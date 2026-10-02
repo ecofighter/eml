@@ -34,17 +34,18 @@
 |---|---|
 | 線形性 | Kind で区別する。`Type<m>`、`m ∈ {Unr ≤ Lin}`。Affine は持たず、値を捨てるときは組み込みキーワード `drop` を明示する |
 | Kind の将来 | 内部では最初から Kind 変数と部分 Kind 関係を扱う。表面の構文では当面書かせず、将来ユーザーが Kind を書けるようにする |
-| エフェクト | Row 多相 (Koka 方式、scoped labels)。row 変数にも Kind `Row<s>`、`s ∈ {Once ≤ Multi}` を持たせる |
+| エフェクト | Row 多相 (Koka 方式、scoped labels)。row 変数にも Kind `Row<s>`、`s ∈ {Never ≤ Tail ≤ Once ≤ Multi}` を持たせる。`Never` と `Tail` は将来のマルチコア対応のための要素 (§4) |
 | 継続の多重度 | 操作ごとに `never` / `once` / `multi` を宣言する。デフォルトは `once` |
 | 継続の線形性 | `once` の継続 `k` は `Lin`。handler は `resume k v` か `drop k` を必ず書く。`multi` の継続は `Unr` |
 | handler の意味 | deep handler。`resume` した継続の中でも同じ handler が有効なまま |
 | `IO` | 組み込みのエフェクト。ユーザーは handle できない |
 | 暗黙の後始末 | 通常の制御フローでは一切行わない。中断時 (`drop k` や `never` 操作) だけ、捕まっていた `Lin` 値を、その型に宣言された破棄処理で drop する |
-| メモリ管理 | Perceus 方式の参照カウント。`Lin` 値は静的に一意なので RC 操作を付けない |
+| メモリ管理 | Perceus 方式の参照カウント。`Lin` 値は静的に一意なので RC 操作を付けない。RC は将来のマルチコア対応で共有の印方式にできる形にしておく (§5) |
 | 型付け | Bidirectional Typing + 単一化。トップレベルの関数は引数と戻り値の型注釈が必須。row と Kind は推論する |
 | 構文 | マイルストーン1 は §7 の暫定構文で進める。本番の構文は作者が別途手で設計する。暫定構文で迷ったときは Haskell の慣習に寄せる |
 | コンパイラ構成 | バッチ型のパイプライン。各段階を純粋な関数とし、Arena と ID で表現して、後でクエリ化 (salsa など) できるようにしておく |
-| 実行系 | 型付き Core IR (ANF 形式で、RC とエフェクトを明示する) + CEK 風のインタプリタ。将来の LLVM バックエンドも同じ IR から変換する |
+| 実行系 | 型付き Core IR (ANF 形式で、RC とエフェクトを明示する) + CEK 風のインタプリタ。将来の LLVM バックエンドも同じ IR から変換する。ヒープと RC は `eml_runtime` に分離する |
+| マルチコア | マイルストーン1 では実装しない。将来の設計は [マルチコア対応の設計 spec](2026-10-03-eml-multicore-design.md) にまとめ、その §9 の予防的な決定だけをこの spec に反映する |
 
 ## 3. 全体構成
 
@@ -61,6 +62,7 @@ eml/
     eml_hir/
     eml_types/
     eml_core_ir/
+    eml_runtime/
     eml_interp/
     eml_cli/            # lib + バイナリ (バイナリ名 `eml`)
   tests/ui/             # UI テストのコーパス (§8)
@@ -81,6 +83,7 @@ eml/
 ```
 eml_cli        run / check コマンド。各段階をつなぐだけ。テストから呼べる lib API を公開する
 eml_interp     Core IR を CEK 機械で実行する
+eml_runtime    オブジェクトのモデル、ヒープ、参照カウント、debug_heap の検査
 eml_core_ir    型付き HIR → Core IR。dup/decref の挿入パス
 eml_types      Kind・型・row の推論、線形性・多重度の検査、match の網羅性検査
 eml_hir        CST → HIR の変換、名前解決
@@ -116,7 +119,9 @@ eml_diagnostics  Diagnostic 型、FileId と SourceFiles、ariadne による表�
 - `eml check <file>`: 診断を stderr に表示する。`eml run <file>`: 検査を通ったら実行する
 - `eml run --debug-heap`: RC のリーク検出と解放済みアクセスの検出を有効にする (§5)
 - 終了コード: 0 = 成功、1 = 診断のエラーあり、または実行時エラー、2 = 使い方の誤り (引数の誤り、ファイルが読めない)
-- `eml_cli` の lib は `check(files, file_id) -> Vec<Diagnostic>` と `run(files, file_id, &RunConfig, stdout: &mut dyn Write) -> RunOutcome` を公開する。UI テストはこれをプロセス内で呼ぶ
+- `eml_cli` の lib は `check(files, file_id) -> Vec<Diagnostic>` と `run(files, file_id, &RunConfig, stdout: OutputSink) -> RunOutcome` を公開する。UI テストはこれをプロセス内で呼ぶ
+- `OutputSink` は `Send + Sync` な共有の出力先の型とする (`Arc<Mutex<dyn Write + Send>>` を包む型など)。将来、複数のスレッドから `println` するため。テストでは出力を捕まえられるバッファを渡す
+- `RunConfig` は `Default` を実装し、フィールドを後から足せるようにする (将来 `threads` や `schedule_seed` を足す)
 
 ### 主な外部 crate
 
@@ -129,9 +134,12 @@ eml_diagnostics  Diagnostic 型、FileId と SourceFiles、ariadne による表�
 ```
 κ ::= Type<m> | Row<s> | κ → κ
 m ::= Unr | Lin | μ          (μ は線形性の Kind 変数)
-s ::= Once | Multi | σ       (σ は多重度の Kind 変数)
-Unr ≤ Lin,  Once ≤ Multi
+s ::= Never | Tail | Once | Multi | σ       (σ は多重度の Kind 変数)
+Unr ≤ Lin,  Never ≤ Tail ≤ Once ≤ Multi
 ```
+
+- `Row<s>` の `s` は、その row に含まれてよい操作の上限を表す。`Never` は `never` の操作だけを含んでよい。`Tail` はさらに、すぐに再開する操作 (組み込みの `IO`) まで含んでよい。`Once` はさらに `once` の操作まで、`Multi` はさらに `multi` の操作まで含んでよい
+- `Never` と `Tail` は、将来のマルチコア対応 (並列タスクに許す row の制限) のために、内部の束に最初から用意しておく。後から束の下に要素を足すと、解き方や既存の制約の意味が変わるため。表面の構文で `tail` の操作を宣言する機能は、マイルストーン1 には入れない ([マルチコア対応の設計 spec](2026-10-03-eml-multicore-design.md) §6)
 
 - データ型の Kind は、フィールドの Kind の上限 (join) で推論する
 - 組み込みのリソース型 (`File`) は `Lin` で、破棄処理 (`close`) を持つ
@@ -175,9 +183,9 @@ Unr ≤ Lin,  Once ≤ Multi
 
 - 呼び出しをまたいで `Lin` 変数が生きている場合、その呼び出しの row について次のように扱う。この検査は各呼び出し箇所で局所的に行えば、全体として健全になる
   - row に `multi` な操作が含まれていれば、エラーにする
-  - row 変数 `e : Row<σ>` を含む場合は、制約 `σ = Once` を追加する。その結果、`e` に `multi` な操作が入るような呼び出し方は、制約違反として検出される
+  - row 変数 `e : Row<σ>` を含む場合は、制約 `σ ≤ Once` を追加する。その結果、`e` に `multi` な操作が入るような呼び出し方は、制約違反として検出される (束が4要素なので、`σ = Once` ではなく `≤` で書く)
 - `never` の操作の結果の型は、宣言で自由な型変数として書く (`never raise : String -> a`)。呼び出した側ではどんな型として使ってもよい
-- 組み込みの `IO` は実行時が必ずちょうど1回再開するので、`once` と同じ扱いになる。ただし中断は起こらない
+- 組み込みの `IO` の操作は、実行時が必ずすぐにちょうど1回再開するので、`Tail` に分類する。持ち越し規則の上では `once` と同じく、`Lin` の値が呼び出しをまたいで生きていてよい。ただし中断は起こらない
 
 ### handler
 
@@ -224,11 +232,17 @@ Unr ≤ Lin,  Once ≤ Multi
 - 継続は、ヒープ上のイミュータブルなフレームの連結リストで表す。handler フレームはその中の目印になる
 - `perform` は、連結リストを遡って対応する handler を探す。perform した場所から handler までのフレームへのポインタを集めたものが継続になる。`multi` の再開は、その列をもう一度積むだけで行える
 - `drop k` は、継続の各フレームのクリーンアップ情報に従って、生きている `Lin` 変数を drop する
-- `IO` は、連結リストの最下部にある組み込みの handler として Rust で実装する。標準出力は `run` に渡された `&mut dyn Write` に書く (テストで出力を捕まえるため)
+- `IO` は、連結リストの最下部にある組み込みの handler として Rust で実装する。標準出力は `run` に渡された `OutputSink` に書く (テストで出力を捕まえるため)
 
-### ヒープと参照カウント
+### ヒープと参照カウント (`eml_runtime`)
 
-- Rust の `Rc` は使わず、自前のヒープと参照カウントを持つ。`dup` / `decref` 命令が実際にカウントを増減する
+- Rust の `Rc` は使わず、自前のヒープと参照カウントを `eml_runtime` に持つ。`dup` / `decref` 命令が実際にカウントを増減する
+- ヒープはインデックス方式のアリーナと世代番号で実装する。解放済みのオブジェクトへのアクセスは、世代番号の不一致で検出する
+- ランタイムの API (確保、`dup` / `decref`、フィールドの読み出し、一意かどうかの判定) は、マルチコア版と同じものに固定する。共有の印付け `mark_shared` は API に名前だけ予約し、実装はマルチコアの段階で行う。マルチコア化では `eml_runtime` の内部だけを差し替える
+- オブジェクトのヘッダの RC は符号付きの `AtomicI32` とする。正なら局所、負なら共有を表す。マイルストーン1 では常に正
+- ヘッダから記述子 (フィールドのレイアウトと `Lin` の破棄処理) を引けるようにする。`decref` で子のオブジェクトをたどるときや `drop k` の後始末で、静的な型の情報なしに処理するため
+- 継続のフレームと環境も、同じ RC で管理するランタイムのオブジェクトにする
+- インタプリタの値とフレームに `Rc` と `RefCell` を使わない。Core IR は `Arc<Program>` で読み取り専用で共有する。将来、複数のスレッドがそれぞれの CEK 機械で同じプログラムを実行するため
 - `RunConfig` の `debug_heap` を有効にすると、解放済みのオブジェクトへのアクセスを検出し、プログラムの終了時にすべてのオブジェクトが解放されていることを確認する (リーク検出)。CLI では `--debug-heap`、UI テストでは常に有効にする
 
 ## 6. 診断
@@ -486,7 +500,7 @@ TDD で進める。テストを先に書き、実装をテストに合わせる�
 
 最初の段階として、次の範囲のスケルトンを作る。
 
-- 7 つの crate と workspace の設定、flake の更新
+- 8 つの crate と workspace の設定、flake の更新
 - 各段階を `fn stage(&In) -> (Out, Vec<Diagnostic>)` の形の仮実装でつなぎ、空のファイルに対する `eml check` が診断 0 件で終了する
 - UI テストの仕組みと `insta` のスナップショットが動く
 - `eml_syntax` の土台: §7 の字句に従う `SyntaxKind` と logos による lexer、イベント方式のパーサの骨組み (イベント列 → rowan の木の組み立て、エラー回復の仕組み)
@@ -495,7 +509,8 @@ TDD で進める。テストを先に書き、実装をテストに合わせる�
 
 ## 10. 後回しにした論点と将来の拡張
 
-- **multi-shot と可変参照**: `Ref` を導入するとき、multi-shot で再開したときに共有するかコピーするか
+- **可変参照 (方針は決定済み)**: 値 `Ref h a` と組み込みのエフェクト `Heap h` を持ち、`IO` と分離する。`run_heap` は rank-2 の組み込みとして特別扱いする。`Ref` には `Unr` の値だけを入れ、multi-shot で再開したときの状態は共有する。詳細は [マルチコア対応の設計 spec](2026-10-03-eml-multicore-design.md) §4
+- **マルチコア対応**: 共有の印方式の RC、並列の `par` の段階的な拡張 (a1 → a2-wait → a2-cancel → a4)、`tail` の操作、並行処理の `spawn`、継続の移動、マルチコアのインタプリタ。[マルチコア対応の設計 spec](2026-10-03-eml-multicore-design.md) を参照
 - **使い切り必須の型**: 捨てることを許さない線形型。ユーザーが Kind を書けるようにする段階で、Kind に「drop できるか」の次元を追加して扱う
 - **row 要素ごとの捕捉 Kind**: `<IO, Async@lin>` のように、row の各要素に「捕まえてよい Kind」を推論で持たせ、`never` / `once` の持ち越し規則をより柔軟にする
 - **ユーザーによる Kind の記述**: 内部の Kind 変数を表面の構文に開放する
