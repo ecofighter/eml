@@ -1,0 +1,12 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: rendered
+input_file: tests/ui/check-fail/stray_tokens.em
+---
+[E0003] Error: expected an item (`fn`, `type`, or `effect`)
+   ╭─[ check-fail/stray_tokens.em:1:1 ]
+   │
+ 1 │ 1 2 3
+   │ ┬  
+   │ ╰── not the start of an item
+───╯

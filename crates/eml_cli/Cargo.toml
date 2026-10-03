@@ -1,0 +1,16 @@
+[package]
+name = "eml_cli"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+eml_core_ir.workspace = true
+eml_diagnostics.workspace = true
+eml_hir.workspace = true
+eml_interp.workspace = true
+eml_runtime.workspace = true
+eml_syntax.workspace = true
+eml_types.workspace = true
+
+[dev-dependencies]
+insta.workspace = true
