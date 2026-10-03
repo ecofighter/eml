@@ -1,0 +1,8 @@
+[package]
+name = "eml_diagnostics"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+ariadne.workspace = true
+text-size.workspace = true

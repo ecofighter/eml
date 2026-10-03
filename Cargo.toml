@@ -1,6 +1,22 @@
-[package]
-name = "eml"
+[workspace]
+members = ["crates/*"]
+resolver = "3"
+
+[workspace.package]
 version = "0.1.0"
 edition = "2024"
 
-[dependencies]
+[workspace.dependencies]
+eml_diagnostics = { path = "crates/eml_diagnostics" }
+eml_syntax = { path = "crates/eml_syntax" }
+eml_hir = { path = "crates/eml_hir" }
+eml_types = { path = "crates/eml_types" }
+eml_core_ir = { path = "crates/eml_core_ir" }
+eml_runtime = { path = "crates/eml_runtime" }
+eml_interp = { path = "crates/eml_interp" }
+ariadne = "0.6"
+clap = { version = "4.6", features = ["derive"] }
+insta = { version = "1.49", features = ["glob"] }
+logos = "0.16"
+rowan = "0.16"
+text-size = "1.1"
