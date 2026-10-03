@@ -34,7 +34,7 @@
 |---|---|
 | 線形性 | Kind で区別する。`Type<m>`、`m ∈ {Unr ≤ Lin}`。Affine は持たず、値を捨てるときは組み込みキーワード `drop` を明示する |
 | Kind の将来 | 内部では最初から Kind 変数と部分 Kind 関係を扱う。表面の構文では当面書かせず、将来ユーザーが Kind を書けるようにする |
-| エフェクト | Row 多相 (Koka 方式、scoped labels)。row 変数にも Kind `Row<s>`、`s ∈ {Never ≤ Tail ≤ Once ≤ Multi}` を持たせる。`Never` と `Tail` は将来のマルチコア対応のための要素 (§4) |
+| エフェクト | Row 多相 (Koka 方式、scoped labels)。row 変数にも Kind `Row<s>`、`s ∈ {Never ≤ Once ≤ Multi}` を持たせる。`Never` は将来のマルチコア対応のための要素 (§4) |
 | 継続の多重度 | 操作ごとに `never` / `once` / `multi` を宣言する。デフォルトは `once` |
 | 継続の線形性 | `once` の継続 `k` は `Lin`。handler は `resume k v` か `drop k` を必ず書く。`multi` の継続は `Unr` |
 | handler の意味 | deep handler。`resume` した継続の中でも同じ handler が有効なまま |
@@ -134,12 +134,12 @@ eml_diagnostics  Diagnostic 型、FileId と SourceFiles、ariadne による表�
 ```
 κ ::= Type<m> | Row<s> | κ → κ
 m ::= Unr | Lin | μ          (μ は線形性の Kind 変数)
-s ::= Never | Tail | Once | Multi | σ       (σ は多重度の Kind 変数)
-Unr ≤ Lin,  Never ≤ Tail ≤ Once ≤ Multi
+s ::= Never | Once | Multi | σ       (σ は多重度の Kind 変数)
+Unr ≤ Lin,  Never ≤ Once ≤ Multi
 ```
 
-- `Row<s>` の `s` は、その row に含まれてよい操作の上限を表す。`Never` は `never` の操作だけを含んでよい。`Tail` はさらに、すぐに再開する操作 (組み込みの `IO`) まで含んでよい。`Once` はさらに `once` の操作まで、`Multi` はさらに `multi` の操作まで含んでよい
-- `Never` と `Tail` は、将来のマルチコア対応 (並列タスクに許す row の制限) のために、内部の束に最初から用意しておく。後から束の下に要素を足すと、解き方や既存の制約の意味が変わるため。表面の構文で `tail` の操作を宣言する機能は、マイルストーン1 には入れない ([マルチコア対応の設計 spec](2026-10-03-eml-multicore-design.md) §6)
+- `Row<s>` の `s` は、その row に含まれてよい操作の上限を表す。`Never` は `never` の操作だけを含んでよい。`Once` はさらに `once` の操作 (組み込みの `IO` を含む) まで、`Multi` はさらに `multi` の操作まで含んでよい
+- `Never` は、将来のマルチコア対応のために内部の束に最初から用意しておく。並列タスクの row を `never` の操作だけに制限するため ([マルチコア対応の設計 spec](2026-10-03-eml-multicore-design.md) §6)
 
 - データ型の Kind は、フィールドの Kind の上限 (join) で推論する
 - 組み込みのリソース型 (`File`) は `Lin` で、破棄処理 (`close`) を持つ
@@ -183,9 +183,9 @@ Unr ≤ Lin,  Never ≤ Tail ≤ Once ≤ Multi
 
 - 呼び出しをまたいで `Lin` 変数が生きている場合、その呼び出しの row について次のように扱う。この検査は各呼び出し箇所で局所的に行えば、全体として健全になる
   - row に `multi` な操作が含まれていれば、エラーにする
-  - row 変数 `e : Row<σ>` を含む場合は、制約 `σ ≤ Once` を追加する。その結果、`e` に `multi` な操作が入るような呼び出し方は、制約違反として検出される (束が4要素なので、`σ = Once` ではなく `≤` で書く)
+  - row 変数 `e : Row<σ>` を含む場合は、制約 `σ ≤ Once` を追加する。その結果、`e` に `multi` な操作が入るような呼び出し方は、制約違反として検出される (束が3要素なので、`σ = Once` ではなく `≤` で書く)
 - `never` の操作の結果の型は、宣言で自由な型変数として書く (`never raise : String -> a`)。呼び出した側ではどんな型として使ってもよい
-- 組み込みの `IO` の操作は、実行時が必ずすぐにちょうど1回再開するので、`Tail` に分類する。持ち越し規則の上では `once` と同じく、`Lin` の値が呼び出しをまたいで生きていてよい。ただし中断は起こらない
+- 組み込みの `IO` は実行時が必ずちょうど1回再開するので、`once` と同じ扱いになる。ただし中断は起こらない
 
 ### handler
 
@@ -510,7 +510,7 @@ TDD で進める。テストを先に書き、実装をテストに合わせる�
 ## 10. 後回しにした論点と将来の拡張
 
 - **可変参照 (方針は決定済み)**: 値 `Ref h a` と組み込みのエフェクト `Heap h` を持ち、`IO` と分離する。`run_heap` は rank-2 の組み込みとして特別扱いする。`Ref` には `Unr` の値だけを入れ、multi-shot で再開したときの状態は共有する。詳細は [マルチコア対応の設計 spec](2026-10-03-eml-multicore-design.md) §4
-- **マルチコア対応**: 共有の印方式の RC、並列の `par` の段階的な拡張 (a1 → a2-wait → a2-cancel → a4)、`tail` の操作、並行処理の `spawn`、継続の移動、マルチコアのインタプリタ。[マルチコア対応の設計 spec](2026-10-03-eml-multicore-design.md) を参照
+- **マルチコア対応**: 共有の印方式の RC、データ並列に限った `par` の段階的な拡張 (a1 → a2-wait → a2-cancel)、並行処理の `spawn`、継続の移動、マルチコアのインタプリタ。[マルチコア対応の設計 spec](2026-10-03-eml-multicore-design.md) を参照
 - **使い切り必須の型**: 捨てることを許さない線形型。ユーザーが Kind を書けるようにする段階で、Kind に「drop できるか」の次元を追加して扱う
 - **row 要素ごとの捕捉 Kind**: `<IO, Async@lin>` のように、row の各要素に「捕まえてよい Kind」を推論で持たせ、`never` / `once` の持ち越し規則をより柔軟にする
 - **ユーザーによる Kind の記述**: 内部の Kind 変数を表面の構文に開放する
