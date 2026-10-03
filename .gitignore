@@ -8,3 +8,7 @@
 #/target
 .direnv/
 .envrc
+
+# insta が失敗したテストの出力を一時的に置くファイル
+*.pending-snap
+*.snap.new
