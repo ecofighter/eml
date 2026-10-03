@@ -501,3 +501,25 @@ fn semicolon_inside_brackets_is_one_error() {
         ["E0011 1:7 unexpected `;` inside brackets"]
     );
 }
+
+#[test]
+fn implicitly_closed_bracket_in_an_unsupported_list_does_not_swallow_the_file() {
+    assert_eq!(
+        diagnostics("x = [a (b\ny = 1\nz = 2 +"),
+        [
+            "E0004 1:5 lists are not supported yet",
+            "E0011 3:8 expected an expression"
+        ]
+    );
+}
+
+#[test]
+fn implicitly_closed_bracket_after_a_semicolon_does_not_swallow_the_file() {
+    assert_eq!(
+        diagnostics("h = (a; (b\ny = 1\nz = 2 +"),
+        [
+            "E0011 1:7 unexpected `;` inside brackets",
+            "E0011 3:8 expected an expression"
+        ]
+    );
+}

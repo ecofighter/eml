@@ -212,18 +212,36 @@ fn not_yet_supported(p: &mut Parser, message: &str) {
 fn unsupported_group(p: &mut Parser, message: &str) {
     not_yet_supported(p, message);
     p.bump_any();
-    let mut depth = 0u32;
+    skip_to_closing(p);
+    if p.at_ts(CLOSING_BRACKETS) {
+        p.bump_any();
+    }
+}
+
+/// 括弧の中身を、対応する閉じ括弧の手前まで読み飛ばす (閉じ括弧は読まない)。
+/// 規則 2 でレイアウト段が入れ子の括弧を暗黙に閉じると、閉じ括弧のトークンがないまま括弧の深さが戻らなくなる。
+/// そのため、括弧の深さとは別にブロックの深さを数え、ブロックの外で現れた `SEP` / `CLOSE` では
+/// 括弧の深さにかかわらず止まる (docs/spec/layout.md の規則 2)。ファイルの残りを飲み込まないための同期点になる。
+fn skip_to_closing(p: &mut Parser) {
+    let mut brackets = 0u32;
+    let mut blocks = 0u32;
     while !p.at_eof() {
         match p.current() {
-            L_PAREN | L_BRACK | L_BRACE | LAYOUT_OPEN => depth += 1,
-            R_PAREN | R_BRACK | R_BRACE if depth == 0 => {
-                p.bump_any();
-                break;
+            L_PAREN | L_BRACK | L_BRACE => brackets += 1,
+            R_PAREN | R_BRACK | R_BRACE => {
+                if brackets == 0 {
+                    break;
+                }
+                brackets -= 1;
             }
-            R_PAREN | R_BRACK | R_BRACE => depth -= 1,
-            LAYOUT_CLOSE if depth == 0 => break,
-            LAYOUT_CLOSE => depth -= 1,
-            LAYOUT_SEP if depth == 0 => break,
+            LAYOUT_OPEN => blocks += 1,
+            LAYOUT_CLOSE => {
+                if blocks == 0 {
+                    break;
+                }
+                blocks -= 1;
+            }
+            LAYOUT_SEP if blocks == 0 => break,
             _ => {}
         }
         p.bump_any();
@@ -254,21 +272,7 @@ fn close_bracket(p: &mut Parser, kind: SyntaxKind) {
     if !p.at_ts(CLOSING_BRACKETS) {
         // `;` や余計なトークンは、対応する閉じ括弧まで読み飛ばす。診断は上の1件だけにする。
         let m = p.start();
-        let mut depth = 0u32;
-        while !p.at_eof() {
-            match p.current() {
-                L_PAREN | L_BRACK | L_BRACE | LAYOUT_OPEN => depth += 1,
-                R_PAREN | R_BRACK | R_BRACE | LAYOUT_CLOSE => {
-                    if depth == 0 {
-                        break;
-                    }
-                    depth -= 1;
-                }
-                LAYOUT_SEP if depth == 0 => break,
-                _ => {}
-            }
-            p.bump_any();
-        }
+        skip_to_closing(p);
         m.complete(p, ERROR);
     }
     if p.at_ts(CLOSING_BRACKETS) {
