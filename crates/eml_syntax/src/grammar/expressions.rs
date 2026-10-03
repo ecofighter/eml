@@ -405,7 +405,16 @@ fn match_expr(p: &mut Parser) {
 /// 同じ行に並べた枝では、本体は次の `|` の手前で終わる。`|` 単独は演算子ではないため。
 fn branches(p: &mut Parser, what: &str, branch: fn(&mut Parser) -> bool) {
     if p.at(LAYOUT_OPEN) {
+        // 中身のないブロックは、`with` の次の行が字下げされていないときにレイアウト段が E0009 を出して作ったもの。
+        // 続く `|` の行はこの式の枝なので、診断を重ねずに枝として読む (docs/spec/layout.md の「エラー回復」)。
+        let recovered = p.nth(1) == LAYOUT_CLOSE;
         block_of(p, what, branch);
+        if recovered {
+            while p.at(LAYOUT_SEP) && p.nth(1) == PIPE {
+                p.bump(LAYOUT_SEP);
+                branch(p);
+            }
+        }
         return;
     }
     if !p.at(PIPE) {

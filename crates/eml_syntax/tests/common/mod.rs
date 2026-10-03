@@ -23,6 +23,17 @@ pub fn diagnostics(text: &str) -> Vec<String> {
     parse_text(text).1
 }
 
+/// help の文言を確かめるテストのため、すべての診断の help を順に返す。
+pub fn helps(text: &str) -> Vec<String> {
+    let mut files = SourceFiles::new();
+    let file = files.add("test.em", text);
+    parse(file, text)
+        .1
+        .into_iter()
+        .flat_map(|diagnostic| diagnostic.help)
+        .collect()
+}
+
 pub fn lines(lines: &[&str]) -> String {
     lines.join("\n")
 }

@@ -1,6 +1,6 @@
 mod common;
 
-use common::{diagnostics, lines, shape};
+use common::{diagnostics, helps, lines, shape};
 
 #[test]
 fn if_with_else_on_separate_lines() {
@@ -235,10 +235,63 @@ fn later_arms_on_one_line_belong_to_the_inner_match() {
 fn arms_at_the_column_of_match_need_indentation() {
     assert_eq!(
         diagnostics(&lines(&["f b =", "  match b with", "  | True -> 1"])),
-        [
-            "E0009 2:11 expected an indented block after `with`",
-            "E0011 3:3 expected a statement",
-        ]
+        ["E0009 2:11 expected an indented block after `with`"]
+    );
+}
+
+#[test]
+fn arms_at_the_column_of_match_are_read_as_arms() {
+    let text = lines(&[
+        "f b =",
+        "  match b with",
+        "  | True -> 1",
+        "  | False -> 0",
+        "  g b",
+    ]);
+    insta::assert_snapshot!(shape(&text), @r#"
+    SOURCE_FILE
+      EQUATION
+        LIDENT "f"
+        BIND_PAT
+          LIDENT "b"
+        EQ "="
+        BLOCK
+          EXPR_STMT
+            MATCH_EXPR
+              MATCH_KW "match"
+              PATH_EXPR
+                LIDENT "b"
+              WITH_KW "with"
+              MATCH_ARM
+                PIPE "|"
+                CON_PAT
+                  UIDENT "True"
+                THIN_ARROW "->"
+                LITERAL
+                  INT "1"
+              MATCH_ARM
+                PIPE "|"
+                CON_PAT
+                  UIDENT "False"
+                THIN_ARROW "->"
+                LITERAL
+                  INT "0"
+          EXPR_STMT
+            APP_EXPR
+              PATH_EXPR
+                LIDENT "g"
+              PATH_EXPR
+                LIDENT "b"
+    ---
+    E0009 2:11 expected an indented block after `with`
+    "#);
+}
+
+#[test]
+fn arms_at_the_column_of_match_get_a_help() {
+    assert_eq!(
+        helps(&lines(&["f b =", "  match b with", "  | True -> 1"])),
+        ["indent the `|` arms more than the line with `with`"]
     );
 }
 

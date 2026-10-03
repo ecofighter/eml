@@ -233,3 +233,11 @@ fn clauses_must_start_with_a_pipe() {
         ["E0011 1:22 expected a clause starting with `|`"]
     );
 }
+
+#[test]
+fn clauses_at_the_column_of_handle_are_read_as_clauses() {
+    assert_eq!(
+        diagnostics(&lines(&["f =", "  handle g () with", "  | return x -> x"])),
+        ["E0009 2:15 expected an indented block after `with`"]
+    );
+}

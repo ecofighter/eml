@@ -181,7 +181,7 @@ fn missing_block(
     out: &mut Vec<Token>,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
-    diagnostics.push(Diagnostic::error(
+    let mut diagnostic = Diagnostic::error(
         codes::EXPECTED_INDENTED_BLOCK,
         format!(
             "expected an indented block after `{}`",
@@ -192,7 +192,12 @@ fn missing_block(
             starter.range,
             "the next line must be indented more than the enclosing block",
         ),
-    ));
+    );
+    if starter.kind == WITH_KW {
+        // 枝を `match` / `handle` と同じ列に書く誤りが多いので、直し方を示す (docs/spec/layout.md の「エラー回復」)。
+        diagnostic = diagnostic.with_help("indent the `|` arms more than the line with `with`");
+    }
+    diagnostics.push(diagnostic);
     let end = starter.range.end();
     out.push(virtual_token(LAYOUT_OPEN, end));
     out.push(virtual_token(LAYOUT_CLOSE, end));
