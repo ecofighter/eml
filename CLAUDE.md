@@ -5,7 +5,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Overview
 
 eml is an experimental functional language exploring "linear types × algebraic effects" (Rust, Cargo workspace, edition 2024). Source files use the `.em` extension.
-The specs in `docs/superpowers/specs/` are the source of truth for the design; work plans live in `docs/superpowers/plans/`. Code comments and docs are written in Japanese.
+The documents under `docs/` are the source of truth; start from `docs/README.md`. `docs/spec/` is normative (what to implement), `docs/implementation/` covers architecture, testing and the current status, and `docs/future/` holds future designs (multicore, roadmap, stdlib notes). Past work plans live in `docs/superpowers/plans/`. Code comments and docs are written in Japanese. Code comments explain why, not what: do not restate the code, and cite `docs/` paths when pointing at a rule.
 
 ## Commands
 
@@ -24,7 +24,7 @@ nix build                            # build the eml binary (eml_cli)
 
 ## Architecture
 
-A batch pipeline. Dependencies flow strictly top to bottom; every crate uses `eml_diagnostics`.
+A batch pipeline. Dependencies flow strictly top to bottom; every crate that reports diagnostics uses `eml_diagnostics` (currently all but `eml_runtime` and `eml_interp`).
 
 ```
 eml_cli          check / run; only wires the stages together (lib API is called from tests)
@@ -39,11 +39,11 @@ eml_diagnostics  Diagnostic, FileId/SourceFiles, ariadne rendering (does not dep
 
 - Each stage is a pure function `fn stage(&In) -> (Out, Vec<Diagnostic>)` with no global mutable state, so it can later move onto queries (salsa).
 - Never stop on errors: `eml_cli::analyze` runs every stage and collects all diagnostics. The parser recovers with `ERROR` nodes; type checking onward inserts an `Error` type and suppresses cascading diagnostics.
-- The parser follows rust-analyzer (event stream -> rowan tree built in `sink.rs`). A layout stage (`layout.rs`) between the lexer and the parser inserts virtual `LAYOUT_OPEN` / `LAYOUT_SEP` / `LAYOUT_CLOSE` tokens (syntax spec §4); the parser emits no events for them, so the CST is always lossless. Grammar rules are confined to `eml_syntax/src/grammar/`.
+- The parser follows rust-analyzer (event stream -> rowan tree built in `sink.rs`). A layout stage (`layout.rs`) between the lexer and the parser inserts virtual `LAYOUT_OPEN` / `LAYOUT_SEP` / `LAYOUT_CLOSE` tokens (`docs/spec/layout.md`); the parser emits no events for them, so the CST is always lossless. Grammar rules are confined to `eml_syntax/src/grammar/`.
 - From HIR onward, nodes are referenced by arena IDs (`ExprId`, etc.) and analysis results (types, ...) live in side tables. HIR nodes carry a `SyntaxNodePtr`.
 - Diagnostic codes are defined in a per-stage `codes` module (e.g. `eml_syntax::codes`, E0xxx).
 - `OutputSink` is `Send + Sync` in preparation for multicore. `RunConfig` is `#[non_exhaustive]`; build it from `Default`.
-- `eml_syntax` implements stage S1 of the final syntax (syntax spec §10); S2/S3 constructs (records, modules, interpolation, command literals, ...) are lexed and parsed far enough to report E0004. The later stages (hir / types / core_ir / interp) are still stubs.
+- `eml_syntax` implements stage S1 of the final syntax (`docs/implementation/status.md`); S2/S3 constructs (records, modules, interpolation, command literals, ...) are lexed and parsed far enough to report E0004. The later stages (hir / types / core_ir / interp) are still stubs.
 
 ## Testing
 
@@ -54,4 +54,4 @@ eml_diagnostics  Diagnostic, FileId/SourceFiles, ariadne rendering (does not dep
 
 ## Syntax
 
-The final syntax is defined in `docs/superpowers/specs/2026-10-03-eml-syntax-design.md` (lexical rules, layout rule, grammar, desugaring); the provisional syntax in language-design spec §7 is obsolete. When a syntax choice is undecided, lean toward Haskell conventions.
+The final syntax is defined in `docs/spec/` (`lexical.md`, `layout.md`, `grammar.md`, `declarations.md`, `expressions.md`, `records.md`, `modules.md`; program examples in `examples.md`); the provisional syntax used before syntax stage S1 is obsolete. When a syntax choice is undecided, lean toward Haskell conventions.

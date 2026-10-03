@@ -1,0 +1,94 @@
+# 診断
+
+位置づけ: 規範。割り当て済みの番号は `crates/eml_syntax/src/lib.rs` の `codes` モジュールにある。
+
+診断のデータ構造、番号の範囲、各誤りで診断が指す場所を定める。`eml check` は、構文・名前解決・型・線形性・エフェクト・`match` の網羅性のエラーを、ソース位置を指す診断として表示する。1回の実行で、独立した複数のエラーを報告する。
+
+## データ構造
+
+```rust
+struct Diagnostic {
+    code: ErrorCode,          // E0001 などの安定した番号
+    severity: Severity,       // Error / Warning / Note
+    message: String,
+    primary: Label,           // (FileId, TextRange, ラベル文)
+    secondary: Vec<Label>,
+    notes: Vec<String>,
+    help: Vec<String>,
+    fix: Option<Vec<TextEdit>>,
+}
+```
+
+- CLI では `ariadne` で表示する。将来の LSP では、同じ構造体から LSP の診断と code action に変換する。
+- `Diagnostic`、`FileId`、`SourceFiles` は `eml_diagnostics` に置く。`eml_diagnostics` は `rowan` に依存しない ([アーキテクチャ](../implementation/architecture.md))。
+- 番号の定数は、段階ごとの `codes` モジュールに定義する (例: `eml_syntax::codes`)。
+
+## 番号の範囲
+
+`ErrorCode` は段階ごとに番号の範囲を分ける。
+
+| 範囲 | 段階 |
+|---|---|
+| E0xxx | 字句・構文 |
+| E1xxx | 名前解決 (重複定義、未定義の名前、handler の節の引数の個数など) |
+| E2xxx | 型・Kind・row |
+| E3xxx | 線形性・継続の多重度 |
+| E4xxx | パターンの網羅性 |
+
+## 割り当て済みの番号
+
+現時点で番号を割り当てたのは、`eml_syntax::codes` の E0xxx だけである。E1xxx 〜 E4xxx の番号は、まだ割り当てていない。各段階の実装計画で割り当てる。
+
+| 番号 | 定数 | 内容 |
+|---|---|---|
+| E0001 | `UNEXPECTED_CHARACTER` | eml のソースとして認識できない文字 |
+| E0002 | `UNTERMINATED_STRING` | 閉じていない文字列リテラル (複数行の文字列、raw 文字列、コマンドリテラルを含む) |
+| E0003 | `EXPECTED_ITEM` | トップレベルで項目の始まりでないトークン |
+| E0004 | `NOT_YET_SUPPORTED` | 後の段階で実装する構文 (浮動小数と文字のリテラル、補間、レコードなど) |
+| E0005 | `UNTERMINATED_BLOCK_COMMENT` | 閉じていないブロックコメント |
+| E0006 | `TAB_INDENTATION` | インデントにタブを使った |
+| E0007 | `INVALID_NUMBER` | 不正な数値リテラル |
+| E0008 | `INVALID_ESCAPE` | 不正なエスケープ (未知のエスケープ、不正な `\u{...}`) |
+| E0009 | `EXPECTED_INDENTED_BLOCK` | 開始トークンの後に字下げしたブロックが必要 |
+| E0010 | `SPACE_AROUND_DOT` | `.` の前後の空白 |
+| E0011 | `SYNTAX_ERROR` | その他の構文エラー |
+| E0012 | `NEEDS_PARENS` | 括弧の要る式 (`if`、`match`、`handle`、`let`) を、引数や演算の項の位置に括弧なしで書いた |
+
+## 構文の決定で増える診断
+
+構文設計で増える診断は次のとおり。E0xxx のうち番号を割り当てたものは上の表にある。それ以外の範囲は、HIR 以降の実装計画で番号を割り当てる。
+
+| 範囲 | 例 |
+|---|---|
+| E0xxx | インデントのタブ、字下げしたブロックが必要、閉じていない補間・コマンドリテラル・ブロックコメント、`.` の前後の空白、浮動小数と文字のリテラル (E0004 未対応) |
+| E1xxx | シグネチャのない等式、等式のないシグネチャ、等式が連続していない、シグネチャと等式が隣り合っていない、等式ごとの引数の個数の違い、fixity の衝突と重複、結合しない演算子の並び、ブロックの最後の `use`、修飾なしの名前の衝突、handler の節の引数の個数 |
+| E3xxx | 射影で `Lin` な残りを捨てる、更新で `Lin` な古い値を捨てる |
+
+シグネチャに関する E1xxx の診断には、シグネチャの追加を提案する help を付ける ([宣言](declarations.md))。
+
+## 型エラー
+
+制約の由来 (引数の位置、`if` の各枝、型注釈など) をもとに、「expected / found」と、その根拠になった場所を示すラベルを出す ([型と Kind](types.md))。
+
+## 線形性の診断
+
+| 誤り | 指す場所 |
+|---|---|
+| 二重使用 | 1回目に消費した場所と、2回目に使った場所 |
+| 消費されていない | 束縛した場所とスコープの終わり。help と fix で `drop x` の追加を提案する |
+| `_` で `Lin` の値を受けた | そのパターン。help で、変数に束縛して `drop` するよう提案する |
+| `multi` の呼び出しをまたぐ | 線形な変数、その呼び出し、`multi` と宣言している操作 |
+| 継続の扱い忘れ | `k` に `resume` も `drop` もしていない handler の節 |
+| 射影・更新で `Lin` な値を捨てる | 射影または更新の式。help と fix で、分解パターンへの書き換えを提案する ([直積型とレコード](records.md)) |
+
+## 網羅性の診断
+
+| 誤り | 指す場所 |
+|---|---|
+| 網羅されていない `match` | `match` 式。漏れているパターンの例を note で示し、fix で枝の追加を提案する |
+| 到達しない枝 (Warning) | その枝のパターン |
+| 反駁可能な `let` / 引数のパターン | そのパターン |
+
+## 連鎖する診断の抑止
+
+パーサは壊れた入力に対して `ERROR` ノードを作って処理を続ける。名前解決以降は、エラーが起きた場所に `Error` 型を入れ、`Error` が関わる制約や線形性の検査からは追加の診断を出さない ([アーキテクチャ](../implementation/architecture.md))。
