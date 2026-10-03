@@ -420,3 +420,19 @@ fn captured_values_count_inside_the_lambda_body() {
       x#0 : a
     ");
 }
+
+#[test]
+fn an_undefined_effect_row_is_fresh_at_each_call() {
+    let text = "run : (Unit -> <Console> Unit) -> <Console> Unit\nrun f = f ()\n\nloud : Unit -> <IO> Unit\nloud () = run (fn () -> println \"x\")\n\nquiet : Unit -> Unit\nquiet () = run (fn () -> ())";
+    insta::assert_snapshot!(check_text(text), @"
+    run : (Unit -> <_> Unit) -> <_> Unit
+      f#0 : Unit -> <_> Unit
+    loud : Unit -> <IO> Unit
+    quiet : Unit -> Unit
+    ---
+    E1002 1:17 cannot find effect `Console`
+      1:17 not found in this scope
+    E1002 1:36 cannot find effect `Console`
+      1:36 not found in this scope
+    ");
+}

@@ -7,7 +7,7 @@ use la_arena::ArenaMap;
 
 use crate::builtins::builtin_type;
 use crate::kind::Bound;
-use crate::scheme::{Rigids, Scheme, lower_type};
+use crate::scheme::{Rigids, Scheme, lower_signature, lower_type};
 use crate::table::{Row, Table, Ty, TyKind, UnifyError};
 use crate::ty::{Effect, KindConstraint, KindTerm, Linearity, Type};
 use crate::{BodyTypes, TypedModule, codes, scc, usage};
@@ -18,9 +18,9 @@ pub(crate) fn check_module(module: &Module) -> (TypedModule, Vec<Diagnostic>) {
     let mut rigids = ArenaMap::default();
     let mut schemes: ArenaMap<FunctionId, Scheme> = ArenaMap::default();
     for (id, function) in module.functions.iter() {
-        let function_rigids = Rigids::new(&mut table, function);
+        let mut function_rigids = Rigids::new(&mut table, function);
         if let Some(signature) = &function.signature {
-            let ty = lower_type(&mut table, function, &function_rigids, signature.ty, true);
+            let ty = lower_signature(&mut table, function, &mut function_rigids, signature.ty);
             // 部分適用のクロージャは、それまでの引数を捕まえる (docs/spec/types.md の「関数型」)
             if let Some(body) = &function.body {
                 table.closure_kinds(ty, body.params.len(), &[]);
@@ -356,7 +356,7 @@ impl BodyCheck<'_> {
                 }
             }
             ExprKind::Annot { expr: inner, ty } => {
-                let annotated = lower_type(self.table, self.function, self.rigids, *ty, false);
+                let annotated = lower_type(self.table, self.function, self.rigids, *ty);
                 let range = self.function.types[*ty].range;
                 self.check_expr(*inner, annotated, Origin::Annotation(range));
                 annotated
@@ -372,8 +372,7 @@ impl BodyCheck<'_> {
                 Stmt::Let { pat, ty, init } => {
                     let ty = match ty {
                         Some(ty) => {
-                            let annotated =
-                                lower_type(self.table, self.function, self.rigids, *ty, false);
+                            let annotated = lower_type(self.table, self.function, self.rigids, *ty);
                             let range = self.function.types[*ty].range;
                             self.check_expr(*init, annotated, Origin::Annotation(range));
                             annotated
@@ -680,7 +679,7 @@ impl BodyCheck<'_> {
             ty: annotation,
         } = &body.pats[pat].kind
         {
-            let annotated = lower_type(self.table, self.function, self.rigids, *annotation, false);
+            let annotated = lower_type(self.table, self.function, self.rigids, *annotation);
             self.expect(
                 body.pats[pat].range,
                 ty,

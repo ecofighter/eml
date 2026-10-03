@@ -1,0 +1,19 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: rendered
+input_file: tests/ui/check-fail/undefined_effect_in_higher_order.em
+---
+[E1002] Error: cannot find effect `Console`
+   ╭─[ check-fail/undefined_effect_in_higher_order.em:3:17 ]
+   │
+ 3 │ run : (Unit -> <Console> Unit) -> <Console> Unit
+   │                 ───┬───  
+   │                    ╰───── not found in this scope
+───╯
+[E1002] Error: cannot find effect `Console`
+   ╭─[ check-fail/undefined_effect_in_higher_order.em:3:36 ]
+   │
+ 3 │ run : (Unit -> <Console> Unit) -> <Console> Unit
+   │                                    ───┬───  
+   │                                       ╰───── not found in this scope
+───╯
