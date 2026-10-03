@@ -6,7 +6,7 @@
 
 ## 実行系の方針
 
-実行系は、型付き Core IR と CEK 風のインタプリタで構成する。Core IR は ANF 形式で、RC とエフェクトを明示する。将来の LLVM バックエンドも同じ IR から変換する ([将来の拡張](../future/roadmap.md))。
+実行系は、型付き Core IR と CEK 風のインタプリタで構成する。Core IR は ANF 形式で、RC とエフェクトを明示する。将来の LLVM バックエンドも同じ IR から変換する ([ロードマップ](../future/roadmap.md))。
 
 ## Core IR
 
@@ -24,7 +24,7 @@
 - `Bool` は、タグ 0 (`False`) と 1 (`True`) の引数のないコンストラクタとして表し、`if` は `match` と同じ分岐の命令に変換する。
 - perform し得る各呼び出しに、線形性の検査パスが出したクリーンアップ情報 (その時点で生きている `Lin` 変数の集合) を付ける ([線形性](linearity.md))。
 - メモリ管理は Perceus 方式の参照カウントである。`Lin` 値は静的に一意なので、RC 操作を付けない。
-- マイルストーン1 で入れるパスは、Perceus の `dup` / `decref` の挿入だけにする。reuse analysis と借用パラメータの最適化は後で追加する ([将来の拡張](../future/roadmap.md))。
+- マイルストーン1 で入れるパスは、Perceus の `dup` / `decref` の挿入だけにする。reuse analysis と借用パラメータの最適化は後で追加する ([ロードマップ](../future/roadmap.md))。
 
 ## インタプリタ (CEK 機械)
 
@@ -39,7 +39,7 @@
 
 ## 実行時エラー
 
-次の場合は実行を止めて実行時エラーにする。CLI の終了コードは 1 である ([アーキテクチャ](../implementation/architecture.md))。
+次の場合は実行を止めて実行時エラーにする。CLI の終了コードは 1 である ([コンパイラの構成](../implementation/architecture.md))。
 
 - `Int` のオーバーフローとゼロ除算 ([宣言](declarations.md) の標準の演算子の表)
 - 解放済みのオブジェクトへのアクセスと、`debug_heap` が有効なときのリーク ([ランタイム](runtime.md))
@@ -49,4 +49,4 @@
 - インタプリタの値とフレームに `Rc` と `RefCell` を使わない。
 - Core IR は `Arc<Program>` で読み取り専用で共有する。将来、複数のスレッドがそれぞれの CEK 機械で同じプログラムを実行するためである。
 - [マルチコア対応の設計](../future/multicore.md) の規約では、さらに CEK 機械の状態を `Send` にすると定めている。
-- 継続のフレームと環境も、`eml_runtime` の RC で管理するランタイムのオブジェクトにする ([ランタイム](runtime.md))。
+- 継続のフレームと環境は、`eml_runtime` の RC で管理するランタイムのオブジェクトである ([ランタイム](runtime.md) の「ランタイムの API」)。

@@ -50,26 +50,26 @@ eml の目的、言語の性格、確定した設計判断の一覧、文書全�
 | 全体の方針 | Haskell 流を土台にする。F# から、逐次実行 (`do` なしで行を並べる)、`\|>` のパイプライン、`match` / `handle` の `with` と `\|` の枝、`List.map` 形式のモジュール修飾を借りる | [文法](spec/grammar.md) |
 | レイアウト | オフサイドルール。開始トークン (`=` `->` `with` `then` `else` `where`) で行が終わり、次の行が深いときだけブロックを開く | [レイアウト規則](spec/layout.md) |
 | トップレベルのシグネチャ | Haskell / Idris と同じく、別の行に書く。必須であることは HIR で検査する。複数の等式で定義できる | [宣言](spec/declarations.md) |
-| ラムダ | `fn x y -> e` | [式と脱糖](spec/expressions.md) |
-| `if` | then 節が `Unit` なら `else` を省略できる | [式と脱糖](spec/expressions.md) |
-| `match` / handler の枝 | `\|` を必須にし、字下げする。1行でも書ける。直和型の宣言も同じ形 | [式と脱糖](spec/expressions.md)、[宣言](spec/declarations.md) |
+| ラムダ | `fn x y -> e` | [式](spec/expressions.md) |
+| `if` | then 節が `Unit` なら `else` を省略できる | [式](spec/expressions.md) |
+| `match` / handler の枝 | `\|` を必須にし、字下げする。1行でも書ける。直和型の宣言も同じ形 | [式](spec/expressions.md)、[宣言](spec/declarations.md) |
 | 型の宣言 | `data` は直和型、`type` は型の別名 | [宣言](spec/declarations.md) |
 | エフェクトの宣言 | `effect Name a where` の後に操作を並べる。操作のカリー化を許す | [宣言](spec/declarations.md) |
-| `use` | ブロックの残りを、最後の引数のラムダとして渡す糖衣構文 | [式と脱糖](spec/expressions.md) |
-| パラメータ付き handler | `handle e from init with`。状態を節の最後の引数で受ける糖衣構文 | [式と脱糖](spec/expressions.md) |
-| 線形値の受け渡し | 糖衣構文は入れない。再束縛、`use`、パラメータ付き handler で吸収する | [式と脱糖](spec/expressions.md) |
+| `use` | ブロックの残りを、最後の引数のラムダとして渡す糖衣構文 | [式](spec/expressions.md) |
+| パラメータ付き handler | `handle e from init with`。状態を節の最後の引数で受ける糖衣構文 | [式](spec/expressions.md) |
+| 線形値の受け渡し | 糖衣構文は入れない。再束縛、`use`、パラメータ付き handler で吸収する | [式](spec/expressions.md) |
 | 文字列 | 補間は `"\{x}"`。複数行の `"""`、raw の `r"..."` | [字句](spec/lexical.md) |
 | コマンドリテラル | バッククォート。シェルを介さず、引数のリストを組む (Julia 方式) | [字句](spec/lexical.md) |
-| fixity | ユーザーが宣言する。優先順位は整数 0〜9。CST では演算子の列を平たいまま持ち、HIR で組み直す | [宣言](spec/declarations.md)、[式と脱糖](spec/expressions.md) |
+| fixity | ユーザーが宣言する。優先順位は整数 0〜9。CST では演算子の列を平たいまま持ち、HIR で組み直す | [宣言](spec/declarations.md)、[式](spec/expressions.md) |
 | モジュール | 1ファイル = 1モジュール。`pub` で公開する。import は既定で修飾付き。標準ライブラリは import なしで修飾付きで使える | [モジュールと名前解決](spec/modules.md) |
-| 並行処理 | 新しい構文は追加しない。エフェクトにより直接の形で書ける | [式と脱糖](spec/expressions.md) |
+| 並行処理 | 新しい構文は追加しない。エフェクトにより直接の形で書ける | [式](spec/expressions.md) |
 | コメント | `--` と、入れ子にできる `{- -}` | [字句](spec/lexical.md) |
 
 ### コンパイラと実行系
 
 | 領域 | 決定 | 詳細 |
 |---|---|---|
-| コンパイラ構成 | バッチ型のパイプライン。各段階を純粋な関数とし、Arena と ID で表現して、後でクエリ化 (salsa など) できるようにしておく | [アーキテクチャ](implementation/architecture.md) |
+| コンパイラ構成 | バッチ型のパイプライン。各段階を純粋な関数とし、Arena と ID で表現して、後でクエリ化 (salsa など) できるようにしておく | [コンパイラの構成](implementation/architecture.md) |
 | 実行系 | 型付き Core IR (ANF 形式で、RC とエフェクトを明示する) + CEK 風のインタプリタ。将来の LLVM バックエンドも同じ IR から変換する。ヒープと RC は `eml_runtime` に分離する | [Core IR とインタプリタ](spec/core-ir.md)、[ランタイム](spec/runtime.md) |
 | メモリ管理 | Perceus 方式の参照カウント。`Lin` 値は静的に一意なので RC 操作を付けない。RC は将来のマルチコア対応で共有の印方式にできる形にしておく | [ランタイム](spec/runtime.md) |
 | マルチコア | マイルストーン1 では実装しない。将来の設計はマルチコア対応の設計にまとめ、予防的な決定だけをマイルストーン1 に入れる | [マルチコア対応の設計](future/multicore.md)、[ランタイム](spec/runtime.md) |
@@ -90,7 +90,7 @@ eml の目的、言語の性格、確定した設計判断の一覧、文書全�
 | レイアウト段 | lexer と parser の間で、仮想トークン `OPEN` / `SEP` / `CLOSE` (コードでは `LAYOUT_OPEN` / `LAYOUT_SEP` / `LAYOUT_CLOSE`) を挿入する段 |
 | Perceus | 参照カウントの `dup` / `decref` を静的に挿入する方式。reuse analysis と借用の最適化は後で入れる |
 | Core IR | 型付き HIR から変換する ANF 形式の IR。RC とエフェクトの命令を明示する |
-| マイルストーン1 (M1) | 最初の vertical slice。成功条件と範囲は [現在地](implementation/status.md) にある |
+| マイルストーン1 (M1) | 最初の vertical slice。成功条件と範囲は [実装の現在地](implementation/status.md) にある |
 | 暫定構文 | 本番の構文を決める前に、最初の実装とテストのために使っていた仮の構文。S1 で本番の構文に置き換えて廃止した |
 | S1 / S2 / S3 | 本番の構文を実装する段階。S1 は M1 の機能の文法、S2 はレコードやモジュール、S3 はコマンドリテラル |
 | a1 / a2-wait / a2-cancel | 並列 API `par` を段階的に広げる計画の各段階。[マルチコア対応の設計](future/multicore.md) にある |

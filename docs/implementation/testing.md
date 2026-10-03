@@ -30,9 +30,10 @@
 
 現在あるテストの置き場所は次のとおり。
 
-- `crates/eml_syntax/tests/`: 字句 (`lexer.rs`)、パーサ (`parser.rs`、`declarations.rs`、`expressions.rs`、`control.rs`、`handlers.rs`)、型付き AST ラッパ (`ast.rs`)、コーパス (`corpus.rs`)。コーパスのソースは `crates/eml_syntax/tests/corpus/` にあり、`s1.em` は S1 の構文、`later_stages.em` は S2 以降の構文を含む
+- `crates/eml_syntax/tests/`: 字句 (`lexer.rs`)、リテラルの値の解釈 (`literals.rs`)、パーサ (`parser.rs`、`declarations.rs`、`expressions.rs`、`control.rs`、`handlers.rs`)、入れ子の深さの上限 (`nesting.rs`)、型付き AST ラッパ (`ast.rs`)、コーパス (`corpus.rs`)。コーパスのソースは `crates/eml_syntax/tests/corpus/` にあり、`s1.em` は S1 の構文、`later_stages.em` は S2 以降の構文を含む
 - `crates/eml_hir/tests/`、`crates/eml_types/tests/`、`crates/eml_core_ir/tests/`、`crates/eml_interp/tests/`: 各段階の変換結果と診断のスナップショット、実行の結果。ランタイムのヒープの単体テストは `crates/eml_runtime/src/heap.rs` にある
 - `crates/eml_cli/tests/ui.rs`: UI テスト
+- `crates/eml_cli/tests/api.rs`: lib API (`check` / `compile` / `execute`) の流れ
 - `crates/eml_cli/tests/cli.rs`: CLI の終了コード
 
 ## UI テスト
@@ -46,11 +47,11 @@
 
 ## CLI のテスト
 
-`crates/eml_cli/tests/cli.rs` は `eml` バイナリを起動し、終了コードを確認する。0 = 成功、1 = 診断のエラーか実行時エラー、2 = 使い方の誤り (引数の誤り、ファイルが読めない) である ([コンパイラの構成](architecture.md) の「CLI と lib API」)。
+`crates/eml_cli/tests/cli.rs` は `eml` バイナリを起動し、終了コードが [コンパイラの構成](architecture.md) の「CLI と lib API」の定めに合うことを確認する。
 
 ## テストの変更に関する合意済みの例外
 
-- 暫定構文で書いたテストのソースは、本番の構文に差し替えるときに書き直す。これは構文の差し替えに伴う機械的な書き換えとして、事前に合意した例外とする。テストの期待値 (意味) は変えない
+- 暫定構文で書いたテストのソースは、構文の段階 S1 で本番の構文に書き直した。構文の差し替えに伴う機械的な書き換えとして、事前に合意した例外である。テストの期待値 (意味) は変えていない
 - `tests/ui/run/empty.em`、`comments_only.em` と、`crates/eml_cli/tests/api.rs` の `compile_returns_a_program_without_errors`、`execute_runs_a_compiled_program` は、`main` を持たない「空のプログラムが実行できる」ことを前提にしていた。`main` を入口とする spec と合わないので、縦の貫通の段階1で `main : Unit -> <IO> Unit` と `main () = ()` を足した。コメントを読み飛ばすことと lib API の流れを確かめる目的は変わらない
 - 本番の構文では `$` と `@` が演算子の文字になる。そのため、「認識できない文字」のテスト (`unexpected_character.em`、`multiple_errors.em`) は、本番の構文でも認識できない文字 `€` に置き換えた
 

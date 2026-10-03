@@ -133,7 +133,7 @@ HIR への変換では、名前解決に加えて、次の脱糖と検査を行�
 - 各関数の本体は、シグネチャだけを見て検査する。引数を1つ消費するごとにシグネチャの矢印を1つたどり、本体の row は最後にたどった矢印の row になる。呼び出しでは、呼び出し先の閉じた row を新しい row 変数で開いてから本体の row と単一化する
 - 推論の対象は [型と Kind](../spec/types.md) の Kind・型・row である。推論の後に、型付き HIR の上で別のパスとして、線形性の検査 ([線形性](../spec/linearity.md)) と網羅性の検査 ([網羅性](../spec/exhaustiveness.md)) を行う
 - 型の表現はすでに閉じたレコードを使い、`Unit` は `Record([])` である。段階4のタプルは、この表現を数字ラベルの閉じたレコードとして再利用する ([直積型とレコード](../spec/records.md))
-- 結果の `TypedModule` は、HIR を複製せずに、関数ごとの `Type` (変数を解決した型) の別テーブルを持つ
+- 結果の `TypedModule` が持つ型は、型変数の束縛を解決した `Type` である (別テーブルの形は上の「各段階の規律」)
 - 関数や組み込みを値として使うこと、関数型の引数として渡すこと (「using a function as a value is not supported yet」)、関数型の引数を呼ぶこと (「calling a function value is not supported yet」)、部分適用を E0004 にする。Core IR は、呼ばれるものがトップレベルの関数と組み込みだけであることを前提にするため
 
 ## `eml_core_ir`、`eml_runtime`、`eml_interp` の内部

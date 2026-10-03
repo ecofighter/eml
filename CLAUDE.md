@@ -50,7 +50,7 @@ eml_diagnostics  Diagnostic, FileId/SourceFiles, ariadne rendering (does not dep
 - Work test-first (TDD). Snapshots use `insta`, mostly inline (`@"..."`).
 - UI tests (`crates/eml_cli/tests/ui.rs`): `tests/ui/run/*.em` must run to completion and `tests/ui/run-fail/*.em` must compile cleanly and end in a runtime error, and `tests/ui/check-fail/*.em` must produce at least one error; output is snapshotted. Pass/fail expectation is decided by directory. Run tests always enable `debug_heap`.
 - `crates/eml_cli/tests/cli.rs` checks the binary's exit codes (0 success / 1 diagnostic or runtime error / 2 usage error).
-- Agreed exception: test sources written in the provisional syntax may be mechanically rewritten when switching to the final syntax (expected results must not change).
+- Agreed exceptions to the rule against changing existing tests are recorded in `docs/implementation/testing.md` (e.g. the mechanical rewrite of provisional-syntax test sources, done in S1).
 
 ## Syntax
 

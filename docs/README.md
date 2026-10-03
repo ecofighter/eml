@@ -24,9 +24,9 @@ eml を実装するエージェントとプログラマのための文書群で�
 | [spec/diagnostics.md](spec/diagnostics.md) | 規範 | 診断のデータ構造、番号の範囲と割り当て済みの番号、各診断が指す場所 |
 | [spec/examples.md](spec/examples.md) | 説明 | 本番の構文で書いたプログラム例 |
 | **implementation/** | 手引き | どう作るか、今どこまでできているか |
-| [implementation/architecture.md](implementation/architecture.md) | 手引き | crate の構成、各段階の規律、エラー回復、CLI と lib API、`eml_syntax` の内部、HIR で行う脱糖 |
+| [implementation/architecture.md](implementation/architecture.md) | 手引き | crate の構成、各段階の規律、エラー回復、各 crate の内部、CLI と lib API |
 | [implementation/testing.md](implementation/testing.md) | 手引き | テスト戦略、UI テスト、テストの変更に関する合意済みの例外 |
-| [implementation/status.md](implementation/status.md) | 手引き | マイルストーン1 の成功条件と範囲、構文の実装段階、各 crate の状況、決定済みで実装待ちの方針 |
+| [implementation/status.md](implementation/status.md) | 手引き | マイルストーン1 の成功条件と範囲、構文と名前解決以降の実装段階、各 crate の状況、次の作業の注意点、決定済みで実装待ちの方針、完了した作業 |
 | **future/** | 将来の設計 | まだ実装しない方針 |
 | [future/roadmap.md](future/roadmap.md) | 将来の設計 | 将来の拡張の一覧 (型システム、言語機能、処理系、マルチコア) |
 | [future/multicore.md](future/multicore.md) | 将来の設計 | マルチコア対応の設計 (共有の印方式の RC、`par`、並行処理、継続の移動) |
