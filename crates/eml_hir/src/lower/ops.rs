@@ -62,7 +62,6 @@ impl BodyLowering<'_> {
         mut previous: Option<(String, u8, Assoc)>,
     ) -> ExprId {
         let mut lhs = self.operand(cursor, min_precedence);
-        // 直前に組んだ演算子、または囲む演算子。結合しない並びを見つけるため
         while let Some(Piece::Operator { text, range }) = cursor.peek() {
             // fixity の宣言がない演算子は `infixl 9` とする (docs/spec/declarations.md)
             let (precedence, assoc) = fixity(&text).unwrap_or((9, Assoc::Left));
@@ -70,6 +69,7 @@ impl BodyLowering<'_> {
                 break;
             }
             cursor.pos += 1;
+            // `previous` は直前に組んだ演算子、または囲む演算子。同じ優先順位で結合しない並びを見つけるために使う
             let conflict = previous
                 .as_ref()
                 .is_some_and(|(_, p, a)| *p == precedence && (*a != assoc || assoc == Assoc::None));

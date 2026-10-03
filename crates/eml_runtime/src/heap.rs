@@ -254,7 +254,7 @@ impl Heap {
 fn children(payload: &Payload, work: &mut Vec<ObjRef>) {
     if let Payload::Frame(frame) = payload {
         for owned in frame.slots.iter().flatten().flatten() {
-            // 変数が2つ参照を持っていれば、解放でも2つ手放す
+            // Perceus の `dup` で1つの変数が複数の参照を持つので、1つだけ手放すと残りがリークする
             if let Value::Obj(obj) = owned.value {
                 work.extend(std::iter::repeat_n(obj, owned.refs as usize));
             }
