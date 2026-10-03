@@ -164,3 +164,20 @@ fn main_with_an_erroneous_row_is_not_reported_again() {
           1:17 not found in this scope
         ");
 }
+
+#[test]
+fn function_typed_parameters_cannot_be_called_or_passed() {
+    let text = "apply : (Int -> Int) -> Int -> Int\napply f x = f x\n\npass : (Int -> Int) -> Int\npass f = apply f 1";
+    insta::assert_snapshot!(check_text(text), @"
+    apply : (Int -> Int) -> Int -> Int
+      f#0 : Int -> Int
+      x#1 : Int
+    pass : (Int -> Int) -> Int
+      f#0 : Int -> Int
+    ---
+    E0004 2:13 calling a function value is not supported yet
+      2:13 this is implemented in a later stage
+    E0004 5:16 using a function as a value is not supported yet
+      5:16 this is implemented in a later stage
+    ");
+}

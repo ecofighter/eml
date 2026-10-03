@@ -1,0 +1,12 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: rendered
+input_file: tests/ui/check-fail/function_value_parameter.em
+---
+[E0004] Error: calling a function value is not supported yet
+   ╭─[ check-fail/function_value_parameter.em:3:13 ]
+   │
+ 3 │ apply f x = f x
+   │             ┬  
+   │             ╰── this is implemented in a later stage
+───╯

@@ -355,9 +355,7 @@ impl BodyCheck<'_> {
 
     fn value(&mut self, res: Res, range: TextRange) -> Ty {
         let ty = match res {
-            Res::Local(local) => {
-                return self.locals.get(local).copied().unwrap_or(self.table.error);
-            }
+            Res::Local(local) => self.locals.get(local).copied().unwrap_or(self.table.error),
             Res::Function(function) => self
                 .signatures
                 .get(function)
@@ -399,6 +397,21 @@ impl BodyCheck<'_> {
             ),
             _ => (self.infer_expr(callee), "this expression".to_string()),
         };
+        if matches!(callee_expr.kind, ExprKind::Path(Res::Local(_)))
+            && matches!(self.table.kind(callee_ty), TyKind::Fn { .. })
+        {
+            // 関数値はクロージャと一緒に段階2で入れる (docs/implementation/status.md)
+            for &arg in args {
+                self.infer_expr(arg);
+            }
+            self.diagnostics.push(not_yet_supported(
+                self.file(),
+                callee_expr.range,
+                "calling a function value is not supported yet",
+            ));
+            self.exprs.insert(callee, self.table.error);
+            return self.table.error;
+        }
         self.exprs.insert(callee, callee_ty);
         let mut ty = callee_ty;
         for (index, &arg) in args.iter().enumerate() {
