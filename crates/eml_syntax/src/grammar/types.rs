@@ -16,6 +16,10 @@ pub(super) fn type_(p: &mut Parser) -> bool {
 /// `in_type_block` は、型だけを入れたブロック (`->` や `=` で行が終わって開いたもの) の中にいるかどうか。
 /// 揃えた複数行のシグネチャの回復で、`SEP` が型の続きかどうかを見分けるのに使う。
 fn type_in(p: &mut Parser, in_type_block: bool) -> bool {
+    nested(p, true, |p| type_in_inner(p, in_type_block))
+}
+
+fn type_in_inner(p: &mut Parser, in_type_block: bool) -> bool {
     let m = p.start();
     if !btype(p) {
         m.abandon(p);

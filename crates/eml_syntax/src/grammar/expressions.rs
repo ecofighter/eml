@@ -89,6 +89,10 @@ fn let_head_and_body(p: &mut Parser) {
 
 /// 何も読めなければ、診断を出さずに偽を返す。何を期待していたかを知っている呼び出し側が診断するため。
 pub(super) fn expr(p: &mut Parser) -> bool {
+    nested(p, true, expr_inner)
+}
+
+fn expr_inner(p: &mut Parser) -> bool {
     match p.current() {
         IF_KW => if_expr(p),
         MATCH_KW => match_expr(p),
@@ -110,6 +114,10 @@ enum OpExpr {
 /// 演算子が1つもなければ `OP_SEQ` を作らない。1つの被演算子を余計なノードで包まないため。
 /// `section` が真なら、括弧の直下の `(a +)` を検出して `LeftSection` を返す。
 fn op_expr(p: &mut Parser, section: bool) -> OpExpr {
+    nested(p, OpExpr::Expr, |p| op_expr_inner(p, section))
+}
+
+fn op_expr_inner(p: &mut Parser, section: bool) -> OpExpr {
     let m = p.start();
     let mut operands = 0;
     let mut has_operator = false;

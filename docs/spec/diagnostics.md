@@ -55,7 +55,7 @@ struct Diagnostic {
 | E0010 | `SPACE_AROUND_DOT` | `.` の前後の空白 |
 | E0011 | `SYNTAX_ERROR` | その他の構文エラー |
 | E0012 | `NEEDS_PARENS` | 括弧の要る式 (`if`、`match`、`handle`、`let`) を、引数や演算の項の位置に括弧なしで書いた |
-| E0013 | `NESTING_TOO_DEEP` | 式・パターン・型の入れ子が深すぎる (256 を超えた。[文法](grammar.md))。S1 の後始末で追加する |
+| E0013 | `NESTING_TOO_DEEP` | 式・パターン・型の入れ子が深すぎる (256 を超えた。[文法](grammar.md)) |
 
 ## 構文の決定で増える診断
 

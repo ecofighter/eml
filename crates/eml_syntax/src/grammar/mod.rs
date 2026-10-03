@@ -10,7 +10,7 @@ mod patterns;
 mod types;
 
 use crate::SyntaxKind::{self, *};
-use crate::parser::{Marker, Parser};
+use crate::parser::{Marker, NESTING_LIMIT, Parser};
 use crate::token_set::TokenSet;
 use crate::{NOT_YET_SUPPORTED_LABEL, codes};
 
@@ -28,6 +28,7 @@ pub(crate) fn source_file(p: &mut Parser) {
             p.bump_any();
             continue;
         }
+        p.set_too_deep(false);
         if items::at_item_start(p) {
             items::item(p);
         } else {
@@ -45,6 +46,34 @@ pub(crate) fn source_file(p: &mut Parser) {
         }
     }
     m.complete(p, SOURCE_FILE);
+}
+
+/// 入れ子の深さを数えて `parse` を呼ぶ。上限を超えたら `too_deep` で読み飛ばし、`on_too_deep` を返す。
+fn nested<T>(p: &mut Parser, on_too_deep: T, parse: impl FnOnce(&mut Parser) -> T) -> T {
+    if !p.enter() {
+        too_deep(p);
+        return on_too_deep;
+    }
+    let result = parse(p);
+    p.leave();
+    result
+}
+
+/// E0013 は項目ごとに1回だけ出し、今の括弧かブロックの中身を読み飛ばす。その後の連鎖する診断は、項目の終わりまで
+/// 出さない (`source_file` で戻す)。読み飛ばしは `skip_to_closing` に任せる。括弧とブロックの深さを別々に数えるので、
+/// レイアウト段が入れ子の括弧を暗黙に閉じた場合でも、ファイルの残りを飲み込まない。
+fn too_deep(p: &mut Parser) {
+    if !p.is_too_deep() {
+        p.error(
+            codes::NESTING_TOO_DEEP,
+            "nesting is too deep",
+            format!("the parser stops at {NESTING_LIMIT} levels of nesting"),
+        );
+        p.set_too_deep(true);
+    }
+    let m = p.start();
+    skip_to_closing(p);
+    m.complete(p, ERROR);
 }
 
 /// 診断はトークンごとではなく1件だけ出す。`ERROR_TOKEN` は字句解析で報告済みなので、それ以外のトークンの位置に出す。

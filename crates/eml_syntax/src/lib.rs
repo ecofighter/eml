@@ -33,6 +33,7 @@ pub mod codes {
     pub const SPACE_AROUND_DOT: ErrorCode = ErrorCode(10);
     pub const SYNTAX_ERROR: ErrorCode = ErrorCode(11);
     pub const NEEDS_PARENS: ErrorCode = ErrorCode(12);
+    pub const NESTING_TOO_DEEP: ErrorCode = ErrorCode(13);
 }
 
 pub(crate) const NOT_YET_SUPPORTED_LABEL: &str = "this is implemented in a later stage";

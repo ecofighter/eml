@@ -32,6 +32,10 @@ pub(crate) enum Event {
     Tombstone,
 }
 
+/// 式・パターン・型の入れ子の深さの上限 (docs/spec/grammar.md)。後の段階の再帰がスタックを溢れさせないよう、
+/// parser で止める。
+pub(crate) const NESTING_LIMIT: u32 = 256;
+
 pub(crate) struct Parser<'t> {
     file: FileId,
     text: &'t str,
@@ -40,6 +44,8 @@ pub(crate) struct Parser<'t> {
     events: Vec<Event>,
     diagnostics: Vec<Diagnostic>,
     steps: Cell<u32>,
+    depth: u32,
+    too_deep: bool,
 }
 
 impl<'t> Parser<'t> {
@@ -52,7 +58,31 @@ impl<'t> Parser<'t> {
             events: Vec::new(),
             diagnostics: Vec::new(),
             steps: Cell::new(0),
+            depth: 0,
+            too_deep: false,
         }
+    }
+
+    /// 入れ子を1段深くする。上限に達していたら何もせずに偽を返す。
+    pub(crate) fn enter(&mut self) -> bool {
+        if self.depth == NESTING_LIMIT {
+            return false;
+        }
+        self.depth += 1;
+        true
+    }
+
+    pub(crate) fn leave(&mut self) {
+        self.depth -= 1;
+    }
+
+    /// 入れ子が深すぎて読み飛ばした項目の中では、診断を出さない。読み飛ばしたことで連鎖する診断を抑えるため。
+    pub(crate) fn set_too_deep(&mut self, too_deep: bool) {
+        self.too_deep = too_deep;
+    }
+
+    pub(crate) fn is_too_deep(&self) -> bool {
+        self.too_deep
     }
 
     pub(crate) fn finish(self) -> (Vec<Event>, Vec<Diagnostic>) {
@@ -200,6 +230,9 @@ impl<'t> Parser<'t> {
         message: impl Into<String>,
         label: impl Into<String>,
     ) {
+        if self.too_deep {
+            return;
+        }
         if self.at(SyntaxKind::ERROR_TOKEN) {
             return;
         }

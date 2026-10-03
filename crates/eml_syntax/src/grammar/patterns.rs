@@ -48,6 +48,10 @@ pub(super) fn apat_len(p: &Parser) -> Option<usize> {
 }
 
 pub(super) fn pattern(p: &mut Parser) -> bool {
+    nested(p, true, pattern_inner)
+}
+
+fn pattern_inner(p: &mut Parser) -> bool {
     let m = p.start();
     if !cpat(p) {
         m.abandon(p);
