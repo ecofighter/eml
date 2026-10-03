@@ -576,3 +576,29 @@ fn row_written_right_after_the_arrow() {
     "#);
     assert!(diagnostics("f : Int -><> Int").is_empty());
 }
+
+#[test]
+fn infix_constructor_with_type_applications() {
+    insta::assert_snapshot!(shape(&lines(&["data L a =", "  | Nil", "  | List a :: L a"])), @r#"
+    SOURCE_FILE
+      DATA_ITEM
+        DATA_KW "data"
+        UIDENT "L"
+        LIDENT "a"
+        EQ "="
+        ALT
+          PIPE "|"
+          UIDENT "Nil"
+        ALT
+          PIPE "|"
+          APP_TYPE
+            UIDENT "List"
+            VAR_TYPE
+              LIDENT "a"
+          CONOP "::"
+          APP_TYPE
+            UIDENT "L"
+            VAR_TYPE
+              LIDENT "a"
+    "#);
+}

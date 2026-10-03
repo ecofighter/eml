@@ -125,7 +125,7 @@ fn alt(p: &mut Parser) -> bool {
             "each constructor starts with `|`",
         );
     }
-    if p.at(UIDENT) && p.nth(1) != CONOP {
+    if p.at(UIDENT) && !has_conop_ahead(p) {
         p.bump(UIDENT);
         while types::at_type_atom_start(p) {
             types::type_atom(p);
@@ -144,6 +144,31 @@ fn alt(p: &mut Parser) -> bool {
     }
     m.complete(p, ALT);
     true
+}
+
+/// `| List a :: L a` のように左側が型の適用でも中置のコンストラクタとして読むため、選択肢の終わりまでに
+/// 括弧の外の `:` 演算子があるかを先読みする (docs/spec/grammar.md の `alt`)。
+fn has_conop_ahead(p: &Parser) -> bool {
+    let mut depth = 0u32;
+    let mut n = 0;
+    loop {
+        match p.peek(n) {
+            CONOP if depth == 0 => return true,
+            L_PAREN | L_BRACK | L_BRACE => depth += 1,
+            R_PAREN | R_BRACK | R_BRACE => {
+                if depth == 0 {
+                    return false;
+                }
+                depth -= 1;
+            }
+            PIPE | LAYOUT_SEP | LAYOUT_OPEN | LAYOUT_CLOSE | SEMICOLON if depth == 0 => {
+                return false;
+            }
+            EOF => return false,
+            _ => {}
+        }
+        n += 1;
+    }
 }
 
 /// S2 で実装する。今は E0004 を出したうえで、宣言として最後まで読む。
