@@ -36,7 +36,8 @@ pub mod codes {
     pub const NESTING_TOO_DEEP: ErrorCode = ErrorCode(13);
 }
 
-pub(crate) const NOT_YET_SUPPORTED_LABEL: &str = "this is implemented in a later stage";
+/// E0004 のラベル。HIR 以降の段階も、まだ扱えない構文に同じ文言を使う (docs/spec/diagnostics.md)。
+pub const NOT_YET_SUPPORTED_LABEL: &str = "this is implemented in a later stage";
 
 /// 壊れた入力でも必ず木を作る。エラーがあっても後の段階を止めないため。
 #[derive(Debug, Clone, PartialEq, Eq)]

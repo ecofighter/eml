@@ -218,11 +218,160 @@ impl Literal {
 
 impl PathExpr {
     pub fn segments(&self) -> impl Iterator<Item = SyntaxToken> {
-        self.syntax
-            .children_with_tokens()
-            .filter_map(NodeOrToken::into_token)
-            .filter(|token| matches!(token.kind(), SyntaxKind::UIDENT | SyntaxKind::LIDENT))
+        path_segments(&self.syntax)
     }
+}
+
+impl LetStmt {
+    pub fn pat(&self) -> Option<Pat> {
+        support::child(&self.syntax)
+    }
+
+    pub fn ty(&self) -> Option<Type> {
+        support::child(&self.syntax)
+    }
+
+    pub fn body(&self) -> Option<Expr> {
+        support::child(&self.syntax)
+    }
+}
+
+impl ExprStmt {
+    pub fn expr(&self) -> Option<Expr> {
+        support::child(&self.syntax)
+    }
+}
+
+impl IfExpr {
+    pub fn condition(&self) -> Option<Expr> {
+        child_between(
+            &self.syntax,
+            Some(SyntaxKind::IF_KW),
+            Some(SyntaxKind::THEN_KW),
+        )
+    }
+
+    pub fn then_branch(&self) -> Option<Expr> {
+        child_between(
+            &self.syntax,
+            Some(SyntaxKind::THEN_KW),
+            Some(SyntaxKind::ELSE_KW),
+        )
+    }
+
+    pub fn else_branch(&self) -> Option<Expr> {
+        child_between(&self.syntax, Some(SyntaxKind::ELSE_KW), None)
+    }
+}
+
+impl AppExpr {
+    pub fn callee(&self) -> Option<Expr> {
+        support::child(&self.syntax)
+    }
+
+    pub fn args(&self) -> impl Iterator<Item = Expr> {
+        support::children::<Expr>(&self.syntax).skip(1)
+    }
+}
+
+impl ParenExpr {
+    pub fn expr(&self) -> Option<Expr> {
+        support::child(&self.syntax)
+    }
+}
+
+impl AnnotExpr {
+    pub fn expr(&self) -> Option<Expr> {
+        support::child(&self.syntax)
+    }
+
+    pub fn ty(&self) -> Option<Type> {
+        support::child(&self.syntax)
+    }
+}
+
+impl BindPat {
+    pub fn name(&self) -> Option<SyntaxToken> {
+        support::token(&self.syntax, SyntaxKind::LIDENT)
+    }
+}
+
+impl ParenPat {
+    pub fn pat(&self) -> Option<Pat> {
+        support::child(&self.syntax)
+    }
+}
+
+impl PathType {
+    pub fn segments(&self) -> impl Iterator<Item = SyntaxToken> {
+        path_segments(&self.syntax)
+    }
+}
+
+impl ParenType {
+    pub fn ty(&self) -> Option<Type> {
+        support::child(&self.syntax)
+    }
+}
+
+impl FnType {
+    pub fn param(&self) -> Option<Type> {
+        child_between(&self.syntax, None, Some(SyntaxKind::THIN_ARROW))
+    }
+
+    pub fn row(&self) -> Option<EffectRow> {
+        support::child(&self.syntax)
+    }
+
+    pub fn ret(&self) -> Option<Type> {
+        child_between(&self.syntax, Some(SyntaxKind::THIN_ARROW), None)
+    }
+}
+
+impl EffectRow {
+    pub fn effects(&self) -> AstChildren<Effect> {
+        support::children(&self.syntax)
+    }
+
+    /// `<IO | e>` と `<e>` の row 変数。
+    pub fn tail(&self) -> Option<SyntaxToken> {
+        support::token(&self.syntax, SyntaxKind::LIDENT)
+    }
+}
+
+impl Effect {
+    pub fn name(&self) -> Option<SyntaxToken> {
+        support::token(&self.syntax, SyntaxKind::UIDENT)
+    }
+}
+
+fn path_segments(node: &SyntaxNode) -> impl Iterator<Item = SyntaxToken> {
+    node.children_with_tokens()
+        .filter_map(NodeOrToken::into_token)
+        .filter(|token| matches!(token.kind(), SyntaxKind::UIDENT | SyntaxKind::LIDENT))
+}
+
+/// 欠けた部分があっても前後の部分を取り違えないように、区切りのトークンの間で子を探す。
+fn child_between<N: AstNode<Language = EmlLanguage>>(
+    node: &SyntaxNode,
+    after: Option<SyntaxKind>,
+    before: Option<SyntaxKind>,
+) -> Option<N> {
+    let mut started = after.is_none();
+    for element in node.children_with_tokens() {
+        let kind = element.kind();
+        if !started {
+            started = Some(kind) == after;
+            continue;
+        }
+        if Some(kind) == before {
+            return None;
+        }
+        if let Some(found) = element.into_node().and_then(N::cast) {
+            return Some(found);
+        }
+    }
+    None
 }
 
 fn name_token(node: &SyntaxNode) -> Option<SyntaxToken> {
