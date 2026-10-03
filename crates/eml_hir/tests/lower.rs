@@ -108,17 +108,45 @@ fn constructs_of_later_stages_are_not_yet_supported() {
 }
 
 #[test]
-fn rows_and_types_of_later_stages() {
+fn row_variables_type_variables_and_unknown_effects() {
     let text = "f : Int -> <e> Int\nf x = x\ng : a -> <State> Int\ng x = 1";
     insta::assert_snapshot!(lower_text(text), @r"
-    f : Int -> <error> Int
+    f : Int -> <e> Int
     f x#0 = x#0
-    g : <error> -> <error> Int
+    g : a -> <error> Int
     g x#0 = 1
     ---
-    E0004 1:13 row variables are not supported yet
-    E0004 3:5 type variables are not supported yet
     E1002 3:11 cannot find effect `State`
+    ");
+}
+
+#[test]
+fn signature_variables_scope_over_the_body() {
+    let text = "f : a -> <e> a\nf x =\n  let y : a = x\n  let g = fn (h : b -> <e> b) -> h\n  y";
+    insta::assert_snapshot!(lower_text(text), @r"
+    f : a -> <e> a
+    f x#0 = {
+      let y#1 : a = x#0
+      let g#3 = (fn (h#2 : <error> -> <e> <error>) -> h#2)
+      y#1
+    }
+    ---
+    E1002 4:19 cannot find type variable `b`
+    E1002 4:28 cannot find type variable `b`
+    ");
+}
+
+#[test]
+fn type_variables_and_row_variables_have_separate_names() {
+    let text =
+        "f : a -> <IO | a> a\nf x = x\n\ng : Int -> <IO | e> Int\ng x = (x : Int -> <f> Int)";
+    insta::assert_snapshot!(lower_text(text), @r"
+    f : a -> <IO | a> a
+    f x#0 = x#0
+    g : Int -> <IO | e> Int
+    g x#0 = (x#0 : Int -> <error> Int)
+    ---
+    E1002 5:20 cannot find row variable `f`
     ");
 }
 

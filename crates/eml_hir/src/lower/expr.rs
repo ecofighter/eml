@@ -5,7 +5,7 @@ use eml_syntax::{SyntaxKind, SyntaxNode, SyntaxToken, ast, decode_string, int_va
 use la_arena::Arena;
 use rowan::ast::AstNode;
 
-use super::types::TypeLowering;
+use super::types::{TypeLowering, TypeScope};
 use crate::builtin::Builtin;
 use crate::hir::*;
 use crate::{codes, not_yet_supported};
@@ -13,7 +13,7 @@ use crate::{codes, not_yet_supported};
 pub(super) struct BodyLowering<'a> {
     pub(super) file: FileId,
     functions: &'a HashMap<String, FunctionId>,
-    types: &'a mut Arena<TypeRef>,
+    types: TypeScope<'a>,
     pub(super) diagnostics: &'a mut Vec<Diagnostic>,
     pub(super) exprs: Arena<Expr>,
     pats: Arena<Pat>,
@@ -26,7 +26,7 @@ impl<'a> BodyLowering<'a> {
     pub(super) fn new(
         file: FileId,
         functions: &'a HashMap<String, FunctionId>,
-        types: &'a mut Arena<TypeRef>,
+        types: TypeScope<'a>,
         diagnostics: &'a mut Vec<Diagnostic>,
     ) -> Self {
         BodyLowering {
@@ -292,7 +292,10 @@ impl<'a> BodyLowering<'a> {
     fn lower_type(&mut self, ty: Option<ast::Type>, fallback: TextRange) -> TypeRefId {
         TypeLowering {
             file: self.file,
-            types: &mut *self.types,
+            types: &mut *self.types.types,
+            type_vars: &mut *self.types.type_vars,
+            row_vars: &mut *self.types.row_vars,
+            define: false,
             diagnostics: &mut *self.diagnostics,
         }
         .lower(ty, fallback)

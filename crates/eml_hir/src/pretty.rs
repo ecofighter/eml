@@ -131,6 +131,7 @@ impl Printer<'_> {
         match &types[id].kind {
             TypeRefKind::Error => "<error>".to_string(),
             TypeRefKind::Builtin(builtin) => builtin.name().to_string(),
+            TypeRefKind::Var(id) => self.function.type_vars[*id].name.clone(),
             TypeRefKind::Fn { param, row, ret } => {
                 let param_text = self.ty(*param);
                 let param_text = if matches!(types[*param].kind, TypeRefKind::Fn { .. }) {
@@ -138,11 +139,24 @@ impl Printer<'_> {
                 } else {
                     param_text
                 };
+                let effect_names = |effects: &[EffectRef]| -> Vec<String> {
+                    effects
+                        .iter()
+                        .map(|EffectRef::Io| "IO".to_string())
+                        .collect()
+                };
                 let row = match row {
                     RowRef::Omitted => String::new(),
                     RowRef::Closed { effects, .. } => {
-                        let names: Vec<&str> = effects.iter().map(|EffectRef::Io| "IO").collect();
-                        format!("<{}> ", names.join(", "))
+                        format!("<{}> ", effect_names(effects).join(", "))
+                    }
+                    RowRef::Open { effects, tail, .. } => {
+                        let tail = &self.function.row_vars[*tail].name;
+                        if effects.is_empty() {
+                            format!("<{tail}> ")
+                        } else {
+                            format!("<{} | {tail}> ", effect_names(effects).join(", "))
+                        }
                     }
                     RowRef::Error => "<error> ".to_string(),
                 };

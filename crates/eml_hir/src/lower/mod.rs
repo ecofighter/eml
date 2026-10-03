@@ -12,7 +12,7 @@ use rowan::ast::AstNode;
 use crate::hir::*;
 use crate::{codes, not_yet_supported};
 use expr::BodyLowering;
-use types::TypeLowering;
+use types::{TypeLowering, TypeScope};
 
 /// 同じ名前のシグネチャと等式。名前で対応づけてから、並び方を検査する (docs/spec/declarations.md)。
 struct Definition {
@@ -80,6 +80,8 @@ pub fn lower(file: FileId, source: &ast::SourceFile) -> (Module, Vec<Diagnostic>
             _ => {}
         }
         let mut types = Arena::new();
+        let mut type_vars = Arena::new();
+        let mut row_vars = Arena::new();
         let signature = signature.map(|(_, node, _)| {
             let range = node
                 .ty()
@@ -87,6 +89,9 @@ pub fn lower(file: FileId, source: &ast::SourceFile) -> (Module, Vec<Diagnostic>
             let ty = TypeLowering {
                 file,
                 types: &mut types,
+                type_vars: &mut type_vars,
+                row_vars: &mut row_vars,
+                define: true,
                 diagnostics: &mut diagnostics,
             }
             .lower(node.ty(), range);
@@ -101,6 +106,8 @@ pub fn lower(file: FileId, source: &ast::SourceFile) -> (Module, Vec<Diagnostic>
             signature,
             body: None,
             types,
+            type_vars,
+            row_vars,
         });
         names.insert(name, id);
         if let Some((_, equation, _)) = first_equation {
@@ -109,8 +116,14 @@ pub fn lower(file: FileId, source: &ast::SourceFile) -> (Module, Vec<Diagnostic>
     }
     // 本体は、すべての関数の名前がそろってから変換する。後ろで定義した関数も呼べるようにするため
     for (id, equation) in pending {
-        let body = BodyLowering::new(file, &names, &mut functions[id].types, &mut diagnostics)
-            .lower_equation(&equation);
+        let function = &mut functions[id];
+        let scope = TypeScope {
+            types: &mut function.types,
+            type_vars: &mut function.type_vars,
+            row_vars: &mut function.row_vars,
+        };
+        let body =
+            BodyLowering::new(file, &names, scope, &mut diagnostics).lower_equation(&equation);
         functions[id].body = Some(body);
     }
     diagnostics.sort_by_key(|d| d.primary.range.start());

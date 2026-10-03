@@ -4,12 +4,25 @@ use la_arena::Arena;
 use rowan::ast::AstNode;
 
 use crate::builtin::BuiltinType;
-use crate::hir::{EffectRef, RowRef, TypeRef, TypeRefId, TypeRefKind};
+use crate::hir::{
+    EffectRef, RowRef, RowVarDecl, RowVarId, TypeRef, TypeRefId, TypeRefKind, TypeVarDecl,
+};
 use crate::{codes, not_yet_supported};
+
+/// 本体の注釈が引く、関数ごとの型の置き場所。
+pub(super) struct TypeScope<'a> {
+    pub types: &'a mut Arena<TypeRef>,
+    pub type_vars: &'a mut Arena<TypeVarDecl>,
+    pub row_vars: &'a mut Arena<RowVarDecl>,
+}
 
 pub(super) struct TypeLowering<'a> {
     pub file: FileId,
     pub types: &'a mut Arena<TypeRef>,
+    pub type_vars: &'a mut Arena<TypeVarDecl>,
+    pub row_vars: &'a mut Arena<RowVarDecl>,
+    /// シグネチャなら真で、新しい変数の名前を表に入れる。本体の注釈では表にある名前だけを使える。
+    pub define: bool,
     pub diagnostics: &'a mut Vec<Diagnostic>,
 }
 
@@ -31,9 +44,10 @@ impl TypeLowering<'_> {
                 let ret = self.lower(function.ret(), range);
                 TypeRefKind::Fn { param, row, ret }
             }
-            ast::Type::VarType(_) => {
-                self.unsupported(range, "type variables are not supported yet")
-            }
+            ast::Type::VarType(var) => match var.name() {
+                Some(name) => self.type_var(&name, range),
+                None => TypeRefKind::Error,
+            },
             ast::Type::AppType(_) => {
                 self.unsupported(range, "type applications are not supported yet")
             }
@@ -62,14 +76,14 @@ impl TypeLowering<'_> {
 
     fn row(&mut self, row: &ast::EffectRow) -> RowRef {
         let mut valid = true;
-        if let Some(tail) = row.tail() {
-            self.diagnostics.push(not_yet_supported(
-                self.file,
-                tail.text_range(),
-                "row variables are not supported yet",
-            ));
-            valid = false;
-        }
+        let tail = match row.tail() {
+            Some(tail) => {
+                let id = self.row_var(&tail);
+                valid &= id.is_some();
+                id
+            }
+            None => None,
+        };
         let mut effects = Vec::new();
         for effect in row.effects() {
             let Some(name) = effect.name() else {
@@ -91,14 +105,56 @@ impl TypeLowering<'_> {
                 valid = false;
             }
         }
-        if valid {
-            RowRef::Closed {
+        let range = row.syntax().text_range();
+        match (valid, tail) {
+            (false, _) => RowRef::Error,
+            (true, Some(tail)) => RowRef::Open {
                 effects,
-                range: row.syntax().text_range(),
-            }
-        } else {
-            RowRef::Error
+                tail,
+                range,
+            },
+            (true, None) => RowRef::Closed { effects, range },
         }
+    }
+
+    fn type_var(&mut self, name: &SyntaxToken, range: TextRange) -> TypeRefKind {
+        let text = name.text();
+        if let Some((id, _)) = self.type_vars.iter().find(|(_, var)| var.name == text) {
+            return TypeRefKind::Var(id);
+        }
+        if self.define {
+            let id = self.type_vars.alloc(TypeVarDecl {
+                name: text.to_string(),
+                range,
+            });
+            return TypeRefKind::Var(id);
+        }
+        self.diagnostics.push(Diagnostic::error(
+            codes::UNDEFINED_TYPE,
+            format!("cannot find type variable `{text}`"),
+            Label::new(self.file, range, "not found in the signature"),
+        ));
+        TypeRefKind::Error
+    }
+
+    fn row_var(&mut self, name: &SyntaxToken) -> Option<RowVarId> {
+        let text = name.text();
+        let range = name.text_range();
+        if let Some((id, _)) = self.row_vars.iter().find(|(_, var)| var.name == text) {
+            return Some(id);
+        }
+        if self.define {
+            return Some(self.row_vars.alloc(RowVarDecl {
+                name: text.to_string(),
+                range,
+            }));
+        }
+        self.diagnostics.push(Diagnostic::error(
+            codes::UNDEFINED_TYPE,
+            format!("cannot find row variable `{text}`"),
+            Label::new(self.file, range, "not found in the signature"),
+        ));
+        None
     }
 
     fn unsupported(&mut self, range: TextRange, message: &str) -> TypeRefKind {

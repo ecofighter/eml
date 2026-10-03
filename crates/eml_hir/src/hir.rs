@@ -28,6 +28,27 @@ pub struct Function {
     pub body: Option<Body>,
     /// シグネチャと、本体の中の型の注釈。
     pub types: Arena<TypeRef>,
+    /// シグネチャに現れた型変数と row 変数。
+    pub type_vars: Arena<TypeVarDecl>,
+    pub row_vars: Arena<RowVarDecl>,
+}
+
+pub type TypeVarId = Idx<TypeVarDecl>;
+pub type RowVarId = Idx<RowVarDecl>;
+
+/// シグネチャの型変数。本体の注釈からも同じ変数を指す (docs/spec/types.md の「推論」)。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TypeVarDecl {
+    pub name: String,
+    /// シグネチャで最初に現れた位置。
+    pub range: TextRange,
+}
+
+/// シグネチャの row 変数。型変数とは別の名前空間に置く (docs/spec/types.md の「推論」)。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RowVarDecl {
+    pub name: String,
+    pub range: TextRange,
 }
 
 #[derive(Debug)]
@@ -145,6 +166,7 @@ pub struct TypeRef {
 pub enum TypeRefKind {
     Error,
     Builtin(BuiltinType),
+    Var(TypeVarId),
     Fn {
         param: TypeRefId,
         row: RowRef,
@@ -158,6 +180,12 @@ pub enum RowRef {
     Omitted,
     Closed {
         effects: Vec<EffectRef>,
+        range: TextRange,
+    },
+    /// `<e>` と `<IO | e>`。
+    Open {
+        effects: Vec<EffectRef>,
+        tail: RowVarId,
         range: TextRange,
     },
     /// 未対応の row 変数や未定義のエフェクトの跡。型検査はどのエフェクトも受け入れ、診断を連鎖させない。

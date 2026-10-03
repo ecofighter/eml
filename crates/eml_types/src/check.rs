@@ -14,6 +14,27 @@ use crate::{BodyTypes, TypedModule, codes};
 pub(crate) fn check_module(module: &Module) -> (TypedModule, Vec<Diagnostic>) {
     let mut table = Table::new();
     let mut diagnostics = Vec::new();
+    // 型変数と row 変数は Task 7 で入れる。それまでは段階1と同じ E0004 を出す
+    for (_, function) in module.functions.iter() {
+        for (_, ty) in function.types.iter() {
+            match &ty.kind {
+                TypeRefKind::Var(_) => diagnostics.push(not_yet_supported(
+                    module.file,
+                    ty.range,
+                    "type variables are not supported yet",
+                )),
+                TypeRefKind::Fn {
+                    row: RowRef::Open { range, .. },
+                    ..
+                } => diagnostics.push(not_yet_supported(
+                    module.file,
+                    *range,
+                    "row variables are not supported yet",
+                )),
+                _ => {}
+            }
+        }
+    }
     let mut signatures = ArenaMap::default();
     for (id, function) in module.functions.iter() {
         if let Some(signature) = &function.signature {
@@ -74,6 +95,8 @@ fn lower_type(table: &mut Table, function: &Function, id: TypeRefId) -> Ty {
         TypeRefKind::Builtin(BuiltinType::String) => table.string,
         TypeRefKind::Builtin(BuiltinType::Bool) => table.bool,
         TypeRefKind::Builtin(BuiltinType::Unit) => table.unit,
+        // 多相は Task 7 で入れる。それまでは `check_module` の先頭で E0004 を報告し、ここでは `Error` にする
+        TypeRefKind::Var(_) => table.error,
         TypeRefKind::Fn { param, row, ret } => {
             let param = lower_type(table, function, *param);
             let ret = lower_type(table, function, *ret);
@@ -84,7 +107,7 @@ fn lower_type(table: &mut Table, function: &Function, id: TypeRefId) -> Ty {
                     Row::closed(effects.iter().map(|EffectRef::Io| Effect::Io).collect())
                 }
                 // 未対応の row の跡。どのエフェクトも受け入れて、診断を連鎖させない
-                RowRef::Error => Row {
+                RowRef::Error | RowRef::Open { .. } => Row {
                     labels: Vec::new(),
                     tail: Some(table.fresh_row_var()),
                 },
@@ -131,8 +154,11 @@ fn has_error(function: &Function, id: TypeRefId) -> bool {
     match &function.types[id].kind {
         TypeRefKind::Error => true,
         TypeRefKind::Builtin(_) => false,
+        TypeRefKind::Var(_) => true,
         TypeRefKind::Fn { param, row, ret } => {
-            matches!(row, RowRef::Error) || has_error(function, *param) || has_error(function, *ret)
+            matches!(row, RowRef::Error | RowRef::Open { .. })
+                || has_error(function, *param)
+                || has_error(function, *ret)
         }
     }
 }
