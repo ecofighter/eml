@@ -22,6 +22,10 @@
               cargoLock = {
                 lockFile = ./Cargo.lock;
               };
+              cargoBuildFlags = [
+                "-p"
+                "eml_cli"
+              ];
             };
             default = eml;
           };
@@ -30,6 +34,9 @@
             default = pkgs.mkShell {
               packages = with pkgs; [
                 rust-analyzer
+                clippy
+                rustfmt
+                cargo-insta
               ];
               nativeBuildInputs = with pkgs; [
                 cargo
