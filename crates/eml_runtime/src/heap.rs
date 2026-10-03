@@ -42,6 +42,20 @@ pub enum Payload {
     Frame(Frame),
 }
 
+/// 変数が持っている値と、その変数が所有している参照の数。`dup` で増え、読み出し (所有権の移動) で減る
+/// (docs/spec/core-ir.md)。ヒープにない値では数は意味を持たない。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Owned {
+    pub value: Value,
+    pub refs: u32,
+}
+
+impl Owned {
+    pub fn new(value: Value) -> Owned {
+        Owned { value, refs: 1 }
+    }
+}
+
 /// CEK 機械の継続のフレーム。継続もランタイムのオブジェクトにする (docs/spec/runtime.md)。各フィールドの意味は
 /// インタプリタが決める。
 #[derive(Debug, Clone, PartialEq)]
@@ -50,7 +64,7 @@ pub struct Frame {
     pub resume: u32,
     pub bind: u32,
     /// `None` なら、戻った後も今の環境を使い続ける (入れ子の式のフレーム)。
-    pub slots: Option<Vec<Option<Value>>>,
+    pub slots: Option<Vec<Option<Owned>>>,
     pub next: Option<ObjRef>,
 }
 
@@ -239,17 +253,12 @@ impl Heap {
 
 fn children(payload: &Payload, work: &mut Vec<ObjRef>) {
     if let Payload::Frame(frame) = payload {
-        work.extend(
-            frame
-                .slots
-                .iter()
-                .flatten()
-                .flatten()
-                .filter_map(|value| match value {
-                    Value::Obj(obj) => Some(*obj),
-                    _ => None,
-                }),
-        );
+        for owned in frame.slots.iter().flatten().flatten() {
+            // 変数が2つ参照を持っていれば、解放でも2つ手放す
+            if let Value::Obj(obj) = owned.value {
+                work.extend(std::iter::repeat_n(obj, owned.refs as usize));
+            }
+        }
         work.extend(frame.next);
     }
 }
@@ -262,7 +271,7 @@ mod tests {
         heap.alloc(DescId::STRING, Payload::Str(text.to_string()))
     }
 
-    fn frame(heap: &mut Heap, slots: Vec<Option<Value>>, next: Option<ObjRef>) -> ObjRef {
+    fn frame(heap: &mut Heap, slots: Vec<Option<Owned>>, next: Option<ObjRef>) -> ObjRef {
         heap.alloc(
             DescId::FRAME,
             Payload::Frame(Frame {
@@ -314,10 +323,31 @@ mod tests {
         let inner = frame(&mut heap, vec![], None);
         let outer = frame(
             &mut heap,
-            vec![Some(Value::Obj(s)), Some(Value::Int(1)), None],
+            vec![
+                Some(Owned::new(Value::Obj(s))),
+                Some(Owned::new(Value::Int(1))),
+                None,
+            ],
             Some(inner),
         );
         heap.decref(outer).unwrap();
+        assert!(heap.live_objects().is_empty());
+    }
+
+    #[test]
+    fn a_slot_with_two_references_releases_both() {
+        let mut heap = Heap::new();
+        let s = string(&mut heap, "a");
+        heap.dup(s).unwrap();
+        let owner = frame(
+            &mut heap,
+            vec![Some(Owned {
+                value: Value::Obj(s),
+                refs: 2,
+            })],
+            None,
+        );
+        heap.decref(owner).unwrap();
         assert!(heap.live_objects().is_empty());
     }
 

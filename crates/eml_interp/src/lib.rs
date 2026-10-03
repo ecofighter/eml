@@ -2,7 +2,7 @@ use std::fmt;
 use std::sync::Arc;
 
 use eml_core_ir::{Atom, CExpr, CExprId, FALSE, FnIdx, IoOp, PrimOp, Program, Rhs, TRUE, VarId};
-use eml_runtime::{DescId, Frame, Heap, HeapError, ObjRef, OutputSink, Payload, Value};
+use eml_runtime::{DescId, Frame, Heap, HeapError, ObjRef, OutputSink, Owned, Payload, Value};
 
 /// 将来 `threads` などを足しても呼び出し側を壊さないように、`non_exhaustive` にして `RunConfig::default()` から作らせる。
 #[derive(Debug, Clone, Default)]
@@ -46,7 +46,7 @@ struct Machine<'p> {
     heap: Heap,
     function: FnIdx,
     control: CExprId,
-    slots: Vec<Option<Value>>,
+    slots: Vec<Option<Owned>>,
     /// 継続の先頭のフレーム。最下部には常に `IO` の handler のフレームがある。
     cont: ObjRef,
 }
@@ -68,7 +68,7 @@ impl<'p> Machine<'p> {
         let mut slots = vec![None; main.vars.len()];
         // `main : Unit -> <IO> Unit` の引数
         for param in &main.params {
-            slots[param.0 as usize] = Some(Value::Unit);
+            slots[param.0 as usize] = Some(Owned::new(Value::Unit));
         }
         Machine {
             program,
@@ -114,8 +114,12 @@ impl<'p> Machine<'p> {
                 return self.ret(value);
             }
             CExpr::Dup { var, body } => {
-                if let Value::Obj(obj) = self.peek(*var)? {
+                let slot = self.slots[var.0 as usize]
+                    .as_mut()
+                    .ok_or_else(|| internal("a variable duplicated after it was moved"))?;
+                if let Value::Obj(obj) = slot.value {
                     self.heap.dup(obj).map_err(heap_error)?;
+                    slot.refs += 1;
                 }
                 self.control = *body;
             }
@@ -156,7 +160,7 @@ impl<'p> Machine<'p> {
                 let target = self.program.function(*callee);
                 let mut slots = vec![None; target.vars.len()];
                 for (param, value) in target.params.iter().zip(args) {
-                    slots[param.0 as usize] = Some(value);
+                    slots[param.0 as usize] = Some(Owned::new(value));
                 }
                 self.slots = slots;
                 self.function = *callee;
@@ -169,7 +173,7 @@ impl<'p> Machine<'p> {
                 return Ok(());
             }
         };
-        self.slots[var.0 as usize] = Some(value);
+        self.slots[var.0 as usize] = Some(Owned::new(value));
         self.control = body;
         Ok(())
     }
@@ -204,31 +208,40 @@ impl<'p> Machine<'p> {
         }
         self.function = FnIdx(frame.function);
         self.control = CExprId(frame.resume);
-        self.slots[frame.bind as usize] = Some(value);
+        self.slots[frame.bind as usize] = Some(Owned::new(value));
         self.cont = frame
             .next
             .ok_or_else(|| internal("a frame without a next frame"))?;
         Ok(false)
     }
 
-    /// ヒープの値の読み出しは所有権の移動だが、誰が所有するかは Perceus が静的に決めて `dup` / `decref` を挿入済みである。
-    /// `dup s; return s` や `s ++ s` のように、複製した後に同じ変数を読むことがあるので、読んでもスロットは空にしない
-    /// (docs/spec/core-ir.md)。参照カウントの収支は `dup` / `decref` と、プリミティブの消費だけが動かす。
-    fn atom(&self, atom: &Atom) -> Result<Value, String> {
+    /// ヒープの値の読み出しは所有権の移動で、複製は `dup` 命令だけが行う (docs/spec/core-ir.md)。ただし Perceus の `dup` で
+    /// 1つの変数が複数の参照を持つので (`s ++ s`、`dup s; return s`)、環境を共有する入れ子の式でも後で読めるように
+    /// 変数ごとに参照の数を数え、読むたびに1つ減らして0になったらスロットを空にする。ヒープにない値は何度でも読める。
+    fn atom(&mut self, atom: &Atom) -> Result<Value, String> {
         Ok(match *atom {
-            Atom::Var(var) => self.peek(var)?,
+            Atom::Var(var) => {
+                let slot = &mut self.slots[var.0 as usize];
+                let owned = slot
+                    .as_mut()
+                    .ok_or_else(|| internal("a variable read after it was moved"))?;
+                let value = owned.value;
+                if let Value::Obj(_) = value {
+                    owned.refs -= 1;
+                    if owned.refs == 0 {
+                        *slot = None;
+                    }
+                }
+                value
+            }
             Atom::Int(n) => Value::Int(n),
             Atom::Unit => Value::Unit,
             Atom::Tag(tag) => Value::Tag(tag),
         })
     }
 
-    fn atoms(&self, atoms: &[Atom]) -> Result<Vec<Value>, String> {
+    fn atoms(&mut self, atoms: &[Atom]) -> Result<Vec<Value>, String> {
         atoms.iter().map(|atom| self.atom(atom)).collect()
-    }
-
-    fn peek(&self, var: VarId) -> Result<Value, String> {
-        self.slots[var.0 as usize].ok_or_else(|| internal("a variable read after it was moved"))
     }
 
     fn prim(&mut self, op: PrimOp, args: &[Value]) -> Result<Value, String> {
