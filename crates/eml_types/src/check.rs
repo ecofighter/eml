@@ -6,10 +6,11 @@ use eml_hir::{
 use la_arena::ArenaMap;
 
 use crate::builtins::builtin_type;
+use crate::kind::Bound;
 use crate::scheme::{Rigids, Scheme, lower_type};
 use crate::table::{Row, Table, Ty, TyKind, UnifyError};
-use crate::ty::{Effect, Linearity, Type};
-use crate::{BodyTypes, TypedModule, codes};
+use crate::ty::{Effect, KindConstraint, KindTerm, Linearity, Type};
+use crate::{BodyTypes, TypedModule, codes, scc, usage};
 
 pub(crate) fn check_module(module: &Module) -> (TypedModule, Vec<Diagnostic>) {
     let mut table = Table::new();
@@ -37,40 +38,57 @@ pub(crate) fn check_module(module: &Module) -> (TypedModule, Vec<Diagnostic>) {
         check_main(module, &table, &schemes, id, &mut diagnostics);
     }
     let mut bodies = Vec::new();
-    for (id, function) in module.functions.iter() {
-        let (Some(scheme), Some(body)) = (schemes.get(id), &function.body) else {
-            continue;
-        };
-        let signature = scheme.ty;
-        let mut checker = BodyCheck {
-            module,
-            function,
-            body,
-            rigids: &rigids[id],
-            schemes: &schemes,
-            table: &mut table,
-            diagnostics: &mut diagnostics,
-            ambient: Row::pure(),
-            ambient_source: AmbientSource::Signature,
-            exprs: ArenaMap::default(),
-            locals: ArenaMap::default(),
-        };
-        checker.check_function(signature);
-        bodies.push((id, checker.exprs, checker.locals));
+    // 呼ばれる側の SCC から順に検査し、SCC ごとに Kind を多相化する (docs/spec/types.md の「推論」)
+    for component in scc::components(module) {
+        for &id in &component {
+            let function = &module.functions[id];
+            let (Some(scheme), Some(body)) = (schemes.get(id), &function.body) else {
+                continue;
+            };
+            let signature = scheme.ty;
+            let mut checker = BodyCheck {
+                module,
+                function,
+                body,
+                rigids: &rigids[id],
+                schemes: &schemes,
+                table: &mut table,
+                diagnostics: &mut diagnostics,
+                ambient: Row::pure(),
+                ambient_source: AmbientSource::Signature,
+                typing: BodyTyping::default(),
+            };
+            checker.check_function(signature);
+            let typing = checker.typing;
+            usage::constrain(body, &typing, &mut table);
+            bodies.push((id, typing));
+        }
+        for &id in &component {
+            if let Some(scheme) = schemes.get_mut(id) {
+                scheme.generalize(&table);
+            }
+        }
     }
+    let violated = table.solve_kinds();
+    // 段階2には `Lin` の型がないので、Kind の制約は破れない。違反の診断の番号は段階5で決める
+    debug_assert!(
+        !violated,
+        "a kind constraint was violated without linear types"
+    );
     let mut typed = TypedModule {
         main,
         ..TypedModule::default()
     };
     for (id, scheme) in schemes.iter() {
         typed.signatures.insert(id, table.export(scheme.ty));
+        typed.kinds.insert(id, kind_constraints(&table, scheme));
     }
-    for (id, exprs, locals) in bodies {
+    for (id, typing) in bodies {
         let mut types = BodyTypes::default();
-        for (expr, &ty) in exprs.iter() {
+        for (expr, &ty) in typing.exprs.iter() {
             types.exprs.insert(expr, table.export(ty));
         }
-        for (local, &ty) in locals.iter() {
+        for (local, &ty) in typing.locals.iter() {
             types.locals.insert(local, table.export(ty));
         }
         typed.bodies.insert(id, types);
@@ -151,6 +169,15 @@ enum AmbientSource {
     Lambda(Origin),
 }
 
+/// 1つの本体の推論結果。使用回数のパスも読む。
+#[derive(Default)]
+pub(crate) struct BodyTyping {
+    pub exprs: ArenaMap<ExprId, Ty>,
+    pub locals: ArenaMap<LocalId, Ty>,
+    /// パターンが受けた値の型。`_` で受けた値の Kind に制約を出すのに使う。
+    pub pats: ArenaMap<PatId, Ty>,
+}
+
 struct BodyCheck<'a> {
     module: &'a Module,
     function: &'a Function,
@@ -162,8 +189,7 @@ struct BodyCheck<'a> {
     /// 本体が起こしてよいエフェクト。最後にたどったシグネチャの矢印の row である。
     ambient: Row,
     ambient_source: AmbientSource,
-    exprs: ArenaMap<ExprId, Ty>,
-    locals: ArenaMap<LocalId, Ty>,
+    typing: BodyTyping,
 }
 
 impl BodyCheck<'_> {
@@ -252,7 +278,7 @@ impl BodyCheck<'_> {
                         self.expect(expr.range, expected, unit, &origin);
                     }
                 }
-                self.exprs.insert(id, expected);
+                self.typing.exprs.insert(id, expected);
             }
             ExprKind::Block { stmts, tail } => {
                 self.stmts(stmts);
@@ -263,7 +289,7 @@ impl BodyCheck<'_> {
                         self.expect(expr.range, expected, unit, &origin);
                     }
                 }
-                self.exprs.insert(id, expected);
+                self.typing.exprs.insert(id, expected);
             }
             ExprKind::Lambda {
                 params,
@@ -336,7 +362,7 @@ impl BodyCheck<'_> {
                 annotated
             }
         };
-        self.exprs.insert(id, ty);
+        self.typing.exprs.insert(id, ty);
         ty
     }
 
@@ -377,7 +403,12 @@ impl BodyCheck<'_> {
     /// 引数に渡せるようにするため (docs/spec/types.md の「推論」)。局所変数の型は開かない。
     fn value(&mut self, res: Res) -> Ty {
         match res {
-            Res::Local(local) => self.locals.get(local).copied().unwrap_or(self.table.error),
+            Res::Local(local) => self
+                .typing
+                .locals
+                .get(local)
+                .copied()
+                .unwrap_or(self.table.error),
             Res::Function(function) => {
                 let ty = self.reference(function);
                 self.table.open_spine(ty)
@@ -638,7 +669,7 @@ impl BodyCheck<'_> {
         self.ambient_source = AmbientSource::Lambda(origin);
         self.check_expr(lambda_body, current, Origin::LambdaBody);
         (self.ambient, self.ambient_source) = saved;
-        self.exprs.insert(id, expected);
+        self.typing.exprs.insert(id, expected);
     }
 
     /// ラムダの引数を束縛する。型を明示した引数は、明示した型が、ラムダが期待される引数の型と一致しなければならない。
@@ -663,10 +694,11 @@ impl BodyCheck<'_> {
     }
 
     fn bind_pat(&mut self, pat: PatId, ty: Ty) {
+        self.typing.pats.insert(pat, ty);
         let body = self.body;
         match &body.pats[pat].kind {
             PatKind::Bind(local) => {
-                self.locals.insert(*local, ty);
+                self.typing.locals.insert(*local, ty);
             }
             PatKind::Annot { pat, .. } => self.bind_pat(*pat, ty),
             PatKind::Wildcard | PatKind::Missing => {}
@@ -757,6 +789,30 @@ fn count(n: usize, word: &str) -> String {
     } else {
         format!("{n} {word}s")
     }
+}
+
+/// スキームに残った制約のうち、定数を片側に持つものを表示用にする。変数どうしの制約は出さない。テストで確かめたいのは
+/// `Unr` の上限が付いたかどうかで、変数どうしの制約は部分適用のたびに増えて読みにくくなるため。
+fn kind_constraints(table: &Table, scheme: &Scheme) -> Vec<KindConstraint> {
+    let names = table.kind_names(scheme.ty);
+    let term = |bound: Bound<Linearity>| match bound {
+        Bound::Const(Linearity::Unr) => Some(KindTerm::Unr),
+        Bound::Const(Linearity::Lin) => Some(KindTerm::Lin),
+        Bound::Var(var) => names.get(&var).cloned().map(KindTerm::Of),
+    };
+    scheme
+        .lin_constraints()
+        .iter()
+        .filter(|(lower, upper)| {
+            matches!(lower, Bound::Const(_)) != matches!(upper, Bound::Const(_))
+        })
+        .filter_map(|&(lower, upper)| {
+            Some(KindConstraint {
+                lower: term(lower)?,
+                upper: term(upper)?,
+            })
+        })
+        .collect()
 }
 
 #[cfg(test)]

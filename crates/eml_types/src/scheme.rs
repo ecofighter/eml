@@ -87,7 +87,6 @@ impl Scheme {
         table.copy_type(self.ty, &subst)
     }
 
-    #[allow(dead_code)] // Task 10 の SCC の検査の後で使う
     /// SCC の検査の後に、スキームに現れる Kind 変数を多相化し、それらに関わる制約を残す (docs/spec/types.md の「推論」)。
     pub fn generalize(&mut self, table: &Table) {
         let (lin, mult) = table.kind_vars(self.ty);
@@ -97,7 +96,6 @@ impl Scheme {
         self.mult_vars = mult;
     }
 
-    #[allow(dead_code)] // Task 10 の Kind の解決で使う
     pub fn lin_constraints(&self) -> &[(Bound<Linearity>, Bound<Linearity>)] {
         &self.lin_constraints
     }

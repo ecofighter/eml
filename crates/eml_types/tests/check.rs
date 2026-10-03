@@ -364,3 +364,59 @@ fn an_arity_mismatch_in_a_lambda_does_not_cascade() {
       6:23 this parameter has no arrow in the expected type
     ");
 }
+
+#[test]
+fn kinds_follow_from_how_values_are_used() {
+    let text = "twice : (a -> a) -> a -> a\ntwice f x = f (f x)\n\nid : a -> a\nid x = x\n\nboth : a -> (a -> a -> b) -> b\nboth x g = g x x\n\npick : c -> c -> c\npick p q = p\n\ncall : d -> d\ncall y = both y pick";
+    insta::assert_snapshot!(check_text(text), @r"
+    twice : (a -> a) -> a -> a
+      kinds: (a -> a) <= Unr
+      f#0 : a -> a
+      x#1 : a
+    id : a -> a
+      x#0 : a
+    both : a -> (a -> a -> b) -> b
+      kinds: a <= Unr
+      x#0 : a
+      g#1 : a -> a -> b
+    pick : c -> c -> c
+      kinds: c <= Unr
+      p#0 : c
+      q#1 : c
+    call : d -> d
+      kinds: d <= Unr
+      y#0 : d
+    ");
+}
+
+#[test]
+fn kinds_are_shared_within_a_strongly_connected_component() {
+    let text = "ping : a -> Int -> a\nping x n = if n == 0 then x else pong (first x x) (n - 1)\n\npong : b -> Int -> b\npong y n = ping y n\n\nfirst : c -> c -> c\nfirst u v = u";
+    insta::assert_snapshot!(check_text(text), @r"
+    ping : a -> Int -> a
+      kinds: a <= Unr
+      x#0 : a
+      n#1 : Int
+    pong : b -> Int -> b
+      kinds: b <= Unr
+      y#0 : b
+      n#1 : Int
+    first : c -> c -> c
+      kinds: c <= Unr
+      u#0 : c
+      v#1 : c
+    ");
+}
+
+#[test]
+fn captured_values_count_inside_the_lambda_body() {
+    let text = "dupper : a -> Unit -> (a -> a -> a) -> a\ndupper x = fn () g -> g x x\n\nkeeper : a -> Unit -> a\nkeeper x = fn () -> x";
+    insta::assert_snapshot!(check_text(text), @r"
+    dupper : a -> Unit -> (a -> a -> a) -> a
+      kinds: a <= Unr
+      x#0 : a
+      g#1 : a -> a -> a
+    keeper : a -> Unit -> a
+      x#0 : a
+    ");
+}

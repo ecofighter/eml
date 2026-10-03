@@ -151,3 +151,34 @@ mod tests {
         assert_eq!(io.to_string(), "(Int -> Bool) -> <IO> Unit");
     }
 }
+
+/// スキームに残った Kind の制約。テストの表示で使う。`Of` は、その型の Kind を表す。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum KindTerm {
+    Unr,
+    Lin,
+    Of(Type),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KindConstraint {
+    pub lower: KindTerm,
+    pub upper: KindTerm,
+}
+
+impl fmt::Display for KindTerm {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            KindTerm::Unr => f.write_str("Unr"),
+            KindTerm::Lin => f.write_str("Lin"),
+            KindTerm::Of(ty @ Type::Fn { .. }) => write!(f, "({ty})"),
+            KindTerm::Of(ty) => write!(f, "{ty}"),
+        }
+    }
+}
+
+impl fmt::Display for KindConstraint {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{} <= {}", self.lower, self.upper)
+    }
+}

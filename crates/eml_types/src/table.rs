@@ -682,9 +682,35 @@ impl Table {
         self.multiplicity.copy_constraints(constraints, map);
     }
 
+    /// スキームの Kind 変数を、その変数を持つ型の部分 (型変数か関数型) で呼ぶ。外側から順に見て、最初に現れた部分を使う。
+    pub fn kind_names(&self, ty: Ty) -> HashMap<KindVar, Type> {
+        let mut names = HashMap::new();
+        let mut work = vec![ty];
+        while let Some(ty) = work.pop() {
+            match self.kind(ty) {
+                TyKind::Rigid(rigid) => {
+                    names
+                        .entry(self.rigid_linearity(*rigid))
+                        .or_insert_with(|| self.export(ty));
+                }
+                TyKind::Fn {
+                    param, lin, ret, ..
+                } => {
+                    if let Mult::Var(v) = lin {
+                        names.entry(*v).or_insert_with(|| self.export(ty));
+                    }
+                    work.push(*ret);
+                    work.push(*param);
+                }
+                TyKind::Record(fields) => work.extend(fields.iter().rev().map(|(_, f)| *f)),
+                TyKind::Con(_) | TyKind::Var(_) | TyKind::Error => {}
+            }
+        }
+        names
+    }
+
     /// すべての Kind の制約を解き、線形性の解を覚える。`export` が式ごとに解き直さずに済むようにするため。
     /// 定数の上限を超えた制約があれば `true` を返す。
-    #[allow(dead_code)] // Task 10 の Kind の解決で使う
     pub fn solve_kinds(&mut self) -> bool {
         let (lin, lin_violated) = self.linearity.solve();
         let (_, mult_violated) = self.multiplicity.solve();
@@ -716,7 +742,11 @@ impl Table {
                     linearity: match lin {
                         Mult::Known(l) => l,
                         Mult::Var(v) => match &self.lin_solution {
-                            Some(solution) => solution[v.index()],
+                            Some(solution) => {
+                                // 解いた後に Kind 変数を作ると解が古くなる。`export` は解いた後に変数を作らない前提である
+                                debug_assert!(v.index() < solution.len());
+                                solution[v.index()]
+                            }
                             None => self.linearity.value(v),
                         },
                     },
