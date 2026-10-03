@@ -1,4 +1,4 @@
-//! 成功すべきか失敗すべきかはディレクトリ (`run/`、`check-fail/`) で決める。スナップショットの承認を誤っても、
+//! 成功すべきか失敗すべきかはディレクトリ (`run/`、`run-fail/`、`check-fail/`) で決める。スナップショットの承認を誤っても、
 //! 成功と失敗の入れ替わりを検出できるようにするため (docs/implementation/testing.md)。
 
 use std::fs;
@@ -42,6 +42,28 @@ fn run() {
         );
         let stdout = String::from_utf8(buffer.lock().unwrap().clone()).unwrap();
         insta::assert_snapshot!(format!("--- stdout ---\n{stdout}--- stderr ---\n{stderr}"));
+    });
+}
+
+#[test]
+fn run_fail() {
+    insta::glob!("../../../tests/ui", "run-fail/*.em", |path| {
+        let (files, id) = load(path);
+        let mut config = RunConfig::default();
+        config.debug_heap = true;
+        let compiled = eml_cli::compile(&files, id);
+        let stderr = render(&compiled.diagnostics, &files);
+        let program = compiled
+            .program
+            .unwrap_or_else(|| panic!("unexpected errors:\n{stderr}"));
+        let (sink, buffer) = OutputSink::capture();
+        let RunResult::RuntimeError(message) = eml_cli::execute(program, &config, sink) else {
+            panic!("expected a runtime error");
+        };
+        let stdout = String::from_utf8(buffer.lock().unwrap().clone()).unwrap();
+        insta::assert_snapshot!(format!(
+            "--- stdout ---\n{stdout}--- runtime error ---\n{message}\n"
+        ));
     });
 }
 

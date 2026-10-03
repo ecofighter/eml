@@ -1,0 +1,12 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: rendered
+input_file: tests/ui/check-fail/non_associative.em
+---
+[E1006] Error: `<` and `<` cannot be combined without parentheses
+   ╭─[ check-fail/non_associative.em:3:20 ]
+   │
+ 3 │ main () = if 1 < 2 < 3 then println "yes"
+   │                    ┬  
+   │                    ╰── use parentheses to group the operators
+───╯

@@ -1,0 +1,14 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: rendered
+input_file: tests/ui/check-fail/missing_signature.em
+---
+[E1004] Error: `helper` has no type signature
+   ╭─[ check-fail/missing_signature.em:2:1 ]
+   │
+ 2 │ helper x = x
+   │ ───┬──  
+   │    ╰──── every top-level definition needs a signature
+   │ 
+   │ Help: add a signature `helper : ...` on the line before this equation
+───╯

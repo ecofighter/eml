@@ -1,0 +1,41 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: rendered
+input_file: tests/ui/check-fail/type_mismatch.em
+---
+[E2001] Error: mismatched types
+   ╭─[ check-fail/type_mismatch.em:7:12 ]
+   │
+ 7 │   println (add 1 2)
+   │   ───┬───  ───┬───  
+   │      ╰────────────── argument 1 of `println`
+   │               │     
+   │               ╰───── expected `String`, found `Int`
+───╯
+[E2001] Error: mismatched types
+   ╭─[ check-fail/type_mismatch.em:8:17 ]
+   │
+ 8 │   let x : Int = "one"
+   │           ─┬─   ──┬──  
+   │            ╰─────────── expected because of this annotation
+   │                   │    
+   │                   ╰──── expected `Int`, found `String`
+───╯
+[E2001] Error: mismatched types
+   ╭─[ check-fail/type_mismatch.em:9:6 ]
+   │
+ 9 │   if x then println "x"
+   │      ┬  
+   │      ╰── expected `Bool`, found `Int`
+   │ 
+   │ Note: the condition of `if` must have type `Bool`
+───╯
+[E2001] Error: mismatched types
+    ╭─[ check-fail/type_mismatch.em:10:3 ]
+    │
+ 10 │   x
+    │   ┬  
+    │   ╰── expected `Unit`, found `Int`
+    │ 
+    │ Note: a statement that is not the last one in a block must have type `Unit`
+────╯

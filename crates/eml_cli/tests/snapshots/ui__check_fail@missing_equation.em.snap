@@ -1,0 +1,12 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: rendered
+input_file: tests/ui/check-fail/missing_equation.em
+---
+[E1005] Error: `helper` has a signature but no equation
+   ╭─[ check-fail/missing_equation.em:2:1 ]
+   │
+ 2 │ helper : Int -> Int
+   │ ───┬──  
+   │    ╰──── add an equation for `helper` after this signature
+───╯

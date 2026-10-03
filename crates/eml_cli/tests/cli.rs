@@ -69,3 +69,20 @@ fn run_fails_without_main_but_check_succeeds() {
     assert_eq!(output.status.code(), Some(1));
     assert!(String::from_utf8_lossy(&output.stderr).contains("E2003"));
 }
+
+#[test]
+fn runtime_errors_exit_with_one() {
+    let output = eml(&["run", "--debug-heap", "run-fail/division_by_zero.em"]);
+    assert_eq!(output.status.code(), Some(1));
+    assert!(
+        String::from_utf8_lossy(&output.stderr)
+            .contains("runtime error: division by zero in `divide`")
+    );
+}
+
+#[test]
+fn run_prints_the_program_output() {
+    let output = eml(&["run", "--debug-heap", "run/hello.em"]);
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "Hello, world!\n");
+}

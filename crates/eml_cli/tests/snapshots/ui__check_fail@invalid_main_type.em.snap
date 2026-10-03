@@ -1,0 +1,12 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: rendered
+input_file: tests/ui/check-fail/invalid_main_type.em
+---
+[E2004] Error: `main` must have type `Unit -> <IO> Unit`
+   ╭─[ check-fail/invalid_main_type.em:2:8 ]
+   │
+ 2 │ main : Int -> Int
+   │        ─────┬────  
+   │             ╰────── found `Int -> Int`
+───╯

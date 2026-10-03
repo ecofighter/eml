@@ -1,0 +1,20 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: rendered
+input_file: tests/ui/check-fail/missing_io_row.em
+---
+[E2002] Error: `println` performs `IO`, which the signature of `greet` does not allow
+   ╭─[ check-fail/missing_io_row.em:3:14 ]
+   │
+ 3 │ greet name = println name
+   │              ──────┬─────  
+   │                    ╰─────── this call performs `IO`
+   │
+   ├─[ check-fail/missing_io_row.em:3:14 ]
+   │
+ 2 │ greet : String -> Unit
+   │         ───────┬──────  
+   │                ╰──────── the row of this signature does not include it
+   │ 
+   │ Help: add `IO` to the row of the signature of `greet`, as in `-> <IO> ...`
+───╯
