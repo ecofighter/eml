@@ -1,0 +1,196 @@
+//! Perceus の `dup` / `decref` の挿入 (docs/spec/core-ir.md)。変数を使うことを所有権の移動として扱い、後でも使う
+//! 変数を複製し、使わなくなった変数をできるだけ早く捨てる。対象は `Unr` でボックス化した変数だけである。
+
+use std::collections::{BTreeMap, BTreeSet, HashMap};
+
+use crate::{Atom, CExpr, CExprId, CoreFn, Linearity, Rhs, VarId};
+
+type Vars = BTreeSet<VarId>;
+
+pub(crate) fn insert_rc(function: &mut CoreFn) {
+    let tracked: Vec<bool> = function
+        .vars
+        .iter()
+        .map(|var| var.boxed && var.linearity == Linearity::Unr)
+        .collect();
+    let (body, exprs) = {
+        let mut pass = Pass {
+            old: &function.exprs,
+            tracked: &tracked,
+            new: Vec::new(),
+            free: HashMap::new(),
+        };
+        let owned: Vars = function
+            .params
+            .iter()
+            .copied()
+            .filter(|var| tracked[var.0 as usize])
+            .collect();
+        let body = pass.transform(function.body, &owned, &Vars::new());
+        (body, pass.new)
+    };
+    function.body = body;
+    function.exprs = exprs;
+}
+
+struct Pass<'a> {
+    old: &'a [CExpr],
+    tracked: &'a [bool],
+    new: Vec<CExpr>,
+    free: HashMap<CExprId, Vars>,
+}
+
+impl Pass<'_> {
+    fn atom_var(&self, atom: &Atom) -> Option<VarId> {
+        match atom {
+            Atom::Var(var) if self.tracked[var.0 as usize] => Some(*var),
+            _ => None,
+        }
+    }
+
+    /// 右辺が使う変数を、使う回数の分だけ並べる。
+    fn uses(&self, rhs: &Rhs) -> Vec<VarId> {
+        let atoms: &[Atom] = match rhs {
+            Rhs::Atom(atom) => std::slice::from_ref(atom),
+            Rhs::CallDirect(_, args) | Rhs::Prim(_, args) | Rhs::Perform(_, args) => args,
+            Rhs::ConstString(_) | Rhs::Nested(_) => &[],
+        };
+        atoms
+            .iter()
+            .filter_map(|atom| self.atom_var(atom))
+            .collect()
+    }
+
+    /// 式の中で使う対象の変数。
+    fn free(&mut self, id: CExprId) -> Vars {
+        if let Some(vars) = self.free.get(&id) {
+            return vars.clone();
+        }
+        let old = self.old;
+        let vars = match &old[id.0 as usize] {
+            CExpr::Let { var, rhs, body } => {
+                let mut vars = self.free(*body);
+                vars.remove(var);
+                match rhs {
+                    Rhs::Nested(inner) => vars.extend(self.free(*inner)),
+                    other => vars.extend(self.uses(other)),
+                }
+                vars
+            }
+            CExpr::Switch { scrutinee, arms } => {
+                let mut vars: Vars = self.atom_var(scrutinee).into_iter().collect();
+                for &(_, arm) in arms {
+                    vars.extend(self.free(arm));
+                }
+                vars
+            }
+            CExpr::Return(atom) => self.atom_var(atom).into_iter().collect(),
+            CExpr::Dup { .. } | CExpr::Decref { .. } => {
+                unreachable!("the pass runs once on code without RC instructions")
+            }
+        };
+        self.free.insert(id, vars.clone());
+        vars
+    }
+
+    fn push(&mut self, expr: CExpr) -> CExprId {
+        self.new.push(expr);
+        CExprId(self.new.len() as u32 - 1)
+    }
+
+    /// `owned` は入口で所有している変数。`keep` は、この式が値を返した後でも使うので、所有したまま残す変数。
+    fn transform(&mut self, id: CExprId, owned: &Vars, keep: &Vars) -> CExprId {
+        let old = self.old;
+        match &old[id.0 as usize] {
+            CExpr::Return(atom) => {
+                let returned = self.atom_var(atom);
+                let mut code = self.push(CExpr::Return(*atom));
+                for &var in owned.iter().rev() {
+                    if !keep.contains(&var) && Some(var) != returned {
+                        code = self.push(CExpr::Decref { var, body: code });
+                    }
+                }
+                // 返す値の所有権は呼び出し側に移るので、後でも使うなら複製する
+                if let Some(var) = returned.filter(|var| keep.contains(var)) {
+                    code = self.push(CExpr::Dup { var, body: code });
+                }
+                code
+            }
+            CExpr::Let {
+                var,
+                rhs: Rhs::Nested(inner),
+                body,
+            } => {
+                let mut after = self.free(*body);
+                after.remove(var);
+                after.extend(keep.iter().copied());
+                let keep_inner: Vars = after.intersection(owned).copied().collect();
+                // 入れ子の式の各枝は、使わない変数を枝の先頭で捨てる
+                let inner = self.transform(*inner, owned, &keep_inner);
+                let mut owned_body = keep_inner;
+                if self.tracked[var.0 as usize] {
+                    owned_body.insert(*var);
+                }
+                let body = self.transform(*body, &owned_body, keep);
+                self.push(CExpr::Let {
+                    var: *var,
+                    rhs: Rhs::Nested(inner),
+                    body,
+                })
+            }
+            CExpr::Let { var, rhs, body } => {
+                let uses = self.uses(rhs);
+                let mut after = self.free(*body);
+                after.remove(var);
+                after.extend(keep.iter().copied());
+                let mut owned_body: Vars = owned.intersection(&after).copied().collect();
+                if self.tracked[var.0 as usize] {
+                    owned_body.insert(*var);
+                }
+                let body = self.transform(*body, &owned_body, keep);
+                let mut code = self.push(CExpr::Let {
+                    var: *var,
+                    rhs: rhs.clone(),
+                    body,
+                });
+                // 後で使わない変数は、この束縛の前で捨てる
+                for &dead in owned.iter().rev() {
+                    if !uses.contains(&dead) && !after.contains(&dead) {
+                        code = self.push(CExpr::Decref {
+                            var: dead,
+                            body: code,
+                        });
+                    }
+                }
+                // 右辺は使うたびに所有権を1つ受け取るので、2回目以降の使用と、後でも使う変数の分を複製する
+                let mut counts: BTreeMap<VarId, usize> = BTreeMap::new();
+                for &used in &uses {
+                    *counts.entry(used).or_default() += 1;
+                }
+                for (&used, &count) in counts.iter().rev() {
+                    let dups = count - usize::from(!after.contains(&used));
+                    for _ in 0..dups {
+                        code = self.push(CExpr::Dup {
+                            var: used,
+                            body: code,
+                        });
+                    }
+                }
+                code
+            }
+            CExpr::Switch { scrutinee, arms } => {
+                let arms = arms
+                    .iter()
+                    .map(|&(tag, arm)| (tag, self.transform(arm, owned, keep)))
+                    .collect();
+                self.push(CExpr::Switch {
+                    scrutinee: *scrutinee,
+                    arms,
+                })
+            }
+            CExpr::Dup { .. } | CExpr::Decref { .. } => {
+                unreachable!("the pass runs once on code without RC instructions")
+            }
+        }
+    }
+}

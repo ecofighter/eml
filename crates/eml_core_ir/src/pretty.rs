@@ -1,0 +1,87 @@
+//! テストで Core IR を確かめるための表示。
+
+use std::fmt::Write;
+
+use crate::{Atom, CExpr, CExprId, CoreFn, IoOp, Program, Rhs, VarId};
+
+pub fn pretty(program: &Program) -> String {
+    let mut out = String::new();
+    for function in &program.functions {
+        let params: Vec<String> = function.params.iter().map(|&p| var(function, p)).collect();
+        writeln!(out, "fn {}({}) {{", function.name, params.join(", ")).unwrap();
+        expr(program, function, function.body, 1, &mut out);
+        out.push_str("}\n");
+    }
+    out
+}
+
+fn var(function: &CoreFn, var: VarId) -> String {
+    format!("{}{}", function.vars[var.0 as usize].name, var.0)
+}
+
+fn atom(function: &CoreFn, atom: &Atom) -> String {
+    match atom {
+        Atom::Var(v) => var(function, *v),
+        Atom::Int(n) => n.to_string(),
+        Atom::Unit => "()".to_string(),
+        Atom::Tag(tag) => format!("#{tag}"),
+    }
+}
+
+fn expr(program: &Program, function: &CoreFn, id: CExprId, indent: usize, out: &mut String) {
+    let pad = "  ".repeat(indent);
+    match function.expr(id) {
+        CExpr::Let { var: v, rhs, body } => {
+            if let Rhs::Nested(inner) = rhs {
+                writeln!(out, "{pad}let {} = {{", var(function, *v)).unwrap();
+                expr(program, function, *inner, indent + 1, out);
+                writeln!(out, "{pad}}}").unwrap();
+            } else {
+                writeln!(
+                    out,
+                    "{pad}let {} = {}",
+                    var(function, *v),
+                    rhs_text(program, function, rhs)
+                )
+                .unwrap();
+            }
+            expr(program, function, *body, indent, out);
+        }
+        CExpr::Switch { scrutinee, arms } => {
+            writeln!(out, "{pad}switch {} {{", atom(function, scrutinee)).unwrap();
+            for (tag, arm) in arms {
+                writeln!(out, "{pad}  #{tag} ->").unwrap();
+                expr(program, function, *arm, indent + 2, out);
+            }
+            writeln!(out, "{pad}}}").unwrap();
+        }
+        CExpr::Return(a) => writeln!(out, "{pad}return {}", atom(function, a)).unwrap(),
+        CExpr::Dup { var: v, body } => {
+            writeln!(out, "{pad}dup {}", var(function, *v)).unwrap();
+            expr(program, function, *body, indent, out);
+        }
+        CExpr::Decref { var: v, body } => {
+            writeln!(out, "{pad}decref {}", var(function, *v)).unwrap();
+            expr(program, function, *body, indent, out);
+        }
+    }
+}
+
+fn rhs_text(program: &Program, function: &CoreFn, rhs: &Rhs) -> String {
+    let args = |args: &[Atom]| {
+        args.iter()
+            .map(|a| atom(function, a))
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    match rhs {
+        Rhs::Atom(a) => atom(function, a),
+        Rhs::CallDirect(callee, a) => {
+            format!("call {}({})", program.function(*callee).name, args(a))
+        }
+        Rhs::Prim(op, a) => format!("prim {}({})", op.name(), args(a)),
+        Rhs::ConstString(index) => format!("const {:?}", program.strings[*index as usize]),
+        Rhs::Perform(IoOp::Println, a) => format!("perform println({})", args(a)),
+        Rhs::Nested(_) => unreachable!("nested expressions are printed as blocks"),
+    }
+}
