@@ -1,12 +1,12 @@
 use eml_diagnostics::{Diagnostic, FileId, Label, TextRange};
-use eml_hir::builtin::BuiltinType;
 use eml_hir::{
-    Body, EffectRef, ExprId, ExprKind, Function, FunctionId, Literal, LocalId, Module, PatId,
-    PatKind, Res, RowRef, Stmt, TypeRefId, TypeRefKind, not_yet_supported,
+    Body, ExprId, ExprKind, Function, FunctionId, Literal, LocalId, Module, PatId, PatKind, Res,
+    RowRef, Stmt, TypeRefId, TypeRefKind, not_yet_supported,
 };
 use la_arena::ArenaMap;
 
 use crate::builtins::builtin_type;
+use crate::scheme::{Rigids, Scheme, lower_type};
 use crate::table::{Row, Table, Ty, TyKind, UnifyError};
 use crate::ty::{Effect, Linearity, Type};
 use crate::{BodyTypes, TypedModule, codes};
@@ -14,32 +14,19 @@ use crate::{BodyTypes, TypedModule, codes};
 pub(crate) fn check_module(module: &Module) -> (TypedModule, Vec<Diagnostic>) {
     let mut table = Table::new();
     let mut diagnostics = Vec::new();
-    // 型変数と row 変数は Task 7 で入れる。それまでは段階1と同じ E0004 を出す
-    for (_, function) in module.functions.iter() {
-        for (_, ty) in function.types.iter() {
-            match &ty.kind {
-                TypeRefKind::Var(_) => diagnostics.push(not_yet_supported(
-                    module.file,
-                    ty.range,
-                    "type variables are not supported yet",
-                )),
-                TypeRefKind::Fn {
-                    row: RowRef::Open { range, .. },
-                    ..
-                } => diagnostics.push(not_yet_supported(
-                    module.file,
-                    *range,
-                    "row variables are not supported yet",
-                )),
-                _ => {}
-            }
-        }
-    }
-    let mut signatures = ArenaMap::default();
+    let mut rigids = ArenaMap::default();
+    let mut schemes: ArenaMap<FunctionId, Scheme> = ArenaMap::default();
     for (id, function) in module.functions.iter() {
+        let function_rigids = Rigids::new(&mut table, function);
         if let Some(signature) = &function.signature {
-            signatures.insert(id, lower_type(&mut table, function, signature.ty));
+            let ty = lower_type(&mut table, function, &function_rigids, signature.ty, true);
+            // 部分適用のクロージャは、それまでの引数を捕まえる (docs/spec/types.md の「関数型」)
+            if let Some(body) = &function.body {
+                table.closure_kinds(ty, body.params.len(), &[]);
+            }
+            schemes.insert(id, Scheme::new(ty, &function_rigids));
         }
+        rigids.insert(id, function_rigids);
     }
     let main = module
         .functions
@@ -47,18 +34,20 @@ pub(crate) fn check_module(module: &Module) -> (TypedModule, Vec<Diagnostic>) {
         .find(|(_, function)| function.name == "main")
         .map(|(id, _)| id);
     if let Some(id) = main {
-        check_main(module, &table, &signatures, id, &mut diagnostics);
+        check_main(module, &table, &schemes, id, &mut diagnostics);
     }
     let mut bodies = Vec::new();
     for (id, function) in module.functions.iter() {
-        let (Some(&signature), Some(body)) = (signatures.get(id), &function.body) else {
+        let (Some(scheme), Some(body)) = (schemes.get(id), &function.body) else {
             continue;
         };
+        let signature = scheme.ty;
         let mut checker = BodyCheck {
             module,
             function,
             body,
-            signatures: &signatures,
+            rigids: &rigids[id],
+            schemes: &schemes,
             table: &mut table,
             diagnostics: &mut diagnostics,
             ambient: Row::pure(),
@@ -72,8 +61,8 @@ pub(crate) fn check_module(module: &Module) -> (TypedModule, Vec<Diagnostic>) {
         main,
         ..TypedModule::default()
     };
-    for (id, &ty) in signatures.iter() {
-        typed.signatures.insert(id, table.export(ty));
+    for (id, scheme) in schemes.iter() {
+        typed.signatures.insert(id, table.export(scheme.ty));
     }
     for (id, exprs, locals) in bodies {
         let mut types = BodyTypes::default();
@@ -88,44 +77,15 @@ pub(crate) fn check_module(module: &Module) -> (TypedModule, Vec<Diagnostic>) {
     (typed, diagnostics)
 }
 
-fn lower_type(table: &mut Table, function: &Function, id: TypeRefId) -> Ty {
-    match &function.types[id].kind {
-        TypeRefKind::Error => table.error,
-        TypeRefKind::Builtin(BuiltinType::Int) => table.int,
-        TypeRefKind::Builtin(BuiltinType::String) => table.string,
-        TypeRefKind::Builtin(BuiltinType::Bool) => table.bool,
-        TypeRefKind::Builtin(BuiltinType::Unit) => table.unit,
-        // 多相は Task 7 で入れる。それまでは `check_module` の先頭で E0004 を報告し、ここでは `Error` にする
-        TypeRefKind::Var(_) => table.error,
-        TypeRefKind::Fn { param, row, ret } => {
-            let param = lower_type(table, function, *param);
-            let ret = lower_type(table, function, *ret);
-            let row = match row {
-                // 省略した row は空の row である (docs/spec/types.md の「関数型」)
-                RowRef::Omitted => Row::pure(),
-                RowRef::Closed { effects, .. } => {
-                    Row::closed(effects.iter().map(|EffectRef::Io| Effect::Io).collect())
-                }
-                // 未対応の row の跡。どのエフェクトも受け入れて、診断を連鎖させない
-                RowRef::Error | RowRef::Open { .. } => Row {
-                    labels: Vec::new(),
-                    tail: Some(table.fresh_row_var()),
-                },
-            };
-            table.function(param, row, ret)
-        }
-    }
-}
-
 fn check_main(
     module: &Module,
     table: &Table,
-    signatures: &ArenaMap<FunctionId, Ty>,
+    schemes: &ArenaMap<FunctionId, Scheme>,
     id: FunctionId,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     let function = &module.functions[id];
-    let (Some(&ty), Some(signature)) = (signatures.get(id), &function.signature) else {
+    let (Some(scheme), Some(signature)) = (schemes.get(id), &function.signature) else {
         return;
     };
     // 未対応の row や未定義のエフェクトの跡から E2004 を連鎖させないため
@@ -133,7 +93,7 @@ fn check_main(
     if has_error(function, signature.ty) {
         return;
     }
-    let found = table.export(ty);
+    let found = table.export(scheme.ty);
     let expected = Type::Fn {
         param: Box::new(Type::unit()),
         linearity: Linearity::Unr,
@@ -154,11 +114,9 @@ fn has_error(function: &Function, id: TypeRefId) -> bool {
     match &function.types[id].kind {
         TypeRefKind::Error => true,
         TypeRefKind::Builtin(_) => false,
-        TypeRefKind::Var(_) => true,
+        TypeRefKind::Var(_) => false,
         TypeRefKind::Fn { param, row, ret } => {
-            matches!(row, RowRef::Error | RowRef::Open { .. })
-                || has_error(function, *param)
-                || has_error(function, *ret)
+            matches!(row, RowRef::Error) || has_error(function, *param) || has_error(function, *ret)
         }
     }
 }
@@ -184,7 +142,8 @@ struct BodyCheck<'a> {
     module: &'a Module,
     function: &'a Function,
     body: &'a Body,
-    signatures: &'a ArenaMap<FunctionId, Ty>,
+    rigids: &'a Rigids,
+    schemes: &'a ArenaMap<FunctionId, Scheme>,
     table: &'a mut Table,
     diagnostics: &'a mut Vec<Diagnostic>,
     /// 本体が起こしてよいエフェクト。最後にたどったシグネチャの矢印の row である。
@@ -356,7 +315,7 @@ impl BodyCheck<'_> {
                 }
             }
             ExprKind::Annot { expr: inner, ty } => {
-                let annotated = lower_type(self.table, self.function, *ty);
+                let annotated = lower_type(self.table, self.function, self.rigids, *ty, false);
                 let range = self.function.types[*ty].range;
                 self.check_expr(*inner, annotated, Origin::Annotation(range));
                 annotated
@@ -372,7 +331,8 @@ impl BodyCheck<'_> {
                 Stmt::Let { pat, ty, init } => {
                     let ty = match ty {
                         Some(ty) => {
-                            let annotated = lower_type(self.table, self.function, *ty);
+                            let annotated =
+                                lower_type(self.table, self.function, self.rigids, *ty, false);
                             let range = self.function.types[*ty].range;
                             self.check_expr(*init, annotated, Origin::Annotation(range));
                             annotated
@@ -389,14 +349,19 @@ impl BodyCheck<'_> {
         }
     }
 
+    /// トップレベルの関数を参照するたびに、スキームを具体化する (docs/spec/types.md の「推論」)。
+    fn reference(&mut self, function: FunctionId) -> Ty {
+        let schemes = self.schemes;
+        match schemes.get(function) {
+            Some(scheme) => scheme.instantiate(self.table),
+            None => self.table.error,
+        }
+    }
+
     fn value(&mut self, res: Res, range: TextRange) -> Ty {
         let ty = match res {
             Res::Local(local) => self.locals.get(local).copied().unwrap_or(self.table.error),
-            Res::Function(function) => self
-                .signatures
-                .get(function)
-                .copied()
-                .unwrap_or(self.table.error),
+            Res::Function(function) => self.reference(function),
             Res::Builtin(builtin) => builtin_type(self.table, builtin),
         };
         if matches!(self.table.kind(ty), TyKind::Fn { .. }) {
@@ -417,10 +382,7 @@ impl BodyCheck<'_> {
         // 呼び出し先が名前なら、関数値の門 (`value`) を通さずに型を引く
         let (callee_ty, name) = match &callee_expr.kind {
             ExprKind::Path(Res::Function(function)) => (
-                self.signatures
-                    .get(*function)
-                    .copied()
-                    .unwrap_or(self.table.error),
+                self.reference(*function),
                 self.module.functions[*function].name.clone(),
             ),
             ExprKind::Path(Res::Builtin(builtin)) => (

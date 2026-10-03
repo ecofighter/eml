@@ -3,6 +3,7 @@
 mod builtins;
 mod check;
 mod kind;
+mod scheme;
 mod table;
 mod ty;
 

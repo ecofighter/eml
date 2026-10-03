@@ -83,7 +83,6 @@ impl<T: Copy + Ord> Lattice<T> {
 
     /// `keep` の変数について、他の変数を経由した推移も含めて成り立つ制約を返す。多相化したスキームに残す制約で、
     /// 具体化のたびに複製する (docs/spec/types.md の「推論」)。下限が束の最小元なら何も言わないので省く。
-    #[allow(dead_code)] // Task 7 のスキームの多相化で使う
     pub fn residual(&self, keep: &[KindVar]) -> Vec<(Bound<T>, Bound<T>)> {
         let kept: HashSet<KindVar> = keep.iter().copied().collect();
         let mut upward: HashMap<KindVar, Vec<Bound<T>>> = HashMap::new();
@@ -114,7 +113,6 @@ impl<T: Copy + Ord> Lattice<T> {
     }
 
     /// スキームに残した制約を、具体化した新しい変数について足す。`map` にない変数はそのまま使う。
-    #[allow(dead_code)] // Task 7 のスキームの具体化で使う
     pub fn copy_constraints(
         &mut self,
         constraints: &[(Bound<T>, Bound<T>)],

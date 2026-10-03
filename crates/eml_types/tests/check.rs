@@ -212,3 +212,49 @@ fn a_value_cannot_perform_effects() {
       help: `v` takes no parameters, so it cannot perform `IO`; make it a function taking `()`, as in `v : Unit -> <IO> ...` with `v () = ...`
     ");
 }
+
+#[test]
+fn polymorphic_functions_are_instantiated_at_each_use() {
+    let text = "id : a -> a\nid x = x\n\nuse_both : Unit -> String\nuse_both () =\n  let n = id 1\n  let s = id \"s\"\n  s";
+    insta::assert_snapshot!(check_text(text), @r"
+    id : a -> a
+      x#0 : a
+    use_both : Unit -> String
+      n#0 : Int
+      s#1 : String
+    ");
+}
+
+#[test]
+fn rigid_type_variables_do_not_unify_with_other_types() {
+    let text = "f : a -> b\nf x = x\n\ng : a -> Int\ng x = x";
+    insta::assert_snapshot!(check_text(text), @r"
+    f : a -> b
+      x#0 : a
+    g : a -> Int
+      x#0 : a
+    ---
+    E2001 2:7 mismatched types
+      2:7 expected `b`, found `a`
+      1:5 expected because of the signature of `f`
+    E2001 5:7 mismatched types
+      5:7 expected `Int`, found `a`
+      4:5 expected because of the signature of `g`
+    ");
+}
+
+#[test]
+fn annotations_in_the_body_refer_to_the_signature() {
+    let text = "f : a -> a\nf x =\n  let y : a = x\n  y\n\ng : a -> Int\ng x = (x : Int)";
+    insta::assert_snapshot!(check_text(text), @r"
+    f : a -> a
+      x#0 : a
+      y#1 : a
+    g : a -> Int
+      x#0 : a
+    ---
+    E2001 7:8 mismatched types
+      7:8 expected `Int`, found `a`
+      7:12 expected because of this annotation
+    ");
+}

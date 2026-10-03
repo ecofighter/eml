@@ -97,7 +97,6 @@ pub(crate) struct Subst {
     pub tys: HashMap<RigidVar, Ty>,
     pub rows: HashMap<RowVar, RowVar>,
     pub lin: HashMap<KindVar, KindVar>,
-    #[allow(dead_code)] // Task 6 以降のスキームの具体化で使う
     pub mult: HashMap<KindVar, KindVar>,
 }
 
@@ -169,12 +168,10 @@ impl Table {
         })
     }
 
-    #[allow(dead_code)] // Task 6 以降のスキームの具体化で使う
     pub fn fresh_lin_kind(&mut self) -> KindVar {
         self.linearity.fresh()
     }
 
-    #[allow(dead_code)] // Task 6 以降のスキームの具体化で使う
     pub fn fresh_mult_kind(&mut self) -> KindVar {
         self.multiplicity.fresh()
     }
@@ -183,7 +180,6 @@ impl Table {
         Mult::Var(self.linearity.fresh())
     }
 
-    #[allow(dead_code)] // Task 6 以降のスキームの具体化で使う
     pub fn fresh_var_with(&mut self, linearity: KindVar) -> Ty {
         self.ty_vars.push(TyVarInfo {
             binding: None,
@@ -198,7 +194,6 @@ impl Table {
         self.fresh_row_var_with(multiplicity)
     }
 
-    #[allow(dead_code)] // Task 6 以降のスキームの具体化で使う
     pub fn fresh_row_var_with(&mut self, multiplicity: KindVar) -> RowVar {
         self.row_vars.push(RowVarInfo {
             binding: None,
@@ -208,7 +203,6 @@ impl Table {
         RowVar(self.row_vars.len() as u32 - 1)
     }
 
-    #[allow(dead_code)] // Task 6 以降のシグネチャの型変数で使う
     pub fn fresh_rigid(&mut self, name: &str) -> (Ty, RigidVar) {
         let linearity = self.linearity.fresh();
         self.rigids.push(RigidInfo {
@@ -223,7 +217,6 @@ impl Table {
         self.rigids[rigid.0 as usize].linearity
     }
 
-    #[allow(dead_code)] // Task 6 以降のシグネチャの row 変数で使う
     pub fn fresh_rigid_row(&mut self, name: &str) -> RowVar {
         let var = self.fresh_row_var();
         self.row_vars[var.0 as usize].rigid = Some(name.to_string());
@@ -597,7 +590,6 @@ impl Table {
     }
 
     /// `subst` に従って rigid 変数、row 変数、Kind 変数を置き換えた型を作る。スキームの具体化で使う。
-    #[allow(dead_code)] // Task 6 以降のスキームの具体化で使う
     pub fn copy_type(&mut self, ty: Ty, subst: &Subst) -> Ty {
         match self.kind(ty).clone() {
             TyKind::Rigid(rigid) => subst.tys.get(&rigid).copied().unwrap_or(ty),
@@ -635,7 +627,6 @@ impl Table {
 
     /// 型に現れる Kind 変数。線形性 (rigid 変数の `μ` と矢印の `m`) と多重度 (rigid な row 変数の `σ`) に分けて、
     /// 現れた順に重複なく返す。多相化する変数を決めるのに使う。
-    #[allow(dead_code)] // Task 6 以降の多相化で使う
     pub fn kind_vars(&self, ty: Ty) -> (Vec<KindVar>, Vec<KindVar>) {
         let mut lin = Vec::new();
         let mut mult = Vec::new();
@@ -667,12 +658,10 @@ impl Table {
         (lin, mult)
     }
 
-    #[allow(dead_code)] // Task 7 のスキームの多相化で使う
     pub fn lin_residual(&self, keep: &[KindVar]) -> Vec<(Bound<Linearity>, Bound<Linearity>)> {
         self.linearity.residual(keep)
     }
 
-    #[allow(dead_code)] // Task 7 のスキームの多相化で使う
     pub fn mult_residual(
         &self,
         keep: &[KindVar],
@@ -680,7 +669,6 @@ impl Table {
         self.multiplicity.residual(keep)
     }
 
-    #[allow(dead_code)] // Task 7 のスキームの具体化で使う
     pub fn copy_lin_constraints(
         &mut self,
         constraints: &[(Bound<Linearity>, Bound<Linearity>)],
@@ -689,7 +677,6 @@ impl Table {
         self.linearity.copy_constraints(constraints, map);
     }
 
-    #[allow(dead_code)] // Task 7 のスキームの具体化で使う
     pub fn copy_mult_constraints(
         &mut self,
         constraints: &[(Bound<Multiplicity>, Bound<Multiplicity>)],
