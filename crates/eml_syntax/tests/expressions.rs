@@ -419,6 +419,36 @@ fn body_on_an_unindented_line_gets_an_empty_block() {
 }
 
 #[test]
+fn lambdas_ending_consecutive_lines_are_each_an_error() {
+    assert_eq!(
+        diagnostics(&lines(&[
+            "f =",
+            "  let g = fn a ->",
+            "  let h = fn b ->",
+            "  g"
+        ])),
+        [
+            "E0009 2:16 expected an indented block after `->`",
+            "E0009 3:16 expected an indented block after `->`"
+        ]
+    );
+}
+
+#[test]
+fn line_at_column_0_after_a_missing_block_closes_the_bracket() {
+    // 規則 2 の例外 (E0009 を出した行) は列 0 の行には当てない。h と k の欠けた右辺も報告する。
+    assert_eq!(
+        diagnostics(&lines(&["f = g (fn x ->", "h = 1 +", "k = 2 +"])),
+        [
+            "E0009 1:13 expected an indented block after `->`",
+            "E0011 1:15 expected `)`",
+            "E0011 2:8 expected an expression",
+            "E0011 3:8 expected an expression"
+        ]
+    );
+}
+
+#[test]
 fn unclosed_paren_is_reported() {
     assert_eq!(diagnostics("a = f (1\nb = 2"), ["E0011 1:9 expected `)`"]);
 }
@@ -522,6 +552,55 @@ fn implicitly_closed_bracket_after_a_semicolon_does_not_swallow_the_file() {
             "E0011 3:8 expected an expression"
         ]
     );
+}
+
+#[test]
+fn section_ending_with_an_operator_is_one_error() {
+    // 被演算子の欠けたセクションは E0011 を1件だけ出し、次の項目を壊さない。
+    insta::assert_snapshot!(shape("s = (+ a +)\nt = 1"), @r#"
+    SOURCE_FILE
+      EQUATION
+        LIDENT "s"
+        EQ "="
+        RIGHT_SECTION
+          L_PAREN "("
+          OP "+"
+          OP_SEQ
+            PATH_EXPR
+              LIDENT "a"
+            OP "+"
+          R_PAREN ")"
+      EQUATION
+        LIDENT "t"
+        EQ "="
+        LITERAL
+          INT "1"
+    ---
+    E0011 1:11 expected an expression
+    "#);
+}
+
+#[test]
+fn section_of_two_operators_is_one_error() {
+    insta::assert_snapshot!(shape("s = (+ *)\nt = 1"), @r#"
+    SOURCE_FILE
+      EQUATION
+        LIDENT "s"
+        EQ "="
+        RIGHT_SECTION
+          L_PAREN "("
+          OP "+"
+          ERROR
+            OP "*"
+          R_PAREN ")"
+      EQUATION
+        LIDENT "t"
+        EQ "="
+        LITERAL
+          INT "1"
+    ---
+    E0011 1:8 expected an expression
+    "#);
 }
 
 #[test]

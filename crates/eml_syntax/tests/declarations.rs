@@ -551,7 +551,37 @@ fn many_aligned_signature_lines_are_still_one_error() {
 fn arrow_at_the_end_of_a_line_suggests_a_leading_arrow() {
     assert_eq!(
         helps(&lines(&["f : Int ->", "  Int ->", "  Int"])),
-        ["in a type that spans lines, put `->` at the start of the next line"]
+        [
+            "indent the next line more, or in a type that spans lines, put `->` at the start of the next line"
+        ]
+    );
+}
+
+#[test]
+fn arrows_ending_consecutive_top_level_signatures_are_each_an_error() {
+    // 揃えたシグネチャの続きの行ではないので、2件とも報告する。
+    assert_eq!(
+        diagnostics(&lines(&["f : A ->", "g : B ->", "h : C"])),
+        [
+            "E0009 1:7 expected an indented block after `->`",
+            "E0009 2:7 expected an indented block after `->`"
+        ]
+    );
+}
+
+#[test]
+fn arrows_ending_consecutive_operation_signatures_are_each_an_error() {
+    assert_eq!(
+        diagnostics(&lines(&[
+            "effect E where",
+            "  op : A ->",
+            "  op2 : B ->",
+            "  op3 : C"
+        ])),
+        [
+            "E0009 2:10 expected an indented block after `->`",
+            "E0009 3:11 expected an indented block after `->`"
+        ]
     );
 }
 

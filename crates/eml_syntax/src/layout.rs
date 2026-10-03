@@ -9,7 +9,11 @@ use crate::lexer::Token;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Context {
-    Block(u32),
+    /// `opener` はブロックを開いた規則 3 の開始トークン。ファイル全体のブロックには無い。
+    Block {
+        indent: u32,
+        opener: Option<SyntaxKind>,
+    },
     Bracket,
 }
 
@@ -27,33 +31,43 @@ pub(crate) fn layout(file: FileId, text: &str, tokens: &[Token]) -> (Vec<Token>,
     let mut diagnostics = Vec::new();
     let items = scan_lines(file, text, tokens, &mut diagnostics);
     let mut out = Vec::with_capacity(items.len() * 2);
-    let mut stack = vec![Context::Block(0)];
+    let mut stack = vec![Context::Block {
+        indent: 0,
+        opener: None,
+    }];
     // 最初の項目の前には SEP を入れないため、今のブロックにまだトークンがないかを覚えておく。
     let mut at_block_start = true;
-    // 行末の `->` で E0009 を出した次の行。揃えた複数行のシグネチャではその行も `->` で終わるので、
-    // E0009 を1件にするため、その行の `->` では報告しない。
-    let mut aligned_arrow_line = None;
+    // 行末の `->` で E0009 を出した次の行の、先頭の項目の番号。
+    let mut item_after_arrow_error = None;
     // 今の行の先頭の項目の番号。
-    let mut line_start = 0;
+    let mut line_first_item = 0;
     for (i, item) in items.iter().enumerate() {
         let start = item.token.range.start();
         if item.line_start {
             let mut opened = false;
-            // E0009 を出した行には規則 2 を当てない。同じ誤りから、閉じていない括弧の診断を重ねないため。
+            // E0009 を出した行 (字下げの足りない行) には規則 2 を当てない。同じ誤りから、閉じていない括弧の
+            // 診断を重ねないため。ただし列 0 の行には当てる。トップレベルの境目で括弧を閉じないと、次の項目が
+            // 括弧に飲み込まれ、その中の誤りが報告されなくなる (docs/spec/layout.md の規則 2)。
             let mut missing = false;
             if i > 0 && BLOCK_STARTERS.contains(&items[i - 1].token.kind) {
                 // 規則 3。
                 if item.column > enclosing_indent(&stack) && !is_closing_bracket(item.token.kind) {
                     out.push(virtual_token(LAYOUT_OPEN, start));
-                    stack.push(Context::Block(item.column));
+                    stack.push(Context::Block {
+                        indent: item.column,
+                        opener: Some(items[i - 1].token.kind),
+                    });
                     opened = true;
                 } else {
                     let starter = items[i - 1].token;
-                    let report =
-                        !(starter.kind == THIN_ARROW && aligned_arrow_line == Some(line_start));
+                    let report = !continues_aligned_arrows(
+                        starter.kind,
+                        item_after_arrow_error == Some(line_first_item),
+                        &stack,
+                    );
                     missing_block(file, text, starter, report, &mut out, &mut diagnostics);
                     if starter.kind == THIN_ARROW {
-                        aligned_arrow_line = Some(i);
+                        item_after_arrow_error = Some(i);
                     }
                     missing = true;
                 }
@@ -62,12 +76,14 @@ pub(crate) fn layout(file: FileId, text: &str, tokens: &[Token]) -> (Vec<Token>,
                 // 規則 1 と規則 2。括弧を閉じるとその外のブロックに規則 1 が当たるので、どちらも当てはまらなくなるまで繰り返す。
                 loop {
                     match stack.last() {
-                        Some(&Context::Block(n)) if item.column < n && stack.len() > 1 => {
+                        Some(&Context::Block { indent, .. })
+                            if item.column < indent && stack.len() > 1 =>
+                        {
                             out.push(virtual_token(LAYOUT_CLOSE, start));
                             stack.pop();
                         }
-                        Some(&Context::Block(n)) => {
-                            if item.column == n && !at_block_start {
+                        Some(&Context::Block { indent, .. }) => {
+                            if item.column == indent && !at_block_start {
                                 out.push(virtual_token(LAYOUT_SEP, start));
                             }
                             break;
@@ -75,7 +91,7 @@ pub(crate) fn layout(file: FileId, text: &str, tokens: &[Token]) -> (Vec<Token>,
                         // 閉じ忘れた括弧がファイルの残りを飲み込まないよう、ここで閉じる。閉じ括弧がないことは
                         // parser が報告する。
                         Some(Context::Bracket)
-                            if !missing
+                            if (!missing || item.column == 0)
                                 && !is_closing_bracket(item.token.kind)
                                 && item.column <= enclosing_indent(&stack) =>
                         {
@@ -85,7 +101,7 @@ pub(crate) fn layout(file: FileId, text: &str, tokens: &[Token]) -> (Vec<Token>,
                     }
                 }
             }
-            line_start = i;
+            line_first_item = i;
         }
         match item.token.kind {
             L_PAREN | L_BRACK | L_BRACE => {
@@ -96,7 +112,7 @@ pub(crate) fn layout(file: FileId, text: &str, tokens: &[Token]) -> (Vec<Token>,
                 // 規則 4。種類は見ずに一番内側の括弧を閉じ、その上のブロックもすべて閉じる。種類の食い違いは parser が
                 // 報告する。対応する開き括弧がなければ何もしない。
                 if stack.contains(&Context::Bracket) {
-                    while let Some(Context::Block(_)) = stack.last() {
+                    while let Some(Context::Block { .. }) = stack.last() {
                         out.push(virtual_token(LAYOUT_CLOSE, start));
                         stack.pop();
                     }
@@ -112,12 +128,16 @@ pub(crate) fn layout(file: FileId, text: &str, tokens: &[Token]) -> (Vec<Token>,
     if let Some(last) = items.last()
         && BLOCK_STARTERS.contains(&last.token.kind)
     {
-        let report = !(last.token.kind == THIN_ARROW && aligned_arrow_line == Some(line_start));
+        let report = !continues_aligned_arrows(
+            last.token.kind,
+            item_after_arrow_error == Some(line_first_item),
+            &stack,
+        );
         missing_block(file, text, last.token, report, &mut out, &mut diagnostics);
     }
-    // 規則 6。ファイル全体の Block(0) は閉じない。
+    // 規則 6。ファイル全体のブロックは閉じない。
     while stack.len() > 1 {
-        if let Some(Context::Block(_)) = stack.pop() {
+        if let Some(Context::Block { .. }) = stack.pop() {
             out.push(virtual_token(LAYOUT_CLOSE, eof));
         }
     }
@@ -215,9 +235,10 @@ fn missing_block(
                 diagnostic =
                     diagnostic.with_help("indent the `|` arms more than the line with `with`");
             }
+            // 行末の `->` は関数型にも、ラムダや match の枝にもあるので、どちらにも当てはまる言い方にする。
             THIN_ARROW => {
                 diagnostic = diagnostic.with_help(
-                    "in a type that spans lines, put `->` at the start of the next line",
+                    "indent the next line more, or in a type that spans lines, put `->` at the start of the next line",
                 );
             }
             _ => {}
@@ -229,16 +250,33 @@ fn missing_block(
     out.push(virtual_token(LAYOUT_CLOSE, end));
 }
 
+/// 揃えた複数行のシグネチャ (`f : A ->` の次の行から `B ->`、`C ->` と同じ列に並ぶ) では、最初の `->` が
+/// 開いたブロックの中の行がどれも `->` で終わる。E0009 を1件にするため、前の行の `->` で E0009 を出していて、
+/// 今の行が `->` の開いたブロックにあるときは報告しない。ブロックを見ないと、トップレベルや `where` の中で
+/// 続けて `->` で終わる別の行の誤りまで黙ってしまう。
+fn continues_aligned_arrows(
+    starter: SyntaxKind,
+    follows_arrow_error: bool,
+    stack: &[Context],
+) -> bool {
+    starter == THIN_ARROW && follows_arrow_error && enclosing_block(stack).1 == Some(THIN_ARROW)
+}
+
 /// 括弧の内側にいても、一番近いブロックの基準列を返す。
 fn enclosing_indent(stack: &[Context]) -> u32 {
+    enclosing_block(stack).0
+}
+
+/// 一番近いブロックの基準列と、それを開いた開始トークン。
+fn enclosing_block(stack: &[Context]) -> (u32, Option<SyntaxKind>) {
     stack
         .iter()
         .rev()
-        .find_map(|context| match context {
-            Context::Block(n) => Some(*n),
+        .find_map(|context| match *context {
+            Context::Block { indent, opener } => Some((indent, opener)),
             Context::Bracket => None,
         })
-        .unwrap_or(0)
+        .unwrap_or((0, None))
 }
 
 fn is_closing_bracket(kind: SyntaxKind) -> bool {

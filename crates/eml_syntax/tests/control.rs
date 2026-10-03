@@ -232,6 +232,23 @@ fn later_arms_on_one_line_belong_to_the_inner_match() {
 }
 
 #[test]
+fn arms_ending_with_an_arrow_are_each_an_error() {
+    assert_eq!(
+        diagnostics(&lines(&[
+            "f x =",
+            "  match x with",
+            "    | A ->",
+            "    | B ->",
+            "    | C -> 1"
+        ])),
+        [
+            "E0009 3:9 expected an indented block after `->`",
+            "E0009 4:9 expected an indented block after `->`"
+        ]
+    );
+}
+
+#[test]
 fn arms_at_the_column_of_match_need_indentation() {
     assert_eq!(
         diagnostics(&lines(&["f b =", "  match b with", "  | True -> 1"])),
