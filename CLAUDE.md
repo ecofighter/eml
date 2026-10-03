@@ -38,9 +38,9 @@ eml_diagnostics  Diagnostic, FileId/SourceFiles, ariadne rendering (does not dep
 ```
 
 - Each stage is a pure function `fn stage(&In) -> (Out, Vec<Diagnostic>)` with no global mutable state, so it can later move onto queries (salsa).
-- Never stop on errors: `eml_cli::analyze` runs every stage and collects all diagnostics. The parser recovers with `ERROR` nodes; type checking onward inserts an `Error` type and suppresses cascading diagnostics.
+- Never stop on errors: `eml_cli::check` / `compile` run every checking stage and collect all diagnostics. The parser recovers with `ERROR` nodes; type checking onward inserts an `Error` type and suppresses cascading diagnostics.
 - The parser follows rust-analyzer (event stream -> rowan tree built in `sink.rs`). A layout stage (`layout.rs`) between the lexer and the parser inserts virtual `LAYOUT_OPEN` / `LAYOUT_SEP` / `LAYOUT_CLOSE` tokens (`docs/spec/layout.md`); the parser emits no events for them, so the CST is always lossless. Grammar rules are confined to `eml_syntax/src/grammar/`.
-- From HIR onward, nodes are referenced by arena IDs (`ExprId`, etc.) and analysis results (types, ...) live in side tables. HIR nodes carry a `SyntaxNodePtr`.
+- From HIR onward, nodes are referenced by arena IDs (`ExprId`, etc.) and analysis results (types, ...) live in side tables. HIR nodes carry a `TextRange` (not a `SyntaxNodePtr`), because some expressions, such as reassociated operator subexpressions, have no syntax node.
 - Diagnostic codes are defined in a per-stage `codes` module (e.g. `eml_syntax::codes`, E0xxx).
 - `OutputSink` is `Send + Sync` in preparation for multicore. `RunConfig` is `#[non_exhaustive]`; build it from `Default`.
 - `eml_syntax` implements stage S1 of the final syntax (`docs/implementation/status.md`); S2/S3 constructs (records, modules, interpolation, command literals, ...) are lexed and parsed far enough to report E0004. The later stages implement step 1 of the vertical slices in `docs/implementation/status.md` (functions, `Int` / `String` / `Bool`, `if`, `let`, standard operators, `println`); constructs of later steps are reported as E0004 by HIR or the type checker.
@@ -48,7 +48,7 @@ eml_diagnostics  Diagnostic, FileId/SourceFiles, ariadne rendering (does not dep
 ## Testing
 
 - Work test-first (TDD). Snapshots use `insta`, mostly inline (`@"..."`).
-- UI tests (`crates/eml_cli/tests/ui.rs`): `tests/ui/run/*.em` must run to completion and `tests/ui/check-fail/*.em` must produce at least one error; output is snapshotted. Pass/fail expectation is decided by directory. Run tests always enable `debug_heap`.
+- UI tests (`crates/eml_cli/tests/ui.rs`): `tests/ui/run/*.em` must run to completion and `tests/ui/run-fail/*.em` must compile cleanly and end in a runtime error, and `tests/ui/check-fail/*.em` must produce at least one error; output is snapshotted. Pass/fail expectation is decided by directory. Run tests always enable `debug_heap`.
 - `crates/eml_cli/tests/cli.rs` checks the binary's exit codes (0 success / 1 diagnostic or runtime error / 2 usage error).
 - Agreed exception: test sources written in the provisional syntax may be mechanically rewritten when switching to the final syntax (expected results must not change).
 

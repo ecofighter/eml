@@ -56,7 +56,7 @@ eml_diagnostics  Diagnostic 型、FileId と SourceFiles、ariadne による表�
 
 ## 各段階の規律
 
-- 各段階は `fn stage(input: &In) -> (Out, Vec<Diagnostic>)` の形の純粋な関数にする。グローバルな可変状態は持たない
+- 各段階は `fn stage(input: &In) -> (Out, Vec<Diagnostic>)` の形の純粋な関数にする。グローバルな可変状態は持たない。例外は `eml_core_ir` で、診断のエラーがないプログラムだけを受け取り、`Program` を返す (下の「エラーが出ても止まらない」)
 - HIR 以降は `ExprId` / `PatId` / `DefId` などの ID で参照する (`la-arena`)。型などの解析結果は `ExprId → Type` のような別テーブルに置く
 - HIR の各ノードは、元の構文の範囲 (`TextRange`) を持つ。演算子の列を組み直した部分式のように、対応する構文ノードのない式があるため
 - 型付き HIR は HIR を複製しない。`TypedModule` は、関数ごとの型スキームと推論結果 (式や局所変数の型、呼び出しごとの具体化) の別テーブルだけを持つ。そのため `eml_core_ir` は HIR と `TypedModule` の両方を受け取る
@@ -73,7 +73,7 @@ eml_diagnostics  Diagnostic 型、FileId と SourceFiles、ariadne による表�
 
 ## エラーが出ても止まらない
 
-- `eml_cli` の `analyze` は、エラーがあっても途中で止めずにすべての段階を実行し、診断を集める。1回の実行で、独立した複数のエラーを報告するため
+- `eml_cli` の `check` / `compile` は、エラーがあっても途中で止めずにすべての段階を実行し、診断を集める。1回の実行で、独立した複数のエラーを報告するため
 - パーサは、壊れた入力に対して `ERROR` ノードを作って処理を続ける。壊れた入力でも必ず `SOURCE_FILE` の木を作り、パニックしない
 - 回復の同期点は、レイアウト段が挿入する `SEP` と `CLOSE` である。トップレベルでは、列 0 の `SEP` が最も強い同期点になる ([レイアウト規則](../spec/layout.md))
 - 名前解決と型推論は、エラーが起きた場所に `Error` 型を入れる。`Error` が関わる制約や線形性の検査からは、追加の診断を出さない
