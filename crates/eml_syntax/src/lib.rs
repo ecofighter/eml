@@ -3,6 +3,8 @@
 pub mod ast;
 mod debug_dump;
 mod grammar;
+#[allow(dead_code)] // Task 3 で parse から使う
+mod layout;
 mod lexer;
 mod parser;
 mod sink;
@@ -28,6 +30,8 @@ pub mod codes {
     pub const EXPECTED_ITEM: ErrorCode = ErrorCode(3);
     pub const NOT_YET_SUPPORTED: ErrorCode = ErrorCode(4);
     pub const UNTERMINATED_BLOCK_COMMENT: ErrorCode = ErrorCode(5);
+    pub const TAB_INDENTATION: ErrorCode = ErrorCode(6);
+    pub const EXPECTED_INDENTED_BLOCK: ErrorCode = ErrorCode(9);
     pub const INVALID_NUMBER: ErrorCode = ErrorCode(7);
     pub const INVALID_ESCAPE: ErrorCode = ErrorCode(8);
 }
