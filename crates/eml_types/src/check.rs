@@ -599,6 +599,7 @@ impl BodyCheck<'_> {
                 TyKind::Error => {
                     let error = self.table.error;
                     self.bind_pat(pat, error);
+                    row = None;
                 }
                 _ => {
                     let found = self.table.export(expected);
@@ -620,6 +621,8 @@ impl BodyCheck<'_> {
                         self.bind_pat(rest, error);
                     }
                     current = error;
+                    // 矢印が足りないときは最後の矢印の row を使わず、本体の効果を受け入れて診断を連鎖させない
+                    row = None;
                     break;
                 }
             }

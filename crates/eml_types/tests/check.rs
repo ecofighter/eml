@@ -348,3 +348,19 @@ fn annotated_lambda_parameters_must_match_and_arities_must_agree() {
       5:53 this parameter has no arrow in the expected type
     ");
 }
+
+#[test]
+fn an_arity_mismatch_in_a_lambda_does_not_cascade() {
+    let text = "apply : (Int -> Int) -> Int\napply f = f 1\n\nmain : Unit -> <IO> Unit\nmain () =\n  let n = apply (fn a b -> println \"x\")\n  ()";
+    insta::assert_snapshot!(check_text(text), @r"
+    apply : (Int -> Int) -> Int
+      f#0 : Int -> Int
+    main : Unit -> <IO> Unit
+      a#0 : Int
+      b#1 : {error}
+      n#2 : Int
+    ---
+    E2001 6:23 this lambda has 2 parameters but its expected type `Int -> Int` has 1 arrow
+      6:23 this parameter has no arrow in the expected type
+    ");
+}
