@@ -21,6 +21,7 @@ pub(crate) enum TyCon {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Mult {
     Known(Linearity),
+    #[allow(dead_code)] // 関数値を入れる段階2で使う
     Var(KindVar),
 }
 
@@ -51,6 +52,7 @@ pub(crate) enum TyKind {
         row: Row,
         ret: Ty,
     },
+    #[allow(dead_code)] // 多相を入れる段階2で使う
     Var(TyVar),
     Error,
 }
@@ -126,6 +128,7 @@ impl Table {
         })
     }
 
+    #[allow(dead_code)] // 多相を入れる段階2で使う
     pub fn fresh_var(&mut self) -> Ty {
         let linearity = self.linearity.fresh();
         self.ty_vars.push(TyVarInfo {
@@ -176,6 +179,7 @@ impl Table {
         Row { labels, tail }
     }
 
+    #[allow(dead_code)] // 関数値を入れる段階2で使う
     pub fn row_multiplicity(&self, var: RowVar) -> Multiplicity {
         self.multiplicity
             .value(self.row_vars[var.0 as usize].multiplicity)

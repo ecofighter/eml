@@ -57,3 +57,15 @@ fn non_utf8_file_is_a_usage_error() {
     assert_eq!(output.status.code(), Some(2));
     assert!(String::from_utf8_lossy(&output.stderr).contains("cannot read"));
 }
+
+#[test]
+fn run_fails_without_main_but_check_succeeds() {
+    let path = std::env::temp_dir().join(format!("eml-cli-no-main-{}.em", std::process::id()));
+    std::fs::write(&path, "f : Int -> Int\nf x = x\n").unwrap();
+    let path_text = path.to_str().unwrap();
+    assert_eq!(eml(&["check", path_text]).status.code(), Some(0));
+    let output = eml(&["run", path_text]);
+    std::fs::remove_file(&path).unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("E2003"));
+}

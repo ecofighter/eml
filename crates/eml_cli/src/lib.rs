@@ -22,8 +22,12 @@ pub struct Compiled {
 }
 
 pub fn compile(files: &SourceFiles, file: FileId) -> Compiled {
-    let (program, diagnostics) = analyze(files, file);
-    let program = (!has_errors(&diagnostics)).then(|| Arc::new(program));
+    let (analysis, mut diagnostics) = analyze(files, file);
+    // `main` がないことは実行するときだけ誤りにする。モジュール (S2) は `main` を持たないため (docs/spec/types.md)
+    if analysis.main.is_none() {
+        diagnostics.push(eml_types::missing_main(file));
+    }
+    let program = (!has_errors(&diagnostics)).then(|| Arc::new(analysis.program));
     Compiled {
         diagnostics,
         program,
@@ -43,14 +47,20 @@ pub fn execute(program: Arc<Program>, config: &RunConfig, stdout: OutputSink) ->
     }
 }
 
+struct Analysis {
+    program: Program,
+    main: Option<eml_hir::FunctionId>,
+}
+
 /// エラーがあっても止めずに全段階を実行する。1回の実行で、独立した複数のエラーを報告するため。
-fn analyze(files: &SourceFiles, file: FileId) -> (Program, Vec<Diagnostic>) {
+fn analyze(files: &SourceFiles, file: FileId) -> (Analysis, Vec<Diagnostic>) {
     let (parse, mut diagnostics) = eml_syntax::parse(file, files.text(file));
     let (module, stage) = eml_hir::lower(file, &parse.tree());
     diagnostics.extend(stage);
     let (typed, stage) = eml_types::check(&module);
     diagnostics.extend(stage);
+    let main = typed.main;
     let (program, stage) = eml_core_ir::lower(&typed);
     diagnostics.extend(stage);
-    (program, diagnostics)
+    (Analysis { program, main }, diagnostics)
 }

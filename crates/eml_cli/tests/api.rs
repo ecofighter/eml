@@ -30,3 +30,24 @@ fn execute_runs_a_compiled_program() {
         RunResult::Completed
     );
 }
+
+#[test]
+fn compile_reports_a_missing_main() {
+    let mut files = SourceFiles::new();
+    let file = files.add("a.em", "f : Int -> Int\nf x = x");
+    let compiled = compile(&files, file);
+    let codes: Vec<String> = compiled
+        .diagnostics
+        .iter()
+        .map(|d| d.code.to_string())
+        .collect();
+    assert_eq!(codes, ["E2003"]);
+    assert!(compiled.program.is_none());
+}
+
+#[test]
+fn check_accepts_a_file_without_main() {
+    let mut files = SourceFiles::new();
+    let file = files.add("a.em", "f : Int -> Int\nf x = x");
+    assert!(eml_cli::check(&files, file).is_empty());
+}
