@@ -1,5 +1,5 @@
 -- Function values: calling function-typed parameters, passing top-level functions and builtins as values,
--- passing effects through a row variable, and composition.
+-- passing effects through a row variable, composition, and a polymorphic function used at an unboxed and a boxed type.
 apply : (a -> <e> b) -> a -> <e> b
 apply f x = f x
 
@@ -12,6 +12,9 @@ inc n = n + 1
 double : Int -> Int
 double n = n * 2
 
+id : a -> a
+id x = x
+
 main : Unit -> <IO> Unit
 main () =
   println (show_int (apply inc 1))
@@ -20,3 +23,5 @@ main () =
   println (show_int ((inc >> inc << inc) 0))
   println (show_int ((inc >> double) 1))
   println (show_int ((inc << double) 1))
+  println (show_int (id 3))
+  println (id "s")
