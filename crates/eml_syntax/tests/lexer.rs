@@ -22,6 +22,31 @@ fn dump(text: &str) -> String {
     out
 }
 
+/// trivia を除いたトークンの種類。
+fn kinds(text: &str) -> Vec<String> {
+    let mut files = SourceFiles::new();
+    let file = files.add("test.em", text);
+    let (tokens, _) = lex(file, text);
+    let joined: String = tokens.iter().map(|token| &text[token.range]).collect();
+    assert_eq!(joined, text, "tokens must cover the whole text");
+    tokens
+        .iter()
+        .filter(|token| !token.kind.is_trivia())
+        .map(|token| format!("{:?}", token.kind))
+        .collect()
+}
+
+/// 診断を `E0001@2..4 message` の形で並べる。
+fn diags(text: &str) -> Vec<String> {
+    let mut files = SourceFiles::new();
+    let file = files.add("test.em", text);
+    let (_, diagnostics) = lex(file, text);
+    diagnostics
+        .iter()
+        .map(|d| format!("{}@{:?} {}", d.code, d.primary.range, d.message))
+        .collect()
+}
+
 #[test]
 fn keywords_and_identifiers() {
     insta::assert_snapshot!(dump("fn fnord let _ _x x1 Some IO"), @r#"
@@ -45,89 +70,97 @@ fn keywords_and_identifiers() {
 
 #[test]
 fn all_keywords() {
-    let text = "fn let if then else match type effect handle resume drop return never once multi true false";
-    let kinds: Vec<String> = dump(text)
-        .lines()
-        .filter(|line| !line.starts_with("WHITESPACE"))
-        .map(|line| line.split('@').next().unwrap().to_string())
-        .collect();
+    let text = "data type effect where pub import as infixl infixr infix \
+                let in if then else match with handle from resume drop return \
+                never once multi use fn forall class instance";
     assert_eq!(
-        kinds,
+        kinds(text),
         [
-            "FN_KW",
+            "DATA_KW",
+            "TYPE_KW",
+            "EFFECT_KW",
+            "WHERE_KW",
+            "PUB_KW",
+            "IMPORT_KW",
+            "AS_KW",
+            "INFIXL_KW",
+            "INFIXR_KW",
+            "INFIX_KW",
             "LET_KW",
+            "IN_KW",
             "IF_KW",
             "THEN_KW",
             "ELSE_KW",
             "MATCH_KW",
-            "TYPE_KW",
-            "EFFECT_KW",
+            "WITH_KW",
             "HANDLE_KW",
+            "FROM_KW",
             "RESUME_KW",
             "DROP_KW",
             "RETURN_KW",
             "NEVER_KW",
             "ONCE_KW",
             "MULTI_KW",
-            "TRUE_KW",
-            "FALSE_KW",
+            "USE_KW",
+            "FN_KW",
+            "FORALL_KW",
+            "CLASS_KW",
+            "INSTANCE_KW",
         ]
     );
 }
 
 #[test]
-fn operators_use_longest_match() {
-    let text = "( ) { } , ; : = -> => | < > + - * / % ++ == != <= >= && || ! <<= --";
-    let kinds: Vec<String> = dump(text)
-        .lines()
-        .filter(|line| !line.starts_with("WHITESPACE"))
-        .map(|line| line.split('@').next().unwrap().to_string())
-        .collect();
+fn true_and_false_are_identifiers() {
+    assert_eq!(kinds("true false True"), ["LIDENT", "LIDENT", "UIDENT"]);
+}
+
+#[test]
+fn identifiers_may_contain_primes() {
+    assert_eq!(kinds("x' go'' A'b"), ["LIDENT", "LIDENT", "UIDENT"]);
+}
+
+#[test]
+fn operators_and_reserved_symbols() {
+    let text = "( ) [ ] { } , ; = | : . -> <- .. - :: |> <> == => !$@ -->";
     assert_eq!(
-        kinds,
+        kinds(text),
         [
             "L_PAREN",
             "R_PAREN",
+            "L_BRACK",
+            "R_BRACK",
             "L_BRACE",
             "R_BRACE",
             "COMMA",
             "SEMICOLON",
-            "COLON",
             "EQ",
-            "THIN_ARROW",
-            "FAT_ARROW",
             "PIPE",
-            "LT",
-            "GT",
-            "PLUS",
+            "COLON",
+            "DOT",
+            "THIN_ARROW",
+            "LEFT_ARROW",
+            "DOT2",
             "MINUS",
-            "STAR",
-            "SLASH",
-            "PERCENT",
-            "PLUS2",
-            "EQ2",
-            "NEQ",
-            "LTEQ",
-            "GTEQ",
-            "AMP2",
-            "PIPE2",
-            "BANG",
-            "LT",
-            "LTEQ",
-            "MINUS",
-            "MINUS",
+            "CONOP",
+            "OP",
+            "OP",
+            "OP",
+            "OP",
+            "OP",
+            "OP",
         ]
     );
 }
 
 #[test]
 fn literals_and_comments() {
-    insta::assert_snapshot!(dump("42 \"a\\n\\\"b\" // note\n-1"), @r#"
+    insta::assert_snapshot!(dump("42 \"a\\n\\\"b\" -- note\n-1"), @r#"
     INT@0..2 "42"
     WHITESPACE@2..3 " "
     STRING@3..11 "\"a\\n\\\"b\""
     WHITESPACE@11..12 " "
-    COMMENT@12..19 "// note"
+    COMMENT@12..19 "-- note"
     WHITESPACE@19..20 "\n"
     MINUS@20..21 "-"
     INT@21..22 "1"
@@ -135,31 +168,109 @@ fn literals_and_comments() {
 }
 
 #[test]
-fn unexpected_characters_are_merged_into_one_error() {
-    insta::assert_snapshot!(dump("a $@ b é"), @r#"
+fn dashes_start_a_comment_unless_an_operator_character_follows() {
+    insta::assert_snapshot!(dump("x -- note\n---- banner\n-- | doc\ny"), @r#"
+    LIDENT@0..1 "x"
+    WHITESPACE@1..2 " "
+    COMMENT@2..9 "-- note"
+    WHITESPACE@9..10 "\n"
+    COMMENT@10..21 "---- banner"
+    WHITESPACE@21..22 "\n"
+    COMMENT@22..30 "-- | doc"
+    WHITESPACE@30..31 "\n"
+    LIDENT@31..32 "y"
+    "#);
+    assert_eq!(
+        kinds("a --> b --| c"),
+        ["LIDENT", "OP", "LIDENT", "OP", "LIDENT"]
+    );
+}
+
+#[test]
+fn block_comments_nest() {
+    insta::assert_snapshot!(dump("a {- x {- y -} z -} b"), @r#"
     LIDENT@0..1 "a"
     WHITESPACE@1..2 " "
-    ERROR_TOKEN@2..4 "$@"
-    WHITESPACE@4..5 " "
-    LIDENT@5..6 "b"
-    WHITESPACE@6..7 " "
-    ERROR_TOKEN@7..9 "é"
-    ---
-    [E0001] Error: unexpected character `$@`
-       ╭─[ test.em:1:3 ]
-       │
-     1 │ a $@ b é
-       │   ─┬  
-       │    ╰── not valid in eml source
-    ───╯
-    [E0001] Error: unexpected character `é`
-       ╭─[ test.em:1:8 ]
-       │
-     1 │ a $@ b é
-       │        ┬  
-       │        ╰── not valid in eml source
-    ───╯
+    BLOCK_COMMENT@2..19 "{- x {- y -} z -}"
+    WHITESPACE@19..20 " "
+    LIDENT@20..21 "b"
     "#);
+}
+
+#[test]
+fn unterminated_block_comment_is_an_error() {
+    assert_eq!(
+        diags("a {- x {- y -}"),
+        ["E0005@2..4 unterminated block comment"]
+    );
+    assert_eq!(kinds("a {- x {- y -}"), ["LIDENT"]);
+}
+
+#[test]
+fn shebang_is_trivia_only_at_the_start_of_the_file() {
+    insta::assert_snapshot!(dump("#!/usr/bin/env eml run\nx"), @r##"
+    SHEBANG@0..22 "#!/usr/bin/env eml run"
+    WHITESPACE@22..23 "\n"
+    LIDENT@23..24 "x"
+    "##);
+    assert_eq!(kinds("\u{feff}#!x\ny"), ["LIDENT"]);
+    assert_eq!(kinds("x\n#!y"), ["LIDENT", "ERROR_TOKEN", "OP", "LIDENT"]);
+}
+
+#[test]
+fn number_forms() {
+    assert_eq!(
+        kinds("123 1_000 0xff 0o17 0b1010 1.5 1e9 2.5e-3"),
+        ["INT", "INT", "INT", "INT", "INT", "FLOAT", "FLOAT", "FLOAT"]
+    );
+}
+
+#[test]
+fn malformed_numbers_are_errors() {
+    assert_eq!(
+        diags("0xZZ 12ab 0x"),
+        [
+            "E0007@0..4 invalid number literal `0xZZ`",
+            "E0007@5..9 invalid number literal `12ab`",
+            "E0007@10..12 invalid number literal `0x`",
+        ]
+    );
+    assert_eq!(kinds("0xZZ 12ab 0x"), ["INT", "INT", "INT"]);
+}
+
+#[test]
+fn character_literals() {
+    assert_eq!(kinds(r"'a' '\n' x'"), ["CHAR", "CHAR", "LIDENT"]);
+}
+
+#[test]
+fn float_right_after_a_dot_is_split_into_field_indices() {
+    insta::assert_snapshot!(dump("t.0.1"), @r#"
+    LIDENT@0..1 "t"
+    DOT@1..2 "."
+    INT@2..3 "0"
+    DOT@3..4 "."
+    INT@4..5 "1"
+    "#);
+    assert_eq!(kinds("x . 0.1"), ["LIDENT", "DOT", "FLOAT"]);
+    assert_eq!(kinds("1.5"), ["FLOAT"]);
+}
+
+#[test]
+fn valid_escapes_have_no_errors() {
+    assert!(diags(r#""\n\t\r\\\"\0\u{1F600}""#).is_empty());
+}
+
+#[test]
+fn invalid_escapes_are_errors() {
+    assert_eq!(
+        diags(r#""a\qb""#),
+        ["E0008@2..4 unknown escape sequence `\\q`"]
+    );
+    assert_eq!(
+        diags(r#""\u{110000}""#),
+        ["E0008@1..11 invalid unicode escape `\\u{110000}`"]
+    );
 }
 
 #[test]
@@ -180,13 +291,109 @@ fn unterminated_string_becomes_string_with_error() {
 }
 
 #[test]
+fn backslash_at_end_of_line_gives_only_the_unterminated_error() {
+    assert_eq!(
+        diags("\"abc\\\nx"),
+        ["E0002@0..5 unterminated string literal"]
+    );
+    assert_eq!(kinds("\"abc\\\nx"), ["STRING", "LIDENT"]);
+}
+
+#[test]
+fn unterminated_string_does_not_swallow_carriage_return() {
+    assert_eq!(
+        diags("\"abc\r\nx"),
+        ["E0002@0..4 unterminated string literal"]
+    );
+    assert_eq!(kinds("\"abc\r\nx"), ["STRING", "LIDENT"]);
+}
+
+#[test]
+fn interpolation_is_skipped_with_not_yet_supported() {
+    let text = r#""a\{f "x"} b" c"#;
+    assert_eq!(
+        diags(text),
+        ["E0004@2..10 string interpolation is not supported yet"]
+    );
+    assert_eq!(kinds(text), ["STRING", "LIDENT"]);
+}
+
+#[test]
+fn later_stage_literals_are_single_tokens() {
+    insta::assert_snapshot!(dump("\"\"\"\n  a\n  \"\"\" r\"x\" r#\"y\"z\"# `ls -l`"), @r##"
+    MULTILINE_STRING@0..13 "\"\"\"\n  a\n  \"\"\""
+    WHITESPACE@13..14 " "
+    RAW_STRING@14..18 "r\"x\""
+    WHITESPACE@18..19 " "
+    RAW_STRING@19..27 "r#\"y\"z\"#"
+    WHITESPACE@27..28 " "
+    COMMAND@28..35 "`ls -l`"
+    "##);
+}
+
+#[test]
+fn unterminated_later_stage_literals_are_errors() {
+    assert_eq!(diags("`ls"), ["E0002@0..3 unterminated command literal"]);
+    assert_eq!(diags("r#\"abc"), ["E0002@0..3 unterminated raw string"]);
+    assert_eq!(
+        diags("\"\"\"abc"),
+        ["E0002@0..3 unterminated multi-line string"]
+    );
+}
+
+#[test]
+fn unexpected_characters_are_merged_into_one_error() {
+    insta::assert_snapshot!(dump("a €€ b é"), @r#"
+    LIDENT@0..1 "a"
+    WHITESPACE@1..2 " "
+    ERROR_TOKEN@2..8 "€€"
+    WHITESPACE@8..9 " "
+    LIDENT@9..10 "b"
+    WHITESPACE@10..11 " "
+    ERROR_TOKEN@11..13 "é"
+    ---
+    [E0001] Error: unexpected character `€€`
+       ╭─[ test.em:1:3 ]
+       │
+     1 │ a €€ b é
+       │   ─┬  
+       │    ╰── not valid in eml source
+    ───╯
+    [E0001] Error: unexpected character `é`
+       ╭─[ test.em:1:8 ]
+       │
+     1 │ a €€ b é
+       │        ┬  
+       │        ╰── not valid in eml source
+    ───╯
+    "#);
+}
+
+#[test]
+fn unexpected_character_messages_escape_and_truncate() {
+    assert_eq!(
+        diags("a\u{1}b"),
+        ["E0001@1..2 unexpected character `\\u{1}`"]
+    );
+    assert_eq!(
+        diags(&"€".repeat(20)),
+        ["E0001@0..60 unexpected character `€€€€€€€€€€€€€€€€…`"]
+    );
+}
+
+#[test]
+fn backslash_outside_strings_is_unexpected() {
+    assert_eq!(diags("a \\ b"), ["E0001@2..3 unexpected character `\\`"]);
+}
+
+#[test]
 fn crlf_line_endings_are_whitespace() {
-    insta::assert_snapshot!(dump("a\r\nb // c\r\n"), @r#"
+    insta::assert_snapshot!(dump("a\r\nb -- c\r\n"), @r#"
     LIDENT@0..1 "a"
     WHITESPACE@1..3 "\r\n"
     LIDENT@3..4 "b"
     WHITESPACE@4..5 " "
-    COMMENT@5..9 "// c"
+    COMMENT@5..9 "-- c"
     WHITESPACE@9..11 "\r\n"
     "#);
 }
@@ -201,9 +408,9 @@ fn byte_order_mark_is_whitespace() {
 
 #[test]
 fn comment_at_end_of_file_without_newline() {
-    insta::assert_snapshot!(dump("x // end"), @r#"
+    insta::assert_snapshot!(dump("x -- end"), @r#"
     LIDENT@0..1 "x"
     WHITESPACE@1..2 " "
-    COMMENT@2..8 "// end"
+    COMMENT@2..8 "-- end"
     "#);
 }

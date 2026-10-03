@@ -1,2 +1,2 @@
-// `$` is not a valid character in eml source.
-$
+-- `€` is not a valid character in eml source.
+€

@@ -1,4 +1,4 @@
-// Independent errors are all reported in one run.
-$
+-- Independent errors are all reported in one run.
+€
 foo
-@
+€

@@ -26,9 +26,9 @@ fn empty_file() {
 
 #[test]
 fn trivia_only_file_has_no_errors() {
-    insta::assert_snapshot!(dump("// only a comment\n\n"), @r#"
+    insta::assert_snapshot!(dump("-- only a comment\n\n"), @r#"
     SOURCE_FILE@0..19
-      COMMENT@0..17 "// only a comment"
+      COMMENT@0..17 "-- only a comment"
       WHITESPACE@17..19 "\n\n"
     "#);
 }
@@ -56,21 +56,21 @@ fn stray_tokens_are_one_error_until_the_next_item() {
 
 #[test]
 fn lexer_errors_are_not_reported_twice() {
-    let text = "$ x";
+    let text = "€ x";
     let mut files = SourceFiles::new();
     let file = files.add("test.em", text);
     let (_, diagnostics) = parse(file, text);
     let codes: Vec<String> = diagnostics.iter().map(|d| d.code.to_string()).collect();
-    // `$` は字句解析の E0001 だけ。続く `x` は項目ではないので E0003 を1件出す。
+    // `€` は字句解析の E0001 だけ。続く `x` は項目ではないので E0003 を1件出す。
     assert_eq!(codes, ["E0001", "E0003"]);
-    assert_eq!(u32::from(diagnostics[1].primary.range.start()), 2);
+    assert_eq!(u32::from(diagnostics[1].primary.range.start()), 4);
 }
 
 #[test]
 fn recovery_resumes_at_item_keywords() {
     // 項目の文法は後の段階で実装する。今は項目ごとに「まだ対応していない」を1件ずつ出し、
     // 項目の間のエラーとは独立に報告できることを確認する。
-    let text = "fn main () : Unit { } ? type T { } effect E { }";
+    let text = "fn main () : Unit { } € type T { } effect E { }";
     let mut files = SourceFiles::new();
     let file = files.add("test.em", text);
     let (parse, diagnostics) = parse(file, text);

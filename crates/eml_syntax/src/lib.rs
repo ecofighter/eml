@@ -27,7 +27,13 @@ pub mod codes {
     pub const UNTERMINATED_STRING: ErrorCode = ErrorCode(2);
     pub const EXPECTED_ITEM: ErrorCode = ErrorCode(3);
     pub const NOT_YET_SUPPORTED: ErrorCode = ErrorCode(4);
+    pub const UNTERMINATED_BLOCK_COMMENT: ErrorCode = ErrorCode(5);
+    pub const INVALID_NUMBER: ErrorCode = ErrorCode(7);
+    pub const INVALID_ESCAPE: ErrorCode = ErrorCode(8);
 }
+
+/// E0004 (まだ対応していない構文) のラベル。
+pub(crate) const NOT_YET_SUPPORTED_LABEL: &str = "this is implemented in a later stage";
 
 /// パースの結果の木。壊れた入力でも必ず木を作る。
 #[derive(Debug, Clone, PartialEq, Eq)]

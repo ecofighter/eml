@@ -1,121 +1,104 @@
-use logos::Logos;
-
 /// トークンと構文ノードの種類。トークン (`EOF` まで) を先に並べ、`TokenSet` が 128 ビットに収まるようにする。
-/// 字句の規則は spec §7 の「字句」に従う。
-#[derive(Logos, Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+/// 字句の規則は構文設計 spec §3 に従う。字句解析は `lexer` が行う。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[repr(u16)]
 #[allow(non_camel_case_types)]
 pub enum SyntaxKind {
     // trivia
-    #[regex(r"[ \t\r\n\u{FEFF}]+")]
     WHITESPACE = 0,
-    #[regex(r"//[^\r\n]*", allow_greedy = true)]
+    /// `--` から行末まで。`-- |` のドキュメントコメントも字句としてはこれ。
     COMMENT,
+    /// 入れ子にできる `{- -}`。
+    BLOCK_COMMENT,
+    /// ファイルの先頭の `#!` の行。
+    SHEBANG,
 
     // リテラルと識別子
-    #[regex(r"[0-9]+")]
     INT,
-    #[regex(r#""([^"\\\n]|\\[^\n])*""#)]
+    /// 浮動小数。S1 では使うと E0004。
+    FLOAT,
+    /// 文字。S1 では使うと E0004。
+    CHAR,
+    /// 通常の文字列。S1 では補間を含めて1つのトークン。
     STRING,
-    /// 閉じていない文字列。字句解析の段階で `STRING` に変換し、診断を出す。木には現れない。
-    #[regex(r#""([^"\\\n]|\\[^\n])*"#)]
-    UNTERMINATED_STRING,
-    #[regex(r"[a-z][A-Za-z0-9_]*|_[A-Za-z0-9_]+")]
+    /// `"""` の複数行の文字列。S1 では使うと E0004。
+    MULTILINE_STRING,
+    /// `r"..."` / `r#"..."#`。S1 では使うと E0004。
+    RAW_STRING,
+    /// バッククォートのコマンドリテラル。S1 では使うと E0004。
+    COMMAND,
     LIDENT,
-    #[regex(r"[A-Z][A-Za-z0-9_]*")]
     UIDENT,
-    #[token("_")]
     UNDERSCORE,
 
     // キーワード
-    #[token("fn")]
-    FN_KW,
-    #[token("let")]
-    LET_KW,
-    #[token("if")]
-    IF_KW,
-    #[token("then")]
-    THEN_KW,
-    #[token("else")]
-    ELSE_KW,
-    #[token("match")]
-    MATCH_KW,
-    #[token("type")]
+    DATA_KW,
     TYPE_KW,
-    #[token("effect")]
     EFFECT_KW,
-    #[token("handle")]
+    WHERE_KW,
+    PUB_KW,
+    IMPORT_KW,
+    AS_KW,
+    INFIXL_KW,
+    INFIXR_KW,
+    INFIX_KW,
+    LET_KW,
+    IN_KW,
+    IF_KW,
+    THEN_KW,
+    ELSE_KW,
+    MATCH_KW,
+    WITH_KW,
     HANDLE_KW,
-    #[token("resume")]
+    FROM_KW,
     RESUME_KW,
-    #[token("drop")]
     DROP_KW,
-    #[token("return")]
     RETURN_KW,
-    #[token("never")]
     NEVER_KW,
-    #[token("once")]
     ONCE_KW,
-    #[token("multi")]
     MULTI_KW,
-    #[token("true")]
-    TRUE_KW,
-    #[token("false")]
-    FALSE_KW,
+    USE_KW,
+    FN_KW,
+    /// 将来のために予約する。
+    FORALL_KW,
+    CLASS_KW,
+    INSTANCE_KW,
 
-    // 記号
-    #[token("(")]
+    // 区切り記号
     L_PAREN,
-    #[token(")")]
     R_PAREN,
-    #[token("{")]
+    L_BRACK,
+    R_BRACK,
     L_BRACE,
-    #[token("}")]
     R_BRACE,
-    #[token(",")]
     COMMA,
-    #[token(";")]
     SEMICOLON,
-    #[token(":")]
-    COLON,
-    #[token("=")]
+
+    // 予約記号 (演算子にならない)
     EQ,
-    #[token("->")]
-    THIN_ARROW,
-    #[token("=>")]
-    FAT_ARROW,
-    #[token("|")]
     PIPE,
-    #[token("<")]
-    LT,
-    #[token(">")]
-    GT,
-    #[token("+")]
-    PLUS,
-    #[token("-")]
+    COLON,
+    DOT,
+    THIN_ARROW,
+    LEFT_ARROW,
+    DOT2,
+
+    // 演算子
+    /// ユーザーが定義できる演算子。
+    OP,
+    /// `:` で始まる、コンストラクタの演算子。
+    CONOP,
+    /// `-`。中置の引き算と、前置の負号の両方に使う。
     MINUS,
-    #[token("*")]
-    STAR,
-    #[token("/")]
-    SLASH,
-    #[token("%")]
-    PERCENT,
-    #[token("++")]
-    PLUS2,
-    #[token("==")]
-    EQ2,
-    #[token("!=")]
-    NEQ,
-    #[token("<=")]
-    LTEQ,
-    #[token(">=")]
-    GTEQ,
-    #[token("&&")]
-    AMP2,
-    #[token("||")]
-    PIPE2,
-    #[token("!")]
-    BANG,
+
+    /// row の `<` と `>`。lexer は `OP` にし、parser が型の中で付け替える (分割することもある)。
+    L_ANGLE,
+    R_ANGLE,
+
+    /// レイアウト段の仮想トークン。parser の入力にだけ現れ、木には入らない。
+    LAYOUT_OPEN,
+    LAYOUT_SEP,
+    LAYOUT_CLOSE,
 
     /// 字句として認識できない文字の並び。
     ERROR_TOKEN,
@@ -132,7 +115,13 @@ pub enum SyntaxKind {
 
 impl SyntaxKind {
     pub fn is_trivia(self) -> bool {
-        matches!(self, SyntaxKind::WHITESPACE | SyntaxKind::COMMENT)
+        matches!(
+            self,
+            SyntaxKind::WHITESPACE
+                | SyntaxKind::COMMENT
+                | SyntaxKind::BLOCK_COMMENT
+                | SyntaxKind::SHEBANG
+        )
     }
 
     fn from_raw(raw: u16) -> SyntaxKind {

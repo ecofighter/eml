@@ -3,10 +3,10 @@ source: crates/eml_cli/tests/ui.rs
 expression: rendered
 input_file: tests/ui/check-fail/unexpected_character.em
 ---
-[E0001] Error: unexpected character `$`
+[E0001] Error: unexpected character `€`
    ╭─[ check-fail/unexpected_character.em:2:1 ]
    │
- 2 │ $
+ 2 │ €
    │ ┬  
    │ ╰── not valid in eml source
 ───╯

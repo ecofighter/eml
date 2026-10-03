@@ -207,7 +207,7 @@ mod tests {
 
     #[test]
     fn trivia_inside_root_goes_to_the_enclosing_node() {
-        let (tree, _) = run(" a // c\n b ", |p| {
+        let (tree, _) = run(" a -- c\n b ", |p| {
             let root = p.start();
             let inner = p.start();
             p.bump_any();
@@ -221,7 +221,7 @@ mod tests {
           ERROR@1..2
             LIDENT@1..2 "a"
           WHITESPACE@2..3 " "
-          COMMENT@3..7 "// c"
+          COMMENT@3..7 "-- c"
           WHITESPACE@7..9 "\n "
           LIDENT@9..10 "b"
           WHITESPACE@10..11 " "
@@ -267,7 +267,7 @@ mod tests {
 
     #[test]
     fn lookahead_skips_trivia_and_reports_eof() {
-        run("a  // c\n b", |p| {
+        run("a  -- c\n b", |p| {
             let root = p.start();
             assert_eq!(p.current(), LIDENT);
             assert_eq!(p.nth(1), LIDENT);
