@@ -85,3 +85,13 @@ fn nested_let_blocks_report_one_error() {
 fn very_deep_nested_let_blocks_do_not_overflow_the_stack() {
     assert_one_nesting_error_anywhere(&nested_let_blocks(20_000));
 }
+
+#[test]
+fn long_field_access_chain_reports_one_error() {
+    assert_one_nesting_error(&format!("x = a{}", ".b".repeat(30_000)));
+}
+
+#[test]
+fn moderate_field_access_chain_is_fine() {
+    assert!(diagnostics(&format!("x = a{}", ".b".repeat(200))).is_empty());
+}

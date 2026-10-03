@@ -226,15 +226,26 @@ fn app(p: &mut Parser) {
     }
 }
 
+/// 連鎖は再帰せずに深い木を作るので、各段を入れ子の深さに数える。数えないと、長い連鎖の木の解放がスタックを
+/// 溢れさせる (docs/implementation/status.md)。
 fn postfix(p: &mut Parser) -> bool {
     let Some(mut lhs) = atom(p) else {
         return false;
     };
+    let mut entered = 0;
     while p.at(DOT) && matches!(p.nth(1), LIDENT | INT) {
+        if !p.enter() {
+            too_deep(p);
+            break;
+        }
+        entered += 1;
         let m = lhs.precede(p);
         dot(p);
         p.bump_any();
         lhs = m.complete(p, FIELD_EXPR);
+    }
+    for _ in 0..entered {
+        p.leave();
     }
     true
 }
