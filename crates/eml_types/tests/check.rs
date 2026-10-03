@@ -181,3 +181,34 @@ fn function_typed_parameters_cannot_be_called_or_passed() {
       5:16 this is implemented in a later stage
     ");
 }
+
+#[test]
+fn a_call_reports_a_missing_effect_once() {
+    let text =
+        "f : Int -> <IO> Int -> <IO> Unit\nf a b = println \"x\"\n\ng : Int -> Unit\ng n = f 1 2";
+    insta::assert_snapshot!(check_text(text), @"
+    f : Int -> <IO> Int -> <IO> Unit
+      a#0 : Int
+      b#1 : Int
+    g : Int -> Unit
+      n#0 : Int
+    ---
+    E2002 5:7 `f` performs `IO`, which the signature of `g` does not allow
+      5:7 this call performs `IO`
+      4:5 the row of this signature does not include it
+      help: add `IO` to the row of the signature of `g`, as in `-> <IO> ...`
+    ");
+}
+
+#[test]
+fn a_value_cannot_perform_effects() {
+    let text = "v : Unit\nv = println \"x\"";
+    insta::assert_snapshot!(check_text(text), @"
+    v : Unit
+    ---
+    E2002 2:5 `println` performs `IO`, which the signature of `v` does not allow
+      2:5 this call performs `IO`
+      1:5 the row of this signature does not include it
+      help: `v` takes no parameters, so it cannot perform `IO`; make it a function taking `()`, as in `v : Unit -> <IO> ...` with `v () = ...`
+    ");
+}

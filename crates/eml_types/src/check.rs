@@ -414,6 +414,8 @@ impl BodyCheck<'_> {
         }
         self.exprs.insert(callee, callee_ty);
         let mut ty = callee_ty;
+        // 1回の呼び出しの E2002 は、どの引数の矢印で起きても1つだけ報告する
+        let mut reported = false;
         for (index, &arg) in args.iter().enumerate() {
             match self.table.kind(ty).clone() {
                 TyKind::Fn {
@@ -425,7 +427,8 @@ impl BodyCheck<'_> {
                         index,
                     };
                     self.check_expr(arg, param, origin);
-                    self.perform(row, body.exprs[id].range, &name);
+                    let ok = self.perform(row, body.exprs[id].range, &name, !reported);
+                    reported |= !ok;
                     ty = ret;
                 }
                 TyKind::Error => {
@@ -466,7 +469,8 @@ impl BodyCheck<'_> {
 
     /// 呼び出し先の閉じた row を新しい row 変数で開いてから、本体の row と単一化する (Koka と同じ)。
     /// 純粋な関数はどこからでも呼べ、`IO` を起こす関数は row に `IO` がある本体からだけ呼べる。
-    fn perform(&mut self, row: Row, range: TextRange, name: &str) {
+    /// 許されない効果があれば `false` を返す。`report` が偽なら診断を出さない。
+    fn perform(&mut self, row: Row, range: TextRange, name: &str, report: bool) -> bool {
         let opened = if row.tail.is_none() {
             Row {
                 labels: row.labels,
@@ -476,28 +480,45 @@ impl BodyCheck<'_> {
             row
         };
         let ambient = self.ambient.clone();
-        if let Err(UnifyError::MissingEffects(missing)) = self.table.unify_row(&opened, &ambient) {
-            let quoted: Vec<String> = missing.iter().map(|e| format!("`{}`", e.name())).collect();
-            let quoted = quoted.join(", ");
-            let names: Vec<&str> = missing.iter().map(|e| e.name()).collect();
-            let function = &self.function.name;
-            self.diagnostics.push(
-                Diagnostic::error(
-                    codes::EFFECT_NOT_IN_ROW,
-                    format!("`{name}` performs {quoted}, which the signature of `{function}` does not allow"),
-                    Label::new(self.file(), range, format!("this call performs {quoted}")),
-                )
-                .with_secondary(Label::new(
-                    self.file(),
-                    self.signature_range(),
-                    "the row of this signature does not include it",
-                ))
-                .with_help(format!(
-                    "add {quoted} to the row of the signature of `{function}`, as in `-> <{}> ...`",
-                    names.join(", ")
-                )),
-            );
+        let Err(UnifyError::MissingEffects(missing)) = self.table.unify_row(&opened, &ambient)
+        else {
+            return true;
+        };
+        if !report {
+            return false;
         }
+        let quoted: Vec<String> = missing.iter().map(|e| format!("`{}`", e.name())).collect();
+        let quoted = quoted.join(", ");
+        let names: Vec<&str> = missing.iter().map(|e| e.name()).collect();
+        let function = &self.function.name;
+        // 引数のない関数は矢印を持たず、row を足す先がない。`()` を取る関数にする規則を案内する (docs/spec/declarations.md)
+        let help = if self.body.params.is_empty() {
+            format!(
+                "`{function}` takes no parameters, so it cannot perform {quoted}; make it a function taking `()`, as in `{function} : Unit -> <{}> ...` with `{function} () = ...`",
+                names.join(", ")
+            )
+        } else {
+            format!(
+                "add {quoted} to the row of the signature of `{function}`, as in `-> <{}> ...`",
+                names.join(", ")
+            )
+        };
+        self.diagnostics.push(
+            Diagnostic::error(
+                codes::EFFECT_NOT_IN_ROW,
+                format!(
+                    "`{name}` performs {quoted}, which the signature of `{function}` does not allow"
+                ),
+                Label::new(self.file(), range, format!("this call performs {quoted}")),
+            )
+            .with_secondary(Label::new(
+                self.file(),
+                self.signature_range(),
+                "the row of this signature does not include it",
+            ))
+            .with_help(help),
+        );
+        false
     }
 
     fn bind_pat(&mut self, pat: PatId, ty: Ty) {
