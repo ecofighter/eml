@@ -89,7 +89,7 @@ fn assert_parses_losslessly(text: &str) {
     let mut files = SourceFiles::new();
     let file = files.add("test.em", text);
     let (parse, _) = parse(file, text);
-    assert!(parse.syntax().text().to_string() == text);
+    assert_eq!(parse.syntax().text(), text, "tree must be lossless");
 }
 
 #[test]
