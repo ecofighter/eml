@@ -24,7 +24,7 @@ const ATOM_START: TokenSet = TokenSet::new(&[
 ]);
 
 /// atom ではないので、引数や演算の項の位置では括弧が要る式 (spec §5)。
-const NEEDS_PARENS: TokenSet = TokenSet::new(&[IF_KW, MATCH_KW, LET_KW]);
+const NEEDS_PARENS: TokenSet = TokenSet::new(&[IF_KW, MATCH_KW, HANDLE_KW, LET_KW]);
 
 /// body ::= block(stmt) | expr
 pub(super) fn body(p: &mut Parser) {
@@ -109,6 +109,7 @@ pub(super) fn expr(p: &mut Parser) -> bool {
     match p.current() {
         IF_KW => if_expr(p),
         MATCH_KW => match_expr(p),
+        HANDLE_KW => handle_expr(p),
         LET_KW => let_expr(p),
         _ => return op_expr(p, false) != OpExpr::Nothing,
     }
@@ -173,7 +174,7 @@ fn op_expr(p: &mut Parser, section: bool) -> OpExpr {
 
 /// operand ::= app | lambda 。括弧の要る式は E0012 を出して読む。
 fn operand(p: &mut Parser) -> bool {
-    if p.at_ts(ATOM_START) {
+    if p.at_ts(ATOM_START) || p.at(RESUME_KW) || p.at(DROP_KW) {
         app(p);
     } else if p.at(FN_KW) {
         lambda(p);
@@ -185,10 +186,27 @@ fn operand(p: &mut Parser) -> bool {
     true
 }
 
-/// app ::= postfix+ lambda? 。引数が1つ以上あれば `APP_EXPR` にする。
+/// app ::= ('resume' | 'drop')? postfix+ lambda?
+/// `resume` / `drop` があればそのノードに、なければ引数が1つ以上あるときだけ `APP_EXPR` にする。
 fn app(p: &mut Parser) {
     let m = p.start();
-    postfix(p);
+    let keyword = match p.current() {
+        RESUME_KW => Some(RESUME_EXPR),
+        DROP_KW => Some(DROP_EXPR),
+        _ => None,
+    };
+    if keyword.is_some() {
+        p.bump_any();
+        if !postfix(p) {
+            p.error(
+                codes::SYNTAX_ERROR,
+                "expected an expression",
+                format!("found {}", describe(p)),
+            );
+        }
+    } else {
+        postfix(p);
+    }
     let mut args = 0;
     loop {
         if p.at_ts(ATOM_START) {
@@ -207,10 +225,14 @@ fn app(p: &mut Parser) {
             break;
         }
     }
-    if args > 0 {
-        m.complete(p, APP_EXPR);
-    } else {
-        m.abandon(p);
+    match keyword {
+        Some(kind) => {
+            m.complete(p, kind);
+        }
+        None if args > 0 => {
+            m.complete(p, APP_EXPR);
+        }
+        None => m.abandon(p),
     }
 }
 
@@ -556,4 +578,58 @@ fn has_left_arrow(p: &Parser) -> bool {
         }
         n += 1;
     }
+}
+
+/// 'handle' expr ('from' expr)? 'with' clauses
+fn handle_expr(p: &mut Parser) {
+    let m = p.start();
+    p.bump(HANDLE_KW);
+    if !expr(p) {
+        p.error(
+            codes::SYNTAX_ERROR,
+            "expected an expression",
+            format!("found {}", describe(p)),
+        );
+    }
+    if p.eat(FROM_KW) && !expr(p) {
+        p.error(
+            codes::SYNTAX_ERROR,
+            "expected the initial state",
+            format!("found {}", describe(p)),
+        );
+    }
+    if expect(p, WITH_KW) {
+        branches(p, "a clause starting with `|`", handler_clause);
+    }
+    m.complete(p, HANDLE_EXPR);
+}
+
+/// clause ::= '|' LIDENT apat* '->' body | '|' 'return' apat+ '->' body
+fn handler_clause(p: &mut Parser) -> bool {
+    if !p.at(PIPE) {
+        return false;
+    }
+    let m = p.start();
+    p.bump(PIPE);
+    let kind = if p.eat(RETURN_KW) {
+        if !patterns::at_apat_start(p) {
+            p.error(
+                codes::SYNTAX_ERROR,
+                "expected a pattern",
+                format!("found {}", describe(p)),
+            );
+        }
+        RETURN_CLAUSE
+    } else {
+        expect(p, LIDENT);
+        OP_CLAUSE
+    };
+    while patterns::at_apat_start(p) {
+        patterns::apat(p);
+    }
+    if expect(p, THIN_ARROW) {
+        body(p);
+    }
+    m.complete(p, kind);
+    true
 }
