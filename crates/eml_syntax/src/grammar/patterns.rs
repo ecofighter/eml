@@ -92,7 +92,6 @@ pub(super) fn apat(p: &mut Parser) -> bool {
 }
 
 /// ラムダの引数。`(pat : type)` も書ける (spec §5 の param)。
-#[allow(dead_code)] // Task 6 のラムダで使う。
 pub(super) fn param(p: &mut Parser) -> bool {
     apat_with(p, true)
 }

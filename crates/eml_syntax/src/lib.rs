@@ -35,6 +35,7 @@ pub mod codes {
     pub const INVALID_ESCAPE: ErrorCode = ErrorCode(8);
     pub const SPACE_AROUND_DOT: ErrorCode = ErrorCode(10);
     pub const SYNTAX_ERROR: ErrorCode = ErrorCode(11);
+    pub const NEEDS_PARENS: ErrorCode = ErrorCode(12);
 }
 
 /// E0004 (まだ対応していない構文) のラベル。
