@@ -1,0 +1,18 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: rendered
+input_file: tests/ui/check-fail/rigid_type_variable.em
+---
+[E2001] Error: mismatched types
+   ╭─[ check-fail/rigid_type_variable.em:3:13 ]
+   │
+ 3 │ first x y = y
+   │             ┬  
+   │             ╰── expected `a`, found `b`
+   │
+   ├─[ check-fail/rigid_type_variable.em:3:13 ]
+   │
+ 2 │ first : a -> b -> a
+   │         ─────┬─────  
+   │              ╰─────── expected because of the signature of `first`
+───╯

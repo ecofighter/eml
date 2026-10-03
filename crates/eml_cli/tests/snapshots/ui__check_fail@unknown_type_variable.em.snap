@@ -1,0 +1,12 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: rendered
+input_file: tests/ui/check-fail/unknown_type_variable.em
+---
+[E1002] Error: cannot find type variable `b`
+   ╭─[ check-fail/unknown_type_variable.em:3:13 ]
+   │
+ 3 │ id x = (x : b)
+   │             ┬  
+   │             ╰── not found in the signature
+───╯
