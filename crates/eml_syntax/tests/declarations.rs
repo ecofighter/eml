@@ -453,3 +453,66 @@ fn virtual_tokens_are_described_without_articles() {
     let text = lines(&["f : Int ->", "    Int", "    Int"]);
     assert_eq!(diagnostics(&text), ["E0011 2:8 unexpected line break"]);
 }
+
+#[test]
+fn unclosed_row_is_an_error() {
+    assert_eq!(
+        diagnostics("f : Int -> <IO Int"),
+        ["E0011 1:19 expected `>`"]
+    );
+}
+
+#[test]
+fn row_with_something_other_than_an_effect_is_an_error() {
+    assert_eq!(
+        diagnostics("f : Int -> <1> Int"),
+        ["E0011 1:13 expected an effect"]
+    );
+}
+
+#[test]
+fn constructor_must_have_a_name() {
+    assert_eq!(
+        diagnostics("data T = | 1"),
+        ["E0011 1:12 expected a constructor"]
+    );
+    assert_eq!(
+        diagnostics("data T = | a b"),
+        ["E0011 1:14 expected a constructor name or an infix constructor"]
+    );
+}
+
+#[test]
+fn data_needs_constructors() {
+    assert_eq!(
+        diagnostics("data T = 1"),
+        ["E0011 1:10 expected a constructor starting with `|`"]
+    );
+}
+
+#[test]
+fn fixity_needs_a_precedence() {
+    assert_eq!(
+        diagnostics("infixl +"),
+        ["E0011 1:8 expected a precedence from 0 to 9"]
+    );
+}
+
+#[test]
+fn effect_body_lines_must_be_operations() {
+    assert_eq!(
+        diagnostics(&lines(&["effect E where", "  1"])),
+        ["E0011 2:3 expected an operation signature"]
+    );
+}
+
+#[test]
+fn pub_without_an_item_is_an_error() {
+    assert_eq!(
+        diagnostics("pub"),
+        [
+            "E0004 1:1 `pub` is not supported yet",
+            "E0003 1:4 expected an item"
+        ]
+    );
+}

@@ -88,7 +88,7 @@ fn skip_to_sep(p: &mut Parser, in_block: bool) {
 
 /// `item` は、今の位置から項目を始められなければ何も読まずに偽を返す。
 /// 空のブロックは、レイアウト段が E0009 を報告したうえで作ったものなので、黙って受け入れる。
-fn block_of(p: &mut Parser, expected: &str, mut item: impl FnMut(&mut Parser) -> bool) {
+fn block_of(p: &mut Parser, what: &str, mut item: impl FnMut(&mut Parser) -> bool) {
     p.bump(LAYOUT_OPEN);
     if p.eat(LAYOUT_CLOSE) {
         return;
@@ -103,11 +103,7 @@ fn block_of(p: &mut Parser, expected: &str, mut item: impl FnMut(&mut Parser) ->
         }
         attempted = true;
         if !item(p) {
-            p.error(
-                codes::SYNTAX_ERROR,
-                format!("expected {expected}"),
-                format!("found {}", describe(p)),
-            );
+            expected(p, what);
         }
         if !p.at_sep() && !p.at(LAYOUT_CLOSE) && !p.at_eof() {
             p.error(
@@ -121,11 +117,7 @@ fn block_of(p: &mut Parser, expected: &str, mut item: impl FnMut(&mut Parser) ->
         }
     }
     if !attempted {
-        p.error(
-            codes::SYNTAX_ERROR,
-            format!("expected {expected}"),
-            format!("found {}", describe(p)),
-        );
+        expected(p, what);
     }
     p.eat(LAYOUT_CLOSE);
 }
@@ -153,15 +145,20 @@ fn close_block(p: &mut Parser) {
     p.eat(LAYOUT_CLOSE);
 }
 
+/// 「何が必要で、実際に何があったか」を示す構文エラー。回復の経路の多くが同じ形の診断を出すので、ここにまとめる。
+fn expected(p: &mut Parser, what: &str) {
+    p.error(
+        codes::SYNTAX_ERROR,
+        format!("expected {what}"),
+        format!("found {}", describe(p)),
+    );
+}
+
 fn expect(p: &mut Parser, kind: SyntaxKind) -> bool {
     if p.eat(kind) {
         return true;
     }
-    p.error(
-        codes::SYNTAX_ERROR,
-        format!("expected {}", token_name(kind)),
-        format!("found {}", describe(p)),
-    );
+    expected(p, token_name(kind));
     false
 }
 

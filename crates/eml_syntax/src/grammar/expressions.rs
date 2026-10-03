@@ -32,11 +32,7 @@ pub(super) fn body(p: &mut Parser) {
         return;
     }
     if !expr(p) {
-        p.error(
-            codes::SYNTAX_ERROR,
-            "expected an expression",
-            format!("found {}", describe(p)),
-        );
+        expected(p, "an expression");
     }
 }
 
@@ -69,11 +65,7 @@ fn let_stmt(p: &mut Parser) {
     let_head_and_body(p);
     if p.eat(IN_KW) {
         if !expr(p) {
-            p.error(
-                codes::SYNTAX_ERROR,
-                "expected an expression",
-                format!("found {}", describe(p)),
-            );
+            expected(p, "an expression");
         }
         let let_expr = m.complete(p, LET_EXPR);
         let_expr.precede(p).complete(p, EXPR_STMT);
@@ -85,11 +77,7 @@ fn let_stmt(p: &mut Parser) {
 fn let_head_and_body(p: &mut Parser) {
     p.bump(LET_KW);
     if !patterns::pattern(p) {
-        p.error(
-            codes::SYNTAX_ERROR,
-            "expected a pattern",
-            format!("found {}", describe(p)),
-        );
+        expected(p, "a pattern");
     }
     if p.eat(COLON) {
         types::type_(p);
@@ -132,11 +120,7 @@ fn op_expr(p: &mut Parser, section: bool) -> OpExpr {
         }
         if !operand(p) {
             if has_operator {
-                p.error(
-                    codes::SYNTAX_ERROR,
-                    "expected an expression",
-                    format!("found {}", describe(p)),
-                );
+                expected(p, "an expression");
             }
             break;
         }
@@ -189,11 +173,7 @@ fn app(p: &mut Parser) {
     if keyword.is_some() {
         p.bump_any();
         if !postfix(p) {
-            p.error(
-                codes::SYNTAX_ERROR,
-                "expected an expression",
-                format!("found {}", describe(p)),
-            );
+            expected(p, "an expression");
         }
     } else {
         postfix(p);
@@ -312,11 +292,7 @@ fn paren_expr(p: &mut Parser) -> SyntaxKind {
             p.bump(MINUS);
         }
         if !operand(p) {
-            p.error(
-                codes::SYNTAX_ERROR,
-                "expected an expression",
-                format!("found {}", describe(p)),
-            );
+            expected(p, "an expression");
         }
         expect(p, R_PAREN);
         return RIGHT_SECTION;
@@ -346,11 +322,7 @@ fn paren_expr(p: &mut Parser) -> SyntaxKind {
             expect(p, R_PAREN);
             return LEFT_SECTION;
         }
-        OpExpr::Nothing => p.error(
-            codes::SYNTAX_ERROR,
-            "expected an expression",
-            format!("found {}", describe(p)),
-        ),
+        OpExpr::Nothing => expected(p, "an expression"),
         OpExpr::Expr => {}
     }
     if p.eat(COLON) {
@@ -365,11 +337,7 @@ fn paren_expr(p: &mut Parser) -> SyntaxKind {
                 break;
             }
             if !expr(p) {
-                p.error(
-                    codes::SYNTAX_ERROR,
-                    "expected an expression",
-                    format!("found {}", describe(p)),
-                );
+                expected(p, "an expression");
                 break;
             }
             count += 1;
@@ -397,11 +365,7 @@ fn if_expr(p: &mut Parser) {
     let m = p.start();
     p.bump(IF_KW);
     if !expr(p) {
-        p.error(
-            codes::SYNTAX_ERROR,
-            "expected an expression",
-            format!("found {}", describe(p)),
-        );
+        expected(p, "an expression");
     }
     skip_sep_before(p, THEN_KW);
     if expect(p, THEN_KW) {
@@ -426,11 +390,7 @@ fn match_expr(p: &mut Parser) {
     let m = p.start();
     p.bump(MATCH_KW);
     if !expr(p) {
-        p.error(
-            codes::SYNTAX_ERROR,
-            "expected an expression",
-            format!("found {}", describe(p)),
-        );
+        expected(p, "an expression");
     }
     if expect(p, WITH_KW) {
         branches(p, "an arm starting with `|`", match_arm);
@@ -439,17 +399,13 @@ fn match_expr(p: &mut Parser) {
 }
 
 /// 同じ行に並べた枝では、本体は次の `|` の手前で終わる。`|` 単独は演算子ではないため。
-fn branches(p: &mut Parser, expected: &str, branch: fn(&mut Parser) -> bool) {
+fn branches(p: &mut Parser, what: &str, branch: fn(&mut Parser) -> bool) {
     if p.at(LAYOUT_OPEN) {
-        block_of(p, expected, branch);
+        block_of(p, what, branch);
         return;
     }
     if !p.at(PIPE) {
-        p.error(
-            codes::SYNTAX_ERROR,
-            format!("expected {expected}"),
-            format!("found {}", describe(p)),
-        );
+        expected(p, what);
         return;
     }
     while p.at(PIPE) {
@@ -471,11 +427,7 @@ fn match_arm(p: &mut Parser) -> bool {
         );
     }
     if !patterns::pattern(p) {
-        p.error(
-            codes::SYNTAX_ERROR,
-            "expected a pattern",
-            format!("found {}", describe(p)),
-        );
+        expected(p, "a pattern");
     }
     if expect(p, THIN_ARROW) {
         body(p);
@@ -493,11 +445,7 @@ fn lambda(p: &mut Parser) {
         params += 1;
     }
     if params == 0 {
-        p.error(
-            codes::SYNTAX_ERROR,
-            "expected a parameter",
-            format!("found {}", describe(p)),
-        );
+        expected(p, "a parameter");
     }
     if expect(p, THIN_ARROW) {
         body(p);
@@ -509,11 +457,7 @@ fn let_expr(p: &mut Parser) {
     let m = p.start();
     let_head_and_body(p);
     if expect(p, IN_KW) && !expr(p) {
-        p.error(
-            codes::SYNTAX_ERROR,
-            "expected an expression",
-            format!("found {}", describe(p)),
-        );
+        expected(p, "an expression");
     }
     m.complete(p, LET_EXPR);
 }
@@ -524,20 +468,12 @@ fn use_stmt(p: &mut Parser) {
     p.bump(USE_KW);
     if has_left_arrow(p) {
         if !patterns::pattern(p) {
-            p.error(
-                codes::SYNTAX_ERROR,
-                "expected a pattern",
-                format!("found {}", describe(p)),
-            );
+            expected(p, "a pattern");
         }
         expect(p, LEFT_ARROW);
     }
     if !expr(p) {
-        p.error(
-            codes::SYNTAX_ERROR,
-            "expected an expression",
-            format!("found {}", describe(p)),
-        );
+        expected(p, "an expression");
     }
     m.complete(p, USE_STMT);
 }
@@ -568,18 +504,10 @@ fn handle_expr(p: &mut Parser) {
     let m = p.start();
     p.bump(HANDLE_KW);
     if !expr(p) {
-        p.error(
-            codes::SYNTAX_ERROR,
-            "expected an expression",
-            format!("found {}", describe(p)),
-        );
+        expected(p, "an expression");
     }
     if p.eat(FROM_KW) && !expr(p) {
-        p.error(
-            codes::SYNTAX_ERROR,
-            "expected the initial state",
-            format!("found {}", describe(p)),
-        );
+        expected(p, "the initial state");
     }
     if expect(p, WITH_KW) {
         branches(p, "a clause starting with `|`", handler_clause);
@@ -595,11 +523,7 @@ fn handler_clause(p: &mut Parser) -> bool {
     p.bump(PIPE);
     let kind = if p.eat(RETURN_KW) {
         if !patterns::at_apat_start(p) {
-            p.error(
-                codes::SYNTAX_ERROR,
-                "expected a pattern",
-                format!("found {}", describe(p)),
-            );
+            expected(p, "a pattern");
         }
         RETURN_CLAUSE
     } else {

@@ -10,11 +10,7 @@ pub(super) fn type_(p: &mut Parser) -> bool {
     let m = p.start();
     if !btype(p) {
         m.abandon(p);
-        p.error(
-            codes::SYNTAX_ERROR,
-            "expected a type",
-            format!("found {}", describe(p)),
-        );
+        expected(p, "a type");
         return false;
     }
     if p.at(THIN_ARROW) {
@@ -122,22 +118,14 @@ fn effect_row(p: &mut Parser) {
         }
     }
     if !eat_angle(p, '>', R_ANGLE) {
-        p.error(
-            codes::SYNTAX_ERROR,
-            "expected `>`",
-            format!("found {}", describe(p)),
-        );
+        expected(p, "`>`");
     }
     m.complete(p, EFFECT_ROW);
 }
 
 fn effect(p: &mut Parser) {
     if !p.at(UIDENT) {
-        p.error(
-            codes::SYNTAX_ERROR,
-            "expected an effect",
-            format!("found {}", describe(p)),
-        );
+        expected(p, "an effect");
         return;
     }
     let m = p.start();

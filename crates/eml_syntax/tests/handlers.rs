@@ -217,3 +217,19 @@ fn handle_must_be_parenthesized_as_an_argument() {
         ["E0012 1:7 `handle` expression must be parenthesized here"]
     );
 }
+
+#[test]
+fn from_needs_an_initial_state() {
+    assert_eq!(
+        diagnostics("f = handle g () from with | return x -> x"),
+        ["E0011 1:22 expected the initial state"]
+    );
+}
+
+#[test]
+fn clauses_must_start_with_a_pipe() {
+    assert_eq!(
+        diagnostics("f = handle g () with x"),
+        ["E0011 1:22 expected a clause starting with `|`"]
+    );
+}

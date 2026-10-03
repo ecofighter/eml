@@ -109,11 +109,7 @@ fn alts(p: &mut Parser) {
         first = false;
     }
     if first {
-        p.error(
-            codes::SYNTAX_ERROR,
-            "expected a constructor starting with `|`",
-            format!("found {}", describe(p)),
-        );
+        expected(p, "a constructor starting with `|`");
     }
 }
 
@@ -136,26 +132,14 @@ fn alt(p: &mut Parser) -> bool {
         }
     } else {
         if !types::btype(p) {
-            p.error(
-                codes::SYNTAX_ERROR,
-                "expected a constructor",
-                format!("found {}", describe(p)),
-            );
+            expected(p, "a constructor");
         }
         if p.eat(CONOP) {
             if !types::btype(p) {
-                p.error(
-                    codes::SYNTAX_ERROR,
-                    "expected a type",
-                    format!("found {}", describe(p)),
-                );
+                expected(p, "a type");
             }
         } else {
-            p.error(
-                codes::SYNTAX_ERROR,
-                "expected a constructor name or an infix constructor",
-                format!("found {}", describe(p)),
-            );
+            expected(p, "a constructor name or an infix constructor");
         }
     }
     m.complete(p, ALT);
@@ -186,11 +170,7 @@ fn effect_item(p: &mut Parser, m: Marker) {
         if p.at(LAYOUT_OPEN) {
             block_of(p, "an operation signature", op_decl);
         } else {
-            p.error(
-                codes::SYNTAX_ERROR,
-                "expected the operations on indented lines after `where`",
-                format!("found {}", describe(p)),
-            );
+            expected(p, "the operations on indented lines after `where`");
         }
     }
     m.complete(p, EFFECT_ITEM);
@@ -225,21 +205,13 @@ fn fixity_item(p: &mut Parser, m: Marker) {
         }
         p.bump(INT);
     } else {
-        p.error(
-            codes::SYNTAX_ERROR,
-            "expected a precedence from 0 to 9",
-            format!("found {}", describe(p)),
-        );
+        expected(p, "a precedence from 0 to 9");
     }
     loop {
         if p.at_ts(DECLARABLE_OPERATORS) {
             p.bump_any();
         } else {
-            p.error(
-                codes::SYNTAX_ERROR,
-                "expected an operator",
-                format!("found {}", describe(p)),
-            );
+            expected(p, "an operator");
             break;
         }
         if !p.eat(COMMA) {
@@ -283,11 +255,7 @@ fn operator_equation(p: &mut Parser, m: Marker) {
     if p.at(OP) || p.at(MINUS) {
         p.bump_any();
         if !patterns::apat(p) {
-            p.error(
-                codes::SYNTAX_ERROR,
-                "expected a pattern",
-                format!("found {}", describe(p)),
-            );
+            expected(p, "a pattern");
         }
         if expect(p, EQ) {
             expressions::body(p);

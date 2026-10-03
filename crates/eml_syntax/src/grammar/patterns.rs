@@ -56,11 +56,7 @@ pub(super) fn pattern(p: &mut Parser) -> bool {
     if p.at(CONOP) {
         p.bump(CONOP);
         if !pattern(p) {
-            p.error(
-                codes::SYNTAX_ERROR,
-                "expected a pattern",
-                format!("found {}", describe(p)),
-            );
+            expected(p, "a pattern");
         }
         m.complete(p, INFIX_CON_PAT);
     } else {
@@ -144,11 +140,7 @@ fn paren_pat(p: &mut Parser, annotated: bool) -> SyntaxKind {
         return UNIT_PAT;
     }
     if !pattern(p) {
-        p.error(
-            codes::SYNTAX_ERROR,
-            "expected a pattern",
-            format!("found {}", describe(p)),
-        );
+        expected(p, "a pattern");
     }
     let kind = if annotated && p.eat(COLON) {
         types::type_(p);
@@ -160,11 +152,7 @@ fn paren_pat(p: &mut Parser, annotated: bool) -> SyntaxKind {
                 break;
             }
             if !pattern(p) {
-                p.error(
-                    codes::SYNTAX_ERROR,
-                    "expected a pattern",
-                    format!("found {}", describe(p)),
-                );
+                expected(p, "a pattern");
                 break;
             }
             count += 1;
