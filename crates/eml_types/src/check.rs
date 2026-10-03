@@ -286,6 +286,15 @@ impl BodyCheck<'_> {
         let body = self.body;
         let expr = &body.exprs[id];
         let ty = match &expr.kind {
+            ExprKind::Lambda { .. } => {
+                // ラムダの型検査は Task 9 で入れる。それまでは段階1と同じ E0004 を出す
+                self.diagnostics.push(not_yet_supported(
+                    self.file(),
+                    TextRange::at(expr.range.start(), 2.into()),
+                    "lambdas are not supported yet",
+                ));
+                self.table.error
+            }
             ExprKind::Missing => self.table.error,
             ExprKind::Literal(Literal::Int(_)) => self.table.int,
             ExprKind::Literal(Literal::String(_)) => self.table.string,
@@ -528,6 +537,7 @@ impl BodyCheck<'_> {
             PatKind::Bind(local) => {
                 self.locals.insert(*local, ty);
             }
+            PatKind::Annot { pat, .. } => self.bind_pat(*pat, ty),
             PatKind::Wildcard | PatKind::Missing => {}
             PatKind::Unit => {
                 let unit = self.table.unit;

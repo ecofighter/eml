@@ -146,6 +146,32 @@ ast_enum! {
     Type { PathType, VarType, AppType, FnType, ParenType, TupleType }
 }
 
+impl LambdaExpr {
+    pub fn params(&self) -> AstChildren<Pat> {
+        support::children(&self.syntax)
+    }
+
+    pub fn body(&self) -> Option<Expr> {
+        support::child(&self.syntax)
+    }
+}
+
+impl AnnotPat {
+    pub fn pat(&self) -> Option<Pat> {
+        support::child(&self.syntax)
+    }
+
+    pub fn ty(&self) -> Option<Type> {
+        support::child(&self.syntax)
+    }
+}
+
+impl VarType {
+    pub fn name(&self) -> Option<SyntaxToken> {
+        support::token(&self.syntax, SyntaxKind::LIDENT)
+    }
+}
+
 impl SourceFile {
     pub fn items(&self) -> AstChildren<Item> {
         support::children(&self.syntax)

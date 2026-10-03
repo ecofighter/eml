@@ -98,12 +98,11 @@ fn constructs_of_later_stages_are_not_yet_supported() {
     insta::assert_snapshot!(lower_text(text), @r"
     f : Int -> Int
     f x#0 = {
-      let g#1 = <missing>
+      let g#2 = (fn y#1 -> y#1)
       <missing>
     }
     ---
     E0004 1:1 `data` declarations are not supported yet
-    E0004 4:11 lambdas are not supported yet
     E0004 5:3 `match` is not supported yet
     ");
 }
@@ -133,5 +132,30 @@ fn operator_definitions_and_qualified_names() {
     E0004 1:2 defining operators is not supported yet
     E0004 2:3 defining operators is not supported yet
     E0004 4:9 qualified names are not supported yet
+    ");
+}
+
+#[test]
+fn lambdas_bind_their_parameters_only_in_the_body() {
+    let text = "f : Int -> Int\nf x =\n  let g = fn y (z : Int) _ -> x + y\n  y";
+    insta::assert_snapshot!(lower_text(text), @r"
+    f : Int -> Int
+    f x#0 = {
+      let g#3 = (fn y#1 (z#2 : Int) _ -> (+ x#0 y#1))
+      <missing>
+    }
+    ---
+    E1001 4:3 cannot find value `y`
+    ");
+}
+
+#[test]
+fn a_lambda_can_be_the_last_argument() {
+    let text = "call : Int -> (Int -> Int) -> Int\ncall n f = f n\n\ng : Int -> Int\ng n = call n fn x -> x + 1";
+    insta::assert_snapshot!(lower_text(text), @r"
+    call : Int -> (Int -> Int) -> Int
+    call n#0 f#1 = (f#1 n#0)
+    g : Int -> Int
+    g n#0 = (@call n#0 (fn x#1 -> (+ x#1 1)))
     ");
 }

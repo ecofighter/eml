@@ -109,8 +109,15 @@ impl<'a> BodyLowering<'a> {
             }
             ast::Expr::Block(block) => self.lower_block(&block, range),
             ast::Expr::OpSeq(seq) => self.lower_op_seq(&seq),
-            ast::Expr::LambdaExpr(e) => {
-                self.unsupported(keyword(e.syntax()), "lambdas are not supported yet")
+            ast::Expr::LambdaExpr(lambda) => {
+                let mark = self.scope.len();
+                let params = lambda
+                    .params()
+                    .map(|pat| self.lower_lambda_param(pat))
+                    .collect();
+                let body = self.lower_expr(lambda.body(), range);
+                self.scope.truncate(mark);
+                self.alloc(ExprKind::Lambda { params, body }, range)
             }
             ast::Expr::MatchExpr(e) => {
                 self.unsupported(keyword(e.syntax()), "`match` is not supported yet")
@@ -266,6 +273,20 @@ impl<'a> BodyLowering<'a> {
             }
         };
         self.pats.alloc(Pat { kind, range })
+    }
+
+    /// ラムダの引数だけは型の明示を受ける (docs/spec/expressions.md の「ラムダ」)。
+    fn lower_lambda_param(&mut self, pat: ast::Pat) -> PatId {
+        let ast::Pat::AnnotPat(annot) = pat else {
+            return self.lower_pat(Some(pat), TextRange::default());
+        };
+        let range = annot.syntax().text_range();
+        let ty = self.lower_type(annot.ty(), range);
+        let inner = self.lower_pat(annot.pat(), range);
+        self.pats.alloc(Pat {
+            kind: PatKind::Annot { pat: inner, ty },
+            range,
+        })
     }
 
     fn lower_type(&mut self, ty: Option<ast::Type>, fallback: TextRange) -> TypeRefId {

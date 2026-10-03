@@ -79,6 +79,11 @@ pub enum ExprKind {
         expr: ExprId,
         ty: TypeRefId,
     },
+    /// 引数のスコープは本体だけである (docs/spec/expressions.md の「ラムダ」)。
+    Lambda {
+        params: Vec<PatId>,
+        body: ExprId,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -117,6 +122,11 @@ pub enum PatKind {
     Bind(LocalId),
     Wildcard,
     Unit,
+    /// `fn (x : Int) -> e` の引数。等式と `let` の型を明示したパターンは、まだ E0004 にする。
+    Annot {
+        pat: PatId,
+        ty: TypeRefId,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

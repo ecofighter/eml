@@ -94,6 +94,17 @@ impl Printer<'_> {
             ExprKind::Annot { expr, ty } => {
                 format!("({} : {})", self.expr(body, *expr, indent), self.ty(*ty))
             }
+            ExprKind::Lambda {
+                params,
+                body: lambda_body,
+            } => {
+                let mut s = "(fn".to_string();
+                for &param in params {
+                    write!(s, " {}", self.pat(body, param)).unwrap();
+                }
+                write!(s, " -> {})", self.expr(body, *lambda_body, indent)).unwrap();
+                s
+            }
         }
     }
 
@@ -111,6 +122,7 @@ impl Printer<'_> {
             PatKind::Bind(local) => local_name(body, *local),
             PatKind::Wildcard => "_".to_string(),
             PatKind::Unit => "()".to_string(),
+            PatKind::Annot { pat, ty } => format!("({} : {})", self.pat(body, *pat), self.ty(*ty)),
         }
     }
 

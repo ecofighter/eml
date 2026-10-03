@@ -237,13 +237,20 @@ impl FnLowering<'_> {
                 }
             }
             ExprKind::Annot { expr, .. } => self.atom(*expr, out),
+            ExprKind::Lambda { .. } => {
+                unreachable!("the type checker rejects lambdas until they are lowered")
+            }
         }
     }
 
     /// `_` と `()` で受けた値は以後使われないので、Perceus の挿入が decref する。
     fn bind_pat(&mut self, pat: PatId, value: Atom) {
-        if let PatKind::Bind(local) = self.body.pats[pat].kind {
-            self.locals.insert(local, value);
+        match self.body.pats[pat].kind {
+            PatKind::Bind(local) => {
+                self.locals.insert(local, value);
+            }
+            PatKind::Annot { pat, .. } => self.bind_pat(pat, value),
+            _ => {}
         }
     }
 }
