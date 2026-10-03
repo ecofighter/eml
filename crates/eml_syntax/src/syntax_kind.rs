@@ -108,6 +108,84 @@ pub enum SyntaxKind {
     // ノード
     SOURCE_FILE,
     ERROR,
+    // 項目
+    SIGNATURE,
+    EQUATION,
+    DATA_ITEM,
+    /// `data` の1つの選択肢 (`| Some a`、`| a :: List a`)。
+    ALT,
+    TYPE_ITEM,
+    EFFECT_ITEM,
+    /// エフェクトの1つの操作の宣言。
+    OP_DECL,
+    FIXITY_ITEM,
+
+    // 文
+    /// 字下げしたブロック。仮想トークンは木に入らないので、子は文だけ。
+    BLOCK,
+    LET_STMT,
+    USE_STMT,
+    EXPR_STMT,
+
+    // 式
+    IF_EXPR,
+    MATCH_EXPR,
+    MATCH_ARM,
+    HANDLE_EXPR,
+    /// handler の操作の節 (`| op x k -> e`)。
+    OP_CLAUSE,
+    /// handler の `return` の節。
+    RETURN_CLAUSE,
+    LAMBDA_EXPR,
+    /// `let p = e in e2`。
+    LET_EXPR,
+    /// 演算子の列。被演算子と演算子のトークンを平たく並べる。前置の `-` もトークンとして入る (spec §7)。
+    OP_SEQ,
+    /// 関数適用。最初の子が関数、残りが引数。
+    APP_EXPR,
+    RESUME_EXPR,
+    DROP_EXPR,
+    /// `e.name`、`e.0`。
+    FIELD_EXPR,
+    /// 変数、コンストラクタ、修飾された名前。
+    PATH_EXPR,
+    LITERAL,
+    UNIT_EXPR,
+    PAREN_EXPR,
+    TUPLE_EXPR,
+    /// `(e : T)`。
+    ANNOT_EXPR,
+    /// `(+)`。
+    OP_REF,
+    /// `(1 +)`。
+    LEFT_SECTION,
+    /// `(+ 1)`。
+    RIGHT_SECTION,
+    /// `(.name)`。
+    FIELD_SECTION,
+
+    // パターン
+    WILDCARD_PAT,
+    BIND_PAT,
+    CON_PAT,
+    LITERAL_PAT,
+    UNIT_PAT,
+    PAREN_PAT,
+    TUPLE_PAT,
+    /// `x :: rest`。
+    INFIX_CON_PAT,
+    /// ラムダの引数の `(x : Int)`。
+    ANNOT_PAT,
+
+    // 型
+    PATH_TYPE,
+    VAR_TYPE,
+    APP_TYPE,
+    FN_TYPE,
+    PAREN_TYPE,
+    TUPLE_TYPE,
+    EFFECT_ROW,
+    EFFECT,
 
     #[doc(hidden)]
     __LAST,

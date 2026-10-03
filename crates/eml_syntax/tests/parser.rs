@@ -44,7 +44,7 @@ fn stray_tokens_are_one_error_until_the_next_item() {
         WHITESPACE@3..4 " "
         INT@4..5 "3"
     ---
-    [E0003] Error: expected an item (`fn`, `type`, or `effect`)
+    [E0003] Error: expected an item
        ╭─[ test.em:1:1 ]
        │
      1 │ 1 2 3
@@ -67,19 +67,19 @@ fn lexer_errors_are_not_reported_twice() {
 }
 
 #[test]
-fn recovery_resumes_at_item_keywords() {
-    // 項目の文法は後の段階で実装する。今は項目ごとに「まだ対応していない」を1件ずつ出し、
-    // 項目の間のエラーとは独立に報告できることを確認する。
-    let text = "fn main () : Unit { } € type T { } effect E { }";
+fn recovery_resumes_at_the_next_item() {
+    // 1つの項目の中のエラーは、次の行の項目の解析に影響しない。
+    let text = "a : Int -> )\nb : Int\nc : Int";
     let mut files = SourceFiles::new();
     let file = files.add("test.em", text);
     let (parse, diagnostics) = parse(file, text);
     let codes: Vec<String> = diagnostics.iter().map(|d| d.code.to_string()).collect();
-    assert_eq!(codes, ["E0004", "E0001", "E0004", "E0004"]);
+    assert_eq!(codes, ["E0011"]);
+    assert_eq!(u32::from(diagnostics[0].primary.range.start()), 11);
     let kinds: Vec<String> = parse
         .syntax()
         .children()
         .map(|node| format!("{:?}", node.kind()))
         .collect();
-    assert_eq!(kinds, ["ERROR", "ERROR", "ERROR"]);
+    assert_eq!(kinds, ["SIGNATURE", "ERROR", "SIGNATURE", "SIGNATURE"]);
 }

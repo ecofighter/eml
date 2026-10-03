@@ -33,6 +33,8 @@ pub mod codes {
     pub const EXPECTED_INDENTED_BLOCK: ErrorCode = ErrorCode(9);
     pub const INVALID_NUMBER: ErrorCode = ErrorCode(7);
     pub const INVALID_ESCAPE: ErrorCode = ErrorCode(8);
+    pub const SPACE_AROUND_DOT: ErrorCode = ErrorCode(10);
+    pub const SYNTAX_ERROR: ErrorCode = ErrorCode(11);
 }
 
 /// E0004 (まだ対応していない構文) のラベル。

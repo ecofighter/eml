@@ -25,7 +25,6 @@ pub(crate) enum Event {
         kind: SyntaxKind,
     },
     /// trivia でないトークンの先頭の `len` バイトだけを、`kind` のトークンとして進める。
-    #[allow(dead_code)] // Task 4 の文法で使う。
     TokenPrefix {
         kind: SyntaxKind,
         len: TextSize,
@@ -46,7 +45,6 @@ pub(crate) struct Parser<'t> {
     steps: Cell<u32>,
 }
 
-#[allow(dead_code)] // Task 4 の文法で使う補助関数を含む。
 impl<'t> Parser<'t> {
     pub(crate) fn new(file: FileId, text: &'t str, tokens: Vec<Token>) -> Parser<'t> {
         Parser {
@@ -255,7 +253,6 @@ impl Marker {
 
     /// ノードを作らない。イベントは `Tombstone` のまま残す (取り除くと、`precede` で指された位置に
     /// 後のノードが入り、親子関係が壊れるため)。
-    #[allow(dead_code)] // Task 4 の文法で使う。
     pub(crate) fn abandon(mut self, _p: &mut Parser) {
         self.done = true;
     }
@@ -269,14 +266,14 @@ impl Drop for Marker {
     }
 }
 
-#[allow(dead_code)] // Task 4 の文法で使う。
+#[allow(dead_code)] // Task 5 の式の文法で使う。
 pub(crate) struct CompletedMarker {
     pos: u32,
 }
 
 impl CompletedMarker {
     /// 完了したノードの外側に、新しい親ノードを開始する (演算子の列やフィールドアクセスの左辺などに使う)。
-    #[allow(dead_code)] // Task 4 の文法で使う。
+    #[allow(dead_code)] // Task 5 の式の文法で使う。
     pub(crate) fn precede(self, p: &mut Parser) -> Marker {
         let parent = p.start();
         match &mut p.events[self.pos as usize] {

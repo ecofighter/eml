@@ -10,7 +10,7 @@ input_file: tests/ui/check-fail/multiple_errors.em
    │ ┬  
    │ ╰── not valid in eml source
 ───╯
-[E0003] Error: expected an item (`fn`, `type`, or `effect`)
+[E0003] Error: expected an item
    ╭─[ check-fail/multiple_errors.em:3:1 ]
    │
  3 │ foo
