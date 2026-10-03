@@ -79,19 +79,56 @@ fn print_int(n: u32, show: u32, out: u32) -> Vec<Step> {
 #[test]
 fn a_partial_application_waits_for_the_rest_of_the_arguments() {
     let mut steps = vec![
-        Step::Let(1, Rhs::MakeClosure(FnIdx(0), vec![Atom::Int(10)])),
-        Step::Let(2, Rhs::Apply(var(1), vec![Atom::Int(20)])),
+        Step::Let(1, Rhs::MakeClosure(FnIdx(0), vec![])),
+        Step::Let(2, Rhs::Apply(var(1), vec![Atom::Int(10)])),
+        Step::Let(3, Rhs::Apply(var(2), vec![Atom::Int(20)])),
     ];
-    steps.extend(print_int(2, 3, 4));
+    steps.extend(print_int(3, 4, 5));
     let vars = [
         ("p", false),
         ("c", true),
+        ("d", true),
         ("r", false),
         ("s", true),
         ("t", false),
     ];
-    let main = function("main", 1, &vars, steps, var(4));
+    let main = function("main", 1, &vars, steps, var(5));
     assert_eq!(run_program(vec![first(false), main], 1, &[]), "10\n");
+}
+
+#[test]
+fn a_returned_function_can_still_wait_for_more_arguments() {
+    let first3 = function(
+        "first3",
+        3,
+        &[("a", false), ("b", false), ("c", false)],
+        vec![],
+        var(0),
+    );
+    // make x = closure first3(x)
+    let make = function(
+        "make",
+        1,
+        &[("x", false), ("c", true)],
+        vec![Step::Let(1, Rhs::MakeClosure(FnIdx(0), vec![var(0)]))],
+        var(1),
+    );
+    let mut steps = vec![
+        Step::Let(1, Rhs::MakeClosure(FnIdx(1), vec![])),
+        Step::Let(2, Rhs::Apply(var(1), vec![Atom::Int(5), Atom::Int(6)])),
+        Step::Let(3, Rhs::Apply(var(2), vec![Atom::Int(7)])),
+    ];
+    steps.extend(print_int(3, 4, 5));
+    let vars = [
+        ("p", false),
+        ("m", true),
+        ("r", true),
+        ("s", false),
+        ("t", true),
+        ("u", false),
+    ];
+    let main = function("main", 1, &vars, steps, var(5));
+    assert_eq!(run_program(vec![first3, make, main], 2, &[]), "5\n");
 }
 
 #[test]
