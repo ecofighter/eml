@@ -1,7 +1,7 @@
 use eml_diagnostics::{Diagnostic, FileId, Label, TextRange};
 use eml_hir::{
     Body, ExprId, ExprKind, Function, FunctionId, Literal, LocalId, Module, PatId, PatKind, Res,
-    RowRef, Stmt, TypeRefId, TypeRefKind, not_yet_supported,
+    RowRef, Stmt, TypeRefId, TypeRefKind,
 };
 use la_arena::ArenaMap;
 
@@ -51,6 +51,7 @@ pub(crate) fn check_module(module: &Module) -> (TypedModule, Vec<Diagnostic>) {
             table: &mut table,
             diagnostics: &mut diagnostics,
             ambient: Row::pure(),
+            ambient_source: AmbientSource::Signature,
             exprs: ArenaMap::default(),
             locals: ArenaMap::default(),
         };
@@ -136,6 +137,18 @@ enum Origin {
     IfWithoutElse,
     Statement,
     UnitPattern,
+    LambdaParameter,
+    LambdaBody,
+    /// 推論で決まる型。根拠の場所はない。
+    Inferred,
+}
+
+/// 今の row がどこから来たか。E2002 の言い方を決める (docs/spec/diagnostics.md)。
+#[derive(Debug, Clone)]
+enum AmbientSource {
+    Signature,
+    /// ラムダの最後の矢印の row。ラムダの期待する型の由来を持つ。
+    Lambda(Origin),
 }
 
 struct BodyCheck<'a> {
@@ -148,6 +161,7 @@ struct BodyCheck<'a> {
     diagnostics: &'a mut Vec<Diagnostic>,
     /// 本体が起こしてよいエフェクト。最後にたどったシグネチャの矢印の row である。
     ambient: Row,
+    ambient_source: AmbientSource,
     exprs: ArenaMap<ExprId, Ty>,
     locals: ArenaMap<LocalId, Ty>,
 }
@@ -251,6 +265,17 @@ impl BodyCheck<'_> {
                 }
                 self.exprs.insert(id, expected);
             }
+            ExprKind::Lambda {
+                params,
+                body: lambda_body,
+            } => {
+                if matches!(self.table.kind(expected), TyKind::Fn { .. } | TyKind::Error) {
+                    self.check_lambda(id, params, *lambda_body, expected, origin);
+                } else {
+                    let found = self.infer_expr(id);
+                    self.expect(expr.range, expected, found, &origin);
+                }
+            }
             _ => {
                 let found = self.infer_expr(id);
                 self.expect(expr.range, expected, found, &origin);
@@ -262,14 +287,13 @@ impl BodyCheck<'_> {
         let body = self.body;
         let expr = &body.exprs[id];
         let ty = match &expr.kind {
-            ExprKind::Lambda { .. } => {
-                // ラムダの型検査は Task 9 で入れる。それまでは段階1と同じ E0004 を出す
-                self.diagnostics.push(not_yet_supported(
-                    self.file(),
-                    TextRange::at(expr.range.start(), 2.into()),
-                    "lambdas are not supported yet",
-                ));
-                self.table.error
+            ExprKind::Lambda {
+                params,
+                body: lambda_body,
+            } => {
+                let ty = self.table.fresh_var();
+                self.check_lambda(id, params, *lambda_body, ty, Origin::Inferred);
+                ty
             }
             ExprKind::Missing => self.table.error,
             ExprKind::Literal(Literal::Int(_)) => self.table.int,
@@ -397,7 +421,11 @@ impl BodyCheck<'_> {
             if let TyKind::Var(_) = self.table.kind(ty) {
                 let function = self.fresh_function();
                 // 新しい変数だけでできた関数型なので、単一化は失敗しない
-                let _ = self.table.unify(ty, function);
+                let unified = self.table.unify(ty, function);
+                debug_assert!(
+                    unified.is_ok(),
+                    "a fresh function type always unifies with a variable"
+                );
             }
             match self.table.kind(ty).clone() {
                 TyKind::Fn {
@@ -451,43 +479,184 @@ impl BodyCheck<'_> {
                 effects.iter().map(|e| e.name().to_string()).collect()
             }
             Err(UnifyError::MissingRowVar(var)) => vec![var],
-            // 包含の検査は、今の row に新しい row 変数を合わせるだけなので、ほかの失敗は起きない
-            Err(other) => unreachable!("including a row reports only missing effects: {other:?}"),
+            // include_row は呼び出し先側の剛体でない row 変数を通してしか単一化しないので、剛体変数の束縛 (Mismatch) も
+            // Occurs も起きない
+            Err(other) => unreachable!(
+                "including a row reports only missing effects or a missing row variable: {other:?}"
+            ),
         };
         if !report {
             return false;
         }
         let quoted: Vec<String> = missing.iter().map(|name| format!("`{name}`")).collect();
         let quoted = quoted.join(", ");
-        let function = &self.function.name;
-        // 引数のない関数は矢印を持たず、row を足す先がない。`()` を取る関数にする規則を案内する (docs/spec/declarations.md)
-        let help = if self.body.params.is_empty() {
-            format!(
-                "`{function}` takes no parameters, so it cannot perform {quoted}; make it a function taking `()`, as in `{function} : Unit -> <{}> ...` with `{function} () = ...`",
-                missing.join(", ")
-            )
-        } else {
-            format!(
-                "add {quoted} to the row of the signature of `{function}`, as in `-> <{}> ...`",
-                missing.join(", ")
-            )
+        let file = self.file();
+        let diagnostic = match &self.ambient_source {
+            AmbientSource::Signature => {
+                let function = &self.function.name;
+                // 引数のない関数は矢印を持たず、row を足す先がない。`()` を取る関数にする規則を案内する (docs/spec/declarations.md)
+                let help = if self.body.params.is_empty() {
+                    format!(
+                        "`{function}` takes no parameters, so it cannot perform {quoted}; make it a function taking `()`, as in `{function} : Unit -> <{}> ...` with `{function} () = ...`",
+                        missing.join(", ")
+                    )
+                } else {
+                    format!(
+                        "add {quoted} to the row of the signature of `{function}`, as in `-> <{}> ...`",
+                        missing.join(", ")
+                    )
+                };
+                Diagnostic::error(
+                    codes::EFFECT_NOT_IN_ROW,
+                    format!(
+                        "`{name}` performs {quoted}, which the signature of `{function}` does not allow"
+                    ),
+                    Label::new(self.file(), range, format!("this call performs {quoted}")),
+                )
+                .with_secondary(Label::new(
+                    self.file(),
+                    self.signature_range(),
+                    "the row of this signature does not include it",
+                ))
+                .with_help(help)
+            }
+            AmbientSource::Lambda(origin) => {
+                let diagnostic = Diagnostic::error(
+                    codes::EFFECT_NOT_IN_ROW,
+                    format!("`{name}` performs {quoted}, which this lambda does not allow"),
+                    Label::new(file, range, format!("this call performs {quoted}")),
+                );
+                // ラムダの row を決めた場所を secondary にする (docs/spec/diagnostics.md の E2002)
+                match origin {
+                    Origin::Argument {
+                        callee,
+                        name: callee_name,
+                        index,
+                    } => diagnostic.with_secondary(Label::new(
+                        file,
+                        *callee,
+                        format!(
+                            "argument {} of `{callee_name}` does not allow it",
+                            index + 1
+                        ),
+                    )),
+                    Origin::Annotation(annotation) => diagnostic.with_secondary(Label::new(
+                        file,
+                        *annotation,
+                        "this annotation does not allow it",
+                    )),
+                    Origin::Return => diagnostic.with_secondary(Label::new(
+                        file,
+                        self.signature_range(),
+                        format!(
+                            "the signature of `{}` does not allow it",
+                            self.function.name
+                        ),
+                    )),
+                    _ => diagnostic,
+                }
+            }
         };
-        self.diagnostics.push(
-            Diagnostic::error(
-                codes::EFFECT_NOT_IN_ROW,
-                format!(
-                    "`{name}` performs {quoted}, which the signature of `{function}` does not allow"
-                ),
-                Label::new(self.file(), range, format!("this call performs {quoted}")),
-            )
-            .with_secondary(Label::new(
-                self.file(),
-                self.signature_range(),
-                "the row of this signature does not include it",
-            ))
-            .with_help(help),
-        );
+        self.diagnostics.push(diagnostic);
         false
+    }
+
+    /// ラムダを、期待する関数型の矢印を引数ごとにたどって検査する。本体のエフェクトは、外側の関数ではなく、最後に
+    /// たどった矢印の row に入る (docs/spec/types.md の「推論」)。
+    fn check_lambda(
+        &mut self,
+        id: ExprId,
+        params: &[PatId],
+        lambda_body: ExprId,
+        expected: Ty,
+        origin: Origin,
+    ) {
+        let body = self.body;
+        let saved = (self.ambient.clone(), self.ambient_source.clone());
+        let mut current = expected;
+        let mut row = None;
+        for (index, &pat) in params.iter().enumerate() {
+            if let TyKind::Var(_) = self.table.kind(current) {
+                let function = self.fresh_function();
+                // 新しい変数だけでできた関数型なので、単一化は失敗しない
+                let unified = self.table.unify(current, function);
+                debug_assert!(
+                    unified.is_ok(),
+                    "a fresh function type always unifies with a variable"
+                );
+            }
+            match self.table.kind(current).clone() {
+                TyKind::Fn {
+                    param,
+                    row: arrow,
+                    ret,
+                    ..
+                } => {
+                    self.bind_param(pat, param);
+                    row = Some(arrow);
+                    current = ret;
+                }
+                TyKind::Error => {
+                    let error = self.table.error;
+                    self.bind_pat(pat, error);
+                }
+                _ => {
+                    let found = self.table.export(expected);
+                    self.diagnostics.push(Diagnostic::error(
+                        codes::TYPE_MISMATCH,
+                        format!(
+                            "this lambda has {} but its expected type `{found}` has {}",
+                            count(params.len(), "parameter"),
+                            count(index, "arrow"),
+                        ),
+                        Label::new(
+                            self.file(),
+                            body.pats[pat].range,
+                            "this parameter has no arrow in the expected type",
+                        ),
+                    ));
+                    let error = self.table.error;
+                    for &rest in &params[index..] {
+                        self.bind_pat(rest, error);
+                    }
+                    current = error;
+                    break;
+                }
+            }
+        }
+        self.ambient = match row {
+            Some(row) => row,
+            // 期待する型が壊れていれば、どのエフェクトも受け入れて診断を連鎖させない
+            None => Row {
+                labels: Vec::new(),
+                tail: Some(self.table.fresh_row_var()),
+            },
+        };
+        self.ambient_source = AmbientSource::Lambda(origin);
+        self.check_expr(lambda_body, current, Origin::LambdaBody);
+        (self.ambient, self.ambient_source) = saved;
+        self.exprs.insert(id, expected);
+    }
+
+    /// ラムダの引数を束縛する。型を明示した引数は、明示した型が、ラムダが期待される引数の型と一致しなければならない。
+    fn bind_param(&mut self, pat: PatId, ty: Ty) {
+        let body = self.body;
+        if let PatKind::Annot {
+            pat: inner,
+            ty: annotation,
+        } = &body.pats[pat].kind
+        {
+            let annotated = lower_type(self.table, self.function, self.rigids, *annotation, false);
+            self.expect(
+                body.pats[pat].range,
+                ty,
+                annotated,
+                &Origin::LambdaParameter,
+            );
+            self.bind_pat(*inner, annotated);
+            return;
+        }
+        self.bind_pat(pat, ty);
     }
 
     fn bind_pat(&mut self, pat: PatId, ty: Ty) {
@@ -567,6 +736,13 @@ impl BodyCheck<'_> {
             Origin::Statement => diagnostic
                 .with_note("a statement that is not the last one in a block must have type `Unit`"),
             Origin::UnitPattern => diagnostic.with_note("the pattern `()` matches only `Unit`"),
+            Origin::LambdaParameter => diagnostic.with_note(
+                "an annotated lambda parameter must have the parameter type the lambda is expected to have",
+            ),
+            Origin::LambdaBody => diagnostic.with_note(
+                "the body of a lambda must have the return type the lambda is expected to have",
+            ),
+            Origin::Inferred => diagnostic,
         };
         self.diagnostics.push(diagnostic);
     }

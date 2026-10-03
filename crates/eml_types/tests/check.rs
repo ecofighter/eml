@@ -297,3 +297,54 @@ fn equations_may_return_functions_and_calls_may_pass_more_arguments() {
     three : Unit -> Int
     ");
 }
+
+#[test]
+fn lambdas_are_checked_against_the_expected_type_or_inferred() {
+    let text = "apply : (Int -> Int) -> Int\napply f = f 1\n\nmain : Unit -> <IO> Unit\nmain () =\n  let n = apply (fn x -> x + 1)\n  let id = fn y -> y\n  let s = id \"s\"\n  let k = fn (z : Int) _ -> z\n  println (show_int (k n s))";
+    insta::assert_snapshot!(check_text(text), @r"
+    apply : (Int -> Int) -> Int
+      f#0 : Int -> Int
+    main : Unit -> <IO> Unit
+      x#0 : Int
+      n#1 : Int
+      y#2 : String
+      id#3 : String -> <IO> String
+      s#4 : String
+      z#5 : Int
+      k#6 : Int -> <IO> String -> <IO> Int
+    ");
+}
+
+#[test]
+fn a_lambda_cannot_perform_effects_its_expected_type_does_not_allow() {
+    let text = "each : (String -> Unit) -> Unit\neach f = f \"a\"\n\nmain : Unit -> <IO> Unit\nmain () = each (fn s -> println s)";
+    insta::assert_snapshot!(check_text(text), @r"
+    each : (String -> Unit) -> Unit
+      f#0 : String -> Unit
+    main : Unit -> <IO> Unit
+      s#0 : String
+    ---
+    E2002 5:25 `println` performs `IO`, which this lambda does not allow
+      5:25 this call performs `IO`
+      5:11 argument 1 of `each` does not allow it
+    ");
+}
+
+#[test]
+fn annotated_lambda_parameters_must_match_and_arities_must_agree() {
+    let text = "apply : (Int -> Int) -> Int\napply f = f 1\n\nbad : Unit -> Int\nbad () = apply (fn (x : String) -> 1) + apply (fn a b -> a)";
+    insta::assert_snapshot!(check_text(text), @r"
+    apply : (Int -> Int) -> Int
+      f#0 : Int -> Int
+    bad : Unit -> Int
+      x#0 : String
+      a#1 : Int
+      b#2 : {error}
+    ---
+    E2001 5:20 mismatched types
+      5:20 expected `Int`, found `String`
+      note: an annotated lambda parameter must have the parameter type the lambda is expected to have
+    E2001 5:53 this lambda has 2 parameters but its expected type `Int -> Int` has 1 arrow
+      5:53 this parameter has no arrow in the expected type
+    ");
+}

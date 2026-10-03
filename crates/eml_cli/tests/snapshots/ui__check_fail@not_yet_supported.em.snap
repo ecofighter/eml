@@ -10,10 +10,3 @@ input_file: tests/ui/check-fail/not_yet_supported.em
    │ ──┬─  
    │   ╰─── this is implemented in a later stage
 ───╯
-[E0004] Error: lambdas are not supported yet
-   ╭─[ check-fail/not_yet_supported.em:9:11 ]
-   │
- 9 │   let f = fn x -> x
-   │           ─┬  
-   │            ╰── this is implemented in a later stage
-───╯
