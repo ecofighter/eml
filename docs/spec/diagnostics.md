@@ -9,7 +9,7 @@
 ```rust
 struct Diagnostic {
     code: ErrorCode,          // E0001 などの安定した番号
-    severity: Severity,       // Error / Warning / Note
+    severity: Severity,       // Error / Warning
     message: String,
     primary: Label,           // (FileId, TextRange, ラベル文)
     secondary: Vec<Label>,
@@ -22,6 +22,8 @@ struct Diagnostic {
 - CLI では `ariadne` で表示する。将来の LSP では、同じ構造体から LSP の診断と code action に変換する。
 - `Diagnostic`、`FileId`、`SourceFiles` は `eml_diagnostics` に置く。`eml_diagnostics` は `rowan` に依存しない ([アーキテクチャ](../implementation/architecture.md))。
 - 番号の定数は、段階ごとの `codes` モジュールに定義する (例: `eml_syntax::codes`)。
+- 補足の情報は、独立した診断ではなく `notes` と `help` に入れる。そのため `Severity` は `Error` と `Warning` の2つだけにする。
+- ソースの先頭の BOM は、表示で列に数えない ([字句](lexical.md))。`TextRange` は BOM を含む元のテキストのバイト位置のままにして、表示の層で BOM を除いて位置をずらす。
 
 ## 番号の範囲
 
@@ -30,7 +32,7 @@ struct Diagnostic {
 | 範囲 | 段階 |
 |---|---|
 | E0xxx | 字句・構文 |
-| E1xxx | 名前解決 (重複定義、未定義の名前、handler の節の引数の個数など) |
+| E1xxx | 名前解決と HIR での検査 (重複定義、未定義の名前、handler の節と `resume` の引数の個数など) |
 | E2xxx | 型・Kind・row |
 | E3xxx | 線形性・継続の多重度 |
 | E4xxx | パターンの網羅性 |
@@ -53,6 +55,7 @@ struct Diagnostic {
 | E0010 | `SPACE_AROUND_DOT` | `.` の前後の空白 |
 | E0011 | `SYNTAX_ERROR` | その他の構文エラー |
 | E0012 | `NEEDS_PARENS` | 括弧の要る式 (`if`、`match`、`handle`、`let`) を、引数や演算の項の位置に括弧なしで書いた |
+| E0013 | `NESTING_TOO_DEEP` | 式・パターン・型の入れ子が深すぎる (256 を超えた。[文法](grammar.md))。S1 の後始末で追加する |
 
 ## 構文の決定で増える診断
 
@@ -61,7 +64,7 @@ struct Diagnostic {
 | 範囲 | 例 |
 |---|---|
 | E0xxx | インデントのタブ、字下げしたブロックが必要、閉じていない補間・コマンドリテラル・ブロックコメント、`.` の前後の空白、浮動小数と文字のリテラル (E0004 未対応) |
-| E1xxx | シグネチャのない等式、等式のないシグネチャ、等式が連続していない、シグネチャと等式が隣り合っていない、等式ごとの引数の個数の違い、fixity の衝突と重複、結合しない演算子の並び、ブロックの最後の `use`、修飾なしの名前の衝突、handler の節の引数の個数 |
+| E1xxx | シグネチャのない等式、等式のないシグネチャ、等式が連続していない、シグネチャと等式が隣り合っていない、等式ごとの引数の個数の違い、fixity の衝突と重複、結合しない演算子の並び、優先順位の合わないセクション、ブロックの最後の `use`、修飾なしの名前の衝突、handler の節の引数の個数、`resume` の引数の個数 |
 | E3xxx | 射影で `Lin` な残りを捨てる、更新で `Lin` な古い値を捨てる |
 
 シグネチャに関する E1xxx の診断には、シグネチャの追加を提案する help を付ける ([宣言](declarations.md))。
@@ -86,8 +89,10 @@ struct Diagnostic {
 | 誤り | 指す場所 |
 |---|---|
 | 網羅されていない `match` | `match` 式。漏れているパターンの例を note で示し、fix で枝の追加を提案する |
+| 網羅されていない等式 | primary はシグネチャの関数名 (シグネチャがなければ最初の等式の関数名)、secondary は各等式の先頭。漏れている引数の並びの例 (`f None _`) を note で示し、fix で最後の等式の後への等式の追加を提案する |
 | 到達しない枝 (Warning) | その枝のパターン |
-| 反駁可能な `let` / 引数のパターン | そのパターン |
+| 到達しない等式 (Warning) | その等式の引数のパターン |
+| 反駁可能な `let` / ラムダの引数のパターン | そのパターン |
 
 ## 連鎖する診断の抑止
 

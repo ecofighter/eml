@@ -137,14 +137,17 @@ HIR への変換では、名前解決に加えて、次の脱糖と検査を行�
 ## CLI と lib API
 
 - 引数の解析は `clap` (derive) を使う
-- `eml check <file>` は、診断を stderr に表示する。`eml run <file>` は、検査を通ったら実行する
+- `eml check <file>` は、診断を stderr に表示する。`eml run <file>` は、診断 (警告を含む) を先に stderr に表示し、エラーがなければ実行する。警告がプログラムの出力の後に出ないようにするため
 - `eml run --debug-heap` は、RC のリーク検出と解放済みアクセスの検出を有効にする
 - 終了コードは、0 = 成功、1 = 診断のエラーあり、または実行時エラー、2 = 使い方の誤り (引数の誤り、ファイルが読めない) とする
 
 `eml_cli` の lib は次の API を公開する。UI テストはこれをプロセス内で呼ぶ。
 
 - `check(files, file_id) -> Vec<Diagnostic>`
-- `run(files, file_id, &RunConfig, stdout: OutputSink) -> RunOutcome`。`RunOutcome` は、検査で出た診断 (警告を含む) と、結果 `RunResult` (`NotRun` / `Completed` / `RuntimeError`) を持つ
+- `compile(files, file_id) -> Compiled`。`Compiled` は、検査で出た診断 (警告を含む) と、エラーがなければ `Program` を持つ (`program: Option<Arc<Program>>`)
+- `execute(Arc<Program>, &RunConfig, stdout: OutputSink) -> RunResult`。`RunResult` は `Completed` / `RuntimeError` である
+
+検査と実行を別の関数に分けるのは、呼び出し側が実行の前に診断を表示できるようにするためである。CLI と UI テストは、`compile` の診断を表示してから `execute` を呼ぶ。
 
 関連する型は次のとおり。
 

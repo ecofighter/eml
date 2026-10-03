@@ -30,7 +30,7 @@ body        ::= block(stmt) | expr
 data_item   ::= 'data' UIDENT LIDENT* '=' alts
 alts        ::= block(alt) | alt+
 alt         ::= '|' UIDENT type_atom*
-              | '|' type_atom CONOP type_atom             -- 中置のコンストラクタ
+              | '|' btype CONOP btype                     -- 中置のコンストラクタ
 type_item   ::= 'type' UIDENT LIDENT* '=' type
 effect_item ::= 'effect' UIDENT LIDENT* 'where' block(op_decl)
 op_decl     ::= ('never' | 'once' | 'multi')? LIDENT ':' type
@@ -70,7 +70,7 @@ atom        ::= INT | FLOAT | CHAR | string | RAW_STRING | command
               | '[' list(expr) ']'
               | '{' list(field) '}' | '{' expr 'with' list(field) '}'
               | '{' list(field) '|' expr '}'              -- 拡張
-              | '(' OP ')' | '(' OP operand ')' | '(' operand OP ')' | '(' '.' LIDENT ')'
+              | '(' OP ')' | '(' OP op_expr ')' | '(' op_expr OP ')' | '(' '.' LIDENT ')'
 qvar        ::= (UIDENT '.')* LIDENT
 qcon        ::= (UIDENT '.')* UIDENT
 field       ::= LIDENT ('=' expr)?
@@ -99,7 +99,7 @@ command     ::= CMD_START (CMD_TEXT | ESCAPE | '\{' '..'? expr '}')* CMD_END
 
 ## 文法上の補足
 
-- 型の位置では、`<` で始まる演算子のトークン (`<>` など) と `>` で始まる演算子のトークン (`>->` など) を、parser が分割して読む (Rust が `>>` を分割するのと同じ)
+- 型の位置では、`<` で始まる演算子のトークン (`<>` など) と `>` で始まる演算子のトークン (`>->` など) を、parser が分割して読む (Rust が `>>` を分割するのと同じ)。`->` の直後に row を空白なしで書いた `-><` も、`->` と `<` に分割して読む (`Int -><IO> Int`)
 - 型の位置での `<` は row の開始だけを意味する
 - `postfix` の `.INT` で、lexer が `t.0.1` の `0.1` を浮動小数のトークンにした場合、parser がフィールドアクセスの位置で分割する (Rust と同じ)
 - `qvar` / `qcon` の `.` と、`postfix` の `.` は、前後に空白を置かない (置くと E0010)。`Upper.lower` は修飾された名前、`lower.lower` はフィールドアクセスである
@@ -108,6 +108,8 @@ command     ::= CMD_START (CMD_TEXT | ESCAPE | '\{' '..'? expr '}')* CMD_END
 - 等式が `LIDENT OP` で始まる場合は演算子の定義、`LIDENT` の後に `=` か `apat` が続く場合は関数の定義である。2トークンの先読みで区別する
 - `A -> <E> B -> C` の row `<E>` は最初の `->` に付き、`A -> <E> (B -> C)` と読む。内側の `B -> C` の row は省略扱いとする
 - `handle` の節の引数の個数と `resume` の引数の個数は、文法では制限せず HIR で検査する ([式](expressions.md) の「handler」と「パラメータ付き handler」)
+- セクションの被演算子は演算子の列でもよい。優先順位による可否は HIR で検査する ([式](expressions.md) の「セクション」)
+- 式・パターン・型の入れ子 (括弧、ブロック、ラムダなど) の深さは 256 までとする。超えたら E0013 を出す。後の段階の再帰がスタックを溢れさせないよう、parser で止める
 
 ## 実装の段階
 
