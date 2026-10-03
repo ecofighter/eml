@@ -529,6 +529,9 @@ impl Table {
     /// 呼び出し先の row `callee` のエフェクトが、今の row `ambient` にすべて含まれることを確かめる
     /// (docs/spec/types.md の「推論」)。閉じた row と推論用の末尾は、残りを row 変数で受けて単一化する。
     /// rigid な末尾は束縛できないので、ラベルを取り除いた残りの末尾が同じ変数であることを確かめる。
+    /// 残りの末尾が推論中の row 変数なら、その row はまだ伸ばせるので、rigid な変数を末尾として受けさせる
+    /// (ラムダ本体のように、今の row を推論している途中で呼び出すときのため)。
+    /// 閉じた末尾か、別の rigid な変数なら含まれないので `MissingRowVar` にする。
     #[allow(dead_code)] // Task 6 以降の呼び出しの推論で使う
     pub fn include_row(&mut self, callee: &Row, ambient: &Row) -> Result<(), UnifyError> {
         let callee = self.resolve_row(callee);
@@ -552,6 +555,16 @@ impl Table {
                 });
                 if rest.tail == Some(rigid) {
                     Ok(())
+                } else if let Some(open) = rest.tail
+                    && !self.is_rigid_row(open)
+                {
+                    self.bind_row(
+                        open,
+                        Row {
+                            labels: Vec::new(),
+                            tail: Some(rigid),
+                        },
+                    )
                 } else {
                     let name = self.row_vars[rigid.0 as usize].rigid.clone();
                     Err(UnifyError::MissingRowVar(name.unwrap_or_default()))
@@ -938,5 +951,24 @@ mod tests {
         subst.rows.insert(e, table.fresh_row_var());
         let copied = table.copy_type(f, &subst);
         assert_eq!(table.export(copied).to_string(), "a -> <_> a");
+    }
+
+    #[test]
+    fn a_rigid_callee_row_extends_a_flexible_ambient_row() {
+        let mut table = Table::new();
+        let e = table.fresh_rigid_row("e");
+        let fresh = table.fresh_row_var();
+        let ambient = Row {
+            labels: vec![Effect::Io],
+            tail: Some(fresh),
+        };
+        let callee = Row {
+            labels: vec![],
+            tail: Some(e),
+        };
+        assert_eq!(table.include_row(&callee, &ambient), Ok(()));
+        let resolved = table.resolve_row(&ambient);
+        assert_eq!(resolved.labels, vec![Effect::Io]);
+        assert_eq!(resolved.tail, Some(e));
     }
 }
