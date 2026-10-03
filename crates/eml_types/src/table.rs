@@ -1,5 +1,5 @@
 use crate::kind::{Bound, KindVar, Lattice};
-use crate::ty::{Effect, Linearity, Multiplicity, Type};
+use crate::ty::{Effect, Linearity, Multiplicity, RowTail, Type};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Ty(u32);
@@ -128,7 +128,7 @@ impl Table {
         })
     }
 
-    #[allow(dead_code)] // 多相を入れる段階2で使う
+    #[allow(dead_code)] // Task 6 の compose 組み込み関数から使う
     pub fn fresh_var(&mut self) -> Ty {
         let linearity = self.linearity.fresh();
         self.ty_vars.push(TyVarInfo {
@@ -194,10 +194,11 @@ impl Table {
             self.kinds[a.0 as usize].clone(),
             self.kinds[b.0 as usize].clone(),
         ) {
-            // `Error` が関わる制約からは診断を出さない (docs/spec/types.md の「エラーの扱い」)
-            (TyKind::Error, _) | (_, TyKind::Error) => Ok(()),
+            // 変数を先に束縛する。`Error` と単一化した変数も `Error` に束縛し、後の制約で診断を出させない
             (TyKind::Var(var), _) => self.bind_var(var, b),
             (_, TyKind::Var(var)) => self.bind_var(var, a),
+            // `Error` が関わる制約からは診断を出さない (docs/spec/types.md の「エラーの扱い」)
+            (TyKind::Error, _) | (_, TyKind::Error) => Ok(()),
             (TyKind::Con(x), TyKind::Con(y)) if x == y => Ok(()),
             (TyKind::Record(xs), TyKind::Record(ys))
                 if xs.len() == ys.len() && xs.iter().zip(&ys).all(|((l, _), (m, _))| l == m) =>
@@ -300,10 +301,12 @@ impl Table {
                 self.bind_row(tail, Row::closed(only_a))
             }
             (Some(x), Some(y)) if x == y => {
-                if only_a.is_empty() && only_b.is_empty() {
+                let mut missing = only_a;
+                missing.extend(only_b);
+                if missing.is_empty() {
                     Ok(())
                 } else {
-                    Err(UnifyError::Occurs)
+                    Err(UnifyError::MissingEffects(missing))
                 }
             }
             (Some(x), Some(y)) => {
@@ -345,7 +348,7 @@ impl Table {
         Ok(())
     }
 
-    /// 後の段階に渡す形にする。解けていない変数は `Error` にする。
+    /// 後の段階に渡す形にする。解けていない型変数と row 変数は、`_` として残す。
     pub fn export(&self, ty: Ty) -> Type {
         match self.kind(ty).clone() {
             TyKind::Con(TyCon::Int) => Type::Int,
@@ -362,16 +365,21 @@ impl Table {
                 lin,
                 row,
                 ret,
-            } => Type::Fn {
-                param: Box::new(self.export(param)),
-                linearity: match lin {
-                    Mult::Known(l) => l,
-                    Mult::Var(v) => self.linearity.value(v),
-                },
-                effects: self.resolve_row(&row).labels,
-                ret: Box::new(self.export(ret)),
-            },
-            TyKind::Var(_) | TyKind::Error => Type::Error,
+            } => {
+                let row = self.resolve_row(&row);
+                Type::Fn {
+                    param: Box::new(self.export(param)),
+                    linearity: match lin {
+                        Mult::Known(l) => l,
+                        Mult::Var(v) => self.linearity.value(v),
+                    },
+                    effects: row.labels,
+                    tail: row.tail.map(|_| RowTail::Flexible),
+                    ret: Box::new(self.export(ret)),
+                }
+            }
+            TyKind::Var(_) => Type::Var("_".to_string()),
+            TyKind::Error => Type::Error,
         }
     }
 }
@@ -469,5 +477,49 @@ mod tests {
         assert_eq!(a.labels, vec![Effect::Io]);
         assert_eq!(b.labels, vec![Effect::Io]);
         assert_eq!(a.tail, b.tail);
+    }
+
+    #[test]
+    fn rows_with_the_same_tail_and_different_labels_report_the_missing_effects() {
+        let mut table = Table::new();
+        let r = table.fresh_row_var();
+        let a = Row {
+            labels: vec![Effect::Io],
+            tail: Some(r),
+        };
+        let b = Row {
+            labels: vec![],
+            tail: Some(r),
+        };
+        assert_eq!(
+            table.unify_row(&a, &b),
+            Err(UnifyError::MissingEffects(vec![Effect::Io]))
+        );
+    }
+
+    #[test]
+    fn a_variable_unified_with_error_becomes_error() {
+        let mut table = Table::new();
+        let v = table.fresh_var();
+        assert_eq!(table.unify(v, table.error), Ok(()));
+        assert_eq!(table.unify(v, table.int), Ok(()));
+        assert_eq!(table.unify(v, table.string), Ok(()));
+    }
+
+    #[test]
+    fn export_keeps_an_open_row() {
+        let mut table = Table::new();
+        let r = table.fresh_row_var();
+        let f = table.function(
+            table.int,
+            Row {
+                labels: vec![Effect::Io],
+                tail: Some(r),
+            },
+            table.int,
+        );
+        assert_eq!(table.export(f).to_string(), "Int -> <IO | _> Int");
+        let v = table.fresh_var();
+        assert_eq!(table.export(v).to_string(), "_");
     }
 }

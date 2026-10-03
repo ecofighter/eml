@@ -34,7 +34,7 @@ impl Effect {
     }
 }
 
-/// 型検査の結果として後の段階に渡す型。推論用の変数は解決済みで、残った変数は `Error` になる。
+/// 型検査の結果として後の段階に渡す型。推論用の変数は解決済みで、解けずに残った変数は `Var("_")` になる。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Type {
     Int,
@@ -46,9 +46,20 @@ pub enum Type {
         param: Box<Type>,
         linearity: Linearity,
         effects: Vec<Effect>,
+        /// row の末尾。`None` なら閉じた row である。
+        tail: Option<RowTail>,
         ret: Box<Type>,
     },
+    /// シグネチャの型変数はその名前、推論で解けなかった変数は `_` を持つ。
+    Var(String),
     Error,
+}
+
+/// row の末尾。シグネチャの row 変数は名前を持つ。推論で解けなかった row 変数は `_` と表示する。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RowTail {
+    Rigid(String),
+    Flexible,
 }
 
 impl Type {
@@ -61,7 +72,7 @@ impl Type {
             Type::Error => true,
             Type::Record(fields) => fields.iter().any(|(_, ty)| ty.contains_error()),
             Type::Fn { param, ret, .. } => param.contains_error() || ret.contains_error(),
-            Type::Int | Type::String | Type::Bool => false,
+            Type::Int | Type::String | Type::Bool | Type::Var(_) => false,
         }
     }
 }
@@ -86,6 +97,7 @@ impl fmt::Display for Type {
             Type::Fn {
                 param,
                 effects,
+                tail,
                 ret,
                 ..
             } => {
@@ -94,13 +106,22 @@ impl fmt::Display for Type {
                 } else {
                     write!(f, "{param} -> ")?;
                 }
-                // 空の row は書かない。省略した row が `<>` だから (docs/spec/types.md)
-                if !effects.is_empty() {
-                    let names: Vec<&str> = effects.iter().map(|e| e.name()).collect();
-                    write!(f, "<{}> ", names.join(", "))?;
+                let names: Vec<&str> = effects.iter().map(|e| e.name()).collect();
+                let tail = match tail {
+                    Some(RowTail::Rigid(name)) => Some(name.as_str()),
+                    Some(RowTail::Flexible) => Some("_"),
+                    None => None,
+                };
+                // 空の閉じた row は書かない。省略した row が `<>` だから (docs/spec/types.md)
+                match tail {
+                    Some(tail) if names.is_empty() => write!(f, "<{tail}> ")?,
+                    Some(tail) => write!(f, "<{} | {tail}> ", names.join(", "))?,
+                    None if names.is_empty() => {}
+                    None => write!(f, "<{}> ", names.join(", "))?,
                 }
                 write!(f, "{ret}")
             }
+            Type::Var(name) => f.write_str(name),
             Type::Error => f.write_str("{error}"),
         }
     }
@@ -116,12 +137,14 @@ mod tests {
             param: Box::new(Type::Int),
             linearity: Linearity::Unr,
             effects: vec![],
+            tail: None,
             ret: Box::new(Type::Bool),
         };
         let io = Type::Fn {
             param: Box::new(pure.clone()),
             linearity: Linearity::Unr,
             effects: vec![Effect::Io],
+            tail: None,
             ret: Box::new(Type::unit()),
         };
         assert_eq!(pure.to_string(), "Int -> Bool");

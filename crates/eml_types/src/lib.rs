@@ -12,7 +12,7 @@ use eml_diagnostics::{Diagnostic, FileId, Label, TextRange};
 use eml_hir::{ExprId, FunctionId, LocalId, Module};
 use la_arena::ArenaMap;
 
-pub use ty::{Effect, Linearity, Multiplicity, Type};
+pub use ty::{Effect, Linearity, Multiplicity, RowTail, Type};
 
 pub mod codes {
     use eml_diagnostics::ErrorCode;

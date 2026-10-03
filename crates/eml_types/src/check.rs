@@ -115,6 +115,7 @@ fn check_main(
         param: Box::new(Type::unit()),
         linearity: Linearity::Unr,
         effects: vec![Effect::Io],
+        tail: None,
         ret: Box::new(Type::unit()),
     };
     if !found.contains_error() && found != expected {
