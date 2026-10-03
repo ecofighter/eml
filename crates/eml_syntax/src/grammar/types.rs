@@ -6,7 +6,16 @@ pub(super) fn at_type_atom_start(p: &Parser) -> bool {
     p.at_ts(TYPE_ATOM_START)
 }
 
+/// 結果の型を始められるトークン。`OP` は row の `<`。
+const RESULT_START: TokenSet = TokenSet::new(&[UIDENT, LIDENT, L_PAREN, L_BRACE, OP]);
+
 pub(super) fn type_(p: &mut Parser) -> bool {
+    type_in(p, false)
+}
+
+/// `in_type_block` は、型だけを入れたブロック (`->` や `=` で行が終わって開いたもの) の中にいるかどうか。
+/// 揃えた複数行のシグネチャの回復で、`SEP` が型の続きかどうかを見分けるのに使う。
+fn type_in(p: &mut Parser, in_type_block: bool) -> bool {
     let m = p.start();
     if !btype(p) {
         m.abandon(p);
@@ -15,7 +24,7 @@ pub(super) fn type_(p: &mut Parser) -> bool {
     }
     if p.at(THIN_ARROW) {
         p.bump(THIN_ARROW);
-        arrow_result(p);
+        arrow_result(p, in_type_block);
         m.complete(p, FN_TYPE);
     } else {
         m.abandon(p);
@@ -24,19 +33,29 @@ pub(super) fn type_(p: &mut Parser) -> bool {
 }
 
 /// `->` で行が終わるとレイアウト段がブロックを開くので、その中の1つの型として読む。
-fn arrow_result(p: &mut Parser) {
+fn arrow_result(p: &mut Parser, in_type_block: bool) {
     let in_block = p.eat(LAYOUT_OPEN);
     if in_block && p.eat(LAYOUT_CLOSE) {
-        // レイアウト段の回復で作った空のブロック。E0009 は報告済み。
+        // レイアウト段の回復で作った空のブロックで、E0009 は報告済み。型のブロックの中で次の行が同じ列に
+        // 揃っていれば、行末の `->` で揃えたシグネチャなので、その行を結果の型として読み、診断を重ねない
+        // (docs/spec/declarations.md の「シグネチャと等式」)。
+        if in_type_block && p.at(LAYOUT_SEP) && RESULT_START.contains(p.nth(1)) {
+            p.bump(LAYOUT_SEP);
+            row_and_type(p, true);
+        }
         return;
     }
-    if at_angle(p, '<') {
-        effect_row(p);
-    }
-    type_(p);
+    row_and_type(p, in_block || in_type_block);
     if in_block {
         close_block(p);
     }
+}
+
+fn row_and_type(p: &mut Parser, in_type_block: bool) {
+    if at_angle(p, '<') {
+        effect_row(p);
+    }
+    type_in(p, in_type_block);
 }
 
 /// `=` で行が終わるとレイアウト段がブロックを開くので、その中の1つの型として読む。
@@ -45,7 +64,7 @@ pub(super) fn type_or_block(p: &mut Parser) {
     if in_block && p.eat(LAYOUT_CLOSE) {
         return;
     }
-    type_(p);
+    type_in(p, in_block);
     if in_block {
         close_block(p);
     }

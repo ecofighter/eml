@@ -1,6 +1,6 @@
 mod common;
 
-use common::{diagnostics, lines, shape};
+use common::{diagnostics, helps, lines, shape};
 
 #[test]
 fn signature_with_function_type() {
@@ -514,5 +514,43 @@ fn pub_without_an_item_is_an_error() {
             "E0004 1:1 `pub` is not supported yet",
             "E0003 1:4 expected an item"
         ]
+    );
+}
+
+#[test]
+fn aligned_signature_lines_are_one_error() {
+    insta::assert_snapshot!(shape(&lines(&["f : Int ->", "  Int ->", "  Int"])), @r#"
+    SOURCE_FILE
+      SIGNATURE
+        LIDENT "f"
+        COLON ":"
+        FN_TYPE
+          PATH_TYPE
+            UIDENT "Int"
+          THIN_ARROW "->"
+          FN_TYPE
+            PATH_TYPE
+              UIDENT "Int"
+            THIN_ARROW "->"
+            PATH_TYPE
+              UIDENT "Int"
+    ---
+    E0009 2:7 expected an indented block after `->`
+    "#);
+}
+
+#[test]
+fn many_aligned_signature_lines_are_still_one_error() {
+    assert_eq!(
+        diagnostics(&lines(&["f : A ->", "  B ->", "  C ->", "  D"])),
+        ["E0009 2:5 expected an indented block after `->`"]
+    );
+}
+
+#[test]
+fn arrow_at_the_end_of_a_line_suggests_a_leading_arrow() {
+    assert_eq!(
+        helps(&lines(&["f : Int ->", "  Int ->", "  Int"])),
+        ["in a type that spans lines, put `->` at the start of the next line"]
     );
 }

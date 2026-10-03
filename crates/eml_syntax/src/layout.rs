@@ -30,6 +30,11 @@ pub(crate) fn layout(file: FileId, text: &str, tokens: &[Token]) -> (Vec<Token>,
     let mut stack = vec![Context::Block(0)];
     // 最初の項目の前には SEP を入れないため、今のブロックにまだトークンがないかを覚えておく。
     let mut at_block_start = true;
+    // 行末の `->` で E0009 を出した次の行。揃えた複数行のシグネチャではその行も `->` で終わるので、
+    // E0009 を1件にするため、その行の `->` では報告しない。
+    let mut aligned_arrow_line = None;
+    // 今の行の先頭の項目の番号。
+    let mut line_start = 0;
     for (i, item) in items.iter().enumerate() {
         let start = item.token.range.start();
         if item.line_start {
@@ -43,7 +48,13 @@ pub(crate) fn layout(file: FileId, text: &str, tokens: &[Token]) -> (Vec<Token>,
                     stack.push(Context::Block(item.column));
                     opened = true;
                 } else {
-                    missing_block(file, text, items[i - 1].token, &mut out, &mut diagnostics);
+                    let starter = items[i - 1].token;
+                    let report =
+                        !(starter.kind == THIN_ARROW && aligned_arrow_line == Some(line_start));
+                    missing_block(file, text, starter, report, &mut out, &mut diagnostics);
+                    if starter.kind == THIN_ARROW {
+                        aligned_arrow_line = Some(i);
+                    }
                     missing = true;
                 }
             }
@@ -74,6 +85,7 @@ pub(crate) fn layout(file: FileId, text: &str, tokens: &[Token]) -> (Vec<Token>,
                     }
                 }
             }
+            line_start = i;
         }
         match item.token.kind {
             L_PAREN | L_BRACK | L_BRACE => {
@@ -100,7 +112,8 @@ pub(crate) fn layout(file: FileId, text: &str, tokens: &[Token]) -> (Vec<Token>,
     if let Some(last) = items.last()
         && BLOCK_STARTERS.contains(&last.token.kind)
     {
-        missing_block(file, text, last.token, &mut out, &mut diagnostics);
+        let report = !(last.token.kind == THIN_ARROW && aligned_arrow_line == Some(line_start));
+        missing_block(file, text, last.token, report, &mut out, &mut diagnostics);
     }
     // 規則 6。ファイル全体の Block(0) は閉じない。
     while stack.len() > 1 {
@@ -173,31 +186,44 @@ fn report_tab(file: FileId, prefix: &str, line_begin: usize, diagnostics: &mut V
 }
 
 /// E0009 を出した後、開始トークンの直後に空のブロックを入れる。parser は空のブロックを黙って受け入れるので、
-/// 同じ問題を二重に報告せずに済む。
+/// 同じ問題を二重に報告せずに済む。`report` が偽なら、空のブロックだけを入れる。
 fn missing_block(
     file: FileId,
     text: &str,
     starter: Token,
+    report: bool,
     out: &mut Vec<Token>,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
-    let mut diagnostic = Diagnostic::error(
-        codes::EXPECTED_INDENTED_BLOCK,
-        format!(
-            "expected an indented block after `{}`",
-            &text[starter.range]
-        ),
-        Label::new(
-            file,
-            starter.range,
-            "the next line must be indented more than the enclosing block",
-        ),
-    );
-    if starter.kind == WITH_KW {
-        // 枝を `match` / `handle` と同じ列に書く誤りが多いので、直し方を示す (docs/spec/layout.md の「エラー回復」)。
-        diagnostic = diagnostic.with_help("indent the `|` arms more than the line with `with`");
+    if report {
+        let mut diagnostic = Diagnostic::error(
+            codes::EXPECTED_INDENTED_BLOCK,
+            format!(
+                "expected an indented block after `{}`",
+                &text[starter.range]
+            ),
+            Label::new(
+                file,
+                starter.range,
+                "the next line must be indented more than the enclosing block",
+            ),
+        );
+        // よくある誤りなので、直し方を示す (docs/spec/layout.md の「エラー回復」、docs/spec/declarations.md の
+        // 「シグネチャと等式」)。
+        match starter.kind {
+            WITH_KW => {
+                diagnostic =
+                    diagnostic.with_help("indent the `|` arms more than the line with `with`");
+            }
+            THIN_ARROW => {
+                diagnostic = diagnostic.with_help(
+                    "in a type that spans lines, put `->` at the start of the next line",
+                );
+            }
+            _ => {}
+        }
+        diagnostics.push(diagnostic);
     }
-    diagnostics.push(diagnostic);
     let end = starter.range.end();
     out.push(virtual_token(LAYOUT_OPEN, end));
     out.push(virtual_token(LAYOUT_CLOSE, end));
@@ -504,6 +530,18 @@ mod tests {
         assert!(
             out.iter()
                 .all(|t| !matches!(t.kind, LAYOUT_OPEN | LAYOUT_SEP | LAYOUT_CLOSE))
+        );
+    }
+
+    #[test]
+    fn aligned_arrow_lines_report_e0009_once() {
+        assert_eq!(
+            dump("f : A ->\n  B ->\n  C ->\n  D"),
+            (
+                "f : A -> <OPEN> B -> <OPEN> <CLOSE> <SEP> C -> <OPEN> <CLOSE> <SEP> D <CLOSE>"
+                    .to_string(),
+                vec!["E0009@13..15".to_string()]
+            )
         );
     }
 }
