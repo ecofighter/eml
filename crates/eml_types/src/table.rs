@@ -108,6 +108,7 @@ pub(crate) struct Table {
     rigids: Vec<RigidInfo>,
     linearity: Lattice<Linearity>,
     multiplicity: Lattice<Multiplicity>,
+    lin_solution: Option<Vec<Linearity>>,
     pub int: Ty,
     pub string: Ty,
     pub bool: Ty,
@@ -124,6 +125,7 @@ impl Table {
             rigids: Vec::new(),
             linearity: Lattice::new(Linearity::Unr),
             multiplicity: Lattice::new(Multiplicity::Never),
+            lin_solution: None,
             int: Ty(0),
             string: Ty(0),
             bool: Ty(0),
@@ -669,6 +671,47 @@ impl Table {
         (lin, mult)
     }
 
+    #[allow(dead_code)] // Task 7 のスキームの多相化で使う
+    pub fn lin_residual(&self, keep: &[KindVar]) -> Vec<(Bound<Linearity>, Bound<Linearity>)> {
+        self.linearity.residual(keep)
+    }
+
+    #[allow(dead_code)] // Task 7 のスキームの多相化で使う
+    pub fn mult_residual(
+        &self,
+        keep: &[KindVar],
+    ) -> Vec<(Bound<Multiplicity>, Bound<Multiplicity>)> {
+        self.multiplicity.residual(keep)
+    }
+
+    #[allow(dead_code)] // Task 7 のスキームの具体化で使う
+    pub fn copy_lin_constraints(
+        &mut self,
+        constraints: &[(Bound<Linearity>, Bound<Linearity>)],
+        map: &HashMap<KindVar, KindVar>,
+    ) {
+        self.linearity.copy_constraints(constraints, map);
+    }
+
+    #[allow(dead_code)] // Task 7 のスキームの具体化で使う
+    pub fn copy_mult_constraints(
+        &mut self,
+        constraints: &[(Bound<Multiplicity>, Bound<Multiplicity>)],
+        map: &HashMap<KindVar, KindVar>,
+    ) {
+        self.multiplicity.copy_constraints(constraints, map);
+    }
+
+    /// すべての Kind の制約を解き、線形性の解を覚える。`export` が式ごとに解き直さずに済むようにするため。
+    /// 定数の上限を超えた制約があれば `true` を返す。
+    #[allow(dead_code)] // Task 10 の Kind の解決で使う
+    pub fn solve_kinds(&mut self) -> bool {
+        let (lin, lin_violated) = self.linearity.solve();
+        let (_, mult_violated) = self.multiplicity.solve();
+        self.lin_solution = Some(lin);
+        !lin_violated.is_empty() || !mult_violated.is_empty()
+    }
+
     /// 後の段階に渡す形にする。解けていない型変数と row 変数は、`_` として残す。
     pub fn export(&self, ty: Ty) -> Type {
         match self.kind(ty).clone() {
@@ -692,7 +735,10 @@ impl Table {
                     param: Box::new(self.export(param)),
                     linearity: match lin {
                         Mult::Known(l) => l,
-                        Mult::Var(v) => self.linearity.value(v),
+                        Mult::Var(v) => match &self.lin_solution {
+                            Some(solution) => solution[v.index()],
+                            None => self.linearity.value(v),
+                        },
                     },
                     effects: row.labels,
                     tail: row
@@ -970,5 +1016,36 @@ mod tests {
         let resolved = table.resolve_row(&ambient);
         assert_eq!(resolved.labels, vec![Effect::Io]);
         assert_eq!(resolved.tail, Some(e));
+    }
+
+    #[test]
+    fn binding_a_variable_passes_the_kind_of_its_type_to_the_variable() {
+        let mut table = Table::new();
+        let (a, ra) = table.fresh_rigid("a");
+        let v = table.fresh_var();
+        // v の Kind は Unr でなければならない。v を a に束縛すると、a の Kind も Unr になる
+        table.kind_at_most(v, Bound::Const(Linearity::Unr));
+        assert_eq!(table.unify(v, a), Ok(()));
+        let mu = table.rigid_linearity(ra);
+        assert_eq!(
+            table.lin_residual(&[mu]),
+            vec![(Bound::Var(mu), Bound::Const(Linearity::Unr))]
+        );
+    }
+
+    #[test]
+    fn closure_kinds_bound_each_partial_application() {
+        let mut table = Table::new();
+        let (a, ra) = table.fresh_rigid("a");
+        let m = table.fresh_mult();
+        let inner = table.function_with(a, m, Row::pure(), a);
+        let f = table.function(a, Row::pure(), inner);
+        table.closure_kinds(f, 2, &[]);
+        let Mult::Var(m) = m else { unreachable!() };
+        let mu = table.rigid_linearity(ra);
+        assert_eq!(
+            table.lin_residual(&[mu, m]),
+            vec![(Bound::Var(mu), Bound::Var(m))]
+        );
     }
 }
