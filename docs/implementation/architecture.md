@@ -26,6 +26,7 @@ eml/
     eml_cli/            # lib + バイナリ (バイナリ名 `eml`)
   tests/ui/             # UI テストのコーパス
     run/
+    run-fail/
     check-fail/
   docs/
   flake.nix
@@ -57,17 +58,17 @@ eml_diagnostics  Diagnostic 型、FileId と SourceFiles、ariadne による表�
 
 - 各段階は `fn stage(input: &In) -> (Out, Vec<Diagnostic>)` の形の純粋な関数にする。グローバルな可変状態は持たない
 - HIR 以降は `ExprId` / `PatId` / `DefId` などの ID で参照する (`la-arena`)。型などの解析結果は `ExprId → Type` のような別テーブルに置く
-- HIR の各ノードは、元の構文ノードへのポインタ (`SyntaxNodePtr`) を持つ
+- HIR の各ノードは、元の構文の範囲 (`TextRange`) を持つ。演算子の列を組み直した部分式のように、対応する構文ノードのない式があるため
 - 型付き HIR は HIR を複製しない。`TypedModule` は、関数ごとの型スキームと推論結果 (式や局所変数の型、呼び出しごとの具体化) の別テーブルだけを持つ。そのため `eml_core_ir` は HIR と `TypedModule` の両方を受け取る
 
-現在の各段階の入口は次のとおり。`eml_syntax` 以外はまだ仮実装で、空の結果を返す (実装状況は [status.md](status.md))。
+現在の各段階の入口は次のとおり (実装状況は [status.md](status.md))。
 
 | crate | 関数 |
 |---|---|
 | `eml_syntax` | `parse(FileId, &str) -> (Parse, Vec<Diagnostic>)` |
 | `eml_hir` | `lower(FileId, &ast::SourceFile) -> (Module, Vec<Diagnostic>)` |
 | `eml_types` | `check(&Module) -> (TypedModule, Vec<Diagnostic>)` |
-| `eml_core_ir` | `lower(&Module, &TypedModule) -> (Program, Vec<Diagnostic>)` |
+| `eml_core_ir` | `lower(&Module, &TypedModule) -> Program` |
 | `eml_interp` | `run(Arc<Program>, &RunConfig, &OutputSink) -> Result<(), RuntimeError>` |
 
 ## エラーが出ても止まらない
@@ -76,6 +77,7 @@ eml_diagnostics  Diagnostic 型、FileId と SourceFiles、ariadne による表�
 - パーサは、壊れた入力に対して `ERROR` ノードを作って処理を続ける。壊れた入力でも必ず `SOURCE_FILE` の木を作り、パニックしない
 - 回復の同期点は、レイアウト段が挿入する `SEP` と `CLOSE` である。トップレベルでは、列 0 の `SEP` が最も強い同期点になる ([レイアウト規則](../spec/layout.md))
 - 名前解決と型推論は、エラーが起きた場所に `Error` 型を入れる。`Error` が関わる制約や線形性の検査からは、追加の診断を出さない
+- Core IR は、診断のエラーがないプログラムだけを受け取る。`compile` は、エラーがあれば Core IR を作らない。型付きで正しい入力を前提にできるので、Core IR への変換は診断を返さない
 
 ## 構文を差し替えられるようにする
 
@@ -117,6 +119,28 @@ HIR への変換では、名前解決に加えて、次の脱糖と検査を行�
 - `use`、パラメータ付き handler、`if` の `else` の補完、`let ... in`
 - タプルのレコードへの変換、補間の `++` の連結への変換、コマンドリテラルの `Cmd` の構築
 - handler の節の引数の個数、`resume` の引数の個数
+
+## `eml_hir` の内部
+
+- `Module` はトップレベルの関数の `Arena<Function>` を持つ。本体は関数ごとの `Body` (`exprs`、`pats`、`locals` のアリーナ) に置く。後でクエリ化したときに関数単位で再計算できるようにするため (rust-analyzer と同じ分け方)。型の注釈は関数ごとの `types` に置く
+- シグネチャと等式は名前で対応づけてから、並び方を検査する。シグネチャか等式のない関数も `Function` として残し (`signature` か `body` が `None`)、呼び出し側で名前の誤りを連鎖させない
+- 名前は `Res::{Local, Function, Builtin}` に解決する。組み込み (`eml_hir::builtin::Builtin`) は名前解決の最も外側のスコープで、ユーザーの定義で隠せる。S2 で `Prelude` モジュールに移す
+- 演算子の列は、標準の演算子の表で precedence climbing により組み直す。`&&` / `||` は `if` に、`|>` / `<|` は関数適用に脱糖する。`else` のない `if` は `else_branch: None` のまま残し、型検査が `Unit` を求める
+
+## `eml_types` の内部
+
+- 型は検査器の中の表に置いて ID で引き、型変数の束縛を辿って単一化する。row は「ラベルの並び + 末尾の row 変数」で、scoped labels の書き換えで単一化する。Kind の変数と `≤` の制約は束の上で最小解を求める
+- 各関数の本体は、シグネチャだけを見て検査する。引数を1つ消費するごとにシグネチャの矢印を1つたどり、本体の row は最後にたどった矢印の row になる。呼び出しでは、呼び出し先の閉じた row を新しい row 変数で開いてから本体の row と単一化する
+- 結果の `TypedModule` は、HIR を複製せずに、関数ごとの `Type` (変数を解決した型) の別テーブルを持つ
+- 関数や組み込みを値として使うこと、部分適用に加えて、関数型の引数を呼ぶこと、関数型の引数として渡すことも E0004 (「calling a function value is not supported yet」) にする。Core IR は、呼ばれるものがトップレベルの関数と組み込みだけであることを前提にするため
+
+## `eml_core_ir`、`eml_runtime`、`eml_interp` の内部
+
+- Core IR の関数は、ANF の木をアリーナに置き、`CExprId` で参照する。継続のフレームが再開する位置を ID で持てるようにするため。値を返す入れ子の式は `Rhs::Nested` で、`if` はその中の `Switch` にする
+- Perceus の挿入は、ANF の上の後ろ向きの生存解析で行う。関数、プリミティブ、`perform` の引数は、どれも所有権を受け取る
+- ヒープはインデックス方式のアリーナで、スロットごとに世代番号を持つ。値は `Copy` な `Value` である
+- 変数のスロットは所有する参照の数を持つ (`eml_runtime::Owned { value, refs }`)。束縛で `refs` を 1 にし、`dup` で 1 足し、ヒープの値を読むたびに 1 引く (読み出しは move)。0 になったスロットは空にする。`decref` も 1 引く。継続のフレームのスロットもこの数を持ち、フレームを解放するときは、保持する参照を `refs` 回ずつ解放する。Perceus の `dup` で 1 つの変数が複数の参照を持ち、入れ子の式は環境を共有するため、読み出しでスロットを空にするだけでは足りない。この規則により、[Core IR とインタプリタ](../spec/core-ir.md) の「変数の読み出しは move、複製は `dup` だけ」が文字どおり成り立つ
+- CEK 機械の継続は、ヒープ上のフレームの連結リストである。呼び出しのフレームは環境 (スロットの配列) を退避し、入れ子の式のフレームは環境をそのまま使い続ける。最下部に `IO` の handler のフレームを置く
 
 ## `eml_types`
 
@@ -165,4 +189,4 @@ HIR への変換では、名前解決に加えて、次の脱糖と検査を行�
 | `ariadne` | 0.6 | 診断の表示 |
 | `clap` | 4.6 (`derive`) | CLI の引数 |
 | `insta` | 1.49 (`glob`) | スナップショットテスト |
-| `la-arena` | 未導入 | HIR の ID。HIR で ID を使い始める段階で追加する |
+| `la-arena` | 0.3 | HIR の ID とアリーナ、型検査の別テーブル (`ArenaMap`) |

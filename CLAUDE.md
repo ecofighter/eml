@@ -43,7 +43,7 @@ eml_diagnostics  Diagnostic, FileId/SourceFiles, ariadne rendering (does not dep
 - From HIR onward, nodes are referenced by arena IDs (`ExprId`, etc.) and analysis results (types, ...) live in side tables. HIR nodes carry a `SyntaxNodePtr`.
 - Diagnostic codes are defined in a per-stage `codes` module (e.g. `eml_syntax::codes`, E0xxx).
 - `OutputSink` is `Send + Sync` in preparation for multicore. `RunConfig` is `#[non_exhaustive]`; build it from `Default`.
-- `eml_syntax` implements stage S1 of the final syntax (`docs/implementation/status.md`); S2/S3 constructs (records, modules, interpolation, command literals, ...) are lexed and parsed far enough to report E0004. The later stages (hir / types / core_ir / interp) are still stubs.
+- `eml_syntax` implements stage S1 of the final syntax (`docs/implementation/status.md`); S2/S3 constructs (records, modules, interpolation, command literals, ...) are lexed and parsed far enough to report E0004. The later stages implement step 1 of the vertical slices in `docs/implementation/status.md` (functions, `Int` / `String` / `Bool`, `if`, `let`, standard operators, `println`); constructs of later steps are reported as E0004 by HIR or the type checker.
 
 ## Testing
 

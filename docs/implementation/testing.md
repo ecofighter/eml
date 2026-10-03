@@ -31,6 +31,7 @@
 現在あるテストの置き場所は次のとおり。
 
 - `crates/eml_syntax/tests/`: 字句 (`lexer.rs`)、パーサ (`parser.rs`、`declarations.rs`、`expressions.rs`、`control.rs`、`handlers.rs`)、型付き AST ラッパ (`ast.rs`)、コーパス (`corpus.rs`)。コーパスのソースは `crates/eml_syntax/tests/corpus/` にあり、`s1.em` は S1 の構文、`later_stages.em` は S2 以降の構文を含む
+- `crates/eml_hir/tests/`、`crates/eml_types/tests/`、`crates/eml_core_ir/tests/`、`crates/eml_interp/tests/`: 各段階の変換結果と診断のスナップショット、実行の結果。ランタイムのヒープの単体テストは `crates/eml_runtime/src/heap.rs` にある
 - `crates/eml_cli/tests/ui.rs`: UI テスト
 - `crates/eml_cli/tests/cli.rs`: CLI の終了コード
 

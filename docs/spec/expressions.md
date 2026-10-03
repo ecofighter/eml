@@ -43,7 +43,7 @@ if s >= 1 then println line
 else if verbose () then println "skipped"
 ```
 
-- **then 節の型が `Unit` の場合、`else` を省略できる。** HIR で `else ()` を補う。正格評価なので、Haskell の `when c (println x)` は `println x` を必ず評価してしまう。そのため構文で用意する
+- **then 節の型が `Unit` の場合、`else` を省略できる。** `else ()` を補ったものとして扱う (HIR は `else` のない `if` として残し、型検査は then 節が `Unit` でなければ診断する)。正格評価なので、Haskell の `when c (println x)` は `println x` を必ず評価してしまう。そのため構文で用意する
 - `else` の枝はできるだけ遠くまで伸びる (`if c then 1 else 2 + 3` は `else (2 + 3)`)
 - `else if` を連ねられる。1行の中に入れ子にした場合、`else` は一番近い `if` に付く
 - ブロックの中で `then` / `else` を `if` と同じ列に書いた場合の扱いは [レイアウト規則](layout.md) にある
