@@ -103,7 +103,7 @@ pub(super) fn expr(p: &mut Parser) -> bool {
 enum OpExpr {
     Nothing,
     Expr,
-    /// `(a +)` の左セクション。被演算子と演算子は、呼び出し側のノードの直下に平たく残る。
+    /// `(a +)` の左セクション。被演算子 (列なら `OP_SEQ`) と演算子は、呼び出し側のノードの直下に残る。
     LeftSection,
 }
 
@@ -128,9 +128,15 @@ fn op_expr(p: &mut Parser, section: bool) -> OpExpr {
         if !p.at_ts(OPERATORS) {
             break;
         }
-        if section && operands == 1 && p.nth(1) == R_PAREN {
+        if section && p.nth(1) == R_PAREN {
+            // `(a * b +)` のように、被演算子が演算子の列でもよい。列は `OP_SEQ` にまとめ、セクションの演算子は
+            // その外に置く。
+            if has_operator {
+                m.complete(p, OP_SEQ);
+            } else {
+                m.abandon(p);
+            }
             p.bump_any();
-            m.abandon(p);
             return OpExpr::LeftSection;
         }
         p.bump_any();
@@ -287,11 +293,9 @@ fn paren_expr(p: &mut Parser) -> SyntaxKind {
     }
     if p.at(OP) || p.at(CONOP) {
         // `(- 1)` は右セクションではなく負の数なので (docs/spec/expressions.md)、`-` はここに来ない。
+        // 被演算子は演算子の列でもよい。優先順位による可否は HIR で検査する。
         p.bump_any();
-        while p.at(MINUS) {
-            p.bump(MINUS);
-        }
-        if !operand(p) {
+        if op_expr(p, false) == OpExpr::Nothing {
             expected(p, "an expression");
         }
         close_bracket(p, R_PAREN);

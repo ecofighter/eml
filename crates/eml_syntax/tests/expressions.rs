@@ -523,3 +523,46 @@ fn implicitly_closed_bracket_after_a_semicolon_does_not_swallow_the_file() {
         ]
     );
 }
+
+#[test]
+fn sections_with_operator_sequences() {
+    insta::assert_snapshot!(shape("s = ((+ a * b), (a * b +), (+ -1))"), @r#"
+    SOURCE_FILE
+      EQUATION
+        LIDENT "s"
+        EQ "="
+        TUPLE_EXPR
+          L_PAREN "("
+          RIGHT_SECTION
+            L_PAREN "("
+            OP "+"
+            OP_SEQ
+              PATH_EXPR
+                LIDENT "a"
+              OP "*"
+              PATH_EXPR
+                LIDENT "b"
+            R_PAREN ")"
+          COMMA ","
+          LEFT_SECTION
+            L_PAREN "("
+            OP_SEQ
+              PATH_EXPR
+                LIDENT "a"
+              OP "*"
+              PATH_EXPR
+                LIDENT "b"
+            OP "+"
+            R_PAREN ")"
+          COMMA ","
+          RIGHT_SECTION
+            L_PAREN "("
+            OP "+"
+            OP_SEQ
+              MINUS "-"
+              LITERAL
+                INT "1"
+            R_PAREN ")"
+          R_PAREN ")"
+    "#);
+}
