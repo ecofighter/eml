@@ -52,13 +52,17 @@ impl BodyLowering<'_> {
             pos: 0,
             end: range.end(),
         };
-        self.climb(&mut cursor, 0)
+        self.climb(&mut cursor, 0, None)
     }
 
-    fn climb(&mut self, cursor: &mut Cursor, min_precedence: u8) -> ExprId {
+    fn climb(
+        &mut self,
+        cursor: &mut Cursor,
+        min_precedence: u8,
+        mut previous: Option<(String, u8, Assoc)>,
+    ) -> ExprId {
         let mut lhs = self.operand(cursor, min_precedence);
-        // 直前に組んだ演算子。結合しない並びを見つけるため
-        let mut previous: Option<(String, u8, Assoc)> = None;
+        // 直前に組んだ演算子、または囲む演算子。結合しない並びを見つけるため
         while let Some(Piece::Operator { text, range }) = cursor.peek() {
             // fixity の宣言がない演算子は `infixl 9` とする (docs/spec/declarations.md)
             let (precedence, assoc) = fixity(&text).unwrap_or((9, Assoc::Left));
@@ -74,7 +78,7 @@ impl BodyLowering<'_> {
             } else {
                 precedence + 1
             };
-            let rhs = self.climb(cursor, next_min);
+            let rhs = self.climb(cursor, next_min, Some((text.clone(), precedence, assoc)));
             if conflict {
                 let (previous_text, _, _) = previous.as_ref().unwrap();
                 self.diagnostics.push(Diagnostic::error(
@@ -106,7 +110,7 @@ impl BodyLowering<'_> {
                         Label::new(self.file, range, "put the negation in parentheses"),
                     ));
                 }
-                let operand = self.climb(cursor, NEGATE_PRECEDENCE + 1);
+                let operand = self.climb(cursor, NEGATE_PRECEDENCE + 1, None);
                 let callee = self.alloc(ExprKind::Path(Res::Builtin(Builtin::IntNeg)), range);
                 let whole = range.cover(self.exprs[operand].range);
                 self.alloc(

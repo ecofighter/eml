@@ -90,3 +90,19 @@ fn unknown_and_unsupported_operators_and_missing_operands() {
     E0011 6:8 expected an expression
     ");
 }
+
+#[test]
+fn mixed_associativity_is_rejected_in_both_orders() {
+    let text = "x : Int\nx = 1 <+> 2 >> 3\ny : Int\ny = 1 >> 2 <+> 3";
+    insta::assert_snapshot!(lower_text(text), @r"
+    x : Int
+    x = <missing>
+    y : Int
+    y = (<missing> 1 <missing>)
+    ---
+    E1001 2:7 cannot find operator `<+>`
+    E1006 2:13 `<+>` and `>>` cannot be combined without parentheses
+    E0004 4:7 function composition is not supported yet
+    E1006 4:12 `>>` and `<+>` cannot be combined without parentheses
+    ");
+}
