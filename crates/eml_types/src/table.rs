@@ -179,7 +179,7 @@ impl Table {
         Row { labels, tail }
     }
 
-    #[allow(dead_code)] // 関数値を入れる段階2で使う
+    #[allow(dead_code)] // row 変数と Kind の推論を入れる段階2で使う
     pub fn row_multiplicity(&self, var: RowVar) -> Multiplicity {
         self.multiplicity
             .value(self.row_vars[var.0 as usize].multiplicity)

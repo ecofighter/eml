@@ -154,3 +154,13 @@ fn too_many_arguments_and_non_functions() {
       5:25 unexpected argument
     ");
 }
+
+#[test]
+fn main_with_an_erroneous_row_is_not_reported_again() {
+    insta::assert_snapshot!(check_text("main : Unit -> <Console> Unit\nmain () = ()"), @r"
+        main : Unit -> Unit
+        ---
+        E1002 1:17 cannot find effect `Console`
+          1:17 not found in this scope
+        ");
+}

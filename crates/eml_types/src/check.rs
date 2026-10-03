@@ -105,6 +105,11 @@ fn check_main(
     let (Some(&ty), Some(signature)) = (signatures.get(id), &function.signature) else {
         return;
     };
+    // 未対応の row や未定義のエフェクトの跡から E2004 を連鎖させないため
+    // (docs/spec/types.md の「エラーの扱い」)
+    if has_error(function, signature.ty) {
+        return;
+    }
     let found = table.export(ty);
     let expected = Type::Fn {
         param: Box::new(Type::unit()),
@@ -118,6 +123,16 @@ fn check_main(
             "`main` must have type `Unit -> <IO> Unit`",
             Label::new(module.file, signature.range, format!("found `{found}`")),
         ));
+    }
+}
+
+fn has_error(function: &Function, id: TypeRefId) -> bool {
+    match &function.types[id].kind {
+        TypeRefKind::Error => true,
+        TypeRefKind::Builtin(_) => false,
+        TypeRefKind::Fn { param, row, ret } => {
+            matches!(row, RowRef::Error) || has_error(function, *param) || has_error(function, *ret)
+        }
     }
 }
 
