@@ -10,3 +10,12 @@ input_file: tests/ui/check-fail/tab_indentation.em
    │ ┬───  
    │ ╰───── indent with spaces
 ───╯
+[E1004] Error: `answer` has no type signature
+   ╭─[ check-fail/tab_indentation.em:2:1 ]
+   │
+ 2 │ answer =
+   │ ───┬──  
+   │    ╰──── every top-level definition needs a signature
+   │ 
+   │ Help: add a signature `answer : ...` on the line before this equation
+───╯

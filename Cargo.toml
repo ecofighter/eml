@@ -17,6 +17,7 @@ eml_interp = { path = "crates/eml_interp" }
 ariadne = "0.6"
 clap = { version = "4.6", features = ["derive"] }
 insta = { version = "1.49", features = ["glob"] }
+la-arena = "0.3"
 logos = "0.16"
 rowan = "0.16"
 text-size = "1.1"
