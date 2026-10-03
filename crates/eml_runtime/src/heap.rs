@@ -27,6 +27,7 @@ pub struct DescId(u32);
 impl DescId {
     pub const STRING: DescId = DescId(0);
     pub const FRAME: DescId = DescId(1);
+    pub const CLOSURE: DescId = DescId(2);
 }
 
 /// オブジェクトの種類。ヘッダから引けるようにし、後の段階でフィールドのレイアウトと `Lin` の破棄処理を足す
@@ -40,6 +41,24 @@ pub struct Descriptor {
 pub enum Payload {
     Str(String),
     Frame(Frame),
+    Closure(Closure),
+    ApplyFrame(ApplyFrame),
+}
+
+/// クロージャ。関数と、すでに渡された先頭の引数の並び (docs/spec/core-ir.md)。各値は参照を1つずつ所有する。
+/// `Clone` は `ObjRef` を `dup` せずに複製するので、複製した側が参照を数え直す。
+#[derive(Debug, Clone, PartialEq)]
+pub struct Closure {
+    pub function: u32,
+    pub args: Vec<Value>,
+}
+
+/// 呼んだ関数から戻った値に、余った引数を適用するフレーム (docs/spec/core-ir.md の eval/apply)。継続の連結リストの
+/// 要素なので、記述子はフレームと同じにする。
+#[derive(Debug, Clone, PartialEq)]
+pub struct ApplyFrame {
+    pub args: Vec<Value>,
+    pub next: Option<ObjRef>,
 }
 
 /// 変数が持っている値と、その変数が所有している参照の数。`dup` で増え、読み出し (所有権の移動) で減る
@@ -124,6 +143,9 @@ impl Heap {
                 },
                 Descriptor {
                     name: "Frame".to_string(),
+                },
+                Descriptor {
+                    name: "Closure".to_string(),
                 },
             ],
         }
@@ -252,14 +274,31 @@ impl Heap {
 }
 
 fn children(payload: &Payload, work: &mut Vec<ObjRef>) {
-    if let Payload::Frame(frame) = payload {
-        for owned in frame.slots.iter().flatten().flatten() {
-            // Perceus の `dup` で1つの変数が複数の参照を持つので、1つだけ手放すと残りがリークする
-            if let Value::Obj(obj) = owned.value {
-                work.extend(std::iter::repeat_n(obj, owned.refs as usize));
+    let objects = |values: &[Value]| -> Vec<ObjRef> {
+        values
+            .iter()
+            .filter_map(|value| match value {
+                Value::Obj(obj) => Some(*obj),
+                _ => None,
+            })
+            .collect()
+    };
+    match payload {
+        Payload::Frame(frame) => {
+            for owned in frame.slots.iter().flatten().flatten() {
+                // Perceus の `dup` で1つの変数が複数の参照を持つので、1つだけ手放すと残りがリークする
+                if let Value::Obj(obj) = owned.value {
+                    work.extend(std::iter::repeat_n(obj, owned.refs as usize));
+                }
             }
+            work.extend(frame.next);
         }
-        work.extend(frame.next);
+        Payload::Closure(closure) => work.extend(objects(&closure.args)),
+        Payload::ApplyFrame(frame) => {
+            work.extend(objects(&frame.args));
+            work.extend(frame.next);
+        }
+        Payload::Str(_) => {}
     }
 }
 
@@ -282,6 +321,37 @@ mod tests {
                 next,
             }),
         )
+    }
+
+    #[test]
+    fn a_closure_releases_its_arguments() {
+        let mut heap = Heap::new();
+        let s = string(&mut heap, "a");
+        let closure = heap.alloc(
+            DescId::CLOSURE,
+            Payload::Closure(Closure {
+                function: 0,
+                args: vec![Value::Obj(s), Value::Int(1)],
+            }),
+        );
+        heap.decref(closure).unwrap();
+        assert!(heap.live_objects().is_empty());
+    }
+
+    #[test]
+    fn an_apply_frame_releases_its_arguments_and_the_rest_of_the_continuation() {
+        let mut heap = Heap::new();
+        let s = string(&mut heap, "a");
+        let next = frame(&mut heap, vec![], None);
+        let apply = heap.alloc(
+            DescId::FRAME,
+            Payload::ApplyFrame(ApplyFrame {
+                args: vec![Value::Obj(s)],
+                next: Some(next),
+            }),
+        );
+        heap.decref(apply).unwrap();
+        assert!(heap.live_objects().is_empty());
     }
 
     #[test]

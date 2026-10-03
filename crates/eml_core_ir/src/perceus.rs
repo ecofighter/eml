@@ -51,13 +51,17 @@ impl Pass<'_> {
 
     /// 右辺が使う変数を、使う回数の分だけ並べる。
     fn uses(&self, rhs: &Rhs) -> Vec<VarId> {
-        let atoms: &[Atom] = match rhs {
-            Rhs::Atom(atom) => std::slice::from_ref(atom),
-            Rhs::CallDirect(_, args) | Rhs::Prim(_, args) | Rhs::Perform(_, args) => args,
-            Rhs::ConstString(_) | Rhs::Nested(_) => &[],
+        let atoms: Vec<&Atom> = match rhs {
+            Rhs::Atom(atom) => vec![atom],
+            Rhs::CallDirect(_, args)
+            | Rhs::Prim(_, args)
+            | Rhs::Perform(_, args)
+            | Rhs::MakeClosure(_, args) => args.iter().collect(),
+            Rhs::Apply(callee, args) => std::iter::once(callee).chain(args).collect(),
+            Rhs::ConstString(_) | Rhs::Nested(_) => Vec::new(),
         };
         atoms
-            .iter()
+            .into_iter()
             .filter_map(|atom| self.atom_var(atom))
             .collect()
     }

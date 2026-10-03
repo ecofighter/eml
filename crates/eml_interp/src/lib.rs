@@ -1,8 +1,17 @@
+use std::cmp::Ordering;
 use std::fmt;
 use std::sync::Arc;
 
 use eml_core_ir::{Atom, CExpr, CExprId, FALSE, FnIdx, IoOp, PrimOp, Program, Rhs, TRUE, VarId};
-use eml_runtime::{DescId, Frame, Heap, HeapError, ObjRef, OutputSink, Owned, Payload, Value};
+use eml_runtime::{
+    ApplyFrame, Closure, DescId, Frame, Heap, HeapError, ObjRef, OutputSink, Owned, Payload, Value,
+};
+
+/// 関数値の適用の結果。関数に入ったか、値ができたか (足りない引数のクロージャ)。
+enum Applied {
+    Entered,
+    Value(Value),
+}
 
 /// 将来 `threads` などを足しても呼び出し側を壊さないように、`non_exhaustive` にして `RunConfig::default()` から作らせる。
 #[derive(Debug, Clone, Default)]
@@ -98,7 +107,7 @@ impl<'p> Machine<'p> {
     fn step(&mut self) -> Result<bool, String> {
         let program = self.program;
         match program.function(self.function).expr(self.control) {
-            CExpr::Let { var, rhs, body } => self.bind(*var, rhs, *body)?,
+            CExpr::Let { var, rhs, body } => return self.bind(*var, rhs, *body),
             CExpr::Switch { scrutinee, arms } => {
                 let Value::Tag(tag) = self.atom(scrutinee)? else {
                     return Err(internal("a switch on a value that is not a tag"));
@@ -133,7 +142,7 @@ impl<'p> Machine<'p> {
         Ok(false)
     }
 
-    fn bind(&mut self, var: VarId, rhs: &Rhs, body: CExprId) -> Result<(), String> {
+    fn bind(&mut self, var: VarId, rhs: &Rhs, body: CExprId) -> Result<bool, String> {
         let value = match rhs {
             Rhs::Atom(atom) => self.atom(atom)?,
             Rhs::ConstString(index) => {
@@ -157,25 +166,105 @@ impl<'p> Machine<'p> {
             Rhs::CallDirect(callee, args) => {
                 let args = self.atoms(args)?;
                 self.push_frame(var, body, true);
-                let target = self.program.function(*callee);
-                let mut slots = vec![None; target.vars.len()];
-                for (param, value) in target.params.iter().zip(args) {
-                    slots[param.0 as usize] = Some(Owned::new(value));
-                }
-                self.slots = slots;
-                self.function = *callee;
-                self.control = target.body;
-                return Ok(());
+                self.enter(*callee, args);
+                return Ok(false);
+            }
+            Rhs::MakeClosure(function, args) => {
+                let args = self.atoms(args)?;
+                let closure = Closure {
+                    function: function.0,
+                    args,
+                };
+                Value::Obj(self.heap.alloc(DescId::CLOSURE, Payload::Closure(closure)))
+            }
+            Rhs::Apply(callee, args) => {
+                let callee = self.atom(callee)?;
+                let args = self.atoms(args)?;
+                self.push_frame(var, body, true);
+                return match self.apply(callee, args)? {
+                    Applied::Entered => Ok(false),
+                    Applied::Value(value) => self.ret(value),
+                };
             }
             Rhs::Nested(inner) => {
                 self.push_frame(var, body, false);
                 self.control = *inner;
-                return Ok(());
+                return Ok(false);
             }
         };
         self.slots[var.0 as usize] = Some(Owned::new(value));
         self.control = body;
-        Ok(())
+        Ok(false)
+    }
+
+    fn enter(&mut self, callee: FnIdx, args: Vec<Value>) {
+        let target = self.program.function(callee);
+        let mut slots = vec![None; target.vars.len()];
+        for (param, value) in target.params.iter().zip(args) {
+            slots[param.0 as usize] = Some(Owned::new(value));
+        }
+        self.slots = slots;
+        self.function = callee;
+        self.control = target.body;
+    }
+
+    /// 関数値を引数に適用する (docs/spec/core-ir.md の eval/apply)。引数の個数が揃えば関数に入り、足りなければ
+    /// 引数を足したクロージャを値にし、余れば余りを持つフレームを積んでから関数に入る。
+    fn apply(&mut self, callee: Value, mut args: Vec<Value>) -> Result<Applied, String> {
+        let Value::Obj(obj) = callee else {
+            return Err(internal("applying a value that is not a closure"));
+        };
+        let closure = self.take_closure(obj)?;
+        let function = FnIdx(closure.function);
+        let mut all = closure.args;
+        all.append(&mut args);
+        let arity = self.program.function(function).params.len();
+        match all.len().cmp(&arity) {
+            Ordering::Equal => {
+                self.enter(function, all);
+                Ok(Applied::Entered)
+            }
+            Ordering::Less => {
+                let closure = Closure {
+                    function: closure.function,
+                    args: all,
+                };
+                let value = self.heap.alloc(DescId::CLOSURE, Payload::Closure(closure));
+                Ok(Applied::Value(Value::Obj(value)))
+            }
+            Ordering::Greater => {
+                let rest = all.split_off(arity);
+                let frame = ApplyFrame {
+                    args: rest,
+                    next: Some(self.cont),
+                };
+                self.cont = self.heap.alloc(DescId::FRAME, Payload::ApplyFrame(frame));
+                self.enter(function, all);
+                Ok(Applied::Entered)
+            }
+        }
+    }
+
+    /// 呼び出しはクロージャの所有権を受け取る。一意なら中身を取り出し、共有されていれば中身の参照を複製してから
+    /// 手放す。
+    fn take_closure(&mut self, obj: ObjRef) -> Result<Closure, String> {
+        if self.heap.is_unique(obj).map_err(heap_error)? {
+            return match self.heap.take(obj).map_err(heap_error)? {
+                Payload::Closure(closure) => Ok(closure),
+                _ => Err(internal("applying an object that is not a closure")),
+            };
+        }
+        let closure = match self.heap.get(obj).map_err(heap_error)? {
+            Payload::Closure(closure) => closure.clone(),
+            _ => return Err(internal("applying an object that is not a closure")),
+        };
+        for value in &closure.args {
+            if let Value::Obj(captured) = value {
+                self.heap.dup(*captured).map_err(heap_error)?;
+            }
+        }
+        self.heap.decref(obj).map_err(heap_error)?;
+        Ok(closure)
     }
 
     /// 呼び出しでは環境ごと退避する。入れ子の式は同じ関数の中なので、環境をそのまま使い続ける。
@@ -192,27 +281,43 @@ impl<'p> Machine<'p> {
     }
 
     /// 継続の先頭のフレームに値を返す。最下部の `IO` の handler に届いたら、プログラムが終わる。
-    fn ret(&mut self, value: Value) -> Result<bool, String> {
-        // 段階1では継続を複製しないので、フレームは常に一意である。共有されたフレームは段階3の `multi` で扱う
-        let Payload::Frame(frame) = self.heap.take(self.cont).map_err(heap_error)? else {
-            return Err(internal("the continuation is not a frame"));
-        };
-        if frame.function == IO_HANDLER {
-            if let Value::Obj(obj) = value {
-                self.heap.decref(obj).map_err(heap_error)?;
+    /// 余った引数のフレームが続く間はループで適用し、Rust の再帰を使わない。
+    fn ret(&mut self, mut value: Value) -> Result<bool, String> {
+        loop {
+            // 段階2までは継続を複製しないので、フレームは常に一意である。共有されたフレームは段階3の `multi` で扱う
+            let frame = match self.heap.take(self.cont).map_err(heap_error)? {
+                Payload::ApplyFrame(frame) => {
+                    self.cont = frame
+                        .next
+                        .ok_or_else(|| internal("an apply frame without a next frame"))?;
+                    match self.apply(value, frame.args)? {
+                        Applied::Entered => return Ok(false),
+                        Applied::Value(result) => {
+                            value = result;
+                            continue;
+                        }
+                    }
+                }
+                Payload::Frame(frame) => frame,
+                _ => return Err(internal("the continuation is not a frame")),
+            };
+            if frame.function == IO_HANDLER {
+                if let Value::Obj(obj) = value {
+                    self.heap.decref(obj).map_err(heap_error)?;
+                }
+                return Ok(true);
             }
-            return Ok(true);
+            if let Some(slots) = frame.slots {
+                self.slots = slots;
+            }
+            self.function = FnIdx(frame.function);
+            self.control = CExprId(frame.resume);
+            self.slots[frame.bind as usize] = Some(Owned::new(value));
+            self.cont = frame
+                .next
+                .ok_or_else(|| internal("a frame without a next frame"))?;
+            return Ok(false);
         }
-        if let Some(slots) = frame.slots {
-            self.slots = slots;
-        }
-        self.function = FnIdx(frame.function);
-        self.control = CExprId(frame.resume);
-        self.slots[frame.bind as usize] = Some(Owned::new(value));
-        self.cont = frame
-            .next
-            .ok_or_else(|| internal("a frame without a next frame"))?;
-        Ok(false)
     }
 
     /// ヒープの値の読み出しは所有権の移動で、複製は `dup` 命令だけが行う (docs/spec/core-ir.md)。ただし Perceus の `dup` で
@@ -302,8 +407,10 @@ impl<'p> Machine<'p> {
         };
         let text = match self.heap.get(obj).map_err(heap_error)? {
             Payload::Str(text) => text.clone(),
-            Payload::Frame(_) => {
-                return Err(internal("a string operation on a frame"));
+            _ => {
+                return Err(internal(
+                    "a string operation on a value that is not a string",
+                ));
             }
         };
         self.heap.decref(obj).map_err(heap_error)?;

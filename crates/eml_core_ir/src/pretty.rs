@@ -87,6 +87,10 @@ fn rhs_text(program: &Program, function: &CoreFn, rhs: &Rhs) -> String {
         Rhs::CallDirect(callee, a) => {
             format!("call {}({})", program.function(*callee).name, args(a))
         }
+        Rhs::MakeClosure(target, a) => {
+            format!("closure {}({})", program.function(*target).name, args(a))
+        }
+        Rhs::Apply(callee, a) => format!("apply {}({})", atom(function, callee), args(a)),
         Rhs::Prim(op, a) => format!("prim {}({})", op.name(), args(a)),
         Rhs::ConstString(index) => format!("const {:?}", program.strings[*index as usize]),
         Rhs::Perform(IoOp::Println, a) => format!("perform println({})", args(a)),

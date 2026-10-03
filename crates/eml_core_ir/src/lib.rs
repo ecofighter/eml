@@ -84,6 +84,11 @@ pub enum CExpr {
 pub enum Rhs {
     Atom(Atom),
     CallDirect(FnIdx, Vec<Atom>),
+    /// 関数と先頭の引数の並びからクロージャを作る。並びの値の所有権はクロージャに移る。ラムダの捕獲と部分適用は、
+    /// どちらもこの形になる (docs/spec/core-ir.md)。
+    MakeClosure(FnIdx, Vec<Atom>),
+    /// クロージャの値を呼ぶ。実行時に引数の個数を比べる (eval/apply)。クロージャと引数の所有権は呼び出しに移る。
+    Apply(Atom, Vec<Atom>),
     Prim(PrimOp, Vec<Atom>),
     ConstString(u32),
     Perform(IoOp, Vec<Atom>),
