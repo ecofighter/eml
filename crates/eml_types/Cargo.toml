@@ -1,0 +1,8 @@
+[package]
+name = "eml_types"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+eml_diagnostics.workspace = true
+eml_hir.workspace = true

@@ -1,0 +1,8 @@
+[package]
+name = "eml_interp"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+eml_core_ir.workspace = true
+eml_runtime.workspace = true

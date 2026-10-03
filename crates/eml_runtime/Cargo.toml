@@ -1,0 +1,6 @@
+[package]
+name = "eml_runtime"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
