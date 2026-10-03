@@ -88,7 +88,7 @@ fn check_main(
     let (Some(scheme), Some(signature)) = (schemes.get(id), &function.signature) else {
         return;
     };
-    // 未対応の row や未定義のエフェクトの跡から E2004 を連鎖させないため
+    // 未定義のエフェクトや解決できなかった型変数・row 変数の跡から E2004 を連鎖させないため
     // (docs/spec/types.md の「エラーの扱い」)
     if has_error(function, signature.ty) {
         return;
@@ -213,15 +213,6 @@ impl BodyCheck<'_> {
                 }
             }
         }
-        if matches!(self.table.kind(expected), TyKind::Fn { .. }) {
-            // 関数を返す等式は、関数値と一緒に段階2で扱う
-            self.diagnostics.push(not_yet_supported(
-                self.file(),
-                self.function.name_range,
-                "an equation with fewer parameters than arrows in its signature is not supported yet",
-            ));
-            expected = self.table.error;
-        }
         self.check_expr(body.root, expected, Origin::Return);
     }
 
@@ -284,7 +275,7 @@ impl BodyCheck<'_> {
             ExprKind::Literal(Literal::Int(_)) => self.table.int,
             ExprKind::Literal(Literal::String(_)) => self.table.string,
             ExprKind::Literal(Literal::Unit) => self.table.unit,
-            ExprKind::Path(res) => self.value(*res, expr.range),
+            ExprKind::Path(res) => self.value(*res),
             ExprKind::Call { callee, args } => self.call(id, *callee, args),
             ExprKind::If {
                 condition,
@@ -358,63 +349,56 @@ impl BodyCheck<'_> {
         }
     }
 
-    fn value(&mut self, res: Res, range: TextRange) -> Ty {
-        let ty = match res {
+    /// 関数と組み込みの参照は、具体化した後に戻り値の側の閉じた row を開く。純粋な関数を、エフェクトを持つ関数型の
+    /// 引数に渡せるようにするため (docs/spec/types.md の「推論」)。局所変数の型は開かない。
+    fn value(&mut self, res: Res) -> Ty {
+        match res {
             Res::Local(local) => self.locals.get(local).copied().unwrap_or(self.table.error),
-            Res::Function(function) => self.reference(function),
-            Res::Builtin(builtin) => builtin_type(self.table, builtin),
-        };
-        if matches!(self.table.kind(ty), TyKind::Fn { .. }) {
-            // 関数値はクロージャと一緒に段階2で入れる (docs/implementation/status.md)
-            self.diagnostics.push(not_yet_supported(
-                self.file(),
-                range,
-                "using a function as a value is not supported yet",
-            ));
-            return self.table.error;
+            Res::Function(function) => {
+                let ty = self.reference(function);
+                self.table.open_spine(ty)
+            }
+            Res::Builtin(builtin) => {
+                let ty = builtin_type(self.table, builtin);
+                self.table.open_spine(ty)
+            }
         }
-        ty
     }
 
+    /// 呼ばれる値や期待する型がまだ推論用の変数のとき、それを関数型に決める。
+    fn fresh_function(&mut self) -> Ty {
+        let param = self.table.fresh_var();
+        let ret = self.table.fresh_var();
+        let lin = self.table.fresh_mult();
+        let row = Row {
+            labels: Vec::new(),
+            tail: Some(self.table.fresh_row_var()),
+        };
+        self.table.function_with(param, lin, row, ret)
+    }
+
+    /// 等式と同じく、引数を1つ受けるごとに型の矢印を1つたどる。たどった矢印の row はすべて今の row に含まれなければ
+    /// ならない。矢印が余れば部分適用で、残りの関数型が値の型になる (docs/spec/expressions.md の「ラムダ」)。
     fn call(&mut self, id: ExprId, callee: ExprId, args: &[ExprId]) -> Ty {
         let body = self.body;
         let callee_expr = &body.exprs[callee];
-        // 呼び出し先が名前なら、関数値の門 (`value`) を通さずに型を引く
-        let (callee_ty, name) = match &callee_expr.kind {
-            ExprKind::Path(Res::Function(function)) => (
-                self.reference(*function),
-                self.module.functions[*function].name.clone(),
-            ),
-            ExprKind::Path(Res::Builtin(builtin)) => (
-                builtin_type(self.table, *builtin),
-                builtin.name().to_string(),
-            ),
-            ExprKind::Path(Res::Local(local)) => (
-                self.locals.get(*local).copied().unwrap_or(self.table.error),
-                body.locals[*local].name.clone(),
-            ),
-            _ => (self.infer_expr(callee), "this expression".to_string()),
-        };
-        if matches!(callee_expr.kind, ExprKind::Path(Res::Local(_)))
-            && matches!(self.table.kind(callee_ty), TyKind::Fn { .. })
-        {
-            // 関数値はクロージャと一緒に段階2で入れる (docs/implementation/status.md)
-            for &arg in args {
-                self.infer_expr(arg);
+        let name = match &callee_expr.kind {
+            ExprKind::Path(Res::Function(function)) => {
+                self.module.functions[*function].name.clone()
             }
-            self.diagnostics.push(not_yet_supported(
-                self.file(),
-                callee_expr.range,
-                "calling a function value is not supported yet",
-            ));
-            self.exprs.insert(callee, self.table.error);
-            return self.table.error;
-        }
-        self.exprs.insert(callee, callee_ty);
-        let mut ty = callee_ty;
+            ExprKind::Path(Res::Builtin(builtin)) => builtin.name().to_string(),
+            ExprKind::Path(Res::Local(local)) => body.locals[*local].name.clone(),
+            _ => "this expression".to_string(),
+        };
+        let mut ty = self.infer_expr(callee);
         // 1回の呼び出しの E2002 は、どの引数の矢印で起きても1つだけ報告する
         let mut reported = false;
         for (index, &arg) in args.iter().enumerate() {
+            if let TyKind::Var(_) = self.table.kind(ty) {
+                let function = self.fresh_function();
+                // 新しい変数だけでできた関数型なので、単一化は失敗しない
+                let _ = self.table.unify(ty, function);
+            }
             match self.table.kind(ty).clone() {
                 TyKind::Fn {
                     param, row, ret, ..
@@ -454,51 +438,38 @@ impl BodyCheck<'_> {
                 }
             }
         }
-        if matches!(self.table.kind(ty), TyKind::Fn { .. }) {
-            self.diagnostics.push(not_yet_supported(
-                self.file(),
-                body.exprs[id].range,
-                "partial application is not supported yet",
-            ));
-            return self.table.error;
-        }
         ty
     }
 
-    /// 呼び出し先の閉じた row を新しい row 変数で開いてから、本体の row と単一化する (Koka と同じ)。
-    /// 純粋な関数はどこからでも呼べ、`IO` を起こす関数は row に `IO` がある本体からだけ呼べる。
-    /// 許されない効果があれば `false` を返す。`report` が偽なら診断を出さない。
+    /// 呼び出し先の row が今の row に含まれることを確かめる (docs/spec/types.md の「推論」)。含まれなければ
+    /// `false` を返す。`report` が偽なら診断を出さない。
     fn perform(&mut self, row: Row, range: TextRange, name: &str, report: bool) -> bool {
-        let opened = if row.tail.is_none() {
-            Row {
-                labels: row.labels,
-                tail: Some(self.table.fresh_row_var()),
-            }
-        } else {
-            row
-        };
         let ambient = self.ambient.clone();
-        let Err(UnifyError::MissingEffects(missing)) = self.table.unify_row(&opened, &ambient)
-        else {
-            return true;
+        let missing: Vec<String> = match self.table.include_row(&row, &ambient) {
+            Ok(()) => return true,
+            Err(UnifyError::MissingEffects(effects)) => {
+                effects.iter().map(|e| e.name().to_string()).collect()
+            }
+            Err(UnifyError::MissingRowVar(var)) => vec![var],
+            // 包含の検査は、今の row に新しい row 変数を合わせるだけなので、ほかの失敗は起きない
+            Err(other) => unreachable!("including a row reports only missing effects: {other:?}"),
         };
         if !report {
             return false;
         }
-        let quoted: Vec<String> = missing.iter().map(|e| format!("`{}`", e.name())).collect();
+        let quoted: Vec<String> = missing.iter().map(|name| format!("`{name}`")).collect();
         let quoted = quoted.join(", ");
-        let names: Vec<&str> = missing.iter().map(|e| e.name()).collect();
         let function = &self.function.name;
         // 引数のない関数は矢印を持たず、row を足す先がない。`()` を取る関数にする規則を案内する (docs/spec/declarations.md)
         let help = if self.body.params.is_empty() {
             format!(
                 "`{function}` takes no parameters, so it cannot perform {quoted}; make it a function taking `()`, as in `{function} : Unit -> <{}> ...` with `{function} () = ...`",
-                names.join(", ")
+                missing.join(", ")
             )
         } else {
             format!(
                 "add {quoted} to the row of the signature of `{function}`, as in `-> <{}> ...`",
-                names.join(", ")
+                missing.join(", ")
             )
         };
         self.diagnostics.push(

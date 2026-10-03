@@ -486,7 +486,6 @@ impl Table {
     }
 
     /// `ty` の Kind が `upper` 以下であること。
-    #[allow(dead_code)] // Task 6 以降の関数値の推論で使う
     pub fn kind_at_most(&mut self, ty: Ty, upper: Bound<Linearity>) {
         for bound in self.kind_bounds(ty) {
             self.linearity.require(bound, upper);
@@ -523,7 +522,6 @@ impl Table {
     /// 残りの末尾が推論中の row 変数なら、その row はまだ伸ばせるので、rigid な変数を末尾として受けさせる
     /// (ラムダ本体のように、今の row を推論している途中で呼び出すときのため)。
     /// 閉じた末尾か、別の rigid な変数なら含まれないので `MissingRowVar` にする。
-    #[allow(dead_code)] // Task 6 以降の呼び出しの推論で使う
     pub fn include_row(&mut self, callee: &Row, ambient: &Row) -> Result<(), UnifyError> {
         let callee = self.resolve_row(callee);
         match callee.tail {
@@ -566,7 +564,6 @@ impl Table {
 
     /// 戻り値の側に並ぶ矢印の閉じた row を、新しい row 変数で開く。純粋な関数を、エフェクトを持つ関数型の引数に
     /// 渡せるようにするため (docs/spec/types.md の「推論」)。引数の型の中は開かない。
-    #[allow(dead_code)] // Task 6 以降の関数値の推論で使う
     pub fn open_spine(&mut self, ty: Ty) -> Ty {
         let TyKind::Fn {
             param,

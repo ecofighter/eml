@@ -102,24 +102,21 @@ fn main_type_and_parameter_count() {
 }
 
 #[test]
-fn function_values_are_not_yet_supported() {
+fn function_values_and_partial_application() {
     let text = "add : Int -> Int -> Int\nadd a b = a + b\n\npartial : Unit -> Int\npartial () =\n  let f = add 1\n  let g = add\n  0\n\ncurried : Int -> Int -> Int\ncurried a = a";
     insta::assert_snapshot!(check_text(text), @r"
     add : Int -> Int -> Int
       a#0 : Int
       b#1 : Int
     partial : Unit -> Int
-      f#0 : {error}
-      g#1 : {error}
+      f#0 : Int -> <_> Int
+      g#1 : Int -> <_> Int -> <_> Int
     curried : Int -> Int -> Int
       a#0 : Int
     ---
-    E0004 6:11 partial application is not supported yet
-      6:11 this is implemented in a later stage
-    E0004 7:11 using a function as a value is not supported yet
-      7:11 this is implemented in a later stage
-    E0004 11:1 an equation with fewer parameters than arrows in its signature is not supported yet
-      11:1 this is implemented in a later stage
+    E2001 11:13 mismatched types
+      11:13 expected `Int -> Int`, found `Int`
+      10:11 expected because of the signature of `curried`
     ");
 }
 
@@ -166,7 +163,7 @@ fn main_with_an_erroneous_row_is_not_reported_again() {
 }
 
 #[test]
-fn function_typed_parameters_cannot_be_called_or_passed() {
+fn function_typed_parameters_can_be_called_and_passed() {
     let text = "apply : (Int -> Int) -> Int -> Int\napply f x = f x\n\npass : (Int -> Int) -> Int\npass f = apply f 1";
     insta::assert_snapshot!(check_text(text), @"
     apply : (Int -> Int) -> Int -> Int
@@ -174,11 +171,6 @@ fn function_typed_parameters_cannot_be_called_or_passed() {
       x#1 : Int
     pass : (Int -> Int) -> Int
       f#0 : Int -> Int
-    ---
-    E0004 2:13 calling a function value is not supported yet
-      2:13 this is implemented in a later stage
-    E0004 5:16 using a function as a value is not supported yet
-      5:16 this is implemented in a later stage
     ");
 }
 
@@ -256,5 +248,52 @@ fn annotations_in_the_body_refer_to_the_signature() {
     E2001 7:8 mismatched types
       7:8 expected `Int`, found `a`
       7:12 expected because of this annotation
+    ");
+}
+
+#[test]
+fn row_variables_pass_effects_through() {
+    let text = "apply : (a -> <e> b) -> a -> <e> b\napply f x = f x\n\nshout : String -> <IO> Unit\nshout s = apply println s\n\nquiet : String -> Unit\nquiet s = apply println s";
+    insta::assert_snapshot!(check_text(text), @r"
+    apply : (a -> <e> b) -> a -> <e> b
+      f#0 : a -> <e> b
+      x#1 : a
+    shout : String -> <IO> Unit
+      s#0 : String
+    quiet : String -> Unit
+      s#0 : String
+    ---
+    E2002 8:11 `apply` performs `IO`, which the signature of `quiet` does not allow
+      8:11 this call performs `IO`
+      7:9 the row of this signature does not include it
+      help: add `IO` to the row of the signature of `quiet`, as in `-> <IO> ...`
+    ");
+}
+
+#[test]
+fn a_rigid_row_variable_must_be_in_the_ambient_row() {
+    let text = "run : (Unit -> <e> Unit) -> Unit\nrun f = f ()";
+    insta::assert_snapshot!(check_text(text), @r"
+    run : (Unit -> <e> Unit) -> Unit
+      f#0 : Unit -> <e> Unit
+    ---
+    E2002 2:9 `f` performs `e`, which the signature of `run` does not allow
+      2:9 this call performs `e`
+      1:7 the row of this signature does not include it
+      help: add `e` to the row of the signature of `run`, as in `-> <e> ...`
+    ");
+}
+
+#[test]
+fn equations_may_return_functions_and_calls_may_pass_more_arguments() {
+    let text = "add : Int -> Int -> Int\nadd a b = a + b\n\nadder : Int -> Int -> Int\nadder x = add x\n\ninc : Int -> Int\ninc = adder 1\n\nthree : Unit -> Int\nthree () = adder 1 2 + inc 1";
+    insta::assert_snapshot!(check_text(text), @r"
+    add : Int -> Int -> Int
+      a#0 : Int
+      b#1 : Int
+    adder : Int -> Int -> Int
+      x#0 : Int
+    inc : Int -> Int
+    three : Unit -> Int
     ");
 }

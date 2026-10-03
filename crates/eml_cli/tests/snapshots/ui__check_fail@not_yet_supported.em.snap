@@ -17,17 +17,3 @@ input_file: tests/ui/check-fail/not_yet_supported.em
    │           ─┬  
    │            ╰── this is implemented in a later stage
 ───╯
-[E0004] Error: using a function as a value is not supported yet
-    ╭─[ check-fail/not_yet_supported.em:10:11 ]
-    │
- 10 │   let g = add
-    │           ─┬─  
-    │            ╰─── this is implemented in a later stage
-────╯
-[E0004] Error: partial application is not supported yet
-    ╭─[ check-fail/not_yet_supported.em:11:11 ]
-    │
- 11 │   let h = add 1
-    │           ──┬──  
-    │             ╰──── this is implemented in a later stage
-────╯
