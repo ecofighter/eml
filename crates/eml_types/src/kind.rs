@@ -4,6 +4,13 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct KindVar(u32);
 
+impl KindVar {
+    #[allow(dead_code)] // Task 6 以降のスキームの具体化で使う
+    pub fn index(self) -> usize {
+        self.0 as usize
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Bound<T> {
     Const(T),

@@ -1,5 +1,6 @@
 use crate::kind::{Bound, KindVar, Lattice};
 use crate::ty::{Effect, Linearity, Multiplicity, RowTail, Type};
+use std::collections::HashMap;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Ty(u32);
@@ -7,7 +8,11 @@ pub(crate) struct Ty(u32);
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct TyVar(u32);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// シグネチャの型変数。本体の中では固定された型として扱う (docs/spec/types.md の「推論」)。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) struct RigidVar(u32);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct RowVar(u32);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -21,7 +26,6 @@ pub(crate) enum TyCon {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Mult {
     Known(Linearity),
-    #[allow(dead_code)] // 関数値を入れる段階2で使う
     Var(KindVar),
 }
 
@@ -52,8 +56,8 @@ pub(crate) enum TyKind {
         row: Row,
         ret: Ty,
     },
-    #[allow(dead_code)] // 多相を入れる段階2で使う
     Var(TyVar),
+    Rigid(RigidVar),
     Error,
 }
 
@@ -63,12 +67,13 @@ pub(crate) enum UnifyError {
     Occurs,
     /// 閉じた row に含まれないエフェクト。
     MissingEffects(Vec<Effect>),
+    /// 呼び出し先の row の末尾にある、シグネチャの row 変数が、今の row に含まれない。
+    MissingRowVar(String),
 }
 
 struct TyVarInfo {
     binding: Option<Ty>,
     /// 型変数の Kind `Type<μ>` の `μ`。段階2でシグネチャの型変数とともに制約が付く。
-    #[allow(dead_code)]
     linearity: KindVar,
 }
 
@@ -76,12 +81,31 @@ struct RowVarInfo {
     binding: Option<Row>,
     /// row 変数の Kind `Row<σ>` の `σ`。
     multiplicity: KindVar,
+    /// シグネチャの row 変数なら、その名前。本体の中では束縛できない (docs/spec/types.md の「推論」)。
+    rigid: Option<String>,
+}
+
+struct RigidInfo {
+    name: String,
+    /// 型変数の Kind `Type<μ>` の `μ`。
+    linearity: KindVar,
+}
+
+/// スキームを具体化するときの置き換え。rigid 変数を新しい推論用の変数に、多相化した Kind 変数を新しい Kind 変数に変える。
+#[derive(Default)]
+pub(crate) struct Subst {
+    pub tys: HashMap<RigidVar, Ty>,
+    pub rows: HashMap<RowVar, RowVar>,
+    pub lin: HashMap<KindVar, KindVar>,
+    #[allow(dead_code)] // Task 6 以降のスキームの具体化で使う
+    pub mult: HashMap<KindVar, KindVar>,
 }
 
 pub(crate) struct Table {
     kinds: Vec<TyKind>,
     ty_vars: Vec<TyVarInfo>,
     row_vars: Vec<RowVarInfo>,
+    rigids: Vec<RigidInfo>,
     linearity: Lattice<Linearity>,
     multiplicity: Lattice<Multiplicity>,
     pub int: Ty,
@@ -97,6 +121,7 @@ impl Table {
             kinds: Vec::new(),
             ty_vars: Vec::new(),
             row_vars: Vec::new(),
+            rigids: Vec::new(),
             linearity: Lattice::new(Linearity::Unr),
             multiplicity: Lattice::new(Multiplicity::Never),
             int: Ty(0),
@@ -131,6 +156,36 @@ impl Table {
     #[allow(dead_code)] // Task 6 の compose 組み込み関数から使う
     pub fn fresh_var(&mut self) -> Ty {
         let linearity = self.linearity.fresh();
+        self.fresh_var_with(linearity)
+    }
+
+    #[allow(dead_code)] // Task 6 以降のスキームの具体化で使う
+    pub fn function_with(&mut self, param: Ty, lin: Mult, row: Row, ret: Ty) -> Ty {
+        self.alloc(TyKind::Fn {
+            param,
+            lin,
+            row,
+            ret,
+        })
+    }
+
+    #[allow(dead_code)] // Task 6 以降のスキームの具体化で使う
+    pub fn fresh_lin_kind(&mut self) -> KindVar {
+        self.linearity.fresh()
+    }
+
+    #[allow(dead_code)] // Task 6 以降のスキームの具体化で使う
+    pub fn fresh_mult_kind(&mut self) -> KindVar {
+        self.multiplicity.fresh()
+    }
+
+    #[allow(dead_code)] // Task 6 以降の関数値の推論で使う
+    pub fn fresh_mult(&mut self) -> Mult {
+        Mult::Var(self.linearity.fresh())
+    }
+
+    #[allow(dead_code)] // Task 6 以降のスキームの具体化で使う
+    pub fn fresh_var_with(&mut self, linearity: KindVar) -> Ty {
         self.ty_vars.push(TyVarInfo {
             binding: None,
             linearity,
@@ -141,11 +196,47 @@ impl Table {
 
     pub fn fresh_row_var(&mut self) -> RowVar {
         let multiplicity = self.multiplicity.fresh();
+        self.fresh_row_var_with(multiplicity)
+    }
+
+    #[allow(dead_code)] // Task 6 以降のスキームの具体化で使う
+    pub fn fresh_row_var_with(&mut self, multiplicity: KindVar) -> RowVar {
         self.row_vars.push(RowVarInfo {
             binding: None,
             multiplicity,
+            rigid: None,
         });
         RowVar(self.row_vars.len() as u32 - 1)
+    }
+
+    #[allow(dead_code)] // Task 6 以降のシグネチャの型変数で使う
+    pub fn fresh_rigid(&mut self, name: &str) -> (Ty, RigidVar) {
+        let linearity = self.linearity.fresh();
+        self.rigids.push(RigidInfo {
+            name: name.to_string(),
+            linearity,
+        });
+        let rigid = RigidVar(self.rigids.len() as u32 - 1);
+        (self.alloc(TyKind::Rigid(rigid)), rigid)
+    }
+
+    pub fn rigid_linearity(&self, rigid: RigidVar) -> KindVar {
+        self.rigids[rigid.0 as usize].linearity
+    }
+
+    #[allow(dead_code)] // Task 6 以降のシグネチャの row 変数で使う
+    pub fn fresh_rigid_row(&mut self, name: &str) -> RowVar {
+        let var = self.fresh_row_var();
+        self.row_vars[var.0 as usize].rigid = Some(name.to_string());
+        var
+    }
+
+    pub fn is_rigid_row(&self, var: RowVar) -> bool {
+        self.row_vars[var.0 as usize].rigid.is_some()
+    }
+
+    pub fn row_multiplicity_var(&self, var: RowVar) -> KindVar {
+        self.row_vars[var.0 as usize].multiplicity
     }
 
     fn resolve(&self, mut ty: Ty) -> Ty {
@@ -199,6 +290,7 @@ impl Table {
             (_, TyKind::Var(var)) => self.bind_var(var, a),
             // `Error` が関わる制約からは診断を出さない (docs/spec/types.md の「エラーの扱い」)
             (TyKind::Error, _) | (_, TyKind::Error) => Ok(()),
+            (TyKind::Rigid(x), TyKind::Rigid(y)) if x == y => Ok(()),
             (TyKind::Con(x), TyKind::Con(y)) if x == y => Ok(()),
             (TyKind::Record(xs), TyKind::Record(ys))
                 if xs.len() == ys.len() && xs.iter().zip(&ys).all(|((l, _), (m, _))| l == m) =>
@@ -235,6 +327,10 @@ impl Table {
         if self.occurs(var, ty) {
             return Err(UnifyError::Occurs);
         }
+        let mu = self.ty_vars[var.0 as usize].linearity;
+        for bound in self.kind_bounds(ty) {
+            self.linearity.require(bound, Bound::Var(mu));
+        }
         self.ty_vars[var.0 as usize].binding = Some(ty);
         Ok(())
     }
@@ -244,7 +340,7 @@ impl Table {
             TyKind::Var(other) => *other == var,
             TyKind::Record(fields) => fields.iter().any(|(_, field)| self.occurs(var, *field)),
             TyKind::Fn { param, ret, .. } => self.occurs(var, *param) || self.occurs(var, *ret),
-            TyKind::Con(_) | TyKind::Error => false,
+            TyKind::Con(_) | TyKind::Rigid(_) | TyKind::Error => false,
         }
     }
 
@@ -309,28 +405,59 @@ impl Table {
                     Err(UnifyError::MissingEffects(missing))
                 }
             }
-            (Some(x), Some(y)) => {
-                let rest = self.fresh_row_var();
-                self.bind_row(
-                    x,
-                    Row {
-                        labels: only_b,
-                        tail: Some(rest),
-                    },
-                )?;
-                self.bind_row(
-                    y,
-                    Row {
-                        labels: only_a,
-                        tail: Some(rest),
-                    },
-                )
-            }
+            (Some(x), Some(y)) => match (self.is_rigid_row(x), self.is_rigid_row(y)) {
+                (false, false) => {
+                    let rest = self.fresh_row_var();
+                    self.bind_row(
+                        x,
+                        Row {
+                            labels: only_b,
+                            tail: Some(rest),
+                        },
+                    )?;
+                    self.bind_row(
+                        y,
+                        Row {
+                            labels: only_a,
+                            tail: Some(rest),
+                        },
+                    )
+                }
+                // rigid な側は束縛できないので、推論用の側に残りを入れる
+                (false, true) => {
+                    if !only_a.is_empty() {
+                        return Err(UnifyError::MissingEffects(only_a));
+                    }
+                    self.bind_row(
+                        x,
+                        Row {
+                            labels: only_b,
+                            tail: Some(y),
+                        },
+                    )
+                }
+                (true, false) => {
+                    if !only_b.is_empty() {
+                        return Err(UnifyError::MissingEffects(only_b));
+                    }
+                    self.bind_row(
+                        y,
+                        Row {
+                            labels: only_a,
+                            tail: Some(x),
+                        },
+                    )
+                }
+                (true, true) => Err(UnifyError::Mismatch),
+            },
         }
     }
 
     /// row 変数に入る操作は、その Kind `Row<σ>` の上限 `σ` を超えてはならない (docs/spec/types.md)。
     fn bind_row(&mut self, var: RowVar, row: Row) -> Result<(), UnifyError> {
+        if self.is_rigid_row(var) {
+            return Err(UnifyError::Mismatch);
+        }
         if row.tail == Some(var) {
             return Err(UnifyError::Occurs);
         }
@@ -346,6 +473,187 @@ impl Table {
         }
         self.row_vars[var.0 as usize].binding = Some(row);
         Ok(())
+    }
+
+    /// 型の Kind の上界の候補。レコードはフィールドの join なので、フィールドごとの境界を並べる (docs/spec/types.md)。
+    pub fn kind_bounds(&self, ty: Ty) -> Vec<Bound<Linearity>> {
+        match self.kind(ty) {
+            TyKind::Con(_) => vec![Bound::Const(Linearity::Unr)],
+            TyKind::Record(fields) => fields
+                .iter()
+                .flat_map(|(_, field)| self.kind_bounds(*field))
+                .collect(),
+            TyKind::Fn { lin, .. } => vec![match lin {
+                Mult::Known(l) => Bound::Const(*l),
+                Mult::Var(v) => Bound::Var(*v),
+            }],
+            TyKind::Var(var) => vec![Bound::Var(self.ty_vars[var.0 as usize].linearity)],
+            TyKind::Rigid(rigid) => vec![Bound::Var(self.rigid_linearity(*rigid))],
+            TyKind::Error => Vec::new(),
+        }
+    }
+
+    /// `ty` の Kind が `upper` 以下であること。
+    #[allow(dead_code)] // Task 6 以降の関数値の推論で使う
+    pub fn kind_at_most(&mut self, ty: Ty, upper: Bound<Linearity>) {
+        for bound in self.kind_bounds(ty) {
+            self.linearity.require(bound, upper);
+        }
+    }
+
+    /// 引数を `arity` 個まで受ける関数の、部分適用のクロージャの線形性。矢印 `i` (0 始まり) のクロージャは、先頭の
+    /// `i` 個の引数と `captured` を捕まえるので、その Kind 以上になる (docs/spec/types.md の「関数型」)。
+    #[allow(dead_code)] // Task 6 以降の関数値の推論で使う
+    pub fn closure_kinds(&mut self, ty: Ty, arity: usize, captured: &[Ty]) {
+        let mut held: Vec<Ty> = captured.to_vec();
+        let mut current = ty;
+        for _ in 0..arity {
+            let TyKind::Fn {
+                param, lin, ret, ..
+            } = self.kind(current).clone()
+            else {
+                return;
+            };
+            let upper = match lin {
+                Mult::Known(l) => Bound::Const(l),
+                Mult::Var(v) => Bound::Var(v),
+            };
+            for &value in &held {
+                self.kind_at_most(value, upper);
+            }
+            held.push(param);
+            current = ret;
+        }
+    }
+
+    /// 呼び出し先の row `callee` のエフェクトが、今の row `ambient` にすべて含まれることを確かめる
+    /// (docs/spec/types.md の「推論」)。閉じた row と推論用の末尾は、残りを row 変数で受けて単一化する。
+    /// rigid な末尾は束縛できないので、ラベルを取り除いた残りの末尾が同じ変数であることを確かめる。
+    #[allow(dead_code)] // Task 6 以降の呼び出しの推論で使う
+    pub fn include_row(&mut self, callee: &Row, ambient: &Row) -> Result<(), UnifyError> {
+        let callee = self.resolve_row(callee);
+        match callee.tail {
+            Some(tail) if !self.is_rigid_row(tail) => self.unify_row(&callee, ambient),
+            tail => {
+                let rest = self.fresh_row_var();
+                self.unify_row(
+                    &Row {
+                        labels: callee.labels,
+                        tail: Some(rest),
+                    },
+                    ambient,
+                )?;
+                let Some(rigid) = tail else {
+                    return Ok(());
+                };
+                let rest = self.resolve_row(&Row {
+                    labels: Vec::new(),
+                    tail: Some(rest),
+                });
+                if rest.tail == Some(rigid) {
+                    Ok(())
+                } else {
+                    let name = self.row_vars[rigid.0 as usize].rigid.clone();
+                    Err(UnifyError::MissingRowVar(name.unwrap_or_default()))
+                }
+            }
+        }
+    }
+
+    /// 戻り値の側に並ぶ矢印の閉じた row を、新しい row 変数で開く。純粋な関数を、エフェクトを持つ関数型の引数に
+    /// 渡せるようにするため (docs/spec/types.md の「推論」)。引数の型の中は開かない。
+    #[allow(dead_code)] // Task 6 以降の関数値の推論で使う
+    pub fn open_spine(&mut self, ty: Ty) -> Ty {
+        let TyKind::Fn {
+            param,
+            lin,
+            row,
+            ret,
+        } = self.kind(ty).clone()
+        else {
+            return ty;
+        };
+        let ret = self.open_spine(ret);
+        let row = self.resolve_row(&row);
+        let row = match row.tail {
+            Some(_) => row,
+            None => Row {
+                labels: row.labels,
+                tail: Some(self.fresh_row_var()),
+            },
+        };
+        self.function_with(param, lin, row, ret)
+    }
+
+    /// `subst` に従って rigid 変数、row 変数、Kind 変数を置き換えた型を作る。スキームの具体化で使う。
+    #[allow(dead_code)] // Task 6 以降のスキームの具体化で使う
+    pub fn copy_type(&mut self, ty: Ty, subst: &Subst) -> Ty {
+        match self.kind(ty).clone() {
+            TyKind::Rigid(rigid) => subst.tys.get(&rigid).copied().unwrap_or(ty),
+            TyKind::Fn {
+                param,
+                lin,
+                row,
+                ret,
+            } => {
+                let param = self.copy_type(param, subst);
+                let ret = self.copy_type(ret, subst);
+                let lin = match lin {
+                    Mult::Var(v) => Mult::Var(subst.lin.get(&v).copied().unwrap_or(v)),
+                    known => known,
+                };
+                let row = self.resolve_row(&row);
+                let row = Row {
+                    labels: row.labels,
+                    tail: row
+                        .tail
+                        .map(|tail| subst.rows.get(&tail).copied().unwrap_or(tail)),
+                };
+                self.function_with(param, lin, row, ret)
+            }
+            TyKind::Record(fields) => {
+                let fields = fields
+                    .into_iter()
+                    .map(|(label, field)| (label, self.copy_type(field, subst)))
+                    .collect();
+                self.alloc(TyKind::Record(fields))
+            }
+            TyKind::Con(_) | TyKind::Var(_) | TyKind::Error => ty,
+        }
+    }
+
+    /// 型に現れる Kind 変数。線形性 (rigid 変数の `μ` と矢印の `m`) と多重度 (rigid な row 変数の `σ`) に分けて、
+    /// 現れた順に重複なく返す。多相化する変数を決めるのに使う。
+    #[allow(dead_code)] // Task 6 以降の多相化で使う
+    pub fn kind_vars(&self, ty: Ty) -> (Vec<KindVar>, Vec<KindVar>) {
+        let mut lin = Vec::new();
+        let mut mult = Vec::new();
+        let mut work = vec![ty];
+        while let Some(ty) = work.pop() {
+            match self.kind(ty) {
+                TyKind::Rigid(rigid) => push_unique(&mut lin, self.rigid_linearity(*rigid)),
+                TyKind::Fn {
+                    param,
+                    lin: m,
+                    row,
+                    ret,
+                } => {
+                    if let Mult::Var(v) = m {
+                        push_unique(&mut lin, *v);
+                    }
+                    if let Some(tail) = self.resolve_row(row).tail
+                        && self.is_rigid_row(tail)
+                    {
+                        push_unique(&mut mult, self.row_multiplicity_var(tail));
+                    }
+                    work.push(*ret);
+                    work.push(*param);
+                }
+                TyKind::Record(fields) => work.extend(fields.iter().rev().map(|(_, f)| *f)),
+                TyKind::Con(_) | TyKind::Var(_) | TyKind::Error => {}
+            }
+        }
+        (lin, mult)
     }
 
     /// 後の段階に渡す形にする。解けていない型変数と row 変数は、`_` として残す。
@@ -374,13 +682,25 @@ impl Table {
                         Mult::Var(v) => self.linearity.value(v),
                     },
                     effects: row.labels,
-                    tail: row.tail.map(|_| RowTail::Flexible),
+                    tail: row
+                        .tail
+                        .map(|tail| match &self.row_vars[tail.0 as usize].rigid {
+                            Some(name) => RowTail::Rigid(name.clone()),
+                            None => RowTail::Flexible,
+                        }),
                     ret: Box::new(self.export(ret)),
                 }
             }
             TyKind::Var(_) => Type::Var("_".to_string()),
+            TyKind::Rigid(rigid) => Type::Var(self.rigids[rigid.0 as usize].name.clone()),
             TyKind::Error => Type::Error,
         }
+    }
+}
+
+fn push_unique(vars: &mut Vec<KindVar>, var: KindVar) {
+    if !vars.contains(&var) {
+        vars.push(var);
     }
 }
 
@@ -521,5 +841,102 @@ mod tests {
         assert_eq!(table.export(f).to_string(), "Int -> <IO | _> Int");
         let v = table.fresh_var();
         assert_eq!(table.export(v).to_string(), "_");
+    }
+
+    #[test]
+    fn rigid_variables_unify_only_with_themselves_and_flexible_variables() {
+        let mut table = Table::new();
+        let (a, _) = table.fresh_rigid("a");
+        let (b, _) = table.fresh_rigid("b");
+        assert_eq!(table.unify(a, a), Ok(()));
+        assert_eq!(table.unify(a, b), Err(UnifyError::Mismatch));
+        assert_eq!(table.unify(a, table.int), Err(UnifyError::Mismatch));
+        let v = table.fresh_var();
+        assert_eq!(table.unify(v, a), Ok(()));
+        assert_eq!(table.export(v).to_string(), "a");
+    }
+
+    #[test]
+    fn a_rigid_row_variable_cannot_be_bound() {
+        let mut table = Table::new();
+        let e = table.fresh_rigid_row("e");
+        let rigid = Row {
+            labels: vec![],
+            tail: Some(e),
+        };
+        assert_eq!(
+            table.unify_row(&rigid, &Row::closed(vec![Effect::Io])),
+            Err(UnifyError::Mismatch)
+        );
+        let f = table.function(table.int, rigid.clone(), table.int);
+        assert_eq!(table.export(f).to_string(), "Int -> <e> Int");
+    }
+
+    #[test]
+    fn a_closed_callee_row_is_included_in_a_larger_row() {
+        let mut table = Table::new();
+        let io = Row::closed(vec![Effect::Io]);
+        assert_eq!(table.include_row(&Row::pure(), &io), Ok(()));
+        assert_eq!(table.include_row(&io, &io), Ok(()));
+        assert_eq!(
+            table.include_row(&io, &Row::pure()),
+            Err(UnifyError::MissingEffects(vec![Effect::Io]))
+        );
+    }
+
+    #[test]
+    fn a_rigid_callee_row_needs_the_same_variable_in_the_ambient_row() {
+        let mut table = Table::new();
+        let e = table.fresh_rigid_row("e");
+        let callee = Row {
+            labels: vec![],
+            tail: Some(e),
+        };
+        let wider = Row {
+            labels: vec![Effect::Io],
+            tail: Some(e),
+        };
+        assert_eq!(table.include_row(&callee, &wider), Ok(()));
+        assert_eq!(table.include_row(&callee, &callee.clone()), Ok(()));
+        assert_eq!(
+            table.include_row(&callee, &Row::closed(vec![Effect::Io])),
+            Err(UnifyError::MissingRowVar("e".to_string()))
+        );
+    }
+
+    #[test]
+    fn open_spine_opens_only_the_rows_on_the_return_side() {
+        let mut table = Table::new();
+        let param = table.function(table.int, Row::pure(), table.int);
+        let inner = table.function(table.int, Row::pure(), table.int);
+        let f = table.function(param, Row::pure(), inner);
+        let opened = table.open_spine(f);
+        assert_eq!(
+            table.export(opened).to_string(),
+            "(Int -> Int) -> <_> Int -> <_> Int"
+        );
+    }
+
+    #[test]
+    fn copy_type_replaces_rigid_variables() {
+        let mut table = Table::new();
+        let (a, ra) = table.fresh_rigid("a");
+        let e = table.fresh_rigid_row("e");
+        let f = table.function(
+            a,
+            Row {
+                labels: vec![],
+                tail: Some(e),
+            },
+            a,
+        );
+        let mut subst = Subst::default();
+        subst.tys.insert(ra, table.int);
+        let copied = table.copy_type(f, &subst);
+        assert_eq!(table.export(copied).to_string(), "Int -> <e> Int");
+        let mut subst = Subst::default();
+        subst.rows.insert(e, table.fresh_row_var());
+        let copied = table.copy_type(f, &subst);
+        assert_eq!(table.export(copied).to_string(), "a -> <_> a");
     }
 }
