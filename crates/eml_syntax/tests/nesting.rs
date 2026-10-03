@@ -57,3 +57,31 @@ fn errors_in_the_next_item_are_still_reported() {
     assert!(found[0].starts_with("E0013 1:"), "{found:?}");
     assert_eq!(found[1], "E0011 2:8 expected an expression");
 }
+
+fn nested_let_blocks(levels: usize) -> String {
+    let mut text = String::from("x =\n");
+    for i in 0..levels {
+        text.push_str(&format!("{}let a{i} =\n", " ".repeat(i + 1)));
+    }
+    text.push_str(&format!("{}1", " ".repeat(levels + 1)));
+    text
+}
+
+fn assert_one_nesting_error_anywhere(text: &str) {
+    let found = diagnostics(text);
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert!(
+        found[0].starts_with("E0013 ") && found[0].ends_with(" nesting is too deep"),
+        "{found:?}"
+    );
+}
+
+#[test]
+fn nested_let_blocks_report_one_error() {
+    assert_one_nesting_error_anywhere(&nested_let_blocks(300));
+}
+
+#[test]
+fn very_deep_nested_let_blocks_do_not_overflow_the_stack() {
+    assert_one_nesting_error_anywhere(&nested_let_blocks(20_000));
+}

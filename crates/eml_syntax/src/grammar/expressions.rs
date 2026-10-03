@@ -36,7 +36,12 @@ pub(super) fn body(p: &mut Parser) {
     }
 }
 
+/// `let` のブロックの入れ子は `expr` を通らずに `stmt` へ戻るので、ここでも深さを数える。
 fn stmt(p: &mut Parser) -> bool {
+    nested(p, true, stmt_inner)
+}
+
+fn stmt_inner(p: &mut Parser) -> bool {
     match p.current() {
         LET_KW => {
             let_stmt(p);
