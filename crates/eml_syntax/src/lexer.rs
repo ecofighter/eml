@@ -174,16 +174,29 @@ impl Lexer<'_> {
             Ok(Raw::Lower) if slice == "_" => UNDERSCORE,
             Ok(Raw::Lower) => keyword(slice).unwrap_or(LIDENT),
             Ok(Raw::Upper) => UIDENT,
-            Ok(Raw::Number) => number_kind(slice).unwrap_or_else(|| {
-                self.error(
-                    codes::INVALID_NUMBER,
-                    format!("invalid number literal `{slice}`"),
-                    self.pos,
-                    self.pos + len,
-                    "not a valid number",
-                );
-                INT
-            }),
+            Ok(Raw::Number) => match number_kind(slice) {
+                Some(INT) if int_value(slice).is_none() => {
+                    self.error(
+                        codes::INVALID_NUMBER,
+                        format!("integer literal `{slice}` is too large"),
+                        self.pos,
+                        self.pos + len,
+                        "the largest `Int` is 9223372036854775807",
+                    );
+                    INT
+                }
+                Some(kind) => kind,
+                None => {
+                    self.error(
+                        codes::INVALID_NUMBER,
+                        format!("invalid number literal `{slice}`"),
+                        self.pos,
+                        self.pos + len,
+                        "not a valid number",
+                    );
+                    INT
+                }
+            },
             Ok(Raw::Float) => {
                 if self.split_field_index(len) {
                     return;
@@ -495,6 +508,53 @@ fn raw_string_hashes(rest: &str) -> Option<usize> {
     let after_r = rest.strip_prefix('r')?;
     let hashes = after_r.bytes().take_while(|&b| b == b'#').count();
     after_r[hashes..].starts_with('"').then_some(hashes)
+}
+
+/// `INT` トークンの値。`Int` の範囲を超えるものは `None` で、字句解析が E0007 を報告している
+/// (docs/spec/lexical.md)。HIR も同じ関数で値を読む。
+pub fn int_value(text: &str) -> Option<i64> {
+    let digits = text.replace('_', "");
+    let (body, radix) = match digits.get(..2) {
+        Some("0x") => (&digits[2..], 16),
+        Some("0o") => (&digits[2..], 8),
+        Some("0b") => (&digits[2..], 2),
+        _ => (&digits[..], 10),
+    };
+    i64::from_str_radix(body, radix).ok()
+}
+
+/// 通常の文字列リテラル `"..."` の値。補間を含むもの (S2)、不正なエスケープを含むもの、閉じていないものは `None`
+/// で、どれも字句解析が報告している。
+pub fn decode_string(text: &str) -> Option<String> {
+    if text.len() < 2 {
+        return None;
+    }
+    let inner = text.strip_prefix('"')?.strip_suffix('"')?;
+    let mut out = String::new();
+    let mut chars = inner.chars();
+    while let Some(c) = chars.next() {
+        if c != '\\' {
+            out.push(c);
+            continue;
+        }
+        match chars.next()? {
+            'n' => out.push('\n'),
+            't' => out.push('\t'),
+            'r' => out.push('\r'),
+            '\\' => out.push('\\'),
+            '"' => out.push('"'),
+            '0' => out.push('\0'),
+            'u' => {
+                let rest = chars.as_str();
+                let close = rest.strip_prefix('{')?.find('}')?;
+                let code = u32::from_str_radix(&rest[1..close + 1], 16).ok()?;
+                out.push(char::from_u32(code)?);
+                chars = rest[close + 2..].chars();
+            }
+            _ => return None,
+        }
+    }
+    Some(out)
 }
 
 fn number_kind(number: &str) -> Option<SyntaxKind> {

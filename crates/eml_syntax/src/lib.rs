@@ -13,7 +13,7 @@ use rowan::GreenNode;
 use rowan::ast::AstNode;
 
 pub use debug_dump::debug_tree;
-pub use lexer::{Token, lex};
+pub use lexer::{Token, decode_string, int_value, lex};
 pub use syntax_kind::{
     EmlLanguage, SyntaxElement, SyntaxKind, SyntaxNode, SyntaxNodePtr, SyntaxToken,
 };
