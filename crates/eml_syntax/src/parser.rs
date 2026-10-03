@@ -160,14 +160,20 @@ impl<'t> Parser<'t> {
 
     /// 型の中で `<>` や `>->` を分けて読むのに使う (docs/spec/grammar.md の「文法上の補足」)。
     pub(crate) fn split_first_char(&mut self, kind: SyntaxKind) {
+        self.split_prefix(kind, 1);
+    }
+
+    /// トークンの先頭の `len` バイトを `kind` として木に入れ、残りを今のトークンにする。型の中の `-><` を
+    /// `->` と `<` に分けるのにも使う (docs/spec/grammar.md の「文法上の補足」)。
+    pub(crate) fn split_prefix(&mut self, kind: SyntaxKind, len: u32) {
         let token = self.tokens[self.pos];
-        let one = TextSize::new(1);
+        let len = TextSize::new(len);
         assert!(
-            token.range.len() > one,
-            "cannot split a one-character token"
+            token.range.len() > len,
+            "the prefix must be shorter than the token"
         );
-        self.events.push(Event::TokenPrefix { kind, len: one });
-        let rest = TextRange::new(token.range.start() + one, token.range.end());
+        self.events.push(Event::TokenPrefix { kind, len });
+        let rest = TextRange::new(token.range.start() + len, token.range.end());
         self.tokens[self.pos] = Token {
             kind: operator_kind(&self.text[rest]),
             range: rest,
@@ -486,6 +492,23 @@ mod tests {
           L_ANGLE@0..1 "<"
           R_ANGLE@1..2 ">"
           THIN_ARROW@2..4 "->"
+        "#);
+    }
+
+    #[test]
+    fn split_prefix_divides_an_arrow_and_a_row() {
+        let (tree, _) = run("-><", |p| {
+            let root = p.start();
+            p.split_prefix(THIN_ARROW, 2);
+            assert_eq!(p.current(), OP);
+            assert_eq!(p.current_text(), "<");
+            p.bump_remap(L_ANGLE);
+            root.complete(p, SOURCE_FILE);
+        });
+        insta::assert_snapshot!(tree, @r#"
+        SOURCE_FILE@0..3
+          THIN_ARROW@0..2 "->"
+          L_ANGLE@2..3 "<"
         "#);
     }
 

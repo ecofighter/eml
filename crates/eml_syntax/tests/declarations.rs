@@ -554,3 +554,25 @@ fn arrow_at_the_end_of_a_line_suggests_a_leading_arrow() {
         ["in a type that spans lines, put `->` at the start of the next line"]
     );
 }
+
+#[test]
+fn row_written_right_after_the_arrow() {
+    insta::assert_snapshot!(shape("f : Int -><IO> Int"), @r#"
+    SOURCE_FILE
+      SIGNATURE
+        LIDENT "f"
+        COLON ":"
+        FN_TYPE
+          PATH_TYPE
+            UIDENT "Int"
+          THIN_ARROW "->"
+          EFFECT_ROW
+            L_ANGLE "<"
+            EFFECT
+              UIDENT "IO"
+            R_ANGLE ">"
+          PATH_TYPE
+            UIDENT "Int"
+    "#);
+    assert!(diagnostics("f : Int -><> Int").is_empty());
+}

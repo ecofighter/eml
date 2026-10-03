@@ -22,8 +22,7 @@ fn type_in(p: &mut Parser, in_type_block: bool) -> bool {
         expected(p, "a type");
         return false;
     }
-    if p.at(THIN_ARROW) {
-        p.bump(THIN_ARROW);
+    if eat_arrow(p) {
         arrow_result(p, in_type_block);
         m.complete(p, FN_TYPE);
     } else {
@@ -170,4 +169,17 @@ fn eat_angle(p: &mut Parser, c: char, kind: SyntaxKind) -> bool {
         p.split_first_char(kind);
     }
     true
+}
+
+/// `-><IO>` のように `->` の直後に空白なしで row を書くと、lexer は `-><` を1つの演算子にするので、
+/// `->` と残りに分けて読む (docs/spec/grammar.md の「文法上の補足」)。
+fn eat_arrow(p: &mut Parser) -> bool {
+    if p.eat(THIN_ARROW) {
+        return true;
+    }
+    if p.at(OP) && p.current_text().starts_with("-><") {
+        p.split_prefix(THIN_ARROW, 2);
+        return true;
+    }
+    false
 }
