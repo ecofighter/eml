@@ -226,6 +226,9 @@ version = "0.1.0"
 dependencies = [
  "eml_diagnostics",
  "eml_hir",
+ "eml_syntax",
+ "insta",
+ "la-arena",
 ]
 
 [[package]]

@@ -6,3 +6,8 @@ edition.workspace = true
 [dependencies]
 eml_diagnostics.workspace = true
 eml_hir.workspace = true
+la-arena.workspace = true
+
+[dev-dependencies]
+eml_syntax.workspace = true
+insta.workspace = true
