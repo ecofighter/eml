@@ -29,14 +29,17 @@ fn run() {
         let (files, id) = load(path);
         let mut config = RunConfig::default();
         config.debug_heap = true;
+        let compiled = eml_cli::compile(&files, id);
+        let stderr = render(&compiled.diagnostics, &files);
+        let program = compiled
+            .program
+            .unwrap_or_else(|| panic!("unexpected errors:\n{stderr}"));
         let (sink, buffer) = OutputSink::capture();
-        let outcome = eml_cli::run(&files, id, &config, sink);
-        let stderr = render(&outcome.diagnostics, &files);
-        assert!(
-            !has_errors(&outcome.diagnostics),
-            "unexpected errors:\n{stderr}"
+        assert_eq!(
+            eml_cli::execute(program, &config, sink),
+            RunResult::Completed,
+            "{stderr}"
         );
-        assert_eq!(outcome.result, RunResult::Completed, "{stderr}");
         let stdout = String::from_utf8(buffer.lock().unwrap().clone()).unwrap();
         insta::assert_snapshot!(format!("--- stdout ---\n{stdout}--- stderr ---\n{stderr}"));
     });

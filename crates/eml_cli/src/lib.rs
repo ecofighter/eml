@@ -12,40 +12,34 @@ pub fn check(files: &SourceFiles, file: FileId) -> Vec<Diagnostic> {
     analyze(files, file).1
 }
 
+/// 呼び出し側が実行の前に診断を表示できるように、検査と実行を別の関数にする (docs/implementation/architecture.md)。
+#[derive(Debug)]
+pub struct Compiled {
+    /// 警告を含む。
+    pub diagnostics: Vec<Diagnostic>,
+    /// エラーがあれば `None`。
+    pub program: Option<Arc<Program>>,
+}
+
+pub fn compile(files: &SourceFiles, file: FileId) -> Compiled {
+    let (program, diagnostics) = analyze(files, file);
+    let program = (!has_errors(&diagnostics)).then(|| Arc::new(program));
+    Compiled {
+        diagnostics,
+        program,
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RunResult {
-    NotRun,
     Completed,
     RuntimeError(String),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RunOutcome {
-    /// 実行した場合も、警告を表示できるように検査の診断を返す。
-    pub diagnostics: Vec<Diagnostic>,
-    pub result: RunResult,
-}
-
-pub fn run(
-    files: &SourceFiles,
-    file: FileId,
-    config: &RunConfig,
-    stdout: OutputSink,
-) -> RunOutcome {
-    let (program, diagnostics) = analyze(files, file);
-    if has_errors(&diagnostics) {
-        return RunOutcome {
-            diagnostics,
-            result: RunResult::NotRun,
-        };
-    }
-    let result = match eml_interp::run(Arc::new(program), config, &stdout) {
+pub fn execute(program: Arc<Program>, config: &RunConfig, stdout: OutputSink) -> RunResult {
+    match eml_interp::run(program, config, &stdout) {
         Ok(()) => RunResult::Completed,
         Err(error) => RunResult::RuntimeError(error.to_string()),
-    };
-    RunOutcome {
-        diagnostics,
-        result,
     }
 }
 

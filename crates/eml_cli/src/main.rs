@@ -48,11 +48,14 @@ fn main() -> ExitCode {
             };
             let mut config = RunConfig::default();
             config.debug_heap = debug_heap;
-            let outcome = eml_cli::run(&files, id, &config, OutputSink::stdout());
-            eprint!("{}", render(&outcome.diagnostics, &files));
-            match outcome.result {
+            // 警告がプログラムの出力の後に出ないように、実行の前に表示する。
+            let compiled = eml_cli::compile(&files, id);
+            eprint!("{}", render(&compiled.diagnostics, &files));
+            let Some(program) = compiled.program else {
+                return ExitCode::from(1);
+            };
+            match eml_cli::execute(program, &config, OutputSink::stdout()) {
                 RunResult::Completed => ExitCode::SUCCESS,
-                RunResult::NotRun => ExitCode::from(1),
                 RunResult::RuntimeError(message) => {
                     eprintln!("runtime error: {message}");
                     ExitCode::from(1)
