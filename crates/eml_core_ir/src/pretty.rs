@@ -28,41 +28,49 @@ fn atom(function: &CoreFn, atom: &Atom) -> String {
     }
 }
 
+/// `Let` / `Dup` / `Decref` の連鎖は長くなりうるので、本体へ進む向きはループで辿る。
 fn expr(program: &Program, function: &CoreFn, id: CExprId, indent: usize, out: &mut String) {
     let pad = "  ".repeat(indent);
-    match function.expr(id) {
-        CExpr::Let { var: v, rhs, body } => {
-            if let Rhs::Nested(inner) = rhs {
-                writeln!(out, "{pad}let {} = {{", var(function, *v)).unwrap();
-                expr(program, function, *inner, indent + 1, out);
+    let mut id = id;
+    loop {
+        match function.expr(id) {
+            CExpr::Let { var: v, rhs, body } => {
+                if let Rhs::Nested(inner) = rhs {
+                    writeln!(out, "{pad}let {} = {{", var(function, *v)).unwrap();
+                    expr(program, function, *inner, indent + 1, out);
+                    writeln!(out, "{pad}}}").unwrap();
+                } else {
+                    writeln!(
+                        out,
+                        "{pad}let {} = {}",
+                        var(function, *v),
+                        rhs_text(program, function, rhs)
+                    )
+                    .unwrap();
+                }
+                id = *body;
+            }
+            CExpr::Switch { scrutinee, arms } => {
+                writeln!(out, "{pad}switch {} {{", atom(function, scrutinee)).unwrap();
+                for (tag, arm) in arms {
+                    writeln!(out, "{pad}  #{tag} ->").unwrap();
+                    expr(program, function, *arm, indent + 2, out);
+                }
                 writeln!(out, "{pad}}}").unwrap();
-            } else {
-                writeln!(
-                    out,
-                    "{pad}let {} = {}",
-                    var(function, *v),
-                    rhs_text(program, function, rhs)
-                )
-                .unwrap();
+                return;
             }
-            expr(program, function, *body, indent, out);
-        }
-        CExpr::Switch { scrutinee, arms } => {
-            writeln!(out, "{pad}switch {} {{", atom(function, scrutinee)).unwrap();
-            for (tag, arm) in arms {
-                writeln!(out, "{pad}  #{tag} ->").unwrap();
-                expr(program, function, *arm, indent + 2, out);
+            CExpr::Return(a) => {
+                writeln!(out, "{pad}return {}", atom(function, a)).unwrap();
+                return;
             }
-            writeln!(out, "{pad}}}").unwrap();
-        }
-        CExpr::Return(a) => writeln!(out, "{pad}return {}", atom(function, a)).unwrap(),
-        CExpr::Dup { var: v, body } => {
-            writeln!(out, "{pad}dup {}", var(function, *v)).unwrap();
-            expr(program, function, *body, indent, out);
-        }
-        CExpr::Decref { var: v, body } => {
-            writeln!(out, "{pad}decref {}", var(function, *v)).unwrap();
-            expr(program, function, *body, indent, out);
+            CExpr::Dup { var: v, body } => {
+                writeln!(out, "{pad}dup {}", var(function, *v)).unwrap();
+                id = *body;
+            }
+            CExpr::Decref { var: v, body } => {
+                writeln!(out, "{pad}decref {}", var(function, *v)).unwrap();
+                id = *body;
+            }
         }
     }
 }

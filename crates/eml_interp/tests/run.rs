@@ -141,3 +141,11 @@ fn debug_heap_reports_leaks() {
     );
     assert_eq!(execute(leaking_program(), false).1, Ok(()));
 }
+
+#[test]
+fn long_statement_sequence_does_not_overflow_the_stack() {
+    // 逐次の文は入れ子ではないので、後段は長い `Let` の連鎖を再帰せずに処理しなければならない
+    let mut body = "  let s = \"x\"\n".repeat(5000);
+    body.push_str("  println s");
+    assert_eq!(run(&main_with(&body)), ("x\n".to_string(), Ok(())));
+}
