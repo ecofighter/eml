@@ -7,6 +7,11 @@ use crate::{Diagnostic, Label, Severity, SourceFiles};
 /// 診断を色なしのテキストに整形する。CLI は stderr に、UI テストはスナップショットに使う。
 pub fn render(diagnostics: &[Diagnostic], files: &SourceFiles) -> String {
     let mut out = Vec::new();
+    let mut sources = ariadne::sources(
+        files
+            .iter()
+            .map(|(path, text)| (path.to_string(), text.to_string())),
+    );
     for diagnostic in diagnostics {
         let kind = match diagnostic.severity {
             Severity::Error => ReportKind::Error,
@@ -31,14 +36,9 @@ pub fn render(diagnostics: &[Diagnostic], files: &SourceFiles) -> String {
         for help in &diagnostic.help {
             report = report.with_help(help);
         }
-        let sources = ariadne::sources(
-            files
-                .iter()
-                .map(|(path, text)| (path.to_string(), text.to_string())),
-        );
         report
             .finish()
-            .write(sources, &mut out)
+            .write(&mut sources, &mut out)
             .expect("writing to a Vec cannot fail");
     }
     String::from_utf8(out).expect("ariadne writes UTF-8")
