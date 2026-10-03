@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 use eml_hir::builtin::Builtin;
 use eml_hir::{
@@ -133,7 +133,7 @@ impl ProgramBuilder {
         let steps: Vec<(VarId, Rhs)> = match builtin {
             Builtin::Println => vec![(fresh(false), Rhs::Perform(IoOp::Println, atoms))],
             Builtin::ComposeFwd | Builtin::ComposeBwd => {
-                // `>>` は `g (f x)`、`<<` は `f (g x)` である (Task 6)
+                // `>>` は `g (f x)`、`<<` は `f (g x)` である (docs/spec/declarations.md の演算子の表が `>>` / `<<` を関数合成としている)
                 let (inner, outer) = if builtin == Builtin::ComposeFwd {
                     (atoms[0], atoms[1])
                 } else {
@@ -228,10 +228,8 @@ struct FnLowering<'a> {
     types: &'a BodyTypes,
     indices: &'a ArenaMap<FunctionId, FnIdx>,
     program: &'a mut ProgramBuilder,
-    /// ラムダの関数の名前に使う、トップレベルの関数の名前と、その中のラムダの数 (Task 13)。
-    #[allow(dead_code)]
+    /// ラムダの関数の名前に使う、トップレベルの関数の名前と、その中のラムダの数。
     root_name: &'a str,
-    #[allow(dead_code)]
     lambdas: &'a mut u32,
     exprs: Vec<CExpr>,
     vars: Vec<VarInfo>,
@@ -417,7 +415,10 @@ impl FnLowering<'_> {
             ExprKind::Call { callee, args } => {
                 let ty = self.ty(id);
                 match &body.exprs[*callee].kind {
-                    ExprKind::Path(Res::Function(function)) => {
+                    // 引数のない値の参照は呼び出しなので、呼ばれる式として先に評価する必要がある。一般の経路に回す
+                    ExprKind::Path(Res::Function(function))
+                        if self.program.arity(self.indices[*function]) > 0 =>
+                    {
                         let args = self.atoms(args, out);
                         let target = self.indices[*function];
                         self.call_known(target, args, &ty, out)
@@ -471,8 +472,46 @@ impl FnLowering<'_> {
                 }
             }
             ExprKind::Annot { expr, .. } => self.atom(*expr, out),
-            ExprKind::Lambda { .. } => {
-                unreachable!("the type checker rejects lambdas until they are lowered")
+            ExprKind::Lambda {
+                params,
+                body: lambda_body,
+            } => {
+                let captured: Vec<(LocalId, Type)> = captures(body, id)
+                    .into_iter()
+                    .map(|local| {
+                        let ty = self
+                            .types
+                            .locals
+                            .get(local)
+                            .cloned()
+                            .expect("every local is typed");
+                        (local, ty)
+                    })
+                    .collect();
+                let lambda_ty = self.ty(id);
+                let param_types = param_types(&lambda_ty, params.len());
+                let function = self.program.reserve(captured.len() + params.len());
+                let name = format!("{}$lambda{}", self.root_name, *self.lambdas);
+                *self.lambdas += 1;
+                let core = FnLowering {
+                    module: self.module,
+                    body,
+                    types: self.types,
+                    indices: self.indices,
+                    program: &mut *self.program,
+                    root_name: self.root_name,
+                    lambdas: &mut *self.lambdas,
+                    exprs: Vec::new(),
+                    vars: Vec::new(),
+                    locals: ArenaMap::default(),
+                }
+                .lower(&name, &captured, params, &param_types, *lambda_body);
+                self.program.finish(function, core);
+                let atoms = captured
+                    .iter()
+                    .map(|(local, _)| self.locals[*local])
+                    .collect();
+                self.bind_boxed(out, "c", Rhs::MakeClosure(function, atoms))
             }
         }
     }
@@ -512,5 +551,69 @@ fn prim(builtin: Builtin) -> PrimOp {
         Builtin::ComposeFwd | Builtin::ComposeBwd => {
             unreachable!("composition is lowered to a closure, not to a primitive")
         }
+    }
+}
+
+/// ラムダの本体が参照する、ラムダの外で束縛した局所変数。`LocalId` の順に並べる。入れ子のラムダが捕まえる変数も、
+/// 外側のラムダが捕まえる (docs/spec/core-ir.md)。式の木は作業リストでたどる。
+fn captures(body: &Body, lambda: ExprId) -> Vec<LocalId> {
+    let mut used = BTreeSet::new();
+    let mut bound = HashSet::new();
+    let mut work = vec![lambda];
+    while let Some(id) = work.pop() {
+        match &body.exprs[id].kind {
+            ExprKind::Path(Res::Local(local)) => {
+                used.insert(*local);
+            }
+            ExprKind::Lambda {
+                params,
+                body: inner,
+            } => {
+                for &param in params {
+                    bind_locals(body, param, &mut bound);
+                }
+                work.push(*inner);
+            }
+            ExprKind::Call { callee, args } => {
+                work.push(*callee);
+                work.extend(args.iter().copied());
+            }
+            ExprKind::If {
+                condition,
+                then_branch,
+                else_branch,
+            } => {
+                work.push(*condition);
+                work.push(*then_branch);
+                work.extend(*else_branch);
+            }
+            ExprKind::Block { stmts, tail } => {
+                for stmt in stmts {
+                    match stmt {
+                        Stmt::Let { pat, init, .. } => {
+                            bind_locals(body, *pat, &mut bound);
+                            work.push(*init);
+                        }
+                        Stmt::Expr(expr) => work.push(*expr),
+                    }
+                }
+                work.extend(*tail);
+            }
+            ExprKind::Annot { expr, .. } => work.push(*expr),
+            ExprKind::Missing | ExprKind::Literal(_) | ExprKind::Path(_) => {}
+        }
+    }
+    used.into_iter()
+        .filter(|local| !bound.contains(local))
+        .collect()
+}
+
+fn bind_locals(body: &Body, pat: PatId, bound: &mut HashSet<LocalId>) {
+    match &body.pats[pat].kind {
+        PatKind::Bind(local) => {
+            bound.insert(*local);
+        }
+        PatKind::Annot { pat, .. } => bind_locals(body, *pat, bound),
+        PatKind::Wildcard | PatKind::Unit | PatKind::Missing => {}
     }
 }

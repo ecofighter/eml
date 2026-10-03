@@ -9,9 +9,14 @@ twice f x = f (f x)
 inc : Int -> Int
 inc n = n + 1
 
+double : Int -> Int
+double n = n * 2
+
 main : Unit -> <IO> Unit
 main () =
   println (show_int (apply inc 1))
   println (show_int (twice inc 5))
   apply println "through a row variable"
   println (show_int ((inc >> inc << inc) 0))
+  println (show_int ((inc >> double) 1))
+  println (show_int ((inc << double) 1))

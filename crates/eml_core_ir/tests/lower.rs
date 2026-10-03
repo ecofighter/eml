@@ -164,3 +164,50 @@ fn builtins_used_as_values_are_wrapped() {
     }
     ");
 }
+
+#[test]
+fn lambdas_are_lifted_with_their_captures_first() {
+    let text = "apply : (a -> <e> b) -> a -> <e> b\napply f x = f x\n\nmain : Unit -> <IO> Unit\nmain () =\n  let s = \"!\"\n  let shout = fn t -> t ++ s\n  println (apply shout \"hi\")\n  println s";
+    insta::assert_snapshot!(core_text(text), @r#"
+    fn apply(f0, x1) {
+      let t2 = apply f0(x1)
+      return t2
+    }
+    fn main(p0) {
+      let s1 = const "!"
+      dup s1
+      let c2 = closure main$lambda0(s1)
+      let s3 = const "hi"
+      let t4 = call apply(c2, s3)
+      let t5 = perform println(t4)
+      let t6 = perform println(s1)
+      return t6
+    }
+    fn main$lambda0(s0, t1) {
+      let t2 = prim ++(t1, s0)
+      return t2
+    }
+    "#);
+}
+
+#[test]
+fn a_zero_arity_callee_is_evaluated_before_its_arguments() {
+    let text = "k : Int -> Int -> Int\nk a b = a\n\nfive : Int -> Int\nfive = k 5\n\nmain : Unit -> <IO> Unit\nmain () = println (show_int (five (1 + 2)))";
+    insta::assert_snapshot!(core_text(text), @r#"
+    fn k(a0, b1) {
+      return a0
+    }
+    fn five() {
+      let c0 = closure k(5)
+      return c0
+    }
+    fn main(p0) {
+      let five1 = call five()
+      let t2 = prim +(1, 2)
+      let t3 = apply five1(t2)
+      let t4 = prim show_int(t3)
+      let t5 = perform println(t4)
+      return t5
+    }
+    "#);
+}
