@@ -110,14 +110,6 @@ impl<'t> Parser<'t> {
             .map_or("", |token| &text[token.range])
     }
 
-    pub(crate) fn current_range(&self) -> TextRange {
-        self.tokens
-            .get(self.pos)
-            .map_or(TextRange::empty(TextSize::of(self.text)), |token| {
-                token.range
-            })
-    }
-
     pub(crate) fn touches_prev(&self) -> bool {
         match (self.pos.checked_sub(1), self.tokens.get(self.pos)) {
             (Some(prev), Some(current)) => self.tokens[prev].range.end() == current.range.start(),
@@ -205,7 +197,7 @@ impl<'t> Parser<'t> {
         if self.at(SyntaxKind::ERROR_TOKEN) {
             return;
         }
-        let range = self.current_range();
+        let range = self.error_range();
         if self
             .diagnostics
             .last()
@@ -218,6 +210,22 @@ impl<'t> Parser<'t> {
             message,
             Label::new(self.file, range, label),
         ));
+    }
+
+    /// 仮想トークンと EOF は次の行の先頭やテキストの終わりにあり、そこを指すと誤りのない行を指してしまう。
+    /// そのため、直前の実トークンの直後の空の範囲を指す (docs/spec/layout.md の「エラー回復」)。
+    fn error_range(&self) -> TextRange {
+        match self.tokens.get(self.pos) {
+            Some(token) if !token.kind.is_virtual() => token.range,
+            _ => {
+                let end = self.tokens[..self.pos.min(self.tokens.len())]
+                    .iter()
+                    .rev()
+                    .find(|token| !token.kind.is_virtual())
+                    .map_or(TextSize::new(0), |token| token.range.end());
+                TextRange::empty(end)
+            }
+        }
     }
 }
 
@@ -379,7 +387,7 @@ mod tests {
     }
 
     #[test]
-    fn error_at_eof_points_at_end_of_text() {
+    fn error_at_eof_points_after_the_last_token() {
         let (_, diagnostics) = run("a ", |p| {
             let root = p.start();
             p.bump_any();
@@ -389,7 +397,39 @@ mod tests {
         assert_eq!(diagnostics.len(), 1);
         assert_eq!(
             diagnostics[0].primary.range,
-            TextRange::empty(TextSize::new(2))
+            TextRange::empty(TextSize::new(1))
+        );
+    }
+
+    #[test]
+    fn error_at_a_virtual_token_points_after_the_last_token() {
+        let (_, diagnostics) = run("a =\n  b", |p| {
+            let root = p.start();
+            p.bump(LIDENT);
+            p.bump(EQ);
+            assert_eq!(p.current(), LAYOUT_OPEN);
+            p.error(ErrorCode(9999), "expected more", "here");
+            while !p.at_eof() {
+                p.bump_any();
+            }
+            root.complete(p, SOURCE_FILE);
+        });
+        assert_eq!(
+            diagnostics[0].primary.range,
+            TextRange::empty(TextSize::new(3))
+        );
+    }
+
+    #[test]
+    fn error_in_an_empty_file_points_at_the_start() {
+        let (_, diagnostics) = run("", |p| {
+            let root = p.start();
+            p.error(ErrorCode(9999), "expected more", "here");
+            root.complete(p, SOURCE_FILE);
+        });
+        assert_eq!(
+            diagnostics[0].primary.range,
+            TextRange::empty(TextSize::new(0))
         );
     }
 

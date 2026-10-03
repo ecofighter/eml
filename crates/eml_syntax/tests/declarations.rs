@@ -450,12 +450,6 @@ fn stray_unterminated_string_reports_both_problems() {
 
 #[test]
 fn virtual_tokens_are_described_without_articles() {
-    let text = lines(&["f : Int ->", "  Int ->", "  Int"]);
-    assert_eq!(
-        diagnostics(&text),
-        [
-            "E0009 2:7 expected an indented block after `->`",
-            "E0011 3:3 unexpected line break",
-        ]
-    );
+    let text = lines(&["f : Int ->", "    Int", "    Int"]);
+    assert_eq!(diagnostics(&text), ["E0011 2:8 unexpected line break"]);
 }

@@ -369,7 +369,7 @@ fn missing_operand_does_not_affect_the_next_item() {
         LITERAL
           INT "2"
     ---
-    E0011 2:1 expected an expression
+    E0011 1:8 expected an expression
     "#);
 }
 
@@ -436,5 +436,22 @@ fn error_token_in_an_expression_is_reported_once() {
     assert_eq!(
         diagnostics("z = f € x"),
         ["E0001 1:7 unexpected character `€`"]
+    );
+}
+
+#[test]
+fn missing_operand_at_the_end_of_the_file_points_after_the_operator() {
+    assert_eq!(diagnostics("a = 1 +"), ["E0011 1:8 expected an expression"]);
+    assert_eq!(
+        diagnostics("a = 1 +\n"),
+        ["E0011 1:8 expected an expression"]
+    );
+}
+
+#[test]
+fn missing_operand_before_a_comment_points_after_the_operator() {
+    assert_eq!(
+        diagnostics("a = 1 + -- c\nb = 2"),
+        ["E0011 1:8 expected an expression"]
     );
 }

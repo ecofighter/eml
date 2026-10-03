@@ -103,3 +103,14 @@ fn long_use_lookahead_does_not_hit_the_step_limit() {
     // 先読み走査 (`has_left_arrow`) は、`<-` を探して EOF まで読む。
     assert_parses_losslessly(&("f =\n  use g (".to_string() + &"a ".repeat(600_000)));
 }
+
+#[test]
+fn recovered_empty_block_stays_on_its_line() {
+    let text = "f =\ng = 1";
+    let mut files = SourceFiles::new();
+    let file = files.add("test.em", text);
+    let (parse, _) = parse(file, text);
+    let tree = debug_tree(&parse.syntax());
+    assert!(tree.contains("\n  EQUATION@0..3\n"), "{tree}");
+    assert!(tree.contains("\n    BLOCK@3..3\n"), "{tree}");
+}

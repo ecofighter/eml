@@ -46,8 +46,17 @@ pub(crate) fn build_tree(text: &str, tokens: &[Token], mut events: Vec<Event>) -
                         }
                     };
                 }
+                // 中身のないノード (E0009 の回復で作る空のブロックなど) は、直前の trivia を取り込まない。
+                // 取り込むと、ノードが次の行の先頭に置かれるため (docs/spec/layout.md の「エラー回復」)。
+                let empty = kinds.len() == 1
+                    && matches!(
+                        events[i + 1..]
+                            .iter()
+                            .find(|event| !matches!(event, Event::Tombstone)),
+                        Some(Event::Finish)
+                    );
                 for kind in kinds.drain(..).rev() {
-                    if depth > 0 {
+                    if depth > 0 && !empty {
                         builder.eat_trivia();
                     }
                     builder.inner.start_node(EmlLanguage::kind_to_raw(kind));
