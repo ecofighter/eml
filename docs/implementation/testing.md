@@ -50,7 +50,7 @@
 ## テストの変更に関する合意済みの例外
 
 - 暫定構文で書いたテストのソースは、本番の構文に差し替えるときに書き直す。これは構文の差し替えに伴う機械的な書き換えとして、事前に合意した例外とする。テストの期待値 (意味) は変えない
-- `tests/ui/run/empty.em` と `comments_only.em` は、`main` を持たない「空のプログラムが実行できる」ことを確かめていた。`main` を入口とする spec と合わないので、名前解決以降を実装する段階で `main : Unit -> <IO> Unit` と `main () = ()` を足す。コメントを読み飛ばすことを確かめる目的は変わらない
+- `tests/ui/run/empty.em`、`comments_only.em` と、`crates/eml_cli/tests/api.rs` の `compile_returns_a_program_without_errors`、`execute_runs_a_compiled_program` は、`main` を持たない「空のプログラムが実行できる」ことを前提にしていた。`main` を入口とする spec と合わないので、縦の貫通の段階1で `main : Unit -> <IO> Unit` と `main () = ()` を足した。コメントを読み飛ばすことと lib API の流れを確かめる目的は変わらない
 - 本番の構文では `$` と `@` が演算子の文字になる。そのため、「認識できない文字」のテスト (`unexpected_character.em`、`multiple_errors.em`) は、本番の構文でも認識できない文字 `€` に置き換えた
 
 ## よく使うコマンド
