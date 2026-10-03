@@ -208,22 +208,71 @@ fn not_yet_supported(p: &mut Parser, message: &str) {
 }
 
 /// 中身ごと読み飛ばすのは、S2 の構文の中で診断を連鎖させないため。ノードは作らないので、呼び出し側が `ERROR` で包む。
+/// 閉じ括弧の種類を見ないのは、レイアウト段と同じ解釈にするため (docs/spec/layout.md の規則 4)。
 fn unsupported_group(p: &mut Parser, message: &str) {
     not_yet_supported(p, message);
-    let open = p.current();
-    let close = if open == L_BRACK { R_BRACK } else { R_BRACE };
+    p.bump_any();
     let mut depth = 0u32;
     while !p.at_eof() {
-        let kind = p.current();
-        p.bump_any();
-        if kind == open {
-            depth += 1;
-        } else if kind == close {
-            depth -= 1;
-            if depth == 0 {
+        match p.current() {
+            L_PAREN | L_BRACK | L_BRACE | LAYOUT_OPEN => depth += 1,
+            R_PAREN | R_BRACK | R_BRACE if depth == 0 => {
+                p.bump_any();
                 break;
             }
+            R_PAREN | R_BRACK | R_BRACE => depth -= 1,
+            LAYOUT_CLOSE if depth == 0 => break,
+            LAYOUT_CLOSE => depth -= 1,
+            LAYOUT_SEP if depth == 0 => break,
+            _ => {}
         }
+        p.bump_any();
+    }
+}
+
+const CLOSING_BRACKETS: TokenSet = TokenSet::new(&[R_PAREN, R_BRACK, R_BRACE]);
+
+/// レイアウト段は閉じ括弧の種類を見ずに一番内側の括弧を閉じるので (docs/spec/layout.md の規則 4)、parser も
+/// 種類の違う閉じ括弧をこの括弧の終わりとして読み、解釈を揃える。
+fn close_bracket(p: &mut Parser, kind: SyntaxKind) {
+    if p.eat(kind) {
+        return;
+    }
+    if p.at(SEMICOLON) {
+        p.error(
+            codes::SYNTAX_ERROR,
+            "unexpected `;` inside brackets",
+            "`;` separates statements only in a block",
+        );
+    } else {
+        expected(p, token_name(kind));
+    }
+    if p.current().is_virtual() || p.at_eof() {
+        // 規則 2 でレイアウト段が括弧を閉じたので、閉じ括弧はない。
+        return;
+    }
+    if !p.at_ts(CLOSING_BRACKETS) {
+        // `;` や余計なトークンは、対応する閉じ括弧まで読み飛ばす。診断は上の1件だけにする。
+        let m = p.start();
+        let mut depth = 0u32;
+        while !p.at_eof() {
+            match p.current() {
+                L_PAREN | L_BRACK | L_BRACE | LAYOUT_OPEN => depth += 1,
+                R_PAREN | R_BRACK | R_BRACE | LAYOUT_CLOSE => {
+                    if depth == 0 {
+                        break;
+                    }
+                    depth -= 1;
+                }
+                LAYOUT_SEP if depth == 0 => break,
+                _ => {}
+            }
+            p.bump_any();
+        }
+        m.complete(p, ERROR);
+    }
+    if p.at_ts(CLOSING_BRACKETS) {
+        p.bump_any();
     }
 }
 

@@ -294,7 +294,7 @@ fn paren_expr(p: &mut Parser) -> SyntaxKind {
         if !operand(p) {
             expected(p, "an expression");
         }
-        expect(p, R_PAREN);
+        close_bracket(p, R_PAREN);
         return RIGHT_SECTION;
     }
     if p.at(DOT) && p.nth(1) == LIDENT {
@@ -308,7 +308,7 @@ fn paren_expr(p: &mut Parser) -> SyntaxKind {
         }
         p.bump(DOT);
         p.bump(LIDENT);
-        expect(p, R_PAREN);
+        close_bracket(p, R_PAREN);
         return FIELD_SECTION;
     }
     let inner = if p.at_ts(NEEDS_PARENS) {
@@ -319,7 +319,7 @@ fn paren_expr(p: &mut Parser) -> SyntaxKind {
     };
     match inner {
         OpExpr::LeftSection => {
-            expect(p, R_PAREN);
+            close_bracket(p, R_PAREN);
             return LEFT_SECTION;
         }
         OpExpr::Nothing => expected(p, "an expression"),
@@ -327,7 +327,7 @@ fn paren_expr(p: &mut Parser) -> SyntaxKind {
     }
     if p.eat(COLON) {
         types::type_(p);
-        expect(p, R_PAREN);
+        close_bracket(p, R_PAREN);
         return ANNOT_EXPR;
     }
     if p.at(COMMA) {
@@ -342,10 +342,10 @@ fn paren_expr(p: &mut Parser) -> SyntaxKind {
             }
             count += 1;
         }
-        expect(p, R_PAREN);
+        close_bracket(p, R_PAREN);
         return TUPLE_EXPR;
     }
-    expect(p, R_PAREN);
+    close_bracket(p, R_PAREN);
     PAREN_EXPR
 }
 /// E0012 を出した後も、回復のためにそのまま式として読む。

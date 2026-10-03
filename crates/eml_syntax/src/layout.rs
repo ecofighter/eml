@@ -34,6 +34,8 @@ pub(crate) fn layout(file: FileId, text: &str, tokens: &[Token]) -> (Vec<Token>,
         let start = item.token.range.start();
         if item.line_start {
             let mut opened = false;
+            // E0009 を出した行には規則 2 を当てない。同じ誤りから、閉じていない括弧の診断を重ねないため。
+            let mut missing = false;
             if i > 0 && BLOCK_STARTERS.contains(&items[i - 1].token.kind) {
                 // 規則 3。
                 if item.column > enclosing_indent(&stack) && !is_closing_bracket(item.token.kind) {
@@ -42,19 +44,33 @@ pub(crate) fn layout(file: FileId, text: &str, tokens: &[Token]) -> (Vec<Token>,
                     opened = true;
                 } else {
                     missing_block(file, text, items[i - 1].token, &mut out, &mut diagnostics);
+                    missing = true;
                 }
             }
             if !opened {
-                // 規則 1。一番上が Bracket なら何もしない (規則 2)。
-                while let Some(&Context::Block(n)) = stack.last() {
-                    if item.column < n && stack.len() > 1 {
-                        out.push(virtual_token(LAYOUT_CLOSE, start));
-                        stack.pop();
-                    } else {
-                        if item.column == n && !at_block_start {
-                            out.push(virtual_token(LAYOUT_SEP, start));
+                // 規則 1 と規則 2。括弧を閉じるとその外のブロックに規則 1 が当たるので、どちらも当てはまらなくなるまで繰り返す。
+                loop {
+                    match stack.last() {
+                        Some(&Context::Block(n)) if item.column < n && stack.len() > 1 => {
+                            out.push(virtual_token(LAYOUT_CLOSE, start));
+                            stack.pop();
                         }
-                        break;
+                        Some(&Context::Block(n)) => {
+                            if item.column == n && !at_block_start {
+                                out.push(virtual_token(LAYOUT_SEP, start));
+                            }
+                            break;
+                        }
+                        // 閉じ忘れた括弧がファイルの残りを飲み込まないよう、ここで閉じる。閉じ括弧がないことは
+                        // parser が報告する。
+                        Some(Context::Bracket)
+                            if !missing
+                                && !is_closing_bracket(item.token.kind)
+                                && item.column <= enclosing_indent(&stack) =>
+                        {
+                            stack.pop();
+                        }
+                        _ => break,
                     }
                 }
             }
@@ -65,7 +81,8 @@ pub(crate) fn layout(file: FileId, text: &str, tokens: &[Token]) -> (Vec<Token>,
                 stack.push(Context::Bracket);
             }
             kind if is_closing_bracket(kind) => {
-                // 規則 4。対応する Bracket より上のブロックをすべて閉じる。対応する開き括弧がなければ何もしない。
+                // 規則 4。種類は見ずに一番内側の括弧を閉じ、その上のブロックもすべて閉じる。種類の食い違いは parser が
+                // 報告する。対応する開き括弧がなければ何もしない。
                 if stack.contains(&Context::Bracket) {
                     while let Some(Context::Block(_)) = stack.last() {
                         out.push(virtual_token(LAYOUT_CLOSE, start));
@@ -312,7 +329,7 @@ mod tests {
 
     #[test]
     fn newlines_inside_brackets_mean_nothing() {
-        assert_eq!(layout_of("f = (a\nb)\ng"), "f = ( a b ) <SEP> g");
+        assert_eq!(layout_of("f = (a\n  b)\ng"), "f = ( a b ) <SEP> g");
     }
 
     #[test]
@@ -419,9 +436,30 @@ mod tests {
     }
 
     #[test]
-    fn unclosed_bracket_suspends_layout_to_eof() {
-        // 規則 2 のとおり、閉じ忘れた括弧の後ろの行は括弧の中身として続く。
-        assert_eq!(layout_of("a = (1\nb = 2"), "a = ( 1 b = 2");
+    fn line_at_the_enclosing_column_closes_an_unclosed_bracket() {
+        // 規則 2。閉じていないことは parser が報告するので、レイアウト段は診断を出さない。
+        assert_eq!(layout_of("a = (1\nb = 2"), "a = ( 1 <SEP> b = 2");
+    }
+
+    #[test]
+    fn line_left_of_the_block_closes_the_bracket_and_the_block() {
+        assert_eq!(
+            layout_of("f =\n  g (a\nh = 1"),
+            "f = <OPEN> g ( a <CLOSE> <SEP> h = 1"
+        );
+    }
+
+    #[test]
+    fn nested_unclosed_brackets_are_all_closed() {
+        assert_eq!(layout_of("f = g (h (a\nb = 1"), "f = g ( h ( a <SEP> b = 1");
+    }
+
+    #[test]
+    fn closing_bracket_at_the_block_column_is_allowed() {
+        assert_eq!(
+            layout_of("f =\n  g (\n    a\n  ) x\nh"),
+            "f = <OPEN> g ( a ) x <CLOSE> <SEP> h"
+        );
     }
 
     #[test]

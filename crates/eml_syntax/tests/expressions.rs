@@ -420,7 +420,7 @@ fn body_on_an_unindented_line_gets_an_empty_block() {
 
 #[test]
 fn unclosed_paren_is_reported() {
-    assert_eq!(diagnostics("a = f (1\nb = 2"), ["E0011 2:3 expected `)`"]);
+    assert_eq!(diagnostics("a = f (1\nb = 2"), ["E0011 1:9 expected `)`"]);
 }
 
 #[test]
@@ -453,5 +453,51 @@ fn missing_operand_before_a_comment_points_after_the_operator() {
     assert_eq!(
         diagnostics("a = 1 + -- c\nb = 2"),
         ["E0011 1:8 expected an expression"]
+    );
+}
+
+#[test]
+fn nested_unclosed_brackets_are_reported_once() {
+    assert_eq!(
+        diagnostics("f = g (h (a\nb = 1"),
+        ["E0011 1:12 expected `)`"]
+    );
+}
+
+#[test]
+fn mismatched_closing_bracket_closes_the_innermost_bracket() {
+    insta::assert_snapshot!(shape("x = (a]\ny = 1"), @r#"
+    SOURCE_FILE
+      EQUATION
+        LIDENT "x"
+        EQ "="
+        PAREN_EXPR
+          L_PAREN "("
+          PATH_EXPR
+            LIDENT "a"
+          R_BRACK "]"
+      EQUATION
+        LIDENT "y"
+        EQ "="
+        LITERAL
+          INT "1"
+    ---
+    E0011 1:7 expected `)`
+    "#);
+}
+
+#[test]
+fn mismatched_closing_bracket_ends_an_unsupported_list() {
+    assert_eq!(
+        diagnostics("x = [a)\ny = 1"),
+        ["E0004 1:5 lists are not supported yet"]
+    );
+}
+
+#[test]
+fn semicolon_inside_brackets_is_one_error() {
+    assert_eq!(
+        diagnostics("h = (a; b)\nk = 1"),
+        ["E0011 1:7 unexpected `;` inside brackets"]
     );
 }

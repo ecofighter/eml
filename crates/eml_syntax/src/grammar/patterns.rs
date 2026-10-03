@@ -161,6 +161,6 @@ fn paren_pat(p: &mut Parser, annotated: bool) -> SyntaxKind {
     } else {
         PAREN_PAT
     };
-    expect(p, R_PAREN);
+    close_bracket(p, R_PAREN);
     kind
 }

@@ -85,7 +85,7 @@ pub(super) fn type_atom(p: &mut Parser) -> bool {
                 type_(p);
                 count += 1;
             }
-            expect(p, R_PAREN);
+            close_bracket(p, R_PAREN);
             if count == 1 { PAREN_TYPE } else { TUPLE_TYPE }
         }
         L_BRACE => {
