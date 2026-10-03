@@ -15,42 +15,49 @@ use crate::{
 /// 診断のエラーがないプログラムだけを受け取る。エラーがあれば `eml_cli` は Core IR を作らない
 /// (docs/implementation/architecture.md)。
 pub fn lower(module: &Module, typed: &TypedModule) -> Program {
+    let mut program = ProgramBuilder::default();
     let mut indices = ArenaMap::default();
-    for (index, (id, _)) in module.functions.iter().enumerate() {
-        indices.insert(id, FnIdx(index as u32));
-    }
-    let mut strings = Strings::default();
-    let mut functions = Vec::new();
     for (id, function) in module.functions.iter() {
         let body = function
             .body
             .as_ref()
             .expect("a program without errors has an equation for every function");
-        let lowering = FnLowering {
-            module,
-            body,
-            types: typed.bodies.get(id).expect("every body is type-checked"),
-            indices: &indices,
-            strings: &mut strings,
-            exprs: Vec::new(),
-            vars: Vec::new(),
-            locals: ArenaMap::default(),
-        };
+        indices.insert(id, program.reserve(body.params.len()));
+    }
+    for (id, function) in module.functions.iter() {
+        let body = function.body.as_ref().expect("checked above");
         let signature = typed
             .signatures
             .get(id)
             .expect("every function has a signature");
-        let mut core = lowering.lower(&function.name, signature);
-        perceus::insert_rc(&mut core);
-        functions.push(core);
+        let params = param_types(signature, body.params.len());
+        let mut lambdas = 0;
+        let core = FnLowering {
+            module,
+            body,
+            types: typed.bodies.get(id).expect("every body is type-checked"),
+            indices: &indices,
+            program: &mut program,
+            root_name: &function.name,
+            lambdas: &mut lambdas,
+            exprs: Vec::new(),
+            vars: Vec::new(),
+            locals: ArenaMap::default(),
+        }
+        .lower(&function.name, &[], &body.params, &params, body.root);
+        program.finish(indices[id], core);
     }
     let main = typed
         .main
         .expect("`eml_cli::compile` reports a missing `main`");
     Program {
-        functions,
+        functions: program
+            .functions
+            .into_iter()
+            .map(|function| function.expect("every reserved function is lowered"))
+            .collect(),
         main: indices[main],
-        strings: strings.values,
+        strings: program.strings.values,
     }
 }
 
@@ -72,6 +79,147 @@ impl Strings {
     }
 }
 
+/// 変換の途中で、ラムダと包んだ組み込みの関数を足していく関数の表。番号を先に取り、中身は変換が終わってから入れる。
+#[derive(Default)]
+struct ProgramBuilder {
+    functions: Vec<Option<CoreFn>>,
+    arities: Vec<usize>,
+    strings: Strings,
+    wrappers: HashMap<Builtin, FnIdx>,
+}
+
+impl ProgramBuilder {
+    fn reserve(&mut self, arity: usize) -> FnIdx {
+        self.functions.push(None);
+        self.arities.push(arity);
+        FnIdx(self.functions.len() as u32 - 1)
+    }
+
+    fn arity(&self, function: FnIdx) -> usize {
+        self.arities[function.0 as usize]
+    }
+
+    fn finish(&mut self, function: FnIdx, mut core: CoreFn) {
+        perceus::insert_rc(&mut core);
+        self.functions[function.0 as usize] = Some(core);
+    }
+
+    /// 組み込みを値や部分適用で使うときに、それを呼ぶだけの関数を作る。組み込みごとに1つだけ作る。
+    fn wrapper(&mut self, builtin: Builtin) -> FnIdx {
+        if let Some(&function) = self.wrappers.get(&builtin) {
+            return function;
+        }
+        let boxed = builtin_params(builtin);
+        let function = self.reserve(boxed.len());
+        self.wrappers.insert(builtin, function);
+        let mut vars: Vec<VarInfo> = boxed
+            .iter()
+            .map(|&boxed| VarInfo {
+                name: "p".to_string(),
+                linearity: Linearity::Unr,
+                boxed,
+            })
+            .collect();
+        let params: Vec<VarId> = (0..boxed.len() as u32).map(VarId).collect();
+        let atoms: Vec<Atom> = params.iter().map(|&param| Atom::Var(param)).collect();
+        let mut fresh = |boxed: bool| {
+            vars.push(VarInfo {
+                name: "t".to_string(),
+                linearity: Linearity::Unr,
+                boxed,
+            });
+            VarId(vars.len() as u32 - 1)
+        };
+        let steps: Vec<(VarId, Rhs)> = match builtin {
+            Builtin::Println => vec![(fresh(false), Rhs::Perform(IoOp::Println, atoms))],
+            Builtin::ComposeFwd | Builtin::ComposeBwd => {
+                // `>>` は `g (f x)`、`<<` は `f (g x)` である (Task 6)
+                let (inner, outer) = if builtin == Builtin::ComposeFwd {
+                    (atoms[0], atoms[1])
+                } else {
+                    (atoms[1], atoms[0])
+                };
+                let mid = fresh(true);
+                let result = fresh(true);
+                vec![
+                    (mid, Rhs::Apply(inner, vec![atoms[2]])),
+                    (result, Rhs::Apply(outer, vec![Atom::Var(mid)])),
+                ]
+            }
+            other => vec![(
+                fresh(builtin_result_boxed(other)),
+                Rhs::Prim(prim(other), atoms),
+            )],
+        };
+        let mut exprs = Vec::new();
+        let last = steps.last().expect("every wrapper binds a result").0;
+        exprs.push(CExpr::Return(Atom::Var(last)));
+        let mut body = CExprId(0);
+        for (var, rhs) in steps.into_iter().rev() {
+            exprs.push(CExpr::Let { var, rhs, body });
+            body = CExprId(exprs.len() as u32 - 1);
+        }
+        let core = CoreFn {
+            name: format!("builtin${}", builtin.name()),
+            params,
+            vars,
+            body,
+            exprs,
+        };
+        self.finish(function, core);
+        function
+    }
+}
+
+/// 関数型の先頭の `count` 個の引数の型。
+fn param_types(ty: &Type, count: usize) -> Vec<Type> {
+    let mut out = Vec::new();
+    let mut ty = ty;
+    for _ in 0..count {
+        let Type::Fn { param, ret, .. } = ty else {
+            unreachable!("the type checker matched parameters with arrows");
+        };
+        out.push((**param).clone());
+        ty = ret;
+    }
+    out
+}
+
+/// 引数のパターンが束縛する局所変数。型を明示した引数は内側のパターンを見る。
+fn binder(body: &Body, pat: PatId) -> Option<LocalId> {
+    match &body.pats[pat].kind {
+        PatKind::Bind(local) => Some(*local),
+        PatKind::Annot { pat, .. } => binder(body, *pat),
+        _ => None,
+    }
+}
+
+/// 組み込みの引数ごとの、ヒープの値かどうか。`True` と `False` は値なので、ここには来ない。
+fn builtin_params(builtin: Builtin) -> Vec<bool> {
+    match builtin {
+        Builtin::Println => vec![true],
+        Builtin::ShowInt | Builtin::Not | Builtin::IntNeg => vec![false],
+        Builtin::IntAdd
+        | Builtin::IntSub
+        | Builtin::IntMul
+        | Builtin::IntDiv
+        | Builtin::IntMod
+        | Builtin::IntEq
+        | Builtin::IntNe
+        | Builtin::IntLt
+        | Builtin::IntLe
+        | Builtin::IntGt
+        | Builtin::IntGe => vec![false, false],
+        Builtin::StrConcat => vec![true, true],
+        Builtin::ComposeFwd | Builtin::ComposeBwd => vec![true, true, true],
+        Builtin::True | Builtin::False => unreachable!("constructors are values, not functions"),
+    }
+}
+
+fn builtin_result_boxed(builtin: Builtin) -> bool {
+    matches!(builtin, Builtin::ShowInt | Builtin::StrConcat)
+}
+
 type Bindings = Vec<(VarId, Rhs)>;
 
 struct FnLowering<'a> {
@@ -79,36 +227,47 @@ struct FnLowering<'a> {
     body: &'a Body,
     types: &'a BodyTypes,
     indices: &'a ArenaMap<FunctionId, FnIdx>,
-    strings: &'a mut Strings,
+    program: &'a mut ProgramBuilder,
+    /// ラムダの関数の名前に使う、トップレベルの関数の名前と、その中のラムダの数 (Task 13)。
+    #[allow(dead_code)]
+    root_name: &'a str,
+    #[allow(dead_code)]
+    lambdas: &'a mut u32,
     exprs: Vec<CExpr>,
     vars: Vec<VarInfo>,
     locals: ArenaMap<LocalId, Atom>,
 }
 
 impl FnLowering<'_> {
-    fn lower(mut self, name: &str, signature: &Type) -> CoreFn {
+    /// ラムダは捕まえた変数を先頭の引数に持つ (docs/spec/core-ir.md)。トップレベルの関数では `captured` は空である。
+    fn lower(
+        mut self,
+        name: &str,
+        captured: &[(LocalId, Type)],
+        params: &[PatId],
+        param_types: &[Type],
+        root: ExprId,
+    ) -> CoreFn {
         let body = self.body;
-        let mut params = Vec::new();
-        let mut ty = signature;
-        for &pat in &body.params {
-            let Type::Fn { param, ret, .. } = ty else {
-                unreachable!("the type checker matched parameters with arrows");
-            };
-            let name = match body.pats[pat].kind {
-                PatKind::Bind(local) => body.locals[local].name.clone(),
-                _ => "p".to_string(),
-            };
-            let var = self.new_var(&name, param);
-            if let PatKind::Bind(local) = body.pats[pat].kind {
+        let mut vars = Vec::new();
+        for (local, ty) in captured {
+            let var = self.new_var(&body.locals[*local].name, ty);
+            self.locals.insert(*local, Atom::Var(var));
+            vars.push(var);
+        }
+        for (&pat, ty) in params.iter().zip(param_types) {
+            let local = binder(body, pat);
+            let name = local.map_or("p", |local| body.locals[local].name.as_str());
+            let var = self.new_var(name, ty);
+            if let Some(local) = local {
                 self.locals.insert(local, Atom::Var(var));
             }
-            params.push(var);
-            ty = ret.as_ref();
+            vars.push(var);
         }
-        let root = self.tail(body.root);
+        let root = self.tail(root);
         CoreFn {
             name: name.to_string(),
-            params,
+            params: vars,
             vars: self.vars,
             body: root,
             exprs: self.exprs,
@@ -118,9 +277,10 @@ impl FnLowering<'_> {
     fn new_var(&mut self, name: &str, ty: &Type) -> VarId {
         self.vars.push(VarInfo {
             name: name.to_string(),
-            // 段階1の値はすべて `Unr` で、ヒープに置くのは文字列だけである
             linearity: Linearity::Unr,
-            boxed: matches!(ty, Type::String),
+            // 関数値と型変数の値は、ヒープのクロージャや文字列かもしれない。インタプリタの `dup` / `decref` は
+            // ヒープにない値を無視するので、多めに対象にしても正しく動く (docs/spec/core-ir.md)
+            boxed: matches!(ty, Type::String | Type::Fn { .. } | Type::Var(_)),
         });
         VarId(self.vars.len() as u32 - 1)
     }
@@ -159,6 +319,70 @@ impl FnLowering<'_> {
         Atom::Var(var)
     }
 
+    /// 型を見ずに、ヒープの値として変数を作る。クロージャと、関数値を返す途中の結果に使う。
+    fn bind_boxed(&mut self, out: &mut Bindings, name: &str, rhs: Rhs) -> Atom {
+        self.vars.push(VarInfo {
+            name: name.to_string(),
+            linearity: Linearity::Unr,
+            boxed: true,
+        });
+        let var = VarId(self.vars.len() as u32 - 1);
+        out.push((var, rhs));
+        Atom::Var(var)
+    }
+
+    fn atoms(&mut self, exprs: &[ExprId], out: &mut Bindings) -> Vec<Atom> {
+        exprs.iter().map(|&expr| self.atom(expr, out)).collect()
+    }
+
+    /// 呼ぶ相手の引数の個数と比べ、揃えば直接呼び、足りなければクロージャにし、余れば戻った関数値に残りを適用する
+    /// (docs/spec/core-ir.md の eval/apply)。
+    fn call_known(
+        &mut self,
+        target: FnIdx,
+        mut args: Vec<Atom>,
+        ty: &Type,
+        out: &mut Bindings,
+    ) -> Atom {
+        let arity = self.program.arity(target);
+        if args.len() < arity {
+            return self.bind_boxed(out, "c", Rhs::MakeClosure(target, args));
+        }
+        let rest = args.split_off(arity);
+        if rest.is_empty() {
+            return self.bind(out, "t", ty, Rhs::CallDirect(target, args));
+        }
+        let function = self.bind_boxed(out, "t", Rhs::CallDirect(target, args));
+        self.bind(out, "t", ty, Rhs::Apply(function, rest))
+    }
+
+    fn call_builtin(
+        &mut self,
+        builtin: Builtin,
+        mut args: Vec<Atom>,
+        ty: &Type,
+        out: &mut Bindings,
+    ) -> Atom {
+        let arity = builtin_params(builtin).len();
+        if args.len() < arity {
+            let wrapper = self.program.wrapper(builtin);
+            return self.bind_boxed(out, "c", Rhs::MakeClosure(wrapper, args));
+        }
+        let rest = args.split_off(arity);
+        let rhs = match builtin {
+            Builtin::Println => Rhs::Perform(IoOp::Println, args),
+            Builtin::ComposeFwd | Builtin::ComposeBwd => {
+                Rhs::CallDirect(self.program.wrapper(builtin), args)
+            }
+            other => Rhs::Prim(prim(other), args),
+        };
+        if rest.is_empty() {
+            return self.bind(out, "t", ty, rhs);
+        }
+        let function = self.bind_boxed(out, "t", rhs);
+        self.bind(out, "t", ty, Rhs::Apply(function, rest))
+    }
+
     /// 式の値をアトムにする。値の計算に要る束縛は `out` に積む。
     fn atom(&mut self, id: ExprId, out: &mut Bindings) -> Atom {
         let body = self.body;
@@ -169,36 +393,46 @@ impl FnLowering<'_> {
             ExprKind::Literal(Literal::Int(n)) => Atom::Int(*n),
             ExprKind::Literal(Literal::Unit) => Atom::Unit,
             ExprKind::Literal(Literal::String(text)) => {
-                let index = self.strings.intern(text);
+                let index = self.program.strings.intern(text);
                 self.bind(out, "s", &Type::String, Rhs::ConstString(index))
             }
             ExprKind::Path(Res::Local(local)) => self.locals[*local],
             ExprKind::Path(Res::Builtin(Builtin::True)) => Atom::Tag(TRUE),
             ExprKind::Path(Res::Builtin(Builtin::False)) => Atom::Tag(FALSE),
-            ExprKind::Path(Res::Builtin(_)) => {
-                unreachable!("the type checker allows builtin functions only as callees")
+            ExprKind::Path(Res::Builtin(builtin)) => {
+                let wrapper = self.program.wrapper(*builtin);
+                self.bind_boxed(out, "c", Rhs::MakeClosure(wrapper, Vec::new()))
             }
-            // 引数のないトップレベルの値は、参照するたびに呼び出す
+            // 引数のないトップレベルの値は、参照するたびに呼び出す (docs/spec/core-ir.md)
             ExprKind::Path(Res::Function(function)) => {
-                let ty = self.ty(id);
-                let name = self.module.functions[*function].name.clone();
-                let callee = self.indices[*function];
-                self.bind(out, &name, &ty, Rhs::CallDirect(callee, Vec::new()))
+                let target = self.indices[*function];
+                if self.program.arity(target) == 0 {
+                    let ty = self.ty(id);
+                    let name = self.module.functions[*function].name.clone();
+                    self.bind(out, &name, &ty, Rhs::CallDirect(target, Vec::new()))
+                } else {
+                    self.bind_boxed(out, "c", Rhs::MakeClosure(target, Vec::new()))
+                }
             }
             ExprKind::Call { callee, args } => {
-                let args: Vec<Atom> = args.iter().map(|&arg| self.atom(arg, out)).collect();
-                let rhs = match &body.exprs[*callee].kind {
-                    ExprKind::Path(Res::Function(function)) => {
-                        Rhs::CallDirect(self.indices[*function], args)
-                    }
-                    ExprKind::Path(Res::Builtin(Builtin::Println)) => {
-                        Rhs::Perform(IoOp::Println, args)
-                    }
-                    ExprKind::Path(Res::Builtin(builtin)) => Rhs::Prim(prim(*builtin), args),
-                    _ => unreachable!("only functions and builtins are called in stage 1"),
-                };
                 let ty = self.ty(id);
-                self.bind(out, "t", &ty, rhs)
+                match &body.exprs[*callee].kind {
+                    ExprKind::Path(Res::Function(function)) => {
+                        let args = self.atoms(args, out);
+                        let target = self.indices[*function];
+                        self.call_known(target, args, &ty, out)
+                    }
+                    ExprKind::Path(Res::Builtin(builtin)) => {
+                        let args = self.atoms(args, out);
+                        self.call_builtin(*builtin, args, &ty, out)
+                    }
+                    _ => {
+                        // 呼ばれる式は引数より左にあるので、先に評価する
+                        let function = self.atom(*callee, out);
+                        let args = self.atoms(args, out);
+                        self.bind(out, "t", &ty, Rhs::Apply(function, args))
+                    }
+                }
             }
             ExprKind::If {
                 condition,

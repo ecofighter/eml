@@ -105,3 +105,62 @@ fn recursion_and_top_level_values() {
     }
     ");
 }
+
+#[test]
+fn partial_and_extra_arguments_use_closures() {
+    let text = "add : Int -> Int -> Int\nadd a b = a + b\n\nadder : Int -> Int -> Int\nadder x = add x\n\nmain : Unit -> <IO> Unit\nmain () =\n  let f = add 1\n  let n = f 2 + adder 3 4\n  println (show_int n)";
+    insta::assert_snapshot!(core_text(text), @r"
+    fn add(a0, b1) {
+      let t2 = prim +(a0, b1)
+      return t2
+    }
+    fn adder(x0) {
+      let c1 = closure add(x0)
+      return c1
+    }
+    fn main(p0) {
+      let c1 = closure add(1)
+      let t2 = apply c1(2)
+      let t3 = call adder(3)
+      let t4 = apply t3(4)
+      let t5 = prim +(t2, t4)
+      let t6 = prim show_int(t5)
+      let t7 = perform println(t6)
+      return t7
+    }
+    ");
+}
+
+#[test]
+fn builtins_used_as_values_are_wrapped() {
+    let text = "apply : (a -> <e> b) -> a -> <e> b\napply f x = f x\n\nmain : Unit -> <IO> Unit\nmain () =\n  let g = not >> not\n  apply println (show_int 1)";
+    insta::assert_snapshot!(core_text(text), @r"
+    fn apply(f0, x1) {
+      let t2 = apply f0(x1)
+      return t2
+    }
+    fn main(p0) {
+      let c1 = closure builtin$not()
+      let c2 = closure builtin$not()
+      let c3 = closure builtin$>>(c1, c2)
+      decref c3
+      let c4 = closure builtin$println()
+      let t5 = prim show_int(1)
+      let t6 = call apply(c4, t5)
+      return t6
+    }
+    fn builtin$not(p0) {
+      let t1 = prim not(p0)
+      return t1
+    }
+    fn builtin$>>(p0, p1, p2) {
+      let t3 = apply p0(p2)
+      let t4 = apply p1(t3)
+      return t4
+    }
+    fn builtin$println(p0) {
+      let t1 = perform println(p0)
+      return t1
+    }
+    ");
+}
