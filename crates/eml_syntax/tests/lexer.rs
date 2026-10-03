@@ -414,3 +414,13 @@ fn comment_at_end_of_file_without_newline() {
     COMMENT@2..8 "-- end"
     "#);
 }
+
+#[test]
+fn unicode_escape_does_not_run_past_the_string() {
+    let text = r#""\u{zz" f {x}"#;
+    assert_eq!(diags(text), ["E0008@1..3 invalid unicode escape `\\u`"]);
+    assert_eq!(
+        kinds(text),
+        ["STRING", "LIDENT", "L_BRACE", "LIDENT", "R_BRACE"]
+    );
+}

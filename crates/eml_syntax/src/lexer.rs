@@ -298,7 +298,9 @@ impl Lexer<'_> {
     fn unicode_escape(&mut self, i: usize) -> usize {
         let text = self.text;
         let rest = &text[i + 2..];
+        // `}` の探索は文字列の外 (最初の `"` や行末) に出ない。
         let line = &rest[..line_len(rest)];
+        let line = &line[..line.find('"').unwrap_or(line.len())];
         let (end, valid) = match line.strip_prefix('{').and_then(|inner| inner.find('}')) {
             Some(close) => {
                 let hex = &line[1..close + 1];
