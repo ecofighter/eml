@@ -3,7 +3,12 @@ name = "eml_cli"
 version.workspace = true
 edition.workspace = true
 
+[[bin]]
+name = "eml"
+path = "src/main.rs"
+
 [dependencies]
+clap.workspace = true
 eml_core_ir.workspace = true
 eml_diagnostics.workspace = true
 eml_hir.workspace = true
