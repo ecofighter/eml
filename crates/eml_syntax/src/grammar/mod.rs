@@ -1,8 +1,8 @@
-//! 本番の構文の文法 (構文設計 spec §5)。構文の差し替えは原則としてこのモジュールの中で行う。
+//! 文法は docs/spec/grammar.md。関数の名前は、おおむね文法の規則の名前に合わせてある。
+//! 構文の差し替えをこのモジュールの中で済ませるため、文法の規則はここ以外に置かない。
 //!
-//! 入力はレイアウト段の出力で、仮想トークン `LAYOUT_OPEN` / `LAYOUT_SEP` / `LAYOUT_CLOSE` を含む。
-//! spec の `block(x)` は `block_of` で読む。エラーからの回復は、同じ深さの `SEP`
-//! (ブロックの中なら `CLOSE` も) まで読み飛ばすのを基本にする (spec §4 のエラー回復)。
+//! エラーからの回復は、同じ深さの `SEP` (ブロックの中なら `CLOSE` も) まで読み飛ばすのを基本にする。
+//! レイアウトの区切りが、行の構造に沿った確かな同期点になるため (docs/spec/layout.md の「エラー回復」)。
 
 mod expressions;
 mod items;
@@ -24,7 +24,7 @@ pub(crate) fn source_file(p: &mut Parser) {
             break;
         }
         if p.at(LAYOUT_CLOSE) {
-            // 項目の中で読み残したブロックの終わり。トップレベルでは読み捨てる。
+            // 項目の中で読み残したブロックの終わり。次の項目の解析に持ち越さないため、読み捨てる。
             p.bump_any();
             continue;
         }
@@ -47,8 +47,7 @@ pub(crate) fn source_file(p: &mut Parser) {
     m.complete(p, SOURCE_FILE);
 }
 
-/// 項目の外にあるトークンの並びを、次の項目まで1つの `ERROR` ノードにまとめる。
-/// 診断は1件だけ出す。`ERROR_TOKEN` は字句解析で報告済みなので、それ以外のトークンの位置に出す。
+/// 診断はトークンごとではなく1件だけ出す。`ERROR_TOKEN` は字句解析で報告済みなので、それ以外のトークンの位置に出す。
 fn stray_tokens(p: &mut Parser) {
     let m = p.start();
     let mut reported = false;
@@ -72,8 +71,7 @@ fn stray_tokens(p: &mut Parser) {
     m.complete(p, ERROR);
 }
 
-/// 同じ深さの `SEP` まで (`in_block` なら、今のブロックの `LAYOUT_CLOSE` の手前まで) トークンを読み飛ばす。
-/// 途中のブロックは丸ごと読み飛ばす。ノードは作らないので、呼び出し側が `ERROR` で包む。
+/// ノードは作らないので、呼び出し側が `ERROR` で包む。
 fn skip_to_sep(p: &mut Parser, in_block: bool) {
     let mut depth = 0u32;
     while !p.at_eof() {
@@ -88,9 +86,8 @@ fn skip_to_sep(p: &mut Parser, in_block: bool) {
     }
 }
 
-/// `block(x) ::= OPEN x (SEP x)* CLOSE` を読む。今のトークンは `LAYOUT_OPEN`。
-/// `item` は項目を1つ読む。今の位置から項目を始められなければ、何も読まずに偽を返す。
-/// レイアウト段の回復で作った空のブロック (`OPEN` の直後の `CLOSE`) は、黙って受け入れる (E0009 は報告済み)。
+/// `item` は、今の位置から項目を始められなければ何も読まずに偽を返す。
+/// 空のブロックは、レイアウト段が E0009 を報告したうえで作ったものなので、黙って受け入れる。
 fn block_of(p: &mut Parser, expected: &str, mut item: impl FnMut(&mut Parser) -> bool) {
     p.bump(LAYOUT_OPEN);
     if p.eat(LAYOUT_CLOSE) {
@@ -133,8 +130,7 @@ fn block_of(p: &mut Parser, expected: &str, mut item: impl FnMut(&mut Parser) ->
     p.eat(LAYOUT_CLOSE);
 }
 
-/// 1つの要素だけを持つブロック (型の途中で改行したときなど) の終わりを読む。
-/// 余分なトークンがあれば、ブロックの終わりまでを `ERROR` にまとめる。
+/// 型の途中で改行したときなど、1つの要素だけを持つブロックの終わりで使う。
 fn close_block(p: &mut Parser) {
     if !p.at(LAYOUT_CLOSE) && !p.at_eof() {
         p.error(
@@ -157,7 +153,6 @@ fn close_block(p: &mut Parser) {
     p.eat(LAYOUT_CLOSE);
 }
 
-/// `kind` があれば読み進める。なければ診断を出して偽を返す。
 fn expect(p: &mut Parser, kind: SyntaxKind) -> bool {
     if p.eat(kind) {
         return true;
@@ -190,7 +185,7 @@ fn token_name(kind: SyntaxKind) -> &'static str {
     }
 }
 
-/// 「予期しない」トークンの診断メッセージ。仮想トークンと EOF は、名詞句として読める言い方にする。
+/// 仮想トークンと EOF にはテキストがないので、名詞句として読める言い方にする。
 fn unexpected(p: &Parser) -> String {
     match p.current() {
         EOF => "unexpected end of file".to_string(),
@@ -201,7 +196,6 @@ fn unexpected(p: &Parser) -> String {
     }
 }
 
-/// 今のトークンを、診断のラベルのために説明する。
 fn describe(p: &Parser) -> String {
     match p.current() {
         EOF => "the end of the file".to_string(),
@@ -212,13 +206,11 @@ fn describe(p: &Parser) -> String {
     }
 }
 
-/// 今のトークンの位置に E0004 (まだ対応していない構文) を出す。
 fn not_yet_supported(p: &mut Parser, message: &str) {
     p.error(codes::NOT_YET_SUPPORTED, message, NOT_YET_SUPPORTED_LABEL);
 }
 
-/// まだ対応していない括弧の構文 (`[...]`、`{...}`) に E0004 を出し、対応する閉じ括弧まで読み飛ばす。
-/// ノードは作らないので、呼び出し側が `ERROR` で包む。
+/// 中身ごと読み飛ばすのは、S2 の構文の中で診断を連鎖させないため。ノードは作らないので、呼び出し側が `ERROR` で包む。
 fn unsupported_group(p: &mut Parser, message: &str) {
     not_yet_supported(p, message);
     let open = p.current();
@@ -238,7 +230,6 @@ fn unsupported_group(p: &mut Parser, message: &str) {
     }
 }
 
-/// qcon ::= (UIDENT '.')* UIDENT
 fn qcon(p: &mut Parser) {
     while p.at(UIDENT) && p.nth(1) == DOT && p.nth(2) == UIDENT {
         p.bump(UIDENT);
@@ -247,7 +238,7 @@ fn qcon(p: &mut Parser) {
     p.bump(UIDENT);
 }
 
-/// 修飾とフィールドアクセスの `.` を読む。前後に空白があれば E0010 を出す (spec §5)。
+/// `.` の前後の空白を禁じるのは、修飾・フィールドアクセスと区別できるようにするため (docs/spec/grammar.md)。
 fn dot(p: &mut Parser) {
     if !p.touches_prev() || !p.touches_next() {
         p.error(

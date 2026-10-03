@@ -1,5 +1,4 @@
-//! 字句解析 (構文設計 spec §3)。logos で単純なトークンを切り出し、文字列・コメント・演算子の分類などを
-//! 手書きの層で扱う。トークン列をつなげると元のテキストに戻る (lossless)。
+//! 規則は docs/spec/lexical.md。CST を lossless にするため、trivia も含めてトークン列をつなげると元のテキストに戻る。
 
 use eml_diagnostics::{Diagnostic, ErrorCode, FileId, Label, TextRange, TextSize};
 use logos::Logos;
@@ -7,14 +6,12 @@ use logos::Logos;
 use crate::SyntaxKind::{self, *};
 use crate::{NOT_YET_SUPPORTED_LABEL, codes};
 
-/// 字句解析の結果の1トークン。trivia (空白とコメント) も含む。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Token {
     pub kind: SyntaxKind,
     pub range: TextRange,
 }
 
-/// テキストをトークン列に分ける。認識できない文字の並びは1つの `ERROR_TOKEN` にまとめ、診断を1件出す。
 pub fn lex(file: FileId, text: &str) -> (Vec<Token>, Vec<Diagnostic>) {
     let mut lexer = Lexer {
         file,
@@ -40,7 +37,6 @@ pub fn lex(file: FileId, text: &str) -> (Vec<Token>, Vec<Diagnostic>) {
     (tokens, diagnostics)
 }
 
-/// 演算子の文字の並びを分類する。予約記号 (spec §3) は演算子にならない。
 pub(crate) fn operator_kind(op: &str) -> SyntaxKind {
     match op {
         "=" => EQ,
@@ -56,7 +52,6 @@ pub(crate) fn operator_kind(op: &str) -> SyntaxKind {
     }
 }
 
-/// logos で切り出す単純なトークン。キーワードや演算子の種類は、切り出した後で決める。
 #[derive(Logos, Debug, Clone, Copy, PartialEq, Eq)]
 enum Raw {
     #[regex(r"[ \t\r\n\u{FEFF}]+")]
@@ -65,7 +60,7 @@ enum Raw {
     Lower,
     #[regex(r"[A-Z][A-Za-z0-9_']*")]
     Upper,
-    /// 整数、指数だけの浮動小数 (`1e9`)、形の不正な数値 (`0xZZ`)。種類は `number_kind` で決める。
+    /// 形の不正な数値 (`0xZZ`) も1つのトークンにして E0007 を1件だけ出すため、広くマッチさせて `number_kind` で判定する。
     #[regex(r"[0-9][0-9A-Za-z_]*")]
     Number,
     #[regex(r"[0-9][0-9_]*\.[0-9][0-9_]*([eE][+-]?[0-9][0-9_]*)?")]
@@ -96,7 +91,7 @@ enum Raw {
 struct Lexer<'a> {
     file: FileId,
     text: &'a str,
-    /// 次に読むバイト位置。常に文字の境界にある。
+    /// 常に文字の境界に置く。`&text[pos..]` で panic しないため。
     pos: usize,
     tokens: Vec<Token>,
     diagnostics: Vec<Diagnostic>,
@@ -104,7 +99,7 @@ struct Lexer<'a> {
 
 impl Lexer<'_> {
     fn run(&mut self) {
-        // shebang はファイルの先頭 (BOM の直後を含む) にだけ書ける。
+        // shebang は先頭にだけ書ける。BOM があれば、その直後を先頭とみなす。
         let shebang_at = if self.text.starts_with('\u{feff}') {
             '\u{feff}'.len_utf8()
         } else {
@@ -131,7 +126,7 @@ impl Lexer<'_> {
         }
     }
 
-    /// `self.pos` から `end` までを1つのトークンにする。連続する `ERROR_TOKEN` は1つにまとめる。
+    /// 連続する `ERROR_TOKEN` は1つにまとめる。認識できない文字の並びに、診断を1件だけ出すため。
     fn push(&mut self, kind: SyntaxKind, end: usize) {
         let range = self.range(self.pos, end);
         match self.tokens.last_mut() {
@@ -163,7 +158,6 @@ impl Lexer<'_> {
         ));
     }
 
-    /// logos で1トークンを切り出す。
     fn simple(&mut self) {
         let text = self.text;
         let rest = &text[self.pos..];
@@ -198,7 +192,7 @@ impl Lexer<'_> {
             }
             Ok(Raw::Char) => CHAR,
             Ok(Raw::Op) if slice.len() >= 2 && slice.bytes().all(|b| b == b'-') => {
-                // `-` が2つ以上並び、その後ろに演算子の文字が続かなければ、行コメント (Haskell と同じ)。
+                // `-->` などを演算子として使えるように、`-` だけの並びに限って行コメントにする (Haskell と同じ)。
                 self.push(COMMENT, self.pos + line_len(rest));
                 return;
             }
@@ -216,7 +210,7 @@ impl Lexer<'_> {
         self.push(kind, self.pos + len);
     }
 
-    /// `t.0.1` の `0.1` のように、空白なしの `.` の直後にある `数字.数字` を、`INT` `DOT` `INT` に分ける。
+    /// `t.0.1` の `0.1` はフィールドアクセスの並びなので、空白なしの `.` の直後の `数字.数字` を `INT` `DOT` `INT` に分ける。
     fn split_field_index(&mut self, len: usize) -> bool {
         let text = self.text;
         let start = self.pos;
@@ -237,7 +231,7 @@ impl Lexer<'_> {
         true
     }
 
-    /// 通常の文字列 `"..."`。行をまたげない。閉じていなければ行末までを `STRING` にする。
+    /// 閉じていなければ行末までを `STRING` にする。後ろの行まで文字列として読み込まないため。
     fn string(&mut self) {
         let text = self.text;
         let start = self.pos;
@@ -268,7 +262,6 @@ impl Lexer<'_> {
         self.push(STRING, i);
     }
 
-    /// `i` にある `\` から始まるエスケープを読み、その次の位置を返す。不正なら E0008 を出す。
     fn escape(&mut self, i: usize) -> usize {
         let text = self.text;
         let Some(c) = text[i + 1..].chars().next() else {
@@ -294,7 +287,6 @@ impl Lexer<'_> {
         }
     }
 
-    /// `\u{XXXX}`。16進で1〜6桁の、Unicode のスカラー値であること。
     fn unicode_escape(&mut self, i: usize) -> usize {
         let text = self.text;
         let rest = &text[i + 2..];
@@ -326,8 +318,8 @@ impl Lexer<'_> {
         end
     }
 
-    /// 補間 `\{...}` は S2 で実装する。S1 では対応する `}` まで読み飛ばし、E0004 を出す。
-    /// 穴の中の文字列も読み飛ばすので、`"\{f "x"}"` の内側の `"` で外側の文字列が終わらない。
+    /// 補間は S2 で実装する。今は対応する `}` まで読み飛ばして E0004 を出す。穴の中の文字列も読み飛ばすのは、
+    /// `"\{f "x"}"` の内側の `"` で外側の文字列を終わらせないため。
     fn interpolation(&mut self, i: usize) -> usize {
         let text = self.text;
         let mut j = i + 2;
@@ -360,7 +352,7 @@ impl Lexer<'_> {
         j
     }
 
-    /// 複数行の文字列 `"""..."""` は S2 で実装する。S1 では閉じの `"""` までを1つのトークンにする。
+    /// S2 で実装する。今は閉じの `"""` までを1つのトークンにして、parser が E0004 を1件だけ出せるようにする。
     fn multiline_string(&mut self) {
         let text = self.text;
         let start = self.pos;
@@ -380,7 +372,7 @@ impl Lexer<'_> {
         self.push(MULTILINE_STRING, end);
     }
 
-    /// raw 文字列 `r"..."` / `r#"..."#` は S2 で実装する。S1 では閉じまでを1つのトークンにする。行をまたげる。
+    /// S2 で実装する。今は閉じまでを1つのトークンにして、parser が E0004 を1件だけ出せるようにする。
     fn raw_string(&mut self, hashes: usize) {
         let text = self.text;
         let start = self.pos;
@@ -402,7 +394,7 @@ impl Lexer<'_> {
         self.push(RAW_STRING, end);
     }
 
-    /// コマンドリテラルは S3 で実装する。S1 では閉じのバッククォートまでを1つのトークンにする。行はまたげない。
+    /// S3 で実装する。今は閉じのバッククォートまでを1つのトークンにして、parser が E0004 を1件だけ出せるようにする。
     fn command(&mut self) {
         let text = self.text;
         let start = self.pos;
@@ -438,7 +430,6 @@ impl Lexer<'_> {
         self.push(COMMAND, i);
     }
 
-    /// 入れ子にできるブロックコメント `{- ... -}`。
     fn block_comment(&mut self) {
         let text = self.text;
         let start = self.pos;
@@ -472,7 +463,6 @@ impl Lexer<'_> {
     }
 }
 
-/// 行末 (`\n` または `\r\n`) の手前までの長さ。
 fn line_len(rest: &str) -> usize {
     let end = rest.find('\n').unwrap_or(rest.len());
     if rest[..end].ends_with('\r') {
@@ -482,7 +472,7 @@ fn line_len(rest: &str) -> usize {
     }
 }
 
-/// 補間の穴の中の文字列を読み飛ばす。`j` は開きの `"` の位置。閉じの `"` の次 (なければ行末) を返す。
+/// `j` は開きの `"` の位置。閉じの `"` の次 (なければ行末) を返す。
 fn skip_simple_string(text: &str, j: usize) -> usize {
     let mut k = j + 1;
     while let Some(c) = text[k..].chars().next() {
@@ -501,14 +491,12 @@ fn skip_simple_string(text: &str, j: usize) -> usize {
     k
 }
 
-/// `r"` または `r#..#"` で始まっていれば、`#` の数を返す。
 fn raw_string_hashes(rest: &str) -> Option<usize> {
     let after_r = rest.strip_prefix('r')?;
     let hashes = after_r.bytes().take_while(|&b| b == b'#').count();
     after_r[hashes..].starts_with('"').then_some(hashes)
 }
 
-/// `Raw::Number` の種類。整数 (10進、`0x`、`0o`、`0b`) なら `INT`、`1e9` の形なら `FLOAT`、不正なら `None`。
 fn number_kind(number: &str) -> Option<SyntaxKind> {
     let digits = |body: &str, radix: u32| {
         body.chars().any(|c| c != '_') && body.chars().all(|c| c == '_' || c.is_digit(radix))

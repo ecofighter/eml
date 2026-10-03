@@ -8,8 +8,7 @@ use crate::lexer::Token;
 use crate::parser::Event;
 use crate::{EmlLanguage, SyntaxKind};
 
-/// イベント列と、trivia を含むトークン列から、rowan の木を組み立てる。
-/// trivia は、それを囲むノードのうち一番内側のもの (直後に始まるノードの親) に付ける。
+/// trivia は、直後に始まるノードではなく、それを囲むノードのうち一番内側のものに付ける。
 pub(crate) fn build_tree(text: &str, tokens: &[Token], mut events: Vec<Event>) -> GreenNode {
     let mut builder = Builder {
         text,
@@ -26,7 +25,7 @@ pub(crate) fn build_tree(text: &str, tokens: &[Token], mut events: Vec<Event>) -
                 kind,
                 forward_parent,
             } => {
-                // `precede` で作った親ノードを外側から順に開く。
+                // `precede` で作った親は後ろのイベントにあるので、連鎖をたどって集め、外側から開く。
                 kinds.push(kind);
                 let mut index = i;
                 let mut next = forward_parent;
@@ -40,7 +39,7 @@ pub(crate) fn build_tree(text: &str, tokens: &[Token], mut events: Vec<Event>) -
                             kinds.push(kind);
                             forward_parent
                         }
-                        // 放棄した親ノード。連鎖はここで終わる。
+                        // 放棄した親ノードで、連鎖はここで終わる。
                         Event::Tombstone => None,
                         _ => {
                             unreachable!("forward_parent must point at a Start or Tombstone event")
@@ -80,7 +79,7 @@ struct Builder<'a> {
     text: &'a str,
     tokens: &'a [Token],
     next: usize,
-    /// 今のトークンのうち、すでに木に入れたバイト数。
+    /// `<>` のように1つのトークンを分けて木に入れるとき、すでに入れたバイト数。
     offset: TextSize,
     inner: GreenNodeBuilder<'static>,
 }
@@ -95,7 +94,6 @@ impl Builder<'_> {
         }
     }
 
-    /// 今のトークンの残り全部を、`kind` として木に入れる。
     fn token(&mut self, kind: SyntaxKind) {
         let range = self.tokens[self.next].range;
         let start = range.start() + self.offset;
@@ -107,7 +105,6 @@ impl Builder<'_> {
         self.offset = TextSize::new(0);
     }
 
-    /// 今のトークンの先頭の `len` バイトだけを、`kind` として木に入れる。
     fn token_prefix(&mut self, kind: SyntaxKind, len: TextSize) {
         let range = self.tokens[self.next].range;
         let start = range.start() + self.offset;

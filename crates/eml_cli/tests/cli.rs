@@ -1,5 +1,3 @@
-//! `eml` バイナリの終了コードと引数の誤りの確認。
-
 use std::process::{Command, Output};
 
 fn eml(args: &[&str]) -> Output {

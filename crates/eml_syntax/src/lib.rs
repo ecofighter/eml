@@ -1,5 +1,3 @@
-//! 字句解析、イベント方式のパーサ、rowan の木、型付き AST ラッパ。
-
 pub mod ast;
 mod debug_dump;
 mod grammar;
@@ -20,7 +18,6 @@ pub use syntax_kind::{
     EmlLanguage, SyntaxElement, SyntaxKind, SyntaxNode, SyntaxNodePtr, SyntaxToken,
 };
 
-/// 字句・構文の診断の番号 (E0xxx)。
 pub mod codes {
     use eml_diagnostics::ErrorCode;
 
@@ -38,10 +35,9 @@ pub mod codes {
     pub const NEEDS_PARENS: ErrorCode = ErrorCode(12);
 }
 
-/// E0004 (まだ対応していない構文) のラベル。
 pub(crate) const NOT_YET_SUPPORTED_LABEL: &str = "this is implemented in a later stage";
 
-/// パースの結果の木。壊れた入力でも必ず木を作る。
+/// 壊れた入力でも必ず木を作る。エラーがあっても後の段階を止めないため。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Parse {
     green: GreenNode,

@@ -1,12 +1,10 @@
-//! パターン (spec §5 の pat / cpat / apat)。
-
 use super::*;
 
 pub(super) fn at_apat_start(p: &Parser) -> bool {
     at_apat_start_at(p, 0)
 }
 
-/// `n` 個先から apat を始められるか。`-` は整数が続くときだけ (負の数のリテラル)。
+/// `-` は、整数が続くときだけ負の数のリテラルとして apat を始める。
 pub(super) fn at_apat_start_at(p: &Parser, n: usize) -> bool {
     match p.nth(n) {
         UNDERSCORE | LIDENT | UIDENT | INT | STRING | CHAR | L_PAREN | L_BRACK | L_BRACE => true,
@@ -15,8 +13,7 @@ pub(super) fn at_apat_start_at(p: &Parser, n: usize) -> bool {
     }
 }
 
-/// 今の位置から始まる apat のトークン数。apat でなければ `None`。
-/// 括弧は対応する閉じ括弧までを数える (項目の種類を決める先読みに使う)。
+/// 項目の種類を決める先読みに使うので、括弧は対応する閉じ括弧までを数える。
 pub(super) fn apat_len(p: &Parser) -> Option<usize> {
     match p.current() {
         UNDERSCORE | LIDENT | INT | STRING | CHAR => Some(1),
@@ -50,7 +47,6 @@ pub(super) fn apat_len(p: &Parser) -> Option<usize> {
     }
 }
 
-/// pat ::= cpat (CONOP pat)?  (右結合)
 pub(super) fn pattern(p: &mut Parser) -> bool {
     let m = p.start();
     if !cpat(p) {
@@ -73,7 +69,6 @@ pub(super) fn pattern(p: &mut Parser) -> bool {
     true
 }
 
-/// cpat ::= qcon apat+ | apat
 fn cpat(p: &mut Parser) -> bool {
     if !p.at(UIDENT) {
         return apat(p);
@@ -91,13 +86,11 @@ pub(super) fn apat(p: &mut Parser) -> bool {
     apat_with(p, false)
 }
 
-/// ラムダの引数。`(pat : type)` も書ける (spec §5 の param)。
+/// `apat` と違い、`(pat : type)` も書ける。
 pub(super) fn param(p: &mut Parser) -> bool {
     apat_with(p, true)
 }
 
-/// apat ::= '_' | LIDENT | qcon | literal | '-' INT | '(' ')' | '(' pat ')' | '(' pat (',' pat)+ ','? ')'
-///        | リスト (S2) | レコード (S2)
 fn apat_with(p: &mut Parser, annotated: bool) -> bool {
     let m = p.start();
     let kind = match p.current() {

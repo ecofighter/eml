@@ -4,7 +4,7 @@ use ariadne::{Config, IndexType, Label as AriadneLabel, Report, ReportKind};
 
 use crate::{Diagnostic, Label, Severity, SourceFiles};
 
-/// 診断を色なしのテキストに整形する。CLI は stderr に、UI テストはスナップショットに使う。
+/// UI テストのスナップショットにも使うので、色を付けない。
 pub fn render(diagnostics: &[Diagnostic], files: &SourceFiles) -> String {
     let mut out = Vec::new();
     let mut sources = ariadne::sources(

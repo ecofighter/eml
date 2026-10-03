@@ -1,12 +1,9 @@
-//! 文と式 (spec §5 の body / stmt / expr / op_expr / app / postfix / atom)。
-
 use super::*;
 use crate::parser::CompletedMarker;
 
-/// 中置の位置に置ける演算子。`-` は前置の負号にもなる。
 const OPERATORS: TokenSet = TokenSet::new(&[OP, CONOP, MINUS]);
 
-/// atom を始められるトークン。`ERROR_TOKEN` も atom として読み、診断は出さない (字句解析で報告済み)。
+/// `ERROR_TOKEN` も atom として読む。字句解析で報告済みなので、診断を重ねずに先へ進めるため。
 const ATOM_START: TokenSet = TokenSet::new(&[
     INT,
     FLOAT,
@@ -23,10 +20,10 @@ const ATOM_START: TokenSet = TokenSet::new(&[
     ERROR_TOKEN,
 ]);
 
-/// atom ではないので、引数や演算の項の位置では括弧が要る式 (spec §5)。
+/// atom ではないので、引数や演算の項の位置では括弧が要る (docs/spec/grammar.md)。
+/// これにより、`match e with` の `e` が `with` の手前で終わる。
 const NEEDS_PARENS: TokenSet = TokenSet::new(&[IF_KW, MATCH_KW, HANDLE_KW, LET_KW]);
 
-/// body ::= block(stmt) | expr
 pub(super) fn body(p: &mut Parser) {
     if p.at(LAYOUT_OPEN) {
         let m = p.start();
@@ -43,7 +40,6 @@ pub(super) fn body(p: &mut Parser) {
     }
 }
 
-/// stmt ::= 'let' pat (':' type)? '=' body | 'use' (pat '<-')? expr | expr
 fn stmt(p: &mut Parser) -> bool {
     match p.current() {
         LET_KW => {
@@ -67,7 +63,7 @@ fn stmt(p: &mut Parser) -> bool {
     }
 }
 
-/// ブロックの `let`。後ろに `in` が続けば、1行の形の `let ... in` 式 (spec §7) として式文にする。
+/// `let ... in` 式とは `in` まで読まないと区別できないので、`in` が続けば `LET_EXPR` の式文に作り替える。
 fn let_stmt(p: &mut Parser) {
     let m = p.start();
     let_head_and_body(p);
@@ -86,7 +82,6 @@ fn let_stmt(p: &mut Parser) {
     }
 }
 
-/// `let pat (: type)? = body` の部分。
 fn let_head_and_body(p: &mut Parser) {
     p.bump(LET_KW);
     if !patterns::pattern(p) {
@@ -104,7 +99,7 @@ fn let_head_and_body(p: &mut Parser) {
     }
 }
 
-/// expr。何も読めなければ、診断を出さずに偽を返す。
+/// 何も読めなければ、診断を出さずに偽を返す。何を期待していたかを知っている呼び出し側が診断するため。
 pub(super) fn expr(p: &mut Parser) -> bool {
     match p.current() {
         IF_KW => if_expr(p),
@@ -124,9 +119,7 @@ enum OpExpr {
     LeftSection,
 }
 
-/// op_expr ::= operand (OP operand)* 。CST では `OP_SEQ` に平たく並べる (spec §7)。
-/// 前置の `-` も `OP_SEQ` の中のトークンとして置き、HIR が `negate` として組み直す。
-/// 演算子が1つもなければ `OP_SEQ` を作らない。
+/// 演算子が1つもなければ `OP_SEQ` を作らない。1つの被演算子を余計なノードで包まないため。
 /// `section` が真なら、括弧の直下の `(a +)` を検出して `LeftSection` を返す。
 fn op_expr(p: &mut Parser, section: bool) -> OpExpr {
     let m = p.start();
@@ -172,7 +165,6 @@ fn op_expr(p: &mut Parser, section: bool) -> OpExpr {
     }
 }
 
-/// operand ::= app | lambda 。括弧の要る式は E0012 を出して読む。
 fn operand(p: &mut Parser) -> bool {
     if p.at_ts(ATOM_START) || p.at(RESUME_KW) || p.at(DROP_KW) {
         app(p);
@@ -186,8 +178,7 @@ fn operand(p: &mut Parser) -> bool {
     true
 }
 
-/// app ::= ('resume' | 'drop')? postfix+ lambda?
-/// `resume` / `drop` があればそのノードに、なければ引数が1つ以上あるときだけ `APP_EXPR` にする。
+/// 引数がなければ `APP_EXPR` を作らない。1つの atom を余計なノードで包まないため。
 fn app(p: &mut Parser) {
     let m = p.start();
     let keyword = match p.current() {
@@ -213,7 +204,7 @@ fn app(p: &mut Parser) {
             postfix(p);
             args += 1;
         } else if p.at(FN_KW) {
-            // 最後の引数のラムダは、括弧なしで書ける (spec §7)。
+            // 最後の引数のラムダは括弧なしで書け、本体が後ろをすべて取るので、引数の並びはここで終わる。
             lambda(p);
             args += 1;
             break;
@@ -236,7 +227,6 @@ fn app(p: &mut Parser) {
     }
 }
 
-/// postfix ::= atom ('.' (LIDENT | INT))*
 fn postfix(p: &mut Parser) -> bool {
     let Some(mut lhs) = atom(p) else {
         return false;
@@ -297,7 +287,6 @@ fn unsupported_literal_message(kind: SyntaxKind) -> &'static str {
     }
 }
 
-/// qvar | qcon ::= (UIDENT '.')* (LIDENT | UIDENT)
 fn qname(p: &mut Parser) {
     while p.at(UIDENT) && p.nth(1) == DOT && matches!(p.nth(2), UIDENT | LIDENT) {
         p.bump(UIDENT);
@@ -306,7 +295,6 @@ fn qname(p: &mut Parser) {
     p.bump_any();
 }
 
-/// `(` で始まる atom。単位、括弧、タプル、型の明示、演算子の参照、セクション。
 fn paren_expr(p: &mut Parser) -> SyntaxKind {
     p.bump(L_PAREN);
     if p.eat(R_PAREN) {
@@ -318,7 +306,7 @@ fn paren_expr(p: &mut Parser) -> SyntaxKind {
         return OP_REF;
     }
     if p.at(OP) || p.at(CONOP) {
-        // 右セクション。`(- 1)` は負の数なので、ここには来ない (spec §7)。
+        // `(- 1)` は右セクションではなく負の数なので (docs/spec/expressions.md)、`-` はここに来ない。
         p.bump_any();
         while p.at(MINUS) {
             p.bump(MINUS);
@@ -334,7 +322,7 @@ fn paren_expr(p: &mut Parser) -> SyntaxKind {
         return RIGHT_SECTION;
     }
     if p.at(DOT) && p.nth(1) == LIDENT {
-        // `(.name)`。`.` と名前の間だけを詰める。
+        // `(.name)` では、`.` と名前の間だけに空白を禁じる。
         if !p.touches_next() {
             p.error(
                 codes::SPACE_AROUND_DOT,
@@ -392,7 +380,7 @@ fn paren_expr(p: &mut Parser) -> SyntaxKind {
     expect(p, R_PAREN);
     PAREN_EXPR
 }
-/// 括弧の要る式を、引数や演算の項の位置で見つけた。E0012 を出し、回復のためにそのまま式として読む。
+/// E0012 を出した後も、回復のためにそのまま式として読む。
 fn needs_parens(p: &mut Parser) {
     p.error(
         codes::NEEDS_PARENS,
@@ -405,7 +393,6 @@ fn needs_parens(p: &mut Parser) {
     expr(p);
 }
 
-/// 'if' expr 'then' body ('else' body)?
 fn if_expr(p: &mut Parser) {
     let m = p.start();
     p.bump(IF_KW);
@@ -427,14 +414,14 @@ fn if_expr(p: &mut Parser) {
     m.complete(p, IF_EXPR);
 }
 
-/// `if` と同じ列に書いた `then` / `else` の前の `SEP` を1つ読み飛ばす (spec §4、Haskell の DoAndIfThenElse)。
+/// `if` と同じ列に書いた `then` / `else` の前には、レイアウト段が `SEP` を入れる。`else` で始まる文はないので、
+/// その `SEP` を1つ読み飛ばしても曖昧にならない (Haskell の DoAndIfThenElse。docs/spec/layout.md)。
 fn skip_sep_before(p: &mut Parser, kind: SyntaxKind) {
     if p.at_sep() && p.nth(1) == kind {
         p.bump_any();
     }
 }
 
-/// 'match' expr 'with' arms
 fn match_expr(p: &mut Parser) {
     let m = p.start();
     p.bump(MATCH_KW);
@@ -451,8 +438,7 @@ fn match_expr(p: &mut Parser) {
     m.complete(p, MATCH_EXPR);
 }
 
-/// `with` の後ろの枝の並び。字下げしたブロックか、同じ行に並べた枝 (spec §7)。
-/// 同じ行の形では、枝の本体は次の `|` の手前で終わる (`|` 単独は演算子ではないため)。
+/// 同じ行に並べた枝では、本体は次の `|` の手前で終わる。`|` 単独は演算子ではないため。
 fn branches(p: &mut Parser, expected: &str, branch: fn(&mut Parser) -> bool) {
     if p.at(LAYOUT_OPEN) {
         block_of(p, expected, branch);
@@ -471,7 +457,7 @@ fn branches(p: &mut Parser, expected: &str, branch: fn(&mut Parser) -> bool) {
     }
 }
 
-/// arm ::= '|' pat '->' body 。ブロックの中で `|` を書き忘れた枝も、診断したうえで読む。
+/// ブロックの中で `|` を書き忘れた枝も、診断したうえで枝として読む。
 fn match_arm(p: &mut Parser) -> bool {
     if !p.at(PIPE) && !patterns::at_apat_start(p) {
         return false;
@@ -498,7 +484,6 @@ fn match_arm(p: &mut Parser) -> bool {
     true
 }
 
-/// lambda ::= 'fn' param+ '->' body
 fn lambda(p: &mut Parser) {
     let m = p.start();
     p.bump(FN_KW);
@@ -520,7 +505,6 @@ fn lambda(p: &mut Parser) {
     m.complete(p, LAMBDA_EXPR);
 }
 
-/// 式の位置の 'let' pat (':' type)? '=' expr 'in' expr
 fn let_expr(p: &mut Parser) {
     let m = p.start();
     let_head_and_body(p);
@@ -534,7 +518,7 @@ fn let_expr(p: &mut Parser) {
     m.complete(p, LET_EXPR);
 }
 
-/// 'use' (pat '<-')? expr 。脱糖は HIR で行う (spec §7)。
+/// 脱糖は HIR で行うので、ここでは形だけを読む (docs/spec/expressions.md)。
 fn use_stmt(p: &mut Parser) {
     let m = p.start();
     p.bump(USE_KW);
@@ -558,7 +542,7 @@ fn use_stmt(p: &mut Parser) {
     m.complete(p, USE_STMT);
 }
 
-/// 文の終わりまでに、括弧とブロックの外の `<-` があるか (`use p <- e` の形か)。
+/// `use p <- e` と `use e` は `<-` まで読まないと区別できないので、括弧とブロックの外の `<-` を文の終わりまで探す。
 fn has_left_arrow(p: &Parser) -> bool {
     let mut depth = 0u32;
     let mut n = 0;
@@ -580,7 +564,6 @@ fn has_left_arrow(p: &Parser) -> bool {
     }
 }
 
-/// 'handle' expr ('from' expr)? 'with' clauses
 fn handle_expr(p: &mut Parser) {
     let m = p.start();
     p.bump(HANDLE_KW);
@@ -604,7 +587,6 @@ fn handle_expr(p: &mut Parser) {
     m.complete(p, HANDLE_EXPR);
 }
 
-/// clause ::= '|' LIDENT apat* '->' body | '|' 'return' apat+ '->' body
 fn handler_clause(p: &mut Parser) -> bool {
     if !p.at(PIPE) {
         return false;

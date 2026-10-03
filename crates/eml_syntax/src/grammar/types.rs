@@ -1,5 +1,3 @@
-//! 型と row (spec §5 の type / btype / type_atom / row)。
-
 use super::*;
 
 const TYPE_ATOM_START: TokenSet = TokenSet::new(&[UIDENT, LIDENT, L_PAREN, L_BRACE]);
@@ -8,7 +6,6 @@ pub(super) fn at_type_atom_start(p: &Parser) -> bool {
     p.at_ts(TYPE_ATOM_START)
 }
 
-/// type ::= btype ('->' row? type)?
 pub(super) fn type_(p: &mut Parser) -> bool {
     let m = p.start();
     if !btype(p) {
@@ -30,7 +27,7 @@ pub(super) fn type_(p: &mut Parser) -> bool {
     true
 }
 
-/// `->` の右側。`->` で行が終わると、レイアウト段がブロックを開くので、その中の1つの型として読む。
+/// `->` で行が終わるとレイアウト段がブロックを開くので、その中の1つの型として読む。
 fn arrow_result(p: &mut Parser) {
     let in_block = p.eat(LAYOUT_OPEN);
     if in_block && p.eat(LAYOUT_CLOSE) {
@@ -46,7 +43,7 @@ fn arrow_result(p: &mut Parser) {
     }
 }
 
-/// `type` の宣言の `=` の右側。`=` で行が終われば、ブロックの中の1つの型として読む。
+/// `=` で行が終わるとレイアウト段がブロックを開くので、その中の1つの型として読む。
 pub(super) fn type_or_block(p: &mut Parser) {
     let in_block = p.eat(LAYOUT_OPEN);
     if in_block && p.eat(LAYOUT_CLOSE) {
@@ -58,7 +55,6 @@ pub(super) fn type_or_block(p: &mut Parser) {
     }
 }
 
-/// btype ::= qcon type_atom* | type_atom
 pub(super) fn btype(p: &mut Parser) -> bool {
     if !p.at(UIDENT) {
         return type_atom(p);
@@ -74,7 +70,6 @@ pub(super) fn btype(p: &mut Parser) -> bool {
     true
 }
 
-/// type_atom ::= qcon | LIDENT | '(' type ')' | '(' type (',' type)+ ')' | レコード (S2)
 pub(super) fn type_atom(p: &mut Parser) -> bool {
     let m = p.start();
     let kind = match p.current() {
@@ -110,7 +105,6 @@ pub(super) fn type_atom(p: &mut Parser) -> bool {
     true
 }
 
-/// row ::= '<' '>' | '<' LIDENT '>' | '<' effect (',' effect)* ('|' LIDENT)? '>'
 fn effect_row(p: &mut Parser) {
     let m = p.start();
     eat_angle(p, '<', L_ANGLE);
@@ -137,7 +131,6 @@ fn effect_row(p: &mut Parser) {
     m.complete(p, EFFECT_ROW);
 }
 
-/// effect ::= qcon type_atom*
 fn effect(p: &mut Parser) {
     if !p.at(UIDENT) {
         p.error(
@@ -155,7 +148,7 @@ fn effect(p: &mut Parser) {
     m.complete(p, EFFECT);
 }
 
-/// 今のトークンが `c` で始まる演算子か。型の中では `<>` や `>->` を分けて読む (spec §5)。
+/// 型の中では `<>` や `>->` を分けて読むので、演算子の先頭の文字だけを見る。
 fn at_angle(p: &Parser, c: char) -> bool {
     p.at(OP) && p.current_text().starts_with(c)
 }

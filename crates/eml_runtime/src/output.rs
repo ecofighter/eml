@@ -1,8 +1,7 @@
 use std::io::{self, Write};
 use std::sync::{Arc, Mutex};
 
-/// 実行結果の出力先。将来、複数のスレッドから `println` するため `Send + Sync` にする
-/// (マルチコア対応の設計 spec §8)。
+/// 将来、複数のスレッドから `println` するため `Send + Sync` にする (docs/future/multicore.md)。
 #[derive(Clone)]
 pub struct OutputSink(Arc<Mutex<dyn Write + Send>>);
 
@@ -11,12 +10,11 @@ impl OutputSink {
         OutputSink(Arc::new(Mutex::new(writer)))
     }
 
-    /// プロセスの標準出力に書く出力先。
     pub fn stdout() -> Self {
         Self::new(io::stdout())
     }
 
-    /// 書いた内容をメモリに貯める出力先と、その中身を読むためのバッファを返す。テストで使う。
+    /// テストでプログラムの出力を捕まえるためのもの。
     pub fn capture() -> (Self, Arc<Mutex<Vec<u8>>>) {
         let buffer = Arc::new(Mutex::new(Vec::new()));
         (OutputSink(buffer.clone()), buffer)

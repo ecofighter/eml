@@ -1,5 +1,5 @@
-//! rust-analyzer と同じイベント方式のパーサ。文法の規則は `grammar` に置き、ここは仕組みだけを持つ。
-//! 入力はレイアウト段の出力で、仮想トークン (`LAYOUT_*`) を含み、trivia を含まない。
+//! 構文を差し替えやすくするため、文法の規則は `grammar` に置き、ここには仕組みだけを持つ。
+//! 入力はレイアウト段の出力なので、仮想トークンを含み、trivia を含まない。
 
 use std::cell::Cell;
 
@@ -9,22 +9,20 @@ use crate::SyntaxKind;
 use crate::lexer::{Token, operator_kind};
 use crate::token_set::TokenSet;
 
-/// 前進せずに先読みできる回数の上限。文法の誤りによる無限ループを検出する。
+/// 前進せずに先読みできる回数の上限。文法の誤りによる無限ループを、ハングではなく panic で見つけるため。
 const STEP_LIMIT: u32 = 1_000_000;
 
-/// パーサが出すイベント。`sink::build_tree` がこれを rowan の木に組み立てる。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Event {
-    /// ノードの開始。`forward_parent` は、`precede` で後から作った親ノードの `Start` までの距離。
+    /// `forward_parent` は、`precede` で後から作った親ノードの `Start` までの距離。
     Start {
         kind: SyntaxKind,
         forward_parent: Option<u32>,
     },
-    /// trivia でないトークン (の残り全部) を1つ進める。
     Token {
         kind: SyntaxKind,
     },
-    /// trivia でないトークンの先頭の `len` バイトだけを、`kind` のトークンとして進める。
+    /// 型の中で `<>` などを分けて読むとき、トークンの先頭だけを木に入れる。
     TokenPrefix {
         kind: SyntaxKind,
         len: TextSize,
@@ -37,7 +35,6 @@ pub(crate) enum Event {
 pub(crate) struct Parser<'t> {
     file: FileId,
     text: &'t str,
-    /// レイアウト段の出力。
     tokens: Vec<Token>,
     pos: usize,
     events: Vec<Event>,
@@ -62,7 +59,6 @@ impl<'t> Parser<'t> {
         (self.events, self.diagnostics)
     }
 
-    /// `n` 個先のトークンの種類。入力の終わりを越えたら `EOF`。
     pub(crate) fn nth(&self, n: usize) -> SyntaxKind {
         let steps = self.steps.get();
         assert!(
@@ -76,8 +72,7 @@ impl<'t> Parser<'t> {
             .map_or(SyntaxKind::EOF, |token| token.kind)
     }
 
-    /// `n` 個先のトークンの種類。`nth` と違い、ステップ上限に数えない。
-    /// 入力の終わり (`EOF`) で必ず終わる、有限の先読み走査のためのもの。
+    /// `nth` と違い、ステップ上限に数えない。`EOF` で必ず終わる有限の先読み走査が、上限に引っかからないようにするため。
     pub(crate) fn peek(&self, n: usize) -> SyntaxKind {
         self.tokens
             .get(self.pos + n)
@@ -100,7 +95,7 @@ impl<'t> Parser<'t> {
         self.at(SyntaxKind::EOF)
     }
 
-    /// 項目の区切り。`;` はレイアウトの `SEP` と同じに扱う (spec §4 規則 5)。
+    /// `;` はレイアウトの `SEP` と同じに扱う (docs/spec/layout.md の規則 5)。
     pub(crate) fn at_sep(&self) -> bool {
         matches!(
             self.current(),
@@ -108,7 +103,6 @@ impl<'t> Parser<'t> {
         )
     }
 
-    /// 今のトークンのテキスト。仮想トークンと入力の終わりでは空。
     pub(crate) fn current_text(&self) -> &'t str {
         let text = self.text;
         self.tokens
@@ -116,7 +110,6 @@ impl<'t> Parser<'t> {
             .map_or("", |token| &text[token.range])
     }
 
-    /// 今のトークンの位置。入力の終わりでは、テキストの末尾の空の範囲。
     pub(crate) fn current_range(&self) -> TextRange {
         self.tokens
             .get(self.pos)
@@ -125,7 +118,6 @@ impl<'t> Parser<'t> {
             })
     }
 
-    /// 直前のトークンと今のトークンの間に、空白やコメントがないか。
     pub(crate) fn touches_prev(&self) -> bool {
         match (self.pos.checked_sub(1), self.tokens.get(self.pos)) {
             (Some(prev), Some(current)) => self.tokens[prev].range.end() == current.range.start(),
@@ -133,7 +125,6 @@ impl<'t> Parser<'t> {
         }
     }
 
-    /// 今のトークンと次のトークンの間に、空白やコメントがないか。
     pub(crate) fn touches_next(&self) -> bool {
         match (self.tokens.get(self.pos), self.tokens.get(self.pos + 1)) {
             (Some(current), Some(next)) => current.range.end() == next.range.start(),
@@ -168,15 +159,14 @@ impl<'t> Parser<'t> {
         }
     }
 
-    /// 今のトークンを `kind` として木に入れる (型の中の `<` を `L_ANGLE` にする、など)。
+    /// 型の中の `<` を `L_ANGLE` にするなど、lexer と違う種類で木に入れるときに使う。
     pub(crate) fn bump_remap(&mut self, kind: SyntaxKind) {
         assert!(!self.at_eof() && !self.current().is_virtual());
         self.events.push(Event::Token { kind });
         self.advance();
     }
 
-    /// 今のトークン (2文字以上の演算子) の先頭の1文字を `kind` として読み、残りを今のトークンにする。
-    /// 型の中で `<>` や `>->` を分けて読むのに使う (spec §5)。
+    /// 型の中で `<>` や `>->` を分けて読むのに使う (docs/spec/grammar.md の「文法上の補足」)。
     pub(crate) fn split_first_char(&mut self, kind: SyntaxKind) {
         let token = self.tokens[self.pos];
         let one = TextSize::new(1);
@@ -204,9 +194,8 @@ impl<'t> Parser<'t> {
         Marker::new(pos)
     }
 
-    /// 今のトークンの位置に診断を出す。トークンは進めない。`label` はその位置に付ける説明。
-    /// `ERROR_TOKEN` は字句解析で報告済みなので、その位置には出さない。
-    /// 直前の診断と同じ位置にも出さない (1つの誤りから連鎖する診断を抑える)。
+    /// `ERROR_TOKEN` の位置には出さない。字句解析で報告済みのため。直前の診断と同じ位置にも出さない。
+    /// 1つの誤りから連鎖する診断を抑えるため。
     pub(crate) fn error(
         &mut self,
         code: ErrorCode,
@@ -232,7 +221,7 @@ impl<'t> Parser<'t> {
     }
 }
 
-/// 開始したノード。`complete` か `abandon` で必ず閉じる。閉じずに捨てるとパニックする。
+/// 閉じ忘れは文法の実装の誤りなので、`complete` も `abandon` もせずに捨てるとパニックする。
 #[must_use]
 pub(crate) struct Marker {
     pos: u32,
@@ -259,8 +248,8 @@ impl Marker {
         CompletedMarker { pos: self.pos }
     }
 
-    /// ノードを作らない。イベントは `Tombstone` のまま残す (取り除くと、`precede` で指された位置に
-    /// 後のノードが入り、親子関係が壊れるため)。
+    /// イベントは取り除かずに `Tombstone` のまま残す。取り除くと、`precede` で指された位置に後のノードが入り、
+    /// 親子関係がずれるため。
     pub(crate) fn abandon(mut self, _p: &mut Parser) {
         self.done = true;
     }
@@ -279,7 +268,7 @@ pub(crate) struct CompletedMarker {
 }
 
 impl CompletedMarker {
-    /// 完了したノードの外側に、新しい親ノードを開始する (演算子の列やフィールドアクセスの左辺などに使う)。
+    /// 左辺を読んだ後で、それを子に持つノード (演算子の列、フィールドアクセスなど) を作るのに使う。
     pub(crate) fn precede(self, p: &mut Parser) -> Marker {
         let parent = p.start();
         match &mut p.events[self.pos as usize] {
@@ -300,8 +289,7 @@ mod tests {
     use crate::{SyntaxKind::*, SyntaxNode};
     use eml_diagnostics::SourceFiles;
 
-    /// テキストを字句解析とレイアウト段に通し、`grammar` でパースして木の表示を返す。
-    /// 仕組みだけを試すための小さな文法を渡す。
+    /// 本物の文法から独立して仕組みを試すため、小さな文法を引数で渡す。
     fn run(text: &str, grammar: impl FnOnce(&mut Parser)) -> (String, Vec<Diagnostic>) {
         let mut files = SourceFiles::new();
         let file = files.add("test.em", text);

@@ -1,5 +1,3 @@
-//! 診断の型、ソースファイルの管理、ariadne による表示。
-
 mod render;
 mod source;
 
@@ -9,7 +7,7 @@ pub use render::render;
 pub use source::{FileId, SourceFiles};
 pub use text_size::{TextRange, TextSize};
 
-/// `E0001` のような安定したエラー番号。段階ごとに番号の範囲を分ける (spec §6)。
+/// 番号の範囲は段階ごとに分けている (docs/spec/diagnostics.md)。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct ErrorCode(pub u16);
 
@@ -26,7 +24,6 @@ pub enum Severity {
     Note,
 }
 
-/// ソース上の位置と、そこに付けるラベル文。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Label {
     pub file: FileId,
@@ -44,7 +41,6 @@ impl Label {
     }
 }
 
-/// 自動修正の1つの編集。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TextEdit {
     pub file: FileId,

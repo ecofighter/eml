@@ -1,7 +1,7 @@
 use eml_diagnostics::{SourceFiles, render};
 use eml_syntax::{debug_tree, parse};
 
-/// パースした木と診断を表示する。木は必ず元のテキストに戻ることも確認する。
+/// どのテストでも lossless を確かめるため、木が元のテキストに戻ることもここで確認する。
 fn dump(text: &str) -> String {
     let mut files = SourceFiles::new();
     let file = files.add("test.em", text);

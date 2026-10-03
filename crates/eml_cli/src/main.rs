@@ -26,7 +26,7 @@ enum Command {
     },
 }
 
-/// 終了コード: 0 = 成功、1 = 診断のエラーか実行時エラー、2 = 使い方の誤り (clap が引数の誤りで 2 を返す)。
+/// 使い方の誤りに 2 を使うのは、clap が引数の誤りで返す値に合わせるため (docs/implementation/architecture.md)。
 fn main() -> ExitCode {
     let cli = Cli::parse();
     match cli.command {

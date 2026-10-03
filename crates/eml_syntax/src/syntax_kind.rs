@@ -1,37 +1,28 @@
-/// トークンと構文ノードの種類。トークン (`EOF` まで) を先に並べ、`TokenSet` が 128 ビットに収まるようにする。
-/// 字句の規則は構文設計 spec §3 に従う。字句解析は `lexer` が行う。
+/// トークン (`EOF` まで) を先に並べるのは、`TokenSet` の 128 ビットに収めるため。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[repr(u16)]
 #[allow(non_camel_case_types)]
 pub enum SyntaxKind {
-    // trivia
     WHITESPACE = 0,
-    /// `--` から行末まで。`-- |` のドキュメントコメントも字句としてはこれ。
+    /// ドキュメントコメント `-- |` もこれにする。解釈するのはドキュメント生成と LSP で、字句では区別しない。
     COMMENT,
-    /// 入れ子にできる `{- -}`。
     BLOCK_COMMENT,
-    /// ファイルの先頭の `#!` の行。
     SHEBANG,
 
-    // リテラルと識別子
     INT,
-    /// 浮動小数。S1 では使うと E0004。
+    // FLOAT、CHAR、MULTILINE_STRING、RAW_STRING、COMMAND は後の段階で実装する構文。
+    // 使われた位置で E0004 を出せるように、字句だけ先に用意している。
     FLOAT,
-    /// 文字。S1 では使うと E0004。
     CHAR,
-    /// 通常の文字列。S1 では補間を含めて1つのトークン。
+    /// 補間を含んでいても1つのトークンにする。部品に分けるのは補間を実装する S2 から。
     STRING,
-    /// `"""` の複数行の文字列。S1 では使うと E0004。
     MULTILINE_STRING,
-    /// `r"..."` / `r#"..."#`。S1 では使うと E0004。
     RAW_STRING,
-    /// バッククォートのコマンドリテラル。S1 では使うと E0004。
     COMMAND,
     LIDENT,
     UIDENT,
     UNDERSCORE,
 
-    // キーワード
     DATA_KW,
     TYPE_KW,
     EFFECT_KW,
@@ -64,7 +55,6 @@ pub enum SyntaxKind {
     CLASS_KW,
     INSTANCE_KW,
 
-    // 区切り記号
     L_PAREN,
     R_PAREN,
     L_BRACK,
@@ -74,7 +64,6 @@ pub enum SyntaxKind {
     COMMA,
     SEMICOLON,
 
-    // 予約記号 (演算子にならない)
     EQ,
     PIPE,
     COLON,
@@ -83,88 +72,66 @@ pub enum SyntaxKind {
     LEFT_ARROW,
     DOT2,
 
-    // 演算子
-    /// ユーザーが定義できる演算子。
     OP,
-    /// `:` で始まる、コンストラクタの演算子。
     CONOP,
-    /// `-`。中置の引き算と、前置の負号の両方に使う。
+    /// `OP` と分けるのは、前置の負号としても使うため。
     MINUS,
 
-    /// row の `<` と `>`。lexer は `OP` にし、parser が型の中で付け替える (分割することもある)。
+    /// row の括弧かどうかは型の中でしか分からないので、lexer は `OP` にし、parser が付け替える (`<>` などは分割する)。
     L_ANGLE,
     R_ANGLE,
 
-    /// レイアウト段の仮想トークン。parser の入力にだけ現れ、木には入らない。
+    /// レイアウト段の仮想トークン。CST を lossless に保つため、木には入れない。
     LAYOUT_OPEN,
     LAYOUT_SEP,
     LAYOUT_CLOSE,
 
-    /// 字句として認識できない文字の並び。
     ERROR_TOKEN,
-    /// 入力の終わり。パーサの中でだけ使い、木には現れない。
+    /// パーサの中でだけ使い、木には現れない。
     EOF,
 
-    // ノード
     SOURCE_FILE,
     ERROR,
-    // 項目
     SIGNATURE,
     EQUATION,
     DATA_ITEM,
-    /// `data` の1つの選択肢 (`| Some a`、`| a :: List a`)。
     ALT,
     TYPE_ITEM,
     EFFECT_ITEM,
-    /// エフェクトの1つの操作の宣言。
     OP_DECL,
     FIXITY_ITEM,
 
-    // 文
-    /// 字下げしたブロック。仮想トークンは木に入らないので、子は文だけ。
     BLOCK,
     LET_STMT,
     USE_STMT,
     EXPR_STMT,
 
-    // 式
     IF_EXPR,
     MATCH_EXPR,
     MATCH_ARM,
     HANDLE_EXPR,
-    /// handler の操作の節 (`| op x k -> e`)。
     OP_CLAUSE,
-    /// handler の `return` の節。
     RETURN_CLAUSE,
     LAMBDA_EXPR,
-    /// `let p = e in e2`。
     LET_EXPR,
-    /// 演算子の列。被演算子と演算子のトークンを平たく並べる。前置の `-` もトークンとして入る (spec §7)。
+    /// fixity はユーザーが宣言し、名前解決の後でないと分からない。そのため演算子の列は平たく並べ、HIR で木に組み直す
+    /// (docs/spec/expressions.md)。前置の `-` もトークンのまま入る。
     OP_SEQ,
-    /// 関数適用。最初の子が関数、残りが引数。
     APP_EXPR,
     RESUME_EXPR,
     DROP_EXPR,
-    /// `e.name`、`e.0`。
     FIELD_EXPR,
-    /// 変数、コンストラクタ、修飾された名前。
     PATH_EXPR,
     LITERAL,
     UNIT_EXPR,
     PAREN_EXPR,
     TUPLE_EXPR,
-    /// `(e : T)`。
     ANNOT_EXPR,
-    /// `(+)`。
     OP_REF,
-    /// `(1 +)`。
     LEFT_SECTION,
-    /// `(+ 1)`。
     RIGHT_SECTION,
-    /// `(.name)`。
     FIELD_SECTION,
 
-    // パターン
     WILDCARD_PAT,
     BIND_PAT,
     CON_PAT,
@@ -172,12 +139,9 @@ pub enum SyntaxKind {
     UNIT_PAT,
     PAREN_PAT,
     TUPLE_PAT,
-    /// `x :: rest`。
     INFIX_CON_PAT,
-    /// ラムダの引数の `(x : Int)`。
     ANNOT_PAT,
 
-    // 型
     PATH_TYPE,
     VAR_TYPE,
     APP_TYPE,
@@ -192,7 +156,6 @@ pub enum SyntaxKind {
 }
 
 impl SyntaxKind {
-    /// レイアウト段の仮想トークンか。parser は読んでもイベントを出さない。
     pub fn is_virtual(self) -> bool {
         matches!(
             self,

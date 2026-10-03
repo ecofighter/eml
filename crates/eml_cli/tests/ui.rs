@@ -1,5 +1,5 @@
-//! UI テスト。`tests/ui/run/*.em` は実行が正常に終わること、`tests/ui/check-fail/*.em` は診断のエラーが
-//! 1件以上出ることを確認し、出力をスナップショットにする (spec §8)。
+//! 成功すべきか失敗すべきかはディレクトリ (`run/`、`check-fail/`) で決める。スナップショットの承認を誤っても、
+//! 成功と失敗の入れ替わりを検出できるようにするため (docs/implementation/testing.md)。
 
 use std::fs;
 use std::path::Path;

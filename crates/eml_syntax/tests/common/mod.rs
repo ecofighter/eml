@@ -1,11 +1,9 @@
-//! 文法のテストの補助。範囲と trivia を省いた木の形と、診断の一覧を表示する。
 #![allow(dead_code)]
 
 use eml_diagnostics::SourceFiles;
 use eml_syntax::{SyntaxElement, SyntaxNode, parse};
 
-/// 木の形 (ノードと、trivia でないトークン) を表示し、`---` の後に診断を並べる。
-/// 木が元のテキストに戻ることも確認する。
+/// どのテストでも lossless を確かめるため、木が元のテキストに戻ることもここで確認する。
 pub fn shape(text: &str) -> String {
     let (root, diagnostics) = parse_text(text);
     let mut out = String::new();
@@ -20,12 +18,11 @@ pub fn shape(text: &str) -> String {
     out
 }
 
-/// 診断を `E0011 1:5 message` の形で並べる。行と列は 1 始まりで、列は文字数で数える。
+/// 期待値を読みやすくするため、位置はバイトではなく 1 始まりの行と列 (文字数) で表示する。
 pub fn diagnostics(text: &str) -> Vec<String> {
     parse_text(text).1
 }
 
-/// テキストの行を改行でつなぐ。
 pub fn lines(lines: &[&str]) -> String {
     lines.join("\n")
 }

@@ -1,4 +1,4 @@
-//! `eml check` / `eml run` の中身。各段階をつなぐだけで、テストからプロセス内で呼べる API を公開する。
+//! UI テストからプロセス内で呼べるように、CLI の中身をバイナリではなく lib に置く。
 
 use std::sync::Arc;
 
@@ -8,14 +8,12 @@ use eml_diagnostics::{Diagnostic, FileId, SourceFiles, has_errors};
 pub use eml_interp::RunConfig;
 pub use eml_runtime::OutputSink;
 
-/// ファイルを検査し、すべての段階の診断を返す。
 pub fn check(files: &SourceFiles, file: FileId) -> Vec<Diagnostic> {
     analyze(files, file).1
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RunResult {
-    /// 診断のエラーがあったので実行しなかった。
     NotRun,
     Completed,
     RuntimeError(String),
@@ -23,12 +21,11 @@ pub enum RunResult {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RunOutcome {
-    /// 検査で出た診断 (警告を含む)。
+    /// 実行した場合も、警告を表示できるように検査の診断を返す。
     pub diagnostics: Vec<Diagnostic>,
     pub result: RunResult,
 }
 
-/// ファイルを検査し、エラーがなければ実行する。プログラムの出力は `stdout` に書く。
 pub fn run(
     files: &SourceFiles,
     file: FileId,
@@ -52,7 +49,7 @@ pub fn run(
     }
 }
 
-/// 各段階を順につなぐ。エラーがあっても止めず、すべての段階の診断を集める。
+/// エラーがあっても止めずに全段階を実行する。1回の実行で、独立した複数のエラーを報告するため。
 fn analyze(files: &SourceFiles, file: FileId) -> (Program, Vec<Diagnostic>) {
     let (parse, mut diagnostics) = eml_syntax::parse(file, files.text(file));
     let (module, stage) = eml_hir::lower(file, &parse.tree());

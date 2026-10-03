@@ -1,8 +1,6 @@
-//! 項目 (spec §5 の item / decl、§6)。
-
 use super::*;
 
-/// 項目を始めるキーワード。将来の予約語も、ここで受けてエラーにする。
+/// 将来の予約語もここで受けるのは、項目としてエラーにして次の項目から回復するため。
 const ITEM_KEYWORDS: TokenSet = TokenSet::new(&[
     DATA_KW,
     TYPE_KW,
@@ -17,7 +15,6 @@ const ITEM_KEYWORDS: TokenSet = TokenSet::new(&[
     INSTANCE_KW,
 ]);
 
-/// fixity の宣言に書ける演算子。
 const DECLARABLE_OPERATORS: TokenSet = TokenSet::new(&[OP, CONOP, MINUS]);
 
 pub(super) fn at_item_start(p: &Parser) -> bool {
@@ -28,22 +25,20 @@ pub(super) fn at_item_start(p: &Parser) -> bool {
         || at_operator_equation(p)
 }
 
-/// equation ::= LIDENT apat* '=' body 。`LIDENT OP` で始まる行は演算子の定義 (spec §5)。
+/// `LIDENT` の直後が `-` なら、演算子の定義 (`a - b = ...`) とみなす。関数の定義とは2トークンの先読みで区別する。
 fn at_equation(p: &Parser) -> bool {
     p.at(LIDENT) && (p.nth(1) == EQ || (p.nth(1) != MINUS && patterns::at_apat_start_at(p, 1)))
 }
 
-/// equation ::= apat OP apat '=' body 。apat の後ろが `=` や `::` なら、パターンによる束縛 (エラー)。
+/// apat の直後が `=` や `::` でも受けるのは、トップレベルのパターンによる束縛をここで診断するため。
 fn at_operator_equation(p: &Parser) -> bool {
     patterns::apat_len(p).is_some_and(|len| matches!(p.nth(len), OP | MINUS | CONOP | EQ))
 }
 
-/// `(OP) : type` の形のシグネチャか。
 fn at_operator_signature(p: &Parser) -> bool {
     p.at(L_PAREN) && matches!(p.nth(1), OP | MINUS) && p.nth(2) == R_PAREN
 }
 
-/// item ::= 'pub'? decl | equation | import_item
 pub(super) fn item(p: &mut Parser) {
     let m = p.start();
     if p.at(PUB_KW) {
@@ -102,7 +97,6 @@ fn data_item(p: &mut Parser, m: Marker) {
     m.complete(p, DATA_ITEM);
 }
 
-/// alts ::= block(alt) | alt+
 fn alts(p: &mut Parser) {
     if p.at(LAYOUT_OPEN) {
         block_of(p, "a constructor starting with `|`", alt);
@@ -123,7 +117,6 @@ fn alts(p: &mut Parser) {
     }
 }
 
-/// alt ::= '|' UIDENT type_atom* | '|' btype CONOP btype
 fn alt(p: &mut Parser) -> bool {
     if !p.at(PIPE) && !types::at_type_atom_start(p) {
         return false;
@@ -169,7 +162,7 @@ fn alt(p: &mut Parser) -> bool {
     true
 }
 
-/// type_item ::= 'type' UIDENT LIDENT* '=' type 。S2 で実装するので、読んだうえで E0004 を出す。
+/// S2 で実装する。今は E0004 を出したうえで、宣言として最後まで読む。
 fn type_item(p: &mut Parser, m: Marker) {
     not_yet_supported(p, "`type` declarations are not supported yet");
     p.bump(TYPE_KW);
@@ -183,7 +176,6 @@ fn type_item(p: &mut Parser, m: Marker) {
     m.complete(p, TYPE_ITEM);
 }
 
-/// effect_item ::= 'effect' UIDENT LIDENT* 'where' block(op_decl)
 fn effect_item(p: &mut Parser, m: Marker) {
     p.bump(EFFECT_KW);
     expect(p, UIDENT);
@@ -204,7 +196,6 @@ fn effect_item(p: &mut Parser, m: Marker) {
     m.complete(p, EFFECT_ITEM);
 }
 
-/// op_decl ::= ('never' | 'once' | 'multi')? LIDENT ':' type
 fn op_decl(p: &mut Parser) -> bool {
     if !matches!(p.current(), NEVER_KW | ONCE_KW | MULTI_KW | LIDENT) {
         return false;
@@ -221,7 +212,6 @@ fn op_decl(p: &mut Parser) -> bool {
     true
 }
 
-/// fixity_item ::= ('infixl' | 'infixr' | 'infix') INT OP (',' OP)*
 fn fixity_item(p: &mut Parser, m: Marker) {
     p.bump_any();
     if p.at(INT) {
@@ -259,7 +249,7 @@ fn fixity_item(p: &mut Parser, m: Marker) {
     m.complete(p, FIXITY_ITEM);
 }
 
-/// import は S2 で実装する。E0004 を出し、次の項目まで読み飛ばす。
+/// S2 で実装する。今は E0004 を出して次の項目まで読み飛ばす。
 fn import_item(p: &mut Parser, m: Marker) {
     not_yet_supported(p, "`import` is not supported yet");
     skip_to_sep(p, false);
@@ -276,7 +266,6 @@ fn reserved_item(p: &mut Parser, m: Marker) {
     m.complete(p, ERROR);
 }
 
-/// equation ::= LIDENT apat* '=' body
 fn equation(p: &mut Parser, m: Marker) {
     p.bump(LIDENT);
     while patterns::at_apat_start(p) {
@@ -288,7 +277,7 @@ fn equation(p: &mut Parser, m: Marker) {
     m.complete(p, EQUATION);
 }
 
-/// equation ::= apat OP apat '=' body (演算子の定義)。トップレベルのパターンによる束縛はエラー (spec §5)。
+/// トップレベルのパターンによる束縛 (`(a, b) = ...`) もここに来るので、エラーにする (docs/spec/grammar.md)。
 fn operator_equation(p: &mut Parser, m: Marker) {
     patterns::apat(p);
     if p.at(OP) || p.at(MINUS) {

@@ -1,6 +1,5 @@
 use crate::SyntaxKind;
 
-/// トークンの種類の集合。エラー回復の同期点などに使う。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct TokenSet(u128);
 

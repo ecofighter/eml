@@ -1,8 +1,7 @@
-/// `SourceFiles` の中のファイルを指す ID。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct FileId(u32);
 
-/// `FileId` → パスとテキスト。将来クエリ化するときは salsa の入力に置き換える。
+/// 将来クエリ化するときは salsa の入力に置き換える。
 #[derive(Debug, Default)]
 pub struct SourceFiles {
     files: Vec<(String, String)>,

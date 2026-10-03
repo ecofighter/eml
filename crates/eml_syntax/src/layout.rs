@@ -1,6 +1,5 @@
-//! レイアウト段 (構文設計 spec §4)。trivia を除いたトークン列に、幅 0 の仮想トークン
-//! `LAYOUT_OPEN` (ブロックの開始) / `LAYOUT_SEP` (項目の区切り) / `LAYOUT_CLOSE` (ブロックの終了) を挿入する。
-//! 仮想トークンは parser の入力にだけ現れ、木には入らない。
+//! 規則は docs/spec/layout.md。コメントの「規則 N」はその番号を指す。
+//! 仮想トークンを木に入れないのは、CST を lossless に保つため。
 
 use eml_diagnostics::{Diagnostic, FileId, Label, TextRange, TextSize};
 
@@ -8,19 +7,16 @@ use crate::SyntaxKind::{self, *};
 use crate::codes;
 use crate::lexer::Token;
 
-/// 文脈のスタックの要素。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Context {
-    /// 基準列 n のブロック。
     Block(u32),
-    /// 括弧の内側。改行は意味を持たない。
     Bracket,
 }
 
-/// 行の最後にあると、ブロックを開くトークン (spec §4 規則 3)。
+/// 規則 3 の開始トークン。
 const BLOCK_STARTERS: [SyntaxKind; 6] = [EQ, THIN_ARROW, WITH_KW, THEN_KW, ELSE_KW, WHERE_KW];
 
-/// trivia でないトークンと、それが行の先頭にあるかどうか、その列 (0 始まり、文字数)。
+/// 列はバイトではなく、0 始まりの文字数で数える。
 struct Item {
     token: Token,
     line_start: bool,
@@ -32,14 +28,14 @@ pub(crate) fn layout(file: FileId, text: &str, tokens: &[Token]) -> (Vec<Token>,
     let items = scan_lines(file, text, tokens, &mut diagnostics);
     let mut out = Vec::with_capacity(items.len() * 2);
     let mut stack = vec![Context::Block(0)];
-    // 今のブロックに、まだトークンが1つもないか。最初の項目の前には SEP を入れない。
+    // 最初の項目の前には SEP を入れないため、今のブロックにまだトークンがないかを覚えておく。
     let mut at_block_start = true;
     for (i, item) in items.iter().enumerate() {
         let start = item.token.range.start();
         if item.line_start {
             let mut opened = false;
             if i > 0 && BLOCK_STARTERS.contains(&items[i - 1].token.kind) {
-                // 前の行は開始トークンで終わっている (規則 3)。
+                // 規則 3。
                 if item.column > enclosing_indent(&stack) && !is_closing_bracket(item.token.kind) {
                     out.push(virtual_token(LAYOUT_OPEN, start));
                     stack.push(Context::Block(item.column));
@@ -98,7 +94,7 @@ pub(crate) fn layout(file: FileId, text: &str, tokens: &[Token]) -> (Vec<Token>,
     (out, diagnostics)
 }
 
-/// trivia でないトークンについて、行の先頭かどうかと列を求める。インデントのタブを報告する。
+/// インデントのタブも、列を求めるついでにここで報告する。
 fn scan_lines(
     file: FileId,
     text: &str,
@@ -106,7 +102,6 @@ fn scan_lines(
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Vec<Item> {
     let mut items = Vec::new();
-    // ファイルの先頭も行の先頭とみなす。
     let mut newline_seen = true;
     // 今の行の先頭のバイト位置。改行を見るたびに更新するので、全体で線形時間になる。
     let mut line_begin = 0usize;
@@ -142,7 +137,6 @@ fn scan_lines(
     items
 }
 
-/// 行の先頭の空白 (インデント) にタブがあれば、最初のタブの位置に E0006 を出す。
 fn report_tab(file: FileId, prefix: &str, line_begin: usize, diagnostics: &mut Vec<Diagnostic>) {
     let indent_len = prefix
         .find(|c: char| !matches!(c, ' ' | '\t' | '\u{feff}'))
@@ -161,8 +155,8 @@ fn report_tab(file: FileId, prefix: &str, line_begin: usize, diagnostics: &mut V
     }
 }
 
-/// 規則 3 の「字下げしたブロックが必要」。E0009 を出し、開始トークンの直後に空のブロックを入れる。
-/// parser は空のブロックを黙って受け入れるので、同じ問題を二重に報告しない。
+/// E0009 を出した後、開始トークンの直後に空のブロックを入れる。parser は空のブロックを黙って受け入れるので、
+/// 同じ問題を二重に報告せずに済む。
 fn missing_block(
     file: FileId,
     text: &str,
@@ -216,8 +210,6 @@ mod tests {
     use crate::lexer::lex;
     use eml_diagnostics::SourceFiles;
 
-    /// レイアウト段の出力を、トークンのテキストと `<OPEN>` / `<SEP>` / `<CLOSE>` を空白で区切って並べる。
-    /// 診断は `E0009@2..3` の形で返す。
     fn dump(text: &str) -> (String, Vec<String>) {
         let mut files = SourceFiles::new();
         let file = files.add("test.em", text);
@@ -428,7 +420,7 @@ mod tests {
 
     #[test]
     fn unclosed_bracket_suspends_layout_to_eof() {
-        // spec §4 規則 2 のまま。閉じ忘れた括弧の後ろの行は、括弧の中身として続く。
+        // 規則 2 のとおり、閉じ忘れた括弧の後ろの行は括弧の中身として続く。
         assert_eq!(layout_of("a = (1\nb = 2"), "a = ( 1 b = 2");
     }
 

@@ -1,7 +1,6 @@
 use eml_diagnostics::{SourceFiles, render};
 use eml_syntax::lex;
 
-/// トークン列を1行1トークンで表示する。
 fn dump(text: &str) -> String {
     let mut files = SourceFiles::new();
     let file = files.add("test.em", text);
@@ -22,7 +21,6 @@ fn dump(text: &str) -> String {
     out
 }
 
-/// trivia を除いたトークンの種類。
 fn kinds(text: &str) -> Vec<String> {
     let mut files = SourceFiles::new();
     let file = files.add("test.em", text);
@@ -36,7 +34,6 @@ fn kinds(text: &str) -> Vec<String> {
         .collect()
 }
 
-/// 診断を `E0001@2..4 message` の形で並べる。
 fn diags(text: &str) -> Vec<String> {
     let mut files = SourceFiles::new();
     let file = files.add("test.em", text);

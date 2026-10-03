@@ -1,5 +1,3 @@
-//! 型付き AST ラッパ。rowan の木の上の薄い型付きの見方を提供する。
-//! ノードごとの構造体と、項目・文・式・パターン・型の enum を持つ。
 //! アクセサは、HIR への変換で必要になったものから足していく。
 
 use rowan::NodeOrToken;
@@ -7,7 +5,6 @@ use rowan::ast::{AstChildren, AstNode, support};
 
 use crate::{EmlLanguage, SyntaxKind, SyntaxNode, SyntaxToken};
 
-/// ノードの種類1つに対応する構造体を定義する。
 macro_rules! ast_node {
     ($($(#[$meta:meta])* $name:ident => $kind:ident,)*) => {$(
         $(#[$meta])*
@@ -34,7 +31,6 @@ macro_rules! ast_node {
     )*};
 }
 
-/// いくつかのノードの構造体をまとめる enum を定義する。
 macro_rules! ast_enum {
     ($(#[$meta:meta])* $name:ident { $($variant:ident),* $(,)? }) => {
         $(#[$meta])*
@@ -67,7 +63,6 @@ macro_rules! ast_enum {
 }
 
 ast_node! {
-    /// ファイル全体。
     SourceFile => SOURCE_FILE,
     Signature => SIGNATURE,
     Equation => EQUATION,
@@ -124,17 +119,15 @@ ast_node! {
 }
 
 ast_enum! {
-    /// トップレベルの項目。
     Item { Signature, Equation, DataItem, TypeItem, EffectItem, FixityItem }
 }
 
 ast_enum! {
-    /// ブロックの中の文。
     Stmt { LetStmt, UseStmt, ExprStmt }
 }
 
 ast_enum! {
-    /// 式。本体の位置の字下げしたブロック (`Block`) も式として扱う。
+    /// `body ::= block(stmt) | expr` を1つの型で受けられるように、字下げしたブロック (`Block`) も式に含める。
     Expr {
         Block, IfExpr, MatchExpr, HandleExpr, LambdaExpr, LetExpr, OpSeq, AppExpr, ResumeExpr,
         DropExpr, FieldExpr, PathExpr, Literal, UnitExpr, ParenExpr, TupleExpr, AnnotExpr, OpRef,
@@ -143,7 +136,6 @@ ast_enum! {
 }
 
 ast_enum! {
-    /// パターン。
     Pat {
         WildcardPat, BindPat, ConPat, LiteralPat, UnitPat, ParenPat, TuplePat, InfixConPat,
         AnnotPat,
@@ -151,7 +143,6 @@ ast_enum! {
 }
 
 ast_enum! {
-    /// 型。
     Type { PathType, VarType, AppType, FnType, ParenType, TupleType }
 }
 
@@ -162,7 +153,6 @@ impl SourceFile {
 }
 
 impl Signature {
-    /// 名前のトークン (`LIDENT`、または `(OP)` の演算子)。
     pub fn name(&self) -> Option<SyntaxToken> {
         name_token(&self.syntax)
     }
@@ -173,12 +163,11 @@ impl Signature {
 }
 
 impl Equation {
-    /// 定義する名前のトークン。関数なら `LIDENT`、演算子の定義なら演算子。
     pub fn name(&self) -> Option<SyntaxToken> {
         name_token(&self.syntax)
     }
 
-    /// 引数のパターン。演算子の定義では左辺と右辺。
+    /// 演算子の定義では、左辺と右辺のパターンが入る。
     pub fn params(&self) -> AstChildren<Pat> {
         support::children(&self.syntax)
     }
@@ -194,7 +183,8 @@ impl Block {
     }
 }
 
-/// 演算子の列の要素。前置の `-` は、列の先頭か別の演算子の直後にある `Operator` として現れる (spec §7)。
+/// 前置の `-` は、列の先頭か別の演算子の直後にある `Operator` として現れる。単項マイナスも fixity と一緒に HIR で
+/// 組み直すため (docs/spec/expressions.md)。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum OpSeqElement {
     Operand(Expr),
@@ -221,14 +211,12 @@ impl OpSeq {
 }
 
 impl Literal {
-    /// リテラルのトークン (`INT`、`STRING` など)。
     pub fn token(&self) -> Option<SyntaxToken> {
         self.syntax.first_token()
     }
 }
 
 impl PathExpr {
-    /// 名前の部分 (`Foo.bar` なら `Foo` と `bar`)。
     pub fn segments(&self) -> impl Iterator<Item = SyntaxToken> {
         self.syntax
             .children_with_tokens()
@@ -237,7 +225,6 @@ impl PathExpr {
     }
 }
 
-/// 直接の子のトークンのうち、最初の名前 (`LIDENT`) か演算子。
 fn name_token(node: &SyntaxNode) -> Option<SyntaxToken> {
     node.children_with_tokens()
         .filter_map(NodeOrToken::into_token)
