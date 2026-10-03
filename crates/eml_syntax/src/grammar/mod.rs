@@ -36,7 +36,7 @@ pub(crate) fn source_file(p: &mut Parser) {
         if !p.at_sep() && !p.at_eof() && !p.at(LAYOUT_CLOSE) {
             p.error(
                 codes::SYNTAX_ERROR,
-                format!("unexpected {}", describe(p)),
+                unexpected(p),
                 "expected the end of the item",
             );
             let m = p.start();
@@ -115,7 +115,7 @@ fn block_of(p: &mut Parser, expected: &str, mut item: impl FnMut(&mut Parser) ->
         if !p.at_sep() && !p.at(LAYOUT_CLOSE) && !p.at_eof() {
             p.error(
                 codes::SYNTAX_ERROR,
-                format!("unexpected {}", describe(p)),
+                unexpected(p),
                 "expected a new line or the end of the block",
             );
             let m = p.start();
@@ -139,7 +139,7 @@ fn close_block(p: &mut Parser) {
     if !p.at(LAYOUT_CLOSE) && !p.at_eof() {
         p.error(
             codes::SYNTAX_ERROR,
-            format!("unexpected {}", describe(p)),
+            unexpected(p),
             "expected the end of the indented block",
         );
         let m = p.start();
@@ -187,6 +187,17 @@ fn token_name(kind: SyntaxKind) -> &'static str {
         LIDENT => "a lowercase name",
         INT => "an integer",
         _ => "a token",
+    }
+}
+
+/// 「予期しない」トークンの診断メッセージ。仮想トークンと EOF は、名詞句として読める言い方にする。
+fn unexpected(p: &Parser) -> String {
+    match p.current() {
+        EOF => "unexpected end of file".to_string(),
+        LAYOUT_SEP => "unexpected line break".to_string(),
+        LAYOUT_OPEN => "unexpected indented block".to_string(),
+        LAYOUT_CLOSE => "unexpected end of block".to_string(),
+        _ => format!("unexpected `{}`", p.current_text()),
     }
 }
 

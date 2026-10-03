@@ -32,7 +32,7 @@ pub(super) fn apat_len(p: &Parser) -> Option<usize> {
             let mut depth = 0u32;
             let mut n = 0;
             loop {
-                match p.nth(n) {
+                match p.peek(n) {
                     L_PAREN | L_BRACK | L_BRACE => depth += 1,
                     R_PAREN | R_BRACK | R_BRACE => {
                         depth -= 1;

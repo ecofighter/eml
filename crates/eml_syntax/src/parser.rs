@@ -76,6 +76,14 @@ impl<'t> Parser<'t> {
             .map_or(SyntaxKind::EOF, |token| token.kind)
     }
 
+    /// `n` 個先のトークンの種類。`nth` と違い、ステップ上限に数えない。
+    /// 入力の終わり (`EOF`) で必ず終わる、有限の先読み走査のためのもの。
+    pub(crate) fn peek(&self, n: usize) -> SyntaxKind {
+        self.tokens
+            .get(self.pos + n)
+            .map_or(SyntaxKind::EOF, |token| token.kind)
+    }
+
     pub(crate) fn current(&self) -> SyntaxKind {
         self.nth(0)
     }

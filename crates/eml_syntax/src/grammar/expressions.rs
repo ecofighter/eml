@@ -563,7 +563,7 @@ fn has_left_arrow(p: &Parser) -> bool {
     let mut depth = 0u32;
     let mut n = 0;
     loop {
-        match p.nth(n) {
+        match p.peek(n) {
             LEFT_ARROW if depth == 0 => return true,
             L_PAREN | L_BRACK | L_BRACE | LAYOUT_OPEN => depth += 1,
             R_PAREN | R_BRACK | R_BRACE | LAYOUT_CLOSE => {

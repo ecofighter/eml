@@ -299,9 +299,9 @@ struct Diagnostic {
 
 ### 含めるもの
 
-- 基本型: `Int`、`Bool`、`String`、`Unit`
+- 基本型: `Int`、`Bool`、`String`、`Unit`。`Bool` は組み込みの `data Bool = | False | True` で、キーワード `true` / `false` は廃止した。単項の `!` は廃止し、関数 `not` にする
 - タプル、ユーザー定義の代数的データ型 (直和と直積) と `match` (網羅性の検査つき)
-- トップレベルの関数 (引数と戻り値の型注釈は必須)、ローカルの `let`、`if`、再帰、クロージャ、型の明示 `(e : T)`
+- トップレベルの関数 (引数と戻り値の型注釈は必須)、ローカルの `let`、`if` (then 節が `Unit` なら `else` を省略できる)、再帰、クロージャ、型の明示 `(e : T)`
 - `drop` キーワード
 - エフェクトの宣言 (`never` / `once` / `multi`)、`handle` (deep)、`resume`、`drop k`
 - 組み込みの `IO` エフェクト: `println : String -> <IO> Unit`、ファイル操作 (`open : String -> <IO> File`、`read_all : File -> <IO> (File, String)`、`close : File -> <IO> Unit`)
@@ -309,7 +309,6 @@ struct Diagnostic {
 
 ### 含めないもの
 
-- 本番の構文 (作者が別途設計する)
 - LSP、フォーマッタ、REPL
 - LLVM バックエンド
 - 型クラスやトレイトなどのアドホック多相
@@ -318,8 +317,8 @@ struct Diagnostic {
 - Perceus の reuse analysis と借用の最適化
 - 表面構文でのユーザーによる Kind の記述 (関数型の線形性 `m` を含む)
 - `IO` をユーザーが handle すること
-- レコード、or パターン、ガード、as パターン
-- 浮動小数、文字型、16進リテラル、ブロックコメント
+- or パターン、ガード、as パターン (レコードの構文は構文設計 spec で定めた。実装は同 spec の §10 の段階に従う)
+- 浮動小数、文字型 (16進リテラルとブロックコメントの構文も構文設計 spec で定めた。どちらも S1 で実装済み)
 
 ### 暫定構文
 

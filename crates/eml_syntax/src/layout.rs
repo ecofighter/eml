@@ -108,19 +108,24 @@ fn scan_lines(
     let mut items = Vec::new();
     // ファイルの先頭も行の先頭とみなす。
     let mut newline_seen = true;
+    // 今の行の先頭のバイト位置。改行を見るたびに更新するので、全体で線形時間になる。
+    let mut line_begin = 0usize;
     for token in tokens {
+        let start = usize::from(token.range.start());
+        let end = usize::from(token.range.end());
         if token.kind.is_trivia() {
-            if text[token.range].contains('\n') {
+            if let Some(i) = text[start..end].rfind('\n') {
+                line_begin = start + i + 1;
                 newline_seen = true;
             }
             continue;
         }
-        let start = usize::from(token.range.start());
-        let line_begin = text[..start].rfind('\n').map_or(0, |i| i + 1);
-        let prefix = &text[line_begin..start];
-        // BOM は列に数えない。タブは1列に数える (タブ自体はエラー)。
-        let column = prefix.chars().filter(|&c| c != '\u{feff}').count() as u32;
+        // 列は行の先頭のトークンでしか読まれないので、それ以外は 0 のままにする。
+        let mut column = 0;
         if newline_seen {
+            let prefix = &text[line_begin..start];
+            // BOM は列に数えない。タブは1列に数える (タブ自体はエラー)。
+            column = prefix.chars().filter(|&c| c != '\u{feff}').count() as u32;
             report_tab(file, prefix, line_begin, diagnostics);
         }
         items.push(Item {
@@ -129,6 +134,10 @@ fn scan_lines(
             column,
         });
         newline_seen = false;
+        // 複数行にまたがるトークン (文字列) の中の改行も、行の先頭を進める。
+        if let Some(i) = text[start..end].rfind('\n') {
+            line_begin = start + i + 1;
+        }
     }
     items
 }
@@ -445,6 +454,21 @@ mod tests {
                 "LAYOUT_OPEN@16..16",
                 "LAYOUT_CLOSE@17..17",
             ]
+        );
+    }
+
+    #[test]
+    fn very_long_line_is_laid_out_in_linear_time() {
+        // 1行に約20万トークン。行ごとの探索が二次になっていると、テストが目に見えて遅くなる。
+        let text = format!("x = {}a", "a + ".repeat(50_000));
+        let mut files = SourceFiles::new();
+        let file = files.add("test.em", &text);
+        let (tokens, _) = lex(file, &text);
+        let (out, diagnostics) = layout(file, &text, &tokens);
+        assert!(diagnostics.is_empty());
+        assert!(
+            out.iter()
+                .all(|t| !matches!(t.kind, LAYOUT_OPEN | LAYOUT_SEP | LAYOUT_CLOSE))
         );
     }
 }
