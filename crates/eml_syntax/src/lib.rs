@@ -3,7 +3,6 @@
 pub mod ast;
 mod debug_dump;
 mod grammar;
-#[allow(dead_code)] // Task 3 で parse から使う
 mod layout;
 mod lexer;
 mod parser;
@@ -11,7 +10,7 @@ mod sink;
 mod syntax_kind;
 mod token_set;
 
-use eml_diagnostics::{Diagnostic, FileId, TextSize};
+use eml_diagnostics::{Diagnostic, FileId};
 use rowan::GreenNode;
 use rowan::ast::AstNode;
 
@@ -57,7 +56,9 @@ impl Parse {
 
 pub fn parse(file: FileId, text: &str) -> (Parse, Vec<Diagnostic>) {
     let (tokens, mut diagnostics) = lex(file, text);
-    let mut parser = parser::Parser::new(file, &tokens, TextSize::of(text));
+    let (input, layout_diagnostics) = layout::layout(file, text, &tokens);
+    diagnostics.extend(layout_diagnostics);
+    let mut parser = parser::Parser::new(file, text, input);
     grammar::source_file(&mut parser);
     let (events, parse_diagnostics) = parser.finish();
     diagnostics.extend(parse_diagnostics);

@@ -47,7 +47,7 @@ fn stray_tokens(p: &mut Parser) {
     let m = p.start();
     let mut reported = false;
     while !p.at_eof() && !p.at_ts(ITEM_START) {
-        if !reported && !p.at(ERROR_TOKEN) {
+        if !reported && !p.at(ERROR_TOKEN) && !p.current().is_virtual() {
             p.error(
                 codes::EXPECTED_ITEM,
                 "expected an item (`fn`, `type`, or `effect`)",

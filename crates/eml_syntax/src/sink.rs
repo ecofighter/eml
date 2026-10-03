@@ -2,6 +2,8 @@ use std::mem;
 
 use rowan::{GreenNode, GreenNodeBuilder, Language};
 
+use eml_diagnostics::{TextRange, TextSize};
+
 use crate::lexer::Token;
 use crate::parser::Event;
 use crate::{EmlLanguage, SyntaxKind};
@@ -13,6 +15,7 @@ pub(crate) fn build_tree(text: &str, tokens: &[Token], mut events: Vec<Event>) -
         text,
         tokens,
         next: 0,
+        offset: TextSize::new(0),
         inner: GreenNodeBuilder::new(),
     };
     let mut depth = 0usize;
@@ -37,7 +40,11 @@ pub(crate) fn build_tree(text: &str, tokens: &[Token], mut events: Vec<Event>) -
                             kinds.push(kind);
                             forward_parent
                         }
-                        _ => unreachable!("forward_parent must point at a Start event"),
+                        // 放棄した親ノード。連鎖はここで終わる。
+                        Event::Tombstone => None,
+                        _ => {
+                            unreachable!("forward_parent must point at a Start or Tombstone event")
+                        }
                     };
                 }
                 for kind in kinds.drain(..).rev() {
@@ -51,6 +58,10 @@ pub(crate) fn build_tree(text: &str, tokens: &[Token], mut events: Vec<Event>) -
             Event::Token { kind } => {
                 builder.eat_trivia();
                 builder.token(kind);
+            }
+            Event::TokenPrefix { kind, len } => {
+                builder.eat_trivia();
+                builder.token_prefix(kind, len);
             }
             Event::Finish => {
                 depth -= 1;
@@ -69,6 +80,8 @@ struct Builder<'a> {
     text: &'a str,
     tokens: &'a [Token],
     next: usize,
+    /// 今のトークンのうち、すでに木に入れたバイト数。
+    offset: TextSize,
     inner: GreenNodeBuilder<'static>,
 }
 
@@ -82,10 +95,26 @@ impl Builder<'_> {
         }
     }
 
+    /// 今のトークンの残り全部を、`kind` として木に入れる。
     fn token(&mut self, kind: SyntaxKind) {
-        let token = self.tokens[self.next];
-        self.inner
-            .token(EmlLanguage::kind_to_raw(kind), &self.text[token.range]);
+        let range = self.tokens[self.next].range;
+        let start = range.start() + self.offset;
+        self.inner.token(
+            EmlLanguage::kind_to_raw(kind),
+            &self.text[TextRange::new(start, range.end())],
+        );
         self.next += 1;
+        self.offset = TextSize::new(0);
+    }
+
+    /// 今のトークンの先頭の `len` バイトだけを、`kind` として木に入れる。
+    fn token_prefix(&mut self, kind: SyntaxKind, len: TextSize) {
+        let range = self.tokens[self.next].range;
+        let start = range.start() + self.offset;
+        self.inner.token(
+            EmlLanguage::kind_to_raw(kind),
+            &self.text[TextRange::at(start, len)],
+        );
+        self.offset += len;
     }
 }

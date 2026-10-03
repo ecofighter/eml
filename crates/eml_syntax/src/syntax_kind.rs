@@ -114,6 +114,14 @@ pub enum SyntaxKind {
 }
 
 impl SyntaxKind {
+    /// レイアウト段の仮想トークンか。parser は読んでもイベントを出さない。
+    pub fn is_virtual(self) -> bool {
+        matches!(
+            self,
+            SyntaxKind::LAYOUT_OPEN | SyntaxKind::LAYOUT_SEP | SyntaxKind::LAYOUT_CLOSE
+        )
+    }
+
     pub fn is_trivia(self) -> bool {
         matches!(
             self,
