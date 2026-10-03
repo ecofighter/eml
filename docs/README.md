@@ -54,7 +54,3 @@ eml を実装するエージェントとプログラマのための文書群で�
 - 将来の論点の一覧は [future/roadmap.md](future/roadmap.md) を正とする。マルチコアと標準ライブラリの詳細は、それぞれ [future/multicore.md](future/multicore.md) と [future/stdlib.md](future/stdlib.md) にある。
 - 構文で迷ったときは Haskell の慣習に寄せる。
 - 文書は日本語で書く。
-
-## 作業の履歴
-
-これまでの作業計画は [superpowers/plans/](superpowers/plans/) に残してある。完了した作業の記録で、今の仕様はこの文書群が定める。
