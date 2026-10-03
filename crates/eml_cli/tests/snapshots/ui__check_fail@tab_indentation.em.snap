@@ -1,0 +1,12 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: rendered
+input_file: tests/ui/check-fail/tab_indentation.em
+---
+[E0006] Error: tab used for indentation
+   ╭─[ check-fail/tab_indentation.em:3:1 ]
+   │
+ 3 │     42
+   │ ┬───  
+   │ ╰───── indent with spaces
+───╯

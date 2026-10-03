@@ -1,0 +1,12 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: rendered
+input_file: tests/ui/check-fail/missing_indented_block.em
+---
+[E0009] Error: expected an indented block after `=`
+   ╭─[ check-fail/missing_indented_block.em:2:8 ]
+   │
+ 2 │ answer =
+   │        ┬  
+   │        ╰── the next line must be indented more than the enclosing block
+───╯

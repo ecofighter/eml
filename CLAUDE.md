@@ -33,17 +33,17 @@ eml_runtime      object model, heap, RC, debug_heap checks, OutputSink
 eml_core_ir      typed HIR -> Core IR (ANF, dup/decref insertion)
 eml_types        Kind/type/row inference; linearity, multiplicity, and exhaustiveness checks
 eml_hir          CST -> HIR, name resolution
-eml_syntax       logos lexer, event-based parser, rowan CST, typed AST wrappers
+eml_syntax       logos lexer, layout stage, event-based parser, rowan CST, typed AST wrappers
 eml_diagnostics  Diagnostic, FileId/SourceFiles, ariadne rendering (does not depend on rowan)
 ```
 
 - Each stage is a pure function `fn stage(&In) -> (Out, Vec<Diagnostic>)` with no global mutable state, so it can later move onto queries (salsa).
 - Never stop on errors: `eml_cli::analyze` runs every stage and collects all diagnostics. The parser recovers with `ERROR` nodes; type checking onward inserts an `Error` type and suppresses cascading diagnostics.
-- The parser follows rust-analyzer (event stream -> rowan tree built in `sink.rs`); the CST is always lossless. Grammar rules are confined to `eml_syntax/src/grammar/` so swapping in the final syntax only touches `grammar/`, `SyntaxKind`, the lexer, and the AST wrappers.
+- The parser follows rust-analyzer (event stream -> rowan tree built in `sink.rs`). A layout stage (`layout.rs`) between the lexer and the parser inserts virtual `LAYOUT_OPEN` / `LAYOUT_SEP` / `LAYOUT_CLOSE` tokens (syntax spec §4); the parser emits no events for them, so the CST is always lossless. Grammar rules are confined to `eml_syntax/src/grammar/`.
 - From HIR onward, nodes are referenced by arena IDs (`ExprId`, etc.) and analysis results (types, ...) live in side tables. HIR nodes carry a `SyntaxNodePtr`.
 - Diagnostic codes are defined in a per-stage `codes` module (e.g. `eml_syntax::codes`, E0xxx).
 - `OutputSink` is `Send + Sync` in preparation for multicore. `RunConfig` is `#[non_exhaustive]`; build it from `Default`.
-- The project is at the milestone-1 skeleton stage: apart from the `eml_syntax` foundation, the stages (hir / types / core_ir / interp) are stubs.
+- `eml_syntax` implements stage S1 of the final syntax (syntax spec §10); S2/S3 constructs (records, modules, interpolation, command literals, ...) are lexed and parsed far enough to report E0004. The later stages (hir / types / core_ir / interp) are still stubs.
 
 ## Testing
 
@@ -54,4 +54,4 @@ eml_diagnostics  Diagnostic, FileId/SourceFiles, ariadne rendering (does not dep
 
 ## Syntax
 
-Milestone 1 uses a provisional syntax (language-design spec §7). When a provisional-syntax choice is undecided, lean toward Haskell conventions.
+The final syntax is defined in `docs/superpowers/specs/2026-10-03-eml-syntax-design.md` (lexical rules, layout rule, grammar, desugaring); the provisional syntax in language-design spec §7 is obsolete. When a syntax choice is undecided, lean toward Haskell conventions.
