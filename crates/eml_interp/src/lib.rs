@@ -63,7 +63,7 @@ struct Machine<'p> {
 impl<'p> Machine<'p> {
     fn new(program: &'p Program, out: &'p OutputSink) -> Self {
         let mut heap = Heap::new();
-        let cont = heap.alloc(
+        let mut cont = heap.alloc(
             DescId::FRAME,
             Payload::Frame(Frame {
                 function: IO_HANDLER,
@@ -74,6 +74,17 @@ impl<'p> Machine<'p> {
             }),
         );
         let main = program.function(program.main);
+        // `main` の型は `Unit -> <IO> Unit` に決まっている (docs/spec/types.md)。等式に引数がない `main = fn () -> ...` は
+        // 関数値を返すので、返った値に `()` を適用するフレームを先に積んでおく
+        if main.params.is_empty() {
+            cont = heap.alloc(
+                DescId::FRAME,
+                Payload::ApplyFrame(ApplyFrame {
+                    args: vec![Value::Unit],
+                    next: Some(cont),
+                }),
+            );
+        }
         let mut slots = vec![None; main.vars.len()];
         // `main : Unit -> <IO> Unit` の引数
         for param in &main.params {
