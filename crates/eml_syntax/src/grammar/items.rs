@@ -21,7 +21,21 @@ const ITEM_KEYWORDS: TokenSet = TokenSet::new(&[
 const DECLARABLE_OPERATORS: TokenSet = TokenSet::new(&[OP, CONOP, MINUS]);
 
 pub(super) fn at_item_start(p: &Parser) -> bool {
-    p.at_ts(ITEM_KEYWORDS) || (p.at(LIDENT) && p.nth(1) == COLON) || at_operator_signature(p)
+    p.at_ts(ITEM_KEYWORDS)
+        || (p.at(LIDENT) && p.nth(1) == COLON)
+        || at_operator_signature(p)
+        || at_equation(p)
+        || at_operator_equation(p)
+}
+
+/// equation ::= LIDENT apat* '=' body 。`LIDENT OP` で始まる行は演算子の定義 (spec §5)。
+fn at_equation(p: &Parser) -> bool {
+    p.at(LIDENT) && (p.nth(1) == EQ || (p.nth(1) != MINUS && patterns::at_apat_start_at(p, 1)))
+}
+
+/// equation ::= apat OP apat '=' body 。apat の後ろが `=` や `::` なら、パターンによる束縛 (エラー)。
+fn at_operator_equation(p: &Parser) -> bool {
+    patterns::apat_len(p).is_some_and(|len| matches!(p.nth(len), OP | MINUS | CONOP | EQ))
 }
 
 /// `(OP) : type` の形のシグネチャか。
@@ -45,6 +59,8 @@ pub(super) fn item(p: &mut Parser) {
         FORALL_KW | CLASS_KW | INSTANCE_KW => reserved_item(p, m),
         LIDENT if p.nth(1) == COLON => signature(p, m),
         _ if at_operator_signature(p) => signature(p, m),
+        _ if at_equation(p) => equation(p, m),
+        _ if at_operator_equation(p) => operator_equation(p, m),
         _ => {
             // `pub` の後ろに項目がない
             p.error(
@@ -258,4 +274,43 @@ fn reserved_item(p: &mut Parser, m: Marker) {
     );
     skip_to_sep(p, false);
     m.complete(p, ERROR);
+}
+
+/// equation ::= LIDENT apat* '=' body
+fn equation(p: &mut Parser, m: Marker) {
+    p.bump(LIDENT);
+    while patterns::at_apat_start(p) {
+        patterns::apat(p);
+    }
+    if expect(p, EQ) {
+        expressions::body(p);
+    }
+    m.complete(p, EQUATION);
+}
+
+/// equation ::= apat OP apat '=' body (演算子の定義)。トップレベルのパターンによる束縛はエラー (spec §5)。
+fn operator_equation(p: &mut Parser, m: Marker) {
+    patterns::apat(p);
+    if p.at(OP) || p.at(MINUS) {
+        p.bump_any();
+        if !patterns::apat(p) {
+            p.error(
+                codes::SYNTAX_ERROR,
+                "expected a pattern",
+                format!("found {}", describe(p)),
+            );
+        }
+        if expect(p, EQ) {
+            expressions::body(p);
+        }
+        m.complete(p, EQUATION);
+    } else {
+        p.error(
+            codes::SYNTAX_ERROR,
+            "top-level pattern bindings are not allowed",
+            "define a value by name instead, as in `x = ...`",
+        );
+        skip_to_sep(p, false);
+        m.complete(p, ERROR);
+    }
 }

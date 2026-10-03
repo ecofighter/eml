@@ -266,14 +266,12 @@ impl Drop for Marker {
     }
 }
 
-#[allow(dead_code)] // Task 5 の式の文法で使う。
 pub(crate) struct CompletedMarker {
     pos: u32,
 }
 
 impl CompletedMarker {
     /// 完了したノードの外側に、新しい親ノードを開始する (演算子の列やフィールドアクセスの左辺などに使う)。
-    #[allow(dead_code)] // Task 5 の式の文法で使う。
     pub(crate) fn precede(self, p: &mut Parser) -> Marker {
         let parent = p.start();
         match &mut p.events[self.pos as usize] {

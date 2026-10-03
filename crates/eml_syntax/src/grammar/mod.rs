@@ -4,7 +4,9 @@
 //! spec の `block(x)` は `block_of` で読む。エラーからの回復は、同じ深さの `SEP`
 //! (ブロックの中なら `CLOSE` も) まで読み飛ばすのを基本にする (spec §4 のエラー回復)。
 
+mod expressions;
 mod items;
+mod patterns;
 mod types;
 
 use crate::SyntaxKind::{self, *};
