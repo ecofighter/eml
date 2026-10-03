@@ -17,11 +17,11 @@ impl fmt::Display for ErrorCode {
     }
 }
 
+/// 補足の情報は独立した診断にせず、`notes` と `help` に入れる (docs/spec/diagnostics.md)。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Severity {
     Error,
     Warning,
-    Note,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

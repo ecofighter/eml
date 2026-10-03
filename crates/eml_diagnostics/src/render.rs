@@ -4,19 +4,26 @@ use ariadne::{Config, IndexType, Label as AriadneLabel, Report, ReportKind};
 
 use crate::{Diagnostic, Label, Severity, SourceFiles};
 
+const BOM: &str = "\u{feff}";
+
+/// BOM は列に数えないので (docs/spec/lexical.md)、表示では除く。`TextRange` は BOM を含む元のテキストの位置の
+/// ままにしておき、ここでずらす (docs/spec/diagnostics.md)。
+fn bom_len(text: &str) -> usize {
+    if text.starts_with(BOM) { BOM.len() } else { 0 }
+}
+
 /// UI テストのスナップショットにも使うので、色を付けない。
 pub fn render(diagnostics: &[Diagnostic], files: &SourceFiles) -> String {
     let mut out = Vec::new();
     let mut sources = ariadne::sources(
         files
             .iter()
-            .map(|(path, text)| (path.to_string(), text.to_string())),
+            .map(|(path, text)| (path.to_string(), text[bom_len(text)..].to_string())),
     );
     for diagnostic in diagnostics {
         let kind = match diagnostic.severity {
             Severity::Error => ReportKind::Error,
             Severity::Warning => ReportKind::Warning,
-            Severity::Note => ReportKind::Advice,
         };
         let mut report = Report::build(kind, span(&diagnostic.primary, files))
             .with_config(
@@ -45,10 +52,10 @@ pub fn render(diagnostics: &[Diagnostic], files: &SourceFiles) -> String {
 }
 
 fn span(label: &Label, files: &SourceFiles) -> (String, Range<usize>) {
-    (
-        files.path(label.file).to_string(),
-        label.range.start().into()..label.range.end().into(),
-    )
+    let shift = bom_len(files.text(label.file));
+    let start = usize::from(label.range.start()).saturating_sub(shift);
+    let end = usize::from(label.range.end()).saturating_sub(shift);
+    (files.path(label.file).to_string(), start..end)
 }
 
 fn label(label: &Label, files: &SourceFiles) -> AriadneLabel<(String, Range<usize>)> {
@@ -95,6 +102,27 @@ mod tests {
         let diagnostic = Diagnostic::error(ErrorCode(1), "bad", Label::new(file, range, "here"));
         let text = render(&[diagnostic], &files);
         assert!(text.contains("a.em:1:5"), "{text}");
+    }
+
+    #[test]
+    fn byte_order_mark_takes_no_column() {
+        let mut files = SourceFiles::new();
+        let file = files.add("a.em", "\u{feff}a = $");
+        // `$` はバイト位置 7 (BOM が3バイト)。BOM を列に数えないので、列 5 と表示する (docs/spec/lexical.md)。
+        let range = TextRange::new(7.into(), 8.into());
+        let diagnostic = Diagnostic::error(ErrorCode(1), "bad", Label::new(file, range, "here"));
+        let text = render(&[diagnostic], &files);
+        assert!(text.contains("a.em:1:5"), "{text}");
+    }
+
+    #[test]
+    fn byte_order_mark_does_not_shift_later_lines() {
+        let mut files = SourceFiles::new();
+        let file = files.add("a.em", "\u{feff}a = 1\nb = $");
+        let range = TextRange::new(13.into(), 14.into());
+        let diagnostic = Diagnostic::error(ErrorCode(1), "bad", Label::new(file, range, "here"));
+        let text = render(&[diagnostic], &files);
+        assert!(text.contains("a.em:2:5"), "{text}");
     }
 
     #[test]
