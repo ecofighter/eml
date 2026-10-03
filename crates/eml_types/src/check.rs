@@ -187,7 +187,8 @@ struct BodyCheck<'a> {
     schemes: &'a ArenaMap<FunctionId, Scheme>,
     table: &'a mut Table,
     diagnostics: &'a mut Vec<Diagnostic>,
-    /// 本体が起こしてよいエフェクト。最後にたどったシグネチャの矢印の row である。
+    /// 本体が起こしてよいエフェクト。シグネチャで最後にたどった矢印の row か、本体を囲むラムダで最後にたどった
+    /// 矢印の row である。
     ambient: Row,
     ambient_source: AmbientSource,
     typing: BodyTyping,
@@ -503,7 +504,7 @@ impl BodyCheck<'_> {
                 effects.iter().map(|e| e.name().to_string()).collect()
             }
             Err(UnifyError::MissingRowVar(var)) => vec![var],
-            // include_row は呼び出し先側の剛体でない row 変数を通してしか単一化しないので、剛体変数の束縛 (Mismatch) も
+            // include_row は呼び出し先側の rigid でない row 変数を通してしか単一化しないので、rigid 変数の束縛 (Mismatch) も
             // Occurs も起きない
             Err(other) => unreachable!(
                 "including a row reports only missing effects or a missing row variable: {other:?}"
@@ -623,11 +624,11 @@ impl BodyCheck<'_> {
                     row = None;
                 }
                 _ => {
-                    let found = self.table.export(expected);
+                    let expected_ty = self.table.export(expected);
                     self.diagnostics.push(Diagnostic::error(
                         codes::TYPE_MISMATCH,
                         format!(
-                            "this lambda has {} but its expected type `{found}` has {}",
+                            "this lambda has {} but its expected type `{expected_ty}` has {}",
                             count(params.len(), "parameter"),
                             count(index, "arrow"),
                         ),
@@ -642,7 +643,7 @@ impl BodyCheck<'_> {
                         self.bind_pat(rest, error);
                     }
                     current = error;
-                    // 矢印が足りないときは最後の矢印の row を使わず、本体の効果を受け入れて診断を連鎖させない
+                    // 矢印が足りないときは最後の矢印の row を使わず、本体のエフェクトを受け入れて診断を連鎖させない
                     row = None;
                     break;
                 }

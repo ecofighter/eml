@@ -152,7 +152,7 @@ mod tests {
     }
 }
 
-/// スキームに残った Kind の制約。テストの表示で使う。`Of` は、その型の Kind を表す。
+/// Kind の制約の片側。`Unr` と `Lin` は定数で、`Of` はその型の Kind を表す。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum KindTerm {
     Unr,
@@ -160,6 +160,7 @@ pub enum KindTerm {
     Of(Type),
 }
 
+/// スキームに残った Kind の制約 `lower <= upper`。テストの表示で使う。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KindConstraint {
     pub lower: KindTerm,

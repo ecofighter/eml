@@ -10,7 +10,7 @@ use crate::kind::Bound;
 use crate::table::Table;
 use crate::ty::Linearity;
 
-/// 制御フローの経路ごとの使用回数の最小と最大。2 回以上は区別しないので 2 で頭打ちにする。
+/// 制御フローの経路ごとの使用回数の最小と最大。2回以上は区別しないので2で頭打ちにする。
 type Uses = HashMap<LocalId, (u8, u8)>;
 
 pub(crate) fn constrain(body: &Body, typing: &BodyTyping, table: &mut Table) {
@@ -38,7 +38,7 @@ impl Usage<'_> {
             ExprKind::Missing | ExprKind::Literal(_) => Uses::new(),
             ExprKind::Path(Res::Local(local)) => Uses::from([(*local, (1, 1))]),
             ExprKind::Path(_) => Uses::new(),
-            // 関数型の値を呼ぶことも、その値の1回の使用である (docs/spec/types.md の「推論」)
+            // 関数型の値を呼ぶことも、その値の1回の使用である (docs/spec/linearity.md の「基本の規則」)
             ExprKind::Call { callee, args } => {
                 let mut uses = self.expr(*callee);
                 for &arg in args {
@@ -114,7 +114,7 @@ impl Usage<'_> {
         }
     }
 
-    /// パターンが束縛した変数を数え終える。どこかの経路で 0 回か2回以上なら、その型の Kind に `Unr` の制約を出す。
+    /// パターンが束縛した変数を数え終える。どこかの経路で0回か2回以上なら、その型の Kind に `Unr` の制約を出す。
     /// `_` で受けた値も使わない値なので同じ扱いにする (docs/spec/linearity.md の「基本の規則」)。
     fn check_pat(&mut self, pat: PatId, uses: &Uses) {
         match &self.body.pats[pat].kind {
@@ -158,7 +158,7 @@ fn sequence(uses: &mut Uses, next: Uses) {
     }
 }
 
-/// 分岐の2つの枝の使用回数を合わせる。片方の枝にない変数は、その枝では 0 回である。
+/// 分岐の2つの枝の使用回数を合わせる。片方の枝にない変数は、その枝では0回である。
 fn join(a: Uses, b: Uses) -> Uses {
     let mut out = Uses::new();
     for local in a.keys().chain(b.keys()) {

@@ -554,8 +554,9 @@ fn prim(builtin: Builtin) -> PrimOp {
     }
 }
 
-/// ラムダの本体が参照する、ラムダの外で束縛した局所変数。`LocalId` の順に並べる。入れ子のラムダが捕まえる変数も、
-/// 外側のラムダが捕まえる (docs/spec/core-ir.md)。式の木は作業リストでたどる。
+/// ラムダの本体が参照する、ラムダの外で束縛した局所変数。`LocalId` の順に並べる。ラムダは捕まえた変数を先頭の
+/// 引数に持つ関数に持ち上げる (docs/spec/core-ir.md)。そのため、入れ子のラムダが捕まえる変数は、内側のクロージャを
+/// 作る外側のラムダの関数でも引数として要るので、外側のラムダも捕まえる。式の木は作業リストでたどる。
 fn captures(body: &Body, lambda: ExprId) -> Vec<LocalId> {
     let mut used = BTreeSet::new();
     let mut bound = HashSet::new();
