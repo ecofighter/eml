@@ -1,4 +1,5 @@
 mod expr;
+mod ops;
 mod types;
 
 use std::collections::HashMap;

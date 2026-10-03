@@ -108,8 +108,7 @@ impl<'a> BodyLowering<'a> {
                 )
             }
             ast::Expr::Block(block) => self.lower_block(&block, range),
-            // 演算子の列は Task 5 で組み直す
-            ast::Expr::OpSeq(_) => self.alloc(ExprKind::Missing, range),
+            ast::Expr::OpSeq(seq) => self.lower_op_seq(&seq),
             ast::Expr::LambdaExpr(e) => {
                 self.unsupported(keyword(e.syntax()), "lambdas are not supported yet")
             }
