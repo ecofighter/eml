@@ -155,13 +155,11 @@ impl Table {
         })
     }
 
-    #[allow(dead_code)] // Task 6 の compose 組み込み関数から使う
     pub fn fresh_var(&mut self) -> Ty {
         let linearity = self.linearity.fresh();
         self.fresh_var_with(linearity)
     }
 
-    #[allow(dead_code)] // Task 6 以降のスキームの具体化で使う
     pub fn function_with(&mut self, param: Ty, lin: Mult, row: Row, ret: Ty) -> Ty {
         self.alloc(TyKind::Fn {
             param,
@@ -181,7 +179,6 @@ impl Table {
         self.multiplicity.fresh()
     }
 
-    #[allow(dead_code)] // Task 6 以降の関数値の推論で使う
     pub fn fresh_mult(&mut self) -> Mult {
         Mult::Var(self.linearity.fresh())
     }
@@ -505,7 +502,6 @@ impl Table {
 
     /// 引数を `arity` 個まで受ける関数の、部分適用のクロージャの線形性。矢印 `i` (0 始まり) のクロージャは、先頭の
     /// `i` 個の引数と `captured` を捕まえるので、その Kind 以上になる (docs/spec/types.md の「関数型」)。
-    #[allow(dead_code)] // Task 6 以降の関数値の推論で使う
     pub fn closure_kinds(&mut self, ty: Ty, arity: usize, captured: &[Ty]) {
         let mut held: Vec<Ty> = captured.to_vec();
         let mut current = ty;

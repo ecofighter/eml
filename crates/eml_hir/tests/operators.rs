@@ -98,11 +98,18 @@ fn mixed_associativity_is_rejected_in_both_orders() {
     x : Int
     x = <missing>
     y : Int
-    y = (<missing> 1 <missing>)
+    y = (>> 1 <missing>)
     ---
     E1001 2:7 cannot find operator `<+>`
     E1006 2:13 `<+>` and `>>` cannot be combined without parentheses
-    E0004 4:7 function composition is not supported yet
     E1006 4:12 `>>` and `<+>` cannot be combined without parentheses
+    ");
+}
+
+#[test]
+fn composition_operators_are_builtin_calls() {
+    insta::assert_snapshot!(lower_text("h : Bool -> Bool\nh = not >> not << not"), @r"
+    h : Bool -> Bool
+    h = (>> not (<< not not))
     ");
 }

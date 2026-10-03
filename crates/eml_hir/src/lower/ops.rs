@@ -162,9 +162,6 @@ impl BodyLowering<'_> {
             _ => {
                 let callee = match Builtin::binary_operator(op) {
                     Some(builtin) => self.alloc(ExprKind::Path(Res::Builtin(builtin)), op_range),
-                    None if op == ">>" || op == "<<" => {
-                        self.unsupported(op_range, "function composition is not supported yet")
-                    }
                     None if op == "::" => self.unsupported(op_range, "lists are not supported yet"),
                     None => {
                         self.diagnostics.push(Diagnostic::error(

@@ -275,5 +275,8 @@ fn prim(builtin: Builtin) -> PrimOp {
         Builtin::Println | Builtin::True | Builtin::False => {
             unreachable!("`println` is performed and constructors are values")
         }
+        Builtin::ComposeFwd | Builtin::ComposeBwd => {
+            unreachable!("composition is lowered to a closure, not to a primitive")
+        }
     }
 }

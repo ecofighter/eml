@@ -21,6 +21,8 @@ pub enum Builtin {
     IntGt,
     IntGe,
     StrConcat,
+    ComposeFwd,
+    ComposeBwd,
 }
 
 impl Builtin {
@@ -51,6 +53,8 @@ impl Builtin {
             ">" => Builtin::IntGt,
             ">=" => Builtin::IntGe,
             "++" => Builtin::StrConcat,
+            ">>" => Builtin::ComposeFwd,
+            "<<" => Builtin::ComposeBwd,
             _ => return None,
         })
     }
@@ -76,6 +80,8 @@ impl Builtin {
             Builtin::IntGt => ">",
             Builtin::IntGe => ">=",
             Builtin::StrConcat => "++",
+            Builtin::ComposeFwd => ">>",
+            Builtin::ComposeBwd => "<<",
         }
     }
 }
