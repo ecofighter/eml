@@ -145,6 +145,7 @@ fn has_error(function: &Function, id: TypeRefId) -> bool {
 enum Origin {
     Argument {
         callee: TextRange,
+        /// 診断の文に埋める呼ばれる側の呼び方。`callee_subject` が作る。
         name: String,
         index: usize,
     },
@@ -436,14 +437,7 @@ impl BodyCheck<'_> {
     fn call(&mut self, id: ExprId, callee: ExprId, args: &[ExprId]) -> Ty {
         let body = self.body;
         let callee_expr = &body.exprs[callee];
-        let name = match &callee_expr.kind {
-            ExprKind::Path(Res::Function(function)) => {
-                self.module.functions[*function].name.clone()
-            }
-            ExprKind::Path(Res::Builtin(builtin)) => builtin.name().to_string(),
-            ExprKind::Path(Res::Local(local)) => body.locals[*local].name.clone(),
-            _ => "this expression".to_string(),
-        };
+        let name = callee_subject(self.module, body, callee);
         let mut ty = self.infer_expr(callee);
         // 1回の呼び出しの E2002 は、どの引数の矢印で起きても1つだけ報告する
         let mut reported = false;
@@ -476,10 +470,10 @@ impl BodyCheck<'_> {
                 }
                 _ => {
                     let message = if index == 0 {
-                        format!("`{name}` is not a function")
+                        format!("{name} is not a function")
                     } else {
                         format!(
-                            "`{name}` takes {} but {} were given",
+                            "{name} takes {} but {} were given",
                             count(index, "argument"),
                             args.len()
                         )
@@ -539,7 +533,7 @@ impl BodyCheck<'_> {
                 Diagnostic::error(
                     codes::EFFECT_NOT_IN_ROW,
                     format!(
-                        "`{name}` performs {quoted}, which the signature of `{function}` does not allow"
+                        "{name} performs {quoted}, which the signature of `{function}` does not allow"
                     ),
                     Label::new(self.file(), range, format!("this call performs {quoted}")),
                 )
@@ -553,7 +547,7 @@ impl BodyCheck<'_> {
             AmbientSource::Lambda(origin) => {
                 let diagnostic = Diagnostic::error(
                     codes::EFFECT_NOT_IN_ROW,
-                    format!("`{name}` performs {quoted}, which this lambda does not allow"),
+                    format!("{name} performs {quoted}, which this lambda does not allow"),
                     Label::new(file, range, format!("this call performs {quoted}")),
                 );
                 // ラムダの row を決めた場所を secondary にする (docs/spec/diagnostics.md の E2002)
@@ -565,10 +559,7 @@ impl BodyCheck<'_> {
                     } => diagnostic.with_secondary(Label::new(
                         file,
                         *callee,
-                        format!(
-                            "argument {} of `{callee_name}` does not allow it",
-                            index + 1
-                        ),
+                        format!("argument {} of {callee_name} does not allow it", index + 1),
                     )),
                     Origin::Annotation(annotation) => diagnostic.with_secondary(Label::new(
                         file,
@@ -741,7 +732,7 @@ impl BodyCheck<'_> {
             } => diagnostic.with_secondary(Label::new(
                 file,
                 *callee,
-                format!("argument {} of `{name}`", index + 1),
+                format!("argument {} of {name}", index + 1),
             )),
             Origin::Return => diagnostic.with_secondary(Label::new(
                 file,
@@ -780,6 +771,18 @@ impl BodyCheck<'_> {
         };
         self.diagnostics.push(diagnostic);
     }
+}
+
+/// 診断の文で呼ばれる側を指す言い方。名前で呼んだときはその名前をコードとして引用し、名前のない式は
+/// 地の文の `this expression` にする。名前のない式を引用符で囲むと、そういう名前があるように読めてしまうため。
+fn callee_subject(module: &Module, body: &Body, callee: ExprId) -> String {
+    let name = match &body.exprs[callee].kind {
+        ExprKind::Path(Res::Function(function)) => module.functions[*function].name.as_str(),
+        ExprKind::Path(Res::Builtin(builtin)) => builtin.name(),
+        ExprKind::Path(Res::Local(local)) => body.locals[*local].name.as_str(),
+        _ => return "this expression".to_string(),
+    };
+    format!("`{name}`")
 }
 
 fn count(n: usize, word: &str) -> String {

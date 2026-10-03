@@ -436,3 +436,34 @@ fn an_undefined_effect_row_is_fresh_at_each_call() {
       1:36 not found in this scope
     ");
 }
+
+#[test]
+fn a_callee_that_is_not_a_name_is_described_without_quotes() {
+    let text = "inc : Int -> Int\ninc n = n + 1\n\neach : (String -> Unit) -> Unit\neach f = f \"a\"\n\nbad : Bool -> Int\nbad b = (if b then 1 else 2) 3 + (if b then inc else inc) \"x\" + (if b then inc else inc) 1 2\n\nloud : Bool -> Unit\nloud b =\n  (if b then println else println) \"x\"\n  (if b then each else each) (fn s -> println s)";
+    insta::assert_snapshot!(check_text(text), @"
+    inc : Int -> Int
+      n#0 : Int
+    each : (String -> Unit) -> Unit
+      f#0 : String -> Unit
+    bad : Bool -> Int
+      b#0 : Bool
+    loud : Bool -> Unit
+      b#0 : Bool
+      s#1 : String
+    ---
+    E2001 8:30 this expression is not a function
+      8:30 unexpected argument
+    E2001 8:59 mismatched types
+      8:59 expected `Int`, found `String`
+      8:35 argument 1 of this expression
+    E2001 8:92 this expression takes 1 argument but 2 were given
+      8:92 unexpected argument
+    E2002 12:3 this expression performs `IO`, which the signature of `loud` does not allow
+      12:3 this call performs `IO`
+      10:8 the row of this signature does not include it
+      help: add `IO` to the row of the signature of `loud`, as in `-> <IO> ...`
+    E2002 13:39 `println` performs `IO`, which this lambda does not allow
+      13:39 this call performs `IO`
+      13:4 argument 1 of this expression does not allow it
+    ");
+}
