@@ -1,0 +1,12 @@
+[package]
+name = "eml_syntax"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+eml_diagnostics.workspace = true
+logos.workspace = true
+rowan.workspace = true
+
+[dev-dependencies]
+insta.workspace = true
