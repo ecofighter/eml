@@ -146,7 +146,11 @@ impl FnLowering<'_> {
     }
 
     fn ty(&self, expr: ExprId) -> Type {
-        self.types.exprs.get(expr).cloned().unwrap_or(Type::Error)
+        self.types
+            .exprs
+            .get(expr)
+            .cloned()
+            .expect("every reached expression is typed")
     }
 
     fn bind(&mut self, out: &mut Bindings, name: &str, ty: &Type, rhs: Rhs) -> Atom {
