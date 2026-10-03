@@ -34,7 +34,7 @@ eml の目的、言語の性格、確定した設計判断の一覧、文書全�
 | handler の意味 | deep handler。`resume` した継続の中でも同じ handler が有効なまま | [エフェクトと handler](spec/effects.md) |
 | `IO` | 組み込みのエフェクト。ユーザーは handle できない | [エフェクトと handler](spec/effects.md) |
 | 暗黙の後始末 | 通常の制御フローでは一切行わない。中断時 (`drop k` や `never` 操作) だけ、捕まっていた `Lin` 値を、その型に宣言された破棄処理で drop する | [線形性](spec/linearity.md)、[エフェクトと handler](spec/effects.md) |
-| 型付け | Bidirectional Typing + 単一化。トップレベルの関数は引数と戻り値の型注釈が必須。row と Kind は推論する | [型と Kind](spec/types.md) |
+| 型付け | Bidirectional Typing + 単一化。トップレベルの関数は引数と戻り値の型注釈が必須。トップレベルの関数の row はシグネチャで決まり、省略した row は `<>` (純粋) である。Kind は推論する | [型と Kind](spec/types.md) |
 | 直積型 | SML 方式。タプルは数字ラベルのレコード、Unit は `{}`。構造的な row 多相のレコード。Kind はフィールドの Kind の join で推論する | [直積型とレコード](spec/records.md) |
 
 ### 構文

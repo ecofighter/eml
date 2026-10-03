@@ -1,6 +1,6 @@
 # 診断
 
-位置づけ: 規範。割り当て済みの番号は `crates/eml_syntax/src/lib.rs` の `codes` モジュールにある。
+位置づけ: 規範。割り当て済みの番号は、段階ごとの `codes` モジュール (`eml_syntax`、`eml_hir`、`eml_types`) にある。
 
 診断のデータ構造、番号の範囲、各誤りで診断が指す場所を定める。`eml check` は、構文・名前解決・型・線形性・エフェクト・`match` の網羅性のエラーを、ソース位置を指す診断として表示する。1回の実行で、独立した複数のエラーを報告する。
 
@@ -39,7 +39,7 @@ struct Diagnostic {
 
 ## 割り当て済みの番号
 
-現時点で番号を割り当てたのは、`eml_syntax::codes` の E0xxx だけである。E1xxx 〜 E4xxx の番号は、まだ割り当てていない。各段階の実装計画で割り当てる。
+E0xxx は `eml_syntax::codes`、E1xxx は `eml_hir::codes`、E2xxx は `eml_types::codes` に置く。E3xxx と E4xxx の番号は、線形性と網羅性の検査を実装するときに割り当てる。
 
 | 番号 | 定数 | 内容 |
 |---|---|---|
@@ -56,6 +56,19 @@ struct Diagnostic {
 | E0011 | `SYNTAX_ERROR` | その他の構文エラー |
 | E0012 | `NEEDS_PARENS` | 括弧の要る式 (`if`、`match`、`handle`、`let`) を、引数や演算の項の位置に括弧なしで書いた |
 | E0013 | `NESTING_TOO_DEEP` | 式・パターン・型の入れ子が深すぎる (256 を超えた。[文法](grammar.md)) |
+| E1001 | `UNDEFINED_NAME` | 未定義の値の名前 |
+| E1002 | `UNDEFINED_TYPE` | 未定義の型の名前、未定義のエフェクトの名前 |
+| E1003 | `DUPLICATE_DEFINITION` | 同じ名前空間でのトップレベルの定義の重複 |
+| E1004 | `MISSING_SIGNATURE` | シグネチャのない等式。シグネチャの追加を提案する help を付ける |
+| E1005 | `MISSING_EQUATION` | 等式のないシグネチャ |
+| E1006 | `NON_ASSOCIATIVE_OPERATORS` | 結合しない演算子の並び、優先順位が同じで結合の向きが違う演算子の並び |
+| E2001 | `TYPE_MISMATCH` | 型の不一致。メッセージとラベルは制約の由来ごとに変える ([型と Kind](types.md)) |
+| E2002 | `EFFECT_NOT_IN_ROW` | シグネチャの row に含まれないエフェクトを起こした。シグネチャの矢印を指し、row を足す help を付ける |
+| E2003 | `MISSING_MAIN` | `main` がない。`eml run` のときだけ出す |
+| E2004 | `INVALID_MAIN_TYPE` | `main` のシグネチャが `Unit -> <IO> Unit` でない |
+| E2005 | `INFINITE_TYPE` | 無限の型 (単一化の occurs check) |
+
+E0004 (`NOT_YET_SUPPORTED`) は、構文の段階 (S2、S3) で未対応の構文に加えて、名前解決以降の段階がまだ扱えない構文 (マイルストーン1 の実装の途中の段階) にも使う。どの段階でも「後で実装する」という同じ意味なので、番号を分けない。HIR 以降の段階は、対応していない構文を黙って無視せず、見つけた段階で E0004 を出して回復する。
 
 ## 構文の決定で増える診断
 

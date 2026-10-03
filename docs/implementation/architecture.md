@@ -58,6 +58,7 @@ eml_diagnostics  Diagnostic 型、FileId と SourceFiles、ariadne による表�
 - 各段階は `fn stage(input: &In) -> (Out, Vec<Diagnostic>)` の形の純粋な関数にする。グローバルな可変状態は持たない
 - HIR 以降は `ExprId` / `PatId` / `DefId` などの ID で参照する (`la-arena`)。型などの解析結果は `ExprId → Type` のような別テーブルに置く
 - HIR の各ノードは、元の構文ノードへのポインタ (`SyntaxNodePtr`) を持つ
+- 型付き HIR は HIR を複製しない。`TypedModule` は、関数ごとの型スキームと推論結果 (式や局所変数の型、呼び出しごとの具体化) の別テーブルだけを持つ。そのため `eml_core_ir` は HIR と `TypedModule` の両方を受け取る
 
 現在の各段階の入口は次のとおり。`eml_syntax` 以外はまだ仮実装で、空の結果を返す (実装状況は [status.md](status.md))。
 
@@ -66,7 +67,7 @@ eml_diagnostics  Diagnostic 型、FileId と SourceFiles、ariadne による表�
 | `eml_syntax` | `parse(FileId, &str) -> (Parse, Vec<Diagnostic>)` |
 | `eml_hir` | `lower(FileId, &ast::SourceFile) -> (Module, Vec<Diagnostic>)` |
 | `eml_types` | `check(&Module) -> (TypedModule, Vec<Diagnostic>)` |
-| `eml_core_ir` | `lower(&TypedModule) -> (Program, Vec<Diagnostic>)` |
+| `eml_core_ir` | `lower(&Module, &TypedModule) -> (Program, Vec<Diagnostic>)` |
 | `eml_interp` | `run(Arc<Program>, &RunConfig, &OutputSink) -> Result<(), RuntimeError>` |
 
 ## エラーが出ても止まらない
@@ -144,7 +145,7 @@ HIR への変換では、名前解決に加えて、次の脱糖と検査を行�
 `eml_cli` の lib は次の API を公開する。UI テストはこれをプロセス内で呼ぶ。
 
 - `check(files, file_id) -> Vec<Diagnostic>`
-- `compile(files, file_id) -> Compiled`。`Compiled` は、検査で出た診断 (警告を含む) と、エラーがなければ `Program` を持つ (`program: Option<Arc<Program>>`)
+- `compile(files, file_id) -> Compiled`。`Compiled` は、検査で出た診断 (警告を含む) と、エラーがなければ `Program` を持つ (`program: Option<Arc<Program>>`)。`main` がないこと (E2003) は `compile` だけが検査し、`check` は検査しない ([型と Kind](../spec/types.md) の「推論」)
 - `execute(Arc<Program>, &RunConfig, stdout: OutputSink) -> RunResult`。`RunResult` は `Completed` / `RuntimeError` である
 
 検査と実行を別の関数に分けるのは、呼び出し側が実行の前に診断を表示できるようにするためである。CLI と UI テストは、`compile` の診断を表示してから `execute` を呼ぶ。
