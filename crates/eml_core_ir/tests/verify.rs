@@ -1,25 +1,10 @@
 //! 手で組んだ Core IR で、verifier が正しいものを受け入れ、壊れたものを拒むことを確かめる (docs/spec/core-ir.md)。
 
 use eml_core_ir::{
-    Atom, CExpr, CExprId, Call, CoreFn, EffectInfo, FnIdx, JoinId, Linearity, OperationInfo,
-    PrimOp, Program, Rhs, VarId, VarInfo, verify,
+    Atom, CExpr, CExprId, Call, CoreFn, EffectInfo, FnIdx, JoinId, OperationInfo, PrimOp, Program,
+    Rhs, VarId, VarInfo, verify,
 };
-
-fn string(name: &str) -> VarInfo {
-    VarInfo {
-        name: name.to_string(),
-        linearity: Linearity::Unr,
-        boxed: true,
-    }
-}
-
-fn int(name: &str) -> VarInfo {
-    VarInfo {
-        name: name.to_string(),
-        linearity: Linearity::Unr,
-        boxed: false,
-    }
-}
+use eml_test_support::ir::{boxed, program, unboxed, var};
 
 /// `exprs` は子を親より先に並べ、最後の式を本体にする。
 fn function(
@@ -40,17 +25,7 @@ fn function(
 }
 
 fn check(functions: Vec<CoreFn>) -> Result<(), String> {
-    let program = Program {
-        functions,
-        entry: FnIdx(0),
-        strings: vec!["s".to_string()],
-        effects: Vec::new(),
-    };
-    verify(&program).map_err(|error| error.to_string())
-}
-
-fn var(n: u32) -> Atom {
-    Atom::Var(VarId(n))
+    verify(&program(functions, 0, &["s"])).map_err(|error| error.to_string())
 }
 
 fn concat(var: u32, left: u32, right: u32, body: u32) -> CExpr {
@@ -102,7 +77,7 @@ fn pick(dup_before_jump: bool) -> CoreFn {
         scope: CExprId(switch),
     });
     let join = exprs.len() as u32 - 1;
-    let vars = vec![int("b"), string("s"), string("s"), string("t"), string("t")];
+    let vars = vec![unboxed("b"), boxed("s"), boxed("s"), boxed("t"), boxed("t")];
     function("pick", 2, vars, exprs, &[join])
 }
 
@@ -116,7 +91,7 @@ fn a_duplicated_string_used_twice_is_accepted() {
             body: CExprId(1),
         },
     ];
-    let twice = function("twice", 1, vec![string("s"), string("t")], exprs, &[]);
+    let twice = function("twice", 1, vec![boxed("s"), boxed("t")], exprs, &[]);
     assert_eq!(check(vec![twice]), Ok(()));
 }
 
@@ -127,9 +102,9 @@ fn a_join_point_is_accepted() {
 
 #[test]
 fn a_tail_call_that_takes_every_owned_value_is_accepted() {
-    let id = function("id", 1, vec![string("s")], vec![CExpr::Return(var(0))], &[]);
+    let id = function("id", 1, vec![boxed("s")], vec![CExpr::Return(var(0))], &[]);
     let exprs = vec![CExpr::TailCall(Call::Direct(FnIdx(0), vec![var(0)]))];
-    let caller = function("caller", 1, vec![string("s")], exprs, &[]);
+    let caller = function("caller", 1, vec![boxed("s")], exprs, &[]);
     assert_eq!(check(vec![id, caller]), Ok(()));
 }
 
@@ -148,7 +123,7 @@ fn a_variable_bound_twice_is_rejected() {
             body: CExprId(1),
         },
     ];
-    let f = function("f", 0, vec![string("s")], exprs, &[]);
+    let f = function("f", 0, vec![boxed("s")], exprs, &[]);
     assert_eq!(
         check(vec![f]),
         Err("`s0` is bound twice in `f`".to_string())
@@ -157,7 +132,7 @@ fn a_variable_bound_twice_is_rejected() {
 
 #[test]
 fn a_variable_used_outside_its_scope_is_rejected() {
-    let f = function("f", 0, vec![string("s")], vec![CExpr::Return(var(0))], &[]);
+    let f = function("f", 0, vec![boxed("s")], vec![CExpr::Return(var(0))], &[]);
     assert_eq!(
         check(vec![f]),
         Err("`s0` is used outside its scope in `f`".to_string())
@@ -183,7 +158,7 @@ fn a_jump_outside_its_join_scope_is_rejected() {
             scope: CExprId(1),
         },
     ];
-    let f = function("f", 0, vec![int("t")], exprs, &[2]);
+    let f = function("f", 0, vec![unboxed("t")], exprs, &[2]);
     assert_eq!(
         check(vec![f]),
         Err("a jump to `j0` is outside its scope in `f`".to_string())
@@ -193,7 +168,7 @@ fn a_jump_outside_its_join_scope_is_rejected() {
 #[test]
 fn a_use_after_a_move_is_rejected() {
     let exprs = vec![CExpr::Return(var(1)), concat(1, 0, 0, 0)];
-    let twice = function("twice", 1, vec![string("s"), string("t")], exprs, &[]);
+    let twice = function("twice", 1, vec![boxed("s"), boxed("t")], exprs, &[]);
     assert_eq!(
         check(vec![twice]),
         Err("`s0` is used after it was moved in `twice`".to_string())
@@ -205,7 +180,7 @@ fn a_missing_decref_is_rejected() {
     let ignore = function(
         "ignore",
         1,
-        vec![string("s")],
+        vec![boxed("s")],
         vec![CExpr::Return(Atom::Int(1))],
         &[],
     );
@@ -228,7 +203,7 @@ fn a_double_decref_is_rejected() {
             body: CExprId(1),
         },
     ];
-    let ignore = function("ignore", 1, vec![string("s")], exprs, &[]);
+    let ignore = function("ignore", 1, vec![boxed("s")], exprs, &[]);
     assert_eq!(
         check(vec![ignore]),
         Err("`s0` is released after it was moved in `ignore`".to_string())
@@ -251,7 +226,7 @@ fn a_jump_that_owns_too_much_is_rejected() {
             scope: CExprId(1),
         },
     ];
-    let f = function("f", 1, vec![string("s"), int("t")], exprs, &[2]);
+    let f = function("f", 1, vec![boxed("s"), unboxed("t")], exprs, &[2]);
     assert_eq!(
         check(vec![f]),
         Err("a jump to `j0` owns [s0] but its join needs [] in `f`".to_string())
@@ -268,7 +243,7 @@ fn a_jump_that_owns_too_little_is_rejected() {
 
 #[test]
 fn a_direct_call_with_the_wrong_number_of_arguments_is_rejected() {
-    let g = function("g", 1, vec![int("a")], vec![CExpr::Return(var(0))], &[]);
+    let g = function("g", 1, vec![unboxed("a")], vec![CExpr::Return(var(0))], &[]);
     let exprs = vec![
         CExpr::Return(var(0)),
         CExpr::Let {
@@ -277,7 +252,7 @@ fn a_direct_call_with_the_wrong_number_of_arguments_is_rejected() {
             body: CExprId(0),
         },
     ];
-    let f = function("f", 0, vec![int("t")], exprs, &[]);
+    let f = function("f", 0, vec![unboxed("t")], exprs, &[]);
     assert_eq!(
         check(vec![g, f]),
         Err("a direct call to `g` passes 2 arguments, but it takes 1 in `f`".to_string())
@@ -303,7 +278,7 @@ fn a_long_run_of_if_statements_is_verified_in_linear_time() {
 
 /// `g s = s`。
 fn identity() -> CoreFn {
-    function("g", 1, vec![string("s")], vec![CExpr::Return(var(0))], &[])
+    function("g", 1, vec![boxed("s")], vec![CExpr::Return(var(0))], &[])
 }
 
 #[test]
@@ -322,13 +297,7 @@ fn a_call_that_does_not_save_an_owned_variable_is_rejected() {
             body: CExprId(2),
         },
     ];
-    let f = function(
-        "f",
-        1,
-        vec![string("s"), string("t"), string("t")],
-        exprs,
-        &[],
-    );
+    let f = function("f", 1, vec![boxed("s"), boxed("t"), boxed("t")], exprs, &[]);
     assert_eq!(
         check(vec![identity(), f]),
         Err("a call saves [] but owns [s0] in `f`".to_string())
@@ -348,7 +317,7 @@ fn a_call_that_saves_a_variable_it_does_not_own_is_rejected() {
             body: CExprId(0),
         },
     ];
-    let f = function("f", 1, vec![string("s"), string("t")], exprs, &[]);
+    let f = function("f", 1, vec![boxed("s"), boxed("t")], exprs, &[]);
     assert_eq!(
         check(vec![identity(), f]),
         Err("a call saves [s0] but owns [] in `f`".to_string())
@@ -357,7 +326,7 @@ fn a_call_that_saves_a_variable_it_does_not_own_is_rejected() {
 
 #[test]
 fn a_variable_not_saved_by_a_call_is_out_of_scope_after_it() {
-    let k = function("k", 1, vec![int("a")], vec![CExpr::Return(var(0))], &[]);
+    let k = function("k", 1, vec![unboxed("a")], vec![CExpr::Return(var(0))], &[]);
     let exprs = vec![
         CExpr::Return(var(2)),
         CExpr::Let {
@@ -371,7 +340,13 @@ fn a_variable_not_saved_by_a_call_is_out_of_scope_after_it() {
             body: CExprId(1),
         },
     ];
-    let f = function("f", 1, vec![int("n"), int("t"), int("t")], exprs, &[]);
+    let f = function(
+        "f",
+        1,
+        vec![unboxed("n"), unboxed("t"), unboxed("t")],
+        exprs,
+        &[],
+    );
     assert_eq!(
         check(vec![k, f]),
         Err("`n0` is used outside its scope in `f`".to_string())
@@ -408,7 +383,7 @@ fn a_jump_after_a_call_needs_the_variables_of_the_join_body_in_scope() {
     let f = function(
         "f",
         1,
-        vec![int("n"), int("t"), int("t"), int("t")],
+        vec![unboxed("n"), unboxed("t"), unboxed("t"), unboxed("t")],
         exprs,
         &[4],
     );
@@ -437,13 +412,7 @@ fn a_call_that_saves_a_variable_twice_is_rejected() {
             body: CExprId(2),
         },
     ];
-    let f = function(
-        "f",
-        1,
-        vec![string("s"), string("t"), string("t")],
-        exprs,
-        &[],
-    );
+    let f = function("f", 1, vec![boxed("s"), boxed("t"), boxed("t")], exprs, &[]);
     assert_eq!(
         check(vec![identity(), f]),
         Err("a call saves [s0, s0] but owns [s0] in `f`".to_string())
@@ -452,10 +421,8 @@ fn a_call_that_saves_a_variable_twice_is_rejected() {
 
 fn check_with_effects(functions: Vec<CoreFn>, effects: Vec<EffectInfo>) -> Result<(), String> {
     let program = Program {
-        functions,
-        entry: FnIdx(0),
-        strings: Vec::new(),
         effects,
+        ..program(functions, 0, &[])
     };
     verify(&program).map_err(|error| error.to_string())
 }
@@ -475,7 +442,7 @@ fn handler_program() -> Vec<CoreFn> {
     let main = function(
         "main",
         0,
-        vec![string("c"), string("c"), int("t")],
+        vec![boxed("c"), boxed("c"), unboxed("t")],
         vec![
             CExpr::Return(var(2)),
             CExpr::Let {
@@ -507,7 +474,7 @@ fn handler_program() -> Vec<CoreFn> {
     let body = function(
         "main$handle0",
         1,
-        vec![int("p")],
+        vec![unboxed("p")],
         vec![CExpr::TailCall(Call::Perform {
             effect: 0,
             op: 0,
@@ -518,7 +485,7 @@ fn handler_program() -> Vec<CoreFn> {
     let clause = function(
         "main$handle0$ask",
         2,
-        vec![int("x"), string("k")],
+        vec![unboxed("x"), boxed("k")],
         vec![CExpr::TailCall(Call::Resume {
             k: var(1),
             arg: var(0),
@@ -573,7 +540,7 @@ fn drop_takes_the_ownership_of_its_value() {
     let once = function(
         "f",
         1,
-        vec![string("s"), int("t")],
+        vec![boxed("s"), unboxed("t")],
         vec![
             CExpr::Return(var(1)),
             CExpr::Let {
@@ -588,7 +555,7 @@ fn drop_takes_the_ownership_of_its_value() {
     let twice = function(
         "g",
         1,
-        vec![string("s"), int("t"), int("u")],
+        vec![boxed("s"), unboxed("t"), unboxed("u")],
         vec![
             CExpr::Return(var(2)),
             CExpr::Let {
@@ -632,7 +599,13 @@ fn a_join_body_that_uses_a_variable_missing_from_its_captures_is_rejected() {
             scope: CExprId(2),
         },
     ];
-    let f = function("f", 1, vec![int("n"), int("t"), int("u")], exprs, &[3]);
+    let f = function(
+        "f",
+        1,
+        vec![unboxed("n"), unboxed("t"), unboxed("u")],
+        exprs,
+        &[3],
+    );
     assert_eq!(
         check(vec![f]),
         Err("`n0` is used outside its scope in `f`".to_string())
@@ -656,7 +629,13 @@ fn a_capture_out_of_scope_at_its_join_is_rejected() {
             scope: CExprId(1),
         },
     ];
-    let f = function("f", 1, vec![int("n"), int("t"), int("x")], exprs, &[2]);
+    let f = function(
+        "f",
+        1,
+        vec![unboxed("n"), unboxed("t"), unboxed("x")],
+        exprs,
+        &[2],
+    );
     assert_eq!(
         check(vec![f]),
         Err("`j0` captures `x2`, which is not in scope in `f`".to_string())
@@ -679,7 +658,13 @@ fn captures_out_of_order_are_rejected() {
             scope: CExprId(1),
         },
     ];
-    let f = function("f", 2, vec![int("a"), int("b"), int("t")], exprs, &[2]);
+    let f = function(
+        "f",
+        2,
+        vec![unboxed("a"), unboxed("b"), unboxed("t")],
+        exprs,
+        &[2],
+    );
     assert_eq!(
         check(vec![f]),
         Err("the captures of `j0` are not in increasing order in `f`".to_string())
@@ -707,6 +692,6 @@ fn an_unused_capture_released_by_the_body_is_accepted() {
             scope: CExprId(2),
         },
     ];
-    let f = function("f", 1, vec![string("s"), int("t")], exprs, &[3]);
+    let f = function("f", 1, vec![boxed("s"), unboxed("t")], exprs, &[3]);
     assert_eq!(check(vec![f]), Ok(()));
 }

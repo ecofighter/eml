@@ -1,8 +1,9 @@
 //! ソースから実行して確かめるテストは UI テスト (`tests/ui/run/`) に置く。ここには、手書きの Core IR や生成した
 //! ソースが要るものだけを置く (docs/implementation/testing.md)。
 
-use eml_core_ir::{Atom, CExpr, CExprId, CoreFn, FnIdx, Linearity, Program, Rhs, VarId, VarInfo};
+use eml_core_ir::{Atom, CExpr, CExprId, CoreFn, Program, Rhs, VarId};
 use eml_interp::RuntimeError;
+use eml_test_support::ir::{boxed, program, unboxed};
 use eml_test_support::{execute, run};
 
 fn main_with(body: &str) -> String {
@@ -11,31 +12,22 @@ fn main_with(body: &str) -> String {
 
 /// Perceus の挿入を経ない手書きの Core IR で、`debug_heap` がリークを見つけることを確かめる。
 fn leaking_program() -> Program {
-    let var = |name: &str, boxed| VarInfo {
-        name: name.to_string(),
-        linearity: Linearity::Unr,
-        boxed,
+    let main = CoreFn {
+        name: "main".to_string(),
+        params: vec![],
+        vars: vec![unboxed("p"), boxed("s")],
+        body: CExprId(1),
+        exprs: vec![
+            CExpr::Return(Atom::Unit),
+            CExpr::Let {
+                var: VarId(1),
+                rhs: Rhs::ConstString(0),
+                body: CExprId(0),
+            },
+        ],
+        joins: Vec::new(),
     };
-    Program {
-        functions: vec![CoreFn {
-            name: "main".to_string(),
-            params: vec![],
-            vars: vec![var("p", false), var("s", true)],
-            body: CExprId(1),
-            exprs: vec![
-                CExpr::Return(Atom::Unit),
-                CExpr::Let {
-                    var: VarId(1),
-                    rhs: Rhs::ConstString(0),
-                    body: CExprId(0),
-                },
-            ],
-            joins: Vec::new(),
-        }],
-        entry: FnIdx(0),
-        strings: vec!["leaked".to_string()],
-        effects: Vec::new(),
-    }
+    program(vec![main], 0, &["leaked"])
 }
 
 #[test]

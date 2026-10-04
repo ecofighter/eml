@@ -1,9 +1,7 @@
 //! 手で組んだ Core IR で、クロージャの eval/apply を確かめる (docs/spec/core-ir.md)。
 
-use eml_core_ir::{
-    Atom, CExpr, CExprId, Call, CoreFn, FnIdx, IoOp, Linearity, PrimOp, Program, Rhs, VarId,
-    VarInfo,
-};
+use eml_core_ir::{Atom, CExpr, CExprId, Call, CoreFn, FnIdx, IoOp, PrimOp, Rhs, VarId};
+use eml_test_support::ir::{boxed, program, unboxed, var};
 
 enum Step {
     Let(u32, Rhs),
@@ -32,11 +30,7 @@ fn function(name: &str, params: u32, vars: &[(&str, bool)], steps: Vec<Step>, re
         params: (0..params).map(VarId).collect(),
         vars: vars
             .iter()
-            .map(|&(name, boxed)| VarInfo {
-                name: name.to_string(),
-                linearity: Linearity::Unr,
-                boxed,
-            })
+            .map(|&(name, is_boxed)| if is_boxed { boxed(name) } else { unboxed(name) })
             .collect(),
         body,
         exprs,
@@ -45,19 +39,9 @@ fn function(name: &str, params: u32, vars: &[(&str, bool)], steps: Vec<Step>, re
 }
 
 fn run_program(functions: Vec<CoreFn>, main: u32, strings: &[&str]) -> String {
-    let program = Program {
-        functions,
-        entry: FnIdx(main),
-        strings: strings.iter().map(|s| s.to_string()).collect(),
-        effects: Vec::new(),
-    };
-    let (stdout, result) = eml_test_support::execute(program, true);
+    let (stdout, result) = eml_test_support::execute(program(functions, main, strings), true);
     result.unwrap();
     stdout
-}
-
-fn var(n: u32) -> Atom {
-    Atom::Var(VarId(n))
 }
 
 /// `first a b = a`。
