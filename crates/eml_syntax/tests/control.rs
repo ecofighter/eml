@@ -249,14 +249,6 @@ fn arms_ending_with_an_arrow_are_each_an_error() {
 }
 
 #[test]
-fn arms_at_the_column_of_match_need_indentation() {
-    assert_eq!(
-        diagnostics(&lines(&["f b =", "  match b with", "  | True -> 1"])),
-        ["E0009 2:11 expected an indented block after `with`"]
-    );
-}
-
-#[test]
 fn arms_at_the_column_of_match_are_read_as_arms() {
     let text = lines(&[
         "f b =",

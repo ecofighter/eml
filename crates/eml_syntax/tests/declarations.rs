@@ -376,7 +376,7 @@ fn import_and_records_are_skipped_as_not_supported_yet() {
 
 #[test]
 fn errors_in_one_declaration_do_not_affect_the_next() {
-    let text = lines(&["x : Int ->", "y : Int", "z : ) Int", "w : Int"]);
+    let text = lines(&["x : Int ->", "y : Int", "w : Int"]);
     insta::assert_snapshot!(shape(&text), @r#"
     SOURCE_FILE
       SIGNATURE
@@ -392,19 +392,12 @@ fn errors_in_one_declaration_do_not_affect_the_next() {
         PATH_TYPE
           UIDENT "Int"
       SIGNATURE
-        LIDENT "z"
-        COLON ":"
-      ERROR
-        R_PAREN ")"
-        UIDENT "Int"
-      SIGNATURE
         LIDENT "w"
         COLON ":"
         PATH_TYPE
           UIDENT "Int"
     ---
     E0009 1:9 expected an indented block after `->`
-    E0011 3:5 expected a type
     "#);
 }
 

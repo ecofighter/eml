@@ -77,11 +77,6 @@ fn assert_one_nesting_error_anywhere(text: &str) {
 }
 
 #[test]
-fn nested_let_blocks_report_one_error() {
-    assert_one_nesting_error_anywhere(&nested_let_blocks(300));
-}
-
-#[test]
 fn very_deep_nested_let_blocks_do_not_overflow_the_stack() {
     assert_one_nesting_error_anywhere(&nested_let_blocks(20_000));
 }

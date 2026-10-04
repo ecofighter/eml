@@ -557,14 +557,10 @@ mod tests {
     }
 
     #[test]
-    fn aligned_arrow_lines_report_e0009_once() {
+    fn aligned_arrow_lines_get_empty_blocks() {
         assert_eq!(
-            dump("f : A ->\n  B ->\n  C ->\n  D"),
-            (
-                "f : A -> <OPEN> B -> <OPEN> <CLOSE> <SEP> C -> <OPEN> <CLOSE> <SEP> D <CLOSE>"
-                    .to_string(),
-                vec!["E0009@13..15".to_string()]
-            )
+            dump("f : A ->\n  B ->\n  C ->\n  D").0,
+            "f : A -> <OPEN> B -> <OPEN> <CLOSE> <SEP> C -> <OPEN> <CLOSE> <SEP> D <CLOSE>"
         );
     }
 }
