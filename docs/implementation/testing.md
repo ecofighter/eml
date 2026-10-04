@@ -127,6 +127,7 @@
 - `eml_core_ir/tests/verify.rs` の手書きの Core IR に `captures` を足した (種類3)。期待値は変えていない
 - 末尾にない `if` の条件の計算を join point の範囲に入れたので、`eml_core_ir/tests/lower.rs` の `calls_save_the_variables_used_after_them` の `let t3 = prim >(n0, 0)` が `join` の定義の後ろに移り、`ifs_in_a_condition_nest_join_points` の2つの join point が入れ子でなく並んだ (種類2)。`saved` と `dup` / `decref` は変わっていない
 - `simplify` を入れたので、`ifs_in_a_condition_nest_join_points` の条件の join point が消え、`a` が偽の枝は外側の join point へ直接 `jump j0(2)` するようになった (種類2)。join point の入れ子と `captures` は `nested_join_points_capture_what_outer_join_points_need` で確かめる
+- `ifs_in_a_condition_nest_join_points` は、`simplify` の後は join point の入れ子を示さなくなったので、ユーザーの合意を得て `an_if_in_a_condition_jumps_straight_to_the_outer_join_point` に改名した (種類1)。ソースと期待値は変えていない
 
 ## よく使うコマンド
 

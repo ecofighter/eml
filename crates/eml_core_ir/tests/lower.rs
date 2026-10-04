@@ -255,7 +255,7 @@ fn a_tail_if_returns_from_each_arm() {
 }
 
 #[test]
-fn ifs_in_a_condition_nest_join_points() {
+fn an_if_in_a_condition_jumps_straight_to_the_outer_join_point() {
     let text = "choose : Bool -> Bool -> Int\nchoose a b =\n  let n = if (if a then b else False) then 1 else 2\n  n + 1\n\nmain : Unit -> <IO> Unit\nmain () = ()";
     insta::assert_snapshot!(core_text(text), @r"
     fn choose(a0, b1) {
