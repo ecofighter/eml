@@ -88,26 +88,32 @@ fn short_text_ends_every_line_with_a_newline() {
 
 #[test]
 fn parse_clean_returns_a_tree_without_diagnostics() {
-    assert!(parse_clean("x = 1").diagnostics.is_empty());
+    let parsed = parse_clean("x = 1");
+    assert!(parsed.diagnostics.is_empty());
+    assert_eq!(parsed.parse.tree().items().count(), 1);
 }
 
 #[test]
-#[should_panic]
+#[should_panic(expected = "unexpected diagnostics")]
 fn parse_clean_rejects_a_syntax_error() {
     parse_clean("x = €");
 }
 
 #[test]
 fn lower_clean_returns_a_module_without_diagnostics() {
+    let lowered = lower_clean("f : Int -> Int\nf x = x");
+    assert!(lowered.diagnostics.is_empty());
     assert!(
-        lower_clean("f : Int -> Int\nf x = x")
-            .diagnostics
-            .is_empty()
+        lowered
+            .module
+            .functions
+            .iter()
+            .any(|(_, function)| function.name == "f")
     );
 }
 
 #[test]
-#[should_panic]
+#[should_panic(expected = "unexpected diagnostics")]
 fn lower_clean_rejects_an_undefined_name() {
     lower_clean("f : Int -> Int\nf x = g x");
 }
