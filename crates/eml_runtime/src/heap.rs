@@ -42,7 +42,7 @@ const DESCRIPTORS: [Descriptor; 3] = [
     Descriptor { name: "Closure" },
 ];
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, PartialEq)]
 pub enum Payload {
     Str(String),
     Closure(Closure),
@@ -61,15 +61,14 @@ impl Payload {
 }
 
 /// クロージャ。関数と、すでに渡された先頭の引数の並び (docs/spec/core-ir.md)。各値は参照を1つずつ所有する。
-/// `Clone` は `ObjRef` を `dup` せずに複製するので、複製した側が参照を数え直す。
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, PartialEq)]
 pub struct Closure {
     pub function: u32,
     pub args: Vec<Value>,
 }
 
 /// CEK 機械の継続のフレーム。継続もランタイムのオブジェクトにする (docs/spec/runtime.md)。
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, PartialEq)]
 pub enum Frame {
     /// 呼び出し元の関数に戻る。呼び出しの後で使う変数だけを退避し、それぞれ参照を1つ所有する
     /// (docs/spec/core-ir.md)。
@@ -210,6 +209,23 @@ impl Heap {
         Ok(self.release(obj))
     }
 
+    /// オブジェクトの所有権を受け取って中身を使う側のための手続き。一意なら解放して中身を返す。共有されていれば
+    /// 中身を写し、写した中身の子の参照を1つずつ増やしてから、元の参照を1つ手放す。子は解放と同じ `children` で
+    /// 数えるので、写すときと解放するときで数える参照が一致する (docs/spec/runtime.md)。
+    pub fn take_or_copy(&mut self, obj: ObjRef) -> Result<Payload, HeapError> {
+        if self.is_unique(obj)? {
+            return self.take(obj);
+        }
+        let copy = copy(&self.object(obj)?.payload);
+        let mut shared = Vec::new();
+        children(&copy, &mut shared);
+        for child in shared {
+            self.dup(child)?;
+        }
+        self.decref(obj)?;
+        Ok(copy)
+    }
+
     /// 共有の印付けは、名前だけ予約する。実装はマルチコアの段階で行う (docs/spec/runtime.md)。
     pub fn mark_shared(&mut self, obj: ObjRef) -> Result<(), HeapError> {
         self.object(obj)?;
@@ -256,6 +272,35 @@ impl Heap {
         slot.generation = slot.generation.wrapping_add(1);
         self.free.push(obj.index);
         object.payload
+    }
+}
+
+/// 中身の写し。子の参照は数え直さないので、`take_or_copy` だけが使う。
+fn copy(payload: &Payload) -> Payload {
+    match payload {
+        Payload::Str(text) => Payload::Str(text.clone()),
+        Payload::Closure(closure) => Payload::Closure(Closure {
+            function: closure.function,
+            args: closure.args.clone(),
+        }),
+        Payload::Frame(Frame::Return {
+            function,
+            resume,
+            bind,
+            saved,
+            next,
+        }) => Payload::Frame(Frame::Return {
+            function: *function,
+            resume: *resume,
+            bind: *bind,
+            saved: saved.clone(),
+            next: *next,
+        }),
+        Payload::Frame(Frame::Apply { args, next }) => Payload::Frame(Frame::Apply {
+            args: args.clone(),
+            next: *next,
+        }),
+        Payload::Frame(Frame::Io) => Payload::Frame(Frame::Io),
     }
 }
 
@@ -406,6 +451,37 @@ mod tests {
         assert_eq!(heap.take(s), Err(HeapError::Shared));
         heap.decref(s).unwrap();
         assert_eq!(heap.take(s), Ok(Payload::Str("a".to_string())));
+        assert!(heap.live_objects().is_empty());
+    }
+
+    #[test]
+    fn take_or_copy_takes_a_unique_object() {
+        let mut heap = Heap::new();
+        let s = string(&mut heap, "a");
+        assert_eq!(heap.take_or_copy(s), Ok(Payload::Str("a".to_string())));
+        assert!(heap.live_objects().is_empty());
+    }
+
+    #[test]
+    fn take_or_copy_copies_a_shared_object_and_its_children() {
+        let mut heap = Heap::new();
+        let s = string(&mut heap, "a");
+        let closure = heap.alloc(Payload::Closure(Closure {
+            function: 0,
+            args: vec![Value::Obj(s), Value::Int(1)],
+        }));
+        heap.dup(closure).unwrap();
+        let copy = heap.take_or_copy(closure).unwrap();
+        assert_eq!(
+            copy,
+            Payload::Closure(Closure {
+                function: 0,
+                args: vec![Value::Obj(s), Value::Int(1)],
+            })
+        );
+        // 元のクロージャと写した中身が、捕まえた文字列の参照を1つずつ持つ
+        heap.decref(closure).unwrap();
+        heap.decref(s).unwrap();
         assert!(heap.live_objects().is_empty());
     }
 

@@ -316,26 +316,13 @@ impl<'p> Machine<'p> {
         }
     }
 
-    /// 呼び出しはクロージャの所有権を受け取る。一意なら中身を取り出し、共有されていれば中身の参照を複製してから
-    /// 手放す。
+    /// 呼び出しはクロージャの所有権を受け取る。共有されていれば、ランタイムが中身を写して子の参照を数え直す
+    /// (docs/spec/runtime.md)。
     fn take_closure(&mut self, obj: ObjRef) -> Result<Closure, Fault> {
-        if self.heap.is_unique(obj).map_err(Fault::Heap)? {
-            return match self.heap.take(obj).map_err(Fault::Heap)? {
-                Payload::Closure(closure) => Ok(closure),
-                _ => Err(Fault::Internal("applying an object that is not a closure")),
-            };
+        match self.heap.take_or_copy(obj).map_err(Fault::Heap)? {
+            Payload::Closure(closure) => Ok(closure),
+            _ => Err(Fault::Internal("applying an object that is not a closure")),
         }
-        let closure = match self.heap.get(obj).map_err(Fault::Heap)? {
-            Payload::Closure(closure) => closure.clone(),
-            _ => return Err(Fault::Internal("applying an object that is not a closure")),
-        };
-        for value in &closure.args {
-            if let Value::Obj(captured) = value {
-                self.heap.dup(*captured).map_err(Fault::Heap)?;
-            }
-        }
-        self.heap.decref(obj).map_err(Fault::Heap)?;
-        Ok(closure)
     }
 
     /// 呼び出しの後で使う変数だけをフレームに退避する。フレームは、ちょうど所有している参照だけを持つ
