@@ -49,7 +49,7 @@ impl SourceFiles {
         let line_start = before.rfind('\n').map_or(0, |newline| newline + 1);
         let mut column_text = &before[line_start..];
         if line_start == 0 {
-            column_text = column_text.strip_prefix('\u{feff}').unwrap_or(column_text);
+            column_text = &column_text[bom_len(column_text)..];
         }
         LineCol {
             line: u32::try_from(before.matches('\n').count() + 1).expect("too many lines"),
@@ -62,6 +62,12 @@ impl SourceFiles {
             .iter()
             .map(|(path, text)| (path.as_str(), text.as_str()))
     }
+}
+
+/// ファイルの先頭の BOM のバイト数。BOM は列に数えないので (docs/spec/lexical.md)、行と列の計算と表示の両方が使う。
+pub(crate) fn bom_len(text: &str) -> usize {
+    const BOM: &str = "\u{feff}";
+    if text.starts_with(BOM) { BOM.len() } else { 0 }
 }
 
 #[cfg(test)]

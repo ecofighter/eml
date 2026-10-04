@@ -2,19 +2,14 @@ use std::ops::Range;
 
 use ariadne::{Config, IndexType, Label as AriadneLabel, Report, ReportKind};
 
+use crate::source::bom_len;
 use crate::{Diagnostic, Label, Severity, SourceFiles};
-
-const BOM: &str = "\u{feff}";
-
-/// BOM は列に数えないので (docs/spec/lexical.md)、表示では除く。`TextRange` は BOM を含む元のテキストの位置の
-/// ままにしておき、ここでずらす (docs/spec/diagnostics.md)。
-fn bom_len(text: &str) -> usize {
-    if text.starts_with(BOM) { BOM.len() } else { 0 }
-}
 
 /// UI テストのスナップショットにも使うので、色を付けない。
 pub fn render(diagnostics: &[Diagnostic], files: &SourceFiles) -> String {
     let mut out = Vec::new();
+    // BOM は列に数えないので (docs/spec/lexical.md)、表示では除く。`TextRange` は BOM を含む元のテキストの位置の
+    // ままにしておき、`span` でずらす (docs/spec/diagnostics.md)
     let mut sources = ariadne::sources(
         files
             .iter()
