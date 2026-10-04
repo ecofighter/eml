@@ -142,10 +142,15 @@ HIR への変換では、名前解決に加えて、次の脱糖と検査を行�
 - 結果の `TypedModule` が持つ型は、型変数の束縛を解決した `Type` である (別テーブルの形は上の「各段階の規律」)
 - シグネチャはスキーム (`scheme.rs`) で持つ。型変数と row 変数は rigid で、参照するたびに具体化し、戻り値の側の閉じた row を開く
 - 呼び出しは、たどった矢印の row を今の row に含める (`Table::include_row`)。呼び出し先の末尾が推論変数なら、その row を今の row とそのまま単一化する。閉じた末尾と rigid な末尾では、末尾を新しい row 変数に替えた row を今の row と単一化し、今の row の残りをその変数で受ける。rigid な末尾では、さらに残りの末尾が同じ rigid 変数であることを確かめる。今の row をまだ推論している途中で残りの末尾が推論変数なら、その推論変数を rigid な変数に束縛する (推論されるラムダの中の呼び出しに必要)
-- ラムダの引数の個数が合わないときや期待する型が壊れているときは、新しい開いた row に退避し、エフェクトの誤りを連鎖させない
+- ラムダの引数の個数が合わないときや期待する型が壊れているときは、末尾が `Error` の row で本体を検査し、エフェクトの誤りを連鎖させない
 - 呼び出しグラフの SCC (`scc.rs`) を呼ばれる側から検査し、SCC ごとに使用回数のパス (`usage.rs`) で `Unr` の制約を出してから、スキームの Kind 変数を多相化する。残す制約は、内部の変数を経由した推移も含めて求める (`Lattice::residual`)
 - 部分適用のクロージャの線形性は、それまでの引数と捕まえた値の Kind 以上になる (`Table::closure_kinds`)
 - `dump` は、スキームに残った Kind の制約のうち定数を片側に持つものを `kinds:` の行に出す
+- 型の表は `table/` に分ける。`mod.rs` は型と変数の格納、`unify.rs` は型の単一化、`row.rs` は row の単一化と `include_row`、`kinds.rs` は Kind の制約、`copy.rs` はスキームの具体化の写し、`export.rs` は外に出す型への変換である。型の形は `TyShape`、関数の矢印の線形性は `ArrowLin` と呼び、Kind (線形性と多重度) と取り違えないようにする
+- row の末尾は `Tail::{Closed, Var, Error}` である。未定義のエフェクトか解決できない row 変数の跡は末尾 `Error` の row になり、型の `Error` と同じく、どのエフェクトも受け入れて束縛されない。外に出す型では `{error}` と表示する
+- `Table::display` は診断の文言のための変換で、Kind の束を解かず、矢印の線形性を `Unr` にする。`Table::export` は `solve_kinds` の後にだけ呼び、`TypedModule` を組み立てる
+- 検査器は `check/` に分ける。`mod.rs` は SCC の順の検査と `TypedModule` の組み立て、`body.rs` は本体の検査、`report.rs` は診断を作る処理である。`if` とブロックは期待する型の有無 (`Expectation`) で check と infer の処理を共有し、矢印をたどる処理は `next_arrow` に、今の row の保存と復元は `with_ambient` にまとめてある。呼び出しの row を今の row に含める処理は `include_call_row` と呼ぶ
+- E2002 の副ラベルは、本体の row が入る矢印の部分の型を指す (`body_arrow_range`)
 
 ## `eml_core_ir`、`eml_runtime`、`eml_interp` の内部
 
