@@ -103,6 +103,11 @@
 
 - `x |> f a` を、`x` を先に評価する印を付けた呼び出し `f a x` に脱糖し、`x` を先に評価するようにした ([宣言](../spec/declarations.md) の標準の演算子の表)。`eml_hir/tests/operators.rs` の `pipes_become_applications` の HIR の表示が、先に評価する引数に `|>` を付けた `(@g 2 |>(@f |>1))` になった (種類2)。評価順は `tests/ui/run/pipe_evaluation_order.em` で、普通の呼び出しと同じ診断が出ることは `tests/ui/check-fail/pipe_into_function_parameter.em` で確かめる
 
+### リファクタリング R3a
+
+- Core IR の命令を変えたので、`eml_core_ir/tests/lower.rs` の既存の9件のスナップショットが変わった (種類2)。末尾にない `if` が join point (`join` と `jump`) に、末尾の `if` が各枝で返す `switch` に、値を返すだけの呼び出しが `tailcall` になり、すべてに入口の関数 `entry$main` が加わった。`dup` と `decref` の位置で所有権を確かめる目的は変わらない
+- `eml_interp/tests/run.rs` と `closures.rs` の手書きの Core IR は、`Rhs::Call`、`CoreFn::joins`、`Program::entry` に合わせて組み立てを書き換えた (種類3)。入口は引数を取らないので、手書きの `main` の引数を除いた。期待値は変えていない
+
 ## よく使うコマンド
 
 ```sh
