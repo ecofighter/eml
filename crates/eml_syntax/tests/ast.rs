@@ -1,6 +1,6 @@
 use eml_diagnostics::TextRange;
 use eml_syntax::SyntaxKind::{self, *};
-use eml_syntax::ast::{AppExpr, Expr, Item, OpSeqElement, Pat, SourceFile, Stmt, Type};
+use eml_syntax::ast::{AppExpr, Clause, Expr, Item, OpSeqElement, Pat, SourceFile, Stmt, Type};
 use rowan::ast::AstNode;
 
 fn source(text: &str) -> SourceFile {
@@ -277,4 +277,87 @@ fn callee_is_the_first_child_even_when_it_is_an_error() {
         .map(|arg| arg.syntax().text().to_string())
         .collect();
     assert_eq!(args, ["x"]);
+}
+
+#[test]
+fn effect_declaration_parts() {
+    let file = source("effect State s where\n  get : Unit -> s\n  never fail : String -> a");
+    let Some(Item::EffectItem(effect)) = file.items().next() else {
+        panic!("expected an effect");
+    };
+    assert_eq!(effect.name().unwrap().text(), "State");
+    let params: Vec<String> = effect.params().map(|t| t.text().to_string()).collect();
+    assert_eq!(params, ["s"]);
+    let operations: Vec<(Option<SyntaxKind>, String)> = effect
+        .operations()
+        .map(|op| {
+            (
+                op.multiplicity().map(|t| t.kind()),
+                op.name().unwrap().text().to_string(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        operations,
+        [
+            (None, "get".to_string()),
+            (Some(NEVER_KW), "fail".to_string())
+        ]
+    );
+    assert!(
+        effect
+            .operations()
+            .all(|op| matches!(op.ty(), Some(Type::FnType(_))))
+    );
+}
+
+#[test]
+fn handler_clauses_resume_and_drop() {
+    let file =
+        source("h = handle f () with\n  | ask key k -> resume k key\n  | return x -> drop x");
+    let equation = first_equation(&file);
+    let Some(Expr::HandleExpr(handle)) = equation.body() else {
+        panic!("expected a handler");
+    };
+    assert!(matches!(handle.body(), Some(Expr::AppExpr(_))));
+    assert!(handle.from_keyword().is_none());
+    let clauses: Vec<Clause> = handle.clauses().collect();
+    let [Clause::OpClause(op), Clause::ReturnClause(ret)] = clauses.as_slice() else {
+        panic!("{clauses:?}");
+    };
+    assert_eq!(op.name().unwrap().text(), "ask");
+    assert_eq!(op.params().count(), 2);
+    let Some(Expr::ResumeExpr(resume)) = op.body() else {
+        panic!("expected `resume`");
+    };
+    assert_eq!(resume.args().count(), 2);
+    assert_eq!(ret.params().count(), 1);
+    let Some(Expr::DropExpr(drop)) = ret.body() else {
+        panic!("expected `drop`");
+    };
+    assert_eq!(drop.args().count(), 1);
+}
+
+#[test]
+fn handler_with_an_initial_state() {
+    let file = source("h = handle f () from s with | return x st -> x");
+    let equation = first_equation(&file);
+    let Some(Expr::HandleExpr(handle)) = equation.body() else {
+        panic!("expected a handler");
+    };
+    assert!(matches!(handle.body(), Some(Expr::AppExpr(_))));
+    assert_eq!(handle.from_keyword().unwrap().kind(), FROM_KW);
+}
+
+#[test]
+fn effect_arguments_in_a_row() {
+    let file = source("f : Unit -> <State Int> Unit");
+    let Some(Item::Signature(signature)) = file.items().next() else {
+        panic!("expected a signature");
+    };
+    let Some(Type::FnType(function)) = signature.ty() else {
+        panic!("expected a function type");
+    };
+    let effect = function.row().unwrap().effects().next().unwrap();
+    assert_eq!(effect.args().count(), 1);
 }

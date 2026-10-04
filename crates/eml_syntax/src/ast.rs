@@ -168,6 +168,11 @@ ast_enum! {
     Type { PathType, VarType, AppType, FnType, ParenType, TupleType }
 }
 
+ast_enum! {
+    /// handler の節。
+    Clause { OpClause, ReturnClause }
+}
+
 impl LambdaExpr {
     pub fn params(&self) -> AstChildren<Pat> {
         support::children(&self.syntax)
@@ -412,6 +417,111 @@ impl EffectRow {
 impl Effect {
     pub fn name(&self) -> Option<SyntaxToken> {
         support::token(&self.syntax, SyntaxKind::UIDENT)
+    }
+
+    /// row に書いたエフェクトの型引数。
+    pub fn args(&self) -> AstChildren<Type> {
+        support::children(&self.syntax)
+    }
+}
+
+impl EffectItem {
+    pub fn name(&self) -> Option<SyntaxToken> {
+        support::token(&self.syntax, SyntaxKind::UIDENT)
+    }
+
+    /// エフェクトの型引数。操作の宣言は子のノードなので、直下のトークンだけを見る。
+    pub fn params(&self) -> impl Iterator<Item = SyntaxToken> {
+        self.syntax
+            .children_with_tokens()
+            .filter_map(NodeOrToken::into_token)
+            .filter(|token| token.kind() == SyntaxKind::LIDENT)
+    }
+
+    pub fn operations(&self) -> AstChildren<OpDecl> {
+        support::children(&self.syntax)
+    }
+}
+
+impl OpDecl {
+    /// `never` / `once` / `multi`。省略したら `None` で、`once` として扱う (docs/spec/declarations.md)。
+    pub fn multiplicity(&self) -> Option<SyntaxToken> {
+        self.syntax
+            .children_with_tokens()
+            .filter_map(NodeOrToken::into_token)
+            .find(|token| {
+                matches!(
+                    token.kind(),
+                    SyntaxKind::NEVER_KW | SyntaxKind::ONCE_KW | SyntaxKind::MULTI_KW
+                )
+            })
+    }
+
+    pub fn name(&self) -> Option<SyntaxToken> {
+        support::token(&self.syntax, SyntaxKind::LIDENT)
+    }
+
+    pub fn ty(&self) -> Option<Type> {
+        support::child(&self.syntax)
+    }
+}
+
+impl HandleExpr {
+    /// handle する式。`from` があれば初期値より前、なければ `with` より前にある。
+    pub fn body(&self) -> Option<Expr> {
+        let before = if self.from_keyword().is_some() {
+            SyntaxKind::FROM_KW
+        } else {
+            SyntaxKind::WITH_KW
+        };
+        child_between(&self.syntax, Some(SyntaxKind::HANDLE_KW), Some(before))
+    }
+
+    pub fn from_keyword(&self) -> Option<SyntaxToken> {
+        support::token(&self.syntax, SyntaxKind::FROM_KW)
+    }
+
+    pub fn clauses(&self) -> AstChildren<Clause> {
+        support::children(&self.syntax)
+    }
+}
+
+impl OpClause {
+    /// 節の先頭の操作の名前。引数はパターンのノードなので、直下の最初の小文字の名前が操作の名前である。
+    pub fn name(&self) -> Option<SyntaxToken> {
+        support::token(&self.syntax, SyntaxKind::LIDENT)
+    }
+
+    /// 操作の引数、`k`、(パラメータ付き handler なら) 状態のパターン。
+    pub fn params(&self) -> AstChildren<Pat> {
+        support::children(&self.syntax)
+    }
+
+    pub fn body(&self) -> Option<Expr> {
+        child_between(&self.syntax, Some(SyntaxKind::THIN_ARROW), None)
+    }
+}
+
+impl ReturnClause {
+    pub fn params(&self) -> AstChildren<Pat> {
+        support::children(&self.syntax)
+    }
+
+    pub fn body(&self) -> Option<Expr> {
+        child_between(&self.syntax, Some(SyntaxKind::THIN_ARROW), None)
+    }
+}
+
+impl ResumeExpr {
+    /// 個数は文法で制限せず、HIR で検査する (docs/spec/grammar.md の「文法上の補足」)。
+    pub fn args(&self) -> AstChildren<Expr> {
+        support::children(&self.syntax)
+    }
+}
+
+impl DropExpr {
+    pub fn args(&self) -> AstChildren<Expr> {
+        support::children(&self.syntax)
     }
 }
 
