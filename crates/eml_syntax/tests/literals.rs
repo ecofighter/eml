@@ -77,3 +77,24 @@ fn unsupported_literals_have_no_value() {
     assert_eq!(value("1.5"), None);
     assert_eq!(value("'a'"), None);
 }
+
+#[test]
+fn unicode_escapes_the_lexer_rejects_have_no_value() {
+    // lexer の検査と値の取り出しは同じ規則を使う (docs/spec/lexical.md)。1〜6桁の16進数で、Unicode のスカラー値
+    // でなければ、lexer が E0008 を報告し、値は持たない。
+    for literal in [
+        r#""\u{+41}""#,
+        r#""\u{0000041}""#,
+        r#""\u{}""#,
+        r#""\u{110000}""#,
+        r#""\u{D800}""#,
+    ] {
+        assert_eq!(decode_string(literal), None, "{literal}");
+        assert!(
+            diagnostics(&format!("x = {literal}"))
+                .iter()
+                .any(|d| d.starts_with("E0008 ")),
+            "{literal}"
+        );
+    }
+}
