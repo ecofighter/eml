@@ -99,6 +99,10 @@
 
 - 未定義のエフェクトか解決できない row 変数の跡の row を、推論用の row 変数ではなく末尾 `Error` の row にした。外に出す型での表示が `<_>` から `<{error}>` になり、`eml_types/tests/check.rs` の `main_with_an_erroneous_row_is_not_reported_again` と `an_undefined_effect_row_is_fresh_at_each_call` の期待値が変わった (種類2)。どちらも、E1002 を重ねて出さないことと、呼び出しごとに独立していることを確かめる目的は変わらない
 
+### リファクタリング R2b-1
+
+- `x |> f a` を `{ let $pipe = x; f a $pipe }` に脱糖し、`x` を先に評価するようにした ([宣言](../spec/declarations.md) の標準の演算子の表)。`eml_hir/tests/operators.rs` の `pipes_become_applications` の HIR が、`$pipe` の `let` を持つ入れ子のブロックになった (種類2)。評価順は `tests/ui/run/pipe_evaluation_order.em` で確かめる
+
 ## よく使うコマンド
 
 ```sh

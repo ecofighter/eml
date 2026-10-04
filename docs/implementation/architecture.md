@@ -127,11 +127,13 @@ HIR への変換では、名前解決に加えて、次の脱糖と検査を行�
 
 ## `eml_hir` の内部
 
-- `Module` はトップレベルの関数の `Arena<Function>` を持つ。本体は関数ごとの `Body` (`exprs`、`pats`、`locals` のアリーナ) に置く。後でクエリ化したときに関数単位で再計算できるようにするため (rust-analyzer と同じ分け方)。型の注釈は関数ごとの `types` に置く
-- 型変数と row 変数の表は `Function::type_vars` / `row_vars` に置く。シグネチャで定義し、本体の注釈は引くだけにする。ラムダの引数は、ラムダの本体だけで見えるスコープに入る
+- `Module` はトップレベルの関数の `Arena<Function>` を持つ。本体は関数ごとの `Body` (`exprs`、`pats`、`locals` のアリーナ) に置く。後でクエリ化したときに関数単位で再計算できるようにするため (rust-analyzer と同じ分け方)。型の注釈は、シグネチャのものを `Signature::types` に、本体のものを `Body::types` に置く。本体を書き換えてもシグネチャが変わらないようにするため
+- 型変数と row 変数の表は `Signature::generics` (`Generics`) に置く。シグネチャで定義し、本体の注釈は引くだけにする。ラムダの引数は、ラムダの本体だけで見えるスコープに入る
 - シグネチャと等式は名前で対応づけてから、並び方を検査する。シグネチャか等式のない関数も `Function` として残し (`signature` か `body` が `None`)、呼び出し側で名前の誤りを連鎖させない
 - 名前は `Res::{Local, Function, Builtin}` に解決する。組み込み (`eml_hir::builtin::Builtin`) は名前解決の最も外側のスコープで、ユーザーの定義で隠せる。S2 で `Prelude` モジュールに移す
-- 演算子の列は、標準の演算子の表で precedence climbing により組み直す。`&&` / `||` は `if` に、`|>` / `<|` は関数適用に脱糖する。`else` のない `if` は `else_branch: None` のまま残し、型検査が `Unit` を求める
+- トップレベルの名前は、変換の中の `ItemScope` (`lower/scope.rs`) で解決する。値と型 (型名とエフェクト名) の2つの名前空間を持ち、ユーザーの定義を先に引き、なければ組み込みを引く
+- `Body` は走査関数を持つ。`walk_child_exprs` は式の直接の子を辿り、`pat_bindings` はパターンが束縛する変数を、`lambda_captures` はラムダが捕まえる変数を返す。段階3と4で式やパターンの種類を足すときは、これらを直す
+- 演算子の列は、標準の演算子の表で precedence climbing により組み直す。`&&` / `||` は `if` に脱糖する。`x |> f` は `{ let $pipe = x; f $pipe }` に、`f <| x` は関数適用に脱糖する。`|>` の左辺を先に評価するため。`else` のない `if` は `else_branch: None` のまま残し、型検査が `Unit` を求める
 
 ## `eml_types` の内部
 
