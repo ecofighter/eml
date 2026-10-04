@@ -349,3 +349,25 @@ fn builtin_schemes_are_exported() {
     // コンストラクタは Prelude にない (段階4で `data Bool` にする)
     assert!(!checked.typed.builtins.contains_key(&Builtin::True));
 }
+
+#[test]
+fn later_stage_constructs_add_no_type_errors() {
+    // E0004 の跡 (`<missing>` のパターンと値、`from` の handle) を型検査に通しても、誤りを重ねて出さない。
+    let text = "counter : Unit -> Int\ncounter () = 0\n\nf : Int -> Int\nf n =\n  let swap = fn (a, b) -> (b, a)\n  let plus = (+)\n  handle counter () from n with\n    | return x st -> x";
+    insta::assert_snapshot!(check_text(text), @"
+    counter : Unit -> Int
+    f : Int -> Int
+      n#0 : Int
+      swap#1 : _ -> <_> {error}
+      plus#2 : {error}
+    ---
+    E0004 6:17 tuple patterns are not supported yet
+      6:17 this is implemented in a later stage
+    E0004 6:27 tuples are not supported yet
+      6:27 this is implemented in a later stage
+    E0004 7:14 operator references are not supported yet
+      7:14 this is implemented in a later stage
+    E0004 8:21 handlers with `from` are not supported yet
+      8:21 this is implemented in a later stage
+    ");
+}
