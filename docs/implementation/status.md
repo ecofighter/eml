@@ -158,7 +158,7 @@ R3a で済んだ。末尾にない `if` を join point にし、末尾の `if` �
 - 段階3の `drop k` は、継続のフレームをヒープの子の走査で解放する。これは、フレームのスロットが所有する参照だけを持つことに頼っている。インタプリタのスロットごとの参照の数 ([architecture.md](architecture.md) の「`eml_core_ir`、`eml_runtime`、`eml_interp` の内部」) がこれを保証する
 - 段階4で boxed な値を `Switch` の scrutinee にするとき、現在の規則では scrutinee の読み出しが move になる。`match` の変換で、scrutinee の所有権を各枝にどう渡すかを決める必要がある
 - 非常に長い平らな演算子の列 (約1万項) は、同じ深さの HIR の木になり、型検査と Core IR への変換がその木を再帰するのでスタックがあふれる。演算子を E0013 の深さに数えるか、平らに保つ対応は後に回す
-- 段階3の注意: `Payload` / `Frame` は `Clone` を導出しているが、`ObjRef` を `dup` せずに複製する。`Closure` の `args` と `ApplyFrame` の `args` も同じである。multi-shot の `resume` では、`children` が列挙するのと同じ数 (スロットごとの参照 × 回数) を `dup` する経路でフレームを複製する。また `perform` は、呼び出しと同じく環境を退避するフレームを積む必要がある。入れ子の式のフレームは環境を所有しないため
+- 段階3の注意: `Payload` / `Frame` は `Clone` を導出しているが、`ObjRef` を `dup` せずに複製する。`Closure` の `args` と `ApplyFrame` の `args` も同じである。multi-shot の `resume` では、`children` が列挙するのと同じ数 (スロットごとの参照 × 回数) を `dup` する経路でフレームを複製する。また `perform` は、呼び出しと同じく環境を退避するフレームを積む必要がある。join point への `jump` と末尾呼び出しはフレームを積まないので、捕獲した継続から再開するには、`perform` の時点の環境がフレームに残っていなければならないため
 - 段階3: row 変数の多重度 `σ` は、スキームの多相化と具体化で制約を複製しているが、段階2では上限の制約が出ないので確かめていない。`multi` と持ち越し規則で上限が出たときにテストを足す
 - 段階5: Kind の制約の違反は、段階2では `debug_assert` だけで、診断にしていない (`eml_types::check` の `solve_kinds` の後)。`Lin` の型が現れたら E3xxx の番号を決めて診断にする
 - 段階5: 使用回数のパス (`eml_types::usage`) は、どの経路でも1回でない変数に `Unr` の制約を出すだけである。枝ごとの消費の一致、持ち越し規則、E3xxx はこのパスに足す

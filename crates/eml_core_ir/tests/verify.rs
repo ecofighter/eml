@@ -279,3 +279,20 @@ fn a_direct_call_with_the_wrong_number_of_arguments_is_rejected() {
         Err("a direct call to `g` passes 2 arguments, but it takes 1 in `f`".to_string())
     );
 }
+
+#[test]
+fn a_long_run_of_if_statements_is_verified_in_linear_time() {
+    // 文の `if` が続くと、join point の本体が長く連なる。範囲や枝ごとに変数の範囲を写すと、文の数の2乗の時間がかかる。
+    // `lower` はデバッグビルドで毎回 verify するので、文の数に比例する時間で終わらなければならない
+    let mut text = String::from("main : Unit -> <IO> Unit\nmain () =\n  let s = \"keep\"\n");
+    text.push_str(&"  if True then println \"x\"\n".repeat(20000));
+    text.push_str("  println s");
+    let start = std::time::Instant::now();
+    let program = eml_test_support::core(&text);
+    assert_eq!(verify(&program), Ok(()));
+    let elapsed = start.elapsed();
+    assert!(
+        elapsed < std::time::Duration::from_secs(10),
+        "took {elapsed:?}"
+    );
+}

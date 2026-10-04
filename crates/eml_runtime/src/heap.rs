@@ -82,7 +82,8 @@ pub struct Frame {
     pub function: u32,
     pub resume: u32,
     pub bind: u32,
-    /// `None` なら、戻った後も今の環境を使い続ける (入れ子の式のフレーム)。
+    /// `None` なのは最下部の `IO` の handler のフレームだけで、ほかの呼び出しのフレームは環境を退避する。R3b でフレームの
+    /// 種類の enum にする (docs/implementation/status.md の「R3b」)。
     pub slots: Option<Vec<Option<Owned>>>,
     pub next: Option<ObjRef>,
 }

@@ -33,11 +33,11 @@ pub fn verify(program: &Program) -> Result<(), VerifyError> {
     Ok(())
 }
 
-/// 経路ごとの状態。`Switch` の各枝と join point の範囲は、同じ状態の写しから始まる。
+/// 経路ごとの状態。`Switch` の各枝と join point の範囲は、同じ状態の写しから始まる。写すのは今所有している変数と
+/// `Jump` してよい join point だけで、どちらも小さい。束縛の範囲は `Checker` が取り消しの記録で戻す。
 #[derive(Clone, Default)]
 struct State {
-    in_scope: BTreeSet<VarId>,
-    /// RC の対象の変数ごとの、所有している参照の数。
+    /// RC の対象の変数ごとの、所有している参照の数。0 になった変数は除く。
     owned: BTreeMap<VarId, u32>,
     /// `Jump` してよい join point。
     joins: BTreeSet<JoinId>,
@@ -50,6 +50,10 @@ struct Checker<'a> {
     /// join point ごとの、本体で使う RC の対象の変数。
     needs: HashMap<JoinId, Vars>,
     bound: HashSet<VarId>,
+    /// 今の経路で束縛の範囲にある変数。枝ごとに写すと、文の `if` が続く関数で文の数の2乗の時間がかかるので、
+    /// 束縛を `scope_log` に記録し、枝や範囲を確かめ終えたら記録を巻き戻す。
+    in_scope: Vec<bool>,
+    scope_log: Vec<VarId>,
     defined_joins: HashSet<JoinId>,
 }
 
@@ -63,6 +67,8 @@ impl<'a> Checker<'a> {
             tracked,
             needs,
             bound: HashSet::new(),
+            in_scope: vec![false; function.vars.len()],
+            scope_log: Vec::new(),
             defined_joins: HashSet::new(),
         }
     }
@@ -101,7 +107,7 @@ impl<'a> Checker<'a> {
                     id = *body;
                 }
                 CExpr::Decref { var, body } => {
-                    *self.count(&mut state, *var, "released")? -= 1;
+                    self.give_up(&mut state, *var, "released")?;
                     id = *body;
                 }
                 CExpr::Return(atom) => {
@@ -120,7 +126,7 @@ impl<'a> Checker<'a> {
                         if !tags.insert(tag) {
                             return Err(format!("a switch has two arms for tag {tag}"));
                         }
-                        self.check(arm, state.clone())?;
+                        self.check_branch(arm, state.clone())?;
                     }
                     return Ok(());
                 }
@@ -139,7 +145,7 @@ impl<'a> Checker<'a> {
                     // 範囲は今の状態から始まり、この join point に `Jump` できる
                     let mut scope_state = state.clone();
                     scope_state.joins.insert(*join);
-                    self.check(*scope, scope_state)?;
+                    self.check_branch(*scope, scope_state)?;
                     // 本体は、本体で使う変数を1つずつ所有し、引数を束縛して始まる
                     let needs = self.needs.get(join).cloned().unwrap_or_default();
                     state.owned = needs.iter().map(|&var| (var, 1)).collect();
@@ -150,19 +156,30 @@ impl<'a> Checker<'a> {
         }
     }
 
+    /// 枝や範囲を確かめ、その中で束縛した変数を範囲から外す。
+    fn check_branch(&mut self, id: CExprId, state: State) -> Result<(), String> {
+        let mark = self.scope_log.len();
+        self.check(id, state)?;
+        for var in self.scope_log.drain(mark..) {
+            self.in_scope[var.0 as usize] = false;
+        }
+        Ok(())
+    }
+
     fn bind(&mut self, state: &mut State, var: VarId) -> Result<(), String> {
         if !self.bound.insert(var) {
             return Err(format!("`{}` is bound twice", self.name(var)));
         }
-        state.in_scope.insert(var);
+        self.in_scope[var.0 as usize] = true;
+        self.scope_log.push(var);
         if self.tracked[var.0 as usize] {
             state.owned.insert(var, 1);
         }
         Ok(())
     }
 
-    fn visible(&self, state: &State, var: VarId) -> Result<(), String> {
-        if state.in_scope.contains(&var) {
+    fn visible(&self, var: VarId) -> Result<(), String> {
+        if self.in_scope[var.0 as usize] {
             Ok(())
         } else {
             Err(format!("`{}` is used outside its scope", self.name(var)))
@@ -176,7 +193,7 @@ impl<'a> Checker<'a> {
         var: VarId,
         what: &str,
     ) -> Result<&'s mut u32, String> {
-        self.visible(state, var)?;
+        self.visible(var)?;
         if !self.tracked[var.0 as usize] {
             return Err(format!(
                 "`{}` is {what} but is not reference counted",
@@ -190,16 +207,28 @@ impl<'a> Checker<'a> {
         }
     }
 
+    /// 参照を1つ手放す。所有しなくなった変数は表から除き、写す状態を小さく保つ。
+    fn give_up(&self, state: &mut State, var: VarId, what: &str) -> Result<(), String> {
+        let left = {
+            let count = self.count(state, var, what)?;
+            *count -= 1;
+            *count
+        };
+        if left == 0 {
+            state.owned.remove(&var);
+        }
+        Ok(())
+    }
+
     /// 値を使う。RC の対象なら、所有権を1つ渡す。
     fn consume(&self, state: &mut State, atom: &Atom) -> Result<(), String> {
         let Atom::Var(var) = *atom else {
             return Ok(());
         };
         if !self.tracked[var.0 as usize] {
-            return self.visible(state, var);
+            return self.visible(var);
         }
-        *self.count(state, var, "used")? -= 1;
-        Ok(())
+        self.give_up(state, var, "used")
     }
 
     fn check_rhs(&self, state: &mut State, rhs: &Rhs) -> Result<(), String> {
