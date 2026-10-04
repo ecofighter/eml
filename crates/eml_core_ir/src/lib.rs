@@ -1,14 +1,15 @@
 //! Core IR (docs/spec/core-ir.md)。型付き HIR から変換する ANF 形式の IR で、RC とエフェクトを明示する。
 
 mod liveness;
-mod lower;
 mod perceus;
+mod pipeline;
 mod pretty;
 mod simplify;
+mod translate;
 mod verify;
 
 pub use eml_types::Linearity;
-pub use lower::lower;
+pub use pipeline::lower;
 pub use pretty::pretty;
 pub use verify::{VerifyError, verify};
 
