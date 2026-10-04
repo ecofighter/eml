@@ -45,10 +45,6 @@ pub(crate) fn layout(file: FileId, text: &str, tokens: &[Token]) -> (Vec<Token>,
         let start = item.token.range.start();
         if item.line_start {
             let mut opened = false;
-            // E0009 を出した行 (字下げの足りない行) には規則 2 を当てない。同じ誤りから、閉じていない括弧の
-            // 診断を重ねないため。ただし列 0 の行には当てる。トップレベルの境目で括弧を閉じないと、次の項目が
-            // 括弧に飲み込まれ、その中の誤りが報告されなくなる (docs/spec/layout.md の規則 2)。
-            let mut missing = false;
             if i > 0 && BLOCK_STARTERS.contains(&items[i - 1].token.kind) {
                 // 規則 3。
                 if item.column > enclosing_indent(&stack) && !is_closing_bracket(item.token.kind) {
@@ -69,7 +65,6 @@ pub(crate) fn layout(file: FileId, text: &str, tokens: &[Token]) -> (Vec<Token>,
                     if starter.kind == THIN_ARROW {
                         item_after_arrow_error = Some(i);
                     }
-                    missing = true;
                 }
             }
             if !opened {
@@ -91,8 +86,7 @@ pub(crate) fn layout(file: FileId, text: &str, tokens: &[Token]) -> (Vec<Token>,
                         // 閉じ忘れた括弧がファイルの残りを飲み込まないよう、ここで閉じる。閉じ括弧がないことは
                         // parser が報告する。
                         Some(Context::Bracket)
-                            if (!missing || item.column == 0)
-                                && !is_closing_bracket(item.token.kind)
+                            if !is_closing_bracket(item.token.kind)
                                 && item.column <= enclosing_indent(&stack) =>
                         {
                             stack.pop();
@@ -169,8 +163,8 @@ fn scan_lines(
         let mut column = 0;
         if newline_seen {
             let prefix = &text[line_begin..start];
-            // BOM は列に数えない。タブは1列に数える (タブ自体はエラー)。
-            column = prefix.chars().filter(|&c| c != '\u{feff}').count() as u32;
+            // タブは1列に数える (タブ自体はエラー)。
+            column = prefix.chars().count() as u32;
             report_tab(file, prefix, line_begin, diagnostics);
         }
         items.push(Item {
@@ -189,7 +183,7 @@ fn scan_lines(
 
 fn report_tab(file: FileId, prefix: &str, line_begin: usize, diagnostics: &mut Vec<Diagnostic>) {
     let indent_len = prefix
-        .find(|c: char| !matches!(c, ' ' | '\t' | '\u{feff}'))
+        .find(|c: char| !matches!(c, ' ' | '\t'))
         .unwrap_or(prefix.len());
     if let Some(offset) = prefix[..indent_len].find('\t') {
         let at = TextSize::new((line_begin + offset) as u32);
@@ -431,11 +425,6 @@ mod tests {
     }
 
     #[test]
-    fn byte_order_mark_takes_no_column() {
-        assert_eq!(layout_of("\u{feff}a = 1\nb = 2"), "a = 1 <SEP> b = 2");
-    }
-
-    #[test]
     fn crlf_lines_lay_out_like_lf() {
         assert_eq!(
             layout_of("f =\r\n  a\r\n  b\r\ng"),
@@ -477,7 +466,7 @@ mod tests {
         assert_eq!(
             dump("f =\n  g (fn x ->\n  y)"),
             (
-                "f = <OPEN> g ( fn x -> <OPEN> <CLOSE> y ) <CLOSE>".to_string(),
+                "f = <OPEN> g ( fn x -> <OPEN> <CLOSE> <SEP> y ) <CLOSE>".to_string(),
                 vec!["E0009@14..16".to_string()]
             )
         );

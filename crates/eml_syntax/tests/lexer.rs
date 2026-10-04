@@ -208,7 +208,6 @@ fn shebang_is_trivia_only_at_the_start_of_the_file() {
     WHITESPACE@22..23 "\n"
     LIDENT@23..24 "x"
     "##);
-    assert_eq!(kinds("\u{feff}#!x\ny"), ["LIDENT"]);
     assert_eq!(kinds("x\n#!y"), ["LIDENT", "ERROR_TOKEN", "OP", "LIDENT"]);
 }
 
@@ -394,11 +393,12 @@ fn crlf_line_endings_are_whitespace() {
 }
 
 #[test]
-fn byte_order_mark_is_whitespace() {
-    insta::assert_snapshot!(dump("\u{feff}fn"), @r#"
-    WHITESPACE@0..3 "\u{feff}"
-    FN_KW@3..5 "fn"
-    "#);
+fn byte_order_mark_in_the_middle_is_an_unexpected_character() {
+    // 先頭の BOM は読み込み時に除く。lexer に届いた U+FEFF は、どこにあっても認識できない文字である
+    // (docs/spec/lexical.md)。
+    let found = diags("fn\u{feff}");
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert!(found[0].starts_with("E0001@2..5 "), "{found:?}");
 }
 
 #[test]

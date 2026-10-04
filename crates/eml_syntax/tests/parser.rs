@@ -97,3 +97,10 @@ fn recovered_empty_block_stays_on_its_line() {
     assert!(tree.contains("\n  EQUATION@0..3\n"), "{tree}");
     assert!(tree.contains("\n    BLOCK@3..3\n"), "{tree}");
 }
+
+#[test]
+fn shebang_after_a_byte_order_mark_is_trivia() {
+    // BOM は読み込み時に除くので (docs/spec/lexical.md)、その後の `#!` はファイルの先頭の shebang である。
+    assert!(parse("\u{feff}#!x\ny = 1").diagnostics.is_empty());
+    assert_eq!(item_kinds("\u{feff}#!x\ny = 1"), ["EQUATION"]);
+}

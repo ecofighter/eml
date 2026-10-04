@@ -23,7 +23,7 @@ struct Diagnostic {
 - `Diagnostic`、`FileId`、`SourceFiles` は `eml_diagnostics` に置く。`eml_diagnostics` は `rowan` に依存しない ([コンパイラの構成](../implementation/architecture.md))。
 - 番号の定数は、段階ごとの `codes` モジュールに定義する (例: `eml_syntax::codes`)。
 - 補足の情報は、独立した診断ではなく `notes` と `help` に入れる。そのため `Severity` は `Error` と `Warning` の2つだけにする。
-- ソースの先頭の BOM は、表示で列に数えない ([字句](lexical.md))。`TextRange` は BOM を含む元のテキストのバイト位置のままにして、表示の層で BOM を除いて位置をずらす。
+- `TextRange` は、読み込み時に先頭の BOM を除いたテキストのバイト位置である ([字句](lexical.md))。
 
 ## 番号の範囲
 

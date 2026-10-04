@@ -54,7 +54,7 @@ pub(crate) fn operator_kind(op: &str) -> SyntaxKind {
 
 #[derive(Logos, Debug, Clone, Copy, PartialEq, Eq)]
 enum Raw {
-    #[regex(r"[ \t\r\n\u{FEFF}]+")]
+    #[regex(r"[ \t\r\n]+")]
     Whitespace,
     #[regex(r"[a-z_][A-Za-z0-9_']*")]
     Lower,
@@ -99,16 +99,11 @@ struct Lexer<'a> {
 
 impl Lexer<'_> {
     fn run(&mut self) {
-        // shebang は先頭にだけ書ける。BOM があれば、その直後を先頭とみなす。
-        let shebang_at = if self.text.starts_with('\u{feff}') {
-            '\u{feff}'.len_utf8()
-        } else {
-            0
-        };
+        // shebang はファイルの先頭にだけ書ける。先頭の BOM は読み込み時に除いてある (docs/spec/lexical.md)。
         let text = self.text;
         while self.pos < text.len() {
             let rest = &text[self.pos..];
-            if self.pos == shebang_at && rest.starts_with("#!") {
+            if self.pos == 0 && rest.starts_with("#!") {
                 self.push(SHEBANG, self.pos + line_len(rest));
             } else if rest.starts_with("{-") {
                 self.block_comment();
