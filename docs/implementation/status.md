@@ -152,7 +152,7 @@ R2b-2 で済んだ。組み込みのシグネチャを Prelude に置いてス�
 
 ## 次の作業の注意点
 
-- 段階3と4: HIR の `Module` に、エフェクトと `data` の item を足し、宣言の型変数の表を `Generics` として持たせる。エフェクトの操作とコンストラクタは、値の名前空間 (`ItemScope`) に置く ([モジュール](../spec/modules.md) の「名前空間」)。リファクタリング R2b-1 で、置き場所の形 (`Generics`、`ItemScope`) だけを用意した
+- 段階3と4: HIR の `Module` に、エフェクトと `data` の item を足し、宣言の型変数の表を `Generics` として持たせる。エフェクトの操作とコンストラクタは、値の名前空間 (`ItemScope`) に置く ([モジュール](../spec/modules.md) の「名前空間」)。リファクタリング R2b-1 で、置き場所の形 (`Generics`、`ItemScope`) だけを用意した。R2b-2 で、型とエフェクトを ID で表す item (`Module::types`、`Module::effects`) にしたが、型構成子と row のラベルは ID だけを持ち、型の引数の置き場所はまだない。引数を持つ `data` と `effect` は、引数の単一化と一緒にこの段階で入れる
 - 段階4のタプルは、型検査器がすでに使っている閉じたレコードの表現 (`Unit` は `Record([])`) を、数字ラベルの閉じたレコードとして再利用する ([architecture.md](architecture.md) の「`eml_types` の内部」)
 - 段階6: パーサは、セクションの被演算子を演算子の列 (`OP_SEQ`) のまま置き、前置の `-` もその中に入れる。HIR の変換では、組み直した後にセクションの優先順位の可否を検査する ([式](../spec/expressions.md) の「セクション」)
 - 段階3の `drop k` は、継続のフレームをヒープの子の走査で解放する。これは、フレームのスロットが所有する参照だけを持つことに頼っている。インタプリタのスロットごとの参照の数 ([architecture.md](architecture.md) の「`eml_core_ir`、`eml_runtime`、`eml_interp` の内部」) がこれを保証する
