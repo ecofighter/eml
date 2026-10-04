@@ -10,13 +10,13 @@ impl Table {
                 TyShape::Rigid(rigid) => {
                     names
                         .entry(self.rigid_linearity(*rigid))
-                        .or_insert_with(|| self.export(ty));
+                        .or_insert_with(|| self.display(ty));
                 }
                 TyShape::Fn {
                     param, lin, ret, ..
                 } => {
                     if let ArrowLin::Var(v) = lin {
-                        names.entry(*v).or_insert_with(|| self.export(ty));
+                        names.entry(*v).or_insert_with(|| self.display(ty));
                     }
                     work.push(*ret);
                     work.push(*param);
@@ -28,8 +28,22 @@ impl Table {
         names
     }
 
-    /// 後の段階に渡す形にする。解けていない型変数と row 変数は、`_` として残す。
+    /// 後の段階に渡す形にする。矢印の線形性は解いた結果を使うので、`solve_kinds` の後にだけ呼ぶ。解けていない
+    /// 型変数と row 変数は、`_` として残す。
     pub fn export(&self, ty: Ty) -> Type {
+        debug_assert!(
+            self.lin_solution.is_some(),
+            "export is for after solve_kinds; use display while checking"
+        );
+        self.to_type(ty, true)
+    }
+
+    /// 診断の文言のための形。型の表示は線形性を出さないので、Kind の束を解かず、矢印の線形性はすべて `Unr` にする。
+    pub fn display(&self, ty: Ty) -> Type {
+        self.to_type(ty, false)
+    }
+
+    fn to_type(&self, ty: Ty, solved: bool) -> Type {
         match self.shape(ty).clone() {
             TyShape::Con(TyCon::Int) => Type::Int,
             TyShape::Con(TyCon::String) => Type::String,
@@ -37,7 +51,7 @@ impl Table {
             TyShape::Record(fields) => Type::Record(
                 fields
                     .into_iter()
-                    .map(|(label, field)| (label, self.export(field)))
+                    .map(|(label, field)| (label, self.to_type(field, solved)))
                     .collect(),
             ),
             TyShape::Fn {
@@ -48,17 +62,19 @@ impl Table {
             } => {
                 let row = self.resolve_row(&row);
                 Type::Fn {
-                    param: Box::new(self.export(param)),
+                    param: Box::new(self.to_type(param, solved)),
                     linearity: match lin {
                         ArrowLin::Known(l) => l,
-                        ArrowLin::Var(v) => match &self.lin_solution {
-                            Some(solution) => {
-                                // 解いた後に Kind 変数を作ると解が古くなる。`export` は解いた後に変数を作らない前提である
-                                debug_assert!(v.index() < solution.len());
-                                solution[v.index()]
-                            }
-                            None => self.linearity.value(v),
-                        },
+                        ArrowLin::Var(_) if !solved => Linearity::Unr,
+                        ArrowLin::Var(v) => {
+                            let solution = self
+                                .lin_solution
+                                .as_ref()
+                                .expect("export runs after solve_kinds");
+                            // 解いた後に Kind 変数を作ると解が古くなる。`export` は解いた後に変数を作らない前提である
+                            debug_assert!(v.index() < solution.len());
+                            solution[v.index()]
+                        }
                     },
                     effects: row.labels,
                     tail: row
@@ -67,7 +83,7 @@ impl Table {
                             Some(name) => RowTail::Rigid(name.clone()),
                             None => RowTail::Flexible,
                         }),
-                    ret: Box::new(self.export(ret)),
+                    ret: Box::new(self.to_type(ret, solved)),
                 }
             }
             TyShape::Var(_) => Type::Var("_".to_string()),

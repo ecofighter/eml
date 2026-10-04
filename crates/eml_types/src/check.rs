@@ -112,7 +112,7 @@ fn check_main(
     if has_error(function, signature.ty) {
         return;
     }
-    let found = table.export(scheme.ty);
+    let found = table.display(scheme.ty);
     let expected = Type::Fn {
         param: Box::new(Type::unit()),
         linearity: Linearity::Unr,
@@ -627,7 +627,7 @@ impl BodyCheck<'_> {
                     row = None;
                 }
                 _ => {
-                    let expected_ty = self.table.export(expected);
+                    let expected_ty = self.table.display(expected);
                     self.diagnostics.push(Diagnostic::error(
                         codes::TYPE_MISMATCH,
                         format!(
@@ -717,8 +717,8 @@ impl BodyCheck<'_> {
 
     fn mismatch(&mut self, range: TextRange, expected: Ty, found: Ty, origin: &Origin) {
         let file = self.file();
-        let expected = self.table.export(expected);
-        let found = self.table.export(found);
+        let expected = self.table.display(expected);
+        let found = self.table.display(found);
         let mut diagnostic = Diagnostic::error(
             codes::TYPE_MISMATCH,
             "mismatched types",

@@ -18,7 +18,7 @@ fn variables_are_bound_by_unification() {
     let f = table.function(table.int, Row::pure(), v);
     let g = table.function(table.int, Row::pure(), table.bool);
     assert_eq!(table.unify(f, g), Ok(()));
-    assert_eq!(table.export(v), Type::Bool);
+    assert_eq!(table.display(v), Type::Bool);
 }
 
 #[test]
@@ -130,9 +130,9 @@ fn export_keeps_an_open_row() {
         },
         table.int,
     );
-    assert_eq!(table.export(f).to_string(), "Int -> <IO | _> Int");
+    assert_eq!(table.display(f).to_string(), "Int -> <IO | _> Int");
     let v = table.fresh_var();
-    assert_eq!(table.export(v).to_string(), "_");
+    assert_eq!(table.display(v).to_string(), "_");
 }
 
 #[test]
@@ -145,7 +145,7 @@ fn rigid_variables_unify_only_with_themselves_and_flexible_variables() {
     assert_eq!(table.unify(a, table.int), Err(UnifyError::Mismatch));
     let v = table.fresh_var();
     assert_eq!(table.unify(v, a), Ok(()));
-    assert_eq!(table.export(v).to_string(), "a");
+    assert_eq!(table.display(v).to_string(), "a");
 }
 
 #[test]
@@ -161,7 +161,7 @@ fn a_rigid_row_variable_cannot_be_bound() {
         Err(UnifyError::Mismatch)
     );
     let f = table.function(table.int, rigid.clone(), table.int);
-    assert_eq!(table.export(f).to_string(), "Int -> <e> Int");
+    assert_eq!(table.display(f).to_string(), "Int -> <e> Int");
 }
 
 #[test]
@@ -204,7 +204,7 @@ fn open_spine_opens_only_the_rows_on_the_return_side() {
     let f = table.function(param, Row::pure(), inner);
     let opened = table.open_spine(f);
     assert_eq!(
-        table.export(opened).to_string(),
+        table.display(opened).to_string(),
         "(Int -> Int) -> <_> Int -> <_> Int"
     );
 }
@@ -225,11 +225,11 @@ fn copy_type_replaces_rigid_variables() {
     let mut subst = Subst::default();
     subst.tys.insert(ra, table.int);
     let copied = table.copy_type(f, &subst);
-    assert_eq!(table.export(copied).to_string(), "Int -> <e> Int");
+    assert_eq!(table.display(copied).to_string(), "Int -> <e> Int");
     let mut subst = Subst::default();
     subst.rows.insert(e, table.fresh_row_var());
     let copied = table.copy_type(f, &subst);
-    assert_eq!(table.export(copied).to_string(), "a -> <_> a");
+    assert_eq!(table.display(copied).to_string(), "a -> <_> a");
 }
 
 #[test]
@@ -280,4 +280,19 @@ fn closure_kinds_bound_each_partial_application() {
         table.lin_residual(&[mu, m]),
         vec![(Bound::Var(mu), Bound::Var(m))]
     );
+}
+
+#[test]
+#[should_panic(expected = "export is for after solve_kinds")]
+fn export_needs_solved_kinds() {
+    let table = Table::new();
+    table.export(table.int);
+}
+
+#[test]
+fn display_does_not_solve_kinds() {
+    let mut table = Table::new();
+    let lin = table.fresh_arrow_lin();
+    let f = table.function_with(table.int, lin, Row::pure(), table.int);
+    assert_eq!(table.display(f).to_string(), "Int -> Int");
 }
