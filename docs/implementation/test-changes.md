@@ -98,3 +98,12 @@
 - `eml_types/tests/check.rs` の `function_typed_parameters_can_be_called_and_passed` と `composition_has_the_prelude_type` を削除した (種類1)。前者は段階1の E0004 のテストの名残で、通る場合は `row_variables_pass_effects_through` と `lambdas_are_checked_against_the_expected_type_or_inferred` が確かめる。後者の `>>` のスキームは `builtin_schemes_are_exported` が、`>>` と `<<` の変換と実行は `eml_hir/tests/operators.rs` の `composition_operators_are_builtin_calls` と `run/higher_order.em` が確かめる
 - `eml_interp` の単体テスト `runtime_errors_are_displayed_as_before` を `runtime_errors_name_the_fault_and_the_function` に改名した (種類1)。「as before」が指していたリファクタリング R3b の前の文字列は、もう比べる相手がない。中身は変えていない
 - `eml_diagnostics` の `render.rs` の `byte_order_mark_takes_no_column` と `byte_order_mark_does_not_shift_later_lines` を削除し、`source.rs` の `line_col_does_not_count_the_bom` を `add_strips_only_a_leading_bom` に統合した (種類1)。リファクタリング R1 から BOM は `SourceFiles::add` で除くので、表示と `line_col` は BOM を見ない。BOM を除いた後の位置の確認は、統合したテストに残る
+
+### テスト本体の整理 3b
+
+- 複数の話題にまたがっていた結合テストのファイルを、話題ごとに分けた (種類1)。テストの本体、名前、期待値は変えていない ([testing.md](testing.md) の「crate の中の置き方」)
+  - `eml_syntax/tests/declarations.rs` から、型と row の17件を新しい `types.rs` に移した。予約語、項目にならない名前、閉じていない文字列の3件は、項目の解析として `parser.rs` に移した
+  - `eml_syntax/tests/expressions.rs` から、演算子の列、前置の `-`、セクション、被演算子の欠けの9件を新しい `operators.rs` に移した。`control.rs` のラムダ、`let ... in`、`use` の6件を `expressions.rs` に移し、`control.rs` は `if` と `match` だけになった
+  - `eml_types/tests/check.rs` から、エフェクトの row の11件を新しい `rows.rs` に移した
+  - `eml_core_ir/tests/lower.rs` から、`simplify` の6件を新しい `simplify.rs` に移した
+- `eml_syntax/src/parser.rs` と `eml_runtime/src/heap.rs` の単体テストを、隣の `parser/tests.rs` と `heap/tests.rs` に移した (種類1)。テストがファイルの半分ほどを占めていた。本体は字下げを1段浅くしたほかは変えていない

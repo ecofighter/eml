@@ -45,7 +45,7 @@
 
 - 結合テストは、話題ごとに1ファイルにする。ファイル名は spec の節か言語の機能から付ける (`effects.rs`、`operators.rs`)。1つのファイルが複数の話題にまたがったら、話題で分ける
 - crate の結合テストが使う表示の関数は `tests/common/mod.rs` に置く。複数の crate で使う部品は `eml_test_support` に置く
-- 単体テストは、ファイルの末尾の `#[cfg(test)] mod tests` に置く。大きくなったら、`eml_types/src/table/tests.rs` のように隣の `tests.rs` に分ける
+- 単体テストは、ファイルの末尾の `#[cfg(test)] mod tests` に置く。テストがファイルの半分ほどを占めるようになったら、`eml_types/src/table/tests.rs` のように隣の `tests.rs` に分ける
 - `crates/eml_test_support/` は、結合テストのためにパイプラインを組む関数 (`parse`、`lower`、`check`、`core`、`run`、`execute`) と、診断のないことを確かめて組む関数 (`parse_clean`、`lower_clean`)、診断を文字列にする関数 (`short`、`short_text`、`full`)、段階の表示に診断を足す関数 (`with_diagnostics`)、手書きの Core IR の部品 (`ir`) を持つ。開発専用の crate で、各 crate の `tests/` からだけ使う。段階は feature (`hir` < `types` < `core` < `run`) で選び、各 crate は自分の段階までを有効にする。下流の crate がまだ組み立たなくても、上流の段階のテストを流せるようにするためである。`src/` の `#[cfg(test)]` から使うと、テストする crate が2つ別々にリンクされて型が合わなくなる
 
 ### 今あるテストの地図
@@ -53,11 +53,11 @@
 | crate | 結合テスト (`tests/`) | 単体テスト (`src/`) |
 |---|---|---|
 | `eml_diagnostics` | なし | `lib.rs` (診断の番号と E0004)、`source.rs` (`SourceFiles` と行と列)、`render.rs` (診断の表示) |
-| `eml_syntax` | `lexer.rs` (字句)、`literals.rs` (リテラルの値の解釈)、`parser.rs` (空のファイル、項目の間の回復、BOM と shebang)、`declarations.rs` (シグネチャ、型、row、`data`、`effect`、fixity)、`expressions.rs` (等式、パターン、式)、`control.rs` (`if` と `match`)、`handlers.rs` (handler)、`nesting.rs` (入れ子の深さの上限)、`ast.rs` (型付き AST ラッパ)、`corpus.rs` (コーパス。ソースは `tests/corpus/` にあり、`s1.em` は S1 の構文、`later_stages.em` は S2 以降の構文を含む) | `layout.rs` (レイアウト段)、`parser.rs` (パーサのマーカー、先読み、診断の位置)、`grammar/scan.rs` (回復の範囲の走査)、`syntax_kind.rs` と `token_set.rs` (構文の種類の表) |
+| `eml_syntax` | `lexer.rs` (字句)、`literals.rs` (リテラルの値の解釈)、`parser.rs` (空のファイル、項目の解析と項目の間の回復、BOM と shebang)、`declarations.rs` (シグネチャの形、`data`、`effect`、fixity、`pub` / `type` / `import`)、`types.rs` (型と row)、`expressions.rs` (等式、パターン、ブロックと `let`、ラムダ、`use`、括弧の回復)、`operators.rs` (演算子の列、前置の `-`、セクション、被演算子の欠け)、`control.rs` (`if` と `match`)、`handlers.rs` (handler)、`nesting.rs` (入れ子の深さの上限)、`ast.rs` (型付き AST ラッパ)、`corpus.rs` (コーパス。ソースは `tests/corpus/` にあり、`s1.em` は S1 の構文、`later_stages.em` は S2 以降の構文を含む) | `layout.rs` (レイアウト段)、`parser/tests.rs` (パーサのマーカー、先読み、診断の位置)、`grammar/scan.rs` (回復の範囲の走査)、`syntax_kind.rs` と `token_set.rs` (構文の種類の表) |
 | `eml_hir` | `lower.rs` (名前解決と脱糖)、`operators.rs` (演算子の組み直し)、`effects.rs` (エフェクトと操作)、`structure.rs` (HIR のデータ構造と走査) | `builtin.rs` (組み込みの表)、`lower/scope.rs` (名前空間) |
-| `eml_types` | `check.rs` (推論と型の診断)、`effects.rs` (エフェクト、handler、継続、線形な継続 (E3001)) | `table/tests.rs` (単一化と型の書き出し)、`kind.rs` (Kind の制約の解消)、`ty.rs` (型の表示)、`scc.rs` (関数の呼び出しの強連結成分)、`check/mod.rs` (診断の文言) |
-| `eml_core_ir` | `lower.rs` (Core IR への変換と `dup` / `decref` の位置)、`verify.rs` (手書きの Core IR による verifier) | なし |
-| `eml_runtime` | なし | `heap.rs` (確保と解放、世代番号、リーク、フレームと継続の解放、`take` と `take_or_copy` による複製)、`output.rs` (`OutputSink`) |
+| `eml_types` | `check.rs` (推論と型の診断)、`rows.rs` (エフェクトの row と E2002)、`effects.rs` (エフェクト、handler、継続、線形な継続 (E3001)) | `table/tests.rs` (単一化と型の書き出し)、`kind.rs` (Kind の制約の解消)、`ty.rs` (型の表示)、`scc.rs` (関数の呼び出しの強連結成分)、`check/mod.rs` (診断の文言) |
+| `eml_core_ir` | `lower.rs` (Core IR への変換と `dup` / `decref` の位置)、`simplify.rs` (`simplify` の書き換え)、`verify.rs` (手書きの Core IR による verifier) | なし |
+| `eml_runtime` | なし | `heap/tests.rs` (確保と解放、世代番号、リーク、フレームと継続の解放、`take` と `take_or_copy` による複製)、`output.rs` (`OutputSink`) |
 | `eml_interp` | `run.rs` (手書きの Core IR や生成したソースによる実行)、`closures.rs` (手書きの Core IR によるクロージャ) | `lib.rs` (実行時エラーの表示と `RunConfig`) |
 | `eml_cli` | `ui.rs` (UI テスト)、`api.rs` (lib API の `check` / `compile` / `execute` の流れ)、`cli.rs` (CLI の終了コード) | なし |
 | `eml_test_support` | `support.rs` (テスト補助そのもの) | なし |
