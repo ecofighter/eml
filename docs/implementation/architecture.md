@@ -147,7 +147,7 @@ HIR への変換では、名前解決に加えて、次の脱糖と検査を行�
 - 部分適用のクロージャの線形性は、それまでの引数と捕まえた値の Kind 以上になる (`Table::closure_kinds`)
 - `dump` は、スキームに残った Kind の制約のうち定数を片側に持つものを `kinds:` の行に出す
 - 型の表は `table/` に分ける。`mod.rs` は型と変数の格納、`unify.rs` は型の単一化、`row.rs` は row の単一化と `include_row`、`kinds.rs` は Kind の制約、`copy.rs` はスキームの具体化の写し、`export.rs` は外に出す型への変換である。型の形は `TyShape`、関数の矢印の線形性は `ArrowLin` と呼び、Kind (線形性と多重度) と取り違えないようにする
-- row の末尾は `Tail::{Closed, Var, Error}` である。未定義のエフェクトか解決できない row 変数の跡は末尾 `Error` の row になり、型の `Error` と同じく、どのエフェクトも受け入れて束縛されない。外に出す型では `{error}` と表示する
+- row の末尾は `Tail::{Closed, Var, Error}` である。未定義のエフェクトか解決できない row 変数の跡は末尾 `Error` の row になり、型の `Error` と同じく束縛されない。末尾 `Error` は相手の側にしかないエフェクトを受け入れるが、自分の側の既知のエフェクトは受け入れない。綴り誤りの E1002 と無関係なエフェクトの誤りを隠さないためである。外に出す型では `{error}` と表示する
 - `Table::display` は診断の文言のための変換で、Kind の束を解かず、矢印の線形性を `Unr` にする。`Table::export` は `solve_kinds` の後にだけ呼び、`TypedModule` を組み立てる
 - 検査器は `check/` に分ける。`mod.rs` は SCC の順の検査と `TypedModule` の組み立て、`body.rs` は本体の検査、`report.rs` は診断を作る処理である。`if` とブロックは期待する型の有無 (`Expectation`) で check と infer の処理を共有し、矢印をたどる処理は `next_arrow` に、今の row の保存と復元は `with_ambient` にまとめてある。呼び出しの row を今の row に含める処理は `include_call_row` と呼ぶ
 - E2002 の副ラベルは、本体の row が入る矢印の部分の型を指す (`body_arrow_range`)
