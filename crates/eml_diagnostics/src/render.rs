@@ -95,9 +95,15 @@ mod tests {
             .with_help("a help");
         let text = render(&[diagnostic], &files);
         // E3001 などは note を2つ持ち、help と併せて出す。その番号付けと並びは UI テストに代表がないので、ここで確かめる。
-        let at = |needle: &str| text.find(needle).unwrap_or_else(|| panic!("{needle} in {text}"));
+        let at = |needle: &str| {
+            text.find(needle)
+                .unwrap_or_else(|| panic!("{needle} in {text}"))
+        };
         assert!(at("Help: a help") < at("Note 1: first note"), "{text}");
-        assert!(at("Note 1: first note") < at("Note 2: second note"), "{text}");
+        assert!(
+            at("Note 1: first note") < at("Note 2: second note"),
+            "{text}"
+        );
     }
 
     #[test]
