@@ -17,6 +17,21 @@ enum Applied {
 enum Prepared {
     Direct(FnIdx, Vec<Value>),
     Apply(Value, Vec<Value>),
+    Handle {
+        effect: u32,
+        body: Value,
+        clauses: Vec<Value>,
+        ret: Option<Value>,
+    },
+    Perform {
+        effect: u32,
+        op: u32,
+        args: Vec<Value>,
+    },
+    Resume {
+        k: Value,
+        arg: Value,
+    },
 }
 
 /// 1つの命令を実行した後の状態。
@@ -259,9 +274,26 @@ impl<'p> Machine<'p> {
                 let callee = self.atom(callee)?;
                 Prepared::Apply(callee, self.atoms(args)?)
             }
-            Call::Handle { .. } | Call::Perform { .. } | Call::Resume { .. } => {
-                return Err(Fault::Internal("effects are not run yet"));
-            }
+            Call::Handle {
+                effect,
+                body,
+                clauses,
+                ret,
+            } => Prepared::Handle {
+                effect: *effect,
+                body: self.atom(body)?,
+                clauses: self.atoms(clauses)?,
+                ret: ret.map(|ret| self.atom(&ret)).transpose()?,
+            },
+            Call::Perform { effect, op, args } => Prepared::Perform {
+                effect: *effect,
+                op: *op,
+                args: self.atoms(args)?,
+            },
+            Call::Resume { k, arg } => Prepared::Resume {
+                k: self.atom(k)?,
+                arg: self.atom(arg)?,
+            },
         };
         if let Some(resume) = resume {
             self.push_frame(resume)?;
@@ -271,11 +303,115 @@ impl<'p> Machine<'p> {
                 self.enter(callee, args);
                 Ok(Step::Continue)
             }
-            Prepared::Apply(callee, args) => match self.apply(callee, args)? {
-                Applied::Entered => Ok(Step::Continue),
-                Applied::Value(value) => self.ret(value),
-            },
+            Prepared::Apply(callee, args) => self.apply_and_continue(callee, args),
+            Prepared::Handle {
+                effect,
+                body,
+                clauses,
+                ret,
+            } => {
+                let frame = Frame::Handler {
+                    effect,
+                    clauses,
+                    ret,
+                    next: Some(self.cont),
+                };
+                self.cont = self.heap.alloc(Payload::Frame(frame));
+                self.apply_and_continue(body, vec![Value::Unit])
+            }
+            Prepared::Perform { effect, op, args } => self.perform(effect, op, args),
+            Prepared::Resume { k, arg } => self.resume(k, arg),
         }
+    }
+
+    /// 関数値を適用する。関数に入らずに値ができたら (足りない引数のクロージャ)、その値を継続に返す。
+    fn apply_and_continue(&mut self, callee: Value, args: Vec<Value>) -> Result<Step, Fault> {
+        match self.apply(callee, args)? {
+            Applied::Entered => Ok(Step::Continue),
+            Applied::Value(value) => self.ret(value),
+        }
+    }
+
+    /// 継続の連結リストを先頭から読み、同じエフェクトの一番内側の handler フレームを探す (docs/spec/core-ir.md)。
+    fn find_handler(&self, effect: u32) -> Result<ObjRef, Fault> {
+        let mut current = self.cont;
+        loop {
+            let Payload::Frame(frame) = self.heap.get(current).map_err(Fault::Heap)? else {
+                return Err(Fault::Internal("the continuation is not a frame"));
+            };
+            current = match frame {
+                Frame::Handler { effect: other, .. } if *other == effect => return Ok(current),
+                Frame::Handler { next, .. } => {
+                    next.ok_or(Fault::Internal("a detached handler is in the continuation"))?
+                }
+                Frame::Return { next, .. } | Frame::Apply { next, .. } => *next,
+                Frame::Io => return Err(Fault::Internal("an operation without a handler")),
+            };
+        }
+    }
+
+    /// handler フレームの外側を切り離して機械の継続に戻し、節を呼ぶ。先頭から handler フレームまでの区間が継続で、
+    /// `once` の操作はそれを継続オブジェクトにして `k` として渡す。`never` の操作は再開しないので、区間をここで
+    /// 解放する。区間のフレームが退避した値も、子をたどる解放で1回ずつ解放される (docs/spec/core-ir.md)。
+    fn perform(&mut self, effect: u32, op: u32, mut args: Vec<Value>) -> Result<Step, Fault> {
+        let handler = self.find_handler(effect)?;
+        let Payload::Frame(Frame::Handler { clauses, next, .. }) =
+            self.heap.get_mut(handler).map_err(Fault::Heap)?
+        else {
+            return Err(Fault::Internal("a handler that is not a handler frame"));
+        };
+        let clause = *clauses
+            .get(op as usize)
+            .ok_or(Fault::Internal("an operation without a clause"))?;
+        let outside = next
+            .take()
+            .ok_or(Fault::Internal("performing through a detached handler"))?;
+        // 節のクロージャは handler フレームにも残るので、呼ぶ分の参照を足す
+        if let Value::Obj(obj) = clause {
+            self.heap.dup(obj).map_err(Fault::Heap)?;
+        }
+        let top = std::mem::replace(&mut self.cont, outside);
+        let resumable = self
+            .program
+            .effects
+            .get(effect as usize)
+            .and_then(|info| info.operations.get(op as usize))
+            .ok_or(Fault::Internal("an unknown operation"))?
+            .resumable;
+        if resumable {
+            let k = self.heap.alloc(Payload::Continuation { top, handler });
+            args.push(Value::Obj(k));
+        } else {
+            self.heap.decref(top).map_err(Fault::Heap)?;
+        }
+        self.apply_and_continue(clause, args)
+    }
+
+    /// 継続オブジェクトの handler フレームの外側に今の継続をつなぎ、先頭のフレームに値を返す。末尾でない `resume`
+    /// では、その前に呼び出しのフレームが積まれている。`once` の継続は一意なので、取り出して書き換えてよい。
+    fn resume(&mut self, k: Value, value: Value) -> Result<Step, Fault> {
+        let Value::Obj(obj) = k else {
+            return Err(Fault::Internal(
+                "resuming a value that is not a continuation",
+            ));
+        };
+        let Payload::Continuation { top, handler } = self.heap.take(obj).map_err(Fault::Heap)?
+        else {
+            return Err(Fault::Internal(
+                "resuming an object that is not a continuation",
+            ));
+        };
+        let current = self.cont;
+        match self.heap.get_mut(handler).map_err(Fault::Heap)? {
+            Payload::Frame(Frame::Handler { next, .. }) => *next = Some(current),
+            _ => {
+                return Err(Fault::Internal(
+                    "a continuation whose handler is not a handler frame",
+                ));
+            }
+        }
+        self.cont = top;
+        self.ret(value)
     }
 
     fn enter(&mut self, callee: FnIdx, args: Vec<Value>) {
@@ -358,7 +494,7 @@ impl<'p> Machine<'p> {
     /// 余った引数のフレームが続く間はループで適用し、Rust の再帰を使わない。
     fn ret(&mut self, mut value: Value) -> Result<Step, Fault> {
         loop {
-            // 段階2までは継続を複製しないので、フレームは常に一意である。共有されたフレームは段階3の `multi` で扱う
+            // `once` の継続までは継続を複製しないので、フレームは常に一意である。共有されたフレームは段階3b の `multi` で扱う
             let Payload::Frame(frame) = self.heap.take(self.cont).map_err(Fault::Heap)? else {
                 return Err(Fault::Internal("the continuation is not a frame"));
             };
@@ -388,6 +524,27 @@ impl<'p> Machine<'p> {
                     self.control = CExprId(resume);
                     self.cont = next;
                     return Ok(Step::Continue);
+                }
+                // 本体が値を返したので handler を外す。節のクロージャはもう呼ばない
+                Frame::Handler {
+                    clauses,
+                    ret: on_return,
+                    next,
+                    ..
+                } => {
+                    for clause in clauses {
+                        if let Value::Obj(obj) = clause {
+                            self.heap.decref(obj).map_err(Fault::Heap)?;
+                        }
+                    }
+                    self.cont =
+                        next.ok_or(Fault::Internal("a detached handler received a value"))?;
+                    if let Some(on_return) = on_return {
+                        match self.apply(on_return, vec![value])? {
+                            Applied::Entered => return Ok(Step::Continue),
+                            Applied::Value(result) => value = result,
+                        }
+                    }
                 }
                 Frame::Io => {
                     if let Value::Obj(obj) = value {

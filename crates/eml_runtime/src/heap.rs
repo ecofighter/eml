@@ -28,6 +28,7 @@ impl DescId {
     const STRING: DescId = DescId(0);
     const FRAME: DescId = DescId(1);
     const CLOSURE: DescId = DescId(2);
+    const CONTINUATION: DescId = DescId(3);
 }
 
 /// オブジェクトの種類。ヘッダから引けるようにし、後の段階でフィールドのレイアウトと `Lin` の破棄処理を足す
@@ -36,10 +37,13 @@ struct Descriptor {
     name: &'static str,
 }
 
-const DESCRIPTORS: [Descriptor; 3] = [
+const DESCRIPTORS: [Descriptor; 4] = [
     Descriptor { name: "String" },
     Descriptor { name: "Frame" },
     Descriptor { name: "Closure" },
+    Descriptor {
+        name: "Continuation",
+    },
 ];
 
 #[derive(Debug, PartialEq)]
@@ -47,6 +51,13 @@ pub enum Payload {
     Str(String),
     Closure(Closure),
     Frame(Frame),
+    /// `perform` で捕まえた継続。先頭のフレーム `top` から `next` をたどった先に `handler` のフレームがある。`top`
+    /// だけを所有し、`handler` は所有せずに指す。`handler` の `next` は捕まえられている間 `None` なので、継続を
+    /// 解放すると `top` から `handler` までの区間だけが解放される (docs/spec/runtime.md)。
+    Continuation {
+        top: ObjRef,
+        handler: ObjRef,
+    },
 }
 
 impl Payload {
@@ -56,6 +67,7 @@ impl Payload {
             Payload::Str(_) => DescId::STRING,
             Payload::Closure(_) => DescId::CLOSURE,
             Payload::Frame(_) => DescId::FRAME,
+            Payload::Continuation { .. } => DescId::CONTINUATION,
         }
     }
 }
@@ -83,6 +95,14 @@ pub enum Frame {
     Apply { args: Vec<Value>, next: ObjRef },
     /// 継続の最下部にある `IO` の組み込みの handler (docs/spec/core-ir.md)。
     Io,
+    /// handle の handler。節のクロージャはエフェクトの操作の順に並ぶ。`next` が `None` なのは、継続に捕まえられて
+    /// handle の外側から切り離されている間である (docs/spec/core-ir.md)。
+    Handler {
+        effect: u32,
+        clauses: Vec<Value>,
+        ret: Option<Value>,
+        next: Option<ObjRef>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -301,6 +321,21 @@ fn copy(payload: &Payload) -> Payload {
             next: *next,
         }),
         Payload::Frame(Frame::Io) => Payload::Frame(Frame::Io),
+        Payload::Frame(Frame::Handler {
+            effect,
+            clauses,
+            ret,
+            next,
+        }) => Payload::Frame(Frame::Handler {
+            effect: *effect,
+            clauses: clauses.clone(),
+            ret: *ret,
+            next: *next,
+        }),
+        Payload::Continuation { top, handler } => Payload::Continuation {
+            top: *top,
+            handler: *handler,
+        },
     }
 }
 
@@ -320,6 +355,15 @@ fn children(payload: &Payload, work: &mut Vec<ObjRef>) {
             work.extend(args.iter().filter_map(object));
             work.push(*next);
         }
+        Payload::Frame(Frame::Handler {
+            clauses, ret, next, ..
+        }) => {
+            work.extend(clauses.iter().filter_map(object));
+            work.extend(ret.as_ref().and_then(object));
+            work.extend(*next);
+        }
+        // `handler` は所有しない。`top` からたどれる
+        Payload::Continuation { top, .. } => work.push(*top),
         Payload::Closure(closure) => work.extend(closure.args.iter().filter_map(object)),
         Payload::Frame(Frame::Io) | Payload::Str(_) => {}
     }
@@ -346,6 +390,68 @@ mod tests {
             saved,
             next,
         }))
+    }
+
+    fn handler(
+        heap: &mut Heap,
+        clauses: Vec<Value>,
+        ret: Option<Value>,
+        next: Option<ObjRef>,
+    ) -> ObjRef {
+        heap.alloc(Payload::Frame(Frame::Handler {
+            effect: 1,
+            clauses,
+            ret,
+            next,
+        }))
+    }
+
+    #[test]
+    fn a_handler_frame_releases_its_clauses_and_the_rest_of_the_continuation() {
+        let mut heap = Heap::new();
+        let clause = heap.alloc(Payload::Closure(Closure {
+            function: 0,
+            args: vec![],
+        }));
+        let ret = heap.alloc(Payload::Closure(Closure {
+            function: 1,
+            args: vec![],
+        }));
+        let end = bottom(&mut heap);
+        let frame = handler(
+            &mut heap,
+            vec![Value::Obj(clause)],
+            Some(Value::Obj(ret)),
+            Some(end),
+        );
+        heap.decref(frame).unwrap();
+        assert!(heap.live_objects().is_empty());
+    }
+
+    #[test]
+    fn releasing_a_continuation_stops_at_its_detached_handler() {
+        let mut heap = Heap::new();
+        // handler の外側は機械の継続が持っている
+        let outside = bottom(&mut heap);
+        let s = string(&mut heap, "saved");
+        let detached = handler(&mut heap, vec![], None, None);
+        let top = frame(&mut heap, vec![(0, Value::Obj(s))], detached);
+        let k = heap.alloc(Payload::Continuation {
+            top,
+            handler: detached,
+        });
+        assert_eq!(
+            heap.live_objects(),
+            vec![
+                ("Continuation".to_string(), 1),
+                ("Frame".to_string(), 3),
+                ("String".to_string(), 1),
+            ]
+        );
+        heap.decref(k).unwrap();
+        assert_eq!(heap.live_objects(), vec![("Frame".to_string(), 1)]);
+        heap.decref(outside).unwrap();
+        assert!(heap.live_objects().is_empty());
     }
 
     #[test]
