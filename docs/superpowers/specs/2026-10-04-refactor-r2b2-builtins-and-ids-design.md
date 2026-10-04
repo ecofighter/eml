@@ -161,7 +161,7 @@ pub struct Scheme {
 | `crates/eml_types/src/ty.rs` の `function_types_are_displayed_like_the_surface_syntax` | 3 | `Type::Int` などを `Type::Con { .. }` で組み立てる形にする。期待値は変えない |
 | `crates/eml_hir/src/lower/scope.rs` の単体テスト | 3 | `BuiltinType::Int` と `EffectRef::Io` の代わりに、登録した item の ID で確かめる形にする。確かめる中身 (組み込みの値、型、エフェクトの解決と、ユーザーの定義による隠し) は変えない |
 
-スナップショット (HIR、型、Core IR、UI) は変わらない見込みである。上の表にないテストの期待値が変わった場合は、変えずに止まり、差分と理由をユーザーに示して承認を得る。
+スナップショット (HIR、型、Core IR、UI) は、どれも変わらないと見込んでいる。上の表にないテストの期待値が変わった場合は、変えずに止まり、差分と理由をユーザーに示して承認を得る。
 
 ### 足すテスト
 
