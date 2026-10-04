@@ -38,11 +38,20 @@ pub(crate) enum ArrowLin {
     Var(KindVar),
 }
 
-/// エフェクトの row。`tail` が `None` なら閉じた row である。
+/// row の末尾。`Error` は未定義のエフェクトか解決できない row 変数の跡で、型の `Error` と同じく、どのエフェクトも
+/// 受け入れて束縛されない (docs/spec/types.md の「エラーの扱い」)。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Tail {
+    Closed,
+    Var(RowVar),
+    Error,
+}
+
+/// エフェクトの row。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Row {
     pub labels: Vec<Effect>,
-    pub tail: Option<RowVar>,
+    pub tail: Tail,
 }
 
 impl Row {
@@ -51,7 +60,17 @@ impl Row {
     }
 
     pub fn closed(labels: Vec<Effect>) -> Row {
-        Row { labels, tail: None }
+        Row {
+            labels,
+            tail: Tail::Closed,
+        }
+    }
+
+    pub fn error() -> Row {
+        Row {
+            labels: Vec::new(),
+            tail: Tail::Error,
+        }
     }
 }
 

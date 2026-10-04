@@ -5,7 +5,7 @@ impl Table {
     pub fn resolve_row(&self, row: &Row) -> Row {
         let mut labels = row.labels.clone();
         let mut tail = row.tail;
-        while let Some(var) = tail {
+        while let Tail::Var(var) = tail {
             match &self.row_vars[var.0 as usize].binding {
                 Some(bound) => {
                     labels.extend(bound.labels.iter().copied());
@@ -32,7 +32,24 @@ impl Table {
             }
         }
         match (a.tail, b.tail) {
-            (None, None) => {
+            // `Error` が関わる row の制約からは診断を出さない (docs/spec/types.md の「エラーの扱い」)。推論用の row 変数は、
+            // 型の `unify(Var, Error)` と同じく、相手にしかないラベルと末尾 `Error` に束縛する
+            (Tail::Error, Tail::Var(y)) if !self.is_rigid_row(y) => self.bind_row(
+                y,
+                Row {
+                    labels: only_a,
+                    tail: Tail::Error,
+                },
+            ),
+            (Tail::Var(x), Tail::Error) if !self.is_rigid_row(x) => self.bind_row(
+                x,
+                Row {
+                    labels: only_b,
+                    tail: Tail::Error,
+                },
+            ),
+            (Tail::Error, _) | (_, Tail::Error) => Ok(()),
+            (Tail::Closed, Tail::Closed) => {
                 let mut missing = only_a;
                 missing.extend(only_b);
                 if missing.is_empty() {
@@ -41,19 +58,19 @@ impl Table {
                     Err(UnifyError::MissingEffects(missing))
                 }
             }
-            (Some(tail), None) => {
+            (Tail::Var(tail), Tail::Closed) => {
                 if !only_a.is_empty() {
                     return Err(UnifyError::MissingEffects(only_a));
                 }
                 self.bind_row(tail, Row::closed(only_b))
             }
-            (None, Some(tail)) => {
+            (Tail::Closed, Tail::Var(tail)) => {
                 if !only_b.is_empty() {
                     return Err(UnifyError::MissingEffects(only_b));
                 }
                 self.bind_row(tail, Row::closed(only_a))
             }
-            (Some(x), Some(y)) if x == y => {
+            (Tail::Var(x), Tail::Var(y)) if x == y => {
                 let mut missing = only_a;
                 missing.extend(only_b);
                 if missing.is_empty() {
@@ -62,21 +79,21 @@ impl Table {
                     Err(UnifyError::MissingEffects(missing))
                 }
             }
-            (Some(x), Some(y)) => match (self.is_rigid_row(x), self.is_rigid_row(y)) {
+            (Tail::Var(x), Tail::Var(y)) => match (self.is_rigid_row(x), self.is_rigid_row(y)) {
                 (false, false) => {
                     let rest = self.fresh_row_var();
                     self.bind_row(
                         x,
                         Row {
                             labels: only_b,
-                            tail: Some(rest),
+                            tail: Tail::Var(rest),
                         },
                     )?;
                     self.bind_row(
                         y,
                         Row {
                             labels: only_a,
-                            tail: Some(rest),
+                            tail: Tail::Var(rest),
                         },
                     )
                 }
@@ -89,7 +106,7 @@ impl Table {
                         x,
                         Row {
                             labels: only_b,
-                            tail: Some(y),
+                            tail: Tail::Var(y),
                         },
                     )
                 }
@@ -101,7 +118,7 @@ impl Table {
                         y,
                         Row {
                             labels: only_a,
-                            tail: Some(x),
+                            tail: Tail::Var(x),
                         },
                     )
                 }
@@ -115,7 +132,7 @@ impl Table {
         if self.is_rigid_row(var) {
             return Err(UnifyError::Mismatch);
         }
-        if row.tail == Some(var) {
+        if row.tail == Tail::Var(var) {
             return Err(UnifyError::Occurs);
         }
         let sigma = self.row_vars[var.0 as usize].multiplicity;
@@ -123,7 +140,7 @@ impl Table {
             self.multiplicity
                 .require(Bound::Const(label.multiplicity()), Bound::Var(sigma));
         }
-        if let Some(tail) = row.tail {
+        if let Tail::Var(tail) = row.tail {
             let inner = self.row_vars[tail.0 as usize].multiplicity;
             self.multiplicity
                 .require(Bound::Var(inner), Bound::Var(sigma));
@@ -137,42 +154,43 @@ impl Table {
     /// 単一化する。rigid な末尾は束縛できないので、ラベルを取り除いた残りの末尾が同じ変数であることを確かめる。
     /// 残りの末尾が推論中の row 変数なら、その row はまだ伸ばせるので、rigid な変数を末尾として受けさせる
     /// (ラムダ本体のように、今の row を推論している途中で呼び出すときのため)。
-    /// 閉じた末尾か、別の rigid な変数なら含まれないので `MissingRowVar` にする。
+    /// 閉じた末尾か、別の rigid な変数なら含まれないので `MissingRowVar` にする。どちらかの末尾が `Error` なら含まれるとみなす。
     pub fn include_row(&mut self, callee: &Row, ambient: &Row) -> Result<(), UnifyError> {
         let callee = self.resolve_row(callee);
         match callee.tail {
-            Some(tail) if !self.is_rigid_row(tail) => self.unify_row(&callee, ambient),
+            Tail::Error => Ok(()),
+            Tail::Var(tail) if !self.is_rigid_row(tail) => self.unify_row(&callee, ambient),
             tail => {
                 let rest = self.fresh_row_var();
                 self.unify_row(
                     &Row {
                         labels: callee.labels,
-                        tail: Some(rest),
+                        tail: Tail::Var(rest),
                     },
                     ambient,
                 )?;
-                let Some(rigid) = tail else {
+                let Tail::Var(rigid) = tail else {
                     return Ok(());
                 };
                 let rest = self.resolve_row(&Row {
                     labels: Vec::new(),
-                    tail: Some(rest),
+                    tail: Tail::Var(rest),
                 });
-                if rest.tail == Some(rigid) {
-                    Ok(())
-                } else if let Some(open) = rest.tail
-                    && !self.is_rigid_row(open)
-                {
-                    self.bind_row(
+                match rest.tail {
+                    Tail::Var(open) if open == rigid => Ok(()),
+                    // 今の row の末尾が `Error` なら、rigid な変数も受け入れる
+                    Tail::Error => Ok(()),
+                    Tail::Var(open) if !self.is_rigid_row(open) => self.bind_row(
                         open,
                         Row {
                             labels: Vec::new(),
-                            tail: Some(rigid),
+                            tail: Tail::Var(rigid),
                         },
-                    )
-                } else {
-                    let name = self.row_vars[rigid.0 as usize].rigid.clone();
-                    Err(UnifyError::MissingRowVar(name.unwrap_or_default()))
+                    ),
+                    _ => {
+                        let name = self.row_vars[rigid.0 as usize].rigid.clone();
+                        Err(UnifyError::MissingRowVar(name.unwrap_or_default()))
+                    }
                 }
             }
         }
@@ -193,11 +211,11 @@ impl Table {
         let ret = self.open_spine(ret);
         let row = self.resolve_row(&row);
         let row = match row.tail {
-            Some(_) => row,
-            None => Row {
+            Tail::Closed => Row {
                 labels: row.labels,
-                tail: Some(self.fresh_row_var()),
+                tail: Tail::Var(self.fresh_row_var()),
             },
+            Tail::Var(_) | Tail::Error => row,
         };
         self.function_with(param, lin, row, ret)
     }

@@ -1,6 +1,6 @@
 use eml_hir::builtin::Builtin;
 
-use crate::table::{Row, Table, Ty};
+use crate::table::{Row, Table, Tail, Ty};
 use crate::ty::Effect;
 
 /// 組み込みの型。型と意味は docs/spec/declarations.md の標準の演算子の表と、docs/spec/effects.md の組み込みの
@@ -44,7 +44,7 @@ fn compose(table: &mut Table, forward: bool) -> Ty {
             m,
             Row {
                 labels: Vec::new(),
-                tail: Some(e),
+                tail: Tail::Var(e),
             },
             to,
         )

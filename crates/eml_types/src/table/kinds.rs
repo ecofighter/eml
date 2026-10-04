@@ -68,7 +68,7 @@ impl Table {
                     if let ArrowLin::Var(v) = m {
                         push_unique(&mut lin, *v);
                     }
-                    if let Some(tail) = self.resolve_row(row).tail
+                    if let Tail::Var(tail) = self.resolve_row(row).tail
                         && self.is_rigid_row(tail)
                     {
                         push_unique(&mut mult, self.row_multiplicity_var(tail));

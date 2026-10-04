@@ -77,12 +77,14 @@ impl Table {
                         }
                     },
                     effects: row.labels,
-                    tail: row
-                        .tail
-                        .map(|tail| match &self.row_vars[tail.0 as usize].rigid {
+                    tail: match row.tail {
+                        Tail::Closed => None,
+                        Tail::Var(tail) => Some(match &self.row_vars[tail.0 as usize].rigid {
                             Some(name) => RowTail::Rigid(name.clone()),
                             None => RowTail::Flexible,
                         }),
+                        Tail::Error => Some(RowTail::Error),
+                    },
                     ret: Box::new(self.to_type(ret, solved)),
                 }
             }

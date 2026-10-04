@@ -18,11 +18,13 @@ impl Table {
                     known => known,
                 };
                 let row = self.resolve_row(&row);
+                let tail = match row.tail {
+                    Tail::Var(tail) => Tail::Var(subst.rows.get(&tail).copied().unwrap_or(tail)),
+                    other => other,
+                };
                 let row = Row {
                     labels: row.labels,
-                    tail: row
-                        .tail
-                        .map(|tail| subst.rows.get(&tail).copied().unwrap_or(tail)),
+                    tail,
                 };
                 self.function_with(param, lin, row, ret)
             }

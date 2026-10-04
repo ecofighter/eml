@@ -60,6 +60,8 @@ pub enum Type {
 pub enum RowTail {
     Rigid(String),
     Flexible,
+    /// 未定義のエフェクトか解決できない row 変数の跡。どのエフェクトも受け入れる。
+    Error,
 }
 
 impl Type {
@@ -71,7 +73,13 @@ impl Type {
         match self {
             Type::Error => true,
             Type::Record(fields) => fields.iter().any(|(_, ty)| ty.contains_error()),
-            Type::Fn { param, ret, .. } => param.contains_error() || ret.contains_error(),
+            Type::Fn {
+                param, tail, ret, ..
+            } => {
+                param.contains_error()
+                    || ret.contains_error()
+                    || matches!(tail, Some(RowTail::Error))
+            }
             Type::Int | Type::String | Type::Bool | Type::Var(_) => false,
         }
     }
@@ -110,6 +118,7 @@ impl fmt::Display for Type {
                 let tail = match tail {
                     Some(RowTail::Rigid(name)) => Some(name.as_str()),
                     Some(RowTail::Flexible) => Some("_"),
+                    Some(RowTail::Error) => Some("{error}"),
                     None => None,
                 };
                 // 空の閉じた row は書かない。省略した row が `<>` だから (docs/spec/types.md)

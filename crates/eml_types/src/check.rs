@@ -8,7 +8,7 @@ use la_arena::ArenaMap;
 use crate::builtins::builtin_type;
 use crate::kind::Bound;
 use crate::scheme::{Rigids, Scheme, lower_signature, lower_type};
-use crate::table::{Row, Table, Ty, TyShape, UnifyError};
+use crate::table::{Row, Table, Tail, Ty, TyShape, UnifyError};
 use crate::ty::{Effect, KindConstraint, KindTerm, Linearity, Type};
 use crate::{BodyTypes, TypedModule, codes, scc, usage};
 
@@ -18,9 +18,9 @@ pub(crate) fn check_module(module: &Module) -> (TypedModule, Vec<Diagnostic>) {
     let mut rigids = ArenaMap::default();
     let mut schemes: ArenaMap<FunctionId, Scheme> = ArenaMap::default();
     for (id, function) in module.functions.iter() {
-        let mut function_rigids = Rigids::new(&mut table, function);
+        let function_rigids = Rigids::new(&mut table, function);
         if let Some(signature) = &function.signature {
-            let ty = lower_signature(&mut table, function, &mut function_rigids, signature.ty);
+            let ty = lower_signature(&mut table, function, &function_rigids, signature.ty);
             // 部分適用のクロージャは、それまでの引数を捕まえる (docs/spec/types.md の「関数型」)
             if let Some(body) = &function.body {
                 table.closure_kinds(ty, body.params.len(), &[]);
@@ -431,7 +431,7 @@ impl BodyCheck<'_> {
         let lin = self.table.fresh_arrow_lin();
         let row = Row {
             labels: Vec::new(),
-            tail: Some(self.table.fresh_row_var()),
+            tail: Tail::Var(self.table.fresh_row_var()),
         };
         self.table.function_with(param, lin, row, ret)
     }
@@ -655,10 +655,7 @@ impl BodyCheck<'_> {
         self.ambient = match row {
             Some(row) => row,
             // 期待する型が壊れていれば、どのエフェクトも受け入れて診断を連鎖させない
-            None => Row {
-                labels: Vec::new(),
-                tail: Some(self.table.fresh_row_var()),
-            },
+            None => Row::error(),
         };
         self.ambient_source = AmbientSource::Lambda(origin);
         self.check_expr(lambda_body, current, Origin::LambdaBody);

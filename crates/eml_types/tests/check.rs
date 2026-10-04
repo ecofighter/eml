@@ -155,7 +155,7 @@ fn too_many_arguments_and_non_functions() {
 #[test]
 fn main_with_an_erroneous_row_is_not_reported_again() {
     insta::assert_snapshot!(check_text("main : Unit -> <Console> Unit\nmain () = ()"), @r"
-        main : Unit -> <_> Unit
+        main : Unit -> <{error}> Unit
         ---
         E1002 1:17 cannot find effect `Console`
           1:17 not found in this scope
@@ -425,8 +425,8 @@ fn captured_values_count_inside_the_lambda_body() {
 fn an_undefined_effect_row_is_fresh_at_each_call() {
     let text = "run : (Unit -> <Console> Unit) -> <Console> Unit\nrun f = f ()\n\nloud : Unit -> <IO> Unit\nloud () = run (fn () -> println \"x\")\n\nquiet : Unit -> Unit\nquiet () = run (fn () -> ())";
     insta::assert_snapshot!(check_text(text), @"
-    run : (Unit -> <_> Unit) -> <_> Unit
-      f#0 : Unit -> <_> Unit
+    run : (Unit -> <{error}> Unit) -> <{error}> Unit
+      f#0 : Unit -> <{error}> Unit
     loud : Unit -> <IO> Unit
     quiet : Unit -> Unit
     ---
@@ -465,5 +465,19 @@ fn a_callee_that_is_not_a_name_is_described_without_quotes() {
     E2002 13:39 `println` performs `IO`, which this lambda does not allow
       13:39 this call performs `IO`
       13:4 argument 1 of this expression does not allow it
+    ");
+}
+
+#[test]
+fn an_undefined_effect_row_does_not_pass_the_body_effects_to_callers() {
+    // 未定義のエフェクトの row はどのエフェクトも受け入れるが、本体のエフェクトを取り込んで呼び出し側に伝えない
+    // (docs/spec/types.md の「エラーの扱い」)
+    let text = "g : Unit -> <Console> Unit\ng () = println \"x\"\n\nh : Unit -> Unit\nh () = g ()";
+    insta::assert_snapshot!(check_text(text), @"
+    g : Unit -> <{error}> Unit
+    h : Unit -> Unit
+    ---
+    E1002 1:14 cannot find effect `Console`
+      1:14 not found in this scope
     ");
 }

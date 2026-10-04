@@ -5,7 +5,7 @@ use eml_hir::{EffectRef, Function, RowRef, RowVarId, TypeRefId, TypeRefKind, Typ
 use la_arena::ArenaMap;
 
 use crate::kind::{Bound, KindVar};
-use crate::table::{ArrowLin, RigidVar, Row, RowVar, Subst, Table, Ty};
+use crate::table::{ArrowLin, RigidVar, Row, RowVar, Subst, Table, Tail, Ty};
 use crate::ty::{Effect, Linearity, Multiplicity};
 
 /// 関数ごとの、シグネチャの型変数と row 変数。本体の注釈も同じ変数を指す (docs/spec/types.md の「推論」)。
@@ -13,8 +13,6 @@ pub(crate) struct Rigids {
     tys: ArenaMap<TypeVarId, Ty>,
     rows: ArenaMap<RowVarId, RowVar>,
     vars: Vec<RigidVar>,
-    /// シグネチャの中の、未定義のエフェクトや解決できない row 変数の跡に置いた row 変数。
-    error_rows: Vec<RowVar>,
 }
 
 impl Rigids {
@@ -23,7 +21,6 @@ impl Rigids {
             tys: ArenaMap::default(),
             rows: ArenaMap::default(),
             vars: Vec::new(),
-            error_rows: Vec::new(),
         };
         for (id, var) in function.type_vars.iter() {
             let (ty, rigid) = table.fresh_rigid(&var.name);
@@ -41,7 +38,6 @@ pub(crate) struct Scheme {
     pub ty: Ty,
     rigids: Vec<RigidVar>,
     rigid_rows: Vec<RowVar>,
-    error_rows: Vec<RowVar>,
     lin_vars: Vec<KindVar>,
     lin_constraints: Vec<(Bound<Linearity>, Bound<Linearity>)>,
     mult_vars: Vec<KindVar>,
@@ -54,7 +50,6 @@ impl Scheme {
             ty,
             rigids: rigids.vars.clone(),
             rigid_rows: rigids.rows.values().copied().collect(),
-            error_rows: rigids.error_rows.clone(),
             lin_vars: Vec::new(),
             lin_constraints: Vec::new(),
             mult_vars: Vec::new(),
@@ -89,27 +84,6 @@ impl Scheme {
             let fresh = table.fresh_row_var_with(sigma);
             subst.rows.insert(row, fresh);
         }
-        // エラーの跡の row はどのエフェクトも受け入れる。呼び出しごとに別の変数にしないと、最初の呼び出しが決めた
-        // エフェクトが後の呼び出しで診断になる (docs/spec/types.md の「エラーの扱い」)。本体の検査で束縛されていれば、
-        // `copy_type` と同じく辿った先の変数を置き換える
-        for &row in &self.error_rows {
-            let Some(tail) = table
-                .resolve_row(&Row {
-                    labels: Vec::new(),
-                    tail: Some(row),
-                })
-                .tail
-            else {
-                continue;
-            };
-            if subst.rows.contains_key(&tail) {
-                continue;
-            }
-            let sigma = table.row_multiplicity_var(tail);
-            let sigma = subst.mult.get(&sigma).copied().unwrap_or(sigma);
-            let fresh = table.fresh_row_var_with(sigma);
-            subst.rows.insert(tail, fresh);
-        }
         table.copy_type(self.ty, &subst)
     }
 
@@ -128,27 +102,24 @@ impl Scheme {
 }
 
 /// シグネチャを型の表に変換する。一番外側の矢印はトップレベルの関数そのもので、何度でも呼べるので `Unr` である
-/// (docs/spec/types.md の「関数型」)。エラーの跡の row 変数は、具体化のたびに新しくするために記録する。
+/// (docs/spec/types.md の「関数型」)。
 pub(crate) fn lower_signature(
     table: &mut Table,
     function: &Function,
-    rigids: &mut Rigids,
+    rigids: &Rigids,
     id: TypeRefId,
 ) -> Ty {
-    let mut error_rows = Vec::new();
-    let ty = lower(table, function, rigids, id, true, &mut error_rows);
-    rigids.error_rows = error_rows;
-    ty
+    lower(table, function, rigids, id, true)
 }
 
-/// 本体の注釈を型の表に変換する。注釈の型は関数の中で具体化しないので、エラーの跡の row 変数は記録しない。
+/// 本体の注釈を型の表に変換する。
 pub(crate) fn lower_type(
     table: &mut Table,
     function: &Function,
     rigids: &Rigids,
     id: TypeRefId,
 ) -> Ty {
-    lower(table, function, rigids, id, false, &mut Vec::new())
+    lower(table, function, rigids, id, false)
 }
 
 /// `outermost_unr` が真なら一番外側の矢印を `Unr` にする。ほかの矢印の線形性は Kind 変数にして推論する
@@ -159,7 +130,6 @@ fn lower(
     rigids: &Rigids,
     id: TypeRefId,
     outermost_unr: bool,
-    error_rows: &mut Vec<RowVar>,
 ) -> Ty {
     match &function.types[id].kind {
         TypeRefKind::Error => table.error,
@@ -169,8 +139,8 @@ fn lower(
         TypeRefKind::Builtin(BuiltinType::Unit) => table.unit,
         TypeRefKind::Var(var) => rigids.tys[*var],
         TypeRefKind::Fn { param, row, ret } => {
-            let param = lower(table, function, rigids, *param, false, error_rows);
-            let ret = lower(table, function, rigids, *ret, false, error_rows);
+            let param = lower(table, function, rigids, *param, false);
+            let ret = lower(table, function, rigids, *ret, false);
             let labels = |effects: &[EffectRef]| -> Vec<Effect> {
                 effects.iter().map(|EffectRef::Io| Effect::Io).collect()
             };
@@ -180,17 +150,10 @@ fn lower(
                 RowRef::Closed { effects, .. } => Row::closed(labels(effects)),
                 RowRef::Open { effects, tail, .. } => Row {
                     labels: labels(effects),
-                    tail: Some(rigids.rows[*tail]),
+                    tail: Tail::Var(rigids.rows[*tail]),
                 },
                 // 未定義のエフェクトか、解決できない row 変数の跡。どのエフェクトも受け入れて、診断を連鎖させない
-                RowRef::Error => {
-                    let tail = table.fresh_row_var();
-                    error_rows.push(tail);
-                    Row {
-                        labels: Vec::new(),
-                        tail: Some(tail),
-                    }
-                }
+                RowRef::Error => Row::error(),
             };
             let lin = if outermost_unr {
                 ArrowLin::Known(Linearity::Unr)
