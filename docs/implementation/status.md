@@ -1,6 +1,6 @@
 # 実装の現在地
 
-位置づけ: 手引き。2026-10-04 時点のリポジトリの状態を書いている。
+位置づけ: 手引き。2026-10-05 時点のリポジトリの状態を書いている。
 
 マイルストーン1 の目標と範囲、構文と名前解決以降の実装段階、各 crate の実装状況、次の作業の注意点、決定済みで実装待ちの方針、完了した作業をまとめる。実装が進んだら、この文書を更新する。
 
@@ -75,6 +75,8 @@ S2、S3 の構文は、S1 の時点でも字句と文法の置き場所を用意
 
 段階3に入る前に、これまでの実装で見つかった構成の不合理を、破壊的な変更も含めて整理する。7つの回に分け、R0 → R1 → R2a → R2b-1 → R2b-2 → R3a → R3b の順に、それぞれ spec、計画、実装の1サイクルで進める。言語の観測できる振る舞い (UI テストの出力) は原則として変えず、spec の変更が要る項目はその回の spec で判断する。段階3〜5に向けた器の形は作り替えるが、機能は実装しない。
 
+段階4の前に、Core IR のパスの構成を整理する R4 を足した。段階4で `match` のコンパイルを変換に入れる前に、パスの順番を1か所に置き、途中のパスの IR をテストから見られるようにするためである。
+
 | 回 | 名前 | 範囲 | 状態 |
 |---|---|---|---|
 | R0 | テスト基盤と運用 | `eml_test_support`、`SourceFiles::line_col`、テストの変更の運用 ([testing.md](testing.md)) | 完了 |
@@ -84,6 +86,7 @@ S2、S3 の構文は、S1 の時点でも字句と文法の置き場所を用意
 | R2b-2 | 組み込みと ID | 組み込みの表と lang item、エフェクトと型構成子の ID、`TypedModule` のスキーム。`eml_core_ir` と `eml_interp` も追随させる | 完了 |
 | R3a | Core IR の形 | join point と末尾呼び出し、Perceus のパスと verifier、boxed の判定、入口の関数、組み込みの変換。`eml_interp` も追随させる | 完了 |
 | R3b | ランタイムとインタプリタ | `Frame` の種類の enum、記述子、共有されたオブジェクトの複製、`Owned::refs`、型を付けた `RuntimeError`。`eml_runtime`、`eml_interp`、`eml_cli` | 完了 |
+| R4 | Core IR のパスの構成 | パスの順番を持つ `pipeline.rs` と `lower_until`、パスの間の `captures`、verifier の2つの度合い (`verify_scopes`)、`translate/` への分割、パスごとのテスト | 完了 |
 
 ### テストを変えないために曲げた箇所
 
@@ -142,7 +145,7 @@ R3b で済んだ。`Frame` を種類の enum にし、記述子をペイロー�
 | `eml_syntax` | S1 まで実装済み。lexer、レイアウト段、パーサ、型付き AST ラッパ。入れ子の深さの上限 (E0013、フィールドアクセスの連鎖を含む) を持つ。型付き AST は範囲、キーワードの範囲、リテラルの値を持ち、HIR はこれだけを使う |
 | `eml_hir` | 段階3b まで実装済み。宣言の対応づけ、名前解決、演算子の列の組み直し、`&&` / `\|\|` / `\|>` / `<\|` の脱糖、E1001〜E1006。ラムダと、シグネチャの型変数と row 変数の表。組み込みのシグネチャは Prelude (`prelude.em`) に、型とエフェクトは ID で表す item にある。`effect` の宣言と操作の item、handler、`resume`、`drop`、E1007〜E1014。エフェクトの型引数と E1015、`multi` の操作 |
 | `eml_types` | 段階3b まで実装済み。型・row・Kind の表現と単一化、シグネチャに対する本体の検査、E2001〜E2005。型変数と row 変数の表、スキームと SCC ごとの Kind の推論、使用回数のパス、関数値と部分適用の検査。線形性と網羅性の検査は未実装。継続の型、操作のスキーム、handle の検査、Kind の制約の由来と E3001。row のラベルの型引数、`multi` の操作の `k`、`return` の節の捕獲の制約 |
-| `eml_core_ir` | 段階3b まで実装済み。ANF への変換、Perceus の `dup` / `decref` の挿入。ラムダのクロージャ変換 (捕まえた変数を先頭の引数に持つ関数への持ち上げ)、関数値の呼び出し。join point (`captures` を持つ) と末尾呼び出し、関数ごとに1回の生存解析、Perceus の独立したパス (`saved` を含む) と verifier、入口の関数。join point を書き換える `simplify` (分かっているタグの `jump`、小さな本体の転送、`jump` が1つの join point の展開、使われない join point の削除)。handle の本体と節の持ち上げ、操作を包む関数、`Call::{Handle, Perform, Resume}`、`Rhs::Drop` |
+| `eml_core_ir` | 段階3b まで実装済み。ANF への変換、Perceus の `dup` / `decref` の挿入。ラムダのクロージャ変換 (捕まえた変数を先頭の引数に持つ関数への持ち上げ)、関数値の呼び出し。join point (`captures` を持つ) と末尾呼び出し、Perceus の独立したパス (`saved` を含む) と verifier、入口の関数。パスの順番を持つ `pipeline.rs` と、途中のパスで止める `lower_until`。パスの間で埋め直す `captures` と、Perceus より前の IR を確かめる `verify_scopes`。join point を書き換える `simplify` (分かっているタグの `jump`、小さな本体の転送、`jump` が1つの join point の展開、使われない join point の削除)。handle の本体と節の持ち上げ、操作を包む関数、`Call::{Handle, Perform, Resume}`、`Rhs::Drop` |
 | `eml_runtime` | 段階3b まで実装済み。世代番号つきのヒープ、RC、記述子、`debug_heap` のリーク検出、`OutputSink` (テストで出力を捕まえる `Captured` を含む)。クロージャのオブジェクト、継続のフレームの種類 (`Return`、`Apply`、`Io`)、共有されたオブジェクトの複製。handler のフレーム (`Frame::Handler`) と継続オブジェクト (`Payload::Continuation`)。共有された継続の区間の複製 |
 | `eml_interp` | 段階3b まで実装済み。CEK 機械 (ヒープ上の継続のフレーム、最下部の `IO` の handler)、プリミティブ、`println`、eval/apply によるクロージャの呼び出し、型を付けた実行時エラー。handle、`perform`、`resume`、`drop` の実行。multi-shot の再開 |
 | `eml_test_support` | 開発専用。結合テストのパイプライン (段階ごとの feature で選ぶ) と、診断を文字列にする関数 |
@@ -156,6 +159,7 @@ R3b で済んだ。`Frame` を種類の enum にし、記述子をペイロー�
 - 段階4で boxed な値を `Switch` の scrutinee にするとき、現在の規則では scrutinee の読み出しが move になる。`match` の変換で、scrutinee の所有権を各枝にどう渡すかを決める必要がある
 - 非常に長い平らな演算子の列 (約1万項) は、同じ深さの HIR の木になり、型検査と Core IR への変換がその木を再帰するのでスタックがあふれる。演算子を E0013 の深さに数えるか、平らに保つ対応は後に回す
 - 段階4: `simplify` の B2 は、枝の中の join point の引数をそのタグの定数に置き換える。今の `Switch` の scrutinee は引数のないタグ (`if` の `Bool`) だけなので正しい。引数を持つコンストラクタの `match` を入れるときは、置き換えを引数のないタグに限るか、フィールドの束縛と一緒に設計し直す
+- 段階4: `match` のコンパイルは `translate/pattern.rs` に置き、決定木の枝の join point も `translate/mod.rs` の骨組み (`Exit::Jump` と `Binding::Join`) で作る。共有する枝の join point はパターン変数を受けるので、join point の引数を `Vec` にする。B2 の作り直し (上の項目) と一緒に設計する
 - 性能: B2 の置き換えは枝の部分木をたどるので、条件に `&&` や `||` を使う `else if` が末尾で長く続くと、続きの深さの2乗の時間がかかる。必要になったら、変数から使用の位置への索引を巡ごとに作る
 - `simplify` を不動点まで繰り返すことにしたときは、B3 が長い続きの連鎖を `Switch` の枝の中へ移しうる。Perceus と verifier は `Switch` の枝を再帰でたどるので、E0013 はその深さの上限にならなくなる
 - 段階5: row 変数の多重度 `σ` は、スキームの多相化と具体化で制約を複製しているが、上限の制約が出ないので確かめていない。段階3b の `multi` でも下限しか出ない。持ち越し規則で上限が出たときにテストを足す
@@ -207,3 +211,4 @@ R3b で済んだ。`Frame` を種類の enum にし、記述子をペイロー�
 | 縦の貫通 段階3a | ユーザー定義のエフェクトの `never` と `once` の操作、deep handler、`resume`、`drop` を通した。handle の本体と節をクロージャに持ち上げ、`perform` で handler フレームの外側を切り離し、`resume` でつなぎ直す。`drop k` は継続の区間の解放で済ませ、クリーンアップ情報をなくした。Kind の制約に由来を持たせ、違反を E3001 にした |
 | 縦の貫通 段階3b | `multi` の操作と multi-shot の再開、エフェクトの型引数を通した。row のラベルに型引数を持たせ、同じエフェクトのラベルを順に対にして単一化する。共有された継続を再開するときは区間を写し、フレームはつねに一意に保つ。持ち越し規則は段階5に残した |
 | join point の解析の整理 | join point に本体が使う外側の変数 (`captures`) を持たせ、生存解析を関数ごとに1回にした。Perceus が呼び出しの `saved` も決め、verifier は `captures` を宣言として確かめる。その上に join point を書き換える `simplify` を置き、`&&` と `||` を条件にした `if` が条件の値で分岐し直さないようにした |
+| リファクタリング R4 | Core IR のパスの順番を `pipeline.rs` に置き、途中のパスで止める `lower_until` を足した。パスの間では `captures` をつねに正しくし、Perceus より前の IR を範囲だけで確かめる `verify_scopes` を各パスの後にかける。`lower.rs` を `translate/` に分け、Core IR のテストを確かめるパスごとのファイルに組み替えた |

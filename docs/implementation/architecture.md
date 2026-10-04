@@ -70,7 +70,7 @@ eml_diagnostics  Diagnostic 型、FileId と SourceFiles、行と列、ariadne �
 | `eml_syntax` | `parse(FileId, &str) -> (Parse, Vec<Diagnostic>)` |
 | `eml_hir` | `lower(FileId, &ast::SourceFile) -> (Module, Vec<Diagnostic>)` |
 | `eml_types` | `check(&Module) -> (TypedModule, Vec<Diagnostic>)` |
-| `eml_core_ir` | `lower(&Module, &TypedModule) -> Program` |
+| `eml_core_ir` | `lower(&Module, &TypedModule) -> Program`。途中のパスで止める `lower_until(&Module, &TypedModule, Pass) -> Program` |
 | `eml_interp` | `run(Arc<Program>, &RunConfig, &OutputSink) -> Result<(), RuntimeError>` |
 
 ## エラーが出ても止まらない
@@ -167,6 +167,8 @@ HIR への変換では、名前解決に加えて、次の脱糖と検査を行�
 
 - Core IR とインタプリタの設計は [Core IR とインタプリタ](../spec/core-ir.md)、ヒープと RC は [ランタイム](../spec/runtime.md) が定める
 - インタプリタの値とフレームに `Rc` と `RefCell` を使わない。Core IR は `Arc<Program>` で読み取り専用で共有する。将来、複数のスレッドがそれぞれの CEK 機械で同じプログラムを実行するため ([マルチコア対応の設計](../future/multicore.md))
+- パスの順番は `pipeline.rs` だけが持つ。`lower_until` は、変換 (`translate/`)、`simplify`、Perceus を順にかけ、指定したパスの直後で止める。RC の命令を入れる前のパスの後では、`liveness::analyze` で `captures` を埋め直してから `verify_scopes` をかけ、Perceus の後では `verify` をかける。検査はデバッグビルドだけで、誤りはパスの名前を付けた panic にする
+- 変換は `translate/` にある。`mod.rs` は式の値の渡し先と join point の組み立てという制御の骨組み、`expr.rs` は式ごとの変換と呼び出しの場合分け、`program.rs` は関数の表 (`ProgramBuilder`)、組み込みと操作を包む関数、入口の関数、エフェクトの表、`types.rs` は型から決まる変数の性質 (`boxed`) と組み込みの変換の種類 (`lowering`) を持つ
 - Core IR の関数は、ANF の木をアリーナに置き、`CExprId` で参照する。継続のフレームが再開する位置を ID で持てるようにするため。変換は式の値の渡し先 (`Exit::Return` か `Exit::Jump`) を持って回り、末尾の `if` は各枝が返す `Switch` に、末尾にない `if` は続きを本体にした join point (`CExpr::Join`) にする。末尾にない `if` は、`tail` で条件の計算ごと join point の範囲を組み立てる。`CoreFn::joins` は `JoinId` から `Join` の式を引く索引で、アリーナは Perceus が作り直す。値を返すだけの呼び出しは `TailCall` にする
 - 変数が boxed かどうかは、型から `boxed` の1か所で決める。組み込みの引数の数は `Builtin::arity` (R2 の表) から、引数と結果の型は `TypedModule::builtins` (Prelude のスキーム) から引き、変換の種類 (`Prim`、`Perform`、`Compose`、`Constructor`) は `lowering` の1つの match に置く
 - 変換は、`main` を `()` で呼ぶ入口の関数 `entry$main` を足す (`Program::entry`)
@@ -175,9 +177,9 @@ HIR への変換では、名前解決に加えて、次の脱糖と検査を行�
 - クロージャは `Payload::Closure(Closure)` (フィールドは `function` と `args`) で、関数値の呼び出し (`Call::Apply`) は eval/apply で行う。継続のフレームは `Payload::Frame(Frame)` で、`Frame` は種類の enum である。`Return` は呼び出し元に戻るフレームで、呼び出しの後で使う変数だけを退避する。`Apply` は余った引数を持ち、戻った関数値に適用する。`Io` は継続の最下部の `IO` の handler である。記述子はペイロードの種類から決める
 - 共有されたクロージャを呼ぶときは、`Heap::take_or_copy` で中身を写し、写した中身の子の参照を1つずつ増やしてから元の参照を手放す。`Payload` は `Clone` を導出しないので、`ObjRef` を `dup` せずに複製できない
 - `simplify` (`simplify.rs`) は、変換の後、Perceus の前に、アリーナの上で join point をその場で書き換える。木から外れた式はアリーナに残るが、Perceus が捨てる。`jump` の位置と親は、根からたどれる式だけで求める。B2 (分かっているタグの `jump`) は、枝ごとに新しい join point を作る。その引数 `u` は `()` を受け、枝の中の join point の引数をそのタグの定数に置き換える。最後に、残った join point に元の順で番号を振り直す
-- Perceus の挿入 (`perceus.rs`) は、変換の後にプログラム全体にかける独立したパスである。生存解析 (`liveness.rs` の `analyze`) は関数ごとに1回だけ行い、`Let` の連鎖と join point の本体の連なりが長くなりうるので、作業の列で後順にたどる。解析が持つのは、ブロックの入口 (`Switch` の枝と join point の範囲) の生きている変数の集合と、join point の `captures` だけである。`Join` の直前の集合は範囲の入口の集合に join point の `captures` を足したものである。verifier は `captures` が `Join` の位置で範囲にあることを求めるので、`jump` が届かない join point でも、`captures` は `Join` まで生かしておく。Perceus は連鎖を逆順に組み立てるときに、生きている変数の集合を1つ更新して `dup` / `decref` と `saved` を決める。連鎖の途中の所有は、生きている RC の対象と直前に束縛した変数から求める。join point の本体は、`captures` のうち RC の対象をちょうど1つずつ所有して始まり、`jump` の前で残りを捨てる。関数、プリミティブ、`perform` の引数は、どれも所有権を受け取る
+- Perceus の挿入 (`perceus.rs`) は、変換の後にプログラム全体にかける独立したパスである。Perceus は最初に関数ごとに生存解析 (`liveness.rs` の `analyze`) を行う。解析は、`Let` の連鎖と join point の本体の連なりが長くなりうるので、作業の列で後順にたどる。解析が持つのは、ブロックの入口 (`Switch` の枝と join point の範囲) の生きている変数の集合と、join point の `captures` だけである。`Join` の直前の集合は範囲の入口の集合に join point の `captures` を足したものである。verifier は `captures` が `Join` の位置で範囲にあることを求めるので、`jump` が届かない join point でも、`captures` は `Join` まで生かしておく。Perceus は連鎖を逆順に組み立てるときに、生きている変数の集合を1つ更新して `dup` / `decref` と `saved` を決める。連鎖の途中の所有は、生きている RC の対象と直前に束縛した変数から求める。join point の本体は、`captures` のうち RC の対象をちょうど1つずつ所有して始まり、`jump` の前で残りを捨てる。関数、プリミティブ、`perform` の引数は、どれも所有権を受け取る
 - `saved` は、各呼び出し (`Rhs::Call`) の後で使う変数で、Perceus が埋める。RC の対象でない変数と、`jump` の先の join point の `captures` も含む。verifier は、`saved` の RC の対象の変数が所有している変数とちょうど一致すること、呼び出しの後は `saved` の変数と結果の変数だけが範囲にあることを確かめる
-- verifier (`verify.rs`) は、Perceus の後に、変数と join point の範囲、引数の数、所有権の釣り合いを確かめる。`captures` を宣言として扱い、生存解析は使わない。デバッグビルドの `lower` が毎回呼ぶ
+- verifier (`verify.rs`) は2つの入口を持つ。`verify` は Perceus の後に、変数と join point の範囲、引数の数、所有権の釣り合いを確かめる。`verify_scopes` は Perceus より前に、範囲と引数の数を確かめ、RC の命令と `saved` がないことを確かめる。`verify_scopes` はどの変数も RC の対象として扱わないので、束縛、使用、join point の入口、`jump` の所有の検査が範囲の検査だけになる。どちらも `captures` を宣言として扱い、生存解析は使わない
 - ヒープはインデックス方式のアリーナで、スロットごとに世代番号を持つ。値は `Copy` な `Value` である
 - 環境のスロットは値だけを持ち、読み出しはスロットを書き換えない。参照の所有は Core IR の命令 (使用、`dup`、`decref`) が表し、verifier が釣り合いを確かめる。呼び出しのフレームには `saved` の変数だけを退避するので、フレームはちょうど所有している参照だけを持ち、解放するときは退避した値を1回ずつ解放する
 - CEK 機械の継続は、ヒープ上のフレームの連結リストである。呼び出しのフレームは、呼び出しの後で使う変数 (`saved`) だけを退避する。`jump` と末尾呼び出しはフレームを積まない。最下部に `IO` の handler のフレーム (`Frame::Io`) を置く
