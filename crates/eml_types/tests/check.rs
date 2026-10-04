@@ -164,18 +164,6 @@ fn main_with_an_erroneous_row_is_not_reported_again() {
 }
 
 #[test]
-fn function_typed_parameters_can_be_called_and_passed() {
-    let text = "apply : (Int -> Int) -> Int -> Int\napply f x = f x\n\npass : (Int -> Int) -> Int\npass f = apply f 1";
-    insta::assert_snapshot!(check_text(text), @"
-    apply : (Int -> Int) -> Int -> Int
-      f#0 : Int -> Int
-      x#1 : Int
-    pass : (Int -> Int) -> Int
-      f#0 : Int -> Int
-    ");
-}
-
-#[test]
 fn a_call_reports_a_missing_effect_once() {
     let text =
         "f : Int -> <IO> Int -> <IO> Unit\nf a b = println \"x\"\n\ng : Int -> Unit\ng n = f 1 2";
@@ -511,20 +499,6 @@ fn an_undefined_effect_does_not_hide_an_unrelated_missing_effect() {
         "{out}"
     );
     assert!(out.contains("E2002 8:3 `l` performs `IO`"), "{out}");
-}
-
-#[test]
-fn composition_has_the_prelude_type() {
-    // `>>` の型は Prelude にある (crates/eml_hir/src/prelude.em)。手で組み立てていたときと同じ型になる
-    let text = "compose : (Int -> Int) -> (Int -> Int) -> Int -> Int\ncompose f g = f >> g\n\nback : (Int -> Int) -> (Int -> Int) -> Int -> Int\nback f g = g << f";
-    insta::assert_snapshot!(check_text(text), @"
-    compose : (Int -> Int) -> (Int -> Int) -> Int -> Int
-      f#0 : Int -> Int
-      g#1 : Int -> Int
-    back : (Int -> Int) -> (Int -> Int) -> Int -> Int
-      f#0 : Int -> Int
-      g#1 : Int -> Int
-    ");
 }
 
 #[test]

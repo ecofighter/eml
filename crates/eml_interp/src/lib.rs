@@ -660,7 +660,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn runtime_errors_are_displayed_as_before() {
+    fn runtime_errors_name_the_fault_and_the_function() {
         let fault = |fault| {
             RuntimeError::Fault {
                 fault,

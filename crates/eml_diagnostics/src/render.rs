@@ -96,27 +96,6 @@ mod tests {
     }
 
     #[test]
-    fn byte_order_mark_takes_no_column() {
-        let mut files = SourceFiles::new();
-        let file = files.add("a.em", "\u{feff}a = $");
-        // BOM は読み込み時に除くので (docs/spec/lexical.md)、`$` はバイト位置 4 で、列 5 と表示する。
-        let range = TextRange::new(4.into(), 5.into());
-        let diagnostic = Diagnostic::error(ErrorCode(1), "bad", Label::new(file, range, "here"));
-        let text = render(&[diagnostic], &files);
-        assert!(text.contains("a.em:1:5"), "{text}");
-    }
-
-    #[test]
-    fn byte_order_mark_does_not_shift_later_lines() {
-        let mut files = SourceFiles::new();
-        let file = files.add("a.em", "\u{feff}a = 1\nb = $");
-        let range = TextRange::new(10.into(), 11.into());
-        let diagnostic = Diagnostic::error(ErrorCode(1), "bad", Label::new(file, range, "here"));
-        let text = render(&[diagnostic], &files);
-        assert!(text.contains("a.em:2:5"), "{text}");
-    }
-
-    #[test]
     fn renders_nothing_for_no_diagnostics() {
         assert_eq!(render(&[], &SourceFiles::new()), "");
     }

@@ -108,16 +108,12 @@ mod tests {
     }
 
     #[test]
-    fn line_col_does_not_count_the_bom() {
-        // BOM は読み込み時に除くので (docs/spec/lexical.md)、位置は BOM を除いたテキストで数える。
-        assert_eq!(position("\u{feff}ab", 1), "1:2");
-        assert_eq!(position("\u{feff}a\nb", 2), "2:1");
-    }
-
-    #[test]
     fn add_strips_only_a_leading_bom() {
         let mut files = SourceFiles::new();
         let file = files.add("a.em", "\u{feff}a\u{feff}");
         assert_eq!(files.text(file), "a\u{feff}");
+        // BOM は読み込み時に除くので (docs/spec/lexical.md)、位置は BOM を除いたテキストで数える。
+        assert_eq!(position("\u{feff}ab", 1), "1:2");
+        assert_eq!(position("\u{feff}a\nb", 2), "2:1");
     }
 }
