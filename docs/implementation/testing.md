@@ -101,7 +101,7 @@
 
 ### リファクタリング R2b-1
 
-- `x |> f a` を `{ let $pipe = x; f a $pipe }` に脱糖し、`x` を先に評価するようにした ([宣言](../spec/declarations.md) の標準の演算子の表)。`eml_hir/tests/operators.rs` の `pipes_become_applications` の HIR が、`$pipe` の `let` を持つ入れ子のブロックになった (種類2)。評価順は `tests/ui/run/pipe_evaluation_order.em` で確かめる
+- `x |> f a` を、`x` を先に評価する印を付けた呼び出し `f a x` に脱糖し、`x` を先に評価するようにした ([宣言](../spec/declarations.md) の標準の演算子の表)。`eml_hir/tests/operators.rs` の `pipes_become_applications` の HIR の表示が、先に評価する引数に `|>` を付けた `(@g 2 |>(@f |>1))` になった (種類2)。評価順は `tests/ui/run/pipe_evaluation_order.em` で、普通の呼び出しと同じ診断が出ることは `tests/ui/check-fail/pipe_into_function_parameter.em` で確かめる
 
 ## よく使うコマンド
 

@@ -133,7 +133,7 @@ HIR への変換では、名前解決に加えて、次の脱糖と検査を行�
 - 名前は `Res::{Local, Function, Builtin}` に解決する。組み込み (`eml_hir::builtin::Builtin`) は名前解決の最も外側のスコープで、ユーザーの定義で隠せる。S2 で `Prelude` モジュールに移す
 - トップレベルの名前は、変換の中の `ItemScope` (`lower/scope.rs`) で解決する。値と型 (型名とエフェクト名) の2つの名前空間を持ち、ユーザーの定義を先に引き、なければ組み込みを引く
 - `Body` は走査関数を持つ。`walk_child_exprs` は式の直接の子を辿り、`pat_bindings` はパターンが束縛する変数を、`lambda_captures` はラムダが捕まえる変数を返す。段階3と4で式やパターンの種類を足すときは、これらを直す
-- 演算子の列は、標準の演算子の表で precedence climbing により組み直す。`&&` / `||` は `if` に脱糖する。`x |> f` は `{ let $pipe = x; f $pipe }` に、`f <| x` は関数適用に脱糖する。`|>` の左辺を先に評価するため。`else` のない `if` は `else_branch: None` のまま残し、型検査が `Unit` を求める
+- 演算子の列は、標準の演算子の表で precedence climbing により組み直す。`&&` / `||` は `if` に脱糖する。`x |> f` は、`x` を先に評価する印 (`ExprKind::Call::evaluate_first`) を付けた関数適用 `f x` に、`f <| x` は関数適用に脱糖する。型検査は印を見ずに普通の呼び出しとして検査し、Core IR への変換が印の付いた引数を先に評価する。`let` に脱糖すると左辺が推論になり、引数の型を期待した診断が失われるため`else` のない `if` は `else_branch: None` のまま残し、型検査が `Unit` を求める
 
 ## `eml_types` の内部
 
