@@ -252,7 +252,7 @@ impl ProgramBuilder {
                     CExpr::Return(Atom::Var(result)),
                 )
             }
-            Lowering::Perform(op) => {
+            Lowering::Io(op) => {
                 let result = fresh(&result_type);
                 (
                     vec![(result, Rhs::Io(op, atoms))],
@@ -326,7 +326,7 @@ fn split_arrows(ty: &Type, count: usize) -> (Vec<Type>, Type) {
 /// スキームから引くので、ここには変換の種類だけを置く。
 enum Lowering {
     Prim(PrimOp),
-    Perform(IoOp),
+    Io(IoOp),
     /// `>>` は `g (f x)`、`<<` は `f (g x)` である (docs/spec/declarations.md の演算子の表)。
     Compose {
         forward: bool,
@@ -336,7 +336,7 @@ enum Lowering {
 
 fn lowering(builtin: Builtin) -> Lowering {
     match builtin {
-        Builtin::Println => Lowering::Perform(IoOp::Println),
+        Builtin::Println => Lowering::Io(IoOp::Println),
         Builtin::ShowInt => Lowering::Prim(PrimOp::ShowInt),
         Builtin::Not => Lowering::Prim(PrimOp::Not),
         Builtin::IntNeg => Lowering::Prim(PrimOp::IntNeg),
@@ -659,7 +659,7 @@ impl FnLowering<'_> {
         let rest = args.split_off(arity);
         let rhs = match lowering(builtin) {
             Lowering::Prim(op) => Rhs::Prim(op, args),
-            Lowering::Perform(op) => Rhs::Io(op, args),
+            Lowering::Io(op) => Rhs::Io(op, args),
             Lowering::Compose { .. } => {
                 Rhs::call(Call::Direct(self.program.wrapper(builtin), args))
             }

@@ -339,7 +339,7 @@ fn copy(payload: &Payload) -> Payload {
     }
 }
 
-/// 子のオブジェクト。解放と、段階3以降の複製が、同じ子を数える。
+/// 子のオブジェクト。解放と、共有されたオブジェクトの複製 (`take_or_copy`) が、同じ子を数える。
 fn children(payload: &Payload, work: &mut Vec<ObjRef>) {
     let object = |value: &Value| match value {
         Value::Obj(obj) => Some(*obj),
