@@ -72,3 +72,29 @@
 - 末尾にない `if` の条件の計算を join point の範囲に入れたので、`eml_core_ir/tests/lower.rs` の `calls_save_the_variables_used_after_them` の `let t3 = prim >(n0, 0)` が `join` の定義の後ろに移り、`ifs_in_a_condition_nest_join_points` の2つの join point が入れ子でなく並んだ (種類2)。`saved` と `dup` / `decref` は変わっていない
 - `simplify` を入れたので、`ifs_in_a_condition_nest_join_points` の条件の join point が消え、`a` が偽の枝は外側の join point へ直接 `jump j0(2)` するようになった (種類2)。join point の入れ子と `captures` は `nested_join_points_capture_what_outer_join_points_need` で確かめる
 - `ifs_in_a_condition_nest_join_points` は、`simplify` の後は join point の入れ子を示さなくなったので、ユーザーの合意を得て `an_if_in_a_condition_jumps_straight_to_the_outer_join_point` に改名した (種類1)。ソースと期待値は変えていない
+
+### テスト本体の整理 3a
+
+- 次の UI テストを削除した (種類1)。それぞれ、括弧の中のテストが同じ事実を確かめ続ける。UI テストには、機能ごとの代表的なプログラムと、診断ごとの代表的な表示だけを残す ([testing.md](testing.md) の「重複させない」)
+  - `check-fail/stray_tokens.em` (`eml_syntax/tests/parser.rs` の `stray_tokens_are_one_error_until_the_next_item`。E0003 の表示は `check-fail/multiple_errors.em`)
+  - `check-fail/unexpected_character.em` (`check-fail/multiple_errors.em` が同じ E0001 を表示する)
+  - `check-fail/undefined_effect_in_higher_order.em` (`eml_types/tests/check.rs` の `an_undefined_effect_row_is_fresh_at_each_call`)
+  - `check-fail/effect_in_lambda.em` (`eml_types/tests/check.rs` の `a_lambda_cannot_perform_effects_its_expected_type_does_not_allow`)
+  - `check-fail/unhandled_effect.em` (`eml_types/tests/effects.rs` の `an_unhandled_operation_is_not_in_the_row`)
+  - `check-fail/multi_return_clause.em` (`eml_types/tests/effects.rs` の `the_return_clause_of_a_multi_handler_cannot_capture_a_linear_value`)
+  - `check-fail/continuation_through_operation.em` (`eml_types/tests/effects.rs` の `a_continuation_cannot_pass_through_a_polymorphic_operation_parameter`)
+  - `check-fail/later_stage_effects.em` (`eml_hir/tests/effects.rs` の `handlers_with_an_initial_state_come_in_stage_6`)
+  - `check-fail/rigid_type_variable.em` (`eml_types/tests/check.rs` の `rigid_type_variables_do_not_unify_with_other_types`。E2001 の表示は `check-fail/type_mismatch.em`)
+  - `run/jumpless_join_after_call.em` (`eml_core_ir/tests/lower.rs` の `join_points_left_without_jumps_are_removed`)
+- `run/empty.em` を削除した (種類1)。縦の貫通の段階1で `main` を足してから、プログラムの部分が `run/comments_only.em` と同じになっていた。`crates/eml_cli/tests/cli.rs` が使っていた `run/empty.em` は `run/comments_only.em` に、`check-fail/unexpected_character.em` は `check-fail/multiple_errors.em` に置き換えた。終了コードと `[E0001]` の確認は変えていない
+- `run/short_circuit.em` を `run/operators.em` に、`run/strings_and_let.em` を `run/strings_freed_in_branches.em` に統合した (種類1)。統合先になかった場合 (`True && noisy False`、`++` で文字列を作る関数と2回使う文字列) を足したので、stdout の期待値に2行ずつ加わった。短絡評価と文字列の解放を確かめる目的は変わらない
+- `check-fail/not_yet_supported.em` から、段階2で E0004 でなくなった関数値とラムダの行を除き、コメントを `data` の説明に直した (種類1)。`check-fail/continuation_misuse.em` は2回再開する場合だけを残した (種類1)。残りの場合は `eml_types/tests/effects.rs` の `a_continuation_of_a_once_operation_must_be_used_exactly_once` が確かめる
+- `check-fail/later_stage_lambda_syntax.em` を削除し、タプルのパターン、タプル、演算子の参照の E0004 を、`eml_hir/tests/lower.rs` の `constructs_of_later_stages_are_not_yet_supported` に移した (種類1)。同じテストから、段階2で E0004 でなくなった `let g = fn y -> y` を除いた。E0004 の UI テストは `check-fail/not_yet_supported.em` だけになった
+- `eml_syntax` の次のテストを変えた (種類1)
+  - `control.rs` の `arms_at_the_column_of_match_need_indentation` を削除した。`arms_at_the_column_of_match_are_read_as_arms` が同じ先頭の行と同じ E0009 を含む
+  - `nesting.rs` の `nested_let_blocks_report_one_error` (300段) を削除した。`very_deep_nested_let_blocks_do_not_overflow_the_stack` (2万段) が同じ確かめ方で含む
+  - `declarations.rs` の `errors_in_one_declaration_do_not_affect_the_next` の入力から `z : ) Int` の行を除いた。項目の間の回復は `parser.rs` の `recovery_resumes_at_the_next_item` が確かめる
+  - `layout.rs` の単体テスト `aligned_arrow_lines_report_e0009_once` は仮想トークンの列の比較だけを残し、`aligned_arrow_lines_get_empty_blocks` に改名した。E0009 が1件であることは `declarations.rs` の `many_aligned_signature_lines_are_still_one_error` が確かめる
+- `eml_types/tests/check.rs` の `function_typed_parameters_can_be_called_and_passed` と `composition_has_the_prelude_type` を削除した (種類1)。前者は段階1の E0004 のテストの名残で、通る場合は `row_variables_pass_effects_through` と `lambdas_are_checked_against_the_expected_type_or_inferred` が確かめる。後者の `>>` のスキームは `builtin_schemes_are_exported` が確かめる
+- `eml_interp` の単体テスト `runtime_errors_are_displayed_as_before` を `runtime_errors_name_the_fault_and_the_function` に改名した (種類1)。「as before」が指していたリファクタリング R3b の前の文字列は、もう比べる相手がない。中身は変えていない
+- `eml_diagnostics` の `render.rs` の `byte_order_mark_takes_no_column` と `byte_order_mark_does_not_shift_later_lines` を削除し、`source.rs` の `line_col_does_not_count_the_bom` を `add_strips_only_a_leading_bom` に統合した (種類1)。リファクタリング R1 から BOM は `SourceFiles::add` で除くので、表示と `line_col` は BOM を見ない。BOM を除いた後の位置の確認は、統合したテストに残る
