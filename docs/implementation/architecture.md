@@ -90,15 +90,16 @@ eml_diagnostics  Diagnostic 型、FileId と SourceFiles、行と列、ariadne �
 ## `eml_syntax` の内部構成
 
 ```
-lexer.rs       字句解析。トークン列をつなげると元のテキストに戻る (lossless)
+lexer/         字句解析。トークン列をつなげると元のテキストに戻る (lossless)。文字列の字句は lexer/string.rs
+literal.rs     リテラルの値の解釈。lexer の検査と AST の値の取り出しが同じエスケープの表を使う
 layout.rs      レイアウト段。trivia を除いたトークン列に仮想トークンを挿入する
 parser.rs      イベント方式のパーサの仕組み。文法の規則は持たない
-grammar/       文法の規則 (items / types / patterns / expressions)
+grammar/       文法の規則 (items / types / patterns / expressions)。括弧とブロックの深さは grammar/scan.rs の Nesting で数える
 sink.rs        イベント列から rowan の木を組み立てる
-ast.rs         型付き AST ラッパ
-syntax_kind.rs SyntaxKind
+ast.rs         型付き AST ラッパ。範囲 (range)、キーワードの範囲 (keyword_range)、リテラルの値 (Literal::value) を持つ
+syntax_kind.rs SyntaxKind。括弧の種類の判定 (is_opening_bracket / is_closing_bracket) もここに置く
 token_set.rs   トークンの集合 (u128 のビット集合)
-debug_dump.rs  テスト用の木のダンプ (debug_tree)
+debug_dump.rs  木のダンプ (debug_tree)。構文のテストとデバッグに使う
 ```
 
 - lexer は logos で単純なトークンを切り出し、文字列、コメント、演算子の分類などを手書きの層で扱う
@@ -110,6 +111,8 @@ debug_dump.rs  テスト用の木のダンプ (debug_tree)
 - 型付き AST ラッパのアクセサは、HIR への変換で必要になったものから足していく
 - 字句・構文の診断の番号 (E0xxx) は `eml_syntax::codes` に置く ([診断](../spec/diagnostics.md))
 - `parse` は、lexer、レイアウト段、パーサの診断を集め、位置の順に並べて返す
+- `eml_hir` は型付き AST の API (`range`、`keyword_range`、`Literal::value`、各アクセサ) と、識別子や演算子の `SyntaxToken` だけを使う。CST の木の構造 (`.syntax()`) には触れず、`rowan` に依存しない
+- E0004 (未対応) の番号とラベルは、どの段階でも同じ意味なので `eml_diagnostics` に置く (`Diagnostic::not_yet_supported`)
 
 ## `eml_hir` で行う脱糖と検査
 
@@ -162,6 +165,7 @@ HIR への変換では、名前解決に加えて、次の脱糖と検査を行�
 
 - `FileId` と `SourceFiles` (`FileId` → パスとテキスト) は `eml_diagnostics` に置く。マイルストーン1 は単一ファイルなので、中身は実質1件である
 - `TextRange` は `text-size` crate を直接使う (`rowan` が再公開しているものと同じ型)。`eml_diagnostics` は `rowan` に依存しない
+- `SourceFiles::add` は、テキストの先頭の BOM を取り除いてから保存する。以後の位置 (`TextRange`、レイアウトの列、診断の行と列) は、すべて BOM を除いたテキストで数える ([字句](../spec/lexical.md))。lexer、レイアウト段、表示は BOM を扱わない
 - 将来クエリ化するときは、`SourceFiles` を salsa の入力に置き換え、必要なら別の crate に切り出す
 
 ## CLI と lib API

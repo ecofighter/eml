@@ -89,6 +89,12 @@
 
 - `crates/eml_interp/tests/run.rs` のうち、ソースから実行するテストを UI テストに寄せた。UI テストが同じことを確かめていた `hello_world`、`arithmetic_truncates_toward_zero`、`recursion`、`deep_recursion_does_not_overflow_the_stack`、`integer_overflow_is_a_runtime_error`、`division_by_zero_is_a_runtime_error` は削除した。UI テストにない場合を含む `strings_are_freed` と `and_and_or_short_circuit` は、先頭に説明のコメントを足したほかはソースを変えずに `tests/ui/run/strings_freed_in_branches.em` と `tests/ui/run/short_circuit.em` に移した。stdout は元の期待値と同じである。手書きの Core IR や生成したソースが要るテストだけを `eml_interp` に残した
 
+### リファクタリング R1
+
+- BOM を読み込み時に除くようにした ([字句](../spec/lexical.md))。`eml_syntax/tests/lexer.rs` の `shebang_is_trivia_only_at_the_start_of_the_file` から BOM の後の shebang のアサーションを消し、同じことを `tests/parser.rs` の `shebang_after_a_byte_order_mark_is_trivia` で `SourceFiles` を通して確かめる。`byte_order_mark_is_whitespace` は、ファイルの途中の U+FEFF が E0001 になることを確かめる `byte_order_mark_in_the_middle_is_an_unexpected_character` に置き換えた。レイアウト段の単体テスト `byte_order_mark_takes_no_column` は、レイアウト段が BOM を見なくなったので削除した
+- `eml_diagnostics` の `render.rs` の `byte_order_mark_takes_no_column` と `byte_order_mark_does_not_shift_later_lines`、`source.rs` の `line_col_does_not_count_the_bom` は、診断の範囲と `line_col` に渡す位置を、BOM を除いたテキストの位置にした。期待する表示と行と列は変えていない
+- レイアウト規則2の E0009 の例外を外した ([レイアウト規則](../spec/layout.md))。`layout.rs` の単体テスト `block_inside_brackets_must_be_deeper_than_the_enclosing_block` の期待するレイアウト段の出力が、`f = <OPEN> g ( fn x -> <OPEN> <CLOSE> <SEP> y ) <CLOSE>` になった。この例外は、過去の計画で既存のテストを変えないために足したものだった
+
 ## よく使うコマンド
 
 ```sh
