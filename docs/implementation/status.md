@@ -80,7 +80,7 @@ S2、S3 の構文は、S1 の時点でも字句と文法の置き場所を用意
 | R1 | フロントエンド | `eml_syntax` と、`eml_diagnostics` の一部 | 完了 |
 | R2a | 型検査器の内部 | `eml_types` の `table/` と `check/` の分割と改名、row の末尾の `Error`、`display` と `export`、E2002 の矢印 | 完了 |
 | R2b-1 | HIR の構造 | `Signature` と `Generics`、本体の注釈のアリーナ、`ItemScope`、`Body` の走査関数、`\|>` の評価順 | 完了 |
-| R2b-2 | 組み込みと ID | 組み込みの表と lang item、エフェクトと型構成子の ID、`TypedModule` のスキーム。`eml_core_ir` と `eml_interp` も追随させる | 未着手 |
+| R2b-2 | 組み込みと ID | 組み込みの表と lang item、エフェクトと型構成子の ID、`TypedModule` のスキーム。`eml_core_ir` と `eml_interp` も追随させる | 完了 |
 | R3 | Core IR とランタイム | `eml_core_ir`、`eml_runtime`、`eml_interp`、`eml_cli` | 未着手 |
 
 ### テストを変えないために曲げた箇所
@@ -92,7 +92,7 @@ S2、S3 の構文は、S1 の時点でも字句と文法の置き場所を用意
 | 1 | `Frame` に種類の enum を持たせる (段階2の設計) | 別のペイロード `Payload::ApplyFrame` を足し、記述子は `FRAME` を流用した。作業記録には「`Frame` を変えると既存の heap テストの書き換えが要るため」とある | 継続のリストが2種類のペイロードからなる。段階3の継続の捕獲、複製、`drop k` がどちらの種類も扱う必要がある | R3 |
 | 2 | レイアウト規則2を例外なしで適用する | `block_inside_brackets_must_be_deeper_than_the_enclosing_block` を通すために、E0009 を出した行を除く `missing` フラグを足し、後で列0の例外を重ねた | R1 で例外を外し、spec の規則2から消した | R1 |
 | 3 | BOM を読み込み時に除くか、表示だけで直すか | 「既存のテストが変わらない」ほうの表示側の修正を選んだ | R1 で、BOM を読み込み時に除く形にした | R1 |
-| 4 | `TypedModule::signatures` にスキームを持たせる (段階2の設計) | `signatures: Type` を残し、テストの表示のためだけの公開フィールド `kinds` を足した。理由は記録されていない | スキームが後の段階に渡らない | R2 |
+| 4 | `TypedModule::signatures` にスキームを持たせる (段階2の設計) | `signatures: Type` を残し、テストの表示のためだけの公開フィールド `kinds` を足した。理由は記録されていない | R2b-2 で `kinds` を除き、`TypedModule` がスキームを返す形にした | R2 |
 
 ### R1〜R3 で直す項目
 
@@ -122,9 +122,7 @@ R2b-1 で済んだ。`Function` の型の注釈と型変数の表を `Signature`
 
 #### R2b-2 組み込みと ID
 
-- 組み込みの名前、fixity、型、Core IR への変換を1つの表にまとめる。今は `eml_hir`、`eml_types`、`eml_core_ir`、`eml_interp` の約7か所にある。組み込みの型は、ユーザーの関数と同じスキームの経路で作る。`Bool`、`Unit`、`IO`、`main` などは lang item として引く
-- エフェクトと型構成子を ID で表す。`EffectRef::Io` と `Effect::Io` の二重の enum と、`TyCon { Int, String, Bool }` をやめる。row のラベルは、エフェクトの ID と型の引数を持つ。組み込みの型とエフェクトを item にして、`ItemScope` を通して引く
-- `TypedModule` がスキームを返すようにし、テストの表示のためだけの `kinds` を除く (上の表の4)。`Type::Var` が rigid な変数と解けなかった変数を区別できるようにする
+R2b-2 で済んだ。組み込みのシグネチャを Prelude に置いてスキームの経路で型を作り、型とエフェクトを item と ID にし、`TypedModule` がスキームを返すようにした。Core IR への変換の対応 (`PrimOp` などとの対応) は、R3 の「組み込みの変換を R2 の表から引く」で扱う。
 
 #### R3 Core IR とランタイム
 
@@ -144,7 +142,7 @@ R2b-1 で済んだ。`Function` の型の注釈と型変数の表を `Signature`
 |---|---|
 | `eml_diagnostics` | 実装済み。`Diagnostic`、`FileId` と `SourceFiles`、行と列 (`SourceFiles::line_col`)、ariadne による表示 |
 | `eml_syntax` | S1 まで実装済み。lexer、レイアウト段、パーサ、型付き AST ラッパ。入れ子の深さの上限 (E0013、フィールドアクセスの連鎖を含む) を持つ。型付き AST は範囲、キーワードの範囲、リテラルの値を持ち、HIR はこれだけを使う |
-| `eml_hir` | 段階2まで実装済み。宣言の対応づけ、名前解決、演算子の列の組み直し、`&&` / `\|\|` / `\|>` / `<\|` の脱糖、E1001〜E1006。ラムダと、シグネチャの型変数と row 変数の表 |
+| `eml_hir` | 段階2まで実装済み。宣言の対応づけ、名前解決、演算子の列の組み直し、`&&` / `\|\|` / `\|>` / `<\|` の脱糖、E1001〜E1006。ラムダと、シグネチャの型変数と row 変数の表。組み込みのシグネチャは Prelude (`prelude.em`) に、型とエフェクトは ID で表す item にある |
 | `eml_types` | 段階2まで実装済み。型・row・Kind の表現と単一化、シグネチャに対する本体の検査、E2001〜E2005。型変数と row 変数の表、スキームと SCC ごとの Kind の推論、使用回数のパス、関数値と部分適用の検査。線形性と網羅性の検査は未実装 |
 | `eml_core_ir` | 段階2まで実装済み。ANF への変換、Perceus の `dup` / `decref` の挿入。ラムダのクロージャ変換 (捕まえた変数を先頭の引数に持つ関数への持ち上げ)、関数値の呼び出し |
 | `eml_runtime` | 段階2まで実装済み。世代番号つきのヒープ、RC、記述子、`debug_heap` のリーク検出、`OutputSink` (テストで出力を捕まえる `Captured` を含む)。クロージャのオブジェクトと、余った引数のフレーム |
@@ -201,3 +199,4 @@ R2b-1 で済んだ。`Function` の型の注釈と型変数の表を `Signature`
 | リファクタリング R1 | BOM を読み込み時に除き、レイアウト規則2の例外を外した。括弧とブロックの深さの走査を `grammar/scan.rs` に、リテラルの解釈を `literal.rs` にまとめ、lexer を分けた。型付き AST に範囲とリテラルの値を持たせ、`eml_hir` から `rowan` を外した。E0004 を `eml_diagnostics` に移した |
 | リファクタリング R2a | 型検査器の `table.rs` と `check.rs` を分けて名前を直した。未定義のエフェクトの row の末尾を `Error` にして、既知の誤り2件を直した。表示のために Kind の束を解かないようにし、E2002 の副ラベルを本体の row の矢印に向けた |
 | リファクタリング R2b-1 | HIR の `Function` の型の注釈と型変数の表を `Signature` と `Body` に分け、トップレベルの名前の解決を `ItemScope` にまとめた。子の式、パターンの束縛、ラムダが捕まえる変数を `Body` の走査関数にした。`x \|> f` が `x` を先に評価するようにした |
+| リファクタリング R2b-2 | 組み込みのシグネチャを eml の Prelude に置き、型検査がユーザーの関数と同じ経路でスキームを作るようにした。組み込みの名前と見え方と引数の数を1つの表にした。型とエフェクトを item と ID (`TypeDefId`、`EffectId`) で表し、lang item を足した。`TypedModule` がスキームを返し、`Type::Var` を `Rigid` と `Flexible` に分けた |
