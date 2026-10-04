@@ -164,7 +164,7 @@ impl BodyCheck<'_> {
                 )
                 .with_secondary(Label::new(
                     self.file(),
-                    self.signature_range(),
+                    self.body_arrow_range(),
                     "the row of this signature does not include it",
                 ))
                 .with_help(help)

@@ -1,7 +1,7 @@
 use eml_diagnostics::{Diagnostic, FileId, Label, TextRange};
 use eml_hir::{
     Body, ExprId, ExprKind, Function, FunctionId, Literal, LocalId, Module, PatId, PatKind, Res,
-    Stmt,
+    Stmt, TypeRefKind,
 };
 use la_arena::ArenaMap;
 
@@ -59,6 +59,25 @@ impl BodyCheck<'_> {
             .signature
             .as_ref()
             .map_or(self.function.name_range, |signature| signature.range)
+    }
+
+    /// 本体の row が入る矢印の部分の型の範囲。シグネチャの型を、引数の数より1つ少ない回数だけ戻り値の側にたどる。
+    /// たどれないときと引数が1つ以下のときは、シグネチャの型全体を指す (docs/spec/diagnostics.md の E2002)。
+    pub(super) fn body_arrow_range(&self) -> TextRange {
+        let Some(signature) = &self.function.signature else {
+            return self.function.name_range;
+        };
+        let mut id = signature.ty;
+        for _ in 1..self.body.params.len() {
+            match &self.function.types[id].kind {
+                TypeRefKind::Fn { ret, .. } => id = *ret,
+                _ => return signature.range,
+            }
+        }
+        match &self.function.types[id].kind {
+            TypeRefKind::Fn { .. } if self.body.params.len() > 1 => self.function.types[id].range,
+            _ => signature.range,
+        }
     }
 
     /// 等式 `f x y = e` は `fn x -> fn y -> e` と同じなので、引数を1つ消費するごとにシグネチャの矢印を1つたどる。
