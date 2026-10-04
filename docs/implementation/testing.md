@@ -108,6 +108,12 @@
 - Core IR の命令を変えたので、`eml_core_ir/tests/lower.rs` の既存の9件のスナップショットが変わった (種類2)。末尾にない `if` が join point (`join` と `jump`) に、末尾の `if` が各枝で返す `switch` に、値を返すだけの呼び出しが `tailcall` になり、すべてに入口の関数 `entry$main` が加わった。`dup` と `decref` の位置で所有権を確かめる目的は変わらない
 - `eml_interp/tests/run.rs` と `closures.rs` の手書きの Core IR は、`Rhs::Call`、`CoreFn::joins`、`Program::entry` に合わせて組み立てを書き換えた (種類3)。入口は引数を取らないので、手書きの `main` の引数を除いた。期待値は変えていない
 
+### リファクタリング R3b
+
+- `eml_runtime` の `Heap::register` をなくしたので、`registered_descriptors_are_counted_by_name` を削除した (種類1)。段階4で `data` の記述子を足すときに、登録のテストを書き直す。スロットが複数の参照を持つことがなくなったので、`a_slot_with_two_references_releases_both` を削除した (種類1)。フレームが退避した値を1回ずつ解放することは `decref_releases_children` が確かめる
+- Core IR の呼び出しが、呼び出しの後で使う変数を持つようになった。`eml_core_ir/tests/lower.rs` の `partial_and_extra_arguments_use_closures`、`builtins_used_as_values_are_wrapped`、`lambdas_are_lifted_with_their_captures_first`、`calls_in_tail_position_are_tail_calls` の呼び出しの後ろに `[...]` が付いた (種類2)
+- `eml_runtime` の単体テスト、`eml_interp/tests/closures.rs` と `run.rs`、`eml_core_ir/tests/verify.rs` の手書きの Core IR、`eml_cli/tests/api.rs` と `ui.rs` の実行の結果の扱いを、新しい型に合わせて書き換えた (種類3)。期待値は変えていない
+
 ## よく使うコマンド
 
 ```sh

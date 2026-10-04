@@ -166,13 +166,15 @@ HIR への変換では、名前解決に加えて、次の脱糖と検査を行�
 - 変換は、`main` を `()` で呼ぶ入口の関数 `entry$main` を足す (`Program::entry`)
 - ラムダは、捕まえた変数を先頭の引数に持つ関数に持ち上げる (`外側の名前$lambdaN`)。組み込みを値として使うときは、呼ぶだけの関数 (`builtin$名前`) で包む。関数の表は番号を先に取り、変換の途中で関数を足す
 - 呼ばれるものが引数のないトップレベルの値のときは、呼ばれるものを先に評価してから引数を評価する (一般の `Apply` の経路)。左から右の評価順を保つため
-- クロージャは `Payload::Closure(Closure)` (フィールドは `function` と `args`) で、関数値の呼び出し (`Call::Apply`) は eval/apply で行う。余った引数は `Payload::ApplyFrame(ApplyFrame)` (フィールドは `args` と `next`) として継続に積む。設計文書ではフレームの種類の enum にする案だったが、`Frame` を変えると既存の heap のテストの書き換えが要るため、ペイロードの別の種類にした。テストを守るために構造を曲げた例で、リファクタリング R3b でフレームの種類の enum に直す ([status.md](status.md) の「リファクタリング」)
-- 共有されたクロージャを呼ぶときは、捕まえた値の参照を複製してからクロージャを手放す
+- クロージャは `Payload::Closure(Closure)` (フィールドは `function` と `args`) で、関数値の呼び出し (`Call::Apply`) は eval/apply で行う。継続のフレームは `Payload::Frame(Frame)` で、`Frame` は種類の enum である。`Return` は呼び出し元に戻るフレームで、呼び出しの後で使う変数だけを退避する。`Apply` は余った引数を持ち、戻った関数値に適用する。`Io` は継続の最下部の `IO` の handler である。記述子はペイロードの種類から決める
+- 共有されたクロージャを呼ぶときは、`Heap::take_or_copy` で中身を写し、写した中身の子の参照を1つずつ増やしてから元の参照を手放す。`Payload` は `Clone` を導出しないので、`ObjRef` を `dup` せずに複製できない
 - Perceus の挿入 (`perceus.rs`) は、変換の後にプログラム全体にかける独立したパスである。生存解析 (`liveness.rs`) は、`Let` の連鎖と join point の本体の連なりが長くなりうるので、作業の列で後順にたどる。join point の本体を範囲より先に求めるのは、範囲の中の `jump` が、本体で使う変数を要るためである。join point の本体は、本体で使う変数をちょうど1つずつ所有して始まり、`jump` の前で残りを捨てる。関数、プリミティブ、`perform` の引数は、どれも所有権を受け取る
 - verifier (`verify.rs`) は、Perceus の後に、変数と join point の範囲、引数の数、所有権の釣り合いを確かめる。デバッグビルドの `lower` が毎回呼ぶ
+- 退避のパス (`saved.rs`) は、Perceus の後に、各呼び出し (`Rhs::Call`) の `saved` を、その呼び出しの後で使う変数で埋める。RC の対象でない変数と、`jump` の先の join point の本体で使う変数も含む。verifier は、`saved` の RC の対象の変数が所有している変数とちょうど一致すること、呼び出しの後は `saved` の変数と結果の変数だけが範囲にあることを確かめる
 - ヒープはインデックス方式のアリーナで、スロットごとに世代番号を持つ。値は `Copy` な `Value` である
-- 変数のスロットは所有する参照の数を持つ (`eml_runtime::Owned { value, refs }`)。束縛で `refs` を 1 にし、`dup` で 1 足し、ヒープの値を読むたびに 1 引く (読み出しは move)。0 になったスロットは空にする。`decref` も 1 引く。継続のフレームのスロットもこの数を持ち、フレームを解放するときは、保持する参照を `refs` 回ずつ解放する。Perceus の `dup` で 1 つの変数が複数の参照を持つため、読み出しでスロットを空にするだけでは足りない。この規則により、[Core IR とインタプリタ](../spec/core-ir.md) の「変数の読み出しは move、複製は `dup` だけ」が文字どおり成り立つ
-- CEK 機械の継続は、ヒープ上のフレームの連結リストである。呼び出しのフレームは環境 (スロットの配列) を退避する。`jump` と末尾呼び出しはフレームを積まない。最下部に `IO` の handler のフレームを置く
+- 環境のスロットは値だけを持ち、読み出しはスロットを書き換えない。参照の所有は Core IR の命令 (使用、`dup`、`decref`) が表し、verifier が釣り合いを確かめる。呼び出しのフレームには `saved` の変数だけを退避するので、フレームはちょうど所有している参照だけを持ち、解放するときは退避した値を1回ずつ解放する
+- CEK 機械の継続は、ヒープ上のフレームの連結リストである。呼び出しのフレームは環境 (スロットの配列) を退避する。`jump` と末尾呼び出しはフレームを積まない。最下部に `IO` の handler のフレーム (`Frame::Io`) を置く
+- 実行時エラーは `RuntimeError` (実行中の関数で止まった `Fault` と、`debug_heap` の `Leak`) で、`step` は `Result<Step, Fault>` を返す。`Fault` に関数の名前を付けるのは `run` である。表示の文言は CLI と UI テストが使う
 
 ## ソースファイルと位置
 
@@ -192,7 +194,7 @@ HIR への変換では、名前解決に加えて、次の脱糖と検査を行�
 
 - `check(files, file_id) -> Vec<Diagnostic>`
 - `compile(files, file_id) -> Compiled`。`Compiled` は、検査で出た診断 (警告を含む) と、エラーがなければ `Program` を持つ (`program: Option<Arc<Program>>`)。`main` がないこと (E2003) は `compile` だけが検査し、`check` は検査しない ([型と Kind](../spec/types.md) の「推論」)
-- `execute(Arc<Program>, &RunConfig, stdout: OutputSink) -> RunResult`。`RunResult` は `Completed` / `RuntimeError` である
+- `execute(Arc<Program>, &RunConfig, stdout: OutputSink) -> Result<(), RuntimeError>`。`RuntimeError` は `eml_interp` の型を再公開したものである
 
 検査と実行を別の関数に分けるのは、呼び出し側が実行の前に診断を表示できるようにするためである。CLI と UI テストは、`compile` の診断を表示してから `execute` を呼ぶ。
 
