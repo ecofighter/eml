@@ -30,12 +30,18 @@ pub mod codes {
 #[derive(Debug, Default)]
 pub struct TypedModule {
     /// シグネチャのある関数だけを含む。
-    pub signatures: ArenaMap<FunctionId, Type>,
+    pub signatures: ArenaMap<FunctionId, Scheme>,
     /// シグネチャと等式の両方がある関数だけを含む。
     pub bodies: ArenaMap<FunctionId, BodyTypes>,
     pub main: Option<FunctionId>,
-    /// スキームに残った Kind の制約のうち、定数を片側に持つもの。テストの表示で使う。
-    pub kinds: ArenaMap<FunctionId, Vec<KindConstraint>>,
+}
+
+/// 関数の型と、多相化したときに残った Kind の制約のうち、定数を片側に持つもの。変数どうしの制約は部分適用のたびに
+/// 増えて読みにくくなるので出さない。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Scheme {
+    pub ty: Type,
+    pub constraints: Vec<KindConstraint>,
 }
 
 #[derive(Debug, Default)]
@@ -66,10 +72,11 @@ pub fn missing_main(file: FileId) -> Diagnostic {
 pub fn dump(module: &Module, typed: &TypedModule) -> String {
     let mut out = String::new();
     for (id, function) in module.functions.iter() {
-        if let Some(signature) = typed.signatures.get(id) {
-            writeln!(out, "{} : {signature}", function.name).unwrap();
-            if let Some(kinds) = typed.kinds.get(id).filter(|kinds| !kinds.is_empty()) {
-                let kinds: Vec<String> = kinds.iter().map(ToString::to_string).collect();
+        if let Some(scheme) = typed.signatures.get(id) {
+            writeln!(out, "{} : {}", function.name, scheme.ty).unwrap();
+            if !scheme.constraints.is_empty() {
+                let kinds: Vec<String> =
+                    scheme.constraints.iter().map(ToString::to_string).collect();
                 writeln!(out, "  kinds: {}", kinds.join(", ")).unwrap();
             }
         }

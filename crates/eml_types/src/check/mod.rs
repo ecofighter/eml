@@ -106,8 +106,13 @@ pub(crate) fn check_module(module: &Module) -> (TypedModule, Vec<Diagnostic>) {
         ..TypedModule::default()
     };
     for (id, scheme) in schemes.iter() {
-        typed.signatures.insert(id, table.export(scheme.ty));
-        typed.kinds.insert(id, kind_constraints(&table, scheme));
+        typed.signatures.insert(
+            id,
+            crate::Scheme {
+                ty: table.export(scheme.ty),
+                constraints: kind_constraints(&table, scheme),
+            },
+        );
     }
     for (id, typing) in bodies {
         let mut types = BodyTypes::default();

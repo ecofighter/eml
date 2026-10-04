@@ -96,8 +96,8 @@ impl Table {
                     ret: Box::new(self.to_type(ret, solved)),
                 }
             }
-            TyShape::Var(_) => Type::Var("_".to_string()),
-            TyShape::Rigid(rigid) => Type::Var(self.rigids[rigid.0 as usize].name.clone()),
+            TyShape::Var(_) => Type::Flexible,
+            TyShape::Rigid(rigid) => Type::Rigid(self.rigids[rigid.0 as usize].name.clone()),
             TyShape::Error => Type::Error,
         }
     }

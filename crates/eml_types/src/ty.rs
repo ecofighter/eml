@@ -23,7 +23,7 @@ pub struct EffectLabel {
     pub name: String,
 }
 
-/// 型検査の結果として後の段階に渡す型。推論用の変数は解決済みで、解けずに残った変数は `Var("_")` になる。
+/// 型検査の結果として後の段階に渡す型。推論用の変数は解決済みで、解けずに残った変数は `Flexible` になる。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Type {
     Con {
@@ -40,8 +40,10 @@ pub enum Type {
         tail: Option<RowTail>,
         ret: Box<Type>,
     },
-    /// シグネチャの型変数はその名前、推論で解けなかった変数は `_` を持つ。
-    Var(String),
+    /// シグネチャの型変数。
+    Rigid(String),
+    /// 推論で解けなかった変数。`_` と表示する。
+    Flexible,
     Error,
 }
 
@@ -70,7 +72,7 @@ impl Type {
                     || ret.contains_error()
                     || matches!(tail, Some(RowTail::Error))
             }
-            Type::Con { .. } | Type::Var(_) => false,
+            Type::Con { .. } | Type::Rigid(_) | Type::Flexible => false,
         }
     }
 }
@@ -118,7 +120,8 @@ impl fmt::Display for Type {
                 }
                 write!(f, "{ret}")
             }
-            Type::Var(name) => f.write_str(name),
+            Type::Rigid(name) => f.write_str(name),
+            Type::Flexible => f.write_str("_"),
             Type::Error => f.write_str("{error}"),
         }
     }

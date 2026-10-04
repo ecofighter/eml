@@ -24,10 +24,11 @@ pub fn lower(module: &Module, typed: &TypedModule) -> Program {
     }
     for (id, function) in module.functions.iter() {
         let body = function.body.as_ref().expect("checked above");
-        let signature = typed
+        let signature = &typed
             .signatures
             .get(id)
-            .expect("every function has a signature");
+            .expect("every function has a signature")
+            .ty;
         let params = param_types(signature, body.params.len());
         let mut lambdas = 0;
         let core = FnLowering {
@@ -269,7 +270,7 @@ impl FnLowering<'_> {
             // ヒープにない値を無視するので、多めに対象にしても正しく動く (docs/spec/core-ir.md)
             boxed: match ty {
                 Type::Con { id, .. } => *id == self.module.lang.string,
-                Type::Fn { .. } | Type::Var(_) => true,
+                Type::Fn { .. } | Type::Rigid(_) | Type::Flexible => true,
                 _ => false,
             },
         });
