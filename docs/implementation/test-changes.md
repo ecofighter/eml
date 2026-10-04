@@ -106,4 +106,4 @@
   - `eml_syntax/tests/expressions.rs` から、演算子の列、前置の `-`、セクション、被演算子の欠けの9件を新しい `operators.rs` に移した。`control.rs` のラムダ、`let ... in`、`use` の6件を `expressions.rs` に移し、`control.rs` は `if` と `match` だけになった
   - `eml_types/tests/check.rs` から、エフェクトの row の11件を新しい `rows.rs` に移した
   - `eml_core_ir/tests/lower.rs` から、`simplify` の6件を新しい `simplify.rs` に移した
-- `eml_syntax/src/parser.rs` と `eml_runtime/src/heap.rs` の単体テストを、隣の `parser/tests.rs` と `heap/tests.rs` に移した (種類1)。テストがファイルの半分ほどを占めていた。本体は字下げを1段浅くしたほかは変えていない
+- `eml_syntax/src/parser.rs` と `eml_runtime/src/heap.rs` の単体テストを、隣の `parser/tests.rs` と `heap/tests.rs` に移した (種類1)。テストが300行を超え、ファイルの半分ほどを占めていた。本体は字下げを1段浅くしたほかは変えていない
