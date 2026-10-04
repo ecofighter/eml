@@ -1,0 +1,47 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: rendered
+input_file: tests/ui/check-fail/continuation_misuse.em
+---
+[E3001] Error: `k` must be used exactly once, but it may be used more than once
+   ╭─[ check-fail/continuation_misuse.em:9:14 ]
+   │
+ 9 │     | ask () k -> resume k 1 + resume k 2
+   │              ┬  
+   │              ╰── `k` is bound here
+   │ 
+   │ Note: linear values, such as the continuation of a `once` operation and closures that capture one, must be used exactly once
+───╯
+[E3001] Error: `k` must be used exactly once, but some paths do not use it
+    ╭─[ check-fail/continuation_misuse.em:14:14 ]
+    │
+ 14 │     | ask () k -> 0
+    │              ┬  
+    │              ╰── `k` is bound here
+    │ 
+    │ Help: pass `k` to `drop` on the paths that do not use it
+    │ 
+    │ Note: linear values, such as the continuation of a `once` operation and closures that capture one, must be used exactly once
+────╯
+[E3001] Error: a linear value cannot be discarded with `_`
+    ╭─[ check-fail/continuation_misuse.em:19:14 ]
+    │
+ 19 │     | ask () _ -> 0
+    │              ┬  
+    │              ╰── this pattern discards it
+    │ 
+    │ Help: bind it to a name and pass the name to `drop`
+    │ 
+    │ Note: linear values, such as the continuation of a `once` operation and closures that capture one, must be used exactly once
+────╯
+[E3001] Error: `k` must be used exactly once, but an operation clause captures it
+    ╭─[ check-fail/continuation_misuse.em:24:14 ]
+    │
+ 24 │     | ask () k ->
+    │              ┬  
+    │              ╰── `k` is bound here
+    │ 
+    │ Note 1: linear values, such as the continuation of a `once` operation and closures that capture one, must be used exactly once
+    │ 
+    │ Note 2: an operation clause runs each time its operation is performed
+────╯

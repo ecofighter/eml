@@ -1,0 +1,20 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: rendered
+input_file: tests/ui/check-fail/unhandled_effect.em
+---
+[E2002] Error: `ask` performs `Ask`, which the signature of `main` does not allow
+   ╭─[ check-fail/unhandled_effect.em:6:30 ]
+   │
+ 6 │ main () = println (show_int (ask ()))
+   │                              ───┬──  
+   │                                 ╰──── this call performs `Ask`
+   │
+   ├─[ check-fail/unhandled_effect.em:6:30 ]
+   │
+ 5 │ main : Unit -> <IO> Unit
+   │        ────────┬────────  
+   │                ╰────────── the row of this signature does not include it
+   │ 
+   │ Help: add `Ask` to the row of the signature of `main`, as in `-> <Ask> ...`
+───╯

@@ -1,0 +1,45 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: rendered
+input_file: tests/ui/check-fail/operation_declarations.em
+---
+[E1007] Error: an operation cannot have a row on its outermost arrows
+   ╭─[ check-fail/operation_declarations.em:4:21 ]
+   │
+ 4 │   with_row : Int -> <IO> Int
+   │                     ──┬─  
+   │                       ╰─── remove this row
+   │ 
+   │ Note: an operation performs only the effect it belongs to
+───╯
+[E1007] Error: the signature of an operation must be a function type
+   ╭─[ check-fail/operation_declarations.em:5:14 ]
+   │
+ 5 │   constant : Int
+   │              ─┬─  
+   │               ╰─── this type is not a function type
+   │ 
+   │ Help: an operation without arguments takes `Unit`, as in `constant : Unit -> ...`
+───╯
+[E1008] Error: the result type of a `never` operation must be a type variable that does not appear in its parameters
+   ╭─[ check-fail/operation_declarations.em:6:21 ]
+   │
+ 6 │   never stop : a -> a
+   │                     ┬  
+   │                     ╰── this result type
+   │ 
+   │ Note: a `never` operation does not return, so its caller may use the result as any type
+───╯
+[E1003] Error: `helper` is defined more than once
+   ╭─[ check-fail/operation_declarations.em:9:1 ]
+   │
+ 9 │ helper : Int -> Int
+   │ ───┬──  
+   │    ╰──── defined again here
+   │
+   ├─[ check-fail/operation_declarations.em:9:1 ]
+   │
+ 7 │   helper : Int -> Int
+   │   ───┬──  
+   │      ╰──── first defined here
+───╯
