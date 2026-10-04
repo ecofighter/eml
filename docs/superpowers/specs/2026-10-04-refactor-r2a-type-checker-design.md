@@ -8,7 +8,7 @@
 
 R2a は `eml_types` の中に閉じる。リファクタリング全体の方針 (UI テストの出力は原則として変えない、段階3〜5の器の形は作り替えるが機能は実装しない) と、テストの変更の運用 ([testing.md](../../implementation/testing.md)) に従う。
 
-R2a で振る舞いが変わるのは2点である。1つは、row の末尾に `Error` を置くことで、`status.md` にある既知の誤り2件が直ることである。もう1つは、E2002 の副ラベルを spec の定めのとおり矢印に向けることである。どちらもユーザーと合意済みである。
+R2a で振る舞いが変わるのは2点で、どちらもユーザーと合意済みである。1つは、row の末尾に `Error` を置くことで、`status.md` にある既知の誤り2件が直る。もう1つは、E2002 の副ラベルを spec の定めのとおり矢印に向ける。
 
 ## 1. `table.rs` の分割、改名、row の末尾の `Error`
 
@@ -123,7 +123,7 @@ UI テストの出力は変わらない見込みである。上の表にない�
 
 - `crates/eml_types/tests/check.rs`: 未定義のエフェクトを持つ関数が、本体のエフェクトを呼び出し側に伝えないこと。`g : Unit -> <Console> Unit`、`g () = println "x"`、`h : Unit -> Unit`、`h () = g ()` で、E1002 だけが出て E2002 が出ないことを確かめる。
 - `crates/eml_types/tests/check.rs`: 引数が2つの関数の E2002 の副ラベルが、本体の row の矢印の部分の型の先頭を指すこと。`f : Int -> Int -> Unit`、`f a b = println "x"` で、副ラベルの位置が2つ目の `Int` (1行目の12列) になることを確かめる。
-- `crates/eml_types/src/table/tests.rs`:
+- `crates/eml_types/src/table/tests.rs` に、次の5つを足す。
   - 末尾が `Error` の row が、閉じた row とも、末尾が rigid な row とも単一化できること
   - 末尾が推論用の変数の row と単一化すると、その変数が末尾 `Error` の row に束縛されること
   - `include_row` が、呼び出し先と今の row のどちらかの末尾が `Error` なら成功すること
