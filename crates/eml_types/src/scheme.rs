@@ -5,7 +5,7 @@ use eml_hir::{EffectRef, Function, RowRef, RowVarId, TypeRefId, TypeRefKind, Typ
 use la_arena::ArenaMap;
 
 use crate::kind::{Bound, KindVar};
-use crate::table::{Mult, RigidVar, Row, RowVar, Subst, Table, Ty};
+use crate::table::{ArrowLin, RigidVar, Row, RowVar, Subst, Table, Ty};
 use crate::ty::{Effect, Linearity, Multiplicity};
 
 /// 関数ごとの、シグネチャの型変数と row 変数。本体の注釈も同じ変数を指す (docs/spec/types.md の「推論」)。
@@ -68,11 +68,11 @@ impl Scheme {
     pub fn instantiate(&self, table: &mut Table) -> Ty {
         let mut subst = Subst::default();
         for &var in &self.lin_vars {
-            let fresh = table.fresh_lin_kind();
+            let fresh = table.fresh_lin_var();
             subst.lin.insert(var, fresh);
         }
         for &var in &self.mult_vars {
-            let fresh = table.fresh_mult_kind();
+            let fresh = table.fresh_mult_var();
             subst.mult.insert(var, fresh);
         }
         table.copy_lin_constraints(&self.lin_constraints, &subst.lin);
@@ -193,9 +193,9 @@ fn lower(
                 }
             };
             let lin = if outermost_unr {
-                Mult::Known(Linearity::Unr)
+                ArrowLin::Known(Linearity::Unr)
             } else {
-                table.fresh_mult()
+                table.fresh_arrow_lin()
             };
             table.function_with(param, lin, row, ret)
         }

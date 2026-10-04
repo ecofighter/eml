@@ -38,7 +38,7 @@ fn compose(table: &mut Table, forward: bool) -> Ty {
     let (a, b, c) = (table.fresh_var(), table.fresh_var(), table.fresh_var());
     let e = table.fresh_row_var();
     let effectful = |table: &mut Table, from: Ty, to: Ty| {
-        let m = table.fresh_mult();
+        let m = table.fresh_arrow_lin();
         table.function_with(
             from,
             m,
@@ -53,7 +53,7 @@ fn compose(table: &mut Table, forward: bool) -> Ty {
     let g = effectful(table, b, c);
     let result = effectful(table, a, c);
     let (first, second) = if forward { (f, g) } else { (g, f) };
-    let m = table.fresh_mult();
+    let m = table.fresh_arrow_lin();
     let inner = table.function_with(second, m, Row::pure(), result);
     let outer = table.function(first, Row::pure(), inner);
     table.closure_kinds(outer, 3, &[]);

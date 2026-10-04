@@ -8,7 +8,7 @@ use la_arena::ArenaMap;
 use crate::builtins::builtin_type;
 use crate::kind::Bound;
 use crate::scheme::{Rigids, Scheme, lower_signature, lower_type};
-use crate::table::{Row, Table, Ty, TyKind, UnifyError};
+use crate::table::{Row, Table, Ty, TyShape, UnifyError};
 use crate::ty::{Effect, KindConstraint, KindTerm, Linearity, Type};
 use crate::{BodyTypes, TypedModule, codes, scc, usage};
 
@@ -212,15 +212,15 @@ impl BodyCheck<'_> {
         let body = self.body;
         let mut expected = signature;
         for (index, &pat) in body.params.iter().enumerate() {
-            match self.table.kind(expected).clone() {
-                TyKind::Fn {
+            match self.table.shape(expected).clone() {
+                TyShape::Fn {
                     param, row, ret, ..
                 } => {
                     self.bind_pat(pat, param);
                     self.ambient = row;
                     expected = ret;
                 }
-                TyKind::Error => {
+                TyShape::Error => {
                     let error = self.table.error;
                     self.bind_pat(pat, error);
                 }
@@ -297,7 +297,10 @@ impl BodyCheck<'_> {
                 params,
                 body: lambda_body,
             } => {
-                if matches!(self.table.kind(expected), TyKind::Fn { .. } | TyKind::Error) {
+                if matches!(
+                    self.table.shape(expected),
+                    TyShape::Fn { .. } | TyShape::Error
+                ) {
                     self.check_lambda(id, params, *lambda_body, expected, origin);
                 } else {
                     let found = self.infer_expr(id);
@@ -425,7 +428,7 @@ impl BodyCheck<'_> {
     fn fresh_function(&mut self) -> Ty {
         let param = self.table.fresh_var();
         let ret = self.table.fresh_var();
-        let lin = self.table.fresh_mult();
+        let lin = self.table.fresh_arrow_lin();
         let row = Row {
             labels: Vec::new(),
             tail: Some(self.table.fresh_row_var()),
@@ -443,7 +446,7 @@ impl BodyCheck<'_> {
         // 1回の呼び出しの E2002 は、どの引数の矢印で起きても1つだけ報告する
         let mut reported = false;
         for (index, &arg) in args.iter().enumerate() {
-            if let TyKind::Var(_) = self.table.kind(ty) {
+            if let TyShape::Var(_) = self.table.shape(ty) {
                 let function = self.fresh_function();
                 // 新しい変数だけでできた関数型なので、単一化は失敗しない
                 let unified = self.table.unify(ty, function);
@@ -452,8 +455,8 @@ impl BodyCheck<'_> {
                     "a fresh function type always unifies with a variable"
                 );
             }
-            match self.table.kind(ty).clone() {
-                TyKind::Fn {
+            match self.table.shape(ty).clone() {
+                TyShape::Fn {
                     param, row, ret, ..
                 } => {
                     let origin = Origin::Argument {
@@ -466,7 +469,7 @@ impl BodyCheck<'_> {
                     reported |= !ok;
                     ty = ret;
                 }
-                TyKind::Error => {
+                TyShape::Error => {
                     self.infer_expr(arg);
                 }
                 _ => {
@@ -598,7 +601,7 @@ impl BodyCheck<'_> {
         let mut current = expected;
         let mut row = None;
         for (index, &pat) in params.iter().enumerate() {
-            if let TyKind::Var(_) = self.table.kind(current) {
+            if let TyShape::Var(_) = self.table.shape(current) {
                 let function = self.fresh_function();
                 // 新しい変数だけでできた関数型なので、単一化は失敗しない
                 let unified = self.table.unify(current, function);
@@ -607,8 +610,8 @@ impl BodyCheck<'_> {
                     "a fresh function type always unifies with a variable"
                 );
             }
-            match self.table.kind(current).clone() {
-                TyKind::Fn {
+            match self.table.shape(current).clone() {
+                TyShape::Fn {
                     param,
                     row: arrow,
                     ret,
@@ -618,7 +621,7 @@ impl BodyCheck<'_> {
                     row = Some(arrow);
                     current = ret;
                 }
-                TyKind::Error => {
+                TyShape::Error => {
                     let error = self.table.error;
                     self.bind_pat(pat, error);
                     row = None;

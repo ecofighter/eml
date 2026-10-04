@@ -22,9 +22,10 @@ pub(crate) enum TyCon {
     Bool,
 }
 
-/// 関数型の線形性 `m`。内部では最初から Kind 変数を扱う (docs/spec/types.md)。
+/// 関数型の矢印の線形性 `m`。多重度 (`Multiplicity`) と取り違えないよう、名前に矢印を入れる。内部では最初から Kind 変数を扱う
+/// (docs/spec/types.md)。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Mult {
+pub(crate) enum ArrowLin {
     Known(Linearity),
     Var(KindVar),
 }
@@ -47,12 +48,12 @@ impl Row {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) enum TyKind {
+pub(crate) enum TyShape {
     Con(TyCon),
     Record(Vec<(String, Ty)>),
     Fn {
         param: Ty,
-        lin: Mult,
+        lin: ArrowLin,
         row: Row,
         ret: Ty,
     },
@@ -101,7 +102,7 @@ pub(crate) struct Subst {
 }
 
 pub(crate) struct Table {
-    kinds: Vec<TyKind>,
+    shapes: Vec<TyShape>,
     ty_vars: Vec<TyVarInfo>,
     row_vars: Vec<RowVarInfo>,
     rigids: Vec<RigidInfo>,
@@ -118,7 +119,7 @@ pub(crate) struct Table {
 impl Table {
     pub fn new() -> Table {
         let mut table = Table {
-            kinds: Vec::new(),
+            shapes: Vec::new(),
             ty_vars: Vec::new(),
             row_vars: Vec::new(),
             rigids: Vec::new(),
@@ -131,24 +132,24 @@ impl Table {
             unit: Ty(0),
             error: Ty(0),
         };
-        table.int = table.alloc(TyKind::Con(TyCon::Int));
-        table.string = table.alloc(TyKind::Con(TyCon::String));
-        table.bool = table.alloc(TyKind::Con(TyCon::Bool));
-        table.unit = table.alloc(TyKind::Record(Vec::new()));
-        table.error = table.alloc(TyKind::Error);
+        table.int = table.alloc(TyShape::Con(TyCon::Int));
+        table.string = table.alloc(TyShape::Con(TyCon::String));
+        table.bool = table.alloc(TyShape::Con(TyCon::Bool));
+        table.unit = table.alloc(TyShape::Record(Vec::new()));
+        table.error = table.alloc(TyShape::Error);
         table
     }
 
-    pub fn alloc(&mut self, kind: TyKind) -> Ty {
-        self.kinds.push(kind);
-        Ty(self.kinds.len() as u32 - 1)
+    pub fn alloc(&mut self, kind: TyShape) -> Ty {
+        self.shapes.push(kind);
+        Ty(self.shapes.len() as u32 - 1)
     }
 
     /// トップレベルの関数と組み込みの関数型。どちらも `Unr` である。
     pub fn function(&mut self, param: Ty, row: Row, ret: Ty) -> Ty {
-        self.alloc(TyKind::Fn {
+        self.alloc(TyShape::Fn {
             param,
-            lin: Mult::Known(Linearity::Unr),
+            lin: ArrowLin::Known(Linearity::Unr),
             row,
             ret,
         })
@@ -159,8 +160,8 @@ impl Table {
         self.fresh_var_with(linearity)
     }
 
-    pub fn function_with(&mut self, param: Ty, lin: Mult, row: Row, ret: Ty) -> Ty {
-        self.alloc(TyKind::Fn {
+    pub fn function_with(&mut self, param: Ty, lin: ArrowLin, row: Row, ret: Ty) -> Ty {
+        self.alloc(TyShape::Fn {
             param,
             lin,
             row,
@@ -168,16 +169,16 @@ impl Table {
         })
     }
 
-    pub fn fresh_lin_kind(&mut self) -> KindVar {
+    pub fn fresh_lin_var(&mut self) -> KindVar {
         self.linearity.fresh()
     }
 
-    pub fn fresh_mult_kind(&mut self) -> KindVar {
+    pub fn fresh_mult_var(&mut self) -> KindVar {
         self.multiplicity.fresh()
     }
 
-    pub fn fresh_mult(&mut self) -> Mult {
-        Mult::Var(self.linearity.fresh())
+    pub fn fresh_arrow_lin(&mut self) -> ArrowLin {
+        ArrowLin::Var(self.linearity.fresh())
     }
 
     pub fn fresh_var_with(&mut self, linearity: KindVar) -> Ty {
@@ -186,7 +187,7 @@ impl Table {
             linearity,
         });
         let var = TyVar(self.ty_vars.len() as u32 - 1);
-        self.alloc(TyKind::Var(var))
+        self.alloc(TyShape::Var(var))
     }
 
     pub fn fresh_row_var(&mut self) -> RowVar {
@@ -210,7 +211,7 @@ impl Table {
             linearity,
         });
         let rigid = RigidVar(self.rigids.len() as u32 - 1);
-        (self.alloc(TyKind::Rigid(rigid)), rigid)
+        (self.alloc(TyShape::Rigid(rigid)), rigid)
     }
 
     pub fn rigid_linearity(&self, rigid: RigidVar) -> KindVar {
@@ -232,7 +233,7 @@ impl Table {
     }
 
     fn resolve(&self, mut ty: Ty) -> Ty {
-        while let TyKind::Var(var) = &self.kinds[ty.0 as usize] {
+        while let TyShape::Var(var) = &self.shapes[ty.0 as usize] {
             match self.ty_vars[var.0 as usize].binding {
                 Some(bound) => ty = bound,
                 None => break,
@@ -242,8 +243,8 @@ impl Table {
     }
 
     /// 束縛を辿った先の形。
-    pub fn kind(&self, ty: Ty) -> &TyKind {
-        &self.kinds[self.resolve(ty).0 as usize]
+    pub fn shape(&self, ty: Ty) -> &TyShape {
+        &self.shapes[self.resolve(ty).0 as usize]
     }
 
     /// 束縛済みの row 変数を展開し、ラベルを1つの並びにまとめる。
@@ -274,17 +275,17 @@ impl Table {
             return Ok(());
         }
         match (
-            self.kinds[a.0 as usize].clone(),
-            self.kinds[b.0 as usize].clone(),
+            self.shapes[a.0 as usize].clone(),
+            self.shapes[b.0 as usize].clone(),
         ) {
             // 変数を先に束縛する。`Error` と単一化した変数も `Error` に束縛し、後の制約で診断を出させない
-            (TyKind::Var(var), _) => self.bind_var(var, b),
-            (_, TyKind::Var(var)) => self.bind_var(var, a),
+            (TyShape::Var(var), _) => self.bind_var(var, b),
+            (_, TyShape::Var(var)) => self.bind_var(var, a),
             // `Error` が関わる制約からは診断を出さない (docs/spec/types.md の「エラーの扱い」)
-            (TyKind::Error, _) | (_, TyKind::Error) => Ok(()),
-            (TyKind::Rigid(x), TyKind::Rigid(y)) if x == y => Ok(()),
-            (TyKind::Con(x), TyKind::Con(y)) if x == y => Ok(()),
-            (TyKind::Record(xs), TyKind::Record(ys))
+            (TyShape::Error, _) | (_, TyShape::Error) => Ok(()),
+            (TyShape::Rigid(x), TyShape::Rigid(y)) if x == y => Ok(()),
+            (TyShape::Con(x), TyShape::Con(y)) if x == y => Ok(()),
+            (TyShape::Record(xs), TyShape::Record(ys))
                 if xs.len() == ys.len() && xs.iter().zip(&ys).all(|((l, _), (m, _))| l == m) =>
             {
                 for ((_, x), (_, y)) in xs.iter().zip(&ys) {
@@ -293,13 +294,13 @@ impl Table {
                 Ok(())
             }
             (
-                TyKind::Fn {
+                TyShape::Fn {
                     param: p1,
                     lin: l1,
                     row: r1,
                     ret: t1,
                 },
-                TyKind::Fn {
+                TyShape::Fn {
                     param: p2,
                     lin: l2,
                     row: r2,
@@ -307,7 +308,7 @@ impl Table {
                 },
             ) => {
                 self.unify(p1, p2)?;
-                self.unify_mult(l1, l2)?;
+                self.unify_arrow_lin(l1, l2)?;
                 self.unify_row(&r1, &r2)?;
                 self.unify(t1, t2)
             }
@@ -328,22 +329,22 @@ impl Table {
     }
 
     fn occurs(&self, var: TyVar, ty: Ty) -> bool {
-        match self.kind(ty) {
-            TyKind::Var(other) => *other == var,
-            TyKind::Record(fields) => fields.iter().any(|(_, field)| self.occurs(var, *field)),
-            TyKind::Fn { param, ret, .. } => self.occurs(var, *param) || self.occurs(var, *ret),
-            TyKind::Con(_) | TyKind::Rigid(_) | TyKind::Error => false,
+        match self.shape(ty) {
+            TyShape::Var(other) => *other == var,
+            TyShape::Record(fields) => fields.iter().any(|(_, field)| self.occurs(var, *field)),
+            TyShape::Fn { param, ret, .. } => self.occurs(var, *param) || self.occurs(var, *ret),
+            TyShape::Con(_) | TyShape::Rigid(_) | TyShape::Error => false,
         }
     }
 
-    fn unify_mult(&mut self, a: Mult, b: Mult) -> Result<(), UnifyError> {
+    fn unify_arrow_lin(&mut self, a: ArrowLin, b: ArrowLin) -> Result<(), UnifyError> {
         match (a, b) {
-            (Mult::Known(x), Mult::Known(y)) if x == y => Ok(()),
-            (Mult::Known(_), Mult::Known(_)) => Err(UnifyError::Mismatch),
-            (Mult::Var(v), other) | (other, Mult::Var(v)) => {
+            (ArrowLin::Known(x), ArrowLin::Known(y)) if x == y => Ok(()),
+            (ArrowLin::Known(_), ArrowLin::Known(_)) => Err(UnifyError::Mismatch),
+            (ArrowLin::Var(v), other) | (other, ArrowLin::Var(v)) => {
                 let other = match other {
-                    Mult::Known(l) => Bound::Const(l),
-                    Mult::Var(w) => Bound::Var(w),
+                    ArrowLin::Known(l) => Bound::Const(l),
+                    ArrowLin::Var(w) => Bound::Var(w),
                 };
                 self.linearity.require(Bound::Var(v), other);
                 self.linearity.require(other, Bound::Var(v));
@@ -469,19 +470,19 @@ impl Table {
 
     /// 型の Kind の上界の候補。レコードはフィールドの join なので、フィールドごとの境界を並べる (docs/spec/types.md)。
     pub fn kind_bounds(&self, ty: Ty) -> Vec<Bound<Linearity>> {
-        match self.kind(ty) {
-            TyKind::Con(_) => vec![Bound::Const(Linearity::Unr)],
-            TyKind::Record(fields) => fields
+        match self.shape(ty) {
+            TyShape::Con(_) => vec![Bound::Const(Linearity::Unr)],
+            TyShape::Record(fields) => fields
                 .iter()
                 .flat_map(|(_, field)| self.kind_bounds(*field))
                 .collect(),
-            TyKind::Fn { lin, .. } => vec![match lin {
-                Mult::Known(l) => Bound::Const(*l),
-                Mult::Var(v) => Bound::Var(*v),
+            TyShape::Fn { lin, .. } => vec![match lin {
+                ArrowLin::Known(l) => Bound::Const(*l),
+                ArrowLin::Var(v) => Bound::Var(*v),
             }],
-            TyKind::Var(var) => vec![Bound::Var(self.ty_vars[var.0 as usize].linearity)],
-            TyKind::Rigid(rigid) => vec![Bound::Var(self.rigid_linearity(*rigid))],
-            TyKind::Error => Vec::new(),
+            TyShape::Var(var) => vec![Bound::Var(self.ty_vars[var.0 as usize].linearity)],
+            TyShape::Rigid(rigid) => vec![Bound::Var(self.rigid_linearity(*rigid))],
+            TyShape::Error => Vec::new(),
         }
     }
 
@@ -498,15 +499,15 @@ impl Table {
         let mut held: Vec<Ty> = captured.to_vec();
         let mut current = ty;
         for _ in 0..arity {
-            let TyKind::Fn {
+            let TyShape::Fn {
                 param, lin, ret, ..
-            } = self.kind(current).clone()
+            } = self.shape(current).clone()
             else {
                 return;
             };
             let upper = match lin {
-                Mult::Known(l) => Bound::Const(l),
-                Mult::Var(v) => Bound::Var(v),
+                ArrowLin::Known(l) => Bound::Const(l),
+                ArrowLin::Var(v) => Bound::Var(v),
             };
             for &value in &held {
                 self.kind_at_most(value, upper);
@@ -565,12 +566,12 @@ impl Table {
     /// 戻り値の側に並ぶ矢印の閉じた row を、新しい row 変数で開く。純粋な関数を、エフェクトを持つ関数型の引数に
     /// 渡せるようにするため (docs/spec/types.md の「推論」)。引数の型の中は開かない。
     pub fn open_spine(&mut self, ty: Ty) -> Ty {
-        let TyKind::Fn {
+        let TyShape::Fn {
             param,
             lin,
             row,
             ret,
-        } = self.kind(ty).clone()
+        } = self.shape(ty).clone()
         else {
             return ty;
         };
@@ -588,9 +589,9 @@ impl Table {
 
     /// `subst` に従って rigid 変数、row 変数、Kind 変数を置き換えた型を作る。スキームの具体化で使う。
     pub fn copy_type(&mut self, ty: Ty, subst: &Subst) -> Ty {
-        match self.kind(ty).clone() {
-            TyKind::Rigid(rigid) => subst.tys.get(&rigid).copied().unwrap_or(ty),
-            TyKind::Fn {
+        match self.shape(ty).clone() {
+            TyShape::Rigid(rigid) => subst.tys.get(&rigid).copied().unwrap_or(ty),
+            TyShape::Fn {
                 param,
                 lin,
                 row,
@@ -599,7 +600,7 @@ impl Table {
                 let param = self.copy_type(param, subst);
                 let ret = self.copy_type(ret, subst);
                 let lin = match lin {
-                    Mult::Var(v) => Mult::Var(subst.lin.get(&v).copied().unwrap_or(v)),
+                    ArrowLin::Var(v) => ArrowLin::Var(subst.lin.get(&v).copied().unwrap_or(v)),
                     known => known,
                 };
                 let row = self.resolve_row(&row);
@@ -611,14 +612,14 @@ impl Table {
                 };
                 self.function_with(param, lin, row, ret)
             }
-            TyKind::Record(fields) => {
+            TyShape::Record(fields) => {
                 let fields = fields
                     .into_iter()
                     .map(|(label, field)| (label, self.copy_type(field, subst)))
                     .collect();
-                self.alloc(TyKind::Record(fields))
+                self.alloc(TyShape::Record(fields))
             }
-            TyKind::Con(_) | TyKind::Var(_) | TyKind::Error => ty,
+            TyShape::Con(_) | TyShape::Var(_) | TyShape::Error => ty,
         }
     }
 
@@ -629,15 +630,15 @@ impl Table {
         let mut mult = Vec::new();
         let mut work = vec![ty];
         while let Some(ty) = work.pop() {
-            match self.kind(ty) {
-                TyKind::Rigid(rigid) => push_unique(&mut lin, self.rigid_linearity(*rigid)),
-                TyKind::Fn {
+            match self.shape(ty) {
+                TyShape::Rigid(rigid) => push_unique(&mut lin, self.rigid_linearity(*rigid)),
+                TyShape::Fn {
                     param,
                     lin: m,
                     row,
                     ret,
                 } => {
-                    if let Mult::Var(v) = m {
+                    if let ArrowLin::Var(v) = m {
                         push_unique(&mut lin, *v);
                     }
                     if let Some(tail) = self.resolve_row(row).tail
@@ -648,8 +649,8 @@ impl Table {
                     work.push(*ret);
                     work.push(*param);
                 }
-                TyKind::Record(fields) => work.extend(fields.iter().rev().map(|(_, f)| *f)),
-                TyKind::Con(_) | TyKind::Var(_) | TyKind::Error => {}
+                TyShape::Record(fields) => work.extend(fields.iter().rev().map(|(_, f)| *f)),
+                TyShape::Con(_) | TyShape::Var(_) | TyShape::Error => {}
             }
         }
         (lin, mult)
@@ -687,23 +688,23 @@ impl Table {
         let mut names = HashMap::new();
         let mut work = vec![ty];
         while let Some(ty) = work.pop() {
-            match self.kind(ty) {
-                TyKind::Rigid(rigid) => {
+            match self.shape(ty) {
+                TyShape::Rigid(rigid) => {
                     names
                         .entry(self.rigid_linearity(*rigid))
                         .or_insert_with(|| self.export(ty));
                 }
-                TyKind::Fn {
+                TyShape::Fn {
                     param, lin, ret, ..
                 } => {
-                    if let Mult::Var(v) = lin {
+                    if let ArrowLin::Var(v) = lin {
                         names.entry(*v).or_insert_with(|| self.export(ty));
                     }
                     work.push(*ret);
                     work.push(*param);
                 }
-                TyKind::Record(fields) => work.extend(fields.iter().rev().map(|(_, f)| *f)),
-                TyKind::Con(_) | TyKind::Var(_) | TyKind::Error => {}
+                TyShape::Record(fields) => work.extend(fields.iter().rev().map(|(_, f)| *f)),
+                TyShape::Con(_) | TyShape::Var(_) | TyShape::Error => {}
             }
         }
         names
@@ -720,17 +721,17 @@ impl Table {
 
     /// 後の段階に渡す形にする。解けていない型変数と row 変数は、`_` として残す。
     pub fn export(&self, ty: Ty) -> Type {
-        match self.kind(ty).clone() {
-            TyKind::Con(TyCon::Int) => Type::Int,
-            TyKind::Con(TyCon::String) => Type::String,
-            TyKind::Con(TyCon::Bool) => Type::Bool,
-            TyKind::Record(fields) => Type::Record(
+        match self.shape(ty).clone() {
+            TyShape::Con(TyCon::Int) => Type::Int,
+            TyShape::Con(TyCon::String) => Type::String,
+            TyShape::Con(TyCon::Bool) => Type::Bool,
+            TyShape::Record(fields) => Type::Record(
                 fields
                     .into_iter()
                     .map(|(label, field)| (label, self.export(field)))
                     .collect(),
             ),
-            TyKind::Fn {
+            TyShape::Fn {
                 param,
                 lin,
                 row,
@@ -740,8 +741,8 @@ impl Table {
                 Type::Fn {
                     param: Box::new(self.export(param)),
                     linearity: match lin {
-                        Mult::Known(l) => l,
-                        Mult::Var(v) => match &self.lin_solution {
+                        ArrowLin::Known(l) => l,
+                        ArrowLin::Var(v) => match &self.lin_solution {
                             Some(solution) => {
                                 // 解いた後に Kind 変数を作ると解が古くなる。`export` は解いた後に変数を作らない前提である
                                 debug_assert!(v.index() < solution.len());
@@ -760,9 +761,9 @@ impl Table {
                     ret: Box::new(self.export(ret)),
                 }
             }
-            TyKind::Var(_) => Type::Var("_".to_string()),
-            TyKind::Rigid(rigid) => Type::Var(self.rigids[rigid.0 as usize].name.clone()),
-            TyKind::Error => Type::Error,
+            TyShape::Var(_) => Type::Var("_".to_string()),
+            TyShape::Rigid(rigid) => Type::Var(self.rigids[rigid.0 as usize].name.clone()),
+            TyShape::Error => Type::Error,
         }
     }
 }
@@ -1047,11 +1048,11 @@ mod tests {
     fn closure_kinds_bound_each_partial_application() {
         let mut table = Table::new();
         let (a, ra) = table.fresh_rigid("a");
-        let m = table.fresh_mult();
+        let m = table.fresh_arrow_lin();
         let inner = table.function_with(a, m, Row::pure(), a);
         let f = table.function(a, Row::pure(), inner);
         table.closure_kinds(f, 2, &[]);
-        let Mult::Var(m) = m else { unreachable!() };
+        let ArrowLin::Var(m) = m else { unreachable!() };
         let mu = table.rigid_linearity(ra);
         assert_eq!(
             table.lin_residual(&[mu, m]),
