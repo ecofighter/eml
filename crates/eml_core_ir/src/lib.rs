@@ -11,7 +11,7 @@ mod verify;
 pub use eml_types::Linearity;
 pub use pipeline::lower;
 pub use pretty::pretty;
-pub use verify::{VerifyError, verify};
+pub use verify::{VerifyError, verify, verify_scopes};
 
 /// 複数のスレッドが同じプログラムを実行できるように、実行時は `Arc<Program>` で読み取り専用で共有する。
 #[derive(Debug)]

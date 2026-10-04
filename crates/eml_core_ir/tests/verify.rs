@@ -2,7 +2,7 @@
 
 use eml_core_ir::{
     Atom, CExpr, CExprId, Call, CoreFn, EffectInfo, FnIdx, JoinId, OperationInfo, PrimOp, Program,
-    Rhs, VarId, VarInfo, verify,
+    Rhs, VarId, VarInfo, verify, verify_scopes,
 };
 use eml_test_support::ir::{boxed, program, unboxed, var};
 
@@ -26,6 +26,10 @@ fn function(
 
 fn check(functions: Vec<CoreFn>) -> Result<(), String> {
     verify(&program(functions, 0, &["s"])).map_err(|error| error.to_string())
+}
+
+fn check_scopes(functions: Vec<CoreFn>) -> Result<(), String> {
+    verify_scopes(&program(functions, 0, &["s"])).map_err(|error| error.to_string())
 }
 
 fn concat(var: u32, left: u32, right: u32, body: u32) -> CExpr {
@@ -694,4 +698,106 @@ fn an_unused_capture_released_by_the_body_is_accepted() {
     ];
     let f = function("f", 1, vec![boxed("s"), unboxed("t")], exprs, &[3]);
     assert_eq!(check(vec![f]), Ok(()));
+}
+
+#[test]
+fn scopes_accept_a_value_used_twice_without_dup() {
+    // Perceus より前の IR には `dup` がないので、所有は数えない
+    let exprs = vec![CExpr::Return(var(1)), concat(1, 0, 0, 0)];
+    let twice = function("twice", 1, vec![boxed("s"), boxed("t")], exprs, &[]);
+    assert_eq!(check_scopes(vec![twice]), Ok(()));
+}
+
+#[test]
+fn scopes_accept_a_join_point_before_perceus() {
+    assert_eq!(check_scopes(vec![pick(false)]), Ok(()));
+}
+
+#[test]
+fn scopes_keep_variables_in_scope_after_a_call() {
+    // `saved` は Perceus が決めるので、その前は呼び出しの後で範囲を区切り直さない
+    let k = function("k", 1, vec![unboxed("a")], vec![CExpr::Return(var(0))], &[]);
+    let exprs = vec![
+        CExpr::Return(var(2)),
+        CExpr::Let {
+            var: VarId(2),
+            rhs: Rhs::Prim(PrimOp::IntAdd, vec![var(0), var(1)]),
+            body: CExprId(0),
+        },
+        CExpr::Let {
+            var: VarId(1),
+            rhs: Rhs::call(Call::Direct(FnIdx(0), vec![var(0)])),
+            body: CExprId(1),
+        },
+    ];
+    let f = function(
+        "f",
+        1,
+        vec![unboxed("n"), unboxed("t"), unboxed("t")],
+        exprs,
+        &[],
+    );
+    assert_eq!(check_scopes(vec![k, f]), Ok(()));
+}
+
+#[test]
+fn scopes_reject_a_dup() {
+    let exprs = vec![
+        CExpr::Return(var(1)),
+        concat(1, 0, 0, 0),
+        CExpr::Dup {
+            var: VarId(0),
+            body: CExprId(1),
+        },
+    ];
+    let twice = function("twice", 1, vec![boxed("s"), boxed("t")], exprs, &[]);
+    assert_eq!(
+        check_scopes(vec![twice]),
+        Err("`s0` is duplicated before Perceus in `twice`".to_string())
+    );
+}
+
+#[test]
+fn scopes_reject_a_decref() {
+    let exprs = vec![
+        CExpr::Return(Atom::Int(1)),
+        CExpr::Decref {
+            var: VarId(0),
+            body: CExprId(0),
+        },
+    ];
+    let ignore = function("ignore", 1, vec![boxed("s")], exprs, &[]);
+    assert_eq!(
+        check_scopes(vec![ignore]),
+        Err("`s0` is released before Perceus in `ignore`".to_string())
+    );
+}
+
+#[test]
+fn scopes_reject_a_saved_list() {
+    let exprs = vec![
+        CExpr::Return(var(1)),
+        CExpr::Let {
+            var: VarId(1),
+            rhs: Rhs::Call {
+                call: Call::Direct(FnIdx(0), vec![var(0)]),
+                saved: vec![VarId(0)],
+            },
+            body: CExprId(0),
+        },
+    ];
+    let f = function("f", 1, vec![boxed("s"), boxed("t")], exprs, &[]);
+    assert_eq!(
+        check_scopes(vec![identity(), f]),
+        Err("a call saves [s0] before Perceus in `f`".to_string())
+    );
+}
+
+#[test]
+fn scopes_reject_a_variable_used_outside_its_scope() {
+    let f = function("f", 0, vec![boxed("s")], vec![CExpr::Return(var(0))], &[]);
+    assert_eq!(
+        check_scopes(vec![f]),
+        Err("`s0` is used outside its scope in `f`".to_string())
+    );
 }

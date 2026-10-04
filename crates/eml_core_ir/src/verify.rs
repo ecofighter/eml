@@ -1,6 +1,7 @@
-//! Core IR の不変条件の検査 (docs/spec/core-ir.md)。Perceus の挿入の後のプログラムについて、変数と join point の
-//! 範囲、直接呼び出しとクロージャの引数の数、RC の対象の変数の所有権の釣り合いを確かめる。join point の `captures` は
-//! 宣言として扱い、生存解析には頼らない。
+//! Core IR の不変条件の検査 (docs/spec/core-ir.md)。Perceus の後のプログラムについては、変数と join point の範囲、
+//! 直接呼び出しとクロージャの引数の数、RC の対象の変数の所有権の釣り合いを確かめる (`verify`)。Perceus より前の
+//! プログラムについては、範囲と引数の数を確かめ、RC の命令がまだないことを確かめる (`verify_scopes`)。どちらも
+//! join point の `captures` を宣言として扱い、生存解析には頼らない。
 
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::fmt;
@@ -23,8 +24,23 @@ impl fmt::Display for VerifyError {
 impl std::error::Error for VerifyError {}
 
 pub fn verify(program: &Program) -> Result<(), VerifyError> {
+    verify_at(program, Level::Ownership)
+}
+
+pub fn verify_scopes(program: &Program) -> Result<(), VerifyError> {
+    verify_at(program, Level::Scopes)
+}
+
+/// 検査の度合い。Perceus より前の IR には、所有権を確かめる材料 (`dup`、`decref`、`saved`) がまだない。
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Level {
+    Scopes,
+    Ownership,
+}
+
+fn verify_at(program: &Program, level: Level) -> Result<(), VerifyError> {
     for function in &program.functions {
-        Checker::new(program, function)
+        Checker::new(program, function, level)
             .run()
             .map_err(|message| VerifyError {
                 function: function.name.clone(),
@@ -47,6 +63,7 @@ struct State {
 struct Checker<'a> {
     program: &'a Program,
     function: &'a CoreFn,
+    level: Level,
     tracked: Vec<bool>,
     bound: HashSet<VarId>,
     /// 変数ごとの、範囲に入れたときの区間の番号。区間は呼び出しのたびに新しくなり、呼び出しで退避した変数を新しい
@@ -60,11 +77,17 @@ struct Checker<'a> {
 }
 
 impl<'a> Checker<'a> {
-    fn new(program: &'a Program, function: &'a CoreFn) -> Self {
-        let tracked = tracked(function);
+    fn new(program: &'a Program, function: &'a CoreFn, level: Level) -> Self {
+        // Perceus より前は所有を数えないので、どの変数も RC の対象として扱わない。束縛、使用、join point の入口、
+        // `jump` の所有の検査は、これで範囲の検査だけになる
+        let tracked = match level {
+            Level::Ownership => tracked(function),
+            Level::Scopes => vec![false; function.vars.len()],
+        };
         Checker {
             program,
             function,
+            level,
             tracked,
             bound: HashSet::new(),
             stamps: vec![None; function.vars.len()],
@@ -102,22 +125,35 @@ impl<'a> Checker<'a> {
                 CExpr::Let { var, rhs, body } => {
                     self.check_rhs(&mut state, rhs)?;
                     if let Rhs::Call { saved, .. } = rhs {
-                        self.check_saved(&state, saved)?;
-                        // 呼び出しの後は、退避した変数だけが範囲に残る
-                        self.epoch = self.next_epoch;
-                        self.next_epoch += 1;
-                        for &var in saved {
-                            self.enter_scope(var);
+                        match self.level {
+                            Level::Scopes if !saved.is_empty() => {
+                                return Err(format!(
+                                    "a call saves {} before Perceus",
+                                    self.names(saved)
+                                ));
+                            }
+                            Level::Scopes => {}
+                            Level::Ownership => {
+                                self.check_saved(&state, saved)?;
+                                // 呼び出しの後は、退避した変数だけが範囲に残る
+                                self.epoch = self.next_epoch;
+                                self.next_epoch += 1;
+                                for &var in saved {
+                                    self.enter_scope(var);
+                                }
+                            }
                         }
                     }
                     self.bind(&mut state, *var)?;
                     id = *body;
                 }
                 CExpr::Dup { var, body } => {
+                    self.rc_allowed(*var, "duplicated")?;
                     *self.count(&mut state, *var, "duplicated")? += 1;
                     id = *body;
                 }
                 CExpr::Decref { var, body } => {
+                    self.rc_allowed(*var, "released")?;
                     self.give_up(&mut state, *var, "released")?;
                     id = *body;
                 }
@@ -263,6 +299,14 @@ impl<'a> Checker<'a> {
         };
         if left == 0 {
             state.owned.remove(&var);
+        }
+        Ok(())
+    }
+
+    /// RC の命令は Perceus だけが入れる (docs/spec/core-ir.md のパスの表)。
+    fn rc_allowed(&self, var: VarId, what: &str) -> Result<(), String> {
+        if self.level == Level::Scopes {
+            return Err(format!("`{}` is {what} before Perceus", self.name(var)));
         }
         Ok(())
     }
