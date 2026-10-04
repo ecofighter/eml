@@ -49,6 +49,7 @@ fn run_program(functions: Vec<CoreFn>, main: u32, strings: &[&str]) -> String {
         functions,
         entry: FnIdx(main),
         strings: strings.iter().map(|s| s.to_string()).collect(),
+        effects: Vec::new(),
     };
     let (stdout, result) = eml_test_support::execute(program, true);
     result.unwrap();
@@ -68,7 +69,7 @@ fn first(boxed: bool) -> CoreFn {
 fn print_int(n: u32, show: u32, out: u32) -> Vec<Step> {
     vec![
         Step::Let(show, Rhs::Prim(PrimOp::ShowInt, vec![var(n)])),
-        Step::Let(out, Rhs::Perform(IoOp::Println, vec![var(show)])),
+        Step::Let(out, Rhs::Io(IoOp::Println, vec![var(show)])),
     ]
 }
 
@@ -172,9 +173,9 @@ fn a_shared_closure_keeps_its_captured_values() {
                 saved: vec![VarId(2)],
             },
         ),
-        Step::Let(4, Rhs::Perform(IoOp::Println, vec![var(3)])),
+        Step::Let(4, Rhs::Io(IoOp::Println, vec![var(3)])),
         Step::Let(5, Rhs::call(Call::Apply(var(2), vec![Atom::Int(2)]))),
-        Step::Let(6, Rhs::Perform(IoOp::Println, vec![var(5)])),
+        Step::Let(6, Rhs::Io(IoOp::Println, vec![var(5)])),
     ];
     let vars = [
         ("p", false),

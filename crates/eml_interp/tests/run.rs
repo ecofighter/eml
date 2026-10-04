@@ -34,6 +34,7 @@ fn leaking_program() -> Program {
         }],
         entry: FnIdx(0),
         strings: vec!["leaked".to_string()],
+        effects: Vec::new(),
     }
 }
 

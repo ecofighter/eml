@@ -211,7 +211,7 @@ impl<'p> Machine<'p> {
                 let args = self.atoms(args)?;
                 self.prim(*op, &args)?
             }
-            Rhs::Perform(IoOp::Println, args) => {
+            Rhs::Io(IoOp::Println, args) => {
                 // `IO` はユーザーが handle できず、最下部の handler が必ずすぐに再開するので、継続を遡らずにその場で
                 // 実行する (docs/spec/core-ir.md)
                 let args = self.atoms(args)?;
@@ -219,6 +219,13 @@ impl<'p> Machine<'p> {
                 self.out
                     .write_str(&format!("{text}\n"))
                     .map_err(|error| Fault::Output(error.to_string()))?;
+                Value::Unit
+            }
+            // 所有している参照を1つ手放す。継続も RC が1のオブジェクトなので、これで解放される (docs/spec/core-ir.md)
+            Rhs::Drop(atom) => {
+                if let Value::Obj(obj) = self.atom(atom)? {
+                    self.heap.decref(obj).map_err(Fault::Heap)?;
+                }
                 Value::Unit
             }
             Rhs::Call { call, saved } => {
@@ -251,6 +258,9 @@ impl<'p> Machine<'p> {
             Call::Apply(callee, args) => {
                 let callee = self.atom(callee)?;
                 Prepared::Apply(callee, self.atoms(args)?)
+            }
+            Call::Handle { .. } | Call::Perform { .. } | Call::Resume { .. } => {
+                return Err(Fault::Internal("effects are not run yet"));
             }
         };
         if let Some(resume) = resume {

@@ -20,6 +20,22 @@ pub struct Program {
     pub entry: FnIdx,
     /// 文字列リテラルの定数表。`ConstString` が添字で引き、実行のたびに新しい文字列をヒープに作る。
     pub strings: Vec<String>,
+    /// エフェクトの表。添字は `Call::Handle` と `Call::Perform` のエフェクトの番号で、HIR の `EffectId` の添字と同じである。
+    pub effects: Vec<EffectInfo>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EffectInfo {
+    pub name: String,
+    /// 宣言した順の操作。`Call::Handle` の節と `Call::Perform` の操作の番号は、この順の添字である。
+    pub operations: Vec<OperationInfo>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OperationInfo {
+    pub name: String,
+    /// `never` の操作は再開しないので、継続を作らずに捨てる (docs/spec/effects.md)。
+    pub resumable: bool,
 }
 
 impl Program {
@@ -126,7 +142,11 @@ pub enum Rhs {
     MakeClosure(FnIdx, Vec<Atom>),
     Prim(PrimOp, Vec<Atom>),
     ConstString(u32),
-    Perform(IoOp, Vec<Atom>),
+    /// `IO` の操作。最下部の組み込みの handler が必ずすぐに1回再開するので、継続を遡らずにその場で実行する
+    /// (docs/spec/core-ir.md)。
+    Io(IoOp, Vec<Atom>),
+    /// 値の所有権を受け取って捨てる。値は `()` である (docs/spec/core-ir.md の `drop x`)。
+    Drop(Atom),
 }
 
 impl Rhs {
@@ -143,7 +163,8 @@ impl Rhs {
         match self {
             Rhs::Atom(atom) => vec![*atom],
             Rhs::Call { call, .. } => call.atoms(),
-            Rhs::MakeClosure(_, args) | Rhs::Prim(_, args) | Rhs::Perform(_, args) => args.clone(),
+            Rhs::MakeClosure(_, args) | Rhs::Prim(_, args) | Rhs::Io(_, args) => args.clone(),
+            Rhs::Drop(atom) => vec![*atom],
             Rhs::ConstString(_) => Vec::new(),
         }
     }
@@ -156,16 +177,40 @@ pub enum Call {
     Direct(FnIdx, Vec<Atom>),
     /// 関数値の呼び出し。実行時に引数の個数を比べる (eval/apply)。
     Apply(Atom, Vec<Atom>),
+    /// handler フレームを積み、本体のクロージャに `()` を適用する。本体と節と `return` の節は、捕まえた変数を先頭の
+    /// 引数に持つ関数のクロージャである (docs/spec/core-ir.md)。節はエフェクトの操作の順に並ぶ。`ret` が `None` なら、
+    /// 本体の値をそのまま返す。
+    Handle {
+        effect: u32,
+        body: Atom,
+        clauses: Vec<Atom>,
+        ret: Option<Atom>,
+    },
+    /// ユーザーのエフェクトの操作。継続を遡って handler を探し、その節を呼ぶ。
+    Perform {
+        effect: u32,
+        op: u32,
+        args: Vec<Atom>,
+    },
+    /// 継続を再開する。値は handle 式の値である。
+    Resume { k: Atom, arg: Atom },
 }
 
 impl Call {
     /// 呼び出しが使う値。関数値の呼び出しでは、呼ばれる値が先に来る。
     pub fn atoms(&self) -> Vec<Atom> {
         match self {
-            Call::Direct(_, args) => args.clone(),
+            Call::Direct(_, args) | Call::Perform { args, .. } => args.clone(),
             Call::Apply(callee, args) => std::iter::once(*callee)
                 .chain(args.iter().copied())
                 .collect(),
+            Call::Handle {
+                body, clauses, ret, ..
+            } => std::iter::once(*body)
+                .chain(clauses.iter().copied())
+                .chain(*ret)
+                .collect(),
+            Call::Resume { k, arg } => vec![*k, *arg],
         }
     }
 }

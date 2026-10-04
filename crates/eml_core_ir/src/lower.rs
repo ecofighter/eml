@@ -2,14 +2,15 @@ use std::collections::HashMap;
 
 use eml_hir::builtin::Builtin;
 use eml_hir::{
-    Body, ExprId, ExprKind, FunctionId, LangItems, Literal, LocalId, Module, PatId, Res, Stmt,
+    Body, ExprId, ExprKind, FunctionId, LangItems, Literal, LocalId, Module, OpMultiplicity, PatId,
+    Res, Stmt,
 };
 use eml_types::{BodyTypes, Linearity, Type, TypedModule};
 use la_arena::ArenaMap;
 
 use crate::{
-    Atom, CExpr, CExprId, Call, CoreFn, FALSE, FnIdx, IoOp, JoinId, PrimOp, Program, Rhs, TRUE,
-    VarId, VarInfo, perceus, saved,
+    Atom, CExpr, CExprId, Call, CoreFn, EffectInfo, FALSE, FnIdx, IoOp, JoinId, OperationInfo,
+    PrimOp, Program, Rhs, TRUE, VarId, VarInfo, perceus, saved,
 };
 
 /// 診断のエラーがないプログラムだけを受け取る。エラーがあれば `eml_cli` は Core IR を作らない
@@ -66,6 +67,7 @@ pub fn lower(module: &Module, typed: &TypedModule) -> Program {
             .collect(),
         entry,
         strings: builder.strings.values,
+        effects: effect_table(module),
     };
     perceus::insert(&mut program);
     saved::record(&mut program);
@@ -204,7 +206,7 @@ impl ProgramBuilder {
             Lowering::Perform(op) => {
                 let result = fresh(&result_type);
                 (
-                    vec![(result, Rhs::Perform(op, atoms))],
+                    vec![(result, Rhs::Io(op, atoms))],
                     CExpr::Return(Atom::Var(result)),
                 )
             }
@@ -551,7 +553,7 @@ impl FnLowering<'_> {
         let rest = args.split_off(arity);
         let rhs = match lowering(builtin) {
             Lowering::Prim(op) => Rhs::Prim(op, args),
-            Lowering::Perform(op) => Rhs::Perform(op, args),
+            Lowering::Perform(op) => Rhs::Io(op, args),
             Lowering::Compose { .. } => {
                 Rhs::call(Call::Direct(self.program.wrapper(builtin), args))
             }
@@ -728,4 +730,26 @@ impl FnLowering<'_> {
             self.locals.insert(local, value);
         }
     }
+}
+
+/// エフェクトの表。`EffectId` の添字の順に並べ、エフェクトの番号を `EffectId` の添字と同じにする。
+fn effect_table(module: &Module) -> Vec<EffectInfo> {
+    module
+        .effects
+        .iter()
+        .map(|(_, effect)| EffectInfo {
+            name: effect.name.clone(),
+            operations: effect
+                .operations
+                .iter()
+                .map(|&op| {
+                    let operation = &module.operations[op];
+                    OperationInfo {
+                        name: operation.name.clone(),
+                        resumable: operation.multiplicity != OpMultiplicity::Never,
+                    }
+                })
+                .collect(),
+        })
+        .collect()
 }

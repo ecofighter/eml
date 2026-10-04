@@ -1,8 +1,8 @@
 //! 手で組んだ Core IR で、verifier が正しいものを受け入れ、壊れたものを拒むことを確かめる (docs/spec/core-ir.md)。
 
 use eml_core_ir::{
-    Atom, CExpr, CExprId, Call, CoreFn, FnIdx, JoinId, Linearity, PrimOp, Program, Rhs, VarId,
-    VarInfo, verify,
+    Atom, CExpr, CExprId, Call, CoreFn, EffectInfo, FnIdx, JoinId, Linearity, OperationInfo,
+    PrimOp, Program, Rhs, VarId, VarInfo, verify,
 };
 
 fn string(name: &str) -> VarInfo {
@@ -44,6 +44,7 @@ fn check(functions: Vec<CoreFn>) -> Result<(), String> {
         functions,
         entry: FnIdx(0),
         strings: vec!["s".to_string()],
+        effects: Vec::new(),
     };
     verify(&program).map_err(|error| error.to_string())
 }
@@ -442,5 +443,165 @@ fn a_call_that_saves_a_variable_twice_is_rejected() {
     assert_eq!(
         check(vec![identity(), f]),
         Err("a call saves [s0, s0] but owns [s0] in `f`".to_string())
+    );
+}
+
+fn check_with_effects(functions: Vec<CoreFn>, effects: Vec<EffectInfo>) -> Result<(), String> {
+    let program = Program {
+        functions,
+        entry: FnIdx(0),
+        strings: Vec::new(),
+        effects,
+    };
+    verify(&program).map_err(|error| error.to_string())
+}
+
+fn ask_effect() -> Vec<EffectInfo> {
+    vec![EffectInfo {
+        name: "Ask".to_string(),
+        operations: vec![OperationInfo {
+            name: "ask".to_string(),
+            resumable: true,
+        }],
+    }]
+}
+
+/// `handle ask 1 with | ask x k -> resume k x` を持ち上げた形。
+fn handler_program() -> Vec<CoreFn> {
+    let main = function(
+        "main",
+        0,
+        vec![string("c"), string("c"), int("t")],
+        vec![
+            CExpr::Return(var(2)),
+            CExpr::Let {
+                var: VarId(2),
+                rhs: Rhs::Call {
+                    call: Call::Handle {
+                        effect: 0,
+                        body: var(0),
+                        clauses: vec![var(1)],
+                        ret: None,
+                    },
+                    saved: Vec::new(),
+                },
+                body: CExprId(0),
+            },
+            CExpr::Let {
+                var: VarId(1),
+                rhs: Rhs::MakeClosure(FnIdx(2), Vec::new()),
+                body: CExprId(1),
+            },
+            CExpr::Let {
+                var: VarId(0),
+                rhs: Rhs::MakeClosure(FnIdx(1), Vec::new()),
+                body: CExprId(2),
+            },
+        ],
+        &[],
+    );
+    let body = function(
+        "main$handle0",
+        1,
+        vec![int("p")],
+        vec![CExpr::TailCall(Call::Perform {
+            effect: 0,
+            op: 0,
+            args: vec![Atom::Int(1)],
+        })],
+        &[],
+    );
+    let clause = function(
+        "main$handle0$ask",
+        2,
+        vec![int("x"), string("k")],
+        vec![CExpr::TailCall(Call::Resume {
+            k: var(1),
+            arg: var(0),
+        })],
+        &[],
+    );
+    vec![main, body, clause]
+}
+
+#[test]
+fn handlers_operations_and_resume_are_calls() {
+    assert_eq!(check_with_effects(handler_program(), ask_effect()), Ok(()));
+}
+
+#[test]
+fn a_handler_has_a_clause_for_each_operation() {
+    let mut effects = ask_effect();
+    effects[0].operations.push(OperationInfo {
+        name: "tell".to_string(),
+        resumable: true,
+    });
+    assert_eq!(
+        check_with_effects(handler_program(), effects),
+        Err(
+            "a handler of `Ask` has clauses for 1 operations, but the effect has 2 in `main`"
+                .to_string()
+        )
+    );
+}
+
+#[test]
+fn perform_names_an_operation_of_its_effect() {
+    let f = function(
+        "f",
+        0,
+        Vec::new(),
+        vec![CExpr::TailCall(Call::Perform {
+            effect: 0,
+            op: 1,
+            args: Vec::new(),
+        })],
+        &[],
+    );
+    assert_eq!(
+        check_with_effects(vec![f], ask_effect()),
+        Err("`perform` names operation 1 of `Ask`, which has 1 operations in `f`".to_string())
+    );
+}
+
+#[test]
+fn drop_takes_the_ownership_of_its_value() {
+    let once = function(
+        "f",
+        1,
+        vec![string("s"), int("t")],
+        vec![
+            CExpr::Return(var(1)),
+            CExpr::Let {
+                var: VarId(1),
+                rhs: Rhs::Drop(var(0)),
+                body: CExprId(0),
+            },
+        ],
+        &[],
+    );
+    assert_eq!(check_with_effects(vec![once], Vec::new()), Ok(()));
+    let twice = function(
+        "g",
+        1,
+        vec![string("s"), int("t"), int("u")],
+        vec![
+            CExpr::Return(var(2)),
+            CExpr::Let {
+                var: VarId(2),
+                rhs: Rhs::Drop(var(0)),
+                body: CExprId(0),
+            },
+            CExpr::Let {
+                var: VarId(1),
+                rhs: Rhs::Drop(var(0)),
+                body: CExprId(1),
+            },
+        ],
+        &[],
+    );
+    assert_eq!(
+        check_with_effects(vec![twice], Vec::new()),
+        Err("`s0` is used after it was moved in `g`".to_string())
     );
 }

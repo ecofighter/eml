@@ -5,7 +5,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fmt;
 
 use crate::liveness::{Vars, liveness, tracked};
-use crate::{Atom, CExpr, CExprId, Call, CoreFn, JoinId, Program, Rhs, VarId};
+use crate::{Atom, CExpr, CExprId, Call, CoreFn, EffectInfo, JoinId, Program, Rhs, VarId};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VerifyError {
@@ -279,21 +279,54 @@ impl<'a> Checker<'a> {
     }
 
     fn check_call(&self, state: &mut State, call: &Call) -> Result<(), String> {
-        if let Call::Direct(target, args) = call {
-            let target = self.program.function(*target);
-            if args.len() != target.params.len() {
-                return Err(format!(
-                    "a direct call to `{}` passes {} arguments, but it takes {}",
-                    target.name,
-                    args.len(),
-                    target.params.len()
-                ));
+        match call {
+            Call::Direct(target, args) => {
+                let target = self.program.function(*target);
+                if args.len() != target.params.len() {
+                    return Err(format!(
+                        "a direct call to `{}` passes {} arguments, but it takes {}",
+                        target.name,
+                        args.len(),
+                        target.params.len()
+                    ));
+                }
             }
+            Call::Handle {
+                effect, clauses, ..
+            } => {
+                let info = self.effect(*effect)?;
+                if clauses.len() != info.operations.len() {
+                    return Err(format!(
+                        "a handler of `{}` has clauses for {} operations, but the effect has {}",
+                        info.name,
+                        clauses.len(),
+                        info.operations.len()
+                    ));
+                }
+            }
+            Call::Perform { effect, op, .. } => {
+                let info = self.effect(*effect)?;
+                if *op as usize >= info.operations.len() {
+                    return Err(format!(
+                        "`perform` names operation {op} of `{}`, which has {} operations",
+                        info.name,
+                        info.operations.len()
+                    ));
+                }
+            }
+            Call::Apply(..) | Call::Resume { .. } => {}
         }
         for atom in call.atoms() {
             self.consume(state, &atom)?;
         }
         Ok(())
+    }
+
+    fn effect(&self, effect: u32) -> Result<&EffectInfo, String> {
+        self.program
+            .effects
+            .get(effect as usize)
+            .ok_or_else(|| format!("effect {effect} is not in the effect table"))
     }
 
     /// 退避する変数は範囲の中にあり、RC の対象のうち所有している変数とちょうど一致する。フレームがちょうど所有して

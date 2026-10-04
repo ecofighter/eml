@@ -100,7 +100,7 @@ fn rhs_text(program: &Program, function: &CoreFn, rhs: &Rhs) -> String {
         Rhs::Call { call, saved } => {
             let text = match call {
                 Call::Direct(..) => format!("call {}", call_text(program, function, call)),
-                Call::Apply(..) => call_text(program, function, call),
+                _ => call_text(program, function, call),
             };
             if saved.is_empty() {
                 text
@@ -114,7 +114,8 @@ fn rhs_text(program: &Program, function: &CoreFn, rhs: &Rhs) -> String {
         }
         Rhs::Prim(op, a) => format!("prim {}({})", op.name(), args(a)),
         Rhs::ConstString(index) => format!("const {:?}", program.strings[*index as usize]),
-        Rhs::Perform(IoOp::Println, a) => format!("perform println({})", args(a)),
+        Rhs::Io(IoOp::Println, a) => format!("perform println({})", args(a)),
+        Rhs::Drop(a) => format!("drop {}", atom(function, a)),
     }
 }
 
@@ -128,5 +129,44 @@ fn call_text(program: &Program, function: &CoreFn, call: &Call) -> String {
     match call {
         Call::Direct(callee, a) => format!("{}({})", program.function(*callee).name, args(a)),
         Call::Apply(callee, a) => format!("apply {}({})", atom(function, callee), args(a)),
+        Call::Handle {
+            effect,
+            body,
+            clauses,
+            ret,
+        } => {
+            let info = &program.effects[*effect as usize];
+            let clauses: Vec<String> = info
+                .operations
+                .iter()
+                .zip(clauses)
+                .map(|(op, clause)| format!("{}: {}", op.name, atom(function, clause)))
+                .collect();
+            let ret = ret.map_or(String::new(), |ret| {
+                format!(" return {}", atom(function, &ret))
+            });
+            format!(
+                "handle {}({}) {{{}}}{ret}",
+                info.name,
+                atom(function, body),
+                clauses.join(", ")
+            )
+        }
+        Call::Perform {
+            effect,
+            op,
+            args: a,
+        } => {
+            let info = &program.effects[*effect as usize];
+            format!(
+                "perform {}.{}({})",
+                info.name,
+                info.operations[*op as usize].name,
+                args(a)
+            )
+        }
+        Call::Resume { k, arg } => {
+            format!("resume {}({})", atom(function, k), atom(function, arg))
+        }
     }
 }
