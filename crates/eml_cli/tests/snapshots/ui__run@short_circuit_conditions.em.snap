@@ -1,0 +1,21 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{stderr}\")"
+input_file: tests/ui/run/short_circuit_conditions.em
+---
+--- stdout ---
+a
+and: no
+c
+or: yes
+e
+f
+both: yes
+k
+l
+three: no
+g
+h
+1
+kept
+--- stderr ---

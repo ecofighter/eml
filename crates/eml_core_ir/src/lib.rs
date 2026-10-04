@@ -140,6 +140,20 @@ pub enum CExpr {
     },
 }
 
+impl CExpr {
+    /// 式が直接使う値を書き換える口。子の式の値は含まない。
+    pub(crate) fn atoms_mut(&mut self) -> Vec<&mut Atom> {
+        match self {
+            CExpr::Let { rhs, .. } => rhs.atoms_mut(),
+            CExpr::Switch { scrutinee, .. } => vec![scrutinee],
+            CExpr::Jump { arg, .. } => vec![arg],
+            CExpr::Return(atom) => vec![atom],
+            CExpr::TailCall(call) => call.atoms_mut(),
+            CExpr::Join { .. } | CExpr::Dup { .. } | CExpr::Decref { .. } => Vec::new(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Rhs {
     Atom(Atom),
@@ -176,6 +190,18 @@ impl Rhs {
             Rhs::Call { call, .. } => call.atoms(),
             Rhs::MakeClosure(_, args) | Rhs::Prim(_, args) | Rhs::Io(_, args) => args.clone(),
             Rhs::Drop(atom) => vec![*atom],
+            Rhs::ConstString(_) => Vec::new(),
+        }
+    }
+
+    /// 右辺が使う値を書き換える口。`atoms` と同じ順に並ぶ。
+    pub(crate) fn atoms_mut(&mut self) -> Vec<&mut Atom> {
+        match self {
+            Rhs::Atom(atom) | Rhs::Drop(atom) => vec![atom],
+            Rhs::Call { call, .. } => call.atoms_mut(),
+            Rhs::MakeClosure(_, args) | Rhs::Prim(_, args) | Rhs::Io(_, args) => {
+                args.iter_mut().collect()
+            }
             Rhs::ConstString(_) => Vec::new(),
         }
     }
@@ -222,6 +248,21 @@ impl Call {
                 .chain(*ret)
                 .collect(),
             Call::Resume { k, arg } => vec![*k, *arg],
+        }
+    }
+
+    /// 呼び出しが使う値を書き換える口。`atoms` と同じ順に並ぶ。
+    pub(crate) fn atoms_mut(&mut self) -> Vec<&mut Atom> {
+        match self {
+            Call::Direct(_, args) | Call::Perform { args, .. } => args.iter_mut().collect(),
+            Call::Apply(callee, args) => std::iter::once(callee).chain(args.iter_mut()).collect(),
+            Call::Handle {
+                body, clauses, ret, ..
+            } => std::iter::once(body)
+                .chain(clauses.iter_mut())
+                .chain(ret.iter_mut())
+                .collect(),
+            Call::Resume { k, arg } => vec![k, arg],
         }
     }
 }

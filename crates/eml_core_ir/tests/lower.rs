@@ -263,19 +263,17 @@ fn ifs_in_a_condition_nest_join_points() {
         let t4 = prim +(t3, 1)
         return t4
       }
-      join j1(t2) [] {
-        switch t2 {
-          #0 ->
-            jump j0(2)
-          #1 ->
-            jump j0(1)
-        }
-      }
       switch a0 {
         #0 ->
-          jump j1(#0)
+          jump j0(2)
         #1 ->
-          jump j1(b1)
+          let t2 = b1
+          switch t2 {
+            #0 ->
+              jump j0(2)
+            #1 ->
+              jump j0(1)
+          }
       }
     }
     fn main(p0) {
@@ -513,6 +511,96 @@ fn a_join_point_that_passes_its_value_on_is_forwarded() {
               jump j0(2)
             #1 ->
               jump j0(1)
+          }
+      }
+    }
+    fn main(p0) {
+      return ()
+    }
+    fn entry$main() {
+      tailcall main(())
+    }
+    ");
+}
+
+#[test]
+fn known_tags_jump_straight_to_their_arm() {
+    // `a && b` の偽は分かっているので、`a` が偽の枝は条件の値で分岐せずに `2` を返す
+    let text = "both : Bool -> Bool -> Int\nboth a b = if a && b then 1 else 2\n\nmain : Unit -> <IO> Unit\nmain () = ()";
+    insta::assert_snapshot!(core_text(text), @r"
+    fn both(a0, b1) {
+      switch a0 {
+        #0 ->
+          return 2
+        #1 ->
+          let t2 = b1
+          switch t2 {
+            #0 ->
+              return 2
+            #1 ->
+              return 1
+          }
+      }
+    }
+    fn main(p0) {
+      return ()
+    }
+    fn entry$main() {
+      tailcall main(())
+    }
+    ");
+}
+
+#[test]
+fn an_arm_reached_twice_stays_a_join_point() {
+    // `||` の真の枝は2か所から来るので join point に残り、偽の枝は1か所からなので戻す
+    let text = "either : Bool -> Bool -> String -> String\neither a b s = if a || b then s ++ \"!\" else s\n\nmain : Unit -> <IO> Unit\nmain () = ()";
+    insta::assert_snapshot!(core_text(text), @r#"
+    fn either(a0, b1, s2) {
+      join j0(u7) [s2] {
+        let s4 = const "!"
+        let t5 = prim ++(s2, s4)
+        return t5
+      }
+      switch a0 {
+        #0 ->
+          let t3 = b1
+          switch t3 {
+            #0 ->
+              return s2
+            #1 ->
+              jump j0(())
+          }
+        #1 ->
+          jump j0(())
+      }
+    }
+    fn main(p0) {
+      return ()
+    }
+    fn entry$main() {
+      tailcall main(())
+    }
+    "#);
+}
+
+#[test]
+fn split_arms_use_the_known_tag() {
+    // 切り出した枝の中では、条件の値をその枝のタグに置き換える
+    let text = "describe : Bool -> Bool -> Bool\ndescribe a b =\n  let v = a && b\n  if v then not v else v\n\nmain : Unit -> <IO> Unit\nmain () = ()";
+    insta::assert_snapshot!(core_text(text), @r"
+    fn describe(a0, b1) {
+      switch a0 {
+        #0 ->
+          return #0
+        #1 ->
+          let t2 = b1
+          switch t2 {
+            #0 ->
+              return #0
+            #1 ->
+              let t3 = prim not(#1)
+              return t3
           }
       }
     }
