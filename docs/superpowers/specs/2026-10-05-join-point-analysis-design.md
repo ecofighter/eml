@@ -108,7 +108,30 @@ verifier は `liveness` を使わない。`captures` を、関数の引数と同
 
 - 新しいパス `simplify.rs` を、`lower` の後、Perceus の前に置く。RC の命令がまだないので、書き換えで所有権を扱わずに済む。
 - デバッグビルドでは、Perceus の後の verifier が、最適化した IR も確かめる。
-- 1回の実行では、B2 から B5 を順に1巡だけ回す。不動点まで回すかは、テストで2巡目が要る形が出たら決める。
+- 1回の実行では、B2、B5、B3、B4 の順に1巡だけ回す。B5 を B4 より先に回すのは、B5 で jump がなくなった join point を、同じ巡の B4 で消すためである。不動点まで回すかは、テストで2巡目が要る形が出たら決める。
+- 書き換えは式のアリーナの上でその場で行い、木から外れた式はアリーナに残す。Perceus がアリーナを作り直すときに捨てる。
+
+### B0. 変換: 末尾にない `if` の条件を範囲の中に置く
+
+今の変換は、末尾にない `if` の条件の計算を、join point の定義より前に置く。条件がさらに末尾にない `if` (`&&` や `||` を含む) だと、外側の `if` の join point が、条件の join point の本体の中に入る。
+
+```
+join j1(t2) {                  -- 条件の join point
+  join j0(t3) { 続き }          -- 外側の if の join point
+  switch t2 { #0 -> jump j0(2), #1 -> jump j0(1) }
+}
+switch a0 { #0 -> jump j1(#0), #1 -> jump j1(b1) }
+```
+
+この形では、`j1` の本体が `Switch` でないので B2 が効かない。枝を切り出しても、枝が jump する `j0` が `j1` の本体の中にあり、範囲の外になる。
+
+そこで、変換は `if` 全体 (条件の計算を含む) を join point の範囲として組み立てる。join point の定義は実行時に何もしないので、条件を計算する位置を範囲の中に移しても、評価の順は変わらない。
+
+```
+join j0(t3) { 続き }
+join j1(t2) { switch t2 { #0 -> jump j0(2), #1 -> jump j0(1) } }
+switch a0 { #0 -> jump j1(#0), #1 -> jump j1(b1) }
+```
 
 ### B2. 分かっているタグの jump (case-of-case)
 
@@ -129,7 +152,7 @@ verifier は `liveness` を使わない。`captures` を、関数の引数と同
 
 ### B3. jump が1つだけの join point を戻す
 
-範囲の中に jump が1つしかない join point は、その jump を `let param = 値` と本体で置き換え、join point を消す。jump の位置では、本体が使う外側の変数がすべて範囲にある。B2 の後では、元の join point の本体だけから jump される枝の join point がこの形になる。
+範囲の中に jump が1つしかない join point は、その jump を `let param = 値` と本体で置き換え、join point を消す。B2 で作った join point の引数は `()` を受けるだけで本体で使わないので、`let` を作らず本体だけを置く。jump の位置では、本体が使う外側の変数がすべて範囲にある。B2 の後では、元の join point の本体だけから jump される枝の join point がこの形になる。
 
 ### B4. 使われない join point を消す
 
@@ -153,12 +176,14 @@ jump がなくなった join point は、範囲だけを残して消す。B2 で
 - `eml_core_ir/tests/lower.rs` の join point を含むスナップショット (`pick`、`choose`、`around` など) に `captures` の欄が加わる (種類2)。`dup` と `decref` の位置と `saved` の並びは変わらない。変わったら、段階Aの誤りとして扱う。
 - `eml_core_ir/tests/verify.rs` と `eml_interp/tests/run.rs` の手書きの IR に `captures` を足す (種類3)。期待値は変えない。
 - verifier の新しいテストを `verify.rs` に足す。`captures` の書き漏れ、`Join` の時点で範囲の外の変数を `captures` に書いた場合、jump の時点で `captures` の RC の対象を所有していない場合を、それぞれ拒むことを確かめる。
-- `lower.rs` に、呼び出しの後に jump する関数のスナップショットを足す。`saved` が行き先の `captures` を含むことを確かめる。`saved` を Perceus が埋めるようになるので、`saved.rs` が受け持っていたこの経路を直接確かめておく。
+- 呼び出しの後に jump する経路の `saved` が行き先の `captures` を含むことは、既存の `lower.rs` の `calls_save_the_variables_used_after_them` で確かめる (`call twice(s1) [t2]` と `join j0(t5) [t2]`)。`saved` を Perceus が埋めるようになっても、このスナップショットの `saved` の並びは変わらない。
+- `lower.rs` に、範囲の中の join point の本体が外側の join point へ jump する関数のスナップショットを足す。内側の `captures` が、外側の `captures` を含むことを確かめる。
 - 長い文の列の性能は、`eml_interp/tests/run.rs` の入れ子の join point のテストで確かめる (今あるテスト)。
 
 ### 段階B
 
 - `simplify` の Core IR のスナップショットを、B2 から B5 のそれぞれについて足す。
+- B0 で、条件を計算する末尾にない `if` を含むスナップショット (`calls_save_the_variables_used_after_them`、`ifs_in_a_condition_nest_join_points`) の束縛の位置が変わる (種類2)。
 - 既存のスナップショットのうち、`simplify` で形が変わるものは種類2として記録する。`lower.rs` の `ifs_in_a_condition_nest_join_points` (`if (if a then b else False) then 1 else 2`) は B2 の対象そのもので、形が変わる。入れ子の join point を確かめる目的は、`simplify` を通らない形の新しいスナップショットで引き継ぐ。
 - `tests/ui/run/` に、`&&` と `||` を `if` の条件に置き、右辺が `println` を呼ぶテストを足す。短絡評価とエフェクトの順序が保たれることを確かめる。今の `short_circuit.em` は `&&` を引数の位置で使うので、B2 の対象にならない。
 - 既存の UI テストの出力は変わらない。
