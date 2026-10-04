@@ -53,7 +53,7 @@ eml_diagnostics  Diagnostic 型、FileId と SourceFiles、行と列、ariadne �
 ```
 
 - 段階の並びは `eml_cli` → `eml_interp` → `eml_core_ir` → `eml_types` → `eml_hir` → `eml_syntax` → `eml_diagnostics` で、`eml_interp` はさらに `eml_runtime` に依存する
-- `eml_diagnostics` は、診断を出す crate のすべてから使う。現時点で `eml_runtime` と `eml_interp` は診断を出さないので、`eml_diagnostics` に依存していない
+- `eml_diagnostics` は、診断を出す crate のすべてから使う。現時点で `eml_core_ir`、`eml_runtime`、`eml_interp` は診断を出さないので、`eml_diagnostics` に依存していない
 - `eml_test_support` は開発専用の crate で、パイプラインに入らない。各 crate の結合テストが dev-dependency として使う。段階を feature (`hir` < `types` < `core` < `run`) で選び、各 crate は自分の段階までを有効にする。破壊的な変更の途中で下流の crate がまだ組み立たなくても、変更している段階のテストを流せるようにするため ([テスト戦略](testing.md))
 
 ## 各段階の規律
