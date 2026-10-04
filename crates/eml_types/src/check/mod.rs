@@ -1,0 +1,179 @@
+use eml_diagnostics::{Diagnostic, Label};
+use eml_hir::{Function, FunctionId, Module, RowRef, TypeRefId, TypeRefKind};
+use la_arena::ArenaMap;
+
+use crate::kind::Bound;
+use crate::scheme::{Rigids, Scheme, lower_signature};
+use crate::table::{Row, Table};
+use crate::ty::{Effect, KindConstraint, KindTerm, Linearity, Type};
+use crate::{BodyTypes, TypedModule, codes, scc, usage};
+
+mod body;
+mod report;
+
+use body::BodyCheck;
+pub(crate) use body::BodyTyping;
+use report::AmbientSource;
+
+pub(crate) fn check_module(module: &Module) -> (TypedModule, Vec<Diagnostic>) {
+    let mut table = Table::new();
+    let mut diagnostics = Vec::new();
+    let mut rigids = ArenaMap::default();
+    let mut schemes: ArenaMap<FunctionId, Scheme> = ArenaMap::default();
+    for (id, function) in module.functions.iter() {
+        let function_rigids = Rigids::new(&mut table, function);
+        if let Some(signature) = &function.signature {
+            let ty = lower_signature(&mut table, function, &function_rigids, signature.ty);
+            // 部分適用のクロージャは、それまでの引数を捕まえる (docs/spec/types.md の「関数型」)
+            if let Some(body) = &function.body {
+                table.closure_kinds(ty, body.params.len(), &[]);
+            }
+            schemes.insert(id, Scheme::new(ty, &function_rigids));
+        }
+        rigids.insert(id, function_rigids);
+    }
+    let main = module
+        .functions
+        .iter()
+        .find(|(_, function)| function.name == "main")
+        .map(|(id, _)| id);
+    if let Some(id) = main {
+        check_main(module, &table, &schemes, id, &mut diagnostics);
+    }
+    let mut bodies = Vec::new();
+    // 呼ばれる側の SCC から順に検査し、SCC ごとに Kind を多相化する (docs/spec/types.md の「推論」)
+    for component in scc::components(module) {
+        for &id in &component {
+            let function = &module.functions[id];
+            let (Some(scheme), Some(body)) = (schemes.get(id), &function.body) else {
+                continue;
+            };
+            let signature = scheme.ty;
+            let mut checker = BodyCheck {
+                module,
+                function,
+                body,
+                rigids: &rigids[id],
+                schemes: &schemes,
+                table: &mut table,
+                diagnostics: &mut diagnostics,
+                ambient: Row::pure(),
+                ambient_source: AmbientSource::Signature,
+                typing: BodyTyping::default(),
+            };
+            checker.check_function(signature);
+            let typing = checker.typing;
+            usage::constrain(body, &typing, &mut table);
+            bodies.push((id, typing));
+        }
+        for &id in &component {
+            if let Some(scheme) = schemes.get_mut(id) {
+                scheme.generalize(&table);
+            }
+        }
+    }
+    let violated = table.solve_kinds();
+    // 段階2には `Lin` の型がないので、Kind の制約は破れない。違反の診断の番号は段階5で決める
+    debug_assert!(
+        !violated,
+        "a kind constraint was violated without linear types"
+    );
+    let mut typed = TypedModule {
+        main,
+        ..TypedModule::default()
+    };
+    for (id, scheme) in schemes.iter() {
+        typed.signatures.insert(id, table.export(scheme.ty));
+        typed.kinds.insert(id, kind_constraints(&table, scheme));
+    }
+    for (id, typing) in bodies {
+        let mut types = BodyTypes::default();
+        for (expr, &ty) in typing.exprs.iter() {
+            types.exprs.insert(expr, table.export(ty));
+        }
+        for (local, &ty) in typing.locals.iter() {
+            types.locals.insert(local, table.export(ty));
+        }
+        typed.bodies.insert(id, types);
+    }
+    (typed, diagnostics)
+}
+
+fn check_main(
+    module: &Module,
+    table: &Table,
+    schemes: &ArenaMap<FunctionId, Scheme>,
+    id: FunctionId,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    let function = &module.functions[id];
+    let (Some(scheme), Some(signature)) = (schemes.get(id), &function.signature) else {
+        return;
+    };
+    // 未定義のエフェクトや解決できなかった型変数・row 変数の跡から E2004 を連鎖させないため
+    // (docs/spec/types.md の「エラーの扱い」)
+    if has_error(function, signature.ty) {
+        return;
+    }
+    let found = table.display(scheme.ty);
+    let expected = Type::Fn {
+        param: Box::new(Type::unit()),
+        linearity: Linearity::Unr,
+        effects: vec![Effect::Io],
+        tail: None,
+        ret: Box::new(Type::unit()),
+    };
+    if !found.contains_error() && found != expected {
+        diagnostics.push(Diagnostic::error(
+            codes::INVALID_MAIN_TYPE,
+            "`main` must have type `Unit -> <IO> Unit`",
+            Label::new(module.file, signature.range, format!("found `{found}`")),
+        ));
+    }
+}
+
+fn has_error(function: &Function, id: TypeRefId) -> bool {
+    match &function.types[id].kind {
+        TypeRefKind::Error => true,
+        TypeRefKind::Builtin(_) => false,
+        TypeRefKind::Var(_) => false,
+        TypeRefKind::Fn { param, row, ret } => {
+            matches!(row, RowRef::Error) || has_error(function, *param) || has_error(function, *ret)
+        }
+    }
+}
+
+/// スキームに残った制約のうち、定数を片側に持つものを表示用にする。変数どうしの制約は出さない。テストで確かめたいのは
+/// `Unr` の上限が付いたかどうかで、変数どうしの制約は部分適用のたびに増えて読みにくくなるため。
+fn kind_constraints(table: &Table, scheme: &Scheme) -> Vec<KindConstraint> {
+    let names = table.kind_names(scheme.ty);
+    let term = |bound: Bound<Linearity>| match bound {
+        Bound::Const(Linearity::Unr) => Some(KindTerm::Unr),
+        Bound::Const(Linearity::Lin) => Some(KindTerm::Lin),
+        Bound::Var(var) => names.get(&var).cloned().map(KindTerm::Of),
+    };
+    scheme
+        .lin_constraints()
+        .iter()
+        .filter(|(lower, upper)| {
+            matches!(lower, Bound::Const(_)) != matches!(upper, Bound::Const(_))
+        })
+        .filter_map(|&(lower, upper)| {
+            Some(KindConstraint {
+                lower: term(lower)?,
+                upper: term(upper)?,
+            })
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::report::count;
+
+    #[test]
+    fn counts_are_pluralized() {
+        assert_eq!(count(1, "arrow"), "1 arrow");
+        assert_eq!(count(2, "arrow"), "2 arrows");
+    }
+}

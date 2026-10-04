@@ -1,174 +1,16 @@
 use eml_diagnostics::{Diagnostic, FileId, Label, TextRange};
 use eml_hir::{
     Body, ExprId, ExprKind, Function, FunctionId, Literal, LocalId, Module, PatId, PatKind, Res,
-    RowRef, Stmt, TypeRefId, TypeRefKind,
+    Stmt,
 };
 use la_arena::ArenaMap;
 
 use crate::builtins::builtin_type;
-use crate::kind::Bound;
-use crate::scheme::{Rigids, Scheme, lower_signature, lower_type};
+use crate::codes;
+use crate::scheme::{Rigids, Scheme, lower_type};
 use crate::table::{Row, Table, Tail, Ty, TyShape, UnifyError};
-use crate::ty::{Effect, KindConstraint, KindTerm, Linearity, Type};
-use crate::{BodyTypes, TypedModule, codes, scc, usage};
 
-pub(crate) fn check_module(module: &Module) -> (TypedModule, Vec<Diagnostic>) {
-    let mut table = Table::new();
-    let mut diagnostics = Vec::new();
-    let mut rigids = ArenaMap::default();
-    let mut schemes: ArenaMap<FunctionId, Scheme> = ArenaMap::default();
-    for (id, function) in module.functions.iter() {
-        let function_rigids = Rigids::new(&mut table, function);
-        if let Some(signature) = &function.signature {
-            let ty = lower_signature(&mut table, function, &function_rigids, signature.ty);
-            // 部分適用のクロージャは、それまでの引数を捕まえる (docs/spec/types.md の「関数型」)
-            if let Some(body) = &function.body {
-                table.closure_kinds(ty, body.params.len(), &[]);
-            }
-            schemes.insert(id, Scheme::new(ty, &function_rigids));
-        }
-        rigids.insert(id, function_rigids);
-    }
-    let main = module
-        .functions
-        .iter()
-        .find(|(_, function)| function.name == "main")
-        .map(|(id, _)| id);
-    if let Some(id) = main {
-        check_main(module, &table, &schemes, id, &mut diagnostics);
-    }
-    let mut bodies = Vec::new();
-    // 呼ばれる側の SCC から順に検査し、SCC ごとに Kind を多相化する (docs/spec/types.md の「推論」)
-    for component in scc::components(module) {
-        for &id in &component {
-            let function = &module.functions[id];
-            let (Some(scheme), Some(body)) = (schemes.get(id), &function.body) else {
-                continue;
-            };
-            let signature = scheme.ty;
-            let mut checker = BodyCheck {
-                module,
-                function,
-                body,
-                rigids: &rigids[id],
-                schemes: &schemes,
-                table: &mut table,
-                diagnostics: &mut diagnostics,
-                ambient: Row::pure(),
-                ambient_source: AmbientSource::Signature,
-                typing: BodyTyping::default(),
-            };
-            checker.check_function(signature);
-            let typing = checker.typing;
-            usage::constrain(body, &typing, &mut table);
-            bodies.push((id, typing));
-        }
-        for &id in &component {
-            if let Some(scheme) = schemes.get_mut(id) {
-                scheme.generalize(&table);
-            }
-        }
-    }
-    let violated = table.solve_kinds();
-    // 段階2には `Lin` の型がないので、Kind の制約は破れない。違反の診断の番号は段階5で決める
-    debug_assert!(
-        !violated,
-        "a kind constraint was violated without linear types"
-    );
-    let mut typed = TypedModule {
-        main,
-        ..TypedModule::default()
-    };
-    for (id, scheme) in schemes.iter() {
-        typed.signatures.insert(id, table.export(scheme.ty));
-        typed.kinds.insert(id, kind_constraints(&table, scheme));
-    }
-    for (id, typing) in bodies {
-        let mut types = BodyTypes::default();
-        for (expr, &ty) in typing.exprs.iter() {
-            types.exprs.insert(expr, table.export(ty));
-        }
-        for (local, &ty) in typing.locals.iter() {
-            types.locals.insert(local, table.export(ty));
-        }
-        typed.bodies.insert(id, types);
-    }
-    (typed, diagnostics)
-}
-
-fn check_main(
-    module: &Module,
-    table: &Table,
-    schemes: &ArenaMap<FunctionId, Scheme>,
-    id: FunctionId,
-    diagnostics: &mut Vec<Diagnostic>,
-) {
-    let function = &module.functions[id];
-    let (Some(scheme), Some(signature)) = (schemes.get(id), &function.signature) else {
-        return;
-    };
-    // 未定義のエフェクトや解決できなかった型変数・row 変数の跡から E2004 を連鎖させないため
-    // (docs/spec/types.md の「エラーの扱い」)
-    if has_error(function, signature.ty) {
-        return;
-    }
-    let found = table.display(scheme.ty);
-    let expected = Type::Fn {
-        param: Box::new(Type::unit()),
-        linearity: Linearity::Unr,
-        effects: vec![Effect::Io],
-        tail: None,
-        ret: Box::new(Type::unit()),
-    };
-    if !found.contains_error() && found != expected {
-        diagnostics.push(Diagnostic::error(
-            codes::INVALID_MAIN_TYPE,
-            "`main` must have type `Unit -> <IO> Unit`",
-            Label::new(module.file, signature.range, format!("found `{found}`")),
-        ));
-    }
-}
-
-fn has_error(function: &Function, id: TypeRefId) -> bool {
-    match &function.types[id].kind {
-        TypeRefKind::Error => true,
-        TypeRefKind::Builtin(_) => false,
-        TypeRefKind::Var(_) => false,
-        TypeRefKind::Fn { param, row, ret } => {
-            matches!(row, RowRef::Error) || has_error(function, *param) || has_error(function, *ret)
-        }
-    }
-}
-
-/// 型の不一致の由来。診断のラベルと note を決める (docs/spec/diagnostics.md の「型エラー」)。
-#[derive(Debug, Clone)]
-enum Origin {
-    Argument {
-        callee: TextRange,
-        /// 診断の文に埋める呼ばれる側の呼び方。`callee_subject` が作る。
-        name: String,
-        index: usize,
-    },
-    Return,
-    Annotation(TextRange),
-    IfCondition,
-    IfBranches(TextRange),
-    IfWithoutElse,
-    Statement,
-    UnitPattern,
-    LambdaParameter,
-    LambdaBody,
-    /// 推論で決まる型。根拠の場所はない。
-    Inferred,
-}
-
-/// 今の row がどこから来たか。E2002 の言い方を決める (docs/spec/diagnostics.md)。
-#[derive(Debug, Clone)]
-enum AmbientSource {
-    Signature,
-    /// ラムダの最後の矢印の row。ラムダの期待する型の由来を持つ。
-    Lambda(Origin),
-}
+use super::report::{AmbientSource, Origin, callee_subject, count};
 
 /// 1つの本体の推論結果。使用回数のパスも読む。
 #[derive(Default)]
@@ -179,27 +21,27 @@ pub(crate) struct BodyTyping {
     pub pats: ArenaMap<PatId, Ty>,
 }
 
-struct BodyCheck<'a> {
-    module: &'a Module,
-    function: &'a Function,
-    body: &'a Body,
-    rigids: &'a Rigids,
-    schemes: &'a ArenaMap<FunctionId, Scheme>,
-    table: &'a mut Table,
-    diagnostics: &'a mut Vec<Diagnostic>,
+pub(super) struct BodyCheck<'a> {
+    pub(super) module: &'a Module,
+    pub(super) function: &'a Function,
+    pub(super) body: &'a Body,
+    pub(super) rigids: &'a Rigids,
+    pub(super) schemes: &'a ArenaMap<FunctionId, Scheme>,
+    pub(super) table: &'a mut Table,
+    pub(super) diagnostics: &'a mut Vec<Diagnostic>,
     /// 本体が起こしてよいエフェクト。シグネチャで最後にたどった矢印の row か、本体を囲むラムダで最後にたどった
     /// 矢印の row である。
-    ambient: Row,
-    ambient_source: AmbientSource,
-    typing: BodyTyping,
+    pub(super) ambient: Row,
+    pub(super) ambient_source: AmbientSource,
+    pub(super) typing: BodyTyping,
 }
 
 impl BodyCheck<'_> {
-    fn file(&self) -> FileId {
+    pub(super) fn file(&self) -> FileId {
         self.module.file
     }
 
-    fn signature_range(&self) -> TextRange {
+    pub(super) fn signature_range(&self) -> TextRange {
         self.function
             .signature
             .as_ref()
@@ -208,7 +50,7 @@ impl BodyCheck<'_> {
 
     /// 等式 `f x y = e` は `fn x -> fn y -> e` と同じなので、引数を1つ消費するごとにシグネチャの矢印を1つたどる。
     /// 本体の row は、最後にたどった矢印の row になる。
-    fn check_function(&mut self, signature: Ty) {
+    pub(super) fn check_function(&mut self, signature: Ty) {
         let body = self.body;
         let mut expected = signature;
         for (index, &pat) in body.params.iter().enumerate() {
@@ -497,95 +339,6 @@ impl BodyCheck<'_> {
         ty
     }
 
-    /// 呼び出し先の row が今の row に含まれることを確かめる (docs/spec/types.md の「推論」)。含まれなければ
-    /// `false` を返す。`report` が偽なら診断を出さない。
-    fn perform(&mut self, row: Row, range: TextRange, name: &str, report: bool) -> bool {
-        let ambient = self.ambient.clone();
-        let missing: Vec<String> = match self.table.include_row(&row, &ambient) {
-            Ok(()) => return true,
-            Err(UnifyError::MissingEffects(effects)) => {
-                effects.iter().map(|e| e.name().to_string()).collect()
-            }
-            Err(UnifyError::MissingRowVar(var)) => vec![var],
-            // include_row は呼び出し先側の rigid でない row 変数を通してしか単一化しないので、rigid 変数の束縛 (Mismatch) も
-            // Occurs も起きない
-            Err(other) => unreachable!(
-                "including a row reports only missing effects or a missing row variable: {other:?}"
-            ),
-        };
-        if !report {
-            return false;
-        }
-        let quoted: Vec<String> = missing.iter().map(|name| format!("`{name}`")).collect();
-        let quoted = quoted.join(", ");
-        let file = self.file();
-        let diagnostic = match &self.ambient_source {
-            AmbientSource::Signature => {
-                let function = &self.function.name;
-                // 引数のない関数は矢印を持たず、row を足す先がない。`()` を取る関数にする規則を案内する (docs/spec/declarations.md)
-                let help = if self.body.params.is_empty() {
-                    format!(
-                        "`{function}` takes no parameters, so it cannot perform {quoted}; make it a function taking `()`, as in `{function} : Unit -> <{}> ...` with `{function} () = ...`",
-                        missing.join(", ")
-                    )
-                } else {
-                    format!(
-                        "add {quoted} to the row of the signature of `{function}`, as in `-> <{}> ...`",
-                        missing.join(", ")
-                    )
-                };
-                Diagnostic::error(
-                    codes::EFFECT_NOT_IN_ROW,
-                    format!(
-                        "{name} performs {quoted}, which the signature of `{function}` does not allow"
-                    ),
-                    Label::new(self.file(), range, format!("this call performs {quoted}")),
-                )
-                .with_secondary(Label::new(
-                    self.file(),
-                    self.signature_range(),
-                    "the row of this signature does not include it",
-                ))
-                .with_help(help)
-            }
-            AmbientSource::Lambda(origin) => {
-                let diagnostic = Diagnostic::error(
-                    codes::EFFECT_NOT_IN_ROW,
-                    format!("{name} performs {quoted}, which this lambda does not allow"),
-                    Label::new(file, range, format!("this call performs {quoted}")),
-                );
-                // ラムダの row を決めた場所を secondary にする (docs/spec/diagnostics.md の E2002)
-                match origin {
-                    Origin::Argument {
-                        callee,
-                        name: callee_name,
-                        index,
-                    } => diagnostic.with_secondary(Label::new(
-                        file,
-                        *callee,
-                        format!("argument {} of {callee_name} does not allow it", index + 1),
-                    )),
-                    Origin::Annotation(annotation) => diagnostic.with_secondary(Label::new(
-                        file,
-                        *annotation,
-                        "this annotation does not allow it",
-                    )),
-                    Origin::Return => diagnostic.with_secondary(Label::new(
-                        file,
-                        self.signature_range(),
-                        format!(
-                            "the signature of `{}` does not allow it",
-                            self.function.name
-                        ),
-                    )),
-                    _ => diagnostic,
-                }
-            }
-        };
-        self.diagnostics.push(diagnostic);
-        false
-    }
-
     /// ラムダを、期待する関数型の矢印を引数ごとにたどって検査する。本体のエフェクトは、外側の関数ではなく、最後に
     /// たどった矢印の row に入る (docs/spec/types.md の「推論」)。
     fn check_lambda(
@@ -710,121 +463,5 @@ impl BodyCheck<'_> {
             )),
             Err(_) => self.mismatch(range, expected, found, origin),
         }
-    }
-
-    fn mismatch(&mut self, range: TextRange, expected: Ty, found: Ty, origin: &Origin) {
-        let file = self.file();
-        let expected = self.table.display(expected);
-        let found = self.table.display(found);
-        let mut diagnostic = Diagnostic::error(
-            codes::TYPE_MISMATCH,
-            "mismatched types",
-            Label::new(
-                file,
-                range,
-                format!("expected `{expected}`, found `{found}`"),
-            ),
-        );
-        diagnostic = match origin {
-            Origin::Argument {
-                callee,
-                name,
-                index,
-            } => diagnostic.with_secondary(Label::new(
-                file,
-                *callee,
-                format!("argument {} of {name}", index + 1),
-            )),
-            Origin::Return => diagnostic.with_secondary(Label::new(
-                file,
-                self.signature_range(),
-                format!(
-                    "expected because of the signature of `{}`",
-                    self.function.name
-                ),
-            )),
-            Origin::Annotation(annotation) => diagnostic.with_secondary(Label::new(
-                file,
-                *annotation,
-                "expected because of this annotation",
-            )),
-            Origin::IfCondition => {
-                diagnostic.with_note("the condition of `if` must have type `Bool`")
-            }
-            Origin::IfBranches(then_branch) => diagnostic.with_secondary(Label::new(
-                file,
-                *then_branch,
-                "the `then` branch has this type",
-            )),
-            Origin::IfWithoutElse => {
-                diagnostic.with_note("an `if` without `else` must have type `Unit`")
-            }
-            Origin::Statement => diagnostic
-                .with_note("a statement that is not the last one in a block must have type `Unit`"),
-            Origin::UnitPattern => diagnostic.with_note("the pattern `()` matches only `Unit`"),
-            Origin::LambdaParameter => diagnostic.with_note(
-                "an annotated lambda parameter must have the parameter type the lambda is expected to have",
-            ),
-            Origin::LambdaBody => diagnostic.with_note(
-                "the body of a lambda must have the return type the lambda is expected to have",
-            ),
-            Origin::Inferred => diagnostic,
-        };
-        self.diagnostics.push(diagnostic);
-    }
-}
-
-/// 診断の文で呼ばれる側を指す言い方。名前で呼んだときはその名前をコードとして引用し、名前のない式は
-/// 地の文の `this expression` にする。名前のない式を引用符で囲むと、そういう名前があるように読めてしまうため。
-fn callee_subject(module: &Module, body: &Body, callee: ExprId) -> String {
-    let name = match &body.exprs[callee].kind {
-        ExprKind::Path(Res::Function(function)) => module.functions[*function].name.as_str(),
-        ExprKind::Path(Res::Builtin(builtin)) => builtin.name(),
-        ExprKind::Path(Res::Local(local)) => body.locals[*local].name.as_str(),
-        _ => return "this expression".to_string(),
-    };
-    format!("`{name}`")
-}
-
-fn count(n: usize, word: &str) -> String {
-    if n == 1 {
-        format!("1 {word}")
-    } else {
-        format!("{n} {word}s")
-    }
-}
-
-/// スキームに残った制約のうち、定数を片側に持つものを表示用にする。変数どうしの制約は出さない。テストで確かめたいのは
-/// `Unr` の上限が付いたかどうかで、変数どうしの制約は部分適用のたびに増えて読みにくくなるため。
-fn kind_constraints(table: &Table, scheme: &Scheme) -> Vec<KindConstraint> {
-    let names = table.kind_names(scheme.ty);
-    let term = |bound: Bound<Linearity>| match bound {
-        Bound::Const(Linearity::Unr) => Some(KindTerm::Unr),
-        Bound::Const(Linearity::Lin) => Some(KindTerm::Lin),
-        Bound::Var(var) => names.get(&var).cloned().map(KindTerm::Of),
-    };
-    scheme
-        .lin_constraints()
-        .iter()
-        .filter(|(lower, upper)| {
-            matches!(lower, Bound::Const(_)) != matches!(upper, Bound::Const(_))
-        })
-        .filter_map(|&(lower, upper)| {
-            Some(KindConstraint {
-                lower: term(lower)?,
-                upper: term(upper)?,
-            })
-        })
-        .collect()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::count;
-
-    #[test]
-    fn counts_are_pluralized() {
-        assert_eq!(count(1, "arrow"), "1 arrow");
-        assert_eq!(count(2, "arrow"), "2 arrows");
     }
 }
