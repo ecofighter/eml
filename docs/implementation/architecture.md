@@ -130,10 +130,11 @@ HIR への変換では、名前解決に加えて、次の脱糖と検査を行�
 - `Module` はトップレベルの関数の `Arena<Function>` を持つ。本体は関数ごとの `Body` (`exprs`、`pats`、`locals` のアリーナ) に置く。後でクエリ化したときに関数単位で再計算できるようにするため (rust-analyzer と同じ分け方)。型の注釈は、シグネチャのものを `Signature::types` に、本体のものを `Body::types` に置く。本体を書き換えてもシグネチャが変わらないようにするため
 - 型変数と row 変数の表は `Signature::generics` (`Generics`) に置く。シグネチャで定義し、本体の注釈は引くだけにする。ラムダの引数は、ラムダの本体だけで見えるスコープに入る
 - シグネチャと等式は名前で対応づけてから、並び方を検査する。シグネチャか等式のない関数も `Function` として残し (`signature` か `body` が `None`)、呼び出し側で名前の誤りを連鎖させない
-- 名前は `Res::{Local, Function, Builtin}` に解決する。組み込みは名前解決の最も外側のスコープで、ユーザーの定義で隠せる。組み込みの名前、見え方 (名前で引く値、演算子、名前で引けない内部用)、引数の数は `eml_hir::builtin::BUILTINS` の表に、シグネチャは eml のソースで書いた Prelude (`crates/eml_hir/src/prelude.em`) に置く。変換のはじめに Prelude を構文解析し、`Module::builtins` に置く。Prelude の範囲には `FileId::PRELUDE` を使い、診断には出さない。S2 で `Prelude` モジュールに移す
-- 型とエフェクトは item (`Module::types`、`Module::effects`) で、ID (`TypeDefId`、`EffectId`) で参照する。今は組み込みの `Int`、`String`、`Bool`、`Unit` と `IO` だけを、変換のはじめに登録する。処理系が役割で引く item は `Module::lang` (`LangItems`) にある
+- 名前は `Res::{Local, Function, Operation, Builtin}` に解決する。組み込みは名前解決の最も外側のスコープで、ユーザーの定義で隠せる。組み込みの名前、見え方 (名前で引く値、演算子、名前で引けない内部用)、引数の数は `eml_hir::builtin::BUILTINS` の表に、シグネチャは eml のソースで書いた Prelude (`crates/eml_hir/src/prelude.em`) に置く。変換のはじめに Prelude を構文解析し、`Module::builtins` に置く。Prelude の範囲には `FileId::PRELUDE` を使い、診断には出さない。S2 で `Prelude` モジュールに移す
+- 型とエフェクトは item (`Module::types`、`Module::effects`) で、ID (`TypeDefId`、`EffectId`) で参照する。組み込みの `Int`、`String`、`Bool`、`Unit` と `IO` を変換のはじめに登録し、続けて `effect` の宣言を変換する (`lower/effect.rs`)。エフェクトの名前をすべて登録してから操作を変換するので、操作の引数の型の row は後ろで宣言したエフェクトも引ける。操作は `Module::operations` (`OperationId`) に置き、シグネチャと引数の個数 (外側の矢印の数) を持つ。処理系が役割で引く item は `Module::lang` (`LangItems`) にある
 - トップレベルの名前は、変換の中の `ItemScope` (`lower/scope.rs`) で解決する。値と型 (型名とエフェクト名) の2つの名前空間を持ち、ユーザーの定義を先に引き、なければ組み込みを引く
-- `Body` は走査関数を持つ。`walk_child_exprs` は式の直接の子を辿り、`pat_bindings` はパターンが束縛する変数を、`lambda_captures` はラムダが捕まえる変数を返す。段階3と4で式やパターンの種類を足すときは、これらを直す
+- `Body` は走査関数を持つ。`walk_child_exprs` は式の直接の子を辿り、`pat_bindings` はパターンが束縛する変数を、`captures` は式の中で束縛していない変数 (ラムダ、handle の本体と節が捕まえる変数) を返す。段階4で式やパターンの種類を足すときは、これらを直す
+- handler の変換と節の検査は `lower/handler.rs` にある。節の先頭の名前は `ItemScope::operation` で操作だけから引く。誤った節 (引数の個数の誤り、重複、別のエフェクトの節) は診断を出して `ExprKind::Handle::clauses` に入れず、扱うエフェクトが決まらなければ `effect` を `None` にする。型検査はそれを見て診断を連鎖させない
 - 演算子の列は、標準の演算子の表で precedence climbing により組み直す。`&&` / `||` は `if` に脱糖する。`x |> f` は、`x` を先に評価する印 (`ExprKind::Call::evaluate_first`) を付けた関数適用 `f x` に、`f <| x` は関数適用に脱糖する。型検査は印を見ずに普通の呼び出しとして検査し、Core IR への変換が印の付いた引数を先に評価する。`let` に脱糖すると左辺が推論になり、引数の型を期待した診断が失われるため`else` のない `if` は `else_branch: None` のまま残し、型検査が `Unit` を求める
 
 ## `eml_types` の内部
@@ -156,6 +157,10 @@ HIR への変換では、名前解決に加えて、次の脱糖と検査を行�
 - E2002 の副ラベルは、本体の row が入る矢印の部分の型を指す (`body_arrow_range`)
 - 組み込みの型は、Prelude のシグネチャから、ユーザーの関数と同じ経路 (`Rigids`、`lower_signature`、`closure_kinds`、`Scheme`) で作る。本体がないので、作ってすぐ多相化する。`True` と `False` は、段階4で `data Bool` にするまで lang item の `Bool` の型である
 - 型構成子は `TyShape::Con(TypeDefId)`、row のラベルは `EffectId` である。外に出す型は `Type::Con { id, name }` と `EffectLabel { id, name }` で、`Module` を渡さずに表示できるよう名前を持つ。型変数は、シグネチャの変数 (`Type::Rigid`) と推論で解けなかった変数 (`Type::Flexible`) を区別する
+- 継続の型は `TyShape::Cont` (操作の結果の型、継続の線形性、handle の外側の row、handle の結果の型) で、外に出す型は `Type::Cont` である。`once` の操作の `k` の線形性は `Lin` である
+- 操作のスキームは、組み込みと同じ経路で作る。シグネチャの外側の最後の矢印に、操作のエフェクトだけの row を付ける (`scheme::lower_operation`)。エフェクトの多重度は操作の多重度の最大である
+- handle の検査は `check/handle.rs` にある。本体は今の row の前に扱うエフェクトを足した row で、節は今の row で検査する。節では操作の型変数を新しい rigid 変数にする。`resume` は、推論用の変数でできた継続の型と単一化してから、関数の呼び出しと同じく row を今の row に含める
+- Kind の制約は由来 (`KindOrigin`) を持つ。型の表が「今の由来」を持ち、制約を作るときに記録する。本体の検査は単一化と参照の具体化の前後で、使用回数のパスは `Unr` の制約の前後で、今の由来を設定する。`solve_kinds` は破れた制約の由来を返し、`check` が E3001 にする。報告済みの誤りの跡 (`Missing`) がある本体では、使用回数のパスは由来を記録しない
 
 ## `eml_core_ir`、`eml_runtime`、`eml_interp` の内部
 
@@ -175,6 +180,9 @@ HIR への変換では、名前解決に加えて、次の脱糖と検査を行�
 - 環境のスロットは値だけを持ち、読み出しはスロットを書き換えない。参照の所有は Core IR の命令 (使用、`dup`、`decref`) が表し、verifier が釣り合いを確かめる。呼び出しのフレームには `saved` の変数だけを退避するので、フレームはちょうど所有している参照だけを持ち、解放するときは退避した値を1回ずつ解放する
 - CEK 機械の継続は、ヒープ上のフレームの連結リストである。呼び出しのフレームは、呼び出しの後で使う変数 (`saved`) だけを退避する。`jump` と末尾呼び出しはフレームを積まない。最下部に `IO` の handler のフレーム (`Frame::Io`) を置く
 - 実行時エラーは `RuntimeError` (実行中の関数で止まった `Fault` と、`debug_heap` の `Leak`) で、`step` は `Result<Step, Fault>` を返す。`Fault` に関数の名前を付けるのは `run` である。表示の文言は CLI と UI テストが使う
+- handle の本体と節は、ラムダと同じ `lift` で持ち上げる (`外側の名前$handleN`、`外側の名前$handleN$操作名`、`外側の名前$handleN$return`)。操作を値として使うときは、`perform` を呼ぶだけの関数 (`op$名前`) で包む。`Program::effects` はエフェクトごとの操作の表 (名前と、再開できるか) で、番号は `EffectId` の添字である
+- `Call::{Handle, Perform, Resume}` は呼び出しの一種なので、`saved` と末尾の位置の扱い、Perceus と verifier の規則を、ほかの呼び出しと共有する。`IO` の操作は `Rhs::Io` で、その場で実行する
+- handler は `Frame::Handler` (エフェクトの番号、節のクロージャ、`return` の節、次のフレーム) で、継続は `Payload::Continuation` (区間の先頭のフレームと、所有しない handler フレームへの参照) である。`perform` は handler フレームの次を切り離し、`resume` はそこに今の継続をつなぐ。`never` の操作は区間をその場で解放する
 
 ## ソースファイルと位置
 

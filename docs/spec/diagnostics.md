@@ -39,7 +39,7 @@ struct Diagnostic {
 
 ## 割り当て済みの番号
 
-E0xxx は `eml_syntax::codes` (E0004 だけは `eml_diagnostics`)、E1xxx は `eml_hir::codes`、E2xxx は `eml_types::codes` に置く。E3xxx と E4xxx の番号は、線形性と網羅性の検査を実装するときに割り当てる。
+E0xxx は `eml_syntax::codes` (E0004 だけは `eml_diagnostics`)、E1xxx は `eml_hir::codes`、E2xxx は `eml_types::codes` に置く。E3001 は `eml_types::codes` に置く。E3xxx の残りと E4xxx の番号は、線形性と網羅性の検査を実装するときに割り当てる。
 
 | 番号 | 定数 | 内容 |
 |---|---|---|
@@ -62,11 +62,20 @@ E0xxx は `eml_syntax::codes` (E0004 だけは `eml_diagnostics`)、E1xxx は `e
 | E1004 | `MISSING_SIGNATURE` | シグネチャのない等式。シグネチャの追加を提案する help を付ける |
 | E1005 | `MISSING_EQUATION` | 等式のないシグネチャ |
 | E1006 | `NON_ASSOCIATIVE_OPERATORS` | 結合しない演算子の並び、優先順位が同じで結合の向きが違う演算子の並び |
+| E1007 | `INVALID_OPERATION_SIGNATURE` | 操作のシグネチャの一番外側の `->` に row を書いた。または、シグネチャが関数型でない |
+| E1008 | `NEVER_RESULT_NOT_FREE` | `never` の操作の結果の型が、引数に現れない型変数でない |
+| E1009 | `UNHANDLEABLE_EFFECT` | handler に組み込みの `IO` の操作の節を書いた |
+| E1010 | `CLAUSE_ARITY` | handler の節の引数の個数の誤り |
+| E1011 | `KEYWORD_ARITY` | `resume` と `drop` の引数の個数の誤り |
+| E1012 | `MIXED_EFFECTS_IN_HANDLER` | 1つの handler に別のエフェクトの操作の節が混ざった |
+| E1013 | `MISSING_CLAUSE` | 節のない操作がある。操作の節が1つもない handler も含む。primary は `handle` で、節の追加を help で示す |
+| E1014 | `DUPLICATE_CLAUSE` | 同じ操作の節、または `return` の節が2つある |
 | E2001 | `TYPE_MISMATCH` | 型の不一致。メッセージとラベルは制約の由来ごとに変える ([型と Kind](types.md)) |
 | E2002 | `EFFECT_NOT_IN_ROW` | シグネチャの row に含まれないエフェクトを起こした。シグネチャの矢印を指し、row を足す help を付ける。ラムダの本体の場合は、エフェクトを起こした場所を primary、ラムダの期待する型の由来 (シグネチャの引数の型や型の明示) を secondary にする |
 | E2003 | `MISSING_MAIN` | `main` がない。`eml run` のときだけ出す |
 | E2004 | `INVALID_MAIN_TYPE` | `main` のシグネチャが `Unit -> <IO> Unit` でない |
 | E2005 | `INFINITE_TYPE` | 無限の型 (単一化の occurs check) |
+| E3001 | `LINEAR_VALUE_MISUSED` | 線形な値 (`once` の操作の `k` と、それを捕まえたクロージャ) を、ちょうど1回でなく使った。違反した Kind の制約の由来を指す |
 
 E0004 (`NOT_YET_SUPPORTED`) は、構文の段階 (S2、S3) で未対応の構文に加えて、名前解決以降の段階がまだ扱えない構文 (マイルストーン1 の実装の途中の段階) にも使う。どの段階でも「後で実装する」という同じ意味なので、番号を分けない。HIR 以降の段階は、対応していない構文を、診断を出さずに無視することはしない。見つけた段階で E0004 を出して回復する。
 
@@ -77,7 +86,7 @@ E0004 (`NOT_YET_SUPPORTED`) は、構文の段階 (S2、S3) で未対応の構�
 | 範囲 | 例 |
 |---|---|
 | E0xxx | 閉じていない補間 |
-| E1xxx | 等式が連続していない、シグネチャと等式が隣り合っていない、等式ごとの引数の個数の違い、fixity の衝突と重複、優先順位の合わないセクション、ブロックの最後の `use`、修飾なしの名前の衝突、handler の節の引数の個数、`resume` の引数の個数 |
+| E1xxx | 等式が連続していない、シグネチャと等式が隣り合っていない、等式ごとの引数の個数の違い、fixity の衝突と重複、優先順位の合わないセクション、ブロックの最後の `use`、修飾なしの名前の衝突 |
 | E3xxx | 射影で `Lin` な残りを捨てる、更新で `Lin` な古い値を捨てる |
 
 シグネチャに関する E1xxx の診断には、シグネチャの追加を提案する help を付ける ([宣言](declarations.md))。
