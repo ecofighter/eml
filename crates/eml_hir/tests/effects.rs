@@ -192,3 +192,9 @@ fn handler_parts_capture_what_they_use() {
     let ret = ret.as_ref().unwrap();
     assert_eq!(names(body.captures(ret.body, &[ret.param])), ["a"]);
 }
+
+#[test]
+fn a_repeated_operation_name_is_not_a_missing_clause() {
+    let text = "effect Ask where\n  ask : Unit -> Int\n  ask : Unit -> Int\n\nf : Unit -> Int\nf () = handle 1 with | ask () k -> resume k 1";
+    assert_eq!(errors(text), ["E1003 3:3 `ask` is defined more than once"]);
+}

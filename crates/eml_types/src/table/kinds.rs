@@ -50,6 +50,17 @@ impl Table {
         }
     }
 
+    /// `ty` に現れる線形性の Kind 変数 (rigid 変数の `μ` と矢印の `m`) を、すべて `Unr` 以下にする。操作の引数の型に
+    /// 使う。操作は本体を持たないので、節がその引数をどう使うかを操作の型に推論できない。そこで `Unr` に固定し、節では
+    /// 引数を何回使ってもよいことにする (docs/spec/effects.md の「handler の意味」)。
+    pub fn unrestricted(&mut self, ty: Ty) {
+        let (lin, _) = self.kind_vars(ty);
+        for var in lin {
+            self.linearity
+                .require(Bound::Var(var), Bound::Const(Linearity::Unr));
+        }
+    }
+
     /// 型に現れる Kind 変数。線形性 (rigid 変数の `μ` と矢印の `m`) と多重度 (rigid な row 変数の `σ`) に分けて、
     /// 現れた順に重複なく返す。多相化する変数を決めるのに使う。
     pub fn kind_vars(&self, ty: Ty) -> (Vec<KindVar>, Vec<KindVar>) {

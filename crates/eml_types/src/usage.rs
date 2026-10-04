@@ -15,12 +15,15 @@ use crate::ty::Linearity;
 type Uses = HashMap<LocalId, (u8, u8)>;
 
 pub(crate) fn constrain(body: &Body, typing: &BodyTyping, table: &mut Table) {
-    // 報告済みの誤りの跡 (`Missing`) がある本体では、捨てた式の中の使用が数えられない。E3001 を連鎖させないよう、
-    // 由来を記録せずに制約だけを出す (docs/spec/types.md の「エラーの扱い」)
-    let reliable = !body
-        .exprs
-        .iter()
-        .any(|(_, expr)| matches!(expr.kind, ExprKind::Missing));
+    // 誤りを報告済みの本体では、捨てた式や節の中の使用が数えられない。構文解析の誤りは HIR の診断 (`has_errors`) に
+    // 入らず `Missing` の跡だけが残るので、両方を見る。E3001 を連鎖させないよう、このパスの制約は由来を記録せずに
+    // 出す。本体の型検査が出す制約 (`Passed` や `Unified` の由来) はこのパスの外なので、由来を記録したままである
+    // (docs/spec/types.md の「エラーの扱い」)
+    let reliable = !body.has_errors
+        && !body
+            .exprs
+            .iter()
+            .any(|(_, expr)| matches!(expr.kind, ExprKind::Missing));
     let mut usage = Usage {
         body,
         typing,

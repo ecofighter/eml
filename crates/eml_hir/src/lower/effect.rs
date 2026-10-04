@@ -62,8 +62,16 @@ pub(super) fn lower_effects(
             };
             let name = operation.name.clone();
             let range = operation.name_range;
+            // 同じエフェクトに同じ名前の操作を重ねても、並びには最初の1つだけを入れる。節の名前は最初の操作に解決
+            // されるので、2つ目を入れると、重複 (E1003) に加えて節のない操作 (E1013) まで報告してしまう
+            let repeated = effects[effect]
+                .operations
+                .iter()
+                .any(|&op| operations[op].name == name);
             let id = operations.alloc(operation);
-            effects[effect].operations.push(id);
+            if !repeated {
+                effects[effect].operations.push(id);
+            }
             match values.get(&name) {
                 Some(&first) => diagnostics.push(duplicate(file, &name, first, range)),
                 None => {

@@ -8,7 +8,7 @@ use la_arena::ArenaMap;
 
 use crate::kind::Bound;
 use crate::scheme::{Rigids, Scheme, lower_operation, lower_signature};
-use crate::table::{Row, Table};
+use crate::table::{Row, Table, TyShape};
 use crate::ty::{EffectLabel, KindConstraint, KindTerm, Linearity, Type};
 use crate::{BodyTypes, TypedModule, codes, scc, usage};
 
@@ -46,6 +46,15 @@ pub(crate) fn check_module(module: &Module) -> (TypedModule, Vec<Diagnostic>) {
         let rigids = Rigids::new(&mut table, &operation.signature.generics);
         let ty = lower_operation(&mut table, operation, &rigids);
         table.closure_kinds(ty, operation.arity, &[]);
+        // 結果の型は縛らない。`never fail : String -> a` をどの型としても使えるようにするため
+        let mut spine = ty;
+        for _ in 0..operation.arity {
+            let TyShape::Fn { param, ret, .. } = table.shape(spine).clone() else {
+                break;
+            };
+            table.unrestricted(param);
+            spine = ret;
+        }
         let mut scheme = Scheme::new(ty, &rigids);
         scheme.generalize(&table);
         operations.insert(id, scheme);

@@ -60,6 +60,7 @@ fn type_variables_of_an_operation_are_rigid_in_its_clause() {
     let text = "effect Pick where\n  pick : a -> a -> a\n\nfirst : Unit -> Int\nfirst () =\n  handle pick 1 2 with\n    | pick x y k -> resume k x\n\nwrong : Unit -> Int\nwrong () =\n  handle pick 1 2 with\n    | pick x y k -> resume k 0";
     insta::assert_snapshot!(check_text(text), @r"
     pick : a -> a -> <Pick> a
+      kinds: a <= Unr
     first : Unit -> Int
       x#0 : a
       y#1 : a
@@ -164,5 +165,50 @@ fn a_body_with_a_reported_error_does_not_report_linear_values() {
     ---
     E1011 7:19 `resume` takes a continuation and a value, but 1 argument was given
       7:19 this `resume`
+    ");
+}
+
+#[test]
+fn a_continuation_cannot_pass_through_a_polymorphic_operation_parameter() {
+    let text = "effect Ask where\n  ask : Unit -> Int\n\neffect Sink where\n  sink : a -> Unit\n\neffect Pair where\n  pair : a -> (a -> a -> b) -> b\n\nsunk : Unit -> <Sink> Int\nsunk () =\n  handle ask () with\n    | ask () k ->\n        sink k\n        0\n\npaired : Unit -> <Pair> Int\npaired () =\n  handle ask () with\n    | ask () k ->\n        let f = pair 1 (fn x y -> fn u -> resume k (x + y))\n        f ()";
+    insta::assert_snapshot!(check_text(text), @r"
+    ask : Unit -> <Ask> Int
+    sink : a -> <Sink> Unit
+      kinds: a <= Unr
+    pair : a -> (a -> a -> b) -> <Pair> b
+      kinds: a <= Unr, (a -> a -> b) <= Unr, (a -> b) <= Unr, b <= Unr
+    sunk : Unit -> <Sink> Int
+      k#0 : Cont Int Int <Sink>
+    paired : Unit -> <Pair> Int
+      k#0 : Cont Int Int <Pair>
+      x#1 : Int
+      y#2 : Int
+      u#3 : Unit
+      f#4 : Unit -> <Pair> Int
+    ---
+    E3001 14:9 a linear value is passed to `sink`, which may use it more than once or not at all
+      14:9 `sink` is used here
+      note: linear values, such as the continuation of a `once` operation and closures that capture one, must be used exactly once
+    E3001 21:17 a linear value is passed to `pair`, which may use it more than once or not at all
+      21:17 `pair` is used here
+      note: linear values, such as the continuation of a `once` operation and closures that capture one, must be used exactly once
+    ");
+}
+
+#[test]
+fn a_clause_dropped_by_an_error_does_not_cause_linear_misuse() {
+    let text = "effect Ask where\n  ask : Unit -> Int\n\neffect Log where\n  log : String -> Unit\n\nf : Unit -> Int\nf () =\n  handle ask () with\n    | ask () k ->\n        handle 1 with\n          | log m k2 -> resume k2 ()\n          | return x -> x\n          | return y -> resume k y";
+    insta::assert_snapshot!(check_text(text), @r"
+    ask : Unit -> <Ask> Int
+    log : String -> <Log> Unit
+    f : Unit -> Int
+      k#0 : Cont Int Int <>
+      m#1 : String
+      k2#2 : Cont Unit Int <>
+      x#3 : Int
+    ---
+    E1014 14:11 this handler has more than one `return` clause
+      14:11 another `return` clause
+      13:11 the first `return` clause
     ");
 }

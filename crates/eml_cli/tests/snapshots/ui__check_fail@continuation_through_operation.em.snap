@@ -1,0 +1,23 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: rendered
+input_file: tests/ui/check-fail/continuation_through_operation.em
+---
+[E3001] Error: a linear value is passed to `pair`, which may use it more than once or not at all
+    ╭─[ check-fail/continuation_through_operation.em:17:17 ]
+    │
+ 17 │         let f = pair k (fn c1 c2 -> fn u -> resume c1 1 + resume c2 2)
+    │                 ──┬─  
+    │                   ╰─── `pair` is used here
+    │ 
+    │ Note: linear values, such as the continuation of a `once` operation and closures that capture one, must be used exactly once
+────╯
+[E3001] Error: a linear value is passed to `sink`, which may use it more than once or not at all
+    ╭─[ check-fail/continuation_through_operation.em:31:9 ]
+    │
+ 31 │         sink k
+    │         ──┬─  
+    │           ╰─── `sink` is used here
+    │ 
+    │ Note: linear values, such as the continuation of a `once` operation and closures that capture one, must be used exactly once
+────╯

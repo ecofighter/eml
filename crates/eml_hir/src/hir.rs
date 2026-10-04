@@ -112,7 +112,8 @@ pub struct Signature {
     pub generics: Generics,
 }
 
-/// 型変数と row 変数の表。シグネチャが持つ。段階3と4では、`data` とエフェクトの宣言も持つ。
+/// 型変数と row 変数の表。関数と操作のシグネチャが持つ。`data` の宣言には段階4で、型引数を持つエフェクトの宣言には
+/// 段階3b で持たせる。
 #[derive(Debug, Default)]
 pub struct Generics {
     pub type_vars: Arena<TypeVarDecl>,
@@ -130,6 +131,9 @@ pub struct Body {
     /// 本体の型の注釈。型変数と row 変数は、シグネチャの `Generics` を指す。シグネチャのアリーナと分けるのは、本体を
     /// 書き換えてもシグネチャが変わらないようにするため。
     pub types: Arena<TypeRef>,
+    /// 本体の変換で診断を報告したか。誤りのある節などは `Missing` を残さずに捨てるので、`Missing` の有無だけでは
+    /// 本体に誤りがあったかを判断できない。後の段階が診断の連鎖を止めるのに使う。
+    pub has_errors: bool,
 }
 
 impl Body {

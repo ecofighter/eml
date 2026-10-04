@@ -332,7 +332,7 @@ impl Table {
         &self.shapes[self.resolve(ty).0 as usize]
     }
 
-    #[allow(dead_code)] // 多重度の上限を検査する段階3で使う
+    #[allow(dead_code)] // 多重度の上限を検査する段階3b と段階5で使う
     pub fn row_multiplicity(&self, var: RowVar) -> Multiplicity {
         self.multiplicity
             .value(self.row_vars[var.0 as usize].multiplicity)

@@ -84,16 +84,13 @@ pub fn dump(module: &Module, typed: &TypedModule) -> String {
     for (id, operation) in module.operations.iter() {
         if let Some(scheme) = typed.operations.get(id) {
             writeln!(out, "{} : {}", operation.name, scheme.ty).unwrap();
+            write_kinds(&mut out, scheme);
         }
     }
     for (id, function) in module.functions.iter() {
         if let Some(scheme) = typed.signatures.get(id) {
             writeln!(out, "{} : {}", function.name, scheme.ty).unwrap();
-            if !scheme.constraints.is_empty() {
-                let kinds: Vec<String> =
-                    scheme.constraints.iter().map(ToString::to_string).collect();
-                writeln!(out, "  kinds: {}", kinds.join(", ")).unwrap();
-            }
+            write_kinds(&mut out, scheme);
         }
         let (Some(body), Some(types)) = (&function.body, typed.bodies.get(id)) else {
             continue;
@@ -111,4 +108,11 @@ pub fn dump(module: &Module, typed: &TypedModule) -> String {
         }
     }
     out
+}
+
+fn write_kinds(out: &mut String, scheme: &Scheme) {
+    if !scheme.constraints.is_empty() {
+        let kinds: Vec<String> = scheme.constraints.iter().map(ToString::to_string).collect();
+        writeln!(out, "  kinds: {}", kinds.join(", ")).unwrap();
+    }
 }

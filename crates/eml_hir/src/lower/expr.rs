@@ -51,6 +51,7 @@ impl<'a> BodyLowering<'a> {
 
     pub(super) fn lower_equation(mut self, equation: &ast::Equation) -> Body {
         let range = equation.range();
+        let reported = self.diagnostics.len();
         let params = equation
             .params()
             .map(|pat| self.lower_pat(Some(pat), range))
@@ -63,6 +64,7 @@ impl<'a> BodyLowering<'a> {
             pats: self.pats,
             locals: self.locals,
             types: self.types,
+            has_errors: self.diagnostics.len() > reported,
         }
     }
 
