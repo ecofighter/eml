@@ -11,6 +11,8 @@ input_file: tests/ui/run/operators.em
 True
 False
 True
+evaluated
+False
 True
 10
 --- stderr ---

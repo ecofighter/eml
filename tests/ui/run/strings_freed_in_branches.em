@@ -1,6 +1,10 @@
--- Strings chosen by `if`, passed to an unused parameter, and discarded must all be freed.
+-- Strings chosen by `if`, built by a function, used twice, passed to an unused parameter, and discarded
+-- must all be freed.
 twice : String -> String
 twice s = s ++ s
+
+greet : String -> String
+greet name = "Hello, " ++ name ++ "!"
 
 ignore : String -> Int
 ignore s = 1
@@ -19,3 +23,6 @@ main () =
   println (show_int (ignore "w"))
   println (pick True "a")
   println (pick False "b")
+  let name = "eml"
+  println (greet name)
+  println name

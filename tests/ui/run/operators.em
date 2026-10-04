@@ -16,5 +16,6 @@ main () =
   println (show_bool (1 < 2 && 2 < 3))
   println (show_bool (False && noisy True))
   println (show_bool (True || noisy False))
+  println (show_bool (True && noisy False))
   println (show_bool (not (1 == 2)))
   10 |> show_int |> println
