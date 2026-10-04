@@ -44,7 +44,7 @@
 
 ### item
 
-- `Module::effects` の `EffectDef` に、操作の並び (`Vec<OperationId>`) と範囲を持たせる。
+- `Module::effects` の `EffectDef` に、操作の並び (`Vec<OperationId>`) を持たせる。
 - 操作は新しいアリーナ `Module::operations` (`OperationId`) に置く。`Operation` は、名前、属するエフェクト、多重度、シグネチャ (`Signature`。型変数は `Generics` に入る)、引数の個数 (シグネチャの一番外側の `->` の数)、範囲を持つ。
 - 値の名前空間の `ItemScope` は、関数と操作を両方引けるようにする。`Res` に `Operation(OperationId)` を足す。
 - 操作名と関数名の重複、別のエフェクトの操作名との重複は、今の E1003 で報告する。エフェクト名と型名の重複も E1003 にする ([modules.md](../../spec/modules.md) の「名前空間」)。
@@ -97,7 +97,7 @@ pub struct ReturnClause {
 
 | 番号 | 定数 | 内容 |
 |---|---|---|
-| E1007 | `ROW_ON_OPERATION` | 操作のシグネチャの一番外側の `->` に row を書いた。カリー化した操作では外側のすべての `->` が対象 ([declarations.md](../../spec/declarations.md) の「`effect`」) |
+| E1007 | `INVALID_OPERATION_SIGNATURE` | 操作のシグネチャの一番外側の `->` に row を書いた (カリー化した操作では外側のすべての `->` が対象。[declarations.md](../../spec/declarations.md) の「`effect`」)。または、シグネチャが関数型でない。引数のない操作には、エフェクトの row を付ける矢印がないためである |
 | E1008 | `NEVER_RESULT_NOT_FREE` | `never` の操作の結果の型が、引数に現れない型変数でない |
 | E1009 | `UNHANDLEABLE_EFFECT` | handler に `IO` の操作の節を書いた |
 | E1010 | `CLAUSE_ARITY` | 節の引数の個数の誤り。`never` の操作は「操作の引数の個数」、それ以外は「操作の引数の個数 + 1」。`return` の節の引数が2つで `from` がない場合も含む |
@@ -142,7 +142,9 @@ handle 式の期待する型を `τ`、その位置の row を `ρ` とする。
 
 - 使用回数のパスでは、handle の本体と `return` の節を、ラムダと同じく「捕獲はその位置での1回の使用、中の使用は別に数える」扱いにする。この2つは高々1回しか動かないので、`Lin` の値も捕まえられる。
 - 操作の節は、handler が生きている間に何度も呼ばれうる。そのため、操作の節が捕まえる変数には、使用の回数によらず `Unr` の制約を出す。これにより、内側の handler の操作の節が外側の節の `k` を捕まえて何度も再開することを防ぐ。
-- Kind の制約に由来を持たせる。由来は、使用回数のパスが出した制約なら「変数の束縛の範囲と理由 (2回以上使った、使わなかった、操作の節が捕まえた)」、スキームの具体化で複写した制約なら「呼び出しの範囲」である。
+- Kind の制約に由来を持たせる。由来は、使用回数のパスが出した制約なら「変数の束縛の範囲と理由 (2回以上使った、使わなかった、`_` で捨てた、操作の節が捕まえた)」、スキームの具体化で複写した制約なら「参照の範囲」、型の単一化で出た制約なら「単一化した式の範囲」である。
+- 由来は、型の表が「今の由来」として持ち、制約を作るときに記録する。`Lattice::require` の引数は変えない。本体の検査と使用回数のパスが、制約を作る処理の前後で今の由来を設定する。
+- 本体に `Missing` (報告済みの誤りの跡) がある関数では、使用回数のパスは由来を記録しない。E1011 などで捨てた式の中の変数が「使っていない」と数えられ、E3001 が連鎖するのを防ぐためである。由来のない制約が破れても診断は出さない。誤りのあるプログラムは実行しないので、困ることはない。
 - `solve_kinds` は、破れた制約の由来を返す。`check` は、今の `debug_assert` の代わりに、それぞれを E3001 (`LINEAR_VALUE_MISUSED`) の診断にする。primary は由来の範囲で、理由をラベルにする。
 - E3001 は `eml_types::codes` に置く。E3xxx の範囲は線形性の段階の番号だが、3a では型検査の後の Kind の解決で出すので、型検査の `codes` に置く。段階5で線形性の検査パスを分けるときに置き場所を見直す。
 
@@ -195,7 +197,8 @@ pub enum Call {
 
 - `drop e` は、spec の Core IR の表にある `drop x` を `Rhs::Drop(Atom)` として足す。値は `()` で、Perceus には1回の使用に見える。
 - 操作ごとに、引数を受け取って `Perform` を末尾で呼ぶラッパーの関数を作る。操作を値として参照したら、そのラッパーの `MakeClosure` にする。引数の揃った呼び出しは、直接 `Perform` にする。
-- verifier は、新しい種類の `Call` を既存の呼び出しと同じ規則で確かめる。加えて、`Handle` の節の数がエフェクトの操作の数と一致することを確かめる。そのため、`Program` にエフェクトごとの操作の数を持たせる。
+- verifier は、新しい種類の `Call` を既存の呼び出しと同じ規則で確かめる。加えて、`Handle` の節の数がエフェクトの操作の数と一致することを確かめる。そのため、`Program` にエフェクトごとの操作の表 (名前と、再開できるか) を持たせる。インタプリタも、この表で `never` の操作かどうかを引く。
+- 節の引数の型を引くために、`BodyTypes` にパターンの型 (`pats`) を足す。
 - 表示は `handle E(body) [clauses] return r`、`perform E.op(args)`、`resume k(v)`、`drop x` のような形にする。細部は計画で決める。
 
 ## 4. ランタイムとインタプリタ
@@ -254,7 +257,10 @@ pub enum Payload {
 
 | テスト | 種類 | 変更 |
 |---|---|---|
-| `crates/eml_types/src/kind.rs` の単体テスト | 3 | `Lattice::require` に由来の引数を足す。期待値は変えない |
+| `EffectDef` を組み立てるテスト (`eml_types` の `ty.rs` と `table/tests.rs`、`eml_hir` の `lower/scope.rs`) | 3 | `operations: Vec::new()` を足す。期待値は変えない |
+| `crates/eml_types/src/table/tests.rs` の `new_table` | 3 | `Table::new` に操作のアリーナを渡す。期待値は変えない |
+| `Program` を組み立てるテスト (`eml_core_ir/tests/verify.rs`、`eml_interp/tests/`) | 3 | `effects: Vec::new()` を足す。期待値は変えない |
+| `crates/eml_interp/tests/closures.rs` | 3 | `Rhs::Perform` を `Rhs::Io` に改名する。期待値は変えない |
 | enum の網羅的な `match` を書いたテスト (`Frame`、`Call`、`Rhs`、`ExprKind` など) | 3 | 新しい種類に追随する。期待値は変えない |
 
 上の表にないテストの期待値が変わった場合は、変えずに止まり、差分と理由をユーザーに示して承認を得る。
