@@ -5,8 +5,6 @@ mod hir;
 mod lower;
 mod pretty;
 
-use eml_diagnostics::{Diagnostic, FileId, Label, TextRange};
-
 pub use hir::*;
 pub use lower::lower;
 pub use pretty::pretty;
@@ -20,13 +18,4 @@ pub mod codes {
     pub const MISSING_SIGNATURE: ErrorCode = ErrorCode(1004);
     pub const MISSING_EQUATION: ErrorCode = ErrorCode(1005);
     pub const NON_ASSOCIATIVE_OPERATORS: ErrorCode = ErrorCode(1006);
-}
-
-/// まだ扱えない構文。E0004 はどの段階でも「後で実装する」という同じ意味で使う (docs/spec/diagnostics.md)。
-pub fn not_yet_supported(file: FileId, range: TextRange, message: impl Into<String>) -> Diagnostic {
-    Diagnostic::error(
-        eml_syntax::codes::NOT_YET_SUPPORTED,
-        message,
-        Label::new(file, range, eml_syntax::NOT_YET_SUPPORTED_LABEL),
-    )
 }

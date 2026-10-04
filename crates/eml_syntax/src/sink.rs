@@ -65,10 +65,24 @@ pub(crate) fn build_tree(text: &str, tokens: &[Token], mut events: Vec<Event>) -
             }
             Event::Token { kind } => {
                 builder.eat_trivia();
+                debug_assert!(
+                    builder
+                        .tokens
+                        .get(builder.next)
+                        .is_some_and(|token| !token.kind.is_trivia()),
+                    "a token event must take a non-trivia token from the lexer"
+                );
                 builder.token(kind);
             }
             Event::TokenPrefix { kind, len } => {
                 builder.eat_trivia();
+                debug_assert!(
+                    builder
+                        .tokens
+                        .get(builder.next)
+                        .is_some_and(|token| !token.kind.is_trivia()),
+                    "a token event must take a non-trivia token from the lexer"
+                );
                 builder.token_prefix(kind, len);
             }
             Event::Finish => {
@@ -81,6 +95,12 @@ pub(crate) fn build_tree(text: &str, tokens: &[Token], mut events: Vec<Event>) -
             Event::Tombstone => {}
         }
     }
+    // パーサのトークンのイベントは範囲を持たないので、lexer のトークンを使い切ったことで木と元のテキストの対応を確かめる。
+    debug_assert_eq!(
+        builder.next,
+        tokens.len(),
+        "the tree must take every token from the lexer"
+    );
     builder.inner.finish()
 }
 

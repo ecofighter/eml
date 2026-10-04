@@ -3,8 +3,9 @@
 
 use super::Lexer;
 use crate::SyntaxKind::*;
+use crate::codes;
 use crate::literal;
-use crate::{NOT_YET_SUPPORTED_LABEL, codes};
+use eml_diagnostics::{NOT_YET_SUPPORTED, NOT_YET_SUPPORTED_LABEL};
 
 impl Lexer<'_> {
     /// 閉じていなければ行末までを `STRING` にする。後ろの行まで文字列として読み込まないため。
@@ -106,7 +107,7 @@ impl Lexer<'_> {
             }
         }
         self.error(
-            codes::NOT_YET_SUPPORTED,
+            NOT_YET_SUPPORTED,
             "string interpolation is not supported yet",
             i,
             j,

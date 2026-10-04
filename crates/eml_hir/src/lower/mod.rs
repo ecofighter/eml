@@ -8,8 +8,8 @@ use eml_diagnostics::{Diagnostic, FileId, Label, TextRange};
 use eml_syntax::{SyntaxKind, SyntaxToken, ast};
 use la_arena::Arena;
 
+use crate::codes;
 use crate::hir::*;
-use crate::{codes, not_yet_supported};
 use expr::BodyLowering;
 use types::{TypeLowering, TypeScope};
 
@@ -40,7 +40,7 @@ pub fn lower(file: FileId, source: &ast::SourceFile) -> (Module, Vec<Diagnostic>
         let first_equation = equations.next();
         for (_, _, range) in equations {
             // 複数の等式は段階6で `match` に脱糖する
-            diagnostics.push(not_yet_supported(
+            diagnostics.push(Diagnostic::not_yet_supported(
                 file,
                 range,
                 "defining a function with several equations is not supported yet",
@@ -70,7 +70,7 @@ pub fn lower(file: FileId, source: &ast::SourceFile) -> (Module, Vec<Diagnostic>
                 if *equation_index != signature_index + 1 =>
             {
                 // 離れたシグネチャと等式は段階6で E1xxx の検査にする
-                diagnostics.push(not_yet_supported(
+                diagnostics.push(Diagnostic::not_yet_supported(
                     file,
                     *range,
                     "an equation that does not directly follow its signature is not supported yet",
@@ -166,17 +166,17 @@ fn collect(
                 let slot = slot(&mut definitions, &mut by_name, name.text(), range);
                 definitions[slot].equations.push((index, equation, range));
             }
-            ast::Item::DataItem(item) => diagnostics.push(not_yet_supported(
+            ast::Item::DataItem(item) => diagnostics.push(Diagnostic::not_yet_supported(
                 file,
                 item.keyword_range(),
                 "`data` declarations are not supported yet",
             )),
-            ast::Item::EffectItem(item) => diagnostics.push(not_yet_supported(
+            ast::Item::EffectItem(item) => diagnostics.push(Diagnostic::not_yet_supported(
                 file,
                 item.keyword_range(),
                 "`effect` declarations are not supported yet",
             )),
-            ast::Item::FixityItem(item) => diagnostics.push(not_yet_supported(
+            ast::Item::FixityItem(item) => diagnostics.push(Diagnostic::not_yet_supported(
                 file,
                 item.keyword_range(),
                 "fixity declarations are not supported yet",
@@ -215,7 +215,7 @@ fn value_name(
     if token.kind() == SyntaxKind::LIDENT {
         return Some(token);
     }
-    diagnostics.push(not_yet_supported(
+    diagnostics.push(Diagnostic::not_yet_supported(
         file,
         token.text_range(),
         "defining operators is not supported yet",

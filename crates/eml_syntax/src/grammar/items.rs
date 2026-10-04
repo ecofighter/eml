@@ -1,28 +1,41 @@
 use super::*;
 
-/// 将来の予約語もここで受けるのは、項目としてエラーにして次の項目から回復するため。
-const ITEM_KEYWORDS: TokenSet = TokenSet::new(&[
-    DATA_KW,
-    TYPE_KW,
-    EFFECT_KW,
-    INFIXL_KW,
-    INFIXR_KW,
-    INFIX_KW,
-    IMPORT_KW,
-    PUB_KW,
-    FORALL_KW,
-    CLASS_KW,
-    INSTANCE_KW,
-]);
-
 const DECLARABLE_OPERATORS: TokenSet = TokenSet::new(&[OP, CONOP, MINUS]);
 
+#[derive(Debug, Clone, Copy)]
+enum ItemKind {
+    Data,
+    Type,
+    Effect,
+    Fixity,
+    Import,
+    /// 将来の予約語。項目としてエラーにし、次の項目から回復する。
+    Reserved,
+    Signature,
+    Equation,
+    OperatorEquation,
+}
+
+/// 今の位置から始まる項目の種類。`pub` は項目の前置きなので、ここでは見ない。`at_item_start` と `item` が同じ判定を
+/// 使うため、項目の種類を足すときはここだけを直す。
+fn item_kind(p: &Parser) -> Option<ItemKind> {
+    Some(match p.current() {
+        DATA_KW => ItemKind::Data,
+        TYPE_KW => ItemKind::Type,
+        EFFECT_KW => ItemKind::Effect,
+        INFIXL_KW | INFIXR_KW | INFIX_KW => ItemKind::Fixity,
+        IMPORT_KW => ItemKind::Import,
+        FORALL_KW | CLASS_KW | INSTANCE_KW => ItemKind::Reserved,
+        LIDENT if p.nth(1) == COLON => ItemKind::Signature,
+        _ if at_operator_signature(p) => ItemKind::Signature,
+        _ if at_equation(p) => ItemKind::Equation,
+        _ if at_operator_equation(p) => ItemKind::OperatorEquation,
+        _ => return None,
+    })
+}
+
 pub(super) fn at_item_start(p: &Parser) -> bool {
-    p.at_ts(ITEM_KEYWORDS)
-        || (p.at(LIDENT) && p.nth(1) == COLON)
-        || at_operator_signature(p)
-        || at_equation(p)
-        || at_operator_equation(p)
+    p.at(PUB_KW) || item_kind(p).is_some()
 }
 
 /// `LIDENT` の直後が `-` なら、演算子の定義 (`a - b = ...`) とみなす。関数の定義とは2トークンの先読みで区別する。
@@ -45,18 +58,17 @@ pub(super) fn item(p: &mut Parser) {
         not_yet_supported(p, "`pub` is not supported yet");
         p.bump(PUB_KW);
     }
-    match p.current() {
-        DATA_KW => data_item(p, m),
-        TYPE_KW => type_item(p, m),
-        EFFECT_KW => effect_item(p, m),
-        INFIXL_KW | INFIXR_KW | INFIX_KW => fixity_item(p, m),
-        IMPORT_KW => import_item(p, m),
-        FORALL_KW | CLASS_KW | INSTANCE_KW => reserved_item(p, m),
-        LIDENT if p.nth(1) == COLON => signature(p, m),
-        _ if at_operator_signature(p) => signature(p, m),
-        _ if at_equation(p) => equation(p, m),
-        _ if at_operator_equation(p) => operator_equation(p, m),
-        _ => {
+    match item_kind(p) {
+        Some(ItemKind::Data) => data_item(p, m),
+        Some(ItemKind::Type) => type_item(p, m),
+        Some(ItemKind::Effect) => effect_item(p, m),
+        Some(ItemKind::Fixity) => fixity_item(p, m),
+        Some(ItemKind::Import) => import_item(p, m),
+        Some(ItemKind::Reserved) => reserved_item(p, m),
+        Some(ItemKind::Signature) => signature(p, m),
+        Some(ItemKind::Equation) => equation(p, m),
+        Some(ItemKind::OperatorEquation) => operator_equation(p, m),
+        None => {
             // `pub` の後ろに項目がない
             p.error(
                 codes::EXPECTED_ITEM,

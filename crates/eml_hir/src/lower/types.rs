@@ -3,10 +3,10 @@ use eml_syntax::{SyntaxToken, ast};
 use la_arena::Arena;
 
 use crate::builtin::BuiltinType;
+use crate::codes;
 use crate::hir::{
     EffectRef, RowRef, RowVarDecl, RowVarId, TypeRef, TypeRefId, TypeRefKind, TypeVarDecl,
 };
-use crate::{codes, not_yet_supported};
 
 /// 本体の注釈が引く、関数ごとの型の置き場所。
 pub(super) struct TypeScope<'a> {
@@ -154,7 +154,7 @@ impl TypeLowering<'_> {
 
     fn unsupported(&mut self, range: TextRange, message: &str) -> TypeRefKind {
         self.diagnostics
-            .push(not_yet_supported(self.file, range, message));
+            .push(Diagnostic::not_yet_supported(self.file, range, message));
         TypeRefKind::Error
     }
 

@@ -23,20 +23,17 @@ pub mod codes {
     pub const UNEXPECTED_CHARACTER: ErrorCode = ErrorCode(1);
     pub const UNTERMINATED_STRING: ErrorCode = ErrorCode(2);
     pub const EXPECTED_ITEM: ErrorCode = ErrorCode(3);
-    pub const NOT_YET_SUPPORTED: ErrorCode = ErrorCode(4);
+    // E0004 (未対応) はどの段階でも使うので、eml_diagnostics::NOT_YET_SUPPORTED に置く
     pub const UNTERMINATED_BLOCK_COMMENT: ErrorCode = ErrorCode(5);
     pub const TAB_INDENTATION: ErrorCode = ErrorCode(6);
-    pub const EXPECTED_INDENTED_BLOCK: ErrorCode = ErrorCode(9);
     pub const INVALID_NUMBER: ErrorCode = ErrorCode(7);
     pub const INVALID_ESCAPE: ErrorCode = ErrorCode(8);
+    pub const EXPECTED_INDENTED_BLOCK: ErrorCode = ErrorCode(9);
     pub const SPACE_AROUND_DOT: ErrorCode = ErrorCode(10);
     pub const SYNTAX_ERROR: ErrorCode = ErrorCode(11);
     pub const NEEDS_PARENS: ErrorCode = ErrorCode(12);
     pub const NESTING_TOO_DEEP: ErrorCode = ErrorCode(13);
 }
-
-/// E0004 のラベル。HIR 以降の段階も、まだ扱えない構文に同じ文言を使う (docs/spec/diagnostics.md)。
-pub const NOT_YET_SUPPORTED_LABEL: &str = "this is implemented in a later stage";
 
 /// 壊れた入力でも必ず木を作る。エラーがあっても後の段階を止めないため。
 #[derive(Debug, Clone, PartialEq, Eq)]

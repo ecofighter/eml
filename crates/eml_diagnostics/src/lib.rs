@@ -17,6 +17,13 @@ impl fmt::Display for ErrorCode {
     }
 }
 
+/// E0004 (未対応)。構文、HIR、型検査のどの段階でも「後の段階で実装する」という同じ意味で使うので、段階ごとの
+/// `codes` ではなくここに置く (docs/spec/diagnostics.md)。
+pub const NOT_YET_SUPPORTED: ErrorCode = ErrorCode(4);
+
+/// E0004 のラベル。どの段階でも同じ文言にする。
+pub const NOT_YET_SUPPORTED_LABEL: &str = "this is implemented in a later stage";
+
 /// 補足の情報は独立した診断にせず、`notes` と `help` に入れる (docs/spec/diagnostics.md)。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Severity {
@@ -83,6 +90,14 @@ impl Diagnostic {
         Self::new(code, Severity::Error, message, primary)
     }
 
+    pub fn not_yet_supported(file: FileId, range: TextRange, message: impl Into<String>) -> Self {
+        Self::error(
+            NOT_YET_SUPPORTED,
+            message,
+            Label::new(file, range, NOT_YET_SUPPORTED_LABEL),
+        )
+    }
+
     pub fn with_secondary(mut self, label: Label) -> Self {
         self.secondary.push(label);
         self
@@ -115,6 +130,21 @@ mod tests {
     fn error_code_is_zero_padded() {
         assert_eq!(ErrorCode(1).to_string(), "E0001");
         assert_eq!(ErrorCode(2105).to_string(), "E2105");
+    }
+
+    #[test]
+    fn not_yet_supported_is_e0004_with_the_shared_label() {
+        let mut files = SourceFiles::new();
+        let file = files.add("a.em", "x");
+        let range = TextRange::new(0.into(), 1.into());
+        let diagnostic = Diagnostic::not_yet_supported(file, range, "lists are not supported yet");
+        assert_eq!(diagnostic.code.to_string(), "E0004");
+        assert_eq!(diagnostic.message, "lists are not supported yet");
+        assert_eq!(diagnostic.primary.message, NOT_YET_SUPPORTED_LABEL);
+        assert_eq!(
+            NOT_YET_SUPPORTED_LABEL,
+            "this is implemented in a later stage"
+        );
     }
 
     #[test]

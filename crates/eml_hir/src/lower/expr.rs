@@ -6,8 +6,8 @@ use la_arena::Arena;
 
 use super::types::{TypeLowering, TypeScope};
 use crate::builtin::Builtin;
+use crate::codes;
 use crate::hir::*;
-use crate::{codes, not_yet_supported};
 
 pub(super) struct BodyLowering<'a> {
     pub(super) file: FileId,
@@ -302,13 +302,13 @@ impl<'a> BodyLowering<'a> {
 
     pub(super) fn unsupported(&mut self, range: TextRange, message: &str) -> ExprId {
         self.diagnostics
-            .push(not_yet_supported(self.file, range, message));
+            .push(Diagnostic::not_yet_supported(self.file, range, message));
         self.alloc(ExprKind::Missing, range)
     }
 
     fn unsupported_pat(&mut self, range: TextRange, message: &str) -> PatKind {
         self.diagnostics
-            .push(not_yet_supported(self.file, range, message));
+            .push(Diagnostic::not_yet_supported(self.file, range, message));
         PatKind::Missing
     }
 

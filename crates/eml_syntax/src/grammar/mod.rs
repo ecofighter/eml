@@ -11,9 +11,10 @@ mod scan;
 mod types;
 
 use crate::SyntaxKind::{self, *};
+use crate::codes;
 use crate::parser::{Marker, NESTING_LIMIT, Parser};
 use crate::token_set::TokenSet;
-use crate::{NOT_YET_SUPPORTED_LABEL, codes};
+use eml_diagnostics::{NOT_YET_SUPPORTED, NOT_YET_SUPPORTED_LABEL};
 use scan::Nesting;
 
 pub(crate) fn source_file(p: &mut Parser) {
@@ -226,7 +227,7 @@ fn describe(p: &Parser) -> String {
 }
 
 fn not_yet_supported(p: &mut Parser, message: &str) {
-    p.error(codes::NOT_YET_SUPPORTED, message, NOT_YET_SUPPORTED_LABEL);
+    p.error(NOT_YET_SUPPORTED, message, NOT_YET_SUPPORTED_LABEL);
 }
 
 /// 中身ごと読み飛ばすのは、S2 の構文の中で診断を連鎖させないため。ノードは作らないので、呼び出し側が `ERROR` で包む。
