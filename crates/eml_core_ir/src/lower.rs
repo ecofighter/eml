@@ -68,6 +68,11 @@ pub fn lower(module: &Module, typed: &TypedModule) -> Program {
         strings: builder.strings.values,
     };
     perceus::insert(&mut program);
+    // Perceus の誤りを、実行した経路だけでなく変換のたびに見つける (docs/spec/core-ir.md)
+    #[cfg(debug_assertions)]
+    if let Err(error) = crate::verify(&program) {
+        panic!("internal error: invalid Core IR: {error}");
+    }
     program
 }
 
