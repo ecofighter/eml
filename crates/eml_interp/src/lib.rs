@@ -21,6 +21,12 @@ enum Prepared {
     Apply(Value, Vec<Value>),
 }
 
+/// 1つの命令を実行した後の状態。
+enum Step {
+    Continue,
+    Finished,
+}
+
 /// 将来 `threads` などを足しても呼び出し側を壊さないように、`non_exhaustive` にして `RunConfig::default()` から作らせる。
 #[derive(Debug, Clone, Default)]
 #[non_exhaustive]
@@ -35,12 +41,52 @@ impl RunConfig {
     }
 }
 
+/// 実行時エラー (docs/spec/core-ir.md の「実行時エラー」)。表示は CLI と UI テストが使う文言である。
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RuntimeError(pub String);
+pub enum RuntimeError {
+    /// 実行中の関数で止まった。
+    Fault { fault: Fault, function: String },
+    /// `debug_heap` で、終了時に解放されていないオブジェクトがあった。記述子の名前ごとの数。
+    Leak(Vec<(String, usize)>),
+}
+
+/// 実行中の関数で起きた誤り。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Fault {
+    DivisionByZero,
+    IntegerOverflow,
+    Heap(HeapError),
+    Output(String),
+    /// 型検査と Core IR の変換が正しければ起きない誤り。
+    Internal(&'static str),
+}
+
+impl fmt::Display for Fault {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Fault::DivisionByZero => f.write_str("division by zero"),
+            Fault::IntegerOverflow => f.write_str("integer overflow"),
+            Fault::Heap(error) => write!(f, "{error}"),
+            Fault::Output(error) => write!(f, "cannot write the output: {error}"),
+            Fault::Internal(what) => write!(f, "internal error: {what}"),
+        }
+    }
+}
 
 impl fmt::Display for RuntimeError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.0)
+        match self {
+            RuntimeError::Fault { fault, function } => write!(f, "{fault} in `{function}`"),
+            RuntimeError::Leak(live) => {
+                let parts: Vec<String> =
+                    live.iter().map(|(name, n)| format!("{n} {name}")).collect();
+                write!(
+                    f,
+                    "memory leak: objects were not freed: {}",
+                    parts.join(", ")
+                )
+            }
+        }
     }
 }
 
@@ -103,30 +149,30 @@ impl<'p> Machine<'p> {
     fn run(&mut self) -> Result<(), RuntimeError> {
         loop {
             match self.step() {
-                Ok(true) => return Ok(()),
-                Ok(false) => {}
-                Err(message) => {
-                    let function = &self.program.function(self.function).name;
-                    return Err(RuntimeError(format!("{message} in `{function}`")));
+                Ok(Step::Finished) => return Ok(()),
+                Ok(Step::Continue) => {}
+                Err(fault) => {
+                    let function = self.program.function(self.function).name.clone();
+                    return Err(RuntimeError::Fault { fault, function });
                 }
             }
         }
     }
 
-    /// 1つの命令を実行する。プログラムが終わったら真を返す。
-    fn step(&mut self) -> Result<bool, String> {
+    /// 1つの命令を実行する。
+    fn step(&mut self) -> Result<Step, Fault> {
         let program = self.program;
         match program.function(self.function).expr(self.control) {
             CExpr::Let { var, rhs, body } => return self.bind(*var, rhs, *body),
             CExpr::Switch { scrutinee, arms } => {
                 let Value::Tag(tag) = self.atom(scrutinee)? else {
-                    return Err(internal("a switch on a value that is not a tag"));
+                    return Err(Fault::Internal("a switch on a value that is not a tag"));
                 };
                 self.control = arms
                     .iter()
                     .find(|(arm_tag, _)| *arm_tag == tag)
                     .map(|&(_, arm)| arm)
-                    .ok_or_else(|| internal("a switch without a matching arm"))?;
+                    .ok_or(Fault::Internal("a switch without a matching arm"))?;
             }
             CExpr::Return(atom) => {
                 let value = self.atom(atom)?;
@@ -146,24 +192,24 @@ impl<'p> Machine<'p> {
             CExpr::Dup { var, body } => {
                 let slot = self.slots[var.0 as usize]
                     .as_mut()
-                    .ok_or_else(|| internal("a variable duplicated after it was moved"))?;
+                    .ok_or(Fault::Internal("a variable duplicated after it was moved"))?;
                 if let Value::Obj(obj) = slot.value {
-                    self.heap.dup(obj).map_err(heap_error)?;
+                    self.heap.dup(obj).map_err(Fault::Heap)?;
                     slot.refs += 1;
                 }
                 self.control = *body;
             }
             CExpr::Decref { var, body } => {
                 if let Value::Obj(obj) = self.atom(&Atom::Var(*var))? {
-                    self.heap.decref(obj).map_err(heap_error)?;
+                    self.heap.decref(obj).map_err(Fault::Heap)?;
                 }
                 self.control = *body;
             }
         }
-        Ok(false)
+        Ok(Step::Continue)
     }
 
-    fn bind(&mut self, var: VarId, rhs: &Rhs, body: CExprId) -> Result<bool, String> {
+    fn bind(&mut self, var: VarId, rhs: &Rhs, body: CExprId) -> Result<Step, Fault> {
         let value = match rhs {
             Rhs::Atom(atom) => self.atom(atom)?,
             Rhs::ConstString(index) => {
@@ -181,7 +227,7 @@ impl<'p> Machine<'p> {
                 let text = self.take_string(args[0])?;
                 self.out
                     .write_str(&format!("{text}\n"))
-                    .map_err(|error| format!("cannot write the output: {error}"))?;
+                    .map_err(|error| Fault::Output(error.to_string()))?;
                 Value::Unit
             }
             Rhs::Call(call) => return self.call(call, Some((var, body))),
@@ -196,12 +242,12 @@ impl<'p> Machine<'p> {
         };
         self.slots[var.0 as usize] = Some(Owned::new(value));
         self.control = body;
-        Ok(false)
+        Ok(Step::Continue)
     }
 
     /// 呼び出す。引数は、環境を退避する前に読む。`resume` は、戻った値を受ける変数と再開する位置で、`None` なら
     /// フレームを積まない (末尾呼び出し)。
-    fn call(&mut self, call: &Call, resume: Option<(VarId, CExprId)>) -> Result<bool, String> {
+    fn call(&mut self, call: &Call, resume: Option<(VarId, CExprId)>) -> Result<Step, Fault> {
         let prepared = match call {
             Call::Direct(callee, args) => Prepared::Direct(*callee, self.atoms(args)?),
             Call::Apply(callee, args) => {
@@ -215,10 +261,10 @@ impl<'p> Machine<'p> {
         match prepared {
             Prepared::Direct(callee, args) => {
                 self.enter(callee, args);
-                Ok(false)
+                Ok(Step::Continue)
             }
             Prepared::Apply(callee, args) => match self.apply(callee, args)? {
-                Applied::Entered => Ok(false),
+                Applied::Entered => Ok(Step::Continue),
                 Applied::Value(value) => self.ret(value),
             },
         }
@@ -237,9 +283,9 @@ impl<'p> Machine<'p> {
 
     /// 関数値を引数に適用する (docs/spec/core-ir.md の eval/apply)。引数の個数が揃えば関数に入り、足りなければ
     /// 引数を足したクロージャを値にし、余れば余りを持つフレームを積んでから関数に入る。
-    fn apply(&mut self, callee: Value, mut args: Vec<Value>) -> Result<Applied, String> {
+    fn apply(&mut self, callee: Value, mut args: Vec<Value>) -> Result<Applied, Fault> {
         let Value::Obj(obj) = callee else {
-            return Err(internal("applying a value that is not a closure"));
+            return Err(Fault::Internal("applying a value that is not a closure"));
         };
         let closure = self.take_closure(obj)?;
         let function = FnIdx(closure.function);
@@ -274,23 +320,23 @@ impl<'p> Machine<'p> {
 
     /// 呼び出しはクロージャの所有権を受け取る。一意なら中身を取り出し、共有されていれば中身の参照を複製してから
     /// 手放す。
-    fn take_closure(&mut self, obj: ObjRef) -> Result<Closure, String> {
-        if self.heap.is_unique(obj).map_err(heap_error)? {
-            return match self.heap.take(obj).map_err(heap_error)? {
+    fn take_closure(&mut self, obj: ObjRef) -> Result<Closure, Fault> {
+        if self.heap.is_unique(obj).map_err(Fault::Heap)? {
+            return match self.heap.take(obj).map_err(Fault::Heap)? {
                 Payload::Closure(closure) => Ok(closure),
-                _ => Err(internal("applying an object that is not a closure")),
+                _ => Err(Fault::Internal("applying an object that is not a closure")),
             };
         }
-        let closure = match self.heap.get(obj).map_err(heap_error)? {
+        let closure = match self.heap.get(obj).map_err(Fault::Heap)? {
             Payload::Closure(closure) => closure.clone(),
-            _ => return Err(internal("applying an object that is not a closure")),
+            _ => return Err(Fault::Internal("applying an object that is not a closure")),
         };
         for value in &closure.args {
             if let Value::Obj(captured) = value {
-                self.heap.dup(*captured).map_err(heap_error)?;
+                self.heap.dup(*captured).map_err(Fault::Heap)?;
             }
         }
-        self.heap.decref(obj).map_err(heap_error)?;
+        self.heap.decref(obj).map_err(Fault::Heap)?;
         Ok(closure)
     }
 
@@ -308,16 +354,16 @@ impl<'p> Machine<'p> {
 
     /// 継続の先頭のフレームに値を返す。最下部の `IO` の handler に届いたら、プログラムが終わる。
     /// 余った引数のフレームが続く間はループで適用し、Rust の再帰を使わない。
-    fn ret(&mut self, mut value: Value) -> Result<bool, String> {
+    fn ret(&mut self, mut value: Value) -> Result<Step, Fault> {
         loop {
             // 段階2までは継続を複製しないので、フレームは常に一意である。共有されたフレームは段階3の `multi` で扱う
-            let frame = match self.heap.take(self.cont).map_err(heap_error)? {
+            let frame = match self.heap.take(self.cont).map_err(Fault::Heap)? {
                 Payload::ApplyFrame(frame) => {
                     self.cont = frame
                         .next
-                        .ok_or_else(|| internal("an apply frame without a next frame"))?;
+                        .ok_or(Fault::Internal("an apply frame without a next frame"))?;
                     match self.apply(value, frame.args)? {
-                        Applied::Entered => return Ok(false),
+                        Applied::Entered => return Ok(Step::Continue),
                         Applied::Value(result) => {
                             value = result;
                             continue;
@@ -325,13 +371,13 @@ impl<'p> Machine<'p> {
                     }
                 }
                 Payload::Frame(frame) => frame,
-                _ => return Err(internal("the continuation is not a frame")),
+                _ => return Err(Fault::Internal("the continuation is not a frame")),
             };
             if frame.function == IO_HANDLER {
                 if let Value::Obj(obj) = value {
-                    self.heap.decref(obj).map_err(heap_error)?;
+                    self.heap.decref(obj).map_err(Fault::Heap)?;
                 }
-                return Ok(true);
+                return Ok(Step::Finished);
             }
             if let Some(slots) = frame.slots {
                 self.slots = slots;
@@ -341,21 +387,21 @@ impl<'p> Machine<'p> {
             self.slots[frame.bind as usize] = Some(Owned::new(value));
             self.cont = frame
                 .next
-                .ok_or_else(|| internal("a frame without a next frame"))?;
-            return Ok(false);
+                .ok_or(Fault::Internal("a frame without a next frame"))?;
+            return Ok(Step::Continue);
         }
     }
 
     /// ヒープの値の読み出しは所有権の移動で、複製は `dup` 命令だけが行う (docs/spec/core-ir.md)。ただし Perceus の `dup` で
     /// 1つの変数が複数の参照を持ち、1つの右辺で2回読むこともあるので (`dup s; prim ++(s, s)`)、変数ごとに参照の数を
     /// 数え、読むたびに1つ減らして0になったらスロットを空にする。ヒープにない値は何度でも読める。
-    fn atom(&mut self, atom: &Atom) -> Result<Value, String> {
+    fn atom(&mut self, atom: &Atom) -> Result<Value, Fault> {
         Ok(match *atom {
             Atom::Var(var) => {
                 let slot = &mut self.slots[var.0 as usize];
                 let owned = slot
                     .as_mut()
-                    .ok_or_else(|| internal("a variable read after it was moved"))?;
+                    .ok_or(Fault::Internal("a variable read after it was moved"))?;
                 let value = owned.value;
                 if let Value::Obj(_) = value {
                     owned.refs -= 1;
@@ -371,18 +417,18 @@ impl<'p> Machine<'p> {
         })
     }
 
-    fn atoms(&mut self, atoms: &[Atom]) -> Result<Vec<Value>, String> {
+    fn atoms(&mut self, atoms: &[Atom]) -> Result<Vec<Value>, Fault> {
         atoms.iter().map(|atom| self.atom(atom)).collect()
     }
 
-    fn prim(&mut self, op: PrimOp, args: &[Value]) -> Result<Value, String> {
+    fn prim(&mut self, op: PrimOp, args: &[Value]) -> Result<Value, Fault> {
         let int = |index: usize| match args[index] {
             Value::Int(n) => Ok(n),
-            _ => Err(internal(
+            _ => Err(Fault::Internal(
                 "an integer operation on a value that is not an integer",
             )),
         };
-        let overflow = || "integer overflow".to_string();
+        let overflow = || Fault::IntegerOverflow;
         let tag = |b: bool| Value::Tag(if b { TRUE } else { FALSE });
         Ok(match op {
             PrimOp::IntAdd => Value::Int(int(0)?.checked_add(int(1)?).ok_or_else(overflow)?),
@@ -391,7 +437,7 @@ impl<'p> Machine<'p> {
             PrimOp::IntDiv | PrimOp::IntMod => {
                 let (a, b) = (int(0)?, int(1)?);
                 if b == 0 {
-                    return Err("division by zero".to_string());
+                    return Err(Fault::DivisionByZero);
                 }
                 // Rust と同じく 0 の方向に切り捨てる (docs/spec/declarations.md)
                 let result = if op == PrimOp::IntDiv {
@@ -410,7 +456,7 @@ impl<'p> Machine<'p> {
             PrimOp::IntGe => tag(int(0)? >= int(1)?),
             PrimOp::Not => match args[0] {
                 Value::Tag(t) => tag(t == FALSE),
-                _ => return Err(internal("`not` on a value that is not a tag")),
+                _ => return Err(Fault::Internal("`not` on a value that is not a tag")),
             },
             PrimOp::ShowInt => {
                 let text = int(0)?.to_string();
@@ -425,21 +471,21 @@ impl<'p> Machine<'p> {
     }
 
     /// プリミティブは引数の所有権を受け取るので、読んだ文字列は decref する。
-    fn take_string(&mut self, value: Value) -> Result<String, String> {
+    fn take_string(&mut self, value: Value) -> Result<String, Fault> {
         let Value::Obj(obj) = value else {
-            return Err(internal(
+            return Err(Fault::Internal(
                 "a string operation on a value that is not a string",
             ));
         };
-        let text = match self.heap.get(obj).map_err(heap_error)? {
+        let text = match self.heap.get(obj).map_err(Fault::Heap)? {
             Payload::Str(text) => text.clone(),
             _ => {
-                return Err(internal(
+                return Err(Fault::Internal(
                     "a string operation on a value that is not a string",
                 ));
             }
         };
-        self.heap.decref(obj).map_err(heap_error)?;
+        self.heap.decref(obj).map_err(Fault::Heap)?;
         Ok(text)
     }
 
@@ -448,25 +494,43 @@ impl<'p> Machine<'p> {
         if live.is_empty() {
             return Ok(());
         }
-        let parts: Vec<String> = live.iter().map(|(name, n)| format!("{n} {name}")).collect();
-        Err(RuntimeError(format!(
-            "memory leak: objects were not freed: {}",
-            parts.join(", ")
-        )))
+        Err(RuntimeError::Leak(live))
     }
-}
-
-fn internal(what: &str) -> String {
-    format!("internal error: {what}")
-}
-
-fn heap_error(error: HeapError) -> String {
-    error.to_string()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn runtime_errors_are_displayed_as_before() {
+        let fault = |fault| {
+            RuntimeError::Fault {
+                fault,
+                function: "f".to_string(),
+            }
+            .to_string()
+        };
+        assert_eq!(fault(Fault::DivisionByZero), "division by zero in `f`");
+        assert_eq!(fault(Fault::IntegerOverflow), "integer overflow in `f`");
+        assert_eq!(
+            fault(Fault::Heap(HeapError::UseAfterFree)),
+            "use of a freed object in `f`"
+        );
+        assert_eq!(
+            fault(Fault::Output("broken pipe".to_string())),
+            "cannot write the output: broken pipe in `f`"
+        );
+        assert_eq!(
+            fault(Fault::Internal("a switch without a matching arm")),
+            "internal error: a switch without a matching arm in `f`"
+        );
+        let leak = RuntimeError::Leak(vec![("Closure".to_string(), 2), ("String".to_string(), 1)]);
+        assert_eq!(
+            leak.to_string(),
+            "memory leak: objects were not freed: 2 Closure, 1 String"
+        );
+    }
 
     #[test]
     fn with_debug_heap_sets_the_flag() {

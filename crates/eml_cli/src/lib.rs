@@ -5,7 +5,7 @@ use std::sync::Arc;
 use eml_core_ir::Program;
 use eml_diagnostics::{Diagnostic, FileId, SourceFiles, has_errors};
 
-pub use eml_interp::RunConfig;
+pub use eml_interp::{RunConfig, RuntimeError};
 pub use eml_runtime::{Captured, OutputSink};
 
 pub fn check(files: &SourceFiles, file: FileId) -> Vec<Diagnostic> {
@@ -36,17 +36,12 @@ pub fn compile(files: &SourceFiles, file: FileId) -> Compiled {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum RunResult {
-    Completed,
-    RuntimeError(String),
-}
-
-pub fn execute(program: Arc<Program>, config: &RunConfig, stdout: OutputSink) -> RunResult {
-    match eml_interp::run(program, config, &stdout) {
-        Ok(()) => RunResult::Completed,
-        Err(error) => RunResult::RuntimeError(error.to_string()),
-    }
+pub fn execute(
+    program: Arc<Program>,
+    config: &RunConfig,
+    stdout: OutputSink,
+) -> Result<(), RuntimeError> {
+    eml_interp::run(program, config, &stdout)
 }
 
 /// エラーがあっても止めずに、検査の段階をすべて実行する。1回の実行で、独立した複数のエラーを報告するため。

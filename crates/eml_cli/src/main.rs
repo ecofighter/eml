@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
-use eml_cli::{OutputSink, RunConfig, RunResult};
+use eml_cli::{OutputSink, RunConfig};
 use eml_diagnostics::{FileId, SourceFiles, has_errors, render};
 
 #[derive(Parser)]
@@ -54,9 +54,9 @@ fn main() -> ExitCode {
                 return ExitCode::from(1);
             };
             match eml_cli::execute(program, &config, OutputSink::stdout()) {
-                RunResult::Completed => ExitCode::SUCCESS,
-                RunResult::RuntimeError(message) => {
-                    eprintln!("runtime error: {message}");
+                Ok(()) => ExitCode::SUCCESS,
+                Err(error) => {
+                    eprintln!("runtime error: {error}");
                     ExitCode::from(1)
                 }
             }

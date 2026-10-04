@@ -4,7 +4,7 @@
 use std::fs;
 use std::path::Path;
 
-use eml_cli::{OutputSink, RunConfig, RunResult};
+use eml_cli::{OutputSink, RunConfig, RuntimeError};
 use eml_diagnostics::{SourceFiles, has_errors, render};
 
 /// スナップショットの中のパスを安定させるため、`tests/ui` からの相対パスでファイルを登録する。
@@ -24,7 +24,7 @@ fn load(path: &Path) -> (SourceFiles, eml_diagnostics::FileId) {
 }
 
 /// 診断のエラーなしでコンパイルし、`debug_heap` を有効にして実行する。stdout、診断の表示、実行の結果を返す。
-fn compile_and_execute(path: &Path) -> (String, String, RunResult) {
+fn compile_and_execute(path: &Path) -> (String, String, Result<(), RuntimeError>) {
     let (files, id) = load(path);
     let compiled = eml_cli::compile(&files, id);
     let stderr = render(&compiled.diagnostics, &files);
@@ -41,7 +41,7 @@ fn compile_and_execute(path: &Path) -> (String, String, RunResult) {
 fn run() {
     insta::glob!("../../../tests/ui", "run/*.em", |path| {
         let (stdout, stderr, result) = compile_and_execute(path);
-        assert_eq!(result, RunResult::Completed, "{stderr}");
+        assert_eq!(result, Ok(()), "{stderr}");
         insta::assert_snapshot!(format!("--- stdout ---\n{stdout}--- stderr ---\n{stderr}"));
     });
 }
@@ -50,11 +50,11 @@ fn run() {
 fn run_fail() {
     insta::glob!("../../../tests/ui", "run-fail/*.em", |path| {
         let (stdout, _, result) = compile_and_execute(path);
-        let RunResult::RuntimeError(message) = result else {
+        let Err(error) = result else {
             panic!("expected a runtime error");
         };
         insta::assert_snapshot!(format!(
-            "--- stdout ---\n{stdout}--- runtime error ---\n{message}\n"
+            "--- stdout ---\n{stdout}--- runtime error ---\n{error}\n"
         ));
     });
 }

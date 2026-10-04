@@ -41,9 +41,7 @@ fn leaking_program() -> Program {
 fn debug_heap_reports_leaks() {
     assert_eq!(
         execute(leaking_program(), true).1,
-        Err(RuntimeError(
-            "memory leak: objects were not freed: 1 String".to_string()
-        ))
+        Err(RuntimeError::Leak(vec![("String".to_string(), 1)]))
     );
     assert_eq!(execute(leaking_program(), false).1, Ok(()));
 }

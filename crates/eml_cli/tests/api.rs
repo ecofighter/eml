@@ -1,4 +1,4 @@
-use eml_cli::{OutputSink, RunConfig, RunResult, compile, execute};
+use eml_cli::{OutputSink, RunConfig, compile, execute};
 use eml_diagnostics::{SourceFiles, has_errors};
 
 #[test]
@@ -25,10 +25,7 @@ fn execute_runs_a_compiled_program() {
     let file = files.add("a.em", "main : Unit -> <IO> Unit\nmain () = ()");
     let program = compile(&files, file).program.unwrap();
     let (sink, _) = OutputSink::capture();
-    assert_eq!(
-        execute(program, &RunConfig::default(), sink),
-        RunResult::Completed
-    );
+    assert_eq!(execute(program, &RunConfig::default(), sink), Ok(()));
 }
 
 #[test]
