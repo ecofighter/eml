@@ -272,3 +272,31 @@ fn a_function_type_with_other_effect_arguments_is_a_mismatch() {
       13:15 argument 1 of `run`
     ");
 }
+
+#[test]
+fn a_continuation_of_a_multi_operation_may_be_resumed_twice() {
+    let text = "effect Choice where\n  multi choose : Unit -> Bool\n\nboth : Unit -> Int\nboth () =\n  handle (if choose () then 1 else 2) with\n    | choose () k -> resume k True + resume k False";
+    insta::assert_snapshot!(check_text(text), @r"
+    choose : Unit -> <Choice> Bool
+    both : Unit -> Int
+      k#0 : Cont Bool Int <>
+    ");
+}
+
+#[test]
+fn the_return_clause_of_a_multi_handler_cannot_capture_a_linear_value() {
+    let text = "effect Ask where\n  ask : Unit -> Int\n\neffect Choice where\n  multi choose : Unit -> Bool\n\ncaptured : Unit -> Int\ncaptured () =\n  handle ask () with\n    | ask () k ->\n        handle (if choose () then 1 else 2) with\n          | choose () c -> resume c True + resume c False\n          | return n -> resume k n";
+    insta::assert_snapshot!(check_text(text), @r"
+    ask : Unit -> <Ask> Int
+    choose : Unit -> <Choice> Bool
+    captured : Unit -> Int
+      k#0 : Cont Int Int <>
+      c#1 : Cont Bool Int <>
+      n#2 : Int
+    ---
+    E3001 10:14 `k` must be used exactly once, but the `return` clause of a handler with a `multi` operation captures it
+      10:14 `k` is bound here
+      note: linear values, such as the continuation of a `once` operation and closures that capture one, must be used exactly once
+      note: the `return` clause runs each time a continuation of a `multi` operation is resumed
+    ");
+}

@@ -46,11 +46,12 @@ pub struct EffectDef {
     pub operations: Vec<OperationId>,
 }
 
-/// 操作の多重度 (docs/spec/effects.md)。`multi` は段階3b で足す。
+/// 操作の多重度 (docs/spec/effects.md)。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OpMultiplicity {
     Never,
     Once,
+    Multi,
 }
 
 #[derive(Debug)]

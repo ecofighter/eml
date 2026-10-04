@@ -202,6 +202,7 @@ impl Table {
                         .map(|&op| match operations[op].multiplicity {
                             OpMultiplicity::Never => Multiplicity::Never,
                             OpMultiplicity::Once => Multiplicity::Once,
+                            OpMultiplicity::Multi => Multiplicity::Multi,
                         })
                         .max()
                         .unwrap_or(Multiplicity::Never)

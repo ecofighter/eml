@@ -28,14 +28,15 @@ pub fn pretty(module: &Module) -> String {
                 module,
                 generics: &operation.signature.generics,
             };
-            let never = match operation.multiplicity {
+            let multiplicity = match operation.multiplicity {
                 OpMultiplicity::Never => "never ",
                 OpMultiplicity::Once => "",
+                OpMultiplicity::Multi => "multi ",
             };
             let signature = &operation.signature;
             writeln!(
                 out,
-                "  {never}{} : {}",
+                "  {multiplicity}{} : {}",
                 operation.name,
                 printer.ty(&signature.types, signature.ty)
             )

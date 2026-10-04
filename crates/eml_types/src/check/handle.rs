@@ -1,6 +1,6 @@
 //! handle、`resume` の検査 (docs/spec/effects.md の「handler の意味」)。
 
-use eml_hir::{EffectId, ExprId, OpClause, ReturnClause};
+use eml_hir::{EffectId, ExprId, OpClause, OpMultiplicity, ReturnClause};
 
 use crate::scheme::{Rigids, lower_operation};
 use crate::table::{ArrowLin, Label, Row, Tail, Ty, TyShape};
@@ -57,7 +57,7 @@ impl BodyCheck<'_> {
     }
 
     /// 節の引数は操作の引数の型で、`k` は「操作の結果を受け、handle 式の値を返し、外側の row のエフェクトを起こす」
-    /// 継続である。`once` の操作の `k` は `Lin` である (docs/spec/effects.md の「継続の多重度と持ち越し規則」)。
+    /// 継続である。`once` の操作の `k` は `Lin`、`multi` の操作の `k` は `Unr` である (docs/spec/effects.md の「継続の多重度と持ち越し規則」)。
     fn op_clause(&mut self, clause: &OpClause, result: Ty, outer: &Row, effect_args: &[Ty]) {
         let operation = &self.module.operations[clause.op];
         // エフェクトの型引数は handle の型引数である。操作自身の型変数は節の中では rigid である。handler は、操作が
@@ -83,9 +83,14 @@ impl BodyCheck<'_> {
             }
         }
         if let Some(k) = clause.k {
+            // `multi` の操作の `k` は何度でも再開でき、捨ててもよい (docs/spec/effects.md の「継続の多重度と持ち越し規則」)
+            let lin = match operation.multiplicity {
+                OpMultiplicity::Multi => Linearity::Unr,
+                OpMultiplicity::Once | OpMultiplicity::Never => Linearity::Lin,
+            };
             let continuation = self.table.alloc(TyShape::Cont {
                 arg: ty,
-                lin: ArrowLin::Known(Linearity::Lin),
+                lin: ArrowLin::Known(lin),
                 row: outer.clone(),
                 ret: result,
             });

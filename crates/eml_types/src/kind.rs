@@ -37,6 +37,8 @@ pub(crate) enum KindReason {
     Discarded,
     /// 操作の節が捕まえた変数。
     CapturedByClause(String),
+    /// 扱うエフェクトに `multi` の操作がある handler の、`return` の節が捕まえた変数。
+    CapturedByReturnClause(String),
     /// ラムダが捕まえた値。
     CapturedByLambda,
     /// トップレベルの関数、組み込み、操作のスキームから複写した制約。名前は参照した値の名前である。

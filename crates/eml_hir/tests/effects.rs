@@ -52,12 +52,11 @@ fn operation_signatures_are_checked() {
       constant : Int
       never bad : a -> a
       never good : Int -> b
-      many : Unit -> Int
+      multi many : Unit -> Int
     ---
     E1007 2:21 an operation cannot have a row on its outermost arrows
     E1007 3:14 the signature of an operation must be a function type
     E1008 4:20 the result type of a `never` operation must be a type variable that does not appear in its parameters
-    E0004 6:3 `multi` operations are not supported yet
     ");
 }
 

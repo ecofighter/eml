@@ -110,14 +110,7 @@ fn lower_operation(
     let name = decl.name()?;
     let multiplicity = match decl.multiplicity() {
         Some(token) if token.kind() == SyntaxKind::NEVER_KW => OpMultiplicity::Never,
-        Some(token) if token.kind() == SyntaxKind::MULTI_KW => {
-            diagnostics.push(Diagnostic::not_yet_supported(
-                file,
-                token.text_range(),
-                "`multi` operations are not supported yet",
-            ));
-            OpMultiplicity::Once
-        }
+        Some(token) if token.kind() == SyntaxKind::MULTI_KW => OpMultiplicity::Multi,
         _ => OpMultiplicity::Once,
     };
     let range = decl.ty().map_or(decl.range(), |ty| ty.range());

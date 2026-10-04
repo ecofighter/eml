@@ -343,6 +343,12 @@ pub(super) fn linear_misuse(file: FileId, origin: &KindOrigin) -> Diagnostic {
             format!("`{name}` must be used exactly once, but an operation clause captures it"),
             format!("`{name}` is bound here"),
         ),
+        KindReason::CapturedByReturnClause(name) => (
+            format!(
+                "`{name}` must be used exactly once, but the `return` clause of a handler with a `multi` operation captures it"
+            ),
+            format!("`{name}` is bound here"),
+        ),
         KindReason::CapturedByLambda => (
             "a lambda that captures a linear value is used where it may be called any number of times"
                 .to_string(),
@@ -379,6 +385,11 @@ pub(super) fn linear_misuse(file: FileId, origin: &KindOrigin) -> Diagnostic {
         KindReason::CapturedByClause(_) => {
             diagnostic = diagnostic
                 .with_note("an operation clause runs each time its operation is performed");
+        }
+        KindReason::CapturedByReturnClause(_) => {
+            diagnostic = diagnostic.with_note(
+                "the `return` clause runs each time a continuation of a `multi` operation is resumed",
+            );
         }
         _ => {}
     }
