@@ -2,7 +2,7 @@
 
 位置づけ: 手引き。
 
-テストの書き方、層ごとの方法、UI テストの仕組み、テストの変更に関する合意済みの例外を定める。マルチコア対応の段階でのテスト方針も扱う。
+テストの書き方、テストの変更の運用、層ごとの方法、UI テストの仕組み、これまでのテストの変更の記録を定める。マルチコア対応の段階でのテスト方針も扱う。
 
 ## 方針
 
@@ -49,7 +49,7 @@
 - `crates/eml_cli/tests/ui.rs`: UI テスト
 - `crates/eml_cli/tests/api.rs`: lib API (`check` / `compile` / `execute`) の流れ
 - `crates/eml_cli/tests/cli.rs`: CLI の終了コード
-- `crates/eml_test_support/`: 結合テストのためにパイプラインを組む関数 (`parse`、`lower`、`check`、`core`、`run`、`execute`) と、診断を文字列にする関数 (`short`、`full`)。開発専用の crate で、各 crate の `tests/` からだけ使う。`src/` の `#[cfg(test)]` から使うと、テストする crate が2つ別々にリンクされて型が合わなくなる
+- `crates/eml_test_support/`: 結合テストのためにパイプラインを組む関数 (`parse`、`lower`、`check`、`core`、`run`、`execute`) と、診断を文字列にする関数 (`short`、`full`)。開発専用の crate で、各 crate の `tests/` からだけ使う。段階は feature (`hir` < `types` < `core` < `run`) で選び、各 crate は自分の段階までを有効にする。下流の crate がまだ組み立たなくても、上流の段階のテストを流せるようにするためである。`src/` の `#[cfg(test)]` から使うと、テストする crate が2つ別々にリンクされて型が合わなくなる
 
 ## UI テスト
 
@@ -87,7 +87,7 @@
 
 ### リファクタリング R0
 
-- `crates/eml_interp/tests/run.rs` のうち、ソースから実行するテストを UI テストに寄せた。UI テストが同じことを確かめていた `hello_world`、`arithmetic_truncates_toward_zero`、`recursion`、`deep_recursion_does_not_overflow_the_stack`、`integer_overflow_is_a_runtime_error`、`division_by_zero_is_a_runtime_error` は削除した。UI テストにない場合を含む `strings_are_freed` と `and_and_or_short_circuit` は、ソースを変えずに `tests/ui/run/strings_freed_in_branches.em` と `tests/ui/run/short_circuit.em` に移した。stdout は元の期待値と同じである。手書きの Core IR や生成したソースが要るテストだけを `eml_interp` に残した
+- `crates/eml_interp/tests/run.rs` のうち、ソースから実行するテストを UI テストに寄せた。UI テストが同じことを確かめていた `hello_world`、`arithmetic_truncates_toward_zero`、`recursion`、`deep_recursion_does_not_overflow_the_stack`、`integer_overflow_is_a_runtime_error`、`division_by_zero_is_a_runtime_error` は削除した。UI テストにない場合を含む `strings_are_freed` と `and_and_or_short_circuit` は、先頭に説明のコメントを足したほかはソースを変えずに `tests/ui/run/strings_freed_in_branches.em` と `tests/ui/run/short_circuit.em` に移した。stdout は元の期待値と同じである。手書きの Core IR や生成したソースが要るテストだけを `eml_interp` に残した
 
 ## よく使うコマンド
 

@@ -89,7 +89,7 @@ S2、S3 の構文は、S1 の時点でも字句と文法の置き場所を用意
 |---|---|---|---|---|
 | 1 | `Frame` に種類の enum を持たせる (段階2の設計) | 別のペイロード `Payload::ApplyFrame` を足し、記述子は `FRAME` を流用した。作業記録には「`Frame` を変えると既存の heap テストの書き換えが要るため」とある | 継続のリストが2種類のペイロードからなる。段階3の継続の捕獲、複製、`drop k` がどちらの種類も扱う必要がある | R3 |
 | 2 | レイアウト規則2を例外なしで適用する | `block_inside_brackets_must_be_deeper_than_the_enclosing_block` を通すために、E0009 を出した行を除く `missing` フラグを足し、後で列0の例外を重ねた | テストのための例外が、規範の `spec/layout.md` の規則2に書き込まれている | R1 |
-| 3 | BOM を読み込み時に除くか、表示だけで直すか | 「既存のテストが変わらない」ほうの表示側の修正を選んだ | BOM の扱いが lexer、レイアウト段、表示の3か所に分かれている | R1 |
+| 3 | BOM を読み込み時に除くか、表示だけで直すか | 「既存のテストが変わらない」ほうの表示側の修正を選んだ | BOM の扱いが lexer、レイアウト段、`eml_diagnostics` (表示と行と列の計算) の3か所に分かれている | R1 |
 | 4 | `TypedModule::signatures` にスキームを持たせる (段階2の設計) | `signatures: Type` を残し、テストの表示のためだけの公開フィールド `kinds` を足した。理由は記録されていない | スキームが後の段階に渡らない | R2 |
 
 ### R1〜R3 で直す項目
@@ -139,13 +139,14 @@ S2、S3 の構文は、S1 の時点でも字句と文法の置き場所を用意
 
 | crate | 状態 |
 |---|---|
-| `eml_diagnostics` | 実装済み。`Diagnostic`、`FileId` と `SourceFiles`、ariadne による表示 |
+| `eml_diagnostics` | 実装済み。`Diagnostic`、`FileId` と `SourceFiles`、行と列 (`SourceFiles::line_col`)、ariadne による表示 |
 | `eml_syntax` | S1 まで実装済み。lexer、レイアウト段、パーサ、型付き AST ラッパ。入れ子の深さの上限 (E0013、フィールドアクセスの連鎖を含む) を持つ |
 | `eml_hir` | 段階2まで実装済み。宣言の対応づけ、名前解決、演算子の列の組み直し、`&&` / `\|\|` / `\|>` / `<\|` の脱糖、E1001〜E1006。ラムダと、シグネチャの型変数と row 変数の表 |
 | `eml_types` | 段階2まで実装済み。型・row・Kind の表現と単一化、シグネチャに対する本体の検査、E2001〜E2005。型変数と row 変数の表、スキームと SCC ごとの Kind の推論、使用回数のパス、関数値と部分適用の検査。線形性と網羅性の検査は未実装 |
 | `eml_core_ir` | 段階2まで実装済み。ANF への変換、Perceus の `dup` / `decref` の挿入。ラムダのクロージャ変換 (捕まえた変数を先頭の引数に持つ関数への持ち上げ)、関数値の呼び出し |
-| `eml_runtime` | 段階2まで実装済み。世代番号つきのヒープ、RC、記述子、`debug_heap` のリーク検出、`OutputSink`。クロージャのオブジェクトと、余った引数のフレーム |
+| `eml_runtime` | 段階2まで実装済み。世代番号つきのヒープ、RC、記述子、`debug_heap` のリーク検出、`OutputSink` (テストで出力を捕まえる `Captured` を含む)。クロージャのオブジェクトと、余った引数のフレーム |
 | `eml_interp` | 段階2まで実装済み。CEK 機械 (ヒープ上の継続のフレーム、最下部の `IO` の handler)、プリミティブ、`println`、eval/apply によるクロージャの呼び出し |
+| `eml_test_support` | 開発専用。結合テストのパイプライン (段階ごとの feature で選ぶ) と、診断を文字列にする関数 |
 | `eml_cli` | 実装済み。`check` / `run` コマンド、lib API (`check` / `compile` / `execute`)、終了コード、UI テスト (`run/`、`run-fail/`、`check-fail/`) と CLI テスト |
 
 ## 次の作業の注意点
