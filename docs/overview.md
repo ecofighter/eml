@@ -56,7 +56,7 @@ eml の目的、言語の性格、確定した設計判断の一覧、文書全�
 | 型の宣言 | `data` は直和型、`type` は型の別名 | [宣言](spec/declarations.md) |
 | エフェクトの宣言 | `effect Name a where` の後に操作を並べる。操作のカリー化を許す | [宣言](spec/declarations.md) |
 | `use` | ブロックの残りを、最後の引数のラムダとして渡す糖衣構文 | [式](spec/expressions.md) |
-| パラメータ付き handler | `handle e from init with`。状態を handler が持ち、節の最後の引数で受ける | [式](spec/expressions.md) |
+| パラメータ付き handler | `handle e from init with`。状態を handler が持ち、節の最後の引数で受ける。状態のない handler は状態の型が `Unit` の handler として扱い、`resume k v` は `resume k v ()` の略 | [式](spec/expressions.md) |
 | 線形値の受け渡し | 糖衣構文は入れない。再束縛、`use`、パラメータ付き handler で吸収する | [式](spec/expressions.md) |
 | 文字列 | 補間は `"\{x}"`。複数行の `"""`、raw の `r"..."` | [字句](spec/lexical.md) |
 | コマンドリテラル | バッククォート。シェルを介さず、引数のリストを組む (Julia 方式) | [字句](spec/lexical.md) |

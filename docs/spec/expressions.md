@@ -155,7 +155,7 @@ with_log path action =
   脱糖しないのは、状態を handler フレームに置くと、`| get () k st -> resume k st st` のような節がすぐに再開する形のまま残るためである。将来の evidence passing の最適化を、そのまま当てはめられる ([evidence passing の設計](../future/evidence-passing.md))
 - `return` の節を省略したら、`| return x _ -> x` とみなす。状態を `_` で捨てるので、状態の型に `Unr` の制約が付く。`Lin` の状態では `return` の節を書く
 - 状態の線形性の規則は [線形性](linearity.md) の「パラメータ付き handler の状態」で定める
-- `resume` の引数が 2 個でも 3 個でもなければ、HIR で E1011 にする。個数が `k` の型 (状態の有無) と合わないことは、型検査で報告する ([エフェクトと handler](effects.md) の「パラメータ付き handler」)
+- `resume` の引数が 2 個でも 3 個でもなければ、HIR で E1011 にする。`resume k v` は `resume k v ()` の略である。状態のない handler は状態の型が `Unit` の handler として扱うので、2引数と3引数のどちらが合うかは、状態の型の単一化で決まる ([エフェクトと handler](effects.md) の「パラメータ付き handler」)
 - `Ref` には `Unr` の値しか入れられない ([マルチコア対応の設計](../future/multicore.md) の「可変状態」)。そのため、`Lin` なリソースを handler に持たせる方法は、この構文が基本になる
 
 ## 並行処理
