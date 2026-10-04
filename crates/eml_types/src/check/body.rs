@@ -172,7 +172,7 @@ impl BodyCheck<'_> {
             ExprKind::Literal(Literal::String(_)) => self.table.string,
             ExprKind::Literal(Literal::Unit) => self.table.unit,
             ExprKind::Path(res) => self.value(*res),
-            ExprKind::Call { callee, args } => self.call(id, *callee, args),
+            ExprKind::Call { callee, args, .. } => self.call(id, *callee, args),
             ExprKind::If {
                 condition,
                 then_branch,

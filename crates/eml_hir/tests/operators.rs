@@ -48,13 +48,7 @@ fn pipes_become_applications() {
     g : Int -> Int -> Int
     g a#0 b#1 = a#0
     p : Int
-    p = {
-      let $pipe#1 = {
-        let $pipe#0 = 1
-        (@f $pipe#0)
-      }
-      (@g 2 $pipe#1)
-    }
+    p = (@g 2 |>(@f |>1))
     q : Int
     q = (@g 1 (@f 2))
     ");

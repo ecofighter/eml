@@ -116,6 +116,7 @@ impl BodyLowering<'_> {
                     ExprKind::Call {
                         callee,
                         args: vec![operand],
+                        evaluate_first: None,
                     },
                     whole,
                 )
@@ -157,7 +158,7 @@ impl BodyLowering<'_> {
                 )
             }
             "|>" => self.pipe(lhs, rhs, range),
-            "<|" => self.call(lhs, vec![rhs], range),
+            "<|" => self.call(lhs, vec![rhs], None, range),
             _ => {
                 let callee = match Builtin::binary_operator(op) {
                     Some(builtin) => self.alloc(ExprKind::Path(Res::Builtin(builtin)), op_range),
@@ -175,6 +176,7 @@ impl BodyLowering<'_> {
                     ExprKind::Call {
                         callee,
                         args: vec![lhs, rhs],
+                        evaluate_first: None,
                     },
                     range,
                 )

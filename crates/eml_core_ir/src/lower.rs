@@ -318,10 +318,6 @@ impl FnLowering<'_> {
         Atom::Var(var)
     }
 
-    fn atoms(&mut self, exprs: &[ExprId], out: &mut Bindings) -> Vec<Atom> {
-        exprs.iter().map(|&expr| self.atom(expr, out)).collect()
-    }
-
     /// 呼ぶ相手の引数の個数と比べ、揃えば直接呼び、足りなければクロージャにし、余れば戻った関数値に残りを適用する
     /// (docs/spec/core-ir.md の eval/apply)。
     fn call_known(
@@ -401,25 +397,31 @@ impl FnLowering<'_> {
                     self.bind_boxed(out, "c", Rhs::MakeClosure(target, Vec::new()))
                 }
             }
-            ExprKind::Call { callee, args } => {
+            ExprKind::Call {
+                callee,
+                args,
+                evaluate_first,
+            } => {
                 let ty = self.ty(id);
+                // `x |> f a` の `x` は、呼ばれる式とほかの引数より先に評価する (docs/spec/declarations.md)
+                let first = evaluate_first.map(|index| (index, self.atom(args[index], out)));
                 match &body.exprs[*callee].kind {
                     // 引数のない値の参照は呼び出しなので、呼ばれる式として先に評価する必要がある。一般の経路に回す
                     ExprKind::Path(Res::Function(function))
                         if self.program.arity(self.indices[*function]) > 0 =>
                     {
-                        let args = self.atoms(args, out);
+                        let args = self.call_args(args, first, out);
                         let target = self.indices[*function];
                         self.call_known(target, args, &ty, out)
                     }
                     ExprKind::Path(Res::Builtin(builtin)) => {
-                        let args = self.atoms(args, out);
+                        let args = self.call_args(args, first, out);
                         self.call_builtin(*builtin, args, &ty, out)
                     }
                     _ => {
                         // 呼ばれる式は引数より左にあるので、先に評価する
                         let function = self.atom(*callee, out);
-                        let args = self.atoms(args, out);
+                        let args = self.call_args(args, first, out);
                         self.bind(out, "t", &ty, Rhs::Apply(function, args))
                     }
                 }
@@ -504,6 +506,23 @@ impl FnLowering<'_> {
                 self.bind_boxed(out, "c", Rhs::MakeClosure(function, atoms))
             }
         }
+    }
+
+    /// 引数を左から順に atom にする。`first` (位置と、先に評価した atom) の引数は評価し直さない。
+    fn call_args(
+        &mut self,
+        args: &[ExprId],
+        first: Option<(usize, Atom)>,
+        out: &mut Bindings,
+    ) -> Vec<Atom> {
+        let mut atoms = Vec::with_capacity(args.len());
+        for (index, &arg) in args.iter().enumerate() {
+            match first {
+                Some((first, atom)) if first == index => atoms.push(atom),
+                _ => atoms.push(self.atom(arg, out)),
+            }
+        }
+        atoms
     }
 
     /// `_` と `()` で受けた値は以後使われないので、Perceus の挿入が decref する。

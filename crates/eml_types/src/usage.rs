@@ -39,7 +39,8 @@ impl Usage<'_> {
             ExprKind::Path(Res::Local(local)) => Uses::from([(*local, (1, 1))]),
             ExprKind::Path(_) => Uses::new(),
             // 関数型の値を呼ぶことも、その値の1回の使用である (docs/spec/linearity.md の「基本の規則」)
-            ExprKind::Call { callee, args } => {
+            // 使用回数は評価の順によらないので、先に評価する引数 (`evaluate_first`) は区別しない
+            ExprKind::Call { callee, args, .. } => {
                 let mut uses = self.expr(*callee);
                 for &arg in args {
                     let next = self.expr(arg);

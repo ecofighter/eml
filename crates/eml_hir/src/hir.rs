@@ -84,7 +84,7 @@ impl Body {
     pub fn walk_child_exprs(&self, id: ExprId, mut f: impl FnMut(ExprId)) {
         match &self.exprs[id].kind {
             ExprKind::Missing | ExprKind::Literal(_) | ExprKind::Path(_) => {}
-            ExprKind::Call { callee, args } => {
+            ExprKind::Call { callee, args, .. } => {
                 f(*callee);
                 for &arg in args {
                     f(arg);
@@ -182,6 +182,9 @@ pub enum ExprKind {
     Call {
         callee: ExprId,
         args: Vec<ExprId>,
+        /// この位置の引数を、呼ばれる式とほかの引数より先に評価する。`x |> f a` は `f a x` の呼び出しで、`x` を先に
+        /// 評価する (docs/spec/declarations.md の標準の演算子の表)。型検査は普通の呼び出しとして扱う。
+        evaluate_first: Option<usize>,
     },
     /// `else` を省略したら `None`。型検査が「`else` のない `if`」として診断できるように、`()` を補わずに残す。
     If {
