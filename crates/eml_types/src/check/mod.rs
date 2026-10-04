@@ -1,5 +1,6 @@
 use eml_diagnostics::{Diagnostic, Label};
-use eml_hir::{Function, FunctionId, Module, RowRef, TypeRefId, TypeRefKind};
+use eml_hir::{FunctionId, Generics, Module, RowRef, TypeRef, TypeRefId, TypeRefKind};
+use la_arena::Arena;
 use la_arena::ArenaMap;
 
 use crate::kind::Bound;
@@ -21,9 +22,14 @@ pub(crate) fn check_module(module: &Module) -> (TypedModule, Vec<Diagnostic>) {
     let mut rigids = ArenaMap::default();
     let mut schemes: ArenaMap<FunctionId, Scheme> = ArenaMap::default();
     for (id, function) in module.functions.iter() {
-        let function_rigids = Rigids::new(&mut table, function);
+        let no_generics = Generics::default();
+        let generics = function
+            .signature
+            .as_ref()
+            .map_or(&no_generics, |signature| &signature.generics);
+        let function_rigids = Rigids::new(&mut table, generics);
         if let Some(signature) = &function.signature {
-            let ty = lower_signature(&mut table, function, &function_rigids, signature.ty);
+            let ty = lower_signature(&mut table, signature, &function_rigids);
             // 部分適用のクロージャは、それまでの引数を捕まえる (docs/spec/types.md の「関数型」)
             if let Some(body) = &function.body {
                 table.closure_kinds(ty, body.params.len(), &[]);
@@ -112,7 +118,7 @@ fn check_main(
     };
     // 未定義のエフェクトや解決できなかった型変数・row 変数の跡から E2004 を連鎖させないため
     // (docs/spec/types.md の「エラーの扱い」)
-    if has_error(function, signature.ty) {
+    if has_error(&signature.types, signature.ty) {
         return;
     }
     let found = table.display(scheme.ty);
@@ -132,13 +138,13 @@ fn check_main(
     }
 }
 
-fn has_error(function: &Function, id: TypeRefId) -> bool {
-    match &function.types[id].kind {
+fn has_error(types: &Arena<TypeRef>, id: TypeRefId) -> bool {
+    match &types[id].kind {
         TypeRefKind::Error => true,
         TypeRefKind::Builtin(_) => false,
         TypeRefKind::Var(_) => false,
         TypeRefKind::Fn { param, row, ret } => {
-            matches!(row, RowRef::Error) || has_error(function, *param) || has_error(function, *ret)
+            matches!(row, RowRef::Error) || has_error(types, *param) || has_error(types, *ret)
         }
     }
 }

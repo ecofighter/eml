@@ -7,7 +7,17 @@ use crate::hir::*;
 pub fn pretty(module: &Module) -> String {
     let mut out = String::new();
     for (_, function) in module.functions.iter() {
-        let printer = Printer { module, function };
+        // 本体の注釈もシグネチャの型変数を指す。シグネチャがなければ型変数は現れない
+        let no_generics = Generics::default();
+        let generics = function
+            .signature
+            .as_ref()
+            .map_or(&no_generics, |signature| &signature.generics);
+        let printer = Printer {
+            module,
+            function,
+            generics,
+        };
         printer.function(&mut out);
     }
     out
@@ -16,13 +26,19 @@ pub fn pretty(module: &Module) -> String {
 struct Printer<'a> {
     module: &'a Module,
     function: &'a Function,
+    generics: &'a Generics,
 }
 
 impl Printer<'_> {
     fn function(&self, out: &mut String) {
         let function = self.function;
         match &function.signature {
-            Some(signature) => writeln!(out, "{} : {}", function.name, self.ty(signature.ty)),
+            Some(signature) => writeln!(
+                out,
+                "{} : {}",
+                function.name,
+                self.ty(&signature.types, signature.ty)
+            ),
             None => writeln!(out, "{} : <no signature>", function.name),
         }
         .unwrap();
@@ -77,7 +93,7 @@ impl Printer<'_> {
                                 Some(ty) => format!(
                                     "let {} : {} = {init}",
                                     self.pat(body, *pat),
-                                    self.ty(*ty)
+                                    self.ty(&body.types, *ty)
                                 ),
                                 None => format!("let {} = {init}", self.pat(body, *pat)),
                             }
@@ -92,7 +108,11 @@ impl Printer<'_> {
                 s + &"  ".repeat(indent) + "}"
             }
             ExprKind::Annot { expr, ty } => {
-                format!("({} : {})", self.expr(body, *expr, indent), self.ty(*ty))
+                format!(
+                    "({} : {})",
+                    self.expr(body, *expr, indent),
+                    self.ty(&body.types, *ty)
+                )
             }
             ExprKind::Lambda {
                 params,
@@ -122,18 +142,19 @@ impl Printer<'_> {
             PatKind::Bind(local) => local_name(body, *local),
             PatKind::Wildcard => "_".to_string(),
             PatKind::Unit => "()".to_string(),
-            PatKind::Annot { pat, ty } => format!("({} : {})", self.pat(body, *pat), self.ty(*ty)),
+            PatKind::Annot { pat, ty } => {
+                format!("({} : {})", self.pat(body, *pat), self.ty(&body.types, *ty))
+            }
         }
     }
 
-    fn ty(&self, id: TypeRefId) -> String {
-        let types = &self.function.types;
+    fn ty(&self, types: &la_arena::Arena<TypeRef>, id: TypeRefId) -> String {
         match &types[id].kind {
             TypeRefKind::Error => "<error>".to_string(),
             TypeRefKind::Builtin(builtin) => builtin.name().to_string(),
-            TypeRefKind::Var(id) => self.function.type_vars[*id].name.clone(),
+            TypeRefKind::Var(id) => self.generics.type_vars[*id].name.clone(),
             TypeRefKind::Fn { param, row, ret } => {
-                let param_text = self.ty(*param);
+                let param_text = self.ty(types, *param);
                 let param_text = if matches!(types[*param].kind, TypeRefKind::Fn { .. }) {
                     format!("({param_text})")
                 } else {
@@ -151,7 +172,7 @@ impl Printer<'_> {
                         format!("<{}> ", effect_names(effects).join(", "))
                     }
                     RowRef::Open { effects, tail, .. } => {
-                        let tail = &self.function.row_vars[*tail].name;
+                        let tail = &self.generics.row_vars[*tail].name;
                         if effects.is_empty() {
                             format!("<{tail}> ")
                         } else {
@@ -160,7 +181,7 @@ impl Printer<'_> {
                     }
                     RowRef::Error => "<error> ".to_string(),
                 };
-                format!("{param_text} -> {row}{}", self.ty(*ret))
+                format!("{param_text} -> {row}{}", self.ty(types, *ret))
             }
         }
     }

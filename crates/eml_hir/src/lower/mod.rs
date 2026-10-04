@@ -11,7 +11,7 @@ use la_arena::Arena;
 use crate::codes;
 use crate::hir::*;
 use expr::BodyLowering;
-use types::{TypeLowering, TypeScope};
+use types::TypeLowering;
 
 /// 同じ名前のシグネチャと等式。名前で対応づけてから、並び方を検査する (docs/spec/declarations.md)。
 struct Definition {
@@ -78,21 +78,24 @@ pub fn lower(file: FileId, source: &ast::SourceFile) -> (Module, Vec<Diagnostic>
             }
             _ => {}
         }
-        let mut types = Arena::new();
-        let mut type_vars = Arena::new();
-        let mut row_vars = Arena::new();
         let signature = signature.map(|(_, node, _)| {
             let range = node.ty().map_or(node.range(), |ty| ty.range());
+            let mut types = Arena::new();
+            let mut generics = Generics::default();
             let ty = TypeLowering {
                 file,
                 types: &mut types,
-                type_vars: &mut type_vars,
-                row_vars: &mut row_vars,
+                generics: &mut generics,
                 define: true,
                 diagnostics: &mut diagnostics,
             }
             .lower(node.ty(), range);
-            Signature { ty, range }
+            Signature {
+                ty,
+                range,
+                types,
+                generics,
+            }
         });
         let name_range = first_equation
             .as_ref()
@@ -102,9 +105,6 @@ pub fn lower(file: FileId, source: &ast::SourceFile) -> (Module, Vec<Diagnostic>
             name_range,
             signature,
             body: None,
-            types,
-            type_vars,
-            row_vars,
         });
         names.insert(name, id);
         if let Some((_, equation, _)) = first_equation {
@@ -113,14 +113,14 @@ pub fn lower(file: FileId, source: &ast::SourceFile) -> (Module, Vec<Diagnostic>
     }
     // 本体は、すべての関数の名前がそろってから変換する。後ろで定義した関数も呼べるようにするため
     for (id, equation) in pending {
-        let function = &mut functions[id];
-        let scope = TypeScope {
-            types: &mut function.types,
-            type_vars: &mut function.type_vars,
-            row_vars: &mut function.row_vars,
+        // シグネチャがなければ、本体の注釈は型変数を引けない (docs/spec/types.md の「推論」)
+        let mut no_generics = Generics::default();
+        let generics = match &mut functions[id].signature {
+            Some(signature) => &mut signature.generics,
+            None => &mut no_generics,
         };
         let body =
-            BodyLowering::new(file, &names, scope, &mut diagnostics).lower_equation(&equation);
+            BodyLowering::new(file, &names, generics, &mut diagnostics).lower_equation(&equation);
         functions[id].body = Some(body);
     }
     diagnostics.sort_by_key(|d| d.primary.range.start());

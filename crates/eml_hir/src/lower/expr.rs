@@ -4,7 +4,7 @@ use eml_diagnostics::{Diagnostic, FileId, Label, TextRange};
 use eml_syntax::{SyntaxKind, SyntaxToken, ast};
 use la_arena::Arena;
 
-use super::types::{TypeLowering, TypeScope};
+use super::types::TypeLowering;
 use crate::builtin::Builtin;
 use crate::codes;
 use crate::hir::*;
@@ -12,7 +12,10 @@ use crate::hir::*;
 pub(super) struct BodyLowering<'a> {
     pub(super) file: FileId,
     functions: &'a HashMap<String, FunctionId>,
-    types: TypeScope<'a>,
+    /// 本体の型の注釈。
+    types: Arena<TypeRef>,
+    /// 本体の注釈が引く、シグネチャの型変数と row 変数の表。
+    generics: &'a mut Generics,
     pub(super) diagnostics: &'a mut Vec<Diagnostic>,
     pub(super) exprs: Arena<Expr>,
     pats: Arena<Pat>,
@@ -25,13 +28,14 @@ impl<'a> BodyLowering<'a> {
     pub(super) fn new(
         file: FileId,
         functions: &'a HashMap<String, FunctionId>,
-        types: TypeScope<'a>,
+        generics: &'a mut Generics,
         diagnostics: &'a mut Vec<Diagnostic>,
     ) -> Self {
         BodyLowering {
             file,
             functions,
-            types,
+            types: Arena::new(),
+            generics,
             diagnostics,
             exprs: Arena::new(),
             pats: Arena::new(),
@@ -53,6 +57,7 @@ impl<'a> BodyLowering<'a> {
             exprs: self.exprs,
             pats: self.pats,
             locals: self.locals,
+            types: self.types,
         }
     }
 
@@ -291,9 +296,8 @@ impl<'a> BodyLowering<'a> {
     fn lower_type(&mut self, ty: Option<ast::Type>, fallback: TextRange) -> TypeRefId {
         TypeLowering {
             file: self.file,
-            types: &mut *self.types.types,
-            type_vars: &mut *self.types.type_vars,
-            row_vars: &mut *self.types.row_vars,
+            types: &mut self.types,
+            generics: &mut *self.generics,
             define: false,
             diagnostics: &mut *self.diagnostics,
         }

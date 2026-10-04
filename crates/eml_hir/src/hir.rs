@@ -26,11 +26,6 @@ pub struct Function {
     pub signature: Option<Signature>,
     /// 等式がなければ `None` で、E1005 は報告済み。
     pub body: Option<Body>,
-    /// シグネチャと、本体の中の型の注釈。
-    pub types: Arena<TypeRef>,
-    /// シグネチャに現れた型変数と row 変数。
-    pub type_vars: Arena<TypeVarDecl>,
-    pub row_vars: Arena<RowVarDecl>,
 }
 
 pub type TypeVarId = Idx<TypeVarDecl>;
@@ -56,6 +51,16 @@ pub struct Signature {
     pub ty: TypeRefId,
     /// シグネチャの型の範囲。
     pub range: TextRange,
+    /// シグネチャの型の注釈。
+    pub types: Arena<TypeRef>,
+    pub generics: Generics,
+}
+
+/// 型変数と row 変数の表。シグネチャが持つ。段階3と4では、`data` とエフェクトの宣言も持つ。
+#[derive(Debug, Default)]
+pub struct Generics {
+    pub type_vars: Arena<TypeVarDecl>,
+    pub row_vars: Arena<RowVarDecl>,
 }
 
 /// 本体を関数ごとに持つのは、後でクエリ化したときに関数単位で再計算できるようにするため (rust-analyzer と同じ)。
@@ -66,6 +71,9 @@ pub struct Body {
     pub exprs: Arena<Expr>,
     pub pats: Arena<Pat>,
     pub locals: Arena<Local>,
+    /// 本体の型の注釈。型変数と row 変数は、シグネチャの `Generics` を指す。シグネチャのアリーナと分けるのは、本体を
+    /// 書き換えてもシグネチャが変わらないようにするため。
+    pub types: Arena<TypeRef>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

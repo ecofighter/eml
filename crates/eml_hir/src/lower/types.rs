@@ -5,21 +5,13 @@ use la_arena::Arena;
 use crate::builtin::BuiltinType;
 use crate::codes;
 use crate::hir::{
-    EffectRef, RowRef, RowVarDecl, RowVarId, TypeRef, TypeRefId, TypeRefKind, TypeVarDecl,
+    EffectRef, Generics, RowRef, RowVarDecl, RowVarId, TypeRef, TypeRefId, TypeRefKind, TypeVarDecl,
 };
-
-/// 本体の注釈が引く、関数ごとの型の置き場所。
-pub(super) struct TypeScope<'a> {
-    pub types: &'a mut Arena<TypeRef>,
-    pub type_vars: &'a mut Arena<TypeVarDecl>,
-    pub row_vars: &'a mut Arena<RowVarDecl>,
-}
 
 pub(super) struct TypeLowering<'a> {
     pub file: FileId,
     pub types: &'a mut Arena<TypeRef>,
-    pub type_vars: &'a mut Arena<TypeVarDecl>,
-    pub row_vars: &'a mut Arena<RowVarDecl>,
+    pub generics: &'a mut Generics,
     /// シグネチャなら真で、新しい変数の名前を表に入れる。本体の注釈では表にある名前だけを使える。
     pub define: bool,
     pub diagnostics: &'a mut Vec<Diagnostic>,
@@ -114,11 +106,16 @@ impl TypeLowering<'_> {
 
     fn type_var(&mut self, name: &SyntaxToken, range: TextRange) -> TypeRefKind {
         let text = name.text();
-        if let Some((id, _)) = self.type_vars.iter().find(|(_, var)| var.name == text) {
+        if let Some((id, _)) = self
+            .generics
+            .type_vars
+            .iter()
+            .find(|(_, var)| var.name == text)
+        {
             return TypeRefKind::Var(id);
         }
         if self.define {
-            let id = self.type_vars.alloc(TypeVarDecl {
+            let id = self.generics.type_vars.alloc(TypeVarDecl {
                 name: text.to_string(),
                 range,
             });
@@ -135,11 +132,16 @@ impl TypeLowering<'_> {
     fn row_var(&mut self, name: &SyntaxToken) -> Option<RowVarId> {
         let text = name.text();
         let range = name.text_range();
-        if let Some((id, _)) = self.row_vars.iter().find(|(_, var)| var.name == text) {
+        if let Some((id, _)) = self
+            .generics
+            .row_vars
+            .iter()
+            .find(|(_, var)| var.name == text)
+        {
             return Some(id);
         }
         if self.define {
-            return Some(self.row_vars.alloc(RowVarDecl {
+            return Some(self.generics.row_vars.alloc(RowVarDecl {
                 name: text.to_string(),
                 range,
             }));

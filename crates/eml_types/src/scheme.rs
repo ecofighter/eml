@@ -1,8 +1,10 @@
 //! シグネチャのスキームと、その具体化 (docs/spec/types.md の「推論」)。
 
 use eml_hir::builtin::BuiltinType;
-use eml_hir::{EffectRef, Function, RowRef, RowVarId, TypeRefId, TypeRefKind, TypeVarId};
-use la_arena::ArenaMap;
+use eml_hir::{
+    EffectRef, Generics, RowRef, RowVarId, Signature, TypeRef, TypeRefId, TypeRefKind, TypeVarId,
+};
+use la_arena::{Arena, ArenaMap};
 
 use crate::kind::{Bound, KindVar};
 use crate::table::{ArrowLin, RigidVar, Row, RowVar, Subst, Table, Tail, Ty};
@@ -16,18 +18,18 @@ pub(crate) struct Rigids {
 }
 
 impl Rigids {
-    pub fn new(table: &mut Table, function: &Function) -> Rigids {
+    pub fn new(table: &mut Table, generics: &Generics) -> Rigids {
         let mut rigids = Rigids {
             tys: ArenaMap::default(),
             rows: ArenaMap::default(),
             vars: Vec::new(),
         };
-        for (id, var) in function.type_vars.iter() {
+        for (id, var) in generics.type_vars.iter() {
             let (ty, rigid) = table.fresh_rigid(&var.name);
             rigids.tys.insert(id, ty);
             rigids.vars.push(rigid);
         }
-        for (id, var) in function.row_vars.iter() {
+        for (id, var) in generics.row_vars.iter() {
             rigids.rows.insert(id, table.fresh_rigid_row(&var.name));
         }
         rigids
@@ -103,35 +105,30 @@ impl Scheme {
 
 /// シグネチャを型の表に変換する。一番外側の矢印はトップレベルの関数そのもので、何度でも呼べるので `Unr` である
 /// (docs/spec/types.md の「関数型」)。
-pub(crate) fn lower_signature(
-    table: &mut Table,
-    function: &Function,
-    rigids: &Rigids,
-    id: TypeRefId,
-) -> Ty {
-    lower(table, function, rigids, id, true)
+pub(crate) fn lower_signature(table: &mut Table, signature: &Signature, rigids: &Rigids) -> Ty {
+    lower(table, &signature.types, rigids, signature.ty, true)
 }
 
 /// 本体の注釈を型の表に変換する。
 pub(crate) fn lower_type(
     table: &mut Table,
-    function: &Function,
+    types: &Arena<TypeRef>,
     rigids: &Rigids,
     id: TypeRefId,
 ) -> Ty {
-    lower(table, function, rigids, id, false)
+    lower(table, types, rigids, id, false)
 }
 
 /// `outermost_unr` が真なら一番外側の矢印を `Unr` にする。ほかの矢印の線形性は Kind 変数にして推論する
 /// (docs/spec/types.md の「関数型」)。
 fn lower(
     table: &mut Table,
-    function: &Function,
+    types: &Arena<TypeRef>,
     rigids: &Rigids,
     id: TypeRefId,
     outermost_unr: bool,
 ) -> Ty {
-    match &function.types[id].kind {
+    match &types[id].kind {
         TypeRefKind::Error => table.error,
         TypeRefKind::Builtin(BuiltinType::Int) => table.int,
         TypeRefKind::Builtin(BuiltinType::String) => table.string,
@@ -139,8 +136,8 @@ fn lower(
         TypeRefKind::Builtin(BuiltinType::Unit) => table.unit,
         TypeRefKind::Var(var) => rigids.tys[*var],
         TypeRefKind::Fn { param, row, ret } => {
-            let param = lower(table, function, rigids, *param, false);
-            let ret = lower(table, function, rigids, *ret, false);
+            let param = lower(table, types, rigids, *param, false);
+            let ret = lower(table, types, rigids, *ret, false);
             let labels = |effects: &[EffectRef]| -> Vec<Effect> {
                 effects.iter().map(|EffectRef::Io| Effect::Io).collect()
             };

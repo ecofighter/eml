@@ -69,13 +69,13 @@ impl BodyCheck<'_> {
         };
         let mut id = signature.ty;
         for _ in 1..self.body.params.len() {
-            match &self.function.types[id].kind {
+            match &signature.types[id].kind {
                 TypeRefKind::Fn { ret, .. } => id = *ret,
                 _ => return signature.range,
             }
         }
-        match &self.function.types[id].kind {
-            TypeRefKind::Fn { .. } if self.body.params.len() > 1 => self.function.types[id].range,
+        match &signature.types[id].kind {
+            TypeRefKind::Fn { .. } if self.body.params.len() > 1 => signature.types[id].range,
             _ => signature.range,
         }
     }
@@ -188,8 +188,8 @@ impl BodyCheck<'_> {
                 self.block(expr.range, stmts, *tail, Expectation::None)
             }
             ExprKind::Annot { expr: inner, ty } => {
-                let annotated = lower_type(self.table, self.function, self.rigids, *ty);
-                let range = self.function.types[*ty].range;
+                let annotated = lower_type(self.table, &self.body.types, self.rigids, *ty);
+                let range = self.body.types[*ty].range;
                 self.check_expr(*inner, annotated, Origin::Annotation(range));
                 annotated
             }
@@ -266,8 +266,9 @@ impl BodyCheck<'_> {
                 Stmt::Let { pat, ty, init } => {
                     let ty = match ty {
                         Some(ty) => {
-                            let annotated = lower_type(self.table, self.function, self.rigids, *ty);
-                            let range = self.function.types[*ty].range;
+                            let annotated =
+                                lower_type(self.table, &self.body.types, self.rigids, *ty);
+                            let range = self.body.types[*ty].range;
                             self.check_expr(*init, annotated, Origin::Annotation(range));
                             annotated
                         }
@@ -458,7 +459,7 @@ impl BodyCheck<'_> {
             ty: annotation,
         } = &body.pats[pat].kind
         {
-            let annotated = lower_type(self.table, self.function, self.rigids, *annotation);
+            let annotated = lower_type(self.table, &body.types, self.rigids, *annotation);
             self.expect(
                 body.pats[pat].range,
                 ty,
