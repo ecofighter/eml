@@ -4,9 +4,7 @@ use eml_syntax::ast::{AppExpr, Clause, Expr, Item, OpSeqElement, Pat, SourceFile
 use rowan::ast::AstNode;
 
 fn source(text: &str) -> SourceFile {
-    let parsed = eml_test_support::parse(text);
-    assert!(parsed.diagnostics.is_empty(), "{:?}", parsed.diagnostics);
-    parsed.parse.tree()
+    eml_test_support::parse_clean(text).parse.tree()
 }
 
 fn first_equation(file: &SourceFile) -> eml_syntax::ast::Equation {

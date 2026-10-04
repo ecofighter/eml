@@ -1,22 +1,14 @@
 #![allow(dead_code)]
 
 use eml_syntax::{SyntaxElement, SyntaxNode};
-use eml_test_support::{parse, short};
+use eml_test_support::{parse, short, short_text, with_diagnostics};
 
 /// 木の形 (trivia を除く) と、構文の診断。lossless の確認は `eml_test_support::parse` が行う。
 pub fn shape(text: &str) -> String {
     let parsed = parse(text);
     let mut out = String::new();
     write_node(&mut out, &parsed.parse.syntax(), 0);
-    let diagnostics = short(&parsed.files, &parsed.diagnostics);
-    if !diagnostics.is_empty() {
-        out.push_str("---\n");
-        for line in diagnostics {
-            out.push_str(&line);
-            out.push('\n');
-        }
-    }
-    out
+    with_diagnostics(out, &short_text(&parsed.files, &parsed.diagnostics))
 }
 
 /// 期待値を読みやすくするため、位置はバイトではなく 1 始まりの行と列 (文字数) で表示する。

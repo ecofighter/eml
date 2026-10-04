@@ -3,17 +3,15 @@ mod common;
 use common::item_kinds;
 use eml_diagnostics::render;
 use eml_syntax::debug_tree;
-use eml_test_support::parse;
+use eml_test_support::{parse, with_diagnostics};
 
 /// lossless の確認は `eml_test_support::parse` が行う。
 fn dump(text: &str) -> String {
     let parsed = parse(text);
-    let mut out = debug_tree(&parsed.parse.syntax());
-    if !parsed.diagnostics.is_empty() {
-        out.push_str("---\n");
-        out.push_str(&render(&parsed.diagnostics, &parsed.files));
-    }
-    out
+    with_diagnostics(
+        debug_tree(&parsed.parse.syntax()),
+        &render(&parsed.diagnostics, &parsed.files),
+    )
 }
 
 #[test]

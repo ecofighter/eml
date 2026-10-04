@@ -1,6 +1,6 @@
 use eml_diagnostics::render;
 use eml_syntax::lex;
-use eml_test_support::source;
+use eml_test_support::{source, with_diagnostics};
 
 fn dump(text: &str) -> String {
     let (files, file) = source(text);
@@ -14,11 +14,7 @@ fn dump(text: &str) -> String {
     }
     let joined: String = tokens.iter().map(|token| &text[token.range]).collect();
     assert_eq!(joined, text, "tokens must cover the whole text");
-    if !diagnostics.is_empty() {
-        out.push_str("---\n");
-        out.push_str(&render(&diagnostics, &files));
-    }
-    out
+    with_diagnostics(out, &render(&diagnostics, &files))
 }
 
 fn kinds(text: &str) -> Vec<String> {
