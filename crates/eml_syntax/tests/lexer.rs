@@ -396,9 +396,11 @@ fn crlf_line_endings_are_whitespace() {
 fn byte_order_mark_in_the_middle_is_an_unexpected_character() {
     // 先頭の BOM は読み込み時に除く。lexer に届いた U+FEFF は、どこにあっても認識できない文字である
     // (docs/spec/lexical.md)。
-    let found = diags("fn\u{feff}");
-    assert_eq!(found.len(), 1, "{found:?}");
-    assert!(found[0].starts_with("E0001@2..5 "), "{found:?}");
+    // 見えない文字なので、メッセージではエスケープして名指しする。
+    assert_eq!(
+        diags("fn\u{feff}"),
+        ["E0001@2..5 unexpected character `\\u{feff}`"]
+    );
 }
 
 #[test]

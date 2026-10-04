@@ -338,12 +338,12 @@ fn keyword(ident: &str) -> Option<SyntaxKind> {
     })
 }
 
-/// 診断のメッセージに埋め込むため、制御文字をエスケープし、長い並びを切り詰める。
+/// 診断のメッセージに埋め込むため、見えない文字をエスケープし、長い並びを切り詰める。
 fn printable(snippet: &str) -> String {
     const MAX_CHARS: usize = 16;
     let mut out = String::new();
     for c in snippet.chars().take(MAX_CHARS) {
-        if c.is_control() {
+        if is_invisible(c) {
             out.extend(c.escape_default());
         } else {
             out.push(c);
@@ -353,4 +353,18 @@ fn printable(snippet: &str) -> String {
         out.push('…');
     }
     out
+}
+
+/// 制御文字と、幅を持たない書式の文字 (BOM、ゼロ幅の空白、書字方向の制御など)。そのまま埋め込むと、メッセージの中で
+/// 何の文字か分からない。
+fn is_invisible(c: char) -> bool {
+    c.is_control()
+        || matches!(
+            c,
+            '\u{200b}'..='\u{200f}'
+                | '\u{202a}'..='\u{202e}'
+                | '\u{2060}'..='\u{2064}'
+                | '\u{2066}'..='\u{2069}'
+                | '\u{feff}'
+        )
 }
