@@ -1,7 +1,9 @@
 use std::collections::HashMap;
 
 use eml_hir::builtin::Builtin;
-use eml_hir::{Body, ExprId, ExprKind, FunctionId, Literal, LocalId, Module, PatId, Res, Stmt};
+use eml_hir::{
+    Body, ExprId, ExprKind, FunctionId, LangItems, Literal, LocalId, Module, PatId, Res, Stmt,
+};
 use eml_types::{BodyTypes, Linearity, Type, TypedModule};
 use la_arena::ArenaMap;
 
@@ -13,7 +15,7 @@ use crate::{
 /// 診断のエラーがないプログラムだけを受け取る。エラーがあれば `eml_cli` は Core IR を作らない
 /// (docs/implementation/architecture.md)。
 pub fn lower(module: &Module, typed: &TypedModule) -> Program {
-    let mut builder = ProgramBuilder::default();
+    let mut builder = ProgramBuilder::new(module, typed);
     let mut indices = ArenaMap::default();
     for (id, function) in module.functions.iter() {
         let body = function
@@ -29,7 +31,7 @@ pub fn lower(module: &Module, typed: &TypedModule) -> Program {
             .get(id)
             .expect("every function has a signature")
             .ty;
-        let params = param_types(signature, body.params.len());
+        let (params, _) = split_arrows(signature, body.params.len());
         let mut lambdas = 0;
         let core = FnLowering {
             module,
@@ -81,8 +83,10 @@ impl Strings {
 }
 
 /// 変換の途中で、ラムダと包んだ組み込みの関数を足していく関数の表。番号を先に取り、中身は変換が終わってから入れる。
-#[derive(Default)]
 struct ProgramBuilder {
+    lang: LangItems,
+    /// Prelude から作った組み込みの型。組み込みを包む関数の変数が boxed かどうかを決める。
+    builtin_types: HashMap<Builtin, Type>,
     functions: Vec<Option<CoreFn>>,
     arities: Vec<usize>,
     strings: Strings,
@@ -90,6 +94,21 @@ struct ProgramBuilder {
 }
 
 impl ProgramBuilder {
+    fn new(module: &Module, typed: &TypedModule) -> ProgramBuilder {
+        ProgramBuilder {
+            lang: module.lang,
+            builtin_types: typed
+                .builtins
+                .iter()
+                .map(|(&builtin, scheme)| (builtin, scheme.ty.clone()))
+                .collect(),
+            functions: Vec::new(),
+            arities: Vec::new(),
+            strings: Strings::default(),
+            wrappers: HashMap::new(),
+        }
+    }
+
     fn reserve(&mut self, arity: usize) -> FnIdx {
         self.functions.push(None);
         self.arities.push(arity);
@@ -109,47 +128,42 @@ impl ProgramBuilder {
         if let Some(&function) = self.wrappers.get(&builtin) {
             return function;
         }
-        let boxed = builtin_params(builtin);
-        let function = self.reserve(boxed.len());
+        let arity = builtin.arity();
+        let ty = self
+            .builtin_types
+            .get(&builtin)
+            .expect("every builtin function has a Prelude signature");
+        let (param_types, result_type) = split_arrows(ty, arity);
+        let lang = self.lang;
+        let function = self.reserve(arity);
         self.wrappers.insert(builtin, function);
-        let mut vars: Vec<VarInfo> = boxed
+        let mut vars: Vec<VarInfo> = param_types
             .iter()
-            .map(|&boxed| VarInfo {
-                name: "p".to_string(),
-                linearity: Linearity::Unr,
-                boxed,
-            })
+            .map(|ty| var_info("p", ty, &lang))
             .collect();
-        let params: Vec<VarId> = (0..boxed.len() as u32).map(VarId).collect();
+        let params: Vec<VarId> = (0..arity as u32).map(VarId).collect();
         let atoms: Vec<Atom> = params.iter().map(|&param| Atom::Var(param)).collect();
-        let mut fresh = |boxed: bool| {
-            vars.push(VarInfo {
-                name: "t".to_string(),
-                linearity: Linearity::Unr,
-                boxed,
-            });
+        let mut fresh = |ty: &Type| {
+            vars.push(var_info("t", ty, &lang));
             VarId(vars.len() as u32 - 1)
         };
-        let steps: Vec<(VarId, Rhs)> = match builtin {
-            Builtin::Println => vec![(fresh(false), Rhs::Perform(IoOp::Println, atoms))],
-            Builtin::ComposeFwd | Builtin::ComposeBwd => {
-                // `>>` は `g (f x)`、`<<` は `f (g x)` である (docs/spec/declarations.md の演算子の表が `>>` / `<<` を関数合成としている)
-                let (inner, outer) = if builtin == Builtin::ComposeFwd {
-                    (atoms[0], atoms[1])
-                } else {
-                    (atoms[1], atoms[0])
-                };
-                let mid = fresh(true);
-                let result = fresh(true);
+        let steps: Vec<(VarId, Rhs)> = match lowering(builtin) {
+            Lowering::Prim(op) => vec![(fresh(&result_type), Rhs::Prim(op, atoms))],
+            Lowering::Perform(op) => vec![(fresh(&result_type), Rhs::Perform(op, atoms))],
+            Lowering::Compose { forward } => {
+                let (inner, outer) = if forward { (0, 1) } else { (1, 0) };
+                let (_, middle_type) = split_arrows(&param_types[inner], 1);
+                let middle = fresh(&middle_type);
+                let result = fresh(&result_type);
                 vec![
-                    (mid, Rhs::Call(Call::Apply(inner, vec![atoms[2]]))),
-                    (result, Rhs::Call(Call::Apply(outer, vec![Atom::Var(mid)]))),
+                    (middle, Rhs::Call(Call::Apply(atoms[inner], vec![atoms[2]]))),
+                    (
+                        result,
+                        Rhs::Call(Call::Apply(atoms[outer], vec![Atom::Var(middle)])),
+                    ),
                 ]
             }
-            other => vec![(
-                fresh(builtin_result_boxed(other)),
-                Rhs::Prim(prim(other), atoms),
-            )],
+            Lowering::Constructor(_) => unreachable!("constructors are values, not functions"),
         };
         let mut exprs = Vec::new();
         let last = steps.last().expect("every wrapper binds a result").0;
@@ -171,44 +185,74 @@ impl ProgramBuilder {
     }
 }
 
-/// 関数型の先頭の `count` 個の引数の型。
-fn param_types(ty: &Type, count: usize) -> Vec<Type> {
-    let mut out = Vec::new();
+/// ヒープに置く値の型。`Unr` でボックス化した変数が RC の対象になる。関数値と型変数の値は、ヒープのクロージャや
+/// 文字列かもしれない。インタプリタの `dup` / `decref` はヒープにない値を無視するので、多めに対象にしても正しく動く
+/// (docs/spec/core-ir.md)。
+fn boxed(ty: &Type, lang: &LangItems) -> bool {
+    match ty {
+        Type::Con { id, .. } => *id == lang.string,
+        Type::Fn { .. } | Type::Rigid(_) | Type::Flexible => true,
+        Type::Record(_) | Type::Error => false,
+    }
+}
+
+fn var_info(name: &str, ty: &Type, lang: &LangItems) -> VarInfo {
+    VarInfo {
+        name: name.to_string(),
+        linearity: Linearity::Unr,
+        boxed: boxed(ty, lang),
+    }
+}
+
+/// 関数型の先頭の `count` 個の引数の型と、残りの型。
+fn split_arrows(ty: &Type, count: usize) -> (Vec<Type>, Type) {
+    let mut params = Vec::new();
     let mut ty = ty;
     for _ in 0..count {
         let Type::Fn { param, ret, .. } = ty else {
             unreachable!("the type checker matched parameters with arrows");
         };
-        out.push((**param).clone());
+        params.push((**param).clone());
         ty = ret;
     }
-    out
+    (params, ty.clone())
 }
 
-/// 組み込みの引数ごとの、ヒープの値かどうか。`True` と `False` は値なので、ここには来ない。
-fn builtin_params(builtin: Builtin) -> Vec<bool> {
+/// 組み込みを Core IR のどの命令にするか。引数の数は `Builtin::arity` (eml_hir の表) から、引数と結果の型は Prelude の
+/// スキームから引くので、ここには変換の種類だけを置く。
+enum Lowering {
+    Prim(PrimOp),
+    Perform(IoOp),
+    /// `>>` は `g (f x)`、`<<` は `f (g x)` である (docs/spec/declarations.md の演算子の表)。
+    Compose {
+        forward: bool,
+    },
+    Constructor(u32),
+}
+
+fn lowering(builtin: Builtin) -> Lowering {
     match builtin {
-        Builtin::Println => vec![true],
-        Builtin::ShowInt | Builtin::Not | Builtin::IntNeg => vec![false],
-        Builtin::IntAdd
-        | Builtin::IntSub
-        | Builtin::IntMul
-        | Builtin::IntDiv
-        | Builtin::IntMod
-        | Builtin::IntEq
-        | Builtin::IntNe
-        | Builtin::IntLt
-        | Builtin::IntLe
-        | Builtin::IntGt
-        | Builtin::IntGe => vec![false, false],
-        Builtin::StrConcat => vec![true, true],
-        Builtin::ComposeFwd | Builtin::ComposeBwd => vec![true, true, true],
-        Builtin::True | Builtin::False => unreachable!("constructors are values, not functions"),
+        Builtin::Println => Lowering::Perform(IoOp::Println),
+        Builtin::ShowInt => Lowering::Prim(PrimOp::ShowInt),
+        Builtin::Not => Lowering::Prim(PrimOp::Not),
+        Builtin::IntNeg => Lowering::Prim(PrimOp::IntNeg),
+        Builtin::IntAdd => Lowering::Prim(PrimOp::IntAdd),
+        Builtin::IntSub => Lowering::Prim(PrimOp::IntSub),
+        Builtin::IntMul => Lowering::Prim(PrimOp::IntMul),
+        Builtin::IntDiv => Lowering::Prim(PrimOp::IntDiv),
+        Builtin::IntMod => Lowering::Prim(PrimOp::IntMod),
+        Builtin::IntEq => Lowering::Prim(PrimOp::IntEq),
+        Builtin::IntNe => Lowering::Prim(PrimOp::IntNe),
+        Builtin::IntLt => Lowering::Prim(PrimOp::IntLt),
+        Builtin::IntLe => Lowering::Prim(PrimOp::IntLe),
+        Builtin::IntGt => Lowering::Prim(PrimOp::IntGt),
+        Builtin::IntGe => Lowering::Prim(PrimOp::IntGe),
+        Builtin::StrConcat => Lowering::Prim(PrimOp::StrConcat),
+        Builtin::ComposeFwd => Lowering::Compose { forward: true },
+        Builtin::ComposeBwd => Lowering::Compose { forward: false },
+        Builtin::True => Lowering::Constructor(TRUE),
+        Builtin::False => Lowering::Constructor(FALSE),
     }
-}
-
-fn builtin_result_boxed(builtin: Builtin) -> bool {
-    matches!(builtin, Builtin::ShowInt | Builtin::StrConcat)
 }
 
 type Bindings = Vec<(VarId, Rhs)>;
@@ -264,17 +308,7 @@ impl FnLowering<'_> {
     }
 
     fn new_var(&mut self, name: &str, ty: &Type) -> VarId {
-        self.vars.push(VarInfo {
-            name: name.to_string(),
-            linearity: Linearity::Unr,
-            // 関数値と型変数の値は、ヒープのクロージャや文字列かもしれない。インタプリタの `dup` / `decref` は
-            // ヒープにない値を無視するので、多めに対象にしても正しく動く (docs/spec/core-ir.md)
-            boxed: match ty {
-                Type::Con { id, .. } => *id == self.module.lang.string,
-                Type::Fn { .. } | Type::Rigid(_) | Type::Flexible => true,
-                _ => false,
-            },
-        });
+        self.vars.push(var_info(name, ty, &self.module.lang));
         VarId(self.vars.len() as u32 - 1)
     }
 
@@ -312,63 +346,61 @@ impl FnLowering<'_> {
         Atom::Var(var)
     }
 
-    /// 型を見ずに、ヒープの値として変数を作る。クロージャと、関数値を返す途中の結果に使う。
-    fn bind_boxed(&mut self, out: &mut Bindings, name: &str, rhs: Rhs) -> Atom {
-        self.vars.push(VarInfo {
-            name: name.to_string(),
-            linearity: Linearity::Unr,
-            boxed: true,
-        });
-        let var = VarId(self.vars.len() as u32 - 1);
-        out.push((var, rhs));
-        Atom::Var(var)
-    }
-
     /// 呼ぶ相手の引数の個数と比べ、揃えば直接呼び、足りなければクロージャにし、余れば戻った関数値に残りを適用する
     /// (docs/spec/core-ir.md の eval/apply)。
     fn call_known(
         &mut self,
         target: FnIdx,
+        callee_ty: &Type,
         mut args: Vec<Atom>,
         ty: &Type,
         out: &mut Bindings,
     ) -> Atom {
         let arity = self.program.arity(target);
         if args.len() < arity {
-            return self.bind_boxed(out, "c", Rhs::MakeClosure(target, args));
+            return self.bind(out, "c", ty, Rhs::MakeClosure(target, args));
         }
         let rest = args.split_off(arity);
         if rest.is_empty() {
             return self.bind(out, "t", ty, Rhs::Call(Call::Direct(target, args)));
         }
-        let function = self.bind_boxed(out, "t", Rhs::Call(Call::Direct(target, args)));
+        let (_, function_ty) = split_arrows(callee_ty, arity);
+        let function = self.bind(
+            out,
+            "t",
+            &function_ty,
+            Rhs::Call(Call::Direct(target, args)),
+        );
         self.bind(out, "t", ty, Rhs::Call(Call::Apply(function, rest)))
     }
 
     fn call_builtin(
         &mut self,
         builtin: Builtin,
+        callee_ty: &Type,
         mut args: Vec<Atom>,
         ty: &Type,
         out: &mut Bindings,
     ) -> Atom {
-        let arity = builtin_params(builtin).len();
+        let arity = builtin.arity();
         if args.len() < arity {
             let wrapper = self.program.wrapper(builtin);
-            return self.bind_boxed(out, "c", Rhs::MakeClosure(wrapper, args));
+            return self.bind(out, "c", ty, Rhs::MakeClosure(wrapper, args));
         }
         let rest = args.split_off(arity);
-        let rhs = match builtin {
-            Builtin::Println => Rhs::Perform(IoOp::Println, args),
-            Builtin::ComposeFwd | Builtin::ComposeBwd => {
+        let rhs = match lowering(builtin) {
+            Lowering::Prim(op) => Rhs::Prim(op, args),
+            Lowering::Perform(op) => Rhs::Perform(op, args),
+            Lowering::Compose { .. } => {
                 Rhs::Call(Call::Direct(self.program.wrapper(builtin), args))
             }
-            other => Rhs::Prim(prim(other), args),
+            Lowering::Constructor(_) => unreachable!("constructors are values, not functions"),
         };
         if rest.is_empty() {
             return self.bind(out, "t", ty, rhs);
         }
-        let function = self.bind_boxed(out, "t", rhs);
+        let (_, function_ty) = split_arrows(callee_ty, arity);
+        let function = self.bind(out, "t", &function_ty, rhs);
         self.bind(out, "t", ty, Rhs::Call(Call::Apply(function, rest)))
     }
 
@@ -391,12 +423,14 @@ impl FnLowering<'_> {
                 self.bind(out, "s", &ty, Rhs::ConstString(index))
             }
             ExprKind::Path(Res::Local(local)) => self.locals[*local],
-            ExprKind::Path(Res::Builtin(Builtin::True)) => Atom::Tag(TRUE),
-            ExprKind::Path(Res::Builtin(Builtin::False)) => Atom::Tag(FALSE),
-            ExprKind::Path(Res::Builtin(builtin)) => {
-                let wrapper = self.program.wrapper(*builtin);
-                self.bind_boxed(out, "c", Rhs::MakeClosure(wrapper, Vec::new()))
-            }
+            ExprKind::Path(Res::Builtin(builtin)) => match lowering(*builtin) {
+                Lowering::Constructor(tag) => Atom::Tag(tag),
+                _ => {
+                    let wrapper = self.program.wrapper(*builtin);
+                    let ty = self.ty(id);
+                    self.bind(out, "c", &ty, Rhs::MakeClosure(wrapper, Vec::new()))
+                }
+            },
             // 引数のないトップレベルの値は、参照するたびに呼び出す (docs/spec/core-ir.md)
             ExprKind::Path(Res::Function(function)) => {
                 let target = self.indices[*function];
@@ -405,7 +439,8 @@ impl FnLowering<'_> {
                     let name = self.module.functions[*function].name.clone();
                     self.bind(out, &name, &ty, Rhs::Call(Call::Direct(target, Vec::new())))
                 } else {
-                    self.bind_boxed(out, "c", Rhs::MakeClosure(target, Vec::new()))
+                    let ty = self.ty(id);
+                    self.bind(out, "c", &ty, Rhs::MakeClosure(target, Vec::new()))
                 }
             }
             ExprKind::Call {
@@ -414,6 +449,7 @@ impl FnLowering<'_> {
                 evaluate_first,
             } => {
                 let ty = self.ty(id);
+                let callee_ty = self.ty(*callee);
                 // `x |> f a` の `x` は、呼ばれる式とほかの引数より先に評価する (docs/spec/declarations.md)
                 let first = evaluate_first.map(|index| (index, self.atom(args[index], out)));
                 match &body.exprs[*callee].kind {
@@ -423,11 +459,11 @@ impl FnLowering<'_> {
                     {
                         let args = self.call_args(args, first, out);
                         let target = self.indices[*function];
-                        self.call_known(target, args, &ty, out)
+                        self.call_known(target, &callee_ty, args, &ty, out)
                     }
                     ExprKind::Path(Res::Builtin(builtin)) => {
                         let args = self.call_args(args, first, out);
-                        self.call_builtin(*builtin, args, &ty, out)
+                        self.call_builtin(*builtin, &callee_ty, args, &ty, out)
                     }
                     _ => {
                         // 呼ばれる式は引数より左にあるので、先に評価する
@@ -492,7 +528,7 @@ impl FnLowering<'_> {
                     })
                     .collect();
                 let lambda_ty = self.ty(id);
-                let param_types = param_types(&lambda_ty, params.len());
+                let (param_types, _) = split_arrows(&lambda_ty, params.len());
                 let function = self.program.reserve(captured.len() + params.len());
                 let name = format!("{}$lambda{}", self.root_name, *self.lambdas);
                 *self.lambdas += 1;
@@ -514,7 +550,7 @@ impl FnLowering<'_> {
                     .iter()
                     .map(|(local, _)| self.locals[*local])
                     .collect();
-                self.bind_boxed(out, "c", Rhs::MakeClosure(function, atoms))
+                self.bind(out, "c", &lambda_ty, Rhs::MakeClosure(function, atoms))
             }
         }
     }
@@ -540,32 +576,6 @@ impl FnLowering<'_> {
     fn bind_pat(&mut self, pat: PatId, value: Atom) {
         for local in self.body.pat_bindings(pat) {
             self.locals.insert(local, value);
-        }
-    }
-}
-
-fn prim(builtin: Builtin) -> PrimOp {
-    match builtin {
-        Builtin::IntAdd => PrimOp::IntAdd,
-        Builtin::IntSub => PrimOp::IntSub,
-        Builtin::IntMul => PrimOp::IntMul,
-        Builtin::IntDiv => PrimOp::IntDiv,
-        Builtin::IntMod => PrimOp::IntMod,
-        Builtin::IntNeg => PrimOp::IntNeg,
-        Builtin::IntEq => PrimOp::IntEq,
-        Builtin::IntNe => PrimOp::IntNe,
-        Builtin::IntLt => PrimOp::IntLt,
-        Builtin::IntLe => PrimOp::IntLe,
-        Builtin::IntGt => PrimOp::IntGt,
-        Builtin::IntGe => PrimOp::IntGe,
-        Builtin::StrConcat => PrimOp::StrConcat,
-        Builtin::ShowInt => PrimOp::ShowInt,
-        Builtin::Not => PrimOp::Not,
-        Builtin::Println | Builtin::True | Builtin::False => {
-            unreachable!("`println` is performed and constructors are values")
-        }
-        Builtin::ComposeFwd | Builtin::ComposeBwd => {
-            unreachable!("composition is lowered to a closure, not to a primitive")
         }
     }
 }
