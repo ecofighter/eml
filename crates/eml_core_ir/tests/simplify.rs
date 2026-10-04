@@ -183,3 +183,34 @@ fn join_points_left_without_jumps_are_removed() {
     }
     "#);
 }
+
+#[test]
+fn an_if_in_a_condition_jumps_straight_to_the_outer_join_point() {
+    let text = "choose : Bool -> Bool -> Int\nchoose a b =\n  let n = if (if a then b else False) then 1 else 2\n  n + 1\n\nmain : Unit -> <IO> Unit\nmain () = ()";
+    insta::assert_snapshot!(core_text(text), @r"
+    fn choose(a0, b1) {
+      join j0(t3) [] {
+        let t4 = prim +(t3, 1)
+        return t4
+      }
+      switch a0 {
+        #0 ->
+          jump j0(2)
+        #1 ->
+          let t2 = b1
+          switch t2 {
+            #0 ->
+              jump j0(2)
+            #1 ->
+              jump j0(1)
+          }
+      }
+    }
+    fn main(p0) {
+      return ()
+    }
+    fn entry$main() {
+      tailcall main(())
+    }
+    ");
+}
