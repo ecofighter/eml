@@ -10,27 +10,27 @@ fn eml(args: &[&str]) -> Output {
 
 #[test]
 fn check_succeeds_on_a_valid_file() {
-    let output = eml(&["check", "run/empty.em"]);
+    let output = eml(&["check", "run/comments_only.em"]);
     assert_eq!(output.status.code(), Some(0));
     assert!(output.stderr.is_empty());
 }
 
 #[test]
 fn check_fails_with_diagnostics() {
-    let output = eml(&["check", "check-fail/unexpected_character.em"]);
+    let output = eml(&["check", "check-fail/multiple_errors.em"]);
     assert_eq!(output.status.code(), Some(1));
     assert!(String::from_utf8_lossy(&output.stderr).contains("[E0001]"));
 }
 
 #[test]
 fn run_succeeds_on_a_valid_file() {
-    let output = eml(&["run", "--debug-heap", "run/empty.em"]);
+    let output = eml(&["run", "--debug-heap", "run/comments_only.em"]);
     assert_eq!(output.status.code(), Some(0));
 }
 
 #[test]
 fn run_does_not_execute_a_file_with_errors() {
-    let output = eml(&["run", "check-fail/unexpected_character.em"]);
+    let output = eml(&["run", "check-fail/multiple_errors.em"]);
     assert_eq!(output.status.code(), Some(1));
 }
 
