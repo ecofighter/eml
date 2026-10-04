@@ -97,6 +97,8 @@ pub enum CExpr {
         arg: Atom,
     },
     Return(Atom),
+    /// 関数の末尾の呼び出し。呼び出し元のフレームを積まない。
+    TailCall(Call),
     Dup {
         var: VarId,
         body: CExprId,

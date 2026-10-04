@@ -148,6 +148,9 @@ impl<'p> Machine<'p> {
                 let value = self.atom(atom)?;
                 return self.ret(value);
             }
+            // 呼び出し元のフレームを積まない。verifier が、この時点で所有している参照が残っていないことを保証するので、
+            // 今の環境はそのまま捨ててよい (docs/spec/core-ir.md)
+            CExpr::TailCall(call) => return self.call(call, None),
             CExpr::Join { scope, .. } => self.control = *scope,
             CExpr::Jump { join, arg } => {
                 // join point は同じ関数の中にあるので、環境をそのまま使い、フレームを積まない

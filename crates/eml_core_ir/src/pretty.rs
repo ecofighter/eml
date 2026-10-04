@@ -59,6 +59,10 @@ fn expr(program: &Program, function: &CoreFn, id: CExprId, indent: usize, out: &
                 writeln!(out, "{pad}jump j{}({})", join.0, atom(function, arg)).unwrap();
                 return;
             }
+            CExpr::TailCall(call) => {
+                writeln!(out, "{pad}tailcall {}", call_text(program, function, call)).unwrap();
+                return;
+            }
             CExpr::Switch { scrutinee, arms } => {
                 writeln!(out, "{pad}switch {} {{", atom(function, scrutinee)).unwrap();
                 for (tag, arm) in arms {
@@ -93,17 +97,28 @@ fn rhs_text(program: &Program, function: &CoreFn, rhs: &Rhs) -> String {
     };
     match rhs {
         Rhs::Atom(a) => atom(function, a),
-        Rhs::Call(Call::Direct(callee, a)) => {
-            format!("call {}({})", program.function(*callee).name, args(a))
+        Rhs::Call(call @ Call::Direct(..)) => {
+            format!("call {}", call_text(program, function, call))
         }
+        Rhs::Call(call) => call_text(program, function, call),
         Rhs::MakeClosure(target, a) => {
             format!("closure {}({})", program.function(*target).name, args(a))
-        }
-        Rhs::Call(Call::Apply(callee, a)) => {
-            format!("apply {}({})", atom(function, callee), args(a))
         }
         Rhs::Prim(op, a) => format!("prim {}({})", op.name(), args(a)),
         Rhs::ConstString(index) => format!("const {:?}", program.strings[*index as usize]),
         Rhs::Perform(IoOp::Println, a) => format!("perform println({})", args(a)),
+    }
+}
+
+fn call_text(program: &Program, function: &CoreFn, call: &Call) -> String {
+    let args = |args: &[Atom]| {
+        args.iter()
+            .map(|a| atom(function, a))
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    match call {
+        Call::Direct(callee, a) => format!("{}({})", program.function(*callee).name, args(a)),
+        Call::Apply(callee, a) => format!("apply {}({})", atom(function, callee), args(a)),
     }
 }

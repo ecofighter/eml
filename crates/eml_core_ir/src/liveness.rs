@@ -69,7 +69,7 @@ pub(crate) fn liveness(function: &CoreFn, tracked: &[bool]) -> Liveness {
                     CExpr::Switch { arms, .. } => {
                         work.extend(arms.iter().map(|&(_, arm)| Task::Visit(arm)));
                     }
-                    CExpr::Return(_) | CExpr::Jump { .. } => {}
+                    CExpr::Return(_) | CExpr::Jump { .. } | CExpr::TailCall(_) => {}
                 }
             }
             Task::Needs { join, param, body } => {
@@ -105,6 +105,7 @@ pub(crate) fn liveness(function: &CoreFn, tracked: &[bool]) -> Liveness {
                         vars
                     }
                     CExpr::Return(atom) => tracked_var(atom).into_iter().collect(),
+                    CExpr::TailCall(call) => call.atoms().iter().filter_map(tracked_var).collect(),
                     // 壊れた Core IR (範囲の外の `Jump`) は verifier が報告するので、ここでは空として扱う
                     CExpr::Jump { join, arg } => {
                         let mut vars = joins.get(join).cloned().unwrap_or_default();

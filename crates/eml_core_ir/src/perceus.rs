@@ -4,7 +4,7 @@
 use std::collections::{BTreeMap, HashMap};
 
 use crate::liveness::{Liveness, Vars, liveness, tracked};
-use crate::{Atom, CExpr, CExprId, CoreFn, JoinId, Program, Rhs, VarId};
+use crate::{Atom, CExpr, CExprId, Call, CoreFn, JoinId, Program, Rhs, VarId};
 
 /// 変換の後に、プログラム全体にかける。変換の途中の関数ごとではなく、独立したパスにする (docs/spec/core-ir.md)。
 pub(crate) fn insert(program: &mut Program) {
@@ -72,7 +72,7 @@ impl Pass<'_> {
         CExprId(self.new.len() as u32 - 1)
     }
 
-    /// `owned` は入口で所有している変数。どの経路も `Return` か `Jump` で終わり、その時点で渡すもの以外は所有して
+    /// `owned` は入口で所有している変数。どの経路も `Return`、`TailCall`、`Jump` で終わり、その時点で渡すもの以外は所有して
     /// いない。
     ///
     /// `Let` の連鎖と join point の本体の連なりは長くなりうるので、その向きはループで歩いて各段を記録し、最後に
@@ -85,6 +85,7 @@ impl Pass<'_> {
         let mut code = loop {
             match &old[id.0 as usize] {
                 CExpr::Return(atom) => break self.transform_return(*atom, &owned),
+                CExpr::TailCall(call) => break self.transform_tail_call(call, &owned),
                 CExpr::Jump { join, arg } => break self.transform_jump(*join, *arg, &owned),
                 CExpr::Switch { scrutinee, arms } => {
                     let arms = arms
@@ -209,6 +210,13 @@ impl Pass<'_> {
             }
         }
         code
+    }
+
+    /// 末尾呼び出しの後で使う変数はないので、呼び出しが使わない変数をすべて捨てる。
+    fn transform_tail_call(&mut self, call: &Call, owned: &Vars) -> CExprId {
+        let uses = self.uses(&call.atoms());
+        let code = self.push(CExpr::TailCall(call.clone()));
+        self.release_and_duplicate(code, owned, &uses, &Vars::new())
     }
 
     /// join point の本体は、本体で使う変数をちょうど1つずつ所有して始まる。それ以外を捨て、渡す値を本体でも使う

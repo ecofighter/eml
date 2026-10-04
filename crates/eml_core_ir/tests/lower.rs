@@ -86,12 +86,10 @@ fn recursion_and_top_level_values() {
       let t1 = prim ==(n0, 0)
       switch t1 {
         #0 ->
-          let t3 = prim -(n0, 1)
-          let t4 = call count(t3)
-          return t4
+          let t2 = prim -(n0, 1)
+          tailcall count(t2)
         #1 ->
-          let answer2 = call answer()
-          return answer2
+          tailcall answer()
       }
     }
     fn main(p0) {
@@ -133,8 +131,7 @@ fn builtins_used_as_values_are_wrapped() {
     let text = "apply : (a -> <e> b) -> a -> <e> b\napply f x = f x\n\nmain : Unit -> <IO> Unit\nmain () =\n  let g = not >> not\n  apply println (show_int 1)";
     insta::assert_snapshot!(core_text(text), @r"
     fn apply(f0, x1) {
-      let t2 = apply f0(x1)
-      return t2
+      tailcall apply f0(x1)
     }
     fn main(p0) {
       let c1 = closure builtin$not()
@@ -143,8 +140,7 @@ fn builtins_used_as_values_are_wrapped() {
       decref c3
       let c4 = closure builtin$println()
       let t5 = prim show_int(1)
-      let t6 = call apply(c4, t5)
-      return t6
+      tailcall apply(c4, t5)
     }
     fn builtin$not(p0) {
       let t1 = prim not(p0)
@@ -152,8 +148,7 @@ fn builtins_used_as_values_are_wrapped() {
     }
     fn builtin$>>(p0, p1, p2) {
       let t3 = apply p0(p2)
-      let t4 = apply p1(t3)
-      return t4
+      tailcall apply p1(t3)
     }
     fn builtin$println(p0) {
       let t1 = perform println(p0)
@@ -167,8 +162,7 @@ fn lambdas_are_lifted_with_their_captures_first() {
     let text = "apply : (a -> <e> b) -> a -> <e> b\napply f x = f x\n\nmain : Unit -> <IO> Unit\nmain () =\n  let s = \"!\"\n  let shout = fn t -> t ++ s\n  println (apply shout \"hi\")\n  println s";
     insta::assert_snapshot!(core_text(text), @r#"
     fn apply(f0, x1) {
-      let t2 = apply f0(x1)
-      return t2
+      tailcall apply f0(x1)
     }
     fn main(p0) {
       let s1 = const "!"
@@ -253,6 +247,32 @@ fn ifs_in_a_condition_nest_join_points() {
         #1 ->
           jump j1(b1)
       }
+    }
+    fn main(p0) {
+      return ()
+    }
+    ");
+}
+
+#[test]
+fn calls_in_tail_position_are_tail_calls() {
+    let text = "loop : Int -> Int -> Int\nloop n acc = if n == 0 then acc else loop (n - 1) (acc + 1)\n\ncall_twice : (Int -> Int) -> Int -> Int\ncall_twice f x = f (f x)\n\nmain : Unit -> <IO> Unit\nmain () = ()";
+    insta::assert_snapshot!(core_text(text), @r"
+    fn loop(n0, acc1) {
+      let t2 = prim ==(n0, 0)
+      switch t2 {
+        #0 ->
+          let t3 = prim -(n0, 1)
+          let t4 = prim +(acc1, 1)
+          tailcall loop(t3, t4)
+        #1 ->
+          return acc1
+      }
+    }
+    fn call_twice(f0, x1) {
+      dup f0
+      let t2 = apply f0(x1)
+      tailcall apply f0(t2)
     }
     fn main(p0) {
       return ()

@@ -148,27 +148,33 @@ impl ProgramBuilder {
             vars.push(var_info("t", ty, &lang));
             VarId(vars.len() as u32 - 1)
         };
-        let steps: Vec<(VarId, Rhs)> = match lowering(builtin) {
-            Lowering::Prim(op) => vec![(fresh(&result_type), Rhs::Prim(op, atoms))],
-            Lowering::Perform(op) => vec![(fresh(&result_type), Rhs::Perform(op, atoms))],
+        let (steps, last): (Vec<(VarId, Rhs)>, CExpr) = match lowering(builtin) {
+            Lowering::Prim(op) => {
+                let result = fresh(&result_type);
+                (
+                    vec![(result, Rhs::Prim(op, atoms))],
+                    CExpr::Return(Atom::Var(result)),
+                )
+            }
+            Lowering::Perform(op) => {
+                let result = fresh(&result_type);
+                (
+                    vec![(result, Rhs::Perform(op, atoms))],
+                    CExpr::Return(Atom::Var(result)),
+                )
+            }
             Lowering::Compose { forward } => {
                 let (inner, outer) = if forward { (0, 1) } else { (1, 0) };
                 let (_, middle_type) = split_arrows(&param_types[inner], 1);
                 let middle = fresh(&middle_type);
-                let result = fresh(&result_type);
-                vec![
-                    (middle, Rhs::Call(Call::Apply(atoms[inner], vec![atoms[2]]))),
-                    (
-                        result,
-                        Rhs::Call(Call::Apply(atoms[outer], vec![Atom::Var(middle)])),
-                    ),
-                ]
+                (
+                    vec![(middle, Rhs::Call(Call::Apply(atoms[inner], vec![atoms[2]])))],
+                    CExpr::TailCall(Call::Apply(atoms[outer], vec![Atom::Var(middle)])),
+                )
             }
             Lowering::Constructor(_) => unreachable!("constructors are values, not functions"),
         };
-        let mut exprs = Vec::new();
-        let last = steps.last().expect("every wrapper binds a result").0;
-        exprs.push(CExpr::Return(Atom::Var(last)));
+        let mut exprs = vec![last];
         let mut body = CExprId(0);
         for (var, rhs) in steps.into_iter().rev() {
             exprs.push(CExpr::Let { var, rhs, body });
@@ -371,10 +377,22 @@ impl FnLowering<'_> {
         id
     }
 
-    /// 式の値を `exit` に渡すコード。
+    /// 式の値を `exit` に渡すコード。値を返すだけの呼び出しは、呼び出し元のフレームを積まない末尾呼び出しにする。
     fn tail(&mut self, expr: ExprId, exit: Exit) -> CExprId {
         let mut bindings = Vec::new();
-        let last = self.tail_expr(expr, exit, &mut bindings);
+        let mut last = self.tail_expr(expr, exit, &mut bindings);
+        if let CExpr::Return(Atom::Var(returned)) = last
+            && let Some(Binding::Let(bound, Rhs::Call(_))) = bindings.last()
+            && *bound == returned
+        {
+            let Some(Binding::Let(_, Rhs::Call(call))) = bindings.pop() else {
+                unreachable!("checked above");
+            };
+            // 結果の変数は呼び出しの直前に作ったものなので、表から除いて番号を詰める
+            debug_assert_eq!(returned.0 as usize, self.vars.len() - 1);
+            self.vars.pop();
+            last = CExpr::TailCall(call);
+        }
         self.seq(bindings, last)
     }
 
