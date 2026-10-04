@@ -1,20 +1,17 @@
-use eml_diagnostics::{SourceFiles, render};
-use eml_syntax::{debug_tree, parse};
+mod common;
 
-/// どのテストでも lossless を確かめるため、木が元のテキストに戻ることもここで確認する。
+use common::item_kinds;
+use eml_diagnostics::render;
+use eml_syntax::debug_tree;
+use eml_test_support::parse;
+
+/// lossless の確認は `eml_test_support::parse` が行う。
 fn dump(text: &str) -> String {
-    let mut files = SourceFiles::new();
-    let file = files.add("test.em", text);
-    let (parse, diagnostics) = parse(file, text);
-    assert_eq!(
-        parse.syntax().text().to_string(),
-        text,
-        "tree must be lossless"
-    );
-    let mut out = debug_tree(&parse.syntax());
-    if !diagnostics.is_empty() {
+    let parsed = parse(text);
+    let mut out = debug_tree(&parsed.parse.syntax());
+    if !parsed.diagnostics.is_empty() {
         out.push_str("---\n");
-        out.push_str(&render(&diagnostics, &files));
+        out.push_str(&render(&parsed.diagnostics, &parsed.files));
     }
     out
 }
@@ -56,10 +53,7 @@ fn stray_tokens_are_one_error_until_the_next_item() {
 
 #[test]
 fn lexer_errors_are_not_reported_twice() {
-    let text = "€ x";
-    let mut files = SourceFiles::new();
-    let file = files.add("test.em", text);
-    let (_, diagnostics) = parse(file, text);
+    let diagnostics = parse("€ x").diagnostics;
     let codes: Vec<String> = diagnostics.iter().map(|d| d.code.to_string()).collect();
     // `€` は字句解析の E0001 だけ。続く `x` は項目ではないので E0003 を1件出す。
     assert_eq!(codes, ["E0001", "E0003"]);
@@ -70,26 +64,19 @@ fn lexer_errors_are_not_reported_twice() {
 fn recovery_resumes_at_the_next_item() {
     // 1つの項目の中のエラーは、次の行の項目の解析に影響しない。
     let text = "a : Int -> )\nb : Int\nc : Int";
-    let mut files = SourceFiles::new();
-    let file = files.add("test.em", text);
-    let (parse, diagnostics) = parse(file, text);
+    let diagnostics = parse(text).diagnostics;
     let codes: Vec<String> = diagnostics.iter().map(|d| d.code.to_string()).collect();
     assert_eq!(codes, ["E0011"]);
     assert_eq!(u32::from(diagnostics[0].primary.range.start()), 11);
-    let kinds: Vec<String> = parse
-        .syntax()
-        .children()
-        .map(|node| format!("{:?}", node.kind()))
-        .collect();
-    assert_eq!(kinds, ["SIGNATURE", "ERROR", "SIGNATURE", "SIGNATURE"]);
+    assert_eq!(
+        item_kinds(text),
+        ["SIGNATURE", "ERROR", "SIGNATURE", "SIGNATURE"]
+    );
 }
 
 /// パースが panic せずに終わり、木が元のテキストに戻ることだけを確かめる。
 fn assert_parses_losslessly(text: &str) {
-    let mut files = SourceFiles::new();
-    let file = files.add("test.em", text);
-    let (parse, _) = parse(file, text);
-    assert_eq!(parse.syntax().text(), text, "tree must be lossless");
+    parse(text);
 }
 
 #[test]
@@ -106,11 +93,7 @@ fn long_use_lookahead_does_not_hit_the_step_limit() {
 
 #[test]
 fn recovered_empty_block_stays_on_its_line() {
-    let text = "f =\ng = 1";
-    let mut files = SourceFiles::new();
-    let file = files.add("test.em", text);
-    let (parse, _) = parse(file, text);
-    let tree = debug_tree(&parse.syntax());
+    let tree = debug_tree(&parse("f =\ng = 1").parse.syntax());
     assert!(tree.contains("\n  EQUATION@0..3\n"), "{tree}");
     assert!(tree.contains("\n    BLOCK@3..3\n"), "{tree}");
 }

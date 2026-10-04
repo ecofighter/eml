@@ -223,6 +223,7 @@ name = "eml_syntax"
 version = "0.1.0"
 dependencies = [
  "eml_diagnostics",
+ "eml_test_support",
  "insta",
  "logos",
  "rowan",

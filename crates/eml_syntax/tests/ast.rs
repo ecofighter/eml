@@ -1,15 +1,11 @@
-use eml_diagnostics::SourceFiles;
 use eml_syntax::SyntaxKind::{self, *};
 use eml_syntax::ast::{Expr, Item, OpSeqElement, Pat, SourceFile, Stmt, Type};
-use eml_syntax::parse;
 use rowan::ast::AstNode;
 
 fn source(text: &str) -> SourceFile {
-    let mut files = SourceFiles::new();
-    let file = files.add("test.em", text);
-    let (parse, diagnostics) = parse(file, text);
-    assert!(diagnostics.is_empty(), "{diagnostics:?}");
-    parse.tree()
+    let parsed = eml_test_support::parse(text);
+    assert!(parsed.diagnostics.is_empty(), "{:?}", parsed.diagnostics);
+    parsed.parse.tree()
 }
 
 fn first_equation(file: &SourceFile) -> eml_syntax::ast::Equation {

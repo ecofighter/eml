@@ -1,8 +1,6 @@
 mod common;
 
-use common::diagnostics;
-use eml_diagnostics::SourceFiles;
-use eml_syntax::parse;
+use common::{diagnostics, item_kinds};
 
 const S1: &str = include_str!("corpus/s1.em");
 const LATER_STAGES: &str = include_str!("corpus/later_stages.em");
@@ -14,16 +12,8 @@ fn s1_corpus_has_no_diagnostics() {
 
 #[test]
 fn s1_corpus_items() {
-    let mut files = SourceFiles::new();
-    let file = files.add("s1.em", S1);
-    let (parse, _) = parse(file, S1);
-    let kinds: Vec<String> = parse
-        .syntax()
-        .children()
-        .map(|node| format!("{:?}", node.kind()))
-        .collect();
     assert_eq!(
-        kinds,
+        item_kinds(S1),
         [
             "FIXITY_ITEM",
             "FIXITY_ITEM",

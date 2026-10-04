@@ -9,4 +9,5 @@ logos.workspace = true
 rowan.workspace = true
 
 [dev-dependencies]
+eml_test_support.workspace = true
 insta.workspace = true

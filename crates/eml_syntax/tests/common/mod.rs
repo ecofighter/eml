@@ -1,13 +1,14 @@
 #![allow(dead_code)]
 
-use eml_diagnostics::SourceFiles;
-use eml_syntax::{SyntaxElement, SyntaxNode, parse};
+use eml_syntax::{SyntaxElement, SyntaxNode};
+use eml_test_support::{parse, short};
 
-/// どのテストでも lossless を確かめるため、木が元のテキストに戻ることもここで確認する。
+/// 木の形 (trivia を除く) と、構文の診断。lossless の確認は `eml_test_support::parse` が行う。
 pub fn shape(text: &str) -> String {
-    let (root, diagnostics) = parse_text(text);
+    let parsed = parse(text);
     let mut out = String::new();
-    write_node(&mut out, &root, 0);
+    write_node(&mut out, &parsed.parse.syntax(), 0);
+    let diagnostics = short(&parsed.files, &parsed.diagnostics);
     if !diagnostics.is_empty() {
         out.push_str("---\n");
         for line in diagnostics {
@@ -20,41 +21,31 @@ pub fn shape(text: &str) -> String {
 
 /// 期待値を読みやすくするため、位置はバイトではなく 1 始まりの行と列 (文字数) で表示する。
 pub fn diagnostics(text: &str) -> Vec<String> {
-    parse_text(text).1
+    let parsed = parse(text);
+    short(&parsed.files, &parsed.diagnostics)
 }
 
 /// help の文言を確かめるテストのため、すべての診断の help を順に返す。
 pub fn helps(text: &str) -> Vec<String> {
-    let mut files = SourceFiles::new();
-    let file = files.add("test.em", text);
-    parse(file, text)
-        .1
+    parse(text)
+        .diagnostics
         .into_iter()
         .flat_map(|diagnostic| diagnostic.help)
         .collect()
 }
 
-pub fn lines(lines: &[&str]) -> String {
-    lines.join("\n")
+/// トップレベルの子のノードの種類。回復が次の項目から再開することを確かめるため。
+pub fn item_kinds(text: &str) -> Vec<String> {
+    parse(text)
+        .parse
+        .syntax()
+        .children()
+        .map(|node| format!("{:?}", node.kind()))
+        .collect()
 }
 
-fn parse_text(text: &str) -> (SyntaxNode, Vec<String>) {
-    let mut files = SourceFiles::new();
-    let file = files.add("test.em", text);
-    let (parse, diagnostics) = parse(file, text);
-    let root = parse.syntax();
-    assert_eq!(root.text().to_string(), text, "tree must be lossless");
-    let shown = diagnostics
-        .iter()
-        .map(|d| {
-            let offset = u32::from(d.primary.range.start()) as usize;
-            let before = &text[..offset];
-            let line = before.matches('\n').count() + 1;
-            let column = before.rsplit('\n').next().unwrap_or("").chars().count() + 1;
-            format!("{} {line}:{column} {}", d.code, d.message)
-        })
-        .collect();
-    (root, shown)
+pub fn lines(lines: &[&str]) -> String {
+    lines.join("\n")
 }
 
 fn write_node(out: &mut String, node: &SyntaxNode, depth: usize) {

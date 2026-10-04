@@ -1,9 +1,9 @@
-use eml_diagnostics::{SourceFiles, render};
+use eml_diagnostics::render;
 use eml_syntax::lex;
+use eml_test_support::source;
 
 fn dump(text: &str) -> String {
-    let mut files = SourceFiles::new();
-    let file = files.add("test.em", text);
+    let (files, file) = source(text);
     let (tokens, diagnostics) = lex(file, text);
     let mut out = String::new();
     for token in &tokens {
@@ -22,8 +22,7 @@ fn dump(text: &str) -> String {
 }
 
 fn kinds(text: &str) -> Vec<String> {
-    let mut files = SourceFiles::new();
-    let file = files.add("test.em", text);
+    let (_, file) = source(text);
     let (tokens, _) = lex(file, text);
     let joined: String = tokens.iter().map(|token| &text[token.range]).collect();
     assert_eq!(joined, text, "tokens must cover the whole text");
@@ -35,8 +34,7 @@ fn kinds(text: &str) -> Vec<String> {
 }
 
 fn diags(text: &str) -> Vec<String> {
-    let mut files = SourceFiles::new();
-    let file = files.add("test.em", text);
+    let (_, file) = source(text);
     let (_, diagnostics) = lex(file, text);
     diagnostics
         .iter()
