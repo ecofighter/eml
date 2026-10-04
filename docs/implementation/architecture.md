@@ -24,6 +24,7 @@ eml/
     eml_runtime/
     eml_interp/
     eml_cli/            # lib + バイナリ (バイナリ名 `eml`)
+    eml_test_support/   # 開発専用。結合テストのパイプラインと診断の文字列
   tests/ui/             # UI テストのコーパス
     run/
     run-fail/
@@ -53,6 +54,7 @@ eml_diagnostics  Diagnostic 型、FileId と SourceFiles、ariadne による表�
 
 - 段階の並びは `eml_cli` → `eml_interp` → `eml_core_ir` → `eml_types` → `eml_hir` → `eml_syntax` → `eml_diagnostics` で、`eml_interp` はさらに `eml_runtime` に依存する
 - `eml_diagnostics` は、診断を出す crate のすべてから使う。現時点で `eml_runtime` と `eml_interp` は診断を出さないので、`eml_diagnostics` に依存していない
+- `eml_test_support` は開発専用の crate で、パイプラインに入らない。各 crate の結合テストが dev-dependency として使う ([テスト戦略](testing.md))
 
 ## 各段階の規律
 
@@ -149,7 +151,7 @@ HIR への変換では、名前解決に加えて、次の脱糖と検査を行�
 - Core IR の関数は、ANF の木をアリーナに置き、`CExprId` で参照する。継続のフレームが再開する位置を ID で持てるようにするため。値を返す入れ子の式は `Rhs::Nested` で、`if` はその中の `Switch` にする
 - ラムダは、捕まえた変数を先頭の引数に持つ関数に持ち上げる (`外側の名前$lambdaN`)。組み込みを値として使うときは、呼ぶだけの関数 (`builtin$名前`) で包む。関数の表は番号を先に取り、変換の途中で関数を足す
 - 呼ばれるものが引数のないトップレベルの値のときは、呼ばれるものを先に評価してから引数を評価する (一般の `Apply` の経路)。左から右の評価順を保つため
-- クロージャは `Payload::Closure(Closure)` (フィールドは `function` と `args`) で、関数値の呼び出し `Apply` は eval/apply で行う。余った引数は `Payload::ApplyFrame(ApplyFrame)` (フィールドは `args` と `next`) として継続に積む。設計文書ではフレームの種類の enum にする案だったが、既存の `Frame` を変えずに済むので、ペイロードの別の種類にした
+- クロージャは `Payload::Closure(Closure)` (フィールドは `function` と `args`) で、関数値の呼び出し `Apply` は eval/apply で行う。余った引数は `Payload::ApplyFrame(ApplyFrame)` (フィールドは `args` と `next`) として継続に積む。設計文書ではフレームの種類の enum にする案だったが、`Frame` を変えると既存の heap のテストの書き換えが要るため、ペイロードの別の種類にした。テストを守るために構造を曲げた例で、リファクタリング R3 でフレームの種類の enum に直す ([status.md](status.md) の「リファクタリング」)
 - 共有されたクロージャを呼ぶときは、捕まえた値の参照を複製してからクロージャを手放す
 - Perceus の挿入は、ANF の上の後ろ向きの生存解析で行う。逐次の文は入れ子ではなく `Let` の連鎖が長くなりうるので、連鎖に沿った走査はループで行い、再帰は入れ子の式と `Switch` の枝に限る。関数、プリミティブ、`perform` の引数は、どれも所有権を受け取る
 - ヒープはインデックス方式のアリーナで、スロットごとに世代番号を持つ。値は `Copy` な `Value` である
