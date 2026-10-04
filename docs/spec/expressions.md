@@ -143,7 +143,8 @@ with_log path action =
 ```
 
 - `from 初期値` で handler の状態の初期値を与える。各節 (`return` を含む) は、最後の引数として状態を受け取る。`resume k v s` で、次の状態を渡して再開する
-- 次のように、関数を返す handler に初期値を適用する形へ脱糖する。handler の意味論 (deep handler、中断時の後始末) は変わらない
+- 初期値を先に評価し、その後で本体を実行する
+- 状態は handler が持ち、脱糖しない。観測できる振る舞いは、次のように関数を返す handler に初期値を適用した形と同じで、handler の意味論 (deep handler、中断時の後始末) も変わらない。ただし、評価の順は上の規則に従う
 
   ```haskell
   (handle action () with
@@ -151,8 +152,10 @@ with_log path action =
      | return x -> fn f -> ...) (open path)
   ```
 
+  脱糖しないのは、状態を handler フレームに置くと、`| get () k st -> resume k st st` のような節がすぐに再開する形のまま残るためである。将来の evidence passing の最適化を、そのまま当てはめられる ([evidence passing の設計](../future/evidence-passing.md))
+- `return` の節を省略したら、`| return x _ -> x` とみなす。状態を `_` で捨てるので、状態の型に `Unr` の制約が付く。`Lin` の状態では `return` の節を書く
 - 状態の線形性の規則は [線形性](linearity.md) の「パラメータ付き handler の状態」で定める
-- `resume` の引数の個数 (2 または 3) は HIR で検査する (E1011)
+- `resume` の引数が 2 個でも 3 個でもなければ、HIR で E1011 にする。個数が `k` の型 (状態の有無) と合わないことは、型検査で報告する ([エフェクトと handler](effects.md) の「パラメータ付き handler」)
 - `Ref` には `Unr` の値しか入れられない ([マルチコア対応の設計](../future/multicore.md) の「可変状態」)。そのため、`Lin` なリソースを handler に持たせる方法は、この構文が基本になる
 
 ## 並行処理
@@ -178,7 +181,7 @@ fetch_all urls =
 この文書の構文のうち、HIR への変換で次の脱糖と検査を行う。
 
 - 演算子の列の組み直し、単項マイナス、セクション、`&&` と `||` の `if` への脱糖、`|>` の、左辺を先に評価する関数適用への脱糖、`<|` の関数適用への脱糖 ([宣言](declarations.md) の標準の演算子の表)
-- `use`、パラメータ付き handler、`if` の `else` の補完、`let ... in`
+- `use`、`if` の `else` の補完、`let ... in`
 - handler の節の引数の個数、`resume` の引数の個数
 
 宣言とレコードに関する脱糖は [宣言](declarations.md) と [直積型とレコード](records.md) にある。

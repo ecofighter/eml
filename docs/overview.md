@@ -56,7 +56,7 @@ eml の目的、言語の性格、確定した設計判断の一覧、文書全�
 | 型の宣言 | `data` は直和型、`type` は型の別名 | [宣言](spec/declarations.md) |
 | エフェクトの宣言 | `effect Name a where` の後に操作を並べる。操作のカリー化を許す | [宣言](spec/declarations.md) |
 | `use` | ブロックの残りを、最後の引数のラムダとして渡す糖衣構文 | [式](spec/expressions.md) |
-| パラメータ付き handler | `handle e from init with`。状態を節の最後の引数で受ける糖衣構文 | [式](spec/expressions.md) |
+| パラメータ付き handler | `handle e from init with`。状態を handler が持ち、節の最後の引数で受ける | [式](spec/expressions.md) |
 | 線形値の受け渡し | 糖衣構文は入れない。再束縛、`use`、パラメータ付き handler で吸収する | [式](spec/expressions.md) |
 | 文字列 | 補間は `"\{x}"`。複数行の `"""`、raw の `r"..."` | [字句](spec/lexical.md) |
 | コマンドリテラル | バッククォート。シェルを介さず、引数のリストを組む (Julia 方式) | [字句](spec/lexical.md) |
@@ -86,7 +86,7 @@ eml の目的、言語の性格、確定した設計判断の一覧、文書全�
 | 中断 | `drop k` や `never` 操作によって、継続が再開されずに捨てられること。暗黙の後始末は中断時にだけ起きる |
 | 破棄処理 | `Lin` 型に宣言された捨て方。組み込みリソース `File` では `close` |
 | deep handler | `resume` した継続の中でも同じ handler が有効なままの handler |
-| パラメータ付き handler | `handle e from init with` の形で、状態を節の最後の引数として受け渡す handler。関数を返す handler に脱糖する |
+| パラメータ付き handler | `handle e from init with` の形で、状態を節の最後の引数として受け渡す handler。状態は handler フレームに置き、脱糖しない |
 | レイアウト段 | lexer と parser の間で、仮想トークン `OPEN` / `SEP` / `CLOSE` (コードでは `LAYOUT_OPEN` / `LAYOUT_SEP` / `LAYOUT_CLOSE`) を挿入する段 |
 | Perceus | 参照カウントの `dup` / `decref` を静的に挿入する方式。reuse analysis と借用の最適化は後で入れる |
 | Core IR | 型付き HIR から変換する ANF 形式の IR。RC とエフェクトの命令を明示する |

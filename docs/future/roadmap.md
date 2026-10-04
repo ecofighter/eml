@@ -34,11 +34,11 @@
 
 - インクリメンタル化: 各段階をクエリ (salsa など) に載せ替える。各段階を純粋な関数にしているのはこのため ([コンパイラの構成](../implementation/architecture.md))
 - LSP: 診断、hover (型と row の表示)、補完、code action。診断の構造体は、LSP の診断と code action に変換できる形にしてある ([診断](../spec/diagnostics.md))
-- ネイティブ化: 同じ Core IR から LLVM へ変換する。`never` / `once` はスタック切り替え、`multi` は選択的な CPS 変換かスタックのコピーで実装する。evidence passing を検討する
+- ネイティブ化: 同じ Core IR から LLVM へ変換する。エフェクトは generalized evidence passing と yield の bubbling (Koka 方式) で実装する。スタックの切り替えは、性能が足りない場合の選択肢として残す ([evidence passing の設計](evidence-passing.md))
 - レコードのネイティブな表現: フィールドの位置が多相になる箇所に、オフセットを証拠として渡す (evidence passing) か、単相化するか
 - Perceus の最適化: reuse analysis (FBIP)、借用パラメータ
 - 引数のないトップレベルの値の計算: 今は参照するたびに計算する ([Core IR とインタプリタ](../spec/core-ir.md))。一度だけ計算して覚えておく形にする
-- すぐに再開する handler の最適化: 節が `resume k v` を末尾で1回だけ呼ぶ場合に、継続を取り出さない直接の呼び出しにする ([マルチコア対応の設計](multicore.md))
+- すぐに再開する handler の最適化: 節が `resume k v` を末尾で1回だけ呼ぶ場合に、継続を取り出さない直接の呼び出しにする ([evidence passing の設計](evidence-passing.md) の「すぐに再開する節」)
 
 ## マルチコア対応
 

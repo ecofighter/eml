@@ -176,7 +176,7 @@ row の Kind: Row<s>,  s ∈ { Never ≤ Once ≤ Multi }
 
 ### すぐに再開する handler の最適化
 
-handler の節が `resume k v` を末尾で1回だけ呼ぶ場合、継続を取り出さない直接の呼び出しにコンパイルできる (Koka や evidence passing の主要な最適化)。これは並列とは関係なく、コンパイラが handler ごとに構文から判定する。エフェクトの宣言に操作の種類を追加する必要はない。
+handler の節が `resume k v` を末尾で1回だけ呼ぶ場合、継続を取り出さない直接の呼び出しにコンパイルできる (Koka や evidence passing の主要な最適化)。これは並列とは関係なく、コンパイラが handler ごとに構文から判定する。エフェクトの宣言に操作の種類を追加する必要はない。実装の方針は [evidence passing の設計](evidence-passing.md) の「すぐに再開する節」にある。
 
 ### 並行処理
 
