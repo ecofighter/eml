@@ -21,6 +21,7 @@ pub use ty::{EffectLabel, KindConstraint, KindTerm, Linearity, Multiplicity, Row
 pub mod codes {
     use eml_diagnostics::ErrorCode;
 
+    pub const LINEAR_VALUE_MISUSED: ErrorCode = ErrorCode(3001);
     pub const TYPE_MISMATCH: ErrorCode = ErrorCode(2001);
     pub const EFFECT_NOT_IN_ROW: ErrorCode = ErrorCode(2002);
     pub const MISSING_MAIN: ErrorCode = ErrorCode(2003);

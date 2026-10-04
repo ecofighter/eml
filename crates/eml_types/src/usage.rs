@@ -3,10 +3,11 @@
 
 use std::collections::HashMap;
 
+use eml_diagnostics::TextRange;
 use eml_hir::{Body, ExprId, ExprKind, LocalId, PatId, PatKind, Res, Stmt};
 
 use crate::check::BodyTyping;
-use crate::kind::Bound;
+use crate::kind::{Bound, KindOrigin, KindReason};
 use crate::table::Table;
 use crate::ty::Linearity;
 
@@ -14,10 +15,17 @@ use crate::ty::Linearity;
 type Uses = HashMap<LocalId, (u8, u8)>;
 
 pub(crate) fn constrain(body: &Body, typing: &BodyTyping, table: &mut Table) {
+    // 報告済みの誤りの跡 (`Missing`) がある本体では、捨てた式の中の使用が数えられない。E3001 を連鎖させないよう、
+    // 由来を記録せずに制約だけを出す (docs/spec/types.md の「エラーの扱い」)
+    let reliable = !body
+        .exprs
+        .iter()
+        .any(|(_, expr)| matches!(expr.kind, ExprKind::Missing));
     let mut usage = Usage {
         body,
         typing,
         table,
+        reliable,
     };
     let uses = usage.expr(body.root);
     for &param in &body.params {
@@ -29,6 +37,7 @@ struct Usage<'a> {
     body: &'a Body,
     typing: &'a BodyTyping,
     table: &'a mut Table,
+    reliable: bool,
 }
 
 impl Usage<'_> {
@@ -85,7 +94,52 @@ impl Usage<'_> {
                 uses
             }
             ExprKind::Annot { expr, .. } => self.expr(*expr),
-            ExprKind::Handle { .. } | ExprKind::Resume { .. } | ExprKind::Drop(_) => Uses::new(),
+            // handle の本体と節は、捕まえた変数を先頭の引数に持つ関数に持ち上げる (docs/spec/core-ir.md)。ラムダと
+            // 同じく、捕まえることを handle 式の位置での1回の使用に数え、中の使用を別に数える
+            ExprKind::Handle {
+                body: handled,
+                clauses,
+                ret,
+                ..
+            } => {
+                let mut uses = Uses::new();
+                let inner = self.expr(*handled);
+                let captured = self.captured_once(*handled, &[], inner);
+                sequence(&mut uses, captured);
+                if let Some(ret) = ret {
+                    let inner = self.expr(ret.body);
+                    let captured = self.captured_once(ret.body, &[ret.param], inner);
+                    sequence(&mut uses, captured);
+                }
+                for clause in clauses {
+                    let mut inner = self.expr(clause.body);
+                    let bound: Vec<PatId> = clause.patterns().collect();
+                    for &pat in &bound {
+                        self.check_pat(pat, &inner);
+                        remove_bound(body, pat, &mut inner);
+                    }
+                    let mut captured: Vec<LocalId> = inner.keys().copied().collect();
+                    captured.sort();
+                    debug_assert_eq!(captured, body.captures(clause.body, &bound));
+                    // 操作の節は、操作を起こすたびに呼ばれる。捕まえた変数は、何回使ってもよいものでなければならない
+                    for &local in &captured {
+                        let name = body.locals[local].name.clone();
+                        self.unr_local(local, KindReason::CapturedByClause(name));
+                    }
+                    sequence(
+                        &mut uses,
+                        captured.into_iter().map(|local| (local, (1, 1))).collect(),
+                    );
+                }
+                uses
+            }
+            ExprKind::Resume { k, arg } => {
+                let mut uses = self.expr(*k);
+                let next = self.expr(*arg);
+                sequence(&mut uses, next);
+                uses
+            }
+            ExprKind::Drop(value) => self.expr(*value),
             ExprKind::Lambda {
                 params,
                 body: lambda_body,
@@ -103,15 +157,16 @@ impl Usage<'_> {
                 debug_assert_eq!(captured, body.lambda_captures(id));
                 let mut captured_types = Vec::new();
                 for &local in &captured {
-                    if inner[&local] != (1, 1) {
-                        self.unr_local(local);
-                    }
+                    self.count(local, inner[&local]);
                     if let Some(&ty) = self.typing.locals.get(local) {
                         captured_types.push(ty);
                     }
                 }
                 if let Some(&ty) = self.typing.exprs.get(id) {
-                    self.table.closure_kinds(ty, params.len(), &captured_types);
+                    let range = body.exprs[id].range;
+                    self.with_origin(range, KindReason::CapturedByLambda, |table| {
+                        table.closure_kinds(ty, params.len(), &captured_types)
+                    });
                 }
                 captured.into_iter().map(|local| (local, (1, 1))).collect()
             }
@@ -123,13 +178,14 @@ impl Usage<'_> {
     fn check_pat(&mut self, pat: PatId, uses: &Uses) {
         match &self.body.pats[pat].kind {
             PatKind::Bind(local) => {
-                if uses.get(local).copied().unwrap_or((0, 0)) != (1, 1) {
-                    self.unr_local(*local);
-                }
+                self.count(*local, uses.get(local).copied().unwrap_or((0, 0)));
             }
             PatKind::Wildcard => {
                 if let Some(&ty) = self.typing.pats.get(pat) {
-                    self.table.kind_at_most(ty, Bound::Const(Linearity::Unr));
+                    let range = self.body.pats[pat].range;
+                    self.with_origin(range, KindReason::Discarded, |table| {
+                        table.kind_at_most(ty, Bound::Const(Linearity::Unr))
+                    });
                 }
             }
             PatKind::Annot { pat, .. } => self.check_pat(*pat, uses),
@@ -137,10 +193,56 @@ impl Usage<'_> {
         }
     }
 
-    fn unr_local(&mut self, local: LocalId) {
-        if let Some(&ty) = self.typing.locals.get(local) {
-            self.table.kind_at_most(ty, Bound::Const(Linearity::Unr));
+    /// 1回だけ動く部分 (handle の本体と `return` の節) の使用回数を、捕まえた変数の1回の使用にまとめる。
+    fn captured_once(&mut self, root: ExprId, params: &[PatId], mut inner: Uses) -> Uses {
+        for &param in params {
+            self.check_pat(param, &inner);
+            remove_bound(self.body, param, &mut inner);
         }
+        let mut captured: Vec<LocalId> = inner.keys().copied().collect();
+        captured.sort();
+        // 捕まえた変数の集合は、Core IR の変換が使う `captures` と同じでなければならない
+        debug_assert_eq!(captured, self.body.captures(root, params));
+        for &local in &captured {
+            self.count(local, inner[&local]);
+        }
+        captured.into_iter().map(|local| (local, (1, 1))).collect()
+    }
+
+    /// 経路ごとの使用回数が1回でなければ、`Unr` の制約を出す。
+    fn count(&mut self, local: LocalId, (min, max): (u8, u8)) {
+        if (min, max) == (1, 1) {
+            return;
+        }
+        let name = self.body.locals[local].name.clone();
+        let reason = if max >= 2 {
+            KindReason::UsedMoreThanOnce(name)
+        } else {
+            KindReason::NotUsed(name)
+        };
+        self.unr_local(local, reason);
+    }
+
+    fn unr_local(&mut self, local: LocalId, reason: KindReason) {
+        if let Some(&ty) = self.typing.locals.get(local) {
+            let range = self.body.locals[local].range;
+            self.with_origin(range, reason, |table| {
+                table.kind_at_most(ty, Bound::Const(Linearity::Unr))
+            });
+        }
+    }
+
+    /// `constrain` の間だけ、作る Kind の制約の由来を設定する。誤りのある本体では由来を記録しない。
+    fn with_origin(
+        &mut self,
+        range: TextRange,
+        reason: KindReason,
+        constrain: impl FnOnce(&mut Table),
+    ) {
+        let origin = self.reliable.then_some(KindOrigin { range, reason });
+        let previous = self.table.set_kind_origin(origin);
+        constrain(&mut *self.table);
+        self.table.set_kind_origin(previous);
     }
 }
 

@@ -1,7 +1,8 @@
-use eml_diagnostics::{Diagnostic, Label, TextRange};
+use eml_diagnostics::{Diagnostic, FileId, Label, TextRange};
 use eml_hir::{Body, ExprId, ExprKind, Module, PatId, Res};
 
 use crate::codes;
+use crate::kind::{KindOrigin, KindReason};
 use crate::table::{Row, Ty, UnifyError};
 
 use super::body::BodyCheck;
@@ -304,4 +305,66 @@ pub(super) fn count(n: usize, word: &str) -> String {
     } else {
         format!("{n} {word}s")
     }
+}
+
+/// 線形な値の誤った使い方 (E3001)。破れた Kind の制約の由来を指す。指し方を docs/spec/diagnostics.md の「線形性の
+/// 診断」の表どおりにする (二重使用の2か所など) のは、線形性の検査パスを分ける段階5で行う。
+pub(super) fn linear_misuse(file: FileId, origin: &KindOrigin) -> Diagnostic {
+    let (message, label) = match &origin.reason {
+        KindReason::UsedMoreThanOnce(name) => (
+            format!("`{name}` must be used exactly once, but it may be used more than once"),
+            format!("`{name}` is bound here"),
+        ),
+        KindReason::NotUsed(name) => (
+            format!("`{name}` must be used exactly once, but some paths do not use it"),
+            format!("`{name}` is bound here"),
+        ),
+        KindReason::Discarded => (
+            "a linear value cannot be discarded with `_`".to_string(),
+            "this pattern discards it".to_string(),
+        ),
+        KindReason::CapturedByClause(name) => (
+            format!("`{name}` must be used exactly once, but an operation clause captures it"),
+            format!("`{name}` is bound here"),
+        ),
+        KindReason::CapturedByLambda => (
+            "a lambda that captures a linear value is used where it may be called any number of times"
+                .to_string(),
+            "this lambda".to_string(),
+        ),
+        KindReason::Passed(name) => (
+            format!(
+                "a linear value is passed to `{name}`, which may use it more than once or not at all"
+            ),
+            format!("`{name}` is used here"),
+        ),
+        KindReason::Unified => (
+            "a linear value is used where an unrestricted value is expected".to_string(),
+            "this expression".to_string(),
+        ),
+    };
+    let mut diagnostic = Diagnostic::error(
+        codes::LINEAR_VALUE_MISUSED,
+        message,
+        Label::new(file, origin.range, label),
+    )
+    .with_note(
+        "linear values, such as the continuation of a `once` operation and closures that capture one, must be used exactly once",
+    );
+    match &origin.reason {
+        KindReason::NotUsed(name) => {
+            diagnostic = diagnostic.with_help(format!(
+                "pass `{name}` to `drop` on the paths that do not use it"
+            ));
+        }
+        KindReason::Discarded => {
+            diagnostic = diagnostic.with_help("bind it to a name and pass the name to `drop`");
+        }
+        KindReason::CapturedByClause(_) => {
+            diagnostic = diagnostic
+                .with_note("an operation clause runs each time its operation is performed");
+        }
+        _ => {}
+    }
+    diagnostic
 }

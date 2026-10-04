@@ -112,12 +112,10 @@ pub(crate) fn check_module(module: &Module) -> (TypedModule, Vec<Diagnostic>) {
             }
         }
     }
-    let violated = table.solve_kinds();
-    // 段階2には `Lin` の型がないので、Kind の制約は破れない。違反の診断の番号は段階5で決める
-    debug_assert!(
-        !violated,
-        "a kind constraint was violated without linear types"
-    );
+    // Kind の制約の違反は、線形な値の誤った使い方である (docs/spec/linearity.md)
+    for origin in table.solve_kinds() {
+        diagnostics.push(report::linear_misuse(module.file, &origin));
+    }
     let mut typed = TypedModule {
         main,
         ..TypedModule::default()

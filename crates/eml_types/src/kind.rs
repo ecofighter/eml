@@ -3,6 +3,8 @@
 
 use std::collections::{HashMap, HashSet};
 
+use eml_diagnostics::TextRange;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct KindVar(u32);
 
@@ -18,11 +20,40 @@ pub(crate) enum Bound<T> {
     Var(KindVar),
 }
 
+/// Kind の制約の由来。制約が破れたときに E3001 が指す場所と理由である (docs/spec/diagnostics.md の「線形性の診断」)。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct KindOrigin {
+    pub range: TextRange,
+    pub reason: KindReason,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum KindReason {
+    /// ある経路で2回以上使った変数。名前は変数の名前である。
+    UsedMoreThanOnce(String),
+    /// ある経路で使わなかった変数。
+    NotUsed(String),
+    /// `_` で受けた値。
+    Discarded,
+    /// 操作の節が捕まえた変数。
+    CapturedByClause(String),
+    /// ラムダが捕まえた値。
+    CapturedByLambda,
+    /// トップレベルの関数、組み込み、操作のスキームから複写した制約。名前は参照した値の名前である。
+    Passed(String),
+    /// 型の単一化で出た制約。
+    Unified,
+}
+
 #[derive(Debug)]
 pub(crate) struct Lattice<T> {
     bottom: T,
     vars: usize,
     constraints: Vec<(Bound<T>, Bound<T>)>,
+    /// 制約ごとの由来。`constraints` と同じ順に並ぶ。
+    origins: Vec<Option<KindOrigin>>,
+    /// これから作る制約に記録する由来。制約を作る側の引数を増やさずに済むよう、型の表が設定する。
+    current: Option<KindOrigin>,
 }
 
 impl<T: Copy + Ord> Lattice<T> {
@@ -31,7 +62,17 @@ impl<T: Copy + Ord> Lattice<T> {
             bottom,
             vars: 0,
             constraints: Vec::new(),
+            origins: Vec::new(),
+            current: None,
         }
+    }
+
+    pub fn set_origin(&mut self, origin: Option<KindOrigin>) {
+        self.current = origin;
+    }
+
+    pub fn origin(&self, index: usize) -> Option<&KindOrigin> {
+        self.origins[index].as_ref()
     }
 
     pub fn fresh(&mut self) -> KindVar {
@@ -41,6 +82,7 @@ impl<T: Copy + Ord> Lattice<T> {
 
     pub fn require(&mut self, lower: Bound<T>, upper: Bound<T>) {
         self.constraints.push((lower, upper));
+        self.origins.push(self.current.clone());
     }
 
     /// 最小解と、満たせなかった制約 (定数の上限を超えたもの) の番号を返す。束は有限で更新は単調なので止まる。
@@ -124,6 +166,7 @@ impl<T: Copy + Ord> Lattice<T> {
         };
         for &(lower, upper) in constraints {
             self.constraints.push((rename(lower), rename(upper)));
+            self.origins.push(self.current.clone());
         }
     }
 }

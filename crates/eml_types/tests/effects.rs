@@ -103,3 +103,66 @@ fn the_body_of_a_handler_may_perform_only_the_handled_effect_and_the_outer_row()
       help: add `IO` to the row of the signature of `f`, as in `-> <IO> ...`
     ");
 }
+
+#[test]
+fn a_continuation_of_a_once_operation_must_be_used_exactly_once() {
+    let text = "effect Ask where\n  ask : Unit -> Int\n\ntwice : Unit -> Int\ntwice () =\n  handle ask () with\n    | ask () k -> resume k 1 + resume k 2\n\nunused : Unit -> Int\nunused () =\n  handle ask () with\n    | ask () k -> 0\n\ndiscarded : Unit -> Int\ndiscarded () =\n  handle ask () with\n    | ask () _ -> 0\n\ncaptured : Unit -> <Ask> Int\ncaptured () =\n  handle ask () with\n    | ask () k ->\n        handle ask () with\n          | ask () inner -> resume k (resume inner 1)";
+    insta::assert_snapshot!(check_text(text), @r"
+    ask : Unit -> <Ask> Int
+    twice : Unit -> Int
+      k#0 : Cont Int Int <>
+    unused : Unit -> Int
+      k#0 : Cont Int Int <>
+    discarded : Unit -> Int
+    captured : Unit -> <Ask> Int
+      k#0 : Cont Int Int <Ask>
+      inner#1 : Cont Int Int <Ask>
+    ---
+    E3001 7:14 `k` must be used exactly once, but it may be used more than once
+      7:14 `k` is bound here
+      note: linear values, such as the continuation of a `once` operation and closures that capture one, must be used exactly once
+    E3001 12:14 `k` must be used exactly once, but some paths do not use it
+      12:14 `k` is bound here
+      note: linear values, such as the continuation of a `once` operation and closures that capture one, must be used exactly once
+      help: pass `k` to `drop` on the paths that do not use it
+    E3001 17:14 a linear value cannot be discarded with `_`
+      17:14 this pattern discards it
+      note: linear values, such as the continuation of a `once` operation and closures that capture one, must be used exactly once
+      help: bind it to a name and pass the name to `drop`
+    E3001 22:14 `k` must be used exactly once, but an operation clause captures it
+      22:14 `k` is bound here
+      note: linear values, such as the continuation of a `once` operation and closures that capture one, must be used exactly once
+      note: an operation clause runs each time its operation is performed
+    ");
+}
+
+#[test]
+fn a_closure_capturing_a_continuation_cannot_be_used_twice() {
+    let text = "effect Ask where\n  ask : Unit -> Int\n\ntwice : (Int -> Int) -> Int\ntwice f = f (f 0)\n\ng : Unit -> Int\ng () =\n  handle ask () with\n    | ask () k -> twice (fn n -> resume k n)";
+    insta::assert_snapshot!(check_text(text), @r"
+    ask : Unit -> <Ask> Int
+    twice : (Int -> Int) -> Int
+      kinds: (Int -> Int) <= Unr
+      f#0 : Int -> Int
+    g : Unit -> Int
+      k#0 : Cont Int Int <>
+      n#1 : Int
+    ---
+    E3001 10:19 a linear value is passed to `twice`, which may use it more than once or not at all
+      10:19 `twice` is used here
+      note: linear values, such as the continuation of a `once` operation and closures that capture one, must be used exactly once
+    ");
+}
+
+#[test]
+fn a_body_with_a_reported_error_does_not_report_linear_values() {
+    let text = "effect Ask where\n  ask : Unit -> Int\n\nf : Unit -> Int\nf () =\n  handle ask () with\n    | ask () k -> resume k";
+    insta::assert_snapshot!(check_text(text), @r"
+    ask : Unit -> <Ask> Int
+    f : Unit -> Int
+      k#0 : Cont Int Int <>
+    ---
+    E1011 7:19 `resume` takes a continuation and a value, but 1 argument was given
+      7:19 this `resume`
+    ");
+}

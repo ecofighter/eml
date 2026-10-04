@@ -9,6 +9,7 @@ use eml_hir::{
 use la_arena::ArenaMap;
 
 use crate::codes;
+use crate::kind::{KindOrigin, KindReason};
 use crate::scheme::{Rigids, Scheme, lower_type};
 use crate::table::{Row, Table, Tail, Ty, TyShape, UnifyError};
 
@@ -177,7 +178,7 @@ impl BodyCheck<'_> {
             ExprKind::Literal(Literal::Int(_)) => self.table.int,
             ExprKind::Literal(Literal::String(_)) => self.table.string,
             ExprKind::Literal(Literal::Unit) => self.table.unit,
-            ExprKind::Path(res) => self.value(*res),
+            ExprKind::Path(res) => self.value(*res, expr.range),
             ExprKind::Call { callee, args, .. } => self.call(id, *callee, args),
             ExprKind::If {
                 condition,
@@ -311,39 +312,61 @@ impl BodyCheck<'_> {
         }
     }
 
+    /// `check` の間だけ、作る Kind の制約の由来を設定する。
+    fn with_kind_origin<T>(
+        &mut self,
+        range: TextRange,
+        reason: KindReason,
+        check: impl FnOnce(&mut Self) -> T,
+    ) -> T {
+        let previous = self
+            .table
+            .set_kind_origin(Some(KindOrigin { range, reason }));
+        let result = check(self);
+        self.table.set_kind_origin(previous);
+        result
+    }
+
     /// 関数と組み込みの参照は、具体化した後に戻り値の側の閉じた row を開く。純粋な関数を、エフェクトを持つ関数型の
-    /// 引数に渡せるようにするため (docs/spec/types.md の「推論」)。局所変数の型は開かない。
-    fn value(&mut self, res: Res) -> Ty {
-        match res {
-            Res::Local(local) => self
-                .typing
-                .locals
-                .get(local)
-                .copied()
-                .unwrap_or(self.table.error),
+    /// 引数に渡せるようにするため (docs/spec/types.md の「推論」)。局所変数の型は開かない。スキームから複写する Kind
+    /// の制約は、参照した場所を由来にする。
+    fn value(&mut self, res: Res, range: TextRange) -> Ty {
+        let module = self.module;
+        let ty = match res {
+            Res::Local(local) => {
+                return self
+                    .typing
+                    .locals
+                    .get(local)
+                    .copied()
+                    .unwrap_or(self.table.error);
+            }
             Res::Function(function) => {
-                let ty = self.reference(function);
-                self.table.open_spine(ty)
+                let name = module.functions[function].name.clone();
+                self.with_kind_origin(range, KindReason::Passed(name), |this| {
+                    this.reference(function)
+                })
+            }
+            // コンストラクタは Prelude にない。段階4で `data Bool` に置き換える
+            Res::Builtin(Builtin::True | Builtin::False) => self.table.bool,
+            Res::Builtin(builtin) => {
+                let reason = KindReason::Passed(builtin.name().to_string());
+                self.with_kind_origin(range, reason, |this| match this.builtins.get(&builtin) {
+                    Some(scheme) => scheme.instantiate(this.table),
+                    None => this.table.error,
+                })
             }
             Res::Operation(operation) => {
-                let ty = match self.operations.get(operation) {
-                    Some(scheme) => scheme.instantiate(self.table),
-                    None => self.table.error,
-                };
-                self.table.open_spine(ty)
+                let name = module.operations[operation].name.clone();
+                self.with_kind_origin(range, KindReason::Passed(name), |this| {
+                    match this.operations.get(operation) {
+                        Some(scheme) => scheme.instantiate(this.table),
+                        None => this.table.error,
+                    }
+                })
             }
-            Res::Builtin(builtin) => {
-                let ty = match builtin {
-                    // コンストラクタは Prelude にない。段階4で `data Bool` に置き換える
-                    Builtin::True | Builtin::False => self.table.bool,
-                    _ => match self.builtins.get(&builtin) {
-                        Some(scheme) => scheme.instantiate(self.table),
-                        None => self.table.error,
-                    },
-                };
-                self.table.open_spine(ty)
-            }
-        }
+        };
+        self.table.open_spine(ty)
     }
 
     /// 呼ばれる値や期待する型がまだ推論用の変数のとき、それを関数型に決める。
@@ -521,7 +544,10 @@ impl BodyCheck<'_> {
     }
 
     fn expect(&mut self, range: TextRange, expected: Ty, found: Ty, origin: &Origin) {
-        match self.table.unify(found, expected) {
+        let unified = self.with_kind_origin(range, KindReason::Unified, |this| {
+            this.table.unify(found, expected)
+        });
+        match unified {
             Ok(()) => {}
             Err(UnifyError::Occurs) => self.diagnostics.push(Diagnostic::error(
                 codes::INFINITE_TYPE,

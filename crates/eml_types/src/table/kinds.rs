@@ -128,12 +128,24 @@ impl Table {
     }
 
     /// すべての Kind の制約を解き、線形性の解を覚える。`export` が式ごとに解き直さずに済むようにするため。
-    /// 定数の上限を超えた制約があれば `true` を返す。
-    pub fn solve_kinds(&mut self) -> bool {
+    /// 定数の上限を超えた制約の由来を、位置の順に重複なく返す。由来のない制約は、報告済みの誤りのある本体から出た
+    /// ものなので返さない。誤りのあるプログラムは実行しないので、困ることはない。
+    pub fn solve_kinds(&mut self) -> Vec<KindOrigin> {
         let (lin, lin_violated) = self.linearity.solve();
         let (_, mult_violated) = self.multiplicity.solve();
         self.lin_solution = Some(lin);
-        !lin_violated.is_empty() || !mult_violated.is_empty()
+        let mut origins: Vec<KindOrigin> = lin_violated
+            .iter()
+            .filter_map(|&index| self.linearity.origin(index).cloned())
+            .chain(
+                mult_violated
+                    .iter()
+                    .filter_map(|&index| self.multiplicity.origin(index).cloned()),
+            )
+            .collect();
+        origins.sort_by_key(|origin| (origin.range.start(), origin.range.end()));
+        origins.dedup();
+        origins
     }
 }
 

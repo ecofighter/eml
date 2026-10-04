@@ -1,4 +1,4 @@
-use crate::kind::{Bound, KindVar, Lattice};
+use crate::kind::{Bound, KindOrigin, KindVar, Lattice};
 use crate::ty::{EffectLabel, Linearity, Multiplicity, RowTail, Type};
 use eml_hir::{EffectDef, EffectId, LangItems, OpMultiplicity, Operation, TypeDef, TypeDefId};
 use la_arena::{Arena, ArenaMap};
@@ -137,6 +137,7 @@ pub(crate) struct Table {
     row_vars: Vec<RowVarInfo>,
     rigids: Vec<RigidInfo>,
     linearity: Lattice<Linearity>,
+    kind_origin: Option<KindOrigin>,
     multiplicity: Lattice<Multiplicity>,
     lin_solution: Option<Vec<Linearity>>,
     pub int: Ty,
@@ -152,6 +153,13 @@ pub(crate) struct Table {
 }
 
 impl Table {
+    /// これから作る Kind の制約の由来を設定し、前の由来を返す。呼び出し側は、制約を作る処理の後で前の由来に戻す。
+    pub fn set_kind_origin(&mut self, origin: Option<KindOrigin>) -> Option<KindOrigin> {
+        self.linearity.set_origin(origin.clone());
+        self.multiplicity.set_origin(origin.clone());
+        std::mem::replace(&mut self.kind_origin, origin)
+    }
+
     pub fn new(
         lang: LangItems,
         types: &Arena<TypeDef>,
@@ -184,6 +192,7 @@ impl Table {
             row_vars: Vec::new(),
             rigids: Vec::new(),
             linearity: Lattice::new(Linearity::Unr),
+            kind_origin: None,
             multiplicity: Lattice::new(Multiplicity::Never),
             lin_solution: None,
             int: Ty(0),
