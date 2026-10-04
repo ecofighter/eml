@@ -2,7 +2,7 @@
 
 use std::fmt::Write;
 
-use crate::{Atom, CExpr, CExprId, CoreFn, IoOp, Program, Rhs, VarId};
+use crate::{Atom, CExpr, CExprId, Call, CoreFn, IoOp, Program, Rhs, VarId};
 
 pub fn pretty(program: &Program) -> String {
     let mut out = String::new();
@@ -84,13 +84,15 @@ fn rhs_text(program: &Program, function: &CoreFn, rhs: &Rhs) -> String {
     };
     match rhs {
         Rhs::Atom(a) => atom(function, a),
-        Rhs::CallDirect(callee, a) => {
+        Rhs::Call(Call::Direct(callee, a)) => {
             format!("call {}({})", program.function(*callee).name, args(a))
         }
         Rhs::MakeClosure(target, a) => {
             format!("closure {}({})", program.function(*target).name, args(a))
         }
-        Rhs::Apply(callee, a) => format!("apply {}({})", atom(function, callee), args(a)),
+        Rhs::Call(Call::Apply(callee, a)) => {
+            format!("apply {}({})", atom(function, callee), args(a))
+        }
         Rhs::Prim(op, a) => format!("prim {}({})", op.name(), args(a)),
         Rhs::ConstString(index) => format!("const {:?}", program.strings[*index as usize]),
         Rhs::Perform(IoOp::Println, a) => format!("perform println({})", args(a)),

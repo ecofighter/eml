@@ -3,11 +3,18 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::{Atom, CExpr, CExprId, CoreFn, Linearity, Rhs, VarId};
+use crate::{Atom, CExpr, CExprId, CoreFn, Linearity, Program, Rhs, VarId};
 
 type Vars = BTreeSet<VarId>;
 
-pub(crate) fn insert_rc(function: &mut CoreFn) {
+/// 変換の後に、プログラム全体にかける。変換の途中の関数ごとではなく、独立したパスにする (docs/spec/core-ir.md)。
+pub(crate) fn insert(program: &mut Program) {
+    for function in &mut program.functions {
+        insert_rc(function);
+    }
+}
+
+fn insert_rc(function: &mut CoreFn) {
     let tracked: Vec<bool> = function
         .vars
         .iter()
@@ -51,17 +58,8 @@ impl Pass<'_> {
 
     /// 右辺が使う変数を、使う回数の分だけ並べる。
     fn uses(&self, rhs: &Rhs) -> Vec<VarId> {
-        let atoms: Vec<&Atom> = match rhs {
-            Rhs::Atom(atom) => vec![atom],
-            Rhs::CallDirect(_, args)
-            | Rhs::Prim(_, args)
-            | Rhs::Perform(_, args)
-            | Rhs::MakeClosure(_, args) => args.iter().collect(),
-            Rhs::Apply(callee, args) => std::iter::once(callee).chain(args).collect(),
-            Rhs::ConstString(_) | Rhs::Nested(_) => Vec::new(),
-        };
-        atoms
-            .into_iter()
+        rhs.atoms()
+            .iter()
             .filter_map(|atom| self.atom_var(atom))
             .collect()
     }

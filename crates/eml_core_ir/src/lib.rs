@@ -83,17 +83,48 @@ pub enum CExpr {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Rhs {
     Atom(Atom),
-    CallDirect(FnIdx, Vec<Atom>),
+    Call(Call),
     /// 関数と先頭の引数の並びからクロージャを作る。並びの値の所有権はクロージャに移る。ラムダの捕獲と部分適用は、
     /// どちらもこの形になる (docs/spec/core-ir.md)。
     MakeClosure(FnIdx, Vec<Atom>),
-    /// クロージャの値を呼ぶ。実行時に引数の個数を比べる (eval/apply)。クロージャと引数の所有権は呼び出しに移る。
-    Apply(Atom, Vec<Atom>),
     Prim(PrimOp, Vec<Atom>),
     ConstString(u32),
     Perform(IoOp, Vec<Atom>),
     /// 値を返す入れ子の式。中の `Return` が、この `Let` の変数に値を渡す。
     Nested(CExprId),
+}
+
+impl Rhs {
+    /// 右辺が使う値。関数、プリミティブ、`perform` の引数は、どれも所有権を受け取る (docs/spec/core-ir.md)。
+    pub fn atoms(&self) -> Vec<Atom> {
+        match self {
+            Rhs::Atom(atom) => vec![*atom],
+            Rhs::Call(call) => call.atoms(),
+            Rhs::MakeClosure(_, args) | Rhs::Prim(_, args) | Rhs::Perform(_, args) => args.clone(),
+            Rhs::ConstString(_) | Rhs::Nested(_) => Vec::new(),
+        }
+    }
+}
+
+/// 呼び出し。クロージャと引数の所有権は呼び出しに移る。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Call {
+    /// 呼ぶ相手が分かっていて、引数の個数が揃っている呼び出し。
+    Direct(FnIdx, Vec<Atom>),
+    /// 関数値の呼び出し。実行時に引数の個数を比べる (eval/apply)。
+    Apply(Atom, Vec<Atom>),
+}
+
+impl Call {
+    /// 呼び出しが使う値。関数値の呼び出しでは、呼ばれる値が先に来る。
+    pub fn atoms(&self) -> Vec<Atom> {
+        match self {
+            Call::Direct(_, args) => args.clone(),
+            Call::Apply(callee, args) => std::iter::once(*callee)
+                .chain(args.iter().copied())
+                .collect(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

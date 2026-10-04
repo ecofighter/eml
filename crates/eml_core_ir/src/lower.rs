@@ -6,21 +6,21 @@ use eml_types::{BodyTypes, Linearity, Type, TypedModule};
 use la_arena::ArenaMap;
 
 use crate::{
-    Atom, CExpr, CExprId, CoreFn, FALSE, FnIdx, IoOp, PrimOp, Program, Rhs, TRUE, VarId, VarInfo,
-    perceus,
+    Atom, CExpr, CExprId, Call, CoreFn, FALSE, FnIdx, IoOp, PrimOp, Program, Rhs, TRUE, VarId,
+    VarInfo, perceus,
 };
 
 /// 診断のエラーがないプログラムだけを受け取る。エラーがあれば `eml_cli` は Core IR を作らない
 /// (docs/implementation/architecture.md)。
 pub fn lower(module: &Module, typed: &TypedModule) -> Program {
-    let mut program = ProgramBuilder::default();
+    let mut builder = ProgramBuilder::default();
     let mut indices = ArenaMap::default();
     for (id, function) in module.functions.iter() {
         let body = function
             .body
             .as_ref()
             .expect("a program without errors has an equation for every function");
-        indices.insert(id, program.reserve(body.params.len()));
+        indices.insert(id, builder.reserve(body.params.len()));
     }
     for (id, function) in module.functions.iter() {
         let body = function.body.as_ref().expect("checked above");
@@ -36,7 +36,7 @@ pub fn lower(module: &Module, typed: &TypedModule) -> Program {
             body,
             types: typed.bodies.get(id).expect("every body is type-checked"),
             indices: &indices,
-            program: &mut program,
+            program: &mut builder,
             root_name: &function.name,
             lambdas: &mut lambdas,
             exprs: Vec::new(),
@@ -44,20 +44,22 @@ pub fn lower(module: &Module, typed: &TypedModule) -> Program {
             locals: ArenaMap::default(),
         }
         .lower(&function.name, &[], &body.params, &params, body.root);
-        program.finish(indices[id], core);
+        builder.finish(indices[id], core);
     }
     let main = typed
         .main
         .expect("`eml_cli::compile` reports a missing `main`");
-    Program {
-        functions: program
+    let mut program = Program {
+        functions: builder
             .functions
             .into_iter()
             .map(|function| function.expect("every reserved function is lowered"))
             .collect(),
         main: indices[main],
-        strings: program.strings.values,
-    }
+        strings: builder.strings.values,
+    };
+    perceus::insert(&mut program);
+    program
 }
 
 #[derive(Default)]
@@ -98,8 +100,7 @@ impl ProgramBuilder {
         self.arities[function.0 as usize]
     }
 
-    fn finish(&mut self, function: FnIdx, mut core: CoreFn) {
-        perceus::insert_rc(&mut core);
+    fn finish(&mut self, function: FnIdx, core: CoreFn) {
         self.functions[function.0 as usize] = Some(core);
     }
 
@@ -141,8 +142,8 @@ impl ProgramBuilder {
                 let mid = fresh(true);
                 let result = fresh(true);
                 vec![
-                    (mid, Rhs::Apply(inner, vec![atoms[2]])),
-                    (result, Rhs::Apply(outer, vec![Atom::Var(mid)])),
+                    (mid, Rhs::Call(Call::Apply(inner, vec![atoms[2]]))),
+                    (result, Rhs::Call(Call::Apply(outer, vec![Atom::Var(mid)]))),
                 ]
             }
             other => vec![(
@@ -338,10 +339,10 @@ impl FnLowering<'_> {
         }
         let rest = args.split_off(arity);
         if rest.is_empty() {
-            return self.bind(out, "t", ty, Rhs::CallDirect(target, args));
+            return self.bind(out, "t", ty, Rhs::Call(Call::Direct(target, args)));
         }
-        let function = self.bind_boxed(out, "t", Rhs::CallDirect(target, args));
-        self.bind(out, "t", ty, Rhs::Apply(function, rest))
+        let function = self.bind_boxed(out, "t", Rhs::Call(Call::Direct(target, args)));
+        self.bind(out, "t", ty, Rhs::Call(Call::Apply(function, rest)))
     }
 
     fn call_builtin(
@@ -360,7 +361,7 @@ impl FnLowering<'_> {
         let rhs = match builtin {
             Builtin::Println => Rhs::Perform(IoOp::Println, args),
             Builtin::ComposeFwd | Builtin::ComposeBwd => {
-                Rhs::CallDirect(self.program.wrapper(builtin), args)
+                Rhs::Call(Call::Direct(self.program.wrapper(builtin), args))
             }
             other => Rhs::Prim(prim(other), args),
         };
@@ -368,7 +369,7 @@ impl FnLowering<'_> {
             return self.bind(out, "t", ty, rhs);
         }
         let function = self.bind_boxed(out, "t", rhs);
-        self.bind(out, "t", ty, Rhs::Apply(function, rest))
+        self.bind(out, "t", ty, Rhs::Call(Call::Apply(function, rest)))
     }
 
     /// 式の値をアトムにする。値の計算に要る束縛は `out` に積む。
@@ -402,7 +403,7 @@ impl FnLowering<'_> {
                 if self.program.arity(target) == 0 {
                     let ty = self.ty(id);
                     let name = self.module.functions[*function].name.clone();
-                    self.bind(out, &name, &ty, Rhs::CallDirect(target, Vec::new()))
+                    self.bind(out, &name, &ty, Rhs::Call(Call::Direct(target, Vec::new())))
                 } else {
                     self.bind_boxed(out, "c", Rhs::MakeClosure(target, Vec::new()))
                 }
@@ -432,7 +433,7 @@ impl FnLowering<'_> {
                         // 呼ばれる式は引数より左にあるので、先に評価する
                         let function = self.atom(*callee, out);
                         let args = self.call_args(args, first, out);
-                        self.bind(out, "t", &ty, Rhs::Apply(function, args))
+                        self.bind(out, "t", &ty, Rhs::Call(Call::Apply(function, args)))
                     }
                 }
             }

@@ -2,7 +2,9 @@ use std::cmp::Ordering;
 use std::fmt;
 use std::sync::Arc;
 
-use eml_core_ir::{Atom, CExpr, CExprId, FALSE, FnIdx, IoOp, PrimOp, Program, Rhs, TRUE, VarId};
+use eml_core_ir::{
+    Atom, CExpr, CExprId, Call, FALSE, FnIdx, IoOp, PrimOp, Program, Rhs, TRUE, VarId,
+};
 use eml_runtime::{
     ApplyFrame, Closure, DescId, Frame, Heap, HeapError, ObjRef, OutputSink, Owned, Payload, Value,
 };
@@ -11,6 +13,12 @@ use eml_runtime::{
 enum Applied {
     Entered,
     Value(Value),
+}
+
+/// 読み終えた呼び出し。環境を退避する前に引数を読むために、呼び出しを2段に分ける。
+enum Prepared {
+    Direct(FnIdx, Vec<Value>),
+    Apply(Value, Vec<Value>),
 }
 
 /// 将来 `threads` などを足しても呼び出し側を壊さないように、`non_exhaustive` にして `RunConfig::default()` から作らせる。
@@ -181,12 +189,7 @@ impl<'p> Machine<'p> {
                     .map_err(|error| format!("cannot write the output: {error}"))?;
                 Value::Unit
             }
-            Rhs::CallDirect(callee, args) => {
-                let args = self.atoms(args)?;
-                self.push_frame(var, body, true);
-                self.enter(*callee, args);
-                return Ok(false);
-            }
+            Rhs::Call(call) => return self.call(call, Some((var, body))),
             Rhs::MakeClosure(function, args) => {
                 let args = self.atoms(args)?;
                 let closure = Closure {
@@ -194,15 +197,6 @@ impl<'p> Machine<'p> {
                     args,
                 };
                 Value::Obj(self.heap.alloc(DescId::CLOSURE, Payload::Closure(closure)))
-            }
-            Rhs::Apply(callee, args) => {
-                let callee = self.atom(callee)?;
-                let args = self.atoms(args)?;
-                self.push_frame(var, body, true);
-                return match self.apply(callee, args)? {
-                    Applied::Entered => Ok(false),
-                    Applied::Value(value) => self.ret(value),
-                };
             }
             Rhs::Nested(inner) => {
                 self.push_frame(var, body, false);
@@ -213,6 +207,31 @@ impl<'p> Machine<'p> {
         self.slots[var.0 as usize] = Some(Owned::new(value));
         self.control = body;
         Ok(false)
+    }
+
+    /// 呼び出す。引数は、環境を退避する前に読む。`resume` は、戻った値を受ける変数と再開する位置で、`None` なら
+    /// フレームを積まない (末尾呼び出し)。
+    fn call(&mut self, call: &Call, resume: Option<(VarId, CExprId)>) -> Result<bool, String> {
+        let prepared = match call {
+            Call::Direct(callee, args) => Prepared::Direct(*callee, self.atoms(args)?),
+            Call::Apply(callee, args) => {
+                let callee = self.atom(callee)?;
+                Prepared::Apply(callee, self.atoms(args)?)
+            }
+        };
+        if let Some((var, body)) = resume {
+            self.push_frame(var, body, true);
+        }
+        match prepared {
+            Prepared::Direct(callee, args) => {
+                self.enter(callee, args);
+                Ok(false)
+            }
+            Prepared::Apply(callee, args) => match self.apply(callee, args)? {
+                Applied::Entered => Ok(false),
+                Applied::Value(value) => self.ret(value),
+            },
+        }
     }
 
     fn enter(&mut self, callee: FnIdx, args: Vec<Value>) {
