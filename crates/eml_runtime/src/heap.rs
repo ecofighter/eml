@@ -22,27 +22,42 @@ pub enum Value {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct DescId(u32);
+struct DescId(u32);
 
 impl DescId {
-    pub const STRING: DescId = DescId(0);
-    pub const FRAME: DescId = DescId(1);
-    pub const CLOSURE: DescId = DescId(2);
+    const STRING: DescId = DescId(0);
+    const FRAME: DescId = DescId(1);
+    const CLOSURE: DescId = DescId(2);
 }
 
 /// オブジェクトの種類。ヘッダから引けるようにし、後の段階でフィールドのレイアウトと `Lin` の破棄処理を足す
-/// (docs/spec/runtime.md の「オブジェクトのヘッダ」)。
-#[derive(Debug, Clone)]
-pub struct Descriptor {
-    pub name: String,
+/// (docs/spec/runtime.md の「オブジェクトのヘッダ」)。段階4で、ユーザーの `data` の記述子を登録できるようにする。
+struct Descriptor {
+    name: &'static str,
 }
+
+const DESCRIPTORS: [Descriptor; 3] = [
+    Descriptor { name: "String" },
+    Descriptor { name: "Frame" },
+    Descriptor { name: "Closure" },
+];
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Payload {
     Str(String),
-    Frame(Frame),
     Closure(Closure),
-    ApplyFrame(ApplyFrame),
+    Frame(Frame),
+}
+
+impl Payload {
+    /// 記述子はペイロードの種類から決める。フレームはどの種類も継続の連結リストの要素なので、同じ記述子にする。
+    fn desc(&self) -> DescId {
+        match self {
+            Payload::Str(_) => DescId::STRING,
+            Payload::Closure(_) => DescId::CLOSURE,
+            Payload::Frame(_) => DescId::FRAME,
+        }
+    }
 }
 
 /// クロージャ。関数と、すでに渡された先頭の引数の並び (docs/spec/core-ir.md)。各値は参照を1つずつ所有する。
@@ -53,39 +68,22 @@ pub struct Closure {
     pub args: Vec<Value>,
 }
 
-/// 呼んだ関数から戻った値に、余った引数を適用するフレーム (docs/spec/core-ir.md の eval/apply)。継続の連結リストの
-/// 要素なので、記述子はフレームと同じにする。
+/// CEK 機械の継続のフレーム。継続もランタイムのオブジェクトにする (docs/spec/runtime.md)。
 #[derive(Debug, Clone, PartialEq)]
-pub struct ApplyFrame {
-    pub args: Vec<Value>,
-    pub next: Option<ObjRef>,
-}
-
-/// 変数が持っている値と、その変数が所有している参照の数。`dup` で増え、読み出し (所有権の移動) で減る
-/// (docs/spec/core-ir.md)。ヒープにない値では数は意味を持たない。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Owned {
-    pub value: Value,
-    pub refs: u32,
-}
-
-impl Owned {
-    pub fn new(value: Value) -> Owned {
-        Owned { value, refs: 1 }
-    }
-}
-
-/// CEK 機械の継続のフレーム。継続もランタイムのオブジェクトにする (docs/spec/runtime.md)。各フィールドの意味は
-/// インタプリタが決める。
-#[derive(Debug, Clone, PartialEq)]
-pub struct Frame {
-    pub function: u32,
-    pub resume: u32,
-    pub bind: u32,
-    /// `None` なのは最下部の `IO` の handler のフレームだけで、ほかの呼び出しのフレームは環境を退避する。R3b でフレームの
-    /// 種類の enum にする (docs/implementation/status.md の「R3b」)。
-    pub slots: Option<Vec<Option<Owned>>>,
-    pub next: Option<ObjRef>,
+pub enum Frame {
+    /// 呼び出し元の関数に戻る。呼び出しの後で使う変数だけを退避し、それぞれ参照を1つ所有する
+    /// (docs/spec/core-ir.md)。
+    Return {
+        function: u32,
+        resume: u32,
+        bind: u32,
+        saved: Vec<(u32, Value)>,
+        next: ObjRef,
+    },
+    /// 戻った関数値に、余った引数を適用する (docs/spec/core-ir.md の eval/apply)。
+    Apply { args: Vec<Value>, next: ObjRef },
+    /// 継続の最下部にある `IO` の組み込みの handler (docs/spec/core-ir.md)。
+    Io,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -124,7 +122,6 @@ struct Slot {
 pub struct Heap {
     slots: Vec<Slot>,
     free: Vec<u32>,
-    descriptors: Vec<Descriptor>,
 }
 
 impl Default for Heap {
@@ -138,30 +135,14 @@ impl Heap {
         Heap {
             slots: Vec::new(),
             free: Vec::new(),
-            descriptors: vec![
-                Descriptor {
-                    name: "String".to_string(),
-                },
-                Descriptor {
-                    name: "Frame".to_string(),
-                },
-                Descriptor {
-                    name: "Closure".to_string(),
-                },
-            ],
         }
     }
 
-    pub fn register(&mut self, descriptor: Descriptor) -> DescId {
-        self.descriptors.push(descriptor);
-        DescId(self.descriptors.len() as u32 - 1)
-    }
-
-    pub fn alloc(&mut self, desc: DescId, payload: Payload) -> ObjRef {
+    pub fn alloc(&mut self, payload: Payload) -> ObjRef {
         let object = Object {
             header: Header {
                 rc: AtomicI32::new(1),
-                desc,
+                desc: payload.desc(),
             },
             payload,
         };
@@ -237,12 +218,16 @@ impl Heap {
 
     /// まだ解放されていないオブジェクトの数を、記述子の名前ごとに数える。`debug_heap` のリーク検出で使う。
     pub fn live_objects(&self) -> Vec<(String, usize)> {
-        let mut counts: BTreeMap<String, usize> = BTreeMap::new();
+        let mut counts: BTreeMap<&'static str, usize> = BTreeMap::new();
         for object in self.slots.iter().filter_map(|slot| slot.object.as_ref()) {
-            let name = &self.descriptors[object.header.desc.0 as usize].name;
-            *counts.entry(name.clone()).or_default() += 1;
+            *counts
+                .entry(DESCRIPTORS[object.header.desc.0 as usize].name)
+                .or_default() += 1;
         }
-        counts.into_iter().collect()
+        counts
+            .into_iter()
+            .map(|(name, count)| (name.to_string(), count))
+            .collect()
     }
 
     fn object(&self, obj: ObjRef) -> Result<&Object, HeapError> {
@@ -274,32 +259,24 @@ impl Heap {
     }
 }
 
+/// 子のオブジェクト。解放と、段階3以降の複製が、同じ子を数える。
 fn children(payload: &Payload, work: &mut Vec<ObjRef>) {
-    let objects = |values: &[Value]| -> Vec<ObjRef> {
-        values
-            .iter()
-            .filter_map(|value| match value {
-                Value::Obj(obj) => Some(*obj),
-                _ => None,
-            })
-            .collect()
+    let object = |value: &Value| match value {
+        Value::Obj(obj) => Some(*obj),
+        _ => None,
     };
     match payload {
-        Payload::Frame(frame) => {
-            for owned in frame.slots.iter().flatten().flatten() {
-                // Perceus の `dup` で1つの変数が複数の参照を持つので、1つだけ手放すと残りがリークする
-                if let Value::Obj(obj) = owned.value {
-                    work.extend(std::iter::repeat_n(obj, owned.refs as usize));
-                }
-            }
-            work.extend(frame.next);
+        // 退避した値はそれぞれ参照を1つ所有するので、1回ずつ解放する
+        Payload::Frame(Frame::Return { saved, next, .. }) => {
+            work.extend(saved.iter().filter_map(|(_, value)| object(value)));
+            work.push(*next);
         }
-        Payload::Closure(closure) => work.extend(objects(&closure.args)),
-        Payload::ApplyFrame(frame) => {
-            work.extend(objects(&frame.args));
-            work.extend(frame.next);
+        Payload::Frame(Frame::Apply { args, next }) => {
+            work.extend(args.iter().filter_map(object));
+            work.push(*next);
         }
-        Payload::Str(_) => {}
+        Payload::Closure(closure) => work.extend(closure.args.iter().filter_map(object)),
+        Payload::Frame(Frame::Io) | Payload::Str(_) => {}
     }
 }
 
@@ -308,33 +285,32 @@ mod tests {
     use super::*;
 
     fn string(heap: &mut Heap, text: &str) -> ObjRef {
-        heap.alloc(DescId::STRING, Payload::Str(text.to_string()))
+        heap.alloc(Payload::Str(text.to_string()))
     }
 
-    fn frame(heap: &mut Heap, slots: Vec<Option<Owned>>, next: Option<ObjRef>) -> ObjRef {
-        heap.alloc(
-            DescId::FRAME,
-            Payload::Frame(Frame {
-                function: 0,
-                resume: 0,
-                bind: 0,
-                slots: Some(slots),
-                next,
-            }),
-        )
+    /// 継続の最下部のフレーム。
+    fn bottom(heap: &mut Heap) -> ObjRef {
+        heap.alloc(Payload::Frame(Frame::Io))
+    }
+
+    fn frame(heap: &mut Heap, saved: Vec<(u32, Value)>, next: ObjRef) -> ObjRef {
+        heap.alloc(Payload::Frame(Frame::Return {
+            function: 0,
+            resume: 0,
+            bind: 0,
+            saved,
+            next,
+        }))
     }
 
     #[test]
     fn a_closure_releases_its_arguments() {
         let mut heap = Heap::new();
         let s = string(&mut heap, "a");
-        let closure = heap.alloc(
-            DescId::CLOSURE,
-            Payload::Closure(Closure {
-                function: 0,
-                args: vec![Value::Obj(s), Value::Int(1)],
-            }),
-        );
+        let closure = heap.alloc(Payload::Closure(Closure {
+            function: 0,
+            args: vec![Value::Obj(s), Value::Int(1)],
+        }));
         heap.decref(closure).unwrap();
         assert!(heap.live_objects().is_empty());
     }
@@ -343,14 +319,12 @@ mod tests {
     fn an_apply_frame_releases_its_arguments_and_the_rest_of_the_continuation() {
         let mut heap = Heap::new();
         let s = string(&mut heap, "a");
-        let next = frame(&mut heap, vec![], None);
-        let apply = heap.alloc(
-            DescId::FRAME,
-            Payload::ApplyFrame(ApplyFrame {
-                args: vec![Value::Obj(s)],
-                next: Some(next),
-            }),
-        );
+        let end = bottom(&mut heap);
+        let next = frame(&mut heap, vec![], end);
+        let apply = heap.alloc(Payload::Frame(Frame::Apply {
+            args: vec![Value::Obj(s)],
+            next,
+        }));
         heap.decref(apply).unwrap();
         assert!(heap.live_objects().is_empty());
     }
@@ -391,45 +365,24 @@ mod tests {
     fn decref_releases_children() {
         let mut heap = Heap::new();
         let s = string(&mut heap, "a");
-        let inner = frame(&mut heap, vec![], None);
+        let inner = bottom(&mut heap);
         let outer = frame(
             &mut heap,
-            vec![
-                Some(Owned::new(Value::Obj(s))),
-                Some(Owned::new(Value::Int(1))),
-                None,
-            ],
-            Some(inner),
+            vec![(0, Value::Obj(s)), (1, Value::Int(1))],
+            inner,
         );
         heap.decref(outer).unwrap();
         assert!(heap.live_objects().is_empty());
     }
 
     #[test]
-    fn a_slot_with_two_references_releases_both() {
-        let mut heap = Heap::new();
-        let s = string(&mut heap, "a");
-        heap.dup(s).unwrap();
-        let owner = frame(
-            &mut heap,
-            vec![Some(Owned {
-                value: Value::Obj(s),
-                refs: 2,
-            })],
-            None,
-        );
-        heap.decref(owner).unwrap();
-        assert!(heap.live_objects().is_empty());
-    }
-
-    #[test]
     fn releasing_a_long_chain_does_not_overflow_the_stack() {
         let mut heap = Heap::new();
-        let mut next = None;
+        let mut next = bottom(&mut heap);
         for _ in 0..200_000 {
-            next = Some(frame(&mut heap, vec![], next));
+            next = frame(&mut heap, vec![], next);
         }
-        heap.decref(next.unwrap()).unwrap();
+        heap.decref(next).unwrap();
         assert!(heap.live_objects().is_empty());
     }
 
@@ -438,7 +391,7 @@ mod tests {
         let mut heap = Heap::new();
         string(&mut heap, "a");
         string(&mut heap, "b");
-        frame(&mut heap, vec![], None);
+        bottom(&mut heap);
         assert_eq!(
             heap.live_objects(),
             [("Frame".to_string(), 1), ("String".to_string(), 2)]
@@ -464,15 +417,5 @@ mod tests {
             heap.mark_shared(s),
             Err(HeapError::NotImplemented("mark_shared"))
         );
-    }
-
-    #[test]
-    fn registered_descriptors_are_counted_by_name() {
-        let mut heap = Heap::new();
-        let desc = heap.register(Descriptor {
-            name: "Cell".to_string(),
-        });
-        heap.alloc(desc, Payload::Str(String::new()));
-        assert_eq!(heap.live_objects(), [("Cell".to_string(), 1)]);
     }
 }

@@ -5,9 +5,7 @@ use std::sync::Arc;
 use eml_core_ir::{
     Atom, CExpr, CExprId, Call, FALSE, FnIdx, IoOp, PrimOp, Program, Rhs, TRUE, VarId,
 };
-use eml_runtime::{
-    ApplyFrame, Closure, DescId, Frame, Heap, HeapError, ObjRef, OutputSink, Owned, Payload, Value,
-};
+use eml_runtime::{Closure, Frame, Heap, HeapError, ObjRef, OutputSink, Payload, Value};
 
 /// 関数値の適用の結果。関数に入ったか、値ができたか (足りない引数のクロージャ)。
 enum Applied {
@@ -25,6 +23,13 @@ enum Prepared {
 enum Step {
     Continue,
     Finished,
+}
+
+/// 呼び出しから戻った後に再開するところと、呼び出しのフレームに退避する変数。
+struct Resume<'p> {
+    bind: VarId,
+    resume: CExprId,
+    saved: &'p [VarId],
 }
 
 /// 将来 `threads` などを足しても呼び出し側を壊さないように、`non_exhaustive` にして `RunConfig::default()` から作らせる。
@@ -106,9 +111,6 @@ pub fn run(
     Ok(())
 }
 
-/// 継続の最下部にある、`IO` の組み込み handler のフレームの印 (docs/spec/core-ir.md)。
-const IO_HANDLER: u32 = u32::MAX;
-
 /// CEK 機械。制御 (`function` と `control`)、環境 (`slots`)、継続 (`cont`) からなる。
 struct Machine<'p> {
     program: &'p Program,
@@ -116,24 +118,17 @@ struct Machine<'p> {
     heap: Heap,
     function: FnIdx,
     control: CExprId,
-    slots: Vec<Option<Owned>>,
-    /// 継続の先頭のフレーム。最下部には常に `IO` の handler のフレームがある。
+    /// 今の関数の環境。読み出しはスロットを書き換えない。参照の所有は Core IR の命令 (使用、`dup`、`decref`) が表し、
+    /// verifier がその釣り合いを確かめる (docs/spec/core-ir.md)。
+    slots: Vec<Option<Value>>,
+    /// 継続の先頭のフレーム。最下部には常に `Frame::Io` がある。
     cont: ObjRef,
 }
 
 impl<'p> Machine<'p> {
     fn new(program: &'p Program, out: &'p OutputSink) -> Self {
         let mut heap = Heap::new();
-        let cont = heap.alloc(
-            DescId::FRAME,
-            Payload::Frame(Frame {
-                function: IO_HANDLER,
-                resume: 0,
-                bind: 0,
-                slots: None,
-                next: None,
-            }),
-        );
+        let cont = heap.alloc(Payload::Frame(Frame::Io));
         let entry = program.function(program.entry);
         Machine {
             program,
@@ -186,21 +181,17 @@ impl<'p> Machine<'p> {
                 // join point は同じ関数の中にあるので、環境をそのまま使い、フレームを積まない
                 let value = self.atom(arg)?;
                 let (param, body) = program.function(self.function).join(*join);
-                self.slots[param.0 as usize] = Some(Owned::new(value));
+                self.slots[param.0 as usize] = Some(value);
                 self.control = body;
             }
             CExpr::Dup { var, body } => {
-                let slot = self.slots[var.0 as usize]
-                    .as_mut()
-                    .ok_or(Fault::Internal("a variable duplicated after it was moved"))?;
-                if let Value::Obj(obj) = slot.value {
+                if let Value::Obj(obj) = self.read(*var)? {
                     self.heap.dup(obj).map_err(Fault::Heap)?;
-                    slot.refs += 1;
                 }
                 self.control = *body;
             }
             CExpr::Decref { var, body } => {
-                if let Value::Obj(obj) = self.atom(&Atom::Var(*var))? {
+                if let Value::Obj(obj) = self.read(*var)? {
                     self.heap.decref(obj).map_err(Fault::Heap)?;
                 }
                 self.control = *body;
@@ -209,12 +200,12 @@ impl<'p> Machine<'p> {
         Ok(Step::Continue)
     }
 
-    fn bind(&mut self, var: VarId, rhs: &Rhs, body: CExprId) -> Result<Step, Fault> {
+    fn bind(&mut self, var: VarId, rhs: &'p Rhs, body: CExprId) -> Result<Step, Fault> {
         let value = match rhs {
             Rhs::Atom(atom) => self.atom(atom)?,
             Rhs::ConstString(index) => {
                 let text = self.program.strings[*index as usize].clone();
-                Value::Obj(self.heap.alloc(DescId::STRING, Payload::Str(text)))
+                Value::Obj(self.heap.alloc(Payload::Str(text)))
             }
             Rhs::Prim(op, args) => {
                 let args = self.atoms(args)?;
@@ -230,24 +221,31 @@ impl<'p> Machine<'p> {
                     .map_err(|error| Fault::Output(error.to_string()))?;
                 Value::Unit
             }
-            Rhs::Call { call, .. } => return self.call(call, Some((var, body))),
+            Rhs::Call { call, saved } => {
+                let resume = Resume {
+                    bind: var,
+                    resume: body,
+                    saved,
+                };
+                return self.call(call, Some(resume));
+            }
             Rhs::MakeClosure(function, args) => {
                 let args = self.atoms(args)?;
                 let closure = Closure {
                     function: function.0,
                     args,
                 };
-                Value::Obj(self.heap.alloc(DescId::CLOSURE, Payload::Closure(closure)))
+                Value::Obj(self.heap.alloc(Payload::Closure(closure)))
             }
         };
-        self.slots[var.0 as usize] = Some(Owned::new(value));
+        self.slots[var.0 as usize] = Some(value);
         self.control = body;
         Ok(Step::Continue)
     }
 
     /// 呼び出す。引数は、環境を退避する前に読む。`resume` は、戻った値を受ける変数と再開する位置で、`None` なら
     /// フレームを積まない (末尾呼び出し)。
-    fn call(&mut self, call: &Call, resume: Option<(VarId, CExprId)>) -> Result<Step, Fault> {
+    fn call(&mut self, call: &Call, resume: Option<Resume<'p>>) -> Result<Step, Fault> {
         let prepared = match call {
             Call::Direct(callee, args) => Prepared::Direct(*callee, self.atoms(args)?),
             Call::Apply(callee, args) => {
@@ -255,8 +253,8 @@ impl<'p> Machine<'p> {
                 Prepared::Apply(callee, self.atoms(args)?)
             }
         };
-        if let Some((var, body)) = resume {
-            self.push_frame(var, body);
+        if let Some(resume) = resume {
+            self.push_frame(resume)?;
         }
         match prepared {
             Prepared::Direct(callee, args) => {
@@ -274,7 +272,7 @@ impl<'p> Machine<'p> {
         let target = self.program.function(callee);
         let mut slots = vec![None; target.vars.len()];
         for (param, value) in target.params.iter().zip(args) {
-            slots[param.0 as usize] = Some(Owned::new(value));
+            slots[param.0 as usize] = Some(value);
         }
         self.slots = slots;
         self.function = callee;
@@ -302,16 +300,16 @@ impl<'p> Machine<'p> {
                     function: closure.function,
                     args: all,
                 };
-                let value = self.heap.alloc(DescId::CLOSURE, Payload::Closure(closure));
+                let value = self.heap.alloc(Payload::Closure(closure));
                 Ok(Applied::Value(Value::Obj(value)))
             }
             Ordering::Greater => {
                 let rest = all.split_off(arity);
-                let frame = ApplyFrame {
+                let frame = Frame::Apply {
                     args: rest,
-                    next: Some(self.cont),
+                    next: self.cont,
                 };
-                self.cont = self.heap.alloc(DescId::FRAME, Payload::ApplyFrame(frame));
+                self.cont = self.heap.alloc(Payload::Frame(frame));
                 self.enter(function, all);
                 Ok(Applied::Entered)
             }
@@ -340,84 +338,86 @@ impl<'p> Machine<'p> {
         Ok(closure)
     }
 
-    /// 呼び出しでは環境ごと退避する。
-    fn push_frame(&mut self, bind: VarId, resume: CExprId) {
-        let frame = Frame {
+    /// 呼び出しの後で使う変数だけをフレームに退避する。フレームは、ちょうど所有している参照だけを持つ
+    /// (docs/spec/core-ir.md)。
+    fn push_frame(&mut self, resume: Resume<'p>) -> Result<(), Fault> {
+        let saved = resume
+            .saved
+            .iter()
+            .map(|&var| Ok((var.0, self.read(var)?)))
+            .collect::<Result<Vec<_>, Fault>>()?;
+        let frame = Frame::Return {
             function: self.function.0,
-            resume: resume.0,
-            bind: bind.0,
-            slots: Some(std::mem::take(&mut self.slots)),
-            next: Some(self.cont),
+            resume: resume.resume.0,
+            bind: resume.bind.0,
+            saved,
+            next: self.cont,
         };
-        self.cont = self.heap.alloc(DescId::FRAME, Payload::Frame(frame));
+        self.cont = self.heap.alloc(Payload::Frame(frame));
+        Ok(())
     }
 
-    /// 継続の先頭のフレームに値を返す。最下部の `IO` の handler に届いたら、プログラムが終わる。
+    /// 継続の先頭のフレームに値を返す。最下部の `Frame::Io` に届いたら、プログラムが終わる。
     /// 余った引数のフレームが続く間はループで適用し、Rust の再帰を使わない。
     fn ret(&mut self, mut value: Value) -> Result<Step, Fault> {
         loop {
             // 段階2までは継続を複製しないので、フレームは常に一意である。共有されたフレームは段階3の `multi` で扱う
-            let frame = match self.heap.take(self.cont).map_err(Fault::Heap)? {
-                Payload::ApplyFrame(frame) => {
-                    self.cont = frame
-                        .next
-                        .ok_or(Fault::Internal("an apply frame without a next frame"))?;
-                    match self.apply(value, frame.args)? {
+            let Payload::Frame(frame) = self.heap.take(self.cont).map_err(Fault::Heap)? else {
+                return Err(Fault::Internal("the continuation is not a frame"));
+            };
+            match frame {
+                Frame::Apply { args, next } => {
+                    self.cont = next;
+                    match self.apply(value, args)? {
                         Applied::Entered => return Ok(Step::Continue),
-                        Applied::Value(result) => {
-                            value = result;
-                            continue;
-                        }
+                        Applied::Value(result) => value = result,
                     }
                 }
-                Payload::Frame(frame) => frame,
-                _ => return Err(Fault::Internal("the continuation is not a frame")),
-            };
-            if frame.function == IO_HANDLER {
-                if let Value::Obj(obj) = value {
-                    self.heap.decref(obj).map_err(Fault::Heap)?;
+                Frame::Return {
+                    function,
+                    resume,
+                    bind,
+                    saved,
+                    next,
+                } => {
+                    let function = FnIdx(function);
+                    let mut slots = vec![None; self.program.function(function).vars.len()];
+                    for (var, saved) in saved {
+                        slots[var as usize] = Some(saved);
+                    }
+                    slots[bind as usize] = Some(value);
+                    self.slots = slots;
+                    self.function = function;
+                    self.control = CExprId(resume);
+                    self.cont = next;
+                    return Ok(Step::Continue);
                 }
-                return Ok(Step::Finished);
+                Frame::Io => {
+                    if let Value::Obj(obj) = value {
+                        self.heap.decref(obj).map_err(Fault::Heap)?;
+                    }
+                    return Ok(Step::Finished);
+                }
             }
-            if let Some(slots) = frame.slots {
-                self.slots = slots;
-            }
-            self.function = FnIdx(frame.function);
-            self.control = CExprId(frame.resume);
-            self.slots[frame.bind as usize] = Some(Owned::new(value));
-            self.cont = frame
-                .next
-                .ok_or(Fault::Internal("a frame without a next frame"))?;
-            return Ok(Step::Continue);
         }
     }
 
-    /// ヒープの値の読み出しは所有権の移動で、複製は `dup` 命令だけが行う (docs/spec/core-ir.md)。ただし Perceus の `dup` で
-    /// 1つの変数が複数の参照を持ち、1つの右辺で2回読むこともあるので (`dup s; prim ++(s, s)`)、変数ごとに参照の数を
-    /// 数え、読むたびに1つ減らして0になったらスロットを空にする。ヒープにない値は何度でも読める。
-    fn atom(&mut self, atom: &Atom) -> Result<Value, Fault> {
+    /// 変数の値。読み出しはスロットを書き換えない。ヒープの値の所有権を渡すかどうかは Core IR の命令が決める
+    /// (docs/spec/core-ir.md)。
+    fn read(&self, var: VarId) -> Result<Value, Fault> {
+        self.slots[var.0 as usize].ok_or(Fault::Internal("a variable read before it was bound"))
+    }
+
+    fn atom(&self, atom: &Atom) -> Result<Value, Fault> {
         Ok(match *atom {
-            Atom::Var(var) => {
-                let slot = &mut self.slots[var.0 as usize];
-                let owned = slot
-                    .as_mut()
-                    .ok_or(Fault::Internal("a variable read after it was moved"))?;
-                let value = owned.value;
-                if let Value::Obj(_) = value {
-                    owned.refs -= 1;
-                    if owned.refs == 0 {
-                        *slot = None;
-                    }
-                }
-                value
-            }
+            Atom::Var(var) => self.read(var)?,
             Atom::Int(n) => Value::Int(n),
             Atom::Unit => Value::Unit,
             Atom::Tag(tag) => Value::Tag(tag),
         })
     }
 
-    fn atoms(&mut self, atoms: &[Atom]) -> Result<Vec<Value>, Fault> {
+    fn atoms(&self, atoms: &[Atom]) -> Result<Vec<Value>, Fault> {
         atoms.iter().map(|atom| self.atom(atom)).collect()
     }
 
@@ -460,12 +460,12 @@ impl<'p> Machine<'p> {
             },
             PrimOp::ShowInt => {
                 let text = int(0)?.to_string();
-                Value::Obj(self.heap.alloc(DescId::STRING, Payload::Str(text)))
+                Value::Obj(self.heap.alloc(Payload::Str(text)))
             }
             PrimOp::StrConcat => {
                 let left = self.take_string(args[0])?;
                 let right = self.take_string(args[1])?;
-                Value::Obj(self.heap.alloc(DescId::STRING, Payload::Str(left + &right)))
+                Value::Obj(self.heap.alloc(Payload::Str(left + &right)))
             }
         })
     }
