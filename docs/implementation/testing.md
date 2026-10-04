@@ -125,6 +125,8 @@
 
 - join point に `captures` の欄を足したので、`eml_core_ir/tests/lower.rs` の `a_non_tail_if_keeps_strings_used_later`、`ifs_in_a_condition_nest_join_points`、`calls_save_the_variables_used_after_them` の `join` の行に `[...]` が付いた (種類2)。`dup` と `decref` の位置と `saved` の並びは変わっていない
 - `eml_core_ir/tests/verify.rs` の手書きの Core IR に `captures` を足した (種類3)。期待値は変えていない
+- 末尾にない `if` の条件の計算を join point の範囲に入れたので、`eml_core_ir/tests/lower.rs` の `calls_save_the_variables_used_after_them` の `let t3 = prim >(n0, 0)` が `join` の定義の後ろに移り、`ifs_in_a_condition_nest_join_points` の2つの join point が入れ子でなく並んだ (種類2)。`saved` と `dup` / `decref` は変わっていない
+- `simplify` を入れたので、`ifs_in_a_condition_nest_join_points` の条件の join point が消え、`a` が偽の枝は外側の join point へ直接 `jump j0(2)` するようになった (種類2)。join point の入れ子と `captures` は `nested_join_points_capture_what_outer_join_points_need` で確かめる
 
 ## よく使うコマンド
 
