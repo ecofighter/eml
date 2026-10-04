@@ -1,17 +1,15 @@
-use std::collections::HashMap;
-
 use eml_diagnostics::{Diagnostic, FileId, Label, TextRange};
 use eml_syntax::{SyntaxKind, SyntaxToken, ast};
 use la_arena::Arena;
 
+use super::scope::{ItemScope, ValueItem};
 use super::types::TypeLowering;
-use crate::builtin::Builtin;
 use crate::codes;
 use crate::hir::*;
 
 pub(super) struct BodyLowering<'a> {
     pub(super) file: FileId,
-    functions: &'a HashMap<String, FunctionId>,
+    items: &'a ItemScope,
     /// 本体の型の注釈。
     types: Arena<TypeRef>,
     /// 本体の注釈が引く、シグネチャの型変数と row 変数の表。
@@ -27,13 +25,13 @@ pub(super) struct BodyLowering<'a> {
 impl<'a> BodyLowering<'a> {
     pub(super) fn new(
         file: FileId,
-        functions: &'a HashMap<String, FunctionId>,
+        items: &'a ItemScope,
         generics: &'a mut Generics,
         diagnostics: &'a mut Vec<Diagnostic>,
     ) -> Self {
         BodyLowering {
             file,
-            functions,
+            items,
             types: Arena::new(),
             generics,
             diagnostics,
@@ -161,8 +159,12 @@ impl<'a> BodyLowering<'a> {
             .rev()
             .find(|(local, _)| local == text)
             .map(|&(_, local)| Res::Local(local))
-            .or_else(|| self.functions.get(text).map(|&f| Res::Function(f)))
-            .or_else(|| Builtin::from_name(text).map(Res::Builtin));
+            .or_else(|| {
+                self.items.value(text).map(|item| match item {
+                    ValueItem::Function(id) => Res::Function(id),
+                    ValueItem::Builtin(builtin) => Res::Builtin(builtin),
+                })
+            });
         match res {
             Some(res) => self.alloc(ExprKind::Path(res), range),
             None => {
@@ -298,6 +300,7 @@ impl<'a> BodyLowering<'a> {
             file: self.file,
             types: &mut self.types,
             generics: &mut *self.generics,
+            items: self.items,
             define: false,
             diagnostics: &mut *self.diagnostics,
         }

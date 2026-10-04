@@ -2,16 +2,17 @@ use eml_diagnostics::{Diagnostic, FileId, Label, TextRange};
 use eml_syntax::{SyntaxToken, ast};
 use la_arena::Arena;
 
-use crate::builtin::BuiltinType;
+use super::scope::{ItemScope, TypeItem};
 use crate::codes;
 use crate::hir::{
-    EffectRef, Generics, RowRef, RowVarDecl, RowVarId, TypeRef, TypeRefId, TypeRefKind, TypeVarDecl,
+    Generics, RowRef, RowVarDecl, RowVarId, TypeRef, TypeRefId, TypeRefKind, TypeVarDecl,
 };
 
 pub(super) struct TypeLowering<'a> {
     pub file: FileId,
     pub types: &'a mut Arena<TypeRef>,
     pub generics: &'a mut Generics,
+    pub items: &'a ItemScope,
     /// シグネチャなら真で、新しい変数の名前を表に入れる。本体の注釈では表にある名前だけを使える。
     pub define: bool,
     pub diagnostics: &'a mut Vec<Diagnostic>,
@@ -52,9 +53,9 @@ impl TypeLowering<'_> {
         let [name] = segments.as_slice() else {
             return self.unsupported(range, "qualified names are not supported yet");
         };
-        match BuiltinType::from_name(name.text()) {
-            Some(builtin) => TypeRefKind::Builtin(builtin),
-            None => {
+        match self.items.type_item(name.text()) {
+            Some(TypeItem::Builtin(builtin)) => TypeRefKind::Builtin(builtin),
+            Some(TypeItem::Effect(_)) | None => {
                 self.diagnostics.push(Diagnostic::error(
                     codes::UNDEFINED_TYPE,
                     format!("cannot find type `{}`", name.text()),
@@ -80,16 +81,17 @@ impl TypeLowering<'_> {
             let Some(name) = effect.name() else {
                 continue;
             };
-            if name.text() == "IO" {
-                effects.push(EffectRef::Io);
-            } else {
-                // ユーザー定義のエフェクトは段階3で入れる。宣言も E0004 になるので、ここでは未定義として扱う
-                self.diagnostics.push(Diagnostic::error(
-                    codes::UNDEFINED_TYPE,
-                    format!("cannot find effect `{}`", name.text()),
-                    Label::new(self.file, effect.range(), "not found in this scope"),
-                ));
-                valid = false;
+            match self.items.type_item(name.text()) {
+                Some(TypeItem::Effect(effect)) => effects.push(effect),
+                Some(TypeItem::Builtin(_)) | None => {
+                    // ユーザー定義のエフェクトは段階3で入れる。宣言も E0004 になるので、ここでは未定義として扱う
+                    self.diagnostics.push(Diagnostic::error(
+                        codes::UNDEFINED_TYPE,
+                        format!("cannot find effect `{}`", name.text()),
+                        Label::new(self.file, effect.range(), "not found in this scope"),
+                    ));
+                    valid = false;
+                }
             }
         }
         let range = row.range();

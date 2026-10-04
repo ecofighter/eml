@@ -1,5 +1,6 @@
 mod expr;
 mod ops;
+mod scope;
 mod types;
 
 use std::collections::HashMap;
@@ -11,6 +12,7 @@ use la_arena::Arena;
 use crate::codes;
 use crate::hir::*;
 use expr::BodyLowering;
+use scope::ItemScope;
 use types::TypeLowering;
 
 /// 同じ名前のシグネチャと等式。名前で対応づけてから、並び方を検査する (docs/spec/declarations.md)。
@@ -27,7 +29,7 @@ pub fn lower(file: FileId, source: &ast::SourceFile) -> (Module, Vec<Diagnostic>
     let mut diagnostics = Vec::new();
     let definitions = collect(file, source, &mut diagnostics);
     let mut functions = Arena::new();
-    let mut names = HashMap::new();
+    let mut scope = ItemScope::new();
     let mut pending = Vec::new();
     for definition in definitions {
         let Definition {
@@ -86,6 +88,7 @@ pub fn lower(file: FileId, source: &ast::SourceFile) -> (Module, Vec<Diagnostic>
                 file,
                 types: &mut types,
                 generics: &mut generics,
+                items: &scope,
                 define: true,
                 diagnostics: &mut diagnostics,
             }
@@ -106,7 +109,7 @@ pub fn lower(file: FileId, source: &ast::SourceFile) -> (Module, Vec<Diagnostic>
             signature,
             body: None,
         });
-        names.insert(name, id);
+        scope.define_function(&name, id);
         if let Some((_, equation, _)) = first_equation {
             pending.push((id, equation));
         }
@@ -120,7 +123,7 @@ pub fn lower(file: FileId, source: &ast::SourceFile) -> (Module, Vec<Diagnostic>
             None => &mut no_generics,
         };
         let body =
-            BodyLowering::new(file, &names, generics, &mut diagnostics).lower_equation(&equation);
+            BodyLowering::new(file, &scope, generics, &mut diagnostics).lower_equation(&equation);
         functions[id].body = Some(body);
     }
     diagnostics.sort_by_key(|d| d.primary.range.start());

@@ -1,5 +1,7 @@
 //! 組み込みの名前と型と演算子。S2 で `Prelude` モジュールに移すまで、名前解決の最も外側のスコープとして扱う。
 
+use crate::hir::EffectRef;
+
 /// 組み込みの値と関数。型は `eml_types` が、実装は `eml_interp` が、この enum の `match` で与える。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Builtin {
@@ -112,6 +114,14 @@ impl BuiltinType {
             BuiltinType::Bool => "Bool",
             BuiltinType::Unit => "Unit",
         }
+    }
+}
+
+/// 組み込みのエフェクト。
+pub fn builtin_effect(name: &str) -> Option<EffectRef> {
+    match name {
+        "IO" => Some(EffectRef::Io),
+        _ => None,
     }
 }
 
