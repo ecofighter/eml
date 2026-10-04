@@ -1,4 +1,5 @@
-//! RC の対象の変数の生存 (docs/spec/core-ir.md)。Perceus の挿入と verifier が使う。
+//! 変数の生存 (docs/spec/core-ir.md)。調べる変数は引数の印 (`selected`) で選ぶ。Perceus の挿入と verifier の所有権の検査は
+//! RC の対象の変数を、退避のパス (`saved.rs`) と verifier の範囲の検査はすべての変数を選ぶ。
 
 use std::collections::{BTreeSet, HashMap};
 
@@ -16,9 +17,10 @@ pub(crate) fn tracked(function: &CoreFn) -> Vec<bool> {
 }
 
 pub(crate) struct Liveness {
-    /// 式ごとの、その式から先で使う RC の対象の変数。`Jump` の先の join point の本体で使う変数も含む。
+    /// 式ごとの、その式から先で使う選んだ変数。`Jump` の先の join point の本体で使う変数も含む。
     pub exprs: Vec<Vars>,
-    /// join point ごとの、本体で使う RC の対象の変数 (引数を除く)。`Jump` の時点で、ちょうど1つずつ所有している。
+    /// join point ごとの、本体で使う選んだ変数 (引数を除く)。RC の対象の変数なら、`Jump` の時点でちょうど1つずつ
+    /// 所有している。
     pub joins: HashMap<JoinId, Vars>,
 }
 
@@ -34,9 +36,9 @@ enum Task {
 
 /// `Let` の連鎖と、join point の本体の連なりは長くなりうるので、再帰せずに作業の列で後順にたどる。join point の
 /// 本体は範囲より先に求める。範囲の中の `Jump` が、本体で使う変数を要るためである。
-pub(crate) fn liveness(function: &CoreFn, tracked: &[bool]) -> Liveness {
+pub(crate) fn liveness(function: &CoreFn, selected: &[bool]) -> Liveness {
     let tracked_var = |atom: &Atom| match atom {
-        Atom::Var(var) if tracked[var.0 as usize] => Some(*var),
+        Atom::Var(var) if selected[var.0 as usize] => Some(*var),
         _ => None,
     };
     let mut exprs = vec![Vars::new(); function.exprs.len()];
@@ -87,7 +89,7 @@ pub(crate) fn liveness(function: &CoreFn, tracked: &[bool]) -> Liveness {
                     }
                     CExpr::Dup { var, body } | CExpr::Decref { var, body } => {
                         let mut vars = exprs[body.0 as usize].clone();
-                        if tracked[var.0 as usize] {
+                        if selected[var.0 as usize] {
                             vars.insert(*var);
                         }
                         vars

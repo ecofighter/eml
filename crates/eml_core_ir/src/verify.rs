@@ -302,19 +302,19 @@ impl<'a> Checker<'a> {
         for &var in saved {
             self.visible(var)?;
         }
-        let saved_tracked: Vars = saved
+        // 同じ変数を2回退避すると、解放や複製のときに所有していない参照まで数えるので、重なりも含めて比べる
+        let mut saved_tracked: Vec<VarId> = saved
             .iter()
             .copied()
             .filter(|var| self.tracked[var.0 as usize])
             .collect();
+        saved_tracked.sort();
         let owned: Vec<VarId> = state
             .owned
             .iter()
             .flat_map(|(&var, &count)| std::iter::repeat_n(var, count as usize))
             .collect();
-        if owned.iter().copied().collect::<Vars>() != saved_tracked
-            || owned.len() != saved_tracked.len()
-        {
+        if owned != saved_tracked {
             return Err(format!(
                 "a call saves {} but owns {}",
                 self.names(&saved_tracked),

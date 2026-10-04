@@ -412,3 +412,35 @@ fn a_jump_after_a_call_needs_the_variables_of_the_join_body_in_scope() {
         Err("`n0` is used outside its scope in `f`".to_string())
     );
 }
+
+#[test]
+fn a_call_that_saves_a_variable_twice_is_rejected() {
+    // 退避する変数が重なると、フレームが所有していない参照を、解放や複製のときに数えてしまう
+    let exprs = vec![
+        CExpr::Return(var(2)),
+        concat(2, 1, 0, 0),
+        CExpr::Let {
+            var: VarId(1),
+            rhs: Rhs::Call {
+                call: Call::Direct(FnIdx(0), vec![var(0)]),
+                saved: vec![VarId(0), VarId(0)],
+            },
+            body: CExprId(1),
+        },
+        CExpr::Dup {
+            var: VarId(0),
+            body: CExprId(2),
+        },
+    ];
+    let f = function(
+        "f",
+        1,
+        vec![string("s"), string("t"), string("t")],
+        exprs,
+        &[],
+    );
+    assert_eq!(
+        check(vec![identity(), f]),
+        Err("a call saves [s0, s0] but owns [s0] in `f`".to_string())
+    );
+}
