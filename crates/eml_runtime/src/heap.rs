@@ -53,7 +53,8 @@ pub enum Payload {
     Frame(Frame),
     /// `perform` で捕まえた継続。先頭のフレーム `top` から `next` をたどった先に `handler` のフレームがある。`top`
     /// だけを所有し、`handler` は所有せずに指す。`handler` の `next` は捕まえられている間 `None` なので、継続を
-    /// 解放すると `top` から `handler` までの区間だけが解放される (docs/spec/runtime.md)。
+    /// 解放すると `top` から `handler` までの区間だけが解放される (docs/spec/runtime.md)。共有された継続を写すときは、
+    /// 区間のフレームごと写す (`take_or_copy`)。
     Continuation {
         top: ObjRef,
         handler: ObjRef,
@@ -109,6 +110,8 @@ pub enum Frame {
 pub enum HeapError {
     UseAfterFree,
     Shared,
+    /// 継続の区間が、切り離された handler フレームで終わっていない。
+    BrokenSegment,
     NotImplemented(&'static str),
 }
 
@@ -117,6 +120,9 @@ impl fmt::Display for HeapError {
         match self {
             HeapError::UseAfterFree => f.write_str("use of a freed object"),
             HeapError::Shared => f.write_str("an object is still shared"),
+            HeapError::BrokenSegment => {
+                f.write_str("a continuation does not end at a detached handler")
+            }
             HeapError::NotImplemented(name) => write!(f, "`{name}` is not implemented yet"),
         }
     }
@@ -231,19 +237,76 @@ impl Heap {
 
     /// オブジェクトの所有権を受け取って中身を使う側のための手続き。一意なら解放して中身を返す。共有されていれば
     /// 中身を写し、写した中身の子の参照を1つずつ増やしてから、元の参照を1つ手放す。子は解放と同じ `children` で
-    /// 数えるので、写すときと解放するときで数える参照が一致する (docs/spec/runtime.md)。
+    /// 数えるので、写すときと解放するときで数える参照が一致する。継続オブジェクトは区間のフレームごと写す。フレームを
+    /// 共有させないためである (docs/spec/runtime.md)。
     pub fn take_or_copy(&mut self, obj: ObjRef) -> Result<Payload, HeapError> {
         if self.is_unique(obj)? {
             return self.take(obj);
         }
-        let copy = copy(&self.object(obj)?.payload);
-        let mut shared = Vec::new();
-        children(&copy, &mut shared);
-        for child in shared {
-            self.dup(child)?;
-        }
+        let segment = match &self.object(obj)?.payload {
+            Payload::Continuation { top, .. } => Some(*top),
+            _ => None,
+        };
+        let copy = match segment {
+            Some(top) => {
+                let (top, handler) = self.copy_segment(top)?;
+                Payload::Continuation { top, handler }
+            }
+            None => {
+                let copy = copy(&self.object(obj)?.payload);
+                let mut shared = Vec::new();
+                children(&copy, &mut shared);
+                for child in shared {
+                    self.dup(child)?;
+                }
+                copy
+            }
+        };
         self.decref(obj)?;
         Ok(copy)
+    }
+
+    /// 継続の区間を、先頭のフレームから切り離された handler フレーム (`next` が `None`) まで写し、写した区間の先頭と
+    /// handler フレームを返す。写したフレームは `next` 以外の子の参照を1つずつ増やし、`next` は写した次のフレームを
+    /// 指す。元のフレームの参照の数は変えないので、写した後も両方の区間のフレームは一意である。長い区間で Rust の
+    /// スタックを溢れさせないよう、ループでたどる (docs/spec/runtime.md)。
+    fn copy_segment(&mut self, top: ObjRef) -> Result<(ObjRef, ObjRef), HeapError> {
+        let mut frames = Vec::new();
+        let mut current = top;
+        loop {
+            frames.push(current);
+            current = match &self.object(current)?.payload {
+                Payload::Frame(Frame::Handler { next: None, .. }) => break,
+                Payload::Frame(
+                    Frame::Return { next, .. }
+                    | Frame::Apply { next, .. }
+                    | Frame::Handler {
+                        next: Some(next), ..
+                    },
+                ) => *next,
+                _ => return Err(HeapError::BrokenSegment),
+            };
+        }
+        // 下から写し、写した次のフレームを `next` に入れる
+        let mut below = None;
+        let mut handler = None;
+        for &frame in frames.iter().rev() {
+            let mut payload = copy(&self.object(frame)?.payload);
+            set_next(&mut payload, below)?;
+            let mut shared = Vec::new();
+            children(&payload, &mut shared);
+            // 写した次のフレームは、この写しだけが所有する
+            for child in shared.into_iter().filter(|&child| Some(child) != below) {
+                self.dup(child)?;
+            }
+            let copied = self.alloc(payload);
+            handler.get_or_insert(copied);
+            below = Some(copied);
+        }
+        match (below, handler) {
+            (Some(top), Some(handler)) => Ok((top, handler)),
+            _ => Err(HeapError::BrokenSegment),
+        }
     }
 
     /// 共有の印付けは、名前だけ予約する。実装はマルチコアの段階で行う (docs/spec/runtime.md)。
@@ -295,7 +358,8 @@ impl Heap {
     }
 }
 
-/// 中身の写し。子の参照は数え直さないので、`take_or_copy` だけが使う。
+/// 中身の写し。子の参照は数え直さないので、`take_or_copy` と `copy_segment` だけが使う。継続オブジェクトは区間ごと
+/// 写すので、ここでは扱わない。
 fn copy(payload: &Payload) -> Payload {
     match payload {
         Payload::Str(text) => Payload::Str(text.clone()),
@@ -332,11 +396,22 @@ fn copy(payload: &Payload) -> Payload {
             ret: *ret,
             next: *next,
         }),
-        Payload::Continuation { top, handler } => Payload::Continuation {
-            top: *top,
-            handler: *handler,
-        },
+        Payload::Continuation { .. } => {
+            unreachable!("a shared continuation is copied with its segment by `copy_segment`")
+        }
     }
+}
+
+/// 写したフレームの次を、写した次のフレームにする。切り離された handler フレームだけが次を持たない。
+fn set_next(payload: &mut Payload, below: Option<ObjRef>) -> Result<(), HeapError> {
+    match payload {
+        Payload::Frame(Frame::Return { next, .. } | Frame::Apply { next, .. }) => {
+            *next = below.ok_or(HeapError::BrokenSegment)?;
+        }
+        Payload::Frame(Frame::Handler { next, .. }) => *next = below,
+        _ => return Err(HeapError::BrokenSegment),
+    }
+    Ok(())
 }
 
 /// 子のオブジェクト。解放と、共有されたオブジェクトの複製 (`take_or_copy`) が、同じ子を数える。
@@ -588,6 +663,109 @@ mod tests {
         // 元のクロージャと写した中身が、捕まえた文字列の参照を1つずつ持つ
         heap.decref(closure).unwrap();
         heap.decref(s).unwrap();
+        assert!(heap.live_objects().is_empty());
+    }
+
+    /// 区間の先頭から、切り離された handler フレームまでのフレーム。
+    fn segment(heap: &Heap, top: ObjRef) -> Vec<ObjRef> {
+        let mut frames = vec![top];
+        loop {
+            let next = match heap.get(*frames.last().unwrap()).unwrap() {
+                Payload::Frame(Frame::Return { next, .. } | Frame::Apply { next, .. }) => *next,
+                Payload::Frame(Frame::Handler {
+                    next: Some(next), ..
+                }) => *next,
+                Payload::Frame(Frame::Handler { next: None, .. }) => return frames,
+                other => panic!("not a frame: {other:?}"),
+            };
+            frames.push(next);
+        }
+    }
+
+    #[test]
+    fn take_or_copy_takes_a_unique_continuation_without_copying() {
+        let mut heap = Heap::new();
+        let detached = handler(&mut heap, vec![], None, None);
+        let top = frame(&mut heap, vec![], detached);
+        let k = heap.alloc(Payload::Continuation {
+            top,
+            handler: detached,
+        });
+        assert_eq!(
+            heap.take_or_copy(k),
+            Ok(Payload::Continuation {
+                top,
+                handler: detached
+            })
+        );
+        heap.decref(top).unwrap();
+        assert!(heap.live_objects().is_empty());
+    }
+
+    #[test]
+    fn take_or_copy_copies_the_segment_of_a_shared_continuation() {
+        let mut heap = Heap::new();
+        let s = string(&mut heap, "saved");
+        let clause = heap.alloc(Payload::Closure(Closure {
+            function: 0,
+            args: vec![],
+        }));
+        let detached = handler(&mut heap, vec![Value::Obj(clause)], None, None);
+        let below_attached = frame(&mut heap, vec![], detached);
+        // 本体の中の別の handle は、外側につながったまま区間に入る
+        let attached = handler(&mut heap, vec![], None, Some(below_attached));
+        let top = frame(&mut heap, vec![(0, Value::Obj(s))], attached);
+        let k = heap.alloc(Payload::Continuation {
+            top,
+            handler: detached,
+        });
+        heap.dup(k).unwrap();
+        let Payload::Continuation {
+            top: copied_top,
+            handler: copied_handler,
+        } = heap.take_or_copy(k).unwrap()
+        else {
+            panic!("not a continuation");
+        };
+        let original = segment(&heap, top);
+        let copied = segment(&heap, copied_top);
+        assert_eq!(original, [top, attached, below_attached, detached]);
+        assert_eq!(copied.len(), 4);
+        assert_eq!(copied[3], copied_handler);
+        assert!(copied.iter().all(|frame| !original.contains(frame)));
+        // どちらの区間のフレームも一意である
+        for &frame in original.iter().chain(&copied) {
+            assert!(heap.is_unique(frame).unwrap());
+        }
+        // 退避した文字列と節のクロージャは、両方の区間から参照される
+        assert!(!heap.is_unique(s).unwrap());
+        assert!(!heap.is_unique(clause).unwrap());
+        let copy = heap.alloc(Payload::Continuation {
+            top: copied_top,
+            handler: copied_handler,
+        });
+        heap.decref(copy).unwrap();
+        heap.decref(k).unwrap();
+        assert!(heap.live_objects().is_empty());
+    }
+
+    #[test]
+    fn copying_a_long_segment_does_not_overflow_the_stack() {
+        let mut heap = Heap::new();
+        let detached = handler(&mut heap, vec![], None, None);
+        let mut top = detached;
+        for _ in 0..200_000 {
+            top = frame(&mut heap, vec![], top);
+        }
+        let k = heap.alloc(Payload::Continuation {
+            top,
+            handler: detached,
+        });
+        heap.dup(k).unwrap();
+        let copy = heap.take_or_copy(k).unwrap();
+        let copy = heap.alloc(copy);
+        heap.decref(copy).unwrap();
+        heap.decref(k).unwrap();
         assert!(heap.live_objects().is_empty());
     }
 

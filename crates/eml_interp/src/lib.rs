@@ -388,14 +388,17 @@ impl<'p> Machine<'p> {
     }
 
     /// 継続オブジェクトの handler フレームの外側に今の継続をつなぎ、先頭のフレームに値を返す。末尾でない `resume`
-    /// では、その前に呼び出しのフレームが積まれている。`once` の継続は一意なので、取り出して書き換えてよい。
+    /// では、その前に呼び出しのフレームが積まれている。`multi` の継続をもう一度使うなら継続は共有されていて、
+    /// `take_or_copy` が区間を写す。どちらの場合も区間のフレームは一意なので、handler フレームを書き換えてよい
+    /// (docs/spec/core-ir.md)。
     fn resume(&mut self, k: Value, value: Value) -> Result<Step, Fault> {
         let Value::Obj(obj) = k else {
             return Err(Fault::Internal(
                 "resuming a value that is not a continuation",
             ));
         };
-        let Payload::Continuation { top, handler } = self.heap.take(obj).map_err(Fault::Heap)?
+        let Payload::Continuation { top, handler } =
+            self.heap.take_or_copy(obj).map_err(Fault::Heap)?
         else {
             return Err(Fault::Internal(
                 "resuming an object that is not a continuation",
@@ -494,7 +497,7 @@ impl<'p> Machine<'p> {
     /// 余った引数のフレームが続く間はループで適用し、Rust の再帰を使わない。
     fn ret(&mut self, mut value: Value) -> Result<Step, Fault> {
         loop {
-            // `once` の継続までは継続を複製しないので、フレームは常に一意である。共有されたフレームは段階3b の `multi` で扱う
+            // フレームはつねに一意である。共有されうるのは継続オブジェクトだけで、再開するときに区間を写す (docs/spec/runtime.md)
             let Payload::Frame(frame) = self.heap.take(self.cont).map_err(Fault::Heap)? else {
                 return Err(Fault::Internal("the continuation is not a frame"));
             };
