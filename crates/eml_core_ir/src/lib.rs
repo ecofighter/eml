@@ -4,7 +4,6 @@ mod liveness;
 mod lower;
 mod perceus;
 mod pretty;
-mod saved;
 mod verify;
 
 pub use eml_types::Linearity;
@@ -161,7 +160,7 @@ pub enum Rhs {
 }
 
 impl Rhs {
-    /// 退避する変数をまだ決めていない呼び出し。Perceus の後に、退避のパス (`saved.rs`) が埋める。
+    /// 退避する変数をまだ決めていない呼び出し。Perceus が、呼び出しの後で生きている変数で埋める。
     pub fn call(call: Call) -> Rhs {
         Rhs::Call {
             call,

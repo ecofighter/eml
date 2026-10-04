@@ -1,10 +1,10 @@
 //! Core IR の不変条件の検査 (docs/spec/core-ir.md)。Perceus の挿入の後のプログラムについて、変数と join point の
 //! 範囲、直接呼び出しとクロージャの引数の数、RC の対象の変数の所有権の釣り合いを確かめる。
 
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::fmt;
 
-use crate::liveness::{Vars, liveness, tracked};
+use crate::liveness::{Vars, tracked};
 use crate::{Atom, CExpr, CExprId, Call, CoreFn, EffectInfo, JoinId, Program, Rhs, VarId};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -47,11 +47,6 @@ struct Checker<'a> {
     program: &'a Program,
     function: &'a CoreFn,
     tracked: Vec<bool>,
-    /// join point ごとの、本体で使う RC の対象の変数。
-    needs: HashMap<JoinId, Vars>,
-    /// join point ごとの、本体で使う変数 (RC の対象でないものも含む)。呼び出しの後に `Jump` するとき、退避し忘れて
-    /// いないことを確かめる。
-    uses: HashMap<JoinId, Vars>,
     bound: HashSet<VarId>,
     /// 変数ごとの、範囲に入れたときの区間の番号。区間は呼び出しのたびに新しくなり、呼び出しで退避した変数を新しい
     /// 区間に入れ直す。今の区間の番号を持つ変数だけが範囲にある。枝ごとに写すと、文の `if` が続く関数で文の数の
@@ -66,14 +61,10 @@ struct Checker<'a> {
 impl<'a> Checker<'a> {
     fn new(program: &'a Program, function: &'a CoreFn) -> Self {
         let tracked = tracked(function);
-        let needs = liveness(function, &tracked).joins;
-        let uses = liveness(function, &vec![true; function.vars.len()]).joins;
         Checker {
             program,
             function,
             tracked,
-            needs,
-            uses,
             bound: HashSet::new(),
             stamps: vec![None; function.vars.len()],
             scope_log: Vec::new(),
@@ -152,9 +143,9 @@ impl<'a> Checker<'a> {
                 CExpr::Join {
                     join,
                     param,
+                    captures,
                     body,
                     scope,
-                    ..
                 } => {
                     if !self.defined_joins.insert(*join) {
                         return Err(format!("`j{}` is defined twice", join.0));
@@ -166,9 +157,13 @@ impl<'a> Checker<'a> {
                     let mut scope_state = state.clone();
                     scope_state.joins.insert(*join);
                     self.check_branch(*scope, scope_state)?;
-                    // 本体は、本体で使う変数を1つずつ所有し、引数を束縛して始まる
-                    let needs = self.needs.get(join).cloned().unwrap_or_default();
-                    state.owned = needs.iter().map(|&var| (var, 1)).collect();
+                    // 本体は、`captures` のうち RC の対象を1つずつ所有し、引数を束縛して始まる
+                    state.owned = captures
+                        .iter()
+                        .copied()
+                        .filter(|var| self.tracked[var.0 as usize])
+                        .map(|var| (var, 1))
+                        .collect();
                     self.bind(&mut state, *param)?;
                     id = *body;
                 }
@@ -358,17 +353,22 @@ impl<'a> Checker<'a> {
         Ok(())
     }
 
-    /// 渡す値を除き、行き先の join point の本体が使う変数を、ちょうど1つずつ所有している。
+    /// 渡す値を除き、行き先の join point の `captures` のうち RC の対象を、ちょうど1つずつ所有している。
     fn check_jump(&self, mut state: State, join: JoinId, arg: &Atom) -> Result<(), String> {
         if !state.joins.contains(&join) {
             return Err(format!("a jump to `j{}` is outside its scope", join.0));
         }
+        let captures = self.function.captures(join);
         // 呼び出しの後に `Jump` する経路で、本体が使う変数を退避し忘れていないこと
-        for &var in self.uses.get(&join).into_iter().flatten() {
+        for &var in captures {
             self.visible(var)?;
         }
         self.consume(&mut state, arg)?;
-        let needs = self.needs.get(&join).cloned().unwrap_or_default();
+        let needs: Vars = captures
+            .iter()
+            .copied()
+            .filter(|var| self.tracked[var.0 as usize])
+            .collect();
         let owned: Vec<VarId> = state
             .owned
             .iter()

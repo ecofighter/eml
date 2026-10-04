@@ -1,5 +1,7 @@
-//! 変数の生存 (docs/spec/core-ir.md)。調べる変数は引数の印 (`selected`) で選ぶ。Perceus の挿入と verifier の所有権の検査は
-//! RC の対象の変数を、退避のパス (`saved.rs`) と verifier の範囲の検査はすべての変数を選ぶ。
+//! 変数の生存 (docs/spec/core-ir.md)。`analyze` は、関数ごとに1回、すべての変数について生存を求め、join point の
+//! `captures` を埋め直す。持つのはブロックの入口 (`Switch` の枝と join point の範囲) で生きている変数だけで、`Let`
+//! ごとの集合は持たない。RC の対象だけの集合が要る側は、結果を RC の対象で絞る。生存は変数ごとに独立して決まるので、
+//! 絞った結果は RC の対象だけで求めた結果と一致する。
 
 use std::collections::{BTreeSet, HashMap};
 
@@ -16,44 +18,105 @@ pub(crate) fn tracked(function: &CoreFn) -> Vec<bool> {
         .collect()
 }
 
-pub(crate) struct Liveness {
-    /// 式ごとの、その式から先で使う選んだ変数。`Jump` の先の join point の本体で使う変数も含む。
-    pub exprs: Vec<Vars>,
-    /// join point ごとの、本体で使う選んだ変数 (引数を除く)。RC の対象の変数なら、`Jump` の時点でちょうど1つずつ
-    /// 所有している。
-    pub joins: HashMap<JoinId, Vars>,
+pub(crate) struct BlockLiveness {
+    /// `Switch` の枝と join point の範囲の入口で生きている変数。
+    entries: HashMap<CExprId, Vars>,
+    /// join point ごとの `captures`。
+    captures: Vec<Vars>,
 }
 
-enum Task {
-    Visit(CExprId),
-    Finish(CExprId),
-    Needs {
-        join: JoinId,
-        param: VarId,
-        body: CExprId,
+impl BlockLiveness {
+    pub(crate) fn entry(&self, id: CExprId) -> &Vars {
+        &self.entries[&id]
+    }
+
+    pub(crate) fn captures(&self, join: JoinId) -> &Vars {
+        &self.captures[join.0 as usize]
+    }
+
+    /// 連鎖を終える式の直前で生きている変数。`Join` では、範囲の入口と同じである。
+    pub(crate) fn at_end(&self, expr: &CExpr) -> Vars {
+        match expr {
+            CExpr::Return(atom) => var_of(atom).into_iter().collect(),
+            CExpr::TailCall(call) => call.atoms().iter().filter_map(var_of).collect(),
+            // 範囲の外への `Jump` は verifier が報告するので、ここでは求めていない `captures` を空として扱う
+            CExpr::Jump { join, arg } => {
+                let mut vars = self
+                    .captures
+                    .get(join.0 as usize)
+                    .cloned()
+                    .unwrap_or_default();
+                vars.extend(var_of(arg));
+                vars
+            }
+            CExpr::Switch { scrutinee, arms } => {
+                let mut vars: Vars = var_of(scrutinee).into_iter().collect();
+                for &(_, arm) in arms {
+                    vars.extend(self.entry(arm).iter().copied());
+                }
+                vars
+            }
+            CExpr::Join { scope, .. } => self.entry(*scope).clone(),
+            CExpr::Let { .. } | CExpr::Dup { .. } | CExpr::Decref { .. } => {
+                unreachable!("a chain ends at a control expression")
+            }
+        }
+    }
+}
+
+fn var_of(atom: &Atom) -> Option<VarId> {
+    match atom {
+        Atom::Var(var) => Some(*var),
+        _ => None,
+    }
+}
+
+/// 連鎖の始まりの種類。join point の本体の入口は表に持たず、`captures` に書く。
+#[derive(Clone, Copy)]
+enum Start {
+    Function,
+    Block,
+    JoinBody { join: JoinId, param: VarId },
+}
+
+enum Step {
+    Visit(CExprId, Start),
+    Finish {
+        start: CExprId,
+        kind: Start,
+        bindings: Vec<CExprId>,
+        end: CExprId,
     },
 }
 
-/// `Let` の連鎖と、join point の本体の連なりは長くなりうるので、再帰せずに作業の列で後順にたどる。join point の
-/// 本体は範囲より先に求める。範囲の中の `Jump` が、本体で使う変数を要るためである。
-pub(crate) fn liveness(function: &CoreFn, selected: &[bool]) -> Liveness {
-    let selected_var = |atom: &Atom| match atom {
-        Atom::Var(var) if selected[var.0 as usize] => Some(*var),
-        _ => None,
+/// `Let` の連鎖と join point の本体の連なりは長くなりうるので、再帰せずに作業の列で後順にたどる。join point の
+/// 本体は範囲より先に求める。範囲の中の `Jump` と、範囲の中の join point の本体からの `Jump` が、行き先の
+/// `captures` を要るためである。
+pub(crate) fn analyze(function: &mut CoreFn) -> BlockLiveness {
+    let mut live = BlockLiveness {
+        entries: HashMap::new(),
+        captures: vec![Vars::new(); function.joins.len()],
     };
-    let mut exprs = vec![Vars::new(); function.exprs.len()];
-    let mut joins: HashMap<JoinId, Vars> = HashMap::new();
-    let mut work = vec![Task::Visit(function.body)];
-    while let Some(task) = work.pop() {
-        match task {
-            Task::Visit(id) => {
-                work.push(Task::Finish(id));
+    let mut work = vec![Step::Visit(function.body, Start::Function)];
+    while let Some(step) = work.pop() {
+        match step {
+            Step::Visit(start, kind) => {
+                let mut bindings = Vec::new();
+                let mut id = start;
+                while let CExpr::Let { body, .. }
+                | CExpr::Dup { body, .. }
+                | CExpr::Decref { body, .. } = function.expr(id)
+                {
+                    bindings.push(id);
+                    id = *body;
+                }
+                work.push(Step::Finish {
+                    start,
+                    kind,
+                    bindings,
+                    end: id,
+                });
                 match function.expr(id) {
-                    CExpr::Let { body, .. }
-                    | CExpr::Dup { body, .. }
-                    | CExpr::Decref { body, .. } => {
-                        work.push(Task::Visit(*body));
-                    }
                     CExpr::Join {
                         join,
                         param,
@@ -61,76 +124,57 @@ pub(crate) fn liveness(function: &CoreFn, selected: &[bool]) -> Liveness {
                         scope,
                         ..
                     } => {
-                        work.push(Task::Visit(*scope));
-                        work.push(Task::Needs {
-                            join: *join,
-                            param: *param,
-                            body: *body,
-                        });
-                        work.push(Task::Visit(*body));
+                        work.push(Step::Visit(*scope, Start::Block));
+                        work.push(Step::Visit(
+                            *body,
+                            Start::JoinBody {
+                                join: *join,
+                                param: *param,
+                            },
+                        ));
                     }
                     CExpr::Switch { arms, .. } => {
-                        work.extend(arms.iter().map(|&(_, arm)| Task::Visit(arm)));
+                        work.extend(arms.iter().map(|&(_, arm)| Step::Visit(arm, Start::Block)));
                     }
-                    CExpr::Return(_) | CExpr::Jump { .. } | CExpr::TailCall(_) => {}
+                    _ => {}
                 }
             }
-            Task::Needs { join, param, body } => {
-                let mut needs = exprs[body.0 as usize].clone();
-                needs.remove(&param);
-                joins.insert(join, needs);
-            }
-            Task::Finish(id) => {
-                let vars = match function.expr(id) {
-                    CExpr::Let { var, rhs, body } => {
-                        let mut vars = exprs[body.0 as usize].clone();
-                        vars.remove(var);
-                        vars.extend(rhs.atoms().iter().filter_map(selected_var));
-                        vars
-                    }
-                    CExpr::Dup { var, body } | CExpr::Decref { var, body } => {
-                        let mut vars = exprs[body.0 as usize].clone();
-                        if selected[var.0 as usize] {
+            Step::Finish {
+                start,
+                kind,
+                bindings,
+                end,
+            } => {
+                let mut vars = live.at_end(function.expr(end));
+                for &id in bindings.iter().rev() {
+                    match function.expr(id) {
+                        CExpr::Let { var, rhs, .. } => {
+                            vars.remove(var);
+                            vars.extend(rhs.atoms().iter().filter_map(var_of));
+                        }
+                        CExpr::Dup { var, .. } | CExpr::Decref { var, .. } => {
                             vars.insert(*var);
                         }
-                        vars
+                        _ => unreachable!("only bindings are collected"),
                     }
-                    CExpr::Join { join, scope, .. } => {
-                        let mut vars = joins.get(join).cloned().unwrap_or_default();
-                        vars.extend(exprs[scope.0 as usize].iter().copied());
-                        vars
+                }
+                match kind {
+                    Start::Function => {}
+                    Start::Block => {
+                        live.entries.insert(start, vars);
                     }
-                    CExpr::Switch { scrutinee, arms } => {
-                        let mut vars: Vars = selected_var(scrutinee).into_iter().collect();
-                        for &(_, arm) in arms {
-                            vars.extend(exprs[arm.0 as usize].iter().copied());
-                        }
-                        vars
+                    Start::JoinBody { join, param } => {
+                        vars.remove(&param);
+                        live.captures[join.0 as usize] = vars;
                     }
-                    CExpr::Return(atom) => selected_var(atom).into_iter().collect(),
-                    CExpr::TailCall(call) => call.atoms().iter().filter_map(selected_var).collect(),
-                    // 壊れた Core IR (範囲の外の `Jump`) は verifier が報告するので、ここでは空として扱う
-                    CExpr::Jump { join, arg } => {
-                        let mut vars = joins.get(join).cloned().unwrap_or_default();
-                        vars.extend(selected_var(arg));
-                        vars
-                    }
-                };
-                exprs[id.0 as usize] = vars;
+                }
             }
         }
     }
-    Liveness { exprs, joins }
-}
-
-/// join point の本体が使う外側の変数を `captures` に書く。
-pub(crate) fn fill_captures(function: &mut CoreFn) {
-    let all = vec![true; function.vars.len()];
-    let joins = liveness(function, &all).joins;
-    for (join, captured) in joins {
-        let node = function.joins[join.0 as usize];
+    for (join, &node) in function.joins.iter().enumerate() {
         if let CExpr::Join { captures, .. } = &mut function.exprs[node.0 as usize] {
-            *captures = captured.into_iter().collect();
+            *captures = live.captures[join].iter().copied().collect();
         }
     }
+    live
 }

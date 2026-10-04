@@ -10,7 +10,7 @@ use la_arena::ArenaMap;
 
 use crate::{
     Atom, CExpr, CExprId, Call, CoreFn, EffectInfo, FALSE, FnIdx, IoOp, JoinId, OperationInfo,
-    PrimOp, Program, Rhs, TRUE, VarId, VarInfo, perceus, saved,
+    PrimOp, Program, Rhs, TRUE, VarId, VarInfo, perceus,
 };
 
 /// 診断のエラーがないプログラムだけを受け取る。エラーがあれば `eml_cli` は Core IR を作らない
@@ -78,7 +78,6 @@ pub fn lower(module: &Module, typed: &TypedModule) -> Program {
         effects: effect_table(module),
     };
     perceus::insert(&mut program);
-    saved::record(&mut program);
     // Perceus の誤りを、実行した経路だけでなく変換のたびに見つける (docs/spec/core-ir.md)
     #[cfg(debug_assertions)]
     if let Err(error) = crate::verify(&program) {
