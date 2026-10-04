@@ -300,3 +300,15 @@ fn the_return_clause_of_a_multi_handler_cannot_capture_a_linear_value() {
       note: the `return` clause runs each time a continuation of a `multi` operation is resumed
     ");
 }
+
+#[test]
+fn the_return_clause_of_a_multi_handler_may_capture_an_unrestricted_value() {
+    let text = "effect Choice where\n  multi choose : Unit -> Bool\n\ncaptured : Int -> Int\ncaptured base =\n  handle (if choose () then 1 else 2) with\n    | choose () c -> resume c True + resume c False\n    | return n -> n + base";
+    insta::assert_snapshot!(check_text(text), @r"
+    choose : Unit -> <Choice> Bool
+    captured : Int -> Int
+      base#0 : Int
+      c#1 : Cont Bool Int <>
+      n#2 : Int
+    ");
+}

@@ -115,6 +115,15 @@ fn type_arguments_and_parameters_of_effects_are_checked() {
 }
 
 #[test]
+fn type_arguments_of_effects_in_an_open_row_are_checked() {
+    let text = "effect State s where\n  get : Unit -> s\n\nf : Unit -> <State | e> Int\nf () = 1";
+    assert_eq!(
+        errors(text),
+        ["E1015 4:14 `State` takes 1 type argument, but 0 were given"]
+    );
+}
+
+#[test]
 fn a_function_after_an_operation_of_the_same_name_is_a_duplicate() {
     let text = "effect E where\n  run : Int -> Int\n\nrun : Int -> Int\nrun x = x";
     assert_eq!(errors(text), ["E1003 4:1 `run` is defined more than once"]);
