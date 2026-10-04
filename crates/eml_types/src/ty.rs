@@ -21,6 +21,17 @@ pub enum Multiplicity {
 pub struct EffectLabel {
     pub id: EffectId,
     pub name: String,
+    pub args: Vec<Type>,
+}
+
+impl fmt::Display for EffectLabel {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.name)?;
+        for arg in &self.args {
+            write!(f, " {}", atomic(arg))?;
+        }
+        Ok(())
+    }
 }
 
 /// 型検査の結果として後の段階に渡す型。推論用の変数は解決済みで、解けずに残った変数は `Flexible` になる。
@@ -77,14 +88,32 @@ impl Type {
             Type::Error => true,
             Type::Record(fields) => fields.iter().any(|(_, ty)| ty.contains_error()),
             Type::Fn {
-                param, tail, ret, ..
+                param,
+                effects,
+                tail,
+                ret,
+                ..
             } => {
                 param.contains_error()
                     || ret.contains_error()
+                    || effects
+                        .iter()
+                        .any(|e| e.args.iter().any(Type::contains_error))
                     || matches!(tail, Some(RowTail::Error))
             }
-            Type::Cont { arg, ret, tail, .. } => {
-                arg.contains_error() || ret.contains_error() || matches!(tail, Some(RowTail::Error))
+            Type::Cont {
+                arg,
+                ret,
+                effects,
+                tail,
+                ..
+            } => {
+                arg.contains_error()
+                    || ret.contains_error()
+                    || effects
+                        .iter()
+                        .any(|e| e.args.iter().any(Type::contains_error))
+                    || matches!(tail, Some(RowTail::Error))
             }
             Type::Con { .. } | Type::Rigid(_) | Type::Flexible => false,
         }
@@ -148,7 +177,10 @@ impl fmt::Display for Type {
 
 /// row の中身。`<` と `>` は呼び出し側が付ける。
 fn row_text(effects: &[EffectLabel], tail: &Option<RowTail>) -> String {
-    let names: Vec<&str> = effects.iter().map(|e| e.name.as_str()).collect();
+    let names = effects
+        .iter()
+        .map(|e| e.to_string())
+        .collect::<Vec<String>>();
     let tail = match tail {
         Some(RowTail::Rigid(name)) => Some(name.as_str()),
         Some(RowTail::Flexible) => Some("_"),
@@ -201,6 +233,7 @@ mod tests {
                 operations: Vec::new(),
             }),
             name: "IO".to_string(),
+            args: vec![],
         };
         let io = Type::Fn {
             param: Box::new(pure.clone()),
@@ -232,6 +265,7 @@ mod tests {
                 operations: Vec::new(),
             }),
             name: "IO".to_string(),
+            args: vec![],
         };
         let k = Type::Cont {
             arg: Box::new(int.clone()),
@@ -255,6 +289,52 @@ mod tests {
             linearity: Linearity::Lin,
         };
         assert_eq!(pure.to_string(), "Cont (Int -> Int) Unit <e>");
+    }
+
+    #[test]
+    fn effect_labels_are_displayed_with_their_type_arguments() {
+        let mut types = Arena::new();
+        let mut effects = Arena::new();
+        let int = Type::Con {
+            id: types.alloc(TypeDef {
+                name: "Int".to_string(),
+            }),
+            name: "Int".to_string(),
+        };
+        let id = effects.alloc(EffectDef {
+            name: "State".to_string(),
+            generics: Generics::default(),
+            operations: Vec::new(),
+        });
+        let function = Type::Fn {
+            param: Box::new(int.clone()),
+            linearity: Linearity::Unr,
+            effects: vec![],
+            tail: None,
+            ret: Box::new(int.clone()),
+        };
+        let ty = Type::Fn {
+            param: Box::new(Type::unit()),
+            linearity: Linearity::Unr,
+            effects: vec![
+                EffectLabel {
+                    id,
+                    name: "State".to_string(),
+                    args: vec![int.clone()],
+                },
+                EffectLabel {
+                    id,
+                    name: "State".to_string(),
+                    args: vec![function],
+                },
+            ],
+            tail: Some(RowTail::Rigid("e".to_string())),
+            ret: Box::new(int),
+        };
+        assert_eq!(
+            ty.to_string(),
+            "Unit -> <State Int, State (Int -> Int) | e> Int"
+        );
     }
 }
 

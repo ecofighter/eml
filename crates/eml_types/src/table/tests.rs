@@ -58,7 +58,7 @@ fn the_occurs_check_rejects_infinite_types() {
 fn closed_rows_unify_regardless_of_order() {
     let mut table = new_table();
     let io = table.lang.io;
-    let a = Row::closed(vec![io]);
+    let a = Row::closed(vec![Label::plain(io)]);
     assert_eq!(table.unify_row(&a, &a.clone()), Ok(()));
     assert_eq!(
         table.unify_row(&a, &Row::pure()),
@@ -75,8 +75,14 @@ fn an_open_row_absorbs_the_missing_labels() {
         labels: vec![],
         tail: Tail::Var(r),
     };
-    assert_eq!(table.unify_row(&open, &Row::closed(vec![io])), Ok(()));
-    assert_eq!(table.resolve_row(&open), Row::closed(vec![io]));
+    assert_eq!(
+        table.unify_row(&open, &Row::closed(vec![Label::plain(io)])),
+        Ok(())
+    );
+    assert_eq!(
+        table.resolve_row(&open),
+        Row::closed(vec![Label::plain(io)])
+    );
     assert_eq!(table.row_multiplicity(r), Multiplicity::Once);
 }
 
@@ -86,7 +92,7 @@ fn an_open_row_cannot_add_labels_to_a_closed_row() {
     let io = table.lang.io;
     let r = table.fresh_row_var();
     let open = Row {
-        labels: vec![io],
+        labels: vec![Label::plain(io)],
         tail: Tail::Var(r),
     };
     assert_eq!(
@@ -102,7 +108,7 @@ fn two_open_rows_share_a_fresh_tail() {
     let r1 = table.fresh_row_var();
     let r2 = table.fresh_row_var();
     let a = Row {
-        labels: vec![io],
+        labels: vec![Label::plain(io)],
         tail: Tail::Var(r1),
     };
     let b = Row {
@@ -112,8 +118,8 @@ fn two_open_rows_share_a_fresh_tail() {
     assert_eq!(table.unify_row(&a, &b), Ok(()));
     let a = table.resolve_row(&a);
     let b = table.resolve_row(&b);
-    assert_eq!(a.labels, vec![io]);
-    assert_eq!(b.labels, vec![io]);
+    assert_eq!(a.labels, vec![Label::plain(io)]);
+    assert_eq!(b.labels, vec![Label::plain(io)]);
     assert_eq!(a.tail, b.tail);
 }
 
@@ -123,7 +129,7 @@ fn rows_with_the_same_tail_and_different_labels_report_the_missing_effects() {
     let io = table.lang.io;
     let r = table.fresh_row_var();
     let a = Row {
-        labels: vec![io],
+        labels: vec![Label::plain(io)],
         tail: Tail::Var(r),
     };
     let b = Row {
@@ -153,7 +159,7 @@ fn export_keeps_an_open_row() {
     let f = table.function(
         table.int,
         Row {
-            labels: vec![io],
+            labels: vec![Label::plain(io)],
             tail: Tail::Var(r),
         },
         table.int,
@@ -186,7 +192,7 @@ fn a_rigid_row_variable_cannot_be_bound() {
         tail: Tail::Var(e),
     };
     assert_eq!(
-        table.unify_row(&rigid, &Row::closed(vec![io])),
+        table.unify_row(&rigid, &Row::closed(vec![Label::plain(io)])),
         Err(UnifyError::Mismatch)
     );
     let f = table.function(table.int, rigid.clone(), table.int);
@@ -197,7 +203,7 @@ fn a_rigid_row_variable_cannot_be_bound() {
 fn a_closed_callee_row_is_included_in_a_larger_row() {
     let mut table = new_table();
     let io_effect = table.lang.io;
-    let io = Row::closed(vec![io_effect]);
+    let io = Row::closed(vec![Label::plain(io_effect)]);
     assert_eq!(table.include_row(&Row::pure(), &io), Ok(()));
     assert_eq!(table.include_row(&io, &io), Ok(()));
     assert_eq!(
@@ -216,13 +222,13 @@ fn a_rigid_callee_row_needs_the_same_variable_in_the_ambient_row() {
         tail: Tail::Var(e),
     };
     let wider = Row {
-        labels: vec![io],
+        labels: vec![Label::plain(io)],
         tail: Tail::Var(e),
     };
     assert_eq!(table.include_row(&callee, &wider), Ok(()));
     assert_eq!(table.include_row(&callee, &callee.clone()), Ok(()));
     assert_eq!(
-        table.include_row(&callee, &Row::closed(vec![io])),
+        table.include_row(&callee, &Row::closed(vec![Label::plain(io)])),
         Err(UnifyError::MissingRowVar("e".to_string()))
     );
 }
@@ -270,7 +276,7 @@ fn a_rigid_callee_row_extends_a_flexible_ambient_row() {
     let e = table.fresh_rigid_row("e");
     let fresh = table.fresh_row_var();
     let ambient = Row {
-        labels: vec![io],
+        labels: vec![Label::plain(io)],
         tail: Tail::Var(fresh),
     };
     let callee = Row {
@@ -279,7 +285,7 @@ fn a_rigid_callee_row_extends_a_flexible_ambient_row() {
     };
     assert_eq!(table.include_row(&callee, &ambient), Ok(()));
     let resolved = table.resolve_row(&ambient);
-    assert_eq!(resolved.labels, vec![io]);
+    assert_eq!(resolved.labels, vec![Label::plain(io)]);
     assert_eq!(resolved.tail, Tail::Var(e));
 }
 
@@ -335,11 +341,11 @@ fn an_error_row_unifies_with_any_row_without_binding() {
     let io = table.lang.io;
     let e = table.fresh_rigid_row("e");
     assert_eq!(
-        table.unify_row(&Row::error(), &Row::closed(vec![io])),
+        table.unify_row(&Row::error(), &Row::closed(vec![Label::plain(io)])),
         Ok(())
     );
     let rigid = Row {
-        labels: vec![io],
+        labels: vec![Label::plain(io)],
         tail: Tail::Var(e),
     };
     assert_eq!(table.unify_row(&rigid, &Row::error()), Ok(()));
@@ -356,7 +362,7 @@ fn a_flexible_row_unified_with_an_error_row_becomes_an_error_row() {
         tail: Tail::Var(r),
     };
     let error = Row {
-        labels: vec![io],
+        labels: vec![Label::plain(io)],
         tail: Tail::Error,
     };
     assert_eq!(table.unify_row(&open, &error), Ok(()));
@@ -369,7 +375,7 @@ fn an_error_row_is_included_and_includes_any_row() {
     let io = table.lang.io;
     assert_eq!(table.include_row(&Row::error(), &Row::pure()), Ok(()));
     assert_eq!(
-        table.include_row(&Row::closed(vec![io]), &Row::error()),
+        table.include_row(&Row::closed(vec![Label::plain(io)]), &Row::error()),
         Ok(())
     );
     let e = table.fresh_rigid_row("e");
@@ -395,7 +401,7 @@ fn an_error_row_keeps_its_own_labels() {
     let mut table = new_table();
     let io = table.lang.io;
     let io_error = Row {
-        labels: vec![io],
+        labels: vec![Label::plain(io)],
         tail: Tail::Error,
     };
     assert_eq!(
@@ -446,4 +452,39 @@ fn continuations_unify_by_their_parts_and_are_linear() {
     assert_eq!(table.unify(k, other), Err(UnifyError::Mismatch));
     assert_eq!(table.unify(k, int), Err(UnifyError::Mismatch));
     assert_eq!(table.kind_bounds(k), vec![Bound::Const(Linearity::Lin)]);
+}
+
+#[test]
+fn labels_of_one_effect_pair_up_in_order() {
+    let mut table = new_table();
+    let io = table.lang.io;
+    let label = |args: Vec<Ty>| Label { effect: io, args };
+    let a = Row::closed(vec![label(vec![table.int]), label(vec![table.string])]);
+    let x = table.fresh_var();
+    let y = table.fresh_var();
+    let b = Row::closed(vec![label(vec![x]), label(vec![y])]);
+    assert_eq!(table.unify_row(&a, &b), Ok(()));
+    assert_eq!(table.display(x).to_string(), "Int");
+    assert_eq!(table.display(y).to_string(), "String");
+}
+
+#[test]
+fn labels_with_different_type_arguments_do_not_unify() {
+    let mut table = new_table();
+    let io = table.lang.io;
+    let left = Label {
+        effect: io,
+        args: vec![table.string],
+    };
+    let right = Label {
+        effect: io,
+        args: vec![table.int],
+    };
+    assert_eq!(
+        table.unify_row(
+            &Row::closed(vec![left.clone()]),
+            &Row::closed(vec![right.clone()])
+        ),
+        Err(UnifyError::EffectArgs { left, right })
+    );
 }

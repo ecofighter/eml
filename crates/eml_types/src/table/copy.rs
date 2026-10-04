@@ -17,15 +17,7 @@ impl Table {
                     ArrowLin::Var(v) => ArrowLin::Var(subst.lin.get(&v).copied().unwrap_or(v)),
                     known => known,
                 };
-                let row = self.resolve_row(&row);
-                let tail = match row.tail {
-                    Tail::Var(tail) => Tail::Var(subst.rows.get(&tail).copied().unwrap_or(tail)),
-                    other => other,
-                };
-                let row = Row {
-                    labels: row.labels,
-                    tail,
-                };
+                let row = self.copy_row(&row, subst);
                 self.function_with(param, lin, row, ret)
             }
             TyShape::Cont { arg, lin, row, ret } => {
@@ -35,20 +27,8 @@ impl Table {
                     ArrowLin::Var(v) => ArrowLin::Var(subst.lin.get(&v).copied().unwrap_or(v)),
                     known => known,
                 };
-                let row = self.resolve_row(&row);
-                let tail = match row.tail {
-                    Tail::Var(tail) => Tail::Var(subst.rows.get(&tail).copied().unwrap_or(tail)),
-                    other => other,
-                };
-                self.alloc(TyShape::Cont {
-                    arg,
-                    lin,
-                    row: Row {
-                        labels: row.labels,
-                        tail,
-                    },
-                    ret,
-                })
+                let row = self.copy_row(&row, subst);
+                self.alloc(TyShape::Cont { arg, lin, row, ret })
             }
             TyShape::Record(fields) => {
                 let fields = fields
@@ -59,5 +39,26 @@ impl Table {
             }
             TyShape::Con(_) | TyShape::Var(_) | TyShape::Error => ty,
         }
+    }
+
+    /// row の末尾の row 変数と、ラベルの型引数を `subst` に従って置き換える。
+    fn copy_row(&mut self, row: &Row, subst: &Subst) -> Row {
+        let row = self.resolve_row(row);
+        let mut labels = Vec::new();
+        for label in row.labels {
+            let mut args = Vec::new();
+            for arg in label.args {
+                args.push(self.copy_type(arg, subst));
+            }
+            labels.push(Label {
+                effect: label.effect,
+                args,
+            });
+        }
+        let tail = match row.tail {
+            Tail::Var(tail) => Tail::Var(subst.rows.get(&tail).copied().unwrap_or(tail)),
+            other => other,
+        };
+        Row { labels, tail }
     }
 }

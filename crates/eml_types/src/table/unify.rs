@@ -83,10 +83,23 @@ impl Table {
         match self.shape(ty) {
             TyShape::Var(other) => *other == var,
             TyShape::Record(fields) => fields.iter().any(|(_, field)| self.occurs(var, *field)),
-            TyShape::Fn { param, ret, .. }
+            TyShape::Fn {
+                param, row, ret, ..
+            }
             | TyShape::Cont {
-                arg: param, ret, ..
-            } => self.occurs(var, *param) || self.occurs(var, *ret),
+                arg: param,
+                row,
+                ret,
+                ..
+            } => {
+                self.occurs(var, *param)
+                    || self.occurs(var, *ret)
+                    || self
+                        .resolve_row(row)
+                        .labels
+                        .iter()
+                        .any(|label| label.args.iter().any(|&arg| self.occurs(var, arg)))
+            }
             TyShape::Con(_) | TyShape::Rigid(_) | TyShape::Error => false,
         }
     }

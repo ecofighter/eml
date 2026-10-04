@@ -42,10 +42,28 @@ pub(crate) enum Tail {
     Error,
 }
 
+/// row のラベル。エフェクトとその型引数である (docs/spec/types.md の「関数型」)。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Label {
+    pub effect: EffectId,
+    pub args: Vec<Ty>,
+}
+
+#[cfg(test)]
+impl Label {
+    /// 型引数のないラベル。表の単体テストで row を組み立てるために使う。
+    pub fn plain(effect: EffectId) -> Label {
+        Label {
+            effect,
+            args: Vec::new(),
+        }
+    }
+}
+
 /// エフェクトの row。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Row {
-    pub labels: Vec<EffectId>,
+    pub labels: Vec<Label>,
     pub tail: Tail,
 }
 
@@ -54,7 +72,7 @@ impl Row {
         Row::closed(Vec::new())
     }
 
-    pub fn closed(labels: Vec<EffectId>) -> Row {
+    pub fn closed(labels: Vec<Label>) -> Row {
         Row {
             labels,
             tail: Tail::Closed,
@@ -100,6 +118,11 @@ pub(crate) enum UnifyError {
     MissingEffects(Vec<EffectId>),
     /// 呼び出し先の row の末尾にある、シグネチャの row 変数が、今の row に含まれない。
     MissingRowVar(String),
+    /// 同じエフェクトのラベルの型引数が一致しない。`left` は単一化の左辺の row のラベルである。
+    EffectArgs {
+        left: Label,
+        right: Label,
+    },
 }
 
 struct TyVarInfo {

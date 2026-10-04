@@ -6,7 +6,7 @@ use eml_hir::{FunctionId, Generics, Module, OperationId, RowRef, TypeRef, TypeRe
 use la_arena::Arena;
 use la_arena::ArenaMap;
 
-use crate::kind::Bound;
+use crate::kind::{Bound, KindVar};
 use crate::scheme::{Rigids, Scheme, lower_operation, lower_signature};
 use crate::table::{Row, Table, TyShape};
 use crate::ty::{EffectLabel, KindConstraint, KindTerm, Linearity, Type};
@@ -46,13 +46,23 @@ pub(crate) fn check_module(module: &Module) -> (TypedModule, Vec<Diagnostic>) {
         let rigids = Rigids::new(&mut table, &operation.signature.generics);
         let ty = lower_operation(&mut table, operation, &rigids);
         table.closure_kinds(ty, operation.arity, &[]);
+        // エフェクトの型引数は handle ごとに具体的な型で節を検査するので、`Unr` に固定しない
+        let effect_kinds: Vec<KindVar> = rigids
+            .effect_args(operation)
+            .into_iter()
+            .flat_map(|ty| table.kind_bounds(ty))
+            .filter_map(|bound| match bound {
+                Bound::Var(var) => Some(var),
+                Bound::Const(_) => None,
+            })
+            .collect();
         // 結果の型は縛らない。`never fail : String -> a` をどの型としても使えるようにするため
         let mut spine = ty;
         for _ in 0..operation.arity {
             let TyShape::Fn { param, ret, .. } = table.shape(spine).clone() else {
                 break;
             };
-            table.unrestricted(param);
+            table.unrestricted(param, &effect_kinds);
             spine = ret;
         }
         let mut scheme = Scheme::new(ty, &rigids);
@@ -195,6 +205,7 @@ fn check_main(
         effects: vec![EffectLabel {
             id: module.lang.io,
             name: module.effects[module.lang.io].name.clone(),
+            args: Vec::new(),
         }],
         tail: None,
         ret: Box::new(Type::unit()),
@@ -214,7 +225,16 @@ fn has_error(types: &Arena<TypeRef>, id: TypeRefId) -> bool {
         TypeRefKind::Con(_) => false,
         TypeRefKind::Var(_) => false,
         TypeRefKind::Fn { param, row, ret } => {
-            matches!(row, RowRef::Error) || has_error(types, *param) || has_error(types, *ret)
+            let args_error = match row {
+                RowRef::Closed { effects, .. } | RowRef::Open { effects, .. } => effects
+                    .iter()
+                    .any(|effect| effect.args.iter().any(|&arg| has_error(types, arg))),
+                RowRef::Omitted | RowRef::Error => false,
+            };
+            matches!(row, RowRef::Error)
+                || args_error
+                || has_error(types, *param)
+                || has_error(types, *ret)
         }
     }
 }

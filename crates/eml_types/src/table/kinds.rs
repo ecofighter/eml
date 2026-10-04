@@ -50,12 +50,13 @@ impl Table {
         }
     }
 
-    /// `ty` に現れる線形性の Kind 変数 (rigid 変数の `μ` と矢印の `m`) を、すべて `Unr` 以下にする。操作の引数の型に
-    /// 使う。操作は本体を持たないので、節がその引数をどう使うかを操作の型に推論できない。そこで `Unr` に固定し、節では
-    /// 引数を何回使ってもよいことにする (docs/spec/effects.md の「handler の意味」)。
-    pub fn unrestricted(&mut self, ty: Ty) {
+    /// `ty` に現れる線形性の Kind 変数 (rigid 変数の `μ` と矢印の `m`) を、`keep` を除いて `Unr` 以下にする。操作の
+    /// 引数の型に使う。操作は本体を持たないので、節がその引数をどう使うかを操作の型に推論できない。そこで `Unr` に固定し、
+    /// 節では引数を何回使ってもよいことにする。エフェクトの型引数 (`keep`) は handle ごとに具体的な型で節を検査するので
+    /// 固定しない (docs/spec/effects.md の「handler の意味」)。
+    pub fn unrestricted(&mut self, ty: Ty, keep: &[KindVar]) {
         let (lin, _) = self.kind_vars(ty);
-        for var in lin {
+        for var in lin.into_iter().filter(|var| !keep.contains(var)) {
             self.linearity
                 .require(Bound::Var(var), Bound::Const(Linearity::Unr));
         }
@@ -79,12 +80,16 @@ impl Table {
                     if let ArrowLin::Var(v) = m {
                         push_unique(&mut lin, *v);
                     }
-                    if let Tail::Var(tail) = self.resolve_row(row).tail
+                    let row = self.resolve_row(row);
+                    if let Tail::Var(tail) = row.tail
                         && self.is_rigid_row(tail)
                     {
                         push_unique(&mut mult, self.row_multiplicity_var(tail));
                     }
                     work.push(*ret);
+                    for label in row.labels.iter().rev() {
+                        work.extend(label.args.iter().rev().copied());
+                    }
                     work.push(*param);
                 }
                 TyShape::Cont {
@@ -96,12 +101,16 @@ impl Table {
                     if let ArrowLin::Var(v) = m {
                         push_unique(&mut lin, *v);
                     }
-                    if let Tail::Var(tail) = self.resolve_row(row).tail
+                    let row = self.resolve_row(row);
+                    if let Tail::Var(tail) = row.tail
                         && self.is_rigid_row(tail)
                     {
                         push_unique(&mut mult, self.row_multiplicity_var(tail));
                     }
                     work.push(*ret);
+                    for label in row.labels.iter().rev() {
+                        work.extend(label.args.iter().rev().copied());
+                    }
                     work.push(*arg);
                 }
                 TyShape::Record(fields) => work.extend(fields.iter().rev().map(|(_, f)| *f)),

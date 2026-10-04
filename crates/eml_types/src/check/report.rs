@@ -136,10 +136,26 @@ impl BodyCheck<'_> {
                 .map(|e| self.module.effects[*e].name.clone())
                 .collect(),
             Err(UnifyError::MissingRowVar(var)) => vec![var],
+            Err(UnifyError::EffectArgs { left, right }) => {
+                // 呼び出し先の row が左辺である (`Table::include_row`)
+                if report {
+                    let found = self.table.display_label(&left);
+                    let allowed = self.table.display_label(&right);
+                    self.diagnostics.push(
+                        Diagnostic::error(
+                            codes::TYPE_MISMATCH,
+                            format!("{name} performs `{found}`, but the row allows `{allowed}`"),
+                            Label::new(self.file(), range, format!("this call performs `{found}`")),
+                        )
+                        .with_note("the type arguments of an effect must match those in the row"),
+                    );
+                }
+                return false;
+            }
             // include_row は呼び出し先側の rigid でない row 変数を通してしか単一化しないので、rigid 変数の束縛 (Mismatch) も
-            // Occurs も起きない
+            // Occurs も起きない。型引数の誤りは `EffectArgs` になる
             Err(other) => unreachable!(
-                "including a row reports only missing effects or a missing row variable: {other:?}"
+                "including a row reports only missing effects, a missing row variable or effect arguments: {other:?}"
             ),
         };
         if !report {

@@ -13,16 +13,21 @@ impl Table {
                         .or_insert_with(|| self.display(ty));
                 }
                 TyShape::Fn {
-                    param, lin, ret, ..
+                    param,
+                    lin,
+                    row,
+                    ret,
                 } => {
                     if let ArrowLin::Var(v) = lin {
                         names.entry(*v).or_insert_with(|| self.display(ty));
                     }
                     work.push(*ret);
+                    self.push_label_args(row, &mut work);
                     work.push(*param);
                 }
-                TyShape::Cont { arg, ret, .. } => {
+                TyShape::Cont { arg, row, ret, .. } => {
                     work.push(*ret);
+                    self.push_label_args(row, &mut work);
                     work.push(*arg);
                 }
                 TyShape::Record(fields) => work.extend(fields.iter().rev().map(|(_, f)| *f)),
@@ -30,6 +35,12 @@ impl Table {
             }
         }
         names
+    }
+
+    fn push_label_args(&self, row: &Row, work: &mut Vec<Ty>) {
+        for label in self.resolve_row(row).labels.iter().rev() {
+            work.extend(label.args.iter().rev().copied());
+        }
     }
 
     /// 後の段階に渡す形にする。矢印の線形性は解いた結果を使うので、`solve_kinds` の後にだけ呼ぶ。解けていない
@@ -65,7 +76,7 @@ impl Table {
                 row,
                 ret,
             } => {
-                let (effects, tail) = self.export_row(&row);
+                let (effects, tail) = self.export_row(&row, solved);
                 Type::Fn {
                     param: Box::new(self.to_type(param, solved)),
                     linearity: self.export_lin(lin, solved),
@@ -75,7 +86,7 @@ impl Table {
                 }
             }
             TyShape::Cont { arg, lin, row, ret } => {
-                let (effects, tail) = self.export_row(&row);
+                let (effects, tail) = self.export_row(&row, solved);
                 Type::Cont {
                     arg: Box::new(self.to_type(arg, solved)),
                     ret: Box::new(self.to_type(ret, solved)),
@@ -106,15 +117,29 @@ impl Table {
         }
     }
 
-    fn export_row(&self, row: &Row) -> (Vec<EffectLabel>, Option<RowTail>) {
+    /// 診断の文言のためのラベルの形。
+    pub fn display_label(&self, label: &Label) -> EffectLabel {
+        self.label_type(label, false)
+    }
+
+    fn label_type(&self, label: &Label, solved: bool) -> EffectLabel {
+        EffectLabel {
+            id: label.effect,
+            name: self.effect_names[label.effect].clone(),
+            args: label
+                .args
+                .iter()
+                .map(|&arg| self.to_type(arg, solved))
+                .collect(),
+        }
+    }
+
+    fn export_row(&self, row: &Row, solved: bool) -> (Vec<EffectLabel>, Option<RowTail>) {
         let row = self.resolve_row(row);
         let effects = row
             .labels
-            .into_iter()
-            .map(|id| EffectLabel {
-                id,
-                name: self.effect_names[id].clone(),
-            })
+            .iter()
+            .map(|label| self.label_type(label, solved))
             .collect();
         let tail = match row.tail {
             Tail::Closed => None,

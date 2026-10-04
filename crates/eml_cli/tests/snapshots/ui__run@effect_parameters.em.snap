@@ -1,0 +1,12 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{stderr}\")"
+input_file: tests/ui/run/effect_parameters.em
+---
+--- stdout ---
+20
+hello Ada
+42
+abab
+hello 7
+--- stderr ---

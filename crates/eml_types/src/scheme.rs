@@ -1,13 +1,13 @@
 //! シグネチャのスキームと、その具体化 (docs/spec/types.md の「推論」)。
 
 use eml_hir::{
-    EffectId, Generics, Operation, RowRef, RowVarId, Signature, TypeRef, TypeRefId, TypeRefKind,
+    EffectRef, Generics, Operation, RowRef, RowVarId, Signature, TypeRef, TypeRefId, TypeRefKind,
     TypeVarId,
 };
 use la_arena::{Arena, ArenaMap};
 
 use crate::kind::{Bound, KindVar};
-use crate::table::{ArrowLin, RigidVar, Row, RowVar, Subst, Table, Tail, Ty, TyShape};
+use crate::table::{ArrowLin, Label, RigidVar, Row, RowVar, Subst, Table, Tail, Ty, TyShape};
 use crate::ty::{Linearity, Multiplicity};
 
 /// 関数ごとの、シグネチャの型変数と row 変数。本体の注釈も同じ変数を指す (docs/spec/types.md の「推論」)。
@@ -19,12 +19,22 @@ pub(crate) struct Rigids {
 
 impl Rigids {
     pub fn new(table: &mut Table, generics: &Generics) -> Rigids {
+        Rigids::with_effect_args(table, generics, &[])
+    }
+
+    /// 先頭の型変数を `effect_args` の型にし、残りを新しい rigid 変数にする。handler の操作の節で、エフェクトの型引数を
+    /// handle の型引数に、操作自身の型変数を rigid にするために使う (docs/spec/effects.md の「handler の意味」)。
+    pub fn with_effect_args(table: &mut Table, generics: &Generics, effect_args: &[Ty]) -> Rigids {
         let mut rigids = Rigids {
             tys: ArenaMap::default(),
             rows: ArenaMap::default(),
             vars: Vec::new(),
         };
-        for (id, var) in generics.type_vars.iter() {
+        for (index, (id, var)) in generics.type_vars.iter().enumerate() {
+            if let Some(&arg) = effect_args.get(index) {
+                rigids.tys.insert(id, arg);
+                continue;
+            }
             let (ty, rigid) = table.fresh_rigid(&var.name);
             rigids.tys.insert(id, ty);
             rigids.vars.push(rigid);
@@ -33,6 +43,18 @@ impl Rigids {
             rigids.rows.insert(id, table.fresh_rigid_row(&var.name));
         }
         rigids
+    }
+
+    /// 操作の `Generics` の先頭に写した、エフェクトの型引数の型。
+    pub fn effect_args(&self, operation: &Operation) -> Vec<Ty> {
+        operation
+            .signature
+            .generics
+            .type_vars
+            .iter()
+            .take(operation.effect_params)
+            .map(|(id, _)| self.tys[id])
+            .collect()
     }
 }
 
@@ -144,10 +166,10 @@ fn lower(
                 // 省略した row は空の row である (docs/spec/types.md の「関数型」)
                 RowRef::Omitted => Row::pure(),
                 RowRef::Closed { effects, .. } => {
-                    Row::closed(effects.iter().map(|effect| effect.effect).collect())
+                    Row::closed(lower_labels(table, types, rigids, effects))
                 }
                 RowRef::Open { effects, tail, .. } => Row {
-                    labels: effects.iter().map(|effect| effect.effect).collect(),
+                    labels: lower_labels(table, types, rigids, effects),
                     tail: Tail::Var(rigids.rows[*tail]),
                 },
                 // 未定義のエフェクトか、解決できない row 変数の跡。どのエフェクトも受け入れて、診断を連鎖させない
@@ -163,15 +185,39 @@ fn lower(
     }
 }
 
+fn lower_labels(
+    table: &mut Table,
+    types: &Arena<TypeRef>,
+    rigids: &Rigids,
+    effects: &[EffectRef],
+) -> Vec<Label> {
+    let mut labels = Vec::new();
+    for effect in effects {
+        let mut args = Vec::new();
+        for &arg in &effect.args {
+            args.push(lower(table, types, rigids, arg, false));
+        }
+        labels.push(Label {
+            effect: effect.effect,
+            args,
+        });
+    }
+    labels
+}
+
 /// 操作のスキームの型。シグネチャの、引数の個数の分だけたどった最後の矢印に、操作のエフェクトだけの row を付ける
 /// (docs/spec/effects.md)。操作のシグネチャの外側の矢印には row を書けないので (E1007)、ほかの外側の矢印の row は
 /// 空である。
 pub(crate) fn lower_operation(table: &mut Table, operation: &Operation, rigids: &Rigids) -> Ty {
     let ty = lower_signature(table, &operation.signature, rigids);
-    with_effect(table, ty, operation.arity, operation.effect)
+    let label = Label {
+        effect: operation.effect,
+        args: rigids.effect_args(operation),
+    };
+    with_effect(table, ty, operation.arity, label)
 }
 
-fn with_effect(table: &mut Table, ty: Ty, arity: usize, effect: EffectId) -> Ty {
+fn with_effect(table: &mut Table, ty: Ty, arity: usize, label: Label) -> Ty {
     if arity == 0 {
         return ty;
     }
@@ -186,12 +232,12 @@ fn with_effect(table: &mut Table, ty: Ty, arity: usize, effect: EffectId) -> Ty 
     };
     let (row, ret) = if arity == 1 {
         let row = Row {
-            labels: vec![effect],
+            labels: vec![label],
             tail: row.tail,
         };
         (row, ret)
     } else {
-        (row, with_effect(table, ret, arity - 1, effect))
+        (row, with_effect(table, ret, arity - 1, label))
     };
     table.function_with(param, lin, row, ret)
 }

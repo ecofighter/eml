@@ -3,7 +3,7 @@
 use eml_hir::{EffectId, ExprId, OpClause, ReturnClause};
 
 use crate::scheme::{Rigids, lower_operation};
-use crate::table::{ArrowLin, Row, Tail, Ty, TyShape};
+use crate::table::{ArrowLin, Label, Row, Tail, Ty, TyShape};
 use crate::ty::Linearity;
 
 use super::body::BodyCheck;
@@ -23,11 +23,22 @@ impl BodyCheck<'_> {
             return self.broken_handle(handled, clauses, ret);
         };
         let outer = self.ambient.clone();
+        // handle ごとにエフェクトの型引数を新しい変数にする。本体の操作の呼び出しと節が、この変数を通じて型引数を共有する
+        let module = self.module;
+        let args: Vec<Ty> = module.effects[effect]
+            .generics
+            .type_vars
+            .iter()
+            .map(|_| self.table.fresh_var())
+            .collect();
         // scoped labels なので、同じエフェクトの handler を入れ子にすると内側が処理する
         let inner = Row {
-            labels: std::iter::once(effect)
-                .chain(outer.labels.iter().copied())
-                .collect(),
+            labels: std::iter::once(Label {
+                effect,
+                args: args.clone(),
+            })
+            .chain(outer.labels.iter().cloned())
+            .collect(),
             tail: outer.tail,
         };
         let source = self.ambient_source.clone();
@@ -40,17 +51,19 @@ impl BodyCheck<'_> {
             None => handled_ty,
         };
         for clause in clauses {
-            self.op_clause(clause, result, &outer);
+            self.op_clause(clause, result, &outer, &args);
         }
         result
     }
 
     /// 節の引数は操作の引数の型で、`k` は「操作の結果を受け、handle 式の値を返し、外側の row のエフェクトを起こす」
     /// 継続である。`once` の操作の `k` は `Lin` である (docs/spec/effects.md の「継続の多重度と持ち越し規則」)。
-    fn op_clause(&mut self, clause: &OpClause, result: Ty, outer: &Row) {
+    fn op_clause(&mut self, clause: &OpClause, result: Ty, outer: &Row, effect_args: &[Ty]) {
         let operation = &self.module.operations[clause.op];
-        // 操作の型変数は節の中では rigid である。handler は、操作がどの型で呼ばれても動かなければならないため
-        let rigids = Rigids::new(self.table, &operation.signature.generics);
+        // エフェクトの型引数は handle の型引数である。操作自身の型変数は節の中では rigid である。handler は、操作が
+        // どの型で呼ばれても動かなければならないため
+        let rigids =
+            Rigids::with_effect_args(self.table, &operation.signature.generics, effect_args);
         let mut ty = lower_operation(self.table, operation, &rigids);
         for &param in &clause.params {
             match self.table.shape(ty).clone() {

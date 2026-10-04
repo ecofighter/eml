@@ -8,7 +8,7 @@ impl Table {
         while let Tail::Var(var) = tail {
             match &self.row_vars[var.0 as usize].binding {
                 Some(bound) => {
-                    labels.extend(bound.labels.iter().copied());
+                    labels.extend(bound.labels.iter().cloned());
                     tail = bound.tail;
                 }
                 None => break,
@@ -23,12 +23,25 @@ impl Table {
         let b = self.resolve_row(b);
         let mut only_b = b.labels.clone();
         let mut only_a = Vec::new();
+        let mut pairs = Vec::new();
+        // 同じエフェクトのラベルが複数あれば、それぞれの row の中の順で対にする (scoped labels)
         for label in &a.labels {
-            match only_b.iter().position(|other| other == label) {
-                Some(index) => {
-                    only_b.remove(index);
+            match only_b.iter().position(|other| other.effect == label.effect) {
+                Some(index) => pairs.push((label.clone(), only_b.remove(index))),
+                None => only_a.push(label.clone()),
+            }
+        }
+        for (left, right) in pairs {
+            let args: Vec<(Ty, Ty)> = left
+                .args
+                .iter()
+                .copied()
+                .zip(right.args.iter().copied())
+                .collect();
+            for (x, y) in args {
+                if self.unify(x, y).is_err() {
+                    return Err(UnifyError::EffectArgs { left, right });
                 }
-                None => only_a.push(*label),
             }
         }
         match (a.tail, b.tail) {
@@ -51,37 +64,37 @@ impl Table {
                 },
             ),
             // 閉じた末尾と rigid な末尾は、相手の側の既知のラベルを受け入れられない
-            (Tail::Error, _) if !only_a.is_empty() => Err(UnifyError::MissingEffects(only_a)),
-            (_, Tail::Error) if !only_b.is_empty() => Err(UnifyError::MissingEffects(only_b)),
+            (Tail::Error, _) if !only_a.is_empty() => Err(missing(&only_a)),
+            (_, Tail::Error) if !only_b.is_empty() => Err(missing(&only_b)),
             (Tail::Error, _) | (_, Tail::Error) => Ok(()),
             (Tail::Closed, Tail::Closed) => {
-                let mut missing = only_a;
-                missing.extend(only_b);
-                if missing.is_empty() {
+                let mut rest = only_a;
+                rest.extend(only_b);
+                if rest.is_empty() {
                     Ok(())
                 } else {
-                    Err(UnifyError::MissingEffects(missing))
+                    Err(missing(&rest))
                 }
             }
             (Tail::Var(tail), Tail::Closed) => {
                 if !only_a.is_empty() {
-                    return Err(UnifyError::MissingEffects(only_a));
+                    return Err(missing(&only_a));
                 }
                 self.bind_row(tail, Row::closed(only_b))
             }
             (Tail::Closed, Tail::Var(tail)) => {
                 if !only_b.is_empty() {
-                    return Err(UnifyError::MissingEffects(only_b));
+                    return Err(missing(&only_b));
                 }
                 self.bind_row(tail, Row::closed(only_a))
             }
             (Tail::Var(x), Tail::Var(y)) if x == y => {
-                let mut missing = only_a;
-                missing.extend(only_b);
-                if missing.is_empty() {
+                let mut rest = only_a;
+                rest.extend(only_b);
+                if rest.is_empty() {
                     Ok(())
                 } else {
-                    Err(UnifyError::MissingEffects(missing))
+                    Err(missing(&rest))
                 }
             }
             (Tail::Var(x), Tail::Var(y)) => match (self.is_rigid_row(x), self.is_rigid_row(y)) {
@@ -105,7 +118,7 @@ impl Table {
                 // rigid な側は束縛できないので、推論用の側に残りを入れる
                 (false, true) => {
                     if !only_a.is_empty() {
-                        return Err(UnifyError::MissingEffects(only_a));
+                        return Err(missing(&only_a));
                     }
                     self.bind_row(
                         x,
@@ -117,7 +130,7 @@ impl Table {
                 }
                 (true, false) => {
                     if !only_b.is_empty() {
-                        return Err(UnifyError::MissingEffects(only_b));
+                        return Err(missing(&only_b));
                     }
                     self.bind_row(
                         y,
@@ -143,7 +156,7 @@ impl Table {
         let sigma = self.row_vars[var.0 as usize].multiplicity;
         for label in &row.labels {
             self.multiplicity.require(
-                Bound::Const(self.effect_multiplicity(*label)),
+                Bound::Const(self.effect_multiplicity(label.effect)),
                 Bound::Var(sigma),
             );
         }
@@ -225,4 +238,8 @@ impl Table {
         };
         self.function_with(param, lin, row, ret)
     }
+}
+
+fn missing(labels: &[Label]) -> UnifyError {
+    UnifyError::MissingEffects(labels.iter().map(|label| label.effect).collect())
 }

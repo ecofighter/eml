@@ -212,3 +212,63 @@ fn a_clause_dropped_by_an_error_does_not_cause_linear_misuse() {
       13:11 the first `return` clause
     ");
 }
+
+#[test]
+fn type_parameters_of_an_effect_are_not_fixed_to_unr() {
+    let text = "effect State s where\n  get : Unit -> s\n  put : s -> Unit\n\neffect Store s where\n  store : a -> s -> Unit\n\ncounter : Unit -> <State Int> Int\ncounter () =\n  put (get () + 1)\n  get ()";
+    insta::assert_snapshot!(check_text(text), @r"
+    get : Unit -> <State s> s
+    put : s -> <State s> Unit
+    store : a -> s -> <Store s> Unit
+      kinds: a <= Unr
+    counter : Unit -> <State Int> Int
+    ");
+}
+
+#[test]
+fn type_arguments_of_a_performed_effect_must_match_the_row() {
+    let text = "effect State s where\n  get : Unit -> s\n  put : s -> Unit\n\nwrong : Unit -> <State Int> Unit\nwrong () = put \"text\"";
+    insta::assert_snapshot!(check_text(text), @r"
+    get : Unit -> <State s> s
+    put : s -> <State s> Unit
+    wrong : Unit -> <State Int> Unit
+    ---
+    E2001 6:12 `put` performs `State String`, but the row allows `State Int`
+      6:12 this call performs `State String`
+      note: the type arguments of an effect must match those in the row
+    ");
+}
+
+#[test]
+fn a_handler_takes_the_type_arguments_of_its_effect_from_the_body() {
+    let text = "effect Reader r where\n  ask : Unit -> r\n\ngreeting : Unit -> <Reader String> String\ngreeting () = ask ()\n\nrun : Unit -> String\nrun () =\n  handle greeting () with\n    | ask () k -> resume k \"x\"\n\nwrong : Unit -> String\nwrong () =\n  handle greeting () with\n    | ask () k -> resume k 1";
+    insta::assert_snapshot!(check_text(text), @r"
+    ask : Unit -> <Reader r> r
+    greeting : Unit -> <Reader String> String
+    run : Unit -> String
+      k#0 : Cont String String <>
+    wrong : Unit -> String
+      k#0 : Cont String String <>
+    ---
+    E2001 15:28 mismatched types
+      15:28 expected `String`, found `Int`
+      note: `resume` passes this value as the result of the operation
+    ");
+}
+
+#[test]
+fn a_function_type_with_other_effect_arguments_is_a_mismatch() {
+    // `f` を `drop` するのは、使わない引数の `Unr` の制約を `kinds:` の行に出さないため
+    let text = "effect Reader r where\n  ask : Unit -> r\n\nrun : (Unit -> <Reader String> Int) -> Int\nrun f =\n  drop f\n  0\n\nnumber : Unit -> <Reader Int> Int\nnumber () = ask ()\n\napply_it : Unit -> Int\napply_it () = run number";
+    insta::assert_snapshot!(check_text(text), @r"
+    ask : Unit -> <Reader r> r
+    run : (Unit -> <Reader String> Int) -> Int
+      f#0 : Unit -> <Reader String> Int
+    number : Unit -> <Reader Int> Int
+    apply_it : Unit -> Int
+    ---
+    E2001 13:19 mismatched types
+      13:19 expected `Unit -> <Reader String> Int`, found `Unit -> <Reader Int | _> Int`
+      13:15 argument 1 of `run`
+    ");
+}
