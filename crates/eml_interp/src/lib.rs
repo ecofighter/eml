@@ -148,6 +148,14 @@ impl<'p> Machine<'p> {
                 let value = self.atom(atom)?;
                 return self.ret(value);
             }
+            CExpr::Join { scope, .. } => self.control = *scope,
+            CExpr::Jump { join, arg } => {
+                // join point は同じ関数の中にあるので、環境をそのまま使い、フレームを積まない
+                let value = self.atom(arg)?;
+                let (param, body) = program.function(self.function).join(*join);
+                self.slots[param.0 as usize] = Some(Owned::new(value));
+                self.control = body;
+            }
             CExpr::Dup { var, body } => {
                 let slot = self.slots[var.0 as usize]
                     .as_mut()
@@ -198,11 +206,6 @@ impl<'p> Machine<'p> {
                 };
                 Value::Obj(self.heap.alloc(DescId::CLOSURE, Payload::Closure(closure)))
             }
-            Rhs::Nested(inner) => {
-                self.push_frame(var, body, false);
-                self.control = *inner;
-                return Ok(false);
-            }
         };
         self.slots[var.0 as usize] = Some(Owned::new(value));
         self.control = body;
@@ -220,7 +223,7 @@ impl<'p> Machine<'p> {
             }
         };
         if let Some((var, body)) = resume {
-            self.push_frame(var, body, true);
+            self.push_frame(var, body);
         }
         match prepared {
             Prepared::Direct(callee, args) => {
@@ -304,14 +307,13 @@ impl<'p> Machine<'p> {
         Ok(closure)
     }
 
-    /// 呼び出しでは環境ごと退避する。入れ子の式は同じ関数の中なので、環境をそのまま使い続ける。
-    fn push_frame(&mut self, bind: VarId, resume: CExprId, save_env: bool) {
-        let slots = save_env.then(|| std::mem::take(&mut self.slots));
+    /// 呼び出しでは環境ごと退避する。
+    fn push_frame(&mut self, bind: VarId, resume: CExprId) {
         let frame = Frame {
             function: self.function.0,
             resume: resume.0,
             bind: bind.0,
-            slots,
+            slots: Some(std::mem::take(&mut self.slots)),
             next: Some(self.cont),
         };
         self.cont = self.heap.alloc(DescId::FRAME, Payload::Frame(frame));

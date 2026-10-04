@@ -56,18 +56,18 @@ fn a_non_tail_if_keeps_strings_used_later() {
     let text = "pick : Bool -> String -> String\npick b s =\n  let t = if b then s else \"none\"\n  t ++ s\n\nmain : Unit -> <IO> Unit\nmain () = ()";
     insta::assert_snapshot!(core_text(text), @r#"
     fn pick(b0, s1) {
-      let t3 = {
-        switch b0 {
-          #0 ->
-            let s2 = const "none"
-            return s2
-          #1 ->
-            dup s1
-            return s1
-        }
+      join j0(t3) {
+        let t4 = prim ++(t3, s1)
+        return t4
       }
-      let t4 = prim ++(t3, s1)
-      return t4
+      switch b0 {
+        #0 ->
+          let s2 = const "none"
+          jump j0(s2)
+        #1 ->
+          dup s1
+          jump j0(s1)
+      }
     }
     fn main(p0) {
       return ()
@@ -84,18 +84,15 @@ fn recursion_and_top_level_values() {
     }
     fn count(n0) {
       let t1 = prim ==(n0, 0)
-      let t5 = {
-        switch t1 {
-          #0 ->
-            let t3 = prim -(n0, 1)
-            let t4 = call count(t3)
-            return t4
-          #1 ->
-            let answer2 = call answer()
-            return answer2
-        }
+      switch t1 {
+        #0 ->
+          let t3 = prim -(n0, 1)
+          let t4 = call count(t3)
+          return t4
+        #1 ->
+          let answer2 = call answer()
+          return answer2
       }
-      return t5
     }
     fn main(p0) {
       let t1 = call count(3)
@@ -210,4 +207,55 @@ fn a_zero_arity_callee_is_evaluated_before_its_arguments() {
       return t5
     }
     "#);
+}
+
+#[test]
+fn a_tail_if_returns_from_each_arm() {
+    let text = "sign : Int -> String\nsign n = if n < 0 then \"negative\" else \"non-negative\"\n\nmain : Unit -> <IO> Unit\nmain () = ()";
+    insta::assert_snapshot!(core_text(text), @r#"
+    fn sign(n0) {
+      let t1 = prim <(n0, 0)
+      switch t1 {
+        #0 ->
+          let s3 = const "non-negative"
+          return s3
+        #1 ->
+          let s2 = const "negative"
+          return s2
+      }
+    }
+    fn main(p0) {
+      return ()
+    }
+    "#);
+}
+
+#[test]
+fn ifs_in_a_condition_nest_join_points() {
+    let text = "choose : Bool -> Bool -> Int\nchoose a b =\n  let n = if (if a then b else False) then 1 else 2\n  n + 1\n\nmain : Unit -> <IO> Unit\nmain () = ()";
+    insta::assert_snapshot!(core_text(text), @r"
+    fn choose(a0, b1) {
+      join j1(t2) {
+        join j0(t3) {
+          let t4 = prim +(t3, 1)
+          return t4
+        }
+        switch t2 {
+          #0 ->
+            jump j0(2)
+          #1 ->
+            jump j0(1)
+        }
+      }
+      switch a0 {
+        #0 ->
+          jump j1(#0)
+        #1 ->
+          jump j1(b1)
+      }
+    }
+    fn main(p0) {
+      return ()
+    }
+    ");
 }

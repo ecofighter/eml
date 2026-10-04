@@ -40,6 +40,7 @@ fn function(name: &str, params: u32, vars: &[(&str, bool)], steps: Vec<Step>, re
             .collect(),
         body,
         exprs,
+        joins: Vec::new(),
     }
 }
 

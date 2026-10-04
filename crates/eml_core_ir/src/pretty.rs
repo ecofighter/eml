@@ -35,20 +35,29 @@ fn expr(program: &Program, function: &CoreFn, id: CExprId, indent: usize, out: &
     loop {
         match function.expr(id) {
             CExpr::Let { var: v, rhs, body } => {
-                if let Rhs::Nested(inner) = rhs {
-                    writeln!(out, "{pad}let {} = {{", var(function, *v)).unwrap();
-                    expr(program, function, *inner, indent + 1, out);
-                    writeln!(out, "{pad}}}").unwrap();
-                } else {
-                    writeln!(
-                        out,
-                        "{pad}let {} = {}",
-                        var(function, *v),
-                        rhs_text(program, function, rhs)
-                    )
-                    .unwrap();
-                }
+                writeln!(
+                    out,
+                    "{pad}let {} = {}",
+                    var(function, *v),
+                    rhs_text(program, function, rhs)
+                )
+                .unwrap();
                 id = *body;
+            }
+            CExpr::Join {
+                join,
+                param,
+                body,
+                scope,
+            } => {
+                writeln!(out, "{pad}join j{}({}) {{", join.0, var(function, *param)).unwrap();
+                expr(program, function, *body, indent + 1, out);
+                writeln!(out, "{pad}}}").unwrap();
+                id = *scope;
+            }
+            CExpr::Jump { join, arg } => {
+                writeln!(out, "{pad}jump j{}({})", join.0, atom(function, arg)).unwrap();
+                return;
             }
             CExpr::Switch { scrutinee, arms } => {
                 writeln!(out, "{pad}switch {} {{", atom(function, scrutinee)).unwrap();
@@ -96,6 +105,5 @@ fn rhs_text(program: &Program, function: &CoreFn, rhs: &Rhs) -> String {
         Rhs::Prim(op, a) => format!("prim {}({})", op.name(), args(a)),
         Rhs::ConstString(index) => format!("const {:?}", program.strings[*index as usize]),
         Rhs::Perform(IoOp::Println, a) => format!("perform println({})", args(a)),
-        Rhs::Nested(_) => unreachable!("nested expressions are printed as blocks"),
     }
 }

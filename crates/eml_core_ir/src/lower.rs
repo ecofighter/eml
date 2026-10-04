@@ -8,8 +8,8 @@ use eml_types::{BodyTypes, Linearity, Type, TypedModule};
 use la_arena::ArenaMap;
 
 use crate::{
-    Atom, CExpr, CExprId, Call, CoreFn, FALSE, FnIdx, IoOp, PrimOp, Program, Rhs, TRUE, VarId,
-    VarInfo, perceus,
+    Atom, CExpr, CExprId, Call, CoreFn, FALSE, FnIdx, IoOp, JoinId, PrimOp, Program, Rhs, TRUE,
+    VarId, VarInfo, perceus,
 };
 
 /// 診断のエラーがないプログラムだけを受け取る。エラーがあれば `eml_cli` は Core IR を作らない
@@ -44,6 +44,7 @@ pub fn lower(module: &Module, typed: &TypedModule) -> Program {
             exprs: Vec::new(),
             vars: Vec::new(),
             locals: ArenaMap::default(),
+            joins: Vec::new(),
         }
         .lower(&function.name, &[], &body.params, &params, body.root);
         builder.finish(indices[id], core);
@@ -179,6 +180,7 @@ impl ProgramBuilder {
             vars,
             body,
             exprs,
+            joins: Vec::new(),
         };
         self.finish(function, core);
         function
@@ -255,7 +257,32 @@ fn lowering(builtin: Builtin) -> Lowering {
     }
 }
 
-type Bindings = Vec<(VarId, Rhs)>;
+/// 値を計算する束縛と、join point の開始の並び。`seq` が後ろから組み立てる。
+enum Binding {
+    Let(VarId, Rhs),
+    /// ここより後ろで組み立てる式を本体にし、`scope` (枝が `Jump` する `Switch`) を範囲にする join point。
+    Join {
+        join: JoinId,
+        param: VarId,
+        scope: CExprId,
+    },
+}
+
+type Bindings = Vec<Binding>;
+
+/// 式の値の渡し先。
+#[derive(Clone, Copy)]
+enum Exit {
+    Return,
+    Jump(JoinId),
+}
+
+fn exit_with(exit: Exit, value: Atom) -> CExpr {
+    match exit {
+        Exit::Return => CExpr::Return(value),
+        Exit::Jump(join) => CExpr::Jump { join, arg: value },
+    }
+}
 
 struct FnLowering<'a> {
     module: &'a Module,
@@ -269,6 +296,8 @@ struct FnLowering<'a> {
     exprs: Vec<CExpr>,
     vars: Vec<VarInfo>,
     locals: ArenaMap<LocalId, Atom>,
+    /// `JoinId` から `Join` の式への索引。`seq` が join point を組み立てたときに埋める。
+    joins: Vec<Option<CExprId>>,
 }
 
 impl FnLowering<'_> {
@@ -297,13 +326,18 @@ impl FnLowering<'_> {
             }
             vars.push(var);
         }
-        let root = self.tail(root);
+        let root = self.tail(root, Exit::Return);
         CoreFn {
             name: name.to_string(),
             params: vars,
             vars: self.vars,
             body: root,
             exprs: self.exprs,
+            joins: self
+                .joins
+                .into_iter()
+                .map(|join| join.expect("every join point is built"))
+                .collect(),
         }
     }
 
@@ -319,17 +353,81 @@ impl FnLowering<'_> {
 
     fn seq(&mut self, bindings: Bindings, last: CExpr) -> CExprId {
         let mut id = self.push(last);
-        for (var, rhs) in bindings.into_iter().rev() {
-            id = self.push(CExpr::Let { var, rhs, body: id });
+        for binding in bindings.into_iter().rev() {
+            id = match binding {
+                Binding::Let(var, rhs) => self.push(CExpr::Let { var, rhs, body: id }),
+                Binding::Join { join, param, scope } => {
+                    let expr = self.push(CExpr::Join {
+                        join,
+                        param,
+                        body: id,
+                        scope,
+                    });
+                    self.joins[join.0 as usize] = Some(expr);
+                    expr
+                }
+            };
         }
         id
     }
 
-    /// 式の値を返すコード。
-    fn tail(&mut self, expr: ExprId) -> CExprId {
+    /// 式の値を `exit` に渡すコード。
+    fn tail(&mut self, expr: ExprId, exit: Exit) -> CExprId {
         let mut bindings = Vec::new();
-        let atom = self.atom(expr, &mut bindings);
-        self.seq(bindings, CExpr::Return(atom))
+        let last = self.tail_expr(expr, exit, &mut bindings);
+        self.seq(bindings, last)
+    }
+
+    /// 式の値を `exit` に渡す最後の命令を返す。値の計算に要る束縛は `out` に積む。末尾の `if` は、枝が直接 `exit` に
+    /// 渡す `Switch` にし、join point を作らない。
+    fn tail_expr(&mut self, id: ExprId, exit: Exit, out: &mut Bindings) -> CExpr {
+        let body = self.body;
+        match &body.exprs[id].kind {
+            ExprKind::If {
+                condition,
+                then_branch,
+                else_branch,
+            } => {
+                let scrutinee = self.atom(*condition, out);
+                let then_code = self.tail(*then_branch, exit);
+                let else_code = match else_branch {
+                    Some(else_branch) => self.tail(*else_branch, exit),
+                    // `else` のない `if` の値は `()` である
+                    None => self.push(exit_with(exit, Atom::Unit)),
+                };
+                CExpr::Switch {
+                    scrutinee,
+                    arms: vec![(FALSE, else_code), (TRUE, then_code)],
+                }
+            }
+            ExprKind::Block { stmts, tail } => {
+                self.stmts(stmts, out);
+                match tail {
+                    Some(tail) => self.tail_expr(*tail, exit, out),
+                    None => exit_with(exit, Atom::Unit),
+                }
+            }
+            ExprKind::Annot { expr, .. } => self.tail_expr(*expr, exit, out),
+            _ => {
+                let value = self.atom(id, out);
+                exit_with(exit, value)
+            }
+        }
+    }
+
+    fn stmts(&mut self, stmts: &[Stmt], out: &mut Bindings) {
+        for stmt in stmts {
+            match stmt {
+                Stmt::Let { pat, init, .. } => {
+                    let value = self.atom(*init, out);
+                    self.bind_pat(*pat, value);
+                }
+                // 式文の値は `Unit` なので捨ててよい
+                Stmt::Expr(expr) => {
+                    self.atom(*expr, out);
+                }
+            }
+        }
     }
 
     fn ty(&self, expr: ExprId) -> Type {
@@ -342,7 +440,7 @@ impl FnLowering<'_> {
 
     fn bind(&mut self, out: &mut Bindings, name: &str, ty: &Type, rhs: Rhs) -> Atom {
         let var = self.new_var(name, ty);
-        out.push((var, rhs));
+        out.push(Binding::Let(var, rhs));
         Atom::Var(var)
     }
 
@@ -473,37 +571,19 @@ impl FnLowering<'_> {
                     }
                 }
             }
-            ExprKind::If {
-                condition,
-                then_branch,
-                else_branch,
-            } => {
-                let scrutinee = self.atom(*condition, out);
-                let then_code = self.tail(*then_branch);
-                let else_code = match else_branch {
-                    Some(else_branch) => self.tail(*else_branch),
-                    None => self.push(CExpr::Return(Atom::Unit)),
-                };
-                let switch = self.push(CExpr::Switch {
-                    scrutinee,
-                    arms: vec![(FALSE, else_code), (TRUE, then_code)],
-                });
+            ExprKind::If { .. } => {
+                // 続きの式を join point の本体にし、`if` の値をその引数で受ける
+                let join = JoinId(self.joins.len() as u32);
+                self.joins.push(None);
+                let last = self.tail_expr(id, Exit::Jump(join), out);
+                let scope = self.push(last);
                 let ty = self.ty(id);
-                self.bind(out, "t", &ty, Rhs::Nested(switch))
+                let param = self.new_var("t", &ty);
+                out.push(Binding::Join { join, param, scope });
+                Atom::Var(param)
             }
             ExprKind::Block { stmts, tail } => {
-                for stmt in stmts {
-                    match stmt {
-                        Stmt::Let { pat, init, .. } => {
-                            let value = self.atom(*init, out);
-                            self.bind_pat(*pat, value);
-                        }
-                        // 式文の値は `Unit` なので捨ててよい
-                        Stmt::Expr(expr) => {
-                            self.atom(*expr, out);
-                        }
-                    }
-                }
+                self.stmts(stmts, out);
                 match tail {
                     Some(tail) => self.atom(*tail, out),
                     None => Atom::Unit,
@@ -543,6 +623,7 @@ impl FnLowering<'_> {
                     exprs: Vec::new(),
                     vars: Vec::new(),
                     locals: ArenaMap::default(),
+                    joins: Vec::new(),
                 }
                 .lower(&name, &captured, params, &param_types, *lambda_body);
                 self.program.finish(function, core);

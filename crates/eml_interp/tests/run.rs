@@ -30,6 +30,7 @@ fn leaking_program() -> Program {
                     body: CExprId(0),
                 },
             ],
+            joins: Vec::new(),
         }],
         main: FnIdx(0),
         strings: vec!["leaked".to_string()],
@@ -53,4 +54,13 @@ fn long_statement_sequence_does_not_overflow_the_stack() {
     let mut body = "  let s = \"x\"\n".repeat(5000);
     body.push_str("  println s");
     assert_eq!(run(&main_with(&body)), ("x\n".to_string(), Ok(())));
+}
+
+#[test]
+fn long_sequence_of_if_statements_does_not_overflow_the_stack() {
+    // 文の `if` は join point になり、続きの文はその本体に入れ子になる。後段は、この入れ子を再帰せずに処理しなければならない
+    let mut body = "  if True then println \"x\"\n".repeat(5000);
+    body.push_str("  println \"done\"");
+    let expected = format!("{}done\n", "x\n".repeat(5000));
+    assert_eq!(run(&main_with(&body)), (expected, Ok(())));
 }
