@@ -682,6 +682,10 @@ mod tests {
             fault(Fault::Internal("a switch without a matching arm")),
             "internal error: a switch without a matching arm in `f`"
         );
+    }
+
+    #[test]
+    fn leaks_are_displayed_with_the_object_counts() {
         let leak = RuntimeError::Leak(vec![("Closure".to_string(), 2), ("String".to_string(), 1)]);
         assert_eq!(
             leak.to_string(),
