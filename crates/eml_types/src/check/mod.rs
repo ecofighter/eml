@@ -1,4 +1,7 @@
+use std::collections::HashMap;
+
 use eml_diagnostics::{Diagnostic, Label};
+use eml_hir::builtin::{BUILTINS, Builtin};
 use eml_hir::{FunctionId, Generics, Module, RowRef, TypeRef, TypeRefId, TypeRefKind};
 use la_arena::Arena;
 use la_arena::ArenaMap;
@@ -18,6 +21,19 @@ use report::AmbientSource;
 
 pub(crate) fn check_module(module: &Module) -> (TypedModule, Vec<Diagnostic>) {
     let mut table = Table::new();
+    // 組み込みの型は Prelude のシグネチャから、ユーザーの関数と同じ経路で作る。本体がないので、作ってすぐ多相化する
+    let mut builtins: HashMap<Builtin, Scheme> = HashMap::new();
+    for info in BUILTINS {
+        let Some(signature) = module.builtins.get(&info.builtin) else {
+            continue;
+        };
+        let rigids = Rigids::new(&mut table, &signature.generics);
+        let ty = lower_signature(&mut table, signature, &rigids);
+        table.closure_kinds(ty, info.arity, &[]);
+        let mut scheme = Scheme::new(ty, &rigids);
+        scheme.generalize(&table);
+        builtins.insert(info.builtin, scheme);
+    }
     let mut diagnostics = Vec::new();
     let mut rigids = ArenaMap::default();
     let mut schemes: ArenaMap<FunctionId, Scheme> = ArenaMap::default();
@@ -61,6 +77,7 @@ pub(crate) fn check_module(module: &Module) -> (TypedModule, Vec<Diagnostic>) {
                 body,
                 rigids: &rigids[id],
                 schemes: &schemes,
+                builtins: &builtins,
                 table: &mut table,
                 diagnostics: &mut diagnostics,
                 ambient: Row::pure(),

@@ -1,6 +1,5 @@
 //! 型、row、Kind の検査 (docs/spec/types.md)。
 
-mod builtins;
 mod check;
 mod kind;
 mod scc;

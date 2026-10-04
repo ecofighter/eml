@@ -172,7 +172,8 @@ impl Table {
         Ty(self.shapes.len() as u32 - 1)
     }
 
-    /// トップレベルの関数と組み込みの関数型。どちらも `Unr` である。
+    /// `Unr` の関数型。表の単体テストで型を組み立てるために使う。
+    #[cfg(test)]
     pub fn function(&mut self, param: Ty, row: Row, ret: Ty) -> Ty {
         self.alloc(TyShape::Fn {
             param,

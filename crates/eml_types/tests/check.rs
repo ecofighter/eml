@@ -511,3 +511,17 @@ fn an_undefined_effect_does_not_hide_an_unrelated_missing_effect() {
     );
     assert!(out.contains("E2002 8:3 `l` performs `IO`"), "{out}");
 }
+
+#[test]
+fn composition_has_the_prelude_type() {
+    // `>>` の型は Prelude にある (crates/eml_hir/src/prelude.em)。手で組み立てていたときと同じ型になる
+    let text = "compose : (Int -> Int) -> (Int -> Int) -> Int -> Int\ncompose f g = f >> g\n\nback : (Int -> Int) -> (Int -> Int) -> Int -> Int\nback f g = g << f";
+    insta::assert_snapshot!(check_text(text), @"
+    compose : (Int -> Int) -> (Int -> Int) -> Int -> Int
+      f#0 : Int -> Int
+      g#1 : Int -> Int
+    back : (Int -> Int) -> (Int -> Int) -> Int -> Int
+      f#0 : Int -> Int
+      g#1 : Int -> Int
+    ");
+}
