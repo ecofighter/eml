@@ -259,11 +259,11 @@ fn ifs_in_a_condition_nest_join_points() {
     let text = "choose : Bool -> Bool -> Int\nchoose a b =\n  let n = if (if a then b else False) then 1 else 2\n  n + 1\n\nmain : Unit -> <IO> Unit\nmain () = ()";
     insta::assert_snapshot!(core_text(text), @r"
     fn choose(a0, b1) {
+      join j0(t3) [] {
+        let t4 = prim +(t3, 1)
+        return t4
+      }
       join j1(t2) [] {
-        join j0(t3) [] {
-          let t4 = prim +(t3, 1)
-          return t4
-        }
         switch t2 {
           #0 ->
             jump j0(2)
@@ -342,12 +342,12 @@ fn calls_save_the_variables_used_after_them() {
     insta::assert_snapshot!(core_text(text), @r"
     fn around(n0, s1) {
       let t2 = prim +(n0, 1)
-      let t3 = prim >(n0, 0)
       join j0(t5) [t2] {
         let t6 = prim show_int(t2)
         let t7 = prim ++(t5, t6)
         return t7
       }
+      let t3 = prim >(n0, 0)
       switch t3 {
         #0 ->
           jump j0(s1)

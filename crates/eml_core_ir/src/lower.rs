@@ -361,7 +361,7 @@ fn lowering(builtin: Builtin) -> Lowering {
 /// 値を計算する束縛と、join point の開始の並び。`seq` が後ろから組み立てる。
 enum Binding {
     Let(VarId, Rhs),
-    /// ここより後ろで組み立てる式を本体にし、`scope` (枝が `Jump` する `Switch`) を範囲にする join point。
+    /// ここより後ろで組み立てる式を本体にし、`scope` (条件の計算と、枝が `Jump` する `Switch`) を範囲にする join point。
     Join {
         join: JoinId,
         param: VarId,
@@ -770,11 +770,12 @@ impl FnLowering<'_> {
                 }
             }
             ExprKind::If { .. } => {
-                // 続きの式を join point の本体にし、`if` の値をその引数で受ける
+                // 続きの式を join point の本体にし、`if` の値をその引数で受ける。条件の計算も範囲に入れる。条件が末尾に
+                // ない `if` のとき、その join point が外側の join point の範囲の中にでき、枝から外側へ jump できる
+                // (docs/spec/core-ir.md)
                 let join = JoinId(self.joins.len() as u32);
                 self.joins.push(None);
-                let last = self.tail_expr(id, Exit::Jump(join), out);
-                let scope = self.push(last);
+                let scope = self.tail(id, Exit::Jump(join));
                 let ty = self.ty(id);
                 let param = self.new_var("t", &ty);
                 out.push(Binding::Join { join, param, scope });
