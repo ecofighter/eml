@@ -142,7 +142,7 @@ R3b で済んだ。`Frame` を種類の enum にし、記述子をペイロー�
 | `eml_syntax` | S1 まで実装済み。lexer、レイアウト段、パーサ、型付き AST ラッパ。入れ子の深さの上限 (E0013、フィールドアクセスの連鎖を含む) を持つ。型付き AST は範囲、キーワードの範囲、リテラルの値を持ち、HIR はこれだけを使う |
 | `eml_hir` | 段階3b まで実装済み。宣言の対応づけ、名前解決、演算子の列の組み直し、`&&` / `\|\|` / `\|>` / `<\|` の脱糖、E1001〜E1006。ラムダと、シグネチャの型変数と row 変数の表。組み込みのシグネチャは Prelude (`prelude.em`) に、型とエフェクトは ID で表す item にある。`effect` の宣言と操作の item、handler、`resume`、`drop`、E1007〜E1014。エフェクトの型引数と E1015、`multi` の操作 |
 | `eml_types` | 段階3b まで実装済み。型・row・Kind の表現と単一化、シグネチャに対する本体の検査、E2001〜E2005。型変数と row 変数の表、スキームと SCC ごとの Kind の推論、使用回数のパス、関数値と部分適用の検査。線形性と網羅性の検査は未実装。継続の型、操作のスキーム、handle の検査、Kind の制約の由来と E3001。row のラベルの型引数、`multi` の操作の `k`、`return` の節の捕獲の制約 |
-| `eml_core_ir` | 段階3b まで実装済み。ANF への変換、Perceus の `dup` / `decref` の挿入。ラムダのクロージャ変換 (捕まえた変数を先頭の引数に持つ関数への持ち上げ)、関数値の呼び出し。join point と末尾呼び出し、Perceus の独立したパスと verifier、入口の関数。handle の本体と節の持ち上げ、操作を包む関数、`Call::{Handle, Perform, Resume}`、`Rhs::Drop` |
+| `eml_core_ir` | 段階3b まで実装済み。ANF への変換、Perceus の `dup` / `decref` の挿入。ラムダのクロージャ変換 (捕まえた変数を先頭の引数に持つ関数への持ち上げ)、関数値の呼び出し。join point (`captures` を持つ) と末尾呼び出し、関数ごとに1回の生存解析、Perceus の独立したパス (`saved` を含む) と verifier、入口の関数。handle の本体と節の持ち上げ、操作を包む関数、`Call::{Handle, Perform, Resume}`、`Rhs::Drop` |
 | `eml_runtime` | 段階3b まで実装済み。世代番号つきのヒープ、RC、記述子、`debug_heap` のリーク検出、`OutputSink` (テストで出力を捕まえる `Captured` を含む)。クロージャのオブジェクト、継続のフレームの種類 (`Return`、`Apply`、`Io`)、共有されたオブジェクトの複製。handler のフレーム (`Frame::Handler`) と継続オブジェクト (`Payload::Continuation`)。共有された継続の区間の複製 |
 | `eml_interp` | 段階3b まで実装済み。CEK 機械 (ヒープ上の継続のフレーム、最下部の `IO` の handler)、プリミティブ、`println`、eval/apply によるクロージャの呼び出し、型を付けた実行時エラー。handle、`perform`、`resume`、`drop` の実行。multi-shot の再開 |
 | `eml_test_support` | 開発専用。結合テストのパイプライン (段階ごとの feature で選ぶ) と、診断を文字列にする関数 |
@@ -203,3 +203,4 @@ R3b で済んだ。`Frame` を種類の enum にし、記述子をペイロー�
 | リファクタリング R3b | 継続のフレームを種類の enum にし、記述子をペイロードの種類から決めるようにした。呼び出しの後で使う変数を Core IR に記録してフレームにはその変数だけを退避し、`Owned::refs` をなくした。共有されたオブジェクトの複製を `take_or_copy` にまとめて `Clone` をなくし、実行時エラーに型を付けた |
 | 縦の貫通 段階3a | ユーザー定義のエフェクトの `never` と `once` の操作、deep handler、`resume`、`drop` を通した。handle の本体と節をクロージャに持ち上げ、`perform` で handler フレームの外側を切り離し、`resume` でつなぎ直す。`drop k` は継続の区間の解放で済ませ、クリーンアップ情報をなくした。Kind の制約に由来を持たせ、違反を E3001 にした |
 | 縦の貫通 段階3b | `multi` の操作と multi-shot の再開、エフェクトの型引数を通した。row のラベルに型引数を持たせ、同じエフェクトのラベルを順に対にして単一化する。共有された継続を再開するときは区間を写し、フレームはつねに一意に保つ。持ち越し規則は段階5に残した |
+| join point の解析の整理 | join point に本体が使う外側の変数 (`captures`) を持たせ、生存解析を関数ごとに1回にした。Perceus が呼び出しの `saved` も決め、verifier は `captures` を宣言として確かめる |

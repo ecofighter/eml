@@ -121,6 +121,11 @@
 - `eml_types` の `table/tests.rs` と `ty.rs` の単体テストの row とラベルの組み立てを `Label` と `EffectLabel::args` に合わせ、`EffectDef` の組み立てに `generics` を足した (種類3)。期待値は変えていない
 - `tests/ui/run/multi_over_once.em` は、持ち越し規則がない段階3b での振る舞い (メモリ安全に `once` の `k` を写す) を確かめる。段階5で持ち越し規則を入れたら `check-fail/` に移す (種類1の予定)
 
+### join point の解析の整理
+
+- join point に `captures` の欄を足したので、`eml_core_ir/tests/lower.rs` の `a_non_tail_if_keeps_strings_used_later`、`ifs_in_a_condition_nest_join_points`、`calls_save_the_variables_used_after_them` の `join` の行に `[...]` が付いた (種類2)。`dup` と `decref` の位置と `saved` の並びは変わっていない
+- `eml_core_ir/tests/verify.rs` の手書きの Core IR に `captures` を足した (種類3)。期待値は変えていない
+
 ## よく使うコマンド
 
 ```sh
