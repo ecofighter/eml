@@ -9,7 +9,7 @@ mod translate;
 mod verify;
 
 pub use eml_types::Linearity;
-pub use pipeline::lower;
+pub use pipeline::{Pass, lower, lower_until};
 pub use pretty::pretty;
 pub use verify::{VerifyError, verify, verify_scopes};
 
@@ -114,7 +114,7 @@ pub enum CExpr {
         join: JoinId,
         param: VarId,
         /// 本体が使う外側の変数 (`param` を除く)。RC の対象かどうかによらずすべて入れ、`VarId` の昇順に並べる。
-        /// Perceus の最初の解析が埋め直すので、変換や `simplify` は空のままでよい。
+        /// パスの中では古くなってよく、パスの間ではパイプラインが埋め直す (docs/spec/core-ir.md のパスの表)。
         captures: Vec<VarId>,
         body: CExprId,
         scope: CExprId,

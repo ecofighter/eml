@@ -12,7 +12,7 @@ use std::fmt::Write;
 use std::sync::Arc;
 
 #[cfg(feature = "core")]
-use eml_core_ir::Program;
+use eml_core_ir::{Pass, Program};
 #[cfg(feature = "core")]
 use eml_diagnostics::has_errors;
 use eml_diagnostics::{Diagnostic, FileId, Label, LineCol, SourceFiles};
@@ -140,6 +140,18 @@ pub fn core(text: &str) -> Program {
         checked.diagnostics
     );
     eml_core_ir::lower(&checked.module, &checked.typed)
+}
+
+/// 確かめたいパスの直後の Core IR を見るテストのため (docs/implementation/testing.md)。
+#[cfg(feature = "core")]
+pub fn core_until(text: &str, last: Pass) -> Program {
+    let checked = check(text);
+    assert!(
+        !has_errors(&checked.diagnostics),
+        "{:#?}",
+        checked.diagnostics
+    );
+    eml_core_ir::lower_until(&checked.module, &checked.typed, last)
 }
 
 /// 実行のテストでは、つねに `debug_heap` を有効にする (docs/implementation/testing.md)。

@@ -17,7 +17,8 @@ use crate::{
 use program::{ProgramBuilder, effect_table};
 use types::{split_arrows, var_info};
 
-/// 誤りのない型付き HIR を、RC の命令のない Core IR にする。`captures` は空のままでよい (docs/spec/core-ir.md)。
+/// 誤りのない型付き HIR を、RC の命令のない Core IR にする。`captures` は空のままでよく、パイプラインが埋める
+/// (docs/spec/core-ir.md のパスの表)。
 pub(crate) fn translate(module: &Module, typed: &TypedModule) -> Program {
     let mut builder = ProgramBuilder::new(module, typed);
     let mut indices = ArenaMap::default();

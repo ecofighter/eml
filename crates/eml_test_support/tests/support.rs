@@ -1,9 +1,11 @@
-use eml_core_ir::{Atom, CExpr, CExprId, CoreFn, FnIdx, Linearity, Rhs, VarId, verify};
+use eml_core_ir::{
+    Atom, CExpr, CExprId, CoreFn, FnIdx, Linearity, Pass, Rhs, VarId, pretty, verify,
+};
 use eml_diagnostics::{Diagnostic, ErrorCode, Label, TextRange};
 use eml_test_support::ir::{boxed, program, unboxed, var};
 use eml_test_support::{
-    check, core, full, lower, lower_clean, parse, parse_clean, run, short, short_text, source,
-    with_diagnostics,
+    check, core, core_until, full, lower, lower_clean, parse, parse_clean, run, short, short_text,
+    source, with_diagnostics,
 };
 
 fn range(start: u32, end: u32) -> TextRange {
@@ -57,6 +59,24 @@ fn run_executes_with_the_heap_checks() {
 #[should_panic]
 fn core_rejects_programs_with_errors() {
     core("f : Int -> Int\nf x = g x");
+}
+
+#[test]
+fn core_until_stops_after_the_named_pass() {
+    // `simplify` は、値を返すだけの join point を消す
+    let joined = "pick : Bool -> Int\npick c =\n  let y = if c then 1 else 2\n  y\n\nmain : Unit -> <IO> Unit\nmain () = ()";
+    assert!(pretty(&core_until(joined, Pass::Translate)).contains("join j0"));
+    assert!(!pretty(&core_until(joined, Pass::Simplify)).contains("join"));
+    // `s` を2回使うので、Perceus の後にだけ `dup` が入る
+    let twice =
+        "twice : String -> String\ntwice s = s ++ s\n\nmain : Unit -> <IO> Unit\nmain () = ()";
+    assert!(!pretty(&core_until(twice, Pass::Translate)).contains("dup"));
+    assert!(!pretty(&core_until(twice, Pass::Simplify)).contains("dup"));
+    assert!(pretty(&core_until(twice, Pass::Perceus)).contains("dup s0"));
+    assert_eq!(
+        pretty(&core_until(twice, Pass::Perceus)),
+        pretty(&core(twice))
+    );
 }
 
 #[test]
