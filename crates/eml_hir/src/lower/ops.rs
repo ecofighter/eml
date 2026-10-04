@@ -156,7 +156,7 @@ impl BodyLowering<'_> {
                     range,
                 )
             }
-            "|>" => self.call(rhs, vec![lhs], range),
+            "|>" => self.pipe(lhs, rhs, range),
             "<|" => self.call(lhs, vec![rhs], range),
             _ => {
                 let callee = match Builtin::binary_operator(op) {

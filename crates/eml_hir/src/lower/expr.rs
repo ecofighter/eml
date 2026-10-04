@@ -209,6 +209,34 @@ impl<'a> BodyLowering<'a> {
         self.alloc(ExprKind::Call { callee, args }, range)
     }
 
+    /// `x |> f a` を `{ let $pipe = x; f a $pipe }` にする。`x` を先に評価するため (docs/spec/declarations.md の標準の
+    /// 演算子の表)。`$` は識別子に使えないので、作った変数はユーザーの名前と重ならない。作った式の範囲は `x` の範囲に
+    /// して、型の誤りを `x` の位置に出す。
+    pub(super) fn pipe(&mut self, value: ExprId, function: ExprId, range: TextRange) -> ExprId {
+        let value_range = self.exprs[value].range;
+        let local = self.locals.alloc(Local {
+            name: "$pipe".to_string(),
+            range: value_range,
+        });
+        let pat = self.pats.alloc(Pat {
+            kind: PatKind::Bind(local),
+            range: value_range,
+        });
+        let arg = self.alloc(ExprKind::Path(Res::Local(local)), value_range);
+        let call = self.call(function, vec![arg], range);
+        self.alloc(
+            ExprKind::Block {
+                stmts: vec![Stmt::Let {
+                    pat,
+                    ty: None,
+                    init: value,
+                }],
+                tail: Some(call),
+            },
+            range,
+        )
+    }
+
     fn lower_block(&mut self, block: &ast::Block, range: TextRange) -> ExprId {
         let mark = self.scope.len();
         let all: Vec<ast::Stmt> = block.stmts().collect();

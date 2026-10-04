@@ -123,7 +123,7 @@ dir </> name = join_path dir name
 | `==` `!=` `<` `<=` `>` `>=` | `Int -> Int -> Bool`。`String` などの等値を `==` で書けるようにするかは、`data` と `match` を実装するときに決める |
 | `++` | `String -> String -> String` |
 | `&&` `\|\|` | `Bool -> Bool -> Bool`。短絡評価する。HIR で `a && b` を `if a then b else False` に、`a \|\| b` を `if a then True else b` に脱糖する |
-| `\|>` `<\|` | `x \|> f` と `f <\| x` は、HIR で関数適用 `f x` に脱糖する |
+| `\|>` `<\|` | `x \|> f` は `x` を先に評価してから `f` に適用する。HIR で `{ let p = x; f p }` に脱糖する。`f <\| x` は関数適用 `f x` に脱糖する |
 | `>>` `<<` | 関数合成 |
 | `::` | リストのコンストラクタ (S2 の `Prelude`) |
 
