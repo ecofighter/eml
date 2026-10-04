@@ -1,9 +1,8 @@
 use std::collections::HashMap;
 
 use eml_diagnostics::{Diagnostic, FileId, Label, TextRange};
-use eml_syntax::{SyntaxKind, SyntaxNode, SyntaxToken, ast};
+use eml_syntax::{SyntaxKind, SyntaxToken, ast};
 use la_arena::Arena;
-use rowan::ast::AstNode;
 
 use super::types::{TypeLowering, TypeScope};
 use crate::builtin::Builtin;
@@ -42,7 +41,7 @@ impl<'a> BodyLowering<'a> {
     }
 
     pub(super) fn lower_equation(mut self, equation: &ast::Equation) -> Body {
-        let range = equation.syntax().text_range();
+        let range = equation.range();
         let params = equation
             .params()
             .map(|pat| self.lower_pat(Some(pat), range))
@@ -61,7 +60,7 @@ impl<'a> BodyLowering<'a> {
         let Some(expr) = expr else {
             return self.alloc(ExprKind::Missing, fallback);
         };
-        let range = expr.syntax().text_range();
+        let range = expr.range();
         match expr {
             ast::Expr::Literal(literal) => {
                 // 未対応のリテラルと壊れた値は、字句解析と構文解析が報告済み
@@ -81,7 +80,7 @@ impl<'a> BodyLowering<'a> {
                 let args = app
                     .args()
                     .map(|arg| {
-                        let arg_range = arg.syntax().text_range();
+                        let arg_range = arg.range();
                         self.lower_expr(Some(arg), arg_range)
                     })
                     .collect();
@@ -120,19 +119,19 @@ impl<'a> BodyLowering<'a> {
                 self.alloc(ExprKind::Lambda { params, body }, range)
             }
             ast::Expr::MatchExpr(e) => {
-                self.unsupported(keyword(e.syntax()), "`match` is not supported yet")
+                self.unsupported(e.keyword_range(), "`match` is not supported yet")
             }
             ast::Expr::HandleExpr(e) => {
-                self.unsupported(keyword(e.syntax()), "handlers are not supported yet")
+                self.unsupported(e.keyword_range(), "handlers are not supported yet")
             }
             ast::Expr::LetExpr(e) => {
-                self.unsupported(keyword(e.syntax()), "`let ... in` is not supported yet")
+                self.unsupported(e.keyword_range(), "`let ... in` is not supported yet")
             }
             ast::Expr::ResumeExpr(e) => {
-                self.unsupported(keyword(e.syntax()), "`resume` is not supported yet")
+                self.unsupported(e.keyword_range(), "`resume` is not supported yet")
             }
             ast::Expr::DropExpr(e) => {
-                self.unsupported(keyword(e.syntax()), "`drop` is not supported yet")
+                self.unsupported(e.keyword_range(), "`drop` is not supported yet")
             }
             ast::Expr::FieldExpr(_) => self.unsupported(range, "field access is not supported yet"),
             ast::Expr::TupleExpr(_) => self.unsupported(range, "tuples are not supported yet"),
@@ -209,7 +208,7 @@ impl<'a> BodyLowering<'a> {
         let mut stmts = Vec::new();
         let mut tail = None;
         for (index, stmt) in all.iter().enumerate() {
-            let stmt_range = stmt.syntax().text_range();
+            let stmt_range = stmt.range();
             match stmt {
                 ast::Stmt::ExprStmt(stmt) => {
                     let expr = self.lower_expr(stmt.expr(), stmt_range);
@@ -227,7 +226,7 @@ impl<'a> BodyLowering<'a> {
                     stmts.push(Stmt::Let { pat, ty, init });
                 }
                 ast::Stmt::UseStmt(stmt) => {
-                    self.unsupported(keyword(stmt.syntax()), "`use` is not supported yet");
+                    self.unsupported(stmt.keyword_range(), "`use` is not supported yet");
                 }
             }
         }
@@ -242,7 +241,7 @@ impl<'a> BodyLowering<'a> {
                 range: fallback,
             });
         };
-        let range = pat.syntax().text_range();
+        let range = pat.range();
         let kind = match pat {
             ast::Pat::BindPat(bind) => match bind.name() {
                 Some(name) => {
@@ -280,7 +279,7 @@ impl<'a> BodyLowering<'a> {
         let ast::Pat::AnnotPat(annot) = pat else {
             return self.lower_pat(Some(pat), TextRange::default());
         };
-        let range = annot.syntax().text_range();
+        let range = annot.range();
         let ty = self.lower_type(annot.ty(), range);
         let inner = self.lower_pat(annot.pat(), range);
         self.pats.alloc(Pat {
@@ -316,10 +315,4 @@ impl<'a> BodyLowering<'a> {
     pub(super) fn alloc(&mut self, kind: ExprKind, range: TextRange) -> ExprId {
         self.exprs.alloc(Expr { kind, range })
     }
-}
-
-/// キーワードで始まる構文は、診断でキーワードだけを指す。本体全体を指すと読みにくいため。
-fn keyword(node: &SyntaxNode) -> TextRange {
-    node.first_token()
-        .map_or(node.text_range(), |token| token.text_range())
 }

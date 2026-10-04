@@ -213,7 +213,6 @@ impl rowan::Language for EmlLanguage {
 pub type SyntaxNode = rowan::SyntaxNode<EmlLanguage>;
 pub type SyntaxToken = rowan::SyntaxToken<EmlLanguage>;
 pub type SyntaxElement = rowan::SyntaxElement<EmlLanguage>;
-pub type SyntaxNodePtr = rowan::ast::SyntaxNodePtr<EmlLanguage>;
 
 #[cfg(test)]
 mod tests {

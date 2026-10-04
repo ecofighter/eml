@@ -2,7 +2,6 @@
 
 use eml_diagnostics::{Diagnostic, Label, TextRange, TextSize};
 use eml_syntax::ast::{self, OpSeqElement};
-use rowan::ast::AstNode;
 
 use super::expr::BodyLowering;
 use crate::builtin::{Assoc, Builtin, fixity};
@@ -33,12 +32,12 @@ const NEGATE_PRECEDENCE: u8 = 6;
 
 impl BodyLowering<'_> {
     pub(super) fn lower_op_seq(&mut self, seq: &ast::OpSeq) -> ExprId {
-        let range = seq.syntax().text_range();
+        let range = seq.range();
         let mut pieces = Vec::new();
         for element in seq.elements() {
             match element {
                 OpSeqElement::Operand(expr) => {
-                    let expr_range = expr.syntax().text_range();
+                    let expr_range = expr.range();
                     pieces.push(Piece::Operand(self.lower_expr(Some(expr), expr_range)));
                 }
                 OpSeqElement::Operator(token) => pieces.push(Piece::Operator {

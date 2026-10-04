@@ -1,7 +1,6 @@
 use eml_diagnostics::{Diagnostic, FileId, Label, TextRange};
 use eml_syntax::{SyntaxToken, ast};
 use la_arena::Arena;
-use rowan::ast::AstNode;
 
 use crate::builtin::BuiltinType;
 use crate::hir::{
@@ -31,7 +30,7 @@ impl TypeLowering<'_> {
         let Some(ty) = ty else {
             return self.alloc(TypeRefKind::Error, fallback);
         };
-        let range = ty.syntax().text_range();
+        let range = ty.range();
         let kind = match ty {
             ast::Type::PathType(path) => self.path(&path, range),
             ast::Type::ParenType(paren) => return self.lower(paren.ty(), range),
@@ -96,16 +95,12 @@ impl TypeLowering<'_> {
                 self.diagnostics.push(Diagnostic::error(
                     codes::UNDEFINED_TYPE,
                     format!("cannot find effect `{}`", name.text()),
-                    Label::new(
-                        self.file,
-                        effect.syntax().text_range(),
-                        "not found in this scope",
-                    ),
+                    Label::new(self.file, effect.range(), "not found in this scope"),
                 ));
                 valid = false;
             }
         }
-        let range = row.syntax().text_range();
+        let range = row.range();
         match (valid, tail) {
             (false, _) => RowRef::Error,
             (true, Some(tail)) => RowRef::Open {

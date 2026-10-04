@@ -7,7 +7,6 @@ edition.workspace = true
 eml_diagnostics.workspace = true
 eml_syntax.workspace = true
 la-arena.workspace = true
-rowan.workspace = true
 
 [dev-dependencies]
 eml_test_support = { workspace = true, features = ["hir"] }

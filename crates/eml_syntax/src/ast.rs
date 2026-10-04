@@ -1,5 +1,6 @@
 //! アクセサは、HIR への変換で必要になったものから足していく。
 
+use eml_diagnostics::TextRange;
 use rowan::NodeOrToken;
 use rowan::ast::{AstChildren, AstNode, support};
 
@@ -26,6 +27,17 @@ macro_rules! ast_node {
 
             fn syntax(&self) -> &SyntaxNode {
                 &self.syntax
+            }
+        }
+
+        impl $name {
+            pub fn range(&self) -> TextRange {
+                self.syntax.text_range()
+            }
+
+            /// 最初のトークンの範囲。キーワードで始まる構文の診断は、本体全体ではなくキーワードだけを指すと読みやすい。
+            pub fn keyword_range(&self) -> TextRange {
+                keyword_range(&self.syntax)
             }
         }
     )*};
@@ -57,6 +69,16 @@ macro_rules! ast_enum {
                 match self {
                     $($name::$variant(node) => node.syntax(),)*
                 }
+            }
+        }
+
+        impl $name {
+            pub fn range(&self) -> TextRange {
+                self.syntax().text_range()
+            }
+
+            pub fn keyword_range(&self) -> TextRange {
+                keyword_range(self.syntax())
             }
         }
     };
@@ -311,12 +333,14 @@ impl IfExpr {
 }
 
 impl AppExpr {
+    /// 最初の子が式でなければ (構文エラーの `ERROR` ノードなど) `None` を返す。2つ目以降の子を呼ばれるものと
+    /// 取り違えないため。
     pub fn callee(&self) -> Option<Expr> {
-        support::child(&self.syntax)
+        self.syntax.first_child().and_then(Expr::cast)
     }
 
     pub fn args(&self) -> impl Iterator<Item = Expr> {
-        support::children::<Expr>(&self.syntax).skip(1)
+        self.syntax.children().skip(1).filter_map(Expr::cast)
     }
 }
 
@@ -429,4 +453,9 @@ fn name_token(node: &SyntaxNode) -> Option<SyntaxToken> {
                 SyntaxKind::LIDENT | SyntaxKind::OP | SyntaxKind::MINUS
             )
         })
+}
+
+fn keyword_range(node: &SyntaxNode) -> TextRange {
+    node.first_token()
+        .map_or(node.text_range(), |token| token.text_range())
 }

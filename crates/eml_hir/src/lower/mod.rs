@@ -5,9 +5,8 @@ mod types;
 use std::collections::HashMap;
 
 use eml_diagnostics::{Diagnostic, FileId, Label, TextRange};
-use eml_syntax::{SyntaxKind, SyntaxNode, SyntaxToken, ast};
+use eml_syntax::{SyntaxKind, SyntaxToken, ast};
 use la_arena::Arena;
-use rowan::ast::AstNode;
 
 use crate::hir::*;
 use crate::{codes, not_yet_supported};
@@ -83,9 +82,7 @@ pub fn lower(file: FileId, source: &ast::SourceFile) -> (Module, Vec<Diagnostic>
         let mut type_vars = Arena::new();
         let mut row_vars = Arena::new();
         let signature = signature.map(|(_, node, _)| {
-            let range = node
-                .ty()
-                .map_or(node.syntax().text_range(), |ty| ty.syntax().text_range());
+            let range = node.ty().map_or(node.range(), |ty| ty.range());
             let ty = TypeLowering {
                 file,
                 types: &mut types,
@@ -171,17 +168,17 @@ fn collect(
             }
             ast::Item::DataItem(item) => diagnostics.push(not_yet_supported(
                 file,
-                keyword(item.syntax()),
+                item.keyword_range(),
                 "`data` declarations are not supported yet",
             )),
             ast::Item::EffectItem(item) => diagnostics.push(not_yet_supported(
                 file,
-                keyword(item.syntax()),
+                item.keyword_range(),
                 "`effect` declarations are not supported yet",
             )),
             ast::Item::FixityItem(item) => diagnostics.push(not_yet_supported(
                 file,
-                keyword(item.syntax()),
+                item.keyword_range(),
                 "fixity declarations are not supported yet",
             )),
             // `type` は構文の段階 S2 の構文で、パーサが E0004 を報告済み
@@ -224,9 +221,4 @@ fn value_name(
         "defining operators is not supported yet",
     ));
     None
-}
-
-fn keyword(node: &SyntaxNode) -> TextRange {
-    node.first_token()
-        .map_or(node.text_range(), |token| token.text_range())
 }

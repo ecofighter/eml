@@ -199,7 +199,6 @@ dependencies = [
  "eml_test_support",
  "insta",
  "la-arena",
- "rowan",
 ]
 
 [[package]]

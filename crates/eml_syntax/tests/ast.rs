@@ -1,5 +1,6 @@
+use eml_diagnostics::TextRange;
 use eml_syntax::SyntaxKind::{self, *};
-use eml_syntax::ast::{Expr, Item, OpSeqElement, Pat, SourceFile, Stmt, Type};
+use eml_syntax::ast::{AppExpr, Expr, Item, OpSeqElement, Pat, SourceFile, Stmt, Type};
 use rowan::ast::AstNode;
 
 fn source(text: &str) -> SourceFile {
@@ -248,4 +249,32 @@ fn parenthesized_expression() {
         panic!("expected a parenthesized expression");
     };
     assert!(matches!(paren.expr(), Some(Expr::PathExpr(_))));
+}
+
+#[test]
+fn ranges_of_nodes_and_their_keywords() {
+    let file = source("f x = if x == 0 then 1 else x");
+    let equation = first_equation(&file);
+    assert_eq!(equation.range(), TextRange::new(0.into(), 29.into()));
+    let body = equation.body().expect("a body");
+    assert_eq!(body.range(), TextRange::new(6.into(), 29.into()));
+    assert_eq!(body.keyword_range(), TextRange::new(6.into(), 8.into()));
+}
+
+#[test]
+fn callee_is_the_first_child_even_when_it_is_an_error() {
+    // `€` は ERROR ノードになる。最初の `Expr` の子を探すと、引数の `x` を呼ばれるものと取り違える。
+    let parsed = eml_test_support::parse("f = € x");
+    let app = parsed
+        .parse
+        .syntax()
+        .descendants()
+        .find_map(AppExpr::cast)
+        .expect("an application");
+    assert!(app.callee().is_none());
+    let args: Vec<String> = app
+        .args()
+        .map(|arg| arg.syntax().text().to_string())
+        .collect();
+    assert_eq!(args, ["x"]);
 }
