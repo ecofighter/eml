@@ -184,7 +184,8 @@ R0 の範囲ではないが、`status.md` に置く一覧の中身をここで�
 - `cargo test`、`cargo clippy --all-targets`、`cargo fmt --check` が通る
 - 既存のスナップショット (インラインと `snapshots/` のファイル) は1文字も変わらない。増えるスナップショットは、移した2件の UI テストだけである
 - 移した2件の UI テストの stdout が、元のテストの期待値と一致する
-- パイプラインを組む処理は `eml_cli` と `eml_test_support` の2か所、行と列の計算は `eml_diagnostics` の1か所になる
+- 結合テストでパイプラインを組む処理は `eml_test_support` の1か所、製品のコードでは `eml_cli` の1か所になる。`src/` の単体テスト (`eml_types` の `scc.rs` の構文解析と HIR への変換) は `eml_test_support` を使えないので、対象の外とする
+- 行と列の計算は `eml_diagnostics` の1か所になる
 - 上の「文書」の表の変更が済んでいる
 
 ## 範囲の外
