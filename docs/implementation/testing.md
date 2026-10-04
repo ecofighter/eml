@@ -114,6 +114,13 @@
 - Core IR の呼び出しが、呼び出しの後で使う変数を持つようになった。`eml_core_ir/tests/lower.rs` の `partial_and_extra_arguments_use_closures`、`builtins_used_as_values_are_wrapped`、`lambdas_are_lifted_with_their_captures_first`、`calls_in_tail_position_are_tail_calls` の呼び出しの後ろに `[...]` が付いた (種類2)
 - `eml_runtime` の単体テスト、`eml_interp/tests/closures.rs` と `run.rs`、`eml_core_ir/tests/verify.rs` の手書きの Core IR、`eml_cli/tests/api.rs` と `ui.rs` の実行の結果の扱いを、新しい型に合わせて書き換えた (種類3)。期待値は変えていない
 
+### 縦の貫通 段階3b
+
+- `multi` の操作とエフェクトの型引数を通すようになったので、`tests/ui/check-fail/later_stage_effects.em` から `multi` とエフェクトの型引数の部分を除き、`from` の E0004 だけを確かめるようにした (種類1)。`multi` の操作は `run/multi_*.em` と `check-fail/multi_return_clause.em`、エフェクトの型引数は `run/effect_parameters.em` と `check-fail/effect_arguments.em` で確かめる
+- `eml_hir/tests/effects.rs` の `operation_signatures_are_checked` の期待値から `multi` の E0004 が消え、HIR の表示が `multi many : Unit -> Int` になった (種類1)。`effect_type_parameters_and_arguments_come_in_stage_3b` は、型引数が HIR に入ることを確かめる3つのテスト (`effects_take_type_parameters_and_rows_take_type_arguments`、`operations_see_the_type_parameters_of_their_effect_first`、`type_arguments_and_parameters_of_effects_are_checked`) に置き換えた (種類1)
+- `eml_types` の `table/tests.rs` と `ty.rs` の単体テストの row とラベルの組み立てを `Label` と `EffectLabel::args` に合わせ、`EffectDef` の組み立てに `generics` を足した (種類3)。期待値は変えていない
+- `tests/ui/run/multi_over_once.em` は、持ち越し規則がない段階3b での振る舞い (メモリ安全に `once` の `k` を写す) を確かめる。段階5で持ち越し規則を入れたら `check-fail/` に移す (種類1の予定)
+
 ## よく使うコマンド
 
 ```sh

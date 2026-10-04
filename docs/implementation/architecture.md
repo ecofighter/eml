@@ -131,7 +131,7 @@ HIR への変換では、名前解決に加えて、次の脱糖と検査を行�
 - 型変数と row 変数の表は `Signature::generics` (`Generics`) に置く。シグネチャで定義し、本体の注釈は引くだけにする。ラムダの引数は、ラムダの本体だけで見えるスコープに入る
 - シグネチャと等式は名前で対応づけてから、並び方を検査する。シグネチャか等式のない関数も `Function` として残し (`signature` か `body` が `None`)、呼び出し側で名前の誤りを連鎖させない
 - 名前は `Res::{Local, Function, Operation, Builtin}` に解決する。組み込みは名前解決の最も外側のスコープで、ユーザーの定義で隠せる。組み込みの名前、見え方 (名前で引く値、演算子、名前で引けない内部用)、引数の数は `eml_hir::builtin::BUILTINS` の表に、シグネチャは eml のソースで書いた Prelude (`crates/eml_hir/src/prelude.em`) に置く。変換のはじめに Prelude を構文解析し、`Module::builtins` に置く。Prelude の範囲には `FileId::PRELUDE` を使い、診断には出さない。S2 で `Prelude` モジュールに移す
-- 型とエフェクトは item (`Module::types`、`Module::effects`) で、ID (`TypeDefId`、`EffectId`) で参照する。組み込みの `Int`、`String`、`Bool`、`Unit` と `IO` を変換のはじめに登録し、続けて `effect` の宣言を変換する (`lower/effect.rs`)。エフェクトの名前をすべて登録してから操作を変換するので、操作の引数の型の row は後ろで宣言したエフェクトも引ける。操作は `Module::operations` (`OperationId`) に置き、シグネチャと引数の個数 (外側の矢印の数) を持つ。処理系が役割で引く item は `Module::lang` (`LangItems`) にある
+- 型とエフェクトは item (`Module::types`、`Module::effects`) で、ID (`TypeDefId`、`EffectId`) で参照する。組み込みの `Int`、`String`、`Bool`、`Unit` と `IO` を変換のはじめに登録し、続けて `effect` の宣言を変換する (`lower/effect.rs`)。エフェクトの名前をすべて登録してから操作を変換するので、操作の引数の型の row は後ろで宣言したエフェクトも引ける。操作は `Module::operations` (`OperationId`) に置き、シグネチャと引数の個数 (外側の矢印の数) を持つ。処理系が役割で引く item は `Module::lang` (`LangItems`) にある。エフェクトの宣言は型引数を `EffectDef::generics` に持つ。操作の `Generics` は、エフェクトの型引数を先頭に写して始め、その個数を `Operation::effect_params` に持つ。row のエフェクトは `EffectRef` (エフェクトと型引数) で、型引数の個数は `ItemScope::effect_params` で確かめる (E1015)
 - トップレベルの名前は、変換の中の `ItemScope` (`lower/scope.rs`) で解決する。値と型 (型名とエフェクト名) の2つの名前空間を持ち、ユーザーの定義を先に引き、なければ組み込みを引く
 - `Body` は走査関数を持つ。`walk_child_exprs` は式の直接の子を辿り、`pat_bindings` はパターンが束縛する変数を、`captures` は式の中で束縛していない変数 (ラムダ、handle の本体と節が捕まえる変数) を返す。段階4で式やパターンの種類を足すときは、これらを直す
 - handler の変換と節の検査は `lower/handler.rs` にある。節の先頭の名前は `ItemScope::operation` で操作だけから引く。誤った節 (引数の個数の誤り、重複、別のエフェクトの節) は診断を出して `ExprKind::Handle::clauses` に入れず、扱うエフェクトが決まらなければ `effect` を `None` にする。型検査はそれを見て診断を連鎖させない
@@ -147,7 +147,7 @@ HIR への変換では、名前解決に加えて、次の脱糖と検査を行�
 - シグネチャはスキーム (`scheme.rs`) で持つ。型変数と row 変数は rigid で、参照するたびに具体化し、戻り値の側の閉じた row を開く
 - 呼び出しは、たどった矢印の row を今の row に含める (`Table::include_row`)。呼び出し先の末尾が推論変数なら、その row を今の row とそのまま単一化する。閉じた末尾と rigid な末尾では、末尾を新しい row 変数に替えた row を今の row と単一化し、今の row の残りをその変数で受ける。rigid な末尾では、さらに残りの末尾が同じ rigid 変数であることを確かめる。今の row をまだ推論している途中で残りの末尾が推論変数なら、その推論変数を rigid な変数に束縛する (推論されるラムダの中の呼び出しに必要)
 - ラムダの引数の個数が合わないときや期待する型が壊れているときは、末尾が `Error` の row で本体を検査し、エフェクトの誤りを連鎖させない
-- 呼び出しグラフの SCC (`scc.rs`) を呼ばれる側から検査し、SCC ごとに使用回数のパス (`usage.rs`) で `Unr` の制約を出してから、スキームの Kind 変数を多相化する。残す制約は、内部の変数を経由した推移も含めて求める (`Lattice::residual`)
+- 呼び出しグラフの SCC (`scc.rs`) を呼ばれる側から検査し、SCC ごとに使用回数のパス (`usage.rs`) で `Unr` の制約を出してから、スキームの Kind 変数を多相化する。残す制約は、内部の変数を経由した推移も含めて求める (`Lattice::residual`)。使用回数のパスは、扱うエフェクトに `multi` の操作がある handle の `return` の節が捕まえる変数にも `Unr` の制約を出す
 - 部分適用のクロージャの線形性は、それまでの引数と捕まえた値の Kind 以上になる (`Table::closure_kinds`)
 - `TypedModule::signatures` は、関数の型と、スキームに残った Kind の制約のうち定数を片側に持つもの (`Scheme::constraints`) を持つ。`dump` はこれを `kinds:` の行に出す
 - 型の表は `table/` に分ける。`mod.rs` は型と変数の格納、`unify.rs` は型の単一化、`row.rs` は row の単一化と `include_row`、`kinds.rs` は Kind の制約、`copy.rs` はスキームの具体化の写し、`export.rs` は外に出す型への変換である。型の形は `TyShape`、関数の矢印の線形性は `ArrowLin` と呼び、Kind (線形性と多重度) と取り違えないようにする
@@ -156,10 +156,11 @@ HIR への変換では、名前解決に加えて、次の脱糖と検査を行�
 - 検査器は `check/` に分ける。`mod.rs` は SCC の順の検査と `TypedModule` の組み立て、`body.rs` は本体の検査、`report.rs` は診断を作る処理である。`if` とブロックは期待する型の有無 (`Expectation`) で check と infer の処理を共有し、矢印をたどる処理は `next_arrow` に、今の row の保存と復元は `with_ambient` にまとめてある。呼び出しの row を今の row に含める処理は `include_call_row` と呼ぶ
 - E2002 の副ラベルは、本体の row が入る矢印の部分の型を指す (`body_arrow_range`)
 - 組み込みの型は、Prelude のシグネチャから、ユーザーの関数と同じ経路 (`Rigids`、`lower_signature`、`closure_kinds`、`Scheme`) で作る。本体がないので、作ってすぐ多相化する。`True` と `False` は、段階4で `data Bool` にするまで lang item の `Bool` の型である
-- 型構成子は `TyShape::Con(TypeDefId)`、row のラベルは `EffectId` である。外に出す型は `Type::Con { id, name }` と `EffectLabel { id, name }` で、`Module` を渡さずに表示できるよう名前を持つ。型変数は、シグネチャの変数 (`Type::Rigid`) と推論で解けなかった変数 (`Type::Flexible`) を区別する
-- 継続の型は `TyShape::Cont` (操作の結果の型、継続の線形性、handle の外側の row、handle の結果の型) で、外に出す型は `Type::Cont` である。`once` の操作の `k` の線形性は `Lin` である
-- 操作のスキームは、組み込みと同じ経路で作る。シグネチャの外側の最後の矢印に、操作のエフェクトだけの row を付ける (`scheme::lower_operation`)。エフェクトの多重度は操作の多重度の最大である
-- handle の検査は `check/handle.rs` にある。本体は今の row の前に扱うエフェクトを足した row で、節は今の row で検査する。節では操作の型変数を新しい rigid 変数にする。`resume` は、推論用の変数でできた継続の型と単一化してから、関数の呼び出しと同じく row を今の row に含める
+- 型構成子は `TyShape::Con(TypeDefId)`、row のラベルは `Label` (エフェクトの ID と型引数) である。外に出す型は `Type::Con { id, name }` と `EffectLabel { id, name, args }` で、`Module` を渡さずに表示できるよう名前を持つ。型変数は、シグネチャの変数 (`Type::Rigid`) と推論で解けなかった変数 (`Type::Flexible`) を区別する
+- row の単一化は、同じエフェクトのラベルを row の中の順で対にし、型引数を単一化する。一致しなければ `UnifyError::EffectArgs` で、`include_call_row` が E2001 にする
+- 継続の型は `TyShape::Cont` (操作の結果の型、継続の線形性、handle の外側の row、handle の結果の型) で、外に出す型は `Type::Cont` である。`once` の操作の `k` の線形性は `Lin`、`multi` の操作の `k` は `Unr` である
+- 操作のスキームは、組み込みと同じ経路で作る。シグネチャの外側の最後の矢印に、操作のエフェクトだけの row を付ける (`scheme::lower_operation`)。エフェクトの多重度は操作の多重度の最大である。row のラベルの型引数は、エフェクトの型引数の rigid 変数である。操作の引数の型の Kind 変数を `Unr` に固定する `Table::unrestricted` は、エフェクトの型引数の Kind 変数を外す
+- handle の検査は `check/handle.rs` にある。本体は今の row の前に扱うエフェクトを足した row で、節は今の row で検査する。handle ごとにエフェクトの型引数を新しい推論用の変数にし、節ではエフェクトの型引数をその変数に、操作自身の型変数だけを新しい rigid 変数にする (`Rigids::with_effect_args`)。`resume` は、推論用の変数でできた継続の型と単一化してから、関数の呼び出しと同じく row を今の row に含める
 - Kind の制約は由来 (`KindOrigin`) を持つ。型の表が「今の由来」を持ち、制約を作るときに記録する。本体の検査は単一化と参照の具体化の前後で、使用回数のパスは `Unr` の制約の前後で、今の由来を設定する。`solve_kinds` は破れた制約の由来を返し、`check` が E3001 にする。報告済みの誤りの跡 (`Missing`) がある本体では、使用回数のパスは由来を記録しない
 
 ## `eml_core_ir`、`eml_runtime`、`eml_interp` の内部
@@ -182,7 +183,7 @@ HIR への変換では、名前解決に加えて、次の脱糖と検査を行�
 - 実行時エラーは `RuntimeError` (実行中の関数で止まった `Fault` と、`debug_heap` の `Leak`) で、`step` は `Result<Step, Fault>` を返す。`Fault` に関数の名前を付けるのは `run` である。表示の文言は CLI と UI テストが使う
 - handle の本体と節は、ラムダと同じ `lift` で持ち上げる (`外側の名前$handleN`、`外側の名前$handleN$操作名`、`外側の名前$handleN$return`)。操作を値として使うときは、`perform` を呼ぶだけの関数 (`op$名前`) で包む。`Program::effects` はエフェクトごとの操作の表 (名前と、再開できるか) で、番号は `EffectId` の添字である
 - `Call::{Handle, Perform, Resume}` は呼び出しの一種なので、`saved` と末尾の位置の扱い、Perceus と verifier の規則を、ほかの呼び出しと共有する。`IO` の操作は `Rhs::Io` で、その場で実行する
-- handler は `Frame::Handler` (エフェクトの番号、節のクロージャ、`return` の節、次のフレーム) で、継続は `Payload::Continuation` (区間の先頭のフレームと、所有しない handler フレームへの参照) である。`perform` は handler フレームの次を切り離し、`resume` はそこに今の継続をつなぐ。`never` の操作は区間をその場で解放する
+- handler は `Frame::Handler` (エフェクトの番号、節のクロージャ、`return` の節、次のフレーム) で、継続は `Payload::Continuation` (区間の先頭のフレームと、所有しない handler フレームへの参照) である。`perform` は handler フレームの次を切り離し、`resume` はそこに今の継続をつなぐ。`never` の操作は区間をその場で解放する。共有された継続の `resume` は `Heap::take_or_copy` で区間を写す (`copy_segment`)。フレームはつねに一意で、共有されうるのは継続オブジェクトだけである
 
 ## ソースファイルと位置
 
