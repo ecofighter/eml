@@ -313,7 +313,7 @@ impl BodyCheck<'_> {
     }
 
     /// `check` の間だけ、作る Kind の制約の由来を設定する。
-    fn with_kind_origin<T>(
+    pub(super) fn with_kind_origin<T>(
         &mut self,
         range: TextRange,
         reason: KindReason,

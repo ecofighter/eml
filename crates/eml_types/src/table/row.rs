@@ -39,8 +39,11 @@ impl Table {
                 .zip(right.args.iter().copied())
                 .collect();
             for (x, y) in args {
-                if self.unify(x, y).is_err() {
-                    return Err(UnifyError::EffectArgs { left, right });
+                match self.unify(x, y) {
+                    Ok(()) => {}
+                    // 無限の型は型引数の不一致ではないので、E2005 として報告させる (docs/spec/diagnostics.md)
+                    Err(UnifyError::Occurs) => return Err(UnifyError::Occurs),
+                    Err(_) => return Err(UnifyError::EffectArgs { left, right }),
                 }
             }
         }
@@ -150,7 +153,7 @@ impl Table {
         if self.is_rigid_row(var) {
             return Err(UnifyError::Mismatch);
         }
-        if row.tail == Tail::Var(var) {
+        if self.row_occurs(var, &row) {
             return Err(UnifyError::Occurs);
         }
         let sigma = self.row_vars[var.0 as usize].multiplicity;
@@ -167,6 +170,39 @@ impl Table {
         }
         self.row_vars[var.0 as usize].binding = Some(row);
         Ok(())
+    }
+
+    /// row 変数 `var` が `row` の中に現れるかを調べる。ラベルの型引数は関数型や継続の型を持てるので、その row の
+    /// 中までたどる。現れるのに束縛すると、row の展開が終わらなくなる。
+    fn row_occurs(&self, var: RowVar, row: &Row) -> bool {
+        let row = self.resolve_row(row);
+        row.tail == Tail::Var(var)
+            || row
+                .labels
+                .iter()
+                .any(|label| label.args.iter().any(|&arg| self.row_occurs_in(var, arg)))
+    }
+
+    fn row_occurs_in(&self, var: RowVar, ty: Ty) -> bool {
+        match self.shape(ty) {
+            TyShape::Record(fields) => fields
+                .iter()
+                .any(|(_, field)| self.row_occurs_in(var, *field)),
+            TyShape::Fn {
+                param, row, ret, ..
+            }
+            | TyShape::Cont {
+                arg: param,
+                row,
+                ret,
+                ..
+            } => {
+                self.row_occurs_in(var, *param)
+                    || self.row_occurs_in(var, *ret)
+                    || self.row_occurs(var, row)
+            }
+            TyShape::Var(_) | TyShape::Con(_) | TyShape::Rigid(_) | TyShape::Error => false,
+        }
     }
 
     /// 呼び出し先の row `callee` のエフェクトが、今の row `ambient` にすべて含まれることを確かめる

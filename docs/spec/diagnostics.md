@@ -75,7 +75,7 @@ E0xxx は `eml_syntax::codes` (E0004 だけは `eml_diagnostics`)、E1xxx は `e
 | E2002 | `EFFECT_NOT_IN_ROW` | シグネチャの row に含まれないエフェクトを起こした。シグネチャの矢印を指し、row を足す help を付ける。ラムダの本体の場合は、エフェクトを起こした場所を primary、ラムダの期待する型の由来 (シグネチャの引数の型や型の明示) を secondary にする |
 | E2003 | `MISSING_MAIN` | `main` がない。`eml run` のときだけ出す |
 | E2004 | `INVALID_MAIN_TYPE` | `main` のシグネチャが `Unit -> <IO> Unit` でない |
-| E2005 | `INFINITE_TYPE` | 無限の型 (単一化の occurs check) |
+| E2005 | `INFINITE_TYPE` | 無限の型 (単一化の occurs check)。row のラベルの型引数を通して、型変数か row 変数が自分自身の中に現れる場合を含む。呼び出しの row で起きたときは、呼び出しを指す |
 | E3001 | `LINEAR_VALUE_MISUSED` | 線形な値 (`once` の操作の `k` と、それを捕まえたクロージャ) を、ちょうど1回でなく使った。違反した Kind の制約の由来を指す。`multi` の操作を持つ handler の `return` の節が捕まえた場合を含む |
 
 E0004 (`NOT_YET_SUPPORTED`) は、構文の段階 (S2、S3) で未対応の構文に加えて、名前解決以降の段階がまだ扱えない構文 (マイルストーン1 の実装の途中の段階) にも使う。どの段階でも「後で実装する」という同じ意味なので、番号を分けない。HIR 以降の段階は、対応していない構文を、診断を出さずに無視することはしない。見つけた段階で E0004 を出して回復する。

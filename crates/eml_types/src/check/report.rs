@@ -129,7 +129,12 @@ impl BodyCheck<'_> {
         report: bool,
     ) -> bool {
         let ambient = self.ambient.clone();
-        let missing: Vec<String> = match self.table.include_row(&row, &ambient) {
+        // ラベルの型引数の単一化は矢印の線形性の制約を作る。由来がないと、違反しても `solve_kinds` が捨ててしまう
+        // (docs/implementation/architecture.md)
+        let included = self.with_kind_origin(range, KindReason::Unified, |this| {
+            this.table.include_row(&row, &ambient)
+        });
+        let missing: Vec<String> = match included {
             Ok(()) => return true,
             Err(UnifyError::MissingEffects(effects)) => effects
                 .iter()
@@ -152,10 +157,21 @@ impl BodyCheck<'_> {
                 }
                 return false;
             }
-            // include_row は呼び出し先側の rigid でない row 変数を通してしか単一化しないので、rigid 変数の束縛 (Mismatch) も
-            // Occurs も起きない。型引数の誤りは `EffectArgs` になる
-            Err(other) => unreachable!(
-                "including a row reports only missing effects, a missing row variable or effect arguments: {other:?}"
+            // ラベルの型引数を通して、row 変数や型変数が自分自身の中に現れる
+            Err(UnifyError::Occurs) => {
+                if report {
+                    self.diagnostics.push(Diagnostic::error(
+                        codes::INFINITE_TYPE,
+                        "this expression would have an infinite type",
+                        Label::new(self.file(), range, "infinite type"),
+                    ));
+                }
+                return false;
+            }
+            // include_row は rigid な row 変数を束縛しない。型引数の単一化の失敗は `EffectArgs` か `Occurs` になるので、
+            // `Mismatch` は起きない
+            Err(UnifyError::Mismatch) => unreachable!(
+                "including a row reports only missing effects, a missing row variable, effect arguments or an infinite type"
             ),
         };
         if !report {

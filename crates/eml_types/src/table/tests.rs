@@ -488,3 +488,41 @@ fn labels_with_different_type_arguments_do_not_unify() {
         Err(UnifyError::EffectArgs { left, right })
     );
 }
+
+#[test]
+fn a_row_variable_cannot_occur_in_a_label_argument_of_its_row() {
+    let mut table = new_table();
+    let io = table.lang.io;
+    let r = table.fresh_row_var();
+    let open = Row {
+        labels: Vec::new(),
+        tail: Tail::Var(r),
+    };
+    let int = table.int;
+    let g = table.function(int, open.clone(), int);
+    let with_g = Row {
+        labels: vec![Label {
+            effect: io,
+            args: vec![g],
+        }],
+        tail: Tail::Var(table.fresh_row_var()),
+    };
+    assert_eq!(table.unify_row(&open, &with_g), Err(UnifyError::Occurs));
+}
+
+#[test]
+fn an_infinite_label_argument_is_not_an_argument_mismatch() {
+    let mut table = new_table();
+    let io = table.lang.io;
+    let int = table.int;
+    let x = table.fresh_var();
+    let label = |args: Vec<Ty>| Label { effect: io, args };
+    let f = table.function(int, Row::closed(vec![label(vec![x])]), int);
+    assert_eq!(
+        table.unify_row(
+            &Row::closed(vec![label(vec![x])]),
+            &Row::closed(vec![label(vec![f])])
+        ),
+        Err(UnifyError::Occurs)
+    );
+}

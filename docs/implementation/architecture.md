@@ -157,11 +157,11 @@ HIR への変換では、名前解決に加えて、次の脱糖と検査を行�
 - E2002 の副ラベルは、本体の row が入る矢印の部分の型を指す (`body_arrow_range`)
 - 組み込みの型は、Prelude のシグネチャから、ユーザーの関数と同じ経路 (`Rigids`、`lower_signature`、`closure_kinds`、`Scheme`) で作る。本体がないので、作ってすぐ多相化する。`True` と `False` は、段階4で `data Bool` にするまで lang item の `Bool` の型である
 - 型構成子は `TyShape::Con(TypeDefId)`、row のラベルは `Label` (エフェクトの ID と型引数) である。外に出す型は `Type::Con { id, name }` と `EffectLabel { id, name, args }` で、`Module` を渡さずに表示できるよう名前を持つ。型変数は、シグネチャの変数 (`Type::Rigid`) と推論で解けなかった変数 (`Type::Flexible`) を区別する
-- row の単一化は、同じエフェクトのラベルを row の中の順で対にし、型引数を単一化する。一致しなければ `UnifyError::EffectArgs` で、`include_call_row` が E2001 にする
+- row の単一化は、同じエフェクトのラベルを row の中の順で対にし、型引数を単一化する。一致しなければ `UnifyError::EffectArgs` で、`include_call_row` が E2001 にする。型引数の中で型変数や row 変数が自分自身に現れるときは `UnifyError::Occurs` で、`include_call_row` が E2005 にする。row 変数を束縛するときは、ラベルの型引数の中の関数型と継続の型の row までたどって、その変数が現れないことを確かめる (`Table::row_occurs`)
 - 継続の型は `TyShape::Cont` (操作の結果の型、継続の線形性、handle の外側の row、handle の結果の型) で、外に出す型は `Type::Cont` である。`once` の操作の `k` の線形性は `Lin`、`multi` の操作の `k` は `Unr` である
 - 操作のスキームは、組み込みと同じ経路で作る。シグネチャの外側の最後の矢印に、操作のエフェクトだけの row を付ける (`scheme::lower_operation`)。エフェクトの多重度は操作の多重度の最大である。row のラベルの型引数は、エフェクトの型引数の rigid 変数である。操作の引数の型の Kind 変数を `Unr` に固定する `Table::unrestricted` は、エフェクトの型引数の Kind 変数を外す
 - handle の検査は `check/handle.rs` にある。本体は今の row の前に扱うエフェクトを足した row で、節は今の row で検査する。handle ごとにエフェクトの型引数を新しい推論用の変数にし、節ではエフェクトの型引数をその変数に、操作自身の型変数だけを新しい rigid 変数にする (`Rigids::with_effect_args`)。`resume` は、推論用の変数でできた継続の型と単一化してから、関数の呼び出しと同じく row を今の row に含める
-- Kind の制約は由来 (`KindOrigin`) を持つ。型の表が「今の由来」を持ち、制約を作るときに記録する。本体の検査は単一化と参照の具体化の前後で、使用回数のパスは `Unr` の制約の前後で、今の由来を設定する。`solve_kinds` は破れた制約の由来を返し、`check` が E3001 にする。報告済みの誤りの跡 (`Missing`) がある本体では、使用回数のパスは由来を記録しない
+- Kind の制約は由来 (`KindOrigin`) を持つ。型の表が「今の由来」を持ち、制約を作るときに記録する。本体の検査は単一化、呼び出しと `resume` の row の包含 (`include_call_row`)、参照の具体化の前後で、使用回数のパスは `Unr` の制約の前後で、今の由来を設定する。`solve_kinds` は破れた制約の由来を返し、`check` が E3001 にする。報告済みの誤りの跡 (`Missing`) がある本体では、使用回数のパスは由来を記録しない。由来のない制約は、宣言の型から作る制約 (具体化のたびに由来を付けて複写する) と、この記録しない制約に限り、`solve_kinds` は返さない
 
 ## `eml_core_ir`、`eml_runtime`、`eml_interp` の内部
 
