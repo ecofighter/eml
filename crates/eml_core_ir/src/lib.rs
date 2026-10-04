@@ -81,6 +81,14 @@ impl CoreFn {
             _ => unreachable!("the join index points at join points"),
         }
     }
+
+    /// join point の本体が使う外側の変数。
+    pub fn captures(&self, join: JoinId) -> &[VarId] {
+        match self.expr(self.joins[join.0 as usize]) {
+            CExpr::Join { captures, .. } => captures,
+            _ => unreachable!("the join index points at join points"),
+        }
+    }
 }
 
 /// 型の情報は消し、Kind とボックス化の有無だけを残す (docs/spec/core-ir.md)。
@@ -104,6 +112,9 @@ pub enum CExpr {
     Join {
         join: JoinId,
         param: VarId,
+        /// 本体が使う外側の変数 (`param` を除く)。RC の対象かどうかによらずすべて入れ、`VarId` の昇順に並べる。
+        /// Perceus の最初の解析が埋め直すので、変換や `simplify` は空のままでよい。
+        captures: Vec<VarId>,
         body: CExprId,
         scope: CExprId,
     },

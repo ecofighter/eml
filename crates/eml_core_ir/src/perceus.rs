@@ -3,7 +3,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 
-use crate::liveness::{Liveness, Vars, liveness, tracked};
+use crate::liveness::{Liveness, Vars, fill_captures, liveness, tracked};
 use crate::{Atom, CExpr, CExprId, Call, CoreFn, JoinId, Program, Rhs, VarId};
 
 /// 変換の後に、プログラム全体にかける。変換の途中の関数ごとではなく、独立したパスにする (docs/spec/core-ir.md)。
@@ -14,6 +14,7 @@ pub(crate) fn insert(program: &mut Program) {
 }
 
 fn insert_rc(function: &mut CoreFn) {
+    fill_captures(function);
     let tracked = tracked(function);
     let Liveness { exprs, joins } = liveness(function, &tracked);
     let mut pass = Pass {
@@ -100,6 +101,7 @@ impl Pass<'_> {
                 CExpr::Join {
                     join,
                     param,
+                    captures,
                     body,
                     scope,
                 } => {
@@ -108,6 +110,7 @@ impl Pass<'_> {
                     steps.push(Step::Join {
                         join: *join,
                         param: *param,
+                        captures: captures.clone(),
                         scope,
                     });
                     owned = self.needs.get(join).cloned().unwrap_or_default();
@@ -140,10 +143,16 @@ impl Pass<'_> {
         };
         for step in steps.into_iter().rev() {
             match step {
-                Step::Join { join, param, scope } => {
+                Step::Join {
+                    join,
+                    param,
+                    captures,
+                    scope,
+                } => {
                     code = self.push(CExpr::Join {
                         join,
                         param,
+                        captures,
                         body: code,
                         scope,
                     });
@@ -242,6 +251,7 @@ enum Step {
     Join {
         join: JoinId,
         param: VarId,
+        captures: Vec<VarId>,
         scope: CExprId,
     },
     Let {

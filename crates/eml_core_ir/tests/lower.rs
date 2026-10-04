@@ -65,7 +65,7 @@ fn a_non_tail_if_keeps_strings_used_later() {
     let text = "pick : Bool -> String -> String\npick b s =\n  let t = if b then s else \"none\"\n  t ++ s\n\nmain : Unit -> <IO> Unit\nmain () = ()";
     insta::assert_snapshot!(core_text(text), @r#"
     fn pick(b0, s1) {
-      join j0(t3) {
+      join j0(t3) [s1] {
         let t4 = prim ++(t3, s1)
         return t4
       }
@@ -259,8 +259,8 @@ fn ifs_in_a_condition_nest_join_points() {
     let text = "choose : Bool -> Bool -> Int\nchoose a b =\n  let n = if (if a then b else False) then 1 else 2\n  n + 1\n\nmain : Unit -> <IO> Unit\nmain () = ()";
     insta::assert_snapshot!(core_text(text), @r"
     fn choose(a0, b1) {
-      join j1(t2) {
-        join j0(t3) {
+      join j1(t2) [] {
+        join j0(t3) [] {
           let t4 = prim +(t3, 1)
           return t4
         }
@@ -343,7 +343,7 @@ fn calls_save_the_variables_used_after_them() {
     fn around(n0, s1) {
       let t2 = prim +(n0, 1)
       let t3 = prim >(n0, 0)
-      join j0(t5) {
+      join j0(t5) [t2] {
         let t6 = prim show_int(t2)
         let t7 = prim ++(t5, t6)
         return t7
@@ -368,6 +368,47 @@ fn calls_save_the_variables_used_after_them() {
       tailcall main(())
     }
     ");
+}
+
+#[test]
+fn nested_join_points_capture_what_outer_join_points_need() {
+    // 内側の join point の本体は外側の join point へ jump するので、外側の本体が使う `s2` も捕まえる
+    let text = "label : Bool -> Bool -> String -> String\nlabel a b s =\n  let t =\n    if a then\n      let u = if b then s ++ \"!\" else \"plain\"\n      u ++ \"?\"\n    else s\n  t ++ s\n\nmain : Unit -> <IO> Unit\nmain () = ()";
+    insta::assert_snapshot!(core_text(text), @r#"
+    fn label(a0, b1, s2) {
+      join j0(t9) [s2] {
+        let t10 = prim ++(t9, s2)
+        return t10
+      }
+      switch a0 {
+        #0 ->
+          dup s2
+          jump j0(s2)
+        #1 ->
+          join j1(t6) [s2] {
+            let s7 = const "?"
+            let t8 = prim ++(t6, s7)
+            jump j0(t8)
+          }
+          switch b1 {
+            #0 ->
+              let s5 = const "plain"
+              jump j1(s5)
+            #1 ->
+              let s3 = const "!"
+              dup s2
+              let t4 = prim ++(s2, s3)
+              jump j1(t4)
+          }
+      }
+    }
+    fn main(p0) {
+      return ()
+    }
+    fn entry$main() {
+      tailcall main(())
+    }
+    "#);
 }
 
 #[test]

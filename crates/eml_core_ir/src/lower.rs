@@ -519,6 +519,7 @@ impl FnLowering<'_> {
                     let expr = self.push(CExpr::Join {
                         join,
                         param,
+                        captures: Vec::new(),
                         body: id,
                         scope,
                     });

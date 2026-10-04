@@ -59,6 +59,7 @@ pub(crate) fn liveness(function: &CoreFn, selected: &[bool]) -> Liveness {
                         param,
                         body,
                         scope,
+                        ..
                     } => {
                         work.push(Task::Visit(*scope));
                         work.push(Task::Needs {
@@ -120,4 +121,16 @@ pub(crate) fn liveness(function: &CoreFn, selected: &[bool]) -> Liveness {
         }
     }
     Liveness { exprs, joins }
+}
+
+/// join point の本体が使う外側の変数を `captures` に書く。
+pub(crate) fn fill_captures(function: &mut CoreFn) {
+    let all = vec![true; function.vars.len()];
+    let joins = liveness(function, &all).joins;
+    for (join, captured) in joins {
+        let node = function.joins[join.0 as usize];
+        if let CExpr::Join { captures, .. } = &mut function.exprs[node.0 as usize] {
+            *captures = captured.into_iter().collect();
+        }
+    }
 }

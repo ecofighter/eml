@@ -47,10 +47,19 @@ fn expr(program: &Program, function: &CoreFn, id: CExprId, indent: usize, out: &
             CExpr::Join {
                 join,
                 param,
+                captures,
                 body,
                 scope,
             } => {
-                writeln!(out, "{pad}join j{}({}) {{", join.0, var(function, *param)).unwrap();
+                let captures: Vec<String> = captures.iter().map(|&v| var(function, v)).collect();
+                writeln!(
+                    out,
+                    "{pad}join j{}({}) [{}] {{",
+                    join.0,
+                    var(function, *param),
+                    captures.join(", ")
+                )
+                .unwrap();
                 expr(program, function, *body, indent + 1, out);
                 writeln!(out, "{pad}}}").unwrap();
                 id = *scope;

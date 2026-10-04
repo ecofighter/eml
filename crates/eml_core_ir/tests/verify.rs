@@ -97,6 +97,7 @@ fn pick(dup_before_jump: bool) -> CoreFn {
     exprs.push(CExpr::Join {
         join: JoinId(0),
         param: VarId(3),
+        captures: vec![VarId(1)],
         body: CExprId(1),
         scope: CExprId(switch),
     });
@@ -177,6 +178,7 @@ fn a_jump_outside_its_join_scope_is_rejected() {
         CExpr::Join {
             join: JoinId(0),
             param: VarId(0),
+            captures: vec![],
             body: CExprId(0),
             scope: CExprId(1),
         },
@@ -244,6 +246,7 @@ fn a_jump_that_owns_too_much_is_rejected() {
         CExpr::Join {
             join: JoinId(0),
             param: VarId(1),
+            captures: vec![],
             body: CExprId(0),
             scope: CExprId(1),
         },
@@ -397,6 +400,7 @@ fn a_jump_after_a_call_needs_the_variables_of_the_join_body_in_scope() {
         CExpr::Join {
             join: JoinId(0),
             param: VarId(1),
+            captures: vec![VarId(0)],
             body: CExprId(1),
             scope: CExprId(3),
         },

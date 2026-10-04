@@ -154,6 +154,7 @@ impl<'a> Checker<'a> {
                     param,
                     body,
                     scope,
+                    ..
                 } => {
                     if !self.defined_joins.insert(*join) {
                         return Err(format!("`j{}` is defined twice", join.0));
