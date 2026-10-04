@@ -10,5 +10,5 @@ la-arena.workspace = true
 rowan.workspace = true
 
 [dev-dependencies]
-eml_test_support.workspace = true
+eml_test_support = { workspace = true, features = ["hir"] }
 insta.workspace = true

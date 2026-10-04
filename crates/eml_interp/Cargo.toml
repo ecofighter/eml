@@ -8,4 +8,4 @@ eml_core_ir.workspace = true
 eml_runtime.workspace = true
 
 [dev-dependencies]
-eml_test_support.workspace = true
+eml_test_support = { workspace = true, features = ["run"] }

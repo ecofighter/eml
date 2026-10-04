@@ -2,13 +2,22 @@
 //!
 //! この crate は、テストする crate の型をそのまま使う。そのため、使ってよいのは各 crate の `tests/` にある結合テスト
 //! からだけである。`src/` の `#[cfg(test)]` から使うと、テストする crate が2つ別々にリンクされて型が合わなくなる。
+//!
+//! 段階は feature で選ぶ (`hir` < `types` < `core` < `run`)。各 crate は自分の段階までを有効にし、下流の crate に
+//! テストを依存させない。
 
 use std::fmt::Write;
+#[cfg(feature = "run")]
 use std::sync::Arc;
 
+#[cfg(feature = "core")]
 use eml_core_ir::Program;
-use eml_diagnostics::{Diagnostic, FileId, Label, LineCol, SourceFiles, has_errors};
+#[cfg(feature = "core")]
+use eml_diagnostics::has_errors;
+use eml_diagnostics::{Diagnostic, FileId, Label, LineCol, SourceFiles};
+#[cfg(feature = "run")]
 use eml_interp::{RunConfig, RuntimeError};
+#[cfg(feature = "run")]
 use eml_runtime::OutputSink;
 
 pub struct Parsed {
@@ -18,6 +27,7 @@ pub struct Parsed {
     pub diagnostics: Vec<Diagnostic>,
 }
 
+#[cfg(feature = "hir")]
 pub struct Lowered {
     pub files: SourceFiles,
     pub file: FileId,
@@ -26,6 +36,7 @@ pub struct Lowered {
     pub diagnostics: Vec<Diagnostic>,
 }
 
+#[cfg(feature = "types")]
 pub struct Checked {
     pub files: SourceFiles,
     pub file: FileId,
@@ -58,6 +69,7 @@ pub fn parse(text: &str) -> Parsed {
     }
 }
 
+#[cfg(feature = "hir")]
 pub fn lower(text: &str) -> Lowered {
     let Parsed {
         files,
@@ -75,6 +87,7 @@ pub fn lower(text: &str) -> Lowered {
     }
 }
 
+#[cfg(feature = "types")]
 pub fn check(text: &str) -> Checked {
     let Lowered {
         files,
@@ -94,6 +107,7 @@ pub fn check(text: &str) -> Checked {
 }
 
 /// Core IR は診断のエラーがないプログラムだけを受け取る (docs/implementation/architecture.md)。
+#[cfg(feature = "core")]
 pub fn core(text: &str) -> Program {
     let checked = check(text);
     assert!(
@@ -105,10 +119,12 @@ pub fn core(text: &str) -> Program {
 }
 
 /// 実行のテストでは、つねに `debug_heap` を有効にする (docs/implementation/testing.md)。
+#[cfg(feature = "run")]
 pub fn run(text: &str) -> (String, Result<(), RuntimeError>) {
     execute(core(text), true)
 }
 
+#[cfg(feature = "run")]
 pub fn execute(program: Program, debug_heap: bool) -> (String, Result<(), RuntimeError>) {
     let (sink, captured) = OutputSink::capture();
     let config = RunConfig::default().with_debug_heap(debug_heap);
