@@ -1,5 +1,5 @@
 use eml_diagnostics::{Diagnostic, Label, TextRange};
-use eml_hir::{Body, ExprId, ExprKind, Module, Res};
+use eml_hir::{Body, ExprId, ExprKind, Module, PatId, Res};
 
 use crate::codes;
 use crate::table::{Row, Ty, UnifyError};
@@ -37,9 +37,90 @@ pub(super) enum AmbientSource {
 }
 
 impl BodyCheck<'_> {
+    /// 等式の引数が、シグネチャの矢印より多い。
+    pub(super) fn signature_arity_error(&self, param: PatId, index: usize) -> Diagnostic {
+        Diagnostic::error(
+            codes::TYPE_MISMATCH,
+            format!(
+                "`{}` has {} but its signature has {}",
+                self.function.name,
+                count(self.body.params.len(), "parameter"),
+                count(index, "arrow"),
+            ),
+            Label::new(
+                self.file(),
+                self.body.pats[param].range,
+                "this parameter has no arrow in the signature",
+            ),
+        )
+        .with_secondary(Label::new(
+            self.file(),
+            self.signature_range(),
+            "the signature",
+        ))
+    }
+
+    /// ラムダの引数が、期待する型の矢印より多い。
+    pub(super) fn lambda_arity_error(
+        &self,
+        expected: Ty,
+        params: usize,
+        param: PatId,
+        index: usize,
+    ) -> Diagnostic {
+        let expected = self.table.display(expected);
+        Diagnostic::error(
+            codes::TYPE_MISMATCH,
+            format!(
+                "this lambda has {} but its expected type `{expected}` has {}",
+                count(params, "parameter"),
+                count(index, "arrow"),
+            ),
+            Label::new(
+                self.file(),
+                self.body.pats[param].range,
+                "this parameter has no arrow in the expected type",
+            ),
+        )
+    }
+
+    /// 呼び出しの引数が、呼ばれる側の矢印より多い。
+    pub(super) fn call_arity_error(
+        &self,
+        name: &str,
+        index: usize,
+        args: usize,
+        arg: ExprId,
+    ) -> Diagnostic {
+        let message = if index == 0 {
+            format!("{name} is not a function")
+        } else {
+            format!(
+                "{name} takes {} but {} were given",
+                count(index, "argument"),
+                args
+            )
+        };
+        Diagnostic::error(
+            codes::TYPE_MISMATCH,
+            message,
+            Label::new(
+                self.file(),
+                self.body.exprs[arg].range,
+                "unexpected argument",
+            ),
+        )
+    }
+
     /// 呼び出し先の row が今の row に含まれることを確かめる (docs/spec/types.md の「推論」)。含まれなければ
     /// `false` を返す。`report` が偽なら診断を出さない。
-    pub(super) fn perform(&mut self, row: Row, range: TextRange, name: &str, report: bool) -> bool {
+    pub(super) fn include_call_row(
+        &mut self,
+        row: Row,
+        range: TextRange,
+        name: &str,
+        report: bool,
+    ) -> bool {
         let ambient = self.ambient.clone();
         let missing: Vec<String> = match self.table.include_row(&row, &ambient) {
             Ok(()) => return true,

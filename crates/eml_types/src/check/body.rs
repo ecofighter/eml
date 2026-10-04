@@ -10,7 +10,7 @@ use crate::codes;
 use crate::scheme::{Rigids, Scheme, lower_type};
 use crate::table::{Row, Table, Tail, Ty, TyShape, UnifyError};
 
-use super::report::{AmbientSource, Origin, callee_subject, count};
+use super::report::{AmbientSource, Origin, callee_subject};
 
 /// 1つの本体の推論結果。使用回数のパスも読む。
 #[derive(Default)]
@@ -36,6 +36,19 @@ pub(super) struct BodyCheck<'a> {
     pub(super) typing: BodyTyping,
 }
 
+/// 式に期待する型。check と infer で `if` とブロックの処理を共有するため。
+pub(super) enum Expectation {
+    Has(Ty, Origin),
+    None,
+}
+
+/// 関数型として見たときの最初の矢印。
+pub(super) enum Arrow {
+    Fn { param: Ty, row: Row, ret: Ty },
+    Error,
+    NotFunction,
+}
+
 impl BodyCheck<'_> {
     pub(super) fn file(&self) -> FileId {
         self.module.file
@@ -54,40 +67,19 @@ impl BodyCheck<'_> {
         let body = self.body;
         let mut expected = signature;
         for (index, &pat) in body.params.iter().enumerate() {
-            match self.table.shape(expected).clone() {
-                TyShape::Fn {
-                    param, row, ret, ..
-                } => {
+            match self.next_arrow(expected) {
+                Arrow::Fn { param, row, ret } => {
                     self.bind_pat(pat, param);
                     self.ambient = row;
                     expected = ret;
                 }
-                TyShape::Error => {
+                Arrow::Error => {
                     let error = self.table.error;
                     self.bind_pat(pat, error);
                 }
-                _ => {
-                    self.diagnostics.push(
-                        Diagnostic::error(
-                            codes::TYPE_MISMATCH,
-                            format!(
-                                "`{}` has {} but its signature has {}",
-                                self.function.name,
-                                count(body.params.len(), "parameter"),
-                                count(index, "arrow"),
-                            ),
-                            Label::new(
-                                self.file(),
-                                body.pats[pat].range,
-                                "this parameter has no arrow in the signature",
-                            ),
-                        )
-                        .with_secondary(Label::new(
-                            self.file(),
-                            self.signature_range(),
-                            "the signature",
-                        )),
-                    );
+                Arrow::NotFunction => {
+                    let diagnostic = self.signature_arity_error(pat, index);
+                    self.diagnostics.push(diagnostic);
                     let error = self.table.error;
                     for &rest in &body.params[index..] {
                         self.bind_pat(rest, error);
@@ -109,30 +101,18 @@ impl BodyCheck<'_> {
                 then_branch,
                 else_branch,
             } => {
-                let bool = self.table.bool;
-                self.check_expr(*condition, bool, Origin::IfCondition);
-                match else_branch {
-                    Some(else_branch) => {
-                        self.check_expr(*then_branch, expected, origin.clone());
-                        self.check_expr(*else_branch, expected, origin);
-                    }
-                    None => {
-                        let unit = self.table.unit;
-                        self.check_expr(*then_branch, unit, Origin::IfWithoutElse);
-                        self.expect(expr.range, expected, unit, &origin);
-                    }
-                }
+                let expectation = Expectation::Has(expected, origin);
+                self.if_expr(
+                    expr.range,
+                    *condition,
+                    *then_branch,
+                    *else_branch,
+                    expectation,
+                );
                 self.typing.exprs.insert(id, expected);
             }
             ExprKind::Block { stmts, tail } => {
-                self.stmts(stmts);
-                match tail {
-                    Some(tail) => self.check_expr(*tail, expected, origin),
-                    None => {
-                        let unit = self.table.unit;
-                        self.expect(expr.range, expected, unit, &origin);
-                    }
-                }
+                self.block(expr.range, stmts, *tail, Expectation::Has(expected, origin));
                 self.typing.exprs.insert(id, expected);
             }
             ExprKind::Lambda {
@@ -178,29 +158,15 @@ impl BodyCheck<'_> {
                 condition,
                 then_branch,
                 else_branch,
-            } => {
-                let bool = self.table.bool;
-                self.check_expr(*condition, bool, Origin::IfCondition);
-                match else_branch {
-                    Some(else_branch) => {
-                        let ty = self.infer_expr(*then_branch);
-                        let then_range = body.exprs[*then_branch].range;
-                        self.check_expr(*else_branch, ty, Origin::IfBranches(then_range));
-                        ty
-                    }
-                    None => {
-                        let unit = self.table.unit;
-                        self.check_expr(*then_branch, unit, Origin::IfWithoutElse);
-                        unit
-                    }
-                }
-            }
+            } => self.if_expr(
+                expr.range,
+                *condition,
+                *then_branch,
+                *else_branch,
+                Expectation::None,
+            ),
             ExprKind::Block { stmts, tail } => {
-                self.stmts(stmts);
-                match tail {
-                    Some(tail) => self.infer_expr(*tail),
-                    None => self.table.unit,
-                }
+                self.block(expr.range, stmts, *tail, Expectation::None)
             }
             ExprKind::Annot { expr: inner, ty } => {
                 let annotated = lower_type(self.table, self.function, self.rigids, *ty);
@@ -211,6 +177,68 @@ impl BodyCheck<'_> {
         };
         self.typing.exprs.insert(id, ty);
         ty
+    }
+
+    /// 期待する型があれば、両方の枝をその型で検査する。なければ then 節の型を推論し、else 節をそれに合わせる。
+    /// `else` がなければ then 節は `Unit` で、式の型も `Unit` になる (docs/spec/expressions.md の「if」)。
+    fn if_expr(
+        &mut self,
+        range: TextRange,
+        condition: ExprId,
+        then_branch: ExprId,
+        else_branch: Option<ExprId>,
+        expectation: Expectation,
+    ) -> Ty {
+        let bool = self.table.bool;
+        self.check_expr(condition, bool, Origin::IfCondition);
+        match (else_branch, expectation) {
+            (Some(else_branch), Expectation::Has(expected, origin)) => {
+                self.check_expr(then_branch, expected, origin.clone());
+                self.check_expr(else_branch, expected, origin);
+                expected
+            }
+            (Some(else_branch), Expectation::None) => {
+                let ty = self.infer_expr(then_branch);
+                let then_range = self.body.exprs[then_branch].range;
+                self.check_expr(else_branch, ty, Origin::IfBranches(then_range));
+                ty
+            }
+            (None, expectation) => {
+                let unit = self.table.unit;
+                self.check_expr(then_branch, unit, Origin::IfWithoutElse);
+                match expectation {
+                    Expectation::Has(expected, origin) => {
+                        self.expect(range, expected, unit, &origin);
+                        expected
+                    }
+                    Expectation::None => unit,
+                }
+            }
+        }
+    }
+
+    /// 最後の文が `let` なら、ブロックの値は `()` である (docs/spec/expressions.md)。
+    fn block(
+        &mut self,
+        range: TextRange,
+        stmts: &[Stmt],
+        tail: Option<ExprId>,
+        expectation: Expectation,
+    ) -> Ty {
+        self.stmts(stmts);
+        match (tail, expectation) {
+            (Some(tail), Expectation::Has(expected, origin)) => {
+                self.check_expr(tail, expected, origin);
+                expected
+            }
+            (Some(tail), Expectation::None) => self.infer_expr(tail),
+            (None, Expectation::Has(expected, origin)) => {
+                let unit = self.table.unit;
+                self.expect(range, expected, unit, &origin);
+                expected
+            }
+            (None, Expectation::None) => self.table.unit,
+        }
     }
 
     fn stmts(&mut self, stmts: &[Stmt]) {
@@ -267,6 +295,27 @@ impl BodyCheck<'_> {
     }
 
     /// 呼ばれる値や期待する型がまだ推論用の変数のとき、それを関数型に決める。
+    /// 推論用の変数なら、新しい関数型と単一化してから矢印を返す。呼び出しとラムダで、型の決まっていない値を関数として
+    /// 使えるようにするため。シグネチャの型は推論用の変数を含まないので、等式の検査でも同じ関数を使える。
+    fn next_arrow(&mut self, ty: Ty) -> Arrow {
+        if let TyShape::Var(_) = self.table.shape(ty) {
+            let function = self.fresh_function();
+            // 新しい変数だけでできた関数型なので、単一化は失敗しない
+            let unified = self.table.unify(ty, function);
+            debug_assert!(
+                unified.is_ok(),
+                "a fresh function type always unifies with a variable"
+            );
+        }
+        match self.table.shape(ty).clone() {
+            TyShape::Fn {
+                param, row, ret, ..
+            } => Arrow::Fn { param, row, ret },
+            TyShape::Error => Arrow::Error,
+            _ => Arrow::NotFunction,
+        }
+    }
+
     fn fresh_function(&mut self) -> Ty {
         let param = self.table.fresh_var();
         let ret = self.table.fresh_var();
@@ -288,47 +337,24 @@ impl BodyCheck<'_> {
         // 1回の呼び出しの E2002 は、どの引数の矢印で起きても1つだけ報告する
         let mut reported = false;
         for (index, &arg) in args.iter().enumerate() {
-            if let TyShape::Var(_) = self.table.shape(ty) {
-                let function = self.fresh_function();
-                // 新しい変数だけでできた関数型なので、単一化は失敗しない
-                let unified = self.table.unify(ty, function);
-                debug_assert!(
-                    unified.is_ok(),
-                    "a fresh function type always unifies with a variable"
-                );
-            }
-            match self.table.shape(ty).clone() {
-                TyShape::Fn {
-                    param, row, ret, ..
-                } => {
+            match self.next_arrow(ty) {
+                Arrow::Fn { param, row, ret } => {
                     let origin = Origin::Argument {
                         callee: callee_expr.range,
                         name: name.clone(),
                         index,
                     };
                     self.check_expr(arg, param, origin);
-                    let ok = self.perform(row, body.exprs[id].range, &name, !reported);
+                    let ok = self.include_call_row(row, body.exprs[id].range, &name, !reported);
                     reported |= !ok;
                     ty = ret;
                 }
-                TyShape::Error => {
+                Arrow::Error => {
                     self.infer_expr(arg);
                 }
-                _ => {
-                    let message = if index == 0 {
-                        format!("{name} is not a function")
-                    } else {
-                        format!(
-                            "{name} takes {} but {} were given",
-                            count(index, "argument"),
-                            args.len()
-                        )
-                    };
-                    self.diagnostics.push(Diagnostic::error(
-                        codes::TYPE_MISMATCH,
-                        message,
-                        Label::new(self.file(), body.exprs[arg].range, "unexpected argument"),
-                    ));
+                Arrow::NotFunction => {
+                    let diagnostic = self.call_arity_error(&name, index, args.len(), arg);
+                    self.diagnostics.push(diagnostic);
                     for &rest in &args[index..] {
                         self.infer_expr(rest);
                     }
@@ -337,6 +363,22 @@ impl BodyCheck<'_> {
             }
         }
         ty
+    }
+
+    /// `check` の間だけ今の row とその由来を替え、終わったら戻す。ラムダの本体は、外側の関数ではなく、ラムダで最後に
+    /// たどった矢印の row で検査する (docs/spec/types.md の「推論」)。
+    fn with_ambient<T>(
+        &mut self,
+        row: Row,
+        source: AmbientSource,
+        check: impl FnOnce(&mut Self) -> T,
+    ) -> T {
+        let saved_row = std::mem::replace(&mut self.ambient, row);
+        let saved_source = std::mem::replace(&mut self.ambient_source, source);
+        let result = check(self);
+        self.ambient = saved_row;
+        self.ambient_source = saved_source;
+        result
     }
 
     /// ラムダを、期待する関数型の矢印を引数ごとにたどって検査する。本体のエフェクトは、外側の関数ではなく、最後に
@@ -349,51 +391,27 @@ impl BodyCheck<'_> {
         expected: Ty,
         origin: Origin,
     ) {
-        let body = self.body;
-        let saved = (self.ambient.clone(), self.ambient_source.clone());
         let mut current = expected;
         let mut row = None;
         for (index, &pat) in params.iter().enumerate() {
-            if let TyShape::Var(_) = self.table.shape(current) {
-                let function = self.fresh_function();
-                // 新しい変数だけでできた関数型なので、単一化は失敗しない
-                let unified = self.table.unify(current, function);
-                debug_assert!(
-                    unified.is_ok(),
-                    "a fresh function type always unifies with a variable"
-                );
-            }
-            match self.table.shape(current).clone() {
-                TyShape::Fn {
+            match self.next_arrow(current) {
+                Arrow::Fn {
                     param,
                     row: arrow,
                     ret,
-                    ..
                 } => {
                     self.bind_param(pat, param);
                     row = Some(arrow);
                     current = ret;
                 }
-                TyShape::Error => {
+                Arrow::Error => {
                     let error = self.table.error;
                     self.bind_pat(pat, error);
                     row = None;
                 }
-                _ => {
-                    let expected_ty = self.table.display(expected);
-                    self.diagnostics.push(Diagnostic::error(
-                        codes::TYPE_MISMATCH,
-                        format!(
-                            "this lambda has {} but its expected type `{expected_ty}` has {}",
-                            count(params.len(), "parameter"),
-                            count(index, "arrow"),
-                        ),
-                        Label::new(
-                            self.file(),
-                            body.pats[pat].range,
-                            "this parameter has no arrow in the expected type",
-                        ),
-                    ));
+                Arrow::NotFunction => {
+                    let diagnostic = self.lambda_arity_error(expected, params.len(), pat, index);
+                    self.diagnostics.push(diagnostic);
                     let error = self.table.error;
                     for &rest in &params[index..] {
                         self.bind_pat(rest, error);
@@ -405,14 +423,11 @@ impl BodyCheck<'_> {
                 }
             }
         }
-        self.ambient = match row {
-            Some(row) => row,
-            // 期待する型が壊れていれば、どのエフェクトも受け入れて診断を連鎖させない
-            None => Row::error(),
-        };
-        self.ambient_source = AmbientSource::Lambda(origin);
-        self.check_expr(lambda_body, current, Origin::LambdaBody);
-        (self.ambient, self.ambient_source) = saved;
+        // 期待する型が壊れていれば、どのエフェクトも受け入れて診断を連鎖させない
+        let row = row.unwrap_or_else(Row::error);
+        self.with_ambient(row, AmbientSource::Lambda(origin), |this| {
+            this.check_expr(lambda_body, current, Origin::LambdaBody)
+        });
         self.typing.exprs.insert(id, expected);
     }
 
