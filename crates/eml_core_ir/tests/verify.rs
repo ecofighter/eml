@@ -269,7 +269,7 @@ fn a_direct_call_with_the_wrong_number_of_arguments_is_rejected() {
         CExpr::Return(var(0)),
         CExpr::Let {
             var: VarId(0),
-            rhs: Rhs::Call(Call::Direct(FnIdx(0), vec![Atom::Int(1), Atom::Int(2)])),
+            rhs: Rhs::call(Call::Direct(FnIdx(0), vec![Atom::Int(1), Atom::Int(2)])),
             body: CExprId(0),
         },
     ];
@@ -294,5 +294,121 @@ fn a_long_run_of_if_statements_is_verified_in_linear_time() {
     assert!(
         elapsed < std::time::Duration::from_secs(10),
         "took {elapsed:?}"
+    );
+}
+
+/// `g s = s`。
+fn identity() -> CoreFn {
+    function("g", 1, vec![string("s")], vec![CExpr::Return(var(0))], &[])
+}
+
+#[test]
+fn a_call_that_does_not_save_an_owned_variable_is_rejected() {
+    // f s = dup s; let t = g s; s を退避しないまま t ++ s
+    let exprs = vec![
+        CExpr::Return(var(2)),
+        concat(2, 1, 0, 0),
+        CExpr::Let {
+            var: VarId(1),
+            rhs: Rhs::call(Call::Direct(FnIdx(0), vec![var(0)])),
+            body: CExprId(1),
+        },
+        CExpr::Dup {
+            var: VarId(0),
+            body: CExprId(2),
+        },
+    ];
+    let f = function(
+        "f",
+        1,
+        vec![string("s"), string("t"), string("t")],
+        exprs,
+        &[],
+    );
+    assert_eq!(
+        check(vec![identity(), f]),
+        Err("a call saves [] but owns [s0] in `f`".to_string())
+    );
+}
+
+#[test]
+fn a_call_that_saves_a_variable_it_does_not_own_is_rejected() {
+    let exprs = vec![
+        CExpr::Return(var(1)),
+        CExpr::Let {
+            var: VarId(1),
+            rhs: Rhs::Call {
+                call: Call::Direct(FnIdx(0), vec![var(0)]),
+                saved: vec![VarId(0)],
+            },
+            body: CExprId(0),
+        },
+    ];
+    let f = function("f", 1, vec![string("s"), string("t")], exprs, &[]);
+    assert_eq!(
+        check(vec![identity(), f]),
+        Err("a call saves [s0] but owns [] in `f`".to_string())
+    );
+}
+
+#[test]
+fn a_variable_not_saved_by_a_call_is_out_of_scope_after_it() {
+    let k = function("k", 1, vec![int("a")], vec![CExpr::Return(var(0))], &[]);
+    let exprs = vec![
+        CExpr::Return(var(2)),
+        CExpr::Let {
+            var: VarId(2),
+            rhs: Rhs::Prim(PrimOp::IntAdd, vec![var(0), var(1)]),
+            body: CExprId(0),
+        },
+        CExpr::Let {
+            var: VarId(1),
+            rhs: Rhs::call(Call::Direct(FnIdx(0), vec![var(0)])),
+            body: CExprId(1),
+        },
+    ];
+    let f = function("f", 1, vec![int("n"), int("t"), int("t")], exprs, &[]);
+    assert_eq!(
+        check(vec![k, f]),
+        Err("`n0` is used outside its scope in `f`".to_string())
+    );
+}
+
+#[test]
+fn a_jump_after_a_call_needs_the_variables_of_the_join_body_in_scope() {
+    let z = function("z", 0, vec![], vec![CExpr::Return(Atom::Int(1))], &[]);
+    let exprs = vec![
+        CExpr::Return(var(2)),
+        CExpr::Let {
+            var: VarId(2),
+            rhs: Rhs::Prim(PrimOp::IntAdd, vec![var(0), var(1)]),
+            body: CExprId(0),
+        },
+        CExpr::Jump {
+            join: JoinId(0),
+            arg: var(3),
+        },
+        CExpr::Let {
+            var: VarId(3),
+            rhs: Rhs::call(Call::Direct(FnIdx(0), vec![])),
+            body: CExprId(2),
+        },
+        CExpr::Join {
+            join: JoinId(0),
+            param: VarId(1),
+            body: CExprId(1),
+            scope: CExprId(3),
+        },
+    ];
+    let f = function(
+        "f",
+        1,
+        vec![int("n"), int("t"), int("t"), int("t")],
+        exprs,
+        &[4],
+    );
+    assert_eq!(
+        check(vec![z, f]),
+        Err("`n0` is used outside its scope in `f`".to_string())
     );
 }

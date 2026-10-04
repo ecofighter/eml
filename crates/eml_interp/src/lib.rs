@@ -230,7 +230,7 @@ impl<'p> Machine<'p> {
                     .map_err(|error| Fault::Output(error.to_string()))?;
                 Value::Unit
             }
-            Rhs::Call(call) => return self.call(call, Some((var, body))),
+            Rhs::Call { call, .. } => return self.call(call, Some((var, body))),
             Rhs::MakeClosure(function, args) => {
                 let args = self.atoms(args)?;
                 let closure = Closure {

@@ -9,7 +9,7 @@ use la_arena::ArenaMap;
 
 use crate::{
     Atom, CExpr, CExprId, Call, CoreFn, FALSE, FnIdx, IoOp, JoinId, PrimOp, Program, Rhs, TRUE,
-    VarId, VarInfo, perceus,
+    VarId, VarInfo, perceus, saved,
 };
 
 /// 診断のエラーがないプログラムだけを受け取る。エラーがあれば `eml_cli` は Core IR を作らない
@@ -68,6 +68,7 @@ pub fn lower(module: &Module, typed: &TypedModule) -> Program {
         strings: builder.strings.values,
     };
     perceus::insert(&mut program);
+    saved::record(&mut program);
     // Perceus の誤りを、実行した経路だけでなく変換のたびに見つける (docs/spec/core-ir.md)
     #[cfg(debug_assertions)]
     if let Err(error) = crate::verify(&program) {
@@ -148,7 +149,7 @@ impl ProgramBuilder {
                     CExpr::TailCall(Call::Apply(Atom::Var(value), unit)),
                     CExpr::Let {
                         var: value,
-                        rhs: Rhs::Call(Call::Direct(main, Vec::new())),
+                        rhs: Rhs::call(Call::Direct(main, Vec::new())),
                         body: CExprId(0),
                     },
                 ],
@@ -212,7 +213,7 @@ impl ProgramBuilder {
                 let (_, middle_type) = split_arrows(&param_types[inner], 1);
                 let middle = fresh(&middle_type);
                 (
-                    vec![(middle, Rhs::Call(Call::Apply(atoms[inner], vec![atoms[2]])))],
+                    vec![(middle, Rhs::call(Call::Apply(atoms[inner], vec![atoms[2]])))],
                     CExpr::TailCall(Call::Apply(atoms[outer], vec![Atom::Var(middle)])),
                 )
             }
@@ -426,10 +427,10 @@ impl FnLowering<'_> {
         let mut bindings = Vec::new();
         let mut last = self.tail_expr(expr, exit, &mut bindings);
         if let CExpr::Return(Atom::Var(returned)) = last
-            && let Some(Binding::Let(bound, Rhs::Call(_))) = bindings.last()
+            && let Some(Binding::Let(bound, Rhs::Call { .. })) = bindings.last()
             && *bound == returned
         {
-            let Some(Binding::Let(_, Rhs::Call(call))) = bindings.pop() else {
+            let Some(Binding::Let(_, Rhs::Call { call, .. })) = bindings.pop() else {
                 unreachable!("checked above");
             };
             // 結果の変数は呼び出しの直前に作ったものなので、表から除いて番号を詰める
@@ -522,16 +523,16 @@ impl FnLowering<'_> {
         }
         let rest = args.split_off(arity);
         if rest.is_empty() {
-            return self.bind(out, "t", ty, Rhs::Call(Call::Direct(target, args)));
+            return self.bind(out, "t", ty, Rhs::call(Call::Direct(target, args)));
         }
         let (_, function_ty) = split_arrows(callee_ty, arity);
         let function = self.bind(
             out,
             "t",
             &function_ty,
-            Rhs::Call(Call::Direct(target, args)),
+            Rhs::call(Call::Direct(target, args)),
         );
-        self.bind(out, "t", ty, Rhs::Call(Call::Apply(function, rest)))
+        self.bind(out, "t", ty, Rhs::call(Call::Apply(function, rest)))
     }
 
     fn call_builtin(
@@ -552,7 +553,7 @@ impl FnLowering<'_> {
             Lowering::Prim(op) => Rhs::Prim(op, args),
             Lowering::Perform(op) => Rhs::Perform(op, args),
             Lowering::Compose { .. } => {
-                Rhs::Call(Call::Direct(self.program.wrapper(builtin), args))
+                Rhs::call(Call::Direct(self.program.wrapper(builtin), args))
             }
             Lowering::Constructor(_) => unreachable!("constructors are values, not functions"),
         };
@@ -561,7 +562,7 @@ impl FnLowering<'_> {
         }
         let (_, function_ty) = split_arrows(callee_ty, arity);
         let function = self.bind(out, "t", &function_ty, rhs);
-        self.bind(out, "t", ty, Rhs::Call(Call::Apply(function, rest)))
+        self.bind(out, "t", ty, Rhs::call(Call::Apply(function, rest)))
     }
 
     /// 式の値をアトムにする。値の計算に要る束縛は `out` に積む。
@@ -597,7 +598,7 @@ impl FnLowering<'_> {
                 if self.program.arity(target) == 0 {
                     let ty = self.ty(id);
                     let name = self.module.functions[*function].name.clone();
-                    self.bind(out, &name, &ty, Rhs::Call(Call::Direct(target, Vec::new())))
+                    self.bind(out, &name, &ty, Rhs::call(Call::Direct(target, Vec::new())))
                 } else {
                     let ty = self.ty(id);
                     self.bind(out, "c", &ty, Rhs::MakeClosure(target, Vec::new()))
@@ -629,7 +630,7 @@ impl FnLowering<'_> {
                         // 呼ばれる式は引数より左にあるので、先に評価する
                         let function = self.atom(*callee, out);
                         let args = self.call_args(args, first, out);
-                        self.bind(out, "t", &ty, Rhs::Call(Call::Apply(function, args)))
+                        self.bind(out, "t", &ty, Rhs::call(Call::Apply(function, args)))
                     }
                 }
             }

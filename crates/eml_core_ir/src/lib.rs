@@ -4,6 +4,7 @@ mod liveness;
 mod lower;
 mod perceus;
 mod pretty;
+mod saved;
 mod verify;
 
 pub use eml_types::Linearity;
@@ -115,7 +116,11 @@ pub enum CExpr {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Rhs {
     Atom(Atom),
-    Call(Call),
+    /// 呼び出しの後で使う変数 (`saved`) を、呼び出しのフレームに退避する (docs/spec/core-ir.md)。
+    Call {
+        call: Call,
+        saved: Vec<VarId>,
+    },
     /// 関数と先頭の引数の並びからクロージャを作る。並びの値の所有権はクロージャに移る。ラムダの捕獲と部分適用は、
     /// どちらもこの形になる (docs/spec/core-ir.md)。
     MakeClosure(FnIdx, Vec<Atom>),
@@ -125,11 +130,19 @@ pub enum Rhs {
 }
 
 impl Rhs {
+    /// 退避する変数をまだ決めていない呼び出し。Perceus の後に、退避のパス (`saved.rs`) が埋める。
+    pub fn call(call: Call) -> Rhs {
+        Rhs::Call {
+            call,
+            saved: Vec::new(),
+        }
+    }
+
     /// 右辺が使う値。関数、プリミティブ、`perform` の引数は、どれも所有権を受け取る (docs/spec/core-ir.md)。
     pub fn atoms(&self) -> Vec<Atom> {
         match self {
             Rhs::Atom(atom) => vec![*atom],
-            Rhs::Call(call) => call.atoms(),
+            Rhs::Call { call, .. } => call.atoms(),
             Rhs::MakeClosure(_, args) | Rhs::Prim(_, args) | Rhs::Perform(_, args) => args.clone(),
             Rhs::ConstString(_) => Vec::new(),
         }

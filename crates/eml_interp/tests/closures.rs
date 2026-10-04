@@ -76,8 +76,8 @@ fn print_int(n: u32, show: u32, out: u32) -> Vec<Step> {
 fn a_partial_application_waits_for_the_rest_of_the_arguments() {
     let mut steps = vec![
         Step::Let(1, Rhs::MakeClosure(FnIdx(0), vec![])),
-        Step::Let(2, Rhs::Call(Call::Apply(var(1), vec![Atom::Int(10)]))),
-        Step::Let(3, Rhs::Call(Call::Apply(var(2), vec![Atom::Int(20)]))),
+        Step::Let(2, Rhs::call(Call::Apply(var(1), vec![Atom::Int(10)]))),
+        Step::Let(3, Rhs::call(Call::Apply(var(2), vec![Atom::Int(20)]))),
     ];
     steps.extend(print_int(3, 4, 5));
     let vars = [
@@ -113,9 +113,9 @@ fn a_returned_function_can_still_wait_for_more_arguments() {
         Step::Let(1, Rhs::MakeClosure(FnIdx(1), vec![])),
         Step::Let(
             2,
-            Rhs::Call(Call::Apply(var(1), vec![Atom::Int(5), Atom::Int(6)])),
+            Rhs::call(Call::Apply(var(1), vec![Atom::Int(5), Atom::Int(6)])),
         ),
-        Step::Let(3, Rhs::Call(Call::Apply(var(2), vec![Atom::Int(7)]))),
+        Step::Let(3, Rhs::call(Call::Apply(var(2), vec![Atom::Int(7)]))),
     ];
     steps.extend(print_int(3, 4, 5));
     let vars = [
@@ -144,7 +144,7 @@ fn extra_arguments_are_applied_to_the_returned_function() {
         Step::Let(1, Rhs::MakeClosure(FnIdx(1), vec![])),
         Step::Let(
             2,
-            Rhs::Call(Call::Apply(var(1), vec![Atom::Int(5), Atom::Int(6)])),
+            Rhs::call(Call::Apply(var(1), vec![Atom::Int(5), Atom::Int(6)])),
         ),
     ];
     steps.extend(print_int(2, 3, 4));
@@ -165,9 +165,15 @@ fn a_shared_closure_keeps_its_captured_values() {
         Step::Let(1, Rhs::ConstString(0)),
         Step::Let(2, Rhs::MakeClosure(FnIdx(0), vec![var(1)])),
         Step::Dup(2),
-        Step::Let(3, Rhs::Call(Call::Apply(var(2), vec![Atom::Int(1)]))),
+        Step::Let(
+            3,
+            Rhs::Call {
+                call: Call::Apply(var(2), vec![Atom::Int(1)]),
+                saved: vec![VarId(2)],
+            },
+        ),
         Step::Let(4, Rhs::Perform(IoOp::Println, vec![var(3)])),
-        Step::Let(5, Rhs::Call(Call::Apply(var(2), vec![Atom::Int(2)]))),
+        Step::Let(5, Rhs::call(Call::Apply(var(2), vec![Atom::Int(2)]))),
         Step::Let(6, Rhs::Perform(IoOp::Println, vec![var(5)])),
     ];
     let vars = [

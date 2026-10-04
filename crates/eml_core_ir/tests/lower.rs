@@ -131,8 +131,8 @@ fn partial_and_extra_arguments_use_closures() {
     fn main(p0) {
       let c1 = closure add(1)
       let t2 = apply c1(2)
-      let t3 = call adder(3)
-      let t4 = apply t3(4)
+      let t3 = call adder(3) [t2]
+      let t4 = apply t3(4) [t2]
       let t5 = prim +(t2, t4)
       let t6 = prim show_int(t5)
       let t7 = perform println(t6)
@@ -165,7 +165,7 @@ fn builtins_used_as_values_are_wrapped() {
       return t1
     }
     fn builtin$>>(p0, p1, p2) {
-      let t3 = apply p0(p2)
+      let t3 = apply p0(p2) [p1]
       tailcall apply p1(t3)
     }
     fn builtin$println(p0) {
@@ -190,7 +190,7 @@ fn lambdas_are_lifted_with_their_captures_first() {
       dup s1
       let c2 = closure main$lambda0(s1)
       let s3 = const "hi"
-      let t4 = call apply(c2, s3)
+      let t4 = call apply(c2, s3) [s1]
       let t5 = perform println(t4)
       let t6 = perform println(s1)
       return t6
@@ -304,7 +304,7 @@ fn calls_in_tail_position_are_tail_calls() {
     }
     fn call_twice(f0, x1) {
       dup f0
-      let t2 = apply f0(x1)
+      let t2 = apply f0(x1) [f0]
       tailcall apply f0(t2)
     }
     fn main(p0) {
@@ -334,4 +334,38 @@ fn the_entry_applies_a_point_free_main_to_unit() {
       tailcall apply f0(())
     }
     "#);
+}
+
+#[test]
+fn calls_save_the_variables_used_after_them() {
+    let text = "around : Int -> String -> String\naround n s =\n  let m = n + 1\n  let t = if n > 0 then twice s else s\n  t ++ show_int m\n\ntwice : String -> String\ntwice s = s ++ s\n\nmain : Unit -> <IO> Unit\nmain () = ()";
+    insta::assert_snapshot!(core_text(text), @r"
+    fn around(n0, s1) {
+      let t2 = prim +(n0, 1)
+      let t3 = prim >(n0, 0)
+      join j0(t5) {
+        let t6 = prim show_int(t2)
+        let t7 = prim ++(t5, t6)
+        return t7
+      }
+      switch t3 {
+        #0 ->
+          jump j0(s1)
+        #1 ->
+          let t4 = call twice(s1) [t2]
+          jump j0(t4)
+      }
+    }
+    fn twice(s0) {
+      dup s0
+      let t1 = prim ++(s0, s0)
+      return t1
+    }
+    fn main(p0) {
+      return ()
+    }
+    fn entry$main() {
+      tailcall main(())
+    }
+    ");
 }

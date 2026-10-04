@@ -97,10 +97,18 @@ fn rhs_text(program: &Program, function: &CoreFn, rhs: &Rhs) -> String {
     };
     match rhs {
         Rhs::Atom(a) => atom(function, a),
-        Rhs::Call(call @ Call::Direct(..)) => {
-            format!("call {}", call_text(program, function, call))
+        Rhs::Call { call, saved } => {
+            let text = match call {
+                Call::Direct(..) => format!("call {}", call_text(program, function, call)),
+                Call::Apply(..) => call_text(program, function, call),
+            };
+            if saved.is_empty() {
+                text
+            } else {
+                let names: Vec<String> = saved.iter().map(|&v| var(function, v)).collect();
+                format!("{text} [{}]", names.join(", "))
+            }
         }
-        Rhs::Call(call) => call_text(program, function, call),
         Rhs::MakeClosure(target, a) => {
             format!("closure {}({})", program.function(*target).name, args(a))
         }

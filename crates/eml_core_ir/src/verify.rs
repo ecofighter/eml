@@ -49,11 +49,17 @@ struct Checker<'a> {
     tracked: Vec<bool>,
     /// join point ごとの、本体で使う RC の対象の変数。
     needs: HashMap<JoinId, Vars>,
+    /// join point ごとの、本体で使う変数 (RC の対象でないものも含む)。呼び出しの後に `Jump` するとき、退避し忘れて
+    /// いないことを確かめる。
+    uses: HashMap<JoinId, Vars>,
     bound: HashSet<VarId>,
-    /// 今の経路で束縛の範囲にある変数。枝ごとに写すと、文の `if` が続く関数で文の数の2乗の時間がかかるので、
-    /// 束縛を `scope_log` に記録し、枝や範囲を確かめ終えたら記録を巻き戻す。
-    in_scope: Vec<bool>,
-    scope_log: Vec<VarId>,
+    /// 変数ごとの、範囲に入れたときの区間の番号。区間は呼び出しのたびに新しくなり、呼び出しで退避した変数を新しい
+    /// 区間に入れ直す。今の区間の番号を持つ変数だけが範囲にある。枝ごとに写すと、文の `if` が続く関数で文の数の
+    /// 2乗の時間がかかるので、変更を `scope_log` に記録し、枝や範囲を確かめ終えたら巻き戻す。
+    stamps: Vec<Option<u32>>,
+    scope_log: Vec<(VarId, Option<u32>)>,
+    epoch: u32,
+    next_epoch: u32,
     defined_joins: HashSet<JoinId>,
 }
 
@@ -61,14 +67,18 @@ impl<'a> Checker<'a> {
     fn new(program: &'a Program, function: &'a CoreFn) -> Self {
         let tracked = tracked(function);
         let needs = liveness(function, &tracked).joins;
+        let uses = liveness(function, &vec![true; function.vars.len()]).joins;
         Checker {
             program,
             function,
             tracked,
             needs,
+            uses,
             bound: HashSet::new(),
-            in_scope: vec![false; function.vars.len()],
+            stamps: vec![None; function.vars.len()],
             scope_log: Vec::new(),
+            epoch: 0,
+            next_epoch: 1,
             defined_joins: HashSet::new(),
         }
     }
@@ -99,6 +109,15 @@ impl<'a> Checker<'a> {
             match function.expr(id) {
                 CExpr::Let { var, rhs, body } => {
                     self.check_rhs(&mut state, rhs)?;
+                    if let Rhs::Call { saved, .. } = rhs {
+                        self.check_saved(&state, saved)?;
+                        // 呼び出しの後は、退避した変数だけが範囲に残る
+                        self.epoch = self.next_epoch;
+                        self.next_epoch += 1;
+                        for &var in saved {
+                            self.enter_scope(var);
+                        }
+                    }
                     self.bind(&mut state, *var)?;
                     id = *body;
                 }
@@ -156,22 +175,28 @@ impl<'a> Checker<'a> {
         }
     }
 
-    /// 枝や範囲を確かめ、その中で束縛した変数を範囲から外す。
+    /// 枝や範囲を確かめ、その中での範囲の変更を巻き戻す。
     fn check_branch(&mut self, id: CExprId, state: State) -> Result<(), String> {
         let mark = self.scope_log.len();
+        let epoch = self.epoch;
         self.check(id, state)?;
-        for var in self.scope_log.drain(mark..) {
-            self.in_scope[var.0 as usize] = false;
+        for (var, stamp) in self.scope_log.drain(mark..).rev() {
+            self.stamps[var.0 as usize] = stamp;
         }
+        self.epoch = epoch;
         Ok(())
+    }
+
+    fn enter_scope(&mut self, var: VarId) {
+        self.scope_log.push((var, self.stamps[var.0 as usize]));
+        self.stamps[var.0 as usize] = Some(self.epoch);
     }
 
     fn bind(&mut self, state: &mut State, var: VarId) -> Result<(), String> {
         if !self.bound.insert(var) {
             return Err(format!("`{}` is bound twice", self.name(var)));
         }
-        self.in_scope[var.0 as usize] = true;
-        self.scope_log.push(var);
+        self.enter_scope(var);
         if self.tracked[var.0 as usize] {
             state.owned.insert(var, 1);
         }
@@ -179,7 +204,7 @@ impl<'a> Checker<'a> {
     }
 
     fn visible(&self, var: VarId) -> Result<(), String> {
-        if self.in_scope[var.0 as usize] {
+        if self.stamps[var.0 as usize] == Some(self.epoch) {
             Ok(())
         } else {
             Err(format!("`{}` is used outside its scope", self.name(var)))
@@ -233,7 +258,7 @@ impl<'a> Checker<'a> {
 
     fn check_rhs(&self, state: &mut State, rhs: &Rhs) -> Result<(), String> {
         match rhs {
-            Rhs::Call(call) => return self.check_call(state, call),
+            Rhs::Call { call, .. } => return self.check_call(state, call),
             Rhs::MakeClosure(target, args) => {
                 let target = self.program.function(*target);
                 if args.len() >= target.params.len() {
@@ -271,10 +296,42 @@ impl<'a> Checker<'a> {
         Ok(())
     }
 
+    /// 退避する変数は範囲の中にあり、RC の対象のうち所有している変数とちょうど一致する。フレームがちょうど所有して
+    /// いる参照だけを持つためである (docs/spec/core-ir.md)。
+    fn check_saved(&self, state: &State, saved: &[VarId]) -> Result<(), String> {
+        for &var in saved {
+            self.visible(var)?;
+        }
+        let saved_tracked: Vars = saved
+            .iter()
+            .copied()
+            .filter(|var| self.tracked[var.0 as usize])
+            .collect();
+        let owned: Vec<VarId> = state
+            .owned
+            .iter()
+            .flat_map(|(&var, &count)| std::iter::repeat_n(var, count as usize))
+            .collect();
+        if owned.iter().copied().collect::<Vars>() != saved_tracked
+            || owned.len() != saved_tracked.len()
+        {
+            return Err(format!(
+                "a call saves {} but owns {}",
+                self.names(&saved_tracked),
+                self.names(&owned)
+            ));
+        }
+        Ok(())
+    }
+
     /// 渡す値を除き、行き先の join point の本体が使う変数を、ちょうど1つずつ所有している。
     fn check_jump(&self, mut state: State, join: JoinId, arg: &Atom) -> Result<(), String> {
         if !state.joins.contains(&join) {
             return Err(format!("a jump to `j{}` is outside its scope", join.0));
+        }
+        // 呼び出しの後に `Jump` する経路で、本体が使う変数を退避し忘れていないこと
+        for &var in self.uses.get(&join).into_iter().flatten() {
+            self.visible(var)?;
         }
         self.consume(&mut state, arg)?;
         let needs = self.needs.get(&join).cloned().unwrap_or_default();
