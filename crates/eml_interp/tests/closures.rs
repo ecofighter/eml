@@ -47,7 +47,7 @@ fn function(name: &str, params: u32, vars: &[(&str, bool)], steps: Vec<Step>, re
 fn run_program(functions: Vec<CoreFn>, main: u32, strings: &[&str]) -> String {
     let program = Program {
         functions,
-        main: FnIdx(main),
+        entry: FnIdx(main),
         strings: strings.iter().map(|s| s.to_string()).collect(),
     };
     let (stdout, result) = eml_test_support::execute(program, true);
@@ -88,7 +88,7 @@ fn a_partial_application_waits_for_the_rest_of_the_arguments() {
         ("s", true),
         ("t", false),
     ];
-    let main = function("main", 1, &vars, steps, var(5));
+    let main = function("main", 0, &vars, steps, var(5));
     assert_eq!(run_program(vec![first(false), main], 1, &[]), "10\n");
 }
 
@@ -126,7 +126,7 @@ fn a_returned_function_can_still_wait_for_more_arguments() {
         ("t", true),
         ("u", false),
     ];
-    let main = function("main", 1, &vars, steps, var(5));
+    let main = function("main", 0, &vars, steps, var(5));
     assert_eq!(run_program(vec![first3, make, main], 2, &[]), "5\n");
 }
 
@@ -155,7 +155,7 @@ fn extra_arguments_are_applied_to_the_returned_function() {
         ("s", true),
         ("t", false),
     ];
-    let main = function("main", 1, &vars, steps, var(4));
+    let main = function("main", 0, &vars, steps, var(4));
     assert_eq!(run_program(vec![first(false), make, main], 2, &[]), "5\n");
 }
 
@@ -179,6 +179,6 @@ fn a_shared_closure_keeps_its_captured_values() {
         ("r", true),
         ("t", false),
     ];
-    let main = function("main", 1, &vars, steps, var(6));
+    let main = function("main", 0, &vars, steps, var(6));
     assert_eq!(run_program(vec![first(true), main], 1, &["a"]), "a\na\n");
 }

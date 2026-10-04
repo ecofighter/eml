@@ -19,7 +19,7 @@ fn leaking_program() -> Program {
     Program {
         functions: vec![CoreFn {
             name: "main".to_string(),
-            params: vec![VarId(0)],
+            params: vec![],
             vars: vec![var("p", false), var("s", true)],
             body: CExprId(1),
             exprs: vec![
@@ -32,7 +32,7 @@ fn leaking_program() -> Program {
             ],
             joins: Vec::new(),
         }],
-        main: FnIdx(0),
+        entry: FnIdx(0),
         strings: vec!["leaked".to_string()],
     }
 }

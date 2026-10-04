@@ -52,13 +52,19 @@ pub fn lower(module: &Module, typed: &TypedModule) -> Program {
     let main = typed
         .main
         .expect("`eml_cli::compile` reports a missing `main`");
+    let main_type = &typed
+        .signatures
+        .get(main)
+        .expect("`main` has a signature")
+        .ty;
+    let entry = builder.entry(indices[main], main_type);
     let mut program = Program {
         functions: builder
             .functions
             .into_iter()
             .map(|function| function.expect("every reserved function is lowered"))
             .collect(),
-        main: indices[main],
+        entry,
         strings: builder.strings.values,
     };
     perceus::insert(&mut program);
@@ -122,6 +128,39 @@ impl ProgramBuilder {
 
     fn finish(&mut self, function: FnIdx, core: CoreFn) {
         self.functions[function.0 as usize] = Some(core);
+    }
+
+    /// 実行の入口。`main : Unit -> <IO> Unit` を `()` で呼ぶ。等式に引数のない `main = fn () -> ...` は関数値を返す
+    /// ので、返った値に `()` を適用する (docs/spec/core-ir.md)。
+    fn entry(&mut self, main: FnIdx, main_type: &Type) -> FnIdx {
+        let function = self.reserve(0);
+        let unit = vec![Atom::Unit];
+        let (vars, exprs) = if self.arity(main) == 0 {
+            let value = VarId(0);
+            (
+                vec![var_info("f", main_type, &self.lang)],
+                vec![
+                    CExpr::TailCall(Call::Apply(Atom::Var(value), unit)),
+                    CExpr::Let {
+                        var: value,
+                        rhs: Rhs::Call(Call::Direct(main, Vec::new())),
+                        body: CExprId(0),
+                    },
+                ],
+            )
+        } else {
+            (Vec::new(), vec![CExpr::TailCall(Call::Direct(main, unit))])
+        };
+        let core = CoreFn {
+            name: "entry$main".to_string(),
+            params: Vec::new(),
+            vars,
+            body: CExprId(exprs.len() as u32 - 1),
+            exprs,
+            joins: Vec::new(),
+        };
+        self.finish(function, core);
+        function
     }
 
     /// 組み込みを値や部分適用で使うときに、それを呼ぶだけの関数を作る。組み込みごとに1つだけ作る。

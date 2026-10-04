@@ -10,6 +10,9 @@ fn hello_world() {
       let t2 = perform println(s1)
       return t2
     }
+    fn entry$main() {
+      tailcall main(())
+    }
     "#);
 }
 
@@ -32,6 +35,9 @@ fn strings_are_dupped_and_decreffed() {
       let t3 = perform println(t2)
       return t3
     }
+    fn entry$main() {
+      tailcall main(())
+    }
     "#);
 }
 
@@ -47,6 +53,9 @@ fn shadowed_and_discarded_strings() {
       decref s4
       let t5 = perform println(t3)
       return t5
+    }
+    fn entry$main() {
+      tailcall main(())
     }
     "#);
 }
@@ -71,6 +80,9 @@ fn a_non_tail_if_keeps_strings_used_later() {
     }
     fn main(p0) {
       return ()
+    }
+    fn entry$main() {
+      tailcall main(())
     }
     "#);
 }
@@ -98,6 +110,9 @@ fn recursion_and_top_level_values() {
       let t3 = perform println(t2)
       return t3
     }
+    fn entry$main() {
+      tailcall main(())
+    }
     ");
 }
 
@@ -122,6 +137,9 @@ fn partial_and_extra_arguments_use_closures() {
       let t6 = prim show_int(t5)
       let t7 = perform println(t6)
       return t7
+    }
+    fn entry$main() {
+      tailcall main(())
     }
     ");
 }
@@ -154,6 +172,9 @@ fn builtins_used_as_values_are_wrapped() {
       let t1 = perform println(p0)
       return t1
     }
+    fn entry$main() {
+      tailcall main(())
+    }
     ");
 }
 
@@ -178,6 +199,9 @@ fn lambdas_are_lifted_with_their_captures_first() {
       let t2 = prim ++(t1, s0)
       return t2
     }
+    fn entry$main() {
+      tailcall main(())
+    }
     "#);
 }
 
@@ -200,6 +224,9 @@ fn a_zero_arity_callee_is_evaluated_before_its_arguments() {
       let t5 = perform println(t4)
       return t5
     }
+    fn entry$main() {
+      tailcall main(())
+    }
     "#);
 }
 
@@ -220,6 +247,9 @@ fn a_tail_if_returns_from_each_arm() {
     }
     fn main(p0) {
       return ()
+    }
+    fn entry$main() {
+      tailcall main(())
     }
     "#);
 }
@@ -251,6 +281,9 @@ fn ifs_in_a_condition_nest_join_points() {
     fn main(p0) {
       return ()
     }
+    fn entry$main() {
+      tailcall main(())
+    }
     ");
 }
 
@@ -277,5 +310,28 @@ fn calls_in_tail_position_are_tail_calls() {
     fn main(p0) {
       return ()
     }
+    fn entry$main() {
+      tailcall main(())
+    }
     ");
+}
+
+#[test]
+fn the_entry_applies_a_point_free_main_to_unit() {
+    let text = "main : Unit -> <IO> Unit\nmain = fn () -> println \"point-free\"";
+    insta::assert_snapshot!(core_text(text), @r#"
+    fn main() {
+      let c0 = closure main$lambda0()
+      return c0
+    }
+    fn main$lambda0(p0) {
+      let s1 = const "point-free"
+      let t2 = perform println(s1)
+      return t2
+    }
+    fn entry$main() {
+      let f0 = call main()
+      tailcall apply f0(())
+    }
+    "#);
 }

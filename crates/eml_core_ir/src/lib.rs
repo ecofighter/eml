@@ -13,7 +13,8 @@ pub use pretty::pretty;
 #[derive(Debug)]
 pub struct Program {
     pub functions: Vec<CoreFn>,
-    pub main: FnIdx,
+    /// 実行の入口。`main` を `()` で呼ぶ、引数のない関数 (docs/spec/core-ir.md)。
+    pub entry: FnIdx,
     /// 文字列リテラルの定数表。`ConstString` が添字で引き、実行のたびに新しい文字列をヒープに作る。
     pub strings: Vec<String>,
 }
