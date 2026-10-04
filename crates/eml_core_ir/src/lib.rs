@@ -4,6 +4,7 @@ mod liveness;
 mod lower;
 mod perceus;
 mod pretty;
+mod simplify;
 mod verify;
 
 pub use eml_types::Linearity;

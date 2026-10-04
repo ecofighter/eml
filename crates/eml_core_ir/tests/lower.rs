@@ -471,3 +471,56 @@ fn operations_as_values_and_drop() {
     }
     "#);
 }
+
+#[test]
+fn a_join_point_that_returns_its_value_is_forwarded_and_removed() {
+    // `let y = if ...` の後に `y` を返すだけなら、join point の本体を各 jump の位置に写し、join point を消す
+    let text = "select : Bool -> Int\nselect c =\n  let y = if c then 1 else 2\n  y\n\nmain : Unit -> <IO> Unit\nmain () = ()";
+    insta::assert_snapshot!(core_text(text), @r"
+    fn select(c0) {
+      switch c0 {
+        #0 ->
+          return 2
+        #1 ->
+          return 1
+      }
+    }
+    fn main(p0) {
+      return ()
+    }
+    fn entry$main() {
+      tailcall main(())
+    }
+    ");
+}
+
+#[test]
+fn a_join_point_that_passes_its_value_on_is_forwarded() {
+    // 内側の join point の本体は外側への jump だけなので、内側への jump を外側への jump にする
+    let text = "nested : Bool -> Bool -> Int\nnested a b =\n  let y =\n    if a then\n      let z = if b then 1 else 2\n      z\n    else 3\n  y + 1\n\nmain : Unit -> <IO> Unit\nmain () = ()";
+    insta::assert_snapshot!(core_text(text), @r"
+    fn nested(a0, b1) {
+      join j0(t3) [] {
+        let t4 = prim +(t3, 1)
+        return t4
+      }
+      switch a0 {
+        #0 ->
+          jump j0(3)
+        #1 ->
+          switch b1 {
+            #0 ->
+              jump j0(2)
+            #1 ->
+              jump j0(1)
+          }
+      }
+    }
+    fn main(p0) {
+      return ()
+    }
+    fn entry$main() {
+      tailcall main(())
+    }
+    ");
+}
