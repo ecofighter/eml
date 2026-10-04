@@ -2,7 +2,7 @@
 
 位置づけ: 手引き。
 
-テストの書き方、テストの変更の運用、層ごとの方法、UI テストの仕組みを定める。テストの変更の記録は [test-changes.md](test-changes.md) にある。
+テストの書き方、テストの変更の運用、テストの置き場所、層ごとの方法、UI テストの仕組みを定める。テストの変更の記録は [test-changes.md](test-changes.md) にある。
 
 ## 方針
 
@@ -25,6 +25,43 @@
 - 作業の計画の全体制約は「期待値は、このプランで名前を挙げたテストだけを変える。期待値を変えない機械的な追随は許す」と書く
 - UI テストは最も強い仕様として扱い、種類1でしか変えない
 
+## テストの置き場所
+
+新しいテストの置き場所は、期待するものを上から順に見て、最初に当てはまる行で決める。
+
+| # | 期待するもの | 置き場所 |
+|---|---|---|
+| 1 | プログラムを `eml check` / `eml run` にかけたときにユーザーが見るもの。stdout、実行時エラー、プログラム全体が通るか落ちるか | UI テスト (`tests/ui/`) |
+| 2 | 1つの段階の出力 (CST、HIR、推論したシグネチャ、Core IR) と、その段階の診断の細部 (位置、回復、端のケース) | その段階の crate の結合テスト (`crates/<段階>/tests/`)。ソースから `eml_test_support` で組み立てる |
+| 3 | フロントエンドからは作れない状態。壊れた IR、`decref` の抜けた IR など | `eml_core_ir/tests/verify.rs` か `eml_interp/tests/`。手書きの Core IR で組み立てる |
+| 4 | 公開の API から届かないか、内部の状態を直接組まないと確かめにくい部品の振る舞い。レイアウト段、パーサのマーカー、単一化の表、Kind の制約の解消、ヒープなど | `src/` の単体テスト |
+| 5 | lib API の流れ、CLI の終了コード、テスト補助そのもの | `eml_cli/tests/api.rs`、`eml_cli/tests/cli.rs`、`eml_test_support/tests/` |
+
+### 重複させない
+
+1つの事実は、それを観測できるいちばん下の層で確かめる。UI テストは機能ごとの代表的な筋書きを確かめ、段階の端のケースを繰り返さない。例えば診断なら、端のケースは段階の crate のテストに置き、代表的な表示を `check-fail/` に1つ置く。
+
+### crate の中の置き方
+
+- 結合テストは、話題ごとに1ファイルにする。ファイル名は spec の節か言語の機能から付ける (`effects.rs`、`operators.rs`)。1つのファイルが複数の話題にまたがったら、話題で分ける
+- crate の結合テストが使う表示の関数は `tests/common/mod.rs` に置く
+- 単体テストは、ファイルの末尾の `#[cfg(test)] mod tests` に置く。大きくなったら、`eml_types/src/table/tests.rs` のように隣の `tests.rs` に分ける
+- `crates/eml_test_support/` は、結合テストのためにパイプラインを組む関数 (`parse`、`lower`、`check`、`core`、`run`、`execute`) と、診断を文字列にする関数 (`short`、`full`) を持つ。開発専用の crate で、各 crate の `tests/` からだけ使う。段階は feature (`hir` < `types` < `core` < `run`) で選び、各 crate は自分の段階までを有効にする。下流の crate がまだ組み立たなくても、上流の段階のテストを流せるようにするためである。`src/` の `#[cfg(test)]` から使うと、テストする crate が2つ別々にリンクされて型が合わなくなる
+
+### 今あるテストの地図
+
+| crate | 結合テスト (`tests/`) | 単体テスト (`src/`) |
+|---|---|---|
+| `eml_diagnostics` | なし | `lib.rs` (診断の番号と E0004)、`source.rs` (`SourceFiles` と行と列)、`render.rs` (診断の表示) |
+| `eml_syntax` | `lexer.rs` (字句)、`literals.rs` (リテラルの値の解釈)、`parser.rs` (空のファイル、項目の間の回復、BOM と shebang)、`declarations.rs` (シグネチャ、型、row、`data`、`effect`、fixity)、`expressions.rs` (等式、パターン、式)、`control.rs` (`if` と `match`)、`handlers.rs` (handler)、`nesting.rs` (入れ子の深さの上限)、`ast.rs` (型付き AST ラッパ)、`corpus.rs` (コーパス。ソースは `tests/corpus/` にあり、`s1.em` は S1 の構文、`later_stages.em` は S2 以降の構文を含む) | `layout.rs` (レイアウト段)、`parser.rs` (パーサのマーカー、先読み、診断の位置)、`grammar/scan.rs` (回復の範囲の走査)、`syntax_kind.rs` と `token_set.rs` (構文の種類の表) |
+| `eml_hir` | `lower.rs` (名前解決と脱糖)、`operators.rs` (演算子の組み直し)、`effects.rs` (エフェクトと操作)、`structure.rs` (HIR のデータ構造と走査) | `builtin.rs` (組み込みの表)、`lower/scope.rs` (名前空間) |
+| `eml_types` | `check.rs` (推論と型の診断)、`effects.rs` (エフェクト、handler、継続) | `table/tests.rs` (単一化と型の書き出し)、`kind.rs` (Kind の制約の解消)、`ty.rs` (型の表示)、`scc.rs` (関数の呼び出しの強連結成分)、`check/mod.rs` (診断の文言) |
+| `eml_core_ir` | `lower.rs` (Core IR への変換と `dup` / `decref` の位置)、`verify.rs` (手書きの Core IR による verifier) | なし |
+| `eml_runtime` | なし | `heap.rs` (確保と解放、世代番号、リーク、フレームと継続の解放)、`output.rs` (`OutputSink`) |
+| `eml_interp` | `run.rs` (手書きの Core IR や生成したソースによる実行)、`closures.rs` (手書きの Core IR によるクロージャ) | `lib.rs` (実行時エラーの表示と `RunConfig`) |
+| `eml_cli` | `ui.rs` (UI テスト)、`api.rs` (lib API の `check` / `compile` / `execute` の流れ)、`cli.rs` (CLI の終了コード) | なし |
+| `eml_test_support` | `support.rs` (テスト補助そのもの) | なし |
+
 ## 層ごとの方法
 
 | 層 | 方法 |
@@ -36,20 +73,15 @@
 | Core IR | Core IR の pretty printer で、`dup` / `decref` の位置を含めてダンプしたスナップショット |
 | ランタイム | ヒープの単体テスト (確保と解放、世代番号による解放済みアクセスの検出、リークの数え方、長い連鎖の解放) |
 | 診断 | 表示した診断テキストのスナップショット |
-| 線形性 | 不正なプログラム (二重使用、消費漏れ、`_` での破棄、`multi` をまたぐ、継続の扱い忘れ) と、正しく通るべきプログラムの対 |
-| 網羅性 | 網羅されていない `match`、到達しない枝、反駁可能な `let` |
+| 線形性 | 線形な値 (`once` の操作の `k` など) を1回でなく使う不正なプログラム (E3001) と、正しく通るべきプログラムの対 |
 | 全体 (UI テスト) | 下の「UI テスト」 |
 | CLI | `eml run` / `eml check` の終了コードと引数の誤りを数件確認する |
 | RC | すべての実行テストで `debug_heap` を有効にする。違反があればテストを失敗させる |
 
-現在あるテストの置き場所は次のとおり。
+### 後の段階で足すテスト
 
-- `crates/eml_syntax/tests/`: 字句 (`lexer.rs`)、リテラルの値の解釈 (`literals.rs`)、パーサ (`parser.rs`、`declarations.rs`、`expressions.rs`、`control.rs`、`handlers.rs`)、入れ子の深さの上限 (`nesting.rs`)、型付き AST ラッパ (`ast.rs`)、コーパス (`corpus.rs`)。コーパスのソースは `crates/eml_syntax/tests/corpus/` にあり、`s1.em` は S1 の構文、`later_stages.em` は S2 以降の構文を含む
-- `crates/eml_hir/tests/`、`crates/eml_types/tests/`、`crates/eml_core_ir/tests/`、`crates/eml_interp/tests/`: 各段階の変換結果と診断のスナップショット、実行の結果。ランタイムのヒープの単体テストは `crates/eml_runtime/src/heap.rs` にある
-- `crates/eml_cli/tests/ui.rs`: UI テスト
-- `crates/eml_cli/tests/api.rs`: lib API (`check` / `compile` / `execute`) の流れ
-- `crates/eml_cli/tests/cli.rs`: CLI の終了コード
-- `crates/eml_test_support/`: 結合テストのためにパイプラインを組む関数 (`parse`、`lower`、`check`、`core`、`run`、`execute`) と、診断を文字列にする関数 (`short`、`full`)。開発専用の crate で、各 crate の `tests/` からだけ使う。段階は feature (`hir` < `types` < `core` < `run`) で選び、各 crate は自分の段階までを有効にする。下流の crate がまだ組み立たなくても、上流の段階のテストを流せるようにするためである。`src/` の `#[cfg(test)]` から使うと、テストする crate が2つ別々にリンクされて型が合わなくなる
+- 線形性 (段階5): 線形性の検査パスを分けたら、二重使用、消費漏れ、`_` での破棄、`multi` をまたぐ、継続の扱い忘れのそれぞれについて、不正なプログラムと正しく通るべきプログラムの対を足す
+- 網羅性 (段階4): 網羅されていない `match`、到達しない枝、反駁可能な `let`
 
 ## UI テスト
 
@@ -59,6 +91,22 @@
 - テストは `crates/eml_cli/tests/ui.rs` に置き、`insta::glob!` で `tests/ui/` 以下の `.em` を走査する。`eml_cli` の lib API をプロセス内で呼び、`debug_heap` を有効にした `RunConfig` で実行する
 - 成功すべきか失敗すべきかはディレクトリで決める。そのため、スナップショットの承認を誤っても、成功と失敗の入れ替わりは検出できる
 - スナップショットの中のパスは `tests/ui` からの相対パスにして、実行する環境に依存しないようにする
+
+### 分類
+
+`run/`、`check-fail/`、`run-fail/` の下に、分類のサブディレクトリを切る。成功すべきか失敗すべきかは、今までどおり最上位のディレクトリで決まる。
+
+- `run/` と `run-fail/` は言語の機能で分け、両方で同じ名前を使う
+  - `basics/`: 値、演算子、`let`、`if`、短絡評価
+  - `functions/`: クロージャ、高階関数、部分適用
+  - `effects/`: エフェクト、`multi`、継続
+  - `runtime/`: 実装の性質を確かめるテスト。メモリの解放、スタックの深さ、join point、末尾呼び出し
+- `check-fail/` は、主なエラーの番号の範囲 ([診断](../spec/diagnostics.md) の「番号の範囲」) で分ける。機能で分けると、エフェクトの誤りのように E1xxx と E2xxx にまたがるものの置き場所が決まらないためである
+  - `syntax/` (E0xxx)、`names/` (E1xxx)、`types/` (E2xxx)、`linearity/` (E3xxx)。網羅性 (E4xxx) の検査を実装したら `exhaustiveness/` を足す
+  - E3001 は今は `eml_types` が出すが、出す crate ではなく番号の範囲に従って `linearity/` に置く
+  - E0004 (まだ対応していない構文) は、どの段階が出しても `not-yet-supported/` に置く
+- サブディレクトリの名前は、親の `check-fail` と同じくケバブケースにする
+- テストのパスはスナップショットの名前になる。そのため、UI テストの移動はスナップショットの名前を変え、種類1の変更になる
 
 ## CLI のテスト
 
