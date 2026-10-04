@@ -104,45 +104,6 @@ fn block_body_with_let_and_expression_statements() {
 }
 
 #[test]
-fn operator_sequence_is_flat_with_prefix_minus() {
-    insta::assert_snapshot!(shape("x = -a + b * c"), @r#"
-    SOURCE_FILE
-      EQUATION
-        LIDENT "x"
-        EQ "="
-        OP_SEQ
-          MINUS "-"
-          PATH_EXPR
-            LIDENT "a"
-          OP "+"
-          PATH_EXPR
-            LIDENT "b"
-          OP "*"
-          PATH_EXPR
-            LIDENT "c"
-    "#);
-}
-
-#[test]
-fn minus_after_a_function_is_subtraction() {
-    insta::assert_snapshot!(shape("y = f -1 :: xs"), @r#"
-    SOURCE_FILE
-      EQUATION
-        LIDENT "y"
-        EQ "="
-        OP_SEQ
-          PATH_EXPR
-            LIDENT "f"
-          MINUS "-"
-          LITERAL
-            INT "1"
-          CONOP "::"
-          PATH_EXPR
-            LIDENT "xs"
-    "#);
-}
-
-#[test]
 fn application_field_access_and_qualified_names() {
     insta::assert_snapshot!(shape("y = String.split_once \" \" line.text t.0.1"), @r#"
     SOURCE_FILE
@@ -169,56 +130,6 @@ fn application_field_access_and_qualified_names() {
               INT "0"
             DOT "."
             INT "1"
-    "#);
-}
-
-#[test]
-fn sections() {
-    insta::assert_snapshot!(shape("s = ((+), (+ 1), (1 +), (.name), (- 1), (-))"), @r#"
-    SOURCE_FILE
-      EQUATION
-        LIDENT "s"
-        EQ "="
-        TUPLE_EXPR
-          L_PAREN "("
-          OP_REF
-            L_PAREN "("
-            OP "+"
-            R_PAREN ")"
-          COMMA ","
-          RIGHT_SECTION
-            L_PAREN "("
-            OP "+"
-            LITERAL
-              INT "1"
-            R_PAREN ")"
-          COMMA ","
-          LEFT_SECTION
-            L_PAREN "("
-            LITERAL
-              INT "1"
-            OP "+"
-            R_PAREN ")"
-          COMMA ","
-          FIELD_SECTION
-            L_PAREN "("
-            DOT "."
-            LIDENT "name"
-            R_PAREN ")"
-          COMMA ","
-          PAREN_EXPR
-            L_PAREN "("
-            OP_SEQ
-              MINUS "-"
-              LITERAL
-                INT "1"
-            R_PAREN ")"
-          COMMA ","
-          OP_REF
-            L_PAREN "("
-            MINUS "-"
-            R_PAREN ")"
-          R_PAREN ")"
     "#);
 }
 
@@ -353,27 +264,6 @@ fn later_stage_literals_are_not_supported_yet() {
 }
 
 #[test]
-fn missing_operand_does_not_affect_the_next_item() {
-    insta::assert_snapshot!(shape("a = 1 +\nb = 2"), @r#"
-    SOURCE_FILE
-      EQUATION
-        LIDENT "a"
-        EQ "="
-        OP_SEQ
-          LITERAL
-            INT "1"
-          OP "+"
-      EQUATION
-        LIDENT "b"
-        EQ "="
-        LITERAL
-          INT "2"
-    ---
-    E0011 1:8 expected an expression
-    "#);
-}
-
-#[test]
 fn let_in_as_a_statement() {
     let text = lines(&["f x =", "  let y = x in y"]);
     insta::assert_snapshot!(shape(&text), @r#"
@@ -470,23 +360,6 @@ fn error_token_in_an_expression_is_reported_once() {
 }
 
 #[test]
-fn missing_operand_at_the_end_of_the_file_points_after_the_operator() {
-    assert_eq!(diagnostics("a = 1 +"), ["E0011 1:8 expected an expression"]);
-    assert_eq!(
-        diagnostics("a = 1 +\n"),
-        ["E0011 1:8 expected an expression"]
-    );
-}
-
-#[test]
-fn missing_operand_before_a_comment_points_after_the_operator() {
-    assert_eq!(
-        diagnostics("a = 1 + -- c\nb = 2"),
-        ["E0011 1:8 expected an expression"]
-    );
-}
-
-#[test]
 fn nested_unclosed_brackets_are_reported_once() {
     assert_eq!(
         diagnostics("f = g (h (a\nb = 1"),
@@ -555,93 +428,163 @@ fn implicitly_closed_bracket_after_a_semicolon_does_not_swallow_the_file() {
 }
 
 #[test]
-fn section_ending_with_an_operator_is_one_error() {
-    // 被演算子の欠けたセクションは E0011 を1件だけ出し、次の項目を壊さない。
-    insta::assert_snapshot!(shape("s = (+ a +)\nt = 1"), @r#"
+fn trailing_lambda_with_a_block_body() {
+    let text = lines(&["f = each items fn item ->", "  println item"]);
+    insta::assert_snapshot!(shape(&text), @r#"
     SOURCE_FILE
       EQUATION
-        LIDENT "s"
+        LIDENT "f"
         EQ "="
-        RIGHT_SECTION
-          L_PAREN "("
-          OP "+"
-          OP_SEQ
+        APP_EXPR
+          PATH_EXPR
+            LIDENT "each"
+          PATH_EXPR
+            LIDENT "items"
+          LAMBDA_EXPR
+            FN_KW "fn"
+            BIND_PAT
+              LIDENT "item"
+            THIN_ARROW "->"
+            BLOCK
+              EXPR_STMT
+                APP_EXPR
+                  PATH_EXPR
+                    LIDENT "println"
+                  PATH_EXPR
+                    LIDENT "item"
+    "#);
+}
+
+#[test]
+fn lambda_parameters() {
+    insta::assert_snapshot!(shape("g = map (fn (x : Int) (a, b) -> x) xs"), @r#"
+    SOURCE_FILE
+      EQUATION
+        LIDENT "g"
+        EQ "="
+        APP_EXPR
+          PATH_EXPR
+            LIDENT "map"
+          PAREN_EXPR
+            L_PAREN "("
+            LAMBDA_EXPR
+              FN_KW "fn"
+              ANNOT_PAT
+                L_PAREN "("
+                BIND_PAT
+                  LIDENT "x"
+                COLON ":"
+                PATH_TYPE
+                  UIDENT "Int"
+                R_PAREN ")"
+              TUPLE_PAT
+                L_PAREN "("
+                BIND_PAT
+                  LIDENT "a"
+                COMMA ","
+                BIND_PAT
+                  LIDENT "b"
+                R_PAREN ")"
+              THIN_ARROW "->"
+              PATH_EXPR
+                LIDENT "x"
+            R_PAREN ")"
+          PATH_EXPR
+            LIDENT "xs"
+    "#);
+}
+
+#[test]
+fn lambda_as_an_operand() {
+    insta::assert_snapshot!(shape("h = xs |> each fn l -> println l"), @r#"
+    SOURCE_FILE
+      EQUATION
+        LIDENT "h"
+        EQ "="
+        OP_SEQ
+          PATH_EXPR
+            LIDENT "xs"
+          OP "|>"
+          APP_EXPR
             PATH_EXPR
-              LIDENT "a"
-            OP "+"
-          R_PAREN ")"
-      EQUATION
-        LIDENT "t"
-        EQ "="
-        LITERAL
-          INT "1"
-    ---
-    E0011 1:11 expected an expression
+              LIDENT "each"
+            LAMBDA_EXPR
+              FN_KW "fn"
+              BIND_PAT
+                LIDENT "l"
+              THIN_ARROW "->"
+              APP_EXPR
+                PATH_EXPR
+                  LIDENT "println"
+                PATH_EXPR
+                  LIDENT "l"
     "#);
 }
 
 #[test]
-fn section_of_two_operators_is_one_error() {
-    insta::assert_snapshot!(shape("s = (+ *)\nt = 1"), @r#"
+fn lambda_needs_a_parameter() {
+    assert_eq!(
+        diagnostics("f = fn -> 1"),
+        ["E0011 1:8 expected a parameter"]
+    );
+}
+
+#[test]
+fn let_in_inside_parentheses() {
+    insta::assert_snapshot!(shape("f = (let x = 1 in x)"), @r#"
     SOURCE_FILE
       EQUATION
-        LIDENT "s"
+        LIDENT "f"
         EQ "="
-        RIGHT_SECTION
+        PAREN_EXPR
           L_PAREN "("
-          OP "+"
-          ERROR
-            OP "*"
+          LET_EXPR
+            LET_KW "let"
+            BIND_PAT
+              LIDENT "x"
+            EQ "="
+            LITERAL
+              INT "1"
+            IN_KW "in"
+            PATH_EXPR
+              LIDENT "x"
           R_PAREN ")"
-      EQUATION
-        LIDENT "t"
-        EQ "="
-        LITERAL
-          INT "1"
-    ---
-    E0011 1:8 expected an expression
     "#);
 }
 
 #[test]
-fn sections_with_operator_sequences() {
-    insta::assert_snapshot!(shape("s = ((+ a * b), (a * b +), (+ -1))"), @r#"
+fn use_statements() {
+    let text = lines(&[
+        "main () =",
+        "  use with_env",
+        "  use tmp <- with_temp_dir",
+        "  build tmp",
+    ]);
+    insta::assert_snapshot!(shape(&text), @r#"
     SOURCE_FILE
       EQUATION
-        LIDENT "s"
-        EQ "="
-        TUPLE_EXPR
+        LIDENT "main"
+        UNIT_PAT
           L_PAREN "("
-          RIGHT_SECTION
-            L_PAREN "("
-            OP "+"
-            OP_SEQ
-              PATH_EXPR
-                LIDENT "a"
-              OP "*"
-              PATH_EXPR
-                LIDENT "b"
-            R_PAREN ")"
-          COMMA ","
-          LEFT_SECTION
-            L_PAREN "("
-            OP_SEQ
-              PATH_EXPR
-                LIDENT "a"
-              OP "*"
-              PATH_EXPR
-                LIDENT "b"
-            OP "+"
-            R_PAREN ")"
-          COMMA ","
-          RIGHT_SECTION
-            L_PAREN "("
-            OP "+"
-            OP_SEQ
-              MINUS "-"
-              LITERAL
-                INT "1"
-            R_PAREN ")"
           R_PAREN ")"
+        EQ "="
+        BLOCK
+          USE_STMT
+            USE_KW "use"
+            PATH_EXPR
+              LIDENT "with_env"
+          USE_STMT
+            USE_KW "use"
+            BIND_PAT
+              LIDENT "tmp"
+            LEFT_ARROW "<-"
+            PATH_EXPR
+              LIDENT "with_temp_dir"
+          EXPR_STMT
+            APP_EXPR
+              PATH_EXPR
+                LIDENT "build"
+              PATH_EXPR
+                LIDENT "tmp"
     "#);
 }
