@@ -47,7 +47,7 @@ pub(crate) fn layout(file: FileId, text: &str, tokens: &[Token]) -> (Vec<Token>,
             let mut opened = false;
             if i > 0 && BLOCK_STARTERS.contains(&items[i - 1].token.kind) {
                 // 規則 3。
-                if item.column > enclosing_indent(&stack) && !is_closing_bracket(item.token.kind) {
+                if item.column > enclosing_indent(&stack) && !item.token.kind.is_closing_bracket() {
                     out.push(virtual_token(LAYOUT_OPEN, start));
                     stack.push(Context::Block {
                         indent: item.column,
@@ -86,7 +86,7 @@ pub(crate) fn layout(file: FileId, text: &str, tokens: &[Token]) -> (Vec<Token>,
                         // 閉じ忘れた括弧がファイルの残りを飲み込まないよう、ここで閉じる。閉じ括弧がないことは
                         // parser が報告する。
                         Some(Context::Bracket)
-                            if !is_closing_bracket(item.token.kind)
+                            if !item.token.kind.is_closing_bracket()
                                 && item.column <= enclosing_indent(&stack) =>
                         {
                             stack.pop();
@@ -98,11 +98,11 @@ pub(crate) fn layout(file: FileId, text: &str, tokens: &[Token]) -> (Vec<Token>,
             line_first_item = i;
         }
         match item.token.kind {
-            L_PAREN | L_BRACK | L_BRACE => {
+            kind if kind.is_opening_bracket() => {
                 out.push(item.token);
                 stack.push(Context::Bracket);
             }
-            kind if is_closing_bracket(kind) => {
+            kind if kind.is_closing_bracket() => {
                 // 規則 4。種類は見ずに一番内側の括弧を閉じ、その上のブロックもすべて閉じる。種類の食い違いは parser が
                 // 報告する。対応する開き括弧がなければ何もしない。
                 if stack.contains(&Context::Bracket) {
@@ -271,10 +271,6 @@ fn enclosing_block(stack: &[Context]) -> (u32, Option<SyntaxKind>) {
             Context::Bracket => None,
         })
         .unwrap_or((0, None))
-}
-
-fn is_closing_bracket(kind: SyntaxKind) -> bool {
-    matches!(kind, R_PAREN | R_BRACK | R_BRACE)
 }
 
 fn virtual_token(kind: SyntaxKind, at: TextSize) -> Token {

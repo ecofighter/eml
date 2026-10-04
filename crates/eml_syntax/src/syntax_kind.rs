@@ -156,6 +156,21 @@ pub enum SyntaxKind {
 }
 
 impl SyntaxKind {
+    /// 括弧の種類の判定はここだけに置く。S2 で補間の `\{` と `}` を足すときも、ここに足す (docs/spec/layout.md の規則 4)。
+    pub fn is_opening_bracket(self) -> bool {
+        matches!(
+            self,
+            SyntaxKind::L_PAREN | SyntaxKind::L_BRACK | SyntaxKind::L_BRACE
+        )
+    }
+
+    pub fn is_closing_bracket(self) -> bool {
+        matches!(
+            self,
+            SyntaxKind::R_PAREN | SyntaxKind::R_BRACK | SyntaxKind::R_BRACE
+        )
+    }
+
     pub fn is_virtual(self) -> bool {
         matches!(
             self,
@@ -214,5 +229,24 @@ mod tests {
     #[test]
     fn tokens_fit_in_token_set() {
         assert!((SyntaxKind::EOF as u16) < 128);
+    }
+
+    #[test]
+    fn brackets() {
+        for kind in [
+            SyntaxKind::L_PAREN,
+            SyntaxKind::L_BRACK,
+            SyntaxKind::L_BRACE,
+        ] {
+            assert!(kind.is_opening_bracket() && !kind.is_closing_bracket());
+        }
+        for kind in [
+            SyntaxKind::R_PAREN,
+            SyntaxKind::R_BRACK,
+            SyntaxKind::R_BRACE,
+        ] {
+            assert!(kind.is_closing_bracket() && !kind.is_opening_bracket());
+        }
+        assert!(!SyntaxKind::LAYOUT_OPEN.is_opening_bracket());
     }
 }

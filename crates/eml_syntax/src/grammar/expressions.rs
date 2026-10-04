@@ -517,22 +517,21 @@ fn use_stmt(p: &mut Parser) {
 
 /// `use p <- e` と `use e` は `<-` まで読まないと区別できないので、括弧とブロックの外の `<-` を文の終わりまで探す。
 fn has_left_arrow(p: &Parser) -> bool {
-    let mut depth = 0u32;
+    let mut nesting = Nesting::default();
     let mut n = 0;
     loop {
-        match p.peek(n) {
-            LEFT_ARROW if depth == 0 => return true,
-            L_PAREN | L_BRACK | L_BRACE | LAYOUT_OPEN => depth += 1,
-            R_PAREN | R_BRACK | R_BRACE | LAYOUT_CLOSE => {
-                if depth == 0 {
-                    return false;
-                }
-                depth -= 1;
-            }
-            LAYOUT_SEP | SEMICOLON if depth == 0 => return false,
-            EOF => return false,
-            _ => {}
+        let kind = p.peek(n);
+        if nesting.ends(kind) {
+            return false;
         }
+        if nesting.at_top() {
+            match kind {
+                LEFT_ARROW => return true,
+                SEMICOLON => return false,
+                _ => {}
+            }
+        }
+        nesting.step(kind);
         n += 1;
     }
 }

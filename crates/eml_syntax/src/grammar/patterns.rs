@@ -7,7 +7,8 @@ pub(super) fn at_apat_start(p: &Parser) -> bool {
 /// `-` は、整数が続くときだけ負の数のリテラルとして apat を始める。
 pub(super) fn at_apat_start_at(p: &Parser, n: usize) -> bool {
     match p.nth(n) {
-        UNDERSCORE | LIDENT | UIDENT | INT | STRING | CHAR | L_PAREN | L_BRACK | L_BRACE => true,
+        UNDERSCORE | LIDENT | UIDENT | INT | STRING | CHAR => true,
+        kind if kind.is_opening_bracket() => true,
         MINUS => p.nth(n + 1) == INT,
         _ => false,
     }
@@ -25,20 +26,20 @@ pub(super) fn apat_len(p: &Parser) -> Option<usize> {
             }
             Some(n)
         }
-        L_PAREN | L_BRACK | L_BRACE => {
-            let mut depth = 0u32;
-            let mut n = 0;
+        kind if kind.is_opening_bracket() => {
+            // 開き括弧の次から、対応する閉じ括弧を探す。範囲が先に終わったら (規則 2 で括弧が暗黙に閉じられた
+            // など)、パターンは閉じていない。
+            let mut nesting = Nesting::default();
+            nesting.step(kind);
+            let mut n = 1;
             loop {
-                match p.peek(n) {
-                    L_PAREN | L_BRACK | L_BRACE => depth += 1,
-                    R_PAREN | R_BRACK | R_BRACE => {
-                        depth -= 1;
-                        if depth == 0 {
-                            return Some(n + 1);
-                        }
-                    }
-                    EOF => return None,
-                    _ => {}
+                let kind = p.peek(n);
+                if nesting.ends(kind) {
+                    return None;
+                }
+                nesting.step(kind);
+                if nesting.at_top() {
+                    return Some(n + 1);
                 }
                 n += 1;
             }

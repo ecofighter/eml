@@ -7,12 +7,14 @@
 mod expressions;
 mod items;
 mod patterns;
+mod scan;
 mod types;
 
 use crate::SyntaxKind::{self, *};
 use crate::parser::{Marker, NESTING_LIMIT, Parser};
 use crate::token_set::TokenSet;
 use crate::{NOT_YET_SUPPORTED_LABEL, codes};
+use scan::Nesting;
 
 pub(crate) fn source_file(p: &mut Parser) {
     let m = p.start();
@@ -80,8 +82,9 @@ fn too_deep(p: &mut Parser) {
 fn stray_tokens(p: &mut Parser) {
     let m = p.start();
     let mut reported = false;
-    let mut depth = 0u32;
-    while !p.at_eof() && (depth != 0 || !p.at_sep()) {
+    let mut nesting = Nesting::default();
+    // ブロックの外の区切りまでを1つの `ERROR` にする。読み残したブロックの終わりは、ここでは読み捨てる。
+    while !p.at_eof() && (nesting.in_block() || !p.at_sep()) {
         if !reported && !p.at(ERROR_TOKEN) && !p.current().is_virtual() {
             p.error(
                 codes::EXPECTED_ITEM,
@@ -90,27 +93,21 @@ fn stray_tokens(p: &mut Parser) {
             );
             reported = true;
         }
-        match p.current() {
-            LAYOUT_OPEN => depth += 1,
-            LAYOUT_CLOSE => depth = depth.saturating_sub(1),
-            _ => {}
-        }
+        nesting.step(p.current());
         p.bump_any();
     }
     m.complete(p, ERROR);
 }
 
-/// ノードは作らないので、呼び出し側が `ERROR` で包む。
+/// ノードは作らないので、呼び出し側が `ERROR` で包む。`;` は `SEP` と同じに扱う (docs/spec/layout.md の規則 5)。
+/// ブロックの中で呼んだときは、そのブロックの終わりでも止まる。
 fn skip_to_sep(p: &mut Parser, in_block: bool) {
-    let mut depth = 0u32;
+    let mut nesting = Nesting::default();
     while !p.at_eof() {
-        match p.current() {
-            LAYOUT_SEP | SEMICOLON if depth == 0 => break,
-            LAYOUT_CLOSE if depth == 0 && in_block => break,
-            LAYOUT_OPEN => depth += 1,
-            LAYOUT_CLOSE => depth = depth.saturating_sub(1),
-            _ => {}
+        if !nesting.in_block() && (p.at_sep() || (in_block && p.at(LAYOUT_CLOSE))) {
+            break;
         }
+        nesting.step(p.current());
         p.bump_any();
     }
 }
@@ -160,13 +157,9 @@ fn close_block(p: &mut Parser) {
             "expected the end of the indented block",
         );
         let m = p.start();
-        let mut depth = 0u32;
-        while !p.at_eof() && (depth != 0 || !p.at(LAYOUT_CLOSE)) {
-            match p.current() {
-                LAYOUT_OPEN => depth += 1,
-                LAYOUT_CLOSE => depth -= 1,
-                _ => {}
-            }
+        let mut nesting = Nesting::default();
+        while !p.at_eof() && (nesting.in_block() || !p.at(LAYOUT_CLOSE)) {
+            nesting.step(p.current());
             p.bump_any();
         }
         m.complete(p, ERROR);
@@ -242,42 +235,19 @@ fn unsupported_group(p: &mut Parser, message: &str) {
     not_yet_supported(p, message);
     p.bump_any();
     skip_to_closing(p);
-    if p.at_ts(CLOSING_BRACKETS) {
+    if p.current().is_closing_bracket() {
         p.bump_any();
     }
 }
 
-/// 括弧の中身を、対応する閉じ括弧の手前まで読み飛ばす (閉じ括弧は読まない)。
-/// 規則 2 でレイアウト段が入れ子の括弧を暗黙に閉じると、閉じ括弧のトークンがないまま括弧の深さが戻らなくなる。
-/// そのため、括弧の深さとは別にブロックの深さを数え、ブロックの外で現れた `SEP` / `CLOSE` では
-/// 括弧の深さにかかわらず止まる (docs/spec/layout.md の規則 2)。ファイルの残りを飲み込まないための同期点になる。
+/// 括弧の中身を、対応する閉じ括弧の手前まで読み飛ばす (閉じ括弧は読まない)。範囲の終わりは `Nesting::ends` が決める。
 fn skip_to_closing(p: &mut Parser) {
-    let mut brackets = 0u32;
-    let mut blocks = 0u32;
-    while !p.at_eof() {
-        match p.current() {
-            L_PAREN | L_BRACK | L_BRACE => brackets += 1,
-            R_PAREN | R_BRACK | R_BRACE => {
-                if brackets == 0 {
-                    break;
-                }
-                brackets -= 1;
-            }
-            LAYOUT_OPEN => blocks += 1,
-            LAYOUT_CLOSE => {
-                if blocks == 0 {
-                    break;
-                }
-                blocks -= 1;
-            }
-            LAYOUT_SEP if blocks == 0 => break,
-            _ => {}
-        }
+    let mut nesting = Nesting::default();
+    while !nesting.ends(p.current()) {
+        nesting.step(p.current());
         p.bump_any();
     }
 }
-
-const CLOSING_BRACKETS: TokenSet = TokenSet::new(&[R_PAREN, R_BRACK, R_BRACE]);
 
 /// レイアウト段は閉じ括弧の種類を見ずに一番内側の括弧を閉じるので (docs/spec/layout.md の規則 4)、parser も
 /// 種類の違う閉じ括弧をこの括弧の終わりとして読み、解釈を揃える。
@@ -298,13 +268,13 @@ fn close_bracket(p: &mut Parser, kind: SyntaxKind) {
         // 規則 2 でレイアウト段が括弧を閉じたので、閉じ括弧はない。
         return;
     }
-    if !p.at_ts(CLOSING_BRACKETS) {
+    if !p.current().is_closing_bracket() {
         // `;` や余計なトークンは、対応する閉じ括弧まで読み飛ばす。診断は上の1件だけにする。
         let m = p.start();
         skip_to_closing(p);
         m.complete(p, ERROR);
     }
-    if p.at_ts(CLOSING_BRACKETS) {
+    if p.current().is_closing_bracket() {
         p.bump_any();
     }
 }

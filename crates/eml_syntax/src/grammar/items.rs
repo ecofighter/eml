@@ -149,24 +149,22 @@ fn alt(p: &mut Parser) -> bool {
 /// `| List a :: L a` のように左側が型の適用でも中置のコンストラクタとして読むため、選択肢の終わりまでに
 /// 括弧の外の `:` 演算子があるかを先読みする (docs/spec/grammar.md の `alt`)。
 fn has_conop_ahead(p: &Parser) -> bool {
-    let mut depth = 0u32;
+    let mut nesting = Nesting::default();
     let mut n = 0;
     loop {
-        match p.peek(n) {
-            CONOP if depth == 0 => return true,
-            L_PAREN | L_BRACK | L_BRACE => depth += 1,
-            R_PAREN | R_BRACK | R_BRACE => {
-                if depth == 0 {
-                    return false;
-                }
-                depth -= 1;
-            }
-            PIPE | LAYOUT_SEP | LAYOUT_OPEN | LAYOUT_CLOSE | SEMICOLON if depth == 0 => {
-                return false;
-            }
-            EOF => return false,
-            _ => {}
+        let kind = p.peek(n);
+        if nesting.ends(kind) {
+            return false;
         }
+        // 括弧の外の `|` とブロックの始まりは、今の選択肢の外である。
+        if nesting.at_top() {
+            match kind {
+                CONOP => return true,
+                PIPE | LAYOUT_OPEN | SEMICOLON => return false,
+                _ => {}
+            }
+        }
+        nesting.step(kind);
         n += 1;
     }
 }
