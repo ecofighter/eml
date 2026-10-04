@@ -120,3 +120,9 @@
 - `eml_test_support/tests/support.rs` の `parse_clean_rejects_a_syntax_error` と `lower_clean_rejects_an_undefined_name` を、`#[should_panic(expected = "unexpected diagnostics")]` にした (種類1)。補助関数の外の panic で通ってしまわないようにするためである。`parse_clean_returns_a_tree_without_diagnostics` と `lower_clean_returns_a_module_without_diagnostics` には、返した木の項目の数と、モジュールの関数 `f` を確かめるアサーションを足した (種類1)
 - `eml_interp` の単体テスト `runtime_errors_name_the_fault_and_the_function` から、関数の名前を含まない `Leak` の表示のアサーションを、新しい `leaks_are_displayed_with_the_object_counts` に分けた (種類1)。アサーションの中身は変えていない
 - `eml_core_ir/tests/lower.rs` の `an_if_in_a_condition_jumps_straight_to_the_outer_join_point` を `simplify.rs` に移した (種類1)。期待値は `simplify` の結果を写している。本体は変えていない
+
+### リファクタリング R4
+
+- `eml_core_ir/tests/lower.rs` を `translate.rs` に改名し、`dup` / `decref` の位置と `saved` を確かめる4件 (`strings_are_dupped_and_decreffed`、`shadowed_and_discarded_strings`、`a_non_tail_if_keeps_strings_used_later`、`calls_save_the_variables_used_after_them`) を新しい `perceus.rs` に移した (種類1)。`perceus.rs` は Perceus の直後の IR を見るので、期待値は変わっていない
+- `translate.rs` の12件は変換の直後の IR を、`simplify.rs` の7件は `simplify` の直後の IR を見るようにした。期待値から `dup` / `decref` の行と、呼び出しの後ろの `saved` の並びが消えた (種類2)。ほかの行は変わっていないことを、差分から RC の命令と `saved` を除いて比べて確かめた。確かめる目的は、それぞれのテストの名前のとおりで変わらない
+- `eml_test_support/tests/support.rs` に `core_until_stops_after_the_named_pass` を、`eml_core_ir/tests/verify.rs` に `verify_scopes` の7件を足した
