@@ -369,3 +369,64 @@ fn calls_save_the_variables_used_after_them() {
     }
     ");
 }
+
+#[test]
+fn handlers_are_lifted_to_closures() {
+    let text = "effect Ask where\n  ask : String -> Int\n\nmain : Unit -> <IO> Unit\nmain () =\n  let prefix = \"n = \"\n  let n =\n    handle ask \"x\" with\n      | ask key k -> resume k 1\n      | return x -> x + 1\n  println (prefix ++ show_int n)";
+    insta::assert_snapshot!(core_text(text), @r#"
+    fn main(p0) {
+      let s1 = const "n = "
+      let c2 = closure main$handle0()
+      let c3 = closure main$handle0$ask()
+      let c4 = closure main$handle0$return()
+      let t5 = handle Ask(c2) {ask: c3} return c4 [s1]
+      let t6 = prim show_int(t5)
+      let t7 = prim ++(s1, t6)
+      let t8 = perform println(t7)
+      return t8
+    }
+    fn main$handle0(p0) {
+      let s1 = const "x"
+      tailcall perform Ask.ask(s1)
+    }
+    fn main$handle0$ask(key0, k1) {
+      decref key0
+      tailcall resume k1(1)
+    }
+    fn main$handle0$return(x0) {
+      let t1 = prim +(x0, 1)
+      return t1
+    }
+    fn entry$main() {
+      tailcall main(())
+    }
+    "#);
+}
+
+#[test]
+fn operations_as_values_and_drop() {
+    let text = "effect Log where\n  log : String -> String -> Unit\n\nrun : Unit -> <Log> Unit\nrun () =\n  let info = log \"info\"\n  info \"a\"\n\ndiscard : String -> Unit\ndiscard s = drop s\n\nmain : Unit -> <IO> Unit\nmain () = println \"x\"";
+    insta::assert_snapshot!(core_text(text), @r#"
+    fn run(p0) {
+      let s1 = const "info"
+      let c2 = closure op$log(s1)
+      let s3 = const "a"
+      tailcall apply c2(s3)
+    }
+    fn discard(s0) {
+      let t1 = drop s0
+      return t1
+    }
+    fn main(p0) {
+      let s1 = const "x"
+      let t2 = perform println(s1)
+      return t2
+    }
+    fn op$log(p0, p1) {
+      tailcall perform Log.log(p0, p1)
+    }
+    fn entry$main() {
+      tailcall main(())
+    }
+    "#);
+}

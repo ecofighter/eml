@@ -2,8 +2,8 @@ use std::collections::HashMap;
 
 use eml_hir::builtin::Builtin;
 use eml_hir::{
-    Body, ExprId, ExprKind, FunctionId, LangItems, Literal, LocalId, Module, OpMultiplicity, PatId,
-    Res, Stmt,
+    Body, EffectId, ExprId, ExprKind, FunctionId, LangItems, Literal, LocalId, Module,
+    OpMultiplicity, OperationId, PatId, Res, Stmt,
 };
 use eml_types::{BodyTypes, Linearity, Type, TypedModule};
 use la_arena::ArenaMap;
@@ -32,8 +32,15 @@ pub fn lower(module: &Module, typed: &TypedModule) -> Program {
             .get(id)
             .expect("every function has a signature")
             .ty;
-        let (params, _) = split_arrows(signature, body.params.len());
+        let (param_types, _) = split_arrows(signature, body.params.len());
+        let params: Vec<(Option<PatId>, Type)> = body
+            .params
+            .iter()
+            .map(|&pat| Some(pat))
+            .zip(param_types)
+            .collect();
         let mut lambdas = 0;
+        let mut handlers = 0;
         let core = FnLowering {
             module,
             body,
@@ -42,12 +49,13 @@ pub fn lower(module: &Module, typed: &TypedModule) -> Program {
             program: &mut builder,
             root_name: &function.name,
             lambdas: &mut lambdas,
+            handlers: &mut handlers,
             exprs: Vec::new(),
             vars: Vec::new(),
             locals: ArenaMap::default(),
             joins: Vec::new(),
         }
-        .lower(&function.name, &[], &body.params, &params, body.root);
+        .lower(&function.name, &[], &params, body.root);
         builder.finish(indices[id], core);
     }
     let main = typed
@@ -106,6 +114,9 @@ struct ProgramBuilder {
     arities: Vec<usize>,
     strings: Strings,
     wrappers: HashMap<Builtin, FnIdx>,
+    /// 操作のスキームの型。操作を包む関数の変数が boxed かどうかを決める。
+    operation_types: HashMap<OperationId, Type>,
+    operation_wrappers: HashMap<OperationId, FnIdx>,
 }
 
 impl ProgramBuilder {
@@ -121,7 +132,45 @@ impl ProgramBuilder {
             arities: Vec::new(),
             strings: Strings::default(),
             wrappers: HashMap::new(),
+            operation_types: typed
+                .operations
+                .iter()
+                .map(|(id, scheme)| (id, scheme.ty.clone()))
+                .collect(),
+            operation_wrappers: HashMap::new(),
         }
+    }
+
+    /// 操作を値や部分適用で使うときに、`perform` を末尾で呼ぶだけの関数を作る。操作ごとに1つだけ作る。
+    fn operation_wrapper(&mut self, module: &Module, op: OperationId) -> FnIdx {
+        if let Some(&function) = self.operation_wrappers.get(&op) {
+            return function;
+        }
+        let operation = &module.operations[op];
+        let arity = operation.arity;
+        let ty = self
+            .operation_types
+            .get(&op)
+            .expect("every operation has a scheme");
+        let (param_types, _) = split_arrows(ty, arity);
+        let vars = param_types
+            .iter()
+            .map(|ty| var_info("p", ty, &self.lang))
+            .collect();
+        let function = self.reserve(arity);
+        self.operation_wrappers.insert(op, function);
+        let params: Vec<VarId> = (0..arity as u32).map(VarId).collect();
+        let args = params.iter().map(|&param| Atom::Var(param)).collect();
+        let core = CoreFn {
+            name: format!("op${}", operation.name),
+            params,
+            vars,
+            body: CExprId(0),
+            exprs: vec![CExpr::TailCall(perform_call(module, op, args))],
+            joins: Vec::new(),
+        };
+        self.finish(function, core);
+        function
     }
 
     fn reserve(&mut self, arity: usize) -> FnIdx {
@@ -346,6 +395,8 @@ struct FnLowering<'a> {
     /// ラムダの関数の名前に使う、トップレベルの関数の名前と、その中のラムダの数。
     root_name: &'a str,
     lambdas: &'a mut u32,
+    /// handle の本体と節の関数の名前に使う、トップレベルの関数の中の handle の数。
+    handlers: &'a mut u32,
     exprs: Vec<CExpr>,
     vars: Vec<VarInfo>,
     locals: ArenaMap<LocalId, Atom>,
@@ -354,13 +405,13 @@ struct FnLowering<'a> {
 }
 
 impl FnLowering<'_> {
-    /// ラムダは捕まえた変数を先頭の引数に持つ (docs/spec/core-ir.md)。トップレベルの関数では `captured` は空である。
+    /// ラムダと handle の本体と節は、捕まえた変数を先頭の引数に持つ (docs/spec/core-ir.md)。トップレベルの関数では
+    /// `captured` は空である。引数のパターンが `None` なら、名前のない引数 (handle の本体が受ける `()`) である。
     fn lower(
         mut self,
         name: &str,
         captured: &[(LocalId, Type)],
-        params: &[PatId],
-        param_types: &[Type],
+        params: &[(Option<PatId>, Type)],
         root: ExprId,
     ) -> CoreFn {
         let body = self.body;
@@ -370,8 +421,8 @@ impl FnLowering<'_> {
             self.locals.insert(*local, Atom::Var(var));
             vars.push(var);
         }
-        for (&pat, ty) in params.iter().zip(param_types) {
-            let local = body.pat_bindings(pat).first().copied();
+        for (pat, ty) in params {
+            let local = pat.and_then(|pat| body.pat_bindings(pat).first().copied());
             let name = local.map_or("p", |local| body.locals[local].name.as_str());
             let var = self.new_var(name, ty);
             if let Some(local) = local {
@@ -392,6 +443,61 @@ impl FnLowering<'_> {
                 .map(|join| join.expect("every join point is built"))
                 .collect(),
         }
+    }
+
+    /// `root` を、捕まえた変数を先頭の引数に持つ関数に持ち上げ、そのクロージャを作る (docs/spec/core-ir.md)。ラムダと、
+    /// handle の本体と節に使う。関数の番号は持ち上げる前に取るので、入れ子の持ち上げは外側より後ろの番号になる。
+    fn lift(
+        &mut self,
+        name: String,
+        captured: Vec<LocalId>,
+        params: &[(Option<PatId>, Type)],
+        root: ExprId,
+        ty: &Type,
+        out: &mut Bindings,
+    ) -> Atom {
+        let captured: Vec<(LocalId, Type)> = captured
+            .into_iter()
+            .map(|local| {
+                let ty = self
+                    .types
+                    .locals
+                    .get(local)
+                    .cloned()
+                    .expect("every local is typed");
+                (local, ty)
+            })
+            .collect();
+        let function = self.program.reserve(captured.len() + params.len());
+        let core = FnLowering {
+            module: self.module,
+            body: self.body,
+            types: self.types,
+            indices: self.indices,
+            program: &mut *self.program,
+            root_name: self.root_name,
+            lambdas: &mut *self.lambdas,
+            handlers: &mut *self.handlers,
+            exprs: Vec::new(),
+            vars: Vec::new(),
+            locals: ArenaMap::default(),
+            joins: Vec::new(),
+        }
+        .lower(&name, &captured, params, root);
+        self.program.finish(function, core);
+        let atoms = captured
+            .iter()
+            .map(|(local, _)| self.locals[*local])
+            .collect();
+        self.bind(out, "c", ty, Rhs::MakeClosure(function, atoms))
+    }
+
+    fn pat_type(&self, pat: PatId) -> Type {
+        self.types
+            .pats
+            .get(pat)
+            .cloned()
+            .expect("every pattern is typed")
     }
 
     fn new_var(&mut self, name: &str, ty: &Type) -> VarId {
@@ -567,6 +673,24 @@ impl FnLowering<'_> {
         self.bind(out, "t", ty, Rhs::call(Call::Apply(function, rest)))
     }
 
+    /// 引数が操作の引数の個数に揃えば `perform` にし、足りなければ操作を包む関数のクロージャにする。操作の引数の個数は
+    /// シグネチャの外側の矢印の数なので、型検査を通った呼び出しで引数が余ることはない。
+    fn call_operation(
+        &mut self,
+        op: OperationId,
+        args: Vec<Atom>,
+        ty: &Type,
+        out: &mut Bindings,
+    ) -> Atom {
+        let arity = self.module.operations[op].arity;
+        if args.len() < arity {
+            let wrapper = self.program.operation_wrapper(self.module, op);
+            return self.bind(out, "c", ty, Rhs::MakeClosure(wrapper, args));
+        }
+        let call = perform_call(self.module, op, args);
+        self.bind(out, "t", ty, Rhs::call(call))
+    }
+
     /// 式の値をアトムにする。値の計算に要る束縛は `out` に積む。
     fn atom(&mut self, id: ExprId, out: &mut Bindings) -> Atom {
         let body = self.body;
@@ -606,8 +730,10 @@ impl FnLowering<'_> {
                     self.bind(out, "c", &ty, Rhs::MakeClosure(target, Vec::new()))
                 }
             }
-            ExprKind::Path(Res::Operation(_)) => {
-                unreachable!("operations are not lowered to Core IR yet")
+            ExprKind::Path(Res::Operation(op)) => {
+                let wrapper = self.program.operation_wrapper(self.module, *op);
+                let ty = self.ty(id);
+                self.bind(out, "c", &ty, Rhs::MakeClosure(wrapper, Vec::new()))
             }
             ExprKind::Call {
                 callee,
@@ -630,6 +756,10 @@ impl FnLowering<'_> {
                     ExprKind::Path(Res::Builtin(builtin)) => {
                         let args = self.call_args(args, first, out);
                         self.call_builtin(*builtin, &callee_ty, args, &ty, out)
+                    }
+                    ExprKind::Path(Res::Operation(op)) => {
+                        let args = self.call_args(args, first, out);
+                        self.call_operation(*op, args, &ty, out)
                     }
                     _ => {
                         // 呼ばれる式は引数より左にあるので、先に評価する
@@ -658,51 +788,84 @@ impl FnLowering<'_> {
                 }
             }
             ExprKind::Annot { expr, .. } => self.atom(*expr, out),
-            ExprKind::Handle { .. } | ExprKind::Resume { .. } | ExprKind::Drop(_) => {
-                unreachable!("handlers are not lowered to Core IR yet")
+            // 本体と節を、捕まえた変数を先頭の引数に持つ関数に持ち上げる (docs/spec/core-ir.md)。本体は `()` を受ける
+            ExprKind::Handle {
+                body: handled,
+                effect,
+                clauses,
+                ret,
+            } => {
+                let effect = effect.expect("a program without errors handles a known effect");
+                let ty = self.ty(id);
+                let prefix = format!("{}$handle{}", self.root_name, *self.handlers);
+                *self.handlers += 1;
+                let unit = [(None, Type::unit())];
+                let handled_closure = self.lift(
+                    prefix.clone(),
+                    body.captures(*handled, &[]),
+                    &unit,
+                    *handled,
+                    &Type::Flexible,
+                    out,
+                );
+                // 節はエフェクトの操作の順に並べる。インタプリタは操作の番号で節を引く
+                let operations = self.module.effects[effect].operations.clone();
+                let mut closures = Vec::new();
+                for op in operations {
+                    let clause = clauses
+                        .iter()
+                        .find(|clause| clause.op == op)
+                        .expect("a program without errors has a clause for every operation");
+                    let bound: Vec<PatId> = clause.patterns().collect();
+                    let params: Vec<(Option<PatId>, Type)> = bound
+                        .iter()
+                        .map(|&pat| (Some(pat), self.pat_type(pat)))
+                        .collect();
+                    let name = format!("{prefix}${}", self.module.operations[op].name);
+                    let captured = body.captures(clause.body, &bound);
+                    let closure =
+                        self.lift(name, captured, &params, clause.body, &Type::Flexible, out);
+                    closures.push(closure);
+                }
+                let ret = ret.as_ref().map(|ret| {
+                    let params = [(Some(ret.param), self.pat_type(ret.param))];
+                    let captured = body.captures(ret.body, &[ret.param]);
+                    let name = format!("{prefix}$return");
+                    self.lift(name, captured, &params, ret.body, &Type::Flexible, out)
+                });
+                let call = Call::Handle {
+                    effect: effect_index(effect),
+                    body: handled_closure,
+                    clauses: closures,
+                    ret,
+                };
+                self.bind(out, "t", &ty, Rhs::call(call))
+            }
+            ExprKind::Resume { k, arg } => {
+                let k = self.atom(*k, out);
+                let arg = self.atom(*arg, out);
+                let ty = self.ty(id);
+                self.bind(out, "t", &ty, Rhs::call(Call::Resume { k, arg }))
+            }
+            ExprKind::Drop(value) => {
+                let value = self.atom(*value, out);
+                self.bind(out, "t", &Type::unit(), Rhs::Drop(value))
             }
             ExprKind::Lambda {
                 params,
                 body: lambda_body,
             } => {
-                let captured: Vec<(LocalId, Type)> = body
-                    .lambda_captures(id)
-                    .into_iter()
-                    .map(|local| {
-                        let ty = self
-                            .types
-                            .locals
-                            .get(local)
-                            .cloned()
-                            .expect("every local is typed");
-                        (local, ty)
-                    })
-                    .collect();
                 let lambda_ty = self.ty(id);
                 let (param_types, _) = split_arrows(&lambda_ty, params.len());
-                let function = self.program.reserve(captured.len() + params.len());
+                let params: Vec<(Option<PatId>, Type)> = params
+                    .iter()
+                    .map(|&pat| Some(pat))
+                    .zip(param_types)
+                    .collect();
                 let name = format!("{}$lambda{}", self.root_name, *self.lambdas);
                 *self.lambdas += 1;
-                let core = FnLowering {
-                    module: self.module,
-                    body,
-                    types: self.types,
-                    indices: self.indices,
-                    program: &mut *self.program,
-                    root_name: self.root_name,
-                    lambdas: &mut *self.lambdas,
-                    exprs: Vec::new(),
-                    vars: Vec::new(),
-                    locals: ArenaMap::default(),
-                    joins: Vec::new(),
-                }
-                .lower(&name, &captured, params, &param_types, *lambda_body);
-                self.program.finish(function, core);
-                let atoms = captured
-                    .iter()
-                    .map(|(local, _)| self.locals[*local])
-                    .collect();
-                self.bind(out, "c", &lambda_ty, Rhs::MakeClosure(function, atoms))
+                let captured = body.lambda_captures(id);
+                self.lift(name, captured, &params, *lambda_body, &lambda_ty, out)
             }
         }
     }
@@ -729,6 +892,26 @@ impl FnLowering<'_> {
         for local in self.body.pat_bindings(pat) {
             self.locals.insert(local, value);
         }
+    }
+}
+
+/// エフェクトの番号は `EffectId` の添字である (`Program::effects`)。
+fn effect_index(effect: EffectId) -> u32 {
+    u32::from(effect.into_raw())
+}
+
+/// 操作の番号は、エフェクトの宣言の中の順番である。
+fn perform_call(module: &Module, op: OperationId, args: Vec<Atom>) -> Call {
+    let effect = module.operations[op].effect;
+    let index = module.effects[effect]
+        .operations
+        .iter()
+        .position(|&other| other == op)
+        .expect("an operation belongs to its effect");
+    Call::Perform {
+        effect: effect_index(effect),
+        op: index as u32,
+        args,
     }
 }
 
