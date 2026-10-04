@@ -1,14 +1,7 @@
 mod common;
 
-use common::lower_text;
-use eml_test_support::{lower, short};
-
-/// 構文と HIR の診断を、位置の順に並べたもの。
-fn errors(text: &str) -> Vec<String> {
-    let mut lowered = lower(text);
-    lowered.diagnostics.sort_by_key(|d| d.primary.range.start());
-    short(&lowered.files, &lowered.diagnostics)
-}
+use common::{diagnostics, lower_text};
+use eml_test_support::lower_clean;
 
 #[test]
 fn effects_and_operations_are_items() {
@@ -75,8 +68,7 @@ fn effects_take_type_parameters_and_rows_take_type_arguments() {
 
 #[test]
 fn operations_see_the_type_parameters_of_their_effect_first() {
-    let lowered = lower("effect State s where\n  get : Unit -> s\n  never fail : Unit -> a");
-    assert!(lowered.diagnostics.is_empty(), "{:?}", lowered.diagnostics);
+    let lowered = lower_clean("effect State s where\n  get : Unit -> s\n  never fail : Unit -> a");
     let generics = |name: &str| -> (Vec<String>, usize) {
         let (_, operation) = lowered
             .module
@@ -104,7 +96,7 @@ fn operations_see_the_type_parameters_of_their_effect_first() {
 fn type_arguments_and_parameters_of_effects_are_checked() {
     let text = "effect State s where\n  get : Unit -> s\n\neffect Pair a a where\n  first : Unit -> a\n\neffect Fail e where\n  never raise : Unit -> e\n\nf : Unit -> <State> Int\nf () = 1\n\ng : Unit -> <State Int Int> Int\ng () = 1\n\nh : Unit -> <State Int> Int\nh () = 1";
     assert_eq!(
-        errors(text),
+        diagnostics(text),
         [
             "E1003 4:15 `a` is defined more than once",
             "E1008 8:25 the result type of a `never` operation must be a type variable that does not appear in its parameters",
@@ -118,7 +110,7 @@ fn type_arguments_and_parameters_of_effects_are_checked() {
 fn type_arguments_of_effects_in_an_open_row_are_checked() {
     let text = "effect State s where\n  get : Unit -> s\n\nf : Unit -> <State | e> Int\nf () = 1";
     assert_eq!(
-        errors(text),
+        diagnostics(text),
         ["E1015 4:14 `State` takes 1 type argument, but 0 were given"]
     );
 }
@@ -126,7 +118,10 @@ fn type_arguments_of_effects_in_an_open_row_are_checked() {
 #[test]
 fn a_function_after_an_operation_of_the_same_name_is_a_duplicate() {
     let text = "effect E where\n  run : Int -> Int\n\nrun : Int -> Int\nrun x = x";
-    assert_eq!(errors(text), ["E1003 4:1 `run` is defined more than once"]);
+    assert_eq!(
+        diagnostics(text),
+        ["E1003 4:1 `run` is defined more than once"]
+    );
 }
 
 #[test]
@@ -163,7 +158,7 @@ fn clause_names_are_resolved_among_operations_only() {
 fn clause_errors_are_reported_together() {
     let text = "effect Ask where\n  ask : Unit -> Int\n  other : Unit -> Int\n\neffect Log where\n  log : String -> Unit\n\neffect Fail where\n  never fail : String -> a\n\nf : Unit -> Int\nf () =\n  handle 1 with\n    | ask () -> 1\n    | ask () k -> resume k 1\n    | log m k -> resume k ()\n    | nope x k -> 1\n    | println s k -> resume k ()\n    | return x -> x\n    | return y -> y\n\ng : Unit -> Int\ng () = handle 1 with | fail m k -> 1\n\nh : Unit -> Int\nh () = handle 1 with | return x -> x";
     assert_eq!(
-        errors(text),
+        diagnostics(text),
         [
             "E1013 13:3 this handler has no clause for `other` of `Ask`",
             "E1010 14:7 the clause for `ask` takes 2 parameters, but this one has 1",
@@ -182,7 +177,7 @@ fn clause_errors_are_reported_together() {
 fn resume_and_drop_take_a_fixed_number_of_arguments() {
     let text = "f : Int -> Unit\nf k =\n  resume k\n  drop k 2\n  resume k k k";
     assert_eq!(
-        errors(text),
+        diagnostics(text),
         [
             "E1011 3:3 `resume` takes a continuation and a value, but 1 argument was given",
             "E1011 4:3 `drop` takes one value, but 2 arguments were given",
@@ -194,7 +189,7 @@ fn resume_and_drop_take_a_fixed_number_of_arguments() {
 #[test]
 fn handlers_with_an_initial_state_come_in_stage_6() {
     assert_eq!(
-        errors("f : Unit -> Int\nf () = handle g () from 1 with | return x st -> x"),
+        diagnostics("f : Unit -> Int\nf () = handle g () from 1 with | return x st -> x"),
         ["E0004 2:20 handlers with `from` are not supported yet"]
     );
 }
@@ -202,8 +197,7 @@ fn handlers_with_an_initial_state_come_in_stage_6() {
 #[test]
 fn handler_parts_capture_what_they_use() {
     let text = "effect Ask where\n  ask : Unit -> Int\n\nf : Int -> Int -> Int\nf a b =\n  handle ask () + a with\n    | ask () k -> resume k b\n    | return x -> x + a";
-    let lowered = lower(text);
-    assert!(lowered.diagnostics.is_empty(), "{:?}", lowered.diagnostics);
+    let lowered = lower_clean(text);
     let function = lowered
         .module
         .functions
@@ -246,5 +240,8 @@ fn handler_parts_capture_what_they_use() {
 #[test]
 fn a_repeated_operation_name_is_not_a_missing_clause() {
     let text = "effect Ask where\n  ask : Unit -> Int\n  ask : Unit -> Int\n\nf : Unit -> Int\nf () = handle 1 with | ask () k -> resume k 1";
-    assert_eq!(errors(text), ["E1003 3:3 `ask` is defined more than once"]);
+    assert_eq!(
+        diagnostics(text),
+        ["E1003 3:3 `ask` is defined more than once"]
+    );
 }

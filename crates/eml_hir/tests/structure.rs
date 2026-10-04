@@ -5,9 +5,7 @@ use eml_hir::{Body, ExprId, ExprKind, Function, LocalId, Module, PatKind, TypeRe
 
 /// 診断のエラーがないことを確かめて HIR を返す。
 fn module(text: &str) -> Module {
-    let lowered = eml_test_support::lower(text);
-    assert!(lowered.diagnostics.is_empty(), "{:?}", lowered.diagnostics);
-    lowered.module
+    eml_test_support::lower_clean(text).module
 }
 
 fn function<'m>(module: &'m Module, name: &str) -> &'m Function {
