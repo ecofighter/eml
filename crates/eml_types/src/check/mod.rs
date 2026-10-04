@@ -114,6 +114,15 @@ pub(crate) fn check_module(module: &Module) -> (TypedModule, Vec<Diagnostic>) {
             },
         );
     }
+    for (&builtin, scheme) in &builtins {
+        typed.builtins.insert(
+            builtin,
+            crate::Scheme {
+                ty: table.export(scheme.ty),
+                constraints: kind_constraints(&table, scheme),
+            },
+        );
+    }
     for (id, typing) in bodies {
         let mut types = BodyTypes::default();
         for (expr, &ty) in typing.exprs.iter() {

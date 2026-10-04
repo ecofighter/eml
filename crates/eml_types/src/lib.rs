@@ -8,9 +8,11 @@ mod table;
 mod ty;
 mod usage;
 
+use std::collections::HashMap;
 use std::fmt::Write;
 
 use eml_diagnostics::{Diagnostic, FileId, Label, TextRange};
+use eml_hir::builtin::Builtin;
 use eml_hir::{ExprId, FunctionId, LocalId, Module};
 use la_arena::ArenaMap;
 
@@ -34,6 +36,9 @@ pub struct TypedModule {
     /// シグネチャと等式の両方がある関数だけを含む。
     pub bodies: ArenaMap<FunctionId, BodyTypes>,
     pub main: Option<FunctionId>,
+    /// Prelude のシグネチャから作った組み込みのスキーム。Core IR が、組み込みを包む関数の変数を boxed にするかを
+    /// 決めるのに使う。コンストラクタ (`True`、`False`) は含まない。
+    pub builtins: HashMap<Builtin, Scheme>,
 }
 
 /// 関数の型と、多相化したときに残った Kind の制約のうち、定数を片側に持つもの。変数どうしの制約は部分適用のたびに

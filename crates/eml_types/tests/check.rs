@@ -1,6 +1,7 @@
 mod common;
 
 use common::check_text;
+use eml_hir::builtin::Builtin;
 
 #[test]
 fn signatures_and_local_types() {
@@ -524,4 +525,18 @@ fn composition_has_the_prelude_type() {
       f#0 : Int -> Int
       g#1 : Int -> Int
     ");
+}
+
+#[test]
+fn builtin_schemes_are_exported() {
+    let checked = eml_test_support::check("main : Unit -> <IO> Unit\nmain () = ()");
+    let ty = |builtin| checked.typed.builtins[&builtin].ty.to_string();
+    assert_eq!(ty(Builtin::Println), "String -> <IO> Unit");
+    assert_eq!(ty(Builtin::IntAdd), "Int -> Int -> Int");
+    assert_eq!(
+        ty(Builtin::ComposeFwd),
+        "(a -> <e> b) -> (b -> <e> c) -> a -> <e> c"
+    );
+    // コンストラクタは Prelude にない (段階4で `data Bool` にする)
+    assert!(!checked.typed.builtins.contains_key(&Builtin::True));
 }
