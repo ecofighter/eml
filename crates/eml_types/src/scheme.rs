@@ -1,6 +1,9 @@
 //! シグネチャのスキームと、その具体化 (docs/spec/types.md の「推論」)。
 
-use eml_hir::{Generics, RowRef, RowVarId, Signature, TypeRef, TypeRefId, TypeRefKind, TypeVarId};
+use eml_hir::{
+    EffectId, Generics, Operation, RowRef, RowVarId, Signature, TypeRef, TypeRefId, TypeRefKind,
+    TypeVarId,
+};
 use la_arena::{Arena, ArenaMap};
 
 use crate::kind::{Bound, KindVar};
@@ -156,4 +159,37 @@ fn lower(
             table.function_with(param, lin, row, ret)
         }
     }
+}
+
+/// 操作のスキームの型。シグネチャの、引数の個数の分だけたどった最後の矢印に、操作のエフェクトだけの row を付ける
+/// (docs/spec/effects.md)。操作のシグネチャの外側の矢印には row を書けないので (E1007)、ほかの外側の矢印の row は
+/// 空である。
+pub(crate) fn lower_operation(table: &mut Table, operation: &Operation, rigids: &Rigids) -> Ty {
+    let ty = lower_signature(table, &operation.signature, rigids);
+    with_effect(table, ty, operation.arity, operation.effect)
+}
+
+fn with_effect(table: &mut Table, ty: Ty, arity: usize, effect: EffectId) -> Ty {
+    if arity == 0 {
+        return ty;
+    }
+    let TyShape::Fn {
+        param,
+        lin,
+        row,
+        ret,
+    } = table.shape(ty).clone()
+    else {
+        return ty;
+    };
+    let (row, ret) = if arity == 1 {
+        let row = Row {
+            labels: vec![effect],
+            tail: row.tail,
+        };
+        (row, ret)
+    } else {
+        (row, with_effect(table, ret, arity - 1, effect))
+    };
+    table.function_with(param, lin, row, ret)
 }

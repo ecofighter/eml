@@ -40,6 +40,17 @@ pub enum Type {
         tail: Option<RowTail>,
         ret: Box<Type>,
     },
+    /// 継続 `k` の型 (docs/spec/effects.md)。表面の構文に名前を持たず、診断の表示だけに使う。
+    Cont {
+        /// 操作の結果の型。`resume` に渡す値の型である。
+        arg: Box<Type>,
+        /// handle の結果の型。`resume` の値の型である。
+        ret: Box<Type>,
+        /// handle の外側の row。`resume` が起こすエフェクトである。
+        effects: Vec<EffectLabel>,
+        tail: Option<RowTail>,
+        linearity: Linearity,
+    },
     /// シグネチャの型変数。
     Rigid(String),
     /// 推論で解けなかった変数。`_` と表示する。
@@ -71,6 +82,9 @@ impl Type {
                 param.contains_error()
                     || ret.contains_error()
                     || matches!(tail, Some(RowTail::Error))
+            }
+            Type::Cont { arg, ret, tail, .. } => {
+                arg.contains_error() || ret.contains_error() || matches!(tail, Some(RowTail::Error))
             }
             Type::Con { .. } | Type::Rigid(_) | Type::Flexible => false,
         }
@@ -104,26 +118,55 @@ impl fmt::Display for Type {
                 } else {
                     write!(f, "{param} -> ")?;
                 }
-                let names: Vec<&str> = effects.iter().map(|e| e.name.as_str()).collect();
-                let tail = match tail {
-                    Some(RowTail::Rigid(name)) => Some(name.as_str()),
-                    Some(RowTail::Flexible) => Some("_"),
-                    Some(RowTail::Error) => Some("{error}"),
-                    None => None,
-                };
                 // 空の閉じた row は書かない。省略した row が `<>` だから (docs/spec/types.md)
-                match tail {
-                    Some(tail) if names.is_empty() => write!(f, "<{tail}> ")?,
-                    Some(tail) => write!(f, "<{} | {tail}> ", names.join(", "))?,
-                    None if names.is_empty() => {}
-                    None => write!(f, "<{}> ", names.join(", "))?,
+                let row = row_text(effects, tail);
+                if !row.is_empty() {
+                    write!(f, "<{row}> ")?;
                 }
                 write!(f, "{ret}")
             }
+            // 継続の row は、空でも書く。何も起こさない `resume` であることを示すため
+            Type::Cont {
+                arg,
+                ret,
+                effects,
+                tail,
+                ..
+            } => write!(
+                f,
+                "Cont {} {} <{}>",
+                atomic(arg),
+                atomic(ret),
+                row_text(effects, tail)
+            ),
             Type::Rigid(name) => f.write_str(name),
             Type::Flexible => f.write_str("_"),
             Type::Error => f.write_str("{error}"),
         }
+    }
+}
+
+/// row の中身。`<` と `>` は呼び出し側が付ける。
+fn row_text(effects: &[EffectLabel], tail: &Option<RowTail>) -> String {
+    let names: Vec<&str> = effects.iter().map(|e| e.name.as_str()).collect();
+    let tail = match tail {
+        Some(RowTail::Rigid(name)) => Some(name.as_str()),
+        Some(RowTail::Flexible) => Some("_"),
+        Some(RowTail::Error) => Some("{error}"),
+        None => None,
+    };
+    match tail {
+        Some(tail) if names.is_empty() => tail.to_string(),
+        Some(tail) => format!("{} | {tail}", names.join(", ")),
+        None => names.join(", "),
+    }
+}
+
+/// 型の適用の引数の位置に置く形。関数型と継続の型は括弧で囲む。
+fn atomic(ty: &Type) -> String {
+    match ty {
+        Type::Fn { .. } | Type::Cont { .. } => format!("({ty})"),
+        _ => ty.to_string(),
     }
 }
 
@@ -167,6 +210,49 @@ mod tests {
         };
         assert_eq!(pure.to_string(), "Int -> Bool");
         assert_eq!(io.to_string(), "(Int -> Bool) -> <IO> Unit");
+    }
+
+    #[test]
+    fn continuations_are_displayed_with_their_row() {
+        let mut types = Arena::new();
+        let mut effects = Arena::new();
+        let mut con = |name: &str| Type::Con {
+            id: types.alloc(TypeDef {
+                name: name.to_string(),
+            }),
+            name: name.to_string(),
+        };
+        let int = con("Int");
+        let unit = Type::unit();
+        let io = EffectLabel {
+            id: effects.alloc(EffectDef {
+                name: "IO".to_string(),
+                operations: Vec::new(),
+            }),
+            name: "IO".to_string(),
+        };
+        let k = Type::Cont {
+            arg: Box::new(int.clone()),
+            ret: Box::new(unit.clone()),
+            effects: vec![io],
+            tail: None,
+            linearity: Linearity::Lin,
+        };
+        assert_eq!(k.to_string(), "Cont Int Unit <IO>");
+        let pure = Type::Cont {
+            arg: Box::new(Type::Fn {
+                param: Box::new(int.clone()),
+                linearity: Linearity::Unr,
+                effects: vec![],
+                tail: None,
+                ret: Box::new(int),
+            }),
+            ret: Box::new(unit),
+            effects: vec![],
+            tail: Some(RowTail::Rigid("e".to_string())),
+            linearity: Linearity::Lin,
+        };
+        assert_eq!(pure.to_string(), "Cont (Int -> Int) Unit <e>");
     }
 }
 

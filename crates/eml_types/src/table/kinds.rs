@@ -9,7 +9,7 @@ impl Table {
                 .iter()
                 .flat_map(|(_, field)| self.kind_bounds(*field))
                 .collect(),
-            TyShape::Fn { lin, .. } => vec![match lin {
+            TyShape::Fn { lin, .. } | TyShape::Cont { lin, .. } => vec![match lin {
                 ArrowLin::Known(l) => Bound::Const(*l),
                 ArrowLin::Var(v) => Bound::Var(*v),
             }],
@@ -75,6 +75,23 @@ impl Table {
                     }
                     work.push(*ret);
                     work.push(*param);
+                }
+                TyShape::Cont {
+                    arg,
+                    lin: m,
+                    row,
+                    ret,
+                } => {
+                    if let ArrowLin::Var(v) = m {
+                        push_unique(&mut lin, *v);
+                    }
+                    if let Tail::Var(tail) = self.resolve_row(row).tail
+                        && self.is_rigid_row(tail)
+                    {
+                        push_unique(&mut mult, self.row_multiplicity_var(tail));
+                    }
+                    work.push(*ret);
+                    work.push(*arg);
                 }
                 TyShape::Record(fields) => work.extend(fields.iter().rev().map(|(_, f)| *f)),
                 TyShape::Con(_) | TyShape::Var(_) | TyShape::Error => {}

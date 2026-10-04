@@ -244,7 +244,7 @@ impl ProgramBuilder {
 fn boxed(ty: &Type, lang: &LangItems) -> bool {
     match ty {
         Type::Con { id, .. } => *id == lang.string,
-        Type::Fn { .. } | Type::Rigid(_) | Type::Flexible => true,
+        Type::Fn { .. } | Type::Cont { .. } | Type::Rigid(_) | Type::Flexible => true,
         Type::Record(_) | Type::Error => false,
     }
 }

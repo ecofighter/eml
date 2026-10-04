@@ -21,7 +21,7 @@ fn new_table() -> Table {
             operations: Vec::new(),
         }),
     };
-    Table::new(lang, &types, &effects)
+    Table::new(lang, &types, &effects, &Arena::new())
 }
 
 #[test]
@@ -414,4 +414,35 @@ fn an_error_row_keeps_its_own_labels() {
         table.unify_row(&io_error, &rigid),
         Err(UnifyError::MissingEffects(vec![io]))
     );
+}
+
+#[test]
+fn continuations_unify_by_their_parts_and_are_linear() {
+    let mut table = new_table();
+    let (int, string) = (table.int, table.string);
+    let lin = ArrowLin::Known(Linearity::Lin);
+    let k = table.alloc(TyShape::Cont {
+        arg: int,
+        lin,
+        row: Row::pure(),
+        ret: string,
+    });
+    let v = table.fresh_var();
+    let same = table.alloc(TyShape::Cont {
+        arg: v,
+        lin,
+        row: Row::pure(),
+        ret: string,
+    });
+    assert_eq!(table.unify(k, same), Ok(()));
+    assert_eq!(table.unify(v, int), Ok(()));
+    let other = table.alloc(TyShape::Cont {
+        arg: string,
+        lin,
+        row: Row::pure(),
+        ret: string,
+    });
+    assert_eq!(table.unify(k, other), Err(UnifyError::Mismatch));
+    assert_eq!(table.unify(k, int), Err(UnifyError::Mismatch));
+    assert_eq!(table.kind_bounds(k), vec![Bound::Const(Linearity::Lin)]);
 }

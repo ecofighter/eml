@@ -1,6 +1,6 @@
 use crate::kind::{Bound, KindVar, Lattice};
 use crate::ty::{EffectLabel, Linearity, Multiplicity, RowTail, Type};
-use eml_hir::{EffectDef, EffectId, LangItems, TypeDef, TypeDefId};
+use eml_hir::{EffectDef, EffectId, LangItems, OpMultiplicity, Operation, TypeDef, TypeDefId};
 use la_arena::{Arena, ArenaMap};
 use std::collections::HashMap;
 
@@ -79,6 +79,15 @@ pub(crate) enum TyShape {
         row: Row,
         ret: Ty,
     },
+    /// 継続 `k` の型。`lin` は継続の線形性で、`once` の操作の `k` は `Lin` である (docs/spec/effects.md)。`resume` の
+    /// 検査では、まだ決まらない継続を推論用の変数で表すので、矢印と同じ `ArrowLin` を使う。
+    #[allow(dead_code)]
+    Cont {
+        arg: Ty,
+        lin: ArrowLin,
+        row: Row,
+        ret: Ty,
+    },
     Var(TyVar),
     Rigid(RigidVar),
     Error,
@@ -140,10 +149,36 @@ pub(crate) struct Table {
     /// 名前を持つのは、`Module` を渡さずに `display` と `export` が名前を出せるようにするため。
     type_names: ArenaMap<TypeDefId, String>,
     effect_names: ArenaMap<EffectId, String>,
+    effect_multiplicities: ArenaMap<EffectId, Multiplicity>,
 }
 
 impl Table {
-    pub fn new(lang: LangItems, types: &Arena<TypeDef>, effects: &Arena<EffectDef>) -> Table {
+    pub fn new(
+        lang: LangItems,
+        types: &Arena<TypeDef>,
+        effects: &Arena<EffectDef>,
+        operations: &Arena<Operation>,
+    ) -> Table {
+        let effect_multiplicities = effects
+            .iter()
+            .map(|(id, effect)| {
+                // 組み込みの `IO` は、実行時が必ず1回再開するので `Once` である (docs/spec/effects.md)
+                let multiplicity = if id == lang.io {
+                    Multiplicity::Once
+                } else {
+                    effect
+                        .operations
+                        .iter()
+                        .map(|&op| match operations[op].multiplicity {
+                            OpMultiplicity::Never => Multiplicity::Never,
+                            OpMultiplicity::Once => Multiplicity::Once,
+                        })
+                        .max()
+                        .unwrap_or(Multiplicity::Never)
+                };
+                (id, multiplicity)
+            })
+            .collect();
         let mut table = Table {
             shapes: Vec::new(),
             ty_vars: Vec::new(),
@@ -166,6 +201,7 @@ impl Table {
                 .iter()
                 .map(|(id, def)| (id, def.name.clone()))
                 .collect(),
+            effect_multiplicities,
         };
         table.int = table.alloc(TyShape::Con(lang.int));
         table.string = table.alloc(TyShape::Con(lang.string));
@@ -175,11 +211,9 @@ impl Table {
         table
     }
 
-    /// 今あるエフェクトは組み込みの `IO` だけで、実行時が必ず1回再開するので `Once` である (docs/spec/effects.md)。
-    /// 段階3で、エフェクトの宣言の操作ごとの多重度に置き換える。
+    /// エフェクトがその row に入れる操作の上限。操作の多重度の最大である (docs/spec/types.md の「Kind」)。
     pub fn effect_multiplicity(&self, effect: EffectId) -> Multiplicity {
-        debug_assert_eq!(effect, self.lang.io);
-        Multiplicity::Once
+        self.effect_multiplicities[effect]
     }
 
     pub fn alloc(&mut self, kind: TyShape) -> Ty {

@@ -275,6 +275,7 @@ impl BodyCheck<'_> {
 pub(super) fn callee_subject(module: &Module, body: &Body, callee: ExprId) -> String {
     let name = match &body.exprs[callee].kind {
         ExprKind::Path(Res::Function(function)) => module.functions[*function].name.as_str(),
+        ExprKind::Path(Res::Operation(operation)) => module.operations[*operation].name.as_str(),
         ExprKind::Path(Res::Builtin(builtin)) => builtin.name(),
         ExprKind::Path(Res::Local(local)) => body.locals[*local].name.as_str(),
         _ => return "this expression".to_string(),

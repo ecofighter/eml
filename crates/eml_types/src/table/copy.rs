@@ -28,6 +28,28 @@ impl Table {
                 };
                 self.function_with(param, lin, row, ret)
             }
+            TyShape::Cont { arg, lin, row, ret } => {
+                let arg = self.copy_type(arg, subst);
+                let ret = self.copy_type(ret, subst);
+                let lin = match lin {
+                    ArrowLin::Var(v) => ArrowLin::Var(subst.lin.get(&v).copied().unwrap_or(v)),
+                    known => known,
+                };
+                let row = self.resolve_row(&row);
+                let tail = match row.tail {
+                    Tail::Var(tail) => Tail::Var(subst.rows.get(&tail).copied().unwrap_or(tail)),
+                    other => other,
+                };
+                self.alloc(TyShape::Cont {
+                    arg,
+                    lin,
+                    row: Row {
+                        labels: row.labels,
+                        tail,
+                    },
+                    ret,
+                })
+            }
             TyShape::Record(fields) => {
                 let fields = fields
                     .into_iter()

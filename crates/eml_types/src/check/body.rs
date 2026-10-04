@@ -3,8 +3,8 @@ use std::collections::HashMap;
 use eml_diagnostics::{Diagnostic, FileId, Label, TextRange};
 use eml_hir::builtin::Builtin;
 use eml_hir::{
-    Body, ExprId, ExprKind, Function, FunctionId, Literal, LocalId, Module, PatId, PatKind, Res,
-    Stmt, TypeRefKind,
+    Body, ExprId, ExprKind, Function, FunctionId, Literal, LocalId, Module, OperationId, PatId,
+    PatKind, Res, Stmt, TypeRefKind,
 };
 use la_arena::ArenaMap;
 
@@ -31,6 +31,8 @@ pub(super) struct BodyCheck<'a> {
     pub(super) schemes: &'a ArenaMap<FunctionId, Scheme>,
     /// Prelude から作った組み込みのスキーム。
     pub(super) builtins: &'a HashMap<Builtin, Scheme>,
+    /// エフェクトの操作のスキーム。
+    pub(super) operations: &'a ArenaMap<OperationId, Scheme>,
     pub(super) table: &'a mut Table,
     pub(super) diagnostics: &'a mut Vec<Diagnostic>,
     /// 本体が起こしてよいエフェクト。シグネチャで最後にたどった矢印の row か、本体を囲むラムダで最後にたどった
@@ -314,7 +316,13 @@ impl BodyCheck<'_> {
                 let ty = self.reference(function);
                 self.table.open_spine(ty)
             }
-            Res::Operation(_) => self.table.error,
+            Res::Operation(operation) => {
+                let ty = match self.operations.get(operation) {
+                    Some(scheme) => scheme.instantiate(self.table),
+                    None => self.table.error,
+                };
+                self.table.open_spine(ty)
+            }
             Res::Builtin(builtin) => {
                 let ty = match builtin {
                     // コンストラクタは Prelude にない。段階4で `data Bool` に置き換える

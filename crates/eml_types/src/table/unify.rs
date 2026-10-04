@@ -44,6 +44,25 @@ impl Table {
                 self.unify_row(&r1, &r2)?;
                 self.unify(t1, t2)
             }
+            (
+                TyShape::Cont {
+                    arg: a1,
+                    lin: l1,
+                    row: r1,
+                    ret: t1,
+                },
+                TyShape::Cont {
+                    arg: a2,
+                    lin: l2,
+                    row: r2,
+                    ret: t2,
+                },
+            ) => {
+                self.unify(a1, a2)?;
+                self.unify_arrow_lin(l1, l2)?;
+                self.unify_row(&r1, &r2)?;
+                self.unify(t1, t2)
+            }
             _ => Err(UnifyError::Mismatch),
         }
     }
@@ -64,7 +83,10 @@ impl Table {
         match self.shape(ty) {
             TyShape::Var(other) => *other == var,
             TyShape::Record(fields) => fields.iter().any(|(_, field)| self.occurs(var, *field)),
-            TyShape::Fn { param, ret, .. } => self.occurs(var, *param) || self.occurs(var, *ret),
+            TyShape::Fn { param, ret, .. }
+            | TyShape::Cont {
+                arg: param, ret, ..
+            } => self.occurs(var, *param) || self.occurs(var, *ret),
             TyShape::Con(_) | TyShape::Rigid(_) | TyShape::Error => false,
         }
     }

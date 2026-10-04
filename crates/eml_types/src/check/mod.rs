@@ -2,12 +2,12 @@ use std::collections::HashMap;
 
 use eml_diagnostics::{Diagnostic, Label};
 use eml_hir::builtin::{BUILTINS, Builtin};
-use eml_hir::{FunctionId, Generics, Module, RowRef, TypeRef, TypeRefId, TypeRefKind};
+use eml_hir::{FunctionId, Generics, Module, OperationId, RowRef, TypeRef, TypeRefId, TypeRefKind};
 use la_arena::Arena;
 use la_arena::ArenaMap;
 
 use crate::kind::Bound;
-use crate::scheme::{Rigids, Scheme, lower_signature};
+use crate::scheme::{Rigids, Scheme, lower_operation, lower_signature};
 use crate::table::{Row, Table};
 use crate::ty::{EffectLabel, KindConstraint, KindTerm, Linearity, Type};
 use crate::{BodyTypes, TypedModule, codes, scc, usage};
@@ -20,7 +20,12 @@ pub(crate) use body::BodyTyping;
 use report::AmbientSource;
 
 pub(crate) fn check_module(module: &Module) -> (TypedModule, Vec<Diagnostic>) {
-    let mut table = Table::new(module.lang, &module.types, &module.effects);
+    let mut table = Table::new(
+        module.lang,
+        &module.types,
+        &module.effects,
+        &module.operations,
+    );
     // 組み込みの型は Prelude のシグネチャから、ユーザーの関数と同じ経路で作る。本体がないので、作ってすぐ多相化する
     let mut builtins: HashMap<Builtin, Scheme> = HashMap::new();
     for info in BUILTINS {
@@ -33,6 +38,16 @@ pub(crate) fn check_module(module: &Module) -> (TypedModule, Vec<Diagnostic>) {
         let mut scheme = Scheme::new(ty, &rigids);
         scheme.generalize(&table);
         builtins.insert(info.builtin, scheme);
+    }
+    // 操作は本体を持たない値なので、組み込みと同じく作ってすぐ多相化する
+    let mut operations: ArenaMap<OperationId, Scheme> = ArenaMap::default();
+    for (id, operation) in module.operations.iter() {
+        let rigids = Rigids::new(&mut table, &operation.signature.generics);
+        let ty = lower_operation(&mut table, operation, &rigids);
+        table.closure_kinds(ty, operation.arity, &[]);
+        let mut scheme = Scheme::new(ty, &rigids);
+        scheme.generalize(&table);
+        operations.insert(id, scheme);
     }
     let mut diagnostics = Vec::new();
     let mut rigids = ArenaMap::default();
@@ -78,6 +93,7 @@ pub(crate) fn check_module(module: &Module) -> (TypedModule, Vec<Diagnostic>) {
                 rigids: &rigids[id],
                 schemes: &schemes,
                 builtins: &builtins,
+                operations: &operations,
                 table: &mut table,
                 diagnostics: &mut diagnostics,
                 ambient: Row::pure(),
@@ -123,6 +139,15 @@ pub(crate) fn check_module(module: &Module) -> (TypedModule, Vec<Diagnostic>) {
             },
         );
     }
+    for (id, scheme) in operations.iter() {
+        typed.operations.insert(
+            id,
+            crate::Scheme {
+                ty: table.export(scheme.ty),
+                constraints: kind_constraints(&table, scheme),
+            },
+        );
+    }
     for (id, typing) in bodies {
         let mut types = BodyTypes::default();
         for (expr, &ty) in typing.exprs.iter() {
@@ -130,6 +155,9 @@ pub(crate) fn check_module(module: &Module) -> (TypedModule, Vec<Diagnostic>) {
         }
         for (local, &ty) in typing.locals.iter() {
             types.locals.insert(local, table.export(ty));
+        }
+        for (pat, &ty) in typing.pats.iter() {
+            types.pats.insert(pat, table.export(ty));
         }
         typed.bodies.insert(id, types);
     }

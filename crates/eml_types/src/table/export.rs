@@ -21,6 +21,10 @@ impl Table {
                     work.push(*ret);
                     work.push(*param);
                 }
+                TyShape::Cont { arg, ret, .. } => {
+                    work.push(*ret);
+                    work.push(*arg);
+                }
                 TyShape::Record(fields) => work.extend(fields.iter().rev().map(|(_, f)| *f)),
                 TyShape::Con(_) | TyShape::Var(_) | TyShape::Error => {}
             }
@@ -61,44 +65,65 @@ impl Table {
                 row,
                 ret,
             } => {
-                let row = self.resolve_row(&row);
+                let (effects, tail) = self.export_row(&row);
                 Type::Fn {
                     param: Box::new(self.to_type(param, solved)),
-                    linearity: match lin {
-                        ArrowLin::Known(l) => l,
-                        ArrowLin::Var(_) if !solved => Linearity::Unr,
-                        ArrowLin::Var(v) => {
-                            let solution = self
-                                .lin_solution
-                                .as_ref()
-                                .expect("export runs after solve_kinds");
-                            // 解いた後に Kind 変数を作ると解が古くなる。`export` は解いた後に変数を作らない前提である
-                            debug_assert!(v.index() < solution.len());
-                            solution[v.index()]
-                        }
-                    },
-                    effects: row
-                        .labels
-                        .into_iter()
-                        .map(|id| EffectLabel {
-                            id,
-                            name: self.effect_names[id].clone(),
-                        })
-                        .collect(),
-                    tail: match row.tail {
-                        Tail::Closed => None,
-                        Tail::Var(tail) => Some(match &self.row_vars[tail.0 as usize].rigid {
-                            Some(name) => RowTail::Rigid(name.clone()),
-                            None => RowTail::Flexible,
-                        }),
-                        Tail::Error => Some(RowTail::Error),
-                    },
+                    linearity: self.export_lin(lin, solved),
+                    effects,
+                    tail,
                     ret: Box::new(self.to_type(ret, solved)),
+                }
+            }
+            TyShape::Cont { arg, lin, row, ret } => {
+                let (effects, tail) = self.export_row(&row);
+                Type::Cont {
+                    arg: Box::new(self.to_type(arg, solved)),
+                    ret: Box::new(self.to_type(ret, solved)),
+                    effects,
+                    tail,
+                    linearity: self.export_lin(lin, solved),
                 }
             }
             TyShape::Var(_) => Type::Flexible,
             TyShape::Rigid(rigid) => Type::Rigid(self.rigids[rigid.0 as usize].name.clone()),
             TyShape::Error => Type::Error,
         }
+    }
+
+    fn export_lin(&self, lin: ArrowLin, solved: bool) -> Linearity {
+        match lin {
+            ArrowLin::Known(l) => l,
+            ArrowLin::Var(_) if !solved => Linearity::Unr,
+            ArrowLin::Var(v) => {
+                let solution = self
+                    .lin_solution
+                    .as_ref()
+                    .expect("export runs after solve_kinds");
+                // 解いた後に Kind 変数を作ると解が古くなる。`export` は解いた後に変数を作らない前提である
+                debug_assert!(v.index() < solution.len());
+                solution[v.index()]
+            }
+        }
+    }
+
+    fn export_row(&self, row: &Row) -> (Vec<EffectLabel>, Option<RowTail>) {
+        let row = self.resolve_row(row);
+        let effects = row
+            .labels
+            .into_iter()
+            .map(|id| EffectLabel {
+                id,
+                name: self.effect_names[id].clone(),
+            })
+            .collect();
+        let tail = match row.tail {
+            Tail::Closed => None,
+            Tail::Var(tail) => Some(match &self.row_vars[tail.0 as usize].rigid {
+                Some(name) => RowTail::Rigid(name.clone()),
+                None => RowTail::Flexible,
+            }),
+            Tail::Error => Some(RowTail::Error),
+        };
+        (effects, tail)
     }
 }

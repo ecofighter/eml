@@ -13,7 +13,7 @@ use std::fmt::Write;
 
 use eml_diagnostics::{Diagnostic, FileId, Label, TextRange};
 use eml_hir::builtin::Builtin;
-use eml_hir::{ExprId, FunctionId, LocalId, Module};
+use eml_hir::{ExprId, FunctionId, LocalId, Module, OperationId, PatId};
 use la_arena::ArenaMap;
 
 pub use ty::{EffectLabel, KindConstraint, KindTerm, Linearity, Multiplicity, RowTail, Type};
@@ -39,6 +39,8 @@ pub struct TypedModule {
     /// Prelude のシグネチャから作った組み込みのスキーム。Core IR が、組み込みを包む関数の変数を boxed にするかを
     /// 決めるのに使う。コンストラクタ (`True`、`False`) は含まない。
     pub builtins: HashMap<Builtin, Scheme>,
+    /// エフェクトの操作のスキーム。Core IR が、操作を包む関数の変数を boxed にするかを決めるのに使う。
+    pub operations: ArenaMap<OperationId, Scheme>,
 }
 
 /// 関数の型と、多相化したときに残った Kind の制約のうち、定数を片側に持つもの。変数どうしの制約は部分適用のたびに
@@ -53,6 +55,8 @@ pub struct Scheme {
 pub struct BodyTypes {
     pub exprs: ArenaMap<ExprId, Type>,
     pub locals: ArenaMap<LocalId, Type>,
+    /// パターンが受けた値の型。Core IR が、handler の節の引数の変数を作るのに使う。
+    pub pats: ArenaMap<PatId, Type>,
 }
 
 pub fn check(module: &Module) -> (TypedModule, Vec<Diagnostic>) {
@@ -76,6 +80,11 @@ pub fn missing_main(file: FileId) -> Diagnostic {
 /// テストで推論結果を確かめるための表示。
 pub fn dump(module: &Module, typed: &TypedModule) -> String {
     let mut out = String::new();
+    for (id, operation) in module.operations.iter() {
+        if let Some(scheme) = typed.operations.get(id) {
+            writeln!(out, "{} : {}", operation.name, scheme.ty).unwrap();
+        }
+    }
     for (id, function) in module.functions.iter() {
         if let Some(scheme) = typed.signatures.get(id) {
             writeln!(out, "{} : {}", function.name, scheme.ty).unwrap();
