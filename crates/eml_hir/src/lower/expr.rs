@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use eml_diagnostics::{Diagnostic, FileId, Label, TextRange};
-use eml_syntax::{SyntaxKind, SyntaxNode, SyntaxToken, ast, decode_string, int_value};
+use eml_syntax::{SyntaxKind, SyntaxNode, SyntaxToken, ast};
 use la_arena::Arena;
 use rowan::ast::AstNode;
 
@@ -64,13 +64,13 @@ impl<'a> BodyLowering<'a> {
         let range = expr.syntax().text_range();
         match expr {
             ast::Expr::Literal(literal) => {
-                let value = literal.token().and_then(|token| match token.kind() {
-                    SyntaxKind::INT => int_value(token.text()).map(Literal::Int),
-                    SyntaxKind::STRING => decode_string(token.text()).map(Literal::String),
-                    // 浮動小数などは字句解析と構文解析が E0004 を報告済み
-                    _ => None,
+                // 未対応のリテラルと壊れた値は、字句解析と構文解析が報告済み
+                let kind = literal.value().map_or(ExprKind::Missing, |value| {
+                    ExprKind::Literal(match value {
+                        ast::LiteralValue::Int(n) => Literal::Int(n),
+                        ast::LiteralValue::String(s) => Literal::String(s),
+                    })
                 });
-                let kind = value.map_or(ExprKind::Missing, ExprKind::Literal);
                 self.alloc(kind, range)
             }
             ast::Expr::UnitExpr(_) => self.alloc(ExprKind::Literal(Literal::Unit), range),

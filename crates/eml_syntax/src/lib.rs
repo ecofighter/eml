@@ -3,6 +3,7 @@ mod debug_dump;
 mod grammar;
 mod layout;
 mod lexer;
+mod literal;
 mod parser;
 mod sink;
 mod syntax_kind;
@@ -13,7 +14,7 @@ use rowan::GreenNode;
 use rowan::ast::AstNode;
 
 pub use debug_dump::debug_tree;
-pub use lexer::{Token, decode_string, int_value, lex};
+pub use lexer::{Token, lex};
 pub use syntax_kind::{
     EmlLanguage, SyntaxElement, SyntaxKind, SyntaxNode, SyntaxNodePtr, SyntaxToken,
 };

@@ -1,7 +1,36 @@
 mod common;
 
 use common::diagnostics;
-use eml_syntax::{decode_string, int_value};
+use eml_syntax::ast::{Literal, LiteralValue};
+use rowan::ast::AstNode;
+
+/// `x = <literal>` を構文解析し、右辺のリテラルの値を返す。
+fn value(literal: &str) -> Option<LiteralValue> {
+    let parsed = eml_test_support::parse(&format!("x = {literal}"));
+    parsed
+        .parse
+        .syntax()
+        .descendants()
+        .find_map(Literal::cast)
+        .expect("a literal")
+        .value()
+}
+
+fn int_value(literal: &str) -> Option<i64> {
+    match value(literal) {
+        Some(LiteralValue::Int(n)) => Some(n),
+        None => None,
+        other => panic!("not an integer: {other:?}"),
+    }
+}
+
+fn decode_string(literal: &str) -> Option<String> {
+    match value(literal) {
+        Some(LiteralValue::String(s)) => Some(s),
+        None => None,
+        other => panic!("not a string: {other:?}"),
+    }
+}
 
 #[test]
 fn integer_values() {
@@ -40,4 +69,11 @@ fn strings_reported_by_the_lexer_have_no_value() {
     assert_eq!(decode_string(r#""abc"#), None);
     assert_eq!(decode_string(r#""abc\""#), None);
     assert_eq!(decode_string(r#"""#), None);
+}
+
+#[test]
+fn unsupported_literals_have_no_value() {
+    // 浮動小数と文字はパーサが E0004 を報告済みで、値は持たない。
+    assert_eq!(value("1.5"), None);
+    assert_eq!(value("'a'"), None);
 }

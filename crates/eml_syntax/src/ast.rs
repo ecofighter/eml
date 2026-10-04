@@ -236,9 +236,29 @@ impl OpSeq {
     }
 }
 
+/// リテラルの値。HIR はトークンの種類を見ずに、これで値を受け取る。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LiteralValue {
+    Int(i64),
+    String(String),
+}
+
 impl Literal {
     pub fn token(&self) -> Option<SyntaxToken> {
         self.syntax.first_token()
+    }
+
+    /// 浮動小数、文字、複数行の文字列などの未対応のリテラルと、値が壊れているもの (範囲外の整数、不正なエスケープ、
+    /// 閉じていない文字列) は `None` を返す。どれも字句解析かパーサが報告済みである。
+    pub fn value(&self) -> Option<LiteralValue> {
+        let token = self.token()?;
+        match token.kind() {
+            SyntaxKind::INT => crate::literal::int_value(token.text()).map(LiteralValue::Int),
+            SyntaxKind::STRING => {
+                crate::literal::decode_string(token.text()).map(LiteralValue::String)
+            }
+            _ => None,
+        }
     }
 }
 
