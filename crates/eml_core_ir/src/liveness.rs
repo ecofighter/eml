@@ -1,5 +1,5 @@
-//! 変数の生存 (docs/spec/core-ir.md)。`analyze` は、関数ごとに1回、すべての変数について生存を求め、join point の
-//! `captures` を埋め直す。持つのはブロックの入口 (`Switch` の枝と join point の範囲) で生きている変数だけで、`Let`
+//! 変数の生存 (docs/spec/core-ir.md)。`analyze` は、1回の呼び出しで関数のすべての変数について生存を求め、join point
+//! の `captures` を埋め直す。持つのはブロックの入口 (`Switch` の枝と join point の範囲) で生きている変数だけで、`Let`
 //! ごとの集合は持たない。RC の対象だけの集合が要る側は、結果を RC の対象で絞る。生存は変数ごとに独立して決まるので、
 //! 絞った結果は RC の対象だけで求めた結果と一致する。
 
