@@ -97,6 +97,8 @@ impl Usage<'_> {
                 // にする。ラムダとその部分適用の線形性は、捕まえた値の Kind 以上になる (docs/spec/linearity.md)
                 let mut captured: Vec<LocalId> = inner.keys().copied().collect();
                 captured.sort();
+                // 捕まえた変数の集合は、Core IR の変換が使う `lambda_captures` と同じでなければならない
+                debug_assert_eq!(captured, body.lambda_captures(id));
                 let mut captured_types = Vec::new();
                 for &local in &captured {
                     if inner[&local] != (1, 1) {
@@ -141,12 +143,8 @@ impl Usage<'_> {
 }
 
 fn remove_bound(body: &Body, pat: PatId, uses: &mut Uses) {
-    match &body.pats[pat].kind {
-        PatKind::Bind(local) => {
-            uses.remove(local);
-        }
-        PatKind::Annot { pat, .. } => remove_bound(body, *pat, uses),
-        _ => {}
+    for local in body.pat_bindings(pat) {
+        uses.remove(&local);
     }
 }
 

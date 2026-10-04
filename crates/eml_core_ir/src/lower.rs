@@ -1,9 +1,7 @@
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::HashMap;
 
 use eml_hir::builtin::Builtin;
-use eml_hir::{
-    Body, ExprId, ExprKind, FunctionId, Literal, LocalId, Module, PatId, PatKind, Res, Stmt,
-};
+use eml_hir::{Body, ExprId, ExprKind, FunctionId, Literal, LocalId, Module, PatId, Res, Stmt};
 use eml_types::{BodyTypes, Linearity, Type, TypedModule};
 use la_arena::ArenaMap;
 
@@ -185,15 +183,6 @@ fn param_types(ty: &Type, count: usize) -> Vec<Type> {
     out
 }
 
-/// 引数のパターンが束縛する局所変数。型を明示した引数は内側のパターンを見る。
-fn binder(body: &Body, pat: PatId) -> Option<LocalId> {
-    match &body.pats[pat].kind {
-        PatKind::Bind(local) => Some(*local),
-        PatKind::Annot { pat, .. } => binder(body, *pat),
-        _ => None,
-    }
-}
-
 /// 組み込みの引数ごとの、ヒープの値かどうか。`True` と `False` は値なので、ここには来ない。
 fn builtin_params(builtin: Builtin) -> Vec<bool> {
     match builtin {
@@ -254,7 +243,7 @@ impl FnLowering<'_> {
             vars.push(var);
         }
         for (&pat, ty) in params.iter().zip(param_types) {
-            let local = binder(body, pat);
+            let local = body.pat_bindings(pat).first().copied();
             let name = local.map_or("p", |local| body.locals[local].name.as_str());
             let var = self.new_var(name, ty);
             if let Some(local) = local {
@@ -476,7 +465,8 @@ impl FnLowering<'_> {
                 params,
                 body: lambda_body,
             } => {
-                let captured: Vec<(LocalId, Type)> = captures(body, id)
+                let captured: Vec<(LocalId, Type)> = body
+                    .lambda_captures(id)
                     .into_iter()
                     .map(|local| {
                         let ty = self
@@ -518,12 +508,8 @@ impl FnLowering<'_> {
 
     /// `_` と `()` で受けた値は以後使われないので、Perceus の挿入が decref する。
     fn bind_pat(&mut self, pat: PatId, value: Atom) {
-        match self.body.pats[pat].kind {
-            PatKind::Bind(local) => {
-                self.locals.insert(local, value);
-            }
-            PatKind::Annot { pat, .. } => self.bind_pat(pat, value),
-            _ => {}
+        for local in self.body.pat_bindings(pat) {
+            self.locals.insert(local, value);
         }
     }
 }
@@ -551,70 +537,5 @@ fn prim(builtin: Builtin) -> PrimOp {
         Builtin::ComposeFwd | Builtin::ComposeBwd => {
             unreachable!("composition is lowered to a closure, not to a primitive")
         }
-    }
-}
-
-/// ラムダの本体が参照する、ラムダの外で束縛した局所変数。`LocalId` の順に並べる。ラムダは捕まえた変数を先頭の
-/// 引数に持つ関数に持ち上げる (docs/spec/core-ir.md)。そのため、入れ子のラムダが捕まえる変数は、内側のクロージャを
-/// 作る外側のラムダの関数でも引数として要るので、外側のラムダも捕まえる。式の木は作業リストでたどる。
-fn captures(body: &Body, lambda: ExprId) -> Vec<LocalId> {
-    let mut used = BTreeSet::new();
-    let mut bound = HashSet::new();
-    let mut work = vec![lambda];
-    while let Some(id) = work.pop() {
-        match &body.exprs[id].kind {
-            ExprKind::Path(Res::Local(local)) => {
-                used.insert(*local);
-            }
-            ExprKind::Lambda {
-                params,
-                body: inner,
-            } => {
-                for &param in params {
-                    bind_locals(body, param, &mut bound);
-                }
-                work.push(*inner);
-            }
-            ExprKind::Call { callee, args } => {
-                work.push(*callee);
-                work.extend(args.iter().copied());
-            }
-            ExprKind::If {
-                condition,
-                then_branch,
-                else_branch,
-            } => {
-                work.push(*condition);
-                work.push(*then_branch);
-                work.extend(*else_branch);
-            }
-            ExprKind::Block { stmts, tail } => {
-                for stmt in stmts {
-                    match stmt {
-                        Stmt::Let { pat, init, .. } => {
-                            bind_locals(body, *pat, &mut bound);
-                            work.push(*init);
-                        }
-                        Stmt::Expr(expr) => work.push(*expr),
-                    }
-                }
-                work.extend(*tail);
-            }
-            ExprKind::Annot { expr, .. } => work.push(*expr),
-            ExprKind::Missing | ExprKind::Literal(_) | ExprKind::Path(_) => {}
-        }
-    }
-    used.into_iter()
-        .filter(|local| !bound.contains(local))
-        .collect()
-}
-
-fn bind_locals(body: &Body, pat: PatId, bound: &mut HashSet<LocalId>) {
-    match &body.pats[pat].kind {
-        PatKind::Bind(local) => {
-            bound.insert(*local);
-        }
-        PatKind::Annot { pat, .. } => bind_locals(body, *pat, bound),
-        PatKind::Wildcard | PatKind::Unit | PatKind::Missing => {}
     }
 }

@@ -1,3 +1,5 @@
+use std::collections::{BTreeSet, HashSet};
+
 use eml_diagnostics::{FileId, TextRange};
 use la_arena::{Arena, Idx};
 
@@ -74,6 +76,94 @@ pub struct Body {
     /// 本体の型の注釈。型変数と row 変数は、シグネチャの `Generics` を指す。シグネチャのアリーナと分けるのは、本体を
     /// 書き換えてもシグネチャが変わらないようにするため。
     pub types: Arena<TypeRef>,
+}
+
+impl Body {
+    /// 式の直接の子を、ソースの順に `f` に渡す。子を辿る規則はここだけに置き、段階3と4で `match` や `handle` を
+    /// 足すときはここを直す。
+    pub fn walk_child_exprs(&self, id: ExprId, mut f: impl FnMut(ExprId)) {
+        match &self.exprs[id].kind {
+            ExprKind::Missing | ExprKind::Literal(_) | ExprKind::Path(_) => {}
+            ExprKind::Call { callee, args } => {
+                f(*callee);
+                for &arg in args {
+                    f(arg);
+                }
+            }
+            ExprKind::If {
+                condition,
+                then_branch,
+                else_branch,
+            } => {
+                f(*condition);
+                f(*then_branch);
+                if let Some(else_branch) = else_branch {
+                    f(*else_branch);
+                }
+            }
+            ExprKind::Block { stmts, tail } => {
+                for stmt in stmts {
+                    match stmt {
+                        Stmt::Let { init, .. } => f(*init),
+                        Stmt::Expr(expr) => f(*expr),
+                    }
+                }
+                if let Some(tail) = tail {
+                    f(*tail);
+                }
+            }
+            ExprKind::Annot { expr, .. } => f(*expr),
+            ExprKind::Lambda { body, .. } => f(*body),
+        }
+    }
+
+    /// パターンが束縛する局所変数。型を明示したパターンは内側を見る。
+    pub fn pat_bindings(&self, pat: PatId) -> Vec<LocalId> {
+        let mut out = Vec::new();
+        self.collect_bindings(pat, &mut out);
+        out
+    }
+
+    fn collect_bindings(&self, pat: PatId, out: &mut Vec<LocalId>) {
+        match &self.pats[pat].kind {
+            PatKind::Bind(local) => out.push(*local),
+            PatKind::Annot { pat, .. } => self.collect_bindings(*pat, out),
+            PatKind::Missing | PatKind::Wildcard | PatKind::Unit => {}
+        }
+    }
+
+    /// ラムダの本体が参照する局所変数のうち、ラムダの中で束縛していないもの。`LocalId` の順に並べる。ラムダは捕まえた
+    /// 変数を先頭の引数に持つ関数に持ち上げるので (docs/spec/core-ir.md)、入れ子のラムダが捕まえる変数は外側のラムダも
+    /// 捕まえる。式の木は作業リストでたどる。
+    pub fn lambda_captures(&self, lambda: ExprId) -> Vec<LocalId> {
+        let mut used = BTreeSet::new();
+        let mut bound = HashSet::new();
+        let mut work = vec![lambda];
+        while let Some(id) = work.pop() {
+            match &self.exprs[id].kind {
+                ExprKind::Path(Res::Local(local)) => {
+                    used.insert(*local);
+                }
+                ExprKind::Lambda { params, .. } => {
+                    for &param in params {
+                        bound.extend(self.pat_bindings(param));
+                    }
+                }
+                ExprKind::Block { stmts, .. } => {
+                    for stmt in stmts {
+                        if let Stmt::Let { pat, .. } = stmt {
+                            bound.extend(self.pat_bindings(*pat));
+                        }
+                    }
+                }
+                _ => {}
+            }
+            self.walk_child_exprs(id, |child| work.push(child));
+        }
+        used.into_iter()
+            .filter(|local| !bound.contains(local))
+            .collect()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
