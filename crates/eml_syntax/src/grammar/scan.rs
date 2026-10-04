@@ -46,7 +46,6 @@ impl Nesting {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::SyntaxKind::*;
 
     fn ends_after(kinds: &[SyntaxKind], last: SyntaxKind) -> bool {
         let mut nesting = Nesting::default();
