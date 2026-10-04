@@ -88,6 +88,28 @@ pub fn lower(text: &str) -> Lowered {
     }
 }
 
+/// 前提として診断のないソースを使うテストのため。条件を緩めないよう、警告も1件として数える。
+pub fn parse_clean(text: &str) -> Parsed {
+    let parsed = parse(text);
+    assert_clean(&parsed.files, &parsed.diagnostics);
+    parsed
+}
+
+#[cfg(feature = "hir")]
+pub fn lower_clean(text: &str) -> Lowered {
+    let lowered = lower(text);
+    assert_clean(&lowered.files, &lowered.diagnostics);
+    lowered
+}
+
+fn assert_clean(files: &SourceFiles, diagnostics: &[Diagnostic]) {
+    assert!(
+        diagnostics.is_empty(),
+        "unexpected diagnostics:\n{}",
+        short_text(files, diagnostics)
+    );
+}
+
 #[cfg(feature = "types")]
 pub fn check(text: &str) -> Checked {
     let Lowered {
@@ -141,6 +163,23 @@ pub fn short(files: &SourceFiles, diagnostics: &[Diagnostic]) -> Vec<String> {
         .collect()
 }
 
+/// `full` と同じく文字列にして、段階の表示の後ろにそのまま足せるようにする。
+pub fn short_text(files: &SourceFiles, diagnostics: &[Diagnostic]) -> String {
+    short(files, diagnostics)
+        .into_iter()
+        .map(|line| line + "\n")
+        .collect()
+}
+
+/// 診断の形式は段階のテストごとに違うので、区切り方だけをここでそろえる。
+pub fn with_diagnostics(mut dump: String, diagnostics: &str) -> String {
+    if !diagnostics.is_empty() {
+        dump.push_str("---\n");
+        dump.push_str(diagnostics);
+    }
+    dump
+}
+
 /// 1件を、先頭の行に続けてラベル、note、help を字下げした行にする。
 pub fn full(files: &SourceFiles, diagnostics: &[Diagnostic]) -> String {
     let mut out = String::new();
@@ -163,4 +202,40 @@ pub fn full(files: &SourceFiles, diagnostics: &[Diagnostic]) -> String {
 
 fn position(files: &SourceFiles, label: &Label) -> LineCol {
     files.line_col(label.file, label.range.start())
+}
+
+/// フロントエンドからは作れない Core IR を手で組むテストが使う部品 (docs/implementation/testing.md の「テストの置き場所」)。
+#[cfg(feature = "core")]
+pub mod ir {
+    use eml_core_ir::{Atom, CoreFn, FnIdx, Linearity, Program, VarId, VarInfo};
+
+    pub fn var(n: u32) -> Atom {
+        Atom::Var(VarId(n))
+    }
+
+    pub fn boxed(name: &str) -> VarInfo {
+        var_info(name, true)
+    }
+
+    pub fn unboxed(name: &str) -> VarInfo {
+        var_info(name, false)
+    }
+
+    fn var_info(name: &str, boxed: bool) -> VarInfo {
+        VarInfo {
+            name: name.to_string(),
+            linearity: Linearity::Unr,
+            boxed,
+        }
+    }
+
+    /// エフェクトを持つプログラムは `Program { effects, ..program(...) }` で組む。
+    pub fn program(functions: Vec<CoreFn>, entry: u32, strings: &[&str]) -> Program {
+        Program {
+            functions,
+            entry: FnIdx(entry),
+            strings: strings.iter().map(|s| s.to_string()).collect(),
+            effects: Vec::new(),
+        }
+    }
 }
