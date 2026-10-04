@@ -14,6 +14,7 @@ eml_types = { path = "crates/eml_types" }
 eml_core_ir = { path = "crates/eml_core_ir" }
 eml_runtime = { path = "crates/eml_runtime" }
 eml_interp = { path = "crates/eml_interp" }
+eml_test_support = { path = "crates/eml_test_support" }
 ariadne = "0.6"
 clap = { version = "4.6", features = ["derive"] }
 insta = { version = "1.49", features = ["glob"] }

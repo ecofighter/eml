@@ -1,0 +1,14 @@
+[package]
+name = "eml_test_support"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[dependencies]
+eml_core_ir.workspace = true
+eml_diagnostics.workspace = true
+eml_hir.workspace = true
+eml_interp.workspace = true
+eml_runtime.workspace = true
+eml_syntax.workspace = true
+eml_types.workspace = true
