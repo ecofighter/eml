@@ -114,3 +114,9 @@
 - `check-fail/not_yet_supported.em` を `check-fail/not-yet-supported/data_declarations.em` に改名した (種類1)。ディレクトリの名前と重なるためである
 - `crates/eml_cli/tests/ui.rs` がサブディレクトリを走査し、スナップショットの名前を最上位のディレクトリからの相対パスで固定するようにしたので、すべてのスナップショットの名前が変わった (種類1)。中身は、ヘッダの `input_file:` と `expression:` の行と、`check-fail/` の診断の表示の中のパスのほかは変わっていない。`ui.rs` は最上位のディレクトリの直下の .em を拒む
 - `crates/eml_cli/tests/cli.rs` が使う UI テストのパスを、移した先に合わせた。終了コードと出力の確認は変えていない
+
+### テストの整理の後の小さな直し
+
+- `eml_test_support/tests/support.rs` の `parse_clean_rejects_a_syntax_error` と `lower_clean_rejects_an_undefined_name` を、`#[should_panic(expected = "unexpected diagnostics")]` にした (種類1)。補助関数の外の panic で通ってしまわないようにするためである。`parse_clean_returns_a_tree_without_diagnostics` と `lower_clean_returns_a_module_without_diagnostics` には、返した木の項目の数と、モジュールの関数 `f` を確かめるアサーションを足した (種類1)
+- `eml_interp` の単体テスト `runtime_errors_name_the_fault_and_the_function` から、関数の名前を含まない `Leak` の表示のアサーションを、新しい `leaks_are_displayed_with_the_object_counts` に分けた (種類1)。アサーションの中身は変えていない
+- `eml_core_ir/tests/lower.rs` の `an_if_in_a_condition_jumps_straight_to_the_outer_join_point` を `simplify.rs` に移した (種類1)。期待値は `simplify` の結果を写している。本体は変えていない
