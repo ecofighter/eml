@@ -313,13 +313,41 @@ impl Simplify<'_> {
         }
     }
 
-    /// B4: jump がなくなった join point を消し、範囲だけを残す。
+    /// B4: どの join point にも、たどれる `jump` が届かなければ、join point を消して範囲だけを残す。まだ入らない
+    /// 本体の中の `jump` は数えない。その本体ごと消える join point の `jump` で、別の join point が残らないようにするため。
     fn remove_unused(&mut self) {
-        let jumps = self.jumps();
-        let present = self.present();
+        let joins = self.function.joins.len();
+        let mut used = vec![false; joins];
+        let mut deferred: Vec<Option<CExprId>> = vec![None; joins];
+        let mut seen = Vec::new();
+        let mut work = vec![self.function.body];
+        while let Some(id) = work.pop() {
+            match self.expr(id) {
+                CExpr::Join {
+                    join, body, scope, ..
+                } => {
+                    let index = join.0 as usize;
+                    seen.push(index);
+                    work.push(*scope);
+                    if used[index] {
+                        work.push(*body);
+                    } else {
+                        deferred[index] = Some(*body);
+                    }
+                }
+                CExpr::Jump { join, .. } => {
+                    let index = join.0 as usize;
+                    if !used[index] {
+                        used[index] = true;
+                        work.extend(deferred[index]);
+                    }
+                }
+                other => work.extend(children(other)),
+            }
+        }
         let mut parents = self.parents();
-        for (index, sites) in jumps.iter().enumerate() {
-            if !sites.is_empty() || !present[index] {
+        for index in seen {
+            if used[index] {
                 continue;
             }
             let node = self.function.joins[index];

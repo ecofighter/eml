@@ -612,3 +612,40 @@ fn split_arms_use_the_known_tag() {
     }
     ");
 }
+
+#[test]
+fn join_points_left_without_jumps_are_removed() {
+    // `(a || True) && True` の join point は、消える join point の本体の中にしか jump がない。残すと captures が呼び出しをまたいで生きない
+    let text = "noisy : String -> Bool -> <IO> Bool\nnoisy name b =\n  println name\n  b\n\nmain : Unit -> <IO> Unit\nmain () =\n  let other = \"other\"\n  let a = noisy \"a\" True\n  if (a || True) && True then println \"x\" else println other\n  println \"end\"";
+    insta::assert_snapshot!(core_text(text), @r#"
+    fn noisy(name0, b1) {
+      let t2 = perform println(name0)
+      return b1
+    }
+    fn main(p0) {
+      let s1 = const "other"
+      decref s1
+      let s2 = const "a"
+      let t3 = call noisy(s2, #1)
+      join j0(t9) [] {
+        let s10 = const "end"
+        let t11 = perform println(s10)
+        return t11
+      }
+      join j1(u13) [] {
+        let s6 = const "x"
+        let t7 = perform println(s6)
+        jump j0(t7)
+      }
+      switch t3 {
+        #0 ->
+          jump j1(())
+        #1 ->
+          jump j1(())
+      }
+    }
+    fn entry$main() {
+      tailcall main(())
+    }
+    "#);
+}

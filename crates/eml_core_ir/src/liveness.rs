@@ -56,7 +56,15 @@ impl BlockLiveness {
                 }
                 vars
             }
-            CExpr::Join { scope, .. } => self.entry(*scope).clone(),
+            // verifier は join point の `captures` が定義の位置で範囲にあることを求める。`jump` が届かない join point でも、
+            // `Join` まで生かしておかないと、間の呼び出しをまたいだ変数が退避されずに範囲から外れる
+            CExpr::Join { join, scope, .. } => {
+                let mut vars = self.entry(*scope).clone();
+                if let Some(captures) = self.captures.get(join.0 as usize) {
+                    vars.extend(captures.iter().copied());
+                }
+                vars
+            }
             CExpr::Let { .. } | CExpr::Dup { .. } | CExpr::Decref { .. } => {
                 unreachable!("a chain ends at a control expression")
             }
