@@ -29,9 +29,15 @@ impl SourceFiles {
         Self::default()
     }
 
+    /// 先頭の BOM は読み込み時に除く。以後の位置 (`TextRange`、レイアウトの列、診断の行と列) は、すべて BOM を除いた
+    /// テキストで数える (docs/spec/lexical.md)。
     pub fn add(&mut self, path: impl Into<String>, text: impl Into<String>) -> FileId {
         let id = FileId(u32::try_from(self.files.len()).expect("too many source files"));
-        self.files.push((path.into(), text.into()));
+        let mut text = text.into();
+        if text.starts_with('\u{feff}') {
+            text.drain(..'\u{feff}'.len_utf8());
+        }
+        self.files.push((path.into(), text));
         id
     }
 
@@ -43,17 +49,13 @@ impl SourceFiles {
         &self.files[id.0 as usize].1
     }
 
-    /// 位置を行と列にする。ファイルの先頭の BOM は列に数えない (docs/spec/lexical.md)。
+    /// 位置を行と列にする。`offset` は、このファイルのテキストの中の文字の境界でなければならない。
     pub fn line_col(&self, file: FileId, offset: TextSize) -> LineCol {
         let before = &self.text(file)[..usize::from(offset)];
         let line_start = before.rfind('\n').map_or(0, |newline| newline + 1);
-        let mut column_text = &before[line_start..];
-        if line_start == 0 {
-            column_text = &column_text[bom_len(column_text)..];
-        }
         LineCol {
             line: u32::try_from(before.matches('\n').count() + 1).expect("too many lines"),
-            column: u32::try_from(column_text.chars().count() + 1).expect("line too long"),
+            column: u32::try_from(before[line_start..].chars().count() + 1).expect("line too long"),
         }
     }
 
@@ -62,12 +64,6 @@ impl SourceFiles {
             .iter()
             .map(|(path, text)| (path.as_str(), text.as_str()))
     }
-}
-
-/// ファイルの先頭の BOM のバイト数。BOM は列に数えないので (docs/spec/lexical.md)、行と列の計算と表示の両方が使う。
-pub(crate) fn bom_len(text: &str) -> usize {
-    const BOM: &str = "\u{feff}";
-    if text.starts_with(BOM) { BOM.len() } else { 0 }
 }
 
 #[cfg(test)]
@@ -107,8 +103,15 @@ mod tests {
 
     #[test]
     fn line_col_does_not_count_the_bom() {
-        // BOM は列に数えない (docs/spec/lexical.md)。BOM は3バイトなので、`b` はバイト位置 4 にある。
-        assert_eq!(position("\u{feff}ab", 4), "1:2");
-        assert_eq!(position("\u{feff}a\nb", 5), "2:1");
+        // BOM は読み込み時に除くので (docs/spec/lexical.md)、位置は BOM を除いたテキストで数える。
+        assert_eq!(position("\u{feff}ab", 1), "1:2");
+        assert_eq!(position("\u{feff}a\nb", 2), "2:1");
+    }
+
+    #[test]
+    fn add_strips_only_a_leading_bom() {
+        let mut files = SourceFiles::new();
+        let file = files.add("a.em", "\u{feff}a\u{feff}");
+        assert_eq!(files.text(file), "a\u{feff}");
     }
 }

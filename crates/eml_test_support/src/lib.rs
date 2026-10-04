@@ -52,13 +52,14 @@ pub fn source(text: &str) -> (SourceFiles, FileId) {
     (files, file)
 }
 
-/// どのテストでも lossless を確かめるため、木が元のテキストに戻ることもここで確認する。
+/// どのテストでも lossless を確かめるため、木が元のテキストに戻ることもここで確認する。構文解析するのは
+/// `SourceFiles` に保存したテキスト (先頭の BOM を除いたもの) である (docs/spec/lexical.md)。
 pub fn parse(text: &str) -> Parsed {
     let (files, file) = source(text);
-    let (parse, diagnostics) = eml_syntax::parse(file, text);
+    let (parse, diagnostics) = eml_syntax::parse(file, files.text(file));
     assert_eq!(
         parse.syntax().text().to_string(),
-        text,
+        files.text(file),
         "tree must be lossless"
     );
     Parsed {
