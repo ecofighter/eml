@@ -24,6 +24,12 @@ pub(super) enum Origin {
     UnitPattern,
     LambdaParameter,
     LambdaBody,
+    /// handler の節の本体。handle 式全体の型を持つ。
+    HandlerClause,
+    /// `resume` の最初の引数。
+    Continuation,
+    /// `resume` に渡す値。
+    ResumeValue,
     /// 推論で決まる型。根拠の場所はない。
     Inferred,
 }
@@ -258,6 +264,15 @@ impl BodyCheck<'_> {
             Origin::Statement => diagnostic
                 .with_note("a statement that is not the last one in a block must have type `Unit`"),
             Origin::UnitPattern => diagnostic.with_note("the pattern `()` matches only `Unit`"),
+            Origin::HandlerClause => diagnostic.with_note(
+                "each clause of a handler must have the type of the whole `handle` expression",
+            ),
+            Origin::Continuation => {
+                diagnostic.with_note("the first argument of `resume` must be a continuation")
+            }
+            Origin::ResumeValue => {
+                diagnostic.with_note("`resume` passes this value as the result of the operation")
+            }
             Origin::LambdaParameter => diagnostic.with_note(
                 "an annotated lambda parameter must have the parameter type the lambda is expected to have",
             ),

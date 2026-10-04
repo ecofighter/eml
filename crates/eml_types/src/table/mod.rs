@@ -81,7 +81,6 @@ pub(crate) enum TyShape {
     },
     /// 継続 `k` の型。`lin` は継続の線形性で、`once` の操作の `k` は `Lin` である (docs/spec/effects.md)。`resume` の
     /// 検査では、まだ決まらない継続を推論用の変数で表すので、矢印と同じ `ArrowLin` を使う。
-    #[allow(dead_code)]
     Cont {
         arg: Ty,
         lin: ArrowLin,

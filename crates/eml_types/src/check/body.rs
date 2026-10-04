@@ -117,7 +117,7 @@ impl BodyCheck<'_> {
         self.check_expr(body.root, expected, Origin::Return);
     }
 
-    fn check_expr(&mut self, id: ExprId, expected: Ty, origin: Origin) {
+    pub(super) fn check_expr(&mut self, id: ExprId, expected: Ty, origin: Origin) {
         let body = self.body;
         let expr = &body.exprs[id];
         match &expr.kind {
@@ -161,7 +161,7 @@ impl BodyCheck<'_> {
         }
     }
 
-    fn infer_expr(&mut self, id: ExprId) -> Ty {
+    pub(super) fn infer_expr(&mut self, id: ExprId) -> Ty {
         let body = self.body;
         let expr = &body.exprs[id];
         let ty = match &expr.kind {
@@ -199,8 +199,17 @@ impl BodyCheck<'_> {
                 self.check_expr(*inner, annotated, Origin::Annotation(range));
                 annotated
             }
-            ExprKind::Handle { .. } | ExprKind::Resume { .. } | ExprKind::Drop(_) => {
-                self.table.error
+            ExprKind::Handle {
+                body: handled,
+                effect,
+                clauses,
+                ret,
+            } => self.handle(*effect, *handled, clauses, ret.as_ref()),
+            ExprKind::Resume { k, arg } => self.resume(id, *k, *arg),
+            // `drop` はどんな値も受け取る。値を捨てることは使用の1回に数える (docs/spec/linearity.md)
+            ExprKind::Drop(value) => {
+                self.infer_expr(*value);
+                self.table.unit
             }
         };
         self.typing.exprs.insert(id, ty);
@@ -410,7 +419,7 @@ impl BodyCheck<'_> {
 
     /// `check` の間だけ今の row とその由来を替え、終わったら戻す。ラムダの本体は、外側の関数ではなく、ラムダで最後に
     /// たどった矢印の row で検査する (docs/spec/types.md の「推論」)。
-    fn with_ambient<T>(
+    pub(super) fn with_ambient<T>(
         &mut self,
         row: Row,
         source: AmbientSource,
@@ -495,7 +504,7 @@ impl BodyCheck<'_> {
         self.bind_pat(pat, ty);
     }
 
-    fn bind_pat(&mut self, pat: PatId, ty: Ty) {
+    pub(super) fn bind_pat(&mut self, pat: PatId, ty: Ty) {
         self.typing.pats.insert(pat, ty);
         let body = self.body;
         match &body.pats[pat].kind {

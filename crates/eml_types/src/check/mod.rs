@@ -13,6 +13,7 @@ use crate::ty::{EffectLabel, KindConstraint, KindTerm, Linearity, Type};
 use crate::{BodyTypes, TypedModule, codes, scc, usage};
 
 mod body;
+mod handle;
 mod report;
 
 use body::BodyCheck;
