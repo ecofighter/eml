@@ -11,7 +11,17 @@ pub fn pretty(module: &Module) -> String {
         if id == module.lang.io {
             continue;
         }
-        writeln!(out, "effect {}", effect.name).unwrap();
+        let params: Vec<&str> = effect
+            .generics
+            .type_vars
+            .iter()
+            .map(|(_, var)| var.name.as_str())
+            .collect();
+        if params.is_empty() {
+            writeln!(out, "effect {}", effect.name).unwrap();
+        } else {
+            writeln!(out, "effect {} {}", effect.name, params.join(" ")).unwrap();
+        }
         for &operation in &effect.operations {
             let operation = &module.operations[operation];
             let printer = Printer {
@@ -225,10 +235,21 @@ impl Printer<'_> {
                 } else {
                     param_text
                 };
-                let effect_names = |effects: &[EffectId]| -> Vec<String> {
+                let effect_names = |effects: &[EffectRef]| -> Vec<String> {
                     effects
                         .iter()
-                        .map(|effect| self.module.effects[*effect].name.clone())
+                        .map(|effect| {
+                            let mut text = self.module.effects[effect.effect].name.clone();
+                            for &arg in &effect.args {
+                                let arg_text = self.ty(types, arg);
+                                if matches!(types[arg].kind, TypeRefKind::Fn { .. }) {
+                                    write!(text, " ({arg_text})").unwrap();
+                                } else {
+                                    write!(text, " {arg_text}").unwrap();
+                                }
+                            }
+                            text
+                        })
                         .collect()
                 };
                 let row = match row {

@@ -143,9 +143,11 @@ fn lower(
             let row = match row {
                 // 省略した row は空の row である (docs/spec/types.md の「関数型」)
                 RowRef::Omitted => Row::pure(),
-                RowRef::Closed { effects, .. } => Row::closed(effects.clone()),
+                RowRef::Closed { effects, .. } => {
+                    Row::closed(effects.iter().map(|effect| effect.effect).collect())
+                }
                 RowRef::Open { effects, tail, .. } => Row {
-                    labels: effects.clone(),
+                    labels: effects.iter().map(|effect| effect.effect).collect(),
                     tail: Tail::Var(rigids.rows[*tail]),
                 },
                 // 未定義のエフェクトか、解決できない row 変数の跡。どのエフェクトも受け入れて、診断を連鎖させない

@@ -62,13 +62,55 @@ fn operation_signatures_are_checked() {
 }
 
 #[test]
-fn effect_type_parameters_and_arguments_come_in_stage_3b() {
-    let text = "effect State s where\n  get : Unit -> s\n\nf : Unit -> <State Int> Int\nf () = 1";
+fn effects_take_type_parameters_and_rows_take_type_arguments() {
+    let text = "effect State s where\n  get : Unit -> s\n  put : s -> Unit\n  never fail : Unit -> a\n\nf : Unit -> <State Int, State (Int -> Int)> Int\nf () = 1";
+    insta::assert_snapshot!(lower_text(text), @r"
+    effect State s
+      get : Unit -> s
+      put : s -> Unit
+      never fail : Unit -> a
+    f : Unit -> <State Int, State (Int -> Int)> Int
+    f () = 1
+    ");
+}
+
+#[test]
+fn operations_see_the_type_parameters_of_their_effect_first() {
+    let lowered = lower("effect State s where\n  get : Unit -> s\n  never fail : Unit -> a");
+    assert!(lowered.diagnostics.is_empty(), "{:?}", lowered.diagnostics);
+    let generics = |name: &str| -> (Vec<String>, usize) {
+        let (_, operation) = lowered
+            .module
+            .operations
+            .iter()
+            .find(|(_, operation)| operation.name == name)
+            .unwrap();
+        let names = operation
+            .signature
+            .generics
+            .type_vars
+            .iter()
+            .map(|(_, var)| var.name.clone())
+            .collect();
+        (names, operation.effect_params)
+    };
+    assert_eq!(generics("get"), (vec!["s".to_string()], 1));
+    assert_eq!(
+        generics("fail"),
+        (vec!["s".to_string(), "a".to_string()], 1)
+    );
+}
+
+#[test]
+fn type_arguments_and_parameters_of_effects_are_checked() {
+    let text = "effect State s where\n  get : Unit -> s\n\neffect Pair a a where\n  first : Unit -> a\n\neffect Fail e where\n  never raise : Unit -> e\n\nf : Unit -> <State> Int\nf () = 1\n\ng : Unit -> <State Int Int> Int\ng () = 1\n\nh : Unit -> <State Int> Int\nh () = 1";
     assert_eq!(
         errors(text),
         [
-            "E0004 1:14 effect type parameters are not supported yet",
-            "E0004 4:14 effects with type arguments are not supported yet",
+            "E1003 4:15 `a` is defined more than once",
+            "E1008 8:25 the result type of a `never` operation must be a type variable that does not appear in its parameters",
+            "E1015 10:14 `State` takes 1 type argument, but 0 were given",
+            "E1015 13:14 `State` takes 1 type argument, but 2 were given",
         ]
     );
 }

@@ -1,4 +1,4 @@
-use eml_hir::{EffectDef, LangItems, TypeDef};
+use eml_hir::{EffectDef, Generics, LangItems, TypeDef};
 use la_arena::Arena;
 
 use super::*;
@@ -18,6 +18,7 @@ fn new_table() -> Table {
         unit: ty("Unit"),
         io: effects.alloc(EffectDef {
             name: "IO".to_string(),
+            generics: Generics::default(),
             operations: Vec::new(),
         }),
     };

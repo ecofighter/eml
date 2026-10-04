@@ -40,6 +40,8 @@ pub struct TypeDef {
 #[derive(Debug)]
 pub struct EffectDef {
     pub name: String,
+    /// 宣言の型引数。エフェクトの引数は型だけで、row 変数は持たない (docs/spec/declarations.md の「`effect`」)。
+    pub generics: Generics,
     /// 宣言した順の操作。組み込みの `IO` の操作は組み込みの関数なので、ここには入らない。
     pub operations: Vec<OperationId>,
 }
@@ -57,8 +59,10 @@ pub struct Operation {
     pub name_range: TextRange,
     pub effect: EffectId,
     pub multiplicity: OpMultiplicity,
-    /// 型変数は、操作ごとに暗黙に量化する。
+    /// `generics` の先頭の `effect_params` 個は、エフェクトの型引数を写したものである。シグネチャで同じ名前の型変数は
+    /// それを指し、ほかの型変数は操作ごとに暗黙に量化する。
     pub signature: Signature,
+    pub effect_params: usize,
     /// シグネチャの一番外側の `->` の数 (docs/spec/declarations.md の「`effect`」)。
     pub arity: usize,
 }
@@ -112,8 +116,7 @@ pub struct Signature {
     pub generics: Generics,
 }
 
-/// 型変数と row 変数の表。関数と操作のシグネチャが持つ。`data` の宣言には段階4で、型引数を持つエフェクトの宣言には
-/// 段階3b で持たせる。
+/// 型変数と row 変数の表。関数と操作のシグネチャが持つ。エフェクトの宣言も持つ。`data` の宣言には段階4で持たせる。
 #[derive(Debug, Default)]
 pub struct Generics {
     pub type_vars: Arena<TypeVarDecl>,
@@ -405,17 +408,24 @@ pub enum TypeRefKind {
     },
 }
 
+/// row に書いたエフェクト。型引数の個数は宣言と一致する。違えば E1015 を報告して、row を `RowRef::Error` にする。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EffectRef {
+    pub effect: EffectId,
+    pub args: Vec<TypeRefId>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RowRef {
     /// 省略した row。空の row `<>` である (docs/spec/types.md の「関数型」)。
     Omitted,
     Closed {
-        effects: Vec<EffectId>,
+        effects: Vec<EffectRef>,
         range: TextRange,
     },
     /// `<e>` と `<IO | e>`。
     Open {
-        effects: Vec<EffectId>,
+        effects: Vec<EffectRef>,
         tail: RowVarId,
         range: TextRange,
     },

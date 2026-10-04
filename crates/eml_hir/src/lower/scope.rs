@@ -6,7 +6,9 @@ use std::collections::HashMap;
 use la_arena::Arena;
 
 use crate::builtin::Builtin;
-use crate::hir::{EffectDef, EffectId, FunctionId, LangItems, OperationId, TypeDef, TypeDefId};
+use crate::hir::{
+    EffectDef, EffectId, FunctionId, Generics, LangItems, OperationId, TypeDef, TypeDefId,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum ValueItem {
@@ -28,6 +30,8 @@ pub(super) struct ItemScope {
     /// ユーザーが定義した値 (関数と操作)。
     values: HashMap<String, ValueItem>,
     types: HashMap<String, TypeItem>,
+    /// エフェクトの型引数の個数。row のエフェクトの型引数の個数を確かめるのに使う (E1015)。
+    effect_params: HashMap<EffectId, usize>,
 }
 
 impl ItemScope {
@@ -50,8 +54,13 @@ impl ItemScope {
         self.types.insert(name.to_string(), TypeItem::Type(id));
     }
 
-    pub(super) fn define_effect(&mut self, name: &str, id: EffectId) {
+    pub(super) fn define_effect(&mut self, name: &str, id: EffectId, params: usize) {
         self.types.insert(name.to_string(), TypeItem::Effect(id));
+        self.effect_params.insert(id, params);
+    }
+
+    pub(super) fn effect_params(&self, id: EffectId) -> usize {
+        self.effect_params.get(&id).copied().unwrap_or(0)
     }
 
     pub(super) fn value(&self, name: &str) -> Option<ValueItem> {
@@ -90,9 +99,10 @@ pub(super) fn builtin_items(
     let (int, string, bool, unit) = (ty("Int"), ty("String"), ty("Bool"), ty("Unit"));
     let io = effects.alloc(EffectDef {
         name: "IO".to_string(),
+        generics: Generics::default(),
         operations: Vec::new(),
     });
-    scope.define_effect("IO", io);
+    scope.define_effect("IO", io, 0);
     LangItems {
         int,
         string,

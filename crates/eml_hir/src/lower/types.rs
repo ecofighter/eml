@@ -5,7 +5,7 @@ use la_arena::Arena;
 use super::scope::{ItemScope, TypeItem};
 use crate::codes;
 use crate::hir::{
-    Generics, RowRef, RowVarDecl, RowVarId, TypeRef, TypeRefId, TypeRefKind, TypeVarDecl,
+    EffectRef, Generics, RowRef, RowVarDecl, RowVarId, TypeRef, TypeRefId, TypeRefKind, TypeVarDecl,
 };
 
 pub(super) struct TypeLowering<'a> {
@@ -78,20 +78,42 @@ impl TypeLowering<'_> {
         };
         let mut effects = Vec::new();
         for effect in row.effects() {
-            if effect.args().next().is_some() {
-                self.diagnostics.push(Diagnostic::not_yet_supported(
-                    self.file,
-                    effect.range(),
-                    "effects with type arguments are not supported yet",
-                ));
-                valid = false;
-                continue;
-            }
             let Some(name) = effect.name() else {
                 continue;
             };
             match self.items.type_item(name.text()) {
-                Some(TypeItem::Effect(effect)) => effects.push(effect),
+                Some(TypeItem::Effect(id)) => {
+                    let args: Vec<TypeRefId> = effect
+                        .args()
+                        .map(|arg| {
+                            let range = arg.range();
+                            self.lower(Some(arg), range)
+                        })
+                        .collect();
+                    let expected = self.items.effect_params(id);
+                    if args.len() != expected {
+                        let given = match args.len() {
+                            1 => "1 was given".to_string(),
+                            n => format!("{n} were given"),
+                        };
+                        self.diagnostics.push(Diagnostic::error(
+                            codes::TYPE_ARGUMENT_COUNT,
+                            format!(
+                                "`{}` takes {}, but {given}",
+                                name.text(),
+                                type_arguments(expected)
+                            ),
+                            Label::new(
+                                self.file,
+                                effect.range(),
+                                format!("expected {}", type_arguments(expected)),
+                            ),
+                        ));
+                        valid = false;
+                        continue;
+                    }
+                    effects.push(EffectRef { effect: id, args });
+                }
                 Some(TypeItem::Type(_)) | None => {
                     self.diagnostics.push(Diagnostic::error(
                         codes::UNDEFINED_TYPE,
@@ -172,5 +194,13 @@ impl TypeLowering<'_> {
 
     fn alloc(&mut self, kind: TypeRefKind, range: TextRange) -> TypeRefId {
         self.types.alloc(TypeRef { kind, range })
+    }
+}
+
+fn type_arguments(n: usize) -> String {
+    if n == 1 {
+        "1 type argument".to_string()
+    } else {
+        format!("{n} type arguments")
     }
 }

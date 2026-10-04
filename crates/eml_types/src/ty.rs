@@ -172,7 +172,7 @@ fn atomic(ty: &Type) -> String {
 
 #[cfg(test)]
 mod tests {
-    use eml_hir::{EffectDef, TypeDef};
+    use eml_hir::{EffectDef, Generics, TypeDef};
     use la_arena::Arena;
 
     use super::*;
@@ -197,6 +197,7 @@ mod tests {
         let io = EffectLabel {
             id: effects.alloc(EffectDef {
                 name: "IO".to_string(),
+                generics: Generics::default(),
                 operations: Vec::new(),
             }),
             name: "IO".to_string(),
@@ -227,6 +228,7 @@ mod tests {
         let io = EffectLabel {
             id: effects.alloc(EffectDef {
                 name: "IO".to_string(),
+                generics: Generics::default(),
                 operations: Vec::new(),
             }),
             name: "IO".to_string(),

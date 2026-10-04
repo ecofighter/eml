@@ -26,4 +26,5 @@ pub mod codes {
     pub const MIXED_EFFECTS_IN_HANDLER: ErrorCode = ErrorCode(1012);
     pub const MISSING_CLAUSE: ErrorCode = ErrorCode(1013);
     pub const DUPLICATE_CLAUSE: ErrorCode = ErrorCode(1014);
+    pub const TYPE_ARGUMENT_COUNT: ErrorCode = ErrorCode(1015);
 }

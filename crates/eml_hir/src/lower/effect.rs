@@ -13,7 +13,7 @@ use super::types::TypeLowering;
 use crate::codes;
 use crate::hir::{
     EffectDef, EffectId, Generics, OpMultiplicity, Operation, RowRef, Signature, TypeRef,
-    TypeRefId, TypeRefKind, TypeVarId,
+    TypeRefId, TypeRefKind, TypeVarDecl, TypeVarId,
 };
 
 /// エフェクトの名前をすべて登録してから、操作のシグネチャを変換する。操作の引数の型の row で、後ろで宣言した
@@ -33,23 +33,31 @@ pub(super) fn lower_effects(
         let Some(name) = item.name() else {
             continue;
         };
+        let mut generics = Generics::default();
         for param in item.params() {
-            diagnostics.push(Diagnostic::not_yet_supported(
-                file,
-                param.text_range(),
-                "effect type parameters are not supported yet",
-            ));
+            let text = param.text();
+            let range = param.text_range();
+            if let Some((_, first)) = generics.type_vars.iter().find(|(_, var)| var.name == text) {
+                diagnostics.push(duplicate(file, text, first.range, range));
+                continue;
+            }
+            generics.type_vars.alloc(TypeVarDecl {
+                name: text.to_string(),
+                range,
+            });
         }
+        let params = generics.type_vars.len();
         let range = name.text_range();
         let id = effects.alloc(EffectDef {
             name: name.text().to_string(),
+            generics,
             operations: Vec::new(),
         });
         match declared.get(name.text()) {
             Some(&first) => diagnostics.push(duplicate(file, name.text(), first, range)),
             None => {
                 declared.insert(name.text().to_string(), range);
-                scope.define_effect(name.text(), id);
+                scope.define_effect(name.text(), id, params);
             }
         }
         lowered.push((id, item));
@@ -57,7 +65,14 @@ pub(super) fn lower_effects(
     let mut values: HashMap<String, TextRange> = HashMap::new();
     for (effect, item) in lowered {
         for decl in item.operations() {
-            let Some(operation) = lower_operation(file, &decl, effect, scope, diagnostics) else {
+            let Some(operation) = lower_operation(
+                file,
+                &decl,
+                effect,
+                &effects[effect].generics,
+                scope,
+                diagnostics,
+            ) else {
                 continue;
             };
             let name = operation.name.clone();
@@ -87,6 +102,7 @@ fn lower_operation(
     file: FileId,
     decl: &ast::OpDecl,
     effect: EffectId,
+    effect_generics: &Generics,
     scope: &ItemScope,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Option<Operation> {
@@ -106,7 +122,12 @@ fn lower_operation(
     };
     let range = decl.ty().map_or(decl.range(), |ty| ty.range());
     let mut types = Arena::new();
+    // エフェクトの型引数を先頭に写す。シグネチャで同じ名前の型変数は、それを指す (docs/spec/declarations.md の「`effect`」)
     let mut generics = Generics::default();
+    for (_, param) in effect_generics.type_vars.iter() {
+        generics.type_vars.alloc(param.clone());
+    }
+    let effect_params = generics.type_vars.len();
     let ty = TypeLowering {
         file,
         types: &mut types,
@@ -122,13 +143,21 @@ fn lower_operation(
         types,
         generics,
     };
-    let arity = check_signature(file, name.text(), &signature, multiplicity, diagnostics);
+    let arity = check_signature(
+        file,
+        name.text(),
+        &signature,
+        multiplicity,
+        effect_params,
+        diagnostics,
+    );
     Some(Operation {
         name: name.text().to_string(),
         name_range: name.text_range(),
         effect,
         multiplicity,
         signature,
+        effect_params,
         arity,
     })
 }
@@ -141,6 +170,7 @@ fn check_signature(
     name: &str,
     signature: &Signature,
     multiplicity: OpMultiplicity,
+    effect_params: usize,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> usize {
     let types = &signature.types;
@@ -177,17 +207,28 @@ fn check_signature(
         return 0;
     }
     if multiplicity == OpMultiplicity::Never {
+        let effect_param = match types[id].kind {
+            TypeRefKind::Var(var) => (u32::from(var.into_raw()) as usize) < effect_params,
+            _ => false,
+        };
         let free = match types[id].kind {
+            // エフェクトの型引数は handle ごとに決まるので、呼び出した側が自由な型として使えない
+            TypeRefKind::Var(_) if effect_param => false,
             TypeRefKind::Var(var) => !params.iter().any(|&param| mentions(types, param, var)),
             TypeRefKind::Error => true,
             TypeRefKind::Con(_) | TypeRefKind::Fn { .. } => false,
         };
         if !free {
+            let label = if effect_param {
+                "this is a type parameter of the effect"
+            } else {
+                "this result type"
+            };
             diagnostics.push(
                 Diagnostic::error(
                     codes::NEVER_RESULT_NOT_FREE,
                     "the result type of a `never` operation must be a type variable that does not appear in its parameters",
-                    Label::new(file, types[id].range, "this result type"),
+                    Label::new(file, types[id].range, label),
                 )
                 .with_note(
                     "a `never` operation does not return, so its caller may use the result as any type",

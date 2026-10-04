@@ -3,31 +3,10 @@ source: crates/eml_cli/tests/ui.rs
 expression: rendered
 input_file: tests/ui/check-fail/later_stage_effects.em
 ---
-[E0004] Error: `multi` operations are not supported yet
-   ╭─[ check-fail/later_stage_effects.em:4:3 ]
-   │
- 4 │   multi choose : Unit -> Bool
-   │   ──┬──  
-   │     ╰──── this is implemented in a later stage
-───╯
-[E0004] Error: effect type parameters are not supported yet
-   ╭─[ check-fail/later_stage_effects.em:6:14 ]
-   │
- 6 │ effect State s where
-   │              ┬  
-   │              ╰── this is implemented in a later stage
-───╯
-[E0004] Error: effects with type arguments are not supported yet
-   ╭─[ check-fail/later_stage_effects.em:9:20 ]
-   │
- 9 │ counter : Unit -> <State Int> Int
-   │                    ────┬────  
-   │                        ╰────── this is implemented in a later stage
-───╯
 [E0004] Error: handlers with `from` are not supported yet
-    ╭─[ check-fail/later_stage_effects.em:14:21 ]
-    │
- 14 │   handle counter () from n with
-    │                     ──┬─  
-    │                       ╰─── this is implemented in a later stage
-────╯
+   ╭─[ check-fail/later_stage_effects.em:7:21 ]
+   │
+ 7 │   handle counter () from n with
+   │                     ──┬─  
+   │                       ╰─── this is implemented in a later stage
+───╯
