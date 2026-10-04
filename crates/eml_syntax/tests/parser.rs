@@ -1,6 +1,6 @@
 mod common;
 
-use common::item_kinds;
+use common::{diagnostics, item_kinds};
 use eml_diagnostics::render;
 use eml_syntax::debug_tree;
 use eml_test_support::{parse, with_diagnostics};
@@ -101,4 +101,28 @@ fn shebang_after_a_byte_order_mark_is_trivia() {
     // BOM は読み込み時に除くので (docs/spec/lexical.md)、その後の `#!` はファイルの先頭の shebang である。
     assert!(parse("\u{feff}#!x\ny = 1").diagnostics.is_empty());
     assert_eq!(item_kinds("\u{feff}#!x\ny = 1"), ["EQUATION"]);
+}
+
+#[test]
+fn reserved_keywords_are_errors() {
+    assert_eq!(
+        diagnostics("class Foo"),
+        ["E0011 1:1 `class` is reserved for future use"]
+    );
+}
+
+#[test]
+fn lone_lowercase_name_is_not_an_item() {
+    assert_eq!(diagnostics("foo"), ["E0003 1:1 expected an item"]);
+}
+
+#[test]
+fn stray_unterminated_string_reports_both_problems() {
+    assert_eq!(
+        diagnostics("\"abc"),
+        [
+            "E0002 1:1 unterminated string literal",
+            "E0003 1:1 expected an item"
+        ]
+    );
 }
