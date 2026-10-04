@@ -46,8 +46,7 @@ fn main() -> ExitCode {
             let Some((files, id)) = load(&file) else {
                 return ExitCode::from(2);
             };
-            let mut config = RunConfig::default();
-            config.debug_heap = debug_heap;
+            let config = RunConfig::default().with_debug_heap(debug_heap);
             // 警告がプログラムの出力の後に出ないように、実行の前に表示する。
             let compiled = eml_cli::compile(&files, id);
             eprint!("{}", render(&compiled.diagnostics, &files));

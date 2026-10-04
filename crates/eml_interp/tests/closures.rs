@@ -52,11 +52,10 @@ fn run_program(functions: Vec<CoreFn>, main: u32, strings: &[&str]) -> String {
         main: FnIdx(main),
         strings: strings.iter().map(|s| s.to_string()).collect(),
     };
-    let mut config = RunConfig::default();
-    config.debug_heap = true;
-    let (sink, buffer) = OutputSink::capture();
+    let config = RunConfig::default().with_debug_heap(true);
+    let (sink, captured) = OutputSink::capture();
     run(Arc::new(program), &config, &sink).unwrap();
-    String::from_utf8(buffer.lock().unwrap().clone()).unwrap()
+    captured.contents()
 }
 
 fn var(n: u32) -> Atom {

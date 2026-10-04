@@ -19,12 +19,10 @@ fn run(text: &str) -> (String, Result<(), RuntimeError>) {
 }
 
 fn execute(program: Program, debug_heap: bool) -> (String, Result<(), RuntimeError>) {
-    let (sink, buffer) = OutputSink::capture();
-    let mut config = RunConfig::default();
-    config.debug_heap = debug_heap;
+    let (sink, captured) = OutputSink::capture();
+    let config = RunConfig::default().with_debug_heap(debug_heap);
     let result = eml_interp::run(Arc::new(program), &config, &sink);
-    let stdout = String::from_utf8(buffer.lock().unwrap().clone()).unwrap();
-    (stdout, result)
+    (captured.contents(), result)
 }
 
 fn main_with(body: &str) -> String {

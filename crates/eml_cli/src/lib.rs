@@ -6,7 +6,7 @@ use eml_core_ir::Program;
 use eml_diagnostics::{Diagnostic, FileId, SourceFiles, has_errors};
 
 pub use eml_interp::RunConfig;
-pub use eml_runtime::OutputSink;
+pub use eml_runtime::{Captured, OutputSink};
 
 pub fn check(files: &SourceFiles, file: FileId) -> Vec<Diagnostic> {
     front(files, file).2

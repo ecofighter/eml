@@ -23,24 +23,25 @@ fn load(path: &Path) -> (SourceFiles, eml_diagnostics::FileId) {
     (files, id)
 }
 
+/// 診断のエラーなしでコンパイルし、`debug_heap` を有効にして実行する。stdout、診断の表示、実行の結果を返す。
+fn compile_and_execute(path: &Path) -> (String, String, RunResult) {
+    let (files, id) = load(path);
+    let compiled = eml_cli::compile(&files, id);
+    let stderr = render(&compiled.diagnostics, &files);
+    let program = compiled
+        .program
+        .unwrap_or_else(|| panic!("unexpected errors:\n{stderr}"));
+    let (sink, captured) = OutputSink::capture();
+    let config = RunConfig::default().with_debug_heap(true);
+    let result = eml_cli::execute(program, &config, sink);
+    (captured.contents(), stderr, result)
+}
+
 #[test]
 fn run() {
     insta::glob!("../../../tests/ui", "run/*.em", |path| {
-        let (files, id) = load(path);
-        let mut config = RunConfig::default();
-        config.debug_heap = true;
-        let compiled = eml_cli::compile(&files, id);
-        let stderr = render(&compiled.diagnostics, &files);
-        let program = compiled
-            .program
-            .unwrap_or_else(|| panic!("unexpected errors:\n{stderr}"));
-        let (sink, buffer) = OutputSink::capture();
-        assert_eq!(
-            eml_cli::execute(program, &config, sink),
-            RunResult::Completed,
-            "{stderr}"
-        );
-        let stdout = String::from_utf8(buffer.lock().unwrap().clone()).unwrap();
+        let (stdout, stderr, result) = compile_and_execute(path);
+        assert_eq!(result, RunResult::Completed, "{stderr}");
         insta::assert_snapshot!(format!("--- stdout ---\n{stdout}--- stderr ---\n{stderr}"));
     });
 }
@@ -48,19 +49,10 @@ fn run() {
 #[test]
 fn run_fail() {
     insta::glob!("../../../tests/ui", "run-fail/*.em", |path| {
-        let (files, id) = load(path);
-        let mut config = RunConfig::default();
-        config.debug_heap = true;
-        let compiled = eml_cli::compile(&files, id);
-        let stderr = render(&compiled.diagnostics, &files);
-        let program = compiled
-            .program
-            .unwrap_or_else(|| panic!("unexpected errors:\n{stderr}"));
-        let (sink, buffer) = OutputSink::capture();
-        let RunResult::RuntimeError(message) = eml_cli::execute(program, &config, sink) else {
+        let (stdout, _, result) = compile_and_execute(path);
+        let RunResult::RuntimeError(message) = result else {
             panic!("expected a runtime error");
         };
-        let stdout = String::from_utf8(buffer.lock().unwrap().clone()).unwrap();
         insta::assert_snapshot!(format!(
             "--- stdout ---\n{stdout}--- runtime error ---\n{message}\n"
         ));

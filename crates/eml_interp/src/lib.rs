@@ -20,6 +20,13 @@ pub struct RunConfig {
     pub debug_heap: bool,
 }
 
+impl RunConfig {
+    pub fn with_debug_heap(mut self, debug_heap: bool) -> Self {
+        self.debug_heap = debug_heap;
+        self
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RuntimeError(pub String);
 
@@ -447,4 +454,15 @@ fn internal(what: &str) -> String {
 
 fn heap_error(error: HeapError) -> String {
     error.to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn with_debug_heap_sets_the_flag() {
+        assert!(RunConfig::default().with_debug_heap(true).debug_heap);
+        assert!(!RunConfig::default().with_debug_heap(false).debug_heap);
+    }
 }

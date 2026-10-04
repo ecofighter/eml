@@ -15,9 +15,9 @@ impl OutputSink {
     }
 
     /// テストでプログラムの出力を捕まえるためのもの。
-    pub fn capture() -> (Self, Arc<Mutex<Vec<u8>>>) {
+    pub fn capture() -> (Self, Captured) {
         let buffer = Arc::new(Mutex::new(Vec::new()));
-        (OutputSink(buffer.clone()), buffer)
+        (OutputSink(buffer.clone()), Captured(buffer))
     }
 
     pub fn write_str(&self, text: &str) -> io::Result<()> {
@@ -27,6 +27,21 @@ impl OutputSink {
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         writer.write_all(text.as_bytes())?;
         writer.flush()
+    }
+}
+
+/// `OutputSink::capture` が捕まえた出力。
+#[derive(Clone)]
+pub struct Captured(Arc<Mutex<Vec<u8>>>);
+
+impl Captured {
+    /// プログラムは文字列だけを書くので、出力は UTF-8 である。
+    pub fn contents(&self) -> String {
+        let buffer = self
+            .0
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        String::from_utf8(buffer.clone()).expect("the program writes UTF-8")
     }
 }
 
@@ -43,13 +58,10 @@ mod tests {
 
     #[test]
     fn capture_collects_writes_from_clones() {
-        let (sink, buffer) = OutputSink::capture();
+        let (sink, captured) = OutputSink::capture();
         let clone = sink.clone();
         sink.write_str("hello ").unwrap();
         clone.write_str("world\n").unwrap();
-        assert_eq!(
-            String::from_utf8(buffer.lock().unwrap().clone()).unwrap(),
-            "hello world\n"
-        );
+        assert_eq!(captured.contents(), "hello world\n");
     }
 }
