@@ -85,6 +85,22 @@ mod tests {
     }
 
     #[test]
+    fn renders_several_notes_and_a_help() {
+        let mut files = SourceFiles::new();
+        let file = files.add("a.em", "x = $");
+        let range = TextRange::new(4.into(), 5.into());
+        let diagnostic = Diagnostic::error(ErrorCode(1), "bad", Label::new(file, range, "here"))
+            .with_note("first note")
+            .with_note("second note")
+            .with_help("a help");
+        let text = render(&[diagnostic], &files);
+        // E3001 などは note を2つ持ち、help と併せて出す。その番号付けと並びは UI テストに代表がないので、ここで確かめる。
+        let at = |needle: &str| text.find(needle).unwrap_or_else(|| panic!("{needle} in {text}"));
+        assert!(at("Help: a help") < at("Note 1: first note"), "{text}");
+        assert!(at("Note 1: first note") < at("Note 2: second note"), "{text}");
+    }
+
+    #[test]
     fn columns_count_characters_not_bytes() {
         let mut files = SourceFiles::new();
         let file = files.add("a.em", "é = $");
