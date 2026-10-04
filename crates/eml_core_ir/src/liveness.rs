@@ -37,7 +37,7 @@ enum Task {
 /// `Let` の連鎖と、join point の本体の連なりは長くなりうるので、再帰せずに作業の列で後順にたどる。join point の
 /// 本体は範囲より先に求める。範囲の中の `Jump` が、本体で使う変数を要るためである。
 pub(crate) fn liveness(function: &CoreFn, selected: &[bool]) -> Liveness {
-    let tracked_var = |atom: &Atom| match atom {
+    let selected_var = |atom: &Atom| match atom {
         Atom::Var(var) if selected[var.0 as usize] => Some(*var),
         _ => None,
     };
@@ -84,7 +84,7 @@ pub(crate) fn liveness(function: &CoreFn, selected: &[bool]) -> Liveness {
                     CExpr::Let { var, rhs, body } => {
                         let mut vars = exprs[body.0 as usize].clone();
                         vars.remove(var);
-                        vars.extend(rhs.atoms().iter().filter_map(tracked_var));
+                        vars.extend(rhs.atoms().iter().filter_map(selected_var));
                         vars
                     }
                     CExpr::Dup { var, body } | CExpr::Decref { var, body } => {
@@ -100,18 +100,18 @@ pub(crate) fn liveness(function: &CoreFn, selected: &[bool]) -> Liveness {
                         vars
                     }
                     CExpr::Switch { scrutinee, arms } => {
-                        let mut vars: Vars = tracked_var(scrutinee).into_iter().collect();
+                        let mut vars: Vars = selected_var(scrutinee).into_iter().collect();
                         for &(_, arm) in arms {
                             vars.extend(exprs[arm.0 as usize].iter().copied());
                         }
                         vars
                     }
-                    CExpr::Return(atom) => tracked_var(atom).into_iter().collect(),
-                    CExpr::TailCall(call) => call.atoms().iter().filter_map(tracked_var).collect(),
+                    CExpr::Return(atom) => selected_var(atom).into_iter().collect(),
+                    CExpr::TailCall(call) => call.atoms().iter().filter_map(selected_var).collect(),
                     // 壊れた Core IR (範囲の外の `Jump`) は verifier が報告するので、ここでは空として扱う
                     CExpr::Jump { join, arg } => {
                         let mut vars = joins.get(join).cloned().unwrap_or_default();
-                        vars.extend(tracked_var(arg));
+                        vars.extend(selected_var(arg));
                         vars
                     }
                 };
