@@ -29,7 +29,7 @@ fn load(path: &Path) -> (SourceFiles, eml_diagnostics::FileId) {
 
 /// スナップショットの名前を、最上位のディレクトリからの相対パス (`basics/hello.em`) で固定する。insta の既定はすべての
 /// 一致に共通の接頭辞を除くので、分類が1つしかないディレクトリでは名前に分類が入らず、分類が増えたときに名前が変わる。
-/// 直下の .em は分類の規則に反するので拒む。
+/// 直下の .em は分類の規則に反するので拒む。成功や失敗の確かめより先に呼び、置き場所の誤りを先に伝える。
 fn categorized(path: &Path, top: &str) -> insta::Settings {
     let relative = path.strip_prefix(ui_root().join(top)).unwrap();
     assert!(
@@ -59,9 +59,10 @@ fn compile_and_execute(path: &Path) -> (String, String, Result<(), RuntimeError>
 #[test]
 fn run() {
     insta::glob!("../../../tests/ui", "run/**/*.em", |path| {
+        let settings = categorized(path, "run");
         let (stdout, stderr, result) = compile_and_execute(path);
         assert_eq!(result, Ok(()), "{stderr}");
-        categorized(path, "run").bind(|| {
+        settings.bind(|| {
             insta::assert_snapshot!(format!("--- stdout ---\n{stdout}--- stderr ---\n{stderr}"));
         });
     });
@@ -70,11 +71,12 @@ fn run() {
 #[test]
 fn run_fail() {
     insta::glob!("../../../tests/ui", "run-fail/**/*.em", |path| {
+        let settings = categorized(path, "run-fail");
         let (stdout, _, result) = compile_and_execute(path);
         let Err(error) = result else {
             panic!("expected a runtime error");
         };
-        categorized(path, "run-fail").bind(|| {
+        settings.bind(|| {
             insta::assert_snapshot!(format!(
                 "--- stdout ---\n{stdout}--- runtime error ---\n{error}\n"
             ));
@@ -85,6 +87,7 @@ fn run_fail() {
 #[test]
 fn check_fail() {
     insta::glob!("../../../tests/ui", "check-fail/**/*.em", |path| {
+        let settings = categorized(path, "check-fail");
         let (files, id) = load(path);
         let diagnostics = eml_cli::check(&files, id);
         let rendered = render(&diagnostics, &files);
@@ -92,7 +95,7 @@ fn check_fail() {
             has_errors(&diagnostics),
             "expected at least one error, got:\n{rendered}"
         );
-        categorized(path, "check-fail").bind(|| {
+        settings.bind(|| {
             insta::assert_snapshot!(rendered);
         });
     });
