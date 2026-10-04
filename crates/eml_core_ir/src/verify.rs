@@ -1,5 +1,6 @@
 //! Core IR の不変条件の検査 (docs/spec/core-ir.md)。Perceus の挿入の後のプログラムについて、変数と join point の
-//! 範囲、直接呼び出しとクロージャの引数の数、RC の対象の変数の所有権の釣り合いを確かめる。
+//! 範囲、直接呼び出しとクロージャの引数の数、RC の対象の変数の所有権の釣り合いを確かめる。join point の `captures` は
+//! 宣言として扱い、生存解析には頼らない。
 
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::fmt;
@@ -153,11 +154,32 @@ impl<'a> Checker<'a> {
                     if function.joins.get(join.0 as usize) != Some(&id) {
                         return Err(format!("the join index does not point at `j{}`", join.0));
                     }
+                    if !captures.is_sorted_by(|a, b| a < b) {
+                        return Err(format!(
+                            "the captures of `j{}` are not in increasing order",
+                            join.0
+                        ));
+                    }
+                    for &var in captures {
+                        if !self.in_scope(var) {
+                            return Err(format!(
+                                "`j{}` captures `{}`, which is not in scope",
+                                join.0,
+                                self.name(var)
+                            ));
+                        }
+                    }
                     // 範囲は今の状態から始まり、この join point に `Jump` できる
                     let mut scope_state = state.clone();
                     scope_state.joins.insert(*join);
                     self.check_branch(*scope, scope_state)?;
-                    // 本体は、`captures` のうち RC の対象を1つずつ所有し、引数を束縛して始まる
+                    // 本体は、関数の本体と同じく、`captures` と引数だけが範囲にある状態から始まり、`captures` のうち
+                    // RC の対象を1つずつ所有する。`captures` の書き漏れは、本体での範囲の誤りとして見つかる
+                    self.epoch = self.next_epoch;
+                    self.next_epoch += 1;
+                    for &var in captures {
+                        self.enter_scope(var);
+                    }
                     state.owned = captures
                         .iter()
                         .copied()
@@ -199,8 +221,12 @@ impl<'a> Checker<'a> {
         Ok(())
     }
 
+    fn in_scope(&self, var: VarId) -> bool {
+        self.stamps[var.0 as usize] == Some(self.epoch)
+    }
+
     fn visible(&self, var: VarId) -> Result<(), String> {
-        if self.stamps[var.0 as usize] == Some(self.epoch) {
+        if self.in_scope(var) {
             Ok(())
         } else {
             Err(format!("`{}` is used outside its scope", self.name(var)))

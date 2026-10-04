@@ -609,3 +609,104 @@ fn drop_takes_the_ownership_of_its_value() {
         Err("`s0` is used after it was moved in `g`".to_string())
     );
 }
+
+#[test]
+fn a_join_body_that_uses_a_variable_missing_from_its_captures_is_rejected() {
+    // f n = join j0(t) [] { let u = n + t; return u } in jump j0(1)
+    let exprs = vec![
+        CExpr::Return(var(2)),
+        CExpr::Let {
+            var: VarId(2),
+            rhs: Rhs::Prim(PrimOp::IntAdd, vec![var(0), var(1)]),
+            body: CExprId(0),
+        },
+        CExpr::Jump {
+            join: JoinId(0),
+            arg: Atom::Int(1),
+        },
+        CExpr::Join {
+            join: JoinId(0),
+            param: VarId(1),
+            captures: vec![],
+            body: CExprId(1),
+            scope: CExprId(2),
+        },
+    ];
+    let f = function("f", 1, vec![int("n"), int("t"), int("u")], exprs, &[3]);
+    assert_eq!(
+        check(vec![f]),
+        Err("`n0` is used outside its scope in `f`".to_string())
+    );
+}
+
+#[test]
+fn a_capture_out_of_scope_at_its_join_is_rejected() {
+    // f n = join j0(t) [x] { return t } in jump j0(n)。`x` はどこでも束縛していない
+    let exprs = vec![
+        CExpr::Return(var(1)),
+        CExpr::Jump {
+            join: JoinId(0),
+            arg: var(0),
+        },
+        CExpr::Join {
+            join: JoinId(0),
+            param: VarId(1),
+            captures: vec![VarId(2)],
+            body: CExprId(0),
+            scope: CExprId(1),
+        },
+    ];
+    let f = function("f", 1, vec![int("n"), int("t"), int("x")], exprs, &[2]);
+    assert_eq!(
+        check(vec![f]),
+        Err("`j0` captures `x2`, which is not in scope in `f`".to_string())
+    );
+}
+
+#[test]
+fn captures_out_of_order_are_rejected() {
+    let exprs = vec![
+        CExpr::Return(var(2)),
+        CExpr::Jump {
+            join: JoinId(0),
+            arg: Atom::Int(1),
+        },
+        CExpr::Join {
+            join: JoinId(0),
+            param: VarId(2),
+            captures: vec![VarId(1), VarId(0)],
+            body: CExprId(0),
+            scope: CExprId(1),
+        },
+    ];
+    let f = function("f", 2, vec![int("a"), int("b"), int("t")], exprs, &[2]);
+    assert_eq!(
+        check(vec![f]),
+        Err("the captures of `j0` are not in increasing order in `f`".to_string())
+    );
+}
+
+#[test]
+fn an_unused_capture_released_by_the_body_is_accepted() {
+    // f s = join j0(t) [s] { decref s; return t } in jump j0(1)。`captures` は最小でなくてよい
+    let exprs = vec![
+        CExpr::Return(var(1)),
+        CExpr::Decref {
+            var: VarId(0),
+            body: CExprId(0),
+        },
+        CExpr::Jump {
+            join: JoinId(0),
+            arg: Atom::Int(1),
+        },
+        CExpr::Join {
+            join: JoinId(0),
+            param: VarId(1),
+            captures: vec![VarId(0)],
+            body: CExprId(1),
+            scope: CExprId(2),
+        },
+    ];
+    let f = function("f", 1, vec![string("s"), int("t")], exprs, &[3]);
+    assert_eq!(check(vec![f]), Ok(()));
+}
