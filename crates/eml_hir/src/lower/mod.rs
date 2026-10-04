@@ -1,5 +1,6 @@
 mod expr;
 mod ops;
+mod prelude;
 mod scope;
 mod types;
 
@@ -30,6 +31,7 @@ pub fn lower(file: FileId, source: &ast::SourceFile) -> (Module, Vec<Diagnostic>
     let definitions = collect(file, source, &mut diagnostics);
     let mut functions = Arena::new();
     let mut scope = ItemScope::new();
+    let builtins = prelude::lower_prelude(&scope);
     let mut pending = Vec::new();
     for definition in definitions {
         let Definition {
@@ -127,7 +129,14 @@ pub fn lower(file: FileId, source: &ast::SourceFile) -> (Module, Vec<Diagnostic>
         functions[id].body = Some(body);
     }
     diagnostics.sort_by_key(|d| d.primary.range.start());
-    (Module { file, functions }, diagnostics)
+    (
+        Module {
+            file,
+            functions,
+            builtins,
+        },
+        diagnostics,
+    )
 }
 
 fn collect(

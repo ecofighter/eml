@@ -1,4 +1,4 @@
-use std::collections::{BTreeSet, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 use eml_diagnostics::{FileId, TextRange};
 use la_arena::{Arena, Idx};
@@ -17,6 +17,8 @@ pub type TypeRefId = Idx<TypeRef>;
 pub struct Module {
     pub file: FileId,
     pub functions: Arena<Function>,
+    /// Prelude の組み込みのシグネチャ。
+    pub builtins: HashMap<Builtin, Signature>,
 }
 
 #[derive(Debug)]

@@ -1,5 +1,6 @@
 //! HIR のデータ構造と走査関数のテスト。
 
+use eml_hir::builtin::{BUILTINS, Builtin};
 use eml_hir::{Body, ExprId, ExprKind, Function, LocalId, Module, PatKind, TypeRefKind};
 
 /// 診断のエラーがないことを確かめて HIR を返す。
@@ -109,4 +110,30 @@ fn a_lambda_captures_what_its_nested_lambdas_capture() {
         names(body, &body.lambda_captures(lambda(body, "y"))),
         ["a", "c"]
     );
+}
+
+#[test]
+fn the_prelude_has_a_signature_for_every_builtin_function() {
+    // コンストラクタはシグネチャの構文で書けないので、`True` と `False` は Prelude にない
+    let module = module("");
+    for info in BUILTINS {
+        let expected = !matches!(info.builtin, Builtin::True | Builtin::False);
+        assert_eq!(
+            module.builtins.contains_key(&info.builtin),
+            expected,
+            "{}",
+            info.name
+        );
+    }
+}
+
+#[test]
+fn internal_builtins_cannot_be_named() {
+    let lowered = eml_test_support::lower("f : Int -> Int\nf x = negate x");
+    let codes: Vec<String> = lowered
+        .diagnostics
+        .iter()
+        .map(|d| d.code.to_string())
+        .collect();
+    assert_eq!(codes, ["E1001"]);
 }
