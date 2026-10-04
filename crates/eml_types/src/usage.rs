@@ -85,6 +85,7 @@ impl Usage<'_> {
                 uses
             }
             ExprKind::Annot { expr, .. } => self.expr(*expr),
+            ExprKind::Handle { .. } | ExprKind::Resume { .. } | ExprKind::Drop(_) => Uses::new(),
             ExprKind::Lambda {
                 params,
                 body: lambda_body,

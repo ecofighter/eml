@@ -656,6 +656,9 @@ impl FnLowering<'_> {
                 }
             }
             ExprKind::Annot { expr, .. } => self.atom(*expr, out),
+            ExprKind::Handle { .. } | ExprKind::Resume { .. } | ExprKind::Drop(_) => {
+                unreachable!("handlers are not lowered to Core IR yet")
+            }
             ExprKind::Lambda {
                 params,
                 body: lambda_body,

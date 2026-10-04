@@ -1,5 +1,6 @@
 mod effect;
 mod expr;
+mod handler;
 mod ops;
 mod prelude;
 mod scope;
@@ -145,8 +146,15 @@ pub fn lower(file: FileId, source: &ast::SourceFile) -> (Module, Vec<Diagnostic>
             Some(signature) => &mut signature.generics,
             None => &mut no_generics,
         };
-        let body =
-            BodyLowering::new(file, &scope, generics, &mut diagnostics).lower_equation(&equation);
+        let body = BodyLowering::new(
+            file,
+            &scope,
+            &effects,
+            &operations,
+            generics,
+            &mut diagnostics,
+        )
+        .lower_equation(&equation);
         functions[id].body = Some(body);
     }
     diagnostics.sort_by_key(|d| d.primary.range.start());

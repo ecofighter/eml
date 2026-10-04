@@ -9,29 +9,36 @@ use crate::hir::*;
 
 pub(super) struct BodyLowering<'a> {
     pub(super) file: FileId,
-    items: &'a ItemScope,
+    pub(super) items: &'a ItemScope,
+    /// handler の節の検査で、操作の引数の個数とエフェクトの操作の並びを引く。
+    pub(super) effects: &'a Arena<EffectDef>,
+    pub(super) operations: &'a Arena<Operation>,
     /// 本体の型の注釈。
     types: Arena<TypeRef>,
     /// 本体の注釈が引く、シグネチャの型変数と row 変数の表。
     generics: &'a mut Generics,
     pub(super) diagnostics: &'a mut Vec<Diagnostic>,
     pub(super) exprs: Arena<Expr>,
-    pats: Arena<Pat>,
+    pub(super) pats: Arena<Pat>,
     locals: Arena<Local>,
     /// 内側の束縛ほど後ろにある。後の `let` が前の同じ名前を隠す (docs/spec/expressions.md)。
-    scope: Vec<(String, LocalId)>,
+    pub(super) scope: Vec<(String, LocalId)>,
 }
 
 impl<'a> BodyLowering<'a> {
     pub(super) fn new(
         file: FileId,
         items: &'a ItemScope,
+        effects: &'a Arena<EffectDef>,
+        operations: &'a Arena<Operation>,
         generics: &'a mut Generics,
         diagnostics: &'a mut Vec<Diagnostic>,
     ) -> Self {
         BodyLowering {
             file,
             items,
+            effects,
+            operations,
             types: Arena::new(),
             generics,
             diagnostics,
@@ -124,18 +131,12 @@ impl<'a> BodyLowering<'a> {
             ast::Expr::MatchExpr(e) => {
                 self.unsupported(e.keyword_range(), "`match` is not supported yet")
             }
-            ast::Expr::HandleExpr(e) => {
-                self.unsupported(e.keyword_range(), "handlers are not supported yet")
-            }
+            ast::Expr::HandleExpr(e) => self.lower_handle(&e, range),
             ast::Expr::LetExpr(e) => {
                 self.unsupported(e.keyword_range(), "`let ... in` is not supported yet")
             }
-            ast::Expr::ResumeExpr(e) => {
-                self.unsupported(e.keyword_range(), "`resume` is not supported yet")
-            }
-            ast::Expr::DropExpr(e) => {
-                self.unsupported(e.keyword_range(), "`drop` is not supported yet")
-            }
+            ast::Expr::ResumeExpr(e) => self.lower_resume(&e, range),
+            ast::Expr::DropExpr(e) => self.lower_drop(&e, range),
             ast::Expr::FieldExpr(_) => self.unsupported(range, "field access is not supported yet"),
             ast::Expr::TupleExpr(_) => self.unsupported(range, "tuples are not supported yet"),
             ast::Expr::OpRef(_) => {
@@ -263,7 +264,7 @@ impl<'a> BodyLowering<'a> {
         self.alloc(ExprKind::Block { stmts, tail }, range)
     }
 
-    fn lower_pat(&mut self, pat: Option<ast::Pat>, fallback: TextRange) -> PatId {
+    pub(super) fn lower_pat(&mut self, pat: Option<ast::Pat>, fallback: TextRange) -> PatId {
         let Some(pat) = pat else {
             return self.pats.alloc(Pat {
                 kind: PatKind::Missing,

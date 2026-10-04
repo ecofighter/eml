@@ -133,7 +133,7 @@ pub struct Body {
 }
 
 impl Body {
-    /// 式の直接の子を、ソースの順に `f` に渡す。子を辿る規則はここだけに置き、段階3と4で `match` や `handle` を
+    /// 式の直接の子を、ソースの順に `f` に渡す。子を辿る規則はここだけに置き、段階4で `match` を
     /// 足すときはここを直す。
     pub fn walk_child_exprs(&self, id: ExprId, mut f: impl FnMut(ExprId)) {
         match &self.exprs[id].kind {
@@ -168,6 +168,22 @@ impl Body {
             }
             ExprKind::Annot { expr, .. } => f(*expr),
             ExprKind::Lambda { body, .. } => f(*body),
+            ExprKind::Handle {
+                body, clauses, ret, ..
+            } => {
+                f(*body);
+                for clause in clauses {
+                    f(clause.body);
+                }
+                if let Some(ret) = ret {
+                    f(ret.body);
+                }
+            }
+            ExprKind::Resume { k, arg } => {
+                f(*k);
+                f(*arg);
+            }
+            ExprKind::Drop(value) => f(*value),
         }
     }
 
@@ -186,13 +202,21 @@ impl Body {
         }
     }
 
-    /// ラムダの本体が参照する局所変数のうち、ラムダの中で束縛していないもの。`LocalId` の順に並べる。ラムダは捕まえた
-    /// 変数を先頭の引数に持つ関数に持ち上げるので (docs/spec/core-ir.md)、入れ子のラムダが捕まえる変数は外側のラムダも
-    /// 捕まえる。式の木は作業リストでたどる。
+    /// ラムダが捕まえる変数。
     pub fn lambda_captures(&self, lambda: ExprId) -> Vec<LocalId> {
+        self.captures(lambda, &[])
+    }
+
+    /// `root` の中で参照する局所変数のうち、`root` の中でも `bound` でも束縛していないもの。`LocalId` の順に並べる。
+    /// ラムダと handle の本体と節は、捕まえた変数を先頭の引数に持つ関数に持ち上げるので (docs/spec/core-ir.md)、
+    /// 入れ子のラムダや節が捕まえる変数は外側も捕まえる。式の木は作業リストでたどる。
+    pub fn captures(&self, root: ExprId, bound: &[PatId]) -> Vec<LocalId> {
         let mut used = BTreeSet::new();
-        let mut bound = HashSet::new();
-        let mut work = vec![lambda];
+        let mut bound: HashSet<LocalId> = bound
+            .iter()
+            .flat_map(|&pat| self.pat_bindings(pat))
+            .collect();
+        let mut work = vec![root];
         while let Some(id) = work.pop() {
             match &self.exprs[id].kind {
                 ExprKind::Path(Res::Local(local)) => {
@@ -208,6 +232,16 @@ impl Body {
                         if let Stmt::Let { pat, .. } = stmt {
                             bound.extend(self.pat_bindings(*pat));
                         }
+                    }
+                }
+                ExprKind::Handle { clauses, ret, .. } => {
+                    for clause in clauses {
+                        for pat in clause.patterns() {
+                            bound.extend(self.pat_bindings(pat));
+                        }
+                    }
+                    if let Some(ret) = ret {
+                        bound.extend(self.pat_bindings(ret.param));
                     }
                 }
                 _ => {}
@@ -260,6 +294,43 @@ pub enum ExprKind {
         params: Vec<PatId>,
         body: ExprId,
     },
+    /// `effect` は節から決めたエフェクトで、決められなかったら `None` である。HIR が診断を報告済みなので、型検査は
+    /// 連鎖する診断を出さない。誤った節 (引数の個数の誤り、重複、別のエフェクトの節) は `clauses` に入れない。
+    Handle {
+        body: ExprId,
+        effect: Option<EffectId>,
+        clauses: Vec<OpClause>,
+        ret: Option<ReturnClause>,
+    },
+    Resume {
+        k: ExprId,
+        arg: ExprId,
+    },
+    Drop(ExprId),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OpClause {
+    pub op: OperationId,
+    pub params: Vec<PatId>,
+    /// `never` の操作の節は `k` を持たない (docs/spec/expressions.md の「handler」)。
+    pub k: Option<PatId>,
+    pub body: ExprId,
+    pub range: TextRange,
+}
+
+impl OpClause {
+    /// 節が束縛するパターン。操作の引数、`k` の順である。
+    pub fn patterns(&self) -> impl Iterator<Item = PatId> + '_ {
+        self.params.iter().copied().chain(self.k)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReturnClause {
+    pub param: PatId,
+    pub body: ExprId,
+    pub range: TextRange,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

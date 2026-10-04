@@ -80,6 +80,12 @@ const fn info(builtin: Builtin, name: &'static str, access: Access, arity: usize
 }
 
 impl Builtin {
+    /// 組み込みの `IO` の操作。handler の節に書けないことを報告するのに使う (docs/spec/effects.md)。段階5で
+    /// `open` などを足す。
+    pub fn is_io_operation(self) -> bool {
+        matches!(self, Builtin::Println)
+    }
+
     pub fn info(self) -> &'static BuiltinInfo {
         BUILTINS
             .iter()

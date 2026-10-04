@@ -62,7 +62,6 @@ impl ItemScope {
     }
 
     /// handler の節の先頭の名前は、エフェクトの操作だけから引く (docs/spec/modules.md の「名前の解決」)。
-    #[expect(dead_code)]
     pub(super) fn operation(&self, name: &str) -> Option<OperationId> {
         match self.values.get(name) {
             Some(ValueItem::Operation(id)) => Some(*id),

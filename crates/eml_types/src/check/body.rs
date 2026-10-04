@@ -197,6 +197,9 @@ impl BodyCheck<'_> {
                 self.check_expr(*inner, annotated, Origin::Annotation(range));
                 annotated
             }
+            ExprKind::Handle { .. } | ExprKind::Resume { .. } | ExprKind::Drop(_) => {
+                self.table.error
+            }
         };
         self.typing.exprs.insert(id, ty);
         ty

@@ -154,6 +154,37 @@ impl Printer<'_> {
                 write!(s, " -> {})", self.expr(body, *lambda_body, indent)).unwrap();
                 s
             }
+            ExprKind::Handle {
+                body: handled,
+                clauses,
+                ret,
+                ..
+            } => {
+                let mut s = format!("(handle {} with", self.expr(body, *handled, indent));
+                for clause in clauses {
+                    write!(s, " | {}", self.module.operations[clause.op].name).unwrap();
+                    for pat in clause.patterns() {
+                        write!(s, " {}", self.pat(body, pat)).unwrap();
+                    }
+                    write!(s, " -> {}", self.expr(body, clause.body, indent)).unwrap();
+                }
+                if let Some(ret) = ret {
+                    write!(
+                        s,
+                        " | return {} -> {}",
+                        self.pat(body, ret.param),
+                        self.expr(body, ret.body, indent)
+                    )
+                    .unwrap();
+                }
+                s + ")"
+            }
+            ExprKind::Resume { k, arg } => format!(
+                "(resume {} {})",
+                self.expr(body, *k, indent),
+                self.expr(body, *arg, indent)
+            ),
+            ExprKind::Drop(value) => format!("(drop {})", self.expr(body, *value, indent)),
         }
     }
 
