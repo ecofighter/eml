@@ -54,7 +54,7 @@ impl TypeLowering<'_> {
             return self.unsupported(range, "qualified names are not supported yet");
         };
         match self.items.type_item(name.text()) {
-            Some(TypeItem::Builtin(builtin)) => TypeRefKind::Builtin(builtin),
+            Some(TypeItem::Type(id)) => TypeRefKind::Con(id),
             Some(TypeItem::Effect(_)) | None => {
                 self.diagnostics.push(Diagnostic::error(
                     codes::UNDEFINED_TYPE,
@@ -83,7 +83,7 @@ impl TypeLowering<'_> {
             };
             match self.items.type_item(name.text()) {
                 Some(TypeItem::Effect(effect)) => effects.push(effect),
-                Some(TypeItem::Builtin(_)) | None => {
+                Some(TypeItem::Type(_)) | None => {
                     // ユーザー定義のエフェクトは段階3で入れる。宣言も E0004 になるので、ここでは未定義として扱う
                     self.diagnostics.push(Diagnostic::error(
                         codes::UNDEFINED_TYPE,

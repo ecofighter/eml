@@ -31,6 +31,9 @@ pub fn lower(file: FileId, source: &ast::SourceFile) -> (Module, Vec<Diagnostic>
     let definitions = collect(file, source, &mut diagnostics);
     let mut functions = Arena::new();
     let mut scope = ItemScope::new();
+    let mut types = Arena::new();
+    let mut effects = Arena::new();
+    let lang = scope::builtin_items(&mut types, &mut effects, &mut scope);
     let builtins = prelude::lower_prelude(&scope);
     let mut pending = Vec::new();
     for definition in definitions {
@@ -133,7 +136,10 @@ pub fn lower(file: FileId, source: &ast::SourceFile) -> (Module, Vec<Diagnostic>
         Module {
             file,
             functions,
+            types,
+            effects,
             builtins,
+            lang,
         },
         diagnostics,
     )

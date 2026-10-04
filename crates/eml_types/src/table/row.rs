@@ -142,8 +142,10 @@ impl Table {
         }
         let sigma = self.row_vars[var.0 as usize].multiplicity;
         for label in &row.labels {
-            self.multiplicity
-                .require(Bound::Const(label.multiplicity()), Bound::Var(sigma));
+            self.multiplicity.require(
+                Bound::Const(self.effect_multiplicity(*label)),
+                Bound::Var(sigma),
+            );
         }
         if let Tail::Var(tail) = row.tail {
             let inner = self.row_vars[tail.0 as usize].multiplicity;

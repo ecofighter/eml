@@ -1,6 +1,4 @@
-//! 組み込みの名前と型と演算子。S2 で `Prelude` モジュールに移すまで、名前解決の最も外側のスコープとして扱う。
-
-use crate::hir::EffectRef;
+//! 組み込みの値と関数の名前と、演算子の表。S2 で `Prelude` モジュールに移すまで、名前解決の最も外側のスコープとして扱う。
 
 /// 組み込みの値と関数。型は Prelude (`prelude.em`) が、Core IR への変換は `eml_core_ir` が与える。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -118,43 +116,6 @@ impl Builtin {
             .iter()
             .find(|info| info.name == name && access(info.access))
             .map(|info| info.builtin)
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum BuiltinType {
-    Int,
-    String,
-    Bool,
-    Unit,
-}
-
-impl BuiltinType {
-    pub fn from_name(name: &str) -> Option<BuiltinType> {
-        Some(match name {
-            "Int" => BuiltinType::Int,
-            "String" => BuiltinType::String,
-            "Bool" => BuiltinType::Bool,
-            "Unit" => BuiltinType::Unit,
-            _ => return None,
-        })
-    }
-
-    pub fn name(self) -> &'static str {
-        match self {
-            BuiltinType::Int => "Int",
-            BuiltinType::String => "String",
-            BuiltinType::Bool => "Bool",
-            BuiltinType::Unit => "Unit",
-        }
-    }
-}
-
-/// 組み込みのエフェクト。
-pub fn builtin_effect(name: &str) -> Option<EffectRef> {
-    match name {
-        "IO" => Some(EffectRef::Io),
-        _ => None,
     }
 }
 

@@ -124,9 +124,10 @@ impl BodyCheck<'_> {
         let ambient = self.ambient.clone();
         let missing: Vec<String> = match self.table.include_row(&row, &ambient) {
             Ok(()) => return true,
-            Err(UnifyError::MissingEffects(effects)) => {
-                effects.iter().map(|e| e.name().to_string()).collect()
-            }
+            Err(UnifyError::MissingEffects(effects)) => effects
+                .iter()
+                .map(|e| self.module.effects[*e].name.clone())
+                .collect(),
             Err(UnifyError::MissingRowVar(var)) => vec![var],
             // include_row は呼び出し先側の rigid でない row 変数を通してしか単一化しないので、rigid 変数の束縛 (Mismatch) も
             // Occurs も起きない

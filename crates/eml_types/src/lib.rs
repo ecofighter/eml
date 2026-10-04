@@ -14,7 +14,7 @@ use eml_diagnostics::{Diagnostic, FileId, Label, TextRange};
 use eml_hir::{ExprId, FunctionId, LocalId, Module};
 use la_arena::ArenaMap;
 
-pub use ty::{Effect, KindConstraint, KindTerm, Linearity, Multiplicity, RowTail, Type};
+pub use ty::{EffectLabel, KindConstraint, KindTerm, Linearity, Multiplicity, RowTail, Type};
 
 pub mod codes {
     use eml_diagnostics::ErrorCode;

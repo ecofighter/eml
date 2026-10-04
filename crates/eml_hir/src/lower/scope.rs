@@ -3,8 +3,10 @@
 
 use std::collections::HashMap;
 
-use crate::builtin::{Builtin, BuiltinType, builtin_effect};
-use crate::hir::{EffectRef, FunctionId};
+use la_arena::Arena;
+
+use crate::builtin::Builtin;
+use crate::hir::{EffectDef, EffectId, FunctionId, LangItems, TypeDef, TypeDefId};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum ValueItem {
@@ -14,8 +16,8 @@ pub(super) enum ValueItem {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum TypeItem {
-    Builtin(BuiltinType),
-    Effect(EffectRef),
+    Type(TypeDefId),
+    Effect(EffectId),
 }
 
 /// 組み込みは名前解決の最も外側のスコープで、ユーザーの定義で隠せる。そのため、ユーザーの定義を先に引き、
@@ -23,6 +25,7 @@ pub(super) enum TypeItem {
 #[derive(Debug, Default)]
 pub(super) struct ItemScope {
     functions: HashMap<String, FunctionId>,
+    types: HashMap<String, TypeItem>,
 }
 
 impl ItemScope {
@@ -34,6 +37,14 @@ impl ItemScope {
         self.functions.insert(name.to_string(), id);
     }
 
+    pub(super) fn define_type(&mut self, name: &str, id: TypeDefId) {
+        self.types.insert(name.to_string(), TypeItem::Type(id));
+    }
+
+    pub(super) fn define_effect(&mut self, name: &str, id: EffectId) {
+        self.types.insert(name.to_string(), TypeItem::Effect(id));
+    }
+
     pub(super) fn value(&self, name: &str) -> Option<ValueItem> {
         self.functions
             .get(name)
@@ -42,16 +53,39 @@ impl ItemScope {
     }
 
     pub(super) fn type_item(&self, name: &str) -> Option<TypeItem> {
-        BuiltinType::from_name(name)
-            .map(TypeItem::Builtin)
-            .or_else(|| builtin_effect(name).map(TypeItem::Effect))
+        self.types.get(name).copied()
+    }
+}
+
+/// 組み込みの型とエフェクトを item として登録し、lang item を返す (docs/spec/declarations.md と docs/spec/effects.md)。
+pub(super) fn builtin_items(
+    types: &mut Arena<TypeDef>,
+    effects: &mut Arena<EffectDef>,
+    scope: &mut ItemScope,
+) -> LangItems {
+    let mut ty = |name: &str| {
+        let id = types.alloc(TypeDef {
+            name: name.to_string(),
+        });
+        scope.define_type(name, id);
+        id
+    };
+    let (int, string, bool, unit) = (ty("Int"), ty("String"), ty("Bool"), ty("Unit"));
+    let io = effects.alloc(EffectDef {
+        name: "IO".to_string(),
+    });
+    scope.define_effect("IO", io);
+    LangItems {
+        int,
+        string,
+        bool,
+        unit,
+        io,
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use la_arena::Arena;
-
     use super::*;
     use crate::hir::Function;
 
@@ -73,12 +107,12 @@ mod tests {
 
     #[test]
     fn types_and_effects_share_the_type_namespace() {
-        let scope = ItemScope::new();
-        assert_eq!(
-            scope.type_item("Int"),
-            Some(TypeItem::Builtin(BuiltinType::Int))
-        );
-        assert_eq!(scope.type_item("IO"), Some(TypeItem::Effect(EffectRef::Io)));
+        let mut types = Arena::new();
+        let mut effects = Arena::new();
+        let mut scope = ItemScope::new();
+        let lang = builtin_items(&mut types, &mut effects, &mut scope);
+        assert_eq!(scope.type_item("Int"), Some(TypeItem::Type(lang.int)));
+        assert_eq!(scope.type_item("IO"), Some(TypeItem::Effect(lang.io)));
         assert_eq!(scope.type_item("Console"), None);
     }
 }

@@ -9,7 +9,7 @@ use la_arena::ArenaMap;
 use crate::kind::Bound;
 use crate::scheme::{Rigids, Scheme, lower_signature};
 use crate::table::{Row, Table};
-use crate::ty::{Effect, KindConstraint, KindTerm, Linearity, Type};
+use crate::ty::{EffectLabel, KindConstraint, KindTerm, Linearity, Type};
 use crate::{BodyTypes, TypedModule, codes, scc, usage};
 
 mod body;
@@ -20,7 +20,7 @@ pub(crate) use body::BodyTyping;
 use report::AmbientSource;
 
 pub(crate) fn check_module(module: &Module) -> (TypedModule, Vec<Diagnostic>) {
-    let mut table = Table::new();
+    let mut table = Table::new(module.lang, &module.types, &module.effects);
     // 組み込みの型は Prelude のシグネチャから、ユーザーの関数と同じ経路で作る。本体がないので、作ってすぐ多相化する
     let mut builtins: HashMap<Builtin, Scheme> = HashMap::new();
     for info in BUILTINS {
@@ -142,7 +142,10 @@ fn check_main(
     let expected = Type::Fn {
         param: Box::new(Type::unit()),
         linearity: Linearity::Unr,
-        effects: vec![Effect::Io],
+        effects: vec![EffectLabel {
+            id: module.lang.io,
+            name: module.effects[module.lang.io].name.clone(),
+        }],
         tail: None,
         ret: Box::new(Type::unit()),
     };
@@ -158,7 +161,7 @@ fn check_main(
 fn has_error(types: &Arena<TypeRef>, id: TypeRefId) -> bool {
     match &types[id].kind {
         TypeRefKind::Error => true,
-        TypeRefKind::Builtin(_) => false,
+        TypeRefKind::Con(_) => false,
         TypeRefKind::Var(_) => false,
         TypeRefKind::Fn { param, row, ret } => {
             matches!(row, RowRef::Error) || has_error(types, *param) || has_error(types, *ret)

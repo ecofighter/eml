@@ -3,7 +3,7 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 use eml_diagnostics::{FileId, TextRange};
 use la_arena::{Arena, Idx};
 
-use crate::builtin::{Builtin, BuiltinType};
+use crate::builtin::Builtin;
 
 pub type FunctionId = Idx<Function>;
 pub type ExprId = Idx<Expr>;
@@ -17,8 +17,36 @@ pub type TypeRefId = Idx<TypeRef>;
 pub struct Module {
     pub file: FileId,
     pub functions: Arena<Function>,
+    /// 型の item。今は組み込みの `Int`、`String`、`Bool`、`Unit` だけ。段階4で `data` を足す。
+    pub types: Arena<TypeDef>,
+    /// エフェクトの item。今は組み込みの `IO` だけ。段階3で `effect` の宣言を足す。
+    pub effects: Arena<EffectDef>,
     /// Prelude の組み込みのシグネチャ。
     pub builtins: HashMap<Builtin, Signature>,
+    pub lang: LangItems,
+}
+
+pub type TypeDefId = Idx<TypeDef>;
+pub type EffectId = Idx<EffectDef>;
+
+#[derive(Debug)]
+pub struct TypeDef {
+    pub name: String,
+}
+
+#[derive(Debug)]
+pub struct EffectDef {
+    pub name: String,
+}
+
+/// 処理系が名前ではなく役割で引く item。
+#[derive(Debug, Clone, Copy)]
+pub struct LangItems {
+    pub int: TypeDefId,
+    pub string: TypeDefId,
+    pub bool: TypeDefId,
+    pub unit: TypeDefId,
+    pub io: EffectId,
 }
 
 #[derive(Debug)]
@@ -268,7 +296,7 @@ pub struct TypeRef {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TypeRefKind {
     Error,
-    Builtin(BuiltinType),
+    Con(TypeDefId),
     Var(TypeVarId),
     Fn {
         param: TypeRefId,
@@ -282,20 +310,15 @@ pub enum RowRef {
     /// 省略した row。空の row `<>` である (docs/spec/types.md の「関数型」)。
     Omitted,
     Closed {
-        effects: Vec<EffectRef>,
+        effects: Vec<EffectId>,
         range: TextRange,
     },
     /// `<e>` と `<IO | e>`。
     Open {
-        effects: Vec<EffectRef>,
+        effects: Vec<EffectId>,
         tail: RowVarId,
         range: TextRange,
     },
     /// 未定義のエフェクトか、解決できない row 変数の跡。型検査はどのエフェクトも受け入れ、診断を連鎖させない。
     Error,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum EffectRef {
-    Io,
 }

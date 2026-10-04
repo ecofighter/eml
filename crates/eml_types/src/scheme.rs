@@ -1,14 +1,11 @@
 //! シグネチャのスキームと、その具体化 (docs/spec/types.md の「推論」)。
 
-use eml_hir::builtin::BuiltinType;
-use eml_hir::{
-    EffectRef, Generics, RowRef, RowVarId, Signature, TypeRef, TypeRefId, TypeRefKind, TypeVarId,
-};
+use eml_hir::{Generics, RowRef, RowVarId, Signature, TypeRef, TypeRefId, TypeRefKind, TypeVarId};
 use la_arena::{Arena, ArenaMap};
 
 use crate::kind::{Bound, KindVar};
-use crate::table::{ArrowLin, RigidVar, Row, RowVar, Subst, Table, Tail, Ty};
-use crate::ty::{Effect, Linearity, Multiplicity};
+use crate::table::{ArrowLin, RigidVar, Row, RowVar, Subst, Table, Tail, Ty, TyShape};
+use crate::ty::{Linearity, Multiplicity};
 
 /// 関数ごとの、シグネチャの型変数と row 変数。本体の注釈も同じ変数を指す (docs/spec/types.md の「推論」)。
 pub(crate) struct Rigids {
@@ -130,23 +127,22 @@ fn lower(
 ) -> Ty {
     match &types[id].kind {
         TypeRefKind::Error => table.error,
-        TypeRefKind::Builtin(BuiltinType::Int) => table.int,
-        TypeRefKind::Builtin(BuiltinType::String) => table.string,
-        TypeRefKind::Builtin(BuiltinType::Bool) => table.bool,
-        TypeRefKind::Builtin(BuiltinType::Unit) => table.unit,
+        // `Unit` は空のレコードである (docs/spec/records.md)
+        TypeRefKind::Con(id) if *id == table.lang.unit => table.unit,
+        TypeRefKind::Con(id) if *id == table.lang.int => table.int,
+        TypeRefKind::Con(id) if *id == table.lang.string => table.string,
+        TypeRefKind::Con(id) if *id == table.lang.bool => table.bool,
+        TypeRefKind::Con(id) => table.alloc(TyShape::Con(*id)),
         TypeRefKind::Var(var) => rigids.tys[*var],
         TypeRefKind::Fn { param, row, ret } => {
             let param = lower(table, types, rigids, *param, false);
             let ret = lower(table, types, rigids, *ret, false);
-            let labels = |effects: &[EffectRef]| -> Vec<Effect> {
-                effects.iter().map(|EffectRef::Io| Effect::Io).collect()
-            };
             let row = match row {
                 // 省略した row は空の row である (docs/spec/types.md の「関数型」)
                 RowRef::Omitted => Row::pure(),
-                RowRef::Closed { effects, .. } => Row::closed(labels(effects)),
+                RowRef::Closed { effects, .. } => Row::closed(effects.clone()),
                 RowRef::Open { effects, tail, .. } => Row {
-                    labels: labels(effects),
+                    labels: effects.clone(),
                     tail: Tail::Var(rigids.rows[*tail]),
                 },
                 // 未定義のエフェクトか、解決できない row 変数の跡。どのエフェクトも受け入れて、診断を連鎖させない

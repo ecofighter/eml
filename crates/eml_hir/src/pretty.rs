@@ -161,7 +161,7 @@ impl Printer<'_> {
     fn ty(&self, types: &la_arena::Arena<TypeRef>, id: TypeRefId) -> String {
         match &types[id].kind {
             TypeRefKind::Error => "<error>".to_string(),
-            TypeRefKind::Builtin(builtin) => builtin.name().to_string(),
+            TypeRefKind::Con(id) => self.module.types[*id].name.clone(),
             TypeRefKind::Var(id) => self.generics.type_vars[*id].name.clone(),
             TypeRefKind::Fn { param, row, ret } => {
                 let param_text = self.ty(types, *param);
@@ -170,10 +170,10 @@ impl Printer<'_> {
                 } else {
                     param_text
                 };
-                let effect_names = |effects: &[EffectRef]| -> Vec<String> {
+                let effect_names = |effects: &[EffectId]| -> Vec<String> {
                     effects
                         .iter()
-                        .map(|EffectRef::Io| "IO".to_string())
+                        .map(|effect| self.module.effects[*effect].name.clone())
                         .collect()
                 };
                 let row = match row {

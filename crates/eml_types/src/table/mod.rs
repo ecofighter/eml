@@ -1,5 +1,7 @@
 use crate::kind::{Bound, KindVar, Lattice};
-use crate::ty::{Effect, Linearity, Multiplicity, RowTail, Type};
+use crate::ty::{EffectLabel, Linearity, Multiplicity, RowTail, Type};
+use eml_hir::{EffectDef, EffectId, LangItems, TypeDef, TypeDefId};
+use la_arena::{Arena, ArenaMap};
 use std::collections::HashMap;
 
 mod copy;
@@ -23,13 +25,6 @@ pub(crate) struct RigidVar(u32);
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct RowVar(u32);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum TyCon {
-    Int,
-    String,
-    Bool,
-}
-
 /// 関数型の矢印の線形性 `m`。多重度 (`Multiplicity`) と取り違えないよう、名前に矢印を入れる。内部では最初から Kind 変数を扱う
 /// (docs/spec/types.md)。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -50,7 +45,7 @@ pub(crate) enum Tail {
 /// エフェクトの row。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Row {
-    pub labels: Vec<Effect>,
+    pub labels: Vec<EffectId>,
     pub tail: Tail,
 }
 
@@ -59,7 +54,7 @@ impl Row {
         Row::closed(Vec::new())
     }
 
-    pub fn closed(labels: Vec<Effect>) -> Row {
+    pub fn closed(labels: Vec<EffectId>) -> Row {
         Row {
             labels,
             tail: Tail::Closed,
@@ -76,7 +71,7 @@ impl Row {
 
 #[derive(Debug, Clone)]
 pub(crate) enum TyShape {
-    Con(TyCon),
+    Con(TypeDefId),
     Record(Vec<(String, Ty)>),
     Fn {
         param: Ty,
@@ -94,7 +89,7 @@ pub(crate) enum UnifyError {
     Mismatch,
     Occurs,
     /// 閉じた row に含まれないエフェクト。
-    MissingEffects(Vec<Effect>),
+    MissingEffects(Vec<EffectId>),
     /// 呼び出し先の row の末尾にある、シグネチャの row 変数が、今の row に含まれない。
     MissingRowVar(String),
 }
@@ -141,10 +136,14 @@ pub(crate) struct Table {
     pub bool: Ty,
     pub unit: Ty,
     pub error: Ty,
+    pub lang: LangItems,
+    /// 名前を持つのは、`Module` を渡さずに `display` と `export` が名前を出せるようにするため。
+    type_names: ArenaMap<TypeDefId, String>,
+    effect_names: ArenaMap<EffectId, String>,
 }
 
 impl Table {
-    pub fn new() -> Table {
+    pub fn new(lang: LangItems, types: &Arena<TypeDef>, effects: &Arena<EffectDef>) -> Table {
         let mut table = Table {
             shapes: Vec::new(),
             ty_vars: Vec::new(),
@@ -158,13 +157,29 @@ impl Table {
             bool: Ty(0),
             unit: Ty(0),
             error: Ty(0),
+            lang,
+            type_names: types
+                .iter()
+                .map(|(id, def)| (id, def.name.clone()))
+                .collect(),
+            effect_names: effects
+                .iter()
+                .map(|(id, def)| (id, def.name.clone()))
+                .collect(),
         };
-        table.int = table.alloc(TyShape::Con(TyCon::Int));
-        table.string = table.alloc(TyShape::Con(TyCon::String));
-        table.bool = table.alloc(TyShape::Con(TyCon::Bool));
+        table.int = table.alloc(TyShape::Con(lang.int));
+        table.string = table.alloc(TyShape::Con(lang.string));
+        table.bool = table.alloc(TyShape::Con(lang.bool));
         table.unit = table.alloc(TyShape::Record(Vec::new()));
         table.error = table.alloc(TyShape::Error);
         table
+    }
+
+    /// 今あるエフェクトは組み込みの `IO` だけで、実行時が必ず1回再開するので `Once` である (docs/spec/effects.md)。
+    /// 段階3で、エフェクトの宣言の操作ごとの多重度に置き換える。
+    pub fn effect_multiplicity(&self, effect: EffectId) -> Multiplicity {
+        debug_assert_eq!(effect, self.lang.io);
+        Multiplicity::Once
     }
 
     pub fn alloc(&mut self, kind: TyShape) -> Ty {

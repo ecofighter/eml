@@ -45,9 +45,10 @@ impl Table {
 
     fn to_type(&self, ty: Ty, solved: bool) -> Type {
         match self.shape(ty).clone() {
-            TyShape::Con(TyCon::Int) => Type::Int,
-            TyShape::Con(TyCon::String) => Type::String,
-            TyShape::Con(TyCon::Bool) => Type::Bool,
+            TyShape::Con(id) => Type::Con {
+                id,
+                name: self.type_names[id].clone(),
+            },
             TyShape::Record(fields) => Type::Record(
                 fields
                     .into_iter()
@@ -76,7 +77,14 @@ impl Table {
                             solution[v.index()]
                         }
                     },
-                    effects: row.labels,
+                    effects: row
+                        .labels
+                        .into_iter()
+                        .map(|id| EffectLabel {
+                            id,
+                            name: self.effect_names[id].clone(),
+                        })
+                        .collect(),
                     tail: match row.tail {
                         Tail::Closed => None,
                         Tail::Var(tail) => Some(match &self.row_vars[tail.0 as usize].rigid {

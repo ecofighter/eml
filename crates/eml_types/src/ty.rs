@@ -1,5 +1,7 @@
 use std::fmt;
 
+use eml_hir::{EffectId, TypeDefId};
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Linearity {
     Unr,
@@ -14,38 +16,26 @@ pub enum Multiplicity {
     Multi,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum Effect {
-    Io,
-}
-
-impl Effect {
-    pub fn name(self) -> &'static str {
-        match self {
-            Effect::Io => "IO",
-        }
-    }
-
-    /// `IO` は実行時が必ず1回再開するので、`once` と同じ扱いになる (docs/spec/effects.md)。
-    pub(crate) fn multiplicity(self) -> Multiplicity {
-        match self {
-            Effect::Io => Multiplicity::Once,
-        }
-    }
+/// 外に出す型の row のラベル。名前を持つのは、`Module` を渡さずに表示するため。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EffectLabel {
+    pub id: EffectId,
+    pub name: String,
 }
 
 /// 型検査の結果として後の段階に渡す型。推論用の変数は解決済みで、解けずに残った変数は `Var("_")` になる。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Type {
-    Int,
-    String,
-    Bool,
+    Con {
+        id: TypeDefId,
+        name: String,
+    },
     /// 閉じたレコード。`Unit` は空のレコード、タプルは数字ラベルのレコードである (docs/spec/records.md)。
     Record(Vec<(String, Type)>),
     Fn {
         param: Box<Type>,
         linearity: Linearity,
-        effects: Vec<Effect>,
+        effects: Vec<EffectLabel>,
         /// row の末尾。`None` なら閉じた row である。
         tail: Option<RowTail>,
         ret: Box<Type>,
@@ -80,7 +70,7 @@ impl Type {
                     || ret.contains_error()
                     || matches!(tail, Some(RowTail::Error))
             }
-            Type::Int | Type::String | Type::Bool | Type::Var(_) => false,
+            Type::Con { .. } | Type::Var(_) => false,
         }
     }
 }
@@ -88,9 +78,7 @@ impl Type {
 impl fmt::Display for Type {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Type::Int => f.write_str("Int"),
-            Type::String => f.write_str("String"),
-            Type::Bool => f.write_str("Bool"),
+            Type::Con { name, .. } => f.write_str(name),
             Type::Record(fields) if fields.is_empty() => f.write_str("Unit"),
             Type::Record(fields) => {
                 f.write_str("{ ")?;
@@ -114,7 +102,7 @@ impl fmt::Display for Type {
                 } else {
                     write!(f, "{param} -> ")?;
                 }
-                let names: Vec<&str> = effects.iter().map(|e| e.name()).collect();
+                let names: Vec<&str> = effects.iter().map(|e| e.name.as_str()).collect();
                 let tail = match tail {
                     Some(RowTail::Rigid(name)) => Some(name.as_str()),
                     Some(RowTail::Flexible) => Some("_"),
@@ -138,21 +126,38 @@ impl fmt::Display for Type {
 
 #[cfg(test)]
 mod tests {
+    use eml_hir::{EffectDef, TypeDef};
+    use la_arena::Arena;
+
     use super::*;
 
     #[test]
     fn function_types_are_displayed_like_the_surface_syntax() {
+        let mut types = Arena::new();
+        let mut effects = Arena::new();
+        let mut con = |name: &str| Type::Con {
+            id: types.alloc(TypeDef {
+                name: name.to_string(),
+            }),
+            name: name.to_string(),
+        };
         let pure = Type::Fn {
-            param: Box::new(Type::Int),
+            param: Box::new(con("Int")),
             linearity: Linearity::Unr,
             effects: vec![],
             tail: None,
-            ret: Box::new(Type::Bool),
+            ret: Box::new(con("Bool")),
+        };
+        let io = EffectLabel {
+            id: effects.alloc(EffectDef {
+                name: "IO".to_string(),
+            }),
+            name: "IO".to_string(),
         };
         let io = Type::Fn {
             param: Box::new(pure.clone()),
             linearity: Linearity::Unr,
-            effects: vec![Effect::Io],
+            effects: vec![io],
             tail: None,
             ret: Box::new(Type::unit()),
         };

@@ -267,7 +267,11 @@ impl FnLowering<'_> {
             linearity: Linearity::Unr,
             // 関数値と型変数の値は、ヒープのクロージャや文字列かもしれない。インタプリタの `dup` / `decref` は
             // ヒープにない値を無視するので、多めに対象にしても正しく動く (docs/spec/core-ir.md)
-            boxed: matches!(ty, Type::String | Type::Fn { .. } | Type::Var(_)),
+            boxed: match ty {
+                Type::Con { id, .. } => *id == self.module.lang.string,
+                Type::Fn { .. } | Type::Var(_) => true,
+                _ => false,
+            },
         });
         VarId(self.vars.len() as u32 - 1)
     }
@@ -377,7 +381,12 @@ impl FnLowering<'_> {
             ExprKind::Literal(Literal::Unit) => Atom::Unit,
             ExprKind::Literal(Literal::String(text)) => {
                 let index = self.program.strings.intern(text);
-                self.bind(out, "s", &Type::String, Rhs::ConstString(index))
+                let string = self.module.lang.string;
+                let ty = Type::Con {
+                    id: string,
+                    name: self.module.types[string].name.clone(),
+                };
+                self.bind(out, "s", &ty, Rhs::ConstString(index))
             }
             ExprKind::Path(Res::Local(local)) => self.locals[*local],
             ExprKind::Path(Res::Builtin(Builtin::True)) => Atom::Tag(TRUE),
