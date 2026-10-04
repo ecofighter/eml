@@ -1,12 +1,8 @@
 //! 手で組んだ Core IR で、クロージャの eval/apply を確かめる (docs/spec/core-ir.md)。
 
-use std::sync::Arc;
-
 use eml_core_ir::{
     Atom, CExpr, CExprId, CoreFn, FnIdx, IoOp, Linearity, PrimOp, Program, Rhs, VarId, VarInfo,
 };
-use eml_interp::{RunConfig, run};
-use eml_runtime::OutputSink;
 
 enum Step {
     Let(u32, Rhs),
@@ -52,10 +48,9 @@ fn run_program(functions: Vec<CoreFn>, main: u32, strings: &[&str]) -> String {
         main: FnIdx(main),
         strings: strings.iter().map(|s| s.to_string()).collect(),
     };
-    let config = RunConfig::default().with_debug_heap(true);
-    let (sink, captured) = OutputSink::capture();
-    run(Arc::new(program), &config, &sink).unwrap();
-    captured.contents()
+    let (stdout, result) = eml_test_support::execute(program, true);
+    result.unwrap();
+    stdout
 }
 
 fn var(n: u32) -> Atom {

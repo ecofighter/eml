@@ -207,11 +207,8 @@ name = "eml_interp"
 version = "0.1.0"
 dependencies = [
  "eml_core_ir",
- "eml_diagnostics",
- "eml_hir",
  "eml_runtime",
- "eml_syntax",
- "eml_types",
+ "eml_test_support",
 ]
 
 [[package]]

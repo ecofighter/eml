@@ -1,0 +1,11 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{stderr}\")"
+input_file: tests/ui/run/strings_freed_in_branches.em
+---
+--- stdout ---
+xyxy
+1
+aa
+noneb
+--- stderr ---
