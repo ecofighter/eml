@@ -175,9 +175,8 @@ dependencies = [
 name = "eml_core_ir"
 version = "0.1.0"
 dependencies = [
- "eml_diagnostics",
  "eml_hir",
- "eml_syntax",
+ "eml_test_support",
  "eml_types",
  "insta",
  "la-arena",
@@ -197,6 +196,7 @@ version = "0.1.0"
 dependencies = [
  "eml_diagnostics",
  "eml_syntax",
+ "eml_test_support",
  "insta",
  "la-arena",
  "rowan",
@@ -249,6 +249,7 @@ dependencies = [
  "eml_diagnostics",
  "eml_hir",
  "eml_syntax",
+ "eml_test_support",
  "insta",
  "la-arena",
 ]
