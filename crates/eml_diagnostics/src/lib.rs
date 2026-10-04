@@ -4,7 +4,7 @@ mod source;
 use std::fmt;
 
 pub use render::render;
-pub use source::{FileId, SourceFiles};
+pub use source::{FileId, LineCol, SourceFiles};
 pub use text_size::{TextRange, TextSize};
 
 /// 番号の範囲は段階ごとに分けている (docs/spec/diagnostics.md)。
