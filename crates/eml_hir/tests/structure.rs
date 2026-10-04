@@ -3,7 +3,7 @@
 use eml_hir::builtin::{BUILTINS, Builtin};
 use eml_hir::{Body, ExprId, ExprKind, Function, LocalId, Module, PatKind, TypeRefKind};
 
-/// 診断のエラーがないことを確かめて HIR を返す。
+/// 診断がないことを確かめて HIR を返す。
 fn module(text: &str) -> Module {
     eml_test_support::lower_clean(text).module
 }
