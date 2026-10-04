@@ -1,0 +1,14 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: rendered
+input_file: tests/ui/check-fail/names/handle_io.em
+---
+[E1009] Error: `IO` cannot be handled
+   ╭─[ check-fail/names/handle_io.em:5:7 ]
+   │
+ 5 │     | println text k -> resume k ()
+   │       ───┬───  
+   │          ╰───── `println` is an operation of the built-in `IO`
+   │ 
+   │ Note: the runtime handles `IO` itself
+───╯

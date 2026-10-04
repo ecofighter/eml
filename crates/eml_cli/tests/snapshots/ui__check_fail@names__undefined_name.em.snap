@@ -1,0 +1,12 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: rendered
+input_file: tests/ui/check-fail/names/undefined_name.em
+---
+[E1001] Error: cannot find value `shout`
+   ╭─[ check-fail/names/undefined_name.em:3:20 ]
+   │
+ 3 │ main () = println (shout "hi")
+   │                    ──┬──  
+   │                      ╰──── not found in this scope
+───╯

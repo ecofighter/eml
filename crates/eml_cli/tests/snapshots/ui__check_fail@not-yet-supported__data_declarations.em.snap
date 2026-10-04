@@ -1,0 +1,12 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: rendered
+input_file: tests/ui/check-fail/not-yet-supported/data_declarations.em
+---
+[E0004] Error: `data` declarations are not supported yet
+   ╭─[ check-fail/not-yet-supported/data_declarations.em:2:1 ]
+   │
+ 2 │ data Color = | Red | Green
+   │ ──┬─  
+   │   ╰─── this is implemented in a later stage
+───╯

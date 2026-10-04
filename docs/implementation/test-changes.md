@@ -107,3 +107,10 @@
   - `eml_types/tests/check.rs` から、エフェクトの row の11件を新しい `rows.rs` に移した
   - `eml_core_ir/tests/lower.rs` から、`simplify` の6件を新しい `simplify.rs` に移した
 - `eml_syntax/src/parser.rs` と `eml_runtime/src/heap.rs` の単体テストを、隣の `parser/tests.rs` と `heap/tests.rs` に移した (種類1)。テストが300行を超え、ファイルの半分ほどを占めていた。本体は字下げを1段浅くしたほかは変えていない
+
+### テスト本体の整理 3c
+
+- UI テストを、[testing.md](testing.md) の「UI テスト」の「分類」のサブディレクトリに移した (種類1)。`run/` は `basics/`、`functions/`、`effects/`、`runtime/`、`run-fail/` は `basics/`、`check-fail/` は主な番号の範囲で `syntax/`、`names/`、`types/`、`linearity/`、`not-yet-supported/` に分けた。.em の中身は変えていない
+- `check-fail/not_yet_supported.em` を `check-fail/not-yet-supported/data_declarations.em` に改名した (種類1)。ディレクトリの名前と重なるためである
+- `crates/eml_cli/tests/ui.rs` がサブディレクトリを走査し、スナップショットの名前を最上位のディレクトリからの相対パスで固定するようにしたので、すべてのスナップショットの名前が変わった (種類1)。中身は、ヘッダの `input_file:` と `expression:` の行と、`check-fail/` の診断の表示の中のパスのほかは変わっていない。`ui.rs` は最上位のディレクトリの直下の .em を拒む
+- `crates/eml_cli/tests/cli.rs` が使う UI テストのパスを、移した先に合わせた。終了コードと出力の確認は変えていない

@@ -1,0 +1,21 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: rendered
+input_file: tests/ui/check-fail/syntax/tab_indentation.em
+---
+[E0006] Error: tab used for indentation
+   ╭─[ check-fail/syntax/tab_indentation.em:3:1 ]
+   │
+ 3 │     42
+   │ ┬───  
+   │ ╰───── indent with spaces
+───╯
+[E1004] Error: `answer` has no type signature
+   ╭─[ check-fail/syntax/tab_indentation.em:2:1 ]
+   │
+ 2 │ answer =
+   │ ───┬──  
+   │    ╰──── every top-level definition needs a signature
+   │ 
+   │ Help: add a signature `answer : ...` on the line before this equation
+───╯

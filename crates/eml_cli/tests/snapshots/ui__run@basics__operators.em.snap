@@ -1,0 +1,18 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{stderr}\")"
+input_file: tests/ui/run/basics/operators.em
+---
+--- stdout ---
+3
+-6
+-3
+-1
+True
+False
+True
+evaluated
+False
+True
+10
+--- stderr ---

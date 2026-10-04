@@ -1,0 +1,12 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: rendered
+input_file: tests/ui/check-fail/types/infinite_row_through_effect_argument.em
+---
+[E2005] Error: this expression would have an infinite type
+    ╭─[ check-fail/types/infinite_row_through_effect_argument.em:11:32 ]
+    │
+ 11 │   let h = fn g -> seq (put g) (g ())
+    │                                ──┬─  
+    │                                  ╰─── infinite type
+────╯

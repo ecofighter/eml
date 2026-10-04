@@ -1,0 +1,9 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- runtime error ---\\n{error}\\n\")"
+input_file: tests/ui/run-fail/basics/integer_overflow.em
+---
+--- stdout ---
+before
+--- runtime error ---
+integer overflow in `main`

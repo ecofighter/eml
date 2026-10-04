@@ -1,0 +1,13 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{stderr}\")"
+input_file: tests/ui/run/functions/closures.em
+---
+--- stdout ---
+hey!
+you!
+n = 3
+n = 2
+n = 1
+100000
+--- stderr ---

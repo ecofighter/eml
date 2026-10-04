@@ -10,27 +10,27 @@ fn eml(args: &[&str]) -> Output {
 
 #[test]
 fn check_succeeds_on_a_valid_file() {
-    let output = eml(&["check", "run/comments_only.em"]);
+    let output = eml(&["check", "run/basics/comments_only.em"]);
     assert_eq!(output.status.code(), Some(0));
     assert!(output.stderr.is_empty());
 }
 
 #[test]
 fn check_fails_with_diagnostics() {
-    let output = eml(&["check", "check-fail/multiple_errors.em"]);
+    let output = eml(&["check", "check-fail/syntax/multiple_errors.em"]);
     assert_eq!(output.status.code(), Some(1));
     assert!(String::from_utf8_lossy(&output.stderr).contains("[E0001]"));
 }
 
 #[test]
 fn run_succeeds_on_a_valid_file() {
-    let output = eml(&["run", "--debug-heap", "run/comments_only.em"]);
+    let output = eml(&["run", "--debug-heap", "run/basics/comments_only.em"]);
     assert_eq!(output.status.code(), Some(0));
 }
 
 #[test]
 fn run_does_not_execute_a_file_with_errors() {
-    let output = eml(&["run", "check-fail/multiple_errors.em"]);
+    let output = eml(&["run", "check-fail/syntax/multiple_errors.em"]);
     assert_eq!(output.status.code(), Some(1));
 }
 
@@ -72,7 +72,7 @@ fn run_fails_without_main_but_check_succeeds() {
 
 #[test]
 fn runtime_errors_exit_with_one() {
-    let output = eml(&["run", "--debug-heap", "run-fail/division_by_zero.em"]);
+    let output = eml(&["run", "--debug-heap", "run-fail/basics/division_by_zero.em"]);
     assert_eq!(output.status.code(), Some(1));
     assert!(
         String::from_utf8_lossy(&output.stderr)
@@ -82,7 +82,7 @@ fn runtime_errors_exit_with_one() {
 
 #[test]
 fn run_prints_the_program_output() {
-    let output = eml(&["run", "--debug-heap", "run/hello.em"]);
+    let output = eml(&["run", "--debug-heap", "run/basics/hello.em"]);
     assert_eq!(output.status.code(), Some(0));
     assert_eq!(String::from_utf8_lossy(&output.stdout), "Hello, world!\n");
 }

@@ -1,9 +1,0 @@
----
-source: crates/eml_cli/tests/ui.rs
-expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{stderr}\")"
-input_file: tests/ui/run/multi_choice.em
----
---- stdout ---
-bits:0 bits:1 bits:2 bits:3 bits:4 bits:5 bits:6 bits:7
-8
---- stderr ---

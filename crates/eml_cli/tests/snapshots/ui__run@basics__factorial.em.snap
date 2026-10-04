@@ -1,0 +1,9 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{stderr}\")"
+input_file: tests/ui/run/basics/factorial.em
+---
+--- stdout ---
+3628800
+2432902008176640000
+--- stderr ---

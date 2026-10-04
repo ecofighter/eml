@@ -1,0 +1,15 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{stderr}\")"
+input_file: tests/ui/run/functions/higher_order.em
+---
+--- stdout ---
+2
+7
+through a row variable
+3
+4
+3
+3
+s
+--- stderr ---
