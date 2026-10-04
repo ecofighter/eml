@@ -1,3 +1,4 @@
+mod effect;
 mod expr;
 mod ops;
 mod prelude;
@@ -13,7 +14,7 @@ use la_arena::Arena;
 use crate::codes;
 use crate::hir::*;
 use expr::BodyLowering;
-use scope::ItemScope;
+use scope::{ItemScope, ValueItem};
 use types::TypeLowering;
 
 /// 同じ名前のシグネチャと等式。名前で対応づけてから、並び方を検査する (docs/spec/declarations.md)。
@@ -28,13 +29,23 @@ struct Definition {
 
 pub fn lower(file: FileId, source: &ast::SourceFile) -> (Module, Vec<Diagnostic>) {
     let mut diagnostics = Vec::new();
-    let definitions = collect(file, source, &mut diagnostics);
+    let (definitions, effect_items) = collect(file, source, &mut diagnostics);
     let mut functions = Arena::new();
     let mut scope = ItemScope::new();
     let mut types = Arena::new();
     let mut effects = Arena::new();
+    let mut operations = Arena::new();
     let lang = scope::builtin_items(&mut types, &mut effects, &mut scope);
     let builtins = prelude::lower_prelude(&scope);
+    // 関数のシグネチャの row がユーザーのエフェクトを引けるように、エフェクトを先に変換する
+    effect::lower_effects(
+        file,
+        &effect_items,
+        &mut scope,
+        &mut effects,
+        &mut operations,
+        &mut diagnostics,
+    );
     let mut pending = Vec::new();
     for definition in definitions {
         let Definition {
@@ -114,7 +125,14 @@ pub fn lower(file: FileId, source: &ast::SourceFile) -> (Module, Vec<Diagnostic>
             signature,
             body: None,
         });
-        scope.define_function(&name, id);
+        if let Some(ValueItem::Operation(operation)) = scope.define_function(&name, id) {
+            diagnostics.push(duplicate(
+                file,
+                &name,
+                operations[operation].name_range,
+                first_range,
+            ));
+        }
         if let Some((_, equation, _)) = first_equation {
             pending.push((id, equation));
         }
@@ -138,6 +156,7 @@ pub fn lower(file: FileId, source: &ast::SourceFile) -> (Module, Vec<Diagnostic>
             functions,
             types,
             effects,
+            operations,
             builtins,
             lang,
         },
@@ -149,9 +168,10 @@ fn collect(
     file: FileId,
     source: &ast::SourceFile,
     diagnostics: &mut Vec<Diagnostic>,
-) -> Vec<Definition> {
+) -> (Vec<Definition>, Vec<ast::EffectItem>) {
     let mut definitions: Vec<Definition> = Vec::new();
     let mut by_name: HashMap<String, usize> = HashMap::new();
+    let mut effects = Vec::new();
     for (index, item) in source.items().enumerate() {
         match item {
             ast::Item::Signature(signature) => {
@@ -189,11 +209,7 @@ fn collect(
                 item.keyword_range(),
                 "`data` declarations are not supported yet",
             )),
-            ast::Item::EffectItem(item) => diagnostics.push(Diagnostic::not_yet_supported(
-                file,
-                item.keyword_range(),
-                "`effect` declarations are not supported yet",
-            )),
+            ast::Item::EffectItem(item) => effects.push(item),
             ast::Item::FixityItem(item) => diagnostics.push(Diagnostic::not_yet_supported(
                 file,
                 item.keyword_range(),
@@ -203,7 +219,7 @@ fn collect(
             ast::Item::TypeItem(_) => {}
         }
     }
-    definitions
+    (definitions, effects)
 }
 
 fn slot(
@@ -239,4 +255,19 @@ fn value_name(
         "defining operators is not supported yet",
     ));
     None
+}
+
+/// 同じ名前空間のトップレベルの定義の重複 (docs/spec/modules.md の「名前空間」)。ソースで後に書いた方を primary にする。
+pub(super) fn duplicate(file: FileId, name: &str, a: TextRange, b: TextRange) -> Diagnostic {
+    let (first, again) = if a.start() <= b.start() {
+        (a, b)
+    } else {
+        (b, a)
+    };
+    Diagnostic::error(
+        codes::DUPLICATE_DEFINITION,
+        format!("`{name}` is defined more than once"),
+        Label::new(file, again, "defined again here"),
+    )
+    .with_secondary(Label::new(file, first, "first defined here"))
 }

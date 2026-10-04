@@ -6,6 +6,32 @@ use crate::hir::*;
 
 pub fn pretty(module: &Module) -> String {
     let mut out = String::new();
+    for (id, effect) in module.effects.iter() {
+        // 組み込みの `IO` の操作は組み込みの関数なので、表示しない
+        if id == module.lang.io {
+            continue;
+        }
+        writeln!(out, "effect {}", effect.name).unwrap();
+        for &operation in &effect.operations {
+            let operation = &module.operations[operation];
+            let printer = Printer {
+                module,
+                generics: &operation.signature.generics,
+            };
+            let never = match operation.multiplicity {
+                OpMultiplicity::Never => "never ",
+                OpMultiplicity::Once => "",
+            };
+            let signature = &operation.signature;
+            writeln!(
+                out,
+                "  {never}{} : {}",
+                operation.name,
+                printer.ty(&signature.types, signature.ty)
+            )
+            .unwrap();
+        }
+    }
     for (_, function) in module.functions.iter() {
         // 本体の注釈もシグネチャの型変数を指す。シグネチャがなければ型変数は現れない
         let no_generics = Generics::default();
@@ -13,25 +39,18 @@ pub fn pretty(module: &Module) -> String {
             .signature
             .as_ref()
             .map_or(&no_generics, |signature| &signature.generics);
-        let printer = Printer {
-            module,
-            function,
-            generics,
-        };
-        printer.function(&mut out);
+        Printer { module, generics }.function(function, &mut out);
     }
     out
 }
 
 struct Printer<'a> {
     module: &'a Module,
-    function: &'a Function,
     generics: &'a Generics,
 }
 
 impl Printer<'_> {
-    fn function(&self, out: &mut String) {
-        let function = self.function;
+    fn function(&self, function: &Function, out: &mut String) {
         match &function.signature {
             Some(signature) => writeln!(
                 out,
@@ -142,6 +161,11 @@ impl Printer<'_> {
         match res {
             Res::Local(local) => local_name(body, local),
             Res::Function(function) => format!("@{}", self.module.functions[function].name),
+            Res::Operation(operation) => {
+                let operation = &self.module.operations[operation];
+                let effect = &self.module.effects[operation.effect].name;
+                format!("@{effect}.{}", operation.name)
+            }
             Res::Builtin(builtin) => builtin.name().to_string(),
         }
     }

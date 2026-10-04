@@ -604,6 +604,9 @@ impl FnLowering<'_> {
                     self.bind(out, "c", &ty, Rhs::MakeClosure(target, Vec::new()))
                 }
             }
+            ExprKind::Path(Res::Operation(_)) => {
+                unreachable!("operations are not lowered to Core IR yet")
+            }
             ExprKind::Call {
                 callee,
                 args,

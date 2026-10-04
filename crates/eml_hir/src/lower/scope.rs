@@ -6,11 +6,12 @@ use std::collections::HashMap;
 use la_arena::Arena;
 
 use crate::builtin::Builtin;
-use crate::hir::{EffectDef, EffectId, FunctionId, LangItems, TypeDef, TypeDefId};
+use crate::hir::{EffectDef, EffectId, FunctionId, LangItems, OperationId, TypeDef, TypeDefId};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum ValueItem {
     Function(FunctionId),
+    Operation(OperationId),
     Builtin(Builtin),
 }
 
@@ -24,7 +25,8 @@ pub(super) enum TypeItem {
 /// なければ組み込みを引く。
 #[derive(Debug, Default)]
 pub(super) struct ItemScope {
-    functions: HashMap<String, FunctionId>,
+    /// ユーザーが定義した値 (関数と操作)。
+    values: HashMap<String, ValueItem>,
     types: HashMap<String, TypeItem>,
 }
 
@@ -33,8 +35,15 @@ impl ItemScope {
         ItemScope::default()
     }
 
-    pub(super) fn define_function(&mut self, name: &str, id: FunctionId) {
-        self.functions.insert(name.to_string(), id);
+    /// 同じ名前のユーザーの値があれば、それを返す。重複の診断は呼び出し側が出す。
+    pub(super) fn define_function(&mut self, name: &str, id: FunctionId) -> Option<ValueItem> {
+        self.values
+            .insert(name.to_string(), ValueItem::Function(id))
+    }
+
+    pub(super) fn define_operation(&mut self, name: &str, id: OperationId) -> Option<ValueItem> {
+        self.values
+            .insert(name.to_string(), ValueItem::Operation(id))
     }
 
     pub(super) fn define_type(&mut self, name: &str, id: TypeDefId) {
@@ -46,10 +55,19 @@ impl ItemScope {
     }
 
     pub(super) fn value(&self, name: &str) -> Option<ValueItem> {
-        self.functions
+        self.values
             .get(name)
-            .map(|&id| ValueItem::Function(id))
+            .copied()
             .or_else(|| Builtin::from_name(name).map(ValueItem::Builtin))
+    }
+
+    /// handler の節の先頭の名前は、エフェクトの操作だけから引く (docs/spec/modules.md の「名前の解決」)。
+    #[expect(dead_code)]
+    pub(super) fn operation(&self, name: &str) -> Option<OperationId> {
+        match self.values.get(name) {
+            Some(ValueItem::Operation(id)) => Some(*id),
+            _ => None,
+        }
     }
 
     pub(super) fn type_item(&self, name: &str) -> Option<TypeItem> {
@@ -73,6 +91,7 @@ pub(super) fn builtin_items(
     let (int, string, bool, unit) = (ty("Int"), ty("String"), ty("Bool"), ty("Unit"));
     let io = effects.alloc(EffectDef {
         name: "IO".to_string(),
+        operations: Vec::new(),
     });
     scope.define_effect("IO", io);
     LangItems {

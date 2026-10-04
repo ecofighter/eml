@@ -19,8 +19,10 @@ pub struct Module {
     pub functions: Arena<Function>,
     /// 型の item。今は組み込みの `Int`、`String`、`Bool`、`Unit` だけ。段階4で `data` を足す。
     pub types: Arena<TypeDef>,
-    /// エフェクトの item。今は組み込みの `IO` だけ。段階3で `effect` の宣言を足す。
+    /// エフェクトの item。組み込みの `IO` と、`effect` の宣言。
     pub effects: Arena<EffectDef>,
+    /// エフェクトの操作。値の名前空間に置くトップレベルの値である (docs/spec/modules.md の「名前空間」)。
+    pub operations: Arena<Operation>,
     /// Prelude の組み込みのシグネチャ。
     pub builtins: HashMap<Builtin, Signature>,
     pub lang: LangItems,
@@ -28,6 +30,7 @@ pub struct Module {
 
 pub type TypeDefId = Idx<TypeDef>;
 pub type EffectId = Idx<EffectDef>;
+pub type OperationId = Idx<Operation>;
 
 #[derive(Debug)]
 pub struct TypeDef {
@@ -37,6 +40,27 @@ pub struct TypeDef {
 #[derive(Debug)]
 pub struct EffectDef {
     pub name: String,
+    /// 宣言した順の操作。組み込みの `IO` の操作は組み込みの関数なので、ここには入らない。
+    pub operations: Vec<OperationId>,
+}
+
+/// 操作の多重度 (docs/spec/effects.md)。`multi` は段階3b で足す。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OpMultiplicity {
+    Never,
+    Once,
+}
+
+#[derive(Debug)]
+pub struct Operation {
+    pub name: String,
+    pub name_range: TextRange,
+    pub effect: EffectId,
+    pub multiplicity: OpMultiplicity,
+    /// 型変数は、操作ごとに暗黙に量化する。
+    pub signature: Signature,
+    /// シグネチャの一番外側の `->` の数 (docs/spec/declarations.md の「`effect`」)。
+    pub arity: usize,
 }
 
 /// 処理系が名前ではなく役割で引く item。
@@ -249,6 +273,7 @@ pub enum Literal {
 pub enum Res {
     Local(LocalId),
     Function(FunctionId),
+    Operation(OperationId),
     Builtin(Builtin),
 }
 

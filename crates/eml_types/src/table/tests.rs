@@ -18,6 +18,7 @@ fn new_table() -> Table {
         unit: ty("Unit"),
         io: effects.alloc(EffectDef {
             name: "IO".to_string(),
+            operations: Vec::new(),
         }),
     };
     Table::new(lang, &types, &effects)

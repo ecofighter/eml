@@ -78,13 +78,21 @@ impl TypeLowering<'_> {
         };
         let mut effects = Vec::new();
         for effect in row.effects() {
+            if effect.args().next().is_some() {
+                self.diagnostics.push(Diagnostic::not_yet_supported(
+                    self.file,
+                    effect.range(),
+                    "effects with type arguments are not supported yet",
+                ));
+                valid = false;
+                continue;
+            }
             let Some(name) = effect.name() else {
                 continue;
             };
             match self.items.type_item(name.text()) {
                 Some(TypeItem::Effect(effect)) => effects.push(effect),
                 Some(TypeItem::Type(_)) | None => {
-                    // ユーザー定義のエフェクトは段階3で入れる。宣言も E0004 になるので、ここでは未定義として扱う
                     self.diagnostics.push(Diagnostic::error(
                         codes::UNDEFINED_TYPE,
                         format!("cannot find effect `{}`", name.text()),

@@ -311,6 +311,7 @@ impl BodyCheck<'_> {
                 let ty = self.reference(function);
                 self.table.open_spine(ty)
             }
+            Res::Operation(_) => self.table.error,
             Res::Builtin(builtin) => {
                 let ty = match builtin {
                     // コンストラクタは Prelude にない。段階4で `data Bool` に置き換える

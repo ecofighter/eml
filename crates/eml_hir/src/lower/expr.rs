@@ -162,6 +162,7 @@ impl<'a> BodyLowering<'a> {
             .or_else(|| {
                 self.items.value(text).map(|item| match item {
                     ValueItem::Function(id) => Res::Function(id),
+                    ValueItem::Operation(id) => Res::Operation(id),
                     ValueItem::Builtin(builtin) => Res::Builtin(builtin),
                 })
             });

@@ -18,4 +18,6 @@ pub mod codes {
     pub const MISSING_SIGNATURE: ErrorCode = ErrorCode(1004);
     pub const MISSING_EQUATION: ErrorCode = ErrorCode(1005);
     pub const NON_ASSOCIATIVE_OPERATORS: ErrorCode = ErrorCode(1006);
+    pub const INVALID_OPERATION_SIGNATURE: ErrorCode = ErrorCode(1007);
+    pub const NEVER_RESULT_NOT_FREE: ErrorCode = ErrorCode(1008);
 }

@@ -154,6 +154,7 @@ mod tests {
         let io = EffectLabel {
             id: effects.alloc(EffectDef {
                 name: "IO".to_string(),
+                operations: Vec::new(),
             }),
             name: "IO".to_string(),
         };
