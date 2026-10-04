@@ -498,3 +498,16 @@ fn a_missing_effect_points_at_the_arrow_of_the_body() {
       help: add `IO` to the row of the signature of `f`, as in `-> <IO> ...`
     ");
 }
+
+#[test]
+fn an_undefined_effect_does_not_hide_an_unrelated_missing_effect() {
+    // `l` の row は `bad` の引数と単一化して末尾 `Error` になるが、`l` が起こす `IO` は既知のエフェクトなので、純粋な `p`
+    // の中で呼べば E2002 になる (docs/spec/types.md の「エラーの扱い」は `Error` が関わる制約だけを黙らせる)
+    let text = "bad : (Unit -> <Console> Unit) -> Unit\nbad f = ()\n\np : Unit -> Unit\np () =\n  let l = fn () -> println \"x\"\n  bad l\n  l ()";
+    let out = check_text(text);
+    assert!(
+        out.contains("E1002 1:17 cannot find effect `Console`"),
+        "{out}"
+    );
+    assert!(out.contains("E2002 8:3 `l` performs `IO`"), "{out}");
+}

@@ -352,3 +352,31 @@ fn copying_keeps_an_error_row() {
     let copied = table.copy_type(f, &Subst::default());
     assert_eq!(table.display(copied).to_string(), "Int -> <{error}> Int");
 }
+
+#[test]
+fn an_error_row_keeps_its_own_labels() {
+    // 末尾 `Error` が受け入れるのは相手の側にしかないラベルだけである。自分の側の既知のラベルは、閉じた row に
+    // 含まれなければ報告する。綴り誤りの E1002 と無関係なエフェクトの誤りを隠さないため
+    let mut table = Table::new();
+    let io_error = Row {
+        labels: vec![Effect::Io],
+        tail: Tail::Error,
+    };
+    assert_eq!(
+        table.unify_row(&io_error, &Row::pure()),
+        Err(UnifyError::MissingEffects(vec![Effect::Io]))
+    );
+    assert_eq!(
+        table.include_row(&io_error, &Row::pure()),
+        Err(UnifyError::MissingEffects(vec![Effect::Io]))
+    );
+    let e = table.fresh_rigid_row("e");
+    let rigid = Row {
+        labels: vec![],
+        tail: Tail::Var(e),
+    };
+    assert_eq!(
+        table.unify_row(&io_error, &rigid),
+        Err(UnifyError::MissingEffects(vec![Effect::Io]))
+    );
+}

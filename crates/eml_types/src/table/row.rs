@@ -32,8 +32,10 @@ impl Table {
             }
         }
         match (a.tail, b.tail) {
-            // `Error` が関わる row の制約からは診断を出さない (docs/spec/types.md の「エラーの扱い」)。推論用の row 変数は、
-            // 型の `unify(Var, Error)` と同じく、相手にしかないラベルと末尾 `Error` に束縛する
+            // 末尾 `Error` は相手の側にしかないラベルを受け入れ、それについては診断を出さない (docs/spec/types.md の
+            // 「エラーの扱い」)。自分の側の既知のラベルは受け入れない。綴り誤りと無関係なエフェクトの誤りを隠さないため。
+            // 推論用の row 変数は、型の `unify(Var, Error)` と同じく、相手にしかないラベルと末尾 `Error` に束縛する
+            (Tail::Error, Tail::Error) => Ok(()),
             (Tail::Error, Tail::Var(y)) if !self.is_rigid_row(y) => self.bind_row(
                 y,
                 Row {
@@ -48,6 +50,9 @@ impl Table {
                     tail: Tail::Error,
                 },
             ),
+            // 閉じた末尾と rigid な末尾は、相手の側の既知のラベルを受け入れられない
+            (Tail::Error, _) if !only_a.is_empty() => Err(UnifyError::MissingEffects(only_a)),
+            (_, Tail::Error) if !only_b.is_empty() => Err(UnifyError::MissingEffects(only_b)),
             (Tail::Error, _) | (_, Tail::Error) => Ok(()),
             (Tail::Closed, Tail::Closed) => {
                 let mut missing = only_a;
@@ -154,11 +159,10 @@ impl Table {
     /// 単一化する。rigid な末尾は束縛できないので、ラベルを取り除いた残りの末尾が同じ変数であることを確かめる。
     /// 残りの末尾が推論中の row 変数なら、その row はまだ伸ばせるので、rigid な変数を末尾として受けさせる
     /// (ラムダ本体のように、今の row を推論している途中で呼び出すときのため)。
-    /// 閉じた末尾か、別の rigid な変数なら含まれないので `MissingRowVar` にする。どちらかの末尾が `Error` なら含まれるとみなす。
+    /// 閉じた末尾か、別の rigid な変数なら含まれないので `MissingRowVar` にする。末尾が `Error` の呼び出し先は、閉じた末尾と同じく、既知のラベルだけを今の row に含める。
     pub fn include_row(&mut self, callee: &Row, ambient: &Row) -> Result<(), UnifyError> {
         let callee = self.resolve_row(callee);
         match callee.tail {
-            Tail::Error => Ok(()),
             Tail::Var(tail) if !self.is_rigid_row(tail) => self.unify_row(&callee, ambient),
             tail => {
                 let rest = self.fresh_row_var();
