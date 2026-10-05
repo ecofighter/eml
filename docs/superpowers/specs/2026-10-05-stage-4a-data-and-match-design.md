@@ -356,6 +356,27 @@ TDD で、実装の前に書く。
 | `eml_core_ir` | 変換の直後の決定木 (入れ子、残りの join point、`let` とラムダと等式の引数のパターン)、B2 がフィールドを持つ枝を残すこと、B3 と B5 の複数の引数、Perceus の枝の所有 (使わないフィールドの `decref`、枝で scrutinee を使うときの `dup`)、verifier の枝の束縛と `jump` の引数の数 |
 | `eml_runtime` | 分解の一意と共有の2通り、`Data` の解放とリーク検出 |
 
+### case-of-case (B2) のテスト
+
+B2 の限定が、引数のないタグで効き、フィールドを束縛する枝では何もしないことを確かめる。どれも `crates/eml_core_ir/tests/simplify.rs` に置き、`lower_until(Pass::Simplify)` の IR をスナップショットで見る。
+
+| テスト | 入力の形 | 確かめること |
+|---|---|---|
+| `a_bool_match_in_a_condition_jumps_straight_to_the_branch` | `if (match o with \| Some _ -> True \| None -> False) then a else b` | `match` の各枝が、`Bool` で分岐し直さずに `then` と `else` の枝へ直接 `jump` する。`&&` と `||` 以外の経路でも B2 が効くことを確かめる |
+| `known_tags_of_a_larger_type_jump_straight_to_their_arm` | 末尾にない `if` で `Red`、`Green`、`Blue` のどれかを作り、その値で3つの枝の `match` をする | 2つより多いタグでも、各定数の `jump` がその枝へ直接向かう。`jump` が1つの枝は B3 で戻る |
+| `a_mixed_switch_splits_only_the_arms_without_fields` | `match (if c then None else Some x) with \| None -> a \| Some y -> g y` | `None` の枝だけが引数0個の join point になり、定数の `jump` がそこへ直接向かう。`Some y` の枝は `Switch` に残り、`Some` の値を渡す `jump` は元の join point を通る |
+| `arms_with_fields_keep_the_join_point_argument` | `let o = if c then None else Some x` の後に `match o with \| None -> a \| Some y -> h o y` | フィールドを束縛する枝の中では、join point の引数をタグの定数に置き換えない |
+| `jumps_that_pass_constructed_values_are_left_alone` | `match (if c then Some 1 else Some 2) with \| Some n -> n \| None -> 0` | どの `jump` も `Rhs::Con` で作った変数を渡すので、B2 は join point を変えない。引数を持つコンストラクタの case-of-case を後に回したことを、テストで示す |
+| `split_arms_of_a_data_type_use_the_known_tag` | `let c = if b then Red else Green` の後に、`Red` の枝で `c` を使う `match` | 切り出した引数のない枝の中では、引数を `#0` に置き換える。今の `split_arms_use_the_known_tag` の `data` 版 |
+
+Perceus の後の IR は、`crates/eml_core_ir/tests/perceus.rs` に1つ足す。
+
+| テスト | 確かめること |
+|---|---|
+| `a_split_switch_still_unpacks_the_arm_with_fields` | `a_mixed_switch_splits_only_the_arms_without_fields` と同じ入力で、`Switch` に残った `Some y` の枝が `y` を所有して始まり、使わない値の `decref` が釣り合う |
+
+実行の結果は UI テスト `run/data/case_of_case.em` で確かめる。上の入力の形をまとめ、各枝が `println` で順に出力する。`debug_heap` で、切り出した枝と残った枝のどちらを通っても箱が漏れないことを確かめる。
+
 UI テスト:
 
 - `run/data/`: `Option`、再帰する `List` の長さと和、入れ子のパターン、コンストラクタの部分適用と関数値、中置のコンストラクタ、`let` とラムダと等式の引数の反駁不可能なパターン (`data Box a = | Box a`)、E4004 の Warning (stderr のスナップショットで確かめる)
