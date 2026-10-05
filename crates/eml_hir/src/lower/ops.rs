@@ -136,7 +136,10 @@ impl BodyLowering<'_> {
         match op {
             // 短絡評価にするため `if` に脱糖する (docs/spec/declarations.md)
             "&&" => {
-                let otherwise = self.alloc(ExprKind::Path(Res::Builtin(Builtin::False)), op_range);
+                let otherwise = self.alloc(
+                    ExprKind::Path(Res::Constructor(self.lang.false_ctor)),
+                    op_range,
+                );
                 self.alloc(
                     ExprKind::If {
                         condition: lhs,
@@ -147,7 +150,10 @@ impl BodyLowering<'_> {
                 )
             }
             "||" => {
-                let then = self.alloc(ExprKind::Path(Res::Builtin(Builtin::True)), op_range);
+                let then = self.alloc(
+                    ExprKind::Path(Res::Constructor(self.lang.true_ctor)),
+                    op_range,
+                );
                 self.alloc(
                     ExprKind::If {
                         condition: lhs,

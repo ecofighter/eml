@@ -1,0 +1,14 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: rendered
+input_file: tests/ui/check-fail/types/constructor_pattern_mismatch.em
+---
+[E2001] Error: mismatched types
+    ╭─[ check-fail/types/constructor_pattern_mismatch.em:12:5 ]
+    │
+ 12 │   | Some x -> x
+    │     ───┬──  
+    │        ╰──── expected `List Int`, found `Option _`
+    │ 
+    │ Note: `Some` is a constructor of `Option`
+────╯

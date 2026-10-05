@@ -2,12 +2,15 @@ use std::collections::HashMap;
 
 use eml_diagnostics::{Diagnostic, Label};
 use eml_hir::builtin::{BUILTINS, Builtin};
-use eml_hir::{FunctionId, Generics, Module, OperationId, RowRef, TypeRef, TypeRefId, TypeRefKind};
+use eml_hir::{
+    ConstructorId, FunctionId, Generics, Module, OperationId, RowRef, TypeRef, TypeRefId,
+    TypeRefKind,
+};
 use la_arena::Arena;
 use la_arena::ArenaMap;
 
 use crate::kind::{Bound, KindVar};
-use crate::scheme::{Rigids, Scheme, lower_operation, lower_signature};
+use crate::scheme::{Rigids, Scheme, lower_constructor, lower_operation, lower_signature};
 use crate::table::{Row, Table, TyShape};
 use crate::ty::{EffectLabel, KindConstraint, KindTerm, Linearity, Type};
 use crate::{BodyTypes, TypedModule, codes, scc, usage};
@@ -24,6 +27,7 @@ pub(crate) fn check_module(module: &Module) -> (TypedModule, Vec<Diagnostic>) {
     let mut table = Table::new(
         module.lang,
         &module.types,
+        &module.constructors,
         &module.effects,
         &module.operations,
     );
@@ -68,6 +72,17 @@ pub(crate) fn check_module(module: &Module) -> (TypedModule, Vec<Diagnostic>) {
         let mut scheme = Scheme::new(ty, &rigids);
         scheme.generalize(&table);
         operations.insert(id, scheme);
+    }
+    // コンストラクタは本体を持たない値なので、組み込みと同じく作ってすぐ多相化する
+    let mut constructors: ArenaMap<ConstructorId, Scheme> = ArenaMap::default();
+    for (id, constructor) in module.constructors.iter() {
+        let def = &module.types[constructor.ty];
+        let rigids = Rigids::new(&mut table, &def.generics);
+        let ty = lower_constructor(&mut table, def, constructor, &rigids);
+        table.closure_kinds(ty, constructor.fields.len(), &[]);
+        let mut scheme = Scheme::new(ty, &rigids);
+        scheme.generalize(&table);
+        constructors.insert(id, scheme);
     }
     let mut diagnostics = Vec::new();
     let mut rigids = ArenaMap::default();
@@ -114,6 +129,7 @@ pub(crate) fn check_module(module: &Module) -> (TypedModule, Vec<Diagnostic>) {
                 schemes: &schemes,
                 builtins: &builtins,
                 operations: &operations,
+                constructors: &constructors,
                 table: &mut table,
                 diagnostics: &mut diagnostics,
                 ambient: Row::pure(),
@@ -159,6 +175,15 @@ pub(crate) fn check_module(module: &Module) -> (TypedModule, Vec<Diagnostic>) {
     }
     for (id, scheme) in operations.iter() {
         typed.operations.insert(
+            id,
+            crate::Scheme {
+                ty: table.export(scheme.ty),
+                constraints: kind_constraints(&table, scheme),
+            },
+        );
+    }
+    for (id, scheme) in constructors.iter() {
+        typed.constructors.insert(
             id,
             crate::Scheme {
                 ty: table.export(scheme.ty),

@@ -193,7 +193,6 @@ impl ProgramBuilder {
                     CExpr::TailCall(Call::Apply(atoms[outer], vec![Atom::Var(middle)])),
                 )
             }
-            Lowering::Constructor(_) => unreachable!("constructors are values, not functions"),
         };
         let mut exprs = vec![last];
         let mut body = CExprId(0);

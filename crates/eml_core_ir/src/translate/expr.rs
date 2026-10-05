@@ -73,7 +73,6 @@ impl FnLowering<'_> {
             Lowering::Compose { .. } => {
                 Rhs::call(Call::Direct(self.program.wrapper(builtin), args))
             }
-            Lowering::Constructor(_) => unreachable!("constructors are values, not functions"),
         };
         if rest.is_empty() {
             return self.bind(out, "t", ty, rhs);
@@ -116,18 +115,16 @@ impl FnLowering<'_> {
                 let ty = Type::Con {
                     id: string,
                     name: self.module.types[string].name.clone(),
+                    args: Vec::new(),
                 };
                 self.bind(out, "s", &ty, Rhs::ConstString(index))
             }
             ExprKind::Path(Res::Local(local)) => self.locals[*local],
-            ExprKind::Path(Res::Builtin(builtin)) => match lowering(*builtin) {
-                Lowering::Constructor(tag) => Atom::Tag(tag),
-                _ => {
-                    let wrapper = self.program.wrapper(*builtin);
-                    let ty = self.ty(id);
-                    self.bind(out, "c", &ty, Rhs::MakeClosure(wrapper, Vec::new()))
-                }
-            },
+            ExprKind::Path(Res::Builtin(builtin)) => {
+                let wrapper = self.program.wrapper(*builtin);
+                let ty = self.ty(id);
+                self.bind(out, "c", &ty, Rhs::MakeClosure(wrapper, Vec::new()))
+            }
             // 引数のないトップレベルの値は、参照するたびに呼び出す (docs/spec/core-ir.md)
             ExprKind::Path(Res::Function(function)) => {
                 let target = self.indices[*function];
@@ -145,11 +142,15 @@ impl FnLowering<'_> {
                 let ty = self.ty(id);
                 self.bind(out, "c", &ty, Rhs::MakeClosure(wrapper, Vec::new()))
             }
-            ExprKind::Path(Res::Constructor(_)) | ExprKind::Match { .. } => {
-                unreachable!(
-                    "the type checker reports constructors and `match` as not yet supported"
-                )
+            ExprKind::Path(Res::Constructor(ctor)) => {
+                let constructor = &self.module.constructors[*ctor];
+                assert!(
+                    constructor.fields.is_empty(),
+                    "constructors with fields are not lowered to Core IR"
+                );
+                Atom::Tag(constructor.tag)
             }
+            ExprKind::Match { .. } => unreachable!("`match` is not lowered to Core IR"),
             ExprKind::Call {
                 callee,
                 args,

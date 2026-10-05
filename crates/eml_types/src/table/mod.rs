@@ -1,6 +1,8 @@
 use crate::kind::{Bound, KindOrigin, KindVar, Lattice};
 use crate::ty::{EffectLabel, Linearity, Multiplicity, RowTail, Type};
-use eml_hir::{EffectDef, EffectId, LangItems, OpMultiplicity, Operation, TypeDef, TypeDefId};
+use eml_hir::{
+    Constructor, EffectDef, EffectId, LangItems, OpMultiplicity, Operation, TypeDef, TypeDefId,
+};
 use la_arena::{Arena, ArenaMap};
 use std::collections::HashMap;
 
@@ -89,7 +91,7 @@ impl Row {
 
 #[derive(Debug, Clone)]
 pub(crate) enum TyShape {
-    Con(TypeDefId),
+    Con(TypeDefId, Vec<Ty>),
     Record(Vec<(String, Ty)>),
     Fn {
         param: Ty,
@@ -169,6 +171,8 @@ pub(crate) struct Table {
     pub unit: Ty,
     pub error: Ty,
     pub lang: LangItems,
+    /// 型構成子ごとの、Kind に効く型引数の位置 (`crate::data`)。
+    effective: ArenaMap<TypeDefId, Vec<bool>>,
     /// 名前を持つのは、`Module` を渡さずに `display` と `export` が名前を出せるようにするため。
     type_names: ArenaMap<TypeDefId, String>,
     effect_names: ArenaMap<EffectId, String>,
@@ -186,6 +190,7 @@ impl Table {
     pub fn new(
         lang: LangItems,
         types: &Arena<TypeDef>,
+        constructors: &Arena<Constructor>,
         effects: &Arena<EffectDef>,
         operations: &Arena<Operation>,
     ) -> Table {
@@ -225,6 +230,7 @@ impl Table {
             unit: Ty(0),
             error: Ty(0),
             lang,
+            effective: crate::data::effective_params(types, constructors),
             type_names: types
                 .iter()
                 .map(|(id, def)| (id, def.name.clone()))
@@ -235,9 +241,9 @@ impl Table {
                 .collect(),
             effect_multiplicities,
         };
-        table.int = table.alloc(TyShape::Con(lang.int));
-        table.string = table.alloc(TyShape::Con(lang.string));
-        table.bool = table.alloc(TyShape::Con(lang.bool));
+        table.int = table.alloc(TyShape::Con(lang.int, Vec::new()));
+        table.string = table.alloc(TyShape::Con(lang.string, Vec::new()));
+        table.bool = table.alloc(TyShape::Con(lang.bool, Vec::new()));
         table.unit = table.alloc(TyShape::Record(Vec::new()));
         table.error = table.alloc(TyShape::Error);
         table

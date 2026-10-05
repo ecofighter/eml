@@ -16,7 +16,12 @@ impl Table {
             // `Error` が関わる制約からは診断を出さない (docs/spec/types.md の「エラーの扱い」)
             (TyShape::Error, _) | (_, TyShape::Error) => Ok(()),
             (TyShape::Rigid(x), TyShape::Rigid(y)) if x == y => Ok(()),
-            (TyShape::Con(x), TyShape::Con(y)) if x == y => Ok(()),
+            (TyShape::Con(x, xs), TyShape::Con(y, ys)) if x == y && xs.len() == ys.len() => {
+                for (x, y) in xs.iter().zip(&ys) {
+                    self.unify(*x, *y)?;
+                }
+                Ok(())
+            }
             (TyShape::Record(xs), TyShape::Record(ys))
                 if xs.len() == ys.len() && xs.iter().zip(&ys).all(|((l, _), (m, _))| l == m) =>
             {
@@ -100,7 +105,8 @@ impl Table {
                         .iter()
                         .any(|label| label.args.iter().any(|&arg| self.occurs(var, arg)))
             }
-            TyShape::Con(_) | TyShape::Rigid(_) | TyShape::Error => false,
+            TyShape::Con(_, args) => args.iter().any(|arg| self.occurs(var, *arg)),
+            TyShape::Rigid(_) | TyShape::Error => false,
         }
     }
 

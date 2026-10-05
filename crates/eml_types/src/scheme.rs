@@ -1,8 +1,8 @@
 //! シグネチャのスキームと、その具体化 (docs/spec/types.md の「推論」)。
 
 use eml_hir::{
-    EffectRef, Generics, Operation, RowRef, RowVarId, Signature, TypeRef, TypeRefId, TypeRefKind,
-    TypeVarId,
+    Constructor, EffectRef, Generics, Operation, RowRef, RowVarId, Signature, TypeDef, TypeRef,
+    TypeRefId, TypeRefKind, TypeVarId,
 };
 use la_arena::{Arena, ArenaMap};
 
@@ -125,10 +125,38 @@ impl Scheme {
     }
 }
 
+/// 型の注釈の矢印の線形性の決め方。
+#[derive(Clone, Copy)]
+enum Arrows {
+    /// Kind 変数にして推論する。
+    Inferred,
+    /// 一番外側の矢印だけを `Unr` にし、内側は推論する。トップレベルの関数のシグネチャに使う。
+    OutermostUnr,
+    /// すべて `Unr` にする。`data` のフィールドの型に使う。表面の構文で `m` を書けないので、操作の引数の型と同じく
+    /// `Unr` に固定する (docs/spec/types.md の「Kind」)。
+    Unr,
+}
+
+impl Arrows {
+    /// 引数、戻り値、型引数の位置の決め方。
+    fn inner(self) -> Arrows {
+        match self {
+            Arrows::Unr => Arrows::Unr,
+            Arrows::Inferred | Arrows::OutermostUnr => Arrows::Inferred,
+        }
+    }
+}
+
 /// シグネチャを型の表に変換する。一番外側の矢印はトップレベルの関数そのもので、何度でも呼べるので `Unr` である
 /// (docs/spec/types.md の「関数型」)。
 pub(crate) fn lower_signature(table: &mut Table, signature: &Signature, rigids: &Rigids) -> Ty {
-    lower(table, &signature.types, rigids, signature.ty, true)
+    lower(
+        table,
+        &signature.types,
+        rigids,
+        signature.ty,
+        Arrows::OutermostUnr,
+    )
 }
 
 /// 本体の注釈を型の表に変換する。
@@ -138,17 +166,16 @@ pub(crate) fn lower_type(
     rigids: &Rigids,
     id: TypeRefId,
 ) -> Ty {
-    lower(table, types, rigids, id, false)
+    lower(table, types, rigids, id, Arrows::Inferred)
 }
 
-/// `outermost_unr` が真なら一番外側の矢印を `Unr` にする。ほかの矢印の線形性は Kind 変数にして推論する
-/// (docs/spec/types.md の「関数型」)。
+/// 矢印の線形性は `arrows` に従う。推論するものは Kind 変数にする (docs/spec/types.md の「関数型」)。
 fn lower(
     table: &mut Table,
     types: &Arena<TypeRef>,
     rigids: &Rigids,
     id: TypeRefId,
-    outermost_unr: bool,
+    arrows: Arrows,
 ) -> Ty {
     match &types[id].kind {
         TypeRefKind::Error => table.error,
@@ -157,28 +184,33 @@ fn lower(
         TypeRefKind::Con(id, _) if *id == table.lang.int => table.int,
         TypeRefKind::Con(id, _) if *id == table.lang.string => table.string,
         TypeRefKind::Con(id, _) if *id == table.lang.bool => table.bool,
-        TypeRefKind::Con(id, _) => table.alloc(TyShape::Con(*id)),
+        TypeRefKind::Con(id, args) => {
+            let mut lowered = Vec::new();
+            for &arg in args {
+                lowered.push(lower(table, types, rigids, arg, arrows.inner()));
+            }
+            table.alloc(TyShape::Con(*id, lowered))
+        }
         TypeRefKind::Var(var) => rigids.tys[*var],
         TypeRefKind::Fn { param, row, ret } => {
-            let param = lower(table, types, rigids, *param, false);
-            let ret = lower(table, types, rigids, *ret, false);
+            let param = lower(table, types, rigids, *param, arrows.inner());
+            let ret = lower(table, types, rigids, *ret, arrows.inner());
             let row = match row {
                 // 省略した row は空の row である (docs/spec/types.md の「関数型」)
                 RowRef::Omitted => Row::pure(),
                 RowRef::Closed { effects, .. } => {
-                    Row::closed(lower_labels(table, types, rigids, effects))
+                    Row::closed(lower_labels(table, types, rigids, effects, arrows.inner()))
                 }
                 RowRef::Open { effects, tail, .. } => Row {
-                    labels: lower_labels(table, types, rigids, effects),
+                    labels: lower_labels(table, types, rigids, effects, arrows.inner()),
                     tail: Tail::Var(rigids.rows[*tail]),
                 },
                 // 未定義のエフェクトか、解決できない row 変数の跡。どのエフェクトも受け入れて、診断を連鎖させない
                 RowRef::Error => Row::error(),
             };
-            let lin = if outermost_unr {
-                ArrowLin::Known(Linearity::Unr)
-            } else {
-                table.fresh_arrow_lin()
+            let lin = match arrows {
+                Arrows::Inferred => table.fresh_arrow_lin(),
+                Arrows::OutermostUnr | Arrows::Unr => ArrowLin::Known(Linearity::Unr),
             };
             table.function_with(param, lin, row, ret)
         }
@@ -190,12 +222,13 @@ fn lower_labels(
     types: &Arena<TypeRef>,
     rigids: &Rigids,
     effects: &[EffectRef],
+    arrows: Arrows,
 ) -> Vec<Label> {
     let mut labels = Vec::new();
     for effect in effects {
         let mut args = Vec::new();
         for &arg in &effect.args {
-            args.push(lower(table, types, rigids, arg, false));
+            args.push(lower(table, types, rigids, arg, arrows));
         }
         labels.push(Label {
             effect: effect.effect,
@@ -203,6 +236,35 @@ fn lower_labels(
         });
     }
     labels
+}
+
+/// コンストラクタのスキームの型。`Some : a -> Option a` の形で、宣言の型引数で量化する。矢印の row は `<>` である。
+/// 一番外側の矢印は、トップレベルの関数と同じく何度でも呼べるので `Unr` にし、内側の矢印は推論する。部分適用の
+/// クロージャはそれまでの引数を捕まえるためである (docs/spec/types.md の「関数型」)。フィールドの型の中の矢印は
+/// `Unr` に固定する。
+pub(crate) fn lower_constructor(
+    table: &mut Table,
+    def: &TypeDef,
+    constructor: &Constructor,
+    rigids: &Rigids,
+) -> Ty {
+    let args = def
+        .generics
+        .type_vars
+        .iter()
+        .map(|(var, _)| rigids.tys[var])
+        .collect();
+    let mut ty = table.alloc(TyShape::Con(constructor.ty, args));
+    for (index, &field) in constructor.fields.iter().enumerate().rev() {
+        let field = lower(table, &def.types, rigids, field, Arrows::Unr);
+        let lin = if index == 0 {
+            ArrowLin::Known(Linearity::Unr)
+        } else {
+            table.fresh_arrow_lin()
+        };
+        ty = table.function_with(field, lin, Row::pure(), ty);
+    }
+    ty
 }
 
 /// 操作のスキームの型。シグネチャの、引数の個数の分だけたどった最後の矢印に、操作のエフェクトだけの row を付ける

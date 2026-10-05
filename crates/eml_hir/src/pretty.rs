@@ -6,7 +6,11 @@ use crate::hir::*;
 
 pub fn pretty(module: &Module) -> String {
     let mut out = String::new();
-    for (_, def) in module.types.iter() {
+    for (id, def) in module.types.iter() {
+        // Prelude の `Bool` は、どのモジュールにもあるので表示しない
+        if id == module.lang.bool {
+            continue;
+        }
         let TypeDefKind::Data { constructors } = &def.kind else {
             continue;
         };

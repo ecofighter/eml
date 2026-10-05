@@ -7,8 +7,8 @@ use la_arena::Arena;
 
 use crate::builtin::Builtin;
 use crate::hir::{
-    ConstructorId, EffectDef, EffectId, FunctionId, Generics, LangItems, OperationId, TypeDef,
-    TypeDefId,
+    Constructor, ConstructorId, EffectDef, EffectId, FunctionId, Generics, LangItems, OperationId,
+    TypeDef, TypeDefId,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -106,30 +106,67 @@ impl ItemScope {
     }
 }
 
-/// 組み込みの型とエフェクトを item として登録し、lang item を返す (docs/spec/declarations.md と docs/spec/effects.md)。
+/// Prelude より前に作る組み込みの item。`Bool` は Prelude の `data` である。
+pub(super) struct BuiltinItems {
+    pub int: TypeDefId,
+    pub string: TypeDefId,
+    pub unit: TypeDefId,
+    pub io: EffectId,
+}
+
+/// 組み込みの型とエフェクトを item として登録する (docs/spec/declarations.md と docs/spec/effects.md)。
 pub(super) fn builtin_items(
     types: &mut Arena<TypeDef>,
     effects: &mut Arena<EffectDef>,
     scope: &mut ItemScope,
-) -> LangItems {
+) -> BuiltinItems {
     let mut ty = |name: &str| {
         let id = types.alloc(TypeDef::builtin(name));
         scope.define_type(name, id, 0);
         id
     };
-    let (int, string, bool, unit) = (ty("Int"), ty("String"), ty("Bool"), ty("Unit"));
+    let (int, string, unit) = (ty("Int"), ty("String"), ty("Unit"));
     let io = effects.alloc(EffectDef {
         name: "IO".to_string(),
         generics: Generics::default(),
         operations: Vec::new(),
     });
     scope.define_effect("IO", io, 0);
-    LangItems {
+    BuiltinItems {
         int,
         string,
-        bool,
         unit,
         io,
+    }
+}
+
+/// Prelude を変換した直後、ユーザーの定義が同じ名前を上書きする前に呼ぶ。
+pub(super) fn lang_items(
+    builtin: BuiltinItems,
+    scope: &ItemScope,
+    constructors: &Arena<Constructor>,
+) -> LangItems {
+    let Some(TypeItem::Type(bool)) = scope.type_item("Bool") else {
+        unreachable!("the Prelude declares `Bool`");
+    };
+    let constructor = |name: &str| match scope.constructor(name) {
+        Some(id) => id,
+        None => unreachable!("the Prelude declares `{name}`"),
+    };
+    let (false_ctor, true_ctor) = (constructor("False"), constructor("True"));
+    // Core IR は `Bool` を、タグ 0 の `False` と 1 の `True` で表す (docs/spec/core-ir.md)
+    assert_eq!(
+        (constructors[false_ctor].tag, constructors[true_ctor].tag),
+        (0, 1)
+    );
+    LangItems {
+        int: builtin.int,
+        string: builtin.string,
+        bool,
+        unit: builtin.unit,
+        io: builtin.io,
+        true_ctor,
+        false_ctor,
     }
 }
 

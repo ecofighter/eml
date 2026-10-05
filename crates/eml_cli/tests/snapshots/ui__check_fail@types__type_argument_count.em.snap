@@ -1,0 +1,19 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: rendered
+input_file: tests/ui/check-fail/types/type_argument_count.em
+---
+[E1015] Error: `Option` takes 1 type argument, but 0 were given
+   ╭─[ check-fail/types/type_argument_count.em:6:8 ]
+   │
+ 6 │ size : Option -> Int
+   │        ───┬──  
+   │           ╰──── expected 1 type argument
+───╯
+[E1015] Error: `Option` takes 1 type argument, but 2 were given
+   ╭─[ check-fail/types/type_argument_count.em:9:8 ]
+   │
+ 9 │ pair : Option Int Int -> Int
+   │        ───────┬──────  
+   │               ╰──────── expected 1 type argument
+───╯

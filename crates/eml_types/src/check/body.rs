@@ -1,10 +1,10 @@
 use std::collections::HashMap;
 
-use eml_diagnostics::{Diagnostic, FileId, Label, TextRange, TextSize};
+use eml_diagnostics::{Diagnostic, FileId, Label, TextRange};
 use eml_hir::builtin::Builtin;
 use eml_hir::{
-    Body, ExprId, ExprKind, Function, FunctionId, Literal, LocalId, Module, OperationId, PatId,
-    PatKind, Res, Stmt, TypeRefKind,
+    Body, ConstructorId, ExprId, ExprKind, Function, FunctionId, Literal, LocalId, MatchArm,
+    Module, OperationId, PatId, PatKind, Res, Stmt, TypeRefKind,
 };
 use la_arena::ArenaMap;
 
@@ -34,6 +34,8 @@ pub(super) struct BodyCheck<'a> {
     pub(super) builtins: &'a HashMap<Builtin, Scheme>,
     /// エフェクトの操作のスキーム。
     pub(super) operations: &'a ArenaMap<OperationId, Scheme>,
+    /// コンストラクタのスキーム。
+    pub(super) constructors: &'a ArenaMap<ConstructorId, Scheme>,
     pub(super) table: &'a mut Table,
     pub(super) diagnostics: &'a mut Vec<Diagnostic>,
     /// 本体が起こしてよいエフェクト。シグネチャで最後にたどった矢印の row か、本体を囲むラムダで最後にたどった
@@ -137,6 +139,10 @@ impl BodyCheck<'_> {
                 );
                 self.typing.exprs.insert(id, expected);
             }
+            ExprKind::Match { scrutinee, arms } => {
+                self.match_expr(*scrutinee, arms, Expectation::Has(expected, origin));
+                self.typing.exprs.insert(id, expected);
+            }
             ExprKind::Block { stmts, tail } => {
                 self.block(expr.range, stmts, *tail, Expectation::Has(expected, origin));
                 self.typing.exprs.insert(id, expected);
@@ -207,14 +213,8 @@ impl BodyCheck<'_> {
                 ret,
             } => self.handle(*effect, *handled, clauses, ret.as_ref()),
             ExprKind::Resume { k, arg } => self.resume(id, *k, *arg),
-            ExprKind::Match { .. } => {
-                let keyword = TextRange::at(expr.range.start(), TextSize::of("match"));
-                self.diagnostics.push(Diagnostic::not_yet_supported(
-                    self.file(),
-                    keyword,
-                    "`match` is not supported yet",
-                ));
-                self.table.error
+            ExprKind::Match { scrutinee, arms } => {
+                self.match_expr(*scrutinee, arms, Expectation::None)
             }
             // `drop` はどんな値も受け取る。値を捨てることは使用の1回に数える (docs/spec/linearity.md)
             ExprKind::Drop(value) => {
@@ -260,6 +260,34 @@ impl BodyCheck<'_> {
                     }
                     Expectation::None => unit,
                 }
+            }
+        }
+    }
+
+    /// 各枝のパターンを scrutinee の型で検査する。期待する型があれば枝の本体をその型で検査し、なければ最初の枝の型を
+    /// 推論して後の枝をそれに合わせる (`if` と同じ)。
+    fn match_expr(&mut self, scrutinee: ExprId, arms: &[MatchArm], expectation: Expectation) -> Ty {
+        let scrutinee_ty = self.infer_expr(scrutinee);
+        for arm in arms {
+            self.bind_pat(arm.pat, scrutinee_ty);
+        }
+        match expectation {
+            Expectation::Has(expected, origin) => {
+                for arm in arms {
+                    self.check_expr(arm.body, expected, origin.clone());
+                }
+                expected
+            }
+            Expectation::None => {
+                let Some((first, rest)) = arms.split_first() else {
+                    return self.table.fresh_var();
+                };
+                let ty = self.infer_expr(first.body);
+                let first_range = self.body.exprs[first.body].range;
+                for arm in rest {
+                    self.check_expr(arm.body, ty, Origin::MatchArms(first_range));
+                }
+                ty
             }
         }
     }
@@ -356,16 +384,15 @@ impl BodyCheck<'_> {
                     this.reference(function)
                 })
             }
-            Res::Constructor(_) => {
-                self.diagnostics.push(Diagnostic::not_yet_supported(
-                    self.file(),
-                    range,
-                    "constructors are not supported yet",
-                ));
-                return self.table.error;
+            Res::Constructor(constructor) => {
+                let name = module.constructors[constructor].name.clone();
+                self.with_kind_origin(range, KindReason::Passed(name), |this| {
+                    match this.constructors.get(constructor) {
+                        Some(scheme) => scheme.instantiate(this.table),
+                        None => this.table.error,
+                    }
+                })
             }
-            // コンストラクタは Prelude にない。段階4で `data Bool` に置き換える
-            Res::Builtin(Builtin::True | Builtin::False) => self.table.bool,
             Res::Builtin(builtin) => {
                 let reason = KindReason::Passed(builtin.name().to_string());
                 self.with_kind_origin(range, reason, |this| match this.builtins.get(&builtin) {
@@ -552,22 +579,60 @@ impl BodyCheck<'_> {
                 self.typing.locals.insert(*local, ty);
             }
             PatKind::Annot { pat, .. } => self.bind_pat(*pat, ty),
-            PatKind::Con { .. } => {
-                self.diagnostics.push(Diagnostic::not_yet_supported(
-                    self.file(),
-                    body.pats[pat].range,
-                    "constructor patterns are not supported yet",
-                ));
-                let error = self.table.error;
-                for local in body.pat_bindings(pat) {
-                    self.typing.locals.insert(local, error);
-                }
-            }
+            PatKind::Con { ctor, args } => self.constructor_pattern(pat, *ctor, args, ty),
             PatKind::Wildcard | PatKind::Missing => {}
             PatKind::Unit => {
                 let unit = self.table.unit;
                 self.expect(body.pats[pat].range, ty, unit, &Origin::UnitPattern);
             }
+        }
+    }
+
+    /// コンストラクタのパターン。スキームを具体化し、結果の型を期待する型と単一化してから、引数のパターンを
+    /// フィールドの型で検査する。HIR が引数の個数を確かめている (E1016) ので、引数とフィールドは同じ数である。
+    fn constructor_pattern(
+        &mut self,
+        pat: PatId,
+        ctor: ConstructorId,
+        args: &[PatId],
+        expected: Ty,
+    ) {
+        let range = self.body.pats[pat].range;
+        let constructors = self.constructors;
+        let mut ty = match constructors.get(ctor) {
+            Some(scheme) => self.with_kind_origin(range, KindReason::Unified, |this| {
+                scheme.instantiate(this.table)
+            }),
+            None => self.table.error,
+        };
+        let mut fields = Vec::new();
+        for _ in args {
+            match self.table.shape(ty).clone() {
+                TyShape::Fn { param, ret, .. } => {
+                    fields.push(param);
+                    ty = ret;
+                }
+                _ => fields.push(self.table.error),
+            }
+        }
+        let unified = self.with_kind_origin(range, KindReason::Unified, |this| {
+            this.table.unify(ty, expected)
+        });
+        if unified.is_err() {
+            let constructor = &self.module.constructors[ctor];
+            let origin = Origin::ConstructorPattern {
+                constructor: constructor.name.clone(),
+                ty: self.module.types[constructor.ty].name.clone(),
+            };
+            self.mismatch(range, expected, ty, &origin);
+            // 型の合わないパターンの中は検査しない。網羅性の検査は、`Error` の型のパターンを含む `match` を飛ばす
+            // (docs/spec/exhaustiveness.md)
+            let error = self.table.error;
+            self.typing.pats.insert(pat, error);
+            fields = vec![error; args.len()];
+        }
+        for (&arg, field) in args.iter().zip(fields) {
+            self.bind_pat(arg, field);
         }
     }
 

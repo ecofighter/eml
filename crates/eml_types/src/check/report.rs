@@ -21,6 +21,13 @@ pub(super) enum Origin {
     IfCondition,
     IfBranches(TextRange),
     IfWithoutElse,
+    /// `match` の2つ目以降の枝。最初の枝の本体の範囲を持つ。
+    MatchArms(TextRange),
+    /// コンストラクタのパターン。コンストラクタと、それが作る型の名前を持つ。
+    ConstructorPattern {
+        constructor: String,
+        ty: String,
+    },
     Statement,
     UnitPattern,
     LambdaParameter,
@@ -291,6 +298,14 @@ impl BodyCheck<'_> {
                 *then_branch,
                 "the `then` branch has this type",
             )),
+            Origin::MatchArms(first) => diagnostic.with_secondary(Label::new(
+                file,
+                *first,
+                "the first arm has this type",
+            )),
+            Origin::ConstructorPattern { constructor, ty } => {
+                diagnostic.with_note(format!("`{constructor}` is a constructor of `{ty}`"))
+            }
             Origin::IfWithoutElse => {
                 diagnostic.with_note("an `if` without `else` must have type `Unit`")
             }

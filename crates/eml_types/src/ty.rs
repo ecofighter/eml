@@ -37,9 +37,11 @@ impl fmt::Display for EffectLabel {
 /// 型検査の結果として後の段階に渡す型。推論用の変数は解決済みで、解けずに残った変数は `Flexible` になる。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Type {
+    /// 型構成子とその型引数。`Int` などの組み込みの型は引数を持たない。
     Con {
         id: TypeDefId,
         name: String,
+        args: Vec<Type>,
     },
     /// 閉じたレコード。`Unit` は空のレコード、タプルは数字ラベルのレコードである (docs/spec/records.md)。
     Record(Vec<(String, Type)>),
@@ -115,7 +117,8 @@ impl Type {
                         .any(|e| e.args.iter().any(Type::contains_error))
                     || matches!(tail, Some(RowTail::Error))
             }
-            Type::Con { .. } | Type::Rigid(_) | Type::Flexible => false,
+            Type::Con { args, .. } => args.iter().any(Type::contains_error),
+            Type::Rigid(_) | Type::Flexible => false,
         }
     }
 }
@@ -123,7 +126,13 @@ impl Type {
 impl fmt::Display for Type {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Type::Con { name, .. } => f.write_str(name),
+            Type::Con { name, args, .. } => {
+                f.write_str(name)?;
+                for arg in args {
+                    write!(f, " {}", atomic(arg))?;
+                }
+                Ok(())
+            }
             Type::Record(fields) if fields.is_empty() => f.write_str("Unit"),
             Type::Record(fields) => {
                 f.write_str("{ ")?;
@@ -194,10 +203,11 @@ fn row_text(effects: &[EffectLabel], tail: &Option<RowTail>) -> String {
     }
 }
 
-/// 型の適用の引数の位置に置く形。関数型と継続の型は括弧で囲む。
+/// 型の適用の引数の位置に置く形。関数型、継続の型、引数を持つ型の適用は括弧で囲む。
 fn atomic(ty: &Type) -> String {
     match ty {
         Type::Fn { .. } | Type::Cont { .. } => format!("({ty})"),
+        Type::Con { args, .. } if !args.is_empty() => format!("({ty})"),
         _ => ty.to_string(),
     }
 }
@@ -216,6 +226,7 @@ mod tests {
         let mut con = |name: &str| Type::Con {
             id: types.alloc(TypeDef::builtin(name)),
             name: name.to_string(),
+            args: Vec::new(),
         };
         let pure = Type::Fn {
             param: Box::new(con("Int")),
@@ -251,6 +262,7 @@ mod tests {
         let mut con = |name: &str| Type::Con {
             id: types.alloc(TypeDef::builtin(name)),
             name: name.to_string(),
+            args: Vec::new(),
         };
         let int = con("Int");
         let unit = Type::unit();
@@ -294,6 +306,7 @@ mod tests {
         let int = Type::Con {
             id: types.alloc(TypeDef::builtin("Int")),
             name: "Int".to_string(),
+            args: Vec::new(),
         };
         let id = effects.alloc(EffectDef {
             name: "State".to_string(),

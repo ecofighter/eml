@@ -201,7 +201,8 @@ impl Table {
                     || self.row_occurs_in(var, *ret)
                     || self.row_occurs(var, row)
             }
-            TyShape::Var(_) | TyShape::Con(_) | TyShape::Rigid(_) | TyShape::Error => false,
+            TyShape::Con(_, args) => args.iter().any(|arg| self.row_occurs_in(var, *arg)),
+            TyShape::Var(_) | TyShape::Rigid(_) | TyShape::Error => false,
         }
     }
 

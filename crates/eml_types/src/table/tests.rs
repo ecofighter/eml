@@ -1,4 +1,5 @@
-use eml_hir::{EffectDef, Generics, LangItems, TypeDef};
+use eml_diagnostics::TextRange;
+use eml_hir::{Constructor, EffectDef, Generics, LangItems, TypeDef};
 use la_arena::Arena;
 
 use super::*;
@@ -6,19 +7,36 @@ use super::*;
 fn new_table() -> Table {
     let mut types = Arena::new();
     let mut effects = Arena::new();
-    let mut ty = |name: &str| types.alloc(TypeDef::builtin(name));
+    let mut constructors = Arena::new();
+    let int = types.alloc(TypeDef::builtin("Int"));
+    let string = types.alloc(TypeDef::builtin("String"));
+    let bool = types.alloc(TypeDef::builtin("Bool"));
+    let unit = types.alloc(TypeDef::builtin("Unit"));
+    let mut constructor = |name: &str, tag| {
+        constructors.alloc(Constructor {
+            name: name.to_string(),
+            range: TextRange::default(),
+            ty: bool,
+            tag,
+            fields: Vec::new(),
+        })
+    };
+    let false_ctor = constructor("False", 0);
+    let true_ctor = constructor("True", 1);
     let lang = LangItems {
-        int: ty("Int"),
-        string: ty("String"),
-        bool: ty("Bool"),
-        unit: ty("Unit"),
+        int,
+        string,
+        bool,
+        unit,
         io: effects.alloc(EffectDef {
             name: "IO".to_string(),
             generics: Generics::default(),
             operations: Vec::new(),
         }),
+        true_ctor,
+        false_ctor,
     };
-    Table::new(lang, &types, &effects, &Arena::new())
+    Table::new(lang, &types, &constructors, &effects, &Arena::new())
 }
 
 #[test]

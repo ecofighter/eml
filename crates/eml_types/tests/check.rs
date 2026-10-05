@@ -346,8 +346,13 @@ fn builtin_schemes_are_exported() {
         ty(Builtin::ComposeFwd),
         "(a -> <e> b) -> (b -> <e> c) -> a -> <e> c"
     );
-    // コンストラクタは Prelude にない (段階4で `data Bool` にする)
-    assert!(!checked.typed.builtins.contains_key(&Builtin::True));
+    // コンストラクタは組み込みではなく、Prelude の `data Bool` のスキームとして書き出す
+    assert_eq!(
+        checked.typed.constructors[checked.module.lang.true_ctor]
+            .ty
+            .to_string(),
+        "Bool"
+    );
 }
 
 #[test]

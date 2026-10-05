@@ -31,7 +31,8 @@ impl Table {
                     work.push(*arg);
                 }
                 TyShape::Record(fields) => work.extend(fields.iter().rev().map(|(_, f)| *f)),
-                TyShape::Con(_) | TyShape::Var(_) | TyShape::Error => {}
+                TyShape::Con(_, args) => work.extend(args.iter().rev().copied()),
+                TyShape::Var(_) | TyShape::Error => {}
             }
         }
         names
@@ -60,9 +61,13 @@ impl Table {
 
     fn to_type(&self, ty: Ty, solved: bool) -> Type {
         match self.shape(ty).clone() {
-            TyShape::Con(id) => Type::Con {
+            TyShape::Con(id, args) => Type::Con {
                 id,
                 name: self.type_names[id].clone(),
+                args: args
+                    .into_iter()
+                    .map(|arg| self.to_type(arg, solved))
+                    .collect(),
             },
             TyShape::Record(fields) => Type::Record(
                 fields

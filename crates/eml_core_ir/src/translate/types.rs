@@ -4,7 +4,7 @@ use eml_hir::LangItems;
 use eml_hir::builtin::Builtin;
 use eml_types::{Linearity, Type};
 
-use crate::{FALSE, IoOp, PrimOp, TRUE, VarInfo};
+use crate::{IoOp, PrimOp, VarInfo};
 
 /// ヒープに置く値の型。`Unr` でボックス化した変数が RC の対象になる。関数値と型変数の値は、ヒープのクロージャや
 /// 文字列かもしれない。インタプリタの `dup` / `decref` はヒープにない値を無視するので、多めに対象にしても正しく動く
@@ -48,7 +48,6 @@ pub(super) enum Lowering {
     Compose {
         forward: bool,
     },
-    Constructor(u32),
 }
 
 pub(super) fn lowering(builtin: Builtin) -> Lowering {
@@ -71,7 +70,5 @@ pub(super) fn lowering(builtin: Builtin) -> Lowering {
         Builtin::StrConcat => Lowering::Prim(PrimOp::StrConcat),
         Builtin::ComposeFwd => Lowering::Compose { forward: true },
         Builtin::ComposeBwd => Lowering::Compose { forward: false },
-        Builtin::True => Lowering::Constructor(TRUE),
-        Builtin::False => Lowering::Constructor(FALSE),
     }
 }

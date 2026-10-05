@@ -6,8 +6,6 @@ pub enum Builtin {
     Println,
     ShowInt,
     Not,
-    True,
-    False,
     IntAdd,
     IntSub,
     IntMul,
@@ -51,8 +49,6 @@ pub const BUILTINS: &[BuiltinInfo] = &[
     info(Builtin::Println, "println", Access::Named, 1),
     info(Builtin::ShowInt, "show_int", Access::Named, 1),
     info(Builtin::Not, "not", Access::Named, 1),
-    info(Builtin::True, "True", Access::Named, 0),
-    info(Builtin::False, "False", Access::Named, 0),
     info(Builtin::IntNeg, "negate", Access::Internal, 1),
     info(Builtin::IntAdd, "+", Access::Operator, 2),
     info(Builtin::IntSub, "-", Access::Operator, 2),
@@ -171,7 +167,6 @@ mod tests {
     #[test]
     fn names_are_looked_up_by_access() {
         assert_eq!(Builtin::from_name("println"), Some(Builtin::Println));
-        assert_eq!(Builtin::from_name("True"), Some(Builtin::True));
         assert_eq!(Builtin::from_name("+"), None);
         assert_eq!(Builtin::from_name("negate"), None);
         assert_eq!(Builtin::binary_operator("+"), Some(Builtin::IntAdd));

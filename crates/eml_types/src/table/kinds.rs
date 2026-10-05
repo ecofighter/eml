@@ -1,10 +1,19 @@
 use super::*;
 
 impl Table {
-    /// 型の Kind の上界の候補。レコードはフィールドの join なので、フィールドごとの境界を並べる (docs/spec/types.md)。
+    /// 型の Kind の上界の候補。レコードとデータ型の Kind はフィールドの join なので、フィールドごとの境界を並べる
+    /// (docs/spec/types.md)。データ型では、Kind に効く位置の型引数の境界を並べる。
     pub fn kind_bounds(&self, ty: Ty) -> Vec<Bound<Linearity>> {
         match self.shape(ty) {
-            TyShape::Con(_) => vec![Bound::Const(Linearity::Unr)],
+            TyShape::Con(id, args) => {
+                let mut bounds = vec![Bound::Const(Linearity::Unr)];
+                for (&arg, &effective) in args.iter().zip(&self.effective[*id]) {
+                    if effective {
+                        bounds.extend(self.kind_bounds(arg));
+                    }
+                }
+                bounds
+            }
             TyShape::Record(fields) => fields
                 .iter()
                 .flat_map(|(_, field)| self.kind_bounds(*field))
@@ -114,7 +123,8 @@ impl Table {
                     work.push(*arg);
                 }
                 TyShape::Record(fields) => work.extend(fields.iter().rev().map(|(_, f)| *f)),
-                TyShape::Con(_) | TyShape::Var(_) | TyShape::Error => {}
+                TyShape::Con(_, args) => work.extend(args.iter().rev().copied()),
+                TyShape::Var(_) | TyShape::Error => {}
             }
         }
         (lin, mult)

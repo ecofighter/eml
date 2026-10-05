@@ -1,6 +1,7 @@
 //! 型、row、Kind の検査 (docs/spec/types.md)。
 
 mod check;
+mod data;
 mod kind;
 mod scc;
 mod scheme;
@@ -13,7 +14,7 @@ use std::fmt::Write;
 
 use eml_diagnostics::{Diagnostic, FileId, Label, TextRange};
 use eml_hir::builtin::Builtin;
-use eml_hir::{ExprId, FunctionId, LocalId, Module, OperationId, PatId};
+use eml_hir::{ConstructorId, ExprId, FunctionId, LocalId, Module, OperationId, PatId};
 use la_arena::ArenaMap;
 
 pub use ty::{EffectLabel, KindConstraint, KindTerm, Linearity, Multiplicity, RowTail, Type};
@@ -38,10 +39,13 @@ pub struct TypedModule {
     pub bodies: ArenaMap<FunctionId, BodyTypes>,
     pub main: Option<FunctionId>,
     /// Prelude のシグネチャから作った組み込みのスキーム。Core IR が、組み込みを包む関数の変数を boxed にするかを
-    /// 決めるのに使う。コンストラクタ (`True`、`False`) は含まない。
+    /// 決めるのに使う。
     pub builtins: HashMap<Builtin, Scheme>,
     /// エフェクトの操作のスキーム。Core IR が、操作を包む関数の変数を boxed にするかを決めるのに使う。
     pub operations: ArenaMap<OperationId, Scheme>,
+    /// コンストラクタのスキーム。`Some : a -> Option a` の形である。Core IR が、コンストラクタを包む関数の変数を
+    /// boxed にするかを決めるのに使う。
+    pub constructors: ArenaMap<ConstructorId, Scheme>,
 }
 
 /// 関数の型と、多相化したときに残った Kind の制約のうち、定数を片側に持つもの。変数どうしの制約は部分適用のたびに

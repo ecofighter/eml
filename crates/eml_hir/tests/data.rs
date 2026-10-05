@@ -3,7 +3,7 @@
 mod common;
 
 use common::{diagnostics, lower_text};
-use eml_hir::{Body, ExprKind, Module};
+use eml_hir::{Body, ExprKind, Module, TypeDefKind};
 
 #[test]
 fn data_declarations_become_items() {
@@ -164,4 +164,25 @@ fn a_name_is_bound_once_per_pattern_and_per_equation() {
             "E1017 8:14 `y` is bound more than once",
         ]
     );
+}
+
+#[test]
+fn bool_is_a_data_type_of_the_prelude() {
+    let lowered = eml_test_support::lower_clean("f : Bool -> Bool\nf b = b && True");
+    let module = &lowered.module;
+    let TypeDefKind::Data { constructors } = &module.types[module.lang.bool].kind else {
+        panic!("`Bool` is a data type");
+    };
+    let tags: Vec<(&str, u32)> = constructors
+        .iter()
+        .map(|&id| {
+            (
+                module.constructors[id].name.as_str(),
+                module.constructors[id].tag,
+            )
+        })
+        .collect();
+    assert_eq!(tags, [("False", 0), ("True", 1)]);
+    assert_eq!(module.constructors[module.lang.false_ctor].name, "False");
+    assert_eq!(module.constructors[module.lang.true_ctor].name, "True");
 }

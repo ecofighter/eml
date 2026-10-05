@@ -37,7 +37,14 @@ impl Table {
                     .collect();
                 self.alloc(TyShape::Record(fields))
             }
-            TyShape::Con(_) | TyShape::Var(_) | TyShape::Error => ty,
+            TyShape::Con(id, args) if !args.is_empty() => {
+                let args = args
+                    .into_iter()
+                    .map(|arg| self.copy_type(arg, subst))
+                    .collect();
+                self.alloc(TyShape::Con(id, args))
+            }
+            TyShape::Con(..) | TyShape::Var(_) | TyShape::Error => ty,
         }
     }
 

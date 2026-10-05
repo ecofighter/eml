@@ -16,6 +16,8 @@ pub(super) struct BodyLowering<'a> {
     pub(super) operations: &'a Arena<Operation>,
     /// コンストラクタのパターンの引数の個数を確かめる (E1016)。
     constructors: &'a Arena<Constructor>,
+    /// `&&` と `||` の脱糖が引く `Bool` のコンストラクタ。
+    pub(super) lang: LangItems,
     /// 本体の型の注釈。
     types: Arena<TypeRef>,
     /// 本体の注釈が引く、シグネチャの型変数と row 変数の表。
@@ -31,12 +33,15 @@ pub(super) struct BodyLowering<'a> {
 }
 
 impl<'a> BodyLowering<'a> {
+    // 引数はすべて、変換の間は読むだけの参照か診断の出力先で、まとめる型を作ると呼び出しが増えるだけになる
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn new(
         file: FileId,
         items: &'a ItemScope,
         effects: &'a Arena<EffectDef>,
         operations: &'a Arena<Operation>,
         constructors: &'a Arena<Constructor>,
+        lang: LangItems,
         generics: &'a mut Generics,
         diagnostics: &'a mut Vec<Diagnostic>,
     ) -> Self {
@@ -46,6 +51,7 @@ impl<'a> BodyLowering<'a> {
             effects,
             operations,
             constructors,
+            lang,
             types: Arena::new(),
             generics,
             diagnostics,

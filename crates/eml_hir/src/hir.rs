@@ -18,7 +18,7 @@ pub type ConstructorId = Idx<Constructor>;
 pub struct Module {
     pub file: FileId,
     pub functions: Arena<Function>,
-    /// 型の item。組み込みの `Int`、`String`、`Bool`、`Unit` と、`data` の宣言。
+    /// 型の item。組み込みの `Int`、`String`、`Unit`、Prelude の `Bool`、ユーザーの `data` の宣言。
     pub types: Arena<TypeDef>,
     /// `data` の宣言のコンストラクタ。値の名前空間に置くトップレベルの値である (docs/spec/modules.md の「名前空間」)。
     pub constructors: Arena<Constructor>,
@@ -116,6 +116,10 @@ pub struct LangItems {
     pub bool: TypeDefId,
     pub unit: TypeDefId,
     pub io: EffectId,
+    /// `&&` と `||` の脱糖が使う `Bool` のコンストラクタ。ユーザーが同じ名前のコンストラクタで隠しても、脱糖は
+    /// Prelude のものを指す。
+    pub true_ctor: ConstructorId,
+    pub false_ctor: ConstructorId,
 }
 
 #[derive(Debug)]
