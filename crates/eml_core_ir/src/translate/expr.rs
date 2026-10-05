@@ -7,7 +7,7 @@ use eml_types::Type;
 use crate::{Atom, Call, FnIdx, Rhs};
 
 use super::program::{effect_index, perform_call};
-use super::types::{Lowering, lowering, split_arrows};
+use super::types::{Lowering, equality_op, lowering, split_arrows};
 use super::{Binding, Bindings, Exit, FnLowering};
 
 impl FnLowering<'_> {
@@ -56,6 +56,7 @@ impl FnLowering<'_> {
     fn call_builtin(
         &mut self,
         builtin: Builtin,
+        callee: ExprId,
         callee_ty: &Type,
         mut args: Vec<Atom>,
         ty: &Type,
@@ -70,6 +71,15 @@ impl FnLowering<'_> {
         let rhs = match lowering(builtin) {
             Lowering::Prim(op) => Rhs::Prim(op, args),
             Lowering::Io(op) => Rhs::Io(op, args),
+            Lowering::Equality { negated } => {
+                let equality = self
+                    .types
+                    .equalities
+                    .get(callee)
+                    .copied()
+                    .expect("the type checker decides how every `==` and `!=` compares");
+                Rhs::Prim(equality_op(equality, negated), args)
+            }
             Lowering::Compose { .. } => Rhs::call(Call::Direct(
                 self.program.wrapper(self.module, builtin),
                 args,
@@ -199,7 +209,7 @@ impl FnLowering<'_> {
                     }
                     ExprKind::Path(Res::Builtin(builtin)) => {
                         let args = self.call_args(args, first, out);
-                        self.call_builtin(*builtin, &callee_ty, args, &ty, out)
+                        self.call_builtin(*builtin, *callee, &callee_ty, args, &ty, out)
                     }
                     ExprKind::Path(Res::Operation(op)) => {
                         let args = self.call_args(args, first, out);
@@ -300,7 +310,7 @@ impl FnLowering<'_> {
                 self.bind(out, "t", &ty, Rhs::call(Call::Resume { k, arg }))
             }
             ExprKind::Tuple(_) => {
-                unreachable!("the type checker reports tuples as not yet supported")
+                unreachable!("the translation does not handle tuple values")
             }
             ExprKind::Drop(value) => {
                 let value = self.atom(*value, out);

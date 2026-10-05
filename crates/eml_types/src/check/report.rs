@@ -28,6 +28,10 @@ pub(super) enum Origin {
         constructor: String,
         ty: String,
     },
+    /// タプルのパターン。パターンの要素の数を持つ。
+    TuplePattern(usize),
+    /// `Int` か `String` のリテラルのパターン。
+    LiteralPattern,
     Statement,
     UnitPattern,
     LambdaParameter,
@@ -306,6 +310,11 @@ impl BodyCheck<'_> {
             Origin::ConstructorPattern { constructor, ty } => {
                 diagnostic.with_note(format!("`{constructor}` is a constructor of `{ty}`"))
             }
+            Origin::TuplePattern(elements) => diagnostic.with_note(format!(
+                "this pattern matches a tuple of {elements} elements"
+            )),
+            Origin::LiteralPattern => diagnostic
+                .with_note("a literal pattern matches only values of the type of the literal"),
             Origin::IfWithoutElse => {
                 diagnostic.with_note("an `if` without `else` must have type `Unit`")
             }

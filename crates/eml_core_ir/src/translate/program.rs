@@ -232,6 +232,11 @@ impl ProgramBuilder {
                     CExpr::Return(Atom::Var(result)),
                 )
             }
+            // `==` と `!=` は演算子の構文からしか書けず、2つの引数がそろって呼ばれる。演算子の参照 `(==)` とセクションは
+            // まだ E0004 なので (docs/spec/expressions.md)、値として包む関数は作らない
+            Lowering::Equality { .. } => {
+                unreachable!("`==` and `!=` are always called with both operands")
+            }
             Lowering::Io(op) => {
                 let result = fresh(&result_type);
                 (

@@ -2,7 +2,7 @@
 
 use eml_hir::builtin::Builtin;
 use eml_hir::{Module, TypeDefId, TypeDefKind};
-use eml_types::{Linearity, Type};
+use eml_types::{Equality, Linearity, Type};
 
 use crate::{IoOp, PrimOp, VarInfo};
 
@@ -59,6 +59,11 @@ pub(super) enum Lowering {
     Compose {
         forward: bool,
     },
+    /// `==` と `!=`。比べ方は型検査が引数の型から決め、`BodyTypes::equalities` に入れてある
+    /// (docs/spec/declarations.md の標準の演算子の表)。
+    Equality {
+        negated: bool,
+    },
 }
 
 pub(super) fn lowering(builtin: Builtin) -> Lowering {
@@ -72,8 +77,8 @@ pub(super) fn lowering(builtin: Builtin) -> Lowering {
         Builtin::IntMul => Lowering::Prim(PrimOp::IntMul),
         Builtin::IntDiv => Lowering::Prim(PrimOp::IntDiv),
         Builtin::IntMod => Lowering::Prim(PrimOp::IntMod),
-        Builtin::IntEq => Lowering::Prim(PrimOp::IntEq),
-        Builtin::IntNe => Lowering::Prim(PrimOp::IntNe),
+        Builtin::IntEq => Lowering::Equality { negated: false },
+        Builtin::IntNe => Lowering::Equality { negated: true },
         Builtin::IntLt => Lowering::Prim(PrimOp::IntLt),
         Builtin::IntLe => Lowering::Prim(PrimOp::IntLe),
         Builtin::IntGt => Lowering::Prim(PrimOp::IntGt),
@@ -81,5 +86,17 @@ pub(super) fn lowering(builtin: Builtin) -> Lowering {
         Builtin::StrConcat => Lowering::Prim(PrimOp::StrConcat),
         Builtin::ComposeFwd => Lowering::Compose { forward: true },
         Builtin::ComposeBwd => Lowering::Compose { forward: false },
+    }
+}
+
+/// 型検査が決めた比べ方の命令。
+pub(super) fn equality_op(equality: Equality, negated: bool) -> PrimOp {
+    match (equality, negated) {
+        (Equality::Int, false) => PrimOp::IntEq,
+        (Equality::Int, true) => PrimOp::IntNe,
+        (Equality::String, false) => PrimOp::StrEq,
+        (Equality::String, true) => PrimOp::StrNe,
+        (Equality::Bool, false) => PrimOp::BoolEq,
+        (Equality::Bool, true) => PrimOp::BoolNe,
     }
 }

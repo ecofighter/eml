@@ -191,8 +191,13 @@ fn lower(
             }
             table.alloc(TyShape::Con(*id, lowered))
         }
-        // 型検査はタプルの式とパターンを未対応として報告する。型の注釈のタプルは `Error` にして、診断を重ねない
-        TypeRefKind::Tuple(_) => table.error,
+        TypeRefKind::Tuple(elements) => {
+            let mut lowered = Vec::new();
+            for &element in elements {
+                lowered.push(lower(table, types, rigids, element, arrows.inner()));
+            }
+            table.tuple(lowered)
+        }
         TypeRefKind::Var(var) => rigids.tys[*var],
         TypeRefKind::Fn { param, row, ret } => {
             let param = lower(table, types, rigids, *param, arrows.inner());

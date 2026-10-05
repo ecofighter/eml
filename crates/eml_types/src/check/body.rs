@@ -13,6 +13,7 @@ use crate::kind::{KindOrigin, KindReason};
 use crate::scheme::{Rigids, Scheme, lower_type};
 use crate::table::{Row, Table, Tail, Ty, TyShape, UnifyError};
 
+use super::equality::Comparison;
 use super::report::{AmbientSource, Origin, callee_subject};
 
 /// 1つの本体の推論結果。使用回数のパスも読む。
@@ -22,6 +23,8 @@ pub(crate) struct BodyTyping {
     pub locals: ArenaMap<LocalId, Ty>,
     /// パターンが受けた値の型。`_` で受けた値の Kind に制約を出すのに使う。
     pub pats: ArenaMap<PatId, Ty>,
+    /// `==` と `!=` の比べ方。`resolve_equalities` が埋める。
+    pub equalities: ArenaMap<ExprId, crate::Equality>,
 }
 
 pub(super) struct BodyCheck<'a> {
@@ -42,6 +45,8 @@ pub(super) struct BodyCheck<'a> {
     /// 矢印の row である。
     pub(super) ambient: Row,
     pub(super) ambient_source: AmbientSource,
+    /// 比べ方をまだ決めていない `==` と `!=` の参照。本体の検査が終わってから `resolve_equalities` が決める。
+    pub(super) comparisons: Vec<Comparison>,
     pub(super) typing: BodyTyping,
 }
 
@@ -184,7 +189,17 @@ impl BodyCheck<'_> {
             ExprKind::Literal(Literal::Int(_)) => self.table.int,
             ExprKind::Literal(Literal::String(_)) => self.table.string,
             ExprKind::Literal(Literal::Unit) => self.table.unit,
-            ExprKind::Path(res) => self.value(*res, expr.range),
+            ExprKind::Path(res) => {
+                let ty = self.value(*res, expr.range);
+                if let Res::Builtin(operator @ (Builtin::IntEq | Builtin::IntNe)) = *res {
+                    self.comparisons.push(Comparison {
+                        callee: id,
+                        operator,
+                        ty,
+                    });
+                }
+                ty
+            }
             ExprKind::Call { callee, args, .. } => self.call(id, *callee, args),
             ExprKind::If {
                 condition,
@@ -216,18 +231,14 @@ impl BodyCheck<'_> {
             ExprKind::Match { scrutinee, arms } => {
                 self.match_expr(*scrutinee, arms, Expectation::None)
             }
-            // `drop` はどんな値も受け取る。値を捨てることは使用の1回に数える (docs/spec/linearity.md)
             ExprKind::Tuple(elements) => {
-                for &element in elements {
-                    self.infer_expr(element);
-                }
-                self.diagnostics.push(Diagnostic::not_yet_supported(
-                    self.file(),
-                    expr.range,
-                    "tuples are not supported yet",
-                ));
-                self.table.error
+                let fields = elements
+                    .iter()
+                    .map(|&element| self.infer_expr(element))
+                    .collect();
+                self.table.tuple(fields)
             }
+            // `drop` はどんな値も受け取る。値を捨てることは使用の1回に数える (docs/spec/linearity.md)
             ExprKind::Drop(value) => {
                 self.infer_expr(*value);
                 self.table.unit
@@ -591,23 +602,8 @@ impl BodyCheck<'_> {
             }
             PatKind::Annot { pat, .. } => self.bind_pat(*pat, ty),
             PatKind::Con { ctor, args } => self.constructor_pattern(pat, *ctor, args, ty),
-            PatKind::Tuple(_) | PatKind::Literal(_) => {
-                let message = match &body.pats[pat].kind {
-                    PatKind::Tuple(_) => "tuple patterns are not supported yet",
-                    _ => "literal patterns are not supported yet",
-                };
-                self.diagnostics.push(Diagnostic::not_yet_supported(
-                    self.file(),
-                    body.pats[pat].range,
-                    message,
-                ));
-                // 網羅性の検査と使用回数のパスに誤りを連鎖させないよう、パターンと中の変数を `Error` にする
-                let error = self.table.error;
-                self.typing.pats.insert(pat, error);
-                for local in body.pat_bindings(pat) {
-                    self.typing.locals.insert(local, error);
-                }
-            }
+            PatKind::Tuple(elements) => self.tuple_pattern(pat, elements, ty),
+            PatKind::Literal(literal) => self.literal_pattern(pat, literal, ty),
             PatKind::Wildcard | PatKind::Missing => {}
             PatKind::Unit => {
                 let unit = self.table.unit;
@@ -661,6 +657,53 @@ impl BodyCheck<'_> {
         }
         for (&arg, field) in args.iter().zip(fields) {
             self.bind_pat(arg, field);
+        }
+    }
+
+    /// タプルのパターン。期待する型を、要素の数だけの新しい変数でできたタプルと単一化してから、要素のパターンを検査
+    /// する。要素の数が違えば、型の合わないコンストラクタのパターンと同じく、中を検査しない。
+    fn tuple_pattern(&mut self, pat: PatId, elements: &[PatId], expected: Ty) {
+        let range = self.body.pats[pat].range;
+        let fields: Vec<Ty> = elements.iter().map(|_| self.table.fresh_var()).collect();
+        let tuple = self.table.tuple(fields.clone());
+        let unified = self.with_kind_origin(range, KindReason::Unified, |this| {
+            this.table.unify(tuple, expected)
+        });
+        let fields = if unified.is_ok() {
+            fields
+        } else {
+            self.mismatch(
+                range,
+                expected,
+                tuple,
+                &Origin::TuplePattern(elements.len()),
+            );
+            // 網羅性の検査は、`Error` の型のパターンを含む `match` を飛ばす (docs/spec/exhaustiveness.md)
+            let error = self.table.error;
+            self.typing.pats.insert(pat, error);
+            vec![error; elements.len()]
+        };
+        for (&element, field) in elements.iter().zip(fields) {
+            self.bind_pat(element, field);
+        }
+    }
+
+    /// `Int` と `String` のリテラルのパターン。リテラルの型を期待する型と単一化する。
+    fn literal_pattern(&mut self, pat: PatId, literal: &Literal, expected: Ty) {
+        let range = self.body.pats[pat].range;
+        let found = match literal {
+            Literal::Int(_) => self.table.int,
+            Literal::String(_) => self.table.string,
+            Literal::Unit => self.table.unit,
+        };
+        let unified = self.with_kind_origin(range, KindReason::Unified, |this| {
+            this.table.unify(found, expected)
+        });
+        if unified.is_err() {
+            self.mismatch(range, expected, found, &Origin::LiteralPattern);
+            // 網羅性の検査は、`Error` の型のパターンを含む `match` を飛ばす (docs/spec/exhaustiveness.md)
+            let error = self.table.error;
+            self.typing.pats.insert(pat, error);
         }
     }
 

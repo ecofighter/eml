@@ -270,6 +270,17 @@ impl Table {
         })
     }
 
+    /// タプルの型。0 から始まる数字ラベルの閉じたレコードである (docs/spec/records.md)。式、パターン、型の注釈の
+    /// どれも同じ形を作る。
+    pub fn tuple(&mut self, elements: Vec<Ty>) -> Ty {
+        let fields = elements
+            .into_iter()
+            .enumerate()
+            .map(|(index, ty)| (index.to_string(), ty))
+            .collect();
+        self.alloc(TyShape::Record(fields))
+    }
+
     pub fn fresh_var(&mut self) -> Ty {
         let linearity = self.linearity.fresh();
         self.fresh_var_with(linearity)

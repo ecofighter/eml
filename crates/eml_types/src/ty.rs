@@ -134,6 +134,17 @@ impl fmt::Display for Type {
                 Ok(())
             }
             Type::Record(fields) if fields.is_empty() => f.write_str("Unit"),
+            // ラベルが 0 から連番の閉じたレコードは、タプルの書き方で表示する (docs/spec/records.md の「構成」)
+            Type::Record(fields) if is_tuple(fields) => {
+                f.write_str("(")?;
+                for (index, (_, ty)) in fields.iter().enumerate() {
+                    if index > 0 {
+                        f.write_str(", ")?;
+                    }
+                    write!(f, "{ty}")?;
+                }
+                f.write_str(")")
+            }
             Type::Record(fields) => {
                 f.write_str("{ ")?;
                 for (index, (label, ty)) in fields.iter().enumerate() {
@@ -185,6 +196,15 @@ impl fmt::Display for Type {
 }
 
 /// row の中身。`<` と `>` は呼び出し側が付ける。
+/// タプルとして書くレコード。タプルの構文は要素を2つ以上持つので、要素が1つのレコードは `{ 0 : A }` のまま書く。
+fn is_tuple(fields: &[(String, Type)]) -> bool {
+    fields.len() >= 2
+        && fields
+            .iter()
+            .enumerate()
+            .all(|(index, (label, _))| *label == index.to_string())
+}
+
 fn row_text(effects: &[EffectLabel], tail: &Option<RowTail>) -> String {
     let names = effects
         .iter()

@@ -1,0 +1,13 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{stderr}\")"
+input_file: tests/ui/run/data/equality.em
+---
+--- stdout ---
+yes
+yes
+no
+yes
+no
+yes
+--- stderr ---

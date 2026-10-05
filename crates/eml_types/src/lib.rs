@@ -29,6 +29,7 @@ pub mod codes {
     pub const MISSING_MAIN: ErrorCode = ErrorCode(2003);
     pub const INVALID_MAIN_TYPE: ErrorCode = ErrorCode(2004);
     pub const INFINITE_TYPE: ErrorCode = ErrorCode(2005);
+    pub const NOT_COMPARABLE: ErrorCode = ErrorCode(2006);
     pub const NON_EXHAUSTIVE_MATCH: ErrorCode = ErrorCode(4001);
     pub const NON_EXHAUSTIVE_EQUATION: ErrorCode = ErrorCode(4002);
     pub const REFUTABLE_PATTERN: ErrorCode = ErrorCode(4003);
@@ -62,12 +63,24 @@ pub struct Scheme {
     pub constraints: Vec<KindConstraint>,
 }
 
+/// `==` と `!=` の比べ方。型クラスがないので、型検査が引数の型から決め、比べられる型を限る
+/// (docs/spec/declarations.md の標準の演算子の表)。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Equality {
+    Int,
+    String,
+    Bool,
+}
+
 #[derive(Debug, Default)]
 pub struct BodyTypes {
     pub exprs: ArenaMap<ExprId, Type>,
     pub locals: ArenaMap<LocalId, Type>,
     /// パターンが受けた値の型。Core IR が、handler の節の引数の変数を作るのに使う。
     pub pats: ArenaMap<PatId, Type>,
+    /// `==` と `!=` の比べ方。キーは演算子を指す呼ばれる側の式である。Core IR が、どの比べる命令にするかを決めるのに
+    /// 使う。
+    pub equalities: ArenaMap<ExprId, Equality>,
 }
 
 pub fn check(module: &Module) -> (TypedModule, Vec<Diagnostic>) {

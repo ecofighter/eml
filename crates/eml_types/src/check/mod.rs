@@ -16,6 +16,7 @@ use crate::ty::{EffectLabel, KindConstraint, KindTerm, Linearity, Type};
 use crate::{BodyTypes, TypedModule, codes, exhaustive, scc, usage};
 
 mod body;
+mod equality;
 mod handle;
 mod report;
 
@@ -134,9 +135,11 @@ pub(crate) fn check_module(module: &Module) -> (TypedModule, Vec<Diagnostic>) {
                 diagnostics: &mut diagnostics,
                 ambient: Row::pure(),
                 ambient_source: AmbientSource::Signature,
+                comparisons: Vec::new(),
                 typing: BodyTyping::default(),
             };
             checker.check_function(signature);
+            checker.resolve_equalities();
             let typing = checker.typing;
             usage::constrain(body, &typing, &mut table);
             bodies.push((id, typing));
@@ -202,6 +205,7 @@ pub(crate) fn check_module(module: &Module) -> (TypedModule, Vec<Diagnostic>) {
         for (pat, &ty) in typing.pats.iter() {
             types.pats.insert(pat, table.export(ty));
         }
+        types.equalities = typing.equalities;
         typed.bodies.insert(id, types);
     }
     // 網羅性は型推論と使用回数のパスの後に、書き出した型の上で調べる (docs/spec/exhaustiveness.md の「検査パス」)

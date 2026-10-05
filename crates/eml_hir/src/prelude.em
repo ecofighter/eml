@@ -13,8 +13,9 @@ negate : Int -> Int
 (*) : Int -> Int -> Int
 (/) : Int -> Int -> Int
 (%) : Int -> Int -> Int
-(==) : Int -> Int -> Bool
-(!=) : Int -> Int -> Bool
+-- `==` と `!=` で比べられるのは `Int`、`String`、`Bool` で、どれで比べるかは型検査が引数の型から決める
+(==) : a -> a -> Bool
+(!=) : a -> a -> Bool
 (<) : Int -> Int -> Bool
 (<=) : Int -> Int -> Bool
 (>) : Int -> Int -> Bool

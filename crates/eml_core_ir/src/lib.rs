@@ -312,6 +312,10 @@ pub enum PrimOp {
     IntGt,
     IntGe,
     StrConcat,
+    StrEq,
+    StrNe,
+    BoolEq,
+    BoolNe,
     ShowInt,
     Not,
 }
@@ -332,6 +336,10 @@ impl PrimOp {
             PrimOp::IntGt => ">",
             PrimOp::IntGe => ">=",
             PrimOp::StrConcat => "++",
+            PrimOp::StrEq => "string==",
+            PrimOp::StrNe => "string!=",
+            PrimOp::BoolEq => "bool==",
+            PrimOp::BoolNe => "bool!=",
             PrimOp::ShowInt => "show_int",
             PrimOp::Not => "not",
         }

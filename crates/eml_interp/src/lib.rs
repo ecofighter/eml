@@ -645,6 +645,20 @@ impl<'p> Machine<'p> {
                 let right = self.take_string(args[1])?;
                 Value::Obj(self.heap.alloc(Payload::Str(left + &right)))
             }
+            // プリミティブは引数の所有権を受け取るので、比べた後に両方の文字列を手放す (`take_string`)
+            PrimOp::StrEq | PrimOp::StrNe => {
+                let left = self.take_string(args[0])?;
+                let right = self.take_string(args[1])?;
+                tag((left == right) == (op == PrimOp::StrEq))
+            }
+            PrimOp::BoolEq | PrimOp::BoolNe => {
+                let (Value::Tag(left), Value::Tag(right)) = (args[0], args[1]) else {
+                    return Err(Fault::Internal(
+                        "a `Bool` comparison on a value that is not a tag",
+                    ));
+                };
+                tag((left == right) == (op == PrimOp::BoolEq))
+            }
         })
     }
 

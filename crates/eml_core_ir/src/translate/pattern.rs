@@ -34,9 +34,7 @@ fn head(body: &Body, cell: Cell) -> Head<'_> {
             PatKind::Con { ctor, args } => return Head::Con(*ctor, args),
             // `()` は値が1つしかないので、ワイルドカードと同じに扱える
             PatKind::Tuple(_) | PatKind::Literal(_) => {
-                unreachable!(
-                    "the type checker reports tuple and literal patterns as not yet supported"
-                )
+                unreachable!("the decision tree does not handle tuple and literal patterns")
             }
             PatKind::Wildcard | PatKind::Unit | PatKind::Missing => return Head::Any(None),
         }
@@ -49,7 +47,7 @@ pub(super) fn has_constructor(body: &Body, pat: PatId) -> bool {
         PatKind::Con { .. } => true,
         PatKind::Annot { pat, .. } => has_constructor(body, *pat),
         PatKind::Tuple(_) | PatKind::Literal(_) => {
-            unreachable!("the type checker reports tuple and literal patterns as not yet supported")
+            unreachable!("the decision tree does not handle tuple and literal patterns")
         }
         PatKind::Bind(_) | PatKind::Wildcard | PatKind::Unit | PatKind::Missing => false,
     }

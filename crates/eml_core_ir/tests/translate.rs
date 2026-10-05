@@ -590,3 +590,26 @@ fn constructor_patterns_in_handler_clause_parameters() {
     }
     ");
 }
+
+#[test]
+fn equality_picks_the_comparison_of_the_operand_type() {
+    // `Int` の `==` は今までどおり `prim ==` のまま表示し、`String` と `Bool` は型を前に付けた名前で表示する
+    let text = "same : String -> Bool\nsame s = \"a\" == s\n\nflip : Bool -> Bool\nflip b = b != True\n\nmain : Unit -> <IO> Unit\nmain () = ()";
+    insta::assert_snapshot!(core_text(text, Pass::Translate), @r#"
+    fn same(s0) {
+      let s1 = const "a"
+      let t2 = prim string==(s1, s0)
+      return t2
+    }
+    fn flip(b0) {
+      let t1 = prim bool!=(b0, #1)
+      return t1
+    }
+    fn main(p0) {
+      return ()
+    }
+    fn entry$main() {
+      tailcall main(())
+    }
+    "#);
+}
