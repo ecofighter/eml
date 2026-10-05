@@ -123,10 +123,12 @@ pub(super) struct BuiltinItems {
     pub int: TypeDefId,
     pub string: TypeDefId,
     pub unit: TypeDefId,
+    pub file: TypeDefId,
     pub io: EffectId,
 }
 
-/// 組み込みの型とエフェクトを item として登録する (docs/spec/declarations.md と docs/spec/effects.md)。
+/// 組み込みの型とエフェクトを item として登録する (docs/spec/declarations.md と docs/spec/effects.md)。`File` は組み込みの
+/// 線形型である (docs/spec/effects.md)。
 pub(super) fn builtin_items(
     types: &mut Arena<TypeDef>,
     effects: &mut Arena<EffectDef>,
@@ -137,7 +139,7 @@ pub(super) fn builtin_items(
         scope.define_type(name, id, 0);
         id
     };
-    let (int, string, unit) = (ty("Int"), ty("String"), ty("Unit"));
+    let (int, string, unit, file) = (ty("Int"), ty("String"), ty("Unit"), ty("File"));
     let io = effects.alloc(EffectDef {
         name: "IO".to_string(),
         generics: Generics::default(),
@@ -148,6 +150,7 @@ pub(super) fn builtin_items(
         int,
         string,
         unit,
+        file,
         io,
     }
 }
@@ -176,6 +179,7 @@ pub(super) fn lang_items(
         string: builtin.string,
         bool,
         unit: builtin.unit,
+        file: builtin.file,
         io: builtin.io,
         true_ctor,
         false_ctor,

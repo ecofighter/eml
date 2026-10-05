@@ -245,3 +245,13 @@ fn a_repeated_operation_name_is_not_a_missing_clause() {
         ["E1003 3:3 `ask` is defined more than once"]
     );
 }
+
+#[test]
+fn file_operations_cannot_be_handled() {
+    let text = "f : Unit -> Int\nf () =\n  handle 1 with\n    | open p k -> resume k 1";
+    assert!(
+        diagnostics(text).contains(&"E1009 4:7 `IO` cannot be handled".to_string()),
+        "{:?}",
+        diagnostics(text)
+    );
+}

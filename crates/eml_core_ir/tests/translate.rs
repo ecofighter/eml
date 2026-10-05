@@ -819,3 +819,12 @@ fn a_literal_column_inside_a_tuple() {
     }
     ");
 }
+
+#[test]
+fn file_operations_are_performed_on_the_io_handler() {
+    let text = "main : Unit -> <IO> Unit\nmain () =\n  let f = open \"a.txt\"\n  let (f, s) = read_all f\n  close f\n  println s";
+    let ir = core_text(text, Pass::Translate);
+    for op in ["perform open(", "perform read_all(", "perform close("] {
+        assert!(ir.contains(op), "{ir}");
+    }
+}

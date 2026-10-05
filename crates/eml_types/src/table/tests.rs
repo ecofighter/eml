@@ -12,6 +12,7 @@ fn new_table() -> Table {
     let string = types.alloc(TypeDef::builtin("String"));
     let bool = types.alloc(TypeDef::builtin("Bool"));
     let unit = types.alloc(TypeDef::builtin("Unit"));
+    let file = types.alloc(TypeDef::builtin("File"));
     let mut constructor = |name: &str, tag| {
         constructors.alloc(Constructor {
             name: name.to_string(),
@@ -28,6 +29,7 @@ fn new_table() -> Table {
         string,
         bool,
         unit,
+        file,
         io: effects.alloc(EffectDef {
             name: "IO".to_string(),
             generics: Generics::default(),

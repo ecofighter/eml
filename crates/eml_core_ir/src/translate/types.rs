@@ -8,10 +8,12 @@ use crate::{IoOp, PrimOp, VarInfo};
 
 /// ヒープに置く値の型。`Unr` でボックス化した変数が RC の対象になる。関数値と型変数の値は、ヒープのクロージャや
 /// 文字列かもしれない。インタプリタの `dup` / `decref` はヒープにない値を無視するので、多めに対象にしても正しく動く
-/// (docs/spec/core-ir.md)。
+/// (docs/spec/core-ir.md)。`File` はヒープのオブジェクトである。
 fn boxed(ty: &Type, module: &Module) -> bool {
     match ty {
-        Type::Con { id, .. } => *id == module.lang.string || has_fields(module, *id),
+        Type::Con { id, .. } => {
+            *id == module.lang.string || *id == module.lang.file || has_fields(module, *id)
+        }
         Type::Fn { .. } | Type::Cont { .. } | Type::Rigid(_) | Type::Flexible => true,
         // 空のレコードは `Unit` で、値は `()` である。要素のあるレコード (タプル) はヒープのオブジェクトにする
         Type::Record(fields) => !fields.is_empty(),
@@ -71,6 +73,9 @@ pub(super) enum Lowering {
 pub(super) fn lowering(builtin: Builtin) -> Lowering {
     match builtin {
         Builtin::Println => Lowering::Io(IoOp::Println),
+        Builtin::Open => Lowering::Io(IoOp::Open),
+        Builtin::ReadAll => Lowering::Io(IoOp::ReadAll),
+        Builtin::Close => Lowering::Io(IoOp::Close),
         Builtin::ShowInt => Lowering::Prim(PrimOp::ShowInt),
         Builtin::Not => Lowering::Prim(PrimOp::Not),
         Builtin::IntNeg => Lowering::Prim(PrimOp::IntNeg),

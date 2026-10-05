@@ -147,3 +147,84 @@ fn no_fix_when_the_binding_is_the_last_statement() {
     assert_eq!(fix_text(rest), "");
     assert!(diagnostics(rest).starts_with("E3003 11:13"));
 }
+
+/// HEADER を付けずに検査する。
+fn plain(text: &str) -> String {
+    let checked = check(text);
+    full(&checked.files, &checked.diagnostics)
+}
+
+#[test]
+fn a_file_read_and_closed_is_clean() {
+    let text = "main : Unit -> <IO> Unit\nmain () =\n  let f = open \"a.txt\"\n  let (f, text) = read_all f\n  close f\n  println text";
+    assert_eq!(plain(text), "");
+}
+
+#[test]
+fn a_file_closed_twice() {
+    let text =
+        "main : Unit -> <IO> Unit\nmain () =\n  let f = open \"a.txt\"\n  close f\n  close f";
+    insta::assert_snapshot!(plain(text), @r"
+    E3002 5:9 `f` must be used exactly once, but it is used more than once
+      5:9 used again here
+      4:9 first used here
+      note: linear values, such as files, the continuation of a `once` operation and closures that capture one, must be used exactly once
+    ");
+}
+
+#[test]
+fn data_with_a_file_field_is_linear() {
+    let text = "data Handle = | Handle File\n\nmain : Unit -> <IO> Unit\nmain () =\n  let h = Handle (open \"a.txt\")\n  drop h\n  drop h";
+    insta::assert_snapshot!(plain(text), @r"
+    E3002 7:8 `h` must be used exactly once, but it is used more than once
+      7:8 used again here
+      6:8 first used here
+      note: linear values, such as files, the continuation of a `once` operation and closures that capture one, must be used exactly once
+    ");
+}
+
+#[test]
+fn recursive_and_mutually_recursive_data_with_a_file_are_linear() {
+    let text = "data Files =\n  | Nil\n  | More File Files\n\ndata A =\n  | NoA\n  | SomeA B\n\ndata B = | B File\n\nmain : Unit -> <IO> Unit\nmain () =\n  let fs = More (open \"a.txt\") Nil\n  let a = SomeA (B (open \"b.txt\"))\n  ()";
+    let codes: Vec<String> = check(text)
+        .diagnostics
+        .iter()
+        .map(|d| d.code.to_string())
+        .collect();
+    assert_eq!(codes, ["E3003", "E3003"]);
+}
+
+#[test]
+fn a_file_cannot_be_discarded_from_a_tuple() {
+    let text = "main : Unit -> <IO> Unit\nmain () =\n  let (_, text) = read_all (open \"a.txt\")\n  println text";
+    insta::assert_snapshot!(plain(text), @r"
+    E3004 3:8 a linear value cannot be discarded with `_`
+      3:8 this pattern discards it
+      note: linear values, such as files, the continuation of a `once` operation and closures that capture one, must be used exactly once
+      help: bind it to a name and pass the name to `drop`
+    ");
+}
+
+#[test]
+fn a_file_cannot_go_where_a_value_is_used_twice() {
+    let text = "pair : a -> (a, a)\npair x = (x, x)\n\nmain : Unit -> <IO> Unit\nmain () =\n  let (f, g) = pair (open \"a.txt\")\n  close f\n  close g";
+    insta::assert_snapshot!(plain(text), @r"
+    E3001 6:16 a linear value is passed to `pair`, which may use it more than once or not at all
+      6:16 `pair` is used here
+      note: linear values, such as files, the continuation of a `once` operation and closures that capture one, must be used exactly once
+    ");
+}
+
+#[test]
+fn no_fix_for_a_function_body_on_one_line() {
+    let text = "consume : File -> Int\nconsume f = 0";
+    insta::assert_snapshot!(plain(text), @r"
+    E3003 2:9 `f` must be used exactly once, but it is not used
+      2:9 `f` is bound here
+      2:14 `f` is not used before the end of this scope
+      note: linear values, such as files, the continuation of a `once` operation and closures that capture one, must be used exactly once
+      help: pass `f` to `drop`
+    ");
+    let checked = check(text);
+    assert_eq!(fixes(&checked.files, &checked.diagnostics), "");
+}

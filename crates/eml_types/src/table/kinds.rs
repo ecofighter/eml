@@ -2,12 +2,16 @@ use super::*;
 
 impl Table {
     /// 型の Kind の上界の候補。レコードとデータ型の Kind はフィールドの join なので、フィールドごとの境界を並べる
-    /// (docs/spec/types.md)。データ型では、Kind に効く位置の型引数の境界を並べる。
+    /// (docs/spec/types.md)。データ型では、Kind に効く位置の型引数の境界を並べる。`File` を含むデータ型は定数の `Lin` である。
     pub fn kind_bounds(&self, ty: Ty) -> Vec<Bound<Linearity>> {
         match self.shape(ty) {
             TyShape::Con(id, args) => {
+                let kind = &self.data_kinds[*id];
+                if kind.lin {
+                    return vec![Bound::Const(Linearity::Lin)];
+                }
                 let mut bounds = vec![Bound::Const(Linearity::Unr)];
-                for (&arg, &effective) in args.iter().zip(&self.effective[*id]) {
+                for (&arg, &effective) in args.iter().zip(&kind.params) {
                     if effective {
                         bounds.extend(self.kind_bounds(arg));
                     }

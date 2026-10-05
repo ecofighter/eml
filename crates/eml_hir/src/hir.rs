@@ -115,6 +115,8 @@ pub struct LangItems {
     pub string: TypeDefId,
     pub bool: TypeDefId,
     pub unit: TypeDefId,
+    /// 組み込みの線形型。Kind はつねに `Lin` である。
+    pub file: TypeDefId,
     pub io: EffectId,
     /// `&&` と `||` の脱糖が使う `Bool` のコンストラクタ。ユーザーが同じ名前のコンストラクタで隠しても、脱糖は
     /// Prelude のものを指す。

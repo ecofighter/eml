@@ -2,7 +2,7 @@
 
 use std::fmt::Write;
 
-use crate::{Atom, CExpr, CExprId, Call, CoreFn, IoOp, Program, Rhs, VarId};
+use crate::{Atom, CExpr, CExprId, Call, CoreFn, Program, Rhs, VarId};
 
 pub fn pretty(program: &Program) -> String {
     let mut out = String::new();
@@ -132,7 +132,7 @@ fn rhs_text(program: &Program, function: &CoreFn, rhs: &Rhs) -> String {
         }
         Rhs::Prim(op, a) => format!("prim {}({})", op.name(), args(a)),
         Rhs::ConstString(index) => format!("const {:?}", program.strings[*index as usize]),
-        Rhs::Io(IoOp::Println, a) => format!("perform println({})", args(a)),
+        Rhs::Io(op, a) => format!("perform {}({})", op.name(), args(a)),
         Rhs::Drop(a) => format!("drop {}", atom(function, a)),
     }
 }

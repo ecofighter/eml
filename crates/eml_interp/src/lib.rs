@@ -1,11 +1,15 @@
 use std::cmp::Ordering;
 use std::fmt;
+use std::io::Read;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use eml_core_ir::{
-    Atom, CExpr, CExprId, Call, FALSE, FnIdx, IoOp, PrimOp, Program, Rhs, TRUE, VarId,
+    Atom, CExpr, CExprId, Call, FALSE, FnIdx, IoOp, PrimOp, Program, Rhs, TRUE, TUPLE, VarId,
 };
-use eml_runtime::{Closure, Frame, Heap, HeapError, ObjRef, OutputSink, Payload, Value};
+use eml_runtime::{
+    Closure, FileHandle, Frame, Heap, HeapError, ObjRef, OutputSink, Payload, Value,
+};
 
 /// 関数値の適用の結果。関数に入ったか、値ができたか (足りない引数のクロージャ)。
 enum Applied {
@@ -52,11 +56,18 @@ struct Resume<'p> {
 #[non_exhaustive]
 pub struct RunConfig {
     pub debug_heap: bool,
+    /// `open` の相対パスの基準 (docs/spec/effects.md の「組み込みの `IO`」)。既定の空のパスはカレントディレクトリを指す。
+    pub file_root: PathBuf,
 }
 
 impl RunConfig {
     pub fn with_debug_heap(mut self, debug_heap: bool) -> Self {
         self.debug_heap = debug_heap;
+        self
+    }
+
+    pub fn with_file_root(mut self, root: PathBuf) -> Self {
+        self.file_root = root;
         self
     }
 }
@@ -77,6 +88,18 @@ pub enum Fault {
     IntegerOverflow,
     Heap(HeapError),
     Output(String),
+    /// `open` がファイルを開けなかった。理由は `ErrorKind` から決めた固定の文言で、OS の文言は環境ごとに違うので使わない。
+    FileOpen {
+        path: String,
+        reason: &'static str,
+    },
+    FileRead {
+        path: String,
+        reason: &'static str,
+    },
+    FileNotUtf8 {
+        path: String,
+    },
     /// 型検査と Core IR の変換が正しければ起きない誤り。
     Internal(&'static str),
 }
@@ -88,6 +111,9 @@ impl fmt::Display for Fault {
             Fault::IntegerOverflow => f.write_str("integer overflow"),
             Fault::Heap(error) => write!(f, "{error}"),
             Fault::Output(error) => write!(f, "cannot write the output: {error}"),
+            Fault::FileOpen { path, reason } => write!(f, "cannot open `{path}`: {reason}"),
+            Fault::FileRead { path, reason } => write!(f, "cannot read `{path}`: {reason}"),
+            Fault::FileNotUtf8 { path } => write!(f, "`{path}` is not valid UTF-8"),
             Fault::Internal(what) => write!(f, "internal error: {what}"),
         }
     }
@@ -117,7 +143,7 @@ pub fn run(
     config: &RunConfig,
     out: &OutputSink,
 ) -> Result<(), RuntimeError> {
-    let mut machine = Machine::new(&program, out);
+    let mut machine = Machine::new(&program, out, &config.file_root);
     machine.run()?;
     // 実行時エラーで止まった場合はリークを数えない。途中のフレームが残っているのは当然だから
     if config.debug_heap {
@@ -130,6 +156,7 @@ pub fn run(
 struct Machine<'p> {
     program: &'p Program,
     out: &'p OutputSink,
+    file_root: &'p Path,
     heap: Heap,
     function: FnIdx,
     control: CExprId,
@@ -141,13 +168,14 @@ struct Machine<'p> {
 }
 
 impl<'p> Machine<'p> {
-    fn new(program: &'p Program, out: &'p OutputSink) -> Self {
+    fn new(program: &'p Program, out: &'p OutputSink, file_root: &'p Path) -> Self {
         let mut heap = Heap::new();
         let cont = heap.alloc(Payload::Frame(Frame::Io));
         let entry = program.function(program.entry);
         Machine {
             program,
             out,
+            file_root,
             heap,
             function: program.entry,
             control: entry.body,
@@ -243,15 +271,9 @@ impl<'p> Machine<'p> {
                 let args = self.atoms(args)?;
                 self.prim(*op, &args)?
             }
-            Rhs::Io(IoOp::Println, args) => {
-                // `IO` はユーザーが handle できず、最下部の handler が必ずすぐに再開するので、継続を遡らずにその場で
-                // 実行する (docs/spec/core-ir.md)
+            Rhs::Io(op, args) => {
                 let args = self.atoms(args)?;
-                let text = self.take_string(args[0])?;
-                self.out
-                    .write_str(&format!("{text}\n"))
-                    .map_err(|error| Fault::Output(error.to_string()))?;
-                Value::Unit
+                self.io(*op, &args)?
             }
             // 所有している参照を1つ手放す。継続も RC が1のオブジェクトなので、これで解放される (docs/spec/core-ir.md)
             Rhs::Drop(atom) => {
@@ -662,6 +684,65 @@ impl<'p> Machine<'p> {
         })
     }
 
+    /// `IO` はユーザーが handle できず、最下部の handler が必ずすぐに再開するので、継続を遡らずにその場で実行する
+    /// (docs/spec/core-ir.md)。
+    fn io(&mut self, op: IoOp, args: &[Value]) -> Result<Value, Fault> {
+        match op {
+            IoOp::Println => {
+                let text = self.take_string(args[0])?;
+                self.out
+                    .write_str(&format!("{text}\n"))
+                    .map_err(|error| Fault::Output(error.to_string()))?;
+                Ok(Value::Unit)
+            }
+            IoOp::Open => {
+                let path = self.take_string(args[0])?;
+                // 絶対パスなら `join` がそのパスを返す
+                let file = std::fs::File::open(self.file_root.join(&path)).map_err(|error| {
+                    Fault::FileOpen {
+                        path: path.clone(),
+                        reason: io_reason(error.kind()),
+                    }
+                })?;
+                let handle = FileHandle::new(path, Box::new(file));
+                Ok(Value::Obj(self.heap.alloc(Payload::File(handle))))
+            }
+            // 受け取った `File` の参照を、そのまま返す組に移す (docs/spec/effects.md の「組み込みの `IO`」)
+            IoOp::ReadAll => {
+                let Value::Obj(file) = args[0] else {
+                    return Err(Fault::Internal("`read_all` on a value that is not a file"));
+                };
+                let read = match self.heap.get_mut(file).map_err(Fault::Heap)? {
+                    Payload::File(handle) => {
+                        let mut bytes = Vec::new();
+                        match handle.reader.read_to_end(&mut bytes) {
+                            Ok(_) => String::from_utf8(bytes).map_err(|_| Fault::FileNotUtf8 {
+                                path: handle.path.clone(),
+                            }),
+                            Err(error) => Err(Fault::FileRead {
+                                path: handle.path.clone(),
+                                reason: io_reason(error.kind()),
+                            }),
+                        }
+                    }
+                    _ => Err(Fault::Internal("`read_all` on a value that is not a file")),
+                };
+                let text = self.heap.alloc(Payload::Str(read?));
+                Ok(Value::Obj(self.heap.alloc(Payload::Data {
+                    tag: TUPLE,
+                    fields: vec![Value::Obj(file), Value::Obj(text)],
+                })))
+            }
+            // 破棄処理はオブジェクトの解放で、読み出し口を捨てると閉じる (docs/spec/runtime.md)
+            IoOp::Close => {
+                if let Value::Obj(file) = args[0] {
+                    self.heap.decref(file).map_err(Fault::Heap)?;
+                }
+                Ok(Value::Unit)
+            }
+        }
+    }
+
     /// プリミティブは引数の所有権を受け取るので、読んだ文字列は decref する。
     fn take_string(&mut self, value: Value) -> Result<String, Fault> {
         let Value::Obj(obj) = value else {
@@ -687,6 +768,14 @@ impl<'p> Machine<'p> {
             return Ok(());
         }
         Err(RuntimeError::Leak(live))
+    }
+}
+
+fn io_reason(kind: std::io::ErrorKind) -> &'static str {
+    match kind {
+        std::io::ErrorKind::NotFound => "not found",
+        std::io::ErrorKind::PermissionDenied => "permission denied",
+        _ => "I/O error",
     }
 }
 

@@ -1,19 +1,36 @@
-//! データ型の Kind に効く型引数の位置 (docs/spec/types.md の「Kind」)。データ型の Kind はフィールドの Kind の join
-//! なので、`Option a` の Kind は `a` の Kind になる。どの型引数が効くかは宣言だけで決まるので、検査の前に1回だけ求める。
+//! データ型の Kind (docs/spec/types.md の「Kind」)。データ型の Kind はフィールドの Kind の join なので、`Option a` の
+//! Kind は `a` の Kind になる。フィールドに定数の `Lin` の型 (`File` など) があれば、型引数によらず `Lin` になる。
+//! どちらも宣言だけで決まるので、検査の前に1回だけ求める。
 
 use eml_hir::{
-    Constructor, TypeDef, TypeDefId, TypeDefKind, TypeRef, TypeRefId, TypeRefKind, TypeVarId,
+    Constructor, LangItems, TypeDef, TypeDefId, TypeDefKind, TypeRef, TypeRefId, TypeRefKind,
+    TypeVarId,
 };
 use la_arena::{Arena, ArenaMap};
 
-/// 型構成子ごとの、型引数の位置が Kind に効くかどうか。組み込みの型は型引数を持たないので空である。
-pub(crate) fn effective_params(
+/// 型構成子の Kind の決まり方。
+#[derive(Debug, Clone)]
+pub(crate) struct DataKind {
+    /// 型引数の位置ごとに、Kind に効くかどうか。組み込みの型は型引数を持たないので空である。
+    pub params: Vec<bool>,
+    /// 定数の `Lin` の型を、関数型の外のフィールドに含む。組み込みでは `File` だけが真である。
+    pub lin: bool,
+}
+
+pub(crate) fn data_kinds(
     types: &Arena<TypeDef>,
     constructors: &Arena<Constructor>,
-) -> ArenaMap<TypeDefId, Vec<bool>> {
-    let mut effective: ArenaMap<TypeDefId, Vec<bool>> = types
+    lang: &LangItems,
+) -> ArenaMap<TypeDefId, DataKind> {
+    let mut kinds: ArenaMap<TypeDefId, DataKind> = types
         .iter()
-        .map(|(id, def)| (id, vec![false; def.generics.type_vars.len()]))
+        .map(|(id, def)| {
+            let kind = DataKind {
+                params: vec![false; def.generics.type_vars.len()],
+                lin: id == lang.file,
+            };
+            (id, kind)
+        })
         .collect();
     // 再帰する宣言 (`List a`) と相互再帰する宣言があるので、印が増えなくなるまで繰り返す。印は増えるだけなので止まる
     loop {
@@ -25,47 +42,60 @@ pub(crate) fn effective_params(
             else {
                 continue;
             };
-            let mut found = Vec::new();
+            let mut found = Found::default();
             for &ctor in ctors {
                 for &field in &constructors[ctor].fields {
-                    collect(&def.types, field, &effective, &mut found);
+                    collect(&def.types, field, &kinds, &mut found);
                 }
             }
-            for var in found {
+            for var in found.vars {
                 let index = u32::from(var.into_raw()) as usize;
-                if !effective[id][index] {
-                    effective[id][index] = true;
+                if !kinds[id].params[index] {
+                    kinds[id].params[index] = true;
                     changed = true;
                 }
             }
+            if found.lin && !kinds[id].lin {
+                kinds[id].lin = true;
+                changed = true;
+            }
         }
         if !changed {
-            return effective;
+            return kinds;
         }
     }
 }
 
-/// フィールドの型のうち、Kind に効く位置にある型変数。関数型の Kind はその矢印の線形性で決まり、フィールドの矢印は
-/// `Unr` に固定するので、関数型の中は見ない。型変数の番号は `Generics` の並びの位置と同じである。
+#[derive(Default)]
+struct Found {
+    vars: Vec<TypeVarId>,
+    lin: bool,
+}
+
+/// フィールドの型のうち、Kind に効く位置にある型変数と、定数の `Lin` の型。関数型の Kind はその矢印の線形性で決まり、
+/// フィールドの矢印は `Unr` に固定するので、関数型の中は見ない。型変数の番号は `Generics` の並びの位置と同じである。
 fn collect(
     types: &Arena<TypeRef>,
     id: TypeRefId,
-    effective: &ArenaMap<TypeDefId, Vec<bool>>,
-    out: &mut Vec<TypeVarId>,
+    kinds: &ArenaMap<TypeDefId, DataKind>,
+    out: &mut Found,
 ) {
     match &types[id].kind {
-        TypeRefKind::Var(var) => out.push(*var),
+        TypeRefKind::Var(var) => out.vars.push(*var),
         TypeRefKind::Con(con, args) => {
+            if kinds[*con].lin {
+                out.lin = true;
+            }
             for (index, &arg) in args.iter().enumerate() {
-                if effective[*con].get(index).copied().unwrap_or(false) {
-                    collect(types, arg, effective, out);
+                if kinds[*con].params.get(index).copied().unwrap_or(false) {
+                    collect(types, arg, kinds, out);
                 }
             }
         }
         // タプルの Kind は要素の Kind の join なので、要素に書いた型引数はすべて効く (docs/spec/records.md の「Kind」)
         TypeRefKind::Tuple(elements) => {
             for &element in elements {
-                collect(types, element, effective, out);
+                collect(types, element, kinds, out);
             }
         }
         TypeRefKind::Fn { .. } | TypeRefKind::Error => {}

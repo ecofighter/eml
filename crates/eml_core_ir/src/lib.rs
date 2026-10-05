@@ -349,6 +349,21 @@ impl PrimOp {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IoOp {
     Println,
+    Open,
+    ReadAll,
+    Close,
+}
+
+impl IoOp {
+    /// 表示での名前。Prelude の名前と同じである。
+    pub fn name(self) -> &'static str {
+        match self {
+            IoOp::Println => "println",
+            IoOp::Open => "open",
+            IoOp::ReadAll => "read_all",
+            IoOp::Close => "close",
+        }
+    }
 }
 
 /// `Bool` のタグ (docs/spec/core-ir.md)。

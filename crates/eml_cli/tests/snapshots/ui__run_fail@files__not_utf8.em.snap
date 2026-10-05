@@ -1,0 +1,8 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- runtime error ---\\n{error}\\n\")"
+input_file: tests/ui/run-fail/files/not_utf8.em
+---
+--- stdout ---
+--- runtime error ---
+`not_utf8.txt` is not valid UTF-8 in `main`

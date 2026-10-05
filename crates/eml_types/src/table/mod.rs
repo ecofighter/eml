@@ -171,8 +171,8 @@ pub(crate) struct Table {
     pub unit: Ty,
     pub error: Ty,
     pub lang: LangItems,
-    /// 型構成子ごとの、Kind に効く型引数の位置 (`crate::data`)。
-    effective: ArenaMap<TypeDefId, Vec<bool>>,
+    /// 型構成子ごとの、Kind の決まり方 (`crate::data`)。
+    data_kinds: ArenaMap<TypeDefId, crate::data::DataKind>,
     /// 名前を持つのは、`Module` を渡さずに `display` と `export` が名前を出せるようにするため。
     type_names: ArenaMap<TypeDefId, String>,
     effect_names: ArenaMap<EffectId, String>,
@@ -230,7 +230,7 @@ impl Table {
             unit: Ty(0),
             error: Ty(0),
             lang,
-            effective: crate::data::effective_params(types, constructors),
+            data_kinds: crate::data::data_kinds(types, constructors, &lang),
             type_names: types
                 .iter()
                 .map(|(id, def)| (id, def.name.clone()))

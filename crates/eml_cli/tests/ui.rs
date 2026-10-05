@@ -51,7 +51,14 @@ fn compile_and_execute(path: &Path) -> (String, String, Result<(), RuntimeError>
         .program
         .unwrap_or_else(|| panic!("unexpected errors:\n{stderr}"));
     let (sink, captured) = OutputSink::capture();
-    let config = RunConfig::default().with_debug_heap(true);
+    // 入力のファイルはテストの隣に置く (docs/implementation/testing.md の「UI テスト」)
+    let root = path
+        .parent()
+        .expect("a test file has a directory")
+        .to_path_buf();
+    let config = RunConfig::default()
+        .with_debug_heap(true)
+        .with_file_root(root);
     let result = eml_cli::execute(program, &config, sink);
     (captured.contents(), stderr, result)
 }

@@ -4,6 +4,9 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Builtin {
     Println,
+    Open,
+    ReadAll,
+    Close,
     ShowInt,
     Not,
     IntAdd,
@@ -47,6 +50,9 @@ pub struct BuiltinInfo {
 /// 組み込みの表。名前と見え方と引数の数はここだけに置き、型は Prelude に置く。
 pub const BUILTINS: &[BuiltinInfo] = &[
     info(Builtin::Println, "println", Access::Named, 1),
+    info(Builtin::Open, "open", Access::Named, 1),
+    info(Builtin::ReadAll, "read_all", Access::Named, 1),
+    info(Builtin::Close, "close", Access::Named, 1),
     info(Builtin::ShowInt, "show_int", Access::Named, 1),
     info(Builtin::Not, "not", Access::Named, 1),
     info(Builtin::IntNeg, "negate", Access::Internal, 1),
@@ -76,10 +82,12 @@ const fn info(builtin: Builtin, name: &'static str, access: Access, arity: usize
 }
 
 impl Builtin {
-    /// 組み込みの `IO` の操作。handler の節に書けないことを報告するのに使う (docs/spec/effects.md)。段階5で
-    /// `open` などを足す。
+    /// 組み込みの `IO` の操作。handler の節に書けないことを報告するのに使う (docs/spec/effects.md)。
     pub fn is_io_operation(self) -> bool {
-        matches!(self, Builtin::Println)
+        matches!(
+            self,
+            Builtin::Println | Builtin::Open | Builtin::ReadAll | Builtin::Close
+        )
     }
 
     pub fn info(self) -> &'static BuiltinInfo {

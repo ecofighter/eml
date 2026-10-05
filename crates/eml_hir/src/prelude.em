@@ -5,6 +5,9 @@ data Bool =
   | True
 
 println : String -> <IO> Unit
+open : String -> <IO> File
+read_all : File -> <IO> (File, String)
+close : File -> <IO> Unit
 show_int : Int -> String
 not : Bool -> Bool
 negate : Int -> Int
