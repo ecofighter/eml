@@ -8,7 +8,7 @@ use eml_syntax::ast;
 use la_arena::Arena;
 
 use super::duplicate;
-use super::scope::ItemScope;
+use super::scope::{ItemScope, TypeItem};
 use super::types::{TypeLowering, Vars};
 use crate::hir::{Constructor, Generics, TypeDef, TypeDefId, TypeDefKind, TypeVarDecl};
 
@@ -102,6 +102,7 @@ pub(super) fn lower_constructors(
                 unreachable!("`declare_data` makes data types")
             };
             let range = name.text_range();
+            let registered = scope.type_item(&def.name) == Some(TypeItem::Type(*ty));
             let id = constructors.alloc(Constructor {
                 name: name.text().to_string(),
                 range,
@@ -110,6 +111,14 @@ pub(super) fn lower_constructors(
                 fields,
             });
             declared.push(id);
+            // 重複した型 (E1003) の本体は、名前を引いても別の型を指す。コンストラクタをそのまま置くと使った箇所が
+            // 「expected `T`, found `T`」になり、置かないと「cannot find constructor」が続く。どちらも E1003 の連鎖
+            // なので、使えない印だけを置いて、使った箇所は診断なしで `Missing` にする (docs/spec/diagnostics.md の
+            // 「連鎖する診断の抑止」)
+            if !registered {
+                scope.define_unusable_constructor(name.text());
+                continue;
+            }
             match values.get(name.text()) {
                 Some(&first) => diagnostics.push(duplicate(file, name.text(), first, range)),
                 None => {

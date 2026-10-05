@@ -41,7 +41,7 @@
 - すぐに再開する handler の最適化: 節が `resume k v` を末尾で1回だけ呼ぶ場合に、継続を取り出さない直接の呼び出しにする ([evidence passing の設計](evidence-passing.md) の「すぐに再開する節」)
 - 再帰する join point (ループ化): 自己末尾呼び出しを、関数の中の自分へ `jump` する join point にする。トップレベルの関数を呼び出し元の join point にする contification も同じ枠で扱う。今は join point の本体から自分へ `jump` しない ([Core IR とインタプリタ](../spec/core-ir.md))
   - 入れる時期: マイルストーン1 では入れない。eml のローカルの `let` は再帰せず、自己末尾呼び出しはすでにフレームを積まないので、インタプリタでの効果が小さい。ループの中で変わらない値の `dup` / `decref` を減らすには、`captures` を借用として扱う Perceus の拡張も要る。借用パラメータ、evidence passing、ネイティブ化のどれかに着手するときに一緒に入れる
-  - 残りの作業: verifier の「自分へ `jump` しない」制約を外すことと、変換にループ化を足すこと。join point の引数を複数にする変更は、段階4で `match` のために入れる予定である
+  - 残りの作業: verifier の「自分へ `jump` しない」制約を外すことと、変換にループ化を足すこと。join point の引数を複数にする変更は、段階4a で `match` のために入れた
   - 生存解析に不動点の計算は要らない。自分への `jump` の時点で生きている変数も「行き先の `captures` + 渡す値」で決まり、`captures` は本体の自由変数で決まるためである。互いに `jump` し合う join point の組は、別に設計する
 
 ## マルチコア対応

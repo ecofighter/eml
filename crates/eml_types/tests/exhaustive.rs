@@ -150,3 +150,13 @@ fn constructors_of_two_types_in_one_column_add_no_exhaustiveness_errors() {
         "{codes:?}"
     );
 }
+
+#[test]
+fn a_match_without_arms_is_left_to_the_syntax_error() {
+    let text = "f : Bool -> Int\nf b = match b with";
+    insta::assert_snapshot!(diagnostics(text), @"
+    E0009 2:15 expected an indented block after `with`
+      2:15 the next line must be indented more than the enclosing block
+      help: indent the `|` arms more than the line with `with`
+    ");
+}

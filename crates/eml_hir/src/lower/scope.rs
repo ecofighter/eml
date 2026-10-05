@@ -17,6 +17,8 @@ pub(super) enum ValueItem {
     Operation(OperationId),
     Constructor(ConstructorId),
     Builtin(Builtin),
+    /// 重複した `data` の型 (E1003) のコンストラクタ。使っても診断を足さない。
+    Unusable,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -58,6 +60,16 @@ impl ItemScope {
     pub(super) fn define_constructor(&mut self, name: &str, id: ConstructorId) {
         self.values
             .insert(name.to_string(), ValueItem::Constructor(id));
+    }
+
+    pub(super) fn define_unusable_constructor(&mut self, name: &str) {
+        self.values
+            .entry(name.to_string())
+            .or_insert(ValueItem::Unusable);
+    }
+
+    pub(super) fn is_unusable(&self, name: &str) -> bool {
+        matches!(self.values.get(name), Some(ValueItem::Unusable))
     }
 
     pub(super) fn define_type(&mut self, name: &str, id: TypeDefId, params: usize) {

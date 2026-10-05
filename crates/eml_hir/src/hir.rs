@@ -188,7 +188,7 @@ pub struct Body {
 }
 
 impl Body {
-    /// 式の直接の子を、ソースの順に `f` に渡す。子を辿る規則はここだけに置き。
+    /// 式の直接の子を、ソースの順に `f` に渡す。子を辿る規則はここだけに置く。
     pub fn walk_child_exprs(&self, id: ExprId, mut f: impl FnMut(ExprId)) {
         match &self.exprs[id].kind {
             ExprKind::Missing | ExprKind::Literal(_) | ExprKind::Path(_) => {}

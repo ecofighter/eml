@@ -406,3 +406,68 @@ fn split_arms_of_a_data_type_use_the_known_tag() {
     }
     ");
 }
+
+#[test]
+fn a_join_point_with_two_parameters_reached_once_is_inlined() {
+    // 引数が2つの枝は jump が1つだけなので、本体を jump の位置に写し、引数を `let` の連鎖で束縛する
+    let text = "data Option a = | None | Some a\ndata Pair a b = | Pair a b\n\nadd : Pair (Option Int) (Option Int) -> Int\nadd p = match p with\n  | Pair (Some a) (Some b) -> a + b\n  | Pair x y -> 0\n\nmain : Unit -> <IO> Unit\nmain () = ()";
+    insta::assert_snapshot!(core_text(text, Pass::Simplify), @"
+    fn add(p0) {
+      switch p0 {
+        #0(x6, y7) ->
+          switch x6 {
+            #0 ->
+              return 0
+            #1(a8) ->
+              switch y7 {
+                #0 ->
+                  return 0
+                #1(b9) ->
+                  let a1 = a8
+                  let b2 = b9
+                  let t3 = prim +(a1, b2)
+                  return t3
+              }
+          }
+      }
+    }
+    fn main(p0) {
+      return ()
+    }
+    fn entry$main() {
+      tailcall main(())
+    }
+    ");
+}
+
+#[test]
+fn a_join_point_with_two_parameters_is_forwarded_by_position() {
+    // 2つの leaf から届く枝の本体は2つ目の引数を返すだけなので、各 jump の2つ目の引数を位置で対応させて写す
+    let text = "data Option a = | None | Some a\ndata Color = | Red | Green\ndata Pair a b = | Pair a b\n\nsecond : Pair Color (Option Int) -> Option Int\nsecond p = match p with\n  | Pair Red (Some n) -> Some n\n  | Pair t o -> o\n\nmain : Unit -> <IO> Unit\nmain () = ()";
+    insta::assert_snapshot!(core_text(text, Pass::Simplify), @"
+    fn second(p0) {
+      switch p0 {
+        #0(t5, o6) ->
+          switch t5 {
+            #0 ->
+              switch o6 {
+                #0 ->
+                  return o6
+                #1(n7) ->
+                  let n1 = n7
+                  let d2 = con #1(n1)
+                  return d2
+              }
+            #1 ->
+              return o6
+          }
+      }
+    }
+    fn main(p0) {
+      return ()
+    }
+    fn entry$main() {
+      tailcall main(())
+    }
+    ");
+}

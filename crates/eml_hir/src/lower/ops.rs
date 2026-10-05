@@ -169,6 +169,8 @@ impl BodyLowering<'_> {
                 // 中置のコンストラクタも、演算子と同じく2引数の呼び出しにする
                 let callee = if let Some(ctor) = self.items.constructor(op) {
                     self.alloc(ExprKind::Path(Res::Constructor(ctor)), op_range)
+                } else if self.items.is_unusable(op) {
+                    self.alloc(ExprKind::Missing, op_range)
                 } else {
                     match Builtin::binary_operator(op) {
                         Some(builtin) => {

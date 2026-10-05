@@ -33,7 +33,8 @@ pub(super) struct BodyLowering<'a> {
 }
 
 impl<'a> BodyLowering<'a> {
-    // 引数はすべて、変換の間は読むだけの参照か診断の出力先で、まとめる型を作ると呼び出しが増えるだけになる
+    // 呼び出し元は1か所だけである。引数は、本体の変換が読む item の表と、シグネチャの型引数と、診断の出力先で、
+    // まとめる型を作っても使う場所が増えない
     #[allow(clippy::too_many_arguments)]
     pub(super) fn new(
         file: FileId,
@@ -177,13 +178,17 @@ impl<'a> BodyLowering<'a> {
             .find(|(local, _)| local == text)
             .map(|&(_, local)| Res::Local(local))
             .or_else(|| {
-                self.items.value(text).map(|item| match item {
-                    ValueItem::Function(id) => Res::Function(id),
-                    ValueItem::Operation(id) => Res::Operation(id),
-                    ValueItem::Constructor(id) => Res::Constructor(id),
-                    ValueItem::Builtin(builtin) => Res::Builtin(builtin),
+                self.items.value(text).and_then(|item| match item {
+                    ValueItem::Function(id) => Some(Res::Function(id)),
+                    ValueItem::Operation(id) => Some(Res::Operation(id)),
+                    ValueItem::Constructor(id) => Some(Res::Constructor(id)),
+                    ValueItem::Builtin(builtin) => Some(Res::Builtin(builtin)),
+                    ValueItem::Unusable => None,
                 })
             });
+        if res.is_none() && self.items.is_unusable(text) {
+            return self.alloc(ExprKind::Missing, range);
+        }
         match res {
             Some(res) => self.alloc(ExprKind::Path(res), range),
             None => {
@@ -434,6 +439,9 @@ impl<'a> BodyLowering<'a> {
         range: TextRange,
     ) -> PatKind {
         let Some(ctor) = self.items.constructor(name.text()) else {
+            if self.items.is_unusable(name.text()) {
+                return PatKind::Missing;
+            }
             self.diagnostics.push(Diagnostic::error(
                 codes::UNDEFINED_NAME,
                 format!("cannot find constructor `{}`", name.text()),

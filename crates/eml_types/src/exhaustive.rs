@@ -150,6 +150,11 @@ impl<'a> Exhaustive<'a> {
     }
 
     fn match_expr(&mut self, range: TextRange, scrutinee: ExprId, arms: &[MatchArm]) {
+        // 腕のない `match` は構文の誤りの後にしか現れず、報告済みである。ここで網羅性を調べると `_` の漏れを重ねて
+        // 報告してしまう (docs/spec/diagnostics.md の「連鎖する診断の抑止」)
+        if arms.is_empty() {
+            return;
+        }
         // scrutinee の型の誤りは報告済みである。パターンの型が期待する型のまま残っていても、検査しない
         if self
             .types

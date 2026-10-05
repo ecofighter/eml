@@ -111,10 +111,22 @@ fn match_arms_are_paths_and_discarded_fields_are_unrestricted() {
 
 #[test]
 fn user_constructors_shadow_the_prelude() {
-    // `True` はユーザーの `Answer` のコンストラクタを指す。`&&` の脱糖は Prelude の `False` を使うので、条件は `Bool` のまま
-    let text = "data Answer =\n  | True\n  | No\n\nreply : Bool -> Answer\nreply b = if b && b then True else No";
+    // `True` はユーザーの `Answer` のコンストラクタを指す。`||` の脱糖は Prelude の `True` を使うので、条件は `Bool` のまま。名前で引くと `Answer` になり、lang item で引くと `Bool` になる
+    let text = "data Answer =\n  | True\n  | No\n\nreply : Bool -> Answer\nreply b = if b || b then True else No";
     insta::assert_snapshot!(check_text(text), @r"
     reply : Bool -> Answer
       b#0 : Bool
+    ");
+}
+
+#[test]
+fn constructors_of_a_duplicate_data_type_do_not_cascade() {
+    let text = "data T = | A\n\ndata T = | B\n\nf : T\nf = B";
+    insta::assert_snapshot!(check_text(text), @"
+    f : T
+    ---
+    E1003 3:6 `T` is defined more than once
+      3:6 defined again here
+      1:6 first defined here
     ");
 }
