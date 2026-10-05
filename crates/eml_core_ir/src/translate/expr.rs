@@ -188,7 +188,11 @@ impl FnLowering<'_> {
                 let scope = self.tail(id, Exit::Jump(join));
                 let ty = self.ty(id);
                 let param = self.new_var("t", &ty);
-                out.push(Binding::Join { join, param, scope });
+                out.push(Binding::Join {
+                    join,
+                    params: vec![param],
+                    scope,
+                });
                 Atom::Var(param)
             }
             ExprKind::Block { stmts, tail } => {

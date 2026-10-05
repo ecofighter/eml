@@ -46,17 +46,18 @@ fn expr(program: &Program, function: &CoreFn, id: CExprId, indent: usize, out: &
             }
             CExpr::Join {
                 join,
-                param,
+                params,
                 captures,
                 body,
                 scope,
             } => {
+                let params: Vec<String> = params.iter().map(|&v| var(function, v)).collect();
                 let captures: Vec<String> = captures.iter().map(|&v| var(function, v)).collect();
                 writeln!(
                     out,
                     "{pad}join j{}({}) [{}] {{",
                     join.0,
-                    var(function, *param),
+                    params.join(", "),
                     captures.join(", ")
                 )
                 .unwrap();
@@ -64,8 +65,9 @@ fn expr(program: &Program, function: &CoreFn, id: CExprId, indent: usize, out: &
                 writeln!(out, "{pad}}}").unwrap();
                 id = *scope;
             }
-            CExpr::Jump { join, arg } => {
-                writeln!(out, "{pad}jump j{}({})", join.0, atom(function, arg)).unwrap();
+            CExpr::Jump { join, args } => {
+                let args: Vec<String> = args.iter().map(|a| atom(function, a)).collect();
+                writeln!(out, "{pad}jump j{}({})", join.0, args.join(", ")).unwrap();
                 return;
             }
             CExpr::TailCall(call) => {

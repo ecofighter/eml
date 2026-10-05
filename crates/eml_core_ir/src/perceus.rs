@@ -130,7 +130,7 @@ impl Rebuild<'_> {
                 }
                 CExpr::Join {
                     join,
-                    param,
+                    params,
                     captures,
                     body,
                     scope,
@@ -141,15 +141,18 @@ impl Rebuild<'_> {
                     let scope = self.transform(*scope, &owned);
                     steps.push(Step::Join {
                         join: *join,
-                        param: *param,
+                        params: params.clone(),
                         captures: captures.clone(),
                         scope,
                         before,
                     });
                     let mut owned = self.tracked_only(self.live.captures(*join));
-                    if self.tracked[param.0 as usize] {
-                        owned.insert(*param);
-                    }
+                    owned.extend(
+                        params
+                            .iter()
+                            .copied()
+                            .filter(|param| self.tracked[param.0 as usize]),
+                    );
                     segment = Segment::Start(owned);
                     id = *body;
                 }
@@ -163,10 +166,10 @@ impl Rebuild<'_> {
                     let owned = self.owned(&segment, &live);
                     break (self.transform_tail_call(call, &owned), live);
                 }
-                CExpr::Jump { join, arg } => {
+                CExpr::Jump { join, args } => {
                     let live = self.live.at_end(expr);
                     let owned = self.owned(&segment, &live);
-                    break (self.transform_jump(*join, *arg, &owned), live);
+                    break (self.transform_jump(*join, args, &owned), live);
                 }
                 CExpr::Switch { scrutinee, arms } => {
                     let live = self.live.at_end(expr);
@@ -190,14 +193,14 @@ impl Rebuild<'_> {
             match step {
                 Step::Join {
                     join,
-                    param,
+                    params,
                     captures,
                     scope,
                     before,
                 } => {
                     code = self.push(CExpr::Join {
                         join,
-                        param,
+                        params,
                         captures,
                         body: code,
                         scope,
@@ -286,20 +289,15 @@ impl Rebuild<'_> {
     }
 
     /// join point の本体は、`captures` のうち RC の対象をちょうど1つずつ所有して始まる。それ以外を捨て、渡す値を
-    /// 本体でも使うなら複製する。
-    fn transform_jump(&mut self, join: JoinId, arg: Atom, owned: &Vars) -> CExprId {
+    /// 本体でも使うなら複製する。同じ変数を2つの引数に渡すときは、2つ目の分も複製する。
+    fn transform_jump(&mut self, join: JoinId, args: &[Atom], owned: &Vars) -> CExprId {
         let needs = self.tracked_only(self.live.captures(join));
-        let passed = self.atom_var(&arg);
-        let mut code = self.push(CExpr::Jump { join, arg });
-        for &var in owned.iter().rev() {
-            if !needs.contains(&var) && Some(var) != passed {
-                code = self.push(CExpr::Decref { var, body: code });
-            }
-        }
-        if let Some(var) = passed.filter(|var| needs.contains(var)) {
-            code = self.push(CExpr::Dup { var, body: code });
-        }
-        code
+        let uses = self.uses(args);
+        let code = self.push(CExpr::Jump {
+            join,
+            args: args.to_vec(),
+        });
+        self.release_and_duplicate(code, owned, &uses, |var| needs.contains(&var))
     }
 }
 
@@ -307,7 +305,7 @@ impl Rebuild<'_> {
 enum Step {
     Join {
         join: JoinId,
-        param: VarId,
+        params: Vec<VarId>,
         captures: Vec<VarId>,
         scope: CExprId,
         /// join point の定義の直前 (範囲の入口) で生きている変数。

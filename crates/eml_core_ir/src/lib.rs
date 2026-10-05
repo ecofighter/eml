@@ -76,9 +76,9 @@ impl CoreFn {
     }
 
     /// `Jump` の行き先の、join point の引数と本体。
-    pub fn join(&self, join: JoinId) -> (VarId, CExprId) {
+    pub fn join(&self, join: JoinId) -> (&[VarId], CExprId) {
         match self.expr(self.joins[join.0 as usize]) {
-            CExpr::Join { param, body, .. } => (*param, *body),
+            CExpr::Join { params, body, .. } => (params, *body),
             _ => unreachable!("the join index points at join points"),
         }
     }
@@ -108,12 +108,13 @@ pub enum CExpr {
         rhs: Rhs,
         body: CExprId,
     },
-    /// `scope` の中の `Jump` が `body` に入る。`param` は `Jump` が渡す値を受ける。末尾にない `if` の続きを、
+    /// `scope` の中の `Jump` が `body` に入る。`params` は `Jump` が渡す値を順に受ける。末尾にない `if` の続きを、
     /// ヒープにフレームを積まずに実行するために使う (docs/spec/core-ir.md)。`body` の中からは `Jump` しない。
+    /// 末尾にない `if` の join point は引数を1つ持ち、`simplify` の B2 が切り出す枝の join point は引数を持たない。
     Join {
         join: JoinId,
-        param: VarId,
-        /// 本体が使う外側の変数 (`param` を除く)。RC の対象かどうかによらずすべて入れ、`VarId` の昇順に並べる。
+        params: Vec<VarId>,
+        /// 本体が使う外側の変数 (`params` を除く)。RC の対象かどうかによらずすべて入れ、`VarId` の昇順に並べる。
         /// パスの中では古くなってよく、パスの間ではパイプラインが埋め直す (docs/spec/core-ir.md のパスの表)。
         captures: Vec<VarId>,
         body: CExprId,
@@ -126,7 +127,7 @@ pub enum CExpr {
     },
     Jump {
         join: JoinId,
-        arg: Atom,
+        args: Vec<Atom>,
     },
     Return(Atom),
     /// 関数の末尾の呼び出し。呼び出し元のフレームを積まない。
@@ -147,7 +148,7 @@ impl CExpr {
         match self {
             CExpr::Let { rhs, .. } => rhs.atoms_mut(),
             CExpr::Switch { scrutinee, .. } => vec![scrutinee],
-            CExpr::Jump { arg, .. } => vec![arg],
+            CExpr::Jump { args, .. } => args.iter_mut().collect(),
             CExpr::Return(atom) => vec![atom],
             CExpr::TailCall(call) => call.atoms_mut(),
             CExpr::Join { .. } | CExpr::Dup { .. } | CExpr::Decref { .. } => Vec::new(),

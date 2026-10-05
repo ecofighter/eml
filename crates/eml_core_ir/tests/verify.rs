@@ -47,7 +47,7 @@ fn pick(dup_before_jump: bool) -> CoreFn {
         concat(4, 3, 1, 0),
         CExpr::Jump {
             join: JoinId(0),
-            arg: var(2),
+            args: vec![var(2)],
         },
         CExpr::Let {
             var: VarId(2),
@@ -56,7 +56,7 @@ fn pick(dup_before_jump: bool) -> CoreFn {
         },
         CExpr::Jump {
             join: JoinId(0),
-            arg: var(1),
+            args: vec![var(1)],
         },
     ];
     let then_arm = if dup_before_jump {
@@ -75,7 +75,7 @@ fn pick(dup_before_jump: bool) -> CoreFn {
     let switch = exprs.len() as u32 - 1;
     exprs.push(CExpr::Join {
         join: JoinId(0),
-        param: VarId(3),
+        params: vec![VarId(3)],
         captures: vec![VarId(1)],
         body: CExprId(1),
         scope: CExprId(switch),
@@ -148,15 +148,15 @@ fn a_jump_outside_its_join_scope_is_rejected() {
     let exprs = vec![
         CExpr::Jump {
             join: JoinId(0),
-            arg: Atom::Int(1),
+            args: vec![Atom::Int(1)],
         },
         CExpr::Jump {
             join: JoinId(0),
-            arg: Atom::Int(2),
+            args: vec![Atom::Int(2)],
         },
         CExpr::Join {
             join: JoinId(0),
-            param: VarId(0),
+            params: vec![VarId(0)],
             captures: vec![],
             body: CExprId(0),
             scope: CExprId(1),
@@ -220,11 +220,11 @@ fn a_jump_that_owns_too_much_is_rejected() {
         CExpr::Return(var(1)),
         CExpr::Jump {
             join: JoinId(0),
-            arg: Atom::Int(1),
+            args: vec![Atom::Int(1)],
         },
         CExpr::Join {
             join: JoinId(0),
-            param: VarId(1),
+            params: vec![VarId(1)],
             captures: vec![],
             body: CExprId(0),
             scope: CExprId(1),
@@ -242,6 +242,47 @@ fn a_jump_that_owns_too_little_is_rejected() {
     assert_eq!(
         check(vec![pick(false)]),
         Err("a jump to `j0` owns [] but its join needs [s1] in `pick`".to_string())
+    );
+}
+
+/// `two s = let u = "s" in join j0(a, b) [] { let c = a ++ b; return c } in jump j0(s, u)` の Perceus の後の形。
+/// `passed` を変えて、`jump` が渡す値の数を変える。
+fn two_values(passed: Vec<Atom>) -> CoreFn {
+    let exprs = vec![
+        CExpr::Return(var(4)),
+        concat(4, 2, 3, 0),
+        CExpr::Jump {
+            join: JoinId(0),
+            args: passed,
+        },
+        CExpr::Let {
+            var: VarId(1),
+            rhs: Rhs::ConstString(0),
+            body: CExprId(2),
+        },
+        CExpr::Join {
+            join: JoinId(0),
+            params: vec![VarId(2), VarId(3)],
+            captures: vec![],
+            body: CExprId(1),
+            scope: CExprId(3),
+        },
+    ];
+    let vars = vec![boxed("s"), boxed("u"), boxed("a"), boxed("b"), boxed("c")];
+    function("two", 1, vars, exprs, &[4])
+}
+
+#[test]
+fn a_join_point_with_two_parameters_is_accepted() {
+    // 本体は2つの引数をどちらも所有して始まり、`jump` は渡す値の所有権を渡す
+    assert_eq!(check(vec![two_values(vec![var(0), var(1)])]), Ok(()));
+}
+
+#[test]
+fn a_jump_with_the_wrong_number_of_values_is_rejected() {
+    assert_eq!(
+        check(vec![two_values(vec![var(0)])]),
+        Err("a jump to `j0` passes 1 values, but its join takes 2 in `two`".to_string())
     );
 }
 
@@ -369,7 +410,7 @@ fn a_jump_after_a_call_needs_the_variables_of_the_join_body_in_scope() {
         },
         CExpr::Jump {
             join: JoinId(0),
-            arg: var(3),
+            args: vec![var(3)],
         },
         CExpr::Let {
             var: VarId(3),
@@ -378,7 +419,7 @@ fn a_jump_after_a_call_needs_the_variables_of_the_join_body_in_scope() {
         },
         CExpr::Join {
             join: JoinId(0),
-            param: VarId(1),
+            params: vec![VarId(1)],
             captures: vec![VarId(0)],
             body: CExprId(1),
             scope: CExprId(3),
@@ -593,11 +634,11 @@ fn a_join_body_that_uses_a_variable_missing_from_its_captures_is_rejected() {
         },
         CExpr::Jump {
             join: JoinId(0),
-            arg: Atom::Int(1),
+            args: vec![Atom::Int(1)],
         },
         CExpr::Join {
             join: JoinId(0),
-            param: VarId(1),
+            params: vec![VarId(1)],
             captures: vec![],
             body: CExprId(1),
             scope: CExprId(2),
@@ -623,11 +664,11 @@ fn a_capture_out_of_scope_at_its_join_is_rejected() {
         CExpr::Return(var(1)),
         CExpr::Jump {
             join: JoinId(0),
-            arg: var(0),
+            args: vec![var(0)],
         },
         CExpr::Join {
             join: JoinId(0),
-            param: VarId(1),
+            params: vec![VarId(1)],
             captures: vec![VarId(2)],
             body: CExprId(0),
             scope: CExprId(1),
@@ -652,11 +693,11 @@ fn captures_out_of_order_are_rejected() {
         CExpr::Return(var(2)),
         CExpr::Jump {
             join: JoinId(0),
-            arg: Atom::Int(1),
+            args: vec![Atom::Int(1)],
         },
         CExpr::Join {
             join: JoinId(0),
-            param: VarId(2),
+            params: vec![VarId(2)],
             captures: vec![VarId(1), VarId(0)],
             body: CExprId(0),
             scope: CExprId(1),
@@ -686,11 +727,11 @@ fn an_unused_capture_released_by_the_body_is_accepted() {
         },
         CExpr::Jump {
             join: JoinId(0),
-            arg: Atom::Int(1),
+            args: vec![Atom::Int(1)],
         },
         CExpr::Join {
             join: JoinId(0),
-            param: VarId(1),
+            params: vec![VarId(1)],
             captures: vec![VarId(0)],
             body: CExprId(1),
             scope: CExprId(2),

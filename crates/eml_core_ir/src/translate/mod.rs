@@ -89,7 +89,7 @@ enum Binding {
     /// ここより後ろで組み立てる式を本体にし、`scope` (条件の計算と、枝が `Jump` する `Switch`) を範囲にする join point。
     Join {
         join: JoinId,
-        param: VarId,
+        params: Vec<VarId>,
         scope: CExprId,
     },
 }
@@ -106,7 +106,10 @@ enum Exit {
 fn exit_with(exit: Exit, value: Atom) -> CExpr {
     match exit {
         Exit::Return => CExpr::Return(value),
-        Exit::Jump(join) => CExpr::Jump { join, arg: value },
+        Exit::Jump(join) => CExpr::Jump {
+            join,
+            args: vec![value],
+        },
     }
 }
 
@@ -239,10 +242,14 @@ impl FnLowering<'_> {
         for binding in bindings.into_iter().rev() {
             id = match binding {
                 Binding::Let(var, rhs) => self.push(CExpr::Let { var, rhs, body: id }),
-                Binding::Join { join, param, scope } => {
+                Binding::Join {
+                    join,
+                    params,
+                    scope,
+                } => {
                     let expr = self.push(CExpr::Join {
                         join,
-                        param,
+                        params,
                         captures: Vec::new(),
                         body: id,
                         scope,

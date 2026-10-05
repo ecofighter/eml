@@ -167,7 +167,7 @@ impl<'a> Checker<'a> {
                     self.check_call(&mut state, call)?;
                     return self.nothing_owned(&state);
                 }
-                CExpr::Jump { join, arg } => return self.check_jump(state, *join, arg),
+                CExpr::Jump { join, args } => return self.check_jump(state, *join, args),
                 CExpr::Switch { scrutinee, arms } => {
                     self.consume(&mut state, scrutinee)?;
                     let mut tags = HashSet::new();
@@ -181,7 +181,7 @@ impl<'a> Checker<'a> {
                 }
                 CExpr::Join {
                     join,
-                    param,
+                    params,
                     captures,
                     body,
                     scope,
@@ -224,7 +224,9 @@ impl<'a> Checker<'a> {
                         .filter(|var| self.tracked[var.0 as usize])
                         .map(|var| (var, 1))
                         .collect();
-                    self.bind(&mut state, *param)?;
+                    for &param in params {
+                        self.bind(&mut state, param)?;
+                    }
                     id = *body;
                 }
             }
@@ -425,17 +427,29 @@ impl<'a> Checker<'a> {
         Ok(())
     }
 
-    /// 渡す値を除き、行き先の join point の `captures` のうち RC の対象を、ちょうど1つずつ所有している。
-    fn check_jump(&self, mut state: State, join: JoinId, arg: &Atom) -> Result<(), String> {
+    /// 渡す値の数が行き先の引数の数と一致し、渡す値を除き、行き先の join point の `captures` のうち RC の対象を、
+    /// ちょうど1つずつ所有している。
+    fn check_jump(&self, mut state: State, join: JoinId, args: &[Atom]) -> Result<(), String> {
         if !state.joins.contains(&join) {
             return Err(format!("a jump to `j{}` is outside its scope", join.0));
+        }
+        let (params, _) = self.function.join(join);
+        if args.len() != params.len() {
+            return Err(format!(
+                "a jump to `j{}` passes {} values, but its join takes {}",
+                join.0,
+                args.len(),
+                params.len()
+            ));
         }
         let captures = self.function.captures(join);
         // 呼び出しの後に `Jump` する経路で、本体が使う変数を退避し忘れていないこと
         for &var in captures {
             self.visible(var)?;
         }
-        self.consume(&mut state, arg)?;
+        for arg in args {
+            self.consume(&mut state, arg)?;
+        }
         let needs: Vars = captures
             .iter()
             .copied()

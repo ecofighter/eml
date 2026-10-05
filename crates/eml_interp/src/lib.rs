@@ -192,11 +192,13 @@ impl<'p> Machine<'p> {
             // 今の環境はそのまま捨ててよい (docs/spec/core-ir.md)
             CExpr::TailCall(call) => return self.call(call, None),
             CExpr::Join { scope, .. } => self.control = *scope,
-            CExpr::Jump { join, arg } => {
+            CExpr::Jump { join, args } => {
                 // join point は同じ関数の中にあるので、環境をそのまま使い、フレームを積まない
-                let value = self.atom(arg)?;
-                let (param, body) = program.function(self.function).join(*join);
-                self.slots[param.0 as usize] = Some(value);
+                let values = self.atoms(args)?;
+                let (params, body) = program.function(self.function).join(*join);
+                for (param, value) in params.iter().zip(values) {
+                    self.slots[param.0 as usize] = Some(value);
+                }
                 self.control = body;
             }
             CExpr::Dup { var, body } => {

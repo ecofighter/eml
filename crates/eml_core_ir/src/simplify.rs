@@ -7,16 +7,11 @@
 //! 書き換えは式のアリーナの上でその場で行う。木から外れた式はアリーナに残り、Perceus がアリーナを作り直すときに
 //! 捨てる。そのため、jump の位置と親は、根からたどれる式だけで求める。
 
-use std::collections::HashSet;
-
-use crate::{Atom, CExpr, CExprId, CoreFn, JoinId, Linearity, Program, Rhs, VarId, VarInfo};
+use crate::{Atom, CExpr, CExprId, CoreFn, JoinId, Program, Rhs, VarId};
 
 pub(crate) fn simplify(program: &mut Program) {
     for function in &mut program.functions {
-        let mut pass = Simplify {
-            function,
-            unit_params: HashSet::new(),
-        };
+        let mut pass = Simplify { function };
         pass.split_known_tags();
         pass.forward_small_bodies();
         pass.inline_single_jumps();
@@ -27,8 +22,6 @@ pub(crate) fn simplify(program: &mut Program) {
 
 struct Simplify<'a> {
     function: &'a mut CoreFn,
-    /// B2 で作った join point の引数。`()` を受けるだけで本体では使わないので、戻すときに束縛を作らない。
-    unit_params: HashSet<VarId>,
 }
 
 impl Simplify<'_> {
@@ -98,17 +91,6 @@ impl Simplify<'_> {
         CExprId(self.function.exprs.len() as u32 - 1)
     }
 
-    fn new_unit_param(&mut self) -> VarId {
-        self.function.vars.push(VarInfo {
-            name: "u".to_string(),
-            linearity: Linearity::Unr,
-            boxed: false,
-        });
-        let var = VarId(self.function.vars.len() as u32 - 1);
-        self.unit_params.insert(var);
-        var
-    }
-
     /// `root` の部分木で、`var` の使用を `atom` に置き換える。
     fn substitute(&mut self, root: CExprId, var: VarId, atom: Atom) {
         let mut work = vec![root];
@@ -125,29 +107,32 @@ impl Simplify<'_> {
 
     fn known_tag(&self, site: CExprId) -> Option<u32> {
         match self.expr(site) {
-            CExpr::Jump {
-                arg: Atom::Tag(tag),
-                ..
-            } => Some(*tag),
+            CExpr::Jump { args, .. } => match args.as_slice() {
+                [Atom::Tag(tag)] => Some(*tag),
+                _ => None,
+            },
             _ => None,
         }
     }
 
-    /// B2: 本体が引数で分岐する join point に定数のタグを jump で渡していれば、各枝を join point に切り出し、定数の
-    /// jump を枝へ直接向ける。`&&` と `||` を条件にした `if` がこの形になる (docs/spec/core-ir.md)。
+    /// B2: 本体が引数で分岐する join point に定数のタグを jump で渡していれば、各枝を引数のない join point に切り出し、
+    /// 定数の jump を枝へ直接向ける。`&&` と `||` を条件にした `if` がこの形になる (docs/spec/core-ir.md)。
     fn split_known_tags(&mut self) {
         let jumps = self.jumps();
         for (index, sites) in jumps.iter().enumerate() {
             let node = self.function.joins[index];
             let CExpr::Join {
                 join,
-                param,
+                params,
                 body,
                 scope,
                 ..
             } = self.expr(node).clone()
             else {
                 unreachable!("the join index points at join points")
+            };
+            let &[param] = params.as_slice() else {
+                continue;
             };
             let CExpr::Switch {
                 scrutinee: Atom::Var(scrutinee),
@@ -167,18 +152,17 @@ impl Simplify<'_> {
             let mut arm_joins = Vec::new();
             for &(tag, arm) in &arms {
                 self.substitute(arm, param, Atom::Tag(tag));
-                let unit = self.new_unit_param();
                 let arm_join = JoinId(self.function.joins.len() as u32);
                 // 索引は、下で組み立てた `Join` の位置に直す
                 self.function.joins.push(arm);
-                arm_joins.push((tag, arm_join, unit, arm));
+                arm_joins.push((tag, arm_join, arm));
             }
             let dispatch = arm_joins
                 .iter()
-                .map(|&(tag, arm_join, _, _)| {
+                .map(|&(tag, arm_join, _)| {
                     let jump = self.push(CExpr::Jump {
                         join: arm_join,
-                        arg: Atom::Unit,
+                        args: Vec::new(),
                     });
                     (tag, jump)
                 })
@@ -192,7 +176,7 @@ impl Simplify<'_> {
             );
             for &site in sites {
                 if let Some(tag) = self.known_tag(site) {
-                    let &(_, arm_join, _, _) = arm_joins
+                    let &(_, arm_join, _) = arm_joins
                         .iter()
                         .find(|&&(arm_tag, ..)| arm_tag == tag)
                         .expect("checked above");
@@ -200,7 +184,7 @@ impl Simplify<'_> {
                         site,
                         CExpr::Jump {
                             join: arm_join,
-                            arg: Atom::Unit,
+                            args: Vec::new(),
                         },
                     );
                 }
@@ -209,16 +193,16 @@ impl Simplify<'_> {
             // 範囲にするので、元の本体からも、範囲の中の定数の jump からも届く。元の位置には最初の枝の join point が入る
             let mut inner = self.push(CExpr::Join {
                 join,
-                param,
+                params: vec![param],
                 captures: Vec::new(),
                 body,
                 scope,
             });
             self.function.joins[index] = inner;
-            for (position, &(_, arm_join, unit, arm)) in arm_joins.iter().enumerate().rev() {
+            for (position, &(_, arm_join, arm)) in arm_joins.iter().enumerate().rev() {
                 let expr = CExpr::Join {
                     join: arm_join,
-                    param: unit,
+                    params: Vec::new(),
                     captures: Vec::new(),
                     body: arm,
                     scope: inner,
@@ -234,8 +218,8 @@ impl Simplify<'_> {
         }
     }
 
-    /// B3: jump が1つだけの join point を、その jump の位置に戻す。jump の位置では、本体が使う外側の変数がすべて
-    /// 範囲にある。
+    /// B3: jump が1つだけの join point を、その jump の位置に戻す。引数は、jump が渡す値の束縛にする。jump の位置では、
+    /// 本体が使う外側の変数がすべて範囲にある。
     fn inline_single_jumps(&mut self) {
         let jumps = self.jumps();
         let mut parents = self.parents();
@@ -244,26 +228,40 @@ impl Simplify<'_> {
                 continue;
             };
             let node = self.function.joins[index];
-            let CExpr::Join { param, body, .. } = self.expr(node) else {
+            let CExpr::Join { params, body, .. } = self.expr(node) else {
                 unreachable!("the join index points at join points")
             };
-            let (param, body) = (*param, *body);
-            let CExpr::Jump { arg, .. } = self.expr(site) else {
+            let (params, body) = (params.clone(), *body);
+            let CExpr::Jump { args, .. } = self.expr(site) else {
                 unreachable!("a jump site holds a jump")
             };
-            let arg = *arg;
-            if self.unit_params.contains(&param) {
-                self.replace(&mut parents, site, body);
-            } else {
-                self.set(
-                    site,
-                    CExpr::Let {
-                        var: param,
-                        rhs: Rhs::Atom(arg),
-                        body,
-                    },
-                );
-                parents[body.0 as usize] = Some(site);
+            let args = args.clone();
+            match params.split_first() {
+                None => self.replace(&mut parents, site, body),
+                Some((&first, rest)) => {
+                    // 2つ目からの引数の束縛を本体の前に積み、最初の引数の束縛を jump の位置に置く。新しく作った式も
+                    // 後の置き換えで親をたどれるように、親の表を広げる
+                    let mut inner = body;
+                    for (&param, &arg) in rest.iter().zip(&args[1..]).rev() {
+                        let binding = self.push(CExpr::Let {
+                            var: param,
+                            rhs: Rhs::Atom(arg),
+                            body: inner,
+                        });
+                        parents.resize(self.function.exprs.len(), None);
+                        parents[inner.0 as usize] = Some(binding);
+                        inner = binding;
+                    }
+                    self.set(
+                        site,
+                        CExpr::Let {
+                            var: first,
+                            rhs: Rhs::Atom(args[0]),
+                            body: inner,
+                        },
+                    );
+                    parents[inner.0 as usize] = Some(site);
+                }
             }
             // jump が範囲そのものだった場合に備え、範囲は置き換えの後に読み直す
             let CExpr::Join { scope, .. } = self.expr(node) else {
@@ -279,32 +277,35 @@ impl Simplify<'_> {
     fn forward_small_bodies(&mut self) {
         let jumps = self.jumps();
         for (index, sites) in jumps.iter().enumerate() {
-            let CExpr::Join { param, body, .. } = self.expr(self.function.joins[index]) else {
+            let CExpr::Join { params, body, .. } = self.expr(self.function.joins[index]) else {
                 unreachable!("the join index points at join points")
             };
-            let (param, body) = (*param, *body);
+            let (params, body) = (params.clone(), *body);
             let small = match self.expr(body) {
-                CExpr::Return(value) if movable(*value, param) => self.expr(body).clone(),
-                CExpr::Jump { arg, .. } if movable(*arg, param) => self.expr(body).clone(),
+                CExpr::Return(value) if movable(*value, &params) => self.expr(body).clone(),
+                CExpr::Jump { args, .. } if args.iter().all(|&arg| movable(arg, &params)) => {
+                    self.expr(body).clone()
+                }
                 _ => continue,
             };
             for &site in sites {
-                let CExpr::Jump { arg, .. } = self.expr(site) else {
+                let CExpr::Jump { args: passed, .. } = self.expr(site) else {
                     unreachable!("a jump site holds a jump")
                 };
-                let passed = *arg;
-                let with = |atom: Atom| {
-                    if atom == Atom::Var(param) {
-                        passed
-                    } else {
-                        atom
-                    }
+                let passed = passed.clone();
+                // 引数は、jump が同じ位置に渡す値に置き換える
+                let with = |atom: Atom| match atom {
+                    Atom::Var(var) => params
+                        .iter()
+                        .position(|&param| param == var)
+                        .map_or(atom, |position| passed[position]),
+                    _ => atom,
                 };
                 let copy = match &small {
                     CExpr::Return(value) => CExpr::Return(with(*value)),
-                    CExpr::Jump { join, arg } => CExpr::Jump {
+                    CExpr::Jump { join, args } => CExpr::Jump {
                         join: *join,
-                        arg: with(*arg),
+                        args: args.iter().map(|&arg| with(arg)).collect(),
                     },
                     _ => unreachable!("only returns and jumps are small"),
                 };
@@ -411,9 +412,9 @@ fn replace_child(expr: &mut CExpr, old: CExprId, new: CExprId) {
 
 /// 本体を jump の位置に写してよい値。引数は渡す値に置き換わり、定数はどこでも同じである。ほかの変数は、写すと
 /// その変数の使用が増えるので写さない。
-fn movable(atom: Atom, param: VarId) -> bool {
+fn movable(atom: Atom, params: &[VarId]) -> bool {
     match atom {
-        Atom::Var(var) => var == param,
+        Atom::Var(var) => params.contains(&var),
         _ => true,
     }
 }

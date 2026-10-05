@@ -92,7 +92,7 @@ fn an_arm_reached_twice_stays_a_join_point() {
     let text = "either : Bool -> Bool -> String -> String\neither a b s = if a || b then s ++ \"!\" else s\n\nmain : Unit -> <IO> Unit\nmain () = ()";
     insta::assert_snapshot!(core_text(text, Pass::Simplify), @r#"
     fn either(a0, b1, s2) {
-      join j0(u7) [s2] {
+      join j0() [s2] {
         let s4 = const "!"
         let t5 = prim ++(s2, s4)
         return t5
@@ -104,10 +104,10 @@ fn an_arm_reached_twice_stays_a_join_point() {
             #0 ->
               return s2
             #1 ->
-              jump j0(())
+              jump j0()
           }
         #1 ->
-          jump j0(())
+          jump j0()
       }
     }
     fn main(p0) {
@@ -166,16 +166,16 @@ fn join_points_left_without_jumps_are_removed() {
         let t11 = perform println(s10)
         return t11
       }
-      join j1(u13) [] {
+      join j1() [] {
         let s6 = const "x"
         let t7 = perform println(s6)
         jump j0(t7)
       }
       switch t3 {
         #0 ->
-          jump j1(())
+          jump j1()
         #1 ->
-          jump j1(())
+          jump j1()
       }
     }
     fn entry$main() {

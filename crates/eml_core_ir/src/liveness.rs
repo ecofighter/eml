@@ -40,13 +40,13 @@ impl BlockLiveness {
             CExpr::Return(atom) => var_of(atom).into_iter().collect(),
             CExpr::TailCall(call) => call.atoms().iter().filter_map(var_of).collect(),
             // 範囲の外への `Jump` は verifier が報告するので、ここでは求めていない `captures` を空として扱う
-            CExpr::Jump { join, arg } => {
+            CExpr::Jump { join, args } => {
                 let mut vars = self
                     .captures
                     .get(join.0 as usize)
                     .cloned()
                     .unwrap_or_default();
-                vars.extend(var_of(arg));
+                vars.extend(args.iter().filter_map(var_of));
                 vars
             }
             CExpr::Switch { scrutinee, arms } => {
@@ -79,12 +79,13 @@ fn var_of(atom: &Atom) -> Option<VarId> {
     }
 }
 
-/// 連鎖の始まりの種類。join point の本体の入口は表に持たず、`captures` に書く。
+/// 連鎖の始まりの種類。join point の本体の入口は表に持たず、`captures` に書く。`JoinBody` の `node` は `Join` の式で、
+/// 本体の入口から除く引数をそこから読む。
 #[derive(Clone, Copy)]
 enum Start {
     Function,
     Block,
-    JoinBody { join: JoinId, param: VarId },
+    JoinBody { join: JoinId, node: CExprId },
 }
 
 enum Step {
@@ -126,18 +127,14 @@ pub(crate) fn analyze(function: &mut CoreFn) -> BlockLiveness {
                 });
                 match function.expr(id) {
                     CExpr::Join {
-                        join,
-                        param,
-                        body,
-                        scope,
-                        ..
+                        join, body, scope, ..
                     } => {
                         work.push(Step::Visit(*scope, Start::Block));
                         work.push(Step::Visit(
                             *body,
                             Start::JoinBody {
                                 join: *join,
-                                param: *param,
+                                node: id,
                             },
                         ));
                     }
@@ -171,8 +168,13 @@ pub(crate) fn analyze(function: &mut CoreFn) -> BlockLiveness {
                     Start::Block => {
                         live.entries.insert(start, vars);
                     }
-                    Start::JoinBody { join, param } => {
-                        vars.remove(&param);
+                    Start::JoinBody { join, node } => {
+                        let CExpr::Join { params, .. } = function.expr(node) else {
+                            unreachable!("a join body starts at a join point")
+                        };
+                        for param in params {
+                            vars.remove(param);
+                        }
                         live.captures[join.0 as usize] = vars;
                     }
                 }
