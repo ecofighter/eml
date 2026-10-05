@@ -177,3 +177,10 @@
 - 演算子の参照を `fn` に脱糖するようになったので、`eml_hir/tests/lower.rs` の `constructs_of_later_stages_are_not_yet_supported` から、演算子の参照の E0004 の行が消え、`plus` が `(fn $a#3 $b#4 -> (+ $a#3 $b#4))` と表示されるようになった。隠しの引数が局所変数の番号を使うので、`plus` の番号は `#3` から `#5` に変わった。`let ... in` の E0004 は残る (種類1)
 - 同じ理由で、`eml_types/tests/check.rs` の `later_stage_constructs_add_no_type_errors` から、演算子の参照の E0004 の2行が消え、`plus` の型が `Int -> <_> Int -> <_> Int` になり、隠しの引数 `$a`、`$b` の `Int` が出力に加わった (種類1)
 - `let ... in` を脱糖するようになったので、`eml_hir/tests/lower.rs` の `constructs_of_later_stages_are_not_yet_supported` から `let ... in` の E0004 の行が消え、`let y = x in y` が1つの `let` を持つ入れ子のブロックとして表示されるようになった (種類1)
+
+### リファクタリング R5
+
+- `export` が Kind の解なしで書き出せるようになり、`display` と1つにまとめたので、`eml_types/src/table/tests.rs` の `export_needs_solved_kinds` (解く前の書き出しの panic) と `display_does_not_solve_kinds` (表示が解かないこと) を消した (種類1)。確かめる性質そのものがなくなったためである
+- 型の表の複写 (`Table::copy_type`) をなくし、シグネチャの閉じた形 `Shape` の具体化に替えたので、`table/tests.rs` の `copy_type_replaces_rigid_variables` と `copying_keeps_an_error_row` を消した (種類1)。同じ意図のテストは `shape.rs` の `instantiation_replaces_rigid_variables_and_rows` と `an_error_row_survives_closing_and_instantiation` に移した
+- dump の `kinds:` の行は変わらなかった (種類2はなし)
+- `kind.rs` の単体テスト9件を `kind/solve.rs` に移し、新しい API で組み立て直した。`table/tests.rs` の `Table::new` の呼び方、Kind を読む3件の組み立て、`ty.rs` の単体テストの `Type` の組み立て (`linearity` を除いた) も追随させた。`kind/solve.rs` の `carry_residual` の単体テスト3件は、何もない成分を飛ばす修正で呼び出しの引数だけが変わった。期待値は変えていない (種類3)

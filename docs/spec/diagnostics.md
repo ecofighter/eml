@@ -91,7 +91,7 @@ E0xxx は `eml_syntax::codes` (E0004 だけは `eml_diagnostics`)、E1xxx は `e
 | E3003 | `LINEAR_VALUE_NOT_CONSUMED` | 線形な値を、ある経路で使わなかった。束縛した位置を primary、使わなかった枝、省いた `else`、またはスコープの終わりを secondary にする。どの経路でも使わないうちに同じブロックの後の `let` で隠されたときは、スコープの終わりではなく隠した束縛を secondary にし、隠す前に `drop` するよう help で伝える。help で `drop` を提案し、使わなかった経路がブロックなら、その最後の文の前に `drop x` の行を入れる fix を付ける。`drop x` を入れる位置で同じ名前の後の束縛が見えているときは、fix を付けない |
 | E3004 | `LINEAR_VALUE_DISCARDED` | 線形な値を `_` で受けた。パターンを指す |
 | E3005 | `CONTINUATION_NOT_HANDLED` | `once` の操作の節の `k` を、ある経路で `resume` も `drop` もしなかった。節を primary、`k` の束縛を secondary にする |
-| E3006 | `LINEAR_VALUE_KEPT_ACROSS_MULTI` | 線形な値を持ったまま、`multi` の操作を起こしうる呼び出し、`resume`、`handle` をまたいだ (持ち越し規則)。同じ値は、呼び出しの位置が最も前の1件だけを報告する |
+| E3006 | `LINEAR_VALUE_KEPT_ACROSS_MULTI` | 線形な値を持ったまま、`multi` の操作を起こしうる呼び出し、`resume`、`handle` をまたいだ (持ち越し規則)。同じ値は、呼び出しの位置が最も前の1件だけを報告する。呼んだ関数のスキームを通る持ち越しの違反は、そのスキームに残した組ごとに1件で、呼んだ関数の中で位置が最も前の持ち越しを指す |
 | E4001 | `NON_EXHAUSTIVE_MATCH` | 網羅されていない `match` |
 | E4002 | `NON_EXHAUSTIVE_EQUATION` | 網羅されていない等式 |
 | E4003 | `REFUTABLE_PATTERN` | 反駁可能な `let` の左辺、ラムダの引数、handler の節の引数と `return` の節の引数のパターン |
