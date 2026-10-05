@@ -60,7 +60,7 @@ enum Missing {
 }
 ```
 
-- `sequence(a, b)` は回数を足す。`first` は `a` の `first` があればそれ、なければ `b` の `first` にする。`second` は `a` の `second`、`b` の `second`、`a` の `first` があるときの `b` の `first` の順に最初に見つかったものにする。`missing` は、合わせた `min` が0のときだけ残し、`a` の `missing` を優先する。
+- `sequence(a, b)` は回数を足す。`first` は `a` の `first` があればそれ、なければ `b` の `first` にする。`second` は `a` の `second`、`a` の `first` があるときの `b` の `first`、`b` の `second` の順に最初に見つかったものにする。経路の上で早い2回目を指すためである。`missing` は、合わせた `min` が0のときだけ残し、`a` の `missing` を優先する。
 - `join` は、2つの枝の範囲 (枝の本体の `ExprId`、または `else` のない `if` の `ExprId`) を引数に取る。片方の枝に現れない変数は、その枝で `min = max = 0` とし、`missing` をその枝にする。`first` と `second` は、`max` が大きい側の枝から取る。
 - どの経路でも使わない変数 (`max == 0`) は `missing` を持たない。診断はスコープの終わりを指す (下の表)。
 
@@ -71,13 +71,13 @@ enum Missing {
 | 今 | 5a |
 |---|---|
 | `UsedMoreThanOnce(String)` | `UsedMoreThanOnce { name, first: TextRange, second: TextRange }` |
-| `NotUsed(String)` | `NotUsed { name, path: UnusedPath }`。`UnusedPath` は `Branch(TextRange)`、`NoElse(TextRange)`、`ScopeEnd(TextRange)` のどれかで、fix のための字下げの情報 (下の「fix」) を持つ |
+| `NotUsed(String)` | `NotUsed { name, path: UnusedPath, fix: Option<DropFix> }`。`UnusedPath` は `Branch(TextRange)`、`NoElse(TextRange)`、`ScopeEnd(TextRange)` のどれかである。`DropFix` は `drop x` を入れる位置と字下げである (下の「fix」) |
 | (なし) | `ContinuationNotUsed { name, clause: TextRange }`。`once` の操作の節の `k` が、ある経路で使われない |
 | `Discarded` | 変えない |
 | ほかの由来 | 変えない |
 
-- `count` は、`Use` から由来を作る。`max >= 2` なら `UsedMoreThanOnce`、そうでなく `min == 0` なら `NotUsed` にする。このとき `Missing` を、範囲と fix の情報を持つ `UnusedPath` に変える。操作の節の `OpClause::k` が束縛した変数で `min == 0` なら、`NotUsed` の代わりに `ContinuationNotUsed` にする。
-- スコープの終わりは、ブロックの `let` なら囲むブロックの式の範囲の終わり、関数の引数なら本体の範囲の終わり、ラムダの引数ならラムダの本体の範囲の終わり、`match` の枝のパターンなら枝の本体の範囲の終わりである。どれも長さ0の範囲にする。
+- `count` は、`Use` から由来を作る。`max >= 2` なら `UsedMoreThanOnce`、そうでなく `min == 0` なら `NotUsed` にする。このとき `Missing` を `UnusedPath` に変え、fix を決める。操作の節の `OpClause::k` が束縛した変数で `min == 0` なら、`NotUsed` の代わりに `ContinuationNotUsed` にする。
+- スコープの終わりは、ブロックの `let` なら囲むブロック、関数の引数なら本体、ラムダの引数ならラムダの本体、`match` の枝のパターンなら枝の本体、handler の節の引数なら節の本体の終わりである。その式がブロックなら、最後の文の終わりにする。どれも長さ0の範囲にする。
 - `solve_kinds` が由来を範囲で並べて重複を除く今の処理は変えない。由来の比較に位置が加わるので、同じ束縛の異なる誤りは別の診断になる。
 
 ### 診断
@@ -103,9 +103,11 @@ E3003 にだけ付ける。`drop x` の行を、使わなかった経路のブ�
 - 経路がブロックであり (`Branch` の本体がブロック、またはスコープの終わりがブロックの終わり)、そのブロックの最後の文が行の最初のトークンで始まるときだけ fix を付ける。
 - 編集は、最後の文の先頭の位置に長さ0の範囲で `drop x\n<最後の文と同じ字下げ>` を入れる。
 - ほかの場合 (1行の式で終わる枝、`else` のない `if`、本体が1行の式の関数) は help だけを出す。1行の式を書き換える fix は、括弧とレイアウトの扱いが込み入るためである。
-- `eml_types` はソースの文字列を持たないので、字下げを HIR に持たせる。`ExprKind::Block` に `tail_indent: Option<u32>` を足す。ブロックの最後の文 (`tail`、なければ最後の `Stmt`) が行の最初のトークンで始まるとき、その列 (行の先頭からの空白の数) を入れ、そうでなければ `None` にする。HIR の変換が、最後の文の前の空白のトークンから求める。タブは字句の段階で誤りなので、空白だけを数えればよい ([字句](../../spec/lexical.md))。
-- 使用回数のパスは、経路のブロックの `tail_indent` と最後の文の範囲から挿入の位置と字下げを決め、`UnusedPath` に入れる。`tail_indent` が `None` なら fix を付けない。
-- HIR の表示 (テストのダンプ) に `tail_indent` は出さない。
+- `eml_types` はソースの文字列を持たないので、挿入の位置と字下げを HIR に持たせる。`ExprKind::Block` に `last_line: Option<LineStart>` を足す。`LineStart` は、ブロックの最後の文 (`tail`、なければ最後の `Stmt`) の先頭の位置 `offset: TextSize` と、その行の字下げ `indent: u32` (行の先頭からの空白の数) である。最後の文が行の最初のトークンで始まるときだけ `Some` にする。型付き AST の `Stmt::line_indent` が、文の最初のトークンの直前の空白のトークンから字下げを求める。タブは字句の段階で誤りなので、空白だけを数えればよい ([字句](../../spec/lexical.md))。
+- 使用回数のパスは、経路のブロックの `last_line` から `DropFix` を作る。`last_line` が `None` なら fix を付けない。
+- 束縛した位置より後に最後の文がないとき (ブロックの最後の文が、その変数を束縛する `let` であるとき) は fix を付けない。
+- 束縛した位置と挿入の位置の間に、同じ名前の別の変数の束縛があるときは fix を付けない。入れた `drop x` が、シャドーイングした別の `x` を指してしまうためである。
+- HIR の表示 (テストのダンプ) に `last_line` は出さない。
 - CLI の表示は変えない (fix を表示しない)。
 
 ## 2. `File`
@@ -152,12 +154,12 @@ pub(crate) struct DataKind {
 
 ### ランタイム
 
-- `Payload::File(FileHandle)` を足す。`FileHandle` は `std::fs::File` と開いたときのパスを持つ。`Payload` は `PartialEq` を導出しているので、`FileHandle` の `PartialEq` は手で書き、パスだけを比べる。
+- `Payload::File(FileHandle)` を足す。`FileHandle` は、読み出し口 `Box<dyn Read + Send + Sync>` と、`open` に渡したパスを持つ。インタプリタは `std::fs::File` を入れる。読み出し口を trait object にするのは、解放したときに読み出し口が捨てられることを、ランタイムの単体テストで確かめられるようにするためである。`Payload` は `Debug` と `PartialEq` を導出しているので、`FileHandle` のこの2つは手で書き、パスだけを表示し、比べる。
 - 記述子 `DescId::FILE` (名前は `"File"`) を足す。
-- 破棄処理は、オブジェクトの解放そのものである。RC が0になってオブジェクトを解放すると、`std::fs::File` の `Drop` が OS のファイルを閉じる。`drop f`、`close f`、`data` とタプルの再帰的な解放、5b の中断時の区間の解放は、すべてこの経路を通る。
+- 破棄処理は、オブジェクトの解放そのものである。RC が0になってオブジェクトを解放すると、読み出し口が捨てられ、`std::fs::File` の `Drop` が OS のファイルを閉じる。`drop f`、`close f`、`data` とタプルの再帰的な解放、5b の中断時の区間の解放は、すべてこの経路を通る。
 - `take_or_copy` が共有された `File` を写そうとしたら、`HeapError::NotCopyable` を返す。型検査と Core IR が正しければ起きない。
 - `debug_heap` のリーク検出は、ほかのオブジェクトと同じく `File` にも効く。
-- `std::fs::File` は `Send + Sync` なので、マルチコアに備えた決定 ([ランタイム](../../spec/runtime.md)) に反しない。
+- 読み出し口に `Send + Sync` を求めるので、マルチコアに備えた決定 ([ランタイム](../../spec/runtime.md)) に反しない。
 
 ### インタプリタ
 
