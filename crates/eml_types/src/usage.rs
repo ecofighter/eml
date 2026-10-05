@@ -55,17 +55,21 @@ impl Use {
     }
 }
 
-pub(crate) fn constrain(body: &Body, typing: &BodyTyping, table: &mut Table, well_typed: bool) {
-    // 型の誤りを報告済みの本体 (`well_typed` が偽) と、HIR の誤りがある本体では、捨てた式や節の中の使用が数えられない。
-    // 構文解析の誤りは HIR の診断 (`has_errors`) に入らず `Missing` の跡だけが残るので、両方を見る。E3xxx を連鎖
-    // させないよう、このパスの制約は由来を記録せずに出す。本体の型検査が出す制約 (`Passed` や `Unified` の由来) は
-    // このパスの外なので、由来を記録したままである (docs/spec/types.md の「エラーの扱い」)
-    let reliable = well_typed
+/// 使った回数を正しく数えられる本体か。型の誤りを報告済みの本体 (`well_typed` が偽) と、HIR の誤りがある本体では、
+/// 捨てた式や節の中の使用が数えられない。構文解析の誤りは HIR の診断 (`has_errors`) に入らず `Missing` の跡だけが
+/// 残るので、両方を見る。偽なら、使用回数のパスと持ち越しのパスは、E3xxx を連鎖させないよう制約の由来を記録しない。
+/// 本体の型検査が出す制約 (`Passed` や `Unified` の由来) はこのパスの外なので、由来を記録したままである
+/// (docs/spec/types.md の「エラーの扱い」)。
+pub(crate) fn reliable(body: &Body, well_typed: bool) -> bool {
+    well_typed
         && !body.has_errors
         && !body
             .exprs
             .iter()
-            .any(|(_, expr)| matches!(expr.kind, ExprKind::Missing));
+            .any(|(_, expr)| matches!(expr.kind, ExprKind::Missing))
+}
+
+pub(crate) fn constrain(body: &Body, typing: &BodyTyping, table: &mut Table, reliable: bool) {
     let mut by_name: HashMap<&str, Vec<LocalId>> = HashMap::new();
     for (local, data) in body.locals.iter() {
         by_name.entry(data.name.as_str()).or_default().push(local);

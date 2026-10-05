@@ -1,0 +1,28 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: rendered
+input_file: tests/ui/check-fail/linearity/multi_over_once.em
+---
+[E3006] Error: `k` must be used exactly once, but it is kept alive across a call that may resume more than once
+    ╭─[ check-fail/linearity/multi_over_once.em:13:17 ]
+    │
+ 13 │         let b = choose ()
+    │                 ────┬────  
+    │                     ╰────── this call may perform `choose`, a `multi` operation
+    │
+    ├─[ check-fail/linearity/multi_over_once.em:13:17 ]
+    │
+ 12 │     | ask () k ->
+    │              ┬  
+    │              ╰── `k` is bound here
+    │
+    ├─[ check-fail/linearity/multi_over_once.em:13:17 ]
+    │
+  7 │   multi choose : Unit -> Bool
+    │         ───┬──  
+    │            ╰──── `choose` is declared `multi` here
+    │ 
+    │ Help: finish using `k` before this call
+    │ 
+    │ Note: a continuation of a `multi` operation can be resumed more than once, and each resumption would use the value again
+────╯

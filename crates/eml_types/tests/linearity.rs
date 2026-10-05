@@ -365,3 +365,211 @@ fn no_fix_when_the_last_statement_does_not_start_a_line() {
     assert!(diagnostics(rest).starts_with("E3003 11:13"));
     assert_eq!(fix_text(rest), "");
 }
+
+/// 持ち越し規則のテストの宣言 (docs/spec/effects.md の「継続の多重度と持ち越し規則」)。どのテストも20行目から関数を書く。
+const CARRY: &str = "effect Choice where\n  multi choose : Unit -> Bool\n\neffect Ask where\n  ask : Unit -> Int\n\neffect Fail where\n  never fail : Unit -> a\n\neffect Mixed where\n  single : Unit -> Int\n  multi many : Unit -> Int\n\neffect Use where\n  use_file : File -> Unit\n\nconsume : File -> Bool -> <IO> Unit\nconsume f b = close f\n\n";
+
+fn carried(rest: &str) -> String {
+    let checked = check(&format!("{CARRY}{rest}"));
+    full(&checked.files, &checked.diagnostics)
+}
+
+#[test]
+fn a_file_kept_across_a_multi_operation() {
+    let rest = "held : Unit -> <Choice, IO> Unit\nheld () =\n  let f = open \"a.txt\"\n  let b = choose ()\n  close f";
+    insta::assert_snapshot!(carried(rest), @r"
+    E3006 23:11 `f` must be used exactly once, but it is kept alive across a call that may resume more than once
+      23:11 this call may perform `choose`, a `multi` operation
+      22:7 `f` is bound here
+      2:9 `choose` is declared `multi` here
+      note: a continuation of a `multi` operation can be resumed more than once, and each resumption would use the value again
+      help: finish using `f` before this call
+    ");
+}
+
+#[test]
+fn an_evaluated_argument_is_kept_across_a_later_argument() {
+    let rest = "temporary : Unit -> <Choice, IO> Unit\ntemporary () =\n  let f = open \"a.txt\"\n  consume f (choose ())";
+    insta::assert_snapshot!(carried(rest), @r"
+    E3006 23:14 a linear value must be used exactly once, but it is kept alive across a call that may resume more than once
+      23:14 this call may perform `choose`, a `multi` operation
+      23:11 this value is kept alive across the call
+      2:9 `choose` is declared `multi` here
+      note: a continuation of a `multi` operation can be resumed more than once, and each resumption would use the value again
+      help: finish using the value before this call
+    ");
+}
+
+#[test]
+fn an_evaluated_tuple_element_is_kept_across_a_later_element() {
+    let rest = "paired : Unit -> <Choice, IO> Unit\npaired () =\n  let f = open \"a.txt\"\n  let (g, b) = (f, choose ())\n  close g";
+    insta::assert_snapshot!(carried(rest), @r"
+    E3006 23:20 a linear value must be used exactly once, but it is kept alive across a call that may resume more than once
+      23:20 this call may perform `choose`, a `multi` operation
+      23:17 this value is kept alive across the call
+      2:9 `choose` is declared `multi` here
+      note: a continuation of a `multi` operation can be resumed more than once, and each resumption would use the value again
+      help: finish using the value before this call
+    ");
+}
+
+#[test]
+fn a_call_of_a_function_that_performs_a_multi_operation() {
+    let rest = "pick : Unit -> <Choice> Bool\npick () = choose ()\n\nthrough : Unit -> <Choice, IO> Unit\nthrough () =\n  let f = open \"a.txt\"\n  let b = pick ()\n  close f";
+    insta::assert_snapshot!(carried(rest), @r"
+    E3006 26:11 `f` must be used exactly once, but it is kept alive across a call that may resume more than once
+      26:11 this call may perform `choose`, a `multi` operation
+      25:7 `f` is bound here
+      2:9 `choose` is declared `multi` here
+      note: a continuation of a `multi` operation can be resumed more than once, and each resumption would use the value again
+      help: finish using `f` before this call
+    ");
+}
+
+#[test]
+fn a_value_kept_across_two_calls_is_reported_once() {
+    let rest = "twice : Unit -> <Choice, IO> Unit\ntwice () =\n  let f = open \"a.txt\"\n  let a = choose ()\n  let b = choose ()\n  close f";
+    insta::assert_snapshot!(carried(rest), @r"
+    E3006 23:11 `f` must be used exactly once, but it is kept alive across a call that may resume more than once
+      23:11 this call may perform `choose`, a `multi` operation
+      22:7 `f` is bound here
+      2:9 `choose` is declared `multi` here
+      note: a continuation of a `multi` operation can be resumed more than once, and each resumption would use the value again
+      help: finish using `f` before this call
+    ");
+}
+
+/// 精度の限界 (spec の「精度の限界」)。`log` の row は呼び出しで今の row と単一化されるので、`println` しか起こさない
+/// のに `choose` を起こしうると判定される。
+#[test]
+fn a_local_lambda_takes_the_row_of_its_caller() {
+    let rest = "logged : Unit -> <Choice, IO> Unit\nlogged () =\n  let f = open \"a.txt\"\n  let log = fn () -> println \"x\"\n  log ()\n  close f";
+    insta::assert_snapshot!(carried(rest), @r"
+    E3006 24:3 `f` must be used exactly once, but it is kept alive across a call that may resume more than once
+      24:3 this call may perform `choose`, a `multi` operation
+      22:7 `f` is bound here
+      2:9 `choose` is declared `multi` here
+      note: a continuation of a `multi` operation can be resumed more than once, and each resumption would use the value again
+      help: finish using `f` before this call
+    ");
+}
+
+#[test]
+fn a_multi_operation_of_an_effect_with_once_operations() {
+    let rest = "many_held : Unit -> <Mixed, IO> Unit\nmany_held () =\n  let f = open \"a.txt\"\n  let n = many ()\n  close f";
+    insta::assert_snapshot!(carried(rest), @r"
+    E3006 23:11 `f` must be used exactly once, but it is kept alive across a call that may resume more than once
+      23:11 this call may perform `many`, a `multi` operation
+      22:7 `f` is bound here
+      12:9 `many` is declared `multi` here
+      note: a continuation of a `multi` operation can be resumed more than once, and each resumption would use the value again
+      help: finish using `f` before this call
+    ");
+}
+
+#[test]
+fn a_once_continuation_kept_across_a_multi_operation_in_a_clause() {
+    let rest = "inner : Unit -> <Choice> Int\ninner () =\n  handle ask () with\n    | ask () k ->\n        let b = choose ()\n        resume k (if b then 1 else 2)";
+    insta::assert_snapshot!(carried(rest), @r"
+    E3006 24:17 `k` must be used exactly once, but it is kept alive across a call that may resume more than once
+      24:17 this call may perform `choose`, a `multi` operation
+      23:14 `k` is bound here
+      2:9 `choose` is declared `multi` here
+      note: a continuation of a `multi` operation can be resumed more than once, and each resumption would use the value again
+      help: finish using `k` before this call
+    ");
+}
+
+#[test]
+fn a_piped_value_is_kept_across_the_call() {
+    let rest = "consume_after : Bool -> File -> <IO> Unit\nconsume_after b f = close f\n\npiped : Unit -> <Choice, IO> Unit\npiped () =\n  let f = open \"a.txt\"\n  f |> consume_after (choose ())";
+    insta::assert_snapshot!(carried(rest), @r"
+    E3006 26:23 a linear value must be used exactly once, but it is kept alive across a call that may resume more than once
+      26:23 this call may perform `choose`, a `multi` operation
+      26:3 this value is kept alive across the call
+      2:9 `choose` is declared `multi` here
+      note: a continuation of a `multi` operation can be resumed more than once, and each resumption would use the value again
+      help: finish using the value before this call
+    ");
+}
+
+#[test]
+fn an_argument_for_a_later_arrow_is_kept_across_the_call() {
+    let rest = "choose_then : Unit -> <Choice> (File -> <IO> Unit)\nchoose_then () =\n  let b = choose ()\n  fn f -> close f\n\napplied : Unit -> <Choice, IO> Unit\napplied () =\n  let f = open \"a.txt\"\n  choose_then () f";
+    insta::assert_snapshot!(carried(rest), @r"
+    E3006 28:3 a linear value must be used exactly once, but it is kept alive across a call that may resume more than once
+      28:3 this call may perform `choose`, a `multi` operation
+      28:18 this value is kept alive across the call
+      2:9 `choose` is declared `multi` here
+      note: a continuation of a `multi` operation can be resumed more than once, and each resumption would use the value again
+      help: finish using the value before this call
+    ");
+}
+
+#[test]
+fn a_lambda_body_is_checked_on_its_own() {
+    let rest = "in_lambda : Unit -> <Choice, IO> Unit\nin_lambda () =\n  let f = open \"a.txt\"\n  let later = fn () ->\n    let b = choose ()\n    close f\n  later ()";
+    insta::assert_snapshot!(carried(rest), @r"
+    E3006 24:13 `f` must be used exactly once, but it is kept alive across a call that may resume more than once
+      24:13 this call may perform `choose`, a `multi` operation
+      22:7 `f` is bound here
+      2:9 `choose` is declared `multi` here
+      note: a continuation of a `multi` operation can be resumed more than once, and each resumption would use the value again
+      help: finish using `f` before this call
+    ");
+}
+
+#[test]
+fn a_value_kept_on_one_branch() {
+    let rest = "branch : Bool -> <Choice, IO> Unit\nbranch c =\n  let f = open \"a.txt\"\n  if c then\n    let b = choose ()\n    close f\n  else close f";
+    insta::assert_snapshot!(carried(rest), @r"
+    E3006 24:13 `f` must be used exactly once, but it is kept alive across a call that may resume more than once
+      24:13 this call may perform `choose`, a `multi` operation
+      22:7 `f` is bound here
+      2:9 `choose` is declared `multi` here
+      note: a continuation of a `multi` operation can be resumed more than once, and each resumption would use the value again
+      help: finish using `f` before this call
+    ");
+}
+
+/// 型の誤りを報告済みの本体では、持ち越しのパスも由来を記録しないので、E3006 を重ねない (docs/spec/diagnostics.md)。
+#[test]
+fn a_body_with_a_type_error_reports_no_carry_over() {
+    let rest = "broken : Unit -> <Choice, IO> Unit\nbroken () =\n  let f = open \"a.txt\"\n  let b = choose ()\n  close f\n  1";
+    let text = carried(rest);
+    assert!(text.contains("E2001"), "{text}");
+    assert!(!text.contains("E3006"), "{text}");
+}
+
+#[test]
+fn a_file_may_be_kept_across_once_and_never_operations() {
+    let rest = "across_once : Unit -> <Ask, IO> Unit\nacross_once () =\n  let f = open \"a.txt\"\n  let n = ask ()\n  close f\n\nacross_never : Bool -> <Fail, IO> Unit\nacross_never b =\n  let f = open \"a.txt\"\n  if b then fail () else ()\n  close f";
+    assert_eq!(carried(rest), "");
+}
+
+/// トップレベルの値の呼び出しは、開く前の宣言の row で判定する。`println` の row は `<IO>` なので、今の row に
+/// `Choice` があっても `multi` を起こさない (spec の「型検査が記録するもの」)。
+#[test]
+fn a_file_may_be_kept_across_a_call_whose_declared_row_has_no_multi() {
+    let rest = "across_io : Unit -> <Choice, IO> Unit\nacross_io () =\n  let f = open \"a.txt\"\n  println \"x\"\n  close f\n  let b = choose ()\n  ()";
+    assert_eq!(carried(rest), "");
+}
+
+/// 操作を直接呼ぶときは、その操作の多重度だけを見る (docs/spec/effects.md)。
+#[test]
+fn a_file_may_be_kept_across_a_once_operation_of_an_effect_with_multi_operations() {
+    let rest = "across_single : Unit -> <Mixed, IO> Unit\nacross_single () =\n  let f = open \"a.txt\"\n  let n = single ()\n  close f";
+    assert_eq!(carried(rest), "");
+}
+
+#[test]
+fn a_file_passed_to_the_call_is_not_kept_across_it() {
+    let rest = "chooser_closes : File -> <Choice, IO> Unit\nchooser_closes f =\n  close f\n  let b = choose ()\n  ()\n\npassed : Unit -> <Choice, IO> Unit\npassed () =\n  let f = open \"a.txt\"\n  chooser_closes f";
+    assert_eq!(carried(rest), "");
+}
+
+#[test]
+fn unrestricted_values_may_be_kept_across_a_multi_operation() {
+    let rest = "counted : Unit -> <Choice> Int\ncounted () =\n  let n = 1\n  let b = choose ()\n  n\n\nnested : Unit -> <Choice> Int\nnested () =\n  handle (if choose () then 1 else 2) with\n    | choose () k ->\n        let b = choose ()\n        resume k b";
+    assert_eq!(carried(rest), "");
+}

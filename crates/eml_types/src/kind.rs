@@ -4,6 +4,10 @@
 use std::collections::{HashMap, HashSet};
 
 use eml_diagnostics::{TextRange, TextSize};
+use eml_hir::OperationId;
+
+use crate::table::Row;
+use crate::ty::{Linearity, Multiplicity};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct KindVar(u32);
@@ -62,6 +66,12 @@ pub(crate) enum KindReason {
     Passed(String),
     /// 型の単一化で出た制約。
     Unified,
+    /// 呼び出しをまたいで持っている値。由来の範囲は呼び出しの範囲である (docs/spec/effects.md の「継続の多重度と持ち越し規則」)。
+    CarriedAcross {
+        value: CarriedValue,
+        across: Across,
+        call: CallKind,
+    },
 }
 
 /// 変数を使わなかった経路。E3003 の secondary が指す。
@@ -75,6 +85,84 @@ pub(crate) enum UnusedPath {
     ScopeEnd(TextRange),
     /// どの経路でも使わないうちに、同じブロックの後の `let` で隠された。範囲は隠した束縛である。
     Shadowed(TextRange),
+}
+
+/// 呼び出しをまたいで持っている値。E3006 の secondary が指す。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum CarriedValue {
+    /// 局所変数。名前と束縛の範囲。
+    Local { name: String, binding: TextRange },
+    /// 評価済みで消費前の部分式の値。部分式の範囲。
+    Temporary(TextRange),
+    /// `return` の節が捕まえた変数。名前、束縛の範囲、節の範囲。
+    ReturnCapture {
+        name: String,
+        binding: TextRange,
+        clause: TextRange,
+    },
+}
+
+impl CarriedValue {
+    /// 同じ値を見分ける範囲。同じ値の違反は1件だけ報告する (docs/spec/diagnostics.md の E3006)。
+    pub fn key(&self) -> TextRange {
+        match self {
+            CarriedValue::Local { binding, .. } | CarriedValue::ReturnCapture { binding, .. } => {
+                *binding
+            }
+            CarriedValue::Temporary(range) => *range,
+        }
+    }
+}
+
+/// 値がまたぐもの。row は報告するときに解く。操作の直接の呼び出しでは、その操作の多重度だけを見る。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Across {
+    Row(Row),
+    Operation(OperationId),
+}
+
+/// 値がまたぐ式の種類。E3006 の primary の言い方を決める。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum CallKind {
+    Call,
+    /// `resume k v`。`k` が変数ならその名前。
+    Resume {
+        k: Option<String>,
+    },
+    Handle,
+}
+
+/// 持ち越しの制約 (docs/spec/types.md の「推論」)。`lin` の解が `Lin` なら、`mult` の解は `Once` 以下でなければならない。
+/// 線形性と多重度の束とは別に持つのは、スキームに残すときも由来を持つためである。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Carry {
+    pub lin: Bound<Linearity>,
+    pub mult: Bound<Multiplicity>,
+    pub origin: Option<KindOrigin>,
+}
+
+/// 破れた持ち越しの制約の番号。持ち越しの制約はどちらの束の最小解も動かさないので、解いた後に確かめればよい。
+pub(crate) fn violated_carries(
+    carries: &[Carry],
+    lin: &[Linearity],
+    mult: &[Multiplicity],
+) -> Vec<usize> {
+    let lin_value = |bound: Bound<Linearity>| match bound {
+        Bound::Const(c) => c,
+        Bound::Var(v) => lin[v.index()],
+    };
+    let mult_value = |bound: Bound<Multiplicity>| match bound {
+        Bound::Const(c) => c,
+        Bound::Var(v) => mult[v.index()],
+    };
+    carries
+        .iter()
+        .enumerate()
+        .filter(|(_, carry)| {
+            lin_value(carry.lin) == Linearity::Lin && mult_value(carry.mult) == Multiplicity::Multi
+        })
+        .map(|(index, _)| index)
+        .collect()
 }
 
 #[derive(Debug)]
@@ -240,7 +328,6 @@ fn push_constraint<T: PartialEq>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ty::{Linearity, Multiplicity};
 
     #[test]
     fn unconstrained_variables_take_the_bottom() {
@@ -312,5 +399,22 @@ mod tests {
         lattice.copy_constraints(&[(Bound::Const(Linearity::Lin), Bound::Var(a))], &map);
         assert_eq!(lattice.value(copy), Linearity::Lin);
         assert_eq!(lattice.value(a), Linearity::Unr);
+    }
+
+    #[test]
+    fn a_carry_breaks_only_when_the_value_is_linear_and_the_row_is_multi() {
+        let carry = |lin, mult| Carry {
+            lin,
+            mult,
+            origin: None,
+        };
+        let carries = [
+            carry(Bound::Var(KindVar(0)), Bound::Var(KindVar(0))),
+            carry(Bound::Const(Linearity::Lin), Bound::Var(KindVar(1))),
+            carry(Bound::Var(KindVar(1)), Bound::Const(Multiplicity::Multi)),
+        ];
+        let lin = [Linearity::Lin, Linearity::Unr];
+        let mult = [Multiplicity::Multi, Multiplicity::Once];
+        assert_eq!(violated_carries(&carries, &lin, &mult), vec![0]);
     }
 }

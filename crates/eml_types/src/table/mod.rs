@@ -1,7 +1,8 @@
-use crate::kind::{Bound, KindOrigin, KindVar, Lattice};
+use crate::kind::{Bound, Carry, KindOrigin, KindVar, Lattice};
 use crate::ty::{EffectLabel, Linearity, Multiplicity, RowTail, Type};
 use eml_hir::{
-    Constructor, EffectDef, EffectId, LangItems, OpMultiplicity, Operation, TypeDef, TypeDefId,
+    Constructor, EffectDef, EffectId, LangItems, OpMultiplicity, Operation, OperationId, TypeDef,
+    TypeDefId,
 };
 use la_arena::{Arena, ArenaMap};
 use std::collections::HashMap;
@@ -177,6 +178,9 @@ pub(crate) struct Table {
     type_names: ArenaMap<TypeDefId, String>,
     effect_names: ArenaMap<EffectId, String>,
     effect_multiplicities: ArenaMap<EffectId, Multiplicity>,
+    /// 持ち越しの制約 (docs/spec/types.md の「推論」)。
+    carries: Vec<Carry>,
+    operation_multiplicities: ArenaMap<OperationId, Multiplicity>,
 }
 
 impl Table {
@@ -194,6 +198,17 @@ impl Table {
         effects: &Arena<EffectDef>,
         operations: &Arena<Operation>,
     ) -> Table {
+        let operation_multiplicities = operations
+            .iter()
+            .map(|(id, operation)| {
+                let multiplicity = match operation.multiplicity {
+                    OpMultiplicity::Never => Multiplicity::Never,
+                    OpMultiplicity::Once => Multiplicity::Once,
+                    OpMultiplicity::Multi => Multiplicity::Multi,
+                };
+                (id, multiplicity)
+            })
+            .collect();
         let effect_multiplicities = effects
             .iter()
             .map(|(id, effect)| {
@@ -240,6 +255,8 @@ impl Table {
                 .map(|(id, def)| (id, def.name.clone()))
                 .collect(),
             effect_multiplicities,
+            carries: Vec::new(),
+            operation_multiplicities,
         };
         table.int = table.alloc(TyShape::Con(lang.int, Vec::new()));
         table.string = table.alloc(TyShape::Con(lang.string, Vec::new()));
@@ -252,6 +269,11 @@ impl Table {
     /// エフェクトがその row に入れる操作の上限。操作の多重度の最大である (docs/spec/types.md の「Kind」)。
     pub fn effect_multiplicity(&self, effect: EffectId) -> Multiplicity {
         self.effect_multiplicities[effect]
+    }
+
+    /// 操作の多重度。操作を直接呼ぶときは、エフェクトの単位ではなくこれを見る (docs/spec/effects.md の「継続の多重度と持ち越し規則」)。
+    pub fn operation_multiplicity(&self, operation: OperationId) -> Multiplicity {
+        self.operation_multiplicities[operation]
     }
 
     pub fn alloc(&mut self, kind: TyShape) -> Ty {

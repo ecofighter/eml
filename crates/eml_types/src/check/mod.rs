@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use eml_diagnostics::{Diagnostic, Label};
 use eml_hir::builtin::{BUILTINS, Builtin};
@@ -9,11 +9,11 @@ use eml_hir::{
 use la_arena::Arena;
 use la_arena::ArenaMap;
 
-use crate::kind::{Bound, KindVar};
+use crate::kind::{Bound, KindReason, KindVar};
 use crate::scheme::{Rigids, Scheme, lower_constructor, lower_operation, lower_signature};
 use crate::table::{Row, Table, TyShape};
 use crate::ty::{EffectLabel, KindConstraint, KindTerm, Linearity, Type};
-use crate::{BodyTypes, TypedModule, codes, exhaustive, scc, usage};
+use crate::{BodyTypes, TypedModule, carry, codes, exhaustive, scc, usage};
 
 mod body;
 mod equality;
@@ -21,7 +21,7 @@ mod handle;
 mod report;
 
 use body::BodyCheck;
-pub(crate) use body::BodyTyping;
+pub(crate) use body::{BodyTyping, CallRows};
 use report::AmbientSource;
 
 pub(crate) fn check_module(module: &Module) -> (TypedModule, Vec<Diagnostic>) {
@@ -136,6 +136,7 @@ pub(crate) fn check_module(module: &Module) -> (TypedModule, Vec<Diagnostic>) {
                 ambient: Row::pure(),
                 ambient_source: AmbientSource::Signature,
                 comparisons: Vec::new(),
+                declared: ArenaMap::default(),
                 typing: BodyTyping::default(),
             };
             let diagnostics_before = checker.diagnostics.len();
@@ -143,7 +144,9 @@ pub(crate) fn check_module(module: &Module) -> (TypedModule, Vec<Diagnostic>) {
             checker.resolve_equalities(diagnostics_before);
             let well_typed = checker.diagnostics.len() == diagnostics_before;
             let typing = checker.typing;
-            usage::constrain(body, &typing, &mut table, well_typed);
+            let reliable = usage::reliable(body, well_typed);
+            usage::constrain(body, &typing, &mut table, reliable);
+            carry::constrain(body, &typing, &mut table, reliable);
             bodies.push((id, typing));
         }
         for &id in &component {
@@ -152,9 +155,17 @@ pub(crate) fn check_module(module: &Module) -> (TypedModule, Vec<Diagnostic>) {
             }
         }
     }
-    // Kind の制約の違反は、線形な値の誤った使い方である (docs/spec/linearity.md)
-    for origin in table.solve_kinds() {
-        diagnostics.push(report::linear_misuse(module.file, &origin));
+    // Kind の制約の違反は、線形な値の誤った使い方である (docs/spec/linearity.md)。同じ値の持ち越しの違反は、呼び出しの
+    // 位置が最も前のものだけを報告する (docs/spec/diagnostics.md の E3006)。由来は位置の順に並んでいる
+    let violated = table.solve_kinds();
+    let mut carried = HashSet::new();
+    for origin in violated {
+        if let KindReason::CarriedAcross { value, .. } = &origin.reason
+            && !carried.insert(value.key())
+        {
+            continue;
+        }
+        diagnostics.push(report::linear_misuse(module, &table, &origin));
     }
     let mut typed = TypedModule {
         main,

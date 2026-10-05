@@ -1,9 +1,9 @@
 use eml_diagnostics::{Diagnostic, FileId, Label, TextEdit, TextRange};
-use eml_hir::{Body, ExprId, ExprKind, Module, PatId, Res};
+use eml_hir::{Body, ExprId, ExprKind, Module, OpMultiplicity, OperationId, PatId, Res};
 
 use crate::codes;
-use crate::kind::{KindOrigin, KindReason, UnusedPath};
-use crate::table::{Row, Ty, UnifyError};
+use crate::kind::{Across, CallKind, CarriedValue, KindOrigin, KindReason, UnusedPath};
+use crate::table::{Row, Table, Ty, UnifyError};
 
 use super::body::BodyCheck;
 
@@ -368,8 +368,14 @@ const LINEAR_NOTE: &str = "linear values, such as files, the continuation of a `
 
 /// 線形な値の誤った使い方。破れた Kind の制約の由来から番号と指す場所を決める (docs/spec/diagnostics.md の
 /// 「線形性の診断」)。表に当たらない由来 (受け渡し、単一化、捕獲) は E3001 にする。
-pub(super) fn linear_misuse(file: FileId, origin: &KindOrigin) -> Diagnostic {
+pub(super) fn linear_misuse(module: &Module, table: &Table, origin: &KindOrigin) -> Diagnostic {
+    let file = module.file;
     match &origin.reason {
+        KindReason::CarriedAcross {
+            value,
+            across,
+            call,
+        } => carried_across(module, table, origin.range, value, across, call),
         KindReason::UsedMoreThanOnce {
             name,
             first,
@@ -501,4 +507,96 @@ fn misused(file: FileId, origin: &KindOrigin, message: String, label: String) ->
         Label::new(file, origin.range, label),
     )
     .with_note(LINEAR_NOTE)
+}
+
+const CARRY_NOTE: &str = "a continuation of a `multi` operation can be resumed more than once, and each resumption would use the value again";
+
+/// E3006。呼び出しをまたいで持っている値 (docs/spec/diagnostics.md の「線形性の診断」)。
+fn carried_across(
+    module: &Module,
+    table: &Table,
+    range: TextRange,
+    value: &CarriedValue,
+    across: &Across,
+    call: &CallKind,
+) -> Diagnostic {
+    let file = module.file;
+    let subject = match value {
+        CarriedValue::Local { name, .. } | CarriedValue::ReturnCapture { name, .. } => {
+            format!("`{name}`")
+        }
+        CarriedValue::Temporary(_) => "a linear value".to_string(),
+    };
+    let what = match call {
+        CallKind::Call => "this call".to_string(),
+        CallKind::Resume { k: Some(k) } => format!("resuming `{k}`"),
+        CallKind::Resume { k: None } => "resuming the continuation".to_string(),
+        CallKind::Handle => "this handle".to_string(),
+    };
+    let operation = multi_operation(module, table, across);
+    let primary = match operation {
+        Some(op) => format!(
+            "{what} may perform `{}`, a `multi` operation",
+            module.operations[op].name
+        ),
+        None => format!("{what} may perform `multi` operations"),
+    };
+    let mut diagnostic = Diagnostic::error(
+        codes::LINEAR_VALUE_KEPT_ACROSS_MULTI,
+        format!(
+            "{subject} must be used exactly once, but it is kept alive across a call that may resume more than once"
+        ),
+        Label::new(file, range, primary),
+    );
+    diagnostic = match value {
+        CarriedValue::Local { name, binding } => diagnostic.with_secondary(Label::new(
+            file,
+            *binding,
+            format!("`{name}` is bound here"),
+        )),
+        CarriedValue::Temporary(at) => diagnostic.with_secondary(Label::new(
+            file,
+            *at,
+            "this value is kept alive across the call",
+        )),
+        CarriedValue::ReturnCapture { name, clause, .. } => diagnostic.with_secondary(Label::new(
+            file,
+            *clause,
+            format!("the `return` clause captures `{name}`"),
+        )),
+    };
+    if let Some(op) = operation {
+        let declared = &module.operations[op];
+        diagnostic = diagnostic.with_secondary(Label::new(
+            file,
+            declared.name_range,
+            format!("`{}` is declared `multi` here", declared.name),
+        ));
+    }
+    let before = match call {
+        CallKind::Handle => "this handle",
+        CallKind::Call | CallKind::Resume { .. } => "this call",
+    };
+    let help = match value {
+        CarriedValue::Local { name, .. } => format!("finish using `{name}` before {before}"),
+        CarriedValue::Temporary(_) => format!("finish using the value before {before}"),
+        CarriedValue::ReturnCapture { name, .. } => {
+            format!("do not capture `{name}` in the `return` clause")
+        }
+    };
+    diagnostic.with_note(CARRY_NOTE).with_help(help)
+}
+
+/// 指す `multi` の操作。row を解き、`multi` の操作を持つ最初のラベルのエフェクトから、宣言の順で最初の `multi` の操作を選ぶ。
+fn multi_operation(module: &Module, table: &Table, across: &Across) -> Option<OperationId> {
+    match across {
+        Across::Operation(op) => Some(*op),
+        Across::Row(row) => table.resolve_row(row).labels.iter().find_map(|label| {
+            module.effects[label.effect]
+                .operations
+                .iter()
+                .copied()
+                .find(|&op| matches!(module.operations[op].multiplicity, OpMultiplicity::Multi))
+        }),
+    }
 }

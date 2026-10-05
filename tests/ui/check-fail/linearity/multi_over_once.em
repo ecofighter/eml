@@ -1,6 +1,5 @@
--- The continuation `k` of a `once` operation is saved across a `multi` operation, so resuming the `multi`
--- continuation twice copies `k` and resumes it on each path. The carry-over rule of stage 5 will reject this
--- program statically; until then the runtime copies `k` with its frames and releases every copy.
+-- E3006: the continuation `k` of a `once` operation is kept alive across a `multi` operation. Resuming the `multi`
+-- continuation twice would resume `k` twice, so the carry-over rule rejects the program.
 effect Ask where
   ask : Unit -> Int
 

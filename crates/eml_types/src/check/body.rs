@@ -16,6 +16,21 @@ use crate::table::{Row, Table, Tail, Ty, TyShape, UnifyError};
 use super::equality::Comparison;
 use super::report::{AmbientSource, Origin, callee_subject};
 
+/// 呼び出しの row。持ち越しのパスが読む (docs/spec/effects.md の「継続の多重度と持ち越し規則」)。
+#[derive(Debug, Clone)]
+pub(crate) enum CallRows {
+    /// 矢印ごとの row。トップレベルの値を呼ぶときは、開く前の宣言の row である。`performs` は、操作を起こす矢印の
+    /// 番号とその操作である。
+    Call {
+        arrows: Vec<Row>,
+        performs: Option<(usize, OperationId)>,
+    },
+    /// `resume k v`。`k` の型の、handle の外側の row。
+    Resume(Row),
+    /// handle。本体の row と、外側の row。
+    Handle { body: Row, outer: Row },
+}
+
 /// 1つの本体の推論結果。使用回数のパスも読む。
 #[derive(Default)]
 pub(crate) struct BodyTyping {
@@ -25,6 +40,8 @@ pub(crate) struct BodyTyping {
     pub pats: ArenaMap<PatId, Ty>,
     /// `==` と `!=` の比べ方。`resolve_equalities` が埋める。
     pub equalities: ArenaMap<ExprId, crate::Equality>,
+    /// 呼び出しの row。持ち越しのパスが読む。
+    pub calls: ArenaMap<ExprId, CallRows>,
 }
 
 pub(super) struct BodyCheck<'a> {
@@ -47,6 +64,9 @@ pub(super) struct BodyCheck<'a> {
     pub(super) ambient_source: AmbientSource,
     /// 比べ方をまだ決めていない `==` と `!=` の参照。本体の検査が終わってから `resolve_equalities` が決める。
     pub(super) comparisons: Vec<Comparison>,
+    /// トップレベルの値の参照の、戻り値の側の row を開く前の型。開いた row は呼び出しで今の row と単一化されるので、
+    /// 持ち越し規則は宣言の row で判定する (docs/spec/effects.md の「継続の多重度と持ち越し規則」)。
+    pub(super) declared: ArenaMap<ExprId, Ty>,
     pub(super) typing: BodyTyping,
 }
 
@@ -190,7 +210,7 @@ impl BodyCheck<'_> {
             ExprKind::Literal(Literal::String(_)) => self.table.string,
             ExprKind::Literal(Literal::Unit) => self.table.unit,
             ExprKind::Path(res) => {
-                let ty = self.value(*res, expr.range);
+                let ty = self.value(id, *res, expr.range);
                 if let Res::Builtin(operator @ (Builtin::IntEq | Builtin::IntNe)) = *res {
                     self.comparisons.push(Comparison {
                         callee: id,
@@ -389,7 +409,7 @@ impl BodyCheck<'_> {
     /// 関数と組み込みの参照は、具体化した後に戻り値の側の閉じた row を開く。純粋な関数を、エフェクトを持つ関数型の
     /// 引数に渡せるようにするため (docs/spec/types.md の「推論」)。局所変数の型は開かない。スキームから複写する Kind
     /// の制約は、参照した場所を由来にする。
-    fn value(&mut self, res: Res, range: TextRange) -> Ty {
+    fn value(&mut self, id: ExprId, res: Res, range: TextRange) -> Ty {
         let module = self.module;
         let ty = match res {
             Res::Local(local) => {
@@ -432,6 +452,7 @@ impl BodyCheck<'_> {
                 })
             }
         };
+        self.declared.insert(id, ty);
         self.table.open_spine(ty)
     }
 
@@ -475,11 +496,35 @@ impl BodyCheck<'_> {
         let callee_expr = &body.exprs[callee];
         let name = callee_subject(self.module, body, callee);
         let mut ty = self.infer_expr(callee);
+        let performs = match &callee_expr.kind {
+            ExprKind::Path(Res::Operation(op)) => {
+                Some((self.module.operations[*op].arity.saturating_sub(1), *op))
+            }
+            _ => None,
+        };
+        let mut declared = self.declared.get(callee).copied();
+        let mut arrows = Vec::new();
         // 1回の呼び出しの E2002 は、どの引数の矢印で起きても1つだけ報告する
         let mut reported = false;
         for (index, &arg) in args.iter().enumerate() {
             match self.next_arrow(ty) {
                 Arrow::Fn { param, row, ret } => {
+                    // トップレベルの値は、開く前の宣言の row を記録する
+                    let recorded = match declared.map(|d| self.table.shape(d).clone()) {
+                        Some(TyShape::Fn {
+                            row: declared_row,
+                            ret: declared_ret,
+                            ..
+                        }) => {
+                            declared = Some(declared_ret);
+                            declared_row
+                        }
+                        _ => {
+                            declared = None;
+                            row.clone()
+                        }
+                    };
+                    arrows.push(recorded);
                     let origin = Origin::Argument {
                         callee: callee_expr.range,
                         name: name.clone(),
@@ -499,10 +544,16 @@ impl BodyCheck<'_> {
                     for &rest in &args[index..] {
                         self.infer_expr(rest);
                     }
+                    self.typing
+                        .calls
+                        .insert(id, CallRows::Call { arrows, performs });
                     return self.table.error;
                 }
             }
         }
+        self.typing
+            .calls
+            .insert(id, CallRows::Call { arrows, performs });
         ty
     }
 

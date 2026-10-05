@@ -39,6 +39,40 @@ impl Table {
         }
     }
 
+    /// 持ち越しの制約。値の型の Kind の成分と、`mults` の成分の組ごとに出す。破れない組 (値の側が `Unr`、row の側が
+    /// `Never` か `Once`) は出さない (docs/spec/types.md の「推論」)。
+    pub fn carry(&mut self, value: Ty, mults: &[Bound<Multiplicity>]) {
+        for lin in self.kind_bounds(value) {
+            if lin == Bound::Const(Linearity::Unr) {
+                continue;
+            }
+            for &mult in mults {
+                if matches!(mult, Bound::Const(Multiplicity::Never | Multiplicity::Once)) {
+                    continue;
+                }
+                self.carries.push(Carry {
+                    lin,
+                    mult,
+                    origin: self.kind_origin.clone(),
+                });
+            }
+        }
+    }
+
+    /// row の多重度の成分。ラベルごとのエフェクトの多重度と、末尾の row 変数の σ である。
+    pub fn row_multiplicities(&self, row: &Row) -> Vec<Bound<Multiplicity>> {
+        let row = self.resolve_row(row);
+        let mut mults: Vec<Bound<Multiplicity>> = row
+            .labels
+            .iter()
+            .map(|label| Bound::Const(self.effect_multiplicity(label.effect)))
+            .collect();
+        if let Tail::Var(var) = row.tail {
+            mults.push(Bound::Var(self.row_multiplicity_var(var)));
+        }
+        mults
+    }
+
     /// 引数を `arity` 個まで受ける関数の、部分適用のクロージャの線形性。矢印 `i` (0 始まり) のクロージャは、先頭の
     /// `i` 個の引数と `captured` を捕まえるので、その Kind 以上になる (docs/spec/types.md の「関数型」)。
     pub fn closure_kinds(&mut self, ty: Ty, arity: usize, captured: &[Ty]) {
@@ -162,14 +196,15 @@ impl Table {
     }
 
     /// すべての Kind の制約を解き、線形性の解を覚える。`export` が式ごとに解き直さずに済むようにするため。
-    /// 定数の上限を超えた制約の由来を、位置の順に重複なく返す。由来のない制約は返さない。本体の検査は、単一化 (row
+    /// 定数の上限を超えた制約と、破れた持ち越しの制約の由来を、位置の順に重複なく返す。由来のない制約は返さない。本体の検査は、単一化 (row
     /// の包含を含む) と参照の具体化の制約にかならず由来を付けるので、由来のない制約は次の2つに限る。
     /// 1つは宣言の型 (シグネチャ、組み込み、操作) から作る制約で、具体化のたびに参照した場所を由来にして複写する。
     /// もう1つは、報告済みの誤りのある本体で使用回数のパスが作る制約である。誤りのあるプログラムは実行しないので、
     /// 返さなくても困らない (docs/implementation/architecture.md)。
     pub fn solve_kinds(&mut self) -> Vec<KindOrigin> {
         let (lin, lin_violated) = self.linearity.solve();
-        let (_, mult_violated) = self.multiplicity.solve();
+        let (mult, mult_violated) = self.multiplicity.solve();
+        let carry_violated = crate::kind::violated_carries(&self.carries, &lin, &mult);
         self.lin_solution = Some(lin);
         let mut origins: Vec<KindOrigin> = lin_violated
             .iter()
@@ -178,6 +213,11 @@ impl Table {
                 mult_violated
                     .iter()
                     .filter_map(|&index| self.multiplicity.origin(index).cloned()),
+            )
+            .chain(
+                carry_violated
+                    .iter()
+                    .filter_map(|&index| self.carries[index].origin.clone()),
             )
             .collect();
         origins.sort_by_key(|origin| (origin.range.start(), origin.range.end()));
