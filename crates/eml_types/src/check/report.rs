@@ -382,6 +382,7 @@ pub(super) fn linear_misuse(file: FileId, origin: &KindOrigin) -> Diagnostic {
         .with_secondary(Label::new(file, *first, "first used here"))
         .with_note(LINEAR_NOTE),
         KindReason::NotUsed { name, path, fix } => {
+            let mut help = format!("pass `{name}` to `drop`");
             let (how, label) = match path {
                 UnusedPath::Branch(range) => (
                     "some paths do not use it",
@@ -403,6 +404,14 @@ pub(super) fn linear_misuse(file: FileId, origin: &KindOrigin) -> Diagnostic {
                         format!("`{name}` is not used before the end of this scope"),
                     ),
                 ),
+                // スコープの終わりでは、`x` はもう隠した側の変数を指すので、隠す前に捨てるよう伝える
+                UnusedPath::Shadowed(range) => {
+                    help.push_str(" before it is shadowed");
+                    (
+                        "it is not used",
+                        Label::new(file, *range, format!("`{name}` is shadowed here")),
+                    )
+                }
             };
             let diagnostic = Diagnostic::error(
                 codes::LINEAR_VALUE_NOT_CONSUMED,
@@ -411,7 +420,7 @@ pub(super) fn linear_misuse(file: FileId, origin: &KindOrigin) -> Diagnostic {
             )
             .with_secondary(label)
             .with_note(LINEAR_NOTE)
-            .with_help(format!("pass `{name}` to `drop`"));
+            .with_help(help);
             match fix {
                 Some(fix) => diagnostic.with_fix(vec![TextEdit {
                     file,

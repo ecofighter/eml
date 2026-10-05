@@ -73,6 +73,8 @@ pub(crate) enum UnusedPath {
     NoElse(TextRange),
     /// どの経路でも使わなかった。範囲はスコープの終わりの長さ0の範囲である。
     ScopeEnd(TextRange),
+    /// どの経路でも使わないうちに、同じブロックの後の `let` で隠された。範囲は隠した束縛である。
+    Shadowed(TextRange),
 }
 
 #[derive(Debug)]

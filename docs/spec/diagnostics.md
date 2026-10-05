@@ -81,7 +81,7 @@ E0xxx は `eml_syntax::codes` (E0004 だけは `eml_diagnostics`)、E1xxx は `e
 | E2006 | `NOT_COMPARABLE` | `==` か `!=` で、`Int`、`String`、`Bool` のどれでもない型の値を比べた。演算子を primary にし、比べようとした型をメッセージに出す。note で比べられる型を示す |
 | E3001 | `LINEAR_VALUE_MISUSED` | 線形な値の誤った使い方のうち、E3002〜E3005 に当たらないもの (関数への受け渡し、型の単一化、ラムダや節の捕獲)。違反した Kind の制約の由来を指す。`multi` の操作を持つ handler の `return` の節が捕まえた場合を含む |
 | E3002 | `LINEAR_VALUE_USED_TWICE` | 線形な値を、ある経路で2回以上使った。2回目に使った位置を primary、1回目を secondary にする |
-| E3003 | `LINEAR_VALUE_NOT_CONSUMED` | 線形な値を、ある経路で使わなかった。束縛した位置を primary、使わなかった枝、省いた `else`、またはスコープの終わりを secondary にする。help で `drop` を提案し、使わなかった経路がブロックなら、その最後の文の前に `drop x` の行を入れる fix を付ける |
+| E3003 | `LINEAR_VALUE_NOT_CONSUMED` | 線形な値を、ある経路で使わなかった。束縛した位置を primary、使わなかった枝、省いた `else`、またはスコープの終わりを secondary にする。どの経路でも使わないうちに同じブロックの後の `let` で隠されたときは、スコープの終わりではなく隠した束縛を secondary にし、隠す前に `drop` するよう help で伝える。help で `drop` を提案し、使わなかった経路がブロックなら、その最後の文の前に `drop x` の行を入れる fix を付ける。`drop x` を入れる位置で同じ名前の後の束縛が見えているときは、fix を付けない |
 | E3004 | `LINEAR_VALUE_DISCARDED` | 線形な値を `_` で受けた。パターンを指す |
 | E3005 | `CONTINUATION_NOT_HANDLED` | `once` の操作の節の `k` を、ある経路で `resume` も `drop` もしなかった。節を primary、`k` の束縛を secondary にする |
 | E4001 | `NON_EXHAUSTIVE_MATCH` | 網羅されていない `match` |
@@ -113,7 +113,7 @@ E0004 (`NOT_YET_SUPPORTED`) は、構文の段階 (S2、S3) で未対応の構�
 | 誤り | 指す場所 |
 |---|---|
 | 二重使用 | 1回目に消費した場所と、2回目に使った場所 |
-| 消費されていない | 束縛した場所とスコープの終わり。help と fix で `drop x` の追加を提案する |
+| 消費されていない | 束縛した場所とスコープの終わり。同じブロックの後の `let` で隠されたときは、隠した束縛。help と fix で `drop x` の追加を提案する |
 | `_` で `Lin` の値を受けた | そのパターン。help で、変数に束縛して `drop` するよう提案する |
 | `multi` の呼び出しをまたぐ | 線形な変数、その呼び出し、`multi` と宣言している操作 |
 | 継続の扱い忘れ | `k` に `resume` も `drop` もしていない handler の節 |

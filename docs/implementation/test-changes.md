@@ -151,3 +151,7 @@
 - `eml_types/tests/effects.rs` の `a_continuation_of_a_once_operation_must_be_used_exactly_once` で、二重使用が E3002、使わない経路が E3005、`_` が E3004 になり、文言と指す場所が変わった (種類1)。節の捕獲は E3001 のまま
 - 線形性の診断の note に `files` を加えたので、`once_continuation_through_effect_argument.em` のスナップショットと、`effects.rs` のほかの E3001 のテストの note の行が変わった (種類1)
 - `ExprKind::Block` に `last_line` を足したことによる分解の追随と、`KindReason` の形の変更の追随は、期待値を変えていない (種類3)
+
+### 段階5a の後始末
+
+- 消費されないまま同じブロックの後の `let` で隠された変数の E3003 は、スコープの終わりではなく隠した束縛を指し、help で隠す前に `drop` するよう伝えるようにした。スコープの終わりでは、その名前はもう隠した側の変数を指すためである。`tests/ui/check-fail/linearity/file_shadowed.em` のスナップショットと、`eml_types/tests/linearity.rs` の `a_shadowed_value_is_not_consumed` の secondary と help が変わった (種類1)

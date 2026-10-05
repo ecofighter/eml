@@ -76,9 +76,9 @@ fn a_shadowed_value_is_not_consumed() {
     insta::assert_snapshot!(diagnostics(rest), @r"
     E3003 11:13 `j` must be used exactly once, but it is not used
       11:13 `j` is bound here
-      13:10 `j` is not used before the end of this scope
+      12:13 `j` is shadowed here
       note: linear values, such as files, the continuation of a `once` operation and closures that capture one, must be used exactly once
-      help: pass `j` to `drop`
+      help: pass `j` to `drop` before it is shadowed
     ");
 }
 
@@ -278,4 +278,30 @@ fn a_type_error_in_one_body_does_not_hide_linearity_errors_in_another() {
         "{}",
         full(&checked.files, &checked.diagnostics)
     );
+}
+
+#[test]
+fn the_fix_for_a_shadowed_value_goes_before_the_shadowing_let() {
+    let rest = "last : Unit -> Unit\nlast () =\n  handle ask () with\n    | ask () k ->\n        let j = k\n        let j = 1\n    | return x -> ()";
+    insta::assert_snapshot!(fix_text(rest), @r#"
+    E3003 11:13
+      12:9..12:9 "drop j\n        "
+    "#);
+}
+
+#[test]
+fn a_same_name_in_an_unrelated_lambda_keeps_the_fix() {
+    // ラムダの引数の `j` は、`drop j` を入れる位置では見えないので、外側の `j` を隠さない
+    let rest = "lambda_name : Unit -> Int\nlambda_name () =\n  handle ask () with\n    | ask () k ->\n        let j = k\n        let f = fn j -> j + 1\n        f 0";
+    insta::assert_snapshot!(diagnostics(rest), @r"
+    E3003 11:13 `j` must be used exactly once, but it is not used
+      11:13 `j` is bound here
+      13:12 `j` is not used before the end of this scope
+      note: linear values, such as files, the continuation of a `once` operation and closures that capture one, must be used exactly once
+      help: pass `j` to `drop`
+    ");
+    insta::assert_snapshot!(fix_text(rest), @r#"
+    E3003 11:13
+      13:9..13:9 "drop j\n        "
+    "#);
 }

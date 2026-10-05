@@ -9,12 +9,11 @@ input_file: tests/ui/check-fail/linearity/file_shadowed.em
  4 │   let f = open "a.txt"
    │       ┬  
    │       ╰── `f` is bound here
+ 5 │   let f = open "b.txt"
+   │       ┬  
+   │       ╰── `f` is shadowed here
    │ 
- 6 │   close f
-   │          │ 
-   │          ╰─ `f` is not used before the end of this scope
-   │ 
-   │ Help: pass `f` to `drop`
+   │ Help: pass `f` to `drop` before it is shadowed
    │ 
    │ Note: linear values, such as files, the continuation of a `once` operation and closures that capture one, must be used exactly once
 ───╯

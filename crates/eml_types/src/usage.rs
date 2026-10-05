@@ -66,11 +66,17 @@ pub(crate) fn constrain(body: &Body, typing: &BodyTyping, table: &mut Table, wel
             .exprs
             .iter()
             .any(|(_, expr)| matches!(expr.kind, ExprKind::Missing));
+    let mut by_name: HashMap<&str, Vec<LocalId>> = HashMap::new();
+    for (local, data) in body.locals.iter() {
+        by_name.entry(data.name.as_str()).or_default().push(local);
+    }
     let mut usage = Usage {
         body,
         typing,
         table,
         reliable,
+        by_name,
+        scopes: HashMap::new(),
     };
     let uses = usage.expr(body.root);
     for &param in &body.params {
@@ -83,9 +89,14 @@ struct Usage<'a> {
     typing: &'a BodyTyping,
     table: &'a mut Table,
     reliable: bool,
+    /// 名前ごとの局所変数。消費漏れの fix と診断が、同じ名前の後の束縛を探すのに使う。
+    by_name: HashMap<&'a str, Vec<LocalId>>,
+    /// 変数が見える範囲の式。同じ名前の後の束縛が、ある位置で前の変数を隠すかを決めるのに使う。変数を数え終える前に
+    /// 記録するので、その変数のスコープの中の束縛は、数えるときにはすべてそろっている。
+    scopes: HashMap<LocalId, ExprId>,
 }
 
-impl Usage<'_> {
+impl<'a> Usage<'a> {
     fn expr(&mut self, id: ExprId) -> Uses {
         let body = self.body;
         let at = body.exprs[id].range;
@@ -139,6 +150,12 @@ impl Usage<'_> {
                 }
                 // ブロックの `let` は外から見えないので、ここで数え終える。外の `if` で枝を合わせると、片方の枝で
                 // 束縛した変数が、もう片方の枝では「使わない」と数えられてしまうため
+                // 同じブロックの後の `let` が前の変数を隠すかを、前の変数を数えるときに調べられるようにする
+                for &pat in &bound {
+                    for local in body.pat_bindings(pat) {
+                        self.scopes.insert(local, id);
+                    }
+                }
                 for pat in bound {
                     self.check_pat(pat, &uses, id);
                     remove_bound(body, pat, &mut uses);
@@ -284,6 +301,7 @@ impl Usage<'_> {
     fn check_pat(&mut self, pat: PatId, uses: &Uses, scope: ExprId) {
         match &self.body.pats[pat].kind {
             PatKind::Bind(local) => {
+                self.scopes.insert(*local, scope);
                 self.count(*local, uses.get(local).copied().unwrap_or_default(), scope);
             }
             PatKind::Wildcard => {
@@ -310,6 +328,7 @@ impl Usage<'_> {
             return self.check_pat(pat, uses, scope);
         };
         let local = *local;
+        self.scopes.insert(local, scope);
         let used = uses.get(&local).copied().unwrap_or_default();
         if used.max < 2 && used.min == 0 {
             let name = self.body.locals[local].name.clone();
@@ -370,7 +389,7 @@ impl Usage<'_> {
             };
             KindReason::NotUsed {
                 name,
-                path: self.unused_path(used.missing, scope),
+                path: self.unused_path(local, used.missing, scope),
                 fix,
             }
         };
@@ -378,8 +397,8 @@ impl Usage<'_> {
     }
 
     /// 経路の式がブロックで、その最後の文が行の先頭で始まるとき、その前に `drop x` の行を入れる。最後の文が束縛より前
-    /// (束縛する `let` そのもの) のときと、間に同じ名前の束縛があるときは付けない。後者では、入れた `drop x` が
-    /// シャドーイングした別の変数を指してしまう。
+    /// (束縛する `let` そのもの) のときと、入れる位置で同じ名前の後の束縛が見えているときは付けない。後者では、入れた
+    /// `drop x` がシャドーイングした別の変数を指してしまう。
     fn drop_fix(&self, local: LocalId, target: ExprId) -> Option<DropFix> {
         let ExprKind::Block {
             last_line: Some(line),
@@ -392,13 +411,14 @@ impl Usage<'_> {
         if line.offset < binding.range.end() {
             return None;
         }
-        let shadowed = self.body.locals.iter().any(|(other, data)| {
-            other != local
-                && data.name == binding.name
-                && data.range.start() > binding.range.end()
-                && data.range.start() < line.offset
+        let hidden = self.later_namesakes(local).any(|other| {
+            self.body.locals[other].range.start() < line.offset
+                && self
+                    .scopes
+                    .get(&other)
+                    .is_some_and(|&scope| self.body.exprs[scope].range.contains(line.offset))
         });
-        if shadowed {
+        if hidden {
             return None;
         }
         Some(DropFix {
@@ -407,13 +427,37 @@ impl Usage<'_> {
         })
     }
 
-    fn unused_path(&self, missing: Option<Missing>, scope: ExprId) -> UnusedPath {
+    fn unused_path(&self, local: LocalId, missing: Option<Missing>, scope: ExprId) -> UnusedPath {
         let range = |id: ExprId| self.body.exprs[id].range;
         match missing {
             Some(Missing::Branch(branch)) => UnusedPath::Branch(range(branch)),
             Some(Missing::NoElse(if_expr)) => UnusedPath::NoElse(range(if_expr)),
-            None => UnusedPath::ScopeEnd(TextRange::empty(self.scope_end(scope))),
+            None => match self.shadowed_by(local, scope) {
+                Some(other) => UnusedPath::Shadowed(self.body.locals[other].range),
+                None => UnusedPath::ScopeEnd(TextRange::empty(self.scope_end(scope))),
+            },
         }
+    }
+
+    /// 同じブロックの後の `let` で隠された変数は、隠された後に使えないので、スコープの終わりではなく隠した束縛を指す。
+    /// 入れ子のスコープ (ラムダの引数など) の同じ名前は、その外で前の変数がまた見えるので数えない。
+    fn shadowed_by(&self, local: LocalId, scope: ExprId) -> Option<LocalId> {
+        self.later_namesakes(local)
+            .filter(|other| self.scopes.get(other) == Some(&scope))
+            .min_by_key(|&other| self.body.locals[other].range.start())
+    }
+
+    /// `local` より後に束縛された、同じ名前の別の変数。
+    fn later_namesakes(&self, local: LocalId) -> impl Iterator<Item = LocalId> {
+        let binding = &self.body.locals[local];
+        self.by_name
+            .get(binding.name.as_str())
+            .into_iter()
+            .flatten()
+            .copied()
+            .filter(move |&other| {
+                other != local && self.body.locals[other].range.start() > binding.range.end()
+            })
     }
 
     /// スコープの終わり。ブロックでは、最後の文の直後を指す。
