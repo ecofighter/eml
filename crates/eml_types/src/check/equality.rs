@@ -21,11 +21,9 @@ pub(super) struct Comparison {
 }
 
 impl BodyCheck<'_, '_> {
-    /// `diagnostics_before` は、この本体の検査を始める前の診断の数である。
-    pub(super) fn resolve_equalities(&mut self, diagnostics_before: usize) {
-        let body_has_error = self.diagnostics[diagnostics_before..]
-            .iter()
-            .any(Diagnostic::is_error);
+    /// 本体の検査が終わってから呼ぶ。`self.diagnostics` はこの本体だけの診断なので、そこに誤りがあれば本体に誤りがある。
+    pub(super) fn resolve_equalities(&mut self) {
+        let body_has_error = self.diagnostics.iter().any(Diagnostic::is_error);
         let lang = self.module.lang;
         for comparison in std::mem::take(&mut self.comparisons) {
             // Prelude のシグネチャがなければ参照の型は `Error` で、矢印を持たない

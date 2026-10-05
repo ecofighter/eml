@@ -109,7 +109,8 @@ impl Table<'_> {
     }
 
     /// 型に現れる Kind 変数。線形性 (rigid 変数の `μ` と矢印の `m`) と多重度 (rigid な row 変数の `σ`) に分けて、
-    /// 現れた順に重複なく返す。多相化する変数を決めるのに使う。
+    /// 現れた順に重複なく返す。`unrestricted` が `Unr` に固定する変数を集めるのに使う。
+    /// `Shape` の番号がこの順に従うことを確かめるテストも使う。
     pub fn kind_vars(&self, ty: Ty) -> (Vec<KindVar>, Vec<KindVar>) {
         let mut lin = Vec::new();
         let mut mult = Vec::new();

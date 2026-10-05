@@ -503,6 +503,8 @@ impl Shape {
     /// 自分の本体のための rigid な具体化。rigid な変数を表の rigid 変数にし、Kind 変数を新しい変数にする。本体の注釈が
     /// 同じ変数を指せるよう、`generics` の ID から表への対応 (`Rigids`) も返す。
     pub fn instantiate_rigid(&self, table: &mut Table<'_>, generics: &Generics) -> Own {
+        debug_assert_eq!(generics.type_vars.len(), self.rigids.len());
+        debug_assert_eq!(generics.row_vars.len(), self.rows.len());
         let lin: Vec<KindVar> = (0..self.lin_vars).map(|_| table.fresh_lin_var()).collect();
         let mult: Vec<KindVar> = (0..self.mult_vars)
             .map(|_| table.fresh_mult_var())

@@ -100,6 +100,15 @@ fn merge(members: &[(Decl, &KindProblem)], schemes: &HashMap<Decl, KindScheme>) 
     for ((_, problem), &(l, m)) in members.iter().zip(&offsets) {
         let mut next = (0, 0, 0);
         for instance in &problem.instances {
+            debug_assert!(
+                next.0 <= instance.at.0
+                    && next.1 <= instance.at.1
+                    && next.2 <= instance.at.2
+                    && instance.at.0 <= problem.lin.constraints.len()
+                    && instance.at.1 <= problem.mult.constraints.len()
+                    && instance.at.2 <= problem.carries.len(),
+                "an instance position is out of order or out of range"
+            );
             merged.copy_own(problem, (l, m), next, instance.at);
             next = instance.at;
             let lin: Vec<KindVar> = instance.lin.iter().map(|&v| shift_var(v, l)).collect();
@@ -161,6 +170,8 @@ impl Merged {
     /// 同じ SCC の宣言の参照は、多相化する前の Kind 変数を共有するのと同じ解にする (docs/spec/types.md の「推論」)。
     /// 変数どうしの制約は違反にならないので、由来は付けない。
     fn equate(&mut self, lin: &[KindVar], mult: &[KindVar], callee: usize) {
+        debug_assert_eq!(lin.len(), self.own[callee].lin.len());
+        debug_assert_eq!(mult.len(), self.own[callee].mult.len());
         for (&v, &w) in lin.iter().zip(&self.own[callee].lin) {
             self.lin.require(Bound::Var(v), Bound::Var(w), None);
             self.lin.require(Bound::Var(w), Bound::Var(v), None);
@@ -882,6 +893,41 @@ mod tests {
         let values = solve(&merged.lin).0;
         assert_eq!(values[copy.index()], Linearity::Lin);
         assert_eq!(values[a.index()], Linearity::Unr);
+    }
+
+    #[test]
+    fn instance_constraints_are_spliced_at_their_position() {
+        // 違反は自分の x ≤ Unr (O_a)、具体化した x ≤ Unr (O_b)、自分の x ≤ Unr (O_c) の3つだけで、由来は1つずつ違う。
+        // 下限の Lin ≤ x は違反にならないので由来を付けない。範囲はすべて同じなので、報告の順は制約を並べた順で決まる。
+        // 具体化を自分の制約の後ろにまとめて足すと、O_b が O_c の後ろに回る
+        let origin = |name: &str| KindOrigin {
+            range: range(0, 1),
+            reason: KindReason::Passed(name.to_string()),
+        };
+        let mut problem = KindProblem::default();
+        let x = problem.lin.fresh();
+        let unr = Bound::Const(Linearity::Unr);
+        problem.lin.require(Bound::Var(x), unr, Some(origin("a")));
+        problem.lin.require(Bound::Var(x), unr, Some(origin("c")));
+        problem
+            .lin
+            .require(Bound::Const(Linearity::Lin), Bound::Var(x), None);
+        problem.instances.push(Instance {
+            decl: Decl::Builtin(Builtin::IntEq),
+            lin: vec![x],
+            mult: vec![],
+            origin: Some(origin("b")),
+            at: (1, 0, 0),
+        });
+        let scheme = KindScheme {
+            lin: vec![(Bound::Var(KindVar::from_index(0)), unr)],
+            ..KindScheme::default()
+        };
+        let schemes = HashMap::from([(Decl::Builtin(Builtin::IntEq), scheme)]);
+        assert_eq!(
+            solve_scc(&[(function(0), &problem)], &schemes).violated,
+            vec![origin("a"), origin("b"), origin("c")]
+        );
     }
 
     #[test]

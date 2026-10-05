@@ -1,5 +1,6 @@
-//! Kind の変数と `下限 ≤ 上限` の制約を集め、束の上で最小解を求める (docs/spec/types.md の「推論」)。
-//! 線形性 (`Unr ≤ Lin`) と多重度 (`Never ≤ Once ≤ Multi`) の両方に使う。
+//! Kind の変数、`下限 ≤ 上限` の制約の両辺 (`Bound`)、束の値 (`Level`)、制約の由来、持ち越しの制約を置く
+//! (docs/spec/types.md の「推論」)。線形性 (`Unr ≤ Lin`) と多重度 (`Never ≤ Once ≤ Multi`) の両方に使う。
+//! 段1が集める問題とスキームは `problem` に、段2が SCC ごとに解く処理は `solve` にある。
 
 use eml_diagnostics::{TextRange, TextSize};
 use eml_hir::OperationId;

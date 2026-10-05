@@ -182,7 +182,7 @@ pub(crate) fn check_body(
         instances: Vec::new(),
     };
     checker.check_function(own.ty);
-    checker.resolve_equalities(0);
+    checker.resolve_equalities();
     let typing = checker.typing;
     let instances = checker.instances;
     let reliable = usage::reliable(body, diagnostics.is_empty());
@@ -265,6 +265,8 @@ fn declaration_schemes(
     let mut schemes = HashMap::new();
     for (decl, problem) in &problems {
         let solution = solve_scc(&[(*decl, problem)], &schemes);
+        // 宣言の問題は由来を設定せずに作るので、報告する違反はない
+        debug_assert!(solution.violated.is_empty());
         let scheme = solution.schemes.into_iter().next().unwrap_or_default();
         schemes.insert(*decl, scheme);
     }
