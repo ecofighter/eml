@@ -160,3 +160,39 @@ fn constructor_patterns_with_conflicting_fixities_need_parentheses() {
         vec!["E1006 6:29 `:+` and `:-` cannot be combined without parentheses"]
     );
 }
+
+#[test]
+fn user_operators_are_functions_with_their_own_fixity() {
+    let text =
+        "infixr 5 <+>\n(<+>) : Int -> Int -> Int\na <+> b = a + b\n\nf : Int\nf = 1 <+> 2 <+> 3";
+    insta::assert_snapshot!(lower_text(text), @r"
+    <+> : Int -> Int -> Int
+    <+> a#0 b#1 = (+ a#0 b#1)
+    f : Int
+    f = (@<+> 1 (@<+> 2 3))
+    ");
+}
+
+#[test]
+fn a_user_operator_without_a_fixity_is_infixl_9() {
+    // ユーザーの `+` は Prelude の `+` を隠し、宣言がないので `infixl 9` になる。`*` (7) より強く結合する
+    let text = "(+) : Int -> Int -> Int\na + b = a - b\n\nf : Int\nf = 1 * 2 + 3";
+    insta::assert_snapshot!(lower_text(text), @r"
+    + : Int -> Int -> Int
+    + a#0 b#1 = (- a#0 b#1)
+    f : Int
+    f = (* 1 (@+ 2 3))
+    ");
+}
+
+#[test]
+fn a_user_definition_hides_a_desugared_operator() {
+    // ユーザーが `&&` を定義すると、短絡の `if` ではなく普通の呼び出しになる
+    let text = "(&&) : Bool -> Bool -> Bool\na && b = b\n\nf : Bool\nf = True && False";
+    insta::assert_snapshot!(lower_text(text), @r"
+    && : Bool -> Bool -> Bool
+    && a#0 b#1 = b#1
+    f : Bool
+    f = (@&& True False)
+    ");
+}

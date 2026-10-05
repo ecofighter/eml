@@ -223,7 +223,7 @@ fn collect(
     for (index, item) in source.items().enumerate() {
         match item {
             ast::Item::Signature(signature) => {
-                let Some(name) = value_name(file, signature.name(), diagnostics) else {
+                let Some(name) = value_name(signature.name()) else {
                     continue;
                 };
                 let range = name.text_range();
@@ -245,7 +245,7 @@ fn collect(
                 }
             }
             ast::Item::Equation(equation) => {
-                let Some(name) = value_name(file, equation.name(), diagnostics) else {
+                let Some(name) = value_name(equation.name()) else {
                     continue;
                 };
                 let range = name.text_range();
@@ -339,22 +339,15 @@ fn slot(
     })
 }
 
-/// 演算子の定義は、fixity の宣言と一緒に段階6で扱う。名前がなければパーサが報告済み。
-fn value_name(
-    file: FileId,
-    token: Option<SyntaxToken>,
-    diagnostics: &mut Vec<Diagnostic>,
-) -> Option<SyntaxToken> {
-    let token = token?;
-    if token.kind() == SyntaxKind::LIDENT {
-        return Some(token);
-    }
-    diagnostics.push(Diagnostic::not_yet_supported(
-        file,
-        token.text_range(),
-        "defining operators is not supported yet",
-    ));
-    None
+/// シグネチャと等式の名前。演算子の定義 (`(</>) : …` と `a </> b = …`) は、演算子の文字列を名前にした関数である
+/// (docs/spec/declarations.md の「fixity」)。名前がなければパーサが報告済み。
+fn value_name(token: Option<SyntaxToken>) -> Option<SyntaxToken> {
+    token.filter(|token| {
+        matches!(
+            token.kind(),
+            SyntaxKind::LIDENT | SyntaxKind::OP | SyntaxKind::MINUS
+        )
+    })
 }
 
 /// 同じ名前空間のトップレベルの定義の重複 (docs/spec/modules.md の「名前空間」)。ソースで後に書いた方を primary にする。

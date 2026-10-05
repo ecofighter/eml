@@ -156,11 +156,11 @@ fn type_variables_and_row_variables_have_separate_names() {
 fn operator_definitions_and_qualified_names() {
     let text = "(<+>) : Int\na <+> b = a\nf : Int -> Int\nf (x) = List.length x";
     insta::assert_snapshot!(lower_text(text), @r"
+    <+> : Int
+    <+> a#0 b#1 = a#0
     f : Int -> Int
     f x#0 = (<missing> x#0)
     ---
-    E0004 1:2 defining operators is not supported yet
-    E0004 2:3 defining operators is not supported yet
     E0004 4:9 qualified names are not supported yet
     ");
 }
