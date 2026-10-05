@@ -305,3 +305,63 @@ fn a_same_name_in_an_unrelated_lambda_keeps_the_fix() {
       13:9..13:9 "drop j\n        "
     "#);
 }
+
+#[test]
+fn a_value_used_twice_inside_one_branch() {
+    let rest = "inbranch : Unit -> Int\ninbranch () =\n  handle ask () with\n    | ask () k ->\n        let j = k\n        if flag () then resume j 1 + resume j 2 else resume j 0";
+    insta::assert_snapshot!(diagnostics(rest), @r"
+    E3002 12:45 `j` must be used exactly once, but it is used more than once
+      12:45 used again here
+      12:32 first used here
+      note: linear values, such as files, the continuation of a `once` operation and closures that capture one, must be used exactly once
+    ");
+}
+
+#[test]
+fn an_unused_lambda_parameter_points_at_the_end_of_the_lambda_body() {
+    let rest = "lambda_param : Unit -> Int\nlambda_param () =\n  handle ask () with\n    | ask () k ->\n        let f = fn j -> 0\n        f k";
+    insta::assert_snapshot!(diagnostics(rest), @r"
+    E3003 11:20 `j` must be used exactly once, but it is not used
+      11:20 `j` is bound here
+      11:26 `j` is not used before the end of this scope
+      note: linear values, such as files, the continuation of a `once` operation and closures that capture one, must be used exactly once
+      help: pass `j` to `drop`
+    ");
+}
+
+#[test]
+fn an_unused_arm_pattern_variable_points_at_the_end_of_the_arm() {
+    let rest = "arm_var : Unit -> Int\narm_var () =\n  handle ask () with\n    | ask () k ->\n        match (k, 1) with\n          | (j, n) -> n";
+    insta::assert_snapshot!(diagnostics(rest), @r"
+    E3003 12:14 `j` must be used exactly once, but it is not used
+      12:14 `j` is bound here
+      12:24 `j` is not used before the end of this scope
+      note: linear values, such as files, the continuation of a `once` operation and closures that capture one, must be used exactly once
+      help: pass `j` to `drop`
+    ");
+}
+
+#[test]
+fn a_continuation_used_twice_on_one_path_is_a_double_use() {
+    // 2回使う経路があれば、使わない経路があっても E3005 ではなく E3002 にする
+    let rest = "twice_or_none : Unit -> Int\ntwice_or_none () =\n  handle ask () with\n    | ask () k -> if flag () then resume k 1 + resume k 2 else 0";
+    insta::assert_snapshot!(diagnostics(rest), @r"
+    E3002 10:55 `k` must be used exactly once, but it is used more than once
+      10:55 used again here
+      10:42 first used here
+      note: linear values, such as files, the continuation of a `once` operation and closures that capture one, must be used exactly once
+    ");
+}
+
+#[test]
+fn no_fix_for_an_omitted_else() {
+    let rest = "omitted : Unit -> Int\nomitted () =\n  handle ask () with\n    | ask () k ->\n        let j = k\n        if flag () then drop j\n        0";
+    assert_eq!(fix_text(rest), "");
+}
+
+#[test]
+fn no_fix_when_the_last_statement_does_not_start_a_line() {
+    let rest = "same_line : Unit -> Int\nsame_line () =\n  handle ask () with\n    | ask () k ->\n        let j = k; 0";
+    assert!(diagnostics(rest).starts_with("E3003 11:13"));
+    assert_eq!(fix_text(rest), "");
+}
