@@ -1,0 +1,20 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: rendered
+input_file: tests/ui/check-fail/linearity/file_through_polymorphic_function.em
+---
+[E3006] Error: `keep` keeps a linear value alive across a call that may resume more than once
+    ╭─[ check-fail/linearity/file_through_polymorphic_function.em:19:11 ]
+    │
+ 19 │   let g = keep f chooser
+    │           ──┬─  
+    │             ╰─── `keep` is used here
+    │
+    ├─[ check-fail/linearity/file_through_polymorphic_function.em:19:11 ]
+    │
+  8 │   action ()
+    │   ────┬────  
+    │       ╰────── `x` is kept alive across this call
+    │ 
+    │ Note: a continuation of a `multi` operation can be resumed more than once, and each resumption would use the value again
+────╯

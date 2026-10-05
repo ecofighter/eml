@@ -1,0 +1,26 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: rendered
+input_file: tests/ui/check-fail/linearity/return_clause_across_multi.em
+---
+[E3006] Error: `f` must be used exactly once, but it is kept alive across a call that may resume more than once
+    ╭─[ check-fail/linearity/return_clause_across_multi.em:12:3 ]
+    │
+ 12 │ ╭─▶   handle (if choose () then ask () else 0) with
+    ┆ ┆   
+ 14 │ ├─▶     | return n -> close f
+    │ │       ──────────┬──────────   
+    │ │                 ╰───────────── the `return` clause captures `f`
+    │ │                               
+    │ ╰─────────────────────────────── this handle may perform `choose`, a `multi` operation
+    │
+    ├─[ check-fail/linearity/return_clause_across_multi.em:12:3 ]
+    │
+  4 │   multi choose : Unit -> Bool
+    │         ───┬──  
+    │            ╰──── `choose` is declared `multi` here
+    │ 
+    │ Help: do not capture `f` in the `return` clause
+    │ 
+    │ Note: a continuation of a `multi` operation can be resumed more than once, and each resumption would use the value again
+────╯
