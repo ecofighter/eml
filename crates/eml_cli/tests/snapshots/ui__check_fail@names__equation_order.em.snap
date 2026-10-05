@@ -46,12 +46,3 @@ input_file: tests/ui/check-fail/names/equation_order.em
     │ ┬  
     │ ╰── the first equation
 ────╯
-[E4001] Error: `match` does not cover every value
-    ╭─[ check-fail/names/equation_order.em:15:1 ]
-    │
- 15 │ k 0 y = y
-    │ ──┬──  
-    │   ╰──── no arm matches some values
-    │ 
-    │ Note: not covered: `(_, _)`
-────╯

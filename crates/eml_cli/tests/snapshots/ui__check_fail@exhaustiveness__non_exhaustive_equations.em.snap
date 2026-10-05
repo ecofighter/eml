@@ -1,0 +1,20 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: rendered
+input_file: tests/ui/check-fail/exhaustiveness/non_exhaustive_equations.em
+---
+[E4002] Error: the equations of `first` do not cover every argument
+   ╭─[ check-fail/exhaustiveness/non_exhaustive_equations.em:6:1 ]
+   │
+ 6 │ first : Option Int -> Option Int -> Int
+   │ ──┬──  
+   │   ╰──── `first` is not defined for some arguments
+ 7 │ first (Some x) _ = x
+   │ ──┬──  
+   │   ╰──── an equation of `first`
+ 8 │ first None (Some y) = y
+   │ ──┬──  
+   │   ╰──── an equation of `first`
+   │ 
+   │ Note: not covered: `first None None`
+───╯

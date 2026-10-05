@@ -5,8 +5,8 @@ use std::iter;
 
 use eml_diagnostics::{Diagnostic, Label, Severity, TextRange, TextSize};
 use eml_hir::{
-    Body, ConstructorId, ExprId, ExprKind, Function, Literal, MatchArm, Module, PatId, PatKind,
-    Stmt, TypeDefId, TypeDefKind,
+    Body, ConstructorId, ExprId, ExprKind, Function, Literal, MatchArm, MatchSource, Module, PatId,
+    PatKind, Stmt, TypeDefId, TypeDefKind,
 };
 
 use crate::{BodyTypes, TypedModule, codes};
@@ -82,19 +82,51 @@ struct Exhaustive<'a> {
 }
 
 impl<'a> Exhaustive<'a> {
-    /// 等式の引数の並びを1行の行列として調べる。spec の「引数のタプルに対する `match`」と同じ結果になる
-    /// (docs/spec/exhaustiveness.md)。複数の等式は段階6で行を足す。
+    /// 等式の引数の並びを行列の行にして調べる。等式が1つなら引数のパターンを1行に、2つ以上なら脱糖した `match` の
+    /// 枝を1行ずつにする。spec の「引数のタプルに対する `match`」と同じ結果になる (docs/spec/exhaustiveness.md)。
     fn equation(&mut self, function: &Function) {
         let Some(signature_name) = function.signature_name_range else {
             return;
         };
-        let Some(row) = self.row(&self.body.params) else {
+        let (rows, patterns) = match &self.body.exprs[self.body.root].kind {
+            ExprKind::Match {
+                arms,
+                source: MatchSource::Equations,
+                ..
+            } => {
+                // 引数の数の違う等式は E1020 で枝から外れている。残りだけで調べると E4001 や E4002 が連鎖する
+                if arms.len() < function.equation_ranges.len() {
+                    return;
+                }
+                let mut rows = Vec::new();
+                for arm in arms {
+                    let Some(row) = self.equation_row(arm.pat) else {
+                        return;
+                    };
+                    rows.push(row);
+                }
+                (rows, arms.iter().map(|arm| arm.pat).collect())
+            }
+            _ => match self.row(&self.body.params) {
+                Some(row) => (vec![row], Vec::new()),
+                None => return,
+            },
+        };
+        let mut unreachable = Vec::new();
+        for (index, row) in rows.iter().enumerate() {
+            match self.useful(&rows[..index], row) {
+                Ok(true) => {}
+                Ok(false) => unreachable.push(patterns[index]),
+                Err(Mixed) => return,
+            }
+        }
+        let width = self.body.params.len();
+        let Ok(missing) = self.missing(&rows, width, SHOWN + 1) else {
             return;
         };
-        let width = row.len();
-        let Ok(missing) = self.missing(&[row], width, SHOWN + 1) else {
-            return;
-        };
+        for pat in unreachable {
+            self.unreachable_equation(pat);
+        }
         if missing.is_empty() {
             return;
         }
@@ -108,23 +140,63 @@ impl<'a> Exhaustive<'a> {
                     .join(" ")
             })
             .collect();
-        self.diagnostics.push(
-            Diagnostic::error(
-                codes::NON_EXHAUSTIVE_EQUATION,
-                format!("the equation of `{name}` does not cover every argument"),
-                Label::new(
-                    self.module.file,
-                    signature_name,
-                    format!("`{name}` is not defined for some arguments"),
-                ),
-            )
-            .with_secondary(Label::new(
-                self.module.file,
+        let file = self.module.file;
+        let several = function.equation_ranges.len() > 1;
+        let message = if several {
+            format!("the equations of `{name}` do not cover every argument")
+        } else {
+            format!("the equation of `{name}` does not cover every argument")
+        };
+        let mut diagnostic = Diagnostic::error(
+            codes::NON_EXHAUSTIVE_EQUATION,
+            message,
+            Label::new(
+                file,
+                signature_name,
+                format!("`{name}` is not defined for some arguments"),
+            ),
+        );
+        if several {
+            for &range in &function.equation_ranges {
+                diagnostic = diagnostic.with_secondary(Label::new(
+                    file,
+                    range,
+                    format!("an equation of `{name}`"),
+                ));
+            }
+        } else {
+            diagnostic = diagnostic.with_secondary(Label::new(
+                file,
                 function.name_range,
                 "this equation does not match every argument",
-            ))
-            .with_note(not_covered(&examples)),
-        );
+            ));
+        }
+        self.diagnostics
+            .push(diagnostic.with_note(not_covered(&examples)));
+    }
+
+    /// 等式の `match` の枝のパターンを、引数ごとの欄の行にする。脱糖は、引数が2つ以上ならタプル、1つならその
+    /// パターン、0個なら `()` を置く (docs/spec/declarations.md)。
+    fn equation_row(&self, pat: PatId) -> Option<Row> {
+        match (&self.body.pats[pat].kind, self.body.params.len()) {
+            (_, 0) => Some(Vec::new()),
+            (_, 1) => self.pat(pat).map(|pat| vec![pat]),
+            (PatKind::Tuple(elements), _) => self.row(elements),
+            _ => None,
+        }
+    }
+
+    fn unreachable_equation(&mut self, pat: PatId) {
+        self.diagnostics.push(Diagnostic::new(
+            codes::UNREACHABLE_EQUATION,
+            Severity::Warning,
+            "unreachable equation",
+            Label::new(
+                self.module.file,
+                self.body.pats[pat].range,
+                "the equations above already match these arguments",
+            ),
+        ));
     }
 
     /// 本体の中の `match` と、値を1つ受けるだけの束縛のパターン。式はアリーナを順に見るので、木を再帰しない。
@@ -133,7 +205,9 @@ impl<'a> Exhaustive<'a> {
         for (_, expr) in body.exprs.iter() {
             match &expr.kind {
                 ExprKind::Match {
-                    scrutinee, arms, ..
+                    scrutinee,
+                    arms,
+                    source: MatchSource::Expr,
                 } => self.match_expr(expr.range, *scrutinee, arms),
                 ExprKind::Block { stmts, .. } => {
                     for stmt in stmts {

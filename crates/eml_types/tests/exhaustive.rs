@@ -263,3 +263,55 @@ fn a_witness_spans_a_literal_column_and_a_data_column() {
       note: not covered: `(_, Some _)`
     ");
 }
+
+#[test]
+fn several_equations_that_miss_an_argument() {
+    let text = "data Option a = | None | Some a\n\nf : Option Int -> Option Int -> Int\nf (Some x) _ = x\nf None (Some y) = y";
+    insta::assert_snapshot!(diagnostics(text), @r"
+    E4002 3:1 the equations of `f` do not cover every argument
+      3:1 `f` is not defined for some arguments
+      4:1 an equation of `f`
+      5:1 an equation of `f`
+      note: not covered: `f None None`
+    ");
+}
+
+#[test]
+fn an_equation_after_a_catch_all_is_unreachable() {
+    let text = "g : Int -> Int\ng _ = 0\ng 1 = 1";
+    let checked = check(text);
+    assert!(!has_errors(&checked.diagnostics));
+    insta::assert_snapshot!(full(&checked.files, &checked.diagnostics), @r"
+    E4005 3:3 unreachable equation
+      3:3 the equations above already match these arguments
+    ");
+    assert_eq!(checked.diagnostics[0].severity, Severity::Warning);
+}
+
+#[test]
+fn a_value_defined_twice_has_an_unreachable_equation() {
+    let text = "pi : Int\npi = 3\npi = 4";
+    insta::assert_snapshot!(diagnostics(text), @r"
+    E4005 3:1 unreachable equation
+      3:1 the equations above already match these arguments
+    ");
+}
+
+#[test]
+fn equations_with_a_type_error_add_no_exhaustiveness_errors() {
+    let text = "f : Int -> Int\nf \"a\" = 1\nf 2 = 2";
+    let text_out = diagnostics(text);
+    assert!(!text_out.contains("E4002"), "{text_out}");
+}
+
+#[test]
+fn a_dropped_equation_adds_no_exhaustiveness_errors() {
+    let text = "f : Int -> Int -> Int\nf 0 y = y\nf x = x";
+    let text_out = diagnostics(text);
+    assert!(text_out.contains("E1020"), "{text_out}");
+    assert!(
+        !text_out.contains("E4001") && !text_out.contains("E4002"),
+        "{text_out}"
+    );
+    assert!(!text_out.contains("E4005"), "{text_out}");
+}

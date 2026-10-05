@@ -43,6 +43,8 @@ pub mod codes {
     pub const REFUTABLE_PATTERN: ErrorCode = ErrorCode(4003);
     /// 重大度は Warning である (docs/spec/diagnostics.md の「網羅性の診断」)。
     pub const UNREACHABLE_ARM: ErrorCode = ErrorCode(4004);
+    /// 重大度は Warning である (docs/spec/diagnostics.md の「網羅性の診断」)。
+    pub const UNREACHABLE_EQUATION: ErrorCode = ErrorCode(4005);
 }
 
 /// 型付き HIR。HIR は複製せず、型を別テーブルに持つ (docs/implementation/architecture.md)。

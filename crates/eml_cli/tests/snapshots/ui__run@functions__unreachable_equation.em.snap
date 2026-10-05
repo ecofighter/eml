@@ -1,0 +1,15 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{stderr}\")"
+input_file: tests/ui/run/functions/unreachable_equation.em
+---
+--- stdout ---
+any
+--- stderr ---
+[E4005] Warning: unreachable equation
+   ╭─[ run/functions/unreachable_equation.em:4:10 ]
+   │
+ 4 │ classify 0 = "zero"
+   │          ┬  
+   │          ╰── the equations above already match these arguments
+───╯
