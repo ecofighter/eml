@@ -39,7 +39,7 @@ struct Diagnostic {
 
 ## 割り当て済みの番号
 
-E0xxx は `eml_syntax::codes` (E0004 だけは `eml_diagnostics`)、E1xxx は `eml_hir::codes`、E2xxx は `eml_types::codes` に置く。E3xxx は `eml_types::codes` に置く。E4xxx は `eml_types::codes` に置く。持ち越し規則の番号は段階5b で、射影と更新の番号は S2 で割り当てる。
+E0xxx は `eml_syntax::codes` (E0004 だけは `eml_diagnostics`)、E1xxx は `eml_hir::codes`、E2xxx は `eml_types::codes` に置く。E3xxx は `eml_types::codes` に置く。E4xxx は `eml_types::codes` に置く。射影と更新の番号は S2 で割り当てる。
 
 | 番号 | 定数 | 内容 |
 |---|---|---|
@@ -79,11 +79,12 @@ E0xxx は `eml_syntax::codes` (E0004 だけは `eml_diagnostics`)、E1xxx は `e
 | E2004 | `INVALID_MAIN_TYPE` | `main` のシグネチャが `Unit -> <IO> Unit` でない |
 | E2005 | `INFINITE_TYPE` | 無限の型 (単一化の occurs check)。row のラベルの型引数を通して、型変数か row 変数が自分自身の中に現れる場合を含む。呼び出しの row で起きたときは、呼び出しを指す |
 | E2006 | `NOT_COMPARABLE` | `==` か `!=` で、`Int`、`String`、`Bool` のどれでもない型の値を比べた。演算子を primary にし、比べようとした型をメッセージに出す。note で比べられる型を示す |
-| E3001 | `LINEAR_VALUE_MISUSED` | 線形な値の誤った使い方のうち、E3002〜E3005 に当たらないもの (関数への受け渡し、型の単一化、ラムダや節の捕獲)。違反した Kind の制約の由来を指す。`multi` の操作を持つ handler の `return` の節が捕まえた場合を含む |
+| E3001 | `LINEAR_VALUE_MISUSED` | 線形な値の誤った使い方のうち、E3002〜E3005 に当たらないもの (関数への受け渡し、型の単一化、ラムダや節の捕獲)。違反した Kind の制約の由来を指す |
 | E3002 | `LINEAR_VALUE_USED_TWICE` | 線形な値を、ある経路で2回以上使った。2回目に使った位置を primary、1回目を secondary にする |
 | E3003 | `LINEAR_VALUE_NOT_CONSUMED` | 線形な値を、ある経路で使わなかった。束縛した位置を primary、使わなかった枝、省いた `else`、またはスコープの終わりを secondary にする。どの経路でも使わないうちに同じブロックの後の `let` で隠されたときは、スコープの終わりではなく隠した束縛を secondary にし、隠す前に `drop` するよう help で伝える。help で `drop` を提案し、使わなかった経路がブロックなら、その最後の文の前に `drop x` の行を入れる fix を付ける。`drop x` を入れる位置で同じ名前の後の束縛が見えているときは、fix を付けない |
 | E3004 | `LINEAR_VALUE_DISCARDED` | 線形な値を `_` で受けた。パターンを指す |
 | E3005 | `CONTINUATION_NOT_HANDLED` | `once` の操作の節の `k` を、ある経路で `resume` も `drop` もしなかった。節を primary、`k` の束縛を secondary にする |
+| E3006 | `LINEAR_VALUE_KEPT_ACROSS_MULTI` | 線形な値を持ったまま、`multi` の操作を起こしうる呼び出し、`resume`、`handle` をまたいだ (持ち越し規則)。同じ値は、呼び出しの位置が最も前の1件だけを報告する |
 | E4001 | `NON_EXHAUSTIVE_MATCH` | 網羅されていない `match` |
 | E4002 | `NON_EXHAUSTIVE_EQUATION` | 網羅されていない等式 |
 | E4003 | `REFUTABLE_PATTERN` | 反駁可能な `let` の左辺、ラムダの引数、handler の節の引数と `return` の節の引数のパターン |
@@ -100,7 +101,7 @@ E0004 (`NOT_YET_SUPPORTED`) は、構文の段階 (S2、S3) で未対応の構�
 | E0xxx | 閉じていない補間 |
 | E1xxx | 等式が連続していない、シグネチャと等式が隣り合っていない、等式ごとの引数の個数の違い、fixity の衝突と重複、優先順位の合わないセクション、ブロックの最後の `use`、修飾なしの名前の衝突 |
 | E2xxx | `resume` の引数の個数が `k` の状態の欄と合わない (状態のある handler の `k` を2引数で、状態のない `k` を3引数で再開した)。primary は `resume` の式で、状態のある `k` なら次の状態を3つ目の引数で渡すよう、状態のない `k` なら3つ目の引数を除くよう伝える |
-| E3xxx | 射影で `Lin` な残りを捨てる、更新で `Lin` な古い値を捨てる、`multi` の呼び出しをまたぐ線形な変数 (段階5b) |
+| E3xxx | 射影で `Lin` な残りを捨てる、更新で `Lin` な古い値を捨てる |
 
 シグネチャに関する E1xxx の診断には、シグネチャの追加を提案する help を付ける ([宣言](declarations.md))。
 
@@ -115,7 +116,8 @@ E0004 (`NOT_YET_SUPPORTED`) は、構文の段階 (S2、S3) で未対応の構�
 | 二重使用 | 1回目に消費した場所と、2回目に使った場所 |
 | 消費されていない | 束縛した場所とスコープの終わり。同じブロックの後の `let` で隠されたときは、隠した束縛。help と fix で `drop x` の追加を提案する |
 | `_` で `Lin` の値を受けた | そのパターン。help で、変数に束縛して `drop` するよう提案する |
-| `multi` の呼び出しをまたぐ | 線形な変数、その呼び出し、`multi` と宣言している操作 |
+| `multi` の呼び出しをまたぐ | primary はその呼び出し、`resume`、または `handle` で、起こしうる `multi` の操作を書く。secondary は値 (変数の束縛、途中の値の部分式、`return` の節) と、`multi` と宣言した操作。help で、呼び出しの前に使い終えるよう提案する |
+| 呼んだ関数が `multi` の呼び出しをまたがせる | primary は呼んだ関数を参照した位置。secondary は、呼んだ関数の中で値をまたがせている呼び出し、またはその先の関数の参照 (1段だけ) |
 | 継続の扱い忘れ | `k` に `resume` も `drop` もしていない handler の節 |
 | 射影・更新で `Lin` な値を捨てる | 射影または更新の式。help と fix で、分解パターンへの書き換えを提案する ([直積型とレコード](records.md)) |
 

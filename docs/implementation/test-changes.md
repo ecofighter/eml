@@ -63,7 +63,7 @@
 - `multi` の操作とエフェクトの型引数を通すようになったので、`tests/ui/check-fail/later_stage_effects.em` から `multi` とエフェクトの型引数の部分を除き、`from` の E0004 だけを確かめるようにした (種類1)。`multi` の操作は `run/multi_*.em` と `check-fail/multi_return_clause.em`、エフェクトの型引数は `run/effect_parameters.em` と `check-fail/effect_arguments.em` で確かめる
 - `eml_hir/tests/effects.rs` の `operation_signatures_are_checked` の期待値から `multi` の E0004 が消え、HIR の表示が `multi many : Unit -> Int` になった (種類1)。`effect_type_parameters_and_arguments_come_in_stage_3b` は、型引数が HIR に入ることを確かめる3つのテスト (`effects_take_type_parameters_and_rows_take_type_arguments`、`operations_see_the_type_parameters_of_their_effect_first`、`type_arguments_and_parameters_of_effects_are_checked`) に置き換えた (種類1)
 - `eml_types` の `table/tests.rs` と `ty.rs` の単体テストの row とラベルの組み立てを `Label` と `EffectLabel::args` に合わせ、`EffectDef` の組み立てに `generics` を足した (種類3)。期待値は変えていない
-- `tests/ui/run/multi_over_once.em` は、持ち越し規則がない段階3b での振る舞い (メモリ安全に `once` の `k` を写す) を確かめる。段階5で持ち越し規則を入れたら `check-fail/` に移す (種類1の予定)
+- `tests/ui/run/multi_over_once.em` は、持ち越し規則がない段階3b での振る舞い (メモリ安全に `once` の `k` を写す) を確かめる。段階5で持ち越し規則を入れたら `check-fail/` に移す (種類1の予定)。段階5b で移した
 
 ### join point の解析の整理
 
@@ -155,3 +155,9 @@
 ### 段階5a の後始末
 
 - 消費されないまま同じブロックの後の `let` で隠された変数の E3003 は、スコープの終わりではなく隠した束縛を指し、help で隠す前に `drop` するよう伝えるようにした。スコープの終わりでは、その名前はもう隠した側の変数を指すためである。`tests/ui/check-fail/linearity/file_shadowed.em` のスナップショットと、`eml_types/tests/linearity.rs` の `a_shadowed_value_is_not_consumed` の secondary と help が変わった (種類1)
+
+### 縦の貫通 段階5b
+
+- 持ち越し規則で拒否されるようになったので、`tests/ui/run/effects/multi_over_once.em` を `tests/ui/check-fail/linearity/` に移し、冒頭のコメントを E3006 の説明に書き直した。スナップショットは実行の出力から E3006 の診断に変わった (種類1)
+- `return` の節の捕獲の専用の規則を持ち越し規則にまとめたので、`eml_types/tests/effects.rs` の `the_return_clause_of_a_multi_handler_cannot_capture_a_linear_value` が E3001 から E3006 になり、内側の `handle` と `return` の節と `choose` の宣言を指すようになった (種類1)
+- `KindConstraint` を enum にしたことと、`report::linear_misuse` の引数の変更の追随は、期待値を変えていない (種類3)
