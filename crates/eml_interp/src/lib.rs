@@ -727,7 +727,15 @@ impl<'p> Machine<'p> {
                     }
                     _ => Err(Fault::Internal("`read_all` on a value that is not a file")),
                 };
-                let text = self.heap.alloc(Payload::Str(read?));
+                let text = match read {
+                    Ok(text) => text,
+                    // 実行はここで止まるが、受け取った参照を手放す規律はエラーの経路でも保ち、ファイルをすぐに閉じる
+                    Err(fault) => {
+                        self.heap.decref(file).map_err(Fault::Heap)?;
+                        return Err(fault);
+                    }
+                };
+                let text = self.heap.alloc(Payload::Str(text));
                 Ok(Value::Obj(self.heap.alloc(Payload::Data {
                     tag: TUPLE,
                     fields: vec![Value::Obj(file), Value::Obj(text)],
@@ -783,6 +791,17 @@ fn io_reason(kind: std::io::ErrorKind) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn io_errors_have_fixed_reasons() {
+        // OS の文言は環境ごとに違うので、実行時エラーの文言には `ErrorKind` から決めた理由だけを入れる
+        assert_eq!(io_reason(std::io::ErrorKind::NotFound), "not found");
+        assert_eq!(
+            io_reason(std::io::ErrorKind::PermissionDenied),
+            "permission denied"
+        );
+        assert_eq!(io_reason(std::io::ErrorKind::IsADirectory), "I/O error");
+    }
 
     #[test]
     fn runtime_errors_name_the_fault_and_the_function() {

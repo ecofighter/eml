@@ -1,4 +1,9 @@
+use std::io::Read;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use super::*;
+use crate::FileHandle;
 
 fn string(heap: &mut Heap, text: &str) -> ObjRef {
     heap.alloc(Payload::Str(text.to_string()))
@@ -391,12 +396,6 @@ fn take_or_copy_copies_a_shared_data_object_and_dups_its_fields() {
     heap.decref(s).unwrap();
     assert!(heap.live_objects().is_empty());
 }
-
-use std::io::Read;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
-
-use crate::FileHandle;
 
 /// 捨てられたことを旗で知らせる読み出し口。
 struct Flagged(Arc<AtomicBool>);

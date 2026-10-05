@@ -1,0 +1,8 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- runtime error ---\\n{error}\\n\")"
+input_file: tests/ui/run-fail/files/read_directory.em
+---
+--- stdout ---
+--- runtime error ---
+cannot read `.`: I/O error in `main`

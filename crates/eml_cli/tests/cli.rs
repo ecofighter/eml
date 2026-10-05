@@ -86,3 +86,25 @@ fn run_prints_the_program_output() {
     assert_eq!(output.status.code(), Some(0));
     assert_eq!(String::from_utf8_lossy(&output.stdout), "Hello, world!\n");
 }
+
+#[test]
+fn run_opens_an_absolute_path_as_is() {
+    // UI テストは基準ディレクトリからの相対パスだけを使うので、絶対パスはここで確かめる (docs/spec/effects.md)
+    let dir = std::env::temp_dir().join(format!("eml-cli-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let input = dir.join("input.txt");
+    std::fs::write(&input, "from an absolute path").unwrap();
+    let program = dir.join("absolute.em");
+    let source = format!(
+        "main : Unit -> <IO> Unit\nmain () =\n  let f = open \"{}\"\n  let (f, text) = read_all f\n  close f\n  println text\n",
+        input.display()
+    );
+    std::fs::write(&program, source).unwrap();
+    let output = eml(&["run", "--debug-heap", program.to_str().unwrap()]);
+    std::fs::remove_dir_all(&dir).unwrap();
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "from an absolute path\n"
+    );
+}
