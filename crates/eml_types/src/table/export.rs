@@ -1,6 +1,6 @@
 use super::*;
 
-impl Table {
+impl Table<'_> {
     /// スキームの Kind 変数を、その変数を持つ型の部分 (型変数か関数型) で呼ぶ。外側から順に見て、最初に現れた部分を使う。
     pub fn kind_names(&self, ty: Ty) -> HashMap<KindVar, Type> {
         let mut names = HashMap::new();
@@ -63,7 +63,7 @@ impl Table {
         match self.shape(ty).clone() {
             TyShape::Con(id, args) => Type::Con {
                 id,
-                name: self.type_names[id].clone(),
+                name: self.context.type_names[id].clone(),
                 args: args
                     .into_iter()
                     .map(|arg| self.to_type(arg, solved))
@@ -130,7 +130,7 @@ impl Table {
     fn label_type(&self, label: &Label, solved: bool) -> EffectLabel {
         EffectLabel {
             id: label.effect,
-            name: self.effect_names[label.effect].clone(),
+            name: self.context.effect_names[label.effect].clone(),
             args: label
                 .args
                 .iter()

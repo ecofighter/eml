@@ -44,7 +44,7 @@ pub(crate) struct BodyTyping {
     pub calls: ArenaMap<ExprId, CallRows>,
 }
 
-pub(super) struct BodyCheck<'a> {
+pub(super) struct BodyCheck<'a, 'c> {
     pub(super) module: &'a Module,
     pub(super) function: &'a Function,
     pub(super) body: &'a Body,
@@ -56,7 +56,7 @@ pub(super) struct BodyCheck<'a> {
     pub(super) operations: &'a ArenaMap<OperationId, Scheme>,
     /// コンストラクタのスキーム。
     pub(super) constructors: &'a ArenaMap<ConstructorId, Scheme>,
-    pub(super) table: &'a mut Table,
+    pub(super) table: &'a mut Table<'c>,
     pub(super) diagnostics: &'a mut Vec<Diagnostic>,
     /// 本体が起こしてよいエフェクト。シグネチャで最後にたどった矢印の row か、本体を囲むラムダで最後にたどった
     /// 矢印の row である。
@@ -83,7 +83,7 @@ pub(super) enum Arrow {
     NotFunction,
 }
 
-impl BodyCheck<'_> {
+impl BodyCheck<'_, '_> {
     pub(super) fn file(&self) -> FileId {
         self.module.file
     }

@@ -1,10 +1,7 @@
+use crate::context::Context;
 use crate::kind::{Bound, Carry, KindOrigin, KindVar, Lattice};
 use crate::ty::{EffectLabel, Linearity, Multiplicity, RowTail, Type};
-use eml_hir::{
-    Constructor, EffectDef, EffectId, LangItems, OpMultiplicity, Operation, OperationId, TypeDef,
-    TypeDefId,
-};
-use la_arena::{Arena, ArenaMap};
+use eml_hir::{EffectId, LangItems, OperationId, TypeDefId};
 use std::collections::HashMap;
 
 mod copy;
@@ -157,7 +154,9 @@ pub(crate) struct Subst {
     pub mult: HashMap<KindVar, KindVar>,
 }
 
-pub(crate) struct Table {
+pub(crate) struct Table<'c> {
+    /// モジュール全体の情報。表ごとに作り直さず借りる。
+    context: &'c Context,
     shapes: Vec<TyShape>,
     ty_vars: Vec<TyVarInfo>,
     row_vars: Vec<RowVarInfo>,
@@ -172,18 +171,11 @@ pub(crate) struct Table {
     pub unit: Ty,
     pub error: Ty,
     pub lang: LangItems,
-    /// 型構成子ごとの、Kind の決まり方 (`crate::data`)。
-    data_kinds: ArenaMap<TypeDefId, crate::data::DataKind>,
-    /// 名前を持つのは、`Module` を渡さずに `display` と `export` が名前を出せるようにするため。
-    type_names: ArenaMap<TypeDefId, String>,
-    effect_names: ArenaMap<EffectId, String>,
-    effect_multiplicities: ArenaMap<EffectId, Multiplicity>,
     /// 持ち越しの制約 (docs/spec/types.md の「推論」)。
     carries: Vec<Carry>,
-    operation_multiplicities: ArenaMap<OperationId, Multiplicity>,
 }
 
-impl Table {
+impl<'c> Table<'c> {
     /// これから作る Kind の制約の由来を設定し、前の由来を返す。呼び出し側は、制約を作る処理の後で前の由来に戻す。
     pub fn set_kind_origin(&mut self, origin: Option<KindOrigin>) -> Option<KindOrigin> {
         self.linearity.set_origin(origin.clone());
@@ -191,46 +183,10 @@ impl Table {
         std::mem::replace(&mut self.kind_origin, origin)
     }
 
-    pub fn new(
-        lang: LangItems,
-        types: &Arena<TypeDef>,
-        constructors: &Arena<Constructor>,
-        effects: &Arena<EffectDef>,
-        operations: &Arena<Operation>,
-    ) -> Table {
-        let operation_multiplicities = operations
-            .iter()
-            .map(|(id, operation)| {
-                let multiplicity = match operation.multiplicity {
-                    OpMultiplicity::Never => Multiplicity::Never,
-                    OpMultiplicity::Once => Multiplicity::Once,
-                    OpMultiplicity::Multi => Multiplicity::Multi,
-                };
-                (id, multiplicity)
-            })
-            .collect();
-        let effect_multiplicities = effects
-            .iter()
-            .map(|(id, effect)| {
-                // 組み込みの `IO` は、実行時が必ず1回再開するので `Once` である (docs/spec/effects.md)
-                let multiplicity = if id == lang.io {
-                    Multiplicity::Once
-                } else {
-                    effect
-                        .operations
-                        .iter()
-                        .map(|&op| match operations[op].multiplicity {
-                            OpMultiplicity::Never => Multiplicity::Never,
-                            OpMultiplicity::Once => Multiplicity::Once,
-                            OpMultiplicity::Multi => Multiplicity::Multi,
-                        })
-                        .max()
-                        .unwrap_or(Multiplicity::Never)
-                };
-                (id, multiplicity)
-            })
-            .collect();
+    pub fn new(context: &'c Context) -> Table<'c> {
+        let lang = context.lang;
         let mut table = Table {
+            context,
             shapes: Vec::new(),
             ty_vars: Vec::new(),
             row_vars: Vec::new(),
@@ -245,18 +201,7 @@ impl Table {
             unit: Ty(0),
             error: Ty(0),
             lang,
-            data_kinds: crate::data::data_kinds(types, constructors, &lang),
-            type_names: types
-                .iter()
-                .map(|(id, def)| (id, def.name.clone()))
-                .collect(),
-            effect_names: effects
-                .iter()
-                .map(|(id, def)| (id, def.name.clone()))
-                .collect(),
-            effect_multiplicities,
             carries: Vec::new(),
-            operation_multiplicities,
         };
         table.int = table.alloc(TyShape::Con(lang.int, Vec::new()));
         table.string = table.alloc(TyShape::Con(lang.string, Vec::new()));
@@ -268,12 +213,12 @@ impl Table {
 
     /// エフェクトがその row に入れる操作の上限。操作の多重度の最大である (docs/spec/types.md の「Kind」)。
     pub fn effect_multiplicity(&self, effect: EffectId) -> Multiplicity {
-        self.effect_multiplicities[effect]
+        self.context.effect_multiplicities[effect]
     }
 
     /// 操作の多重度。操作を直接呼ぶときは、エフェクトの単位ではなくこれを見る (docs/spec/effects.md の「継続の多重度と持ち越し規則」)。
     pub fn operation_multiplicity(&self, operation: OperationId) -> Multiplicity {
-        self.operation_multiplicities[operation]
+        self.context.operation_multiplicities[operation]
     }
 
     pub fn alloc(&mut self, kind: TyShape) -> Ty {

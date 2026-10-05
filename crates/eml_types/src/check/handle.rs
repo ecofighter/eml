@@ -9,7 +9,7 @@ use crate::ty::Linearity;
 use super::body::{BodyCheck, CallRows};
 use super::report::Origin;
 
-impl BodyCheck<'_> {
+impl BodyCheck<'_, '_> {
     /// handle 式の型は、`return` の節があればその本体の型、なければ本体の型である。本体は今の row `ρ` の前に扱う
     /// エフェクトを足した row で、節と `return` の節は `ρ` で検査する。deep handler の節は handler の外側で動くため。
     pub(super) fn handle(

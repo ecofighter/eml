@@ -88,10 +88,10 @@ pub(crate) fn constrain(body: &Body, typing: &BodyTyping, table: &mut Table, rel
     }
 }
 
-struct Usage<'a> {
+struct Usage<'a, 'c> {
     body: &'a Body,
     typing: &'a BodyTyping,
-    table: &'a mut Table,
+    table: &'a mut Table<'c>,
     reliable: bool,
     /// 名前ごとの局所変数。消費漏れの fix と診断が、同じ名前の後の束縛を探すのに使う。
     by_name: HashMap<&'a str, Vec<LocalId>>,
@@ -100,7 +100,7 @@ struct Usage<'a> {
     scopes: HashMap<LocalId, ExprId>,
 }
 
-impl<'a> Usage<'a> {
+impl<'a> Usage<'a, '_> {
     fn expr(&mut self, id: ExprId) -> Uses {
         let body = self.body;
         let at = body.exprs[id].range;

@@ -1,49 +1,10 @@
-use eml_diagnostics::TextRange;
-use eml_hir::{Constructor, EffectDef, Generics, LangItems, TypeDef};
-use la_arena::Arena;
-
 use super::*;
-
-fn new_table() -> Table {
-    let mut types = Arena::new();
-    let mut effects = Arena::new();
-    let mut constructors = Arena::new();
-    let int = types.alloc(TypeDef::builtin("Int"));
-    let string = types.alloc(TypeDef::builtin("String"));
-    let bool = types.alloc(TypeDef::builtin("Bool"));
-    let unit = types.alloc(TypeDef::builtin("Unit"));
-    let file = types.alloc(TypeDef::builtin("File"));
-    let mut constructor = |name: &str, tag| {
-        constructors.alloc(Constructor {
-            name: name.to_string(),
-            range: TextRange::default(),
-            ty: bool,
-            tag,
-            fields: Vec::new(),
-        })
-    };
-    let false_ctor = constructor("False", 0);
-    let true_ctor = constructor("True", 1);
-    let lang = LangItems {
-        int,
-        string,
-        bool,
-        unit,
-        file,
-        io: effects.alloc(EffectDef {
-            name: "IO".to_string(),
-            generics: Generics::default(),
-            operations: Vec::new(),
-        }),
-        true_ctor,
-        false_ctor,
-    };
-    Table::new(lang, &types, &constructors, &effects, &Arena::new())
-}
+use crate::context::test_context;
 
 #[test]
 fn constructors_unify_only_with_themselves() {
-    let mut table = new_table();
+    let context = test_context();
+    let mut table = Table::new(&context);
     assert_eq!(table.unify(table.int, table.int), Ok(()));
     assert_eq!(
         table.unify(table.int, table.string),
@@ -54,7 +15,8 @@ fn constructors_unify_only_with_themselves() {
 
 #[test]
 fn variables_are_bound_by_unification() {
-    let mut table = new_table();
+    let context = test_context();
+    let mut table = Table::new(&context);
     let v = table.fresh_var();
     let f = table.function(table.int, Row::pure(), v);
     let g = table.function(table.int, Row::pure(), table.bool);
@@ -64,7 +26,8 @@ fn variables_are_bound_by_unification() {
 
 #[test]
 fn the_occurs_check_rejects_infinite_types() {
-    let mut table = new_table();
+    let context = test_context();
+    let mut table = Table::new(&context);
     let v = table.fresh_var();
     let f = table.function(v, Row::pure(), table.int);
     assert_eq!(table.unify(v, f), Err(UnifyError::Occurs));
@@ -72,7 +35,8 @@ fn the_occurs_check_rejects_infinite_types() {
 
 #[test]
 fn closed_rows_unify_regardless_of_order() {
-    let mut table = new_table();
+    let context = test_context();
+    let mut table = Table::new(&context);
     let io = table.lang.io;
     let a = Row::closed(vec![Label::plain(io)]);
     assert_eq!(table.unify_row(&a, &a.clone()), Ok(()));
@@ -84,7 +48,8 @@ fn closed_rows_unify_regardless_of_order() {
 
 #[test]
 fn an_open_row_absorbs_the_missing_labels() {
-    let mut table = new_table();
+    let context = test_context();
+    let mut table = Table::new(&context);
     let io = table.lang.io;
     let r = table.fresh_row_var();
     let open = Row {
@@ -104,7 +69,8 @@ fn an_open_row_absorbs_the_missing_labels() {
 
 #[test]
 fn an_open_row_cannot_add_labels_to_a_closed_row() {
-    let mut table = new_table();
+    let context = test_context();
+    let mut table = Table::new(&context);
     let io = table.lang.io;
     let r = table.fresh_row_var();
     let open = Row {
@@ -119,7 +85,8 @@ fn an_open_row_cannot_add_labels_to_a_closed_row() {
 
 #[test]
 fn two_open_rows_share_a_fresh_tail() {
-    let mut table = new_table();
+    let context = test_context();
+    let mut table = Table::new(&context);
     let io = table.lang.io;
     let r1 = table.fresh_row_var();
     let r2 = table.fresh_row_var();
@@ -141,7 +108,8 @@ fn two_open_rows_share_a_fresh_tail() {
 
 #[test]
 fn rows_with_the_same_tail_and_different_labels_report_the_missing_effects() {
-    let mut table = new_table();
+    let context = test_context();
+    let mut table = Table::new(&context);
     let io = table.lang.io;
     let r = table.fresh_row_var();
     let a = Row {
@@ -160,7 +128,8 @@ fn rows_with_the_same_tail_and_different_labels_report_the_missing_effects() {
 
 #[test]
 fn a_variable_unified_with_error_becomes_error() {
-    let mut table = new_table();
+    let context = test_context();
+    let mut table = Table::new(&context);
     let v = table.fresh_var();
     assert_eq!(table.unify(v, table.error), Ok(()));
     assert_eq!(table.unify(v, table.int), Ok(()));
@@ -169,7 +138,8 @@ fn a_variable_unified_with_error_becomes_error() {
 
 #[test]
 fn export_keeps_an_open_row() {
-    let mut table = new_table();
+    let context = test_context();
+    let mut table = Table::new(&context);
     let io = table.lang.io;
     let r = table.fresh_row_var();
     let f = table.function(
@@ -187,7 +157,8 @@ fn export_keeps_an_open_row() {
 
 #[test]
 fn rigid_variables_unify_only_with_themselves_and_flexible_variables() {
-    let mut table = new_table();
+    let context = test_context();
+    let mut table = Table::new(&context);
     let (a, _) = table.fresh_rigid("a");
     let (b, _) = table.fresh_rigid("b");
     assert_eq!(table.unify(a, a), Ok(()));
@@ -200,7 +171,8 @@ fn rigid_variables_unify_only_with_themselves_and_flexible_variables() {
 
 #[test]
 fn a_rigid_row_variable_cannot_be_bound() {
-    let mut table = new_table();
+    let context = test_context();
+    let mut table = Table::new(&context);
     let io = table.lang.io;
     let e = table.fresh_rigid_row("e");
     let rigid = Row {
@@ -217,7 +189,8 @@ fn a_rigid_row_variable_cannot_be_bound() {
 
 #[test]
 fn a_closed_callee_row_is_included_in_a_larger_row() {
-    let mut table = new_table();
+    let context = test_context();
+    let mut table = Table::new(&context);
     let io_effect = table.lang.io;
     let io = Row::closed(vec![Label::plain(io_effect)]);
     assert_eq!(table.include_row(&Row::pure(), &io), Ok(()));
@@ -230,7 +203,8 @@ fn a_closed_callee_row_is_included_in_a_larger_row() {
 
 #[test]
 fn a_rigid_callee_row_needs_the_same_variable_in_the_ambient_row() {
-    let mut table = new_table();
+    let context = test_context();
+    let mut table = Table::new(&context);
     let io = table.lang.io;
     let e = table.fresh_rigid_row("e");
     let callee = Row {
@@ -251,7 +225,8 @@ fn a_rigid_callee_row_needs_the_same_variable_in_the_ambient_row() {
 
 #[test]
 fn open_spine_opens_only_the_rows_on_the_return_side() {
-    let mut table = new_table();
+    let context = test_context();
+    let mut table = Table::new(&context);
     let param = table.function(table.int, Row::pure(), table.int);
     let inner = table.function(table.int, Row::pure(), table.int);
     let f = table.function(param, Row::pure(), inner);
@@ -264,7 +239,8 @@ fn open_spine_opens_only_the_rows_on_the_return_side() {
 
 #[test]
 fn copy_type_replaces_rigid_variables() {
-    let mut table = new_table();
+    let context = test_context();
+    let mut table = Table::new(&context);
     let (a, ra) = table.fresh_rigid("a");
     let e = table.fresh_rigid_row("e");
     let f = table.function(
@@ -287,7 +263,8 @@ fn copy_type_replaces_rigid_variables() {
 
 #[test]
 fn a_rigid_callee_row_extends_a_flexible_ambient_row() {
-    let mut table = new_table();
+    let context = test_context();
+    let mut table = Table::new(&context);
     let io = table.lang.io;
     let e = table.fresh_rigid_row("e");
     let fresh = table.fresh_row_var();
@@ -307,7 +284,8 @@ fn a_rigid_callee_row_extends_a_flexible_ambient_row() {
 
 #[test]
 fn binding_a_variable_passes_the_kind_of_its_type_to_the_variable() {
-    let mut table = new_table();
+    let context = test_context();
+    let mut table = Table::new(&context);
     let (a, ra) = table.fresh_rigid("a");
     let v = table.fresh_var();
     // v の Kind は Unr でなければならない。v を a に束縛すると、a の Kind も Unr になる
@@ -322,7 +300,8 @@ fn binding_a_variable_passes_the_kind_of_its_type_to_the_variable() {
 
 #[test]
 fn closure_kinds_bound_each_partial_application() {
-    let mut table = new_table();
+    let context = test_context();
+    let mut table = Table::new(&context);
     let (a, ra) = table.fresh_rigid("a");
     let m = table.fresh_arrow_lin();
     let inner = table.function_with(a, m, Row::pure(), a);
@@ -339,13 +318,15 @@ fn closure_kinds_bound_each_partial_application() {
 #[test]
 #[should_panic(expected = "export is for after solve_kinds")]
 fn export_needs_solved_kinds() {
-    let table = new_table();
+    let context = test_context();
+    let table = Table::new(&context);
     table.export(table.int);
 }
 
 #[test]
 fn display_does_not_solve_kinds() {
-    let mut table = new_table();
+    let context = test_context();
+    let mut table = Table::new(&context);
     let lin = table.fresh_arrow_lin();
     let f = table.function_with(table.int, lin, Row::pure(), table.int);
     assert_eq!(table.display(f).to_string(), "Int -> Int");
@@ -353,7 +334,8 @@ fn display_does_not_solve_kinds() {
 
 #[test]
 fn an_error_row_unifies_with_any_row_without_binding() {
-    let mut table = new_table();
+    let context = test_context();
+    let mut table = Table::new(&context);
     let io = table.lang.io;
     let e = table.fresh_rigid_row("e");
     assert_eq!(
@@ -370,7 +352,8 @@ fn an_error_row_unifies_with_any_row_without_binding() {
 
 #[test]
 fn a_flexible_row_unified_with_an_error_row_becomes_an_error_row() {
-    let mut table = new_table();
+    let context = test_context();
+    let mut table = Table::new(&context);
     let io = table.lang.io;
     let r = table.fresh_row_var();
     let open = Row {
@@ -387,7 +370,8 @@ fn a_flexible_row_unified_with_an_error_row_becomes_an_error_row() {
 
 #[test]
 fn an_error_row_is_included_and_includes_any_row() {
-    let mut table = new_table();
+    let context = test_context();
+    let mut table = Table::new(&context);
     let io = table.lang.io;
     assert_eq!(table.include_row(&Row::error(), &Row::pure()), Ok(()));
     assert_eq!(
@@ -404,7 +388,8 @@ fn an_error_row_is_included_and_includes_any_row() {
 
 #[test]
 fn copying_keeps_an_error_row() {
-    let mut table = new_table();
+    let context = test_context();
+    let mut table = Table::new(&context);
     let f = table.function(table.int, Row::error(), table.int);
     let copied = table.copy_type(f, &Subst::default());
     assert_eq!(table.display(copied).to_string(), "Int -> <{error}> Int");
@@ -414,7 +399,8 @@ fn copying_keeps_an_error_row() {
 fn an_error_row_keeps_its_own_labels() {
     // 末尾 `Error` が受け入れるのは相手の側にしかないラベルだけである。自分の側の既知のラベルは、閉じた row に
     // 含まれなければ報告する。綴り誤りの E1002 と無関係なエフェクトの誤りを隠さないため
-    let mut table = new_table();
+    let context = test_context();
+    let mut table = Table::new(&context);
     let io = table.lang.io;
     let io_error = Row {
         labels: vec![Label::plain(io)],
@@ -441,7 +427,8 @@ fn an_error_row_keeps_its_own_labels() {
 
 #[test]
 fn continuations_unify_by_their_parts_and_are_linear() {
-    let mut table = new_table();
+    let context = test_context();
+    let mut table = Table::new(&context);
     let (int, string) = (table.int, table.string);
     let lin = ArrowLin::Known(Linearity::Lin);
     let k = table.alloc(TyShape::Cont {
@@ -472,7 +459,8 @@ fn continuations_unify_by_their_parts_and_are_linear() {
 
 #[test]
 fn labels_of_one_effect_pair_up_in_order() {
-    let mut table = new_table();
+    let context = test_context();
+    let mut table = Table::new(&context);
     let io = table.lang.io;
     let label = |args: Vec<Ty>| Label { effect: io, args };
     let a = Row::closed(vec![label(vec![table.int]), label(vec![table.string])]);
@@ -486,7 +474,8 @@ fn labels_of_one_effect_pair_up_in_order() {
 
 #[test]
 fn labels_with_different_type_arguments_do_not_unify() {
-    let mut table = new_table();
+    let context = test_context();
+    let mut table = Table::new(&context);
     let io = table.lang.io;
     let left = Label {
         effect: io,
@@ -507,7 +496,8 @@ fn labels_with_different_type_arguments_do_not_unify() {
 
 #[test]
 fn a_row_variable_cannot_occur_in_a_label_argument_of_its_row() {
-    let mut table = new_table();
+    let context = test_context();
+    let mut table = Table::new(&context);
     let io = table.lang.io;
     let r = table.fresh_row_var();
     let open = Row {
@@ -528,7 +518,8 @@ fn a_row_variable_cannot_occur_in_a_label_argument_of_its_row() {
 
 #[test]
 fn an_infinite_label_argument_is_not_an_argument_mismatch() {
-    let mut table = new_table();
+    let context = test_context();
+    let mut table = Table::new(&context);
     let io = table.lang.io;
     let int = table.int;
     let x = table.fresh_var();

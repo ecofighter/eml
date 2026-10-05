@@ -2,6 +2,7 @@
 
 mod carry;
 mod check;
+mod context;
 mod data;
 mod exhaustive;
 mod kind;

@@ -1,6 +1,6 @@
 use super::*;
 
-impl Table {
+impl Table<'_> {
     /// 束縛済みの row 変数を展開し、ラベルを1つの並びにまとめる。
     pub fn resolve_row(&self, row: &Row) -> Row {
         let mut labels = row.labels.clone();

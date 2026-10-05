@@ -56,7 +56,7 @@ pub(super) enum AmbientSource {
     Lambda(Origin),
 }
 
-impl BodyCheck<'_> {
+impl BodyCheck<'_, '_> {
     /// 等式の引数が、シグネチャの矢印より多い。
     pub(super) fn signature_arity_error(&self, param: PatId, index: usize) -> Diagnostic {
         Diagnostic::error(

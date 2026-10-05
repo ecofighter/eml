@@ -1,6 +1,6 @@
 use super::*;
 
-impl Table {
+impl Table<'_> {
     pub fn unify(&mut self, a: Ty, b: Ty) -> Result<(), UnifyError> {
         let (a, b) = (self.resolve(a), self.resolve(b));
         if a == b {

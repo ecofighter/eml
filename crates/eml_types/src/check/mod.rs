@@ -9,6 +9,7 @@ use eml_hir::{
 use la_arena::Arena;
 use la_arena::ArenaMap;
 
+use crate::context::Context;
 use crate::kind::{Bound, KindReason, KindVar};
 use crate::scheme::{Rigids, Scheme, lower_constructor, lower_operation, lower_signature};
 use crate::table::{Row, Table, TyShape};
@@ -25,13 +26,14 @@ pub(crate) use body::{BodyTyping, CallRows};
 use report::AmbientSource;
 
 pub(crate) fn check_module(module: &Module) -> (TypedModule, Vec<Diagnostic>) {
-    let mut table = Table::new(
+    let context = Context::new(
         module.lang,
         &module.types,
         &module.constructors,
         &module.effects,
         &module.operations,
     );
+    let mut table = Table::new(&context);
     // 組み込みの型は Prelude のシグネチャから、ユーザーの関数と同じ経路で作る。本体がないので、作ってすぐ多相化する
     let mut builtins: HashMap<Builtin, Scheme> = HashMap::new();
     for info in BUILTINS {

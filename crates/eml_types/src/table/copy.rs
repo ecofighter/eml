@@ -1,6 +1,6 @@
 use super::*;
 
-impl Table {
+impl Table<'_> {
     /// `subst` に従って rigid 変数、row 変数、Kind 変数を置き換えた型を作る。スキームの具体化で使う。
     pub fn copy_type(&mut self, ty: Ty, subst: &Subst) -> Ty {
         match self.shape(ty).clone() {

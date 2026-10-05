@@ -20,7 +20,7 @@ pub(super) struct Comparison {
     pub ty: Ty,
 }
 
-impl BodyCheck<'_> {
+impl BodyCheck<'_, '_> {
     /// `diagnostics_before` は、この本体の検査を始める前の診断の数である。
     pub(super) fn resolve_equalities(&mut self, diagnostics_before: usize) {
         let body_has_error = self.diagnostics[diagnostics_before..]

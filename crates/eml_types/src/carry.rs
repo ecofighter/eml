@@ -31,14 +31,14 @@ pub(crate) fn constrain(body: &Body, typing: &BodyTyping, table: &mut Table, rel
     carrying.function(body.root);
 }
 
-struct Carrying<'a> {
+struct Carrying<'a, 'c> {
     body: &'a Body,
     typing: &'a BodyTyping,
-    table: &'a mut Table,
+    table: &'a mut Table<'c>,
     reliable: bool,
 }
 
-impl Carrying<'_> {
+impl Carrying<'_, '_> {
     /// 持ち上げる関数の本体 (関数、ラムダ、handle の本体、節)。本体の後に持つ値はないので、空の集合から始める。
     fn function(&mut self, root: ExprId) {
         self.expr(root, &Live::new());

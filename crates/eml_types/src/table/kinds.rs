@@ -1,7 +1,7 @@
 use super::*;
 use crate::kind::KindReason;
 
-impl Table {
+impl Table<'_> {
     pub fn carry_residual(&self, lin_keep: &[KindVar], mult_keep: &[KindVar]) -> Vec<Carry> {
         crate::kind::carry_residual(
             &self.carries,
@@ -81,7 +81,7 @@ impl Table {
     pub fn kind_bounds(&self, ty: Ty) -> Vec<Bound<Linearity>> {
         match self.shape(ty) {
             TyShape::Con(id, args) => {
-                let kind = &self.data_kinds[*id];
+                let kind = &self.context.data_kinds[*id];
                 if kind.lin {
                     return vec![Bound::Const(Linearity::Lin)];
                 }
