@@ -138,8 +138,9 @@ pub(crate) fn check_module(module: &Module) -> (TypedModule, Vec<Diagnostic>) {
                 comparisons: Vec::new(),
                 typing: BodyTyping::default(),
             };
+            let diagnostics_before = checker.diagnostics.len();
             checker.check_function(signature);
-            checker.resolve_equalities();
+            checker.resolve_equalities(diagnostics_before);
             let typing = checker.typing;
             usage::constrain(body, &typing, &mut table);
             bodies.push((id, typing));

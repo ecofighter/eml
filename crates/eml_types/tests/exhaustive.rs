@@ -253,3 +253,13 @@ fn a_literal_inside_a_tuple_parameter_makes_the_equation_refutable() {
       note: not covered: `f (_, _)`
     ");
 }
+
+#[test]
+fn a_witness_spans_a_literal_column_and_a_data_column() {
+    let text = "data Option a = | None | Some a\n\nf : (Int, Option Int) -> Int\nf p = match p with\n  | (0, Some _) -> 1\n  | (_, None) -> 2";
+    insta::assert_snapshot!(diagnostics(text), @"
+    E4001 4:7 `match` does not cover every value
+      4:7 no arm matches some values
+      note: not covered: `(_, Some _)`
+    ");
+}

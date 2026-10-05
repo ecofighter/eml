@@ -21,6 +21,11 @@ bonus n = match greet (if n % 2 == 0 then "en" else "fr") with
 count_hellos : Int -> Int -> Int
 count_hellos n acc = if n == 0 then acc else count_hellos (n - 1) (acc + bonus n)
 
+tagged : (String, Int) -> Int
+tagged p = match p with
+  | ("a", 0) -> 10
+  | (s, n) -> n + 100
+
 main : Unit -> <IO> Unit
 main () =
   println (describe 0)
@@ -31,3 +36,6 @@ main () =
   println (greet "ja")
   println (greet "fr")
   println (show_int (count_hellos 1000 0))
+  println (show_int (tagged ("a", 0)))
+  println (show_int (tagged ("a", 1)))
+  println (show_int (tagged ("bcd", 2)))

@@ -21,7 +21,11 @@ pub(super) struct Comparison {
 }
 
 impl BodyCheck<'_> {
-    pub(super) fn resolve_equalities(&mut self) {
+    /// `diagnostics_before` は、この本体の検査を始める前の診断の数である。
+    pub(super) fn resolve_equalities(&mut self, diagnostics_before: usize) {
+        let body_has_error = self.diagnostics[diagnostics_before..]
+            .iter()
+            .any(Diagnostic::is_error);
         let lang = self.module.lang;
         for comparison in std::mem::take(&mut self.comparisons) {
             // Prelude のシグネチャがなければ参照の型は `Error` で、矢印を持たない
@@ -36,6 +40,11 @@ impl BodyCheck<'_> {
             };
             if let Some(equality) = equality {
                 self.typing.equalities.insert(comparison.callee, equality);
+                continue;
+            }
+            // 同じ本体に別の誤りがあるとき、決まらない型はその誤りの連鎖である。誤りを直せば型が決まるので、
+            // E2006 を重ねない (docs/spec/diagnostics.md の「連鎖する診断の抑止」)
+            if body_has_error && matches!(self.table.shape(param), TyShape::Var(_)) {
                 continue;
             }
             let operand = self.table.display(param);

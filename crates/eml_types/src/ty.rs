@@ -195,7 +195,6 @@ impl fmt::Display for Type {
     }
 }
 
-/// row の中身。`<` と `>` は呼び出し側が付ける。
 /// タプルとして書くレコード。タプルの構文は要素を2つ以上持つので、要素が1つのレコードは `{ 0 : A }` のまま書く。
 fn is_tuple(fields: &[(String, Type)]) -> bool {
     fields.len() >= 2
@@ -205,6 +204,7 @@ fn is_tuple(fields: &[(String, Type)]) -> bool {
             .all(|(index, (label, _))| *label == index.to_string())
 }
 
+/// row の中身。`<` と `>` は呼び出し側が付ける。
 fn row_text(effects: &[EffectLabel], tail: &Option<RowTail>) -> String {
     let names = effects
         .iter()

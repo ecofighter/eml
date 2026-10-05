@@ -162,3 +162,18 @@ fn undecided_operands_are_reported_and_errors_are_not() {
       note: `==` and `!=` compare only values of type `Int`, `String` and `Bool`
     ");
 }
+
+#[test]
+fn an_undecided_operand_is_not_reported_when_the_body_has_another_error() {
+    // `g` の引数の型は `1 + g` の誤りが直れば決まる。E2006 は連鎖なので出さない
+    let text = "broken : Unit -> Int\nbroken () =\n  let g = fn x -> x == x\n  1 + g";
+    insta::assert_snapshot!(check_text(text), @"
+    broken : Unit -> Int
+      x#0 : _
+      g#1 : _ -> <_> Bool
+    ---
+    E2001 4:7 mismatched types
+      4:7 expected `Int`, found `_ -> <_> Bool`
+      4:5 argument 2 of `+`
+    ");
+}
