@@ -453,4 +453,10 @@ fn a_shared_file_is_not_copied() {
     heap.dup(f).unwrap();
     assert!(matches!(heap.take_or_copy(f), Err(HeapError::NotCopyable)));
     assert!(!dropped.load(Ordering::SeqCst));
+    // take_or_copy did not decref when it returned error, so refcount is still 2.
+    // Release both references to verify no leak or double-free.
+    heap.decref(f).unwrap();
+    heap.decref(f).unwrap();
+    assert!(dropped.load(Ordering::SeqCst));
+    assert!(heap.live_objects().is_empty());
 }
