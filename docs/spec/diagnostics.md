@@ -78,6 +78,7 @@ E0xxx は `eml_syntax::codes` (E0004 だけは `eml_diagnostics`)、E1xxx は `e
 | E2003 | `MISSING_MAIN` | `main` がない。`eml run` のときだけ出す |
 | E2004 | `INVALID_MAIN_TYPE` | `main` のシグネチャが `Unit -> <IO> Unit` でない |
 | E2005 | `INFINITE_TYPE` | 無限の型 (単一化の occurs check)。row のラベルの型引数を通して、型変数か row 変数が自分自身の中に現れる場合を含む。呼び出しの row で起きたときは、呼び出しを指す |
+| E2006 | `NOT_COMPARABLE` | `==` か `!=` で、`Int`、`String`、`Bool` のどれでもない型の値を比べた。演算子を primary にし、比べようとした型をメッセージに出す。note で比べられる型を示す |
 | E3001 | `LINEAR_VALUE_MISUSED` | 線形な値 (`once` の操作の `k` と、それを捕まえたクロージャ) を、ちょうど1回でなく使った。違反した Kind の制約の由来を指す。`multi` の操作を持つ handler の `return` の節が捕まえた場合を含む |
 | E4001 | `NON_EXHAUSTIVE_MATCH` | 網羅されていない `match` |
 | E4002 | `NON_EXHAUSTIVE_EQUATION` | 網羅されていない等式 |

@@ -137,3 +137,10 @@
 - `not-yet-supported/` の UI テストがなくならないよう、段階4b に残すタプルの E0004 を確かめる `tests/ui/check-fail/not-yet-supported/tuples.em` を足した (新しいテスト)
 - `eml_core_ir/tests/simplify.rs` の `an_arm_reached_twice_stays_a_join_point` と `join_points_left_without_jumps_are_removed` の期待値で、B2 が作る join point の引数がなくなった (`join j0(u7)` が `join j0()` に、`jump j0(())` が `jump j0()` に) (種類2)。join point が引数の並びを持つようになり、`()` を受けるだけの引数が要らなくなったためである。ほかの行は変わっていない
 - 手で組んだ Core IR のテスト (`CExpr::Join`、`CExpr::Jump`、`CExpr::Switch` の組み立て) と、`Type::Con` と `TypeRefKind::Con` を組み立てるテストは、欄の形の変更に合わせて書き換えた。期待値は変えていない (種類3)
+
+### 縦の貫通 段階4b
+
+- タプルが E0004 でなくなったので、`tests/ui/check-fail/not-yet-supported/tuples.em` とそのスナップショットを削除し、まだ E0004 の射影を確かめる `projections.em` に置き換えた (種類1)
+- `eml_hir/tests/lower.rs` の `constructs_of_later_stages_are_not_yet_supported` は、入力のタプルのラムダを射影のラムダに、リテラルのパターンの `match` を `let ... in` に変えた (種類1)。タプルとリテラルのパターンが E0004 でなくなったためである。後の段階の構文の E0004 を、射影と `let ... in` で確かめ続ける
+- `eml_types/tests/check.rs` の `later_stage_constructs_add_no_type_errors` は、入力のタプルのパターンとタプルを射影に変え、期待値の E0004 の行をそれに合わせた (種類1)。E0004 の跡を型検査に通しても誤りを重ねないことを、射影で確かめ続ける
+- HIR の enum に種類を足したことによる、テストの中の網羅的な `match` の追随は、期待値を変えていない (種類3)
