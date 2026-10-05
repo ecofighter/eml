@@ -9,6 +9,12 @@ use eml_hir::OperationId;
 use crate::table::Row;
 use crate::ty::{Linearity, Multiplicity};
 
+// 段1と段2をつなぐまで (R5 の Task 6) は check_module から使われない
+#[allow(dead_code)]
+pub(crate) mod problem;
+#[allow(dead_code)]
+pub(crate) mod solve;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct KindVar(u32);
 
@@ -16,12 +22,29 @@ impl KindVar {
     pub fn index(self) -> usize {
         self.0 as usize
     }
+
+    pub fn from_index(index: usize) -> KindVar {
+        KindVar(index as u32)
+    }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum Bound<T> {
     Const(T),
     Var(KindVar),
+}
+
+/// Kind の束の値。線形性 (`Unr ≤ Lin`) と多重度 (`Never ≤ Once ≤ Multi`) の2つがある (docs/spec/types.md の「Kind」)。
+pub(crate) trait Level: Copy + Ord + std::hash::Hash + std::fmt::Debug {
+    const BOTTOM: Self;
+}
+
+impl Level for Linearity {
+    const BOTTOM: Self = Linearity::Unr;
+}
+
+impl Level for Multiplicity {
+    const BOTTOM: Self = Multiplicity::Never;
 }
 
 /// Kind の制約の由来。制約が破れたときに E3001〜E3005 が指す場所と理由である (docs/spec/diagnostics.md の「線形性の診断」)。
@@ -181,30 +204,6 @@ pub(crate) struct Carry {
     pub lin: Bound<Linearity>,
     pub mult: Bound<Multiplicity>,
     pub origin: Option<KindOrigin>,
-}
-
-/// 破れた持ち越しの制約の番号。持ち越しの制約はどちらの束の最小解も動かさないので、解いた後に確かめればよい。
-pub(crate) fn violated_carries(
-    carries: &[Carry],
-    lin: &[Linearity],
-    mult: &[Multiplicity],
-) -> Vec<usize> {
-    let lin_value = |bound: Bound<Linearity>| match bound {
-        Bound::Const(c) => c,
-        Bound::Var(v) => lin[v.index()],
-    };
-    let mult_value = |bound: Bound<Multiplicity>| match bound {
-        Bound::Const(c) => c,
-        Bound::Var(v) => mult[v.index()],
-    };
-    carries
-        .iter()
-        .enumerate()
-        .filter(|(_, carry)| {
-            lin_value(carry.lin) == Linearity::Lin && mult_value(carry.mult) == Multiplicity::Multi
-        })
-        .map(|(index, _)| index)
-        .collect()
 }
 
 /// `start` の下にある `keep` の変数と、下にある定数の最大。`start` が `keep` の変数ならそれ自身だけを返す。その変数の
@@ -435,153 +434,5 @@ fn push_constraint<T: PartialEq>(
 ) {
     if !out.contains(&constraint) {
         out.push(constraint);
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn a_residual_carry_replaces_internal_variables_with_kept_ones() {
-        let mut linearity = Lattice::new(Linearity::Unr);
-        let a = linearity.fresh();
-        let internal = linearity.fresh();
-        linearity.require(Bound::Var(a), Bound::Var(internal));
-        let mut multiplicity = Lattice::new(Multiplicity::Never);
-        let e = multiplicity.fresh();
-        let inner = multiplicity.fresh();
-        multiplicity.require(Bound::Var(e), Bound::Var(inner));
-        let carries = [Carry {
-            lin: Bound::Var(internal),
-            mult: Bound::Var(inner),
-            origin: None,
-        }];
-        assert_eq!(
-            carry_residual(&carries, &linearity, &[a], &multiplicity, &[e]),
-            vec![Carry {
-                lin: Bound::Var(a),
-                mult: Bound::Var(e),
-                origin: None,
-            }]
-        );
-    }
-
-    #[test]
-    fn a_residual_carry_keeps_one_constant_side() {
-        let mut linearity = Lattice::new(Linearity::Unr);
-        let internal = linearity.fresh();
-        linearity.require(Bound::Const(Linearity::Lin), Bound::Var(internal));
-        let mut multiplicity = Lattice::new(Multiplicity::Never);
-        let e = multiplicity.fresh();
-        let carries = [
-            Carry {
-                lin: Bound::Var(internal),
-                mult: Bound::Var(e),
-                origin: None,
-            },
-            Carry {
-                lin: Bound::Const(Linearity::Lin),
-                mult: Bound::Const(Multiplicity::Multi),
-                origin: None,
-            },
-        ];
-        assert_eq!(
-            carry_residual(&carries, &linearity, &[], &multiplicity, &[e]),
-            vec![Carry {
-                lin: Bound::Const(Linearity::Lin),
-                mult: Bound::Var(e),
-                origin: None,
-            }]
-        );
-    }
-
-    #[test]
-    fn unconstrained_variables_take_the_bottom() {
-        let mut lattice = Lattice::new(Linearity::Unr);
-        let v = lattice.fresh();
-        assert_eq!(lattice.value(v), Linearity::Unr);
-    }
-
-    #[test]
-    fn lower_bounds_propagate_through_chains() {
-        let mut lattice = Lattice::new(Linearity::Unr);
-        let a = lattice.fresh();
-        let b = lattice.fresh();
-        lattice.require(Bound::Var(a), Bound::Var(b));
-        lattice.require(Bound::Const(Linearity::Lin), Bound::Var(a));
-        assert_eq!(
-            lattice.solve(),
-            (vec![Linearity::Lin, Linearity::Lin], vec![])
-        );
-    }
-
-    #[test]
-    fn an_upper_bound_below_the_solution_is_reported() {
-        let mut lattice = Lattice::new(Multiplicity::Never);
-        let a = lattice.fresh();
-        lattice.require(Bound::Const(Multiplicity::Multi), Bound::Var(a));
-        lattice.require(Bound::Var(a), Bound::Const(Multiplicity::Once));
-        assert_eq!(lattice.solve().1, vec![1]);
-    }
-
-    #[test]
-    fn residual_constraints_pass_through_internal_variables() {
-        let mut lattice = Lattice::new(Linearity::Unr);
-        let a = lattice.fresh();
-        let internal = lattice.fresh();
-        let b = lattice.fresh();
-        lattice.require(Bound::Var(a), Bound::Var(internal));
-        lattice.require(Bound::Var(internal), Bound::Const(Linearity::Unr));
-        lattice.require(Bound::Var(a), Bound::Var(b));
-        assert_eq!(
-            lattice.residual(&[a, b]),
-            vec![
-                (Bound::Var(a), Bound::Var(b)),
-                (Bound::Var(a), Bound::Const(Linearity::Unr)),
-            ]
-        );
-    }
-
-    #[test]
-    fn residual_lower_bounds_above_the_bottom_are_kept() {
-        let mut lattice = Lattice::new(Linearity::Unr);
-        let internal = lattice.fresh();
-        let c = lattice.fresh();
-        lattice.require(Bound::Const(Linearity::Lin), Bound::Var(internal));
-        lattice.require(Bound::Var(internal), Bound::Var(c));
-        lattice.require(Bound::Const(Linearity::Unr), Bound::Var(c));
-        assert_eq!(
-            lattice.residual(&[c]),
-            vec![(Bound::Const(Linearity::Lin), Bound::Var(c))]
-        );
-    }
-
-    #[test]
-    fn copied_constraints_use_the_new_variables() {
-        let mut lattice = Lattice::new(Linearity::Unr);
-        let a = lattice.fresh();
-        let copy = lattice.fresh();
-        let map = std::collections::HashMap::from([(a, copy)]);
-        lattice.copy_constraints(&[(Bound::Const(Linearity::Lin), Bound::Var(a))], &map);
-        assert_eq!(lattice.value(copy), Linearity::Lin);
-        assert_eq!(lattice.value(a), Linearity::Unr);
-    }
-
-    #[test]
-    fn a_carry_breaks_only_when_the_value_is_linear_and_the_row_is_multi() {
-        let carry = |lin, mult| Carry {
-            lin,
-            mult,
-            origin: None,
-        };
-        let carries = [
-            carry(Bound::Var(KindVar(0)), Bound::Var(KindVar(0))),
-            carry(Bound::Const(Linearity::Lin), Bound::Var(KindVar(1))),
-            carry(Bound::Var(KindVar(1)), Bound::Const(Multiplicity::Multi)),
-        ];
-        let lin = [Linearity::Lin, Linearity::Unr];
-        let mult = [Multiplicity::Multi, Multiplicity::Once];
-        assert_eq!(violated_carries(&carries, &lin, &mult), vec![0]);
     }
 }

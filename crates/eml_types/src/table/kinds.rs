@@ -279,7 +279,7 @@ impl Table<'_> {
     pub fn solve_kinds(&self) -> Vec<KindOrigin> {
         let (lin, lin_violated) = self.linearity.solve();
         let (mult, mult_violated) = self.multiplicity.solve();
-        let carry_violated = crate::kind::violated_carries(&self.carries, &lin, &mult);
+        let carry_violated = crate::kind::solve::violated_carries(&self.carries, &lin, &mult);
         let mut origins: Vec<KindOrigin> = lin_violated
             .iter()
             .filter_map(|&index| self.linearity.origin(index).cloned())
