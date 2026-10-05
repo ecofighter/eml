@@ -263,7 +263,7 @@ fn collect(
 }
 
 /// fixity の宣言の結合と優先順位。優先順位の範囲の誤りはパーサが報告済みなので、読めなければ `None` にする。
-pub(super) fn fixity_of(item: &ast::FixityItem) -> Option<Fixity> {
+fn fixity_of(item: &ast::FixityItem) -> Option<Fixity> {
     let assoc = match item.assoc()?.kind() {
         SyntaxKind::INFIXL_KW => Assoc::Left,
         SyntaxKind::INFIXR_KW => Assoc::Right,
