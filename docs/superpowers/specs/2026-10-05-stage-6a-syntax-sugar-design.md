@@ -13,7 +13,7 @@
 - 等式の検査の連鎖の修正 (`check_function` の余計な E2002)
 - 演算子の定義、fixity の宣言 (E1021、E1022)、標準の演算子の fixity の Prelude への移動
 - セクションと演算子の参照 (E1023)、`use` (E1024)、`let ... in`
-- すべてのパターンの位置での型の明示 `(p : T)`
+- パターンの型の明示 `(p : T)` を、ラムダの引数だけでなくすべての `apat` の位置で書けるようにする文法の拡張
 - ラムダの引数の並びと handler の節の引数の並びの重複束縛 (E1017 の対象を広げる)
 
 ### 後に回すもの
@@ -29,6 +29,7 @@
 
 - 段階6 を 6a と 6b に分け、6a → R5 → 6b → S2 の順に進める
 - 6a には、5つの構文と演算子の定義に加えて、等式の検査の連鎖の修正、パターンの型の明示、ラムダと節の重複束縛を含める
+- パターンの型の明示は、今の文法ではラムダの引数 (`param`) にしか書けず、そこはすでに実装済みだった。`apat` に `'(' pat ':' type ')'` を足して文法を広げる
 - 複数の等式は、spec どおり HIR で引数のタプルに対する `match` に脱糖する (案1)。等式が1つの関数は今の形のままにする
 - 脱糖で作るタプルの確保は、決定木の特別扱いではなく、`simplify` の一般の書き換え (K1 と DCE) で消す
 - case-of-case の拡張は、F、K1、B2 の拡張、DCE の4つをすべて 6a に入れる (甲)
@@ -226,8 +227,14 @@ HIR でラムダに脱糖する ([式](../../spec/expressions.md) の「セク�
 
 ### パターンの型の明示
 
-- `(p : T)` を、すべてのパターンの位置で受け付ける (`let` の左辺、`match` の枝、等式の引数、`use` のパターン、入れ子の中)。今の E0004 (`type annotations in patterns are not supported yet`) はなくす
-- HIR の `PatKind::Annot` と、型検査、網羅性、決定木での扱いはすでにある。変えるのは HIR の変換 (`lower_pat`) だけで、ラムダの引数の専用の経路 (`lower_lambda_param`) はこれにまとめる
+今の文法 ([文法](../../spec/grammar.md)) では、型の明示は `param ::= apat | '(' pat ':' type ')'`、つまりラムダの引数にしか書けない。ラムダの引数の `(x : Int)` は実装済みで、`lower_pat` の `AnnotPat` の E0004 は、パーサがその位置に `ANNOT_PAT` を作らないので到達しない。6a では文法を広げる。
+
+- `grammar.md` の `apat` に `'(' pat ':' type ')'` を足し、`param` の規則を消す (`param` は `apat` と同じになる)。等式の引数、`match` の枝、`let` の左辺、`use` のパターン、handler の節の引数、入れ子のパターンのどこでも書ける
+- パーサは、`paren_pat` の `annotated` の引数をなくし、括弧のパターンでつねに `: type` を受け付ける。`patterns::param` は `apat` にまとめる
+- HIR は、`lower_pat_in_group` で `AnnotPat` を `PatKind::Annot` にする。ラムダの引数の専用の経路 (`lower_lambda_param`) はこれにまとめて消す。到達しない E0004 (`type annotations in patterns are not supported yet`) もなくす
+- 型検査は、今はラムダの引数の一番外側の `Annot` だけを `bind_param` で照合し、`bind_pat` の `Annot` は明示した型を見ずに内側へ進む。`bind_pat` の `Annot` で、明示した型を期待する型と照合してから、内側を明示した型で束縛する。由来は新しい `Origin::AnnotatedPattern` (note: 「an annotated pattern must have the type of the value it matches」) にする。ラムダの引数の一番外側は今どおり `Origin::LambdaParameter` で照合し、今の診断の文言を変えない
+- 網羅性と決定木は `Annot` の内側を見るので、変えない
+- `let (x : Int) = e` と `let x : Int = e` の両方が書ける。前者はパターンの明示、後者は `let` の注釈である
 
 ### ラムダと節の重複束縛
 
@@ -242,6 +249,8 @@ HIR でラムダに脱糖する ([式](../../spec/expressions.md) の「セク�
 | `spec/diagnostics.md` | E1018〜E1024 と E4005 を番号の表に足し、「番号を割り当てていない診断」の E1xxx の行から割り当てたものを外す (残るのは「修飾なしの名前の衝突」)。網羅性の診断の表の「なし」を E4005 にする。E1017 の説明に、ラムダの引数の並びと handler の節の引数の並びを足す |
 | `spec/declarations.md` | fixity の節に、fixity が名前の解決した先の定義に付くこと、宣言がなければ `infixl 9` であること、Prelude の演算子の fixity は変えられないこと、ユーザーの定義が脱糖用の演算子を隠せることを書く |
 | `spec/core-ir.md` | `simplify` の段落を、節1の順と4つの書き換えに書き換える |
+| `spec/grammar.md` | `apat` に `'(' pat ':' type ')'` を足し、`param` の規則を消す。ラムダの規則は `apat` を使う |
+| `spec/expressions.md` | ラムダの節の `fn (x : Int) -> e` の説明に、型の明示がどのパターンの位置でも書けることを足す |
 | `spec/exhaustiveness.md` | 等式の `match` の網羅性の報告が等式を指すことと、到達しない等式が E4005 であることを書く |
 | `implementation/architecture.md` | `simplify` の説明、HIR の `MatchSource` と `equation_ranges`、`Fixities` の表を書く |
 | `implementation/status.md` | 段階6a を完了にし、各 crate の状況を更新する。消す項: case-of-case の制限の2項、「診断の連鎖の残り」、「比べ方ごとに包む関数」、ラムダと節の重複束縛。段階6a の印の付いた項も消す |
@@ -255,9 +264,10 @@ HIR でラムダに脱糖する ([式](../../spec/expressions.md) の「セク�
 |---|---|
 | `eml_core_ir/tests/simplify.rs` | F (ワイルドカードの枝のある `match` で B2 が効く)、K1 (タプルのリテラルの `match` と `match Some x with`)、B2 の拡張 (フィールドを持つコンストラクタを渡す `jump`、枝が値全体も使う場合)、DCE (消すものと、`/` のように消さないもの)、別名をたどる K1 |
 | `eml_core_ir/tests/perceus.rs` | 複数の等式の関数で、タプルの確保と解放が出ないこと |
+| `eml_syntax/tests/` | 入れ子のパターン、等式の引数、`match` の枝、`let` の左辺の `(p : T)` の CST |
 | `eml_hir/tests/` | 複数の等式の脱糖のダンプ、E1018〜E1020、中置の等式、宣言した fixity での組み直しと E1006、E1021、E1022、セクションと演算子の参照の脱糖、E1023、`use` の両方の形と E1024、`let ... in`、パターンの型の明示、ラムダと節の E1017 |
 | `eml_hir` の単体テスト | Prelude の fixity が spec の標準の演算子の表と一致すること |
-| `eml_types/tests/` | 等式の E4002 と E4005、`check_function` の連鎖の修正、`(==)` の比べ方と E2006 |
+| `eml_types/tests/` | 入れ子のパターンの型の明示の照合と、その E2001 の note、等式の E4002 と E4005、`check_function` の連鎖の修正、`(==)` の比べ方と E2006 |
 | `tests/ui/run/` | 複数の等式 (`data` の場合分け、リテラル、複数の引数)、ユーザー定義の演算子と fixity、中置のコンストラクタの fixity、`&&` を隠した定義、セクションの各形と `(==)` を `Int` と `String` で使う例、`(&&)`、`use` の両方の形と handler と組み合わせた例、`let ... in`、パターンの型の明示 |
 | `tests/ui/check-fail/` | E1018〜E1024、E4002 (複数の等式)、E4005、等式の連鎖の修正の2件、決まらない `(==)` の E2006、ラムダと節の E1017 |
 
