@@ -1,0 +1,18 @@
+---
+source: crates/eml_cli/tests/ui.rs
+assertion_line: 99
+expression: rendered
+input_file: tests/ui/check-fail/exhaustiveness/non_exhaustive_equation.em
+---
+[E4002] Error: the equation of `first` does not cover every argument
+   ╭─[ check-fail/exhaustiveness/non_exhaustive_equation.em:4:1 ]
+   │
+ 4 │ first : List Int -> Int
+   │ ──┬──  
+   │   ╰──── `first` is not defined for some arguments
+ 5 │ first (Cons x _) = x
+   │ ──┬──  
+   │   ╰──── this equation does not match every argument
+   │ 
+   │ Note: not covered: `first Nil`
+───╯

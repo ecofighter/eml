@@ -181,6 +181,7 @@ mod tests {
         let id = functions.alloc(Function {
             name: "not".to_string(),
             name_range: Default::default(),
+            signature_name_range: None,
             signature: None,
             body: None,
         });

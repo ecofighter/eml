@@ -1,0 +1,24 @@
+---
+source: crates/eml_cli/tests/ui.rs
+assertion_line: 99
+expression: rendered
+input_file: tests/ui/check-fail/exhaustiveness/refutable_pattern.em
+---
+[E4003] Error: this pattern does not match every value
+   ╭─[ check-fail/exhaustiveness/refutable_pattern.em:6:7 ]
+   │
+ 6 │   let Some n = Some 1
+   │       ───┬──  
+   │          ╰──── `let` needs a pattern that matches every value
+   │ 
+   │ Note: not covered: `None`
+───╯
+[E4003] Error: this pattern does not match every value
+   ╭─[ check-fail/exhaustiveness/refutable_pattern.em:7:15 ]
+   │
+ 7 │   let f = fn (Some m) -> m
+   │               ───┬──  
+   │                  ╰──── a parameter needs a pattern that matches every value
+   │ 
+   │ Note: not covered: `None`
+───╯

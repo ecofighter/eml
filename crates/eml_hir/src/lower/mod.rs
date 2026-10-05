@@ -121,6 +121,7 @@ pub fn lower(file: FileId, source: &ast::SourceFile) -> (Module, Vec<Diagnostic>
             }
             _ => {}
         }
+        let signature_name_range = signature.as_ref().map(|(_, _, range)| *range);
         let signature = signature.map(|(_, node, _)| {
             let range = node.ty().map_or(node.range(), |ty| ty.range());
             let mut types = Arena::new();
@@ -147,6 +148,7 @@ pub fn lower(file: FileId, source: &ast::SourceFile) -> (Module, Vec<Diagnostic>
         let id = functions.alloc(Function {
             name: name.clone(),
             name_range,
+            signature_name_range,
             signature,
             body: None,
         });

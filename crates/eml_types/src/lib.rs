@@ -2,6 +2,7 @@
 
 mod check;
 mod data;
+mod exhaustive;
 mod kind;
 mod scc;
 mod scheme;
@@ -28,6 +29,11 @@ pub mod codes {
     pub const MISSING_MAIN: ErrorCode = ErrorCode(2003);
     pub const INVALID_MAIN_TYPE: ErrorCode = ErrorCode(2004);
     pub const INFINITE_TYPE: ErrorCode = ErrorCode(2005);
+    pub const NON_EXHAUSTIVE_MATCH: ErrorCode = ErrorCode(4001);
+    pub const NON_EXHAUSTIVE_EQUATION: ErrorCode = ErrorCode(4002);
+    pub const REFUTABLE_PATTERN: ErrorCode = ErrorCode(4003);
+    /// 重大度は Warning である (docs/spec/diagnostics.md の「網羅性の診断」)。
+    pub const UNREACHABLE_ARM: ErrorCode = ErrorCode(4004);
 }
 
 /// 型付き HIR。HIR は複製せず、型を別テーブルに持つ (docs/implementation/architecture.md)。

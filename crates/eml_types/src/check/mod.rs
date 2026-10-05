@@ -13,7 +13,7 @@ use crate::kind::{Bound, KindVar};
 use crate::scheme::{Rigids, Scheme, lower_constructor, lower_operation, lower_signature};
 use crate::table::{Row, Table, TyShape};
 use crate::ty::{EffectLabel, KindConstraint, KindTerm, Linearity, Type};
-use crate::{BodyTypes, TypedModule, codes, scc, usage};
+use crate::{BodyTypes, TypedModule, codes, exhaustive, scc, usage};
 
 mod body;
 mod handle;
@@ -204,6 +204,8 @@ pub(crate) fn check_module(module: &Module) -> (TypedModule, Vec<Diagnostic>) {
         }
         typed.bodies.insert(id, types);
     }
+    // 網羅性は型推論と使用回数のパスの後に、書き出した型の上で調べる (docs/spec/exhaustiveness.md の「検査パス」)
+    diagnostics.extend(exhaustive::check(module, &typed));
     (typed, diagnostics)
 }
 

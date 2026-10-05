@@ -127,6 +127,9 @@ pub struct Function {
     pub name: String,
     /// 最初の等式の名前の位置。等式がなければシグネチャの名前の位置。
     pub name_range: TextRange,
+    /// シグネチャの名前の位置。網羅されていない等式の診断 (E4002) は、ここを primary にする
+    /// (docs/spec/diagnostics.md の「網羅性の診断」)。
+    pub signature_name_range: Option<TextRange>,
     /// なければ `None` で、E1004 は報告済み。
     pub signature: Option<Signature>,
     /// 等式がなければ `None` で、E1005 は報告済み。

@@ -1,0 +1,15 @@
+---
+source: crates/eml_cli/tests/ui.rs
+assertion_line: 99
+expression: rendered
+input_file: tests/ui/check-fail/exhaustiveness/non_exhaustive_match.em
+---
+[E4001] Error: `match` does not cover every value
+   ╭─[ check-fail/exhaustiveness/non_exhaustive_match.em:5:10 ]
+   │
+ 5 │ name c = match c with
+   │          ──┬──  
+   │            ╰──── no arm matches some values
+   │ 
+   │ Note: not covered: `Blue`
+───╯
