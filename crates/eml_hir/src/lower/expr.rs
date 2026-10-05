@@ -250,10 +250,8 @@ impl<'a> BodyLowering<'a> {
             ast::Expr::OpSeq(seq) => self.lower_op_seq(&seq),
             ast::Expr::LambdaExpr(lambda) => {
                 let mark = self.scope.len();
-                let params = lambda
-                    .params()
-                    .map(|pat| self.lower_pat(Some(pat), TextRange::default()))
-                    .collect();
+                // ラムダの引数の並びは、等式の引数と同じく1つの組である (E1017)
+                let params = self.lower_param_group(lambda.params(), TextRange::default());
                 let body = self.lower_expr(lambda.body(), range);
                 self.scope.truncate(mark);
                 self.alloc(ExprKind::Lambda { params, body }, range)

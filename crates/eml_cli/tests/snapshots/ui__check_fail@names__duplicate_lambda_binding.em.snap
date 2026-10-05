@@ -1,0 +1,14 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: rendered
+input_file: tests/ui/check-fail/names/duplicate_lambda_binding.em
+---
+[E1017] Error: `x` is bound more than once
+   ╭─[ check-fail/names/duplicate_lambda_binding.em:4:16 ]
+   │
+ 4 │   let f = fn x x -> x
+   │              ┬ ┬  
+   │              ╰──── first bound here
+   │                │  
+   │                ╰── bound again here
+───╯

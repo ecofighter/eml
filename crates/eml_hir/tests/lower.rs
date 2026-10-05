@@ -271,3 +271,15 @@ fn let_in_is_a_block_with_one_let() {
     }
     ");
 }
+
+#[test]
+fn lambda_and_clause_parameters_are_one_group() {
+    let text = "effect Ask where\n  ask : Int -> Int\n\nf : Unit -> Int\nf () =\n  let g = fn x x -> x\n  handle 1 with\n    | ask n n -> 0\n    | return r -> r";
+    assert_eq!(
+        diagnostics(text),
+        vec![
+            "E1017 6:16 `x` is bound more than once",
+            "E1017 8:13 `n` is bound more than once",
+        ]
+    );
+}

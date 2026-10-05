@@ -60,10 +60,8 @@ impl BodyLowering<'_> {
         out.any_operation = true;
         // 引数のスコープは節の本体だけである
         let mark = self.scope.len();
-        let params: Vec<PatId> = clause
-            .params()
-            .map(|pat| self.lower_pat(Some(pat), clause.range()))
-            .collect();
+        // 節の引数の並び (操作の引数と `k`) は、等式の引数と同じく1つの組である (E1017)
+        let params = self.lower_param_group(clause.params(), clause.range());
         let body = self.lower_expr(clause.body(), clause.range());
         self.scope.truncate(mark);
         // 名前がなければパーサが報告済み
@@ -158,10 +156,8 @@ impl BodyLowering<'_> {
 
     fn return_clause(&mut self, clause: &ast::ReturnClause, out: &mut Clauses) {
         let mark = self.scope.len();
-        let params: Vec<PatId> = clause
-            .params()
-            .map(|pat| self.lower_pat(Some(pat), clause.range()))
-            .collect();
+        // 節の引数の並び (操作の引数と `k`) は、等式の引数と同じく1つの組である (E1017)
+        let params = self.lower_param_group(clause.params(), clause.range());
         let body = self.lower_expr(clause.body(), clause.range());
         self.scope.truncate(mark);
         let range = clause.range();
