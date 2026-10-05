@@ -375,3 +375,24 @@ fn later_stage_constructs_add_no_type_errors() {
       8:21 this is implemented in a later stage
     ");
 }
+
+#[test]
+fn a_broken_signature_adds_no_effect_errors_to_the_equation() {
+    // 壊れたシグネチャや足りない矢印の後の本体は、ラムダと同じく末尾が `Error` の row で検査する
+    let text =
+        "f : Int -> Undefined\nf a b = println \"x\"\n\ng : Int -> Unit\ng a b = println \"x\"";
+    let checked = eml_test_support::check(text);
+    let lines = eml_test_support::short(&checked.files, &checked.diagnostics);
+    assert!(
+        lines.iter().any(|line| line.starts_with("E1002")),
+        "{lines:?}"
+    );
+    assert!(
+        lines.iter().any(|line| line.starts_with("E2001")),
+        "{lines:?}"
+    );
+    assert!(
+        !lines.iter().any(|line| line.starts_with("E2002")),
+        "{lines:?}"
+    );
+}

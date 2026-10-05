@@ -1,0 +1,25 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: rendered
+input_file: tests/ui/check-fail/types/broken_signature_effects.em
+---
+[E1002] Error: cannot find type `Undefined`
+   ╭─[ check-fail/types/broken_signature_effects.em:2:12 ]
+   │
+ 2 │ f : Int -> Undefined
+   │            ────┬────  
+   │                ╰────── not found in this scope
+───╯
+[E2001] Error: `g` has 2 parameters but its signature has 1 arrow
+   ╭─[ check-fail/types/broken_signature_effects.em:6:5 ]
+   │
+ 6 │ g a b = println "x"
+   │     ┬  
+   │     ╰── this parameter has no arrow in the signature
+   │
+   ├─[ check-fail/types/broken_signature_effects.em:6:5 ]
+   │
+ 5 │ g : Int -> Unit
+   │     ─────┬─────  
+   │          ╰─────── the signature
+───╯

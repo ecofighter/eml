@@ -129,6 +129,8 @@ impl BodyCheck<'_> {
                 Arrow::Error => {
                     let error = self.table.error;
                     self.bind_pat(pat, error);
+                    // 期待する型が壊れていれば、どのエフェクトも受け入れて診断を連鎖させない (ラムダの検査と同じ)
+                    self.ambient = Row::error();
                 }
                 Arrow::NotFunction => {
                     let diagnostic = self.signature_arity_error(pat, index);
@@ -138,6 +140,8 @@ impl BodyCheck<'_> {
                         self.bind_pat(rest, error);
                     }
                     expected = error;
+                    // 期待する型が壊れていれば、どのエフェクトも受け入れて診断を連鎖させない (ラムダの検査と同じ)
+                    self.ambient = Row::error();
                     break;
                 }
             }
