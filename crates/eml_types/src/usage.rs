@@ -358,7 +358,9 @@ impl Usage<'_> {
             KindReason::UsedMoreThanOnce {
                 name,
                 first,
-                second: used.second.unwrap_or(first),
+                second: used
+                    .second
+                    .expect("a variable used twice on some path has a second use"),
             }
         } else {
             let fix = match used.missing {

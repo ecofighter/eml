@@ -442,60 +442,54 @@ pub(super) fn linear_misuse(file: FileId, origin: &KindOrigin) -> Diagnostic {
         .with_help(format!(
             "call `resume {name} v` or `drop {name}` on every path"
         )),
-        _ => captured_or_passed(file, origin),
-    }
-}
-
-/// E3001。違反した制約の由来を指す。
-fn captured_or_passed(file: FileId, origin: &KindOrigin) -> Diagnostic {
-    let (message, label) = match &origin.reason {
-        KindReason::CapturedByClause(name) => (
+        KindReason::CapturedByClause(name) => misused(
+            file,
+            origin,
             format!("`{name}` must be used exactly once, but an operation clause captures it"),
             format!("`{name}` is bound here"),
-        ),
-        KindReason::CapturedByReturnClause(name) => (
+        )
+        .with_note("an operation clause runs each time its operation is performed"),
+        KindReason::CapturedByReturnClause(name) => misused(
+            file,
+            origin,
             format!(
                 "`{name}` must be used exactly once, but the `return` clause of a handler with a `multi` operation captures it"
             ),
             format!("`{name}` is bound here"),
+        )
+        .with_note(
+            "the `return` clause runs each time a continuation of a `multi` operation is resumed",
         ),
-        KindReason::CapturedByLambda => (
+        KindReason::CapturedByLambda => misused(
+            file,
+            origin,
             "a lambda that captures a linear value is used where it may be called any number of times"
                 .to_string(),
             "this lambda".to_string(),
         ),
-        KindReason::Passed(name) => (
+        KindReason::Passed(name) => misused(
+            file,
+            origin,
             format!(
                 "a linear value is passed to `{name}`, which may use it more than once or not at all"
             ),
             format!("`{name}` is used here"),
         ),
-        KindReason::Unified
-        | KindReason::UsedMoreThanOnce { .. }
-        | KindReason::NotUsed { .. }
-        | KindReason::ContinuationNotUsed { .. }
-        | KindReason::Discarded => (
+        KindReason::Unified => misused(
+            file,
+            origin,
             "a linear value is used where an unrestricted value is expected".to_string(),
             "this expression".to_string(),
         ),
-    };
-    let mut diagnostic = Diagnostic::error(
+    }
+}
+
+/// E3001。違反した制約の由来を指す。
+fn misused(file: FileId, origin: &KindOrigin, message: String, label: String) -> Diagnostic {
+    Diagnostic::error(
         codes::LINEAR_VALUE_MISUSED,
         message,
         Label::new(file, origin.range, label),
     )
-    .with_note(LINEAR_NOTE);
-    match &origin.reason {
-        KindReason::CapturedByClause(_) => {
-            diagnostic = diagnostic
-                .with_note("an operation clause runs each time its operation is performed");
-        }
-        KindReason::CapturedByReturnClause(_) => {
-            diagnostic = diagnostic.with_note(
-                "the `return` clause runs each time a continuation of a `multi` operation is resumed",
-            );
-        }
-        _ => {}
-    }
-    diagnostic
+    .with_note(LINEAR_NOTE)
 }
