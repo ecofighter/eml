@@ -37,21 +37,19 @@ pub(crate) fn solve_scc(
                 .filter_map(|&index| merged.carries[index].origin.clone()),
         )
         .collect();
-    let lin_graph = Graph::new(&merged.lin);
-    let mult_graph = Graph::new(&merged.mult);
-    let schemes = merged
-        .own
-        .iter()
-        .map(|own| KindScheme {
-            lin: residual(&lin_graph, &own.lin),
-            mult: residual(&mult_graph, &own.mult),
-            carries: carry_residual(
-                &merged.carries,
-                &lin_graph,
-                &own.lin,
-                &mult_graph,
-                &own.mult,
-            ),
+    let lin_graph = Graph::new(
+        &merged.lin,
+        merged.own.iter().map(|own| own.lin.clone()).collect(),
+    );
+    let mult_graph = Graph::new(
+        &merged.mult,
+        merged.own.iter().map(|own| own.mult.clone()).collect(),
+    );
+    let schemes = (0..merged.own.len())
+        .map(|member| KindScheme {
+            lin: residual(&lin_graph, member),
+            mult: residual(&mult_graph, member),
+            carries: carry_residual(&merged.carries, &lin_graph, &mult_graph, member),
         })
         .collect();
     Solution { schemes, violated }
@@ -297,16 +295,88 @@ pub(crate) fn violated_carries(
 struct Graph<T> {
     /// 変数ごとの成分の番号。
     component: Vec<usize>,
-    /// 成分ごとの上向き (下限から上限へ) と下向きの辺。重複は除いてある。
-    upward: Vec<Vec<usize>>,
-    downward: Vec<Vec<usize>>,
     /// 成分の変数に付いた定数の上限の最小と、定数の下限の最大。
     upper: Vec<Option<T>>,
     lower: Vec<Option<T>>,
+    /// SCC の宣言ごとの自分の変数 (`Shape` の番号の順)。
+    own: Vec<Vec<KindVar>>,
+    /// 上向き (下限から上限へ) と下向きの辺。
+    upward: Edges,
+    downward: Edges,
+}
+
+/// 1つの向きの辺と、たどるときに入る意味のない隣を見分けるための情報。
+///
+/// その向きにたどった先 (成分自身を含む) に定数がなく、成分自身のほかにどの宣言の変数を含む成分もない成分を
+/// 「何もない成分」と呼ぶ。
+/// 何もない成分は、ある宣言の残す成分でなければ、その宣言の残す制約 (docs/spec/types.md の「推論」) に何も足さない。
+/// 環状の相互再帰では、すべての `μ` を含む成分から、各宣言の内側の矢印の Kind 変数の成分へ辺が出る。そのまま
+/// たどると宣言ごとに宣言の数だけ辺を見ることになるので、何もない成分への辺は、その成分が残す成分のときだけ見る。
+struct Edges {
+    /// 成分ごとの隣。番号の順に並べ、重複は除いてある。
+    all: Vec<Vec<usize>>,
+    /// 成分ごとの、何もない成分かどうか。
+    inert: Vec<bool>,
+    /// 成分ごとの、何もない成分ではない隣。
+    active: Vec<Vec<usize>>,
+    /// 成分ごとの、何もない成分で、どこかの宣言の変数を含む隣。誰の変数も含まない何もない成分は、どの宣言にも
+    /// 何も足さないので持たない。
+    owned_inert: Vec<Vec<usize>>,
+}
+
+impl Edges {
+    /// `all` は成分ごとの1つの向きの隣 (番号の順)、`bounds` はその向きの定数、`owners` は成分ごとの変数を含む宣言の
+    /// 数である。`descending` は、隣の成分の番号が自分より大きいことを表す。
+    fn new<T>(
+        all: Vec<Vec<usize>>,
+        bounds: &[Option<T>],
+        owners: &[usize],
+        descending: bool,
+    ) -> Edges {
+        let count = all.len();
+        // 隣の成分を先に決めるため、隣の番号の側から順に見る
+        let order: Vec<usize> = if descending {
+            (0..count).rev().collect()
+        } else {
+            (0..count).collect()
+        };
+        let mut inert = vec![false; count];
+        for component in order {
+            debug_assert!(
+                all[component]
+                    .iter()
+                    .all(|&next| (next > component) == descending)
+            );
+            inert[component] = bounds[component].is_none()
+                && all[component]
+                    .iter()
+                    .all(|&next| inert[next] && owners[next] == 0);
+        }
+        let active = all
+            .iter()
+            .map(|list| list.iter().copied().filter(|&next| !inert[next]).collect())
+            .collect();
+        let owned_inert = all
+            .iter()
+            .map(|list| {
+                list.iter()
+                    .copied()
+                    .filter(|&next| inert[next] && owners[next] > 0)
+                    .collect()
+            })
+            .collect();
+        Edges {
+            all,
+            inert,
+            active,
+            owned_inert,
+        }
+    }
 }
 
 impl<T: Level> Graph<T> {
-    fn new(bounds: &Bounds<T>) -> Graph<T> {
+    /// `own` は SCC の宣言ごとの自分の変数である。
+    fn new(bounds: &Bounds<T>, own: Vec<Vec<KindVar>>) -> Graph<T> {
         let mut edges = vec![Vec::new(); bounds.vars];
         for &(lower, upper) in &bounds.constraints {
             if let (Bound::Var(a), Bound::Var(b)) = (lower, upper) {
@@ -344,12 +414,29 @@ impl<T: Level> Graph<T> {
                 _ => {}
             }
         }
+        // 成分ごとの、変数を含む宣言の数
+        let mut owners = vec![0; count];
+        let mut last_owner: Vec<Option<usize>> = vec![None; count];
+        for (member, vars) in own.iter().enumerate() {
+            for var in vars {
+                let c = component[var.index()];
+                if last_owner[c] != Some(member) {
+                    last_owner[c] = Some(member);
+                    owners[c] += 1;
+                }
+            }
+        }
+        // Tarjan は、成分からたどれる成分に番号を振り終えてからその成分に番号を振る。上向きの隣は番号が小さく、
+        // 下向きの隣は番号が大きい
+        let upward = Edges::new(upward, &upper, &owners, false);
+        let downward = Edges::new(downward, &lower, &owners, true);
         Graph {
             component,
-            upward,
-            downward,
             upper,
             lower,
+            own,
+            upward,
+            downward,
         }
     }
 
@@ -368,12 +455,32 @@ impl<T: Level> Graph<T> {
             (&self.downward, &self.lower)
         };
         let pick = |a: T, b: T| if up { a.min(b) } else { a.max(b) };
+        // 何もない成分のうち残す成分は、入らずに止まる成分として見つける。ほかの何もない成分は、入っても定数も
+        // 残す成分も見つからないので見ない
+        let mut kept_inert: Vec<usize> = kept.keys().copied().filter(|&c| edges.inert[c]).collect();
+        kept_inert.sort_unstable();
         let mut found = Vec::new();
         let mut constant = bounds[start];
         let mut seen = HashSet::from([start]);
         let mut work = vec![start];
         while let Some(component) = work.pop() {
-            for &next in &edges[component] {
+            // 何もない隣と何もない残す成分の少ないほうから探す。多くの宣言の残す成分に辺が出る成分でも、宣言ごとに
+            // 見る量は自分の変数の数で済む
+            let owned = &edges.owned_inert[component];
+            if owned.len() <= kept_inert.len() {
+                for &next in owned {
+                    if kept.contains_key(&next) && seen.insert(next) {
+                        found.push(next);
+                    }
+                }
+            } else {
+                for &next in &kept_inert {
+                    if edges.all[component].binary_search(&next).is_ok() && seen.insert(next) {
+                        found.push(next);
+                    }
+                }
+            }
+            for &next in &edges.active[component] {
                 if !seen.insert(next) {
                     continue;
                 }
@@ -448,10 +555,10 @@ fn components(edges: &[Vec<usize>]) -> (Vec<usize>, usize) {
     (component, count)
 }
 
-/// 自分の変数を含む成分と、その中の自分の変数の `Shape` の番号 (小さい順)。
-fn kept_components<T>(graph: &Graph<T>, own: &[KindVar]) -> HashMap<usize, Vec<usize>> {
+/// 宣言 `member` の自分の変数を含む成分と、その中の自分の変数の `Shape` の番号 (小さい順)。
+fn kept_components<T>(graph: &Graph<T>, member: usize) -> HashMap<usize, Vec<usize>> {
     let mut kept: HashMap<usize, Vec<usize>> = HashMap::new();
-    for (index, var) in own.iter().enumerate() {
+    for (index, var) in graph.own[member].iter().enumerate() {
         kept.entry(graph.component[var.index()])
             .or_default()
             .push(index);
@@ -463,31 +570,31 @@ fn var<T>(index: usize) -> Bound<T> {
     Bound::Var(KindVar::from_index(index))
 }
 
-/// 宣言の自分の変数 `own` (`Shape` の番号の順) について残す制約 (docs/spec/types.md の「推論」)。`own` の変数を含む成分を
+/// 宣言 `member` の自分の変数 (`Shape` の番号の順) について残す制約 (docs/spec/types.md の「推論」)。自分の変数を含む成分を
 /// 残す成分とし、残さない成分を通り抜けて最初に出会う残す成分までをたどる。同じ成分に入った自分の変数は等しいので、
 /// 等しいことを輪で表し、境界をそのすべてに付ける。結果の変数は `Shape` の番号である。
-fn residual<T: Level>(graph: &Graph<T>, own: &[KindVar]) -> Vec<(Bound<T>, Bound<T>)> {
-    let kept = kept_components(graph, own);
+fn residual<T: Level>(graph: &Graph<T>, member: usize) -> Vec<(Bound<T>, Bound<T>)> {
+    let kept = kept_components(graph, member);
     let mut out = Vec::new();
-    for (&component, members) in &kept {
-        if members.len() >= 2 {
-            for pair in members.windows(2) {
+    for (&component, shapes) in &kept {
+        if shapes.len() >= 2 {
+            for pair in shapes.windows(2) {
                 out.push((var(pair[0]), var(pair[1])));
             }
-            out.push((var(members[members.len() - 1]), var(members[0])));
+            out.push((var(shapes[shapes.len() - 1]), var(shapes[0])));
         }
         let (targets, upper) = graph.reach(component, &kept, true);
         for target in targets {
-            out.push((var(members[0]), var(kept[&target][0])));
+            out.push((var(shapes[0]), var(kept[&target][0])));
         }
         let (_, lower) = graph.reach(component, &kept, false);
-        for &member in members {
+        for &shape in shapes {
             if let Some(c) = upper {
-                out.push((var(member), Bound::Const(c)));
+                out.push((var(shape), Bound::Const(c)));
             }
             // 下限が束の最小元なら何も言わないので省く
             if let Some(c) = lower.filter(|c| *c != T::BOTTOM) {
-                out.push((Bound::Const(c), var(member)));
+                out.push((Bound::Const(c), var(shape)));
             }
         }
     }
@@ -508,21 +615,20 @@ pub(crate) fn residual_of<T: Level>(
     bounds: &Bounds<T>,
     keep: &[KindVar],
 ) -> Vec<(Bound<T>, Bound<T>)> {
-    residual(&Graph::new(bounds), keep)
+    residual(&Graph::new(bounds, vec![keep.to_vec()]), 0)
 }
 
-/// スキームに残す持ち越しの制約 (docs/spec/types.md の「推論」)。両側を下向きにたどり、出会った残す成分の自分の変数と
-/// 定数に置き換える。同じ組は1つにまとめ、由来は位置が最も前のものを残す (docs/spec/diagnostics.md の E3006)。由来ごとに
-/// 残すと、多相な関数を重ねるたびに制約が増え、同じ違反を何度も報告するためである。
+/// 宣言 `member` のスキームに残す持ち越しの制約 (docs/spec/types.md の「推論」)。両側を下向きにたどり、出会った残す成分の
+/// 自分の変数と定数に置き換える。同じ組は1つにまとめ、由来は位置が最も前のものを残す (docs/spec/diagnostics.md の E3006)。
+/// 由来ごとに残すと、多相な関数を重ねるたびに制約が増え、同じ違反を何度も報告するためである。
 fn carry_residual(
     carries: &[Carry],
     lin_graph: &Graph<Linearity>,
-    lin_own: &[KindVar],
     mult_graph: &Graph<Multiplicity>,
-    mult_own: &[KindVar],
+    member: usize,
 ) -> Vec<Carry> {
-    let lin_kept = kept_components(lin_graph, lin_own);
-    let mult_kept = kept_components(mult_graph, mult_own);
+    let lin_kept = kept_components(lin_graph, member);
+    let mult_kept = kept_components(mult_graph, member);
     let mut best: HashMap<(Bound<Linearity>, Bound<Multiplicity>), Option<&KindOrigin>> =
         HashMap::new();
     for carry in carries {
@@ -645,10 +751,9 @@ mod tests {
         assert_eq!(
             carry_residual(
                 &carries,
-                &Graph::new(&linearity),
-                &[a],
-                &Graph::new(&multiplicity),
-                &[e]
+                &Graph::new(&linearity, vec![vec![a]]),
+                &Graph::new(&multiplicity, vec![vec![e]]),
+                0
             ),
             vec![Carry {
                 lin: Bound::Var(a),
@@ -680,10 +785,9 @@ mod tests {
         assert_eq!(
             carry_residual(
                 &carries,
-                &Graph::new(&linearity),
-                &[],
-                &Graph::new(&multiplicity),
-                &[e]
+                &Graph::new(&linearity, vec![vec![]]),
+                &Graph::new(&multiplicity, vec![vec![e]]),
+                0
             ),
             vec![Carry {
                 lin: Bound::Const(Linearity::Lin),
@@ -830,6 +934,28 @@ mod tests {
     }
 
     #[test]
+    fn a_shared_component_reaches_only_the_components_that_matter_to_each_member() {
+        // 環状の相互再帰の形。3つの宣言の μ が1つの成分になり、そこから各宣言の m へ辺が出る。m₁ だけに上限がある
+        let mut lattice = lattice::<Linearity>();
+        let mus: Vec<KindVar> = (0..3).map(|_| lattice.fresh()).collect();
+        let ms: Vec<KindVar> = (0..3).map(|_| lattice.fresh()).collect();
+        for i in 0..3 {
+            lattice.require(Bound::Var(mus[i]), Bound::Var(mus[(i + 1) % 3]), None);
+            lattice.require(Bound::Var(mus[i]), Bound::Var(ms[i]), None);
+        }
+        lattice.require(Bound::Var(ms[1]), Bound::Const(Linearity::Unr), None);
+        let graph = Graph::new(&lattice, (0..3).map(|i| vec![mus[i], ms[i]]).collect());
+        let mu = Bound::Var(KindVar::from_index(0));
+        let m = Bound::Var(KindVar::from_index(1));
+        let unr = Bound::Const(Linearity::Unr);
+        // m₁ の成分はほかの宣言には残す成分でないので、通り抜けて上限を集める
+        assert_eq!(residual(&graph, 0), vec![(mu, m), (mu, unr)]);
+        // 自分の m₁ の成分で止まるので、μ には上限が付かず、m に付く
+        assert_eq!(residual(&graph, 1), vec![(mu, m), (m, unr)]);
+        assert_eq!(residual(&graph, 2), vec![(mu, m), (mu, unr)]);
+    }
+
+    #[test]
     fn a_reference_within_the_scc_becomes_an_equation() {
         // f は自分の a を g に渡し、g は自分の b を2回使う。f の a にも g の b と同じ上限が付く
         let mut f = KindProblem::default();
@@ -959,10 +1085,9 @@ mod tests {
         assert_eq!(
             carry_residual(
                 &carries,
-                &Graph::new(&linearity),
-                &[a],
-                &Graph::new(&multiplicity),
-                &[e]
+                &Graph::new(&linearity, vec![vec![a]]),
+                &Graph::new(&multiplicity, vec![vec![e]]),
+                0
             ),
             vec![Carry {
                 lin: Bound::Var(a),
