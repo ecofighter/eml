@@ -166,3 +166,8 @@
 
 - `simplify` の DCE が使われない `const` の束縛を消すので、`eml_core_ir/tests/perceus.rs` の `shadowed_and_discarded_strings` から、捨てた文字列の `let s4 = const "z"` と `decref s4` の行が消えた (種類2)。捨てた値の解放を確かめる目的は、呼び出しの結果を捨てる `a_discarded_call_result_is_released` を足して引き継いだ
 - 同じ理由で、`eml_core_ir/tests/simplify.rs` の `join_points_left_without_jumps_are_removed` から、`main` の先頭の `let s1 = const "other"` の行が消えた (種類2)。ほかの行は変わっていない
+- B2 がフィールドを持つコンストラクタの値を渡す `jump` を枝へ直接向け、DCE が使われなくなった `con` を消すようになったので、次の4件のスナップショットが変わった (種類2)。`con` を渡していた `jump` がフィールドの値を渡す `jump` になり、使われなくなった `con` が消えた。枝が値全体も使う場合は、値も引数で渡すので `con` が残る
+  - `eml_core_ir/tests/simplify.rs` の `a_mixed_switch_splits_only_the_arms_without_fields` (`a_mixed_switch_splits_every_arm_that_a_known_value_reaches` に改名)
+  - 同 `arms_with_fields_keep_the_join_point_argument` (`an_arm_that_uses_the_whole_value_gets_it_as_an_argument` に改名)
+  - 同 `jumps_that_pass_constructed_values_are_left_alone` (`jumps_that_pass_constructed_values_go_to_their_arms` に改名)
+  - `eml_core_ir/tests/perceus.rs` の `a_split_switch_still_unpacks_the_arm_with_fields` (`a_split_arm_with_fields_still_drops_its_unused_field` に改名)

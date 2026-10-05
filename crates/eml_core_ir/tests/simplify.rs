@@ -266,37 +266,30 @@ fn known_tags_of_a_larger_type_jump_straight_to_their_arm() {
 }
 
 #[test]
-fn a_mixed_switch_splits_only_the_arms_without_fields() {
-    // `None` の枝だけを切り出す。`Some` の値を渡す jump は元の join point を通り、`Some _` の枝は `Switch` に残る
+fn a_mixed_switch_splits_every_arm_that_a_known_value_reaches() {
+    // `None` の枝と、値が届く `Some _` の枝を切り出す。`Some` の値を渡す jump は、フィールドを引数にその枝へ直接向かい、`con` は消える
     let text = "data Option a = | None | Some a\n\npick : Bool -> Bool -> String -> String\npick a b s = match (if a then None else if b then Some s else Some \"x\") with\n  | None -> \"none\"\n  | Some _ -> \"some\"\n\nmain : Unit -> <IO> Unit\nmain () = ()";
     insta::assert_snapshot!(core_text(text, Pass::Simplify), @r#"
     fn pick(a0, b1, s2) {
-      join j1() [] {
+      join j0() [] {
         let s7 = const "none"
         return s7
       }
-      join j0(t6) [] {
-        switch t6 {
-          #0 ->
-            jump j1()
-          #1(x9) ->
-            let s8 = const "some"
-            return s8
-        }
+      join j1(x10) [] {
+        let s8 = const "some"
+        return s8
       }
       switch a0 {
         #0 ->
           switch b1 {
             #0 ->
               let s4 = const "x"
-              let d5 = con #1(s4)
-              jump j0(d5)
+              jump j1(s4)
             #1 ->
-              let d3 = con #1(s2)
-              jump j0(d3)
+              jump j1(s2)
           }
         #1 ->
-          jump j1()
+          jump j0()
       }
     }
     fn main(p0) {
@@ -309,22 +302,17 @@ fn a_mixed_switch_splits_only_the_arms_without_fields() {
 }
 
 #[test]
-fn arms_with_fields_keep_the_join_point_argument() {
-    // フィールドを束縛する枝の中の `o` (join point の引数) は、タグの定数に置き換えない
+fn an_arm_that_uses_the_whole_value_gets_it_as_an_argument() {
+    // 枝が値全体 `o` も使うので、切り出した join point はフィールドに加えて値も受ける。`o` はタグの定数に置き換えず、`con` は残る
     let text = "data Option a = | None | Some a\n\nh : Option Int -> Int -> Int\nh o y = y\n\npick : Bool -> Int -> Int\npick c x =\n  let o = if c then None else if x > 0 then Some x else Some 0\n  match o with\n    | None -> 0\n    | Some y -> h o y\n\nmain : Unit -> <IO> Unit\nmain () = ()";
-    insta::assert_snapshot!(core_text(text, Pass::Simplify), @r"
+    insta::assert_snapshot!(core_text(text, Pass::Simplify), @"
     fn h(o0, y1) {
       return y1
     }
     fn pick(c0, x1) {
-      join j0(t5) [] {
-        switch t5 {
-          #0 ->
-            return 0
-          #1(y7) ->
-            let y6 = y7
-            tailcall h(t5, y6)
-        }
+      join j0(y8, t9) [] {
+        let y6 = y8
+        tailcall h(t9, y6)
       }
       switch c0 {
         #0 ->
@@ -332,10 +320,10 @@ fn arms_with_fields_keep_the_join_point_argument() {
           switch t2 {
             #0 ->
               let d4 = con #1(0)
-              jump j0(d4)
+              jump j0(0, d4)
             #1 ->
               let d3 = con #1(x1)
-              jump j0(d3)
+              jump j0(x1, d3)
           }
         #1 ->
           return 0
@@ -351,28 +339,20 @@ fn arms_with_fields_keep_the_join_point_argument() {
 }
 
 #[test]
-fn jumps_that_pass_constructed_values_are_left_alone() {
-    // どの jump も `con` で作った値を渡すので、B2 は join point を変えない。引数を持つコンストラクタの case-of-case は
-    // 使われない束縛を消すパスと一緒に入れる (docs/implementation/status.md)
+fn jumps_that_pass_constructed_values_go_to_their_arms() {
+    // どの jump も `con` で作った値を渡すので、B2 は `Some n` の枝を join point にして、jump がフィールドを渡す
     let text = "data Option a = | None | Some a\n\npick : Bool -> Int\npick c = match (if c then Some 1 else Some 2) with\n  | Some n -> n\n  | None -> 0\n\nmain : Unit -> <IO> Unit\nmain () = ()";
-    insta::assert_snapshot!(core_text(text, Pass::Simplify), @r"
+    insta::assert_snapshot!(core_text(text, Pass::Simplify), @"
     fn pick(c0) {
-      join j0(t3) [] {
-        switch t3 {
-          #0 ->
-            return 0
-          #1(n5) ->
-            let n4 = n5
-            return n4
-        }
+      join j0(n6) [] {
+        let n4 = n6
+        return n4
       }
       switch c0 {
         #0 ->
-          let d2 = con #1(2)
-          jump j0(d2)
+          jump j0(2)
         #1 ->
-          let d1 = con #1(1)
-          jump j0(d1)
+          jump j0(1)
       }
     }
     fn main(p0) {
@@ -528,4 +508,22 @@ fn a_switch_through_an_alias_takes_its_arm() {
     let h = function(&core_text(text, Pass::Simplify), "h");
     assert!(!h.contains("switch"), "{h}");
     assert!(!h.contains("con #"), "{h}");
+}
+
+#[test]
+fn a_jump_that_passes_a_constructed_value_goes_to_its_arm() {
+    // どの jump も `Some` の値を渡すので、`Some n` の枝をフィールドを引数に取る join point にし、`con` は消える
+    let text = "data Option a = | None | Some a\n\npick : Bool -> Int\npick c =\n  let n = match (if c then Some 1 else Some 2) with\n    | Some n -> n\n    | None -> 0\n  n + 1\n\nmain : Unit -> <IO> Unit\nmain () = ()";
+    let pick = function(&core_text(text, Pass::Simplify), "pick");
+    assert!(!pick.contains("con #"), "{pick}");
+}
+
+#[test]
+fn an_arm_that_uses_the_whole_value_also_receives_it() {
+    // 変数の枝 `x` は scrutinee そのものを受けるので、切り出した join point に値も渡し、`con` は残る。
+    // 新しい join point の引数は新しい変数にするので、verifier の「2回束縛」にならない
+    let text = "data Option a = | None | Some a\n\nsize : Option Int -> Int\nsize o = 1\n\npick : Bool -> Int\npick c =\n  let n = match (if c then Some 1 else None) with\n    | None -> 0\n    | x -> size x\n  n + 1\n\nmain : Unit -> <IO> Unit\nmain () = ()";
+    let pick = function(&core_text(text, Pass::Simplify), "pick");
+    assert!(pick.contains("con #1(1)"), "{pick}");
+    core_text(text, Pass::Perceus);
 }

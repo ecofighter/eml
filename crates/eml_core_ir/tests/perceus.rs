@@ -127,24 +127,19 @@ fn constructor_arguments_are_owned_by_the_value() {
 }
 
 #[test]
-fn a_split_switch_still_unpacks_the_arm_with_fields() {
-    // B2 が `Switch` に残した `Some _` の枝は、フィールド `x9` を所有して始まり、使わないので入口で decref する
+fn a_split_arm_with_fields_still_drops_its_unused_field() {
+    // B2 が切り出した `Some _` の枝は、フィールド `x10` を引数に受けて始まり、使わないので入口で decref する
     let text = "data Option a = | None | Some a\n\npick : Bool -> Bool -> String -> String\npick a b s = match (if a then None else if b then Some s else Some \"x\") with\n  | None -> \"none\"\n  | Some _ -> \"some\"\n\nmain : Unit -> <IO> Unit\nmain () = ()";
     insta::assert_snapshot!(core_text(text, Pass::Perceus), @r#"
     fn pick(a0, b1, s2) {
-      join j1() [] {
+      join j0() [] {
         let s7 = const "none"
         return s7
       }
-      join j0(t6) [] {
-        switch t6 {
-          #0 ->
-            jump j1()
-          #1(x9) ->
-            decref x9
-            let s8 = const "some"
-            return s8
-        }
+      join j1(x10) [] {
+        decref x10
+        let s8 = const "some"
+        return s8
       }
       switch a0 {
         #0 ->
@@ -152,15 +147,13 @@ fn a_split_switch_still_unpacks_the_arm_with_fields() {
             #0 ->
               decref s2
               let s4 = const "x"
-              let d5 = con #1(s4)
-              jump j0(d5)
+              jump j1(s4)
             #1 ->
-              let d3 = con #1(s2)
-              jump j0(d3)
+              jump j1(s2)
           }
         #1 ->
           decref s2
-          jump j1()
+          jump j0()
       }
     }
     fn main(p0) {

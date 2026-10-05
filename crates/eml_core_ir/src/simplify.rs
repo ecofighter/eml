@@ -114,21 +114,13 @@ impl Simplify<'_> {
         }
     }
 
-    fn known_tag(&self, site: CExprId) -> Option<u32> {
-        match self.expr(site) {
-            CExpr::Jump { args, .. } => match args.as_slice() {
-                [Atom::Tag(tag)] => Some(*tag),
-                _ => None,
-            },
-            _ => None,
-        }
-    }
-
-    /// B2: 引数を1つだけ持ち、本体がその引数で分岐する join point に、定数のタグを jump で渡していれば、引数のない
-    /// コンストラクタの枝を引数0個の join point に切り出し、定数の jump をその枝へ直接向ける。`&&` と `||` を条件にした
-    /// `if` と、`Bool` を返す `match` を条件にした `if` がこの形になる (docs/spec/core-ir.md)。フィールドを束縛する枝は
-    /// `Switch` に残し、引数も置き換えない。引数を持つコンストラクタの値はタグだけでは決まらないためである。
+    /// B2: 引数を1つだけ持ち、本体がその引数で分岐する join point に、分かっているコンストラクタの値を渡す jump があれば、
+    /// その値の枝を join point に切り出し、jump をその枝へ直接向ける (docs/spec/core-ir.md)。引数のない枝はすべて切り出し、
+    /// 枝の中の引数をタグの定数に置き換える。フィールドを持つ枝は、分かっている値が届くものだけを、フィールドを引数に取る
+    /// join point にし、jump はフィールドの値を渡す。枝が値全体も使うなら、値も最後の引数で渡す。
+    /// 切り出した join point の引数は新しい変数にする。元の枝のフィールドと join point の引数は、どちらも束縛だからである。
     fn split_known_tags(&mut self) {
+        let known = self.known_constructors();
         let jumps = self.jumps();
         for (index, sites) in jumps.iter().enumerate() {
             let node = self.function.joins[index];
@@ -152,39 +144,70 @@ impl Simplify<'_> {
             else {
                 continue;
             };
-            let known: Vec<u32> = sites
-                .iter()
-                .filter_map(|&site| self.known_tag(site))
-                .collect();
-            // 定数のタグは引数のないコンストラクタの値なので、フィールドのない枝に当たるはずである
-            let nullary = |tag: u32| {
-                arms.iter()
-                    .any(|arm| arm.tag == tag && arm.fields.is_empty())
-            };
-            if scrutinee != param || known.is_empty() || !known.iter().all(|&tag| nullary(tag)) {
+            if scrutinee != param {
                 continue;
             }
-            let mut split = Vec::new();
+            let values: Vec<Option<(u32, Vec<Atom>)>> = sites
+                .iter()
+                .map(|&site| match self.expr(site) {
+                    CExpr::Jump { args, .. } => match args.as_slice() {
+                        [arg] => self.known_value(&known, *arg),
+                        _ => None,
+                    },
+                    _ => None,
+                })
+                .collect();
+            let fits = |(tag, fields): &(u32, Vec<Atom>)| {
+                arms.iter()
+                    .any(|arm| arm.tag == *tag && arm.fields.len() == fields.len())
+            };
+            if values.iter().all(Option::is_none) || !values.iter().flatten().all(fits) {
+                continue;
+            }
+            let targeted: Vec<u32> = values.iter().flatten().map(|(tag, _)| *tag).collect();
+            // (タグ, 切り出した join point, 本体, 引数, 値全体も渡すか)
+            let mut split: Vec<(u32, JoinId, CExprId, Vec<VarId>, bool)> = Vec::new();
             let mut dispatch = Vec::new();
             for arm in &arms {
-                if !arm.fields.is_empty() {
+                if !arm.fields.is_empty() && !targeted.contains(&arm.tag) {
                     dispatch.push(arm.clone());
                     continue;
                 }
-                self.substitute(arm.body, param, Atom::Tag(arm.tag));
+                let mut arm_params = Vec::new();
+                for &field in &arm.fields {
+                    let fresh = self.fresh_like(field);
+                    self.substitute(arm.body, field, Atom::Var(fresh));
+                    arm_params.push(fresh);
+                }
+                let whole = if arm.fields.is_empty() {
+                    self.substitute(arm.body, param, Atom::Tag(arm.tag));
+                    false
+                } else if self.uses(arm.body, param) {
+                    let fresh = self.fresh_like(param);
+                    self.substitute(arm.body, param, Atom::Var(fresh));
+                    arm_params.push(fresh);
+                    true
+                } else {
+                    false
+                };
                 let arm_join = JoinId(self.function.joins.len() as u32);
                 // 索引は、下で組み立てた `Join` の位置に直す
                 self.function.joins.push(arm.body);
-                split.push((arm.tag, arm_join, arm.body));
+                let mut args: Vec<Atom> =
+                    arm.fields.iter().map(|&field| Atom::Var(field)).collect();
+                if whole {
+                    args.push(Atom::Var(param));
+                }
                 let jump = self.push(CExpr::Jump {
                     join: arm_join,
-                    args: Vec::new(),
+                    args,
                 });
                 dispatch.push(Arm {
                     tag: arm.tag,
-                    fields: Vec::new(),
+                    fields: arm.fields.clone(),
                     body: jump,
                 });
+                split.push((arm.tag, arm_join, arm.body, arm_params, whole));
             }
             self.set(
                 body,
@@ -193,23 +216,31 @@ impl Simplify<'_> {
                     arms: dispatch,
                 },
             );
-            for &site in sites {
-                if let Some(tag) = self.known_tag(site) {
-                    let &(_, arm_join, _) = split
-                        .iter()
-                        .find(|&&(arm_tag, ..)| arm_tag == tag)
-                        .expect("checked above");
-                    self.set(
-                        site,
-                        CExpr::Jump {
-                            join: arm_join,
-                            args: Vec::new(),
-                        },
-                    );
+            for (&site, value) in sites.iter().zip(&values) {
+                let Some((tag, fields)) = value else {
+                    continue;
+                };
+                let (_, arm_join, _, _, whole) = split
+                    .iter()
+                    .find(|(arm_tag, ..)| arm_tag == tag)
+                    .expect("checked above");
+                let CExpr::Jump { args: passed, .. } = self.expr(site) else {
+                    unreachable!("a jump site holds a jump")
+                };
+                let mut args = fields.clone();
+                if *whole {
+                    args.push(passed[0]);
                 }
+                self.set(
+                    site,
+                    CExpr::Jump {
+                        join: *arm_join,
+                        args,
+                    },
+                );
             }
             // 枝の join point を外側に並べ、元の join point をいちばん内側に置く。枝は元の join point の定義全体を
-            // 範囲にするので、元の本体からも、範囲の中の定数の jump からも届く。元の位置には最初の枝の join point が入る
+            // 範囲にするので、元の本体からも、範囲の中の jump からも届く。元の位置には最初の枝の join point が入る
             let mut inner = self.push(CExpr::Join {
                 join,
                 params: vec![param],
@@ -218,12 +249,12 @@ impl Simplify<'_> {
                 scope,
             });
             self.function.joins[index] = inner;
-            for (position, &(_, arm_join, arm)) in split.iter().enumerate().rev() {
+            for (position, (_, arm_join, arm, arm_params, _)) in split.iter().enumerate().rev() {
                 let expr = CExpr::Join {
-                    join: arm_join,
-                    params: Vec::new(),
+                    join: *arm_join,
+                    params: arm_params.clone(),
                     captures: Vec::new(),
-                    body: arm,
+                    body: *arm,
                     scope: inner,
                 };
                 inner = if position == 0 {
@@ -235,6 +266,25 @@ impl Simplify<'_> {
                 self.function.joins[arm_join.0 as usize] = inner;
             }
         }
+    }
+
+    /// `var` と同じ名前と性質の新しい変数。
+    fn fresh_like(&mut self, var: VarId) -> VarId {
+        let info = self.function.vars[var.0 as usize].clone();
+        self.function.vars.push(info);
+        VarId(self.function.vars.len() as u32 - 1)
+    }
+
+    /// `root` の部分木が `var` を使うか。
+    fn uses(&self, root: CExprId, var: VarId) -> bool {
+        let mut work = vec![root];
+        while let Some(id) = work.pop() {
+            if used_atoms(self.expr(id)).contains(&Atom::Var(var)) {
+                return true;
+            }
+            work.extend(children(self.expr(id)));
+        }
+        false
     }
 
     /// 分かっているコンストラクタの値を定義する `let` の位置。`let v = con #k(a…)`、引数のないタグの束縛、別名
