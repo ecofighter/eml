@@ -15,7 +15,7 @@ use crate::{
     Arm, Atom, CExpr, CExprId, CoreFn, FALSE, FnIdx, JoinId, Program, Rhs, TRUE, VarId, VarInfo,
 };
 
-use pattern::has_constructor;
+use pattern::needs_decision_tree;
 use program::{ProgramBuilder, effect_table};
 use types::{split_arrows, var_info};
 
@@ -159,8 +159,8 @@ impl FnLowering<'_> {
         }
         let mut destructured = Vec::new();
         for (pat, ty) in params {
-            // コンストラクタを含むパターンは名前のない引数で受け、本体の前で分解する
-            let simple = pat.filter(|&pat| !has_constructor(body, pat));
+            // 値を調べるか分解するパターンは名前のない引数で受け、本体の前で分解する
+            let simple = pat.filter(|&pat| !needs_decision_tree(body, pat));
             let local = simple.and_then(|pat| body.pat_bindings(pat).first().copied());
             let name = local.map_or("p", |local| body.locals[local].name.as_str());
             let var = self.new_var(name, ty);
@@ -168,7 +168,7 @@ impl FnLowering<'_> {
                 self.locals.insert(local, Atom::Var(var));
             }
             vars.push(var);
-            if let Some(pat) = pat.filter(|&pat| has_constructor(body, pat)) {
+            if let Some(pat) = pat.filter(|&pat| needs_decision_tree(body, pat)) {
                 destructured.push((pat, var, ty.clone()));
             }
         }
@@ -376,7 +376,7 @@ impl FnLowering<'_> {
             match stmt {
                 Stmt::Let { pat, init, .. } => {
                     let value = self.atom(*init, out);
-                    if has_constructor(self.body, *pat) {
+                    if needs_decision_tree(self.body, *pat) {
                         let ty = self.ty(*init);
                         self.destructure(*pat, value, ty, out);
                     } else {

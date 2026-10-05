@@ -1,10 +1,10 @@
 //! 式ごとの変換と、呼び出しの引数の個数による場合分け (docs/spec/core-ir.md の eval/apply)。
 
 use eml_hir::builtin::Builtin;
-use eml_hir::{ConstructorId, ExprId, ExprKind, Literal, OperationId, PatId, Res};
+use eml_hir::{ConstructorId, ExprId, ExprKind, Literal, OperationId, PatId, Res, TypeDefId};
 use eml_types::Type;
 
-use crate::{Atom, Call, FnIdx, Rhs};
+use crate::{Atom, Call, FnIdx, Rhs, TUPLE};
 
 use super::program::{effect_index, perform_call};
 use super::types::{Lowering, equality_op, lowering, split_arrows};
@@ -17,6 +17,15 @@ impl FnLowering<'_> {
             .get(expr)
             .cloned()
             .expect("every reached expression is typed")
+    }
+
+    /// 組み込みの型 (`String`、`Bool`) の、引数のない型構成子の型。
+    pub(super) fn lang_type(&self, id: TypeDefId) -> Type {
+        Type::Con {
+            id,
+            name: self.module.types[id].name.clone(),
+            args: Vec::new(),
+        }
     }
 
     pub(super) fn bind(&mut self, out: &mut Bindings, name: &str, ty: &Type, rhs: Rhs) -> Atom {
@@ -148,12 +157,7 @@ impl FnLowering<'_> {
             ExprKind::Literal(Literal::Unit) => Atom::Unit,
             ExprKind::Literal(Literal::String(text)) => {
                 let index = self.program.strings.intern(text);
-                let string = self.module.lang.string;
-                let ty = Type::Con {
-                    id: string,
-                    name: self.module.types[string].name.clone(),
-                    args: Vec::new(),
-                };
+                let ty = self.lang_type(self.module.lang.string);
                 self.bind(out, "s", &ty, Rhs::ConstString(index))
             }
             ExprKind::Path(Res::Local(local)) => self.locals[*local],
@@ -309,8 +313,14 @@ impl FnLowering<'_> {
                 let ty = self.ty(id);
                 self.bind(out, "t", &ty, Rhs::call(Call::Resume { k, arg }))
             }
-            ExprKind::Tuple(_) => {
-                unreachable!("the translation does not handle tuple values")
+            ExprKind::Tuple(elements) => {
+                // 要素を左から評価し、コンストラクタが1つの `data` と同じ値にする (docs/spec/core-ir.md)
+                let args = elements
+                    .iter()
+                    .map(|&element| self.atom(element, out))
+                    .collect();
+                let ty = self.ty(id);
+                self.bind(out, "d", &ty, Rhs::Con { tag: TUPLE, args })
             }
             ExprKind::Drop(value) => {
                 let value = self.atom(*value, out);

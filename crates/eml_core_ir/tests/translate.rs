@@ -613,3 +613,209 @@ fn equality_picks_the_comparison_of_the_operand_type() {
     }
     "#);
 }
+
+#[test]
+fn tuples_are_built_and_taken_apart_by_parameters_and_let() {
+    // タプルの値はタグ 0 のコンストラクタの値で、タプルのパターンは枝が1つの `Switch` で分解する
+    let text = "swap : (Int, String) -> (String, Int)\nswap (n, s) = (s, n)\n\nfirst : (Int, Int) -> Int\nfirst p =\n  let (a, _) = p\n  a\n\nmain : Unit -> <IO> Unit\nmain () = ()";
+    insta::assert_snapshot!(core_text(text, Pass::Translate), @r"
+    fn swap(p0) {
+      join j0(n1, s2) [] {
+        let d5 = con #0(s2, n1)
+        return d5
+      }
+      switch p0 {
+        #0(n3, s4) ->
+          jump j0(n3, s4)
+      }
+    }
+    fn first(p0) {
+      join j0(a1) [] {
+        return a1
+      }
+      switch p0 {
+        #0(a2, x3) ->
+          jump j0(a2)
+      }
+    }
+    fn main(p0) {
+      return ()
+    }
+    fn entry$main() {
+      tailcall main(())
+    }
+    ");
+}
+
+#[test]
+fn a_tuple_column_is_a_single_constructor() {
+    // タプルの欄を分解してから、その中の `Option` の欄で `Switch` する
+    let text = "data Option a = | None | Some a\n\npick : (Option Int, Int) -> Int\npick p = match p with\n  | (Some n, _) -> n\n  | (None, k) -> k\n\nmain : Unit -> <IO> Unit\nmain () = ()";
+    insta::assert_snapshot!(core_text(text, Pass::Translate), @r"
+    fn pick(p0) {
+      join j0(n1) [] {
+        return n1
+      }
+      join j1(k2) [] {
+        return k2
+      }
+      switch p0 {
+        #0(x3, k4) ->
+          switch x3 {
+            #0 ->
+              jump j1(k4)
+            #1(n5) ->
+              jump j0(n5)
+          }
+      }
+    }
+    fn main(p0) {
+      return ()
+    }
+    fn entry$main() {
+      tailcall main(())
+    }
+    ");
+}
+
+#[test]
+fn int_literals_compare_in_order_and_fall_back_to_the_rest() {
+    // 異なるリテラルを上の行から順に比べ、最後の等しくない枝は残りの行列 (`_` の行) に進む
+    let text = "describe : Int -> String\ndescribe n = match n with\n  | 0 -> \"zero\"\n  | 1 -> \"one\"\n  | -1 -> \"minus one\"\n  | _ -> \"many\"\n\nmain : Unit -> <IO> Unit\nmain () = ()";
+    insta::assert_snapshot!(core_text(text, Pass::Translate), @r#"
+    fn describe(n0) {
+      join j0() [] {
+        let s1 = const "zero"
+        return s1
+      }
+      join j1() [] {
+        let s2 = const "one"
+        return s2
+      }
+      join j2() [] {
+        let s3 = const "minus one"
+        return s3
+      }
+      join j3() [] {
+        let s4 = const "many"
+        return s4
+      }
+      let t5 = prim ==(n0, 0)
+      switch t5 {
+        #0 ->
+          let t6 = prim ==(n0, 1)
+          switch t6 {
+            #0 ->
+              let t7 = prim ==(n0, -1)
+              switch t7 {
+                #0 ->
+                  jump j3()
+                #1 ->
+                  jump j2()
+              }
+            #1 ->
+              jump j1()
+          }
+        #1 ->
+          jump j0()
+      }
+    }
+    fn main(p0) {
+      return ()
+    }
+    fn entry$main() {
+      tailcall main(())
+    }
+    "#);
+}
+
+#[test]
+fn string_literals_build_each_literal_for_its_comparison() {
+    // `String` のリテラルは比べるたびに作る。変数の枝は、比べた出現そのものを受ける
+    let text = "greet : String -> String\ngreet name = match name with\n  | \"en\" -> \"hello\"\n  | \"ja\" -> \"konnichiwa\"\n  | other -> other\n\nmain : Unit -> <IO> Unit\nmain () = ()";
+    insta::assert_snapshot!(core_text(text, Pass::Translate), @r#"
+    fn greet(name0) {
+      join j0() [] {
+        let s1 = const "hello"
+        return s1
+      }
+      join j1() [] {
+        let s2 = const "konnichiwa"
+        return s2
+      }
+      join j2(other3) [] {
+        return other3
+      }
+      let s4 = const "en"
+      let t5 = prim string==(name0, s4)
+      switch t5 {
+        #0 ->
+          let s6 = const "ja"
+          let t7 = prim string==(name0, s6)
+          switch t7 {
+            #0 ->
+              jump j2(name0)
+            #1 ->
+              jump j1()
+          }
+        #1 ->
+          jump j0()
+      }
+    }
+    fn main(p0) {
+      return ()
+    }
+    fn entry$main() {
+      tailcall main(())
+    }
+    "#);
+}
+
+#[test]
+fn a_literal_column_inside_a_tuple() {
+    // タプルを分解した後、最初の行でいちばん左の調べる欄 (リテラル) を選ぶ。等しくない枝の `Bool` の欄には `True` の
+    // 行がないので、残りの行列の join point を作る
+    let text = "classify : (Int, Bool) -> Int\nclassify p = match p with\n  | (0, True) -> 1\n  | (_, False) -> 2\n  | (n, _) -> n\n\nmain : Unit -> <IO> Unit\nmain () = ()";
+    insta::assert_snapshot!(core_text(text, Pass::Translate), @r"
+    fn classify(p0) {
+      join j0() [] {
+        return 1
+      }
+      join j1() [] {
+        return 2
+      }
+      join j2(n1) [] {
+        return n1
+      }
+      switch p0 {
+        #0(n2, x3) ->
+          let t4 = prim ==(n2, 0)
+          switch t4 {
+            #0 ->
+              join j3() [n2] {
+                jump j2(n2)
+              }
+              switch x3 {
+                #0 ->
+                  jump j1()
+                #1 ->
+                  jump j3()
+              }
+            #1 ->
+              switch x3 {
+                #0 ->
+                  jump j1()
+                #1 ->
+                  jump j0()
+              }
+          }
+      }
+    }
+    fn main(p0) {
+      return ()
+    }
+    fn entry$main() {
+      tailcall main(())
+    }
+    ");
+}

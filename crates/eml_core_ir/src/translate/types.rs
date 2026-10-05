@@ -13,7 +13,9 @@ fn boxed(ty: &Type, module: &Module) -> bool {
     match ty {
         Type::Con { id, .. } => *id == module.lang.string || has_fields(module, *id),
         Type::Fn { .. } | Type::Cont { .. } | Type::Rigid(_) | Type::Flexible => true,
-        Type::Record(_) | Type::Error => false,
+        // 空のレコードは `Unit` で、値は `()` である。要素のあるレコード (タプル) はヒープのオブジェクトにする
+        Type::Record(fields) => !fields.is_empty(),
+        Type::Error => false,
     }
 }
 

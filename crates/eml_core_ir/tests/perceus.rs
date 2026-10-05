@@ -233,3 +233,42 @@ fn a_scrutinee_used_in_an_arm_is_dupped_before_the_switch() {
     }
     ");
 }
+
+#[test]
+fn a_string_compared_twice_is_dupped_before_each_comparison() {
+    // 比べる `prim` は出現の所有権を受け取るので、後の比較と枝でも使う `name0` を比べるたびに複製する。使わない枝は
+    // 入口で捨てる
+    let text = "greet : String -> String\ngreet name = match name with\n  | \"en\" -> \"hello\"\n  | \"ja\" -> \"konnichiwa\"\n  | other -> other\n\nmain : Unit -> <IO> Unit\nmain () = ()";
+    insta::assert_snapshot!(core_text(text, Pass::Perceus), @r#"
+    fn greet(name0) {
+      let s4 = const "en"
+      dup name0
+      let t5 = prim string==(name0, s4)
+      switch t5 {
+        #0 ->
+          let s6 = const "ja"
+          dup name0
+          let t7 = prim string==(name0, s6)
+          switch t7 {
+            #0 ->
+              let other3 = name0
+              return other3
+            #1 ->
+              decref name0
+              let s2 = const "konnichiwa"
+              return s2
+          }
+        #1 ->
+          decref name0
+          let s1 = const "hello"
+          return s1
+      }
+    }
+    fn main(p0) {
+      return ()
+    }
+    fn entry$main() {
+      tailcall main(())
+    }
+    "#);
+}
