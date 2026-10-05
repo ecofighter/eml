@@ -26,6 +26,7 @@
                 "-p"
                 "eml_cli"
               ];
+              meta.license = pkgs.lib.licenses.mit;
             };
             default = eml;
           };

@@ -2,6 +2,7 @@
 name = "eml_test_support"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
 publish = false
 
 # 段階ごとに feature を分け、各 crate のテストが自分より下流の crate を組み立てずに済むようにする。破壊的な変更の途中で

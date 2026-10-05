@@ -2,6 +2,7 @@
 name = "eml_core_ir"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
 
 [dependencies]
 eml_hir.workspace = true
