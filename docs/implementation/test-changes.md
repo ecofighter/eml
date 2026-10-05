@@ -127,3 +127,13 @@
 - `translate.rs` の12件は変換の直後の IR を、`simplify.rs` の7件は `simplify` の直後の IR を見るようにした。期待値から `dup` / `decref` の行と、呼び出しの後ろの `saved` の並びが消えた (種類2)。ほかの行は変わっていないことを、差分から RC の命令と `saved` を除いて比べて確かめた。確かめる目的は、それぞれのテストの名前のとおりで変わらない
 - `eml_test_support/tests/support.rs` に `core_until_stops_after_the_named_pass` を、`eml_core_ir/tests/verify.rs` に `verify_scopes` の7件を足した
 - `eml_test_support/tests/support.rs` の `core_until_stops_after_the_named_pass` に、変換の直後で止めた IR の join point に `captures` (`[s1]`) が埋まっていることを確かめるアサーションを足した (種類1)。途中で止めたときもパスの後の処理 (`captures` の埋め直しと検査) を行うことを、出力から確かめるためである
+
+### 縦の貫通 段階4a
+
+- `data` の宣言が E0004 でなくなったので、`tests/ui/check-fail/not-yet-supported/data_declarations.em` とそのスナップショットを削除した (種類1)。`data` を使うプログラムが通ることは `tests/ui/run/data/` のテストで確かめる
+- `eml_hir/tests/lower.rs` の `constructs_of_later_stages_are_not_yet_supported` は、入力から `data` の行を除き、`match` の枝をリテラルのパターン (`| 0 -> x`) に変えた (種類1)。`data` と `match` が E0004 でなくなったためである。リテラルのパターンは段階4b まで E0004 なので、後の段階の構文を E0004 にすることを `match` の行で確かめ続ける
+- `eml_hir/src/builtin.rs` の単体テストから、`Builtin::True` を引く行を削除した (種類1)。`True` と `False` は Prelude の `data Bool` のコンストラクタになり、組み込みの表から外れた
+- 同じ理由で、`eml_types/tests/check.rs` の `builtin_schemes_are_exported` の「`builtins` に `True` がない」の assert を、「`TypedModule::constructors` に `True` のスキームがある」の assert に置き換え、`eml_hir/tests/structure.rs` の `the_prelude_has_a_signature_for_every_builtin_function` から `True` と `False` を除く分岐をなくした (種類1)。残る組み込みの期待値は変わらない
+- `not-yet-supported/` の UI テストがなくならないよう、段階4b に残すタプルの E0004 を確かめる `tests/ui/check-fail/not-yet-supported/tuples.em` を足した (新しいテスト)
+- `eml_core_ir/tests/simplify.rs` の `an_arm_reached_twice_stays_a_join_point` と `join_points_left_without_jumps_are_removed` の期待値で、B2 が作る join point の引数がなくなった (`join j0(u7)` が `join j0()` に、`jump j0(())` が `jump j0()` に) (種類2)。join point が引数の並びを持つようになり、`()` を受けるだけの引数が要らなくなったためである。ほかの行は変わっていない
+- 手で組んだ Core IR のテスト (`CExpr::Join`、`CExpr::Jump`、`CExpr::Switch` の組み立て) と、`Type::Con` と `TypeRefKind::Con` を組み立てるテストは、欄の形の変更に合わせて書き換えた。期待値は変えていない (種類3)

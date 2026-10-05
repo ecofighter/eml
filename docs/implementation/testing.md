@@ -54,12 +54,12 @@
 | crate | 結合テスト (`tests/`) | 単体テスト (`src/`) |
 |---|---|---|
 | `eml_diagnostics` | なし | `lib.rs` (診断の番号と E0004)、`source.rs` (`SourceFiles` と行と列)、`render.rs` (診断の表示) |
-| `eml_syntax` | `lexer.rs` (字句)、`literals.rs` (リテラルの値の解釈)、`parser.rs` (空のファイル、項目の解析と項目の間の回復、BOM と shebang)、`declarations.rs` (シグネチャの形、`data`、`effect`、fixity、`pub` / `type` / `import`)、`types.rs` (型と row)、`expressions.rs` (等式、パターン、適用やフィールドの参照などの式、ブロックと `let`、ラムダ、`use`、括弧の回復)、`operators.rs` (演算子の列、前置の `-`、セクション、被演算子の欠け)、`control.rs` (`if` と `match`)、`handlers.rs` (handler)、`nesting.rs` (入れ子の深さの上限)、`ast.rs` (型付き AST ラッパ)、`corpus.rs` (コーパス。ソースは `tests/corpus/` にあり、`s1.em` は S1 の構文、`later_stages.em` は S2 以降の構文を含む) | `layout.rs` (レイアウト段)、`parser/tests.rs` (パーサのマーカー、先読み、診断の位置)、`grammar/scan.rs` (回復の範囲の走査)、`syntax_kind.rs` と `token_set.rs` (構文の種類の表) |
-| `eml_hir` | `lower.rs` (名前解決と脱糖)、`operators.rs` (演算子の組み直し)、`effects.rs` (エフェクトと操作)、`structure.rs` (HIR のデータ構造と走査) | `builtin.rs` (組み込みの表)、`lower/scope.rs` (名前空間) |
-| `eml_types` | `check.rs` (推論と型の診断)、`rows.rs` (エフェクトの row と E2002)、`effects.rs` (エフェクト、handler、継続、線形な継続 (E3001)) | `table/tests.rs` (単一化と型の書き出し)、`kind.rs` (Kind の制約の解消)、`ty.rs` (型の表示)、`scc.rs` (関数の呼び出しの強連結成分)、`check/mod.rs` (診断の文言) |
+| `eml_syntax` | `lexer.rs` (字句)、`literals.rs` (リテラルの値の解釈)、`parser.rs` (空のファイル、項目の解析と項目の間の回復、BOM と shebang)、`declarations.rs` (シグネチャの形、`data`、`effect`、fixity、`pub` / `type` / `import`)、`types.rs` (型と row)、`expressions.rs` (等式、パターン、適用やフィールドの参照などの式、ブロックと `let`、ラムダ、`use`、括弧の回復)、`operators.rs` (演算子の列、前置の `-`、セクション、被演算子の欠け)、`control.rs` (`if` と `match`)、`handlers.rs` (handler)、`nesting.rs` (入れ子の深さの上限)、`ast.rs` (型付き AST ラッパ。`data`、`match`、コンストラクタのパターン、型の適用の取り出し口)、`corpus.rs` (コーパス。ソースは `tests/corpus/` にあり、`s1.em` は S1 の構文、`later_stages.em` は S2 以降の構文を含む) | `layout.rs` (レイアウト段)、`parser/tests.rs` (パーサのマーカー、先読み、診断の位置)、`grammar/scan.rs` (回復の範囲の走査)、`syntax_kind.rs` と `token_set.rs` (構文の種類の表) |
+| `eml_hir` | `lower.rs` (名前解決と脱糖)、`operators.rs` (演算子の組み直し)、`effects.rs` (エフェクトと操作)、`structure.rs` (HIR のデータ構造と走査)、`data.rs` (`data` の宣言、コンストラクタ、型の適用、パターン、`match`) | `builtin.rs` (組み込みの表)、`lower/scope.rs` (名前空間) |
+| `eml_types` | `check.rs` (推論と型の診断)、`rows.rs` (エフェクトの row と E2002)、`effects.rs` (エフェクト、handler、継続、線形な継続 (E3001))、`data.rs` (型構成子の引数、データ型の Kind、パターンと `match` の型検査)、`exhaustive.rs` (網羅性の検査と漏れの例) | `table/tests.rs` (単一化と型の書き出し)、`kind.rs` (Kind の制約の解消)、`ty.rs` (型の表示)、`scc.rs` (関数の呼び出しの強連結成分)、`check/mod.rs` (診断の文言) |
 | `eml_core_ir` | `translate.rs` (Core IR への変換。変換の直後)、`simplify.rs` (`simplify` の書き換え。`simplify` の直後)、`perceus.rs` (`dup` / `decref` の位置と `saved`。Perceus の直後)、`verify.rs` (手書きの Core IR による verifier) | なし |
 | `eml_runtime` | なし | `heap/tests.rs` (確保と解放、世代番号、リーク、フレームと継続の解放、`take` と `take_or_copy` による複製)、`output.rs` (`OutputSink`) |
-| `eml_interp` | `run.rs` (手書きの Core IR や生成したソースによる実行)、`closures.rs` (手書きの Core IR によるクロージャ) | `lib.rs` (実行時エラーの表示と `RunConfig`) |
+| `eml_interp` | `run.rs` (手書きの Core IR や生成したソースによる実行)、`closures.rs` (手書きの Core IR によるクロージャ)、`data.rs` (手書きの Core IR による `data` の値と `Switch` の分解) | `lib.rs` (実行時エラーの表示と `RunConfig`) |
 | `eml_cli` | `ui.rs` (UI テスト)、`api.rs` (lib API の `check` / `compile` / `execute` の流れ)、`cli.rs` (CLI の終了コード) | なし |
 | `eml_test_support` | `support.rs` (テスト補助そのもの) | なし |
 
@@ -101,9 +101,10 @@
   - `basics/`: 値、演算子、`let`、`if`、短絡評価
   - `functions/`: クロージャ、高階関数、部分適用
   - `effects/`: エフェクト、`multi`、継続
+  - `data/`: `data`、コンストラクタ、`match`、パターン
   - `runtime/`: 実装の性質を確かめるテスト。メモリの解放、スタックの深さ、join point、末尾呼び出し
 - `check-fail/` は、主なエラーの番号の範囲 ([診断](../spec/diagnostics.md) の「番号の範囲」) で分ける。機能で分けると、エフェクトの誤りのように E1xxx と E2xxx にまたがるものの置き場所が決まらないためである
-  - `syntax/` (E0xxx)、`names/` (E1xxx)、`types/` (E2xxx)、`linearity/` (E3xxx)。網羅性 (E4xxx) の検査を実装したら `exhaustiveness/` を足す
+  - `syntax/` (E0xxx)、`names/` (E1xxx)、`types/` (E2xxx)、`linearity/` (E3xxx)。`exhaustiveness/` (E4xxx)
   - E3001 は今は `eml_types` が出すが、出す crate ではなく番号の範囲に従って `linearity/` に置く
   - E0004 (まだ対応していない構文) は、どの段階が出しても `not-yet-supported/` に置く
 - サブディレクトリの名前は、親の `check-fail` と同じくケバブケースにする

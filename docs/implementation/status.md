@@ -65,7 +65,8 @@ S2、S3 の構文は、S1 の時点でも字句と文法の置き場所を用意
 | 2 | ラムダ、クロージャ、部分適用と関数値、シグネチャの型変数と row 変数 (多相)、Kind の制約の SCC ごとの推論、`>>` / `<<` | 完了 |
 | 3a | `effect` (型引数なし、`never` / `once`)、`handle` (deep handler)、`resume`、`drop` (`drop k` を含む)、操作の値と部分適用、Kind の制約の違反の E3001 | 完了 |
 | 3b | `multi` と multi-shot の再開、エフェクトの型引数 | 完了 |
-| 4 | `data`、`match`、タプル (数字ラベルのレコード)、網羅性の検査。`Bool` を本物の `data` にする。`String` などの等値の扱いを決める | 未着手 |
+| 4a | `data` (型引数、中置のコンストラクタ、型の適用)、コンストラクタの値、`match` と入れ子のパターン、網羅性の検査、`Bool` を Prelude の `data` にする | 完了 |
+| 4b | タプル (数字ラベルのレコード)、`Int` と `String` のリテラルのパターン、`String` などの等値の扱いの決定 | 未着手 |
 | 5 | 線形性の検査、`drop`、`File`、持ち越し規則、中断時の後始末 | 未着手 |
 | 6 | 糖衣構文と E1xxx の残り: 複数の等式、`use`、パラメータ付き handler、セクション、fixity の宣言、`let ... in` | 未着手 |
 
@@ -143,23 +144,27 @@ R3b で済んだ。`Frame` を種類の enum にし、記述子をペイロー�
 |---|---|
 | `eml_diagnostics` | 実装済み。`Diagnostic`、`FileId` と `SourceFiles`、行と列 (`SourceFiles::line_col`)、ariadne による表示 |
 | `eml_syntax` | S1 まで実装済み。lexer、レイアウト段、パーサ、型付き AST ラッパ。入れ子の深さの上限 (E0013、フィールドアクセスの連鎖を含む) を持つ。型付き AST は範囲、キーワードの範囲、リテラルの値を持ち、HIR はこれだけを使う |
-| `eml_hir` | 段階3b まで実装済み。宣言の対応づけ、名前解決、演算子の列の組み直し、`&&` / `\|\|` / `\|>` / `<\|` の脱糖、E1001〜E1006。ラムダと、シグネチャの型変数と row 変数の表。組み込みのシグネチャは Prelude (`prelude.em`) に、型とエフェクトは ID で表す item にある。`effect` の宣言と操作の item、handler、`resume`、`drop`、E1007〜E1014。エフェクトの型引数と E1015、`multi` の操作 |
-| `eml_types` | 段階3b まで実装済み。型・row・Kind の表現と単一化、シグネチャに対する本体の検査、E2001〜E2005。型変数と row 変数の表、スキームと SCC ごとの Kind の推論、使用回数のパス、関数値と部分適用の検査。線形性と網羅性の検査は未実装。継続の型、操作のスキーム、handle の検査、Kind の制約の由来と E3001。row のラベルの型引数、`multi` の操作の `k`、`return` の節の捕獲の制約 |
-| `eml_core_ir` | 段階3b まで実装済み。ANF への変換、Perceus の `dup` / `decref` の挿入。ラムダのクロージャ変換 (捕まえた変数を先頭の引数に持つ関数への持ち上げ)、関数値の呼び出し。join point (`captures` を持つ) と末尾呼び出し、Perceus の独立したパス (`saved` を含む) と verifier、入口の関数。パスの順番を持つ `pipeline.rs` と、途中のパスで止める `lower_until`。パスの間で埋め直す `captures` と、Perceus より前の IR を確かめる `verify_scopes`。join point を書き換える `simplify` (分かっているタグの `jump`、小さな本体の転送、`jump` が1つの join point の展開、使われない join point の削除)。handle の本体と節の持ち上げ、操作を包む関数、`Call::{Handle, Perform, Resume}`、`Rhs::Drop` |
-| `eml_runtime` | 段階3b まで実装済み。世代番号つきのヒープ、RC、記述子、`debug_heap` のリーク検出、`OutputSink` (テストで出力を捕まえる `Captured` を含む)。クロージャのオブジェクト、継続のフレームの種類 (`Return`、`Apply`、`Io`)、共有されたオブジェクトの複製。handler のフレーム (`Frame::Handler`) と継続オブジェクト (`Payload::Continuation`)。共有された継続の区間の複製 |
-| `eml_interp` | 段階3b まで実装済み。CEK 機械 (ヒープ上の継続のフレーム、最下部の `IO` の handler)、プリミティブ、`println`、eval/apply によるクロージャの呼び出し、型を付けた実行時エラー。handle、`perform`、`resume`、`drop` の実行。multi-shot の再開 |
+| `eml_hir` | 段階4a まで実装済み。宣言の対応づけ、名前解決、演算子の列の組み直し、`&&` / `\|\|` / `\|>` / `<\|` の脱糖、E1001〜E1006。ラムダと、シグネチャの型変数と row 変数の表。組み込みのシグネチャは Prelude (`prelude.em`) に、型とエフェクトは ID で表す item にある。`effect` の宣言と操作の item、handler、`resume`、`drop`、E1007〜E1014。エフェクトの型引数と E1015、`multi` の操作。`data` の宣言とコンストラクタ、型の適用、コンストラクタのパターン、`match`、E1016、E1017。`Bool` は Prelude の `data` |
+| `eml_types` | 段階4a まで実装済み。型・row・Kind の表現と単一化、シグネチャに対する本体の検査、E2001〜E2005。型変数と row 変数の表、スキームと SCC ごとの Kind の推論、使用回数のパス、関数値と部分適用の検査。線形性の検査は未実装。継続の型、操作のスキーム、handle の検査、Kind の制約の由来と E3001。row のラベルの型引数、`multi` の操作の `k`、`return` の節の捕獲の制約。型構成子の引数、データ型の Kind、コンストラクタのスキーム、パターンと `match` の検査、網羅性の検査 (E4001〜E4004) |
+| `eml_core_ir` | 段階4a まで実装済み。ANF への変換、Perceus の `dup` / `decref` の挿入。ラムダのクロージャ変換 (捕まえた変数を先頭の引数に持つ関数への持ち上げ)、関数値の呼び出し。join point (`captures` を持つ) と末尾呼び出し、Perceus の独立したパス (`saved` を含む) と verifier、入口の関数。パスの順番を持つ `pipeline.rs` と、途中のパスで止める `lower_until`。パスの間で埋め直す `captures` と、Perceus より前の IR を確かめる `verify_scopes`。join point を書き換える `simplify` (分かっているタグの `jump`、小さな本体の転送、`jump` が1つの join point の展開、使われない join point の削除)。handle の本体と節の持ち上げ、操作を包む関数、`Call::{Handle, Perform, Resume}`、`Rhs::Drop`。`Switch` の枝のフィールドの束縛、`Rhs::Con`、join point の引数の並び、`match` の決定木 (`translate/pattern.rs`)。B2 は引数のないタグに限る |
+| `eml_runtime` | 段階4a まで実装済み。世代番号つきのヒープ、RC、記述子、`debug_heap` のリーク検出、`OutputSink` (テストで出力を捕まえる `Captured` を含む)。クロージャのオブジェクト、継続のフレームの種類 (`Return`、`Apply`、`Io`)、共有されたオブジェクトの複製。handler のフレーム (`Frame::Handler`) と継続オブジェクト (`Payload::Continuation`)。共有された継続の区間の複製。`data` のオブジェクト (`Payload::Data`) |
+| `eml_interp` | 段階4a まで実装済み。CEK 機械 (ヒープ上の継続のフレーム、最下部の `IO` の handler)、プリミティブ、`println`、eval/apply によるクロージャの呼び出し、型を付けた実行時エラー。handle、`perform`、`resume`、`drop` の実行。multi-shot の再開。コンストラクタの値と `Switch` の分解 |
 | `eml_test_support` | 開発専用。結合テストのパイプライン (段階ごとの feature で選ぶ) と、診断を文字列にする関数 |
 | `eml_cli` | 実装済み。`check` / `run` コマンド、lib API (`check` / `compile` / `execute`)、終了コード、UI テスト (`run/`、`run-fail/`、`check-fail/`) と CLI テスト |
 
 ## 次の作業の注意点
 
-- 段階4: HIR の `Module` に `data` の item を足し、宣言の型変数の表を `Generics` として持たせる。コンストラクタは値の名前空間 (`ItemScope`) に置く。型構成子は ID だけを持ち、型の引数の置き場所はまだない。row のラベルは段階3b で型引数を持った。引数を持つ `data` は段階4で、引数の単一化と一緒に入れる。row のラベルと同じく、型の表の形に引数を持たせる
-- 段階4のタプルは、型検査器がすでに使っている閉じたレコードの表現 (`Unit` は `Record([])`) を、数字ラベルの閉じたレコードとして再利用する ([architecture.md](architecture.md) の「`eml_types` の内部」)
+- 段階4b のタプルは、型検査器がすでに使っている閉じたレコードの表現 (`Unit` は `Record([])`) を、数字ラベルの閉じたレコードとして再利用する ([architecture.md](architecture.md) の「`eml_types` の内部」)
 - 段階6: パーサは、セクションの被演算子を演算子の列 (`OP_SEQ`) のまま置き、前置の `-` もその中に入れる。HIR の変換では、組み直した後にセクションの優先順位の可否を検査する ([式](../spec/expressions.md) の「セクション」)
-- 段階4で boxed な値を `Switch` の scrutinee にするとき、現在の規則では scrutinee の読み出しが move になる。`match` の変換で、scrutinee の所有権を各枝にどう渡すかを決める必要がある
+- 段階4b: リテラルのパターンは、決定木の `Switch` ではなく、値を比べるプリミティブと分岐で調べる。`String` の比べ方は等値の扱いと一緒に決める。網羅性の検査は、Int と String のリテラルを無限に値があるものとして扱う ([網羅性](../spec/exhaustiveness.md))
+- 後で入れる最適化: 引数を持つコンストラクタの case-of-case (`jump` が `let x = Con(...)` の変数を渡す場合に、枝の join point へ直接向ける)。使われなくなった `let x = Con(...)` を消すパスがないと、箱の確保と `dup` と解放が増えるので、そのパスと一緒に入れる
+- case-of-case (B2) は、`match` にワイルドカードの枝があると働かない。決定木が、`if` の join point の本体と `Switch` の間に、`jump` が2つ以上の残りの枝の join point を置くので、最初の B3 がそれを戻さず、B2 が `Switch` を見つけられない (例: `match (if b then Red else Green) with | Red -> 1 | _ -> 2`)。結果は正しく、最適化だけが効かない。後の case-of-case の作業と一緒に直す
+- 網羅されていない `match` と等式の fix (枝や等式の追加の提案) は、段階5の線形性の診断の fix (分解パターンへの書き換え) と一緒に入れる
+- フィールドに書いた関数型の線形性を `Unr` に固定した。操作の引数の型と同じく、線形なクロージャを `data` に入れられるようにするかを後で見直す
+- 決定木の列は、最初の行でコンストラクタのパターンを持ついちばん左の列を選ぶ。行列によっては部分木が大きくなりうる。必要になったら列の選び方を見直す
+- 段階5: `Lin` のフィールドを持つ `data` は、宣言がつねに `Lin` になる。Kind に効く型引数の位置の計算 (`eml_types::data`) に定数の境界を足し、記述子に破棄処理を足す
 - 非常に長い平らな演算子の列 (約1万項) は、同じ深さの HIR の木になり、型検査と Core IR への変換がその木を再帰するのでスタックがあふれる。演算子を E0013 の深さに数えるか、平らに保つ対応は後に回す
-- 段階4: `simplify` の B2 は、枝の中の join point の引数をそのタグの定数に置き換える。今の `Switch` の scrutinee は引数のないタグ (`if` の `Bool`) だけなので正しい。引数を持つコンストラクタの `match` を入れるときは、置き換えを引数のないタグに限るか、フィールドの束縛と一緒に設計し直す
-- 段階4: `match` のコンパイルは `translate/pattern.rs` に置き、決定木の枝の join point も `translate/mod.rs` の骨組み (`Exit::Jump` と `Binding::Join`) で作る。共有する枝の join point はパターン変数を受けるので、join point の引数を `Vec` にする。B2 の作り直し (上の項目) と一緒に設計する
+- 決定木の再帰 (`translate/pattern.rs` の `decide`) の深さは、入れ子の深さだけでは決まらない。1つの経路で調べる位置の種類の数、つまり1つの `match` のパターンの大きさで抑えられる。E0013 の深さの上限と同じ扱いにはならないので、大きなパターンを書いたときのスタックに注意する
 - 性能: B2 の置き換えは枝の部分木をたどるので、条件に `&&` や `||` を使う `else if` が末尾で長く続くと、続きの深さの2乗の時間がかかる。必要になったら、変数から使用の位置への索引を巡ごとに作る
 - `simplify` を不動点まで繰り返すことにしたときは、B3 が長い続きの連鎖を `Switch` の枝の中へ移しうる。Perceus と verifier は `Switch` の枝を再帰でたどるので、E0013 はその深さの上限にならなくなる
 - 段階5: row 変数の多重度 `σ` は、スキームの多相化と具体化で制約を複製しているが、上限の制約が出ないので確かめていない。段階3b の `multi` でも下限しか出ない。持ち越し規則で上限が出たときにテストを足す
@@ -171,7 +176,6 @@ R3b で済んだ。`Frame` を種類の enum にし、記述子をペイロー�
 - 段階5: 使用回数のパス (`eml_types::usage`) は、どの経路でも1回でない変数に `Unr` の制約を出すだけである。枝ごとの消費の一致、持ち越し規則、E3xxx はこのパスに足す
 - 段階5: Core IR の `VarInfo::linearity` は、今はつねに `Unr` である。`Lin` の値を捕まえるクロージャを扱うときに、型検査の結果から入れる必要がある
 - 段階5: 操作の節のクロージャは、操作を起こすたびに handler フレームから複製して呼ぶ。節が捕まえる変数には `Unr` の制約が付くので、複製は正しい。`File` が入ったら、handler フレームの解放で `Lin` の値の破棄処理を呼ぶことを確かめる
-- 段階4: 引数名の重複 (`f x x = x`) は、現在は診断を出さずに受け入れ、後の名前が前の名前を隠す。パターンが広がるときに E1xxx で報告する
 - 既知の制限: `let` で束縛したラムダの row は、最初の呼び出しで決まる。ローカルの `let` は単相で、関数型の局所変数の型は開かない ([型と Kind](../spec/types.md) の「推論」) ためである。例えば `<IO>` の本体で `let g = fn x -> x + 1` を呼んでから `g` を `(Int -> Int)` の引数に渡すと、E2001 か E2002 になる。どちらになるかは、呼び出しと受け渡しの順で変わる。`let` で束縛したラムダの値の row 変数だけを多相化する案がある。これには spec の決定が要る
 - E2002 の言い方: scoped labels で同じラベルが重なると、メッセージが実際とずれる。例えば `run_io : (Unit -> <e> Unit) -> <IO | e> Unit` を、`<IO>` の `main` から `IO` を起こすコールバックで呼ぶと、呼び出しの row は `<IO, IO>` になる。このとき「`main` のシグネチャは `IO` を許さない」と報告するが、`main` は `IO` を1つ許しており、許さないのは重なった2つ目の `IO` である。言い方を見直す必要がある
 - 診断の連鎖の残り: 等式の検査 (`check_function`) は、シグネチャの型が壊れているときや、引数が矢印より多いときにも、それまでの矢印の row で本体を検査する。そのため、`f : Int -> Undefined` を `f a b = println "x"` と定義すると E1002 に加えて E2002 が、`f : Int -> Unit` を `f a b = println "x"` と定義すると E2001 に加えて E2002 が出る。ラムダの検査は同じ場合に末尾 `Error` の row で本体を検査して連鎖を止めているので、等式の検査もそれに合わせる。UI テストの出力が変わりうるので、テストの変更の運用に従って直す
@@ -182,9 +186,9 @@ R3b で済んだ。`Frame` を種類の enum にし、記述子をペイロー�
 ## spec に反映済みで、実装は後の段階で扱うもの
 
 - パラメータ付き handler は段階6で、脱糖せずに状態を handler フレームに持つ形で実装する。HIR、型検査 (継続の型の状態の欄と、型変数と分けた欄の推論用の変数、`resume` の個数による欄の単一化と専用の E2xxx、状態の持ち越し規則)、Core IR (`Handle` の初期値と `Resume` の状態をつねに持つ。状態のない handler では `()`)、ランタイム (`Frame::Handler` がつねに持つ状態の欄)、インタプリタまで通す。今の段階3b の状態のない handler も、このときに同じ形にそろえる ([エフェクトと handler](../spec/effects.md) の「パラメータ付き handler」)。今は `resume` の3引数の形と `return` の節の状態の引数を E0004 と E1010 にする
-- コンストラクタは値の名前空間に置く。型とコンストラクタは同じ名前を持てる ([モジュールと名前解決](../spec/modules.md))。段階4で実装する。import の並びでコンストラクタを `T(..)` でだけ取り込む規則は S2 で実装する
-- 網羅されていない等式の診断は、シグネチャの関数名を primary、各等式の先頭を secondary にする。等式が1つの場合も同じ扱いにする ([網羅性](../spec/exhaustiveness.md)、[診断](../spec/diagnostics.md))。段階4で実装する
-- 直積型の構造的なレコードへの統一 ([直積型とレコード](../spec/records.md))。タプルは段階4、射影と更新の線形性の規則は段階5、名前付きのレコードは S2 で実装する
+- コンストラクタは値の名前空間に置く。型とコンストラクタは同じ名前を持てる ([モジュールと名前解決](../spec/modules.md))。import の並びでコンストラクタを `T(..)` でだけ取り込む規則は S2 で実装する
+- 網羅されていない等式の診断は、シグネチャの関数名を primary、各等式の先頭を secondary にする。等式が1つの場合も同じ扱いにする ([網羅性](../spec/exhaustiveness.md)、[診断](../spec/diagnostics.md))。到達しない等式の Warning は段階6で実装する
+- 直積型の構造的なレコードへの統一 ([直積型とレコード](../spec/records.md))。タプルは段階4b、射影と更新の線形性の規則は段階5、名前付きのレコードは S2 で実装する
 
 ## 採用しないもの
 
@@ -212,3 +216,4 @@ R3b で済んだ。`Frame` を種類の enum にし、記述子をペイロー�
 | 縦の貫通 段階3b | `multi` の操作と multi-shot の再開、エフェクトの型引数を通した。row のラベルに型引数を持たせ、同じエフェクトのラベルを順に対にして単一化する。共有された継続を再開するときは区間を写し、フレームはつねに一意に保つ。持ち越し規則は段階5に残した |
 | join point の解析の整理 | join point に本体が使う外側の変数 (`captures`) を持たせ、生存解析を関数ごとに1回にした。Perceus が呼び出しの `saved` も決め、verifier は `captures` を宣言として確かめる。その上に join point を書き換える `simplify` を置き、`&&` と `||` を条件にした `if` が条件の値で分岐し直さないようにした |
 | リファクタリング R4 | Core IR のパスの順番を `pipeline.rs` に置き、途中のパスで止める `lower_until` を足した。パスの間では `captures` をつねに正しくし、Perceus より前の IR を範囲だけで確かめる `verify_scopes` を各パスの後にかける。`lower.rs` を `translate/` に分け、Core IR のテストを確かめるパスごとのファイルに組み替えた |
+| 縦の貫通 段階4a | 型引数を持つ `data`、コンストラクタ、`match` と入れ子のパターン、網羅性の検査を通した。`Bool` を Prelude の `data` にした。Core IR の join point に引数の並びを持たせ、`Switch` の枝がフィールドを束縛して scrutinee を move で分解するようにした。`match` は決定木にコンパイルし、`simplify` の B2 を引数のないタグに限った |

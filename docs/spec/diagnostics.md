@@ -39,7 +39,7 @@ struct Diagnostic {
 
 ## 割り当て済みの番号
 
-E0xxx は `eml_syntax::codes` (E0004 だけは `eml_diagnostics`)、E1xxx は `eml_hir::codes`、E2xxx は `eml_types::codes` に置く。E3001 は `eml_types::codes` に置く。E3xxx の残りと E4xxx の番号は、線形性と網羅性の検査を実装するときに割り当てる。
+E0xxx は `eml_syntax::codes` (E0004 だけは `eml_diagnostics`)、E1xxx は `eml_hir::codes`、E2xxx は `eml_types::codes` に置く。E3001 は `eml_types::codes` に置く。E4xxx は `eml_types::codes` に置く。E3xxx の残りの番号は、線形性の検査を実装するときに割り当てる。
 
 | 番号 | 定数 | 内容 |
 |---|---|---|
@@ -70,13 +70,19 @@ E0xxx は `eml_syntax::codes` (E0004 だけは `eml_diagnostics`)、E1xxx は `e
 | E1012 | `MIXED_EFFECTS_IN_HANDLER` | 1つの handler に別のエフェクトの操作の節が混ざった |
 | E1013 | `MISSING_CLAUSE` | 節のない操作がある。操作の節が1つもない handler も含む。primary は `handle` で、節の追加を help で示す |
 | E1014 | `DUPLICATE_CLAUSE` | 同じ操作の節、または `return` の節が2つある |
-| E1015 | `TYPE_ARGUMENT_COUNT` | row の中のエフェクトの型引数の個数が宣言と違う。段階4の `data` の型引数でも使う |
+| E1015 | `TYPE_ARGUMENT_COUNT` | `data` の型の適用や row の中のエフェクトの型引数の個数が、宣言と違う |
+| E1016 | `CONSTRUCTOR_ARITY` | パターンのコンストラクタの引数の個数が、宣言のフィールドの数と違う |
+| E1017 | `DUPLICATE_BINDING` | 1つのパターン、または1つの等式の引数の並びで、同じ変数名を2回束縛した。2つ目の束縛を primary、1つ目を secondary にする |
 | E2001 | `TYPE_MISMATCH` | 型の不一致。メッセージとラベルは制約の由来ごとに変える ([型と Kind](types.md))。呼び出しの row のエフェクトの型引数が今の row と一致しないときも E2001 にし、呼び出しを primary にする |
 | E2002 | `EFFECT_NOT_IN_ROW` | シグネチャの row に含まれないエフェクトを起こした。シグネチャの矢印を指し、row を足す help を付ける。ラムダの本体の場合は、エフェクトを起こした場所を primary、ラムダの期待する型の由来 (シグネチャの引数の型や型の明示) を secondary にする |
 | E2003 | `MISSING_MAIN` | `main` がない。`eml run` のときだけ出す |
 | E2004 | `INVALID_MAIN_TYPE` | `main` のシグネチャが `Unit -> <IO> Unit` でない |
 | E2005 | `INFINITE_TYPE` | 無限の型 (単一化の occurs check)。row のラベルの型引数を通して、型変数か row 変数が自分自身の中に現れる場合を含む。呼び出しの row で起きたときは、呼び出しを指す |
 | E3001 | `LINEAR_VALUE_MISUSED` | 線形な値 (`once` の操作の `k` と、それを捕まえたクロージャ) を、ちょうど1回でなく使った。違反した Kind の制約の由来を指す。`multi` の操作を持つ handler の `return` の節が捕まえた場合を含む |
+| E4001 | `NON_EXHAUSTIVE_MATCH` | 網羅されていない `match` |
+| E4002 | `NON_EXHAUSTIVE_EQUATION` | 網羅されていない等式 |
+| E4003 | `REFUTABLE_PATTERN` | 反駁可能な `let` の左辺、ラムダの引数、handler の節の引数と `return` の節の引数のパターン |
+| E4004 | `UNREACHABLE_ARM` | 到達しない枝 (Warning) |
 
 E0004 (`NOT_YET_SUPPORTED`) は、構文の段階 (S2、S3) で未対応の構文に加えて、名前解決以降の段階がまだ扱えない構文 (マイルストーン1 の実装の途中の段階) にも使う。どの段階でも「後で実装する」という同じ意味なので、番号を分けない。HIR 以降の段階は、対応していない構文を、診断を出さずに無視することはしない。見つけた段階で E0004 を出して回復する。
 
@@ -110,15 +116,17 @@ E0004 (`NOT_YET_SUPPORTED`) は、構文の段階 (S2、S3) で未対応の構�
 
 ## 網羅性の診断
 
-| 誤り | 重大度 | 指す場所 |
-|---|---|---|
-| 網羅されていない `match` | Error | `match` 式。漏れているパターンの例を note で示し、fix で枝の追加を提案する |
-| 網羅されていない等式 | Error | primary はシグネチャの関数名 (シグネチャがなければ最初の等式の関数名)、secondary は各等式の先頭。漏れている引数の並びの例 (`f None _`) を note で示し、fix で最後の等式の後への等式の追加を提案する |
-| 到達しない枝 | Warning | その枝のパターン |
-| 到達しない等式 | Warning | その等式の引数のパターン |
-| 反駁可能な `let` / ラムダの引数のパターン | Error | そのパターン |
+| 番号 | 誤り | 重大度 | 指す場所 |
+|---|---|---|---|
+| E4001 | 網羅されていない `match` | Error | `match` 式。漏れているパターンの例を note で示し、fix で枝の追加を提案する (fix は段階5の線形性の fix と一緒に入れる) |
+| E4002 | 網羅されていない等式 | Error | primary はシグネチャの関数名 (シグネチャがなければ最初の等式の関数名)、secondary は各等式の先頭。漏れている引数の並びの例 (`f None _`) を note で示し、fix で最後の等式の後への等式の追加を提案する (fix は段階5の線形性の fix と一緒に入れる) |
+| E4004 | 到達しない枝 | Warning | その枝のパターン |
+| なし | 到達しない等式 | Warning | その等式の引数のパターン |
+| E4003 | 反駁可能な `let` / ラムダの引数 / handler の節と `return` の節の引数のパターン | Error | そのパターン |
 
-等式の場合はソースに `match` 式がないので、指す場所を等式に合わせて決めている。
+等式の場合はソースに `match` 式がないので、指す場所を等式に合わせて決めている。handler の節はラムダと同じく持ち上げる関数で、引数のパターンも同じ経路でコンパイルするため、ラムダの引数と同じ E4003 にする。
+
+漏れているパターンの例は、note に最大3つ並べる。3つより多ければ、残りがあることを書き添える。到達しない等式の Warning は、複数の等式を実装する段階6で入れる。
 
 ## 連鎖する診断の抑止
 
