@@ -36,6 +36,7 @@
 - `match` は決定木にコンパイルし、各枝の本体をつねに join point にする。上から順に試す案は、同じ値を何度も調べ、そのたびに `dup` が増えるので採らない
 - B2 は引数のないタグに限る。引数を持つコンストラクタに広げる案は、使われなくなった `let x = Con(...)` を消すパスがないと、箱の確保と `dup` と解放が増えてかえって遅くなるので、後に回す
 - 網羅性の診断は note に漏れの例を出し、fix は後に回す
+- 実装計画を書く中で、次の3つを決めた。`simplify` の1巡の順を B3、B2、B5、B3、B4 にする (4節の `simplify`)。handler の節の引数と `return` の節の引数の反駁可能なパターンも E4003 にする (3節)。`Builtin::True` をなくすとコンパイルできなくなる既存のテスト2件を種類1に加える (6節)
 
 ## 1. HIR と名前解決
 
@@ -194,7 +195,7 @@ pub struct MatchArm {
 |---|---|---|
 | `match` | 枝のパターンの列 | E4001 |
 | 等式の引数 | 引数のパターンの並びを1行にした行列 | E4002 |
-| `let` の左辺、ラムダの引数 | パターン1つの行列 | E4003 |
+| `let` の左辺、ラムダの引数、handler の節の引数と `return` の節の引数 | パターン1つの行列 | E4003 |
 
 - 等式は 4a では1つだけなので、引数の並びを1行の行列として調べる。spec の「引数のタプルに対する `match`」と同じ結果になる。複数の等式は段階6で同じ行列に行を足す。
 - 到達しない枝 (E4004) は `match` だけで調べる。到達しない等式は段階6で足す。
@@ -205,11 +206,11 @@ pub struct MatchArm {
 |---|---|---|---|
 | E4001 | `NON_EXHAUSTIVE_MATCH` | Error | `match` のキーワード。漏れている例を note に出す |
 | E4002 | `NON_EXHAUSTIVE_EQUATION` | Error | primary はシグネチャの関数名、secondary は等式の先頭 ([診断](../../spec/diagnostics.md) の「網羅性の診断」)。漏れている引数の並びの例 (`f None _`) を note に出す |
-| E4003 | `REFUTABLE_PATTERN` | Error | `let` の左辺、またはラムダの引数のパターン。漏れている例を note に出す |
+| E4003 | `REFUTABLE_PATTERN` | Error | `let` の左辺、ラムダの引数、handler の節の引数と `return` の節の引数のパターン。漏れている例を note に出す |
 | E4004 | `UNREACHABLE_ARM` | Warning | 到達しない枝のパターン |
 
 - 番号は `eml_types::codes` に置く。
-- spec の診断の表には E4003 にあたる行がないので、`docs/spec/diagnostics.md` の「網羅性の診断」に足す。
+- `docs/spec/diagnostics.md` の「網羅性の診断」の反駁可能なパターンの行に、handler の節の引数と `return` の節の引数を足す。節はラムダと同じく持ち上げる関数で、引数のパターンも同じ経路でコンパイルするので、網羅されない値が Core IR に届かないようにする。
 - Warning だけのプログラムは、今の `has_errors` の判定どおり実行できる。
 
 ## 4. Core IR
@@ -322,6 +323,7 @@ fn f(o) {
 
 ### `simplify`
 
+- 1巡の順を B3、B2、B5、B3、B4 にする。最初の B3 は、`jump` が1つの枝の join point を `Switch` の枝に戻す。`match` の各枝の本体をつねに join point にすると、`let o = if …` の後の `match o` では、`if` の join point の本体が「枝の join point の並びと `Switch`」になり、本体が `Switch` でないので B2 が働かないためである。今の変換が作る join point (末尾にない `if`) は `jump` がつねに2つ以上あるので、最初の B3 は今のプログラムの結果を変えない。
 - B2 は、引数を1つだけ持ち、本体がその引数で `Switch` する join point に、定数のタグ (`Atom::Tag`) を渡す `jump` がある場合に限る。
 - 切り出すのは引数のないコンストラクタの枝だけで、引数0個の join point にする。切り出した枝の中では、今と同じく引数をタグの定数に置き換える。
 - フィールドを束縛する枝は `Switch` に残し、引数の置き換えもしない。引数を持つコンストラクタの値はタグだけでは決まらないためである。
@@ -393,6 +395,8 @@ UI テスト:
 | `tests/ui/check-fail/not-yet-supported/data_declarations.em` | 削除する | `data` が E0004 でなくなり、プログラムが通るようになる。後継は `run/data/` のテスト |
 | `crates/eml_hir/tests/lower.rs` の `constructs_of_later_stages_are_not_yet_supported` | 入力から `data` の行を除き、`match` の枝をリテラルのパターン (`\| 0 -> x`) に変える | `data` と `match` が E0004 でなくなる。リテラルのパターンは 4b に残る E0004 なので、`match` の行で後の段階の構文を確かめ続けられる |
 | `crates/eml_hir/src/builtin.rs` の単体テストの `Builtin::True` を引く行 | 削除する | `Builtin::True` をなくす |
+| `crates/eml_types/tests/check.rs` の `builtin_schemes_are_exported` | 「`builtins` に `True` がない」の assert を、「`TypedModule::constructors` に `True` のスキームがある」の assert に置き換える | `True` は組み込みでなくなり、コンストラクタのスキームとして書き出される |
+| `crates/eml_hir/tests/structure.rs` の `the_prelude_has_a_signature_for_every_builtin_function` | `True` と `False` を除く分岐をなくす | `True` と `False` が組み込みの表から外れる |
 
 種類2 (内部の表現のスナップショット。この spec の承認で合意とする):
 
