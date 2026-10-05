@@ -1,3 +1,4 @@
+mod data;
 mod effect;
 mod expr;
 mod handler;
@@ -16,7 +17,7 @@ use crate::codes;
 use crate::hir::*;
 use expr::BodyLowering;
 use scope::{ItemScope, ValueItem};
-use types::TypeLowering;
+use types::{TypeLowering, Vars};
 
 /// 同じ名前のシグネチャと等式。名前で対応づけてから、並び方を検査する (docs/spec/declarations.md)。
 struct Definition {
@@ -30,21 +31,42 @@ struct Definition {
 
 pub fn lower(file: FileId, source: &ast::SourceFile) -> (Module, Vec<Diagnostic>) {
     let mut diagnostics = Vec::new();
-    let (definitions, effect_items) = collect(file, source, &mut diagnostics);
+    let (definitions, data_items, effect_items) = collect(file, source, &mut diagnostics);
     let mut functions = Arena::new();
     let mut scope = ItemScope::new();
     let mut types = Arena::new();
+    let mut constructors = Arena::new();
     let mut effects = Arena::new();
     let mut operations = Arena::new();
     let lang = scope::builtin_items(&mut types, &mut effects, &mut scope);
     let builtins = prelude::lower_prelude(&scope);
+    // 型の名前空間のユーザーの名前。`data` とエフェクトの間の重複も見つける
+    let mut type_names = HashMap::new();
+    let data = data::declare_data(
+        file,
+        &data_items,
+        &mut type_names,
+        &mut scope,
+        &mut types,
+        &mut diagnostics,
+    );
     // 関数のシグネチャの row がユーザーのエフェクトを引けるように、エフェクトを先に変換する
     effect::lower_effects(
         file,
         &effect_items,
+        &mut type_names,
         &mut scope,
         &mut effects,
         &mut operations,
+        &mut diagnostics,
+    );
+    // フィールドの関数型の row がエフェクトを引けるように、コンストラクタはエフェクトの後に変換する
+    data::lower_constructors(
+        file,
+        &data,
+        &mut scope,
+        &mut types,
+        &mut constructors,
         &mut diagnostics,
     );
     let mut pending = Vec::new();
@@ -106,7 +128,7 @@ pub fn lower(file: FileId, source: &ast::SourceFile) -> (Module, Vec<Diagnostic>
                 types: &mut types,
                 generics: &mut generics,
                 items: &scope,
-                define: true,
+                vars: Vars::Define,
                 diagnostics: &mut diagnostics,
             }
             .lower(node.ty(), range);
@@ -151,6 +173,7 @@ pub fn lower(file: FileId, source: &ast::SourceFile) -> (Module, Vec<Diagnostic>
             &scope,
             &effects,
             &operations,
+            &constructors,
             generics,
             &mut diagnostics,
         )
@@ -163,6 +186,7 @@ pub fn lower(file: FileId, source: &ast::SourceFile) -> (Module, Vec<Diagnostic>
             file,
             functions,
             types,
+            constructors,
             effects,
             operations,
             builtins,
@@ -176,9 +200,10 @@ fn collect(
     file: FileId,
     source: &ast::SourceFile,
     diagnostics: &mut Vec<Diagnostic>,
-) -> (Vec<Definition>, Vec<ast::EffectItem>) {
+) -> (Vec<Definition>, Vec<ast::DataItem>, Vec<ast::EffectItem>) {
     let mut definitions: Vec<Definition> = Vec::new();
     let mut by_name: HashMap<String, usize> = HashMap::new();
+    let mut data = Vec::new();
     let mut effects = Vec::new();
     for (index, item) in source.items().enumerate() {
         match item {
@@ -212,11 +237,7 @@ fn collect(
                 let slot = slot(&mut definitions, &mut by_name, name.text(), range);
                 definitions[slot].equations.push((index, equation, range));
             }
-            ast::Item::DataItem(item) => diagnostics.push(Diagnostic::not_yet_supported(
-                file,
-                item.keyword_range(),
-                "`data` declarations are not supported yet",
-            )),
+            ast::Item::DataItem(item) => data.push(item),
             ast::Item::EffectItem(item) => effects.push(item),
             ast::Item::FixityItem(item) => diagnostics.push(Diagnostic::not_yet_supported(
                 file,
@@ -227,7 +248,7 @@ fn collect(
             ast::Item::TypeItem(_) => {}
         }
     }
-    (definitions, effects)
+    (definitions, data, effects)
 }
 
 fn slot(

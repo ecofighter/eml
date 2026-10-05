@@ -1,0 +1,12 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: rendered
+input_file: tests/ui/check-fail/names/constructor_arity.em
+---
+[E1016] Error: `Some` takes 1 argument, but 2 were given
+   ╭─[ check-fail/names/constructor_arity.em:5:8 ]
+   │
+ 5 │ first (Some x y) = x
+   │        ────┬───  
+   │            ╰───── expected 1 argument
+───╯

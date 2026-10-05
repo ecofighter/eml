@@ -1,0 +1,14 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: rendered
+input_file: tests/ui/check-fail/names/duplicate_binding.em
+---
+[E1017] Error: `x` is bound more than once
+   ╭─[ check-fail/names/duplicate_binding.em:3:7 ]
+   │
+ 3 │ add x x = x
+   │     ┬ ┬  
+   │     ╰──── first bound here
+   │       │  
+   │       ╰── bound again here
+───╯

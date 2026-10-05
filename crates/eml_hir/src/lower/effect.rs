@@ -9,7 +9,7 @@ use la_arena::Arena;
 
 use super::duplicate;
 use super::scope::ItemScope;
-use super::types::TypeLowering;
+use super::types::{TypeLowering, Vars};
 use crate::codes;
 use crate::hir::{
     EffectDef, EffectId, Generics, OpMultiplicity, Operation, RowRef, Signature, TypeRef,
@@ -17,16 +17,16 @@ use crate::hir::{
 };
 
 /// エフェクトの名前をすべて登録してから、操作のシグネチャを変換する。操作の引数の型の row で、後ろで宣言した
-/// エフェクトも引けるようにするため。
+/// エフェクトも引けるようにするため。`declared` は `data` の宣言と共有する型の名前空間のユーザーの名前である。
 pub(super) fn lower_effects(
     file: FileId,
     items: &[ast::EffectItem],
+    declared: &mut HashMap<String, TextRange>,
     scope: &mut ItemScope,
     effects: &mut Arena<EffectDef>,
     operations: &mut Arena<Operation>,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
-    let mut declared: HashMap<String, TextRange> = HashMap::new();
     let mut lowered = Vec::new();
     for item in items {
         // 名前がなければパーサが報告済み
@@ -126,7 +126,7 @@ fn lower_operation(
         types: &mut types,
         generics: &mut generics,
         items: scope,
-        define: true,
+        vars: Vars::Define,
         diagnostics: &mut *diagnostics,
     }
     .lower(decl.ty(), range);
@@ -209,7 +209,7 @@ fn check_signature(
             TypeRefKind::Var(_) if effect_param => false,
             TypeRefKind::Var(var) => !params.iter().any(|&param| mentions(types, param, var)),
             TypeRefKind::Error => true,
-            TypeRefKind::Con(_) | TypeRefKind::Fn { .. } => false,
+            TypeRefKind::Con(..) | TypeRefKind::Fn { .. } => false,
         };
         if !free {
             let label = if effect_param {
@@ -238,6 +238,7 @@ fn mentions(types: &Arena<TypeRef>, id: TypeRefId, var: TypeVarId) -> bool {
         TypeRefKind::Fn { param, ret, .. } => {
             mentions(types, *param, var) || mentions(types, *ret, var)
         }
-        TypeRefKind::Error | TypeRefKind::Con(_) => false,
+        TypeRefKind::Con(_, args) => args.iter().any(|&arg| mentions(types, arg, var)),
+        TypeRefKind::Error => false,
     }
 }

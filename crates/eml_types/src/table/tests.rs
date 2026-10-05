@@ -6,11 +6,7 @@ use super::*;
 fn new_table() -> Table {
     let mut types = Arena::new();
     let mut effects = Arena::new();
-    let mut ty = |name: &str| {
-        types.alloc(TypeDef {
-            name: name.to_string(),
-        })
-    };
+    let mut ty = |name: &str| types.alloc(TypeDef::builtin(name));
     let lang = LangItems {
         int: ty("Int"),
         string: ty("String"),

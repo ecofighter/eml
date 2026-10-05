@@ -3,7 +3,8 @@ use eml_syntax::{SyntaxKind, SyntaxToken, ast};
 use la_arena::Arena;
 
 use super::scope::{ItemScope, ValueItem};
-use super::types::TypeLowering;
+use super::types::{TypeLowering, Vars};
+use crate::builtin::{Assoc, fixity};
 use crate::codes;
 use crate::hir::*;
 
@@ -13,6 +14,8 @@ pub(super) struct BodyLowering<'a> {
     /// handler の節の検査で、操作の引数の個数とエフェクトの操作の並びを引く。
     pub(super) effects: &'a Arena<EffectDef>,
     pub(super) operations: &'a Arena<Operation>,
+    /// コンストラクタのパターンの引数の個数を確かめる (E1016)。
+    constructors: &'a Arena<Constructor>,
     /// 本体の型の注釈。
     types: Arena<TypeRef>,
     /// 本体の注釈が引く、シグネチャの型変数と row 変数の表。
@@ -23,6 +26,8 @@ pub(super) struct BodyLowering<'a> {
     locals: Arena<Local>,
     /// 内側の束縛ほど後ろにある。後の `let` が前の同じ名前を隠す (docs/spec/expressions.md)。
     pub(super) scope: Vec<(String, LocalId)>,
+    /// 今変換しているパターンの組が `scope` に積み始めた位置。組の中で同じ名前を2回束縛したら E1017 にする。
+    group_start: usize,
 }
 
 impl<'a> BodyLowering<'a> {
@@ -31,6 +36,7 @@ impl<'a> BodyLowering<'a> {
         items: &'a ItemScope,
         effects: &'a Arena<EffectDef>,
         operations: &'a Arena<Operation>,
+        constructors: &'a Arena<Constructor>,
         generics: &'a mut Generics,
         diagnostics: &'a mut Vec<Diagnostic>,
     ) -> Self {
@@ -39,6 +45,7 @@ impl<'a> BodyLowering<'a> {
             items,
             effects,
             operations,
+            constructors,
             types: Arena::new(),
             generics,
             diagnostics,
@@ -46,15 +53,18 @@ impl<'a> BodyLowering<'a> {
             pats: Arena::new(),
             locals: Arena::new(),
             scope: Vec::new(),
+            group_start: 0,
         }
     }
 
     pub(super) fn lower_equation(mut self, equation: &ast::Equation) -> Body {
         let range = equation.range();
         let reported = self.diagnostics.len();
+        // 等式の引数の並びは、1つのパターンと同じく1つの組である (E1017)
+        self.group_start = self.scope.len();
         let params = equation
             .params()
-            .map(|pat| self.lower_pat(Some(pat), range))
+            .map(|pat| self.lower_pat_in_group(Some(pat), range))
             .collect();
         let root = self.lower_expr(equation.body(), range);
         Body {
@@ -130,9 +140,7 @@ impl<'a> BodyLowering<'a> {
                 self.scope.truncate(mark);
                 self.alloc(ExprKind::Lambda { params, body }, range)
             }
-            ast::Expr::MatchExpr(e) => {
-                self.unsupported(e.keyword_range(), "`match` is not supported yet")
-            }
+            ast::Expr::MatchExpr(e) => self.lower_match(&e, range),
             ast::Expr::HandleExpr(e) => self.lower_handle(&e, range),
             ast::Expr::LetExpr(e) => {
                 self.unsupported(e.keyword_range(), "`let ... in` is not supported yet")
@@ -166,6 +174,7 @@ impl<'a> BodyLowering<'a> {
                 self.items.value(text).map(|item| match item {
                     ValueItem::Function(id) => Res::Function(id),
                     ValueItem::Operation(id) => Res::Operation(id),
+                    ValueItem::Constructor(id) => Res::Constructor(id),
                     ValueItem::Builtin(builtin) => Res::Builtin(builtin),
                 })
             });
@@ -266,7 +275,31 @@ impl<'a> BodyLowering<'a> {
         self.alloc(ExprKind::Block { stmts, tail }, range)
     }
 
+    fn lower_match(&mut self, expr: &ast::MatchExpr, range: TextRange) -> ExprId {
+        let scrutinee = self.lower_expr(expr.scrutinee(), range);
+        let arms = expr
+            .arms()
+            .map(|arm| {
+                let arm_range = arm.range();
+                let mark = self.scope.len();
+                let pat = self.lower_pat(arm.pat(), arm_range);
+                let body = self.lower_expr(arm.body(), arm_range);
+                self.scope.truncate(mark);
+                MatchArm { pat, body }
+            })
+            .collect();
+        self.alloc(ExprKind::Match { scrutinee, arms }, range)
+    }
+
+    /// 1つのパターンを1つの組として変換する。
     pub(super) fn lower_pat(&mut self, pat: Option<ast::Pat>, fallback: TextRange) -> PatId {
+        let outer = std::mem::replace(&mut self.group_start, self.scope.len());
+        let id = self.lower_pat_in_group(pat, fallback);
+        self.group_start = outer;
+        id
+    }
+
+    fn lower_pat_in_group(&mut self, pat: Option<ast::Pat>, fallback: TextRange) -> PatId {
         let Some(pat) = pat else {
             return self.pats.alloc(Pat {
                 kind: PatKind::Missing,
@@ -278,6 +311,13 @@ impl<'a> BodyLowering<'a> {
             ast::Pat::BindPat(bind) => match bind.name() {
                 Some(name) => {
                     let name = name.text().to_string();
+                    if let Some(&(_, first)) = self.scope[self.group_start..]
+                        .iter()
+                        .find(|(bound, _)| *bound == name)
+                    {
+                        let first = self.locals[first].range;
+                        self.duplicate_binding(&name, first, range);
+                    }
                     let local = self.locals.alloc(Local {
                         name: name.clone(),
                         range,
@@ -289,10 +329,22 @@ impl<'a> BodyLowering<'a> {
             },
             ast::Pat::WildcardPat(_) => PatKind::Wildcard,
             ast::Pat::UnitPat(_) => PatKind::Unit,
-            ast::Pat::ParenPat(paren) => return self.lower_pat(paren.pat(), range),
-            ast::Pat::ConPat(_) | ast::Pat::InfixConPat(_) => {
-                self.unsupported_pat(range, "constructor patterns are not supported yet")
+            ast::Pat::ParenPat(paren) => return self.lower_pat_in_group(paren.pat(), range),
+            ast::Pat::ConPat(con) => {
+                let args = con
+                    .args()
+                    .map(|arg| {
+                        let arg_range = arg.range();
+                        self.lower_pat_in_group(Some(arg), arg_range)
+                    })
+                    .collect();
+                let segments: Vec<SyntaxToken> = con.segments().collect();
+                match segments.as_slice() {
+                    [name] => self.constructor_pat(name, args, range),
+                    _ => self.unsupported_pat(range, "qualified names are not supported yet"),
+                }
             }
+            ast::Pat::InfixConPat(infix) => return self.lower_infix_pat(infix, range),
             ast::Pat::LiteralPat(_) => {
                 self.unsupported_pat(range, "literal patterns are not supported yet")
             }
@@ -304,6 +356,118 @@ impl<'a> BodyLowering<'a> {
             }
         };
         self.pats.alloc(Pat { kind, range })
+    }
+
+    /// パーサは中置のコンストラクタのパターンを右に入れ子の木で作る (docs/spec/grammar.md の `pat`)。式の演算子の列と
+    /// 同じ fixity で組むため、木を被演算子と演算子の列に平らにしてから組み直す。fixity の宣言がない演算子は
+    /// `infixl 9` なので (docs/spec/declarations.md)、`a :+ b :+ c` は式と同じく `(a :+ b) :+ c` になる。
+    fn lower_infix_pat(&mut self, infix: ast::InfixConPat, range: TextRange) -> PatId {
+        let mut operands = Vec::new();
+        let mut operators = Vec::new();
+        let mut current = infix;
+        loop {
+            operands.push(current.lhs());
+            operators.push(
+                current
+                    .operator()
+                    .expect("the parser makes an infix constructor pattern at its operator"),
+            );
+            match current.rhs() {
+                // 括弧で囲んだ右辺は `ParenPat` なので、平らにせずに1つの被演算子のまま残る
+                Some(ast::Pat::InfixConPat(next)) => current = next,
+                rhs => {
+                    operands.push(rhs);
+                    break;
+                }
+            }
+        }
+        // 変数は左から順に束縛する。E1017 の組と局所変数の番号を、ソースの順にそろえるため
+        let operands: Vec<PatId> = operands
+            .into_iter()
+            .map(|pat| self.lower_pat_in_group(pat, range))
+            .collect();
+        let mut position = 0;
+        self.climb_pat(&operands, &operators, &mut position, 0)
+    }
+
+    /// 式の `climb` と同じ優先順位の上昇法である。表の中で `:` で始まる演算子は `::` だけなので、同じ優先順位で
+    /// 結合の向きが違う並びは起きず、E1006 は出さない。
+    fn climb_pat(
+        &mut self,
+        operands: &[PatId],
+        operators: &[SyntaxToken],
+        position: &mut usize,
+        min_precedence: u8,
+    ) -> PatId {
+        let mut lhs = operands[*position];
+        while let Some(operator) = operators.get(*position) {
+            let (precedence, assoc) = fixity(operator.text()).unwrap_or((9, Assoc::Left));
+            if precedence < min_precedence {
+                break;
+            }
+            *position += 1;
+            let next_min = if assoc == Assoc::Right {
+                precedence
+            } else {
+                precedence + 1
+            };
+            let rhs = self.climb_pat(operands, operators, position, next_min);
+            let whole = self.pats[lhs].range.cover(self.pats[rhs].range);
+            let kind = self.constructor_pat(operator, vec![lhs, rhs], whole);
+            lhs = self.pats.alloc(Pat { kind, range: whole });
+        }
+        lhs
+    }
+
+    /// 引数のパターンは呼び出し側が先に変換する。コンストラクタが決まらなくても引数の変数を束縛し、枝の本体で名前の
+    /// 誤りを連鎖させないため。
+    fn constructor_pat(
+        &mut self,
+        name: &SyntaxToken,
+        args: Vec<PatId>,
+        range: TextRange,
+    ) -> PatKind {
+        let Some(ctor) = self.items.constructor(name.text()) else {
+            self.diagnostics.push(Diagnostic::error(
+                codes::UNDEFINED_NAME,
+                format!("cannot find constructor `{}`", name.text()),
+                Label::new(self.file, name.text_range(), "not found in this scope"),
+            ));
+            return PatKind::Missing;
+        };
+        let expected = self.constructors[ctor].fields.len();
+        if args.len() != expected {
+            let given = match args.len() {
+                1 => "1 was given".to_string(),
+                n => format!("{n} were given"),
+            };
+            self.diagnostics.push(Diagnostic::error(
+                codes::CONSTRUCTOR_ARITY,
+                format!(
+                    "`{}` takes {}, but {given}",
+                    name.text(),
+                    arguments(expected)
+                ),
+                Label::new(
+                    self.file,
+                    range,
+                    format!("expected {}", arguments(expected)),
+                ),
+            ));
+            return PatKind::Missing;
+        }
+        PatKind::Con { ctor, args }
+    }
+
+    fn duplicate_binding(&mut self, name: &str, first: TextRange, again: TextRange) {
+        self.diagnostics.push(
+            Diagnostic::error(
+                codes::DUPLICATE_BINDING,
+                format!("`{name}` is bound more than once"),
+                Label::new(self.file, again, "bound again here"),
+            )
+            .with_secondary(Label::new(self.file, first, "first bound here")),
+        );
     }
 
     /// ラムダの引数だけは型の明示を受ける (docs/spec/expressions.md の「ラムダ」)。
@@ -326,7 +490,7 @@ impl<'a> BodyLowering<'a> {
             types: &mut self.types,
             generics: &mut *self.generics,
             items: self.items,
-            define: false,
+            vars: Vars::Signature,
             diagnostics: &mut *self.diagnostics,
         }
         .lower(ty, fallback)
@@ -346,5 +510,13 @@ impl<'a> BodyLowering<'a> {
 
     pub(super) fn alloc(&mut self, kind: ExprKind, range: TextRange) -> ExprId {
         self.exprs.alloc(Expr { kind, range })
+    }
+}
+
+fn arguments(n: usize) -> String {
+    if n == 1 {
+        "1 argument".to_string()
+    } else {
+        format!("{n} arguments")
     }
 }

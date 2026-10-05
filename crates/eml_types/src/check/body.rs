@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use eml_diagnostics::{Diagnostic, FileId, Label, TextRange};
+use eml_diagnostics::{Diagnostic, FileId, Label, TextRange, TextSize};
 use eml_hir::builtin::Builtin;
 use eml_hir::{
     Body, ExprId, ExprKind, Function, FunctionId, Literal, LocalId, Module, OperationId, PatId,
@@ -207,6 +207,15 @@ impl BodyCheck<'_> {
                 ret,
             } => self.handle(*effect, *handled, clauses, ret.as_ref()),
             ExprKind::Resume { k, arg } => self.resume(id, *k, *arg),
+            ExprKind::Match { .. } => {
+                let keyword = TextRange::at(expr.range.start(), TextSize::of("match"));
+                self.diagnostics.push(Diagnostic::not_yet_supported(
+                    self.file(),
+                    keyword,
+                    "`match` is not supported yet",
+                ));
+                self.table.error
+            }
             // `drop` はどんな値も受け取る。値を捨てることは使用の1回に数える (docs/spec/linearity.md)
             ExprKind::Drop(value) => {
                 self.infer_expr(*value);
@@ -346,6 +355,14 @@ impl BodyCheck<'_> {
                 self.with_kind_origin(range, KindReason::Passed(name), |this| {
                     this.reference(function)
                 })
+            }
+            Res::Constructor(_) => {
+                self.diagnostics.push(Diagnostic::not_yet_supported(
+                    self.file(),
+                    range,
+                    "constructors are not supported yet",
+                ));
+                return self.table.error;
             }
             // コンストラクタは Prelude にない。段階4で `data Bool` に置き換える
             Res::Builtin(Builtin::True | Builtin::False) => self.table.bool,
@@ -535,6 +552,17 @@ impl BodyCheck<'_> {
                 self.typing.locals.insert(*local, ty);
             }
             PatKind::Annot { pat, .. } => self.bind_pat(*pat, ty),
+            PatKind::Con { .. } => {
+                self.diagnostics.push(Diagnostic::not_yet_supported(
+                    self.file(),
+                    body.pats[pat].range,
+                    "constructor patterns are not supported yet",
+                ));
+                let error = self.table.error;
+                for local in body.pat_bindings(pat) {
+                    self.typing.locals.insert(local, error);
+                }
+            }
             PatKind::Wildcard | PatKind::Missing => {}
             PatKind::Unit => {
                 let unit = self.table.unit;

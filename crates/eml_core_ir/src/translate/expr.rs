@@ -145,6 +145,11 @@ impl FnLowering<'_> {
                 let ty = self.ty(id);
                 self.bind(out, "c", &ty, Rhs::MakeClosure(wrapper, Vec::new()))
             }
+            ExprKind::Path(Res::Constructor(_)) | ExprKind::Match { .. } => {
+                unreachable!(
+                    "the type checker reports constructors and `match` as not yet supported"
+                )
+            }
             ExprKind::Call {
                 callee,
                 args,

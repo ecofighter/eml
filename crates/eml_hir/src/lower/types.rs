@@ -8,13 +8,24 @@ use crate::hir::{
     EffectRef, Generics, RowRef, RowVarDecl, RowVarId, TypeRef, TypeRefId, TypeRefKind, TypeVarDecl,
 };
 
+/// 型変数と row 変数の名前の引き方。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Vars {
+    /// シグネチャ。新しい変数の名前を表に入れる。
+    Define,
+    /// 本体の注釈。シグネチャの表にある名前だけを使える (docs/spec/types.md の「推論」)。
+    Signature,
+    /// `data` の宣言のフィールド。宣言の型引数だけを使える。宣言は row 変数を持たない
+    /// (docs/spec/declarations.md の「`data` と `type`」)。
+    Data,
+}
+
 pub(super) struct TypeLowering<'a> {
     pub file: FileId,
     pub types: &'a mut Arena<TypeRef>,
     pub generics: &'a mut Generics,
     pub items: &'a ItemScope,
-    /// シグネチャなら真で、新しい変数の名前を表に入れる。本体の注釈では表にある名前だけを使える。
-    pub define: bool,
+    pub vars: Vars,
     pub diagnostics: &'a mut Vec<Diagnostic>,
 }
 
@@ -25,7 +36,10 @@ impl TypeLowering<'_> {
         };
         let range = ty.range();
         let kind = match ty {
-            ast::Type::PathType(path) => self.path(&path, range),
+            ast::Type::PathType(path) => {
+                let segments: Vec<SyntaxToken> = path.segments().collect();
+                self.applied(&segments, Vec::new(), range)
+            }
             ast::Type::ParenType(paren) => return self.lower(paren.ty(), range),
             ast::Type::FnType(function) => {
                 let param = self.lower(function.param(), range);
@@ -40,21 +54,41 @@ impl TypeLowering<'_> {
                 Some(name) => self.type_var(&name, range),
                 None => TypeRefKind::Error,
             },
-            ast::Type::AppType(_) => {
-                self.unsupported(range, "type applications are not supported yet")
+            ast::Type::AppType(app) => {
+                // 型引数を先に変換し、型の名前が誤っていても型引数の中の誤りを報告する
+                let args = app
+                    .args()
+                    .map(|arg| {
+                        let range = arg.range();
+                        self.lower(Some(arg), range)
+                    })
+                    .collect();
+                let segments: Vec<SyntaxToken> = app.segments().collect();
+                self.applied(&segments, args, range)
             }
             ast::Type::TupleType(_) => self.unsupported(range, "tuple types are not supported yet"),
         };
         self.alloc(kind, range)
     }
 
-    fn path(&mut self, path: &ast::PathType, range: TextRange) -> TypeRefKind {
-        let segments: Vec<SyntaxToken> = path.segments().collect();
-        let [name] = segments.as_slice() else {
+    fn applied(
+        &mut self,
+        segments: &[SyntaxToken],
+        args: Vec<TypeRefId>,
+        range: TextRange,
+    ) -> TypeRefKind {
+        let [name] = segments else {
             return self.unsupported(range, "qualified names are not supported yet");
         };
         match self.items.type_item(name.text()) {
-            Some(TypeItem::Type(id)) => TypeRefKind::Con(id),
+            Some(TypeItem::Type(id)) => {
+                let expected = self.items.type_params(id);
+                if args.len() != expected {
+                    self.arity_error(name.text(), expected, args.len(), range);
+                    return TypeRefKind::Error;
+                }
+                TypeRefKind::Con(id, args)
+            }
             Some(TypeItem::Effect(_)) | None => {
                 self.diagnostics.push(Diagnostic::error(
                     codes::UNDEFINED_TYPE,
@@ -64,6 +98,23 @@ impl TypeLowering<'_> {
                 TypeRefKind::Error
             }
         }
+    }
+
+    /// 型とエフェクトの型引数の個数の誤り (E1015)。
+    fn arity_error(&mut self, name: &str, expected: usize, given: usize, range: TextRange) {
+        let given = match given {
+            1 => "1 was given".to_string(),
+            n => format!("{n} were given"),
+        };
+        self.diagnostics.push(Diagnostic::error(
+            codes::TYPE_ARGUMENT_COUNT,
+            format!("`{name}` takes {}, but {given}", type_arguments(expected)),
+            Label::new(
+                self.file,
+                range,
+                format!("expected {}", type_arguments(expected)),
+            ),
+        ));
     }
 
     fn row(&mut self, row: &ast::EffectRow) -> RowRef {
@@ -92,23 +143,7 @@ impl TypeLowering<'_> {
                         .collect();
                     let expected = self.items.effect_params(id);
                     if args.len() != expected {
-                        let given = match args.len() {
-                            1 => "1 was given".to_string(),
-                            n => format!("{n} were given"),
-                        };
-                        self.diagnostics.push(Diagnostic::error(
-                            codes::TYPE_ARGUMENT_COUNT,
-                            format!(
-                                "`{}` takes {}, but {given}",
-                                name.text(),
-                                type_arguments(expected)
-                            ),
-                            Label::new(
-                                self.file,
-                                effect.range(),
-                                format!("expected {}", type_arguments(expected)),
-                            ),
-                        ));
+                        self.arity_error(name.text(), expected, args.len(), effect.range());
                         valid = false;
                         continue;
                     }
@@ -146,7 +181,7 @@ impl TypeLowering<'_> {
         {
             return TypeRefKind::Var(id);
         }
-        if self.define {
+        if self.vars == Vars::Define {
             let id = self.generics.type_vars.alloc(TypeVarDecl {
                 name: text.to_string(),
                 range,
@@ -156,7 +191,7 @@ impl TypeLowering<'_> {
         self.diagnostics.push(Diagnostic::error(
             codes::UNDEFINED_TYPE,
             format!("cannot find type variable `{text}`"),
-            Label::new(self.file, range, "not found in the signature"),
+            Label::new(self.file, range, self.undeclared()),
         ));
         TypeRefKind::Error
     }
@@ -172,7 +207,7 @@ impl TypeLowering<'_> {
         {
             return Some(id);
         }
-        if self.define {
+        if self.vars == Vars::Define {
             return Some(self.generics.row_vars.alloc(RowVarDecl {
                 name: text.to_string(),
                 range,
@@ -181,9 +216,17 @@ impl TypeLowering<'_> {
         self.diagnostics.push(Diagnostic::error(
             codes::UNDEFINED_TYPE,
             format!("cannot find row variable `{text}`"),
-            Label::new(self.file, range, "not found in the signature"),
+            Label::new(self.file, range, self.undeclared()),
         ));
         None
+    }
+
+    /// 表にない変数の名前を書いたときのラベル。
+    fn undeclared(&self) -> &'static str {
+        match self.vars {
+            Vars::Data => "not a parameter of this `data` declaration",
+            Vars::Define | Vars::Signature => "not found in the signature",
+        }
     }
 
     fn unsupported(&mut self, range: TextRange, message: &str) -> TypeRefKind {

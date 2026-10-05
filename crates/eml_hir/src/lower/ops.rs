@@ -160,16 +160,25 @@ impl BodyLowering<'_> {
             "|>" => self.pipe(lhs, rhs, range),
             "<|" => self.call(lhs, vec![rhs], None, range),
             _ => {
-                let callee = match Builtin::binary_operator(op) {
-                    Some(builtin) => self.alloc(ExprKind::Path(Res::Builtin(builtin)), op_range),
-                    None if op == "::" => self.unsupported(op_range, "lists are not supported yet"),
-                    None => {
-                        self.diagnostics.push(Diagnostic::error(
-                            codes::UNDEFINED_NAME,
-                            format!("cannot find operator `{op}`"),
-                            Label::new(self.file, op_range, "not found in this scope"),
-                        ));
-                        self.alloc(ExprKind::Missing, op_range)
+                // 中置のコンストラクタも、演算子と同じく2引数の呼び出しにする
+                let callee = if let Some(ctor) = self.items.constructor(op) {
+                    self.alloc(ExprKind::Path(Res::Constructor(ctor)), op_range)
+                } else {
+                    match Builtin::binary_operator(op) {
+                        Some(builtin) => {
+                            self.alloc(ExprKind::Path(Res::Builtin(builtin)), op_range)
+                        }
+                        None if op == "::" => {
+                            self.unsupported(op_range, "lists are not supported yet")
+                        }
+                        None => {
+                            self.diagnostics.push(Diagnostic::error(
+                                codes::UNDEFINED_NAME,
+                                format!("cannot find operator `{op}`"),
+                                Label::new(self.file, op_range, "not found in this scope"),
+                            ));
+                            self.alloc(ExprKind::Missing, op_range)
+                        }
                     }
                 };
                 self.alloc(

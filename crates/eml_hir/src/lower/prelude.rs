@@ -7,7 +7,7 @@ use eml_syntax::ast;
 use la_arena::Arena;
 
 use super::scope::ItemScope;
-use super::types::TypeLowering;
+use super::types::{TypeLowering, Vars};
 use crate::builtin::Builtin;
 use crate::hir::{Generics, Signature};
 
@@ -35,7 +35,7 @@ pub(super) fn lower_prelude(items: &ItemScope) -> HashMap<Builtin, Signature> {
             types: &mut types,
             generics: &mut generics,
             items,
-            define: true,
+            vars: Vars::Define,
             diagnostics: &mut diagnostics,
         }
         .lower(signature.ty(), range);

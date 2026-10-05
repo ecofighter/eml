@@ -10,6 +10,7 @@ pub type ExprId = Idx<Expr>;
 pub type PatId = Idx<Pat>;
 pub type LocalId = Idx<Local>;
 pub type TypeRefId = Idx<TypeRef>;
+pub type ConstructorId = Idx<Constructor>;
 
 /// HIR のノードは `SyntaxNodePtr` ではなく範囲を持つ。演算子の列を組み直した部分式のように、対応する構文ノードの
 /// ない式があるため。
@@ -17,8 +18,10 @@ pub type TypeRefId = Idx<TypeRef>;
 pub struct Module {
     pub file: FileId,
     pub functions: Arena<Function>,
-    /// 型の item。今は組み込みの `Int`、`String`、`Bool`、`Unit` だけ。段階4で `data` を足す。
+    /// 型の item。組み込みの `Int`、`String`、`Bool`、`Unit` と、`data` の宣言。
     pub types: Arena<TypeDef>,
+    /// `data` の宣言のコンストラクタ。値の名前空間に置くトップレベルの値である (docs/spec/modules.md の「名前空間」)。
+    pub constructors: Arena<Constructor>,
     /// エフェクトの item。組み込みの `IO` と、`effect` の宣言。
     pub effects: Arena<EffectDef>,
     /// エフェクトの操作。値の名前空間に置くトップレベルの値である (docs/spec/modules.md の「名前空間」)。
@@ -35,6 +38,43 @@ pub type OperationId = Idx<Operation>;
 #[derive(Debug)]
 pub struct TypeDef {
     pub name: String,
+    /// 宣言の型引数。型引数は型だけで、row 変数は持たない (docs/spec/declarations.md の「`data` と `type`」)。
+    pub generics: Generics,
+    /// フィールドの型の注釈。`Constructor::fields` が指す。
+    pub types: Arena<TypeRef>,
+    pub kind: TypeDefKind,
+}
+
+impl TypeDef {
+    /// 型引数もコンストラクタも持たない組み込みの型。
+    pub fn builtin(name: &str) -> TypeDef {
+        TypeDef {
+            name: name.to_string(),
+            generics: Generics::default(),
+            types: Arena::new(),
+            kind: TypeDefKind::Builtin,
+        }
+    }
+}
+
+#[derive(Debug)]
+pub enum TypeDefKind {
+    /// `Int`、`String` など、宣言を持たない組み込みの型。
+    Builtin,
+    /// 宣言した順のコンストラクタ。
+    Data { constructors: Vec<ConstructorId> },
+}
+
+#[derive(Debug)]
+pub struct Constructor {
+    /// 中置のコンストラクタは演算子 (`:+`) が名前である。
+    pub name: String,
+    pub range: TextRange,
+    pub ty: TypeDefId,
+    /// 宣言の中の順の番号。Core IR のタグになる。
+    pub tag: u32,
+    /// フィールドの型。属する `TypeDef` の `types` と `generics` で解決する。
+    pub fields: Vec<TypeRefId>,
 }
 
 #[derive(Debug)]
@@ -117,7 +157,7 @@ pub struct Signature {
     pub generics: Generics,
 }
 
-/// 型変数と row 変数の表。関数と操作のシグネチャが持つ。エフェクトの宣言も持つ。`data` の宣言には段階4で持たせる。
+/// 型変数と row 変数の表。関数と操作のシグネチャ、エフェクトと `data` の宣言が持つ。
 #[derive(Debug, Default)]
 pub struct Generics {
     pub type_vars: Arena<TypeVarDecl>,
@@ -141,8 +181,7 @@ pub struct Body {
 }
 
 impl Body {
-    /// 式の直接の子を、ソースの順に `f` に渡す。子を辿る規則はここだけに置き、段階4で `match` を
-    /// 足すときはここを直す。
+    /// 式の直接の子を、ソースの順に `f` に渡す。子を辿る規則はここだけに置き。
     pub fn walk_child_exprs(&self, id: ExprId, mut f: impl FnMut(ExprId)) {
         match &self.exprs[id].kind {
             ExprKind::Missing | ExprKind::Literal(_) | ExprKind::Path(_) => {}
@@ -191,6 +230,12 @@ impl Body {
                 f(*k);
                 f(*arg);
             }
+            ExprKind::Match { scrutinee, arms } => {
+                f(*scrutinee);
+                for arm in arms {
+                    f(arm.body);
+                }
+            }
             ExprKind::Drop(value) => f(*value),
         }
     }
@@ -206,6 +251,11 @@ impl Body {
         match &self.pats[pat].kind {
             PatKind::Bind(local) => out.push(*local),
             PatKind::Annot { pat, .. } => self.collect_bindings(*pat, out),
+            PatKind::Con { args, .. } => {
+                for &arg in args {
+                    self.collect_bindings(arg, out);
+                }
+            }
             PatKind::Missing | PatKind::Wildcard | PatKind::Unit => {}
         }
     }
@@ -250,6 +300,11 @@ impl Body {
                     }
                     if let Some(ret) = ret {
                         bound.extend(self.pat_bindings(ret.param));
+                    }
+                }
+                ExprKind::Match { arms, .. } => {
+                    for arm in arms {
+                        bound.extend(self.pat_bindings(arm.pat));
                     }
                 }
                 _ => {}
@@ -314,7 +369,18 @@ pub enum ExprKind {
         k: ExprId,
         arg: ExprId,
     },
+    /// 枝のパターンが束縛する変数は、その枝の本体だけで見える (docs/spec/expressions.md の「`match`」)。
+    Match {
+        scrutinee: ExprId,
+        arms: Vec<MatchArm>,
+    },
     Drop(ExprId),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MatchArm {
+    pub pat: PatId,
+    pub body: ExprId,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -353,6 +419,7 @@ pub enum Res {
     Local(LocalId),
     Function(FunctionId),
     Operation(OperationId),
+    Constructor(ConstructorId),
     Builtin(Builtin),
 }
 
@@ -383,6 +450,12 @@ pub enum PatKind {
         pat: PatId,
         ty: TypeRefId,
     },
+    /// 前置と中置のコンストラクタのパターン。引数の個数はフィールドの数と一致する。違えば E1016 を報告して `Missing`
+    /// にする。
+    Con {
+        ctor: ConstructorId,
+        args: Vec<PatId>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -400,7 +473,8 @@ pub struct TypeRef {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TypeRefKind {
     Error,
-    Con(TypeDefId),
+    /// 型引数の個数は宣言と一致する。違えば E1015 を報告して `Error` にする。
+    Con(TypeDefId, Vec<TypeRefId>),
     Var(TypeVarId),
     Fn {
         param: TypeRefId,

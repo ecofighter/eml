@@ -214,9 +214,7 @@ mod tests {
         let mut types = Arena::new();
         let mut effects = Arena::new();
         let mut con = |name: &str| Type::Con {
-            id: types.alloc(TypeDef {
-                name: name.to_string(),
-            }),
+            id: types.alloc(TypeDef::builtin(name)),
             name: name.to_string(),
         };
         let pure = Type::Fn {
@@ -251,9 +249,7 @@ mod tests {
         let mut types = Arena::new();
         let mut effects = Arena::new();
         let mut con = |name: &str| Type::Con {
-            id: types.alloc(TypeDef {
-                name: name.to_string(),
-            }),
+            id: types.alloc(TypeDef::builtin(name)),
             name: name.to_string(),
         };
         let int = con("Int");
@@ -296,9 +292,7 @@ mod tests {
         let mut types = Arena::new();
         let mut effects = Arena::new();
         let int = Type::Con {
-            id: types.alloc(TypeDef {
-                name: "Int".to_string(),
-            }),
+            id: types.alloc(TypeDef::builtin("Int")),
             name: "Int".to_string(),
         };
         let id = effects.alloc(EffectDef {

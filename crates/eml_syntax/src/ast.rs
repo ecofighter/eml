@@ -525,6 +525,100 @@ impl DropExpr {
     }
 }
 
+impl DataItem {
+    pub fn name(&self) -> Option<SyntaxToken> {
+        support::token(&self.syntax, SyntaxKind::UIDENT)
+    }
+
+    /// 型引数。選択肢は子のノードなので、直下のトークンだけを見る。
+    pub fn params(&self) -> impl Iterator<Item = SyntaxToken> {
+        self.syntax
+            .children_with_tokens()
+            .filter_map(NodeOrToken::into_token)
+            .filter(|token| token.kind() == SyntaxKind::LIDENT)
+    }
+
+    pub fn alts(&self) -> AstChildren<Alt> {
+        support::children(&self.syntax)
+    }
+}
+
+impl Alt {
+    /// 前置のコンストラクタの名前。中置のコンストラクタの左辺の型の名前は子のノードの中にあるので、ここには現れない。
+    pub fn name(&self) -> Option<SyntaxToken> {
+        support::token(&self.syntax, SyntaxKind::UIDENT)
+    }
+
+    /// 中置のコンストラクタの演算子。
+    pub fn operator(&self) -> Option<SyntaxToken> {
+        support::token(&self.syntax, SyntaxKind::CONOP)
+    }
+
+    /// フィールドの型。中置のコンストラクタでは左右の2つである。
+    pub fn fields(&self) -> AstChildren<Type> {
+        support::children(&self.syntax)
+    }
+}
+
+impl MatchExpr {
+    pub fn scrutinee(&self) -> Option<Expr> {
+        child_between(
+            &self.syntax,
+            Some(SyntaxKind::MATCH_KW),
+            Some(SyntaxKind::WITH_KW),
+        )
+    }
+
+    pub fn arms(&self) -> AstChildren<MatchArm> {
+        support::children(&self.syntax)
+    }
+}
+
+impl MatchArm {
+    pub fn pat(&self) -> Option<Pat> {
+        support::child(&self.syntax)
+    }
+
+    pub fn body(&self) -> Option<Expr> {
+        child_between(&self.syntax, Some(SyntaxKind::THIN_ARROW), None)
+    }
+}
+
+impl ConPat {
+    pub fn segments(&self) -> impl Iterator<Item = SyntaxToken> {
+        path_segments(&self.syntax)
+    }
+
+    pub fn args(&self) -> AstChildren<Pat> {
+        support::children(&self.syntax)
+    }
+}
+
+impl InfixConPat {
+    pub fn lhs(&self) -> Option<Pat> {
+        child_between(&self.syntax, None, Some(SyntaxKind::CONOP))
+    }
+
+    pub fn operator(&self) -> Option<SyntaxToken> {
+        support::token(&self.syntax, SyntaxKind::CONOP)
+    }
+
+    pub fn rhs(&self) -> Option<Pat> {
+        child_between(&self.syntax, Some(SyntaxKind::CONOP), None)
+    }
+}
+
+impl AppType {
+    /// 適用する型の名前。型引数は子のノードなので、直下のトークンだけが名前になる。
+    pub fn segments(&self) -> impl Iterator<Item = SyntaxToken> {
+        path_segments(&self.syntax)
+    }
+
+    pub fn args(&self) -> AstChildren<Type> {
+        support::children(&self.syntax)
+    }
+}
+
 fn path_segments(node: &SyntaxNode) -> impl Iterator<Item = SyntaxToken> {
     node.children_with_tokens()
         .filter_map(NodeOrToken::into_token)

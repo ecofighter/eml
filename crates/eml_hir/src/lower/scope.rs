@@ -7,13 +7,15 @@ use la_arena::Arena;
 
 use crate::builtin::Builtin;
 use crate::hir::{
-    EffectDef, EffectId, FunctionId, Generics, LangItems, OperationId, TypeDef, TypeDefId,
+    ConstructorId, EffectDef, EffectId, FunctionId, Generics, LangItems, OperationId, TypeDef,
+    TypeDefId,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum ValueItem {
     Function(FunctionId),
     Operation(OperationId),
+    Constructor(ConstructorId),
     Builtin(Builtin),
 }
 
@@ -27,11 +29,13 @@ pub(super) enum TypeItem {
 /// なければ組み込みを引く。
 #[derive(Debug, Default)]
 pub(super) struct ItemScope {
-    /// ユーザーが定義した値 (関数と操作)。
+    /// ユーザーが定義した値 (関数、操作、コンストラクタ)。
     values: HashMap<String, ValueItem>,
     types: HashMap<String, TypeItem>,
     /// エフェクトの型引数の個数。row のエフェクトの型引数の個数を確かめるのに使う (E1015)。
     effect_params: HashMap<EffectId, usize>,
+    /// 型の型引数の個数。型の適用の型引数の個数を確かめるのに使う (E1015)。
+    type_params: HashMap<TypeDefId, usize>,
 }
 
 impl ItemScope {
@@ -50,8 +54,27 @@ impl ItemScope {
             .insert(name.to_string(), ValueItem::Operation(id))
     }
 
-    pub(super) fn define_type(&mut self, name: &str, id: TypeDefId) {
+    /// コンストラクタは大文字か `:` で始まり、関数と操作は小文字で始まるので、同じ名前のユーザーの値はない。
+    pub(super) fn define_constructor(&mut self, name: &str, id: ConstructorId) {
+        self.values
+            .insert(name.to_string(), ValueItem::Constructor(id));
+    }
+
+    pub(super) fn define_type(&mut self, name: &str, id: TypeDefId, params: usize) {
         self.types.insert(name.to_string(), TypeItem::Type(id));
+        self.type_params.insert(id, params);
+    }
+
+    pub(super) fn type_params(&self, id: TypeDefId) -> usize {
+        self.type_params.get(&id).copied().unwrap_or(0)
+    }
+
+    /// パターンの先頭の名前は、コンストラクタだけから引く (docs/spec/modules.md の「名前の解決」)。
+    pub(super) fn constructor(&self, name: &str) -> Option<ConstructorId> {
+        match self.values.get(name) {
+            Some(ValueItem::Constructor(id)) => Some(*id),
+            _ => None,
+        }
     }
 
     pub(super) fn define_effect(&mut self, name: &str, id: EffectId, params: usize) {
@@ -90,10 +113,8 @@ pub(super) fn builtin_items(
     scope: &mut ItemScope,
 ) -> LangItems {
     let mut ty = |name: &str| {
-        let id = types.alloc(TypeDef {
-            name: name.to_string(),
-        });
-        scope.define_type(name, id);
+        let id = types.alloc(TypeDef::builtin(name));
+        scope.define_type(name, id, 0);
         id
     };
     let (int, string, bool, unit) = (ty("Int"), ty("String"), ty("Bool"), ty("Unit"));

@@ -27,4 +27,6 @@ pub mod codes {
     pub const MISSING_CLAUSE: ErrorCode = ErrorCode(1013);
     pub const DUPLICATE_CLAUSE: ErrorCode = ErrorCode(1014);
     pub const TYPE_ARGUMENT_COUNT: ErrorCode = ErrorCode(1015);
+    pub const CONSTRUCTOR_ARITY: ErrorCode = ErrorCode(1016);
+    pub const DUPLICATE_BINDING: ErrorCode = ErrorCode(1017);
 }

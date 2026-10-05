@@ -155,6 +155,22 @@ impl Usage<'_> {
                 sequence(&mut uses, next);
                 uses
             }
+            // 枝は `if` の枝と同じく別の経路である。枝のパターンの変数は枝の外から見えないので、枝ごとに数え終える
+            ExprKind::Match { scrutinee, arms } => {
+                let mut uses = self.expr(*scrutinee);
+                let mut branches: Option<Uses> = None;
+                for arm in arms {
+                    let mut inner = self.expr(arm.body);
+                    self.check_pat(arm.pat, &inner);
+                    remove_bound(body, arm.pat, &mut inner);
+                    branches = Some(match branches {
+                        Some(other) => join(other, inner),
+                        None => inner,
+                    });
+                }
+                sequence(&mut uses, branches.unwrap_or_default());
+                uses
+            }
             ExprKind::Drop(value) => self.expr(*value),
             ExprKind::Lambda {
                 params,
@@ -205,6 +221,11 @@ impl Usage<'_> {
                 }
             }
             PatKind::Annot { pat, .. } => self.check_pat(*pat, uses),
+            PatKind::Con { args, .. } => {
+                for &arg in args {
+                    self.check_pat(arg, uses);
+                }
+            }
             PatKind::Unit | PatKind::Missing => {}
         }
     }

@@ -359,3 +359,85 @@ fn effect_arguments_in_a_row() {
     let effect = function.row().unwrap().effects().next().unwrap();
     assert_eq!(effect.args().count(), 1);
 }
+
+#[test]
+fn data_declaration_parts() {
+    let file = source("data List a = | Nil | Cons a (List a) | a :+ List a");
+    let Some(Item::DataItem(data)) = file.items().next() else {
+        panic!("expected a data declaration");
+    };
+    assert_eq!(data.name().unwrap().text(), "List");
+    let params: Vec<String> = data
+        .params()
+        .map(|token| token.text().to_string())
+        .collect();
+    assert_eq!(params, ["a"]);
+    let alts: Vec<(Option<String>, Option<String>, Vec<SyntaxKind>)> = data
+        .alts()
+        .map(|alt| {
+            (
+                alt.name().map(|token| token.text().to_string()),
+                alt.operator().map(|token| token.text().to_string()),
+                alt.fields().map(|ty| ty.syntax().kind()).collect(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        alts,
+        [
+            (Some("Nil".to_string()), None, vec![]),
+            (Some("Cons".to_string()), None, vec![VAR_TYPE, PAREN_TYPE]),
+            (None, Some(":+".to_string()), vec![VAR_TYPE, APP_TYPE]),
+        ]
+    );
+}
+
+#[test]
+fn match_arms_and_constructor_patterns() {
+    let file = source("f o = match o with | Some (Pair a b) -> a | x :+ _ -> x");
+    let equation = first_equation(&file);
+    let Some(Expr::MatchExpr(expr)) = equation.body() else {
+        panic!("expected a match");
+    };
+    assert!(matches!(expr.scrutinee(), Some(Expr::PathExpr(_))));
+    let arms: Vec<_> = expr.arms().collect();
+    assert_eq!(arms.len(), 2);
+    let Some(Pat::ConPat(con)) = arms[0].pat() else {
+        panic!("expected a constructor pattern");
+    };
+    let segments: Vec<String> = con
+        .segments()
+        .map(|token| token.text().to_string())
+        .collect();
+    assert_eq!(segments, ["Some"]);
+    let args: Vec<SyntaxKind> = con.args().map(|pat| pat.syntax().kind()).collect();
+    assert_eq!(args, [PAREN_PAT]);
+    assert!(matches!(arms[0].body(), Some(Expr::PathExpr(_))));
+    let Some(Pat::InfixConPat(infix)) = arms[1].pat() else {
+        panic!("expected an infix constructor pattern");
+    };
+    assert!(matches!(infix.lhs(), Some(Pat::BindPat(_))));
+    assert_eq!(infix.operator().unwrap().text(), ":+");
+    assert!(matches!(infix.rhs(), Some(Pat::WildcardPat(_))));
+}
+
+#[test]
+fn type_application_parts() {
+    let file = source("f : Option (List Int) -> Int");
+    let Some(Item::Signature(signature)) = file.items().next() else {
+        panic!("expected a signature");
+    };
+    let Some(Type::FnType(function)) = signature.ty() else {
+        panic!("expected a function type");
+    };
+    let Some(Type::AppType(app)) = function.param() else {
+        panic!("expected a type application");
+    };
+    let segments: Vec<String> = app
+        .segments()
+        .map(|token| token.text().to_string())
+        .collect();
+    assert_eq!(segments, ["Option"]);
+    let args: Vec<SyntaxKind> = app.args().map(|ty| ty.syntax().kind()).collect();
+    assert_eq!(args, [PAREN_TYPE]);
+}

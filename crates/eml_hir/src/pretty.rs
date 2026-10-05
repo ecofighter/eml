@@ -6,6 +6,34 @@ use crate::hir::*;
 
 pub fn pretty(module: &Module) -> String {
     let mut out = String::new();
+    for (_, def) in module.types.iter() {
+        let TypeDefKind::Data { constructors } = &def.kind else {
+            continue;
+        };
+        let params: Vec<&str> = def
+            .generics
+            .type_vars
+            .iter()
+            .map(|(_, var)| var.name.as_str())
+            .collect();
+        if params.is_empty() {
+            writeln!(out, "data {}", def.name).unwrap();
+        } else {
+            writeln!(out, "data {} {}", def.name, params.join(" ")).unwrap();
+        }
+        let printer = Printer {
+            module,
+            generics: &def.generics,
+        };
+        for &ctor in constructors {
+            writeln!(
+                out,
+                "  | {}",
+                printer.constructor(def, &module.constructors[ctor])
+            )
+            .unwrap();
+        }
+    }
     for (id, effect) in module.effects.iter() {
         // 組み込みの `IO` の操作は組み込みの関数なので、表示しない
         if id == module.lang.io {
@@ -61,6 +89,51 @@ struct Printer<'a> {
 }
 
 impl Printer<'_> {
+    fn constructor(&self, def: &TypeDef, ctor: &Constructor) -> String {
+        // 中置のコンストラクタは、宣言と同じく2つのフィールドの間に書く
+        if ctor.name.starts_with(':') && ctor.fields.len() == 2 {
+            return format!(
+                "{} {} {}",
+                self.ty_operand(&def.types, ctor.fields[0]),
+                ctor.name,
+                self.ty_operand(&def.types, ctor.fields[1])
+            );
+        }
+        let mut text = ctor.name.clone();
+        for &field in &ctor.fields {
+            write!(text, " {}", self.ty_atom(&def.types, field)).unwrap();
+        }
+        text
+    }
+
+    /// 型の適用の引数の位置に置く型。型の適用と関数型は括弧で囲む。
+    fn ty_atom(&self, types: &la_arena::Arena<TypeRef>, id: TypeRefId) -> String {
+        let text = self.ty(types, id);
+        match &types[id].kind {
+            TypeRefKind::Fn { .. } => format!("({text})"),
+            TypeRefKind::Con(_, args) if !args.is_empty() => format!("({text})"),
+            _ => text,
+        }
+    }
+
+    /// 関数型の引数や中置のコンストラクタの両側に置く型。関数型だけを括弧で囲む。
+    fn ty_operand(&self, types: &la_arena::Arena<TypeRef>, id: TypeRefId) -> String {
+        let text = self.ty(types, id);
+        match &types[id].kind {
+            TypeRefKind::Fn { .. } => format!("({text})"),
+            _ => text,
+        }
+    }
+
+    /// 引数を持つコンストラクタのパターンを括弧で囲む。等式とラムダの引数、コンストラクタの引数の位置で使う。
+    fn pat_atom(&self, body: &Body, id: PatId) -> String {
+        let text = self.pat(body, id);
+        match &body.pats[id].kind {
+            PatKind::Con { args, .. } if !args.is_empty() => format!("({text})"),
+            _ => text,
+        }
+    }
+
     fn function(&self, function: &Function, out: &mut String) {
         match &function.signature {
             Some(signature) => writeln!(
@@ -78,7 +151,7 @@ impl Printer<'_> {
         };
         out.push_str(&function.name);
         for &param in &body.params {
-            write!(out, " {}", self.pat(body, param)).unwrap();
+            write!(out, " {}", self.pat_atom(body, param)).unwrap();
         }
         writeln!(out, " = {}", self.expr(body, body.root, 0)).unwrap();
     }
@@ -160,7 +233,7 @@ impl Printer<'_> {
             } => {
                 let mut s = "(fn".to_string();
                 for &param in params {
-                    write!(s, " {}", self.pat(body, param)).unwrap();
+                    write!(s, " {}", self.pat_atom(body, param)).unwrap();
                 }
                 write!(s, " -> {})", self.expr(body, *lambda_body, indent)).unwrap();
                 s
@@ -195,6 +268,19 @@ impl Printer<'_> {
                 self.expr(body, *k, indent),
                 self.expr(body, *arg, indent)
             ),
+            ExprKind::Match { scrutinee, arms } => {
+                let mut s = format!("(match {} with", self.expr(body, *scrutinee, indent));
+                for arm in arms {
+                    write!(
+                        s,
+                        " | {} -> {}",
+                        self.pat(body, arm.pat),
+                        self.expr(body, arm.body, indent)
+                    )
+                    .unwrap();
+                }
+                s + ")"
+            }
             ExprKind::Drop(value) => format!("(drop {})", self.expr(body, *value, indent)),
         }
     }
@@ -208,6 +294,7 @@ impl Printer<'_> {
                 let effect = &self.module.effects[operation.effect].name;
                 format!("@{effect}.{}", operation.name)
             }
+            Res::Constructor(ctor) => self.module.constructors[ctor].name.clone(),
             Res::Builtin(builtin) => builtin.name().to_string(),
         }
     }
@@ -218,6 +305,17 @@ impl Printer<'_> {
             PatKind::Bind(local) => local_name(body, *local),
             PatKind::Wildcard => "_".to_string(),
             PatKind::Unit => "()".to_string(),
+            PatKind::Con { ctor, args } => {
+                let name = &self.module.constructors[*ctor].name;
+                let args: Vec<String> = args.iter().map(|&arg| self.pat_atom(body, arg)).collect();
+                if name.starts_with(':') && args.len() == 2 {
+                    format!("{} {name} {}", args[0], args[1])
+                } else if args.is_empty() {
+                    name.clone()
+                } else {
+                    format!("{name} {}", args.join(" "))
+                }
+            }
             PatKind::Annot { pat, ty } => {
                 format!("({} : {})", self.pat(body, *pat), self.ty(&body.types, *ty))
             }
@@ -227,27 +325,23 @@ impl Printer<'_> {
     fn ty(&self, types: &la_arena::Arena<TypeRef>, id: TypeRefId) -> String {
         match &types[id].kind {
             TypeRefKind::Error => "<error>".to_string(),
-            TypeRefKind::Con(id) => self.module.types[*id].name.clone(),
+            TypeRefKind::Con(id, args) => {
+                let mut text = self.module.types[*id].name.clone();
+                for &arg in args {
+                    write!(text, " {}", self.ty_atom(types, arg)).unwrap();
+                }
+                text
+            }
             TypeRefKind::Var(id) => self.generics.type_vars[*id].name.clone(),
             TypeRefKind::Fn { param, row, ret } => {
-                let param_text = self.ty(types, *param);
-                let param_text = if matches!(types[*param].kind, TypeRefKind::Fn { .. }) {
-                    format!("({param_text})")
-                } else {
-                    param_text
-                };
+                let param_text = self.ty_operand(types, *param);
                 let effect_names = |effects: &[EffectRef]| -> Vec<String> {
                     effects
                         .iter()
                         .map(|effect| {
                             let mut text = self.module.effects[effect.effect].name.clone();
                             for &arg in &effect.args {
-                                let arg_text = self.ty(types, arg);
-                                if matches!(types[arg].kind, TypeRefKind::Fn { .. }) {
-                                    write!(text, " ({arg_text})").unwrap();
-                                } else {
-                                    write!(text, " {arg_text}").unwrap();
-                                }
+                                write!(text, " {}", self.ty_atom(types, arg)).unwrap();
                             }
                             text
                         })

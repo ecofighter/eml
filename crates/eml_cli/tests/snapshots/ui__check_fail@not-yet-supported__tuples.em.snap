@@ -1,0 +1,12 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: rendered
+input_file: tests/ui/check-fail/not-yet-supported/tuples.em
+---
+[E0004] Error: tuples are not supported yet
+   ╭─[ check-fail/not-yet-supported/tuples.em:4:14 ]
+   │
+ 4 │   let pair = (1, 2)
+   │              ───┬──  
+   │                 ╰──── this is implemented in a later stage
+───╯
