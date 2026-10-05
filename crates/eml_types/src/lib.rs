@@ -8,6 +8,9 @@ mod exhaustive;
 mod kind;
 mod scc;
 mod scheme;
+// 閉じた形は R5 の Task 6 で check_module につなぐまで、テストからだけ使われる
+#[allow(dead_code)]
+mod shape;
 mod table;
 mod ty;
 mod usage;

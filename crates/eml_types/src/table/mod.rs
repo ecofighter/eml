@@ -297,6 +297,11 @@ impl<'c> Table<'c> {
 
     pub fn fresh_rigid(&mut self, name: &str) -> (Ty, RigidVar) {
         let linearity = self.linearity.fresh();
+        self.fresh_rigid_with(name, linearity)
+    }
+
+    /// Kind 変数 `μ` を決めて rigid 変数を作る。閉じた形を自分の本体のために具体化するときに使う。
+    pub fn fresh_rigid_with(&mut self, name: &str, linearity: KindVar) -> (Ty, RigidVar) {
         self.rigids.push(RigidInfo {
             name: name.to_string(),
             linearity,
@@ -305,14 +310,32 @@ impl<'c> Table<'c> {
         (self.alloc(TyShape::Rigid(rigid)), rigid)
     }
 
+    pub fn rigid_name(&self, rigid: RigidVar) -> &str {
+        &self.rigids[rigid.0 as usize].name
+    }
+
     pub fn rigid_linearity(&self, rigid: RigidVar) -> KindVar {
         self.rigids[rigid.0 as usize].linearity
     }
 
     pub fn fresh_rigid_row(&mut self, name: &str) -> RowVar {
-        let var = self.fresh_row_var();
+        let multiplicity = self.multiplicity.fresh();
+        self.fresh_rigid_row_with(name, multiplicity)
+    }
+
+    /// Kind 変数 `σ` を決めて rigid な row 変数を作る。
+    pub fn fresh_rigid_row_with(&mut self, name: &str, multiplicity: KindVar) -> RowVar {
+        let var = self.fresh_row_var_with(multiplicity);
         self.row_vars[var.0 as usize].rigid = Some(name.to_string());
         var
+    }
+
+    /// rigid な row 変数の名前。
+    pub fn row_name(&self, var: RowVar) -> &str {
+        self.row_vars[var.0 as usize]
+            .rigid
+            .as_deref()
+            .expect("only rigid row variables have names")
     }
 
     pub fn is_rigid_row(&self, var: RowVar) -> bool {

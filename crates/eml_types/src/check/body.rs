@@ -10,7 +10,8 @@ use la_arena::ArenaMap;
 
 use crate::codes;
 use crate::kind::{KindOrigin, KindReason};
-use crate::scheme::{Rigids, Scheme, lower_type};
+use crate::scheme::Scheme;
+use crate::shape::{Rigids, lower_type};
 use crate::table::{Row, Table, Tail, Ty, TyShape, UnifyError};
 
 use super::equality::Comparison;

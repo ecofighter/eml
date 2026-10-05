@@ -11,7 +11,8 @@ use la_arena::ArenaMap;
 
 use crate::context::Context;
 use crate::kind::{Bound, KindReason, KindVar};
-use crate::scheme::{Rigids, Scheme, lower_constructor, lower_operation, lower_signature};
+use crate::scheme::Scheme;
+use crate::shape::{Rigids, lower_constructor, lower_operation, lower_signature};
 use crate::table::{Row, Table, TyShape};
 use crate::ty::{EffectLabel, KindConstraint, KindTerm, Linearity, Multiplicity, RowTerm, Type};
 use crate::{BodyTypes, TypedModule, carry, codes, exhaustive, scc, usage};

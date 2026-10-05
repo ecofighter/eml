@@ -2,7 +2,7 @@
 
 use eml_hir::{EffectId, ExprId, OpClause, OpMultiplicity, ReturnClause};
 
-use crate::scheme::{Rigids, lower_operation};
+use crate::shape::{Rigids, lower_operation};
 use crate::table::{ArrowLin, Label, Row, Tail, Ty, TyShape};
 use crate::ty::Linearity;
 
