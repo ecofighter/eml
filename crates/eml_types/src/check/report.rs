@@ -88,7 +88,7 @@ impl BodyCheck<'_, '_> {
         param: PatId,
         index: usize,
     ) -> Diagnostic {
-        let expected = self.table.display(expected);
+        let expected = self.table.export(expected);
         Diagnostic::error(
             codes::TYPE_MISMATCH,
             format!(
@@ -157,8 +157,8 @@ impl BodyCheck<'_, '_> {
             Err(UnifyError::EffectArgs { left, right }) => {
                 // 呼び出し先の row が左辺である (`Table::include_row`)
                 if report {
-                    let found = self.table.display_label(&left);
-                    let allowed = self.table.display_label(&right);
+                    let found = self.table.export_label(&left);
+                    let allowed = self.table.export_label(&right);
                     self.diagnostics.push(
                         Diagnostic::error(
                             codes::TYPE_MISMATCH,
@@ -262,8 +262,8 @@ impl BodyCheck<'_, '_> {
 
     pub(super) fn mismatch(&mut self, range: TextRange, expected: Ty, found: Ty, origin: &Origin) {
         let file = self.file();
-        let expected = self.table.display(expected);
-        let found = self.table.display(found);
+        let expected = self.table.export(expected);
+        let found = self.table.export(found);
         let mut diagnostic = Diagnostic::error(
             codes::TYPE_MISMATCH,
             "mismatched types",

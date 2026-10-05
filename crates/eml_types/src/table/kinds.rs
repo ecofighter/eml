@@ -270,17 +270,16 @@ impl Table<'_> {
         self.multiplicity.copy_constraints(constraints, map);
     }
 
-    /// すべての Kind の制約を解き、線形性の解を覚える。`export` が式ごとに解き直さずに済むようにするため。
+    /// すべての Kind の制約を解く。
     /// 定数の上限を超えた制約と、破れた持ち越しの制約の由来を、位置の順に重複なく返す。由来のない制約は返さない。本体の検査は、単一化 (row
     /// の包含を含む) と参照の具体化の制約にかならず由来を付けるので、由来のない制約は次の2つに限る。
     /// 1つは宣言の型 (シグネチャ、組み込み、操作) から作る制約で、具体化のたびに参照した場所を由来にして複写する。
     /// もう1つは、報告済みの誤りのある本体で使用回数のパスが作る制約である。誤りのあるプログラムは実行しないので、
     /// 返さなくても困らない (docs/implementation/architecture.md)。
-    pub fn solve_kinds(&mut self) -> Vec<KindOrigin> {
+    pub fn solve_kinds(&self) -> Vec<KindOrigin> {
         let (lin, lin_violated) = self.linearity.solve();
         let (mult, mult_violated) = self.multiplicity.solve();
         let carry_violated = crate::kind::violated_carries(&self.carries, &lin, &mult);
-        self.lin_solution = Some(lin);
         let mut origins: Vec<KindOrigin> = lin_violated
             .iter()
             .filter_map(|&index| self.linearity.origin(index).cloned())

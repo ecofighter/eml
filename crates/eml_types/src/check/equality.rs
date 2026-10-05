@@ -47,7 +47,7 @@ impl BodyCheck<'_, '_> {
             if body_has_error && matches!(self.table.shape(param), TyShape::Var(_)) {
                 continue;
             }
-            let operand = self.table.display(param);
+            let operand = self.table.export(param);
             // 報告済みの誤りの跡には診断を重ねない (docs/spec/diagnostics.md の「連鎖する診断の抑止」)
             if operand.contains_error() {
                 continue;

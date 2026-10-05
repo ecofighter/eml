@@ -45,9 +45,10 @@ pub enum Type {
     },
     /// 閉じたレコード。`Unit` は空のレコード、タプルは数字ラベルのレコードである (docs/spec/records.md)。
     Record(Vec<(String, Type)>),
+    /// 関数型。矢印の線形性は持たない。後の段階は線形性を読まず、線形性は Kind の解に依存するので、持たせると本体の型を
+    /// Kind を解くまで確定できなくなる (docs/implementation/architecture.md の「`eml_types` の内部」)。
     Fn {
         param: Box<Type>,
-        linearity: Linearity,
         effects: Vec<EffectLabel>,
         /// row の末尾。`None` なら閉じた row である。
         tail: Option<RowTail>,
@@ -62,7 +63,6 @@ pub enum Type {
         /// handle の外側の row。`resume` が起こすエフェクトである。
         effects: Vec<EffectLabel>,
         tail: Option<RowTail>,
-        linearity: Linearity,
     },
     /// シグネチャの型変数。
     Rigid(String),
@@ -250,7 +250,6 @@ mod tests {
         };
         let pure = Type::Fn {
             param: Box::new(con("Int")),
-            linearity: Linearity::Unr,
             effects: vec![],
             tail: None,
             ret: Box::new(con("Bool")),
@@ -266,7 +265,6 @@ mod tests {
         };
         let io = Type::Fn {
             param: Box::new(pure.clone()),
-            linearity: Linearity::Unr,
             effects: vec![io],
             tail: None,
             ret: Box::new(Type::unit()),
@@ -300,13 +298,11 @@ mod tests {
             ret: Box::new(unit.clone()),
             effects: vec![io],
             tail: None,
-            linearity: Linearity::Lin,
         };
         assert_eq!(k.to_string(), "Cont Int Unit <IO>");
         let pure = Type::Cont {
             arg: Box::new(Type::Fn {
                 param: Box::new(int.clone()),
-                linearity: Linearity::Unr,
                 effects: vec![],
                 tail: None,
                 ret: Box::new(int),
@@ -314,7 +310,6 @@ mod tests {
             ret: Box::new(unit),
             effects: vec![],
             tail: Some(RowTail::Rigid("e".to_string())),
-            linearity: Linearity::Lin,
         };
         assert_eq!(pure.to_string(), "Cont (Int -> Int) Unit <e>");
     }
@@ -335,14 +330,12 @@ mod tests {
         });
         let function = Type::Fn {
             param: Box::new(int.clone()),
-            linearity: Linearity::Unr,
             effects: vec![],
             tail: None,
             ret: Box::new(int.clone()),
         };
         let ty = Type::Fn {
             param: Box::new(Type::unit()),
-            linearity: Linearity::Unr,
             effects: vec![
                 EffectLabel {
                     id,

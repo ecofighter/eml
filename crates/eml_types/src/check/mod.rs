@@ -244,10 +244,9 @@ fn check_main(
     if has_error(&signature.types, signature.ty) {
         return;
     }
-    let found = table.display(scheme.ty);
+    let found = table.export(scheme.ty);
     let expected = Type::Fn {
         param: Box::new(Type::unit()),
-        linearity: Linearity::Unr,
         effects: vec![EffectLabel {
             id: module.lang.io,
             name: module.effects[module.lang.io].name.clone(),
