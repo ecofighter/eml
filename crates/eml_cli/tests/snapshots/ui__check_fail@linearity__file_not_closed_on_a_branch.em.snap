@@ -1,0 +1,19 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: rendered
+input_file: tests/ui/check-fail/linearity/file_not_closed_on_a_branch.em
+---
+[E3003] Error: `f` must be used exactly once, but some paths do not use it
+   ╭─[ check-fail/linearity/file_not_closed_on_a_branch.em:4:7 ]
+   │
+ 4 │   let f = open "input.txt"
+   │       ┬  
+   │       ╰── `f` is bound here
+ 5 │   if True then close f else println "kept"
+   │                             ───────┬──────  
+   │                                    ╰──────── this branch does not use `f`
+   │ 
+   │ Help: pass `f` to `drop`
+   │ 
+   │ Note: linear values, such as files, the continuation of a `once` operation and closures that capture one, must be used exactly once
+───╯

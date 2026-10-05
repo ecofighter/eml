@@ -1,0 +1,20 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: rendered
+input_file: tests/ui/check-fail/linearity/file_shadowed.em
+---
+[E3003] Error: `f` must be used exactly once, but it is not used
+   ╭─[ check-fail/linearity/file_shadowed.em:4:7 ]
+   │
+ 4 │   let f = open "a.txt"
+   │       ┬  
+   │       ╰── `f` is bound here
+   │ 
+ 6 │   close f
+   │          │ 
+   │          ╰─ `f` is not used before the end of this scope
+   │ 
+   │ Help: pass `f` to `drop`
+   │ 
+   │ Note: linear values, such as files, the continuation of a `once` operation and closures that capture one, must be used exactly once
+───╯
