@@ -230,7 +230,9 @@ impl<'a> Usage<'a> {
                 uses
             }
             // 枝は `if` の枝と同じく別の経路である。枝のパターンの変数は枝の外から見えないので、枝ごとに数え終える
-            ExprKind::Match { scrutinee, arms } => {
+            ExprKind::Match {
+                scrutinee, arms, ..
+            } => {
                 let mut uses = self.expr(*scrutinee);
                 let mut branches = Vec::new();
                 for arm in arms {

@@ -272,7 +272,9 @@ impl Printer<'_> {
                 self.expr(body, *k, indent),
                 self.expr(body, *arg, indent)
             ),
-            ExprKind::Match { scrutinee, arms } => {
+            ExprKind::Match {
+                scrutinee, arms, ..
+            } => {
                 let mut s = format!("(match {} with", self.expr(body, *scrutinee, indent));
                 for arm in arms {
                     write!(

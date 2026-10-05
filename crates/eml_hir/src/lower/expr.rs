@@ -65,16 +65,19 @@ impl<'a> BodyLowering<'a> {
         }
     }
 
-    pub(super) fn lower_equation(mut self, equation: &ast::Equation) -> Body {
-        let range = equation.range();
+    /// 等式が1つなら、引数のパターンをそのまま関数の引数にする。2つ以上なら、引数を隠れた変数で受け、引数のタプルに
+    /// 対する `match` に脱糖する (docs/spec/declarations.md)。
+    pub(super) fn lower_equations(mut self, equations: &[(ast::Equation, TextRange)]) -> Body {
         let reported = self.diagnostics.len();
-        // 等式の引数の並びは、1つのパターンと同じく1つの組である (E1017)
-        self.group_start = self.scope.len();
-        let params = equation
-            .params()
-            .map(|pat| self.lower_pat_in_group(Some(pat), range))
-            .collect();
-        let root = self.lower_expr(equation.body(), range);
+        let (params, root) = match equations {
+            [(equation, _)] => {
+                let range = equation.range();
+                let params = self.lower_param_group(equation.params(), range);
+                let root = self.lower_expr(equation.body(), range);
+                (params, root)
+            }
+            _ => self.lower_equation_match(equations),
+        };
         Body {
             params,
             root,
@@ -84,6 +87,113 @@ impl<'a> BodyLowering<'a> {
             types: self.types,
             has_errors: self.diagnostics.len() > reported,
         }
+    }
+
+    fn lower_equation_match(
+        &mut self,
+        equations: &[(ast::Equation, TextRange)],
+    ) -> (Vec<PatId>, ExprId) {
+        let (first, first_name) = &equations[0];
+        let name = first
+            .name()
+            .map_or(String::new(), |name| name.text().to_string());
+        let first_params: Vec<ast::Pat> = first.params().collect();
+        let arity = first_params.len();
+        // 隠れた変数の範囲は、最初の等式のその位置のパターンである。引数が矢印より多いときの診断がここを指す
+        let (params, scrutinees): (Vec<PatId>, Vec<ExprId>) = first_params
+            .iter()
+            .enumerate()
+            .map(|(position, pat)| self.hidden_param(&format!("${position}"), pat.range()))
+            .unzip();
+        let whole = first
+            .range()
+            .cover(equations[equations.len() - 1].0.range());
+        let scrutinee = match scrutinees.as_slice() {
+            [] => self.alloc(ExprKind::Literal(Literal::Unit), *first_name),
+            [one] => *one,
+            _ => self.alloc(ExprKind::Tuple(scrutinees), whole),
+        };
+        let mut arms = Vec::new();
+        for (equation, name_range) in equations {
+            let mark = self.scope.len();
+            let pats = self.lower_param_group(equation.params(), equation.range());
+            let body = self.lower_expr(equation.body(), equation.range());
+            self.scope.truncate(mark);
+            if pats.len() != arity {
+                self.diagnostics.push(
+                    Diagnostic::error(
+                        codes::EQUATION_ARITY_MISMATCH,
+                        format!("the equations of `{name}` take different numbers of arguments"),
+                        Label::new(
+                            self.file,
+                            *name_range,
+                            format!("expected {}", arguments(arity)),
+                        ),
+                    )
+                    .with_secondary(Label::new(
+                        self.file,
+                        *first_name,
+                        "the first equation",
+                    )),
+                );
+                continue;
+            }
+            let pat = match pats.as_slice() {
+                [] => self.pats.alloc(Pat {
+                    kind: PatKind::Unit,
+                    range: *name_range,
+                }),
+                [one] => *one,
+                _ => {
+                    let range = self.pats[pats[0]]
+                        .range
+                        .cover(self.pats[pats[pats.len() - 1]].range);
+                    self.pats.alloc(Pat {
+                        kind: PatKind::Tuple(pats),
+                        range,
+                    })
+                }
+            };
+            arms.push(MatchArm { pat, body });
+        }
+        let root = self.alloc(
+            ExprKind::Match {
+                scrutinee,
+                arms,
+                source: MatchSource::Equations,
+            },
+            whole,
+        );
+        (params, root)
+    }
+
+    /// 引数の並びを1つの組として変換する。組の中で同じ名前を2回束縛したら E1017 にする。
+    pub(super) fn lower_param_group(
+        &mut self,
+        pats: impl IntoIterator<Item = ast::Pat>,
+        fallback: TextRange,
+    ) -> Vec<PatId> {
+        let outer = std::mem::replace(&mut self.group_start, self.scope.len());
+        let params = pats
+            .into_iter()
+            .map(|pat| self.lower_pat_in_group(Some(pat), fallback))
+            .collect();
+        self.group_start = outer;
+        params
+    }
+
+    /// 脱糖で作る引数。名前は `$` で始まり、ソースの名前とぶつからない。スコープに積まないので、ソースからは引けない。
+    pub(super) fn hidden_param(&mut self, name: &str, range: TextRange) -> (PatId, ExprId) {
+        let local = self.locals.alloc(Local {
+            name: name.to_string(),
+            range,
+        });
+        let pat = self.pats.alloc(Pat {
+            kind: PatKind::Bind(local),
+            range,
+        });
+        let path = self.alloc(ExprKind::Path(Res::Local(local)), range);
+        (pat, path)
     }
 
     pub(super) fn lower_expr(&mut self, expr: Option<ast::Expr>, fallback: TextRange) -> ExprId {
@@ -322,7 +432,14 @@ impl<'a> BodyLowering<'a> {
                 MatchArm { pat, body }
             })
             .collect();
-        self.alloc(ExprKind::Match { scrutinee, arms }, range)
+        self.alloc(
+            ExprKind::Match {
+                scrutinee,
+                arms,
+                source: MatchSource::Expr,
+            },
+            range,
+        )
     }
 
     /// 1つのパターンを1つの組として変換する。

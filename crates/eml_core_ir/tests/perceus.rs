@@ -285,3 +285,17 @@ fn a_discarded_call_result_is_released() {
     }
     "#);
 }
+
+#[test]
+fn equations_allocate_no_tuple_for_their_arguments() {
+    // 等式の脱糖が作る引数のタプルは、simplify の K1 と DCE で消える
+    let text =
+        "f : Int -> Int -> Int\nf 0 y = y\nf x y = x + y\n\nmain : Unit -> <IO> Unit\nmain () = ()";
+    let core = core_text(text, Pass::Perceus);
+    let start = core.find("fn f(").expect("the function");
+    let f = &core[start
+        ..core[start..]
+            .find("\n}\n")
+            .map_or(core.len(), |end| start + end)];
+    assert!(!f.contains("con #"), "{f}");
+}

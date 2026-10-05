@@ -1,6 +1,6 @@
 mod common;
 
-use common::lower_text;
+use common::{diagnostics, lower_text};
 
 #[test]
 fn a_signature_and_an_equation_become_a_function() {
@@ -82,12 +82,11 @@ fn signatures_and_equations_are_paired_by_name() {
     c : Int
     c = 2
     d : Int
-    d = 3
+    d = (match () with | () -> 3 | () -> 4)
     ---
     E1005 1:1 `a` has a signature but no equation
     E1004 2:1 `b` has no type signature
     E1003 5:1 `c` is defined more than once
-    E0004 8:1 defining a function with several equations is not supported yet
     ");
 }
 
@@ -188,4 +187,46 @@ fn a_lambda_can_be_the_last_argument() {
     g : Int -> Int
     g n#0 = (@call n#0 (fn x#1 -> (+ x#1 1)))
     ");
+}
+
+#[test]
+fn several_equations_become_a_match_on_the_arguments() {
+    let text = "f : Int -> Int -> Int\nf 0 y = y\nf x y = x + y";
+    insta::assert_snapshot!(lower_text(text), @r"
+    f : Int -> Int -> Int
+    f $0#0 $1#1 = (match ($0#0, $1#1) with | (0, y#2) -> y#2 | (x#3, y#4) -> (+ x#3 y#4))
+    ");
+}
+
+#[test]
+fn equations_of_one_argument_match_on_it_directly() {
+    let text = "g : Int -> Int\ng 0 = 1\ng n = n";
+    insta::assert_snapshot!(lower_text(text), @r"
+    g : Int -> Int
+    g $0#0 = (match $0#0 with | 0 -> 1 | n#1 -> n#1)
+    ");
+}
+
+#[test]
+fn equations_must_be_consecutive_and_follow_their_signature() {
+    let text = "f : Int -> Int\n\ng : Int\ng = 1\n\nf 0 = 1\n\nh : Int\nh = 2\n\nf n = n";
+    assert_eq!(
+        diagnostics(text),
+        vec![
+            "E1019 6:1 the signature of `f` is not followed by its equations",
+            "E1018 11:1 the equations of `f` are not consecutive",
+        ]
+    );
+}
+
+#[test]
+fn equations_must_take_the_same_number_of_arguments() {
+    let text = "f : Int -> Int -> Int\nf 0 y = y\nf x = x\nf x y = undefined_name";
+    assert_eq!(
+        diagnostics(text),
+        vec![
+            "E1020 3:1 the equations of `f` take different numbers of arguments",
+            "E1001 4:9 cannot find value `undefined_name`",
+        ]
+    );
 }

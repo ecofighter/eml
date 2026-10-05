@@ -164,7 +164,9 @@ impl BodyCheck<'_> {
                 );
                 self.typing.exprs.insert(id, expected);
             }
-            ExprKind::Match { scrutinee, arms } => {
+            ExprKind::Match {
+                scrutinee, arms, ..
+            } => {
                 self.match_expr(*scrutinee, arms, Expectation::Has(expected, origin));
                 self.typing.exprs.insert(id, expected);
             }
@@ -248,9 +250,9 @@ impl BodyCheck<'_> {
                 ret,
             } => self.handle(id, *effect, *handled, clauses, ret.as_ref()),
             ExprKind::Resume { k, arg } => self.resume(id, *k, *arg),
-            ExprKind::Match { scrutinee, arms } => {
-                self.match_expr(*scrutinee, arms, Expectation::None)
-            }
+            ExprKind::Match {
+                scrutinee, arms, ..
+            } => self.match_expr(*scrutinee, arms, Expectation::None),
             ExprKind::Tuple(elements) => {
                 let fields = elements
                     .iter()

@@ -1,0 +1,57 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: rendered
+input_file: tests/ui/check-fail/names/equation_order.em
+---
+[E1019] Error: the signature of `f` is not followed by its equations
+   ╭─[ check-fail/names/equation_order.em:7:1 ]
+   │
+ 7 │ f 0 = 1
+   │ ┬  
+   │ ╰── this equation is not right after the signature of `f`
+   │
+   ├─[ check-fail/names/equation_order.em:7:1 ]
+   │
+ 2 │ f : Int -> Int
+   │ ┬  
+   │ ╰── the signature is here
+   │ 
+   │ Help: move the equations of `f` right after its signature
+───╯
+[E1018] Error: the equations of `f` are not consecutive
+    ╭─[ check-fail/names/equation_order.em:12:1 ]
+    │
+ 12 │ f n = n
+    │ ┬  
+    │ ╰── this equation is separated from the ones above
+    │
+    ├─[ check-fail/names/equation_order.em:12:1 ]
+    │
+  7 │ f 0 = 1
+    │ ┬  
+    │ ╰── the previous equation
+    │ 
+    │ Help: put every equation of `f` together, right after its signature
+────╯
+[E1020] Error: the equations of `k` take different numbers of arguments
+    ╭─[ check-fail/names/equation_order.em:16:1 ]
+    │
+ 16 │ k x = x
+    │ ┬  
+    │ ╰── expected 2 arguments
+    │
+    ├─[ check-fail/names/equation_order.em:16:1 ]
+    │
+ 15 │ k 0 y = y
+    │ ┬  
+    │ ╰── the first equation
+────╯
+[E4001] Error: `match` does not cover every value
+    ╭─[ check-fail/names/equation_order.em:15:1 ]
+    │
+ 15 │ k 0 y = y
+    │ ──┬──  
+    │   ╰──── no arm matches some values
+    │ 
+    │ Note: not covered: `(_, _)`
+────╯

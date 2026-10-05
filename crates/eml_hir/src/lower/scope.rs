@@ -257,6 +257,7 @@ mod tests {
             name: "not".to_string(),
             name_range: Default::default(),
             signature_name_range: None,
+            equation_ranges: Vec::new(),
             signature: None,
             body: None,
         });

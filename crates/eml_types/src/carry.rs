@@ -197,7 +197,9 @@ impl Carrying<'_> {
                 }
                 self.parts(&[*k, *arg], after)
             }
-            ExprKind::Match { scrutinee, arms } => {
+            ExprKind::Match {
+                scrutinee, arms, ..
+            } => {
                 let mut branches = after.clone();
                 for arm in arms {
                     let mut live = self.expr(arm.body, after);

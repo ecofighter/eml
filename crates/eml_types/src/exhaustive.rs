@@ -132,9 +132,9 @@ impl<'a> Exhaustive<'a> {
         let body = self.body;
         for (_, expr) in body.exprs.iter() {
             match &expr.kind {
-                ExprKind::Match { scrutinee, arms } => {
-                    self.match_expr(expr.range, *scrutinee, arms)
-                }
+                ExprKind::Match {
+                    scrutinee, arms, ..
+                } => self.match_expr(expr.range, *scrutinee, arms),
                 ExprKind::Block { stmts, .. } => {
                     for stmt in stmts {
                         if let Stmt::Let { pat, .. } = stmt {

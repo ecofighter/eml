@@ -81,17 +81,30 @@ pub fn lower(file: FileId, source: &ast::SourceFile) -> (Module, Vec<Diagnostic>
             signature,
             equations,
         } = definition;
-        let mut equations = equations.into_iter();
-        let first_equation = equations.next();
-        for (_, _, range) in equations {
-            // 複数の等式は段階6で `match` に脱糖する
-            diagnostics.push(Diagnostic::not_yet_supported(
-                file,
-                range,
-                "defining a function with several equations is not supported yet",
-            ));
+        // 等式は連続していなければならない (docs/spec/declarations.md)。離れていても、網羅性の誤りを連鎖させないよう
+        // ソースの順に1つの関数として扱う
+        for pair in equations.windows(2) {
+            let (previous_index, _, previous_range) = &pair[0];
+            let (index, _, range) = &pair[1];
+            if *index != previous_index + 1 {
+                diagnostics.push(
+                    Diagnostic::error(
+                        codes::NON_CONSECUTIVE_EQUATIONS,
+                        format!("the equations of `{name}` are not consecutive"),
+                        Label::new(
+                            file,
+                            *range,
+                            "this equation is separated from the ones above",
+                        ),
+                    )
+                    .with_secondary(Label::new(file, *previous_range, "the previous equation"))
+                    .with_help(format!(
+                        "put every equation of `{name}` together, right after its signature"
+                    )),
+                );
+            }
         }
-        match (&signature, &first_equation) {
+        match (&signature, equations.first()) {
             (Some((_, _, range)), None) => diagnostics.push(Diagnostic::error(
                 codes::MISSING_EQUATION,
                 format!("`{name}` has a signature but no equation"),
@@ -111,15 +124,24 @@ pub fn lower(file: FileId, source: &ast::SourceFile) -> (Module, Vec<Diagnostic>
                     "add a signature `{name} : ...` on the line before this equation"
                 )),
             ),
-            (Some((signature_index, _, _)), Some((equation_index, _, range)))
+            (Some((signature_index, _, signature_range)), Some((equation_index, _, range)))
                 if *equation_index != signature_index + 1 =>
             {
-                // 離れたシグネチャと等式は段階6で E1xxx の検査にする
-                diagnostics.push(Diagnostic::not_yet_supported(
-                    file,
-                    *range,
-                    "an equation that does not directly follow its signature is not supported yet",
-                ));
+                diagnostics.push(
+                    Diagnostic::error(
+                        codes::SIGNATURE_NOT_ADJACENT,
+                        format!("the signature of `{name}` is not followed by its equations"),
+                        Label::new(
+                            file,
+                            *range,
+                            format!("this equation is not right after the signature of `{name}`"),
+                        ),
+                    )
+                    .with_secondary(Label::new(file, *signature_range, "the signature is here"))
+                    .with_help(format!(
+                        "move the equations of `{name}` right after its signature"
+                    )),
+                );
             }
             _ => {}
         }
@@ -144,13 +166,14 @@ pub fn lower(file: FileId, source: &ast::SourceFile) -> (Module, Vec<Diagnostic>
                 generics,
             }
         });
-        let name_range = first_equation
-            .as_ref()
+        let name_range = equations
+            .first()
             .map_or(first_range, |(_, _, range)| *range);
         let id = functions.alloc(Function {
             name: name.clone(),
             name_range,
             signature_name_range,
+            equation_ranges: equations.iter().map(|(_, _, range)| *range).collect(),
             signature,
             body: None,
         });
@@ -162,14 +185,20 @@ pub fn lower(file: FileId, source: &ast::SourceFile) -> (Module, Vec<Diagnostic>
                 first_range,
             ));
         }
-        if let Some((_, equation, _)) = first_equation {
-            pending.push((id, equation));
+        if !equations.is_empty() {
+            pending.push((
+                id,
+                equations
+                    .into_iter()
+                    .map(|(_, equation, range)| (equation, range))
+                    .collect::<Vec<_>>(),
+            ));
         }
     }
     // fixity の宣言は位置によらずモジュール全体の組み直しに効くので、本体の変換の前に、すべての値を定義してから読む
     declare_fixities(file, &fixity_items, &mut scope, &mut diagnostics);
     // 本体は、すべての関数の名前がそろってから変換する。後ろで定義した関数も呼べるようにするため
-    for (id, equation) in pending {
+    for (id, equations) in pending {
         // シグネチャがなければ、本体の注釈は型変数を引けない (docs/spec/types.md の「推論」)
         let mut no_generics = Generics::default();
         let generics = match &mut functions[id].signature {
@@ -186,7 +215,7 @@ pub fn lower(file: FileId, source: &ast::SourceFile) -> (Module, Vec<Diagnostic>
             generics,
             &mut diagnostics,
         )
-        .lower_equation(&equation);
+        .lower_equations(&equations);
         functions[id].body = Some(body);
     }
     diagnostics.sort_by_key(|d| d.primary.range.start());

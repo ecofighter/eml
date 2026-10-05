@@ -132,6 +132,8 @@ pub struct Function {
     /// シグネチャの名前の位置。網羅されていない等式の診断 (E4002) は、ここを primary にする
     /// (docs/spec/diagnostics.md の「網羅性の診断」)。
     pub signature_name_range: Option<TextRange>,
+    /// 等式の関数名の位置。ソースの順である。網羅されていない等式の診断 (E4002) の secondary が指す。
+    pub equation_ranges: Vec<TextRange>,
     /// なければ `None` で、E1004 は報告済み。
     pub signature: Option<Signature>,
     /// 等式がなければ `None` で、E1005 は報告済み。
@@ -239,7 +241,9 @@ impl Body {
                 f(*k);
                 f(*arg);
             }
-            ExprKind::Match { scrutinee, arms } => {
+            ExprKind::Match {
+                scrutinee, arms, ..
+            } => {
                 f(*scrutinee);
                 for arm in arms {
                     f(arm.body);
@@ -394,13 +398,24 @@ pub enum ExprKind {
         arg: ExprId,
     },
     /// 枝のパターンが束縛する変数は、その枝の本体だけで見える (docs/spec/expressions.md の「`match`」)。
+    /// 等式が2つ以上ある関数の本体は、引数のタプル (引数が1つならその変数、0個なら `()`) に対する `Equations` の
+    /// `match` である (docs/spec/declarations.md)。
     Match {
         scrutinee: ExprId,
         arms: Vec<MatchArm>,
+        source: MatchSource,
     },
     /// 要素は2つ以上である。数字ラベルのレコードへの変換は型検査で行う (docs/spec/records.md)。
     Tuple(Vec<ExprId>),
     Drop(ExprId),
+}
+
+/// `match` の由来。等式から作った `match` は、網羅性の検査が `match` 式ではなく等式として報告する
+/// (docs/spec/diagnostics.md の「網羅性の診断」)。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MatchSource {
+    Expr,
+    Equations,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

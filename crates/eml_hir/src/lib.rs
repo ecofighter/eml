@@ -29,6 +29,9 @@ pub mod codes {
     pub const TYPE_ARGUMENT_COUNT: ErrorCode = ErrorCode(1015);
     pub const CONSTRUCTOR_ARITY: ErrorCode = ErrorCode(1016);
     pub const DUPLICATE_BINDING: ErrorCode = ErrorCode(1017);
+    pub const NON_CONSECUTIVE_EQUATIONS: ErrorCode = ErrorCode(1018);
+    pub const SIGNATURE_NOT_ADJACENT: ErrorCode = ErrorCode(1019);
+    pub const EQUATION_ARITY_MISMATCH: ErrorCode = ErrorCode(1020);
     pub const DUPLICATE_FIXITY: ErrorCode = ErrorCode(1021);
     pub const FIXITY_WITHOUT_DEFINITION: ErrorCode = ErrorCode(1022);
 }

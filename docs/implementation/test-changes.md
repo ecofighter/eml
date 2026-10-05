@@ -173,3 +173,4 @@
   - `eml_core_ir/tests/perceus.rs` の `a_split_switch_still_unpacks_the_arm_with_fields` (`a_split_arm_with_fields_still_drops_its_unused_field` に改名)
 - ユーザーが定義した `::` は Prelude の `::` を隠し、宣言がなければ `infixl 9` になるため、`eml_hir/tests/data.rs` の `infix_constructors_and_a_declared_cons` のソースに `infixr 5 ::` を足した。期待値は変わらない (種類1)
 - 演算子の定義を受け付けるようになったので、`eml_hir/tests/lower.rs` の `operator_definitions_and_qualified_names` から、演算子の定義の E0004 の2行が消え、`<+>` の関数が出力に現れるようになった (種類1)。シグネチャが `Int` で引数が2つの型の誤りは、型検査が報告する
+- 複数の等式を `match` に脱糖するようになったので、`eml_hir/tests/lower.rs` の `signatures_and_equations_are_paired_by_name` から、複数の等式の E0004 の行が消え、`d` が `d = (match () with | () -> 3 | () -> 4)` と表示されるようになった (種類1)

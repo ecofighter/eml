@@ -355,7 +355,9 @@ impl FnLowering<'_> {
                     ],
                 }
             }
-            ExprKind::Match { scrutinee, arms } => self.lower_match(*scrutinee, arms, exit, out),
+            ExprKind::Match {
+                scrutinee, arms, ..
+            } => self.lower_match(*scrutinee, arms, exit, out),
             ExprKind::Block { stmts, tail, .. } => {
                 self.stmts(stmts, out);
                 match tail {
