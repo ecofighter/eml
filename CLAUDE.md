@@ -5,8 +5,15 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Overview
 
 eml is an experimental functional language exploring "linear types × algebraic effects" (Rust, Cargo workspace, edition 2024). Source files use the `.em` extension.
-The documents under `docs/` are the source of truth; start from `docs/README.md`. `docs/spec/` is normative (what to implement), `docs/implementation/` covers architecture, testing and the current status, and `docs/future/` holds future designs (multicore, evidence passing, roadmap, stdlib notes). Code comments and docs are written in Japanese. Code comments explain why, not what: do not restate the code, and cite `docs/` paths when pointing at a rule.
-Whenever you write Japanese text (docs under `docs/`, code comments, or anything else), always follow the `yomiyasu:yomiyasu` skill: invoke it before writing and apply its rules to everything you write.
+The documentation lives under `docs/`; start from `docs/README.md`. `docs/spec/` is normative (what to implement), `docs/implementation/` covers architecture, testing and the current status, and `docs/future/` holds future designs (multicore, evidence passing, roadmap, stdlib notes).
+
+## Rules
+
+- The documents under `docs/` are the source of truth.
+- eml is unreleased and under development, so ignore backward compatibility and develop aggressively: change syntax, APIs, internal representations, and diagnostics freely, without deprecation paths or compatibility shims.
+- When a test fails and there is a sound reason that the test itself is what should change, you may change it after confirming with the user. State the reason and the kind of test change (see Testing).
+- Code comments and docs are written in Japanese. Code comments explain why, not what: do not restate the code, and cite `docs/` paths when pointing at a rule.
+- Whenever you write Japanese text (docs under `docs/`, code comments, or anything else), always follow the `yomiyasu:yomiyasu` skill: invoke it before writing and apply its rules to everything you write.
 
 ## Commands
 
