@@ -1,0 +1,9 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{stderr}\")"
+input_file: tests/ui/run/data/closures_over_pattern_variables.em
+---
+--- stdout ---
+sum 3
+sum 41
+--- stderr ---

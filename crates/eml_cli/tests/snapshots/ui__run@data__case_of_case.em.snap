@@ -1,0 +1,13 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{stderr}\")"
+input_file: tests/ui/run/data/case_of_case.em
+---
+--- stdout ---
+has a value
+empty
+60
+none
+some s
+some x
+--- stderr ---

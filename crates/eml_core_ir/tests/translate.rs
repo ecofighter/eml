@@ -373,3 +373,220 @@ fn a_constructor_used_as_a_function_value_is_wrapped() {
     }
     ");
 }
+
+#[test]
+fn a_match_compiles_to_a_decision_tree_with_arm_join_points() {
+    // 各枝の本体を join point にし、選んだ欄に現れないコンストラクタ (`None`) は残りの行列の join point へ jump する
+    let text = "data Option a = | None | Some a\n\nf : Option (Option Int) -> Int\nf o = match o with\n  | Some (Some n) -> n\n  | _ -> 0\n\nmain : Unit -> <IO> Unit\nmain () = ()";
+    insta::assert_snapshot!(core_text(text, Pass::Translate), @r"
+    fn f(o0) {
+      join j0(n1) [] {
+        return n1
+      }
+      join j1() [] {
+        return 0
+      }
+      join j2() [] {
+        jump j1()
+      }
+      switch o0 {
+        #0 ->
+          jump j2()
+        #1(x2) ->
+          join j3() [] {
+            jump j1()
+          }
+          switch x2 {
+            #0 ->
+              jump j3()
+            #1(n3) ->
+              jump j0(n3)
+          }
+      }
+    }
+    fn main(p0) {
+      return ()
+    }
+    fn entry$main() {
+      tailcall main(())
+    }
+    ");
+}
+
+#[test]
+fn tail_and_non_tail_matches() {
+    // 末尾にない `match` は、`if` と同じく値を受ける join point の範囲に入り、枝の本体はその join point へ jump する
+    let text = "data Option a = | None | Some a\n\ng : Option Int -> Int\ng o =\n  let n = match o with\n    | Some m -> m\n    | None -> 0\n  n + 1\n\nh : Option Int -> Int\nh o = match o with | Some m -> m | None -> 0\n\nmain : Unit -> <IO> Unit\nmain () = ()";
+    insta::assert_snapshot!(core_text(text, Pass::Translate), @r"
+    fn g(o0) {
+      join j0(t3) [] {
+        let t4 = prim +(t3, 1)
+        return t4
+      }
+      join j1(m1) [] {
+        jump j0(m1)
+      }
+      join j2() [] {
+        jump j0(0)
+      }
+      switch o0 {
+        #0 ->
+          jump j2()
+        #1(m2) ->
+          jump j1(m2)
+      }
+    }
+    fn h(o0) {
+      join j0(m1) [] {
+        return m1
+      }
+      join j1() [] {
+        return 0
+      }
+      switch o0 {
+        #0 ->
+          jump j1()
+        #1(m2) ->
+          jump j0(m2)
+      }
+    }
+    fn main(p0) {
+      return ()
+    }
+    fn entry$main() {
+      tailcall main(())
+    }
+    ");
+}
+
+#[test]
+fn constructor_patterns_in_let_lambda_and_equation_parameters() {
+    // コンストラクタを含むパターンは、続きを本体にする join point の引数で変数を受け、枝が1つの決定木で分解する
+    let text = "data Box a = | Box a\n\nby_equation : Box Int -> Int\nby_equation (Box n) = n\n\nby_let : Box Int -> Int\nby_let b =\n  let Box m = b\n  m + 1\n\nby_lambda : Box Int -> Int\nby_lambda b = (fn (Box k) -> k) b\n\nmain : Unit -> <IO> Unit\nmain () = ()";
+    insta::assert_snapshot!(core_text(text, Pass::Translate), @r"
+    fn by_equation(p0) {
+      join j0(n1) [] {
+        return n1
+      }
+      switch p0 {
+        #0(n2) ->
+          jump j0(n2)
+      }
+    }
+    fn by_let(b0) {
+      join j0(m1) [] {
+        let t3 = prim +(m1, 1)
+        return t3
+      }
+      switch b0 {
+        #0(m2) ->
+          jump j0(m2)
+      }
+    }
+    fn by_lambda(b0) {
+      let c1 = closure by_lambda$lambda0()
+      tailcall apply c1(b0)
+    }
+    fn main(p0) {
+      return ()
+    }
+    fn by_lambda$lambda0(p0) {
+      join j0(k1) [] {
+        return k1
+      }
+      switch p0 {
+        #0(k2) ->
+          jump j0(k2)
+      }
+    }
+    fn entry$main() {
+      tailcall main(())
+    }
+    ");
+}
+
+#[test]
+fn a_variable_pattern_after_a_switch_binds_the_scrutinee() {
+    // `ys` は `xs` の `Switch` の後で、`xs` そのものを受ける。残りの行列の join point は `xs` を捕まえる
+    let text = "data List a = | Nil | Cons a (List a)\n\nsize : List Int -> Int\nsize xs = 2\n\ndescribe : List Int -> Int\ndescribe xs = match xs with\n  | Cons _ Nil -> 1\n  | ys -> size ys\n\nmain : Unit -> <IO> Unit\nmain () = ()";
+    insta::assert_snapshot!(core_text(text, Pass::Translate), @r"
+    fn size(xs0) {
+      return 2
+    }
+    fn describe(xs0) {
+      join j0() [] {
+        return 1
+      }
+      join j1(ys1) [] {
+        tailcall size(ys1)
+      }
+      join j2() [xs0] {
+        jump j1(xs0)
+      }
+      switch xs0 {
+        #0 ->
+          jump j2()
+        #1(x2, x3) ->
+          join j3() [xs0] {
+            jump j1(xs0)
+          }
+          switch x3 {
+            #0 ->
+              jump j0()
+            #1(x4, x5) ->
+              jump j3()
+          }
+      }
+    }
+    fn main(p0) {
+      return ()
+    }
+    fn entry$main() {
+      tailcall main(())
+    }
+    ");
+}
+
+#[test]
+fn constructor_patterns_in_handler_clause_parameters() {
+    // 操作の節と `return` の節はラムダと同じく関数に持ち上げるので、引数のコンストラクタのパターンも同じ経路で分解する
+    let text = "data Box a = | Box a\n\neffect Give where\n  give : Box Int -> Int\n\nrun : Unit -> Int\nrun () =\n  handle Box (give (Box 1)) with\n    | give (Box n) k -> resume k n\n    | return (Box r) -> r\n\nmain : Unit -> <IO> Unit\nmain () = ()";
+    insta::assert_snapshot!(core_text(text, Pass::Translate), @r"
+    fn run(p0) {
+      let c1 = closure run$handle0()
+      let c2 = closure run$handle0$give()
+      let c3 = closure run$handle0$return()
+      tailcall handle Give(c1) {give: c2} return c3
+    }
+    fn main(p0) {
+      return ()
+    }
+    fn run$handle0(p0) {
+      let d1 = con #0(1)
+      let t2 = perform Give.give(d1)
+      let d3 = con #0(t2)
+      return d3
+    }
+    fn run$handle0$give(p0, k1) {
+      join j0(n2) [k1] {
+        tailcall resume k1(n2)
+      }
+      switch p0 {
+        #0(n3) ->
+          jump j0(n3)
+      }
+    }
+    fn run$handle0$return(p0) {
+      join j0(r1) [] {
+        return r1
+      }
+      switch p0 {
+        #0(r2) ->
+          jump j0(r2)
+      }
+    }
+    fn entry$main() {
+      tailcall main(())
+    }
+    ");
+}

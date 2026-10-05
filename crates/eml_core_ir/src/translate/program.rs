@@ -154,6 +154,12 @@ impl ProgramBuilder {
         function
     }
 
+    pub(super) fn constructor_type(&self, ctor: ConstructorId) -> &Type {
+        self.constructor_types
+            .get(&ctor)
+            .expect("every constructor has a scheme")
+    }
+
     pub(super) fn arity(&self, function: FnIdx) -> usize {
         self.arities[function.0 as usize]
     }

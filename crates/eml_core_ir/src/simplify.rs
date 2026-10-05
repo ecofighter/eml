@@ -1,8 +1,10 @@
 //! join point を書き換える最適化 (docs/spec/core-ir.md)。変換の後、Perceus の前に置く。RC の命令がまだないので、
 //! 所有権を扱わずに書き換えられる。`captures` は古くなりうるが、このパスの後にパイプラインが埋め直す。
 //!
-//! B2 (分かっているタグ)、B5 (小さな本体)、B3 (jump が1つ)、B4 (使われない) の順に1巡だけ回す。B5 を B4 より先に
-//! 回すのは、B5 で jump がなくなった join point を、同じ巡の B4 で消すためである。
+//! B3 (jump が1つ)、B2 (分かっているタグ)、B5 (小さな本体)、B3、B4 (使われない) の順に1巡だけ回す。最初の B3 は、
+//! `match` の枝の join point を `Switch` の枝に戻す。枝の join point が `if` の join point の本体と `Switch` の間に
+//! 並んだままだと、B2 が本体の `Switch` を見つけられないためである。B5 を B4 より先に回すのは、B5 で jump がなくなった
+//! join point を、同じ巡の B4 で消すためである。
 //!
 //! 書き換えは式のアリーナの上でその場で行う。木から外れた式はアリーナに残り、Perceus がアリーナを作り直すときに
 //! 捨てる。そのため、jump の位置と親は、根からたどれる式だけで求める。
@@ -12,6 +14,7 @@ use crate::{Arm, Atom, CExpr, CExprId, CoreFn, JoinId, Program, Rhs, VarId};
 pub(crate) fn simplify(program: &mut Program) {
     for function in &mut program.functions {
         let mut pass = Simplify { function };
+        pass.inline_single_jumps();
         pass.split_known_tags();
         pass.forward_small_bodies();
         pass.inline_single_jumps();
@@ -115,8 +118,10 @@ impl Simplify<'_> {
         }
     }
 
-    /// B2: 本体が引数で分岐する join point に定数のタグを jump で渡していれば、各枝を引数のない join point に切り出し、
-    /// 定数の jump を枝へ直接向ける。`&&` と `||` を条件にした `if` がこの形になる (docs/spec/core-ir.md)。
+    /// B2: 引数を1つだけ持ち、本体がその引数で分岐する join point に、定数のタグを jump で渡していれば、引数のない
+    /// コンストラクタの枝を引数0個の join point に切り出し、定数の jump をその枝へ直接向ける。`&&` と `||` を条件にした
+    /// `if` と、`Bool` を返す `match` を条件にした `if` がこの形になる (docs/spec/core-ir.md)。フィールドを束縛する枝は
+    /// `Switch` に残し、引数も置き換えない。引数を持つコンストラクタの値はタグだけでは決まらないためである。
     fn split_known_tags(&mut self) {
         let jumps = self.jumps();
         for (index, sites) in jumps.iter().enumerate() {
@@ -141,42 +146,40 @@ impl Simplify<'_> {
             else {
                 continue;
             };
-            // フィールドを束縛する枝の中では、引数をタグの定数に置き換えられない。引数を持つコンストラクタの値は、
-            // タグだけでは決まらないためである (docs/spec/core-ir.md の `simplify`)
-            if arms.iter().any(|arm| !arm.fields.is_empty()) {
-                continue;
-            }
             let known: Vec<u32> = sites
                 .iter()
                 .filter_map(|&site| self.known_tag(site))
                 .collect();
-            let has_arm = |tag: &u32| arms.iter().any(|arm| arm.tag == *tag);
-            if scrutinee != param || known.is_empty() || !known.iter().all(has_arm) {
+            // 定数のタグは引数のないコンストラクタの値なので、フィールドのない枝に当たるはずである
+            let nullary = |tag: u32| {
+                arms.iter()
+                    .any(|arm| arm.tag == tag && arm.fields.is_empty())
+            };
+            if scrutinee != param || known.is_empty() || !known.iter().all(|&tag| nullary(tag)) {
                 continue;
             }
-            let mut arm_joins = Vec::new();
+            let mut split = Vec::new();
+            let mut dispatch = Vec::new();
             for arm in &arms {
-                let (tag, arm) = (arm.tag, arm.body);
-                self.substitute(arm, param, Atom::Tag(tag));
+                if !arm.fields.is_empty() {
+                    dispatch.push(arm.clone());
+                    continue;
+                }
+                self.substitute(arm.body, param, Atom::Tag(arm.tag));
                 let arm_join = JoinId(self.function.joins.len() as u32);
                 // 索引は、下で組み立てた `Join` の位置に直す
-                self.function.joins.push(arm);
-                arm_joins.push((tag, arm_join, arm));
+                self.function.joins.push(arm.body);
+                split.push((arm.tag, arm_join, arm.body));
+                let jump = self.push(CExpr::Jump {
+                    join: arm_join,
+                    args: Vec::new(),
+                });
+                dispatch.push(Arm {
+                    tag: arm.tag,
+                    fields: Vec::new(),
+                    body: jump,
+                });
             }
-            let dispatch = arm_joins
-                .iter()
-                .map(|&(tag, arm_join, _)| {
-                    let jump = self.push(CExpr::Jump {
-                        join: arm_join,
-                        args: Vec::new(),
-                    });
-                    Arm {
-                        tag,
-                        fields: Vec::new(),
-                        body: jump,
-                    }
-                })
-                .collect();
             self.set(
                 body,
                 CExpr::Switch {
@@ -186,7 +189,7 @@ impl Simplify<'_> {
             );
             for &site in sites {
                 if let Some(tag) = self.known_tag(site) {
-                    let &(_, arm_join, _) = arm_joins
+                    let &(_, arm_join, _) = split
                         .iter()
                         .find(|&&(arm_tag, ..)| arm_tag == tag)
                         .expect("checked above");
@@ -209,7 +212,7 @@ impl Simplify<'_> {
                 scope,
             });
             self.function.joins[index] = inner;
-            for (position, &(_, arm_join, arm)) in arm_joins.iter().enumerate().rev() {
+            for (position, &(_, arm_join, arm)) in split.iter().enumerate().rev() {
                 let expr = CExpr::Join {
                     join: arm_join,
                     params: Vec::new(),

@@ -4,14 +4,14 @@ use eml_hir::builtin::Builtin;
 use eml_hir::{ConstructorId, ExprId, ExprKind, Literal, OperationId, PatId, Res};
 use eml_types::Type;
 
-use crate::{Atom, Call, FnIdx, JoinId, Rhs};
+use crate::{Atom, Call, FnIdx, Rhs};
 
 use super::program::{effect_index, perform_call};
 use super::types::{Lowering, lowering, split_arrows};
 use super::{Binding, Bindings, Exit, FnLowering};
 
 impl FnLowering<'_> {
-    fn ty(&self, expr: ExprId) -> Type {
+    pub(super) fn ty(&self, expr: ExprId) -> Type {
         self.types
             .exprs
             .get(expr)
@@ -179,7 +179,6 @@ impl FnLowering<'_> {
                     self.bind(out, "c", &ty, Rhs::MakeClosure(wrapper, Vec::new()))
                 }
             }
-            ExprKind::Match { .. } => unreachable!("`match` is not lowered to Core IR"),
             ExprKind::Call {
                 callee,
                 args,
@@ -218,12 +217,11 @@ impl FnLowering<'_> {
                     }
                 }
             }
-            ExprKind::If { .. } => {
-                // 続きの式を join point の本体にし、`if` の値をその引数で受ける。条件の計算も範囲に入れる。条件が末尾に
-                // ない `if` のとき、その join point が外側の join point の範囲の中にでき、枝から外側へ jump できる
-                // (docs/spec/core-ir.md)
-                let join = JoinId(self.joins.len() as u32);
-                self.joins.push(None);
+            ExprKind::If { .. } | ExprKind::Match { .. } => {
+                // 続きの式を join point の本体にし、`if` と `match` の値をその引数で受ける。条件と scrutinee の計算も範囲に
+                // 入れる。条件が末尾にない `if` のとき、その join point が外側の join point の範囲の中にでき、枝から外側へ
+                // jump できる (docs/spec/core-ir.md)
+                let join = self.new_join();
                 let scope = self.tail(id, Exit::Jump(join));
                 let ty = self.ty(id);
                 let param = self.new_var("t", &ty);

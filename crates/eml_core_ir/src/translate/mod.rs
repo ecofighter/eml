@@ -3,6 +3,7 @@
 //! 組み込みの変換の種類は `types.rs` にある。
 
 mod expr;
+mod pattern;
 mod program;
 mod types;
 
@@ -14,6 +15,7 @@ use crate::{
     Arm, Atom, CExpr, CExprId, CoreFn, FALSE, FnIdx, JoinId, Program, Rhs, TRUE, VarId, VarInfo,
 };
 
+use pattern::has_constructor;
 use program::{ProgramBuilder, effect_table};
 use types::{split_arrows, var_info};
 
@@ -92,6 +94,13 @@ enum Binding {
         params: Vec<VarId>,
         scope: CExprId,
     },
+    /// 本体を先に組み立てた join point。ここより後ろで組み立てる式を範囲にする。`match` の枝と、決定木の残りの
+    /// 部分木に使う (`pattern.rs`)。
+    Shared {
+        join: JoinId,
+        params: Vec<VarId>,
+        body: CExprId,
+    },
 }
 
 type Bindings = Vec<Binding>;
@@ -148,16 +157,27 @@ impl FnLowering<'_> {
             self.locals.insert(*local, Atom::Var(var));
             vars.push(var);
         }
+        let mut destructured = Vec::new();
         for (pat, ty) in params {
-            let local = pat.and_then(|pat| body.pat_bindings(pat).first().copied());
+            // コンストラクタを含むパターンは名前のない引数で受け、本体の前で分解する
+            let simple = pat.filter(|&pat| !has_constructor(body, pat));
+            let local = simple.and_then(|pat| body.pat_bindings(pat).first().copied());
             let name = local.map_or("p", |local| body.locals[local].name.as_str());
             let var = self.new_var(name, ty);
             if let Some(local) = local {
                 self.locals.insert(local, Atom::Var(var));
             }
             vars.push(var);
+            if let Some(pat) = pat.filter(|&pat| has_constructor(body, pat)) {
+                destructured.push((pat, var, ty.clone()));
+            }
         }
-        let root = self.tail(root, Exit::Return);
+        // 引数の変数をすべて作ってから分解する。関数の引数の番号を、分解で作る変数より前にそろえるため
+        let mut bindings = Vec::new();
+        for (pat, var, ty) in destructured {
+            self.destructure(pat, Atom::Var(var), ty, &mut bindings);
+        }
+        let root = self.tail_after(bindings, root, Exit::Return);
         CoreFn {
             name: name.to_string(),
             params: vars,
@@ -237,6 +257,12 @@ impl FnLowering<'_> {
         CExprId(self.exprs.len() as u32 - 1)
     }
 
+    fn new_join(&mut self) -> JoinId {
+        let join = JoinId(self.joins.len() as u32);
+        self.joins.push(None);
+        join
+    }
+
     fn seq(&mut self, bindings: Bindings, last: CExpr) -> CExprId {
         let mut id = self.push(last);
         for binding in bindings.into_iter().rev() {
@@ -257,6 +283,17 @@ impl FnLowering<'_> {
                     self.joins[join.0 as usize] = Some(expr);
                     expr
                 }
+                Binding::Shared { join, params, body } => {
+                    let expr = self.push(CExpr::Join {
+                        join,
+                        params,
+                        captures: Vec::new(),
+                        body,
+                        scope: id,
+                    });
+                    self.joins[join.0 as usize] = Some(expr);
+                    expr
+                }
             };
         }
         id
@@ -264,7 +301,11 @@ impl FnLowering<'_> {
 
     /// 式の値を `exit` に渡すコード。値を返すだけの呼び出しは、呼び出し元のフレームを積まない末尾呼び出しにする。
     fn tail(&mut self, expr: ExprId, exit: Exit) -> CExprId {
-        let mut bindings = Vec::new();
+        self.tail_after(Vec::new(), expr, exit)
+    }
+
+    /// `bindings` (引数のパターンの分解) の後に、式の値を `exit` に渡すコードを続ける。
+    fn tail_after(&mut self, mut bindings: Bindings, expr: ExprId, exit: Exit) -> CExprId {
         let mut last = self.tail_expr(expr, exit, &mut bindings);
         if let CExpr::Return(Atom::Var(returned)) = last
             && let Some(Binding::Let(bound, Rhs::Call { .. })) = bindings.last()
@@ -314,6 +355,7 @@ impl FnLowering<'_> {
                     ],
                 }
             }
+            ExprKind::Match { scrutinee, arms } => self.lower_match(*scrutinee, arms, exit, out),
             ExprKind::Block { stmts, tail } => {
                 self.stmts(stmts, out);
                 match tail {
@@ -334,7 +376,12 @@ impl FnLowering<'_> {
             match stmt {
                 Stmt::Let { pat, init, .. } => {
                     let value = self.atom(*init, out);
-                    self.bind_pat(*pat, value);
+                    if has_constructor(self.body, *pat) {
+                        let ty = self.ty(*init);
+                        self.destructure(*pat, value, ty, out);
+                    } else {
+                        self.bind_pat(*pat, value);
+                    }
                 }
                 // 式文の値は `Unit` なので捨ててよい
                 Stmt::Expr(expr) => {

@@ -127,3 +127,109 @@ fn constructor_arguments_are_owned_by_the_value() {
     }
     ");
 }
+
+#[test]
+fn a_split_switch_still_unpacks_the_arm_with_fields() {
+    // B2 が `Switch` に残した `Some _` の枝は、フィールド `x9` を所有して始まり、使わないので入口で decref する
+    let text = "data Option a = | None | Some a\n\npick : Bool -> Bool -> String -> String\npick a b s = match (if a then None else if b then Some s else Some \"x\") with\n  | None -> \"none\"\n  | Some _ -> \"some\"\n\nmain : Unit -> <IO> Unit\nmain () = ()";
+    insta::assert_snapshot!(core_text(text, Pass::Perceus), @r#"
+    fn pick(a0, b1, s2) {
+      join j1() [] {
+        let s7 = const "none"
+        return s7
+      }
+      join j0(t6) [] {
+        switch t6 {
+          #0 ->
+            jump j1()
+          #1(x9) ->
+            decref x9
+            let s8 = const "some"
+            return s8
+        }
+      }
+      switch a0 {
+        #0 ->
+          switch b1 {
+            #0 ->
+              decref s2
+              let s4 = const "x"
+              let d5 = con #1(s4)
+              jump j0(d5)
+            #1 ->
+              let d3 = con #1(s2)
+              jump j0(d3)
+          }
+        #1 ->
+          decref s2
+          jump j1()
+      }
+    }
+    fn main(p0) {
+      return ()
+    }
+    fn entry$main() {
+      tailcall main(())
+    }
+    "#);
+}
+
+#[test]
+fn an_unused_field_is_decreffed_when_its_arm_starts() {
+    // `Switch` が `o` を move で受け取り、`Some` の枝はフィールド `x1` を所有して始まる。使わないので入口で捨てる
+    let text = "data Option a = | None | Some a\n\nflag : Option String -> Int\nflag o = match o with\n  | Some _ -> 0\n  | None -> 1\n\nmain : Unit -> <IO> Unit\nmain () = ()";
+    insta::assert_snapshot!(core_text(text, Pass::Perceus), @r"
+    fn flag(o0) {
+      switch o0 {
+        #0 ->
+          return 1
+        #1(x1) ->
+          decref x1
+          return 0
+      }
+    }
+    fn main(p0) {
+      return ()
+    }
+    fn entry$main() {
+      tailcall main(())
+    }
+    ");
+}
+
+#[test]
+fn a_scrutinee_used_in_an_arm_is_dupped_before_the_switch() {
+    // `ys` が受ける `xs` は枝の中でも使うので、`Switch` の前で複製する。その参照を使わない枝は入口側で捨てる
+    let text = "data List a = | Nil | Cons a (List a)\n\nsize : List Int -> Int\nsize xs = 2\n\ndescribe : List Int -> Int\ndescribe xs = match xs with\n  | Cons _ Nil -> 1\n  | ys -> size ys\n\nmain : Unit -> <IO> Unit\nmain () = ()";
+    insta::assert_snapshot!(core_text(text, Pass::Perceus), @r"
+    fn size(xs0) {
+      decref xs0
+      return 2
+    }
+    fn describe(xs0) {
+      join j0(ys1) [] {
+        tailcall size(ys1)
+      }
+      dup xs0
+      switch xs0 {
+        #0 ->
+          jump j0(xs0)
+        #1(x2, x3) ->
+          switch x3 {
+            #0 ->
+              decref xs0
+              return 1
+            #1(x4, x5) ->
+              decref x5
+              jump j0(xs0)
+          }
+      }
+    }
+    fn main(p0) {
+      return ()
+    }
+    fn entry$main() {
+      tailcall main(())
+    }
+    ");
+}

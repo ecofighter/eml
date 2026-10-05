@@ -214,3 +214,195 @@ fn an_if_in_a_condition_jumps_straight_to_the_outer_join_point() {
     }
     ");
 }
+
+#[test]
+fn a_bool_match_in_a_condition_jumps_straight_to_the_branch() {
+    // `match` の各枝が返す `True` と `False` は分かっているタグなので、`Bool` で分岐し直さずに `if` の枝へ直接進む
+    let text = "data Option a = | None | Some a\n\npick : Option Int -> Int\npick o = if (match o with | Some _ -> True | None -> False) then 1 else 2\n\nmain : Unit -> <IO> Unit\nmain () = ()";
+    insta::assert_snapshot!(core_text(text, Pass::Simplify), @r"
+    fn pick(o0) {
+      switch o0 {
+        #0 ->
+          return 2
+        #1(x1) ->
+          return 1
+      }
+    }
+    fn main(p0) {
+      return ()
+    }
+    fn entry$main() {
+      tailcall main(())
+    }
+    ");
+}
+
+#[test]
+fn known_tags_of_a_larger_type_jump_straight_to_their_arm() {
+    // 3つのタグのどれを渡す jump も、その枝へ直接向かう
+    let text = "data Color = | Red | Green | Blue\n\ncode : Int -> Int\ncode n =\n  let c = if n == 0 then Red else if n == 1 then Green else Blue\n  match c with\n    | Red -> 10\n    | Green -> 20\n    | Blue -> 30\n\nmain : Unit -> <IO> Unit\nmain () = ()";
+    insta::assert_snapshot!(core_text(text, Pass::Simplify), @r"
+    fn code(n0) {
+      let t1 = prim ==(n0, 0)
+      switch t1 {
+        #0 ->
+          let t2 = prim ==(n0, 1)
+          switch t2 {
+            #0 ->
+              return 30
+            #1 ->
+              return 20
+          }
+        #1 ->
+          return 10
+      }
+    }
+    fn main(p0) {
+      return ()
+    }
+    fn entry$main() {
+      tailcall main(())
+    }
+    ");
+}
+
+#[test]
+fn a_mixed_switch_splits_only_the_arms_without_fields() {
+    // `None` の枝だけを切り出す。`Some` の値を渡す jump は元の join point を通り、`Some _` の枝は `Switch` に残る
+    let text = "data Option a = | None | Some a\n\npick : Bool -> Bool -> String -> String\npick a b s = match (if a then None else if b then Some s else Some \"x\") with\n  | None -> \"none\"\n  | Some _ -> \"some\"\n\nmain : Unit -> <IO> Unit\nmain () = ()";
+    insta::assert_snapshot!(core_text(text, Pass::Simplify), @r#"
+    fn pick(a0, b1, s2) {
+      join j1() [] {
+        let s7 = const "none"
+        return s7
+      }
+      join j0(t6) [] {
+        switch t6 {
+          #0 ->
+            jump j1()
+          #1(x9) ->
+            let s8 = const "some"
+            return s8
+        }
+      }
+      switch a0 {
+        #0 ->
+          switch b1 {
+            #0 ->
+              let s4 = const "x"
+              let d5 = con #1(s4)
+              jump j0(d5)
+            #1 ->
+              let d3 = con #1(s2)
+              jump j0(d3)
+          }
+        #1 ->
+          jump j1()
+      }
+    }
+    fn main(p0) {
+      return ()
+    }
+    fn entry$main() {
+      tailcall main(())
+    }
+    "#);
+}
+
+#[test]
+fn arms_with_fields_keep_the_join_point_argument() {
+    // フィールドを束縛する枝の中の `o` (join point の引数) は、タグの定数に置き換えない
+    let text = "data Option a = | None | Some a\n\nh : Option Int -> Int -> Int\nh o y = y\n\npick : Bool -> Int -> Int\npick c x =\n  let o = if c then None else if x > 0 then Some x else Some 0\n  match o with\n    | None -> 0\n    | Some y -> h o y\n\nmain : Unit -> <IO> Unit\nmain () = ()";
+    insta::assert_snapshot!(core_text(text, Pass::Simplify), @r"
+    fn h(o0, y1) {
+      return y1
+    }
+    fn pick(c0, x1) {
+      join j0(t5) [] {
+        switch t5 {
+          #0 ->
+            return 0
+          #1(y7) ->
+            let y6 = y7
+            tailcall h(t5, y6)
+        }
+      }
+      switch c0 {
+        #0 ->
+          let t2 = prim >(x1, 0)
+          switch t2 {
+            #0 ->
+              let d4 = con #1(0)
+              jump j0(d4)
+            #1 ->
+              let d3 = con #1(x1)
+              jump j0(d3)
+          }
+        #1 ->
+          return 0
+      }
+    }
+    fn main(p0) {
+      return ()
+    }
+    fn entry$main() {
+      tailcall main(())
+    }
+    ");
+}
+
+#[test]
+fn jumps_that_pass_constructed_values_are_left_alone() {
+    // どの jump も `con` で作った値を渡すので、B2 は join point を変えない。引数を持つコンストラクタの case-of-case は
+    // 使われない束縛を消すパスと一緒に入れる (docs/implementation/status.md)
+    let text = "data Option a = | None | Some a\n\npick : Bool -> Int\npick c = match (if c then Some 1 else Some 2) with\n  | Some n -> n\n  | None -> 0\n\nmain : Unit -> <IO> Unit\nmain () = ()";
+    insta::assert_snapshot!(core_text(text, Pass::Simplify), @r"
+    fn pick(c0) {
+      join j0(t3) [] {
+        switch t3 {
+          #0 ->
+            return 0
+          #1(n5) ->
+            let n4 = n5
+            return n4
+        }
+      }
+      switch c0 {
+        #0 ->
+          let d2 = con #1(2)
+          jump j0(d2)
+        #1 ->
+          let d1 = con #1(1)
+          jump j0(d1)
+      }
+    }
+    fn main(p0) {
+      return ()
+    }
+    fn entry$main() {
+      tailcall main(())
+    }
+    ");
+}
+
+#[test]
+fn split_arms_of_a_data_type_use_the_known_tag() {
+    // 切り出した引数のない枝の中では、`c` をその枝のタグに置き換える
+    let text = "data Color = | Red | Green | Blue\n\npick : Bool -> Color\npick b =\n  let c = if b then Red else Green\n  match c with\n    | Red -> c\n    | Green -> Blue\n    | Blue -> c\n\nmain : Unit -> <IO> Unit\nmain () = ()";
+    insta::assert_snapshot!(core_text(text, Pass::Simplify), @r"
+    fn pick(b0) {
+      switch b0 {
+        #0 ->
+          return #2
+        #1 ->
+          return #0
+      }
+    }
+    fn main(p0) {
+      return ()
+    }
+    fn entry$main() {
+      tailcall main(())
+    }
+    ");
+}
