@@ -10,7 +10,7 @@ use eml_hir::{Body, ExprId, ExprKind, LocalId, PatId, PatKind, Res, Stmt};
 use crate::check::BodyTyping;
 use crate::kind::{Bound, DropFix, KindOrigin, KindReason, UnusedPath};
 use crate::table::Table;
-use crate::ty::{Linearity, Multiplicity};
+use crate::ty::Linearity;
 
 /// 制御フローの経路ごとの変数の使い方。
 type Uses = HashMap<LocalId, Use>;
@@ -171,15 +171,10 @@ impl<'a> Usage<'a> {
             // 同じく、捕まえることを handle 式の位置での1回の使用に数え、中の使用を別に数える
             ExprKind::Handle {
                 body: handled,
-                effect,
                 clauses,
                 ret,
+                ..
             } => {
-                // 扱うエフェクトに `multi` の操作があれば、`k` を再開するたびに handler フレームを含む区間が写され、
-                // `return` の節が何度も動きうる (docs/spec/linearity.md の「基本の規則」)
-                let multi = effect.is_some_and(|effect| {
-                    self.table.effect_multiplicity(effect) == Multiplicity::Multi
-                });
                 let mut uses = Uses::new();
                 let inner = self.expr(*handled);
                 let captured = self.captured_once(*handled, &[], inner, body.exprs[*handled].range);
@@ -192,14 +187,6 @@ impl<'a> Usage<'a> {
                         inner,
                         body.exprs[ret.body].range,
                     );
-                    if multi {
-                        let mut locals: Vec<LocalId> = captured.keys().copied().collect();
-                        locals.sort();
-                        for local in locals {
-                            let name = body.locals[local].name.clone();
-                            self.unr_local(local, KindReason::CapturedByReturnClause(name));
-                        }
-                    }
                     sequence(&mut uses, captured);
                 }
                 let mut clause_captures: BTreeMap<LocalId, TextRange> = BTreeMap::new();

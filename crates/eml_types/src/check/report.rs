@@ -464,17 +464,6 @@ pub(super) fn linear_misuse(module: &Module, table: &Table, origin: &KindOrigin)
             format!("`{name}` is bound here"),
         )
         .with_note("an operation clause runs each time its operation is performed"),
-        KindReason::CapturedByReturnClause(name) => misused(
-            file,
-            origin,
-            format!(
-                "`{name}` must be used exactly once, but the `return` clause of a handler with a `multi` operation captures it"
-            ),
-            format!("`{name}` is bound here"),
-        )
-        .with_note(
-            "the `return` clause runs each time a continuation of a `multi` operation is resumed",
-        ),
         KindReason::CapturedByLambda => misused(
             file,
             origin,

@@ -296,10 +296,12 @@ fn the_return_clause_of_a_multi_handler_cannot_capture_a_linear_value() {
       c#1 : Cont Bool Int <>
       n#2 : Int
     ---
-    E3001 10:14 `k` must be used exactly once, but the `return` clause of a handler with a `multi` operation captures it
-      10:14 `k` is bound here
-      note: linear values, such as files, the continuation of a `once` operation and closures that capture one, must be used exactly once
-      note: the `return` clause runs each time a continuation of a `multi` operation is resumed
+    E3006 11:9 `k` must be used exactly once, but it is kept alive across a call that may resume more than once
+      11:9 this handle may perform `choose`, a `multi` operation
+      13:11 the `return` clause captures `k`
+      5:9 `choose` is declared `multi` here
+      note: a continuation of a `multi` operation can be resumed more than once, and each resumption would use the value again
+      help: do not capture `k` in the `return` clause
     ");
 }
 

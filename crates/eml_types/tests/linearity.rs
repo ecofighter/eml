@@ -573,3 +573,49 @@ fn unrestricted_values_may_be_kept_across_a_multi_operation() {
     let rest = "counted : Unit -> <Choice> Int\ncounted () =\n  let n = 1\n  let b = choose ()\n  n\n\nnested : Unit -> <Choice> Int\nnested () =\n  handle (if choose () then 1 else 2) with\n    | choose () k ->\n        let b = choose ()\n        resume k b";
     assert_eq!(carried(rest), "");
 }
+
+#[test]
+fn a_clause_argument_kept_across_a_resume() {
+    let rest = "use_then_choose : File -> <Use, Choice> Unit\nuse_then_choose f =\n  use_file f\n  let b = choose ()\n  ()\n\nresumed : Unit -> <Choice, IO> Unit\nresumed () =\n  let f = open \"a.txt\"\n  handle use_then_choose f with\n    | use_file g k ->\n        let r = resume k ()\n        close g\n        r";
+    insta::assert_snapshot!(carried(rest), @r"
+    E3006 31:17 `g` must be used exactly once, but it is kept alive across a call that may resume more than once
+      31:17 resuming `k` may perform `choose`, a `multi` operation
+      30:16 `g` is bound here
+      2:9 `choose` is declared `multi` here
+      note: a continuation of a `multi` operation can be resumed more than once, and each resumption would use the value again
+      help: finish using `g` before this call
+    ");
+}
+
+#[test]
+fn a_file_kept_across_a_handle_whose_body_performs_a_multi_operation() {
+    let rest = "across_handle : Unit -> <Choice, IO> Unit\nacross_handle () =\n  let f = open \"a.txt\"\n  let n =\n    handle (if choose () then ask () else 0) with\n      | ask () k -> resume k 1\n  close f";
+    insta::assert_snapshot!(carried(rest), @r"
+    E3006 24:5 `f` must be used exactly once, but it is kept alive across a call that may resume more than once
+      24:5 this handle may perform `choose`, a `multi` operation
+      22:7 `f` is bound here
+      2:9 `choose` is declared `multi` here
+      note: a continuation of a `multi` operation can be resumed more than once, and each resumption would use the value again
+      help: finish using `f` before this handle
+    ");
+}
+
+/// 外側の `multi` の handler が内側の handler フレームを写すと、`return` の節のクロージャも写される (spec の「健全性の根拠」)。
+#[test]
+fn a_return_clause_capture_under_an_outer_multi_operation() {
+    let rest = "returned : Unit -> <Choice, IO> Unit\nreturned () =\n  let f = open \"a.txt\"\n  handle (if choose () then ask () else 0) with\n    | ask () k -> resume k 1\n    | return n -> close f";
+    insta::assert_snapshot!(carried(rest), @r"
+    E3006 23:3 `f` must be used exactly once, but it is kept alive across a call that may resume more than once
+      23:3 this handle may perform `choose`, a `multi` operation
+      25:5 the `return` clause captures `f`
+      2:9 `choose` is declared `multi` here
+      note: a continuation of a `multi` operation can be resumed more than once, and each resumption would use the value again
+      help: do not capture `f` in the `return` clause
+    ");
+}
+
+#[test]
+fn a_file_may_be_kept_across_a_handle_and_a_resume_without_multi() {
+    let rest = "fine_return : Unit -> <IO> Unit\nfine_return () =\n  let f = open \"a.txt\"\n  handle ask () with\n    | ask () k -> resume k 1\n    | return n -> close f\n\nfine_resume : Unit -> <IO> Unit\nfine_resume () =\n  let f = open \"a.txt\"\n  handle use_file f with\n    | use_file g k ->\n        let r = resume k ()\n        close g\n        r";
+    assert_eq!(carried(rest), "");
+}

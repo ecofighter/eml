@@ -31,7 +31,7 @@ pub(crate) enum CallRows {
     Handle { body: Row, outer: Row },
 }
 
-/// 1つの本体の推論結果。使用回数のパスも読む。
+/// 1つの本体の推論結果。使用回数のパス (`usage`) と持ち越しのパス (`carry`) が読む。
 #[derive(Default)]
 pub(crate) struct BodyTyping {
     pub exprs: ArenaMap<ExprId, Ty>,
@@ -246,7 +246,7 @@ impl BodyCheck<'_> {
                 effect,
                 clauses,
                 ret,
-            } => self.handle(*effect, *handled, clauses, ret.as_ref()),
+            } => self.handle(id, *effect, *handled, clauses, ret.as_ref()),
             ExprKind::Resume { k, arg } => self.resume(id, *k, *arg),
             ExprKind::Match { scrutinee, arms } => {
                 self.match_expr(*scrutinee, arms, Expectation::None)

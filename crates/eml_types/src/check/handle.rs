@@ -6,7 +6,7 @@ use crate::scheme::{Rigids, lower_operation};
 use crate::table::{ArrowLin, Label, Row, Tail, Ty, TyShape};
 use crate::ty::Linearity;
 
-use super::body::BodyCheck;
+use super::body::{BodyCheck, CallRows};
 use super::report::Origin;
 
 impl BodyCheck<'_> {
@@ -14,6 +14,7 @@ impl BodyCheck<'_> {
     /// エフェクトを足した row で、節と `return` の節は `ρ` で検査する。deep handler の節は handler の外側で動くため。
     pub(super) fn handle(
         &mut self,
+        id: ExprId,
         effect: Option<EffectId>,
         handled: ExprId,
         clauses: &[OpClause],
@@ -41,6 +42,13 @@ impl BodyCheck<'_> {
             .collect(),
             tail: outer.tail,
         };
+        self.typing.calls.insert(
+            id,
+            CallRows::Handle {
+                body: inner.clone(),
+                outer: outer.clone(),
+            },
+        );
         let source = self.ambient_source.clone();
         let handled_ty = self.with_ambient(inner, source, |this| this.infer_expr(handled));
         let result = match ret {
@@ -141,6 +149,7 @@ impl BodyCheck<'_> {
         });
         self.check_expr(k, expected, Origin::Continuation);
         self.check_expr(arg, value, Origin::ResumeValue);
+        self.typing.calls.insert(id, CallRows::Resume(row.clone()));
         let range = self.body.exprs[id].range;
         self.include_call_row(row, range, "`resume`", true);
         result

@@ -133,6 +133,31 @@ impl Carrying<'_> {
                 ret,
                 ..
             } => {
+                // handle の後で使う値は、本体の実行のうち外へ抜けるエフェクト (外側の row) をまたぐ。`return` の節の
+                // クロージャは handler フレームにあり、扱うエフェクトの `multi` の区間にも入るので、本体の row 全体を
+                // またぐ (docs/spec/effects.md の「handler の意味」)
+                if let Some(CallRows::Handle {
+                    body: body_row,
+                    outer,
+                }) = typing.calls.get(id)
+                {
+                    self.carry(id, after, &Across::Row(outer.clone()), &CallKind::Handle);
+                    if let Some(ret) = ret {
+                        let across = Across::Row(body_row.clone());
+                        for local in body.captures(ret.body, &[ret.param]) {
+                            let Some(&ty) = typing.locals.get(local) else {
+                                continue;
+                            };
+                            let data = &body.locals[local];
+                            let value = CarriedValue::ReturnCapture {
+                                name: data.name.clone(),
+                                binding: data.range,
+                                clause: ret.range,
+                            };
+                            self.carry_value(id, ty, value, &across, &CallKind::Handle);
+                        }
+                    }
+                }
                 self.function(*handled);
                 let mut live = after.clone();
                 live.extend(body.captures(*handled, &[]).into_iter().map(Held::Local));
@@ -155,7 +180,23 @@ impl Carrying<'_> {
                 }
                 live
             }
-            ExprKind::Resume { k, arg } => self.parts(&[*k, *arg], after),
+            // 再開した継続が外側の `multi` の操作を起こすと、節の手元の値も写される。同じ handler のエフェクトは区間の
+            // 中で処理されるので、外側の row だけを見ればよい (docs/spec/effects.md の「継続の多重度と持ち越し規則」)
+            ExprKind::Resume { k, arg } => {
+                if let Some(CallRows::Resume(row)) = typing.calls.get(id) {
+                    let name = match &body.exprs[*k].kind {
+                        ExprKind::Path(Res::Local(local)) => Some(body.locals[*local].name.clone()),
+                        _ => None,
+                    };
+                    self.carry(
+                        id,
+                        after,
+                        &Across::Row(row.clone()),
+                        &CallKind::Resume { k: name },
+                    );
+                }
+                self.parts(&[*k, *arg], after)
+            }
             ExprKind::Match { scrutinee, arms } => {
                 let mut branches = after.clone();
                 for arm in arms {
