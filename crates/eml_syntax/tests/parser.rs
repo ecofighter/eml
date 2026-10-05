@@ -126,3 +126,11 @@ fn stray_unterminated_string_reports_both_problems() {
         ]
     );
 }
+
+#[test]
+fn annotated_patterns_can_appear_in_any_pattern() {
+    let text = "f (Some (x : Int)) = x\ng = match y with\n  | ((a : Int), b) -> a\nh = let (z : Int) = 1 in z";
+    let parsed = eml_test_support::parse_clean(text);
+    let tree = eml_syntax::debug_tree(&parsed.parse.syntax());
+    assert_eq!(tree.matches("ANNOT_PAT").count(), 3, "{tree}");
+}

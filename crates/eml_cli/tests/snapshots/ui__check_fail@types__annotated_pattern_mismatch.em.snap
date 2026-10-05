@@ -1,0 +1,14 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: rendered
+input_file: tests/ui/check-fail/types/annotated_pattern_mismatch.em
+---
+[E2001] Error: mismatched types
+   ╭─[ check-fail/types/annotated_pattern_mismatch.em:7:11 ]
+   │
+ 7 │ get (Some (n : String)) = 1
+   │           ──────┬─────  
+   │                 ╰─────── expected `Int`, found `String`
+   │ 
+   │ Note: an annotated pattern must have the type of the value it matches
+───╯

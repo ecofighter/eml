@@ -478,7 +478,7 @@ fn lambda(p: &mut Parser) {
     p.bump(FN_KW);
     let mut params = 0;
     while patterns::at_apat_start(p) {
-        patterns::param(p);
+        patterns::apat(p);
         params += 1;
     }
     if params == 0 {

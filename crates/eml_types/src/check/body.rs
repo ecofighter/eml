@@ -657,7 +657,19 @@ impl BodyCheck<'_> {
             PatKind::Bind(local) => {
                 self.typing.locals.insert(*local, ty);
             }
-            PatKind::Annot { pat, .. } => self.bind_pat(*pat, ty),
+            PatKind::Annot {
+                pat: inner,
+                ty: annotation,
+            } => {
+                let annotated = lower_type(self.table, &body.types, self.rigids, *annotation);
+                self.expect(
+                    body.pats[pat].range,
+                    ty,
+                    annotated,
+                    &Origin::AnnotatedPattern,
+                );
+                self.bind_pat(*inner, annotated);
+            }
             PatKind::Con { ctor, args } => self.constructor_pattern(pat, *ctor, args, ty),
             PatKind::Tuple(elements) => self.tuple_pattern(pat, elements, ty),
             PatKind::Literal(literal) => self.literal_pattern(pat, literal, ty),

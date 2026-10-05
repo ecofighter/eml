@@ -46,7 +46,7 @@ stmt        ::= 'let' pat (':' type)? '=' body
 expr        ::= 'if' expr 'then' body ('else' body)?
               | 'match' expr 'with' arms
               | 'handle' expr ('from' expr)? 'with' clauses
-              | 'fn' param+ '->' body
+              | 'fn' apat+ '->' body
               | 'let' pat (':' type)? '=' expr 'in' expr
               | op_expr
 arms        ::= block(arm) | arm+
@@ -59,8 +59,7 @@ op_expr     ::= operand (OP operand)*                     -- CST では平たい
 operand     ::= '-' operand | app
 app         ::= ('resume' | 'drop')? postfix+ lambda?
               | lambda
-lambda      ::= 'fn' param+ '->' body                     -- 最後の引数のラムダ
-param       ::= apat | '(' pat ':' type ')'
+lambda      ::= 'fn' apat+ '->' body                      -- 最後の引数のラムダ
 postfix     ::= atom ('.' (LIDENT | INT))*                -- '.' の前後に空白を置かない
 
 atom        ::= INT | FLOAT | CHAR | string | RAW_STRING | command
@@ -79,6 +78,7 @@ pat         ::= cpat (CONOP pat)?                         -- 右結合 (例: x :
 cpat        ::= qcon apat+ | apat
 apat        ::= '_' | LIDENT | qcon | literal | '-' INT
               | '(' ')' | '(' pat ')' | '(' pat (',' pat)+ ','? ')'
+              | '(' pat ':' type ')'
               | '[' list(pat) ']'
               | '{' list(fpat) ('|' LIDENT)? '}'
 fpat        ::= LIDENT ('=' pat)?

@@ -414,3 +414,14 @@ fn a_broken_signature_adds_no_effect_errors_to_the_equation() {
         "{lines:?}"
     );
 }
+
+#[test]
+fn an_annotated_pattern_must_have_the_type_of_its_value() {
+    let text = "data Option a = | None | Some a\n\nf : Option Int -> Int\nf (Some (x : String)) = 1\nf None = 0";
+    let checked = eml_test_support::check(text);
+    insta::assert_snapshot!(eml_test_support::full(&checked.files, &checked.diagnostics), @"
+    E2001 4:9 mismatched types
+      4:9 expected `Int`, found `String`
+      note: an annotated pattern must have the type of the value it matches
+    ");
+}

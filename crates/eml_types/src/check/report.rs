@@ -35,6 +35,8 @@ pub(super) enum Origin {
     Statement,
     UnitPattern,
     LambdaParameter,
+    /// 型を明示したパターン。明示した型が、パターンが受ける値の型と一致しなければならない。
+    AnnotatedPattern,
     LambdaBody,
     /// handler の節の本体。handle 式全体の型を持つ。
     HandlerClause,
@@ -333,6 +335,8 @@ impl BodyCheck<'_> {
             Origin::LambdaParameter => diagnostic.with_note(
                 "an annotated lambda parameter must have the parameter type the lambda is expected to have",
             ),
+            Origin::AnnotatedPattern => diagnostic
+                .with_note("an annotated pattern must have the type of the value it matches"),
             Origin::LambdaBody => diagnostic.with_note(
                 "the body of a lambda must have the return type the lambda is expected to have",
             ),

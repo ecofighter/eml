@@ -252,7 +252,7 @@ impl<'a> BodyLowering<'a> {
                 let mark = self.scope.len();
                 let params = lambda
                     .params()
-                    .map(|pat| self.lower_lambda_param(pat))
+                    .map(|pat| self.lower_pat(Some(pat), TextRange::default()))
                     .collect();
                 let body = self.lower_expr(lambda.body(), range);
                 self.scope.truncate(mark);
@@ -580,8 +580,11 @@ impl<'a> BodyLowering<'a> {
                     .collect();
                 PatKind::Tuple(elements)
             }
-            ast::Pat::AnnotPat(_) => {
-                self.unsupported_pat(range, "type annotations in patterns are not supported yet")
+            ast::Pat::AnnotPat(annot) => {
+                // 型を先に変換する。ラムダの引数で使っていた順で、局所変数の番号を変えないため
+                let ty = self.lower_type(annot.ty(), range);
+                let pat = self.lower_pat_in_group(annot.pat(), range);
+                PatKind::Annot { pat, ty }
             }
         };
         self.pats.alloc(Pat { kind, range })
@@ -728,20 +731,6 @@ impl<'a> BodyLowering<'a> {
             )
             .with_secondary(Label::new(self.file, first, "first bound here")),
         );
-    }
-
-    /// ラムダの引数だけは型の明示を受ける (docs/spec/expressions.md の「ラムダ」)。
-    fn lower_lambda_param(&mut self, pat: ast::Pat) -> PatId {
-        let ast::Pat::AnnotPat(annot) = pat else {
-            return self.lower_pat(Some(pat), TextRange::default());
-        };
-        let range = annot.range();
-        let ty = self.lower_type(annot.ty(), range);
-        let inner = self.lower_pat(annot.pat(), range);
-        self.pats.alloc(Pat {
-            kind: PatKind::Annot { pat: inner, ty },
-            range,
-        })
     }
 
     fn lower_type(&mut self, ty: Option<ast::Type>, fallback: TextRange) -> TypeRefId {

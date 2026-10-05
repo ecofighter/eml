@@ -231,6 +231,7 @@ HIR でラムダに脱糖する ([式](../../spec/expressions.md) の「セク�
 今の文法 ([文法](../../spec/grammar.md)) では、型の明示は `param ::= apat | '(' pat ':' type ')'`、つまりラムダの引数にしか書けない。ラムダの引数の `(x : Int)` は実装済みで、`lower_pat` の `AnnotPat` の E0004 は、パーサがその位置に `ANNOT_PAT` を作らないので到達しない。6a では文法を広げる。
 
 - `grammar.md` の `apat` に `'(' pat ':' type ')'` を足し、`param` の規則を消す (`param` は `apat` と同じになる)。等式の引数、`match` の枝、`let` の左辺、`use` のパターン、handler の節の引数、入れ子のパターンのどこでも書ける
+- `(a : Int, b)` は構文エラーになる。括弧の最初のパターンの後ろの `:` を型の明示として読み、そのあとに `)` を期待するためである。タプルの要素に型を明示するときは `((a : Int), b)` と書く
 - パーサは、`paren_pat` の `annotated` の引数をなくし、括弧のパターンでつねに `: type` を受け付ける。`patterns::param` は `apat` にまとめる
 - HIR は、`lower_pat_in_group` で `AnnotPat` を `PatKind::Annot` にする。ラムダの引数の専用の経路 (`lower_lambda_param`) はこれにまとめて消す。到達しない E0004 (`type annotations in patterns are not supported yet`) もなくす
 - 型検査は、今はラムダの引数の一番外側の `Annot` だけを `bind_param` で照合し、`bind_pat` の `Annot` は明示した型を見ずに内側へ進む。`bind_pat` の `Annot` で、明示した型を期待する型と照合してから、内側を明示した型で束縛する。由来は新しい `Origin::AnnotatedPattern` (note: 「an annotated pattern must have the type of the value it matches」) にする。ラムダの引数の一番外側は今どおり `Origin::LambdaParameter` で照合し、今の診断の文言を変えない

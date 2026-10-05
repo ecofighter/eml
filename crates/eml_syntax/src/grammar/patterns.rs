@@ -83,16 +83,8 @@ fn cpat(p: &mut Parser) -> bool {
     true
 }
 
+/// `(pat : type)` の型の明示を含む (docs/spec/grammar.md の `apat`)。
 pub(super) fn apat(p: &mut Parser) -> bool {
-    apat_with(p, false)
-}
-
-/// `apat` と違い、`(pat : type)` も書ける。
-pub(super) fn param(p: &mut Parser) -> bool {
-    apat_with(p, true)
-}
-
-fn apat_with(p: &mut Parser, annotated: bool) -> bool {
     let m = p.start();
     let kind = match p.current() {
         UNDERSCORE => {
@@ -121,7 +113,7 @@ fn apat_with(p: &mut Parser, annotated: bool) -> bool {
             p.bump(INT);
             LITERAL_PAT
         }
-        L_PAREN => paren_pat(p, annotated),
+        L_PAREN => paren_pat(p),
         L_BRACK => {
             unsupported_group(p, "lists are not supported yet");
             ERROR
@@ -139,7 +131,7 @@ fn apat_with(p: &mut Parser, annotated: bool) -> bool {
     true
 }
 
-fn paren_pat(p: &mut Parser, annotated: bool) -> SyntaxKind {
+fn paren_pat(p: &mut Parser) -> SyntaxKind {
     p.bump(L_PAREN);
     if p.eat(R_PAREN) {
         return UNIT_PAT;
@@ -147,7 +139,7 @@ fn paren_pat(p: &mut Parser, annotated: bool) -> SyntaxKind {
     if !pattern(p) {
         expected(p, "a pattern");
     }
-    let kind = if annotated && p.eat(COLON) {
+    let kind = if p.eat(COLON) {
         types::type_(p);
         ANNOT_PAT
     } else if p.at(COMMA) {
