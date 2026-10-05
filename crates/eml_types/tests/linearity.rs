@@ -707,3 +707,15 @@ fn a_polymorphic_function_may_keep_unrestricted_values_or_avoid_multi() {
     let rest = "unrestricted : Unit -> <Choice> Int\nunrestricted () = keep 1 chooser\n\npure_action : Unit -> <IO> Unit\npure_action () =\n  let f = open \"a.txt\"\n  let g = keep f (fn () -> ())\n  close g";
     assert_eq!(polymorphic(rest), "");
 }
+
+#[test]
+fn a_carry_over_whose_row_has_no_known_multi_operation() {
+    let rest = "ping : (Unit -> <e> Unit) -> Int -> <IO | e> Unit\nping action n =\n  let f = open \"a.txt\"\n  action ()\n  close f\n  pong n\n\npong : Int -> <IO | e> Unit\npong n =\n  handle ping chooser n with\n    | choose () k -> resume k True\n\nchooser : Unit -> <Choice> Unit\nchooser () =\n  let b = choose ()\n  ()";
+    insta::assert_snapshot!(carried(rest), @"
+    E3006 23:3 `f` must be used exactly once, but it is kept alive across a call that may resume more than once
+      23:3 this call may perform `multi` operations
+      22:7 `f` is bound here
+      note: a continuation of a `multi` operation can be resumed more than once, and each resumption would use the value again
+      help: finish using `f` before this call
+    ");
+}
