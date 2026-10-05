@@ -4,7 +4,9 @@
 
 use std::collections::BTreeSet;
 
-use eml_hir::{Body, ExprId, ExprKind, LocalId, PatId, Res, Stmt};
+use eml_hir::{
+    Body, ExprId, ExprKind, LocalId, Module, OpMultiplicity, OperationId, PatId, Res, Stmt,
+};
 
 use crate::check::{BodyTyping, CallRows};
 use crate::kind::{Across, Bound, CallKind, CarriedValue, KindOrigin, KindReason};
@@ -21,8 +23,15 @@ enum Held {
 
 type Live = BTreeSet<Held>;
 
-pub(crate) fn constrain(body: &Body, typing: &BodyTyping, table: &mut Table, reliable: bool) {
+pub(crate) fn constrain(
+    module: &Module,
+    body: &Body,
+    typing: &BodyTyping,
+    table: &mut Table<'_>,
+    reliable: bool,
+) {
     let mut carrying = Carrying {
+        module,
         body,
         typing,
         table,
@@ -32,6 +41,7 @@ pub(crate) fn constrain(body: &Body, typing: &BodyTyping, table: &mut Table, rel
 }
 
 struct Carrying<'a, 'c> {
+    module: &'a Module,
     body: &'a Body,
     typing: &'a BodyTyping,
     table: &'a mut Table<'c>,
@@ -261,13 +271,30 @@ impl Carrying<'_, '_> {
             range: self.body.exprs[at].range,
             reason: KindReason::CarriedAcross {
                 value,
-                across: across.clone(),
+                multi: self.multi_operation(across),
                 call: call.clone(),
             },
         });
         let previous = self.table.set_kind_origin(origin);
         self.table.carry(ty, &mults);
         self.table.set_kind_origin(previous);
+    }
+
+    /// 報告が指す `multi` の操作。row を解き、`multi` の操作を持つ最初のラベルのエフェクトから、宣言の順で最初の `multi`
+    /// の操作を選ぶ。row を束縛するのはこの本体の検査だけで、このパスはその後に動くので、報告のときに解いても同じ結果に
+    /// なる。
+    fn multi_operation(&self, across: &Across) -> Option<OperationId> {
+        let module = self.module;
+        match across {
+            Across::Operation(op) => Some(*op),
+            Across::Row(row) => self.table.resolve_row(row).labels.iter().find_map(|label| {
+                module.effects[label.effect]
+                    .operations
+                    .iter()
+                    .copied()
+                    .find(|&op| matches!(module.operations[op].multiplicity, OpMultiplicity::Multi))
+            }),
+        }
     }
 
     fn held(&self, value: Held) -> Option<(Ty, CarriedValue)> {

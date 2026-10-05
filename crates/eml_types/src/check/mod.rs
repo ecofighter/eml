@@ -148,7 +148,7 @@ pub(crate) fn check_module(module: &Module) -> (TypedModule, Vec<Diagnostic>) {
             let typing = checker.typing;
             let reliable = usage::reliable(body, well_typed);
             usage::constrain(body, &typing, &mut table, reliable);
-            carry::constrain(body, &typing, &mut table, reliable);
+            carry::constrain(module, body, &typing, &mut table, reliable);
             bodies.push((id, typing));
         }
         for &id in &component {
@@ -167,7 +167,7 @@ pub(crate) fn check_module(module: &Module) -> (TypedModule, Vec<Diagnostic>) {
         {
             continue;
         }
-        diagnostics.push(report::linear_misuse(module, &table, &origin));
+        diagnostics.push(report::linear_misuse(module, &origin));
     }
     let mut typed = TypedModule {
         main,

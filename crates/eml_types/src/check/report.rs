@@ -1,9 +1,11 @@
 use eml_diagnostics::{Diagnostic, FileId, Label, TextEdit, TextRange};
-use eml_hir::{Body, ExprId, ExprKind, Module, OpMultiplicity, OperationId, PatId, Res};
+use eml_hir::{Body, ExprId, ExprKind, Module, OperationId, PatId, Res};
 
 use crate::codes;
-use crate::kind::{Across, CallKind, CarriedValue, KindOrigin, KindReason, UnusedPath};
-use crate::table::{Row, Table, Ty, UnifyError};
+use crate::kind::{
+    CallKind, CarriedInner, CarriedValue, InnerLabel, KindOrigin, KindReason, UnusedPath,
+};
+use crate::table::{Row, Ty, UnifyError};
 
 use super::body::BodyCheck;
 
@@ -372,16 +374,16 @@ const LINEAR_NOTE: &str = "linear values, such as files, the continuation of a `
 
 /// 線形な値の誤った使い方。破れた Kind の制約の由来から番号と指す場所を決める (docs/spec/diagnostics.md の
 /// 「線形性の診断」)。表に当たらない由来 (受け渡し、単一化、捕獲) は E3001 にする。
-pub(super) fn linear_misuse(module: &Module, table: &Table, origin: &KindOrigin) -> Diagnostic {
+pub(super) fn linear_misuse(module: &Module, origin: &KindOrigin) -> Diagnostic {
     let file = module.file;
     match &origin.reason {
         KindReason::CarriedAcross {
             value,
-            across,
+            multi,
             call,
-        } => carried_across(module, table, origin.range, value, across, call),
+        } => carried_across(module, origin.range, value, *multi, call),
         KindReason::CarriedThrough { name, inner } => {
-            carried_through(file, origin.range, name, inner.as_deref())
+            carried_through(file, origin.range, name, inner.as_ref())
         }
         KindReason::UsedMoreThanOnce {
             name,
@@ -510,10 +512,9 @@ const CARRY_NOTE: &str = "a continuation of a `multi` operation can be resumed m
 /// E3006。呼び出しをまたいで持っている値 (docs/spec/diagnostics.md の「線形性の診断」)。
 fn carried_across(
     module: &Module,
-    table: &Table,
     range: TextRange,
     value: &CarriedValue,
-    across: &Across,
+    multi: Option<OperationId>,
     call: &CallKind,
 ) -> Diagnostic {
     let file = module.file;
@@ -529,7 +530,7 @@ fn carried_across(
         CallKind::Resume { k: None } => "resuming the continuation".to_string(),
         CallKind::Handle => "this handle".to_string(),
     };
-    let operation = multi_operation(module, table, across);
+    let operation = multi;
     let primary = match operation {
         Some(op) => format!(
             "{what} may perform `{}`, a `multi` operation",
@@ -583,27 +584,13 @@ fn carried_across(
     diagnostic.with_note(CARRY_NOTE).with_help(help)
 }
 
-/// 指す `multi` の操作。row を解き、`multi` の操作を持つ最初のラベルのエフェクトから、宣言の順で最初の `multi` の操作を選ぶ。
-fn multi_operation(module: &Module, table: &Table, across: &Across) -> Option<OperationId> {
-    match across {
-        Across::Operation(op) => Some(*op),
-        Across::Row(row) => table.resolve_row(row).labels.iter().find_map(|label| {
-            module.effects[label.effect]
-                .operations
-                .iter()
-                .copied()
-                .find(|&op| matches!(module.operations[op].multiplicity, OpMultiplicity::Multi))
-        }),
-    }
-}
-
 /// E3006。呼んだ関数のスキームから複写した持ち越しの制約が、呼んだ側で破れた (docs/spec/diagnostics.md の「線形性の診断」)。
 /// secondary は、呼んだ関数の中で値をまたがせている位置で、1段だけたどる。
 fn carried_through(
     file: FileId,
     range: TextRange,
     name: &str,
-    inner: Option<&KindOrigin>,
+    inner: Option<&CarriedInner>,
 ) -> Diagnostic {
     let mut diagnostic = Diagnostic::error(
         codes::LINEAR_VALUE_KEPT_ACROSS_MULTI,
@@ -611,13 +598,10 @@ fn carried_through(
         Label::new(file, range, format!("`{name}` is used here")),
     );
     if let Some(inner) = inner {
-        let label = match &inner.reason {
-            KindReason::CarriedAcross {
-                value: CarriedValue::Local { name, .. } | CarriedValue::ReturnCapture { name, .. },
-                ..
-            } => format!("`{name}` is kept alive across this call"),
-            KindReason::CarriedThrough { name, .. } => format!("through this use of `{name}`"),
-            _ => "a value is kept alive across this call".to_string(),
+        let label = match &inner.label {
+            InnerLabel::Kept(name) => format!("`{name}` is kept alive across this call"),
+            InnerLabel::Through(name) => format!("through this use of `{name}`"),
+            InnerLabel::Value => "a value is kept alive across this call".to_string(),
         };
         diagnostic = diagnostic.with_secondary(Label::new(file, inner.range, label));
     }

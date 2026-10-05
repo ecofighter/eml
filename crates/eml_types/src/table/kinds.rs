@@ -1,5 +1,5 @@
 use super::*;
-use crate::kind::KindReason;
+use crate::kind::{CarriedInner, KindReason};
 
 impl Table<'_> {
     pub fn carry_residual(&self, lin_keep: &[KindVar], mult_keep: &[KindVar]) -> Vec<Carry> {
@@ -30,7 +30,7 @@ impl Table<'_> {
                     range: origin.range,
                     reason: KindReason::CarriedThrough {
                         name,
-                        inner: carry.origin.clone().map(Box::new),
+                        inner: carry.origin.as_ref().map(CarriedInner::of),
                     },
                 },
                 _ => origin,

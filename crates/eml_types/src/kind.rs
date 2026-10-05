@@ -65,16 +65,18 @@ pub(crate) enum KindReason {
     /// 型の単一化で出た制約。
     Unified,
     /// 呼び出しをまたいで持っている値。由来の範囲は呼び出しの範囲である (docs/spec/effects.md の「継続の多重度と持ち越し規則」)。
+    /// `multi` は報告が指す `multi` の操作で、持ち越しのパスが決める。row を持たないのは、由来を型の表から切り離し、
+    /// スキームに残せるようにするため。
     CarriedAcross {
         value: CarriedValue,
-        across: Across,
+        multi: Option<OperationId>,
         call: CallKind,
     },
-    /// スキームから複写した持ち越しの制約。由来の範囲は参照した位置である。`inner` は、スキームに残した元の由来で、
-    /// 呼んだ関数の中で値をまたがせている呼び出しを指す (docs/spec/diagnostics.md の E3006)。
+    /// スキームから複写した持ち越しの制約。由来の範囲は参照した位置である。`inner` は、呼んだ関数の中で値をまたがせている
+    /// 位置の要約である (docs/spec/diagnostics.md の E3006)。
     CarriedThrough {
         name: String,
-        inner: Option<Box<KindOrigin>>,
+        inner: Option<CarriedInner>,
     },
 }
 
@@ -118,8 +120,8 @@ impl CarriedValue {
     }
 }
 
-/// 値がまたぐもの。row は報告するときに解く。操作の直接の呼び出しでは、その操作の多重度だけを見る。
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// 値がまたぐもの。持ち越しのパスが多重度の成分を作るのに使う。操作の直接の呼び出しでは、その操作の多重度だけを見る。
+#[derive(Debug, Clone)]
 pub(crate) enum Across {
     Row(Row),
     Operation(OperationId),
@@ -134,6 +136,42 @@ pub(crate) enum CallKind {
         k: Option<String>,
     },
     Handle,
+}
+
+/// `CarriedThrough` が指す、呼んだ関数の中の持ち越しの1段分。報告は1段しかたどらないので入れ子にしない。入れ子にすると、
+/// 呼び出しの段数だけ由来が深くなり、複写のたびにその深さの時間がかかる (docs/spec/diagnostics.md の E3006)。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct CarriedInner {
+    pub range: TextRange,
+    pub label: InnerLabel,
+}
+
+/// 報告の secondary の言い方。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum InnerLabel {
+    /// 名前のある値を持ったまま呼んだ。
+    Kept(String),
+    /// さらに別の関数を通った。
+    Through(String),
+    /// 名前のない値を持ったまま呼んだ。
+    Value,
+}
+
+impl CarriedInner {
+    pub fn of(origin: &KindOrigin) -> CarriedInner {
+        let label = match &origin.reason {
+            KindReason::CarriedAcross {
+                value: CarriedValue::Local { name, .. } | CarriedValue::ReturnCapture { name, .. },
+                ..
+            } => InnerLabel::Kept(name.clone()),
+            KindReason::CarriedThrough { name, .. } => InnerLabel::Through(name.clone()),
+            _ => InnerLabel::Value,
+        };
+        CarriedInner {
+            range: origin.range,
+            label,
+        }
+    }
 }
 
 /// 持ち越しの制約 (docs/spec/types.md の「推論」)。`lin` の解が `Lin` なら、`mult` の解は `Once` 以下でなければならない。
