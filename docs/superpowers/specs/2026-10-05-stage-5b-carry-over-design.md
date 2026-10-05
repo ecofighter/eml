@@ -190,6 +190,7 @@ pub(crate) struct BodyTyping {
 ```
 
 - 呼び出しの矢印ごとの row は、`include_call_row` に渡す row である。矢印が `Arrow::Error` のときは記録しない。
+- ただし、呼ばれる式がトップレベルの値 (関数、組み込み、操作、コンストラクタ) の参照なら、戻り値の側の row を開く前の、宣言の row を記録する。参照は `open_spine` で閉じた row を新しい row 変数で開き、その row 変数は呼び出しで今の row と単一化される。開いた row を記録すると、今の row に `multi` があれば、`println` のような呼び出しもすべて `multi` を起こしうると判定されてしまう。呼ばれる値が起こすエフェクトは宣言の row に収まるので、宣言の row で判定しても健全である。本体の検査は、トップレベルの値の参照ごとに、開く前の型を `BodyCheck` の表に覚えておく。
 - row は記録したまま持ち、持ち越しのパスが表から解く。
 - 型の誤りを報告済みの本体でも記録する。持ち越しのパスは由来を記録しないので、報告はされない。
 
@@ -236,7 +237,7 @@ enum CarriedValue {
 }
 
 enum Across { Row(Row), Operation(OperationId) }
-enum CallKind { Call, Resume { k: String }, Handle }
+enum CallKind { Call, Resume { k: Option<String> }, Handle }
 ```
 
 由来は `PartialEq` で比べて重複を除くので、`Row` も比べられるようにする。
@@ -251,7 +252,8 @@ enum CallKind { Call, Resume { k: String }, Handle }
 - secondary: 選んだ操作の宣言 (`Operation::name_range`)「`choose` is declared `multi` here」。
 - row を解いても `multi` のラベルが見つからないときは、操作の secondary を省き、primary のラベルを「the row of this call may include `multi` operations」とする。
 - note: 「a continuation of a `multi` operation can be resumed more than once, and each resumption would use the value again」。
-- help: 「finish using `f` before this call」。途中の値では「finish using the value before this call」。
+- help: 「finish using `f` before this call」。途中の値では「finish using the value before this call」。`handle` では「before this handle」とする。`return` の節の捕獲では「do not capture `f` in the `return` clause」とする。
+- `resume` の `k` が変数でないとき (`resume (pick ks) v` など) は、primary を「resuming the continuation may perform ...」とする。
 
 **D3** (`CarriedThrough`)。呼んだ関数のスキームから複写した持ち越しの制約が、呼んだ側で破れた場合である。
 
@@ -277,7 +279,11 @@ search () =
   close f
 ```
 
-エフェクト多相な関数に純粋な関数を渡す `keep f (fn () -> ())` も、今の row に `multi` があれば同じく拒否される。判定は健全な側に外れるだけで、誤ったプログラムを通すことはない。原因は、`let` で束縛したラムダの row が最初の呼び出しで決まる既知の制限と同じである。`status.md` の「次の作業の注意点」に、この例と一緒に既知の制限として記録する。
+エフェクト多相な関数に純粋な関数を渡す `keep f (fn () -> ())` も、今の row に `multi` があれば同じく拒否される。
+
+`handle` と `resume` の外側の row は、handle の位置の今の row である。そのため、今の row に `multi` があれば、本体が `multi` の操作を起こさなくても、handle の後で使う `File` や、`return` の節が捕まえた `File`、節の中で `resume` をまたぐ `File` が拒否される。本体が起こすエフェクトを本体の中の呼び出しの row から集めれば細かくできるが、段階5b では行わない。
+
+どちらも、判定は健全な側に外れるだけで、誤ったプログラムを通すことはない。原因は、`let` で束縛したラムダの row が最初の呼び出しで決まる既知の制限と同じである。`status.md` の「次の作業の注意点」に、この例と一緒に既知の制限として記録する。
 
 ## 7. テスト
 
