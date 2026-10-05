@@ -216,7 +216,7 @@ fn operator_references_and_sections_become_lambdas() {
 
 #[test]
 fn a_section_operand_may_be_an_operator_sequence_that_binds_tighter() {
-    let text = "a : Int -> Int\na = (+ 2 * 3)\nb : Int -> Int\nb = (2 * 3 +)\nc : Int -> Int\nc = (1 + 2 +)\nd : String -> String\nd = (++ \"a\" ++ \"b\")\ne : Int -> Int\ne = (+ -1)";
+    let text = "a : Int -> Int\na = (+ 2 * 3)\nb : Int -> Int\nb = (2 * 3 +)\nc : Int -> Int\nc = (1 + 2 +)\nd : String -> String\nd = (++ \"a\" ++ \"b\")";
     insta::assert_snapshot!(lower_text(text), @r#"
     a : Int -> Int
     a = (fn $x#0 -> (+ $x#0 (* 2 3)))
@@ -226,9 +226,37 @@ fn a_section_operand_may_be_an_operator_sequence_that_binds_tighter() {
     c = (fn $x#0 -> (+ (+ 1 2) $x#0))
     d : String -> String
     d = (fn $x#0 -> (++ $x#0 (++ "a" "b")))
-    e : Int -> Int
-    e = (fn $x#0 -> (+ $x#0 (negate 1)))
     "#);
+}
+
+#[test]
+fn a_prefix_minus_in_a_section_operand_follows_the_operator_sequence_rules() {
+    let text =
+        "a : Int -> Int\na = (+ -1)\nb : Int -> Int\nb = (* - 2)\nc : Int -> Int\nc = (- 2 *)";
+    assert_eq!(
+        diagnostics(text),
+        vec![
+            "E1006 2:8 a prefix `-` cannot appear here without parentheses",
+            "E1006 4:8 a prefix `-` cannot appear here without parentheses",
+            "E1023 6:5 the section of `*` needs parentheses around its operand",
+        ]
+    );
+    insta::assert_snapshot!(lower_text("d : Int -> Int\nd = (- 2 +)"), @"
+    d : Int -> Int
+    d = (fn $x#0 -> (+ (negate 2) $x#0))
+    ");
+}
+
+#[test]
+fn an_invalid_section_still_reports_errors_in_its_operand() {
+    let text = "a : Int -> Int\na = (* undefined_name + 2)";
+    assert_eq!(
+        diagnostics(text),
+        vec![
+            "E1023 2:5 the section of `*` needs parentheses around its operand",
+            "E1001 2:8 cannot find value `undefined_name`",
+        ]
+    );
 }
 
 #[test]

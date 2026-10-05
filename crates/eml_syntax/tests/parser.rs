@@ -129,8 +129,120 @@ fn stray_unterminated_string_reports_both_problems() {
 
 #[test]
 fn annotated_patterns_can_appear_in_any_pattern() {
-    let text = "f (Some (x : Int)) = x\ng = match y with\n  | ((a : Int), b) -> a\nh = let (z : Int) = 1 in z";
+    let text = "f (Some (x : Int)) = x\nk (x : Int) = x\ng = match y with\n  | ((a : Int), b) -> a\nh = let (z : Int) = 1 in z";
     let parsed = eml_test_support::parse_clean(text);
-    let tree = eml_syntax::debug_tree(&parsed.parse.syntax());
-    assert_eq!(tree.matches("ANNOT_PAT").count(), 3, "{tree}");
+    insta::assert_snapshot!(eml_syntax::debug_tree(&parsed.parse.syntax()), @r#"
+    SOURCE_FILE@0..106
+      EQUATION@0..22
+        LIDENT@0..1 "f"
+        WHITESPACE@1..2 " "
+        PAREN_PAT@2..18
+          L_PAREN@2..3 "("
+          CON_PAT@3..17
+            UIDENT@3..7 "Some"
+            WHITESPACE@7..8 " "
+            ANNOT_PAT@8..17
+              L_PAREN@8..9 "("
+              BIND_PAT@9..10
+                LIDENT@9..10 "x"
+              WHITESPACE@10..11 " "
+              COLON@11..12 ":"
+              WHITESPACE@12..13 " "
+              PATH_TYPE@13..16
+                UIDENT@13..16 "Int"
+              R_PAREN@16..17 ")"
+          R_PAREN@17..18 ")"
+        WHITESPACE@18..19 " "
+        EQ@19..20 "="
+        WHITESPACE@20..21 " "
+        PATH_EXPR@21..22
+          LIDENT@21..22 "x"
+      WHITESPACE@22..23 "\n"
+      EQUATION@23..38
+        LIDENT@23..24 "k"
+        WHITESPACE@24..25 " "
+        ANNOT_PAT@25..34
+          L_PAREN@25..26 "("
+          BIND_PAT@26..27
+            LIDENT@26..27 "x"
+          WHITESPACE@27..28 " "
+          COLON@28..29 ":"
+          WHITESPACE@29..30 " "
+          PATH_TYPE@30..33
+            UIDENT@30..33 "Int"
+          R_PAREN@33..34 ")"
+        WHITESPACE@34..35 " "
+        EQ@35..36 "="
+        WHITESPACE@36..37 " "
+        PATH_EXPR@37..38
+          LIDENT@37..38 "x"
+      WHITESPACE@38..39 "\n"
+      EQUATION@39..79
+        LIDENT@39..40 "g"
+        WHITESPACE@40..41 " "
+        EQ@41..42 "="
+        WHITESPACE@42..43 " "
+        MATCH_EXPR@43..79
+          MATCH_KW@43..48 "match"
+          WHITESPACE@48..49 " "
+          PATH_EXPR@49..50
+            LIDENT@49..50 "y"
+          WHITESPACE@50..51 " "
+          WITH_KW@51..55 "with"
+          WHITESPACE@55..58 "\n  "
+          MATCH_ARM@58..79
+            PIPE@58..59 "|"
+            WHITESPACE@59..60 " "
+            TUPLE_PAT@60..74
+              L_PAREN@60..61 "("
+              ANNOT_PAT@61..70
+                L_PAREN@61..62 "("
+                BIND_PAT@62..63
+                  LIDENT@62..63 "a"
+                WHITESPACE@63..64 " "
+                COLON@64..65 ":"
+                WHITESPACE@65..66 " "
+                PATH_TYPE@66..69
+                  UIDENT@66..69 "Int"
+                R_PAREN@69..70 ")"
+              COMMA@70..71 ","
+              WHITESPACE@71..72 " "
+              BIND_PAT@72..73
+                LIDENT@72..73 "b"
+              R_PAREN@73..74 ")"
+            WHITESPACE@74..75 " "
+            THIN_ARROW@75..77 "->"
+            WHITESPACE@77..78 " "
+            PATH_EXPR@78..79
+              LIDENT@78..79 "a"
+      WHITESPACE@79..80 "\n"
+      EQUATION@80..106
+        LIDENT@80..81 "h"
+        WHITESPACE@81..82 " "
+        EQ@82..83 "="
+        WHITESPACE@83..84 " "
+        LET_EXPR@84..106
+          LET_KW@84..87 "let"
+          WHITESPACE@87..88 " "
+          ANNOT_PAT@88..97
+            L_PAREN@88..89 "("
+            BIND_PAT@89..90
+              LIDENT@89..90 "z"
+            WHITESPACE@90..91 " "
+            COLON@91..92 ":"
+            WHITESPACE@92..93 " "
+            PATH_TYPE@93..96
+              UIDENT@93..96 "Int"
+            R_PAREN@96..97 ")"
+          WHITESPACE@97..98 " "
+          EQ@98..99 "="
+          WHITESPACE@99..100 " "
+          LITERAL@100..101
+            INT@100..101 "1"
+          WHITESPACE@101..102 " "
+          IN_KW@102..104 "in"
+          WHITESPACE@104..105 " "
+          PATH_EXPR@105..106
+            LIDENT@105..106 "z"
+    "#);
 }

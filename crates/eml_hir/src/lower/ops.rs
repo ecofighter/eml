@@ -29,7 +29,7 @@ impl Cursor {
 }
 
 /// 単項の `-` は Haskell と同じく、優先順位 6 の `negate` として組み直す。
-const NEGATE_PRECEDENCE: u8 = 6;
+pub(super) const NEGATE_PRECEDENCE: u8 = 6;
 
 impl BodyLowering<'_> {
     pub(super) fn lower_op_seq(&mut self, seq: &ast::OpSeq) -> ExprId {

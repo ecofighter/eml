@@ -60,7 +60,7 @@ impl BodyLowering<'_> {
         out.any_operation = true;
         // 引数のスコープは節の本体だけである
         let mark = self.scope.len();
-        // 節の引数の並び (操作の引数と `k`) は、等式の引数と同じく1つの組である (E1017)
+        // `return` 節の引数 (最後の値を受けるパターン) も、等式の引数と同じく1つの組として扱う (E1017)
         let params = self.lower_param_group(clause.params(), clause.range());
         let body = self.lower_expr(clause.body(), clause.range());
         self.scope.truncate(mark);
@@ -156,7 +156,7 @@ impl BodyLowering<'_> {
 
     fn return_clause(&mut self, clause: &ast::ReturnClause, out: &mut Clauses) {
         let mark = self.scope.len();
-        // 節の引数の並び (操作の引数と `k`) は、等式の引数と同じく1つの組である (E1017)
+        // `return` 節の引数 (最後の値を受けるパターン) も、等式の引数と同じく1つの組として扱う (E1017)
         let params = self.lower_param_group(clause.params(), clause.range());
         let body = self.lower_expr(clause.body(), clause.range());
         self.scope.truncate(mark);

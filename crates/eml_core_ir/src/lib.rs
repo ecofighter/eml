@@ -110,7 +110,7 @@ pub enum CExpr {
     },
     /// `scope` の中の `Jump` が `body` に入る。`params` は `Jump` が渡す値を順に受ける。末尾にない `if` の続きを、
     /// ヒープにフレームを積まずに実行するために使う (docs/spec/core-ir.md)。`body` の中からは `Jump` しない。
-    /// 末尾にない `if` の join point は引数を1つ持ち、`simplify` の B2 が切り出す枝の join point は引数を持たない。
+    /// 末尾にない `if` の join point は引数を1つ持つ。`simplify` の B2 が切り出す枝の join point は、その枝のフィールドを引数に取り、枝が値全体も使うときは値も最後の引数に取る。
     Join {
         join: JoinId,
         params: Vec<VarId>,

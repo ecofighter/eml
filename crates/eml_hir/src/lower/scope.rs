@@ -77,7 +77,7 @@ impl ItemScope {
             .insert(name.to_string(), ValueItem::Operation(id))
     }
 
-    /// コンストラクタは大文字か `:` で始まり、関数と操作は小文字で始まるので、同じ名前のユーザーの値はない。
+    /// コンストラクタは大文字か `:` で始まる。関数と操作は小文字で始まるか、`:` で始まらない演算子である。パーサは `:` の演算子を関数として定義させないので、同じ名前のユーザーの値はない。
     pub(super) fn define_constructor(&mut self, name: &str, id: ConstructorId) {
         self.values
             .insert(name.to_string(), ValueItem::Constructor(id));
