@@ -13,10 +13,11 @@ use eml_diagnostics::{Diagnostic, FileId, Label, TextRange};
 use eml_syntax::{SyntaxKind, SyntaxToken, ast};
 use la_arena::Arena;
 
+use crate::builtin::Assoc;
 use crate::codes;
 use crate::hir::*;
 use expr::BodyLowering;
-use scope::{ItemScope, ValueItem};
+use scope::{Fixity, ItemScope, ValueItem};
 use types::{TypeLowering, Vars};
 
 /// 同じ名前のシグネチャと等式。名前で対応づけてから、並び方を検査する (docs/spec/declarations.md)。
@@ -31,7 +32,8 @@ struct Definition {
 
 pub fn lower(file: FileId, source: &ast::SourceFile) -> (Module, Vec<Diagnostic>) {
     let mut diagnostics = Vec::new();
-    let (definitions, data_items, effect_items) = collect(file, source, &mut diagnostics);
+    let (definitions, data_items, effect_items, fixity_items) =
+        collect(file, source, &mut diagnostics);
     let mut functions = Arena::new();
     let mut scope = ItemScope::new();
     let mut types = Arena::new();
@@ -164,6 +166,8 @@ pub fn lower(file: FileId, source: &ast::SourceFile) -> (Module, Vec<Diagnostic>
             pending.push((id, equation));
         }
     }
+    // fixity の宣言は位置によらずモジュール全体の組み直しに効くので、本体の変換の前に、すべての値を定義してから読む
+    declare_fixities(file, &fixity_items, &mut scope, &mut diagnostics);
     // 本体は、すべての関数の名前がそろってから変換する。後ろで定義した関数も呼べるようにするため
     for (id, equation) in pending {
         // シグネチャがなければ、本体の注釈は型変数を引けない (docs/spec/types.md の「推論」)
@@ -205,11 +209,17 @@ fn collect(
     file: FileId,
     source: &ast::SourceFile,
     diagnostics: &mut Vec<Diagnostic>,
-) -> (Vec<Definition>, Vec<ast::DataItem>, Vec<ast::EffectItem>) {
+) -> (
+    Vec<Definition>,
+    Vec<ast::DataItem>,
+    Vec<ast::EffectItem>,
+    Vec<ast::FixityItem>,
+) {
     let mut definitions: Vec<Definition> = Vec::new();
     let mut by_name: HashMap<String, usize> = HashMap::new();
     let mut data = Vec::new();
     let mut effects = Vec::new();
+    let mut fixities = Vec::new();
     for (index, item) in source.items().enumerate() {
         match item {
             ast::Item::Signature(signature) => {
@@ -244,16 +254,72 @@ fn collect(
             }
             ast::Item::DataItem(item) => data.push(item),
             ast::Item::EffectItem(item) => effects.push(item),
-            ast::Item::FixityItem(item) => diagnostics.push(Diagnostic::not_yet_supported(
-                file,
-                item.keyword_range(),
-                "fixity declarations are not supported yet",
-            )),
+            ast::Item::FixityItem(item) => fixities.push(item),
             // `type` は構文の段階 S2 の構文で、パーサが E0004 を報告済み
             ast::Item::TypeItem(_) => {}
         }
     }
-    (definitions, data, effects)
+    (definitions, data, effects, fixities)
+}
+
+/// fixity の宣言の結合と優先順位。優先順位の範囲の誤りはパーサが報告済みなので、読めなければ `None` にする。
+pub(super) fn fixity_of(item: &ast::FixityItem) -> Option<Fixity> {
+    let assoc = match item.assoc()?.kind() {
+        SyntaxKind::INFIXL_KW => Assoc::Left,
+        SyntaxKind::INFIXR_KW => Assoc::Right,
+        _ => Assoc::None,
+    };
+    let precedence = item
+        .precedence()?
+        .text()
+        .parse::<u8>()
+        .ok()
+        .filter(|precedence| *precedence <= 9)?;
+    Some(Fixity { precedence, assoc })
+}
+
+/// ユーザーの fixity の宣言を表に入れる。同じ演算子への2回目の宣言は E1021、このモジュールで定義していない演算子
+/// への宣言は E1022 にし、どちらも表に入れない (docs/spec/declarations.md の「fixity」)。
+fn declare_fixities(
+    file: FileId,
+    items: &[ast::FixityItem],
+    scope: &mut ItemScope,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    for item in items {
+        let Some(fixity) = fixity_of(item) else {
+            continue;
+        };
+        for op in item.operators() {
+            let (name, range) = (op.text(), op.text_range());
+            if !scope.defines_value(name) {
+                diagnostics.push(Diagnostic::error(
+                    codes::FIXITY_WITHOUT_DEFINITION,
+                    format!("`{name}` is not defined in this module"),
+                    Label::new(
+                        file,
+                        range,
+                        "a fixity declaration needs a definition of its operator in the same module",
+                    ),
+                ));
+                continue;
+            }
+            if let Err(first) = scope.declare_fixity(name, fixity, range) {
+                diagnostics.push(
+                    Diagnostic::error(
+                        codes::DUPLICATE_FIXITY,
+                        format!("`{name}` has more than one fixity declaration"),
+                        Label::new(file, range, "declared again here"),
+                    )
+                    .with_secondary(Label::new(
+                        file,
+                        first,
+                        "first declared here",
+                    )),
+                );
+            }
+        }
+    }
 }
 
 fn slot(

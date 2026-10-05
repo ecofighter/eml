@@ -4,7 +4,8 @@ use eml_diagnostics::{Diagnostic, Label, TextRange, TextSize};
 use eml_syntax::ast::{self, OpSeqElement};
 
 use super::expr::BodyLowering;
-use crate::builtin::{Assoc, Builtin, fixity};
+use super::scope::Fixity;
+use crate::builtin::{Assoc, Builtin};
 use crate::codes;
 use crate::hir::{ExprId, ExprKind, Res};
 
@@ -62,8 +63,8 @@ impl BodyLowering<'_> {
     ) -> ExprId {
         let mut lhs = self.operand(cursor, min_precedence);
         while let Some(Piece::Operator { text, range }) = cursor.peek() {
-            // fixity の宣言がない演算子は `infixl 9` とする (docs/spec/declarations.md)
-            let (precedence, assoc) = fixity(&text).unwrap_or((9, Assoc::Left));
+            // fixity は名前が解決した先の定義に付く (docs/spec/declarations.md の「fixity」)
+            let Fixity { precedence, assoc } = self.items.fixity(&text);
             if precedence < min_precedence {
                 break;
             }

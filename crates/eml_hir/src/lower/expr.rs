@@ -2,9 +2,10 @@ use eml_diagnostics::{Diagnostic, FileId, Label, TextRange};
 use eml_syntax::{SyntaxKind, SyntaxToken, ast};
 use la_arena::Arena;
 
+use super::scope::Fixity;
 use super::scope::{ItemScope, ValueItem};
 use super::types::{TypeLowering, Vars};
-use crate::builtin::{Assoc, fixity};
+use crate::builtin::Assoc;
 use crate::codes;
 use crate::hir::*;
 
@@ -431,34 +432,62 @@ impl<'a> BodyLowering<'a> {
             .map(|pat| self.lower_pat_in_group(pat, range))
             .collect();
         let mut position = 0;
-        self.climb_pat(&operands, &operators, &mut position, 0)
+        self.climb_pat(&operands, &operators, &mut position, 0, None)
     }
 
-    /// 式の `climb` と同じ優先順位の上昇法である。表の中で `:` で始まる演算子は `::` だけなので、同じ優先順位で
-    /// 結合の向きが違う並びは起きず、E1006 は出さない。
+    /// 式の `climb` と同じ優先順位の上昇法である。ユーザーは `:` で始まる演算子に fixity を宣言できるので、
+    /// 同じ優先順位で結合の向きが違う並びも起きる。その場合は式と同じく E1006 を報告し、パターンを `Missing` にする。
     fn climb_pat(
         &mut self,
         operands: &[PatId],
         operators: &[SyntaxToken],
         position: &mut usize,
         min_precedence: u8,
+        mut previous: Option<(String, u8, Assoc)>,
     ) -> PatId {
         let mut lhs = operands[*position];
         while let Some(operator) = operators.get(*position) {
-            let (precedence, assoc) = fixity(operator.text()).unwrap_or((9, Assoc::Left));
+            let text = operator.text().to_string();
+            let Fixity { precedence, assoc } = self.items.fixity(&text);
             if precedence < min_precedence {
                 break;
             }
             *position += 1;
+            let conflict = previous
+                .as_ref()
+                .is_some_and(|(_, p, a)| *p == precedence && (*a != assoc || assoc == Assoc::None));
             let next_min = if assoc == Assoc::Right {
                 precedence
             } else {
                 precedence + 1
             };
-            let rhs = self.climb_pat(operands, operators, position, next_min);
+            let rhs = self.climb_pat(
+                operands,
+                operators,
+                position,
+                next_min,
+                Some((text.clone(), precedence, assoc)),
+            );
             let whole = self.pats[lhs].range.cover(self.pats[rhs].range);
-            let kind = self.constructor_pat(operator, vec![lhs, rhs], whole);
+            let kind = if conflict {
+                let (previous_text, _, _) = previous.as_ref().unwrap();
+                self.diagnostics.push(Diagnostic::error(
+                    codes::NON_ASSOCIATIVE_OPERATORS,
+                    format!(
+                        "`{previous_text}` and `{text}` cannot be combined without parentheses"
+                    ),
+                    Label::new(
+                        self.file,
+                        operator.text_range(),
+                        "use parentheses to group the operators",
+                    ),
+                ));
+                PatKind::Missing
+            } else {
+                self.constructor_pat(operator, vec![lhs, rhs], whole)
+            };
             lhs = self.pats.alloc(Pat { kind, range: whole });
+            previous = Some((text, precedence, assoc));
         }
         lhs
     }

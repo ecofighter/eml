@@ -129,27 +129,12 @@ impl Builtin {
     }
 }
 
+/// 演算子の結合の向き。標準の演算子の fixity は Prelude (`prelude.em`) の宣言で持つ (docs/spec/declarations.md の「fixity」)。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Assoc {
     Left,
     Right,
     None,
-}
-
-/// 標準の演算子の表 (docs/spec/declarations.md)。fixity の宣言は段階6で読む。
-pub fn fixity(op: &str) -> Option<(u8, Assoc)> {
-    Some(match op {
-        "<|" => (0, Assoc::Right),
-        "|>" => (1, Assoc::Left),
-        "||" => (2, Assoc::Right),
-        "&&" => (3, Assoc::Right),
-        "==" | "!=" | "<" | "<=" | ">" | ">=" => (4, Assoc::None),
-        "++" | "::" => (5, Assoc::Right),
-        "+" | "-" => (6, Assoc::Left),
-        "*" | "/" | "%" => (7, Assoc::Left),
-        ">>" | "<<" => (9, Assoc::Right),
-        _ => return None,
-    })
 }
 
 #[cfg(test)]

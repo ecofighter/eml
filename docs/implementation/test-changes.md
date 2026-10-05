@@ -171,3 +171,4 @@
   - 同 `arms_with_fields_keep_the_join_point_argument` (`an_arm_that_uses_the_whole_value_gets_it_as_an_argument` に改名)
   - 同 `jumps_that_pass_constructed_values_are_left_alone` (`jumps_that_pass_constructed_values_go_to_their_arms` に改名)
   - `eml_core_ir/tests/perceus.rs` の `a_split_switch_still_unpacks_the_arm_with_fields` (`a_split_arm_with_fields_still_drops_its_unused_field` に改名)
+- ユーザーが定義した `::` は Prelude の `::` を隠し、宣言がなければ `infixl 9` になるため、`eml_hir/tests/data.rs` の `infix_constructors_and_a_declared_cons` のソースに `infixr 5 ::` を足した。期待値は変わらない (種類1)

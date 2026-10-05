@@ -5,11 +5,28 @@ use std::collections::HashMap;
 
 use la_arena::Arena;
 
-use crate::builtin::Builtin;
+use eml_diagnostics::TextRange;
+
+use crate::builtin::{Assoc, Builtin};
 use crate::hir::{
     Constructor, ConstructorId, EffectDef, EffectId, FunctionId, Generics, LangItems, OperationId,
     TypeDef, TypeDefId,
 };
+
+/// 演算子の優先順位と結合 (docs/spec/declarations.md の「fixity」)。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct Fixity {
+    pub precedence: u8,
+    pub assoc: Assoc,
+}
+
+impl Fixity {
+    /// fixity の宣言がない演算子 (Haskell と同じ)。
+    pub(super) const DEFAULT: Fixity = Fixity {
+        precedence: 9,
+        assoc: Assoc::Left,
+    };
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum ValueItem {
@@ -38,6 +55,10 @@ pub(super) struct ItemScope {
     effect_params: HashMap<EffectId, usize>,
     /// 型の型引数の個数。型の適用の型引数の個数を確かめるのに使う (E1015)。
     type_params: HashMap<TypeDefId, usize>,
+    /// Prelude の演算子の fixity。
+    prelude_fixities: HashMap<String, Fixity>,
+    /// ユーザーが宣言した fixity と、宣言の演算子の位置。
+    fixities: HashMap<String, (Fixity, TextRange)>,
 }
 
 impl ItemScope {
@@ -111,6 +132,44 @@ impl ItemScope {
             Some(ValueItem::Operation(id)) => Some(*id),
             _ => None,
         }
+    }
+
+    pub(super) fn declare_prelude_fixity(&mut self, op: &str, fixity: Fixity) {
+        self.prelude_fixities.insert(op.to_string(), fixity);
+    }
+
+    /// 2回目の宣言なら、1回目の演算子の位置を返し、表を変えない。
+    pub(super) fn declare_fixity(
+        &mut self,
+        op: &str,
+        fixity: Fixity,
+        range: TextRange,
+    ) -> Result<(), TextRange> {
+        if let Some((_, first)) = self.fixities.get(op) {
+            return Err(*first);
+        }
+        self.fixities.insert(op.to_string(), (fixity, range));
+        Ok(())
+    }
+
+    /// このモジュールで定義した値か。Prelude の `data` のコンストラクタも同じ表にあるが、演算子の名前のものはない。
+    pub(super) fn defines_value(&self, name: &str) -> bool {
+        self.values.contains_key(name)
+    }
+
+    /// 演算子の fixity。fixity は名前が解決した先の定義に付く。ユーザーの定義は Prelude の演算子を隠すので、宣言の
+    /// ないユーザーの演算子は `infixl 9` である (docs/spec/declarations.md の「fixity」)。
+    pub(super) fn fixity(&self, op: &str) -> Fixity {
+        if let Some((fixity, _)) = self.fixities.get(op) {
+            return *fixity;
+        }
+        if self.values.contains_key(op) {
+            return Fixity::DEFAULT;
+        }
+        self.prelude_fixities
+            .get(op)
+            .copied()
+            .unwrap_or(Fixity::DEFAULT)
     }
 
     pub(super) fn type_item(&self, name: &str) -> Option<TypeItem> {

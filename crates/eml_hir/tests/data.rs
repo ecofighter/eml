@@ -39,8 +39,8 @@ fn match_arms_and_constructor_patterns() {
 
 #[test]
 fn infix_constructors_and_a_declared_cons() {
-    // 宣言した `::` は、標準の演算子の表の `infixr 5` で組み直す
-    let text = "data L = | E | Int :: L\n\nf : Int -> L\nf x = x :: x :: E\n\ng : L -> Int\ng l = match l with | h :: _ -> h | E -> 0";
+    // ユーザーの `::` は Prelude の `::` を隠すので、宣言がなければ `infixl 9` になる。右に組むには自分の fixity の宣言がいる (docs/spec/declarations.md の「fixity」)
+    let text = "infixr 5 ::\ndata L = | E | Int :: L\n\nf : Int -> L\nf x = x :: x :: E\n\ng : L -> Int\ng l = match l with | h :: _ -> h | E -> 0";
     insta::assert_snapshot!(lower_text(text), @r"
     data L
       | E

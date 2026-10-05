@@ -1,5 +1,17 @@
 -- 組み込みの型 `Bool` と、関数と演算子のシグネチャ。型は docs/spec/declarations.md の標準の演算子の表と、
 -- docs/spec/effects.md の組み込みの IO に従う。関数の名前と見え方と引数の数は eml_hir::builtin::BUILTINS にある。
+-- 標準の演算子の fixity (docs/spec/declarations.md の表)。`&&`、`||`、`|>`、`<|` はシグネチャがなく HIR で脱糖し、
+-- `::` は S2 のリストの演算子だが、fixity は Prelude の中でだけ宣言できる。
+infixr 0 <|
+infixl 1 |>
+infixr 2 ||
+infixr 3 &&
+infix 4 ==, !=, <, <=, >, >=
+infixr 5 ++, ::
+infixl 6 +, -
+infixl 7 *, /, %
+infixr 9 >>, <<
+
 data Bool =
   | False
   | True

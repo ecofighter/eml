@@ -158,6 +158,7 @@ infixr 9 >>, <<
   - ユーザーが定義した演算子 (関数と中置のコンストラクタ) は、ユーザーの宣言を使う。宣言がなければ `infixl 9` である
   - ユーザーが `+` を定義して Prelude の `+` を隠すと、その `+` は宣言がなければ `infixl 9` になる (Haskell と同じ)
 - 宣言の位置は問わない。後ろに書いた fixity の宣言も、モジュール全体の組み直しに効く。本体は item をすべて集めてから変換するので、今の順で足りる
+- 中置のコンストラクタのパターンの組み直し (`climb_pat`) も、式の `climb` と同じく、同じ優先順位で結合の向きが違う並びと、結合しない演算子の並びに E1006 を報告する。誤りのパターンは `Missing` にする。ユーザーが `:` で始まる演算子に fixity を宣言できるので、この並びが起きるためである
 - 単項の `-` は今どおり優先順位 6 の `negate` として扱い、表を引かない
 - `&&`、`||`、`|>`、`<|`、`::` は、Prelude にシグネチャのない演算子である。Prelude の中でだけ、これらへの fixity の宣言を許す。Prelude の変換は誤りがないことを `debug_assert` で確かめている (今と同じ)
 
@@ -283,6 +284,7 @@ UI テストは、[testing.md](../../implementation/testing.md) のとおり、�
 | 2 | `eml_core_ir/tests/perceus.rs` の `a_split_switch_still_unpacks_the_arm_with_fields`。同じ理由で、`dup` と `decref` の並びも変わる |
 | 2 | `eml_core_ir/tests/perceus.rs` の `shadowed_and_discarded_strings`。DCE が使われない `const` の束縛を消すため、捨てた文字列の `const` と `decref` が消える。捨てた値の解放は、新しい `a_discarded_call_result_is_released` で確かめ続ける |
 | 2 | `eml_core_ir/tests/simplify.rs` の `join_points_left_without_jumps_are_removed`。DCE が使われない `const` の束縛を消すため、`main` の先頭の `let s1 = const "other"` が消える |
+| 1 | `eml_hir/tests/data.rs` の `infix_constructors_and_a_declared_cons`。ユーザーが定義した `::` は Prelude の `::` を隠し、宣言がなければ `infixl 9` になるため、テストのソースに `infixr 5 ::` を足す。期待値は変わらない |
 
 - 種類1と種類2の変更は `test-changes.md` に記録する
 - `run/` の UI テストの出力は変わらない。`debug_heap` のリーク検出も通ったままである

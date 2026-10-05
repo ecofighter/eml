@@ -713,6 +713,37 @@ fn name_token(node: &SyntaxNode) -> Option<SyntaxToken> {
         })
 }
 
+impl FixityItem {
+    /// `infixl`、`infixr`、`infix` のキーワード。
+    pub fn assoc(&self) -> Option<SyntaxToken> {
+        self.syntax.first_token().filter(|token| {
+            matches!(
+                token.kind(),
+                SyntaxKind::INFIXL_KW | SyntaxKind::INFIXR_KW | SyntaxKind::INFIX_KW
+            )
+        })
+    }
+
+    pub fn precedence(&self) -> Option<SyntaxToken> {
+        self.syntax
+            .children_with_tokens()
+            .filter_map(NodeOrToken::into_token)
+            .find(|token| token.kind() == SyntaxKind::INT)
+    }
+
+    /// 宣言した演算子。`-` と `:` で始まる演算子も含む。
+    pub fn operators(&self) -> impl Iterator<Item = SyntaxToken> {
+        self.syntax
+            .children_with_tokens()
+            .filter_map(NodeOrToken::into_token)
+            .filter(|token| is_operator(token.kind()))
+    }
+}
+
+fn is_operator(kind: SyntaxKind) -> bool {
+    matches!(kind, SyntaxKind::OP | SyntaxKind::MINUS | SyntaxKind::CONOP)
+}
+
 fn keyword_range(node: &SyntaxNode) -> TextRange {
     node.first_token()
         .map_or(node.text_range(), |token| token.text_range())

@@ -48,6 +48,15 @@ pub(super) fn lower_prelude(
         constructors,
         &mut diagnostics,
     );
+    for item in tree.items() {
+        let ast::Item::FixityItem(item) = item else {
+            continue;
+        };
+        let fixity = super::fixity_of(&item).expect("every Prelude fixity is well formed");
+        for op in item.operators() {
+            scope.declare_prelude_fixity(op.text(), fixity);
+        }
+    }
     let mut signatures = HashMap::new();
     for item in tree.items() {
         let ast::Item::Signature(signature) = item else {
@@ -82,4 +91,44 @@ pub(super) fn lower_prelude(
     }
     debug_assert!(diagnostics.is_empty(), "{diagnostics:?}");
     signatures
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::builtin::Assoc;
+    use crate::lower::scope::{Fixity, ItemScope};
+
+    #[test]
+    fn prelude_fixities_follow_the_standard_table() {
+        // docs/spec/declarations.md の標準の演算子の表
+        let table: &[(&[&str], u8, Assoc)] = &[
+            (&["<|"], 0, Assoc::Right),
+            (&["|>"], 1, Assoc::Left),
+            (&["||"], 2, Assoc::Right),
+            (&["&&"], 3, Assoc::Right),
+            (&["==", "!=", "<", "<=", ">", ">="], 4, Assoc::None),
+            (&["++", "::"], 5, Assoc::Right),
+            (&["+", "-"], 6, Assoc::Left),
+            (&["*", "/", "%"], 7, Assoc::Left),
+            (&[">>", "<<"], 9, Assoc::Right),
+        ];
+        let mut scope = ItemScope::new();
+        let mut types = Arena::new();
+        let mut effects = Arena::new();
+        crate::lower::scope::builtin_items(&mut types, &mut effects, &mut scope);
+        lower_prelude(&mut scope, &mut types, &mut Arena::new());
+        for (ops, precedence, assoc) in table {
+            for op in *ops {
+                assert_eq!(
+                    scope.fixity(op),
+                    Fixity {
+                        precedence: *precedence,
+                        assoc: *assoc
+                    },
+                    "{op}"
+                );
+            }
+        }
+    }
 }

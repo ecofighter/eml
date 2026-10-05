@@ -1,0 +1,25 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: rendered
+input_file: tests/ui/check-fail/names/fixity_declarations.em
+---
+[E1021] Error: `:+` has more than one fixity declaration
+   ╭─[ check-fail/names/fixity_declarations.em:3:10 ]
+   │
+ 3 │ infixl 6 :+
+   │          ─┬  
+   │           ╰── declared again here
+   │
+   ├─[ check-fail/names/fixity_declarations.em:3:10 ]
+   │
+ 2 │ infixr 5 :+
+   │          ─┬  
+   │           ╰── first declared here
+───╯
+[E1022] Error: `+` is not defined in this module
+   ╭─[ check-fail/names/fixity_declarations.em:4:10 ]
+   │
+ 4 │ infixl 6 +
+   │          ┬  
+   │          ╰── a fixity declaration needs a definition of its operator in the same module
+───╯

@@ -1,6 +1,6 @@
 mod common;
 
-use common::lower_text;
+use common::{diagnostics, lower_text};
 
 #[test]
 fn precedence_and_left_associativity() {
@@ -112,4 +112,51 @@ fn composition_operators_are_builtin_calls() {
     h : Bool -> Bool
     h = (>> not (<< not not))
     ");
+}
+
+#[test]
+fn a_declared_fixity_regroups_a_constructor_operator() {
+    // 宣言がなければ `infixl 9` で `(a :+ b) :+ c` になるところを、`infixr` で右に組む
+    let text = "infixr 5 :+\ndata P = | E | Int :+ P\n\np : P\np = 1 :+ 2 :+ E";
+    insta::assert_snapshot!(lower_text(text), @r"
+    data P
+      | E
+      | Int :+ P
+    p : P
+    p = (:+ 1 (:+ 2 E))
+    ");
+}
+
+#[test]
+fn a_fixity_declared_after_its_use_still_applies() {
+    let text = "data P = | E | Int :+ P\n\np : P\np = 1 :+ 2 :+ E\n\ninfixr 5 :+";
+    insta::assert_snapshot!(lower_text(text), @r"
+    data P
+      | E
+      | Int :+ P
+    p : P
+    p = (:+ 1 (:+ 2 E))
+    ");
+}
+
+#[test]
+fn fixity_declarations_need_one_definition_in_this_module() {
+    let text = "infixr 5 :+\ninfixl 6 :+\ninfixl 6 +\ninfix 4 <=>\ndata P = | E | Int :+ P\n\nmain : Unit -> <IO> Unit\nmain () = ()";
+    assert_eq!(
+        diagnostics(text),
+        vec![
+            "E1021 2:10 `:+` has more than one fixity declaration",
+            "E1022 3:10 `+` is not defined in this module",
+            "E1022 4:9 `<=>` is not defined in this module",
+        ]
+    );
+}
+
+#[test]
+fn constructor_patterns_with_conflicting_fixities_need_parentheses() {
+    let text = "infixl 5 :+\ninfixr 5 :-\ndata P = | E | P :+ Int | Int :- P\n\nf : P -> Int\nf p = match p with | a :+ b :- c -> 0 | _ -> 1";
+    assert_eq!(
+        diagnostics(text),
+        vec!["E1006 6:29 `:+` and `:-` cannot be combined without parentheses"]
+    );
 }
