@@ -228,3 +228,54 @@ fn no_fix_for_a_function_body_on_one_line() {
     let checked = check(text);
     assert_eq!(fixes(&checked.files, &checked.diagnostics), "");
 }
+
+const TWO_OPS: &str = "effect Two where\n  one : Unit -> Unit\n  two : Unit -> Unit\n\n";
+
+#[test]
+fn two_operation_clauses_capturing_one_file_report_once() {
+    let text = format!(
+        "{TWO_OPS}main : Unit -> <IO> Unit\nmain () =\n  let f = open \"a.txt\"\n  handle one () with\n    | one () k -> resume k (close f)\n    | two () k -> resume k (close f)"
+    );
+    let checked = check(&text);
+    let codes: Vec<String> = checked
+        .diagnostics
+        .iter()
+        .map(|d| d.code.to_string())
+        .collect();
+    assert_eq!(
+        codes,
+        ["E3001"],
+        "{}",
+        full(&checked.files, &checked.diagnostics)
+    );
+}
+
+#[test]
+fn a_file_captured_by_the_body_and_the_return_clause() {
+    let text = format!(
+        "{TWO_OPS}main : Unit -> <IO> Unit\nmain () =\n  let f = open \"a.txt\"\n  handle close f with\n    | one () k -> resume k ()\n    | two () k -> resume k ()\n    | return x -> close f"
+    );
+    insta::assert_snapshot!(plain(&text), @r"
+    E3002 11:19 `f` must be used exactly once, but it is used more than once
+      11:19 used again here
+      8:10 first used here
+      note: linear values, such as files, the continuation of a `once` operation and closures that capture one, must be used exactly once
+    ");
+}
+
+#[test]
+fn a_type_error_in_one_body_does_not_hide_linearity_errors_in_another() {
+    let text = "bad : Unit -> <IO> Unit\nbad () = println 1\n\nmain : Unit -> <IO> Unit\nmain () =\n  let f = open \"a.txt\"\n  close f\n  close f";
+    let checked = check(text);
+    let codes: Vec<String> = checked
+        .diagnostics
+        .iter()
+        .map(|d| d.code.to_string())
+        .collect();
+    assert_eq!(
+        codes,
+        ["E2001", "E3002"],
+        "{}",
+        full(&checked.files, &checked.diagnostics)
+    );
+}

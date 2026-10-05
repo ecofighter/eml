@@ -735,9 +735,10 @@ impl<'p> Machine<'p> {
             }
             // 破棄処理はオブジェクトの解放で、読み出し口を捨てると閉じる (docs/spec/runtime.md)
             IoOp::Close => {
-                if let Value::Obj(file) = args[0] {
-                    self.heap.decref(file).map_err(Fault::Heap)?;
-                }
+                let Value::Obj(file) = args[0] else {
+                    return Err(Fault::Internal("`close` on a value that is not a file"));
+                };
+                self.heap.decref(file).map_err(Fault::Heap)?;
                 Ok(Value::Unit)
             }
         }

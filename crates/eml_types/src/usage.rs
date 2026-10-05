@@ -2,7 +2,7 @@
 //! `Unr` の制約が `Lin` と矛盾したときに見つかる。由来に使った位置と使わなかった経路を入れ、報告がそこを指す
 //! (docs/spec/diagnostics.md の「線形性の診断」)。持ち越し規則は段階5b でこのパスに足す。
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use eml_diagnostics::{TextRange, TextSize};
 use eml_hir::{Body, ExprId, ExprKind, LocalId, PatId, PatKind, Res, Stmt};
@@ -161,11 +161,16 @@ impl Usage<'_> {
                 });
                 let mut uses = Uses::new();
                 let inner = self.expr(*handled);
-                let captured = self.captured_once(*handled, &[], inner, at);
+                let captured = self.captured_once(*handled, &[], inner, body.exprs[*handled].range);
                 sequence(&mut uses, captured);
                 if let Some(ret) = ret {
                     let inner = self.expr(ret.body);
-                    let captured = self.captured_once(ret.body, &[ret.param], inner, at);
+                    let captured = self.captured_once(
+                        ret.body,
+                        &[ret.param],
+                        inner,
+                        body.exprs[ret.body].range,
+                    );
                     if multi {
                         let mut locals: Vec<LocalId> = captured.keys().copied().collect();
                         locals.sort();
@@ -176,6 +181,7 @@ impl Usage<'_> {
                     }
                     sequence(&mut uses, captured);
                 }
+                let mut clause_captures: BTreeMap<LocalId, TextRange> = BTreeMap::new();
                 for clause in clauses {
                     let mut inner = self.expr(clause.body);
                     let bound: Vec<PatId> = clause.patterns().collect();
@@ -195,14 +201,18 @@ impl Usage<'_> {
                         let name = body.locals[local].name.clone();
                         self.unr_local(local, KindReason::CapturedByClause(name));
                     }
-                    sequence(
-                        &mut uses,
-                        captured
-                            .into_iter()
-                            .map(|local| (local, Use::once(at)))
-                            .collect(),
-                    );
+                    for local in captured {
+                        clause_captures.entry(local).or_insert(clause.range);
+                    }
                 }
+                // 操作の節への捕まえ方は、節ごとでなく handle ごとに1回の使用に数える。位置は、最初に捕まえた節に置く
+                sequence(
+                    &mut uses,
+                    clause_captures
+                        .into_iter()
+                        .map(|(local, range)| (local, Use::once(range)))
+                        .collect(),
+                );
                 uses
             }
             ExprKind::Resume { k, arg } => {
@@ -310,7 +320,7 @@ impl Usage<'_> {
     }
 
     /// 1回だけ動く部分 (handle の本体と `return` の節) の使用回数を、捕まえた変数の1回の使用にまとめる。`at` は
-    /// handle 式の範囲で、捕まえた変数の使用の位置にする。
+    /// その部分の範囲で、捕まえた変数の使用の位置にする。
     fn captured_once(
         &mut self,
         root: ExprId,
