@@ -1,25 +1,67 @@
-//! 使用回数の数え上げ (docs/spec/linearity.md の「基本の規則」)。線形性の検査パスの土台で、段階2では Kind の
-//! 制約だけを出す。段階5で、枝ごとの消費の一致、持ち越し規則、E3xxx をこのパスに足す。
+//! 使用回数の数え上げ (docs/spec/linearity.md の「基本の規則」と「線形性の検査パス」)。線形な値の誤りは、ここで出した
+//! `Unr` の制約が `Lin` と矛盾したときに見つかる。由来に使った位置と使わなかった経路を入れ、報告がそこを指す
+//! (docs/spec/diagnostics.md の「線形性の診断」)。持ち越し規則は段階5b でこのパスに足す。
 
 use std::collections::HashMap;
 
-use eml_diagnostics::TextRange;
+use eml_diagnostics::{TextRange, TextSize};
 use eml_hir::{Body, ExprId, ExprKind, LocalId, PatId, PatKind, Res, Stmt};
 
 use crate::check::BodyTyping;
-use crate::kind::{Bound, KindOrigin, KindReason};
+use crate::kind::{Bound, KindOrigin, KindReason, UnusedPath};
 use crate::table::Table;
 use crate::ty::{Linearity, Multiplicity};
 
-/// 制御フローの経路ごとの使用回数の最小と最大。2回以上は区別しないので2で頭打ちにする。
-type Uses = HashMap<LocalId, (u8, u8)>;
+/// 制御フローの経路ごとの変数の使い方。
+type Uses = HashMap<LocalId, Use>;
 
-pub(crate) fn constrain(body: &Body, typing: &BodyTyping, table: &mut Table) {
-    // 誤りを報告済みの本体では、捨てた式や節の中の使用が数えられない。構文解析の誤りは HIR の診断 (`has_errors`) に
-    // 入らず `Missing` の跡だけが残るので、両方を見る。E3001 を連鎖させないよう、このパスの制約は由来を記録せずに
-    // 出す。本体の型検査が出す制約 (`Passed` や `Unified` の由来) はこのパスの外なので、由来を記録したままである
-    // (docs/spec/types.md の「エラーの扱い」)
-    let reliable = !body.has_errors
+#[derive(Debug, Clone, Copy, Default)]
+struct Use {
+    /// 経路ごとの使用回数の最小と最大。2回以上は区別しないので2で頭打ちにする。
+    min: u8,
+    max: u8,
+    /// どこかの経路で最初に使った位置。
+    first: Option<TextRange>,
+    /// ある経路で2回目に使った位置。
+    second: Option<TextRange>,
+    /// 使わなかった経路。`min` が0のときだけ持つ。
+    missing: Option<Missing>,
+}
+
+/// 変数を使わなかった経路。
+#[derive(Debug, Clone, Copy)]
+enum Missing {
+    /// `if` の枝か、`match` の枝の本体。
+    Branch(ExprId),
+    /// `else` のない `if`。
+    NoElse(ExprId),
+}
+
+impl Use {
+    fn once(at: TextRange) -> Use {
+        Use {
+            min: 1,
+            max: 1,
+            first: Some(at),
+            ..Use::default()
+        }
+    }
+
+    fn unused(missing: Missing) -> Use {
+        Use {
+            missing: Some(missing),
+            ..Use::default()
+        }
+    }
+}
+
+pub(crate) fn constrain(body: &Body, typing: &BodyTyping, table: &mut Table, well_typed: bool) {
+    // 型の誤りを報告済みの本体 (`well_typed` が偽) と、HIR の誤りがある本体では、捨てた式や節の中の使用が数えられない。
+    // 構文解析の誤りは HIR の診断 (`has_errors`) に入らず `Missing` の跡だけが残るので、両方を見る。E3xxx を連鎖
+    // させないよう、このパスの制約は由来を記録せずに出す。本体の型検査が出す制約 (`Passed` や `Unified` の由来) は
+    // このパスの外なので、由来を記録したままである (docs/spec/types.md の「エラーの扱い」)
+    let reliable = well_typed
+        && !body.has_errors
         && !body
             .exprs
             .iter()
@@ -32,7 +74,7 @@ pub(crate) fn constrain(body: &Body, typing: &BodyTyping, table: &mut Table) {
     };
     let uses = usage.expr(body.root);
     for &param in &body.params {
-        usage.check_pat(param, &uses);
+        usage.check_pat(param, &uses, body.root);
     }
 }
 
@@ -46,9 +88,10 @@ struct Usage<'a> {
 impl Usage<'_> {
     fn expr(&mut self, id: ExprId) -> Uses {
         let body = self.body;
+        let at = body.exprs[id].range;
         match &body.exprs[id].kind {
             ExprKind::Missing | ExprKind::Literal(_) => Uses::new(),
-            ExprKind::Path(Res::Local(local)) => Uses::from([(*local, (1, 1))]),
+            ExprKind::Path(Res::Local(local)) => Uses::from([(*local, Use::once(at))]),
             ExprKind::Path(_) => Uses::new(),
             // 関数型の値を呼ぶことも、その値の1回の使用である (docs/spec/linearity.md の「基本の規則」)
             // 使用回数は評価の順によらないので、先に評価する引数 (`evaluate_first`) は区別しない
@@ -67,8 +110,14 @@ impl Usage<'_> {
             } => {
                 let mut uses = self.expr(*condition);
                 let then_uses = self.expr(*then_branch);
-                let else_uses = else_branch.map(|e| self.expr(e)).unwrap_or_default();
-                sequence(&mut uses, join(then_uses, else_uses));
+                let otherwise = match else_branch {
+                    Some(else_branch) => (self.expr(*else_branch), Missing::Branch(*else_branch)),
+                    None => (Uses::new(), Missing::NoElse(id)),
+                };
+                sequence(
+                    &mut uses,
+                    join(vec![(then_uses, Missing::Branch(*then_branch)), otherwise]),
+                );
                 uses
             }
             ExprKind::Block { stmts, tail } => {
@@ -91,7 +140,7 @@ impl Usage<'_> {
                 // ブロックの `let` は外から見えないので、ここで数え終える。外の `if` で枝を合わせると、片方の枝で
                 // 束縛した変数が、もう片方の枝では「使わない」と数えられてしまうため
                 for pat in bound {
-                    self.check_pat(pat, &uses);
+                    self.check_pat(pat, &uses, id);
                     remove_bound(body, pat, &mut uses);
                 }
                 uses
@@ -112,11 +161,11 @@ impl Usage<'_> {
                 });
                 let mut uses = Uses::new();
                 let inner = self.expr(*handled);
-                let captured = self.captured_once(*handled, &[], inner);
+                let captured = self.captured_once(*handled, &[], inner, at);
                 sequence(&mut uses, captured);
                 if let Some(ret) = ret {
                     let inner = self.expr(ret.body);
-                    let captured = self.captured_once(ret.body, &[ret.param], inner);
+                    let captured = self.captured_once(ret.body, &[ret.param], inner, at);
                     if multi {
                         let mut locals: Vec<LocalId> = captured.keys().copied().collect();
                         locals.sort();
@@ -131,7 +180,11 @@ impl Usage<'_> {
                     let mut inner = self.expr(clause.body);
                     let bound: Vec<PatId> = clause.patterns().collect();
                     for &pat in &bound {
-                        self.check_pat(pat, &inner);
+                        if Some(pat) == clause.k {
+                            self.check_continuation(pat, &inner, clause.range, clause.body);
+                        } else {
+                            self.check_pat(pat, &inner, clause.body);
+                        }
                         remove_bound(body, pat, &mut inner);
                     }
                     let mut captured: Vec<LocalId> = inner.keys().copied().collect();
@@ -144,7 +197,10 @@ impl Usage<'_> {
                     }
                     sequence(
                         &mut uses,
-                        captured.into_iter().map(|local| (local, (1, 1))).collect(),
+                        captured
+                            .into_iter()
+                            .map(|local| (local, Use::once(at)))
+                            .collect(),
                     );
                 }
                 uses
@@ -158,17 +214,14 @@ impl Usage<'_> {
             // 枝は `if` の枝と同じく別の経路である。枝のパターンの変数は枝の外から見えないので、枝ごとに数え終える
             ExprKind::Match { scrutinee, arms } => {
                 let mut uses = self.expr(*scrutinee);
-                let mut branches: Option<Uses> = None;
+                let mut branches = Vec::new();
                 for arm in arms {
                     let mut inner = self.expr(arm.body);
-                    self.check_pat(arm.pat, &inner);
+                    self.check_pat(arm.pat, &inner, arm.body);
                     remove_bound(body, arm.pat, &mut inner);
-                    branches = Some(match branches {
-                        Some(other) => join(other, inner),
-                        None => inner,
-                    });
+                    branches.push((inner, Missing::Branch(arm.body)));
                 }
-                sequence(&mut uses, branches.unwrap_or_default());
+                sequence(&mut uses, join(branches));
                 uses
             }
             ExprKind::Tuple(elements) => {
@@ -186,7 +239,7 @@ impl Usage<'_> {
             } => {
                 let mut inner = self.expr(*lambda_body);
                 for &param in params {
-                    self.check_pat(param, &inner);
+                    self.check_pat(param, &inner, *lambda_body);
                     remove_bound(body, param, &mut inner);
                 }
                 // 残りは捕まえた変数である。捕まえることは外から見て1回の使用で、本体の中で1回でなければ `Unr`
@@ -197,28 +250,31 @@ impl Usage<'_> {
                 debug_assert_eq!(captured, body.lambda_captures(id));
                 let mut captured_types = Vec::new();
                 for &local in &captured {
-                    self.count(local, inner[&local]);
+                    self.count(local, inner[&local], *lambda_body);
                     if let Some(&ty) = self.typing.locals.get(local) {
                         captured_types.push(ty);
                     }
                 }
                 if let Some(&ty) = self.typing.exprs.get(id) {
-                    let range = body.exprs[id].range;
-                    self.with_origin(range, KindReason::CapturedByLambda, |table| {
+                    self.with_origin(at, KindReason::CapturedByLambda, |table| {
                         table.closure_kinds(ty, params.len(), &captured_types)
                     });
                 }
-                captured.into_iter().map(|local| (local, (1, 1))).collect()
+                captured
+                    .into_iter()
+                    .map(|local| (local, Use::once(at)))
+                    .collect()
             }
         }
     }
 
-    /// パターンが束縛した変数を数え終える。どこかの経路で0回か2回以上なら、その型の Kind に `Unr` の制約を出す。
-    /// `_` で受けた値も使わない値なので同じ扱いにする (docs/spec/linearity.md の「基本の規則」)。
-    fn check_pat(&mut self, pat: PatId, uses: &Uses) {
+    /// パターンが束縛した変数を数え終える。`scope` は変数が見える範囲の式で、どの経路でも使わなかったときに
+    /// その終わりを指す。`_` で受けた値も使わない値なので、その型に `Unr` の制約を出す
+    /// (docs/spec/linearity.md の「基本の規則」)。
+    fn check_pat(&mut self, pat: PatId, uses: &Uses, scope: ExprId) {
         match &self.body.pats[pat].kind {
             PatKind::Bind(local) => {
-                self.count(*local, uses.get(local).copied().unwrap_or((0, 0)));
+                self.count(*local, uses.get(local).copied().unwrap_or_default(), scope);
             }
             PatKind::Wildcard => {
                 if let Some(&ty) = self.typing.pats.get(pat) {
@@ -228,20 +284,42 @@ impl Usage<'_> {
                     });
                 }
             }
-            PatKind::Annot { pat, .. } => self.check_pat(*pat, uses),
+            PatKind::Annot { pat, .. } => self.check_pat(*pat, uses, scope),
             PatKind::Con { args, .. } | PatKind::Tuple(args) => {
                 for &arg in args {
-                    self.check_pat(arg, uses);
+                    self.check_pat(arg, uses, scope);
                 }
             }
             PatKind::Unit | PatKind::Missing | PatKind::Literal(_) => {}
         }
     }
 
-    /// 1回だけ動く部分 (handle の本体と `return` の節) の使用回数を、捕まえた変数の1回の使用にまとめる。
-    fn captured_once(&mut self, root: ExprId, params: &[PatId], mut inner: Uses) -> Uses {
+    /// 操作の節の `k`。ある経路で使わなければ、変数ではなく節を指す (docs/spec/diagnostics.md の「継続の扱い忘れ」)。
+    fn check_continuation(&mut self, pat: PatId, uses: &Uses, clause: TextRange, scope: ExprId) {
+        let PatKind::Bind(local) = &self.body.pats[pat].kind else {
+            return self.check_pat(pat, uses, scope);
+        };
+        let local = *local;
+        let used = uses.get(&local).copied().unwrap_or_default();
+        if used.max < 2 && used.min == 0 {
+            let name = self.body.locals[local].name.clone();
+            self.unr_local(local, KindReason::ContinuationNotUsed { name, clause });
+        } else {
+            self.count(local, used, scope);
+        }
+    }
+
+    /// 1回だけ動く部分 (handle の本体と `return` の節) の使用回数を、捕まえた変数の1回の使用にまとめる。`at` は
+    /// handle 式の範囲で、捕まえた変数の使用の位置にする。
+    fn captured_once(
+        &mut self,
+        root: ExprId,
+        params: &[PatId],
+        mut inner: Uses,
+        at: TextRange,
+    ) -> Uses {
         for &param in params {
-            self.check_pat(param, &inner);
+            self.check_pat(param, &inner, root);
             remove_bound(self.body, param, &mut inner);
         }
         let mut captured: Vec<LocalId> = inner.keys().copied().collect();
@@ -249,23 +327,62 @@ impl Usage<'_> {
         // 捕まえた変数の集合は、Core IR の変換が使う `captures` と同じでなければならない
         debug_assert_eq!(captured, self.body.captures(root, params));
         for &local in &captured {
-            self.count(local, inner[&local]);
+            self.count(local, inner[&local], root);
         }
-        captured.into_iter().map(|local| (local, (1, 1))).collect()
+        captured
+            .into_iter()
+            .map(|local| (local, Use::once(at)))
+            .collect()
     }
 
     /// 経路ごとの使用回数が1回でなければ、`Unr` の制約を出す。
-    fn count(&mut self, local: LocalId, (min, max): (u8, u8)) {
-        if (min, max) == (1, 1) {
+    fn count(&mut self, local: LocalId, used: Use, scope: ExprId) {
+        if (used.min, used.max) == (1, 1) {
             return;
         }
         let name = self.body.locals[local].name.clone();
-        let reason = if max >= 2 {
-            KindReason::UsedMoreThanOnce(name)
+        let reason = if used.max >= 2 {
+            let first = used
+                .first
+                .expect("a variable used on some path has a first use");
+            KindReason::UsedMoreThanOnce {
+                name,
+                first,
+                second: used.second.unwrap_or(first),
+            }
         } else {
-            KindReason::NotUsed(name)
+            KindReason::NotUsed {
+                name,
+                path: self.unused_path(used.missing, scope),
+            }
         };
         self.unr_local(local, reason);
+    }
+
+    fn unused_path(&self, missing: Option<Missing>, scope: ExprId) -> UnusedPath {
+        let range = |id: ExprId| self.body.exprs[id].range;
+        match missing {
+            Some(Missing::Branch(branch)) => UnusedPath::Branch(range(branch)),
+            Some(Missing::NoElse(if_expr)) => UnusedPath::NoElse(range(if_expr)),
+            None => UnusedPath::ScopeEnd(TextRange::empty(self.scope_end(scope))),
+        }
+    }
+
+    /// スコープの終わり。ブロックでは、最後の文の直後を指す。
+    fn scope_end(&self, scope: ExprId) -> TextSize {
+        let exprs = &self.body.exprs;
+        if let ExprKind::Block { stmts, tail } = &exprs[scope].kind {
+            let last = tail.or_else(|| {
+                stmts.last().map(|stmt| match stmt {
+                    Stmt::Let { init, .. } => *init,
+                    Stmt::Expr(expr) => *expr,
+                })
+            });
+            if let Some(last) = last {
+                return exprs[last].range.end();
+            }
+        }
+        exprs[scope].range.end()
     }
 
     fn unr_local(&mut self, local: LocalId, reason: KindReason) {
@@ -297,21 +414,71 @@ fn remove_bound(body: &Body, pat: PatId, uses: &mut Uses) {
     }
 }
 
-/// 続けて実行する2つの部分の使用回数を足す。
+/// 続けて実行する2つの部分の使い方を足す。2回目の位置は、経路の上で早いものを選ぶ。
 fn sequence(uses: &mut Uses, next: Uses) {
-    for (local, (min, max)) in next {
-        let entry = uses.entry(local).or_insert((0, 0));
-        *entry = ((entry.0 + min).min(2), (entry.1 + max).min(2));
+    for (local, b) in next {
+        let a = uses.entry(local).or_default();
+        let min = (a.min + b.min).min(2);
+        let max = (a.max + b.max).min(2);
+        let second = a
+            .second
+            .or(if a.first.is_some() { b.first } else { None })
+            .or(b.second);
+        *a = Use {
+            min,
+            max,
+            first: a.first.or(b.first),
+            second,
+            missing: if min == 0 {
+                a.missing.or(b.missing)
+            } else {
+                None
+            },
+        };
     }
 }
 
-/// 分岐の2つの枝の使用回数を合わせる。片方の枝にない変数は、その枝では0回である。
-fn join(a: Uses, b: Uses) -> Uses {
+/// 分岐の枝の使い方を合わせる。枝に現れない変数は、その枝では使われない。使った位置は回数の多い枝から取り、
+/// 使わなかった経路は前の枝から取る。
+fn join(branches: Vec<(Uses, Missing)>) -> Uses {
+    let mut locals: Vec<LocalId> = branches
+        .iter()
+        .flat_map(|(uses, _)| uses.keys().copied())
+        .collect();
+    locals.sort();
+    locals.dedup();
     let mut out = Uses::new();
-    for local in a.keys().chain(b.keys()) {
-        let x = a.get(local).copied().unwrap_or((0, 0));
-        let y = b.get(local).copied().unwrap_or((0, 0));
-        out.insert(*local, (x.0.min(y.0), x.1.max(y.1)));
+    for local in locals {
+        let mut joined: Option<Use> = None;
+        for (uses, path) in &branches {
+            let used = uses.get(&local).copied().unwrap_or(Use::unused(*path));
+            joined = Some(match joined {
+                None => used,
+                Some(j) => {
+                    let min = j.min.min(used.min);
+                    let (first, second) = if used.max > j.max {
+                        (used.first, used.second)
+                    } else {
+                        (j.first, j.second)
+                    };
+                    let missing = match (min, j.min) {
+                        (0, 0) => j.missing,
+                        (0, _) => used.missing,
+                        _ => None,
+                    };
+                    Use {
+                        min,
+                        max: j.max.max(used.max),
+                        first,
+                        second,
+                        missing,
+                    }
+                }
+            });
+        }
+        if let Some(joined) = joined {
+            out.insert(local, joined);
+        }
     }
     out
 }

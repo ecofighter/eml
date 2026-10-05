@@ -141,8 +141,9 @@ pub(crate) fn check_module(module: &Module) -> (TypedModule, Vec<Diagnostic>) {
             let diagnostics_before = checker.diagnostics.len();
             checker.check_function(signature);
             checker.resolve_equalities(diagnostics_before);
+            let well_typed = checker.diagnostics.len() == diagnostics_before;
             let typing = checker.typing;
-            usage::constrain(body, &typing, &mut table);
+            usage::constrain(body, &typing, &mut table, well_typed);
             bodies.push((id, typing));
         }
         for &id in &component {

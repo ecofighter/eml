@@ -24,6 +24,10 @@ pub mod codes {
     use eml_diagnostics::ErrorCode;
 
     pub const LINEAR_VALUE_MISUSED: ErrorCode = ErrorCode(3001);
+    pub const LINEAR_VALUE_USED_TWICE: ErrorCode = ErrorCode(3002);
+    pub const LINEAR_VALUE_NOT_CONSUMED: ErrorCode = ErrorCode(3003);
+    pub const LINEAR_VALUE_DISCARDED: ErrorCode = ErrorCode(3004);
+    pub const CONTINUATION_NOT_HANDLED: ErrorCode = ErrorCode(3005);
     pub const TYPE_MISMATCH: ErrorCode = ErrorCode(2001);
     pub const EFFECT_NOT_IN_ROW: ErrorCode = ErrorCode(2002);
     pub const MISSING_MAIN: ErrorCode = ErrorCode(2003);

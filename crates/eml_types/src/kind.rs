@@ -20,7 +20,7 @@ pub(crate) enum Bound<T> {
     Var(KindVar),
 }
 
-/// Kind の制約の由来。制約が破れたときに E3001 が指す場所と理由である (docs/spec/diagnostics.md の「線形性の診断」)。
+/// Kind の制約の由来。制約が破れたときに E3001〜E3005 が指す場所と理由である (docs/spec/diagnostics.md の「線形性の診断」)。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct KindOrigin {
     pub range: TextRange,
@@ -29,10 +29,16 @@ pub(crate) struct KindOrigin {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum KindReason {
-    /// ある経路で2回以上使った変数。名前は変数の名前である。
-    UsedMoreThanOnce(String),
+    /// ある経路で2回以上使った変数。名前と、その経路で1回目と2回目に使った位置。
+    UsedMoreThanOnce {
+        name: String,
+        first: TextRange,
+        second: TextRange,
+    },
     /// ある経路で使わなかった変数。
-    NotUsed(String),
+    NotUsed { name: String, path: UnusedPath },
+    /// `once` の操作の節の `k` を、ある経路で `resume` も `drop` もしなかった。`clause` は節の範囲。
+    ContinuationNotUsed { name: String, clause: TextRange },
     /// `_` で受けた値。
     Discarded,
     /// 操作の節が捕まえた変数。
@@ -45,6 +51,17 @@ pub(crate) enum KindReason {
     Passed(String),
     /// 型の単一化で出た制約。
     Unified,
+}
+
+/// 変数を使わなかった経路。E3003 の secondary が指す。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum UnusedPath {
+    /// `if` の枝、または `match` の枝の本体。
+    Branch(TextRange),
+    /// `else` のない `if`。
+    NoElse(TextRange),
+    /// どの経路でも使わなかった。範囲はスコープの終わりの長さ0の範囲である。
+    ScopeEnd(TextRange),
 }
 
 #[derive(Debug)]

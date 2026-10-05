@@ -119,20 +119,22 @@ fn a_continuation_of_a_once_operation_must_be_used_exactly_once() {
       k#0 : Cont Int Int <Ask>
       inner#1 : Cont Int Int <Ask>
     ---
-    E3001 7:14 `k` must be used exactly once, but it may be used more than once
-      7:14 `k` is bound here
-      note: linear values, such as the continuation of a `once` operation and closures that capture one, must be used exactly once
-    E3001 12:14 `k` must be used exactly once, but some paths do not use it
+    E3002 7:39 `k` must be used exactly once, but it is used more than once
+      7:39 used again here
+      7:26 first used here
+      note: linear values, such as files, the continuation of a `once` operation and closures that capture one, must be used exactly once
+    E3005 12:5 the continuation `k` of a `once` operation must be resumed or dropped
+      12:5 this clause
       12:14 `k` is bound here
-      note: linear values, such as the continuation of a `once` operation and closures that capture one, must be used exactly once
-      help: pass `k` to `drop` on the paths that do not use it
-    E3001 17:14 a linear value cannot be discarded with `_`
+      note: linear values, such as files, the continuation of a `once` operation and closures that capture one, must be used exactly once
+      help: call `resume k v` or `drop k` on every path
+    E3004 17:14 a linear value cannot be discarded with `_`
       17:14 this pattern discards it
-      note: linear values, such as the continuation of a `once` operation and closures that capture one, must be used exactly once
+      note: linear values, such as files, the continuation of a `once` operation and closures that capture one, must be used exactly once
       help: bind it to a name and pass the name to `drop`
     E3001 22:14 `k` must be used exactly once, but an operation clause captures it
       22:14 `k` is bound here
-      note: linear values, such as the continuation of a `once` operation and closures that capture one, must be used exactly once
+      note: linear values, such as files, the continuation of a `once` operation and closures that capture one, must be used exactly once
       note: an operation clause runs each time its operation is performed
     ");
 }
@@ -151,7 +153,7 @@ fn a_closure_capturing_a_continuation_cannot_be_used_twice() {
     ---
     E3001 10:19 a linear value is passed to `twice`, which may use it more than once or not at all
       10:19 `twice` is used here
-      note: linear values, such as the continuation of a `once` operation and closures that capture one, must be used exactly once
+      note: linear values, such as files, the continuation of a `once` operation and closures that capture one, must be used exactly once
     ");
 }
 
@@ -188,10 +190,10 @@ fn a_continuation_cannot_pass_through_a_polymorphic_operation_parameter() {
     ---
     E3001 14:9 a linear value is passed to `sink`, which may use it more than once or not at all
       14:9 `sink` is used here
-      note: linear values, such as the continuation of a `once` operation and closures that capture one, must be used exactly once
+      note: linear values, such as files, the continuation of a `once` operation and closures that capture one, must be used exactly once
     E3001 21:17 a linear value is passed to `pair`, which may use it more than once or not at all
       21:17 `pair` is used here
-      note: linear values, such as the continuation of a `once` operation and closures that capture one, must be used exactly once
+      note: linear values, such as files, the continuation of a `once` operation and closures that capture one, must be used exactly once
     ");
 }
 
@@ -296,7 +298,7 @@ fn the_return_clause_of_a_multi_handler_cannot_capture_a_linear_value() {
     ---
     E3001 10:14 `k` must be used exactly once, but the `return` clause of a handler with a `multi` operation captures it
       10:14 `k` is bound here
-      note: linear values, such as the continuation of a `once` operation and closures that capture one, must be used exactly once
+      note: linear values, such as files, the continuation of a `once` operation and closures that capture one, must be used exactly once
       note: the `return` clause runs each time a continuation of a `multi` operation is resumed
     ");
 }

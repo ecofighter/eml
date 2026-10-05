@@ -3,12 +3,14 @@ source: crates/eml_cli/tests/ui.rs
 expression: rendered
 input_file: tests/ui/check-fail/linearity/continuation_misuse.em
 ---
-[E3001] Error: `k` must be used exactly once, but it may be used more than once
-   ╭─[ check-fail/linearity/continuation_misuse.em:8:14 ]
+[E3002] Error: `k` must be used exactly once, but it is used more than once
+   ╭─[ check-fail/linearity/continuation_misuse.em:8:39 ]
    │
  8 │     | ask () k -> resume k 1 + resume k 2
-   │              ┬  
-   │              ╰── `k` is bound here
+   │                          ┬            ┬  
+   │                          ╰─────────────── first used here
+   │                                       │  
+   │                                       ╰── used again here
    │ 
-   │ Note: linear values, such as the continuation of a `once` operation and closures that capture one, must be used exactly once
+   │ Note: linear values, such as files, the continuation of a `once` operation and closures that capture one, must be used exactly once
 ───╯

@@ -2,7 +2,7 @@ use eml_diagnostics::{Diagnostic, FileId, Label, TextRange};
 use eml_hir::{Body, ExprId, ExprKind, Module, PatId, Res};
 
 use crate::codes;
-use crate::kind::{KindOrigin, KindReason};
+use crate::kind::{KindOrigin, KindReason, UnusedPath};
 use crate::table::{Row, Ty, UnifyError};
 
 use super::body::BodyCheck;
@@ -364,22 +364,83 @@ pub(super) fn count(n: usize, word: &str) -> String {
     }
 }
 
-/// 線形な値の誤った使い方 (E3001)。破れた Kind の制約の由来を指す。指し方を docs/spec/diagnostics.md の「線形性の
-/// 診断」の表どおりにする (二重使用の2か所など) のは、線形性の検査パスを分ける段階5で行う。
+const LINEAR_NOTE: &str = "linear values, such as files, the continuation of a `once` operation and closures that capture one, must be used exactly once";
+
+/// 線形な値の誤った使い方。破れた Kind の制約の由来から番号と指す場所を決める (docs/spec/diagnostics.md の
+/// 「線形性の診断」)。表に当たらない由来 (受け渡し、単一化、捕獲) は E3001 にする。
 pub(super) fn linear_misuse(file: FileId, origin: &KindOrigin) -> Diagnostic {
+    match &origin.reason {
+        KindReason::UsedMoreThanOnce {
+            name,
+            first,
+            second,
+        } => Diagnostic::error(
+            codes::LINEAR_VALUE_USED_TWICE,
+            format!("`{name}` must be used exactly once, but it is used more than once"),
+            Label::new(file, *second, "used again here"),
+        )
+        .with_secondary(Label::new(file, *first, "first used here"))
+        .with_note(LINEAR_NOTE),
+        KindReason::NotUsed { name, path } => {
+            let (how, label) = match path {
+                UnusedPath::Branch(range) => (
+                    "some paths do not use it",
+                    Label::new(file, *range, format!("this branch does not use `{name}`")),
+                ),
+                UnusedPath::NoElse(range) => (
+                    "some paths do not use it",
+                    Label::new(
+                        file,
+                        *range,
+                        format!("the omitted `else` does not use `{name}`"),
+                    ),
+                ),
+                UnusedPath::ScopeEnd(range) => (
+                    "it is not used",
+                    Label::new(
+                        file,
+                        *range,
+                        format!("`{name}` is not used before the end of this scope"),
+                    ),
+                ),
+            };
+            Diagnostic::error(
+                codes::LINEAR_VALUE_NOT_CONSUMED,
+                format!("`{name}` must be used exactly once, but {how}"),
+                Label::new(file, origin.range, format!("`{name}` is bound here")),
+            )
+            .with_secondary(label)
+            .with_note(LINEAR_NOTE)
+            .with_help(format!("pass `{name}` to `drop`"))
+        }
+        KindReason::Discarded => Diagnostic::error(
+            codes::LINEAR_VALUE_DISCARDED,
+            "a linear value cannot be discarded with `_`",
+            Label::new(file, origin.range, "this pattern discards it"),
+        )
+        .with_note(LINEAR_NOTE)
+        .with_help("bind it to a name and pass the name to `drop`"),
+        KindReason::ContinuationNotUsed { name, clause } => Diagnostic::error(
+            codes::CONTINUATION_NOT_HANDLED,
+            format!("the continuation `{name}` of a `once` operation must be resumed or dropped"),
+            Label::new(file, *clause, "this clause"),
+        )
+        .with_secondary(Label::new(
+            file,
+            origin.range,
+            format!("`{name}` is bound here"),
+        ))
+        .with_note(LINEAR_NOTE)
+        .with_help(format!(
+            "call `resume {name} v` or `drop {name}` on every path"
+        )),
+        _ => captured_or_passed(file, origin),
+    }
+}
+
+/// E3001。違反した制約の由来を指す。
+fn captured_or_passed(file: FileId, origin: &KindOrigin) -> Diagnostic {
     let (message, label) = match &origin.reason {
-        KindReason::UsedMoreThanOnce(name) => (
-            format!("`{name}` must be used exactly once, but it may be used more than once"),
-            format!("`{name}` is bound here"),
-        ),
-        KindReason::NotUsed(name) => (
-            format!("`{name}` must be used exactly once, but some paths do not use it"),
-            format!("`{name}` is bound here"),
-        ),
-        KindReason::Discarded => (
-            "a linear value cannot be discarded with `_`".to_string(),
-            "this pattern discards it".to_string(),
-        ),
         KindReason::CapturedByClause(name) => (
             format!("`{name}` must be used exactly once, but an operation clause captures it"),
             format!("`{name}` is bound here"),
@@ -401,7 +462,11 @@ pub(super) fn linear_misuse(file: FileId, origin: &KindOrigin) -> Diagnostic {
             ),
             format!("`{name}` is used here"),
         ),
-        KindReason::Unified => (
+        KindReason::Unified
+        | KindReason::UsedMoreThanOnce { .. }
+        | KindReason::NotUsed { .. }
+        | KindReason::ContinuationNotUsed { .. }
+        | KindReason::Discarded => (
             "a linear value is used where an unrestricted value is expected".to_string(),
             "this expression".to_string(),
         ),
@@ -411,18 +476,8 @@ pub(super) fn linear_misuse(file: FileId, origin: &KindOrigin) -> Diagnostic {
         message,
         Label::new(file, origin.range, label),
     )
-    .with_note(
-        "linear values, such as the continuation of a `once` operation and closures that capture one, must be used exactly once",
-    );
+    .with_note(LINEAR_NOTE);
     match &origin.reason {
-        KindReason::NotUsed(name) => {
-            diagnostic = diagnostic.with_help(format!(
-                "pass `{name}` to `drop` on the paths that do not use it"
-            ));
-        }
-        KindReason::Discarded => {
-            diagnostic = diagnostic.with_help("bind it to a name and pass the name to `drop`");
-        }
         KindReason::CapturedByClause(_) => {
             diagnostic = diagnostic
                 .with_note("an operation clause runs each time its operation is performed");

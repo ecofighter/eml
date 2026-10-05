@@ -10,5 +10,5 @@ input_file: tests/ui/check-fail/linearity/once_continuation_through_effect_argum
     │                                      ────────────┬───────────  
     │                                                  ╰───────────── this expression
     │ 
-    │ Note: linear values, such as the continuation of a `once` operation and closures that capture one, must be used exactly once
+    │ Note: linear values, such as files, the continuation of a `once` operation and closures that capture one, must be used exactly once
 ────╯
