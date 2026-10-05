@@ -98,12 +98,11 @@ fn constructs_of_later_stages_are_not_yet_supported() {
     f : Int -> Int
     f x#0 = {
       let first#2 = (fn t#1 -> <missing>)
-      let plus#3 = <missing>
+      let plus#5 = (fn $a#3 $b#4 -> (+ $a#3 $b#4))
       <missing>
     }
     ---
     E0004 3:23 field access is not supported yet
-    E0004 4:14 operator references are not supported yet
     E0004 5:3 `let ... in` is not supported yet
     ");
 }

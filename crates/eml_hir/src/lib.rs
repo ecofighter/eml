@@ -34,4 +34,5 @@ pub mod codes {
     pub const EQUATION_ARITY_MISMATCH: ErrorCode = ErrorCode(1020);
     pub const DUPLICATE_FIXITY: ErrorCode = ErrorCode(1021);
     pub const FIXITY_WITHOUT_DEFINITION: ErrorCode = ErrorCode(1022);
+    pub const INVALID_SECTION: ErrorCode = ErrorCode(1023);
 }

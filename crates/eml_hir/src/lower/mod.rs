@@ -5,6 +5,7 @@ mod handler;
 mod ops;
 mod prelude;
 mod scope;
+mod section;
 mod types;
 
 use std::collections::HashMap;

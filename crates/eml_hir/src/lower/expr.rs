@@ -276,12 +276,10 @@ impl<'a> BodyLowering<'a> {
                     .collect();
                 self.alloc(ExprKind::Tuple(elements), range)
             }
-            ast::Expr::OpRef(_) => {
-                self.unsupported(range, "operator references are not supported yet")
-            }
-            ast::Expr::LeftSection(_) | ast::Expr::RightSection(_) | ast::Expr::FieldSection(_) => {
-                self.unsupported(range, "sections are not supported yet")
-            }
+            ast::Expr::OpRef(op_ref) => self.lower_op_ref(&op_ref, range),
+            ast::Expr::LeftSection(section) => self.lower_left_section(&section, range),
+            ast::Expr::RightSection(section) => self.lower_right_section(&section, range),
+            ast::Expr::FieldSection(_) => self.unsupported(range, "sections are not supported yet"),
         }
     }
 

@@ -365,15 +365,33 @@ fn later_stage_constructs_add_no_type_errors() {
       n#0 : Int
       t#1 : _
       first#2 : _ -> <_> {error}
-      plus#3 : {error}
+      $a#3 : Int
+      $b#4 : Int
+      plus#5 : Int -> <_> Int -> <_> Int
     ---
     E0004 6:23 field access is not supported yet
       6:23 this is implemented in a later stage
-    E0004 7:14 operator references are not supported yet
-      7:14 this is implemented in a later stage
     E0004 8:21 handlers with `from` are not supported yet
       8:21 this is implemented in a later stage
     ");
+}
+
+#[test]
+fn an_equality_section_compares_by_the_type_it_is_used_at() {
+    let text = "ints : Int -> Bool\nints = (== 1)\n\nstrings : String -> Bool\nstrings = (== \"a\")\n\neq : Bool -> Bool -> Bool\neq = (==)";
+    let checked = eml_test_support::check(text);
+    assert!(checked.diagnostics.is_empty(), "{:?}", checked.diagnostics);
+}
+
+#[test]
+fn an_equality_reference_with_an_unknown_type_is_not_comparable() {
+    let text = "f : Int -> Int\nf x =\n  let eq = (==)\n  x";
+    let checked = eml_test_support::check(text);
+    let lines = eml_test_support::short(&checked.files, &checked.diagnostics);
+    assert!(
+        lines.iter().any(|line| line.starts_with("E2006 3:13")),
+        "{lines:?}"
+    );
 }
 
 #[test]

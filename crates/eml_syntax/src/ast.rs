@@ -744,6 +744,41 @@ fn is_operator(kind: SyntaxKind) -> bool {
     matches!(kind, SyntaxKind::OP | SyntaxKind::MINUS | SyntaxKind::CONOP)
 }
 
+/// ノードの直下にある演算子のトークン。セクションの被演算子の列の演算子は `OP_SEQ` の子なので、ここには入らない。
+fn operator_token(node: &SyntaxNode) -> Option<SyntaxToken> {
+    node.children_with_tokens()
+        .filter_map(NodeOrToken::into_token)
+        .find(|token| is_operator(token.kind()))
+}
+
+impl OpRef {
+    pub fn operator(&self) -> Option<SyntaxToken> {
+        operator_token(&self.syntax)
+    }
+}
+
+impl LeftSection {
+    /// `(e op)` の `e`。
+    pub fn operand(&self) -> Option<Expr> {
+        support::child(&self.syntax)
+    }
+
+    pub fn operator(&self) -> Option<SyntaxToken> {
+        operator_token(&self.syntax)
+    }
+}
+
+impl RightSection {
+    /// `(op e)` の `e`。
+    pub fn operand(&self) -> Option<Expr> {
+        support::child(&self.syntax)
+    }
+
+    pub fn operator(&self) -> Option<SyntaxToken> {
+        operator_token(&self.syntax)
+    }
+}
+
 fn keyword_range(node: &SyntaxNode) -> TextRange {
     node.first_token()
         .map_or(node.text_range(), |token| token.text_range())

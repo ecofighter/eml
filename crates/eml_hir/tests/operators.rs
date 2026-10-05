@@ -196,3 +196,50 @@ fn a_user_definition_hides_a_desugared_operator() {
     f = (@&& True False)
     ");
 }
+
+#[test]
+fn operator_references_and_sections_become_lambdas() {
+    let text = "a : Int -> Int -> Int\na = (+)\nb : Int -> Int\nb = (+ 1)\nc : Int -> Int\nc = (10 -)\nd : Bool -> Bool -> Bool\nd = (&&)\ne : Int\ne = (- 1)";
+    insta::assert_snapshot!(lower_text(text), @"
+    a : Int -> Int -> Int
+    a = (fn $a#0 $b#1 -> (+ $a#0 $b#1))
+    b : Int -> Int
+    b = (fn $x#0 -> (+ $x#0 1))
+    c : Int -> Int
+    c = (fn $x#0 -> (- 10 $x#0))
+    d : Bool -> Bool -> Bool
+    d = (fn $a#0 $b#1 -> (if $a#0 $b#1 False))
+    e : Int
+    e = (negate 1)
+    ");
+}
+
+#[test]
+fn a_section_operand_may_be_an_operator_sequence_that_binds_tighter() {
+    let text = "a : Int -> Int\na = (+ 2 * 3)\nb : Int -> Int\nb = (2 * 3 +)\nc : Int -> Int\nc = (1 + 2 +)\nd : String -> String\nd = (++ \"a\" ++ \"b\")\ne : Int -> Int\ne = (+ -1)";
+    insta::assert_snapshot!(lower_text(text), @r#"
+    a : Int -> Int
+    a = (fn $x#0 -> (+ $x#0 (* 2 3)))
+    b : Int -> Int
+    b = (fn $x#0 -> (+ (* 2 3) $x#0))
+    c : Int -> Int
+    c = (fn $x#0 -> (+ (+ 1 2) $x#0))
+    d : String -> String
+    d = (fn $x#0 -> (++ $x#0 (++ "a" "b")))
+    e : Int -> Int
+    e = (fn $x#0 -> (+ $x#0 (negate 1)))
+    "#);
+}
+
+#[test]
+fn a_section_operand_that_binds_looser_needs_parentheses() {
+    let text = "a : Int -> Int\na = (* 1 + 2)\nb : Int -> Int\nb = (+ 1 + 2)\nc : Bool -> Bool\nc = (== 1 == 2)";
+    assert_eq!(
+        diagnostics(text),
+        vec![
+            "E1023 2:5 the section of `*` needs parentheses around its operand",
+            "E1023 4:5 the section of `+` needs parentheses around its operand",
+            "E1023 6:5 the section of `==` needs parentheses around its operand",
+        ]
+    );
+}

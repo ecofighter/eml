@@ -1,0 +1,14 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: rendered
+input_file: tests/ui/check-fail/names/invalid_section.em
+---
+[E1023] Error: the section of `*` needs parentheses around its operand
+   ╭─[ check-fail/names/invalid_section.em:3:5 ]
+   │
+ 3 │ f = (* 1 + 2)
+   │     ────┬────  
+   │         ╰────── `+` does not bind more tightly than `*`
+   │ 
+   │ Help: put the operand in parentheses
+───╯
