@@ -1,13 +1,17 @@
 //! join point を書き換える最適化 (docs/spec/core-ir.md)。変換の後、Perceus の前に置く。RC の命令がまだないので、
 //! 所有権を扱わずに書き換えられる。`captures` は古くなりうるが、このパスの後にパイプラインが埋め直す。
 //!
-//! B3 (jump が1つ)、B2 (分かっているタグ)、B5 (小さな本体)、B3、B4 (使われない) の順に1巡だけ回す。最初の B3 は、
-//! `match` の枝の join point を `Switch` の枝に戻す。枝の join point が `if` の join point の本体と `Switch` の間に
-//! 並んだままだと、B2 が本体の `Switch` を見つけられないためである。B5 を B4 より先に回すのは、B5 で jump がなくなった
-//! join point を、同じ巡の B4 で消すためである。
+//! B3 (jump が1つ)、K1 (分かっているコンストラクタの `switch`)、B2 (分かっているタグ)、B5 (小さな本体)、B3、
+//! B4 (使われない)、DCE (使われない純粋な束縛) の順に1巡だけ回す。最初の B3 は、`match` の枝の join point を `Switch` の
+//! 枝に戻す。枝の join point が `if` の join point の本体と `Switch` の間に並んだままだと、B2 が本体の `Switch` を
+//! 見つけられないためである。K1 を最初の B3 の後に置くのは、B3 が join point を戻すときに作る引数の束縛 `let t = d` を
+//! たどって `d` の `con` まで届くためである。B5 を B4 より先に回すのは、B5 で jump がなくなった join point を、同じ巡の
+//! B4 で消すためである。DCE を最後に置くのは、K1 と B2 が使わなくした `con` をまとめて消すためである。
 //!
 //! 書き換えは式のアリーナの上でその場で行う。木から外れた式はアリーナに残り、Perceus がアリーナを作り直すときに
 //! 捨てる。そのため、jump の位置と親は、根からたどれる式だけで求める。
+
+use std::collections::HashMap;
 
 use crate::{Arm, Atom, CExpr, CExprId, CoreFn, JoinId, Program, Rhs, VarId};
 
@@ -15,10 +19,12 @@ pub(crate) fn simplify(program: &mut Program) {
     for function in &mut program.functions {
         let mut pass = Simplify { function };
         pass.inline_single_jumps();
+        pass.switch_known_constructors();
         pass.split_known_tags();
         pass.forward_small_bodies();
         pass.inline_single_jumps();
         pass.remove_unused();
+        pass.remove_dead_bindings();
         pass.renumber();
     }
 }
@@ -231,6 +237,96 @@ impl Simplify<'_> {
         }
     }
 
+    /// 分かっているコンストラクタの値。`let v = con #k(a…)`、引数のないタグの束縛、別名 (`let v = u`) をたどった先である。
+    /// 変数は関数の中で1回だけ束縛され (verifier が確かめる)、使用はつねに束縛の範囲にあるので、関数全体で1つの表でよい。
+    fn known_constructors(&self) -> HashMap<VarId, (u32, Vec<Atom>)> {
+        let mut direct = HashMap::new();
+        let mut aliases = HashMap::new();
+        for id in self.reachable() {
+            let CExpr::Let { var, rhs, .. } = self.expr(id) else {
+                continue;
+            };
+            match rhs {
+                Rhs::Con { tag, args } => {
+                    direct.insert(*var, (*tag, args.clone()));
+                }
+                Rhs::Atom(Atom::Tag(tag)) => {
+                    direct.insert(*var, (*tag, Vec::new()));
+                }
+                Rhs::Atom(Atom::Var(other)) => {
+                    aliases.insert(*var, *other);
+                }
+                _ => {}
+            }
+        }
+        let mut known = direct.clone();
+        for (&var, &first) in &aliases {
+            // 別名は束縛より前の変数しか指さないので、たどっても輪にならない
+            let mut target = first;
+            while let Some(&next) = aliases.get(&target) {
+                target = next;
+            }
+            if let Some(value) = direct.get(&target) {
+                known.insert(var, value.clone());
+            }
+        }
+        known
+    }
+
+    /// K1: `switch` の値が分かっているコンストラクタなら、その枝で置き換え、枝のフィールドの変数を値に置き換える。
+    /// 値の束縛は `switch` を支配するので、値に使う変数は `switch` の位置で範囲にある。
+    fn switch_known_constructors(&mut self) {
+        let known = self.known_constructors();
+        let mut parents = self.parents();
+        for id in self.reachable() {
+            let CExpr::Switch { scrutinee, arms } = self.expr(id).clone() else {
+                continue;
+            };
+            let Some((tag, values)) = known_value(&known, scrutinee) else {
+                continue;
+            };
+            let Some(arm) = arms
+                .iter()
+                .find(|arm| arm.tag == tag && arm.fields.len() == values.len())
+            else {
+                continue;
+            };
+            for (&field, &value) in arm.fields.iter().zip(&values) {
+                self.substitute(arm.body, field, value);
+            }
+            self.replace(&mut parents, id, arm.body);
+        }
+    }
+
+    /// DCE: 使われない変数の `let` のうち、右辺が実行時に何も起こさないものを消す。前順の逆にたどるので、内側の束縛を
+    /// 先に消し、それで使われなくなった外側の束縛 (`con` の引数など) も同じ巡で消せる。
+    fn remove_dead_bindings(&mut self) {
+        let order = self.reachable();
+        let mut uses = vec![0usize; self.function.vars.len()];
+        for &id in &order {
+            for atom in used_atoms(self.expr(id)) {
+                if let Atom::Var(var) = atom {
+                    uses[var.0 as usize] += 1;
+                }
+            }
+        }
+        let mut parents = self.parents();
+        for &id in order.iter().rev() {
+            let CExpr::Let { var, rhs, body } = self.expr(id).clone() else {
+                continue;
+            };
+            if uses[var.0 as usize] > 0 || !pure(&rhs) {
+                continue;
+            }
+            for atom in rhs.atoms() {
+                if let Atom::Var(used) = atom {
+                    uses[used.0 as usize] -= 1;
+                }
+            }
+            self.replace(&mut parents, id, body);
+        }
+    }
+
     /// B3: jump が1つだけの join point を、その jump の位置に戻す。引数は、jump が渡す値の束縛にする。jump の位置では、
     /// 本体が使う外側の変数がすべて範囲にある。
     fn inline_single_jumps(&mut self) {
@@ -429,5 +525,30 @@ fn movable(atom: Atom, params: &[VarId]) -> bool {
     match atom {
         Atom::Var(var) => params.contains(&var),
         _ => true,
+    }
+}
+
+/// `atom` が分かっているコンストラクタの値なら、そのタグとフィールドの値。
+fn known_value(known: &HashMap<VarId, (u32, Vec<Atom>)>, atom: Atom) -> Option<(u32, Vec<Atom>)> {
+    match atom {
+        Atom::Tag(tag) => Some((tag, Vec::new())),
+        Atom::Var(var) => known.get(&var).cloned(),
+        Atom::Int(_) | Atom::Unit => None,
+    }
+}
+
+/// 式が直接使う値。
+fn used_atoms(expr: &CExpr) -> Vec<Atom> {
+    let mut copy = expr.clone();
+    copy.atoms_mut().into_iter().map(|atom| *atom).collect()
+}
+
+/// 消してもよい右辺。値を作るだけで、エフェクトも実行時エラーも起こさない。`con` と `MakeClosure` が所有権を受け取る
+/// 値は、消すと Perceus がその値の生存の終わりに `decref` を入れるので、解放が早まるだけである。
+fn pure(rhs: &Rhs) -> bool {
+    match rhs {
+        Rhs::Atom(_) | Rhs::ConstString(_) | Rhs::Con { .. } | Rhs::MakeClosure(..) => true,
+        Rhs::Prim(op, _) => !op.may_fail(),
+        Rhs::Call { .. } | Rhs::Io(..) | Rhs::Drop(_) => false,
     }
 }

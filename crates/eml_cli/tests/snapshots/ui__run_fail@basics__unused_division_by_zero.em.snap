@@ -1,0 +1,8 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- runtime error ---\\n{error}\\n\")"
+input_file: tests/ui/run-fail/basics/unused_division_by_zero.em
+---
+--- stdout ---
+--- runtime error ---
+division by zero in `main`

@@ -38,8 +38,6 @@ fn shadowed_and_discarded_strings() {
       let s1 = const "x"
       let s2 = const "y"
       let t3 = prim ++(s1, s2)
-      let s4 = const "z"
-      decref s4
       let t5 = perform println(t3)
       return t5
     }
@@ -266,6 +264,28 @@ fn a_string_compared_twice_is_dupped_before_each_comparison() {
     }
     fn main(p0) {
       return ()
+    }
+    fn entry$main() {
+      tailcall main(())
+    }
+    "#);
+}
+
+#[test]
+fn a_discarded_call_result_is_released() {
+    // `shadowed_and_discarded_strings` の捨てた文字列は DCE で消えるので、呼び出しの結果を捨てる場合の解放はここで確かめる
+    let text = "f : Unit -> String\nf () = \"z\"\n\nmain : Unit -> <IO> Unit\nmain () =\n  let _ = f ()\n  println \"x\"";
+    insta::assert_snapshot!(core_text(text, Pass::Perceus), @r#"
+    fn f(p0) {
+      let s1 = const "z"
+      return s1
+    }
+    fn main(p0) {
+      let t1 = call f(())
+      decref t1
+      let s2 = const "x"
+      let t3 = perform println(s2)
+      return t3
     }
     fn entry$main() {
       tailcall main(())

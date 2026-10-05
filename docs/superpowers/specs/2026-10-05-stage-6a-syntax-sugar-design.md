@@ -281,6 +281,8 @@ UI テストは、[testing.md](../../implementation/testing.md) のとおり、�
 | 1 | `eml_types/tests/check.rs` の、演算子の参照の E0004 を期待している行 (372行目付近)。受け付けるようになった形の期待値に書き換える |
 | 2 | `eml_core_ir/tests/simplify.rs` の `a_mixed_switch_splits_only_the_arms_without_fields`、`arms_with_fields_keep_the_join_point_argument`、`jumps_that_pass_constructed_values_are_left_alone`。フィールドを持つコンストラクタを渡す `jump` が枝へ直接向き、使われなくなった `con` が消える。名前が内容と合わなくなるものは、期待値と一緒に名前と冒頭のコメントを直す |
 | 2 | `eml_core_ir/tests/perceus.rs` の `a_split_switch_still_unpacks_the_arm_with_fields`。同じ理由で、`dup` と `decref` の並びも変わる |
+| 2 | `eml_core_ir/tests/perceus.rs` の `shadowed_and_discarded_strings`。DCE が使われない `const` の束縛を消すため、捨てた文字列の `const` と `decref` が消える。捨てた値の解放は、新しい `a_discarded_call_result_is_released` で確かめ続ける |
+| 2 | `eml_core_ir/tests/simplify.rs` の `join_points_left_without_jumps_are_removed`。DCE が使われない `const` の束縛を消すため、`main` の先頭の `let s1 = const "other"` が消える |
 
 - 種類1と種類2の変更は `test-changes.md` に記録する
 - `run/` の UI テストの出力は変わらない。`debug_heap` のリーク検出も通ったままである

@@ -158,7 +158,6 @@ fn join_points_left_without_jumps_are_removed() {
       return b1
     }
     fn main(p0) {
-      let s1 = const "other"
       let s2 = const "a"
       let t3 = call noisy(s2, #1)
       join j0(t9) [] {
@@ -470,4 +469,54 @@ fn a_join_point_with_two_parameters_is_forwarded_by_position() {
       tailcall main(())
     }
     ");
+}
+
+/// `name` の関数だけの表示。関数は列0の `fn` で始まり、列0の `}` で終わる。
+fn function(core: &str, name: &str) -> String {
+    let start = core.find(&format!("fn {name}(")).expect("the function");
+    let rest = &core[start..];
+    let end = rest.find("\n}\n").map_or(rest.len(), |end| end + 2);
+    rest[..end].to_string()
+}
+
+#[test]
+fn a_match_on_a_tuple_literal_builds_no_tuple() {
+    // `(a, b)` を作ってすぐ分解するので、K1 が `switch` を枝にし、DCE が使われなくなった `con` を消す
+    let text = "pair : Int -> Int -> Int\npair a b = match (a, b) with\n  | (x, y) -> x + y\n\nmain : Unit -> <IO> Unit\nmain () = ()";
+    let pair = function(&core_text(text, Pass::Simplify), "pair");
+    assert!(!pair.contains("con #"), "{pair}");
+    assert!(!pair.contains("switch"), "{pair}");
+}
+
+#[test]
+fn a_match_on_a_constructed_value_takes_its_arm() {
+    let text = "data Option a = | None | Some a\n\nunwrap : Int -> Int\nunwrap x = match Some x with\n  | Some y -> y\n  | None -> 0\n\nmain : Unit -> <IO> Unit\nmain () = ()";
+    let unwrap = function(&core_text(text, Pass::Simplify), "unwrap");
+    assert!(!unwrap.contains("con #"), "{unwrap}");
+    assert!(!unwrap.contains("switch"), "{unwrap}");
+}
+
+#[test]
+fn unused_bindings_that_cannot_fail_are_removed() {
+    let text = "f : Int -> Int\nf x =\n  let p = (x, x)\n  let s = \"unused\"\n  1\n\nmain : Unit -> <IO> Unit\nmain () = ()";
+    let f = function(&core_text(text, Pass::Simplify), "f");
+    assert!(!f.contains("con #"), "{f}");
+    assert!(!f.contains("const"), "{f}");
+}
+
+#[test]
+fn unused_bindings_that_can_fail_are_kept() {
+    // `/` はゼロ除算で実行時エラーになるので、使われなくても消さない
+    let text =
+        "f : Int -> Int\nf x =\n  let q = x / 0\n  1\n\nmain : Unit -> <IO> Unit\nmain () = ()";
+    let f = function(&core_text(text, Pass::Simplify), "f");
+    assert!(f.contains("prim /("), "{f}");
+}
+
+#[test]
+fn a_switch_on_a_join_point_argument_is_not_known() {
+    // join point の引数の値は jump ごとに違うので、K1 は `switch` を残す
+    let text = "data Option a = | None | Some a\n\npick : Bool -> Int\npick c =\n  let o = if c then Some 1 else None\n  let n = match o with\n    | Some v -> v\n    | None -> 0\n  n + 1\n\nmain : Unit -> <IO> Unit\nmain () = ()";
+    let pick = function(&core_text(text, Pass::Simplify), "pick");
+    assert!(pick.contains("switch c0"), "{pick}");
 }

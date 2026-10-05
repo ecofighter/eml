@@ -161,3 +161,8 @@
 - 持ち越し規則で拒否されるようになったので、`tests/ui/run/effects/multi_over_once.em` を `tests/ui/check-fail/linearity/` に移し、冒頭のコメントを E3006 の説明に書き直した。スナップショットは実行の出力から E3006 の診断に変わった (種類1)
 - `return` の節の捕獲の専用の規則を持ち越し規則にまとめたので、`eml_types/tests/effects.rs` の `the_return_clause_of_a_multi_handler_cannot_capture_a_linear_value` が E3001 から E3006 になり、内側の `handle` と `return` の節と `choose` の宣言を指すようになった (種類1)
 - `KindConstraint` を enum にしたことと、`report::linear_misuse` の引数の変更の追随は、期待値を変えていない (種類3)
+
+### 段階6a
+
+- `simplify` の DCE が使われない `const` の束縛を消すので、`eml_core_ir/tests/perceus.rs` の `shadowed_and_discarded_strings` から、捨てた文字列の `let s4 = const "z"` と `decref s4` の行が消えた (種類2)。捨てた値の解放を確かめる目的は、呼び出しの結果を捨てる `a_discarded_call_result_is_released` を足して引き継いだ
+- 同じ理由で、`eml_core_ir/tests/simplify.rs` の `join_points_left_without_jumps_are_removed` から、`main` の先頭の `let s1 = const "other"` の行が消えた (種類2)。ほかの行は変わっていない

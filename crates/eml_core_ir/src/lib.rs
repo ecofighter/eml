@@ -321,6 +321,20 @@ pub enum PrimOp {
 }
 
 impl PrimOp {
+    /// 実行時エラーを起こしうるプリミティブ。整数の演算はオーバーフローとゼロ除算で止まる (docs/spec/declarations.md の
+    /// 標準の演算子の表)。`simplify` の DCE は、これらを使われなくても消さない。
+    pub fn may_fail(self) -> bool {
+        matches!(
+            self,
+            PrimOp::IntAdd
+                | PrimOp::IntSub
+                | PrimOp::IntMul
+                | PrimOp::IntDiv
+                | PrimOp::IntMod
+                | PrimOp::IntNeg
+        )
+    }
+
     pub fn name(self) -> &'static str {
         match self {
             PrimOp::IntAdd => "+",
