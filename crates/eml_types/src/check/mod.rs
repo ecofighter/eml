@@ -250,6 +250,7 @@ fn has_error(types: &Arena<TypeRef>, id: TypeRefId) -> bool {
     match &types[id].kind {
         TypeRefKind::Error => true,
         TypeRefKind::Con(_, args) => args.iter().any(|&arg| has_error(types, arg)),
+        TypeRefKind::Tuple(elements) => elements.iter().any(|&element| has_error(types, element)),
         TypeRefKind::Var(_) => false,
         TypeRefKind::Fn { param, row, ret } => {
             let args_error = match row {

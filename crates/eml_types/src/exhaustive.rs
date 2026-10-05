@@ -252,6 +252,8 @@ impl<'a> Exhaustive<'a> {
             PatKind::Bind(_) | PatKind::Wildcard | PatKind::Unit => Some(Pat::Wild),
             PatKind::Annot { pat, .. } => self.pat(*pat),
             PatKind::Con { ctor, args } => Some(Pat::Con(*ctor, self.row(args)?)),
+            // 型検査がまだ未対応として報告し、型を `Error` にしている
+            PatKind::Tuple(_) | PatKind::Literal(_) => None,
         }
     }
 

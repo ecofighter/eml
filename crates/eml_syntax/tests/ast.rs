@@ -1,6 +1,8 @@
 use eml_diagnostics::TextRange;
 use eml_syntax::SyntaxKind::{self, *};
-use eml_syntax::ast::{AppExpr, Clause, Expr, Item, OpSeqElement, Pat, SourceFile, Stmt, Type};
+use eml_syntax::ast::{
+    AppExpr, Clause, Expr, Item, LiteralValue, OpSeqElement, Pat, SourceFile, Stmt, Type,
+};
 use rowan::ast::AstNode;
 
 fn source(text: &str) -> SourceFile {
@@ -440,4 +442,51 @@ fn type_application_parts() {
     assert_eq!(segments, ["Option"]);
     let args: Vec<SyntaxKind> = app.args().map(|ty| ty.syntax().kind()).collect();
     assert_eq!(args, [PAREN_TYPE]);
+}
+
+#[test]
+fn tuple_and_literal_pattern_parts() {
+    let file = source(
+        "f : (Int, String) -> Int\nf (n, -1) = match (n, \"s\") with | (0, \"t\") -> 1 | _ -> 2",
+    );
+    let Some(Item::Signature(signature)) = file.items().next() else {
+        panic!("expected a signature");
+    };
+    let Some(Type::FnType(function)) = signature.ty() else {
+        panic!("expected a function type");
+    };
+    let Some(Type::TupleType(tuple)) = function.param() else {
+        panic!("expected a tuple type");
+    };
+    let elements: Vec<SyntaxKind> = tuple.elements().map(|ty| ty.syntax().kind()).collect();
+    assert_eq!(elements, [PATH_TYPE, PATH_TYPE]);
+    let literal = |pat: Pat| match pat {
+        Pat::LiteralPat(literal) => literal.value(),
+        _ => None,
+    };
+    let equation = first_equation(&file);
+    let Some(Pat::TuplePat(params)) = equation.params().next() else {
+        panic!("expected a tuple pattern");
+    };
+    let values: Vec<Option<LiteralValue>> = params.elements().map(literal).collect();
+    assert_eq!(values, [None, Some(LiteralValue::Int(-1))]);
+    let Some(Expr::MatchExpr(expr)) = equation.body() else {
+        panic!("expected a match");
+    };
+    let Some(Expr::TupleExpr(scrutinee)) = expr.scrutinee() else {
+        panic!("expected a tuple");
+    };
+    let elements: Vec<SyntaxKind> = scrutinee.elements().map(|e| e.syntax().kind()).collect();
+    assert_eq!(elements, [PATH_EXPR, LITERAL]);
+    let Some(Pat::TuplePat(arm)) = expr.arms().next().and_then(|arm| arm.pat()) else {
+        panic!("expected a tuple pattern in the first arm");
+    };
+    let values: Vec<Option<LiteralValue>> = arm.elements().map(literal).collect();
+    assert_eq!(
+        values,
+        [
+            Some(LiteralValue::Int(0)),
+            Some(LiteralValue::String("t".to_string()))
+        ]
+    );
 }

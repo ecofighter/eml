@@ -285,6 +285,13 @@ impl Printer<'_> {
                 }
                 s + ")"
             }
+            ExprKind::Tuple(elements) => {
+                let elements: Vec<String> = elements
+                    .iter()
+                    .map(|&element| self.expr(body, element, indent))
+                    .collect();
+                format!("({})", elements.join(", "))
+            }
             ExprKind::Drop(value) => format!("(drop {})", self.expr(body, *value, indent)),
         }
     }
@@ -320,6 +327,16 @@ impl Printer<'_> {
                     format!("{name} {}", args.join(" "))
                 }
             }
+            PatKind::Tuple(elements) => {
+                let elements: Vec<String> = elements
+                    .iter()
+                    .map(|&element| self.pat(body, element))
+                    .collect();
+                format!("({})", elements.join(", "))
+            }
+            PatKind::Literal(Literal::Int(n)) => n.to_string(),
+            PatKind::Literal(Literal::String(s)) => format!("{s:?}"),
+            PatKind::Literal(Literal::Unit) => "()".to_string(),
             PatKind::Annot { pat, ty } => {
                 format!("({} : {})", self.pat(body, *pat), self.ty(&body.types, *ty))
             }
@@ -335,6 +352,13 @@ impl Printer<'_> {
                     write!(text, " {}", self.ty_atom(types, arg)).unwrap();
                 }
                 text
+            }
+            TypeRefKind::Tuple(elements) => {
+                let elements: Vec<String> = elements
+                    .iter()
+                    .map(|&element| self.ty(types, element))
+                    .collect();
+                format!("({})", elements.join(", "))
             }
             TypeRefKind::Var(id) => self.generics.type_vars[*id].name.clone(),
             TypeRefKind::Fn { param, row, ret } => {

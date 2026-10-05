@@ -1,0 +1,12 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: rendered
+input_file: tests/ui/check-fail/not-yet-supported/projections.em
+---
+[E0004] Error: field access is not supported yet
+   ╭─[ check-fail/not-yet-supported/projections.em:3:11 ]
+   │
+ 3 │ first t = t.0
+   │           ─┬─  
+   │            ╰─── this is implemented in a later stage
+───╯

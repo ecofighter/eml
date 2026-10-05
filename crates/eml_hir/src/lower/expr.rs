@@ -155,7 +155,16 @@ impl<'a> BodyLowering<'a> {
             ast::Expr::ResumeExpr(e) => self.lower_resume(&e, range),
             ast::Expr::DropExpr(e) => self.lower_drop(&e, range),
             ast::Expr::FieldExpr(_) => self.unsupported(range, "field access is not supported yet"),
-            ast::Expr::TupleExpr(_) => self.unsupported(range, "tuples are not supported yet"),
+            ast::Expr::TupleExpr(tuple) => {
+                let elements = tuple
+                    .elements()
+                    .map(|element| {
+                        let element_range = element.range();
+                        self.lower_expr(Some(element), element_range)
+                    })
+                    .collect();
+                self.alloc(ExprKind::Tuple(elements), range)
+            }
             ast::Expr::OpRef(_) => {
                 self.unsupported(range, "operator references are not supported yet")
             }
@@ -356,11 +365,22 @@ impl<'a> BodyLowering<'a> {
                 }
             }
             ast::Pat::InfixConPat(infix) => return self.lower_infix_pat(infix, range),
-            ast::Pat::LiteralPat(_) => {
-                self.unsupported_pat(range, "literal patterns are not supported yet")
-            }
-            ast::Pat::TuplePat(_) => {
-                self.unsupported_pat(range, "tuple patterns are not supported yet")
+            ast::Pat::LiteralPat(literal) => match literal.value() {
+                Some(ast::LiteralValue::Int(n)) => PatKind::Literal(Literal::Int(n)),
+                Some(ast::LiteralValue::String(s)) => PatKind::Literal(Literal::String(s)),
+                // 範囲外の整数、壊れた文字列、文字のリテラルは、字句解析とパーサが報告済み
+                None => PatKind::Missing,
+            },
+            // 要素は外側のパターンと同じ組で変換する。`(x, x)` も1つのパターンの中の重複である (E1017)
+            ast::Pat::TuplePat(tuple) => {
+                let elements = tuple
+                    .elements()
+                    .map(|element| {
+                        let element_range = element.range();
+                        self.lower_pat_in_group(Some(element), element_range)
+                    })
+                    .collect();
+                PatKind::Tuple(elements)
             }
             ast::Pat::AnnotPat(_) => {
                 self.unsupported_pat(range, "type annotations in patterns are not supported yet")

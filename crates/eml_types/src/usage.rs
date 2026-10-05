@@ -171,6 +171,14 @@ impl Usage<'_> {
                 sequence(&mut uses, branches.unwrap_or_default());
                 uses
             }
+            ExprKind::Tuple(elements) => {
+                let mut uses = Uses::new();
+                for &element in elements {
+                    let next = self.expr(element);
+                    sequence(&mut uses, next);
+                }
+                uses
+            }
             ExprKind::Drop(value) => self.expr(*value),
             ExprKind::Lambda {
                 params,
@@ -221,12 +229,12 @@ impl Usage<'_> {
                 }
             }
             PatKind::Annot { pat, .. } => self.check_pat(*pat, uses),
-            PatKind::Con { args, .. } => {
+            PatKind::Con { args, .. } | PatKind::Tuple(args) => {
                 for &arg in args {
                     self.check_pat(arg, uses);
                 }
             }
-            PatKind::Unit | PatKind::Missing => {}
+            PatKind::Unit | PatKind::Missing | PatKind::Literal(_) => {}
         }
     }
 

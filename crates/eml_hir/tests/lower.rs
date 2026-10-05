@@ -93,19 +93,19 @@ fn signatures_and_equations_are_paired_by_name() {
 
 #[test]
 fn constructs_of_later_stages_are_not_yet_supported() {
-    let text = "f : Int -> Int\nf x =\n  let swap = fn (a, b) -> (b, a)\n  let plus = (+)\n  match x with | 0 -> x";
+    let text =
+        "f : Int -> Int\nf x =\n  let first = fn t -> t.0\n  let plus = (+)\n  let y = x in y";
     insta::assert_snapshot!(lower_text(text), @"
     f : Int -> Int
     f x#0 = {
-      let swap#1 = (fn <missing> -> <missing>)
-      let plus#2 = <missing>
-      (match x#0 with | <missing> -> x#0)
+      let first#2 = (fn t#1 -> <missing>)
+      let plus#3 = <missing>
+      <missing>
     }
     ---
-    E0004 3:17 tuple patterns are not supported yet
-    E0004 3:27 tuples are not supported yet
+    E0004 3:23 field access is not supported yet
     E0004 4:14 operator references are not supported yet
-    E0004 5:18 literal patterns are not supported yet
+    E0004 5:3 `let ... in` is not supported yet
     ");
 }
 

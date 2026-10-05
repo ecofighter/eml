@@ -66,7 +66,15 @@ impl TypeLowering<'_> {
                 let segments: Vec<SyntaxToken> = app.segments().collect();
                 self.applied(&segments, args, range)
             }
-            ast::Type::TupleType(_) => self.unsupported(range, "tuple types are not supported yet"),
+            ast::Type::TupleType(tuple) => TypeRefKind::Tuple(
+                tuple
+                    .elements()
+                    .map(|element| {
+                        let element_range = element.range();
+                        self.lower(Some(element), element_range)
+                    })
+                    .collect(),
+            ),
         };
         self.alloc(kind, range)
     }

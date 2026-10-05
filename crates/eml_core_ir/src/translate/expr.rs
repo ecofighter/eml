@@ -299,6 +299,9 @@ impl FnLowering<'_> {
                 let ty = self.ty(id);
                 self.bind(out, "t", &ty, Rhs::call(Call::Resume { k, arg }))
             }
+            ExprKind::Tuple(_) => {
+                unreachable!("the type checker reports tuples as not yet supported")
+            }
             ExprKind::Drop(value) => {
                 let value = self.atom(*value, out);
                 self.bind(out, "t", &Type::unit(), Rhs::Drop(value))

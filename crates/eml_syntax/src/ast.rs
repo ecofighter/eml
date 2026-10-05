@@ -619,6 +619,45 @@ impl AppType {
     }
 }
 
+impl TupleExpr {
+    /// 要素の式。文法が2つ以上にする (docs/spec/grammar.md の `atom`)。
+    pub fn elements(&self) -> AstChildren<Expr> {
+        support::children(&self.syntax)
+    }
+}
+
+impl TuplePat {
+    pub fn elements(&self) -> AstChildren<Pat> {
+        support::children(&self.syntax)
+    }
+}
+
+impl TupleType {
+    pub fn elements(&self) -> AstChildren<Type> {
+        support::children(&self.syntax)
+    }
+}
+
+impl LiteralPat {
+    /// `-1` の `-` は字句の一部ではなくパターンの一部なので (docs/spec/grammar.md の `apat`)、ここで符号を付ける。
+    /// 値の壊れたリテラルと未対応のリテラル (文字) は `None` を返す。どれも字句解析かパーサが報告済みである。
+    pub fn value(&self) -> Option<LiteralValue> {
+        let negative = support::token(&self.syntax, SyntaxKind::MINUS).is_some();
+        let token = self
+            .syntax
+            .children_with_tokens()
+            .filter_map(|element| element.into_token())
+            .find(|token| matches!(token.kind(), SyntaxKind::INT | SyntaxKind::STRING))?;
+        match token.kind() {
+            SyntaxKind::INT => {
+                let n = crate::literal::int_value(token.text())?;
+                Some(LiteralValue::Int(if negative { -n } else { n }))
+            }
+            _ => crate::literal::decode_string(token.text()).map(LiteralValue::String),
+        }
+    }
+}
+
 fn path_segments(node: &SyntaxNode) -> impl Iterator<Item = SyntaxToken> {
     node.children_with_tokens()
         .filter_map(NodeOrToken::into_token)

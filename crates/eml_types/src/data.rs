@@ -62,6 +62,12 @@ fn collect(
                 }
             }
         }
+        // タプルの Kind は要素の Kind の join なので、要素に書いた型引数はすべて効く (docs/spec/records.md の「Kind」)
+        TypeRefKind::Tuple(elements) => {
+            for &element in elements {
+                collect(types, element, effective, out);
+            }
+        }
         TypeRefKind::Fn { .. } | TypeRefKind::Error => {}
     }
 }

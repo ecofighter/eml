@@ -243,6 +243,11 @@ impl Body {
                     f(arm.body);
                 }
             }
+            ExprKind::Tuple(elements) => {
+                for &element in elements {
+                    f(element);
+                }
+            }
             ExprKind::Drop(value) => f(*value),
         }
     }
@@ -258,12 +263,12 @@ impl Body {
         match &self.pats[pat].kind {
             PatKind::Bind(local) => out.push(*local),
             PatKind::Annot { pat, .. } => self.collect_bindings(*pat, out),
-            PatKind::Con { args, .. } => {
+            PatKind::Con { args, .. } | PatKind::Tuple(args) => {
                 for &arg in args {
                     self.collect_bindings(arg, out);
                 }
             }
-            PatKind::Missing | PatKind::Wildcard | PatKind::Unit => {}
+            PatKind::Missing | PatKind::Wildcard | PatKind::Unit | PatKind::Literal(_) => {}
         }
     }
 
@@ -381,6 +386,8 @@ pub enum ExprKind {
         scrutinee: ExprId,
         arms: Vec<MatchArm>,
     },
+    /// 要素は2つ以上である。数字ラベルのレコードへの変換は型検査で行う (docs/spec/records.md)。
+    Tuple(Vec<ExprId>),
     Drop(ExprId),
 }
 
@@ -463,6 +470,10 @@ pub enum PatKind {
         ctor: ConstructorId,
         args: Vec<PatId>,
     },
+    /// 要素は2つ以上である。
+    Tuple(Vec<PatId>),
+    /// `Int` (負の数を含む) と `String` のリテラル。`()` は `Unit` である。
+    Literal(Literal),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -488,6 +499,8 @@ pub enum TypeRefKind {
         row: RowRef,
         ret: TypeRefId,
     },
+    /// 要素は2つ以上である。数字ラベルの閉じたレコードへの変換は型検査で行う (docs/spec/records.md)。
+    Tuple(Vec<TypeRefId>),
 }
 
 /// row に書いたエフェクト。型引数の個数は宣言と一致する。違えば E1015 を報告して、row を `RowRef::Error` にする。

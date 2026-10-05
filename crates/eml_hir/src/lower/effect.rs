@@ -209,7 +209,7 @@ fn check_signature(
             TypeRefKind::Var(_) if effect_param => false,
             TypeRefKind::Var(var) => !params.iter().any(|&param| mentions(types, param, var)),
             TypeRefKind::Error => true,
-            TypeRefKind::Con(..) | TypeRefKind::Fn { .. } => false,
+            TypeRefKind::Con(..) | TypeRefKind::Fn { .. } | TypeRefKind::Tuple(_) => false,
         };
         if !free {
             let label = if effect_param {
@@ -239,6 +239,9 @@ fn mentions(types: &Arena<TypeRef>, id: TypeRefId, var: TypeVarId) -> bool {
             mentions(types, *param, var) || mentions(types, *ret, var)
         }
         TypeRefKind::Con(_, args) => args.iter().any(|&arg| mentions(types, arg, var)),
+        TypeRefKind::Tuple(elements) => elements
+            .iter()
+            .any(|&element| mentions(types, element, var)),
         TypeRefKind::Error => false,
     }
 }

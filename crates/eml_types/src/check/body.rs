@@ -217,6 +217,17 @@ impl BodyCheck<'_> {
                 self.match_expr(*scrutinee, arms, Expectation::None)
             }
             // `drop` はどんな値も受け取る。値を捨てることは使用の1回に数える (docs/spec/linearity.md)
+            ExprKind::Tuple(elements) => {
+                for &element in elements {
+                    self.infer_expr(element);
+                }
+                self.diagnostics.push(Diagnostic::not_yet_supported(
+                    self.file(),
+                    expr.range,
+                    "tuples are not supported yet",
+                ));
+                self.table.error
+            }
             ExprKind::Drop(value) => {
                 self.infer_expr(*value);
                 self.table.unit
@@ -580,6 +591,23 @@ impl BodyCheck<'_> {
             }
             PatKind::Annot { pat, .. } => self.bind_pat(*pat, ty),
             PatKind::Con { ctor, args } => self.constructor_pattern(pat, *ctor, args, ty),
+            PatKind::Tuple(_) | PatKind::Literal(_) => {
+                let message = match &body.pats[pat].kind {
+                    PatKind::Tuple(_) => "tuple patterns are not supported yet",
+                    _ => "literal patterns are not supported yet",
+                };
+                self.diagnostics.push(Diagnostic::not_yet_supported(
+                    self.file(),
+                    body.pats[pat].range,
+                    message,
+                ));
+                // 網羅性の検査と使用回数のパスに誤りを連鎖させないよう、パターンと中の変数を `Error` にする
+                let error = self.table.error;
+                self.typing.pats.insert(pat, error);
+                for local in body.pat_bindings(pat) {
+                    self.typing.locals.insert(local, error);
+                }
+            }
             PatKind::Wildcard | PatKind::Missing => {}
             PatKind::Unit => {
                 let unit = self.table.unit;
