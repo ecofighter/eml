@@ -515,8 +515,17 @@ fn unused_bindings_that_can_fail_are_kept() {
 
 #[test]
 fn a_switch_on_a_join_point_argument_is_not_known() {
-    // join point の引数の値は jump ごとに違うので、K1 は `switch` を残す
-    let text = "data Option a = | None | Some a\n\npick : Bool -> Int\npick c =\n  let o = if c then Some 1 else None\n  let n = match o with\n    | Some v -> v\n    | None -> 0\n  n + 1\n\nmain : Unit -> <IO> Unit\nmain () = ()";
+    // 両方の jump が関数の呼び出しの結果を渡すので、join point の引数の値は分からない。K1 は引数への `switch` を残す
+    let text = "data Option a = | None | Some a\n\nlookup : Int -> Option Int\nlookup n = Some n\n\npick : Bool -> Int\npick c =\n  let o = if c then lookup 1 else lookup 2\n  let n = match o with\n    | Some v -> v\n    | None -> 0\n  n + 1\n\nmain : Unit -> <IO> Unit\nmain () = ()";
     let pick = function(&core_text(text, Pass::Simplify), "pick");
-    assert!(pick.contains("switch c0"), "{pick}");
+    assert_eq!(pick.matches("switch").count(), 2, "{pick}");
+}
+
+#[test]
+fn a_switch_through_an_alias_takes_its_arm() {
+    // 単一の jump の join point を B3 が戻すと `let t = d` の別名ができる。K1 がそれをたどって `con` まで届き、`switch` を枝にして DCE が `con` を消す
+    let text = "data Option a = | None | Some a\n\nh : Int -> Int\nh x =\n  let p = match x with\n    | n -> Some n\n  match p with\n    | Some y -> y\n    | None -> 0\n\nmain : Unit -> <IO> Unit\nmain () = ()";
+    let h = function(&core_text(text, Pass::Simplify), "h");
+    assert!(!h.contains("switch"), "{h}");
+    assert!(!h.contains("con #"), "{h}");
 }

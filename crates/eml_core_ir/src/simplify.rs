@@ -237,9 +237,11 @@ impl Simplify<'_> {
         }
     }
 
-    /// 分かっているコンストラクタの値。`let v = con #k(a…)`、引数のないタグの束縛、別名 (`let v = u`) をたどった先である。
+    /// 分かっているコンストラクタの値を定義する `let` の位置。`let v = con #k(a…)`、引数のないタグの束縛、別名
+    /// (`let v = u`) をたどった先を指す。値そのものではなく位置を持つのは、K1 や B2 が枝の中の変数を置き換えると
+    /// `con` の引数も書き換わるためで、引くときにアリーナから今の右辺を読む (`known_value`)。
     /// 変数は関数の中で1回だけ束縛され (verifier が確かめる)、使用はつねに束縛の範囲にあるので、関数全体で1つの表でよい。
-    fn known_constructors(&self) -> HashMap<VarId, (u32, Vec<Atom>)> {
+    fn known_constructors(&self) -> HashMap<VarId, CExprId> {
         let mut direct = HashMap::new();
         let mut aliases = HashMap::new();
         for id in self.reachable() {
@@ -247,11 +249,8 @@ impl Simplify<'_> {
                 continue;
             };
             match rhs {
-                Rhs::Con { tag, args } => {
-                    direct.insert(*var, (*tag, args.clone()));
-                }
-                Rhs::Atom(Atom::Tag(tag)) => {
-                    direct.insert(*var, (*tag, Vec::new()));
+                Rhs::Con { .. } | Rhs::Atom(Atom::Tag(_)) => {
+                    direct.insert(*var, id);
                 }
                 Rhs::Atom(Atom::Var(other)) => {
                     aliases.insert(*var, *other);
@@ -266,11 +265,31 @@ impl Simplify<'_> {
             while let Some(&next) = aliases.get(&target) {
                 target = next;
             }
-            if let Some(value) = direct.get(&target) {
-                known.insert(var, value.clone());
+            if let Some(&site) = direct.get(&target) {
+                known.insert(var, site);
             }
         }
         known
+    }
+
+    /// `atom` が分かっているコンストラクタの値なら、そのタグとフィールドの値。表を作った後に枝の中の変数が置き換わり
+    /// うるので、`con` の引数は表に写さず、引くたびにアリーナの今の右辺から読む。
+    fn known_value(&self, known: &HashMap<VarId, CExprId>, atom: Atom) -> Option<(u32, Vec<Atom>)> {
+        match atom {
+            Atom::Tag(tag) => Some((tag, Vec::new())),
+            Atom::Var(var) => match self.expr(*known.get(&var)?) {
+                CExpr::Let {
+                    rhs: Rhs::Con { tag, args },
+                    ..
+                } => Some((*tag, args.clone())),
+                CExpr::Let {
+                    rhs: Rhs::Atom(Atom::Tag(tag)),
+                    ..
+                } => Some((*tag, Vec::new())),
+                _ => None,
+            },
+            Atom::Int(_) | Atom::Unit => None,
+        }
     }
 
     /// K1: `switch` の値が分かっているコンストラクタなら、その枝で置き換え、枝のフィールドの変数を値に置き換える。
@@ -282,7 +301,7 @@ impl Simplify<'_> {
             let CExpr::Switch { scrutinee, arms } = self.expr(id).clone() else {
                 continue;
             };
-            let Some((tag, values)) = known_value(&known, scrutinee) else {
+            let Some((tag, values)) = self.known_value(&known, scrutinee) else {
                 continue;
             };
             let Some(arm) = arms
@@ -525,15 +544,6 @@ fn movable(atom: Atom, params: &[VarId]) -> bool {
     match atom {
         Atom::Var(var) => params.contains(&var),
         _ => true,
-    }
-}
-
-/// `atom` が分かっているコンストラクタの値なら、そのタグとフィールドの値。
-fn known_value(known: &HashMap<VarId, (u32, Vec<Atom>)>, atom: Atom) -> Option<(u32, Vec<Atom>)> {
-    match atom {
-        Atom::Tag(tag) => Some((tag, Vec::new())),
-        Atom::Var(var) => known.get(&var).cloned(),
-        Atom::Int(_) | Atom::Unit => None,
     }
 }
 
