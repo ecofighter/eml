@@ -5,6 +5,8 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::sync::atomic::{AtomicI32, Ordering};
 
+use crate::FileHandle;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ObjRef {
     index: u32,
@@ -30,15 +32,17 @@ impl DescId {
     const CLOSURE: DescId = DescId(2);
     const CONTINUATION: DescId = DescId(3);
     const DATA: DescId = DescId(4);
+    const FILE: DescId = DescId(5);
 }
 
 /// オブジェクトの種類。ヘッダから引けるようにし、後の段階でフィールドのレイアウトと `Lin` の破棄処理を足す
 /// (docs/spec/runtime.md の「オブジェクトのヘッダ」)。`data` のオブジェクトは、型によらず1つの記述子にする。型ごとのフィールドのレイアウトは、`Lin` の破棄処理と一緒に後で足す。
+/// `Lin` の破棄処理はオブジェクトの解放で済む。`File` の読み出し口は、解放で捨てると閉じる。
 struct Descriptor {
     name: &'static str,
 }
 
-const DESCRIPTORS: [Descriptor; 5] = [
+const DESCRIPTORS: [Descriptor; 6] = [
     Descriptor { name: "String" },
     Descriptor { name: "Frame" },
     Descriptor { name: "Closure" },
@@ -46,6 +50,7 @@ const DESCRIPTORS: [Descriptor; 5] = [
         name: "Continuation",
     },
     Descriptor { name: "Data" },
+    Descriptor { name: "File" },
 ];
 
 #[derive(Debug, PartialEq)]
@@ -67,6 +72,8 @@ pub enum Payload {
         tag: u32,
         fields: Vec<Value>,
     },
+    /// 組み込みの線形型 `File` の値。写さない (`take_or_copy` は `NotCopyable` を返す)。
+    File(FileHandle),
 }
 
 impl Payload {
@@ -78,6 +85,7 @@ impl Payload {
             Payload::Frame(_) => DescId::FRAME,
             Payload::Continuation { .. } => DescId::CONTINUATION,
             Payload::Data { .. } => DescId::DATA,
+            Payload::File(_) => DescId::FILE,
         }
     }
 }
@@ -122,6 +130,7 @@ pub enum HeapError {
     /// 継続の区間が、切り離された handler フレームで終わっていない。
     BrokenSegment,
     NotImplemented(&'static str),
+    NotCopyable,
 }
 
 impl fmt::Display for HeapError {
@@ -133,6 +142,7 @@ impl fmt::Display for HeapError {
                 f.write_str("a continuation does not end at a detached handler")
             }
             HeapError::NotImplemented(name) => write!(f, "`{name}` is not implemented yet"),
+            HeapError::NotCopyable => f.write_str("a file cannot be copied"),
         }
     }
 }
@@ -251,6 +261,10 @@ impl Heap {
     pub fn take_or_copy(&mut self, obj: ObjRef) -> Result<Payload, HeapError> {
         if self.is_unique(obj)? {
             return self.take(obj);
+        }
+        // `File` は線形で、型検査が共有させない。共有されていたら処理系の誤りなので、写さずに止める
+        if matches!(self.object(obj)?.payload, Payload::File(_)) {
+            return Err(HeapError::NotCopyable);
         }
         let segment = match &self.object(obj)?.payload {
             Payload::Continuation { top, .. } => Some(*top),
@@ -412,6 +426,7 @@ fn copy(payload: &Payload) -> Payload {
         Payload::Continuation { .. } => {
             unreachable!("a shared continuation is copied with its segment by `copy_segment`")
         }
+        Payload::File(_) => unreachable!("`take_or_copy` refuses to copy a file"),
     }
 }
 
@@ -454,7 +469,7 @@ fn children(payload: &Payload, work: &mut Vec<ObjRef>) {
         Payload::Continuation { top, .. } => work.push(*top),
         Payload::Closure(closure) => work.extend(closure.args.iter().filter_map(object)),
         Payload::Data { fields, .. } => work.extend(fields.iter().filter_map(object)),
-        Payload::Frame(Frame::Io) | Payload::Str(_) => {}
+        Payload::Frame(Frame::Io) | Payload::Str(_) | Payload::File(_) => {}
     }
 }
 

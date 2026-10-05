@@ -391,3 +391,66 @@ fn take_or_copy_copies_a_shared_data_object_and_dups_its_fields() {
     heap.decref(s).unwrap();
     assert!(heap.live_objects().is_empty());
 }
+
+use std::io::Read;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+use crate::FileHandle;
+
+/// 捨てられたことを旗で知らせる読み出し口。
+struct Flagged(Arc<AtomicBool>);
+
+impl Read for Flagged {
+    fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
+        Ok(0)
+    }
+}
+
+impl Drop for Flagged {
+    fn drop(&mut self) {
+        self.0.store(true, Ordering::SeqCst);
+    }
+}
+
+fn file(heap: &mut Heap, dropped: &Arc<AtomicBool>) -> ObjRef {
+    heap.alloc(Payload::File(FileHandle::new(
+        "a.txt".to_string(),
+        Box::new(Flagged(dropped.clone())),
+    )))
+}
+
+#[test]
+fn releasing_a_file_drops_its_reader() {
+    let mut heap = Heap::new();
+    let dropped = Arc::new(AtomicBool::new(false));
+    let f = file(&mut heap, &dropped);
+    assert_eq!(heap.live_objects(), [("File".to_string(), 1)]);
+    heap.decref(f).unwrap();
+    assert!(dropped.load(Ordering::SeqCst));
+    assert!(heap.live_objects().is_empty());
+}
+
+#[test]
+fn a_file_inside_data_is_released_with_it() {
+    let mut heap = Heap::new();
+    let dropped = Arc::new(AtomicBool::new(false));
+    let f = file(&mut heap, &dropped);
+    let pair = heap.alloc(Payload::Data {
+        tag: 0,
+        fields: vec![Value::Obj(f), Value::Int(1)],
+    });
+    heap.decref(pair).unwrap();
+    assert!(dropped.load(Ordering::SeqCst));
+    assert!(heap.live_objects().is_empty());
+}
+
+#[test]
+fn a_shared_file_is_not_copied() {
+    let mut heap = Heap::new();
+    let dropped = Arc::new(AtomicBool::new(false));
+    let f = file(&mut heap, &dropped);
+    heap.dup(f).unwrap();
+    assert!(matches!(heap.take_or_copy(f), Err(HeapError::NotCopyable)));
+    assert!(!dropped.load(Ordering::SeqCst));
+}
