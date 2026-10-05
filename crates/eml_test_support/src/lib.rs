@@ -130,28 +130,29 @@ pub fn check(text: &str) -> Checked {
     }
 }
 
-/// Core IR は診断のエラーがないプログラムだけを受け取る (docs/implementation/architecture.md)。
 #[cfg(feature = "core")]
 pub fn core(text: &str) -> Program {
-    let checked = check(text);
-    assert!(
-        !has_errors(&checked.diagnostics),
-        "{:#?}",
-        checked.diagnostics
-    );
+    let checked = check_without_errors(text);
     eml_core_ir::lower(&checked.module, &checked.typed)
 }
 
 /// 確かめたいパスの直後の Core IR を見るテストのため (docs/implementation/testing.md)。
 #[cfg(feature = "core")]
 pub fn core_until(text: &str, last: Pass) -> Program {
+    let checked = check_without_errors(text);
+    eml_core_ir::lower_until(&checked.module, &checked.typed, last)
+}
+
+/// Core IR は診断のエラーがないプログラムだけを受け取る (docs/implementation/architecture.md)。
+#[cfg(feature = "core")]
+fn check_without_errors(text: &str) -> Checked {
     let checked = check(text);
     assert!(
         !has_errors(&checked.diagnostics),
         "{:#?}",
         checked.diagnostics
     );
-    eml_core_ir::lower_until(&checked.module, &checked.typed, last)
+    checked
 }
 
 /// 実行のテストでは、つねに `debug_heap` を有効にする (docs/implementation/testing.md)。

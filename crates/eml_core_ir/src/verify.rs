@@ -23,10 +23,12 @@ impl fmt::Display for VerifyError {
 
 impl std::error::Error for VerifyError {}
 
+/// Perceus の後の IR を確かめる。範囲と引数の数に加えて、RC の対象の変数の所有権が釣り合うことを確かめる。
 pub fn verify(program: &Program) -> Result<(), VerifyError> {
     verify_at(program, Level::Ownership)
 }
 
+/// Perceus より前の IR を確かめる。範囲と引数の数を確かめ、RC の命令と `saved` がまだないことを確かめる。
 pub fn verify_scopes(program: &Program) -> Result<(), VerifyError> {
     verify_at(program, Level::Scopes)
 }

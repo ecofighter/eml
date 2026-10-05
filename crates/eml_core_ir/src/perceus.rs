@@ -17,7 +17,7 @@ pub(crate) fn insert(program: &mut Program) {
 fn insert_rc(function: &mut CoreFn) {
     let live = analyze(function);
     let tracked = tracked(function);
-    let mut pass = Pass {
+    let mut pass = Rebuild {
         old: &function.exprs,
         tracked: &tracked,
         live: &live,
@@ -31,7 +31,7 @@ fn insert_rc(function: &mut CoreFn) {
         .filter(|var| tracked[var.0 as usize])
         .collect();
     let body = pass.transform(function.body, &owned);
-    let Pass { new, joins, .. } = pass;
+    let Rebuild { new, joins, .. } = pass;
     function.body = body;
     function.exprs = new;
     function.joins = joins
@@ -40,7 +40,7 @@ fn insert_rc(function: &mut CoreFn) {
         .collect();
 }
 
-struct Pass<'a> {
+struct Rebuild<'a> {
     old: &'a [CExpr],
     tracked: &'a [bool],
     live: &'a BlockLiveness,
@@ -57,7 +57,7 @@ enum Segment {
     After(VarId),
 }
 
-impl Pass<'_> {
+impl Rebuild<'_> {
     fn atom_var(&self, atom: &Atom) -> Option<VarId> {
         match atom {
             Atom::Var(var) if self.tracked[var.0 as usize] => Some(*var),

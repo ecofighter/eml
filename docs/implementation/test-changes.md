@@ -126,3 +126,4 @@
 - `eml_core_ir/tests/lower.rs` を `translate.rs` に改名し、`dup` / `decref` の位置と `saved` を確かめる4件 (`strings_are_dupped_and_decreffed`、`shadowed_and_discarded_strings`、`a_non_tail_if_keeps_strings_used_later`、`calls_save_the_variables_used_after_them`) を新しい `perceus.rs` に移した (種類1)。`perceus.rs` は Perceus の直後の IR を見るので、期待値は変わっていない
 - `translate.rs` の12件は変換の直後の IR を、`simplify.rs` の7件は `simplify` の直後の IR を見るようにした。期待値から `dup` / `decref` の行と、呼び出しの後ろの `saved` の並びが消えた (種類2)。ほかの行は変わっていないことを、差分から RC の命令と `saved` を除いて比べて確かめた。確かめる目的は、それぞれのテストの名前のとおりで変わらない
 - `eml_test_support/tests/support.rs` に `core_until_stops_after_the_named_pass` を、`eml_core_ir/tests/verify.rs` に `verify_scopes` の7件を足した
+- `eml_test_support/tests/support.rs` の `core_until_stops_after_the_named_pass` に、変換の直後で止めた IR の join point に `captures` (`[s1]`) が埋まっていることを確かめるアサーションを足した (種類1)。途中で止めたときもパスの後の処理 (`captures` の埋め直しと検査) を行うことを、出力から確かめるためである
