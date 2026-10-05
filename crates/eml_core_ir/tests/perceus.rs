@@ -109,3 +109,21 @@ fn calls_save_the_variables_used_after_them() {
     }
     ");
 }
+
+#[test]
+fn constructor_arguments_are_owned_by_the_value() {
+    let text = "data Pair a b =\n  | Pair a b\n\ntwice : String -> Pair String String\ntwice s = Pair s s\n\nmain : Unit -> <IO> Unit\nmain () = ()";
+    insta::assert_snapshot!(core_text(text, Pass::Perceus), @r"
+    fn twice(s0) {
+      dup s0
+      let d1 = con #0(s0, s0)
+      return d1
+    }
+    fn main(p0) {
+      return ()
+    }
+    fn entry$main() {
+      tailcall main(())
+    }
+    ");
+}

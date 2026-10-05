@@ -1,7 +1,7 @@
 //! 式ごとの変換と、呼び出しの引数の個数による場合分け (docs/spec/core-ir.md の eval/apply)。
 
 use eml_hir::builtin::Builtin;
-use eml_hir::{ExprId, ExprKind, Literal, OperationId, PatId, Res};
+use eml_hir::{ConstructorId, ExprId, ExprKind, Literal, OperationId, PatId, Res};
 use eml_types::Type;
 
 use crate::{Atom, Call, FnIdx, JoinId, Rhs};
@@ -63,16 +63,17 @@ impl FnLowering<'_> {
     ) -> Atom {
         let arity = builtin.arity();
         if args.len() < arity {
-            let wrapper = self.program.wrapper(builtin);
+            let wrapper = self.program.wrapper(self.module, builtin);
             return self.bind(out, "c", ty, Rhs::MakeClosure(wrapper, args));
         }
         let rest = args.split_off(arity);
         let rhs = match lowering(builtin) {
             Lowering::Prim(op) => Rhs::Prim(op, args),
             Lowering::Io(op) => Rhs::Io(op, args),
-            Lowering::Compose { .. } => {
-                Rhs::call(Call::Direct(self.program.wrapper(builtin), args))
-            }
+            Lowering::Compose { .. } => Rhs::call(Call::Direct(
+                self.program.wrapper(self.module, builtin),
+                args,
+            )),
         };
         if rest.is_empty() {
             return self.bind(out, "t", ty, rhs);
@@ -100,6 +101,32 @@ impl FnLowering<'_> {
         self.bind(out, "t", ty, Rhs::call(call))
     }
 
+    /// 引数がフィールドの数にそろえば値を作り、足りなければコンストラクタを包む関数のクロージャにする。コンストラクタの
+    /// 結果は `data` の値で関数ではないので、型検査を通った呼び出しで引数が余ることはない。
+    fn call_constructor(
+        &mut self,
+        ctor: ConstructorId,
+        args: Vec<Atom>,
+        ty: &Type,
+        out: &mut Bindings,
+    ) -> Atom {
+        let module = self.module;
+        let constructor = &module.constructors[ctor];
+        if args.len() < constructor.fields.len() {
+            let wrapper = self.program.constructor_wrapper(module, ctor);
+            return self.bind(out, "c", ty, Rhs::MakeClosure(wrapper, args));
+        }
+        self.bind(
+            out,
+            "d",
+            ty,
+            Rhs::Con {
+                tag: constructor.tag,
+                args,
+            },
+        )
+    }
+
     /// 式の値をアトムにする。値の計算に要る束縛は `out` に積む。
     pub(super) fn atom(&mut self, id: ExprId, out: &mut Bindings) -> Atom {
         let body = self.body;
@@ -121,7 +148,7 @@ impl FnLowering<'_> {
             }
             ExprKind::Path(Res::Local(local)) => self.locals[*local],
             ExprKind::Path(Res::Builtin(builtin)) => {
-                let wrapper = self.program.wrapper(*builtin);
+                let wrapper = self.program.wrapper(self.module, *builtin);
                 let ty = self.ty(id);
                 self.bind(out, "c", &ty, Rhs::MakeClosure(wrapper, Vec::new()))
             }
@@ -144,11 +171,13 @@ impl FnLowering<'_> {
             }
             ExprKind::Path(Res::Constructor(ctor)) => {
                 let constructor = &self.module.constructors[*ctor];
-                assert!(
-                    constructor.fields.is_empty(),
-                    "constructors with fields are not lowered to Core IR"
-                );
-                Atom::Tag(constructor.tag)
+                if constructor.fields.is_empty() {
+                    Atom::Tag(constructor.tag)
+                } else {
+                    let wrapper = self.program.constructor_wrapper(self.module, *ctor);
+                    let ty = self.ty(id);
+                    self.bind(out, "c", &ty, Rhs::MakeClosure(wrapper, Vec::new()))
+                }
             }
             ExprKind::Match { .. } => unreachable!("`match` is not lowered to Core IR"),
             ExprKind::Call {
@@ -176,6 +205,10 @@ impl FnLowering<'_> {
                     ExprKind::Path(Res::Operation(op)) => {
                         let args = self.call_args(args, first, out);
                         self.call_operation(*op, args, &ty, out)
+                    }
+                    ExprKind::Path(Res::Constructor(ctor)) => {
+                        let args = self.call_args(args, first, out);
+                        self.call_constructor(*ctor, args, &ty, out)
                     }
                     _ => {
                         // 呼ばれる式は引数より左にあるので、先に評価する

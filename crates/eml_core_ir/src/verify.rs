@@ -169,13 +169,16 @@ impl<'a> Checker<'a> {
                 }
                 CExpr::Jump { join, args } => return self.check_jump(state, *join, args),
                 CExpr::Switch { scrutinee, arms } => {
+                    if arms.iter().any(|arm| !arm.fields.is_empty()) {
+                        self.fields_allowed(scrutinee)?;
+                    }
                     self.consume(&mut state, scrutinee)?;
                     let mut tags = HashSet::new();
-                    for &(tag, arm) in arms {
-                        if !tags.insert(tag) {
-                            return Err(format!("a switch has two arms for tag {tag}"));
+                    for arm in arms {
+                        if !tags.insert(arm.tag) {
+                            return Err(format!("a switch has two arms for tag {}", arm.tag));
                         }
-                        self.check_branch(arm, state.clone())?;
+                        self.check_branch(arm.body, state.clone(), &arm.fields)?;
                     }
                     return Ok(());
                 }
@@ -210,7 +213,7 @@ impl<'a> Checker<'a> {
                     // 範囲は今の状態から始まり、この join point に `Jump` できる
                     let mut scope_state = state.clone();
                     scope_state.joins.insert(*join);
-                    self.check_branch(*scope, scope_state)?;
+                    self.check_branch(*scope, scope_state, &[])?;
                     // 本体は、関数の本体と同じく、`captures` と引数だけが範囲にある状態から始まり、`captures` のうち
                     // RC の対象を1つずつ所有する。`captures` の書き漏れは、本体での範囲の誤りとして見つかる
                     self.epoch = self.next_epoch;
@@ -233,16 +236,37 @@ impl<'a> Checker<'a> {
         }
     }
 
-    /// 枝や範囲を確かめ、その中での範囲の変更を巻き戻す。
-    fn check_branch(&mut self, id: CExprId, state: State) -> Result<(), String> {
+    /// 枝や範囲を確かめ、その中での範囲の変更を巻き戻す。`bindings` は入口で束縛する変数 (`Switch` の枝のフィールド)
+    /// で、範囲はその枝の中だけである。
+    fn check_branch(
+        &mut self,
+        id: CExprId,
+        mut state: State,
+        bindings: &[VarId],
+    ) -> Result<(), String> {
         let mark = self.scope_log.len();
         let epoch = self.epoch;
+        for &var in bindings {
+            self.bind(&mut state, var)?;
+        }
         self.check(id, state)?;
         for (var, stamp) in self.scope_log.drain(mark..).rev() {
             self.stamps[var.0 as usize] = stamp;
         }
         self.epoch = epoch;
         Ok(())
+    }
+
+    /// フィールドを持つ値は boxed な変数に入る (docs/spec/core-ir.md の boxed の判定)。定数の scrutinee は、B2 が
+    /// 引数をタグに置き換えた枝の中にできるので、フィールドを束縛する枝があってもよい。その枝には入らない。
+    fn fields_allowed(&self, scrutinee: &Atom) -> Result<(), String> {
+        match *scrutinee {
+            Atom::Var(var) if !self.function.vars[var.0 as usize].boxed => Err(format!(
+                "`{}` is not boxed, but a switch binds its fields",
+                self.name(var)
+            )),
+            _ => Ok(()),
+        }
     }
 
     fn enter_scope(&mut self, var: VarId) {

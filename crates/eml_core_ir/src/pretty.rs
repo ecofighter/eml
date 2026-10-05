@@ -76,9 +76,15 @@ fn expr(program: &Program, function: &CoreFn, id: CExprId, indent: usize, out: &
             }
             CExpr::Switch { scrutinee, arms } => {
                 writeln!(out, "{pad}switch {} {{", atom(function, scrutinee)).unwrap();
-                for (tag, arm) in arms {
-                    writeln!(out, "{pad}  #{tag} ->").unwrap();
-                    expr(program, function, *arm, indent + 2, out);
+                for arm in arms {
+                    if arm.fields.is_empty() {
+                        writeln!(out, "{pad}  #{} ->", arm.tag).unwrap();
+                    } else {
+                        let fields: Vec<String> =
+                            arm.fields.iter().map(|&v| var(function, v)).collect();
+                        writeln!(out, "{pad}  #{}({}) ->", arm.tag, fields.join(", ")).unwrap();
+                    }
+                    expr(program, function, arm.body, indent + 2, out);
                 }
                 writeln!(out, "{pad}}}").unwrap();
                 return;
@@ -120,6 +126,7 @@ fn rhs_text(program: &Program, function: &CoreFn, rhs: &Rhs) -> String {
                 format!("{text} [{}]", names.join(", "))
             }
         }
+        Rhs::Con { tag, args: a } => format!("con #{tag}({})", args(a)),
         Rhs::MakeClosure(target, a) => {
             format!("closure {}({})", program.function(*target).name, args(a))
         }

@@ -330,3 +330,64 @@ fn mark_shared_is_reserved_for_multicore() {
         Err(HeapError::NotImplemented("mark_shared"))
     );
 }
+
+#[test]
+fn a_data_object_releases_its_fields() {
+    let mut heap = Heap::new();
+    let s = string(&mut heap, "a");
+    let data = heap.alloc(Payload::Data {
+        tag: 1,
+        fields: vec![Value::Obj(s), Value::Int(3), Value::Tag(0)],
+    });
+    assert_eq!(
+        heap.live_objects(),
+        [("Data".to_string(), 1), ("String".to_string(), 1)]
+    );
+    heap.decref(data).unwrap();
+    assert!(heap.live_objects().is_empty());
+}
+
+#[test]
+fn take_or_copy_takes_a_unique_data_object_with_its_fields() {
+    let mut heap = Heap::new();
+    let s = string(&mut heap, "a");
+    let data = heap.alloc(Payload::Data {
+        tag: 1,
+        fields: vec![Value::Obj(s)],
+    });
+    assert_eq!(
+        heap.take_or_copy(data),
+        Ok(Payload::Data {
+            tag: 1,
+            fields: vec![Value::Obj(s)],
+        })
+    );
+    // 箱は解放され、フィールドの参照は取り出した側に移る
+    assert_eq!(heap.live_objects(), [("String".to_string(), 1)]);
+    heap.decref(s).unwrap();
+    assert!(heap.live_objects().is_empty());
+}
+
+#[test]
+fn take_or_copy_copies_a_shared_data_object_and_dups_its_fields() {
+    let mut heap = Heap::new();
+    let s = string(&mut heap, "a");
+    let data = heap.alloc(Payload::Data {
+        tag: 1,
+        fields: vec![Value::Obj(s), Value::Int(2)],
+    });
+    heap.dup(data).unwrap();
+    let copy = heap.take_or_copy(data).unwrap();
+    assert_eq!(
+        copy,
+        Payload::Data {
+            tag: 1,
+            fields: vec![Value::Obj(s), Value::Int(2)],
+        }
+    );
+    // 元の箱と取り出したフィールドが、文字列の参照を1つずつ持つ
+    heap.decref(data).unwrap();
+    assert_eq!(heap.live_objects(), [("String".to_string(), 1)]);
+    heap.decref(s).unwrap();
+    assert!(heap.live_objects().is_empty());
+}

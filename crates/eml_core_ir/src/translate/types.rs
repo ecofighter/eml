@@ -1,7 +1,7 @@
 //! 型から決まる変数の性質 (boxed かどうか) と、組み込みを Core IR のどの命令にするか。
 
-use eml_hir::LangItems;
 use eml_hir::builtin::Builtin;
+use eml_hir::{Module, TypeDefId, TypeDefKind};
 use eml_types::{Linearity, Type};
 
 use crate::{IoOp, PrimOp, VarInfo};
@@ -9,19 +9,30 @@ use crate::{IoOp, PrimOp, VarInfo};
 /// ヒープに置く値の型。`Unr` でボックス化した変数が RC の対象になる。関数値と型変数の値は、ヒープのクロージャや
 /// 文字列かもしれない。インタプリタの `dup` / `decref` はヒープにない値を無視するので、多めに対象にしても正しく動く
 /// (docs/spec/core-ir.md)。
-fn boxed(ty: &Type, lang: &LangItems) -> bool {
+fn boxed(ty: &Type, module: &Module) -> bool {
     match ty {
-        Type::Con { id, .. } => *id == lang.string,
+        Type::Con { id, .. } => *id == module.lang.string || has_fields(module, *id),
         Type::Fn { .. } | Type::Cont { .. } | Type::Rigid(_) | Type::Flexible => true,
         Type::Record(_) | Type::Error => false,
     }
 }
 
-pub(super) fn var_info(name: &str, ty: &Type, lang: &LangItems) -> VarInfo {
+/// 引数を持つコンストラクタが1つでもある `data` の値は、ヒープの箱かもしれない。同じ型の引数のないコンストラクタの
+/// 値は即値のタグで同じ変数に入るが、`dup` と `decref` はそれを無視する (docs/spec/core-ir.md の boxed の判定)。
+fn has_fields(module: &Module, id: TypeDefId) -> bool {
+    match &module.types[id].kind {
+        TypeDefKind::Data { constructors } => constructors
+            .iter()
+            .any(|&ctor| !module.constructors[ctor].fields.is_empty()),
+        TypeDefKind::Builtin => false,
+    }
+}
+
+pub(super) fn var_info(name: &str, ty: &Type, module: &Module) -> VarInfo {
     VarInfo {
         name: name.to_string(),
         linearity: Linearity::Unr,
-        boxed: boxed(ty, lang),
+        boxed: boxed(ty, module),
     }
 }
 

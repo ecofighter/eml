@@ -175,14 +175,29 @@ impl<'p> Machine<'p> {
         match program.function(self.function).expr(self.control) {
             CExpr::Let { var, rhs, body } => return self.bind(*var, rhs, *body),
             CExpr::Switch { scrutinee, arms } => {
-                let Value::Tag(tag) = self.atom(scrutinee)? else {
-                    return Err(Fault::Internal("a switch on a value that is not a tag"));
+                // scrutinee は move で受け取る。共有された値は `take_or_copy` がフィールドを複製して箱を手放すので、
+                // どちらの場合も枝はフィールドの参照を1つずつ所有して始まる (docs/spec/core-ir.md)
+                let (tag, fields) = match self.atom(scrutinee)? {
+                    Value::Tag(tag) => (tag, Vec::new()),
+                    Value::Obj(obj) => match self.heap.take_or_copy(obj).map_err(Fault::Heap)? {
+                        Payload::Data { tag, fields } => (tag, fields),
+                        _ => return Err(Fault::Internal("a switch on an object that is not data")),
+                    },
+                    _ => return Err(Fault::Internal("a switch on a value that is not a tag")),
                 };
-                self.control = arms
+                let arm = arms
                     .iter()
-                    .find(|(arm_tag, _)| *arm_tag == tag)
-                    .map(|&(_, arm)| arm)
+                    .find(|arm| arm.tag == tag)
                     .ok_or(Fault::Internal("a switch without a matching arm"))?;
+                if arm.fields.len() != fields.len() {
+                    return Err(Fault::Internal(
+                        "a switch arm binds a different number of fields than the value has",
+                    ));
+                }
+                for (&field, value) in arm.fields.iter().zip(fields) {
+                    self.slots[field.0 as usize] = Some(value);
+                }
+                self.control = arm.body;
             }
             CExpr::Return(atom) => {
                 let value = self.atom(atom)?;
@@ -260,6 +275,10 @@ impl<'p> Machine<'p> {
                     args,
                 };
                 Value::Obj(self.heap.alloc(Payload::Closure(closure)))
+            }
+            Rhs::Con { tag, args } => {
+                let fields = self.atoms(args)?;
+                Value::Obj(self.heap.alloc(Payload::Data { tag: *tag, fields }))
             }
         };
         self.slots[var.0 as usize] = Some(value);

@@ -29,21 +29,23 @@ impl DescId {
     const FRAME: DescId = DescId(1);
     const CLOSURE: DescId = DescId(2);
     const CONTINUATION: DescId = DescId(3);
+    const DATA: DescId = DescId(4);
 }
 
 /// オブジェクトの種類。ヘッダから引けるようにし、後の段階でフィールドのレイアウトと `Lin` の破棄処理を足す
-/// (docs/spec/runtime.md の「オブジェクトのヘッダ」)。段階4で、ユーザーの `data` の記述子を登録できるようにする。
+/// (docs/spec/runtime.md の「オブジェクトのヘッダ」)。`data` のオブジェクトは、型によらず1つの記述子にする。型ごとのフィールドのレイアウトは、`Lin` の破棄処理と一緒に後で足す。
 struct Descriptor {
     name: &'static str,
 }
 
-const DESCRIPTORS: [Descriptor; 4] = [
+const DESCRIPTORS: [Descriptor; 5] = [
     Descriptor { name: "String" },
     Descriptor { name: "Frame" },
     Descriptor { name: "Closure" },
     Descriptor {
         name: "Continuation",
     },
+    Descriptor { name: "Data" },
 ];
 
 #[derive(Debug, PartialEq)]
@@ -59,6 +61,12 @@ pub enum Payload {
         top: ObjRef,
         handler: ObjRef,
     },
+    /// 引数を持つコンストラクタの値。フィールドはそれぞれ参照を1つずつ所有する。引数のないコンストラクタの値は
+    /// ヒープに置かず、`Value::Tag` にする (docs/spec/runtime.md)。
+    Data {
+        tag: u32,
+        fields: Vec<Value>,
+    },
 }
 
 impl Payload {
@@ -69,6 +77,7 @@ impl Payload {
             Payload::Closure(_) => DescId::CLOSURE,
             Payload::Frame(_) => DescId::FRAME,
             Payload::Continuation { .. } => DescId::CONTINUATION,
+            Payload::Data { .. } => DescId::DATA,
         }
     }
 }
@@ -363,6 +372,10 @@ impl Heap {
 fn copy(payload: &Payload) -> Payload {
     match payload {
         Payload::Str(text) => Payload::Str(text.clone()),
+        Payload::Data { tag, fields } => Payload::Data {
+            tag: *tag,
+            fields: fields.clone(),
+        },
         Payload::Closure(closure) => Payload::Closure(Closure {
             function: closure.function,
             args: closure.args.clone(),
@@ -440,6 +453,7 @@ fn children(payload: &Payload, work: &mut Vec<ObjRef>) {
         // `handler` は所有しない。`top` からたどれる
         Payload::Continuation { top, .. } => work.push(*top),
         Payload::Closure(closure) => work.extend(closure.args.iter().filter_map(object)),
+        Payload::Data { fields, .. } => work.extend(fields.iter().filter_map(object)),
         Payload::Frame(Frame::Io) | Payload::Str(_) => {}
     }
 }

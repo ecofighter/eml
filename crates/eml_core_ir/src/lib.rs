@@ -120,10 +120,11 @@ pub enum CExpr {
         body: CExprId,
         scope: CExprId,
     },
-    /// タグで分岐する。`if` もここに変換し、段階4の `match` と同じ命令にする。
+    /// タグで分岐する。`if` もここに変換する。scrutinee は move で受け取り、引数を持つコンストラクタの値なら分解して
+    /// 枝のフィールドに入れる (docs/spec/core-ir.md)。
     Switch {
         scrutinee: Atom,
-        arms: Vec<(u32, CExprId)>,
+        arms: Vec<Arm>,
     },
     Jump {
         join: JoinId,
@@ -156,6 +157,15 @@ impl CExpr {
     }
 }
 
+/// `Switch` の枝。引数を持つコンストラクタの枝は、すべてのフィールドを順に束縛する。引数のないコンストラクタの枝の
+/// `fields` は空である。枝は、フィールドの参照を1つずつ所有して始まる (docs/spec/core-ir.md)。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Arm {
+    pub tag: u32,
+    pub fields: Vec<VarId>,
+    pub body: CExprId,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Rhs {
     Atom(Atom),
@@ -169,6 +179,12 @@ pub enum Rhs {
     MakeClosure(FnIdx, Vec<Atom>),
     Prim(PrimOp, Vec<Atom>),
     ConstString(u32),
+    /// 引数を持つコンストラクタの値を作る。`args` の所有権は値に移る。引数のないコンストラクタの値は `Atom::Tag` で
+    /// ある (docs/spec/core-ir.md)。
+    Con {
+        tag: u32,
+        args: Vec<Atom>,
+    },
     /// `IO` の操作。最下部の組み込みの handler が必ずすぐに1回再開するので、継続を遡らずにその場で実行する
     /// (docs/spec/core-ir.md)。
     Io(IoOp, Vec<Atom>),
@@ -190,7 +206,10 @@ impl Rhs {
         match self {
             Rhs::Atom(atom) => vec![*atom],
             Rhs::Call { call, .. } => call.atoms(),
-            Rhs::MakeClosure(_, args) | Rhs::Prim(_, args) | Rhs::Io(_, args) => args.clone(),
+            Rhs::MakeClosure(_, args)
+            | Rhs::Prim(_, args)
+            | Rhs::Io(_, args)
+            | Rhs::Con { args, .. } => args.clone(),
             Rhs::Drop(atom) => vec![*atom],
             Rhs::ConstString(_) => Vec::new(),
         }
@@ -201,9 +220,10 @@ impl Rhs {
         match self {
             Rhs::Atom(atom) | Rhs::Drop(atom) => vec![atom],
             Rhs::Call { call, .. } => call.atoms_mut(),
-            Rhs::MakeClosure(_, args) | Rhs::Prim(_, args) | Rhs::Io(_, args) => {
-                args.iter_mut().collect()
-            }
+            Rhs::MakeClosure(_, args)
+            | Rhs::Prim(_, args)
+            | Rhs::Io(_, args)
+            | Rhs::Con { args, .. } => args.iter_mut().collect(),
             Rhs::ConstString(_) => Vec::new(),
         }
     }

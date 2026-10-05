@@ -11,7 +11,7 @@ use eml_types::{BodyTypes, Type, TypedModule};
 use la_arena::ArenaMap;
 
 use crate::{
-    Atom, CExpr, CExprId, CoreFn, FALSE, FnIdx, JoinId, Program, Rhs, TRUE, VarId, VarInfo,
+    Arm, Atom, CExpr, CExprId, CoreFn, FALSE, FnIdx, JoinId, Program, Rhs, TRUE, VarId, VarInfo,
 };
 
 use program::{ProgramBuilder, effect_table};
@@ -20,7 +20,7 @@ use types::{split_arrows, var_info};
 /// 誤りのない型付き HIR を、RC の命令のない Core IR にする。`captures` は空のままでよく、パイプラインが埋める
 /// (docs/spec/core-ir.md のパスの表)。
 pub(crate) fn translate(module: &Module, typed: &TypedModule) -> Program {
-    let mut builder = ProgramBuilder::new(module, typed);
+    let mut builder = ProgramBuilder::new(typed);
     let mut indices = ArenaMap::default();
     for (id, function) in module.functions.iter() {
         let body = function
@@ -70,7 +70,7 @@ pub(crate) fn translate(module: &Module, typed: &TypedModule) -> Program {
         .get(main)
         .expect("`main` has a signature")
         .ty;
-    let entry = builder.entry(indices[main], main_type);
+    let entry = builder.entry(module, indices[main], main_type);
     Program {
         functions: builder
             .functions
@@ -228,7 +228,7 @@ impl FnLowering<'_> {
     }
 
     fn new_var(&mut self, name: &str, ty: &Type) -> VarId {
-        self.vars.push(var_info(name, ty, &self.module.lang));
+        self.vars.push(var_info(name, ty, self.module));
         VarId(self.vars.len() as u32 - 1)
     }
 
@@ -300,7 +300,18 @@ impl FnLowering<'_> {
                 };
                 CExpr::Switch {
                     scrutinee,
-                    arms: vec![(FALSE, else_code), (TRUE, then_code)],
+                    arms: vec![
+                        Arm {
+                            tag: FALSE,
+                            fields: Vec::new(),
+                            body: else_code,
+                        },
+                        Arm {
+                            tag: TRUE,
+                            fields: Vec::new(),
+                            body: then_code,
+                        },
+                    ],
                 }
             }
             ExprKind::Block { stmts, tail } => {

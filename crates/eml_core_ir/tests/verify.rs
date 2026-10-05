@@ -1,10 +1,18 @@
 //! 手で組んだ Core IR で、verifier が正しいものを受け入れ、壊れたものを拒むことを確かめる (docs/spec/core-ir.md)。
 
 use eml_core_ir::{
-    Atom, CExpr, CExprId, Call, CoreFn, EffectInfo, FnIdx, JoinId, OperationInfo, PrimOp, Program,
-    Rhs, VarId, VarInfo, verify, verify_scopes,
+    Arm, Atom, CExpr, CExprId, Call, CoreFn, EffectInfo, FnIdx, JoinId, OperationInfo, PrimOp,
+    Program, Rhs, VarId, VarInfo, verify, verify_scopes,
 };
 use eml_test_support::ir::{boxed, program, unboxed, var};
+
+fn arm(tag: u32, fields: &[u32], body: u32) -> Arm {
+    Arm {
+        tag,
+        fields: fields.iter().map(|&field| VarId(field)).collect(),
+        body: CExprId(body),
+    }
+}
 
 /// `exprs` は子を親より先に並べ、最後の式を本体にする。
 fn function(
@@ -70,7 +78,7 @@ fn pick(dup_before_jump: bool) -> CoreFn {
     };
     exprs.push(CExpr::Switch {
         scrutinee: var(0),
-        arms: vec![(0, CExprId(3)), (1, CExprId(then_arm))],
+        arms: vec![arm(0, &[], 3), arm(1, &[], then_arm)],
     });
     let switch = exprs.len() as u32 - 1;
     exprs.push(CExpr::Join {
@@ -840,5 +848,111 @@ fn scopes_reject_a_variable_used_outside_its_scope() {
     assert_eq!(
         check_scopes(vec![f]),
         Err("`s0` is used outside its scope in `f`".to_string())
+    );
+}
+
+#[test]
+fn a_switch_that_binds_fields_is_accepted() {
+    let exprs = vec![
+        CExpr::Return(var(1)),
+        CExpr::Return(Atom::Unit),
+        CExpr::Switch {
+            scrutinee: var(0),
+            arms: vec![arm(0, &[], 1), arm(1, &[1], 0)],
+        },
+    ];
+    let f = function("f", 1, vec![boxed("d"), boxed("x")], exprs, &[]);
+    assert_eq!(check(vec![f]), Ok(()));
+}
+
+#[test]
+fn an_unused_field_must_be_released() {
+    let unused = |release: bool| {
+        let mut exprs = vec![CExpr::Return(Atom::Unit), CExpr::Return(Atom::Unit)];
+        let some = if release {
+            exprs.push(CExpr::Decref {
+                var: VarId(1),
+                body: CExprId(0),
+            });
+            2
+        } else {
+            0
+        };
+        exprs.push(CExpr::Switch {
+            scrutinee: var(0),
+            arms: vec![arm(0, &[], 1), arm(1, &[1], some)],
+        });
+        function("f", 1, vec![boxed("d"), boxed("x")], exprs, &[])
+    };
+    assert_eq!(check(vec![unused(true)]), Ok(()));
+    assert_eq!(
+        check(vec![unused(false)]),
+        Err("`x1` is still owned at the end of the function in `f`".to_string())
+    );
+}
+
+/// 両方の枝が scrutinee の `d` を返す。`Switch` は `d` を move で受け取るので、枝で使うには前で複製する。
+fn keep_scrutinee(dup: bool) -> CoreFn {
+    let mut exprs = vec![
+        CExpr::Return(var(0)),
+        CExpr::Decref {
+            var: VarId(1),
+            body: CExprId(0),
+        },
+        CExpr::Return(var(0)),
+        CExpr::Switch {
+            scrutinee: var(0),
+            arms: vec![arm(0, &[], 2), arm(1, &[1], 1)],
+        },
+    ];
+    if dup {
+        exprs.push(CExpr::Dup {
+            var: VarId(0),
+            body: CExprId(3),
+        });
+    }
+    function("f", 1, vec![boxed("d"), boxed("x")], exprs, &[])
+}
+
+#[test]
+fn a_scrutinee_used_in_an_arm_is_duplicated_before_the_switch() {
+    assert_eq!(check(vec![keep_scrutinee(true)]), Ok(()));
+    assert_eq!(
+        check(vec![keep_scrutinee(false)]),
+        Err("`d0` is used after it was moved in `f`".to_string())
+    );
+}
+
+#[test]
+fn a_field_is_in_scope_only_in_its_arm() {
+    let exprs = vec![
+        CExpr::Return(var(1)),
+        CExpr::Return(var(1)),
+        CExpr::Switch {
+            scrutinee: var(0),
+            arms: vec![arm(0, &[], 1), arm(1, &[1], 0)],
+        },
+    ];
+    let f = function("f", 1, vec![boxed("d"), boxed("x")], exprs, &[]);
+    assert_eq!(
+        check_scopes(vec![f]),
+        Err("`x1` is used outside its scope in `f`".to_string())
+    );
+}
+
+#[test]
+fn a_switch_on_an_unboxed_variable_cannot_bind_fields() {
+    let exprs = vec![
+        CExpr::Return(var(1)),
+        CExpr::Return(Atom::Unit),
+        CExpr::Switch {
+            scrutinee: var(0),
+            arms: vec![arm(0, &[], 1), arm(1, &[1], 0)],
+        },
+    ];
+    let f = function("f", 1, vec![unboxed("d"), boxed("x")], exprs, &[]);
+    assert_eq!(
+        check_scopes(vec![f]),
+        Err("`d0` is not boxed, but a switch binds its fields in `f`".to_string())
     );
 }

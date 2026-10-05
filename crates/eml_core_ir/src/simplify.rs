@@ -7,7 +7,7 @@
 //! 書き換えは式のアリーナの上でその場で行う。木から外れた式はアリーナに残り、Perceus がアリーナを作り直すときに
 //! 捨てる。そのため、jump の位置と親は、根からたどれる式だけで求める。
 
-use crate::{Atom, CExpr, CExprId, CoreFn, JoinId, Program, Rhs, VarId};
+use crate::{Arm, Atom, CExpr, CExprId, CoreFn, JoinId, Program, Rhs, VarId};
 
 pub(crate) fn simplify(program: &mut Program) {
     for function in &mut program.functions {
@@ -141,16 +141,22 @@ impl Simplify<'_> {
             else {
                 continue;
             };
+            // フィールドを束縛する枝の中では、引数をタグの定数に置き換えられない。引数を持つコンストラクタの値は、
+            // タグだけでは決まらないためである (docs/spec/core-ir.md の `simplify`)
+            if arms.iter().any(|arm| !arm.fields.is_empty()) {
+                continue;
+            }
             let known: Vec<u32> = sites
                 .iter()
                 .filter_map(|&site| self.known_tag(site))
                 .collect();
-            let has_arm = |tag: &u32| arms.iter().any(|&(arm_tag, _)| arm_tag == *tag);
+            let has_arm = |tag: &u32| arms.iter().any(|arm| arm.tag == *tag);
             if scrutinee != param || known.is_empty() || !known.iter().all(has_arm) {
                 continue;
             }
             let mut arm_joins = Vec::new();
-            for &(tag, arm) in &arms {
+            for arm in &arms {
+                let (tag, arm) = (arm.tag, arm.body);
                 self.substitute(arm, param, Atom::Tag(tag));
                 let arm_join = JoinId(self.function.joins.len() as u32);
                 // 索引は、下で組み立てた `Join` の位置に直す
@@ -164,7 +170,11 @@ impl Simplify<'_> {
                         join: arm_join,
                         args: Vec::new(),
                     });
-                    (tag, jump)
+                    Arm {
+                        tag,
+                        fields: Vec::new(),
+                        body: jump,
+                    }
                 })
                 .collect();
             self.set(
@@ -389,7 +399,7 @@ fn children(expr: &CExpr) -> Vec<CExprId> {
             vec![*body]
         }
         CExpr::Join { body, scope, .. } => vec![*body, *scope],
-        CExpr::Switch { arms, .. } => arms.iter().map(|&(_, arm)| arm).collect(),
+        CExpr::Switch { arms, .. } => arms.iter().map(|arm| arm.body).collect(),
         CExpr::Return(_) | CExpr::Jump { .. } | CExpr::TailCall(_) => Vec::new(),
     }
 }
@@ -400,7 +410,7 @@ fn replace_child(expr: &mut CExpr, old: CExprId, new: CExprId) {
             vec![body]
         }
         CExpr::Join { body, scope, .. } => vec![body, scope],
-        CExpr::Switch { arms, .. } => arms.iter_mut().map(|(_, arm)| arm).collect(),
+        CExpr::Switch { arms, .. } => arms.iter_mut().map(|arm| &mut arm.body).collect(),
         CExpr::Return(_) | CExpr::Jump { .. } | CExpr::TailCall(_) => Vec::new(),
     };
     let slot = slots

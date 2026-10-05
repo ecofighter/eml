@@ -330,3 +330,46 @@ fn operations_as_values_and_drop() {
     }
     "#);
 }
+
+#[test]
+fn constructors_with_fields_build_values() {
+    let text = "data Option a =\n  | None\n  | Some a\n\nwrap : Int -> Option Int\nwrap n = Some n\n\nnest : Unit -> Option (Option Int)\nnest () = Some (Some 1)\n\nmain : Unit -> <IO> Unit\nmain () = ()";
+    insta::assert_snapshot!(core_text(text, Pass::Translate), @r"
+    fn wrap(n0) {
+      let d1 = con #1(n0)
+      return d1
+    }
+    fn nest(p0) {
+      let d1 = con #1(1)
+      let d2 = con #1(d1)
+      return d2
+    }
+    fn main(p0) {
+      return ()
+    }
+    fn entry$main() {
+      tailcall main(())
+    }
+    ");
+}
+
+#[test]
+fn a_constructor_used_as_a_function_value_is_wrapped() {
+    let text = "data Pair a b =\n  | Pair a b\n\npairs : Int -> Pair Int Int\npairs n =\n  let make = Pair n\n  make 2\n\nmain : Unit -> <IO> Unit\nmain () = ()";
+    insta::assert_snapshot!(core_text(text, Pass::Translate), @r"
+    fn pairs(n0) {
+      let c1 = closure con$Pair(n0)
+      tailcall apply c1(2)
+    }
+    fn main(p0) {
+      return ()
+    }
+    fn con$Pair(p0, p1) {
+      let d2 = con #0(p0, p1)
+      return d2
+    }
+    fn entry$main() {
+      tailcall main(())
+    }
+    ");
+}

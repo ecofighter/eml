@@ -51,8 +51,14 @@ impl BlockLiveness {
             }
             CExpr::Switch { scrutinee, arms } => {
                 let mut vars: Vars = var_of(scrutinee).into_iter().collect();
-                for &(_, arm) in arms {
-                    vars.extend(self.entry(arm).iter().copied());
+                for arm in arms {
+                    // フィールドは枝の入口で束縛するので、`Switch` の前では生きていない
+                    vars.extend(
+                        self.entry(arm.body)
+                            .iter()
+                            .copied()
+                            .filter(|var| !arm.fields.contains(var)),
+                    );
                 }
                 vars
             }
@@ -139,7 +145,7 @@ pub(crate) fn analyze(function: &mut CoreFn) -> BlockLiveness {
                         ));
                     }
                     CExpr::Switch { arms, .. } => {
-                        work.extend(arms.iter().map(|&(_, arm)| Step::Visit(arm, Start::Block)));
+                        work.extend(arms.iter().map(|arm| Step::Visit(arm.body, Start::Block)));
                     }
                     _ => {}
                 }

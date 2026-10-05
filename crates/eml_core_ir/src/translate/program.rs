@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 
 use eml_hir::builtin::Builtin;
-use eml_hir::{EffectId, LangItems, Module, OpMultiplicity, OperationId};
+use eml_hir::{ConstructorId, EffectId, Module, OpMultiplicity, OperationId};
 use eml_types::{Type, TypedModule};
 
 use crate::{
@@ -32,7 +32,6 @@ impl Strings {
 
 /// 変換の途中で、ラムダと包んだ組み込みの関数を足していく関数の表。番号を先に取り、中身は変換が終わってから入れる。
 pub(super) struct ProgramBuilder {
-    lang: LangItems,
     /// Prelude から作った組み込みの型。組み込みを包む関数の変数が boxed かどうかを決める。
     builtin_types: HashMap<Builtin, Type>,
     pub(super) functions: Vec<Option<CoreFn>>,
@@ -42,12 +41,14 @@ pub(super) struct ProgramBuilder {
     /// 操作のスキームの型。操作を包む関数の変数が boxed かどうかを決める。
     operation_types: HashMap<OperationId, Type>,
     operation_wrappers: HashMap<OperationId, FnIdx>,
+    /// コンストラクタのスキームの型。コンストラクタを包む関数の変数が boxed かどうかを決める。
+    constructor_types: HashMap<ConstructorId, Type>,
+    constructor_wrappers: HashMap<ConstructorId, FnIdx>,
 }
 
 impl ProgramBuilder {
-    pub(super) fn new(module: &Module, typed: &TypedModule) -> ProgramBuilder {
+    pub(super) fn new(typed: &TypedModule) -> ProgramBuilder {
         ProgramBuilder {
-            lang: module.lang,
             builtin_types: typed
                 .builtins
                 .iter()
@@ -63,6 +64,12 @@ impl ProgramBuilder {
                 .map(|(id, scheme)| (id, scheme.ty.clone()))
                 .collect(),
             operation_wrappers: HashMap::new(),
+            constructor_types: typed
+                .constructors
+                .iter()
+                .map(|(id, scheme)| (id, scheme.ty.clone()))
+                .collect(),
+            constructor_wrappers: HashMap::new(),
         }
     }
 
@@ -80,7 +87,7 @@ impl ProgramBuilder {
         let (param_types, _) = split_arrows(ty, arity);
         let vars = param_types
             .iter()
-            .map(|ty| var_info("p", ty, &self.lang))
+            .map(|ty| var_info("p", ty, module))
             .collect();
         let function = self.reserve(arity);
         self.operation_wrappers.insert(op, function);
@@ -104,6 +111,49 @@ impl ProgramBuilder {
         FnIdx(self.functions.len() as u32 - 1)
     }
 
+    /// コンストラクタを値や部分適用で使うときに、値を作って返すだけの関数を作る。コンストラクタごとに1つだけ作る。
+    pub(super) fn constructor_wrapper(&mut self, module: &Module, ctor: ConstructorId) -> FnIdx {
+        if let Some(&function) = self.constructor_wrappers.get(&ctor) {
+            return function;
+        }
+        let constructor = &module.constructors[ctor];
+        let arity = constructor.fields.len();
+        let ty = self
+            .constructor_types
+            .get(&ctor)
+            .expect("every constructor has a scheme");
+        let (param_types, result_type) = split_arrows(ty, arity);
+        let mut vars: Vec<VarInfo> = param_types
+            .iter()
+            .map(|ty| var_info("p", ty, module))
+            .collect();
+        vars.push(var_info("d", &result_type, module));
+        let function = self.reserve(arity);
+        self.constructor_wrappers.insert(ctor, function);
+        let params: Vec<VarId> = (0..arity as u32).map(VarId).collect();
+        let result = VarId(arity as u32);
+        let core = CoreFn {
+            name: format!("con${}", constructor.name),
+            params: params.clone(),
+            vars,
+            body: CExprId(1),
+            exprs: vec![
+                CExpr::Return(Atom::Var(result)),
+                CExpr::Let {
+                    var: result,
+                    rhs: Rhs::Con {
+                        tag: constructor.tag,
+                        args: params.into_iter().map(Atom::Var).collect(),
+                    },
+                    body: CExprId(0),
+                },
+            ],
+            joins: Vec::new(),
+        };
+        self.finish(function, core);
+        function
+    }
+
     pub(super) fn arity(&self, function: FnIdx) -> usize {
         self.arities[function.0 as usize]
     }
@@ -114,13 +164,13 @@ impl ProgramBuilder {
 
     /// 実行の入口。`main : Unit -> <IO> Unit` を `()` で呼ぶ。等式に引数のない `main = fn () -> ...` は関数値を返す
     /// ので、返った値に `()` を適用する (docs/spec/core-ir.md)。
-    pub(super) fn entry(&mut self, main: FnIdx, main_type: &Type) -> FnIdx {
+    pub(super) fn entry(&mut self, module: &Module, main: FnIdx, main_type: &Type) -> FnIdx {
         let function = self.reserve(0);
         let unit = vec![Atom::Unit];
         let (vars, exprs) = if self.arity(main) == 0 {
             let value = VarId(0);
             (
-                vec![var_info("f", main_type, &self.lang)],
+                vec![var_info("f", main_type, module)],
                 vec![
                     CExpr::TailCall(Call::Apply(Atom::Var(value), unit)),
                     CExpr::Let {
@@ -146,7 +196,7 @@ impl ProgramBuilder {
     }
 
     /// 組み込みを値や部分適用で使うときに、それを呼ぶだけの関数を作る。組み込みごとに1つだけ作る。
-    pub(super) fn wrapper(&mut self, builtin: Builtin) -> FnIdx {
+    pub(super) fn wrapper(&mut self, module: &Module, builtin: Builtin) -> FnIdx {
         if let Some(&function) = self.wrappers.get(&builtin) {
             return function;
         }
@@ -156,17 +206,16 @@ impl ProgramBuilder {
             .get(&builtin)
             .expect("every builtin function has a Prelude signature");
         let (param_types, result_type) = split_arrows(ty, arity);
-        let lang = self.lang;
         let function = self.reserve(arity);
         self.wrappers.insert(builtin, function);
         let mut vars: Vec<VarInfo> = param_types
             .iter()
-            .map(|ty| var_info("p", ty, &lang))
+            .map(|ty| var_info("p", ty, module))
             .collect();
         let params: Vec<VarId> = (0..arity as u32).map(VarId).collect();
         let atoms: Vec<Atom> = params.iter().map(|&param| Atom::Var(param)).collect();
         let mut fresh = |ty: &Type| {
-            vars.push(var_info("t", ty, &lang));
+            vars.push(var_info("t", ty, module));
             VarId(vars.len() as u32 - 1)
         };
         let (steps, last): (Vec<(VarId, Rhs)>, CExpr) = match lowering(builtin) {

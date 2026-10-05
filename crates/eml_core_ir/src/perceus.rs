@@ -5,7 +5,7 @@
 use std::collections::BTreeMap;
 
 use crate::liveness::{BlockLiveness, Vars, analyze, tracked};
-use crate::{Atom, CExpr, CExprId, Call, CoreFn, JoinId, Program, Rhs, VarId};
+use crate::{Arm, Atom, CExpr, CExprId, Call, CoreFn, JoinId, Program, Rhs, VarId};
 
 /// 変換の後に、プログラム全体にかける。変換の途中の関数ごとではなく、独立したパスにする (docs/spec/core-ir.md)。
 pub(crate) fn insert(program: &mut Program) {
@@ -173,15 +173,43 @@ impl Rebuild<'_> {
                 }
                 CExpr::Switch { scrutinee, arms } => {
                     let live = self.live.at_end(expr);
-                    let owned = self.owned(&segment, &live);
+                    let mut owned = self.owned(&segment, &live);
+                    // `Switch` は scrutinee を1回使う (move)。枝の中でも使うなら、`Switch` の前で複製し、枝はその分を
+                    // 所有して始まる。どの枝も使わなければ、枝は scrutinee を所有しない (docs/spec/core-ir.md)
+                    let consumed = self.atom_var(scrutinee);
+                    let kept = consumed.filter(|var| {
+                        arms.iter()
+                            .any(|arm| self.live.entry(arm.body).contains(var))
+                    });
+                    if let (Some(var), None) = (consumed, kept) {
+                        owned.remove(&var);
+                    }
                     let arms = arms
                         .iter()
-                        .map(|&(tag, arm)| (tag, self.transform(arm, &owned)))
+                        .map(|arm| {
+                            // 枝はフィールドの参照を1つずつ所有して始まる。使わないフィールドは、連鎖の始まりの
+                            // 所有として、最初の段で捨てる
+                            let mut owned = owned.clone();
+                            owned.extend(
+                                arm.fields
+                                    .iter()
+                                    .copied()
+                                    .filter(|var| self.tracked[var.0 as usize]),
+                            );
+                            Arm {
+                                tag: arm.tag,
+                                fields: arm.fields.clone(),
+                                body: self.transform(arm.body, &owned),
+                            }
+                        })
                         .collect();
-                    let code = self.push(CExpr::Switch {
+                    let mut code = self.push(CExpr::Switch {
                         scrutinee: *scrutinee,
                         arms,
                     });
+                    if let Some(var) = kept {
+                        code = self.push(CExpr::Dup { var, body: code });
+                    }
                     break (code, live);
                 }
                 CExpr::Dup { .. } | CExpr::Decref { .. } => {
