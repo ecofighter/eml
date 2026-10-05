@@ -160,3 +160,96 @@ fn a_match_without_arms_is_left_to_the_syntax_error() {
       help: indent the `|` arms more than the line with `with`
     ");
 }
+
+#[test]
+fn a_tuple_match_reports_a_missing_tuple() {
+    let text = "data Option a = | None | Some a\n\nf : (Option Int, Bool) -> Int\nf p = match p with\n  | (Some n, True) -> n\n  | (None, _) -> 0";
+    insta::assert_snapshot!(diagnostics(text), @r"
+    E4001 4:7 `match` does not cover every value
+      4:7 no arm matches some values
+      note: not covered: `(Some _, False)`
+    ");
+}
+
+#[test]
+fn a_tuple_inside_a_constructor_reports_the_whole_example() {
+    let text = "data Option a = | None | Some a\n\nf : Option (Int, Int) -> Int\nf o = match o with\n  | Some (0, y) -> y\n  | None -> 0";
+    insta::assert_snapshot!(diagnostics(text), @r"
+    E4001 4:7 `match` does not cover every value
+      4:7 no arm matches some values
+      note: not covered: `Some (_, _)`
+    ");
+}
+
+#[test]
+fn int_literals_alone_never_cover_every_value() {
+    let text = "f : Int -> String\nf n = match n with\n  | 0 -> \"zero\"\n  | 1 -> \"one\"";
+    insta::assert_snapshot!(diagnostics(text), @r"
+    E4001 2:7 `match` does not cover every value
+      2:7 no arm matches some values
+      note: not covered: `_`
+    ");
+}
+
+#[test]
+fn string_literals_alone_never_cover_every_value() {
+    let text = "f : String -> Int\nf s = match s with\n  | \"a\" -> 1\n  | \"b\" -> 2";
+    insta::assert_snapshot!(diagnostics(text), @r"
+    E4001 2:7 `match` does not cover every value
+      2:7 no arm matches some values
+      note: not covered: `_`
+    ");
+}
+
+#[test]
+fn a_repeated_literal_is_unreachable() {
+    let text = "f : Int -> Int\nf n = match n with\n  | 0 -> 1\n  | 0 -> 2\n  | _ -> 3";
+    insta::assert_snapshot!(diagnostics(text), @r"
+    E4004 4:5 unreachable `match` arm
+      4:5 the arms above already match every value of this pattern
+    ");
+}
+
+#[test]
+fn negative_and_positive_literals_are_different_values() {
+    // `-1` と `1` は別の値なので、2つ目の `-1` だけが到達しない
+    let text =
+        "f : Int -> Int\nf n = match n with\n  | -1 -> 0\n  | 1 -> 1\n  | -1 -> 2\n  | _ -> 3";
+    insta::assert_snapshot!(diagnostics(text), @r"
+    E4004 5:5 unreachable `match` arm
+      5:5 the arms above already match every value of this pattern
+    ");
+}
+
+#[test]
+fn literals_with_a_wildcard_cover_every_value() {
+    let text = "f : String -> Int\nf s = match s with\n  | \"yes\" -> 1\n  | _ -> 0";
+    assert_eq!(diagnostics(text), "");
+}
+
+#[test]
+fn tuple_patterns_are_irrefutable() {
+    let text = "swap : (Int, String) -> (String, Int)\nswap p =\n  let (a, b) = p\n  (b, a)\n\nfirst : (Int, Int) -> Int\nfirst (x, _) = x\n\npick : (Int, Int) -> Int\npick p = (fn (a, b) -> a + b) p";
+    assert_eq!(diagnostics(text), "");
+}
+
+#[test]
+fn a_literal_inside_a_tuple_makes_the_let_refutable() {
+    let text = "f : (Int, Int) -> Int\nf p =\n  let (0, y) = p\n  y";
+    insta::assert_snapshot!(diagnostics(text), @r"
+    E4003 3:7 this pattern does not match every value
+      3:7 `let` needs a pattern that matches every value
+      note: not covered: `(_, _)`
+    ");
+}
+
+#[test]
+fn a_literal_inside_a_tuple_parameter_makes_the_equation_refutable() {
+    let text = "f : (Int, Bool) -> Int\nf (0, b) = 1";
+    insta::assert_snapshot!(diagnostics(text), @r"
+    E4002 1:1 the equation of `f` does not cover every argument
+      1:1 `f` is not defined for some arguments
+      2:1 this equation does not match every argument
+      note: not covered: `f (_, _)`
+    ");
+}

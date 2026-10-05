@@ -5,8 +5,8 @@ use std::iter;
 
 use eml_diagnostics::{Diagnostic, Label, Severity, TextRange, TextSize};
 use eml_hir::{
-    Body, ConstructorId, ExprId, ExprKind, Function, MatchArm, Module, PatId, PatKind, Stmt,
-    TypeDefId, TypeDefKind,
+    Body, ConstructorId, ExprId, ExprKind, Function, Literal, MatchArm, Module, PatId, PatKind,
+    Stmt, TypeDefId, TypeDefKind,
 };
 
 use crate::{BodyTypes, TypedModule, codes};
@@ -42,7 +42,17 @@ pub(crate) fn check(module: &Module, typed: &TypedModule) -> Vec<Diagnostic> {
 #[derive(Debug, Clone)]
 enum Pat {
     Wild,
-    Con(ConstructorId, Vec<Pat>),
+    Con(Ctor, Vec<Pat>),
+}
+
+/// パターンの頭。タプルは要素の数だけのフィールドを持つコンストラクタが1つの型として、`Int` と `String` の
+/// リテラルは引数のないコンストラクタが無限にある型として扱う (docs/spec/exhaustiveness.md)。どれも同じ
+/// usefulness の手続きに乗せるため、コンストラクタの一種にする。
+#[derive(Debug, Clone, PartialEq)]
+enum Ctor {
+    Data(ConstructorId),
+    Tuple(usize),
+    Literal(Literal),
 }
 
 type Row = Vec<Pat>;
@@ -58,6 +68,10 @@ enum Column<'a> {
         seen: Vec<ConstructorId>,
         all: &'a [ConstructorId],
     },
+    /// タプルのコンストラクタは1つなので、現れればつねにそろっている。
+    Tuple(usize),
+    /// リテラルの値は無限にあるので、どれだけ現れてもそろわない。
+    Literal,
 }
 
 struct Exhaustive<'a> {
@@ -251,14 +265,20 @@ impl<'a> Exhaustive<'a> {
             PatKind::Missing => None,
             PatKind::Bind(_) | PatKind::Wildcard | PatKind::Unit => Some(Pat::Wild),
             PatKind::Annot { pat, .. } => self.pat(*pat),
-            PatKind::Con { ctor, args } => Some(Pat::Con(*ctor, self.row(args)?)),
-            // タプルとリテラルの列は、まだ調べない。行列ごと飛ばす
-            PatKind::Tuple(_) | PatKind::Literal(_) => None,
+            PatKind::Con { ctor, args } => Some(Pat::Con(Ctor::Data(*ctor), self.row(args)?)),
+            PatKind::Tuple(elements) => {
+                Some(Pat::Con(Ctor::Tuple(elements.len()), self.row(elements)?))
+            }
+            PatKind::Literal(literal) => Some(Pat::Con(Ctor::Literal(literal.clone()), Vec::new())),
         }
     }
 
-    fn arity(&self, ctor: ConstructorId) -> usize {
-        self.module.constructors[ctor].fields.len()
+    fn arity(&self, ctor: &Ctor) -> usize {
+        match ctor {
+            Ctor::Data(id) => self.module.constructors[*id].fields.len(),
+            Ctor::Tuple(width) => *width,
+            Ctor::Literal(_) => 0,
+        }
     }
 
     /// コンストラクタの型と、その型のすべてのコンストラクタ (宣言の順)。
@@ -274,35 +294,55 @@ impl<'a> Exhaustive<'a> {
     }
 
     fn column(&self, rows: &[Row]) -> Result<Column<'a>, Mixed> {
-        let mut seen = Vec::new();
-        let mut data: Option<(TypeDefId, &'a [ConstructorId])> = None;
+        let mut column = Column::Wild;
         for row in rows {
             let Pat::Con(ctor, _) = &row[0] else {
                 continue;
             };
-            let (ty, all) = self.constructors_of(*ctor)?;
-            match data {
-                Some((known, _)) if known != ty => return Err(Mixed),
-                _ => data = Some((ty, all)),
-            }
-            if !seen.contains(ctor) {
-                seen.push(*ctor);
-            }
+            column = match (column, ctor) {
+                (Column::Wild, Ctor::Data(id)) => {
+                    let (_, all) = self.constructors_of(*id)?;
+                    Column::Data {
+                        seen: vec![*id],
+                        all,
+                    }
+                }
+                (Column::Data { mut seen, all }, Ctor::Data(id)) if all.contains(id) => {
+                    if !seen.contains(id) {
+                        seen.push(*id);
+                    }
+                    Column::Data { seen, all }
+                }
+                (Column::Wild, Ctor::Tuple(width)) => Column::Tuple(*width),
+                (Column::Tuple(known), Ctor::Tuple(width)) if known == *width => {
+                    Column::Tuple(known)
+                }
+                (Column::Wild | Column::Literal, Ctor::Literal(_)) => Column::Literal,
+                _ => return Err(Mixed),
+            };
         }
-        Ok(match data {
-            Some((_, all)) => Column::Data { seen, all },
-            None => Column::Wild,
-        })
+        Ok(column)
+    }
+
+    /// 列に現れたコンストラクタがその型のすべてなら、その並び。そろっていなければ `None` である。
+    fn complete(&self, column: &Column) -> Option<Vec<Ctor>> {
+        match column {
+            Column::Data { seen, all } if seen.len() == all.len() => {
+                Some(all.iter().map(|&id| Ctor::Data(id)).collect())
+            }
+            Column::Tuple(width) => Some(vec![Ctor::Tuple(*width)]),
+            _ => None,
+        }
     }
 
     /// 先頭の列がコンストラクタ `ctor` に合う行を、その引数を先頭に並べた行にする。
-    fn specialize(&self, rows: &[Row], ctor: ConstructorId) -> Vec<Row> {
+    fn specialize(&self, rows: &[Row], ctor: &Ctor) -> Vec<Row> {
         let arity = self.arity(ctor);
         rows.iter()
             .filter_map(|row| {
                 let (head, rest) = row.split_first()?;
                 let mut out = match head {
-                    Pat::Con(other, args) if *other == ctor => args.clone(),
+                    Pat::Con(other, args) if other == ctor => args.clone(),
                     Pat::Con(..) => return None,
                     Pat::Wild => vec![Pat::Wild; arity],
                 };
@@ -320,18 +360,16 @@ impl<'a> Exhaustive<'a> {
         let column = self.column(rows)?;
         match head {
             Pat::Con(ctor, args) => {
-                if let Column::Data { all, .. } = column
-                    && !all.contains(ctor)
-                {
+                if !fits(&column, ctor) {
                     return Err(Mixed);
                 }
                 let mut next = args.clone();
                 next.extend_from_slice(rest);
-                self.useful(&self.specialize(rows, *ctor), &next)
+                self.useful(&self.specialize(rows, ctor), &next)
             }
-            Pat::Wild => match column {
-                Column::Data { seen, all } if seen.len() == all.len() => {
-                    for &ctor in all {
+            Pat::Wild => match self.complete(&column) {
+                Some(ctors) => {
+                    for ctor in &ctors {
                         let mut next = vec![Pat::Wild; self.arity(ctor)];
                         next.extend_from_slice(rest);
                         if self.useful(&self.specialize(rows, ctor), &next)? {
@@ -340,15 +378,15 @@ impl<'a> Exhaustive<'a> {
                     }
                     Ok(false)
                 }
-                _ => self.useful(&default_rows(rows), rest),
+                None => self.useful(&default_rows(rows), rest),
             },
         }
     }
 
     /// 長さ `width` の値の並びのうち、`rows` のどの行にも合わないものを `limit` 個まで作る。`_` の並びの usefulness を、
-    /// 例を組み立てながら解く。先頭の列にその型のすべてのコンストラクタが現れていれば、コンストラクタごとに調べる。
-    /// そうでなければ、先頭が `_` の行だけで残りの列を調べ、現れていないコンストラクタ (どれも現れていなければ `_`) を
-    /// 先頭に付ける。
+    /// 例を組み立てながら解く。先頭の列にその型のすべてのコンストラクタが現れていれば (タプルはつねに)、
+    /// コンストラクタごとに調べる。そうでなければ、先頭が `_` の行だけで残りの列を調べ、現れていない
+    /// コンストラクタを先頭に付ける。どれも現れていない列とリテラルの列では、先頭は `_` になる。
     fn missing(&self, rows: &[Row], width: usize, limit: usize) -> Result<Vec<Row>, Mixed> {
         if width == 0 {
             return Ok(if rows.is_empty() {
@@ -358,35 +396,40 @@ impl<'a> Exhaustive<'a> {
             });
         }
         let mut found = Vec::new();
-        match self.column(rows)? {
-            Column::Data { seen, all } if seen.len() == all.len() => {
-                for &ctor in all {
+        let column = self.column(rows)?;
+        match self.complete(&column) {
+            Some(ctors) => {
+                for ctor in ctors {
                     if found.len() >= limit {
                         break;
                     }
-                    let arity = self.arity(ctor);
+                    let arity = self.arity(&ctor);
                     let inner = self.missing(
-                        &self.specialize(rows, ctor),
+                        &self.specialize(rows, &ctor),
                         arity + width - 1,
                         limit - found.len(),
                     )?;
                     for mut values in inner {
                         let rest = values.split_off(arity);
-                        let mut row = vec![Pat::Con(ctor, values)];
+                        let mut row = vec![Pat::Con(ctor.clone(), values)];
                         row.extend(rest);
                         found.push(row);
                     }
                 }
             }
-            column => {
+            None => {
                 let rest = self.missing(&default_rows(rows), width - 1, limit)?;
                 let heads: Vec<Pat> = match column {
                     Column::Data { seen, all } => all
                         .iter()
                         .filter(|ctor| !seen.contains(ctor))
-                        .map(|&ctor| Pat::Con(ctor, vec![Pat::Wild; self.arity(ctor)]))
+                        .map(|&id| {
+                            let ctor = Ctor::Data(id);
+                            let arity = self.arity(&ctor);
+                            Pat::Con(ctor, vec![Pat::Wild; arity])
+                        })
                         .collect(),
-                    Column::Wild => vec![Pat::Wild],
+                    Column::Wild | Column::Tuple(_) | Column::Literal => vec![Pat::Wild],
                 };
                 for head in &heads {
                     for values in &rest {
@@ -404,7 +447,7 @@ impl<'a> Exhaustive<'a> {
     fn show(&self, pat: &Pat) -> String {
         match pat {
             Pat::Wild => "_".to_string(),
-            Pat::Con(ctor, args) => {
+            Pat::Con(Ctor::Data(ctor), args) => {
                 let name = &self.module.constructors[*ctor].name;
                 match args.as_slice() {
                     [] => name.clone(),
@@ -418,15 +461,34 @@ impl<'a> Exhaustive<'a> {
                         .join(" "),
                 }
             }
+            Pat::Con(Ctor::Tuple(_), elements) => {
+                let elements: Vec<String> =
+                    elements.iter().map(|element| self.show(element)).collect();
+                format!("({})", elements.join(", "))
+            }
+            Pat::Con(Ctor::Literal(_), _) => {
+                unreachable!("a literal column is never complete, so examples hold `_` there")
+            }
         }
     }
 
-    /// 引数の位置に置く書き方。引数を持つコンストラクタは括弧で囲む。
+    /// 引数の位置に置く書き方。引数を持つコンストラクタは括弧で囲む。タプルは自分の括弧を持つ。
     fn atomic(&self, pat: &Pat) -> String {
         match pat {
-            Pat::Con(_, args) if !args.is_empty() => format!("({})", self.show(pat)),
+            Pat::Con(Ctor::Data(_), args) if !args.is_empty() => format!("({})", self.show(pat)),
             _ => self.show(pat),
         }
+    }
+}
+
+/// `ctor` が、ほかの行から求めた列と同じ型のコンストラクタか。違えば、型の誤りを報告済みの混ざった列である。
+fn fits(column: &Column, ctor: &Ctor) -> bool {
+    match (column, ctor) {
+        (Column::Wild, _) => true,
+        (Column::Data { all, .. }, Ctor::Data(id)) => all.contains(id),
+        (Column::Tuple(known), Ctor::Tuple(width)) => known == width,
+        (Column::Literal, Ctor::Literal(_)) => true,
+        _ => false,
     }
 }
 

@@ -1,0 +1,14 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: rendered
+input_file: tests/ui/check-fail/exhaustiveness/literal_patterns.em
+---
+[E4001] Error: `match` does not cover every value
+   ╭─[ check-fail/exhaustiveness/literal_patterns.em:3:17 ]
+   │
+ 3 │ greeting lang = match lang with
+   │                 ──┬──  
+   │                   ╰──── no arm matches some values
+   │ 
+   │ Note: not covered: `_`
+───╯
