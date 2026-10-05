@@ -12,7 +12,7 @@ use la_arena::ArenaMap;
 use crate::kind::{Bound, KindReason, KindVar};
 use crate::scheme::{Rigids, Scheme, lower_constructor, lower_operation, lower_signature};
 use crate::table::{Row, Table, TyShape};
-use crate::ty::{EffectLabel, KindConstraint, KindTerm, Linearity, Type};
+use crate::ty::{EffectLabel, KindConstraint, KindTerm, Linearity, Multiplicity, RowTerm, Type};
 use crate::{BodyTypes, TypedModule, carry, codes, exhaustive, scc, usage};
 
 mod body;
@@ -288,24 +288,40 @@ fn has_error(types: &Arena<TypeRef>, id: TypeRefId) -> bool {
 /// `Unr` の上限が付いたかどうかで、変数どうしの制約は部分適用のたびに増えて読みにくくなるため。
 fn kind_constraints(table: &Table, scheme: &Scheme) -> Vec<KindConstraint> {
     let names = table.kind_names(scheme.ty);
+    let rows = table.row_names(scheme.ty);
     let term = |bound: Bound<Linearity>| match bound {
         Bound::Const(Linearity::Unr) => Some(KindTerm::Unr),
         Bound::Const(Linearity::Lin) => Some(KindTerm::Lin),
         Bound::Var(var) => names.get(&var).cloned().map(KindTerm::Of),
     };
-    scheme
+    let row_term = |bound: Bound<Multiplicity>| match bound {
+        Bound::Const(Multiplicity::Multi) => Some(RowTerm::Multi),
+        Bound::Const(_) => None,
+        Bound::Var(var) => rows.get(&var).cloned().map(RowTerm::Of),
+    };
+    let mut constraints: Vec<KindConstraint> = scheme
         .lin_constraints()
         .iter()
         .filter(|(lower, upper)| {
             matches!(lower, Bound::Const(_)) != matches!(upper, Bound::Const(_))
         })
         .filter_map(|&(lower, upper)| {
-            Some(KindConstraint {
+            Some(KindConstraint::Linearity {
                 lower: term(lower)?,
                 upper: term(upper)?,
             })
         })
-        .collect()
+        .collect();
+    for carry in scheme.carries() {
+        let (Some(value), Some(row)) = (term(carry.lin), row_term(carry.mult)) else {
+            continue;
+        };
+        let constraint = KindConstraint::Carry { value, row };
+        if !constraints.contains(&constraint) {
+            constraints.push(constraint);
+        }
+    }
+    constraints
 }
 
 #[cfg(test)]

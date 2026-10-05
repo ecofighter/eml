@@ -619,3 +619,91 @@ fn a_file_may_be_kept_across_a_handle_and_a_resume_without_multi() {
     let rest = "fine_return : Unit -> <IO> Unit\nfine_return () =\n  let f = open \"a.txt\"\n  handle ask () with\n    | ask () k -> resume k 1\n    | return n -> close f\n\nfine_resume : Unit -> <IO> Unit\nfine_resume () =\n  let f = open \"a.txt\"\n  handle use_file f with\n    | use_file g k ->\n        let r = resume k ()\n        close g\n        r";
     assert_eq!(carried(rest), "");
 }
+
+/// 多相な関数のテストの宣言。`CARRY` の後に置くので、どのテストも30行目から関数を書く。
+const POLY: &str = "keep : a -> (Unit -> <e> Unit) -> <e> a\nkeep x action =\n  action ()\n  x\n\nchooser : Unit -> <Choice> Unit\nchooser () =\n  let b = choose ()\n  ()\n\n";
+
+fn polymorphic(rest: &str) -> String {
+    carried(&format!("{POLY}{rest}"))
+}
+
+/// 関数のスキームに残った Kind の制約の行。なければ空にする。
+fn kinds(rest: &str, function: &str) -> String {
+    let checked = check(&format!("{CARRY}{POLY}{rest}"));
+    let dump = eml_types::dump(&checked.module, &checked.typed);
+    let head = format!("{function} : ");
+    let mut lines = dump.lines().skip_while(|line| !line.starts_with(&head));
+    lines.next();
+    lines
+        .next()
+        .filter(|line| line.starts_with("  kinds: "))
+        .unwrap_or("")
+        .to_string()
+}
+
+#[test]
+fn a_scheme_keeps_the_carry_over_of_a_polymorphic_value() {
+    assert_eq!(kinds("", "keep"), "  kinds: a => <e> <= Once");
+}
+
+#[test]
+fn a_scheme_keeps_the_carry_over_of_a_file() {
+    let rest = "with_file : (Unit -> <e> Unit) -> <IO | e> Unit\nwith_file action =\n  let f = open \"a.txt\"\n  action ()\n  close f";
+    assert_eq!(kinds(rest, "with_file"), "  kinds: <e> <= Once");
+}
+
+#[test]
+fn a_scheme_keeps_the_carry_over_across_a_multi_operation() {
+    let rest = "keep_choose : a -> <Choice> a\nkeep_choose x =\n  let b = choose ()\n  x";
+    assert_eq!(kinds(rest, "keep_choose"), "  kinds: a => Multi <= Once");
+}
+
+#[test]
+fn a_file_kept_by_a_polymorphic_function_across_a_multi_operation() {
+    let rest = "kept : Unit -> <Choice, IO> Unit\nkept () =\n  let f = open \"a.txt\"\n  let g = keep f chooser\n  close g";
+    insta::assert_snapshot!(polymorphic(rest), @r"
+    E3006 33:11 `keep` keeps a linear value alive across a call that may resume more than once
+      33:11 `keep` is used here
+      22:3 `x` is kept alive across this call
+      note: a continuation of a `multi` operation can be resumed more than once, and each resumption would use the value again
+    ");
+}
+
+#[test]
+fn a_carry_over_passes_through_two_functions() {
+    let rest = "keep2 : a -> (Unit -> <e> Unit) -> <e> a\nkeep2 x action = keep x action\n\nkept2 : Unit -> <Choice, IO> Unit\nkept2 () =\n  let f = open \"a.txt\"\n  let g = keep2 f chooser\n  close g";
+    insta::assert_snapshot!(polymorphic(rest), @r"
+    E3006 36:11 `keep2` keeps a linear value alive across a call that may resume more than once
+      36:11 `keep2` is used here
+      31:18 through this use of `keep`
+      note: a continuation of a `multi` operation can be resumed more than once, and each resumption would use the value again
+    ");
+}
+
+#[test]
+fn a_file_given_to_a_function_that_keeps_it_across_a_multi_operation() {
+    let rest = "keep_choose : a -> <Choice> a\nkeep_choose x =\n  let b = choose ()\n  x\n\nchosen : Unit -> <Choice, IO> Unit\nchosen () =\n  let f = open \"a.txt\"\n  let g = keep_choose f\n  close g";
+    insta::assert_snapshot!(polymorphic(rest), @r"
+    E3006 38:11 `keep_choose` keeps a linear value alive across a call that may resume more than once
+      38:11 `keep_choose` is used here
+      32:11 `x` is kept alive across this call
+      note: a continuation of a `multi` operation can be resumed more than once, and each resumption would use the value again
+    ");
+}
+
+#[test]
+fn a_multi_action_given_to_a_function_that_keeps_a_file() {
+    let rest = "with_file : (Unit -> <e> Unit) -> <IO | e> Unit\nwith_file action =\n  let f = open \"a.txt\"\n  action ()\n  close f\n\nfiled : Unit -> <Choice, IO> Unit\nfiled () = with_file chooser";
+    insta::assert_snapshot!(polymorphic(rest), @r"
+    E3006 37:12 `with_file` keeps a linear value alive across a call that may resume more than once
+      37:12 `with_file` is used here
+      33:3 `f` is kept alive across this call
+      note: a continuation of a `multi` operation can be resumed more than once, and each resumption would use the value again
+    ");
+}
+
+#[test]
+fn a_polymorphic_function_may_keep_unrestricted_values_or_avoid_multi() {
+    let rest = "unrestricted : Unit -> <Choice> Int\nunrestricted () = keep 1 chooser\n\npure_action : Unit -> <IO> Unit\npure_action () =\n  let f = open \"a.txt\"\n  let g = keep f (fn () -> ())\n  close g";
+    assert_eq!(polymorphic(rest), "");
+}

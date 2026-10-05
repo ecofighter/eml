@@ -373,11 +373,30 @@ pub enum KindTerm {
     Of(Type),
 }
 
-/// スキームに残った Kind の制約 `lower <= upper`。テストの表示で使う。
+/// スキームに残った Kind の制約。テストの表示で使う。
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct KindConstraint {
-    pub lower: KindTerm,
-    pub upper: KindTerm,
+pub enum KindConstraint {
+    /// `lower <= upper`。
+    Linearity { lower: KindTerm, upper: KindTerm },
+    /// 持ち越しの制約。`value` が `Lin` なら `row` は `Once` 以下である (docs/spec/types.md の「推論」)。
+    Carry { value: KindTerm, row: RowTerm },
+}
+
+/// 持ち越しの制約の row の側。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RowTerm {
+    Multi,
+    /// rigid な row 変数の名前。
+    Of(String),
+}
+
+impl fmt::Display for RowTerm {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            RowTerm::Multi => f.write_str("Multi"),
+            RowTerm::Of(name) => write!(f, "<{name}>"),
+        }
+    }
 }
 
 impl fmt::Display for KindTerm {
@@ -393,6 +412,13 @@ impl fmt::Display for KindTerm {
 
 impl fmt::Display for KindConstraint {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{} <= {}", self.lower, self.upper)
+        match self {
+            KindConstraint::Linearity { lower, upper } => write!(f, "{lower} <= {upper}"),
+            KindConstraint::Carry {
+                value: KindTerm::Lin,
+                row,
+            } => write!(f, "{row} <= Once"),
+            KindConstraint::Carry { value, row } => write!(f, "{value} => {row} <= Once"),
+        }
     }
 }

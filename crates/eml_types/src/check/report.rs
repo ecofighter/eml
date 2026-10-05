@@ -376,6 +376,9 @@ pub(super) fn linear_misuse(module: &Module, table: &Table, origin: &KindOrigin)
             across,
             call,
         } => carried_across(module, table, origin.range, value, across, call),
+        KindReason::CarriedThrough { name, inner } => {
+            carried_through(file, origin.range, name, inner.as_deref())
+        }
         KindReason::UsedMoreThanOnce {
             name,
             first,
@@ -588,4 +591,31 @@ fn multi_operation(module: &Module, table: &Table, across: &Across) -> Option<Op
                 .find(|&op| matches!(module.operations[op].multiplicity, OpMultiplicity::Multi))
         }),
     }
+}
+
+/// E3006。呼んだ関数のスキームから複写した持ち越しの制約が、呼んだ側で破れた (docs/spec/diagnostics.md の「線形性の診断」)。
+/// secondary は、呼んだ関数の中で値をまたがせている位置で、1段だけたどる。
+fn carried_through(
+    file: FileId,
+    range: TextRange,
+    name: &str,
+    inner: Option<&KindOrigin>,
+) -> Diagnostic {
+    let mut diagnostic = Diagnostic::error(
+        codes::LINEAR_VALUE_KEPT_ACROSS_MULTI,
+        format!("`{name}` keeps a linear value alive across a call that may resume more than once"),
+        Label::new(file, range, format!("`{name}` is used here")),
+    );
+    if let Some(inner) = inner {
+        let label = match &inner.reason {
+            KindReason::CarriedAcross {
+                value: CarriedValue::Local { name, .. } | CarriedValue::ReturnCapture { name, .. },
+                ..
+            } => format!("`{name}` is kept alive across this call"),
+            KindReason::CarriedThrough { name, .. } => format!("through this use of `{name}`"),
+            _ => "a value is kept alive across this call".to_string(),
+        };
+        diagnostic = diagnostic.with_secondary(Label::new(file, inner.range, label));
+    }
+    diagnostic.with_note(CARRY_NOTE)
 }

@@ -19,7 +19,9 @@ use eml_hir::builtin::Builtin;
 use eml_hir::{ConstructorId, ExprId, FunctionId, LocalId, Module, OperationId, PatId};
 use la_arena::ArenaMap;
 
-pub use ty::{EffectLabel, KindConstraint, KindTerm, Linearity, Multiplicity, RowTail, Type};
+pub use ty::{
+    EffectLabel, KindConstraint, KindTerm, Linearity, Multiplicity, RowTail, RowTerm, Type,
+};
 
 pub mod codes {
     use eml_diagnostics::ErrorCode;

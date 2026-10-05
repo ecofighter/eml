@@ -6,7 +6,7 @@ use eml_hir::{
 };
 use la_arena::{Arena, ArenaMap};
 
-use crate::kind::{Bound, KindVar};
+use crate::kind::{Bound, Carry, KindVar};
 use crate::table::{ArrowLin, Label, RigidVar, Row, RowVar, Subst, Table, Tail, Ty, TyShape};
 use crate::ty::{Linearity, Multiplicity};
 
@@ -66,6 +66,7 @@ pub(crate) struct Scheme {
     lin_constraints: Vec<(Bound<Linearity>, Bound<Linearity>)>,
     mult_vars: Vec<KindVar>,
     mult_constraints: Vec<(Bound<Multiplicity>, Bound<Multiplicity>)>,
+    carries: Vec<Carry>,
 }
 
 impl Scheme {
@@ -78,6 +79,7 @@ impl Scheme {
             lin_constraints: Vec::new(),
             mult_vars: Vec::new(),
             mult_constraints: Vec::new(),
+            carries: Vec::new(),
         }
     }
 
@@ -96,6 +98,7 @@ impl Scheme {
         }
         table.copy_lin_constraints(&self.lin_constraints, &subst.lin);
         table.copy_mult_constraints(&self.mult_constraints, &subst.mult);
+        table.copy_carries(&self.carries, &subst);
         for &rigid in &self.rigids {
             let mu = table.rigid_linearity(rigid);
             let mu = subst.lin.get(&mu).copied().unwrap_or(mu);
@@ -116,12 +119,17 @@ impl Scheme {
         let (lin, mult) = table.kind_vars(self.ty);
         self.lin_constraints = table.lin_residual(&lin);
         self.mult_constraints = table.mult_residual(&mult);
+        self.carries = table.carry_residual(&lin, &mult);
         self.lin_vars = lin;
         self.mult_vars = mult;
     }
 
     pub fn lin_constraints(&self) -> &[(Bound<Linearity>, Bound<Linearity>)] {
         &self.lin_constraints
+    }
+
+    pub fn carries(&self) -> &[Carry] {
+        &self.carries
     }
 }
 

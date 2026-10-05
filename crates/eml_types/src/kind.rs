@@ -70,6 +70,12 @@ pub(crate) enum KindReason {
         across: Across,
         call: CallKind,
     },
+    /// スキームから複写した持ち越しの制約。由来の範囲は参照した位置である。`inner` は、スキームに残した元の由来で、
+    /// 呼んだ関数の中で値をまたがせている呼び出しを指す (docs/spec/diagnostics.md の E3006)。
+    CarriedThrough {
+        name: String,
+        inner: Option<Box<KindOrigin>>,
+    },
 }
 
 /// 変数を使わなかった経路。E3003 の secondary が指す。
@@ -163,6 +169,66 @@ pub(crate) fn violated_carries(
         .collect()
 }
 
+/// `start` の下にある `keep` の変数と、下にある定数の最大。`start` が `keep` の変数ならそれ自身だけを返す。その変数の
+/// 下限は、スキームに残す束の制約が受け持つ。
+fn lowers<T: Copy + Ord>(
+    downward: &HashMap<KindVar, Vec<Bound<T>>>,
+    keep: &HashSet<KindVar>,
+    start: Bound<T>,
+) -> (Vec<KindVar>, Option<T>) {
+    match start {
+        Bound::Const(c) => (Vec::new(), Some(c)),
+        Bound::Var(v) if keep.contains(&v) => (vec![v], None),
+        Bound::Var(v) => reach(downward, keep, v, |a, b| a.max(b)),
+    }
+}
+
+/// スキームに残す持ち越しの制約 (docs/spec/types.md の「推論」)。`lin` の解は下限の join なので、`lin` が `Lin` になるのは
+/// 下にある残す変数か定数 `Lin` のどれかが `Lin` のときに限られる。`mult` が `Once` 以下であるのは、下にあるすべてが
+/// `Once` 以下のときに限られる。そこで両側を下にある残す変数と定数に置き換え、組ごとに元の由来を持ったまま残す。両側が
+/// 定数の組はその本体の中の違反で、`solve_kinds` が報告するので残さない。
+pub(crate) fn carry_residual(
+    carries: &[Carry],
+    linearity: &Lattice<Linearity>,
+    lin_keep: &[KindVar],
+    multiplicity: &Lattice<Multiplicity>,
+    mult_keep: &[KindVar],
+) -> Vec<Carry> {
+    let lin_keep: HashSet<KindVar> = lin_keep.iter().copied().collect();
+    let mult_keep: HashSet<KindVar> = mult_keep.iter().copied().collect();
+    let lin_down = linearity.downward();
+    let mult_down = multiplicity.downward();
+    let mut out = Vec::new();
+    for carry in carries {
+        let (lin_vars, lin_const) = lowers(&lin_down, &lin_keep, carry.lin);
+        let (mult_vars, mult_const) = lowers(&mult_down, &mult_keep, carry.mult);
+        let mut lins: Vec<Bound<Linearity>> = lin_vars.into_iter().map(Bound::Var).collect();
+        if lin_const == Some(Linearity::Lin) {
+            lins.push(Bound::Const(Linearity::Lin));
+        }
+        let mut mults: Vec<Bound<Multiplicity>> = mult_vars.into_iter().map(Bound::Var).collect();
+        if mult_const == Some(Multiplicity::Multi) {
+            mults.push(Bound::Const(Multiplicity::Multi));
+        }
+        for &lin in &lins {
+            for &mult in &mults {
+                if matches!((lin, mult), (Bound::Const(_), Bound::Const(_))) {
+                    continue;
+                }
+                let residual = Carry {
+                    lin,
+                    mult,
+                    origin: carry.origin.clone(),
+                };
+                if !out.contains(&residual) {
+                    out.push(residual);
+                }
+            }
+        }
+    }
+    out
+}
+
 #[derive(Debug)]
 pub(crate) struct Lattice<T> {
     bottom: T,
@@ -187,6 +253,17 @@ impl<T: Copy + Ord> Lattice<T> {
 
     pub fn set_origin(&mut self, origin: Option<KindOrigin>) {
         self.current = origin;
+    }
+
+    /// 制約を、上限の変数から下限へたどる辺。
+    pub fn downward(&self) -> HashMap<KindVar, Vec<Bound<T>>> {
+        let mut downward: HashMap<KindVar, Vec<Bound<T>>> = HashMap::new();
+        for &(lower, upper) in &self.constraints {
+            if let Bound::Var(v) = upper {
+                downward.entry(v).or_default().push(lower);
+            }
+        }
+        downward
     }
 
     pub fn origin(&self, index: usize) -> Option<&KindOrigin> {
@@ -326,6 +403,60 @@ fn push_constraint<T: PartialEq>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_residual_carry_replaces_internal_variables_with_kept_ones() {
+        let mut linearity = Lattice::new(Linearity::Unr);
+        let a = linearity.fresh();
+        let internal = linearity.fresh();
+        linearity.require(Bound::Var(a), Bound::Var(internal));
+        let mut multiplicity = Lattice::new(Multiplicity::Never);
+        let e = multiplicity.fresh();
+        let inner = multiplicity.fresh();
+        multiplicity.require(Bound::Var(e), Bound::Var(inner));
+        let carries = [Carry {
+            lin: Bound::Var(internal),
+            mult: Bound::Var(inner),
+            origin: None,
+        }];
+        assert_eq!(
+            carry_residual(&carries, &linearity, &[a], &multiplicity, &[e]),
+            vec![Carry {
+                lin: Bound::Var(a),
+                mult: Bound::Var(e),
+                origin: None,
+            }]
+        );
+    }
+
+    #[test]
+    fn a_residual_carry_keeps_one_constant_side() {
+        let mut linearity = Lattice::new(Linearity::Unr);
+        let internal = linearity.fresh();
+        linearity.require(Bound::Const(Linearity::Lin), Bound::Var(internal));
+        let mut multiplicity = Lattice::new(Multiplicity::Never);
+        let e = multiplicity.fresh();
+        let carries = [
+            Carry {
+                lin: Bound::Var(internal),
+                mult: Bound::Var(e),
+                origin: None,
+            },
+            Carry {
+                lin: Bound::Const(Linearity::Lin),
+                mult: Bound::Const(Multiplicity::Multi),
+                origin: None,
+            },
+        ];
+        assert_eq!(
+            carry_residual(&carries, &linearity, &[], &multiplicity, &[e]),
+            vec![Carry {
+                lin: Bound::Const(Linearity::Lin),
+                mult: Bound::Var(e),
+                origin: None,
+            }]
+        );
+    }
 
     #[test]
     fn unconstrained_variables_take_the_bottom() {

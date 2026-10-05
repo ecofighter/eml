@@ -1,6 +1,81 @@
 use super::*;
+use crate::kind::KindReason;
 
 impl Table {
+    pub fn carry_residual(&self, lin_keep: &[KindVar], mult_keep: &[KindVar]) -> Vec<Carry> {
+        crate::kind::carry_residual(
+            &self.carries,
+            &self.linearity,
+            lin_keep,
+            &self.multiplicity,
+            mult_keep,
+        )
+    }
+
+    /// スキームに残した持ち越しの制約を、具体化した新しい変数について足す。参照した位置の由来 (`Passed`) は、元の由来を
+    /// 持つ `CarriedThrough` にする。呼んだ側の違反が、呼んだ関数の中の呼び出しを指せるようにするため
+    /// (docs/spec/diagnostics.md の E3006)。
+    pub fn copy_carries(&mut self, carries: &[Carry], subst: &Subst) {
+        for carry in carries {
+            let lin = match carry.lin {
+                Bound::Var(v) => Bound::Var(subst.lin.get(&v).copied().unwrap_or(v)),
+                constant => constant,
+            };
+            let mult = match carry.mult {
+                Bound::Var(v) => Bound::Var(subst.mult.get(&v).copied().unwrap_or(v)),
+                constant => constant,
+            };
+            let origin = self.kind_origin.clone().map(|origin| match origin.reason {
+                KindReason::Passed(name) => KindOrigin {
+                    range: origin.range,
+                    reason: KindReason::CarriedThrough {
+                        name,
+                        inner: carry.origin.clone().map(Box::new),
+                    },
+                },
+                _ => origin,
+            });
+            self.carries.push(Carry { lin, mult, origin });
+        }
+    }
+
+    /// 型に現れる rigid な row 変数の、σ から名前への表。スキームの持ち越しの制約を表示するのに使う。
+    pub fn row_names(&self, ty: Ty) -> HashMap<KindVar, String> {
+        let mut names = HashMap::new();
+        let mut work = vec![ty];
+        while let Some(ty) = work.pop() {
+            match self.shape(ty) {
+                TyShape::Fn {
+                    param, row, ret, ..
+                }
+                | TyShape::Cont {
+                    arg: param,
+                    row,
+                    ret,
+                    ..
+                } => {
+                    let row = self.resolve_row(row);
+                    if let Tail::Var(tail) = row.tail
+                        && let Some(name) = &self.row_vars[tail.0 as usize].rigid
+                    {
+                        names
+                            .entry(self.row_multiplicity_var(tail))
+                            .or_insert_with(|| name.clone());
+                    }
+                    work.push(*ret);
+                    for label in &row.labels {
+                        work.extend(label.args.iter().copied());
+                    }
+                    work.push(*param);
+                }
+                TyShape::Record(fields) => work.extend(fields.iter().map(|(_, f)| *f)),
+                TyShape::Con(_, args) => work.extend(args.iter().copied()),
+                TyShape::Rigid(_) | TyShape::Var(_) | TyShape::Error => {}
+            }
+        }
+        names
+    }
+
     /// 型の Kind の上界の候補。レコードとデータ型の Kind はフィールドの join なので、フィールドごとの境界を並べる
     /// (docs/spec/types.md)。データ型では、Kind に効く位置の型引数の境界を並べる。`File` を含むデータ型は定数の `Lin` である。
     pub fn kind_bounds(&self, ty: Ty) -> Vec<Bound<Linearity>> {
