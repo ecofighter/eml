@@ -527,3 +527,78 @@ fn an_arm_that_uses_the_whole_value_also_receives_it() {
     assert!(pick.contains("con #1(1)"), "{pick}");
     core_text(text, Pass::Perceus);
 }
+
+#[test]
+fn a_wildcard_arm_does_not_block_the_known_tags() {
+    // 決定木が `if` の join point の本体の中に置いた残りの枝の join point を F が外へ出すので、B2 が `switch` に届き、
+    // `if` の結果で分岐し直さない (docs/implementation/status.md にあった制限)
+    let text = "data Color = | Red | Green | Blue\n\npick : Bool -> Int\npick b =\n  let n = match (if b then Red else Green) with\n    | Red -> 1\n    | _ -> 2\n  n + 1\n\nmain : Unit -> <IO> Unit\nmain () = ()";
+    let pick = function(&core_text(text, Pass::Simplify), "pick");
+    assert_eq!(pick.matches("switch").count(), 1, "{pick}");
+}
+
+#[test]
+fn a_known_and_an_unknown_jump_share_the_split_arm() {
+    // 分かっている jump は切り出した join point へ直接向かい、分からない jump は、残った1つの jump の位置に戻された元の join point の `switch` が、同じ join point へ転送する
+    let text = "data Option a = | None | Some a\n\nlookup : Int -> Option Int\nlookup n = Some n\n\npick : Bool -> Int\npick c =\n  let n = match (if c then Some 1 else lookup 2) with\n    | Some v -> v\n    | None -> 0\n  n + 1\n\nmain : Unit -> <IO> Unit\nmain () = ()";
+    let pick = function(&core_text(text, Pass::Simplify), "pick");
+    insta::assert_snapshot!(pick, @"
+    fn pick(c0) {
+      join j0(t6) [] {
+        let t7 = prim +(t6, 1)
+        return t7
+      }
+      join j1(v8) [] {
+        let v4 = v8
+        jump j0(v4)
+      }
+      switch c0 {
+        #0 ->
+          let t2 = call lookup(2)
+          let t3 = t2
+          switch t3 {
+            #0 ->
+              jump j0(0)
+            #1(v5) ->
+              jump j1(v5)
+          }
+        #1 ->
+          jump j1(1)
+      }
+    }
+    ");
+}
+
+#[test]
+fn a_known_and_an_unknown_jump_share_an_arm_that_uses_the_whole_value() {
+    // 枝が値全体も使うので、切り出した join point には値も渡す。分からない側の転送も、そのときの値を同じ join point へ渡す
+    let text = "data Option a = | None | Some a\n\nsize : Option Int -> Int\nsize o = 1\n\nlookup : Int -> Option Int\nlookup n = Some n\n\npick : Bool -> Int\npick c =\n  let n = match (if c then Some 1 else lookup 2) with\n    | None -> 0\n    | x -> size x\n  n + 1\n\nmain : Unit -> <IO> Unit\nmain () = ()";
+    let pick = function(&core_text(text, Pass::Simplify), "pick");
+    insta::assert_snapshot!(pick, @"
+    fn pick(c0) {
+      join j0(t7) [] {
+        let t8 = prim +(t7, 1)
+        return t8
+      }
+      join j1(x9, t10) [] {
+        let x4 = t10
+        let t5 = call size(x4)
+        jump j0(t5)
+      }
+      switch c0 {
+        #0 ->
+          let t2 = call lookup(2)
+          let t3 = t2
+          switch t3 {
+            #0 ->
+              jump j0(0)
+            #1(x6) ->
+              jump j1(x6, t3)
+          }
+        #1 ->
+          let d1 = con #1(1)
+          jump j1(1, d1)
+      }
+    }
+    ");
+}

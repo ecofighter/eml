@@ -1,12 +1,17 @@
 //! join point を書き換える最適化 (docs/spec/core-ir.md)。変換の後、Perceus の前に置く。RC の命令がまだないので、
 //! 所有権を扱わずに書き換えられる。`captures` は古くなりうるが、このパスの後にパイプラインが埋め直す。
 //!
-//! B3 (jump が1つ)、K1 (分かっているコンストラクタの `switch`)、B2 (分かっているタグ)、B5 (小さな本体)、B3、
-//! B4 (使われない)、DCE (使われない純粋な束縛) の順に1巡だけ回す。最初の B3 は、`match` の枝の join point を `Switch` の
-//! 枝に戻す。枝の join point が `if` の join point の本体と `Switch` の間に並んだままだと、B2 が本体の `Switch` を
-//! 見つけられないためである。K1 を最初の B3 の後に置くのは、B3 が join point を戻すときに作る引数の束縛 `let t = d` を
-//! たどって `d` の `con` まで届くためである。B5 を B4 より先に回すのは、B5 で jump がなくなった join point を、同じ巡の
-//! B4 で消すためである。DCE を最後に置くのは、K1 と B2 が使わなくした `con` をまとめて消すためである。
+//! F (join point の外出し)、B3 (jump が1つ)、K1 (分かっているコンストラクタの `switch`)、B2 (分かっているタグと
+//! コンストラクタの値)、B5 (小さな本体)、B3、B4 (使われない)、DCE (使われない純粋な束縛) の順に1巡だけ回す。
+//! F を最初に置くのは、決定木が `if` の join point の本体の中に置いた残りの枝の join point を外へ出し、最初の B3 と
+//! B2 が `Switch` に届くようにするためである。パイプラインが直前に `captures` を埋めているので、F だけは正しい
+//! `captures` を使える。最初の B3 は、`match` の枝の join point を `Switch` の枝に戻す。
+//! K1 を最初の B3 の後に置くのは、B3 が join point を戻すときに作る引数の束縛 `let t = d` をたどって `d` の `con` まで
+//! 届くためである。K1 の分かっているコンストラクタの表は関数全体で1つ作る。変数は1回だけ束縛され、使用は束縛の範囲に
+//! あるので、根からの走査は要らない。K1 と B2 が枝の中の変数を置き換えるので、引くときにアリーナから今の右辺を読み直す。
+//! B2 が枝から切り出す join point の引数 (フィールドと、枝が使うときの値全体) は、どちらも束縛なので、元の枝の束縛とは
+//! 別の新しい変数にする。同じ変数を2回束縛すると verifier が拒否する。B5 を B4 より先に回すのは、B5 で jump がなくなった
+//! join point を、同じ巡の B4 で消すためである。DCE を最後に置くのは、K1 と B2 が使わなくした `con` をまとめて消すためである。
 //!
 //! 書き換えは式のアリーナの上でその場で行う。木から外れた式はアリーナに残り、Perceus がアリーナを作り直すときに
 //! 捨てる。そのため、jump の位置と親は、根からたどれる式だけで求める。
@@ -18,6 +23,7 @@ use crate::{Arm, Atom, CExpr, CExprId, CoreFn, JoinId, Program, Rhs, VarId};
 pub(crate) fn simplify(program: &mut Program) {
     for function in &mut program.functions {
         let mut pass = Simplify { function };
+        pass.float_joins();
         pass.inline_single_jumps();
         pass.switch_known_constructors();
         pass.split_known_tags();
@@ -34,6 +40,64 @@ struct Simplify<'a> {
 }
 
 impl Simplify<'_> {
+    /// F: join point の本体の先頭に並ぶ join point の定義を、外側の join point の引数を使わなければ、外側の定義の位置へ
+    /// 出す。外側の本体は外へ出した join point の範囲に入るので、本体の中の jump はそのまま届く。外へ出す本体は外側の
+    /// 引数を使わず、外側の本体の中で束縛した変数も使えない (先頭に並ぶので、その前に束縛はない) ので、外側の定義の位置
+    /// でも範囲にある変数しか使わない。式の ID を入れ替えるだけなので、親の表は変わらない。
+    fn float_joins(&mut self) {
+        for index in 0..self.function.joins.len() {
+            let mut node = self.function.joins[index];
+            loop {
+                let CExpr::Join {
+                    join,
+                    params,
+                    captures,
+                    body,
+                    scope,
+                } = self.expr(node).clone()
+                else {
+                    unreachable!("the join index points at join points")
+                };
+                let CExpr::Join {
+                    join: inner,
+                    params: inner_params,
+                    captures: inner_captures,
+                    body: inner_body,
+                    scope: inner_scope,
+                } = self.expr(body).clone()
+                else {
+                    break;
+                };
+                if inner_captures.iter().any(|var| params.contains(var)) {
+                    break;
+                }
+                self.set(
+                    node,
+                    CExpr::Join {
+                        join: inner,
+                        params: inner_params,
+                        captures: inner_captures,
+                        body: inner_body,
+                        scope: body,
+                    },
+                );
+                self.set(
+                    body,
+                    CExpr::Join {
+                        join,
+                        params,
+                        captures,
+                        body: inner_scope,
+                        scope,
+                    },
+                );
+                self.function.joins[inner.0 as usize] = node;
+                self.function.joins[join.0 as usize] = body;
+                node = body;
+            }
+        }
+    }
+
     fn expr(&self, id: CExprId) -> &CExpr {
         self.function.expr(id)
     }

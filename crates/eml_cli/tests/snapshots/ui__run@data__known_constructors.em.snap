@@ -10,4 +10,12 @@ input_file: tests/ui/run/data/known_constructors.em
 21
 2
 1
+2
+3
+12
+16
+1
+2
+2
+1
 --- stderr ---
