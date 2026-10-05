@@ -120,7 +120,7 @@ HIR への変換では、名前解決に加えて、次の脱糖と検査を行�
 
 - 名前の重複定義と未定義の名前の検査
 - シグネチャと等式の対応の検査、複数の等式の `match` への脱糖
-- 演算子の列の組み直し (fixity の表を引く)、単項マイナス、セクション
+- 演算子の列の組み直し (fixity の表を引く)、単項マイナス、セクションと演算子の参照のラムダへの脱糖
 - `use`、`if` の `else` の補完、`let ... in`
 - 補間の `++` の連結への変換、コマンドリテラルの `Cmd` の構築
 - handler の節の引数の個数、`resume` の引数の個数
@@ -134,11 +134,20 @@ HIR への変換では、名前解決に加えて、次の脱糖と検査を行�
 - 名前は `Res::{Local, Function, Operation, Constructor, Builtin}` に解決する。組み込みは名前解決の最も外側のスコープで、ユーザーの定義で隠せる。組み込みの名前、見え方 (名前で引く値、演算子、名前で引けない内部用)、引数の数は `eml_hir::builtin::BUILTINS` の表に、シグネチャは eml のソースで書いた Prelude (`crates/eml_hir/src/prelude.em`) に置く。変換のはじめに Prelude を構文解析し、`Module::builtins` に置く。Prelude の範囲には `FileId::PRELUDE` を使い、診断には出さない。S2 で `Prelude` モジュールに移す
 - 型とエフェクトは item (`Module::types`、`Module::effects`) で、ID (`TypeDefId`、`EffectId`) で参照する。組み込みの `Int`、`String`、`Unit` と `IO` を変換のはじめに登録し、Prelude の `data Bool` を変換してから、続けて `effect` の宣言を変換する (`lower/effect.rs`)。エフェクトの名前をすべて登録してから操作を変換するので、操作の引数の型の row は後ろで宣言したエフェクトも引ける。操作は `Module::operations` (`OperationId`) に置き、シグネチャと引数の個数 (外側の矢印の数) を持つ。処理系が役割で引く item は `Module::lang` (`LangItems`) にある。エフェクトの宣言は型引数を `EffectDef::generics` に持つ。操作の `Generics` は、エフェクトの型引数を先頭に写して始め、その個数を `Operation::effect_params` に持つ。row のエフェクトは `EffectRef` (エフェクトと型引数) で、型引数の個数は `ItemScope::effect_params` で確かめる (E1015)
 - `data` の宣言は `lower/data.rs` で変換する。型の名前をすべて登録してから宣言を変換するので、宣言どうしは再帰と相互再帰ができる。`TypeDef` は型引数 (`generics`)、フィールドの型の注釈のアリーナ (`types`)、種類 (`TypeDefKind::{Builtin, Data}`) を持つ。コンストラクタは `Module::constructors` (`ConstructorId`) に置き、属する型、タグ (宣言の順)、フィールドの型を持つ。コンストラクタは値の名前空間に入り、式では `Res::Constructor` に解決する。`Bool` の2つのコンストラクタは lang item (`LangItems::true_ctor`、`false_ctor`) で、`&&` と `||` の脱糖が使う
-- パターンは `PatKind::Con` (コンストラクタと引数のパターン) を持つ。1つのパターンと1つの等式の引数の並びで同じ変数名を2回束縛すると E1017 にする。`match` は `ExprKind::Match` で、枝 (`MatchArm`) のパターンの変数は、その枝の本体だけで見える
+- パターンは `PatKind::Con` (コンストラクタと引数のパターン) を持つ。1つのパターンと、1つの等式、ラムダ、handler の節の引数の並びで同じ変数名を2回束縛すると E1017 にする。型の明示 `(p : T)` はどの `apat` の位置でも `PatKind::Annot` になる。`match` は `ExprKind::Match` で、枝 (`MatchArm`) のパターンの変数は、その枝の本体だけで見える
+- 等式が2つ以上ある関数は、引数の位置ごとの隠れた局所変数 (`$0`、`$1`、…) を `Body::params` に束縛し、`Body::root` をそれらのタプル (引数が1つなら変数そのもの) に対する `match` にする。各等式が1つの枝である。この `match` は `MatchSource::Equations` を持ち、網羅性の検査が等式として報告する
+- `Function::equation_ranges` は各等式の関数名の位置を持ち、E4002 の secondary になる。等式が1つの関数と引数のない値は、脱糖せず今の形のままにする
+- 同じ名前の等式は、E1018 と E1019 の後もソースの順に1つの関数として扱う。引数の個数の違う等式 (E1020) は、`match` の枝に入れず、本体の `has_errors` を立てる
+- セクションと演算子の参照は `lower/section.rs` でラムダに脱糖する。隠れた引数は `$a`、`$b`、`$x` である。被演算子が演算子の列のときは、空いた側に仮の被演算子を置いて `climb` で組み直し、根がセクションの演算子のときだけ許す (E1023)
+- `use` は、`lower_stmts` が `use` の文に出会ったときに、残りの文を内側のブロックにしてラムダで包み、`use` の式の最後の引数に足す。ブロックの最後の `use` は E1024 で、最後の引数を `Missing` にした呼び出しにする。`let p = e in e2` は、ブロックの `let` と同じ経路で変換する
 - トップレベルの名前は、変換の中の `ItemScope` (`lower/scope.rs`) で解決する。値と型 (型名とエフェクト名) の2つの名前空間を持ち、ユーザーの定義を先に引き、なければ組み込みを引く
 - `Body` は走査関数を持つ。`walk_child_exprs` は式の直接の子を辿り、`pat_bindings` はパターンが束縛する変数を、`captures` は式の中で束縛していない変数 (ラムダ、handle の本体と節が捕まえる変数) を返す。式やパターンの種類を足す段階は、これらを直す
 - handler の変換と節の検査は `lower/handler.rs` にある。節の先頭の名前は `ItemScope::operation` で操作だけから引く。誤った節 (引数の個数の誤り、重複、別のエフェクトの節) は診断を出して `ExprKind::Handle::clauses` に入れず、扱うエフェクトが決まらなければ `effect` を `None` にする。型検査はそれを見て診断を連鎖させない
-- 演算子の列は、標準の演算子の表で precedence climbing により組み直す。`&&` / `||` は `if` に脱糖する。`x |> f` は、`x` を先に評価する印 (`ExprKind::Call::evaluate_first`) を付けた関数適用 `f x` に、`f <| x` は関数適用に脱糖する。型検査は印を見ずに普通の呼び出しとして検査し、Core IR への変換が印の付いた引数を先に評価する。`let` に脱糖すると左辺が推論になり、引数の型を期待した診断が失われるため`else` のない `if` は `else_branch: None` のまま残し、型検査が `Unit` を求める
+- 演算子の列は、fixity の表で precedence climbing により組み直す。表は `ItemScope` が持ち、`Fixity` (優先順位と結合) を演算子の文字列で引く。標準の演算子の fixity は Prelude (`prelude.em`) の宣言で、`builtin.rs` には表を置かない。ユーザーの宣言は、item をすべて集めた後に表へ入れるので、宣言の位置を問わない (E1021、E1022)
+- fixity は、演算子が解決した先の定義に付く。ユーザーの宣言があればそれを使い、なければ、このモジュールで定義した演算子は `infixl 9`、Prelude の演算子は Prelude の宣言、どちらもなければ `infixl 9` である。ユーザーの定義は同じ名前の Prelude の演算子を隠すので、fixity も Prelude のものを引かない
+- 中置のコンストラクタのパターンの組み直し (`climb_pat`) も同じ表を引き、式の `climb` と同じ E1006 を報告する。誤りのパターンは `Missing` にする
+- 演算子の定義は、演算子の文字列を名前とする関数である。シグネチャ `(</>) : …` と中置の等式 `a </> b = …` は、普通の関数のシグネチャと引数が2つの等式として扱う
+- `binary()` は、演算子の文字列で脱糖を選ぶ前に名前を解決する。ユーザーの定義に解決すれば関数の呼び出しにし、そうでなければ次の脱糖にする。`&&` / `||` は `if` に脱糖する。`x |> f` は、`x` を先に評価する印 (`ExprKind::Call::evaluate_first`) を付けた関数適用 `f x` に、`f <| x` は関数適用に脱糖する。型検査は印を見ずに普通の呼び出しとして検査し、Core IR への変換が印の付いた引数を先に評価する。`let` に脱糖すると左辺が推論になり、引数の型を期待した診断が失われるため`else` のない `if` は `else_branch: None` のまま残し、型検査が `Unit` を求める
 
 ## `eml_types` の内部
 
@@ -168,6 +177,8 @@ HIR への変換では、名前解決に加えて、次の脱糖と検査を行�
 - データ型の Kind に効く型引数の位置は `data.rs` で、すべての `data` の宣言について不動点で求める。`Table::kind_bounds` は、`Con` の効く位置の引数の境界を並べる。コンストラクタのスキームは関数と同じ経路で作り、`TypedModule::constructors` に置く
 - パターンは期待する型を受けて検査する。`match` は scrutinee の型で各枝のパターンを検査し、枝の本体を `if` の枝と同じく検査する。使用回数のパスは `match` の枝を別の経路として扱う
 - 網羅性の検査は `exhaustive.rs` にある。型推論と使用回数のパスの後に、型付き HIR の上で Maranget の usefulness を使って検査し、漏れているパターンの例を作る。コンストラクタの集合はパターンの型の型構成子から引く
+- 由来が `MatchSource::Equations` の `match` は、等式ごとの行 (引数の並び) の行列として検査する。漏れは E4002、到達しない等式は E4005 (Warning) で、`Function::equation_ranges` を指す。E1020 で枝に入れなかった等式がある関数は、等式の検査を行わない (枝の数が等式の数より少ないので、漏れの診断が連鎖しない)
+- `check_function` は、シグネチャの矢印をたどる途中で壊れた矢印か、引数が矢印より多い場合に当たったら、今の row を末尾が `Error` の row にして本体を検査する。ラムダの検査と同じ扱いで、E2002 を連鎖させない
 - row の単一化は、同じエフェクトのラベルを row の中の順で対にし、型引数を単一化する。一致しなければ `UnifyError::EffectArgs` で、`include_call_row` が E2001 にする。型引数の中で型変数や row 変数が自分自身に現れるときは `UnifyError::Occurs` で、`include_call_row` が E2005 にする。row 変数を束縛するときは、ラベルの型引数の中の関数型と継続の型の row までたどって、その変数が現れないことを確かめる (`Table::row_occurs`)
 - 継続の型は `TyShape::Cont` (操作の結果の型、継続の線形性、handle の外側の row、handle の結果の型) で、外に出す型は `Type::Cont` である。`once` の操作の `k` の線形性は `Lin`、`multi` の操作の `k` は `Unr` である
 - 操作のスキームは、組み込みと同じ経路で作る。シグネチャの外側の最後の矢印に、操作のエフェクトだけの row を付ける (`scheme::lower_operation`)。エフェクトの多重度は操作の多重度の最大である。row のラベルの型引数は、エフェクトの型引数の rigid 変数である。操作の引数の型の Kind 変数を `Unr` に固定する `Table::unrestricted` は、エフェクトの型引数の Kind 変数を外す
