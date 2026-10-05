@@ -194,6 +194,21 @@ pub fn with_diagnostics(mut dump: String, diagnostics: &str) -> String {
     dump
 }
 
+/// fix のある診断ごとに、先頭の行に続けて編集を `開始..終了 "置き換える文字列"` の形で並べる。fix のない診断は出さない。
+pub fn fixes(files: &SourceFiles, diagnostics: &[Diagnostic]) -> String {
+    let mut out = String::new();
+    for d in diagnostics {
+        let Some(edits) = &d.fix else { continue };
+        writeln!(out, "{} {}", d.code, position(files, &d.primary)).unwrap();
+        for edit in edits {
+            let start = files.line_col(edit.file, edit.range.start());
+            let end = files.line_col(edit.file, edit.range.end());
+            writeln!(out, "  {start}..{end} {:?}", edit.replacement).unwrap();
+        }
+    }
+    out
+}
+
 /// 1件を、先頭の行に続けてラベル、note、help を字下げした行にする。
 pub fn full(files: &SourceFiles, diagnostics: &[Diagnostic]) -> String {
     let mut out = String::new();

@@ -1,6 +1,6 @@
 use std::collections::{BTreeSet, HashMap, HashSet};
 
-use eml_diagnostics::{FileId, TextRange};
+use eml_diagnostics::{FileId, TextRange, TextSize};
 use la_arena::{Arena, Idx};
 
 use crate::builtin::Builtin;
@@ -209,7 +209,7 @@ impl Body {
                     f(*else_branch);
                 }
             }
-            ExprKind::Block { stmts, tail } => {
+            ExprKind::Block { stmts, tail, .. } => {
                 for stmt in stmts {
                     match stmt {
                         Stmt::Let { init, .. } => f(*init),
@@ -335,6 +335,14 @@ pub struct Expr {
     pub range: TextRange,
 }
 
+/// ブロックの最後の文の先頭と、その行の字下げ。消費漏れの fix が `drop x` の行を入れる (docs/spec/diagnostics.md の
+/// 「線形性の診断」)。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LineStart {
+    pub offset: TextSize,
+    pub indent: u32,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ExprKind {
     /// 構文エラーや未対応の構文、未定義の名前の跡。診断は報告済みなので、後の段階は何も言わない。
@@ -359,6 +367,8 @@ pub enum ExprKind {
     Block {
         stmts: Vec<Stmt>,
         tail: Option<ExprId>,
+        /// 最後の文が行の最初のトークンで始まるときだけ持つ。
+        last_line: Option<LineStart>,
     },
     Annot {
         expr: ExprId,

@@ -199,7 +199,7 @@ impl Printer<'_> {
                     None => format!("(if {condition} {then_branch})"),
                 }
             }
-            ExprKind::Block { stmts, tail } => {
+            ExprKind::Block { stmts, tail, .. } => {
                 let pad = "  ".repeat(indent + 1);
                 let mut s = "{\n".to_string();
                 for stmt in stmts {

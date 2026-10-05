@@ -1,4 +1,4 @@
-use eml_diagnostics::{Diagnostic, FileId, Label, TextRange};
+use eml_diagnostics::{Diagnostic, FileId, Label, TextEdit, TextRange};
 use eml_hir::{Body, ExprId, ExprKind, Module, PatId, Res};
 
 use crate::codes;
@@ -381,7 +381,7 @@ pub(super) fn linear_misuse(file: FileId, origin: &KindOrigin) -> Diagnostic {
         )
         .with_secondary(Label::new(file, *first, "first used here"))
         .with_note(LINEAR_NOTE),
-        KindReason::NotUsed { name, path } => {
+        KindReason::NotUsed { name, path, fix } => {
             let (how, label) = match path {
                 UnusedPath::Branch(range) => (
                     "some paths do not use it",
@@ -404,14 +404,22 @@ pub(super) fn linear_misuse(file: FileId, origin: &KindOrigin) -> Diagnostic {
                     ),
                 ),
             };
-            Diagnostic::error(
+            let diagnostic = Diagnostic::error(
                 codes::LINEAR_VALUE_NOT_CONSUMED,
                 format!("`{name}` must be used exactly once, but {how}"),
                 Label::new(file, origin.range, format!("`{name}` is bound here")),
             )
             .with_secondary(label)
             .with_note(LINEAR_NOTE)
-            .with_help(format!("pass `{name}` to `drop`"))
+            .with_help(format!("pass `{name}` to `drop`"));
+            match fix {
+                Some(fix) => diagnostic.with_fix(vec![TextEdit {
+                    file,
+                    range: TextRange::empty(fix.offset),
+                    replacement: format!("drop {name}\n{}", " ".repeat(fix.indent as usize)),
+                }]),
+                None => diagnostic,
+            }
         }
         KindReason::Discarded => Diagnostic::error(
             codes::LINEAR_VALUE_DISCARDED,

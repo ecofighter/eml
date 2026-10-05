@@ -1,6 +1,6 @@
 //! 線形性の診断 (docs/spec/diagnostics.md の「線形性の診断」)。番号、文言、指す場所を確かめる。
 
-use eml_test_support::{check, full};
+use eml_test_support::{check, fixes, full};
 
 /// `once` の操作と、純粋な条件。どのテストも7行目から関数を書く。
 const HEADER: &str =
@@ -104,4 +104,46 @@ fn a_body_with_a_type_error_reports_no_linearity_errors() {
         .map(|d| d.code.to_string())
         .collect();
     assert_eq!(codes, ["E2001"]);
+}
+
+fn fix_text(rest: &str) -> String {
+    let checked = check(&format!("{HEADER}{rest}"));
+    fixes(&checked.files, &checked.diagnostics)
+}
+
+#[test]
+fn the_fix_inserts_drop_before_the_last_statement_of_the_scope() {
+    let rest = "unused : Unit -> Int\nunused () =\n  handle ask () with\n    | ask () k ->\n        let j = k\n        0";
+    insta::assert_snapshot!(fix_text(rest), @r#"
+    E3003 11:13
+      12:9..12:9 "drop j\n        "
+    "#);
+}
+
+#[test]
+fn the_fix_inserts_drop_into_a_branch_that_is_a_block() {
+    let rest = "arm : Bool -> Int\narm b =\n  handle ask () with\n    | ask () k ->\n        let j = k\n        match b with\n          | True -> resume j 1\n          | False ->\n              let n = 0\n              n";
+    insta::assert_snapshot!(fix_text(rest), @r#"
+    E3003 11:13
+      16:15..16:15 "drop j\n              "
+    "#);
+}
+
+#[test]
+fn no_fix_for_a_branch_on_one_line() {
+    let rest = "branch : Unit -> Int\nbranch () =\n  handle ask () with\n    | ask () k ->\n        let j = k\n        if flag () then resume j 1 else 0";
+    assert_eq!(fix_text(rest), "");
+}
+
+#[test]
+fn no_fix_when_a_shadowing_binding_comes_first() {
+    let rest = "shadowed : Unit -> Int\nshadowed () =\n  handle ask () with\n    | ask () k ->\n        let j = k\n        let j = 1\n        j";
+    assert_eq!(fix_text(rest), "");
+}
+
+#[test]
+fn no_fix_when_the_binding_is_the_last_statement() {
+    let rest = "last : Unit -> Unit\nlast () =\n  handle ask () with\n    | ask () k ->\n        let j = k\n    | return x -> ()";
+    assert_eq!(fix_text(rest), "");
+    assert!(diagnostics(rest).starts_with("E3003 11:13"));
 }

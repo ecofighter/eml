@@ -292,7 +292,20 @@ impl<'a> BodyLowering<'a> {
             }
         }
         self.scope.truncate(mark);
-        self.alloc(ExprKind::Block { stmts, tail }, range)
+        let last_line = all.last().and_then(|stmt| {
+            Some(LineStart {
+                offset: stmt.range().start(),
+                indent: stmt.line_indent()?,
+            })
+        });
+        self.alloc(
+            ExprKind::Block {
+                stmts,
+                tail,
+                last_line,
+            },
+            range,
+        )
     }
 
     fn lower_match(&mut self, expr: &ast::MatchExpr, range: TextRange) -> ExprId {

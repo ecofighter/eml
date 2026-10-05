@@ -148,7 +148,7 @@ impl BodyCheck<'_> {
                 self.match_expr(*scrutinee, arms, Expectation::Has(expected, origin));
                 self.typing.exprs.insert(id, expected);
             }
-            ExprKind::Block { stmts, tail } => {
+            ExprKind::Block { stmts, tail, .. } => {
                 self.block(expr.range, stmts, *tail, Expectation::Has(expected, origin));
                 self.typing.exprs.insert(id, expected);
             }
@@ -212,7 +212,7 @@ impl BodyCheck<'_> {
                 *else_branch,
                 Expectation::None,
             ),
-            ExprKind::Block { stmts, tail } => {
+            ExprKind::Block { stmts, tail, .. } => {
                 self.block(expr.range, stmts, *tail, Expectation::None)
             }
             ExprKind::Annot { expr: inner, ty } => {

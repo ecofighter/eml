@@ -1,7 +1,7 @@
 //! HIR のデータ構造と走査関数のテスト。
 
 use eml_hir::builtin::BUILTINS;
-use eml_hir::{Body, ExprId, ExprKind, Function, LocalId, Module, PatKind, TypeRefKind};
+use eml_hir::{Body, ExprId, ExprKind, Function, LineStart, LocalId, Module, PatKind, TypeRefKind};
 
 /// 診断がないことを確かめて HIR を返す。
 fn module(text: &str) -> Module {
@@ -127,4 +127,21 @@ fn internal_builtins_cannot_be_named() {
         .map(|d| d.code.to_string())
         .collect();
     assert_eq!(codes, ["E1001"]);
+}
+
+#[test]
+fn a_block_records_where_its_last_line_starts() {
+    // fix が最後の文の前に行を入れるので、その位置と字下げを持つ (docs/spec/diagnostics.md の「線形性の診断」)
+    let module = module("f : Int -> Int\nf x =\n  let y = x\n  y");
+    let body = function(&module, "f").body.as_ref().expect("a body");
+    let ExprKind::Block { last_line, .. } = &body.exprs[body.root].kind else {
+        panic!("the body is a block");
+    };
+    assert_eq!(
+        *last_line,
+        Some(LineStart {
+            offset: 35.into(),
+            indent: 2,
+        })
+    );
 }

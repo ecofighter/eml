@@ -246,7 +246,7 @@ impl FnLowering<'_> {
                 });
                 Atom::Var(param)
             }
-            ExprKind::Block { stmts, tail } => {
+            ExprKind::Block { stmts, tail, .. } => {
                 self.stmts(stmts, out);
                 match tail {
                     Some(tail) => self.atom(*tail, out),

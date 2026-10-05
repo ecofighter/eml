@@ -8,7 +8,7 @@ use eml_diagnostics::{TextRange, TextSize};
 use eml_hir::{Body, ExprId, ExprKind, LocalId, PatId, PatKind, Res, Stmt};
 
 use crate::check::BodyTyping;
-use crate::kind::{Bound, KindOrigin, KindReason, UnusedPath};
+use crate::kind::{Bound, DropFix, KindOrigin, KindReason, UnusedPath};
 use crate::table::Table;
 use crate::ty::{Linearity, Multiplicity};
 
@@ -120,7 +120,7 @@ impl Usage<'_> {
                 );
                 uses
             }
-            ExprKind::Block { stmts, tail } => {
+            ExprKind::Block { stmts, tail, .. } => {
                 let mut uses = Uses::new();
                 let mut bound = Vec::new();
                 for stmt in stmts {
@@ -351,12 +351,48 @@ impl Usage<'_> {
                 second: used.second.unwrap_or(first),
             }
         } else {
+            let fix = match used.missing {
+                Some(Missing::Branch(branch)) => self.drop_fix(local, branch),
+                Some(Missing::NoElse(_)) => None,
+                None => self.drop_fix(local, scope),
+            };
             KindReason::NotUsed {
                 name,
                 path: self.unused_path(used.missing, scope),
+                fix,
             }
         };
         self.unr_local(local, reason);
+    }
+
+    /// 経路の式がブロックで、その最後の文が行の先頭で始まるとき、その前に `drop x` の行を入れる。最後の文が束縛より前
+    /// (束縛する `let` そのもの) のときと、間に同じ名前の束縛があるときは付けない。後者では、入れた `drop x` が
+    /// シャドーイングした別の変数を指してしまう。
+    fn drop_fix(&self, local: LocalId, target: ExprId) -> Option<DropFix> {
+        let ExprKind::Block {
+            last_line: Some(line),
+            ..
+        } = &self.body.exprs[target].kind
+        else {
+            return None;
+        };
+        let binding = &self.body.locals[local];
+        if line.offset < binding.range.end() {
+            return None;
+        }
+        let shadowed = self.body.locals.iter().any(|(other, data)| {
+            other != local
+                && data.name == binding.name
+                && data.range.start() > binding.range.end()
+                && data.range.start() < line.offset
+        });
+        if shadowed {
+            return None;
+        }
+        Some(DropFix {
+            offset: line.offset,
+            indent: line.indent,
+        })
     }
 
     fn unused_path(&self, missing: Option<Missing>, scope: ExprId) -> UnusedPath {
@@ -371,7 +407,7 @@ impl Usage<'_> {
     /// スコープの終わり。ブロックでは、最後の文の直後を指す。
     fn scope_end(&self, scope: ExprId) -> TextSize {
         let exprs = &self.body.exprs;
-        if let ExprKind::Block { stmts, tail } = &exprs[scope].kind {
+        if let ExprKind::Block { stmts, tail, .. } = &exprs[scope].kind {
             let last = tail.or_else(|| {
                 stmts.last().map(|stmt| match stmt {
                     Stmt::Let { init, .. } => *init,

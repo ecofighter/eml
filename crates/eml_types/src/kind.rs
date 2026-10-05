@@ -3,7 +3,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use eml_diagnostics::TextRange;
+use eml_diagnostics::{TextRange, TextSize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct KindVar(u32);
@@ -27,6 +27,13 @@ pub(crate) struct KindOrigin {
     pub reason: KindReason,
 }
 
+/// `drop x` の行を入れる位置と、その行の字下げ。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct DropFix {
+    pub offset: TextSize,
+    pub indent: u32,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum KindReason {
     /// ある経路で2回以上使った変数。名前と、その経路で1回目と2回目に使った位置。
@@ -35,8 +42,12 @@ pub(crate) enum KindReason {
         first: TextRange,
         second: TextRange,
     },
-    /// ある経路で使わなかった変数。
-    NotUsed { name: String, path: UnusedPath },
+    /// ある経路で使わなかった変数。`fix` は `drop x` の行を入れる先である。
+    NotUsed {
+        name: String,
+        path: UnusedPath,
+        fix: Option<DropFix>,
+    },
     /// `once` の操作の節の `k` を、ある経路で `resume` も `drop` もしなかった。`clause` は節の範囲。
     ContinuationNotUsed { name: String, clause: TextRange },
     /// `_` で受けた値。

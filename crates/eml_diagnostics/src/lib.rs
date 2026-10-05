@@ -113,6 +113,11 @@ impl Diagnostic {
         self
     }
 
+    pub fn with_fix(mut self, edits: Vec<TextEdit>) -> Self {
+        self.fix = Some(edits);
+        self
+    }
+
     pub fn is_error(&self) -> bool {
         self.severity == Severity::Error
     }
