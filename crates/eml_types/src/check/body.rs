@@ -1,19 +1,18 @@
-use std::collections::HashMap;
-
 use eml_diagnostics::{Diagnostic, FileId, Label, TextRange};
 use eml_hir::builtin::Builtin;
 use eml_hir::{
-    Body, ConstructorId, ExprId, ExprKind, Function, FunctionId, Literal, LocalId, MatchArm,
-    Module, OperationId, PatId, PatKind, Res, Stmt, TypeRefKind,
+    Body, ConstructorId, ExprId, ExprKind, Function, Literal, LocalId, MatchArm, Module,
+    OperationId, PatId, PatKind, Res, Stmt, TypeRefKind,
 };
 use la_arena::ArenaMap;
 
 use crate::codes;
+use crate::kind::problem::{Decl, Instance};
 use crate::kind::{KindOrigin, KindReason};
-use crate::scheme::Scheme;
 use crate::shape::{Rigids, lower_type};
 use crate::table::{Row, Table, Tail, Ty, TyShape, UnifyError};
 
+use super::Signatures;
 use super::equality::Comparison;
 use super::report::{AmbientSource, Origin, callee_subject};
 
@@ -50,13 +49,8 @@ pub(super) struct BodyCheck<'a, 'c> {
     pub(super) function: &'a Function,
     pub(super) body: &'a Body,
     pub(super) rigids: &'a Rigids,
-    pub(super) schemes: &'a ArenaMap<FunctionId, Scheme>,
-    /// Prelude から作った組み込みのスキーム。
-    pub(super) builtins: &'a HashMap<Builtin, Scheme>,
-    /// エフェクトの操作のスキーム。
-    pub(super) operations: &'a ArenaMap<OperationId, Scheme>,
-    /// コンストラクタのスキーム。
-    pub(super) constructors: &'a ArenaMap<ConstructorId, Scheme>,
+    /// 全宣言の閉じた型の形。本体の検査が呼び出し先について見るのは、これだけである (docs/spec/types.md の「推論」)。
+    pub(super) signatures: &'a Signatures,
     pub(super) table: &'a mut Table<'c>,
     pub(super) diagnostics: &'a mut Vec<Diagnostic>,
     /// 本体が起こしてよいエフェクト。シグネチャで最後にたどった矢印の row か、本体を囲むラムダで最後にたどった
@@ -69,6 +63,8 @@ pub(super) struct BodyCheck<'a, 'c> {
     /// 持ち越し規則は宣言の row で判定する (docs/spec/effects.md の「継続の多重度と持ち越し規則」)。
     pub(super) declared: ArenaMap<ExprId, Ty>,
     pub(super) typing: BodyTyping,
+    /// 参照の具体化の記録。段2が展開する。
+    pub(super) instances: Vec<Instance>,
 }
 
 /// 式に期待する型。check と infer で `if` とブロックの処理を共有するため。
@@ -389,13 +385,23 @@ impl BodyCheck<'_, '_> {
         }
     }
 
-    /// トップレベルの関数を参照するたびに、スキームを具体化する (docs/spec/types.md の「推論」)。
-    fn reference(&mut self, function: FunctionId) -> Ty {
-        let schemes = self.schemes;
-        match schemes.get(function) {
-            Some(scheme) => scheme.instantiate(self.table),
-            None => self.table.error,
-        }
+    /// トップレベルの値を参照するたびに、宣言の型の形を具体化する。呼び出し先の Kind の制約は複写せず、具体化の記録を
+    /// 残して段2で展開する (docs/spec/types.md の「推論」)。
+    fn instantiate(&mut self, decl: Decl) -> Ty {
+        let signatures = self.signatures;
+        let Some(shape) = signatures.get(decl) else {
+            return self.table.error;
+        };
+        let at = self.table.kind_counts();
+        let instance = shape.instantiate(self.table);
+        self.instances.push(Instance {
+            decl,
+            lin: instance.lin,
+            mult: instance.mult,
+            origin: self.table.kind_origin(),
+            at,
+        });
+        instance.ty
     }
 
     /// `check` の間だけ、作る Kind の制約の由来を設定する。
@@ -430,32 +436,25 @@ impl BodyCheck<'_, '_> {
             Res::Function(function) => {
                 let name = module.functions[function].name.clone();
                 self.with_kind_origin(range, KindReason::Passed(name), |this| {
-                    this.reference(function)
+                    this.instantiate(Decl::Function(function))
                 })
             }
             Res::Constructor(constructor) => {
                 let name = module.constructors[constructor].name.clone();
                 self.with_kind_origin(range, KindReason::Passed(name), |this| {
-                    match this.constructors.get(constructor) {
-                        Some(scheme) => scheme.instantiate(this.table),
-                        None => this.table.error,
-                    }
+                    this.instantiate(Decl::Constructor(constructor))
                 })
             }
             Res::Builtin(builtin) => {
                 let reason = KindReason::Passed(builtin.name().to_string());
-                self.with_kind_origin(range, reason, |this| match this.builtins.get(&builtin) {
-                    Some(scheme) => scheme.instantiate(this.table),
-                    None => this.table.error,
+                self.with_kind_origin(range, reason, |this| {
+                    this.instantiate(Decl::Builtin(builtin))
                 })
             }
             Res::Operation(operation) => {
                 let name = module.operations[operation].name.clone();
                 self.with_kind_origin(range, KindReason::Passed(name), |this| {
-                    match this.operations.get(operation) {
-                        Some(scheme) => scheme.instantiate(this.table),
-                        None => this.table.error,
-                    }
+                    this.instantiate(Decl::Operation(operation))
                 })
             }
         };
@@ -692,13 +691,9 @@ impl BodyCheck<'_, '_> {
         expected: Ty,
     ) {
         let range = self.body.pats[pat].range;
-        let constructors = self.constructors;
-        let mut ty = match constructors.get(ctor) {
-            Some(scheme) => self.with_kind_origin(range, KindReason::Unified, |this| {
-                scheme.instantiate(this.table)
-            }),
-            None => self.table.error,
-        };
+        let mut ty = self.with_kind_origin(range, KindReason::Unified, |this| {
+            this.instantiate(Decl::Constructor(ctor))
+        });
         let mut fields = Vec::new();
         for _ in args {
             match self.table.shape(ty).clone() {

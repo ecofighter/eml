@@ -158,15 +158,14 @@ impl Table<'_> {
         }
         let sigma = self.row_vars[var.0 as usize].multiplicity;
         for label in &row.labels {
-            self.multiplicity.require(
+            self.require_mult(
                 Bound::Const(self.effect_multiplicity(label.effect)),
                 Bound::Var(sigma),
             );
         }
         if let Tail::Var(tail) = row.tail {
             let inner = self.row_vars[tail.0 as usize].multiplicity;
-            self.multiplicity
-                .require(Bound::Var(inner), Bound::Var(sigma));
+            self.require_mult(Bound::Var(inner), Bound::Var(sigma));
         }
         self.row_vars[var.0 as usize].binding = Some(row);
         Ok(())

@@ -78,7 +78,7 @@ impl Table<'_> {
         }
         let mu = self.ty_vars[var.0 as usize].linearity;
         for bound in self.kind_bounds(ty) {
-            self.linearity.require(bound, Bound::Var(mu));
+            self.require_lin(bound, Bound::Var(mu));
         }
         self.ty_vars[var.0 as usize].binding = Some(ty);
         Ok(())
@@ -119,8 +119,8 @@ impl Table<'_> {
                     ArrowLin::Known(l) => Bound::Const(l),
                     ArrowLin::Var(w) => Bound::Var(w),
                 };
-                self.linearity.require(Bound::Var(v), other);
-                self.linearity.require(other, Bound::Var(v));
+                self.require_lin(Bound::Var(v), other);
+                self.require_lin(other, Bound::Var(v));
                 Ok(())
             }
         }

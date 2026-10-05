@@ -681,6 +681,17 @@ fn a_carry_over_passes_through_two_functions() {
 }
 
 #[test]
+fn a_carry_over_through_three_functions_is_reported_once() {
+    let rest = "keep2 : a -> (Unit -> <e> Unit) -> <e> a\nkeep2 x action =\n  action ()\n  keep x action\n\nkeep3 : a -> (Unit -> <e> Unit) -> <e> a\nkeep3 x action =\n  action ()\n  keep2 x action\n\nkept3 : Unit -> <Choice, IO> Unit\nkept3 () =\n  let f = open \"a.txt\"\n  let g = keep3 f chooser\n  close g";
+    insta::assert_snapshot!(polymorphic(rest), @r"
+    E3006 43:11 `keep3` keeps a linear value alive across a call that may resume more than once
+      43:11 `keep3` is used here
+      37:3 `x` is kept alive across this call
+      note: a continuation of a `multi` operation can be resumed more than once, and each resumption would use the value again
+    ");
+}
+
+#[test]
 fn a_file_given_to_a_function_that_keeps_it_across_a_multi_operation() {
     let rest = "keep_choose : a -> <Choice> a\nkeep_choose x =\n  let b = choose ()\n  x\n\nchosen : Unit -> <Choice, IO> Unit\nchosen () =\n  let f = open \"a.txt\"\n  let g = keep_choose f\n  close g";
     insta::assert_snapshot!(polymorphic(rest), @r"

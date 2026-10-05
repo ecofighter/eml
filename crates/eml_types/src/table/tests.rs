@@ -1,5 +1,6 @@
 use super::*;
 use crate::context::test_context;
+use crate::kind::solve::{residual_of, solve};
 
 #[test]
 fn constructors_unify_only_with_themselves() {
@@ -64,7 +65,11 @@ fn an_open_row_absorbs_the_missing_labels() {
         table.resolve_row(&open),
         Row::closed(vec![Label::plain(io)])
     );
-    assert_eq!(table.row_multiplicity(r), Multiplicity::Once);
+    let sigma = table.row_multiplicity_var(r);
+    assert_eq!(
+        solve(&table.multiplicity).0[sigma.index()],
+        Multiplicity::Once
+    );
 }
 
 #[test]
@@ -238,30 +243,6 @@ fn open_spine_opens_only_the_rows_on_the_return_side() {
 }
 
 #[test]
-fn copy_type_replaces_rigid_variables() {
-    let context = test_context();
-    let mut table = Table::new(&context);
-    let (a, ra) = table.fresh_rigid("a");
-    let e = table.fresh_rigid_row("e");
-    let f = table.function(
-        a,
-        Row {
-            labels: vec![],
-            tail: Tail::Var(e),
-        },
-        a,
-    );
-    let mut subst = Subst::default();
-    subst.tys.insert(ra, table.int);
-    let copied = table.copy_type(f, &subst);
-    assert_eq!(table.export(copied).to_string(), "Int -> <e> Int");
-    let mut subst = Subst::default();
-    subst.rows.insert(e, table.fresh_row_var());
-    let copied = table.copy_type(f, &subst);
-    assert_eq!(table.export(copied).to_string(), "a -> <_> a");
-}
-
-#[test]
 fn a_rigid_callee_row_extends_a_flexible_ambient_row() {
     let context = test_context();
     let mut table = Table::new(&context);
@@ -293,7 +274,7 @@ fn binding_a_variable_passes_the_kind_of_its_type_to_the_variable() {
     assert_eq!(table.unify(v, a), Ok(()));
     let mu = table.rigid_linearity(ra);
     assert_eq!(
-        table.lin_residual(&[mu]),
+        residual_of(&table.linearity, &[mu]),
         vec![(Bound::Var(mu), Bound::Const(Linearity::Unr))]
     );
 }
@@ -310,7 +291,7 @@ fn closure_kinds_bound_each_partial_application() {
     let ArrowLin::Var(m) = m else { unreachable!() };
     let mu = table.rigid_linearity(ra);
     assert_eq!(
-        table.lin_residual(&[mu, m]),
+        residual_of(&table.linearity, &[mu, m]),
         vec![(Bound::Var(mu), Bound::Var(m))]
     );
 }
@@ -367,15 +348,6 @@ fn an_error_row_is_included_and_includes_any_row() {
         tail: Tail::Var(e),
     };
     assert_eq!(table.include_row(&rigid, &Row::error()), Ok(()));
-}
-
-#[test]
-fn copying_keeps_an_error_row() {
-    let context = test_context();
-    let mut table = Table::new(&context);
-    let f = table.function(table.int, Row::error(), table.int);
-    let copied = table.copy_type(f, &Subst::default());
-    assert_eq!(table.export(copied).to_string(), "Int -> <{error}> Int");
 }
 
 #[test]

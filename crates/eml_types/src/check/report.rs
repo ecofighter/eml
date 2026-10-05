@@ -144,7 +144,7 @@ impl BodyCheck<'_, '_> {
         report: bool,
     ) -> bool {
         let ambient = self.ambient.clone();
-        // ラベルの型引数の単一化は矢印の線形性の制約を作る。由来がないと、違反しても `solve_kinds` が捨ててしまう
+        // ラベルの型引数の単一化は矢印の線形性の制約を作る。由来がないと、違反しても `solve_scc` が捨ててしまう
         // (docs/implementation/architecture.md)
         let included = self.with_kind_origin(range, KindReason::Unified, |this| {
             this.table.include_row(&row, &ambient)

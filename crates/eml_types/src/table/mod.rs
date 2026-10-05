@@ -1,10 +1,9 @@
 use crate::context::Context;
-use crate::kind::{Bound, Carry, KindOrigin, KindVar, Lattice};
+use crate::kind::problem::{Bounds, Instance, KindProblem, OwnVars};
+use crate::kind::{Bound, Carry, KindOrigin, KindVar};
 use crate::ty::{EffectLabel, Linearity, Multiplicity, RowTail, Type};
 use eml_hir::{EffectId, LangItems, OperationId, TypeDefId};
-use std::collections::HashMap;
 
-mod copy;
 mod export;
 mod kinds;
 mod row;
@@ -145,15 +144,6 @@ struct RigidInfo {
     linearity: KindVar,
 }
 
-/// スキームを具体化するときの置き換え。rigid 変数を新しい推論用の変数に、多相化した Kind 変数を新しい Kind 変数に変える。
-#[derive(Default)]
-pub(crate) struct Subst {
-    pub tys: HashMap<RigidVar, Ty>,
-    pub rows: HashMap<RowVar, RowVar>,
-    pub lin: HashMap<KindVar, KindVar>,
-    pub mult: HashMap<KindVar, KindVar>,
-}
-
 pub(crate) struct Table<'c> {
     /// モジュール全体の情報。表ごとに作り直さず借りる。
     context: &'c Context,
@@ -161,9 +151,10 @@ pub(crate) struct Table<'c> {
     ty_vars: Vec<TyVarInfo>,
     row_vars: Vec<RowVarInfo>,
     rigids: Vec<RigidInfo>,
-    linearity: Lattice<Linearity>,
+    /// 線形性の束の制約。段1は集めるだけで、解くのは段2である (docs/implementation/architecture.md の「`eml_types` の内部」)。
+    linearity: Bounds<Linearity>,
     kind_origin: Option<KindOrigin>,
-    multiplicity: Lattice<Multiplicity>,
+    multiplicity: Bounds<Multiplicity>,
     pub int: Ty,
     pub string: Ty,
     pub bool: Ty,
@@ -177,9 +168,41 @@ pub(crate) struct Table<'c> {
 impl<'c> Table<'c> {
     /// これから作る Kind の制約の由来を設定し、前の由来を返す。呼び出し側は、制約を作る処理の後で前の由来に戻す。
     pub fn set_kind_origin(&mut self, origin: Option<KindOrigin>) -> Option<KindOrigin> {
-        self.linearity.set_origin(origin.clone());
-        self.multiplicity.set_origin(origin.clone());
         std::mem::replace(&mut self.kind_origin, origin)
+    }
+
+    pub fn kind_origin(&self) -> Option<KindOrigin> {
+        self.kind_origin.clone()
+    }
+
+    /// 線形性の制約、多重度の制約、持ち越しの制約の数。具体化の記録に、展開する位置として残す。
+    pub fn kind_counts(&self) -> (usize, usize, usize) {
+        (
+            self.linearity.constraints.len(),
+            self.multiplicity.constraints.len(),
+            self.carries.len(),
+        )
+    }
+
+    /// 段1の終わりに、集めた Kind の制約を取り出して表を捨てる。
+    pub fn into_problem(self, instances: Vec<Instance>, own: OwnVars) -> KindProblem {
+        KindProblem {
+            lin: self.linearity,
+            mult: self.multiplicity,
+            carries: self.carries,
+            instances,
+            own,
+        }
+    }
+
+    fn require_lin(&mut self, lower: Bound<Linearity>, upper: Bound<Linearity>) {
+        self.linearity
+            .require(lower, upper, self.kind_origin.clone());
+    }
+
+    fn require_mult(&mut self, lower: Bound<Multiplicity>, upper: Bound<Multiplicity>) {
+        self.multiplicity
+            .require(lower, upper, self.kind_origin.clone());
     }
 
     pub fn new(context: &'c Context) -> Table<'c> {
@@ -190,9 +213,9 @@ impl<'c> Table<'c> {
             ty_vars: Vec::new(),
             row_vars: Vec::new(),
             rigids: Vec::new(),
-            linearity: Lattice::new(Linearity::Unr),
+            linearity: Bounds::default(),
             kind_origin: None,
-            multiplicity: Lattice::new(Multiplicity::Never),
+            multiplicity: Bounds::default(),
             int: Ty(0),
             string: Ty(0),
             bool: Ty(0),
@@ -359,11 +382,5 @@ impl<'c> Table<'c> {
     /// 束縛を辿った先の形。
     pub fn shape(&self, ty: Ty) -> &TyShape {
         &self.shapes[self.resolve(ty).0 as usize]
-    }
-
-    #[allow(dead_code)] // いまは table/tests.rs だけが使う
-    pub fn row_multiplicity(&self, var: RowVar) -> Multiplicity {
-        self.multiplicity
-            .value(self.row_vars[var.0 as usize].multiplicity)
     }
 }

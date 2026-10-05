@@ -293,6 +293,42 @@ fn kinds_are_shared_within_a_strongly_connected_component() {
 }
 
 #[test]
+fn kinds_are_shared_around_a_ring_of_functions() {
+    let text = "f0 : a -> Int -> a\nf0 x n = if n == 0 then x else f1 x (n - 1)\n\nf1 : b -> Int -> b\nf1 y n = if n == 0 then y else f2 y (n - 1)\n\nf2 : c -> Int -> c\nf2 z n = if n == 0 then first z z else f0 z (n - 1)\n\nfirst : d -> d -> d\nfirst u v = u";
+    insta::assert_snapshot!(check_text(text), @r"
+    f0 : a -> Int -> a
+      kinds: a <= Unr
+      x#0 : a
+      n#1 : Int
+    f1 : b -> Int -> b
+      kinds: b <= Unr
+      y#0 : b
+      n#1 : Int
+    f2 : c -> Int -> c
+      kinds: c <= Unr
+      z#0 : c
+      n#1 : Int
+    first : d -> d -> d
+      kinds: d <= Unr
+      u#0 : d
+      v#1 : d
+    ");
+}
+
+#[test]
+fn a_reference_to_a_function_without_equations_is_checked() {
+    let text = "f : Int -> Int\n\ng : Int -> Int\ng x = f x";
+    insta::assert_snapshot!(check_text(text), @r"
+    f : Int -> Int
+    g : Int -> Int
+      x#0 : Int
+    ---
+    E1005 1:1 `f` has a signature but no equation
+      1:1 add an equation for `f` after this signature
+    ");
+}
+
+#[test]
 fn captured_values_count_inside_the_lambda_body() {
     let text = "dupper : a -> Unit -> (a -> a -> a) -> a\ndupper x = fn () g -> g x x\n\nkeeper : a -> Unit -> a\nkeeper x = fn () -> x";
     insta::assert_snapshot!(check_text(text), @r"
