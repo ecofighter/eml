@@ -144,3 +144,10 @@
 - `eml_hir/tests/lower.rs` の `constructs_of_later_stages_are_not_yet_supported` は、入力のタプルのラムダを射影のラムダに、リテラルのパターンの `match` を `let ... in` に変えた (種類1)。タプルとリテラルのパターンが E0004 でなくなったためである。後の段階の構文の E0004 を、射影と `let ... in` で確かめ続ける
 - `eml_types/tests/check.rs` の `later_stage_constructs_add_no_type_errors` は、入力のタプルのパターンとタプルを射影に変え、期待値の E0004 の行をそれに合わせた (種類1)。E0004 の跡を型検査に通しても誤りを重ねないことを、射影で確かめ続ける
 - HIR の enum に種類を足したことによる、テストの中の網羅的な `match` の追随は、期待値を変えていない (種類3)
+
+### 縦の貫通 段階5a
+
+- 線形性の誤りを E3002〜E3005 に分けたので、`tests/ui/check-fail/linearity/continuation_misuse.em` が E3001 から E3002 になり、2回目と1回目の `resume k` を指すようになった。先頭のコメントの番号も直した (種類1)
+- `eml_types/tests/effects.rs` の `a_continuation_of_a_once_operation_must_be_used_exactly_once` で、二重使用が E3002、使わない経路が E3005、`_` が E3004 になり、文言と指す場所が変わった (種類1)。節の捕獲は E3001 のまま
+- 線形性の診断の note に `files` を加えたので、`once_continuation_through_effect_argument.em` のスナップショットと、`effects.rs` のほかの E3001 のテストの note の行が変わった (種類1)
+- `ExprKind::Block` に `last_line` を足したことによる分解の追随と、`KindReason` の形の変更の追随は、期待値を変えていない (種類3)

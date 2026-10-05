@@ -127,6 +127,7 @@ HIR への変換では、名前解決に加えて、次の脱糖と検査を行�
 
 ## `eml_hir` の内部
 
+- ブロックは、fix のために最後の文の行の情報 (`LineStart`) を持つ
 - `Module` はトップレベルの関数の `Arena<Function>` を持つ。本体は関数ごとの `Body` (`exprs`、`pats`、`locals` のアリーナ) に置く。後でクエリ化したときに関数単位で再計算できるようにするため (rust-analyzer と同じ分け方)。型の注釈は、シグネチャのものを `Signature::types` に、本体のものを `Body::types` に置く。本体を書き換えてもシグネチャが変わらないようにするため
 - 型変数と row 変数の表は `Signature::generics` (`Generics`) に置く。シグネチャで定義し、本体の注釈は引くだけにする。ラムダの引数は、ラムダの本体だけで見えるスコープに入る
 - シグネチャと等式は名前で対応づけてから、並び方を検査する。シグネチャか等式のない関数も `Function` として残し (`signature` か `body` が `None`)、呼び出し側で名前の誤りを連鎖させない
@@ -151,7 +152,7 @@ HIR への変換では、名前解決に加えて、次の脱糖と検査を行�
 - シグネチャはスキーム (`scheme.rs`) で持つ。型変数と row 変数は rigid で、参照するたびに具体化し、戻り値の側の閉じた row を開く
 - 呼び出しは、たどった矢印の row を今の row に含める (`Table::include_row`)。呼び出し先の末尾が推論変数なら、その row を今の row とそのまま単一化する。閉じた末尾と rigid な末尾では、末尾を新しい row 変数に替えた row を今の row と単一化し、今の row の残りをその変数で受ける。rigid な末尾では、さらに残りの末尾が同じ rigid 変数であることを確かめる。今の row をまだ推論している途中で残りの末尾が推論変数なら、その推論変数を rigid な変数に束縛する (推論されるラムダの中の呼び出しに必要)
 - ラムダの引数の個数が合わないときや期待する型が壊れているときは、末尾が `Error` の row で本体を検査し、エフェクトの誤りを連鎖させない
-- 呼び出しグラフの SCC (`scc.rs`) を呼ばれる側から検査し、SCC ごとに使用回数のパス (`usage.rs`) で `Unr` の制約を出してから、スキームの Kind 変数を多相化する。残す制約は、内部の変数を経由した推移も含めて求める (`Lattice::residual`)。使用回数のパスは、扱うエフェクトに `multi` の操作がある handle の `return` の節が捕まえる変数にも `Unr` の制約を出す
+- 呼び出しグラフの SCC (`scc.rs`) を呼ばれる側から検査し、SCC ごとに使用回数のパス (`usage.rs`) で `Unr` の制約を出してから、スキームの Kind 変数を多相化する。残す制約は、内部の変数を経由した推移も含めて求める (`Lattice::residual`)。使用回数のパスは、扱うエフェクトに `multi` の操作がある handle の `return` の節が捕まえる変数にも `Unr` の制約を出す。使った位置と使わなかった経路を Kind の制約の由来に入れ、報告が由来から E3001〜E3005 を選ぶ
 - 部分適用のクロージャの線形性は、それまでの引数と捕まえた値の Kind 以上になる (`Table::closure_kinds`)
 - `TypedModule::signatures` は、関数の型と、スキームに残った Kind の制約のうち定数を片側に持つもの (`Scheme::constraints`) を持つ。`dump` はこれを `kinds:` の行に出す
 - 型の表は `table/` に分ける。`mod.rs` は型と変数の格納、`unify.rs` は型の単一化、`row.rs` は row の単一化と `include_row`、`kinds.rs` は Kind の制約、`copy.rs` はスキームの具体化の写し、`export.rs` は外に出す型への変換である。型の形は `TyShape`、関数の矢印の線形性は `ArrowLin` と呼び、Kind (線形性と多重度) と取り違えないようにする
@@ -168,12 +169,13 @@ HIR への変換では、名前解決に加えて、次の脱糖と検査を行�
 - 継続の型は `TyShape::Cont` (操作の結果の型、継続の線形性、handle の外側の row、handle の結果の型) で、外に出す型は `Type::Cont` である。`once` の操作の `k` の線形性は `Lin`、`multi` の操作の `k` は `Unr` である
 - 操作のスキームは、組み込みと同じ経路で作る。シグネチャの外側の最後の矢印に、操作のエフェクトだけの row を付ける (`scheme::lower_operation`)。エフェクトの多重度は操作の多重度の最大である。row のラベルの型引数は、エフェクトの型引数の rigid 変数である。操作の引数の型の Kind 変数を `Unr` に固定する `Table::unrestricted` は、エフェクトの型引数の Kind 変数を外す
 - handle の検査は `check/handle.rs` にある。本体は今の row の前に扱うエフェクトを足した row で、節は今の row で検査する。handle ごとにエフェクトの型引数を新しい推論用の変数にし、節ではエフェクトの型引数をその変数に、操作自身の型変数だけを新しい rigid 変数にする (`Rigids::with_effect_args`)。`resume` は、推論用の変数でできた継続の型と単一化してから、関数の呼び出しと同じく row を今の row に含める
-- Kind の制約は由来 (`KindOrigin`) を持つ。型の表が「今の由来」を持ち、制約を作るときに記録する。本体の検査は単一化、呼び出しと `resume` の row の包含 (`include_call_row`)、参照の具体化の前後で、使用回数のパスは `Unr` の制約の前後で、今の由来を設定する。`solve_kinds` は破れた制約の由来を返し、`check` が E3001 にする。報告済みの誤りの跡 (`Missing`) がある本体では、使用回数のパスは由来を記録しない。由来のない制約は、宣言の型から作る制約 (具体化のたびに由来を付けて複写する) と、この記録しない制約に限り、`solve_kinds` は返さない
+- Kind の制約は由来 (`KindOrigin`) を持つ。型の表が「今の由来」を持ち、制約を作るときに記録する。本体の検査は単一化、呼び出しと `resume` の row の包含 (`include_call_row`)、参照の具体化の前後で、使用回数のパスは `Unr` の制約の前後で、今の由来を設定する。`solve_kinds` は破れた制約の由来を返し、`check` が E3001 にする。報告済みの誤りの跡 (`Missing`) がある本体と、型の誤りを報告済みの本体 (`check/mod.rs` の `well_typed` が偽) では、使用回数のパスは由来を記録しない。HIR の誤りがある本体でも記録しない。由来のない制約は、宣言の型から作る制約 (具体化のたびに由来を付けて複写する) と、この記録しない制約に限り、`solve_kinds` は返さない
 
 ## `eml_core_ir`、`eml_runtime`、`eml_interp` の内部
 
 - Core IR とインタプリタの設計は [Core IR とインタプリタ](../spec/core-ir.md)、ヒープと RC は [ランタイム](../spec/runtime.md) が定める
 - インタプリタの値とフレームに `Rc` と `RefCell` を使わない。Core IR は `Arc<Program>` で読み取り専用で共有する。将来、複数のスレッドがそれぞれの CEK 機械で同じプログラムを実行するため ([マルチコア対応の設計](../future/multicore.md))
+- `RunConfig::file_root` が `open` の基準ディレクトリである。既定の空のパスは、カレントディレクトリを指す。`File` の中身は `eml_runtime` の `file.rs` の `FileHandle` で、実行時エラーは `Fault::{FileOpen, FileRead, FileNotUtf8}` である
 - パスの順番は `pipeline.rs` だけが持つ。`lower_until` は、変換 (`translate/`)、`simplify`、Perceus を順にかけ、指定したパスの直後で止める。RC の命令を入れる前のパスの後では、`liveness::analyze` で `captures` を埋め直してから `verify_scopes` をかけ、Perceus の後では `verify` をかける。検査はデバッグビルドだけで、誤りはパスの名前を付けた panic にする
 - 変換は `translate/` にある。`mod.rs` は式の値の渡し先と join point の組み立てという制御の骨組み、`expr.rs` は式ごとの変換と呼び出しの場合分け、`program.rs` は関数の表 (`ProgramBuilder`)、組み込みと操作を包む関数、入口の関数、エフェクトの表、`types.rs` は型から決まる変数の性質 (`boxed`) と組み込みの変換の種類 (`lowering`) を持つ。`pattern.rs` は `match` と、`let`・ラムダ・等式の引数のパターンを決定木にコンパイルする。列の頭はコンストラクタ、タプル、リテラルで、リテラルの列は比べるプリミティブと `Bool` の `switch` の連なりにする
 - Core IR の関数は、ANF の木をアリーナに置き、`CExprId` で参照する。継続のフレームが再開する位置を ID で持てるようにするため。変換は式の値の渡し先 (`Exit::Return` か `Exit::Jump`) を持って回り、末尾の `if` は各枝が返す `Switch` に、末尾にない `if` は続きを本体にした join point (`CExpr::Join`) にする。末尾にない `if` は、`tail` で条件の計算ごと join point の範囲を組み立てる。`CoreFn::joins` は `JoinId` から `Join` の式を引く索引で、アリーナは Perceus が作り直す。値を返すだけの呼び出しは `TailCall` にする

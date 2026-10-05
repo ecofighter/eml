@@ -57,6 +57,11 @@ effect Fail where
 | `close` | `File -> <IO> Unit` |
 | `File` | 組み込みの線形型 (`Lin`)。破棄処理は `close` |
 
+- `open` の相対パスは、実行の設定 (`RunConfig::file_root`) の基準ディレクトリから解釈する。CLI の `run` はカレントディレクトリを基準にする。絶対パスはそのまま開く。
+- `read_all` は現在の位置から最後までを UTF-8 として読み、同じ `File` と組にして返す。
+- `close f` と `drop f` は、どちらも `File` の破棄処理 (オブジェクトの解放) を呼ぶ。
+- 開けない、読めない、UTF-8 でないときは実行時エラーにする ([Core IR とインタプリタ](core-ir.md))。
+
 組み込みのリソースは、どのスレッドで後始末してもよいものに限る。現状の `File` はこれを満たす ([マルチコア対応の設計](../future/multicore.md))。
 
 ## handler の意味

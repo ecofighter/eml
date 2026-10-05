@@ -39,7 +39,7 @@ struct Diagnostic {
 
 ## 割り当て済みの番号
 
-E0xxx は `eml_syntax::codes` (E0004 だけは `eml_diagnostics`)、E1xxx は `eml_hir::codes`、E2xxx は `eml_types::codes` に置く。E3001 は `eml_types::codes` に置く。E4xxx は `eml_types::codes` に置く。E3xxx の残りの番号は、線形性の検査を実装するときに割り当てる。
+E0xxx は `eml_syntax::codes` (E0004 だけは `eml_diagnostics`)、E1xxx は `eml_hir::codes`、E2xxx は `eml_types::codes` に置く。E3xxx は `eml_types::codes` に置く。E4xxx は `eml_types::codes` に置く。持ち越し規則の番号は段階5b で、射影と更新の番号は S2 で割り当てる。
 
 | 番号 | 定数 | 内容 |
 |---|---|---|
@@ -79,7 +79,11 @@ E0xxx は `eml_syntax::codes` (E0004 だけは `eml_diagnostics`)、E1xxx は `e
 | E2004 | `INVALID_MAIN_TYPE` | `main` のシグネチャが `Unit -> <IO> Unit` でない |
 | E2005 | `INFINITE_TYPE` | 無限の型 (単一化の occurs check)。row のラベルの型引数を通して、型変数か row 変数が自分自身の中に現れる場合を含む。呼び出しの row で起きたときは、呼び出しを指す |
 | E2006 | `NOT_COMPARABLE` | `==` か `!=` で、`Int`、`String`、`Bool` のどれでもない型の値を比べた。演算子を primary にし、比べようとした型をメッセージに出す。note で比べられる型を示す |
-| E3001 | `LINEAR_VALUE_MISUSED` | 線形な値 (`once` の操作の `k` と、それを捕まえたクロージャ) を、ちょうど1回でなく使った。違反した Kind の制約の由来を指す。`multi` の操作を持つ handler の `return` の節が捕まえた場合を含む |
+| E3001 | `LINEAR_VALUE_MISUSED` | 線形な値の誤った使い方のうち、E3002〜E3005 に当たらないもの (関数への受け渡し、型の単一化、ラムダや節の捕獲)。違反した Kind の制約の由来を指す。`multi` の操作を持つ handler の `return` の節が捕まえた場合を含む |
+| E3002 | `LINEAR_VALUE_USED_TWICE` | 線形な値を、ある経路で2回以上使った。2回目に使った位置を primary、1回目を secondary にする |
+| E3003 | `LINEAR_VALUE_NOT_CONSUMED` | 線形な値を、ある経路で使わなかった。束縛した位置を primary、使わなかった枝、省いた `else`、またはスコープの終わりを secondary にする。help で `drop` を提案し、使わなかった経路がブロックなら、その最後の文の前に `drop x` の行を入れる fix を付ける |
+| E3004 | `LINEAR_VALUE_DISCARDED` | 線形な値を `_` で受けた。パターンを指す |
+| E3005 | `CONTINUATION_NOT_HANDLED` | `once` の操作の節の `k` を、ある経路で `resume` も `drop` もしなかった。節を primary、`k` の束縛を secondary にする |
 | E4001 | `NON_EXHAUSTIVE_MATCH` | 網羅されていない `match` |
 | E4002 | `NON_EXHAUSTIVE_EQUATION` | 網羅されていない等式 |
 | E4003 | `REFUTABLE_PATTERN` | 反駁可能な `let` の左辺、ラムダの引数、handler の節の引数と `return` の節の引数のパターン |
@@ -96,7 +100,7 @@ E0004 (`NOT_YET_SUPPORTED`) は、構文の段階 (S2、S3) で未対応の構�
 | E0xxx | 閉じていない補間 |
 | E1xxx | 等式が連続していない、シグネチャと等式が隣り合っていない、等式ごとの引数の個数の違い、fixity の衝突と重複、優先順位の合わないセクション、ブロックの最後の `use`、修飾なしの名前の衝突 |
 | E2xxx | `resume` の引数の個数が `k` の状態の欄と合わない (状態のある handler の `k` を2引数で、状態のない `k` を3引数で再開した)。primary は `resume` の式で、状態のある `k` なら次の状態を3つ目の引数で渡すよう、状態のない `k` なら3つ目の引数を除くよう伝える |
-| E3xxx | 射影で `Lin` な残りを捨てる、更新で `Lin` な古い値を捨てる |
+| E3xxx | 射影で `Lin` な残りを捨てる、更新で `Lin` な古い値を捨てる、`multi` の呼び出しをまたぐ線形な変数 (段階5b) |
 
 シグネチャに関する E1xxx の診断には、シグネチャの追加を提案する help を付ける ([宣言](declarations.md))。
 
@@ -119,8 +123,8 @@ E0004 (`NOT_YET_SUPPORTED`) は、構文の段階 (S2、S3) で未対応の構�
 
 | 番号 | 誤り | 重大度 | 指す場所 |
 |---|---|---|---|
-| E4001 | 網羅されていない `match` | Error | `match` 式。漏れているパターンの例を note で示し、fix で枝の追加を提案する (fix は段階5の線形性の fix と一緒に入れる) |
-| E4002 | 網羅されていない等式 | Error | primary はシグネチャの関数名 (シグネチャがなければ最初の等式の関数名)、secondary は各等式の先頭。漏れている引数の並びの例 (`f None _`) を note で示し、fix で最後の等式の後への等式の追加を提案する (fix は段階5の線形性の fix と一緒に入れる) |
+| E4001 | 網羅されていない `match` | Error | `match` 式。漏れているパターンの例を note で示し、fix で枝の追加を提案する (fix は、どの型にもなる仮置きの式を言語に入れるときに一緒に入れる) |
+| E4002 | 網羅されていない等式 | Error | primary はシグネチャの関数名 (シグネチャがなければ最初の等式の関数名)、secondary は各等式の先頭。漏れている引数の並びの例 (`f None _`) を note で示し、fix で最後の等式の後への等式の追加を提案する (fix は、どの型にもなる仮置きの式を言語に入れるときに一緒に入れる) |
 | E4004 | 到達しない枝 | Warning | その枝のパターン |
 | なし | 到達しない等式 | Warning | その等式の引数のパターン |
 | E4003 | 反駁可能な `let` / ラムダの引数 / handler の節と `return` の節の引数のパターン | Error | そのパターン |
@@ -131,4 +135,4 @@ E0004 (`NOT_YET_SUPPORTED`) は、構文の段階 (S2、S3) で未対応の構�
 
 ## 連鎖する診断の抑止
 
-パーサは壊れた入力に対して `ERROR` ノードを作って処理を続ける。名前解決以降は、エラーが起きた場所に `Error` 型を入れ、`Error` が関わる制約や線形性の検査からは追加の診断を出さない ([コンパイラの構成](../implementation/architecture.md))。
+パーサは壊れた入力に対して `ERROR` ノードを作って処理を続ける。名前解決以降は、エラーが起きた場所に `Error` 型を入れ、`Error` が関わる制約や線形性の検査からは追加の診断を出さない ([コンパイラの構成](../implementation/architecture.md))。使用回数のパスが出す線形性の診断 (E3001〜E3005) は、HIR の誤りがある本体、誤りの跡 (`Missing`) がある本体、型の誤りを報告済みの本体からは出さない。使った回数を正しく数えられないためである。
