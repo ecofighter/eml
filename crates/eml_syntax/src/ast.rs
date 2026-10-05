@@ -324,6 +324,60 @@ impl LetStmt {
     }
 }
 
+impl UseStmt {
+    /// `use p <- e` の `p`。`<-` がなければ `None`。
+    pub fn pat(&self) -> Option<Pat> {
+        support::child(&self.syntax)
+    }
+
+    pub fn expr(&self) -> Option<Expr> {
+        support::child(&self.syntax)
+    }
+}
+
+impl LetExpr {
+    pub fn pat(&self) -> Option<Pat> {
+        support::child(&self.syntax)
+    }
+
+    pub fn ty(&self) -> Option<Type> {
+        support::child(&self.syntax)
+    }
+
+    /// `in` の前の式。
+    pub fn init(&self) -> Option<Expr> {
+        self.split_at_in().0
+    }
+
+    /// `in` の後の式。
+    pub fn body(&self) -> Option<Expr> {
+        self.split_at_in().1
+    }
+
+    /// 片方の式が欠けても取り違えないよう、`in` の位置で分ける。
+    fn split_at_in(&self) -> (Option<Expr>, Option<Expr>) {
+        let in_start = self
+            .syntax
+            .children_with_tokens()
+            .filter_map(NodeOrToken::into_token)
+            .find(|token| token.kind() == SyntaxKind::IN_KW)
+            .map(|token| token.text_range().start());
+        let mut before = None;
+        let mut after = None;
+        for expr in support::children::<Expr>(&self.syntax) {
+            match in_start {
+                Some(start) if expr.range().start() >= start => {
+                    after.get_or_insert(expr);
+                }
+                _ => {
+                    before.get_or_insert(expr);
+                }
+            }
+        }
+        (before, after)
+    }
+}
+
 impl ExprStmt {
     pub fn expr(&self) -> Option<Expr> {
         support::child(&self.syntax)

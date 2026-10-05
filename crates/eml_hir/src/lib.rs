@@ -35,4 +35,5 @@ pub mod codes {
     pub const DUPLICATE_FIXITY: ErrorCode = ErrorCode(1021);
     pub const FIXITY_WITHOUT_DEFINITION: ErrorCode = ErrorCode(1022);
     pub const INVALID_SECTION: ErrorCode = ErrorCode(1023);
+    pub const USE_AT_END_OF_BLOCK: ErrorCode = ErrorCode(1024);
 }

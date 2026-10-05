@@ -99,11 +99,13 @@ fn constructs_of_later_stages_are_not_yet_supported() {
     f x#0 = {
       let first#2 = (fn t#1 -> <missing>)
       let plus#5 = (fn $a#3 $b#4 -> (+ $a#3 $b#4))
-      <missing>
+      {
+        let y#6 = x#0
+        y#6
+      }
     }
     ---
     E0004 3:23 field access is not supported yet
-    E0004 5:3 `let ... in` is not supported yet
     ");
 }
 
@@ -228,4 +230,44 @@ fn equations_must_take_the_same_number_of_arguments() {
             "E1001 4:9 cannot find value `undefined_name`",
         ]
     );
+}
+
+#[test]
+fn use_passes_the_rest_of_the_block_as_the_last_argument() {
+    let text = "wrap : Int -> (Unit -> Int) -> Int\nwrap n k = k ()\n\nbind : (Int -> Int) -> Int\nbind k = k 1\n\nf : Unit -> Int\nf () =\n  use wrap 1\n  use x <- bind\n  x + 2";
+    insta::assert_snapshot!(lower_text(text), @r"
+    wrap : Int -> (Unit -> Int) -> Int
+    wrap n#0 k#1 = (k#1 ())
+    bind : (Int -> Int) -> Int
+    bind k#0 = (k#0 1)
+    f : Unit -> Int
+    f () = {
+      (@wrap 1 (fn () -> {
+        (@bind (fn x#0 -> {
+          (+ x#0 2)
+        }))
+      }))
+    }
+    ");
+}
+
+#[test]
+fn use_at_the_end_of_a_block_has_nothing_to_wrap() {
+    let text = "wrap : (Unit -> Int) -> Int\nwrap k = k ()\n\nf : Unit -> Int\nf () =\n  let a = 1\n  use wrap";
+    assert_eq!(
+        diagnostics(text),
+        vec!["E1024 7:3 a `use` must be followed by the rest of its block"]
+    );
+}
+
+#[test]
+fn let_in_is_a_block_with_one_let() {
+    let text = "f : Int -> Int\nf x = let y : Int = x + 1 in y * 2";
+    insta::assert_snapshot!(lower_text(text), @r"
+    f : Int -> Int
+    f x#0 = {
+      let y#1 : Int = (+ x#0 1)
+      (* y#1 2)
+    }
+    ");
 }

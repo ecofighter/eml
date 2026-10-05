@@ -261,7 +261,21 @@ impl<'a> BodyLowering<'a> {
             ast::Expr::MatchExpr(e) => self.lower_match(&e, range),
             ast::Expr::HandleExpr(e) => self.lower_handle(&e, range),
             ast::Expr::LetExpr(e) => {
-                self.unsupported(e.keyword_range(), "`let ... in` is not supported yet")
+                // ブロックの `let` と同じく右辺を先に変換し、束縛は `in` の後の式でだけ見える (docs/spec/expressions.md)
+                let mark = self.scope.len();
+                let init = self.lower_expr(e.init(), range);
+                let ty = e.ty().map(|ty| self.lower_type(Some(ty), range));
+                let pat = self.lower_pat(e.pat(), range);
+                let tail = self.lower_expr(e.body(), range);
+                self.scope.truncate(mark);
+                self.alloc(
+                    ExprKind::Block {
+                        stmts: vec![Stmt::Let { pat, ty, init }],
+                        tail: Some(tail),
+                        last_line: None,
+                    },
+                    range,
+                )
             }
             ast::Expr::ResumeExpr(e) => self.lower_resume(&e, range),
             ast::Expr::DropExpr(e) => self.lower_drop(&e, range),
@@ -373,8 +387,15 @@ impl<'a> BodyLowering<'a> {
     }
 
     fn lower_block(&mut self, block: &ast::Block, range: TextRange) -> ExprId {
-        let mark = self.scope.len();
         let all: Vec<ast::Stmt> = block.stmts().collect();
+        self.lower_stmts(&all, range)
+    }
+
+    /// 文の並びをブロックにする。`use` の文に出会ったら、残りの文を包んだラムダを最後の引数に足した呼び出しを、この
+    /// ブロックの値にする (docs/spec/expressions.md の「`use`」)。
+    fn lower_stmts(&mut self, all: &[ast::Stmt], range: TextRange) -> ExprId {
+        let mark = self.scope.len();
+        let mut end = all.len();
         let mut stmts = Vec::new();
         let mut tail = None;
         for (index, stmt) in all.iter().enumerate() {
@@ -396,12 +417,14 @@ impl<'a> BodyLowering<'a> {
                     stmts.push(Stmt::Let { pat, ty, init });
                 }
                 ast::Stmt::UseStmt(stmt) => {
-                    self.unsupported(stmt.keyword_range(), "`use` is not supported yet");
+                    tail = Some(self.lower_use(stmt, &all[index + 1..], range));
+                    end = index + 1;
+                    break;
                 }
             }
         }
         self.scope.truncate(mark);
-        let last_line = all.last().and_then(|stmt| {
+        let last_line = all[..end].last().and_then(|stmt| {
             Some(LineStart {
                 offset: stmt.range().start(),
                 indent: stmt.line_indent()?,
@@ -415,6 +438,52 @@ impl<'a> BodyLowering<'a> {
             },
             range,
         )
+    }
+
+    /// `use f a b` を `f a b (fn () -> 残り)` に、`use p <- f a b` を `f a b (fn p -> 残り)` にする。ラムダと残りの
+    /// ブロックの範囲は、`use` の文の始まりからブロックの終わりまでである。
+    fn lower_use(
+        &mut self,
+        stmt: &ast::UseStmt,
+        rest: &[ast::Stmt],
+        block_range: TextRange,
+    ) -> ExprId {
+        let stmt_range = stmt.range();
+        let callee = self.lower_expr(stmt.expr(), stmt_range);
+        if rest.is_empty() {
+            self.diagnostics.push(
+                Diagnostic::error(
+                    codes::USE_AT_END_OF_BLOCK,
+                    "a `use` must be followed by the rest of its block",
+                    Label::new(self.file, stmt_range, "nothing follows this `use`"),
+                )
+                .with_help(
+                    "write the code that the `use` wraps after it, or call the function directly",
+                ),
+            );
+            // 包む残りがないので、最後の引数を Missing にして型の誤りを連鎖させない
+            let missing = self.alloc(ExprKind::Missing, stmt_range);
+            return self.call(callee, vec![missing], None, stmt_range);
+        }
+        let wrapped = TextRange::new(stmt_range.start(), block_range.end());
+        let mark = self.scope.len();
+        let param = match stmt.pat() {
+            Some(pat) => self.lower_pat(Some(pat), stmt_range),
+            None => self.pats.alloc(Pat {
+                kind: PatKind::Unit,
+                range: stmt_range,
+            }),
+        };
+        let body = self.lower_stmts(rest, wrapped);
+        self.scope.truncate(mark);
+        let lambda = self.alloc(
+            ExprKind::Lambda {
+                params: vec![param],
+                body,
+            },
+            wrapped,
+        );
+        self.call(callee, vec![lambda], None, wrapped)
     }
 
     fn lower_match(&mut self, expr: &ast::MatchExpr, range: TextRange) -> ExprId {

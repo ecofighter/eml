@@ -1,0 +1,14 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: rendered
+input_file: tests/ui/check-fail/names/use_at_end_of_block.em
+---
+[E1024] Error: a `use` must be followed by the rest of its block
+   ╭─[ check-fail/names/use_at_end_of_block.em:8:3 ]
+   │
+ 8 │   use wrap
+   │   ────┬───  
+   │       ╰───── nothing follows this `use`
+   │ 
+   │ Help: write the code that the `use` wraps after it, or call the function directly
+───╯

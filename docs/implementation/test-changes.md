@@ -176,3 +176,4 @@
 - 複数の等式を `match` に脱糖するようになったので、`eml_hir/tests/lower.rs` の `signatures_and_equations_are_paired_by_name` から、複数の等式の E0004 の行が消え、`d` が `d = (match () with | () -> 3 | () -> 4)` と表示されるようになった (種類1)
 - 演算子の参照を `fn` に脱糖するようになったので、`eml_hir/tests/lower.rs` の `constructs_of_later_stages_are_not_yet_supported` から、演算子の参照の E0004 の行が消え、`plus` が `(fn $a#3 $b#4 -> (+ $a#3 $b#4))` と表示されるようになった。隠しの引数が局所変数の番号を使うので、`plus` の番号は `#3` から `#5` に変わった。`let ... in` の E0004 は残る (種類1)
 - 同じ理由で、`eml_types/tests/check.rs` の `later_stage_constructs_add_no_type_errors` から、演算子の参照の E0004 の2行が消え、`plus` の型が `Int -> <_> Int -> <_> Int` になり、隠しの引数 `$a`、`$b` の `Int` が出力に加わった (種類1)
+- `let ... in` を脱糖するようになったので、`eml_hir/tests/lower.rs` の `constructs_of_later_stages_are_not_yet_supported` から `let ... in` の E0004 の行が消え、`let y = x in y` が1つの `let` を持つ入れ子のブロックとして表示されるようになった (種類1)
