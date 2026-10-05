@@ -43,7 +43,8 @@ impl Simplify<'_> {
     /// F: join point の本体の先頭に並ぶ join point の定義を、外側の join point の引数を使わなければ、外側の定義の位置へ
     /// 出す。外側の本体は外へ出した join point の範囲に入るので、本体の中の jump はそのまま届く。外へ出す本体は外側の
     /// 引数を使わず、外側の本体の中で束縛した変数も使えない (先頭に並ぶので、その前に束縛はない) ので、外側の定義の位置
-    /// でも範囲にある変数しか使わない。式の ID を入れ替えるだけなので、親の表は変わらない。
+    /// でも範囲にある変数しか使わない。祖父母が指す式の ID は同じ位置に残るので、この2つの式の外で子の指す先を
+    /// 書き換える式はない。F は親の表を持たず、後の書き換えが表を作り直す。
     fn float_joins(&mut self) {
         for index in 0..self.function.joins.len() {
             let mut node = self.function.joins[index];

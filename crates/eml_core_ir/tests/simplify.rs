@@ -602,3 +602,40 @@ fn a_known_and_an_unknown_jump_share_an_arm_that_uses_the_whole_value() {
     }
     ");
 }
+
+#[test]
+fn a_remaining_arm_that_uses_the_scrutinee_stays_inside_the_join_point() {
+    // 残りの枝の join point が scrutinee (外側の join point の引数) を使うので、F は外へ出せず、B2 は本体の `switch` に届かない。
+    // docs/implementation/status.md に残る制限
+    let text = "data Color = | Red | Green | Blue\n\ncode : Color -> Int\ncode c = 7\n\npick : Bool -> Int\npick b =\n  let n = match (if b then Red else Green) with\n    | Red -> 1\n    | x -> code x\n  n + 1\n\nmain : Unit -> <IO> Unit\nmain () = ()";
+    let pick = function(&core_text(text, Pass::Simplify), "pick");
+    insta::assert_snapshot!(pick, @"
+    fn pick(b0) {
+      join j0(t4) [] {
+        let t5 = prim +(t4, 1)
+        return t5
+      }
+      join j1(t1) [] {
+        join j2() [t1] {
+          let x2 = t1
+          let t3 = call code(x2)
+          jump j0(t3)
+        }
+        switch t1 {
+          #0 ->
+            jump j0(1)
+          #1 ->
+            jump j2()
+          #2 ->
+            jump j2()
+        }
+      }
+      switch b0 {
+        #0 ->
+          jump j1(#1)
+        #1 ->
+          jump j1(#0)
+      }
+    }
+    ");
+}
