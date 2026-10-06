@@ -6,9 +6,8 @@ use eml_hir::builtin::Builtin;
 use eml_hir::{ConstructorId, EffectId, Module, OpMultiplicity, OperationId};
 use eml_types::{Type, TypedModule};
 
-use crate::{
-    Atom, CExpr, CExprId, Call, CoreFn, EffectInfo, FnIdx, OperationInfo, Rhs, VarId, VarInfo,
-};
+use crate::builder::FnBuilder;
+use crate::{Atom, CExpr, Call, CoreFn, EffectInfo, FnIdx, OperationInfo, Rhs, VarId};
 
 use super::types::{Lowering, lowering, split_arrows, var_info};
 
@@ -85,22 +84,16 @@ impl ProgramBuilder {
             .get(&op)
             .expect("every operation has a scheme");
         let (param_types, _) = split_arrows(ty, arity);
-        let vars = param_types
+        let mut builder = FnBuilder::new();
+        let params: Vec<VarId> = param_types
             .iter()
-            .map(|ty| var_info("p", ty, module))
+            .map(|ty| builder.var(var_info("p", ty, module)))
             .collect();
         let function = self.reserve(arity);
         self.operation_wrappers.insert(op, function);
-        let params: Vec<VarId> = (0..arity as u32).map(VarId).collect();
         let args = params.iter().map(|&param| Atom::Var(param)).collect();
-        let core = CoreFn {
-            name: format!("op${}", operation.name),
-            params,
-            vars,
-            body: CExprId(0),
-            exprs: vec![CExpr::TailCall(perform_call(module, op, args))],
-            joins: Vec::new(),
-        };
+        let body = builder.push(CExpr::TailCall(perform_call(module, op, args)));
+        let core = builder.finish(format!("op${}", operation.name), params, body);
         self.finish(function, core);
         function
     }
@@ -123,33 +116,24 @@ impl ProgramBuilder {
             .get(&ctor)
             .expect("every constructor has a scheme");
         let (param_types, result_type) = split_arrows(ty, arity);
-        let mut vars: Vec<VarInfo> = param_types
+        let mut builder = FnBuilder::new();
+        let params: Vec<VarId> = param_types
             .iter()
-            .map(|ty| var_info("p", ty, module))
+            .map(|ty| builder.var(var_info("p", ty, module)))
             .collect();
-        vars.push(var_info("d", &result_type, module));
+        let result = builder.var(var_info("d", &result_type, module));
         let function = self.reserve(arity);
         self.constructor_wrappers.insert(ctor, function);
-        let params: Vec<VarId> = (0..arity as u32).map(VarId).collect();
-        let result = VarId(arity as u32);
-        let core = CoreFn {
-            name: format!("con${}", constructor.name),
-            params: params.clone(),
-            vars,
-            body: CExprId(1),
-            exprs: vec![
-                CExpr::Return(Atom::Var(result)),
-                CExpr::Let {
-                    var: result,
-                    rhs: Rhs::Con {
-                        tag: constructor.tag,
-                        args: params.into_iter().map(Atom::Var).collect(),
-                    },
-                    body: CExprId(0),
-                },
-            ],
-            joins: Vec::new(),
-        };
+        let ret = builder.push(CExpr::Return(Atom::Var(result)));
+        let body = builder.push(CExpr::Let {
+            var: result,
+            rhs: Rhs::Con {
+                tag: constructor.tag,
+                args: params.iter().copied().map(Atom::Var).collect(),
+            },
+            body: ret,
+        });
+        let core = builder.finish(format!("con${}", constructor.name), params, body);
         self.finish(function, core);
         function
     }
@@ -173,30 +157,19 @@ impl ProgramBuilder {
     pub(super) fn entry(&mut self, module: &Module, main: FnIdx, main_type: &Type) -> FnIdx {
         let function = self.reserve(0);
         let unit = vec![Atom::Unit];
-        let (vars, exprs) = if self.arity(main) == 0 {
-            let value = VarId(0);
-            (
-                vec![var_info("f", main_type, module)],
-                vec![
-                    CExpr::TailCall(Call::Apply(Atom::Var(value), unit)),
-                    CExpr::Let {
-                        var: value,
-                        rhs: Rhs::call(Call::Direct(main, Vec::new())),
-                        body: CExprId(0),
-                    },
-                ],
-            )
+        let mut builder = FnBuilder::new();
+        let body = if self.arity(main) == 0 {
+            let value = builder.var(var_info("f", main_type, module));
+            let apply = builder.push(CExpr::TailCall(Call::Apply(Atom::Var(value), unit)));
+            builder.push(CExpr::Let {
+                var: value,
+                rhs: Rhs::call(Call::Direct(main, Vec::new())),
+                body: apply,
+            })
         } else {
-            (Vec::new(), vec![CExpr::TailCall(Call::Direct(main, unit))])
+            builder.push(CExpr::TailCall(Call::Direct(main, unit)))
         };
-        let core = CoreFn {
-            name: "entry$main".to_string(),
-            params: Vec::new(),
-            vars,
-            body: CExprId(exprs.len() as u32 - 1),
-            exprs,
-            joins: Vec::new(),
-        };
+        let core = builder.finish("entry$main".to_string(), Vec::new(), body);
         self.finish(function, core);
         function
     }
@@ -214,16 +187,13 @@ impl ProgramBuilder {
         let (param_types, result_type) = split_arrows(ty, arity);
         let function = self.reserve(arity);
         self.wrappers.insert(builtin, function);
-        let mut vars: Vec<VarInfo> = param_types
+        let mut builder = FnBuilder::new();
+        let params: Vec<VarId> = param_types
             .iter()
-            .map(|ty| var_info("p", ty, module))
+            .map(|ty| builder.var(var_info("p", ty, module)))
             .collect();
-        let params: Vec<VarId> = (0..arity as u32).map(VarId).collect();
         let atoms: Vec<Atom> = params.iter().map(|&param| Atom::Var(param)).collect();
-        let mut fresh = |ty: &Type| {
-            vars.push(var_info("t", ty, module));
-            VarId(vars.len() as u32 - 1)
-        };
+        let mut fresh = |ty: &Type| builder.var(var_info("t", ty, module));
         let (steps, last): (Vec<(VarId, Rhs)>, CExpr) = match lowering(builtin) {
             Lowering::Prim(op) => {
                 let result = fresh(&result_type);
@@ -254,20 +224,11 @@ impl ProgramBuilder {
                 )
             }
         };
-        let mut exprs = vec![last];
-        let mut body = CExprId(0);
+        let mut body = builder.push(last);
         for (var, rhs) in steps.into_iter().rev() {
-            exprs.push(CExpr::Let { var, rhs, body });
-            body = CExprId(exprs.len() as u32 - 1);
+            body = builder.push(CExpr::Let { var, rhs, body });
         }
-        let core = CoreFn {
-            name: format!("builtin${}", builtin.name()),
-            params,
-            vars,
-            body,
-            exprs,
-            joins: Vec::new(),
-        };
+        let core = builder.finish(format!("builtin${}", builtin.name()), params, body);
         self.finish(function, core);
         function
     }

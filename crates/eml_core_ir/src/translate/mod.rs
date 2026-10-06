@@ -11,9 +11,8 @@ use eml_hir::{Body, ExprId, ExprKind, FunctionId, LocalId, Module, PatId, Stmt};
 use eml_types::{BodyTypes, Type, TypedModule};
 use la_arena::ArenaMap;
 
-use crate::{
-    Arm, Atom, CExpr, CExprId, CoreFn, FALSE, FnIdx, JoinId, Program, Rhs, TRUE, VarId, VarInfo,
-};
+use crate::builder::FnBuilder;
+use crate::{Arm, Atom, CExpr, CExprId, CoreFn, FALSE, FnIdx, JoinId, Program, Rhs, TRUE, VarId};
 
 use pattern::needs_decision_tree;
 use program::{ProgramBuilder, effect_table};
@@ -56,10 +55,8 @@ pub(crate) fn translate(module: &Module, typed: &TypedModule) -> Program {
             root_name: &function.name,
             lambdas: &mut lambdas,
             handlers: &mut handlers,
-            exprs: Vec::new(),
-            vars: Vec::new(),
+            builder: FnBuilder::new(),
             locals: ArenaMap::default(),
-            joins: Vec::new(),
         }
         .lower(&function.name, &[], &params, body.root);
         builder.finish(indices[id], core);
@@ -133,11 +130,8 @@ struct FnLowering<'a> {
     lambdas: &'a mut u32,
     /// handle の本体と節の関数の名前に使う、トップレベルの関数の中の handle の数。
     handlers: &'a mut u32,
-    exprs: Vec<CExpr>,
-    vars: Vec<VarInfo>,
+    builder: FnBuilder,
     locals: ArenaMap<LocalId, Atom>,
-    /// `JoinId` から `Join` の式への索引。`seq` が join point を組み立てたときに埋める。
-    joins: Vec<Option<CExprId>>,
 }
 
 impl FnLowering<'_> {
@@ -178,18 +172,7 @@ impl FnLowering<'_> {
             self.destructure(pat, Atom::Var(var), ty, &mut bindings);
         }
         let root = self.tail_after(bindings, root, Exit::Return);
-        CoreFn {
-            name: name.to_string(),
-            params: vars,
-            vars: self.vars,
-            body: root,
-            exprs: self.exprs,
-            joins: self
-                .joins
-                .into_iter()
-                .map(|join| join.expect("every join point is built"))
-                .collect(),
-        }
+        self.builder.finish(name.to_string(), vars, root)
     }
 
     /// `root` を、捕まえた変数を先頭の引数に持つ関数に持ち上げ、そのクロージャを作る (docs/spec/core-ir.md)。ラムダと、
@@ -225,10 +208,8 @@ impl FnLowering<'_> {
             root_name: self.root_name,
             lambdas: &mut *self.lambdas,
             handlers: &mut *self.handlers,
-            exprs: Vec::new(),
-            vars: Vec::new(),
+            builder: FnBuilder::new(),
             locals: ArenaMap::default(),
-            joins: Vec::new(),
         }
         .lower(&name, &captured, params, root);
         self.program.finish(function, core);
@@ -248,19 +229,15 @@ impl FnLowering<'_> {
     }
 
     fn new_var(&mut self, name: &str, ty: &Type) -> VarId {
-        self.vars.push(var_info(name, ty, self.module));
-        VarId(self.vars.len() as u32 - 1)
+        self.builder.var(var_info(name, ty, self.module))
     }
 
     fn push(&mut self, expr: CExpr) -> CExprId {
-        self.exprs.push(expr);
-        CExprId(self.exprs.len() as u32 - 1)
+        self.builder.push(expr)
     }
 
     fn new_join(&mut self) -> JoinId {
-        let join = JoinId(self.joins.len() as u32);
-        self.joins.push(None);
-        join
+        self.builder.new_join()
     }
 
     fn seq(&mut self, bindings: Bindings, last: CExpr) -> CExprId {
@@ -280,7 +257,7 @@ impl FnLowering<'_> {
                         body: id,
                         scope,
                     });
-                    self.joins[join.0 as usize] = Some(expr);
+                    self.builder.define_join(join, expr);
                     expr
                 }
                 Binding::Shared { join, params, body } => {
@@ -291,7 +268,7 @@ impl FnLowering<'_> {
                         body,
                         scope: id,
                     });
-                    self.joins[join.0 as usize] = Some(expr);
+                    self.builder.define_join(join, expr);
                     expr
                 }
             };
@@ -315,8 +292,7 @@ impl FnLowering<'_> {
                 unreachable!("checked above");
             };
             // 結果の変数は呼び出しの直前に作ったものなので、表から除いて番号を詰める
-            debug_assert_eq!(returned.0 as usize, self.vars.len() - 1);
-            self.vars.pop();
+            self.builder.discard_last_var(returned);
             last = CExpr::TailCall(call);
         }
         self.seq(bindings, last)

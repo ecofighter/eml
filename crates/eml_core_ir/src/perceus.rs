@@ -4,6 +4,7 @@
 
 use std::collections::BTreeMap;
 
+use crate::builder::FnBuilder;
 use crate::liveness::{BlockLiveness, Vars, analyze, tracked};
 use crate::{Arm, Atom, CExpr, CExprId, Call, CoreFn, JoinId, Program, Rhs, VarId};
 
@@ -17,12 +18,15 @@ pub(crate) fn insert(program: &mut Program) {
 fn insert_rc(function: &mut CoreFn) {
     let live = analyze(function);
     let tracked = tracked(function);
+    let mut builder = FnBuilder::new();
+    for _ in &function.joins {
+        builder.new_join();
+    }
     let mut pass = Rebuild {
         old: &function.exprs,
         tracked: &tracked,
         live: &live,
-        new: Vec::new(),
-        joins: vec![None; function.joins.len()],
+        new: builder,
     };
     let owned: Vars = function
         .params
@@ -31,21 +35,18 @@ fn insert_rc(function: &mut CoreFn) {
         .filter(|var| tracked[var.0 as usize])
         .collect();
     let body = pass.transform(function.body, &owned);
-    let Rebuild { new, joins, .. } = pass;
+    let Rebuild { new, .. } = pass;
+    let (exprs, joins) = new.into_arenas();
     function.body = body;
-    function.exprs = new;
-    function.joins = joins
-        .into_iter()
-        .map(|join| join.expect("every join point is rebuilt"))
-        .collect();
+    function.exprs = exprs;
+    function.joins = joins;
 }
 
 struct Rebuild<'a> {
     old: &'a [CExpr],
     tracked: &'a [bool],
     live: &'a BlockLiveness,
-    new: Vec<CExpr>,
-    joins: Vec<Option<CExprId>>,
+    new: FnBuilder,
 }
 
 /// 連鎖の今の段で所有している変数の求め方。
@@ -94,8 +95,7 @@ impl Rebuild<'_> {
     }
 
     fn push(&mut self, expr: CExpr) -> CExprId {
-        self.new.push(expr);
-        CExprId(self.new.len() as u32 - 1)
+        self.new.push(expr)
     }
 
     /// `owned` は入口で所有している変数。どの経路も `Return`、`TailCall`、`Jump` で終わり、その時点で渡すもの以外は所有して
@@ -233,7 +233,7 @@ impl Rebuild<'_> {
                         body: code,
                         scope,
                     });
-                    self.joins[join.0 as usize] = Some(code);
+                    self.new.define_join(join, code);
                     live = before;
                 }
                 Step::Let { var, rhs, released } => {

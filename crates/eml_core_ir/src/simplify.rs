@@ -169,8 +169,7 @@ impl Simplify<'_> {
     }
 
     fn push(&mut self, expr: CExpr) -> CExprId {
-        self.function.exprs.push(expr);
-        CExprId(self.function.exprs.len() as u32 - 1)
+        self.function.push(expr)
     }
 
     /// `root` の部分木で、`var` の使用を `atom` に置き換える。
@@ -343,9 +342,7 @@ impl Simplify<'_> {
 
     /// `var` と同じ名前と性質の新しい変数。
     fn fresh_like(&mut self, var: VarId) -> VarId {
-        let info = self.function.vars[var.0 as usize].clone();
-        self.function.vars.push(info);
-        VarId(self.function.vars.len() as u32 - 1)
+        self.function.fresh_like(var)
     }
 
     /// `root` の部分木が `var` を使うか。
