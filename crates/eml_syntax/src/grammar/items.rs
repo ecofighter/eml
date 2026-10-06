@@ -96,14 +96,16 @@ fn signature(p: &mut Parser, m: Marker) {
     m.complete(p, SIGNATURE);
 }
 
-/// data_item ::= 'data' UIDENT LIDENT* '=' alts
+/// data_item ::= 'data' UIDENT LIDENT* ('=' alts)?
+/// `=` のない `data` は、Prelude では intrinsic の型で、ユーザーのモジュールでは HIR が E1025 にする
+/// (docs/spec/declarations.md の「`data` と `type`」)。
 fn data_item(p: &mut Parser, m: Marker) {
     p.bump(DATA_KW);
     expect_name(p, UIDENT);
     while p.at(LIDENT) {
         name(p);
     }
-    if expect(p, EQ) {
+    if p.eat(EQ) {
         alts(p);
     }
     m.complete(p, DATA_ITEM);

@@ -662,6 +662,11 @@ impl DropExpr {
 }
 
 impl DataItem {
+    /// `=` とコンストラクタの並びを書いたか。
+    pub fn has_constructors(&self) -> bool {
+        support::token(&self.syntax, SyntaxKind::EQ).is_some()
+    }
+
     pub fn name(&self) -> Option<Name> {
         support::children::<Name>(&self.syntax)
             .find(|name| name.token().kind() == SyntaxKind::UIDENT)

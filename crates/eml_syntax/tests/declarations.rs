@@ -379,3 +379,19 @@ fn infix_constructor_with_type_applications() {
               LIDENT "a"
     "#);
 }
+
+#[test]
+fn data_without_constructors_is_parsed() {
+    insta::assert_snapshot!(shape("data Int\npub data File"), @r#"
+    SOURCE_FILE
+      DATA_ITEM
+        DATA_KW "data"
+        NAME
+          UIDENT "Int"
+      DATA_ITEM
+        PUB_KW "pub"
+        DATA_KW "data"
+        NAME
+          UIDENT "File"
+    "#);
+}
