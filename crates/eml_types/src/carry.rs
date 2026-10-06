@@ -1,11 +1,13 @@
 //! 持ち越し規則 (docs/spec/effects.md の「継続の多重度と持ち越し規則」)。呼び出しをまたいで持っている値の Kind と、
 //! 呼び出しの row の多重度を組にした持ち越しの制約を出す。使用回数のパス (`usage`) は評価の順を区別しないので、
-//! 評価の順に沿った生存の計算を別に持つ。評価の順は Core IR の変換と同じである (docs/spec/core-ir.md)。
+//! 評価の順に沿った生存の計算を別に持つ。呼び出しの評価の順は `eml_hir::call_steps` に従う。Core IR の変換も同じ手順を
+//! 読む (docs/spec/expressions.md の「関数適用」)。
 
 use std::collections::BTreeSet;
 
 use eml_hir::{
-    Body, ExprId, ExprKind, LocalId, Module, OpMultiplicity, OperationId, PatId, Res, Stmt,
+    Body, EvalStep, ExprId, ExprKind, LocalId, Module, OpMultiplicity, OperationId, PatId, Res,
+    Stmt,
 };
 
 use crate::check::{BodyTyping, CallRows};
@@ -19,6 +21,8 @@ enum Held {
     Local(LocalId),
     /// 評価済みで消費前の部分式の値。
     Temporary(ExprId),
+    /// 呼び出し `ExprId` の矢印 `usize` を適用した結果。値でない後の引数を評価する間に持つ。
+    Applied(ExprId, usize),
 }
 
 type Live = BTreeSet<Held>;
@@ -67,37 +71,43 @@ impl Carrying<'_, '_> {
                 live
             }
             ExprKind::Path(_) => after.clone(),
-            ExprKind::Call {
-                callee,
-                args,
-                evaluate_first,
-            } => {
-                // `x |> f a` の `x` は、呼ばれる式とほかの引数より先に評価する (docs/spec/declarations.md)
-                let mut parts: Vec<ExprId> = Vec::new();
-                if let Some(first) = evaluate_first {
-                    parts.push(args[*first]);
-                }
-                parts.push(*callee);
-                parts.extend(
-                    args.iter()
-                        .enumerate()
-                        .filter(|(index, _)| Some(*index) != *evaluate_first)
-                        .map(|(_, &arg)| arg),
-                );
-                // 呼び出しは部分をすべて評価した後に、矢印ごとに起きる。矢印 `i` の呼び出しの間は、後の矢印に渡す引数を
-                // 持っている (`Apply` のフレーム。docs/spec/core-ir.md)
-                if let Some(CallRows::Call { arrows, performs }) = typing.calls.get(id) {
-                    for (index, row) in arrows.iter().enumerate() {
-                        let mut held = after.clone();
-                        held.extend(args[index + 1..].iter().map(|&arg| Held::Temporary(arg)));
-                        let across = match performs {
-                            Some((at, op)) if *at == index => Across::Operation(*op),
-                            _ => Across::Row(row.clone()),
-                        };
-                        self.carry(id, &held, &across, &CallKind::Call);
+            ExprKind::Call { callee, args, .. } => {
+                let rows = match typing.calls.get(id) {
+                    Some(CallRows::Call {
+                        arrows, performs, ..
+                    }) => Some((arrows, *performs)),
+                    _ => None,
+                };
+                let mut live = after.clone();
+                // 手順を後ろからたどる。順は eml_hir::call_steps が決め、Core IR の変換も同じ手順を読む
+                for step in eml_hir::call_steps(self.module, body, id).into_iter().rev() {
+                    match step {
+                        EvalStep::Arrow(index) => {
+                            // 矢印の呼び出しの間は、その結果を除いて、後で使う値と評価済みでまだ渡していない引数を持つ
+                            live.remove(&Held::Applied(id, index));
+                            if let Some((arrows, performs)) = rows
+                                && let Some(row) = arrows.get(index)
+                            {
+                                let across = match performs {
+                                    Some((at, op)) if at == index => Across::Operation(op),
+                                    _ => Across::Row(row.clone()),
+                                };
+                                self.carry(id, &live, &across, &CallKind::Call);
+                            }
+                            let function = match index {
+                                0 => Held::Temporary(*callee),
+                                _ => Held::Applied(id, index - 1),
+                            };
+                            live.insert(function);
+                            live.insert(Held::Temporary(args[index]));
+                        }
+                        EvalStep::Eval(expr) => {
+                            live.remove(&Held::Temporary(expr));
+                            live = self.expr(expr, &live);
+                        }
                     }
                 }
-                self.parts(&parts, after)
+                live
             }
             ExprKind::If {
                 condition,
@@ -317,6 +327,19 @@ impl Carrying<'_, '_> {
             Held::Temporary(expr) => {
                 let ty = *self.typing.exprs.get(expr)?;
                 Some((ty, CarriedValue::Temporary(self.body.exprs[expr].range)))
+            }
+            Held::Applied(call, index) => {
+                let Some(CallRows::Call { results, .. }) = self.typing.calls.get(call) else {
+                    return None;
+                };
+                let ty = *results.get(index)?;
+                let ExprKind::Call { callee, args, .. } = &self.body.exprs[call].kind else {
+                    return None;
+                };
+                let range = self.body.exprs[*callee]
+                    .range
+                    .cover(self.body.exprs[args[index]].range);
+                Some((ty, CarriedValue::Temporary(range)))
             }
         }
     }

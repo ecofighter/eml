@@ -507,6 +507,19 @@ fn an_argument_for_a_later_arrow_is_kept_across_the_call() {
 }
 
 #[test]
+fn an_applied_function_is_kept_across_a_later_argument() {
+    let rest = "make : File -> <IO> (Unit -> <IO> Unit)\nmake f = fn () -> close f\n\napplied : Unit -> <Choice, IO> Unit\napplied () =\n  let f = open \"a.txt\"\n  make f (if choose () then () else ())";
+    insta::assert_snapshot!(carried(rest), @r"
+    E3006 26:14 a linear value must be used exactly once, but it is kept alive across a call that may resume more than once
+      26:14 this call may perform `choose`, a `multi` operation
+      26:3 this value is kept alive across the call
+      2:9 `choose` is declared `multi` here
+      note: a continuation of a `multi` operation can be resumed more than once, and each resumption would use the value again
+      help: finish using the value before this call
+    ");
+}
+
+#[test]
 fn a_lambda_body_is_checked_on_its_own() {
     let rest = "in_lambda : Unit -> <Choice, IO> Unit\nin_lambda () =\n  let f = open \"a.txt\"\n  let later = fn () ->\n    let b = choose ()\n    close f\n  later ()";
     insta::assert_snapshot!(carried(rest), @r"

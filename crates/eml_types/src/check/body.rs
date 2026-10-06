@@ -23,6 +23,8 @@ pub(crate) enum CallRows {
     /// 番号とその操作である。
     Call {
         arrows: Vec<Row>,
+        /// 矢印ごとの、適用した結果の型。持ち越しのパスが、後の引数を評価する間に持つ値の Kind を求める。
+        results: Vec<Ty>,
         performs: Option<(usize, OperationId)>,
     },
     /// `resume k v`。`k` の型の、handle の外側の row。
@@ -521,12 +523,14 @@ impl BodyCheck<'_, '_> {
             _ => None,
         };
         let mut arrows = Vec::new();
+        let mut results = Vec::new();
         // 1回の呼び出しの E2002 は、どの引数の矢印で起きても1つだけ報告する
         let mut reported = false;
         for (index, &arg) in args.iter().enumerate() {
             match self.next_arrow(ty) {
                 Arrow::Fn { param, row, ret } => {
                     arrows.push(row.clone());
+                    results.push(ret);
                     let origin = Origin::Argument {
                         callee: callee_expr.range,
                         name: name.clone(),
@@ -546,16 +550,26 @@ impl BodyCheck<'_, '_> {
                     for &rest in &args[index..] {
                         self.infer_expr(rest);
                     }
-                    self.typing
-                        .calls
-                        .insert(id, CallRows::Call { arrows, performs });
+                    self.typing.calls.insert(
+                        id,
+                        CallRows::Call {
+                            arrows,
+                            results,
+                            performs,
+                        },
+                    );
                     return self.table.error;
                 }
             }
         }
-        self.typing
-            .calls
-            .insert(id, CallRows::Call { arrows, performs });
+        self.typing.calls.insert(
+            id,
+            CallRows::Call {
+                arrows,
+                results,
+                performs,
+            },
+        );
         // 部分適用の残りは、ほかの参照と同じく戻り値の側の row を開く
         if opened_later {
             ty = self.table.open_spine(ty);
