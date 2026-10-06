@@ -1,0 +1,19 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: rendered
+input_file: tests/ui/check-fail/syntax/unparenthesized_lambda.em
+---
+[E0012] Error: `fn` expression must be parenthesized here
+    ╭─[ check-fail/syntax/unparenthesized_lambda.em:16:10 ]
+    │
+ 16 │   each 3 fn n ->
+    │          ─┬  
+    │           ╰── wrap it in parentheses
+────╯
+[E0012] Error: `resume` expression must be parenthesized here
+    ╭─[ check-fail/syntax/unparenthesized_lambda.em:19:23 ]
+    │
+ 19 │     | ask () k -> inc resume k 1
+    │                       ───┬──  
+    │                          ╰──── wrap it in parentheses
+────╯
