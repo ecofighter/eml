@@ -102,6 +102,7 @@ Atom::Fn(FnIdx)
 - `resume k1(v2, s3)`。
 - `Atom::Fn` は `&` に関数の名前を続けて書く (`&lambda$3`)。
 - `perform` の表示は変えない。`parse` は、先頭のエフェクトの行の `never` から `resumable` を埋める。
+- verifier が節の関数の引数の数を確かめるために、エフェクトの表の操作 (`OperationInfo`) に引数の数 `arity` を持たせる。先頭のエフェクトの行は、操作の名前の後に `/` と引数の数を書く (`effect Ask { ask/1, never stop/1 }`)。
 
 ### 1.3 ランタイムとインタプリタ
 
@@ -136,6 +137,7 @@ Value::Fn(u32)
 |---|---|---|
 | 2 | `eml_core_ir` のスナップショットのうち、`handle`、`resume`、捕獲のないラムダ、包む関数の値を含むもの | `init`、`return`、`state`、`&f` の表示が増える。計画で実行して洗い出す |
 | 2 | `eml_core_ir` の verifier と `eml_interp` のテキストの IR のうち、`handle` と `resume` を含むもの | テキストの形が変わる。期待する結果 (verifier の誤り、実行の出力) は変えない |
+| 2 | ユーザーのエフェクトを持つ Core IR のスナップショットと、手で書いた IR の先頭の `effect` の行 | 操作の引数の数 (`/1`) が増える |
 | 2 | `eml_hir` のダンプのうち、`return` の節を省いた handler を含むもの | 合成した節が表示に現れる |
 | 3 | `eml_runtime` のテストのうち、`Frame::Handler` を組み立てるもの | 組み立てだけを `Link` に書き換え、期待値は変えない |
 
