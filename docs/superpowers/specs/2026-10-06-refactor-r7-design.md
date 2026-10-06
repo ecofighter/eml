@@ -47,7 +47,7 @@ item を単位にすれば、型検査は今の構造のまま、ID がプログ
 
 ### 回の分け方
 
-R7 は5回に分け、R7a → R7b → R7c → R7d → R7e の順に、それぞれ計画と実装のサイクルで進める。
+R7 は R7a → R7b → R7c → R7d → R7e-1 → R7e-2 → R7f の順に、それぞれ計画と実装のサイクルで進める。R7e は、互いに独立した2つの変更 (呼び出しの飽和の処理と平らな `Switch`) を別の回に分け、R7 の後始末を R7f にした。
 
 | 回 | 範囲 | 章 |
 |---|---|---|
@@ -55,7 +55,9 @@ R7 は5回に分け、R7a → R7b → R7c → R7d → R7e の順に、それぞ�
 | R7b | `ItemTree`、`DefMap`、item ごとの変換、プログラム全体の ID、Prelude のモジュール、重複と fixity、lang item、session、intrinsic を本体のない関数にする、不具合2 | 1、3、4.2 |
 | R7c | 型検査の出力 (`TypedProgram`、`DeclType`)、由来の `Span`、`main` を入口の引数にする | 5 |
 | R7d | `IO` のエフェクト、Prelude の本体、`|>` と `<|` の脱糖をやめる、入口から届く関数だけの変換と `Prelude.` の名前、`Bool` のタグ | 4.3〜4.6 |
-| R7e | Core IR: item をすべて関数にする、規則 I と `prune`、平らな `Switch` | 6 |
+| R7e-1 | Core IR: 呼び出しの飽和の処理を1つの補助関数にまとめる | 6.1、6.2 |
+| R7e-2 | Core IR: 平らな `Switch` | 6.3 |
+| R7f | 後始末: この文書の内容を `docs/` に移して削除する、参照の張り替え、`architecture.md` の簡素化 | 7.5 |
 
 R7c を R7d より先にするのは、Prelude の本体が入ると、持ち越しの由来が Prelude の中の位置を指すようになるためである。由来がファイルを持つ形を先に作っておく。R7b に intrinsic を入れるのは、Prelude を普通のモジュールにした時点で `Res::Builtin` を残すと、名前の解決の経路が2つになるためである。
 
@@ -292,8 +294,8 @@ pub infixr 0 <|
 
 ### 4.5 Core IR に入れる関数と名前 (R7d)
 
-- Prelude に本体が入ると、本体のある関数をすべて変換する今の `translate` は、使わない Prelude の関数まで Core IR に入れる。そのため、`translate` は入口の関数から届く関数だけを変換する。HIR の本体の中の関数の参照 (`Res::Function`) を、入口の関数からたどって集める。ユーザーの関数と Prelude の関数を区別しない。6.1 の「参照されたときに初めて作る」のうち、トップレベルの関数の分を R7d で入れる
-- Prelude の関数の Core IR の名前には `Prelude.` を付ける (`Prelude.not`)。6.1 の名前の規則のうち、Prelude の分を R7d で入れる。ユーザーが Prelude と同じ名前の関数を定義しても、Core IR の名前が重ならないことを構造で保証するためである。テキストの IR は `.` を名前の一部として読む
+- Prelude に本体が入ると、本体のある関数をすべて変換する今の `translate` は、使わない Prelude の関数まで Core IR に入れる。そのため、`translate` は入口の関数から届く関数だけを変換する。HIR の本体の中の関数の参照 (`Res::Function`) を、入口の関数からたどって集める。ユーザーの関数と Prelude の関数を区別しない。関数を参照されたときに初めて作る仕組み (包む関数) と合わせて、使わない item は Core IR に入らない
+- Prelude の関数の Core IR の名前には `Prelude.` を付ける (`Prelude.not`)。ユーザーが Prelude と同じ名前の関数を定義しても、Core IR の名前が重ならないことを構造で保証するためである。テキストの IR は `.` を名前の一部として読む
 - 入口から届かない関数を定義したテストでは、その関数が Core IR から消える。期待値の変わるテストは 7.1 に挙げる
 
 ### 4.6 `Bool` のタグ (R7d)
@@ -365,31 +367,34 @@ pub struct DeclType {
 
 ## 6. R7e Core IR
 
-### 6.1 どの item も関数にする
+### 6.1 呼び出しの飽和の処理を1つにまとめる (R7e-1)
 
-トップレベルの関数に加えて、intrinsic、操作、コンストラクタも、本体を持つ Core IR の関数にする。
+今の変換は、既知の呼ばれる式への呼び出しを、ユーザーの関数 (`call_known`)、intrinsic (`call_intrinsic`)、操作 (`call_operation`)、コンストラクタ (`call_constructor`) の4つの関数で扱う。どれも「引数が足りなければ包む関数のクロージャ、ちょうどなら命令、余れば結果への `Apply`」という同じ場合分けを、別々に書いている。これを1つの補助関数 `saturate` にまとめる。
 
-| item | 関数の本体 |
-|---|---|
-| 算術などの intrinsic | `let t = prim op(params); return t` |
-| `==` と `!=` | 比べ方ごとに1つずつ関数を作る (`eq$Int`、`eq$String`、`eq$Bool`、`ne$Int` など)。呼び出しの位置で型検査が決めた比べ方から、呼ぶ関数を選ぶ |
-| `IO` の操作 | `let t = io op(params); return t` |
-| ほかの操作 | `tailcall perform op(params)` (今の `op$名前`) |
-| コンストラクタ | `let d = con tag(params); return d` (今の `con$名前`) |
+- `saturate` は、引数の数、引数、足りないときに包む関数を作る手順、ちょうどのときの命令を作る手順を受け取る。足りなければ包む関数のクロージャにし、ちょうどなら命令を束縛し、余れば命令の結果に残りの引数を `Apply` する
+- `call_head` は、呼ばれる式の種類ごとに次の2つだけを決めて、`saturate` に渡す
 
-- 関数は、今と同じく参照されたときに初めて作る。Prelude の使わない item まで Core IR に入れないためである。トップレベルの関数は、R7d から入口の関数から届くものだけを変換している (4.5)
-- 変換の呼び出しは `call_known` の1つの経路にする。呼ぶ相手の引数の数と比べ、足りなければクロージャ、ちょうどなら直接の呼び出し、余れば戻った関数値への `Apply` にする。`call_builtin`、`call_operation`、`call_constructor` と、`ProgramBuilder` の3種類の包む関数の表はなくす
-- 関数の名前は、今の `op$` と `con$` を保ち、Prelude の関数には `Prelude.` を付ける (`Prelude.not`。トップレベルの関数の分は R7d で入れた。4.5)。ユーザーの関数の名前は変えないので、実行時エラーの関数名も変わらない
+| 種類 | 引数の数 | 足りないときの包む関数 | ちょうどのときの命令 |
+|---|---|---|---|
+| ユーザーの関数 | `program.arity(target)` | その関数 | `call` |
+| intrinsic | シグネチャの引数の数 | `builtin$…` | `prim` (`==` と `!=` は型検査が決めた比べ方で選ぶ) |
+| 操作 | 操作の引数の数 | `op$…` | `operation_rhs` (`perform` か `io`) |
+| コンストラクタ | フィールドの数 | `con$…` | `con` |
 
-### 6.2 規則 I と `prune`
+- 束縛の変数の名前 (`t`、コンストラクタの `d`) は今のままにする。Core IR のスナップショットは変わらない
+- `call_intrinsic`、`call_operation`、`call_constructor` は `saturate` にまとめてなくす。値として使う位置の変換 (`atom`) は呼び出しではないので変えない
+- 包む関数の3つの作り方 (`wrapper`、`operation_wrapper`、`constructor_wrapper`) と、満ちた呼び出しを変換の時点で命令にすることは、今のままにする
 
-- `CoreFn` に `inline` の印を足し、6.1 の表の item の関数だけに付ける
-- `simplify` に規則 I を足す。I は、印のある関数の直接の呼び出し (`call` と `tailcall`) を、その本体の1行で置き換える。引数は本体の引数にそのまま入れる
-- I は `simplify` の最初に回す。順は I、F、B3、K1、B2、B5、B3、B4、DCE、T になる。K1 と B2 は、今と同じく `con` を見る
-- `simplify` の後に、入口から届かなくなった関数をプログラムから取り除くパス `prune` を足す。パスの順番は `pipeline.rs` に置き、`lower_until` で止められるようにする
-- I で展開した item の関数は `prune` で消えるので、`simplify` の後の IR は今とほぼ同じ形になる。R7d から、変換は入口から届くトップレベルの関数だけを作るので、`prune` が取り除くのは、I で展開して参照がなくなった item の関数である
+### 6.2 採らなかった形: どの item も関数にして、規則 I と `prune` で戻す
 
-### 6.3 平らな `Switch`
+intrinsic、操作、コンストラクタも本体を持つ Core IR の関数にし、変換はすべてを関数の呼び出しにして、`simplify` の規則 I (印のある関数の直接の呼び出しを本体の1行で置き換える) で命令に戻し、参照がなくなった関数をパス `prune` で取り除く形は採らない。次の理由による。
+
+- 今の変換は、満ちた呼び出しを変換の時点で命令にしているので、規則 I と同じことをすでにしている。重複していたのは飽和の場合分けだけで、6.1 の補助関数で1つにできる
+- 規則 I、`inline` の印、`prune` (関数を取り除くと `FnIdx` の参照をすべて付け替える)、比べ方ごとの関数 (`eq$Int` など) が要り、書いて保つコードが増える
+- 変換の直後で止めるスナップショット (34件) のほとんどで、`prim +` が `call builtin$+(…)` になる
+- R7d から、変換は入口から届くトップレベルの関数だけを作るので、`prune` の仕事は I の後始末だけになっていた
+
+### 6.3 平らな `Switch` (R7e-2)
 
 ```rust
 Switch { scrutinee: Atom, cases: Vec<Case>, default: Option<CExprId> }
@@ -397,14 +402,15 @@ Case { pattern: CasePattern, fields: Vec<VarId>, body: CExprId }
 enum CasePattern { Tag(u32), Int(i64), String(u32) }   // String は文字列定数の番号
 ```
 
-- リテラルの列の `match` は、比べるプリミティブと `Bool` の `Switch` の連なりではなく、リテラルの case と `default` を持つ1つの `Switch` にする。深さが1になるので、リテラルが1000個の `match` でも debug ビルドのスタックがあふれない
-- コンストラクタの列でも、default の行列に行く残りのコンストラクタをまとめて `default` にする。今は残りのコンストラクタごとに枝を作り、join point に飛ばしている
+- `Arm` はなくし、`Case` にする
+- リテラルの列の `match` は、比べるプリミティブと `Bool` の `Switch` の連なりではなく、リテラルの case と `default` (ワイルドカードの行だけの行列) を持つ1つの `Switch` にする。深さが1になるので、リテラルが1000個の `match` でも debug ビルドのスタックがあふれない。`translate/pattern.rs` の `compare` と `if_equal` はなくす
+- コンストラクタの列でも、default の行列に行く残りのコンストラクタをまとめて `default` にする。今は残りのコンストラクタごとに枝を作り、join point に飛ばしている。その join point と `jump` を作る処理はなくなる。`if` とタプルは、今と同じく `Tag` の case にする
 - `Switch` は今と同じく scrutinee を消費する。`String` のリテラルの `Switch` は、比べ終わってから文字列を解放する。今は比べるたびに `dup` しているので、その分が減る
-- `simplify` の K1 と B2 は、分かっているタグを `cases` から探し、なければ `default` に進む
+- `simplify` の K1 と B2 は、分かっているタグを `cases` から探し、なければ `default` に進む。子をたどる規則 (F、B3、B5 など) と、生存解析と `compact` は、`default` もたどる
 - verifier は、1つの `Switch` の case の種類がそろっていること、リテラルの `Switch` に `default` があること、同じ case が2回ないことを確かめる
 - インタプリタは、case を順に比べ、一致するものがなければ `default` に進む
 - テキストの形は `switch x { #0 -> …, 1 -> …, "a" -> …, _ -> … }` にする
-- `perceus.rs` と `verify.rs` のコメントにある「E0013 が深さを抑える」という誤った記述を消す
+- `perceus.rs` と `verify.rs` のコメントにある「E0013 が深さを抑える」という誤った記述を消す。[status.md](../../implementation/status.md) の「次の作業の注意点」のうち、リテラルの `match` の深さの限界の項目を直す
 
 ## 7. テスト、文書、完了の条件
 
@@ -427,7 +433,8 @@ enum CasePattern { Tag(u32), Int(i64), String(u32) }   // String は文字列定
 | R7a | `eml_syntax` の CST (`shape` の56件のほとんど)、`src/parser/tests.rs` |
 | R7b | `eml_hir` の pretty のうち ID の表示を含むもの |
 | R7d | `eml_core_ir` の Core IR のうち、入口から届かない関数を定義したもの (下見で数えて、`perceus.rs` 9件、`simplify.rs` 27件、`translate.rs` 18件、`eml_test_support` の `support.rs` 1件)、`not`、`>>`、`<<`、`|>`、`<|` を使うもの、`println` を値として使うもの。ソースから作る Core IR の表示の先頭に増える `effect IO { … }` の1行 (`pretty` は操作のあるエフェクトをすべて表示し、`IO` を外す特別扱いは入れない)。`>>` と `<<` を使う関数の `eml_types` の `dump` の `kinds:` の行 (`>>` の本体の持ち越しの制約)。`eml_hir` の pretty のうち、`evaluate_first` の印を含むもの |
-| R7e | `eml_core_ir` の `translate.rs` のほとんど、`simplify.rs` と `perceus.rs` の `switch` を含むもの (約30件)、`verify.rs` と `eml_interp/tests/data.rs` の `switch` を含むテキスト |
+| R7e-1 | なし (Core IR のスナップショットは変わらない) |
+| R7e-2 | `eml_core_ir` の `switch` を含むスナップショット (約30件)、リテラルの `match` と、残りのコンストラクタを join point に送っていた `match` のスナップショット、`verify.rs` と `eml_interp/tests/data.rs` の `switch` を含むテキスト |
 
 種類3 (機械的な追随) は、ID の形と入口の引数の変更に合わせたテストの組み立ての書き換えである。R7c では、`eml_types/tests/check.rs` の `signatures` と `constructors` を `decls` から読む形にし、`eml_test_support` の `Checked::typed` の型の名前を変える。R7c は観測できるふるまいを変えないので、種類1と種類2の変更はない。
 
@@ -436,7 +443,8 @@ enum CasePattern { Tag(u32), Int(i64), String(u32) }   // String は文字列定
 - R7b: `ItemTree` と `DefMap` の結合テスト (重複の3つの規則、fixity の付け先、名前の解決の順)。Prelude だけを検査して診断が出ないことのテスト
 - R7c: `Program::main()` の `eml_hir` の結合テスト (入口のモジュールに `main` がある場合、ない場合、`main` が操作の名前である場合)。由来が Prelude の中を指す持ち越しの診断が、`Prelude.em` の位置を表示するテスト (R7d で Prelude の本体が入ってから足す)
 - R7d: 入口から届く関数だけを変換することと、Prelude の関数の `Prelude.` の名前 (`translate.rs`)。`println` を値として使ったときの Core IR (`translate.rs`)。Prelude の `Bool` のタグが `FALSE` と `TRUE` に等しいこと (`eml_core_ir`)。`IO` の操作と `IoOp` の対応 (`eml_core_ir` の単体テスト)。Prelude の本体の中の E3001〜E3004 が `Prelude.em` を指すこと (`eml_types/tests/modules.rs`。R7c で残した)
-- R7e: I と `prune` のテスト (`simplify.rs`)、平らな `Switch` の verifier の誤りのテスト (`verify.rs`)、リテラルが1000個の `match` を debug ビルドで実行するテスト (`eml_interp/tests/run.rs`。ソースはテストの中で生成する)
+- R7e-1: なし。既存のテストで、ふるまいが変わらないことを確かめる
+- R7e-2: 平らな `Switch` の verifier の誤りのテスト (`verify.rs`。case の種類が混ざる、リテラルの `Switch` に `default` がない、同じ case が2回ある)、K1 と B2 が `default` に進むテスト (`simplify.rs`)、リテラルが1000個の `match` を debug ビルドで実行するテスト (`eml_interp/tests/run.rs`。ソースはテストの中で生成する)
 
 ### 7.2 `eml_test_support`
 
@@ -454,14 +462,22 @@ enum CasePattern { Tag(u32), Int(i64), String(u32) }   // String は文字列定
 | `spec/effects.md` | `IO` を Prelude で宣言したエフェクトにすること | R7d |
 | `spec/declarations.md`、`spec/expressions.md` | `|>` と `<|` を脱糖せず Prelude の関数として呼ぶこと (標準の演算子の表、「関数適用」の評価の順、HIR の脱糖の一覧) | R7d |
 | `spec/core-ir.md` | 入口から届く関数だけを変換すること、Prelude の関数の `Prelude.` の名前、`builtin$>>` と `builtin$<<` がなくなること | R7d |
-| `spec/core-ir.md` | item の関数、規則 I と `prune`、平らな `Switch` | R7e |
-| `implementation/architecture.md` | 段階の入口、ID、`ItemTree` と `DefMap`、`TypedProgram` と `DeclType`、由来の `Span`、`lower` の `entry` 引数、session。R7e の後、[ロードマップ](../../future/roadmap.md) の「文書の簡素化」のとおり細部の説明を減らす | 各回、R7e |
+| `spec/core-ir.md` | 平らな `Switch` (`Case`、`CasePattern`、`default`、テキストの形、verifier の規則) | R7e-2 |
+| `implementation/architecture.md` | 段階の入口、ID、`ItemTree` と `DefMap`、`TypedProgram` と `DeclType`、由来の `Span`、`lower` の `entry` 引数、session。R7f で、[ロードマップ](../../future/roadmap.md) の「文書の簡素化」のとおり細部の説明を減らす | 各回、R7f |
 | `implementation/testing.md` | テストの地図と `eml_test_support` | 各回 |
 | `implementation/status.md` | 回ごとに更新する。S2 に回したもの (import をたどるローダ、複数ファイルの fixture、ディレクトリを1件とする UI テスト、import の循環とモジュールの根の決定) を S2 の項目に移す。R7c で、同じ名前の別の型の表示の項目に、`Type` から名前をなくす案 (5.1) を書き足す | 各回 |
 
 ### 7.4 完了の条件
 
 1. 1〜6章の内容が入っていること。不具合1〜3が UI テストで確かめられていること
-2. 次のものがコードから消えていること: `Res::Builtin`、`Builtin`、`BUILTINS`、`Access`、`Module::builtins`、`TypedModule::builtins`、`Decl::Builtin`、`ValueItem::Builtin`、`FileId::PRELUDE`、`ItemScope` の `fixities` と `prelude_fixities`、`Lowering::Compose`、`PrimOp::Not`、`evaluate_first`、`LangItems` の `pipe`、`apply`、`io_operations`、`SyntheticEffect`、`call_builtin`、`call_operation`、`call_constructor`、`TypedModule`、公開の `Scheme`、`check/report.rs` の入口のファイルの決め打ち
+2. 次のものがコードから消えていること: `Res::Builtin`、`Builtin`、`BUILTINS`、`Access`、`Module::builtins`、`TypedModule::builtins`、`Decl::Builtin`、`ValueItem::Builtin`、`FileId::PRELUDE`、`ItemScope` の `fixities` と `prelude_fixities`、`Lowering::Compose`、`PrimOp::Not`、`evaluate_first`、`LangItems` の `pipe`、`apply`、`io_operations`、`SyntheticEffect`、`call_intrinsic`、`call_operation`、`call_constructor`、`Arm`、`translate/pattern.rs` の `compare` と `if_equal`、`TypedModule`、公開の `Scheme`、`check/report.rs` の入口のファイルの決め打ち
 3. `cargo test`、`cargo clippy --all-targets`、`cargo fmt` が通ること
 4. 型検査の性能のテスト (`crates/eml_types/tests/scaling.rs`、release ビルド) の比が6以下のままであること。Prelude をプログラムに含めて検査するようになるためである
+
+### 7.5 R7f 後始末
+
+- この文書のうち残す価値のある内容 (item を単位にした方式と、採らなかった形とその理由) を `implementation/architecture.md` に移す。`docs/spec/` に入れた決定は重ねて書かない
+- コードのコメントと文書から、この文書を指す参照を、内容を移した先に張り替える (`grep -rn 2026-10-06-refactor-r7-design crates docs` で探す)
+- この文書と R7 の計画の文書 (`docs/superpowers/plans/` の R7 の回のもの) を削除する。完了した作業の計画は削除する運用 ([status.md](../../implementation/status.md) の「完了した作業」) に合わせる
+- `implementation/architecture.md` を、[ロードマップ](../../future/roadmap.md) の「文書の簡素化」のとおり、コードの細部の説明を減らす形にする
+- `implementation/status.md` の R7 の行を完了にし、「完了した作業」の表に R7 の行を足す。ロードマップの「文書の簡素化」の項目を、済んだ分だけ直す
