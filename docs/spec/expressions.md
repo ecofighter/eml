@@ -118,13 +118,7 @@ main () =
 
 ## handler
 
-```haskell
-try : (Unit -> <Fail | e> a) -> <e> Option a
-try action =
-  handle action () with
-    | fail _   -> None
-    | return x -> Some x
-```
+例は [エフェクトと handler](effects.md) の「handler の意味」にある。
 
 - 節は `| op 引数... k -> 本体` と `| return x -> 本体` の2種類である
 - 節の引数の個数は、`never` の操作なら「操作の引数の個数」、それ以外なら「操作の引数の個数 + 1 (`k`)」とする。個数は HIR で検査する (E1010)
@@ -177,7 +171,7 @@ fetch_all urls =
   map Async.await tasks
 ```
 
-並行処理はマイルストーン1 の範囲外である。
+並行処理はまだ実装していない ([マルチコア対応の設計](../future/multicore.md))。
 
 ## 型の明示
 
