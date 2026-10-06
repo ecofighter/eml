@@ -4,9 +4,9 @@ expression: rendered
 input_file: tests/ui/check-fail/not-yet-supported/qualified_effect.em
 ---
 [E0004] Error: qualified names are not supported yet
-   ╭─[ check-fail/not-yet-supported/qualified_effect.em:2:14 ]
+   ╭─[ check-fail/not-yet-supported/qualified_effect.em:3:14 ]
    │
- 2 │ f : Unit -> <Log.Log> Unit
-   │              ───┬───  
-   │                 ╰───── this is implemented in a later stage
+ 3 │ f : Unit -> <Log.State Int> Unit
+   │              ──────┬──────  
+   │                    ╰──────── this is implemented in a later stage
 ───╯

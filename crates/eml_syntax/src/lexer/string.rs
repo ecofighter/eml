@@ -116,7 +116,8 @@ impl Lexer<'_> {
         j
     }
 
-    /// S2 で実装する。今は閉じの `"""` までを1つのトークンにして、parser が E0004 を1件だけ出せるようにする。
+    /// S2 で実装する。今は閉じの `"""` までを1つのトークンにして、HIR が E0004 を1件だけ出せるようにする
+    /// (docs/spec/grammar.md の「実装の段階」)。
     pub(super) fn multiline_string(&mut self) {
         let text = self.text;
         let start = self.pos;
@@ -136,7 +137,8 @@ impl Lexer<'_> {
         self.push(MULTILINE_STRING, end);
     }
 
-    /// S2 で実装する。今は閉じまでを1つのトークンにして、parser が E0004 を1件だけ出せるようにする。
+    /// S2 で実装する。今は閉じまでを1つのトークンにして、HIR が E0004 を1件だけ出せるようにする
+    /// (docs/spec/grammar.md の「実装の段階」)。
     pub(super) fn raw_string(&mut self, hashes: usize) {
         let text = self.text;
         let start = self.pos;
