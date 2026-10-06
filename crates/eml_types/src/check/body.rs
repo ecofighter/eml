@@ -8,7 +8,7 @@ use la_arena::ArenaMap;
 
 use crate::codes;
 use crate::kind::problem::{Decl, Instance};
-use crate::kind::{KindOrigin, KindReason};
+use crate::kind::{KindOrigin, KindReason, Provenance};
 use crate::shape::{Rigids, lower_type};
 use crate::table::{Row, Table, Tail, Ty, TyShape, UnifyError};
 
@@ -411,7 +411,7 @@ impl BodyCheck<'_, '_> {
     ) -> T {
         let previous = self
             .table
-            .set_kind_origin(Some(KindOrigin { range, reason }));
+            .set_kind_origin(Provenance::At(KindOrigin { range, reason }));
         let result = check(self);
         self.table.set_kind_origin(previous);
         result

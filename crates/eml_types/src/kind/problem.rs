@@ -4,7 +4,7 @@
 use eml_hir::builtin::Builtin;
 use eml_hir::{ConstructorId, FunctionId, OperationId};
 
-use super::{Bound, Carry, KindOrigin, KindVar};
+use super::{Bound, Carry, KindVar, Provenance};
 use crate::ty::{Linearity, Multiplicity};
 
 /// 1つの束の上の制約 `下限 ≤ 上限` の集まり。変数は 0 から `vars` 未満の番号を持つ。
@@ -13,7 +13,7 @@ pub(crate) struct Bounds<T> {
     pub vars: usize,
     pub constraints: Vec<(Bound<T>, Bound<T>)>,
     /// 制約ごとの由来。`constraints` と同じ順に並ぶ。
-    pub origins: Vec<Option<KindOrigin>>,
+    pub origins: Vec<Provenance>,
 }
 
 impl<T> Default for Bounds<T> {
@@ -32,7 +32,7 @@ impl<T> Bounds<T> {
         KindVar::from_index(self.vars - 1)
     }
 
-    pub fn require(&mut self, lower: Bound<T>, upper: Bound<T>, origin: Option<KindOrigin>) {
+    pub fn require(&mut self, lower: Bound<T>, upper: Bound<T>, origin: Provenance) {
         self.constraints.push((lower, upper));
         self.origins.push(origin);
     }
@@ -57,7 +57,7 @@ pub(crate) struct Instance {
     /// `Shape` の多重度の Kind 変数の番号の順に並べた、具体化した新しい変数。
     pub mult: Vec<KindVar>,
     /// 具体化したときに設定されていた由来。複写する制約の由来になる。
-    pub origin: Option<KindOrigin>,
+    pub origin: Provenance,
 }
 
 /// 宣言のシグネチャの Kind 変数。`Shape` の番号の順に、問題の中の番号を並べる。

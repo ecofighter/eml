@@ -8,7 +8,7 @@ use eml_diagnostics::{TextRange, TextSize};
 use eml_hir::{Body, ExprId, ExprKind, LocalId, PatId, PatKind, Res, Stmt};
 
 use crate::check::BodyTyping;
-use crate::kind::{Bound, DropFix, KindOrigin, KindReason, UnusedPath};
+use crate::kind::{Bound, DropFix, KindOrigin, KindReason, Provenance, UnusedPath};
 use crate::table::Table;
 use crate::ty::Linearity;
 
@@ -486,7 +486,11 @@ impl<'a> Usage<'a, '_> {
         reason: KindReason,
         constrain: impl FnOnce(&mut Table),
     ) {
-        let origin = self.reliable.then_some(KindOrigin { range, reason });
+        let origin = if self.reliable {
+            Provenance::At(KindOrigin { range, reason })
+        } else {
+            Provenance::Suppressed
+        };
         let previous = self.table.set_kind_origin(origin);
         constrain(&mut *self.table);
         self.table.set_kind_origin(previous);

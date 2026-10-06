@@ -4,7 +4,7 @@
 use std::collections::{HashMap, HashSet};
 
 use super::problem::{Bounds, Decl, KindProblem, KindScheme, OwnVars};
-use super::{Bound, CarriedInner, Carry, KindOrigin, KindReason, KindVar, Level};
+use super::{Bound, CarriedInner, Carry, KindOrigin, KindReason, KindVar, Level, Provenance};
 use crate::ty::{Linearity, Multiplicity};
 
 /// 1つの SCC を解いた結果。`schemes` は `members` と同じ順に並ぶ。
@@ -25,17 +25,18 @@ pub(crate) fn solve_scc(
     let carry_violated = violated_carries(&merged.carries, &lin, &mult);
     let violated = lin_violated
         .iter()
-        .filter_map(|&index| merged.lin.origins[index].clone())
+        .map(|&index| &merged.lin.origins[index])
         .chain(
             mult_violated
                 .iter()
-                .filter_map(|&index| merged.mult.origins[index].clone()),
+                .map(|&index| &merged.mult.origins[index]),
         )
         .chain(
             carry_violated
                 .iter()
-                .filter_map(|&index| merged.carries[index].origin.clone()),
+                .map(|&index| &merged.carries[index].origin),
         )
+        .filter_map(reportable)
         .collect();
     let lin_graph = Graph::new(
         &merged.lin,
@@ -53,6 +54,25 @@ pub(crate) fn solve_scc(
         })
         .collect();
     Solution { schemes, violated }
+}
+
+/// 違反した制約のうち報告するものの由来。由来を付け忘れた制約の違反は処理系の誤りである。debug ビルドでは止め、release
+/// ビルドでは、違反のあるプログラムを通さないよう関数を指す E3001 にする。
+fn reportable(provenance: &Provenance) -> Option<KindOrigin> {
+    match provenance {
+        Provenance::At(origin) => Some(origin.clone()),
+        Provenance::Suppressed => None,
+        Provenance::Declaration => {
+            unreachable!("a constraint from a declaration alone is never violated")
+        }
+        Provenance::Unattributed(range) => {
+            debug_assert!(false, "a violated Kind constraint has no origin");
+            Some(KindOrigin {
+                range: *range,
+                reason: KindReason::Unified,
+            })
+        }
+    }
 }
 
 /// SCC の問題を1つの番号の空間に並べ、具体化の記録を展開したもの。
@@ -108,7 +128,7 @@ fn merge(members: &[(Decl, &KindProblem)], schemes: &HashMap<Decl, KindScheme>) 
                     let scheme = schemes
                         .get(&instance.decl)
                         .expect("a callee is solved before its callers");
-                    merged.copy_scheme(scheme, &lin, &mult, instance.origin.as_ref());
+                    merged.copy_scheme(scheme, &lin, &mult, &instance.origin);
                 }
             }
         }
@@ -138,17 +158,21 @@ impl Merged {
     }
 
     /// 同じ SCC の宣言の参照は、多相化する前の Kind 変数を共有するのと同じ解にする (docs/spec/types.md の「推論」)。
-    /// 変数どうしの制約は違反にならないので、由来は付けない。
+    /// 変数どうしの制約は違反にならないので、宣言の由来にする。
     fn equate(&mut self, lin: &[KindVar], mult: &[KindVar], callee: usize) {
         debug_assert_eq!(lin.len(), self.own[callee].lin.len());
         debug_assert_eq!(mult.len(), self.own[callee].mult.len());
         for (&v, &w) in lin.iter().zip(&self.own[callee].lin) {
-            self.lin.require(Bound::Var(v), Bound::Var(w), None);
-            self.lin.require(Bound::Var(w), Bound::Var(v), None);
+            self.lin
+                .require(Bound::Var(v), Bound::Var(w), Provenance::Declaration);
+            self.lin
+                .require(Bound::Var(w), Bound::Var(v), Provenance::Declaration);
         }
         for (&v, &w) in mult.iter().zip(&self.own[callee].mult) {
-            self.mult.require(Bound::Var(v), Bound::Var(w), None);
-            self.mult.require(Bound::Var(w), Bound::Var(v), None);
+            self.mult
+                .require(Bound::Var(v), Bound::Var(w), Provenance::Declaration);
+            self.mult
+                .require(Bound::Var(w), Bound::Var(v), Provenance::Declaration);
         }
     }
 
@@ -160,7 +184,7 @@ impl Merged {
         scheme: &KindScheme,
         lin: &[KindVar],
         mult: &[KindVar],
-        origin: Option<&KindOrigin>,
+        origin: &Provenance,
     ) {
         let rename_lin = |bound: Bound<Linearity>| match bound {
             Bound::Var(v) => Bound::Var(lin[v.index()]),
@@ -172,23 +196,26 @@ impl Merged {
         };
         for &(lower, upper) in &scheme.lin {
             self.lin
-                .require(rename_lin(lower), rename_lin(upper), origin.cloned());
+                .require(rename_lin(lower), rename_lin(upper), origin.clone());
         }
         for &(lower, upper) in &scheme.mult {
             self.mult
-                .require(rename_mult(lower), rename_mult(upper), origin.cloned());
+                .require(rename_mult(lower), rename_mult(upper), origin.clone());
         }
         for carry in &scheme.carries {
-            let origin = origin.map(|origin| match &origin.reason {
-                KindReason::Passed(name) => KindOrigin {
-                    range: origin.range,
+            let origin = match origin {
+                Provenance::At(KindOrigin {
+                    range,
+                    reason: KindReason::Passed(name),
+                }) => Provenance::At(KindOrigin {
+                    range: *range,
                     reason: KindReason::CarriedThrough {
                         name: name.clone(),
-                        inner: carry.origin.as_ref().map(CarriedInner::of),
+                        inner: carry.origin.origin().map(CarriedInner::of),
                     },
-                },
-                _ => origin.clone(),
-            });
+                }),
+                other => other.clone(),
+            };
             self.carries.push(Carry {
                 lin: rename_lin(carry.lin),
                 mult: rename_mult(carry.mult),
@@ -610,8 +637,7 @@ fn carry_residual(
 ) -> Vec<Carry> {
     let lin_kept = kept_components(lin_graph, member);
     let mult_kept = kept_components(mult_graph, member);
-    let mut best: HashMap<(Bound<Linearity>, Bound<Multiplicity>), Option<&KindOrigin>> =
-        HashMap::new();
+    let mut best: HashMap<(Bound<Linearity>, Bound<Multiplicity>), &Provenance> = HashMap::new();
     for carry in carries {
         let lins = lowers(lin_graph, &lin_kept, carry.lin, Linearity::Lin);
         let mults = lowers(mult_graph, &mult_kept, carry.mult, Multiplicity::Multi);
@@ -621,10 +647,10 @@ fn carry_residual(
                 if matches!((lin, mult), (Bound::Const(_), Bound::Const(_))) {
                     continue;
                 }
-                let origin = carry.origin.as_ref();
+                let origin = &carry.origin;
                 best.entry((lin, mult))
                     .and_modify(|kept| {
-                        if earlier(origin, *kept) {
+                        if earlier(origin, kept) {
                             *kept = origin;
                         }
                     })
@@ -637,7 +663,7 @@ fn carry_residual(
         .map(|((lin, mult), origin)| Carry {
             lin,
             mult,
-            origin: origin.cloned(),
+            origin: origin.clone(),
         })
         .collect();
     out.sort_by_key(|carry| (bound_key(carry.lin), bound_key(carry.mult)));
@@ -674,9 +700,9 @@ fn lowers<T: Level>(
     out
 }
 
-/// 由来の位置の比べ方。範囲の始まり、終わりの順に比べ、由来のないものは由来のあるものより後に置く。
-fn earlier(a: Option<&KindOrigin>, b: Option<&KindOrigin>) -> bool {
-    match (a, b) {
+/// 由来の位置の比べ方。範囲の始まり、終わりの順に比べ、報告する由来のないものは後に置く。
+fn earlier(a: &Provenance, b: &Provenance) -> bool {
+    match (a.origin(), b.origin()) {
         (Some(a), Some(b)) => (a.range.start(), a.range.end()) < (b.range.start(), b.range.end()),
         (Some(_), None) => true,
         (None, _) => false,
@@ -719,15 +745,15 @@ mod tests {
         let mut linearity = lattice::<Linearity>();
         let a = linearity.fresh();
         let internal = linearity.fresh();
-        linearity.require(Bound::Var(a), Bound::Var(internal), None);
+        linearity.require(Bound::Var(a), Bound::Var(internal), Provenance::Declaration);
         let mut multiplicity = lattice::<Multiplicity>();
         let e = multiplicity.fresh();
         let inner = multiplicity.fresh();
-        multiplicity.require(Bound::Var(e), Bound::Var(inner), None);
+        multiplicity.require(Bound::Var(e), Bound::Var(inner), Provenance::Declaration);
         let carries = [Carry {
             lin: Bound::Var(internal),
             mult: Bound::Var(inner),
-            origin: None,
+            origin: Provenance::Declaration,
         }];
         assert_eq!(
             carry_residual(
@@ -739,7 +765,7 @@ mod tests {
             vec![Carry {
                 lin: Bound::Var(a),
                 mult: Bound::Var(e),
-                origin: None,
+                origin: Provenance::Declaration,
             }]
         );
     }
@@ -748,19 +774,23 @@ mod tests {
     fn a_residual_carry_keeps_one_constant_side() {
         let mut linearity = lattice::<Linearity>();
         let internal = linearity.fresh();
-        linearity.require(Bound::Const(Linearity::Lin), Bound::Var(internal), None);
+        linearity.require(
+            Bound::Const(Linearity::Lin),
+            Bound::Var(internal),
+            Provenance::Declaration,
+        );
         let mut multiplicity = lattice::<Multiplicity>();
         let e = multiplicity.fresh();
         let carries = [
             Carry {
                 lin: Bound::Var(internal),
                 mult: Bound::Var(e),
-                origin: None,
+                origin: Provenance::Declaration,
             },
             Carry {
                 lin: Bound::Const(Linearity::Lin),
                 mult: Bound::Const(Multiplicity::Multi),
-                origin: None,
+                origin: Provenance::Declaration,
             },
         ];
         assert_eq!(
@@ -773,7 +803,7 @@ mod tests {
             vec![Carry {
                 lin: Bound::Const(Linearity::Lin),
                 mult: Bound::Var(e),
-                origin: None,
+                origin: Provenance::Declaration,
             }]
         );
     }
@@ -790,8 +820,12 @@ mod tests {
         let mut lattice = lattice::<Linearity>();
         let a = lattice.fresh();
         let b = lattice.fresh();
-        lattice.require(Bound::Var(a), Bound::Var(b), None);
-        lattice.require(Bound::Const(Linearity::Lin), Bound::Var(a), None);
+        lattice.require(Bound::Var(a), Bound::Var(b), Provenance::Declaration);
+        lattice.require(
+            Bound::Const(Linearity::Lin),
+            Bound::Var(a),
+            Provenance::Declaration,
+        );
         assert_eq!(
             solve(&lattice),
             (vec![Linearity::Lin, Linearity::Lin], vec![])
@@ -802,8 +836,16 @@ mod tests {
     fn an_upper_bound_below_the_solution_is_reported() {
         let mut lattice = lattice::<Multiplicity>();
         let a = lattice.fresh();
-        lattice.require(Bound::Const(Multiplicity::Multi), Bound::Var(a), None);
-        lattice.require(Bound::Var(a), Bound::Const(Multiplicity::Once), None);
+        lattice.require(
+            Bound::Const(Multiplicity::Multi),
+            Bound::Var(a),
+            Provenance::Declaration,
+        );
+        lattice.require(
+            Bound::Var(a),
+            Bound::Const(Multiplicity::Once),
+            Provenance::Declaration,
+        );
         assert_eq!(solve(&lattice).1, vec![1]);
     }
 
@@ -813,9 +855,13 @@ mod tests {
         let a = lattice.fresh();
         let b = lattice.fresh();
         let internal = lattice.fresh();
-        lattice.require(Bound::Var(a), Bound::Var(internal), None);
-        lattice.require(Bound::Var(internal), Bound::Const(Linearity::Unr), None);
-        lattice.require(Bound::Var(a), Bound::Var(b), None);
+        lattice.require(Bound::Var(a), Bound::Var(internal), Provenance::Declaration);
+        lattice.require(
+            Bound::Var(internal),
+            Bound::Const(Linearity::Unr),
+            Provenance::Declaration,
+        );
+        lattice.require(Bound::Var(a), Bound::Var(b), Provenance::Declaration);
         assert_eq!(
             residual_of(&lattice, &[a, b]),
             vec![
@@ -830,9 +876,17 @@ mod tests {
         let mut lattice = lattice::<Linearity>();
         let c = lattice.fresh();
         let internal = lattice.fresh();
-        lattice.require(Bound::Const(Linearity::Lin), Bound::Var(internal), None);
-        lattice.require(Bound::Var(internal), Bound::Var(c), None);
-        lattice.require(Bound::Const(Linearity::Unr), Bound::Var(c), None);
+        lattice.require(
+            Bound::Const(Linearity::Lin),
+            Bound::Var(internal),
+            Provenance::Declaration,
+        );
+        lattice.require(Bound::Var(internal), Bound::Var(c), Provenance::Declaration);
+        lattice.require(
+            Bound::Const(Linearity::Unr),
+            Bound::Var(c),
+            Provenance::Declaration,
+        );
         assert_eq!(
             residual_of(&lattice, &[c]),
             vec![(Bound::Const(Linearity::Lin), Bound::Var(c))]
@@ -848,7 +902,7 @@ mod tests {
             decl: Decl::Builtin(Builtin::IntEq),
             lin: vec![copy],
             mult: vec![],
-            origin: None,
+            origin: Provenance::Declaration,
         });
         let scheme = KindScheme {
             lin: vec![(
@@ -869,7 +923,7 @@ mod tests {
         let carry = |lin, mult| Carry {
             lin,
             mult,
-            origin: None,
+            origin: Provenance::Declaration,
         };
         let carries = [
             carry(Bound::Var(KindVar(0)), Bound::Var(KindVar(0))),
@@ -886,9 +940,17 @@ mod tests {
         let mut lattice = lattice::<Multiplicity>();
         let vars: Vec<KindVar> = (0..4).map(|_| lattice.fresh()).collect();
         for pair in vars.windows(2).rev() {
-            lattice.require(Bound::Var(pair[0]), Bound::Var(pair[1]), None);
+            lattice.require(
+                Bound::Var(pair[0]),
+                Bound::Var(pair[1]),
+                Provenance::Declaration,
+            );
         }
-        lattice.require(Bound::Const(Multiplicity::Multi), Bound::Var(vars[0]), None);
+        lattice.require(
+            Bound::Const(Multiplicity::Multi),
+            Bound::Var(vars[0]),
+            Provenance::Declaration,
+        );
         assert_eq!(solve(&lattice).0, vec![Multiplicity::Multi; 4]);
     }
 
@@ -898,10 +960,14 @@ mod tests {
         let x = lattice.fresh();
         let y = lattice.fresh();
         let internal = lattice.fresh();
-        lattice.require(Bound::Var(x), Bound::Var(y), None);
-        lattice.require(Bound::Var(y), Bound::Var(internal), None);
-        lattice.require(Bound::Var(internal), Bound::Var(x), None);
-        lattice.require(Bound::Var(internal), Bound::Const(Linearity::Unr), None);
+        lattice.require(Bound::Var(x), Bound::Var(y), Provenance::Declaration);
+        lattice.require(Bound::Var(y), Bound::Var(internal), Provenance::Declaration);
+        lattice.require(Bound::Var(internal), Bound::Var(x), Provenance::Declaration);
+        lattice.require(
+            Bound::Var(internal),
+            Bound::Const(Linearity::Unr),
+            Provenance::Declaration,
+        );
         assert_eq!(
             residual_of(&lattice, &[x, y]),
             vec![
@@ -920,10 +986,22 @@ mod tests {
         let mus: Vec<KindVar> = (0..3).map(|_| lattice.fresh()).collect();
         let ms: Vec<KindVar> = (0..3).map(|_| lattice.fresh()).collect();
         for i in 0..3 {
-            lattice.require(Bound::Var(mus[i]), Bound::Var(mus[(i + 1) % 3]), None);
-            lattice.require(Bound::Var(mus[i]), Bound::Var(ms[i]), None);
+            lattice.require(
+                Bound::Var(mus[i]),
+                Bound::Var(mus[(i + 1) % 3]),
+                Provenance::Declaration,
+            );
+            lattice.require(
+                Bound::Var(mus[i]),
+                Bound::Var(ms[i]),
+                Provenance::Declaration,
+            );
         }
-        lattice.require(Bound::Var(ms[1]), Bound::Const(Linearity::Unr), None);
+        lattice.require(
+            Bound::Var(ms[1]),
+            Bound::Const(Linearity::Unr),
+            Provenance::Declaration,
+        );
         let graph = Graph::new(&lattice, (0..3).map(|i| vec![mus[i], ms[i]]).collect());
         let mu = Bound::Var(KindVar::from_index(0));
         let m = Bound::Var(KindVar::from_index(1));
@@ -941,18 +1019,22 @@ mod tests {
         let mut f = KindProblem::default();
         let a = f.lin.fresh();
         let passed = f.lin.fresh();
-        f.lin.require(Bound::Var(a), Bound::Var(passed), None);
+        f.lin
+            .require(Bound::Var(a), Bound::Var(passed), Provenance::Declaration);
         f.own.lin = vec![a];
         f.instances.push(Instance {
             decl: function(1),
             lin: vec![passed],
             mult: vec![],
-            origin: None,
+            origin: Provenance::Declaration,
         });
         let mut g = KindProblem::default();
         let b = g.lin.fresh();
-        g.lin
-            .require(Bound::Var(b), Bound::Const(Linearity::Unr), None);
+        g.lin.require(
+            Bound::Var(b),
+            Bound::Const(Linearity::Unr),
+            Provenance::Declaration,
+        );
         g.own.lin = vec![b];
         let solution = solve_scc(&[(function(0), &f), (function(1), &g)], &HashMap::new());
         let unr = vec![(
@@ -986,19 +1068,20 @@ mod tests {
             carries: vec![Carry {
                 lin: Bound::Var(KindVar::from_index(0)),
                 mult: Bound::Const(Multiplicity::Multi),
-                origin: Some(inner),
+                origin: Provenance::At(inner),
             }],
         };
         let mut f = KindProblem::default();
         let a = f.lin.fresh();
         let passed = f.lin.fresh();
-        f.lin.require(Bound::Var(a), Bound::Var(passed), None);
+        f.lin
+            .require(Bound::Var(a), Bound::Var(passed), Provenance::Declaration);
         f.own.lin = vec![a];
         f.instances.push(Instance {
             decl: function(9),
             lin: vec![passed],
             mult: vec![],
-            origin: Some(KindOrigin {
+            origin: Provenance::At(KindOrigin {
                 range: range(5, 9),
                 reason: KindReason::Passed("keep".to_string()),
             }),
@@ -1016,7 +1099,7 @@ mod tests {
                 carries: vec![Carry {
                     lin: Bound::Var(KindVar::from_index(0)),
                     mult: Bound::Const(Multiplicity::Multi),
-                    origin: Some(KindOrigin {
+                    origin: Provenance::At(KindOrigin {
                         range: range(5, 9),
                         reason: KindReason::CarriedThrough {
                             name: "keep".to_string(),
@@ -1032,13 +1115,50 @@ mod tests {
     }
 
     #[test]
+    fn suppressed_violations_are_not_reported() {
+        let mut problem = KindProblem::default();
+        let x = problem.lin.fresh();
+        problem.lin.require(
+            Bound::Const(Linearity::Lin),
+            Bound::Var(x),
+            Provenance::Suppressed,
+        );
+        problem.lin.require(
+            Bound::Var(x),
+            Bound::Const(Linearity::Unr),
+            Provenance::Suppressed,
+        );
+        let solution = solve_scc(&[(function(0), &problem)], &HashMap::new());
+        assert!(solution.violated.is_empty());
+    }
+
+    #[test]
+    #[should_panic(expected = "has no origin")]
+    fn an_unattributed_violation_is_a_bug() {
+        let mut problem = KindProblem::default();
+        let x = problem.lin.fresh();
+        let range = TextRange::new(0.into(), 1.into());
+        problem.lin.require(
+            Bound::Const(Linearity::Lin),
+            Bound::Var(x),
+            Provenance::Unattributed(range),
+        );
+        problem.lin.require(
+            Bound::Var(x),
+            Bound::Const(Linearity::Unr),
+            Provenance::Unattributed(range),
+        );
+        solve_scc(&[(function(0), &problem)], &HashMap::new());
+    }
+
+    #[test]
     fn carries_of_one_pair_keep_the_earliest_origin() {
         let mut linearity = lattice::<Linearity>();
         let a = linearity.fresh();
         let mut multiplicity = lattice::<Multiplicity>();
         let e = multiplicity.fresh();
         let origin = |start, end| {
-            Some(KindOrigin {
+            Provenance::At(KindOrigin {
                 range: range(start, end),
                 reason: KindReason::Unified,
             })
@@ -1052,7 +1172,7 @@ mod tests {
             Carry {
                 lin: Bound::Var(a),
                 mult: Bound::Var(e),
-                origin: None,
+                origin: Provenance::Declaration,
             },
             Carry {
                 lin: Bound::Var(a),

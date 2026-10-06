@@ -1,6 +1,6 @@
 use crate::context::Context;
 use crate::kind::problem::{Bounds, Instance, KindProblem, OwnVars};
-use crate::kind::{Bound, Carry, KindOrigin, KindVar};
+use crate::kind::{Bound, Carry, KindVar, Provenance};
 use crate::ty::{EffectLabel, Linearity, Multiplicity, RowTail, Type};
 use eml_hir::{EffectId, LangItems, OperationId, TypeDefId};
 
@@ -203,7 +203,7 @@ pub(crate) struct Table<'c> {
     rigids: Vec<RigidInfo>,
     /// 線形性の束の制約。段1は集めるだけで、解くのは段2である (docs/implementation/architecture.md の「`eml_types` の内部」)。
     linearity: Bounds<Linearity>,
-    kind_origin: Option<KindOrigin>,
+    kind_origin: Provenance,
     multiplicity: Bounds<Multiplicity>,
     pub int: Ty,
     pub string: Ty,
@@ -217,11 +217,11 @@ pub(crate) struct Table<'c> {
 
 impl<'c> Table<'c> {
     /// これから作る Kind の制約の由来を設定し、前の由来を返す。呼び出し側は、制約を作る処理の後で前の由来に戻す。
-    pub fn set_kind_origin(&mut self, origin: Option<KindOrigin>) -> Option<KindOrigin> {
+    pub fn set_kind_origin(&mut self, origin: Provenance) -> Provenance {
         std::mem::replace(&mut self.kind_origin, origin)
     }
 
-    pub fn kind_origin(&self) -> Option<KindOrigin> {
+    pub fn kind_origin(&self) -> Provenance {
         self.kind_origin.clone()
     }
 
@@ -255,7 +255,7 @@ impl<'c> Table<'c> {
             row_vars: Vec::new(),
             rigids: Vec::new(),
             linearity: Bounds::default(),
-            kind_origin: None,
+            kind_origin: Provenance::Declaration,
             multiplicity: Bounds::default(),
             int: Ty(0),
             string: Ty(0),

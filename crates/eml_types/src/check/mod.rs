@@ -11,7 +11,7 @@ use la_arena::{Arena, ArenaMap};
 use crate::context::Context;
 use crate::kind::problem::{Decl, KindProblem, KindScheme, OwnVars};
 use crate::kind::solve::solve_scc;
-use crate::kind::{Bound, KindOrigin, KindReason, KindVar};
+use crate::kind::{Bound, KindOrigin, KindReason, KindVar, Provenance};
 use crate::shape::{Own, Shape, constructor_shape, operation_shape, signature_shape};
 use crate::table::{Row, Table, TyShape};
 use crate::ty::{EffectLabel, KindConstraint, KindTerm, Linearity, Multiplicity, RowTerm, Type};
@@ -166,6 +166,8 @@ pub(crate) fn check_body(
     let own = shape.instantiate_rigid(&mut table, &signature.generics);
     // 部分適用のクロージャは、それまでの引数を捕まえる (docs/spec/types.md の「関数型」)
     table.closure_kinds(own.ty, body.params.len(), &[]);
+    // ここから後の制約は、由来を付け忘れたら Unattributed になり、違反すれば段2が見つける
+    table.set_kind_origin(Provenance::Unattributed(function.name_range));
     let mut diagnostics = Vec::new();
     let mut checker = BodyCheck {
         module,
@@ -266,7 +268,7 @@ fn declaration_schemes(
     let mut schemes = HashMap::new();
     for (decl, problem) in &problems {
         let solution = solve_scc(&[(*decl, problem)], &schemes);
-        // 宣言の問題は由来を設定せずに作るので、報告する違反はない
+        // 宣言の問題の制約はすべて宣言の由来 (`Provenance::Declaration`) で、それだけでは破れないので、報告する違反はない
         debug_assert!(solution.violated.is_empty());
         let scheme = solution.schemes.into_iter().next().unwrap_or_default();
         schemes.insert(*decl, scheme);

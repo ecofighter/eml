@@ -9,7 +9,7 @@ use eml_hir::{
 };
 
 use crate::check::{BodyTyping, CallRows};
-use crate::kind::{Across, Bound, CallKind, CarriedValue, KindOrigin, KindReason};
+use crate::kind::{Across, Bound, CallKind, CarriedValue, KindOrigin, KindReason, Provenance};
 use crate::table::{Table, Ty};
 use crate::ty::Multiplicity;
 
@@ -267,14 +267,18 @@ impl Carrying<'_, '_> {
         {
             return;
         }
-        let origin = self.reliable.then(|| KindOrigin {
-            range: self.body.exprs[at].range,
-            reason: KindReason::CarriedAcross {
-                value,
-                multi: self.multi_operation(across),
-                call: call.clone(),
-            },
-        });
+        let origin = if self.reliable {
+            Provenance::At(KindOrigin {
+                range: self.body.exprs[at].range,
+                reason: KindReason::CarriedAcross {
+                    value,
+                    multi: self.multi_operation(across),
+                    call: call.clone(),
+                },
+            })
+        } else {
+            Provenance::Suppressed
+        };
         let previous = self.table.set_kind_origin(origin);
         self.table.carry(ty, &mults);
         self.table.set_kind_origin(previous);

@@ -50,6 +50,30 @@ pub(crate) struct KindOrigin {
     pub reason: KindReason,
 }
 
+/// Kind の制約の由来の種類。由来を付け忘れた制約の違反を、黙って捨てずに見つけるため、由来を省けない形にする。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Provenance {
+    /// 報告する由来。
+    At(KindOrigin),
+    /// 誤りの跡がある本体 (`usage::reliable` が偽) の、使用回数と持ち越しの制約。正しく数えられないので、違反しても
+    /// 報告しない (docs/spec/diagnostics.md)。
+    Suppressed,
+    /// 宣言の型と、SCC の中の参照の等式から作る制約。それだけでは破れない。具体化するときは参照した位置の由来を付けて
+    /// 複写する。
+    Declaration,
+    /// 本体の検査の表の既定値で、由来を付け忘れた制約である。値は検査している関数の名前の範囲。
+    Unattributed(TextRange),
+}
+
+impl Provenance {
+    pub fn origin(&self) -> Option<&KindOrigin> {
+        match self {
+            Provenance::At(origin) => Some(origin),
+            Provenance::Suppressed | Provenance::Declaration | Provenance::Unattributed(_) => None,
+        }
+    }
+}
+
 /// `drop x` の行を入れる位置と、その行の字下げ。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct DropFix {
@@ -224,7 +248,7 @@ impl CarriedInner {
 pub(crate) struct Carry {
     pub lin: Bound<Linearity>,
     pub mult: Bound<Multiplicity>,
-    pub origin: Option<KindOrigin>,
+    pub origin: Provenance,
 }
 
 #[cfg(test)]
