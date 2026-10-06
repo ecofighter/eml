@@ -1,16 +1,14 @@
 //! `effect` の宣言の変換 (docs/spec/declarations.md の「`effect`」)。エフェクトは型の名前空間に、操作は値の名前空間に
 //! 置く (docs/spec/modules.md の「名前空間」)。
 
-use std::collections::HashMap;
-
-use eml_diagnostics::{Diagnostic, FileId, Label, TextRange};
+use eml_diagnostics::{Diagnostic, FileId, Label};
 use eml_syntax::{SyntaxKind, ast};
 use la_arena::Arena;
 
 use super::duplicate;
-use super::scope::ItemScope;
 use super::types::{TypeLowering, Vars};
 use crate::codes;
+use crate::def_map::{DefMap, Resolver};
 use crate::hir::{
     EffectDef, EffectId, Generics, ItemId, ModuleId, OpMultiplicity, Operation, RowRef, Signature,
     TypeRef, TypeRefId, TypeRefKind, TypeVarDecl, TypeVarId,
@@ -18,30 +16,19 @@ use crate::hir::{
 use crate::item_tree::EffectItem;
 use crate::program::Items;
 
-/// エフェクトの名前をすべて登録してから、操作のシグネチャを変換する。操作の引数の型の row で、後ろで宣言した
-/// エフェクトも引けるようにするため。`declared` は `data` の宣言と共有する型の名前空間のユーザーの名前である。
-pub(super) fn lower_effects(
+/// エフェクトの名前と型引数を置く。操作のシグネチャは `lower_operations` が、すべての型とエフェクトを置いた後に
+/// 変換する。
+pub(super) fn declare_effects(
     file: FileId,
     module: ModuleId,
     items: &[EffectItem],
-    declared: &mut HashMap<String, TextRange>,
-    scope: &mut ItemScope,
-    module_items: &mut Items,
+    def_map: &DefMap,
+    effects: &mut Arena<EffectDef>,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
-    let Items {
-        effects,
-        operations,
-        ..
-    } = module_items;
-    let mut lowered = Vec::new();
-    for item in items.iter().map(|item| &item.syntax) {
-        // 名前がなければパーサが報告済み
-        let Some(name) = item.name().map(|name| name.token()) else {
-            continue;
-        };
+    for (k, item) in items.iter().enumerate() {
         let mut generics = Generics::default();
-        for param in item.params().map(|name| name.token()) {
+        for param in item.syntax.params().map(|name| name.token()) {
             let text = param.text();
             let range = param.text_range();
             if let Some((_, first)) = generics.type_vars.iter().find(|(_, var)| var.name == text) {
@@ -53,40 +40,46 @@ pub(super) fn lower_effects(
                 range,
             });
         }
-        let params = generics.type_vars.len();
-        let range = name.text_range();
         let id = ItemId::new(
             module,
             effects.alloc(EffectDef {
-                name: name.text().to_string(),
+                name: item.name.clone(),
                 generics,
                 operations: Vec::new(),
             }),
         );
-        match declared.get(name.text()) {
-            Some(&first) => diagnostics.push(duplicate(file, name.text(), first, range)),
-            None => {
-                declared.insert(name.text().to_string(), range);
-                scope.define_effect(name.text(), id, params);
-            }
-        }
-        lowered.push((id, item));
+        debug_assert_eq!(id, def_map.effect_id(module, k));
     }
-    let mut values: HashMap<String, TextRange> = HashMap::new();
-    for (effect, item) in lowered {
-        for decl in item.operations() {
-            let Some(operation) = lower_operation(
+}
+
+/// 操作のシグネチャを変換して置く。重複した `effect` の操作も置く。使えない印は `DefMap` が持つ。
+pub(super) fn lower_operations(
+    file: FileId,
+    module: ModuleId,
+    items: &[EffectItem],
+    def_map: &DefMap,
+    module_items: &mut Items,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    let resolver = def_map.resolver(module);
+    let Items {
+        effects,
+        operations,
+        ..
+    } = module_items;
+    for (k, item) in items.iter().enumerate() {
+        let effect = def_map.effect_id(module, k);
+        for (j, decl) in item.operations.iter().enumerate() {
+            let operation = lower_operation(
                 file,
-                &decl,
+                &decl.syntax,
                 effect,
                 &effects[effect.local].generics,
-                scope,
+                resolver,
                 diagnostics,
-            ) else {
-                continue;
-            };
+            )
+            .expect("an operation of the item tree has a name");
             let name = operation.name.clone();
-            let range = operation.name_range;
             // 同じエフェクトに同じ名前の操作を重ねても、並びには最初の1つだけを入れる。節の名前は最初の操作に解決
             // されるので、2つ目を入れると、重複 (E1003) に加えて節のない操作 (E1013) まで報告してしまう
             let repeated = effects[effect.local]
@@ -94,15 +87,9 @@ pub(super) fn lower_effects(
                 .iter()
                 .any(|&op| operations[op.local].name == name);
             let id = ItemId::new(module, operations.alloc(operation));
+            debug_assert_eq!(id, def_map.operation_id(module, k, j));
             if !repeated {
                 effects[effect.local].operations.push(id);
-            }
-            match values.get(&name) {
-                Some(&first) => diagnostics.push(duplicate(file, &name, first, range)),
-                None => {
-                    values.insert(name.clone(), range);
-                    scope.define_operation(&name, id);
-                }
             }
         }
     }
@@ -113,7 +100,7 @@ fn lower_operation(
     decl: &ast::OpDecl,
     effect: EffectId,
     effect_generics: &Generics,
-    scope: &ItemScope,
+    scope: Resolver<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Option<Operation> {
     // 名前がなければパーサが報告済み

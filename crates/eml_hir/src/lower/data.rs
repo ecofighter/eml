@@ -1,39 +1,26 @@
-//! `data` の宣言の変換 (docs/spec/declarations.md の「`data` と `type`」)。型は型の名前空間に、コンストラクタは
-//! 値の名前空間に置く (docs/spec/modules.md の「名前空間」)。
+//! `data` の宣言の変換 (docs/spec/declarations.md の「`data` と `type`」)。名前の表と重複の判定は `DefMap` が持つ。
 
-use std::collections::HashMap;
-
-use eml_diagnostics::{Diagnostic, FileId, TextRange};
-use eml_syntax::ast;
+use eml_diagnostics::{Diagnostic, FileId};
 use la_arena::Arena;
 
 use super::duplicate;
-use super::scope::{ItemScope, TypeItem};
 use super::types::{TypeLowering, Vars};
-use crate::hir::{
-    Constructor, Generics, ItemId, ModuleId, TypeDef, TypeDefId, TypeDefKind, TypeVarDecl,
-};
+use crate::def_map::{DefMap, Resolver};
+use crate::hir::{Constructor, Generics, ItemId, ModuleId, TypeDef, TypeDefKind, TypeVarDecl};
 use crate::item_tree::DataItem;
 
-/// 型の名前と型引数だけを先に登録する。フィールドの型と操作のシグネチャが、後ろで宣言した型も引けるようにするため。
-/// `declared` は型の名前空間のユーザーの名前で、エフェクトの宣言と共有して重複 (E1003) を見つける。
+/// 型の名前と型引数を置く。フィールドの型は `lower_constructors` が、すべての型を置いた後に変換する。
 pub(super) fn declare_data(
     file: FileId,
     module: ModuleId,
     items: &[DataItem],
-    declared: &mut HashMap<String, TextRange>,
-    scope: &mut ItemScope,
+    def_map: &DefMap,
     types: &mut Arena<TypeDef>,
     diagnostics: &mut Vec<Diagnostic>,
-) -> Vec<(TypeDefId, ast::DataItem)> {
-    let mut lowered = Vec::new();
-    for item in items.iter().map(|item| &item.syntax) {
-        // 名前がなければパーサが報告済み
-        let Some(name) = item.name().map(|name| name.token()) else {
-            continue;
-        };
+) {
+    for (k, item) in items.iter().enumerate() {
         let mut generics = Generics::default();
-        for param in item.params().map(|name| name.token()) {
+        for param in item.syntax.params().map(|name| name.token()) {
             let text = param.text();
             let range = param.text_range();
             if let Some((_, first)) = generics.type_vars.iter().find(|(_, var)| var.name == text) {
@@ -45,12 +32,10 @@ pub(super) fn declare_data(
                 range,
             });
         }
-        let params = generics.type_vars.len();
-        let range = name.text_range();
         let id = ItemId::new(
             module,
             types.alloc(TypeDef {
-                name: name.text().to_string(),
+                name: item.name.clone(),
                 generics,
                 types: Arena::new(),
                 kind: TypeDefKind::Data {
@@ -58,49 +43,37 @@ pub(super) fn declare_data(
                 },
             }),
         );
-        match declared.get(name.text()) {
-            Some(&first) => diagnostics.push(duplicate(file, name.text(), first, range)),
-            None => {
-                declared.insert(name.text().to_string(), range);
-                scope.define_type(name.text(), id, params);
-            }
-        }
-        lowered.push((id, item.clone()));
+        debug_assert_eq!(id, def_map.type_id(module, k));
     }
-    lowered
 }
 
-/// フィールドの型を変換し、コンストラクタを値の名前空間に置く。タグは宣言の中の順の番号である。
+/// フィールドの型を変換してコンストラクタを置く。タグは宣言の中の順の番号である。重複した `data` のコンストラクタも
+/// 置く。使えない印は `DefMap` が持つので、使った位置が診断なしで `Missing` になる
+/// (docs/spec/diagnostics.md の「連鎖する診断の抑止」)。
 pub(super) fn lower_constructors(
     file: FileId,
     module: ModuleId,
-    data: &[(TypeDefId, ast::DataItem)],
-    scope: &mut ItemScope,
+    items: &[DataItem],
+    def_map: &DefMap,
     types: &mut Arena<TypeDef>,
     constructors: &mut Arena<Constructor>,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
-    let mut values: HashMap<String, TextRange> = HashMap::new();
-    for (ty, item) in data {
-        for alt in item.alts() {
-            // 名前も演算子もなければパーサが報告済み
-            let Some(name) = alt
-                .name()
-                .or_else(|| alt.operator())
-                .map(|name| name.token())
-            else {
-                continue;
-            };
+    let resolver: Resolver<'_> = def_map.resolver(module);
+    for (k, item) in items.iter().enumerate() {
+        let ty = def_map.type_id(module, k);
+        for (j, constructor) in item.constructors.iter().enumerate() {
             let def = &mut types[ty.local];
             let mut lowering = TypeLowering {
                 file,
                 types: &mut def.types,
                 generics: &mut def.generics,
-                items: scope,
+                items: resolver,
                 vars: Vars::Data,
                 diagnostics: &mut *diagnostics,
             };
-            let fields = alt
+            let fields = constructor
+                .syntax
                 .fields()
                 .map(|field| {
                     let range = field.range();
@@ -113,34 +86,18 @@ pub(super) fn lower_constructors(
             else {
                 unreachable!("`declare_data` makes data types")
             };
-            let range = name.text_range();
-            let registered = scope.type_item(&def.name) == Some(TypeItem::Type(*ty));
             let id = ItemId::new(
                 module,
                 constructors.alloc(Constructor {
-                    name: name.text().to_string(),
-                    range,
-                    ty: *ty,
+                    name: constructor.name.clone(),
+                    range: constructor.name_range,
+                    ty,
                     tag: declared.len() as u32,
                     fields,
                 }),
             );
+            debug_assert_eq!(id, def_map.constructor_id(module, k, j));
             declared.push(id);
-            // 重複した型 (E1003) の本体は、名前を引いても別の型を指す。コンストラクタをそのまま置くと使った箇所が
-            // 「expected `T`, found `T`」になり、置かないと「cannot find constructor」が続く。どちらも E1003 の連鎖
-            // なので、使えない印だけを置いて、使った箇所は診断なしで `Missing` にする (docs/spec/diagnostics.md の
-            // 「連鎖する診断の抑止」)
-            if !registered {
-                scope.define_unusable_constructor(name.text());
-                continue;
-            }
-            match values.get(name.text()) {
-                Some(&first) => diagnostics.push(duplicate(file, name.text(), first, range)),
-                None => {
-                    values.insert(name.text().to_string(), range);
-                    scope.define_constructor(name.text(), id);
-                }
-            }
         }
     }
 }

@@ -2,9 +2,9 @@ use eml_diagnostics::{Diagnostic, FileId, Label, TextRange};
 use eml_syntax::{SyntaxToken, ast};
 use la_arena::Arena;
 
-use super::scope::{ItemScope, TypeItem};
 use super::{PathName, path_name};
 use crate::codes;
+use crate::def_map::{Resolver, TypeItem};
 use crate::hir::{
     EffectRef, Generics, RowRef, RowVarDecl, RowVarId, TypeRef, TypeRefId, TypeRefKind, TypeVarDecl,
 };
@@ -25,7 +25,7 @@ pub(super) struct TypeLowering<'a> {
     pub file: FileId,
     pub types: &'a mut Arena<TypeRef>,
     pub generics: &'a mut Generics,
-    pub items: &'a ItemScope,
+    pub items: Resolver<'a>,
     pub vars: Vars,
     pub diagnostics: &'a mut Vec<Diagnostic>,
 }

@@ -4,9 +4,10 @@ use eml_diagnostics::{Diagnostic, Label, TextRange, TextSize};
 use eml_syntax::ast::{self, OpSeqElement};
 
 use super::expr::BodyLowering;
-use super::scope::{Assoc, Fixity, ValueItem};
 use crate::codes;
+use crate::def_map::ValueItem;
 use crate::hir::{ExprId, ExprKind, Res};
+use crate::item_tree::{Assoc, Fixity};
 
 #[derive(Clone)]
 enum Piece {

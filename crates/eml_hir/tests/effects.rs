@@ -116,10 +116,20 @@ fn type_arguments_of_effects_in_an_open_row_are_checked() {
 
 #[test]
 fn a_function_after_an_operation_of_the_same_name_is_a_duplicate() {
-    let text = "effect E where\n  run : Int -> Int\n\nrun : Int -> Int\nrun x = x";
+    // 不具合2: 関数が操作を上書きし、節の `run` が E1001 になっていた
+    let text = "effect E where\n  run : Int -> Int\n\nrun : Int -> Int\nrun x = x\n\nf : Unit -> Int\nf () = handle run 1 with\n  | run x k -> resume k x";
     assert_eq!(
         diagnostics(text),
         ["E1003 4:1 `run` is defined more than once"]
+    );
+}
+
+#[test]
+fn a_function_before_an_operation_of_the_same_name_does_not_hide_it_from_clauses() {
+    let text = "run : Int -> Int\nrun x = x\n\neffect E where\n  run : Int -> Int\n\nf : Unit -> Int\nf () = handle 1 with\n  | run x k -> resume k x";
+    assert_eq!(
+        diagnostics(text),
+        ["E1003 5:3 `run` is defined more than once"]
     );
 }
 

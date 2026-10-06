@@ -119,14 +119,6 @@ pub fn item_tree(file: FileId, source: &ast::SourceFile) -> (ItemTree, Vec<Diagn
     let mut effects = Vec::new();
     let mut fixities = Vec::new();
     for (index, item) in source.items().enumerate() {
-        // `pub` は R7b-3 の Task 4 で実装する。それまでは今と同じく E0004 にする
-        if let Some(keyword) = item.pub_keyword() {
-            diagnostics.push(Diagnostic::not_yet_supported(
-                file,
-                keyword.text_range(),
-                "`pub` is not supported yet",
-            ));
-        }
         let public = item.pub_keyword().is_some();
         match item {
             ast::Item::Signature(signature) => {

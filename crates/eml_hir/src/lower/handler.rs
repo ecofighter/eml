@@ -6,6 +6,7 @@ use eml_syntax::{SyntaxToken, ast};
 
 use super::expr::BodyLowering;
 use crate::codes;
+use crate::def_map::Lookup;
 use crate::hir::*;
 
 /// 節を読みながら集める情報。
@@ -97,9 +98,14 @@ impl BodyLowering<'_> {
             return;
         };
         let name_range = name.text_range();
-        let Some(op) = self.items.operation(name.text()) else {
-            self.unknown_operation(&name);
-            return;
+        let op = match self.items.operation(name.text()) {
+            Lookup::Found(op) => op,
+            // 重複した effect の操作である。重複は E1003 で報告済み
+            Lookup::Unusable => return,
+            Lookup::NotFound => {
+                self.unknown_operation(&name);
+                return;
+            }
         };
         let operation = self.operation(op);
         let effect = operation.effect;

@@ -165,5 +165,10 @@ pub(crate) fn test_program(text: &str) -> eml_hir::Program {
     let main = files.add("test.em", text);
     let (parse, _) = eml_syntax::parse(main, files.text(main));
     let prelude_tree = eml_hir::parse_prelude(prelude);
-    eml_hir::lower((prelude, &prelude_tree), (main, &parse.tree())).0
+    let trees = [
+        eml_hir::item_tree(prelude, &prelude_tree).0,
+        eml_hir::item_tree(main, &parse.tree()).0,
+    ];
+    let (def_map, _) = eml_hir::def_map(&trees);
+    eml_hir::lower(&def_map, &trees).0
 }

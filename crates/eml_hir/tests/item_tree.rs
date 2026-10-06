@@ -13,8 +13,7 @@ fn tree(text: &str) -> (eml_hir::ItemTree, Vec<String>) {
 #[test]
 fn signatures_and_equations_are_grouped_by_name() {
     let (tree, diagnostics) = tree("f : Int -> Int\nf 0 = 1\nf n = n\npub g : Int\ng = 1");
-    // `pub` は Task 4 で実装する。それまでは E0004 が出る
-    assert_eq!(diagnostics, ["E0004 4:1 `pub` is not supported yet"]);
+    assert!(diagnostics.is_empty(), "{diagnostics:?}");
     let names: Vec<(&str, bool, usize)> = tree
         .functions
         .iter()

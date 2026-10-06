@@ -8,9 +8,9 @@ use eml_syntax::ast::{self, OpSeqElement};
 
 use super::expr::BodyLowering;
 use super::ops::NEGATE_PRECEDENCE;
-use super::scope::{Assoc, Fixity};
 use crate::codes;
 use crate::hir::*;
+use crate::item_tree::{Assoc, Fixity};
 
 /// 空いている被演算子の側。
 #[derive(Clone, Copy, PartialEq, Eq)]

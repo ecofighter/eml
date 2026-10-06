@@ -87,21 +87,13 @@ pub fn parse(text: &str) -> Parsed {
 
 #[cfg(feature = "hir")]
 pub fn lower(text: &str) -> Lowered {
-    let Parsed {
-        files,
-        prelude,
-        file,
-        parse,
-        mut diagnostics,
-    } = parse(text);
-    let prelude = prelude.expect("the `hir` feature registers the Prelude");
-    let prelude_tree = eml_hir::parse_prelude(prelude);
-    let (program, stage) = eml_hir::lower((prelude, &prelude_tree), (file, &parse.tree()));
+    let (parsed, trees, def_map, mut diagnostics) = items(text);
+    let (program, stage) = eml_hir::lower(&def_map, &trees);
     diagnostics.extend(stage);
     sort_diagnostics(&mut diagnostics);
     Lowered {
-        files,
-        file,
+        files: parsed.files,
+        file: parsed.file,
         program,
         diagnostics,
     }
@@ -111,15 +103,42 @@ pub fn lower(text: &str) -> Lowered {
 #[cfg(feature = "hir")]
 pub fn def_map(text: &str) -> (eml_hir::DefMap, Vec<String>) {
     let parsed = parse(text);
+    let (_, def_map, mut diagnostics) = item_stages(&parsed);
+    sort_diagnostics(&mut diagnostics);
+    (def_map, short(&parsed.files, &diagnostics))
+}
+
+/// 構文解析から `DefMap` までの段階を流す。診断は構文解析、`ItemTree`、`DefMap` のものを合わせる。
+#[cfg(feature = "hir")]
+fn items(
+    text: &str,
+) -> (
+    Parsed,
+    [eml_hir::ItemTree; 2],
+    eml_hir::DefMap,
+    Vec<Diagnostic>,
+) {
+    let mut parsed = parse(text);
+    let (trees, def_map, stage) = item_stages(&parsed);
+    let mut diagnostics = std::mem::take(&mut parsed.diagnostics);
+    diagnostics.extend(stage);
+    (parsed, trees, def_map, diagnostics)
+}
+
+/// `ItemTree` と `DefMap` を作り、その2つの段階の診断を返す。
+#[cfg(feature = "hir")]
+fn item_stages(parsed: &Parsed) -> ([eml_hir::ItemTree; 2], eml_hir::DefMap, Vec<Diagnostic>) {
     let prelude = parsed
         .prelude
         .expect("the `hir` feature registers the Prelude");
     let prelude_tree = eml_hir::parse_prelude(prelude);
-    let (prelude_items, _) = eml_hir::item_tree(prelude, &prelude_tree);
-    let (items, _) = eml_hir::item_tree(parsed.file, &parsed.parse.tree());
-    let (map, mut diagnostics) = eml_hir::def_map(&[prelude_items, items]);
-    sort_diagnostics(&mut diagnostics);
-    (map, short(&parsed.files, &diagnostics))
+    let (prelude_items, stage) = eml_hir::item_tree(prelude, &prelude_tree);
+    debug_assert!(stage.is_empty(), "{stage:?}");
+    let (items, mut diagnostics) = eml_hir::item_tree(parsed.file, &parsed.parse.tree());
+    let trees = [prelude_items, items];
+    let (def_map, stage) = eml_hir::def_map(&trees);
+    diagnostics.extend(stage);
+    (trees, def_map, diagnostics)
 }
 
 /// 前提として診断のないソースを使うテストのため。条件を緩めないよう、警告も1件として数える。

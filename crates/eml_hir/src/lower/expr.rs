@@ -2,18 +2,17 @@ use eml_diagnostics::{Diagnostic, FileId, Label, TextRange};
 use eml_syntax::{SyntaxKind, SyntaxToken, ast};
 use la_arena::Arena;
 
-use super::scope::Assoc;
-use super::scope::Fixity;
-use super::scope::{ItemScope, ValueItem};
 use super::types::{TypeLowering, Vars};
 use super::{PathName, path_name};
 use crate::codes;
+use crate::def_map::{Lookup, Resolver, ValueItem};
 use crate::hir::*;
+use crate::item_tree::{Assoc, Fixity};
 use crate::program::Module;
 
 pub(super) struct BodyLowering<'a> {
     pub(super) file: FileId,
-    pub(super) items: &'a ItemScope,
+    pub(super) items: Resolver<'a>,
     /// item を引くモジュール。本体は Prelude のコンストラクタ (`True` など) や操作も引くので、モジュールをまたいで読む。
     /// handler の節の検査が操作の引数の個数とエフェクトの操作の並びを、コンストラクタのパターンが引数の個数 (E1016)
     /// を引く。
@@ -52,7 +51,7 @@ impl<'a> BodyLowering<'a> {
     #[allow(clippy::too_many_arguments)]
     pub(super) fn new(
         file: FileId,
-        items: &'a ItemScope,
+        items: Resolver<'a>,
         modules: &'a Arena<Module>,
         lang: LangItems,
         generics: &'a mut Generics,
@@ -708,20 +707,21 @@ impl<'a> BodyLowering<'a> {
         args: Vec<PatId>,
         range: TextRange,
     ) -> PatKind {
-        let Some(ctor) = self.items.constructor(name.text()) else {
-            if self.items.is_unusable(name.text()) {
+        let ctor = match self.items.constructor(name.text()) {
+            Lookup::Found(ctor) => ctor,
+            Lookup::Unusable => return PatKind::Missing,
+            Lookup::NotFound => {
+                // `::` は S2 のリストのコンストラクタである。ユーザーが同じ名前のコンストラクタを定義していれば、上で引ける
+                if name.text() == "::" {
+                    return self.unsupported_pat(name.text_range(), "lists are not supported yet");
+                }
+                self.diagnostics.push(Diagnostic::error(
+                    codes::UNDEFINED_NAME,
+                    format!("cannot find constructor `{}`", name.text()),
+                    Label::new(self.file, name.text_range(), "not found in this scope"),
+                ));
                 return PatKind::Missing;
             }
-            // `::` は S2 のリストのコンストラクタである。ユーザーが同じ名前のコンストラクタを定義していれば、上で引ける
-            if name.text() == "::" {
-                return self.unsupported_pat(name.text_range(), "lists are not supported yet");
-            }
-            self.diagnostics.push(Diagnostic::error(
-                codes::UNDEFINED_NAME,
-                format!("cannot find constructor `{}`", name.text()),
-                Label::new(self.file, name.text_range(), "not found in this scope"),
-            ));
-            return PatKind::Missing;
         };
         let expected = self.constructor(ctor).fields.len();
         if args.len() != expected {

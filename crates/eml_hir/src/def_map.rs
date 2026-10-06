@@ -144,7 +144,8 @@ pub fn def_map(trees: &[ItemTree]) -> (DefMap, Vec<Diagnostic>) {
     )
 }
 
-fn module_id(index: usize) -> ModuleId {
+/// `trees` の番号のモジュールの ID。`lower` もモジュールを同じ順に置く。
+pub(crate) fn module_id(index: usize) -> ModuleId {
     ModuleId::from_raw(RawIdx::from(index as u32))
 }
 

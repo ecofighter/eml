@@ -332,14 +332,11 @@ fn an_unfinished_import_is_reported_once_by_each_stage() {
 }
 
 #[test]
-fn pub_and_type_are_not_supported_yet() {
+fn type_and_import_are_not_supported_yet() {
     assert_eq!(
         diagnostics("pub type Person = (String, Int)\npub f : Int\nf = 1\npub import M"),
         [
-            "E0004 1:1 `pub` is not supported yet",
             "E0004 1:5 `type` declarations are not supported yet",
-            "E0004 2:1 `pub` is not supported yet",
-            "E0004 4:1 `pub` is not supported yet",
             "E0004 4:5 `import` is not supported yet",
         ]
     );

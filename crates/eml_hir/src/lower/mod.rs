@@ -3,83 +3,110 @@ mod effect;
 mod expr;
 mod handler;
 mod ops;
-mod prelude;
-mod scope;
 mod section;
 mod types;
 
-use std::collections::HashMap;
-
 use eml_diagnostics::{Diagnostic, FileId, Label, TextRange};
 use eml_syntax::{SyntaxToken, ast};
-use la_arena::{Arena, ArenaMap};
+use la_arena::{Arena, ArenaMap, Idx};
 
 use crate::codes;
+use crate::def_map::{DefMap, module_id};
 use crate::hir::*;
-use crate::item_tree::{FixityItem, FunctionItem, item_tree};
-use crate::program::{ItemId, Module, Program};
+use crate::item_tree::{FunctionItem, ItemTree};
+use crate::program::{ItemId, Items, Module, ModuleId, Program};
 use expr::BodyLowering;
-use scope::{ItemScope, ValueItem};
 use types::{TypeLowering, Vars};
 
-/// Prelude と入口のファイルを、別々のモジュールに変換する。名前解決は R7b-3 で `ItemTree` と `DefMap` に分けるまで、
-/// 1つの名前の表 (`ItemScope`) で行う。
-pub fn lower(
-    prelude: (FileId, &ast::SourceFile),
-    main: (FileId, &ast::SourceFile),
-) -> (Program, Vec<Diagnostic>) {
-    let (file, source) = main;
+/// 全モジュールの item と本体を変換する。名前は `def_map` で引き、item はその局所の番号の順にアリーナへ置く
+/// (docs/superpowers/specs/2026-10-06-refactor-r7-design.md の 3.5)。
+pub fn lower(def_map: &DefMap, trees: &[ItemTree]) -> (Program, Vec<Diagnostic>) {
     let mut diagnostics = Vec::new();
     let mut modules = Arena::new();
-    let prelude_id = modules.alloc(Module::new(prelude.0, "Prelude"));
-    let main_id = modules.alloc(Module::new(file, "Main"));
-    let mut scope = ItemScope::new();
-    let builtin = scope::builtin_items(prelude_id, &mut modules[prelude_id].items, &mut scope);
-    let prelude_functions = prelude::lower_prelude(
-        prelude_id,
-        prelude.0,
-        prelude.1,
-        &mut modules[prelude_id].items,
-        &mut scope,
-    );
-    // ユーザーの定義が `Bool`、`True`、`False` を隠す前に引く
-    let lang = scope::lang_items(builtin, &scope, &modules, &prelude_functions);
-    let (tree, found) = item_tree(file, source);
-    diagnostics.extend(found);
-    let items = &mut modules[main_id].items;
-    // 型の名前空間のユーザーの名前。`data` とエフェクトの間の重複も見つける
-    let mut type_names = HashMap::new();
-    let data = data::declare_data(
+    for (index, tree) in trees.iter().enumerate() {
+        let module = module_id(index);
+        let id = modules.alloc(Module::new(tree.file, def_map.module_name(module)));
+        debug_assert_eq!(id, module);
+    }
+    for (index, tree) in trees.iter().enumerate() {
+        let module = module_id(index);
+        lower_items(
+            def_map,
+            module,
+            tree,
+            &mut modules[module].items,
+            &mut diagnostics,
+        );
+    }
+    let lang = def_map.lang();
+    // Core IR は `Bool` を、タグ 0 の `False` と 1 の `True` で表す (docs/spec/core-ir.md)
+    let tag = |id: ConstructorId| modules[id.module].items.constructors[id.local].tag;
+    assert_eq!((tag(lang.false_ctor), tag(lang.true_ctor)), (0, 1));
+    for (index, tree) in trees.iter().enumerate() {
+        let module = module_id(index);
+        let bodies = lower_bodies(def_map, module, tree, &mut modules, &mut diagnostics);
+        modules[module].bodies = bodies;
+    }
+    (
+        Program {
+            modules,
+            prelude: def_map.prelude(),
+            entry: def_map.entry(),
+            lang,
+        },
+        diagnostics,
+    )
+}
+
+/// item を `DefMap` と同じ局所の番号の順に置く。合成の item が先で、続けて `ItemTree` の順である。
+fn lower_items(
+    def_map: &DefMap,
+    module: ModuleId,
+    tree: &ItemTree,
+    items: &mut Items,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    let file = tree.file;
+    for synthetic in def_map.synthetic_types(module) {
+        items.types.alloc(TypeDef::builtin(synthetic.name));
+    }
+    for synthetic in def_map.synthetic_effects(module) {
+        items.effects.alloc(EffectDef {
+            name: synthetic.name.to_string(),
+            generics: Generics::default(),
+            operations: Vec::new(),
+        });
+    }
+    data::declare_data(
         file,
-        main_id,
+        module,
         &tree.data,
-        &mut type_names,
-        &mut scope,
+        def_map,
         &mut items.types,
-        &mut diagnostics,
+        diagnostics,
     );
-    // 関数のシグネチャの row がユーザーのエフェクトを引けるように、エフェクトを先に変換する
-    effect::lower_effects(
+    effect::declare_effects(
         file,
-        main_id,
+        module,
         &tree.effects,
-        &mut type_names,
-        &mut scope,
-        items,
-        &mut diagnostics,
+        def_map,
+        &mut items.effects,
+        diagnostics,
     );
-    // フィールドの関数型の row がエフェクトを引けるように、コンストラクタはエフェクトの後に変換する
+    effect::lower_operations(file, module, &tree.effects, def_map, items, diagnostics);
     data::lower_constructors(
         file,
-        main_id,
-        &data,
-        &mut scope,
+        module,
+        &tree.data,
+        def_map,
         &mut items.types,
         &mut items.constructors,
-        &mut diagnostics,
+        diagnostics,
     );
-    let mut pending = Vec::new();
-    for function in &tree.functions {
+    // Prelude の等式のないシグネチャは intrinsic の関数である (docs/spec/modules.md の「Prelude」)
+    let intrinsic = module == def_map.prelude();
+    let resolver = def_map.resolver(module);
+    for (k, function) in tree.functions.iter().enumerate() {
         let FunctionItem {
             name,
             first_range,
@@ -87,8 +114,7 @@ pub fn lower(
             equations,
             ..
         } = function;
-        let (name, first_range) = (name.clone(), *first_range);
-        if let (Some((_, range)), None) = (signature, equations.first()) {
+        if let (Some((_, range)), None, false) = (signature, equations.first(), intrinsic) {
             diagnostics.push(Diagnostic::error(
                 codes::MISSING_EQUATION,
                 format!("`{name}` has a signature but no equation"),
@@ -108,9 +134,9 @@ pub fn lower(
                 file,
                 types: &mut types,
                 generics: &mut generics,
-                items: &scope,
+                items: resolver,
                 vars: Vars::Define,
-                diagnostics: &mut diagnostics,
+                diagnostics: &mut *diagnostics,
             }
             .lower(node.ty(), range);
             Signature {
@@ -120,111 +146,59 @@ pub fn lower(
                 generics,
             }
         });
-        let name_range = equations.first().map_or(first_range, |(_, range)| *range);
         let id = ItemId::new(
-            main_id,
+            module,
             items.functions.alloc(Function {
                 name: name.clone(),
-                name_range,
+                name_range: equations.first().map_or(*first_range, |(_, range)| *range),
                 signature_name_range,
                 equation_ranges: equations.iter().map(|(_, range)| *range).collect(),
                 signature,
-                intrinsic: false,
+                intrinsic,
             }),
         );
-        if let Some(ValueItem::Operation(operation)) = scope.define_function(&name, id) {
-            diagnostics.push(duplicate(
-                file,
-                &name,
-                items.operations[operation.local].name_range,
-                first_range,
-            ));
-        }
-        if !equations.is_empty() {
-            pending.push((id, equations.clone()));
-        }
+        debug_assert_eq!(id, def_map.function_id(module, k));
     }
-    // fixity の宣言は位置によらずモジュール全体の組み直しに効くので、本体の変換の前に、すべての値を定義してから読む
-    declare_fixities(file, &tree.fixities, &mut scope, &mut diagnostics);
-    // 本体は、すべての関数の名前がそろってから変換する。後ろで定義した関数も呼べるようにするため
+}
+
+/// 本体は、すべてのモジュールの item を置いてから変換する。後ろで定義した関数も、ほかのモジュールの item も引けるように
+/// するため。
+fn lower_bodies(
+    def_map: &DefMap,
+    module: ModuleId,
+    tree: &ItemTree,
+    modules: &mut Arena<Module>,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> ArenaMap<Idx<Function>, Body> {
     let mut bodies = ArenaMap::default();
-    for (id, equations) in pending {
+    for (k, function) in tree.functions.iter().enumerate() {
+        if function.equations.is_empty() {
+            continue;
+        }
+        let id = def_map.function_id(module, k);
         // シグネチャの型変数の表は関数のアリーナの中にあり、本体の変換はほかの item を同じアリーナから読む。
         // そのため、変換の間だけ表を取り出す。シグネチャがなければ、本体の注釈は型変数を引けない
         // (docs/spec/types.md の「推論」)
-        let mut generics = modules[main_id].items.functions[id.local]
+        let mut generics = modules[module].items.functions[id.local]
             .signature
             .as_mut()
             .map(|signature| std::mem::take(&mut signature.generics))
             .unwrap_or_default();
         let body = BodyLowering::new(
-            file,
-            &scope,
-            &modules,
-            lang,
+            tree.file,
+            def_map.resolver(module),
+            modules,
+            def_map.lang(),
             &mut generics,
-            &mut diagnostics,
+            diagnostics,
         )
-        .lower_equations(&equations);
-        if let Some(signature) = &mut modules[main_id].items.functions[id.local].signature {
+        .lower_equations(&function.equations);
+        if let Some(signature) = &mut modules[module].items.functions[id.local].signature {
             signature.generics = generics;
         }
         bodies.insert(id.local, body);
     }
-    modules[main_id].bodies = bodies;
-    (
-        Program {
-            modules,
-            prelude: prelude_id,
-            entry: main_id,
-            lang,
-        },
-        diagnostics,
-    )
-}
-
-/// ユーザーの fixity の宣言を表に入れる。同じ演算子への2回目の宣言は E1021、このモジュールで定義していない演算子
-/// への宣言は E1022 にし、どちらも表に入れない (docs/spec/declarations.md の「fixity」)。
-fn declare_fixities(
-    file: FileId,
-    items: &[FixityItem],
-    scope: &mut ItemScope,
-    diagnostics: &mut Vec<Diagnostic>,
-) {
-    for item in items {
-        let Some(fixity) = item.fixity else {
-            continue;
-        };
-        for (name, range) in &item.operators {
-            let (name, range) = (name.as_str(), *range);
-            if !scope.defines_value(name) {
-                diagnostics.push(Diagnostic::error(
-                    codes::FIXITY_WITHOUT_DEFINITION,
-                    format!("`{name}` is not defined in this module"),
-                    Label::new(
-                        file,
-                        range,
-                        "a fixity declaration needs a definition of its operator in the same module",
-                    ),
-                ));
-                continue;
-            }
-            if let Err(first) = scope.declare_fixity(name, fixity, range) {
-                diagnostics.push(
-                    Diagnostic::error(
-                        codes::DUPLICATE_FIXITY,
-                        format!("`{name}` has more than one fixity declaration"),
-                        Label::new(file, range, "declared again here"),
-                    )
-                    .with_secondary(Label::new(
-                        file,
-                        first,
-                        "first declared here",
-                    )),
-                );
-            }
-        }
-    }
+    bodies
 }
 
 /// 名前の経路の読み方。修飾名は S2 で実装する (docs/spec/modules.md)。

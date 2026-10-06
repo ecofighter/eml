@@ -77,7 +77,14 @@ impl Session {
     fn front(&self, entry: FileId) -> (eml_hir::Program, eml_types::TypedModule, Vec<Diagnostic>) {
         let (parse, mut diagnostics) = eml_syntax::parse(entry, self.files.text(entry));
         let prelude = eml_hir::parse_prelude(self.prelude);
-        let (program, stage) = eml_hir::lower((self.prelude, &prelude), (entry, &parse.tree()));
+        let (prelude_items, stage) = eml_hir::item_tree(self.prelude, &prelude);
+        debug_assert!(stage.is_empty(), "{stage:?}");
+        let (items, stage) = eml_hir::item_tree(entry, &parse.tree());
+        diagnostics.extend(stage);
+        let trees = [prelude_items, items];
+        let (def_map, stage) = eml_hir::def_map(&trees);
+        diagnostics.extend(stage);
+        let (program, stage) = eml_hir::lower(&def_map, &trees);
         diagnostics.extend(stage);
         let (typed, stage) = eml_types::check(&program);
         diagnostics.extend(stage);

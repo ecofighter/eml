@@ -65,3 +65,10 @@ fn a_session_registers_the_prelude_for_rendering() {
     let rendered = eml_diagnostics::render(&[diagnostic], session.files());
     assert!(rendered.contains("Prelude.em"));
 }
+
+#[test]
+fn the_prelude_alone_has_no_diagnostics() {
+    let mut session = Session::new();
+    let file = session.add_file("a.em", "");
+    assert!(session.check(file).is_empty());
+}

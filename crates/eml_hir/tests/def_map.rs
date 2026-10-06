@@ -73,3 +73,34 @@ fn fixities_belong_to_the_definition_a_name_resolves_to() {
     assert_eq!(resolver.fixity("<+>"), fixity(2, Assoc::Right));
     assert_eq!(resolver.fixity("*"), fixity(7, Assoc::Left));
 }
+
+#[test]
+fn prelude_fixities_follow_the_standard_table() {
+    // docs/spec/declarations.md の標準の演算子の表。入口のモジュールから、Prelude の `pub` の fixity として引く
+    let table: &[(&[&str], u8, Assoc)] = &[
+        (&["<|"], 0, Assoc::Right),
+        (&["|>"], 1, Assoc::Left),
+        (&["||"], 2, Assoc::Right),
+        (&["&&"], 3, Assoc::Right),
+        (&["==", "!=", "<", "<=", ">", ">="], 4, Assoc::None),
+        (&["++"], 5, Assoc::Right),
+        (&["+", "-"], 6, Assoc::Left),
+        (&["*", "/", "%"], 7, Assoc::Left),
+        (&[">>", "<<"], 9, Assoc::Right),
+    ];
+    let (map, diagnostics) = def_map("");
+    assert!(diagnostics.is_empty(), "{diagnostics:?}");
+    let resolver = map.resolver(map.entry());
+    for (ops, precedence, assoc) in table {
+        for op in *ops {
+            assert_eq!(
+                resolver.fixity(op),
+                Fixity {
+                    precedence: *precedence,
+                    assoc: *assoc
+                },
+                "{op}"
+            );
+        }
+    }
+}

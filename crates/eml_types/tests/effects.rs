@@ -499,3 +499,14 @@ fn the_current_state_is_passed_after_the_closing_paren_of_the_value() {
       7:39..7:39 " st"
     "#);
 }
+
+#[test]
+fn operations_of_a_duplicate_effect_do_not_cascade() {
+    // 今は重複したエフェクトの `y` が使え、`f` の row にない `E` として E2002 が連鎖する
+    let text = "effect E where\n  x : Unit -> Int\neffect E where\n  y : Unit -> Int\n\nf : Unit -> Int\nf () = y ()";
+    let checked = eml_test_support::check(text);
+    assert_eq!(
+        eml_test_support::short(&checked.files, &checked.diagnostics),
+        ["E1003 3:8 `E` is defined more than once"]
+    );
+}
