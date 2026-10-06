@@ -328,8 +328,8 @@ fn an_arm_that_uses_the_whole_value_also_receives_it() {
 
 #[test]
 fn a_wildcard_arm_does_not_block_the_known_tags() {
-    // 決定木が `if` の join point の本体の中に置いた残りの枝の join point を F が外へ出すので、B2 が `switch` に届き、
-    // `if` の結果で分岐し直さない (docs/implementation/status.md にあった制限)
+    // 決定木は行列に現れないコンストラクタを `default` にまとめ、残りの枝の join point を作らない。ワイルドカードの枝が
+    // あっても B2 が `switch` に届き、`if` の結果で分岐し直さない
     let text = "data Color = | Red | Green | Blue\n\npick : Bool -> Int\npick b =\n  let n = match (if b then Red else Green) with\n    | Red -> 1\n    | _ -> 2\n  n + 1\n\nmain : Unit -> <IO> Unit\nmain () = println (show_int (pick True))";
     let pick = function(&core_text(text, Pass::Simplify), "pick");
     assert_eq!(pick.matches("switch").count(), 1, "{pick}");

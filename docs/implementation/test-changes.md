@@ -294,3 +294,7 @@
 - 種類2: `eml_core_ir/tests/simplify.rs` の `known_tags_that_take_the_default_jump_straight_to_it` を、`switch` の数を数える確かめ方から、`simplify` の後の `pick` のインラインのスナップショットにした。`Green` と `Blue` のどちらも、`if` の結果で分岐し直さずに `return 2` になることを固定する
 - 新しいテスト: `eml_core_ir/tests/simplify.rs` の `f_floats_an_arm_join_point_so_that_b2_reaches_the_switch` (F を止めるとスナップショットが変わり、F が要ることを確かめる)、`eml_core_ir/tests/verify.rs` の `a_literal_case_that_binds_fields_is_rejected`、`a_string_case_without_its_constant_is_rejected`、`a_switch_with_two_defaults_does_not_parse`
 - `match` の枝の join point の番号を、決定木を作った後で、複数の葉から届く枝と葉から届かない枝にだけ取るようにした。番号の振り方は変わりうるが、変わったスナップショットはない
+
+### リファクタリング R7f
+
+- 種類1: Core IR の `Switch` の枝は R7e-2 で `Case` になったので、インタプリタの内部の誤りの文言を「a switch case binds a different number of fields than the value has」にそろえた。`eml_interp/tests/data.rs` の `an_arm_with_a_different_number_of_fields_is_an_internal_error` を `a_case_with_a_different_number_of_fields_is_an_internal_error` にし、期待する文言を変えた

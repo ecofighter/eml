@@ -76,7 +76,7 @@ fn main() {
 }
 
 #[test]
-fn an_arm_with_a_different_number_of_fields_is_an_internal_error() {
+fn a_case_with_a_different_number_of_fields_is_an_internal_error() {
     let text = r#"
 fn main() {
   let s0^ = const "field"
@@ -94,7 +94,7 @@ fn main() {
         result,
         Err(RuntimeError::Fault {
             fault: Fault::Internal(
-                "a switch arm binds a different number of fields than the value has"
+                "a switch case binds a different number of fields than the value has"
             ),
             function: "main".to_string(),
         })

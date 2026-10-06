@@ -129,8 +129,8 @@ enum Binding {
         params: Vec<VarId>,
         scope: CExprId,
     },
-    /// 本体を先に組み立てた join point。ここより後ろで組み立てる式を範囲にする。`match` の枝と、決定木の残りの
-    /// 部分木に使う (`pattern.rs`)。
+    /// 本体を先に組み立てた join point。ここより後ろで組み立てる式を範囲にする。`match` の枝のうち、2つ以上の葉か
+    /// 0の葉から届くものに使う (`pattern.rs`)。
     Shared {
         join: JoinId,
         params: Vec<VarId>,

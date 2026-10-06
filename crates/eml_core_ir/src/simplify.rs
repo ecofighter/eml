@@ -236,24 +236,40 @@ impl Simplify<'_> {
                     _ => None,
                 })
                 .collect();
-            // 値の行き先。`Some(tag)` はそのタグの case、`None` は `default` である。フィールドの数の合わない case と、
-            // 行き先のない値は、verifier と実行に任せて切り出さない
-            let target = |(tag, fields): &(u32, Vec<Atom>)| -> Option<Option<u32>> {
-                match cases
-                    .iter()
-                    .find(|case| case.pattern == CasePattern::Tag(*tag))
-                {
-                    Some(case) if case.fields.len() == fields.len() => Some(Some(*tag)),
-                    Some(_) => None,
-                    None => default.map(|_| None),
-                }
-            };
-            if values.iter().all(Option::is_none)
-                || !values.iter().flatten().all(|value| target(value).is_some())
+            // フィールドの数の合わない case と、行き先のない値は、verifier と実行に任せて切り出さない
+            let destinations: Vec<Destination> = values
+                .iter()
+                .map(|value| match value {
+                    None => Destination::Unknown,
+                    Some((tag, fields)) => {
+                        match cases
+                            .iter()
+                            .find(|case| case.pattern == CasePattern::Tag(*tag))
+                        {
+                            Some(case) if case.fields.len() == fields.len() => {
+                                Destination::To(Some(*tag))
+                            }
+                            Some(_) => Destination::Blocked,
+                            None if default.is_some() => Destination::To(None),
+                            None => Destination::Blocked,
+                        }
+                    }
+                })
+                .collect();
+            if destinations
+                .iter()
+                .all(|destination| *destination == Destination::Unknown)
+                || destinations.contains(&Destination::Blocked)
             {
                 continue;
             }
-            let targeted: Vec<Option<u32>> = values.iter().flatten().filter_map(target).collect();
+            let targeted: Vec<Option<u32>> = destinations
+                .iter()
+                .filter_map(|destination| match destination {
+                    Destination::To(key) => Some(*key),
+                    _ => None,
+                })
+                .collect();
             let mut split: Vec<SplitArm> = Vec::new();
             let mut dispatch = Vec::new();
             for (case, tag) in cases.iter().zip(tags) {
@@ -340,11 +356,11 @@ impl Simplify<'_> {
                     default: otherwise,
                 },
             );
-            for (&site, value) in sites.iter().zip(&values) {
-                let Some(value) = value else {
+            for ((&site, value), destination) in sites.iter().zip(&values).zip(&destinations) {
+                let (Some(value), Destination::To(key)) = (value, destination) else {
                     continue;
                 };
-                let key = target(value).expect("checked above");
+                let key = *key;
                 let arm = split
                     .iter()
                     .find(|arm| arm.target == key)
@@ -707,6 +723,17 @@ impl Simplify<'_> {
             self.replace(&mut parents, node, scope);
         }
     }
+}
+
+/// B2 で、jump が渡す値の行き先。値ごとに1回だけ求め、切り出せるかの判定、切り出す枝の選択、jump の付け替えで共有する。
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Destination {
+    /// 分かっているコンストラクタの値ではない。
+    Unknown,
+    /// 行き先の case も `default` もないか、case のフィールドの数が合わない。
+    Blocked,
+    /// `Some(tag)` はそのタグの case、`None` は `default`。
+    To(Option<u32>),
 }
 
 /// B2 が切り出す枝。

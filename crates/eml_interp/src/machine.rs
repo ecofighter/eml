@@ -86,7 +86,7 @@ impl<'p> Machine<'p> {
                     Some(case) => {
                         if case.fields.len() != fields.len() {
                             return Err(Fault::Internal(
-                                "a switch arm binds a different number of fields than the value has",
+                                "a switch case binds a different number of fields than the value has",
                             ));
                         }
                         for (&field, value) in case.fields.iter().zip(fields) {
