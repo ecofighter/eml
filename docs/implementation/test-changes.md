@@ -276,3 +276,7 @@
 - 種類1: `|>` と `<|` の脱糖をやめ、Prelude の関数の普通の呼び出しにした (docs/superpowers/specs/2026-10-06-refactor-r7-design.md の 4.4)。観測できる評価の順は変わらない。`eml_hir/tests/eval.rs` の `|>` のテストの手順を、呼ばれる式 `|>` を先に評価する形にし、`a_nested_pipe_is_a_callee` を `a_nested_pipe_is_an_argument` に、`a_pipe_into_a_call_beyond_the_arity_applies_before_the_piped_arrow` を `a_pipe_passes_both_operands_together` にした。`eml_hir/tests/structure.rs` の `prelude_signatures_without_equations_are_intrinsic_functions` で、`|>` と `<|` を本体のある関数として確かめる。UI テスト `check-fail/types/pipe_into_function_parameter.em` の診断は、E2002 (ラムダが `IO` を許さない) から、`|>` の引数 2 の型の不一致 E2001 になった (primary は `each` の位置で、`|>` の位置には「argument 2 of `|>`」の secondary が付く)。`eml_types/tests/linearity.rs` の `a_piped_value_is_kept_across_the_arrow_applied_before_a_later_argument` は E3006 のまま、primary と最初の secondary の位置が 32:3 から 32:8 に変わった (`a_piped_value_is_kept_across_the_call` は変わらない)
 - 種類2: `eml_hir/tests/operators.rs` の `pipes_become_applications` を `pipes_are_calls_of_prelude_functions` にし、HIR の表示から `|>` の印をなくした (`p` は `(@|> (@|> 1 @f) (@g 2))`、`q` は `(@<| (@g 1) (@f 2))`)。`|>` と `<|` を使う Core IR のスナップショットは、既存のテストになかったので変わらない
 - 新しいテスト: UI テスト `run-fail/files/missing_file_through_pipe.em`。`IO` の操作をパイプで渡したときの実行時エラーの関数名 (`op$open`) を、既知の制限として固定する
+
+### リファクタリング R7e-1
+
+- 新しいテスト: UI テスト `run/effects/operation_over_application.em`。エフェクトの型引数が関数型の操作に余った引数を渡すと、操作の結果に残りを適用する。R7e-1 より前は、すべての引数を `perform` に渡し、実行時に内部の誤りになっていた。呼び出しの飽和の場合分けを `saturate` にまとめたときに直ったので、その直りを固定する

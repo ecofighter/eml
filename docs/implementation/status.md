@@ -98,7 +98,7 @@ R5 は段階6a の後、段階6b の前に行う。段階6a はほぼ HIR の脱
 | R4 | Core IR のパスの構成 | パスの順番を持つ `pipeline.rs` と `lower_until`、パスの間の `captures`、verifier の2つの度合い (`verify_scopes`)、`translate/` への分割、パスごとのテスト | 完了 |
 | R5 | 型検査の SCC ごとの独立 | `Context`、閉じた形 `Shape`、関数ごとの本体の検査 (段1) と SCC ごとの Kind の解決 (段2)、ワークリストと強連結成分による残す制約、持ち越しの制約の組ごとの重複除去、`Type` の線形性を除くこと。`eml_types` の中で済ませる | 完了 |
 | R6 | 6b の前の継ぎ目 | 評価の順 (ML 式、`call_steps`)、型の走査、Kind の由来、handler の節の型、診断の順 (R6a)。Core IR の visitor と `FnBuilder`、`compact` と木の検査、末尾呼び出しの T、テキストの IR と `parse`、`eml_interp` の分割 (R6b) | 完了 |
-| R7 | 単一ファイルの前提をなくす | R7a (構文)、R7b (R7b-1〜R7b-3)、R7c、R7d、R7e-1 完了。R7b-1 で組み込みを Prelude の intrinsic の関数にし、R7b-2 でプログラム全体の ID、Prelude のモジュール、`Session` を作り、R7b-3 で名前解決を `ItemTree`、`DefMap`、変換の3段に分けて `pub` を受け付けた。R7c で型検査の出力を宣言ごとの `TypedProgram` にし、Kind の制約の由来にファイルを持たせ、入口の関数を `lower` の引数にした。R7d で `IO` を Prelude の `effect IO` にし、`not`、`&&`、`||`、`|>`、`<|`、`>>`、`<<` を eml で書き、`|>` と `<|` の脱糖をやめ、Core IR を入口から届く関数だけにした。R7e-1 で、呼び出しの飽和の場合分けを `saturate` の1か所にまとめた。R7e-2 と R7f は未着手 (docs/superpowers/specs/2026-10-06-refactor-r7-design.md) | 進行中 |
+| R7 | 単一ファイルの前提をなくす | R7a (構文)、R7b (R7b-1〜R7b-3)、R7c、R7d、R7e-1 完了。R7b-1 で組み込みを Prelude の intrinsic の関数にし、R7b-2 でプログラム全体の ID、Prelude のモジュール、`Session` を作り、R7b-3 で名前解決を `ItemTree`、`DefMap`、変換の3段に分けて `pub` を受け付けた。R7c で型検査の出力を宣言ごとの `TypedProgram` にし、Kind の制約の由来にファイルを持たせ、入口の関数を `lower` の引数にした。R7d で `IO` を Prelude の `effect IO` にし、`not`、`&&`、`||`、`|>`、`<|`、`>>`、`<<` を eml で書き、`|>` と `<|` の脱糖をやめ、Core IR を入口から届く関数だけにした。R7e-1 で、呼び出しの飽和の場合分けを `saturate` の1か所にまとめた。これで、エフェクトの型引数が関数型の操作に余った引数を渡すと、すべての引数を `perform` に渡していた誤りも直った。R7e-2 と R7f は未着手 (docs/superpowers/specs/2026-10-06-refactor-r7-design.md) | 進行中 |
 
 ### テストを変えないために曲げた箇所
 
