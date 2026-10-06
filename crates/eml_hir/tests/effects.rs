@@ -221,6 +221,19 @@ fn a_handler_with_a_state_takes_the_state_last_in_every_clause() {
 }
 
 #[test]
+fn a_handler_with_a_state_is_printed_with_its_initial_state() {
+    let text = "effect Ask where\n  ask : Unit -> Int\n\nf : Unit -> Int\nf () =\n  handle ask () from 0 with\n    | ask () k st -> resume k st (st + 1)\n    | return x st -> x + st";
+    insta::assert_snapshot!(lower_text(text), @"
+    effect Ask
+      ask : Unit -> Int
+    f : Unit -> Int
+    f () = {
+      (handle (@Ask.ask ()) from 0 with | ask () k#0 st#1 -> (resume k#0 st#1 (+ st#1 1)) | return x#2 st#3 -> (+ x#2 st#3))
+    }
+    ");
+}
+
+#[test]
 fn an_omitted_return_clause_of_a_handler_with_a_state_discards_the_state() {
     let text = "effect Ask where\n  ask : Unit -> Int\n\nf : Unit -> Int\nf () =\n  handle ask () from 0 with\n    | ask () k st -> resume k 1 st";
     let lowered = lower_clean(text);
