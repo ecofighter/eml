@@ -67,12 +67,7 @@ eml の目的、言語の性格、確定した設計判断の一覧、文書全�
 
 ### コンパイラと実行系
 
-| 領域 | 決定 | 詳細 |
-|---|---|---|
-| コンパイラ構成 | バッチ型のパイプライン。各段階を純粋な関数とし、Arena と ID で表現して、後でクエリ化 (salsa など) できるようにしておく | [コンパイラの構成](implementation/architecture.md) |
-| 実行系 | 型付き Core IR (ANF 形式で、RC とエフェクトを明示する) + CEK 風のインタプリタ。将来の LLVM バックエンドも同じ IR から変換する。ヒープと RC は `eml_runtime` に分離する | [Core IR とインタプリタ](spec/core-ir.md)、[ランタイム](spec/runtime.md) |
-| メモリ管理 | Perceus 方式の参照カウント。`Lin` 値は静的に一意なので RC 操作を付けない。RC は将来のマルチコア対応で共有の印方式にできる形にしておく | [ランタイム](spec/runtime.md) |
-| マルチコア | マイルストーン1 では実装しない。将来の設計はマルチコア対応の設計にまとめ、予防的な決定だけをマイルストーン1 に入れる | [マルチコア対応の設計](future/multicore.md)、[ランタイム](spec/runtime.md) |
+処理系はバッチ型のパイプラインで、各段階を純粋な関数にし、後でクエリ化 (salsa など) できるようにしてある。実行系は、型付き Core IR (ANF 形式で、RC とエフェクトを明示する) を CEK 風のインタプリタで実行する。メモリは Perceus 方式の参照カウントで管理し、`Lin` の値には RC の操作を付けない。マルチコア対応はまだ実装せず、予防的な決定だけを今の実装に入れてある。詳細は [コンパイラの構成](implementation/architecture.md)、[Core IR とインタプリタ](spec/core-ir.md)、[ランタイム](spec/runtime.md)、[マルチコア対応の設計](future/multicore.md) にある。
 
 ## 用語
 
@@ -90,7 +85,6 @@ eml の目的、言語の性格、確定した設計判断の一覧、文書全�
 | レイアウト段 | lexer と parser の間で、仮想トークン `OPEN` / `SEP` / `CLOSE` (コードでは `LAYOUT_OPEN` / `LAYOUT_SEP` / `LAYOUT_CLOSE`) を挿入する段 |
 | Perceus | 参照カウントの `dup` / `decref` を静的に挿入する方式。reuse analysis と借用の最適化は後で入れる |
 | Core IR | 型付き HIR から変換する ANF 形式の IR。RC とエフェクトの命令を明示する |
-| マイルストーン1 (M1) | 最初の vertical slice。成功条件と範囲は [実装の現在地](implementation/status.md) にある |
-| 暫定構文 | 本番の構文を決める前に、最初の実装とテストのために使っていた仮の構文。S1 で本番の構文に置き換えて廃止した |
-| S1 / S2 / S3 | 本番の構文を実装する段階。S1 は M1 の機能の文法、S2 はレコードやモジュール、S3 はコマンドリテラル |
+| マイルストーン1 (M1) | 言語の全体を一通り通した最初の vertical slice。完了している。今の範囲は [実装の現在地](implementation/status.md) にある |
+| S1 / S2 / S3 | 本番の構文を実装する段階。S1 は M1 の機能の文法 (完了)、S2 はレコードやモジュール、S3 はコマンドリテラル |
 | a1 / a2-wait / a2-cancel | 並列 API `par` を段階的に広げる計画の各段階。[マルチコア対応の設計](future/multicore.md) にある |

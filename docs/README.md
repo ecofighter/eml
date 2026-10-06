@@ -50,8 +50,8 @@ eml を実装するエージェントとプログラマのための文書群で�
 ## 文書の扱い
 
 - `spec/` が実装の規範である。仕様を変えるときは、まず `spec/` の該当文書を直す。
-- `implementation/status.md` は実装の現在地を記録する。段階を終えたら更新する。
-- `future/` の内容はまだ実装しない。実装に進むときは、決まった部分を `spec/` に移す。マイルストーン1 に入れた予防的な決定は、すでに [spec/runtime.md](spec/runtime.md) などに反映してある。
+- `implementation/status.md` は実装の現在地を書く。実装が進んだら更新する。
+- `future/` の内容はまだ実装しない。実装に進むときは、決まった部分を `spec/` に移す。今の実装に入れた予防的な決定は、すでに [spec/runtime.md](spec/runtime.md) などに反映してある。
 - 将来の論点の一覧は [future/roadmap.md](future/roadmap.md) を正とする。マルチコア、標準ライブラリ、エフェクトのネイティブな実装の詳細は、それぞれ [future/multicore.md](future/multicore.md)、[future/stdlib.md](future/stdlib.md)、[future/evidence-passing.md](future/evidence-passing.md) にある。
 - 構文で迷ったときは Haskell の慣習に寄せる。
 - 文書は日本語で書く。
