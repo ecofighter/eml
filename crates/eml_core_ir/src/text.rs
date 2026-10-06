@@ -722,6 +722,12 @@ impl<'t> Parser<'t> {
         let (name, number) = split_var(word)
             .ok_or_else(|| error(line, format!("expected a variable, found `{word}`")))?;
         let index = number as usize;
+        if index > self.var_limit() {
+            return Err(error(
+                line,
+                format!("variable number {number} is too large"),
+            ));
+        }
         if state.vars.len() <= index {
             state.vars.resize_with(index + 1, || None);
         }
@@ -748,6 +754,12 @@ impl<'t> Parser<'t> {
             slot.boxed = Some(boxed);
         }
         Ok(VarId(number))
+    }
+
+    /// 変数の表は番号まで伸ばすので、大きすぎる番号で確保が失敗してプロセスが落ちないように上限を置く。番号は
+    /// 飛んでよい (パスが消した変数の番号は表示に現れない) ので、上限は字句の数より緩くする。
+    fn var_limit(&self) -> usize {
+        self.tokens.len().max(1 << 16)
     }
 
     fn intern(&mut self, value: String) -> u32 {
@@ -924,5 +936,20 @@ mod tests {
     fn an_unknown_function_is_an_error_with_its_line() {
         let error = parse("fn f() {\n  tailcall g(1)\n}\n").unwrap_err();
         assert_eq!(error.line, 2);
+    }
+
+    #[test]
+    fn a_variable_number_beyond_the_limit_is_an_error_with_its_line() {
+        let error = parse("fn f() {\n  return x4000000000\n}\n").unwrap_err();
+        assert_eq!(error.line, 2);
+        assert!(error.message.contains("too large"), "{}", error.message);
+    }
+
+    #[test]
+    fn an_operation_number_outside_the_effect_round_trips() {
+        round_trip(
+            "effect Ask { ask }\n\
+             fn f(c0^, c1^, c2^) {\n  let t3 = perform Ask.#3()\n  let t4 = handle Ask(c0) {ask: c1, #1: c2}\n  return t4\n}\n",
+        );
     }
 }

@@ -2,7 +2,7 @@
 
 use std::fmt::Write;
 
-use crate::{Atom, CExpr, CExprId, Call, CoreFn, Program, Rhs, VarId};
+use crate::{Atom, CExpr, CExprId, Call, CoreFn, EffectInfo, Program, Rhs, VarId};
 
 pub fn pretty(program: &Program) -> String {
     let mut out = String::new();
@@ -190,11 +190,12 @@ fn call_text(program: &Program, function: &CoreFn, call: &Call) -> String {
             ret,
         } => {
             let info = &program.effects[*effect as usize];
-            let clauses: Vec<String> = info
-                .operations
+            let clauses: Vec<String> = clauses
                 .iter()
-                .zip(clauses)
-                .map(|(op, clause)| format!("{}: {}", op.name, atom(function, clause)))
+                .enumerate()
+                .map(|(op, clause)| {
+                    format!("{}: {}", operation(info, op as u32), atom(function, clause))
+                })
                 .collect();
             let ret = ret.map_or(String::new(), |ret| {
                 format!(" return {}", atom(function, &ret))
@@ -215,7 +216,7 @@ fn call_text(program: &Program, function: &CoreFn, call: &Call) -> String {
             format!(
                 "perform {}.{}({})",
                 info.name,
-                info.operations[*op as usize].name,
+                operation(info, *op),
                 args(a)
             )
         }
@@ -223,4 +224,12 @@ fn call_text(program: &Program, function: &CoreFn, call: &Call) -> String {
             format!("resume {}({})", atom(function, k), atom(function, arg))
         }
     }
+}
+
+/// 表にない番号は `#N` で書く。誤りを含む IR も表示でき、`parse` が読み戻せるようにするためである
+/// (docs/spec/core-ir.md の「テキストの形」)。
+fn operation(info: &EffectInfo, op: u32) -> String {
+    info.operations
+        .get(op as usize)
+        .map_or_else(|| format!("#{op}"), |info| info.name.clone())
 }
