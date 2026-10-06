@@ -186,6 +186,10 @@ impl Table<'_> {
         self.shape(ty).any_child(|child| match child {
             Child::Ty(child) => self.row_occurs_in(var, child),
             Child::Row(row) => self.row_occurs(var, row),
+            Child::Slot(slot) => match self.resolve_slot(slot) {
+                Slot::State(state) => self.row_occurs_in(var, state),
+                Slot::Stateless | Slot::Var(_) => false,
+            },
         })
     }
 

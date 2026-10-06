@@ -333,3 +333,71 @@ fn the_return_clause_of_a_multi_handler_may_capture_an_unrestricted_value() {
       n#2 : Int
     ");
 }
+
+#[test]
+fn continuations_of_handlers_with_a_state_carry_the_state() {
+    let text = "effect Ask where\n  ask : Unit -> Int\n\nf : Unit -> Int\nf () =\n  handle ask () from \"s\" with\n    | ask () k st -> resume k 1 st\n    | return x st -> x\n\ng : Unit -> Int\ng () =\n  handle ask () from () with\n    | ask () k st -> resume k 1 st\n    | return x st -> x";
+    let dump = check_text(text);
+    assert!(
+        dump.contains("k#") && dump.contains(": Cont Int Int <> from String"),
+        "{dump}"
+    );
+    assert!(dump.contains(": Cont Int Int <> from Unit"), "{dump}");
+    assert!(!dump.contains("E2"), "{dump}");
+}
+
+#[test]
+fn a_continuation_with_a_state_is_resumed_through_a_lambda_and_more_than_once() {
+    let text = "effect Choose where\n  multi choose : Unit -> Bool\n\nf : Unit -> Int\nf () =\n  handle (if choose () then 1 else 2) from 0 with\n    | choose () k st ->\n        let again = fn c -> resume c True (st + 1)\n        again k + resume k False (st + 2)\n    | return x st -> x + st";
+    let checked = eml_test_support::check(text);
+    assert!(checked.diagnostics.is_empty(), "{:?}", checked.diagnostics);
+}
+
+#[test]
+fn resume_must_match_the_state_of_its_continuation() {
+    let text = "effect Ask where\n  ask : Unit -> Int\n\nmissing : Unit -> Int\nmissing () =\n  handle ask () from 0 with\n    | ask () k st -> resume k st\n    | return x st -> x\n\nextra : Unit -> Int\nextra () =\n  handle ask () with\n    | ask () k -> resume k 1 2";
+    insta::assert_snapshot!(check_text(text), @"
+    ask : Unit -> <Ask> Int
+    missing : Unit -> Int
+      k#0 : Cont Int Int <> from Int
+      st#1 : Int
+      x#2 : Int
+      st#3 : Int
+    extra : Unit -> Int
+      k#0 : Cont Int Int <>
+      $r#1 : Int
+    ---
+    E2007 7:22 this continuation comes from a handler with a state, so `resume` needs the next state
+      7:22 the next state is missing
+      help: pass the next state as the third argument: `resume k v st`
+    E2007 13:19 this continuation comes from a handler without a state, so `resume` takes no state
+      13:19 the state argument is not expected
+      help: remove the third argument
+    ");
+}
+
+#[test]
+fn a_continuation_passed_to_a_lambda_is_checked_where_the_states_meet() {
+    // ラムダの中の2引数の `resume` が欄を「状態なし」にし、状態のある `k` を渡したところで食い違う
+    let text = "effect Ask where\n  ask : Unit -> Int\n\nf : Unit -> Int\nf () =\n  handle ask () from 0 with\n    | ask () k st ->\n        let again = fn c -> resume c 1\n        again k\n    | return x _ -> x";
+    let checked = eml_test_support::check(text);
+    let codes: Vec<String> = checked
+        .diagnostics
+        .iter()
+        .map(|d| d.code.to_string())
+        .collect();
+    assert_eq!(codes, ["E2007"]);
+}
+
+#[test]
+fn a_handler_of_an_unknown_effect_still_checks_its_initial_state() {
+    let text = "f : Unit -> Int\nf () =\n  handle 1 from (1 + \"a\") with\n    | nope () k st -> resume k 1 st\n    | return x st -> x";
+    let checked = eml_test_support::check(text);
+    let codes: Vec<String> = checked
+        .diagnostics
+        .iter()
+        .map(|d| d.code.to_string())
+        .collect();
+    assert!(codes.contains(&"E1001".to_string()), "{codes:?}");
+    assert!(codes.contains(&"E2001".to_string()), "{codes:?}");
+}

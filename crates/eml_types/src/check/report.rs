@@ -46,6 +46,8 @@ pub(super) enum Origin {
     Continuation,
     /// `resume` に渡す値。
     ResumeValue,
+    /// `resume` に渡す次の状態。
+    ResumeState,
     /// 推論で決まる型。根拠の場所はない。
     Inferred,
 }
@@ -184,8 +186,8 @@ impl BodyCheck<'_, '_> {
                 return false;
             }
             // include_row は rigid な row 変数を束縛しない。型引数の単一化の失敗は `EffectArgs` か `Occurs` になるので、
-            // `Mismatch` は起きない
-            Err(UnifyError::Mismatch) => unreachable!(
+            // `Mismatch` と `StateSlot` は起きない
+            Err(UnifyError::Mismatch | UnifyError::StateSlot) => unreachable!(
                 "including a row reports only missing effects, a missing row variable, effect arguments or an infinite type"
             ),
         };
@@ -333,6 +335,9 @@ impl BodyCheck<'_, '_> {
             }
             Origin::ResumeValue => {
                 diagnostic.with_note("`resume` passes this value as the result of the operation")
+            }
+            Origin::ResumeState => {
+                diagnostic.with_note("`resume` passes this value as the next state of the handler")
             }
             Origin::LambdaParameter => diagnostic.with_note(
                 "an annotated lambda parameter must have the parameter type the lambda is expected to have",

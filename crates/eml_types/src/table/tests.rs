@@ -391,6 +391,7 @@ fn continuations_unify_by_their_parts_and_are_linear() {
         lin,
         row: Row::pure(),
         ret: string,
+        state: Slot::Stateless,
     });
     let v = table.fresh_var();
     let same = table.alloc(TyShape::Cont {
@@ -398,6 +399,7 @@ fn continuations_unify_by_their_parts_and_are_linear() {
         lin,
         row: Row::pure(),
         ret: string,
+        state: Slot::Stateless,
     });
     assert_eq!(table.unify(k, same), Ok(()));
     assert_eq!(table.unify(v, int), Ok(()));
@@ -406,6 +408,7 @@ fn continuations_unify_by_their_parts_and_are_linear() {
         lin,
         row: Row::pure(),
         ret: string,
+        state: Slot::Stateless,
     });
     assert_eq!(table.unify(k, other), Err(UnifyError::Mismatch));
     assert_eq!(table.unify(k, int), Err(UnifyError::Mismatch));
@@ -503,6 +506,7 @@ fn children_of_arrows_are_the_parameter_the_row_and_the_result() {
             Child::Ty(ty) if ty == string => "ret",
             Child::Ty(_) => "other",
             Child::Row(_) => "row",
+            Child::Slot(_) => "slot",
         })
     });
     assert_eq!(seen, ["param", "row", "ret"]);
@@ -519,6 +523,7 @@ fn children_of_continuations_are_the_argument_the_row_and_the_result() {
         lin: ArrowLin::Known(Linearity::Lin),
         row: Row::pure(),
         ret: string,
+        state: Slot::Stateless,
     });
     let mut seen = Vec::new();
     table.shape(k).for_each_child(|child| {
@@ -527,7 +532,89 @@ fn children_of_continuations_are_the_argument_the_row_and_the_result() {
             Child::Ty(ty) if ty == string => "ret",
             Child::Ty(_) => "other",
             Child::Row(_) => "row",
+            Child::Slot(slot) => match table.resolve_slot(slot) {
+                Slot::State(_) => "state",
+                Slot::Stateless | Slot::Var(_) => return,
+            },
         })
     });
     assert_eq!(seen, ["arg", "row", "ret"]);
+}
+
+#[test]
+fn the_state_of_a_continuation_is_its_last_child() {
+    let context = test_context();
+    let mut table = Table::new(&context);
+    let (int, string, unit) = (table.int, table.string, table.unit);
+    let k = table.alloc(TyShape::Cont {
+        arg: int,
+        lin: ArrowLin::Known(Linearity::Lin),
+        row: Row::pure(),
+        ret: string,
+        state: Slot::State(unit),
+    });
+    let mut seen = Vec::new();
+    table.shape(k).for_each_child(|child| {
+        seen.push(match child {
+            Child::Ty(ty) if ty == int => "arg",
+            Child::Ty(ty) if ty == string => "ret",
+            Child::Ty(_) => "other",
+            Child::Row(_) => "row",
+            Child::Slot(slot) => match table.resolve_slot(slot) {
+                Slot::State(ty) if ty == unit => "state",
+                Slot::State(_) => "other",
+                Slot::Stateless | Slot::Var(_) => return,
+            },
+        })
+    });
+    assert_eq!(seen, ["arg", "row", "ret", "state"]);
+}
+
+#[test]
+fn state_slots_unify_by_kind_and_state_type() {
+    let context = test_context();
+    let mut table = Table::new(&context);
+    let (int, string) = (table.int, table.string);
+    assert_eq!(table.unify_slot(Slot::Stateless, Slot::Stateless), Ok(()));
+    assert_eq!(
+        table.unify_slot(Slot::Stateless, Slot::State(int)),
+        Err(UnifyError::StateSlot)
+    );
+    assert_eq!(
+        table.unify_slot(Slot::State(int), Slot::State(string)),
+        Err(UnifyError::Mismatch)
+    );
+    let x = table.fresh_var();
+    assert_eq!(table.unify_slot(Slot::State(int), Slot::State(x)), Ok(()));
+    assert_eq!(table.export(x).to_string(), "Int");
+    let slot = table.fresh_slot();
+    let other = table.fresh_slot();
+    assert_eq!(table.unify_slot(slot, other), Ok(()));
+    assert_eq!(table.unify_slot(other, Slot::State(string)), Ok(()));
+    assert_eq!(table.resolve_slot(slot), Slot::State(string));
+    assert_eq!(
+        table.unify_slot(slot, Slot::Stateless),
+        Err(UnifyError::StateSlot)
+    );
+}
+
+#[test]
+fn a_continuation_cannot_be_part_of_its_own_state() {
+    let context = test_context();
+    let mut table = Table::new(&context);
+    let int = table.int;
+    let slot = table.fresh_slot();
+    let k = table.alloc(TyShape::Cont {
+        arg: int,
+        lin: ArrowLin::Known(Linearity::Lin),
+        row: Row::pure(),
+        ret: int,
+        state: slot,
+    });
+    let pair = table.tuple(vec![int, k]);
+    assert_eq!(
+        table.unify_slot(slot, Slot::State(pair)),
+        Err(UnifyError::Occurs)
+    );
+    assert_eq!(table.resolve_slot(slot), slot);
 }

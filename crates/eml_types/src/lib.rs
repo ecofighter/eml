@@ -21,7 +21,8 @@ use eml_hir::{ConstructorId, ExprId, FunctionId, LocalId, Module, OperationId, P
 use la_arena::ArenaMap;
 
 pub use ty::{
-    EffectLabel, KindConstraint, KindTerm, Linearity, Multiplicity, RowTail, RowTerm, Type,
+    ContState, EffectLabel, KindConstraint, KindTerm, Linearity, Multiplicity, RowTail, RowTerm,
+    Type,
 };
 
 pub mod codes {
@@ -39,6 +40,7 @@ pub mod codes {
     pub const INVALID_MAIN_TYPE: ErrorCode = ErrorCode(2004);
     pub const INFINITE_TYPE: ErrorCode = ErrorCode(2005);
     pub const NOT_COMPARABLE: ErrorCode = ErrorCode(2006);
+    pub const RESUME_STATE_MISMATCH: ErrorCode = ErrorCode(2007);
     pub const NON_EXHAUSTIVE_MATCH: ErrorCode = ErrorCode(4001);
     pub const NON_EXHAUSTIVE_EQUATION: ErrorCode = ErrorCode(4002);
     pub const REFUTABLE_PATTERN: ErrorCode = ErrorCode(4003);

@@ -1,8 +1,10 @@
 //! handle、`resume` の検査 (docs/spec/effects.md の「handler の意味」)。
 
-use eml_hir::{Closure, EffectId, ExprId, OpClause, OpMultiplicity, ReturnClause};
+use eml_diagnostics::{Diagnostic, Label as DiagnosticLabel};
+use eml_hir::{Closure, EffectId, ExprId, OpClause, OpMultiplicity, PatId, ReturnClause};
 
-use crate::table::{ArrowLin, Label, Row, Tail, Ty, TyShape};
+use crate::codes;
+use crate::table::{ArrowLin, Label, Row, Slot, Tail, Ty, TyShape};
 use crate::ty::Linearity;
 
 use super::body::{BodyCheck, CallRows};
@@ -23,9 +25,12 @@ impl BodyCheck<'_, '_> {
         let Some(effect) = effect else {
             return self.broken_handle(init, handled, clauses, ret);
         };
-        if let Some(init) = init {
-            self.infer_expr(init);
-        }
+        // 初期値は本体より先に、handle の外の row で評価する。その型が状態の型 σ である
+        // (docs/spec/effects.md の「パラメータ付き handler」)
+        let state = match init {
+            Some(init) => Slot::State(self.infer_expr(init)),
+            None => Slot::Stateless,
+        };
         let outer = self.ambient.clone();
         // handle ごとにエフェクトの型引数を新しい変数にする。本体の操作の呼び出しと節が、この変数を通じて型引数を共有する
         let module = self.module;
@@ -55,20 +60,36 @@ impl BodyCheck<'_, '_> {
         let source = self.ambient_source.clone();
         let handled_ty = self.with_ambient(inner, source, |this| this.infer_expr(handled.body));
         self.bind_pat(ret.value(), handled_ty);
-        if let Some(state) = ret.state() {
-            let ty = self.table.fresh_var();
-            self.bind_pat(state, ty);
-        }
+        self.bind_state(ret.state(), state);
         let result = self.infer_expr(ret.closure.body);
         for clause in clauses {
-            self.op_clause(clause, result, &outer, &args);
+            self.op_clause(clause, result, &outer, &args, state);
         }
         result
     }
 
+    /// 節の状態の引数を σ で束縛する。HIR は状態のある handler の節にだけ状態の引数を作るので、状態のない handler に
+    /// 状態の引数があることはない。あっても型を `Error` にして、診断を連鎖させない。
+    fn bind_state(&mut self, pat: Option<PatId>, state: Slot) {
+        if let Some(pat) = pat {
+            let ty = match state {
+                Slot::State(sigma) => sigma,
+                Slot::Stateless | Slot::Var(_) => self.table.error,
+            };
+            self.bind_pat(pat, ty);
+        }
+    }
+
     /// 節の引数は操作の引数の型で、`k` は「操作の結果を受け、handle 式の値を返し、外側の row のエフェクトを起こす」
     /// 継続である。`once` の操作の `k` は `Lin`、`multi` の操作の `k` は `Unr` である (docs/spec/effects.md の「継続の多重度と持ち越し規則」)。
-    fn op_clause(&mut self, clause: &OpClause, result: Ty, outer: &Row, effect_args: &[Ty]) {
+    fn op_clause(
+        &mut self,
+        clause: &OpClause,
+        result: Ty,
+        outer: &Row,
+        effect_args: &[Ty],
+        state: Slot,
+    ) {
         let operation = &self.module.operations[clause.op];
         // 節の型は、操作の閉じた形にエフェクトの型引数を入れて作る。操作の型の作り方を1か所にするため
         let mut ty = self.signatures.operations[clause.op]
@@ -90,10 +111,7 @@ impl BodyCheck<'_, '_> {
                 }
             }
         }
-        if let Some(state) = clause.state() {
-            let ty = self.table.fresh_var();
-            self.bind_pat(state, ty);
-        }
+        self.bind_state(clause.state(), state);
         if let Some(k) = clause.k() {
             // `multi` の操作の `k` は何度でも再開でき、捨ててもよい (docs/spec/effects.md の「継続の多重度と持ち越し規則」)
             let lin = match operation.multiplicity {
@@ -105,6 +123,7 @@ impl BodyCheck<'_, '_> {
                 lin: ArrowLin::Known(lin),
                 row: outer.clone(),
                 ret: result,
+                state,
             });
             self.bind_pat(k, continuation);
         }
@@ -140,7 +159,8 @@ impl BodyCheck<'_, '_> {
     }
 
     /// `resume k v` は、`k` の継続の型を関数型 `a -<ρ'>-> b` のように呼ぶ。`k` の型がまだ決まらない場合 (ラムダの
-    /// 引数など) にも検査できるよう、推論用の変数でできた継続の型と単一化する。
+    /// 引数など) にも検査できるよう、推論用の変数でできた継続の型と単一化する。状態の欄も推論用の変数にして、
+    /// 引数の数に合う欄と単一化する。
     pub(super) fn resume(
         &mut self,
         id: ExprId,
@@ -155,20 +175,56 @@ impl BodyCheck<'_, '_> {
             tail: Tail::Var(self.table.fresh_row_var()),
         };
         let lin = self.table.fresh_arrow_lin();
+        let slot = self.table.fresh_slot();
         let expected = self.table.alloc(TyShape::Cont {
             arg: value,
             lin,
             row: row.clone(),
             ret: result,
+            state: slot,
         });
         self.check_expr(k, expected, Origin::Continuation);
+        // 引数の数と `k` の欄を単一化する。どちらの数が合うかは単一化で決まるので、別の検査は要らない
+        // (docs/spec/effects.md の「パラメータ付き handler」)
+        let (wanted, next) = match state {
+            Some(_) => {
+                let sigma = self.table.fresh_var();
+                (Slot::State(sigma), Some(sigma))
+            }
+            None => (Slot::Stateless, None),
+        };
+        if self.table.unify_slot(slot, wanted).is_err() {
+            self.resume_state_mismatch(id, state);
+        }
+        // 欄が食い違っても、値と状態の中の誤りは報告する。食い違ったときの σ は新しい変数のままなので、状態の式の
+        // 型では誤りにならない
         self.check_expr(arg, value, Origin::ResumeValue);
-        if let Some(state) = state {
-            self.infer_expr(state);
+        if let (Some(state), Some(sigma)) = (state, next) {
+            self.check_expr(state, sigma, Origin::ResumeState);
         }
         self.typing.calls.insert(id, CallRows::Resume(row.clone()));
         let range = self.body.exprs[id].range;
         self.include_call_row(row, range, "`resume`", true);
         result
+    }
+
+    /// `resume` の引数の数が `k` の状態の欄と合わない (docs/spec/diagnostics.md の E2007)。
+    fn resume_state_mismatch(&mut self, id: ExprId, state: Option<ExprId>) {
+        let range = self.body.exprs[id].range;
+        let diagnostic = match state {
+            None => Diagnostic::error(
+                codes::RESUME_STATE_MISMATCH,
+                "this continuation comes from a handler with a state, so `resume` needs the next state",
+                DiagnosticLabel::new(self.file(), range, "the next state is missing"),
+            )
+            .with_help("pass the next state as the third argument: `resume k v st`"),
+            Some(_) => Diagnostic::error(
+                codes::RESUME_STATE_MISMATCH,
+                "this continuation comes from a handler without a state, so `resume` takes no state",
+                DiagnosticLabel::new(self.file(), range, "the state argument is not expected"),
+            )
+            .with_help("remove the third argument"),
+        };
+        self.diagnostics.push(diagnostic);
     }
 }

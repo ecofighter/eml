@@ -130,6 +130,7 @@ impl Table<'_> {
                     lin: m,
                     row,
                     ret: _,
+                    state: _,
                 } => {
                     if let ArrowLin::Var(v) = m {
                         push_unique(&mut lin, *v);
@@ -149,6 +150,11 @@ impl Table<'_> {
                 Child::Row(row) => {
                     for label in self.resolve_row(row).labels {
                         work.extend(label.args);
+                    }
+                }
+                Child::Slot(slot) => {
+                    if let Slot::State(state) = self.resolve_slot(slot) {
+                        work.push(state);
                     }
                 }
             });

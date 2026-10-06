@@ -27,13 +27,25 @@ impl Table<'_> {
                     ret: Box::new(self.export(ret)),
                 }
             }
-            TyShape::Cont { arg, row, ret, .. } => {
+            TyShape::Cont {
+                arg,
+                row,
+                ret,
+                state,
+                ..
+            } => {
                 let (effects, tail) = self.export_row(&row);
+                let state = match self.resolve_slot(state) {
+                    Slot::Stateless => ContState::Stateless,
+                    Slot::State(state) => ContState::State(Box::new(self.export(state))),
+                    Slot::Var(_) => ContState::Unknown,
+                };
                 Type::Cont {
                     arg: Box::new(self.export(arg)),
                     ret: Box::new(self.export(ret)),
                     effects,
                     tail,
+                    state,
                 }
             }
             TyShape::Var(_) => Type::Flexible,

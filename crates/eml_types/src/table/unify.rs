@@ -55,18 +55,21 @@ impl Table<'_> {
                     lin: l1,
                     row: r1,
                     ret: t1,
+                    state: s1,
                 },
                 TyShape::Cont {
                     arg: a2,
                     lin: l2,
                     row: r2,
                     ret: t2,
+                    state: s2,
                 },
             ) => {
                 self.unify(a1, a2)?;
                 self.unify_arrow_lin(l1, l2)?;
                 self.unify_row(&r1, &r2)?;
-                self.unify(t1, t2)
+                self.unify(t1, t2)?;
+                self.unify_slot(s1, s2)
             }
             _ => Err(UnifyError::Mismatch),
         }
@@ -96,6 +99,49 @@ impl Table<'_> {
                 .labels
                 .iter()
                 .any(|label| label.args.iter().any(|&arg| self.occurs(var, arg))),
+            Child::Slot(slot) => match self.resolve_slot(slot) {
+                Slot::State(state) => self.occurs(var, state),
+                Slot::Stateless | Slot::Var(_) => false,
+            },
+        })
+    }
+
+    /// 継続の状態の欄を単一化する (docs/spec/effects.md の「パラメータ付き handler」)。決まっていない欄はもう一方に
+    /// 束縛する。
+    pub fn unify_slot(&mut self, a: Slot, b: Slot) -> Result<(), UnifyError> {
+        match (self.resolve_slot(a), self.resolve_slot(b)) {
+            (Slot::Var(x), Slot::Var(y)) if x == y => Ok(()),
+            (Slot::Var(var), other) | (other, Slot::Var(var)) => {
+                // 状態の型が同じ欄の継続を含むと、欄も型も終わりのない形になり、書き出しが止まらない
+                if let Slot::State(state) = other
+                    && self.slot_occurs(var, state)
+                {
+                    return Err(UnifyError::Occurs);
+                }
+                self.slot_vars[var.0 as usize] = Some(other);
+                Ok(())
+            }
+            (Slot::Stateless, Slot::Stateless) => Ok(()),
+            (Slot::State(x), Slot::State(y)) => self.unify(x, y),
+            (Slot::Stateless, Slot::State(_)) | (Slot::State(_), Slot::Stateless) => {
+                Err(UnifyError::StateSlot)
+            }
+        }
+    }
+
+    fn slot_occurs(&self, var: SlotVar, ty: Ty) -> bool {
+        self.shape(ty).any_child(|child| match child {
+            Child::Ty(child) => self.slot_occurs(var, child),
+            Child::Row(row) => self
+                .resolve_row(row)
+                .labels
+                .iter()
+                .any(|label| label.args.iter().any(|&arg| self.slot_occurs(var, arg))),
+            Child::Slot(slot) => match self.resolve_slot(slot) {
+                Slot::Var(other) => other == var,
+                Slot::State(state) => self.slot_occurs(var, state),
+                Slot::Stateless => false,
+            },
         })
     }
 

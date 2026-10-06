@@ -796,6 +796,16 @@ impl BodyCheck<'_, '_> {
                 "this expression would have an infinite type",
                 Label::new(self.file(), range, "infinite type"),
             )),
+            // `resume` の外で欄が食い違った。`k` をラムダに渡した後などである。`resume` の引数の数を直す場所は
+            // 分からないので、食い違いを見つけた式を指し、fix を付けない (docs/spec/diagnostics.md の E2007)
+            Err(UnifyError::StateSlot) => self.diagnostics.push(
+                Diagnostic::error(
+                    codes::RESUME_STATE_MISMATCH,
+                    "a continuation of a handler with a state meets one of a handler without a state",
+                    Label::new(self.file(), range, "the states of the continuations differ here"),
+                )
+                .with_note("a continuation of a handler with a state is resumed with three arguments, and one without a state with two"),
+            ),
             Err(_) => self.mismatch(range, expected, found, origin),
         }
     }
