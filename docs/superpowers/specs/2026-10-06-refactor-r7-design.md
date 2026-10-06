@@ -426,7 +426,7 @@ enum CasePattern { Tag(u32), Int(i64), String(u32) }   // String は文字列定
 |---|---|
 | R7a | `eml_syntax` の CST (`shape` の56件のほとんど)、`src/parser/tests.rs` |
 | R7b | `eml_hir` の pretty のうち ID の表示を含むもの |
-| R7d | `eml_core_ir` の Core IR のうち、入口から届かない関数を定義したもの (下見で数えて、`perceus.rs` 9件、`simplify.rs` 27件、`translate.rs` 18件、`eml_test_support` の `support.rs` 1件)、`not`、`>>`、`<<`、`|>`、`<|` を使うもの、`println` を値として使うもの。`eml_hir` の pretty のうち、`evaluate_first` の印を含むもの |
+| R7d | `eml_core_ir` の Core IR のうち、入口から届かない関数を定義したもの (下見で数えて、`perceus.rs` 9件、`simplify.rs` 27件、`translate.rs` 18件、`eml_test_support` の `support.rs` 1件)、`not`、`>>`、`<<`、`|>`、`<|` を使うもの、`println` を値として使うもの。ソースから作る Core IR の表示の先頭に増える `effect IO { … }` の1行 (`pretty` は操作のあるエフェクトをすべて表示し、`IO` を外す特別扱いは入れない)。`>>` と `<<` を使う関数の `eml_types` の `dump` の `kinds:` の行 (`>>` の本体の持ち越しの制約)。`eml_hir` の pretty のうち、`evaluate_first` の印を含むもの |
 | R7e | `eml_core_ir` の `translate.rs` のほとんど、`simplify.rs` と `perceus.rs` の `switch` を含むもの (約30件)、`verify.rs` と `eml_interp/tests/data.rs` の `switch` を含むテキスト |
 
 種類3 (機械的な追随) は、ID の形と入口の引数の変更に合わせたテストの組み立ての書き換えである。R7c では、`eml_types/tests/check.rs` の `signatures` と `constructors` を `decls` から読む形にし、`eml_test_support` の `Checked::typed` の型の名前を変える。R7c は観測できるふるまいを変えないので、種類1と種類2の変更はない。
