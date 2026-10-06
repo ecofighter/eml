@@ -72,3 +72,26 @@ fn a_carry_over_through_a_prelude_function_points_into_the_prelude() {
       Prelude.em "action ()" `x` is kept alive across this call
     "#);
 }
+
+#[test]
+fn linear_misuses_in_the_prelude_point_into_the_prelude() {
+    let extra = "pub twice : File -> <IO> Unit\ntwice f =\n  close f\n  close f\n\npub dropped : File -> <IO> Unit\ndropped f = ()\n\npub discarded : File -> <IO> Unit\ndiscarded _ = ()\n\npub captured : File -> <IO> (Unit -> <IO> Unit)\ncaptured f = fn () -> close f\n";
+    let shown = check_with_prelude(extra, "");
+    // どの診断も、すべてのラベルが Prelude の中を指す
+    for line in shown.lines().filter(|line| line.starts_with("  ")) {
+        assert!(line.starts_with("  Prelude.em "), "{shown}");
+    }
+    for code in ["E3002", "E3003", "E3004"] {
+        assert!(shown.contains(code), "{code}\n{shown}");
+    }
+}
+
+#[test]
+fn a_carry_over_through_a_composition_points_into_the_prelude() {
+    // `>>` の本体は `g` を持ったまま `f` を呼ぶので、線形な `g` を `multi` の `f` と合成すると E3006 になる
+    let text = "chooser : Unit -> <Choice> Unit\nchooser () =\n  let b = choose ()\n  ()\n\ncomposed : Unit -> <Choice, IO> Unit\ncomposed () =\n  let h = open \"a.txt\"\n  let k = chooser >> (fn u -> close h)\n  k ()";
+    let shown = check_with_prelude(CHOICE, text);
+    assert!(shown.starts_with("E3006 "), "{shown}");
+    assert!(shown.contains("  test.em \">>\" "), "{shown}");
+    assert!(shown.contains("  Prelude.em "), "{shown}");
+}

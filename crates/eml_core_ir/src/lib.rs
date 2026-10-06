@@ -483,7 +483,6 @@ pub enum PrimOp {
     BoolEq,
     BoolNe,
     ShowInt,
-    Not,
 }
 
 impl PrimOp {
@@ -521,7 +520,6 @@ named_ops!(PrimOp {
     BoolEq => "bool==",
     BoolNe => "bool!=",
     ShowInt => "show_int",
-    Not => "not",
 });
 
 /// 表示での名前 (`name`) は Prelude の名前と同じである。

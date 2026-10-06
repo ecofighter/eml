@@ -79,7 +79,8 @@ impl ProgramBuilder {
         }
     }
 
-    /// 操作を値や部分適用で使うときに、`perform` を末尾で呼ぶだけの関数を作る。操作ごとに1つだけ作る。
+    /// 操作を値や部分適用で使うときの関数を作る。本体は `operation_rhs` の操作の呼び出しで、`perform` の末尾呼び出し、
+    /// または `IO` の操作の `Rhs::Io` (結果を返す) になる (docs/spec/effects.md の「組み込みの `IO`」)。操作ごとに1つだけ作る。
     pub(super) fn operation_wrapper(&mut self, hir: &HirProgram, op: OperationId) -> FnIdx {
         if let Some(&function) = self.operation_wrappers.get(&op) {
             return function;
@@ -220,36 +221,23 @@ impl ProgramBuilder {
             .map(|ty| builder.var(var_info("p", ty, hir)))
             .collect();
         let atoms: Vec<Atom> = params.iter().map(|&param| Atom::Var(param)).collect();
-        let mut fresh = |ty: &Type| builder.var(var_info("t", ty, hir));
         let lowering =
             intrinsic(name).expect("every intrinsic reaching Core IR has an implementation");
-        let (steps, last): (Vec<(VarId, Rhs)>, CExpr) = match lowering {
-            Lowering::Prim(op) => {
-                let result = fresh(&result_type);
-                (
-                    vec![(result, Rhs::Prim(op, atoms))],
-                    CExpr::Return(Atom::Var(result)),
-                )
-            }
+        let op = match lowering {
+            Lowering::Prim(op) => op,
             // `==` と `!=` は演算子の構文からしか書けず、2つの引数がそろって呼ばれる。演算子の参照 `(==)` とセクションは
             // HIR がラムダに脱糖するので (docs/spec/expressions.md)、値として包む関数は作らない
             Lowering::Equality { .. } => {
                 unreachable!("`==` and `!=` are always called with both operands")
             }
-            Lowering::Compose { forward } => {
-                let (inner, outer) = if forward { (0, 1) } else { (1, 0) };
-                let (_, middle_type) = split_arrows(&param_types[inner], 1);
-                let middle = fresh(&middle_type);
-                (
-                    vec![(middle, Rhs::call(Call::Apply(atoms[inner], vec![atoms[2]])))],
-                    CExpr::TailCall(Call::Apply(atoms[outer], vec![Atom::Var(middle)])),
-                )
-            }
         };
-        let mut body = builder.push(last);
-        for (var, rhs) in steps.into_iter().rev() {
-            body = builder.push(CExpr::Let { var, rhs, body });
-        }
+        let result = builder.var(var_info("t", &result_type, hir));
+        let ret = builder.push(CExpr::Return(Atom::Var(result)));
+        let body = builder.push(CExpr::Let {
+            var: result,
+            rhs: Rhs::Prim(op, atoms),
+            body: ret,
+        });
         let core = builder.finish(format!("builtin${name}"), params, body);
         self.finish(function, core);
         function

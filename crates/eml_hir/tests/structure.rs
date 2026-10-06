@@ -125,15 +125,20 @@ fn a_lambda_captures_what_its_nested_lambdas_capture() {
 #[test]
 fn prelude_signatures_without_equations_are_intrinsic_functions() {
     let module = module("f : Int\nf = 1");
-    for name in ["show_int", "negate", "+", "==", ">>", "&&", "|>"] {
+    for name in ["show_int", "negate", "+", "==", "|>"] {
         let function = function(&module, name);
         assert!(function.intrinsic, "{name}");
         assert!(function.signature.is_some(), "{name}");
         assert!(module.body(function_id(&module, name)).is_none(), "{name}");
     }
+    // eml で書いた Prelude の関数は intrinsic ではない (docs/superpowers/specs/2026-10-06-refactor-r7-design.md の 4.4)
+    for name in ["not", "&&", "||", ">>", "<<"] {
+        assert!(!function(&module, name).intrinsic, "{name}");
+        assert!(module.body(function_id(&module, name)).is_some(), "{name}");
+    }
     assert!(!function(&module, "f").intrinsic);
     assert_eq!(module.arity(function_id(&module, "+")), Some(2));
-    assert_eq!(module.arity(function_id(&module, ">>")), Some(3));
+    assert_eq!(module.arity(function_id(&module, ">>")), Some(2));
 }
 
 #[test]

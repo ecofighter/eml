@@ -39,9 +39,6 @@ pub fn lower(def_map: &DefMap, trees: &[ItemTree]) -> (Program, Vec<Diagnostic>)
         );
     }
     let lang = def_map.lang();
-    // Core IR は `Bool` を、タグ 0 の `False` と 1 の `True` で表す (docs/spec/core-ir.md)
-    let tag = |id: ConstructorId| modules[id.module].items.constructors[id.local].tag;
-    assert_eq!((tag(lang.false_ctor), tag(lang.true_ctor)), (0, 1));
     for (index, tree) in trees.iter().enumerate() {
         let module = module_id(index);
         let bodies = lower_bodies(def_map, module, tree, &mut modules, &mut diagnostics);

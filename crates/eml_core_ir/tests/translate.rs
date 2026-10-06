@@ -133,23 +133,38 @@ fn builtins_used_as_values_are_wrapped() {
     let text = "apply : (a -> <e> b) -> a -> <e> b\napply f x = f x\n\nmain : Unit -> <IO> Unit\nmain () =\n  let g = not >> not\n  apply println (show_int 1)";
     insta::assert_snapshot!(core_text(text, Pass::Translate), @"
     effect IO { println/1, open/1, read_all/1, close/1 }
+    fn Prelude.not($00) {
+      join j0() [] {
+        return #0
+      }
+      join j1() [] {
+        return #1
+      }
+      switch $00 {
+        #0 ->
+          jump j1()
+        #1 ->
+          jump j0()
+      }
+    }
+    fn Prelude.>>(f0^, g1^) {
+      let c2^ = closure Prelude.>>$lambda0(f0, g1)
+      return c2
+    }
     fn apply(f0^, x1^) {
       let t2^ = apply f0(x1)
       return t2
     }
     fn main(p0) {
-      let c1^ = closure builtin$>>(&builtin$not, &builtin$not)
+      let t1^ = call Prelude.>>(&Prelude.not, &Prelude.not)
       let t2^ = prim show_int(1)
       let t3 = call apply(&op$println, t2)
       return t3
     }
-    fn builtin$not(p0) {
-      let t1 = prim not(p0)
-      return t1
-    }
-    fn builtin$>>(p0^, p1^, p2^) {
-      let t3^ = apply p0(p2)
-      tailcall apply p1(t3)
+    fn Prelude.>>$lambda0(f0^, g1^, x2^) {
+      let t3^ = apply f0(x2)
+      let t4^ = apply g1(t3)
+      return t4
     }
     fn op$println(p0^) {
       let t1 = perform println(p0)
@@ -616,4 +631,33 @@ fn effects_are_numbered_with_io_first_then_in_declaration_order() {
       tailcall main(())
     }
     ");
+}
+
+#[test]
+fn a_prelude_function_is_lowered_under_the_prelude_name() {
+    // Prelude の関数の Core IR の名前には `Prelude.` を付け、ユーザーの関数と名前が重ならないようにする
+    // (docs/superpowers/specs/2026-10-06-refactor-r7-design.md の 4.5)
+    let text =
+        "main : Unit -> <IO> Unit\nmain () = if not True then println \"a\" else println \"b\"";
+    let shown = core_text(text, Pass::Translate);
+    assert!(shown.contains("fn Prelude.not("), "{shown}");
+    assert!(shown.contains("call Prelude.not("), "{shown}");
+    assert!(!shown.contains("fn Prelude.&&("), "{shown}");
+}
+
+#[test]
+fn a_user_function_hides_the_prelude_function_of_the_same_name() {
+    let text = "not : Bool -> Bool\nnot b = b\n\nmain : Unit -> <IO> Unit\nmain () = if not True then println \"a\" else println \"b\"";
+    let shown = core_text(text, Pass::Translate);
+    assert!(shown.contains("fn not("), "{shown}");
+    assert!(!shown.contains("Prelude.not"), "{shown}");
+}
+
+#[test]
+fn the_prelude_bool_tags_match_the_core_ir_constants() {
+    // Core IR は `Bool` を定数のタグで表す。タグは Prelude の宣言の順で決まる
+    // (docs/superpowers/specs/2026-10-06-refactor-r7-design.md の 4.6)
+    let program = eml_test_support::lower_clean("").program;
+    assert_eq!(program[program.lang.false_ctor].tag, eml_core_ir::FALSE);
+    assert_eq!(program[program.lang.true_ctor].tag, eml_core_ir::TRUE);
 }

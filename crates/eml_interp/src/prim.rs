@@ -38,10 +38,6 @@ impl Machine<'_> {
             PrimOp::IntLe => tag(int(0)? <= int(1)?),
             PrimOp::IntGt => tag(int(0)? > int(1)?),
             PrimOp::IntGe => tag(int(0)? >= int(1)?),
-            PrimOp::Not => match args[0] {
-                Value::Tag(t) => tag(t == FALSE),
-                _ => return Err(Fault::Internal("`not` on a value that is not a tag")),
-            },
             PrimOp::ShowInt => {
                 let text = int(0)?.to_string();
                 Value::Obj(self.heap.alloc(Payload::Str(text)))

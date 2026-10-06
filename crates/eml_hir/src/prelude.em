@@ -31,6 +31,8 @@ pub effect IO where
 
 pub show_int : Int -> String
 pub not : Bool -> Bool
+not True = False
+not False = True
 -- 前置の `-` の脱糖が呼ぶ。`pub` でないので、ユーザーは名前で書けない
 negate : Int -> Int
 pub (+) : Int -> Int -> Int
@@ -47,9 +49,14 @@ pub (>) : Int -> Int -> Bool
 pub (>=) : Int -> Int -> Bool
 pub (++) : String -> String -> String
 pub (>>) : (a -> <e> b) -> (b -> <e> c) -> a -> <e> c
+f >> g = fn x -> g (f x)
 pub (<<) : (b -> <e> c) -> (a -> <e> b) -> a -> <e> c
--- HIR が脱糖する演算子。ユーザーが同じ演算子を定義すれば、普通の呼び出しになる
+f << g = fn x -> f (g x)
+-- HIR が `if` に脱糖するので、二項演算では本体を呼ばない。短絡して評価するためである
 pub (&&) : Bool -> Bool -> Bool
+a && b = if a then b else False
 pub (||) : Bool -> Bool -> Bool
+a || b = if a then True else b
+-- HIR が脱糖する演算子。ユーザーが同じ演算子を定義すれば、普通の呼び出しになる
 pub (|>) : a -> (a -> <e> b) -> <e> b
 pub (<|) : (a -> <e> b) -> a -> <e> b

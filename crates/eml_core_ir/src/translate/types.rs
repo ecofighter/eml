@@ -57,10 +57,6 @@ pub(super) fn split_arrows(ty: &Type, count: usize) -> (Vec<Type>, Type) {
 #[derive(Debug, Clone, Copy)]
 pub(super) enum Lowering {
     Prim(PrimOp),
-    /// `>>` は `g (f x)`、`<<` は `f (g x)` である (docs/spec/declarations.md の演算子の表)。
-    Compose {
-        forward: bool,
-    },
     /// `==` と `!=`。比べ方は型検査が引数の型から決め、`BodyTypes::equalities` に入れてある
     /// (docs/spec/declarations.md の標準の演算子の表)。
     Equality {
@@ -73,7 +69,6 @@ pub(super) enum Lowering {
 /// `<|` は持たない。
 const INTRINSICS: &[(&str, Lowering)] = &[
     ("show_int", Lowering::Prim(PrimOp::ShowInt)),
-    ("not", Lowering::Prim(PrimOp::Not)),
     ("negate", Lowering::Prim(PrimOp::IntNeg)),
     ("+", Lowering::Prim(PrimOp::IntAdd)),
     ("-", Lowering::Prim(PrimOp::IntSub)),
@@ -87,8 +82,6 @@ const INTRINSICS: &[(&str, Lowering)] = &[
     (">", Lowering::Prim(PrimOp::IntGt)),
     (">=", Lowering::Prim(PrimOp::IntGe)),
     ("++", Lowering::Prim(PrimOp::StrConcat)),
-    (">>", Lowering::Compose { forward: true }),
-    ("<<", Lowering::Compose { forward: false }),
 ];
 
 /// Prelude の intrinsic の名前から、Core IR の命令を引く。
@@ -121,7 +114,7 @@ mod tests {
     use super::{INTRINSICS, intrinsic};
 
     /// HIR が脱糖するので、Core IR に届かない intrinsic。
-    const DESUGARED: &[&str] = &["&&", "||", "|>", "<|"];
+    const DESUGARED: &[&str] = &["|>", "<|"];
 
     /// Prelude の等式のないシグネチャ (intrinsic) の名前。
     fn prelude_intrinsics() -> Vec<String> {

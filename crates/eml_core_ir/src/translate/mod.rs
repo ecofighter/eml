@@ -75,6 +75,13 @@ pub(crate) fn translate(hir: &HirProgram, typed: &TypedProgram, entry: FunctionI
             .map(|&pat| Some(pat))
             .zip(param_types)
             .collect();
+        // Prelude の関数の名前には `Prelude.` を付け、ユーザーが同じ名前の関数を定義しても重ならないようにする
+        // (docs/superpowers/specs/2026-10-06-refactor-r7-design.md の 4.5)
+        let name = if id.module == hir.prelude {
+            format!("Prelude.{}", function.name)
+        } else {
+            function.name.clone()
+        };
         let mut lambdas = 0;
         let mut handlers = 0;
         let core = FnLowering {
@@ -83,13 +90,13 @@ pub(crate) fn translate(hir: &HirProgram, typed: &TypedProgram, entry: FunctionI
             types: typed.bodies.get(id).expect("every body is type-checked"),
             indices: &indices,
             program: &mut builder,
-            root_name: &function.name,
+            root_name: &name,
             lambdas: &mut lambdas,
             handlers: &mut handlers,
             builder: FnBuilder::new(),
             locals: ArenaMap::default(),
         }
-        .lower(&function.name, &[], &params, body.root);
+        .lower(&name, &[], &params, body.root);
         builder.finish(indices[id], core);
     }
     let entry_type = &typed

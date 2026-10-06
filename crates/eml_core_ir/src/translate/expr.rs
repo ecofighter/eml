@@ -97,9 +97,6 @@ impl FnLowering<'_> {
                     .expect("the type checker decides how every `==` and `!=` compares");
                 Rhs::Prim(equality_op(equality, negated), args)
             }
-            Lowering::Compose { .. } => {
-                Rhs::call(Call::Direct(self.program.wrapper(self.hir, function), args))
-            }
         };
         if rest.is_empty() {
             return self.bind(out, "t", ty, rhs);
