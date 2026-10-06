@@ -1,4 +1,4 @@
-//! モジュール全体で1回だけ求める、型検査の前提。関数ごとの型の表はこれを借りるだけにして、表を作る費用を関数の
+//! プログラム全体で1回だけ求める、型検査の前提。関数ごとの型の表はこれを借りるだけにして、表を作る費用を関数の
 //! 大きさに比例させる (docs/implementation/architecture.md の「`eml_types` の内部」)。
 
 use eml_hir::{EffectDef, ItemMap, LangItems, OpMultiplicity, Operation, Program, TypeDef};
