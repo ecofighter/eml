@@ -70,14 +70,14 @@ pub(crate) fn translate(hir: &HirProgram, typed: &TypedProgram, entry: FunctionI
         .get(&Decl::Function(entry))
         .expect("the entry function has a signature")
         .ty;
-    let entry = builder.entry(hir, indices[entry], entry, entry_type);
+    let entry_fn = builder.entry(hir, indices[entry], entry, entry_type);
     Program {
         functions: builder
             .functions
             .into_iter()
             .map(|function| function.expect("every reserved function is lowered"))
             .collect(),
-        entry,
+        entry: entry_fn,
         strings: builder.strings.values,
         effects: effect_table(hir),
     }

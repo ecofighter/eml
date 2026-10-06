@@ -304,8 +304,9 @@ fn report_violations(program: &Program, mut origins: Vec<KindOrigin>) -> Vec<Dia
     out
 }
 
-/// 段0の形と段2のスキームを、宣言ごとの結果にまとめる。スキームのない宣言 (Kind の制約が残らなかった宣言) は、制約のない
-/// スキームにする。
+/// 段0の形と段2のスキームを、宣言ごとの結果にまとめる。この時点で、形を持つ宣言はすべてスキームを持つ。intrinsic、操作、
+/// コンストラクタは `declaration_schemes` が、本体に問題のない関数は `check_module` が (制約がなければ空のスキームを)、解いた
+/// SCC の関数は SCC の解が入れるためである。
 fn typed_program(
     context: &Context,
     signatures: &Signatures,
@@ -333,7 +334,9 @@ fn typed_program(
             let declared = DeclType {
                 ty: shape.export(context),
                 shape: shape.clone(),
-                kinds: schemes.remove(&decl).unwrap_or_default(),
+                kinds: schemes
+                    .remove(&decl)
+                    .expect("every declaration has a Kind scheme"),
             };
             (decl, declared)
         })

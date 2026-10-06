@@ -52,7 +52,7 @@ pub(crate) struct Span {
 }
 
 /// Kind の制約の由来。制約が破れたときに E3001〜E3005 が指す場所と理由である (docs/spec/diagnostics.md の「線形性の診断」)。
-/// `reason` の中の位置は、どれも由来を作った本体の中にあり、`span` と同じファイルである。
+/// `reason` の中の位置は、どれも由来を作った本体の中にあり、`span` と同じファイルである。ただし `CarriedThrough` の `inner` は自分の `Span` を持ち、呼ばれた関数のファイルを指しうる。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct KindOrigin {
     pub span: Span,

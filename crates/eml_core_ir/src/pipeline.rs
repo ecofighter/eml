@@ -28,6 +28,9 @@ impl Pass {
 
 /// 診断のエラーがないプログラムだけを受け取る。エラーがあれば `eml_cli` は Core IR を作らない
 /// (docs/implementation/architecture.md)。
+///
+/// `entry` は本体を持つ関数 (intrinsic ではない) で、型が `Unit -> ...` か、引数がなく `Unit -> ...` の関数を返すものでなければならない。
+/// `main` は型検査器が E2004 で保証するが、ほかの呼び出し元 (将来の REPL など) は自分で保証する。
 pub fn lower(hir: &HirProgram, typed: &TypedProgram, entry: FunctionId) -> Program {
     lower_until(hir, typed, entry, Pass::Perceus)
 }

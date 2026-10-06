@@ -166,11 +166,12 @@ S2 の前に、単一ファイルの前提をなくす作り替えを R7 とし�
 - item の ID をプログラム全体で一意にし (`ModuleId`)、HIR をモジュールのインタフェースと本体に分ける。Prelude に本物の `FileId` を与えて普通のモジュールにし、`FileId::PRELUDE` をなくす。R7b-2 で、ID を `ItemId` にし、HIR を `Program` と `Module` (item と本体) に分け、Prelude に `FileId` を与えて `FileId::PRELUDE` をなくした
 - 名前解決を、item の収集、モジュールごとのスコープ表、item ごとの変換の3段に分け、重複の扱いを1つにする。fixity は解決した先の定義に付ける。確かめた不具合2を直す: 操作と同じ名前の関数を定義すると、E1003 の後に handler の節で E1001 が連鎖する。`ItemScope` の重複の扱いが箇所ごとに違い、関数が操作を上書きするためである。R7b-3 で済んだ。不具合2を直した。重複は3つの規則で扱い、`::` の fixity は S2 に回した
 - 組み込みを Prelude の intrinsic にし、Rust の表を1つにする。`Res::Builtin`、`Decl::Builtin`、`Module::builtins`、`TypedModule::builtins` をなくす。`Bool` のタグを HIR のコンストラクタから引く。R7b-1 で、組み込みを Prelude の intrinsic の関数にし、`Res::Builtin`、`Decl::Builtin`、`Module::builtins`、`TypedModule::builtins` をなくした。`Bool` のタグは R7d で扱う
-- 型検査の出力を、損失のないモジュールのインタフェース (`Shape` と `KindScheme`、由来に `FileId`) にする。表示用の `Scheme` は `dump` の中の表示にする。R7c で済んだ。表示用の `Scheme` はなくし、`dump` が `DeclType` から表示する
+- 型検査の出力を、損失のないモジュールのインタフェース (`Shape` と `KindScheme`、由来に `FileId`) にする。表示用の `Scheme` は `dump` の中の表示にする。R7c で済んだ。`Scheme` はなくし、`dump` が `DeclType` から表示する
 - source の読み込み (ローダ、session 型の lib API)、複数ファイルのテストの fixture、ディレクトリを1件とする UI テストを作る。R7b-2 で `Session` を作った。import をたどる部分、複数ファイルの fixture、ディレクトリを1件とする UI テストは S2
 - CST に名前と経路のノード (`PATH`、`NAME`) を入れ、grammar.md の全体を CST まで組む。E0004 を出す層の方針を1つにする。確かめた不具合1を直す: `<M.E>` が E0004 にならず E1002 (「cannot find effect `M`」) になる。`ast::Effect::name()` が最初の `UIDENT` を取り、CST に名前の経路のノードがないためである。R7a で済んだ。不具合1と、`::` のパターンが E1001 になる不具合も直した。grammar.md の全体を CST まで組むことは、補間・コマンドリテラル・レコード・リストを例外として S2 に残した
 - Core IR の `Switch` を、default の枝とリテラルの case を持つ平らな形にする。リテラルが約1000個の `match` で debug ビルドのスタックがあふれる問題を直し、呼び出しの飽和の処理を1つにまとめる
 - spec で決めること: import の循環を許すか、モジュールの根をどこにするか
+- R7 を終えるときに、コードのコメントと文書が指す作業用の設計文書 `docs/superpowers/specs/2026-10-06-refactor-r7-design.md` への参照を、内容を移した先 (`docs/spec/`、`docs/implementation/`) に張り替える (`grep -rn 2026-10-06-refactor-r7-design crates docs` で探す)
 
 ## 各 crate の実装状況
 
