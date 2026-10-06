@@ -58,9 +58,6 @@ pub(crate) struct Instance {
     pub mult: Vec<KindVar>,
     /// 具体化したときに設定されていた由来。複写する制約の由来になる。
     pub origin: Option<KindOrigin>,
-    /// 具体化したときの、線形性の制約、多重度の制約、持ち越しの制約の数。段2は展開した制約をこの位置に差し込む。
-    /// 同じ範囲の違反の報告の順を、具体化のときに制約を複写していたときと同じにするため。
-    pub at: (usize, usize, usize),
 }
 
 /// 宣言のシグネチャの Kind 変数。`Shape` の番号の順に、問題の中の番号を並べる。

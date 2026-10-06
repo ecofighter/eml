@@ -70,11 +70,12 @@ pub(crate) fn check_module(module: &Module) -> (TypedModule, Vec<Diagnostic>) {
     if let Some(id) = main {
         check_main(module, &context, &signatures, id, &mut diagnostics);
     }
-    // 本体の検査は関数ごとに独立している。SCC の順に呼ぶのは、型の誤りの診断の並びを保つためだけである
+    // 本体の検査は関数ごとに独立しているので、アリーナの順に回す。診断の順は表示する側が決める
+    // (docs/spec/diagnostics.md の「診断の順」)
     let components = scc::components(module);
     let mut bodies = ArenaMap::default();
     let mut problems: ArenaMap<FunctionId, KindProblem> = ArenaMap::default();
-    for &id in components.iter().flatten() {
+    for (id, _) in module.functions.iter() {
         if let Some((checked, found)) = check_body(module, &context, &signatures, id) {
             diagnostics.extend(found);
             bodies.insert(id, checked.types);
@@ -290,11 +291,16 @@ fn declaration_problem(
     table.into_problem(Vec::new(), own_vars)
 }
 
-/// Kind の制約の違反は、線形な値の誤った使い方である (docs/spec/linearity.md)。位置の順に並べ、同じ値の持ち越しの違反は、
-/// 呼び出しの位置が最も前のものだけを報告する (docs/spec/diagnostics.md の E3006)。由来の範囲はその SCC の本体の中に
-/// しかないので、SCC ごとに解いた由来を全体で並べ直せば、モジュール全体を1回で解いたときと同じ順になる。
+/// Kind の制約の違反は、線形な値の誤った使い方である (docs/spec/linearity.md)。位置の順に並べ、同じ範囲の由来は `KindReason::order_key` の順に並べる。
+/// 同じ値の持ち越しの違反は、呼び出しの位置が最も前のものだけを報告する (docs/spec/diagnostics.md の E3006)。
 fn report_violations(module: &Module, mut origins: Vec<KindOrigin>) -> Vec<Diagnostic> {
-    origins.sort_by_key(|origin| (origin.range.start(), origin.range.end()));
+    origins.sort_by_cached_key(|origin| {
+        (
+            origin.range.start(),
+            origin.range.end(),
+            origin.reason.order_key(),
+        )
+    });
     origins.dedup();
     let mut carried = HashSet::new();
     let mut out = Vec::new();

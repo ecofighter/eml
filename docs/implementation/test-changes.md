@@ -193,3 +193,4 @@
   - `eml_types/tests/check.rs` の `if_without_else_must_be_unit`: 2つの E2001 が位置の順になった
   - `eml_types/tests/tuples.rs` の `undecided_operands_are_reported_and_errors_are_not`: E2006 (3:32) が E1001 (7:12) より先になった
 - `eml_hir/tests/common` の `lower_sorted` と、`eml_syntax/tests/lexer.rs` の並べ替えを `sort_diagnostics` に置き換えた。期待値は変えていない (種類3)
+- 段2が具体化で展開した制約を差し込む位置 (`Instance::at`) をなくしたので、`kind/solve.rs` の単体テスト `instance_constraints_are_spliced_at_their_position` を消した (種類1)。確かめる性質がなくなったためである。ほかの単体テストの `Instance` の組み立てから `at` を除いた (種類3)

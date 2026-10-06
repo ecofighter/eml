@@ -392,14 +392,12 @@ impl BodyCheck<'_, '_> {
         let Some(shape) = signatures.get(decl) else {
             return self.table.error;
         };
-        let at = self.table.kind_counts();
         let instance = shape.instantiate(self.table);
         self.instances.push(Instance {
             decl,
             lin: instance.lin,
             mult: instance.mult,
             origin: self.table.kind_origin(),
-            at,
         });
         instance.ty
     }

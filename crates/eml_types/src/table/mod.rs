@@ -175,15 +175,6 @@ impl<'c> Table<'c> {
         self.kind_origin.clone()
     }
 
-    /// 線形性の制約、多重度の制約、持ち越しの制約の数。具体化の記録に、展開する位置として残す。
-    pub fn kind_counts(&self) -> (usize, usize, usize) {
-        (
-            self.linearity.constraints.len(),
-            self.multiplicity.constraints.len(),
-            self.carries.len(),
-        )
-    }
-
     /// 段1の終わりに、集めた Kind の制約を取り出して表を捨てる。
     pub fn into_problem(self, instances: Vec<Instance>, own: OwnVars) -> KindProblem {
         KindProblem {

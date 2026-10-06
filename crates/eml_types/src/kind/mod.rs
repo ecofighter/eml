@@ -99,6 +99,31 @@ pub(crate) enum KindReason {
     },
 }
 
+impl KindReason {
+    /// 同じ範囲の由来を並べる順。種類は宣言の順で、同じ種類は名前と位置で比べる。同じ値の持ち越しの違反から報告する1件を、
+    /// 制約が並んだ順に左右されずに選ぶため (docs/spec/diagnostics.md の E3006)。
+    pub fn order_key(&self) -> (u8, String, (u32, u32)) {
+        let at = |range: TextRange| (u32::from(range.start()), u32::from(range.end()));
+        let none = (0, 0);
+        match self {
+            KindReason::UsedMoreThanOnce { name, first, .. } => (0, name.clone(), at(*first)),
+            KindReason::NotUsed { name, .. } => (1, name.clone(), none),
+            KindReason::ContinuationNotUsed { name, clause } => (2, name.clone(), at(*clause)),
+            KindReason::Discarded => (3, String::new(), none),
+            KindReason::CapturedByClause(name) => (4, name.clone(), none),
+            KindReason::CapturedByLambda => (5, String::new(), none),
+            KindReason::Passed(name) => (6, name.clone(), none),
+            KindReason::Unified => (7, String::new(), none),
+            KindReason::CarriedAcross { value, .. } => (8, String::new(), at(value.key())),
+            KindReason::CarriedThrough { name, inner } => (
+                9,
+                name.clone(),
+                inner.as_ref().map_or(none, |inner| at(inner.range)),
+            ),
+        }
+    }
+}
+
 /// 変数を使わなかった経路。E3003 の secondary が指す。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum UnusedPath {
@@ -200,4 +225,23 @@ pub(crate) struct Carry {
     pub lin: Bound<Linearity>,
     pub mult: Bound<Multiplicity>,
     pub origin: Option<KindOrigin>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reasons_have_a_fixed_order() {
+        let used = KindReason::UsedMoreThanOnce {
+            name: "f".to_string(),
+            first: TextRange::new(1.into(), 2.into()),
+            second: TextRange::new(3.into(), 4.into()),
+        };
+        let unified = KindReason::Unified;
+        assert!(used.order_key() < unified.order_key());
+        let a = KindReason::Passed("a".to_string());
+        let b = KindReason::Passed("b".to_string());
+        assert!(a.order_key() < b.order_key());
+    }
 }

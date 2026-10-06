@@ -98,19 +98,8 @@ fn merge(members: &[(Decl, &KindProblem)], schemes: &HashMap<Decl, KindScheme>) 
         own,
     };
     for ((_, problem), &(l, m)) in members.iter().zip(&offsets) {
-        let mut next = (0, 0, 0);
+        merged.copy_own(problem, (l, m));
         for instance in &problem.instances {
-            debug_assert!(
-                next.0 <= instance.at.0
-                    && next.1 <= instance.at.1
-                    && next.2 <= instance.at.2
-                    && instance.at.0 <= problem.lin.constraints.len()
-                    && instance.at.1 <= problem.mult.constraints.len()
-                    && instance.at.2 <= problem.carries.len(),
-                "an instance position is out of order or out of range"
-            );
-            merged.copy_own(problem, (l, m), next, instance.at);
-            next = instance.at;
             let lin: Vec<KindVar> = instance.lin.iter().map(|&v| shift_var(v, l)).collect();
             let mult: Vec<KindVar> = instance.mult.iter().map(|&v| shift_var(v, m)).collect();
             match position.get(&instance.decl) {
@@ -123,42 +112,23 @@ fn merge(members: &[(Decl, &KindProblem)], schemes: &HashMap<Decl, KindScheme>) 
                 }
             }
         }
-        let end = (
-            problem.lin.constraints.len(),
-            problem.mult.constraints.len(),
-            problem.carries.len(),
-        );
-        merged.copy_own(problem, (l, m), next, end);
     }
     merged
 }
 
 impl Merged {
-    /// 宣言の自分の制約のうち、`from` から `to` までを番号をずらして足す。
-    fn copy_own(
-        &mut self,
-        problem: &KindProblem,
-        (l, m): (usize, usize),
-        from: (usize, usize, usize),
-        to: (usize, usize, usize),
-    ) {
-        for index in from.0..to.0 {
-            let (lower, upper) = problem.lin.constraints[index];
-            self.lin.require(
-                shift(lower, l),
-                shift(upper, l),
-                problem.lin.origins[index].clone(),
-            );
+    /// 宣言の自分の制約を、番号をずらして足す。
+    fn copy_own(&mut self, problem: &KindProblem, (l, m): (usize, usize)) {
+        for (&(lower, upper), origin) in problem.lin.constraints.iter().zip(&problem.lin.origins) {
+            self.lin
+                .require(shift(lower, l), shift(upper, l), origin.clone());
         }
-        for index in from.1..to.1 {
-            let (lower, upper) = problem.mult.constraints[index];
-            self.mult.require(
-                shift(lower, m),
-                shift(upper, m),
-                problem.mult.origins[index].clone(),
-            );
+        for (&(lower, upper), origin) in problem.mult.constraints.iter().zip(&problem.mult.origins)
+        {
+            self.mult
+                .require(shift(lower, m), shift(upper, m), origin.clone());
         }
-        for carry in &problem.carries[from.2..to.2] {
+        for carry in &problem.carries {
             self.carries.push(Carry {
                 lin: shift(carry.lin, l),
                 mult: shift(carry.mult, m),
@@ -879,7 +849,6 @@ mod tests {
             lin: vec![copy],
             mult: vec![],
             origin: None,
-            at: (0, 0, 0),
         });
         let scheme = KindScheme {
             lin: vec![(
@@ -893,41 +862,6 @@ mod tests {
         let values = solve(&merged.lin).0;
         assert_eq!(values[copy.index()], Linearity::Lin);
         assert_eq!(values[a.index()], Linearity::Unr);
-    }
-
-    #[test]
-    fn instance_constraints_are_spliced_at_their_position() {
-        // 違反は自分の x ≤ Unr (O_a)、具体化した x ≤ Unr (O_b)、自分の x ≤ Unr (O_c) の3つだけで、由来は1つずつ違う。
-        // 下限の Lin ≤ x は違反にならないので由来を付けない。範囲はすべて同じなので、報告の順は制約を並べた順で決まる。
-        // 具体化を自分の制約の後ろにまとめて足すと、O_b が O_c の後ろに回る
-        let origin = |name: &str| KindOrigin {
-            range: range(0, 1),
-            reason: KindReason::Passed(name.to_string()),
-        };
-        let mut problem = KindProblem::default();
-        let x = problem.lin.fresh();
-        let unr = Bound::Const(Linearity::Unr);
-        problem.lin.require(Bound::Var(x), unr, Some(origin("a")));
-        problem.lin.require(Bound::Var(x), unr, Some(origin("c")));
-        problem
-            .lin
-            .require(Bound::Const(Linearity::Lin), Bound::Var(x), None);
-        problem.instances.push(Instance {
-            decl: Decl::Builtin(Builtin::IntEq),
-            lin: vec![x],
-            mult: vec![],
-            origin: Some(origin("b")),
-            at: (1, 0, 0),
-        });
-        let scheme = KindScheme {
-            lin: vec![(Bound::Var(KindVar::from_index(0)), unr)],
-            ..KindScheme::default()
-        };
-        let schemes = HashMap::from([(Decl::Builtin(Builtin::IntEq), scheme)]);
-        assert_eq!(
-            solve_scc(&[(function(0), &problem)], &schemes).violated,
-            vec![origin("a"), origin("b"), origin("c")]
-        );
     }
 
     #[test]
@@ -1014,7 +948,6 @@ mod tests {
             lin: vec![passed],
             mult: vec![],
             origin: None,
-            at: (1, 0, 0),
         });
         let mut g = KindProblem::default();
         let b = g.lin.fresh();
@@ -1069,7 +1002,6 @@ mod tests {
                 range: range(5, 9),
                 reason: KindReason::Passed("keep".to_string()),
             }),
-            at: (1, 0, 0),
         });
         let schemes = HashMap::from([(function(9), keep)]);
         let solution = solve_scc(&[(function(0), &f)], &schemes);
