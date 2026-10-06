@@ -420,6 +420,8 @@ pub enum Atom {
     Int(i64),
     Unit,
     Tag(u32),
+    /// 捕まえた変数のない関数の値。クロージャを確保しない。RC の対象ではない (docs/spec/core-ir.md)。
+    Fn(FnIdx),
 }
 
 /// 変種と表示の名前の表から、`name` と、その逆の `from_name` を作る。`name` の `match` は網羅を検査されるので、

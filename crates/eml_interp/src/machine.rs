@@ -260,13 +260,16 @@ impl<'p> Machine<'p> {
     /// 関数値を引数に適用する (docs/spec/core-ir.md の eval/apply)。引数の個数が揃えば関数に入り、足りなければ
     /// 引数を足したクロージャを値にし、余れば余りを持つフレームを積んでから関数に入る。
     fn apply(&mut self, callee: Value, mut args: Vec<Value>) -> Result<Applied, Fault> {
-        let Value::Obj(obj) = callee else {
-            return Err(Fault::Internal("applying a value that is not a closure"));
+        let (function, mut all) = match callee {
+            Value::Fn(function) => (function, Vec::new()),
+            Value::Obj(obj) => {
+                let closure = self.take_closure(obj)?;
+                (closure.function, closure.args)
+            }
+            _ => return Err(Fault::Internal("applying a value that is not a function")),
         };
-        let closure = self.take_closure(obj)?;
-        let function = FnIdx(closure.function);
-        let mut all = closure.args;
         all.append(&mut args);
+        let function = FnIdx(function);
         let arity = self.program.function(function).params.len();
         match all.len().cmp(&arity) {
             Ordering::Equal => {
@@ -275,7 +278,7 @@ impl<'p> Machine<'p> {
             }
             Ordering::Less => {
                 let closure = Closure {
-                    function: closure.function,
+                    function: function.0,
                     args: all,
                 };
                 let value = self.heap.alloc(Payload::Closure(closure));
@@ -400,6 +403,7 @@ impl<'p> Machine<'p> {
             Atom::Int(n) => Value::Int(n),
             Atom::Unit => Value::Unit,
             Atom::Tag(tag) => Value::Tag(tag),
+            Atom::Fn(function) => Value::Fn(function.0),
         })
     }
 

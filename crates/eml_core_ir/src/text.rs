@@ -698,6 +698,9 @@ impl<'t> Parser<'t> {
         }
         let line = self.line();
         let word = self.word()?;
+        if let Some(name) = word.strip_prefix('&') {
+            return Ok(Atom::Fn(self.resolve_function(name, line)?));
+        }
         if let Some(tag) = tag_number(&word) {
             return Ok(Atom::Tag(tag));
         }
@@ -948,6 +951,19 @@ mod tests {
     #[test]
     fn an_unknown_function_is_an_error_with_its_line() {
         let error = parse("fn f() {\n  tailcall g(1)\n}\n").unwrap_err();
+        assert_eq!(error.line, 2);
+    }
+
+    #[test]
+    fn a_function_value_round_trips_even_before_its_definition() {
+        round_trip(
+            "fn f() {\n  let c0^ = &g\n  tailcall apply c0(1)\n}\nfn g(x0) {\n  return x0\n}\n",
+        );
+    }
+
+    #[test]
+    fn a_function_value_of_an_unknown_function_is_an_error_with_its_line() {
+        let error = parse("fn f() {\n  return &g\n}\n").unwrap_err();
         assert_eq!(error.line, 2);
     }
 

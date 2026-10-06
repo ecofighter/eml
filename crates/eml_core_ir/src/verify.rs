@@ -366,8 +366,15 @@ impl<'a> Checker<'a> {
 
     /// 値を使う。RC の対象なら、所有権を1つ渡す。
     fn consume(&self, state: &mut State, atom: &Atom) -> Result<(), String> {
-        let Atom::Var(var) = *atom else {
-            return Ok(());
+        let var = match *atom {
+            Atom::Var(var) => var,
+            Atom::Fn(target) if target.0 as usize >= self.program.functions.len() => {
+                return Err(format!(
+                    "a function value refers to the unknown function #{}",
+                    target.0
+                ));
+            }
+            _ => return Ok(()),
         };
         if !self.tracked[var.0 as usize] {
             return self.visible(var);
@@ -380,6 +387,12 @@ impl<'a> Checker<'a> {
             Rhs::Call { call, saved: _ } => return self.check_call(state, call),
             Rhs::MakeClosure(target, args) => {
                 let target = self.program.function(*target);
+                if args.is_empty() {
+                    return Err(format!(
+                        "a closure of `{0}` has no arguments; use `&{0}`",
+                        target.name
+                    ));
+                }
                 if args.len() >= target.params.len() {
                     return Err(format!(
                         "a closure of `{}` has {} arguments, but it must have fewer than {}",

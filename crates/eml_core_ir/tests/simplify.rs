@@ -685,10 +685,7 @@ fn every_kind_of_call_in_tail_position_becomes_a_tail_call() {
       tailcall perform Ask.ask(s1)
     }
     fn answer(p0) {
-      let c1^ = closure answer$handle0()
-      let c2^ = closure answer$handle0$ask()
-      let c3^ = closure answer$handle0$return()
-      tailcall handle Ask(c1) {ask: c2} return c3
+      tailcall handle Ask(&answer$handle0) {ask: &answer$handle0$ask} return &answer$handle0$return
     }
     fn main(p0) {
       let t1 = call answer(())

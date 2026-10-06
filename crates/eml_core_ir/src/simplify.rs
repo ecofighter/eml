@@ -401,7 +401,7 @@ impl Simplify<'_> {
                 } => Some((*tag, Vec::new())),
                 _ => None,
             },
-            Atom::Int(_) | Atom::Unit => None,
+            Atom::Int(_) | Atom::Unit | Atom::Fn(_) => None,
         }
     }
 

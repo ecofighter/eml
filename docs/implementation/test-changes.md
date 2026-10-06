@@ -218,3 +218,4 @@
 ### 段階6b-1
 
 - 種類2: HIR が省いた `return` の節を `| return $r -> $r` として合成するようにしたので、`return` の節のない handler を含む HIR のダンプ、型のダンプ (局所変数 `$r` と、それ以降の番号)、Core IR のスナップショット (`$return` の関数と `handle … return`) が変わった。Core IR とランタイムが、つねに `return` の節を持つ1つの形で handler を扱うためである。各テストが確かめる変換と検査の内容は変わらない
+- 種類2: 捕獲のない関数を関数の値 (`&f`) にしたので、Core IR のスナップショットの `closure f()` の行が使う位置の `&f` になり、変数の番号が変わった。手で書いた IR のテスト (`eml_interp`、`eml_core_ir` の verifier) の `closure f()` も `&f` に書き直した。実行の結果と verifier が拒否する誤りは変わらない

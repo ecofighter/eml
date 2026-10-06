@@ -55,12 +55,13 @@ fn binder(function: &CoreFn, v: VarId) -> String {
     }
 }
 
-fn atom(function: &CoreFn, atom: &Atom) -> String {
+fn atom(program: &Program, function: &CoreFn, atom: &Atom) -> String {
     match atom {
         Atom::Var(v) => var(function, *v),
         Atom::Int(n) => n.to_string(),
         Atom::Unit => "()".to_string(),
         Atom::Tag(tag) => format!("#{tag}"),
+        Atom::Fn(target) => format!("&{}", program.function(*target).name),
     }
 }
 
@@ -102,7 +103,7 @@ fn expr(program: &Program, function: &CoreFn, id: CExprId, indent: usize, out: &
                 id = *scope;
             }
             CExpr::Jump { join, args } => {
-                let args: Vec<String> = args.iter().map(|a| atom(function, a)).collect();
+                let args: Vec<String> = args.iter().map(|a| atom(program, function, a)).collect();
                 writeln!(out, "{pad}jump j{}({})", join.0, args.join(", ")).unwrap();
                 return;
             }
@@ -111,7 +112,7 @@ fn expr(program: &Program, function: &CoreFn, id: CExprId, indent: usize, out: &
                 return;
             }
             CExpr::Switch { scrutinee, arms } => {
-                writeln!(out, "{pad}switch {} {{", atom(function, scrutinee)).unwrap();
+                writeln!(out, "{pad}switch {} {{", atom(program, function, scrutinee)).unwrap();
                 for arm in arms {
                     if arm.fields.is_empty() {
                         writeln!(out, "{pad}  #{} ->", arm.tag).unwrap();
@@ -126,7 +127,7 @@ fn expr(program: &Program, function: &CoreFn, id: CExprId, indent: usize, out: &
                 return;
             }
             CExpr::Return(a) => {
-                writeln!(out, "{pad}return {}", atom(function, a)).unwrap();
+                writeln!(out, "{pad}return {}", atom(program, function, a)).unwrap();
                 return;
             }
             CExpr::Dup { var: v, body } => {
@@ -144,12 +145,12 @@ fn expr(program: &Program, function: &CoreFn, id: CExprId, indent: usize, out: &
 fn rhs_text(program: &Program, function: &CoreFn, rhs: &Rhs) -> String {
     let args = |args: &[Atom]| {
         args.iter()
-            .map(|a| atom(function, a))
+            .map(|a| atom(program, function, a))
             .collect::<Vec<_>>()
             .join(", ")
     };
     match rhs {
-        Rhs::Atom(a) => atom(function, a),
+        Rhs::Atom(a) => atom(program, function, a),
         Rhs::Call { call, saved } => {
             let text = match call {
                 Call::Direct(..) => format!("call {}", call_text(program, function, call)),
@@ -169,20 +170,20 @@ fn rhs_text(program: &Program, function: &CoreFn, rhs: &Rhs) -> String {
         Rhs::Prim(op, a) => format!("prim {}({})", op.name(), args(a)),
         Rhs::ConstString(index) => format!("const {:?}", program.strings[*index as usize]),
         Rhs::Io(op, a) => format!("perform {}({})", op.name(), args(a)),
-        Rhs::Drop(a) => format!("drop {}", atom(function, a)),
+        Rhs::Drop(a) => format!("drop {}", atom(program, function, a)),
     }
 }
 
 fn call_text(program: &Program, function: &CoreFn, call: &Call) -> String {
     let args = |args: &[Atom]| {
         args.iter()
-            .map(|a| atom(function, a))
+            .map(|a| atom(program, function, a))
             .collect::<Vec<_>>()
             .join(", ")
     };
     match call {
         Call::Direct(callee, a) => format!("{}({})", program.function(*callee).name, args(a)),
-        Call::Apply(callee, a) => format!("apply {}({})", atom(function, callee), args(a)),
+        Call::Apply(callee, a) => format!("apply {}({})", atom(program, function, callee), args(a)),
         Call::Handle {
             effect,
             body,
@@ -194,16 +195,20 @@ fn call_text(program: &Program, function: &CoreFn, call: &Call) -> String {
                 .iter()
                 .enumerate()
                 .map(|(op, clause)| {
-                    format!("{}: {}", operation(info, op as u32), atom(function, clause))
+                    format!(
+                        "{}: {}",
+                        operation(info, op as u32),
+                        atom(program, function, clause)
+                    )
                 })
                 .collect();
             let ret = ret.map_or(String::new(), |ret| {
-                format!(" return {}", atom(function, &ret))
+                format!(" return {}", atom(program, function, &ret))
             });
             format!(
                 "handle {}({}) {{{}}}{ret}",
                 info.name,
-                atom(function, body),
+                atom(program, function, body),
                 clauses.join(", ")
             )
         }
@@ -221,7 +226,11 @@ fn call_text(program: &Program, function: &CoreFn, call: &Call) -> String {
             )
         }
         Call::Resume { k, arg } => {
-            format!("resume {}({})", atom(function, k), atom(function, arg))
+            format!(
+                "resume {}({})",
+                atom(program, function, k),
+                atom(program, function, arg)
+            )
         }
     }
 }

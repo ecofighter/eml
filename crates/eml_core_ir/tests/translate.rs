@@ -87,13 +87,10 @@ fn builtins_used_as_values_are_wrapped() {
       return t2
     }
     fn main(p0) {
-      let c1^ = closure builtin$not()
-      let c2^ = closure builtin$not()
-      let c3^ = closure builtin$>>(c1, c2)
-      let c4^ = closure builtin$println()
-      let t5^ = prim show_int(1)
-      let t6 = call apply(c4, t5)
-      return t6
+      let c1^ = closure builtin$>>(&builtin$not, &builtin$not)
+      let t2^ = prim show_int(1)
+      let t3 = call apply(&builtin$println, t2)
+      return t3
     }
     fn builtin$not(p0) {
       let t1 = prim not(p0)
@@ -224,8 +221,7 @@ fn the_entry_applies_a_point_free_main_to_unit() {
     let text = "main : Unit -> <IO> Unit\nmain = fn () -> println \"point-free\"";
     insta::assert_snapshot!(core_text(text, Pass::Translate), @r#"
     fn main() {
-      let c0^ = closure main$lambda0()
-      return c0
+      return &main$lambda0
     }
     fn main$lambda0(p0) {
       let s1^ = const "point-free"
@@ -285,14 +281,11 @@ fn handlers_are_lifted_to_closures() {
     effect Ask { ask }
     fn main(p0) {
       let s1^ = const "n = "
-      let c2^ = closure main$handle0()
-      let c3^ = closure main$handle0$ask()
-      let c4^ = closure main$handle0$return()
-      let t5 = handle Ask(c2) {ask: c3} return c4
-      let t6^ = prim show_int(t5)
-      let t7^ = prim ++(s1, t6)
-      let t8 = perform println(t7)
-      return t8
+      let t2 = handle Ask(&main$handle0) {ask: &main$handle0$ask} return &main$handle0$return
+      let t3^ = prim show_int(t2)
+      let t4^ = prim ++(s1, t3)
+      let t5 = perform println(t4)
+      return t5
     }
     fn main$handle0(p0) {
       let s1^ = const "x"
@@ -497,9 +490,8 @@ fn constructor_patterns_in_let_lambda_and_equation_parameters() {
       }
     }
     fn by_lambda(b0^) {
-      let c1^ = closure by_lambda$lambda0()
-      let t2 = apply c1(b0)
-      return t2
+      let t1 = apply &by_lambda$lambda0(b0)
+      return t1
     }
     fn main(p0) {
       return ()
@@ -569,11 +561,8 @@ fn constructor_patterns_in_handler_clause_parameters() {
     insta::assert_snapshot!(core_text(text, Pass::Translate), @"
     effect Give { give }
     fn run(p0) {
-      let c1^ = closure run$handle0()
-      let c2^ = closure run$handle0$give()
-      let c3^ = closure run$handle0$return()
-      let t4 = handle Give(c1) {give: c2} return c3
-      return t4
+      let t1 = handle Give(&run$handle0) {give: &run$handle0$give} return &run$handle0$return
+      return t1
     }
     fn main(p0) {
       return ()
@@ -845,4 +834,14 @@ fn file_operations_are_performed_on_the_io_handler() {
     for op in ["perform open(", "perform read_all(", "perform close("] {
         assert!(ir.contains(op), "{ir}");
     }
+}
+
+#[test]
+fn functions_without_captures_are_values() {
+    let text = "twice : (Int -> Int) -> Int -> Int\ntwice f x = f (f x)\n\nmain : Unit -> <IO> Unit\nmain () =\n  let n = 3\n  println (show_int (twice (fn x -> x + 1) 1 + twice (fn x -> x + n) 1))";
+    let ir = core_text(text, Pass::Translate);
+    // 捕獲のないラムダは関数の値で、捕獲のあるラムダはクロージャである
+    assert!(ir.contains("&main$lambda0"), "{ir}");
+    assert!(!ir.contains("closure main$lambda0"), "{ir}");
+    assert!(ir.contains("closure main$lambda1(3)"), "{ir}");
 }

@@ -96,8 +96,8 @@ const ASK: &str = "effect Ask { ask }\n";
 fn handler_program(effects: &str) -> String {
     format!(
         "{effects}fn main() {{
-  let c0^ = closure main$handle0()
-  let c1^ = closure main$handle0$ask()
+  let c0^ = &main$handle0
+  let c1^ = &main$handle0$ask
   let t2 = handle Ask(c0) {{ask: c1}}
   return t2
 }}
@@ -621,5 +621,15 @@ fn a_switch_on_an_unboxed_variable_cannot_bind_fields() {
     assert_eq!(
         check_scopes(text),
         Err("`d0` is not boxed, but a switch binds its fields in `f`".to_string())
+    );
+}
+
+#[test]
+fn a_closure_without_arguments_is_rejected() {
+    let text = "fn f() {\n  let c0^ = closure g()\n  return c0\n}\nfn g(x0) {\n  return x0\n}\n";
+    let error = check(text).unwrap_err();
+    assert!(
+        error.contains("a closure of `g` has no arguments; use `&g`"),
+        "{error}"
     );
 }

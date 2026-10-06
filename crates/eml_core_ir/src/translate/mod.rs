@@ -217,7 +217,15 @@ impl FnLowering<'_> {
             .iter()
             .map(|(local, _)| self.locals[*local])
             .collect();
-        self.bind(out, "c", ty, Rhs::MakeClosure(function, atoms))
+        self.closure(function, atoms, ty, out)
+    }
+
+    /// 関数と渡した引数の値。引数がなければ関数の値にし、クロージャを確保しない (docs/spec/core-ir.md)。
+    fn closure(&mut self, target: FnIdx, args: Vec<Atom>, ty: &Type, out: &mut Bindings) -> Atom {
+        if args.is_empty() {
+            return Atom::Fn(target);
+        }
+        self.bind(out, "c", ty, Rhs::MakeClosure(target, args))
     }
 
     fn pat_type(&self, pat: PatId) -> Type {

@@ -20,6 +20,8 @@ pub enum Value {
     Unit,
     /// 引数のないコンストラクタ。`Bool` は `False` = 0、`True` = 1 である。
     Tag(u32),
+    /// 捕まえた値のない関数の値。ヒープに置かない。
+    Fn(u32),
     Obj(ObjRef),
 }
 

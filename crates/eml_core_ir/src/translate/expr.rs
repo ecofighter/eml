@@ -49,7 +49,7 @@ impl FnLowering<'_> {
     ) -> Atom {
         let arity = self.program.arity(target);
         if args.len() < arity {
-            return self.bind(out, "c", ty, Rhs::MakeClosure(target, args));
+            return self.closure(target, args, ty, out);
         }
         let rest = args.split_off(arity);
         if rest.is_empty() {
@@ -77,7 +77,7 @@ impl FnLowering<'_> {
         let arity = builtin.arity();
         if args.len() < arity {
             let wrapper = self.program.wrapper(self.module, builtin);
-            return self.bind(out, "c", ty, Rhs::MakeClosure(wrapper, args));
+            return self.closure(wrapper, args, ty, out);
         }
         let rest = args.split_off(arity);
         let rhs = match lowering(builtin) {
@@ -117,7 +117,7 @@ impl FnLowering<'_> {
         let arity = self.module.operations[op].arity;
         if args.len() < arity {
             let wrapper = self.program.operation_wrapper(self.module, op);
-            return self.bind(out, "c", ty, Rhs::MakeClosure(wrapper, args));
+            return self.closure(wrapper, args, ty, out);
         }
         let call = perform_call(self.module, op, args);
         self.bind(out, "t", ty, Rhs::call(call))
@@ -136,7 +136,7 @@ impl FnLowering<'_> {
         let constructor = &module.constructors[ctor];
         if args.len() < constructor.fields.len() {
             let wrapper = self.program.constructor_wrapper(module, ctor);
-            return self.bind(out, "c", ty, Rhs::MakeClosure(wrapper, args));
+            return self.closure(wrapper, args, ty, out);
         }
         self.bind(
             out,
@@ -249,7 +249,7 @@ impl FnLowering<'_> {
             ExprKind::Path(Res::Builtin(builtin)) => {
                 let wrapper = self.program.wrapper(self.module, *builtin);
                 let ty = self.ty(id);
-                self.bind(out, "c", &ty, Rhs::MakeClosure(wrapper, Vec::new()))
+                self.closure(wrapper, Vec::new(), &ty, out)
             }
             // 引数のないトップレベルの値は、参照するたびに呼び出す (docs/spec/core-ir.md)
             ExprKind::Path(Res::Function(function)) => {
@@ -260,13 +260,13 @@ impl FnLowering<'_> {
                     self.bind(out, &name, &ty, Rhs::call(Call::Direct(target, Vec::new())))
                 } else {
                     let ty = self.ty(id);
-                    self.bind(out, "c", &ty, Rhs::MakeClosure(target, Vec::new()))
+                    self.closure(target, Vec::new(), &ty, out)
                 }
             }
             ExprKind::Path(Res::Operation(op)) => {
                 let wrapper = self.program.operation_wrapper(self.module, *op);
                 let ty = self.ty(id);
-                self.bind(out, "c", &ty, Rhs::MakeClosure(wrapper, Vec::new()))
+                self.closure(wrapper, Vec::new(), &ty, out)
             }
             ExprKind::Path(Res::Constructor(ctor)) => {
                 let constructor = &self.module.constructors[*ctor];
@@ -275,7 +275,7 @@ impl FnLowering<'_> {
                 } else {
                     let wrapper = self.program.constructor_wrapper(self.module, *ctor);
                     let ty = self.ty(id);
-                    self.bind(out, "c", &ty, Rhs::MakeClosure(wrapper, Vec::new()))
+                    self.closure(wrapper, Vec::new(), &ty, out)
                 }
             }
             ExprKind::Call { callee, .. } => {
