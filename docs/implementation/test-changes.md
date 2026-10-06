@@ -196,3 +196,6 @@
 - 段2が具体化で展開した制約を差し込む位置 (`Instance::at`) をなくしたので、`kind/solve.rs` の単体テスト `instance_constraints_are_spliced_at_their_position` を消した (種類1)。確かめる性質がなくなったためである。ほかの単体テストの `Instance` の組み立てから `at` を除いた (種類3)
 - 関数適用の評価の順を ML 式にし、値でない後の引数を評価する間は前の矢印を適用した結果を持つようにしたので、`eml_types/tests/linearity.rs` に `an_applied_function_is_kept_across_a_later_argument` を足した (種類1)
 - `(f 1) (g ())` と `f 1 (g ())` の副作用の順を確かめる `tests/ui/run/functions/evaluation_order.em` を足した (種類1)
+- `tests/ui/run/functions/evaluation_order.em` に、呼ばれる式が引数のないトップレベルの値、ローカルの関数値、ラムダのときと、関数値へパイプで渡すときの副作用の順を確かめる行を足した (種類1)。ML 式の順を固定する新しい期待値で、既存の行の期待値は変えていない
+- `eml_types/tests/linearity.rs` に `a_local_is_kept_across_the_arrow_applied_before_a_later_argument` と `a_piped_value_is_kept_across_the_arrow_applied_before_a_later_argument` を足した (種類1)。前のまとまりの矢印が `multi` の操作を起こしうるとき、後の値でない引数で使うローカルの値と、パイプで渡した値を、その矢印をまたいで持つことを確かめる。既存の期待値は変えていない
+- Core IR のスナップショットは変わらなかったので、種類2の変更はない。同じ範囲に違反が2つあって選ぶ1件か並びが変わったテストも、なかった

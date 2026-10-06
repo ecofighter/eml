@@ -520,6 +520,33 @@ fn an_applied_function_is_kept_across_a_later_argument() {
 }
 
 #[test]
+fn a_local_is_kept_across_the_arrow_applied_before_a_later_argument() {
+    let rest = "choose_then : Int -> <Choice> (Unit -> <IO> Unit)\nchoose_then n =\n  let b = choose ()\n  fn u -> ()\n\napplied_first : Unit -> <Choice, IO> Unit\napplied_first () =\n  let f = open \"a.txt\"\n  let h = choose_then\n  h 1 (close f)";
+    insta::assert_snapshot!(carried(rest), @"
+    E3006 29:3 `f` must be used exactly once, but it is kept alive across a call that may resume more than once
+      29:3 this call may perform `choose`, a `multi` operation
+      27:7 `f` is bound here
+      2:9 `choose` is declared `multi` here
+      note: a continuation of a `multi` operation can be resumed more than once, and each resumption would use the value again
+      help: finish using `f` before this call
+    ");
+}
+
+/// パイプの呼び出しの範囲は `f` から始まるので、primary と持ち越す値はどちらも 32:3 を指す。
+#[test]
+fn a_piped_value_is_kept_across_the_arrow_applied_before_a_later_argument() {
+    let rest = "choose_then : Int -> <Choice> (Bool -> File -> <IO> Unit)\nchoose_then n =\n  let b = choose ()\n  fn c -> fn g -> close g\n\nyes : Unit -> Bool\nyes () = True\n\npiped_first : Unit -> <Choice, IO> Unit\npiped_first () =\n  let f = open \"a.txt\"\n  let k = choose_then\n  f |> k 1 (yes ())";
+    insta::assert_snapshot!(carried(rest), @"
+    E3006 32:3 a linear value must be used exactly once, but it is kept alive across a call that may resume more than once
+      32:3 this call may perform `choose`, a `multi` operation
+      32:3 this value is kept alive across the call
+      2:9 `choose` is declared `multi` here
+      note: a continuation of a `multi` operation can be resumed more than once, and each resumption would use the value again
+      help: finish using the value before this call
+    ");
+}
+
+#[test]
 fn a_lambda_body_is_checked_on_its_own() {
     let rest = "in_lambda : Unit -> <Choice, IO> Unit\nin_lambda () =\n  let f = open \"a.txt\"\n  let later = fn () ->\n    let b = choose ()\n    close f\n  later ()";
     insta::assert_snapshot!(carried(rest), @r"
