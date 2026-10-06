@@ -113,7 +113,7 @@ impl Simplify<'_> {
         let mut work = vec![self.function.body];
         while let Some(id) = work.pop() {
             order.push(id);
-            work.extend(children(self.expr(id)));
+            self.expr(id).for_each_child(|child| work.push(child));
         }
         order
     }
@@ -133,9 +133,8 @@ impl Simplify<'_> {
     fn parents(&self) -> Vec<Option<CExprId>> {
         let mut parents = vec![None; self.function.exprs.len()];
         for id in self.reachable() {
-            for child in children(self.expr(id)) {
-                parents[child.0 as usize] = Some(id);
-            }
+            self.expr(id)
+                .for_each_child(|child| parents[child.0 as usize] = Some(id));
         }
         parents
     }
@@ -155,7 +154,16 @@ impl Simplify<'_> {
     fn replace(&mut self, parents: &mut [Option<CExprId>], old: CExprId, new: CExprId) {
         match parents[old.0 as usize] {
             None => self.function.body = new,
-            Some(parent) => replace_child(&mut self.function.exprs[parent.0 as usize], old, new),
+            Some(parent) => {
+                let mut replaced = 0;
+                self.function.exprs[parent.0 as usize].for_each_child_mut(|slot| {
+                    if *slot == old {
+                        *slot = new;
+                        replaced += 1;
+                    }
+                });
+                debug_assert!(replaced > 0, "the parent points at the child");
+            }
         }
         parents[new.0 as usize] = parents[old.0 as usize];
     }
@@ -170,12 +178,12 @@ impl Simplify<'_> {
         let mut work = vec![root];
         while let Some(id) = work.pop() {
             let expr = &mut self.function.exprs[id.0 as usize];
-            for slot in expr.atoms_mut() {
+            expr.for_each_atom_mut(|slot| {
                 if *slot == Atom::Var(var) {
                     *slot = atom;
                 }
-            }
-            work.extend(children(expr));
+            });
+            expr.for_each_child(|child| work.push(child));
         }
     }
 
@@ -344,10 +352,13 @@ impl Simplify<'_> {
     fn uses(&self, root: CExprId, var: VarId) -> bool {
         let mut work = vec![root];
         while let Some(id) = work.pop() {
-            if used_atoms(self.expr(id)).contains(&Atom::Var(var)) {
+            let mut used = false;
+            self.expr(id)
+                .for_each_atom(|atom| used |= atom == Atom::Var(var));
+            if used {
                 return true;
             }
-            work.extend(children(self.expr(id)));
+            self.expr(id).for_each_child(|child| work.push(child));
         }
         false
     }
@@ -438,11 +449,11 @@ impl Simplify<'_> {
         let order = self.reachable();
         let mut uses = vec![0usize; self.function.vars.len()];
         for &id in &order {
-            for atom in used_atoms(self.expr(id)) {
+            self.expr(id).for_each_atom(|atom| {
                 if let Atom::Var(var) = atom {
                     uses[var.0 as usize] += 1;
                 }
-            }
+            });
         }
         let mut parents = self.parents();
         for &id in order.iter().rev() {
@@ -586,7 +597,7 @@ impl Simplify<'_> {
                         work.extend(deferred[index]);
                     }
                 }
-                other => work.extend(children(other)),
+                other => other.for_each_child(|child| work.push(child)),
             }
         }
         let mut parents = self.parents();
@@ -626,33 +637,6 @@ impl Simplify<'_> {
     }
 }
 
-fn children(expr: &CExpr) -> Vec<CExprId> {
-    match expr {
-        CExpr::Let { body, .. } | CExpr::Dup { body, .. } | CExpr::Decref { body, .. } => {
-            vec![*body]
-        }
-        CExpr::Join { body, scope, .. } => vec![*body, *scope],
-        CExpr::Switch { arms, .. } => arms.iter().map(|arm| arm.body).collect(),
-        CExpr::Return(_) | CExpr::Jump { .. } | CExpr::TailCall(_) => Vec::new(),
-    }
-}
-
-fn replace_child(expr: &mut CExpr, old: CExprId, new: CExprId) {
-    let slots: Vec<&mut CExprId> = match expr {
-        CExpr::Let { body, .. } | CExpr::Dup { body, .. } | CExpr::Decref { body, .. } => {
-            vec![body]
-        }
-        CExpr::Join { body, scope, .. } => vec![body, scope],
-        CExpr::Switch { arms, .. } => arms.iter_mut().map(|arm| &mut arm.body).collect(),
-        CExpr::Return(_) | CExpr::Jump { .. } | CExpr::TailCall(_) => Vec::new(),
-    };
-    let slot = slots
-        .into_iter()
-        .find(|slot| **slot == old)
-        .expect("the parent points at the child");
-    *slot = new;
-}
-
 /// 本体を jump の位置に写してよい値。引数は渡す値に置き換わり、定数はどこでも同じである。ほかの変数は、写すと
 /// その変数の使用が増えるので写さない。
 fn movable(atom: Atom, params: &[VarId]) -> bool {
@@ -660,12 +644,6 @@ fn movable(atom: Atom, params: &[VarId]) -> bool {
         Atom::Var(var) => params.contains(&var),
         _ => true,
     }
-}
-
-/// 式が直接使う値。
-fn used_atoms(expr: &CExpr) -> Vec<Atom> {
-    let mut copy = expr.clone();
-    copy.atoms_mut().into_iter().map(|atom| *atom).collect()
 }
 
 /// 消してもよい右辺。値を作るだけで、エフェクトも実行時エラーも起こさない。`con` と `MakeClosure` が所有権を受け取る

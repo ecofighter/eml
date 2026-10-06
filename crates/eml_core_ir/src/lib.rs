@@ -144,15 +144,85 @@ pub enum CExpr {
 }
 
 impl CExpr {
-    /// 式が直接使う値を書き換える口。子の式の値は含まない。
-    pub(crate) fn atoms_mut(&mut self) -> Vec<&mut Atom> {
+    /// 子の式を、`Join` は本体、`scope` の順に、`Switch` は枝の順に渡す。子をたどる処理はすべてここを通す。
+    pub(crate) fn for_each_child(&self, mut f: impl FnMut(CExprId)) {
         match self {
-            CExpr::Let { rhs, .. } => rhs.atoms_mut(),
-            CExpr::Switch { scrutinee, .. } => vec![scrutinee],
-            CExpr::Jump { args, .. } => args.iter_mut().collect(),
-            CExpr::Return(atom) => vec![atom],
-            CExpr::TailCall(call) => call.atoms_mut(),
-            CExpr::Join { .. } | CExpr::Dup { .. } | CExpr::Decref { .. } => Vec::new(),
+            CExpr::Let {
+                var: _,
+                rhs: _,
+                body,
+            }
+            | CExpr::Dup { var: _, body }
+            | CExpr::Decref { var: _, body } => f(*body),
+            CExpr::Join {
+                join: _,
+                params: _,
+                captures: _,
+                body,
+                scope,
+            } => {
+                f(*body);
+                f(*scope);
+            }
+            CExpr::Switch { scrutinee: _, arms } => arms.iter().for_each(|arm| f(arm.body)),
+            CExpr::Jump { join: _, args: _ } | CExpr::Return(_) | CExpr::TailCall(_) => {}
+        }
+    }
+
+    pub(crate) fn for_each_child_mut(&mut self, mut f: impl FnMut(&mut CExprId)) {
+        match self {
+            CExpr::Let {
+                var: _,
+                rhs: _,
+                body,
+            }
+            | CExpr::Dup { var: _, body }
+            | CExpr::Decref { var: _, body } => f(body),
+            CExpr::Join {
+                join: _,
+                params: _,
+                captures: _,
+                body,
+                scope,
+            } => {
+                f(body);
+                f(scope);
+            }
+            CExpr::Switch { scrutinee: _, arms } => {
+                arms.iter_mut().for_each(|arm| f(&mut arm.body))
+            }
+            CExpr::Jump { join: _, args: _ } | CExpr::Return(_) | CExpr::TailCall(_) => {}
+        }
+    }
+
+    /// 式が直接使う値。子の式の値は含まない。`Dup` と `Decref` の変数は Perceus の命令であり、値の使用に数えない。
+    pub(crate) fn for_each_atom(&self, mut f: impl FnMut(Atom)) {
+        match self {
+            CExpr::Let {
+                var: _,
+                rhs,
+                body: _,
+            } => rhs.for_each_atom(f),
+            CExpr::Switch { scrutinee, arms: _ } => f(*scrutinee),
+            CExpr::Jump { join: _, args } => args.iter().for_each(|&atom| f(atom)),
+            CExpr::Return(atom) => f(*atom),
+            CExpr::TailCall(call) => call.for_each_atom(f),
+            CExpr::Join { .. } | CExpr::Dup { .. } | CExpr::Decref { .. } => {}
+        }
+    }
+
+    pub(crate) fn for_each_atom_mut(&mut self, mut f: impl FnMut(&mut Atom)) {
+        match self {
+            CExpr::Let {
+                var: _,
+                rhs,
+                body: _,
+            } => rhs.for_each_atom_mut(f),
+            CExpr::Switch { scrutinee, arms: _ } => f(scrutinee),
+            CExpr::Jump { join: _, args } => args.iter_mut().for_each(f),
+            CExpr::Return(atom) => f(atom),
+            CExpr::TailCall(call) => call.for_each_atom_mut(f),
+            CExpr::Join { .. } | CExpr::Dup { .. } | CExpr::Decref { .. } => {}
         }
     }
 }
@@ -203,28 +273,32 @@ impl Rhs {
 
     /// 右辺が使う値。関数、プリミティブ、`perform` の引数は、どれも所有権を受け取る (docs/spec/core-ir.md)。
     pub fn atoms(&self) -> Vec<Atom> {
+        let mut atoms = Vec::new();
+        self.for_each_atom(|atom| atoms.push(atom));
+        atoms
+    }
+
+    pub(crate) fn for_each_atom(&self, mut f: impl FnMut(Atom)) {
         match self {
-            Rhs::Atom(atom) => vec![*atom],
-            Rhs::Call { call, .. } => call.atoms(),
+            Rhs::Atom(atom) | Rhs::Drop(atom) => f(*atom),
+            Rhs::Call { call, saved: _ } => call.for_each_atom(f),
             Rhs::MakeClosure(_, args)
             | Rhs::Prim(_, args)
             | Rhs::Io(_, args)
-            | Rhs::Con { args, .. } => args.clone(),
-            Rhs::Drop(atom) => vec![*atom],
-            Rhs::ConstString(_) => Vec::new(),
+            | Rhs::Con { args, .. } => args.iter().for_each(|&atom| f(atom)),
+            Rhs::ConstString(_) => {}
         }
     }
 
-    /// 右辺が使う値を書き換える口。`atoms` と同じ順に並ぶ。
-    pub(crate) fn atoms_mut(&mut self) -> Vec<&mut Atom> {
+    pub(crate) fn for_each_atom_mut(&mut self, mut f: impl FnMut(&mut Atom)) {
         match self {
-            Rhs::Atom(atom) | Rhs::Drop(atom) => vec![atom],
-            Rhs::Call { call, .. } => call.atoms_mut(),
+            Rhs::Atom(atom) | Rhs::Drop(atom) => f(atom),
+            Rhs::Call { call, saved: _ } => call.for_each_atom_mut(f),
             Rhs::MakeClosure(_, args)
             | Rhs::Prim(_, args)
             | Rhs::Io(_, args)
-            | Rhs::Con { args, .. } => args.iter_mut().collect(),
-            Rhs::ConstString(_) => Vec::new(),
+            | Rhs::Con { args, .. } => args.iter_mut().for_each(f),
+            Rhs::ConstString(_) => {}
         }
     }
 }
@@ -258,33 +332,58 @@ pub enum Call {
 impl Call {
     /// 呼び出しが使う値。関数値の呼び出しでは、呼ばれる値が先に来る。
     pub fn atoms(&self) -> Vec<Atom> {
+        let mut atoms = Vec::new();
+        self.for_each_atom(|atom| atoms.push(atom));
+        atoms
+    }
+
+    pub(crate) fn for_each_atom(&self, mut f: impl FnMut(Atom)) {
         match self {
-            Call::Direct(_, args) | Call::Perform { args, .. } => args.clone(),
-            Call::Apply(callee, args) => std::iter::once(*callee)
-                .chain(args.iter().copied())
-                .collect(),
+            Call::Direct(_, args) | Call::Perform { args, .. } => {
+                args.iter().for_each(|&atom| f(atom))
+            }
+            Call::Apply(callee, args) => {
+                f(*callee);
+                args.iter().for_each(|&atom| f(atom));
+            }
             Call::Handle {
-                body, clauses, ret, ..
-            } => std::iter::once(*body)
-                .chain(clauses.iter().copied())
-                .chain(*ret)
-                .collect(),
-            Call::Resume { k, arg } => vec![*k, *arg],
+                effect: _,
+                body,
+                clauses,
+                ret,
+            } => {
+                f(*body);
+                clauses.iter().for_each(|&atom| f(atom));
+                ret.iter().for_each(|&atom| f(atom));
+            }
+            Call::Resume { k, arg } => {
+                f(*k);
+                f(*arg);
+            }
         }
     }
 
-    /// 呼び出しが使う値を書き換える口。`atoms` と同じ順に並ぶ。
-    pub(crate) fn atoms_mut(&mut self) -> Vec<&mut Atom> {
+    pub(crate) fn for_each_atom_mut(&mut self, mut f: impl FnMut(&mut Atom)) {
         match self {
-            Call::Direct(_, args) | Call::Perform { args, .. } => args.iter_mut().collect(),
-            Call::Apply(callee, args) => std::iter::once(callee).chain(args.iter_mut()).collect(),
+            Call::Direct(_, args) | Call::Perform { args, .. } => args.iter_mut().for_each(f),
+            Call::Apply(callee, args) => {
+                f(callee);
+                args.iter_mut().for_each(f);
+            }
             Call::Handle {
-                body, clauses, ret, ..
-            } => std::iter::once(body)
-                .chain(clauses.iter_mut())
-                .chain(ret.iter_mut())
-                .collect(),
-            Call::Resume { k, arg } => vec![k, arg],
+                effect: _,
+                body,
+                clauses,
+                ret,
+            } => {
+                f(body);
+                clauses.iter_mut().for_each(&mut f);
+                ret.iter_mut().for_each(f);
+            }
+            Call::Resume { k, arg } => {
+                f(k);
+                f(arg);
+            }
         }
     }
 }
@@ -386,3 +485,34 @@ pub const TRUE: u32 = 1;
 
 /// タプルの値のタグ。タプルは、コンストラクタが1つの `data` と同じオブジェクトで表す (docs/spec/core-ir.md)。
 pub const TUPLE: u32 = 0;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn children_and_atoms_come_in_a_fixed_order() {
+        let join = CExpr::Join {
+            join: JoinId(0),
+            params: vec![VarId(0)],
+            captures: vec![VarId(1)],
+            body: CExprId(3),
+            scope: CExprId(4),
+        };
+        let mut children = Vec::new();
+        join.for_each_child(|child| children.push(child));
+        assert_eq!(children, [CExprId(3), CExprId(4)]);
+
+        let call = Call::Handle {
+            effect: 0,
+            body: Atom::Var(VarId(1)),
+            clauses: vec![Atom::Var(VarId(2)), Atom::Var(VarId(3))],
+            ret: Some(Atom::Var(VarId(4))),
+        };
+        let handle = CExpr::TailCall(call.clone());
+        let mut atoms = Vec::new();
+        handle.for_each_atom(|atom| atoms.push(atom));
+        assert_eq!(atoms, [1, 2, 3, 4].map(|n| Atom::Var(VarId(n))));
+        assert_eq!(atoms, call.atoms());
+    }
+}
