@@ -746,34 +746,23 @@ fn build(table: &mut Table<'_>, ty: &ShapeTy, tys: &[Ty], rows: &[Tail], lin: &[
 
 #[cfg(test)]
 mod tests {
-    use eml_diagnostics::SourceFiles;
-    use eml_hir::Module;
+    use eml_hir::Program;
 
     use super::*;
 
-    fn module(text: &str) -> Module {
-        let mut files = SourceFiles::new();
-        let file = files.add("test.em", text);
-        let (parse, _) = eml_syntax::parse(file, text);
-        eml_hir::lower(file, &parse.tree()).0
+    fn program(text: &str) -> Program {
+        crate::test_program(text)
     }
 
-    fn context(module: &Module) -> Context {
-        Context::new(
-            module.lang,
-            &module.types,
-            &module.constructors,
-            &module.effects,
-            &module.operations,
-        )
+    fn context(program: &Program) -> Context {
+        Context::new(program)
     }
 
-    /// ソースの最初の関数のシグネチャ。Prelude の intrinsic の関数は飛ばす。
-    fn signature(module: &Module) -> &Signature {
-        module
-            .functions
-            .iter()
-            .find(|(_, function)| !function.intrinsic)
+    /// ソースの最初の関数のシグネチャ。Prelude の関数は飛ばす。
+    fn signature(program: &Program) -> &Signature {
+        program
+            .functions()
+            .find(|(id, _)| id.module == program.entry)
             .and_then(|(_, function)| function.signature.as_ref())
             .unwrap()
     }
@@ -782,9 +771,9 @@ mod tests {
 
     #[test]
     fn a_shape_is_exported_like_its_signature() {
-        let module = module(TWICE);
-        let context = context(&module);
-        let shape = signature_shape(&context, signature(&module));
+        let program = program(TWICE);
+        let context = context(&program);
+        let shape = signature_shape(&context, signature(&program));
         assert_eq!(
             shape.export(&context).to_string(),
             "(a -> <e> a) -> a -> <e> a"
@@ -793,9 +782,9 @@ mod tests {
 
     #[test]
     fn shape_numbers_follow_the_order_of_kind_vars() {
-        let module = module(TWICE);
-        let context = context(&module);
-        let signature = signature(&module);
+        let program = program(TWICE);
+        let context = context(&program);
+        let signature = signature(&program);
         let shape = signature_shape(&context, signature);
         let mut table = Table::new(&context);
         let own = shape.instantiate_rigid(&mut table, &signature.generics);
@@ -808,11 +797,11 @@ mod tests {
 
     #[test]
     fn clause_instantiation_keeps_effect_arguments_and_makes_the_rest_rigid() {
-        let module = module(
+        let program = program(
             "effect State s where\n  swap : a -> s -> (a, s)\n\nmain : Unit -> Unit\nmain () = ()",
         );
-        let context = context(&module);
-        let (_, operation) = module.operations.iter().next().unwrap();
+        let context = context(&program);
+        let (_, operation) = program.operations().next().unwrap();
         let shape = operation_shape(&context, operation);
         let mut table = Table::new(&context);
         let int = table.int;
@@ -825,9 +814,9 @@ mod tests {
 
     #[test]
     fn instantiation_replaces_rigid_variables_and_rows() {
-        let module = module("f : a -> <e> a\nf x = x");
-        let context = context(&module);
-        let shape = signature_shape(&context, signature(&module));
+        let program = program("f : a -> <e> a\nf x = x");
+        let context = context(&program);
+        let shape = signature_shape(&context, signature(&program));
         let mut table = Table::new(&context);
         let first = shape.instantiate(&mut table);
         let second = shape.instantiate(&mut table);
@@ -838,9 +827,9 @@ mod tests {
 
     #[test]
     fn an_error_row_survives_closing_and_instantiation() {
-        let module = module("f : Int -> <Missing> Int\nf x = x");
-        let context = context(&module);
-        let shape = signature_shape(&context, signature(&module));
+        let program = program("f : Int -> <Missing> Int\nf x = x");
+        let context = context(&program);
+        let shape = signature_shape(&context, signature(&program));
         assert_eq!(shape.export(&context).to_string(), "Int -> <{error}> Int");
         let mut table = Table::new(&context);
         let instance = shape.instantiate(&mut table);

@@ -6,7 +6,7 @@
 use std::collections::BTreeSet;
 
 use eml_hir::{
-    Body, EvalStep, ExprId, ExprKind, LocalId, Module, OpMultiplicity, OperationId, PatId, Res,
+    Body, EvalStep, ExprId, ExprKind, LocalId, OpMultiplicity, OperationId, PatId, Program, Res,
     Stmt,
 };
 
@@ -28,14 +28,14 @@ enum Held {
 type Live = BTreeSet<Held>;
 
 pub(crate) fn constrain(
-    module: &Module,
+    program: &Program,
     body: &Body,
     typing: &BodyTyping,
     table: &mut Table<'_>,
     reliable: bool,
 ) {
     let mut carrying = Carrying {
-        module,
+        program,
         body,
         typing,
         table,
@@ -45,7 +45,7 @@ pub(crate) fn constrain(
 }
 
 struct Carrying<'a, 'c> {
-    module: &'a Module,
+    program: &'a Program,
     body: &'a Body,
     typing: &'a BodyTyping,
     table: &'a mut Table<'c>,
@@ -80,7 +80,10 @@ impl Carrying<'_, '_> {
                 };
                 let mut live = after.clone();
                 // 評価の順は `eml_hir::call_steps` だけが持つ。後で使う値は後ろの手順から決まるので、その順を逆にたどる
-                for step in eml_hir::call_steps(self.module, body, id).into_iter().rev() {
+                for step in eml_hir::call_steps(self.program, body, id)
+                    .into_iter()
+                    .rev()
+                {
                     match step {
                         EvalStep::Arrow(index) => {
                             // 矢印の呼び出しの間は、その結果を除いて、後で使う値と評価済みでまだ渡していない引数を持つ
@@ -315,15 +318,15 @@ impl Carrying<'_, '_> {
     /// の操作を選ぶ。row を束縛するのはこの本体の検査だけで、このパスはその後に動くので、報告のときに解いても同じ結果に
     /// なる。
     fn multi_operation(&self, across: &Across) -> Option<OperationId> {
-        let module = self.module;
+        let program = self.program;
         match across {
             Across::Operation(op) => Some(*op),
             Across::Row(row) => self.table.resolve_row(row).labels.iter().find_map(|label| {
-                module.effects[label.effect]
+                program[label.effect]
                     .operations
                     .iter()
                     .copied()
-                    .find(|&op| matches!(module.operations[op].multiplicity, OpMultiplicity::Multi))
+                    .find(|&op| matches!(program[op].multiplicity, OpMultiplicity::Multi))
             }),
         }
     }

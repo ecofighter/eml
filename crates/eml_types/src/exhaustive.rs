@@ -3,10 +3,10 @@
 
 use std::iter;
 
-use eml_diagnostics::{Diagnostic, Label, Severity, TextRange, TextSize};
+use eml_diagnostics::{Diagnostic, FileId, Label, Severity, TextRange, TextSize};
 use eml_hir::{
     Body, Closure, ConstructorId, ExprId, ExprKind, Function, Literal, MatchArm, MatchSource,
-    Module, PatId, PatKind, Stmt, TypeDefId, TypeDefKind,
+    PatId, PatKind, Program, Stmt, TypeDefId, TypeDefKind,
 };
 
 use crate::{BodyTypes, TypedModule, codes};
@@ -17,14 +17,15 @@ const SHOWN: usize = 3;
 const LET_LABEL: &str = "`let` needs a pattern that matches every value";
 const PARAMETER_LABEL: &str = "a parameter needs a pattern that matches every value";
 
-pub(crate) fn check(module: &Module, typed: &TypedModule) -> Vec<Diagnostic> {
+pub(crate) fn check(program: &Program, typed: &TypedModule) -> Vec<Diagnostic> {
     let mut diagnostics = Vec::new();
-    for (id, function) in module.functions.iter() {
-        let (Some(body), Some(types)) = (&function.body, typed.bodies.get(id)) else {
+    for (id, function) in program.functions() {
+        let (Some(body), Some(types)) = (program.body(id), typed.bodies.get(id)) else {
             continue;
         };
         let mut pass = Exhaustive {
-            module,
+            program,
+            file: program.file(id.module),
             body,
             types,
             diagnostics: Vec::new(),
@@ -73,7 +74,9 @@ enum Column<'a> {
 }
 
 struct Exhaustive<'a> {
-    module: &'a Module,
+    program: &'a Program,
+    /// 検査している本体のモジュールのファイル。診断が指す。
+    file: FileId,
     body: &'a Body,
     types: &'a BodyTypes,
     diagnostics: Vec<Diagnostic>,
@@ -138,7 +141,7 @@ impl<'a> Exhaustive<'a> {
                     .join(" ")
             })
             .collect();
-        let file = self.module.file;
+        let file = self.file;
         let several = function.equation_ranges.len() > 1;
         let message = if several {
             format!("the equations of `{name}` do not cover every argument")
@@ -190,7 +193,7 @@ impl<'a> Exhaustive<'a> {
             Severity::Warning,
             "unreachable equation",
             Label::new(
-                self.module.file,
+                self.file,
                 self.body.pats[pat].range,
                 "the equations above already match these arguments",
             ),
@@ -281,7 +284,7 @@ impl<'a> Exhaustive<'a> {
                 Severity::Warning,
                 "unreachable `match` arm",
                 Label::new(
-                    self.module.file,
+                    self.file,
                     range,
                     "the arms above already match every value of this pattern",
                 ),
@@ -297,7 +300,7 @@ impl<'a> Exhaustive<'a> {
             Diagnostic::error(
                 codes::NON_EXHAUSTIVE_MATCH,
                 "`match` does not cover every value",
-                Label::new(self.module.file, keyword, "no arm matches some values"),
+                Label::new(self.file, keyword, "no arm matches some values"),
             )
             .with_note(not_covered(&examples)),
         );
@@ -318,7 +321,7 @@ impl<'a> Exhaustive<'a> {
             Diagnostic::error(
                 codes::REFUTABLE_PATTERN,
                 "this pattern does not match every value",
-                Label::new(self.module.file, self.body.pats[pat].range, label),
+                Label::new(self.file, self.body.pats[pat].range, label),
             )
             .with_note(not_covered(&examples)),
         );
@@ -353,7 +356,7 @@ impl<'a> Exhaustive<'a> {
 
     fn arity(&self, ctor: &Ctor) -> usize {
         match ctor {
-            Ctor::Data(id) => self.module.constructors[*id].fields.len(),
+            Ctor::Data(id) => self.program[*id].fields.len(),
             Ctor::Tuple(width) => *width,
             Ctor::Literal(_) => 0,
         }
@@ -364,8 +367,8 @@ impl<'a> Exhaustive<'a> {
         &self,
         ctor: ConstructorId,
     ) -> Result<(TypeDefId, &'a [ConstructorId]), Mixed> {
-        let ty = self.module.constructors[ctor].ty;
-        match &self.module.types[ty].kind {
+        let ty = self.program[ctor].ty;
+        match &self.program[ty].kind {
             TypeDefKind::Data { constructors } => Ok((ty, constructors)),
             TypeDefKind::Builtin => Err(Mixed),
         }
@@ -526,7 +529,7 @@ impl<'a> Exhaustive<'a> {
         match pat {
             Pat::Wild => "_".to_string(),
             Pat::Con(Ctor::Data(ctor), args) => {
-                let name = &self.module.constructors[*ctor].name;
+                let name = &self.program[*ctor].name;
                 match args.as_slice() {
                     [] => name.clone(),
                     // 中置のコンストラクタは `:` で始まる演算子である (docs/spec/declarations.md の「`data` と `type`」)

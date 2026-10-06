@@ -3,18 +3,18 @@
 
 use std::collections::HashMap;
 
-use eml_hir::{ExprKind, Function, FunctionId, Module, Res};
+use eml_hir::{ExprKind, FunctionId, Program, Res};
 
 /// SCC を、呼ばれる側が先になる順に返す。Tarjan の方法で、関数の数が多くても Rust のスタックを使わないように、
 /// 明示的なスタックでたどる。
-pub(crate) fn components(module: &Module) -> Vec<Vec<FunctionId>> {
-    let ids: Vec<FunctionId> = module.functions.iter().map(|(id, _)| id).collect();
+pub(crate) fn components(program: &Program) -> Vec<Vec<FunctionId>> {
+    let ids: Vec<FunctionId> = program.functions().map(|(id, _)| id).collect();
     let position: HashMap<FunctionId, usize> =
         ids.iter().enumerate().map(|(i, &id)| (id, i)).collect();
     let edges: Vec<Vec<usize>> = ids
         .iter()
         .map(|&id| {
-            callees(&module.functions[id])
+            callees(program, id)
                 .into_iter()
                 .map(|callee| position[&callee])
                 .collect()
@@ -75,8 +75,8 @@ pub(crate) fn components(module: &Module) -> Vec<Vec<FunctionId>> {
 }
 
 /// 本体で参照するトップレベルの関数。呼び出しと値としての参照の両方を数える。
-fn callees(function: &Function) -> Vec<FunctionId> {
-    let Some(body) = &function.body else {
+fn callees(program: &Program, id: FunctionId) -> Vec<FunctionId> {
+    let Some(body) = program.body(id) else {
         return Vec::new();
     };
     let mut out = Vec::new();
@@ -92,23 +92,19 @@ fn callees(function: &Function) -> Vec<FunctionId> {
 
 #[cfg(test)]
 mod tests {
-    use eml_diagnostics::SourceFiles;
 
     use super::*;
 
     fn names(text: &str) -> Vec<Vec<String>> {
-        let mut files = SourceFiles::new();
-        let file = files.add("test.em", text);
-        let (parse, _) = eml_syntax::parse(file, text);
-        let (module, _) = eml_hir::lower(file, &parse.tree());
+        let program = crate::test_program(text);
         // Prelude の intrinsic の関数は、それぞれが1つだけの SCC になる。ここではソースの関数だけを見る
-        components(&module)
+        components(&program)
             .into_iter()
-            .filter(|component| !component.iter().all(|&id| module.functions[id].intrinsic))
+            .filter(|component| component.iter().all(|id| id.module == program.entry))
             .map(|component| {
                 component
                     .into_iter()
-                    .map(|id| module.functions[id].name.clone())
+                    .map(|id| program[id].name.clone())
                     .collect()
             })
             .collect()

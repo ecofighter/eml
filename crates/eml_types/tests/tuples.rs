@@ -15,13 +15,12 @@ fn decided(text: &str, name: &str) -> Vec<(&'static str, Equality)> {
         "{}",
         eml_test_support::short_text(&checked.files, &checked.diagnostics)
     );
-    let (id, function) = checked
-        .module
-        .functions
-        .iter()
+    let (id, _) = checked
+        .program
+        .functions()
         .find(|(_, function)| function.name == name)
         .unwrap();
-    let body = function.body.as_ref().unwrap();
+    let body = checked.program.body(id).unwrap();
     let mut found: Vec<(u32, &'static str, Equality)> = checked.typed.bodies[id]
         .equalities
         .iter()
@@ -29,7 +28,7 @@ fn decided(text: &str, name: &str) -> Vec<(&'static str, Equality)> {
             let ExprKind::Path(Res::Function(function)) = &body.exprs[expr].kind else {
                 panic!("equalities are keyed by the operator");
             };
-            let operator = if *function == checked.module.lang.eq {
+            let operator = if *function == checked.program.lang.eq {
                 "=="
             } else {
                 "!="

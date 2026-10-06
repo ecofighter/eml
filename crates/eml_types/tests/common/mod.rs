@@ -4,7 +4,7 @@ use eml_test_support::{check, full, with_diagnostics};
 pub fn check_text(text: &str) -> String {
     let checked = check(text);
     with_diagnostics(
-        eml_types::dump(&checked.module, &checked.typed),
+        eml_types::dump(&checked.program, &checked.typed),
         &full(&checked.files, &checked.diagnostics),
     )
 }

@@ -40,7 +40,7 @@ pub struct Lowered {
 pub struct Checked {
     pub files: SourceFiles,
     pub file: FileId,
-    pub module: eml_hir::Module,
+    pub program: eml_hir::Program,
     pub typed: eml_types::TypedModule,
     /// 構文、HIR、型の診断を、表示と同じ順 (`sort_diagnostics`) に並べたもの。
     pub diagnostics: Vec<Diagnostic>,
@@ -120,16 +120,16 @@ pub fn check(text: &str) -> Checked {
     let Lowered {
         files,
         file,
-        module,
+        program,
         mut diagnostics,
     } = lower(text);
-    let (typed, stage) = eml_types::check(&module);
+    let (typed, stage) = eml_types::check(&program);
     diagnostics.extend(stage);
     sort_diagnostics(&mut diagnostics);
     Checked {
         files,
         file,
-        module,
+        program,
         typed,
         diagnostics,
     }

@@ -1,7 +1,7 @@
 use eml_diagnostics::{Diagnostic, FileId, Label, TextRange};
 use eml_hir::{
-    Body, Closure, ConstructorId, ExprId, ExprKind, Function, Literal, LocalId, MatchArm, Module,
-    OperationId, PatId, PatKind, Res, Stmt, TypeRefKind,
+    Body, Closure, ConstructorId, ExprId, ExprKind, Function, Literal, LocalId, MatchArm,
+    OperationId, PatId, PatKind, Program, Res, Stmt, TypeRefKind,
 };
 use la_arena::ArenaMap;
 
@@ -46,7 +46,9 @@ pub(crate) struct BodyTyping {
 }
 
 pub(super) struct BodyCheck<'a, 'c> {
-    pub(super) module: &'a Module,
+    pub(super) program: &'a Program,
+    /// 検査している本体のモジュールのファイル。診断が指す。
+    pub(super) file: FileId,
     pub(super) function: &'a Function,
     pub(super) body: &'a Body,
     pub(super) rigids: &'a Rigids,
@@ -89,7 +91,7 @@ pub(super) enum Arrow {
 
 impl BodyCheck<'_, '_> {
     pub(super) fn file(&self) -> FileId {
-        self.module.file
+        self.file
     }
 
     pub(super) fn signature_range(&self) -> TextRange {
@@ -424,7 +426,7 @@ impl BodyCheck<'_, '_> {
     /// 記録し、部分適用の残りだけを開くため (docs/spec/effects.md の「継続の多重度と持ち越し規則」)。
     fn path(&mut self, id: ExprId, res: Res, range: TextRange, open: bool) -> Ty {
         let ty = self.value(res, range, open);
-        let lang = self.module.lang;
+        let lang = self.program.lang;
         if let Res::Function(function) = res
             && (function == lang.eq || function == lang.ne)
         {
@@ -441,7 +443,7 @@ impl BodyCheck<'_, '_> {
     /// 引数に渡せるようにするため (docs/spec/types.md の「推論」)。局所変数の型は開かない。スキームから複写する Kind
     /// の制約は、参照した場所を由来にする。
     fn value(&mut self, res: Res, range: TextRange, open: bool) -> Ty {
-        let module = self.module;
+        let program = self.program;
         let ty = match res {
             Res::Local(local) => {
                 return self
@@ -452,19 +454,19 @@ impl BodyCheck<'_, '_> {
                     .unwrap_or(self.table.error);
             }
             Res::Function(function) => {
-                let name = module.functions[function].name.clone();
+                let name = program[function].name.clone();
                 self.with_kind_origin(range, KindReason::Passed(name), |this| {
                     this.instantiate(Decl::Function(function))
                 })
             }
             Res::Constructor(constructor) => {
-                let name = module.constructors[constructor].name.clone();
+                let name = program[constructor].name.clone();
                 self.with_kind_origin(range, KindReason::Passed(name), |this| {
                     this.instantiate(Decl::Constructor(constructor))
                 })
             }
             Res::Operation(operation) => {
-                let name = module.operations[operation].name.clone();
+                let name = program[operation].name.clone();
                 self.with_kind_origin(range, KindReason::Passed(name), |this| {
                     this.instantiate(Decl::Operation(operation))
                 })
@@ -511,7 +513,7 @@ impl BodyCheck<'_, '_> {
     fn call(&mut self, id: ExprId, callee: ExprId, args: &[ExprId]) -> Ty {
         let body = self.body;
         let callee_expr = &body.exprs[callee];
-        let name = callee_subject(self.module, body, callee);
+        let name = callee_subject(self.program, body, callee);
         let (mut ty, opened_later) = match &callee_expr.kind {
             // 呼ばれる位置のトップレベルの値は開かずに具体化し、矢印の row を宣言のまま記録する。持ち越し規則は宣言の
             // row で判定する (docs/spec/effects.md の「継続の多重度と持ち越し規則」)
@@ -524,7 +526,7 @@ impl BodyCheck<'_, '_> {
         };
         let performs = match &callee_expr.kind {
             ExprKind::Path(Res::Operation(op)) => {
-                Some((self.module.operations[*op].arity.saturating_sub(1), *op))
+                Some((self.program[*op].arity.saturating_sub(1), *op))
             }
             _ => None,
         };
@@ -728,10 +730,10 @@ impl BodyCheck<'_, '_> {
             this.table.unify(ty, expected)
         });
         if unified.is_err() {
-            let constructor = &self.module.constructors[ctor];
+            let constructor = &self.program[ctor];
             let origin = Origin::ConstructorPattern {
                 constructor: constructor.name.clone(),
-                ty: self.module.types[constructor.ty].name.clone(),
+                ty: self.program[constructor.ty].name.clone(),
             };
             self.mismatch(range, expected, ty, &origin);
             // 型の合わないパターンの中は検査しない。網羅性の検査は、`Error` の型のパターンを含む `match` を飛ばす

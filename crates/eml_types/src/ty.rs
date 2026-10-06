@@ -287,17 +287,22 @@ fn atomic(ty: &Type) -> String {
 
 #[cfg(test)]
 mod tests {
-    use eml_hir::{EffectDef, Generics, TypeDef};
-    use la_arena::Arena;
+    use eml_hir::{EffectDef, Generics, ItemId, ModuleId, TypeDef};
+    use la_arena::{Arena, Idx, RawIdx};
 
     use super::*;
+
+    /// 表示は名前だけを使うので、ID はどのモジュールのものでもよい。
+    fn id<T>(local: Idx<T>) -> ItemId<T> {
+        ItemId::new(ModuleId::from_raw(RawIdx::from(0)), local)
+    }
 
     #[test]
     fn function_types_are_displayed_like_the_surface_syntax() {
         let mut types = Arena::new();
         let mut effects = Arena::new();
         let mut con = |name: &str| Type::Con {
-            id: types.alloc(TypeDef::builtin(name)),
+            id: id(types.alloc(TypeDef::builtin(name))),
             name: name.to_string(),
             args: Vec::new(),
         };
@@ -308,11 +313,11 @@ mod tests {
             ret: Box::new(con("Bool")),
         };
         let io = EffectLabel {
-            id: effects.alloc(EffectDef {
+            id: id(effects.alloc(EffectDef {
                 name: "IO".to_string(),
                 generics: Generics::default(),
                 operations: Vec::new(),
-            }),
+            })),
             name: "IO".to_string(),
             args: vec![],
         };
@@ -331,18 +336,18 @@ mod tests {
         let mut types = Arena::new();
         let mut effects = Arena::new();
         let mut con = |name: &str| Type::Con {
-            id: types.alloc(TypeDef::builtin(name)),
+            id: id(types.alloc(TypeDef::builtin(name))),
             name: name.to_string(),
             args: Vec::new(),
         };
         let int = con("Int");
         let unit = Type::unit();
         let io = EffectLabel {
-            id: effects.alloc(EffectDef {
+            id: id(effects.alloc(EffectDef {
                 name: "IO".to_string(),
                 generics: Generics::default(),
                 operations: Vec::new(),
-            }),
+            })),
             name: "IO".to_string(),
             args: vec![],
         };
@@ -387,15 +392,15 @@ mod tests {
         let mut types = Arena::new();
         let mut effects = Arena::new();
         let int = Type::Con {
-            id: types.alloc(TypeDef::builtin("Int")),
+            id: id(types.alloc(TypeDef::builtin("Int"))),
             name: "Int".to_string(),
             args: Vec::new(),
         };
-        let id = effects.alloc(EffectDef {
+        let id = id(effects.alloc(EffectDef {
             name: "State".to_string(),
             generics: Generics::default(),
             operations: Vec::new(),
-        });
+        }));
         let function = Type::Fn {
             param: Box::new(int.clone()),
             effects: vec![],

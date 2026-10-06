@@ -2,10 +2,10 @@ use std::collections::{HashMap, HashSet};
 
 use eml_diagnostics::{Diagnostic, Label};
 use eml_hir::{
-    ConstructorId, FunctionId, Generics, Module, OperationId, RowRef, TypeRef, TypeRefId,
-    TypeRefKind,
+    Constructor, Function, FunctionId, Generics, ItemMap, Operation, Program, RowRef, TypeRef,
+    TypeRefId, TypeRefKind,
 };
-use la_arena::{Arena, ArenaMap};
+use la_arena::Arena;
 
 use crate::context::Context;
 use crate::kind::problem::{Decl, KindProblem, KindScheme, OwnVars};
@@ -27,9 +27,9 @@ use report::AmbientSource;
 
 /// 段0の結果。宣言ごとの閉じた型の形である。
 pub(crate) struct Signatures {
-    pub functions: ArenaMap<FunctionId, Shape>,
-    pub operations: ArenaMap<OperationId, Shape>,
-    pub constructors: ArenaMap<ConstructorId, Shape>,
+    pub functions: ItemMap<Function, Shape>,
+    pub operations: ItemMap<Operation, Shape>,
+    pub constructors: ItemMap<Constructor, Shape>,
 }
 
 impl Signatures {
@@ -48,32 +48,25 @@ pub(crate) struct Checked {
     pub problem: KindProblem,
 }
 
-pub(crate) fn check_module(module: &Module) -> (TypedModule, Vec<Diagnostic>) {
-    let context = Context::new(
-        module.lang,
-        &module.types,
-        &module.constructors,
-        &module.effects,
-        &module.operations,
-    );
-    let signatures = signatures(module, &context);
-    let mut schemes = declaration_schemes(module, &context, &signatures);
+pub(crate) fn check_module(program: &Program) -> (TypedModule, Vec<Diagnostic>) {
+    let context = Context::new(program);
+    let signatures = signatures(program, &context);
+    let mut schemes = declaration_schemes(program, &context, &signatures);
     let mut diagnostics = Vec::new();
-    let main = module
-        .functions
-        .iter()
+    let main = program
+        .functions()
         .find(|(_, function)| function.name == "main")
         .map(|(id, _)| id);
     if let Some(id) = main {
-        check_main(module, &context, &signatures, id, &mut diagnostics);
+        check_main(program, &context, &signatures, id, &mut diagnostics);
     }
     // 本体の検査は関数ごとに独立しているので、アリーナの順に回す。診断の順は表示する側が決める
     // (docs/spec/diagnostics.md の「診断の順」)
-    let components = scc::components(module);
-    let mut bodies = ArenaMap::default();
-    let mut problems: ArenaMap<FunctionId, KindProblem> = ArenaMap::default();
-    for (id, _) in module.functions.iter() {
-        if let Some((checked, found)) = check_body(module, &context, &signatures, id) {
+    let components = scc::components(program);
+    let mut bodies = ItemMap::default();
+    let mut problems: ItemMap<Function, KindProblem> = ItemMap::default();
+    for (id, _) in program.functions() {
+        if let Some((checked, found)) = check_body(program, &context, &signatures, id) {
             diagnostics.extend(found);
             bodies.insert(id, checked.types);
             problems.insert(id, checked.problem);
@@ -99,33 +92,30 @@ pub(crate) fn check_module(module: &Module) -> (TypedModule, Vec<Diagnostic>) {
         }
         violated.extend(solution.violated);
     }
-    diagnostics.extend(report_violations(module, violated));
+    diagnostics.extend(report_violations(program, violated));
     let typed = typed_module(&context, &signatures, &schemes, bodies, main);
     // 網羅性は型推論と使用回数のパスの後に、書き出した型の上で調べる (docs/spec/exhaustiveness.md の「検査パス」)
-    diagnostics.extend(exhaustive::check(module, &typed));
+    diagnostics.extend(exhaustive::check(program, &typed));
     (typed, diagnostics)
 }
 
 /// 段0: すべての宣言のシグネチャを閉じた形にする。宣言ごとに独立している。
-pub(crate) fn signatures(module: &Module, context: &Context) -> Signatures {
-    let functions = module
-        .functions
-        .iter()
+pub(crate) fn signatures(program: &Program, context: &Context) -> Signatures {
+    let functions = program
+        .functions()
         .filter_map(|(id, function)| {
             let signature = function.signature.as_ref()?;
             Some((id, signature_shape(context, signature)))
         })
         .collect();
-    let operations = module
-        .operations
-        .iter()
+    let operations = program
+        .operations()
         .map(|(id, operation)| (id, operation_shape(context, operation)))
         .collect();
-    let constructors = module
-        .constructors
-        .iter()
+    let constructors = program
+        .constructors()
         .map(|(id, constructor)| {
-            let def = &module.types[constructor.ty];
+            let def = &program[constructor.ty];
             (id, constructor_shape(context, def, constructor))
         })
         .collect();
@@ -139,15 +129,15 @@ pub(crate) fn signatures(module: &Module, context: &Context) -> Signatures {
 /// 段1: 1つの関数の本体を、全宣言の型の形だけを見て検査する。呼び出し先の本体の検査の結果は要らない
 /// (docs/spec/types.md の「推論」)。シグネチャと本体の両方がある関数だけを検査する。
 pub(crate) fn check_body(
-    module: &Module,
+    program: &Program,
     context: &Context,
     signatures: &Signatures,
     id: FunctionId,
 ) -> Option<(Checked, Vec<Diagnostic>)> {
-    let function = &module.functions[id];
+    let function = &program[id];
     let (Some(signature), Some(body), Some(shape)) = (
         &function.signature,
-        &function.body,
+        program.body(id),
         signatures.functions.get(id),
     ) else {
         return None;
@@ -160,7 +150,8 @@ pub(crate) fn check_body(
     table.set_kind_origin(Provenance::Unattributed(function.name_range));
     let mut diagnostics = Vec::new();
     let mut checker = BodyCheck {
-        module,
+        program,
+        file: program.file(id.module),
         function,
         body,
         rigids: &own.rigids,
@@ -180,7 +171,7 @@ pub(crate) fn check_body(
     let instances = checker.instances;
     let reliable = usage::reliable(body, diagnostics.is_empty());
     usage::constrain(body, &typing, &mut table, reliable);
-    carry::constrain(module, body, &typing, &mut table, reliable);
+    carry::constrain(program, body, &typing, &mut table, reliable);
     let mut types = BodyTypes::default();
     for (expr, &ty) in typing.exprs.iter() {
         types.exprs.insert(expr, table.export(ty));
@@ -202,15 +193,14 @@ pub(crate) fn check_body(
 
 /// 本体のない宣言の Kind のスキーム。宣言から出る制約だけを持つ問題を、1つの宣言だけの SCC として解く。
 fn declaration_schemes(
-    module: &Module,
+    program: &Program,
     context: &Context,
     signatures: &Signatures,
 ) -> HashMap<Decl, KindScheme> {
     let mut problems: Vec<(Decl, KindProblem)> = Vec::new();
     // intrinsic は本体を持たないので、部分適用のクロージャの Kind だけを宣言から出す (docs/spec/types.md の「関数型」)
-    for (id, function) in module
-        .functions
-        .iter()
+    for (id, function) in program
+        .functions()
         .filter(|(_, function)| function.intrinsic)
     {
         let (Some(shape), Some(signature)) = (signatures.functions.get(id), &function.signature)
@@ -223,7 +213,7 @@ fn declaration_schemes(
         });
         problems.push((Decl::Function(id), problem));
     }
-    for (id, operation) in module.operations.iter() {
+    for (id, operation) in program.operations() {
         let shape = &signatures.operations[id];
         let generics = &operation.signature.generics;
         let problem = declaration_problem(context, shape, generics, |table, own| {
@@ -251,9 +241,9 @@ fn declaration_schemes(
         });
         problems.push((Decl::Operation(id), problem));
     }
-    for (id, constructor) in module.constructors.iter() {
+    for (id, constructor) in program.constructors() {
         let shape = &signatures.constructors[id];
-        let generics = &module.types[constructor.ty].generics;
+        let generics = &program[constructor.ty].generics;
         let problem = declaration_problem(context, shape, generics, |table, own| {
             table.closure_kinds(own.ty, constructor.fields.len(), &[]);
         });
@@ -289,7 +279,7 @@ fn declaration_problem(
 
 /// Kind の制約の違反は、線形な値の誤った使い方である (docs/spec/linearity.md)。位置の順に並べ、同じ範囲の由来は `KindReason::order_key` の順に並べる。
 /// 同じ値の持ち越しの違反は、呼び出しの位置が最も前のものだけを報告する (docs/spec/diagnostics.md の E3006)。
-fn report_violations(module: &Module, mut origins: Vec<KindOrigin>) -> Vec<Diagnostic> {
+fn report_violations(program: &Program, mut origins: Vec<KindOrigin>) -> Vec<Diagnostic> {
     origins.sort_by_cached_key(|origin| {
         (
             origin.range.start(),
@@ -306,7 +296,7 @@ fn report_violations(module: &Module, mut origins: Vec<KindOrigin>) -> Vec<Diagn
         {
             continue;
         }
-        out.push(report::linear_misuse(module, &origin));
+        out.push(report::linear_misuse(program, &origin));
     }
     out
 }
@@ -315,7 +305,7 @@ fn typed_module(
     context: &Context,
     signatures: &Signatures,
     schemes: &HashMap<Decl, KindScheme>,
-    bodies: ArenaMap<FunctionId, BodyTypes>,
+    bodies: ItemMap<Function, BodyTypes>,
     main: Option<FunctionId>,
 ) -> TypedModule {
     let empty = KindScheme::default();
@@ -345,13 +335,13 @@ fn typed_module(
 }
 
 fn check_main(
-    module: &Module,
+    program: &Program,
     context: &Context,
     signatures: &Signatures,
     id: FunctionId,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
-    let function = &module.functions[id];
+    let function = &program[id];
     let (Some(shape), Some(signature)) = (signatures.functions.get(id), &function.signature) else {
         return;
     };
@@ -364,8 +354,8 @@ fn check_main(
     let expected = Type::Fn {
         param: Box::new(Type::unit()),
         effects: vec![EffectLabel {
-            id: module.lang.io,
-            name: module.effects[module.lang.io].name.clone(),
+            id: program.lang.io,
+            name: program[program.lang.io].name.clone(),
             args: Vec::new(),
         }],
         tail: None,
@@ -375,7 +365,11 @@ fn check_main(
         diagnostics.push(Diagnostic::error(
             codes::INVALID_MAIN_TYPE,
             "`main` must have type `Unit -> <IO> Unit`",
-            Label::new(module.file, signature.range, format!("found `{found}`")),
+            Label::new(
+                program.file(id.module),
+                signature.range,
+                format!("found `{found}`"),
+            ),
         ));
     }
 }

@@ -1,5 +1,5 @@
 use eml_diagnostics::{Diagnostic, FileId, Label, TextEdit, TextRange};
-use eml_hir::{Body, ExprId, ExprKind, Module, OperationId, PatId, Res};
+use eml_hir::{Body, ExprId, ExprKind, OperationId, PatId, Program, Res};
 
 use crate::codes;
 use crate::kind::{
@@ -155,7 +155,7 @@ impl BodyCheck<'_, '_> {
             Ok(()) => return true,
             Err(UnifyError::MissingEffects(effects)) => effects
                 .iter()
-                .map(|e| self.module.effects[*e].name.clone())
+                .map(|e| self.program[*e].name.clone())
                 .collect(),
             Err(UnifyError::MissingRowVar(var)) => vec![var],
             Err(UnifyError::EffectArgs { left, right }) => {
@@ -355,11 +355,11 @@ impl BodyCheck<'_, '_> {
 
 /// 診断の文で呼ばれる側を指す言い方。名前で呼んだときはその名前をコードとして引用し、名前のない式は
 /// 地の文の `this expression` にする。名前のない式を引用符で囲むと、そういう名前があるように読めてしまうため。
-pub(super) fn callee_subject(module: &Module, body: &Body, callee: ExprId) -> String {
+pub(super) fn callee_subject(program: &Program, body: &Body, callee: ExprId) -> String {
     let name = match &body.exprs[callee].kind {
-        ExprKind::Path(Res::Function(function)) => module.functions[*function].name.as_str(),
-        ExprKind::Path(Res::Operation(operation)) => module.operations[*operation].name.as_str(),
-        ExprKind::Path(Res::Constructor(ctor)) => module.constructors[*ctor].name.as_str(),
+        ExprKind::Path(Res::Function(function)) => program[*function].name.as_str(),
+        ExprKind::Path(Res::Operation(operation)) => program[*operation].name.as_str(),
+        ExprKind::Path(Res::Constructor(ctor)) => program[*ctor].name.as_str(),
         ExprKind::Path(Res::Local(local)) => body.locals[*local].name.as_str(),
         _ => return "this expression".to_string(),
     };
@@ -378,14 +378,16 @@ const LINEAR_NOTE: &str = "linear values, such as files, the continuation of a `
 
 /// 線形な値の誤った使い方。破れた Kind の制約の由来から番号と指す場所を決める (docs/spec/diagnostics.md の
 /// 「線形性の診断」)。表に当たらない由来 (受け渡し、単一化、捕獲) は E3001 にする。
-pub(super) fn linear_misuse(module: &Module, origin: &KindOrigin) -> Diagnostic {
-    let file = module.file;
+pub(super) fn linear_misuse(program: &Program, origin: &KindOrigin) -> Diagnostic {
+    // 由来は位置だけを持つ。R7c で由来にファイルを持たせるまでは、本体は入口のモジュールにだけあるので、
+    // 入口のファイルを使う
+    let file = program.file(program.entry);
     match &origin.reason {
         KindReason::CarriedAcross {
             value,
             multi,
             call,
-        } => carried_across(module, origin.range, value, *multi, call),
+        } => carried_across(program, origin.range, value, *multi, call),
         KindReason::CarriedThrough { name, inner } => {
             carried_through(file, origin.range, name, inner.as_ref())
         }
@@ -532,13 +534,15 @@ const CARRY_NOTE: &str = "a continuation of a `multi` operation can be resumed m
 
 /// E3006。呼び出しをまたいで持っている値 (docs/spec/diagnostics.md の「線形性の診断」)。
 fn carried_across(
-    module: &Module,
+    program: &Program,
     range: TextRange,
     value: &CarriedValue,
     multi: Option<OperationId>,
     call: &CallKind,
 ) -> Diagnostic {
-    let file = module.file;
+    // 由来は位置だけを持つ。R7c で由来にファイルを持たせるまでは、本体は入口のモジュールにだけあるので、
+    // 入口のファイルを使う
+    let file = program.file(program.entry);
     let subject = match value {
         CarriedValue::Local { name, .. } | CarriedValue::ReturnCapture { name, .. } => {
             format!("`{name}`")
@@ -556,7 +560,7 @@ fn carried_across(
     let primary = match operation {
         Some(op) => format!(
             "{what} may perform `{}`, a `multi` operation",
-            module.operations[op].name
+            program[op].name
         ),
         None => format!("{what} may perform `multi` operations"),
     };
@@ -588,7 +592,7 @@ fn carried_across(
         }
     };
     if let Some(op) = operation {
-        let declared = &module.operations[op];
+        let declared = &program[op];
         diagnostic = diagnostic.with_secondary(Label::new(
             file,
             declared.name_range,

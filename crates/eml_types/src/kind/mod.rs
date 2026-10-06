@@ -157,7 +157,11 @@ impl KindReason {
             KindReason::CarriedAcross { value, multi, call } => {
                 let multi = match multi {
                     None => vec![number(0)],
-                    Some(op) => vec![number(1), number(op.into_raw().into_u32())],
+                    Some(op) => vec![
+                        number(1),
+                        number(op.module.into_raw().into_u32()),
+                        number(op.local.into_raw().into_u32()),
+                    ],
                 };
                 (8, [value.order_key(), multi, call.order_key()].concat())
             }
@@ -351,7 +355,8 @@ pub(crate) struct Carry {
 
 #[cfg(test)]
 mod tests {
-    use la_arena::RawIdx;
+    use eml_hir::ModuleId;
+    use la_arena::{Idx, RawIdx};
 
     use super::*;
 
@@ -387,7 +392,12 @@ mod tests {
     /// 中身が1か所だけ違う由来を、種類ごとに並べる。
     fn distinct_reasons() -> Vec<KindReason> {
         let range = |start: u32, end: u32| TextRange::new(start.into(), end.into());
-        let op = |index: u32| OperationId::from_raw(RawIdx::from(index));
+        let op = |index: u32| {
+            OperationId::new(
+                ModuleId::from_raw(RawIdx::from(0)),
+                Idx::from_raw(RawIdx::from(index)),
+            )
+        };
         let local = |name: &str, start| CarriedValue::Local {
             name: name.to_string(),
             binding: range(start, start + 1),

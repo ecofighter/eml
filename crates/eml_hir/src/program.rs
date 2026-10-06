@@ -4,7 +4,7 @@
 use std::cmp::Ordering;
 use std::fmt;
 use std::hash::{Hash, Hasher};
-use std::ops::Index;
+use std::ops::{Index, IndexMut};
 
 use eml_diagnostics::FileId;
 use la_arena::{Arena, ArenaMap, Idx, RawIdx};
@@ -136,6 +136,12 @@ impl<T, V> Index<ItemId<T>> for ItemMap<T, V> {
 
     fn index(&self, id: ItemId<T>) -> &V {
         self.get(id).expect("the id has a value in the map")
+    }
+}
+
+impl<T, V> IndexMut<ItemId<T>> for ItemMap<T, V> {
+    fn index_mut(&mut self, id: ItemId<T>) -> &mut V {
+        self.get_mut(id).expect("the id has a value in the map")
     }
 }
 

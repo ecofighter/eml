@@ -2,11 +2,8 @@
 //! Kind は `a` の Kind になる。フィールドに定数の `Lin` の型 (`File` など) があれば、型引数によらず `Lin` になる。
 //! どちらも宣言だけで決まるので、検査の前に1回だけ求める。
 
-use eml_hir::{
-    Constructor, LangItems, TypeDef, TypeDefId, TypeDefKind, TypeRef, TypeRefId, TypeRefKind,
-    TypeVarId,
-};
-use la_arena::{Arena, ArenaMap};
+use eml_hir::{ItemMap, Program, TypeDef, TypeDefKind, TypeRef, TypeRefId, TypeRefKind, TypeVarId};
+use la_arena::Arena;
 
 /// 型構成子の Kind の決まり方。
 #[derive(Debug, Clone)]
@@ -17,17 +14,13 @@ pub(crate) struct DataKind {
     pub lin: bool,
 }
 
-pub(crate) fn data_kinds(
-    types: &Arena<TypeDef>,
-    constructors: &Arena<Constructor>,
-    lang: &LangItems,
-) -> ArenaMap<TypeDefId, DataKind> {
-    let mut kinds: ArenaMap<TypeDefId, DataKind> = types
-        .iter()
+pub(crate) fn data_kinds(program: &Program) -> ItemMap<TypeDef, DataKind> {
+    let mut kinds: ItemMap<TypeDef, DataKind> = program
+        .types()
         .map(|(id, def)| {
             let kind = DataKind {
                 params: vec![false; def.generics.type_vars.len()],
-                lin: id == lang.file,
+                lin: id == program.lang.file,
             };
             (id, kind)
         })
@@ -35,7 +28,7 @@ pub(crate) fn data_kinds(
     // 再帰する宣言 (`List a`) と相互再帰する宣言があるので、印が増えなくなるまで繰り返す。印は増えるだけなので止まる
     loop {
         let mut changed = false;
-        for (id, def) in types.iter() {
+        for (id, def) in program.types() {
             let TypeDefKind::Data {
                 constructors: ctors,
             } = &def.kind
@@ -44,7 +37,7 @@ pub(crate) fn data_kinds(
             };
             let mut found = Found::default();
             for &ctor in ctors {
-                for &field in &constructors[ctor].fields {
+                for &field in &program[ctor].fields {
                     collect(&def.types, field, &kinds, &mut found);
                 }
             }
@@ -77,7 +70,7 @@ struct Found {
 fn collect(
     types: &Arena<TypeRef>,
     id: TypeRefId,
-    kinds: &ArenaMap<TypeDefId, DataKind>,
+    kinds: &ItemMap<TypeDef, DataKind>,
     out: &mut Found,
 ) {
     match &types[id].kind {

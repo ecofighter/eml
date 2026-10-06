@@ -23,7 +23,7 @@ impl BodyCheck<'_, '_> {
     /// 本体の検査が終わってから呼ぶ。`self.diagnostics` はこの本体だけの診断なので、そこに誤りがあれば本体に誤りがある。
     pub(super) fn resolve_equalities(&mut self) {
         let body_has_error = self.diagnostics.iter().any(Diagnostic::is_error);
-        let lang = self.module.lang;
+        let lang = self.program.lang;
         for comparison in std::mem::take(&mut self.comparisons) {
             // Prelude のシグネチャがなければ参照の型は `Error` で、矢印を持たない
             let TyShape::Fn { param, .. } = self.table.shape(comparison.ty).clone() else {
@@ -56,7 +56,7 @@ impl BodyCheck<'_, '_> {
 
     /// 比べられない型の値を比べた (E2006)。演算子を指す。
     fn not_comparable(&self, comparison: &Comparison, operand: &Type) -> Diagnostic {
-        let op = &self.module.functions[comparison.operator].name;
+        let op = &self.program[comparison.operator].name;
         Diagnostic::error(
             codes::NOT_COMPARABLE,
             format!("values of type `{operand}` cannot be compared with `{op}`"),

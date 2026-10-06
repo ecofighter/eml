@@ -15,7 +15,9 @@ mod usage;
 use std::fmt::Write;
 
 use eml_diagnostics::{Diagnostic, FileId, Label, TextRange};
-use eml_hir::{ConstructorId, ExprId, FunctionId, LocalId, Module, OperationId, PatId};
+use eml_hir::{
+    Constructor, ExprId, Function, FunctionId, ItemMap, LocalId, Operation, PatId, Program,
+};
 use la_arena::ArenaMap;
 
 pub use ty::{
@@ -52,15 +54,15 @@ pub mod codes {
 #[derive(Debug, Default)]
 pub struct TypedModule {
     /// シグネチャのある関数だけを含む。
-    pub signatures: ArenaMap<FunctionId, Scheme>,
+    pub signatures: ItemMap<Function, Scheme>,
     /// シグネチャと等式の両方がある関数だけを含む。
-    pub bodies: ArenaMap<FunctionId, BodyTypes>,
+    pub bodies: ItemMap<Function, BodyTypes>,
     pub main: Option<FunctionId>,
     /// エフェクトの操作のスキーム。Core IR が、操作を包む関数の変数を boxed にするかを決めるのに使う。
-    pub operations: ArenaMap<OperationId, Scheme>,
+    pub operations: ItemMap<Operation, Scheme>,
     /// コンストラクタのスキーム。`Some : a -> Option a` の形である。Core IR が、コンストラクタを包む関数の変数を
     /// boxed にするかを決めるのに使う。
-    pub constructors: ArenaMap<ConstructorId, Scheme>,
+    pub constructors: ItemMap<Constructor, Scheme>,
 }
 
 /// 関数の型と、多相化したときに残った Kind の制約のうち、定数を片側に持つもの。変数どうしの制約は部分適用のたびに
@@ -91,8 +93,8 @@ pub struct BodyTypes {
     pub equalities: ArenaMap<ExprId, Equality>,
 }
 
-pub fn check(module: &Module) -> (TypedModule, Vec<Diagnostic>) {
-    check::check_module(module)
+pub fn check(program: &Program) -> (TypedModule, Vec<Diagnostic>) {
+    check::check_module(program)
 }
 
 /// `main` がないこと。`eml check` では検査せず、`eml run` だけが報告する (docs/spec/types.md の「推論」)。
@@ -109,25 +111,28 @@ pub fn missing_main(file: FileId) -> Diagnostic {
     .with_help("add `main : Unit -> <IO> Unit` and an equation `main () = ...`")
 }
 
-/// テストで推論結果を確かめるための表示。
-pub fn dump(module: &Module, typed: &TypedModule) -> String {
+/// テストで推論結果を確かめるための表示。入口のモジュールだけを表示する。Prelude はどのプログラムにもあるので、
+/// テストの表示を Prelude に左右させないため。
+pub fn dump(program: &Program, typed: &TypedModule) -> String {
     let mut out = String::new();
-    for (id, operation) in module.operations.iter() {
+    for (id, operation) in program.operations() {
+        if id.module != program.entry {
+            continue;
+        }
         if let Some(scheme) = typed.operations.get(id) {
             writeln!(out, "{} : {}", operation.name, scheme.ty).unwrap();
             write_kinds(&mut out, scheme);
         }
     }
-    for (id, function) in module.functions.iter() {
-        // intrinsic は Prelude の関数なので表示しない。テストの表示を Prelude に左右させないため
-        if function.intrinsic {
+    for (id, function) in program.functions() {
+        if id.module != program.entry {
             continue;
         }
         if let Some(scheme) = typed.signatures.get(id) {
             writeln!(out, "{} : {}", function.name, scheme.ty).unwrap();
             write_kinds(&mut out, scheme);
         }
-        let (Some(body), Some(types)) = (&function.body, typed.bodies.get(id)) else {
+        let (Some(body), Some(types)) = (program.body(id), typed.bodies.get(id)) else {
             continue;
         };
         for (local, data) in body.locals.iter() {
@@ -150,4 +155,15 @@ fn write_kinds(out: &mut String, scheme: &Scheme) {
         let kinds: Vec<String> = scheme.constraints.iter().map(ToString::to_string).collect();
         writeln!(out, "  kinds: {}", kinds.join(", ")).unwrap();
     }
+}
+
+/// 単体テストのための `Program`。Prelude と、`text` を入口にしたモジュールを変換する。
+#[cfg(test)]
+pub(crate) fn test_program(text: &str) -> eml_hir::Program {
+    let mut files = eml_diagnostics::SourceFiles::new();
+    let main = files.add("test.em", text);
+    let prelude = files.add(eml_hir::PRELUDE_PATH, eml_hir::PRELUDE_SOURCE);
+    let (parse, _) = eml_syntax::parse(main, files.text(main));
+    let prelude_tree = eml_hir::parse_prelude(prelude);
+    eml_hir::lower((prelude, &prelude_tree), (main, &parse.tree())).0
 }

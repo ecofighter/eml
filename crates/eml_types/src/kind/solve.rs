@@ -728,7 +728,8 @@ fn bound_key<T: Level>(bound: Bound<T>) -> (u8, usize, Option<T>) {
 #[cfg(test)]
 mod tests {
     use eml_hir::FunctionId;
-    use la_arena::RawIdx;
+    use eml_hir::ModuleId;
+    use la_arena::{Idx, RawIdx};
 
     use super::*;
     use crate::kind::problem::Instance;
@@ -739,7 +740,10 @@ mod tests {
     }
 
     fn function(index: u32) -> Decl {
-        Decl::Function(FunctionId::from_raw(RawIdx::from(index)))
+        Decl::Function(FunctionId::new(
+            ModuleId::from_raw(RawIdx::from(0)),
+            Idx::from_raw(RawIdx::from(index)),
+        ))
     }
 
     fn range(start: u32, end: u32) -> TextRange {

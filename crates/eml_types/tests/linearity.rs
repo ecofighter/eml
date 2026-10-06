@@ -670,7 +670,7 @@ fn polymorphic(rest: &str) -> String {
 /// 関数のスキームに残った Kind の制約の行。なければ空にする。
 fn kinds(rest: &str, function: &str) -> String {
     let checked = check(&format!("{CARRY}{POLY}{rest}"));
-    let dump = eml_types::dump(&checked.module, &checked.typed);
+    let dump = eml_types::dump(&checked.program, &checked.typed);
     let head = format!("{function} : ");
     let mut lines = dump.lines().skip_while(|line| !line.starts_with(&head));
     lines.next();

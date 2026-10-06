@@ -376,9 +376,8 @@ fn intrinsic_schemes_are_exported() {
     let checked = eml_test_support::check("main : Unit -> <IO> Unit\nmain () = ()");
     let ty = |name: &str| {
         let (id, _) = checked
-            .module
-            .functions
-            .iter()
+            .program
+            .functions()
             .find(|(_, function)| function.name == name)
             .unwrap();
         checked.typed.signatures[id].ty.to_string()
@@ -388,7 +387,7 @@ fn intrinsic_schemes_are_exported() {
     assert_eq!(ty(">>"), "(a -> <e> b) -> (b -> <e> c) -> a -> <e> c");
     // コンストラクタは intrinsic ではなく、Prelude の `data Bool` のスキームとして書き出す
     assert_eq!(
-        checked.typed.constructors[checked.module.lang.true_ctor]
+        checked.typed.constructors[checked.program.lang.true_ctor]
             .ty
             .to_string(),
         "Bool"
