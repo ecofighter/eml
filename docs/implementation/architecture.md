@@ -96,7 +96,7 @@ layout.rs      レイアウト段。trivia を除いたトークン列に仮想�
 parser.rs      イベント方式のパーサの仕組み。文法の規則は持たない
 grammar/       文法の規則 (items / types / patterns / expressions)。括弧とブロックの深さは grammar/scan.rs の Nesting で数える
 sink.rs        イベント列から rowan の木を組み立てる
-ast.rs         型付き AST ラッパ。範囲 (range)、キーワードの範囲 (keyword_range)、リテラルの値 (Literal::value) を持つ
+ast.rs         型付き AST ラッパ。範囲 (range)、キーワードの範囲 (keyword_range)、リテラルの値 (Literal::value) を持つ。名前は Name (定義)、NameRef (参照)、Path (修飾名) で返す
 syntax_kind.rs SyntaxKind。括弧の種類の判定 (is_opening_bracket / is_closing_bracket) もここに置く
 token_set.rs   トークンの集合 (u128 のビット集合)
 debug_dump.rs  木のダンプ (debug_tree)。構文のテストとデバッグに使う
@@ -112,7 +112,9 @@ debug_dump.rs  木のダンプ (debug_tree)。構文のテストとデバッグ�
 - 字句・構文の診断の番号 (E0xxx) は `eml_syntax::codes` に置く ([診断](../spec/diagnostics.md))
 - `parse` は、lexer、レイアウト段、パーサの診断を集めて返す。並べるのは表示する側である (`eml_diagnostics::sort_diagnostics`)
 - `eml_hir` は型付き AST の API (`range`、`keyword_range`、`Literal::value`、各アクセサ) と、識別子や演算子の `SyntaxToken` だけを使う。CST の木の構造 (`.syntax()`) には触れず、`rowan` に依存しない
+- 名前は CST のノードで包む。定義する位置は `NAME`、参照する位置は `PATH` (`NAME_REF` を `.` で平たく並べたもの) か、修飾のない参照 (handler の節の先頭) の `NAME_REF` である。型変数と row 変数、演算子の列と `OP_REF` の演算子、フィールドの名前は、トークンのまま置く
 - E0004 (未対応) の番号とラベルは、どの段階でも同じ意味なので `eml_diagnostics` に置く (`Diagnostic::not_yet_supported`)
+- E0004 はパーサではなく HIR が出す。例外は [文法](../spec/grammar.md) の「実装の段階」にある
 
 ## `eml_hir` で行う脱糖と検査
 

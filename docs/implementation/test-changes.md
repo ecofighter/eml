@@ -226,3 +226,10 @@
 
 - 種類2: fix に題名を持たせたので (spec 2.4)、`eml_test_support::fixes` が診断の行に題名を表示するようにした。`eml_types` の fix のスナップショットの先頭の行に題名が増えた。編集の位置と文字列は変わらない
 - 種類1: `from` の handler と3引数の `resume` を受け付けるようにしたので、`eml_hir/tests/effects.rs` の `handlers_with_an_initial_state_come_in_stage_6` を消して、状態の引数と合成した `return` の節を確かめるテストに置き換えた。`resume_and_drop_take_a_fixed_number_of_arguments` は、3引数の行を4引数にし、E1011 の新しい文言を期待する。`eml_types/tests/check.rs` の `later_stage_constructs_add_no_type_errors` から `from` の handle を除いた。後の段階の構文で型の誤りを重ねないことは、フィールドアクセスで確かめ続ける。あわせて E1011 の文言が新しいものに変わったので、`eml_cli` の UI テスト `check-fail/names/resume_and_drop_arity.em` のスナップショットと、`eml_types/tests/effects.rs` の `a_body_with_a_reported_error_does_not_report_linear_values` の期待値を、文言だけ更新した。確かめている内容は変わらない
+
+### リファクタリング R7a
+
+- 種類2: 名前を `NAME`、`NAME_REF`、`PATH` のノードで包んだので、`eml_syntax` の CST のスナップショットの多くで、名前のトークンの上にノードの行が1段増えた。トークンと構造は変わらない
+- 種類2: `declarations.rs` の `import_and_records_are_skipped_as_not_supported_yet` を `import_is_parsed_and_records_are_skipped` にした。import が `ERROR` ではなく `IMPORT_ITEM` になった
+- 種類1: E0004 を出す層をパーサから HIR に移した (docs/spec/grammar.md の「実装の段階」)。`pub`、`type`、import、浮動小数、文字、複数行の文字列、raw 文字列の E0004 を期待していた `eml_syntax` のテスト (`declarations.rs` の `pub_and_type_are_parsed_but_not_supported_yet` と `pub_without_an_item_is_an_error`、`expressions.rs` の `later_stage_literals_are_not_supported_yet`、`corpus.rs` の `later_stage_corpus_reports_only_not_yet_supported`) から、それらの診断を外し、`eml_hir` の `lower.rs` に同じ文言と位置のテストを置いた。item のない `pub` には E0004 が出なくなった
+- 種類1: 修飾されたエフェクト (`<M.E>`) の E1002 と、`::` のパターンの E1001 を E0004 にした。UI テスト `check-fail/not-yet-supported/qualified_effect.em` と `cons_pattern.em` を足した
