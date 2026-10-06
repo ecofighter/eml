@@ -310,9 +310,9 @@ fn an_arm_that_uses_the_whole_value_gets_it_as_an_argument() {
       return y1
     }
     fn pick(c0, x1) {
-      join j0(y8, t9) [] {
-        let y6 = y8
-        tailcall h(t9, y6)
+      join j0(y9, t10) [] {
+        let y6 = y9
+        tailcall h(t10, y6)
       }
       switch c0 {
         #0 ->
@@ -636,6 +636,36 @@ fn a_remaining_arm_that_uses_the_scrutinee_stays_inside_the_join_point() {
         #1 ->
           jump j1(#0)
       }
+    }
+    ");
+}
+
+#[test]
+fn a_call_moved_into_a_branch_becomes_a_tail_call() {
+    let text = "g : Int -> Int\ng x = x\n\nh : Int -> Int\nh x = x\n\nf : Bool -> Int -> Int\nf c x =\n  let y = if c then g x else h x\n  y\n\nmain : Unit -> <IO> Unit\nmain () = println (show_int (f True 1))";
+    insta::assert_snapshot!(core_text(text, Pass::Simplify), @"
+    fn g(x0) {
+      return x0
+    }
+    fn h(x0) {
+      return x0
+    }
+    fn f(c0, x1) {
+      switch c0 {
+        #0 ->
+          tailcall h(x1)
+        #1 ->
+          tailcall g(x1)
+      }
+    }
+    fn main(p0) {
+      let t1 = call f(#1, 1)
+      let t2 = prim show_int(t1)
+      let t3 = perform println(t2)
+      return t3
+    }
+    fn entry$main() {
+      tailcall main(())
     }
     ");
 }

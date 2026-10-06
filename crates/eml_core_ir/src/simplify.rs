@@ -2,7 +2,8 @@
 //! 所有権を扱わずに書き換えられる。`captures` は古くなりうるが、このパスの後にパイプラインが埋め直す。
 //!
 //! F (join point の外出し)、B3 (jump が1つ)、K1 (分かっているコンストラクタの `switch`)、B2 (分かっているタグと
-//! コンストラクタの値)、B5 (小さな本体)、B3、B4 (使われない)、DCE (使われない純粋な束縛) の順に1巡だけ回す。
+//! コンストラクタの値)、B5 (小さな本体)、B3、B4 (使われない)、DCE (使われない純粋な束縛)、T (末尾呼び出し) の順に1巡だけ回す。T を最後に置くのは、B3 と B5 が
+//! 呼び出しを枝へ動かした後で、`let x = call …` と `return x` が並ぶ形を拾うためである。
 //! F を最初に置くのは、決定木が `if` の join point の本体の中に置いた残りの枝の join point を外へ出し、最初の B3 と
 //! B2 が `Switch` に届くようにするためである。パイプラインが直前に `captures` を埋めているので、F だけは正しい
 //! `captures` を使える。最初の B3 は、`match` の枝の join point を `Switch` の枝に戻す。
@@ -32,6 +33,7 @@ pub(crate) fn simplify(program: &mut Program) {
         pass.inline_single_jumps();
         pass.remove_unused();
         pass.remove_dead_bindings();
+        pass.tail_calls();
     }
 }
 
@@ -455,6 +457,26 @@ impl Simplify<'_> {
                 }
             }
             self.replace(&mut parents, id, body);
+        }
+    }
+
+    /// T: 呼び出しの結果をそのまま返す `let x = call …` と `return x` を末尾呼び出しにする。末尾呼び出しを作る場所を
+    /// ここ1か所にする。B3 や B5 が枝へ動かした呼び出しも、ここで末尾呼び出しになる (docs/spec/core-ir.md)。
+    /// 書き換えた `let` の古い本体 `return` は木から外れ、`compact` が捨てる。
+    fn tail_calls(&mut self) {
+        for id in self.reachable() {
+            let CExpr::Let {
+                var,
+                rhs: Rhs::Call { call, .. },
+                body,
+            } = self.expr(id)
+            else {
+                continue;
+            };
+            if self.expr(*body) == &CExpr::Return(Atom::Var(*var)) {
+                let call = call.clone();
+                self.set(id, CExpr::TailCall(call));
+            }
         }
     }
 

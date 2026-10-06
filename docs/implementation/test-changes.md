@@ -198,4 +198,9 @@
 - `(f 1) (g ())` と `f 1 (g ())` の副作用の順を確かめる `tests/ui/run/functions/evaluation_order.em` を足した (種類1)
 - `tests/ui/run/functions/evaluation_order.em` に、呼ばれる式が引数のないトップレベルの値、ローカルの関数値、ラムダのときと、関数値へパイプで渡すときの副作用の順を確かめる行を足した (種類1)。ML 式の順を固定する新しい期待値で、既存の行の期待値は変えていない
 - `eml_types/tests/linearity.rs` に `a_local_is_kept_across_the_arrow_applied_before_a_later_argument` と `a_piped_value_is_kept_across_the_arrow_applied_before_a_later_argument` を足した (種類1)。前のまとまりの矢印が `multi` の操作を起こしうるとき、後の値でない引数で使うローカルの値と、パイプで渡した値を、その矢印をまたいで持つことを確かめる。既存の期待値は変えていない
-- Core IR のスナップショットは変わらなかったので、種類2の変更はない。同じ範囲に違反が2つあって選ぶ1件か並びが変わったテストも、なかった
+- 末尾呼び出しを `simplify` の T が作るようにした (種類2)。UI テストの出力は変わっていない
+  - 新しいテスト `eml_core_ir/tests/simplify.rs` の `a_call_moved_into_a_branch_becomes_a_tail_call`: B3 が呼び出しを枝へ動かした後でも、2つの枝が `tailcall g(x1)` と `tailcall h(x1)` になることを確かめる
+  - `Pass::Translate` で止める `tests/translate.rs` のうち、変換が `tailcall` を作らなくなったので `let t.. = call ..` と `return t..` の2行になったもの: `recursion_and_top_level_values`、`builtins_used_as_values_are_wrapped`、`lambdas_are_lifted_with_their_captures_first`、`calls_in_tail_position_are_tail_calls`、`handlers_are_lifted_to_closures`、`operations_as_values_and_drop`、`a_constructor_used_as_a_function_value_is_wrapped`、`constructor_patterns_in_let_lambda_and_equation_parameters`、`a_variable_pattern_after_a_switch_binds_the_scrutinee`、`constructor_patterns_in_handler_clause_parameters`
+  - 変換が結果の変数を捨てなくなったので、後ろの変数の番号が1つずれたもの: `tests/translate.rs` の `a_variable_pattern_after_a_switch_binds_the_scrutinee`、`tests/perceus.rs` の `a_scrutinee_used_in_an_arm_is_dupped_before_the_switch`、`tests/simplify.rs` の `an_arm_that_uses_the_whole_value_gets_it_as_an_argument`
+- 上の変更でインラインのスナップショットの `@r"` が `@"` に変わったものがある。表記の違いだけで、期待値の中身は変わらない (種類3)
+- 同じ範囲に違反が2つあって選ぶ1件か並びが変わったテストは、なかった

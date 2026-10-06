@@ -276,25 +276,14 @@ impl FnLowering<'_> {
         id
     }
 
-    /// 式の値を `exit` に渡すコード。値を返すだけの呼び出しは、呼び出し元のフレームを積まない末尾呼び出しにする。
+    /// 式の値を `exit` に渡すコード。末尾呼び出しは simplify の T が作る (docs/spec/core-ir.md)。
     fn tail(&mut self, expr: ExprId, exit: Exit) -> CExprId {
         self.tail_after(Vec::new(), expr, exit)
     }
 
     /// `bindings` (引数のパターンの分解) の後に、式の値を `exit` に渡すコードを続ける。
     fn tail_after(&mut self, mut bindings: Bindings, expr: ExprId, exit: Exit) -> CExprId {
-        let mut last = self.tail_expr(expr, exit, &mut bindings);
-        if let CExpr::Return(Atom::Var(returned)) = last
-            && let Some(Binding::Let(bound, Rhs::Call { .. })) = bindings.last()
-            && *bound == returned
-        {
-            let Some(Binding::Let(_, Rhs::Call { call, .. })) = bindings.pop() else {
-                unreachable!("checked above");
-            };
-            // 結果の変数は呼び出しの直前に作ったものなので、表から除いて番号を詰める
-            self.builder.discard_last_var(returned);
-            last = CExpr::TailCall(call);
-        }
+        let last = self.tail_expr(expr, exit, &mut bindings);
         self.seq(bindings, last)
     }
 

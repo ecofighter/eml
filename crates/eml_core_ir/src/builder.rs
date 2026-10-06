@@ -23,12 +23,6 @@ impl FnBuilder {
         VarId(self.vars.len() as u32 - 1)
     }
 
-    /// 直前に作った変数を取り除く。使われなかった結果の変数を、番号を詰めて消すために使う。
-    pub(crate) fn discard_last_var(&mut self, var: VarId) {
-        debug_assert_eq!(var.0 as usize, self.vars.len() - 1);
-        self.vars.pop();
-    }
-
     pub(crate) fn push(&mut self, expr: CExpr) -> CExprId {
         self.exprs.push(expr);
         CExprId(self.exprs.len() as u32 - 1)

@@ -192,7 +192,7 @@ fn an_unused_field_is_decreffed_when_its_arm_starts() {
 fn a_scrutinee_used_in_an_arm_is_dupped_before_the_switch() {
     // `ys` が受ける `xs` は枝の中でも使うので、`Switch` の前で複製する。その参照を使わない枝は入口側で捨てる
     let text = "data List a = | Nil | Cons a (List a)\n\nsize : List Int -> Int\nsize xs = 2\n\ndescribe : List Int -> Int\ndescribe xs = match xs with\n  | Cons _ Nil -> 1\n  | ys -> size ys\n\nmain : Unit -> <IO> Unit\nmain () = ()";
-    insta::assert_snapshot!(core_text(text, Pass::Perceus), @r"
+    insta::assert_snapshot!(core_text(text, Pass::Perceus), @"
     fn size(xs0) {
       decref xs0
       return 2
@@ -205,13 +205,13 @@ fn a_scrutinee_used_in_an_arm_is_dupped_before_the_switch() {
       switch xs0 {
         #0 ->
           jump j0(xs0)
-        #1(x2, x3) ->
-          switch x3 {
+        #1(x3, x4) ->
+          switch x4 {
             #0 ->
               decref xs0
               return 1
-            #1(x4, x5) ->
-              decref x5
+            #1(x5, x6) ->
+              decref x6
               jump j0(xs0)
           }
       }

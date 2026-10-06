@@ -22,7 +22,7 @@ fn hello_world() {
 #[test]
 fn recursion_and_top_level_values() {
     let text = "answer : Int\nanswer = 42\n\ncount : Int -> Int\ncount n = if n == 0 then answer else count (n - 1)\n\nmain : Unit -> <IO> Unit\nmain () = println (show_int (count 3))";
-    insta::assert_snapshot!(core_text(text, Pass::Translate), @r"
+    insta::assert_snapshot!(core_text(text, Pass::Translate), @"
     fn answer() {
       return 42
     }
@@ -30,10 +30,12 @@ fn recursion_and_top_level_values() {
       let t1 = prim ==(n0, 0)
       switch t1 {
         #0 ->
-          let t2 = prim -(n0, 1)
-          tailcall count(t2)
+          let t3 = prim -(n0, 1)
+          let t4 = call count(t3)
+          return t4
         #1 ->
-          tailcall answer()
+          let answer2 = call answer()
+          return answer2
       }
     }
     fn main(p0) {
@@ -81,7 +83,8 @@ fn builtins_used_as_values_are_wrapped() {
     let text = "apply : (a -> <e> b) -> a -> <e> b\napply f x = f x\n\nmain : Unit -> <IO> Unit\nmain () =\n  let g = not >> not\n  apply println (show_int 1)";
     insta::assert_snapshot!(core_text(text, Pass::Translate), @"
     fn apply(f0, x1) {
-      tailcall apply f0(x1)
+      let t2 = apply f0(x1)
+      return t2
     }
     fn main(p0) {
       let c1 = closure builtin$not()
@@ -89,7 +92,8 @@ fn builtins_used_as_values_are_wrapped() {
       let c3 = closure builtin$>>(c1, c2)
       let c4 = closure builtin$println()
       let t5 = prim show_int(1)
-      tailcall apply(c4, t5)
+      let t6 = call apply(c4, t5)
+      return t6
     }
     fn builtin$not(p0) {
       let t1 = prim not(p0)
@@ -114,7 +118,8 @@ fn lambdas_are_lifted_with_their_captures_first() {
     let text = "apply : (a -> <e> b) -> a -> <e> b\napply f x = f x\n\nmain : Unit -> <IO> Unit\nmain () =\n  let s = \"!\"\n  let shout = fn t -> t ++ s\n  println (apply shout \"hi\")\n  println s";
     insta::assert_snapshot!(core_text(text, Pass::Translate), @r#"
     fn apply(f0, x1) {
-      tailcall apply f0(x1)
+      let t2 = apply f0(x1)
+      return t2
     }
     fn main(p0) {
       let s1 = const "!"
@@ -194,14 +199,16 @@ fn calls_in_tail_position_are_tail_calls() {
         #0 ->
           let t3 = prim -(n0, 1)
           let t4 = prim +(acc1, 1)
-          tailcall loop(t3, t4)
+          let t5 = call loop(t3, t4)
+          return t5
         #1 ->
           return acc1
       }
     }
     fn call_twice(f0, x1) {
       let t2 = apply f0(x1)
-      tailcall apply f0(t2)
+      let t3 = apply f0(t2)
+      return t3
     }
     fn main(p0) {
       return ()
@@ -288,10 +295,12 @@ fn handlers_are_lifted_to_closures() {
     }
     fn main$handle0(p0) {
       let s1 = const "x"
-      tailcall perform Ask.ask(s1)
+      let t2 = perform Ask.ask(s1)
+      return t2
     }
     fn main$handle0$ask(key0, k1) {
-      tailcall resume k1(1)
+      let t2 = resume k1(1)
+      return t2
     }
     fn main$handle0$return(x0) {
       let t1 = prim +(x0, 1)
@@ -311,7 +320,8 @@ fn operations_as_values_and_drop() {
       let s1 = const "info"
       let c2 = closure op$log(s1)
       let s3 = const "a"
-      tailcall apply c2(s3)
+      let t4 = apply c2(s3)
+      return t4
     }
     fn discard(s0) {
       let t1 = drop s0
@@ -356,10 +366,11 @@ fn constructors_with_fields_build_values() {
 #[test]
 fn a_constructor_used_as_a_function_value_is_wrapped() {
     let text = "data Pair a b =\n  | Pair a b\n\npairs : Int -> Pair Int Int\npairs n =\n  let make = Pair n\n  make 2\n\nmain : Unit -> <IO> Unit\nmain () = ()";
-    insta::assert_snapshot!(core_text(text, Pass::Translate), @r"
+    insta::assert_snapshot!(core_text(text, Pass::Translate), @"
     fn pairs(n0) {
       let c1 = closure con$Pair(n0)
-      tailcall apply c1(2)
+      let t2 = apply c1(2)
+      return t2
     }
     fn main(p0) {
       return ()
@@ -463,7 +474,7 @@ fn tail_and_non_tail_matches() {
 fn constructor_patterns_in_let_lambda_and_equation_parameters() {
     // コンストラクタを含むパターンは、続きを本体にする join point の引数で変数を受け、枝が1つの決定木で分解する
     let text = "data Box a = | Box a\n\nby_equation : Box Int -> Int\nby_equation (Box n) = n\n\nby_let : Box Int -> Int\nby_let b =\n  let Box m = b\n  m + 1\n\nby_lambda : Box Int -> Int\nby_lambda b = (fn (Box k) -> k) b\n\nmain : Unit -> <IO> Unit\nmain () = ()";
-    insta::assert_snapshot!(core_text(text, Pass::Translate), @r"
+    insta::assert_snapshot!(core_text(text, Pass::Translate), @"
     fn by_equation(p0) {
       join j0(n1) [] {
         return n1
@@ -485,7 +496,8 @@ fn constructor_patterns_in_let_lambda_and_equation_parameters() {
     }
     fn by_lambda(b0) {
       let c1 = closure by_lambda$lambda0()
-      tailcall apply c1(b0)
+      let t2 = apply c1(b0)
+      return t2
     }
     fn main(p0) {
       return ()
@@ -509,7 +521,7 @@ fn constructor_patterns_in_let_lambda_and_equation_parameters() {
 fn a_variable_pattern_after_a_switch_binds_the_scrutinee() {
     // `ys` は `xs` の `Switch` の後で、`xs` そのものを受ける。残りの行列の join point は `xs` を捕まえる
     let text = "data List a = | Nil | Cons a (List a)\n\nsize : List Int -> Int\nsize xs = 2\n\ndescribe : List Int -> Int\ndescribe xs = match xs with\n  | Cons _ Nil -> 1\n  | ys -> size ys\n\nmain : Unit -> <IO> Unit\nmain () = ()";
-    insta::assert_snapshot!(core_text(text, Pass::Translate), @r"
+    insta::assert_snapshot!(core_text(text, Pass::Translate), @"
     fn size(xs0) {
       return 2
     }
@@ -518,7 +530,8 @@ fn a_variable_pattern_after_a_switch_binds_the_scrutinee() {
         return 1
       }
       join j1(ys1) [] {
-        tailcall size(ys1)
+        let t2 = call size(ys1)
+        return t2
       }
       join j2() [xs0] {
         jump j1(xs0)
@@ -526,14 +539,14 @@ fn a_variable_pattern_after_a_switch_binds_the_scrutinee() {
       switch xs0 {
         #0 ->
           jump j2()
-        #1(x2, x3) ->
+        #1(x3, x4) ->
           join j3() [xs0] {
             jump j1(xs0)
           }
-          switch x3 {
+          switch x4 {
             #0 ->
               jump j0()
-            #1(x4, x5) ->
+            #1(x5, x6) ->
               jump j3()
           }
       }
@@ -551,12 +564,13 @@ fn a_variable_pattern_after_a_switch_binds_the_scrutinee() {
 fn constructor_patterns_in_handler_clause_parameters() {
     // 操作の節と `return` の節はラムダと同じく関数に持ち上げるので、引数のコンストラクタのパターンも同じ経路で分解する
     let text = "data Box a = | Box a\n\neffect Give where\n  give : Box Int -> Int\n\nrun : Unit -> Int\nrun () =\n  handle Box (give (Box 1)) with\n    | give (Box n) k -> resume k n\n    | return (Box r) -> r\n\nmain : Unit -> <IO> Unit\nmain () = ()";
-    insta::assert_snapshot!(core_text(text, Pass::Translate), @r"
+    insta::assert_snapshot!(core_text(text, Pass::Translate), @"
     fn run(p0) {
       let c1 = closure run$handle0()
       let c2 = closure run$handle0$give()
       let c3 = closure run$handle0$return()
-      tailcall handle Give(c1) {give: c2} return c3
+      let t4 = handle Give(c1) {give: c2} return c3
+      return t4
     }
     fn main(p0) {
       return ()
@@ -569,7 +583,8 @@ fn constructor_patterns_in_handler_clause_parameters() {
     }
     fn run$handle0$give(p0, k1) {
       join j0(n2) [k1] {
-        tailcall resume k1(n2)
+        let t4 = resume k1(n2)
+        return t4
       }
       switch p0 {
         #0(n3) ->
