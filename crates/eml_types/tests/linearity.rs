@@ -835,3 +835,30 @@ fn values_held_while_the_initial_state_is_evaluated_are_carried() {
     // `f` は初期値の `choose ()` をまたぐ。報告は最も前の呼び出しの1件だけである (docs/spec/diagnostics.md の E3006)
     assert_eq!(codes, ["E3006"]);
 }
+
+/// `f` を使うのは handle の本体だけで、handle の後では使わない。それでも初期値は本体より先に評価するので、`f` は
+/// 初期値の `choose ()` をまたぐ (docs/spec/expressions.md の「パラメータ付き handler」)。
+#[test]
+fn a_value_used_only_by_the_handled_body_is_carried_across_the_initial_state() {
+    let rest = "use_file : File -> <Ask, IO> Int\nuse_file f =\n  close f\n  ask ()\n\nearly : Unit -> <Choose, IO> Int\nearly () =\n  let f = open \"a.txt\"\n  handle use_file f from (if choose () then 1 else 2) with\n    | ask () k st -> resume k st st\n    | return x _ -> x";
+    let text = format!("effect Choose where\n  multi choose : Unit -> Bool\n\n{HEADER}{rest}");
+    let checked = check(&text);
+    insta::assert_snapshot!(full(&checked.files, &checked.diagnostics), @"
+    E3006 18:30 `f` must be used exactly once, but it is kept alive across a call that may resume more than once
+      18:30 this call may perform `choose`, a `multi` operation
+      17:7 `f` is bound here
+      2:9 `choose` is declared `multi` here
+      note: a continuation of a `multi` operation can be resumed more than once, and each resumption would use the value again
+      help: finish using `f` before this call
+    ");
+}
+
+/// 状態は handle の外側の row だけをまたぐ。本体の row に、扱う `multi` の操作があっても E3006 にしない
+/// (docs/spec/linearity.md)。
+#[test]
+fn a_linear_state_does_not_cross_the_multi_operation_the_handler_handles() {
+    let rest = "main : Unit -> <IO> Unit\nmain () =\n  let n =\n    handle (if choose () then 1 else 2) from open \"a.txt\" with\n      | choose () k f -> resume k True f\n      | return x f ->\n          close f\n          x\n  println (show_int n)";
+    let text = format!("effect Choose where\n  multi choose : Unit -> Bool\n\n{HEADER}{rest}");
+    let checked = check(&text);
+    insta::assert_snapshot!(full(&checked.files, &checked.diagnostics), @"");
+}
