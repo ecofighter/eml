@@ -2,7 +2,6 @@
 
 use eml_hir::{EffectId, ExprId, OpClause, OpMultiplicity, ReturnClause};
 
-use crate::shape::{Rigids, lower_operation};
 use crate::table::{ArrowLin, Label, Row, Tail, Ty, TyShape};
 use crate::ty::Linearity;
 
@@ -68,11 +67,12 @@ impl BodyCheck<'_, '_> {
     /// 継続である。`once` の操作の `k` は `Lin`、`multi` の操作の `k` は `Unr` である (docs/spec/effects.md の「継続の多重度と持ち越し規則」)。
     fn op_clause(&mut self, clause: &OpClause, result: Ty, outer: &Row, effect_args: &[Ty]) {
         let operation = &self.module.operations[clause.op];
-        // エフェクトの型引数は handle の型引数である。操作自身の型変数は節の中では rigid である。handler は、操作が
-        // どの型で呼ばれても動かなければならないため
-        let rigids =
-            Rigids::with_effect_args(self.table, &operation.signature.generics, effect_args);
-        let mut ty = lower_operation(self.table, operation, &rigids);
+        // 節の型は、操作の閉じた形にエフェクトの型引数を入れて作る。操作の型の作り方を1か所にするため
+        let signatures = self.signatures;
+        let mut ty = match signatures.operations.get(clause.op) {
+            Some(shape) => shape.instantiate_with_effect_args(self.table, effect_args),
+            None => self.table.error,
+        };
         for &param in &clause.params {
             match self.table.shape(ty).clone() {
                 TyShape::Fn {

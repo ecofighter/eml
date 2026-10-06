@@ -24,22 +24,12 @@ pub(crate) struct Rigids {
 
 impl Rigids {
     pub fn new(table: &mut Table, generics: &Generics) -> Rigids {
-        Rigids::with_effect_args(table, generics, &[])
-    }
-
-    /// 先頭の型変数を `effect_args` の型にし、残りを新しい rigid 変数にする。handler の操作の節で、エフェクトの型引数を
-    /// handle の型引数に、操作自身の型変数を rigid にするために使う (docs/spec/effects.md の「handler の意味」)。
-    pub fn with_effect_args(table: &mut Table, generics: &Generics, effect_args: &[Ty]) -> Rigids {
         let mut rigids = Rigids {
             tys: ArenaMap::default(),
             rows: ArenaMap::default(),
             vars: Vec::new(),
         };
-        for (index, (id, var)) in generics.type_vars.iter().enumerate() {
-            if let Some(&arg) = effect_args.get(index) {
-                rigids.tys.insert(id, arg);
-                continue;
-            }
+        for (id, var) in generics.type_vars.iter() {
             let (ty, rigid) = table.fresh_rigid(&var.name);
             rigids.tys.insert(id, ty);
             rigids.vars.push(rigid);
@@ -50,7 +40,7 @@ impl Rigids {
         rigids
     }
 
-    /// rigid な型変数。`Generics` の並びの順である (エフェクトの型引数に写した変数を除く)。
+    /// rigid な型変数。`Generics` の並びの順である 。
     pub fn vars(&self) -> &[RigidVar] {
         &self.vars
     }
@@ -225,7 +215,7 @@ pub(crate) fn lower_constructor(
 /// 操作のスキームの型。シグネチャの、引数の個数の分だけたどった最後の矢印に、操作のエフェクトだけの row を付ける
 /// (docs/spec/effects.md)。操作のシグネチャの外側の矢印には row を書けないので (E1007)、ほかの外側の矢印の row は
 /// 空である。
-pub(crate) fn lower_operation(table: &mut Table, operation: &Operation, rigids: &Rigids) -> Ty {
+fn lower_operation(table: &mut Table, operation: &Operation, rigids: &Rigids) -> Ty {
     let ty = lower_signature(table, &operation.signature, rigids);
     let label = Label {
         effect: operation.effect,
@@ -566,6 +556,30 @@ impl Shape {
         }
     }
 
+    /// handler の操作の節のための具体化。先頭の `effect_args.len()` 個の rigid な型変数をエフェクトの型引数 (handle の
+    /// 型引数) にし、残りの型変数と row 変数を新しい rigid 変数にする。節は、操作がどの型で呼ばれても動かなければならない
+    /// ため (docs/spec/effects.md の「handler の意味」)。Kind 変数は新しい変数にする。
+    pub fn instantiate_with_effect_args(&self, table: &mut Table<'_>, effect_args: &[Ty]) -> Ty {
+        let lin: Vec<KindVar> = (0..self.lin_vars).map(|_| table.fresh_lin_var()).collect();
+        let mult: Vec<KindVar> = (0..self.mult_vars)
+            .map(|_| table.fresh_mult_var())
+            .collect();
+        let mut tys = Vec::new();
+        for (index, (name, mu)) in self.rigids.iter().enumerate() {
+            let ty = match effect_args.get(index) {
+                Some(&arg) => arg,
+                None => table.fresh_rigid_with(name, lin[mu.index()]).0,
+            };
+            tys.push(ty);
+        }
+        let rows: Vec<Tail> = self
+            .rows
+            .iter()
+            .map(|(name, sigma)| Tail::Var(table.fresh_rigid_row_with(name, mult[sigma.index()])))
+            .collect();
+        build(table, &self.ty, &tys, &rows, &lin)
+    }
+
     /// 後の段階に渡す型。rigid な変数は名前で書く。
     pub fn export(&self, context: &Context) -> Type {
         self.export_ty(&self.ty, context)
@@ -778,6 +792,23 @@ mod tests {
         assert_eq!(
             table.export(own.ty).to_string(),
             "(a -> <e> a) -> a -> <e> a"
+        );
+    }
+
+    #[test]
+    fn clause_instantiation_keeps_effect_arguments_and_makes_the_rest_rigid() {
+        let module = module(
+            "effect State s where\n  swap : a -> s -> (a, s)\n\nmain : Unit -> Unit\nmain () = ()",
+        );
+        let context = context(&module);
+        let (_, operation) = module.operations.iter().next().unwrap();
+        let shape = operation_shape(&context, operation);
+        let mut table = Table::new(&context);
+        let int = table.int;
+        let ty = shape.instantiate_with_effect_args(&mut table, &[int]);
+        assert_eq!(
+            table.export(ty).to_string(),
+            "a -> Int -> <State Int> (a, Int)"
         );
     }
 
