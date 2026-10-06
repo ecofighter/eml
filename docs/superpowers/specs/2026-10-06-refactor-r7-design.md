@@ -54,7 +54,7 @@ R7 は5回に分け、R7a → R7b → R7c → R7d → R7e の順に、それぞ�
 | R7a | 構文: `NAME`、`NAME_REF`、`PATH`、import の CST、E0004 を HIR に寄せる、不具合1と3 | 2 |
 | R7b | `ItemTree`、`DefMap`、item ごとの変換、プログラム全体の ID、Prelude のモジュール、重複と fixity、lang item、session、intrinsic を本体のない関数にする、不具合2 | 1、3、4.2 |
 | R7c | 型検査の出力 (`TypedProgram`、`DeclType`)、由来の `Span`、`main` を入口の引数にする | 5 |
-| R7d | `IO` のエフェクト、Prelude の本体、`&&` などの本体、`Bool` のタグ | 4.3〜4.5 |
+| R7d | `IO` のエフェクト、Prelude の本体、`|>` と `<|` の脱糖をやめる、入口から届く関数だけの変換と `Prelude.` の名前、`Bool` のタグ | 4.3〜4.6 |
 | R7e | Core IR: item をすべて関数にする、規則 I と `prune`、平らな `Switch` | 6 |
 
 R7c を R7d より先にするのは、Prelude の本体が入ると、持ち越しの由来が Prelude の中の位置を指すようになるためである。由来がファイルを持つ形を先に作っておく。R7b に intrinsic を入れるのは、Prelude を普通のモジュールにした時点で `Res::Builtin` を残すと、名前の解決の経路が2つになるためである。
@@ -200,12 +200,12 @@ impl Session {
 - fixity の宣言の演算子は、自分のモジュールの値の名前空間で引き、見つかった定義 (関数、コンストラクタ、操作) に fixity を付ける。見つからなければ E1022、同じ演算子の2回目の宣言は E1021 である
 - 演算子の列の組み直し (`climb`、`climb_pat`、セクション) は、演算子の名前を解決した先の定義の fixity を使う。宣言がなければ `infixl 9` である。`ItemScope` の文字列の表 `fixities` と `prelude_fixities` はなくす
 - 今の Prelude には、定義のない演算子の fixity がある。扱いは次のとおり
-  - `&&`、`||`、`|>`、`<|`: Prelude で関数として宣言し、lang item にする。HIR は、解決した先がこの lang item の二項演算を、今と同じく脱糖する (`&&` と `||` は `if`、`|>` は評価の順の印 `evaluate_first`)。ユーザーの定義に解決した場合は、普通の呼び出しにする。R7b では本体のないシグネチャにし、R7d で本体を書く (4.4)。二項演算はつねに脱糖し、`(&&)` などの演算子の参照はラムダに脱糖するので、R7b の間にこの4つが Core IR まで届くことはない
+  - `&&`、`||`、`|>`、`<|`: Prelude で関数として宣言し、lang item にする。HIR は、解決した先がこの lang item の二項演算を、今と同じく脱糖する (`&&` と `||` は `if`、`|>` は評価の順の印 `evaluate_first`)。ユーザーの定義に解決した場合は、普通の呼び出しにする。R7b では本体のないシグネチャにし、R7d で本体を書く (4.4)。二項演算はつねに脱糖し、`(&&)` などの演算子の参照はラムダに脱糖するので、R7b の間にこの4つが Core IR まで届くことはない。R7d で、`|>` と `<|` の脱糖をやめ、Prelude の関数の普通の呼び出しにする (4.4)。`&&` と `||` は、短絡して評価するために脱糖を続ける
   - `::`: Prelude から fixity の宣言を外す。S2 で `List` のコンストラクタとして定義するときに戻す。R7 の間 `::` は E0004 なので、外しても誤りの式の木の形が変わるだけである
 
 ### 3.4 lang item
 
-- `DefMap` が、Prelude のモジュールから名前で lang item を引く。名前の表は `eml_hir` の Rust の表で、`Int`、`String`、`Unit`、`File`、`Bool`、`True`、`False`、`IO`、`negate`、`==`、`!=`、`&&`、`||`、`|>`、`<|` である
+- `DefMap` が、Prelude のモジュールから名前で lang item を引く。名前の表は `eml_hir` の Rust の表で、`Int`、`String`、`Unit`、`File`、`Bool`、`True`、`False`、`IO`、`negate`、`==`、`!=`、`&&`、`||`、`|>`、`<|` である。`|>` と `<|` は、R7d で脱糖をやめるときに表から外す (4.4)
 - Prelude は処理系と一緒に配るソースなので、lang item が見つからなければ panic にする
 - lang item は `pub` でなくても引ける。前置の `-` は、`pub` でない `negate` に脱糖する
 
@@ -261,7 +261,7 @@ pub infixr 0 <|
 |---|---|
 | `show_int`、`negate`、算術、比較、`++` | `PrimOp` |
 | `==`、`!=` | 型検査が決めた比べ方 (`Equality`) で `PrimOp` を選ぶ |
-| `IO` の操作 | `IoOp` (`Rhs::Io`) |
+| `IO` の操作 | `IoOp` (`Rhs::Io`)。R7d から、`IO` は宣言したエフェクトになり、操作の名前から `IoOp` を引く (4.3) |
 | `>>`、`<<` | R7d までは今の `Compose` |
 
 - `eml_core_ir` の単体テストで、Prelude の intrinsic と `IO` の操作のすべてが表に行を持ち、表の行がすべて Prelude にあることを確かめる
@@ -274,20 +274,33 @@ pub infixr 0 <|
 - `println`、`open`、`read_all`、`close` は `once` の操作になり、`Res::Operation` に解決する
 - 型検査では、`IO` の多重度が操作の多重度の最大 (`Once`) から決まる。`Context` の「`IO` は `Once`」の特別扱いはなくす。`File` を受ける操作は「単相な `Lin` の型の引数」なので、操作の引数を `Unr` に固定する規則には当たらない ([effects.md](../../spec/effects.md))
 - E1009 は「節の操作が lang item の `IO` の操作か」で判定する。文言は今のままにする。`Builtin::is_io_operation` はなくす
-- Core IR は、`IO` の操作の呼び出しを、今と同じく `Rhs::Io` に変換する。インタプリタは変わらない
+- `DefMap` が Prelude に足していた合成の `IO` (`SyntheticEffect`、`PRELUDE_EFFECTS`) と、E1009 のための `LangItems::io_operations` はなくす
+- Core IR は、`IO` の操作の呼び出しを、今と同じく `Rhs::Io` に変換する。`call_operation` は、操作のエフェクトが lang item の `IO` なら `perform` ではなく `Rhs::Io` を作る。`IoOp` は操作の名前から引き (`IoOp::from_name`)、intrinsic の表から `IO` の4行を外す。`println` を値として使ったときは、操作を包む関数 (`op$println`) を作り、その本体も `Rhs::Io` にする。インタプリタは変わらない
+- `eml_core_ir` の単体テストで、`IO` の操作がすべて `IoOp` を持ち、`IoOp` がすべて Prelude の `IO` の操作であることを確かめる
 - `main` のシグネチャの検査は、今と同じく lang item の `IO` で判定する
 - 関数の型の表示 (`println : String -> <IO> Unit`) は変わらない。操作の型も、最後の矢印にエフェクトを付けて表示しているためである
 
 ### 4.4 Prelude の本体 (R7d)
 
 - `not`、`&&`、`||`、`|>`、`<|`、`>>`、`<<` を eml で書く。`>>` は `f >> g = fn x -> g (f x)` の形で書き、引数の数は2になる。`f >> g` の値は `f` と `g` を捕まえたクロージャで、Kind は今の部分適用と同じく `f` と `g` の Kind 以上になる
-- Core IR の `Lowering::Compose` はなくす
+- Core IR の `Lowering::Compose` と、それを包む関数 (`builtin$>>`、`builtin$<<`) はなくす
 - `f >> g` の中で `f` か `g` が失敗した場合は、今と同じく `f` か `g` の名前で報告する
+- `not` を eml で書くので、`PrimOp::Not` とインタプリタのその分岐はなくす
+- `|>` と `<|` は脱糖をやめ、Prelude の関数 (`x |> f = f x`、`f <| x = f x`) の普通の呼び出しにする。実装を簡潔に保つためである。評価の順は変わらない。`x |> f a` は呼び出し `(|>) x (f a)` になり、引数を左から評価するので、今と同じく `x`、`f`、`a` の順に評価する。評価の順の印 `evaluate_first` (`hir.rs`、`lower/ops.rs`、`lower/expr.rs`、`eval.rs`、`pretty.rs`) と、lang item の `pipe` と `apply` はなくす
+  - 代わりに次のものが変わる。`|>` と `<|` の型の誤りは、`|>` の引数の不一致として報告する。たとえば `"a" |> show_int` は、`"a"` の「expected `Int`, found `String`」ではなく、`show_int` の引数の型の不一致になる (OCaml の `|>` と同じ形である)。`x |> f a` の Core IR は、`f a` のクロージャを作ってから `Prelude.|>` を呼ぶ形になり、インタプリタではクロージャの確保と呼び出しが1回ずつ増える
+- `&&` と `||` は、短絡して評価するために、今と同じく `if` に脱糖する。本体は型検査だけを受け、Core IR には届かない
 
-### 4.5 `Bool` のタグ (R7d)
+### 4.5 Core IR に入れる関数と名前 (R7d)
 
-- Core IR の変換は、`if` と比べた結果の `Switch` のタグを、`program[lang.true_ctor].tag` から引く。`eml_core_ir` の定数 `FALSE` と `TRUE` と、HIR の `lang_items` の assert はなくす
-- インタプリタの比べるプリミティブも `Bool` の値を作るので、タグを `Program::bool_tags` で受け取る
+- Prelude に本体が入ると、本体のある関数をすべて変換する今の `translate` は、使わない Prelude の関数まで Core IR に入れる。そのため、`translate` は入口の関数から届く関数だけを変換する。HIR の本体の中の関数の参照 (`Res::Function`) を、入口の関数からたどって集める。ユーザーの関数と Prelude の関数を区別しない。6.1 の「参照されたときに初めて作る」のうち、トップレベルの関数の分を R7d で入れる
+- Prelude の関数の Core IR の名前には `Prelude.` を付ける (`Prelude.not`)。6.1 の名前の規則のうち、Prelude の分を R7d で入れる。ユーザーが Prelude と同じ名前の関数を定義しても、Core IR の名前が重ならないことを構造で保証するためである。テキストの IR は `.` を名前の一部として読む
+- 入口から届かない関数を定義したテストでは、その関数が Core IR から消える。期待値の変わるテストは 7.1 に挙げる
+
+### 4.6 `Bool` のタグ (R7d)
+
+- `eml_core_ir` の定数 `FALSE` (0) と `TRUE` (1) は、Core IR での `Bool` の表し方として残す。タグは Prelude の `data Bool = | False | True` の宣言の順で決まり、Prelude は処理系と一緒に配るソースなので、この順を変える理由がないためである
+- HIR の `lower/mod.rs` の、タグを確かめる `assert_eq!` はなくす。代わりに、Prelude の `False` と `True` のタグが `FALSE` と `TRUE` に等しいことを、`eml_core_ir` のテストで確かめる
+- 採らなかった形: Core IR の変換が `program[lang.true_ctor].tag` からタグを引き、インタプリタには `Program::bool_tags` で渡す形。比べるプリミティブのためにインタプリタまでタグを運び、テキストの IR にもその欄を足すことになる
 
 ## 5. R7c 型検査の出力
 
@@ -364,9 +377,9 @@ pub struct DeclType {
 | ほかの操作 | `tailcall perform op(params)` (今の `op$名前`) |
 | コンストラクタ | `let d = con tag(params); return d` (今の `con$名前`) |
 
-- 関数は、今と同じく参照されたときに初めて作る。Prelude の使わない item まで Core IR に入れないためである
+- 関数は、今と同じく参照されたときに初めて作る。Prelude の使わない item まで Core IR に入れないためである。トップレベルの関数は、R7d から入口の関数から届くものだけを変換している (4.5)
 - 変換の呼び出しは `call_known` の1つの経路にする。呼ぶ相手の引数の数と比べ、足りなければクロージャ、ちょうどなら直接の呼び出し、余れば戻った関数値への `Apply` にする。`call_builtin`、`call_operation`、`call_constructor` と、`ProgramBuilder` の3種類の包む関数の表はなくす
-- 関数の名前は、今の `op$` と `con$` を保ち、Prelude の関数には `Prelude.` を付ける (`Prelude.not`)。ユーザーの関数の名前は変えないので、実行時エラーの関数名も変わらない
+- 関数の名前は、今の `op$` と `con$` を保ち、Prelude の関数には `Prelude.` を付ける (`Prelude.not`。トップレベルの関数の分は R7d で入れた。4.5)。ユーザーの関数の名前は変えないので、実行時エラーの関数名も変わらない
 
 ### 6.2 規則 I と `prune`
 
@@ -374,7 +387,7 @@ pub struct DeclType {
 - `simplify` に規則 I を足す。I は、印のある関数の直接の呼び出し (`call` と `tailcall`) を、その本体の1行で置き換える。引数は本体の引数にそのまま入れる
 - I は `simplify` の最初に回す。順は I、F、B3、K1、B2、B5、B3、B4、DCE、T になる。K1 と B2 は、今と同じく `con` を見る
 - `simplify` の後に、入口から届かなくなった関数をプログラムから取り除くパス `prune` を足す。パスの順番は `pipeline.rs` に置き、`lower_until` で止められるようにする
-- I で展開した item の関数は `prune` で消えるので、`simplify` の後の IR は今とほぼ同じ形になる
+- I で展開した item の関数は `prune` で消えるので、`simplify` の後の IR は今とほぼ同じ形になる。R7d から、変換は入口から届くトップレベルの関数だけを作るので、`prune` が取り除くのは、I で展開して参照がなくなった item の関数である
 
 ### 6.3 平らな `Switch`
 
@@ -405,7 +418,7 @@ enum CasePattern { Tag(u32), Int(i64), String(u32) }   // String は文字列定
 |---|---|
 | R7a | E0004 を出す層が変わる構文 (import、`type`、浮動小数、文字、複数行と raw の文字列) の診断の位置。これらのテストを `eml_syntax` の結合テストから `eml_hir` の結合テストへ移す。不具合1と3の UI テストを `check-fail/not-yet-supported/` に足す |
 | R7b | 不具合2のテスト (`crates/eml_hir/tests/effects.rs` の重複のテスト) を、E1001 が出ないことまで確かめる形に強める。重複の規則の UI テストを `check-fail/names/` に足す。`=` のない `data` が構文エラーから E1025 になる |
-| R7d | Prelude の中の位置を指す secondary が、診断に現れることがある |
+| R7d | Prelude の中の位置を指す secondary が、診断に現れることがある (`|>` を通る E3006 など)。`|>` と `<|` の型の誤りの診断が、`|>` の引数の不一致になる (4.4)。これらを期待値に持つ `eml_types` のテストと UI テストを、計画で列挙する |
 
 種類2 (内部表現) は、次のスナップショットが変わる。各回の計画で、変わるテストの名前を列挙する。
 
@@ -413,7 +426,7 @@ enum CasePattern { Tag(u32), Int(i64), String(u32) }   // String は文字列定
 |---|---|
 | R7a | `eml_syntax` の CST (`shape` の56件のほとんど)、`src/parser/tests.rs` |
 | R7b | `eml_hir` の pretty のうち ID の表示を含むもの |
-| R7d | `eml_core_ir` の、`not`、`>>`、`<<` を使うもの |
+| R7d | `eml_core_ir` の Core IR のうち、入口から届かない関数を定義したもの (下見で数えて、`perceus.rs` 9件、`simplify.rs` 27件、`translate.rs` 18件、`eml_test_support` の `support.rs` 1件)、`not`、`>>`、`<<`、`|>`、`<|` を使うもの、`println` を値として使うもの。`eml_hir` の pretty のうち、`evaluate_first` の印を含むもの |
 | R7e | `eml_core_ir` の `translate.rs` のほとんど、`simplify.rs` と `perceus.rs` の `switch` を含むもの (約30件)、`verify.rs` と `eml_interp/tests/data.rs` の `switch` を含むテキスト |
 
 種類3 (機械的な追随) は、ID の形と入口の引数の変更に合わせたテストの組み立ての書き換えである。R7c では、`eml_types/tests/check.rs` の `signatures` と `constructors` を `decls` から読む形にし、`eml_test_support` の `Checked::typed` の型の名前を変える。R7c は観測できるふるまいを変えないので、種類1と種類2の変更はない。
@@ -422,6 +435,7 @@ enum CasePattern { Tag(u32), Int(i64), String(u32) }   // String は文字列定
 
 - R7b: `ItemTree` と `DefMap` の結合テスト (重複の3つの規則、fixity の付け先、名前の解決の順)。Prelude だけを検査して診断が出ないことのテスト
 - R7c: `Program::main()` の `eml_hir` の結合テスト (入口のモジュールに `main` がある場合、ない場合、`main` が操作の名前である場合)。由来が Prelude の中を指す持ち越しの診断が、`Prelude.em` の位置を表示するテスト (R7d で Prelude の本体が入ってから足す)
+- R7d: 入口から届く関数だけを変換することと、Prelude の関数の `Prelude.` の名前 (`translate.rs`)。`println` を値として使ったときの Core IR (`translate.rs`)。Prelude の `Bool` のタグが `FALSE` と `TRUE` に等しいこと (`eml_core_ir`)。`IO` の操作と `IoOp` の対応 (`eml_core_ir` の単体テスト)。Prelude の本体の中の E3001〜E3004 が `Prelude.em` を指すこと (`eml_types/tests/modules.rs`。R7c で残した)
 - R7e: I と `prune` のテスト (`simplify.rs`)、平らな `Switch` の verifier の誤りのテスト (`verify.rs`)、リテラルが1000個の `match` を debug ビルドで実行するテスト (`eml_interp/tests/run.rs`。ソースはテストの中で生成する)
 
 ### 7.2 `eml_test_support`
@@ -438,6 +452,8 @@ enum CasePattern { Tag(u32), Int(i64), String(u32) }   // String は文字列定
 | `spec/declarations.md` | `=` のない `data` (Prelude の intrinsic の型と E1025)、fixity は定義に付くこと、`::` の fixity を S2 に回すこと | R7b |
 | `spec/diagnostics.md` | E1025 | R7b |
 | `spec/effects.md` | `IO` を Prelude で宣言したエフェクトにすること | R7d |
+| `spec/declarations.md`、`spec/expressions.md` | `|>` と `<|` を脱糖せず Prelude の関数として呼ぶこと (標準の演算子の表、「関数適用」の評価の順、HIR の脱糖の一覧) | R7d |
+| `spec/core-ir.md` | 入口から届く関数だけを変換すること、Prelude の関数の `Prelude.` の名前、`builtin$>>` と `builtin$<<` がなくなること | R7d |
 | `spec/core-ir.md` | item の関数、規則 I と `prune`、平らな `Switch` | R7e |
 | `implementation/architecture.md` | 段階の入口、ID、`ItemTree` と `DefMap`、`TypedProgram` と `DeclType`、由来の `Span`、`lower` の `entry` 引数、session。R7e の後、[ロードマップ](../../future/roadmap.md) の「文書の簡素化」のとおり細部の説明を減らす | 各回、R7e |
 | `implementation/testing.md` | テストの地図と `eml_test_support` | 各回 |
@@ -446,6 +462,6 @@ enum CasePattern { Tag(u32), Int(i64), String(u32) }   // String は文字列定
 ### 7.4 完了の条件
 
 1. 1〜6章の内容が入っていること。不具合1〜3が UI テストで確かめられていること
-2. 次のものがコードから消えていること: `Res::Builtin`、`Builtin`、`BUILTINS`、`Access`、`Module::builtins`、`TypedModule::builtins`、`Decl::Builtin`、`ValueItem::Builtin`、`FileId::PRELUDE`、`ItemScope` の `fixities` と `prelude_fixities`、`eml_core_ir` の `FALSE` と `TRUE`、`Lowering::Compose`、`call_builtin`、`call_operation`、`call_constructor`、`TypedModule`、公開の `Scheme`、`check/report.rs` の入口のファイルの決め打ち
+2. 次のものがコードから消えていること: `Res::Builtin`、`Builtin`、`BUILTINS`、`Access`、`Module::builtins`、`TypedModule::builtins`、`Decl::Builtin`、`ValueItem::Builtin`、`FileId::PRELUDE`、`ItemScope` の `fixities` と `prelude_fixities`、`Lowering::Compose`、`PrimOp::Not`、`evaluate_first`、`LangItems` の `pipe`、`apply`、`io_operations`、`SyntheticEffect`、`call_builtin`、`call_operation`、`call_constructor`、`TypedModule`、公開の `Scheme`、`check/report.rs` の入口のファイルの決め打ち
 3. `cargo test`、`cargo clippy --all-targets`、`cargo fmt` が通ること
 4. 型検査の性能のテスト (`crates/eml_types/tests/scaling.rs`、release ビルド) の比が6以下のままであること。Prelude をプログラムに含めて検査するようになるためである
