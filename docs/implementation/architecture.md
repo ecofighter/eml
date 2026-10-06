@@ -68,9 +68,9 @@ eml_diagnostics  Diagnostic 型、FileId と SourceFiles、行と列、ariadne �
 | crate | 関数 |
 |---|---|
 | `eml_syntax` | `parse(FileId, &str) -> (Parse, Vec<Diagnostic>)` |
-| `eml_hir` | `lower(FileId, &ast::SourceFile) -> (Module, Vec<Diagnostic>)` |
-| `eml_types` | `check(&Module) -> (TypedModule, Vec<Diagnostic>)` |
-| `eml_core_ir` | `lower(&Module, &TypedModule) -> Program`。途中のパスで止める `lower_until(&Module, &TypedModule, Pass) -> Program` |
+| `eml_hir` | `lower((FileId, &ast::SourceFile), (FileId, &ast::SourceFile)) -> (Program, Vec<Diagnostic>)`。引数は Prelude と入口のファイルの構文木で、Prelude は `parse_prelude` で構文解析する |
+| `eml_types` | `check(&Program) -> (TypedModule, Vec<Diagnostic>)` |
+| `eml_core_ir` | `lower(&hir::Program, &TypedModule) -> Program`。途中のパスで止める `lower_until(&hir::Program, &TypedModule, Pass) -> Program` |
 | `eml_interp` | `run(Arc<Program>, &RunConfig, &OutputSink) -> Result<(), RuntimeError>` |
 
 ## エラーが出ても止まらない
@@ -130,10 +130,10 @@ HIR への変換では、名前解決に加えて、次の脱糖と検査を行�
 ## `eml_hir` の内部
 
 - ブロックは、fix のために最後の文の行の情報 (`LineStart`) を持つ
-- `Module` はトップレベルの関数の `Arena<Function>` を持つ。本体は関数ごとの `Body` (`exprs`、`pats`、`locals` のアリーナ) に置く。後でクエリ化したときに関数単位で再計算できるようにするため (rust-analyzer と同じ分け方)。型の注釈は、シグネチャのものを `Signature::types` に、本体のものを `Body::types` に置く。本体を書き換えてもシグネチャが変わらないようにするため
+- HIR の出力は `Program` で、Prelude と入口のモジュール (`Module`) を持つ。item の ID は `ItemId<T>` (モジュールと、モジュールの中の番号) で、プログラム全体で一意である。ID から値を引く表は `ItemMap` で、`program[id]` で item を引く。各モジュールは item のアリーナ (`Items`) と関数の本体 (`Module::bodies`) を分けて持つ。本体を書き換えても item が変わらないようにするため。本体は関数ごとの `Body` (`exprs`、`pats`、`locals` のアリーナ) である。後でクエリ化したときに関数単位で再計算できるようにするため (rust-analyzer と同じ分け方)。型の注釈は、シグネチャのものを `Signature::types` に、本体のものを `Body::types` に置く。本体を書き換えてもシグネチャが変わらないようにするため
 - 型変数と row 変数の表は `Signature::generics` (`Generics`) に置く。シグネチャで定義し、本体の注釈は引くだけにする。ラムダの引数は、ラムダの本体だけで見えるスコープに入る
 - シグネチャと等式は名前で対応づけてから、並び方を検査する。シグネチャか等式のない関数も `Function` として残し (`signature` か `body` が `None`)、呼び出し側で名前の誤りを連鎖させない
-- 名前は `Res::{Local, Function, Operation, Constructor}` に解決する。組み込みは eml のソースで書いた Prelude (`crates/eml_hir/src/prelude.em`、`eml_hir::PRELUDE_SOURCE`) の等式のないシグネチャで、HIR では本体のない関数 (`Function::intrinsic`) である。引数の数はシグネチャの一番外側の `->` の数 (`Function::arity`) である。Prelude の `pub` の関数は名前解決の最も外側のスコープで、ユーザーの定義で隠せる。`negate` は `pub` でないので名前で書けない。処理系が役割で引く関数 (`negate`、`==`、`!=`、`&&`、`||`、`|>`、`<|`、`IO` の操作) は lang item である。変換のはじめに Prelude を構文解析し、intrinsic の関数を関数のアリーナに置く。Prelude の範囲には `FileId::PRELUDE` を使い、診断には出さない。R7b-2 で Prelude を別のモジュールにする
+- 名前は `Res::{Local, Function, Operation, Constructor}` に解決する。組み込みは eml のソースで書いた Prelude (`crates/eml_hir/src/prelude.em`、`eml_hir::PRELUDE_SOURCE`) の等式のないシグネチャで、HIR では本体のない関数 (`Function::intrinsic`) である。引数の数はシグネチャの一番外側の `->` の数 (`Program::arity`) である。Prelude の `pub` の関数は名前解決の最も外側のスコープで、ユーザーの定義で隠せる。`negate` は `pub` でないので名前で書けない。処理系が役割で引く関数 (`negate`、`==`、`!=`、`&&`、`||`、`|>`、`<|`、`IO` の操作) は lang item である。Prelude は `Prelude.em` (`PRELUDE_PATH`) として `SourceFiles` に登録した普通のファイルで、入口のファイルとは別のモジュールに変換する。名前の解決は R7b-3 まで、2つのモジュールで1つの表 (`ItemScope`) を使う
 - 型とエフェクトは item (`Module::types`、`Module::effects`) で、ID (`TypeDefId`、`EffectId`) で参照する。組み込みの `Int`、`String`、`Unit` と `IO` を変換のはじめに登録し、Prelude の `data Bool` を変換してから、続けて `effect` の宣言を変換する (`lower/effect.rs`)。エフェクトの名前をすべて登録してから操作を変換するので、操作の引数の型の row は後ろで宣言したエフェクトも引ける。操作は `Module::operations` (`OperationId`) に置き、シグネチャと引数の個数 (外側の矢印の数) を持つ。処理系が役割で引く item は `Module::lang` (`LangItems`) にある。エフェクトの宣言は型引数を `EffectDef::generics` に持つ。操作の `Generics` は、エフェクトの型引数を先頭に写して始め、その個数を `Operation::effect_params` に持つ。row のエフェクトは `EffectRef` (エフェクトと型引数) で、型引数の個数は `ItemScope::effect_params` で確かめる (E1015)
 - `data` の宣言は `lower/data.rs` で変換する。型の名前をすべて登録してから宣言を変換するので、宣言どうしは再帰と相互再帰ができる。`TypeDef` は型引数 (`generics`)、フィールドの型の注釈のアリーナ (`types`)、種類 (`TypeDefKind::{Builtin, Data}`) を持つ。コンストラクタは `Module::constructors` (`ConstructorId`) に置き、属する型、タグ (宣言の順)、フィールドの型を持つ。コンストラクタは値の名前空間に入り、式では `Res::Constructor` に解決する。`Bool` の2つのコンストラクタは lang item (`LangItems::true_ctor`、`false_ctor`) で、`&&` と `||` の脱糖が使う
 - パターンは `PatKind::Con` (コンストラクタと引数のパターン) を持つ。1つのパターンと、1つの等式、ラムダ、handler の節の引数の並びで同じ変数名を2回束縛すると E1017 にする。型の明示 `(p : T)` はどの `apat` の位置でも `PatKind::Annot` になる。`match` は `ExprKind::Match` で、枝 (`MatchArm`) のパターンの変数は、その枝の本体だけで見える
@@ -202,7 +202,7 @@ HIR への変換では、名前解決に加えて、次の脱糖と検査を行�
 - パスの順番は `pipeline.rs` だけが持つ。`lower_until` は、変換 (`translate/`)、`simplify`、Perceus を順にかけ、指定したパスの直後で止める。RC の命令を入れる前のパスの後では、`liveness::analyze` で `captures` を埋め直してから `verify_scopes` をかけ、Perceus の後では `verify` をかける。verifier の検査はデバッグビルドだけでかけ、`compact` が見つけた木の誤りはどのビルドでも報告する。どちらの誤りも、パスの名前を付けた panic にする
 - 変換は `translate/` にある。`mod.rs` は式の値の渡し先と join point の組み立てという制御の骨組み、`expr.rs` は式ごとの変換と呼び出しの場合分け、`program.rs` は関数の表 (`ProgramBuilder`)、組み込みと操作を包む関数、入口の関数、エフェクトの表、`types.rs` は型から決まる変数の性質 (`boxed`) と、intrinsic の名前と変換の種類の表 (`INTRINSICS` と `intrinsic`) を持つ。`pattern.rs` は `match` と、`let`・ラムダ・等式の引数のパターンを決定木にコンパイルする。列の頭はコンストラクタ、タプル、リテラルで、リテラルの列は比べるプリミティブと `Bool` の `switch` の連なりにする
 - Core IR の関数は、ANF の木をアリーナに置き、`CExprId` で参照する。継続のフレームが再開する位置を ID で持てるようにするため。変換は式の値の渡し先 (`Exit::Return` か `Exit::Jump`) を持って回り、末尾の `if` は各枝が返す `Switch` に、末尾にない `if` は続きを本体にした join point (`CExpr::Join`) にする。末尾にない `if` は、`tail` で条件の計算ごと join point の範囲を組み立てる。`CoreFn::joins` は `JoinId` から `Join` の式を引く索引で、アリーナはパスのたびに `compact` が作り直す。値を返すだけの呼び出しは、`simplify` の最後の T が `TailCall` にする
-- 変数が boxed かどうかは、型から `boxed` の1か所で決める。intrinsic の引数の数は `Function::arity` から、引数と結果の型は `TypedModule::signatures` から引き、変換の種類 (`Prim`、`Io`、`Compose`、`Equality`) は、名前から引く `intrinsic` の1つの match に置く。HIR が脱糖する `&&`、`||`、`|>`、`<|` は表に持たない。`data` の型の変数は、引数を持つコンストラクタが1つでもあれば boxed にする。要素が2つ以上の閉じたレコードの型 (タプル) の変数も boxed にする
+- 変数が boxed かどうかは、型から `boxed` の1か所で決める。intrinsic の引数の数は `Program::arity` から、引数と結果の型は `TypedModule::signatures` から引き、変換の種類 (`Prim`、`Io`、`Compose`、`Equality`) は、名前から引く `intrinsic` の1つの match に置く。HIR が脱糖する `&&`、`||`、`|>`、`<|` は表に持たない。`data` の型の変数は、引数を持つコンストラクタが1つでもあれば boxed にする。要素が2つ以上の閉じたレコードの型 (タプル) の変数も boxed にする
 - 変換は、`main` を `()` で呼ぶ入口の関数 `entry$main` を足す (`Program::entry`)
 - ラムダは、捕まえた変数を先頭の引数に持つ関数に持ち上げる (`外側の名前$lambdaN`)。組み込みを値として使うときは、呼ぶだけの関数 (`builtin$名前`) で包む。コンストラクタを値として使うときは、値を作るだけの関数 (`con$名前`) で包む。関数の表は番号を先に取り、変換の途中で関数を足す
 - 呼び出しは `eml_hir::call_steps` の手順どおりに評価し、続けて並ぶ矢印を1回の呼び出しにする。引数のないトップレベルの値は既知の呼ばれる式に含めず、先に評価する
@@ -227,7 +227,7 @@ HIR への変換では、名前解決に加えて、次の脱糖と検査を行�
 
 ## ソースファイルと位置
 
-- `FileId` と `SourceFiles` (`FileId` → パスとテキスト) は `eml_diagnostics` に置く。マイルストーン1 は単一ファイルなので、中身は実質1件である
+- `FileId` と `SourceFiles` (`FileId` → パスとテキスト) は `eml_diagnostics` に置く。`SourceFiles` には Prelude と入口のファイルが入る
 - `TextRange` は `text-size` crate を直接使う (`rowan` が再公開しているものと同じ型)。`eml_diagnostics` は `rowan` に依存しない
 - `SourceFiles::add` は、テキストの先頭の BOM を取り除いてから保存する。以後の位置 (`TextRange`、レイアウトの列、診断の行と列) は、すべて BOM を除いたテキストで数える ([字句](../spec/lexical.md))。lexer、レイアウト段、表示は BOM を扱わない
 - 将来クエリ化するときは、`SourceFiles` を salsa の入力に置き換え、必要なら別の crate に切り出す
@@ -241,8 +241,9 @@ HIR への変換では、名前解決に加えて、次の脱糖と検査を行�
 
 `eml_cli` の lib は次の API を公開する。UI テストはこれをプロセス内で呼ぶ。
 
-- `check(files, file_id) -> Vec<Diagnostic>`。`check` と `compile` は、診断を `sort_diagnostics` で並べて返す (各段階は順を約束しない)
-- `compile(files, file_id) -> Compiled`。`Compiled` は、検査で出た診断 (警告を含む) と、エラーがなければ `Program` を持つ (`program: Option<Arc<Program>>`)。`main` がないこと (E2003) は `compile` だけが検査し、`check` は検査しない ([型と Kind](../spec/types.md) の「推論」)
+- `Session` は1回の検査や実行で読むソースの集まりで、`new` が Prelude を登録する。`add_file` で入口のファイルを登録し、`files` を診断の表示に使う。import をたどるローダは S2 で足す
+- `Session::check(file_id) -> Vec<Diagnostic>`。`check` と `compile` は、診断を `sort_diagnostics` で並べて返す (各段階は順を約束しない)
+- `Session::compile(file_id) -> Compiled`。`Compiled` は、検査で出た診断 (警告を含む) と、エラーがなければ `Program` を持つ (`program: Option<Arc<Program>>`)。`main` がないこと (E2003) は `compile` だけが検査し、`check` は検査しない ([型と Kind](../spec/types.md) の「推論」)
 - `execute(Arc<Program>, &RunConfig, stdout: OutputSink) -> Result<(), RuntimeError>`。`RuntimeError` は `eml_interp` の型を再公開したものである
 
 検査と実行を別の関数に分けるのは、呼び出し側が実行の前に診断を表示できるようにするためである。CLI と UI テストは、`compile` の診断を表示してから `execute` を呼ぶ。

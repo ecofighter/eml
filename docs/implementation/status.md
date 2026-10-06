@@ -98,7 +98,7 @@ R5 は段階6a の後、段階6b の前に行う。段階6a はほぼ HIR の脱
 | R4 | Core IR のパスの構成 | パスの順番を持つ `pipeline.rs` と `lower_until`、パスの間の `captures`、verifier の2つの度合い (`verify_scopes`)、`translate/` への分割、パスごとのテスト | 完了 |
 | R5 | 型検査の SCC ごとの独立 | `Context`、閉じた形 `Shape`、関数ごとの本体の検査 (段1) と SCC ごとの Kind の解決 (段2)、ワークリストと強連結成分による残す制約、持ち越しの制約の組ごとの重複除去、`Type` の線形性を除くこと。`eml_types` の中で済ませる | 完了 |
 | R6 | 6b の前の継ぎ目 | 評価の順 (ML 式、`call_steps`)、型の走査、Kind の由来、handler の節の型、診断の順 (R6a)。Core IR の visitor と `FnBuilder`、`compact` と木の検査、末尾呼び出しの T、テキストの IR と `parse`、`eml_interp` の分割 (R6b) | 完了 |
-| R7 | 単一ファイルの前提をなくす | R7a (構文) 完了。R7b-1 (組み込みを Prelude の intrinsic の関数にする) 完了。R7b-2〜R7e は未着手 (docs/superpowers/specs/2026-10-06-refactor-r7-design.md)。R7b は R7b-1〜R7b-3 に分けた | 進行中 |
+| R7 | 単一ファイルの前提をなくす | R7a (構文) 完了。R7b-1 (組み込みを Prelude の intrinsic の関数にする)、R7b-2 (プログラム全体の ID、Prelude のモジュール、`Session`) 完了。R7b-3〜R7e は未着手 (docs/superpowers/specs/2026-10-06-refactor-r7-design.md)。R7b は R7b-1〜R7b-3 に分けた | 進行中 |
 
 ### テストを変えないために曲げた箇所
 
@@ -163,11 +163,11 @@ R6b は、`CExpr`、`Rhs`、`Call` の visitor と、関数の組み立ての口
 
 S2 の前に、単一ファイルの前提をなくす作り替えを R7 として行う。R6 の見直しで R7 に回した項目は次のとおりである。
 
-- item の ID をプログラム全体で一意にし (`ModuleId`)、HIR をモジュールのインタフェースと本体に分ける。Prelude に本物の `FileId` を与えて普通のモジュールにし、`FileId::PRELUDE` をなくす
+- item の ID をプログラム全体で一意にし (`ModuleId`)、HIR をモジュールのインタフェースと本体に分ける。Prelude に本物の `FileId` を与えて普通のモジュールにし、`FileId::PRELUDE` をなくす。R7b-2 で、ID を `ItemId` にし、HIR を `Program` と `Module` (item と本体) に分け、Prelude に `FileId` を与えて `FileId::PRELUDE` をなくした
 - 名前解決を、item の収集、モジュールごとのスコープ表、item ごとの変換の3段に分け、重複の扱いを1つにする。fixity は解決した先の定義に付ける。確かめた不具合2を直す: 操作と同じ名前の関数を定義すると、E1003 の後に handler の節で E1001 が連鎖する。`ItemScope` の重複の扱いが箇所ごとに違い、関数が操作を上書きするためである
 - 組み込みを Prelude の intrinsic にし、Rust の表を1つにする。`Res::Builtin`、`Decl::Builtin`、`Module::builtins`、`TypedModule::builtins` をなくす。`Bool` のタグを HIR のコンストラクタから引く。R7b-1 で、組み込みを Prelude の intrinsic の関数にし、`Res::Builtin`、`Decl::Builtin`、`Module::builtins`、`TypedModule::builtins` をなくした。`Bool` のタグは R7d で扱う
 - 型検査の出力を、損失のないモジュールのインタフェース (`Shape` と `KindScheme`、由来に `FileId`) にする。表示用の `Scheme` は `dump` の中の表示にする
-- source の読み込み (ローダ、session 型の lib API)、複数ファイルのテストの fixture、ディレクトリを1件とする UI テストを作る
+- source の読み込み (ローダ、session 型の lib API)、複数ファイルのテストの fixture、ディレクトリを1件とする UI テストを作る。R7b-2 で `Session` を作った。import をたどる部分、複数ファイルの fixture、ディレクトリを1件とする UI テストは S2
 - CST に名前と経路のノード (`PATH`、`NAME`) を入れ、grammar.md の全体を CST まで組む。E0004 を出す層の方針を1つにする。確かめた不具合1を直す: `<M.E>` が E0004 にならず E1002 (「cannot find effect `M`」) になる。`ast::Effect::name()` が最初の `UIDENT` を取り、CST に名前の経路のノードがないためである。R7a で済んだ。不具合1と、`::` のパターンが E1001 になる不具合も直した。grammar.md の全体を CST まで組むことは、補間・コマンドリテラル・レコード・リストを例外として S2 に残した
 - Core IR の `Switch` を、default の枝とリテラルの case を持つ平らな形にする。リテラルが約1000個の `match` で debug ビルドのスタックがあふれる問題を直し、呼び出しの飽和の処理を1つにまとめる
 - spec で決めること: import の循環を許すか、モジュールの根をどこにするか
@@ -184,7 +184,7 @@ S2 の前に、単一ファイルの前提をなくす作り替えを R7 とし�
 | `eml_runtime` | 段階5b まで実装済み。世代番号つきのヒープ、RC、記述子、`debug_heap` のリーク検出、`OutputSink` (テストで出力を捕まえる `Captured` を含む)。クロージャのオブジェクト、継続のフレームの種類 (`Return`、`Apply`、`Io`)、共有されたオブジェクトの複製。handler のフレーム (`Frame::Handler`) と継続オブジェクト (`Payload::Continuation`)。共有された継続の区間の複製。`data` のオブジェクト (`Payload::Data`)。`File` のオブジェクト (`Payload::File`、`FileHandle`)。破棄処理はオブジェクトの解放である。段階6b-1 で、`Frame::Handler` を `{ effect, clauses, ret, link: Option<Link { next, state }> }` にし、つながっている handler フレームだけが状態を持つようにした。捕獲のない関数の値 `Value::Fn` を足した |
 | `eml_interp` | 段階5b まで実装済み。CEK 機械 (ヒープ上の継続のフレーム、最下部の `IO` の handler)、プリミティブ、`println`、eval/apply によるクロージャの呼び出し、型を付けた実行時エラー。handle、`perform`、`resume`、`drop` の実行。multi-shot の再開。コンストラクタの値と `Switch` の分解。文字列と `Bool` の比較。`open`、`read_all`、`close` の実行。`RunConfig::file_root` が `open` の基準ディレクトリで、開けない、読めない、UTF-8 でないときは `Fault::{FileOpen, FileRead, FileNotUtf8}` の実行時エラーにする。段階6b-1 で、`perform`、`resume`、`return` が状態を handler フレームの `Link` に通すようにした。`perform` は `resumable` を読み、エフェクトの表を引かない。`Value::Fn` も eval/apply の3つの場合でクロージャと同じに呼び出す |
 | `eml_test_support` | 開発専用。結合テストのパイプライン (段階ごとの feature で選ぶ) と、診断を文字列にする関数 |
-| `eml_cli` | 実装済み。`check` / `run` コマンド、lib API (`check` / `compile` / `execute`)、終了コード、UI テスト (`run/`、`run-fail/`、`check-fail/`) と CLI テスト |
+| `eml_cli` | 実装済み。`check` / `run` コマンド、lib API (`Session` の `check` / `compile` と `execute`)、終了コード、UI テスト (`run/`、`run-fail/`、`check-fail/`) と CLI テスト |
 
 ## 次の作業の注意点
 
