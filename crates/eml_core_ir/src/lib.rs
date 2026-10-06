@@ -285,7 +285,7 @@ impl Rhs {
             Rhs::MakeClosure(_, args)
             | Rhs::Prim(_, args)
             | Rhs::Io(_, args)
-            | Rhs::Con { args, .. } => args.iter().for_each(|&atom| f(atom)),
+            | Rhs::Con { tag: _, args } => args.iter().for_each(|&atom| f(atom)),
             Rhs::ConstString(_) => {}
         }
     }
@@ -297,7 +297,7 @@ impl Rhs {
             Rhs::MakeClosure(_, args)
             | Rhs::Prim(_, args)
             | Rhs::Io(_, args)
-            | Rhs::Con { args, .. } => args.iter_mut().for_each(f),
+            | Rhs::Con { tag: _, args } => args.iter_mut().for_each(f),
             Rhs::ConstString(_) => {}
         }
     }
@@ -339,9 +339,12 @@ impl Call {
 
     pub(crate) fn for_each_atom(&self, mut f: impl FnMut(Atom)) {
         match self {
-            Call::Direct(_, args) | Call::Perform { args, .. } => {
-                args.iter().for_each(|&atom| f(atom))
-            }
+            Call::Direct(_, args)
+            | Call::Perform {
+                effect: _,
+                op: _,
+                args,
+            } => args.iter().for_each(|&atom| f(atom)),
             Call::Apply(callee, args) => {
                 f(*callee);
                 args.iter().for_each(|&atom| f(atom));
@@ -365,7 +368,12 @@ impl Call {
 
     pub(crate) fn for_each_atom_mut(&mut self, mut f: impl FnMut(&mut Atom)) {
         match self {
-            Call::Direct(_, args) | Call::Perform { args, .. } => args.iter_mut().for_each(f),
+            Call::Direct(_, args)
+            | Call::Perform {
+                effect: _,
+                op: _,
+                args,
+            } => args.iter_mut().for_each(f),
             Call::Apply(callee, args) => {
                 f(callee);
                 args.iter_mut().for_each(f);
@@ -514,5 +522,15 @@ mod tests {
         handle.for_each_atom(|atom| atoms.push(atom));
         assert_eq!(atoms, [1, 2, 3, 4].map(|n| Atom::Var(VarId(n))));
         assert_eq!(atoms, call.atoms());
+
+        let mut handle = handle;
+        let mut atoms_mut = Vec::new();
+        handle.for_each_atom_mut(|atom| atoms_mut.push(*atom));
+        assert_eq!(atoms_mut, atoms);
+
+        let apply = CExpr::TailCall(Call::Apply(Atom::Var(VarId(7)), vec![Atom::Int(1)]));
+        let mut atoms = Vec::new();
+        apply.for_each_atom(|atom| atoms.push(atom));
+        assert_eq!(atoms, [Atom::Var(VarId(7)), Atom::Int(1)]);
     }
 }

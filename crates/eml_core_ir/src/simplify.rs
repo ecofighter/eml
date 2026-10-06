@@ -162,7 +162,7 @@ impl Simplify<'_> {
                         replaced += 1;
                     }
                 });
-                debug_assert!(replaced > 0, "the parent points at the child");
+                debug_assert_eq!(replaced, 1, "the parent points at the child exactly once");
             }
         }
         parents[new.0 as usize] = parents[old.0 as usize];
