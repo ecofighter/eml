@@ -155,11 +155,11 @@ fn undecided_operands_are_reported_and_errors_are_not() {
     broken : Int -> Bool
       n#0 : Int
     ---
-    E1001 7:12 cannot find value `missing`
-      7:12 not found in this scope
     E2006 3:32 values of type `_` cannot be compared with `==`
       3:32 `==` cannot compare `_`
       note: `==` and `!=` compare only values of type `Int`, `String` and `Bool`
+    E1001 7:12 cannot find value `missing`
+      7:12 not found in this scope
     ");
 }
 

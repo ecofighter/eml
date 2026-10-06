@@ -37,7 +37,6 @@ pub fn lex(file: FileId, text: &str) -> (Vec<Token>, Vec<Diagnostic>) {
             Label::new(file, token.range, "not valid in eml source"),
         ));
     }
-    diagnostics.sort_by_key(|diagnostic| diagnostic.primary.range.start());
     (tokens, diagnostics)
 }
 

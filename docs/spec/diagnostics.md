@@ -25,6 +25,10 @@ struct Diagnostic {
 - 補足の情報は、独立した診断ではなく `notes` と `help` に入れる。そのため `Severity` は `Error` と `Warning` の2つだけにする。
 - `TextRange` は、読み込み時に先頭の BOM を除いたテキストのバイト位置である ([字句](lexical.md))。
 
+## 診断の順
+
+`eml check` と `eml run` は、診断を (ファイル、primary の開始位置、番号) の順に並べて表示する。3つとも同じなら、段階が出した順を保つ。各段階は診断の順を約束しない。並べ替えは `eml_diagnostics::sort_diagnostics` の1か所で行い、CLI と結合テストのパイプライン (`eml_test_support`) がそれを呼ぶ。
+
 ## 番号の範囲
 
 `ErrorCode` は段階ごとに番号の範囲を分ける。

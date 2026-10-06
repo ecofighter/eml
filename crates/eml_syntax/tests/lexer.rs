@@ -4,7 +4,8 @@ use eml_test_support::{source, with_diagnostics};
 
 fn dump(text: &str) -> String {
     let (files, file) = source(text);
-    let (tokens, diagnostics) = lex(file, text);
+    let (tokens, mut diagnostics) = lex(file, text);
+    eml_diagnostics::sort_diagnostics(&mut diagnostics);
     let mut out = String::new();
     for token in &tokens {
         out.push_str(&format!(
@@ -31,7 +32,8 @@ fn kinds(text: &str) -> Vec<String> {
 
 fn diags(text: &str) -> Vec<String> {
     let (_, file) = source(text);
-    let (_, diagnostics) = lex(file, text);
+    let (_, mut diagnostics) = lex(file, text);
+    eml_diagnostics::sort_diagnostics(&mut diagnostics);
     diagnostics
         .iter()
         .map(|d| format!("{}@{:?} {}", d.code, d.primary.range, d.message))

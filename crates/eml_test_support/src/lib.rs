@@ -13,9 +13,9 @@ use std::sync::Arc;
 
 #[cfg(feature = "core")]
 use eml_core_ir::{Pass, Program};
-#[cfg(feature = "core")]
-use eml_diagnostics::has_errors;
 use eml_diagnostics::{Diagnostic, FileId, Label, LineCol, SourceFiles};
+#[cfg(feature = "core")]
+use eml_diagnostics::{has_errors, sort_diagnostics};
 #[cfg(feature = "run")]
 use eml_interp::{RunConfig, RuntimeError};
 #[cfg(feature = "run")]
@@ -33,7 +33,7 @@ pub struct Lowered {
     pub files: SourceFiles,
     pub file: FileId,
     pub module: eml_hir::Module,
-    /// 構文と HIR の診断を、各段階が返した順に並べたもの。
+    /// 構文と HIR の診断を、表示と同じ順 (`sort_diagnostics`) に並べたもの。
     pub diagnostics: Vec<Diagnostic>,
 }
 
@@ -43,7 +43,7 @@ pub struct Checked {
     pub file: FileId,
     pub module: eml_hir::Module,
     pub typed: eml_types::TypedModule,
-    /// 構文、HIR、型の診断を、各段階が返した順に並べたもの。
+    /// 構文、HIR、型の診断を、表示と同じ順 (`sort_diagnostics`) に並べたもの。
     pub diagnostics: Vec<Diagnostic>,
 }
 
@@ -57,12 +57,13 @@ pub fn source(text: &str) -> (SourceFiles, FileId) {
 /// `SourceFiles` に保存したテキスト (先頭の BOM を除いたもの) である (docs/spec/lexical.md)。
 pub fn parse(text: &str) -> Parsed {
     let (files, file) = source(text);
-    let (parse, diagnostics) = eml_syntax::parse(file, files.text(file));
+    let (parse, mut diagnostics) = eml_syntax::parse(file, files.text(file));
     assert_eq!(
         parse.syntax().text().to_string(),
         files.text(file),
         "tree must be lossless"
     );
+    sort_diagnostics(&mut diagnostics);
     Parsed {
         files,
         file,
@@ -81,6 +82,7 @@ pub fn lower(text: &str) -> Lowered {
     } = parse(text);
     let (module, stage) = eml_hir::lower(file, &parse.tree());
     diagnostics.extend(stage);
+    sort_diagnostics(&mut diagnostics);
     Lowered {
         files,
         file,
@@ -121,6 +123,7 @@ pub fn check(text: &str) -> Checked {
     } = lower(text);
     let (typed, stage) = eml_types::check(&module);
     diagnostics.extend(stage);
+    sort_diagnostics(&mut diagnostics);
     Checked {
         files,
         file,

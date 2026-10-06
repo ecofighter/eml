@@ -3,13 +3,15 @@
 use std::sync::Arc;
 
 use eml_core_ir::Program;
-use eml_diagnostics::{Diagnostic, FileId, SourceFiles, has_errors};
+use eml_diagnostics::{Diagnostic, FileId, SourceFiles, has_errors, sort_diagnostics};
 
 pub use eml_interp::{RunConfig, RuntimeError};
 pub use eml_runtime::{Captured, OutputSink};
 
 pub fn check(files: &SourceFiles, file: FileId) -> Vec<Diagnostic> {
-    front(files, file).2
+    let mut diagnostics = front(files, file).2;
+    sort_diagnostics(&mut diagnostics);
+    diagnostics
 }
 
 /// 呼び出し側が実行の前に診断を表示できるように、検査と実行を別の関数にする (docs/implementation/architecture.md)。
@@ -27,6 +29,7 @@ pub fn compile(files: &SourceFiles, file: FileId) -> Compiled {
     if typed.main.is_none() {
         diagnostics.push(eml_types::missing_main(file));
     }
+    sort_diagnostics(&mut diagnostics);
     // Core IR は誤りのないプログラムだけを受け取る (docs/implementation/architecture.md)
     let program =
         (!has_errors(&diagnostics)).then(|| Arc::new(eml_core_ir::lower(&module, &typed)));

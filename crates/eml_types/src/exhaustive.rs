@@ -31,8 +31,6 @@ pub(crate) fn check(module: &Module, typed: &TypedModule) -> Vec<Diagnostic> {
         };
         pass.equation(function);
         pass.positions();
-        // 式のアリーナの順はソースの順と一致しないので、関数の中で位置の順に並べる
-        pass.diagnostics.sort_by_key(|d| d.primary.range.start());
         diagnostics.extend(pass.diagnostics);
     }
     diagnostics

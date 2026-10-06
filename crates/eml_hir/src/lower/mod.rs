@@ -219,7 +219,6 @@ pub fn lower(file: FileId, source: &ast::SourceFile) -> (Module, Vec<Diagnostic>
         .lower_equations(&equations);
         functions[id].body = Some(body);
     }
-    diagnostics.sort_by_key(|d| d.primary.range.start());
     (
         Module {
             file,

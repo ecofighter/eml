@@ -59,7 +59,6 @@ pub fn parse(file: FileId, text: &str) -> (Parse, Vec<Diagnostic>) {
     grammar::source_file(&mut parser);
     let (events, parse_diagnostics) = parser.finish();
     diagnostics.extend(parse_diagnostics);
-    diagnostics.sort_by_key(|diagnostic| diagnostic.primary.range.start());
     let green = sink::build_tree(text, &tokens, events);
     (Parse { green }, diagnostics)
 }

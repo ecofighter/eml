@@ -3,13 +3,6 @@ source: crates/eml_cli/tests/ui.rs
 expression: rendered
 input_file: tests/ui/check-fail/syntax/missing_indented_block.em
 ---
-[E0009] Error: expected an indented block after `=`
-   ╭─[ check-fail/syntax/missing_indented_block.em:2:8 ]
-   │
- 2 │ answer =
-   │        ┬  
-   │        ╰── the next line must be indented more than the enclosing block
-───╯
 [E1004] Error: `answer` has no type signature
    ╭─[ check-fail/syntax/missing_indented_block.em:2:1 ]
    │
@@ -18,6 +11,13 @@ input_file: tests/ui/check-fail/syntax/missing_indented_block.em
    │    ╰──── every top-level definition needs a signature
    │ 
    │ Help: add a signature `answer : ...` on the line before this equation
+───╯
+[E0009] Error: expected an indented block after `=`
+   ╭─[ check-fail/syntax/missing_indented_block.em:2:8 ]
+   │
+ 2 │ answer =
+   │        ┬  
+   │        ╰── the next line must be indented more than the enclosing block
 ───╯
 [E1004] Error: `other` has no type signature
    ╭─[ check-fail/syntax/missing_indented_block.em:3:1 ]

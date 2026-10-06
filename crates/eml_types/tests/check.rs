@@ -59,12 +59,12 @@ fn if_without_else_must_be_unit() {
     k : Bool -> Int
       b#0 : Bool
     ---
-    E2001 2:17 mismatched types
-      2:17 expected `Unit`, found `Int`
-      note: an `if` without `else` must have type `Unit`
     E2001 2:7 mismatched types
       2:7 expected `Int`, found `Unit`
       1:5 expected because of the signature of `k`
+    E2001 2:17 mismatched types
+      2:17 expected `Unit`, found `Int`
+      note: an `if` without `else` must have type `Unit`
     ");
 }
 

@@ -184,3 +184,12 @@
 - 型の表の複写 (`Table::copy_type`) をなくし、シグネチャの閉じた形 `Shape` の具体化に替えたので、`table/tests.rs` の `copy_type_replaces_rigid_variables` と `copying_keeps_an_error_row` を消した (種類1)。同じ意図のテストは `shape.rs` の `instantiation_replaces_rigid_variables_and_rows` と `an_error_row_survives_closing_and_instantiation` に移した
 - dump の `kinds:` の行は変わらなかった (種類2はなし)
 - `kind.rs` の単体テスト9件を `kind/solve.rs` に移し、新しい API で組み立て直した。`table/tests.rs` の `Table::new` の呼び方、Kind を読む3件の組み立て、`ty.rs` の単体テストの `Type` の組み立て (`linearity` を除いた) も追随させた。`kind/solve.rs` の `carry_residual` の単体テスト3件は、何もない成分を飛ばす修正で呼び出しの引数だけが変わった。期待値は変えていない (種類3)
+
+### リファクタリング R6
+
+- 診断を (ファイル、開始位置、番号) の順に driver の1か所で並べるようにしたので、次の4件で診断の順が変わった (種類1)。中身は変わっていない
+  - `tests/ui/check-fail/syntax/missing_indented_block.em`: E1004 (2:1) が E0009 (2:8) より先になった
+  - `tests/ui/check-fail/syntax/tab_indentation.em`: E1004 (2:1) が E0006 (3:1) より先になった
+  - `eml_types/tests/check.rs` の `if_without_else_must_be_unit`: 2つの E2001 が位置の順になった
+  - `eml_types/tests/tuples.rs` の `undecided_operands_are_reported_and_errors_are_not`: E2006 (3:32) が E1001 (7:12) より先になった
+- `eml_hir/tests/common` の `lower_sorted` と、`eml_syntax/tests/lexer.rs` の並べ替えを `sort_diagnostics` に置き換えた。期待値は変えていない (種類3)
