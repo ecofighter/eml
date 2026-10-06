@@ -239,7 +239,7 @@ fn position(files: &SourceFiles, label: &Label) -> LineCol {
 /// フロントエンドからは作れない Core IR を手で組むテストが使う部品 (docs/implementation/testing.md の「テストの置き場所」)。
 #[cfg(feature = "core")]
 pub mod ir {
-    use eml_core_ir::{Atom, CoreFn, FnIdx, Linearity, Program, VarId, VarInfo};
+    use eml_core_ir::{Atom, CoreFn, FnIdx, Program, VarId, VarInfo};
 
     pub fn var(n: u32) -> Atom {
         Atom::Var(VarId(n))
@@ -256,7 +256,6 @@ pub mod ir {
     fn var_info(name: &str, boxed: bool) -> VarInfo {
         VarInfo {
             name: name.to_string(),
-            linearity: Linearity::Unr,
             boxed,
         }
     }

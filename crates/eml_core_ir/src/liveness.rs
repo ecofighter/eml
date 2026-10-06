@@ -5,17 +5,13 @@
 
 use std::collections::{BTreeSet, HashMap};
 
-use crate::{Atom, CExpr, CExprId, CoreFn, JoinId, Linearity, VarId};
+use crate::{Atom, CExpr, CExprId, CoreFn, JoinId, VarId};
 
 pub(crate) type Vars = BTreeSet<VarId>;
 
-/// RC の対象 (`Unr` でボックス化した変数) かどうか。
+/// RC の対象 (ボックス化した変数) かどうか。
 pub(crate) fn tracked(function: &CoreFn) -> Vec<bool> {
-    function
-        .vars
-        .iter()
-        .map(|var| var.boxed && var.linearity == Linearity::Unr)
-        .collect()
+    function.vars.iter().map(|var| var.boxed).collect()
 }
 
 pub(crate) struct BlockLiveness {

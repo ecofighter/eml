@@ -87,7 +87,6 @@ mod tests {
         let mut builder = FnBuilder::new();
         let x = builder.var(VarInfo {
             name: "x".to_string(),
-            linearity: crate::Linearity::Unr,
             boxed: false,
         });
         let join = builder.new_join();

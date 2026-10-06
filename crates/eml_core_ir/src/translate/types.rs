@@ -2,11 +2,11 @@
 
 use eml_hir::builtin::Builtin;
 use eml_hir::{Module, TypeDefId, TypeDefKind};
-use eml_types::{Equality, Linearity, Type};
+use eml_types::{Equality, Type};
 
 use crate::{IoOp, PrimOp, VarInfo};
 
-/// ヒープに置く値の型。`Unr` でボックス化した変数が RC の対象になる。関数値と型変数の値は、ヒープのクロージャや
+/// ヒープに置く値の型。ボックス化した変数が RC の対象になる。関数値と型変数の値は、ヒープのクロージャや
 /// 文字列かもしれない。インタプリタの `dup` / `decref` はヒープにない値を無視するので、多めに対象にしても正しく動く
 /// (docs/spec/core-ir.md)。`File` はヒープのオブジェクトである。
 fn boxed(ty: &Type, module: &Module) -> bool {
@@ -35,7 +35,6 @@ fn has_fields(module: &Module, id: TypeDefId) -> bool {
 pub(super) fn var_info(name: &str, ty: &Type, module: &Module) -> VarInfo {
     VarInfo {
         name: name.to_string(),
-        linearity: Linearity::Unr,
         boxed: boxed(ty, module),
     }
 }

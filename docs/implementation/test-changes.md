@@ -204,3 +204,6 @@
   - 変換が結果の変数を捨てなくなったので、後ろの変数の番号が1つずれたもの: `tests/translate.rs` の `a_variable_pattern_after_a_switch_binds_the_scrutinee`、`tests/perceus.rs` の `a_scrutinee_used_in_an_arm_is_dupped_before_the_switch`、`tests/simplify.rs` の `an_arm_that_uses_the_whole_value_gets_it_as_an_argument`
 - 上の変更でインラインのスナップショットの `@r"` が `@"` に変わったものがある。表記の違いだけで、期待値の中身は変わらない (種類3)
 - 同じ範囲に違反が2つあって選ぶ1件か並びが変わったテストは、なかった
+- Core IR の表示で、boxed の変数の束縛の位置に `^` を付け、操作を持つエフェクトを先頭に `effect Ask { ask }` の形で1行ずつ書くようにした ([Core IR](../spec/core-ir.md) の「テキストの形」)。`eml_core_ir/tests/{translate,simplify,perceus}.rs` のスナップショットはすべて、この2つだけが変わった (種類2)。エフェクトの行が入ったのは、`tests/translate.rs` の `handlers_are_lifted_to_closures`、`operations_as_values_and_drop`、`constructor_patterns_in_handler_clause_parameters` である。`^` とエフェクトの行を除くと、期待値は元と同じである
+- `eml_core_ir/tests/common` の `core_text` は、表示を `eml_core_ir::parse` で読み直して同じ表示に戻ることも確かめるようにした。Core IR のスナップショットのテストは、すべて往復のテストを兼ねる。期待値は変えていない (種類3)
+- `VarInfo::linearity` を消したので、`eml_test_support::ir` の変数の組み立て、`eml_test_support/tests/support.rs` の `ir_builds_a_program_the_verifier_accepts` の比べる組、`eml_core_ir` の `builder.rs`、`compact.rs`、`verify.rs` の単体テストの組み立てから `linearity` を除いた。期待値は変えていない (種類3)

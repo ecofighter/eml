@@ -534,8 +534,8 @@ impl<'a> Checker<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::VarInfo;
     use crate::builder::FnBuilder;
-    use crate::{Linearity, VarInfo};
 
     fn program_of(function: CoreFn) -> Program {
         Program {
@@ -551,7 +551,6 @@ mod tests {
         let mut builder = FnBuilder::new();
         let x = builder.var(VarInfo {
             name: "x".to_string(),
-            linearity: Linearity::Unr,
             boxed: false,
         });
         let shared = builder.push(CExpr::Return(Atom::Int(1)));

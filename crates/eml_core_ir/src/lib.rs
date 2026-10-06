@@ -7,12 +7,13 @@ mod perceus;
 mod pipeline;
 mod pretty;
 mod simplify;
+mod text;
 mod translate;
 mod verify;
 
-pub use eml_types::Linearity;
 pub use pipeline::{Pass, lower, lower_until};
 pub use pretty::pretty;
+pub use text::{ParseError, parse};
 pub use verify::{VerifyError, verify, verify_scopes};
 
 /// 複数のスレッドが同じプログラムを実行できるように、実行時は `Arc<Program>` で読み取り専用で共有する。
@@ -94,12 +95,11 @@ impl CoreFn {
     }
 }
 
-/// 型の情報は消し、Kind とボックス化の有無だけを残す (docs/spec/core-ir.md)。
+/// 型の情報は消し、ボックス化の有無だけを残す (docs/spec/core-ir.md)。
 #[derive(Debug, Clone)]
 pub struct VarInfo {
     pub name: String,
-    pub linearity: Linearity,
-    /// ヒープに置く値。`Unr` でボックス化した変数が RC の対象になる。
+    /// ヒープに置く値。ボックス化した変数が RC の対象になる。
     pub boxed: bool,
 }
 
@@ -430,6 +430,33 @@ pub enum PrimOp {
 }
 
 impl PrimOp {
+    const ALL: [PrimOp; 19] = [
+        PrimOp::IntAdd,
+        PrimOp::IntSub,
+        PrimOp::IntMul,
+        PrimOp::IntDiv,
+        PrimOp::IntMod,
+        PrimOp::IntNeg,
+        PrimOp::IntEq,
+        PrimOp::IntNe,
+        PrimOp::IntLt,
+        PrimOp::IntLe,
+        PrimOp::IntGt,
+        PrimOp::IntGe,
+        PrimOp::StrConcat,
+        PrimOp::StrEq,
+        PrimOp::StrNe,
+        PrimOp::BoolEq,
+        PrimOp::BoolNe,
+        PrimOp::ShowInt,
+        PrimOp::Not,
+    ];
+
+    /// `name` の逆。
+    pub fn from_name(name: &str) -> Option<PrimOp> {
+        PrimOp::ALL.into_iter().find(|op| op.name() == name)
+    }
+
     /// 実行時エラーを起こしうるプリミティブ。整数の演算はオーバーフローとゼロ除算で止まる (docs/spec/declarations.md の
     /// 標準の演算子の表)。`simplify` の DCE は、これらを使われなくても消さない。
     pub fn may_fail(self) -> bool {
@@ -478,6 +505,13 @@ pub enum IoOp {
 }
 
 impl IoOp {
+    const ALL: [IoOp; 4] = [IoOp::Println, IoOp::Open, IoOp::ReadAll, IoOp::Close];
+
+    /// `name` の逆。
+    pub fn from_name(name: &str) -> Option<IoOp> {
+        IoOp::ALL.into_iter().find(|op| op.name() == name)
+    }
+
     /// 表示での名前。Prelude の名前と同じである。
     pub fn name(self) -> &'static str {
         match self {

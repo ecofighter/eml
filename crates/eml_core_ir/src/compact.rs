@@ -61,12 +61,11 @@ pub(crate) fn compact(function: &mut CoreFn) {
 mod tests {
     use super::*;
     use crate::builder::FnBuilder;
-    use crate::{Atom, Linearity, VarInfo};
+    use crate::{Atom, VarInfo};
 
-    fn unr(name: &str) -> VarInfo {
+    fn unboxed(name: &str) -> VarInfo {
         VarInfo {
             name: name.to_string(),
-            linearity: Linearity::Unr,
             boxed: false,
         }
     }
@@ -74,8 +73,8 @@ mod tests {
     #[test]
     fn compact_drops_unreachable_expressions_and_packs_join_points() {
         let mut builder = FnBuilder::new();
-        let x = builder.var(unr("x"));
-        let y = builder.var(unr("y"));
+        let x = builder.var(unboxed("x"));
+        let y = builder.var(unboxed("y"));
         let dead_join = builder.new_join();
         let dead_body = builder.push(CExpr::Return(Atom::Int(0)));
         let dead_scope = builder.push(CExpr::Return(Atom::Int(9)));

@@ -91,10 +91,10 @@ fn an_arm_reached_twice_stays_a_join_point() {
     // `||` の真の枝は2か所から来るので join point に残り、偽の枝は1か所からなので戻す
     let text = "either : Bool -> Bool -> String -> String\neither a b s = if a || b then s ++ \"!\" else s\n\nmain : Unit -> <IO> Unit\nmain () = ()";
     insta::assert_snapshot!(core_text(text, Pass::Simplify), @r#"
-    fn either(a0, b1, s2) {
+    fn either(a0, b1, s2^) {
       join j0() [s2] {
-        let s4 = const "!"
-        let t5 = prim ++(s2, s4)
+        let s4^ = const "!"
+        let t5^ = prim ++(s2, s4)
         return t5
       }
       switch a0 {
@@ -153,20 +153,20 @@ fn join_points_left_without_jumps_are_removed() {
     // `(a || True) && True` の join point は、消える join point の本体の中にしか jump がない。残すと captures が呼び出しをまたいで生きない
     let text = "noisy : String -> Bool -> <IO> Bool\nnoisy name b =\n  println name\n  b\n\nmain : Unit -> <IO> Unit\nmain () =\n  let other = \"other\"\n  let a = noisy \"a\" True\n  if (a || True) && True then println \"x\" else println other\n  println \"end\"";
     insta::assert_snapshot!(core_text(text, Pass::Simplify), @r#"
-    fn noisy(name0, b1) {
+    fn noisy(name0^, b1) {
       let t2 = perform println(name0)
       return b1
     }
     fn main(p0) {
-      let s2 = const "a"
+      let s2^ = const "a"
       let t3 = call noisy(s2, #1)
       join j0(t9) [] {
-        let s10 = const "end"
+        let s10^ = const "end"
         let t11 = perform println(s10)
         return t11
       }
       join j1() [] {
-        let s6 = const "x"
+        let s6^ = const "x"
         let t7 = perform println(s6)
         jump j0(t7)
       }
@@ -219,7 +219,7 @@ fn a_bool_match_in_a_condition_jumps_straight_to_the_branch() {
     // `match` の各枝が返す `True` と `False` は分かっているタグなので、`Bool` で分岐し直さずに `if` の枝へ直接進む
     let text = "data Option a = | None | Some a\n\npick : Option Int -> Int\npick o = if (match o with | Some _ -> True | None -> False) then 1 else 2\n\nmain : Unit -> <IO> Unit\nmain () = ()";
     insta::assert_snapshot!(core_text(text, Pass::Simplify), @r"
-    fn pick(o0) {
+    fn pick(o0^) {
       switch o0 {
         #0 ->
           return 2
@@ -270,20 +270,20 @@ fn a_mixed_switch_splits_every_arm_that_a_known_value_reaches() {
     // `None` の枝と、値が届く `Some _` の枝を切り出す。`Some` の値を渡す jump は、フィールドを引数にその枝へ直接向かい、`con` は消える
     let text = "data Option a = | None | Some a\n\npick : Bool -> Bool -> String -> String\npick a b s = match (if a then None else if b then Some s else Some \"x\") with\n  | None -> \"none\"\n  | Some _ -> \"some\"\n\nmain : Unit -> <IO> Unit\nmain () = ()";
     insta::assert_snapshot!(core_text(text, Pass::Simplify), @r#"
-    fn pick(a0, b1, s2) {
+    fn pick(a0, b1, s2^) {
       join j0() [] {
-        let s7 = const "none"
+        let s7^ = const "none"
         return s7
       }
-      join j1(x10) [] {
-        let s8 = const "some"
+      join j1(x10^) [] {
+        let s8^ = const "some"
         return s8
       }
       switch a0 {
         #0 ->
           switch b1 {
             #0 ->
-              let s4 = const "x"
+              let s4^ = const "x"
               jump j1(s4)
             #1 ->
               jump j1(s2)
@@ -306,11 +306,11 @@ fn an_arm_that_uses_the_whole_value_gets_it_as_an_argument() {
     // 枝が値全体 `o` も使うので、切り出した join point はフィールドに加えて値も受ける。`o` はタグの定数に置き換えず、`con` は残る
     let text = "data Option a = | None | Some a\n\nh : Option Int -> Int -> Int\nh o y = y\n\npick : Bool -> Int -> Int\npick c x =\n  let o = if c then None else if x > 0 then Some x else Some 0\n  match o with\n    | None -> 0\n    | Some y -> h o y\n\nmain : Unit -> <IO> Unit\nmain () = ()";
     insta::assert_snapshot!(core_text(text, Pass::Simplify), @"
-    fn h(o0, y1) {
+    fn h(o0^, y1) {
       return y1
     }
     fn pick(c0, x1) {
-      join j0(y9, t10) [] {
+      join j0(y9, t10^) [] {
         let y6 = y9
         tailcall h(t10, y6)
       }
@@ -319,10 +319,10 @@ fn an_arm_that_uses_the_whole_value_gets_it_as_an_argument() {
           let t2 = prim >(x1, 0)
           switch t2 {
             #0 ->
-              let d4 = con #1(0)
+              let d4^ = con #1(0)
               jump j0(0, d4)
             #1 ->
-              let d3 = con #1(x1)
+              let d3^ = con #1(x1)
               jump j0(x1, d3)
           }
         #1 ->
@@ -391,9 +391,9 @@ fn a_join_point_with_two_parameters_reached_once_is_inlined() {
     // 引数が2つの枝は jump が1つだけなので、本体を jump の位置に写し、引数を `let` の連鎖で束縛する
     let text = "data Option a = | None | Some a\ndata Pair a b = | Pair a b\n\nadd : Pair (Option Int) (Option Int) -> Int\nadd p = match p with\n  | Pair (Some a) (Some b) -> a + b\n  | Pair x y -> 0\n\nmain : Unit -> <IO> Unit\nmain () = ()";
     insta::assert_snapshot!(core_text(text, Pass::Simplify), @"
-    fn add(p0) {
+    fn add(p0^) {
       switch p0 {
-        #0(x6, y7) ->
+        #0(x6^, y7^) ->
           switch x6 {
             #0 ->
               return 0
@@ -424,9 +424,9 @@ fn a_join_point_with_two_parameters_is_forwarded_by_position() {
     // 2つの leaf から届く枝の本体は2つ目の引数を返すだけなので、各 jump の2つ目の引数を位置で対応させて写す
     let text = "data Option a = | None | Some a\ndata Color = | Red | Green\ndata Pair a b = | Pair a b\n\nsecond : Pair Color (Option Int) -> Option Int\nsecond p = match p with\n  | Pair Red (Some n) -> Some n\n  | Pair t o -> o\n\nmain : Unit -> <IO> Unit\nmain () = ()";
     insta::assert_snapshot!(core_text(text, Pass::Simplify), @"
-    fn second(p0) {
+    fn second(p0^) {
       switch p0 {
-        #0(t5, o6) ->
+        #0(t5, o6^) ->
           switch t5 {
             #0 ->
               switch o6 {
@@ -434,7 +434,7 @@ fn a_join_point_with_two_parameters_is_forwarded_by_position() {
                   return o6
                 #1(n7) ->
                   let n1 = n7
-                  let d2 = con #1(n1)
+                  let d2^ = con #1(n1)
                   return d2
               }
             #1 ->
@@ -554,8 +554,8 @@ fn a_known_and_an_unknown_jump_share_the_split_arm() {
       }
       switch c0 {
         #0 ->
-          let t2 = call lookup(2)
-          let t3 = t2
+          let t2^ = call lookup(2)
+          let t3^ = t2
           switch t3 {
             #0 ->
               jump j0(0)
@@ -580,15 +580,15 @@ fn a_known_and_an_unknown_jump_share_an_arm_that_uses_the_whole_value() {
         let t8 = prim +(t7, 1)
         return t8
       }
-      join j1(x9, t10) [] {
-        let x4 = t10
+      join j1(x9, t10^) [] {
+        let x4^ = t10
         let t5 = call size(x4)
         jump j0(t5)
       }
       switch c0 {
         #0 ->
-          let t2 = call lookup(2)
-          let t3 = t2
+          let t2^ = call lookup(2)
+          let t3^ = t2
           switch t3 {
             #0 ->
               jump j0(0)
@@ -596,7 +596,7 @@ fn a_known_and_an_unknown_jump_share_an_arm_that_uses_the_whole_value() {
               jump j1(x6, t3)
           }
         #1 ->
-          let d1 = con #1(1)
+          let d1^ = con #1(1)
           jump j1(1, d1)
       }
     }
@@ -660,7 +660,7 @@ fn a_call_moved_into_a_branch_becomes_a_tail_call() {
     }
     fn main(p0) {
       let t1 = call f(#1, 1)
-      let t2 = prim show_int(t1)
+      let t2^ = prim show_int(t1)
       let t3 = perform println(t2)
       return t3
     }

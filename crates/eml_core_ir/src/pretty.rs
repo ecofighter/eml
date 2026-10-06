@@ -1,4 +1,4 @@
-//! テストで Core IR を確かめるための表示。
+//! テストで Core IR を確かめるための表示。`text.rs` の `parse` が同じ形を読む (docs/spec/core-ir.md の「テキストの形」)。
 
 use std::fmt::Write;
 
@@ -6,8 +6,35 @@ use crate::{Atom, CExpr, CExprId, Call, CoreFn, Program, Rhs, VarId};
 
 pub fn pretty(program: &Program) -> String {
     let mut out = String::new();
+    for effect in &program.effects {
+        if effect.operations.is_empty() {
+            continue;
+        }
+        let operations: Vec<String> = effect
+            .operations
+            .iter()
+            .map(|op| {
+                if op.resumable {
+                    op.name.clone()
+                } else {
+                    format!("never {}", op.name)
+                }
+            })
+            .collect();
+        writeln!(
+            out,
+            "effect {} {{ {} }}",
+            effect.name,
+            operations.join(", ")
+        )
+        .unwrap();
+    }
     for function in &program.functions {
-        let params: Vec<String> = function.params.iter().map(|&p| var(function, p)).collect();
+        let params: Vec<String> = function
+            .params
+            .iter()
+            .map(|&p| binder(function, p))
+            .collect();
         writeln!(out, "fn {}({}) {{", function.name, params.join(", ")).unwrap();
         expr(program, function, function.body, 1, &mut out);
         out.push_str("}\n");
@@ -17,6 +44,15 @@ pub fn pretty(program: &Program) -> String {
 
 fn var(function: &CoreFn, var: VarId) -> String {
     format!("{}{}", function.vars[var.0 as usize].name, var.0)
+}
+
+/// 束縛の位置の変数。boxed の変数には `^` を付ける。
+fn binder(function: &CoreFn, v: VarId) -> String {
+    if function.vars[v.0 as usize].boxed {
+        format!("{}^", var(function, v))
+    } else {
+        var(function, v)
+    }
 }
 
 fn atom(function: &CoreFn, atom: &Atom) -> String {
@@ -38,7 +74,7 @@ fn expr(program: &Program, function: &CoreFn, id: CExprId, indent: usize, out: &
                 writeln!(
                     out,
                     "{pad}let {} = {}",
-                    var(function, *v),
+                    binder(function, *v),
                     rhs_text(program, function, rhs)
                 )
                 .unwrap();
@@ -51,7 +87,7 @@ fn expr(program: &Program, function: &CoreFn, id: CExprId, indent: usize, out: &
                 body,
                 scope,
             } => {
-                let params: Vec<String> = params.iter().map(|&v| var(function, v)).collect();
+                let params: Vec<String> = params.iter().map(|&v| binder(function, v)).collect();
                 let captures: Vec<String> = captures.iter().map(|&v| var(function, v)).collect();
                 writeln!(
                     out,
@@ -81,7 +117,7 @@ fn expr(program: &Program, function: &CoreFn, id: CExprId, indent: usize, out: &
                         writeln!(out, "{pad}  #{} ->", arm.tag).unwrap();
                     } else {
                         let fields: Vec<String> =
-                            arm.fields.iter().map(|&v| var(function, v)).collect();
+                            arm.fields.iter().map(|&v| binder(function, v)).collect();
                         writeln!(out, "{pad}  #{}({}) ->", arm.tag, fields.join(", ")).unwrap();
                     }
                     expr(program, function, arm.body, indent + 2, out);

@@ -1,6 +1,4 @@
-use eml_core_ir::{
-    Atom, CExpr, CExprId, CoreFn, FnIdx, Linearity, Pass, Rhs, VarId, pretty, verify,
-};
+use eml_core_ir::{Atom, CExpr, CExprId, CoreFn, FnIdx, Pass, Rhs, VarId, pretty, verify};
 use eml_diagnostics::{Diagnostic, ErrorCode, Label, TextRange};
 use eml_test_support::ir::{boxed, program, unboxed, var};
 use eml_test_support::{
@@ -176,13 +174,7 @@ fn ir_builds_a_program_the_verifier_accepts() {
     assert!(program.effects.is_empty());
     assert_eq!(var(3), Atom::Var(VarId(3)));
     let s = &program.functions[0].vars[0];
-    assert_eq!(
-        (s.name.as_str(), s.linearity, s.boxed),
-        ("s", Linearity::Unr, true)
-    );
+    assert_eq!((s.name.as_str(), s.boxed), ("s", true));
     let n = &program.functions[0].vars[1];
-    assert_eq!(
-        (n.name.as_str(), n.linearity, n.boxed),
-        ("n", Linearity::Unr, false)
-    );
+    assert_eq!((n.name.as_str(), n.boxed), ("n", false));
 }
