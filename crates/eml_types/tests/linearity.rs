@@ -532,7 +532,8 @@ fn a_local_is_kept_across_the_arrow_applied_before_a_later_argument() {
     ");
 }
 
-/// パイプの呼び出しの範囲は `f` から始まるので、primary と持ち越す値はどちらも 32:3 を指す。
+/// パイプは Prelude の `|>` の呼び出しで、`multi` の操作を起こす呼び出しは2番目の引数 `k 1 (yes ())` である。そのため primary は
+/// 32:8 のこの呼び出しを指し、持ち越す値は 32:3 の `f` を指す。
 #[test]
 fn a_piped_value_is_kept_across_the_arrow_applied_before_a_later_argument() {
     let rest = "choose_then : Int -> <Choice> (Bool -> File -> <IO> Unit)\nchoose_then n =\n  let b = choose ()\n  fn c -> fn g -> close g\n\nyes : Unit -> Bool\nyes () = True\n\npiped_first : Unit -> <Choice, IO> Unit\npiped_first () =\n  let f = open \"a.txt\"\n  let k = choose_then\n  f |> k 1 (yes ())";

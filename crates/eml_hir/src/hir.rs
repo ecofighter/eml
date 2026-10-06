@@ -104,8 +104,8 @@ pub struct LangItems {
     /// `==` と `!=`。型検査が引数の型から比べ方を決める (docs/spec/declarations.md の標準の演算子の表)。
     pub eq: FunctionId,
     pub ne: FunctionId,
-    /// HIR が短絡して評価するために脱糖する演算子 `&&` と `||`。ユーザーが同じ演算子を定義すれば、それに解決して
-    /// 普通の呼び出しになる。
+    /// HIR が短絡して評価するために脱糖する演算子 `&&` と `||`。
+    /// ユーザーが同じ演算子を定義すれば、それに解決して普通の呼び出しになる。
     pub and: FunctionId,
     pub or: FunctionId,
 }
