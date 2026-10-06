@@ -243,6 +243,48 @@ fn resume_is_an_operand() {
 }
 
 #[test]
+fn resume_and_drop_must_be_parenthesized_as_arguments() {
+    assert_eq!(
+        diagnostics("f = g resume k 1"),
+        ["E0012 1:7 `resume` expression must be parenthesized here"]
+    );
+    assert_eq!(
+        diagnostics("f = g drop k"),
+        ["E0012 1:7 `drop` expression must be parenthesized here"]
+    );
+}
+
+#[test]
+fn resume_as_an_argument_is_read_as_an_operand() {
+    insta::assert_snapshot!(shape("f = g resume k 1 + 2"), @r#"
+    SOURCE_FILE
+      EQUATION
+        NAME
+          LIDENT "f"
+        EQ "="
+        OP_SEQ
+          APP_EXPR
+            PATH_EXPR
+              PATH
+                NAME_REF
+                  LIDENT "g"
+            RESUME_EXPR
+              RESUME_KW "resume"
+              PATH_EXPR
+                PATH
+                  NAME_REF
+                    LIDENT "k"
+              LITERAL
+                INT "1"
+          OP "+"
+          LITERAL
+            INT "2"
+    ---
+    E0012 1:7 `resume` expression must be parenthesized here
+    "#);
+}
+
+#[test]
 fn malformed_clauses_are_errors() {
     assert_eq!(
         diagnostics("h = handle f () with | return -> 1"),

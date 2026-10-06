@@ -24,6 +24,9 @@ const ATOM_START: TokenSet = TokenSet::new(&[
 /// これにより、`match e with` の `e` が `with` の手前で終わる。
 const EXPR_FORMS: TokenSet = TokenSet::new(&[IF_KW, MATCH_KW, HANDLE_KW, FN_KW, LET_KW]);
 
+/// 引数が atom なので右へ伸びず、演算の項には書けるが、引数の位置では括弧が要る (docs/spec/grammar.md の「文法上の補足」)。
+const KEYWORD_APPS: TokenSet = TokenSet::new(&[RESUME_KW, DROP_KW]);
+
 pub(super) fn body(p: &mut Parser) {
     if p.at(LAYOUT_OPEN) {
         let m = p.start();
@@ -170,7 +173,7 @@ fn op_expr_inner(p: &mut Parser, section: bool) -> OpExpr {
 }
 
 fn operand(p: &mut Parser) -> bool {
-    if p.at_ts(ATOM_START) || p.at(RESUME_KW) || p.at(DROP_KW) {
+    if p.at_ts(ATOM_START) || p.at_ts(KEYWORD_APPS) {
         app(p);
     } else if p.at_ts(EXPR_FORMS) {
         misplaced(p);
@@ -201,7 +204,7 @@ fn app(p: &mut Parser) {
         if p.at_ts(ATOM_START) {
             postfix(p);
             args += 1;
-        } else if p.at_ts(EXPR_FORMS) {
+        } else if p.at_ts(EXPR_FORMS) || p.at_ts(KEYWORD_APPS) {
             misplaced(p);
             args += 1;
             break;
@@ -359,17 +362,26 @@ fn paren_expr(p: &mut Parser) -> SyntaxKind {
     close_bracket(p, R_PAREN);
     PAREN_EXPR
 }
-/// E0012 を出した後も、回復のためにそのまま式として読む。
+/// E0012 を出した後も、回復のためにその形を本来の層で読む。`resume` と `drop` を `app` で読むのは、
+/// `g resume k 1 + 2` を `g (resume k 1) + 2` と同じ木にして、`+ 2` を取り込まないため。
+/// `app` は自分では深さを数えないので、`g resume k resume k …` の再帰をここで数える。E0012 より先に数えるのは、
+/// 上限に達した位置で E0013 を出すためである (同じ位置の診断は1件しか残らない)。
 fn misplaced(p: &mut Parser) {
-    p.error(
-        codes::NEEDS_PARENS,
-        format!(
-            "`{}` expression must be parenthesized here",
-            p.current_text()
-        ),
-        "wrap it in parentheses",
-    );
-    expr(p);
+    nested(p, (), |p| {
+        p.error(
+            codes::NEEDS_PARENS,
+            format!(
+                "`{}` expression must be parenthesized here",
+                p.current_text()
+            ),
+            "wrap it in parentheses",
+        );
+        if p.at_ts(KEYWORD_APPS) {
+            app(p);
+        } else {
+            expr(p);
+        }
+    });
 }
 
 fn if_expr(p: &mut Parser) {
