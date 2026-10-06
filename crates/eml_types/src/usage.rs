@@ -479,7 +479,8 @@ impl<'a> Usage<'a, '_> {
         }
     }
 
-    /// `constrain` の間だけ、作る Kind の制約の由来を設定する。誤りのある本体では由来を記録しない。
+    /// `constrain` の間だけ、作る Kind の制約の由来を設定する。誤りのある本体では由来を `Provenance::Suppressed` にし、
+    /// 違反しても報告しない。
     fn with_origin(
         &mut self,
         range: TextRange,

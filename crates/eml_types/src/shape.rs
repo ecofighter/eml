@@ -40,7 +40,7 @@ impl Rigids {
         rigids
     }
 
-    /// rigid な型変数。`Generics` の並びの順である 。
+    /// rigid な型変数。`Generics` の並びの順である。
     pub fn vars(&self) -> &[RigidVar] {
         &self.vars
     }
