@@ -259,6 +259,17 @@ impl Program {
     pub fn file(&self, module: ModuleId) -> FileId {
         self.modules[module].file
     }
+
+    /// `eml run` が実行を始める関数。入口のモジュールだけから探し、Prelude には置かない
+    /// (docs/superpowers/specs/2026-10-06-refactor-r7-design.md の 1.4)。同じ名前の関数が重複したときは、最初の定義である。
+    pub fn main(&self) -> Option<FunctionId> {
+        self.modules[self.entry]
+            .items
+            .functions
+            .iter()
+            .find(|(_, function)| function.name == "main")
+            .map(|(local, _)| ItemId::new(self.entry, local))
+    }
 }
 
 macro_rules! program_index {

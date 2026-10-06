@@ -213,3 +213,48 @@ fn the_prelude_and_the_entry_are_separate_modules() {
     // `f` は引数のない値である
     assert_eq!(program.arity(f), Some(0));
 }
+
+#[test]
+fn main_is_the_entry_function_named_main() {
+    let program = module("f : Int\nf = 1\n\nmain : Unit -> <IO> Unit\nmain () = ()");
+    let main = program.main().expect("main");
+    assert_eq!(main.module, program.entry);
+    assert_eq!(main, function_id(&program, "main"));
+}
+
+#[test]
+fn a_program_without_main_has_no_entry_function() {
+    assert_eq!(module("f : Int\nf = 1").main(), None);
+}
+
+#[test]
+fn an_operation_named_main_is_not_the_entry_function() {
+    assert_eq!(module("effect E where\n  main : Unit -> Unit").main(), None);
+}
+
+#[test]
+fn a_main_in_the_prelude_is_not_the_entry_function() {
+    // `main` は入口のモジュールからだけ探す (docs/superpowers/specs/2026-10-06-refactor-r7-design.md の 1.4)
+    let mut files = eml_diagnostics::SourceFiles::new();
+    let source = format!(
+        "{}\nmain : Unit -> <IO> Unit\nmain () = ()\n",
+        eml_hir::PRELUDE_SOURCE
+    );
+    let prelude = files.add(eml_hir::PRELUDE_PATH, source);
+    let entry = files.add("test.em", "");
+    let trees = [prelude, entry].map(|file| {
+        let (parse, errors) = eml_syntax::parse(file, files.text(file));
+        assert!(errors.is_empty(), "{errors:?}");
+        eml_hir::item_tree(file, &parse.tree()).0
+    });
+    let (def_map, diagnostics) = eml_hir::def_map(&trees);
+    assert!(diagnostics.is_empty(), "{diagnostics:?}");
+    let (program, diagnostics) = eml_hir::lower(&def_map, &trees);
+    assert!(diagnostics.is_empty(), "{diagnostics:?}");
+    assert!(
+        program
+            .functions()
+            .any(|(_, function)| function.name == "main")
+    );
+    assert_eq!(program.main(), None);
+}
