@@ -363,10 +363,12 @@ fn paren_expr(p: &mut Parser) -> SyntaxKind {
     close_bracket(p, R_PAREN);
     PAREN_EXPR
 }
+
 /// E0012 を出した後も、回復のためにその形を本来の層で読む。`resume` と `drop` を `app` で読むのは、
 /// `g resume k 1 + 2` を `g (resume k 1) + 2` と同じ木にして、`+ 2` を取り込まないため。
-/// `app` は自分では深さを数えないので、`g resume k resume k …` の再帰をここで数える。E0012 より先に数えるのは、
-/// 上限に達した位置で E0013 を出すためである (同じ位置の診断は1件しか残らない)。
+/// 深さは E0012 より先に数える。上限に達した位置で E0013 を出すためである (同じ位置の診断は1件しか残らない)。
+/// `app` は自分では深さを数えないので、`g resume k resume k …` の再帰もここで数える。`expr` の形は `expr` でも
+/// 数えるので1段多くなるが、上限に少し早く届くだけである。
 fn misplaced(p: &mut Parser) {
     nested(p, (), |p| {
         p.error(

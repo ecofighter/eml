@@ -252,3 +252,11 @@ fn sections_with_operator_sequences() {
           R_PAREN ")"
     "#);
 }
+
+#[test]
+fn lambda_in_a_right_section_must_be_parenthesized() {
+    assert_eq!(
+        diagnostics("f = (+ fn x -> x)"),
+        ["E0012 1:8 `fn` expression must be parenthesized here"]
+    );
+}
