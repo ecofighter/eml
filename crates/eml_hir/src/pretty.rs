@@ -3,14 +3,14 @@
 use std::fmt::Write;
 
 use crate::hir::*;
+use crate::program::Program;
 
-pub fn pretty(module: &Module) -> String {
+/// 入口のモジュールだけを表示する。Prelude はどのプログラムにもあるので、テストの表示に出さない。
+pub fn pretty(program: &Program) -> String {
+    let module = &program.modules[program.entry];
+    let items = &module.items;
     let mut out = String::new();
-    for (id, def) in module.types.iter() {
-        // Prelude の `Bool` は、どのモジュールにもあるので表示しない
-        if id == module.lang.bool {
-            continue;
-        }
+    for (_, def) in items.types.iter() {
         let TypeDefKind::Data { constructors } = &def.kind else {
             continue;
         };
@@ -26,23 +26,14 @@ pub fn pretty(module: &Module) -> String {
             writeln!(out, "data {} {}", def.name, params.join(" ")).unwrap();
         }
         let printer = Printer {
-            module,
+            program,
             generics: &def.generics,
         };
         for &ctor in constructors {
-            writeln!(
-                out,
-                "  | {}",
-                printer.constructor(def, &module.constructors[ctor])
-            )
-            .unwrap();
+            writeln!(out, "  | {}", printer.constructor(def, &program[ctor])).unwrap();
         }
     }
-    for (id, effect) in module.effects.iter() {
-        // 組み込みの `IO` の操作は組み込みの関数なので、表示しない
-        if id == module.lang.io {
-            continue;
-        }
+    for (_, effect) in items.effects.iter() {
         let params: Vec<&str> = effect
             .generics
             .type_vars
@@ -55,9 +46,9 @@ pub fn pretty(module: &Module) -> String {
             writeln!(out, "effect {} {}", effect.name, params.join(" ")).unwrap();
         }
         for &operation in &effect.operations {
-            let operation = &module.operations[operation];
+            let operation = &program[operation];
             let printer = Printer {
-                module,
+                program,
                 generics: &operation.signature.generics,
             };
             let multiplicity = match operation.multiplicity {
@@ -75,24 +66,20 @@ pub fn pretty(module: &Module) -> String {
             .unwrap();
         }
     }
-    for (_, function) in module.functions.iter() {
-        // intrinsic は Prelude の関数なので表示しない。Prelude の `Bool` を表示しないのと同じ
-        if function.intrinsic {
-            continue;
-        }
+    for (local, function) in items.functions.iter() {
         // 本体の注釈もシグネチャの型変数を指す。シグネチャがなければ型変数は現れない
         let no_generics = Generics::default();
         let generics = function
             .signature
             .as_ref()
             .map_or(&no_generics, |signature| &signature.generics);
-        Printer { module, generics }.function(function, &mut out);
+        Printer { program, generics }.function(function, module.bodies.get(local), &mut out);
     }
     out
 }
 
 struct Printer<'a> {
-    module: &'a Module,
+    program: &'a Program,
     generics: &'a Generics,
 }
 
@@ -142,7 +129,7 @@ impl Printer<'_> {
         }
     }
 
-    fn function(&self, function: &Function, out: &mut String) {
+    fn function(&self, function: &Function, body: Option<&Body>, out: &mut String) {
         match &function.signature {
             Some(signature) => writeln!(
                 out,
@@ -153,7 +140,7 @@ impl Printer<'_> {
             None => writeln!(out, "{} : <no signature>", function.name),
         }
         .unwrap();
-        let Some(body) = &function.body else {
+        let Some(body) = body else {
             writeln!(out, "{} = <no equation>", function.name).unwrap();
             return;
         };
@@ -259,7 +246,7 @@ impl Printer<'_> {
                 }
                 s.push_str(" with");
                 for clause in clauses {
-                    write!(s, " | {}", self.module.operations[clause.op].name).unwrap();
+                    write!(s, " | {}", self.program[clause.op].name).unwrap();
                     for &pat in &clause.closure.params {
                         write!(s, " {}", self.pat(body, pat)).unwrap();
                     }
@@ -319,7 +306,7 @@ impl Printer<'_> {
             Res::Local(local) => local_name(body, local),
             // intrinsic は Prelude の関数で、`@` を付けずに名前だけを出す。テストの表示を Prelude に左右させないため
             Res::Function(function) => {
-                let function = &self.module.functions[function];
+                let function = &self.program[function];
                 if function.intrinsic {
                     function.name.clone()
                 } else {
@@ -327,11 +314,11 @@ impl Printer<'_> {
                 }
             }
             Res::Operation(operation) => {
-                let operation = &self.module.operations[operation];
-                let effect = &self.module.effects[operation.effect].name;
+                let operation = &self.program[operation];
+                let effect = &self.program[operation.effect].name;
                 format!("@{effect}.{}", operation.name)
             }
-            Res::Constructor(ctor) => self.module.constructors[ctor].name.clone(),
+            Res::Constructor(ctor) => self.program[ctor].name.clone(),
         }
     }
 
@@ -342,7 +329,7 @@ impl Printer<'_> {
             PatKind::Wildcard => "_".to_string(),
             PatKind::Unit => "()".to_string(),
             PatKind::Con { ctor, args } => {
-                let name = &self.module.constructors[*ctor].name;
+                let name = &self.program[*ctor].name;
                 let args: Vec<String> = args.iter().map(|&arg| self.pat_atom(body, arg)).collect();
                 if name.starts_with(':') && args.len() == 2 {
                     format!("{} {name} {}", args[0], args[1])
@@ -372,7 +359,7 @@ impl Printer<'_> {
         match &types[id].kind {
             TypeRefKind::Error => "<error>".to_string(),
             TypeRefKind::Con(id, args) => {
-                let mut text = self.module.types[*id].name.clone();
+                let mut text = self.program[*id].name.clone();
                 for &arg in args {
                     write!(text, " {}", self.ty_atom(types, arg)).unwrap();
                 }
@@ -392,7 +379,7 @@ impl Printer<'_> {
                     effects
                         .iter()
                         .map(|effect| {
-                            let mut text = self.module.effects[effect.effect].name.clone();
+                            let mut text = self.program[effect.effect].name.clone();
                             for &arg in &effect.args {
                                 write!(text, " {}", self.ty_atom(types, arg)).unwrap();
                             }

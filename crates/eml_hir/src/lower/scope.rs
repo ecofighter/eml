@@ -7,9 +7,9 @@ use la_arena::Arena;
 
 use eml_diagnostics::TextRange;
 
-use crate::hir::{
-    Constructor, ConstructorId, EffectDef, EffectId, FunctionId, Generics, LangItems, OperationId,
-    TypeDef, TypeDefId,
+use crate::hir::{EffectDef, Generics, LangItems, TypeDef};
+use crate::program::{
+    ConstructorId, EffectId, FunctionId, ItemId, Items, Module, ModuleId, OperationId, TypeDefId,
 };
 
 /// 演算子の結合の向き (docs/spec/declarations.md の「fixity」)。
@@ -206,21 +206,24 @@ pub(super) struct BuiltinItems {
 /// 組み込みの型とエフェクトを item として登録する (docs/spec/declarations.md と docs/spec/effects.md)。`File` は組み込みの
 /// 線形型である (docs/spec/effects.md)。
 pub(super) fn builtin_items(
-    types: &mut Arena<TypeDef>,
-    effects: &mut Arena<EffectDef>,
+    module: ModuleId,
+    items: &mut Items,
     scope: &mut ItemScope,
 ) -> BuiltinItems {
     let mut ty = |name: &str| {
-        let id = types.alloc(TypeDef::builtin(name));
+        let id = ItemId::new(module, items.types.alloc(TypeDef::builtin(name)));
         scope.define_type(name, id, 0);
         id
     };
     let (int, string, unit, file) = (ty("Int"), ty("String"), ty("Unit"), ty("File"));
-    let io = effects.alloc(EffectDef {
-        name: "IO".to_string(),
-        generics: Generics::default(),
-        operations: Vec::new(),
-    });
+    let io = ItemId::new(
+        module,
+        items.effects.alloc(EffectDef {
+            name: "IO".to_string(),
+            generics: Generics::default(),
+            operations: Vec::new(),
+        }),
+    );
     scope.define_effect("IO", io, 0);
     BuiltinItems {
         int,
@@ -235,7 +238,7 @@ pub(super) fn builtin_items(
 pub(super) fn lang_items(
     builtin: BuiltinItems,
     scope: &ItemScope,
-    constructors: &Arena<Constructor>,
+    modules: &Arena<Module>,
     prelude: &HashMap<String, FunctionId>,
 ) -> LangItems {
     let Some(TypeItem::Type(bool)) = scope.type_item("Bool") else {
@@ -247,10 +250,8 @@ pub(super) fn lang_items(
     };
     let (false_ctor, true_ctor) = (constructor("False"), constructor("True"));
     // Core IR は `Bool` を、タグ 0 の `False` と 1 の `True` で表す (docs/spec/core-ir.md)
-    assert_eq!(
-        (constructors[false_ctor].tag, constructors[true_ctor].tag),
-        (0, 1)
-    );
+    let tag = |id: ConstructorId| modules[id.module].items.constructors[id.local].tag;
+    assert_eq!((tag(false_ctor), tag(true_ctor)), (0, 1));
     let function = |name: &str| match prelude.get(name) {
         Some(&id) => id,
         None => unreachable!("the Prelude declares `{name}`"),
@@ -283,16 +284,19 @@ mod tests {
     #[test]
     fn user_functions_shadow_prelude_functions() {
         let mut functions: Arena<Function> = Arena::new();
+        let module = ModuleId::from_raw(la_arena::RawIdx::from(0));
         let mut function = |name: &str| {
-            functions.alloc(Function {
-                name: name.to_string(),
-                name_range: Default::default(),
-                signature_name_range: None,
-                equation_ranges: Vec::new(),
-                signature: None,
-                body: None,
-                intrinsic: false,
-            })
+            ItemId::new(
+                module,
+                functions.alloc(Function {
+                    name: name.to_string(),
+                    name_range: Default::default(),
+                    signature_name_range: None,
+                    equation_ranges: Vec::new(),
+                    signature: None,
+                    intrinsic: false,
+                }),
+            )
         };
         let (prelude, user) = (function("not"), function("not"));
         let mut scope = ItemScope::new();
@@ -306,10 +310,10 @@ mod tests {
 
     #[test]
     fn types_and_effects_share_the_type_namespace() {
-        let mut types = Arena::new();
-        let mut effects = Arena::new();
+        let mut items = Items::default();
         let mut scope = ItemScope::new();
-        let lang = builtin_items(&mut types, &mut effects, &mut scope);
+        let module = ModuleId::from_raw(la_arena::RawIdx::from(0));
+        let lang = builtin_items(module, &mut items, &mut scope);
         assert_eq!(scope.type_item("Int"), Some(TypeItem::Type(lang.int)));
         assert_eq!(scope.type_item("IO"), Some(TypeItem::Effect(lang.io)));
         assert_eq!(scope.type_item("Console"), None);

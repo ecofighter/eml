@@ -1,35 +1,16 @@
 use std::collections::{BTreeSet, HashSet};
 
-use eml_diagnostics::{FileId, TextRange, TextSize};
+use eml_diagnostics::{TextRange, TextSize};
 use la_arena::{Arena, Idx};
 
-pub type FunctionId = Idx<Function>;
+pub use crate::program::{
+    ConstructorId, EffectId, FunctionId, ItemId, ModuleId, OperationId, TypeDefId,
+};
+
 pub type ExprId = Idx<Expr>;
 pub type PatId = Idx<Pat>;
 pub type LocalId = Idx<Local>;
 pub type TypeRefId = Idx<TypeRef>;
-pub type ConstructorId = Idx<Constructor>;
-
-/// HIR のノードは `SyntaxNodePtr` ではなく範囲を持つ。演算子の列を組み直した部分式のように、対応する構文ノードの
-/// ない式があるため。
-#[derive(Debug)]
-pub struct Module {
-    pub file: FileId,
-    pub functions: Arena<Function>,
-    /// 型の item。組み込みの `Int`、`String`、`Unit`、Prelude の `Bool`、ユーザーの `data` の宣言。
-    pub types: Arena<TypeDef>,
-    /// `data` の宣言のコンストラクタ。値の名前空間に置くトップレベルの値である (docs/spec/modules.md の「名前空間」)。
-    pub constructors: Arena<Constructor>,
-    /// エフェクトの item。組み込みの `IO` と、`effect` の宣言。
-    pub effects: Arena<EffectDef>,
-    /// エフェクトの操作。値の名前空間に置くトップレベルの値である (docs/spec/modules.md の「名前空間」)。
-    pub operations: Arena<Operation>,
-    pub lang: LangItems,
-}
-
-pub type TypeDefId = Idx<TypeDef>;
-pub type EffectId = Idx<EffectDef>;
-pub type OperationId = Idx<Operation>;
 
 #[derive(Debug)]
 pub struct TypeDef {
@@ -146,21 +127,8 @@ pub struct Function {
     pub equation_ranges: Vec<TextRange>,
     /// なければ `None` で、E1004 は報告済み。
     pub signature: Option<Signature>,
-    /// 等式がなければ `None` で、E1005 は報告済み。
-    pub body: Option<Body>,
     /// Prelude の等式のないシグネチャ。実装は Core IR が名前から引く。
     pub intrinsic: bool,
-}
-
-impl Function {
-    /// 引数がそろうまで本体が動かない引数の数。intrinsic はシグネチャの一番外側の `->` の数、ほかは等式の引数の数
-    /// である。本体のない関数 (E1005) は `None`。
-    pub fn arity(&self) -> Option<usize> {
-        if self.intrinsic {
-            return self.signature.as_ref().map(Signature::arity);
-        }
-        self.body.as_ref().map(|body| body.params.len())
-    }
 }
 
 pub type TypeVarId = Idx<TypeVarDecl>;

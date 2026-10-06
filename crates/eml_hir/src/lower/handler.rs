@@ -101,7 +101,7 @@ impl BodyLowering<'_> {
             self.unknown_operation(&name);
             return;
         };
-        let operation = &self.operations[op];
+        let operation = self.operation(op);
         let effect = operation.effect;
         let never = operation.multiplicity == OpMultiplicity::Never;
         let arity = operation.arity;
@@ -124,8 +124,8 @@ impl BodyLowering<'_> {
         match out.effect {
             None => out.effect = Some((effect, name_range)),
             Some((handled, first)) if handled != effect => {
-                let handled = &self.effects[handled].name;
-                let other = &self.effects[effect].name;
+                let handled = &self.effect(handled).name;
+                let other = &self.effect(effect).name;
                 self.diagnostics.push(
                     Diagnostic::error(
                         codes::MIXED_EFFECTS_IN_HANDLER,
@@ -272,14 +272,14 @@ impl BodyLowering<'_> {
     /// 扱うエフェクトの操作のうち、節のないものを報告する。操作の節が1つもない handler も報告する。解決できなかった
     /// 節があってエフェクトが決まらないときは、報告済みなので何も言わない。
     fn missing_clauses(&mut self, keyword: TextRange, clauses: &Clauses) {
-        let (effects, operations) = (self.effects, self.operations);
         match clauses.effect {
             Some((effect, _)) => {
-                let missing: Vec<&Operation> = effects[effect]
+                let effect = self.effect(effect);
+                let missing: Vec<&Operation> = effect
                     .operations
                     .iter()
                     .filter(|&&op| !clauses.seen.iter().any(|(seen, _)| *seen == op))
-                    .map(|&op| &operations[op])
+                    .map(|&op| self.operation(op))
                     .collect();
                 if missing.is_empty() {
                     return;
@@ -297,7 +297,7 @@ impl BodyLowering<'_> {
                     format!(
                         "this handler has no clause for {} of `{}`",
                         names.join(", "),
-                        effects[effect].name
+                        effect.name
                     ),
                     Label::new(self.file, keyword, "this handler"),
                 )

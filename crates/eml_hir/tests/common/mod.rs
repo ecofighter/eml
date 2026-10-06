@@ -6,7 +6,7 @@ use eml_test_support::{lower, short, short_text, with_diagnostics};
 pub fn lower_text(text: &str) -> String {
     let lowered = lower(text);
     with_diagnostics(
-        eml_hir::pretty(&lowered.module),
+        eml_hir::pretty(&lowered.program),
         &short_text(&lowered.files, &lowered.diagnostics),
     )
 }

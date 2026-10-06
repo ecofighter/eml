@@ -10,19 +10,18 @@ use la_arena::Arena;
 use super::data::{declare_data, lower_constructors};
 use super::scope::ItemScope;
 use super::types::{TypeLowering, Vars};
-use crate::hir::{Constructor, Function, FunctionId, Generics, Signature, TypeDef};
+use crate::hir::{Function, Generics, Signature};
+use crate::program::{FunctionId, ItemId, Items, ModuleId};
 
 /// Prelude の等式のないシグネチャを intrinsic の関数にする。`pub` の関数だけを名前の表に入れ、すべての関数を名前で
 /// 返す。lang item は `pub` でない関数 (`negate`) も引くため。
 pub(super) fn lower_prelude(
+    module: ModuleId,
+    file: FileId,
+    tree: &ast::SourceFile,
+    items: &mut Items,
     scope: &mut ItemScope,
-    types: &mut Arena<TypeDef>,
-    constructors: &mut Arena<Constructor>,
-    functions: &mut Arena<Function>,
 ) -> HashMap<String, FunctionId> {
-    let (parse, syntax_errors) = eml_syntax::parse(FileId::PRELUDE, crate::PRELUDE_SOURCE);
-    debug_assert!(syntax_errors.is_empty(), "{syntax_errors:?}");
-    let tree = parse.tree();
     let mut diagnostics = Vec::new();
     // シグネチャが `Bool` を引けるように、`data` を先に変換する。重複を見る名前の表は Prelude だけのもので、ユーザーの
     // 定義との重複は E1003 にしない。ユーザーの定義は後で同じ名前を上書きし、Prelude の名前を隠す
@@ -34,19 +33,21 @@ pub(super) fn lower_prelude(
         })
         .collect();
     let declared = declare_data(
-        FileId::PRELUDE,
+        file,
+        module,
         &data,
         &mut HashMap::new(),
         scope,
-        types,
+        &mut items.types,
         &mut diagnostics,
     );
     lower_constructors(
-        FileId::PRELUDE,
+        file,
+        module,
         &declared,
         scope,
-        types,
-        constructors,
+        &mut items.types,
+        &mut items.constructors,
         &mut diagnostics,
     );
     for item in tree.items() {
@@ -72,7 +73,7 @@ pub(super) fn lower_prelude(
         let mut signature_types = Arena::new();
         let mut generics = Generics::default();
         let ty = TypeLowering {
-            file: FileId::PRELUDE,
+            file,
             types: &mut signature_types,
             generics: &mut generics,
             items: scope,
@@ -80,20 +81,22 @@ pub(super) fn lower_prelude(
             diagnostics: &mut diagnostics,
         }
         .lower(signature.ty(), range);
-        let id = functions.alloc(Function {
-            name: name.text().to_string(),
-            name_range: name.text_range(),
-            signature_name_range: Some(name.text_range()),
-            equation_ranges: Vec::new(),
-            signature: Some(Signature {
-                ty,
-                range,
-                types: signature_types,
-                generics,
+        let id = ItemId::new(
+            module,
+            items.functions.alloc(Function {
+                name: name.text().to_string(),
+                name_range: name.text_range(),
+                signature_name_range: Some(name.text_range()),
+                equation_ranges: Vec::new(),
+                signature: Some(Signature {
+                    ty,
+                    range,
+                    types: signature_types,
+                    generics,
+                }),
+                intrinsic: true,
             }),
-            body: None,
-            intrinsic: true,
-        });
+        );
         if public {
             scope.define_prelude_function(name.text(), id);
         }
@@ -122,11 +125,14 @@ mod tests {
             (&["*", "/", "%"], 7, Assoc::Left),
             (&[">>", "<<"], 9, Assoc::Right),
         ];
+        let mut files = eml_diagnostics::SourceFiles::new();
+        let file = files.add(crate::PRELUDE_PATH, crate::PRELUDE_SOURCE);
+        let tree = crate::parse_prelude(file);
+        let mut modules: Arena<crate::Module> = Arena::new();
+        let module = modules.alloc(crate::Module::new(file, "Prelude"));
         let mut scope = ItemScope::new();
-        let mut types = Arena::new();
-        let mut effects = Arena::new();
-        crate::lower::scope::builtin_items(&mut types, &mut effects, &mut scope);
-        lower_prelude(&mut scope, &mut types, &mut Arena::new(), &mut Arena::new());
+        crate::lower::scope::builtin_items(module, &mut modules[module].items, &mut scope);
+        lower_prelude(module, file, &tree, &mut modules[module].items, &mut scope);
         for (ops, precedence, assoc) in table {
             for op in *ops {
                 assert_eq!(

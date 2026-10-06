@@ -4,14 +4,27 @@ mod eval;
 mod hir;
 mod lower;
 mod pretty;
+mod program;
 
 pub use eval::{EvalStep, call_steps, is_value, known_arity};
 pub use hir::*;
 pub use lower::lower;
 pub use pretty::pretty;
+pub use program::*;
 
 /// Prelude のソース。HIR の変換が読み、Core IR の intrinsic の表のテストも読む。
 pub const PRELUDE_SOURCE: &str = include_str!("prelude.em");
+
+/// 診断の表示に使う Prelude のパス。
+pub const PRELUDE_PATH: &str = "Prelude.em";
+
+/// Prelude を構文解析する。Prelude は処理系と一緒に配るソースなので、構文の誤りはない。呼ぶ側 (session、テスト) が
+/// 同じ処理を重ねないよう、ここにまとめる。`file` は `PRELUDE_SOURCE` を登録した `SourceFiles` の番号である。
+pub fn parse_prelude(file: eml_diagnostics::FileId) -> eml_syntax::ast::SourceFile {
+    let (parse, errors) = eml_syntax::parse(file, PRELUDE_SOURCE);
+    debug_assert!(errors.is_empty(), "{errors:?}");
+    parse.tree()
+}
 
 pub mod codes {
     use eml_diagnostics::ErrorCode;

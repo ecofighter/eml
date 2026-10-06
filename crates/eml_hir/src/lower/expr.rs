@@ -9,15 +9,15 @@ use super::types::{TypeLowering, Vars};
 use super::{PathName, path_name};
 use crate::codes;
 use crate::hir::*;
+use crate::program::Module;
 
 pub(super) struct BodyLowering<'a> {
     pub(super) file: FileId,
     pub(super) items: &'a ItemScope,
-    /// handler の節の検査で、操作の引数の個数とエフェクトの操作の並びを引く。
-    pub(super) effects: &'a Arena<EffectDef>,
-    pub(super) operations: &'a Arena<Operation>,
-    /// コンストラクタのパターンの引数の個数を確かめる (E1016)。
-    constructors: &'a Arena<Constructor>,
+    /// item を引くモジュール。本体は Prelude のコンストラクタ (`True` など) や操作も引くので、モジュールをまたいで読む。
+    /// handler の節の検査が操作の引数の個数とエフェクトの操作の並びを、コンストラクタのパターンが引数の個数 (E1016)
+    /// を引く。
+    modules: &'a Arena<Module>,
     /// `&&` と `||` の脱糖が引く `Bool` のコンストラクタ。
     pub(super) lang: LangItems,
     /// 本体の型の注釈。
@@ -35,15 +35,25 @@ pub(super) struct BodyLowering<'a> {
 }
 
 impl<'a> BodyLowering<'a> {
+    pub(super) fn operation(&self, id: OperationId) -> &'a Operation {
+        &self.modules[id.module].items.operations[id.local]
+    }
+
+    pub(super) fn effect(&self, id: EffectId) -> &'a EffectDef {
+        &self.modules[id.module].items.effects[id.local]
+    }
+
+    pub(super) fn constructor(&self, id: ConstructorId) -> &'a Constructor {
+        &self.modules[id.module].items.constructors[id.local]
+    }
+
     // 呼び出し元は1か所だけである。引数は、本体の変換が読む item の表と、シグネチャの型引数と、診断の出力先で、
     // まとめる型を作っても使う場所が増えない
     #[allow(clippy::too_many_arguments)]
     pub(super) fn new(
         file: FileId,
         items: &'a ItemScope,
-        effects: &'a Arena<EffectDef>,
-        operations: &'a Arena<Operation>,
-        constructors: &'a Arena<Constructor>,
+        modules: &'a Arena<Module>,
         lang: LangItems,
         generics: &'a mut Generics,
         diagnostics: &'a mut Vec<Diagnostic>,
@@ -51,9 +61,7 @@ impl<'a> BodyLowering<'a> {
         BodyLowering {
             file,
             items,
-            effects,
-            operations,
-            constructors,
+            modules,
             lang,
             types: Arena::new(),
             generics,
@@ -715,7 +723,7 @@ impl<'a> BodyLowering<'a> {
             ));
             return PatKind::Missing;
         };
-        let expected = self.constructors[ctor].fields.len();
+        let expected = self.constructor(ctor).fields.len();
         if args.len() != expected {
             let given = match args.len() {
                 1 => "1 was given".to_string(),

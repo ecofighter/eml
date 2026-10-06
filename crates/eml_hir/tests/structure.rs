@@ -1,19 +1,24 @@
 //! HIR のデータ構造と走査関数のテスト。
 
-use eml_hir::{Body, ExprId, ExprKind, Function, LineStart, LocalId, Module, PatKind, TypeRefKind};
+use eml_hir::{
+    Body, ExprId, ExprKind, Function, FunctionId, LineStart, LocalId, PatKind, Program, TypeRefKind,
+};
 
 /// 診断がないことを確かめて HIR を返す。
-fn module(text: &str) -> Module {
-    eml_test_support::lower_clean(text).module
+fn module(text: &str) -> Program {
+    eml_test_support::lower_clean(text).program
 }
 
-fn function<'m>(module: &'m Module, name: &str) -> &'m Function {
-    module
-        .functions
-        .iter()
-        .map(|(_, function)| function)
-        .find(|function| function.name == name)
+fn function_id(program: &Program, name: &str) -> FunctionId {
+    program
+        .functions()
+        .find(|(_, function)| function.name == name)
+        .map(|(id, _)| id)
         .expect("the function")
+}
+
+fn function<'m>(program: &'m Program, name: &str) -> &'m Function {
+    &program[function_id(program, name)]
 }
 
 #[test]
@@ -23,7 +28,7 @@ fn signature_and_body_annotations_live_in_separate_arenas() {
     let f = function(&module, "f");
     let signature = f.signature.as_ref().expect("a signature");
     assert_eq!(signature.generics.type_vars.len(), 1);
-    let body = f.body.as_ref().expect("a body");
+    let body = body(&module, "f");
     assert_eq!(body.types.len(), 1);
     let (_, annotation) = body.types.iter().next().expect("an annotation");
     let TypeRefKind::Var(var) = annotation.kind else {
@@ -32,8 +37,8 @@ fn signature_and_body_annotations_live_in_separate_arenas() {
     assert_eq!(signature.generics.type_vars[var].name, "a");
 }
 
-fn body<'m>(module: &'m Module, name: &str) -> &'m Body {
-    function(module, name).body.as_ref().expect("a body")
+fn body<'m>(program: &'m Program, name: &str) -> &'m Body {
+    program.body(function_id(program, name)).expect("a body")
 }
 
 fn children(body: &Body, id: ExprId) -> Vec<ExprId> {
@@ -124,11 +129,11 @@ fn prelude_signatures_without_equations_are_intrinsic_functions() {
         let function = function(&module, name);
         assert!(function.intrinsic, "{name}");
         assert!(function.signature.is_some(), "{name}");
-        assert!(function.body.is_none(), "{name}");
+        assert!(module.body(function_id(&module, name)).is_none(), "{name}");
     }
     assert!(!function(&module, "f").intrinsic);
-    assert_eq!(function(&module, "+").arity(), Some(2));
-    assert_eq!(function(&module, ">>").arity(), Some(3));
+    assert_eq!(module.arity(function_id(&module, "+")), Some(2));
+    assert_eq!(module.arity(function_id(&module, ">>")), Some(3));
 }
 
 #[test]
@@ -146,7 +151,7 @@ fn internal_builtins_cannot_be_named() {
 fn a_block_records_where_its_last_line_starts() {
     // fix が最後の文の前に行を入れるので、その位置と字下げを持つ (docs/spec/diagnostics.md の「線形性の診断」)
     let module = module("f : Int -> Int\nf x =\n  let y = x\n  y");
-    let body = function(&module, "f").body.as_ref().expect("a body");
+    let body = body(&module, "f");
     let ExprKind::Block { last_line, .. } = &body.exprs[body.root].kind else {
         panic!("the body is a block");
     };
@@ -157,4 +162,28 @@ fn a_block_records_where_its_last_line_starts() {
             indent: 2,
         })
     );
+}
+
+#[test]
+fn the_prelude_and_the_entry_are_separate_modules() {
+    let lowered = eml_test_support::lower_clean("f : Int\nf = 1");
+    let program = &lowered.program;
+    let prelude = &program.modules[program.prelude];
+    let entry = &program.modules[program.entry];
+    assert_eq!(prelude.name, "Prelude");
+    assert_eq!(entry.name, "Main");
+    assert_eq!(lowered.files.path(prelude.file), eml_hir::PRELUDE_PATH);
+    assert_eq!(entry.file, lowered.file);
+    // Prelude の item は Prelude のモジュールに、ユーザーの関数は入口のモジュールにある
+    let (plus, _) = program.functions().find(|(_, f)| f.name == "+").unwrap();
+    let (f, _) = program.functions().find(|(_, f)| f.name == "f").unwrap();
+    assert_eq!(plus.module, program.prelude);
+    assert_eq!(f.module, program.entry);
+    assert_eq!(program.lang.bool.module, program.prelude);
+    // 本体は入口のモジュールの表にある
+    assert!(program.body(f).is_some());
+    assert!(program.body(plus).is_none());
+    assert_eq!(program.arity(plus), Some(2));
+    // `f` は引数のない値である
+    assert_eq!(program.arity(f), Some(0));
 }

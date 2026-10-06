@@ -3,7 +3,7 @@
 mod common;
 
 use common::{diagnostics, lower_text};
-use eml_hir::{Body, ExprKind, LocalId, Module, Stmt};
+use eml_hir::{Body, ExprKind, LocalId, Program, Stmt};
 
 #[test]
 fn tuples_in_expressions_types_and_patterns() {
@@ -61,20 +61,18 @@ fn a_name_is_bound_once_per_tuple_pattern() {
     );
 }
 
-fn body<'m>(module: &'m Module, name: &str) -> &'m Body {
-    module
-        .functions
-        .iter()
-        .map(|(_, function)| function)
-        .find(|function| function.name == name)
-        .and_then(|function| function.body.as_ref())
+fn body<'m>(program: &'m Program, name: &str) -> &'m Body {
+    program
+        .functions()
+        .find(|(_, function)| function.name == name)
+        .and_then(|(id, _)| program.body(id))
         .expect("the body")
 }
 
 #[test]
 fn walkers_see_through_tuples() {
     let text = "f : Int -> Int -> (Int, Int)\nf a b =\n  let ((x, _), y) = ((a, a), b)\n  (fn u -> (x, u)) y";
-    let module = eml_test_support::lower_clean(text).module;
+    let module = eml_test_support::lower_clean(text).program;
     let body = body(&module, "f");
     let names = |locals: Vec<LocalId>| -> Vec<String> {
         locals

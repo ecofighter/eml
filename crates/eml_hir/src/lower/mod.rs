@@ -12,10 +12,11 @@ use std::collections::HashMap;
 
 use eml_diagnostics::{Diagnostic, FileId, Label, TextRange};
 use eml_syntax::{SyntaxKind, SyntaxToken, ast};
-use la_arena::Arena;
+use la_arena::{Arena, ArenaMap};
 
 use crate::codes;
 use crate::hir::*;
+use crate::program::{ItemId, Module, Program};
 use expr::BodyLowering;
 use scope::{Assoc, Fixity, ItemScope, ValueItem};
 use types::{TypeLowering, Vars};
@@ -30,47 +31,61 @@ struct Definition {
     equations: Vec<(usize, ast::Equation, TextRange)>,
 }
 
-pub fn lower(file: FileId, source: &ast::SourceFile) -> (Module, Vec<Diagnostic>) {
+/// Prelude と入口のファイルを、別々のモジュールに変換する。名前解決は R7b-3 で `ItemTree` と `DefMap` に分けるまで、
+/// 1つの名前の表 (`ItemScope`) で行う。
+pub fn lower(
+    prelude: (FileId, &ast::SourceFile),
+    main: (FileId, &ast::SourceFile),
+) -> (Program, Vec<Diagnostic>) {
+    let (file, source) = main;
     let mut diagnostics = Vec::new();
+    let mut modules = Arena::new();
+    let prelude_id = modules.alloc(Module::new(prelude.0, "Prelude"));
+    let main_id = modules.alloc(Module::new(file, "Main"));
+    let mut scope = ItemScope::new();
+    let builtin = scope::builtin_items(prelude_id, &mut modules[prelude_id].items, &mut scope);
+    let prelude_functions = prelude::lower_prelude(
+        prelude_id,
+        prelude.0,
+        prelude.1,
+        &mut modules[prelude_id].items,
+        &mut scope,
+    );
+    // ユーザーの定義が `Bool`、`True`、`False` を隠す前に引く
+    let lang = scope::lang_items(builtin, &scope, &modules, &prelude_functions);
     let (definitions, data_items, effect_items, fixity_items) =
         collect(file, source, &mut diagnostics);
-    let mut functions = Arena::new();
-    let mut scope = ItemScope::new();
-    let mut types = Arena::new();
-    let mut constructors = Arena::new();
-    let mut effects = Arena::new();
-    let mut operations = Arena::new();
-    let builtin = scope::builtin_items(&mut types, &mut effects, &mut scope);
-    let prelude = prelude::lower_prelude(&mut scope, &mut types, &mut constructors, &mut functions);
-    // ユーザーの定義が `Bool`、`True`、`False` を隠す前に引く
-    let lang = scope::lang_items(builtin, &scope, &constructors, &prelude);
+    let items = &mut modules[main_id].items;
     // 型の名前空間のユーザーの名前。`data` とエフェクトの間の重複も見つける
     let mut type_names = HashMap::new();
     let data = data::declare_data(
         file,
+        main_id,
         &data_items,
         &mut type_names,
         &mut scope,
-        &mut types,
+        &mut items.types,
         &mut diagnostics,
     );
     // 関数のシグネチャの row がユーザーのエフェクトを引けるように、エフェクトを先に変換する
     effect::lower_effects(
         file,
+        main_id,
         &effect_items,
         &mut type_names,
         &mut scope,
-        &mut effects,
-        &mut operations,
+        &mut items.effects,
+        &mut items.operations,
         &mut diagnostics,
     );
     // フィールドの関数型の row がエフェクトを引けるように、コンストラクタはエフェクトの後に変換する
     data::lower_constructors(
         file,
+        main_id,
         &data,
         &mut scope,
-        &mut types,
-        &mut constructors,
+        &mut items.types,
+        &mut items.constructors,
         &mut diagnostics,
     );
     let mut pending = Vec::new();
@@ -169,20 +184,22 @@ pub fn lower(file: FileId, source: &ast::SourceFile) -> (Module, Vec<Diagnostic>
         let name_range = equations
             .first()
             .map_or(first_range, |(_, _, range)| *range);
-        let id = functions.alloc(Function {
-            name: name.clone(),
-            name_range,
-            signature_name_range,
-            equation_ranges: equations.iter().map(|(_, _, range)| *range).collect(),
-            signature,
-            body: None,
-            intrinsic: false,
-        });
+        let id = ItemId::new(
+            main_id,
+            items.functions.alloc(Function {
+                name: name.clone(),
+                name_range,
+                signature_name_range,
+                equation_ranges: equations.iter().map(|(_, _, range)| *range).collect(),
+                signature,
+                intrinsic: false,
+            }),
+        );
         if let Some(ValueItem::Operation(operation)) = scope.define_function(&name, id) {
             diagnostics.push(duplicate(
                 file,
                 &name,
-                operations[operation].name_range,
+                items.operations[operation.local].name_range,
                 first_range,
             ));
         }
@@ -199,34 +216,36 @@ pub fn lower(file: FileId, source: &ast::SourceFile) -> (Module, Vec<Diagnostic>
     // fixity の宣言は位置によらずモジュール全体の組み直しに効くので、本体の変換の前に、すべての値を定義してから読む
     declare_fixities(file, &fixity_items, &mut scope, &mut diagnostics);
     // 本体は、すべての関数の名前がそろってから変換する。後ろで定義した関数も呼べるようにするため
+    let mut bodies = ArenaMap::default();
     for (id, equations) in pending {
-        // シグネチャがなければ、本体の注釈は型変数を引けない (docs/spec/types.md の「推論」)
-        let mut no_generics = Generics::default();
-        let generics = match &mut functions[id].signature {
-            Some(signature) => &mut signature.generics,
-            None => &mut no_generics,
-        };
+        // シグネチャの型変数の表は関数のアリーナの中にあり、本体の変換はほかの item を同じアリーナから読む。
+        // そのため、変換の間だけ表を取り出す。シグネチャがなければ、本体の注釈は型変数を引けない
+        // (docs/spec/types.md の「推論」)
+        let mut generics = modules[main_id].items.functions[id.local]
+            .signature
+            .as_mut()
+            .map(|signature| std::mem::take(&mut signature.generics))
+            .unwrap_or_default();
         let body = BodyLowering::new(
             file,
             &scope,
-            &effects,
-            &operations,
-            &constructors,
+            &modules,
             lang,
-            generics,
+            &mut generics,
             &mut diagnostics,
         )
         .lower_equations(&equations);
-        functions[id].body = Some(body);
+        if let Some(signature) = &mut modules[main_id].items.functions[id.local].signature {
+            signature.generics = generics;
+        }
+        bodies.insert(id.local, body);
     }
+    modules[main_id].bodies = bodies;
     (
-        Module {
-            file,
-            functions,
-            types,
-            constructors,
-            effects,
-            operations,
+        Program {
+            modules,
+            prelude: prelude_id,
+            entry: main_id,
             lang,
         },
         diagnostics,

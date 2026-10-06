@@ -3,7 +3,7 @@
 mod common;
 
 use common::{diagnostics, lower_text};
-use eml_hir::{Body, ExprKind, Module, TypeDefKind};
+use eml_hir::{Body, ExprKind, Program, TypeDefKind};
 
 #[test]
 fn data_declarations_become_items() {
@@ -52,20 +52,18 @@ fn infix_constructors_and_a_declared_cons() {
     ");
 }
 
-fn body<'m>(module: &'m Module, name: &str) -> &'m Body {
-    module
-        .functions
-        .iter()
-        .map(|(_, function)| function)
-        .find(|function| function.name == name)
-        .and_then(|function| function.body.as_ref())
+fn body<'m>(program: &'m Program, name: &str) -> &'m Body {
+    program
+        .functions()
+        .find(|(_, function)| function.name == name)
+        .and_then(|(id, _)| program.body(id))
         .expect("the body")
 }
 
 #[test]
 fn match_arms_bind_their_pattern_variables_only_in_the_arm() {
     let text = "data Option a = | None | Some a\n\nf : Option Int -> Int -> Int\nf o k = (fn u -> match o with | Some x -> x + k | None -> u) 0";
-    let module = eml_test_support::lower_clean(text).module;
+    let module = eml_test_support::lower_clean(text).program;
     let body = body(&module, "f");
     let names = |locals: Vec<eml_hir::LocalId>| -> Vec<String> {
         locals
@@ -172,20 +170,15 @@ fn a_name_is_bound_once_per_pattern_and_per_equation() {
 #[test]
 fn bool_is_a_data_type_of_the_prelude() {
     let lowered = eml_test_support::lower_clean("f : Bool -> Bool\nf b = b && True");
-    let module = &lowered.module;
-    let TypeDefKind::Data { constructors } = &module.types[module.lang.bool].kind else {
+    let program = &lowered.program;
+    let TypeDefKind::Data { constructors } = &program[program.lang.bool].kind else {
         panic!("`Bool` is a data type");
     };
     let tags: Vec<(&str, u32)> = constructors
         .iter()
-        .map(|&id| {
-            (
-                module.constructors[id].name.as_str(),
-                module.constructors[id].tag,
-            )
-        })
+        .map(|&id| (program[id].name.as_str(), program[id].tag))
         .collect();
     assert_eq!(tags, [("False", 0), ("True", 1)]);
-    assert_eq!(module.constructors[module.lang.false_ctor].name, "False");
-    assert_eq!(module.constructors[module.lang.true_ctor].name, "True");
+    assert_eq!(program[program.lang.false_ctor].name, "False");
+    assert_eq!(program[program.lang.true_ctor].name, "True");
 }

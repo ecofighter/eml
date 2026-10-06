@@ -8,16 +8,15 @@ const PRELUDE: &str = "f : Int -> Int -> Int\nf a b = a\n\ng : Unit -> Int\ng ()
 /// 関数 `t` の本体 (呼び出し) の手順を、評価する部分式のソースと、適用する矢印の番号で表す。
 fn steps(t: &str) -> Vec<String> {
     let lowered = lower_clean(&format!("{PRELUDE}{t}"));
-    let module = &lowered.module;
-    let (_, function) = module
-        .functions
-        .iter()
+    let program = &lowered.program;
+    let (id, _) = program
+        .functions()
         .find(|(_, function)| function.name == "t")
         .unwrap();
-    let body = function.body.as_ref().unwrap();
+    let body = program.body(id).unwrap();
     assert!(matches!(body.exprs[body.root].kind, ExprKind::Call { .. }));
     let source = lowered.files.text(lowered.file);
-    call_steps(module, body, body.root)
+    call_steps(program, body, body.root)
         .into_iter()
         .map(|step| match step {
             EvalStep::Eval(expr) => format!("eval {}", &source[body.exprs[expr].range]),

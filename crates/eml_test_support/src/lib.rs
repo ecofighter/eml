@@ -31,7 +31,7 @@ pub struct Parsed {
 pub struct Lowered {
     pub files: SourceFiles,
     pub file: FileId,
-    pub module: eml_hir::Module,
+    pub program: eml_hir::Program,
     /// 構文と HIR の診断を、表示と同じ順 (`sort_diagnostics`) に並べたもの。
     pub diagnostics: Vec<Diagnostic>,
 }
@@ -74,18 +74,21 @@ pub fn parse(text: &str) -> Parsed {
 #[cfg(feature = "hir")]
 pub fn lower(text: &str) -> Lowered {
     let Parsed {
-        files,
+        mut files,
         file,
         parse,
         mut diagnostics,
     } = parse(text);
-    let (module, stage) = eml_hir::lower(file, &parse.tree());
+    // Prelude の範囲を指す診断も表示できるように、Prelude を登録する
+    let prelude = files.add(eml_hir::PRELUDE_PATH, eml_hir::PRELUDE_SOURCE);
+    let prelude_tree = eml_hir::parse_prelude(prelude);
+    let (program, stage) = eml_hir::lower((prelude, &prelude_tree), (file, &parse.tree()));
     diagnostics.extend(stage);
     sort_diagnostics(&mut diagnostics);
     Lowered {
         files,
         file,
-        module,
+        program,
         diagnostics,
     }
 }

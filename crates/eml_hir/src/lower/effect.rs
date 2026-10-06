@@ -12,14 +12,15 @@ use super::scope::ItemScope;
 use super::types::{TypeLowering, Vars};
 use crate::codes;
 use crate::hir::{
-    EffectDef, EffectId, Generics, OpMultiplicity, Operation, RowRef, Signature, TypeRef,
-    TypeRefId, TypeRefKind, TypeVarDecl, TypeVarId,
+    EffectDef, EffectId, Generics, ItemId, ModuleId, OpMultiplicity, Operation, RowRef, Signature,
+    TypeRef, TypeRefId, TypeRefKind, TypeVarDecl, TypeVarId,
 };
 
 /// エフェクトの名前をすべて登録してから、操作のシグネチャを変換する。操作の引数の型の row で、後ろで宣言した
 /// エフェクトも引けるようにするため。`declared` は `data` の宣言と共有する型の名前空間のユーザーの名前である。
 pub(super) fn lower_effects(
     file: FileId,
+    module: ModuleId,
     items: &[ast::EffectItem],
     declared: &mut HashMap<String, TextRange>,
     scope: &mut ItemScope,
@@ -48,11 +49,14 @@ pub(super) fn lower_effects(
         }
         let params = generics.type_vars.len();
         let range = name.text_range();
-        let id = effects.alloc(EffectDef {
-            name: name.text().to_string(),
-            generics,
-            operations: Vec::new(),
-        });
+        let id = ItemId::new(
+            module,
+            effects.alloc(EffectDef {
+                name: name.text().to_string(),
+                generics,
+                operations: Vec::new(),
+            }),
+        );
         match declared.get(name.text()) {
             Some(&first) => diagnostics.push(duplicate(file, name.text(), first, range)),
             None => {
@@ -69,7 +73,7 @@ pub(super) fn lower_effects(
                 file,
                 &decl,
                 effect,
-                &effects[effect].generics,
+                &effects[effect.local].generics,
                 scope,
                 diagnostics,
             ) else {
@@ -79,13 +83,13 @@ pub(super) fn lower_effects(
             let range = operation.name_range;
             // 同じエフェクトに同じ名前の操作を重ねても、並びには最初の1つだけを入れる。節の名前は最初の操作に解決
             // されるので、2つ目を入れると、重複 (E1003) に加えて節のない操作 (E1013) まで報告してしまう
-            let repeated = effects[effect]
+            let repeated = effects[effect.local]
                 .operations
                 .iter()
-                .any(|&op| operations[op].name == name);
-            let id = operations.alloc(operation);
+                .any(|&op| operations[op.local].name == name);
+            let id = ItemId::new(module, operations.alloc(operation));
             if !repeated {
-                effects[effect].operations.push(id);
+                effects[effect.local].operations.push(id);
             }
             match values.get(&name) {
                 Some(&first) => diagnostics.push(duplicate(file, &name, first, range)),

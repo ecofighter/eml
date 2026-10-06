@@ -71,9 +71,8 @@ fn operations_see_the_type_parameters_of_their_effect_first() {
     let lowered = lower_clean("effect State s where\n  get : Unit -> s\n  never fail : Unit -> a");
     let generics = |name: &str| -> (Vec<String>, usize) {
         let (_, operation) = lowered
-            .module
-            .operations
-            .iter()
+            .program
+            .operations()
             .find(|(_, operation)| operation.name == name)
             .unwrap();
         let names = operation
@@ -190,14 +189,12 @@ fn resume_and_drop_take_a_fixed_number_of_arguments() {
 fn a_handler_with_a_state_takes_the_state_last_in_every_clause() {
     let text = "effect Ask where\n  ask : Unit -> Int\n\nf : Unit -> Int\nf () =\n  handle ask () from 0 with\n    | ask () k st -> resume k st (st + 1)\n    | return x st -> x + st";
     let lowered = lower_clean(text);
-    let function = lowered
-        .module
-        .functions
-        .iter()
+    let (id, _) = lowered
+        .program
+        .functions()
         .find(|(_, function)| function.name == "f")
-        .map(|(_, function)| function)
         .unwrap();
-    let body = function.body.as_ref().unwrap();
+    let body = lowered.program.body(id).unwrap();
     let (init, clauses, ret) = body
         .exprs
         .iter()
@@ -237,14 +234,12 @@ fn a_handler_with_a_state_is_printed_with_its_initial_state() {
 fn an_omitted_return_clause_of_a_handler_with_a_state_discards_the_state() {
     let text = "effect Ask where\n  ask : Unit -> Int\n\nf : Unit -> Int\nf () =\n  handle ask () from 0 with\n    | ask () k st -> resume k 1 st";
     let lowered = lower_clean(text);
-    let function = lowered
-        .module
-        .functions
-        .iter()
+    let (id, _) = lowered
+        .program
+        .functions()
         .find(|(_, function)| function.name == "f")
-        .map(|(_, function)| function)
         .unwrap();
-    let body = function.body.as_ref().unwrap();
+    let body = lowered.program.body(id).unwrap();
     let (init, ret) = body
         .exprs
         .iter()
@@ -289,14 +284,12 @@ fn clauses_of_a_handler_with_a_state_take_one_more_parameter() {
 fn handler_parts_capture_what_they_use() {
     let text = "effect Ask where\n  ask : Unit -> Int\n\nf : Int -> Int -> Int\nf a b =\n  handle ask () + a with\n    | ask () k -> resume k b\n    | return x -> x + a";
     let lowered = lower_clean(text);
-    let function = lowered
-        .module
-        .functions
-        .iter()
+    let (id, _) = lowered
+        .program
+        .functions()
         .find(|(_, function)| function.name == "f")
-        .map(|(_, function)| function)
         .unwrap();
-    let body = function.body.as_ref().unwrap();
+    let body = lowered.program.body(id).unwrap();
     let names = |locals: Vec<eml_hir::LocalId>| -> Vec<String> {
         locals
             .into_iter()
@@ -333,14 +326,12 @@ fn handler_parts_capture_what_they_use() {
 fn an_omitted_return_clause_is_synthesized() {
     let text = "effect Ask where\n  ask : Unit -> Int\n\nf : Unit -> Int\nf () =\n  handle ask () with\n    | ask () k -> resume k 1";
     let lowered = lower_clean(text);
-    let function = lowered
-        .module
-        .functions
-        .iter()
+    let (id, _) = lowered
+        .program
+        .functions()
         .find(|(_, function)| function.name == "f")
-        .map(|(_, function)| function)
         .unwrap();
-    let body = function.body.as_ref().unwrap();
+    let body = lowered.program.body(id).unwrap();
     let ret = body
         .exprs
         .iter()
