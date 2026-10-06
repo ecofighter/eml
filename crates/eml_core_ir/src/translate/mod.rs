@@ -7,9 +7,11 @@ mod pattern;
 mod program;
 mod types;
 
+use std::collections::HashSet;
+
 use eml_hir::{
     Body, ExprId, ExprKind, Function, FunctionId, ItemMap, LocalId, PatId, Program as HirProgram,
-    Stmt,
+    Res, Stmt,
 };
 use eml_types::{BodyTypes, Decl, Type, TypedProgram};
 use la_arena::ArenaMap;
@@ -21,13 +23,38 @@ use pattern::needs_decision_tree;
 use program::{ProgramBuilder, effect_table};
 use types::{split_arrows, var_info};
 
+/// 入口の関数から届く関数。使わない Prelude の関数を Core IR に入れないため、関数の本体の参照をたどって集める
+/// (docs/superpowers/specs/2026-10-06-refactor-r7-design.md の 4.5)。
+fn reachable(hir: &HirProgram, entry: FunctionId) -> HashSet<FunctionId> {
+    let mut seen = HashSet::new();
+    let mut work = vec![entry];
+    while let Some(id) = work.pop() {
+        if !seen.insert(id) {
+            continue;
+        }
+        let Some(body) = hir.body(id) else {
+            continue;
+        };
+        for (_, expr) in body.exprs.iter() {
+            if let ExprKind::Path(Res::Function(callee)) = expr.kind {
+                work.push(callee);
+            }
+        }
+    }
+    seen
+}
+
 /// 誤りのない型付き HIR を、RC の命令のない Core IR にする。`captures` は空のままでよく、パイプラインが埋める
 /// (docs/spec/core-ir.md のパスの表)。
 pub(crate) fn translate(hir: &HirProgram, typed: &TypedProgram, entry: FunctionId) -> Program {
     let mut builder = ProgramBuilder::new(hir, typed);
     let mut indices = ItemMap::default();
+    let reachable = reachable(hir, entry);
     // intrinsic は本体を持たず、呼び出しの位置で命令にするか、包む関数を作る (`program.rs` の `wrapper`)
-    let defined = || hir.functions().filter(|(_, function)| !function.intrinsic);
+    let defined = || {
+        hir.functions()
+            .filter(|(id, function)| !function.intrinsic && reachable.contains(id))
+    };
     for (id, _) in defined() {
         let body = hir
             .body(id)

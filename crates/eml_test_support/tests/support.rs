@@ -61,16 +61,15 @@ fn core_rejects_programs_with_errors() {
 #[test]
 fn core_until_stops_after_the_named_pass() {
     // `simplify` は、値を返すだけの join point を消す
-    let joined = "pick : Bool -> Int\npick c =\n  let y = if c then 1 else 2\n  y\n\nmain : Unit -> <IO> Unit\nmain () = ()";
+    let joined = "pick : Bool -> Int\npick c =\n  let y = if c then 1 else 2\n  y\n\nmain : Unit -> <IO> Unit\nmain () = println (show_int (pick True))";
     assert!(pretty(&core_until(joined, Pass::Translate)).contains("join j0"));
     assert!(!pretty(&core_until(joined, Pass::Simplify)).contains("join"));
     // 途中で止めても、パスの後の処理 (`captures` の埋め直しと検査) を行う
-    let captured = "pick : Bool -> String -> String\npick b s =\n  let t = if b then s else \"none\"\n  t ++ s\n\nmain : Unit -> <IO> Unit\nmain () = ()";
+    let captured = "pick : Bool -> String -> String\npick b s =\n  let t = if b then s else \"none\"\n  t ++ s\n\nmain : Unit -> <IO> Unit\nmain () = println (pick True \"x\")";
     let translated = pretty(&core_until(captured, Pass::Translate));
     assert!(translated.contains(") [s1] {"), "{translated}");
     // `s` を2回使うので、Perceus の後にだけ `dup` が入る
-    let twice =
-        "twice : String -> String\ntwice s = s ++ s\n\nmain : Unit -> <IO> Unit\nmain () = ()";
+    let twice = "twice : String -> String\ntwice s = s ++ s\n\nmain : Unit -> <IO> Unit\nmain () = println (twice \"x\")";
     assert!(!pretty(&core_until(twice, Pass::Translate)).contains("dup"));
     assert!(!pretty(&core_until(twice, Pass::Simplify)).contains("dup"));
     assert!(pretty(&core_until(twice, Pass::Perceus)).contains("dup s0"));
