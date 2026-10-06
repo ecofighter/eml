@@ -4,7 +4,7 @@
 use eml_hir::Module;
 use eml_types::TypedModule;
 
-use crate::{Program, liveness, perceus, simplify, translate, verify, verify_scopes};
+use crate::{Program, compact, liveness, perceus, simplify, translate, verify, verify_scopes};
 
 /// `lower_until` で止める位置。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -43,6 +43,7 @@ pub fn lower_until(module: &Module, typed: &TypedModule, last: Pass) -> Program 
         return program;
     }
     perceus::insert(&mut program);
+    compact_all(&mut program);
     check(&program, Pass::Perceus);
     program
 }
@@ -50,10 +51,19 @@ pub fn lower_until(module: &Module, typed: &TypedModule, last: Pass) -> Program 
 /// パスの中では `captures` が古くなってよいが、パスの間ではつねに正しくする (docs/spec/core-ir.md のパスの表)。
 /// 途中で止めた IR の表示と、`verify_scopes` が `captures` を宣言として扱うためである。
 fn settle(program: &mut Program, pass: Pass) {
+    compact_all(program);
     for function in &mut program.functions {
         liveness::analyze(function);
     }
     check(program, pass);
+}
+
+/// パスの後でアリーナを根からの前順に組み直す。たどれない式と消えた join point を捨て、次のパスと verifier が
+/// アリーナ全体を1本の木として扱えるようにする (docs/spec/core-ir.md のパスの表)。
+fn compact_all(program: &mut Program) {
+    for function in &mut program.functions {
+        compact::compact(function);
+    }
 }
 
 /// 誤りを、それを作ったパスの名前で報告する。実行した経路だけでなく、変換のたびに見つけるためである。

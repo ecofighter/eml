@@ -13,8 +13,9 @@
 //! 別の新しい変数にする。同じ変数を2回束縛すると verifier が拒否する。B5 を B4 より先に回すのは、B5 で jump がなくなった
 //! join point を、同じ巡の B4 で消すためである。DCE を最後に置くのは、K1 と B2 が使わなくした `con` をまとめて消すためである。
 //!
-//! 書き換えは式のアリーナの上でその場で行う。木から外れた式はアリーナに残り、Perceus がアリーナを作り直すときに
-//! 捨てる。そのため、jump の位置と親は、根からたどれる式だけで求める。
+//! 書き換えは式のアリーナの上でその場で行う。木から外れた式はアリーナに残り、パイプラインが `compact` でアリーナを
+//! 組み直すときに捨てる。そのため、jump の位置と親は、根からたどれる式だけで求める。消した join point の番号の
+//! 詰め直しも `compact` が行う。
 
 use std::collections::HashMap;
 
@@ -31,7 +32,6 @@ pub(crate) fn simplify(program: &mut Program) {
         pass.inline_single_jumps();
         pass.remove_unused();
         pass.remove_dead_bindings();
-        pass.renumber();
     }
 }
 
@@ -137,17 +137,6 @@ impl Simplify<'_> {
                 .for_each_child(|child| parents[child.0 as usize] = Some(id));
         }
         parents
-    }
-
-    /// join point ごとの、木の中に定義が残っているか。
-    fn present(&self) -> Vec<bool> {
-        let mut present = vec![false; self.function.joins.len()];
-        for id in self.reachable() {
-            if let CExpr::Join { join, .. } = self.expr(id) {
-                present[join.0 as usize] = true;
-            }
-        }
-        present
     }
 
     /// 木の中の `old` を `new` で置き換える。`old` の親が `new` を指すようにし、親の表も直す。
@@ -609,28 +598,6 @@ impl Simplify<'_> {
             let scope = *scope;
             self.replace(&mut parents, node, scope);
         }
-    }
-
-    /// 木に残った join point に、元の番号の順を保って 0 から番号を振り直し、索引を作り直す。消した join point が
-    /// なければ番号は変わらない。
-    fn renumber(&mut self) {
-        let present = self.present();
-        let mut numbers = vec![None; present.len()];
-        let mut joins = Vec::new();
-        for (index, &here) in present.iter().enumerate() {
-            if here {
-                numbers[index] = Some(JoinId(joins.len() as u32));
-                joins.push(self.function.joins[index]);
-            }
-        }
-        for id in self.reachable() {
-            if let CExpr::Join { join, .. } | CExpr::Jump { join, .. } =
-                &mut self.function.exprs[id.0 as usize]
-            {
-                *join = numbers[join.0 as usize].expect("a jump targets a join point in the tree");
-            }
-        }
-        self.function.joins = joins;
     }
 }
 

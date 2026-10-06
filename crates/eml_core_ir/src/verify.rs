@@ -42,12 +42,37 @@ enum Level {
 
 fn verify_at(program: &Program, level: Level) -> Result<(), VerifyError> {
     for function in &program.functions {
-        Checker::new(program, function, level)
-            .run()
+        check_tree(function)
+            .and_then(|()| Checker::new(program, function, level).run())
             .map_err(|message| VerifyError {
                 function: function.name.clone(),
                 message,
             })?;
+    }
+    Ok(())
+}
+
+/// アリーナのどの式も、根からちょうど1回たどれることを確かめる。後の検査と Perceus は式を木として扱うので、
+/// 共有された式やたどれない式があると、検査も書き換えも食い違う (docs/spec/core-ir.md)。
+fn check_tree(function: &CoreFn) -> Result<(), String> {
+    let mut seen = vec![false; function.exprs.len()];
+    let mut count = 0;
+    let mut work = vec![function.body];
+    while let Some(id) = work.pop() {
+        if std::mem::replace(&mut seen[id.0 as usize], true) {
+            return Err(format!("expression e{} is reachable twice", id.0));
+        }
+        count += 1;
+        function.expr(id).for_each_child(|child| work.push(child));
+    }
+    if count < function.exprs.len() {
+        let orphan = seen
+            .iter()
+            .position(|&seen| !seen)
+            .expect("some expression is unseen");
+        return Err(format!(
+            "expression e{orphan} is not reachable from the body"
+        ));
     }
     Ok(())
 }
@@ -503,5 +528,70 @@ impl<'a> Checker<'a> {
             )),
             None => Ok(()),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::builder::FnBuilder;
+    use crate::{Linearity, VarInfo};
+
+    fn program_of(function: CoreFn) -> Program {
+        Program {
+            functions: vec![function],
+            entry: crate::FnIdx(0),
+            strings: Vec::new(),
+            effects: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn a_child_shared_by_two_parents_is_rejected() {
+        let mut builder = FnBuilder::new();
+        let x = builder.var(VarInfo {
+            name: "x".to_string(),
+            linearity: Linearity::Unr,
+            boxed: false,
+        });
+        let shared = builder.push(CExpr::Return(Atom::Int(1)));
+        let first = builder.push(CExpr::Dup {
+            var: x,
+            body: shared,
+        });
+        let second = builder.push(CExpr::Dup {
+            var: x,
+            body: shared,
+        });
+        let join = builder.new_join();
+        let at = builder.push(CExpr::Join {
+            join,
+            params: Vec::new(),
+            captures: Vec::new(),
+            body: first,
+            scope: second,
+        });
+        builder.define_join(join, at);
+        let function = builder.finish("f".to_string(), vec![x], at);
+        let error = verify_scopes(&program_of(function)).unwrap_err();
+        assert!(
+            error.message.contains("is reachable twice"),
+            "{}",
+            error.message
+        );
+    }
+
+    #[test]
+    fn an_expression_outside_the_tree_is_rejected() {
+        let mut builder = FnBuilder::new();
+        let _orphan = builder.push(CExpr::Return(Atom::Int(0)));
+        let body = builder.push(CExpr::Return(Atom::Int(1)));
+        let function = builder.finish("f".to_string(), Vec::new(), body);
+        let error = verify_scopes(&program_of(function)).unwrap_err();
+        assert!(
+            error.message.contains("is not reachable from the body"),
+            "{}",
+            error.message
+        );
     }
 }

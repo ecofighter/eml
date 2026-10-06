@@ -1,6 +1,7 @@
 //! Core IR (docs/spec/core-ir.md)。型付き HIR から変換する ANF 形式の IR で、RC とエフェクトを明示する。
 
 mod builder;
+mod compact;
 mod liveness;
 mod perceus;
 mod pipeline;
