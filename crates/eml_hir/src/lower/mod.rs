@@ -319,7 +319,7 @@ fn declare_fixities(
         let Some(fixity) = fixity_of(item) else {
             continue;
         };
-        for op in item.operators() {
+        for op in item.operators().map(|name| name.token()) {
             let (name, range) = (op.text(), op.text_range());
             if !scope.defines_value(name) {
                 diagnostics.push(Diagnostic::error(
@@ -370,8 +370,8 @@ fn slot(
 
 /// シグネチャと等式の名前。演算子の定義 (`(</>) : …` と `a </> b = …`) は、演算子の文字列を名前にした関数である
 /// (docs/spec/declarations.md の「fixity」)。名前がなければパーサが報告済み。
-fn value_name(token: Option<SyntaxToken>) -> Option<SyntaxToken> {
-    token.filter(|token| {
+fn value_name(name: Option<ast::Name>) -> Option<SyntaxToken> {
+    name.map(|name| name.token()).filter(|token| {
         matches!(
             token.kind(),
             SyntaxKind::LIDENT | SyntaxKind::OP | SyntaxKind::MINUS

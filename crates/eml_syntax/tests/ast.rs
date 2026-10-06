@@ -139,6 +139,7 @@ fn every_node_in_the_corpus_has_an_ast_type() {
         EFFECT_ROW,
         EFFECT,
         PATH,
+        NAME,
         NAME_REF,
     ];
     for node in file.syntax().descendants() {

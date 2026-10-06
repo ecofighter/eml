@@ -95,9 +95,7 @@ impl<'a> BodyLowering<'a> {
         equations: &[(ast::Equation, TextRange)],
     ) -> (Vec<PatId>, ExprId) {
         let (first, first_name) = &equations[0];
-        let name = first
-            .name()
-            .map_or(String::new(), |name| name.text().to_string());
+        let name = first.name().map_or(String::new(), |name| name.text());
         let first_params: Vec<ast::Pat> = first.params().collect();
         let arity = first_params.len();
         // 隠れた変数の範囲は、最初の等式のその位置のパターンである。引数が矢印より多いときの診断がここを指す
@@ -528,7 +526,7 @@ impl<'a> BodyLowering<'a> {
         };
         let range = pat.range();
         let kind = match pat {
-            ast::Pat::BindPat(bind) => match bind.name() {
+            ast::Pat::BindPat(bind) => match bind.name().map(|name| name.token()) {
                 Some(name) => {
                     let name = name.text().to_string();
                     if let Some(&(_, first)) = self.scope[self.group_start..]

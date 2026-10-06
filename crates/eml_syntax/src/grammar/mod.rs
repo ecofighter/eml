@@ -297,6 +297,23 @@ fn path(p: &mut Parser, last: TokenSet) {
     m.complete(p, PATH);
 }
 
+/// 今のトークンを1つ読んで `NAME` にする。呼び出し側が名前のトークンにいることを確かめる。
+fn name(p: &mut Parser) {
+    let m = p.start();
+    p.bump_any();
+    m.complete(p, NAME);
+}
+
+/// `kind` の名前があれば `NAME` にし、なければ `expect` と同じ診断を出す。
+fn expect_name(p: &mut Parser, kind: SyntaxKind) -> bool {
+    if p.at(kind) {
+        name(p);
+        return true;
+    }
+    expected(p, token_name(kind));
+    false
+}
+
 /// 今のトークンを1つ読んで `NAME_REF` にする。呼び出し側が名前のトークンにいることを確かめる。
 fn name_ref(p: &mut Parser) {
     let m = p.start();

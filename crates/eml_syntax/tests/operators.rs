@@ -9,7 +9,8 @@ fn operator_sequence_is_flat_with_prefix_minus() {
     insta::assert_snapshot!(shape("x = -a + b * c"), @r#"
     SOURCE_FILE
       EQUATION
-        LIDENT "x"
+        NAME
+          LIDENT "x"
         EQ "="
         OP_SEQ
           MINUS "-"
@@ -35,7 +36,8 @@ fn minus_after_a_function_is_subtraction() {
     insta::assert_snapshot!(shape("y = f -1 :: xs"), @r#"
     SOURCE_FILE
       EQUATION
-        LIDENT "y"
+        NAME
+          LIDENT "y"
         EQ "="
         OP_SEQ
           PATH_EXPR
@@ -58,7 +60,8 @@ fn sections() {
     insta::assert_snapshot!(shape("s = ((+), (+ 1), (1 +), (.name), (- 1), (-))"), @r#"
     SOURCE_FILE
       EQUATION
-        LIDENT "s"
+        NAME
+          LIDENT "s"
         EQ "="
         TUPLE_EXPR
           L_PAREN "("
@@ -108,14 +111,16 @@ fn missing_operand_does_not_affect_the_next_item() {
     insta::assert_snapshot!(shape("a = 1 +\nb = 2"), @r#"
     SOURCE_FILE
       EQUATION
-        LIDENT "a"
+        NAME
+          LIDENT "a"
         EQ "="
         OP_SEQ
           LITERAL
             INT "1"
           OP "+"
       EQUATION
-        LIDENT "b"
+        NAME
+          LIDENT "b"
         EQ "="
         LITERAL
           INT "2"
@@ -147,7 +152,8 @@ fn section_ending_with_an_operator_is_one_error() {
     insta::assert_snapshot!(shape("s = (+ a +)\nt = 1"), @r#"
     SOURCE_FILE
       EQUATION
-        LIDENT "s"
+        NAME
+          LIDENT "s"
         EQ "="
         RIGHT_SECTION
           L_PAREN "("
@@ -160,7 +166,8 @@ fn section_ending_with_an_operator_is_one_error() {
             OP "+"
           R_PAREN ")"
       EQUATION
-        LIDENT "t"
+        NAME
+          LIDENT "t"
         EQ "="
         LITERAL
           INT "1"
@@ -174,7 +181,8 @@ fn section_of_two_operators_is_one_error() {
     insta::assert_snapshot!(shape("s = (+ *)\nt = 1"), @r#"
     SOURCE_FILE
       EQUATION
-        LIDENT "s"
+        NAME
+          LIDENT "s"
         EQ "="
         RIGHT_SECTION
           L_PAREN "("
@@ -183,7 +191,8 @@ fn section_of_two_operators_is_one_error() {
             OP "*"
           R_PAREN ")"
       EQUATION
-        LIDENT "t"
+        NAME
+          LIDENT "t"
         EQ "="
         LITERAL
           INT "1"
@@ -197,7 +206,8 @@ fn sections_with_operator_sequences() {
     insta::assert_snapshot!(shape("s = ((+ a * b), (a * b +), (+ -1))"), @r#"
     SOURCE_FILE
       EQUATION
-        LIDENT "s"
+        NAME
+          LIDENT "s"
         EQ "="
         TUPLE_EXPR
           L_PAREN "("

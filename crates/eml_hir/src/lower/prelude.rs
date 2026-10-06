@@ -53,7 +53,7 @@ pub(super) fn lower_prelude(
             continue;
         };
         let fixity = super::fixity_of(&item).expect("every Prelude fixity is well formed");
-        for op in item.operators() {
+        for op in item.operators().map(|name| name.token()) {
             scope.declare_prelude_fixity(op.text(), fixity);
         }
     }
@@ -64,7 +64,8 @@ pub(super) fn lower_prelude(
         };
         let name = signature
             .name()
-            .expect("every Prelude signature has a name");
+            .expect("every Prelude signature has a name")
+            .token();
         let builtin = Builtin::from_prelude_name(name.text())
             .expect("every Prelude signature names a builtin in the table");
         let range = signature.ty().map_or(signature.range(), |ty| ty.range());

@@ -296,3 +296,14 @@ fn qualified_effects_are_not_supported_yet() {
         ]
     );
 }
+
+#[test]
+fn minus_is_defined_by_its_name_token() {
+    let text = "(-) : Int -> Int -> Int\na - b = a\nf : Int\nf = 3 - 1";
+    insta::assert_snapshot!(lower_text(text), @"
+    - : Int -> Int -> Int
+    - a#0 b#1 = a#0
+    f : Int
+    f = (@- 3 1)
+    ");
+}

@@ -13,9 +13,11 @@ fn handler_with_operation_and_return_clauses() {
     insta::assert_snapshot!(shape(&text), @r#"
     SOURCE_FILE
       EQUATION
-        LIDENT "try"
+        NAME
+          LIDENT "try"
         BIND_PAT
-          LIDENT "action"
+          NAME
+            LIDENT "action"
         EQ "="
         BLOCK
           EXPR_STMT
@@ -45,7 +47,8 @@ fn handler_with_operation_and_return_clauses() {
                 PIPE "|"
                 RETURN_KW "return"
                 BIND_PAT
-                  LIDENT "x"
+                  NAME
+                    LIDENT "x"
                 THIN_ARROW "->"
                 APP_EXPR
                   PATH_EXPR
@@ -71,11 +74,14 @@ fn parameterized_handler() {
     insta::assert_snapshot!(shape(&text), @r#"
     SOURCE_FILE
       EQUATION
-        LIDENT "run_state"
+        NAME
+          LIDENT "run_state"
         BIND_PAT
-          LIDENT "init"
+          NAME
+            LIDENT "init"
         BIND_PAT
-          LIDENT "action"
+          NAME
+            LIDENT "action"
         EQ "="
         BLOCK
           EXPR_STMT
@@ -103,9 +109,11 @@ fn parameterized_handler() {
                   L_PAREN "("
                   R_PAREN ")"
                 BIND_PAT
-                  LIDENT "k"
+                  NAME
+                    LIDENT "k"
                 BIND_PAT
-                  LIDENT "st"
+                  NAME
+                    LIDENT "st"
                 THIN_ARROW "->"
                 RESUME_EXPR
                   RESUME_KW "resume"
@@ -126,9 +134,11 @@ fn parameterized_handler() {
                 NAME_REF
                   LIDENT "put"
                 BIND_PAT
-                  LIDENT "st2"
+                  NAME
+                    LIDENT "st2"
                 BIND_PAT
-                  LIDENT "k"
+                  NAME
+                    LIDENT "k"
                 WILDCARD_PAT
                   UNDERSCORE "_"
                 THIN_ARROW "->"
@@ -149,9 +159,11 @@ fn parameterized_handler() {
                 PIPE "|"
                 RETURN_KW "return"
                 BIND_PAT
-                  LIDENT "x"
+                  NAME
+                    LIDENT "x"
                 BIND_PAT
-                  LIDENT "st"
+                  NAME
+                    LIDENT "st"
                 THIN_ARROW "->"
                 TUPLE_EXPR
                   L_PAREN "("
@@ -173,7 +185,8 @@ fn handler_on_one_line_with_drop() {
     insta::assert_snapshot!(shape("h = handle f () with | ask key k -> drop k"), @r#"
     SOURCE_FILE
       EQUATION
-        LIDENT "h"
+        NAME
+          LIDENT "h"
         EQ "="
         HANDLE_EXPR
           HANDLE_KW "handle"
@@ -191,9 +204,11 @@ fn handler_on_one_line_with_drop() {
             NAME_REF
               LIDENT "ask"
             BIND_PAT
-              LIDENT "key"
+              NAME
+                LIDENT "key"
             BIND_PAT
-              LIDENT "k"
+              NAME
+                LIDENT "k"
             THIN_ARROW "->"
             DROP_EXPR
               DROP_KW "drop"
@@ -209,7 +224,8 @@ fn resume_is_an_operand() {
     insta::assert_snapshot!(shape("y = resume k 1 + 2"), @r#"
     SOURCE_FILE
       EQUATION
-        LIDENT "y"
+        NAME
+          LIDENT "y"
         EQ "="
         OP_SEQ
           RESUME_EXPR

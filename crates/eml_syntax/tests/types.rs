@@ -9,7 +9,8 @@ fn signature_with_function_type() {
     insta::assert_snapshot!(shape("len : List a -> Int"), @r#"
     SOURCE_FILE
       SIGNATURE
-        LIDENT "len"
+        NAME
+          LIDENT "len"
         COLON ":"
         FN_TYPE
           APP_TYPE
@@ -31,7 +32,8 @@ fn qualified_type_names() {
     insta::assert_snapshot!(shape("x : Option.Option Int"), @r#"
     SOURCE_FILE
       SIGNATURE
-        LIDENT "x"
+        NAME
+          LIDENT "x"
         COLON ":"
         APP_TYPE
           PATH
@@ -52,7 +54,8 @@ fn effect_row_with_effects_and_tail() {
     insta::assert_snapshot!(shape("f : a -> <IO, State s | e> b"), @r#"
     SOURCE_FILE
       SIGNATURE
-        LIDENT "f"
+        NAME
+          LIDENT "f"
         COLON ":"
         FN_TYPE
           VAR_TYPE
@@ -84,7 +87,8 @@ fn empty_row_is_split_from_one_operator_token() {
     insta::assert_snapshot!(shape("g : Unit -> <> Unit"), @r#"
     SOURCE_FILE
       SIGNATURE
-        LIDENT "g"
+        NAME
+          LIDENT "g"
         COLON ":"
         FN_TYPE
           PATH_TYPE
@@ -107,7 +111,8 @@ fn row_variable_alone() {
     insta::assert_snapshot!(shape("h : Unit -> <e> Unit"), @r#"
     SOURCE_FILE
       SIGNATURE
-        LIDENT "h"
+        NAME
+          LIDENT "h"
         COLON ":"
         FN_TYPE
           PATH_TYPE
@@ -131,7 +136,8 @@ fn arrows_at_the_end_of_lines_continue_the_type() {
     insta::assert_snapshot!(shape(&lines(&["f : Int ->", "  Int ->", "    Int"])), @r#"
     SOURCE_FILE
       SIGNATURE
-        LIDENT "f"
+        NAME
+          LIDENT "f"
         COLON ":"
         FN_TYPE
           PATH_TYPE
@@ -157,7 +163,8 @@ fn tuple_and_parenthesized_types() {
     insta::assert_snapshot!(shape("p : (Int, (String -> Int))"), @r#"
     SOURCE_FILE
       SIGNATURE
-        LIDENT "p"
+        NAME
+          LIDENT "p"
         COLON ":"
         TUPLE_TYPE
           L_PAREN "("
@@ -188,7 +195,8 @@ fn dot_with_spaces_in_a_qualified_name_is_an_error() {
     insta::assert_snapshot!(shape("f : Foo . Bar"), @r#"
     SOURCE_FILE
       SIGNATURE
-        LIDENT "f"
+        NAME
+          LIDENT "f"
         COLON ":"
         PATH_TYPE
           PATH
@@ -229,7 +237,8 @@ fn aligned_signature_lines_are_one_error() {
     insta::assert_snapshot!(shape(&lines(&["f : Int ->", "  Int ->", "  Int"])), @r#"
     SOURCE_FILE
       SIGNATURE
-        LIDENT "f"
+        NAME
+          LIDENT "f"
         COLON ":"
         FN_TYPE
           PATH_TYPE
@@ -303,7 +312,8 @@ fn row_written_right_after_the_arrow() {
     insta::assert_snapshot!(shape("f : Int -><IO> Int"), @r#"
     SOURCE_FILE
       SIGNATURE
-        LIDENT "f"
+        NAME
+          LIDENT "f"
         COLON ":"
         FN_TYPE
           PATH_TYPE

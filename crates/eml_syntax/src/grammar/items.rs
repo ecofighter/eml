@@ -84,11 +84,13 @@ pub(super) fn item(p: &mut Parser) {
 /// signature ::= var ':' type 、var ::= LIDENT | '(' OP ')'
 fn signature(p: &mut Parser, m: Marker) {
     if p.at(LIDENT) {
-        p.bump(LIDENT);
+        name(p);
     } else {
+        let n = p.start();
         p.bump(L_PAREN);
         p.bump_any();
         p.bump(R_PAREN);
+        n.complete(p, NAME);
     }
     if expect(p, COLON) {
         types::type_(p);
@@ -99,9 +101,9 @@ fn signature(p: &mut Parser, m: Marker) {
 /// data_item ::= 'data' UIDENT LIDENT* '=' alts
 fn data_item(p: &mut Parser, m: Marker) {
     p.bump(DATA_KW);
-    expect(p, UIDENT);
+    expect_name(p, UIDENT);
     while p.at(LIDENT) {
-        p.bump(LIDENT);
+        name(p);
     }
     if expect(p, EQ) {
         alts(p);
@@ -138,7 +140,7 @@ fn alt(p: &mut Parser) -> bool {
         );
     }
     if p.at(UIDENT) && !has_conop_ahead(p) {
-        p.bump(UIDENT);
+        name(p);
         while types::at_type_atom_start(p) {
             types::type_atom(p);
         }
@@ -146,7 +148,8 @@ fn alt(p: &mut Parser) -> bool {
         if !types::btype(p) {
             expected(p, "a constructor");
         }
-        if p.eat(CONOP) {
+        if p.at(CONOP) {
+            name(p);
             if !types::btype(p) {
                 expected(p, "a type");
             }
@@ -185,9 +188,9 @@ fn has_conop_ahead(p: &Parser) -> bool {
 fn type_item(p: &mut Parser, m: Marker) {
     not_yet_supported(p, "`type` declarations are not supported yet");
     p.bump(TYPE_KW);
-    expect(p, UIDENT);
+    expect_name(p, UIDENT);
     while p.at(LIDENT) {
-        p.bump(LIDENT);
+        name(p);
     }
     if expect(p, EQ) {
         types::type_or_block(p);
@@ -197,9 +200,9 @@ fn type_item(p: &mut Parser, m: Marker) {
 
 fn effect_item(p: &mut Parser, m: Marker) {
     p.bump(EFFECT_KW);
-    expect(p, UIDENT);
+    expect_name(p, UIDENT);
     while p.at(LIDENT) {
-        p.bump(LIDENT);
+        name(p);
     }
     if expect(p, WHERE_KW) {
         if p.at(LAYOUT_OPEN) {
@@ -219,7 +222,7 @@ fn op_decl(p: &mut Parser) -> bool {
     if !p.at(LIDENT) {
         p.bump_any();
     }
-    expect(p, LIDENT);
+    expect_name(p, LIDENT);
     if expect(p, COLON) {
         types::type_(p);
     }
@@ -244,7 +247,7 @@ fn fixity_item(p: &mut Parser, m: Marker) {
     }
     loop {
         if p.at_ts(DECLARABLE_OPERATORS) {
-            p.bump_any();
+            name(p);
         } else {
             expected(p, "an operator");
             break;
@@ -274,7 +277,7 @@ fn reserved_item(p: &mut Parser, m: Marker) {
 }
 
 fn equation(p: &mut Parser, m: Marker) {
-    p.bump(LIDENT);
+    name(p);
     while patterns::at_apat_start(p) {
         patterns::apat(p);
     }
@@ -288,7 +291,7 @@ fn equation(p: &mut Parser, m: Marker) {
 fn operator_equation(p: &mut Parser, m: Marker) {
     patterns::apat(p);
     if p.at(OP) || p.at(MINUS) {
-        p.bump_any();
+        name(p);
         if !patterns::apat(p) {
             expected(p, "a pattern");
         }

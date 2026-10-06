@@ -7,7 +7,8 @@ fn equation_with_a_constructor_pattern() {
     insta::assert_snapshot!(shape("len Nil = 0"), @r#"
     SOURCE_FILE
       EQUATION
-        LIDENT "len"
+        NAME
+          LIDENT "len"
         CON_PAT
           PATH
             NAME_REF
@@ -23,7 +24,8 @@ fn parameter_patterns() {
     insta::assert_snapshot!(shape("f (Some (x, _)) (y :: rest) 0 -1 \"s\" () = x"), @r#"
     SOURCE_FILE
       EQUATION
-        LIDENT "f"
+        NAME
+          LIDENT "f"
         PAREN_PAT
           L_PAREN "("
           CON_PAT
@@ -33,7 +35,8 @@ fn parameter_patterns() {
             TUPLE_PAT
               L_PAREN "("
               BIND_PAT
-                LIDENT "x"
+                NAME
+                  LIDENT "x"
               COMMA ","
               WILDCARD_PAT
                 UNDERSCORE "_"
@@ -43,10 +46,12 @@ fn parameter_patterns() {
           L_PAREN "("
           INFIX_CON_PAT
             BIND_PAT
-              LIDENT "y"
+              NAME
+                LIDENT "y"
             CONOP "::"
             BIND_PAT
-              LIDENT "rest"
+              NAME
+                LIDENT "rest"
           R_PAREN ")"
         LITERAL_PAT
           INT "0"
@@ -77,7 +82,8 @@ fn block_body_with_let_and_expression_statements() {
     insta::assert_snapshot!(shape(&text), @r#"
     SOURCE_FILE
       EQUATION
-        LIDENT "main"
+        NAME
+          LIDENT "main"
         UNIT_PAT
           L_PAREN "("
           R_PAREN ")"
@@ -86,14 +92,16 @@ fn block_body_with_let_and_expression_statements() {
           LET_STMT
             LET_KW "let"
             BIND_PAT
-              LIDENT "x"
+              NAME
+                LIDENT "x"
             EQ "="
             LITERAL
               INT "1"
           LET_STMT
             LET_KW "let"
             BIND_PAT
-              LIDENT "n"
+              NAME
+                LIDENT "n"
             COLON ":"
             PATH_TYPE
               PATH
@@ -122,7 +130,8 @@ fn application_field_access_and_qualified_names() {
     insta::assert_snapshot!(shape("y = String.split_once \" \" line.text t.0.1"), @r#"
     SOURCE_FILE
       EQUATION
-        LIDENT "y"
+        NAME
+          LIDENT "y"
         EQ "="
         APP_EXPR
           PATH_EXPR
@@ -159,7 +168,8 @@ fn annotation_and_unit() {
     insta::assert_snapshot!(shape("a = ((x : Int), ())"), @r#"
     SOURCE_FILE
       EQUATION
-        LIDENT "a"
+        NAME
+          LIDENT "a"
         EQ "="
         TUPLE_EXPR
           L_PAREN "("
@@ -189,7 +199,8 @@ fn deeper_lines_continue_the_expression() {
     insta::assert_snapshot!(shape(&text), @r#"
     SOURCE_FILE
       EQUATION
-        LIDENT "t"
+        NAME
+          LIDENT "t"
         EQ "="
         BLOCK
           EXPR_STMT
@@ -226,7 +237,8 @@ fn dot_with_spaces_is_an_error() {
     insta::assert_snapshot!(shape("x = a . b"), @r#"
     SOURCE_FILE
       EQUATION
-        LIDENT "x"
+        NAME
+          LIDENT "x"
         EQ "="
         FIELD_EXPR
           PATH_EXPR
@@ -246,10 +258,13 @@ fn operator_definition() {
     SOURCE_FILE
       EQUATION
         BIND_PAT
-          LIDENT "dir"
-        OP "</>"
+          NAME
+            LIDENT "dir"
+        NAME
+          OP "</>"
         BIND_PAT
-          LIDENT "name"
+          NAME
+            LIDENT "name"
         EQ "="
         APP_EXPR
           PATH_EXPR
@@ -275,10 +290,12 @@ fn top_level_pattern_bindings_are_errors() {
         TUPLE_PAT
           L_PAREN "("
           BIND_PAT
-            LIDENT "a"
+            NAME
+              LIDENT "a"
           COMMA ","
           BIND_PAT
-            LIDENT "b"
+            NAME
+              LIDENT "b"
           R_PAREN ")"
         EQ "="
         LIDENT "p"
@@ -312,16 +329,19 @@ fn let_in_as_a_statement() {
     insta::assert_snapshot!(shape(&text), @r#"
     SOURCE_FILE
       EQUATION
-        LIDENT "f"
+        NAME
+          LIDENT "f"
         BIND_PAT
-          LIDENT "x"
+          NAME
+            LIDENT "x"
         EQ "="
         BLOCK
           EXPR_STMT
             LET_EXPR
               LET_KW "let"
               BIND_PAT
-                LIDENT "y"
+                NAME
+                  LIDENT "y"
               EQ "="
               PATH_EXPR
                 PATH
@@ -340,13 +360,16 @@ fn body_on_an_unindented_line_gets_an_empty_block() {
     insta::assert_snapshot!(shape("f x =\ng = 1"), @r#"
     SOURCE_FILE
       EQUATION
-        LIDENT "f"
+        NAME
+          LIDENT "f"
         BIND_PAT
-          LIDENT "x"
+          NAME
+            LIDENT "x"
         EQ "="
         BLOCK
       EQUATION
-        LIDENT "g"
+        NAME
+          LIDENT "g"
         EQ "="
         LITERAL
           INT "1"
@@ -419,7 +442,8 @@ fn mismatched_closing_bracket_closes_the_innermost_bracket() {
     insta::assert_snapshot!(shape("x = (a]\ny = 1"), @r#"
     SOURCE_FILE
       EQUATION
-        LIDENT "x"
+        NAME
+          LIDENT "x"
         EQ "="
         PAREN_EXPR
           L_PAREN "("
@@ -429,7 +453,8 @@ fn mismatched_closing_bracket_closes_the_innermost_bracket() {
                 LIDENT "a"
           R_BRACK "]"
       EQUATION
-        LIDENT "y"
+        NAME
+          LIDENT "y"
         EQ "="
         LITERAL
           INT "1"
@@ -482,7 +507,8 @@ fn trailing_lambda_with_a_block_body() {
     insta::assert_snapshot!(shape(&text), @r#"
     SOURCE_FILE
       EQUATION
-        LIDENT "f"
+        NAME
+          LIDENT "f"
         EQ "="
         APP_EXPR
           PATH_EXPR
@@ -496,7 +522,8 @@ fn trailing_lambda_with_a_block_body() {
           LAMBDA_EXPR
             FN_KW "fn"
             BIND_PAT
-              LIDENT "item"
+              NAME
+                LIDENT "item"
             THIN_ARROW "->"
             BLOCK
               EXPR_STMT
@@ -517,7 +544,8 @@ fn lambda_parameters() {
     insta::assert_snapshot!(shape("g = map (fn (x : Int) (a, b) -> x) xs"), @r#"
     SOURCE_FILE
       EQUATION
-        LIDENT "g"
+        NAME
+          LIDENT "g"
         EQ "="
         APP_EXPR
           PATH_EXPR
@@ -531,7 +559,8 @@ fn lambda_parameters() {
               ANNOT_PAT
                 L_PAREN "("
                 BIND_PAT
-                  LIDENT "x"
+                  NAME
+                    LIDENT "x"
                 COLON ":"
                 PATH_TYPE
                   PATH
@@ -541,10 +570,12 @@ fn lambda_parameters() {
               TUPLE_PAT
                 L_PAREN "("
                 BIND_PAT
-                  LIDENT "a"
+                  NAME
+                    LIDENT "a"
                 COMMA ","
                 BIND_PAT
-                  LIDENT "b"
+                  NAME
+                    LIDENT "b"
                 R_PAREN ")"
               THIN_ARROW "->"
               PATH_EXPR
@@ -564,7 +595,8 @@ fn lambda_as_an_operand() {
     insta::assert_snapshot!(shape("h = xs |> each fn l -> println l"), @r#"
     SOURCE_FILE
       EQUATION
-        LIDENT "h"
+        NAME
+          LIDENT "h"
         EQ "="
         OP_SEQ
           PATH_EXPR
@@ -580,7 +612,8 @@ fn lambda_as_an_operand() {
             LAMBDA_EXPR
               FN_KW "fn"
               BIND_PAT
-                LIDENT "l"
+                NAME
+                  LIDENT "l"
               THIN_ARROW "->"
               APP_EXPR
                 PATH_EXPR
@@ -607,14 +640,16 @@ fn let_in_inside_parentheses() {
     insta::assert_snapshot!(shape("f = (let x = 1 in x)"), @r#"
     SOURCE_FILE
       EQUATION
-        LIDENT "f"
+        NAME
+          LIDENT "f"
         EQ "="
         PAREN_EXPR
           L_PAREN "("
           LET_EXPR
             LET_KW "let"
             BIND_PAT
-              LIDENT "x"
+              NAME
+                LIDENT "x"
             EQ "="
             LITERAL
               INT "1"
@@ -638,7 +673,8 @@ fn use_statements() {
     insta::assert_snapshot!(shape(&text), @r#"
     SOURCE_FILE
       EQUATION
-        LIDENT "main"
+        NAME
+          LIDENT "main"
         UNIT_PAT
           L_PAREN "("
           R_PAREN ")"
@@ -653,7 +689,8 @@ fn use_statements() {
           USE_STMT
             USE_KW "use"
             BIND_PAT
-              LIDENT "tmp"
+              NAME
+                LIDENT "tmp"
             LEFT_ARROW "<-"
             PATH_EXPR
               PATH

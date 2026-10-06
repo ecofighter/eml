@@ -8,9 +8,11 @@ fn if_with_else_on_separate_lines() {
     insta::assert_snapshot!(shape(&text), @r#"
     SOURCE_FILE
       EQUATION
-        LIDENT "f"
+        NAME
+          LIDENT "f"
         BIND_PAT
-          LIDENT "c"
+          NAME
+            LIDENT "c"
         EQ "="
         BLOCK
           EXPR_STMT
@@ -42,9 +44,11 @@ fn if_without_else() {
     insta::assert_snapshot!(shape("f c = if c then g x"), @r#"
     SOURCE_FILE
       EQUATION
-        LIDENT "f"
+        NAME
+          LIDENT "f"
         BIND_PAT
-          LIDENT "c"
+          NAME
+            LIDENT "c"
         EQ "="
         IF_EXPR
           IF_KW "if"
@@ -70,7 +74,8 @@ fn else_if_chain_on_one_line() {
     insta::assert_snapshot!(shape("f = if a then x else if b then y else z"), @r#"
     SOURCE_FILE
       EQUATION
-        LIDENT "f"
+        NAME
+          LIDENT "f"
         EQ "="
         IF_EXPR
           IF_KW "if"
@@ -109,7 +114,8 @@ fn else_on_the_next_line_after_a_one_line_then() {
     insta::assert_snapshot!(shape(&text), @r#"
     SOURCE_FILE
       EQUATION
-        LIDENT "main"
+        NAME
+          LIDENT "main"
         UNIT_PAT
           L_PAREN "("
           R_PAREN ")"
@@ -153,9 +159,11 @@ fn match_with_indented_arms() {
     insta::assert_snapshot!(shape(&text), @r#"
     SOURCE_FILE
       EQUATION
-        LIDENT "f"
+        NAME
+          LIDENT "f"
         BIND_PAT
-          LIDENT "b"
+          NAME
+            LIDENT "b"
         EQ "="
         BLOCK
           EXPR_STMT
@@ -204,9 +212,11 @@ fn match_on_one_line() {
     insta::assert_snapshot!(shape("g b = match b with | True -> 1 | False -> 0"), @r#"
     SOURCE_FILE
       EQUATION
-        LIDENT "g"
+        NAME
+          LIDENT "g"
         BIND_PAT
-          LIDENT "b"
+          NAME
+            LIDENT "b"
         EQ "="
         MATCH_EXPR
           MATCH_KW "match"
@@ -241,7 +251,8 @@ fn later_arms_on_one_line_belong_to_the_inner_match() {
     insta::assert_snapshot!(shape("h = match a with | X -> match b with | Y -> 1 | Z -> 2"), @r#"
     SOURCE_FILE
       EQUATION
-        LIDENT "h"
+        NAME
+          LIDENT "h"
         EQ "="
         MATCH_EXPR
           MATCH_KW "match"
@@ -314,9 +325,11 @@ fn arms_at_the_column_of_match_are_read_as_arms() {
     insta::assert_snapshot!(shape(&text), @r#"
     SOURCE_FILE
       EQUATION
-        LIDENT "f"
+        NAME
+          LIDENT "f"
         BIND_PAT
-          LIDENT "b"
+          NAME
+            LIDENT "b"
         EQ "="
         BLOCK
           EXPR_STMT

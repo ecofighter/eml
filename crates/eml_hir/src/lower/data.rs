@@ -25,11 +25,11 @@ pub(super) fn declare_data(
     let mut lowered = Vec::new();
     for item in items {
         // 名前がなければパーサが報告済み
-        let Some(name) = item.name() else {
+        let Some(name) = item.name().map(|name| name.token()) else {
             continue;
         };
         let mut generics = Generics::default();
-        for param in item.params() {
+        for param in item.params().map(|name| name.token()) {
             let text = param.text();
             let range = param.text_range();
             if let Some((_, first)) = generics.type_vars.iter().find(|(_, var)| var.name == text) {
@@ -76,7 +76,11 @@ pub(super) fn lower_constructors(
     for (ty, item) in data {
         for alt in item.alts() {
             // 名前も演算子もなければパーサが報告済み
-            let Some(name) = alt.name().or_else(|| alt.operator()) else {
+            let Some(name) = alt
+                .name()
+                .or_else(|| alt.operator())
+                .map(|name| name.token())
+            else {
                 continue;
             };
             let def = &mut types[*ty];

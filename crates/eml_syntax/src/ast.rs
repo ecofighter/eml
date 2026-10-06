@@ -86,6 +86,7 @@ macro_rules! ast_enum {
 
 ast_node! {
     SourceFile => SOURCE_FILE,
+    Name => NAME,
     NameRef => NAME_REF,
     Path => PATH,
     Signature => SIGNATURE,
@@ -175,6 +176,30 @@ ast_enum! {
     Clause { OpClause, ReturnClause }
 }
 
+impl Name {
+    /// 名前のトークン。`(+)` の形では括弧を除いた演算子のトークンである。
+    pub fn token(&self) -> SyntaxToken {
+        self.syntax
+            .children_with_tokens()
+            .filter_map(NodeOrToken::into_token)
+            .find(|token| {
+                matches!(
+                    token.kind(),
+                    SyntaxKind::LIDENT
+                        | SyntaxKind::UIDENT
+                        | SyntaxKind::OP
+                        | SyntaxKind::MINUS
+                        | SyntaxKind::CONOP
+                )
+            })
+            .expect("the parser puts one name token in every NAME")
+    }
+
+    pub fn text(&self) -> String {
+        self.token().text().to_string()
+    }
+}
+
 impl NameRef {
     pub fn token(&self) -> SyntaxToken {
         self.syntax
@@ -235,8 +260,8 @@ impl SourceFile {
 }
 
 impl Signature {
-    pub fn name(&self) -> Option<SyntaxToken> {
-        name_token(&self.syntax)
+    pub fn name(&self) -> Option<Name> {
+        support::child(&self.syntax)
     }
 
     pub fn ty(&self) -> Option<Type> {
@@ -245,8 +270,9 @@ impl Signature {
 }
 
 impl Equation {
-    pub fn name(&self) -> Option<SyntaxToken> {
-        name_token(&self.syntax)
+    /// 関数の名前。演算子の定義では演算子である。
+    pub fn name(&self) -> Option<Name> {
+        support::child(&self.syntax)
     }
 
     /// 演算子の定義では、左辺と右辺のパターンが入る。
@@ -464,8 +490,8 @@ impl AnnotExpr {
 }
 
 impl BindPat {
-    pub fn name(&self) -> Option<SyntaxToken> {
-        support::token(&self.syntax, SyntaxKind::LIDENT)
+    pub fn name(&self) -> Option<Name> {
+        support::child(&self.syntax)
     }
 }
 
@@ -524,16 +550,14 @@ impl Effect {
 }
 
 impl EffectItem {
-    pub fn name(&self) -> Option<SyntaxToken> {
-        support::token(&self.syntax, SyntaxKind::UIDENT)
+    pub fn name(&self) -> Option<Name> {
+        support::children::<Name>(&self.syntax)
+            .find(|name| name.token().kind() == SyntaxKind::UIDENT)
     }
 
-    /// エフェクトの型引数。操作の宣言は子のノードなので、直下のトークンだけを見る。
-    pub fn params(&self) -> impl Iterator<Item = SyntaxToken> {
-        self.syntax
-            .children_with_tokens()
-            .filter_map(NodeOrToken::into_token)
-            .filter(|token| token.kind() == SyntaxKind::LIDENT)
+    /// 型引数。名前が欠けた宣言でも取り違えないよう、小文字の名前だけを返す。
+    pub fn params(&self) -> impl Iterator<Item = Name> {
+        lowercase_names(&self.syntax)
     }
 
     pub fn operations(&self) -> AstChildren<OpDecl> {
@@ -555,8 +579,8 @@ impl OpDecl {
             })
     }
 
-    pub fn name(&self) -> Option<SyntaxToken> {
-        support::token(&self.syntax, SyntaxKind::LIDENT)
+    pub fn name(&self) -> Option<Name> {
+        support::child(&self.syntax)
     }
 
     pub fn ty(&self) -> Option<Type> {
@@ -634,16 +658,14 @@ impl DropExpr {
 }
 
 impl DataItem {
-    pub fn name(&self) -> Option<SyntaxToken> {
-        support::token(&self.syntax, SyntaxKind::UIDENT)
+    pub fn name(&self) -> Option<Name> {
+        support::children::<Name>(&self.syntax)
+            .find(|name| name.token().kind() == SyntaxKind::UIDENT)
     }
 
-    /// 型引数。選択肢は子のノードなので、直下のトークンだけを見る。
-    pub fn params(&self) -> impl Iterator<Item = SyntaxToken> {
-        self.syntax
-            .children_with_tokens()
-            .filter_map(NodeOrToken::into_token)
-            .filter(|token| token.kind() == SyntaxKind::LIDENT)
+    /// 型引数。名前が欠けた宣言でも取り違えないよう、小文字の名前だけを返す。
+    pub fn params(&self) -> impl Iterator<Item = Name> {
+        lowercase_names(&self.syntax)
     }
 
     pub fn alts(&self) -> AstChildren<Alt> {
@@ -652,14 +674,18 @@ impl DataItem {
 }
 
 impl Alt {
-    /// 前置のコンストラクタの名前。中置のコンストラクタの左辺の型の名前は子のノードの中にあるので、ここには現れない。
-    pub fn name(&self) -> Option<SyntaxToken> {
-        support::token(&self.syntax, SyntaxKind::UIDENT)
+    /// 前置のコンストラクタの名前。
+    pub fn name(&self) -> Option<Name> {
+        self.name_of(SyntaxKind::UIDENT)
     }
 
     /// 中置のコンストラクタの演算子。
-    pub fn operator(&self) -> Option<SyntaxToken> {
-        support::token(&self.syntax, SyntaxKind::CONOP)
+    pub fn operator(&self) -> Option<Name> {
+        self.name_of(SyntaxKind::CONOP)
+    }
+
+    fn name_of(&self, kind: SyntaxKind) -> Option<Name> {
+        support::children::<Name>(&self.syntax).find(|name| name.token().kind() == kind)
     }
 
     /// フィールドの型。中置のコンストラクタでは左右の2つである。
@@ -789,15 +815,8 @@ fn child_between<N: AstNode<Language = EmlLanguage>>(
     None
 }
 
-fn name_token(node: &SyntaxNode) -> Option<SyntaxToken> {
-    node.children_with_tokens()
-        .filter_map(NodeOrToken::into_token)
-        .find(|token| {
-            matches!(
-                token.kind(),
-                SyntaxKind::LIDENT | SyntaxKind::OP | SyntaxKind::MINUS
-            )
-        })
+fn lowercase_names(node: &SyntaxNode) -> impl Iterator<Item = Name> {
+    support::children::<Name>(node).filter(|name| name.token().kind() == SyntaxKind::LIDENT)
 }
 
 impl FixityItem {
@@ -819,11 +838,8 @@ impl FixityItem {
     }
 
     /// 宣言した演算子。`-` と `:` で始まる演算子も含む。
-    pub fn operators(&self) -> impl Iterator<Item = SyntaxToken> {
-        self.syntax
-            .children_with_tokens()
-            .filter_map(NodeOrToken::into_token)
-            .filter(|token| is_operator(token.kind()))
+    pub fn operators(&self) -> AstChildren<Name> {
+        support::children(&self.syntax)
     }
 }
 

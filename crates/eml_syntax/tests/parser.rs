@@ -134,7 +134,8 @@ fn annotated_patterns_can_appear_in_any_pattern() {
     insta::assert_snapshot!(eml_syntax::debug_tree(&parsed.parse.syntax()), @r#"
     SOURCE_FILE@0..106
       EQUATION@0..22
-        LIDENT@0..1 "f"
+        NAME@0..1
+          LIDENT@0..1 "f"
         WHITESPACE@1..2 " "
         PAREN_PAT@2..18
           L_PAREN@2..3 "("
@@ -146,7 +147,8 @@ fn annotated_patterns_can_appear_in_any_pattern() {
             ANNOT_PAT@8..17
               L_PAREN@8..9 "("
               BIND_PAT@9..10
-                LIDENT@9..10 "x"
+                NAME@9..10
+                  LIDENT@9..10 "x"
               WHITESPACE@10..11 " "
               COLON@11..12 ":"
               WHITESPACE@12..13 " "
@@ -165,12 +167,14 @@ fn annotated_patterns_can_appear_in_any_pattern() {
               LIDENT@21..22 "x"
       WHITESPACE@22..23 "\n"
       EQUATION@23..38
-        LIDENT@23..24 "k"
+        NAME@23..24
+          LIDENT@23..24 "k"
         WHITESPACE@24..25 " "
         ANNOT_PAT@25..34
           L_PAREN@25..26 "("
           BIND_PAT@26..27
-            LIDENT@26..27 "x"
+            NAME@26..27
+              LIDENT@26..27 "x"
           WHITESPACE@27..28 " "
           COLON@28..29 ":"
           WHITESPACE@29..30 " "
@@ -188,7 +192,8 @@ fn annotated_patterns_can_appear_in_any_pattern() {
               LIDENT@37..38 "x"
       WHITESPACE@38..39 "\n"
       EQUATION@39..79
-        LIDENT@39..40 "g"
+        NAME@39..40
+          LIDENT@39..40 "g"
         WHITESPACE@40..41 " "
         EQ@41..42 "="
         WHITESPACE@42..43 " "
@@ -210,7 +215,8 @@ fn annotated_patterns_can_appear_in_any_pattern() {
               ANNOT_PAT@61..70
                 L_PAREN@61..62 "("
                 BIND_PAT@62..63
-                  LIDENT@62..63 "a"
+                  NAME@62..63
+                    LIDENT@62..63 "a"
                 WHITESPACE@63..64 " "
                 COLON@64..65 ":"
                 WHITESPACE@65..66 " "
@@ -222,7 +228,8 @@ fn annotated_patterns_can_appear_in_any_pattern() {
               COMMA@70..71 ","
               WHITESPACE@71..72 " "
               BIND_PAT@72..73
-                LIDENT@72..73 "b"
+                NAME@72..73
+                  LIDENT@72..73 "b"
               R_PAREN@73..74 ")"
             WHITESPACE@74..75 " "
             THIN_ARROW@75..77 "->"
@@ -233,7 +240,8 @@ fn annotated_patterns_can_appear_in_any_pattern() {
                   LIDENT@78..79 "a"
       WHITESPACE@79..80 "\n"
       EQUATION@80..106
-        LIDENT@80..81 "h"
+        NAME@80..81
+          LIDENT@80..81 "h"
         WHITESPACE@81..82 " "
         EQ@82..83 "="
         WHITESPACE@83..84 " "
@@ -243,7 +251,8 @@ fn annotated_patterns_can_appear_in_any_pattern() {
           ANNOT_PAT@88..97
             L_PAREN@88..89 "("
             BIND_PAT@89..90
-              LIDENT@89..90 "z"
+              NAME@89..90
+                LIDENT@89..90 "z"
             WHITESPACE@90..91 " "
             COLON@91..92 ":"
             WHITESPACE@92..93 " "

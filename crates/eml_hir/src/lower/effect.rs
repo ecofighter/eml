@@ -30,11 +30,11 @@ pub(super) fn lower_effects(
     let mut lowered = Vec::new();
     for item in items {
         // 名前がなければパーサが報告済み
-        let Some(name) = item.name() else {
+        let Some(name) = item.name().map(|name| name.token()) else {
             continue;
         };
         let mut generics = Generics::default();
-        for param in item.params() {
+        for param in item.params().map(|name| name.token()) {
             let text = param.text();
             let range = param.text_range();
             if let Some((_, first)) = generics.type_vars.iter().find(|(_, var)| var.name == text) {
@@ -107,7 +107,7 @@ fn lower_operation(
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Option<Operation> {
     // 名前がなければパーサが報告済み
-    let name = decl.name()?;
+    let name = decl.name()?.token();
     let multiplicity = match decl.multiplicity() {
         Some(token) if token.kind() == SyntaxKind::NEVER_KW => OpMultiplicity::Never,
         Some(token) if token.kind() == SyntaxKind::MULTI_KW => OpMultiplicity::Multi,

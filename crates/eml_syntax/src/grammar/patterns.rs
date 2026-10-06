@@ -92,7 +92,7 @@ pub(super) fn apat(p: &mut Parser) -> bool {
             WILDCARD_PAT
         }
         LIDENT => {
-            p.bump_any();
+            name(p);
             BIND_PAT
         }
         UIDENT => {

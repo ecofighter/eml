@@ -7,9 +7,10 @@ fn operator_signature() {
     insta::assert_snapshot!(shape("(</>) : Path -> String -> Path"), @r#"
     SOURCE_FILE
       SIGNATURE
-        L_PAREN "("
-        OP "</>"
-        R_PAREN ")"
+        NAME
+          L_PAREN "("
+          OP "</>"
+          R_PAREN ")"
         COLON ":"
         FN_TYPE
           PATH_TYPE
@@ -45,40 +46,51 @@ fn data_declarations() {
     SOURCE_FILE
       DATA_ITEM
         DATA_KW "data"
-        UIDENT "Option"
-        LIDENT "a"
+        NAME
+          UIDENT "Option"
+        NAME
+          LIDENT "a"
         EQ "="
         ALT
           PIPE "|"
-          UIDENT "None"
+          NAME
+            UIDENT "None"
         ALT
           PIPE "|"
-          UIDENT "Some"
+          NAME
+            UIDENT "Some"
           VAR_TYPE
             LIDENT "a"
       DATA_ITEM
         DATA_KW "data"
-        UIDENT "Color"
+        NAME
+          UIDENT "Color"
         EQ "="
         ALT
           PIPE "|"
-          UIDENT "Red"
+          NAME
+            UIDENT "Red"
         ALT
           PIPE "|"
-          UIDENT "Green"
+          NAME
+            UIDENT "Green"
       DATA_ITEM
         DATA_KW "data"
-        UIDENT "List"
-        LIDENT "a"
+        NAME
+          UIDENT "List"
+        NAME
+          LIDENT "a"
         EQ "="
         ALT
           PIPE "|"
-          UIDENT "Nil"
+          NAME
+            UIDENT "Nil"
         ALT
           PIPE "|"
           VAR_TYPE
             LIDENT "a"
-          CONOP "::"
+          NAME
+            CONOP "::"
           APP_TYPE
             PATH
               NAME_REF
@@ -94,13 +106,16 @@ fn constructor_without_leading_pipe_is_an_error() {
     SOURCE_FILE
       DATA_ITEM
         DATA_KW "data"
-        UIDENT "T"
+        NAME
+          UIDENT "T"
         EQ "="
         ALT
-          UIDENT "A"
+          NAME
+            UIDENT "A"
         ALT
           PIPE "|"
-          UIDENT "B"
+          NAME
+            UIDENT "B"
     ---
     E0011 1:10 expected `|` before the constructor
     "#);
@@ -117,11 +132,14 @@ fn effect_declaration() {
     SOURCE_FILE
       EFFECT_ITEM
         EFFECT_KW "effect"
-        UIDENT "State"
-        LIDENT "s"
+        NAME
+          UIDENT "State"
+        NAME
+          LIDENT "s"
         WHERE_KW "where"
         OP_DECL
-          LIDENT "get"
+          NAME
+            LIDENT "get"
           COLON ":"
           FN_TYPE
             PATH_TYPE
@@ -133,7 +151,8 @@ fn effect_declaration() {
               LIDENT "s"
         OP_DECL
           NEVER_KW "never"
-          LIDENT "fail"
+          NAME
+            LIDENT "fail"
           COLON ":"
           FN_TYPE
             PATH_TYPE
@@ -152,7 +171,8 @@ fn effect_operations_must_be_on_indented_lines() {
     SOURCE_FILE
       EFFECT_ITEM
         EFFECT_KW "effect"
-        UIDENT "E"
+        NAME
+          UIDENT "E"
         WHERE_KW "where"
       ERROR
         LIDENT "op"
@@ -171,17 +191,21 @@ fn fixity_declarations() {
       FIXITY_ITEM
         INFIXR_KW "infixr"
         INT "5"
-        OP "</>"
+        NAME
+          OP "</>"
         COMMA ","
-        OP "++"
+        NAME
+          OP "++"
       FIXITY_ITEM
         INFIXL_KW "infixl"
         INT "6"
-        MINUS "-"
+        NAME
+          MINUS "-"
       FIXITY_ITEM
         INFIX_KW "infix"
         INT "4"
-        CONOP "::"
+        NAME
+          CONOP "::"
     "#);
 }
 
@@ -200,7 +224,8 @@ fn pub_and_type_are_parsed_but_not_supported_yet() {
       TYPE_ITEM
         PUB_KW "pub"
         TYPE_KW "type"
-        UIDENT "Person"
+        NAME
+          UIDENT "Person"
         EQ "="
         TUPLE_TYPE
           L_PAREN "("
@@ -230,7 +255,8 @@ fn import_and_records_are_skipped_as_not_supported_yet() {
         DOT "."
         UIDENT "Csv"
       SIGNATURE
-        LIDENT "t"
+        NAME
+          LIDENT "t"
         COLON ":"
         ERROR
           L_BRACE "{"
@@ -250,7 +276,8 @@ fn errors_in_one_declaration_do_not_affect_the_next() {
     insta::assert_snapshot!(shape(&text), @r#"
     SOURCE_FILE
       SIGNATURE
-        LIDENT "x"
+        NAME
+          LIDENT "x"
         COLON ":"
         FN_TYPE
           PATH_TYPE
@@ -259,14 +286,16 @@ fn errors_in_one_declaration_do_not_affect_the_next() {
                 UIDENT "Int"
           THIN_ARROW "->"
       SIGNATURE
-        LIDENT "y"
+        NAME
+          LIDENT "y"
         COLON ":"
         PATH_TYPE
           PATH
             NAME_REF
               UIDENT "Int"
       SIGNATURE
-        LIDENT "w"
+        NAME
+          LIDENT "w"
         COLON ":"
         PATH_TYPE
           PATH
@@ -330,12 +359,15 @@ fn infix_constructor_with_type_applications() {
     SOURCE_FILE
       DATA_ITEM
         DATA_KW "data"
-        UIDENT "L"
-        LIDENT "a"
+        NAME
+          UIDENT "L"
+        NAME
+          LIDENT "a"
         EQ "="
         ALT
           PIPE "|"
-          UIDENT "Nil"
+          NAME
+            UIDENT "Nil"
         ALT
           PIPE "|"
           APP_TYPE
@@ -344,7 +376,8 @@ fn infix_constructor_with_type_applications() {
                 UIDENT "List"
             VAR_TYPE
               LIDENT "a"
-          CONOP "::"
+          NAME
+            CONOP "::"
           APP_TYPE
             PATH
               NAME_REF
