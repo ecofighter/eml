@@ -161,7 +161,15 @@ fn split_var(word: &str) -> Option<(&str, u32)> {
 }
 
 fn tag_number(word: &str) -> Option<u32> {
-    word.strip_prefix('#')?.parse().ok()
+    number(word.strip_prefix('#')?)
+}
+
+/// `#N` と `jN` の番号。`u32::from_str` は先頭の `+` も読むので、変数の番号と同じく数字の並びだけを読む。
+fn number(digits: &str) -> Option<u32> {
+    if digits.is_empty() || !digits.chars().all(|c| c.is_ascii_digit()) {
+        return None;
+    }
+    digits.parse().ok()
 }
 
 fn is_int(word: &str) -> bool {
@@ -546,11 +554,16 @@ impl<'t> Parser<'t> {
     }
 
     /// `tailcall` の後と、`let` の右辺の呼び出し。`let` の右辺では、`Direct` の呼び出しに `call` を前に付けるので、
-    /// `direct` が偽になる。キーワードの直後が `(` なら、同じ名前の関数の呼び出しとして読む。
+    /// `direct` が偽になる。キーワードの直後が `(` なら、同じ名前の関数の呼び出しとして読む。ただし `apply ()(` と
+    /// `resume ()(` は、呼ばれる値が `()` の `apply` と `resume` として読む。誤りを含む IR の表示も読み戻すためである。
+    /// 引数のない関数の呼び出しの後に `(` は続かないので、この読み方で関数の呼び出しを取り違えることはない。
     fn call(&mut self, state: &mut FnState, direct: bool) -> Result<Call, ParseError> {
         let line = self.line();
         let word = self.word()?;
-        let keyword = !matches!(self.peek(), Some(Tok::Punct('(')));
+        let unit_callee = matches!(word.as_str(), "apply" | "resume")
+            && self.peek_at(1) == Some(&Tok::Punct(')'))
+            && self.peek_at(2) == Some(&Tok::Punct('('));
+        let keyword = !self.at_punct('(') || unit_callee;
         match word.as_str() {
             "apply" if keyword => {
                 let callee = self.atom(state)?;
@@ -672,7 +685,7 @@ impl<'t> Parser<'t> {
         let line = self.line();
         let word = self.word()?;
         word.strip_prefix('j')
-            .and_then(|number| number.parse().ok())
+            .and_then(number)
             .map(JoinId)
             .ok_or_else(|| error(line, format!("expected a join point `jN`, found `{word}`")))
     }
@@ -951,5 +964,139 @@ mod tests {
             "effect Ask { ask }\n\
              fn f(c0^, c1^, c2^) {\n  let t3 = perform Ask.#3()\n  let t4 = handle Ask(c0) {ask: c1, #1: c2}\n  return t4\n}\n",
         );
+    }
+
+    fn parse_error(text: &str) -> ParseError {
+        match parse(text) {
+            Ok(program) => panic!("expected an error, read:\n{}", crate::pretty(&program)),
+            Err(error) => error,
+        }
+    }
+
+    #[test]
+    fn a_keyword_followed_by_a_paren_is_a_direct_call_in_tail_position() {
+        let text = "fn apply(x0) {\n  return x0\n}\n\
+                    fn resume(x0) {\n  return x0\n}\n\
+                    fn f() {\n  tailcall apply(1)\n}\n\
+                    fn g() {\n  tailcall resume(2)\n}\n";
+        round_trip(text);
+        let program = parse(text).unwrap();
+        let f = &program.functions[2];
+        assert_eq!(
+            f.expr(f.body),
+            &CExpr::TailCall(Call::Direct(FnIdx(0), vec![Atom::Int(1)]))
+        );
+        let g = &program.functions[3];
+        assert_eq!(
+            g.expr(g.body),
+            &CExpr::TailCall(Call::Direct(FnIdx(1), vec![Atom::Int(2)]))
+        );
+    }
+
+    #[test]
+    fn apply_and_resume_of_unit_round_trip() {
+        round_trip(
+            "fn f(x0) {\n  let t1 = apply ()(x0)\n  let t2 = resume ()(t1)\n  tailcall apply ()(t2)\n}\n",
+        );
+        round_trip("fn f(x0) {\n  tailcall resume ()(x0)\n}\n");
+        let program = parse("fn f(x0) {\n  tailcall apply ()(x0)\n}\n").unwrap();
+        let f = &program.functions[0];
+        assert_eq!(
+            f.expr(f.body),
+            &CExpr::TailCall(Call::Apply(Atom::Unit, vec![Atom::Var(VarId(0))]))
+        );
+    }
+
+    #[test]
+    fn one_variable_number_with_two_names_is_an_error() {
+        let error = parse_error("fn f(x0) {\n  return y0\n}\n");
+        assert_eq!(error.line, 2);
+        assert_eq!(error.message, "variable 0 is written both as `x0` and `y0`");
+    }
+
+    #[test]
+    fn one_variable_bound_with_and_without_a_caret_is_an_error() {
+        let error = parse_error("fn f(x0^) {\n  let x0 = 1\n  return x0\n}\n");
+        assert_eq!(error.line, 2);
+        assert_eq!(error.message, "`x0` is bound both with and without `^`");
+
+        let error = parse_error("fn f(x0) {\n  let x0^ = 1\n  return x0\n}\n");
+        assert_eq!(error.line, 2);
+        assert_eq!(error.message, "`x0` is bound both with and without `^`");
+    }
+
+    #[test]
+    fn a_gap_in_the_join_point_numbers_is_an_error() {
+        let error = parse_error("fn f() {\n  join j1() [] {\n    return 1\n  }\n  jump j1()\n}\n");
+        assert_eq!(error.line, 1);
+        assert_eq!(error.message, "the join points of `f` skip `j0`");
+    }
+
+    #[test]
+    fn a_join_point_defined_twice_is_an_error() {
+        let error = parse_error(
+            "fn f() {\n  join j0() [] {\n    return 1\n  }\n  join j0() [] {\n    return 2\n  }\n  jump j0()\n}\n",
+        );
+        assert_eq!(error.message, "join point `j0` is defined twice");
+        // 連なりは後ろから式にするので、先に書いた方の定義の行で報告する
+        assert_eq!(error.line, 2);
+    }
+
+    #[test]
+    fn a_jump_to_an_unknown_join_point_is_an_error() {
+        let error = parse_error("fn f() {\n  let x0 = 1\n  jump j0(x0)\n}\n");
+        assert_eq!(error.line, 3);
+        assert_eq!(error.message, "unknown join point `j0`");
+    }
+
+    #[test]
+    fn variable_numbers_that_do_not_appear_are_filled() {
+        let text = "fn f(x0, x3^) {\n  return x0\n}\n";
+        round_trip(text);
+        let program = parse(text).unwrap();
+        let vars = &program.functions[0].vars;
+        assert_eq!(vars.len(), 4);
+        for filler in &vars[1..3] {
+            assert_eq!((filler.name.as_str(), filler.boxed), ("", false));
+        }
+        assert_eq!((vars[3].name.as_str(), vars[3].boxed), ("x", true));
+    }
+
+    #[test]
+    fn an_unclosed_brace_is_an_error_at_the_end() {
+        let error = parse_error("fn f() {\n  return 1\n");
+        assert_eq!(error.line, 2);
+        assert_eq!(error.message, "expected `}`, found the end of the text");
+    }
+
+    #[test]
+    fn a_chain_without_a_final_instruction_is_an_error() {
+        let error = parse_error("fn f() {\n  let x0 = 1\n}\n");
+        assert_eq!(error.line, 3);
+        assert_eq!(
+            error.message,
+            "expected a statement; a chain ends with return, jump, tailcall or switch, found `}`"
+        );
+    }
+
+    #[test]
+    fn tag_join_and_operation_numbers_are_ascii_digits() {
+        let error = parse_error("fn f() {\n  return #+1\n}\n");
+        assert_eq!(error.line, 2);
+        assert_eq!(error.message, "expected a variable, found `#+1`");
+
+        let error = parse_error("fn f() {\n  let x0 = con #+1(2)\n  return x0\n}\n");
+        assert_eq!(error.line, 2);
+        assert_eq!(error.message, "expected a tag `#N`, found `#+1`");
+
+        let error = parse_error("fn f() {\n  jump j+0()\n}\n");
+        assert_eq!(error.line, 2);
+        assert_eq!(error.message, "expected a join point `jN`, found `j+0`");
+
+        let error = parse_error(
+            "effect Ask { ask }\nfn f() {\n  let t0 = perform Ask.#+0()\n  return t0\n}\n",
+        );
+        assert_eq!(error.line, 3);
+        assert_eq!(error.message, "`Ask` has no operation `#+0`");
     }
 }

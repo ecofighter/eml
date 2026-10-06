@@ -422,6 +422,30 @@ pub enum Atom {
     Tag(u32),
 }
 
+/// 変種と表示の名前の表から、`name` と、その逆の `from_name` を作る。`name` の `match` は網羅を検査されるので、
+/// 変種を足して表に書き忘れるとコンパイルエラーになる。`from_name` も同じ表から作るので、読み戻しから漏れない。
+macro_rules! named_ops {
+    ($ty:ident { $($variant:ident => $name:literal,)* }) => {
+        impl $ty {
+            pub fn name(self) -> &'static str {
+                match self {
+                    $($ty::$variant => $name,)*
+                }
+            }
+
+            pub fn from_name(name: &str) -> Option<$ty> {
+                match name {
+                    $($name => Some($ty::$variant),)*
+                    _ => None,
+                }
+            }
+
+            #[cfg(test)]
+            const VARIANTS: &[$ty] = &[$($ty::$variant,)*];
+        }
+    };
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PrimOp {
     IntAdd,
@@ -446,33 +470,6 @@ pub enum PrimOp {
 }
 
 impl PrimOp {
-    const ALL: [PrimOp; 19] = [
-        PrimOp::IntAdd,
-        PrimOp::IntSub,
-        PrimOp::IntMul,
-        PrimOp::IntDiv,
-        PrimOp::IntMod,
-        PrimOp::IntNeg,
-        PrimOp::IntEq,
-        PrimOp::IntNe,
-        PrimOp::IntLt,
-        PrimOp::IntLe,
-        PrimOp::IntGt,
-        PrimOp::IntGe,
-        PrimOp::StrConcat,
-        PrimOp::StrEq,
-        PrimOp::StrNe,
-        PrimOp::BoolEq,
-        PrimOp::BoolNe,
-        PrimOp::ShowInt,
-        PrimOp::Not,
-    ];
-
-    /// `name` の逆。
-    pub fn from_name(name: &str) -> Option<PrimOp> {
-        PrimOp::ALL.into_iter().find(|op| op.name() == name)
-    }
-
     /// 実行時エラーを起こしうるプリミティブ。整数の演算はオーバーフローとゼロ除算で止まる (docs/spec/declarations.md の
     /// 標準の演算子の表)。`simplify` の DCE は、これらを使われなくても消さない。
     pub fn may_fail(self) -> bool {
@@ -486,32 +483,31 @@ impl PrimOp {
                 | PrimOp::IntNeg
         )
     }
-
-    pub fn name(self) -> &'static str {
-        match self {
-            PrimOp::IntAdd => "+",
-            PrimOp::IntSub => "-",
-            PrimOp::IntMul => "*",
-            PrimOp::IntDiv => "/",
-            PrimOp::IntMod => "%",
-            PrimOp::IntNeg => "negate",
-            PrimOp::IntEq => "==",
-            PrimOp::IntNe => "!=",
-            PrimOp::IntLt => "<",
-            PrimOp::IntLe => "<=",
-            PrimOp::IntGt => ">",
-            PrimOp::IntGe => ">=",
-            PrimOp::StrConcat => "++",
-            PrimOp::StrEq => "string==",
-            PrimOp::StrNe => "string!=",
-            PrimOp::BoolEq => "bool==",
-            PrimOp::BoolNe => "bool!=",
-            PrimOp::ShowInt => "show_int",
-            PrimOp::Not => "not",
-        }
-    }
 }
 
+named_ops!(PrimOp {
+    IntAdd => "+",
+    IntSub => "-",
+    IntMul => "*",
+    IntDiv => "/",
+    IntMod => "%",
+    IntNeg => "negate",
+    IntEq => "==",
+    IntNe => "!=",
+    IntLt => "<",
+    IntLe => "<=",
+    IntGt => ">",
+    IntGe => ">=",
+    StrConcat => "++",
+    StrEq => "string==",
+    StrNe => "string!=",
+    BoolEq => "bool==",
+    BoolNe => "bool!=",
+    ShowInt => "show_int",
+    Not => "not",
+});
+
+/// 表示での名前 (`name`) は Prelude の名前と同じである。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IoOp {
     Println,
@@ -520,24 +516,12 @@ pub enum IoOp {
     Close,
 }
 
-impl IoOp {
-    const ALL: [IoOp; 4] = [IoOp::Println, IoOp::Open, IoOp::ReadAll, IoOp::Close];
-
-    /// `name` の逆。
-    pub fn from_name(name: &str) -> Option<IoOp> {
-        IoOp::ALL.into_iter().find(|op| op.name() == name)
-    }
-
-    /// 表示での名前。Prelude の名前と同じである。
-    pub fn name(self) -> &'static str {
-        match self {
-            IoOp::Println => "println",
-            IoOp::Open => "open",
-            IoOp::ReadAll => "read_all",
-            IoOp::Close => "close",
-        }
-    }
-}
+named_ops!(IoOp {
+    Println => "println",
+    Open => "open",
+    ReadAll => "read_all",
+    Close => "close",
+});
 
 /// `Bool` のタグ (docs/spec/core-ir.md)。
 pub const FALSE: u32 = 0;
@@ -584,5 +568,17 @@ mod tests {
         let mut atoms = Vec::new();
         apply.for_each_atom(|atom| atoms.push(atom));
         assert_eq!(atoms, [Atom::Var(VarId(7)), Atom::Int(1)]);
+    }
+
+    #[test]
+    fn every_operation_name_reads_back() {
+        for &op in PrimOp::VARIANTS {
+            assert_eq!(PrimOp::from_name(op.name()), Some(op));
+        }
+        for &op in IoOp::VARIANTS {
+            assert_eq!(IoOp::from_name(op.name()), Some(op));
+        }
+        assert_eq!(PrimOp::from_name("println"), None);
+        assert_eq!(IoOp::from_name("+"), None);
     }
 }
