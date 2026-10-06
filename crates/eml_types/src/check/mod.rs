@@ -180,7 +180,6 @@ pub(crate) fn check_body(
         ambient: Row::pure(),
         ambient_source: AmbientSource::Signature,
         comparisons: Vec::new(),
-        declared: ArenaMap::default(),
         typing: BodyTyping::default(),
         instances: Vec::new(),
     };

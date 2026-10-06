@@ -59,9 +59,6 @@ pub(super) struct BodyCheck<'a, 'c> {
     pub(super) ambient_source: AmbientSource,
     /// 比べ方をまだ決めていない `==` と `!=` の参照。本体の検査が終わってから `resolve_equalities` が決める。
     pub(super) comparisons: Vec<Comparison>,
-    /// トップレベルの値の参照の、戻り値の側の row を開く前の型。開いた row は呼び出しで今の row と単一化されるので、
-    /// 持ち越し規則は宣言の row で判定する (docs/spec/effects.md の「継続の多重度と持ち越し規則」)。
-    pub(super) declared: ArenaMap<ExprId, Ty>,
     pub(super) typing: BodyTyping,
     /// 参照の具体化の記録。段2が展開する。
     pub(super) instances: Vec<Instance>,
@@ -212,17 +209,7 @@ impl BodyCheck<'_, '_> {
             ExprKind::Literal(Literal::Int(_)) => self.table.int,
             ExprKind::Literal(Literal::String(_)) => self.table.string,
             ExprKind::Literal(Literal::Unit) => self.table.unit,
-            ExprKind::Path(res) => {
-                let ty = self.value(id, *res, expr.range);
-                if let Res::Builtin(operator @ (Builtin::IntEq | Builtin::IntNe)) = *res {
-                    self.comparisons.push(Comparison {
-                        callee: id,
-                        operator,
-                        ty,
-                    });
-                }
-                ty
-            }
+            ExprKind::Path(res) => self.path(id, *res, expr.range, true),
             ExprKind::Call { callee, args, .. } => self.call(id, *callee, args),
             ExprKind::If {
                 condition,
@@ -417,10 +404,24 @@ impl BodyCheck<'_, '_> {
         result
     }
 
-    /// 関数と組み込みの参照は、具体化した後に戻り値の側の閉じた row を開く。純粋な関数を、エフェクトを持つ関数型の
+    /// 名前の参照の型。`open` が偽なら、トップレベルの値の戻り値の側の row を開かない。呼び出しが矢印の row を宣言のまま
+    /// 記録し、部分適用の残りだけを開くため (docs/spec/effects.md の「継続の多重度と持ち越し規則」)。
+    fn path(&mut self, id: ExprId, res: Res, range: TextRange, open: bool) -> Ty {
+        let ty = self.value(res, range, open);
+        if let Res::Builtin(operator @ (Builtin::IntEq | Builtin::IntNe)) = res {
+            self.comparisons.push(Comparison {
+                callee: id,
+                operator,
+                ty,
+            });
+        }
+        ty
+    }
+
+    /// 関数と組み込みの参照は、`open` なら、具体化した後に戻り値の側の閉じた row を開く。純粋な関数を、エフェクトを持つ関数型の
     /// 引数に渡せるようにするため (docs/spec/types.md の「推論」)。局所変数の型は開かない。スキームから複写する Kind
     /// の制約は、参照した場所を由来にする。
-    fn value(&mut self, id: ExprId, res: Res, range: TextRange) -> Ty {
+    fn value(&mut self, res: Res, range: TextRange, open: bool) -> Ty {
         let module = self.module;
         let ty = match res {
             Res::Local(local) => {
@@ -456,8 +457,7 @@ impl BodyCheck<'_, '_> {
                 })
             }
         };
-        self.declared.insert(id, ty);
-        self.table.open_spine(ty)
+        if open { self.table.open_spine(ty) } else { ty }
     }
 
     /// 呼ばれる値や期待する型がまだ推論用の変数のとき、それを関数型に決める。
@@ -499,36 +499,34 @@ impl BodyCheck<'_, '_> {
         let body = self.body;
         let callee_expr = &body.exprs[callee];
         let name = callee_subject(self.module, body, callee);
-        let mut ty = self.infer_expr(callee);
+        let mut ty = match &callee_expr.kind {
+            // 呼ばれる位置のトップレベルの値は開かずに具体化し、矢印の row を宣言のまま記録する。持ち越し規則は宣言の
+            // row で判定する (docs/spec/effects.md の「継続の多重度と持ち越し規則」)
+            ExprKind::Path(
+                res
+                @ (Res::Function(_) | Res::Builtin(_) | Res::Operation(_) | Res::Constructor(_)),
+            ) => {
+                let ty = self.path(callee, *res, callee_expr.range, false);
+                self.typing.exprs.insert(callee, ty);
+                ty
+            }
+            _ => self.infer_expr(callee),
+        };
+        let opened_later =
+            matches!(&callee_expr.kind, ExprKind::Path(res) if !matches!(res, Res::Local(_)));
         let performs = match &callee_expr.kind {
             ExprKind::Path(Res::Operation(op)) => {
                 Some((self.module.operations[*op].arity.saturating_sub(1), *op))
             }
             _ => None,
         };
-        let mut declared = self.declared.get(callee).copied();
         let mut arrows = Vec::new();
         // 1回の呼び出しの E2002 は、どの引数の矢印で起きても1つだけ報告する
         let mut reported = false;
         for (index, &arg) in args.iter().enumerate() {
             match self.next_arrow(ty) {
                 Arrow::Fn { param, row, ret } => {
-                    // トップレベルの値は、開く前の宣言の row を記録する
-                    let recorded = match declared.map(|d| self.table.shape(d).clone()) {
-                        Some(TyShape::Fn {
-                            row: declared_row,
-                            ret: declared_ret,
-                            ..
-                        }) => {
-                            declared = Some(declared_ret);
-                            declared_row
-                        }
-                        _ => {
-                            declared = None;
-                            row.clone()
-                        }
-                    };
-                    arrows.push(recorded);
+                    arrows.push(row.clone());
                     let origin = Origin::Argument {
                         callee: callee_expr.range,
                         name: name.clone(),
@@ -558,6 +556,10 @@ impl BodyCheck<'_, '_> {
         self.typing
             .calls
             .insert(id, CallRows::Call { arrows, performs });
+        // 部分適用の残りは、ほかの参照と同じく戻り値の側の row を開く
+        if opened_later {
+            ty = self.table.open_spine(ty);
+        }
         ty
     }
 
