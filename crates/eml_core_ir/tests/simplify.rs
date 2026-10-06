@@ -336,6 +336,32 @@ fn a_wildcard_arm_does_not_block_the_known_tags() {
 }
 
 #[test]
+fn f_floats_an_arm_join_point_so_that_b2_reaches_the_switch() {
+    // `_` の枝には `No` と、中身が 0 でない `Yes` の2つの葉から届くので、枝は join point になり、`if` の join point の
+    // 本体の先頭に置かれる。F がその join point を外へ出すので、B2 が本体の `switch` に届き、`if` の結果で分岐し直さない
+    let text = "data Opt = | No | Yes Int\n\npick : Bool -> Int\npick b =\n  match (if b then Yes 0 else No) with\n    | Yes 0 -> 1\n    | _ -> 2\n\nmain : Unit -> <IO> Unit\nmain () = println (show_int (pick True))";
+    let pick = function(&core_text(text, Pass::Simplify), "pick");
+    insta::assert_snapshot!(pick, @"
+    fn pick(b0) {
+      join j0(x4) [] {
+        switch x4 {
+          0 ->
+            return 1
+          _ ->
+            return 2
+        }
+      }
+      switch b0 {
+        #0 ->
+          return 2
+        #1 ->
+          jump j0(0)
+      }
+    }
+    ");
+}
+
+#[test]
 fn a_known_and_an_unknown_jump_share_the_split_arm() {
     // 分かっている jump は切り出した join point へ直接向かい、分からない jump は、残った1つの jump の位置に戻された元の join point の `switch` が、同じ join point へ転送する
     let text = "data Option a = | None | Some a\n\nlookup : Int -> Option Int\nlookup n = Some n\n\npick : Bool -> Int\npick c =\n  let n = match (if c then Some 1 else lookup 2) with\n    | Some v -> v\n    | None -> 0\n  n + 1\n\nmain : Unit -> <IO> Unit\nmain () = println (show_int (pick True))";
@@ -402,9 +428,9 @@ fn a_known_and_an_unknown_jump_share_an_arm_that_uses_the_whole_value() {
 }
 
 #[test]
-fn a_remaining_arm_that_uses_the_scrutinee_stays_inside_the_join_point() {
-    // 残りの枝の join point が scrutinee (外側の join point の引数) を使うので、F は外へ出せず、B2 は本体の `switch` に届かない。
-    // docs/implementation/status.md に残る制限
+fn a_known_tag_reaching_a_default_that_uses_the_scrutinee_passes_the_value() {
+    // `Green` は `default` に進み、`default` の枝は値全体 (`x`) を使うので、B2 は `default` を切り出した join point
+    // に値を渡す (`jump j1(#1)`)。`Red` は枝の値をそのまま渡し (`jump j0(1)`)、`if` の結果で分岐し直さない
     let text = "data Color = | Red | Green | Blue\n\ncode : Color -> Int\ncode c = 7\n\npick : Bool -> Int\npick b =\n  let n = match (if b then Red else Green) with\n    | Red -> 1\n    | x -> code x\n  n + 1\n\nmain : Unit -> <IO> Unit\nmain () = println (show_int (pick True))";
     let pick = function(&core_text(text, Pass::Simplify), "pick");
     insta::assert_snapshot!(pick, @"
@@ -505,15 +531,18 @@ fn a_known_tag_without_a_case_takes_the_default() {
 
 #[test]
 fn known_tags_that_take_the_default_jump_straight_to_it() {
-    // B2: 分かっているタグが `default` に進むなら、`default` を join point に切り出して直接 jump する
+    // B2: 分かっているタグ (`Green` と `Blue`) が `default` に進むので、`default` を join point に切り出して直接 jump
+    // する。切り出した本体は小さいので、B5 が両方の jump を `return 2` にし、`if` の結果で分岐し直さない
     let text = "data Color = | Red | Green | Blue\n\npick : Bool -> Int\npick b =\n  match (if b then Green else Blue) with\n    | Red -> 1\n    | _ -> 2\n\nmain : Unit -> <IO> Unit\nmain () = println (show_int (pick True))";
-    let shown = core_text(text, Pass::Simplify);
-    let pick = shown
-        .split("fn pick(")
-        .nth(1)
-        .unwrap()
-        .split("\nfn ")
-        .next()
-        .unwrap();
-    assert_eq!(pick.matches("switch").count(), 1, "{shown}");
+    let pick = function(&core_text(text, Pass::Simplify), "pick");
+    insta::assert_snapshot!(pick, @"
+    fn pick(b0) {
+      switch b0 {
+        #0 ->
+          return 2
+        #1 ->
+          return 2
+      }
+    }
+    ");
 }

@@ -209,10 +209,10 @@ impl<'a> Checker<'a> {
                     cases,
                     default,
                 } => {
+                    self.switch_cases(cases, *default)?;
                     if cases.iter().any(|case| !case.fields.is_empty()) {
                         self.fields_allowed(scrutinee)?;
                     }
-                    self.switch_cases(cases, *default)?;
                     self.consume(&mut state, scrutinee)?;
                     for case in cases {
                         self.check_branch(case.body, state.clone(), &case.fields)?;

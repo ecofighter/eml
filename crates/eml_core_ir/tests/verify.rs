@@ -735,3 +735,52 @@ fn a_switch_with_two_cases_for_one_literal_is_rejected() {
     let error = check(text).unwrap_err();
     assert!(error.contains("two cases"), "{error}");
 }
+
+#[test]
+fn a_literal_case_that_binds_fields_is_rejected() {
+    let text = "fn main(n0) {
+  switch n0 {
+    1(x1) ->
+      return x1
+    _ ->
+      return 0
+  }
+}
+";
+    let error = check(text).unwrap_err();
+    assert!(error.contains("binds fields"), "{error}");
+}
+
+#[test]
+fn a_string_case_without_its_constant_is_rejected() {
+    let text = r#"fn main(s0^) {
+  switch s0 {
+    "a" ->
+      return 1
+    _ ->
+      return 0
+  }
+}
+"#;
+    let mut program = eml_core_ir::parse(text).unwrap_or_else(|error| panic!("{error}"));
+    program.strings.clear();
+    let error = verify(&program).unwrap_err().to_string();
+    assert!(error.contains("does not exist"), "{error}");
+}
+
+#[test]
+fn a_switch_with_two_defaults_does_not_parse() {
+    let text = "fn main(n0) {
+  switch n0 {
+    1 ->
+      return 10
+    _ ->
+      return 0
+    _ ->
+      return 1
+  }
+}
+";
+    let error = eml_core_ir::parse(text).unwrap_err().to_string();
+    assert!(error.contains("two defaults"), "{error}");
+}

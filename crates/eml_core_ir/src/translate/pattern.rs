@@ -89,18 +89,16 @@ impl Row {
     }
 }
 
-/// 葉の jump の行き先。`locals` は join point の引数の順 (`Body::pat_bindings` の順) である。
+/// 葉の行き先。`locals` は join point の引数の順 (`Body::pat_bindings` の順) である。
 struct Target {
-    join: JoinId,
     locals: Vec<LocalId>,
-    /// この行き先へ jump する葉の式と、その jump が渡す出現。
+    /// この行き先に届く葉の位置と、その葉が渡す出現。葉の式は、届く葉の数が分かってから埋める。
     leaves: Vec<(CExprId, Vec<Atom>)>,
 }
 
 impl Target {
-    fn new(join: JoinId, locals: Vec<LocalId>) -> Target {
+    fn new(locals: Vec<LocalId>) -> Target {
         Target {
-            join,
             locals,
             leaves: Vec::new(),
         }
@@ -115,12 +113,13 @@ struct Occurrence {
 }
 
 impl FnLowering<'_> {
-    /// `match` の値を `exit` に渡す決定木を返す。枝の本体は、どの葉から届くかが決定木を作るまで分からないので、先に
-    /// 組み立てておき、葉は枝の join point への jump にする。決定木を作った後で、1つの葉からだけ届く枝は本体をその
-    /// 葉の位置に移し、残りの枝だけを決定木の外側の join point にする。枝ごとの join point は互いの範囲に入れ子に
-    /// なるので、すべてを join point にすると、枝の数だけ深い連なりになるためである
-    /// (docs/superpowers/specs/2026-10-06-refactor-r7-design.md の 6.3)。葉から届かない枝も join point に残し、
-    /// simplify の B4 が消す。
+    /// `match` の値を `exit` に渡す決定木を返す。枝の本体は先に組み立てておく。どの葉から届くかは決定木を作るまで
+    /// 分からないので、葉には仮の式を置く。決定木を作った後で、1つの葉からだけ届く枝は本体をその葉の位置に移す。
+    /// 残りの枝だけに join point の番号を取って決定木の外側に置き、葉をその join point への jump にする。枝ごとの
+    /// join point は互いの範囲に入れ子になるので、すべてを join point にすると、枝の数だけ深い連なりになるためである
+    /// (docs/superpowers/specs/2026-10-06-refactor-r7-design.md の 6.3)。番号を決定木の後で取るのは、木に置かない
+    /// join point の番号を取らないためである。`FnBuilder::finish` は、番号を取った join point がすべて木にあることを
+    /// 求める。葉から届かない枝も join point にし、simplify の B4 が消す。
     pub(super) fn lower_match(
         &mut self,
         scrutinee: ExprId,
@@ -133,10 +132,9 @@ impl FnLowering<'_> {
         let mut targets = Vec::new();
         let mut bodies = Vec::new();
         for arm in arms {
-            let join = self.new_join();
             let (locals, params) = self.bind_params(arm.pat);
             bodies.push((params, self.tail(arm.body, exit)));
-            targets.push(Target::new(join, locals));
+            targets.push(Target::new(locals));
         }
         let rows = arms
             .iter()
@@ -152,17 +150,15 @@ impl FnLowering<'_> {
             if let [(leaf, args)] = target.leaves.as_slice() {
                 self.inline_arm(*leaf, &params, args, body);
             } else {
-                out.push(Binding::Shared {
-                    join: target.join,
-                    params,
-                    body,
-                });
+                let join = self.new_join();
+                self.jump_from_leaves(join, target.leaves);
+                out.push(Binding::Shared { join, params, body });
             }
         }
         tree
     }
 
-    /// 1つの葉からだけ届く枝の本体を、その葉の jump と置き換える。引数は、葉が渡す出現の `let` にする。simplify の
+    /// 1つの葉からだけ届く枝の本体を、その葉の位置に置く。引数は、葉が渡す出現の `let` にする。simplify の
     /// B3 が jump が1つの join point を戻す形と同じである。
     fn inline_arm(&mut self, leaf: CExprId, params: &[VarId], args: &[Atom], body: CExprId) {
         let mut code = body;
@@ -176,6 +172,13 @@ impl FnLowering<'_> {
         self.builder.move_expr(code, leaf);
     }
 
+    /// 行き先に届く葉を、すべて `join` への jump にする。
+    fn jump_from_leaves(&mut self, join: JoinId, leaves: Vec<(CExprId, Vec<Atom>)>) {
+        for (leaf, args) in leaves {
+            self.builder.set(leaf, CExpr::Jump { join, args });
+        }
+    }
+
     /// 値を調べるか分解する `let` と引数のパターン。続きの式を本体にする join point の引数で変数を受け、枝が1つの
     /// `match` と同じ決定木で値を分解する。jump は1つなので、simplify の B3 がその位置に戻す。
     pub(super) fn destructure(&mut self, pat: PatId, value: Atom, ty: Type, out: &mut Bindings) {
@@ -186,8 +189,10 @@ impl FnLowering<'_> {
             target: 0,
             bound: Vec::new(),
         }];
-        let mut targets = [Target::new(join, locals)];
+        let mut targets = [Target::new(locals)];
         let scope = self.decide(&[Occurrence { atom: value, ty }], rows, &mut targets);
+        let [target] = targets;
+        self.jump_from_leaves(join, target.leaves);
         out.push(Binding::Join {
             join,
             params,
@@ -451,8 +456,8 @@ impl FnLowering<'_> {
         }
     }
 
-    /// 葉。最初の行の残りの変数を束縛し、その行の枝の join point へ、引数の順に出現を渡す。枝の本体をこの位置に移せる
-    /// ように、jump の式を行き先に記録する。
+    /// 葉。最初の行の残りの変数を束縛し、その行の行き先に、引数の順に出現を記録する。葉の式は、行き先に届く葉の数が
+    /// 分かってから、枝の本体か jump で埋める。ここでは仮の式を置き、その位置を返す。
     fn leaf(&mut self, occurrences: &[Occurrence], row: Row, targets: &mut [Target]) -> CExprId {
         let body = self.body;
         let mut bound = row.bound;
@@ -473,12 +478,9 @@ impl FnLowering<'_> {
                     .expect("every pattern variable is bound on the way to its leaf")
             })
             .collect();
-        let jump = self.push(CExpr::Jump {
-            join: target.join,
-            args: args.clone(),
-        });
-        target.leaves.push((jump, args));
-        jump
+        let slot = self.push(CExpr::Return(Atom::Unit));
+        target.leaves.push((slot, args));
+        slot
     }
 
     /// コンストラクタのフィールドの型。スキームの型引数を、調べる値の型の引数で置き換える。値の型が型構成子の適用で

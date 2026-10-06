@@ -46,6 +46,11 @@ impl FnBuilder {
         self.joins[join.0 as usize] = Some(at);
     }
 
+    /// `id` の式を置き換える。決定木の葉のように、親が先に指した位置を後で埋めるときに使う。
+    pub(crate) fn set(&mut self, id: CExprId, expr: CExpr) {
+        self.exprs[id.0 as usize] = expr;
+    }
+
     /// `from` の式を `to` に移す。`to` を親が指したまま中身を差し替えるためで、`from` は木から外れて `compact` が
     /// 捨てる。join point の定義を移すときは、索引も `to` を指す。
     pub(crate) fn move_expr(&mut self, from: CExprId, to: CExprId) {
@@ -71,11 +76,6 @@ impl FnBuilder {
     }
 
     pub(crate) fn finish(mut self, name: String, params: Vec<VarId>, body: CExprId) -> CoreFn {
-        // 番号を取ったが木に置かなかった join point (1つの葉からだけ届く `match` の枝。translate/pattern.rs) の索引は、
-        // `CoreFn::new_join` と同じく根を指しておく。木にない join point は `compact` が捨てる
-        for join in &mut self.joins {
-            join.get_or_insert(body);
-        }
         let vars = std::mem::take(&mut self.vars);
         let (exprs, joins) = self.into_arenas();
         CoreFn {

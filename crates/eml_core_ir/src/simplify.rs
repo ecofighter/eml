@@ -4,9 +4,8 @@
 //! F (join point の外出し)、B3 (jump が1つ)、K1 (分かっているコンストラクタの `switch`)、B2 (分かっているタグと
 //! コンストラクタの値)、B5 (小さな本体)、B3、B4 (使われない)、DCE (使われない純粋な束縛)、T (末尾呼び出し) の順に1巡だけ回す。T を最後に置くのは、B3 と B5 が
 //! 呼び出しを枝へ動かした後で、`let x = call …` と `return x` が並ぶ形を拾うためである。
-//! F を最初に置くのは、決定木が `if` の join point の本体の中に置いた残りの枝の join point を外へ出し、最初の B3 と
-//! B2 が `Switch` に届くようにするためである。パイプラインが直前に `captures` を埋めているので、F だけは正しい
-//! `captures` を使える。最初の B3 は、`match` の枝の join point を `Switch` の枝に戻す。
+//! F を最初に置くのは、B2 が join point の本体の始めの `Switch` に届くようにするためである (`float_joins`)。
+//! パイプラインが直前に `captures` を埋めているので、F だけは正しい `captures` を使える。
 //! K1 を最初の B3 の後に置くのは、B3 が join point を戻すときに作る引数の束縛 `let t = d` をたどって `d` の `con` まで
 //! 届くためである。K1 の分かっているコンストラクタの表は関数全体で1つ作る。変数は1回だけ束縛され、使用は束縛の範囲に
 //! あるので、根からの走査は要らない。K1 と B2 が枝の中の変数を置き換えるので、引くときにアリーナから今の右辺を読み直す。
@@ -43,7 +42,8 @@ struct Simplify<'a> {
 
 impl Simplify<'_> {
     /// F: join point の本体の先頭に並ぶ join point の定義を、外側の join point の引数を使わなければ、外側の定義の位置へ
-    /// 出す。外側の本体は外へ出した join point の範囲に入るので、本体の中の jump はそのまま届く。外へ出す本体は外側の
+    /// 出す。外側の本体の始めを `Switch` にして、B2 が届くようにするためである。実際に外へ出すのは、複数の葉から届く
+    /// `match` の枝の join point で、`if` の値の join point の本体の先頭に置かれたものである。外側の本体は外へ出した join point の範囲に入るので、本体の中の jump はそのまま届く。外へ出す本体は外側の
     /// 引数を使わず、外側の本体の中で束縛した変数も使えない (先頭に並ぶので、その前に束縛はない) ので、外側の定義の位置
     /// でも範囲にある変数しか使わない。祖父母が指す式の ID は同じ位置に残るので、この2つの式の外で子の指す先を
     /// 書き換える式はない。F は親の表を持たず、後の書き換えが表を作り直す。
@@ -214,6 +214,18 @@ impl Simplify<'_> {
             if scrutinee != param {
                 continue;
             }
+            // 分かっているコンストラクタの値はタグの case の `Switch` にだけ届くので、リテラルの case を持つ `Switch`
+            // は切り出さない
+            let Some(tags) = cases
+                .iter()
+                .map(|case| match case.pattern {
+                    CasePattern::Tag(tag) => Some(tag),
+                    CasePattern::Int(_) | CasePattern::String(_) => None,
+                })
+                .collect::<Option<Vec<u32>>>()
+            else {
+                continue;
+            };
             let values: Vec<Option<(u32, Vec<Atom>)>> = sites
                 .iter()
                 .map(|&site| match self.expr(site) {
@@ -244,12 +256,7 @@ impl Simplify<'_> {
             let targeted: Vec<Option<u32>> = values.iter().flatten().filter_map(target).collect();
             let mut split: Vec<SplitArm> = Vec::new();
             let mut dispatch = Vec::new();
-            for case in &cases {
-                // 分かっているコンストラクタの値はタグの case の `Switch` にだけ届くので、リテラルの case の `Switch`
-                // は上の確かめで外れている
-                let CasePattern::Tag(tag) = case.pattern else {
-                    unreachable!("known constructor values only reach tag cases")
-                };
+            for (case, tag) in cases.iter().zip(tags) {
                 if !case.fields.is_empty() && !targeted.contains(&Some(tag)) {
                     dispatch.push(case.clone());
                     continue;
