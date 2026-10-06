@@ -7,7 +7,7 @@ use eml_runtime::{Closure, Frame, Heap, ObjRef, OutputSink, Payload, Value};
 use crate::error::{Fault, RuntimeError};
 
 /// 関数値の適用の結果。関数に入ったか、値ができたか (足りない引数のクロージャ)。
-pub(crate) enum Applied {
+enum Applied {
     Entered,
     Value(Value),
 }
@@ -19,9 +19,9 @@ pub(crate) enum Step {
 }
 
 /// 呼び出しから戻った後に再開するところと、呼び出しのフレームに退避する変数。
-pub(crate) struct ReturnPoint<'p> {
+struct ReturnPoint<'p> {
     bind: VarId,
-    pub(crate) control: CExprId,
+    control: CExprId,
     saved: &'p [VarId],
 }
 
@@ -31,11 +31,11 @@ pub(crate) struct Machine<'p> {
     pub(crate) out: &'p OutputSink,
     pub(crate) file_root: &'p Path,
     pub(crate) heap: Heap,
-    pub(crate) function: FnIdx,
+    function: FnIdx,
     control: CExprId,
     /// 今の関数の環境。読み出しはスロットを書き換えない。参照の所有は Core IR の命令 (使用、`dup`、`decref`) が表し、
     /// verifier がその釣り合いを確かめる (docs/spec/core-ir.md)。
-    pub(crate) slots: Vec<Option<Value>>,
+    slots: Vec<Option<Value>>,
     /// 継続の先頭のフレーム。最下部には常に `Frame::Io` がある。
     pub(crate) cont: ObjRef,
 }
@@ -71,7 +71,7 @@ impl<'p> Machine<'p> {
     }
 
     /// 1つの命令を実行する。
-    pub(crate) fn step(&mut self) -> Result<Step, Fault> {
+    fn step(&mut self) -> Result<Step, Fault> {
         let program = self.program;
         match program.function(self.function).expr(self.control) {
             CExpr::Let { var, rhs, body } => return self.bind(*var, rhs, *body),
@@ -133,7 +133,7 @@ impl<'p> Machine<'p> {
         Ok(Step::Continue)
     }
 
-    pub(crate) fn bind(&mut self, var: VarId, rhs: &'p Rhs, body: CExprId) -> Result<Step, Fault> {
+    fn bind(&mut self, var: VarId, rhs: &'p Rhs, body: CExprId) -> Result<Step, Fault> {
         let value = match rhs {
             Rhs::Atom(atom) => self.atom(atom)?,
             Rhs::ConstString(index) => {
@@ -183,11 +183,7 @@ impl<'p> Machine<'p> {
 
     /// 呼び出す。`ret` は戻った値を受ける変数と再開する位置で、`None` ならフレームを積まない (末尾呼び出し)。
     /// 引数はフレームを積んだ後に読む。`push_frame` は環境のスロットを読むだけで書き換えないので、順序は結果に影響しない。
-    pub(crate) fn call(
-        &mut self,
-        call: &Call,
-        ret: Option<ReturnPoint<'p>>,
-    ) -> Result<Step, Fault> {
+    fn call(&mut self, call: &Call, ret: Option<ReturnPoint<'p>>) -> Result<Step, Fault> {
         if let Some(ret) = ret {
             self.push_frame(ret)?;
         }
@@ -244,7 +240,7 @@ impl<'p> Machine<'p> {
         }
     }
 
-    pub(crate) fn enter(&mut self, callee: FnIdx, args: Vec<Value>) {
+    fn enter(&mut self, callee: FnIdx, args: Vec<Value>) {
         let target = self.program.function(callee);
         let mut slots = vec![None; target.vars.len()];
         for (param, value) in target.params.iter().zip(args) {
@@ -257,7 +253,7 @@ impl<'p> Machine<'p> {
 
     /// 関数値を引数に適用する (docs/spec/core-ir.md の eval/apply)。引数の個数が揃えば関数に入り、足りなければ
     /// 引数を足したクロージャを値にし、余れば余りを持つフレームを積んでから関数に入る。
-    pub(crate) fn apply(&mut self, callee: Value, mut args: Vec<Value>) -> Result<Applied, Fault> {
+    fn apply(&mut self, callee: Value, mut args: Vec<Value>) -> Result<Applied, Fault> {
         let Value::Obj(obj) = callee else {
             return Err(Fault::Internal("applying a value that is not a closure"));
         };
@@ -294,7 +290,7 @@ impl<'p> Machine<'p> {
 
     /// 呼び出しはクロージャの所有権を受け取る。共有されていれば、ランタイムが中身を写して子の参照を数え直す
     /// (docs/spec/runtime.md)。
-    pub(crate) fn take_closure(&mut self, obj: ObjRef) -> Result<Closure, Fault> {
+    fn take_closure(&mut self, obj: ObjRef) -> Result<Closure, Fault> {
         match self.heap.take_or_copy(obj).map_err(Fault::Heap)? {
             Payload::Closure(closure) => Ok(closure),
             _ => Err(Fault::Internal("applying an object that is not a closure")),
@@ -303,7 +299,7 @@ impl<'p> Machine<'p> {
 
     /// 呼び出しの後で使う変数だけをフレームに退避する。フレームは、ちょうど所有している参照だけを持つ
     /// (docs/spec/core-ir.md)。
-    pub(crate) fn push_frame(&mut self, ret: ReturnPoint<'p>) -> Result<(), Fault> {
+    fn push_frame(&mut self, ret: ReturnPoint<'p>) -> Result<(), Fault> {
         let saved = ret
             .saved
             .iter()
@@ -388,11 +384,11 @@ impl<'p> Machine<'p> {
 
     /// 変数の値。読み出しはスロットを書き換えない。ヒープの値の所有権を渡すかどうかは Core IR の命令が決める
     /// (docs/spec/core-ir.md)。
-    pub(crate) fn read(&self, var: VarId) -> Result<Value, Fault> {
+    fn read(&self, var: VarId) -> Result<Value, Fault> {
         self.slots[var.0 as usize].ok_or(Fault::Internal("a variable read before it was bound"))
     }
 
-    pub(crate) fn atom(&self, atom: &Atom) -> Result<Value, Fault> {
+    fn atom(&self, atom: &Atom) -> Result<Value, Fault> {
         Ok(match *atom {
             Atom::Var(var) => self.read(var)?,
             Atom::Int(n) => Value::Int(n),
@@ -401,7 +397,7 @@ impl<'p> Machine<'p> {
         })
     }
 
-    pub(crate) fn atoms(&self, atoms: &[Atom]) -> Result<Vec<Value>, Fault> {
+    fn atoms(&self, atoms: &[Atom]) -> Result<Vec<Value>, Fault> {
         atoms.iter().map(|atom| self.atom(atom)).collect()
     }
 
