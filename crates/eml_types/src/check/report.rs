@@ -437,11 +437,14 @@ pub(super) fn linear_misuse(module: &Module, origin: &KindOrigin) -> Diagnostic 
             .with_note(LINEAR_NOTE)
             .with_help(help);
             match fix {
-                Some(fix) => diagnostic.with_fix(vec![TextEdit {
-                    file,
-                    range: TextRange::empty(fix.offset),
-                    replacement: format!("drop {name}\n{}", " ".repeat(fix.indent as usize)),
-                }]),
+                Some(fix) => diagnostic.with_fix(
+                    format!("insert `drop {name}`"),
+                    vec![TextEdit {
+                        file,
+                        range: TextRange::empty(fix.offset),
+                        replacement: format!("drop {name}\n{}", " ".repeat(fix.indent as usize)),
+                    }],
+                ),
                 None => diagnostic,
             }
         }

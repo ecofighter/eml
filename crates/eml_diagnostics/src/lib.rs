@@ -55,6 +55,13 @@ pub struct TextEdit {
     pub replacement: String,
 }
 
+/// 1つの fix。`title` は、何をする fix か。LSP のコードアクションの題名になる (docs/spec/diagnostics.md)。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Fix {
+    pub title: String,
+    pub edits: Vec<TextEdit>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Diagnostic {
     pub code: ErrorCode,
@@ -64,7 +71,7 @@ pub struct Diagnostic {
     pub secondary: Vec<Label>,
     pub notes: Vec<String>,
     pub help: Vec<String>,
-    pub fix: Option<Vec<TextEdit>>,
+    pub fix: Option<Fix>,
 }
 
 impl Diagnostic {
@@ -113,8 +120,11 @@ impl Diagnostic {
         self
     }
 
-    pub fn with_fix(mut self, edits: Vec<TextEdit>) -> Self {
-        self.fix = Some(edits);
+    pub fn with_fix(mut self, title: impl Into<String>, edits: Vec<TextEdit>) -> Self {
+        self.fix = Some(Fix {
+            title: title.into(),
+            edits,
+        });
         self
     }
 
@@ -155,6 +165,30 @@ mod tests {
         assert_eq!(
             NOT_YET_SUPPORTED_LABEL,
             "this is implemented in a later stage"
+        );
+    }
+
+    #[test]
+    fn a_fix_has_a_title_and_its_edits() {
+        let mut files = SourceFiles::new();
+        let file = files.add("a.em", "x");
+        let edit = TextEdit {
+            file,
+            range: TextRange::empty(0.into()),
+            replacement: "drop x\n".to_string(),
+        };
+        let diagnostic = Diagnostic::error(
+            ErrorCode(3003),
+            "unused",
+            Label::new(file, TextRange::empty(0.into()), "here"),
+        )
+        .with_fix("insert `drop x`", vec![edit.clone()]);
+        assert_eq!(
+            diagnostic.fix,
+            Some(Fix {
+                title: "insert `drop x`".to_string(),
+                edits: vec![edit],
+            })
         );
     }
 

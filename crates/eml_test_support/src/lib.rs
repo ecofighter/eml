@@ -200,9 +200,16 @@ pub fn with_diagnostics(mut dump: String, diagnostics: &str) -> String {
 pub fn fixes(files: &SourceFiles, diagnostics: &[Diagnostic]) -> String {
     let mut out = String::new();
     for d in diagnostics {
-        let Some(edits) = &d.fix else { continue };
-        writeln!(out, "{} {}", d.code, position(files, &d.primary)).unwrap();
-        for edit in edits {
+        let Some(fix) = &d.fix else { continue };
+        writeln!(
+            out,
+            "{} {} {}",
+            d.code,
+            position(files, &d.primary),
+            fix.title
+        )
+        .unwrap();
+        for edit in &fix.edits {
             let start = files.line_col(edit.file, edit.range.start());
             let end = files.line_col(edit.file, edit.range.end());
             writeln!(out, "  {start}..{end} {:?}", edit.replacement).unwrap();

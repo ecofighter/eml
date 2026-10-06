@@ -115,7 +115,7 @@ fn fix_text(rest: &str) -> String {
 fn the_fix_inserts_drop_before_the_last_statement_of_the_scope() {
     let rest = "unused : Unit -> Int\nunused () =\n  handle ask () with\n    | ask () k ->\n        let j = k\n        0";
     insta::assert_snapshot!(fix_text(rest), @r#"
-    E3003 11:13
+    E3003 11:13 insert `drop j`
       12:9..12:9 "drop j\n        "
     "#);
 }
@@ -124,7 +124,7 @@ fn the_fix_inserts_drop_before_the_last_statement_of_the_scope() {
 fn the_fix_inserts_drop_into_a_branch_that_is_a_block() {
     let rest = "arm : Bool -> Int\narm b =\n  handle ask () with\n    | ask () k ->\n        let j = k\n        match b with\n          | True -> resume j 1\n          | False ->\n              let n = 0\n              n";
     insta::assert_snapshot!(fix_text(rest), @r#"
-    E3003 11:13
+    E3003 11:13 insert `drop j`
       16:15..16:15 "drop j\n              "
     "#);
 }
@@ -284,7 +284,7 @@ fn a_type_error_in_one_body_does_not_hide_linearity_errors_in_another() {
 fn the_fix_for_a_shadowed_value_goes_before_the_shadowing_let() {
     let rest = "last : Unit -> Unit\nlast () =\n  handle ask () with\n    | ask () k ->\n        let j = k\n        let j = 1\n    | return x -> ()";
     insta::assert_snapshot!(fix_text(rest), @r#"
-    E3003 11:13
+    E3003 11:13 insert `drop j`
       12:9..12:9 "drop j\n        "
     "#);
 }
@@ -301,7 +301,7 @@ fn a_same_name_in_an_unrelated_lambda_keeps_the_fix() {
       help: pass `j` to `drop`
     ");
     insta::assert_snapshot!(fix_text(rest), @r#"
-    E3003 11:13
+    E3003 11:13 insert `drop j`
       13:9..13:9 "drop j\n        "
     "#);
 }
