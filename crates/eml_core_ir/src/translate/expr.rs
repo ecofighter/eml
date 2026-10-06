@@ -308,6 +308,7 @@ impl FnLowering<'_> {
             // 本体と節を、捕まえた変数を先頭の引数に持つ関数に持ち上げる (docs/spec/core-ir.md)。本体は `()` を受ける
             ExprKind::Handle {
                 body: handled,
+                init: _,
                 effect,
                 clauses,
                 ret,
@@ -375,7 +376,7 @@ impl FnLowering<'_> {
                 };
                 self.bind(out, "t", &ty, Rhs::call(call))
             }
-            ExprKind::Resume { k, arg } => {
+            ExprKind::Resume { k, arg, state: _ } => {
                 let k = self.atom(*k, out);
                 let arg = self.atom(*arg, out);
                 let ty = self.ty(id);

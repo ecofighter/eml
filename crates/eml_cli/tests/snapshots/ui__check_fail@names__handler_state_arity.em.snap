@@ -1,0 +1,39 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: rendered
+input_file: tests/ui/check-fail/names/handler_state_arity.em
+---
+[E1010] Error: the clause for `ask` takes 3 parameters, but this one has 2
+    ╭─[ check-fail/names/handler_state_arity.em:11:7 ]
+    │
+ 11 │     | ask () k -> resume k 1 0
+    │       ─┬─  
+    │        ╰─── this clause
+    │ 
+    │ Note: the clause takes the arguments of `ask`, the continuation `k`, and then the state
+────╯
+[E1010] Error: the clause for `fail` takes 2 parameters, but this one has 1
+    ╭─[ check-fail/names/handler_state_arity.em:17:7 ]
+    │
+ 17 │     | fail () -> 0
+    │       ──┬─  
+    │         ╰─── this clause
+    │ 
+    │ Note: `fail` is a `never` operation, so its clause takes the arguments of the operation and then the state
+────╯
+[E1010] Error: the `return` clause takes 2 parameters, but this one has 1
+    ╭─[ check-fail/names/handler_state_arity.em:24:5 ]
+    │
+ 24 │     | return x -> x
+    │     ───────┬───────  
+    │            ╰───────── this clause
+    │ 
+    │ Note: the second parameter receives the state of the handler
+────╯
+[E1011] Error: `resume` takes a continuation, a value, and an optional state, but 4 arguments were given
+    ╭─[ check-fail/names/handler_state_arity.em:29:22 ]
+    │
+ 29 │     | ask () k st -> resume k 1 st st
+    │                      ───┬──  
+    │                         ╰──── this `resume`
+────╯

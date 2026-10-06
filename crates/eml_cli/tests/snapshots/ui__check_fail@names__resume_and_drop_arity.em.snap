@@ -3,7 +3,7 @@ source: crates/eml_cli/tests/ui.rs
 expression: rendered
 input_file: tests/ui/check-fail/names/resume_and_drop_arity.em
 ---
-[E1011] Error: `resume` takes a continuation and a value, but 1 argument was given
+[E1011] Error: `resume` takes a continuation, a value, and an optional state, but 1 argument was given
    ╭─[ check-fail/names/resume_and_drop_arity.em:9:19 ]
    │
  9 │     | ask () k -> resume k

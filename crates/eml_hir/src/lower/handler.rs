@@ -24,18 +24,19 @@ struct Clauses {
 
 impl BodyLowering<'_> {
     pub(super) fn lower_handle(&mut self, handle: &ast::HandleExpr, range: TextRange) -> ExprId {
-        if let Some(from) = handle.from_keyword() {
-            return self.unsupported(
-                from.text_range(),
-                "handlers with `from` are not supported yet",
-            );
-        }
+        // 初期値は本体より先に評価する (docs/spec/expressions.md の「パラメータ付き handler」)
+        let init = handle
+            .from_keyword()
+            .map(|_| self.lower_expr(handle.init(), range));
+        let stateful = init.is_some();
         let body = self.lower_expr(handle.body(), range);
         let mut lowered = Clauses::default();
         for clause in handle.clauses() {
             match clause {
-                ast::Clause::OpClause(clause) => self.op_clause(&clause, &mut lowered),
-                ast::Clause::ReturnClause(clause) => self.return_clause(&clause, &mut lowered),
+                ast::Clause::OpClause(clause) => self.op_clause(&clause, stateful, &mut lowered),
+                ast::Clause::ReturnClause(clause) => {
+                    self.return_clause(&clause, stateful, &mut lowered)
+                }
             }
         }
         self.missing_clauses(handle.keyword_range(), &lowered);
@@ -50,9 +51,19 @@ impl BodyLowering<'_> {
         let ret = ret.unwrap_or_else(|| {
             let keyword = handle.keyword_range();
             let (param, value) = self.hidden_param("$r", keyword);
+            let mut params = vec![param];
+            // 状態を `_` で捨てるので、状態の型に `Unr` の制約が付く (docs/spec/expressions.md の「パラメータ付き handler」)。
+            // 診断が初期値を指すよう、`_` の範囲を初期値にする
+            if let Some(init) = init {
+                let range = self.exprs[init].range;
+                params.push(self.pats.alloc(Pat {
+                    kind: PatKind::Wildcard,
+                    range,
+                }));
+            }
             ReturnClause {
                 closure: Closure {
-                    params: vec![param],
+                    params,
                     body: value,
                 },
                 source: ClauseSource::Omitted,
@@ -65,6 +76,7 @@ impl BodyLowering<'_> {
                     params: vec![],
                     body,
                 },
+                init,
                 effect: effect.map(|(effect, _)| effect),
                 clauses,
                 ret,
@@ -73,7 +85,7 @@ impl BodyLowering<'_> {
         )
     }
 
-    fn op_clause(&mut self, clause: &ast::OpClause, out: &mut Clauses) {
+    fn op_clause(&mut self, clause: &ast::OpClause, stateful: bool, out: &mut Clauses) {
         out.any_operation = true;
         // 引数のスコープは節の本体だけである
         let mark = self.scope.len();
@@ -137,14 +149,21 @@ impl BodyLowering<'_> {
             Some(_) => {}
         }
         out.seen.push((op, name_range));
-        let expected = arity + usize::from(!never);
+        let expected = arity + usize::from(!never) + usize::from(stateful);
         if params.len() != expected {
-            let note = if never {
-                format!(
+            let note = match (never, stateful) {
+                (true, true) => format!(
+                    "`{text}` is a `never` operation, so its clause takes the arguments of the operation and then the state"
+                ),
+                (false, true) => format!(
+                    "the clause takes the arguments of `{text}`, the continuation `k`, and then the state"
+                ),
+                (true, false) => format!(
                     "`{text}` is a `never` operation, so its clause takes only the arguments of the operation"
-                )
-            } else {
-                format!("the clause takes the arguments of `{text}` and then the continuation `k`")
+                ),
+                (false, false) => format!(
+                    "the clause takes the arguments of `{text}` and then the continuation `k`"
+                ),
             };
             self.diagnostics.push(
                 Diagnostic::error(
@@ -169,7 +188,7 @@ impl BodyLowering<'_> {
         });
     }
 
-    fn return_clause(&mut self, clause: &ast::ReturnClause, out: &mut Clauses) {
+    fn return_clause(&mut self, clause: &ast::ReturnClause, stateful: bool, out: &mut Clauses) {
         let mark = self.scope.len();
         // `return` 節の引数 (最後の値を受けるパターン) も、等式の引数と同じく1つの組として扱う (E1017)
         let params = self.lower_param_group(clause.params(), clause.range());
@@ -191,28 +210,32 @@ impl BodyLowering<'_> {
             );
             return;
         }
-        let [param] = params.as_slice() else {
+        let expected = 1 + usize::from(stateful);
+        if params.len() != expected {
             let mut diagnostic = Diagnostic::error(
                 codes::CLAUSE_ARITY,
                 format!(
-                    "the `return` clause takes 1 parameter, but this one has {}",
+                    "the `return` clause takes {}, but this one has {}",
+                    parameters(expected),
                     params.len()
                 ),
                 Label::new(self.file, range, "this clause"),
             );
-            if params.len() == 2 {
-                diagnostic = diagnostic.with_note(
-                    "a second parameter receives the state, which needs `handle ... from ...`",
-                );
+            let note = match (stateful, params.len()) {
+                (true, _) => Some("the second parameter receives the state of the handler"),
+                (false, 2) => {
+                    Some("a second parameter receives the state, which needs `handle ... from ...`")
+                }
+                (false, _) => None,
+            };
+            if let Some(note) = note {
+                diagnostic = diagnostic.with_note(note);
             }
             self.diagnostics.push(diagnostic);
             return;
-        };
+        }
         out.ret = Some(ReturnClause {
-            closure: Closure {
-                params: vec![*param],
-                body,
-            },
+            closure: Closure { params, body },
             source: ClauseSource::Written,
             range,
         });
@@ -293,17 +316,28 @@ impl BodyLowering<'_> {
     pub(super) fn lower_resume(&mut self, resume: &ast::ResumeExpr, range: TextRange) -> ExprId {
         let args = self.keyword_args(resume.args());
         match args.as_slice() {
-            [k, arg] => self.alloc(ExprKind::Resume { k: *k, arg: *arg }, range),
-            // パラメータ付き handler の3引数の形 (docs/spec/expressions.md の「パラメータ付き handler」)
-            [_, _, _] => self.unsupported(
-                resume.keyword_range(),
-                "`resume` with a handler state is not supported yet",
+            [k, arg] => self.alloc(
+                ExprKind::Resume {
+                    k: *k,
+                    arg: *arg,
+                    state: None,
+                },
+                range,
+            ),
+            // 引数の数がどちらに合うかは、`k` の型の状態の欄の単一化で決まる (docs/spec/effects.md の「パラメータ付き handler」)
+            [k, arg, state] => self.alloc(
+                ExprKind::Resume {
+                    k: *k,
+                    arg: *arg,
+                    state: Some(*state),
+                },
+                range,
             ),
             _ => {
                 self.diagnostics.push(Diagnostic::error(
                     codes::KEYWORD_ARITY,
                     format!(
-                        "`resume` takes a continuation and a value, but {} given",
+                        "`resume` takes a continuation, a value, and an optional state, but {} given",
                         arguments(args.len())
                     ),
                     Label::new(self.file, resume.keyword_range(), "this `resume`"),

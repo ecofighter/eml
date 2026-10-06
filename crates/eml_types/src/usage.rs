@@ -171,11 +171,15 @@ impl<'a> Usage<'a, '_> {
             // 同じく、捕まえることを handle 式の位置での1回の使用に数え、中の使用を別に数える
             ExprKind::Handle {
                 body: handled,
+                init,
                 effect: _,
                 clauses,
                 ret,
             } => {
                 let mut uses = Uses::new();
+                if let Some(init) = init {
+                    uses = self.expr(*init);
+                }
                 let inner = self.expr(handled.body);
                 let captured = self.captured_once(handled, inner, body.exprs[handled.body].range);
                 sequence(&mut uses, captured);
@@ -217,10 +221,14 @@ impl<'a> Usage<'a, '_> {
                 );
                 uses
             }
-            ExprKind::Resume { k, arg } => {
+            ExprKind::Resume { k, arg, state } => {
                 let mut uses = self.expr(*k);
                 let next = self.expr(*arg);
                 sequence(&mut uses, next);
+                if let Some(state) = state {
+                    let next = self.expr(*state);
+                    sequence(&mut uses, next);
+                }
                 uses
             }
             // 枝は `if` の枝と同じく別の経路である。枝のパターンの変数は枝の外から見えないので、枝ごとに数え終える

@@ -175,22 +175,100 @@ fn clause_errors_are_reported_together() {
 
 #[test]
 fn resume_and_drop_take_a_fixed_number_of_arguments() {
-    let text = "f : Int -> Unit\nf k =\n  resume k\n  drop k 2\n  resume k k k";
+    let text = "f : Int -> Unit\nf k =\n  resume k\n  drop k 2\n  resume k k k k";
     assert_eq!(
         diagnostics(text),
         [
-            "E1011 3:3 `resume` takes a continuation and a value, but 1 argument was given",
+            "E1011 3:3 `resume` takes a continuation, a value, and an optional state, but 1 argument was given",
             "E1011 4:3 `drop` takes one value, but 2 arguments were given",
-            "E0004 5:3 `resume` with a handler state is not supported yet",
+            "E1011 5:3 `resume` takes a continuation, a value, and an optional state, but 4 arguments were given",
         ]
     );
 }
 
 #[test]
-fn handlers_with_an_initial_state_come_in_stage_6() {
+fn a_handler_with_a_state_takes_the_state_last_in_every_clause() {
+    let text = "effect Ask where\n  ask : Unit -> Int\n\nf : Unit -> Int\nf () =\n  handle ask () from 0 with\n    | ask () k st -> resume k st (st + 1)\n    | return x st -> x + st";
+    let lowered = lower_clean(text);
+    let function = lowered
+        .module
+        .functions
+        .iter()
+        .find(|(_, function)| function.name == "f")
+        .map(|(_, function)| function)
+        .unwrap();
+    let body = function.body.as_ref().unwrap();
+    let (init, clauses, ret) = body
+        .exprs
+        .iter()
+        .find_map(|(_, expr)| match &expr.kind {
+            eml_hir::ExprKind::Handle {
+                init, clauses, ret, ..
+            } => Some((*init, clauses, ret)),
+            _ => None,
+        })
+        .unwrap();
+    assert!(init.is_some());
+    let clause = &clauses[0];
+    assert_eq!(clause.closure.params.len(), 3);
+    assert_eq!(clause.state(), clause.closure.params.last().copied());
+    assert_eq!(ret.state(), Some(ret.closure.params[1]));
+    let resume_state = body.exprs.iter().find_map(|(_, expr)| match &expr.kind {
+        eml_hir::ExprKind::Resume { state, .. } => Some(*state),
+        _ => None,
+    });
+    assert!(matches!(resume_state, Some(Some(_))));
+}
+
+#[test]
+fn an_omitted_return_clause_of_a_handler_with_a_state_discards_the_state() {
+    let text = "effect Ask where\n  ask : Unit -> Int\n\nf : Unit -> Int\nf () =\n  handle ask () from 0 with\n    | ask () k st -> resume k 1 st";
+    let lowered = lower_clean(text);
+    let function = lowered
+        .module
+        .functions
+        .iter()
+        .find(|(_, function)| function.name == "f")
+        .map(|(_, function)| function)
+        .unwrap();
+    let body = function.body.as_ref().unwrap();
+    let (init, ret) = body
+        .exprs
+        .iter()
+        .find_map(|(_, expr)| match &expr.kind {
+            eml_hir::ExprKind::Handle { init, ret, .. } => Some((init.unwrap(), ret)),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(ret.source, eml_hir::ClauseSource::Omitted);
+    let state = ret.state().unwrap();
+    assert_eq!(body.pats[state].kind, eml_hir::PatKind::Wildcard);
+    // 合成した `_` は初期値を指す (docs/spec/diagnostics.md の E3004)
+    assert_eq!(body.pats[state].range, body.exprs[init].range);
+}
+
+#[test]
+fn names_inside_a_handler_with_a_state_are_resolved() {
     assert_eq!(
-        diagnostics("f : Unit -> Int\nf () = handle g () from 1 with | return x st -> x"),
-        ["E0004 2:20 handlers with `from` are not supported yet"]
+        diagnostics("f : Unit -> Int\nf () = handle g () from y with | return x st -> x"),
+        [
+            "E1013 2:8 this handler has no operation clauses",
+            "E1001 2:15 cannot find value `g`",
+            "E1001 2:25 cannot find value `y`",
+        ]
+    );
+}
+
+#[test]
+fn clauses_of_a_handler_with_a_state_take_one_more_parameter() {
+    let text = "effect Ask where\n  ask : Unit -> Int\n\neffect Fail where\n  never fail : Unit -> a\n\nf : Unit -> Int\nf () =\n  handle ask () from 0 with\n    | ask () k -> resume k 1 0\n    | return x -> x\n\ng : Unit -> Int\ng () =\n  handle fail () from 0 with\n    | fail () -> 0\n    | return x st -> x";
+    assert_eq!(
+        diagnostics(text),
+        [
+            "E1010 10:7 the clause for `ask` takes 3 parameters, but this one has 2",
+            "E1010 11:5 the `return` clause takes 2 parameters, but this one has 1",
+            "E1010 16:7 the clause for `fail` takes 2 parameters, but this one has 1",
+        ]
     );
 }
 

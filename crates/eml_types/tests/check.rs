@@ -393,8 +393,8 @@ fn builtin_schemes_are_exported() {
 
 #[test]
 fn later_stage_constructs_add_no_type_errors() {
-    // E0004 の跡 (`<missing>` の値、`from` の handle) を型検査に通しても、誤りを重ねて出さない。
-    let text = "counter : Unit -> Int\ncounter () = 0\n\nf : Int -> Int\nf n =\n  let first = fn t -> t.0\n  let plus = (+)\n  handle counter () from n with\n    | return x st -> x";
+    // E0004 の跡 (`<missing>` の値) を型検査に通しても、誤りを重ねて出さない。
+    let text = "counter : Unit -> Int\ncounter () = 0\n\nf : Int -> Int\nf n =\n  let first = fn t -> t.0\n  let plus = (+)\n  0";
     insta::assert_snapshot!(check_text(text), @"
     counter : Unit -> Int
     f : Int -> Int
@@ -407,8 +407,6 @@ fn later_stage_constructs_add_no_type_errors() {
     ---
     E0004 6:23 field access is not supported yet
       6:23 this is implemented in a later stage
-    E0004 8:21 handlers with `from` are not supported yet
-      8:21 this is implemented in a later stage
     ");
 }
 

@@ -228,19 +228,26 @@ impl Body {
             ExprKind::Lambda(Closure { params: _, body }) => f(*body),
             ExprKind::Handle {
                 body,
+                init,
                 effect: _,
                 clauses,
                 ret,
             } => {
+                if let Some(init) = init {
+                    f(*init);
+                }
                 f(body.body);
                 for clause in clauses {
                     f(clause.closure.body);
                 }
                 f(ret.closure.body);
             }
-            ExprKind::Resume { k, arg } => {
+            ExprKind::Resume { k, arg, state } => {
                 f(*k);
                 f(*arg);
+                if let Some(state) = state {
+                    f(*state);
+                }
             }
             ExprKind::Match {
                 scrutinee, arms, ..
@@ -388,6 +395,8 @@ pub enum ExprKind {
     Handle {
         /// 引数のない closure。Core IR では `()` を受ける関数になる。
         body: Closure,
+        /// `from` の初期値。状態のない handler は `None` で、型検査が `from ()` と区別する (docs/spec/effects.md)。
+        init: Option<ExprId>,
         effect: Option<EffectId>,
         clauses: Vec<OpClause>,
         ret: ReturnClause,
@@ -395,6 +404,8 @@ pub enum ExprKind {
     Resume {
         k: ExprId,
         arg: ExprId,
+        /// 3引数の `resume` の次の状態。
+        state: Option<ExprId>,
     },
     /// 枝のパターンが束縛する変数は、その枝の本体だけで見える (docs/spec/expressions.md の「`match`」)。
     /// 等式が2つ以上ある関数の本体は、引数のタプル (引数が1つならその変数、0個なら `()`) に対する `Equations` の
@@ -451,6 +462,14 @@ impl OpClause {
     pub fn k(&self) -> Option<PatId> {
         self.resumes.then(|| self.closure.params[self.arity])
     }
+
+    /// 状態のある handler の節の、最後の引数。
+    pub fn state(&self) -> Option<PatId> {
+        self.closure
+            .params
+            .get(self.arity + usize::from(self.resumes))
+            .copied()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -464,6 +483,11 @@ pub struct ReturnClause {
 impl ReturnClause {
     pub fn value(&self) -> PatId {
         self.closure.params[0]
+    }
+
+    /// 状態のある handler の `return` の節の、2つ目の引数。
+    pub fn state(&self) -> Option<PatId> {
+        self.closure.params.get(1).copied()
     }
 }
 

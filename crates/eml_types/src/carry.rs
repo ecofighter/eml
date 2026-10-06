@@ -147,6 +147,7 @@ impl Carrying<'_, '_> {
             // handle の位置でクロージャに移る
             ExprKind::Handle {
                 body: handled,
+                init,
                 clauses,
                 ret,
                 effect: _,
@@ -191,11 +192,14 @@ impl Carrying<'_, '_> {
                         .into_iter()
                         .map(Held::Local),
                 );
-                live
+                match init {
+                    Some(init) => self.expr(*init, &live),
+                    None => live,
+                }
             }
             // 再開した継続が外側の `multi` の操作を起こすと、節の手元の値も写される。同じ handler のエフェクトは区間の
             // 中で処理されるので、外側の row だけを見ればよい (docs/spec/effects.md の「継続の多重度と持ち越し規則」)
-            ExprKind::Resume { k, arg } => {
+            ExprKind::Resume { k, arg, state } => {
                 if let Some(CallRows::Resume(row)) = typing.calls.get(id) {
                     let name = match &body.exprs[*k].kind {
                         ExprKind::Path(Res::Local(local)) => Some(body.locals[*local].name.clone()),
@@ -208,7 +212,9 @@ impl Carrying<'_, '_> {
                         &CallKind::Resume { k: name },
                     );
                 }
-                self.parts(&[*k, *arg], after)
+                let mut parts = vec![*k, *arg];
+                parts.extend(state);
+                self.parts(&parts, after)
             }
             ExprKind::Match {
                 scrutinee, arms, ..

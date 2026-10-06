@@ -244,11 +244,16 @@ impl Printer<'_> {
             }
             ExprKind::Handle {
                 body: Closure { body: handled, .. },
+                init,
                 clauses,
                 ret,
                 ..
             } => {
-                let mut s = format!("(handle {} with", self.expr(body, *handled, indent));
+                let mut s = format!("(handle {}", self.expr(body, *handled, indent));
+                if let Some(init) = init {
+                    write!(s, " from {}", self.expr(body, *init, indent)).unwrap();
+                }
+                s.push_str(" with");
                 for clause in clauses {
                     write!(s, " | {}", self.module.operations[clause.op].name).unwrap();
                     for &pat in &clause.closure.params {
@@ -263,11 +268,17 @@ impl Printer<'_> {
                 write!(s, " -> {}", self.expr(body, ret.closure.body, indent)).unwrap();
                 s + ")"
             }
-            ExprKind::Resume { k, arg } => format!(
-                "(resume {} {})",
-                self.expr(body, *k, indent),
-                self.expr(body, *arg, indent)
-            ),
+            ExprKind::Resume { k, arg, state } => {
+                let mut s = format!(
+                    "(resume {} {}",
+                    self.expr(body, *k, indent),
+                    self.expr(body, *arg, indent)
+                );
+                if let Some(state) = state {
+                    write!(s, " {}", self.expr(body, *state, indent)).unwrap();
+                }
+                s + ")"
+            }
             ExprKind::Match {
                 scrutinee, arms, ..
             } => {

@@ -235,11 +235,12 @@ impl BodyCheck<'_, '_> {
             }
             ExprKind::Handle {
                 body: handled,
+                init,
                 effect,
                 clauses,
                 ret,
-            } => self.handle(id, *effect, handled, clauses, ret),
-            ExprKind::Resume { k, arg } => self.resume(id, *k, *arg),
+            } => self.handle(id, *effect, *init, handled, clauses, ret),
+            ExprKind::Resume { k, arg, state } => self.resume(id, *k, *arg, *state),
             ExprKind::Match {
                 scrutinee, arms, ..
             } => self.match_expr(*scrutinee, arms, Expectation::None),

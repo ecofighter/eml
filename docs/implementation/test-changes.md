@@ -225,3 +225,4 @@
 ### 段階6b-2
 
 - 種類2: fix に題名を持たせたので (spec 2.4)、`eml_test_support::fixes` が診断の行に題名を表示するようにした。`eml_types` の fix のスナップショットの先頭の行に題名が増えた。編集の位置と文字列は変わらない
+- 種類1: `from` の handler と3引数の `resume` を受け付けるようにしたので、`eml_hir/tests/effects.rs` の `handlers_with_an_initial_state_come_in_stage_6` を消して、状態の引数と合成した `return` の節を確かめるテストに置き換えた。`resume_and_drop_take_a_fixed_number_of_arguments` は、3引数の行を4引数にし、E1011 の新しい文言を期待する。`eml_types/tests/check.rs` の `later_stage_constructs_add_no_type_errors` から `from` の handle を除いた。後の段階の構文で型の誤りを重ねないことは、フィールドアクセスで確かめ続ける。あわせて E1011 の文言が新しいものに変わったので、`eml_cli` の UI テスト `check-fail/names/resume_and_drop_arity.em` のスナップショットと、`eml_types/tests/effects.rs` の `a_body_with_a_reported_error_does_not_report_linear_values` の期待値を、文言だけ更新した。確かめている内容は変わらない

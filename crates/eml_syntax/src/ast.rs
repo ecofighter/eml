@@ -550,6 +550,16 @@ impl HandleExpr {
         support::token(&self.syntax, SyntaxKind::FROM_KW)
     }
 
+    /// `from` の後、`with` の前の式。`from` がなければ `None`。
+    pub fn init(&self) -> Option<Expr> {
+        self.from_keyword()?;
+        child_between(
+            &self.syntax,
+            Some(SyntaxKind::FROM_KW),
+            Some(SyntaxKind::WITH_KW),
+        )
+    }
+
     pub fn clauses(&self) -> AstChildren<Clause> {
         support::children(&self.syntax)
     }

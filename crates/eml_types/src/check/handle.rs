@@ -15,13 +15,17 @@ impl BodyCheck<'_, '_> {
         &mut self,
         id: ExprId,
         effect: Option<EffectId>,
+        init: Option<ExprId>,
         handled: &Closure,
         clauses: &[OpClause],
         ret: &ReturnClause,
     ) -> Ty {
         let Some(effect) = effect else {
-            return self.broken_handle(handled, clauses, ret);
+            return self.broken_handle(init, handled, clauses, ret);
         };
+        if let Some(init) = init {
+            self.infer_expr(init);
+        }
         let outer = self.ambient.clone();
         // handle ごとにエフェクトの型引数を新しい変数にする。本体の操作の呼び出しと節が、この変数を通じて型引数を共有する
         let module = self.module;
@@ -51,6 +55,10 @@ impl BodyCheck<'_, '_> {
         let source = self.ambient_source.clone();
         let handled_ty = self.with_ambient(inner, source, |this| this.infer_expr(handled.body));
         self.bind_pat(ret.value(), handled_ty);
+        if let Some(state) = ret.state() {
+            let ty = self.table.fresh_var();
+            self.bind_pat(state, ty);
+        }
         let result = self.infer_expr(ret.closure.body);
         for clause in clauses {
             self.op_clause(clause, result, &outer, &args);
@@ -82,6 +90,10 @@ impl BodyCheck<'_, '_> {
                 }
             }
         }
+        if let Some(state) = clause.state() {
+            let ty = self.table.fresh_var();
+            self.bind_pat(state, ty);
+        }
         if let Some(k) = clause.k() {
             // `multi` の操作の `k` は何度でも再開でき、捨ててもよい (docs/spec/effects.md の「継続の多重度と持ち越し規則」)
             let lin = match operation.multiplicity {
@@ -101,7 +113,16 @@ impl BodyCheck<'_, '_> {
 
     /// 扱うエフェクトが決まらない handler は HIR が報告済みである。本体のエフェクトをすべて受け入れ、型を `Error` に
     /// して、診断を連鎖させない。
-    fn broken_handle(&mut self, handled: &Closure, clauses: &[OpClause], ret: &ReturnClause) -> Ty {
+    fn broken_handle(
+        &mut self,
+        init: Option<ExprId>,
+        handled: &Closure,
+        clauses: &[OpClause],
+        ret: &ReturnClause,
+    ) -> Ty {
+        if let Some(init) = init {
+            self.infer_expr(init);
+        }
         let source = self.ambient_source.clone();
         self.with_ambient(Row::error(), source, |this| this.infer_expr(handled.body));
         let error = self.table.error;
@@ -120,7 +141,13 @@ impl BodyCheck<'_, '_> {
 
     /// `resume k v` は、`k` の継続の型を関数型 `a -<ρ'>-> b` のように呼ぶ。`k` の型がまだ決まらない場合 (ラムダの
     /// 引数など) にも検査できるよう、推論用の変数でできた継続の型と単一化する。
-    pub(super) fn resume(&mut self, id: ExprId, k: ExprId, arg: ExprId) -> Ty {
+    pub(super) fn resume(
+        &mut self,
+        id: ExprId,
+        k: ExprId,
+        arg: ExprId,
+        state: Option<ExprId>,
+    ) -> Ty {
         let value = self.table.fresh_var();
         let result = self.table.fresh_var();
         let row = Row {
@@ -136,6 +163,9 @@ impl BodyCheck<'_, '_> {
         });
         self.check_expr(k, expected, Origin::Continuation);
         self.check_expr(arg, value, Origin::ResumeValue);
+        if let Some(state) = state {
+            self.infer_expr(state);
+        }
         self.typing.calls.insert(id, CallRows::Resume(row.clone()));
         let range = self.body.exprs[id].range;
         self.include_call_row(row, range, "`resume`", true);

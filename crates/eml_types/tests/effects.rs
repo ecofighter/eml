@@ -175,7 +175,7 @@ fn a_body_with_a_reported_error_does_not_report_linear_values() {
       k#0 : Cont Int Int <>
       $r#1 : Int
     ---
-    E1011 7:19 `resume` takes a continuation and a value, but 1 argument was given
+    E1011 7:19 `resume` takes a continuation, a value, and an optional state, but 1 argument was given
       7:19 this `resume`
     ");
 }
