@@ -50,7 +50,7 @@ pub fn call_steps(module: &Module, body: &Body, call: ExprId) -> Vec<EvalStep> {
 /// 評価しても何も起きない式か。まとめて渡しても、観測できる順が変わらない。
 pub fn is_value(module: &Module, body: &Body, expr: ExprId) -> bool {
     match &body.exprs[expr].kind {
-        ExprKind::Literal(_) | ExprKind::Lambda { .. } => true,
+        ExprKind::Literal(_) | ExprKind::Lambda(_) => true,
         ExprKind::Path(
             Res::Local(_) | Res::Builtin(_) | Res::Operation(_) | Res::Constructor(_),
         ) => true,

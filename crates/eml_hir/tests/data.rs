@@ -73,13 +73,16 @@ fn match_arms_bind_their_pattern_variables_only_in_the_arm() {
             .map(|&local| body.locals[local].name.clone())
             .collect()
     };
-    let (lambda, _) = body
+    let (_, expr) = body
         .exprs
         .iter()
-        .find(|(_, expr)| matches!(expr.kind, ExprKind::Lambda { .. }))
+        .find(|(_, expr)| matches!(expr.kind, ExprKind::Lambda(_)))
         .expect("the lambda");
+    let ExprKind::Lambda(closure) = &expr.kind else {
+        unreachable!();
+    };
     // 枝のパターンの `x` は捕まえる変数に入らない
-    assert_eq!(names(body.lambda_captures(lambda)), ["o", "k"]);
+    assert_eq!(names(body.closure_captures(closure)), ["o", "k"]);
     let (id, arms) = body
         .exprs
         .iter()

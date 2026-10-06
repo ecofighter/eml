@@ -143,13 +143,13 @@ fn handlers_resume_and_drop_are_expressions() {
 #[test]
 fn clause_names_are_resolved_among_operations_only() {
     let text = "effect Ask where\n  ask : Unit -> Int\n\nf : Unit -> Int\nf () =\n  let ask = 1\n  handle ask with\n    | ask () k -> resume k ask";
-    insta::assert_snapshot!(lower_text(text), @r"
+    insta::assert_snapshot!(lower_text(text), @"
     effect Ask
       ask : Unit -> Int
     f : Unit -> Int
     f () = {
       let ask#0 = 1
-      (handle ask#0 with | ask () k#1 -> (resume k#1 ask#0))
+      (handle ask#0 with | ask () k#1 -> (resume k#1 ask#0) | return $r#2 -> $r#2)
     }
     ");
 }
@@ -228,13 +228,48 @@ fn handler_parts_capture_what_they_use() {
     else {
         unreachable!();
     };
-    assert_eq!(names(body.captures(handle, &[])), ["a", "b"]);
-    assert_eq!(names(body.captures(*handled, &[])), ["a"]);
-    let clause = &clauses[0];
-    let bound: Vec<_> = clause.patterns().collect();
-    assert_eq!(names(body.captures(clause.body, &bound)), ["b"]);
-    let ret = ret.as_ref().unwrap();
-    assert_eq!(names(body.captures(ret.body, &[ret.param])), ["a"]);
+    let lambda_like = eml_hir::Closure {
+        params: vec![],
+        body: handle,
+    };
+    assert_eq!(names(body.closure_captures(&lambda_like)), ["a", "b"]);
+    assert_eq!(names(body.closure_captures(handled)), ["a"]);
+    assert_eq!(names(body.closure_captures(&clauses[0].closure)), ["b"]);
+    assert_eq!(names(body.closure_captures(&ret.closure)), ["a"]);
+}
+
+#[test]
+fn an_omitted_return_clause_is_synthesized() {
+    let text = "effect Ask where\n  ask : Unit -> Int\n\nf : Unit -> Int\nf () =\n  handle ask () with\n    | ask () k -> resume k 1";
+    let lowered = lower_clean(text);
+    let function = lowered
+        .module
+        .functions
+        .iter()
+        .find(|(_, function)| function.name == "f")
+        .map(|(_, function)| function)
+        .unwrap();
+    let body = function.body.as_ref().unwrap();
+    let ret = body
+        .exprs
+        .iter()
+        .find_map(|(_, expr)| match &expr.kind {
+            eml_hir::ExprKind::Handle { ret, .. } => Some(ret),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(ret.source, eml_hir::ClauseSource::Omitted);
+    assert_eq!(ret.closure.params.len(), 1);
+    // 本体は引数の変数そのものを返す
+    let eml_hir::PatKind::Bind(param) = body.pats[ret.value()].kind else {
+        panic!("the synthesized parameter is not a variable");
+    };
+    assert_eq!(body.locals[param].name, "$r");
+    assert_eq!(
+        body.exprs[ret.closure.body].kind,
+        eml_hir::ExprKind::Path(eml_hir::Res::Local(param))
+    );
+    assert!(body.closure_captures(&ret.closure).is_empty());
 }
 
 #[test]

@@ -214,3 +214,7 @@
 - `eml_core_ir/tests/translate.rs` の `calls_in_tail_position_are_tail_calls` を `calls_in_tail_position_return_their_result_before_simplify` に改名した (種類3)。変換の直後で止めるので、末尾呼び出しにはまだなっていない。スナップショットは変えていない
 - `compact` が、2回たどれる式、木の中に定義のない join point への `jump`、2回定義された join point を誤りとして返すようにし、`compact.rs` に単体テストを3件足した (種類1)。`text.rs` に、大きすぎる変数の番号を行の番号付きの誤りにするテストと、エフェクトの表にない操作の番号を `#N` で表示して読み戻すテストを足した (種類1)。既存の期待値は変えていない
 - `eml_core_ir/tests/common` の `core_text` は、読み直したプログラムに verifier もかける (変換と `simplify` の後は `verify_scopes`、Perceus の後は `verify`) ようにした。期待値は変えていない (種類3)
+
+### 段階6b-1
+
+- 種類2: HIR が省いた `return` の節を `| return $r -> $r` として合成するようにしたので、`return` の節のない handler を含む HIR のダンプ、型のダンプ (局所変数 `$r` と、それ以降の番号)、Core IR のスナップショット (`$return` の関数と `handle … return`) が変わった。Core IR とランタイムが、つねに `return` の節を持つ1つの形で handler を扱うためである。各テストが確かめる変換と検査の内容は変わらない

@@ -82,13 +82,16 @@ fn walkers_see_through_tuples() {
             .map(|&local| body.locals[local].name.clone())
             .collect()
     };
-    let (lambda, _) = body
+    let (_, expr) = body
         .exprs
         .iter()
-        .find(|(_, expr)| matches!(expr.kind, ExprKind::Lambda { .. }))
+        .find(|(_, expr)| matches!(expr.kind, ExprKind::Lambda(_)))
         .expect("the lambda");
+    let ExprKind::Lambda(closure) = &expr.kind else {
+        unreachable!();
+    };
     // タプルの中の `x` を捕まえ、引数の `u` は捕まえない
-    assert_eq!(names(body.lambda_captures(lambda)), ["x"]);
+    assert_eq!(names(body.closure_captures(closure)), ["x"]);
     let ExprKind::Block { stmts, .. } = &body.exprs[body.root].kind else {
         panic!("expected a block body");
     };

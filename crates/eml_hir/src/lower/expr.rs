@@ -254,7 +254,7 @@ impl<'a> BodyLowering<'a> {
                 let params = self.lower_param_group(lambda.params(), TextRange::default());
                 let body = self.lower_expr(lambda.body(), range);
                 self.scope.truncate(mark);
-                self.alloc(ExprKind::Lambda { params, body }, range)
+                self.alloc(ExprKind::Lambda(Closure { params, body }), range)
             }
             ast::Expr::MatchExpr(e) => self.lower_match(&e, range),
             ast::Expr::HandleExpr(e) => self.lower_handle(&e, range),
@@ -475,10 +475,10 @@ impl<'a> BodyLowering<'a> {
         let body = self.lower_stmts(rest, wrapped);
         self.scope.truncate(mark);
         let lambda = self.alloc(
-            ExprKind::Lambda {
+            ExprKind::Lambda(Closure {
                 params: vec![param],
                 body,
-            },
+            }),
             wrapped,
         );
         self.call(callee, vec![lambda], None, wrapped)

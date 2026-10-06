@@ -1,6 +1,6 @@
 //! handle、`resume` の検査 (docs/spec/effects.md の「handler の意味」)。
 
-use eml_hir::{EffectId, ExprId, OpClause, OpMultiplicity, ReturnClause};
+use eml_hir::{Closure, EffectId, ExprId, OpClause, OpMultiplicity, ReturnClause};
 
 use crate::table::{ArrowLin, Label, Row, Tail, Ty, TyShape};
 use crate::ty::Linearity;
@@ -15,9 +15,9 @@ impl BodyCheck<'_, '_> {
         &mut self,
         id: ExprId,
         effect: Option<EffectId>,
-        handled: ExprId,
+        handled: &Closure,
         clauses: &[OpClause],
-        ret: Option<&ReturnClause>,
+        ret: &ReturnClause,
     ) -> Ty {
         let Some(effect) = effect else {
             return self.broken_handle(handled, clauses, ret);
@@ -49,14 +49,9 @@ impl BodyCheck<'_, '_> {
             },
         );
         let source = self.ambient_source.clone();
-        let handled_ty = self.with_ambient(inner, source, |this| this.infer_expr(handled));
-        let result = match ret {
-            Some(ret) => {
-                self.bind_pat(ret.param, handled_ty);
-                self.infer_expr(ret.body)
-            }
-            None => handled_ty,
-        };
+        let handled_ty = self.with_ambient(inner, source, |this| this.infer_expr(handled.body));
+        self.bind_pat(ret.value(), handled_ty);
+        let result = self.infer_expr(ret.closure.body);
         for clause in clauses {
             self.op_clause(clause, result, &outer, &args);
         }
@@ -70,7 +65,7 @@ impl BodyCheck<'_, '_> {
         // 節の型は、操作の閉じた形にエフェクトの型引数を入れて作る。操作の型の作り方を1か所にするため
         let mut ty = self.signatures.operations[clause.op]
             .instantiate_with_effect_args(self.table, effect_args);
-        for &param in &clause.params {
+        for &param in clause.args() {
             match self.table.shape(ty).clone() {
                 TyShape::Fn {
                     param: expected,
@@ -87,7 +82,7 @@ impl BodyCheck<'_, '_> {
                 }
             }
         }
-        if let Some(k) = clause.k {
+        if let Some(k) = clause.k() {
             // `multi` の操作の `k` は何度でも再開でき、捨ててもよい (docs/spec/effects.md の「継続の多重度と持ち越し規則」)
             let lin = match operation.multiplicity {
                 OpMultiplicity::Multi => Linearity::Unr,
@@ -101,30 +96,23 @@ impl BodyCheck<'_, '_> {
             });
             self.bind_pat(k, continuation);
         }
-        self.check_expr(clause.body, result, Origin::HandlerClause);
+        self.check_expr(clause.closure.body, result, Origin::HandlerClause);
     }
 
     /// 扱うエフェクトが決まらない handler は HIR が報告済みである。本体のエフェクトをすべて受け入れ、型を `Error` に
     /// して、診断を連鎖させない。
-    fn broken_handle(
-        &mut self,
-        handled: ExprId,
-        clauses: &[OpClause],
-        ret: Option<&ReturnClause>,
-    ) -> Ty {
+    fn broken_handle(&mut self, handled: &Closure, clauses: &[OpClause], ret: &ReturnClause) -> Ty {
         let source = self.ambient_source.clone();
-        self.with_ambient(Row::error(), source, |this| this.infer_expr(handled));
+        self.with_ambient(Row::error(), source, |this| this.infer_expr(handled.body));
         let error = self.table.error;
         for clause in clauses {
-            for pat in clause.patterns() {
+            for &pat in &clause.closure.params {
                 self.bind_pat(pat, error);
             }
-            self.check_expr(clause.body, error, Origin::HandlerClause);
+            self.check_expr(clause.closure.body, error, Origin::HandlerClause);
         }
-        if let Some(ret) = ret {
-            self.bind_pat(ret.param, error);
-            self.check_expr(ret.body, error, Origin::HandlerClause);
-        }
+        self.bind_pat(ret.value(), error);
+        self.check_expr(ret.closure.body, error, Origin::HandlerClause);
         error
     }
 

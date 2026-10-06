@@ -48,7 +48,7 @@ fn lambda(body: &Body, param: &str) -> ExprId {
     body.exprs
         .iter()
         .find(|(_, expr)| match &expr.kind {
-            ExprKind::Lambda { params, .. } => params.iter().any(|&pat| {
+            ExprKind::Lambda(closure) => closure.params.iter().any(|&pat| {
                 body.pat_bindings(pat)
                     .iter()
                     .any(|&local| body.locals[local].name == param)
@@ -57,6 +57,13 @@ fn lambda(body: &Body, param: &str) -> ExprId {
         })
         .map(|(id, _)| id)
         .expect("the lambda")
+}
+
+fn lambda_closure<'a>(body: &'a Body, param: &str) -> &'a eml_hir::Closure {
+    let ExprKind::Lambda(closure) = &body.exprs[lambda(body, param)].kind else {
+        unreachable!();
+    };
+    closure
 }
 
 fn names(body: &Body, locals: &[LocalId]) -> Vec<String> {
@@ -74,9 +81,9 @@ fn child_expressions_include_let_initializers_and_lambda_bodies() {
     assert_eq!(root.len(), 2, "the let initializer and the tail");
     assert!(matches!(body.exprs[root[0]].kind, ExprKind::Call { .. }));
     let call = children(body, root[1]);
-    let ExprKind::Lambda {
+    let ExprKind::Lambda(eml_hir::Closure {
         body: lambda_body, ..
-    } = body.exprs[call[0]].kind
+    }) = body.exprs[call[0]].kind
     else {
         panic!("the callee is the lambda");
     };
@@ -87,9 +94,10 @@ fn child_expressions_include_let_initializers_and_lambda_bodies() {
 fn bindings_look_inside_annotated_patterns() {
     let module = module("f : Int -> Int\nf x = (fn (y : Int) -> y) x");
     let body = body(&module, "f");
-    let ExprKind::Lambda { params, .. } = &body.exprs[lambda(body, "y")].kind else {
+    let ExprKind::Lambda(closure) = &body.exprs[lambda(body, "y")].kind else {
         unreachable!();
     };
+    let params = &closure.params;
     assert!(matches!(body.pats[params[0]].kind, PatKind::Annot { .. }));
     assert_eq!(names(body, &body.pat_bindings(params[0])), ["y"]);
 }
@@ -101,11 +109,11 @@ fn a_lambda_captures_what_its_nested_lambdas_capture() {
     let module = module(text);
     let body = body(&module, "f");
     assert_eq!(
-        names(body, &body.lambda_captures(lambda(body, "x"))),
+        names(body, &body.closure_captures(lambda_closure(body, "x"))),
         ["a", "b"]
     );
     assert_eq!(
-        names(body, &body.lambda_captures(lambda(body, "y"))),
+        names(body, &body.closure_captures(lambda_closure(body, "y"))),
         ["a", "c"]
     );
 }

@@ -45,9 +45,26 @@ impl BodyLowering<'_> {
             ret,
             ..
         } = lowered;
+        // 省いた `return` の節は `| return x -> x` とみなす (docs/spec/expressions.md の「handler」)。Core IR と
+        // ランタイムが、つねに `return` の節を持つ1つの形で扱えるようにするため
+        let ret = ret.unwrap_or_else(|| {
+            let keyword = handle.keyword_range();
+            let (param, value) = self.hidden_param("$r", keyword);
+            ReturnClause {
+                closure: Closure {
+                    params: vec![param],
+                    body: value,
+                },
+                source: ClauseSource::Omitted,
+                range: keyword,
+            }
+        });
         self.alloc(
             ExprKind::Handle {
-                body,
+                body: Closure {
+                    params: vec![],
+                    body,
+                },
                 effect: effect.map(|(effect, _)| effect),
                 clauses,
                 ret,
@@ -143,13 +160,11 @@ impl BodyLowering<'_> {
             );
             return;
         }
-        let mut params = params;
-        let k = if never { None } else { params.pop() };
         out.clauses.push(OpClause {
             op,
-            params,
-            k,
-            body,
+            closure: Closure { params, body },
+            arity,
+            resumes: !never,
             range: clause.range(),
         });
     }
@@ -194,8 +209,11 @@ impl BodyLowering<'_> {
             return;
         };
         out.ret = Some(ReturnClause {
-            param: *param,
-            body,
+            closure: Closure {
+                params: vec![*param],
+                body,
+            },
+            source: ClauseSource::Written,
             range,
         });
     }

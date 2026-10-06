@@ -137,12 +137,10 @@ impl Carrying<'_, '_> {
                 live
             }
             ExprKind::Annot { expr, .. } => self.expr(*expr, after),
-            ExprKind::Lambda {
-                body: lambda_body, ..
-            } => {
-                self.function(*lambda_body);
+            ExprKind::Lambda(closure) => {
+                self.function(closure.body);
                 let mut live = after.clone();
-                live.extend(body.lambda_captures(id).into_iter().map(Held::Local));
+                live.extend(body.closure_captures(closure).into_iter().map(Held::Local));
                 live
             }
             // handle の本体と節は、捕まえた変数を先頭の引数に持つ関数に持ち上げる (docs/spec/core-ir.md)。捕まえた変数は
@@ -151,7 +149,7 @@ impl Carrying<'_, '_> {
                 body: handled,
                 clauses,
                 ret,
-                ..
+                effect: _,
             } => {
                 // handle の後で使う値は、本体の実行のうち外へ抜けるエフェクト (外側の row) をまたぐ。`return` の節の
                 // クロージャは handler フレームにあり、扱うエフェクトの `multi` の区間にも入るので、本体の row 全体を
@@ -162,42 +160,37 @@ impl Carrying<'_, '_> {
                 }) = typing.calls.get(id)
                 {
                     self.carry(id, after, &Across::Row(outer.clone()), &CallKind::Handle);
-                    if let Some(ret) = ret {
-                        let across = Across::Row(body_row.clone());
-                        for local in body.captures(ret.body, &[ret.param]) {
-                            let Some(&ty) = typing.locals.get(local) else {
-                                continue;
-                            };
-                            let data = &body.locals[local];
-                            let value = CarriedValue::ReturnCapture {
-                                name: data.name.clone(),
-                                binding: data.range,
-                                clause: ret.range,
-                            };
-                            self.carry_value(id, ty, value, &across, &CallKind::Handle);
-                        }
+                    let across = Across::Row(body_row.clone());
+                    for local in body.closure_captures(&ret.closure) {
+                        let Some(&ty) = typing.locals.get(local) else {
+                            continue;
+                        };
+                        let data = &body.locals[local];
+                        let value = CarriedValue::ReturnCapture {
+                            name: data.name.clone(),
+                            binding: data.range,
+                            clause: ret.range,
+                        };
+                        self.carry_value(id, ty, value, &across, &CallKind::Handle);
                     }
                 }
-                self.function(*handled);
+                self.function(handled.body);
                 let mut live = after.clone();
-                live.extend(body.captures(*handled, &[]).into_iter().map(Held::Local));
+                live.extend(body.closure_captures(handled).into_iter().map(Held::Local));
                 for clause in clauses {
-                    self.function(clause.body);
-                    let bound: Vec<PatId> = clause.patterns().collect();
+                    self.function(clause.closure.body);
                     live.extend(
-                        body.captures(clause.body, &bound)
+                        body.closure_captures(&clause.closure)
                             .into_iter()
                             .map(Held::Local),
                     );
                 }
-                if let Some(ret) = ret {
-                    self.function(ret.body);
-                    live.extend(
-                        body.captures(ret.body, &[ret.param])
-                            .into_iter()
-                            .map(Held::Local),
-                    );
-                }
+                self.function(ret.closure.body);
+                live.extend(
+                    body.closure_captures(&ret.closure)
+                        .into_iter()
+                        .map(Held::Local),
+                );
                 live
             }
             // 再開した継続が外側の `multi` の操作を起こすと、節の手元の値も写される。同じ handler のエフェクトは区間の

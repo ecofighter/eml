@@ -225,17 +225,18 @@ impl Body {
                 }
             }
             ExprKind::Annot { expr, .. } => f(*expr),
-            ExprKind::Lambda { body, .. } => f(*body),
+            ExprKind::Lambda(Closure { params: _, body }) => f(*body),
             ExprKind::Handle {
-                body, clauses, ret, ..
+                body,
+                effect: _,
+                clauses,
+                ret,
             } => {
-                f(*body);
+                f(body.body);
                 for clause in clauses {
-                    f(clause.body);
+                    f(clause.closure.body);
                 }
-                if let Some(ret) = ret {
-                    f(ret.body);
-                }
+                f(ret.closure.body);
             }
             ExprKind::Resume { k, arg } => {
                 f(*k);
@@ -278,15 +279,15 @@ impl Body {
         }
     }
 
-    /// ラムダが捕まえる変数。
-    pub fn lambda_captures(&self, lambda: ExprId) -> Vec<LocalId> {
-        self.captures(lambda, &[])
+    /// closure の本体で参照する局所変数のうち、本体の中でも引数でも束縛していないもの。`LocalId` の順に並べる。
+    pub fn closure_captures(&self, closure: &Closure) -> Vec<LocalId> {
+        self.captures(closure.body, &closure.params)
     }
 
     /// `root` の中で参照する局所変数のうち、`root` の中でも `bound` でも束縛していないもの。`LocalId` の順に並べる。
     /// ラムダと handle の本体と節は、捕まえた変数を先頭の引数に持つ関数に持ち上げるので (docs/spec/core-ir.md)、
     /// 入れ子のラムダや節が捕まえる変数は外側も捕まえる。式の木は作業リストでたどる。
-    pub fn captures(&self, root: ExprId, bound: &[PatId]) -> Vec<LocalId> {
+    fn captures(&self, root: ExprId, bound: &[PatId]) -> Vec<LocalId> {
         let mut used = BTreeSet::new();
         let mut bound: HashSet<LocalId> = bound
             .iter()
@@ -298,7 +299,7 @@ impl Body {
                 ExprKind::Path(Res::Local(local)) => {
                     used.insert(*local);
                 }
-                ExprKind::Lambda { params, .. } => {
+                ExprKind::Lambda(Closure { params, body: _ }) => {
                     for &param in params {
                         bound.extend(self.pat_bindings(param));
                     }
@@ -312,12 +313,12 @@ impl Body {
                 }
                 ExprKind::Handle { clauses, ret, .. } => {
                     for clause in clauses {
-                        for pat in clause.patterns() {
+                        for &pat in &clause.closure.params {
                             bound.extend(self.pat_bindings(pat));
                         }
                     }
-                    if let Some(ret) = ret {
-                        bound.extend(self.pat_bindings(ret.param));
+                    for &pat in &ret.closure.params {
+                        bound.extend(self.pat_bindings(pat));
                     }
                 }
                 ExprKind::Match { arms, .. } => {
@@ -381,17 +382,15 @@ pub enum ExprKind {
         ty: TypeRefId,
     },
     /// 引数のスコープは本体だけである (docs/spec/expressions.md の「ラムダ」)。
-    Lambda {
-        params: Vec<PatId>,
-        body: ExprId,
-    },
+    Lambda(Closure),
     /// `effect` は節から決めたエフェクトで、決められなかったら `None` である。HIR が診断を報告済みなので、型検査は
     /// 連鎖する診断を出さない。誤った節 (引数の個数の誤り、重複、別のエフェクトの節) は `clauses` に入れない。
     Handle {
-        body: ExprId,
+        /// 引数のない closure。Core IR では `()` を受ける関数になる。
+        body: Closure,
         effect: Option<EffectId>,
         clauses: Vec<OpClause>,
-        ret: Option<ReturnClause>,
+        ret: ReturnClause,
     },
     Resume {
         k: ExprId,
@@ -424,28 +423,55 @@ pub struct MatchArm {
     pub body: ExprId,
 }
 
+/// ラムダ、handle の本体、操作の節、`return` の節の共通の形。Core IR では、捕まえた変数を先頭の引数に持つ関数に
+/// 持ち上げる (docs/spec/core-ir.md)。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Closure {
+    pub params: Vec<PatId>,
+    pub body: ExprId,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OpClause {
     pub op: OperationId,
-    pub params: Vec<PatId>,
-    /// `never` の操作の節は `k` を持たない (docs/spec/expressions.md の「handler」)。
-    pub k: Option<PatId>,
-    pub body: ExprId,
+    /// 操作の引数、`k` (`resumes` のとき) の順。
+    pub closure: Closure,
+    /// 操作の引数の数。
+    pub arity: usize,
+    /// `k` を受けるか。`never` の操作の節は受けない (docs/spec/expressions.md の「handler」)。
+    pub resumes: bool,
     pub range: TextRange,
 }
 
 impl OpClause {
-    /// 節が束縛するパターン。操作の引数、`k` の順である。
-    pub fn patterns(&self) -> impl Iterator<Item = PatId> + '_ {
-        self.params.iter().copied().chain(self.k)
+    pub fn args(&self) -> &[PatId] {
+        &self.closure.params[..self.arity]
+    }
+
+    pub fn k(&self) -> Option<PatId> {
+        self.resumes.then(|| self.closure.params[self.arity])
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReturnClause {
-    pub param: PatId,
-    pub body: ExprId,
+    /// 本体の値の1つ。
+    pub closure: Closure,
+    pub source: ClauseSource,
     pub range: TextRange,
+}
+
+impl ReturnClause {
+    pub fn value(&self) -> PatId {
+        self.closure.params[0]
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClauseSource {
+    Written,
+    /// HIR が合成した節。`range` は handle のキーワードを指す。
+    Omitted,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

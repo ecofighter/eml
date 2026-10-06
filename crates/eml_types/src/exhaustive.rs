@@ -5,8 +5,8 @@ use std::iter;
 
 use eml_diagnostics::{Diagnostic, Label, Severity, TextRange, TextSize};
 use eml_hir::{
-    Body, ConstructorId, ExprId, ExprKind, Function, Literal, MatchArm, MatchSource, Module, PatId,
-    PatKind, Stmt, TypeDefId, TypeDefKind,
+    Body, Closure, ConstructorId, ExprId, ExprKind, Function, Literal, MatchArm, MatchSource,
+    Module, PatId, PatKind, Stmt, TypeDefId, TypeDefKind,
 };
 
 use crate::{BodyTypes, TypedModule, codes};
@@ -214,7 +214,7 @@ impl<'a> Exhaustive<'a> {
                         }
                     }
                 }
-                ExprKind::Lambda { params, .. } => {
+                ExprKind::Lambda(Closure { params, body: _ }) => {
                     for &param in params {
                         self.irrefutable(param, PARAMETER_LABEL);
                     }
@@ -222,12 +222,12 @@ impl<'a> Exhaustive<'a> {
                 // 節の引数もラムダの引数と同じく、値を1つ受けるだけの束縛である
                 ExprKind::Handle { clauses, ret, .. } => {
                     for clause in clauses {
-                        for pat in clause.patterns() {
+                        for &pat in &clause.closure.params {
                             self.irrefutable(pat, PARAMETER_LABEL);
                         }
                     }
-                    if let Some(ret) = ret {
-                        self.irrefutable(ret.param, PARAMETER_LABEL);
+                    for &pat in &ret.closure.params {
+                        self.irrefutable(pat, PARAMETER_LABEL);
                     }
                 }
                 _ => {}

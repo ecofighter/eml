@@ -29,10 +29,10 @@ impl BodyLowering<'_> {
         let (b_pat, b) = self.hidden_param("$b", range);
         let body = self.binary(op.text(), op.text_range(), a, b);
         self.alloc(
-            ExprKind::Lambda {
+            ExprKind::Lambda(Closure {
                 params: vec![a_pat, b_pat],
                 body,
-            },
+            }),
             range,
         )
     }
@@ -123,10 +123,10 @@ impl BodyLowering<'_> {
             Hole::Right => self.binary(op.text(), op.text_range(), value, x),
         };
         self.alloc(
-            ExprKind::Lambda {
+            ExprKind::Lambda(Closure {
                 params: vec![pat],
                 body,
-            },
+            }),
             range,
         )
     }

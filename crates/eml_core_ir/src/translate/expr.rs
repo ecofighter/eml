@@ -2,7 +2,9 @@
 
 use eml_hir::EvalStep;
 use eml_hir::builtin::Builtin;
-use eml_hir::{ConstructorId, ExprId, ExprKind, Literal, OperationId, PatId, Res, TypeDefId};
+use eml_hir::{
+    Closure, ConstructorId, ExprId, ExprKind, Literal, OperationId, PatId, Res, TypeDefId,
+};
 use eml_types::Type;
 
 use crate::{Atom, Call, FnIdx, Rhs, TUPLE};
@@ -317,9 +319,9 @@ impl FnLowering<'_> {
                 let unit = [(None, Type::unit())];
                 let handled_closure = self.lift(
                     prefix.clone(),
-                    body.captures(*handled, &[]),
+                    body.closure_captures(handled),
                     &unit,
-                    *handled,
+                    handled.body,
                     &Type::Flexible,
                     out,
                 );
@@ -331,28 +333,40 @@ impl FnLowering<'_> {
                         .iter()
                         .find(|clause| clause.op == op)
                         .expect("a program without errors has a clause for every operation");
-                    let bound: Vec<PatId> = clause.patterns().collect();
-                    let params: Vec<(Option<PatId>, Type)> = bound
+                    let params: Vec<(Option<PatId>, Type)> = clause
+                        .closure
+                        .params
                         .iter()
                         .map(|&pat| (Some(pat), self.pat_type(pat)))
                         .collect();
                     let name = format!("{prefix}${}", self.module.operations[op].name);
-                    let captured = body.captures(clause.body, &bound);
-                    let closure =
-                        self.lift(name, captured, &params, clause.body, &Type::Flexible, out);
+                    let captured = body.closure_captures(&clause.closure);
+                    let closure = self.lift(
+                        name,
+                        captured,
+                        &params,
+                        clause.closure.body,
+                        &Type::Flexible,
+                        out,
+                    );
                     closures.push(closure);
                 }
-                let ret = ret.as_ref().map(|ret| {
-                    let params = [(Some(ret.param), self.pat_type(ret.param))];
-                    let captured = body.captures(ret.body, &[ret.param]);
-                    let name = format!("{prefix}$return");
-                    self.lift(name, captured, &params, ret.body, &Type::Flexible, out)
-                });
+                let params = [(Some(ret.value()), self.pat_type(ret.value()))];
+                let captured = body.closure_captures(&ret.closure);
+                let name = format!("{prefix}$return");
+                let ret = self.lift(
+                    name,
+                    captured,
+                    &params,
+                    ret.closure.body,
+                    &Type::Flexible,
+                    out,
+                );
                 let call = Call::Handle {
                     effect: effect_index(effect),
                     body: handled_closure,
                     clauses: closures,
-                    ret,
+                    ret: Some(ret),
                 };
                 self.bind(out, "t", &ty, Rhs::call(call))
             }
@@ -375,10 +389,11 @@ impl FnLowering<'_> {
                 let value = self.atom(*value, out);
                 self.bind(out, "t", &Type::unit(), Rhs::Drop(value))
             }
-            ExprKind::Lambda {
-                params,
-                body: lambda_body,
-            } => {
+            ExprKind::Lambda(closure) => {
+                let Closure {
+                    params,
+                    body: lambda_body,
+                } = closure;
                 let lambda_ty = self.ty(id);
                 let (param_types, _) = split_arrows(&lambda_ty, params.len());
                 let params: Vec<(Option<PatId>, Type)> = params
@@ -388,7 +403,7 @@ impl FnLowering<'_> {
                     .collect();
                 let name = format!("{}$lambda{}", self.root_name, *self.lambdas);
                 *self.lambdas += 1;
-                let captured = body.lambda_captures(id);
+                let captured = body.closure_captures(closure);
                 self.lift(name, captured, &params, *lambda_body, &lambda_ty, out)
             }
         }

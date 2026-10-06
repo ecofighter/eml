@@ -1,7 +1,7 @@
 use eml_diagnostics::{Diagnostic, FileId, Label, TextRange};
 use eml_hir::builtin::Builtin;
 use eml_hir::{
-    Body, ConstructorId, ExprId, ExprKind, Function, Literal, LocalId, MatchArm, Module,
+    Body, Closure, ConstructorId, ExprId, ExprKind, Function, Literal, LocalId, MatchArm, Module,
     OperationId, PatId, PatKind, Res, Stmt, TypeRefKind,
 };
 use la_arena::ArenaMap;
@@ -174,10 +174,10 @@ impl BodyCheck<'_, '_> {
                 self.block(expr.range, stmts, *tail, Expectation::Has(expected, origin));
                 self.typing.exprs.insert(id, expected);
             }
-            ExprKind::Lambda {
+            ExprKind::Lambda(Closure {
                 params,
                 body: lambda_body,
-            } => {
+            }) => {
                 if matches!(
                     self.table.shape(expected),
                     TyShape::Fn { .. } | TyShape::Error
@@ -199,10 +199,10 @@ impl BodyCheck<'_, '_> {
         let body = self.body;
         let expr = &body.exprs[id];
         let ty = match &expr.kind {
-            ExprKind::Lambda {
+            ExprKind::Lambda(Closure {
                 params,
                 body: lambda_body,
-            } => {
+            }) => {
                 let ty = self.table.fresh_var();
                 self.check_lambda(id, params, *lambda_body, ty, Origin::Inferred);
                 ty
@@ -238,7 +238,7 @@ impl BodyCheck<'_, '_> {
                 effect,
                 clauses,
                 ret,
-            } => self.handle(id, *effect, *handled, clauses, ret.as_ref()),
+            } => self.handle(id, *effect, handled, clauses, ret),
             ExprKind::Resume { k, arg } => self.resume(id, *k, *arg),
             ExprKind::Match {
                 scrutinee, arms, ..

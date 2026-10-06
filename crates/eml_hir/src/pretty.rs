@@ -231,10 +231,10 @@ impl Printer<'_> {
                     self.ty(&body.types, *ty)
                 )
             }
-            ExprKind::Lambda {
+            ExprKind::Lambda(Closure {
                 params,
                 body: lambda_body,
-            } => {
+            }) => {
                 let mut s = "(fn".to_string();
                 for &param in params {
                     write!(s, " {}", self.pat_atom(body, param)).unwrap();
@@ -243,7 +243,7 @@ impl Printer<'_> {
                 s
             }
             ExprKind::Handle {
-                body: handled,
+                body: Closure { body: handled, .. },
                 clauses,
                 ret,
                 ..
@@ -251,20 +251,18 @@ impl Printer<'_> {
                 let mut s = format!("(handle {} with", self.expr(body, *handled, indent));
                 for clause in clauses {
                     write!(s, " | {}", self.module.operations[clause.op].name).unwrap();
-                    for pat in clause.patterns() {
+                    for &pat in &clause.closure.params {
                         write!(s, " {}", self.pat(body, pat)).unwrap();
                     }
-                    write!(s, " -> {}", self.expr(body, clause.body, indent)).unwrap();
+                    write!(s, " -> {}", self.expr(body, clause.closure.body, indent)).unwrap();
                 }
-                if let Some(ret) = ret {
-                    write!(
-                        s,
-                        " | return {} -> {}",
-                        self.pat(body, ret.param),
-                        self.expr(body, ret.body, indent)
-                    )
-                    .unwrap();
-                }
+                write!(
+                    s,
+                    " | return {} -> {}",
+                    self.pat(body, ret.value()),
+                    self.expr(body, ret.closure.body, indent)
+                )
+                .unwrap();
                 s + ")"
             }
             ExprKind::Resume { k, arg } => format!(

@@ -5,7 +5,7 @@
 use std::collections::{BTreeMap, HashMap};
 
 use eml_diagnostics::{TextRange, TextSize};
-use eml_hir::{Body, ExprId, ExprKind, LocalId, PatId, PatKind, Res, Stmt};
+use eml_hir::{Body, Closure, ExprId, ExprKind, LocalId, PatId, PatKind, Res, Stmt};
 
 use crate::check::BodyTyping;
 use crate::kind::{Bound, DropFix, KindOrigin, KindReason, Provenance, UnusedPath};
@@ -171,39 +171,33 @@ impl<'a> Usage<'a, '_> {
             // 同じく、捕まえることを handle 式の位置での1回の使用に数え、中の使用を別に数える
             ExprKind::Handle {
                 body: handled,
+                effect: _,
                 clauses,
                 ret,
-                ..
             } => {
                 let mut uses = Uses::new();
-                let inner = self.expr(*handled);
-                let captured = self.captured_once(*handled, &[], inner, body.exprs[*handled].range);
+                let inner = self.expr(handled.body);
+                let captured = self.captured_once(handled, inner, body.exprs[handled.body].range);
                 sequence(&mut uses, captured);
-                if let Some(ret) = ret {
-                    let inner = self.expr(ret.body);
-                    let captured = self.captured_once(
-                        ret.body,
-                        &[ret.param],
-                        inner,
-                        body.exprs[ret.body].range,
-                    );
-                    sequence(&mut uses, captured);
-                }
+                let inner = self.expr(ret.closure.body);
+                let captured =
+                    self.captured_once(&ret.closure, inner, body.exprs[ret.closure.body].range);
+                sequence(&mut uses, captured);
                 let mut clause_captures: BTreeMap<LocalId, TextRange> = BTreeMap::new();
                 for clause in clauses {
-                    let mut inner = self.expr(clause.body);
-                    let bound: Vec<PatId> = clause.patterns().collect();
-                    for &pat in &bound {
-                        if Some(pat) == clause.k {
-                            self.check_continuation(pat, &inner, clause.range, clause.body);
+                    let clause_body = clause.closure.body;
+                    let mut inner = self.expr(clause_body);
+                    for &pat in &clause.closure.params {
+                        if Some(pat) == clause.k() {
+                            self.check_continuation(pat, &inner, clause.range, clause_body);
                         } else {
-                            self.check_pat(pat, &inner, clause.body);
+                            self.check_pat(pat, &inner, clause_body);
                         }
                         remove_bound(body, pat, &mut inner);
                     }
                     let mut captured: Vec<LocalId> = inner.keys().copied().collect();
                     captured.sort();
-                    debug_assert_eq!(captured, body.captures(clause.body, &bound));
+                    debug_assert_eq!(captured, body.closure_captures(&clause.closure));
                     // 操作の節は、操作を起こすたびに呼ばれる。捕まえた変数は、何回使ってもよいものでなければならない
                     for &local in &captured {
                         let name = body.locals[local].name.clone();
@@ -253,10 +247,11 @@ impl<'a> Usage<'a, '_> {
                 uses
             }
             ExprKind::Drop(value) => self.expr(*value),
-            ExprKind::Lambda {
-                params,
-                body: lambda_body,
-            } => {
+            ExprKind::Lambda(closure) => {
+                let Closure {
+                    params,
+                    body: lambda_body,
+                } = closure;
                 let mut inner = self.expr(*lambda_body);
                 for &param in params {
                     self.check_pat(param, &inner, *lambda_body);
@@ -266,8 +261,8 @@ impl<'a> Usage<'a, '_> {
                 // にする。ラムダとその部分適用の線形性は、捕まえた値の Kind 以上になる (docs/spec/linearity.md)
                 let mut captured: Vec<LocalId> = inner.keys().copied().collect();
                 captured.sort();
-                // 捕まえた変数の集合は、Core IR の変換が使う `lambda_captures` と同じでなければならない
-                debug_assert_eq!(captured, body.lambda_captures(id));
+                // 捕まえた変数の集合は、Core IR の変換が使う `closure_captures` と同じでなければならない
+                debug_assert_eq!(captured, body.closure_captures(closure));
                 let mut captured_types = Vec::new();
                 for &local in &captured {
                     self.count(local, inner[&local], *lambda_body);
@@ -333,13 +328,9 @@ impl<'a> Usage<'a, '_> {
 
     /// 1回だけ動く部分 (handle の本体と `return` の節) の使用回数を、捕まえた変数の1回の使用にまとめる。`at` は
     /// その部分の範囲で、捕まえた変数の使用の位置にする。
-    fn captured_once(
-        &mut self,
-        root: ExprId,
-        params: &[PatId],
-        mut inner: Uses,
-        at: TextRange,
-    ) -> Uses {
+    fn captured_once(&mut self, closure: &Closure, mut inner: Uses, at: TextRange) -> Uses {
+        let Closure { params, body: root } = closure;
+        let root = *root;
         for &param in params {
             self.check_pat(param, &inner, root);
             remove_bound(self.body, param, &mut inner);
@@ -347,7 +338,7 @@ impl<'a> Usage<'a, '_> {
         let mut captured: Vec<LocalId> = inner.keys().copied().collect();
         captured.sort();
         // 捕まえた変数の集合は、Core IR の変換が使う `captures` と同じでなければならない
-        debug_assert_eq!(captured, self.body.captures(root, params));
+        debug_assert_eq!(captured, self.body.closure_captures(closure));
         for &local in &captured {
             self.count(local, inner[&local], root);
         }

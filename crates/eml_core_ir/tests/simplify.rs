@@ -687,7 +687,8 @@ fn every_kind_of_call_in_tail_position_becomes_a_tail_call() {
     fn answer(p0) {
       let c1^ = closure answer$handle0()
       let c2^ = closure answer$handle0$ask()
-      tailcall handle Ask(c1) {ask: c2}
+      let c3^ = closure answer$handle0$return()
+      tailcall handle Ask(c1) {ask: c2} return c3
     }
     fn main(p0) {
       let t1 = call answer(())
@@ -700,6 +701,9 @@ fn every_kind_of_call_in_tail_position_becomes_a_tail_call() {
     }
     fn answer$handle0$ask(key0^, k1^) {
       tailcall resume k1(1)
+    }
+    fn answer$handle0$return($r0) {
+      return $r0
     }
     fn entry$main() {
       tailcall main(())
