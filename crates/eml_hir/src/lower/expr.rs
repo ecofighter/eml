@@ -202,7 +202,14 @@ impl<'a> BodyLowering<'a> {
         let range = expr.range();
         match expr {
             ast::Expr::Literal(literal) => {
-                // 未対応のリテラルと壊れた値は、字句解析と構文解析が報告済み
+                if let Some((token, message)) = literal.token().and_then(|token| {
+                    Some((token.text_range(), unsupported_literal(token.kind())?))
+                }) {
+                    self.diagnostics
+                        .push(Diagnostic::not_yet_supported(self.file, token, message));
+                    return self.alloc(ExprKind::Missing, range);
+                }
+                // 壊れた値は字句解析が報告済み
                 let kind = literal.value().map_or(ExprKind::Missing, |value| {
                     ExprKind::Literal(match value {
                         ast::LiteralValue::Int(n) => Literal::Int(n),
@@ -568,8 +575,13 @@ impl<'a> BodyLowering<'a> {
             ast::Pat::LiteralPat(literal) => match literal.value() {
                 Some(ast::LiteralValue::Int(n)) => PatKind::Literal(Literal::Int(n)),
                 Some(ast::LiteralValue::String(s)) => PatKind::Literal(Literal::String(s)),
-                // 範囲外の整数、壊れた文字列、文字のリテラルは、字句解析とパーサが報告済み
-                None => PatKind::Missing,
+                None => match literal.token().and_then(|token| {
+                    Some((token.text_range(), unsupported_literal(token.kind())?))
+                }) {
+                    Some((token, message)) => self.unsupported_pat(token, message),
+                    // 範囲外の整数と壊れた文字列は、字句解析が報告済み
+                    None => PatKind::Missing,
+                },
             },
             // 要素は外側のパターンと同じ組で変換する。`(x, x)` も1つのパターンの中の重複である (E1017)
             ast::Pat::TuplePat(tuple) => {
@@ -693,6 +705,10 @@ impl<'a> BodyLowering<'a> {
             if self.items.is_unusable(name.text()) {
                 return PatKind::Missing;
             }
+            // `::` は S2 のリストのコンストラクタである。ユーザーが同じ名前のコンストラクタを定義していれば、上で引ける
+            if name.text() == "::" {
+                return self.unsupported_pat(name.text_range(), "lists are not supported yet");
+            }
             self.diagnostics.push(Diagnostic::error(
                 codes::UNDEFINED_NAME,
                 format!("cannot find constructor `{}`", name.text()),
@@ -770,4 +786,15 @@ fn arguments(n: usize) -> String {
     } else {
         format!("{n} arguments")
     }
+}
+
+/// S2 で実装するリテラル。パーサは CST を組み、HIR が E0004 を出す (docs/spec/grammar.md の「実装の段階」)。
+fn unsupported_literal(kind: SyntaxKind) -> Option<&'static str> {
+    Some(match kind {
+        SyntaxKind::FLOAT => "floating-point literals are not supported yet",
+        SyntaxKind::CHAR => "character literals are not supported yet",
+        SyntaxKind::MULTILINE_STRING => "multi-line strings are not supported yet",
+        SyntaxKind::RAW_STRING => "raw strings are not supported yet",
+        _ => return None,
+    })
 }

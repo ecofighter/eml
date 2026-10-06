@@ -218,7 +218,7 @@ fn precedence_out_of_range_is_an_error() {
 }
 
 #[test]
-fn pub_and_type_are_parsed_but_not_supported_yet() {
+fn pub_and_type_are_parsed() {
     insta::assert_snapshot!(shape("pub type Person = (String, Int)"), @r#"
     SOURCE_FILE
       TYPE_ITEM
@@ -239,9 +239,6 @@ fn pub_and_type_are_parsed_but_not_supported_yet() {
               NAME_REF
                 UIDENT "Int"
           R_PAREN ")"
-    ---
-    E0004 1:1 `pub` is not supported yet
-    E0004 1:5 `type` declarations are not supported yet
     "#);
 }
 
@@ -346,13 +343,7 @@ fn effect_body_lines_must_be_operations() {
 
 #[test]
 fn pub_without_an_item_is_an_error() {
-    assert_eq!(
-        diagnostics("pub"),
-        [
-            "E0004 1:1 `pub` is not supported yet",
-            "E0003 1:4 expected an item"
-        ]
-    );
+    assert_eq!(diagnostics("pub"), ["E0003 1:4 expected an item"]);
 }
 
 #[test]

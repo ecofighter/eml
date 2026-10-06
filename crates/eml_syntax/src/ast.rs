@@ -349,7 +349,8 @@ impl Literal {
     }
 
     /// 浮動小数、文字、複数行の文字列などの未対応のリテラルと、値が壊れているもの (範囲外の整数、不正なエスケープ、
-    /// 閉じていない文字列) は `None` を返す。どれも字句解析かパーサが報告済みである。
+    /// 閉じていない文字列) は `None` を返す。未対応のリテラルは HIR が E0004 を出し、値の壊れたものは字句解析が
+    /// 報告済みである。
     pub fn value(&self) -> Option<LiteralValue> {
         let token = self.token()?;
         match token.kind() {
@@ -776,21 +777,34 @@ impl TupleType {
 }
 
 impl LiteralPat {
+    /// `INT`、`STRING`、`CHAR` のトークン。`-1` の `-` は含まない。
+    pub fn token(&self) -> Option<SyntaxToken> {
+        self.syntax
+            .children_with_tokens()
+            .filter_map(NodeOrToken::into_token)
+            .find(|token| {
+                matches!(
+                    token.kind(),
+                    SyntaxKind::INT | SyntaxKind::STRING | SyntaxKind::CHAR
+                )
+            })
+    }
+
     /// `-1` の `-` は字句の一部ではなくパターンの一部なので (docs/spec/grammar.md の `apat`)、ここで符号を付ける。
-    /// 値の壊れたリテラルと未対応のリテラル (文字) は `None` を返す。どれも字句解析かパーサが報告済みである。
+    /// 値の壊れたリテラルと未対応のリテラル (文字) は `None` を返す。未対応のリテラルは HIR が E0004 を出し、値の
+    /// 壊れたものは字句解析が報告済みである。
     pub fn value(&self) -> Option<LiteralValue> {
         let negative = support::token(&self.syntax, SyntaxKind::MINUS).is_some();
-        let token = self
-            .syntax
-            .children_with_tokens()
-            .filter_map(|element| element.into_token())
-            .find(|token| matches!(token.kind(), SyntaxKind::INT | SyntaxKind::STRING))?;
+        let token = self.token()?;
         match token.kind() {
             SyntaxKind::INT => {
                 let n = crate::literal::int_value(token.text())?;
                 Some(LiteralValue::Int(if negative { -n } else { n }))
             }
-            _ => crate::literal::decode_string(token.text()).map(LiteralValue::String),
+            SyntaxKind::STRING => {
+                crate::literal::decode_string(token.text()).map(LiteralValue::String)
+            }
+            _ => None,
         }
     }
 }
@@ -855,6 +869,18 @@ fn operator_token(node: &SyntaxNode) -> Option<SyntaxToken> {
     node.children_with_tokens()
         .filter_map(NodeOrToken::into_token)
         .find(|token| is_operator(token.kind()))
+}
+
+impl Item {
+    pub fn pub_keyword(&self) -> Option<SyntaxToken> {
+        support::token(self.syntax(), SyntaxKind::PUB_KW)
+    }
+}
+
+impl TypeItem {
+    pub fn type_keyword(&self) -> Option<SyntaxToken> {
+        support::token(&self.syntax, SyntaxKind::TYPE_KW)
+    }
 }
 
 impl ImportItem {

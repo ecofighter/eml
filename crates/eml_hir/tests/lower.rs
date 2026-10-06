@@ -330,3 +330,56 @@ fn an_unfinished_import_is_reported_once_by_each_stage() {
         ]
     );
 }
+
+#[test]
+fn pub_and_type_are_not_supported_yet() {
+    assert_eq!(
+        diagnostics("pub type Person = (String, Int)\npub f : Int\nf = 1\npub import M"),
+        [
+            "E0004 1:1 `pub` is not supported yet",
+            "E0004 1:5 `type` declarations are not supported yet",
+            "E0004 2:1 `pub` is not supported yet",
+            "E0004 4:1 `pub` is not supported yet",
+            "E0004 4:5 `import` is not supported yet",
+        ]
+    );
+}
+
+#[test]
+fn later_stage_literals_are_not_supported_yet() {
+    // コマンドリテラルとリストは、パーサが E0004 を出す例外である (docs/spec/grammar.md の「実装の段階」)
+    assert_eq!(
+        diagnostics("x : Int\nx = (1.5, 'c', [1], r\"raw\", \"\"\"m\"\"\", `ls`)"),
+        [
+            "E0004 2:6 floating-point literals are not supported yet",
+            "E0004 2:11 character literals are not supported yet",
+            "E0004 2:16 lists are not supported yet",
+            "E0004 2:21 raw strings are not supported yet",
+            "E0004 2:29 multi-line strings are not supported yet",
+            "E0004 2:38 command literals are not supported yet",
+        ]
+    );
+}
+
+#[test]
+fn character_patterns_are_not_supported_yet() {
+    assert_eq!(
+        diagnostics("f : Int -> Int\nf x = match x with\n  | 'c' -> 1\n  | _ -> 0"),
+        ["E0004 3:5 character literals are not supported yet"]
+    );
+}
+
+#[test]
+fn cons_patterns_are_not_supported_yet() {
+    // 不具合3: `::` のパターンがコンストラクタとして引かれ、E1001 になっていた
+    assert_eq!(
+        diagnostics("f : Int -> Int\nf x = match x with\n  | y :: ys -> 1\n  | _ -> 0"),
+        ["E0004 3:7 lists are not supported yet"]
+    );
+}
+
+#[test]
+fn a_user_defined_cons_constructor_is_matched() {
+    let text = "data L = | Nil | Int :: L\nf : L -> Int\nf l = match l with\n  | y :: ys -> y\n  | Nil -> 0";
+    assert_eq!(diagnostics(text), Vec::<String>::new());
+}

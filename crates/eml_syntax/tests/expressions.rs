@@ -309,15 +309,12 @@ fn top_level_pattern_bindings_are_errors() {
 }
 
 #[test]
-fn later_stage_literals_are_not_supported_yet() {
+fn later_stage_literals_are_parsed() {
+    // 浮動小数、文字、raw 文字列、複数行の文字列の E0004 は HIR が出す (docs/spec/grammar.md の「実装の段階」)
     assert_eq!(
         diagnostics("x = (1.5, 'c', [1], r\"raw\", \"\"\"m\"\"\", `ls`)"),
         [
-            "E0004 1:6 floating-point literals are not supported yet",
-            "E0004 1:11 character literals are not supported yet",
             "E0004 1:16 lists are not supported yet",
-            "E0004 1:21 raw strings are not supported yet",
-            "E0004 1:29 multi-line strings are not supported yet",
             "E0004 1:38 command literals are not supported yet",
         ]
     );

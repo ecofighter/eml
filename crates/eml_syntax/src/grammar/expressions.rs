@@ -253,12 +253,14 @@ fn postfix(p: &mut Parser) -> bool {
 fn atom(p: &mut Parser) -> Option<CompletedMarker> {
     let m = p.start();
     let kind = match p.current() {
-        INT | STRING => {
+        INT | STRING | FLOAT | CHAR | MULTILINE_STRING | RAW_STRING => {
             p.bump_any();
             LITERAL
         }
-        kind @ (FLOAT | CHAR | MULTILINE_STRING | RAW_STRING | COMMAND) => {
-            not_yet_supported(p, unsupported_literal_message(kind));
+        COMMAND => {
+            // コマンドリテラルは中身の穴を S3 で lexer のモードと一緒に読むので、パーサが E0004 を出す例外である
+            // (docs/spec/grammar.md の「実装の段階」)
+            not_yet_supported(p, "command literals are not supported yet");
             p.bump_any();
             LITERAL
         }
@@ -285,16 +287,6 @@ fn atom(p: &mut Parser) -> Option<CompletedMarker> {
         }
     };
     Some(m.complete(p, kind))
-}
-
-fn unsupported_literal_message(kind: SyntaxKind) -> &'static str {
-    match kind {
-        FLOAT => "floating-point literals are not supported yet",
-        CHAR => "character literals are not supported yet",
-        MULTILINE_STRING => "multi-line strings are not supported yet",
-        RAW_STRING => "raw strings are not supported yet",
-        _ => "command literals are not supported yet",
-    }
 }
 
 /// `qvar ::= (UIDENT '.')* LIDENT` と `qcon`。

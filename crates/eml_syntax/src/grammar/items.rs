@@ -54,10 +54,8 @@ fn at_operator_signature(p: &Parser) -> bool {
 
 pub(super) fn item(p: &mut Parser) {
     let m = p.start();
-    if p.at(PUB_KW) {
-        not_yet_supported(p, "`pub` is not supported yet");
-        p.bump(PUB_KW);
-    }
+    // `pub` の E0004 は HIR が出す (docs/spec/grammar.md の「実装の段階」)
+    p.eat(PUB_KW);
     match item_kind(p) {
         Some(ItemKind::Data) => data_item(p, m),
         Some(ItemKind::Type) => type_item(p, m),
@@ -184,9 +182,8 @@ fn has_conop_ahead(p: &Parser) -> bool {
     }
 }
 
-/// S2 で実装する。今は E0004 を出したうえで、宣言として最後まで読む。
+/// S2 で実装する。CST まで組み、E0004 は HIR が出す (docs/spec/grammar.md の「実装の段階」)。
 fn type_item(p: &mut Parser, m: Marker) {
-    not_yet_supported(p, "`type` declarations are not supported yet");
     p.bump(TYPE_KW);
     expect_name(p, UIDENT);
     while p.at(LIDENT) {

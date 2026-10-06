@@ -46,7 +46,7 @@ fn s1_corpus_items() {
 #[test]
 fn later_stage_corpus_reports_only_not_yet_supported() {
     // S2・S3 の構文は E0004 だけを出し、ほかの診断を連鎖させない。パーサが E0004 を出すのは、補間、コマンドリテラル、
-    // レコード、リストと、HIR に移すまでの残りだけである (docs/spec/grammar.md の「実装の段階」)。
+    // レコード、リストだけである (docs/spec/grammar.md の「実装の段階」)。
     let found = diagnostics(LATER_STAGES);
     assert!(!found.is_empty());
     for line in &found {
@@ -61,10 +61,8 @@ fn later_stage_corpus_reports_only_not_yet_supported() {
     assert_eq!(
         messages,
         [
-            "`type` declarations are not supported yet",
             "command literals are not supported yet",
             "lists are not supported yet",
-            "multi-line strings are not supported yet",
             "records are not supported yet",
             "string interpolation is not supported yet",
         ]

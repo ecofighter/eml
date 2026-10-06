@@ -99,12 +99,7 @@ pub(super) fn apat(p: &mut Parser) -> bool {
             qcon(p);
             CON_PAT
         }
-        INT | STRING => {
-            p.bump_any();
-            LITERAL_PAT
-        }
-        CHAR => {
-            not_yet_supported(p, "character literals are not supported yet");
+        INT | STRING | CHAR => {
             p.bump_any();
             LITERAL_PAT
         }

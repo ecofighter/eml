@@ -250,6 +250,14 @@ fn collect(
     let mut effects = Vec::new();
     let mut fixities = Vec::new();
     for (index, item) in source.items().enumerate() {
+        // `pub` は R7b で実装する (docs/superpowers/specs/2026-10-06-refactor-r7-design.md の 1.5)
+        if let Some(keyword) = item.pub_keyword() {
+            diagnostics.push(Diagnostic::not_yet_supported(
+                file,
+                keyword.text_range(),
+                "`pub` is not supported yet",
+            ));
+        }
         match item {
             ast::Item::Signature(signature) => {
                 let Some(name) = value_name(signature.name()) else {
@@ -284,8 +292,16 @@ fn collect(
             ast::Item::DataItem(item) => data.push(item),
             ast::Item::EffectItem(item) => effects.push(item),
             ast::Item::FixityItem(item) => fixities.push(item),
-            // `type` は構文の段階 S2 の構文で、パーサが E0004 を報告済み
-            ast::Item::TypeItem(_) => {}
+            ast::Item::TypeItem(item) => {
+                let range = item
+                    .type_keyword()
+                    .map_or(item.range(), |keyword| keyword.text_range());
+                diagnostics.push(Diagnostic::not_yet_supported(
+                    file,
+                    range,
+                    "`type` declarations are not supported yet",
+                ));
+            }
             ast::Item::ImportItem(item) => {
                 let range = item
                     .import_keyword()
