@@ -42,7 +42,13 @@
 - 再帰する join point (ループ化): 自己末尾呼び出しを、関数の中の自分へ `jump` する join point にする。トップレベルの関数を呼び出し元の join point にする contification も同じ枠で扱う。今は join point の本体から自分へ `jump` しない ([Core IR とインタプリタ](../spec/core-ir.md))
   - 入れる時期: マイルストーン1 では入れない。eml のローカルの `let` は再帰せず、自己末尾呼び出しはすでにフレームを積まないので、インタプリタでの効果が小さい。ループの中で変わらない値の `dup` / `decref` を減らすには、`captures` を借用として扱う Perceus の拡張も要る。借用パラメータ、evidence passing、ネイティブ化のどれかに着手するときに一緒に入れる
   - 残りの作業: verifier の「自分へ `jump` しない」制約を外すことと、変換にループ化を足すこと。join point の引数を複数にする変更は、段階4a で `match` のために入れた
-  - 生存解析に不動点の計算は要らない。自分への `jump` の時点で生きている変数も「行き先の `captures` + 渡す値」で決まり、`captures` は本体の自由変数で決まるためである。互いに `jump` し合う join point の組は、別に設計する
+  - 生存解析には、再帰する join point だけ不動点の計算が要る。`liveness::analyze` は join point の本体を範囲より先に1回だけたどり、`jump` で行き先の `captures` を読む。そのため自分への `jump` では、まだ空の `captures` を読んでしまう。ループ化では、再帰する join point に印を付け、そこだけ不動点を計算する。simplify の F、B3、B5 も join point が非巡回であることを前提にしているので、あわせて見直す。互いに `jump` し合う join point の組は、別に設計する
+- simplify の書き直し: use と def の索引の上で書き直す。足りない書き換え (別名の伝播、定数の `switch` の畳み込み) もそのときに入れる
+- 実行時エラーの位置: 位置と backtrace、利用者向けの関数名を実行時エラーに付ける
+- HIR の位置を source map に移す: HIR のノードが `TextRange` を直接持つ形をやめる
+- n 列の `match`: 今は決定木の列を最初の行の左から選ぶ。列の選び方を見直す
+- doc comment: trivia の付け方を決める
+- 記述子: ペイロードの種類ごとの方針を、記述子に持たせる
 
 ## マルチコア対応
 

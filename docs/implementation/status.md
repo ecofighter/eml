@@ -97,7 +97,7 @@ R5 は段階6a の後、段階6b の前に行う。段階6a はほぼ HIR の脱
 | R3b | ランタイムとインタプリタ | `Frame` の種類の enum、記述子、共有されたオブジェクトの複製、`Owned::refs`、型を付けた `RuntimeError`。`eml_runtime`、`eml_interp`、`eml_cli` | 完了 |
 | R4 | Core IR のパスの構成 | パスの順番を持つ `pipeline.rs` と `lower_until`、パスの間の `captures`、verifier の2つの度合い (`verify_scopes`)、`translate/` への分割、パスごとのテスト | 完了 |
 | R5 | 型検査の SCC ごとの独立 | `Context`、閉じた形 `Shape`、関数ごとの本体の検査 (段1) と SCC ごとの Kind の解決 (段2)、ワークリストと強連結成分による残す制約、持ち越しの制約の組ごとの重複除去、`Type` の線形性を除くこと。`eml_types` の中で済ませる | 完了 |
-| R6 | 6b の前の継ぎ目 | 評価の順 (ML 式、`call_steps`)、型の走査、Kind の由来、handler の節の型、診断の順 (R6a)。Core IR と interp の道具 (R6b) | R6a 完了 |
+| R6 | 6b の前の継ぎ目 | 評価の順 (ML 式、`call_steps`)、型の走査、Kind の由来、handler の節の型、診断の順 (R6a)。Core IR の visitor と `FnBuilder`、`compact` と木の検査、末尾呼び出しの T、テキストの IR と `parse`、`eml_interp` の分割 (R6b) | 完了 |
 
 ### テストを変えないために曲げた箇所
 
@@ -152,9 +152,15 @@ R3b で済んだ。`Frame` を種類の enum にし、記述子をペイロー�
 
 R5 で済んだ。型検査を、モジュール全体の情報 (`Context`)、宣言ごとの閉じた形 (段0)、関数ごとの本体の検査 (段1)、SCC ごとの Kind の解決 (段2) に分けた。本体の検査は呼び出し先の形だけを見るので、関数ごとに独立している。段2は表を使わずに番号の上の束を解き、ワークリストで解き、制約のグラフを強連結成分に縮めて残す制約を求める。持ち越しの制約は組ごとに1つにまとめ、E3006 の重複報告を直した。`Type` から矢印の線形性を除いた。`crates/eml_types/tests/scaling.rs` が、5つの形の合成プログラムで関数の数を4倍にしたときの時間の比を確かめる。
 
+### R6 で直す項目
+
+R6 で済んだ。R6a は、診断を `eml_diagnostics::sort_diagnostics` で1回だけ並べるようにし、型検査が本体をアリーナの順に検査するようにした。`TyShape`、`Type`、`ShapeTy` の子の走査を `for_each_child` にそろえ、Kind の由来 (`Provenance`) を必須にして、由来のない制約を残さないようにした。handler の節の型は `Shape::instantiate_with_effect_args` で作り、呼ばれる位置の row は閉じたまま扱う。評価の順は `eml_hir::call_steps` を唯一の出どころとして、持ち越しのパスと Core IR の変換が共有する。これで `(f 1) (g ())` は `f` から先に評価される。
+
+R6b は、`CExpr`、`Rhs`、`Call` の visitor と、関数の組み立ての口 (`FnBuilder`、`CoreFn::push`、`CoreFn::fresh_like`) を足した。`compact` を各パスの後にかけ、verifier が木の形を検査する。simplify の規則 T は、枝へ移した呼び出しも末尾呼び出しにする。Core IR を表示する `pretty` は boxed の束縛に `^` とエフェクトの表を出し、`eml_core_ir::parse` が読み戻す。verifier と interp のテストはこのテキストで書き、`eml_test_support::ir` をなくした。`VarInfo::linearity` と `Prepared` もなくし、`eml_interp` を lib、machine、effects、prim、io、error に分けた。
+
 ### R7 で直す項目
 
-S2 の前に、単一ファイルの前提をなくす作り替えを R7 として行う。R6 の設計 ([R6 の設計](../superpowers/specs/2026-10-06-refactor-r6-design.md)) の3章で、R7 に回した項目は次のとおりである。
+S2 の前に、単一ファイルの前提をなくす作り替えを R7 として行う。R6 の見直しで R7 に回した項目は次のとおりである。
 
 - item の ID をプログラム全体で一意にし (`ModuleId`)、HIR をモジュールのインタフェースと本体に分ける。Prelude に本物の `FileId` を与えて普通のモジュールにし、`FileId::PRELUDE` をなくす
 - 名前解決を、item の収集、モジュールごとのスコープ表、item ごとの変換の3段に分け、重複の扱いを1つにする。fixity は解決した先の定義に付ける。確かめた不具合2を直す: 操作と同じ名前の関数を定義すると、E1003 の後に handler の節で E1001 が連鎖する。`ItemScope` の重複の扱いが箇所ごとに違い、関数が操作を上書きするためである
@@ -190,6 +196,14 @@ S2 の前に、単一ファイルの前提をなくす作り替えを R7 とし�
 - 決定木の再帰 (`translate/pattern.rs` の `decide`) の深さは、入れ子の深さだけでは決まらない。1つの経路で調べる位置の種類の数、つまり1つの `match` のパターンの大きさで抑えられる。E0013 の深さの上限と同じ扱いにはならないので、大きなパターンを書いたときのスタックに注意する
 - 性能: B2 の置き換えは枝の部分木をたどるので、条件に `&&` や `||` を使う `else if` が末尾で長く続くと、続きの深さの2乗の時間がかかる。必要になったら、変数から使用の位置への索引を巡ごとに作る
 - `simplify` を不動点まで繰り返すことにしたときは、B3 が長い続きの連鎖を `Switch` の枝の中へ移しうる。Perceus と verifier は `Switch` の枝を再帰でたどるので、E0013 はその深さの上限にならなくなる
+- 段階6b の spec への入力:
+  - HIR: ラムダ、handle の本体、操作の節、`return` の節を1つの closure の形 (`Closure { params, body }`) にそろえ、捕まえる変数を変換のときに1回だけ求める。省いた `return` の節は HIR で合成する。状態のない handler は HIR では `init: None` のまま残し、型検査が状態のない handler と `Unit` の状態を区別できるようにする。`from` のある handler の本体も変換し、名前の誤りを報告する
+  - Core IR: `Call::Handle { effect, init, body: FnRef, clauses: Vec<FnRef>, ret: FnRef }` と `Call::Resume { k, arg, state }` にする。`ret` はつねにある。verifier が節の引数の数を確かめる
+  - Core IR とランタイム: 捕まえた変数のない関数を、クロージャを確保しない値 (`Atom::Fn`、`Value::Fn`) にする
+  - ランタイム: `Frame::Handler` の「つながっている部分」を `Option<Link { next, state }>` にし、つながっているのに状態がない形を表せなくする。`perform` に操作の多重度を持たせ、`Program::effects` を引かずに済むようにする
+  - 型検査: `Cont` に状態の欄を足す。状態の欄の単一化の誤りは、`UnifyError` の専用の種類にする
+  - 診断: `Diagnostic::fix` を、題名を持つ複数の fix (`fixes: Vec<Fix { title, edits }>`) にする。`resume` の引数の数の誤りに、状態の引数を足す fix と除く fix を付けるためである
+- S2 の設計の材料: row の仕組みを sort 付きの1つにし、エフェクトの row とレコードの row で共有する。レコードの実行時の表し方を決める。文字列のトークンを lexer のモードで分ける。レイアウト規則3とレコードの `with` の衝突を解く。借用のオペランドと `Field` を決める。参照ごとの具体化を記録する表を作り、`==` の比べ方を一般化する
 - 段階6b: `from` の handler は、今は本体と節を変換せずに E0004 にする。そのため、その中の名前の誤りは報告しない
 - 段階6b: `table/export.rs` の `export` (`Fn` と `Cont`) と、`shape.rs` の `Closer::ty` (`Cont`) は、今も `..` で欄を読み飛ばして分解する。A2 でそろえたのは子の型をたどる走査だけなので、6b で `Cont` に足す状態の欄は、この2か所で手で扱う
 - 決めたこと: 操作の引数の型に現れる Kind 変数は `Unr` に固定した ([エフェクトと handler](../spec/effects.md) の「handler の意味」)。線形な値を多相な操作の引数で渡せるようにするかは、後で見直す
@@ -245,3 +259,4 @@ S2 の前に、単一ファイルの前提をなくす作り替えを R7 とし�
 | 縦の貫通 段階5a | 線形性の誤りを E3002〜E3005 に分け、`diagnostics.md` の表どおりの場所を指すようにした。消費漏れに `drop x` の fix を付けた。組み込みの線形型 `File` と `open` / `read_all` / `close` を通し、破棄処理をオブジェクトの解放にした。`File` を含む `data` を `Lin` にした |
 | 縦の貫通 段階5b | 持ち越し規則を、呼び出し、`resume`、`handle` で検査し、違反を E3006 にした。評価済みの途中の値も持ち越しに数え、トップレベルの値の呼び出しは開く前の宣言の row で判定する。Kind 変数を含む値には条件つきの持ち越しの制約を出し、由来つきでスキームに残す。`return` の節の捕獲の専用の規則を持ち越し規則にまとめた。`drop k`、`never` の操作、`return` の節のクロージャを持つ handler フレームの中断で `File` が解放されることを確かめた |
 | 縦の貫通 段階6a | 複数の等式を引数のタプルに対する `match` に脱糖し、E1018〜E1020 を足した。演算子の定義と fixity の表 (標準の演算子の fixity は Prelude の宣言) を通し、E1021 と E1022 を足した。セクションと演算子の参照を E1023 つきで、`use` を E1024 つきで、`let ... in` を脱糖した。パターンの型の明示をすべての `apat` の位置で書けるようにし、ラムダと handler の節の引数の並びの重複束縛を E1017 にした。等式の網羅性を E4002 と E4005 で報告し、等式の検査で E2002 が連鎖する誤りを直した。`simplify` に F (join point の外出し)、K1 (分かっているコンストラクタの `switch`)、B2 のフィールドを持つコンストラクタへの拡張、DCE を足し、等式の脱糖で作るタプルの確保を消すようにした |
+| リファクタリング R6 | 評価の順を `eml_hir::call_steps` の1か所にまとめ (`(f 1) (g ())` は `f` から評価する)、型の走査と Kind の由来をそろえ、診断を1回だけ並べるようにした (R6a)。Core IR に visitor と `FnBuilder` を足し、`compact` と木の検査、末尾呼び出しの T、テキストの IR と `parse`、`eml_interp` の分割を入れた (R6b) |
