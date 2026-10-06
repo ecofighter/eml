@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 
 use crate::builder::FnBuilder;
 use crate::liveness::{BlockLiveness, Vars, analyze, tracked};
-use crate::{Arm, Atom, CExpr, CExprId, Call, CoreFn, JoinId, Program, Rhs, VarId};
+use crate::{Atom, CExpr, CExprId, Call, Case, CoreFn, JoinId, Program, Rhs, VarId};
 
 /// 変換の後に、プログラム全体にかける。変換の途中の関数ごとではなく、独立したパスにする (docs/spec/core-ir.md)。
 pub(crate) fn insert(program: &mut Program) {
@@ -99,7 +99,7 @@ impl Rebuild<'_> {
     ///
     /// `Let` の連鎖と join point の本体の連なりは長くなりうるので、その向きはループで歩いて各段を記録し、最後に
     /// 逆順で組み立てる。逆順に組み立てるときに生きている変数の集合を1つだけ更新するので、`Let` ごとの集合を持たない。
-    /// 再帰するのは `Switch` の枝と join point の範囲だけで、深さは E0013 の入れ子の制限で抑えられる。
+    /// 再帰するのは `Switch` の case と `default`、join point の範囲だけである。
     fn transform(&mut self, id: CExprId, owned: &Vars) -> CExprId {
         let old = self.old;
         let mut steps: Vec<Step> = Vec::new();
@@ -167,41 +167,51 @@ impl Rebuild<'_> {
                     let owned = self.owned(&segment, &live);
                     break (self.transform_jump(*join, args, &owned), live);
                 }
-                CExpr::Switch { scrutinee, arms } => {
+                CExpr::Switch {
+                    scrutinee,
+                    cases,
+                    default,
+                } => {
                     let live = self.live.at_end(expr);
                     let mut owned = self.owned(&segment, &live);
                     // `Switch` は scrutinee を1回使う (move)。枝の中でも使うなら、`Switch` の前で複製し、枝はその分を
                     // 所有して始まる。どの枝も使わなければ、枝は scrutinee を所有しない (docs/spec/core-ir.md)
                     let consumed = self.atom_var(scrutinee);
                     let kept = consumed.filter(|var| {
-                        arms.iter()
-                            .any(|arm| self.live.entry(arm.body).contains(var))
+                        cases
+                            .iter()
+                            .map(|case| case.body)
+                            .chain(*default)
+                            .any(|body| self.live.entry(body).contains(var))
                     });
                     if let (Some(var), None) = (consumed, kept) {
                         owned.remove(&var);
                     }
-                    let arms = arms
+                    let cases = cases
                         .iter()
-                        .map(|arm| {
+                        .map(|case| {
                             // 枝はフィールドの参照を1つずつ所有して始まる。使わないフィールドは、連鎖の始まりの
                             // 所有として、最初の段で捨てる
                             let mut owned = owned.clone();
                             owned.extend(
-                                arm.fields
+                                case.fields
                                     .iter()
                                     .copied()
                                     .filter(|var| self.tracked[var.0 as usize]),
                             );
-                            Arm {
-                                tag: arm.tag,
-                                fields: arm.fields.clone(),
-                                body: self.transform(arm.body, &owned),
+                            Case {
+                                pattern: case.pattern,
+                                fields: case.fields.clone(),
+                                body: self.transform(case.body, &owned),
                             }
                         })
                         .collect();
+                    // `default` はフィールドを束縛しないので、`Switch` の前の所有のまま始まる
+                    let default = default.map(|default| self.transform(default, &owned));
                     let mut code = self.push(CExpr::Switch {
                         scrutinee: *scrutinee,
-                        arms,
+                        cases,
+                        default,
                     });
                     if let Some(var) = kept {
                         code = self.push(CExpr::Dup { var, body: code });

@@ -17,7 +17,10 @@ use eml_types::{BodyTypes, Decl, Type, TypedProgram};
 use la_arena::ArenaMap;
 
 use crate::builder::FnBuilder;
-use crate::{Arm, Atom, CExpr, CExprId, CoreFn, FALSE, FnIdx, JoinId, Program, Rhs, TRUE, VarId};
+use crate::{
+    Atom, CExpr, CExprId, Case, CasePattern, CoreFn, FALSE, FnIdx, JoinId, Program, Rhs, TRUE,
+    VarId,
+};
 
 use pattern::needs_decision_tree;
 use program::{ProgramBuilder, effect_table};
@@ -349,18 +352,19 @@ impl FnLowering<'_> {
                 };
                 CExpr::Switch {
                     scrutinee,
-                    arms: vec![
-                        Arm {
-                            tag: FALSE,
+                    cases: vec![
+                        Case {
+                            pattern: CasePattern::Tag(FALSE),
                             fields: Vec::new(),
                             body: else_code,
                         },
-                        Arm {
-                            tag: TRUE,
+                        Case {
+                            pattern: CasePattern::Tag(TRUE),
                             fields: Vec::new(),
                             body: then_code,
                         },
                     ],
+                    default: None,
                 }
             }
             ExprKind::Match {

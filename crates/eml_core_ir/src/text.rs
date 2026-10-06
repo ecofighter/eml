@@ -7,8 +7,8 @@ use std::fmt;
 
 use crate::builder::FnBuilder;
 use crate::{
-    Arm, Atom, CExpr, CExprId, Call, CoreFn, EffectInfo, FnIdx, IoOp, JoinId, OperationInfo,
-    PrimOp, Program, Rhs, VarId, VarInfo,
+    Atom, CExpr, CExprId, Call, Case, CasePattern, CoreFn, EffectInfo, FnIdx, IoOp, JoinId,
+    OperationInfo, PrimOp, Program, Rhs, VarId, VarInfo,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -434,8 +434,12 @@ impl<'t> Parser<'t> {
                 "tailcall" => break CExpr::TailCall(self.call(state, true)?),
                 "switch" => {
                     let scrutinee = self.atom(state)?;
-                    let arms = self.arms(state)?;
-                    break CExpr::Switch { scrutinee, arms };
+                    let (cases, default) = self.cases(state)?;
+                    break CExpr::Switch {
+                        scrutinee,
+                        cases,
+                        default,
+                    };
                 }
                 other => {
                     return Err(error(
@@ -472,14 +476,21 @@ impl<'t> Parser<'t> {
         Ok(id)
     }
 
-    fn arms(&mut self, state: &mut FnState) -> Result<Vec<Arm>, ParseError> {
+    fn cases(&mut self, state: &mut FnState) -> Result<(Vec<Case>, Option<CExprId>), ParseError> {
         self.expect_punct('{')?;
-        let mut arms = Vec::new();
+        let mut cases = Vec::new();
+        let mut default = None;
         while !self.eat_punct('}') {
             let line = self.line();
-            let word = self.word()?;
-            let tag = tag_number(&word)
-                .ok_or_else(|| error(line, format!("expected an arm `#N`, found `{word}`")))?;
+            if self.at_word("_") {
+                self.pos += 1;
+                self.expect_word("->")?;
+                if default.replace(self.chain(state)?).is_some() {
+                    return Err(error(line, "a switch has two defaults"));
+                }
+                continue;
+            }
+            let pattern = self.case_pattern(line)?;
             let fields = if self.at_punct('(') {
                 self.list('(', ')', |p| p.binder(state))?
             } else {
@@ -487,9 +498,35 @@ impl<'t> Parser<'t> {
             };
             self.expect_word("->")?;
             let body = self.chain(state)?;
-            arms.push(Arm { tag, fields, body });
+            cases.push(Case {
+                pattern,
+                fields,
+                body,
+            });
         }
-        Ok(arms)
+        Ok((cases, default))
+    }
+
+    /// `#N` はタグ、整数は `Int`、文字列は `const` と同じく文字列定数の表に入れて `String` にする。
+    fn case_pattern(&mut self, line: usize) -> Result<CasePattern, ParseError> {
+        if let Some(Tok::Str(value)) = self.peek() {
+            self.pos += 1;
+            return Ok(CasePattern::String(self.intern(value.clone())));
+        }
+        let word = self.word()?;
+        if let Some(tag) = tag_number(&word) {
+            return Ok(CasePattern::Tag(tag));
+        }
+        if is_int(&word) {
+            return word
+                .parse()
+                .map(CasePattern::Int)
+                .map_err(|_| error(line, format!("`{word}` does not fit in an Int")));
+        }
+        Err(error(
+            line,
+            format!("expected a case `#N`, an integer, a string or `_`, found `{word}`"),
+        ))
     }
 
     fn rhs(&mut self, state: &mut FnState) -> Result<Rhs, ParseError> {

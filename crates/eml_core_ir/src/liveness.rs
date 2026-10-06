@@ -1,7 +1,7 @@
 //! 変数の生存 (docs/spec/core-ir.md)。`analyze` は、1回の呼び出しで関数のすべての変数について生存を求め、join point
-//! の `captures` を埋め直す。持つのはブロックの入口 (`Switch` の枝と join point の範囲) で生きている変数だけで、`Let`
-//! ごとの集合は持たない。RC の対象だけの集合が要る側は、結果を RC の対象で絞る。生存は変数ごとに独立して決まるので、
-//! 絞った結果は RC の対象だけで求めた結果と一致する。
+//! の `captures` を埋め直す。持つのはブロックの入口 (`Switch` の case と `default`、join point の範囲) で生きている
+//! 変数だけで、`Let` ごとの集合は持たない。RC の対象だけの集合が要る側は、結果を RC の対象で絞る。生存は変数ごとに
+//! 独立して決まるので、絞った結果は RC の対象だけで求めた結果と一致する。
 
 use std::collections::{BTreeSet, HashMap};
 
@@ -15,7 +15,7 @@ pub(crate) fn tracked(function: &CoreFn) -> Vec<bool> {
 }
 
 pub(crate) struct BlockLiveness {
-    /// `Switch` の枝と join point の範囲の入口で生きている変数。
+    /// `Switch` の case と `default`、join point の範囲の入口で生きている変数。
     entries: HashMap<CExprId, Vars>,
     /// join point ごとの `captures`。
     captures: Vec<Vars>,
@@ -45,16 +45,23 @@ impl BlockLiveness {
                 vars.extend(args.iter().filter_map(var_of));
                 vars
             }
-            CExpr::Switch { scrutinee, arms } => {
+            CExpr::Switch {
+                scrutinee,
+                cases,
+                default,
+            } => {
                 let mut vars: Vars = var_of(scrutinee).into_iter().collect();
-                for arm in arms {
-                    // フィールドは枝の入口で束縛するので、`Switch` の前では生きていない
+                for case in cases {
+                    // フィールドは case の入口で束縛するので、`Switch` の前では生きていない
                     vars.extend(
-                        self.entry(arm.body)
+                        self.entry(case.body)
                             .iter()
                             .copied()
-                            .filter(|var| !arm.fields.contains(var)),
+                            .filter(|var| !case.fields.contains(var)),
                     );
+                }
+                if let Some(default) = default {
+                    vars.extend(self.entry(*default).iter().copied());
                 }
                 vars
             }
@@ -160,8 +167,18 @@ pub(crate) fn analyze(function: &mut CoreFn) -> BlockLiveness {
                             },
                         ));
                     }
-                    CExpr::Switch { scrutinee: _, arms } => {
-                        work.extend(arms.iter().map(|arm| Step::Visit(arm.body, Start::Block)));
+                    CExpr::Switch {
+                        scrutinee: _,
+                        cases,
+                        default,
+                    } => {
+                        work.extend(
+                            cases
+                                .iter()
+                                .map(|case| case.body)
+                                .chain(*default)
+                                .map(|body| Step::Visit(body, Start::Block)),
+                        );
                     }
                     CExpr::Jump { join: _, args: _ } | CExpr::Return(_) | CExpr::TailCall(_) => {}
                     CExpr::Let {

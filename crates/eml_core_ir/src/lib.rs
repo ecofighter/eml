@@ -124,11 +124,13 @@ pub enum CExpr {
         body: CExprId,
         scope: CExprId,
     },
-    /// タグで分岐する。`if` もここに変換する。scrutinee は move で受け取り、引数を持つコンストラクタの値なら分解して
-    /// 枝のフィールドに入れる (docs/spec/core-ir.md)。
+    /// scrutinee の値で分岐する。`if` もここに変換する。scrutinee は move で受け取る。合う case がなければ `default` に
+    /// 進む。タグの case は引数を持つコンストラクタの値を分解し、case のフィールドに入れる。リテラルの case の `Switch`
+    /// はつねに `default` を持つ (docs/spec/core-ir.md)。
     Switch {
         scrutinee: Atom,
-        arms: Vec<Arm>,
+        cases: Vec<Case>,
+        default: Option<CExprId>,
     },
     Jump {
         join: JoinId,
@@ -148,7 +150,8 @@ pub enum CExpr {
 }
 
 impl CExpr {
-    /// 子の式を、`Join` は本体、`scope` の順に、`Switch` は枝の順に渡す。子をたどる処理はすべてここを通す。
+    /// 子の式を、`Join` は本体、`scope` の順に、`Switch` は case の順に、続けて `default` を渡す。子をたどる処理は
+    /// すべてここを通す。
     pub(crate) fn for_each_child(&self, mut f: impl FnMut(CExprId)) {
         match self {
             CExpr::Let {
@@ -168,7 +171,16 @@ impl CExpr {
                 f(*body);
                 f(*scope);
             }
-            CExpr::Switch { scrutinee: _, arms } => arms.iter().for_each(|arm| f(arm.body)),
+            CExpr::Switch {
+                scrutinee: _,
+                cases,
+                default,
+            } => {
+                cases.iter().for_each(|case| f(case.body));
+                if let Some(default) = default {
+                    f(*default);
+                }
+            }
             CExpr::Jump { join: _, args: _ } | CExpr::Return(_) | CExpr::TailCall(_) => {}
         }
     }
@@ -192,8 +204,15 @@ impl CExpr {
                 f(body);
                 f(scope);
             }
-            CExpr::Switch { scrutinee: _, arms } => {
-                arms.iter_mut().for_each(|arm| f(&mut arm.body))
+            CExpr::Switch {
+                scrutinee: _,
+                cases,
+                default,
+            } => {
+                cases.iter_mut().for_each(|case| f(&mut case.body));
+                if let Some(default) = default {
+                    f(default);
+                }
             }
             CExpr::Jump { join: _, args: _ } | CExpr::Return(_) | CExpr::TailCall(_) => {}
         }
@@ -207,7 +226,7 @@ impl CExpr {
                 rhs,
                 body: _,
             } => rhs.for_each_atom(f),
-            CExpr::Switch { scrutinee, arms: _ } => f(*scrutinee),
+            CExpr::Switch { scrutinee, .. } => f(*scrutinee),
             CExpr::Jump { join: _, args } => args.iter().for_each(|&atom| f(atom)),
             CExpr::Return(atom) => f(*atom),
             CExpr::TailCall(call) => call.for_each_atom(f),
@@ -230,7 +249,7 @@ impl CExpr {
                 rhs,
                 body: _,
             } => rhs.for_each_atom_mut(f),
-            CExpr::Switch { scrutinee, arms: _ } => f(scrutinee),
+            CExpr::Switch { scrutinee, .. } => f(scrutinee),
             CExpr::Jump { join: _, args } => args.iter_mut().for_each(f),
             CExpr::Return(atom) => f(atom),
             CExpr::TailCall(call) => call.for_each_atom_mut(f),
@@ -247,13 +266,23 @@ impl CExpr {
     }
 }
 
-/// `Switch` の枝。引数を持つコンストラクタの枝は、すべてのフィールドを順に束縛する。引数のないコンストラクタの枝の
-/// `fields` は空である。枝は、フィールドの参照を1つずつ所有して始まる (docs/spec/core-ir.md)。
+/// `Switch` の case。引数を持つコンストラクタの case は、すべてのフィールドを順に束縛する。リテラルの case と、引数の
+/// ないコンストラクタの case はフィールドを持たない。case は、フィールドの参照を1つずつ所有して始まる
+/// (docs/spec/core-ir.md)。
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Arm {
-    pub tag: u32,
+pub struct Case {
+    pub pattern: CasePattern,
     pub fields: Vec<VarId>,
     pub body: CExprId,
+}
+
+/// case が比べる値。`String` は文字列定数の表 (`Program::strings`) の番号である。リテラルを1つの `Switch` に並べ、
+/// 比べる命令の連なりで深くしないため (docs/superpowers/specs/2026-10-06-refactor-r7-design.md の 6.3)。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum CasePattern {
+    Tag(u32),
+    Int(i64),
+    String(u32),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

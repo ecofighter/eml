@@ -8,7 +8,9 @@ use eml_hir::{
 };
 use eml_types::Type;
 
-use crate::{Arm, Atom, CExpr, CExprId, FALSE, JoinId, PrimOp, Rhs, TRUE, TUPLE, VarId};
+use crate::{
+    Atom, CExpr, CExprId, Case, CasePattern, FALSE, JoinId, PrimOp, Rhs, TRUE, TUPLE, VarId,
+};
 
 use super::types::split_arrows;
 use super::{Binding, Bindings, Exit, FnLowering};
@@ -261,7 +263,7 @@ impl FnLowering<'_> {
             });
             Some(join)
         };
-        let mut arms = Vec::new();
+        let mut cases = Vec::new();
         for &ctor in constructors {
             let field_types = self.field_types(ctor, &occurrence.ty);
             let (fields, code) = if rows.iter().any(|row| mentions(ctor, row)) {
@@ -282,15 +284,16 @@ impl FnLowering<'_> {
                 });
                 (fields, jump)
             };
-            arms.push(Arm {
-                tag: hir[ctor].tag,
+            cases.push(Case {
+                pattern: CasePattern::Tag(hir[ctor].tag),
                 fields,
                 body: code,
             });
         }
         CExpr::Switch {
             scrutinee: occurrence.atom,
-            arms,
+            cases,
+            default: None,
         }
     }
 
@@ -316,11 +319,12 @@ impl FnLowering<'_> {
         );
         CExpr::Switch {
             scrutinee: occurrence.atom,
-            arms: vec![Arm {
-                tag: TUPLE,
+            cases: vec![Case {
+                pattern: CasePattern::Tag(TUPLE),
                 fields,
                 body: code,
             }],
+            default: None,
         }
     }
 
@@ -523,18 +527,19 @@ fn tuple_field_types(ty: &Type, arity: usize) -> Vec<Type> {
 fn if_equal(equal: Atom, then: CExprId, otherwise: CExprId) -> CExpr {
     CExpr::Switch {
         scrutinee: equal,
-        arms: vec![
-            Arm {
-                tag: FALSE,
+        cases: vec![
+            Case {
+                pattern: CasePattern::Tag(FALSE),
                 fields: Vec::new(),
                 body: otherwise,
             },
-            Arm {
-                tag: TRUE,
+            Case {
+                pattern: CasePattern::Tag(TRUE),
                 fields: Vec::new(),
                 body: then,
             },
         ],
+        default: None,
     }
 }
 

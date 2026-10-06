@@ -2,7 +2,7 @@
 
 use std::fmt::Write;
 
-use crate::{Atom, CExpr, CExprId, Call, CoreFn, EffectInfo, Program, Rhs, VarId};
+use crate::{Atom, CExpr, CExprId, Call, CasePattern, CoreFn, EffectInfo, Program, Rhs, VarId};
 
 pub fn pretty(program: &Program) -> String {
     let mut out = String::new();
@@ -111,17 +111,26 @@ fn expr(program: &Program, function: &CoreFn, id: CExprId, indent: usize, out: &
                 writeln!(out, "{pad}tailcall {}", call_text(program, function, call)).unwrap();
                 return;
             }
-            CExpr::Switch { scrutinee, arms } => {
+            CExpr::Switch {
+                scrutinee,
+                cases,
+                default,
+            } => {
                 writeln!(out, "{pad}switch {} {{", atom(program, function, scrutinee)).unwrap();
-                for arm in arms {
-                    if arm.fields.is_empty() {
-                        writeln!(out, "{pad}  #{} ->", arm.tag).unwrap();
+                for case in cases {
+                    let head = case_pattern(program, case.pattern);
+                    if case.fields.is_empty() {
+                        writeln!(out, "{pad}  {head} ->").unwrap();
                     } else {
                         let fields: Vec<String> =
-                            arm.fields.iter().map(|&v| binder(function, v)).collect();
-                        writeln!(out, "{pad}  #{}({}) ->", arm.tag, fields.join(", ")).unwrap();
+                            case.fields.iter().map(|&v| binder(function, v)).collect();
+                        writeln!(out, "{pad}  {head}({}) ->", fields.join(", ")).unwrap();
                     }
-                    expr(program, function, arm.body, indent + 2, out);
+                    expr(program, function, case.body, indent + 2, out);
+                }
+                if let Some(default) = default {
+                    writeln!(out, "{pad}  _ ->").unwrap();
+                    expr(program, function, *default, indent + 2, out);
                 }
                 writeln!(out, "{pad}}}").unwrap();
                 return;
@@ -234,6 +243,15 @@ fn call_text(program: &Program, function: &CoreFn, call: &Call) -> String {
                 atom(program, function, state)
             )
         }
+    }
+}
+
+/// case の頭。文字列の case は `const` と同じく文字列定数の表を引いて書く。verifier の誤りの文言もこの形を使う。
+pub(crate) fn case_pattern(program: &Program, pattern: CasePattern) -> String {
+    match pattern {
+        CasePattern::Tag(tag) => format!("#{tag}"),
+        CasePattern::Int(n) => n.to_string(),
+        CasePattern::String(index) => format!("{:?}", program.strings[index as usize]),
     }
 }
 

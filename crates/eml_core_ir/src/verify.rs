@@ -5,9 +5,14 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fmt;
+use std::mem::discriminant;
 
 use crate::liveness::{Vars, tracked};
-use crate::{Atom, CExpr, CExprId, Call, CoreFn, EffectInfo, FnIdx, JoinId, Program, Rhs, VarId};
+use crate::pretty::case_pattern;
+use crate::{
+    Atom, CExpr, CExprId, Call, Case, CasePattern, CoreFn, EffectInfo, FnIdx, JoinId, Program, Rhs,
+    VarId,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VerifyError {
@@ -145,8 +150,8 @@ impl<'a> Checker<'a> {
         format!("[{}]", names.join(", "))
     }
 
-    /// `Let` の連鎖と、join point の本体の連なりはループで歩く。再帰するのは `Switch` の枝と join point の範囲だけで、
-    /// 深さは E0013 の入れ子の制限で抑えられる。
+    /// `Let` の連鎖と、join point の本体の連なりはループで歩く。再帰するのは `Switch` の case と `default`、join point
+    /// の範囲だけである。
     fn check(&mut self, id: CExprId, mut state: State) -> Result<(), String> {
         let function = self.function;
         let mut id = id;
@@ -199,17 +204,21 @@ impl<'a> Checker<'a> {
                     return self.nothing_owned(&state);
                 }
                 CExpr::Jump { join, args } => return self.check_jump(state, *join, args),
-                CExpr::Switch { scrutinee, arms } => {
-                    if arms.iter().any(|arm| !arm.fields.is_empty()) {
+                CExpr::Switch {
+                    scrutinee,
+                    cases,
+                    default,
+                } => {
+                    if cases.iter().any(|case| !case.fields.is_empty()) {
                         self.fields_allowed(scrutinee)?;
                     }
+                    self.switch_cases(cases, *default)?;
                     self.consume(&mut state, scrutinee)?;
-                    let mut tags = HashSet::new();
-                    for arm in arms {
-                        if !tags.insert(arm.tag) {
-                            return Err(format!("a switch has two arms for tag {}", arm.tag));
-                        }
-                        self.check_branch(arm.body, state.clone(), &arm.fields)?;
+                    for case in cases {
+                        self.check_branch(case.body, state.clone(), &case.fields)?;
+                    }
+                    if let Some(default) = default {
+                        self.check_branch(*default, state, &[])?;
                     }
                     return Ok(());
                 }
@@ -265,6 +274,45 @@ impl<'a> Checker<'a> {
                 }
             }
         }
+    }
+
+    /// 1つの `Switch` の case の種類がそろい、同じ case が2回なく、リテラルの case はフィールドを持たず、リテラルの
+    /// `Switch` が `default` を持つこと (docs/spec/core-ir.md)。リテラルは無限にあるので、`default` がないと合わない
+    /// 値が行き場を失う。
+    fn switch_cases(&self, cases: &[Case], default: Option<CExprId>) -> Result<(), String> {
+        let kinds: HashSet<_> = cases
+            .iter()
+            .map(|case| discriminant(&case.pattern))
+            .collect();
+        if kinds.len() > 1 {
+            return Err("a switch mixes kinds of cases".to_string());
+        }
+        let literal = cases
+            .iter()
+            .any(|case| !matches!(case.pattern, CasePattern::Tag(_)));
+        if literal && default.is_none() {
+            return Err("a switch on literals has no default".to_string());
+        }
+        let mut seen = HashSet::new();
+        for case in cases {
+            if literal && !case.fields.is_empty() {
+                return Err("a literal case binds fields".to_string());
+            }
+            if let CasePattern::String(index) = case.pattern
+                && index as usize >= self.program.strings.len()
+            {
+                return Err(format!(
+                    "a case refers to string constant {index}, which does not exist"
+                ));
+            }
+            if !seen.insert(case.pattern) {
+                return Err(format!(
+                    "a switch has two cases for {}",
+                    case_pattern(self.program, case.pattern)
+                ));
+            }
+        }
+        Ok(())
     }
 
     /// 枝や範囲を確かめ、その中での範囲の変更を巻き戻す。`bindings` は入口で束縛する変数 (`Switch` の枝のフィールド)

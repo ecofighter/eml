@@ -100,3 +100,78 @@ fn main() {
         })
     );
 }
+
+/// 文字列のリテラルの case に一致する値と、`default` に進む値。どちらも `Switch` が文字列を1回だけ手放す。
+const STRING_SWITCH: &str = r#"
+fn main() {
+  let s0^ = const "a"
+  let n1 = call pick(s0)
+  let s2^ = const "b"
+  let n3 = call pick(s2) [n1]
+  let t4 = prim +(n1, n3)
+  let t5^ = prim show_int(t4)
+  let o6 = perform println(t5)
+  return o6
+}
+fn pick(s0^) {
+  switch s0 {
+    "a" ->
+      return 1
+    _ ->
+      return 2
+  }
+}
+"#;
+
+#[test]
+fn a_string_switch_releases_the_string_on_every_path() {
+    let (out, result) = run_text(STRING_SWITCH);
+    assert!(result.is_ok(), "{result:?}");
+    assert_eq!(out, "3\n");
+}
+
+/// フィールドを持つ値が `default` に進む。`Switch` は値を分解せずに手放す。
+const DEFAULT_WITH_FIELDS: &str = r#"
+fn main() {
+  let s0^ = const "field"
+  let d1^ = con #1(s0)
+  switch d1 {
+    #0 ->
+      return ()
+    _ ->
+      let s2^ = const "default"
+      let o3 = perform println(s2)
+      return o3
+  }
+}
+"#;
+
+#[test]
+fn a_value_with_fields_that_goes_to_the_default_is_released() {
+    let (out, result) = run_text(DEFAULT_WITH_FIELDS);
+    assert!(result.is_ok(), "{result:?}");
+    assert_eq!(out, "default\n");
+}
+
+#[test]
+fn an_int_switch_goes_to_the_matching_case() {
+    let text = r#"
+fn main() {
+  switch 2 {
+    1 ->
+      let s0^ = const "one"
+      let o1 = perform println(s0)
+      return o1
+    2 ->
+      let s2^ = const "two"
+      let o3 = perform println(s2)
+      return o3
+    _ ->
+      return ()
+  }
+}
+"#;
+    let (out, result) = run_text(text);
+    assert!(result.is_ok(), "{result:?}");
+    assert_eq!(out, "two\n");
+}

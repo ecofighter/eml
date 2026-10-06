@@ -280,3 +280,7 @@
 ### リファクタリング R7e-1
 
 - 新しいテスト: UI テスト `run/effects/operation_over_application.em`。エフェクトの型引数が関数型の操作に余った引数を渡すと、操作の結果に残りを適用する。R7e-1 より前は、すべての引数を `perform` に渡し、実行時に内部の誤りになっていた。呼び出しの飽和の場合分けを `saturate` にまとめたときに直ったので、その直りを固定する
+
+### リファクタリング R7e-2
+
+- 新しいテスト: `eml_core_ir/tests/verify.rs` の `a_literal_switch_with_a_default_is_accepted`、`a_literal_switch_without_a_default_is_rejected`、`a_switch_that_mixes_kinds_of_cases_is_rejected`、`a_switch_with_two_cases_for_one_literal_is_rejected`、`eml_interp/tests/data.rs` の `a_string_switch_releases_the_string_on_every_path`、`a_value_with_fields_that_goes_to_the_default_is_released`、`an_int_switch_goes_to_the_matching_case`。`Switch` を case と `default` を持つ形にした (docs/superpowers/specs/2026-10-06-refactor-r7-design.md の 6.3)。この段では変換の出力は変わらない

@@ -672,3 +672,66 @@ fn a_closure_without_arguments_is_rejected() {
         "{error}"
     );
 }
+
+#[test]
+fn a_literal_switch_with_a_default_is_accepted() {
+    let text = "fn main(n0) {
+  switch n0 {
+    1 ->
+      return 10
+    2 ->
+      return 20
+    _ ->
+      return 0
+  }
+}
+";
+    assert_eq!(check(text), Ok(()));
+}
+
+#[test]
+fn a_literal_switch_without_a_default_is_rejected() {
+    let text = "fn main(n0) {
+  switch n0 {
+    1 ->
+      return 10
+  }
+}
+";
+    let error = check(text).unwrap_err();
+    assert!(error.contains("default"), "{error}");
+}
+
+#[test]
+fn a_switch_that_mixes_kinds_of_cases_is_rejected() {
+    let text = "fn main(n0) {
+  switch n0 {
+    #0 ->
+      return 10
+    1 ->
+      return 20
+    _ ->
+      return 0
+  }
+}
+";
+    let error = check(text).unwrap_err();
+    assert!(error.contains("mixes"), "{error}");
+}
+
+#[test]
+fn a_switch_with_two_cases_for_one_literal_is_rejected() {
+    let text = "fn main(n0) {
+  switch n0 {
+    1 ->
+      return 10
+    1 ->
+      return 20
+    _ ->
+      return 0
+  }
+}
+";
+    let error = check(text).unwrap_err();
+    assert!(error.contains("two cases"), "{error}");
+}

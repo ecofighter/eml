@@ -20,7 +20,7 @@
 
 use std::collections::HashMap;
 
-use crate::{Arm, Atom, CExpr, CExprId, CoreFn, JoinId, Program, Rhs, VarId};
+use crate::{Atom, CExpr, CExprId, Case, CasePattern, CoreFn, JoinId, Program, Rhs, VarId};
 
 pub(crate) fn simplify(program: &mut Program) {
     for function in &mut program.functions {
@@ -202,12 +202,25 @@ impl Simplify<'_> {
             };
             let CExpr::Switch {
                 scrutinee: Atom::Var(scrutinee),
-                arms,
+                cases,
+                default,
             } = self.expr(body).clone()
             else {
                 continue;
             };
-            if scrutinee != param {
+            // `default` へ届く値の切り出しはまだ扱わない。リテラルの case の `Switch` には、分かっている
+            // コンストラクタの値は届かない
+            let Some(tags) = cases
+                .iter()
+                .map(|case| match case.pattern {
+                    CasePattern::Tag(tag) => Some(tag),
+                    CasePattern::Int(_) | CasePattern::String(_) => None,
+                })
+                .collect::<Option<Vec<u32>>>()
+            else {
+                continue;
+            };
+            if scrutinee != param || default.is_some() {
                 continue;
             }
             let values: Vec<Option<(u32, Vec<Atom>)>> = sites
@@ -221,8 +234,10 @@ impl Simplify<'_> {
                 })
                 .collect();
             let fits = |(tag, fields): &(u32, Vec<Atom>)| {
-                arms.iter()
-                    .any(|arm| arm.tag == *tag && arm.fields.len() == fields.len())
+                cases
+                    .iter()
+                    .zip(&tags)
+                    .any(|(case, case_tag)| case_tag == tag && case.fields.len() == fields.len())
             };
             if values.iter().all(Option::is_none) || !values.iter().flatten().all(fits) {
                 continue;
@@ -231,60 +246,61 @@ impl Simplify<'_> {
             // (タグ, 切り出した join point, 本体, 引数, 値全体も渡すか)
             let mut split: Vec<(u32, JoinId, CExprId, Vec<VarId>, bool)> = Vec::new();
             let mut dispatch = Vec::new();
-            for arm in &arms {
-                if !arm.fields.is_empty() && !targeted.contains(&arm.tag) {
-                    dispatch.push(arm.clone());
+            for (case, &tag) in cases.iter().zip(&tags) {
+                if !case.fields.is_empty() && !targeted.contains(&tag) {
+                    dispatch.push(case.clone());
                     continue;
                 }
-                let mut arm_params = Vec::new();
-                for &field in &arm.fields {
+                let mut case_params = Vec::new();
+                for &field in &case.fields {
                     let fresh = self.fresh_like(field);
-                    self.substitute(arm.body, field, Atom::Var(fresh));
-                    arm_params.push(fresh);
+                    self.substitute(case.body, field, Atom::Var(fresh));
+                    case_params.push(fresh);
                 }
-                let whole = if arm.fields.is_empty() {
-                    self.substitute(arm.body, param, Atom::Tag(arm.tag));
+                let whole = if case.fields.is_empty() {
+                    self.substitute(case.body, param, Atom::Tag(tag));
                     false
-                } else if self.uses(arm.body, param) {
+                } else if self.uses(case.body, param) {
                     let fresh = self.fresh_like(param);
-                    self.substitute(arm.body, param, Atom::Var(fresh));
-                    arm_params.push(fresh);
+                    self.substitute(case.body, param, Atom::Var(fresh));
+                    case_params.push(fresh);
                     true
                 } else {
                     false
                 };
                 // 索引は、下で組み立てた `Join` の位置に直す
-                let arm_join = self.function.new_join();
+                let case_join = self.function.new_join();
                 let mut args: Vec<Atom> =
-                    arm.fields.iter().map(|&field| Atom::Var(field)).collect();
+                    case.fields.iter().map(|&field| Atom::Var(field)).collect();
                 if whole {
                     args.push(Atom::Var(param));
                 }
                 let jump = self.push(CExpr::Jump {
-                    join: arm_join,
+                    join: case_join,
                     args,
                 });
-                dispatch.push(Arm {
-                    tag: arm.tag,
-                    fields: arm.fields.clone(),
+                dispatch.push(Case {
+                    pattern: case.pattern,
+                    fields: case.fields.clone(),
                     body: jump,
                 });
-                split.push((arm.tag, arm_join, arm.body, arm_params, whole));
+                split.push((tag, case_join, case.body, case_params, whole));
             }
             self.set(
                 body,
                 CExpr::Switch {
                     scrutinee: Atom::Var(param),
-                    arms: dispatch,
+                    cases: dispatch,
+                    default: None,
                 },
             );
             for (&site, value) in sites.iter().zip(&values) {
                 let Some((tag, fields)) = value else {
                     continue;
                 };
-                let (_, arm_join, _, _, whole) = split
+                let (_, case_join, _, _, whole) = split
                     .iter()
-                    .find(|(arm_tag, ..)| arm_tag == tag)
+                    .find(|(case_tag, ..)| case_tag == tag)
                     .expect("checked above");
                 let CExpr::Jump { args: passed, .. } = self.expr(site) else {
                     unreachable!("a jump site holds a jump")
@@ -296,7 +312,7 @@ impl Simplify<'_> {
                 self.set(
                     site,
                     CExpr::Jump {
-                        join: *arm_join,
+                        join: *case_join,
                         args,
                     },
                 );
@@ -311,12 +327,12 @@ impl Simplify<'_> {
                 scope,
             });
             self.function.define_join(join, inner);
-            for (position, (_, arm_join, arm, arm_params, _)) in split.iter().enumerate().rev() {
+            for (position, (_, case_join, case, case_params, _)) in split.iter().enumerate().rev() {
                 let expr = CExpr::Join {
-                    join: *arm_join,
-                    params: arm_params.clone(),
+                    join: *case_join,
+                    params: case_params.clone(),
                     captures: Vec::new(),
-                    body: *arm,
+                    body: *case,
                     scope: inner,
                 };
                 inner = if position == 0 {
@@ -325,7 +341,7 @@ impl Simplify<'_> {
                 } else {
                     self.push(expr)
                 };
-                self.function.define_join(*arm_join, inner);
+                self.function.define_join(*case_join, inner);
             }
         }
     }
@@ -405,28 +421,42 @@ impl Simplify<'_> {
         }
     }
 
-    /// K1: `switch` の値が分かっているコンストラクタなら、その枝で置き換え、枝のフィールドの変数を値に置き換える。
-    /// 値の束縛は `switch` を支配するので、値に使う変数は `switch` の位置で範囲にある。
+    /// K1: `switch` の値が分かっているコンストラクタなら、その case で置き換え、case のフィールドの変数を値に
+    /// 置き換える。そのタグの case がなければ `default` で置き換える。値の束縛は `switch` を支配するので、値に使う
+    /// 変数は `switch` の位置で範囲にある。
     fn switch_known_constructors(&mut self) {
         let known = self.known_constructors();
         let mut parents = self.parents();
         for id in self.reachable() {
-            let CExpr::Switch { scrutinee, arms } = self.expr(id).clone() else {
+            let CExpr::Switch {
+                scrutinee,
+                cases,
+                default,
+            } = self.expr(id).clone()
+            else {
                 continue;
             };
             let Some((tag, values)) = self.known_value(&known, scrutinee) else {
                 continue;
             };
-            let Some(arm) = arms
+            let body = match cases
                 .iter()
-                .find(|arm| arm.tag == tag && arm.fields.len() == values.len())
-            else {
-                continue;
+                .find(|case| case.pattern == CasePattern::Tag(tag))
+            {
+                Some(case) if case.fields.len() == values.len() => {
+                    for (&field, &value) in case.fields.iter().zip(&values) {
+                        self.substitute(case.body, field, value);
+                    }
+                    case.body
+                }
+                // フィールドの数の合わない case は verifier と実行に任せ、ここでは書き換えない
+                Some(_) => continue,
+                None => match default {
+                    Some(default) => default,
+                    None => continue,
+                },
             };
-            for (&field, &value) in arm.fields.iter().zip(&values) {
-                self.substitute(arm.body, field, value);
-            }
-            self.replace(&mut parents, id, arm.body);
+            self.replace(&mut parents, id, body);
         }
     }
 
