@@ -49,11 +49,11 @@ fn reachable(hir: &HirProgram, entry: FunctionId) -> HashSet<FunctionId> {
 pub(crate) fn translate(hir: &HirProgram, typed: &TypedProgram, entry: FunctionId) -> Program {
     let mut builder = ProgramBuilder::new(hir, typed);
     let mut indices = ItemMap::default();
-    let reachable = reachable(hir, entry);
+    let reached = reachable(hir, entry);
     // intrinsic は本体を持たず、呼び出しの位置で命令にするか、包む関数を作る (`program.rs` の `wrapper`)
     let defined = || {
         hir.functions()
-            .filter(|(id, function)| !function.intrinsic && reachable.contains(id))
+            .filter(|(id, function)| !function.intrinsic && reached.contains(id))
     };
     for (id, _) in defined() {
         let body = hir

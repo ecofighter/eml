@@ -1,0 +1,5 @@
+-- `IO` の操作を `|>` で渡すと、実行時エラーは操作を包む関数 `op$open` の名前で報告される (docs/implementation/status.md の「次の作業の注意点」)。
+main : Unit -> <IO> Unit
+main () =
+  let f = "missing.txt" |> open
+  close f

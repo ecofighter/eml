@@ -637,8 +637,7 @@ fn effects_are_numbered_with_io_first_then_in_declaration_order() {
 fn a_prelude_function_is_lowered_under_the_prelude_name() {
     // Prelude の関数の Core IR の名前には `Prelude.` を付け、ユーザーの関数と名前が重ならないようにする
     // (docs/superpowers/specs/2026-10-06-refactor-r7-design.md の 4.5)
-    let text =
-        "main : Unit -> <IO> Unit\nmain () = if not True then println \"a\" else println \"b\"";
+    let text = "main : Unit -> <IO> Unit\nmain () = if not True && True then println \"a\" else println \"b\"";
     let shown = core_text(text, Pass::Translate);
     assert!(shown.contains("fn Prelude.not("), "{shown}");
     assert!(shown.contains("call Prelude.not("), "{shown}");

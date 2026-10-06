@@ -189,6 +189,7 @@ S2 の前に、単一ファイルの前提をなくす作り替えを R7 とし�
 
 ## 次の作業の注意点
 
+- 既知の制限: `IO` の操作を値として渡したとき (`|>`、`<|`、`>>` を通したときを含む) の実行時エラーは、操作を包む関数の Core IR の名前 (`op$open` など) で報告される。R7d で `|>` と `<|` を Prelude の関数の呼び出しにしたので、パイプでもこの名前になった (R7d より前は呼んだ関数の名前だった)。[ロードマップ](../future/roadmap.md) の「実行時エラーの位置」で、利用者向けの関数名を実行時エラーに付けるときに直す
 - F は、scrutinee そのものを束縛する枝が、ほかのコンストラクタの枝の後で残りの枝の join point になるときに、その join point を外へ出せない (例: `match (if b then Red else Green) with | Red -> 1 | x -> code x`)。その join point は外側の join point の引数を使うので、外側の本体の先頭から動かせず、B2 は外側の join point の本体の `Switch` に届かない。結果は正しく、最適化だけが効かない。分かっている `jump` が変数の枝に直接届く場合は、今も最適化される (`a_known_and_an_unknown_jump_share_an_arm_that_uses_the_whole_value`)
 - 網羅されていない `match` と等式の fix (枝や等式の追加の提案) は、どの型にもなる仮置きの式を言語に入れるときに一緒に入れる
 - 既知の制限: ariadne は、同じファイルの区画の見出しに、どの区画でも診断の primary の位置を出す (`ariadne` 0.6 の `write.rs`)。そのため、secondary が primary より前の行にあって区画が分かれると (E3002 の「first used here」、E1003 の「first defined here」など)、2つ目の区画の見出しも primary の行と列になる。設定では変えられないので、直すときは表示を ariadne 以外で組むか、ariadne を書き換える

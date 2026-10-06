@@ -139,10 +139,10 @@ impl BodyLowering<'_> {
         rhs: ExprId,
     ) -> ExprId {
         let range = self.exprs[lhs].range.cover(self.exprs[rhs].range);
-        // 解決した先が Prelude の `&&` か `||` のときだけ、短絡して評価するために `if` に脱糖する。ユーザーの定義は Prelude の演算子を隠すので、
-        // `&&` を定義すれば普通の呼び出しになる (docs/spec/declarations.md の「fixity」)
+        // 解決した先が Prelude の `&&` か `||` のときだけ、短絡評価にするため `if` に脱糖する。
+        // ユーザーの定義は Prelude の演算子を隠すので、`&&` を定義すれば普通の呼び出しになる
+        // (docs/spec/declarations.md の「fixity」)
         let res = match self.items.value(op) {
-            // 短絡評価にするため `if` に脱糖する (docs/spec/declarations.md)
             Some(ValueItem::Function(id)) if id == self.lang.and => {
                 let otherwise = self.alloc(
                     ExprKind::Path(Res::Constructor(self.lang.false_ctor)),

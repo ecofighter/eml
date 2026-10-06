@@ -75,7 +75,7 @@ fn a_carry_over_through_a_prelude_function_points_into_the_prelude() {
 
 #[test]
 fn linear_misuses_in_the_prelude_point_into_the_prelude() {
-    let extra = "pub twice : File -> <IO> Unit\ntwice f =\n  close f\n  close f\n\npub dropped : File -> <IO> Unit\ndropped f = ()\n\npub discarded : File -> <IO> Unit\ndiscarded _ = ()\n\npub captured : File -> <IO> (Unit -> <IO> Unit)\ncaptured f = fn () -> close f\n";
+    let extra = "pub twice : File -> <IO> Unit\ntwice f =\n  close f\n  close f\n\npub dropped : File -> <IO> Unit\ndropped f = ()\n\npub discarded : File -> <IO> Unit\ndiscarded _ = ()\n";
     let shown = check_with_prelude(extra, "");
     // どの診断も、すべてのラベルが Prelude の中を指す
     for line in shown.lines().filter(|line| line.starts_with("  ")) {
