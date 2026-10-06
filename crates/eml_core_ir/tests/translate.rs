@@ -134,17 +134,11 @@ fn builtins_used_as_values_are_wrapped() {
     insta::assert_snapshot!(core_text(text, Pass::Translate), @"
     effect IO { println/1, open/1, read_all/1, close/1 }
     fn Prelude.not($00) {
-      join j0() [] {
-        return #0
-      }
-      join j1() [] {
-        return #1
-      }
       switch $00 {
         #0 ->
-          jump j1()
+          return #1
         #1 ->
-          jump j0()
+          return #0
       }
     }
     fn Prelude.>>(f0^, g1^) {
@@ -659,4 +653,58 @@ fn the_prelude_bool_tags_match_the_core_ir_constants() {
     let program = eml_test_support::lower_clean("").program;
     assert_eq!(program[program.lang.false_ctor].tag, eml_core_ir::FALSE);
     assert_eq!(program[program.lang.true_ctor].tag, eml_core_ir::TRUE);
+}
+
+#[test]
+fn an_arm_reached_by_one_leaf_sits_at_the_leaf() {
+    // 1つの葉からだけ届く枝の本体は、引数を `let` で束縛してその葉に置き、複数の葉から届く枝だけを join point にする
+    // (docs/superpowers/specs/2026-10-06-refactor-r7-design.md の 6.3)。`pick` の `(n, _)` は、`0` の case の
+    // `default` と、外側の `default` の2つの葉から届く
+    let text = "data Shape = | Dot | Box Int Int\n\narea : Shape -> Int\narea s =\n  match s with\n    | Box w h -> w * h\n    | Dot -> 0\n\npick : Int -> Int -> Int\npick a b =\n  match (a, b) with\n    | (0, 1) -> 0\n    | (n, _) -> n\n\nmain : Unit -> <IO> Unit\nmain () = println (show_int (area (Box 2 3) + pick 0 1))";
+    insta::assert_snapshot!(core_text(text, Pass::Translate), @"
+    effect IO { println/1, open/1, read_all/1, close/1 }
+    fn area(s0^) {
+      switch s0 {
+        #0 ->
+          return 0
+        #1(w4, h5) ->
+          let w1 = w4
+          let h2 = h5
+          let t3 = prim *(w1, h2)
+          return t3
+      }
+    }
+    fn pick(a0, b1) {
+      let d2^ = con #0(a0, b1)
+      join j0(n3) [] {
+        return n3
+      }
+      switch d2 {
+        #0(n4, x5) ->
+          switch n4 {
+            0 ->
+              switch x5 {
+                1 ->
+                  return 0
+                _ ->
+                  jump j0(n4)
+              }
+            _ ->
+              jump j0(n4)
+          }
+      }
+    }
+    fn main(p0) {
+      let d1^ = con #1(2, 3)
+      let t2 = call area(d1)
+      let t3 = call pick(0, 1)
+      let t4 = prim +(t2, t3)
+      let t5^ = prim show_int(t4)
+      let t6 = perform println(t5)
+      return t6
+    }
+    fn entry$main() {
+      tailcall main(())
+    }
+    ");
 }

@@ -286,8 +286,9 @@ impl FnLowering<'_> {
         self.builder.new_join()
     }
 
-    fn seq(&mut self, bindings: Bindings, last: CExpr) -> CExprId {
-        let mut id = self.push(last);
+    /// 組み立て済みの最後の式 `last` を、`bindings` で内側から順に囲む。
+    fn seq(&mut self, bindings: Bindings, last: CExprId) -> CExprId {
+        let mut id = last;
         for binding in bindings.into_iter().rev() {
             id = match binding {
                 Binding::Let(var, rhs) => self.push(CExpr::Let { var, rhs, body: id }),
@@ -333,9 +334,9 @@ impl FnLowering<'_> {
         self.seq(bindings, last)
     }
 
-    /// 式の値を `exit` に渡す最後の命令を返す。値の計算に要る束縛は `out` に積む。末尾の `if` は、枝が直接 `exit` に
-    /// 渡す `Switch` にし、join point を作らない。
-    fn tail_expr(&mut self, id: ExprId, exit: Exit, out: &mut Bindings) -> CExpr {
+    /// 式の値を `exit` に渡す最後の命令を組み立てて返す。値の計算に要る束縛は `out` に積む。末尾の `if` は、枝が直接
+    /// `exit` に渡す `Switch` にし、join point を作らない。
+    fn tail_expr(&mut self, id: ExprId, exit: Exit, out: &mut Bindings) -> CExprId {
         let body = self.body;
         match &body.exprs[id].kind {
             ExprKind::If {
@@ -350,7 +351,7 @@ impl FnLowering<'_> {
                     // `else` のない `if` の値は `()` である
                     None => self.push(exit_with(exit, Atom::Unit)),
                 };
-                CExpr::Switch {
+                self.push(CExpr::Switch {
                     scrutinee,
                     cases: vec![
                         Case {
@@ -365,7 +366,7 @@ impl FnLowering<'_> {
                         },
                     ],
                     default: None,
-                }
+                })
             }
             ExprKind::Match {
                 scrutinee, arms, ..
@@ -374,13 +375,13 @@ impl FnLowering<'_> {
                 self.stmts(stmts, out);
                 match tail {
                     Some(tail) => self.tail_expr(*tail, exit, out),
-                    None => exit_with(exit, Atom::Unit),
+                    None => self.push(exit_with(exit, Atom::Unit)),
                 }
             }
             ExprKind::Annot { expr, .. } => self.tail_expr(*expr, exit, out),
             _ => {
                 let value = self.atom(id, out);
-                exit_with(exit, value)
+                self.push(exit_with(exit, value))
             }
         }
     }

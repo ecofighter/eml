@@ -404,6 +404,7 @@ enum CasePattern { Tag(u32), Int(i64), String(u32) }   // String は文字列定
 
 - `Arm` はなくし、`Case` にする
 - リテラルの列の `match` は、比べるプリミティブと `Bool` の `Switch` の連なりではなく、リテラルの case と `default` (ワイルドカードの行だけの行列) を持つ1つの `Switch` にする。深さが1になるので、リテラルが1000個の `match` でも debug ビルドのスタックがあふれない。`translate/pattern.rs` の `compare` と `if_equal` はなくす
+- `match` の枝の本体は、決定木の1つの葉からだけ届くなら、join point にせず、その葉の位置に置く (引数は `let` で束縛する)。複数の葉から届く枝だけを join point にする。枝ごとの join point は互いの範囲に入れ子になるので、リテラルが1000個の `match` では、`Switch` を平らにしても join point の連なりが1000段になり、`simplify` の B3 が戻す前の検査 (`verify_scopes`) が再帰であふれるためである。変換の時点で B3 と同じ形にする
 - コンストラクタの列でも、default の行列に行く残りのコンストラクタをまとめて `default` にする。今は残りのコンストラクタごとに枝を作り、join point に飛ばしている。その join point と `jump` を作る処理はなくなる。`if` とタプルは、今と同じく `Tag` の case にする
 - `Switch` は今と同じく scrutinee を消費する。`String` のリテラルの `Switch` は、比べ終わってから文字列を解放する。今は比べるたびに `dup` しているので、その分が減る
 - `simplify` の K1 と B2 は、分かっているタグを `cases` から探し、なければ `default` に進む。子をたどる規則 (F、B3、B5 など) と、生存解析と `compact` は、`default` もたどる
@@ -434,7 +435,7 @@ enum CasePattern { Tag(u32), Int(i64), String(u32) }   // String は文字列定
 | R7b | `eml_hir` の pretty のうち ID の表示を含むもの |
 | R7d | `eml_core_ir` の Core IR のうち、入口から届かない関数を定義したもの (下見で数えて、`perceus.rs` 9件、`simplify.rs` 27件、`translate.rs` 18件、`eml_test_support` の `support.rs` 1件)、`not`、`>>`、`<<`、`|>`、`<|` を使うもの、`println` を値として使うもの。ソースから作る Core IR の表示の先頭に増える `effect IO { … }` の1行 (`pretty` は操作のあるエフェクトをすべて表示し、`IO` を外す特別扱いは入れない)。`>>` と `<<` を使う関数の `eml_types` の `dump` の `kinds:` の行 (`>>` の本体の持ち越しの制約)。`eml_hir` の pretty のうち、`evaluate_first` の印を含むもの |
 | R7e-1 | なし (Core IR のスナップショットは変わらない) |
-| R7e-2 | `eml_core_ir` の `switch` を含むスナップショット (約30件)、リテラルの `match` と、残りのコンストラクタを join point に送っていた `match` のスナップショット、`verify.rs` と `eml_interp/tests/data.rs` の `switch` を含むテキスト |
+| R7e-2 | `eml_core_ir` の `switch` を含むスナップショット (約30件)、リテラルの `match` と、残りのコンストラクタを join point に送っていた `match` のスナップショット、変換の直後で止める (`Pass::Translate`) スナップショットのうち `match` を含むもの (1つの葉からだけ届く枝が join point でなくなる)、`verify.rs` と `eml_interp/tests/data.rs` の `switch` を含むテキスト |
 
 種類3 (機械的な追随) は、ID の形と入口の引数の変更に合わせたテストの組み立ての書き換えである。R7c では、`eml_types/tests/check.rs` の `signatures` と `constructors` を `decls` から読む形にし、`eml_test_support` の `Checked::typed` の型の名前を変える。R7c は観測できるふるまいを変えないので、種類1と種類2の変更はない。
 

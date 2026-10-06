@@ -1,6 +1,8 @@
 //! ソースから実行して確かめるテストは UI テスト (`tests/ui/run/`) に置く。ここには、Core IR のテキストや生成した
 //! ソースが要るものだけを置く (docs/implementation/testing.md)。
 
+use std::fmt::Write;
+
 use eml_core_ir::Program;
 use eml_interp::RuntimeError;
 use eml_test_support::{execute, run};
@@ -46,4 +48,19 @@ fn long_sequence_of_if_statements_does_not_overflow_the_stack() {
     body.push_str("  println \"done\"");
     let expected = format!("{}done\n", "x\n".repeat(5000));
     assert_eq!(run(&main_with(&body)), (expected, Ok(())));
+}
+
+#[test]
+fn a_match_with_a_thousand_literals_runs_in_a_debug_build() {
+    // 平らな `Switch` は、リテラルの数だけ入れ子を深くしない (docs/superpowers/specs/2026-10-06-refactor-r7-design.md の 6.3)
+    let mut text = String::from("pick : Int -> Int\npick n =\n  match n with\n");
+    for i in 0..1000 {
+        writeln!(text, "    | {i} -> {}", i + 1).unwrap();
+    }
+    text.push_str(
+        "    | _ -> 0\n\nmain : Unit -> <IO> Unit\nmain () = println (show_int (pick 999))\n",
+    );
+    let (out, result) = eml_test_support::run(&text);
+    assert!(result.is_ok(), "{result:?}");
+    assert_eq!(out, "1000\n");
 }

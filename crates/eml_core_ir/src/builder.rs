@@ -1,4 +1,4 @@
-use crate::{CExpr, CExprId, CoreFn, JoinId, VarId, VarInfo};
+use crate::{Atom, CExpr, CExprId, CoreFn, JoinId, VarId, VarInfo};
 
 /// 新しく関数を組み立てる口。変数、式、join point を足し、最後に `CoreFn` にする。
 /// アリーナの番号と join point の索引の持ち方をここに閉じ込め、組み立てる側が番号を手で書かないようにする。
@@ -46,6 +46,16 @@ impl FnBuilder {
         self.joins[join.0 as usize] = Some(at);
     }
 
+    /// `from` の式を `to` に移す。`to` を親が指したまま中身を差し替えるためで、`from` は木から外れて `compact` が
+    /// 捨てる。join point の定義を移すときは、索引も `to` を指す。
+    pub(crate) fn move_expr(&mut self, from: CExprId, to: CExprId) {
+        let expr = std::mem::replace(&mut self.exprs[from.0 as usize], CExpr::Return(Atom::Unit));
+        if let CExpr::Join { join, .. } = &expr {
+            self.joins[join.0 as usize] = Some(to);
+        }
+        self.exprs[to.0 as usize] = expr;
+    }
+
     /// 式のアリーナと join point の索引だけを取り出す。`rebuilding` で作った builder の出口である。
     pub(crate) fn into_arenas(self) -> (Vec<CExpr>, Vec<CExprId>) {
         debug_assert!(
@@ -61,6 +71,11 @@ impl FnBuilder {
     }
 
     pub(crate) fn finish(mut self, name: String, params: Vec<VarId>, body: CExprId) -> CoreFn {
+        // 番号を取ったが木に置かなかった join point (1つの葉からだけ届く `match` の枝。translate/pattern.rs) の索引は、
+        // `CoreFn::new_join` と同じく根を指しておく。木にない join point は `compact` が捨てる
+        for join in &mut self.joins {
+            join.get_or_insert(body);
+        }
         let vars = std::mem::take(&mut self.vars);
         let (exprs, joins) = self.into_arenas();
         CoreFn {

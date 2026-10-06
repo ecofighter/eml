@@ -1,16 +1,14 @@
 //! `match` と、`let`・ラムダ・等式の引数のパターンを、決定木にコンパイルする (docs/spec/core-ir.md)。同じ値を二度
-//! 調べないように、行列の欄ごとに `Switch` する。各枝の本体は join point にして決定木の葉から jump する。共有の有無は
-//! 数えず、jump が1つの枝は simplify の B3 がその位置に戻す。タプルはコンストラクタが1つの型として分解し、リテラルは
-//! 比べる `prim` とその結果の `Switch` の連なりで調べる。
+//! 調べないように、行列の欄ごとに `Switch` する。決定木の1つの葉からだけ届く枝の本体は、その葉の位置に置く。複数の
+//! 葉から届く枝の本体だけを join point にして、各葉から jump する。タプルはコンストラクタが1つの型として分解し、
+//! リテラルはリテラルの case を並べた1つの `Switch` で調べる。
 
 use eml_hir::{
     Body, ConstructorId, ExprId, Literal, LocalId, MatchArm, PatId, PatKind, TypeDefKind,
 };
 use eml_types::Type;
 
-use crate::{
-    Atom, CExpr, CExprId, Case, CasePattern, FALSE, JoinId, PrimOp, Rhs, TRUE, TUPLE, VarId,
-};
+use crate::{Atom, CExpr, CExprId, Case, CasePattern, JoinId, Rhs, TUPLE, VarId};
 
 use super::types::split_arrows;
 use super::{Binding, Bindings, Exit, FnLowering};
@@ -95,6 +93,18 @@ impl Row {
 struct Target {
     join: JoinId,
     locals: Vec<LocalId>,
+    /// この行き先へ jump する葉の式と、その jump が渡す出現。
+    leaves: Vec<(CExprId, Vec<Atom>)>,
+}
+
+impl Target {
+    fn new(join: JoinId, locals: Vec<LocalId>) -> Target {
+        Target {
+            join,
+            locals,
+            leaves: Vec::new(),
+        }
+    }
 }
 
 /// 調べる値と、その型。型は、フィールドの変数が boxed かどうかを決めるのに使う。
@@ -105,24 +115,28 @@ struct Occurrence {
 }
 
 impl FnLowering<'_> {
-    /// `match` の値を `exit` に渡す最後の命令を返す。各枝の本体は join point にして、決定木の外側に置く。そのため、
-    /// どの葉からも届く。
+    /// `match` の値を `exit` に渡す決定木を返す。枝の本体は、どの葉から届くかが決定木を作るまで分からないので、先に
+    /// 組み立てておき、葉は枝の join point への jump にする。決定木を作った後で、1つの葉からだけ届く枝は本体をその
+    /// 葉の位置に移し、残りの枝だけを決定木の外側の join point にする。枝ごとの join point は互いの範囲に入れ子に
+    /// なるので、すべてを join point にすると、枝の数だけ深い連なりになるためである
+    /// (docs/superpowers/specs/2026-10-06-refactor-r7-design.md の 6.3)。葉から届かない枝も join point に残し、
+    /// simplify の B4 が消す。
     pub(super) fn lower_match(
         &mut self,
         scrutinee: ExprId,
         arms: &[MatchArm],
         exit: Exit,
         out: &mut Bindings,
-    ) -> CExpr {
+    ) -> CExprId {
         let value = self.atom(scrutinee, out);
         let ty = self.ty(scrutinee);
         let mut targets = Vec::new();
+        let mut bodies = Vec::new();
         for arm in arms {
             let join = self.new_join();
             let (locals, params) = self.bind_params(arm.pat);
-            let body = self.tail(arm.body, exit);
-            out.push(Binding::Shared { join, params, body });
-            targets.push(Target { join, locals });
+            bodies.push((params, self.tail(arm.body, exit)));
+            targets.push(Target::new(join, locals));
         }
         let rows = arms
             .iter()
@@ -133,7 +147,33 @@ impl FnLowering<'_> {
                 bound: Vec::new(),
             })
             .collect();
-        self.decide(&[Occurrence { atom: value, ty }], rows, &targets, out)
+        let tree = self.decide(&[Occurrence { atom: value, ty }], rows, &mut targets);
+        for (target, (params, body)) in targets.into_iter().zip(bodies) {
+            if let [(leaf, args)] = target.leaves.as_slice() {
+                self.inline_arm(*leaf, &params, args, body);
+            } else {
+                out.push(Binding::Shared {
+                    join: target.join,
+                    params,
+                    body,
+                });
+            }
+        }
+        tree
+    }
+
+    /// 1つの葉からだけ届く枝の本体を、その葉の jump と置き換える。引数は、葉が渡す出現の `let` にする。simplify の
+    /// B3 が jump が1つの join point を戻す形と同じである。
+    fn inline_arm(&mut self, leaf: CExprId, params: &[VarId], args: &[Atom], body: CExprId) {
+        let mut code = body;
+        for (&param, &arg) in params.iter().zip(args).rev() {
+            code = self.push(CExpr::Let {
+                var: param,
+                rhs: Rhs::Atom(arg),
+                body: code,
+            });
+        }
+        self.builder.move_expr(code, leaf);
     }
 
     /// 値を調べるか分解する `let` と引数のパターン。続きの式を本体にする join point の引数で変数を受け、枝が1つの
@@ -146,10 +186,8 @@ impl FnLowering<'_> {
             target: 0,
             bound: Vec::new(),
         }];
-        let targets = [Target { join, locals }];
-        let mut tree = Vec::new();
-        let last = self.decide(&[Occurrence { atom: value, ty }], rows, &targets, &mut tree);
-        let scope = self.seq(tree, last);
+        let mut targets = [Target::new(join, locals)];
+        let scope = self.decide(&[Occurrence { atom: value, ty }], rows, &mut targets);
         out.push(Binding::Join {
             join,
             params,
@@ -178,16 +216,14 @@ impl FnLowering<'_> {
         (locals, params)
     }
 
-    /// 行列から決定木を作る。最初の行がすべてワイルドカードなら葉にする。そうでなければ、最初の行で値を調べる
-    /// いちばん左の欄を選び、その欄の種類で分ける。`Switch` の直前に置く join point (残りの行列) と比較の束縛は `out`
-    /// に積み、最後の命令を返す。行列は網羅性の検査を通っているので、空にならない。
+    /// 行列から決定木を作り、その根の式を返す。最初の行がすべてワイルドカードなら葉にする。そうでなければ、最初の行で
+    /// 値を調べるいちばん左の欄を選び、その欄の種類で分ける。行列は網羅性の検査を通っているので、空にならない。
     fn decide(
         &mut self,
         occurrences: &[Occurrence],
         mut rows: Vec<Row>,
-        targets: &[Target],
-        out: &mut Bindings,
-    ) -> CExpr {
+        targets: &mut [Target],
+    ) -> CExprId {
         let body = self.body;
         let first = rows.first().expect("type-checked patterns are exhaustive");
         let Some(column) = first
@@ -195,7 +231,7 @@ impl FnLowering<'_> {
             .iter()
             .position(|&cell| !matches!(head(body, cell), Head::Any(_)))
         else {
-            return leaf(body, occurrences, rows.swap_remove(0), targets);
+            return self.leaf(occurrences, rows.swap_remove(0), targets);
         };
         let cell = first.cells[column];
         let occurrence = occurrences[column].atom;
@@ -207,12 +243,12 @@ impl FnLowering<'_> {
         }
         match head(body, cell) {
             Head::Con(ctor, _) => {
-                self.switch_constructors(occurrences, &rows, column, ctor, targets, out)
+                self.switch_constructors(occurrences, &rows, column, ctor, targets)
             }
             Head::Tuple(elements) => {
                 self.switch_tuple(occurrences, &rows, column, elements.len(), targets)
             }
-            Head::Literal(_) => self.compare_literals(occurrences, &rows, column, targets, out),
+            Head::Literal(_) => self.compare_literals(occurrences, &rows, column, targets),
             Head::Any(_) => unreachable!("the chosen column is not a wildcard"),
         }
     }
@@ -224,9 +260,8 @@ impl FnLowering<'_> {
         rows: &[Row],
         column: usize,
         ctor: ConstructorId,
-        targets: &[Target],
-        out: &mut Bindings,
-    ) -> CExpr {
+        targets: &mut [Target],
+    ) -> CExprId {
         let body = self.body;
         let hir = self.hir;
         let occurrence = occurrences[column].clone();
@@ -237,6 +272,7 @@ impl FnLowering<'_> {
             Head::Con(other, _) => other == ctor,
             _ => false,
         };
+        let mut out = Vec::new();
         let rest = if constructors
             .iter()
             .all(|&ctor| rows.iter().any(|row| mentions(ctor, row)))
@@ -253,9 +289,7 @@ impl FnLowering<'_> {
                 .filter(|row| matches!(head(body, row.cells[column]), Head::Any(_)))
                 .map(|row| row.replace(column, []))
                 .collect();
-            let mut inner = Vec::new();
-            let last = self.decide(&remaining, default, targets, &mut inner);
-            let code = self.seq(inner, last);
+            let code = self.decide(&remaining, default, targets);
             out.push(Binding::Shared {
                 join,
                 params: Vec::new(),
@@ -290,11 +324,12 @@ impl FnLowering<'_> {
                 body: code,
             });
         }
-        CExpr::Switch {
+        let switch = self.push(CExpr::Switch {
             scrutinee: occurrence.atom,
             cases,
             default: None,
-        }
+        });
+        self.seq(out, switch)
     }
 
     /// タプルの欄。タグ 0 のコンストラクタが1つの型として、枝が1つの `Switch` で分解する (docs/spec/core-ir.md)。
@@ -305,8 +340,8 @@ impl FnLowering<'_> {
         rows: &[Row],
         column: usize,
         arity: usize,
-        targets: &[Target],
-    ) -> CExpr {
+        targets: &mut [Target],
+    ) -> CExprId {
         let occurrence = occurrences[column].clone();
         let field_types = tuple_field_types(&occurrence.ty, arity);
         let (fields, code) = self.branch(
@@ -317,7 +352,7 @@ impl FnLowering<'_> {
             field_types,
             targets,
         );
-        CExpr::Switch {
+        self.push(CExpr::Switch {
             scrutinee: occurrence.atom,
             cases: vec![Case {
                 pattern: CasePattern::Tag(TUPLE),
@@ -325,7 +360,7 @@ impl FnLowering<'_> {
                 body: code,
             }],
             default: None,
-        }
+        })
     }
 
     /// `shape` の枝。フィールドを新しい出現として束縛し、行列を特殊化して決定木を続ける。フィールドは元の欄の位置に
@@ -337,7 +372,7 @@ impl FnLowering<'_> {
         column: usize,
         shape: Shape,
         field_types: Vec<Type>,
-        targets: &[Target],
+        targets: &mut [Target],
     ) -> (Vec<VarId>, CExprId) {
         let body = self.body;
         let fields: Vec<VarId> = field_types
@@ -364,25 +399,21 @@ impl FnLowering<'_> {
                     .map(|args| row.replace(column, args.iter().map(|&arg| Cell::Pat(arg)))),
             })
             .collect();
-        let mut inner = Vec::new();
-        let last = self.decide(&specialized_occurrences, specialized, targets, &mut inner);
-        (fields, self.seq(inner, last))
+        let code = self.decide(&specialized_occurrences, specialized, targets);
+        (fields, code)
     }
 
-    /// リテラルの欄。上の行から現れる異なるリテラルの順に、出現と比べる `prim` とその結果の `Switch` を連ねる。等しい
-    /// 枝はそのリテラルで特殊化した行列に、最後の等しくない枝は残りの行列に進む。残りの行列は最後の等しくない枝から
-    /// だけ届くので、join point にせずにその位置に置く。リテラルは無限にあるので、網羅性の検査を通った行列では残りの
-    /// 行列が空にならない (docs/spec/exhaustiveness.md)。
-    ///
-    /// 連なりは長くなりうるので、比較と等しい枝をループで先に作り、等しくない枝の入れ子を後ろから組み立てる。
+    /// リテラルの欄。上の行から現れる異なるリテラルの順に case を並べた1つの `Switch` にする。case はそのリテラルで
+    /// 特殊化した行列に、`default` はワイルドカードの行だけの行列に進む。リテラルは無限にあるので、網羅性の検査を
+    /// 通った行列では `default` の行列が空にならない (docs/spec/exhaustiveness.md)。比べる命令の連なりにしないのは、
+    /// リテラルの数だけ入れ子が深くならないようにするため (docs/superpowers/specs/2026-10-06-refactor-r7-design.md の 6.3)。
     fn compare_literals(
         &mut self,
         occurrences: &[Occurrence],
         rows: &[Row],
         column: usize,
-        targets: &[Target],
-        out: &mut Bindings,
-    ) -> CExpr {
+        targets: &mut [Target],
+    ) -> CExprId {
         let body = self.body;
         let scrutinee = occurrences[column].atom;
         let mut remaining = occurrences.to_vec();
@@ -395,10 +426,8 @@ impl FnLowering<'_> {
                 literals.push(literal);
             }
         }
-        let mut steps = Vec::new();
+        let mut cases = Vec::new();
         for literal in literals {
-            let mut compare = Vec::new();
-            let equal = self.compare(scrutinee, literal, &mut compare);
             let specialized: Vec<Row> = rows
                 .iter()
                 .filter(|row| match head(body, row.cells[column]) {
@@ -408,43 +437,63 @@ impl FnLowering<'_> {
                 })
                 .map(|row| row.replace(column, []))
                 .collect();
-            let mut inner = Vec::new();
-            let last = self.decide(&remaining, specialized, targets, &mut inner);
-            let then = self.seq(inner, last);
-            steps.push((compare, equal, then));
+            let code = self.decide(&remaining, specialized, targets);
+            cases.push(Case {
+                pattern: self.literal_pattern(literal),
+                fields: Vec::new(),
+                body: code,
+            });
         }
-        // どのリテラルにも等しくない値は、ワイルドカードの行だけの行列で調べる
-        let default: Vec<Row> = rows
+        let otherwise: Vec<Row> = rows
             .iter()
             .filter(|row| matches!(head(body, row.cells[column]), Head::Any(_)))
             .map(|row| row.replace(column, []))
             .collect();
-        let mut inner = Vec::new();
-        let last = self.decide(&remaining, default, targets, &mut inner);
-        let mut otherwise = self.seq(inner, last);
-        let (first_compare, first_equal, first_then) = steps.remove(0);
-        for (compare, equal, then) in steps.into_iter().rev() {
-            otherwise = self.seq(compare, if_equal(equal, then, otherwise));
-        }
-        out.extend(first_compare);
-        if_equal(first_equal, first_then, otherwise)
+        let default = self.decide(&remaining, otherwise, targets);
+        self.push(CExpr::Switch {
+            scrutinee,
+            cases,
+            default: Some(default),
+        })
     }
 
-    /// 出現をリテラルと比べる `prim` の結果の `Bool`。比べる `prim` は引数の所有権を受け取るので、後で使う出現は
-    /// Perceus が複製する。`String` のリテラルは比べるたびに作る。
-    fn compare(&mut self, scrutinee: Atom, literal: &Literal, out: &mut Bindings) -> Atom {
-        let (op, value) = match literal {
-            Literal::Int(n) => (PrimOp::IntEq, Atom::Int(*n)),
-            Literal::String(text) => {
-                let index = self.program.strings.intern(text);
-                let ty = self.lang_type(self.hir.lang.string);
-                let value = self.bind(out, "s", &ty, Rhs::ConstString(index));
-                (PrimOp::StrEq, value)
-            }
+    /// リテラルのパターンの case。`String` は文字列定数の表に入れる。
+    fn literal_pattern(&mut self, literal: &Literal) -> CasePattern {
+        match literal {
+            Literal::Int(n) => CasePattern::Int(*n),
+            Literal::String(text) => CasePattern::String(self.program.strings.intern(text)),
             Literal::Unit => unreachable!("`()` is a wildcard pattern, not a literal pattern"),
-        };
-        let ty = self.lang_type(self.hir.lang.bool);
-        self.bind(out, "t", &ty, Rhs::Prim(op, vec![scrutinee, value]))
+        }
+    }
+
+    /// 葉。最初の行の残りの変数を束縛し、その行の枝の join point へ、引数の順に出現を渡す。枝の本体をこの位置に移せる
+    /// ように、jump の式を行き先に記録する。
+    fn leaf(&mut self, occurrences: &[Occurrence], row: Row, targets: &mut [Target]) -> CExprId {
+        let body = self.body;
+        let mut bound = row.bound;
+        for (&cell, occurrence) in row.cells.iter().zip(occurrences) {
+            if let Head::Any(Some(local)) = head(body, cell) {
+                bound.push((local, occurrence.atom));
+            }
+        }
+        let target = &mut targets[row.target];
+        let args: Vec<Atom> = target
+            .locals
+            .iter()
+            .map(|local| {
+                bound
+                    .iter()
+                    .find(|(bound, _)| bound == local)
+                    .map(|&(_, atom)| atom)
+                    .expect("every pattern variable is bound on the way to its leaf")
+            })
+            .collect();
+        let jump = self.push(CExpr::Jump {
+            join: target.join,
+            args: args.clone(),
+        });
+        target.leaves.push((jump, args));
+        jump
     }
 
     /// コンストラクタのフィールドの型。スキームの型引数を、調べる値の型の引数で置き換える。値の型が型構成子の適用で
@@ -472,32 +521,6 @@ impl FnLowering<'_> {
     }
 }
 
-/// 葉。最初の行の残りの変数を束縛し、その行の枝の join point へ、引数の順に出現を渡す。
-fn leaf(body: &Body, occurrences: &[Occurrence], row: Row, targets: &[Target]) -> CExpr {
-    let mut bound = row.bound;
-    for (&cell, occurrence) in row.cells.iter().zip(occurrences) {
-        if let Head::Any(Some(local)) = head(body, cell) {
-            bound.push((local, occurrence.atom));
-        }
-    }
-    let target = &targets[row.target];
-    let args = target
-        .locals
-        .iter()
-        .map(|local| {
-            bound
-                .iter()
-                .find(|(bound, _)| bound == local)
-                .map(|&(_, atom)| atom)
-                .expect("every pattern variable is bound on the way to its leaf")
-        })
-        .collect();
-    CExpr::Jump {
-        join: target.join,
-        args,
-    }
-}
-
 /// フィールドの変数の名前。その位置を変数のパターンで受ける行があれば、その変数の名前にする。
 fn field_name(body: &Body, rows: &[Row], column: usize, shape: Shape, index: usize) -> String {
     rows.iter()
@@ -520,26 +543,6 @@ fn tuple_field_types(ty: &Type, arity: usize) -> Vec<Type> {
             fields.iter().map(|(_, field)| field.clone()).collect()
         }
         _ => vec![Type::Flexible; arity],
-    }
-}
-
-/// 比べた結果の `Bool` で分ける `Switch`。`if` と同じく、`False` の枝を先に置く。
-fn if_equal(equal: Atom, then: CExprId, otherwise: CExprId) -> CExpr {
-    CExpr::Switch {
-        scrutinee: equal,
-        cases: vec![
-            Case {
-                pattern: CasePattern::Tag(FALSE),
-                fields: Vec::new(),
-                body: otherwise,
-            },
-            Case {
-                pattern: CasePattern::Tag(TRUE),
-                fields: Vec::new(),
-                body: then,
-            },
-        ],
-        default: None,
     }
 }
 
