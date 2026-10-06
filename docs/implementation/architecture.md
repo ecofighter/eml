@@ -25,7 +25,7 @@ eml の処理系をどの crate に分け、各段階がどんな規律に従う
 - モジュールごとに Core IR を作ってリンクすること。インタプリタでは得るものがない
 - HIR の位置を今 source map に移すこと。利点が出るのはクエリ化した後である ([ロードマップ](../future/roadmap.md))
 - プログラム全体の item を1つのアリーナに置くこと。モジュールの変換が共有のアリーナを書き換えるので、段階が純粋な関数でなくなる
-- 型検査の出力の `Type` から名前をなくすこと。S2 で同じ名前の別の型の表示を決めるときに扱う ([status.md](status.md) の「S2 の材料」)。今は `DeclType::ty` が、書き出した `Type` を持つ
+- 型検査の出力の `Type` から名前をなくすこと。M2 で同じ名前の別の型の表示を決めるときに扱う ([ロードマップ](../future/roadmap.md) の「M2 モジュール」)。今は `DeclType::ty` が、書き出した `Type` を持つ
 - どの item も Core IR の関数にして、`simplify` の規則で命令に戻し、使わない関数を取り除くパスで消すこと。変換が満ちた呼び出しをすでに命令にしているので、飽和の場合分けを `saturate` にまとめれば足りる
 - `Bool` のタグをインタプリタまで運ぶこと。タグは Prelude の宣言の順で決まるので、定数 `FALSE` と `TRUE` をテストで照らし合わせれば足りる
 
@@ -117,7 +117,7 @@ token_set.rs   トークンの集合 (u128 のビット集合)
 debug_dump.rs  木のダンプ。構文のテストとデバッグに使う
 ```
 
-- lexer は logos で単純なトークンを切り出し、文字列、コメント、演算子の分類などを手書きの層で扱う。最終的には、文字列、補間、コマンドリテラル、入れ子のブロックコメントの各モードをスタックで持つ層にし、文字列をトークン列 ([文法](../spec/grammar.md) の `string`) に分ける。今は、補間を含む文字列などをそれぞれ1つのトークンにしている。トークン列への分割は、これらを実装する S2 と S3 で行う
+- lexer は logos で単純なトークンを切り出し、文字列、コメント、演算子の分類などを手書きの層で扱う。最終的には、文字列、補間、コマンドリテラル、入れ子のブロックコメントの各モードをスタックで持つ層にし、文字列をトークン列 ([文法](../spec/grammar.md) の `string`) に分ける。今は、補間を含む文字列などをそれぞれ1つのトークンにしている。トークン列への分割は、これらを実装する M3 と M9 で行う
 - レイアウト段は、幅 0 の仮想トークン `LAYOUT_OPEN` / `LAYOUT_SEP` / `LAYOUT_CLOSE` を挿入する。規則は [レイアウト規則](../spec/layout.md) が定める。パーサは仮想トークンを読んでも `Event::Token` を出さないので、仮想トークンは木に入らず、CST は lossless のまま
 - `grammar/` は [文法](../spec/grammar.md) に従う。演算子の列は `OP_SEQ` ノードに平たく並べ、木への組み直しは HIR で行う
 - トークンの種類 (`EOF` まで) は 128 未満に収める。`TokenSet` が `u128` のビット集合であるため
@@ -188,7 +188,7 @@ HIR への変換では、名前解決に加えて、名前の重複と未定義�
 
 `eml_cli` の lib は次の API を公開する。UI テストはこれをプロセス内で呼ぶ。
 
-- `Session` は1回の検査や実行で読むソースの集まりで、`new` が Prelude を登録する。`add_file` で入口のファイルを登録する。import をたどるローダは S2 で足す。実行を始める `main` は入口のモジュールからだけ探し (`hir::Program::main`)、Prelude には置かない
+- `Session` は1回の検査や実行で読むソースの集まりで、`new` が Prelude を登録する。`add_file` で入口のファイルを登録する。import をたどるローダは M2 で足す。実行を始める `main` は入口のモジュールからだけ探し (`hir::Program::main`)、Prelude には置かない
 - `Session::check(file_id) -> Vec<Diagnostic>`。`check` と `compile` は、診断を `sort_diagnostics` で並べて返す。各段階は診断の順を約束しない
 - `Session::compile(file_id) -> Compiled`。`Compiled` は、検査で出た診断 (警告を含む) と、エラーがなければ `Program` を持つ。`main` がないこと (E2003) は `compile` だけが検査する ([型と Kind](../spec/types.md) の「推論」)
 - `execute(Arc<Program>, &RunConfig, stdout: OutputSink) -> Result<(), RuntimeError>`

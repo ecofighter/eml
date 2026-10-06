@@ -48,7 +48,7 @@ struct Fix {
 
 ## 割り当て済みの番号
 
-E0xxx は `eml_syntax::codes` (E0004 だけは `eml_diagnostics`)、E1xxx は `eml_hir::codes`、E2xxx は `eml_types::codes` に置く。E3xxx は `eml_types::codes` に置く。E4xxx は `eml_types::codes` に置く。射影と更新の番号は S2 で割り当てる。
+E0xxx は `eml_syntax::codes` (E0004 だけは `eml_diagnostics`)、E1xxx は `eml_hir::codes`、E2xxx は `eml_types::codes` に置く。E3xxx は `eml_types::codes` に置く。E4xxx は `eml_types::codes` に置く。射影と更新の番号は M3 で割り当てる。
 
 | 番号 | 定数 | 内容 |
 |---|---|---|
@@ -109,7 +109,7 @@ E0xxx は `eml_syntax::codes` (E0004 だけは `eml_diagnostics`)、E1xxx は `e
 | E4004 | `UNREACHABLE_ARM` | 到達しない枝 (Warning) |
 | E4005 | `UNREACHABLE_EQUATION` | 到達しない等式 (Warning) |
 
-E0004 (`NOT_YET_SUPPORTED`) は、まだ実装していない構文に使う。S2 と S3 の構文と、字句として予約した浮動小数と文字のリテラルである。どの段階でも「後で実装する」という同じ意味なので、番号を分けない。HIR 以降の段階は、対応していない構文を、診断を出さずに無視することはしない。見つけた段階で E0004 を出して回復する。
+E0004 (`NOT_YET_SUPPORTED`) は、まだ実装していない構文に使う。M2、M3、M9 の構文と、字句として予約した浮動小数と文字のリテラル (M4) である。どの段階でも「後で実装する」という同じ意味なので、番号を分けない。HIR 以降の段階は、対応していない構文を、診断を出さずに無視することはしない。見つけた段階で E0004 を出して回復する。
 
 ## 番号を割り当てていない診断
 
