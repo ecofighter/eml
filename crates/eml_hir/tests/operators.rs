@@ -94,11 +94,11 @@ fn unknown_and_unsupported_operators_and_missing_operands() {
 #[test]
 fn mixed_associativity_is_rejected_in_both_orders() {
     let text = "x : Int\nx = 1 <+> 2 >> 3\ny : Int\ny = 1 >> 2 <+> 3";
-    insta::assert_snapshot!(lower_text(text), @r"
+    insta::assert_snapshot!(lower_text(text), @"
     x : Int
     x = <missing>
     y : Int
-    y = (>> 1 <missing>)
+    y = (@>> 1 <missing>)
     ---
     E1001 2:7 cannot find operator `<+>`
     E1006 2:13 `<+>` and `>>` cannot be combined without parentheses
@@ -107,10 +107,10 @@ fn mixed_associativity_is_rejected_in_both_orders() {
 }
 
 #[test]
-fn composition_operators_are_builtin_calls() {
-    insta::assert_snapshot!(lower_text("h : Bool -> Bool\nh = not >> not << not"), @r"
+fn composition_operators_are_prelude_calls() {
+    insta::assert_snapshot!(lower_text("h : Bool -> Bool\nh = not >> not << not"), @"
     h : Bool -> Bool
-    h = (>> not (<< not not))
+    h = (@>> @not (@<< @not @not))
     ");
 }
 
