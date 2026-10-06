@@ -1,10 +1,12 @@
 //! CST から HIR への変換と名前解決 (docs/implementation/architecture.md の「`eml_hir` で行う脱糖と検査」)。
 
 pub mod builtin;
+mod eval;
 mod hir;
 mod lower;
 mod pretty;
 
+pub use eval::{EvalStep, call_steps, is_value};
 pub use hir::*;
 pub use lower::lower;
 pub use pretty::pretty;
