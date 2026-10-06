@@ -8,12 +8,13 @@
 
 - handler でリソースを持つ API を中心にする: `with_log`、`with_output`、`with_temp_dir`、`with_cwd`、`with_env` など。`use` で並べて使う形を想定する ([式](../spec/expressions.md) の「`use`」と「パラメータ付き handler」)
 - `Cmd` 型: コマンドリテラルの結果。`run : Cmd -> <IO> Int`、`read : Cmd -> <IO> String`、`spawn : Cmd -> <IO> Child`、パイプ (`.|` などの演算子)、リダイレクト、環境変数、作業ディレクトリの設定を用意する ([字句](../spec/lexical.md) の「コマンドリテラル」)
-- 同じ型のハンドルの取り違えを防ぐ: `Stdin` / `Stdout` / `Stderr` は別の型にする
+- 標準入出力のハンドル: `Stdin` / `Stdout` / `Stderr` は別の型にして、取り違えを防ぐ。ハンドルは `Lin` で、バッファ付きの読み書きもハンドルにする。intrinsic はハンドルに対する read/write の操作にとどめ、「行を流す」などのストリーム処理は M8 の標準ライブラリにエフェクトとして書く ([ロードマップ](roadmap.md) の「M7 バイト列と入出力」)
 - `Task a` を `Lin` にする: `Async.start` が返すタスクを、必ず `await` するか `drop` (キャンセル) させる。構造化された並行処理にする
 - `exit`: `never` の操作として、`IO` 側に用意する。終了コードはこれで扱う
-- `Prelude` の範囲: `Option`、`Result`、`List`、`Bool`、`println` / `eprintln`、`show_int`、`not`、`|>` などの標準の演算子と fixity ([宣言](../spec/declarations.md) の標準の演算子の表)
+- `Prelude` の範囲: `Option`、`Result`、`List`、`Bool`、`println` / `eprintln`、`show_int`、`not`、`|>` などの標準の演算子と fixity ([宣言](../spec/declarations.md) の標準の演算子の表)。M5 の後は、クラス `Eq`、`Ord`、`Num` と表示用のクラスも入る。`show_int` は M5 までの中継ぎである ([ロードマップ](roadmap.md) の「M5 型クラス」)
 - モジュールの候補: `Fs`、`Path`、`Proc`、`Env`、`String`、`List`、`Map`、`Json`、`Csv`、`Toml`、`Regex`、`Http`、`Async`
-- 補間の穴は当面 `String` のみ: そのため、各型に `show_*` 関数を揃える
+- 補間の穴は M5 まで `String` のみ: それまでは各型に `show_*` 関数を揃える。M5 で穴を表示用のクラスに広げる
+- `Bytes` と UTF-8: `String` は常に妥当な UTF-8 である。intrinsic は、検証付きのデコード、エンコード、バイト長、バイト位置から `Char` と次の位置を読む操作、境界を検査する切り出しにとどめる。分割、検索、反復は eml で書く ([ロードマップ](roadmap.md) の「M8 UTF-8 と標準ライブラリ」)
 
 ## マルチコア対応の設計からの申し送り
 
@@ -30,5 +31,5 @@
 - 並行処理のライブラリ: `Async` の handler、`spawn`、channel
 - 並行処理用の共有の可変状態: channel や atomic な参照などのプリミティブを、`IO` か `Async` の側に用意する。`Heap` では、並行タスクの間で共有する可変状態を書けないため
 - `freeze`: 一意性だけが理由の `Lin` な型 (後始末のない可変バッファなど) には、型ごとに `freeze` を用意する (例: `freeze : MutArray a -> Array a`)。後始末を持つ型には定義しない
-- `Lin` な配列: `write : Array a -> Int -> a -> Array a` のように値を線形に受け渡す API と、分割と結合のプリミティブ。Perceus の reuse analysis が前提になる
+- 配列: `Array a` と `Bytes` は意味が不変の値で、RC が 1 ならその場で書き換える (M7)。分割と結合と並列の書き換えのために、`Lin` の `MutArray` を後で足す。`write : MutArray a -> Int -> a -> MutArray a` のように値を線形に受け渡す API と、分割と結合のプリミティブを持つ。Perceus の reuse analysis が前提になる
 - `trace` は用意しない: row に現れないデバッグ出力の抜け道は作らない
