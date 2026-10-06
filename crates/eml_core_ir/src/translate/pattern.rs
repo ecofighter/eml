@@ -117,7 +117,7 @@ impl FnLowering<'_> {
     /// 分からないので、葉には仮の式を置く。決定木を作った後で、1つの葉からだけ届く枝は本体をその葉の位置に移す。
     /// 残りの枝だけに join point の番号を取って決定木の外側に置き、葉をその join point への jump にする。枝ごとの
     /// join point は互いの範囲に入れ子になるので、すべてを join point にすると、枝の数だけ深い連なりになるためである
-    /// (docs/superpowers/specs/2026-10-06-refactor-r7-design.md の 6.3)。番号を決定木の後で取るのは、木に置かない
+    /// (docs/spec/core-ir.md)。番号を決定木の後で取るのは、木に置かない
     /// join point の番号を取らないためである。`FnBuilder::finish` は、番号を取った join point がすべて木にあることを
     /// 求める。葉から届かない枝も join point にし、simplify の B4 が消す。
     pub(super) fn lower_match(
@@ -285,7 +285,7 @@ impl FnLowering<'_> {
             None
         } else {
             // 選んだ欄に現れないコンストラクタは、どれもワイルドカードの行だけの同じ行列に進む。1つの `default` に
-            // まとめ、コンストラクタごとの枝と join point を作らない (docs/superpowers/specs/2026-10-06-refactor-r7-design.md の 6.3)
+            // まとめ、コンストラクタごとの枝と join point を作らない (docs/spec/core-ir.md)
             let mut remaining = occurrences.to_vec();
             remaining.remove(column);
             let otherwise: Vec<Row> = rows
@@ -396,7 +396,7 @@ impl FnLowering<'_> {
     /// リテラルの欄。上の行から現れる異なるリテラルの順に case を並べた1つの `Switch` にする。case はそのリテラルで
     /// 特殊化した行列に、`default` はワイルドカードの行だけの行列に進む。リテラルは無限にあるので、網羅性の検査を
     /// 通った行列では `default` の行列が空にならない (docs/spec/exhaustiveness.md)。比べる命令の連なりにしないのは、
-    /// リテラルの数だけ入れ子が深くならないようにするため (docs/superpowers/specs/2026-10-06-refactor-r7-design.md の 6.3)。
+    /// リテラルの数だけ入れ子が深くならないようにするため (docs/spec/core-ir.md)。
     fn compare_literals(
         &mut self,
         occurrences: &[Occurrence],

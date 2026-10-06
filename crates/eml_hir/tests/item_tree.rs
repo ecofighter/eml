@@ -1,4 +1,4 @@
-//! item の収集 (docs/superpowers/specs/2026-10-06-refactor-r7-design.md の 3.1)。
+//! item の収集 (docs/implementation/architecture.md の「`eml_hir` の内部」)。
 
 use eml_hir::item_tree;
 use eml_test_support::{parse, short};

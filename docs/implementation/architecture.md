@@ -10,6 +10,25 @@ eml の処理系をどの crate に分け、各段階がどんな規律に従う
 - 実行系は、型付き Core IR (ANF 形式で、RC とエフェクトを明示する) と CEK 風のインタプリタからなる。将来の LLVM バックエンドも同じ IR から変換する。ヒープと RC は `eml_runtime` に分離する
 - 構文木には rowan (Red-Green Tree) を使い、その上にリッチな診断と LSP を整える
 
+## プログラム全体の構成
+
+- 処理系は、item を単位にしたプログラム全体のパイプラインである。rust-analyzer の item tree と DefMap の分け方を、eml の規模に合わせた。名前解決は、`ItemTree` (ファイルごとの宣言の要約)、`DefMap` (モジュールごとのスコープ表)、item ごとの変換の3段で、item の ID (`ItemId`) はプログラム全体で一意である。型検査は宣言、本体、SCC の粒度で動き、モジュールの境目を使わない
+- モジュールごとに検査して、依存先のモジュールのインタフェースを借りる方式は採らない。次の3つの負担が生じるためである
+  - 相互再帰がモジュールをまたぐと SCC もまたぐので、import の循環を許せなくなる
+  - 型検査が、自分のモジュールの表と依存先の表の2系統を引くことになる
+  - モジュールのインタフェースとしての型検査の出力を、別に設計する必要がある
+- item を単位にすれば、import の循環を許すかどうかは `DefMap` の作り方だけの問題になる
+
+採らなかった形は次のとおり。
+
+- salsa を今入れること。段階をクエリの形にしてあるので、後で載せ替えられる。LSP を作るまでは手間が大きい
+- モジュールごとに Core IR を作ってリンクすること。インタプリタでは得るものがない
+- HIR の位置を今 source map に移すこと。利点が出るのはクエリ化した後である ([ロードマップ](../future/roadmap.md))
+- プログラム全体の item を1つのアリーナに置くこと。モジュールの変換が共有のアリーナを書き換えるので、段階が純粋な関数でなくなる
+- 型検査の出力の `Type` から名前をなくすこと。S2 で同じ名前の別の型の表示を決めるときに扱う ([status.md](status.md) の「次の作業の注意点」)。今は `DeclType::ty` が、書き出した `Type` を持つ
+- どの item も Core IR の関数にして、`simplify` の規則で命令に戻し、使わない関数を取り除くパスで消すこと。変換が満ちた呼び出しをすでに命令にしているので、飽和の場合分けを `saturate` にまとめれば足りる
+- `Bool` のタグをインタプリタまで運ぶこと。タグは Prelude の宣言の順で決まるので、定数 `FALSE` と `TRUE` をテストで照らし合わせれば足りる
+
 ## リポジトリ
 
 ```
@@ -175,7 +194,7 @@ HIR への変換では、名前解決に加えて、次の脱糖と検査を行�
 - 型検査器は、呼び出しごとの row を `BodyTyping::calls` (`CallRows`) に記録する。呼ばれる位置のトップレベルの値は開かずに具体化し、矢印の row を宣言のまま記録する。部分適用の残りだけを開く。矢印ごとの結果の型も記録する (`CallRows::Call::results`)。操作の直接の呼び出しは、row ではなく操作自身の多重度を使う
 - 持ち越しの制約は `Table::carries` に入れ、段2が線形性と多重度の両方の束を解いた後に検査する。スキームには、`solve::carry_residual` が内部の変数を経由した推移を含めて残し、同じ組は位置が最も前の由来の1つにまとめる。具体化の展開では `CarriedThrough` の由来を付けて複写する。違反は `report::linear_misuse` が E3006 にする。同じ値の違反は、`check/mod.rs` の報告で値ごとに最初の1件に絞る
 - 部分適用のクロージャの線形性は、それまでの引数と捕まえた値の Kind 以上になる (`Table::closure_kinds`)
-- 宣言の型は `TypedProgram::decls` の `DeclType` にある。`dump` (`dump.rs`) は、`Context` を自分で作り、`Shape` と `KindScheme` から、スキームに残った Kind の制約のうち定数を片側に持つものと持ち越しの制約を `kinds:` の行に出す。持ち越しの制約は `a => <e> <= Once`、`<e> <= Once`、`a => Multi <= Once` の形で表す
+- 宣言の型は `TypedProgram::decls` の `DeclType` にある。結果を宣言ごとに持つのは、クエリ化したときに宣言ごとのクエリの結果として使い、REPL で前の入力の宣言を検査し直さずに使い回せるようにするためである。`dump` (`dump.rs`) は、`Context` を自分で作り、`Shape` と `KindScheme` から、スキームに残った Kind の制約のうち定数を片側に持つものと持ち越しの制約を `kinds:` の行に出す。持ち越しの制約は `a => <e> <= Once`、`<e> <= Once`、`a => Multi <= Once` の形で表す
 - 型の表は `table/` に分ける。`mod.rs` は型と変数の格納、`unify.rs` は型の単一化、`row.rs` は row の単一化と `include_row`、`kinds.rs` は Kind の制約を集める処理 (解くのは段2)、`export.rs` は外に出す型への変換である。型の形は `TyShape`、関数の矢印の線形性は `ArrowLin` と呼び、Kind (線形性と多重度) と取り違えないようにする
 - row の末尾は `Tail::{Closed, Var, Error}` である。未定義のエフェクトか解決できない row 変数の跡は末尾 `Error` の row になり、型の `Error` と同じく束縛されない。末尾 `Error` は相手の側にしかないエフェクトを受け入れるが、自分の側の既知のエフェクトは受け入れない。綴り誤りの E1002 と無関係なエフェクトの誤りを隠さないためである。外に出す型では `{error}` と表示する
 - `Table::export` は、後の段階と診断の文言の両方に渡す形を作る。書き出す `Type` は矢印の線形性を持たない。後の段階は線形性を読まず、持たせると本体の型を Kind を解くまで確定できなくなるためである
@@ -204,8 +223,8 @@ HIR への変換では、名前解決に加えて、次の脱糖と検査を行�
 - パスの順番は `pipeline.rs` だけが持つ。`lower_until` は、変換 (`translate/`)、`simplify`、Perceus を順にかけ、指定したパスの直後で止める。RC の命令を入れる前のパスの後では、`liveness::analyze` で `captures` を埋め直してから `verify_scopes` をかけ、Perceus の後では `verify` をかける。verifier の検査はデバッグビルドだけでかけ、`compact` が見つけた木の誤りはどのビルドでも報告する。どちらの誤りも、パスの名前を付けた panic にする
 - 変換は `translate/` にある。`translate` は、入口の関数から `reachable` が、HIR の本体の `Res::Function` の参照をたどって届く関数だけを変換する。Prelude の関数の名前には `Prelude.` を付ける。`mod.rs` は式の値の渡し先と join point の組み立てという制御の骨組み、`expr.rs` は式ごとの変換と呼び出しの飽和の場合分け、`program.rs` は関数の表 (`ProgramBuilder`)、組み込みと操作を包む関数、入口の関数、エフェクトの表、`types.rs` は型から決まる変数の性質 (`boxed`) と、intrinsic の名前と変換の種類の表 (`INTRINSICS` と `intrinsic`) を持つ。既知の呼ばれる式への呼び出しは、種類 (`Callee`) ごとに、引数の数、足りないときの包む関数、ちょうどのときの命令だけを決める。足りない・ちょうど・余るの場合分けは `saturate` の1か所で行う。`pattern.rs` は `match` と、`let`・ラムダ・等式の引数のパターンを決定木にコンパイルする。列の頭はコンストラクタ、タプル、リテラルで、リテラルの列はリテラルの case と `default` を持つ1つの `switch` にする。行列に現れないコンストラクタは `default` にまとめる。1つの葉にだけ届く枝の本体は葉に置き、複数の葉に届く枝だけを join point にする
 - Core IR の関数は、ANF の木をアリーナに置き、`CExprId` で参照する。継続のフレームが再開する位置を ID で持てるようにするため。変換は式の値の渡し先 (`Exit::Return` か `Exit::Jump`) を持って回り、末尾の `if` は各枝が返す `Switch` に、末尾にない `if` は続きを本体にした join point (`CExpr::Join`) にする。末尾にない `if` は、`tail` で条件の計算ごと join point の範囲を組み立てる。`CoreFn::joins` は `JoinId` から `Join` の式を引く索引で、アリーナはパスのたびに `compact` が作り直す。値を返すだけの呼び出しは、`simplify` の最後の T が `TailCall` にする
-- 変数が boxed かどうかは、型から `boxed` の1か所で決める。intrinsic の引数の数は `hir::Program::arity` から、引数と結果の型は `TypedProgram::decls` から引き、変換の種類 (`Prim`、`Equality`) は、名前から引く `intrinsic` の1つの match に置く。本体のある Prelude の関数 (`not`、`&&`、`||`、`>>`、`<<`、`|>`、`<|`) は表に持たず、普通の関数として変換する。`PrimOp::Not` はなく、`not` は eml の本体で書く。`data` の型の変数は、引数を持つコンストラクタが1つでもあれば boxed にする。要素が2つ以上の閉じたレコードの型 (タプル) の変数も boxed にする
-- 変換は、渡された入口の関数を `()` で呼ぶ関数 `entry$<名前>` を足す (`Program::entry`)。`main` を渡したときは `entry$main` になる
+- 変数が boxed かどうかは、型から `boxed` の1か所で決める。intrinsic の引数の数は `hir::Program::arity` から、引数と結果の型は `TypedProgram::decls` から引き、変換の種類 (`Prim`、`Equality`) は、名前から引く `intrinsic` の1つの match に置く。名前と実装の対応を置くのは `INTRINSICS` だけで、`eml_core_ir` の単体テストが、Prelude の intrinsic のすべてが表に行を持ち、表の行がすべて Prelude にあることを確かめる。本体のある Prelude の関数 (`not`、`&&`、`||`、`>>`、`<<`、`|>`、`<|`) は表に持たず、普通の関数として変換する。`PrimOp::Not` はなく、`not` は eml の本体で書く。`data` の型の変数は、引数を持つコンストラクタが1つでもあれば boxed にする。要素が2つ以上の閉じたレコードの型 (タプル) の変数も boxed にする
+- 変換は、渡された入口の関数を `()` で呼ぶ関数 `entry$<名前>` を足す (`Program::entry`)。`main` を渡したときは `entry$main` になる。入口の関数を引数で受け取るのは、REPL で `main` の代わりにその回の式から作った関数を渡せるようにするためである
 - ラムダは、捕まえた変数を先頭の引数に持つ関数に持ち上げる (`外側の名前$lambdaN`)。intrinsic を値として使うときは、呼ぶだけの関数 (`builtin$名前`) で包む。コンストラクタを値として使うときは、値を作るだけの関数 (`con$名前`) で包む。関数の表は番号を先に取り、変換の途中で関数を足す
 - 呼び出しは `eml_hir::call_steps` の手順どおりに評価し、続けて並ぶ矢印を1回の呼び出しにする。引数のないトップレベルの値は既知の呼ばれる式に含めず、先に評価する
 - クロージャは `Payload::Closure(Closure)` (フィールドは `function` と `args`) で、関数値の呼び出し (`Call::Apply`) は eval/apply で行う。継続のフレームは `Payload::Frame(Frame)` で、`Frame` は種類の enum である。`Return` は呼び出し元に戻るフレームで、呼び出しの後で使う変数だけを退避する。`Apply` は余った引数を持ち、戻った関数値に適用する。`Io` は継続の最下部の `IO` の handler である。記述子はペイロードの種類から決める
@@ -243,7 +262,7 @@ HIR への変換では、名前解決に加えて、次の脱糖と検査を行�
 
 `eml_cli` の lib は次の API を公開する。UI テストはこれをプロセス内で呼ぶ。
 
-- `Session` は1回の検査や実行で読むソースの集まりで、`new` が Prelude を登録する。`add_file` で入口のファイルを登録し、`files` を診断の表示に使う。import をたどるローダは S2 で足す
+- `Session` は1回の検査や実行で読むソースの集まりで、`new` が Prelude を登録する。`add_file` で入口のファイルを登録し、`files` を診断の表示に使う。import をたどるローダは S2 で足す。実行を始める `main` は入口のモジュールからだけ探し (`hir::Program::main`)、Prelude には置かない
 - `Session::check(file_id) -> Vec<Diagnostic>`。`check` と `compile` は、診断を `sort_diagnostics` で並べて返す (各段階は順を約束しない)
 - `Session::compile(file_id) -> Compiled`。`Compiled` は、検査で出た診断 (警告を含む) と、エラーがなければ `Program` を持つ (`program: Option<Arc<Program>>`)。`main` がないこと (E2003) は `compile` だけが検査し、`check` は検査しない ([型と Kind](../spec/types.md) の「推論」)
 - `execute(Arc<Program>, &RunConfig, stdout: OutputSink) -> Result<(), RuntimeError>`。`RuntimeError` は `eml_interp` の型を再公開したものである

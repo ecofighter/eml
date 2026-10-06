@@ -27,7 +27,7 @@ use program::{ProgramBuilder, effect_table};
 use types::{split_arrows, var_info};
 
 /// 入口の関数から届く関数。使わない Prelude の関数を Core IR に入れないため、関数の本体の参照をたどって集める
-/// (docs/superpowers/specs/2026-10-06-refactor-r7-design.md の 4.5)。
+/// (docs/spec/core-ir.md)。
 fn reachable(hir: &HirProgram, entry: FunctionId) -> HashSet<FunctionId> {
     let mut seen = HashSet::new();
     let mut work = vec![entry];
@@ -79,7 +79,7 @@ pub(crate) fn translate(hir: &HirProgram, typed: &TypedProgram, entry: FunctionI
             .zip(param_types)
             .collect();
         // Prelude の関数の名前には `Prelude.` を付け、ユーザーが同じ名前の関数を定義しても重ならないようにする
-        // (docs/superpowers/specs/2026-10-06-refactor-r7-design.md の 4.5)
+        // (docs/spec/core-ir.md)
         let name = if id.module == hir.prelude {
             format!("Prelude.{}", function.name)
         } else {

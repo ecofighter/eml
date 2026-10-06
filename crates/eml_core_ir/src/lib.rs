@@ -277,7 +277,7 @@ pub struct Case {
 }
 
 /// case が比べる値。`String` は文字列定数の表 (`Program::strings`) の番号である。リテラルを1つの `Switch` に並べ、
-/// 比べる命令の連なりで深くしないため (docs/superpowers/specs/2026-10-06-refactor-r7-design.md の 6.3)。
+/// 比べる命令の連なりで深くしないため (docs/spec/core-ir.md)。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum CasePattern {
     Tag(u32),

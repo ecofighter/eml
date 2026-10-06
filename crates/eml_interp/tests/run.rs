@@ -52,7 +52,7 @@ fn long_sequence_of_if_statements_does_not_overflow_the_stack() {
 
 #[test]
 fn a_match_with_a_thousand_literals_runs_in_a_debug_build() {
-    // 平らな `Switch` は、リテラルの数だけ入れ子を深くしない (docs/superpowers/specs/2026-10-06-refactor-r7-design.md の 6.3)
+    // 平らな `Switch` は、リテラルの数だけ入れ子を深くしない (docs/spec/core-ir.md)
     let mut text = String::from("pick : Int -> Int\npick n =\n  match n with\n");
     for i in 0..1000 {
         writeln!(text, "    | {i} -> {}", i + 1).unwrap();

@@ -33,7 +33,7 @@ fn hello_world() {
 #[test]
 fn the_entry_function_is_chosen_by_the_caller() {
     // REPL は、`main` の代わりにその回の式から作った関数を入口にする
-    // (docs/superpowers/specs/2026-10-06-refactor-r7-design.md の 5.3)
+    // (docs/implementation/architecture.md の「`eml_core_ir`、`eml_runtime`、`eml_interp` の内部」)
     let text = "main : Unit -> <IO> Unit\nmain () = println \"main\"\n\nalt : Unit -> <IO> Unit\nalt () = println \"alt\"";
     let checked = eml_test_support::check(text);
     let alt = checked
@@ -58,8 +58,7 @@ fn the_entry_function_is_chosen_by_the_caller() {
 
 #[test]
 fn only_functions_reachable_from_the_entry_are_lowered() {
-    // 使わない Prelude の関数を Core IR に入れないため、入口から届く関数だけを変換する
-    // (docs/superpowers/specs/2026-10-06-refactor-r7-design.md の 4.5)
+    // 使わない Prelude の関数を Core IR に入れないため、入口から届く関数だけを変換する (docs/spec/core-ir.md)
     let text = "used : Int -> Int\nused x = x\n\nunused : Int -> Int\nunused x = x\n\nmain : Unit -> <IO> Unit\nmain () = println (show_int (used 1))";
     let shown = core_text(text, Pass::Translate);
     assert!(shown.contains("fn used("), "{shown}");
@@ -630,7 +629,7 @@ fn effects_are_numbered_with_io_first_then_in_declaration_order() {
 #[test]
 fn a_prelude_function_is_lowered_under_the_prelude_name() {
     // Prelude の関数の Core IR の名前には `Prelude.` を付け、ユーザーの関数と名前が重ならないようにする
-    // (docs/superpowers/specs/2026-10-06-refactor-r7-design.md の 4.5)
+    // (docs/spec/core-ir.md)
     let text = "main : Unit -> <IO> Unit\nmain () = if not True && True then println \"a\" else println \"b\"";
     let shown = core_text(text, Pass::Translate);
     assert!(shown.contains("fn Prelude.not("), "{shown}");
@@ -648,8 +647,7 @@ fn a_user_function_hides_the_prelude_function_of_the_same_name() {
 
 #[test]
 fn the_prelude_bool_tags_match_the_core_ir_constants() {
-    // Core IR は `Bool` を定数のタグで表す。タグは Prelude の宣言の順で決まる
-    // (docs/superpowers/specs/2026-10-06-refactor-r7-design.md の 4.6)
+    // Core IR は `Bool` を定数のタグで表す。タグは Prelude の宣言の順で決まる (docs/spec/core-ir.md)
     let program = eml_test_support::lower_clean("").program;
     assert_eq!(program[program.lang.false_ctor].tag, eml_core_ir::FALSE);
     assert_eq!(program[program.lang.true_ctor].tag, eml_core_ir::TRUE);
@@ -658,7 +656,7 @@ fn the_prelude_bool_tags_match_the_core_ir_constants() {
 #[test]
 fn an_arm_reached_by_one_leaf_sits_at_the_leaf() {
     // 1つの葉からだけ届く枝の本体は、引数を `let` で束縛してその葉に置き、複数の葉から届く枝だけを join point にする
-    // (docs/superpowers/specs/2026-10-06-refactor-r7-design.md の 6.3)。`pick` の `(n, _)` は、`0` の case の
+    // (docs/spec/core-ir.md)。`pick` の `(n, _)` は、`0` の case の
     // `default` と、外側の `default` の2つの葉から届く
     let text = "data Shape = | Dot | Box Int Int\n\narea : Shape -> Int\narea s =\n  match s with\n    | Box w h -> w * h\n    | Dot -> 0\n\npick : Int -> Int -> Int\npick a b =\n  match (a, b) with\n    | (0, 1) -> 0\n    | (n, _) -> n\n\nmain : Unit -> <IO> Unit\nmain () = println (show_int (area (Box 2 3) + pick 0 1))";
     insta::assert_snapshot!(core_text(text, Pass::Translate), @"

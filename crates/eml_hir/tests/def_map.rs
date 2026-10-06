@@ -1,4 +1,4 @@
-//! モジュールごとのスコープ表 (docs/superpowers/specs/2026-10-06-refactor-r7-design.md の 3.2〜3.4)。
+//! モジュールごとのスコープ表 (docs/implementation/architecture.md の「`eml_hir` の内部」)。
 
 use eml_hir::{Assoc, Fixity, Lookup, TypeItem, ValueItem};
 use eml_test_support::def_map;

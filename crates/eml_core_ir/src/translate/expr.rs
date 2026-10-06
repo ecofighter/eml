@@ -14,7 +14,7 @@ use super::types::{Lowering, equality_op, intrinsic, split_arrows};
 use super::{Binding, Bindings, Exit, FnLowering};
 
 /// 既知の呼ばれる式の種類。`saturate` は、引数の数、足りないときの包む関数、ちょうどのときの命令を、この種類から決める
-/// (docs/superpowers/specs/2026-10-06-refactor-r7-design.md の 6.1)。
+/// (docs/implementation/architecture.md の「`eml_core_ir`、`eml_runtime`、`eml_interp` の内部」)。
 #[derive(Clone, Copy)]
 enum Callee {
     /// 本体のある関数。足りないときの包む関数は、その関数自身である。

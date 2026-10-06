@@ -54,7 +54,7 @@ pub mod codes {
 
 /// 型付き HIR。HIR は複製せず、型を別テーブルに持つ (docs/implementation/architecture.md)。宣言の結果を宣言ごとに
 /// 持つのは、クエリ化と REPL で、宣言ごとに結果を使い回せるようにするため
-/// (docs/superpowers/specs/2026-10-06-refactor-r7-design.md の 5.1)。
+/// (docs/implementation/architecture.md の「`eml_types` の内部」)。
 #[derive(Debug, Default)]
 pub struct TypedProgram {
     /// シグネチャのある関数、操作、コンストラクタの型。

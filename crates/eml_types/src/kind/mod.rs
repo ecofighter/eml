@@ -43,8 +43,8 @@ impl Level for Multiplicity {
     const BOTTOM: Self = Multiplicity::Never;
 }
 
-/// ファイルを持つ位置。由来は別のモジュールの中を指しうる (docs/superpowers/specs/2026-10-06-refactor-r7-design.md の
-/// 5.2)。
+/// ファイルを持つ位置。由来は別のモジュールの中を指しうる
+/// (docs/implementation/architecture.md の「`eml_types` の内部」)。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Span {
     pub file: FileId,

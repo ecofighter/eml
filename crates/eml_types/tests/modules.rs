@@ -1,4 +1,4 @@
-//! モジュールをまたぐ型検査 (docs/superpowers/specs/2026-10-06-refactor-r7-design.md の 5.2)。Prelude の末尾に本体のある
+//! モジュールをまたぐ型検査 (docs/implementation/architecture.md の「`eml_types` の内部」)。Prelude の末尾に本体のある
 //! 関数を足したプログラムで、診断が位置のあるファイルを指すことを確かめる。
 
 use std::fmt::Write;

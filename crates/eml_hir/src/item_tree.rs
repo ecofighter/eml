@@ -1,4 +1,4 @@
-//! item の収集 (docs/superpowers/specs/2026-10-06-refactor-r7-design.md の 3.1)。ファイルごとに宣言を集め、名前を解決
+//! item の収集 (docs/implementation/architecture.md の「`eml_hir` の内部」)。ファイルごとに宣言を集め、名前を解決
 //! しなくても判定できる並び方の誤りを出す。名前の表と重複の判定は `DefMap` が行う。
 
 use std::collections::HashMap;

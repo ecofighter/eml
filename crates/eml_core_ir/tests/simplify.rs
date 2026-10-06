@@ -522,7 +522,7 @@ fn every_kind_of_call_in_tail_position_becomes_a_tail_call() {
 
 #[test]
 fn a_known_tag_without_a_case_takes_the_default() {
-    // K1: 分かっているタグの case がなければ `default` の本体で置き換える (docs/superpowers/specs/2026-10-06-refactor-r7-design.md の 6.3)
+    // K1: 分かっているタグの case がなければ `default` の本体で置き換える (docs/spec/core-ir.md の「パス」)
     let text = "data Color = | Red | Green | Blue\n\nmain : Unit -> <IO> Unit\nmain () =\n  let c = Green\n  let n = match c with\n    | Red -> 1\n    | _ -> 2\n  println (show_int n)";
     let shown = core_text(text, Pass::Simplify);
     let main = shown.split("fn entry$main").next().unwrap();

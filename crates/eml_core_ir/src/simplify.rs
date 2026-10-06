@@ -183,7 +183,7 @@ impl Simplify<'_> {
     /// join point にし、jump はフィールドの値を渡す。枝が値全体も使うなら、値も最後の引数で渡す。
     /// 分かっている値のタグの case がなければ、値は `default` に進む。`default` は、そこへ進む値があるときだけ切り出す。
     /// `default` には複数のタグが届きうるので、本体の引数はタグの定数に置き換えず、本体が値全体を使うときだけ値を渡す
-    /// (docs/superpowers/specs/2026-10-06-refactor-r7-design.md の 6.3)。
+    /// (docs/spec/core-ir.md の「パス」)。
     /// 切り出した join point の引数は新しい変数にする。元の枝のフィールドと join point の引数は、どちらも束縛だからである。
     fn split_known_tags(&mut self) {
         let known = self.known_constructors();

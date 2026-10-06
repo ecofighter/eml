@@ -65,7 +65,7 @@ pub(super) enum Lowering {
 }
 
 /// Prelude の intrinsic の名前と、Core IR の命令。名前と実装の対応はここだけに置き、網羅のテストが行ごとに Prelude と
-/// 照らし合わせる (docs/superpowers/specs/2026-10-06-refactor-r7-design.md の 4.2)。
+/// 照らし合わせる (docs/implementation/architecture.md の「`eml_core_ir`、`eml_runtime`、`eml_interp` の内部」)。
 const INTRINSICS: &[(&str, Lowering)] = &[
     ("show_int", Lowering::Prim(PrimOp::ShowInt)),
     ("negate", Lowering::Prim(PrimOp::IntNeg)),

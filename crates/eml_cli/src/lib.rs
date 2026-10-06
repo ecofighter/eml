@@ -18,7 +18,7 @@ pub struct Compiled {
 }
 
 /// 1回の検査や実行で読むソースの集まり。Prelude を最初に登録し、入口のファイルと一緒に変換する
-/// (docs/superpowers/specs/2026-10-06-refactor-r7-design.md の 1.4)。import をたどるローダは S2 で足す。
+/// (docs/implementation/architecture.md の「CLI と lib API」)。import をたどるローダは S2 で足す。
 pub struct Session {
     files: SourceFiles,
     prelude: FileId,

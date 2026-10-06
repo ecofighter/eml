@@ -98,7 +98,7 @@ R5 は段階6a の後、段階6b の前に行う。段階6a はほぼ HIR の脱
 | R4 | Core IR のパスの構成 | パスの順番を持つ `pipeline.rs` と `lower_until`、パスの間の `captures`、verifier の2つの度合い (`verify_scopes`)、`translate/` への分割、パスごとのテスト | 完了 |
 | R5 | 型検査の SCC ごとの独立 | `Context`、閉じた形 `Shape`、関数ごとの本体の検査 (段1) と SCC ごとの Kind の解決 (段2)、ワークリストと強連結成分による残す制約、持ち越しの制約の組ごとの重複除去、`Type` の線形性を除くこと。`eml_types` の中で済ませる | 完了 |
 | R6 | 6b の前の継ぎ目 | 評価の順 (ML 式、`call_steps`)、型の走査、Kind の由来、handler の節の型、診断の順 (R6a)。Core IR の visitor と `FnBuilder`、`compact` と木の検査、末尾呼び出しの T、テキストの IR と `parse`、`eml_interp` の分割 (R6b) | 完了 |
-| R7 | 単一ファイルの前提をなくす | R7a (構文)、R7b (R7b-1〜R7b-3)、R7c、R7d、R7e-1、R7e-2 完了。R7b-1 で組み込みを Prelude の intrinsic の関数にし、R7b-2 でプログラム全体の ID、Prelude のモジュール、`Session` を作り、R7b-3 で名前解決を `ItemTree`、`DefMap`、変換の3段に分けて `pub` を受け付けた。R7c で型検査の出力を宣言ごとの `TypedProgram` にし、Kind の制約の由来にファイルを持たせ、入口の関数を `lower` の引数にした。R7d で `IO` を Prelude の `effect IO` にし、`not`、`&&`、`||`、`|>`、`<|`、`>>`、`<<` を eml で書き、`|>` と `<|` の脱糖をやめ、Core IR を入口から届く関数だけにした。R7e-1 で、呼び出しの飽和の場合分けを `saturate` の1か所にまとめた。これで、エフェクトの型引数が関数型の操作に余った引数を渡すと、すべての引数を `perform` に渡していた誤りも直った。R7e-2 で、`Switch` をリテラルの case と `default` を持つ平らな形にした。リテラルの列は1つの `Switch` になり、リテラルが1000個の `match` も debug ビルドで動く。R7f は未着手 (docs/superpowers/specs/2026-10-06-refactor-r7-design.md) | 進行中 |
+| R7 | 単一ファイルの前提をなくす | R7a (構文)、R7b (R7b-1〜R7b-3)、R7c、R7d、R7e-1、R7e-2 完了。R7b-1 で組み込みを Prelude の intrinsic の関数にし、R7b-2 でプログラム全体の ID、Prelude のモジュール、`Session` を作り、R7b-3 で名前解決を `ItemTree`、`DefMap`、変換の3段に分けて `pub` を受け付けた。R7c で型検査の出力を宣言ごとの `TypedProgram` にし、Kind の制約の由来にファイルを持たせ、入口の関数を `lower` の引数にした。R7d で `IO` を Prelude の `effect IO` にし、`not`、`&&`、`||`、`|>`、`<|`、`>>`、`<<` を eml で書き、`|>` と `<|` の脱糖をやめ、Core IR を入口から届く関数だけにした。R7e-1 で、呼び出しの飽和の場合分けを `saturate` の1か所にまとめた。これで、エフェクトの型引数が関数型の操作に余った引数を渡すと、すべての引数を `perform` に渡していた誤りも直った。R7e-2 で、`Switch` をリテラルの case と `default` を持つ平らな形にした。リテラルの列は1つの `Switch` になり、リテラルが1000個の `match` も debug ビルドで動く。R7f は未着手 | 進行中 |
 
 ### テストを変えないために曲げた箇所
 
@@ -171,7 +171,6 @@ S2 の前に、単一ファイルの前提をなくす作り替えを R7 とし�
 - CST に名前と経路のノード (`PATH`、`NAME`) を入れ、grammar.md の全体を CST まで組む。E0004 を出す層の方針を1つにする。確かめた不具合1を直す: `<M.E>` が E0004 にならず E1002 (「cannot find effect `M`」) になる。`ast::Effect::name()` が最初の `UIDENT` を取り、CST に名前の経路のノードがないためである。R7a で済んだ。不具合1と、`::` のパターンが E1001 になる不具合も直した。grammar.md の全体を CST まで組むことは、補間・コマンドリテラル・レコード・リストを例外として S2 に残した
 - Core IR の `Switch` を、default の枝とリテラルの case を持つ平らな形にする。リテラルが約1000個の `match` で debug ビルドのスタックがあふれる問題を直し、呼び出しの飽和の処理を1つにまとめる。呼び出しの飽和の処理は R7e-1 で `saturate` にまとめた。平らな `Switch` は R7e-2 で済んだ
 - spec で決めること: import の循環を許すか、モジュールの根をどこにするか
-- R7 を終えるときに、コードのコメントと文書が指す作業用の設計文書 `docs/superpowers/specs/2026-10-06-refactor-r7-design.md` への参照を、内容を移した先 (`docs/spec/`、`docs/implementation/`) に張り替える (`grep -rn 2026-10-06-refactor-r7-design crates docs` で探す)
 
 ## 各 crate の実装状況
 
@@ -200,7 +199,7 @@ S2 の前に、単一ファイルの前提をなくす作り替えを R7 とし�
 - `simplify` を不動点まで繰り返すことにしたときは、B3 が長い続きの連鎖を `Switch` の枝の中へ移しうる。Perceus と verifier は `Switch` の枝を再帰でたどるので、E0013 はその深さの上限にならなくなる
 - S2 の設計の材料: row の仕組みを sort 付きの1つにし、エフェクトの row とレコードの row で共有する。レコードの実行時の表し方を決める。文字列のトークンを lexer のモードで分ける。レイアウト規則3とレコードの `with` の衝突を解く。借用のオペランドと `Field` を決める。参照ごとの具体化を記録する表を作り、`==` の比べ方を一般化する
 - 決めたこと: 操作の引数の型に現れる Kind 変数は `Unr` に固定した ([エフェクトと handler](../spec/effects.md) の「handler の意味」)。線形な値を多相な操作の引数で渡せるようにするかは、後で見直す
-- S2 まで: 同じ名前の別の型を区別して表示しない。ユーザーが Prelude の `Bool` と同じ名前の `data Bool` を宣言すると、`if` の条件などで「expected `Bool`, found `Bool`」になる。Prelude に `Option` や `List` が入ると増えるので、宣言の位置を示す note などで区別する方法を決める。案は、`Type` から名前をなくし、表示する側が `Program` から名前を引いて修飾することである (docs/superpowers/specs/2026-10-06-refactor-r7-design.md の 5.1)。REPL で `data T` を定義し直すと、同じことが起きる
+- S2 まで: 同じ名前の別の型を区別して表示しない。ユーザーが Prelude の `Bool` と同じ名前の `data Bool` を宣言すると、`if` の条件などで「expected `Bool`, found `Bool`」になる。Prelude に `Option` や `List` が入ると増えるので、宣言の位置を示す note などで区別する方法を決める。案は、`Type` から名前をなくし、表示する側が `Program` から名前を引いて修飾することである。`Display`、診断の文言、`dump` の経路は変わるが、後の段階は `DeclType::ty` を読むだけなので、使う側は変わらない。REPL で `data T` を定義し直すと、同じことが起きる
 - 網羅性の漏れの例は、現れていないコンストラクタを見つけた段階で、現れているコンストラクタの中の漏れを探さない (Maranget の作り方どおり)。そのため note の例が漏れのすべてを表さないことがある (`| Some (Some _) -> …` の漏れは `None` だけが出る)
 - 変数の枝が scrutinee そのものを受ける `match` (`| ys -> f ys`) では、Perceus が `Switch` の前に scrutinee を `dup` するので、一意な箱でも `take_or_copy` の写す経路を通る。結果は正しいが、reuse analysis などで後で見直す
 - Core IR の変数は Kind を持たず、ボックス化した変数はすべて Perceus の対象になる。`File` も RC で数え、`read_all` と `close` は一意性を求めないので正しく動く。`Lin` の変数を Perceus の対象から外すのは、借用と reuse の最適化と一緒に見直す

@@ -131,7 +131,7 @@ fn prelude_signatures_without_equations_are_intrinsic_functions() {
         assert!(function.signature.is_some(), "{name}");
         assert!(module.body(function_id(&module, name)).is_none(), "{name}");
     }
-    // eml で書いた Prelude の関数は intrinsic ではない (docs/superpowers/specs/2026-10-06-refactor-r7-design.md の 4.4)
+    // eml で書いた Prelude の関数は intrinsic ではない (docs/spec/declarations.md の標準の演算子の表)
     for name in ["not", "&&", "||", ">>", "<<", "|>", "<|"] {
         assert!(!function(&module, name).intrinsic, "{name}");
         assert!(module.body(function_id(&module, name)).is_some(), "{name}");
@@ -143,7 +143,7 @@ fn prelude_signatures_without_equations_are_intrinsic_functions() {
 
 #[test]
 fn prelude_functions_with_equations_are_not_intrinsic() {
-    // R7d で Prelude に本体を書く (docs/superpowers/specs/2026-10-06-refactor-r7-design.md の 4.4)。intrinsic は等式の
+    // R7d で Prelude に本体を書く (docs/spec/declarations.md の標準の演算子の表)。intrinsic は等式の
     // ないシグネチャだけである
     let mut files = eml_diagnostics::SourceFiles::new();
     let source = format!(
@@ -239,7 +239,7 @@ fn an_operation_named_main_is_not_the_entry_function() {
 
 #[test]
 fn a_main_in_the_prelude_is_not_the_entry_function() {
-    // `main` は入口のモジュールからだけ探す (docs/superpowers/specs/2026-10-06-refactor-r7-design.md の 1.4)
+    // `main` は入口のモジュールからだけ探す (docs/implementation/architecture.md の「CLI と lib API」)
     let mut files = eml_diagnostics::SourceFiles::new();
     let source = format!(
         "{}\nmain : Unit -> <IO> Unit\nmain () = ()\n",

@@ -1,5 +1,5 @@
-//! プログラム全体の HIR と、プログラム全体で一意な item の ID (docs/superpowers/specs/2026-10-06-refactor-r7-design.md の
-//! 1.2 と 1.3)。
+//! プログラム全体の HIR と、プログラム全体で一意な item の ID
+//! (docs/implementation/architecture.md の「`eml_hir` の内部」)。
 
 use std::cmp::Ordering;
 use std::fmt;
@@ -261,7 +261,7 @@ impl Program {
     }
 
     /// `eml run` が実行を始める関数。入口のモジュールだけから探し、Prelude には置かない
-    /// (docs/superpowers/specs/2026-10-06-refactor-r7-design.md の 1.4)。同じ名前の関数が重複したときは、最初の定義である。
+    /// (docs/implementation/architecture.md の「CLI と lib API」)。同じ名前の関数が重複したときは、最初の定義である。
     pub fn main(&self) -> Option<FunctionId> {
         self.modules[self.entry]
             .items

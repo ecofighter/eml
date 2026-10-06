@@ -1,4 +1,4 @@
-//! モジュールごとのスコープ表 (docs/superpowers/specs/2026-10-06-refactor-r7-design.md の 3.2〜3.4)。全モジュールの
+//! モジュールごとのスコープ表 (docs/implementation/architecture.md の「`eml_hir` の内部」)。全モジュールの
 //! `ItemTree` から、item の ID、名前の表、定義に付く fixity、lang item を作る。名前を解決しなくても決まるものだけを
 //! 読むので、item の変換より先に作れる。
 
