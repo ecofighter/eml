@@ -126,9 +126,8 @@ fn lower_clean_returns_a_module_without_diagnostics() {
     assert!(lowered.diagnostics.is_empty());
     assert!(
         lowered
-            .module
-            .functions
-            .iter()
+            .program
+            .functions()
             .any(|(_, function)| function.name == "f")
     );
 }

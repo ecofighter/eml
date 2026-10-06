@@ -5,8 +5,8 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use eml_cli::{OutputSink, RunConfig, RuntimeError};
-use eml_diagnostics::{SourceFiles, has_errors, render};
+use eml_cli::{OutputSink, RunConfig, RuntimeError, Session};
+use eml_diagnostics::{has_errors, render};
 
 fn ui_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -16,15 +16,15 @@ fn ui_root() -> PathBuf {
 }
 
 /// スナップショットの中のパスを安定させるため、`tests/ui` からの相対パスでファイルを登録する。
-fn load(path: &Path) -> (SourceFiles, eml_diagnostics::FileId) {
+fn load(path: &Path) -> (Session, eml_diagnostics::FileId) {
     let relative = path
         .strip_prefix(ui_root())
         .unwrap()
         .to_string_lossy()
         .replace('\\', "/");
-    let mut files = SourceFiles::new();
-    let id = files.add(relative, fs::read_to_string(path).unwrap());
-    (files, id)
+    let mut session = Session::new();
+    let id = session.add_file(relative, fs::read_to_string(path).unwrap());
+    (session, id)
 }
 
 /// スナップショットの名前を、最上位のディレクトリからの相対パス (`basics/hello.em`) で固定する。insta の既定はすべての
@@ -44,9 +44,9 @@ fn categorized(path: &Path, top: &str) -> insta::Settings {
 
 /// 診断のエラーなしでコンパイルし、`debug_heap` を有効にして実行する。stdout、診断の表示、実行の結果を返す。
 fn compile_and_execute(path: &Path) -> (String, String, Result<(), RuntimeError>) {
-    let (files, id) = load(path);
-    let compiled = eml_cli::compile(&files, id);
-    let stderr = render(&compiled.diagnostics, &files);
+    let (session, id) = load(path);
+    let compiled = session.compile(id);
+    let stderr = render(&compiled.diagnostics, session.files());
     let program = compiled
         .program
         .unwrap_or_else(|| panic!("unexpected errors:\n{stderr}"));
@@ -95,9 +95,9 @@ fn run_fail() {
 fn check_fail() {
     insta::glob!("../../../tests/ui", "check-fail/**/*.em", |path| {
         let settings = categorized(path, "check-fail");
-        let (files, id) = load(path);
-        let diagnostics = eml_cli::check(&files, id);
-        let rendered = render(&diagnostics, &files);
+        let (session, id) = load(path);
+        let diagnostics = session.check(id);
+        let rendered = render(&diagnostics, session.files());
         assert!(
             has_errors(&diagnostics),
             "expected at least one error, got:\n{rendered}"

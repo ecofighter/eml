@@ -3,8 +3,8 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
-use eml_cli::{OutputSink, RunConfig};
-use eml_diagnostics::{FileId, SourceFiles, has_errors, render};
+use eml_cli::{OutputSink, RunConfig, Session};
+use eml_diagnostics::{FileId, has_errors, render};
 
 #[derive(Parser)]
 #[command(name = "eml", version, about = "The eml programming language")]
@@ -31,11 +31,11 @@ fn main() -> ExitCode {
     let cli = Cli::parse();
     match cli.command {
         Command::Check { file } => {
-            let Some((files, id)) = load(&file) else {
+            let Some((session, id)) = load(&file) else {
                 return ExitCode::from(2);
             };
-            let diagnostics = eml_cli::check(&files, id);
-            eprint!("{}", render(&diagnostics, &files));
+            let diagnostics = session.check(id);
+            eprint!("{}", render(&diagnostics, session.files()));
             if has_errors(&diagnostics) {
                 ExitCode::from(1)
             } else {
@@ -43,13 +43,13 @@ fn main() -> ExitCode {
             }
         }
         Command::Run { debug_heap, file } => {
-            let Some((files, id)) = load(&file) else {
+            let Some((session, id)) = load(&file) else {
                 return ExitCode::from(2);
             };
             let config = RunConfig::default().with_debug_heap(debug_heap);
             // 警告がプログラムの出力の後に出ないように、実行の前に表示する。
-            let compiled = eml_cli::compile(&files, id);
-            eprint!("{}", render(&compiled.diagnostics, &files));
+            let compiled = session.compile(id);
+            eprint!("{}", render(&compiled.diagnostics, session.files()));
             let Some(program) = compiled.program else {
                 return ExitCode::from(1);
             };
@@ -64,12 +64,12 @@ fn main() -> ExitCode {
     }
 }
 
-fn load(path: &Path) -> Option<(SourceFiles, FileId)> {
+fn load(path: &Path) -> Option<(Session, FileId)> {
     match fs::read_to_string(path) {
         Ok(text) => {
-            let mut files = SourceFiles::new();
-            let id = files.add(path.display().to_string(), text);
-            Some((files, id))
+            let mut session = Session::new();
+            let id = session.add_file(path.display().to_string(), text);
+            Some((session, id))
         }
         Err(error) => {
             eprintln!("error: cannot read `{}`: {error}", path.display());
