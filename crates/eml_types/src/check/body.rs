@@ -5,11 +5,11 @@ use eml_hir::{
 };
 use la_arena::ArenaMap;
 
-use crate::codes;
-use crate::kind::problem::{Decl, Instance};
+use crate::kind::problem::Instance;
 use crate::kind::{KindOrigin, KindReason, Provenance};
 use crate::shape::{Rigids, lower_type};
 use crate::table::{Row, Table, Tail, Ty, TyShape, UnifyError};
+use crate::{Decl, codes};
 
 use super::Signatures;
 use super::equality::Comparison;

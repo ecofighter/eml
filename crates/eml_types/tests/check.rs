@@ -1,6 +1,7 @@
 mod common;
 
 use common::check_text;
+use eml_types::Decl;
 
 #[test]
 fn signatures_and_local_types() {
@@ -380,18 +381,34 @@ fn intrinsic_schemes_are_exported() {
             .functions()
             .find(|(_, function)| function.name == name)
             .unwrap();
-        checked.typed.signatures[id].ty.to_string()
+        checked.typed.decls[&Decl::Function(id)].ty.to_string()
     };
     assert_eq!(ty("println"), "String -> <IO> Unit");
     assert_eq!(ty("+"), "Int -> Int -> Int");
     assert_eq!(ty(">>"), "(a -> <e> b) -> (b -> <e> c) -> a -> <e> c");
     // コンストラクタは intrinsic ではなく、Prelude の `data Bool` のスキームとして書き出す
     assert_eq!(
-        checked.typed.constructors[checked.program.lang.true_ctor]
+        checked.typed.decls[&Decl::Constructor(checked.program.lang.true_ctor)]
             .ty
             .to_string(),
         "Bool"
     );
+}
+
+#[test]
+fn operation_types_are_exported() {
+    let checked =
+        eml_test_support::check("effect State where\n  get : Unit -> Int\n  put : Int -> Unit");
+    let ty = |name: &str| {
+        let (id, _) = checked
+            .program
+            .operations()
+            .find(|(_, operation)| operation.name == name)
+            .unwrap();
+        checked.typed.decls[&Decl::Operation(id)].ty.to_string()
+    };
+    assert_eq!(ty("get"), "Unit -> <State> Int");
+    assert_eq!(ty("put"), "Int -> <State> Unit");
 }
 
 #[test]

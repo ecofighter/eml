@@ -79,7 +79,7 @@ impl Session {
     }
 
     /// エラーがあっても止めずに、検査の段階をすべて実行する。1回の実行で、独立した複数のエラーを報告するため。
-    fn front(&self, entry: FileId) -> (eml_hir::Program, eml_types::TypedModule, Vec<Diagnostic>) {
+    fn front(&self, entry: FileId) -> (eml_hir::Program, eml_types::TypedProgram, Vec<Diagnostic>) {
         let (parse, mut diagnostics) = eml_syntax::parse(entry, self.files.text(entry));
         let prelude = eml_hir::parse_prelude(self.prelude);
         let (prelude_items, stage) = eml_hir::item_tree(self.prelude, &prelude);

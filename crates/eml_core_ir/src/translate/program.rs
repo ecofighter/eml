@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use eml_hir::{
     ConstructorId, EffectId, FunctionId, OpMultiplicity, OperationId, Program as HirProgram,
 };
-use eml_types::{Type, TypedModule};
+use eml_types::{Decl, Type, TypedProgram};
 
 use crate::builder::FnBuilder;
 use crate::{Atom, CExpr, Call, CoreFn, EffectInfo, FnIdx, OperationInfo, Rhs, VarId};
@@ -47,27 +47,33 @@ pub(super) struct ProgramBuilder {
 }
 
 impl ProgramBuilder {
-    pub(super) fn new(hir: &HirProgram, typed: &TypedModule) -> ProgramBuilder {
+    pub(super) fn new(hir: &HirProgram, typed: &TypedProgram) -> ProgramBuilder {
         ProgramBuilder {
             intrinsic_types: hir
                 .functions()
                 .filter(|(_, function)| function.intrinsic)
-                .filter_map(|(id, _)| Some((id, typed.signatures.get(id)?.ty.clone())))
+                .filter_map(|(id, _)| Some((id, typed.decls.get(&Decl::Function(id))?.ty.clone())))
                 .collect(),
             functions: Vec::new(),
             arities: Vec::new(),
             strings: Strings::default(),
             wrappers: HashMap::new(),
             operation_types: typed
-                .operations
+                .decls
                 .iter()
-                .map(|(id, scheme)| (id, scheme.ty.clone()))
+                .filter_map(|(decl, declared)| match decl {
+                    Decl::Operation(id) => Some((*id, declared.ty.clone())),
+                    _ => None,
+                })
                 .collect(),
             operation_wrappers: HashMap::new(),
             constructor_types: typed
-                .constructors
+                .decls
                 .iter()
-                .map(|(id, scheme)| (id, scheme.ty.clone()))
+                .filter_map(|(decl, declared)| match decl {
+                    Decl::Constructor(id) => Some((*id, declared.ty.clone())),
+                    _ => None,
+                })
                 .collect(),
             constructor_wrappers: HashMap::new(),
         }
@@ -153,7 +159,8 @@ impl ProgramBuilder {
         self.functions[function.0 as usize] = Some(core);
     }
 
-    /// 入口の関数を `()` で呼ぶ関数を作る。名前は `entry$` に入口の関数の名前を続ける。
+    /// 入口の関数を `()` で呼ぶ関数を作る。名前は `entry$` に入口の関数の名前を続ける。等式に引数のない
+    /// `main = fn () -> ...` は関数値を返すので、返った値に `()` を適用する (docs/spec/core-ir.md)。
     pub(super) fn entry(
         &mut self,
         hir: &HirProgram,

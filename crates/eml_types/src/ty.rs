@@ -433,7 +433,7 @@ mod tests {
 
 /// Kind の制約の片側。`Unr` と `Lin` は定数で、`Of` はその型の Kind を表す。
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum KindTerm {
+pub(crate) enum KindTerm {
     Unr,
     Lin,
     Of(Type),
@@ -441,7 +441,7 @@ pub enum KindTerm {
 
 /// スキームに残った Kind の制約。テストの表示で使う。
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum KindConstraint {
+pub(crate) enum KindConstraint {
     /// `lower <= upper`。
     Linearity { lower: KindTerm, upper: KindTerm },
     /// 持ち越しの制約。`value` が `Lin` なら `row` は `Once` 以下である (docs/spec/types.md の「推論」)。
@@ -450,7 +450,7 @@ pub enum KindConstraint {
 
 /// 持ち越しの制約の row の側。
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum RowTerm {
+pub(crate) enum RowTerm {
     Multi,
     /// rigid な row 変数の名前。
     Of(String),

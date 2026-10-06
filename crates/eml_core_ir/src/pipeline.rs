@@ -2,7 +2,7 @@
 //! で、確かめたいパスの直後の IR を見る。
 
 use eml_hir::{FunctionId, Program as HirProgram};
-use eml_types::TypedModule;
+use eml_types::TypedProgram;
 
 use crate::{
     Program, VerifyError, compact, liveness, perceus, simplify, translate, verify, verify_scopes,
@@ -28,14 +28,14 @@ impl Pass {
 
 /// 診断のエラーがないプログラムだけを受け取る。エラーがあれば `eml_cli` は Core IR を作らない
 /// (docs/implementation/architecture.md)。
-pub fn lower(hir: &HirProgram, typed: &TypedModule, entry: FunctionId) -> Program {
+pub fn lower(hir: &HirProgram, typed: &TypedProgram, entry: FunctionId) -> Program {
     lower_until(hir, typed, entry, Pass::Perceus)
 }
 
 /// `last` の直後で止める。止めたパスまでの検査は、debug ビルドでかける。
 pub fn lower_until(
     hir: &HirProgram,
-    typed: &TypedModule,
+    typed: &TypedProgram,
     entry: FunctionId,
     last: Pass,
 ) -> Program {

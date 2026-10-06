@@ -11,7 +11,7 @@ use eml_hir::{
     Body, ExprId, ExprKind, Function, FunctionId, ItemMap, LocalId, PatId, Program as HirProgram,
     Stmt,
 };
-use eml_types::{BodyTypes, Type, TypedModule};
+use eml_types::{BodyTypes, Decl, Type, TypedProgram};
 use la_arena::ArenaMap;
 
 use crate::builder::FnBuilder;
@@ -23,7 +23,7 @@ use types::{split_arrows, var_info};
 
 /// 誤りのない型付き HIR を、RC の命令のない Core IR にする。`captures` は空のままでよく、パイプラインが埋める
 /// (docs/spec/core-ir.md のパスの表)。
-pub(crate) fn translate(hir: &HirProgram, typed: &TypedModule, entry: FunctionId) -> Program {
+pub(crate) fn translate(hir: &HirProgram, typed: &TypedProgram, entry: FunctionId) -> Program {
     let mut builder = ProgramBuilder::new(hir, typed);
     let mut indices = ItemMap::default();
     // intrinsic は本体を持たず、呼び出しの位置で命令にするか、包む関数を作る (`program.rs` の `wrapper`)
@@ -37,8 +37,8 @@ pub(crate) fn translate(hir: &HirProgram, typed: &TypedModule, entry: FunctionId
     for (id, function) in defined() {
         let body = hir.body(id).expect("checked above");
         let signature = &typed
-            .signatures
-            .get(id)
+            .decls
+            .get(&Decl::Function(id))
             .expect("every function has a signature")
             .ty;
         let (param_types, _) = split_arrows(signature, body.params.len());
@@ -66,8 +66,8 @@ pub(crate) fn translate(hir: &HirProgram, typed: &TypedModule, entry: FunctionId
         builder.finish(indices[id], core);
     }
     let entry_type = &typed
-        .signatures
-        .get(entry)
+        .decls
+        .get(&Decl::Function(entry))
         .expect("the entry function has a signature")
         .ty;
     let entry = builder.entry(hir, indices[entry], entry, entry_type);

@@ -4,6 +4,7 @@ mod carry;
 mod check;
 mod context;
 mod data;
+mod dump;
 mod exhaustive;
 mod kind;
 mod scc;
@@ -12,16 +13,19 @@ mod table;
 mod ty;
 mod usage;
 
-use std::fmt::Write;
+use std::collections::HashMap;
 
 use eml_diagnostics::{Diagnostic, FileId, Label, TextRange};
-use eml_hir::{Constructor, ExprId, Function, ItemMap, LocalId, Operation, PatId, Program};
+use eml_hir::{
+    ConstructorId, ExprId, Function, FunctionId, ItemMap, LocalId, OperationId, PatId, Program,
+};
 use la_arena::ArenaMap;
 
-pub use ty::{
-    ContState, EffectLabel, KindConstraint, KindTerm, Linearity, Multiplicity, RowTail, RowTerm,
-    Type,
-};
+use crate::kind::problem::KindScheme;
+use crate::shape::Shape;
+
+pub use dump::dump;
+pub use ty::{ContState, EffectLabel, Linearity, Multiplicity, RowTail, Type};
 
 pub mod codes {
     use eml_diagnostics::ErrorCode;
@@ -48,26 +52,34 @@ pub mod codes {
     pub const UNREACHABLE_EQUATION: ErrorCode = ErrorCode(4005);
 }
 
-/// 型付き HIR。HIR は複製せず、型を別テーブルに持つ (docs/implementation/architecture.md)。
+/// 型付き HIR。HIR は複製せず、型を別テーブルに持つ (docs/implementation/architecture.md)。宣言の結果を宣言ごとに
+/// 持つのは、クエリ化と REPL で、宣言ごとに結果を使い回せるようにするため
+/// (docs/superpowers/specs/2026-10-06-refactor-r7-design.md の 5.1)。
 #[derive(Debug, Default)]
-pub struct TypedModule {
-    /// シグネチャのある関数だけを含む。
-    pub signatures: ItemMap<Function, Scheme>,
+pub struct TypedProgram {
+    /// シグネチャのある関数、操作、コンストラクタの型。
+    pub decls: HashMap<Decl, DeclType>,
     /// シグネチャと等式の両方がある関数だけを含む。
     pub bodies: ItemMap<Function, BodyTypes>,
-    /// エフェクトの操作のスキーム。Core IR が、操作を包む関数の変数を boxed にするかを決めるのに使う。
-    pub operations: ItemMap<Operation, Scheme>,
-    /// コンストラクタのスキーム。`Some : a -> Option a` の形である。Core IR が、コンストラクタを包む関数の変数を
-    /// boxed にするかを決めるのに使う。
-    pub constructors: ItemMap<Constructor, Scheme>,
 }
 
-/// 関数の型と、多相化したときに残った Kind の制約のうち、定数を片側に持つもの。変数どうしの制約は部分適用のたびに
-/// 増えて読みにくくなるので出さない。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Scheme {
+/// スキームを持つ宣言。具体化の記録が、どの宣言のスキームを使うかも指す。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Decl {
+    Function(FunctionId),
+    Operation(OperationId),
+    Constructor(ConstructorId),
+}
+
+/// 1つの宣言の型検査の結果。
+#[derive(Debug)]
+pub struct DeclType {
+    /// 後の段階が読む、矢印の線形性のない型。`Type` は名前を持ち、名前は `Context` から引くので、検査の最後に1回だけ
+    /// 書き出しておく。
     pub ty: Type,
-    pub constraints: Vec<KindConstraint>,
+    /// 後の段階は Kind を読まない (docs/implementation/architecture.md の「`Table::export`」) ので、外からは読めなくする。
+    pub(crate) shape: Shape,
+    pub(crate) kinds: KindScheme,
 }
 
 /// `==` と `!=` の比べ方。型クラスがないので、型検査が引数の型から決め、比べられる型を限る
@@ -90,7 +102,7 @@ pub struct BodyTypes {
     pub equalities: ArenaMap<ExprId, Equality>,
 }
 
-pub fn check(program: &Program) -> (TypedModule, Vec<Diagnostic>) {
+pub fn check(program: &Program) -> (TypedProgram, Vec<Diagnostic>) {
     check::check_module(program)
 }
 
@@ -106,52 +118,6 @@ pub fn missing_main(file: FileId) -> Diagnostic {
         ),
     )
     .with_help("add `main : Unit -> <IO> Unit` and an equation `main () = ...`")
-}
-
-/// テストで推論結果を確かめるための表示。入口のモジュールだけを表示する。Prelude はどのプログラムにもあるので、
-/// テストの表示を Prelude に左右させないため。
-pub fn dump(program: &Program, typed: &TypedModule) -> String {
-    let mut out = String::new();
-    for (id, operation) in program.operations() {
-        if id.module != program.entry {
-            continue;
-        }
-        if let Some(scheme) = typed.operations.get(id) {
-            writeln!(out, "{} : {}", operation.name, scheme.ty).unwrap();
-            write_kinds(&mut out, scheme);
-        }
-    }
-    for (id, function) in program.functions() {
-        if id.module != program.entry {
-            continue;
-        }
-        if let Some(scheme) = typed.signatures.get(id) {
-            writeln!(out, "{} : {}", function.name, scheme.ty).unwrap();
-            write_kinds(&mut out, scheme);
-        }
-        let (Some(body), Some(types)) = (program.body(id), typed.bodies.get(id)) else {
-            continue;
-        };
-        for (local, data) in body.locals.iter() {
-            if let Some(ty) = types.locals.get(local) {
-                writeln!(
-                    out,
-                    "  {}#{} : {ty}",
-                    data.name,
-                    u32::from(local.into_raw())
-                )
-                .unwrap();
-            }
-        }
-    }
-    out
-}
-
-fn write_kinds(out: &mut String, scheme: &Scheme) {
-    if !scheme.constraints.is_empty() {
-        let kinds: Vec<String> = scheme.constraints.iter().map(ToString::to_string).collect();
-        writeln!(out, "  kinds: {}", kinds.join(", ")).unwrap();
-    }
 }
 
 /// 単体テストのための `Program`。Prelude と、`text` を入口にしたモジュールを変換する。

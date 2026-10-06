@@ -9,7 +9,7 @@ use eml_hir::{
     PatId, PatKind, Program, Stmt, TypeDefId, TypeDefKind,
 };
 
-use crate::{BodyTypes, TypedModule, codes};
+use crate::{BodyTypes, TypedProgram, codes};
 
 /// note に並べる漏れの例の数。1つ多く集めて、ほかにもあるかを知る。
 const SHOWN: usize = 3;
@@ -17,7 +17,7 @@ const SHOWN: usize = 3;
 const LET_LABEL: &str = "`let` needs a pattern that matches every value";
 const PARAMETER_LABEL: &str = "a parameter needs a pattern that matches every value";
 
-pub(crate) fn check(program: &Program, typed: &TypedModule) -> Vec<Diagnostic> {
+pub(crate) fn check(program: &Program, typed: &TypedProgram) -> Vec<Diagnostic> {
     let mut diagnostics = Vec::new();
     for (id, function) in program.functions() {
         let (Some(body), Some(types)) = (program.body(id), typed.bodies.get(id)) else {

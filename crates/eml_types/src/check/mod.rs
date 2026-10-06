@@ -8,13 +8,13 @@ use eml_hir::{
 use la_arena::Arena;
 
 use crate::context::Context;
-use crate::kind::problem::{Decl, KindProblem, KindScheme, OwnVars};
+use crate::kind::problem::{KindProblem, KindScheme, OwnVars};
 use crate::kind::solve::solve_scc;
 use crate::kind::{Bound, KindOrigin, KindReason, KindVar, Provenance};
 use crate::shape::{Own, Shape, constructor_shape, operation_shape, signature_shape};
 use crate::table::{Row, Table, TyShape};
-use crate::ty::{EffectLabel, KindConstraint, KindTerm, Linearity, Multiplicity, RowTerm, Type};
-use crate::{BodyTypes, TypedModule, carry, codes, exhaustive, scc, usage};
+use crate::ty::{EffectLabel, Type};
+use crate::{BodyTypes, Decl, DeclType, TypedProgram, carry, codes, exhaustive, scc, usage};
 
 mod body;
 mod equality;
@@ -48,7 +48,7 @@ pub(crate) struct Checked {
     pub problem: KindProblem,
 }
 
-pub(crate) fn check_module(program: &Program) -> (TypedModule, Vec<Diagnostic>) {
+pub(crate) fn check_module(program: &Program) -> (TypedProgram, Vec<Diagnostic>) {
     let context = Context::new(program);
     let signatures = signatures(program, &context);
     let mut schemes = declaration_schemes(program, &context, &signatures);
@@ -90,7 +90,7 @@ pub(crate) fn check_module(program: &Program) -> (TypedModule, Vec<Diagnostic>) 
         violated.extend(solution.violated);
     }
     diagnostics.extend(report_violations(program, violated));
-    let typed = typed_module(&context, &signatures, &schemes, bodies);
+    let typed = typed_program(&context, &signatures, schemes, bodies);
     // 網羅性は型推論と使用回数のパスの後に、書き出した型の上で調べる (docs/spec/exhaustiveness.md の「検査パス」)
     diagnostics.extend(exhaustive::check(program, &typed));
     (typed, diagnostics)
@@ -298,35 +298,41 @@ fn report_violations(program: &Program, mut origins: Vec<KindOrigin>) -> Vec<Dia
     out
 }
 
-fn typed_module(
+/// 段0の形と段2のスキームを、宣言ごとの結果にまとめる。スキームのない宣言 (Kind の制約が残らなかった宣言) は、制約のない
+/// スキームにする。
+fn typed_program(
     context: &Context,
     signatures: &Signatures,
-    schemes: &HashMap<Decl, KindScheme>,
+    mut schemes: HashMap<Decl, KindScheme>,
     bodies: ItemMap<Function, BodyTypes>,
-) -> TypedModule {
-    let empty = KindScheme::default();
-    let export = |decl: Decl, shape: &Shape| crate::Scheme {
-        ty: shape.export(context),
-        constraints: kind_constraints(context, shape, schemes.get(&decl).unwrap_or(&empty)),
-    };
-    TypedModule {
-        signatures: signatures
-            .functions
-            .iter()
-            .map(|(id, shape)| (id, export(Decl::Function(id), shape)))
-            .collect(),
-        bodies,
-        operations: signatures
-            .operations
-            .iter()
-            .map(|(id, shape)| (id, export(Decl::Operation(id), shape)))
-            .collect(),
-        constructors: signatures
-            .constructors
-            .iter()
-            .map(|(id, shape)| (id, export(Decl::Constructor(id), shape)))
-            .collect(),
-    }
+) -> TypedProgram {
+    let shapes = signatures
+        .functions
+        .iter()
+        .map(|(id, shape)| (Decl::Function(id), shape))
+        .chain(
+            signatures
+                .operations
+                .iter()
+                .map(|(id, shape)| (Decl::Operation(id), shape)),
+        )
+        .chain(
+            signatures
+                .constructors
+                .iter()
+                .map(|(id, shape)| (Decl::Constructor(id), shape)),
+        );
+    let decls = shapes
+        .map(|(decl, shape)| {
+            let declared = DeclType {
+                ty: shape.export(context),
+                shape: shape.clone(),
+                kinds: schemes.remove(&decl).unwrap_or_default(),
+            };
+            (decl, declared)
+        })
+        .collect();
+    TypedProgram { decls, bodies }
 }
 
 fn check_main(
@@ -367,46 +373,6 @@ fn check_main(
             ),
         ));
     }
-}
-
-/// スキームに残った制約のうち、定数を片側に持つものを表示用にする。変数どうしの制約は出さない。テストで確かめたいのは
-/// `Unr` の上限が付いたかどうかで、変数どうしの制約は部分適用のたびに増えて読みにくくなるため。
-fn kind_constraints(context: &Context, shape: &Shape, scheme: &KindScheme) -> Vec<KindConstraint> {
-    let names = shape.kind_names(context);
-    let rows = shape.row_names();
-    let term = |bound: Bound<Linearity>| match bound {
-        Bound::Const(Linearity::Unr) => Some(KindTerm::Unr),
-        Bound::Const(Linearity::Lin) => Some(KindTerm::Lin),
-        Bound::Var(var) => names.get(&var).cloned().map(KindTerm::Of),
-    };
-    let row_term = |bound: Bound<Multiplicity>| match bound {
-        Bound::Const(Multiplicity::Multi) => Some(RowTerm::Multi),
-        Bound::Const(_) => None,
-        Bound::Var(var) => rows.get(&var).cloned().map(RowTerm::Of),
-    };
-    let mut constraints: Vec<KindConstraint> = scheme
-        .lin
-        .iter()
-        .filter(|(lower, upper)| {
-            matches!(lower, Bound::Const(_)) != matches!(upper, Bound::Const(_))
-        })
-        .filter_map(|&(lower, upper)| {
-            Some(KindConstraint::Linearity {
-                lower: term(lower)?,
-                upper: term(upper)?,
-            })
-        })
-        .collect();
-    for carry in &scheme.carries {
-        let (Some(value), Some(row)) = (term(carry.lin), row_term(carry.mult)) else {
-            continue;
-        };
-        let constraint = KindConstraint::Carry { value, row };
-        if !constraints.contains(&constraint) {
-            constraints.push(constraint);
-        }
-    }
-    constraints
 }
 
 fn has_error(types: &Arena<TypeRef>, id: TypeRefId) -> bool {

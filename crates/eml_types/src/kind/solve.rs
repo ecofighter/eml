@@ -5,8 +5,9 @@ use std::collections::{HashMap, HashSet};
 
 use eml_diagnostics::TextRange;
 
-use super::problem::{Bounds, Decl, KindProblem, KindScheme, OwnVars};
+use super::problem::{Bounds, KindProblem, KindScheme, OwnVars};
 use super::{Bound, CarriedInner, Carry, KindOrigin, KindReason, KindVar, Level, Provenance};
+use crate::Decl;
 use crate::ty::{Linearity, Multiplicity};
 
 /// 1つの SCC を解いた結果。`schemes` は `members` と同じ順に並ぶ。
