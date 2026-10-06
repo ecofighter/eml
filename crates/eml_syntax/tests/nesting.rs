@@ -30,6 +30,13 @@ fn deep_chain_of_misplaced_resumes_does_not_overflow_the_stack() {
 }
 
 #[test]
+fn deep_chain_of_drops_reports_the_nesting_limit() {
+    let found = diagnostics(&format!("x = g {}k", "drop ".repeat(10_000)));
+    let too_deep = found.iter().filter(|d| d.starts_with("E0013 ")).count();
+    assert_eq!(too_deep, 1, "{found:?}");
+}
+
+#[test]
 fn deeply_nested_patterns_report_one_error() {
     let depth = 10_000;
     assert_one_nesting_error(&format!(

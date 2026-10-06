@@ -255,6 +255,18 @@ fn resume_and_drop_must_be_parenthesized_as_arguments() {
 }
 
 #[test]
+fn the_first_argument_of_resume_and_drop_follows_the_layers() {
+    assert_eq!(
+        diagnostics("f = drop if c then a else b"),
+        ["E0012 1:10 `if` expression must be parenthesized here"]
+    );
+    assert_eq!(
+        diagnostics("f = resume fn x -> x"),
+        ["E0012 1:12 `fn` expression must be parenthesized here"]
+    );
+}
+
+#[test]
 fn resume_as_an_argument_is_read_as_an_operand() {
     insta::assert_snapshot!(shape("f = g resume k 1 + 2"), @r#"
     SOURCE_FILE

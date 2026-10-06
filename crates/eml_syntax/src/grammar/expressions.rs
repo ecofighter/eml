@@ -191,11 +191,9 @@ fn app(p: &mut Parser) {
         DROP_KW => Some(DROP_EXPR),
         _ => None,
     };
+    // `resume` と `drop` の最初の引数も、ほかの引数と同じループで層を確かめる。
     if keyword.is_some() {
         p.bump_any();
-        if !postfix(p) {
-            expected(p, "an expression");
-        }
     } else {
         postfix(p);
     }
@@ -211,6 +209,9 @@ fn app(p: &mut Parser) {
         } else {
             break;
         }
+    }
+    if keyword.is_some() && args == 0 {
+        expected(p, "an expression");
     }
     match keyword {
         Some(kind) => {
