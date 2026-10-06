@@ -1,15 +1,14 @@
-//! 変換の途中で関数を足していく表と、組み込みと操作を包む関数、入口の関数、エフェクトの表。
+//! 変換の途中で関数を足していく表と、intrinsic と操作を包む関数、入口の関数、エフェクトの表。
 
 use std::collections::HashMap;
 
-use eml_hir::builtin::Builtin;
-use eml_hir::{ConstructorId, EffectId, Module, OpMultiplicity, OperationId};
+use eml_hir::{ConstructorId, EffectId, FunctionId, Module, OpMultiplicity, OperationId};
 use eml_types::{Type, TypedModule};
 
 use crate::builder::FnBuilder;
 use crate::{Atom, CExpr, Call, CoreFn, EffectInfo, FnIdx, OperationInfo, Rhs, VarId};
 
-use super::types::{Lowering, lowering, split_arrows, var_info};
+use super::types::{Lowering, intrinsic, split_arrows, var_info};
 
 #[derive(Default)]
 pub(super) struct Strings {
@@ -31,12 +30,12 @@ impl Strings {
 
 /// 変換の途中で、ラムダと包んだ組み込みの関数を足していく関数の表。番号を先に取り、中身は変換が終わってから入れる。
 pub(super) struct ProgramBuilder {
-    /// Prelude から作った組み込みの型。組み込みを包む関数の変数が boxed かどうかを決める。
-    builtin_types: HashMap<Builtin, Type>,
+    /// Prelude の intrinsic のスキームの型。intrinsic を包む関数の変数が boxed かどうかを決める。
+    intrinsic_types: HashMap<FunctionId, Type>,
     pub(super) functions: Vec<Option<CoreFn>>,
     arities: Vec<usize>,
     pub(super) strings: Strings,
-    wrappers: HashMap<Builtin, FnIdx>,
+    wrappers: HashMap<FunctionId, FnIdx>,
     /// 操作のスキームの型。操作を包む関数の変数が boxed かどうかを決める。
     operation_types: HashMap<OperationId, Type>,
     operation_wrappers: HashMap<OperationId, FnIdx>,
@@ -46,12 +45,13 @@ pub(super) struct ProgramBuilder {
 }
 
 impl ProgramBuilder {
-    pub(super) fn new(typed: &TypedModule) -> ProgramBuilder {
+    pub(super) fn new(module: &Module, typed: &TypedModule) -> ProgramBuilder {
         ProgramBuilder {
-            builtin_types: typed
-                .builtins
+            intrinsic_types: module
+                .functions
                 .iter()
-                .map(|(&builtin, scheme)| (builtin, scheme.ty.clone()))
+                .filter(|(_, function)| function.intrinsic)
+                .filter_map(|(id, _)| Some((id, typed.signatures.get(id)?.ty.clone())))
                 .collect(),
             functions: Vec::new(),
             arities: Vec::new(),
@@ -174,19 +174,22 @@ impl ProgramBuilder {
         function
     }
 
-    /// 組み込みを値や部分適用で使うときに、それを呼ぶだけの関数を作る。組み込みごとに1つだけ作る。
-    pub(super) fn wrapper(&mut self, module: &Module, builtin: Builtin) -> FnIdx {
-        if let Some(&function) = self.wrappers.get(&builtin) {
+    /// intrinsic を値や部分適用で使うときに、それを呼ぶだけの関数を作る。intrinsic ごとに1つだけ作る。
+    pub(super) fn wrapper(&mut self, module: &Module, intrinsic_fn: FunctionId) -> FnIdx {
+        if let Some(&function) = self.wrappers.get(&intrinsic_fn) {
             return function;
         }
-        let arity = builtin.arity();
+        let name = &module.functions[intrinsic_fn].name;
+        let arity = module.functions[intrinsic_fn]
+            .arity()
+            .expect("an intrinsic has a signature");
         let ty = self
-            .builtin_types
-            .get(&builtin)
-            .expect("every builtin function has a Prelude signature");
+            .intrinsic_types
+            .get(&intrinsic_fn)
+            .expect("every intrinsic has a Prelude signature");
         let (param_types, result_type) = split_arrows(ty, arity);
         let function = self.reserve(arity);
-        self.wrappers.insert(builtin, function);
+        self.wrappers.insert(intrinsic_fn, function);
         let mut builder = FnBuilder::new();
         let params: Vec<VarId> = param_types
             .iter()
@@ -194,7 +197,9 @@ impl ProgramBuilder {
             .collect();
         let atoms: Vec<Atom> = params.iter().map(|&param| Atom::Var(param)).collect();
         let mut fresh = |ty: &Type| builder.var(var_info("t", ty, module));
-        let (steps, last): (Vec<(VarId, Rhs)>, CExpr) = match lowering(builtin) {
+        let lowering =
+            intrinsic(name).expect("every intrinsic reaching Core IR has an implementation");
+        let (steps, last): (Vec<(VarId, Rhs)>, CExpr) = match lowering {
             Lowering::Prim(op) => {
                 let result = fresh(&result_type);
                 (
@@ -203,7 +208,7 @@ impl ProgramBuilder {
                 )
             }
             // `==` と `!=` は演算子の構文からしか書けず、2つの引数がそろって呼ばれる。演算子の参照 `(==)` とセクションは
-            // まだ E0004 なので (docs/spec/expressions.md)、値として包む関数は作らない
+            // HIR がラムダに脱糖するので (docs/spec/expressions.md)、値として包む関数は作らない
             Lowering::Equality { .. } => {
                 unreachable!("`==` and `!=` are always called with both operands")
             }
@@ -228,7 +233,7 @@ impl ProgramBuilder {
         for (var, rhs) in steps.into_iter().rev() {
             body = builder.push(CExpr::Let { var, rhs, body });
         }
-        let core = builder.finish(format!("builtin${}", builtin.name()), params, body);
+        let core = builder.finish(format!("builtin${name}"), params, body);
         self.finish(function, core);
         function
     }

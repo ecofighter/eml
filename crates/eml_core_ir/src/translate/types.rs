@@ -1,6 +1,5 @@
-//! 型から決まる変数の性質 (boxed かどうか) と、組み込みを Core IR のどの命令にするか。
+//! 型から決まる変数の性質 (boxed かどうか) と、intrinsic を Core IR のどの命令にするか。
 
-use eml_hir::builtin::Builtin;
 use eml_hir::{Module, TypeDefId, TypeDefKind};
 use eml_types::{Equality, Type};
 
@@ -53,8 +52,8 @@ pub(super) fn split_arrows(ty: &Type, count: usize) -> (Vec<Type>, Type) {
     (params, ty.clone())
 }
 
-/// 組み込みを Core IR のどの命令にするか。引数の数は `Builtin::arity` (eml_hir の表) から、引数と結果の型は Prelude の
-/// スキームから引くので、ここには変換の種類だけを置く。
+/// intrinsic を Core IR のどの命令にするか。引数の数は intrinsic のシグネチャ (`Function::arity`) から、引数と結果の
+/// 型は Prelude のスキームから引くので、ここには変換の種類だけを置く。
 pub(super) enum Lowering {
     Prim(PrimOp),
     Io(IoOp),
@@ -69,30 +68,40 @@ pub(super) enum Lowering {
     },
 }
 
-pub(super) fn lowering(builtin: Builtin) -> Lowering {
-    match builtin {
-        Builtin::Println => Lowering::Io(IoOp::Println),
-        Builtin::Open => Lowering::Io(IoOp::Open),
-        Builtin::ReadAll => Lowering::Io(IoOp::ReadAll),
-        Builtin::Close => Lowering::Io(IoOp::Close),
-        Builtin::ShowInt => Lowering::Prim(PrimOp::ShowInt),
-        Builtin::Not => Lowering::Prim(PrimOp::Not),
-        Builtin::IntNeg => Lowering::Prim(PrimOp::IntNeg),
-        Builtin::IntAdd => Lowering::Prim(PrimOp::IntAdd),
-        Builtin::IntSub => Lowering::Prim(PrimOp::IntSub),
-        Builtin::IntMul => Lowering::Prim(PrimOp::IntMul),
-        Builtin::IntDiv => Lowering::Prim(PrimOp::IntDiv),
-        Builtin::IntMod => Lowering::Prim(PrimOp::IntMod),
-        Builtin::IntEq => Lowering::Equality { negated: false },
-        Builtin::IntNe => Lowering::Equality { negated: true },
-        Builtin::IntLt => Lowering::Prim(PrimOp::IntLt),
-        Builtin::IntLe => Lowering::Prim(PrimOp::IntLe),
-        Builtin::IntGt => Lowering::Prim(PrimOp::IntGt),
-        Builtin::IntGe => Lowering::Prim(PrimOp::IntGe),
-        Builtin::StrConcat => Lowering::Prim(PrimOp::StrConcat),
-        Builtin::ComposeFwd => Lowering::Compose { forward: true },
-        Builtin::ComposeBwd => Lowering::Compose { forward: false },
-    }
+/// 表に行のある intrinsic の名前。網羅のテストが Prelude と照らし合わせる。
+#[cfg(test)]
+const IMPLEMENTED: &[&str] = &[
+    "println", "open", "read_all", "close", "show_int", "not", "negate", "+", "-", "*", "/", "%",
+    "==", "!=", "<", "<=", ">", ">=", "++", ">>", "<<",
+];
+
+/// Prelude の intrinsic の名前から、Core IR の命令を引く。名前と実装の対応はここだけに置く
+/// (docs/superpowers/specs/2026-10-06-refactor-r7-design.md の 4.2)。HIR が脱糖する `&&`、`||`、`|>`、`<|` は持たない。
+pub(super) fn intrinsic(name: &str) -> Option<Lowering> {
+    Some(match name {
+        "println" => Lowering::Io(IoOp::Println),
+        "open" => Lowering::Io(IoOp::Open),
+        "read_all" => Lowering::Io(IoOp::ReadAll),
+        "close" => Lowering::Io(IoOp::Close),
+        "show_int" => Lowering::Prim(PrimOp::ShowInt),
+        "not" => Lowering::Prim(PrimOp::Not),
+        "negate" => Lowering::Prim(PrimOp::IntNeg),
+        "+" => Lowering::Prim(PrimOp::IntAdd),
+        "-" => Lowering::Prim(PrimOp::IntSub),
+        "*" => Lowering::Prim(PrimOp::IntMul),
+        "/" => Lowering::Prim(PrimOp::IntDiv),
+        "%" => Lowering::Prim(PrimOp::IntMod),
+        "==" => Lowering::Equality { negated: false },
+        "!=" => Lowering::Equality { negated: true },
+        "<" => Lowering::Prim(PrimOp::IntLt),
+        "<=" => Lowering::Prim(PrimOp::IntLe),
+        ">" => Lowering::Prim(PrimOp::IntGt),
+        ">=" => Lowering::Prim(PrimOp::IntGe),
+        "++" => Lowering::Prim(PrimOp::StrConcat),
+        ">>" => Lowering::Compose { forward: true },
+        "<<" => Lowering::Compose { forward: false },
+        _ => return None,
+    })
 }
 
 /// 型検査が決めた比べ方の命令。
@@ -104,5 +113,56 @@ pub(super) fn equality_op(equality: Equality, negated: bool) -> PrimOp {
         (Equality::String, true) => PrimOp::StrNe,
         (Equality::Bool, false) => PrimOp::BoolEq,
         (Equality::Bool, true) => PrimOp::BoolNe,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use eml_diagnostics::FileId;
+    use eml_syntax::ast;
+
+    use super::{IMPLEMENTED, intrinsic};
+
+    /// HIR が脱糖するので、Core IR に届かない intrinsic。
+    const DESUGARED: &[&str] = &["&&", "||", "|>", "<|"];
+
+    /// Prelude の等式のないシグネチャ (intrinsic) の名前。
+    fn prelude_intrinsics() -> Vec<String> {
+        let (parse, _) = eml_syntax::parse(FileId::PRELUDE, eml_hir::PRELUDE_SOURCE);
+        let items: Vec<ast::Item> = parse.tree().items().collect();
+        let defined: Vec<String> = items
+            .iter()
+            .filter_map(|item| match item {
+                ast::Item::Equation(equation) => Some(equation.name()?.text()),
+                _ => None,
+            })
+            .collect();
+        items
+            .iter()
+            .filter_map(|item| match item {
+                ast::Item::Signature(signature) => Some(signature.name()?.text()),
+                _ => None,
+            })
+            .filter(|name| !defined.contains(name))
+            .collect()
+    }
+
+    #[test]
+    fn every_prelude_intrinsic_has_an_implementation() {
+        for name in prelude_intrinsics() {
+            assert_eq!(
+                intrinsic(&name).is_some(),
+                !DESUGARED.contains(&name.as_str()),
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn every_implementation_names_a_prelude_intrinsic() {
+        let names = prelude_intrinsics();
+        for name in IMPLEMENTED {
+            assert!(names.iter().any(|n| n == name), "{name}");
+        }
     }
 }

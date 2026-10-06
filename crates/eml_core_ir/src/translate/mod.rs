@@ -21,16 +21,23 @@ use types::{split_arrows, var_info};
 /// 誤りのない型付き HIR を、RC の命令のない Core IR にする。`captures` は空のままでよく、パイプラインが埋める
 /// (docs/spec/core-ir.md のパスの表)。
 pub(crate) fn translate(module: &Module, typed: &TypedModule) -> Program {
-    let mut builder = ProgramBuilder::new(typed);
+    let mut builder = ProgramBuilder::new(module, typed);
     let mut indices = ArenaMap::default();
-    for (id, function) in module.functions.iter() {
+    // intrinsic は本体を持たず、呼び出しの位置で命令にするか、包む関数を作る (`program.rs` の `wrapper`)
+    let defined = || {
+        module
+            .functions
+            .iter()
+            .filter(|(_, function)| !function.intrinsic)
+    };
+    for (id, function) in defined() {
         let body = function
             .body
             .as_ref()
             .expect("a program without errors has an equation for every function");
         indices.insert(id, builder.reserve(body.params.len()));
     }
-    for (id, function) in module.functions.iter() {
+    for (id, function) in defined() {
         let body = function.body.as_ref().expect("checked above");
         let signature = &typed
             .signatures

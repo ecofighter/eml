@@ -10,5 +10,7 @@ eml_types.workspace = true
 la-arena.workspace = true
 
 [dev-dependencies]
+eml_diagnostics.workspace = true
+eml_syntax.workspace = true
 eml_test_support = { workspace = true, features = ["core"] }
 insta.workspace = true

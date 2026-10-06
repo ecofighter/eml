@@ -1,16 +1,16 @@
 //! 式ごとの変換と、呼び出しの引数の個数による場合分け (docs/spec/core-ir.md の eval/apply)。
 
 use eml_hir::EvalStep;
-use eml_hir::builtin::Builtin;
 use eml_hir::{
-    Closure, ConstructorId, ExprId, ExprKind, Literal, OperationId, PatId, Res, TypeDefId,
+    Closure, ConstructorId, ExprId, ExprKind, FunctionId, Literal, OperationId, PatId, Res,
+    TypeDefId,
 };
 use eml_types::Type;
 
 use crate::{Atom, Call, FnIdx, Rhs, TUPLE};
 
 use super::program::{effect_index, perform_call};
-use super::types::{Lowering, equality_op, lowering, split_arrows};
+use super::types::{Lowering, equality_op, intrinsic, split_arrows};
 use super::{Binding, Bindings, Exit, FnLowering};
 
 impl FnLowering<'_> {
@@ -65,22 +65,25 @@ impl FnLowering<'_> {
         self.bind(out, "t", ty, Rhs::call(Call::Apply(function, rest)))
     }
 
-    fn call_builtin(
+    fn call_intrinsic(
         &mut self,
-        builtin: Builtin,
+        function: FunctionId,
         callee: ExprId,
         callee_ty: &Type,
         mut args: Vec<Atom>,
         ty: &Type,
         out: &mut Bindings,
     ) -> Atom {
-        let arity = builtin.arity();
+        let intrinsic_fn = &self.module.functions[function];
+        let arity = intrinsic_fn.arity().expect("an intrinsic has a signature");
         if args.len() < arity {
-            let wrapper = self.program.wrapper(self.module, builtin);
+            let wrapper = self.program.wrapper(self.module, function);
             return self.closure(wrapper, args, ty, out);
         }
         let rest = args.split_off(arity);
-        let rhs = match lowering(builtin) {
+        let lowering = intrinsic(&intrinsic_fn.name)
+            .expect("every intrinsic reaching Core IR has an implementation");
+        let rhs = match lowering {
             Lowering::Prim(op) => Rhs::Prim(op, args),
             Lowering::Io(op) => Rhs::Io(op, args),
             Lowering::Equality { negated } => {
@@ -93,7 +96,7 @@ impl FnLowering<'_> {
                 Rhs::Prim(equality_op(equality, negated), args)
             }
             Lowering::Compose { .. } => Rhs::call(Call::Direct(
-                self.program.wrapper(self.module, builtin),
+                self.program.wrapper(self.module, function),
                 args,
             )),
         };
@@ -218,12 +221,14 @@ impl FnLowering<'_> {
         out: &mut Bindings,
     ) -> Atom {
         match &self.body.exprs[callee].kind {
+            ExprKind::Path(Res::Function(function))
+                if self.module.functions[*function].intrinsic =>
+            {
+                self.call_intrinsic(*function, callee, callee_ty, args, ty, out)
+            }
             ExprKind::Path(Res::Function(function)) => {
                 let target = self.indices[*function];
                 self.call_known(target, callee_ty, args, ty, out)
-            }
-            ExprKind::Path(Res::Builtin(builtin)) => {
-                self.call_builtin(*builtin, callee, callee_ty, args, ty, out)
             }
             ExprKind::Path(Res::Operation(op)) => self.call_operation(*op, args, ty, out),
             ExprKind::Path(Res::Constructor(ctor)) => self.call_constructor(*ctor, args, ty, out),
@@ -246,8 +251,10 @@ impl FnLowering<'_> {
                 self.bind(out, "s", &ty, Rhs::ConstString(index))
             }
             ExprKind::Path(Res::Local(local)) => self.locals[*local],
-            ExprKind::Path(Res::Builtin(builtin)) => {
-                let wrapper = self.program.wrapper(self.module, *builtin);
+            ExprKind::Path(Res::Function(function))
+                if self.module.functions[*function].intrinsic =>
+            {
+                let wrapper = self.program.wrapper(self.module, *function);
                 let ty = self.ty(id);
                 self.closure(wrapper, Vec::new(), &ty, out)
             }
