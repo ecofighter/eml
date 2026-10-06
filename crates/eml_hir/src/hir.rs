@@ -318,7 +318,13 @@ impl Body {
                         }
                     }
                 }
-                ExprKind::Handle { clauses, ret, .. } => {
+                ExprKind::Handle {
+                    body: _,
+                    init: _,
+                    effect: _,
+                    clauses,
+                    ret,
+                } => {
                     for clause in clauses {
                         for &pat in &clause.closure.params {
                             bound.extend(self.pat_bindings(pat));

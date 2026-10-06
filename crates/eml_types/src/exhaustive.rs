@@ -220,7 +220,13 @@ impl<'a> Exhaustive<'a> {
                     }
                 }
                 // 節の引数もラムダの引数と同じく、値を1つ受けるだけの束縛である
-                ExprKind::Handle { clauses, ret, .. } => {
+                ExprKind::Handle {
+                    body: _,
+                    init: _,
+                    effect: _,
+                    clauses,
+                    ret,
+                } => {
                     for clause in clauses {
                         for &pat in &clause.closure.params {
                             self.irrefutable(pat, PARAMETER_LABEL);
