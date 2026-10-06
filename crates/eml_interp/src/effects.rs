@@ -1,0 +1,96 @@
+use eml_runtime::{Frame, ObjRef, Payload, Value};
+
+use crate::error::Fault;
+use crate::machine::{Machine, Step};
+
+impl Machine<'_> {
+    /// 継続の連結リストを先頭から読み、同じエフェクトの一番内側の handler フレームを探す (docs/spec/core-ir.md)。
+    pub(crate) fn find_handler(&self, effect: u32) -> Result<ObjRef, Fault> {
+        let mut current = self.cont;
+        loop {
+            let Payload::Frame(frame) = self.heap.get(current).map_err(Fault::Heap)? else {
+                return Err(Fault::Internal("the continuation is not a frame"));
+            };
+            current = match frame {
+                Frame::Handler { effect: other, .. } if *other == effect => return Ok(current),
+                Frame::Handler { next, .. } => {
+                    next.ok_or(Fault::Internal("a detached handler is in the continuation"))?
+                }
+                Frame::Return { next, .. } | Frame::Apply { next, .. } => *next,
+                Frame::Io => return Err(Fault::Internal("an operation without a handler")),
+            };
+        }
+    }
+
+    /// handler フレームの外側を切り離して機械の継続に戻し、節を呼ぶ。先頭から handler フレームまでの区間が継続で、
+    /// `once` の操作はそれを継続オブジェクトにして `k` として渡す。`never` の操作は再開しないので、区間をここで
+    /// 解放する。区間のフレームが退避した値も、子をたどる解放で1回ずつ解放される (docs/spec/core-ir.md)。
+    pub(crate) fn perform(
+        &mut self,
+        effect: u32,
+        op: u32,
+        mut args: Vec<Value>,
+    ) -> Result<Step, Fault> {
+        let handler = self.find_handler(effect)?;
+        let Payload::Frame(Frame::Handler { clauses, next, .. }) =
+            self.heap.get_mut(handler).map_err(Fault::Heap)?
+        else {
+            return Err(Fault::Internal("a handler that is not a handler frame"));
+        };
+        let clause = *clauses
+            .get(op as usize)
+            .ok_or(Fault::Internal("an operation without a clause"))?;
+        let outside = next
+            .take()
+            .ok_or(Fault::Internal("performing through a detached handler"))?;
+        // 節のクロージャは handler フレームにも残るので、呼ぶ分の参照を足す
+        if let Value::Obj(obj) = clause {
+            self.heap.dup(obj).map_err(Fault::Heap)?;
+        }
+        let top = std::mem::replace(&mut self.cont, outside);
+        let resumable = self
+            .program
+            .effects
+            .get(effect as usize)
+            .and_then(|info| info.operations.get(op as usize))
+            .ok_or(Fault::Internal("an unknown operation"))?
+            .resumable;
+        if resumable {
+            let k = self.heap.alloc(Payload::Continuation { top, handler });
+            args.push(Value::Obj(k));
+        } else {
+            self.heap.decref(top).map_err(Fault::Heap)?;
+        }
+        self.apply_and_continue(clause, args)
+    }
+
+    /// 継続オブジェクトの handler フレームの外側に今の継続をつなぎ、先頭のフレームに値を返す。末尾でない `resume`
+    /// では、その前に呼び出しのフレームが積まれている。`multi` の継続をもう一度使うなら継続は共有されていて、
+    /// `take_or_copy` が区間を写す。どちらの場合も区間のフレームは一意なので、handler フレームを書き換えてよい
+    /// (docs/spec/core-ir.md)。
+    pub(crate) fn resume(&mut self, k: Value, value: Value) -> Result<Step, Fault> {
+        let Value::Obj(obj) = k else {
+            return Err(Fault::Internal(
+                "resuming a value that is not a continuation",
+            ));
+        };
+        let Payload::Continuation { top, handler } =
+            self.heap.take_or_copy(obj).map_err(Fault::Heap)?
+        else {
+            return Err(Fault::Internal(
+                "resuming an object that is not a continuation",
+            ));
+        };
+        let current = self.cont;
+        match self.heap.get_mut(handler).map_err(Fault::Heap)? {
+            Payload::Frame(Frame::Handler { next, .. }) => *next = Some(current),
+            _ => {
+                return Err(Fault::Internal(
+                    "a continuation whose handler is not a handler frame",
+                ));
+            }
+        }
+        self.cont = top;
+        self.ret(value)
+    }
+}

@@ -1,0 +1,414 @@
+use std::cmp::Ordering;
+use std::path::Path;
+
+use eml_core_ir::{Atom, CExpr, CExprId, Call, FnIdx, Program, Rhs, VarId};
+use eml_runtime::{Closure, Frame, Heap, ObjRef, OutputSink, Payload, Value};
+
+use crate::error::{Fault, RuntimeError};
+
+/// 関数値の適用の結果。関数に入ったか、値ができたか (足りない引数のクロージャ)。
+pub(crate) enum Applied {
+    Entered,
+    Value(Value),
+}
+
+/// 1つの命令を実行した後の状態。
+pub(crate) enum Step {
+    Continue,
+    Finished,
+}
+
+/// 呼び出しから戻った後に再開するところと、呼び出しのフレームに退避する変数。
+pub(crate) struct ReturnPoint<'p> {
+    bind: VarId,
+    pub(crate) control: CExprId,
+    saved: &'p [VarId],
+}
+
+/// CEK 機械。制御 (`function` と `control`)、環境 (`slots`)、継続 (`cont`) からなる。
+pub(crate) struct Machine<'p> {
+    pub(crate) program: &'p Program,
+    pub(crate) out: &'p OutputSink,
+    pub(crate) file_root: &'p Path,
+    pub(crate) heap: Heap,
+    pub(crate) function: FnIdx,
+    control: CExprId,
+    /// 今の関数の環境。読み出しはスロットを書き換えない。参照の所有は Core IR の命令 (使用、`dup`、`decref`) が表し、
+    /// verifier がその釣り合いを確かめる (docs/spec/core-ir.md)。
+    pub(crate) slots: Vec<Option<Value>>,
+    /// 継続の先頭のフレーム。最下部には常に `Frame::Io` がある。
+    pub(crate) cont: ObjRef,
+}
+
+impl<'p> Machine<'p> {
+    pub(crate) fn new(program: &'p Program, out: &'p OutputSink, file_root: &'p Path) -> Self {
+        let mut heap = Heap::new();
+        let cont = heap.alloc(Payload::Frame(Frame::Io));
+        let entry = program.function(program.entry);
+        Machine {
+            program,
+            out,
+            file_root,
+            heap,
+            function: program.entry,
+            control: entry.body,
+            slots: vec![None; entry.vars.len()],
+            cont,
+        }
+    }
+
+    pub(crate) fn run(&mut self) -> Result<(), RuntimeError> {
+        loop {
+            match self.step() {
+                Ok(Step::Finished) => return Ok(()),
+                Ok(Step::Continue) => {}
+                Err(fault) => {
+                    let function = self.program.function(self.function).name.clone();
+                    return Err(RuntimeError::Fault { fault, function });
+                }
+            }
+        }
+    }
+
+    /// 1つの命令を実行する。
+    pub(crate) fn step(&mut self) -> Result<Step, Fault> {
+        let program = self.program;
+        match program.function(self.function).expr(self.control) {
+            CExpr::Let { var, rhs, body } => return self.bind(*var, rhs, *body),
+            CExpr::Switch { scrutinee, arms } => {
+                // scrutinee は move で受け取る。共有された値は `take_or_copy` がフィールドを複製して箱を手放すので、
+                // どちらの場合も枝はフィールドの参照を1つずつ所有して始まる (docs/spec/core-ir.md)
+                let (tag, fields) = match self.atom(scrutinee)? {
+                    Value::Tag(tag) => (tag, Vec::new()),
+                    Value::Obj(obj) => match self.heap.take_or_copy(obj).map_err(Fault::Heap)? {
+                        Payload::Data { tag, fields } => (tag, fields),
+                        _ => return Err(Fault::Internal("a switch on an object that is not data")),
+                    },
+                    _ => return Err(Fault::Internal("a switch on a value that is not a tag")),
+                };
+                let arm = arms
+                    .iter()
+                    .find(|arm| arm.tag == tag)
+                    .ok_or(Fault::Internal("a switch without a matching arm"))?;
+                if arm.fields.len() != fields.len() {
+                    return Err(Fault::Internal(
+                        "a switch arm binds a different number of fields than the value has",
+                    ));
+                }
+                for (&field, value) in arm.fields.iter().zip(fields) {
+                    self.slots[field.0 as usize] = Some(value);
+                }
+                self.control = arm.body;
+            }
+            CExpr::Return(atom) => {
+                let value = self.atom(atom)?;
+                return self.ret(value);
+            }
+            // 呼び出し元のフレームを積まない。verifier が、この時点で所有している参照が残っていないことを保証するので、
+            // 今の環境はそのまま捨ててよい (docs/spec/core-ir.md)
+            CExpr::TailCall(call) => return self.call(call, None),
+            CExpr::Join { scope, .. } => self.control = *scope,
+            CExpr::Jump { join, args } => {
+                // join point は同じ関数の中にあるので、環境をそのまま使い、フレームを積まない
+                let values = self.atoms(args)?;
+                let (params, body) = program.function(self.function).join(*join);
+                for (param, value) in params.iter().zip(values) {
+                    self.slots[param.0 as usize] = Some(value);
+                }
+                self.control = body;
+            }
+            CExpr::Dup { var, body } => {
+                if let Value::Obj(obj) = self.read(*var)? {
+                    self.heap.dup(obj).map_err(Fault::Heap)?;
+                }
+                self.control = *body;
+            }
+            CExpr::Decref { var, body } => {
+                if let Value::Obj(obj) = self.read(*var)? {
+                    self.heap.decref(obj).map_err(Fault::Heap)?;
+                }
+                self.control = *body;
+            }
+        }
+        Ok(Step::Continue)
+    }
+
+    pub(crate) fn bind(&mut self, var: VarId, rhs: &'p Rhs, body: CExprId) -> Result<Step, Fault> {
+        let value = match rhs {
+            Rhs::Atom(atom) => self.atom(atom)?,
+            Rhs::ConstString(index) => {
+                let text = self.program.strings[*index as usize].clone();
+                Value::Obj(self.heap.alloc(Payload::Str(text)))
+            }
+            Rhs::Prim(op, args) => {
+                let args = self.atoms(args)?;
+                self.prim(*op, &args)?
+            }
+            Rhs::Io(op, args) => {
+                let args = self.atoms(args)?;
+                self.io(*op, &args)?
+            }
+            // 所有している参照を1つ手放す。継続も RC が1のオブジェクトなので、これで解放される (docs/spec/core-ir.md)
+            Rhs::Drop(atom) => {
+                if let Value::Obj(obj) = self.atom(atom)? {
+                    self.heap.decref(obj).map_err(Fault::Heap)?;
+                }
+                Value::Unit
+            }
+            Rhs::Call { call, saved } => {
+                let ret = ReturnPoint {
+                    bind: var,
+                    control: body,
+                    saved,
+                };
+                return self.call(call, Some(ret));
+            }
+            Rhs::MakeClosure(function, args) => {
+                let args = self.atoms(args)?;
+                let closure = Closure {
+                    function: function.0,
+                    args,
+                };
+                Value::Obj(self.heap.alloc(Payload::Closure(closure)))
+            }
+            Rhs::Con { tag, args } => {
+                let fields = self.atoms(args)?;
+                Value::Obj(self.heap.alloc(Payload::Data { tag: *tag, fields }))
+            }
+        };
+        self.slots[var.0 as usize] = Some(value);
+        self.control = body;
+        Ok(Step::Continue)
+    }
+
+    /// 呼び出す。`ret` は戻った値を受ける変数と再開する位置で、`None` ならフレームを積まない (末尾呼び出し)。
+    /// 引数はフレームを積んだ後に読む。`push_frame` は環境のスロットを読むだけで書き換えないので、順序は結果に影響しない。
+    pub(crate) fn call(
+        &mut self,
+        call: &Call,
+        ret: Option<ReturnPoint<'p>>,
+    ) -> Result<Step, Fault> {
+        if let Some(ret) = ret {
+            self.push_frame(ret)?;
+        }
+        match call {
+            Call::Direct(callee, args) => {
+                let args = self.atoms(args)?;
+                self.enter(*callee, args);
+                Ok(Step::Continue)
+            }
+            Call::Apply(callee, args) => {
+                let callee = self.atom(callee)?;
+                let args = self.atoms(args)?;
+                self.apply_and_continue(callee, args)
+            }
+            Call::Handle {
+                effect,
+                body,
+                clauses,
+                ret,
+            } => {
+                let body = self.atom(body)?;
+                let clauses = self.atoms(clauses)?;
+                let ret = ret.map(|ret| self.atom(&ret)).transpose()?;
+                let frame = Frame::Handler {
+                    effect: *effect,
+                    clauses,
+                    ret,
+                    next: Some(self.cont),
+                };
+                self.cont = self.heap.alloc(Payload::Frame(frame));
+                self.apply_and_continue(body, vec![Value::Unit])
+            }
+            Call::Perform { effect, op, args } => {
+                let args = self.atoms(args)?;
+                self.perform(*effect, *op, args)
+            }
+            Call::Resume { k, arg } => {
+                let k = self.atom(k)?;
+                let arg = self.atom(arg)?;
+                self.resume(k, arg)
+            }
+        }
+    }
+    /// 関数値を適用する。関数に入らずに値ができたら (足りない引数のクロージャ)、その値を継続に返す。
+    pub(crate) fn apply_and_continue(
+        &mut self,
+        callee: Value,
+        args: Vec<Value>,
+    ) -> Result<Step, Fault> {
+        match self.apply(callee, args)? {
+            Applied::Entered => Ok(Step::Continue),
+            Applied::Value(value) => self.ret(value),
+        }
+    }
+
+    pub(crate) fn enter(&mut self, callee: FnIdx, args: Vec<Value>) {
+        let target = self.program.function(callee);
+        let mut slots = vec![None; target.vars.len()];
+        for (param, value) in target.params.iter().zip(args) {
+            slots[param.0 as usize] = Some(value);
+        }
+        self.slots = slots;
+        self.function = callee;
+        self.control = target.body;
+    }
+
+    /// 関数値を引数に適用する (docs/spec/core-ir.md の eval/apply)。引数の個数が揃えば関数に入り、足りなければ
+    /// 引数を足したクロージャを値にし、余れば余りを持つフレームを積んでから関数に入る。
+    pub(crate) fn apply(&mut self, callee: Value, mut args: Vec<Value>) -> Result<Applied, Fault> {
+        let Value::Obj(obj) = callee else {
+            return Err(Fault::Internal("applying a value that is not a closure"));
+        };
+        let closure = self.take_closure(obj)?;
+        let function = FnIdx(closure.function);
+        let mut all = closure.args;
+        all.append(&mut args);
+        let arity = self.program.function(function).params.len();
+        match all.len().cmp(&arity) {
+            Ordering::Equal => {
+                self.enter(function, all);
+                Ok(Applied::Entered)
+            }
+            Ordering::Less => {
+                let closure = Closure {
+                    function: closure.function,
+                    args: all,
+                };
+                let value = self.heap.alloc(Payload::Closure(closure));
+                Ok(Applied::Value(Value::Obj(value)))
+            }
+            Ordering::Greater => {
+                let rest = all.split_off(arity);
+                let frame = Frame::Apply {
+                    args: rest,
+                    next: self.cont,
+                };
+                self.cont = self.heap.alloc(Payload::Frame(frame));
+                self.enter(function, all);
+                Ok(Applied::Entered)
+            }
+        }
+    }
+
+    /// 呼び出しはクロージャの所有権を受け取る。共有されていれば、ランタイムが中身を写して子の参照を数え直す
+    /// (docs/spec/runtime.md)。
+    pub(crate) fn take_closure(&mut self, obj: ObjRef) -> Result<Closure, Fault> {
+        match self.heap.take_or_copy(obj).map_err(Fault::Heap)? {
+            Payload::Closure(closure) => Ok(closure),
+            _ => Err(Fault::Internal("applying an object that is not a closure")),
+        }
+    }
+
+    /// 呼び出しの後で使う変数だけをフレームに退避する。フレームは、ちょうど所有している参照だけを持つ
+    /// (docs/spec/core-ir.md)。
+    pub(crate) fn push_frame(&mut self, ret: ReturnPoint<'p>) -> Result<(), Fault> {
+        let saved = ret
+            .saved
+            .iter()
+            .map(|&var| Ok((var.0, self.read(var)?)))
+            .collect::<Result<Vec<_>, Fault>>()?;
+        let frame = Frame::Return {
+            function: self.function.0,
+            resume: ret.control.0,
+            bind: ret.bind.0,
+            saved,
+            next: self.cont,
+        };
+        self.cont = self.heap.alloc(Payload::Frame(frame));
+        Ok(())
+    }
+
+    /// 継続の先頭のフレームに値を返す。最下部の `Frame::Io` に届いたら、プログラムが終わる。
+    /// 余った引数のフレームが続く間はループで適用し、Rust の再帰を使わない。
+    pub(crate) fn ret(&mut self, mut value: Value) -> Result<Step, Fault> {
+        loop {
+            // フレームはつねに一意である。共有されうるのは継続オブジェクトだけで、再開するときに区間を写す (docs/spec/runtime.md)
+            let Payload::Frame(frame) = self.heap.take(self.cont).map_err(Fault::Heap)? else {
+                return Err(Fault::Internal("the continuation is not a frame"));
+            };
+            match frame {
+                Frame::Apply { args, next } => {
+                    self.cont = next;
+                    match self.apply(value, args)? {
+                        Applied::Entered => return Ok(Step::Continue),
+                        Applied::Value(result) => value = result,
+                    }
+                }
+                Frame::Return {
+                    function,
+                    resume: control,
+                    bind,
+                    saved,
+                    next,
+                } => {
+                    let function = FnIdx(function);
+                    let mut slots = vec![None; self.program.function(function).vars.len()];
+                    for (var, saved) in saved {
+                        slots[var as usize] = Some(saved);
+                    }
+                    slots[bind as usize] = Some(value);
+                    self.slots = slots;
+                    self.function = function;
+                    self.control = CExprId(control);
+                    self.cont = next;
+                    return Ok(Step::Continue);
+                }
+                // 本体が値を返したので handler を外す。節のクロージャはもう呼ばない
+                Frame::Handler {
+                    clauses,
+                    ret: on_return,
+                    next,
+                    ..
+                } => {
+                    for clause in clauses {
+                        if let Value::Obj(obj) = clause {
+                            self.heap.decref(obj).map_err(Fault::Heap)?;
+                        }
+                    }
+                    self.cont =
+                        next.ok_or(Fault::Internal("a detached handler received a value"))?;
+                    if let Some(on_return) = on_return {
+                        match self.apply(on_return, vec![value])? {
+                            Applied::Entered => return Ok(Step::Continue),
+                            Applied::Value(result) => value = result,
+                        }
+                    }
+                }
+                Frame::Io => {
+                    if let Value::Obj(obj) = value {
+                        self.heap.decref(obj).map_err(Fault::Heap)?;
+                    }
+                    return Ok(Step::Finished);
+                }
+            }
+        }
+    }
+
+    /// 変数の値。読み出しはスロットを書き換えない。ヒープの値の所有権を渡すかどうかは Core IR の命令が決める
+    /// (docs/spec/core-ir.md)。
+    pub(crate) fn read(&self, var: VarId) -> Result<Value, Fault> {
+        self.slots[var.0 as usize].ok_or(Fault::Internal("a variable read before it was bound"))
+    }
+
+    pub(crate) fn atom(&self, atom: &Atom) -> Result<Value, Fault> {
+        Ok(match *atom {
+            Atom::Var(var) => self.read(var)?,
+            Atom::Int(n) => Value::Int(n),
+            Atom::Unit => Value::Unit,
+            Atom::Tag(tag) => Value::Tag(tag),
+        })
+    }
+
+    pub(crate) fn atoms(&self, atoms: &[Atom]) -> Result<Vec<Value>, Fault> {
+        atoms.iter().map(|atom| self.atom(atom)).collect()
+    }
+
+    pub(crate) fn check_leaks(&self) -> Result<(), RuntimeError> {
+        let live = self.heap.live_objects();
+        if live.is_empty() {
+            return Ok(());
+        }
+        Err(RuntimeError::Leak(live))
+    }
+}
