@@ -12,7 +12,7 @@ use crate::ty::{Linearity, Multiplicity};
 pub(crate) struct Solution {
     pub schemes: Vec<KindScheme>,
     /// 違反のうち `reportable` が報告すると決めたものの由来。由来を付け忘れた違反は、release ビルドでは
-    /// `unattributed_origin` の由来で入る。並べ替えと重複除去は、呼ぶ側がモジュール全体でまとめて行う。
+    /// `unattributed_origin` の由来で入る。並べ替えと重複除去は、呼ぶ側がプログラム全体でまとめて行う。
     pub violated: Vec<KindOrigin>,
 }
 

@@ -214,7 +214,7 @@ struct RigidInfo {
 }
 
 pub(crate) struct Table<'c> {
-    /// モジュール全体の情報。表ごとに作り直さず借りる。
+    /// プログラム全体の情報。表ごとに作り直さず借りる。
     context: &'c Context,
     shapes: Vec<TyShape>,
     ty_vars: Vec<TyVarInfo>,

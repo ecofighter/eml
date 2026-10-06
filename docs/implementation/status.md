@@ -1,6 +1,6 @@
 # 実装の現在地
 
-位置づけ: 手引き。2026-10-06 時点のリポジトリの状態を書いている。
+位置づけ: 手引き。2026-10-07 時点のリポジトリの状態を書いている。
 
 マイルストーン1 の目標と範囲、構文と名前解決以降の実装段階、各 crate の実装状況、次の作業の注意点、決定済みで実装待ちの方針、完了した作業をまとめる。実装が進んだら、この文書を更新する。
 
@@ -98,7 +98,7 @@ R5 は段階6a の後、段階6b の前に行う。段階6a はほぼ HIR の脱
 | R4 | Core IR のパスの構成 | パスの順番を持つ `pipeline.rs` と `lower_until`、パスの間の `captures`、verifier の2つの度合い (`verify_scopes`)、`translate/` への分割、パスごとのテスト | 完了 |
 | R5 | 型検査の SCC ごとの独立 | `Context`、閉じた形 `Shape`、関数ごとの本体の検査 (段1) と SCC ごとの Kind の解決 (段2)、ワークリストと強連結成分による残す制約、持ち越しの制約の組ごとの重複除去、`Type` の線形性を除くこと。`eml_types` の中で済ませる | 完了 |
 | R6 | 6b の前の継ぎ目 | 評価の順 (ML 式、`call_steps`)、型の走査、Kind の由来、handler の節の型、診断の順 (R6a)。Core IR の visitor と `FnBuilder`、`compact` と木の検査、末尾呼び出しの T、テキストの IR と `parse`、`eml_interp` の分割 (R6b) | 完了 |
-| R7 | 単一ファイルの前提をなくす | R7a で名前と経路のノードと import の CST を足した。R7b で、組み込みを Prelude の intrinsic の関数にし、item の ID をプログラム全体で一意にして Prelude を普通のモジュールにし、名前解決を3段に分けた。R7c で、型検査の出力を宣言ごとの `TypedProgram` にした。R7d で、`IO` と演算子を Prelude に移し、Core IR を入口から届く関数だけにした。R7e で、呼び出しの飽和を `saturate` にまとめ、`Switch` を平らな形にした。R7f で、単一ファイルの前提の記述を `docs/implementation/architecture.md` に移した | 完了 |
+| R7 | 単一ファイルの前提をなくす | R7a で名前と経路のノードと import の CST を足した。R7b で、組み込みを Prelude の intrinsic の関数にし、item の ID をプログラム全体で一意にして Prelude を普通のモジュールにし、名前解決を3段に分けた。R7c で、型検査の出力を宣言ごとの `TypedProgram` にした。R7d で、`IO` と演算子を Prelude に移し、Core IR を入口から届く関数だけにした。R7e で、呼び出しの飽和を `saturate` にまとめ、`Switch` を平らな形にした。R7f で、item を単位にした方式と採らなかった形を `docs/implementation/architecture.md` に移し、architecture.md を簡素にした | 完了 |
 
 ### テストを変えないために曲げた箇所
 
@@ -161,7 +161,7 @@ R6b は、`CExpr`、`Rhs`、`Call` の visitor と、関数の組み立ての口
 
 ### R7 で直す項目
 
-R7 で済んだ。item の ID をプログラム全体で一意にし、HIR を `Program` と `Module` に分け、Prelude に本物の `FileId` を与えた。名前解決は item の収集、モジュールごとのスコープ表、item ごとの変換の3段になり、重複の扱いは3つの規則に集まった。組み込みは Prelude の intrinsic の関数になり、型検査の出力は損失のないモジュールのインタフェースになった。CST は名前と経路のノードを持ち、Core IR の `Switch` は default の枝とリテラルの case を持つ平らな形になった。確かめた不具合のうち、操作と同じ名前の関数による E1001 の連鎖と、`<M.E>` が E1002 になる誤りは直した。
+R7 で済んだ。item の ID をプログラム全体で一意にし、HIR を `Program` と `Module` に分け、Prelude に本物の `FileId` を与えた。名前解決は item の収集、モジュールごとのスコープ表、item ごとの変換の3段になり、重複の扱いは3つの規則に集まった。組み込みは Prelude の intrinsic の関数になり、型検査の出力は宣言ごとの損失のない結果 (`TypedProgram`、`DeclType`) になった。CST は名前と経路のノードを持ち、Core IR の `Switch` は default の枝とリテラルの case を持つ平らな形になった。確かめた不具合は3つとも直した。操作と同じ名前の関数による E1001 の連鎖、`<M.E>` が E1002 になる誤り、`::` のパターンが E1001 になる誤りである。
 
 S2 に回したものは、import をたどるローダ、複数ファイルの fixture、ディレクトリを1件とする UI テスト、import の循環を許すかどうかとモジュールの根の決定で、いずれも上の S2 の行にある。`::` の fixity と、補間・コマンドリテラル・レコード・リストの CST も S2 に残る。
 
@@ -243,4 +243,4 @@ S2 に回したものは、import をたどるローダ、複数ファイルの 
 | 縦の貫通 段階6a | 複数の等式を引数のタプルに対する `match` に脱糖し、E1018〜E1020 を足した。演算子の定義と fixity の表 (標準の演算子の fixity は Prelude の宣言) を通し、E1021 と E1022 を足した。セクションと演算子の参照を E1023 つきで、`use` を E1024 つきで、`let ... in` を脱糖した。パターンの型の明示をすべての `apat` の位置で書けるようにし、ラムダと handler の節の引数の並びの重複束縛を E1017 にした。等式の網羅性を E4002 と E4005 で報告し、等式の検査で E2002 が連鎖する誤りを直した。`simplify` に F (join point の外出し)、K1 (分かっているコンストラクタの `switch`)、B2 のフィールドを持つコンストラクタへの拡張、DCE を足し、等式の脱糖で作るタプルの確保を消すようにした |
 | リファクタリング R6 | 評価の順を `eml_hir::call_steps` の1か所にまとめ (`(f 1) (g ())` は `f` から評価する)、型の走査と Kind の由来をそろえ、診断を1回だけ並べるようにした (R6a)。Core IR に visitor と `FnBuilder` を足し、`compact` と木の検査、末尾呼び出しの T、テキストの IR と `parse`、`eml_interp` の分割を入れた (R6b) |
 | 縦の貫通 段階6b | パラメータ付き handler (`handle ... from ... with`) を、脱糖せずに状態を handler フレームに持つ形で HIR からインタプリタまで通した。6b-1 で、HIR のラムダと handler の各部を `Closure` にそろえ、Core IR とランタイムに `Atom::Fn`、状態をつねに持つ `Handle` と `Resume`、`Frame::Handler` の `Link`、`perform` の `resumable` を入れた。6b-2 で、`from` と3引数の `resume`、継続の型の状態の欄と E2007、状態の線形性と持ち越し、題名を持つ fix を入れた |
-| リファクタリング R7 | コンパイラが単一ファイルを前提にしないようにした。item の ID をプログラム全体で一意にして Prelude を普通のモジュールにし、名前解決を3段に分け、組み込みと `IO`、演算子を Prelude の定義にした。型検査の出力を宣言ごとのモジュールのインタフェースにし、CST に名前と経路のノードを足し、Core IR の `Switch` を平らな形にして呼び出しの飽和を `saturate` にまとめた。import をたどるローダは S2 で作る |
+| リファクタリング R7 | コンパイラが単一ファイルを前提にしないようにした。item の ID をプログラム全体で一意にして Prelude を普通のモジュールにし、名前解決を3段に分け、組み込みと `IO`、演算子を Prelude の定義にした。型検査の出力を宣言ごとの損失のない結果 (`TypedProgram`、`DeclType`) にし、CST に名前と経路のノードを足し、Core IR の `Switch` を平らな形にして呼び出しの飽和を `saturate` にまとめた。import をたどるローダは S2 で作る |
