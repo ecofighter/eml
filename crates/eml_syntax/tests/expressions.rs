@@ -499,8 +499,8 @@ fn implicitly_closed_bracket_after_a_semicolon_does_not_swallow_the_file() {
 }
 
 #[test]
-fn trailing_lambda_with_a_block_body() {
-    let text = lines(&["f = each items fn item ->", "  println item"]);
+fn lambda_in_parentheses_with_a_block_body() {
+    let text = lines(&["f = each items (fn item ->", "  println item)"]);
     insta::assert_snapshot!(shape(&text), @r#"
     SOURCE_FILE
       EQUATION
@@ -516,23 +516,26 @@ fn trailing_lambda_with_a_block_body() {
             PATH
               NAME_REF
                 LIDENT "items"
-          LAMBDA_EXPR
-            FN_KW "fn"
-            BIND_PAT
-              NAME
-                LIDENT "item"
-            THIN_ARROW "->"
-            BLOCK
-              EXPR_STMT
-                APP_EXPR
-                  PATH_EXPR
-                    PATH
-                      NAME_REF
-                        LIDENT "println"
-                  PATH_EXPR
-                    PATH
-                      NAME_REF
-                        LIDENT "item"
+          PAREN_EXPR
+            L_PAREN "("
+            LAMBDA_EXPR
+              FN_KW "fn"
+              BIND_PAT
+                NAME
+                  LIDENT "item"
+              THIN_ARROW "->"
+              BLOCK
+                EXPR_STMT
+                  APP_EXPR
+                    PATH_EXPR
+                      PATH
+                        NAME_REF
+                          LIDENT "println"
+                    PATH_EXPR
+                      PATH
+                        NAME_REF
+                          LIDENT "item"
+            R_PAREN ")"
     "#);
 }
 
@@ -588,40 +591,54 @@ fn lambda_parameters() {
 }
 
 #[test]
-fn lambda_as_an_operand() {
-    insta::assert_snapshot!(shape("h = xs |> each fn l -> println l"), @r#"
-    SOURCE_FILE
-      EQUATION
-        NAME
-          LIDENT "h"
-        EQ "="
-        OP_SEQ
-          PATH_EXPR
-            PATH
-              NAME_REF
-                LIDENT "xs"
-          OP "|>"
-          APP_EXPR
-            PATH_EXPR
-              PATH
-                NAME_REF
-                  LIDENT "each"
-            LAMBDA_EXPR
-              FN_KW "fn"
-              BIND_PAT
-                NAME
-                  LIDENT "l"
-              THIN_ARROW "->"
-              APP_EXPR
-                PATH_EXPR
-                  PATH
-                    NAME_REF
-                      LIDENT "println"
-                PATH_EXPR
-                  PATH
-                    NAME_REF
-                      LIDENT "l"
-    "#);
+fn lambda_must_be_parenthesized_as_an_argument_or_an_operand() {
+    assert_eq!(
+        diagnostics("f = g fn x -> x"),
+        ["E0012 1:7 `fn` expression must be parenthesized here"]
+    );
+    assert_eq!(
+        diagnostics("h = xs |> each fn l -> println l"),
+        ["E0012 1:16 `fn` expression must be parenthesized here"]
+    );
+    assert_eq!(
+        diagnostics("f = 1 + fn x -> x"),
+        ["E0012 1:9 `fn` expression must be parenthesized here"]
+    );
+    assert_eq!(
+        diagnostics("f = - fn x -> x"),
+        ["E0012 1:7 `fn` expression must be parenthesized here"]
+    );
+}
+
+#[test]
+fn old_trailing_lambda_reports_one_error() {
+    let text = lines(&["f = each items fn item ->", "  println item"]);
+    assert_eq!(
+        diagnostics(&text),
+        ["E0012 1:16 `fn` expression must be parenthesized here"]
+    );
+}
+
+#[test]
+fn lambda_in_a_tuple_and_an_annotation() {
+    assert_eq!(
+        diagnostics("f = ((fn x -> x, 1), (fn y -> y : Int -> Int))"),
+        Vec::<String>::new()
+    );
+}
+
+#[test]
+fn lambda_closed_on_its_own_line() {
+    let text = lines(&["f =", "  each items (fn item ->", "    println item", "  )"]);
+    assert_eq!(diagnostics(&text), Vec::<String>::new());
+}
+
+#[test]
+fn lambdas_in_if_branches() {
+    assert_eq!(
+        diagnostics("f c = if c then fn x -> x else fn y -> y"),
+        Vec::<String>::new()
+    );
 }
 
 #[test]

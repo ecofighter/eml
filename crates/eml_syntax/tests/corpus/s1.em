@@ -73,8 +73,8 @@ main () =
     println "big"
   else
     println (show_int (total : Int))
-  each (Cons 1 Nil) fn x ->
-    println (show_int (x <+> 1)) -- 行末のコメント
+  each (Cons 1 Nil) (fn x ->
+    println (show_int (x <+> 1))) -- 行末のコメント
   let pair = (total, classify total)
   println pair.1
   let r = run_state 0 (fn () -> counter ())

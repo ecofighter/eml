@@ -180,8 +180,8 @@ fn lambdas_bind_their_parameters_only_in_the_body() {
 }
 
 #[test]
-fn a_lambda_can_be_the_last_argument() {
-    let text = "call : Int -> (Int -> Int) -> Int\ncall n f = f n\n\ng : Int -> Int\ng n = call n fn x -> x + 1";
+fn a_lambda_can_be_an_argument() {
+    let text = "call : Int -> (Int -> Int) -> Int\ncall n f = f n\n\ng : Int -> Int\ng n = call n (fn x -> x + 1)";
     insta::assert_snapshot!(lower_text(text), @r"
     call : Int -> (Int -> Int) -> Int
     call n#0 f#1 = (f#1 n#0)

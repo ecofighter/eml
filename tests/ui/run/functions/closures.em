@@ -1,4 +1,4 @@
--- Lambdas, closures that capture strings, a closure called twice, a last-argument lambda,
+-- Lambdas, closures that capture strings, a closure called twice, a lambda argument with a block body,
 -- an unused polymorphic lambda, and deep recursion through closures.
 each : Int -> (Int -> <e> Unit) -> <e> Unit
 each n f =
@@ -15,7 +15,7 @@ main () =
   let shout = fn s -> s ++ suffix
   println (shout "hey")
   println (shout "you")
-  each 3 fn n ->
-    println ("n = " ++ show_int n)
+  each 3 (fn n ->
+    println ("n = " ++ show_int n))
   let unused = fn x -> x
   println (show_int (count_down 100000 (fn m -> m)))

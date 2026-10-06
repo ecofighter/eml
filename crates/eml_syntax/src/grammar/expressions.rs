@@ -20,9 +20,9 @@ const ATOM_START: TokenSet = TokenSet::new(&[
     ERROR_TOKEN,
 ]);
 
-/// atom ではないので、引数や演算の項の位置では括弧が要る (docs/spec/grammar.md)。
+/// 本体が右へできるだけ伸びる形なので、引数や演算の項の位置では括弧が要る (docs/spec/grammar.md の「文法上の補足」)。
 /// これにより、`match e with` の `e` が `with` の手前で終わる。
-const NEEDS_PARENS: TokenSet = TokenSet::new(&[IF_KW, MATCH_KW, HANDLE_KW, LET_KW]);
+const EXPR_FORMS: TokenSet = TokenSet::new(&[IF_KW, MATCH_KW, HANDLE_KW, FN_KW, LET_KW]);
 
 pub(super) fn body(p: &mut Parser) {
     if p.at(LAYOUT_OPEN) {
@@ -102,6 +102,7 @@ fn expr_inner(p: &mut Parser) -> bool {
         IF_KW => if_expr(p),
         MATCH_KW => match_expr(p),
         HANDLE_KW => handle_expr(p),
+        FN_KW => lambda(p),
         LET_KW => let_expr(p),
         _ => return op_expr(p, false) != OpExpr::Nothing,
     }
@@ -171,10 +172,8 @@ fn op_expr_inner(p: &mut Parser, section: bool) -> OpExpr {
 fn operand(p: &mut Parser) -> bool {
     if p.at_ts(ATOM_START) || p.at(RESUME_KW) || p.at(DROP_KW) {
         app(p);
-    } else if p.at(FN_KW) {
-        lambda(p);
-    } else if p.at_ts(NEEDS_PARENS) {
-        needs_parens(p);
+    } else if p.at_ts(EXPR_FORMS) {
+        misplaced(p);
     } else {
         return false;
     }
@@ -202,13 +201,8 @@ fn app(p: &mut Parser) {
         if p.at_ts(ATOM_START) {
             postfix(p);
             args += 1;
-        } else if p.at(FN_KW) {
-            // 最後の引数のラムダは括弧なしで書け、本体が後ろをすべて取るので、引数の並びはここで終わる。
-            lambda(p);
-            args += 1;
-            break;
-        } else if p.at_ts(NEEDS_PARENS) {
-            needs_parens(p);
+        } else if p.at_ts(EXPR_FORMS) {
+            misplaced(p);
             args += 1;
             break;
         } else {
@@ -328,7 +322,7 @@ fn paren_expr(p: &mut Parser) -> SyntaxKind {
         close_bracket(p, R_PAREN);
         return FIELD_SECTION;
     }
-    let inner = if p.at_ts(NEEDS_PARENS) {
+    let inner = if p.at_ts(EXPR_FORMS) {
         expr(p);
         OpExpr::Expr
     } else {
@@ -366,7 +360,7 @@ fn paren_expr(p: &mut Parser) -> SyntaxKind {
     PAREN_EXPR
 }
 /// E0012 を出した後も、回復のためにそのまま式として読む。
-fn needs_parens(p: &mut Parser) {
+fn misplaced(p: &mut Parser) {
     p.error(
         codes::NEEDS_PARENS,
         format!(
