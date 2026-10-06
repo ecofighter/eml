@@ -3,10 +3,8 @@
 
 use std::collections::{HashMap, HashSet};
 
-use eml_diagnostics::TextRange;
-
 use super::problem::{Bounds, KindProblem, KindScheme, OwnVars};
-use super::{Bound, CarriedInner, Carry, KindOrigin, KindReason, KindVar, Level, Provenance};
+use super::{Bound, CarriedInner, Carry, KindOrigin, KindReason, KindVar, Level, Provenance, Span};
 use crate::Decl;
 use crate::ty::{Linearity, Multiplicity};
 
@@ -69,17 +67,17 @@ fn reportable(provenance: &Provenance) -> Option<KindOrigin> {
         Provenance::Declaration => {
             unreachable!("a constraint from a declaration alone is never violated")
         }
-        Provenance::Unattributed(range) => {
+        Provenance::Unattributed(span) => {
             debug_assert!(false, "a violated Kind constraint has no origin");
-            Some(unattributed_origin(*range))
+            Some(unattributed_origin(*span))
         }
     }
 }
 
 /// 由来を付け忘れた違反を、release ビルドで報告するときの由来。
-fn unattributed_origin(range: TextRange) -> KindOrigin {
+fn unattributed_origin(span: Span) -> KindOrigin {
     KindOrigin {
-        range,
+        span,
         reason: KindReason::Unified,
     }
 }
@@ -214,10 +212,10 @@ impl Merged {
         for carry in &scheme.carries {
             let origin = match origin {
                 Provenance::At(KindOrigin {
-                    range,
+                    span,
                     reason: KindReason::Passed(name),
                 }) => Provenance::At(KindOrigin {
-                    range: *range,
+                    span: *span,
                     reason: KindReason::CarriedThrough {
                         name: name.clone(),
                         inner: carry.origin.origin().map(CarriedInner::of),
@@ -709,10 +707,19 @@ fn lowers<T: Level>(
     out
 }
 
-/// 由来の位置の比べ方。範囲の始まり、終わりの順に比べ、報告する由来のないものは後に置く。
+/// 由来の位置の比べ方。ファイル、範囲の始まり、終わりの順に比べ、報告する由来のないものは後に置く。
 fn earlier(a: &Provenance, b: &Provenance) -> bool {
     match (a.origin(), b.origin()) {
-        (Some(a), Some(b)) => (a.range.start(), a.range.end()) < (b.range.start(), b.range.end()),
+        (Some(a), Some(b)) => {
+            let key = |origin: &KindOrigin| {
+                (
+                    origin.span.file,
+                    origin.span.range.start(),
+                    origin.span.range.end(),
+                )
+            };
+            key(a) < key(b)
+        }
         (Some(_), None) => true,
         (None, _) => false,
     }
@@ -728,6 +735,7 @@ fn bound_key<T: Level>(bound: Bound<T>) -> (u8, usize, Option<T>) {
 
 #[cfg(test)]
 mod tests {
+    use eml_diagnostics::TextRange;
     use eml_hir::FunctionId;
     use eml_hir::ModuleId;
     use la_arena::{Idx, RawIdx};
@@ -745,6 +753,14 @@ mod tests {
             ModuleId::from_raw(RawIdx::from(0)),
             Idx::from_raw(RawIdx::from(index)),
         ))
+    }
+
+    /// 単体テストの由来のファイル。どのテストも1つのファイルの中の位置だけを使う。
+    fn at(start: u32, end: u32) -> Span {
+        Span {
+            file: eml_diagnostics::SourceFiles::new().add("test.em", ""),
+            range: range(start, end),
+        }
     }
 
     fn range(start: u32, end: u32) -> TextRange {
@@ -1060,7 +1076,7 @@ mod tests {
     #[test]
     fn a_reference_to_an_earlier_scc_copies_its_scheme() {
         let inner = KindOrigin {
-            range: range(1, 2),
+            span: at(1, 2),
             reason: KindReason::CarriedAcross {
                 value: CarriedValue::Local {
                     name: "x".to_string(),
@@ -1093,7 +1109,7 @@ mod tests {
             lin: vec![passed],
             mult: vec![],
             origin: Provenance::At(KindOrigin {
-                range: range(5, 9),
+                span: at(5, 9),
                 reason: KindReason::Passed("keep".to_string()),
             }),
         });
@@ -1111,11 +1127,11 @@ mod tests {
                     lin: Bound::Var(KindVar::from_index(0)),
                     mult: Bound::Const(Multiplicity::Multi),
                     origin: Provenance::At(KindOrigin {
-                        range: range(5, 9),
+                        span: at(5, 9),
                         reason: KindReason::CarriedThrough {
                             name: "keep".to_string(),
                             inner: Some(CarriedInner {
-                                range: range(1, 2),
+                                span: at(1, 2),
                                 label: InnerLabel::Kept("x".to_string()),
                             }),
                         },
@@ -1149,16 +1165,16 @@ mod tests {
     fn an_unattributed_violation_is_a_bug() {
         let mut problem = KindProblem::default();
         let x = problem.lin.fresh();
-        let range = TextRange::new(0.into(), 1.into());
+        let span = at(0, 1);
         problem.lin.require(
             Bound::Const(Linearity::Lin),
             Bound::Var(x),
-            Provenance::Unattributed(range),
+            Provenance::Unattributed(span),
         );
         problem.lin.require(
             Bound::Var(x),
             Bound::Const(Linearity::Unr),
-            Provenance::Unattributed(range),
+            Provenance::Unattributed(span),
         );
         solve_scc(&[(function(0), &problem)], &HashMap::new());
     }
@@ -1166,9 +1182,9 @@ mod tests {
     #[test]
     fn the_fallback_for_an_unattributed_violation_points_at_its_range() {
         assert_eq!(
-            unattributed_origin(range(3, 5)),
+            unattributed_origin(at(3, 5)),
             KindOrigin {
-                range: range(3, 5),
+                span: at(3, 5),
                 reason: KindReason::Unified,
             }
         );
@@ -1182,7 +1198,7 @@ mod tests {
         let e = multiplicity.fresh();
         let origin = |start, end| {
             Provenance::At(KindOrigin {
-                range: range(start, end),
+                span: at(start, end),
                 reason: KindReason::Unified,
             })
         };

@@ -2,7 +2,7 @@
 //! (docs/spec/types.md の「推論」)。線形性 (`Unr ≤ Lin`) と多重度 (`Never ≤ Once ≤ Multi`) の両方に使う。
 //! 段1が集める問題とスキームは `problem` に、段2が SCC ごとに解く処理は `solve` にある。
 
-use eml_diagnostics::{TextRange, TextSize};
+use eml_diagnostics::{FileId, TextRange, TextSize};
 use eml_hir::OperationId;
 
 use crate::table::Row;
@@ -43,10 +43,19 @@ impl Level for Multiplicity {
     const BOTTOM: Self = Multiplicity::Never;
 }
 
+/// ファイルを持つ位置。由来は別のモジュールの中を指しうる (docs/superpowers/specs/2026-10-06-refactor-r7-design.md の
+/// 5.2)。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Span {
+    pub file: FileId,
+    pub range: TextRange,
+}
+
 /// Kind の制約の由来。制約が破れたときに E3001〜E3005 が指す場所と理由である (docs/spec/diagnostics.md の「線形性の診断」)。
+/// `reason` の中の位置は、どれも由来を作った本体の中にあり、`span` と同じファイルである。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct KindOrigin {
-    pub range: TextRange,
+    pub span: Span,
     pub reason: KindReason,
 }
 
@@ -61,8 +70,8 @@ pub(crate) enum Provenance {
     /// 宣言の型と、SCC の中の参照の等式から作る制約。それだけでは破れない。具体化するときは参照した位置の由来を付けて
     /// 複写する。
     Declaration,
-    /// 本体の検査の表の既定値で、由来を付け忘れた制約である。値は検査している関数の名前の範囲。
-    Unattributed(TextRange),
+    /// 本体の検査の表の既定値で、由来を付け忘れた制約である。値は検査している関数の名前の位置。
+    Unattributed(Span),
 }
 
 impl Provenance {
@@ -168,9 +177,12 @@ impl KindReason {
             KindReason::CarriedThrough { name, inner } => {
                 let inner = match inner {
                     None => vec![number(0)],
-                    Some(inner) => {
-                        [vec![number(1)], span(inner.range), inner.label.order_key()].concat()
-                    }
+                    Some(inner) => [
+                        vec![number(1), KeyPart::File(inner.span.file)],
+                        span(inner.span.range),
+                        inner.label.order_key(),
+                    ]
+                    .concat(),
                 };
                 (9, [vec![text(name)], inner].concat())
             }
@@ -184,6 +196,7 @@ impl KindReason {
 pub(crate) enum KeyPart {
     Number(u32),
     Text(String),
+    File(FileId),
 }
 
 fn number(value: u32) -> KeyPart {
@@ -300,9 +313,10 @@ impl CallKind {
 
 /// `CarriedThrough` が指す、呼んだ関数の中の持ち越しの1段分。報告は1段しかたどらないので入れ子にしない。入れ子にすると、
 /// 呼び出しの段数だけ由来が深くなり、複写のたびにその深さの時間がかかる (docs/spec/diagnostics.md の E3006)。
+/// 呼ばれた関数の中を指すので、呼んだ側の由来とは別のファイルでありうる。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct CarriedInner {
-    pub range: TextRange,
+    pub span: Span,
     pub label: InnerLabel,
 }
 
@@ -338,7 +352,7 @@ impl CarriedInner {
             _ => InnerLabel::Value,
         };
         CarriedInner {
-            range: origin.range,
+            span: origin.span,
             label,
         }
     }
@@ -417,8 +431,14 @@ mod tests {
             name: "keep".to_string(),
             inner,
         };
-        let inner = |start, label| CarriedInner {
-            range: range(start, start + 1),
+        let mut files = eml_diagnostics::SourceFiles::new();
+        let a = files.add("a.em", "");
+        let b = files.add("b.em", "");
+        let inner = |file, start, label| CarriedInner {
+            span: Span {
+                file,
+                range: range(start, start + 1),
+            },
             label,
         };
         vec![
@@ -483,10 +503,11 @@ mod tests {
                 CallKind::Handle,
             ),
             through(None),
-            through(Some(inner(1, InnerLabel::Value))),
-            through(Some(inner(1, InnerLabel::Kept("x".to_string())))),
-            through(Some(inner(1, InnerLabel::Through("keep2".to_string())))),
-            through(Some(inner(5, InnerLabel::Value))),
+            through(Some(inner(a, 1, InnerLabel::Value))),
+            through(Some(inner(b, 1, InnerLabel::Value))),
+            through(Some(inner(a, 1, InnerLabel::Kept("x".to_string())))),
+            through(Some(inner(a, 1, InnerLabel::Through("keep2".to_string())))),
+            through(Some(inner(a, 5, InnerLabel::Value))),
             KindReason::OmittedReturn {
                 ty: "File".to_string(),
             },

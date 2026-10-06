@@ -5,13 +5,16 @@
 
 use std::collections::BTreeSet;
 
+use eml_diagnostics::FileId;
 use eml_hir::{
     Body, EvalStep, ExprId, ExprKind, LocalId, OpMultiplicity, OperationId, PatId, Program, Res,
     Stmt,
 };
 
 use crate::check::{BodyTyping, CallRows};
-use crate::kind::{Across, Bound, CallKind, CarriedValue, KindOrigin, KindReason, Provenance};
+use crate::kind::{
+    Across, Bound, CallKind, CarriedValue, KindOrigin, KindReason, Provenance, Span,
+};
 use crate::table::{Table, Ty};
 use crate::ty::Multiplicity;
 
@@ -29,6 +32,7 @@ type Live = BTreeSet<Held>;
 
 pub(crate) fn constrain(
     program: &Program,
+    file: FileId,
     body: &Body,
     typing: &BodyTyping,
     table: &mut Table<'_>,
@@ -36,6 +40,7 @@ pub(crate) fn constrain(
 ) {
     let mut carrying = Carrying {
         program,
+        file,
         body,
         typing,
         table,
@@ -46,6 +51,7 @@ pub(crate) fn constrain(
 
 struct Carrying<'a, 'c> {
     program: &'a Program,
+    file: FileId,
     body: &'a Body,
     typing: &'a BodyTyping,
     table: &'a mut Table<'c>,
@@ -299,7 +305,10 @@ impl Carrying<'_, '_> {
         }
         let origin = if self.reliable {
             Provenance::At(KindOrigin {
-                range: self.body.exprs[at].range,
+                span: Span {
+                    file: self.file,
+                    range: self.body.exprs[at].range,
+                },
                 reason: KindReason::CarriedAcross {
                     value,
                     multi: self.multi_operation(across),

@@ -6,7 +6,7 @@ use eml_hir::{
 use la_arena::ArenaMap;
 
 use crate::kind::problem::Instance;
-use crate::kind::{KindOrigin, KindReason, Provenance};
+use crate::kind::{KindOrigin, KindReason, Provenance, Span};
 use crate::shape::{Rigids, lower_type};
 use crate::table::{Row, Table, Tail, Ty, TyShape, UnifyError};
 use crate::{Decl, codes};
@@ -414,9 +414,13 @@ impl BodyCheck<'_, '_> {
         reason: KindReason,
         check: impl FnOnce(&mut Self) -> T,
     ) -> T {
+        let span = Span {
+            file: self.file(),
+            range,
+        };
         let previous = self
             .table
-            .set_kind_origin(Provenance::At(KindOrigin { range, reason }));
+            .set_kind_origin(Provenance::At(KindOrigin { span, reason }));
         let result = check(self);
         self.table.set_kind_origin(previous);
         result

@@ -10,7 +10,7 @@ use la_arena::Arena;
 use crate::context::Context;
 use crate::kind::problem::{KindProblem, KindScheme, OwnVars};
 use crate::kind::solve::solve_scc;
-use crate::kind::{Bound, KindOrigin, KindReason, KindVar, Provenance};
+use crate::kind::{Bound, KindOrigin, KindReason, KindVar, Provenance, Span};
 use crate::shape::{Own, Shape, constructor_shape, operation_shape, signature_shape};
 use crate::table::{Row, Table, TyShape};
 use crate::ty::{EffectLabel, Type};
@@ -143,12 +143,16 @@ pub(crate) fn check_body(
     let own = shape.instantiate_rigid(&mut table, &signature.generics);
     // 部分適用のクロージャは、それまでの引数を捕まえる (docs/spec/types.md の「関数型」)
     table.closure_kinds(own.ty, body.params.len(), &[]);
+    let file = program.file(id.module);
     // ここから後の制約は、由来を付け忘れたら Unattributed になり、違反すれば段2が見つける
-    table.set_kind_origin(Provenance::Unattributed(function.name_range));
+    table.set_kind_origin(Provenance::Unattributed(Span {
+        file,
+        range: function.name_range,
+    }));
     let mut diagnostics = Vec::new();
     let mut checker = BodyCheck {
         program,
-        file: program.file(id.module),
+        file,
         function,
         body,
         rigids: &own.rigids,
@@ -167,8 +171,8 @@ pub(crate) fn check_body(
     let typing = checker.typing;
     let instances = checker.instances;
     let reliable = usage::reliable(body, diagnostics.is_empty());
-    usage::constrain(body, &typing, &mut table, reliable);
-    carry::constrain(program, body, &typing, &mut table, reliable);
+    usage::constrain(file, body, &typing, &mut table, reliable);
+    carry::constrain(program, file, body, &typing, &mut table, reliable);
     let mut types = BodyTypes::default();
     for (expr, &ty) in typing.exprs.iter() {
         types.exprs.insert(expr, table.export(ty));
@@ -274,13 +278,14 @@ fn declaration_problem(
     table.into_problem(Vec::new(), own_vars)
 }
 
-/// Kind の制約の違反は、線形な値の誤った使い方である (docs/spec/linearity.md)。位置の順に並べ、同じ範囲の由来は `KindReason::order_key` の順に並べる。
+/// Kind の制約の違反は、線形な値の誤った使い方である (docs/spec/linearity.md)。ファイルと位置の順に並べ、同じ範囲の由来は `KindReason::order_key` の順に並べる。
 /// 同じ値の持ち越しの違反は、呼び出しの位置が最も前のものだけを報告する (docs/spec/diagnostics.md の E3006)。
 fn report_violations(program: &Program, mut origins: Vec<KindOrigin>) -> Vec<Diagnostic> {
     origins.sort_by_cached_key(|origin| {
         (
-            origin.range.start(),
-            origin.range.end(),
+            origin.span.file,
+            origin.span.range.start(),
+            origin.span.range.end(),
             origin.reason.order_key(),
         )
     });
@@ -288,8 +293,9 @@ fn report_violations(program: &Program, mut origins: Vec<KindOrigin>) -> Vec<Dia
     let mut carried = HashSet::new();
     let mut out = Vec::new();
     for origin in origins {
+        // 値の範囲は由来と同じファイルにある。別のファイルの値は、範囲が同じでも別の値である
         if let KindReason::CarriedAcross { value, .. } = &origin.reason
-            && !carried.insert(value.key())
+            && !carried.insert((origin.span.file, value.key()))
         {
             continue;
         }
@@ -398,11 +404,35 @@ fn has_error(types: &Arena<TypeRef>, id: TypeRefId) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use eml_diagnostics::TextRange;
+
     use super::report::count;
+    use super::report_violations;
+    use crate::kind::{CallKind, CarriedValue, KindOrigin, KindReason, Span};
 
     #[test]
     fn counts_are_pluralized() {
         assert_eq!(count(1, "arrow"), "1 arrow");
         assert_eq!(count(2, "arrow"), "2 arrows");
+    }
+
+    #[test]
+    fn carried_values_in_different_files_are_reported_separately() {
+        // 範囲が同じでも、ファイルが違えば別の値である
+        let program = crate::test_program("");
+        let prelude = program.file(program.prelude);
+        let entry = program.file(program.entry);
+        let range = TextRange::new(0.into(), 1.into());
+        let origin = |file| KindOrigin {
+            span: Span { file, range },
+            reason: KindReason::CarriedAcross {
+                value: CarriedValue::Temporary(range),
+                multi: None,
+                call: CallKind::Call,
+            },
+        };
+        let reported = report_violations(&program, vec![origin(entry), origin(prelude)]);
+        let files: Vec<_> = reported.iter().map(|d| d.primary.file).collect();
+        assert_eq!(files, vec![prelude, entry]);
     }
 }

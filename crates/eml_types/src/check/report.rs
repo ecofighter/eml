@@ -1,9 +1,9 @@
-use eml_diagnostics::{Diagnostic, FileId, Label, TextEdit, TextRange};
+use eml_diagnostics::{Diagnostic, Label, TextEdit, TextRange};
 use eml_hir::{Body, ExprId, ExprKind, OperationId, PatId, Program, Res};
 
 use crate::codes;
 use crate::kind::{
-    CallKind, CarriedInner, CarriedValue, InnerLabel, KindOrigin, KindReason, UnusedPath,
+    CallKind, CarriedInner, CarriedValue, InnerLabel, KindOrigin, KindReason, Span, UnusedPath,
 };
 use crate::table::{Row, Ty, UnifyError};
 
@@ -379,17 +379,16 @@ const LINEAR_NOTE: &str = "linear values, such as files, the continuation of a `
 /// 線形な値の誤った使い方。破れた Kind の制約の由来から番号と指す場所を決める (docs/spec/diagnostics.md の
 /// 「線形性の診断」)。表に当たらない由来 (受け渡し、単一化、捕獲) は E3001 にする。
 pub(super) fn linear_misuse(program: &Program, origin: &KindOrigin) -> Diagnostic {
-    // 由来は位置だけを持つ。R7c で由来にファイルを持たせるまでは、本体は入口のモジュールにだけあるので、
-    // 入口のファイルを使う
-    let file = program.file(program.entry);
+    let file = origin.span.file;
+    let range = origin.span.range;
     match &origin.reason {
         KindReason::CarriedAcross {
             value,
             multi,
             call,
-        } => carried_across(program, origin.range, value, *multi, call),
+        } => carried_across(program, origin.span, value, *multi, call),
         KindReason::CarriedThrough { name, inner } => {
-            carried_through(file, origin.range, name, inner.as_ref())
+            carried_through(origin.span, name, inner.as_ref())
         }
         KindReason::UsedMoreThanOnce {
             name,
@@ -437,7 +436,7 @@ pub(super) fn linear_misuse(program: &Program, origin: &KindOrigin) -> Diagnosti
             let diagnostic = Diagnostic::error(
                 codes::LINEAR_VALUE_NOT_CONSUMED,
                 format!("`{name}` must be used exactly once, but {how}"),
-                Label::new(file, origin.range, format!("`{name}` is bound here")),
+                Label::new(file, range, format!("`{name}` is bound here")),
             )
             .with_secondary(label)
             .with_note(LINEAR_NOTE)
@@ -457,7 +456,7 @@ pub(super) fn linear_misuse(program: &Program, origin: &KindOrigin) -> Diagnosti
         KindReason::Discarded => Diagnostic::error(
             codes::LINEAR_VALUE_DISCARDED,
             "a linear value cannot be discarded with `_`",
-            Label::new(file, origin.range, "this pattern discards it"),
+            Label::new(file, range, "this pattern discards it"),
         )
         .with_note(LINEAR_NOTE)
         .with_help("bind it to a name and pass the name to `drop`"),
@@ -467,7 +466,7 @@ pub(super) fn linear_misuse(program: &Program, origin: &KindOrigin) -> Diagnosti
             "the state of this handler is discarded by the omitted `return` clause",
             Label::new(
                 file,
-                origin.range,
+                range,
                 format!("this state has a linear type `{ty}`"),
             ),
         )
@@ -482,7 +481,7 @@ pub(super) fn linear_misuse(program: &Program, origin: &KindOrigin) -> Diagnosti
         )
         .with_secondary(Label::new(
             file,
-            origin.range,
+            range,
             format!("`{name}` is bound here"),
         ))
         .with_note(LINEAR_NOTE)
@@ -490,21 +489,18 @@ pub(super) fn linear_misuse(program: &Program, origin: &KindOrigin) -> Diagnosti
             "call `resume {name} v` or `drop {name}` on every path"
         )),
         KindReason::CapturedByClause(name) => misused(
-            file,
             origin,
             format!("`{name}` must be used exactly once, but an operation clause captures it"),
             format!("`{name}` is bound here"),
         )
         .with_note("an operation clause runs each time its operation is performed"),
         KindReason::CapturedByLambda => misused(
-            file,
             origin,
             "a lambda that captures a linear value is used where it may be called any number of times"
                 .to_string(),
             "this lambda".to_string(),
         ),
         KindReason::Passed(name) => misused(
-            file,
             origin,
             format!(
                 "a linear value is passed to `{name}`, which may use it more than once or not at all"
@@ -512,7 +508,6 @@ pub(super) fn linear_misuse(program: &Program, origin: &KindOrigin) -> Diagnosti
             format!("`{name}` is used here"),
         ),
         KindReason::Unified => misused(
-            file,
             origin,
             "a linear value is used where an unrestricted value is expected".to_string(),
             "this expression".to_string(),
@@ -521,11 +516,11 @@ pub(super) fn linear_misuse(program: &Program, origin: &KindOrigin) -> Diagnosti
 }
 
 /// E3001。違反した制約の由来を指す。
-fn misused(file: FileId, origin: &KindOrigin, message: String, label: String) -> Diagnostic {
+fn misused(origin: &KindOrigin, message: String, label: String) -> Diagnostic {
     Diagnostic::error(
         codes::LINEAR_VALUE_MISUSED,
         message,
-        Label::new(file, origin.range, label),
+        Label::new(origin.span.file, origin.span.range, label),
     )
     .with_note(LINEAR_NOTE)
 }
@@ -535,14 +530,12 @@ const CARRY_NOTE: &str = "a continuation of a `multi` operation can be resumed m
 /// E3006。呼び出しをまたいで持っている値 (docs/spec/diagnostics.md の「線形性の診断」)。
 fn carried_across(
     program: &Program,
-    range: TextRange,
+    span: Span,
     value: &CarriedValue,
     multi: Option<OperationId>,
     call: &CallKind,
 ) -> Diagnostic {
-    // 由来は位置だけを持つ。R7c で由来にファイルを持たせるまでは、本体は入口のモジュールにだけあるので、
-    // 入口のファイルを使う
-    let file = program.file(program.entry);
+    let Span { file, range } = span;
     let subject = match value {
         CarriedValue::Local { name, .. } | CarriedValue::ReturnCapture { name, .. } => {
             format!("`{name}`")
@@ -620,16 +613,11 @@ fn carried_across(
 
 /// E3006。呼んだ関数のスキームから複写した持ち越しの制約が、呼んだ側で破れた (docs/spec/diagnostics.md の「線形性の診断」)。
 /// secondary は、呼んだ関数の中で値をまたがせている位置で、1段だけたどる。
-fn carried_through(
-    file: FileId,
-    range: TextRange,
-    name: &str,
-    inner: Option<&CarriedInner>,
-) -> Diagnostic {
+fn carried_through(span: Span, name: &str, inner: Option<&CarriedInner>) -> Diagnostic {
     let mut diagnostic = Diagnostic::error(
         codes::LINEAR_VALUE_KEPT_ACROSS_MULTI,
         format!("`{name}` keeps a linear value alive across a call that may resume more than once"),
-        Label::new(file, range, format!("`{name}` is used here")),
+        Label::new(span.file, span.range, format!("`{name}` is used here")),
     );
     if let Some(inner) = inner {
         let label = match &inner.label {
@@ -637,7 +625,8 @@ fn carried_through(
             InnerLabel::Through(name) => format!("through this use of `{name}`"),
             InnerLabel::Value => "a value is kept alive across this call".to_string(),
         };
-        diagnostic = diagnostic.with_secondary(Label::new(file, inner.range, label));
+        diagnostic =
+            diagnostic.with_secondary(Label::new(inner.span.file, inner.span.range, label));
     }
     diagnostic.with_note(CARRY_NOTE)
 }

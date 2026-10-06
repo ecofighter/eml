@@ -4,11 +4,11 @@
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 
-use eml_diagnostics::{TextRange, TextSize};
+use eml_diagnostics::{FileId, TextRange, TextSize};
 use eml_hir::{Body, ClauseSource, Closure, ExprId, ExprKind, LocalId, PatId, PatKind, Res, Stmt};
 
 use crate::check::BodyTyping;
-use crate::kind::{Bound, DropFix, KindOrigin, KindReason, Provenance, UnusedPath};
+use crate::kind::{Bound, DropFix, KindOrigin, KindReason, Provenance, Span, UnusedPath};
 use crate::table::Table;
 use crate::ty::Linearity;
 
@@ -69,12 +69,19 @@ pub(crate) fn reliable(body: &Body, well_typed: bool) -> bool {
             .any(|(_, expr)| matches!(expr.kind, ExprKind::Missing))
 }
 
-pub(crate) fn constrain(body: &Body, typing: &BodyTyping, table: &mut Table, reliable: bool) {
+pub(crate) fn constrain(
+    file: FileId,
+    body: &Body,
+    typing: &BodyTyping,
+    table: &mut Table,
+    reliable: bool,
+) {
     let mut by_name: HashMap<&str, Vec<LocalId>> = HashMap::new();
     for (local, data) in body.locals.iter() {
         by_name.entry(data.name.as_str()).or_default().push(local);
     }
     let mut usage = Usage {
+        file,
         body,
         typing,
         table,
@@ -90,6 +97,7 @@ pub(crate) fn constrain(body: &Body, typing: &BodyTyping, table: &mut Table, rel
 }
 
 struct Usage<'a, 'c> {
+    file: FileId,
     body: &'a Body,
     typing: &'a BodyTyping,
     table: &'a mut Table<'c>,
@@ -508,7 +516,13 @@ impl<'a> Usage<'a, '_> {
         constrain: impl FnOnce(&mut Table),
     ) {
         let origin = if self.reliable {
-            Provenance::At(KindOrigin { range, reason })
+            Provenance::At(KindOrigin {
+                span: Span {
+                    file: self.file,
+                    range,
+                },
+                reason,
+            })
         } else {
             Provenance::Suppressed
         };
