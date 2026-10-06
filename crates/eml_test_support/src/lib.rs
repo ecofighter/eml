@@ -13,9 +13,9 @@ use std::sync::Arc;
 
 #[cfg(feature = "core")]
 use eml_core_ir::{Pass, Program};
-use eml_diagnostics::{Diagnostic, FileId, Label, LineCol, SourceFiles};
 #[cfg(feature = "core")]
-use eml_diagnostics::{has_errors, sort_diagnostics};
+use eml_diagnostics::has_errors;
+use eml_diagnostics::{Diagnostic, FileId, Label, LineCol, SourceFiles, sort_diagnostics};
 #[cfg(feature = "run")]
 use eml_interp::{RunConfig, RuntimeError};
 #[cfg(feature = "run")]
