@@ -1,13 +1,13 @@
 //! Core IR の不変条件の検査 (docs/spec/core-ir.md)。Perceus の後のプログラムについては、変数と join point の範囲、
-//! 直接呼び出しとクロージャの引数の数、RC の対象の変数の所有権の釣り合いを確かめる (`verify`)。Perceus より前の
-//! プログラムについては、範囲と引数の数を確かめ、RC の命令がまだないことを確かめる (`verify_scopes`)。どちらも
-//! join point の `captures` を宣言として扱い、生存解析には頼らない。
+//! 直接呼び出しとクロージャと `handle` の節の引数の数、RC の対象の変数の所有権の釣り合いを確かめる (`verify`)。
+//! Perceus より前のプログラムについては、範囲と引数の数を確かめ、RC の命令がまだないことを確かめる
+//! (`verify_scopes`)。どちらも join point の `captures` を宣言として扱い、生存解析には頼らない。
 
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fmt;
 
 use crate::liveness::{Vars, tracked};
-use crate::{Atom, CExpr, CExprId, Call, CoreFn, EffectInfo, JoinId, Program, Rhs, VarId};
+use crate::{Atom, CExpr, CExprId, Call, CoreFn, EffectInfo, FnIdx, JoinId, Program, Rhs, VarId};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VerifyError {
@@ -101,6 +101,8 @@ struct Checker<'a> {
     epoch: u32,
     next_epoch: u32,
     defined_joins: HashSet<JoinId>,
+    /// `closure` で束縛した変数の、関数とすでに渡した引数の数。`handle` の節の引数の数を確かめるのに使う。
+    closures: HashMap<VarId, (FnIdx, usize)>,
 }
 
 impl<'a> Checker<'a> {
@@ -122,6 +124,7 @@ impl<'a> Checker<'a> {
             epoch: 0,
             next_epoch: 1,
             defined_joins: HashSet::new(),
+            closures: HashMap::new(),
         }
     }
 
@@ -151,6 +154,9 @@ impl<'a> Checker<'a> {
             match function.expr(id) {
                 CExpr::Let { var, rhs, body } => {
                     self.check_rhs(&mut state, rhs)?;
+                    if let Rhs::MakeClosure(target, args) = rhs {
+                        self.closures.insert(*var, (*target, args.len()));
+                    }
                     if let Rhs::Call { call: _, saved } = rhs {
                         match self.level {
                             Level::Scopes if !saved.is_empty() => {
@@ -425,9 +431,10 @@ impl<'a> Checker<'a> {
             }
             Call::Handle {
                 effect,
+                init: _,
                 body: _,
                 clauses,
-                ret: _,
+                ret,
             } => {
                 let info = self.effect(*effect)?;
                 if clauses.len() != info.operations.len() {
@@ -438,6 +445,7 @@ impl<'a> Checker<'a> {
                         info.operations.len()
                     ));
                 }
+                self.check_clause_arities(info, clauses, ret)?;
             }
             Call::Perform {
                 effect,
@@ -453,12 +461,71 @@ impl<'a> Checker<'a> {
                     ));
                 }
             }
-            Call::Apply(_, _) | Call::Resume { k: _, arg: _ } => {}
+            Call::Apply(_, _)
+            | Call::Resume {
+                k: _,
+                arg: _,
+                state: _,
+            } => {}
         }
         for atom in call.atoms() {
             self.consume(state, &atom)?;
         }
         Ok(())
+    }
+
+    /// 節は捕獲の後に「操作の引数 + `k` (再開する操作) + 状態」を、`return` の節は値と状態を受ける
+    /// (docs/spec/core-ir.md)。関数が静的に分からない節は確かめない。
+    fn check_clause_arities(
+        &self,
+        info: &EffectInfo,
+        clauses: &[Atom],
+        ret: &Atom,
+    ) -> Result<(), String> {
+        for (op, clause) in info.operations.iter().zip(clauses) {
+            let Some(has) = self.parameters_left(clause) else {
+                continue;
+            };
+            let needs = op.arity + usize::from(op.resumable) + 1;
+            if has != needs {
+                let receives = if op.resumable {
+                    "for the arguments, `k`, and the state"
+                } else {
+                    "for the arguments and the state"
+                };
+                return Err(format!(
+                    "the clause for `{}` needs {needs} parameters after its captures ({} {receives}), but it has {has}",
+                    op.name, op.arity
+                ));
+            }
+        }
+        match self.parameters_left(ret) {
+            Some(has) if has != 2 => Err(format!(
+                "the `return` clause needs 2 parameters after its captures (the value and the state), but it has {has}"
+            )),
+            _ => Ok(()),
+        }
+    }
+
+    /// 呼ばれる値の関数が、すでに渡した引数の後にまだ受ける引数の数。静的に分からなければ `None`。
+    fn parameters_left(&self, atom: &Atom) -> Option<usize> {
+        let (function, passed) = self.known_function(atom)?;
+        let params = self
+            .program
+            .functions
+            .get(function.0 as usize)?
+            .params
+            .len();
+        Some(params.saturating_sub(passed))
+    }
+
+    /// 呼ばれる値の関数と、すでに渡した引数の数。関数の値か、同じ関数の中で `closure` で作った値のときだけ分かる。
+    fn known_function(&self, atom: &Atom) -> Option<(FnIdx, usize)> {
+        match atom {
+            Atom::Fn(function) => Some((*function, 0)),
+            Atom::Var(var) => self.closures.get(var).copied(),
+            Atom::Int(_) | Atom::Unit | Atom::Tag(_) => None,
+        }
     }
 
     fn effect(&self, effect: u32) -> Result<&EffectInfo, String> {

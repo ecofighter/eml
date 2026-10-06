@@ -276,7 +276,19 @@ impl<'t> Parser<'t> {
                 self.pos += 1;
             }
             let op_line = self.line();
-            let op = self.word()?;
+            let word = self.word()?;
+            // 関数の名前と同じく操作の名前も `/` を含みうるので、最後の `/` で分ける
+            let (op, arity) = word
+                .rsplit_once('/')
+                .and_then(|(op, arity)| Some((op, number(arity)?)))
+                .filter(|(op, _)| !op.is_empty())
+                .ok_or_else(|| {
+                    error(
+                        op_line,
+                        format!("expected `operation/arity`, found `{word}`"),
+                    )
+                })?;
+            let op = op.to_string();
             if operations.iter().any(|other| other.name == op) {
                 return Err(error(
                     op_line,
@@ -285,6 +297,7 @@ impl<'t> Parser<'t> {
             }
             operations.push(OperationInfo {
                 name: op,
+                arity: arity as usize,
                 resumable: !never,
             });
             if !self.eat_punct(',') {
@@ -586,8 +599,14 @@ impl<'t> Parser<'t> {
                 let k = self.atom(state)?;
                 self.expect_punct('(')?;
                 let arg = self.atom(state)?;
+                self.expect_punct(',')?;
+                let next = self.atom(state)?;
                 self.expect_punct(')')?;
-                Ok(Call::Resume { k, arg })
+                Ok(Call::Resume {
+                    k,
+                    arg,
+                    state: next,
+                })
             }
             _ if direct => {
                 let callee = self.resolve_function(&word, line)?;
@@ -604,6 +623,8 @@ impl<'t> Parser<'t> {
         let effect = self.effect_id(&name, line)?;
         self.expect_punct('(')?;
         let body = self.atom(state)?;
+        self.expect_punct(',')?;
+        let init = self.atom(state)?;
         self.expect_punct(')')?;
         self.expect_punct('{')?;
         let mut clauses = Vec::new();
@@ -633,15 +654,18 @@ impl<'t> Parser<'t> {
         }
         let close = self.line();
         self.expect_punct('}')?;
-        // 続く行の `return` は次の命令なので、`return` の節は `}` と同じ行にあるときだけ読む。
-        let ret = if self.at_word("return") && self.line() == close {
-            self.pos += 1;
-            Some(self.atom(state)?)
-        } else {
-            None
-        };
+        // 次の行の `return` は続く命令なので、`return` の節は `}` と同じ行にあるときだけ読む
+        if !(self.at_word("return") && self.line() == close) {
+            return Err(error(
+                close,
+                "expected `return` after the clauses of `handle`",
+            ));
+        }
+        self.pos += 1;
+        let ret = self.atom(state)?;
         Ok(Call::Handle {
             effect,
+            init,
             body,
             clauses,
             ret,
@@ -914,7 +938,7 @@ mod tests {
     #[test]
     fn a_program_with_joins_switches_and_effects_round_trips() {
         round_trip(
-            "effect Ask { ask, never stop }\n\
+            "effect Ask { ask/1, never stop/1 }\n\
              fn pick(b0, s1^) {\n  join j0(t3^) [s1] {\n    let t4^ = prim ++(t3, s1)\n    return t4\n  }\n  switch b0 {\n    #0 ->\n      let s2^ = const \"none\"\n      jump j0(s2)\n    #1 ->\n      dup s1\n      jump j0(s1)\n  }\n}\n\
              fn entry$main() {\n  let c0^ = closure pick(#1)\n  let t1 = perform Ask.ask(()) [c0]\n  tailcall apply c0(-3)\n}\n",
         );
@@ -941,11 +965,37 @@ mod tests {
     }
 
     #[test]
-    fn a_return_on_the_next_line_is_not_the_return_clause_of_a_handle() {
+    fn the_return_after_the_return_clause_is_the_next_instruction() {
         round_trip(
-            "effect Ask { ask }\n\
-             fn h(c0^, c1^) {\n  let t2 = handle Ask(c0) {ask: c1}\n  return t2\n}\n",
+            "effect Ask { ask/1 }\n\
+             fn h(c0^, c1^, c2^) {\n  let t3 = handle Ask(c0, ()) {ask: c1} return c2\n  return t3\n}\n",
         );
+    }
+
+    #[test]
+    fn a_handle_without_a_return_clause_is_an_error() {
+        let error = parse_error(
+            "effect Ask { ask/1 }\nfn h(c0^, c1^) {\n  let t2 = handle Ask(c0, ()) {ask: c1}\n  return t2\n}\n",
+        );
+        assert_eq!(error.line, 3);
+        assert_eq!(
+            error.message,
+            "expected `return` after the clauses of `handle`"
+        );
+    }
+
+    #[test]
+    fn an_operation_needs_its_arity_after_the_last_slash() {
+        let program = parse("effect E { a/b/2 }\nfn f() {\n  return 1\n}\n").unwrap();
+        assert_eq!(program.effects[0].operations[0].name, "a/b");
+        assert_eq!(program.effects[0].operations[0].arity, 2);
+
+        let error = parse_error("effect E { ask }\nfn f() {\n  return 1\n}\n");
+        assert_eq!(error.line, 1);
+        assert_eq!(error.message, "expected `operation/arity`, found `ask`");
+
+        let error = parse_error("effect E { ask/x }\nfn f() {\n  return 1\n}\n");
+        assert_eq!(error.message, "expected `operation/arity`, found `ask/x`");
     }
 
     #[test]
@@ -977,8 +1027,8 @@ mod tests {
     #[test]
     fn an_operation_number_outside_the_effect_round_trips() {
         round_trip(
-            "effect Ask { ask }\n\
-             fn f(c0^, c1^, c2^) {\n  let t3 = perform Ask.#3()\n  let t4 = handle Ask(c0) {ask: c1, #1: c2}\n  return t4\n}\n",
+            "effect Ask { ask/0 }\n\
+             fn f(c0^, c1^, c2^, c3^) {\n  let t4 = perform Ask.#3()\n  let t5 = handle Ask(c0, ()) {ask: c1, #1: c2} return c3\n  return t5\n}\n",
         );
     }
 
@@ -1012,9 +1062,9 @@ mod tests {
     #[test]
     fn apply_and_resume_of_unit_round_trip() {
         round_trip(
-            "fn f(x0) {\n  let t1 = apply ()(x0)\n  let t2 = resume ()(t1)\n  tailcall apply ()(t2)\n}\n",
+            "fn f(x0) {\n  let t1 = apply ()(x0)\n  let t2 = resume ()(t1, ())\n  tailcall apply ()(t2)\n}\n",
         );
-        round_trip("fn f(x0) {\n  tailcall resume ()(x0)\n}\n");
+        round_trip("fn f(x0) {\n  tailcall resume ()(x0, ())\n}\n");
         let program = parse("fn f(x0) {\n  tailcall apply ()(x0)\n}\n").unwrap();
         let f = &program.functions[0];
         assert_eq!(
@@ -1110,7 +1160,7 @@ mod tests {
         assert_eq!(error.message, "expected a join point `jN`, found `j+0`");
 
         let error = parse_error(
-            "effect Ask { ask }\nfn f() {\n  let t0 = perform Ask.#+0()\n  return t0\n}\n",
+            "effect Ask { ask/0 }\nfn f() {\n  let t0 = perform Ask.#+0()\n  return t0\n}\n",
         );
         assert_eq!(error.line, 3);
         assert_eq!(error.message, "`Ask` has no operation `#+0`");

@@ -325,6 +325,9 @@ impl FnLowering<'_> {
                     &Type::Flexible,
                     out,
                 );
+                // 状態のない handler は状態を `()` にする。節と `return` の節は最後の引数で状態を受ける
+                // (docs/spec/core-ir.md)
+                let state = (None, Type::unit());
                 // 節はエフェクトの操作の順に並べる。インタプリタは操作の番号で節を引く
                 let operations = self.module.effects[effect].operations.clone();
                 let mut closures = Vec::new();
@@ -333,12 +336,13 @@ impl FnLowering<'_> {
                         .iter()
                         .find(|clause| clause.op == op)
                         .expect("a program without errors has a clause for every operation");
-                    let params: Vec<(Option<PatId>, Type)> = clause
+                    let mut params: Vec<(Option<PatId>, Type)> = clause
                         .closure
                         .params
                         .iter()
                         .map(|&pat| (Some(pat), self.pat_type(pat)))
                         .collect();
+                    params.push(state.clone());
                     let name = format!("{prefix}${}", self.module.operations[op].name);
                     let captured = body.closure_captures(&clause.closure);
                     let closure = self.lift(
@@ -351,7 +355,7 @@ impl FnLowering<'_> {
                     );
                     closures.push(closure);
                 }
-                let params = [(Some(ret.value()), self.pat_type(ret.value()))];
+                let params = [(Some(ret.value()), self.pat_type(ret.value())), state];
                 let captured = body.closure_captures(&ret.closure);
                 let name = format!("{prefix}$return");
                 let ret = self.lift(
@@ -364,9 +368,10 @@ impl FnLowering<'_> {
                 );
                 let call = Call::Handle {
                     effect: effect_index(effect),
+                    init: Atom::Unit,
                     body: handled_closure,
                     clauses: closures,
-                    ret: Some(ret),
+                    ret,
                 };
                 self.bind(out, "t", &ty, Rhs::call(call))
             }
@@ -374,7 +379,16 @@ impl FnLowering<'_> {
                 let k = self.atom(*k, out);
                 let arg = self.atom(*arg, out);
                 let ty = self.ty(id);
-                self.bind(out, "t", &ty, Rhs::call(Call::Resume { k, arg }))
+                self.bind(
+                    out,
+                    "t",
+                    &ty,
+                    Rhs::call(Call::Resume {
+                        k,
+                        arg,
+                        state: Atom::Unit,
+                    }),
+                )
             }
             ExprKind::Tuple(elements) => {
                 // 要素を左から評価し、コンストラクタが1つの `data` と同じ値にする (docs/spec/core-ir.md)

@@ -133,3 +133,42 @@ fn first(a0, b1) {
 "#;
     assert_eq!(run_program(text), "ok\n");
 }
+
+#[test]
+fn an_inner_handle_returns_through_each_resumption_of_an_outer_multi_operation() {
+    // `Choose` の節が `k` を2回再開する。区間には内側の `Ask` の handler フレームが入り、写される
+    let text = r#"
+effect Choose { choose/1 }
+effect Ask { ask/1 }
+fn main() {
+  let t0 = handle Choose(&outer_body, ()) {choose: &choose} return &outer_ret
+  let s1^ = prim show_int(t0)
+  let t2 = perform println(s1)
+  return t2
+}
+fn outer_body(u0) {
+  tailcall handle Ask(&inner_body, ()) {ask: &ask} return &inner_ret
+}
+fn inner_body(u0) {
+  tailcall perform Choose.choose(())
+}
+fn inner_ret(x0, s1) {
+  let t2 = prim +(x0, 100)
+  return t2
+}
+fn ask(u0, k1^, s2) {
+  tailcall resume k1(0, s2)
+}
+fn choose(u0, k1^, s2) {
+  dup k1
+  let a3 = resume k1(1, s2) [k1]
+  let b4 = resume k1(2, ()) [a3]
+  let t5 = prim +(a3, b4)
+  return t5
+}
+fn outer_ret(x0, s1) {
+  return x0
+}
+"#;
+    assert_eq!(run_program(text), "203\n");
+}

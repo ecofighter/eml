@@ -38,6 +38,8 @@ pub struct EffectInfo {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OperationInfo {
     pub name: String,
+    /// 操作の引数の数。verifier が節の関数の引数の数を確かめるのに使う (docs/spec/core-ir.md)。
+    pub arity: usize,
     /// `never` の操作は再開しないので、継続を作らずに捨てる (docs/spec/effects.md)。
     pub resumable: bool,
 }
@@ -328,14 +330,15 @@ pub enum Call {
     Direct(FnIdx, Vec<Atom>),
     /// 関数値の呼び出し。実行時に引数の個数を比べる (eval/apply)。
     Apply(Atom, Vec<Atom>),
-    /// handler フレームを積み、本体のクロージャに `()` を適用する。本体と節と `return` の節は、捕まえた変数を先頭の
-    /// 引数に持つ関数のクロージャである (docs/spec/core-ir.md)。節はエフェクトの操作の順に並ぶ。`ret` が `None` なら、
-    /// 本体の値をそのまま返す。
+    /// handler フレームを積み、本体の関数に `()` を適用する。本体と節と `return` の節は、捕まえた変数を先頭の
+    /// 引数に持つ関数の値である (docs/spec/core-ir.md)。節はエフェクトの操作の順に並ぶ。節は最後の引数で状態を、
+    /// `ret` は本体の値と状態を受ける。状態のない handler では `init` が `()` である (docs/spec/core-ir.md)。
     Handle {
         effect: u32,
+        init: Atom,
         body: Atom,
         clauses: Vec<Atom>,
-        ret: Option<Atom>,
+        ret: Atom,
     },
     /// ユーザーのエフェクトの操作。継続を遡って handler を探し、その節を呼ぶ。
     Perform {
@@ -343,8 +346,8 @@ pub enum Call {
         op: u32,
         args: Vec<Atom>,
     },
-    /// 継続を再開する。値は handle 式の値である。
-    Resume { k: Atom, arg: Atom },
+    /// 継続を再開する。`state` を区間の handler フレームに戻してからつなぐ。値は handle 式の値である。
+    Resume { k: Atom, arg: Atom, state: Atom },
 }
 
 impl Call {
@@ -369,17 +372,20 @@ impl Call {
             }
             Call::Handle {
                 effect: _,
+                init,
                 body,
                 clauses,
                 ret,
             } => {
+                f(*init);
                 f(*body);
                 clauses.iter().for_each(|&atom| f(atom));
-                ret.iter().for_each(|&atom| f(atom));
+                f(*ret);
             }
-            Call::Resume { k, arg } => {
+            Call::Resume { k, arg, state } => {
                 f(*k);
                 f(*arg);
+                f(*state);
             }
         }
     }
@@ -398,17 +404,20 @@ impl Call {
             }
             Call::Handle {
                 effect: _,
+                init,
                 body,
                 clauses,
                 ret,
             } => {
+                f(init);
                 f(body);
                 clauses.iter_mut().for_each(&mut f);
-                ret.iter_mut().for_each(f);
+                f(ret);
             }
-            Call::Resume { k, arg } => {
+            Call::Resume { k, arg, state } => {
                 f(k);
                 f(arg);
+                f(state);
             }
         }
     }
@@ -553,14 +562,15 @@ mod tests {
 
         let call = Call::Handle {
             effect: 0,
+            init: Atom::Var(VarId(0)),
             body: Atom::Var(VarId(1)),
             clauses: vec![Atom::Var(VarId(2)), Atom::Var(VarId(3))],
-            ret: Some(Atom::Var(VarId(4))),
+            ret: Atom::Var(VarId(4)),
         };
         let handle = CExpr::TailCall(call.clone());
         let mut atoms = Vec::new();
         handle.for_each_atom(|atom| atoms.push(atom));
-        assert_eq!(atoms, [1, 2, 3, 4].map(|n| Atom::Var(VarId(n))));
+        assert_eq!(atoms, [0, 1, 2, 3, 4].map(|n| Atom::Var(VarId(n))));
         assert_eq!(atoms, call.atoms());
 
         let mut handle = handle;

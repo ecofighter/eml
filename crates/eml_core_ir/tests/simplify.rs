@@ -675,7 +675,7 @@ fn every_kind_of_call_in_tail_position_becomes_a_tail_call() {
     // 関数値の適用、`handle`、`resume`、操作の `perform` のどれも、T で末尾呼び出しになる (docs/spec/core-ir.md の「パス」)
     let text = "effect Ask where\n  ask : String -> Int\n\ntwice : (Int -> Int) -> Int -> Int\ntwice f x = f (f x)\n\nasked : Unit -> <Ask> Int\nasked () = ask \"x\"\n\nanswer : Unit -> Int\nanswer () =\n  handle asked () with\n    | ask key k -> resume k 1\n\nmain : Unit -> <IO> Unit\nmain () = println (show_int (answer ()))";
     insta::assert_snapshot!(core_text(text, Pass::Simplify), @r#"
-    effect Ask { ask }
+    effect Ask { ask/1 }
     fn twice(f0^, x1) {
       let t2 = apply f0(x1)
       tailcall apply f0(t2)
@@ -685,7 +685,7 @@ fn every_kind_of_call_in_tail_position_becomes_a_tail_call() {
       tailcall perform Ask.ask(s1)
     }
     fn answer(p0) {
-      tailcall handle Ask(&answer$handle0) {ask: &answer$handle0$ask} return &answer$handle0$return
+      tailcall handle Ask(&answer$handle0, ()) {ask: &answer$handle0$ask} return &answer$handle0$return
     }
     fn main(p0) {
       let t1 = call answer(())
@@ -696,10 +696,10 @@ fn every_kind_of_call_in_tail_position_becomes_a_tail_call() {
     fn answer$handle0(p0) {
       tailcall asked(())
     }
-    fn answer$handle0$ask(key0^, k1^) {
-      tailcall resume k1(1)
+    fn answer$handle0$ask(key0^, k1^, p2) {
+      tailcall resume k1(1, ())
     }
-    fn answer$handle0$return($r0) {
+    fn answer$handle0$return($r0, p1) {
       return $r0
     }
     fn entry$main() {

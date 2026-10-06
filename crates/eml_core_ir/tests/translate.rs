@@ -278,10 +278,10 @@ fn nested_join_points_capture_what_outer_join_points_need() {
 fn handlers_are_lifted_to_closures() {
     let text = "effect Ask where\n  ask : String -> Int\n\nmain : Unit -> <IO> Unit\nmain () =\n  let prefix = \"n = \"\n  let n =\n    handle ask \"x\" with\n      | ask key k -> resume k 1\n      | return x -> x + 1\n  println (prefix ++ show_int n)";
     insta::assert_snapshot!(core_text(text, Pass::Translate), @r#"
-    effect Ask { ask }
+    effect Ask { ask/1 }
     fn main(p0) {
       let s1^ = const "n = "
-      let t2 = handle Ask(&main$handle0) {ask: &main$handle0$ask} return &main$handle0$return
+      let t2 = handle Ask(&main$handle0, ()) {ask: &main$handle0$ask} return &main$handle0$return
       let t3^ = prim show_int(t2)
       let t4^ = prim ++(s1, t3)
       let t5 = perform println(t4)
@@ -292,13 +292,13 @@ fn handlers_are_lifted_to_closures() {
       let t2 = perform Ask.ask(s1)
       return t2
     }
-    fn main$handle0$ask(key0^, k1^) {
-      let t2 = resume k1(1)
-      return t2
+    fn main$handle0$ask(key0^, k1^, p2) {
+      let t3 = resume k1(1, ())
+      return t3
     }
-    fn main$handle0$return(x0) {
-      let t1 = prim +(x0, 1)
-      return t1
+    fn main$handle0$return(x0, p1) {
+      let t2 = prim +(x0, 1)
+      return t2
     }
     fn entry$main() {
       tailcall main(())
@@ -310,7 +310,7 @@ fn handlers_are_lifted_to_closures() {
 fn operations_as_values_and_drop() {
     let text = "effect Log where\n  log : String -> String -> Unit\n\nrun : Unit -> <Log> Unit\nrun () =\n  let info = log \"info\"\n  info \"a\"\n\ndiscard : String -> Unit\ndiscard s = drop s\n\nmain : Unit -> <IO> Unit\nmain () = println \"x\"";
     insta::assert_snapshot!(core_text(text, Pass::Translate), @r#"
-    effect Log { log }
+    effect Log { log/2 }
     fn run(p0) {
       let s1^ = const "info"
       let c2^ = closure op$log(s1)
@@ -559,9 +559,9 @@ fn constructor_patterns_in_handler_clause_parameters() {
     // 操作の節と `return` の節はラムダと同じく関数に持ち上げるので、引数のコンストラクタのパターンも同じ経路で分解する
     let text = "data Box a = | Box a\n\neffect Give where\n  give : Box Int -> Int\n\nrun : Unit -> Int\nrun () =\n  handle Box (give (Box 1)) with\n    | give (Box n) k -> resume k n\n    | return (Box r) -> r\n\nmain : Unit -> <IO> Unit\nmain () = ()";
     insta::assert_snapshot!(core_text(text, Pass::Translate), @"
-    effect Give { give }
+    effect Give { give/1 }
     fn run(p0) {
-      let t1 = handle Give(&run$handle0) {give: &run$handle0$give} return &run$handle0$return
+      let t1 = handle Give(&run$handle0, ()) {give: &run$handle0$give} return &run$handle0$return
       return t1
     }
     fn main(p0) {
@@ -573,23 +573,23 @@ fn constructor_patterns_in_handler_clause_parameters() {
       let d3^ = con #0(t2)
       return d3
     }
-    fn run$handle0$give(p0^, k1^) {
-      join j0(n2) [k1] {
-        let t4 = resume k1(n2)
-        return t4
+    fn run$handle0$give(p0^, k1^, p2) {
+      join j0(n3) [k1] {
+        let t5 = resume k1(n3, ())
+        return t5
       }
       switch p0 {
-        #0(n3) ->
-          jump j0(n3)
+        #0(n4) ->
+          jump j0(n4)
       }
     }
-    fn run$handle0$return(p0^) {
-      join j0(r1) [] {
-        return r1
+    fn run$handle0$return(p0^, p1) {
+      join j0(r2) [] {
+        return r2
       }
       switch p0 {
-        #0(r2) ->
-          jump j0(r2)
+        #0(r3) ->
+          jump j0(r3)
       }
     }
     fn entry$main() {

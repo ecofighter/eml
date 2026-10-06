@@ -90,7 +90,7 @@ fn unused_field(release: bool) -> String {
     )
 }
 
-const ASK: &str = "effect Ask { ask }\n";
+const ASK: &str = "effect Ask { ask/1 }\n";
 
 /// `handle ask 1 with | ask x k -> resume k x` を持ち上げた形。`effects` は先頭のエフェクトの行。
 fn handler_program(effects: &str) -> String {
@@ -98,14 +98,17 @@ fn handler_program(effects: &str) -> String {
         "{effects}fn main() {{
   let c0^ = &main$handle0
   let c1^ = &main$handle0$ask
-  let t2 = handle Ask(c0) {{ask: c1}}
+  let t2 = handle Ask(c0, ()) {{ask: c1}} return &main$handle0$return
   return t2
 }}
 fn main$handle0(p0) {{
   tailcall perform Ask.ask(1)
 }}
-fn main$handle0$ask(x0, k1^) {{
-  tailcall resume k1(x0)
+fn main$handle0$ask(x0, k1^, s2) {{
+  tailcall resume k1(x0, s2)
+}}
+fn main$handle0$return(x0, s1) {{
+  return x0
 }}
 "
     )
@@ -381,13 +384,49 @@ fn handlers_operations_and_resume_are_calls() {
 
 #[test]
 fn a_handler_has_a_clause_for_each_operation() {
-    let text = handler_program("effect Ask { ask, tell }\n");
+    let text = handler_program("effect Ask { ask/1, tell/1 }\n");
     assert_eq!(
         check(&text),
         Err(
             "a handler of `Ask` has clauses for 1 operations, but the effect has 2 in `main`"
                 .to_string()
         )
+    );
+}
+
+#[test]
+fn a_clause_receives_the_arguments_k_and_the_state_after_its_captures() {
+    let text = "effect Ask { ask/1 }\nfn f() {\n  let t0 = handle Ask(&body, ()) {ask: &clause} return &ret\n  return t0\n}\nfn body(u0) {\n  return 1\n}\nfn clause(x0, k1^) {\n  tailcall resume k1(x0, ())\n}\nfn ret(x0, s1) {\n  return x0\n}\n";
+    let error = check(text).unwrap_err();
+    assert!(
+        error.contains("the clause for `ask` needs 3 parameters after its captures (1 for the arguments, `k`, and the state), but it has 2"),
+        "{error}"
+    );
+    // 節の引数の数は所有権に関わらないので、Perceus より前の IR でも確かめる
+    let error = check_scopes(text).unwrap_err();
+    assert!(
+        error.contains("the clause for `ask` needs 3 parameters after its captures (1 for the arguments, `k`, and the state), but it has 2"),
+        "{error}"
+    );
+}
+
+#[test]
+fn a_clause_of_a_never_operation_receives_the_arguments_and_the_state() {
+    let text = "effect Fail { never fail/1 }\nfn f(n0) {\n  let c1^ = closure clause(n0)\n  let t2 = handle Fail(&body, ()) {fail: c1} return &ret\n  return t2\n}\nfn body(u0) {\n  return 1\n}\nfn clause(n0, x1, k2, s3) {\n  return n0\n}\nfn ret(x0, s1) {\n  return x0\n}\n";
+    let error = check(text).unwrap_err();
+    assert!(
+        error.contains("the clause for `fail` needs 2 parameters after its captures (1 for the arguments and the state), but it has 3"),
+        "{error}"
+    );
+}
+
+#[test]
+fn a_return_clause_receives_the_value_and_the_state_after_its_captures() {
+    let text = "effect Ask { ask/1 }\nfn f(n0) {\n  let c1^ = closure ret(n0)\n  let t2 = handle Ask(&body, ()) {ask: &clause} return c1\n  return t2\n}\nfn body(u0) {\n  return 1\n}\nfn clause(x0, k1^, s2) {\n  tailcall resume k1(x0, s2)\n}\nfn ret(n0, x1) {\n  return x1\n}\n";
+    let error = check(text).unwrap_err();
+    assert!(
+        error.contains("the `return` clause needs 2 parameters after its captures (the value and the state), but it has 1"),
+        "{error}"
     );
 }
 

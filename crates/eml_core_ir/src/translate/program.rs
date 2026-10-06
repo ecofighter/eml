@@ -268,6 +268,7 @@ pub(super) fn effect_table(module: &Module) -> Vec<EffectInfo> {
                     let operation = &module.operations[op];
                     OperationInfo {
                         name: operation.name.clone(),
+                        arity: operation.arity,
                         resumable: operation.multiplicity != OpMultiplicity::Never,
                     }
                 })

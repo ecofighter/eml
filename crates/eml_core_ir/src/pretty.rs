@@ -15,9 +15,9 @@ pub fn pretty(program: &Program) -> String {
             .iter()
             .map(|op| {
                 if op.resumable {
-                    op.name.clone()
+                    format!("{}/{}", op.name, op.arity)
                 } else {
-                    format!("never {}", op.name)
+                    format!("never {}/{}", op.name, op.arity)
                 }
             })
             .collect();
@@ -186,6 +186,7 @@ fn call_text(program: &Program, function: &CoreFn, call: &Call) -> String {
         Call::Apply(callee, a) => format!("apply {}({})", atom(program, function, callee), args(a)),
         Call::Handle {
             effect,
+            init,
             body,
             clauses,
             ret,
@@ -202,14 +203,13 @@ fn call_text(program: &Program, function: &CoreFn, call: &Call) -> String {
                     )
                 })
                 .collect();
-            let ret = ret.map_or(String::new(), |ret| {
-                format!(" return {}", atom(program, function, &ret))
-            });
             format!(
-                "handle {}({}) {{{}}}{ret}",
+                "handle {}({}, {}) {{{}}} return {}",
                 info.name,
                 atom(program, function, body),
-                clauses.join(", ")
+                atom(program, function, init),
+                clauses.join(", "),
+                atom(program, function, ret)
             )
         }
         Call::Perform {
@@ -225,11 +225,12 @@ fn call_text(program: &Program, function: &CoreFn, call: &Call) -> String {
                 args(a)
             )
         }
-        Call::Resume { k, arg } => {
+        Call::Resume { k, arg, state } => {
             format!(
-                "resume {}({})",
+                "resume {}({}, {})",
                 atom(program, function, k),
-                atom(program, function, arg)
+                atom(program, function, arg),
+                atom(program, function, state)
             )
         }
     }

@@ -25,7 +25,8 @@ impl Machine<'_> {
 
     /// handler フレームの外側を切り離して機械の継続に戻し、節を呼ぶ。先頭から handler フレームまでの区間が継続で、
     /// `once` の操作はそれを継続オブジェクトにして `k` として渡す。`never` の操作は再開しないので、区間をここで
-    /// 解放する。区間のフレームが退避した値も、子をたどる解放で1回ずつ解放される (docs/spec/core-ir.md)。
+    /// 解放する。区間のフレームが退避した値も、子をたどる解放で1回ずつ解放される。handler フレームの状態は
+    /// 切り離した `Link` から取り出し、節の最後の引数として渡す (docs/spec/core-ir.md)。
     pub(crate) fn perform(
         &mut self,
         effect: u32,
@@ -47,10 +48,6 @@ impl Machine<'_> {
         } = link
             .take()
             .ok_or(Fault::Internal("performing through a detached handler"))?;
-        // 状態を節に渡すのは Task 4 からで、それまでの状態はつねに `()` である
-        if let Value::Obj(obj) = state {
-            self.heap.decref(obj).map_err(Fault::Heap)?;
-        }
         // 節のクロージャは handler フレームにも残るので、呼ぶ分の参照を足す
         if let Value::Obj(obj) = clause {
             self.heap.dup(obj).map_err(Fault::Heap)?;
@@ -69,14 +66,15 @@ impl Machine<'_> {
         } else {
             self.heap.decref(top).map_err(Fault::Heap)?;
         }
+        args.push(state);
         self.apply_and_continue(clause, args)
     }
 
-    /// 継続オブジェクトの handler フレームの外側に今の継続をつなぎ、先頭のフレームに値を返す。末尾でない `resume`
-    /// では、その前に呼び出しのフレームが積まれている。`multi` の継続をもう一度使うなら継続は共有されていて、
-    /// `take_or_copy` が区間を写す。どちらの場合も区間のフレームは一意なので、handler フレームを書き換えてよい
+    /// 継続オブジェクトの handler フレームの外側に今の継続をつなぎ、`state` をその handler フレームの状態に戻して、
+    /// 先頭のフレームに値を返す。末尾でない `resume` では、その前に呼び出しのフレームが積まれている。`multi` の
+    /// 継続をもう一度使うなら継続は共有されていて、`take_or_copy` が区間を写す。どちらの場合も区間のフレームは一意なので、handler フレームを書き換えてよい
     /// (docs/spec/core-ir.md)。
-    pub(crate) fn resume(&mut self, k: Value, value: Value) -> Result<Step, Fault> {
+    pub(crate) fn resume(&mut self, k: Value, value: Value, state: Value) -> Result<Step, Fault> {
         let Value::Obj(obj) = k else {
             return Err(Fault::Internal(
                 "resuming a value that is not a continuation",
@@ -94,7 +92,7 @@ impl Machine<'_> {
             Payload::Frame(Frame::Handler { link, .. }) => {
                 *link = Some(Link {
                     next: current,
-                    state: Value::Unit,
+                    state,
                 });
             }
             _ => {

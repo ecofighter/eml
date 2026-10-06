@@ -206,23 +206,22 @@ impl<'p> Machine<'p> {
             }
             Call::Handle {
                 effect,
+                init,
                 body,
                 clauses,
                 ret: on_return,
             } => {
+                let init = self.atom(init)?;
                 let body = self.atom(body)?;
                 let clauses = self.atoms(clauses)?;
-                let on_return = on_return
-                    .map(|clause| self.atom(&clause))
-                    .transpose()?
-                    .ok_or(Fault::Internal("a handle without a return clause"))?;
+                let on_return = self.atom(on_return)?;
                 let frame = Frame::Handler {
                     effect: *effect,
                     clauses,
                     ret: on_return,
                     link: Some(Link {
                         next: self.cont,
-                        state: Value::Unit,
+                        state: init,
                     }),
                 };
                 self.cont = self.heap.alloc(Payload::Frame(frame));
@@ -232,10 +231,11 @@ impl<'p> Machine<'p> {
                 let args = self.atoms(args)?;
                 self.perform(*effect, *op, args)
             }
-            Call::Resume { k, arg } => {
+            Call::Resume { k, arg, state } => {
                 let k = self.atom(k)?;
                 let arg = self.atom(arg)?;
-                self.resume(k, arg)
+                let state = self.atom(state)?;
+                self.resume(k, arg, state)
             }
         }
     }
@@ -381,11 +381,7 @@ impl<'p> Machine<'p> {
                     let Link { next, state } =
                         link.ok_or(Fault::Internal("a detached handler received a value"))?;
                     self.cont = next;
-                    // 状態を `return` の節に渡すのは Task 4 からで、それまでの状態はつねに `()` である
-                    if let Value::Obj(obj) = state {
-                        self.heap.decref(obj).map_err(Fault::Heap)?;
-                    }
-                    match self.apply(on_return, vec![value])? {
+                    match self.apply(on_return, vec![value, state])? {
                         Applied::Entered => return Ok(Step::Continue),
                         Applied::Value(result) => value = result,
                     }
