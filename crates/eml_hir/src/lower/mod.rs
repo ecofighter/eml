@@ -74,8 +74,7 @@ pub fn lower(
         &effect_items,
         &mut type_names,
         &mut scope,
-        &mut items.effects,
-        &mut items.operations,
+        items,
         &mut diagnostics,
     );
     // フィールドの関数型の row がエフェクトを引けるように、コンストラクタはエフェクトの後に変換する

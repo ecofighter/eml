@@ -15,6 +15,7 @@ use crate::hir::{
     EffectDef, EffectId, Generics, ItemId, ModuleId, OpMultiplicity, Operation, RowRef, Signature,
     TypeRef, TypeRefId, TypeRefKind, TypeVarDecl, TypeVarId,
 };
+use crate::program::Items;
 
 /// エフェクトの名前をすべて登録してから、操作のシグネチャを変換する。操作の引数の型の row で、後ろで宣言した
 /// エフェクトも引けるようにするため。`declared` は `data` の宣言と共有する型の名前空間のユーザーの名前である。
@@ -24,10 +25,14 @@ pub(super) fn lower_effects(
     items: &[ast::EffectItem],
     declared: &mut HashMap<String, TextRange>,
     scope: &mut ItemScope,
-    effects: &mut Arena<EffectDef>,
-    operations: &mut Arena<Operation>,
+    module_items: &mut Items,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
+    let Items {
+        effects,
+        operations,
+        ..
+    } = module_items;
     let mut lowered = Vec::new();
     for item in items {
         // 名前がなければパーサが報告済み
