@@ -76,7 +76,7 @@ grep pat path =
   close f
   lines text
     |> filter (String.contains pat)
-    |> each fn line -> println "match: \{line}"
+    |> each (fn line -> println "match: \{line}")
 ```
 
 ## 状態 (パラメータ付き handler)

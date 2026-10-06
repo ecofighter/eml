@@ -26,14 +26,14 @@ copy src dst =
 
 ```haskell
 people |> filter (fn p -> p.age >= 18)
-each items fn item ->
-  println item
+each items (fn item ->
+  println item)
 ```
 
 - `fn x y -> e`、`fn (a, b) -> e`、`fn () -> e`、`fn (x : Int) -> e` と書く
 - 型の明示 `(p : T)` は、ラムダの引数だけでなく、どのパターンの位置でも書ける。タプルの要素に書くときは `((a : Int), b)` とする。`(a : Int, b)` は構文エラーである
-- 関数適用の最後の引数がラムダなら、括弧なしで書ける (Haskell の BlockArguments)
-- `->` で行が終われば、本体はブロックになる
+- 関数の引数や演算の項にするときは、括弧で囲む ([文法](grammar.md) の「文法上の補足」)。ブロックの残りを渡すなら、`use item <- each items` とも書ける (「`use`」)
+- `->` で行が終われば、本体はブロックになる。括弧の中でも同じで、そのブロックは閉じ括弧で閉じる ([レイアウト規則](layout.md))
 
 ## 関数適用
 
@@ -167,7 +167,7 @@ with_log path action =
 fetch_all : List String -> <IO> List Int
 fetch_all urls =
   use run_scheduler
-  let tasks = map (fn url -> Async.start fn () -> Http.status url) urls
+  let tasks = map (fn url -> Async.start (fn () -> Http.status url)) urls
   map Async.await tasks
 ```
 

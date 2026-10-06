@@ -677,6 +677,44 @@ fn let_in_inside_parentheses() {
 }
 
 #[test]
+fn let_in_with_a_block_on_the_right() {
+    let text = lines(&["f x =", "  let y =", "      x + 1", "    in y"]);
+    insta::assert_snapshot!(shape(&text), @r#"
+    SOURCE_FILE
+      EQUATION
+        NAME
+          LIDENT "f"
+        BIND_PAT
+          NAME
+            LIDENT "x"
+        EQ "="
+        BLOCK
+          EXPR_STMT
+            LET_EXPR
+              LET_KW "let"
+              BIND_PAT
+                NAME
+                  LIDENT "y"
+              EQ "="
+              BLOCK
+                EXPR_STMT
+                  OP_SEQ
+                    PATH_EXPR
+                      PATH
+                        NAME_REF
+                          LIDENT "x"
+                    OP "+"
+                    LITERAL
+                      INT "1"
+              IN_KW "in"
+              PATH_EXPR
+                PATH
+                  NAME_REF
+                    LIDENT "y"
+    "#);
+}
+
+#[test]
 fn use_statements() {
     let text = lines(&[
         "main () =",

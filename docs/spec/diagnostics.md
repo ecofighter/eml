@@ -63,7 +63,7 @@ E0xxx は `eml_syntax::codes` (E0004 だけは `eml_diagnostics`)、E1xxx は `e
 | E0009 | `EXPECTED_INDENTED_BLOCK` | 開始トークンの後に字下げしたブロックが必要 |
 | E0010 | `SPACE_AROUND_DOT` | `.` の前後の空白 |
 | E0011 | `SYNTAX_ERROR` | その他の構文エラー |
-| E0012 | `NEEDS_PARENS` | 括弧の要る式 (`if`、`match`、`handle`、`let`) を、引数や演算の項の位置に括弧なしで書いた |
+| E0012 | `NEEDS_PARENS` | 括弧の要る形を括弧なしで書いた。`if`、`match`、`handle`、`fn`、`let ... in` を引数や演算の項の位置に書いた場合と、`resume`、`drop` を引数の位置に書いた場合である ([文法](grammar.md) の「文法上の補足」) |
 | E0013 | `NESTING_TOO_DEEP` | 式・パターン・型の入れ子が深すぎる (256 を超えた。[文法](grammar.md)) |
 | E1001 | `UNDEFINED_NAME` | 未定義の値の名前 |
 | E1002 | `UNDEFINED_TYPE` | 未定義の型の名前、未定義のエフェクトの名前、本体の注釈に書いたシグネチャにない型変数と row 変数 |

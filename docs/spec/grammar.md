@@ -47,7 +47,7 @@ expr        ::= 'if' expr 'then' body ('else' body)?
               | 'match' expr 'with' arms
               | 'handle' expr ('from' expr)? 'with' clauses
               | 'fn' apat+ '->' body
-              | 'let' pat (':' type)? '=' expr 'in' expr
+              | 'let' pat (':' type)? '=' body 'in' expr
               | op_expr
 arms        ::= block(arm) | arm+
 arm         ::= '|' pat '->' body
@@ -57,9 +57,7 @@ clause      ::= '|' LIDENT apat* '->' body                -- 操作の節 (引�
 
 op_expr     ::= operand (OP operand)*                     -- CST では平たい列
 operand     ::= '-' operand | app
-app         ::= ('resume' | 'drop')? postfix+ lambda?
-              | lambda
-lambda      ::= 'fn' apat+ '->' body                      -- 最後の引数のラムダ
+app         ::= ('resume' | 'drop')? postfix+
 postfix     ::= atom ('.' (LIDENT | INT))*                -- '.' の前後に空白を置かない
 
 atom        ::= INT | FLOAT | CHAR | string | RAW_STRING | command
@@ -103,7 +101,9 @@ command     ::= CMD_START (CMD_TEXT | ESCAPE | '\{' '..'? expr '}')* CMD_END
 - 型の位置での `<` は row の開始だけを意味する
 - `postfix` の `.INT` で、lexer が `t.0.1` の `0.1` を浮動小数のトークンにした場合、parser がフィールドアクセスの位置で分割する (Rust と同じ)
 - `qvar` / `qcon` の `.` と、`postfix` の `.` は、前後に空白を置かない (置くと E0010)。`Upper.lower` は修飾された名前、`lower.lower` はフィールドアクセスである
-- `match`、`handle`、`if`、`fn` (最後の引数の位置を除く)、`let ... in` は atom ではない。関数の引数や演算の項にするときは括弧で囲む。これにより、`match e with` の `e` は `with` の手前で終わる
+- 式の形は `expr`、`operand`、`postfix` の3つの層に分かれる。上の層の形を下の層の位置に括弧なしで書くと E0012 にする
+  - `if`、`match`、`handle`、`fn`、`let ... in` は `expr` の層の形で、末尾の本体が右へできるだけ伸びる。関数の引数や演算の項にするときは括弧で囲む。これにより、`match e with` の `e` は `with` の手前で終わる
+  - `resume` と `drop` の適用は `operand` の層の形で、引数が atom なので右へ伸びない。演算の項には書けるが、関数の引数にするときは括弧で囲む
 - トップレベルでパターンによる束縛 (`(a, b) = ...`) は書けない。トップレベルの値は、関数と同じく `LIDENT apat* '='` (引数 0 個) で定義する
 - 等式が `LIDENT OP` で始まる場合は演算子の定義、`LIDENT` の後に `=` か `apat` が続く場合は関数の定義である。2トークンの先読みで区別する
 - `A -> <E> B -> C` の row `<E>` は最初の `->` に付き、`A -> <E> (B -> C)` と読む。内側の `B -> C` の row は省略扱いとする
@@ -116,7 +116,7 @@ command     ::= CMD_START (CMD_TEXT | ESCAPE | '\{' '..'? expr '}')* CMD_END
 文法は、M1 で実装した構文に加え、M2、M3、M4、M9 で入れる構文も含む。M5 以降で足す構文 (型クラスなど) は、そのマイルストーンで文法に足す。まだ実装していない機能 (レコード、モジュールなど) も構文の置き場所を先に決めてあるのは、後から入れても文法を作り直さずに済むようにするためである。M1 で実装した文法は次のとおり。
 
 - 宣言: シグネチャ、等式、`data`、`effect`、fixity
-- 式: `let`、`let ... in`、`if`、`match`、`fn`、`handle ... with` / `from`、`use`、`resume`、`drop`、演算子の列、セクション、最後の引数のラムダ、タプル、型の明示
+- 式: `let`、`let ... in`、`if`、`match`、`fn`、`handle ... with` / `from`、`use`、`resume`、`drop`、演算子の列、セクション、タプル、型の明示
 - パターン、型と row、エスケープだけの通常の文字列
 
 モジュールと import は M2 で、名前付きのレコードと `type`、リストのリテラル、補間、複数行の文字列、raw 文字列は M3 で、浮動小数と文字は M4 で、コマンドリテラルは M9 で実装する。マイルストーンの全体は [ロードマップ](../future/roadmap.md) の「マイルストーンの列」にある。

@@ -12,7 +12,7 @@ M1 (言語の全体を一通り通す vertical slice と、本番の構文の最
 - タプル (数字ラベルの閉じたレコード。[直積型とレコード](../spec/records.md))、型引数を持つ代数的データ型 (`data`)、`match` と入れ子のパターン、`Int` と `String` のリテラルのパターン
 - トップレベルの関数 (シグネチャが必須)、複数の等式による定義、ローカルの `let` と `let ... in`、`if` (then 節が `Unit` なら `else` を省略できる)、再帰、ラムダとクロージャ、部分適用、型の明示 `(e : T)`
 - シグネチャの型変数と row 変数による多相
-- fixity の宣言とユーザー定義の演算子、演算子のセクション、`use`、最後の引数のラムダ
+- fixity の宣言とユーザー定義の演算子、演算子のセクション、`use`
 - `drop` キーワード
 - エフェクトの宣言 (`never` / `once` / `multi`、型引数)、`handle` (deep)、`resume`、`drop k`、パラメータ付き handler (`handle ... from ... with`)
 - `IO` エフェクト (Prelude の `pub effect IO`) の `println`、`open`、`read_all`、`close` と、線形型 `File`。ユーザーは `IO` を handle できない ([エフェクトと handler](../spec/effects.md) の「組み込みの `IO`」)
