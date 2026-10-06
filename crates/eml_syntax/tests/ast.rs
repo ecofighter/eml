@@ -499,3 +499,14 @@ fn tuple_and_literal_pattern_parts() {
         ]
     );
 }
+
+#[test]
+fn a_public_fixity_still_has_its_associativity() {
+    // `pub` が最初のトークンになっても、結合の向きのキーワードを引く
+    let file = source("pub infixr 6 +++");
+    let Some(Item::FixityItem(fixity)) = file.items().next() else {
+        panic!("expected a fixity declaration");
+    };
+    assert_eq!(fixity.assoc().unwrap().kind(), SyntaxKind::INFIXR_KW);
+    assert_eq!(fixity.precedence().unwrap().text(), "6");
+}

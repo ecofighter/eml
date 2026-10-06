@@ -54,6 +54,7 @@ pub(super) fn split_arrows(ty: &Type, count: usize) -> (Vec<Type>, Type) {
 
 /// intrinsic を Core IR のどの命令にするか。引数の数は intrinsic のシグネチャ (`Function::arity`) から、引数と結果の
 /// 型は Prelude のスキームから引くので、ここには変換の種類だけを置く。
+#[derive(Debug, Clone, Copy)]
 pub(super) enum Lowering {
     Prim(PrimOp),
     Io(IoOp),
@@ -68,40 +69,39 @@ pub(super) enum Lowering {
     },
 }
 
-/// 表に行のある intrinsic の名前。網羅のテストが Prelude と照らし合わせる。
-#[cfg(test)]
-const IMPLEMENTED: &[&str] = &[
-    "println", "open", "read_all", "close", "show_int", "not", "negate", "+", "-", "*", "/", "%",
-    "==", "!=", "<", "<=", ">", ">=", "++", ">>", "<<",
+/// Prelude の intrinsic の名前と、Core IR の命令。名前と実装の対応はここだけに置き、網羅のテストが行ごとに Prelude と
+/// 照らし合わせる (docs/superpowers/specs/2026-10-06-refactor-r7-design.md の 4.2)。HIR が脱糖する `&&`、`||`、`|>`、
+/// `<|` は持たない。
+const INTRINSICS: &[(&str, Lowering)] = &[
+    ("println", Lowering::Io(IoOp::Println)),
+    ("open", Lowering::Io(IoOp::Open)),
+    ("read_all", Lowering::Io(IoOp::ReadAll)),
+    ("close", Lowering::Io(IoOp::Close)),
+    ("show_int", Lowering::Prim(PrimOp::ShowInt)),
+    ("not", Lowering::Prim(PrimOp::Not)),
+    ("negate", Lowering::Prim(PrimOp::IntNeg)),
+    ("+", Lowering::Prim(PrimOp::IntAdd)),
+    ("-", Lowering::Prim(PrimOp::IntSub)),
+    ("*", Lowering::Prim(PrimOp::IntMul)),
+    ("/", Lowering::Prim(PrimOp::IntDiv)),
+    ("%", Lowering::Prim(PrimOp::IntMod)),
+    ("==", Lowering::Equality { negated: false }),
+    ("!=", Lowering::Equality { negated: true }),
+    ("<", Lowering::Prim(PrimOp::IntLt)),
+    ("<=", Lowering::Prim(PrimOp::IntLe)),
+    (">", Lowering::Prim(PrimOp::IntGt)),
+    (">=", Lowering::Prim(PrimOp::IntGe)),
+    ("++", Lowering::Prim(PrimOp::StrConcat)),
+    (">>", Lowering::Compose { forward: true }),
+    ("<<", Lowering::Compose { forward: false }),
 ];
 
-/// Prelude の intrinsic の名前から、Core IR の命令を引く。名前と実装の対応はここだけに置く
-/// (docs/superpowers/specs/2026-10-06-refactor-r7-design.md の 4.2)。HIR が脱糖する `&&`、`||`、`|>`、`<|` は持たない。
+/// Prelude の intrinsic の名前から、Core IR の命令を引く。
 pub(super) fn intrinsic(name: &str) -> Option<Lowering> {
-    Some(match name {
-        "println" => Lowering::Io(IoOp::Println),
-        "open" => Lowering::Io(IoOp::Open),
-        "read_all" => Lowering::Io(IoOp::ReadAll),
-        "close" => Lowering::Io(IoOp::Close),
-        "show_int" => Lowering::Prim(PrimOp::ShowInt),
-        "not" => Lowering::Prim(PrimOp::Not),
-        "negate" => Lowering::Prim(PrimOp::IntNeg),
-        "+" => Lowering::Prim(PrimOp::IntAdd),
-        "-" => Lowering::Prim(PrimOp::IntSub),
-        "*" => Lowering::Prim(PrimOp::IntMul),
-        "/" => Lowering::Prim(PrimOp::IntDiv),
-        "%" => Lowering::Prim(PrimOp::IntMod),
-        "==" => Lowering::Equality { negated: false },
-        "!=" => Lowering::Equality { negated: true },
-        "<" => Lowering::Prim(PrimOp::IntLt),
-        "<=" => Lowering::Prim(PrimOp::IntLe),
-        ">" => Lowering::Prim(PrimOp::IntGt),
-        ">=" => Lowering::Prim(PrimOp::IntGe),
-        "++" => Lowering::Prim(PrimOp::StrConcat),
-        ">>" => Lowering::Compose { forward: true },
-        "<<" => Lowering::Compose { forward: false },
-        _ => return None,
-    })
+    INTRINSICS
+        .iter()
+        .find(|(intrinsic, _)| *intrinsic == name)
+        .map(|&(_, lowering)| lowering)
 }
 
 /// 型検査が決めた比べ方の命令。
@@ -121,14 +121,16 @@ mod tests {
     use eml_diagnostics::FileId;
     use eml_syntax::ast;
 
-    use super::{IMPLEMENTED, intrinsic};
+    use super::{INTRINSICS, intrinsic};
 
     /// HIR が脱糖するので、Core IR に届かない intrinsic。
     const DESUGARED: &[&str] = &["&&", "||", "|>", "<|"];
 
     /// Prelude の等式のないシグネチャ (intrinsic) の名前。
     fn prelude_intrinsics() -> Vec<String> {
-        let (parse, _) = eml_syntax::parse(FileId::PRELUDE, eml_hir::PRELUDE_SOURCE);
+        let (parse, errors) = eml_syntax::parse(FileId::PRELUDE, eml_hir::PRELUDE_SOURCE);
+        // 壊れた Prelude で、確かめる名前が気づかないうちに減らないようにする
+        assert!(errors.is_empty(), "{errors:?}");
         let items: Vec<ast::Item> = parse.tree().items().collect();
         let defined: Vec<String> = items
             .iter()
@@ -161,8 +163,9 @@ mod tests {
     #[test]
     fn every_implementation_names_a_prelude_intrinsic() {
         let names = prelude_intrinsics();
-        for name in IMPLEMENTED {
+        for (name, _) in INTRINSICS {
             assert!(names.iter().any(|n| n == name), "{name}");
+            assert!(intrinsic(name).is_some(), "{name}");
         }
     }
 }
