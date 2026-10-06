@@ -52,8 +52,8 @@ pub mod codes {
     pub const UNREACHABLE_EQUATION: ErrorCode = ErrorCode(4005);
 }
 
-/// 型付き HIR。HIR は複製せず、型を別テーブルに持つ (docs/implementation/architecture.md)。宣言の結果を宣言ごとに
-/// 持つのは、クエリ化と REPL で、宣言ごとに結果を使い回せるようにするため
+/// 型付き HIR。HIR は複製せず、型を別テーブルに持つ (docs/implementation/architecture.md)。
+/// 宣言の結果を宣言ごとに持つのは、クエリ化と REPL で、宣言ごとに結果を使い回せるようにするため
 /// (docs/implementation/architecture.md の「`eml_types` の内部」)。
 #[derive(Debug, Default)]
 pub struct TypedProgram {

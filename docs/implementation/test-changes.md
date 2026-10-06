@@ -298,3 +298,4 @@
 ### リファクタリング R7f
 
 - 種類1: Core IR の `Switch` の枝は R7e-2 で `Case` になったので、インタプリタの内部の誤りの文言を「a switch case binds a different number of fields than the value has」にそろえた。`eml_interp/tests/data.rs` の `an_arm_with_a_different_number_of_fields_is_an_internal_error` を `a_case_with_a_different_number_of_fields_is_an_internal_error` にし、期待する文言を変えた
+- 種類1: 同じ理由で、`eml_interp/src/error.rs` の表示のテストが例に使う内部の誤りの文言を、`machine.rs` が実際に出す「a switch without a matching case」にそろえた。テストは任意の文言の表示を確かめるもので、振る舞いは変わらない

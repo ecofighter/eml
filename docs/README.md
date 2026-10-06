@@ -24,7 +24,7 @@ eml を実装するエージェントとプログラマのための文書群で�
 | [spec/diagnostics.md](spec/diagnostics.md) | 規範 | 診断のデータ構造、番号の範囲と割り当て済みの番号、各診断が指す場所 |
 | [spec/examples.md](spec/examples.md) | 説明 | 本番の構文で書いたプログラム例 |
 | **implementation/** | 手引き | どう作るか、今どこまでできているか |
-| [implementation/architecture.md](implementation/architecture.md) | 手引き | crate の構成、各段階の規律、エラー回復、各 crate の内部、CLI と lib API |
+| [implementation/architecture.md](implementation/architecture.md) | 手引き | プログラム全体の構成と採らなかった形、crate の構成、各段階の規律、エラー回復、各 crate の内部、CLI と lib API |
 | [implementation/testing.md](implementation/testing.md) | 手引き | テスト戦略、テストの置き場所、UI テスト、テストの変更の運用 |
 | [implementation/test-changes.md](implementation/test-changes.md) | 記録 | 種類1と種類2のテストの変更の記録 |
 | [implementation/status.md](implementation/status.md) | 手引き | マイルストーン1 の成功条件と範囲、構文と名前解決以降の実装段階、各 crate の状況、次の作業の注意点、決定済みで実装待ちの方針、完了した作業 |

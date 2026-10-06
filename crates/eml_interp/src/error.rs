@@ -111,8 +111,8 @@ mod tests {
             "cannot write the output: broken pipe in `f`"
         );
         assert_eq!(
-            fault(Fault::Internal("a switch without a matching arm")),
-            "internal error: a switch without a matching arm in `f`"
+            fault(Fault::Internal("a switch without a matching case")),
+            "internal error: a switch without a matching case in `f`"
         );
     }
 
