@@ -40,17 +40,17 @@ fn and_and_or_become_if() {
 }
 
 #[test]
-fn pipes_become_applications() {
+fn pipes_are_calls_of_prelude_functions() {
     let text = "f : Int -> Int\nf x = x\ng : Int -> Int -> Int\ng a b = a\np : Int\np = 1 |> f |> g 2\nq : Int\nq = g 1 <| f 2";
-    insta::assert_snapshot!(lower_text(text), @r"
+    insta::assert_snapshot!(lower_text(text), @"
     f : Int -> Int
     f x#0 = x#0
     g : Int -> Int -> Int
     g a#0 b#1 = a#0
     p : Int
-    p = (@g 2 |>(@f |>1))
+    p = (@|> (@|> 1 @f) (@g 2))
     q : Int
-    q = (@g 1 (@f 2))
+    q = (@<| (@g 1) (@f 2))
     ");
 }
 

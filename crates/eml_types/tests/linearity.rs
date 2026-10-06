@@ -537,8 +537,8 @@ fn a_local_is_kept_across_the_arrow_applied_before_a_later_argument() {
 fn a_piped_value_is_kept_across_the_arrow_applied_before_a_later_argument() {
     let rest = "choose_then : Int -> <Choice> (Bool -> File -> <IO> Unit)\nchoose_then n =\n  let b = choose ()\n  fn c -> fn g -> close g\n\nyes : Unit -> Bool\nyes () = True\n\npiped_first : Unit -> <Choice, IO> Unit\npiped_first () =\n  let f = open \"a.txt\"\n  let k = choose_then\n  f |> k 1 (yes ())";
     insta::assert_snapshot!(carried(rest), @"
-    E3006 32:3 a linear value must be used exactly once, but it is kept alive across a call that may resume more than once
-      32:3 this call may perform `choose`, a `multi` operation
+    E3006 32:8 a linear value must be used exactly once, but it is kept alive across a call that may resume more than once
+      32:8 this call may perform `choose`, a `multi` operation
       32:3 this value is kept alive across the call
       2:9 `choose` is declared `multi` here
       note: a continuation of a `multi` operation can be resumed more than once, and each resumption would use the value again

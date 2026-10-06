@@ -57,6 +57,9 @@ pub (&&) : Bool -> Bool -> Bool
 a && b = if a then b else False
 pub (||) : Bool -> Bool -> Bool
 a || b = if a then True else b
--- HIR が脱糖する演算子。ユーザーが同じ演算子を定義すれば、普通の呼び出しになる
+-- 左辺を最初の引数に取る関数である。引数を左から評価するので、`x |> f a` は `x`、`f`、`a` の順に評価する
+-- (docs/spec/expressions.md の「関数適用」)
 pub (|>) : a -> (a -> <e> b) -> <e> b
+x |> f = f x
 pub (<|) : (a -> <e> b) -> a -> <e> b
+f <| x = f x

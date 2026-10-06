@@ -237,7 +237,7 @@ impl<'a> BodyLowering<'a> {
                         self.lower_expr(Some(arg), arg_range)
                     })
                     .collect();
-                self.call(callee, args, None, range)
+                self.call(callee, args, range)
             }
             ast::Expr::AnnotExpr(annot) => {
                 let expr = self.lower_expr(annot.expr(), range);
@@ -352,51 +352,30 @@ impl<'a> BodyLowering<'a> {
         }
     }
 
-    /// `(f a) b` と `x |> f a` を、引数の揃った1つの呼び出しとして型検査できるように、入れ子の呼び出しを平たくする。
-    /// `evaluate_first` は、足す引数 `args` の中で先に評価するものの位置である。
+    /// `(f a) b` を、引数の揃った1つの呼び出しとして型検査できるように、入れ子の呼び出しを平たくする。
     pub(super) fn call(
         &mut self,
         callee: ExprId,
         mut args: Vec<ExprId>,
-        evaluate_first: Option<usize>,
         range: TextRange,
     ) -> ExprId {
         if let ExprKind::Call {
             callee: inner,
             args: inner_args,
-            evaluate_first: inner_first,
         } = &self.exprs[callee].kind
         {
-            // 先に評価する引数は1つしか持てない。両方にあるとき (`y |> (x |> f)`) は平たくせず、呼ばれる式として評価する
-            if inner_first.is_none() || evaluate_first.is_none() {
-                let inner = *inner;
-                let first = inner_first.or(evaluate_first.map(|first| first + inner_args.len()));
-                let mut all = inner_args.clone();
-                all.append(&mut args);
-                return self.alloc(
-                    ExprKind::Call {
-                        callee: inner,
-                        args: all,
-                        evaluate_first: first,
-                    },
-                    range,
-                );
-            }
+            let inner = *inner;
+            let mut all = inner_args.clone();
+            all.append(&mut args);
+            return self.alloc(
+                ExprKind::Call {
+                    callee: inner,
+                    args: all,
+                },
+                range,
+            );
         }
-        self.alloc(
-            ExprKind::Call {
-                callee,
-                args,
-                evaluate_first,
-            },
-            range,
-        )
-    }
-
-    /// `x |> f a` を、`x` を先に評価する呼び出し `f a x` にする (docs/spec/declarations.md の標準の演算子の表)。`let` に
-    /// しないのは、型検査が `x` を引数の型を期待して検査し、普通の呼び出しと同じ診断を出せるようにするため。
-    pub(super) fn pipe(&mut self, value: ExprId, function: ExprId, range: TextRange) -> ExprId {
-        self.call(function, vec![value], Some(0), range)
+        self.alloc(ExprKind::Call { callee, args }, range)
     }
 
     fn lower_block(&mut self, block: &ast::Block, range: TextRange) -> ExprId {
@@ -476,7 +455,7 @@ impl<'a> BodyLowering<'a> {
             );
             // 包む残りがないので、最後の引数を Missing にして型の誤りを連鎖させない
             let missing = self.alloc(ExprKind::Missing, stmt_range);
-            return self.call(callee, vec![missing], None, stmt_range);
+            return self.call(callee, vec![missing], stmt_range);
         }
         let wrapped = TextRange::new(stmt_range.start(), block_range.end());
         let mark = self.scope.len();
@@ -496,7 +475,7 @@ impl<'a> BodyLowering<'a> {
             }),
             wrapped,
         );
-        self.call(callee, vec![lambda], None, wrapped)
+        self.call(callee, vec![lambda], wrapped)
     }
 
     fn lower_match(&mut self, expr: &ast::MatchExpr, range: TextRange) -> ExprId {

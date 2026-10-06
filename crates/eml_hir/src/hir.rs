@@ -104,12 +104,10 @@ pub struct LangItems {
     /// `==` と `!=`。型検査が引数の型から比べ方を決める (docs/spec/declarations.md の標準の演算子の表)。
     pub eq: FunctionId,
     pub ne: FunctionId,
-    /// HIR が脱糖する演算子 `&&`、`||`、`|>`、`<|`。ユーザーが同じ演算子を定義すれば、それに解決して普通の呼び出しに
-    /// なる。
+    /// HIR が短絡して評価するために脱糖する演算子 `&&` と `||`。ユーザーが同じ演算子を定義すれば、それに解決して
+    /// 普通の呼び出しになる。
     pub and: FunctionId,
     pub or: FunctionId,
-    pub pipe: FunctionId,
-    pub apply: FunctionId,
 }
 
 #[derive(Debug)]
@@ -375,13 +373,10 @@ pub enum ExprKind {
     Missing,
     Literal(Literal),
     Path(Res),
-    /// `(f a) b` と `x |> f a` は、引数を並べた1つの呼び出しにしてある。
+    /// `(f a) b` は、引数を並べた1つの呼び出しにしてある。
     Call {
         callee: ExprId,
         args: Vec<ExprId>,
-        /// この位置の引数を、呼ばれる式とほかの引数より先に評価する。`x |> f a` は `f a x` の呼び出しで、`x` を先に
-        /// 評価する (docs/spec/declarations.md の標準の演算子の表)。型検査は普通の呼び出しとして扱う。
-        evaluate_first: Option<usize>,
     },
     /// `else` を省略したら `None`。型検査が「`else` のない `if`」として診断できるように、`()` を補わずに残す。
     If {

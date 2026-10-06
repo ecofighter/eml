@@ -113,9 +113,6 @@ mod tests {
 
     use super::{INTRINSICS, intrinsic};
 
-    /// HIR が脱糖するので、Core IR に届かない intrinsic。
-    const DESUGARED: &[&str] = &["|>", "<|"];
-
     /// Prelude の等式のないシグネチャ (intrinsic) の名前。
     fn prelude_intrinsics() -> Vec<String> {
         let mut files = SourceFiles::new();
@@ -175,11 +172,7 @@ mod tests {
     #[test]
     fn every_prelude_intrinsic_has_an_implementation() {
         for name in prelude_intrinsics() {
-            assert_eq!(
-                intrinsic(&name).is_some(),
-                !DESUGARED.contains(&name.as_str()),
-                "{name}"
-            );
+            assert!(intrinsic(&name).is_some(), "{name}");
         }
     }
 

@@ -17,30 +17,17 @@ pub enum EvalStep {
 /// 観測できる順を変えない範囲で、引数をまとめて渡す。既知の呼ばれる式の引数の数までの引数は、本体が引数のそろうまで
 /// 動かないのでまとめる。それを超える引数は、値なら前とまとめ、値でなければその前で矢印を適用する。
 pub fn call_steps(program: &Program, body: &Body, call: ExprId) -> Vec<EvalStep> {
-    let ExprKind::Call {
-        callee,
-        args,
-        evaluate_first,
-    } = &body.exprs[call].kind
-    else {
+    let ExprKind::Call { callee, args } = &body.exprs[call].kind else {
         panic!("call_steps takes a call");
     };
-    let mut steps = Vec::new();
-    // `x |> f a` の `x` は、呼ばれる式とほかの引数より先に評価する (docs/spec/declarations.md の標準の演算子の表)
-    if let Some(first) = *evaluate_first {
-        steps.push(EvalStep::Eval(args[first]));
-    }
-    steps.push(EvalStep::Eval(*callee));
+    let mut steps = vec![EvalStep::Eval(*callee)];
     let known = known_arity(program, body, *callee).unwrap_or(0);
     let mut pending = Vec::new();
     for (index, &arg) in args.iter().enumerate() {
-        let evaluated = Some(index) == *evaluate_first;
-        if !(index < known || evaluated || is_value(program, body, arg)) {
+        if !(index < known || is_value(program, body, arg)) {
             steps.extend(pending.drain(..).map(EvalStep::Arrow));
         }
-        if !evaluated {
-            steps.push(EvalStep::Eval(arg));
-        }
+        steps.push(EvalStep::Eval(arg));
         pending.push(index);
     }
     steps.extend(pending.into_iter().map(EvalStep::Arrow));

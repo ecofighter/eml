@@ -432,8 +432,6 @@ fn lang_items(prelude: &ModuleScope) -> LangItems {
         ne: function("!="),
         and: function("&&"),
         or: function("||"),
-        pipe: function("|>"),
-        apply: function("<|"),
     }
 }
 

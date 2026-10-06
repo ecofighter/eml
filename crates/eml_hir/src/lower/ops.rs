@@ -117,7 +117,6 @@ impl BodyLowering<'_> {
                     ExprKind::Call {
                         callee,
                         args: vec![operand],
-                        evaluate_first: None,
                     },
                     whole,
                 )
@@ -140,7 +139,7 @@ impl BodyLowering<'_> {
         rhs: ExprId,
     ) -> ExprId {
         let range = self.exprs[lhs].range.cover(self.exprs[rhs].range);
-        // 解決した先が Prelude の脱糖する演算子のときだけ脱糖する。ユーザーの定義は Prelude の演算子を隠すので、
+        // 解決した先が Prelude の `&&` か `||` のときだけ、短絡して評価するために `if` に脱糖する。ユーザーの定義は Prelude の演算子を隠すので、
         // `&&` を定義すれば普通の呼び出しになる (docs/spec/declarations.md の「fixity」)
         let res = match self.items.value(op) {
             // 短絡評価にするため `if` に脱糖する (docs/spec/declarations.md)
@@ -172,12 +171,6 @@ impl BodyLowering<'_> {
                     range,
                 );
             }
-            Some(ValueItem::Function(id)) if id == self.lang.pipe => {
-                return self.pipe(lhs, rhs, range);
-            }
-            Some(ValueItem::Function(id)) if id == self.lang.apply => {
-                return self.call(lhs, vec![rhs], None, range);
-            }
             Some(ValueItem::Function(id)) => Some(Res::Function(id)),
             Some(ValueItem::Constructor(ctor)) => Some(Res::Constructor(ctor)),
             Some(ValueItem::Operation(operation)) => Some(Res::Operation(operation)),
@@ -188,7 +181,6 @@ impl BodyLowering<'_> {
                     ExprKind::Call {
                         callee,
                         args: vec![lhs, rhs],
-                        evaluate_first: None,
                     },
                     range,
                 );
@@ -210,7 +202,6 @@ impl BodyLowering<'_> {
             ExprKind::Call {
                 callee,
                 args: vec![lhs, rhs],
-                evaluate_first: None,
             },
             range,
         )

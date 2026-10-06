@@ -91,17 +91,18 @@ fn arguments_of_an_operation_are_passed_together() {
 
 #[test]
 fn the_left_of_a_pipe_is_evaluated_first() {
+    // `x |> f 1` は `(|>) x (f 1)` の呼び出しで、`x` を `f` と `1` より先に評価する
     assert_eq!(
         steps("t : Unit -> Int\nt () = g () |> f 1"),
-        ["eval g ()", "eval f", "eval 1", "arrow 0", "arrow 1"]
+        ["eval |>", "eval g ()", "eval f 1", "arrow 0", "arrow 1"]
     );
 }
 
 #[test]
-fn a_nested_pipe_is_a_callee() {
+fn a_nested_pipe_is_an_argument() {
     assert_eq!(
         steps("t : Unit -> Int\nt () = 1 |> (2 |> f)"),
-        ["eval 1", "eval 2 |> f", "arrow 0"]
+        ["eval |>", "eval 1", "eval 2 |> f", "arrow 0", "arrow 1"]
     );
 }
 
@@ -122,10 +123,10 @@ fn an_annotated_value_beyond_the_arity_is_passed_together() {
 }
 
 #[test]
-fn a_pipe_into_a_call_beyond_the_arity_applies_before_the_piped_arrow() {
+fn a_pipe_passes_both_operands_together() {
     assert_eq!(
         steps("t : Unit -> Int\nt () = g () |> h 1"),
-        ["eval g ()", "eval h", "eval 1", "arrow 0", "arrow 1"]
+        ["eval |>", "eval g ()", "eval h 1", "arrow 0", "arrow 1"]
     );
 }
 

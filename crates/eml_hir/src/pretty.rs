@@ -158,20 +158,10 @@ impl Printer<'_> {
             ExprKind::Literal(Literal::String(s)) => format!("{s:?}"),
             ExprKind::Literal(Literal::Unit) => "()".to_string(),
             ExprKind::Path(res) => self.res(body, *res),
-            ExprKind::Call {
-                callee,
-                args,
-                evaluate_first,
-            } => {
+            ExprKind::Call { callee, args } => {
                 let mut s = format!("({}", self.expr(body, *callee, indent));
-                for (index, &arg) in args.iter().enumerate() {
-                    // 先に評価する引数 (`x |> f` の `x`) には `|>` を付ける
-                    let mark = if *evaluate_first == Some(index) {
-                        "|>"
-                    } else {
-                        ""
-                    };
-                    write!(s, " {mark}{}", self.expr(body, arg, indent)).unwrap();
+                for &arg in args {
+                    write!(s, " {}", self.expr(body, arg, indent)).unwrap();
                 }
                 s + ")"
             }
