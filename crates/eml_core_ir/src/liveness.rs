@@ -219,14 +219,15 @@ pub(crate) fn analyze(function: &mut CoreFn) -> BlockLiveness {
             }
         }
     }
-    for (join, &node) in function.joins.iter().enumerate() {
+    for join in 0..function.joins.len() {
+        let node = function.joins[join];
         if let CExpr::Join {
             join: _,
             params: _,
             captures,
             body: _,
             scope: _,
-        } = &mut function.exprs[node.0 as usize]
+        } = function.expr_mut(node)
         {
             *captures = live.captures[join].iter().copied().collect();
         }
