@@ -4,9 +4,9 @@ use common::{diagnostics, lower_text};
 
 #[test]
 fn a_signature_and_an_equation_become_a_function() {
-    insta::assert_snapshot!(lower_text("f : Int -> <IO> Unit\nf x = println (show_int x)"), @r"
+    insta::assert_snapshot!(lower_text("f : Int -> <IO> Unit\nf x = println (show_int x)"), @"
     f : Int -> <IO> Unit
-    f x#0 = (println (show_int x#0))
+    f x#0 = (@IO.println (show_int x#0))
     ");
 }
 
@@ -43,7 +43,7 @@ fn if_without_else_and_annotations() {
     insta::assert_snapshot!(lower_text(text), @r#"
     f : Bool -> Unit
     f b#0 = {
-      (if b#0 (println "yes"))
+      (if b#0 (@IO.println "yes"))
       (() : Unit)
     }
     "#);
