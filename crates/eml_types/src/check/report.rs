@@ -593,8 +593,9 @@ fn carried_across(
     };
     if let Some(op) = operation {
         let declared = &program[op];
+        // 宣言はどのモジュールにもありうるので、操作のモジュールのファイルを指す
         diagnostic = diagnostic.with_secondary(Label::new(
-            file,
+            program.file(op.module),
             declared.name_range,
             format!("`{}` is declared `multi` here", declared.name),
         ));

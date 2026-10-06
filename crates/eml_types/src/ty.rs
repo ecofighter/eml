@@ -16,7 +16,7 @@ pub enum Multiplicity {
     Multi,
 }
 
-/// 外に出す型の row のラベル。名前を持つのは、`Module` を渡さずに表示するため。
+/// 外に出す型の row のラベル。名前を持つのは、`Program` を渡さずに表示するため。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EffectLabel {
     pub id: EffectId,

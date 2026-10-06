@@ -53,9 +53,10 @@ pub(crate) fn check_module(program: &Program) -> (TypedModule, Vec<Diagnostic>) 
     let signatures = signatures(program, &context);
     let mut schemes = declaration_schemes(program, &context, &signatures);
     let mut diagnostics = Vec::new();
+    // `main` は入口のモジュールからだけ探す (docs/superpowers/specs/2026-10-06-refactor-r7-design.md の 1.4)
     let main = program
         .functions()
-        .find(|(_, function)| function.name == "main")
+        .find(|(id, function)| id.module == program.entry && function.name == "main")
         .map(|(id, _)| id);
     if let Some(id) = main {
         check_main(program, &context, &signatures, id, &mut diagnostics);

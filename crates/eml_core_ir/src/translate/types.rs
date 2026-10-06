@@ -52,7 +52,7 @@ pub(super) fn split_arrows(ty: &Type, count: usize) -> (Vec<Type>, Type) {
     (params, ty.clone())
 }
 
-/// intrinsic を Core IR のどの命令にするか。引数の数は intrinsic のシグネチャ (`Function::arity`) から、引数と結果の
+/// intrinsic を Core IR のどの命令にするか。引数の数は intrinsic のシグネチャ (`hir::Program::arity`) から、引数と結果の
 /// 型は Prelude のスキームから引くので、ここには変換の種類だけを置く。
 #[derive(Debug, Clone, Copy)]
 pub(super) enum Lowering {

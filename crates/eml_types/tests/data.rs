@@ -141,4 +141,6 @@ fn a_user_bool_hides_the_prelude_bool() {
         eml_test_support::short(&checked.files, &checked.diagnostics),
         ["E2001 3:10 mismatched types"]
     );
+    let full = eml_test_support::full(&checked.files, &checked.diagnostics);
+    assert!(full.contains("expected `Bool`, found `Bool`"), "{full}");
 }

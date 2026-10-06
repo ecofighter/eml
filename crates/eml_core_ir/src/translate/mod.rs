@@ -66,7 +66,7 @@ pub(crate) fn translate(hir: &HirProgram, typed: &TypedModule) -> Program {
     }
     let main = typed
         .main
-        .expect("`eml_cli::compile` reports a missing `main`");
+        .expect("`eml_cli::Session::compile` reports a missing `main`");
     let main_type = &typed
         .signatures
         .get(main)

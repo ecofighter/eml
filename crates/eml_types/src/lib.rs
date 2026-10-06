@@ -161,8 +161,8 @@ fn write_kinds(out: &mut String, scheme: &Scheme) {
 #[cfg(test)]
 pub(crate) fn test_program(text: &str) -> eml_hir::Program {
     let mut files = eml_diagnostics::SourceFiles::new();
-    let main = files.add("test.em", text);
     let prelude = files.add(eml_hir::PRELUDE_PATH, eml_hir::PRELUDE_SOURCE);
+    let main = files.add("test.em", text);
     let (parse, _) = eml_syntax::parse(main, files.text(main));
     let prelude_tree = eml_hir::parse_prelude(prelude);
     eml_hir::lower((prelude, &prelude_tree), (main, &parse.tree())).0

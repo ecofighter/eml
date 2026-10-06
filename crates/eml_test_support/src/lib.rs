@@ -22,6 +22,8 @@ use eml_runtime::OutputSink;
 
 pub struct Parsed {
     pub files: SourceFiles,
+    /// `hir` の feature のときに登録する Prelude の番号。
+    pub prelude: Option<FileId>,
     pub file: FileId,
     pub parse: eml_syntax::Parse,
     pub diagnostics: Vec<Diagnostic>,
@@ -47,15 +49,26 @@ pub struct Checked {
 }
 
 pub fn source(text: &str) -> (SourceFiles, FileId) {
-    let mut files = SourceFiles::new();
-    let file = files.add("test.em", text);
+    let (files, _, file) = source_with_prelude(text);
     (files, file)
+}
+
+/// `eml_cli::Session` と同じく、Prelude を先に登録する。診断はファイルの番号の順に並ぶので、Prelude の範囲を指す診断が
+/// 出たときに、テストと CLI で並びをそろえるため。
+fn source_with_prelude(text: &str) -> (SourceFiles, Option<FileId>, FileId) {
+    let mut files = SourceFiles::new();
+    #[cfg(feature = "hir")]
+    let prelude = Some(files.add(eml_hir::PRELUDE_PATH, eml_hir::PRELUDE_SOURCE));
+    #[cfg(not(feature = "hir"))]
+    let prelude = None;
+    let file = files.add("test.em", text);
+    (files, prelude, file)
 }
 
 /// どのテストでも lossless を確かめるため、木が元のテキストに戻ることもここで確認する。構文解析するのは
 /// `SourceFiles` に保存したテキスト (先頭の BOM を除いたもの) である (docs/spec/lexical.md)。
 pub fn parse(text: &str) -> Parsed {
-    let (files, file) = source(text);
+    let (files, prelude, file) = source_with_prelude(text);
     let (parse, mut diagnostics) = eml_syntax::parse(file, files.text(file));
     assert_eq!(
         parse.syntax().text().to_string(),
@@ -65,6 +78,7 @@ pub fn parse(text: &str) -> Parsed {
     sort_diagnostics(&mut diagnostics);
     Parsed {
         files,
+        prelude,
         file,
         parse,
         diagnostics,
@@ -74,13 +88,13 @@ pub fn parse(text: &str) -> Parsed {
 #[cfg(feature = "hir")]
 pub fn lower(text: &str) -> Lowered {
     let Parsed {
-        mut files,
+        files,
+        prelude,
         file,
         parse,
         mut diagnostics,
     } = parse(text);
-    // Prelude の範囲を指す診断も表示できるように、Prelude を登録する
-    let prelude = files.add(eml_hir::PRELUDE_PATH, eml_hir::PRELUDE_SOURCE);
+    let prelude = prelude.expect("the `hir` feature registers the Prelude");
     let prelude_tree = eml_hir::parse_prelude(prelude);
     let (program, stage) = eml_hir::lower((prelude, &prelude_tree), (file, &parse.tree()));
     diagnostics.extend(stage);
