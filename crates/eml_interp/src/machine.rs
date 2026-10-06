@@ -227,9 +227,14 @@ impl<'p> Machine<'p> {
                 self.cont = self.heap.alloc(Payload::Frame(frame));
                 self.apply_and_continue(body, vec![Value::Unit])
             }
-            Call::Perform { effect, op, args } => {
+            Call::Perform {
+                effect,
+                op,
+                resumable,
+                args,
+            } => {
                 let args = self.atoms(args)?;
-                self.perform(*effect, *op, args)
+                self.perform(*effect, *op, *resumable, args)
             }
             Call::Resume { k, arg, state } => {
                 let k = self.atom(k)?;

@@ -215,6 +215,7 @@ fn call_text(program: &Program, function: &CoreFn, call: &Call) -> String {
         Call::Perform {
             effect,
             op,
+            resumable: _,
             args: a,
         } => {
             let info = &program.effects[*effect as usize];

@@ -340,10 +340,12 @@ pub enum Call {
         clauses: Vec<Atom>,
         ret: Atom,
     },
-    /// ユーザーのエフェクトの操作。継続を遡って handler を探し、その節を呼ぶ。
+    /// ユーザーのエフェクトの操作。継続を遡って handler を探し、その節を呼ぶ。`resumable` は操作が `never` でない
+    /// ことで、インタプリタはエフェクトの表を引かずに、区間を継続にするか解放するかを決める (docs/spec/core-ir.md)。
     Perform {
         effect: u32,
         op: u32,
+        resumable: bool,
         args: Vec<Atom>,
     },
     /// 継続を再開する。`state` を区間の handler フレームに戻してからつなぐ。値は handle 式の値である。
@@ -364,6 +366,7 @@ impl Call {
             | Call::Perform {
                 effect: _,
                 op: _,
+                resumable: _,
                 args,
             } => args.iter().for_each(|&atom| f(atom)),
             Call::Apply(callee, args) => {
@@ -396,6 +399,7 @@ impl Call {
             | Call::Perform {
                 effect: _,
                 op: _,
+                resumable: _,
                 args,
             } => args.iter_mut().for_each(f),
             Call::Apply(callee, args) => {

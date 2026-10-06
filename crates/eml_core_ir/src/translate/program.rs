@@ -250,6 +250,7 @@ pub(super) fn perform_call(module: &Module, op: OperationId, args: Vec<Atom>) ->
     Call::Perform {
         effect: effect_index(effect),
         op: index as u32,
+        resumable: module.operations[op].multiplicity != OpMultiplicity::Never,
         args,
     }
 }

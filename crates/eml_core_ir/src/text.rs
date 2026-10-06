@@ -592,8 +592,18 @@ impl<'t> Parser<'t> {
                 })?;
                 let effect = self.effect_id(effect, line)?;
                 let op = self.operation(effect, op, line)?;
+                // 表にない操作番号も読み戻せるようにする。誤りは verifier が報告する
+                let resumable = self.effects[effect as usize]
+                    .operations
+                    .get(op as usize)
+                    .is_some_and(|operation| operation.resumable);
                 let args = self.list('(', ')', |p| p.atom(state))?;
-                Ok(Call::Perform { effect, op, args })
+                Ok(Call::Perform {
+                    effect,
+                    op,
+                    resumable,
+                    args,
+                })
             }
             "resume" if keyword => {
                 let k = self.atom(state)?;

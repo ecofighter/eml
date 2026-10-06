@@ -450,14 +450,26 @@ impl<'a> Checker<'a> {
             Call::Perform {
                 effect,
                 op,
+                resumable,
                 args: _,
             } => {
                 let info = self.effect(*effect)?;
-                if *op as usize >= info.operations.len() {
+                let Some(operation) = info.operations.get(*op as usize) else {
                     return Err(format!(
                         "`perform` names operation {op} of `{}`, which has {} operations",
                         info.name,
                         info.operations.len()
+                    ));
+                };
+                if operation.resumable != *resumable {
+                    let (table, call) = if operation.resumable {
+                        ("resumes", "never resumes")
+                    } else {
+                        ("never resumes", "resumes")
+                    };
+                    return Err(format!(
+                        "`{}.{}` {table}, but this perform {call}",
+                        info.name, operation.name
                     ));
                 }
             }
@@ -676,6 +688,28 @@ mod tests {
         let error = verify_scopes(&program_of(function)).unwrap_err();
         assert!(
             error.message.contains("is not reachable from the body"),
+            "{}",
+            error.message
+        );
+    }
+
+    #[test]
+    fn a_perform_must_agree_with_the_effect_on_resuming() {
+        let mut program = crate::parse(
+            "effect Fail { never fail/1 }\nfn f() {\n  tailcall perform Fail.fail(())\n}\n",
+        )
+        .unwrap();
+        let function = &mut program.functions[0];
+        let root = function.body;
+        let CExpr::TailCall(Call::Perform { resumable, .. }) = function.expr_mut(root) else {
+            panic!("not a perform");
+        };
+        *resumable = true;
+        let error = verify_scopes(&program).unwrap_err();
+        assert!(
+            error
+                .message
+                .contains("`Fail.fail` never resumes, but this perform resumes"),
             "{}",
             error.message
         );

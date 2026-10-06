@@ -31,6 +31,7 @@ impl Machine<'_> {
         &mut self,
         effect: u32,
         op: u32,
+        resumable: bool,
         mut args: Vec<Value>,
     ) -> Result<Step, Fault> {
         let handler = self.find_handler(effect)?;
@@ -53,13 +54,6 @@ impl Machine<'_> {
             self.heap.dup(obj).map_err(Fault::Heap)?;
         }
         let top = std::mem::replace(&mut self.cont, outside);
-        let resumable = self
-            .program
-            .effects
-            .get(effect as usize)
-            .and_then(|info| info.operations.get(op as usize))
-            .ok_or(Fault::Internal("an unknown operation"))?
-            .resumable;
         if resumable {
             let k = self.heap.alloc(Payload::Continuation { top, handler });
             args.push(Value::Obj(k));
