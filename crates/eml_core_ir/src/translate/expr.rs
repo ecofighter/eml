@@ -164,7 +164,7 @@ impl FnLowering<'_> {
         while index < steps.len() {
             match steps[index] {
                 EvalStep::Eval(expr) if expr == callee => {
-                    if !self.is_known_callee(callee) {
+                    if eml_hir::known_arity(self.module, body, callee).is_none() {
                         function = Some(self.atom(callee, out));
                     }
                     index += 1;
@@ -206,18 +206,7 @@ impl FnLowering<'_> {
         function.expect("a call has at least one argument")
     }
 
-    /// 評価せずに直接呼べる呼ばれる式か。引数のない値の参照は呼び出しなので、呼ばれる式として先に評価する。
-    fn is_known_callee(&self, callee: ExprId) -> bool {
-        match &self.body.exprs[callee].kind {
-            ExprKind::Path(Res::Function(function)) => {
-                self.program.arity(self.indices[*function]) > 0
-            }
-            ExprKind::Path(Res::Builtin(_) | Res::Operation(_) | Res::Constructor(_)) => true,
-            _ => false,
-        }
-    }
-
-    /// 既知の呼ばれる式を、最初のまとまりの引数で呼ぶ。
+    /// 既知の呼ばれる式 (`eml_hir::known_arity` が `Some`) を、最初のまとまりの引数で呼ぶ。
     fn call_head(
         &mut self,
         callee: ExprId,

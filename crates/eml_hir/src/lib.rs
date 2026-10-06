@@ -6,7 +6,7 @@ mod hir;
 mod lower;
 mod pretty;
 
-pub use eval::{EvalStep, call_steps, is_value};
+pub use eval::{EvalStep, call_steps, is_value, known_arity};
 pub use hir::*;
 pub use lower::lower;
 pub use pretty::pretty;

@@ -65,8 +65,8 @@ pub fn is_value(module: &Module, body: &Body, expr: ExprId) -> bool {
 }
 
 /// 引数がそろうまで本体が動かない、呼ばれる式の引数の数。引数のないトップレベルの値は、参照するたびに計算して関数値を
-/// 返すので含めない。
-fn known_arity(module: &Module, body: &Body, callee: ExprId) -> Option<usize> {
+/// 返すので含めない。`Some` の呼ばれる式は評価せず、最初のまとまりで直接呼ぶ。Core IR の変換もこれで決める。
+pub fn known_arity(module: &Module, body: &Body, callee: ExprId) -> Option<usize> {
     match &body.exprs[callee].kind {
         ExprKind::Path(Res::Function(function)) => module.functions[*function]
             .body
