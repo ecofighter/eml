@@ -14,25 +14,12 @@ use crate::program::{
     ConstructorId, EffectId, FunctionId, ItemId, ModuleId, OperationId, TypeDefId,
 };
 
-/// 処理系が Prelude に足す型。`=` のない `data` として Prelude に宣言するまでの間、`DefMap` が足す。
-#[derive(Debug, Clone, Copy)]
-pub struct SyntheticType {
-    pub name: &'static str,
-}
-
 /// 処理系が Prelude に足すエフェクト。`IO` は R7d で Prelude の `effect IO` に移すまで、操作のないエフェクトとして
 /// `DefMap` が足す。
 #[derive(Debug, Clone, Copy)]
 pub struct SyntheticEffect {
     pub name: &'static str,
 }
-
-const PRELUDE_TYPES: &[SyntheticType] = &[
-    SyntheticType { name: "Int" },
-    SyntheticType { name: "String" },
-    SyntheticType { name: "Unit" },
-    SyntheticType { name: "File" },
-];
 
 const PRELUDE_EFFECTS: &[SyntheticEffect] = &[SyntheticEffect { name: "IO" }];
 
@@ -90,7 +77,6 @@ struct Definition<T> {
 #[derive(Debug)]
 struct ModuleScope {
     name: String,
-    synthetic_types: &'static [SyntheticType],
     synthetic_effects: &'static [SyntheticEffect],
     /// 名前ごとの定義。ソースの位置の順で、使える定義の最初が名前の定義である (規則1)。
     values: HashMap<String, Vec<Definition<Value>>>,
@@ -157,17 +143,15 @@ impl ModuleScope {
     /// 局所の番号は、合成の item を先に、続けて `ItemTree` の順に振る。コンストラクタと操作は、宣言の順に通し番号に
     /// する。`lower` も同じ順にアリーナへ置く。
     fn new(module: ModuleId, is_prelude: bool, tree: &ItemTree) -> ModuleScope {
-        let (synthetic_types, synthetic_effects, name) = if is_prelude {
-            (PRELUDE_TYPES, PRELUDE_EFFECTS, "Prelude")
+        let (synthetic_effects, name) = if is_prelude {
+            (PRELUDE_EFFECTS, "Prelude")
         } else {
-            (&[][..], &[][..], "Main")
+            (&[][..], "Main")
         };
         let functions = (0..tree.functions.len())
             .map(|k| item_id(module, k))
             .collect();
-        let type_ids: Vec<TypeDefId> = (0..tree.data.len())
-            .map(|k| item_id(module, synthetic_types.len() + k))
-            .collect();
+        let type_ids: Vec<TypeDefId> = (0..tree.data.len()).map(|k| item_id(module, k)).collect();
         let mut next = 0;
         let constructors = tree
             .data
@@ -202,7 +186,6 @@ impl ModuleScope {
             .collect();
         let mut scope = ModuleScope {
             name: name.to_string(),
-            synthetic_types,
             synthetic_effects,
             values: HashMap::new(),
             types: HashMap::new(),
@@ -221,18 +204,6 @@ impl ModuleScope {
 
     fn declare(&mut self, module: ModuleId, tree: &ItemTree) {
         // 合成の item は位置を持たないので空の範囲にし、どの宣言よりも先に来るようにする
-        for (k, synthetic) in self.synthetic_types.iter().enumerate() {
-            let id = item_id(module, k);
-            push(
-                &mut self.types,
-                synthetic.name,
-                TypeItem::Type(id),
-                TextRange::default(),
-                true,
-                true,
-            );
-            self.type_params.insert(id, 0);
-        }
         for (k, synthetic) in self.synthetic_effects.iter().enumerate() {
             let id = item_id(module, k);
             push(
@@ -515,10 +486,6 @@ impl DefMap {
             def_map: self,
             module,
         }
-    }
-
-    pub fn synthetic_types(&self, module: ModuleId) -> &[SyntheticType] {
-        self.scope(module).synthetic_types
     }
 
     pub fn synthetic_effects(&self, module: ModuleId) -> &[SyntheticEffect] {

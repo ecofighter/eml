@@ -57,4 +57,5 @@ pub mod codes {
     pub const FIXITY_WITHOUT_DEFINITION: ErrorCode = ErrorCode(1022);
     pub const INVALID_SECTION: ErrorCode = ErrorCode(1023);
     pub const USE_AT_END_OF_BLOCK: ErrorCode = ErrorCode(1024);
+    pub const MISSING_CONSTRUCTORS: ErrorCode = ErrorCode(1025);
 }

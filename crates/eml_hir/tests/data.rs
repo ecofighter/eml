@@ -182,3 +182,11 @@ fn bool_is_a_data_type_of_the_prelude() {
     assert_eq!(program[program.lang.false_ctor].name, "False");
     assert_eq!(program[program.lang.true_ctor].name, "True");
 }
+
+#[test]
+fn data_without_constructors_is_reported_in_a_user_module() {
+    assert_eq!(
+        diagnostics("data Empty\nf : Empty -> Int\nf e = 1"),
+        ["E1025 1:6 `Empty` has no constructors"]
+    );
+}

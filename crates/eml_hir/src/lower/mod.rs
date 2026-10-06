@@ -67,9 +67,6 @@ fn lower_items(
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     let file = tree.file;
-    for synthetic in def_map.synthetic_types(module) {
-        items.types.alloc(TypeDef::builtin(synthetic.name));
-    }
     for synthetic in def_map.synthetic_effects(module) {
         items.effects.alloc(EffectDef {
             name: synthetic.name.to_string(),

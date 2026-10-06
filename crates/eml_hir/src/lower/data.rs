@@ -1,10 +1,11 @@
 //! `data` の宣言の変換 (docs/spec/declarations.md の「`data` と `type`」)。名前の表と重複の判定は `DefMap` が持つ。
 
-use eml_diagnostics::{Diagnostic, FileId};
+use eml_diagnostics::{Diagnostic, FileId, Label};
 use la_arena::Arena;
 
 use super::duplicate;
 use super::types::{TypeLowering, Vars};
+use crate::codes;
 use crate::def_map::{DefMap, Resolver};
 use crate::hir::{Constructor, Generics, ItemId, ModuleId, TypeDef, TypeDefKind, TypeVarDecl};
 use crate::item_tree::DataItem;
@@ -32,15 +33,34 @@ pub(super) fn declare_data(
                 range,
             });
         }
+        // `=` のない `data` は、Prelude では処理系が表し方を決める intrinsic の型である。ユーザーのモジュールでは
+        // 値を作れないので E1025 にする (docs/spec/declarations.md の「`data` と `type`」)
+        let data = TypeDefKind::Data {
+            constructors: Vec::new(),
+        };
+        let kind = match (item.syntax.has_constructors(), module == def_map.prelude()) {
+            (true, _) => data,
+            (false, true) => TypeDefKind::Builtin,
+            (false, false) => {
+                diagnostics.push(Diagnostic::error(
+                    codes::MISSING_CONSTRUCTORS,
+                    format!("`{}` has no constructors", item.name),
+                    Label::new(
+                        file,
+                        item.name_range,
+                        "add constructors after `=`, as in `= | A | B`",
+                    ),
+                ));
+                data
+            }
+        };
         let id = ItemId::new(
             module,
             types.alloc(TypeDef {
                 name: item.name.clone(),
                 generics,
                 types: Arena::new(),
-                kind: TypeDefKind::Data {
-                    constructors: Vec::new(),
-                },
+                kind,
             }),
         );
         debug_assert_eq!(id, def_map.type_id(module, k));

@@ -103,4 +103,6 @@ fn prelude_fixities_follow_the_standard_table() {
             );
         }
     }
+    // `::` は S2 のリストのコンストラクタで、まだ Prelude に定義がないので fixity も持たない
+    assert_eq!(resolver.fixity("::"), Fixity::DEFAULT);
 }

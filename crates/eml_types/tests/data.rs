@@ -144,3 +144,12 @@ fn a_user_bool_hides_the_prelude_bool() {
     let full = eml_test_support::full(&checked.files, &checked.diagnostics);
     assert!(full.contains("expected `Bool`, found `Bool`"), "{full}");
 }
+
+#[test]
+fn a_user_int_hides_the_prelude_int() {
+    // 整数のリテラルは lang item の `Int` の型を持つ。ユーザーの `Int` は名前だけを隠す
+    let text = "data Int = | I\nf : Int\nf = 1";
+    let checked = eml_test_support::check(text);
+    let full = eml_test_support::full(&checked.files, &checked.diagnostics);
+    assert!(full.contains("expected `Int`, found `Int`"), "{full}");
+}

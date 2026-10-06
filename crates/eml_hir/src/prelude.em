@@ -1,8 +1,7 @@
--- 組み込みの型 `Bool` と、関数と演算子のシグネチャ。型は docs/spec/declarations.md の標準の演算子の表と、
+-- 組み込みの型と、関数と演算子のシグネチャ。型は docs/spec/declarations.md の標準の演算子の表と、
 -- docs/spec/effects.md の組み込みの IO に従う。`pub` がユーザーからの見え方を決める。等式のないシグネチャは intrinsic で、
 -- 実装は eml_core_ir が名前から引く。
--- 標準の演算子の fixity (docs/spec/declarations.md の表)。fixity は定義に付くので、定義のない `::` の fixity は、S2 で
--- `List` のコンストラクタと一緒に宣言する。
+-- 標準の演算子の fixity (docs/spec/declarations.md の表)。
 pub infixr 0 <|
 pub infixl 1 |>
 pub infixr 2 ||
@@ -12,6 +11,12 @@ pub infixr 5 ++
 pub infixl 6 +, -
 pub infixl 7 *, /, %
 pub infixr 9 >>, <<
+
+-- 組み込みの型。`=` のない `data` は Prelude では intrinsic の型で、値の表し方は処理系が決める
+pub data Int
+pub data String
+pub data Unit
+pub data File
 
 pub data Bool =
   | False
