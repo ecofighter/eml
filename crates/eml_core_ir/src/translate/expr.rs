@@ -1,5 +1,6 @@
 //! 式ごとの変換と、呼び出しの引数の個数による場合分け (docs/spec/core-ir.md の eval/apply)。
 
+use eml_hir::EvalStep;
 use eml_hir::builtin::Builtin;
 use eml_hir::{ConstructorId, ExprId, ExprKind, Literal, OperationId, PatId, Res, TypeDefId};
 use eml_types::Type;
@@ -146,6 +147,99 @@ impl FnLowering<'_> {
         )
     }
 
+    /// `call_steps` の手順どおりに評価し、続けて並ぶ矢印を1回の呼び出しにする (docs/spec/expressions.md の「関数適用」)。
+    /// 最初のまとまりは、呼ばれる式が既知なら呼ぶ相手の引数の数で場合分けし、それ以外は前の値への `Apply` にする。
+    fn call(&mut self, id: ExprId, callee: ExprId, ty: &Type, out: &mut Bindings) -> Atom {
+        let body = self.body;
+        let ExprKind::Call { args, .. } = &body.exprs[id].kind else {
+            unreachable!("call takes a call");
+        };
+        let callee_ty = self.ty(callee);
+        let steps = eml_hir::call_steps(self.module, body, id);
+        let mut atoms: Vec<Option<Atom>> = vec![None; args.len()];
+        // 前のまとまりの結果か、評価した呼ばれる式。既知の呼ばれる式は評価せず、最初のまとまりで直接呼ぶ
+        let mut function: Option<Atom> = None;
+        let mut applied = 0;
+        let mut index = 0;
+        while index < steps.len() {
+            match steps[index] {
+                EvalStep::Eval(expr) if expr == callee => {
+                    if !self.is_known_callee(callee) {
+                        function = Some(self.atom(callee, out));
+                    }
+                    index += 1;
+                }
+                EvalStep::Eval(expr) => {
+                    let position = args
+                        .iter()
+                        .position(|&arg| arg == expr)
+                        .expect("an evaluated part is the callee or an argument");
+                    atoms[position] = Some(self.atom(expr, out));
+                    index += 1;
+                }
+                EvalStep::Arrow(_) => {
+                    let mut group = Vec::new();
+                    while let Some(&EvalStep::Arrow(arg)) = steps.get(index) {
+                        group.push(
+                            atoms[arg]
+                                .take()
+                                .expect("an argument is evaluated before its arrow"),
+                        );
+                        index += 1;
+                    }
+                    applied += group.len();
+                    let group_ty = if applied == args.len() {
+                        ty.clone()
+                    } else {
+                        split_arrows(&callee_ty, applied).1
+                    };
+                    let result = match function {
+                        None => self.call_head(callee, &callee_ty, group, &group_ty, out),
+                        Some(value) => {
+                            self.bind(out, "t", &group_ty, Rhs::call(Call::Apply(value, group)))
+                        }
+                    };
+                    function = Some(result);
+                }
+            }
+        }
+        function.expect("a call has at least one argument")
+    }
+
+    /// 評価せずに直接呼べる呼ばれる式か。引数のない値の参照は呼び出しなので、呼ばれる式として先に評価する。
+    fn is_known_callee(&self, callee: ExprId) -> bool {
+        match &self.body.exprs[callee].kind {
+            ExprKind::Path(Res::Function(function)) => {
+                self.program.arity(self.indices[*function]) > 0
+            }
+            ExprKind::Path(Res::Builtin(_) | Res::Operation(_) | Res::Constructor(_)) => true,
+            _ => false,
+        }
+    }
+
+    /// 既知の呼ばれる式を、最初のまとまりの引数で呼ぶ。
+    fn call_head(
+        &mut self,
+        callee: ExprId,
+        callee_ty: &Type,
+        args: Vec<Atom>,
+        ty: &Type,
+        out: &mut Bindings,
+    ) -> Atom {
+        match &self.body.exprs[callee].kind {
+            ExprKind::Path(Res::Function(function)) => {
+                let target = self.indices[*function];
+                self.call_known(target, callee_ty, args, ty, out)
+            }
+            ExprKind::Path(Res::Builtin(builtin)) => {
+                self.call_builtin(*builtin, callee, callee_ty, args, ty, out)
+            }
+            ExprKind::Path(Res::Operation(op)) => self.call_operation(*op, args, ty, out),
+            ExprKind::Path(Res::Constructor(ctor)) => self.call_constructor(*ctor, args, ty, out),
+            _ => unreachable!("only a known callee is called without evaluating it"),
+        }
+    }
+
     /// 式の値をアトムにする。値の計算に要る束縛は `out` に積む。
     pub(super) fn atom(&mut self, id: ExprId, out: &mut Bindings) -> Atom {
         let body = self.body;
@@ -193,43 +287,9 @@ impl FnLowering<'_> {
                     self.bind(out, "c", &ty, Rhs::MakeClosure(wrapper, Vec::new()))
                 }
             }
-            ExprKind::Call {
-                callee,
-                args,
-                evaluate_first,
-            } => {
+            ExprKind::Call { callee, .. } => {
                 let ty = self.ty(id);
-                let callee_ty = self.ty(*callee);
-                // `x |> f a` の `x` は、呼ばれる式とほかの引数より先に評価する (docs/spec/declarations.md)
-                let first = evaluate_first.map(|index| (index, self.atom(args[index], out)));
-                match &body.exprs[*callee].kind {
-                    // 引数のない値の参照は呼び出しなので、呼ばれる式として先に評価する必要がある。一般の経路に回す
-                    ExprKind::Path(Res::Function(function))
-                        if self.program.arity(self.indices[*function]) > 0 =>
-                    {
-                        let args = self.call_args(args, first, out);
-                        let target = self.indices[*function];
-                        self.call_known(target, &callee_ty, args, &ty, out)
-                    }
-                    ExprKind::Path(Res::Builtin(builtin)) => {
-                        let args = self.call_args(args, first, out);
-                        self.call_builtin(*builtin, *callee, &callee_ty, args, &ty, out)
-                    }
-                    ExprKind::Path(Res::Operation(op)) => {
-                        let args = self.call_args(args, first, out);
-                        self.call_operation(*op, args, &ty, out)
-                    }
-                    ExprKind::Path(Res::Constructor(ctor)) => {
-                        let args = self.call_args(args, first, out);
-                        self.call_constructor(*ctor, args, &ty, out)
-                    }
-                    _ => {
-                        // 呼ばれる式は引数より左にあるので、先に評価する
-                        let function = self.atom(*callee, out);
-                        let args = self.call_args(args, first, out);
-                        self.bind(out, "t", &ty, Rhs::call(Call::Apply(function, args)))
-                    }
-                }
+                self.call(id, *callee, &ty, out)
             }
             ExprKind::If { .. } | ExprKind::Match { .. } => {
                 // 続きの式を join point の本体にし、`if` と `match` の値をその引数で受ける。条件と scrutinee の計算も範囲に
@@ -343,23 +403,6 @@ impl FnLowering<'_> {
                 self.lift(name, captured, &params, *lambda_body, &lambda_ty, out)
             }
         }
-    }
-
-    /// 引数を左から順に atom にする。`first` (位置と、先に評価した atom) の引数は評価し直さない。
-    fn call_args(
-        &mut self,
-        args: &[ExprId],
-        first: Option<(usize, Atom)>,
-        out: &mut Bindings,
-    ) -> Vec<Atom> {
-        let mut atoms = Vec::with_capacity(args.len());
-        for (index, &arg) in args.iter().enumerate() {
-            match first {
-                Some((first, atom)) if first == index => atoms.push(atom),
-                _ => atoms.push(self.atom(arg, out)),
-            }
-        }
-        atoms
     }
 
     /// `_` と `()` で受けた値は以後使われないので、Perceus の挿入が decref する。

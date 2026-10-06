@@ -195,3 +195,4 @@
 - `eml_hir/tests/common` の `lower_sorted` と、`eml_syntax/tests/lexer.rs` の並べ替えを `sort_diagnostics` に置き換えた。期待値は変えていない (種類3)
 - 段2が具体化で展開した制約を差し込む位置 (`Instance::at`) をなくしたので、`kind/solve.rs` の単体テスト `instance_constraints_are_spliced_at_their_position` を消した (種類1)。確かめる性質がなくなったためである。ほかの単体テストの `Instance` の組み立てから `at` を除いた (種類3)
 - 関数適用の評価の順を ML 式にし、値でない後の引数を評価する間は前の矢印を適用した結果を持つようにしたので、`eml_types/tests/linearity.rs` に `an_applied_function_is_kept_across_a_later_argument` を足した (種類1)
+- `(f 1) (g ())` と `f 1 (g ())` の副作用の順を確かめる `tests/ui/run/functions/evaluation_order.em` を足した (種類1)

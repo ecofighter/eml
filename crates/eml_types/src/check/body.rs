@@ -496,7 +496,7 @@ impl BodyCheck<'_, '_> {
     }
 
     /// 等式と同じく、引数を1つ受けるごとに型の矢印を1つたどる。たどった矢印の row はすべて今の row に含まれなければ
-    /// ならない。矢印が余れば部分適用で、残りの関数型が値の型になる (docs/spec/expressions.md の「ラムダ」)。
+    /// ならない。矢印が余れば部分適用で、残りの関数型が値の型になる (docs/spec/expressions.md の「関数適用」)。
     fn call(&mut self, id: ExprId, callee: ExprId, args: &[ExprId]) -> Ty {
         let body = self.body;
         let callee_expr = &body.exprs[callee];

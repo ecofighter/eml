@@ -1,9 +1,9 @@
-//! 呼び出しの評価の手順と、引数をまとめて渡す範囲 (docs/spec/expressions.md の「関数」)。
+//! 呼び出しの評価の手順と、引数をまとめて渡す範囲 (docs/spec/expressions.md の「関数適用」)。
 
 use eml_hir::{EvalStep, ExprKind, call_steps};
 use eml_test_support::lower_clean;
 
-const PRELUDE: &str = "f : Int -> Int -> Int\nf a b = a\n\ng : Unit -> Int\ng () = 1\n\nh : Int -> (Int -> Int)\nh a = fn b -> a + b\n\nw : Int -> Int -> Int\nw = fn a b -> a\n\n";
+const PRELUDE: &str = "f : Int -> Int -> Int\nf a b = a\n\ng : Unit -> Int\ng () = 1\n\nh : Int -> (Int -> Int)\nh a = fn b -> a + b\n\nw : Int -> Int -> Int\nw = fn a b -> a\n\nv : Int\nv = g ()\n\neffect Combine where\n  combine : Int -> Int -> Int\n\n";
 
 /// 関数 `t` の本体 (呼び出し) の手順を、評価する部分式のソースと、適用する矢印の番号で表す。
 fn steps(t: &str) -> Vec<String> {
@@ -71,6 +71,22 @@ fn a_top_level_value_is_not_a_known_callee() {
     assert_eq!(
         steps("t : Unit -> Int\nt () = w 1 (g ())"),
         ["eval w", "eval 1", "arrow 0", "eval g ()", "arrow 1"]
+    );
+}
+
+#[test]
+fn a_top_level_value_beyond_the_arity_waits_for_the_call() {
+    assert_eq!(
+        steps("t : Unit -> Int\nt () = h 1 v"),
+        ["eval h", "eval 1", "arrow 0", "eval v", "arrow 1"]
+    );
+}
+
+#[test]
+fn arguments_of_an_operation_are_passed_together() {
+    assert_eq!(
+        steps("t : Unit -> <Combine> Int\nt () = combine 1 (g ())"),
+        ["eval combine", "eval 1", "eval g ()", "arrow 0", "arrow 1"]
     );
 }
 
