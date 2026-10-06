@@ -27,7 +27,7 @@ equation    ::= LIDENT apat* '=' body
               | apat OP apat '=' body                    -- 演算子の定義
 body        ::= block(stmt) | expr
 
-data_item   ::= 'data' UIDENT LIDENT* '=' alts
+data_item   ::= 'data' UIDENT LIDENT* ('=' alts)?
 alts        ::= block(alt) | alt+
 alt         ::= '|' UIDENT type_atom*
               | '|' btype CONOP btype                     -- 中置のコンストラクタ

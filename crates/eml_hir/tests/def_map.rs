@@ -1,6 +1,6 @@
 //! モジュールごとのスコープ表 (docs/superpowers/specs/2026-10-06-refactor-r7-design.md の 3.2〜3.4)。
 
-use eml_hir::{Assoc, Fixity, Lookup, ValueItem};
+use eml_hir::{Assoc, Fixity, Lookup, TypeItem, ValueItem};
 use eml_test_support::def_map;
 
 #[test]
@@ -105,4 +105,36 @@ fn prelude_fixities_follow_the_standard_table() {
     }
     // `::` は S2 のリストのコンストラクタで、まだ Prelude に定義がないので fixity も持たない
     assert_eq!(resolver.fixity("::"), Fixity::DEFAULT);
+}
+
+#[test]
+fn entry_definitions_shadow_prelude_names() {
+    let (map, diagnostics) = def_map("not : Bool -> Bool\nnot b = b");
+    assert!(diagnostics.is_empty(), "{diagnostics:?}");
+    let resolver = map.resolver(map.entry());
+    let Some(ValueItem::Function(user)) = resolver.value("not") else {
+        panic!("`not` is a function");
+    };
+    assert_eq!(user.module, map.entry());
+    // lang item と E1009 の判定は、隠された Prelude の関数も引く
+    let prelude = resolver
+        .prelude_function("not")
+        .expect("the Prelude declares `not`");
+    assert_eq!(prelude.module, map.prelude());
+    assert_eq!(resolver.value("nope"), None);
+}
+
+#[test]
+fn types_and_effects_share_the_type_namespace() {
+    let (map, _) = def_map("");
+    let resolver = map.resolver(map.entry());
+    assert_eq!(
+        resolver.type_item("Int"),
+        Some(TypeItem::Type(map.lang().int))
+    );
+    assert_eq!(
+        resolver.type_item("IO"),
+        Some(TypeItem::Effect(map.lang().io))
+    );
+    assert_eq!(resolver.type_item("Console"), None);
 }

@@ -238,3 +238,11 @@
 
 - 種類1: 組み込みの表 (`eml_hir::builtin`) をなくしたので、表を確かめていた `eml_hir` の単体テスト (`builtin.rs` の `every_builtin_has_one_row_in_the_table` と `names_are_looked_up_by_access`) と、`structure.rs` の `the_prelude_has_a_signature_for_every_builtin_function` を消した。Prelude のシグネチャが intrinsic の関数になることは `structure.rs` の `prelude_signatures_without_equations_are_intrinsic_functions` で、Core IR の実装の表が Prelude の intrinsic と一致することは `eml_core_ir` の `every_prelude_intrinsic_has_an_implementation` と `every_implementation_names_a_prelude_intrinsic` で確かめる
 - 種類2: `eml_hir` の `lower/scope.rs` の単体テスト `user_functions_shadow_builtins` を `user_functions_shadow_prelude_functions` にした。名前の表が引く Prelude の値が、組み込み (`ValueItem::Builtin`) から Prelude の関数 (`ValueItem::Function`) になった。ユーザーの定義が Prelude の名前を隠すことを確かめる目的は変わらない
+
+### リファクタリング R7b-3
+
+- 種類1: 不具合2を直したので、`eml_hir/tests/effects.rs` の `a_function_after_an_operation_of_the_same_name_is_a_duplicate` に handler の節を足し、節で E1001 が出ないことまで確かめる形に強めた。関数を先に定義する `a_function_before_an_operation_of_the_same_name_does_not_hide_it_from_clauses`、`eml_types/tests/effects.rs` の `operations_of_a_duplicate_effect_do_not_cascade`、UI テスト `check-fail/names/duplicate_operation_and_function.em` を足した
+- 種類1: `pub` を受け付けたので、`eml_hir/tests/lower.rs` の `pub_and_type_are_not_supported_yet` を `type_and_import_are_not_supported_yet` にし、`pub` の E0004 を期待から外した。同じ回に足した `item_tree.rs` の `signatures_and_equations_are_grouped_by_name` も、`pub` の E0004 を期待しなくなった
+- 種類1: 構文エラーだった `=` のない `data` を受け付けるようにした。ユーザーのモジュールでは E1025 になる。`eml_syntax/tests/declarations.rs` の `data_without_constructors_is_parsed` と、`eml_hir/tests/data.rs` の `data_without_constructors_is_reported_in_a_user_module` を足した。整数のリテラルが lang item の `Int` を持つことは、`eml_types/tests/data.rs` の `a_user_int_hides_the_prelude_int` で確かめる
+- 種類2: Prelude から `::` の fixity を外した。`lower/prelude.rs` の単体テスト `prelude_fixities_follow_the_standard_table` の表から `::` を外し、`lower/prelude.rs` をなくしたときに `eml_hir/tests/def_map.rs` へ移した。移した先では、入口のモジュールから Prelude の `pub` の fixity を引き、`::` が `infixl 9` になることも確かめる。`::` を含む演算子の列のテストの期待値は変わらなかった
+- 種類2: `lower/scope.rs` をなくしたので、その単体テスト `user_functions_shadow_prelude_functions` と `types_and_effects_share_the_type_namespace` を、`eml_hir/tests/def_map.rs` の `entry_definitions_shadow_prelude_names` と `types_and_effects_share_the_type_namespace` に移した。確かめる内容は変わらない
