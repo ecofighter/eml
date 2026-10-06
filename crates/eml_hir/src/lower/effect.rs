@@ -5,10 +5,9 @@ use eml_diagnostics::{Diagnostic, FileId, Label};
 use eml_syntax::{SyntaxKind, ast};
 use la_arena::Arena;
 
-use super::duplicate;
 use super::types::{TypeLowering, Vars};
 use crate::codes;
-use crate::def_map::{DefMap, Resolver};
+use crate::def_map::{DefMap, Resolver, duplicate};
 use crate::hir::{
     EffectDef, EffectId, Generics, ItemId, ModuleId, OpMultiplicity, Operation, RowRef, Signature,
     TypeRef, TypeRefId, TypeRefKind, TypeVarDecl, TypeVarId,

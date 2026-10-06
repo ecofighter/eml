@@ -502,7 +502,7 @@ fn the_current_state_is_passed_after_the_closing_paren_of_the_value() {
 
 #[test]
 fn operations_of_a_duplicate_effect_do_not_cascade() {
-    // 今は重複したエフェクトの `y` が使え、`f` の row にない `E` として E2002 が連鎖する
+    // R7b-3 より前は、重複したエフェクトの `y` が使え、`f` の row にない `E` として E2002 が連鎖していた
     let text = "effect E where\n  x : Unit -> Int\neffect E where\n  y : Unit -> Int\n\nf : Unit -> Int\nf () = y ()";
     let checked = eml_test_support::check(text);
     assert_eq!(

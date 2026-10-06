@@ -1,0 +1,18 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: rendered
+input_file: tests/ui/check-fail/names/duplicate_effect_operations.em
+---
+[E1003] Error: `Ask` is defined more than once
+   ╭─[ check-fail/names/duplicate_effect_operations.em:5:8 ]
+   │
+ 5 │ effect Ask where
+   │        ─┬─  
+   │         ╰─── defined again here
+   │
+   ├─[ check-fail/names/duplicate_effect_operations.em:5:8 ]
+   │
+ 2 │ effect Ask where
+   │        ─┬─  
+   │         ╰─── first defined here
+───╯

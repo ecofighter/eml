@@ -246,3 +246,8 @@
 - 種類1: 構文エラーだった `=` のない `data` を受け付けるようにした。ユーザーのモジュールでは E1025 になる。`eml_syntax/tests/declarations.rs` の `data_without_constructors_is_parsed` と、`eml_hir/tests/data.rs` の `data_without_constructors_is_reported_in_a_user_module` を足した。整数のリテラルが lang item の `Int` を持つことは、`eml_types/tests/data.rs` の `a_user_int_hides_the_prelude_int` で確かめる
 - 種類2: Prelude から `::` の fixity を外した。`lower/prelude.rs` の単体テスト `prelude_fixities_follow_the_standard_table` の表から `::` を外し、`lower/prelude.rs` をなくしたときに `eml_hir/tests/def_map.rs` へ移した。移した先では、入口のモジュールから Prelude の `pub` の fixity を引き、`::` が `infixl 9` になることも確かめる。`::` を含む演算子の列のテストの期待値は変わらなかった
 - 種類2: `lower/scope.rs` をなくしたので、その単体テスト `user_functions_shadow_prelude_functions` と `types_and_effects_share_the_type_namespace` を、`eml_hir/tests/def_map.rs` の `entry_definitions_shadow_prelude_names` と `types_and_effects_share_the_type_namespace` に移した。確かめる内容は変わらない
+
+### R7b-3 の見直し
+
+- 種類1: 等式と import の前の `pub` を構文エラー (E0011) にした (docs/spec/grammar.md の `item`)。`eml_hir/tests/lower.rs` の `type_and_import_are_not_supported_yet` は、入力の `pub import M` に E0011 が1件増えた。`eml_syntax/tests/declarations.rs` に `pub_on_an_equation_is_an_error` と `pub_on_an_import_is_an_error` を足した
+- 重複したエフェクトの操作を使う UI テスト `check-fail/names/duplicate_effect_operations.em` と、`eml_hir/tests/effects.rs` の `a_clause_for_an_operation_of_a_duplicate_effect_is_dropped_silently` を足した。Prelude の等式のある関数が intrinsic にならないことを、`eml_hir/tests/structure.rs` の `prelude_functions_with_equations_are_not_intrinsic` で確かめる

@@ -237,6 +237,30 @@ impl<'t> Parser<'t> {
             return;
         }
         let range = self.error_range();
+        self.push_error(range, code, message, label);
+    }
+
+    /// 直前に読んだトークンを指す。`pub` のように、続くトークンを見て初めて誤りとわかるトークンのため。
+    pub(crate) fn error_at_previous(
+        &mut self,
+        code: ErrorCode,
+        message: impl Into<String>,
+        label: impl Into<String>,
+    ) {
+        if self.too_deep {
+            return;
+        }
+        let range = self.tokens[self.pos - 1].range;
+        self.push_error(range, code, message, label);
+    }
+
+    fn push_error(
+        &mut self,
+        range: TextRange,
+        code: ErrorCode,
+        message: impl Into<String>,
+        label: impl Into<String>,
+    ) {
         if self
             .diagnostics
             .last()

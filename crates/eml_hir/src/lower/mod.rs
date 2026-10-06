@@ -6,7 +6,7 @@ mod ops;
 mod section;
 mod types;
 
-use eml_diagnostics::{Diagnostic, FileId, Label, TextRange};
+use eml_diagnostics::{Diagnostic, Label};
 use eml_syntax::{SyntaxToken, ast};
 use la_arena::{Arena, ArenaMap, Idx};
 
@@ -19,7 +19,7 @@ use expr::BodyLowering;
 use types::{TypeLowering, Vars};
 
 /// 全モジュールの item と本体を変換する。名前は `def_map` で引き、item はその局所の番号の順にアリーナへ置く
-/// (docs/superpowers/specs/2026-10-06-refactor-r7-design.md の 3.5)。
+/// (docs/implementation/architecture.md の「`eml_hir` の内部」)。
 pub fn lower(def_map: &DefMap, trees: &[ItemTree]) -> (Program, Vec<Diagnostic>) {
     let mut diagnostics = Vec::new();
     let mut modules = Arena::new();
@@ -100,8 +100,7 @@ fn lower_items(
         &mut items.constructors,
         diagnostics,
     );
-    // Prelude の等式のないシグネチャは intrinsic の関数である (docs/spec/modules.md の「Prelude」)
-    let intrinsic = module == def_map.prelude();
+    let in_prelude = module == def_map.prelude();
     let resolver = def_map.resolver(module);
     for (k, function) in tree.functions.iter().enumerate() {
         let FunctionItem {
@@ -111,6 +110,9 @@ fn lower_items(
             equations,
             ..
         } = function;
+        // Prelude の等式のないシグネチャは intrinsic の関数で、E1005 にしない
+        // (docs/implementation/architecture.md の「`eml_hir` の内部」)
+        let intrinsic = in_prelude && equations.is_empty();
         if let (Some((_, range)), None, false) = (signature, equations.first(), intrinsic) {
             diagnostics.push(Diagnostic::error(
                 codes::MISSING_EQUATION,
@@ -214,19 +216,4 @@ pub(super) fn path_name(path: Option<ast::Path>) -> PathName {
             .map_or(PathName::Missing, |name| PathName::Plain(name.token())),
         None => PathName::Missing,
     }
-}
-
-/// 同じ名前空間のトップレベルの定義の重複 (docs/spec/modules.md の「名前空間」)。ソースで後に書いた方を primary にする。
-pub(super) fn duplicate(file: FileId, name: &str, a: TextRange, b: TextRange) -> Diagnostic {
-    let (first, again) = if a.start() <= b.start() {
-        (a, b)
-    } else {
-        (b, a)
-    };
-    Diagnostic::error(
-        codes::DUPLICATE_DEFINITION,
-        format!("`{name}` is defined more than once"),
-        Label::new(file, again, "defined again here"),
-    )
-    .with_secondary(Label::new(file, first, "first defined here"))
 }

@@ -137,6 +137,32 @@ fn prelude_signatures_without_equations_are_intrinsic_functions() {
 }
 
 #[test]
+fn prelude_functions_with_equations_are_not_intrinsic() {
+    // R7d で Prelude に本体を書く (docs/superpowers/specs/2026-10-06-refactor-r7-design.md の 4.4)。intrinsic は等式の
+    // ないシグネチャだけである
+    let mut files = eml_diagnostics::SourceFiles::new();
+    let source = format!(
+        "{}\npub twice : Int -> Int\ntwice x = x + x\n",
+        eml_hir::PRELUDE_SOURCE
+    );
+    let prelude = files.add(eml_hir::PRELUDE_PATH, source);
+    let entry = files.add("test.em", "");
+    let trees = [prelude, entry].map(|file| {
+        let (parse, errors) = eml_syntax::parse(file, files.text(file));
+        assert!(errors.is_empty(), "{errors:?}");
+        eml_hir::item_tree(file, &parse.tree()).0
+    });
+    let (def_map, diagnostics) = eml_hir::def_map(&trees);
+    assert!(diagnostics.is_empty(), "{diagnostics:?}");
+    let (program, diagnostics) = eml_hir::lower(&def_map, &trees);
+    assert!(diagnostics.is_empty(), "{diagnostics:?}");
+    let twice = function_id(&program, "twice");
+    assert!(!program[twice].intrinsic);
+    assert!(program.body(twice).is_some());
+    assert!(program[function_id(&program, "show_int")].intrinsic);
+}
+
+#[test]
 fn internal_builtins_cannot_be_named() {
     let lowered = eml_test_support::lower("f : Int -> Int\nf x = negate x");
     let codes: Vec<String> = lowered

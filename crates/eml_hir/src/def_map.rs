@@ -401,8 +401,14 @@ fn unique_params(names: impl Iterator<Item = String>) -> usize {
     seen.len()
 }
 
-/// 同じ名前空間のトップレベルの定義の重複 (docs/spec/modules.md の「名前空間」)。ソースで後に書いた方を primary にする。
-fn duplicate(file: FileId, name: &str, first: TextRange, again: TextRange) -> Diagnostic {
+/// 同じ名前空間の定義の重複 (docs/spec/modules.md の「名前空間」)。トップレベルの定義と、宣言の中の型引数に使う。
+/// ソースで後に書いた方を primary にする。
+pub(crate) fn duplicate(
+    file: FileId,
+    name: &str,
+    first: TextRange,
+    again: TextRange,
+) -> Diagnostic {
     Diagnostic::error(
         codes::DUPLICATE_DEFINITION,
         format!("`{name}` is defined more than once"),
@@ -643,10 +649,6 @@ impl<'a> Resolver<'a> {
             Some((fixity, public, _)) if module == self.module || *public => *fixity,
             _ => Fixity::DEFAULT,
         }
-    }
-
-    pub fn is_unusable(&self, name: &str) -> bool {
-        matches!(self.value(name), Some(ValueItem::Unusable))
     }
 
     /// Prelude の `pub` の関数。ユーザーの定義に隠されていても引く (E1009 の判定)。

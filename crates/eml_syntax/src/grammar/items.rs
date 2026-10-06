@@ -54,9 +54,25 @@ fn at_operator_signature(p: &Parser) -> bool {
 
 pub(super) fn item(p: &mut Parser) {
     let m = p.start();
-    // `pub` の E0004 は HIR が出す (docs/spec/grammar.md の「実装の段階」)
-    p.eat(PUB_KW);
-    match item_kind(p) {
+    let public = p.eat(PUB_KW);
+    let kind = item_kind(p);
+    // `pub` は宣言だけに付く (docs/spec/grammar.md の `item`)。等式の関数はシグネチャで公開する
+    if public {
+        match kind {
+            Some(ItemKind::Equation | ItemKind::OperatorEquation) => p.error_at_previous(
+                codes::SYNTAX_ERROR,
+                "`pub` cannot be written on an equation",
+                "write `pub` on the signature instead",
+            ),
+            Some(ItemKind::Import) => p.error_at_previous(
+                codes::SYNTAX_ERROR,
+                "`pub` cannot be written on an import",
+                "only declarations can be public",
+            ),
+            _ => {}
+        }
+    }
+    match kind {
         Some(ItemKind::Data) => data_item(p, m),
         Some(ItemKind::Type) => type_item(p, m),
         Some(ItemKind::Effect) => effect_item(p, m),

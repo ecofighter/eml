@@ -317,23 +317,23 @@ impl<'a> BodyLowering<'a> {
             PathName::Missing => return self.alloc(ExprKind::Missing, range),
         };
         let text = name.text();
-        let res = self
+        let local = self
             .scope
             .iter()
             .rev()
             .find(|(local, _)| local == text)
-            .map(|&(_, local)| Res::Local(local))
-            .or_else(|| {
-                self.items.value(text).and_then(|item| match item {
-                    ValueItem::Function(id) => Some(Res::Function(id)),
-                    ValueItem::Operation(id) => Some(Res::Operation(id)),
-                    ValueItem::Constructor(id) => Some(Res::Constructor(id)),
-                    ValueItem::Unusable => None,
-                })
-            });
-        if res.is_none() && self.items.is_unusable(text) {
-            return self.alloc(ExprKind::Missing, range);
-        }
+            .map(|&(_, local)| local);
+        let res = match local {
+            Some(local) => Some(Res::Local(local)),
+            None => match self.items.value(text) {
+                Some(ValueItem::Function(id)) => Some(Res::Function(id)),
+                Some(ValueItem::Operation(id)) => Some(Res::Operation(id)),
+                Some(ValueItem::Constructor(id)) => Some(Res::Constructor(id)),
+                // 重複した宣言の部品である。重複は E1003 で報告済み (docs/spec/modules.md の「名前空間」の規則2)
+                Some(ValueItem::Unusable) => return self.alloc(ExprKind::Missing, range),
+                None => None,
+            },
+        };
         match res {
             Some(res) => self.alloc(ExprKind::Path(res), range),
             None => {

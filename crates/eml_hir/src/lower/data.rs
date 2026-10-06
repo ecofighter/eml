@@ -3,10 +3,9 @@
 use eml_diagnostics::{Diagnostic, FileId, Label};
 use la_arena::Arena;
 
-use super::duplicate;
 use super::types::{TypeLowering, Vars};
 use crate::codes;
-use crate::def_map::{DefMap, Resolver};
+use crate::def_map::{DefMap, Resolver, duplicate};
 use crate::hir::{Constructor, Generics, ItemId, ModuleId, TypeDef, TypeDefKind, TypeVarDecl};
 use crate::item_tree::DataItem;
 

@@ -393,3 +393,13 @@ fn a_user_println_does_not_make_the_io_clause_handleable() {
         diagnostics(text)
     );
 }
+
+#[test]
+fn a_clause_for_an_operation_of_a_duplicate_effect_is_dropped_silently() {
+    // 規則2: 重複した `effect` の操作は使えない。節を捨て、E1001 を重ねない
+    let text = "effect E where\n  x : Unit -> Int\neffect E where\n  y : Unit -> Int\n\nf : Unit -> Int\nf () = handle 1 with\n  | y () k -> resume k 1";
+    assert_eq!(
+        diagnostics(text),
+        ["E1003 3:8 `E` is defined more than once"]
+    );
+}

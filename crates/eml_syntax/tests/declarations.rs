@@ -352,6 +352,31 @@ fn effect_body_lines_must_be_operations() {
 }
 
 #[test]
+fn pub_on_an_equation_is_an_error() {
+    // `pub` は宣言に付ける (docs/spec/grammar.md の `item`)。等式の関数はシグネチャで公開する
+    assert_eq!(
+        diagnostics(&lines(&[
+            "f : Int",
+            "pub f = 1",
+            "(<+>) : Int -> Int -> Int",
+            "pub a <+> b = a"
+        ])),
+        [
+            "E0011 2:1 `pub` cannot be written on an equation",
+            "E0011 4:1 `pub` cannot be written on an equation",
+        ]
+    );
+}
+
+#[test]
+fn pub_on_an_import_is_an_error() {
+    assert_eq!(
+        diagnostics("pub import M"),
+        ["E0011 1:1 `pub` cannot be written on an import"]
+    );
+}
+
+#[test]
 fn pub_without_an_item_is_an_error() {
     assert_eq!(diagnostics("pub"), ["E0003 1:4 expected an item"]);
 }
