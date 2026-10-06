@@ -115,14 +115,22 @@ pub enum Frame {
     Apply { args: Vec<Value>, next: ObjRef },
     /// 継続の最下部にある `IO` の組み込みの handler (docs/spec/core-ir.md)。
     Io,
-    /// handle の handler。節のクロージャはエフェクトの操作の順に並ぶ。`next` が `None` なのは、継続に捕まえられて
-    /// handle の外側から切り離されている間である (docs/spec/core-ir.md)。
+    /// handle の handler。節はエフェクトの操作の順に並ぶ。`link` が `None` なのは、継続に捕まえられて handle の
+    /// 外側から切り離されている間である (docs/spec/core-ir.md)。
     Handler {
         effect: u32,
         clauses: Vec<Value>,
-        ret: Option<Value>,
-        next: Option<ObjRef>,
+        ret: Value,
+        link: Option<Link>,
     },
+}
+
+/// つながっている handler フレームの外側と状態。切り離すと状態は節に渡るので、2つを一緒に持つ
+/// (docs/spec/runtime.md)。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Link {
+    pub next: ObjRef,
+    pub state: Value,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -301,12 +309,13 @@ impl Heap {
         loop {
             frames.push(current);
             current = match &self.object(current)?.payload {
-                Payload::Frame(Frame::Handler { next: None, .. }) => break,
+                Payload::Frame(Frame::Handler { link: None, .. }) => break,
                 Payload::Frame(
                     Frame::Return { next, .. }
                     | Frame::Apply { next, .. }
                     | Frame::Handler {
-                        next: Some(next), ..
+                        link: Some(Link { next, .. }),
+                        ..
                     },
                 ) => *next,
                 _ => return Err(HeapError::BrokenSegment),
@@ -418,12 +427,12 @@ fn copy(payload: &Payload) -> Payload {
             effect,
             clauses,
             ret,
-            next,
+            link,
         }) => Payload::Frame(Frame::Handler {
             effect: *effect,
             clauses: clauses.clone(),
             ret: *ret,
-            next: *next,
+            link: *link,
         }),
         Payload::Continuation { .. } => {
             unreachable!("a shared continuation is copied with its segment by `copy_segment`")
@@ -438,7 +447,11 @@ fn set_next(payload: &mut Payload, below: Option<ObjRef>) -> Result<(), HeapErro
         Payload::Frame(Frame::Return { next, .. } | Frame::Apply { next, .. }) => {
             *next = below.ok_or(HeapError::BrokenSegment)?;
         }
-        Payload::Frame(Frame::Handler { next, .. }) => *next = below,
+        Payload::Frame(Frame::Handler { link, .. }) => match (link, below) {
+            (Some(link), Some(below)) => link.next = below,
+            (None, None) => {}
+            _ => return Err(HeapError::BrokenSegment),
+        },
         _ => return Err(HeapError::BrokenSegment),
     }
     Ok(())
@@ -461,11 +474,17 @@ fn children(payload: &Payload, work: &mut Vec<ObjRef>) {
             work.push(*next);
         }
         Payload::Frame(Frame::Handler {
-            clauses, ret, next, ..
+            effect: _,
+            clauses,
+            ret,
+            link,
         }) => {
             work.extend(clauses.iter().filter_map(object));
-            work.extend(ret.as_ref().and_then(object));
-            work.extend(*next);
+            work.extend(object(ret));
+            if let Some(Link { next, state }) = link {
+                work.extend(object(state));
+                work.push(*next);
+            }
         }
         // `handler` は所有しない。`top` からたどれる
         Payload::Continuation { top, .. } => work.push(*top),

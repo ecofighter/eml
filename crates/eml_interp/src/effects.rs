@@ -1,4 +1,4 @@
-use eml_runtime::{Frame, ObjRef, Payload, Value};
+use eml_runtime::{Frame, Link, ObjRef, Payload, Value};
 
 use crate::error::Fault;
 use crate::machine::{Machine, Step};
@@ -13,8 +13,9 @@ impl Machine<'_> {
             };
             current = match frame {
                 Frame::Handler { effect: other, .. } if *other == effect => return Ok(current),
-                Frame::Handler { next, .. } => {
-                    next.ok_or(Fault::Internal("a detached handler is in the continuation"))?
+                Frame::Handler { link, .. } => {
+                    link.ok_or(Fault::Internal("a detached handler is in the continuation"))?
+                        .next
                 }
                 Frame::Return { next, .. } | Frame::Apply { next, .. } => *next,
                 Frame::Io => return Err(Fault::Internal("an operation without a handler")),
@@ -32,7 +33,7 @@ impl Machine<'_> {
         mut args: Vec<Value>,
     ) -> Result<Step, Fault> {
         let handler = self.find_handler(effect)?;
-        let Payload::Frame(Frame::Handler { clauses, next, .. }) =
+        let Payload::Frame(Frame::Handler { clauses, link, .. }) =
             self.heap.get_mut(handler).map_err(Fault::Heap)?
         else {
             return Err(Fault::Internal("a handler that is not a handler frame"));
@@ -40,9 +41,16 @@ impl Machine<'_> {
         let clause = *clauses
             .get(op as usize)
             .ok_or(Fault::Internal("an operation without a clause"))?;
-        let outside = next
+        let Link {
+            next: outside,
+            state,
+        } = link
             .take()
             .ok_or(Fault::Internal("performing through a detached handler"))?;
+        // 状態を節に渡すのは Task 4 からで、それまでの状態はつねに `()` である
+        if let Value::Obj(obj) = state {
+            self.heap.decref(obj).map_err(Fault::Heap)?;
+        }
         // 節のクロージャは handler フレームにも残るので、呼ぶ分の参照を足す
         if let Value::Obj(obj) = clause {
             self.heap.dup(obj).map_err(Fault::Heap)?;
@@ -83,7 +91,12 @@ impl Machine<'_> {
         };
         let current = self.cont;
         match self.heap.get_mut(handler).map_err(Fault::Heap)? {
-            Payload::Frame(Frame::Handler { next, .. }) => *next = Some(current),
+            Payload::Frame(Frame::Handler { link, .. }) => {
+                *link = Some(Link {
+                    next: current,
+                    state: Value::Unit,
+                });
+            }
             _ => {
                 return Err(Fault::Internal(
                     "a continuation whose handler is not a handler frame",

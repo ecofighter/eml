@@ -2,7 +2,7 @@ use std::cmp::Ordering;
 use std::path::Path;
 
 use eml_core_ir::{Atom, CExpr, CExprId, Call, FnIdx, Program, Rhs, VarId};
-use eml_runtime::{Closure, Frame, Heap, ObjRef, OutputSink, Payload, Value};
+use eml_runtime::{Closure, Frame, Heap, Link, ObjRef, OutputSink, Payload, Value};
 
 use crate::error::{Fault, RuntimeError};
 
@@ -212,12 +212,18 @@ impl<'p> Machine<'p> {
             } => {
                 let body = self.atom(body)?;
                 let clauses = self.atoms(clauses)?;
-                let on_return = on_return.map(|clause| self.atom(&clause)).transpose()?;
+                let on_return = on_return
+                    .map(|clause| self.atom(&clause))
+                    .transpose()?
+                    .ok_or(Fault::Internal("a handle without a return clause"))?;
                 let frame = Frame::Handler {
                     effect: *effect,
                     clauses,
                     ret: on_return,
-                    next: Some(self.cont),
+                    link: Some(Link {
+                        next: self.cont,
+                        state: Value::Unit,
+                    }),
                 };
                 self.cont = self.heap.alloc(Payload::Frame(frame));
                 self.apply_and_continue(body, vec![Value::Unit])
@@ -362,23 +368,26 @@ impl<'p> Machine<'p> {
                 }
                 // 本体が値を返したので handler を外す。節のクロージャはもう呼ばない
                 Frame::Handler {
+                    effect: _,
                     clauses,
                     ret: on_return,
-                    next,
-                    ..
+                    link,
                 } => {
                     for clause in clauses {
                         if let Value::Obj(obj) = clause {
                             self.heap.decref(obj).map_err(Fault::Heap)?;
                         }
                     }
-                    self.cont =
-                        next.ok_or(Fault::Internal("a detached handler received a value"))?;
-                    if let Some(on_return) = on_return {
-                        match self.apply(on_return, vec![value])? {
-                            Applied::Entered => return Ok(Step::Continue),
-                            Applied::Value(result) => value = result,
-                        }
+                    let Link { next, state } =
+                        link.ok_or(Fault::Internal("a detached handler received a value"))?;
+                    self.cont = next;
+                    // 状態を `return` の節に渡すのは Task 4 からで、それまでの状態はつねに `()` である
+                    if let Value::Obj(obj) = state {
+                        self.heap.decref(obj).map_err(Fault::Heap)?;
+                    }
+                    match self.apply(on_return, vec![value])? {
+                        Applied::Entered => return Ok(Step::Continue),
+                        Applied::Value(result) => value = result,
                     }
                 }
                 Frame::Io => {

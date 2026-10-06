@@ -24,18 +24,20 @@ fn frame(heap: &mut Heap, saved: Vec<(u32, Value)>, next: ObjRef) -> ObjRef {
     }))
 }
 
-fn handler(
-    heap: &mut Heap,
-    clauses: Vec<Value>,
-    ret: Option<Value>,
-    next: Option<ObjRef>,
-) -> ObjRef {
+fn handler(heap: &mut Heap, clauses: Vec<Value>, link: Option<Link>) -> ObjRef {
     heap.alloc(Payload::Frame(Frame::Handler {
         effect: 1,
         clauses,
-        ret,
-        next,
+        ret: Value::Unit,
+        link,
     }))
+}
+
+fn attached(next: ObjRef) -> Option<Link> {
+    Some(Link {
+        next,
+        state: Value::Unit,
+    })
 }
 
 #[test]
@@ -50,12 +52,12 @@ fn a_handler_frame_releases_its_clauses_and_the_rest_of_the_continuation() {
         args: vec![],
     }));
     let end = bottom(&mut heap);
-    let frame = handler(
-        &mut heap,
-        vec![Value::Obj(clause)],
-        Some(Value::Obj(ret)),
-        Some(end),
-    );
+    let frame = heap.alloc(Payload::Frame(Frame::Handler {
+        effect: 1,
+        clauses: vec![Value::Obj(clause)],
+        ret: Value::Obj(ret),
+        link: attached(end),
+    }));
     heap.decref(frame).unwrap();
     assert!(heap.live_objects().is_empty());
 }
@@ -66,7 +68,7 @@ fn releasing_a_continuation_stops_at_its_detached_handler() {
     // handler の外側は機械の継続が持っている
     let outside = bottom(&mut heap);
     let s = string(&mut heap, "saved");
-    let detached = handler(&mut heap, vec![], None, None);
+    let detached = handler(&mut heap, vec![], None);
     let top = frame(&mut heap, vec![(0, Value::Obj(s))], detached);
     let k = heap.alloc(Payload::Continuation {
         top,
@@ -230,9 +232,9 @@ fn segment(heap: &Heap, top: ObjRef) -> Vec<ObjRef> {
         let next = match heap.get(*frames.last().unwrap()).unwrap() {
             Payload::Frame(Frame::Return { next, .. } | Frame::Apply { next, .. }) => *next,
             Payload::Frame(Frame::Handler {
-                next: Some(next), ..
-            }) => *next,
-            Payload::Frame(Frame::Handler { next: None, .. }) => return frames,
+                link: Some(link), ..
+            }) => link.next,
+            Payload::Frame(Frame::Handler { link: None, .. }) => return frames,
             other => panic!("not a frame: {other:?}"),
         };
         frames.push(next);
@@ -242,7 +244,7 @@ fn segment(heap: &Heap, top: ObjRef) -> Vec<ObjRef> {
 #[test]
 fn take_or_copy_takes_a_unique_continuation_without_copying() {
     let mut heap = Heap::new();
-    let detached = handler(&mut heap, vec![], None, None);
+    let detached = handler(&mut heap, vec![], None);
     let top = frame(&mut heap, vec![], detached);
     let k = heap.alloc(Payload::Continuation {
         top,
@@ -267,10 +269,10 @@ fn take_or_copy_copies_the_segment_of_a_shared_continuation() {
         function: 0,
         args: vec![],
     }));
-    let detached = handler(&mut heap, vec![Value::Obj(clause)], None, None);
+    let detached = handler(&mut heap, vec![Value::Obj(clause)], None);
     let below_attached = frame(&mut heap, vec![], detached);
     // 本体の中の別の handle は、外側につながったまま区間に入る
-    let attached = handler(&mut heap, vec![], None, Some(below_attached));
+    let attached = handler(&mut heap, vec![], attached(below_attached));
     let top = frame(&mut heap, vec![(0, Value::Obj(s))], attached);
     let k = heap.alloc(Payload::Continuation {
         top,
@@ -309,7 +311,7 @@ fn take_or_copy_copies_the_segment_of_a_shared_continuation() {
 #[test]
 fn copying_a_long_segment_does_not_overflow_the_stack() {
     let mut heap = Heap::new();
-    let detached = handler(&mut heap, vec![], None, None);
+    let detached = handler(&mut heap, vec![], None);
     let mut top = detached;
     for _ in 0..200_000 {
         top = frame(&mut heap, vec![], top);
@@ -457,5 +459,71 @@ fn a_shared_file_is_not_copied() {
     heap.decref(f).unwrap();
     heap.decref(f).unwrap();
     assert!(dropped.load(Ordering::SeqCst));
+    assert!(heap.live_objects().is_empty());
+}
+
+#[test]
+fn an_attached_handler_releases_its_state() {
+    let mut heap = Heap::new();
+    let end = bottom(&mut heap);
+    let state = string(&mut heap, "state");
+    let frame = handler(
+        &mut heap,
+        vec![],
+        Some(Link {
+            next: end,
+            state: Value::Obj(state),
+        }),
+    );
+    heap.decref(frame).unwrap();
+    assert!(heap.live_objects().is_empty());
+}
+
+#[test]
+fn copying_a_segment_shares_the_state_of_an_attached_handler() {
+    let mut heap = Heap::new();
+    let state = string(&mut heap, "state");
+    let detached = handler(&mut heap, vec![], None);
+    let below_attached = frame(&mut heap, vec![], detached);
+    // 本体の中の別の handle は、状態を持ったまま区間に入る
+    let inner = handler(
+        &mut heap,
+        vec![],
+        Some(Link {
+            next: below_attached,
+            state: Value::Obj(state),
+        }),
+    );
+    let top = frame(&mut heap, vec![], inner);
+    let k = heap.alloc(Payload::Continuation {
+        top,
+        handler: detached,
+    });
+    heap.dup(k).unwrap();
+    let Payload::Continuation {
+        top: copied_top,
+        handler: copied_handler,
+    } = heap.take_or_copy(k).unwrap()
+    else {
+        panic!("not a continuation");
+    };
+    let copied = segment(&heap, copied_top);
+    assert_eq!(copied.len(), 4);
+    // 写した内側の handler フレームは、写した次のフレームにつながり、同じ状態を指す
+    let Payload::Frame(Frame::Handler {
+        link: Some(link), ..
+    }) = heap.get(copied[1]).unwrap()
+    else {
+        panic!("the copied inner handler is not attached");
+    };
+    assert_eq!(link.next, copied[2]);
+    assert_eq!(link.state, Value::Obj(state));
+    assert!(!heap.is_unique(state).unwrap());
+    let copy = heap.alloc(Payload::Continuation {
+        top: copied_top,
+        handler: copied_handler,
+    });
+    heap.decref(copy).unwrap();
+    heap.decref(k).unwrap();
     assert!(heap.live_objects().is_empty());
 }
