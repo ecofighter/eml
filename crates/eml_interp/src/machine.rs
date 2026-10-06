@@ -206,15 +206,15 @@ impl<'p> Machine<'p> {
                 effect,
                 body,
                 clauses,
-                ret,
+                ret: on_return,
             } => {
                 let body = self.atom(body)?;
                 let clauses = self.atoms(clauses)?;
-                let ret = ret.map(|ret| self.atom(&ret)).transpose()?;
+                let on_return = on_return.map(|clause| self.atom(&clause)).transpose()?;
                 let frame = Frame::Handler {
                     effect: *effect,
                     clauses,
-                    ret,
+                    ret: on_return,
                     next: Some(self.cont),
                 };
                 self.cont = self.heap.alloc(Payload::Frame(frame));
@@ -231,6 +231,7 @@ impl<'p> Machine<'p> {
             }
         }
     }
+
     /// 関数値を適用する。関数に入らずに値ができたら (足りない引数のクロージャ)、その値を継続に返す。
     pub(crate) fn apply_and_continue(
         &mut self,

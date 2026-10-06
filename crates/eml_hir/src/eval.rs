@@ -65,7 +65,8 @@ pub fn is_value(module: &Module, body: &Body, expr: ExprId) -> bool {
 }
 
 /// 引数がそろうまで本体が動かない、呼ばれる式の引数の数。引数のないトップレベルの値は、参照するたびに計算して関数値を
-/// 返すので含めない。`Some` の呼ばれる式は評価せず、最初のまとまりで直接呼ぶ。Core IR の変換もこれで決める。
+/// 返すので含めない。`Some` の呼ばれる式は、クロージャを作らずに最初のまとまりで直接呼ぶ。`call_steps` はこの式の
+/// `Eval` も並べるが、Core IR の変換は評価を飛ばす。Core IR の変換も、直接呼ぶかどうかをこれで決める。
 pub fn known_arity(module: &Module, body: &Body, callee: ExprId) -> Option<usize> {
     match &body.exprs[callee].kind {
         ExprKind::Path(Res::Function(function)) => module.functions[*function]

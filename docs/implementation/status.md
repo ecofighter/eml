@@ -156,7 +156,7 @@ R5 で済んだ。型検査を、モジュール全体の情報 (`Context`)、�
 
 R6 で済んだ。R6a は、診断を `eml_diagnostics::sort_diagnostics` で1回だけ並べるようにし、型検査が本体をアリーナの順に検査するようにした。`TyShape`、`Type`、`ShapeTy` の子の走査を `for_each_child` にそろえ、Kind の由来 (`Provenance`) を必須にして、由来のない制約を残さないようにした。handler の節の型は `Shape::instantiate_with_effect_args` で作り、呼ばれる位置の row は閉じたまま扱う。評価の順は `eml_hir::call_steps` を唯一の出どころとして、持ち越しのパスと Core IR の変換が共有する。これで `(f 1) (g ())` は `f` から先に評価される。
 
-R6b は、`CExpr`、`Rhs`、`Call` の visitor と、関数の組み立ての口 (`FnBuilder`、`CoreFn::push`、`CoreFn::fresh_like`) を足した。`compact` を各パスの後にかけ、verifier が木の形を検査する。simplify の規則 T は、枝へ移した呼び出しも末尾呼び出しにする。Core IR を表示する `pretty` は boxed の束縛に `^` とエフェクトの表を出し、`eml_core_ir::parse` が読み戻す。verifier と interp のテストはこのテキストで書き、`eml_test_support::ir` をなくした。`VarInfo::linearity` と `Prepared` もなくし、`eml_interp` を lib、machine、effects、prim、io、error に分けた。
+R6b は、`CExpr`、`Rhs`、`Call` の visitor と、関数の組み立ての口 (`FnBuilder`、`CoreFn::push`、`CoreFn::fresh_like`) を足した。`compact` を各パスの後にかけ、`compact` と verifier が木の形を検査する。simplify の規則 T は、枝へ移した呼び出しも末尾呼び出しにする。Core IR を表示する `pretty` は boxed の束縛に `^` とエフェクトの表を出し、`eml_core_ir::parse` が読み戻す。verifier と interp のテストはこのテキストで書き、`eml_test_support::ir` をなくした。`VarInfo::linearity` と `Prepared` もなくし、`eml_interp` を lib、machine、effects、prim、io、error に分けた。
 
 ### R7 で直す項目
 

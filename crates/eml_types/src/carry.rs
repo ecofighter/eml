@@ -79,7 +79,7 @@ impl Carrying<'_, '_> {
                     _ => None,
                 };
                 let mut live = after.clone();
-                // 手順を後ろからたどる
+                // 評価の順は `eml_hir::call_steps` だけが持つ。後で使う値は後ろの手順から決まるので、その順を逆にたどる
                 for step in eml_hir::call_steps(self.module, body, id).into_iter().rev() {
                     match step {
                         EvalStep::Arrow(index) => {

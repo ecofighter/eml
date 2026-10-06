@@ -190,7 +190,7 @@ fn a_tail_if_returns_from_each_arm() {
 }
 
 #[test]
-fn calls_in_tail_position_are_tail_calls() {
+fn calls_in_tail_position_return_their_result_before_simplify() {
     let text = "loop : Int -> Int -> Int\nloop n acc = if n == 0 then acc else loop (n - 1) (acc + 1)\n\ncall_twice : (Int -> Int) -> Int -> Int\ncall_twice f x = f (f x)\n\nmain : Unit -> <IO> Unit\nmain () = ()";
     insta::assert_snapshot!(core_text(text, Pass::Translate), @"
     fn loop(n0, acc1) {
