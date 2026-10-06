@@ -314,12 +314,14 @@ impl BodyLowering<'_> {
     }
 
     pub(super) fn lower_resume(&mut self, resume: &ast::ResumeExpr, range: TextRange) -> ExprId {
+        let written: Vec<TextRange> = resume.args().map(|arg| arg.range()).collect();
         let args = self.keyword_args(resume.args());
         match args.as_slice() {
             [k, arg] => self.alloc(
                 ExprKind::Resume {
                     k: *k,
                     arg: *arg,
+                    arg_end: written[1].end(),
                     state: None,
                 },
                 range,
@@ -329,6 +331,7 @@ impl BodyLowering<'_> {
                 ExprKind::Resume {
                     k: *k,
                     arg: *arg,
+                    arg_end: written[1].end(),
                     state: Some(*state),
                 },
                 range,

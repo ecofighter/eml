@@ -184,6 +184,7 @@ impl BodyCheck<'_, '_> {
         id: ExprId,
         k: ExprId,
         arg: ExprId,
+        arg_end: TextSize,
         state: Option<ExprId>,
     ) -> Ty {
         let value = self.table.fresh_var();
@@ -212,7 +213,7 @@ impl BodyCheck<'_, '_> {
             None => (Slot::Stateless, None),
         };
         if self.table.unify_slot(slot, wanted).is_err() {
-            self.resume_state_mismatch(id, k, arg, state);
+            self.resume_state_mismatch(id, k, arg_end, state);
         }
         // 欄が食い違っても、値と状態の中の誤りは報告する。食い違ったときの σ は新しい変数のままなので、状態の式の
         // 型では誤りにならない
@@ -227,7 +228,13 @@ impl BodyCheck<'_, '_> {
     }
 
     /// `resume` の引数の数が `k` の状態の欄と合わない (docs/spec/diagnostics.md の E2007)。
-    fn resume_state_mismatch(&mut self, id: ExprId, k: ExprId, arg: ExprId, state: Option<ExprId>) {
+    fn resume_state_mismatch(
+        &mut self,
+        id: ExprId,
+        k: ExprId,
+        arg_end: TextSize,
+        state: Option<ExprId>,
+    ) {
         let range = self.body.exprs[id].range;
         let diagnostic = match state {
             None => {
@@ -239,13 +246,12 @@ impl BodyCheck<'_, '_> {
                 .with_help("pass the next state as the third argument: `resume k v st`");
                 match self.current_state_for(k, id) {
                     Some(name) => {
-                        let at = self.body.exprs[arg].range.end();
                         let title = format!("pass the current state `{name}`");
                         diagnostic.with_fix(
                             title,
                             vec![TextEdit {
                                 file: self.file(),
-                                range: TextRange::empty(at),
+                                range: TextRange::empty(arg_end),
                                 replacement: format!(" {name}"),
                             }],
                         )
@@ -253,9 +259,9 @@ impl BodyCheck<'_, '_> {
                     None => diagnostic,
                 }
             }
-            Some(state) => {
-                let from = self.body.exprs[arg].range.end();
-                let to = self.body.exprs[state].range.end();
+            Some(_) => {
+                // 状態の引数を括弧で囲んでも `resume` の式は `)` で終わるので、式の終わりまで消す
+                let to = range.end();
                 Diagnostic::error(
                     codes::RESUME_STATE_MISMATCH,
                     "this continuation comes from a handler without a state, so `resume` takes no state",
@@ -266,7 +272,7 @@ impl BodyCheck<'_, '_> {
                     "remove the state argument",
                     vec![TextEdit {
                         file: self.file(),
-                        range: TextRange::new(from, to),
+                        range: TextRange::new(arg_end, to),
                         replacement: String::new(),
                     }],
                 )

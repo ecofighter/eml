@@ -391,7 +391,12 @@ impl FnLowering<'_> {
                 };
                 self.bind(out, "t", &ty, Rhs::call(call))
             }
-            ExprKind::Resume { k, arg, state } => {
+            ExprKind::Resume {
+                k,
+                arg,
+                arg_end: _,
+                state,
+            } => {
                 let k = self.atom(*k, out);
                 let arg = self.atom(*arg, out);
                 let state = match state {

@@ -229,7 +229,12 @@ impl<'a> Usage<'a, '_> {
                 );
                 uses
             }
-            ExprKind::Resume { k, arg, state } => {
+            ExprKind::Resume {
+                k,
+                arg,
+                arg_end: _,
+                state,
+            } => {
                 let mut uses = self.expr(*k);
                 let next = self.expr(*arg);
                 sequence(&mut uses, next);

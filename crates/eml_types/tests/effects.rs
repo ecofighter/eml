@@ -466,3 +466,36 @@ fn the_state_of_the_clause_that_binds_k_is_passed_in_nested_handlers() {
       9:45..9:45 " outer"
     "#);
 }
+
+#[test]
+fn the_state_argument_is_removed_up_to_its_closing_paren() {
+    let text = format!(
+        "{ASK}f : Unit -> Int\nf () =\n  handle ask () with\n    | ask () k -> resume k 1 (2)"
+    );
+    insta::assert_snapshot!(fix_text(&text), @r#"
+    E2007 7:19 remove the state argument
+      7:29..7:33 ""
+    "#);
+}
+
+#[test]
+fn the_state_argument_is_removed_after_the_closing_paren_of_the_value() {
+    let text = format!(
+        "{ASK}f : Unit -> Int\nf () =\n  handle ask () with\n    | ask () k -> resume k (1) 2"
+    );
+    insta::assert_snapshot!(fix_text(&text), @r#"
+    E2007 7:19 remove the state argument
+      7:31..7:33 ""
+    "#);
+}
+
+#[test]
+fn the_current_state_is_passed_after_the_closing_paren_of_the_value() {
+    let text = format!(
+        "{ASK}f : Unit -> Int\nf () =\n  handle ask () from 0 with\n    | ask () k st -> resume k (st + 1)\n    | return x _ -> x"
+    );
+    insta::assert_snapshot!(fix_text(&text), @r#"
+    E2007 7:22 pass the current state `st`
+      7:39..7:39 " st"
+    "#);
+}

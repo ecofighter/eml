@@ -242,7 +242,12 @@ impl Body {
                 }
                 f(ret.closure.body);
             }
-            ExprKind::Resume { k, arg, state } => {
+            ExprKind::Resume {
+                k,
+                arg,
+                arg_end: _,
+                state,
+            } => {
                 f(*k);
                 f(*arg);
                 if let Some(state) = state {
@@ -410,6 +415,10 @@ pub enum ExprKind {
     Resume {
         k: ExprId,
         arg: ExprId,
+        /// 書いたとおりの値の引数の終わり。値を括弧で囲むと、HIR は括弧を落とすので `arg` の範囲は `)` の前で終わる。
+        /// E2007 の fix は書いた引数の位置に状態を足したり消したりするので、括弧を含む終わりを持っておく
+        /// (docs/spec/diagnostics.md の E2007)。
+        arg_end: TextSize,
         /// 3引数の `resume` の次の状態。
         state: Option<ExprId>,
     },

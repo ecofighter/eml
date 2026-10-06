@@ -249,7 +249,12 @@ impl BodyCheck<'_, '_> {
                 clauses,
                 ret,
             } => self.handle(id, *effect, *init, handled, clauses, ret),
-            ExprKind::Resume { k, arg, state } => self.resume(id, *k, *arg, *state),
+            ExprKind::Resume {
+                k,
+                arg,
+                arg_end,
+                state,
+            } => self.resume(id, *k, *arg, *arg_end, *state),
             ExprKind::Match {
                 scrutinee, arms, ..
             } => self.match_expr(*scrutinee, arms, Expectation::None),
