@@ -8,7 +8,8 @@ mod program;
 mod types;
 
 use eml_hir::{
-    Body, ExprId, ExprKind, Function, ItemMap, LocalId, PatId, Program as HirProgram, Stmt,
+    Body, ExprId, ExprKind, Function, FunctionId, ItemMap, LocalId, PatId, Program as HirProgram,
+    Stmt,
 };
 use eml_types::{BodyTypes, Type, TypedModule};
 use la_arena::ArenaMap;
@@ -22,7 +23,7 @@ use types::{split_arrows, var_info};
 
 /// 誤りのない型付き HIR を、RC の命令のない Core IR にする。`captures` は空のままでよく、パイプラインが埋める
 /// (docs/spec/core-ir.md のパスの表)。
-pub(crate) fn translate(hir: &HirProgram, typed: &TypedModule) -> Program {
+pub(crate) fn translate(hir: &HirProgram, typed: &TypedModule, entry: FunctionId) -> Program {
     let mut builder = ProgramBuilder::new(hir, typed);
     let mut indices = ItemMap::default();
     // intrinsic は本体を持たず、呼び出しの位置で命令にするか、包む関数を作る (`program.rs` の `wrapper`)
@@ -64,15 +65,12 @@ pub(crate) fn translate(hir: &HirProgram, typed: &TypedModule) -> Program {
         .lower(&function.name, &[], &params, body.root);
         builder.finish(indices[id], core);
     }
-    let main = typed
-        .main
-        .expect("`eml_cli::Session::compile` reports a missing `main`");
-    let main_type = &typed
+    let entry_type = &typed
         .signatures
-        .get(main)
-        .expect("`main` has a signature")
+        .get(entry)
+        .expect("the entry function has a signature")
         .ty;
-    let entry = builder.entry(hir, indices[main], main_type);
+    let entry = builder.entry(hir, indices[entry], entry, entry_type);
     Program {
         functions: builder
             .functions

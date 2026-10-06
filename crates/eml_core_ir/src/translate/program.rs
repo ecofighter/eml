@@ -153,24 +153,29 @@ impl ProgramBuilder {
         self.functions[function.0 as usize] = Some(core);
     }
 
-    /// 実行の入口。`main : Unit -> <IO> Unit` を `()` で呼ぶ。等式に引数のない `main = fn () -> ...` は関数値を返す
-    /// ので、返った値に `()` を適用する (docs/spec/core-ir.md)。
-    pub(super) fn entry(&mut self, hir: &HirProgram, main: FnIdx, main_type: &Type) -> FnIdx {
+    /// 入口の関数を `()` で呼ぶ関数を作る。名前は `entry$` に入口の関数の名前を続ける。
+    pub(super) fn entry(
+        &mut self,
+        hir: &HirProgram,
+        target: FnIdx,
+        target_id: FunctionId,
+        target_type: &Type,
+    ) -> FnIdx {
         let function = self.reserve(0);
         let unit = vec![Atom::Unit];
         let mut builder = FnBuilder::new();
-        let body = if self.arity(main) == 0 {
-            let value = builder.var(var_info("f", main_type, hir));
+        let body = if self.arity(target) == 0 {
+            let value = builder.var(var_info("f", target_type, hir));
             let apply = builder.push(CExpr::TailCall(Call::Apply(Atom::Var(value), unit)));
             builder.push(CExpr::Let {
                 var: value,
-                rhs: Rhs::call(Call::Direct(main, Vec::new())),
+                rhs: Rhs::call(Call::Direct(target, Vec::new())),
                 body: apply,
             })
         } else {
-            builder.push(CExpr::TailCall(Call::Direct(main, unit)))
+            builder.push(CExpr::TailCall(Call::Direct(target, unit)))
         };
-        let core = builder.finish("entry$main".to_string(), Vec::new(), body);
+        let core = builder.finish(format!("entry${}", hir[target_id].name), Vec::new(), body);
         self.finish(function, core);
         function
     }

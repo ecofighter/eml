@@ -15,9 +15,7 @@ mod usage;
 use std::fmt::Write;
 
 use eml_diagnostics::{Diagnostic, FileId, Label, TextRange};
-use eml_hir::{
-    Constructor, ExprId, Function, FunctionId, ItemMap, LocalId, Operation, PatId, Program,
-};
+use eml_hir::{Constructor, ExprId, Function, ItemMap, LocalId, Operation, PatId, Program};
 use la_arena::ArenaMap;
 
 pub use ty::{
@@ -57,7 +55,6 @@ pub struct TypedModule {
     pub signatures: ItemMap<Function, Scheme>,
     /// シグネチャと等式の両方がある関数だけを含む。
     pub bodies: ItemMap<Function, BodyTypes>,
-    pub main: Option<FunctionId>,
     /// エフェクトの操作のスキーム。Core IR が、操作を包む関数の変数を boxed にするかを決めるのに使う。
     pub operations: ItemMap<Operation, Scheme>,
     /// コンストラクタのスキーム。`Some : a -> Option a` の形である。Core IR が、コンストラクタを包む関数の変数を

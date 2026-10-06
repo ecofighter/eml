@@ -90,7 +90,7 @@ pub(crate) fn check_module(program: &Program) -> (TypedModule, Vec<Diagnostic>) 
         violated.extend(solution.violated);
     }
     diagnostics.extend(report_violations(program, violated));
-    let typed = typed_module(&context, &signatures, &schemes, bodies, main);
+    let typed = typed_module(&context, &signatures, &schemes, bodies);
     // 網羅性は型推論と使用回数のパスの後に、書き出した型の上で調べる (docs/spec/exhaustiveness.md の「検査パス」)
     diagnostics.extend(exhaustive::check(program, &typed));
     (typed, diagnostics)
@@ -303,7 +303,6 @@ fn typed_module(
     signatures: &Signatures,
     schemes: &HashMap<Decl, KindScheme>,
     bodies: ItemMap<Function, BodyTypes>,
-    main: Option<FunctionId>,
 ) -> TypedModule {
     let empty = KindScheme::default();
     let export = |decl: Decl, shape: &Shape| crate::Scheme {
@@ -317,7 +316,6 @@ fn typed_module(
             .map(|(id, shape)| (id, export(Decl::Function(id), shape)))
             .collect(),
         bodies,
-        main,
         operations: signatures
             .operations
             .iter()

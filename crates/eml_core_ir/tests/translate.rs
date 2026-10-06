@@ -20,6 +20,36 @@ fn hello_world() {
 }
 
 #[test]
+fn the_entry_function_is_chosen_by_the_caller() {
+    // REPL は、`main` の代わりにその回の式から作った関数を入口にする
+    // (docs/superpowers/specs/2026-10-06-refactor-r7-design.md の 5.3)
+    let text = "main : Unit -> <IO> Unit\nmain () = println \"main\"\n\nalt : Unit -> <IO> Unit\nalt () = println \"alt\"";
+    let checked = eml_test_support::check(text);
+    let alt = checked
+        .program
+        .functions()
+        .find(|(_, function)| function.name == "alt")
+        .map(|(id, _)| id)
+        .expect("alt");
+    let program = eml_core_ir::lower_until(&checked.program, &checked.typed, alt, Pass::Translate);
+    insta::assert_snapshot!(eml_core_ir::pretty(&program), @r#"
+    fn main(p0) {
+      let s1^ = const "main"
+      let t2 = perform println(s1)
+      return t2
+    }
+    fn alt(p0) {
+      let s1^ = const "alt"
+      let t2 = perform println(s1)
+      return t2
+    }
+    fn entry$alt() {
+      tailcall alt(())
+    }
+    "#);
+}
+
+#[test]
 fn recursion_and_top_level_values() {
     let text = "answer : Int\nanswer = 42\n\ncount : Int -> Int\ncount n = if n == 0 then answer else count (n - 1)\n\nmain : Unit -> <IO> Unit\nmain () = println (show_int (count 3))";
     insta::assert_snapshot!(core_text(text, Pass::Translate), @"

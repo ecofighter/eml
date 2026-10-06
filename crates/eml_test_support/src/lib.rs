@@ -186,14 +186,23 @@ pub fn check(text: &str) -> Checked {
 #[cfg(feature = "core")]
 pub fn core(text: &str) -> Program {
     let checked = check_without_errors(text);
-    eml_core_ir::lower(&checked.program, &checked.typed)
+    eml_core_ir::lower(&checked.program, &checked.typed, entry(&checked))
 }
 
 /// 確かめたいパスの直後の Core IR を見るテストのため (docs/implementation/testing.md)。
 #[cfg(feature = "core")]
 pub fn core_until(text: &str, last: Pass) -> Program {
     let checked = check_without_errors(text);
-    eml_core_ir::lower_until(&checked.program, &checked.typed, last)
+    eml_core_ir::lower_until(&checked.program, &checked.typed, entry(&checked), last)
+}
+
+/// `eml run` と同じく、入口のモジュールの `main` から実行する。
+#[cfg(feature = "core")]
+fn entry(checked: &Checked) -> eml_hir::FunctionId {
+    checked
+        .program
+        .main()
+        .expect("a program lowered to Core IR has `main`")
 }
 
 /// Core IR は診断のエラーがないプログラムだけを受け取る (docs/implementation/architecture.md)。

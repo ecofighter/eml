@@ -60,13 +60,18 @@ impl Session {
     pub fn compile(&self, entry: FileId) -> Compiled {
         let (program, typed, mut diagnostics) = self.front(entry);
         // `main` がないことは実行するときだけ誤りにする。モジュール (S2) は `main` を持たないため (docs/spec/types.md)
-        if typed.main.is_none() {
+        let main = program.main();
+        if main.is_none() {
             diagnostics.push(eml_types::missing_main(entry));
         }
         sort_diagnostics(&mut diagnostics);
         // Core IR は誤りのないプログラムだけを受け取る (docs/implementation/architecture.md)
-        let program =
-            (!has_errors(&diagnostics)).then(|| Arc::new(eml_core_ir::lower(&program, &typed)));
+        let program = match main {
+            Some(main) if !has_errors(&diagnostics) => {
+                Some(Arc::new(eml_core_ir::lower(&program, &typed, main)))
+            }
+            _ => None,
+        };
         Compiled {
             diagnostics,
             program,
