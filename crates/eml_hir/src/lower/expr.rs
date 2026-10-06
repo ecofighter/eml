@@ -690,7 +690,7 @@ impl<'a> BodyLowering<'a> {
             Lookup::Found(ctor) => ctor,
             Lookup::Unusable => return PatKind::Missing,
             Lookup::NotFound => {
-                // `::` は S2 のリストのコンストラクタである。ユーザーが同じ名前のコンストラクタを定義していれば、上で引ける
+                // `::` は M3 のリストのコンストラクタである。ユーザーが同じ名前のコンストラクタを定義していれば、上で引ける
                 if name.text() == "::" {
                     return self.unsupported_pat(name.text_range(), "lists are not supported yet");
                 }
@@ -774,7 +774,8 @@ fn arguments(n: usize) -> String {
     }
 }
 
-/// S2 で実装するリテラル。パーサは CST を組み、HIR が E0004 を出す (docs/spec/grammar.md の「実装の段階」)。
+/// M3 (複数行の文字列、raw 文字列) と M4 (浮動小数、文字) で実装するリテラル。パーサは CST を組み、HIR が E0004 を
+/// 出す (docs/spec/grammar.md の「実装の段階」)。
 fn unsupported_literal(kind: SyntaxKind) -> Option<&'static str> {
     Some(match kind {
         SyntaxKind::FLOAT => "floating-point literals are not supported yet",

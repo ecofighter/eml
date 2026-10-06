@@ -18,7 +18,7 @@ pub struct Compiled {
 }
 
 /// 1回の検査や実行で読むソースの集まり。Prelude を最初に登録し、入口のファイルと一緒に変換する
-/// (docs/implementation/architecture.md の「CLI と lib API」)。import をたどるローダは S2 で足す。
+/// (docs/implementation/architecture.md の「CLI と lib API」)。import をたどるローダは M2 で足す。
 pub struct Session {
     files: SourceFiles,
     prelude: FileId,
@@ -59,7 +59,7 @@ impl Session {
 
     pub fn compile(&self, entry: FileId) -> Compiled {
         let (program, typed, mut diagnostics) = self.front(entry);
-        // `main` がないことは実行するときだけ誤りにする。モジュール (S2) は `main` を持たないため (docs/spec/types.md)
+        // `main` がないことは実行するときだけ誤りにする。モジュール (M2) は `main` を持たないため (docs/spec/types.md)
         let main = program.main();
         if main.is_none() {
             diagnostics.push(eml_types::missing_main(entry));

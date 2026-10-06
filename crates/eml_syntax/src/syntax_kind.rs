@@ -14,7 +14,7 @@ pub enum SyntaxKind {
     // 使われた位置で E0004 を出せるように、字句だけ先に用意している。
     FLOAT,
     CHAR,
-    /// 補間を含んでいても1つのトークンにする。部品に分けるのは補間を実装する S2 から。
+    /// 補間を含んでいても1つのトークンにする。部品に分けるのは補間を実装する M3 から。
     STRING,
     MULTILINE_STRING,
     RAW_STRING,
@@ -166,7 +166,7 @@ pub enum SyntaxKind {
 }
 
 impl SyntaxKind {
-    /// 括弧の種類の判定はここだけに置く。S2 で補間の `\{` と `}` を足すときも、ここに足す (docs/spec/layout.md の規則 4)。
+    /// 括弧の種類の判定はここだけに置く。M3 で補間の `\{` と `}` を足すときも、ここに足す (docs/spec/layout.md の規則 4)。
     pub fn is_opening_bracket(self) -> bool {
         matches!(
             self,

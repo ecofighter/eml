@@ -204,7 +204,7 @@ fn has_conop_ahead(p: &Parser) -> bool {
     }
 }
 
-/// S2 で実装する。CST まで組み、E0004 は HIR が出す (docs/spec/grammar.md の「実装の段階」)。
+/// M3 で実装する。CST まで組み、E0004 は HIR が出す (docs/spec/grammar.md の「実装の段階」)。
 fn type_item(p: &mut Parser, m: Marker) {
     p.bump(TYPE_KW);
     expect_name(p, UIDENT);
@@ -279,7 +279,7 @@ fn fixity_item(p: &mut Parser, m: Marker) {
 }
 
 /// import_item ::= 'import' modpath ('as' UIDENT)? ('(' list(import_name) ')')?
-/// import は S2 で実装する。CST まで組み、E0004 は HIR が出す (docs/spec/grammar.md の「実装の段階」)。
+/// import は M2 で実装する。CST まで組み、E0004 は HIR が出す (docs/spec/grammar.md の「実装の段階」)。
 fn import_item(p: &mut Parser, m: Marker) {
     p.bump(IMPORT_KW);
     if p.at(UIDENT) {

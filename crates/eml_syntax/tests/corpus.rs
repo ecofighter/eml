@@ -45,7 +45,7 @@ fn s1_corpus_items() {
 
 #[test]
 fn later_stage_corpus_reports_only_not_yet_supported() {
-    // S2・S3 の構文は E0004 だけを出し、ほかの診断を連鎖させない。パーサが E0004 を出すのは、補間、コマンドリテラル、
+    // まだ実装していない構文は E0004 だけを出し、ほかの診断を連鎖させない。パーサが E0004 を出すのは、補間、コマンドリテラル、
     // レコード、リストだけである (docs/spec/grammar.md の「実装の段階」)。
     let found = diagnostics(LATER_STAGES);
     assert!(!found.is_empty());

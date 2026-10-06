@@ -190,7 +190,7 @@ fn lower_bodies(
     bodies
 }
 
-/// 名前の経路の読み方。修飾名は S2 で実装する (docs/spec/modules.md)。
+/// 名前の経路の読み方。修飾名は M2 で実装する (docs/spec/modules.md)。
 pub(super) enum PathName {
     Plain(SyntaxToken),
     Qualified,
