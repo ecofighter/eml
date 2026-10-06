@@ -6,15 +6,19 @@ use crate::{CExpr, CExprId, CoreFn, JoinId};
 
 /// 式を前順に並べ直し、残った join point に元の番号の順で 0 から番号を振り直して索引を作り直す。
 /// 長い連鎖で再帰しないように、作業の列でたどる。
-pub(crate) fn compact(function: &mut CoreFn) {
+///
+/// パスの出力を最初に見るのはこの関数なので、2回たどれる式、木の中に定義のない join point への `jump`、
+/// 2回定義された join point を、ここでパスの誤りとして返す。組み直した後のアリーナは木になるので、verifier の木の
+/// 検査ではもう見つからない。共有された式が入れ子になると、たどる時間が指数的に増えるので、リリースビルドでも
+/// 検査する。誤りを返すときは `function` を書き換えない。
+pub(crate) fn compact(function: &mut CoreFn) -> Result<(), String> {
     let mut new_ids: Vec<Option<CExprId>> = vec![None; function.exprs.len()];
     let mut order: Vec<CExprId> = Vec::new();
     let mut work = vec![function.body];
     while let Some(id) = work.pop() {
-        debug_assert!(
-            new_ids[id.0 as usize].is_none(),
-            "an expression is reachable once"
-        );
+        if new_ids[id.0 as usize].is_some() {
+            return Err(format!("expression e{} is reachable twice", id.0));
+        }
         new_ids[id.0 as usize] = Some(CExprId(order.len() as u32));
         order.push(id);
         let mut children = Vec::new();
@@ -30,7 +34,11 @@ pub(crate) fn compact(function: &mut CoreFn) {
         })
         .collect();
     present.sort_unstable();
-    let mut join_numbers: Vec<Option<JoinId>> = vec![None; function.joins.len()];
+    if let Some(pair) = present.windows(2).find(|pair| pair[0] == pair[1]) {
+        return Err(format!("join point j{} is defined twice", pair[0]));
+    }
+    let table_len = present.last().map_or(0, |&last| last + 1);
+    let mut join_numbers: Vec<Option<JoinId>> = vec![None; table_len.max(function.joins.len())];
     for (number, &old) in present.iter().enumerate() {
         join_numbers[old] = Some(JoinId(number as u32));
     }
@@ -45,16 +53,23 @@ pub(crate) fn compact(function: &mut CoreFn) {
             *child =
                 new_ids[child.0 as usize].expect("a child of a reachable expression is reachable");
         });
-        if let CExpr::Join { join, .. } | CExpr::Jump { join, .. } = expr {
-            *join = join_numbers[join.0 as usize].expect("a jump targets a join point in the tree");
+        if let CExpr::Jump { join, .. } = expr {
+            let old = *join;
+            *join = join_numbers
+                .get(old.0 as usize)
+                .copied()
+                .flatten()
+                .ok_or_else(|| format!("jump to j{} has no join point in the tree", old.0))?;
         }
         if let CExpr::Join { join, .. } = expr {
+            *join = join_numbers[join.0 as usize].expect("a join point in the tree has a number");
             joins[join.0 as usize] = CExprId(index as u32);
         }
     }
     function.body = CExprId(0);
     function.exprs = exprs;
     function.joins = joins;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -102,7 +117,7 @@ mod tests {
         builder.define_join(live_join, live);
         let mut function = builder.finish("f".to_string(), Vec::new(), live);
 
-        compact(&mut function);
+        compact(&mut function).unwrap();
 
         assert_eq!(function.exprs.len(), 3);
         assert_eq!(function.body, CExprId(0));
@@ -120,5 +135,85 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn compact_rejects_an_expression_reachable_twice() {
+        let mut builder = FnBuilder::new();
+        let x = builder.var(unboxed("x"));
+        let shared = builder.push(CExpr::Return(Atom::Int(1)));
+        let first = builder.push(CExpr::Dup {
+            var: x,
+            body: shared,
+        });
+        let second = builder.push(CExpr::Dup {
+            var: x,
+            body: shared,
+        });
+        let join = builder.new_join();
+        let root = builder.push(CExpr::Join {
+            join,
+            params: Vec::new(),
+            captures: Vec::new(),
+            body: first,
+            scope: second,
+        });
+        builder.define_join(join, root);
+        let mut function = builder.finish("f".to_string(), vec![x], root);
+
+        let error = compact(&mut function).unwrap_err();
+        assert_eq!(error, "expression e0 is reachable twice");
+    }
+
+    #[test]
+    fn compact_rejects_a_jump_whose_join_point_is_not_in_the_tree() {
+        let mut builder = FnBuilder::new();
+        let join = builder.new_join();
+        let dead_body = builder.push(CExpr::Return(Atom::Int(0)));
+        let dead_scope = builder.push(CExpr::Return(Atom::Int(9)));
+        let dead = builder.push(CExpr::Join {
+            join,
+            params: Vec::new(),
+            captures: Vec::new(),
+            body: dead_body,
+            scope: dead_scope,
+        });
+        builder.define_join(join, dead);
+        let body = builder.push(CExpr::Jump {
+            join,
+            args: Vec::new(),
+        });
+        let mut function = builder.finish("f".to_string(), Vec::new(), body);
+
+        let error = compact(&mut function).unwrap_err();
+        assert_eq!(error, "jump to j0 has no join point in the tree");
+    }
+
+    #[test]
+    fn compact_rejects_a_join_point_defined_twice() {
+        let mut builder = FnBuilder::new();
+        let join = builder.new_join();
+        let inner_body = builder.push(CExpr::Return(Atom::Int(0)));
+        let inner_scope = builder.push(CExpr::Return(Atom::Int(1)));
+        let inner = builder.push(CExpr::Join {
+            join,
+            params: Vec::new(),
+            captures: Vec::new(),
+            body: inner_body,
+            scope: inner_scope,
+        });
+        let outer_body = builder.push(CExpr::Return(Atom::Int(2)));
+        let outer = builder.push(CExpr::Join {
+            join,
+            params: Vec::new(),
+            captures: Vec::new(),
+            body: outer_body,
+            scope: inner,
+        });
+        builder.define_join(join, outer);
+        let mut function = builder.finish("f".to_string(), Vec::new(), outer);
+
+        let error = compact(&mut function).unwrap_err();
+        assert_eq!(error, "join point j0 is defined twice");
     }
 }

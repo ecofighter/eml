@@ -4,7 +4,9 @@
 use eml_hir::Module;
 use eml_types::TypedModule;
 
-use crate::{Program, compact, liveness, perceus, simplify, translate, verify, verify_scopes};
+use crate::{
+    Program, VerifyError, compact, liveness, perceus, simplify, translate, verify, verify_scopes,
+};
 
 /// `lower_until` で止める位置。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -43,7 +45,7 @@ pub fn lower_until(module: &Module, typed: &TypedModule, last: Pass) -> Program 
         return program;
     }
     perceus::insert(&mut program);
-    compact_all(&mut program);
+    compact_all(&mut program, Pass::Perceus);
     check(&program, Pass::Perceus);
     program
 }
@@ -51,7 +53,7 @@ pub fn lower_until(module: &Module, typed: &TypedModule, last: Pass) -> Program 
 /// パスの中では `captures` が古くなってよいが、パスの間ではつねに正しくする (docs/spec/core-ir.md のパスの表)。
 /// 途中で止めた IR の表示と、`verify_scopes` が `captures` を宣言として扱うためである。
 fn settle(program: &mut Program, pass: Pass) {
-    compact_all(program);
+    compact_all(program, pass);
     for function in &mut program.functions {
         liveness::analyze(function);
     }
@@ -59,10 +61,19 @@ fn settle(program: &mut Program, pass: Pass) {
 }
 
 /// パスの後でアリーナを根からの前順に組み直す。たどれない式と消えた join point を捨て、次のパスと verifier が
-/// アリーナ全体を1本の木として扱えるようにする (docs/spec/core-ir.md のパスの表)。
-fn compact_all(program: &mut Program) {
+/// アリーナ全体を1本の木として扱えるようにする (docs/spec/core-ir.md のパスの表)。`compact` が見つけた木の誤りは、
+/// `check` と違ってどのビルドでも、パスの名前で報告する。理由は compact.rs に書いた。
+fn compact_all(program: &mut Program, pass: Pass) {
     for function in &mut program.functions {
-        compact::compact(function);
+        if let Err(message) = compact::compact(function) {
+            fail(
+                pass,
+                VerifyError {
+                    function: function.name.clone(),
+                    message,
+                },
+            );
+        }
     }
 }
 
@@ -76,9 +87,13 @@ fn check(program: &Program, pass: Pass) {
         Pass::Perceus => verify(program),
     };
     if let Err(error) = result {
-        panic!(
-            "internal error: invalid Core IR after {}: {error}",
-            pass.name()
-        );
+        fail(pass, error);
     }
+}
+
+fn fail(pass: Pass, error: VerifyError) -> ! {
+    panic!(
+        "internal error: invalid Core IR after {}: {error}",
+        pass.name()
+    );
 }
