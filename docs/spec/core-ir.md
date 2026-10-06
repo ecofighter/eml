@@ -64,7 +64,7 @@
 | `simplify` | RC の命令のない IR | 同じ形の IR (join point を書き換えた後) |
 | Perceus | RC の命令のない IR | `dup` / `decref` と `saved` が入った IR |
 
-- どのパスの後でも、アリーナは根からの前順に組み直されている。たどれない式は捨て、残った join point には元の番号の順で 0 から番号を振る。組み直す `compact` は、2回たどれる式、木の中に定義のない join point への `jump`、2回定義された join point を、どのビルドでもそのパスの誤りとして報告する。verifier も、どの式も根からちょうど1回たどれることを確かめる。テキストから読んだ IR は `compact` を通らないためである。
+- どのパスの後でも、アリーナは根からの前順に組み直されている。たどれない式は捨て、残った join point には元の番号の順で 0 から番号を振る。組み直す `compact` は、2回たどれる式、木の中に定義のない join point への `jump`、2回定義された join point、定義を指さない join point の索引を、どのビルドでもそのパスの誤りとして報告する。verifier も、どの式も根からちょうど1回たどれることを確かめる。テキストから読んだ IR は `compact` を通らないためである。
 - どのパスの後でも、join point の `captures` と `joins` の索引は正しい。パスの中では `captures` が古くなってよい。RC の命令を入れる前のパスの後で、パイプラインが生存解析で埋め直す。
 - マイルストーン1 で入れるパスは、`simplify` と Perceus の `dup` / `decref` の挿入にする。reuse analysis と借用パラメータの最適化は後で追加する ([ロードマップ](../future/roadmap.md))。
 - `simplify` は、変換の後、Perceus の前に置き、join point と `switch` を書き換える。書き換えは次の8つで、F、B3、K1、B2、B5、B3、B4、DCE、T の順に1巡だけ行い、不動点までは繰り返さない。

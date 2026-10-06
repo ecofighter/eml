@@ -8,8 +8,8 @@ use crate::{Atom, CExpr, CExprId, CoreFn, JoinId};
 /// 長い連鎖で再帰しないように、作業の列でたどる。
 ///
 /// パスの出力を最初に見るのはこの関数なので、2回たどれる式、木の中に定義のない join point への `jump`、
-/// 2回定義された join point を、ここでパスの誤りとして返す。組み直した後のアリーナは木になるので、verifier の木の
-/// 検査ではもう見つからない。共有された式が入れ子になると、たどる時間が指数的に増えるので、リリースビルドでも
+/// 2回定義された join point、定義を指さない join point の索引を、ここでパスの誤りとして返す。組み直した後の
+/// アリーナは木になり、索引も作り直すので、verifier の検査ではもう見つからない。共有された式が入れ子になると、たどる時間が指数的に増えるので、リリースビルドでも
 /// 検査する。誤りを返すときは `function` を書き換えない。
 pub(crate) fn compact(function: &mut CoreFn) -> Result<(), String> {
     let mut new_ids: Vec<Option<CExprId>> = vec![None; function.exprs.len()];
@@ -26,16 +26,27 @@ pub(crate) fn compact(function: &mut CoreFn) -> Result<(), String> {
         work.extend(children.into_iter().rev());
     }
 
-    let mut present: Vec<usize> = order
+    let defined: Vec<(usize, CExprId)> = order
         .iter()
         .filter_map(|&id| match &function.exprs[id.0 as usize] {
-            CExpr::Join { join, .. } => Some(join.0 as usize),
+            CExpr::Join { join, .. } => Some((join.0 as usize, id)),
             _ => None,
         })
         .collect();
+    let mut present: Vec<usize> = defined.iter().map(|&(join, _)| join).collect();
     present.sort_unstable();
     if let Some(pair) = present.windows(2).find(|pair| pair[0] == pair[1]) {
         return Err(format!("join point j{} is defined twice", pair[0]));
+    }
+    // パスは `CoreFn::new_join` で番号を取ってから `define_join` で定義を指す。指し忘れた索引は、ここで組み直すと
+    // 消えて見えなくなるので、組み直す前に見つける
+    if let Some(&(join, _)) = defined
+        .iter()
+        .find(|&&(join, id)| function.joins.get(join) != Some(&id))
+    {
+        return Err(format!(
+            "the join index of j{join} does not point at its definition"
+        ));
     }
     let table_len = present.last().map_or(0, |&last| last + 1);
     let mut join_numbers: Vec<Option<JoinId>> = vec![None; table_len.max(function.joins.len())];
@@ -234,6 +245,27 @@ mod tests {
         assert_eq!(function.exprs, exprs);
         assert_eq!(function.body, body);
         assert_eq!(function.joins, [dead]);
+    }
+
+    #[test]
+    fn compact_rejects_a_join_index_that_does_not_point_at_its_definition() {
+        let mut function =
+            parse_one("fn f() {\n  join j0() [] {\n    return 1\n  }\n  jump j0()\n}\n");
+        // `CoreFn::new_join` の後に `define_join` を忘れたときのように、`Join` でない式を指す索引を作る
+        let CExpr::Join { scope, .. } = function.expr(function.body) else {
+            panic!("the root is the join point");
+        };
+        function.joins[0] = *scope;
+
+        let error = compact(&mut function).unwrap_err();
+        assert_eq!(
+            error,
+            "the join index of j0 does not point at its definition"
+        );
+    }
+
+    fn parse_one(text: &str) -> CoreFn {
+        crate::parse(text).unwrap().functions.remove(0)
     }
 
     #[test]

@@ -106,7 +106,7 @@ impl Simplify<'_> {
     }
 
     fn set(&mut self, id: CExprId, expr: CExpr) {
-        self.function.exprs[id.0 as usize] = expr;
+        self.function.set(id, expr);
     }
 
     /// 根からたどれる式。長い連鎖で再帰しないように、作業の列でたどる。
@@ -147,7 +147,7 @@ impl Simplify<'_> {
             None => self.function.body = new,
             Some(parent) => {
                 let mut replaced = 0;
-                self.function.exprs[parent.0 as usize].for_each_child_mut(|slot| {
+                self.function.expr_mut(parent).for_each_child_mut(|slot| {
                     if *slot == old {
                         *slot = new;
                         replaced += 1;
@@ -167,7 +167,7 @@ impl Simplify<'_> {
     fn substitute(&mut self, root: CExprId, var: VarId, atom: Atom) {
         let mut work = vec![root];
         while let Some(id) = work.pop() {
-            let expr = &mut self.function.exprs[id.0 as usize];
+            let expr = self.function.expr_mut(id);
             expr.for_each_atom_mut(|slot| {
                 if *slot == Atom::Var(var) {
                     *slot = atom;
@@ -466,7 +466,8 @@ impl Simplify<'_> {
         for id in self.reachable() {
             let CExpr::Let {
                 var,
-                // `saved` は Perceus が決めるので、この時点では空である。末尾呼び出しはフレームを残さないので捨てる
+                // `saved` は Perceus が決めるので、この時点では空である (docs/spec/core-ir.md のパスの表)。末尾呼び出しは
+                // フレームを残さないので捨てる
                 rhs: Rhs::Call { call, saved: _ },
                 body,
             } = self.expr(id)
@@ -587,7 +588,11 @@ impl Simplify<'_> {
         while let Some(id) = work.pop() {
             match self.expr(id) {
                 CExpr::Join {
-                    join, body, scope, ..
+                    join,
+                    params: _,
+                    captures: _,
+                    body,
+                    scope,
                 } => {
                     let index = join.0 as usize;
                     seen.push(index);
@@ -598,7 +603,7 @@ impl Simplify<'_> {
                         deferred[index] = Some(*body);
                     }
                 }
-                CExpr::Jump { join, .. } => {
+                CExpr::Jump { join, args: _ } => {
                     let index = join.0 as usize;
                     if !used[index] {
                         used[index] = true;

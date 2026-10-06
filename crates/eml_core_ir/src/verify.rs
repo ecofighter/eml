@@ -151,7 +151,7 @@ impl<'a> Checker<'a> {
             match function.expr(id) {
                 CExpr::Let { var, rhs, body } => {
                     self.check_rhs(&mut state, rhs)?;
-                    if let Rhs::Call { saved, .. } = rhs {
+                    if let Rhs::Call { call: _, saved } = rhs {
                         match self.level {
                             Level::Scopes if !saved.is_empty() => {
                                 return Err(format!(
@@ -377,7 +377,7 @@ impl<'a> Checker<'a> {
 
     fn check_rhs(&self, state: &mut State, rhs: &Rhs) -> Result<(), String> {
         match rhs {
-            Rhs::Call { call, .. } => return self.check_call(state, call),
+            Rhs::Call { call, saved: _ } => return self.check_call(state, call),
             Rhs::MakeClosure(target, args) => {
                 let target = self.program.function(*target);
                 if args.len() >= target.params.len() {
@@ -411,7 +411,10 @@ impl<'a> Checker<'a> {
                 }
             }
             Call::Handle {
-                effect, clauses, ..
+                effect,
+                body: _,
+                clauses,
+                ret: _,
             } => {
                 let info = self.effect(*effect)?;
                 if clauses.len() != info.operations.len() {
@@ -423,7 +426,11 @@ impl<'a> Checker<'a> {
                     ));
                 }
             }
-            Call::Perform { effect, op, .. } => {
+            Call::Perform {
+                effect,
+                op,
+                args: _,
+            } => {
                 let info = self.effect(*effect)?;
                 if *op as usize >= info.operations.len() {
                     return Err(format!(
@@ -433,7 +440,7 @@ impl<'a> Checker<'a> {
                     ));
                 }
             }
-            Call::Apply(..) | Call::Resume { .. } => {}
+            Call::Apply(_, _) | Call::Resume { k: _, arg: _ } => {}
         }
         for atom in call.atoms() {
             self.consume(state, &atom)?;

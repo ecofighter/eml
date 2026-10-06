@@ -208,7 +208,7 @@ impl Rebuild<'_> {
                     }
                     break (code, live);
                 }
-                CExpr::Dup { .. } | CExpr::Decref { .. } => {
+                CExpr::Dup { var: _, body: _ } | CExpr::Decref { var: _, body: _ } => {
                     unreachable!("the pass runs once on code without RC instructions")
                 }
             }

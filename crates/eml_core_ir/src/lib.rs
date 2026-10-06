@@ -427,12 +427,14 @@ pub enum Atom {
 macro_rules! named_ops {
     ($ty:ident { $($variant:ident => $name:literal,)* }) => {
         impl $ty {
+            /// 表示での名前。`pretty` が書き、`parse` が `from_name` で読み戻す。
             pub fn name(self) -> &'static str {
                 match self {
                     $($ty::$variant => $name,)*
                 }
             }
 
+            /// `name` の逆。表にない名前は `None` である。
             pub fn from_name(name: &str) -> Option<$ty> {
                 match name {
                     $($name => Some($ty::$variant),)*

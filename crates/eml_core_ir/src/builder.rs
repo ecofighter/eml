@@ -80,6 +80,16 @@ impl CoreFn {
         CExprId(push_index(&mut self.exprs, expr))
     }
 
+    /// `id` の式を置き換える。子の指す先と join point の索引は、呼ぶ側が合わせる。
+    pub(crate) fn set(&mut self, id: CExprId, expr: CExpr) {
+        self.exprs[id.0 as usize] = expr;
+    }
+
+    /// `id` の式をその場で書き換えるための参照。子や atom の一部だけを直すときに使う。
+    pub(crate) fn expr_mut(&mut self, id: CExprId) -> &mut CExpr {
+        &mut self.exprs[id.0 as usize]
+    }
+
     /// `var` と同じ名前と性質の新しい変数。
     pub(crate) fn fresh_like(&mut self, var: VarId) -> VarId {
         let info = self.vars[var.0 as usize].clone();
@@ -88,6 +98,7 @@ impl CoreFn {
 
     /// 新しい join point の番号を取る。`Join` の式は、その番号へ飛ぶ `jump` を組んだ後で組むことがあるので、
     /// 番号を取るときにはまだない。索引は `define_join` で `Join` の式を指すまで、仮に関数の根を指しておく。
+    /// 指し忘れは `compact` が報告する。
     pub(crate) fn new_join(&mut self) -> JoinId {
         let placeholder = self.body;
         JoinId(push_index(&mut self.joins, placeholder))

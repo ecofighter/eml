@@ -60,14 +60,26 @@ impl BlockLiveness {
             }
             // verifier は join point の `captures` が定義の位置で範囲にあることを求める。`jump` が届かない join point でも、
             // `Join` まで生かしておかないと、間の呼び出しをまたいだ変数が退避されずに範囲から外れる
-            CExpr::Join { join, scope, .. } => {
+            CExpr::Join {
+                join,
+                params: _,
+                captures: _,
+                body: _,
+                scope,
+            } => {
                 let mut vars = self.entry(*scope).clone();
                 if let Some(captures) = self.captures.get(join.0 as usize) {
                     vars.extend(captures.iter().copied());
                 }
                 vars
             }
-            CExpr::Let { .. } | CExpr::Dup { .. } | CExpr::Decref { .. } => {
+            CExpr::Let {
+                var: _,
+                rhs: _,
+                body: _,
+            }
+            | CExpr::Dup { var: _, body: _ }
+            | CExpr::Decref { var: _, body: _ } => {
                 unreachable!("a chain ends at a control expression")
             }
         }
@@ -114,9 +126,13 @@ pub(crate) fn analyze(function: &mut CoreFn) -> BlockLiveness {
             Step::Visit(start, kind) => {
                 let mut bindings = Vec::new();
                 let mut id = start;
-                while let CExpr::Let { body, .. }
-                | CExpr::Dup { body, .. }
-                | CExpr::Decref { body, .. } = function.expr(id)
+                while let CExpr::Let {
+                    var: _,
+                    rhs: _,
+                    body,
+                }
+                | CExpr::Dup { var: _, body }
+                | CExpr::Decref { var: _, body } = function.expr(id)
                 {
                     bindings.push(id);
                     id = *body;
@@ -129,7 +145,11 @@ pub(crate) fn analyze(function: &mut CoreFn) -> BlockLiveness {
                 });
                 match function.expr(id) {
                     CExpr::Join {
-                        join, body, scope, ..
+                        join,
+                        params: _,
+                        captures: _,
+                        body,
+                        scope,
                     } => {
                         work.push(Step::Visit(*scope, Start::Block));
                         work.push(Step::Visit(
@@ -140,10 +160,19 @@ pub(crate) fn analyze(function: &mut CoreFn) -> BlockLiveness {
                             },
                         ));
                     }
-                    CExpr::Switch { arms, .. } => {
+                    CExpr::Switch { scrutinee: _, arms } => {
                         work.extend(arms.iter().map(|arm| Step::Visit(arm.body, Start::Block)));
                     }
-                    _ => {}
+                    CExpr::Jump { join: _, args: _ } | CExpr::Return(_) | CExpr::TailCall(_) => {}
+                    CExpr::Let {
+                        var: _,
+                        rhs: _,
+                        body: _,
+                    }
+                    | CExpr::Dup { var: _, body: _ }
+                    | CExpr::Decref { var: _, body: _ } => {
+                        unreachable!("the chain above stops at a control expression")
+                    }
                 }
             }
             Step::Finish {
@@ -155,11 +184,11 @@ pub(crate) fn analyze(function: &mut CoreFn) -> BlockLiveness {
                 let mut vars = live.at_end(function.expr(end));
                 for &id in bindings.iter().rev() {
                     match function.expr(id) {
-                        CExpr::Let { var, rhs, .. } => {
+                        CExpr::Let { var, rhs, body: _ } => {
                             vars.remove(var);
                             vars.extend(rhs.atoms().iter().filter_map(var_of));
                         }
-                        CExpr::Dup { var, .. } | CExpr::Decref { var, .. } => {
+                        CExpr::Dup { var, body: _ } | CExpr::Decref { var, body: _ } => {
                             vars.insert(*var);
                         }
                         _ => unreachable!("only bindings are collected"),
@@ -171,7 +200,14 @@ pub(crate) fn analyze(function: &mut CoreFn) -> BlockLiveness {
                         live.entries.insert(start, vars);
                     }
                     Start::JoinBody { join, node } => {
-                        let CExpr::Join { params, .. } = function.expr(node) else {
+                        let CExpr::Join {
+                            join: _,
+                            params,
+                            captures: _,
+                            body: _,
+                            scope: _,
+                        } = function.expr(node)
+                        else {
                             unreachable!("a join body starts at a join point")
                         };
                         for param in params {
@@ -184,7 +220,14 @@ pub(crate) fn analyze(function: &mut CoreFn) -> BlockLiveness {
         }
     }
     for (join, &node) in function.joins.iter().enumerate() {
-        if let CExpr::Join { captures, .. } = &mut function.exprs[node.0 as usize] {
+        if let CExpr::Join {
+            join: _,
+            params: _,
+            captures,
+            body: _,
+            scope: _,
+        } = &mut function.exprs[node.0 as usize]
+        {
             *captures = live.captures[join].iter().copied().collect();
         }
     }
