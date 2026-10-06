@@ -308,13 +308,18 @@ impl FnLowering<'_> {
             // 本体と節を、捕まえた変数を先頭の引数に持つ関数に持ち上げる (docs/spec/core-ir.md)。本体は `()` を受ける
             ExprKind::Handle {
                 body: handled,
-                init: _,
+                init,
                 effect,
                 clauses,
                 ret,
             } => {
                 let effect = effect.expect("a program without errors handles a known effect");
                 let ty = self.ty(id);
+                // 初期値は本体と節を持ち上げる前に評価する (docs/spec/expressions.md のパラメータ付き handler)
+                let init_atom = match init {
+                    Some(init) => self.atom(*init, out),
+                    None => Atom::Unit,
+                };
                 let prefix = format!("{}$handle{}", self.root_name, *self.handlers);
                 *self.handlers += 1;
                 let unit = [(None, Type::unit())];
@@ -326,9 +331,9 @@ impl FnLowering<'_> {
                     &Type::Flexible,
                     out,
                 );
-                // 状態のない handler は状態を `()` にする。節と `return` の節は最後の引数で状態を受ける
-                // (docs/spec/core-ir.md)
-                let state = (None, Type::unit());
+                // 状態のある handler は HIR の節の引数が状態を含む。状態のない handler だけ、
+                // 状態を `()` にして最後の引数で受ける (docs/spec/core-ir.md)
+                let stateless = init.is_none();
                 // 節はエフェクトの操作の順に並べる。インタプリタは操作の番号で節を引く
                 let operations = self.module.effects[effect].operations.clone();
                 let mut closures = Vec::new();
@@ -343,7 +348,9 @@ impl FnLowering<'_> {
                         .iter()
                         .map(|&pat| (Some(pat), self.pat_type(pat)))
                         .collect();
-                    params.push(state.clone());
+                    if stateless {
+                        params.push((None, Type::unit()));
+                    }
                     let name = format!("{prefix}${}", self.module.operations[op].name);
                     let captured = body.closure_captures(&clause.closure);
                     let closure = self.lift(
@@ -356,7 +363,15 @@ impl FnLowering<'_> {
                     );
                     closures.push(closure);
                 }
-                let params = [(Some(ret.value()), self.pat_type(ret.value())), state];
+                let mut params: Vec<(Option<PatId>, Type)> = ret
+                    .closure
+                    .params
+                    .iter()
+                    .map(|&pat| (Some(pat), self.pat_type(pat)))
+                    .collect();
+                if stateless {
+                    params.push((None, Type::unit()));
+                }
                 let captured = body.closure_captures(&ret.closure);
                 let name = format!("{prefix}$return");
                 let ret = self.lift(
@@ -369,27 +384,22 @@ impl FnLowering<'_> {
                 );
                 let call = Call::Handle {
                     effect: effect_index(effect),
-                    init: Atom::Unit,
+                    init: init_atom,
                     body: handled_closure,
                     clauses: closures,
                     ret,
                 };
                 self.bind(out, "t", &ty, Rhs::call(call))
             }
-            ExprKind::Resume { k, arg, state: _ } => {
+            ExprKind::Resume { k, arg, state } => {
                 let k = self.atom(*k, out);
                 let arg = self.atom(*arg, out);
+                let state = match state {
+                    Some(state) => self.atom(*state, out),
+                    None => Atom::Unit,
+                };
                 let ty = self.ty(id);
-                self.bind(
-                    out,
-                    "t",
-                    &ty,
-                    Rhs::call(Call::Resume {
-                        k,
-                        arg,
-                        state: Atom::Unit,
-                    }),
-                )
+                self.bind(out, "t", &ty, Rhs::call(Call::Resume { k, arg, state }))
             }
             ExprKind::Tuple(elements) => {
                 // 要素を左から評価し、コンストラクタが1つの `data` と同じ値にする (docs/spec/core-ir.md)

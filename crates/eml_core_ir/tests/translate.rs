@@ -845,3 +845,35 @@ fn functions_without_captures_are_values() {
     assert!(!ir.contains("closure main$lambda0"), "{ir}");
     assert!(ir.contains("closure main$lambda1(3)"), "{ir}");
 }
+
+#[test]
+fn a_handler_with_a_state_passes_its_initial_value_and_takes_the_state_from_its_clauses() {
+    let text = "effect Ask where\n  ask : Unit -> Int\n\nmain : Unit -> <IO> Unit\nmain () =\n  let n =\n    handle ask () + ask () from 10 with\n      | ask () k st -> resume k st (st + 1)\n      | return x st -> x * st\n  println (show_int n)";
+    insta::assert_snapshot!(core_text(text, Pass::Translate), @"
+    effect Ask { ask/1 }
+    fn main(p0) {
+      let t1 = handle Ask(&main$handle0, 10) {ask: &main$handle0$ask} return &main$handle0$return
+      let t2^ = prim show_int(t1)
+      let t3 = perform println(t2)
+      return t3
+    }
+    fn main$handle0(p0) {
+      let t1 = perform Ask.ask(())
+      let t2 = perform Ask.ask(())
+      let t3 = prim +(t1, t2)
+      return t3
+    }
+    fn main$handle0$ask(p0, k1^, st2) {
+      let t3 = prim +(st2, 1)
+      let t4 = resume k1(st2, t3)
+      return t4
+    }
+    fn main$handle0$return(x0, st1) {
+      let t2 = prim *(x0, st1)
+      return t2
+    }
+    fn entry$main() {
+      tailcall main(())
+    }
+    ");
+}
