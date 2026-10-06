@@ -182,6 +182,7 @@ pub(crate) fn check_body(
         comparisons: Vec::new(),
         typing: BodyTyping::default(),
         instances: Vec::new(),
+        clause_frames: Vec::new(),
     };
     checker.check_function(own.ty);
     checker.resolve_equalities();

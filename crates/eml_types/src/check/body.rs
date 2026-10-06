@@ -64,6 +64,15 @@ pub(super) struct BodyCheck<'a, 'c> {
     pub(super) typing: BodyTyping,
     /// 参照の具体化の記録。段2が展開する。
     pub(super) instances: Vec<Instance>,
+    /// 検査中の操作の節。内側の節が後ろに積まれる。
+    pub(super) clause_frames: Vec<ClauseFrame>,
+}
+
+/// 検査中の操作の節。E2007 の fix が、`resume` を囲む節の `k` と状態の変数を引く (docs/spec/diagnostics.md の E2007)。
+pub(super) struct ClauseFrame {
+    pub k: Option<LocalId>,
+    /// 状態の引数が変数の束縛 (型の明示を含む) なら、その変数。
+    pub state: Option<LocalId>,
 }
 
 /// 式に期待する型。check と infer で `if` とブロックの処理を共有するため。

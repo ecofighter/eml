@@ -1,13 +1,16 @@
 //! handle、`resume` の検査 (docs/spec/effects.md の「handler の意味」)。
 
-use eml_diagnostics::{Diagnostic, Label as DiagnosticLabel};
-use eml_hir::{Closure, EffectId, ExprId, OpClause, OpMultiplicity, PatId, ReturnClause};
+use eml_diagnostics::{Diagnostic, Label as DiagnosticLabel, TextEdit, TextRange, TextSize};
+use eml_hir::{
+    Closure, EffectId, ExprId, ExprKind, LocalId, OpClause, OpMultiplicity, PatId, PatKind, Res,
+    ReturnClause,
+};
 
 use crate::codes;
 use crate::table::{ArrowLin, Label, Row, Slot, Tail, Ty, TyShape};
 use crate::ty::Linearity;
 
-use super::body::{BodyCheck, CallRows};
+use super::body::{BodyCheck, CallRows, ClauseFrame};
 use super::report::Origin;
 
 impl BodyCheck<'_, '_> {
@@ -127,7 +130,22 @@ impl BodyCheck<'_, '_> {
             });
             self.bind_pat(k, continuation);
         }
+        let frame = ClauseFrame {
+            k: clause.k().and_then(|pat| self.bound_variable(pat)),
+            state: clause.state().and_then(|pat| self.bound_variable(pat)),
+        };
+        self.clause_frames.push(frame);
         self.check_expr(clause.closure.body, result, Origin::HandlerClause);
+        self.clause_frames.pop();
+    }
+
+    /// 変数の束縛 (型の明示を含む) のパターンが束縛する変数。タプルなどの分解は変数1つで表せないので `None` にする。
+    fn bound_variable(&self, pat: PatId) -> Option<LocalId> {
+        match &self.body.pats[pat].kind {
+            PatKind::Bind(local) => Some(*local),
+            PatKind::Annot { pat, .. } => self.bound_variable(*pat),
+            _ => None,
+        }
     }
 
     /// 扱うエフェクトが決まらない handler は HIR が報告済みである。本体のエフェクトをすべて受け入れ、型を `Error` に
@@ -194,7 +212,7 @@ impl BodyCheck<'_, '_> {
             None => (Slot::Stateless, None),
         };
         if self.table.unify_slot(slot, wanted).is_err() {
-            self.resume_state_mismatch(id, state);
+            self.resume_state_mismatch(id, k, arg, state);
         }
         // 欄が食い違っても、値と状態の中の誤りは報告する。食い違ったときの σ は新しい変数のままなので、状態の式の
         // 型では誤りにならない
@@ -209,22 +227,77 @@ impl BodyCheck<'_, '_> {
     }
 
     /// `resume` の引数の数が `k` の状態の欄と合わない (docs/spec/diagnostics.md の E2007)。
-    fn resume_state_mismatch(&mut self, id: ExprId, state: Option<ExprId>) {
+    fn resume_state_mismatch(&mut self, id: ExprId, k: ExprId, arg: ExprId, state: Option<ExprId>) {
         let range = self.body.exprs[id].range;
         let diagnostic = match state {
-            None => Diagnostic::error(
-                codes::RESUME_STATE_MISMATCH,
-                "this continuation comes from a handler with a state, so `resume` needs the next state",
-                DiagnosticLabel::new(self.file(), range, "the next state is missing"),
-            )
-            .with_help("pass the next state as the third argument: `resume k v st`"),
-            Some(_) => Diagnostic::error(
-                codes::RESUME_STATE_MISMATCH,
-                "this continuation comes from a handler without a state, so `resume` takes no state",
-                DiagnosticLabel::new(self.file(), range, "the state argument is not expected"),
-            )
-            .with_help("remove the third argument"),
+            None => {
+                let diagnostic = Diagnostic::error(
+                    codes::RESUME_STATE_MISMATCH,
+                    "this continuation comes from a handler with a state, so `resume` needs the next state",
+                    DiagnosticLabel::new(self.file(), range, "the next state is missing"),
+                )
+                .with_help("pass the next state as the third argument: `resume k v st`");
+                match self.current_state_for(k, id) {
+                    Some(name) => {
+                        let at = self.body.exprs[arg].range.end();
+                        let title = format!("pass the current state `{name}`");
+                        diagnostic.with_fix(
+                            title,
+                            vec![TextEdit {
+                                file: self.file(),
+                                range: TextRange::empty(at),
+                                replacement: format!(" {name}"),
+                            }],
+                        )
+                    }
+                    None => diagnostic,
+                }
+            }
+            Some(state) => {
+                let from = self.body.exprs[arg].range.end();
+                let to = self.body.exprs[state].range.end();
+                Diagnostic::error(
+                    codes::RESUME_STATE_MISMATCH,
+                    "this continuation comes from a handler without a state, so `resume` takes no state",
+                    DiagnosticLabel::new(self.file(), range, "the state argument is not expected"),
+                )
+                .with_help("remove the third argument")
+                .with_fix(
+                    "remove the state argument",
+                    vec![TextEdit {
+                        file: self.file(),
+                        range: TextRange::new(from, to),
+                        replacement: String::new(),
+                    }],
+                )
+            }
         };
         self.diagnostics.push(diagnostic);
+    }
+
+    /// `resume` が再開する `k` が、囲む節の `k` そのもので、その節の状態の変数がここで見えるときだけ、状態の変数の
+    /// 名前を返す。型検査器には変数のスコープの表がないので、同じ名前の別の変数が状態の引数より後で、`resume` より前に
+    /// 束縛されていれば、隠されているかもしれないとして返さない。付けるべき fix を付けないことはあるが、誤った fix は
+    /// 付けない。
+    fn current_state_for(&self, k: ExprId, resume: ExprId) -> Option<String> {
+        let ExprKind::Path(Res::Local(local)) = self.body.exprs[k].kind else {
+            return None;
+        };
+        let frame = self
+            .clause_frames
+            .iter()
+            .rev()
+            .find(|frame| frame.k == Some(local))?;
+        let state = frame.state?;
+        let name = &self.body.locals[state].name;
+        let state_start: TextSize = self.body.locals[state].range.start();
+        let resume_start = self.body.exprs[resume].range.start();
+        let shadowed = self.body.locals.iter().any(|(other, data)| {
+            other != state
+                && data.name == *name
+                && data.range.start() > state_start
+                && data.range.start() < resume_start
+        });
+        (!shadowed).then(|| name.clone())
     }
 }

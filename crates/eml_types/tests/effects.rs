@@ -401,3 +401,68 @@ fn a_handler_of_an_unknown_effect_still_checks_its_initial_state() {
     assert!(codes.contains(&"E1001".to_string()), "{codes:?}");
     assert!(codes.contains(&"E2001".to_string()), "{codes:?}");
 }
+
+fn fix_text(text: &str) -> String {
+    let checked = eml_test_support::check(text);
+    eml_test_support::fixes(&checked.files, &checked.diagnostics)
+}
+
+const ASK: &str = "effect Ask where\n  ask : Unit -> Int\n\n";
+
+#[test]
+fn the_state_argument_is_removed_from_a_continuation_without_a_state() {
+    let text = format!(
+        "{ASK}f : Unit -> Int\nf () =\n  handle ask () with\n    | ask () k -> resume k 1 2"
+    );
+    insta::assert_snapshot!(fix_text(&text), @r#"
+    E2007 7:19 remove the state argument
+      7:29..7:31 ""
+    "#);
+}
+
+#[test]
+fn the_current_state_is_passed_when_the_clause_binds_it_to_a_name() {
+    let text = format!(
+        "{ASK}f : Unit -> Int\nf () =\n  handle ask () from 0 with\n    | ask () k (st : Int) -> resume k st\n    | return x _ -> x"
+    );
+    insta::assert_snapshot!(fix_text(&text), @r#"
+    E2007 7:30 pass the current state `st`
+      7:41..7:41 " st"
+    "#);
+}
+
+#[test]
+fn no_state_is_passed_when_the_state_is_a_pattern() {
+    let text = format!(
+        "{ASK}f : Unit -> Int\nf () =\n  handle ask () from (0, 0) with\n    | ask () k (a, b) -> resume k a\n    | return x _ -> x"
+    );
+    assert_eq!(fix_text(&text), "");
+}
+
+#[test]
+fn no_state_is_passed_when_its_name_is_shadowed() {
+    let text = format!(
+        "{ASK}f : Unit -> Int\nf () =\n  handle ask () from 0 with\n    | ask () k st ->\n        let st = 5\n        resume k st\n    | return x _ -> x"
+    );
+    assert_eq!(fix_text(&text), "");
+}
+
+#[test]
+fn no_state_is_passed_for_a_continuation_outside_its_clause() {
+    let text = format!(
+        "{ASK}f : Unit -> Int\nf () =\n  handle ask () from 0 with\n    | ask () k st ->\n        let j = k\n        resume j st\n    | return x _ -> x"
+    );
+    let fixes = fix_text(&text);
+    assert!(!fixes.contains("pass the current state"), "{fixes}");
+}
+
+#[test]
+fn the_state_of_the_clause_that_binds_k_is_passed_in_nested_handlers() {
+    let text = format!(
+        "{ASK}f : Unit -> Int\nf () =\n  handle ask () from 0 with\n    | ask () k outer ->\n        handle ask () from 1 with\n          | ask () j inner -> resume k inner\n          | return y _ -> y\n    | return x _ -> x"
+    );
+    insta::assert_snapshot!(fix_text(&text), @r#"
+    E2007 9:31 pass the current state `outer`
+      9:45..9:45 " outer"
+    "#);
+}
