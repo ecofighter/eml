@@ -116,11 +116,6 @@ fn entry_definitions_shadow_prelude_names() {
         panic!("`not` is a function");
     };
     assert_eq!(user.module, map.entry());
-    // lang item と E1009 の判定は、隠された Prelude の関数も引く
-    let prelude = resolver
-        .prelude_function("not")
-        .expect("the Prelude declares `not`");
-    assert_eq!(prelude.module, map.prelude());
     assert_eq!(resolver.value("nope"), None);
 }
 

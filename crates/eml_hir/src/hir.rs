@@ -110,9 +110,6 @@ pub struct LangItems {
     pub or: FunctionId,
     pub pipe: FunctionId,
     pub apply: FunctionId,
-    /// 組み込みの `IO` の操作 (`println`、`open`、`read_all`、`close`)。R7d で Prelude の `effect IO` の操作になる
-    /// まで、handler の節の E1009 がこれを引く。
-    pub io_operations: [FunctionId; 4],
 }
 
 #[derive(Debug)]

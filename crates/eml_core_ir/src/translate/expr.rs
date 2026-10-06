@@ -9,7 +9,7 @@ use eml_types::Type;
 
 use crate::{Atom, Call, FnIdx, Rhs, TUPLE};
 
-use super::program::{effect_index, perform_call};
+use super::program::{effect_index, operation_rhs};
 use super::types::{Lowering, equality_op, intrinsic, split_arrows};
 use super::{Binding, Bindings, Exit, FnLowering};
 
@@ -88,7 +88,6 @@ impl FnLowering<'_> {
             .expect("every intrinsic reaching Core IR has an implementation");
         let rhs = match lowering {
             Lowering::Prim(op) => Rhs::Prim(op, args),
-            Lowering::Io(op) => Rhs::Io(op, args),
             Lowering::Equality { negated } => {
                 let equality = self
                     .types
@@ -124,8 +123,8 @@ impl FnLowering<'_> {
             let wrapper = self.program.operation_wrapper(self.hir, op);
             return self.closure(wrapper, args, ty, out);
         }
-        let call = perform_call(self.hir, op, args);
-        self.bind(out, "t", ty, Rhs::call(call))
+        let rhs = operation_rhs(self.hir, op, args);
+        self.bind(out, "t", ty, rhs)
     }
 
     /// 引数がフィールドの数にそろえば値を作り、足りなければコンストラクタを包む関数のクロージャにする。コンストラクタの

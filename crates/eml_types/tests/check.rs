@@ -383,7 +383,15 @@ fn intrinsic_schemes_are_exported() {
             .unwrap();
         checked.typed.decls[&Decl::Function(id)].ty.to_string()
     };
-    assert_eq!(ty("println"), "String -> <IO> Unit");
+    let operation = |name: &str| {
+        let (id, _) = checked
+            .program
+            .operations()
+            .find(|(_, operation)| operation.name == name)
+            .unwrap();
+        checked.typed.decls[&Decl::Operation(id)].ty.to_string()
+    };
+    assert_eq!(operation("println"), "String -> <IO> Unit");
     assert_eq!(ty("+"), "Int -> Int -> Int");
     assert_eq!(ty(">>"), "(a -> <e> b) -> (b -> <e> c) -> a -> <e> c");
     // コンストラクタは intrinsic ではなく、Prelude の `data Bool` のスキームとして書き出す

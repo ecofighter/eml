@@ -125,7 +125,7 @@ fn a_lambda_captures_what_its_nested_lambdas_capture() {
 #[test]
 fn prelude_signatures_without_equations_are_intrinsic_functions() {
     let module = module("f : Int\nf = 1");
-    for name in ["println", "show_int", "negate", "+", "==", ">>", "&&", "|>"] {
+    for name in ["show_int", "negate", "+", "==", ">>", "&&", "|>"] {
         let function = function(&module, name);
         assert!(function.intrinsic, "{name}");
         assert!(function.signature.is_some(), "{name}");

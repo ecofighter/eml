@@ -2,7 +2,7 @@
 //! 扱い、そのすべての操作に節を書く (docs/spec/effects.md の「handler の意味」)。
 
 use eml_diagnostics::{Diagnostic, Label, TextRange};
-use eml_syntax::{SyntaxToken, ast};
+use eml_syntax::ast;
 
 use super::expr::BodyLowering;
 use crate::codes;
@@ -103,11 +103,32 @@ impl BodyLowering<'_> {
             // 重複した effect の操作である。重複は E1003 で報告済み
             Lookup::Unusable => return,
             Lookup::NotFound => {
-                self.unknown_operation(&name);
+                self.diagnostics.push(Diagnostic::error(
+                    codes::UNDEFINED_NAME,
+                    format!("cannot find effect operation `{}`", name.text()),
+                    Label::new(self.file, name_range, "not an operation of any effect"),
+                ));
                 return;
             }
         };
         let operation = self.operation(op);
+        // `IO` の操作は実行時がその場で処理するので、handle できない (docs/spec/effects.md の「組み込みの `IO`」)
+        if operation.effect == self.lang.io {
+            let text = name.text();
+            self.diagnostics.push(
+                Diagnostic::error(
+                    codes::UNHANDLEABLE_EFFECT,
+                    "`IO` cannot be handled",
+                    Label::new(
+                        self.file,
+                        name_range,
+                        format!("`{text}` is an operation of the built-in `IO`"),
+                    ),
+                )
+                .with_note("the runtime handles `IO` itself"),
+            );
+            return;
+        }
         let effect = operation.effect;
         let never = operation.multiplicity == OpMultiplicity::Never;
         let arity = operation.arity;
@@ -244,35 +265,6 @@ impl BodyLowering<'_> {
             source: ClauseSource::Written,
             range,
         });
-    }
-
-    /// 節の先頭の名前が操作でない。`IO` の操作なら、handle できないことを伝える (docs/spec/effects.md の「組み込みの `IO`」)。
-    fn unknown_operation(&mut self, name: &SyntaxToken) {
-        let text = name.text();
-        let range = name.text_range();
-        let io = self
-            .items
-            .prelude_function(text)
-            .is_some_and(|id| self.lang.io_operations.contains(&id));
-        let diagnostic = if io {
-            Diagnostic::error(
-                codes::UNHANDLEABLE_EFFECT,
-                "`IO` cannot be handled",
-                Label::new(
-                    self.file,
-                    range,
-                    format!("`{text}` is an operation of the built-in `IO`"),
-                ),
-            )
-            .with_note("the runtime handles `IO` itself")
-        } else {
-            Diagnostic::error(
-                codes::UNDEFINED_NAME,
-                format!("cannot find effect operation `{text}`"),
-                Label::new(self.file, range, "not an operation of any effect"),
-            )
-        };
-        self.diagnostics.push(diagnostic);
     }
 
     /// 扱うエフェクトの操作のうち、節のないものを報告する。操作の節が1つもない handler も報告する。解決できなかった

@@ -801,7 +801,10 @@ mod tests {
             "effect State s where\n  swap : a -> s -> (a, s)\n\nmain : Unit -> Unit\nmain () = ()",
         );
         let context = context(&program);
-        let (_, operation) = program.operations().next().unwrap();
+        let (_, operation) = program
+            .operations()
+            .find(|(_, operation)| operation.name == "swap")
+            .unwrap();
         let shape = operation_shape(&context, operation);
         let mut table = Table::new(&context);
         let int = table.int;

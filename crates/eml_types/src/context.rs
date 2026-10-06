@@ -29,17 +29,12 @@ impl Context {
         let effect_multiplicities = program
             .effects()
             .map(|(id, effect)| {
-                // 組み込みの `IO` は、実行時が必ず1回再開するので `Once` である (docs/spec/effects.md)
-                let multiplicity = if id == lang.io {
-                    Multiplicity::Once
-                } else {
-                    effect
-                        .operations
-                        .iter()
-                        .map(|&op| multiplicity(program[op].multiplicity))
-                        .max()
-                        .unwrap_or(Multiplicity::Never)
-                };
+                let multiplicity = effect
+                    .operations
+                    .iter()
+                    .map(|&op| multiplicity(program[op].multiplicity))
+                    .max()
+                    .unwrap_or(Multiplicity::Never);
                 (id, multiplicity)
             })
             .collect();

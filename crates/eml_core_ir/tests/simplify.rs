@@ -10,6 +10,7 @@ fn a_join_point_that_returns_its_value_is_forwarded_and_removed() {
     // `let y = if ...` の後に `y` を返すだけなら、join point の本体を各 jump の位置に写し、join point を消す
     let text = "select : Bool -> Int\nselect c =\n  let y = if c then 1 else 2\n  y\n\nmain : Unit -> <IO> Unit\nmain () = ()";
     insta::assert_snapshot!(core_text(text, Pass::Simplify), @"
+    effect IO { println/1, open/1, read_all/1, close/1 }
     fn main(p0) {
       return ()
     }
@@ -24,6 +25,7 @@ fn a_join_point_that_passes_its_value_on_is_forwarded() {
     // 内側の join point の本体は外側への jump だけなので、内側への jump を外側への jump にする
     let text = "nested : Bool -> Bool -> Int\nnested a b =\n  let y =\n    if a then\n      let z = if b then 1 else 2\n      z\n    else 3\n  y + 1\n\nmain : Unit -> <IO> Unit\nmain () = ()";
     insta::assert_snapshot!(core_text(text, Pass::Simplify), @"
+    effect IO { println/1, open/1, read_all/1, close/1 }
     fn main(p0) {
       return ()
     }
@@ -38,6 +40,7 @@ fn known_tags_jump_straight_to_their_arm() {
     // `a && b` の偽は分かっているので、`a` が偽の枝は条件の値で分岐せずに `2` を返す
     let text = "both : Bool -> Bool -> Int\nboth a b = if a && b then 1 else 2\n\nmain : Unit -> <IO> Unit\nmain () = ()";
     insta::assert_snapshot!(core_text(text, Pass::Simplify), @"
+    effect IO { println/1, open/1, read_all/1, close/1 }
     fn main(p0) {
       return ()
     }
@@ -52,6 +55,7 @@ fn an_arm_reached_twice_stays_a_join_point() {
     // `||` の真の枝は2か所から来るので join point に残り、偽の枝は1か所からなので戻す
     let text = "either : Bool -> Bool -> String -> String\neither a b s = if a || b then s ++ \"!\" else s\n\nmain : Unit -> <IO> Unit\nmain () = ()";
     insta::assert_snapshot!(core_text(text, Pass::Simplify), @"
+    effect IO { println/1, open/1, read_all/1, close/1 }
     fn main(p0) {
       return ()
     }
@@ -66,6 +70,7 @@ fn split_arms_use_the_known_tag() {
     // 切り出した枝の中では、条件の値をその枝のタグに置き換える
     let text = "describe : Bool -> Bool -> Bool\ndescribe a b =\n  let v = a && b\n  if v then not v else v\n\nmain : Unit -> <IO> Unit\nmain () = ()";
     insta::assert_snapshot!(core_text(text, Pass::Simplify), @"
+    effect IO { println/1, open/1, read_all/1, close/1 }
     fn main(p0) {
       return ()
     }
@@ -80,6 +85,7 @@ fn join_points_left_without_jumps_are_removed() {
     // `(a || True) && True` の join point は、消える join point の本体の中にしか jump がない。残すと captures が呼び出しをまたいで生きない
     let text = "noisy : String -> Bool -> <IO> Bool\nnoisy name b =\n  println name\n  b\n\nmain : Unit -> <IO> Unit\nmain () =\n  let other = \"other\"\n  let a = noisy \"a\" True\n  if (a || True) && True then println \"x\" else println other\n  println \"end\"";
     insta::assert_snapshot!(core_text(text, Pass::Simplify), @r#"
+    effect IO { println/1, open/1, read_all/1, close/1 }
     fn noisy(name0^, b1) {
       let t2 = perform println(name0)
       return b1
@@ -114,6 +120,7 @@ fn join_points_left_without_jumps_are_removed() {
 fn an_if_in_a_condition_jumps_straight_to_the_outer_join_point() {
     let text = "choose : Bool -> Bool -> Int\nchoose a b =\n  let n = if (if a then b else False) then 1 else 2\n  n + 1\n\nmain : Unit -> <IO> Unit\nmain () = ()";
     insta::assert_snapshot!(core_text(text, Pass::Simplify), @"
+    effect IO { println/1, open/1, read_all/1, close/1 }
     fn main(p0) {
       return ()
     }
@@ -128,6 +135,7 @@ fn a_bool_match_in_a_condition_jumps_straight_to_the_branch() {
     // `match` の各枝が返す `True` と `False` は分かっているタグなので、`Bool` で分岐し直さずに `if` の枝へ直接進む
     let text = "data Option a = | None | Some a\n\npick : Option Int -> Int\npick o = if (match o with | Some _ -> True | None -> False) then 1 else 2\n\nmain : Unit -> <IO> Unit\nmain () = ()";
     insta::assert_snapshot!(core_text(text, Pass::Simplify), @"
+    effect IO { println/1, open/1, read_all/1, close/1 }
     fn main(p0) {
       return ()
     }
@@ -142,6 +150,7 @@ fn known_tags_of_a_larger_type_jump_straight_to_their_arm() {
     // 3つのタグのどれを渡す jump も、その枝へ直接向かう
     let text = "data Color = | Red | Green | Blue\n\ncode : Int -> Int\ncode n =\n  let c = if n == 0 then Red else if n == 1 then Green else Blue\n  match c with\n    | Red -> 10\n    | Green -> 20\n    | Blue -> 30\n\nmain : Unit -> <IO> Unit\nmain () = ()";
     insta::assert_snapshot!(core_text(text, Pass::Simplify), @"
+    effect IO { println/1, open/1, read_all/1, close/1 }
     fn main(p0) {
       return ()
     }
@@ -156,6 +165,7 @@ fn a_mixed_switch_splits_every_arm_that_a_known_value_reaches() {
     // `None` の枝と、値が届く `Some _` の枝を切り出す。`Some` の値を渡す jump は、フィールドを引数にその枝へ直接向かい、`con` は消える
     let text = "data Option a = | None | Some a\n\npick : Bool -> Bool -> String -> String\npick a b s = match (if a then None else if b then Some s else Some \"x\") with\n  | None -> \"none\"\n  | Some _ -> \"some\"\n\nmain : Unit -> <IO> Unit\nmain () = ()";
     insta::assert_snapshot!(core_text(text, Pass::Simplify), @"
+    effect IO { println/1, open/1, read_all/1, close/1 }
     fn main(p0) {
       return ()
     }
@@ -170,6 +180,7 @@ fn an_arm_that_uses_the_whole_value_gets_it_as_an_argument() {
     // 枝が値全体 `o` も使うので、切り出した join point はフィールドに加えて値も受ける。`o` はタグの定数に置き換えず、`con` は残る
     let text = "data Option a = | None | Some a\n\nh : Option Int -> Int -> Int\nh o y = y\n\npick : Bool -> Int -> Int\npick c x =\n  let o = if c then None else if x > 0 then Some x else Some 0\n  match o with\n    | None -> 0\n    | Some y -> h o y\n\nmain : Unit -> <IO> Unit\nmain () = ()";
     insta::assert_snapshot!(core_text(text, Pass::Simplify), @"
+    effect IO { println/1, open/1, read_all/1, close/1 }
     fn main(p0) {
       return ()
     }
@@ -184,6 +195,7 @@ fn jumps_that_pass_constructed_values_go_to_their_arms() {
     // どの jump も `con` で作った値を渡すので、B2 は `Some n` の枝を join point にして、jump がフィールドを渡す
     let text = "data Option a = | None | Some a\n\npick : Bool -> Int\npick c = match (if c then Some 1 else Some 2) with\n  | Some n -> n\n  | None -> 0\n\nmain : Unit -> <IO> Unit\nmain () = ()";
     insta::assert_snapshot!(core_text(text, Pass::Simplify), @"
+    effect IO { println/1, open/1, read_all/1, close/1 }
     fn main(p0) {
       return ()
     }
@@ -198,6 +210,7 @@ fn split_arms_of_a_data_type_use_the_known_tag() {
     // 切り出した引数のない枝の中では、`c` をその枝のタグに置き換える
     let text = "data Color = | Red | Green | Blue\n\npick : Bool -> Color\npick b =\n  let c = if b then Red else Green\n  match c with\n    | Red -> c\n    | Green -> Blue\n    | Blue -> c\n\nmain : Unit -> <IO> Unit\nmain () = ()";
     insta::assert_snapshot!(core_text(text, Pass::Simplify), @"
+    effect IO { println/1, open/1, read_all/1, close/1 }
     fn main(p0) {
       return ()
     }
@@ -212,6 +225,7 @@ fn a_join_point_with_two_parameters_reached_once_is_inlined() {
     // 引数が2つの枝は jump が1つだけなので、本体を jump の位置に写し、引数を `let` の連鎖で束縛する
     let text = "data Option a = | None | Some a\ndata Pair a b = | Pair a b\n\nadd : Pair (Option Int) (Option Int) -> Int\nadd p = match p with\n  | Pair (Some a) (Some b) -> a + b\n  | Pair x y -> 0\n\nmain : Unit -> <IO> Unit\nmain () = ()";
     insta::assert_snapshot!(core_text(text, Pass::Simplify), @"
+    effect IO { println/1, open/1, read_all/1, close/1 }
     fn main(p0) {
       return ()
     }
@@ -226,6 +240,7 @@ fn a_join_point_with_two_parameters_is_forwarded_by_position() {
     // 2つの leaf から届く枝の本体は2つ目の引数を返すだけなので、各 jump の2つ目の引数を位置で対応させて写す
     let text = "data Option a = | None | Some a\ndata Color = | Red | Green\ndata Pair a b = | Pair a b\n\nsecond : Pair Color (Option Int) -> Option Int\nsecond p = match p with\n  | Pair Red (Some n) -> Some n\n  | Pair t o -> o\n\nmain : Unit -> <IO> Unit\nmain () = ()";
     insta::assert_snapshot!(core_text(text, Pass::Simplify), @"
+    effect IO { println/1, open/1, read_all/1, close/1 }
     fn main(p0) {
       return ()
     }
@@ -427,6 +442,7 @@ fn a_remaining_arm_that_uses_the_scrutinee_stays_inside_the_join_point() {
 fn a_call_moved_into_a_branch_becomes_a_tail_call() {
     let text = "g : Int -> Int\ng x = x\n\nh : Int -> Int\nh x = x\n\nf : Bool -> Int -> Int\nf c x =\n  let y = if c then g x else h x\n  y\n\nmain : Unit -> <IO> Unit\nmain () = println (show_int (f True 1))";
     insta::assert_snapshot!(core_text(text, Pass::Simplify), @"
+    effect IO { println/1, open/1, read_all/1, close/1 }
     fn g(x0) {
       return x0
     }
@@ -458,6 +474,7 @@ fn every_kind_of_call_in_tail_position_becomes_a_tail_call() {
     // 関数値の適用、`handle`、`resume`、操作の `perform` のどれも、T で末尾呼び出しになる (docs/spec/core-ir.md の「パス」)
     let text = "effect Ask where\n  ask : String -> Int\n\ntwice : (Int -> Int) -> Int -> Int\ntwice f x = f (f x)\n\nasked : Unit -> <Ask> Int\nasked () = ask \"x\"\n\nanswer : Unit -> Int\nanswer () =\n  handle asked () with\n    | ask key k -> resume k 1\n\nmain : Unit -> <IO> Unit\nmain () = println (show_int (answer ()))";
     insta::assert_snapshot!(core_text(text, Pass::Simplify), @r#"
+    effect IO { println/1, open/1, read_all/1, close/1 }
     effect Ask { ask/1 }
     fn asked(p0) {
       let s1^ = const "x"

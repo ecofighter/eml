@@ -14,15 +14,6 @@ use crate::program::{
     ConstructorId, EffectId, FunctionId, ItemId, ModuleId, OperationId, TypeDefId,
 };
 
-/// 処理系が Prelude に足すエフェクト。`IO` は R7d で Prelude の `effect IO` に移すまで、操作のないエフェクトとして
-/// `DefMap` が足す。
-#[derive(Debug, Clone, Copy)]
-pub struct SyntheticEffect {
-    pub name: &'static str,
-}
-
-const PRELUDE_EFFECTS: &[SyntheticEffect] = &[SyntheticEffect { name: "IO" }];
-
 /// 値の名前空間の定義を引いた結果。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ValueItem {
@@ -77,7 +68,6 @@ struct Definition<T> {
 #[derive(Debug)]
 struct ModuleScope {
     name: String,
-    synthetic_effects: &'static [SyntheticEffect],
     /// 名前ごとの定義。ソースの位置の順で、使える定義の最初が名前の定義である (規則1)。
     values: HashMap<String, Vec<Definition<Value>>>,
     types: HashMap<String, Vec<Definition<TypeItem>>>,
@@ -140,14 +130,10 @@ fn item_id<T>(module: ModuleId, local: usize) -> ItemId<T> {
 }
 
 impl ModuleScope {
-    /// 局所の番号は、合成の item を先に、続けて `ItemTree` の順に振る。コンストラクタと操作は、宣言の順に通し番号に
+    /// 局所の番号は `ItemTree` の順に振る。コンストラクタと操作は、宣言の順に通し番号に
     /// する。`lower` も同じ順にアリーナへ置く。
     fn new(module: ModuleId, is_prelude: bool, tree: &ItemTree) -> ModuleScope {
-        let (synthetic_effects, name) = if is_prelude {
-            (PRELUDE_EFFECTS, "Prelude")
-        } else {
-            (&[][..], "Main")
-        };
+        let name = if is_prelude { "Prelude" } else { "Main" };
         let functions = (0..tree.functions.len())
             .map(|k| item_id(module, k))
             .collect();
@@ -167,7 +153,7 @@ impl ModuleScope {
             })
             .collect();
         let effects: Vec<EffectId> = (0..tree.effects.len())
-            .map(|k| item_id(module, synthetic_effects.len() + k))
+            .map(|k| item_id(module, k))
             .collect();
         let mut next = 0;
         let operations = tree
@@ -186,7 +172,6 @@ impl ModuleScope {
             .collect();
         let mut scope = ModuleScope {
             name: name.to_string(),
-            synthetic_effects,
             values: HashMap::new(),
             types: HashMap::new(),
             type_params: HashMap::new(),
@@ -198,24 +183,11 @@ impl ModuleScope {
             effects,
             operations,
         };
-        scope.declare(module, tree);
+        scope.declare(tree);
         scope
     }
 
-    fn declare(&mut self, module: ModuleId, tree: &ItemTree) {
-        // 合成の item は位置を持たないので空の範囲にし、どの宣言よりも先に来るようにする
-        for (k, synthetic) in self.synthetic_effects.iter().enumerate() {
-            let id = item_id(module, k);
-            push(
-                &mut self.types,
-                synthetic.name,
-                TypeItem::Effect(id),
-                TextRange::default(),
-                true,
-                true,
-            );
-            self.effect_params.insert(id, 0);
-        }
+    fn declare(&mut self, tree: &ItemTree) {
         for (k, data) in tree.data.iter().enumerate() {
             let id = self.type_ids[k];
             push(
@@ -462,7 +434,6 @@ fn lang_items(prelude: &ModuleScope) -> LangItems {
         or: function("||"),
         pipe: function("|>"),
         apply: function("<|"),
-        io_operations: ["println", "open", "read_all", "close"].map(function),
     }
 }
 
@@ -489,10 +460,6 @@ impl DefMap {
             def_map: self,
             module,
         }
-    }
-
-    pub fn synthetic_effects(&self, module: ModuleId) -> &[SyntheticEffect] {
-        self.scope(module).synthetic_effects
     }
 
     /// `ItemTree` の k 番目の関数の ID。`lower` が番号の一致を確かめるのに使う。
@@ -649,19 +616,5 @@ impl<'a> Resolver<'a> {
             Some((fixity, public, _)) if module == self.module || *public => *fixity,
             _ => Fixity::DEFAULT,
         }
-    }
-
-    /// Prelude の `pub` の関数。ユーザーの定義に隠されていても引く (E1009 の判定)。
-    pub fn prelude_function(&self, name: &str) -> Option<FunctionId> {
-        let prelude = self.def_map.scope(self.def_map.prelude);
-        prelude
-            .values
-            .get(name)?
-            .iter()
-            .filter(|definition| definition.public)
-            .find_map(|definition| match definition.item {
-                Value::Function(id) => Some(id),
-                _ => None,
-            })
     }
 }

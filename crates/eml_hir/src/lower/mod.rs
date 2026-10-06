@@ -58,7 +58,7 @@ pub fn lower(def_map: &DefMap, trees: &[ItemTree]) -> (Program, Vec<Diagnostic>)
     )
 }
 
-/// item を `DefMap` と同じ局所の番号の順に置く。合成の item が先で、続けて `ItemTree` の順である。
+/// item を `DefMap` と同じ局所の番号の順に置く。`ItemTree` の順である。
 fn lower_items(
     def_map: &DefMap,
     module: ModuleId,
@@ -67,13 +67,6 @@ fn lower_items(
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     let file = tree.file;
-    for synthetic in def_map.synthetic_effects(module) {
-        items.effects.alloc(EffectDef {
-            name: synthetic.name.to_string(),
-            generics: Generics::default(),
-            operations: Vec::new(),
-        });
-    }
     data::declare_data(
         file,
         module,

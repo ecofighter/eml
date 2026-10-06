@@ -3,7 +3,7 @@
 use eml_hir::{Program as HirProgram, TypeDefId, TypeDefKind};
 use eml_types::{Equality, Type};
 
-use crate::{IoOp, PrimOp, VarInfo};
+use crate::{PrimOp, VarInfo};
 
 /// ヒープに置く値の型。ボックス化した変数が RC の対象になる。関数値と型変数の値は、ヒープのクロージャや
 /// 文字列かもしれない。インタプリタの `dup` / `decref` はヒープにない値を無視するので、多めに対象にしても正しく動く
@@ -57,7 +57,6 @@ pub(super) fn split_arrows(ty: &Type, count: usize) -> (Vec<Type>, Type) {
 #[derive(Debug, Clone, Copy)]
 pub(super) enum Lowering {
     Prim(PrimOp),
-    Io(IoOp),
     /// `>>` は `g (f x)`、`<<` は `f (g x)` である (docs/spec/declarations.md の演算子の表)。
     Compose {
         forward: bool,
@@ -73,10 +72,6 @@ pub(super) enum Lowering {
 /// 照らし合わせる (docs/superpowers/specs/2026-10-06-refactor-r7-design.md の 4.2)。HIR が脱糖する `&&`、`||`、`|>`、
 /// `<|` は持たない。
 const INTRINSICS: &[(&str, Lowering)] = &[
-    ("println", Lowering::Io(IoOp::Println)),
-    ("open", Lowering::Io(IoOp::Open)),
-    ("read_all", Lowering::Io(IoOp::ReadAll)),
-    ("close", Lowering::Io(IoOp::Close)),
     ("show_int", Lowering::Prim(PrimOp::ShowInt)),
     ("not", Lowering::Prim(PrimOp::Not)),
     ("negate", Lowering::Prim(PrimOp::IntNeg)),
@@ -121,6 +116,8 @@ mod tests {
     use eml_diagnostics::SourceFiles;
     use eml_syntax::ast;
 
+    use crate::IoOp;
+
     use super::{INTRINSICS, intrinsic};
 
     /// HIR が脱糖するので、Core IR に届かない intrinsic。
@@ -149,6 +146,37 @@ mod tests {
             })
             .filter(|name| !defined.contains(name))
             .collect()
+    }
+
+    /// Prelude の `effect IO` の操作の名前。
+    fn prelude_io_operations() -> Vec<String> {
+        let mut files = SourceFiles::new();
+        let file = files.add(eml_hir::PRELUDE_PATH, eml_hir::PRELUDE_SOURCE);
+        let (parse, errors) = eml_syntax::parse(file, eml_hir::PRELUDE_SOURCE);
+        assert!(errors.is_empty(), "{errors:?}");
+        parse
+            .tree()
+            .items()
+            .filter_map(|item| match item {
+                ast::Item::EffectItem(effect) if effect.name()?.text() == "IO" => Some(effect),
+                _ => None,
+            })
+            .flat_map(|effect| effect.operations())
+            .filter_map(|op| Some(op.name()?.text()))
+            .collect()
+    }
+
+    #[test]
+    fn every_io_operation_has_an_io_op_and_back() {
+        let names = prelude_io_operations();
+        // 壊れた Prelude で、確かめる名前が気づかないうちに減らないようにする
+        assert_eq!(names.len(), IoOp::VARIANTS.len(), "{names:?}");
+        for name in &names {
+            assert!(IoOp::from_name(name).is_some(), "{name}");
+        }
+        for op in IoOp::VARIANTS {
+            assert!(names.iter().any(|name| name == op.name()), "{}", op.name());
+        }
     }
 
     #[test]

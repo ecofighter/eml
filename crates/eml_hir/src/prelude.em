@@ -22,10 +22,13 @@ pub data Bool =
   | False
   | True
 
-pub println : String -> <IO> Unit
-pub open : String -> <IO> File
-pub read_all : File -> <IO> (File, String)
-pub close : File -> <IO> Unit
+-- 組み込みの `IO`。操作は実行時がその場で処理するので、ユーザーは handle できない (docs/spec/effects.md の「組み込みの `IO`」)
+pub effect IO where
+  println : String -> Unit
+  open : String -> File
+  read_all : File -> (File, String)
+  close : File -> Unit
+
 pub show_int : Int -> String
 pub not : Bool -> Bool
 -- 前置の `-` の脱糖が呼ぶ。`pub` でないので、ユーザーは名前で書けない

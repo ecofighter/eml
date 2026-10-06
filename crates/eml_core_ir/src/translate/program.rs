@@ -8,7 +8,7 @@ use eml_hir::{
 use eml_types::{Decl, Type, TypedProgram};
 
 use crate::builder::FnBuilder;
-use crate::{Atom, CExpr, Call, CoreFn, EffectInfo, FnIdx, OperationInfo, Rhs, VarId};
+use crate::{Atom, CExpr, Call, CoreFn, EffectInfo, FnIdx, IoOp, OperationInfo, Rhs, VarId};
 
 use super::types::{Lowering, intrinsic, split_arrows, var_info};
 
@@ -90,7 +90,7 @@ impl ProgramBuilder {
             .operation_types
             .get(&op)
             .expect("every operation has a scheme");
-        let (param_types, _) = split_arrows(ty, arity);
+        let (param_types, result_type) = split_arrows(ty, arity);
         let mut builder = FnBuilder::new();
         let params: Vec<VarId> = param_types
             .iter()
@@ -99,7 +99,18 @@ impl ProgramBuilder {
         let function = self.reserve(arity);
         self.operation_wrappers.insert(op, function);
         let args = params.iter().map(|&param| Atom::Var(param)).collect();
-        let body = builder.push(CExpr::TailCall(perform_call(hir, op, args)));
+        let body = match operation_rhs(hir, op, args) {
+            Rhs::Call { call, .. } => builder.push(CExpr::TailCall(call)),
+            rhs => {
+                let result = builder.var(var_info("t", &result_type, hir));
+                let ret = builder.push(CExpr::Return(Atom::Var(result)));
+                builder.push(CExpr::Let {
+                    var: result,
+                    rhs,
+                    body: ret,
+                })
+            }
+        };
         let core = builder.finish(format!("op${}", operation.name), params, body);
         self.finish(function, core);
         function
@@ -225,13 +236,6 @@ impl ProgramBuilder {
             Lowering::Equality { .. } => {
                 unreachable!("`==` and `!=` are always called with both operands")
             }
-            Lowering::Io(op) => {
-                let result = fresh(&result_type);
-                (
-                    vec![(result, Rhs::Io(op, atoms))],
-                    CExpr::Return(Atom::Var(result)),
-                )
-            }
             Lowering::Compose { forward } => {
                 let (inner, outer) = if forward { (0, 1) } else { (1, 0) };
                 let (_, middle_type) = split_arrows(&param_types[inner], 1);
@@ -260,8 +264,20 @@ pub(super) fn effect_index(hir: &HirProgram, effect: EffectId) -> u32 {
         .expect("every effect is in the program") as u32
 }
 
+/// 操作の呼び出し。`IO` の操作は実行時がその場で処理するので、`perform` ではなく `Rhs::Io` にする
+/// (docs/spec/effects.md の「組み込みの `IO`」)。
+pub(super) fn operation_rhs(hir: &HirProgram, op: OperationId, args: Vec<Atom>) -> Rhs {
+    let operation = &hir[op];
+    if operation.effect == hir.lang.io {
+        let io = IoOp::from_name(&operation.name).expect("every `IO` operation has an `IoOp`");
+        Rhs::Io(io, args)
+    } else {
+        Rhs::call(perform_call(hir, op, args))
+    }
+}
+
 /// 操作の番号は、エフェクトの宣言の中の順番である。
-pub(super) fn perform_call(hir: &HirProgram, op: OperationId, args: Vec<Atom>) -> Call {
+fn perform_call(hir: &HirProgram, op: OperationId, args: Vec<Atom>) -> Call {
     let effect = hir[op].effect;
     let index = hir[effect]
         .operations
