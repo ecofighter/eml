@@ -61,7 +61,7 @@ eml_diagnostics  Diagnostic 型、FileId と SourceFiles、行と列、ariadne �
 - 各段階は `fn stage(input: &In) -> (Out, Vec<Diagnostic>)` の形の純粋な関数にする。グローバルな可変状態は持たない。例外は `eml_core_ir` で、診断のエラーがないプログラムだけを受け取り、`Program` を返す (下の「エラーが出ても止まらない」)
 - HIR 以降は `ExprId` / `PatId` / `DefId` などの ID で参照する (`la-arena`)。型などの解析結果は `ExprId → Type` のような別テーブルに置く
 - HIR の各ノードは、元の構文の範囲 (`TextRange`) を持つ。演算子の列を組み直した部分式のように、対応する構文ノードのない式があるため
-- 型付き HIR は HIR を複製しない。`TypedModule` は、関数ごとの型スキームと推論結果 (式や局所変数の型、呼び出しごとの具体化) の別テーブルだけを持つ。そのため `eml_core_ir` は HIR と `TypedModule` の両方を受け取る
+- 型付き HIR は HIR を複製しない。`TypedProgram` は、宣言ごとの結果 (`decls: HashMap<Decl, DeclType>`) と、本体ごとの推論結果 (`bodies`。式や局所変数の型、呼び出しごとの具体化) の別テーブルだけを持つ。`DeclType` は、後の段階が読む `ty` と、crate の外から読めない `Shape` と `KindScheme` を持つ。そのため `eml_core_ir` は HIR と `TypedProgram` の両方を受け取る
 
 現在の各段階の入口は次のとおり (実装状況は [status.md](status.md))。
 
@@ -69,8 +69,8 @@ eml_diagnostics  Diagnostic 型、FileId と SourceFiles、行と列、ariadne �
 |---|---|
 | `eml_syntax` | `parse(FileId, &str) -> (Parse, Vec<Diagnostic>)` |
 | `eml_hir` | `item_tree(FileId, &ast::SourceFile) -> (ItemTree, Vec<Diagnostic>)`、`def_map(&[ItemTree]) -> (DefMap, Vec<Diagnostic>)`、`lower(&DefMap, &[ItemTree]) -> (Program, Vec<Diagnostic>)` の順に呼ぶ。`ItemTree` の並びは、0番目が Prelude、1番目が入口のファイルである。Prelude は `parse_prelude` で構文解析する |
-| `eml_types` | `check(&Program) -> (TypedModule, Vec<Diagnostic>)` |
-| `eml_core_ir` | `lower(&hir::Program, &TypedModule) -> Program`。途中のパスで止める `lower_until(&hir::Program, &TypedModule, Pass) -> Program` |
+| `eml_types` | `check(&Program) -> (TypedProgram, Vec<Diagnostic>)` |
+| `eml_core_ir` | `lower(&hir::Program, &TypedProgram, FunctionId) -> Program`。途中のパスで止める `lower_until(&hir::Program, &TypedProgram, FunctionId, Pass) -> Program`。入口の関数は呼ぶ側が渡す。`eml run` では `hir::Program::main()` (入口のモジュールの最初の `main`) である |
 | `eml_interp` | `run(Arc<Program>, &RunConfig, &OutputSink) -> Result<(), RuntimeError>` |
 
 ## エラーが出ても止まらない
@@ -163,27 +163,27 @@ HIR への変換では、名前解決に加えて、次の脱糖と検査を行�
 - 型の表現はすでに閉じたレコードを使い、`Unit` は `Record([])` である。
 - タプルの式、型、パターンは、数字ラベルの閉じたレコード (`Record([("0", A), ("1", B)])`) に写す。表示は、ラベルが 0 から連番の閉じたレコードを `(A, B)` と書く ([直積型とレコード](../spec/records.md))
 - `==` と `!=` は Prelude で `a -> a -> Bool` で、参照した位置を記録しておき、関数の本体の検査の後に `a` の型から比べ方 (`Equality`) を決める。決まった比べ方は `BodyTypes::equalities` に、呼ばれる側の式の ID で入れる。決まらなければ E2006 にする
-- 結果の `TypedModule` が持つ型は、型変数の束縛を解決した `Type` である (別テーブルの形は上の「各段階の規律」)
+- 結果の `TypedProgram` が持つ型は、型変数の束縛を解決した `Type` である (別テーブルの形は上の「各段階の規律」)
 - シグネチャは閉じた形 `Shape` (`shape.rs`) で持つ。型の表を指さず、rigid な型変数、row 変数、Kind 変数をスキームの中の番号で持つ。参照するたびに多相な具体化をし、呼ばれる位置にない参照では、戻り値の側の閉じた row を開く。自分の本体の検査では rigid な具体化をして、本体の注釈が同じ変数を指せるようにする
 - 呼び出しは、たどった矢印の row を今の row に含める (`Table::include_row`)。呼び出し先の末尾が推論変数なら、その row を今の row とそのまま単一化する。閉じた末尾と rigid な末尾では、末尾を新しい row 変数に替えた row を今の row と単一化し、今の row の残りをその変数で受ける。rigid な末尾では、さらに残りの末尾が同じ rigid 変数であることを確かめる。今の row をまだ推論している途中で残りの末尾が推論変数なら、その推論変数を rigid な変数に束縛する (推論されるラムダの中の呼び出しに必要)
 - ラムダの引数の個数が合わないときや期待する型が壊れているときは、末尾が `Error` の row で本体を検査し、エフェクトの誤りを連鎖させない
 - 型検査は4つの純粋な関数に分ける。`Context::new` (`context.rs`) はモジュール全体の情報 (データ型の Kind、名前、多重度) を1回だけ作り、関数ごとの型の表はこれを借りる。段0の `check::signatures` は、宣言ごとにシグネチャを閉じた形 `Shape` (`shape.rs`) にする。段1の `check::check_body` は、関数のアリーナの順に、関数ごとに新しい表を作り、全宣言の `Shape` だけを見て本体を検査し、`BodyTypes` と Kind の問題 `KindProblem` (`kind/problem.rs`) を返す。段2の `kind::solve::solve_scc` は、呼び出しグラフの SCC (`scc.rs`) ごとに Kind の問題をまとめて解き、違反の由来と各関数の `KindScheme` を返す。`check_module` はこれらを順に呼んで結果を集めるだけである
 - 段1は、トップレベルの値の参照ごとに `Shape` を具体化し、呼び出し先の制約を複写せずに具体化の記録 (`Instance`) を残す。段2は、宣言の制約の後に、具体化で展開した制約を足す。段2は、同じ SCC の参照を変数どうしの等式にし、前の SCC の参照にはそのスキームを複写する。解き方はワークリストで、残す制約は制約のグラフを強連結成分に縮めた DAG の上で求める (`Graph`)。残す制約を求めるときは、閉包に定数の境界もほかの宣言の変数も持たない成分 (何もない成分) を飛ばし、自分の変数を含む成分だけを引く。環状の相互再帰では、1つに縮んだ成分から各関数の矢印の Kind 変数の成分へ辺が関数の数だけ出るので、それを関数ごとにたどらないためである
-- 使用回数のパス (`usage.rs`) は `Unr` の制約を出し、使った位置と使わなかった経路を Kind の制約の由来に入れる。報告が由来から E3001〜E3005 を選ぶ。由来 (`KindOrigin`) は型の表を指さない。持ち越しの由来は報告が指す `multi` の操作を持ち、スキームを通った持ち越しの由来は、呼んだ関数の中の1段分の要約 (`CarriedInner`) を持つ
+- 使用回数のパス (`usage.rs`) は `Unr` の制約を出し、使った位置と使わなかった経路を Kind の制約の由来に入れる。報告が由来から E3001〜E3005 を選ぶ。由来 (`KindOrigin`) は型の表を指さない。由来の位置は `Span` (ファイルと範囲) で、`KindReason` の中の位置は由来と同じファイルにある。持ち越しの由来は報告が指す `multi` の操作を持ち、スキームを通った持ち越しの由来は、呼んだ関数の中の1段分の要約 (`CarriedInner`) を持つ。`CarriedThrough` の `inner` は、呼ばれた関数のファイルを指しうる
 - 持ち越しのパス (`carry.rs`) は、使用回数のパスの直後に、同じ本体と同じ `usage::reliable` の判定で動く。式を Core IR の評価の順の逆にたどる。呼び出しは `eml_hir::call_steps` の手順を逆にたどり、値でない引数を評価する間は、それまでの矢印の適用の結果を持つ (`Held::Applied`)。たどりながら、後で使う局所変数と、評価済みで消費前の部分式の値を持ち、呼び出し、`resume`、`handle` ごとに、持っている値の Kind と呼び出しの row の多重度を組にした持ち越しの制約 `carry(l, s)` を出す。`return` の節が捕まえる変数も、handle の本体の row 全体に対する持ち越しとして、このパスが扱う
 - 型検査器は、呼び出しごとの row を `BodyTyping::calls` (`CallRows`) に記録する。呼ばれる位置のトップレベルの値は開かずに具体化し、矢印の row を宣言のまま記録する。部分適用の残りだけを開く。矢印ごとの結果の型も記録する (`CallRows::Call::results`)。操作の直接の呼び出しは、row ではなく操作自身の多重度を使う
 - 持ち越しの制約は `Table::carries` に入れ、段2が線形性と多重度の両方の束を解いた後に検査する。スキームには、`solve::carry_residual` が内部の変数を経由した推移を含めて残し、同じ組は位置が最も前の由来の1つにまとめる。具体化の展開では `CarriedThrough` の由来を付けて複写する。違反は `report::linear_misuse` が E3006 にする。同じ値の違反は、`check/mod.rs` の報告で値ごとに最初の1件に絞る
 - 部分適用のクロージャの線形性は、それまでの引数と捕まえた値の Kind 以上になる (`Table::closure_kinds`)
-- `TypedModule::signatures` は、関数の型と、スキームに残った Kind の制約のうち定数を片側に持つもの、および持ち越しの制約 (`Scheme::constraints`) を持つ。`dump` はこれを `kinds:` の行に出し、持ち越しの制約は `a => <e> <= Once`、`<e> <= Once`、`a => Multi <= Once` の形で表す
+- 宣言の型は `TypedProgram::decls` の `DeclType` にある。`dump` (`dump.rs`) は、`Context` を自分で作り、`Shape` と `KindScheme` から、スキームに残った Kind の制約のうち定数を片側に持つものと持ち越しの制約を `kinds:` の行に出す。持ち越しの制約は `a => <e> <= Once`、`<e> <= Once`、`a => Multi <= Once` の形で表す
 - 型の表は `table/` に分ける。`mod.rs` は型と変数の格納、`unify.rs` は型の単一化、`row.rs` は row の単一化と `include_row`、`kinds.rs` は Kind の制約を集める処理 (解くのは段2)、`export.rs` は外に出す型への変換である。型の形は `TyShape`、関数の矢印の線形性は `ArrowLin` と呼び、Kind (線形性と多重度) と取り違えないようにする
 - row の末尾は `Tail::{Closed, Var, Error}` である。未定義のエフェクトか解決できない row 変数の跡は末尾 `Error` の row になり、型の `Error` と同じく束縛されない。末尾 `Error` は相手の側にしかないエフェクトを受け入れるが、自分の側の既知のエフェクトは受け入れない。綴り誤りの E1002 と無関係なエフェクトの誤りを隠さないためである。外に出す型では `{error}` と表示する
 - `Table::export` は、後の段階と診断の文言の両方に渡す形を作る。書き出す `Type` は矢印の線形性を持たない。後の段階は線形性を読まず、持たせると本体の型を Kind を解くまで確定できなくなるためである
-- 検査器は `check/` に分ける。`mod.rs` は段0〜2の組み立てと `TypedModule` の組み立て、`body.rs` は本体の検査、`report.rs` は診断を作る処理である。`if` とブロックは期待する型の有無 (`Expectation`) で check と infer の処理を共有し、矢印をたどる処理は `next_arrow` に、今の row の保存と復元は `with_ambient` にまとめてある。呼び出しの row を今の row に含める処理は `include_call_row` と呼ぶ
+- 検査器は `check/` に分ける。`mod.rs` は段0〜2の組み立てと `TypedProgram` の組み立て、`body.rs` は本体の検査、`report.rs` は診断を作る処理である。`if` とブロックは期待する型の有無 (`Expectation`) で check と infer の処理を共有し、矢印をたどる処理は `next_arrow` に、今の row の保存と復元は `with_ambient` にまとめてある。呼び出しの row を今の row に含める処理は `include_call_row` と呼ぶ
 - E2002 の副ラベルは、本体の row が入る矢印の部分の型を指す (`body_arrow_range`)
 - 型の走査は `Type`、`TyShape`、`ShapeTy` の `for_each_child` だけがたどり、そこでは `..` を使わず欄をすべて名前で受ける。欄を足したときに、occurs の検査などから漏れないようにするためである
 - intrinsic の関数、操作、コンストラクタの型は、ユーザーの関数と同じ経路 (`lower_signature` などで下ろしてから `Shape` に閉じる) で作る。本体がないので、宣言から出る制約 (`closure_kinds` と、操作の引数の `unrestricted`) だけを持つ Kind の問題を、1つの宣言だけの SCC として段2で解く
 - 型構成子は `TyShape::Con(TypeDefId, Vec<Ty>)` で、型の適用の引数を持ち、row のラベルは `Label` (エフェクトの ID と型引数) である。外に出す型は `Type::Con { id, name, args }` と `EffectLabel { id, name, args }` で、`Program` を渡さずに表示できるよう名前を持つ。型変数は、シグネチャの変数 (`Type::Rigid`) と推論で解けなかった変数 (`Type::Flexible`) を区別する
-- データ型の Kind に効く型引数の位置は `data.rs` で、すべての `data` の宣言について不動点で求める。`Table::kind_bounds` は、`Con` の効く位置の引数の境界を並べる。コンストラクタのスキームは関数と同じ経路で作り、`TypedModule::constructors` に置く
+- データ型の Kind に効く型引数の位置は `data.rs` で、すべての `data` の宣言について不動点で求める。`Table::kind_bounds` は、`Con` の効く位置の引数の境界を並べる。コンストラクタのスキームは関数と同じ経路で作り、`TypedProgram::decls` の `Decl::Constructor` に置く
 - パターンは期待する型を受けて検査する。`match` は scrutinee の型で各枝のパターンを検査し、枝の本体を `if` の枝と同じく検査する。使用回数のパスは `match` の枝を別の経路として扱う
 - 網羅性の検査は `exhaustive.rs` にある。型推論と使用回数のパスの後に、型付き HIR の上で Maranget の usefulness を使って検査し、漏れているパターンの例を作る。コンストラクタの集合はパターンの型の型構成子から引く
 - 由来が `MatchSource::Equations` の `match` は、等式ごとの行 (引数の並び) の行列として検査する。漏れは E4002、到達しない等式は E4005 (Warning) で、`Function::equation_ranges` を指す。E1020 で枝に入れなかった等式がある関数は、等式の検査を行わない (枝の数が等式の数より少ないので、漏れの診断が連鎖しない)
@@ -192,7 +192,7 @@ HIR への変換では、名前解決に加えて、次の脱糖と検査を行�
 - 継続の型は `TyShape::Cont` (操作の結果の型、継続の線形性、handle の外側の row、handle の結果の型) で、外に出す型は `Type::Cont` である。`once` の操作の `k` の線形性は `Lin`、`multi` の操作の `k` は `Unr` である
 - 操作のスキームは、組み込みと同じ経路で作る。シグネチャの外側の最後の矢印に、操作のエフェクトだけの row を付ける (`shape::lower_operation`)。エフェクトの多重度は操作の多重度の最大である。row のラベルの型引数は、エフェクトの型引数の rigid 変数である。操作の引数の型の Kind 変数を `Unr` に固定する `Table::unrestricted` は、エフェクトの型引数の Kind 変数を外す
 - handle の検査は `check/handle.rs` にある。本体は今の row の前に扱うエフェクトを足した row で、節は今の row で検査する。handle ごとにエフェクトの型引数を新しい推論用の変数にし、節の型は、操作の閉じた形を `Shape::instantiate_with_effect_args` で具体化して作る。`resume` は、推論用の変数でできた継続の型と単一化してから、関数の呼び出しと同じく row を今の row に含める
-- Kind の制約は由来 (`KindOrigin`) を持つ。型の表が「今の由来」を持ち、制約を作るときに記録する。本体の検査は単一化、呼び出しと `resume` の row の包含 (`include_call_row`)、参照の具体化の前後で、使用回数のパスは `Unr` の制約の前後で、今の由来を設定する。由来は `Provenance` (`At`、`Suppressed`、`Declaration`、`Unattributed`) で持つ。本体の検査の表の既定値は `Unattributed` (検査している関数の名前の範囲) で、付け忘れを見つけられるようにする。段2の `solve_scc` は、破れた `At` の制約の由来を返し、`Suppressed` は捨てる。`Declaration` の制約が破れたとき (宣言の型だけでは破れない) と `Unattributed` の制約が破れたときは処理系の誤りとして扱い、前者は panic に、後者はデバッグビルドで panic に、リリースビルドでは関数の名前の位置の E3001 にする。`check/mod.rs` の `report_violations` が、それを位置の順に並べて重複を除き、持ち越しは値ごとに最初の1件に絞って、`report::linear_misuse` で E3001〜E3006 にする。報告済みの誤りの跡 (`Missing`) がある本体と、型の誤りを報告済みの本体 (`usage::reliable` が偽) では、使用回数のパスも持ち越しのパスも由来を記録しない。HIR の誤りがある本体でも記録しない。宣言の型から作る制約は `Declaration` で、具体化のたびに参照した位置の `At` を付けて複写する。記録しない本体の制約は `Suppressed` である
+- Kind の制約は由来 (`KindOrigin`) を持つ。型の表が「今の由来」を持ち、制約を作るときに記録する。本体の検査は単一化、呼び出しと `resume` の row の包含 (`include_call_row`)、参照の具体化の前後で、使用回数のパスは `Unr` の制約の前後で、今の由来を設定する。由来は `Provenance` (`At`、`Suppressed`、`Declaration`、`Unattributed`) で持つ。本体の検査の表の既定値は `Unattributed` (検査している関数の名前の範囲) で、付け忘れを見つけられるようにする。段2の `solve_scc` は、破れた `At` の制約の由来を返し、`Suppressed` は捨てる。`Declaration` の制約が破れたとき (宣言の型だけでは破れない) と `Unattributed` の制約が破れたときは処理系の誤りとして扱い、前者は panic に、後者はデバッグビルドで panic に、リリースビルドでは関数の名前の位置の E3001 にする。`check/mod.rs` の `report_violations` が、それを位置の順に並べて重複を除き、持ち越しは値ごとに最初の1件に絞って、`report::linear_misuse` で E3001〜E3006 にする。報告は由来のファイルを使う。並べるときはファイル、範囲の順にし、重複を除くときの持ち越しの値はファイルと範囲の組で区別する。報告済みの誤りの跡 (`Missing`) がある本体と、型の誤りを報告済みの本体 (`usage::reliable` が偽) では、使用回数のパスも持ち越しのパスも由来を記録しない。HIR の誤りがある本体でも記録しない。宣言の型から作る制約は `Declaration` で、具体化のたびに参照した位置の `At` を付けて複写する。記録しない本体の制約は `Suppressed` である
 
 ## `eml_core_ir`、`eml_runtime`、`eml_interp` の内部
 
@@ -203,8 +203,8 @@ HIR への変換では、名前解決に加えて、次の脱糖と検査を行�
 - パスの順番は `pipeline.rs` だけが持つ。`lower_until` は、変換 (`translate/`)、`simplify`、Perceus を順にかけ、指定したパスの直後で止める。RC の命令を入れる前のパスの後では、`liveness::analyze` で `captures` を埋め直してから `verify_scopes` をかけ、Perceus の後では `verify` をかける。verifier の検査はデバッグビルドだけでかけ、`compact` が見つけた木の誤りはどのビルドでも報告する。どちらの誤りも、パスの名前を付けた panic にする
 - 変換は `translate/` にある。`mod.rs` は式の値の渡し先と join point の組み立てという制御の骨組み、`expr.rs` は式ごとの変換と呼び出しの場合分け、`program.rs` は関数の表 (`ProgramBuilder`)、組み込みと操作を包む関数、入口の関数、エフェクトの表、`types.rs` は型から決まる変数の性質 (`boxed`) と、intrinsic の名前と変換の種類の表 (`INTRINSICS` と `intrinsic`) を持つ。`pattern.rs` は `match` と、`let`・ラムダ・等式の引数のパターンを決定木にコンパイルする。列の頭はコンストラクタ、タプル、リテラルで、リテラルの列は比べるプリミティブと `Bool` の `switch` の連なりにする
 - Core IR の関数は、ANF の木をアリーナに置き、`CExprId` で参照する。継続のフレームが再開する位置を ID で持てるようにするため。変換は式の値の渡し先 (`Exit::Return` か `Exit::Jump`) を持って回り、末尾の `if` は各枝が返す `Switch` に、末尾にない `if` は続きを本体にした join point (`CExpr::Join`) にする。末尾にない `if` は、`tail` で条件の計算ごと join point の範囲を組み立てる。`CoreFn::joins` は `JoinId` から `Join` の式を引く索引で、アリーナはパスのたびに `compact` が作り直す。値を返すだけの呼び出しは、`simplify` の最後の T が `TailCall` にする
-- 変数が boxed かどうかは、型から `boxed` の1か所で決める。intrinsic の引数の数は `hir::Program::arity` から、引数と結果の型は `TypedModule::signatures` から引き、変換の種類 (`Prim`、`Io`、`Compose`、`Equality`) は、名前から引く `intrinsic` の1つの match に置く。HIR が脱糖する `&&`、`||`、`|>`、`<|` は表に持たない。`data` の型の変数は、引数を持つコンストラクタが1つでもあれば boxed にする。要素が2つ以上の閉じたレコードの型 (タプル) の変数も boxed にする
-- 変換は、`main` を `()` で呼ぶ入口の関数 `entry$main` を足す (`Program::entry`)
+- 変数が boxed かどうかは、型から `boxed` の1か所で決める。intrinsic の引数の数は `hir::Program::arity` から、引数と結果の型は `TypedProgram::decls` から引き、変換の種類 (`Prim`、`Io`、`Compose`、`Equality`) は、名前から引く `intrinsic` の1つの match に置く。HIR が脱糖する `&&`、`||`、`|>`、`<|` は表に持たない。`data` の型の変数は、引数を持つコンストラクタが1つでもあれば boxed にする。要素が2つ以上の閉じたレコードの型 (タプル) の変数も boxed にする
+- 変換は、渡された入口の関数を `()` で呼ぶ関数 `entry$<名前>` を足す (`Program::entry`)。`main` を渡したときは `entry$main` になる
 - ラムダは、捕まえた変数を先頭の引数に持つ関数に持ち上げる (`外側の名前$lambdaN`)。組み込みを値として使うときは、呼ぶだけの関数 (`builtin$名前`) で包む。コンストラクタを値として使うときは、値を作るだけの関数 (`con$名前`) で包む。関数の表は番号を先に取り、変換の途中で関数を足す
 - 呼び出しは `eml_hir::call_steps` の手順どおりに評価し、続けて並ぶ矢印を1回の呼び出しにする。引数のないトップレベルの値は既知の呼ばれる式に含めず、先に評価する
 - クロージャは `Payload::Closure(Closure)` (フィールドは `function` と `args`) で、関数値の呼び出し (`Call::Apply`) は eval/apply で行う。継続のフレームは `Payload::Frame(Frame)` で、`Frame` は種類の enum である。`Return` は呼び出し元に戻るフレームで、呼び出しの後で使う変数だけを退避する。`Apply` は余った引数を持ち、戻った関数値に適用する。`Io` は継続の最下部の `IO` の handler である。記述子はペイロードの種類から決める
