@@ -52,7 +52,7 @@ eml_diagnostics  Diagnostic, FileId/SourceFiles, ariadne rendering (does not dep
 - From HIR onward, nodes are referenced by IDs and analysis results (types, ...) live in side tables. HIR is a `Program` of modules (the Prelude and the entry file); items use program-wide `ItemId`s (module + local index, side tables are `ItemMap`), while body nodes use per-body arena IDs (`ExprId`, etc.). HIR nodes carry a `TextRange` (not a `SyntaxNodePtr`), because some expressions, such as reassociated operator subexpressions, have no syntax node.
 - Diagnostic codes are defined in a per-stage `codes` module (e.g. `eml_syntax::codes`, E0xxx). E0004 (not yet supported) is used by every stage, so it lives in `eml_diagnostics` (`NOT_YET_SUPPORTED`, `Diagnostic::not_yet_supported`).
 - `OutputSink` is `Send + Sync` in preparation for multicore. `RunConfig` is `#[non_exhaustive]`; build it from `Default`.
-- `eml_syntax` implements syntax stage S1 (`docs/implementation/status.md`). S2/S3 constructs (records, modules, interpolation, command literals, ...) and the reserved float and char literals are lexed and parsed far enough to report E0004; where each one is reported is listed in `docs/spec/grammar.md`.
+- `eml_syntax` implements the grammar of milestone M1 (`docs/implementation/status.md`). Constructs of later milestones (modules in M2; records, lists and string interpolation in M3; command literals in M9) and the reserved float and char literals (M4) are lexed and parsed far enough to report E0004; where each one is reported is listed in `docs/spec/grammar.md`. The milestones are listed in `docs/future/roadmap.md`.
 
 ## Testing
 
