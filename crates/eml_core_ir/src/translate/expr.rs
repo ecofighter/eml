@@ -13,6 +13,21 @@ use super::program::{effect_index, operation_rhs};
 use super::types::{Lowering, equality_op, intrinsic, split_arrows};
 use super::{Binding, Bindings, Exit, FnLowering};
 
+/// 既知の呼ばれる式の種類。`saturate` は、引数の数、足りないときの包む関数、ちょうどのときの命令を、この種類から決める
+/// (docs/superpowers/specs/2026-10-06-refactor-r7-design.md の 6.1)。
+#[derive(Clone, Copy)]
+enum Callee {
+    /// 本体のある関数。足りないときの包む関数は、その関数自身である。
+    Function(FnIdx),
+    /// intrinsic。`callee` は呼ばれる式で、`==` と `!=` の比べ方を `BodyTypes::equalities` から引くのに使う。
+    Intrinsic {
+        function: FunctionId,
+        callee: ExprId,
+    },
+    Operation(OperationId),
+    Constructor(ConstructorId),
+}
+
 impl FnLowering<'_> {
     pub(super) fn ty(&self, expr: ExprId) -> Type {
         self.types
@@ -37,117 +52,83 @@ impl FnLowering<'_> {
         Atom::Var(var)
     }
 
-    /// 呼ぶ相手の引数の個数と比べ、揃えば直接呼び、足りなければクロージャにし、余れば戻った関数値に残りを適用する
-    /// (docs/spec/core-ir.md の eval/apply)。
-    fn call_known(
+    /// 呼ぶ相手の引数の個数と比べ、揃えば命令にし、足りなければ包む関数のクロージャにし、余れば命令の結果に残りを
+    /// 適用する (docs/spec/core-ir.md の eval/apply)。呼ばれる式の種類によらず、この1か所で場合分けする。
+    fn saturate(
         &mut self,
-        target: FnIdx,
+        callee: Callee,
         callee_ty: &Type,
         mut args: Vec<Atom>,
         ty: &Type,
         out: &mut Bindings,
     ) -> Atom {
-        let arity = self.program.arity(target);
+        let arity = self.callee_arity(callee);
         if args.len() < arity {
-            return self.closure(target, args, ty, out);
-        }
-        let rest = args.split_off(arity);
-        if rest.is_empty() {
-            return self.bind(out, "t", ty, Rhs::call(Call::Direct(target, args)));
-        }
-        let (_, function_ty) = split_arrows(callee_ty, arity);
-        let function = self.bind(
-            out,
-            "t",
-            &function_ty,
-            Rhs::call(Call::Direct(target, args)),
-        );
-        self.bind(out, "t", ty, Rhs::call(Call::Apply(function, rest)))
-    }
-
-    fn call_intrinsic(
-        &mut self,
-        function: FunctionId,
-        callee: ExprId,
-        callee_ty: &Type,
-        mut args: Vec<Atom>,
-        ty: &Type,
-        out: &mut Bindings,
-    ) -> Atom {
-        let intrinsic_fn = &self.hir[function];
-        let arity = self
-            .hir
-            .arity(function)
-            .expect("an intrinsic has a signature");
-        if args.len() < arity {
-            let wrapper = self.program.wrapper(self.hir, function);
+            let wrapper = self.callee_wrapper(callee);
             return self.closure(wrapper, args, ty, out);
         }
         let rest = args.split_off(arity);
-        let lowering = intrinsic(&intrinsic_fn.name)
-            .expect("every intrinsic reaching Core IR has an implementation");
-        let rhs = match lowering {
-            Lowering::Prim(op) => Rhs::Prim(op, args),
-            Lowering::Equality { negated } => {
-                let equality = self
-                    .types
-                    .equalities
-                    .get(callee)
-                    .copied()
-                    .expect("the type checker decides how every `==` and `!=` compares");
-                Rhs::Prim(equality_op(equality, negated), args)
+        let (name, rhs) = self.saturated_rhs(callee, args);
+        if rest.is_empty() {
+            return self.bind(out, name, ty, rhs);
+        }
+        let (_, function_ty) = split_arrows(callee_ty, arity);
+        let function = self.bind(out, name, &function_ty, rhs);
+        self.bind(out, "t", ty, Rhs::call(Call::Apply(function, rest)))
+    }
+
+    /// 本体が動き出すまでに受け取る引数の数。intrinsic と操作はシグネチャの外側の矢印の数、コンストラクタはフィールドの
+    /// 数である。
+    fn callee_arity(&self, callee: Callee) -> usize {
+        match callee {
+            Callee::Function(target) => self.program.arity(target),
+            Callee::Intrinsic { function, .. } => self
+                .hir
+                .arity(function)
+                .expect("an intrinsic has a signature"),
+            Callee::Operation(op) => self.hir[op].arity,
+            Callee::Constructor(ctor) => self.hir[ctor].fields.len(),
+        }
+    }
+
+    /// 引数が足りないときに、クロージャにする関数。
+    fn callee_wrapper(&mut self, callee: Callee) -> FnIdx {
+        match callee {
+            Callee::Function(target) => target,
+            Callee::Intrinsic { function, .. } => self.program.wrapper(self.hir, function),
+            Callee::Operation(op) => self.program.operation_wrapper(self.hir, op),
+            Callee::Constructor(ctor) => self.program.constructor_wrapper(self.hir, ctor),
+        }
+    }
+
+    /// 引数がちょうどそろったときの命令と、その結果を束縛する変数の名前。
+    fn saturated_rhs(&self, callee: Callee, args: Vec<Atom>) -> (&'static str, Rhs) {
+        match callee {
+            Callee::Function(target) => ("t", Rhs::call(Call::Direct(target, args))),
+            Callee::Intrinsic { function, callee } => {
+                let lowering = intrinsic(&self.hir[function].name)
+                    .expect("every intrinsic reaching Core IR has an implementation");
+                let rhs = match lowering {
+                    Lowering::Prim(op) => Rhs::Prim(op, args),
+                    Lowering::Equality { negated } => {
+                        let equality =
+                            self.types.equalities.get(callee).copied().expect(
+                                "the type checker decides how every `==` and `!=` compares",
+                            );
+                        Rhs::Prim(equality_op(equality, negated), args)
+                    }
+                };
+                ("t", rhs)
             }
-        };
-        if rest.is_empty() {
-            return self.bind(out, "t", ty, rhs);
+            Callee::Operation(op) => ("t", operation_rhs(self.hir, op, args)),
+            Callee::Constructor(ctor) => (
+                "d",
+                Rhs::Con {
+                    tag: self.hir[ctor].tag,
+                    args,
+                },
+            ),
         }
-        let (_, function_ty) = split_arrows(callee_ty, arity);
-        let function = self.bind(out, "t", &function_ty, rhs);
-        self.bind(out, "t", ty, Rhs::call(Call::Apply(function, rest)))
-    }
-
-    /// 引数が操作の引数の個数に揃えば `perform` にし、足りなければ操作を包む関数のクロージャにする。操作の引数の個数は
-    /// シグネチャの外側の矢印の数なので、型検査を通った呼び出しで引数が余ることはない。
-    fn call_operation(
-        &mut self,
-        op: OperationId,
-        args: Vec<Atom>,
-        ty: &Type,
-        out: &mut Bindings,
-    ) -> Atom {
-        let arity = self.hir[op].arity;
-        if args.len() < arity {
-            let wrapper = self.program.operation_wrapper(self.hir, op);
-            return self.closure(wrapper, args, ty, out);
-        }
-        let rhs = operation_rhs(self.hir, op, args);
-        self.bind(out, "t", ty, rhs)
-    }
-
-    /// 引数がフィールドの数にそろえば値を作り、足りなければコンストラクタを包む関数のクロージャにする。コンストラクタの
-    /// 結果は `data` の値で関数ではないので、型検査を通った呼び出しで引数が余ることはない。
-    fn call_constructor(
-        &mut self,
-        ctor: ConstructorId,
-        args: Vec<Atom>,
-        ty: &Type,
-        out: &mut Bindings,
-    ) -> Atom {
-        let hir = self.hir;
-        let constructor = &hir[ctor];
-        if args.len() < constructor.fields.len() {
-            let wrapper = self.program.constructor_wrapper(hir, ctor);
-            return self.closure(wrapper, args, ty, out);
-        }
-        self.bind(
-            out,
-            "d",
-            ty,
-            Rhs::Con {
-                tag: constructor.tag,
-                args,
-            },
-        )
     }
 
     /// `call_steps` の手順どおりに評価し、続けて並ぶ矢印を1回の呼び出しにする (docs/spec/expressions.md の「関数適用」)。
@@ -218,18 +199,19 @@ impl FnLowering<'_> {
         ty: &Type,
         out: &mut Bindings,
     ) -> Atom {
-        match &self.body.exprs[callee].kind {
+        let head = match &self.body.exprs[callee].kind {
             ExprKind::Path(Res::Function(function)) if self.hir[*function].intrinsic => {
-                self.call_intrinsic(*function, callee, callee_ty, args, ty, out)
+                Callee::Intrinsic {
+                    function: *function,
+                    callee,
+                }
             }
-            ExprKind::Path(Res::Function(function)) => {
-                let target = self.indices[*function];
-                self.call_known(target, callee_ty, args, ty, out)
-            }
-            ExprKind::Path(Res::Operation(op)) => self.call_operation(*op, args, ty, out),
-            ExprKind::Path(Res::Constructor(ctor)) => self.call_constructor(*ctor, args, ty, out),
+            ExprKind::Path(Res::Function(function)) => Callee::Function(self.indices[*function]),
+            ExprKind::Path(Res::Operation(op)) => Callee::Operation(*op),
+            ExprKind::Path(Res::Constructor(ctor)) => Callee::Constructor(*ctor),
             _ => unreachable!("only a known callee is called without evaluating it"),
-        }
+        };
+        self.saturate(head, callee_ty, args, ty, out)
     }
 
     /// 式の値をアトムにする。値の計算に要る束縛は `out` に積む。

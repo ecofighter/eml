@@ -98,7 +98,7 @@ R5 は段階6a の後、段階6b の前に行う。段階6a はほぼ HIR の脱
 | R4 | Core IR のパスの構成 | パスの順番を持つ `pipeline.rs` と `lower_until`、パスの間の `captures`、verifier の2つの度合い (`verify_scopes`)、`translate/` への分割、パスごとのテスト | 完了 |
 | R5 | 型検査の SCC ごとの独立 | `Context`、閉じた形 `Shape`、関数ごとの本体の検査 (段1) と SCC ごとの Kind の解決 (段2)、ワークリストと強連結成分による残す制約、持ち越しの制約の組ごとの重複除去、`Type` の線形性を除くこと。`eml_types` の中で済ませる | 完了 |
 | R6 | 6b の前の継ぎ目 | 評価の順 (ML 式、`call_steps`)、型の走査、Kind の由来、handler の節の型、診断の順 (R6a)。Core IR の visitor と `FnBuilder`、`compact` と木の検査、末尾呼び出しの T、テキストの IR と `parse`、`eml_interp` の分割 (R6b) | 完了 |
-| R7 | 単一ファイルの前提をなくす | R7a (構文)、R7b (R7b-1〜R7b-3)、R7c、R7d 完了。R7b-1 で組み込みを Prelude の intrinsic の関数にし、R7b-2 でプログラム全体の ID、Prelude のモジュール、`Session` を作り、R7b-3 で名前解決を `ItemTree`、`DefMap`、変換の3段に分けて `pub` を受け付けた。R7c で型検査の出力を宣言ごとの `TypedProgram` にし、Kind の制約の由来にファイルを持たせ、入口の関数を `lower` の引数にした。R7d で `IO` を Prelude の `effect IO` にし、`not`、`&&`、`||`、`|>`、`<|`、`>>`、`<<` を eml で書き、`|>` と `<|` の脱糖をやめ、Core IR を入口から届く関数だけにした。R7e は未着手 (docs/superpowers/specs/2026-10-06-refactor-r7-design.md) | 進行中 |
+| R7 | 単一ファイルの前提をなくす | R7a (構文)、R7b (R7b-1〜R7b-3)、R7c、R7d、R7e-1 完了。R7b-1 で組み込みを Prelude の intrinsic の関数にし、R7b-2 でプログラム全体の ID、Prelude のモジュール、`Session` を作り、R7b-3 で名前解決を `ItemTree`、`DefMap`、変換の3段に分けて `pub` を受け付けた。R7c で型検査の出力を宣言ごとの `TypedProgram` にし、Kind の制約の由来にファイルを持たせ、入口の関数を `lower` の引数にした。R7d で `IO` を Prelude の `effect IO` にし、`not`、`&&`、`||`、`|>`、`<|`、`>>`、`<<` を eml で書き、`|>` と `<|` の脱糖をやめ、Core IR を入口から届く関数だけにした。R7e-1 で、呼び出しの飽和の場合分けを `saturate` の1か所にまとめた。R7e-2 と R7f は未着手 (docs/superpowers/specs/2026-10-06-refactor-r7-design.md) | 進行中 |
 
 ### テストを変えないために曲げた箇所
 
@@ -169,7 +169,7 @@ S2 の前に、単一ファイルの前提をなくす作り替えを R7 とし�
 - 型検査の出力を、損失のないモジュールのインタフェース (`Shape` と `KindScheme`、由来に `FileId`) にする。表示用の `Scheme` は `dump` の中の表示にする。R7c で済んだ。`Scheme` はなくし、`dump` が `DeclType` から表示する
 - source の読み込み (ローダ、session 型の lib API)、複数ファイルのテストの fixture、ディレクトリを1件とする UI テストを作る。R7b-2 で `Session` を作った。import をたどる部分、複数ファイルの fixture、ディレクトリを1件とする UI テストは S2
 - CST に名前と経路のノード (`PATH`、`NAME`) を入れ、grammar.md の全体を CST まで組む。E0004 を出す層の方針を1つにする。確かめた不具合1を直す: `<M.E>` が E0004 にならず E1002 (「cannot find effect `M`」) になる。`ast::Effect::name()` が最初の `UIDENT` を取り、CST に名前の経路のノードがないためである。R7a で済んだ。不具合1と、`::` のパターンが E1001 になる不具合も直した。grammar.md の全体を CST まで組むことは、補間・コマンドリテラル・レコード・リストを例外として S2 に残した
-- Core IR の `Switch` を、default の枝とリテラルの case を持つ平らな形にする。リテラルが約1000個の `match` で debug ビルドのスタックがあふれる問題を直し、呼び出しの飽和の処理を1つにまとめる
+- Core IR の `Switch` を、default の枝とリテラルの case を持つ平らな形にする。リテラルが約1000個の `match` で debug ビルドのスタックがあふれる問題を直し、呼び出しの飽和の処理を1つにまとめる。呼び出しの飽和の処理は R7e-1 で `saturate` にまとめた。平らな `Switch` は R7e-2
 - spec で決めること: import の循環を許すか、モジュールの根をどこにするか
 - R7 を終えるときに、コードのコメントと文書が指す作業用の設計文書 `docs/superpowers/specs/2026-10-06-refactor-r7-design.md` への参照を、内容を移した先 (`docs/spec/`、`docs/implementation/`) に張り替える (`grep -rn 2026-10-06-refactor-r7-design crates docs` で探す)
 
