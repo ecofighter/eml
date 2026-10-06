@@ -374,12 +374,12 @@ fn a_known_and_an_unknown_jump_share_an_arm_that_uses_the_whole_value() {
     let pick = function(&core_text(text, Pass::Simplify), "pick");
     insta::assert_snapshot!(pick, @"
     fn pick(c0) {
-      join j0(t7) [] {
-        let t8 = prim +(t7, 1)
-        return t8
+      join j0(t6) [] {
+        let t7 = prim +(t6, 1)
+        return t7
       }
-      join j1(x9, t10^) [] {
-        let x4^ = t10
+      join j1(t8^) [] {
+        let x4^ = t8
         let t5 = call size(x4)
         jump j0(t5)
       }
@@ -390,12 +390,12 @@ fn a_known_and_an_unknown_jump_share_an_arm_that_uses_the_whole_value() {
           switch t3 {
             #0 ->
               jump j0(0)
-            #1(x6) ->
-              jump j1(x6, t3)
+            _ ->
+              jump j1(t3)
           }
         #1 ->
           let d1^ = con #1(1)
-          jump j1(1, d1)
+          jump j1(d1)
       }
     }
     ");
@@ -413,26 +413,16 @@ fn a_remaining_arm_that_uses_the_scrutinee_stays_inside_the_join_point() {
         let t5 = prim +(t4, 1)
         return t5
       }
-      join j1(t1) [] {
-        join j2() [t1] {
-          let x2 = t1
-          let t3 = call code(x2)
-          jump j0(t3)
-        }
-        switch t1 {
-          #0 ->
-            jump j0(1)
-          #1 ->
-            jump j2()
-          #2 ->
-            jump j2()
-        }
+      join j1(t6) [] {
+        let x2 = t6
+        let t3 = call code(x2)
+        jump j0(t3)
       }
       switch b0 {
         #0 ->
           jump j1(#1)
         #1 ->
-          jump j1(#0)
+          jump j0(1)
       }
     }
     ");
@@ -502,4 +492,28 @@ fn every_kind_of_call_in_tail_position_becomes_a_tail_call() {
       tailcall main(())
     }
     "#);
+}
+
+#[test]
+fn a_known_tag_without_a_case_takes_the_default() {
+    // K1: 分かっているタグの case がなければ `default` の本体で置き換える (docs/superpowers/specs/2026-10-06-refactor-r7-design.md の 6.3)
+    let text = "data Color = | Red | Green | Blue\n\nmain : Unit -> <IO> Unit\nmain () =\n  let c = Green\n  let n = match c with\n    | Red -> 1\n    | _ -> 2\n  println (show_int n)";
+    let shown = core_text(text, Pass::Simplify);
+    let main = shown.split("fn entry$main").next().unwrap();
+    assert!(!main.contains("switch"), "{shown}");
+}
+
+#[test]
+fn known_tags_that_take_the_default_jump_straight_to_it() {
+    // B2: 分かっているタグが `default` に進むなら、`default` を join point に切り出して直接 jump する
+    let text = "data Color = | Red | Green | Blue\n\npick : Bool -> Int\npick b =\n  match (if b then Green else Blue) with\n    | Red -> 1\n    | _ -> 2\n\nmain : Unit -> <IO> Unit\nmain () = println (show_int (pick True))";
+    let shown = core_text(text, Pass::Simplify);
+    let pick = shown
+        .split("fn pick(")
+        .nth(1)
+        .unwrap()
+        .split("\nfn ")
+        .next()
+        .unwrap();
+    assert_eq!(pick.matches("switch").count(), 1, "{shown}");
 }

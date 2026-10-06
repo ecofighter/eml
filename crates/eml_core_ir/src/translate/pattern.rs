@@ -253,7 +253,8 @@ impl FnLowering<'_> {
         }
     }
 
-    /// コンストラクタの欄。型のすべてのコンストラクタの枝を持つ `Switch` にする。
+    /// コンストラクタの欄。欄に現れるコンストラクタの case と、現れないコンストラクタがあればそれを受ける `default`
+    /// を持つ `Switch` にする。
     fn switch_constructors(
         &mut self,
         occurrences: &[Occurrence],
@@ -272,64 +273,48 @@ impl FnLowering<'_> {
             Head::Con(other, _) => other == ctor,
             _ => false,
         };
-        let mut out = Vec::new();
-        let rest = if constructors
+        let default = if constructors
             .iter()
             .all(|&ctor| rows.iter().any(|row| mentions(ctor, row)))
         {
             None
         } else {
-            // 選んだ欄に現れないコンストラクタの枝は、どれもワイルドカードの行だけの同じ行列になる。部分木を枝の数だけ
-            // 複製しないように、引数のない join point にして各枝から jump する
-            let join = self.new_join();
+            // 選んだ欄に現れないコンストラクタは、どれもワイルドカードの行だけの同じ行列に進む。1つの `default` に
+            // まとめ、コンストラクタごとの枝と join point を作らない (docs/superpowers/specs/2026-10-06-refactor-r7-design.md の 6.3)
             let mut remaining = occurrences.to_vec();
             remaining.remove(column);
-            let default: Vec<Row> = rows
+            let otherwise: Vec<Row> = rows
                 .iter()
                 .filter(|row| matches!(head(body, row.cells[column]), Head::Any(_)))
                 .map(|row| row.replace(column, []))
                 .collect();
-            let code = self.decide(&remaining, default, targets);
-            out.push(Binding::Shared {
-                join,
-                params: Vec::new(),
-                body: code,
-            });
-            Some(join)
+            Some(self.decide(&remaining, otherwise, targets))
         };
         let mut cases = Vec::new();
         for &ctor in constructors {
+            if !rows.iter().any(|row| mentions(ctor, row)) {
+                continue;
+            }
             let field_types = self.field_types(ctor, &occurrence.ty);
-            let (fields, code) = if rows.iter().any(|row| mentions(ctor, row)) {
-                self.branch(
-                    occurrences,
-                    rows,
-                    column,
-                    Shape::Con(ctor),
-                    field_types,
-                    targets,
-                )
-            } else {
-                let fields = field_types.iter().map(|ty| self.new_var("x", ty)).collect();
-                let join = rest.expect("a constructor missing from the column goes to the rest");
-                let jump = self.push(CExpr::Jump {
-                    join,
-                    args: Vec::new(),
-                });
-                (fields, jump)
-            };
+            let (fields, code) = self.branch(
+                occurrences,
+                rows,
+                column,
+                Shape::Con(ctor),
+                field_types,
+                targets,
+            );
             cases.push(Case {
                 pattern: CasePattern::Tag(hir[ctor].tag),
                 fields,
                 body: code,
             });
         }
-        let switch = self.push(CExpr::Switch {
+        self.push(CExpr::Switch {
             scrutinee: occurrence.atom,
             cases,
-            default: None,
-        });
-        self.seq(out, switch)
+            default,
+        })
     }
 
     /// タプルの欄。タグ 0 のコンストラクタが1つの型として、枝が1つの `Switch` で分解する (docs/spec/core-ir.md)。

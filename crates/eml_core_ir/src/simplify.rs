@@ -181,6 +181,9 @@ impl Simplify<'_> {
     /// その値の枝を join point に切り出し、jump をその枝へ直接向ける (docs/spec/core-ir.md)。引数のない枝はすべて切り出し、
     /// 枝の中の引数をタグの定数に置き換える。フィールドを持つ枝は、分かっている値が届くものだけを、フィールドを引数に取る
     /// join point にし、jump はフィールドの値を渡す。枝が値全体も使うなら、値も最後の引数で渡す。
+    /// 分かっている値のタグの case がなければ、値は `default` に進む。`default` は、そこへ進む値があるときだけ切り出す。
+    /// `default` には複数のタグが届きうるので、本体の引数はタグの定数に置き換えず、本体が値全体を使うときだけ値を渡す
+    /// (docs/superpowers/specs/2026-10-06-refactor-r7-design.md の 6.3)。
     /// 切り出した join point の引数は新しい変数にする。元の枝のフィールドと join point の引数は、どちらも束縛だからである。
     fn split_known_tags(&mut self) {
         let known = self.known_constructors();
@@ -208,19 +211,7 @@ impl Simplify<'_> {
             else {
                 continue;
             };
-            // `default` へ届く値の切り出しはまだ扱わない。リテラルの case の `Switch` には、分かっている
-            // コンストラクタの値は届かない
-            let Some(tags) = cases
-                .iter()
-                .map(|case| match case.pattern {
-                    CasePattern::Tag(tag) => Some(tag),
-                    CasePattern::Int(_) | CasePattern::String(_) => None,
-                })
-                .collect::<Option<Vec<u32>>>()
-            else {
-                continue;
-            };
-            if scrutinee != param || default.is_some() {
+            if scrutinee != param {
                 continue;
             }
             let values: Vec<Option<(u32, Vec<Atom>)>> = sites
@@ -233,21 +224,33 @@ impl Simplify<'_> {
                     _ => None,
                 })
                 .collect();
-            let fits = |(tag, fields): &(u32, Vec<Atom>)| {
-                cases
+            // 値の行き先。`Some(tag)` はそのタグの case、`None` は `default` である。フィールドの数の合わない case と、
+            // 行き先のない値は、verifier と実行に任せて切り出さない
+            let target = |(tag, fields): &(u32, Vec<Atom>)| -> Option<Option<u32>> {
+                match cases
                     .iter()
-                    .zip(&tags)
-                    .any(|(case, case_tag)| case_tag == tag && case.fields.len() == fields.len())
+                    .find(|case| case.pattern == CasePattern::Tag(*tag))
+                {
+                    Some(case) if case.fields.len() == fields.len() => Some(Some(*tag)),
+                    Some(_) => None,
+                    None => default.map(|_| None),
+                }
             };
-            if values.iter().all(Option::is_none) || !values.iter().flatten().all(fits) {
+            if values.iter().all(Option::is_none)
+                || !values.iter().flatten().all(|value| target(value).is_some())
+            {
                 continue;
             }
-            let targeted: Vec<u32> = values.iter().flatten().map(|(tag, _)| *tag).collect();
-            // (タグ, 切り出した join point, 本体, 引数, 値全体も渡すか)
-            let mut split: Vec<(u32, JoinId, CExprId, Vec<VarId>, bool)> = Vec::new();
+            let targeted: Vec<Option<u32>> = values.iter().flatten().filter_map(target).collect();
+            let mut split: Vec<SplitArm> = Vec::new();
             let mut dispatch = Vec::new();
-            for (case, &tag) in cases.iter().zip(&tags) {
-                if !case.fields.is_empty() && !targeted.contains(&tag) {
+            for case in &cases {
+                // 分かっているコンストラクタの値はタグの case の `Switch` にだけ届くので、リテラルの case の `Switch`
+                // は上の確かめで外れている
+                let CasePattern::Tag(tag) = case.pattern else {
+                    unreachable!("known constructor values only reach tag cases")
+                };
+                if !case.fields.is_empty() && !targeted.contains(&Some(tag)) {
                     dispatch.push(case.clone());
                     continue;
                 }
@@ -284,35 +287,76 @@ impl Simplify<'_> {
                     fields: case.fields.clone(),
                     body: jump,
                 });
-                split.push((tag, case_join, case.body, case_params, whole));
+                split.push(SplitArm {
+                    target: Some(tag),
+                    join: case_join,
+                    body: case.body,
+                    params: case_params,
+                    whole,
+                });
             }
+            let otherwise = match default {
+                Some(default) if targeted.contains(&None) => {
+                    let mut default_params = Vec::new();
+                    let whole = self.uses(default, param);
+                    if whole {
+                        let fresh = self.fresh_like(param);
+                        self.substitute(default, param, Atom::Var(fresh));
+                        default_params.push(fresh);
+                    }
+                    let default_join = self.function.new_join();
+                    let args = if whole {
+                        vec![Atom::Var(param)]
+                    } else {
+                        Vec::new()
+                    };
+                    let jump = self.push(CExpr::Jump {
+                        join: default_join,
+                        args,
+                    });
+                    split.push(SplitArm {
+                        target: None,
+                        join: default_join,
+                        body: default,
+                        params: default_params,
+                        whole,
+                    });
+                    Some(jump)
+                }
+                _ => default,
+            };
             self.set(
                 body,
                 CExpr::Switch {
                     scrutinee: Atom::Var(param),
                     cases: dispatch,
-                    default: None,
+                    default: otherwise,
                 },
             );
             for (&site, value) in sites.iter().zip(&values) {
-                let Some((tag, fields)) = value else {
+                let Some(value) = value else {
                     continue;
                 };
-                let (_, case_join, _, _, whole) = split
+                let key = target(value).expect("checked above");
+                let arm = split
                     .iter()
-                    .find(|(case_tag, ..)| case_tag == tag)
-                    .expect("checked above");
+                    .find(|arm| arm.target == key)
+                    .expect("every target is split");
                 let CExpr::Jump { args: passed, .. } = self.expr(site) else {
                     unreachable!("a jump site holds a jump")
                 };
-                let mut args = fields.clone();
-                if *whole {
+                // `default` はフィールドを束縛しないので、値全体だけを渡しうる
+                let mut args = match key {
+                    Some(_) => value.1.clone(),
+                    None => Vec::new(),
+                };
+                if arm.whole {
                     args.push(passed[0]);
                 }
                 self.set(
                     site,
                     CExpr::Jump {
-                        join: *case_join,
+                        join: arm.join,
                         args,
                     },
                 );
@@ -327,12 +371,12 @@ impl Simplify<'_> {
                 scope,
             });
             self.function.define_join(join, inner);
-            for (position, (_, case_join, case, case_params, _)) in split.iter().enumerate().rev() {
+            for (position, arm) in split.iter().enumerate().rev() {
                 let expr = CExpr::Join {
-                    join: *case_join,
-                    params: case_params.clone(),
+                    join: arm.join,
+                    params: arm.params.clone(),
                     captures: Vec::new(),
-                    body: *case,
+                    body: arm.body,
                     scope: inner,
                 };
                 inner = if position == 0 {
@@ -341,7 +385,7 @@ impl Simplify<'_> {
                 } else {
                     self.push(expr)
                 };
-                self.function.define_join(*case_join, inner);
+                self.function.define_join(arm.join, inner);
             }
         }
     }
@@ -656,6 +700,17 @@ impl Simplify<'_> {
             self.replace(&mut parents, node, scope);
         }
     }
+}
+
+/// B2 が切り出す枝。
+struct SplitArm {
+    /// 値の行き先。`Some(tag)` はそのタグの case、`None` は `default` である。
+    target: Option<u32>,
+    join: JoinId,
+    body: CExprId,
+    params: Vec<VarId>,
+    /// jump が値全体も最後の引数で渡すか。
+    whole: bool,
 }
 
 /// 本体を jump の位置に写してよい値。引数は渡す値に置き換わり、定数はどこでも同じである。ほかの変数は、写すと
