@@ -143,7 +143,7 @@ fn prelude_signatures_without_equations_are_intrinsic_functions() {
 
 #[test]
 fn prelude_functions_with_equations_are_not_intrinsic() {
-    // R7d で Prelude に本体を書く (docs/spec/declarations.md の標準の演算子の表)。intrinsic は等式の
+    // Prelude の関数は本体を持てる (docs/spec/declarations.md の標準の演算子の表)。intrinsic は等式の
     // ないシグネチャだけである
     let mut files = eml_diagnostics::SourceFiles::new();
     let source = format!(

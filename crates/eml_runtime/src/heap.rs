@@ -158,7 +158,7 @@ impl fmt::Display for HeapError {
 }
 
 struct Header {
-    /// 正なら局所、負なら共有を表す。マイルストーン1 では常に正である (docs/spec/runtime.md)。
+    /// 正なら局所、負なら共有を表す。今は常に正である (docs/spec/runtime.md)。
     rc: AtomicI32,
     desc: DescId,
 }

@@ -195,7 +195,7 @@ pub(crate) enum UnifyError {
 
 struct TyVarInfo {
     binding: Option<Ty>,
-    /// 型変数の Kind `Type<μ>` の `μ`。段階2でシグネチャの型変数とともに制約が付く。
+    /// 型変数の Kind `Type<μ>` の `μ`。
     linearity: KindVar,
 }
 

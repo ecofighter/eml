@@ -277,7 +277,7 @@ impl BodyCheck<'_, '_> {
     }
 
     /// 期待する型があれば、両方の枝をその型で検査する。なければ then 節の型を推論し、else 節をそれに合わせる。
-    /// `else` がなければ then 節は `Unit` で、式の型も `Unit` になる (docs/spec/expressions.md の「if」)。
+    /// `else` がなければ then 節は `Unit` で、式の型も `Unit` になる (docs/spec/expressions.md の「`if`」)。
     fn if_expr(
         &mut self,
         range: TextRange,

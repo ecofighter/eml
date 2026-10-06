@@ -1,6 +1,6 @@
 //! 使用回数の数え上げ (docs/spec/linearity.md の「基本の規則」と「線形性の検査パス」)。線形な値の誤りは、ここで出した
 //! `Unr` の制約が `Lin` と矛盾したときに見つかる。由来に使った位置と使わなかった経路を入れ、報告がそこを指す
-//! (docs/spec/diagnostics.md の「線形性の診断」)。持ち越し規則は段階5b でこのパスに足す。
+//! (docs/spec/diagnostics.md の「線形性の診断」)。持ち越し規則は別のパス (`carry`) で検査する。
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 
@@ -346,7 +346,7 @@ impl<'a> Usage<'a, '_> {
         }
     }
 
-    /// 操作の節の `k`。ある経路で使わなければ、変数ではなく節を指す (docs/spec/diagnostics.md の「継続の扱い忘れ」)。
+    /// 操作の節の `k`。ある経路で使わなければ、変数ではなく節を指す (docs/spec/diagnostics.md の「線形性の診断」の、継続の扱い忘れ)。
     fn check_continuation(&mut self, pat: PatId, uses: &Uses, clause: TextRange, scope: ExprId) {
         let PatKind::Bind(local) = &self.body.pats[pat].kind else {
             return self.check_pat(pat, uses, scope);

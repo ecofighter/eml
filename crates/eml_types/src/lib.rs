@@ -77,7 +77,7 @@ pub struct DeclType {
     /// 後の段階が読む、矢印の線形性のない型。`Type` は名前を持ち、名前は `Context` から引くので、検査の最後に1回だけ
     /// 書き出しておく。
     pub ty: Type,
-    /// 後の段階は Kind を読まない (docs/implementation/architecture.md の「`Table::export`」) ので、外からは読めなくする。
+    /// 後の段階は Kind を読まない (docs/implementation/architecture.md の「`eml_types` の内部」) ので、外からは読めなくする。
     pub(crate) shape: Shape,
     pub(crate) kinds: KindScheme,
 }
