@@ -460,6 +460,20 @@ pub(super) fn linear_misuse(module: &Module, origin: &KindOrigin) -> Diagnostic 
         )
         .with_note(LINEAR_NOTE)
         .with_help("bind it to a name and pass the name to `drop`"),
+        // `return` の節の本体は作れないので、fix は付けない
+        KindReason::OmittedReturn { ty } => Diagnostic::error(
+            codes::LINEAR_VALUE_DISCARDED,
+            "the state of this handler is discarded by the omitted `return` clause",
+            Label::new(
+                file,
+                origin.range,
+                format!("this state has a linear type `{ty}`"),
+            ),
+        )
+        .with_note(LINEAR_NOTE)
+        .with_help(
+            "write a `return` clause that takes the state, such as `| return x st -> ...`, and consume the state there",
+        ),
         KindReason::ContinuationNotUsed { name, clause } => Diagnostic::error(
             codes::CONTINUATION_NOT_HANDLED,
             format!("the continuation `{name}` of a `once` operation must be resumed or dropped"),
@@ -531,6 +545,7 @@ fn carried_across(
             format!("`{name}`")
         }
         CarriedValue::Temporary(_) => "a linear value".to_string(),
+        CarriedValue::HandlerState { .. } => "the state of this handler".to_string(),
     };
     let what = match call {
         CallKind::Call => "this call".to_string(),
@@ -569,6 +584,9 @@ fn carried_across(
             *clause,
             format!("the `return` clause captures `{name}`"),
         )),
+        CarriedValue::HandlerState { init } => {
+            diagnostic.with_secondary(Label::new(file, *init, "the state of this handler"))
+        }
     };
     if let Some(op) = operation {
         let declared = &module.operations[op];
@@ -587,6 +605,10 @@ fn carried_across(
         CarriedValue::Temporary(_) => format!("finish using the value before {before}"),
         CarriedValue::ReturnCapture { name, .. } => {
             format!("do not capture `{name}` in the `return` clause")
+        }
+        CarriedValue::HandlerState { .. } => {
+            "finish using the state before this handle, or give the handler a state that is not linear"
+                .to_string()
         }
     };
     diagnostic.with_note(CARRY_NOTE).with_help(help)

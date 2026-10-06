@@ -160,7 +160,18 @@ impl Carrying<'_, '_> {
                     outer,
                 }) = typing.calls.get(id)
                 {
-                    self.carry(id, after, &Across::Row(outer.clone()), &CallKind::Handle);
+                    let outer = Across::Row(outer.clone());
+                    self.carry(id, after, &outer, &CallKind::Handle);
+                    // 状態は本体の実行中、handler フレームにある。扱うエフェクトの操作が起きると状態は節に渡り、捕まえた
+                    // 区間に入らないので、外側の row だけをまたぐ (docs/spec/effects.md の「パラメータ付き handler」)
+                    if let Some(init) = init
+                        && let Some(&ty) = typing.exprs.get(*init)
+                    {
+                        let value = CarriedValue::HandlerState {
+                            init: body.exprs[*init].range,
+                        };
+                        self.carry_value(id, ty, value, &outer, &CallKind::Handle);
+                    }
                     let across = Across::Row(body_row.clone());
                     for local in body.closure_captures(&ret.closure) {
                         let Some(&ty) = typing.locals.get(local) else {
@@ -192,6 +203,8 @@ impl Carrying<'_, '_> {
                         .into_iter()
                         .map(Held::Local),
                 );
+                // 初期値は handle (クロージャの生成と呼び出し) より先に評価する。初期値の中の呼び出しは、handle の後で
+                // 使う値と、handle で捕まえる値をまたぐ (docs/spec/expressions.md の「パラメータ付き handler」)
                 match init {
                     Some(init) => self.expr(*init, &live),
                     None => live,

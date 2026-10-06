@@ -121,6 +121,12 @@ pub(crate) enum KindReason {
         name: String,
         inner: Option<CarriedInner>,
     },
+    /// 状態のある handler で、省いた `return` の節が状態を `_` で捨てた (docs/spec/expressions.md の「パラメータ付き
+    /// handler」)。由来の範囲は `from` の初期値の式である。
+    OmittedReturn {
+        /// 状態の型を表示した文字列。ラベルに出す。
+        ty: String,
+    },
 }
 
 impl KindReason {
@@ -164,6 +170,7 @@ impl KindReason {
                 };
                 (9, [vec![text(name)], inner].concat())
             }
+            KindReason::OmittedReturn { ty } => (10, vec![text(ty)]),
         }
     }
 }
@@ -225,6 +232,11 @@ pub(crate) enum CarriedValue {
         binding: TextRange,
         clause: TextRange,
     },
+    /// handler の状態。本体の実行中は handler フレームにある (docs/spec/effects.md の「パラメータ付き handler」)。
+    HandlerState {
+        /// `from` の初期値の式の範囲。
+        init: TextRange,
+    },
 }
 
 impl CarriedValue {
@@ -235,6 +247,7 @@ impl CarriedValue {
                 *binding
             }
             CarriedValue::Temporary(range) => *range,
+            CarriedValue::HandlerState { init } => *init,
         }
     }
 
@@ -246,6 +259,7 @@ impl CarriedValue {
             CarriedValue::ReturnCapture { name, clause, .. } => {
                 [vec![number(2), text(name)], span(*clause)].concat()
             }
+            CarriedValue::HandlerState { .. } => vec![number(3)],
         };
         [span(self.key()), rest].concat()
     }
@@ -453,11 +467,22 @@ mod tests {
                 Some(op(0)),
                 CallKind::Handle,
             ),
+            across(
+                CarriedValue::HandlerState { init: range(1, 2) },
+                Some(op(0)),
+                CallKind::Handle,
+            ),
             through(None),
             through(Some(inner(1, InnerLabel::Value))),
             through(Some(inner(1, InnerLabel::Kept("x".to_string())))),
             through(Some(inner(1, InnerLabel::Through("keep2".to_string())))),
             through(Some(inner(5, InnerLabel::Value))),
+            KindReason::OmittedReturn {
+                ty: "File".to_string(),
+            },
+            KindReason::OmittedReturn {
+                ty: "String".to_string(),
+            },
         ]
     }
 }

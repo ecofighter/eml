@@ -2,10 +2,10 @@
 //! `Unr` の制約が `Lin` と矛盾したときに見つかる。由来に使った位置と使わなかった経路を入れ、報告がそこを指す
 //! (docs/spec/diagnostics.md の「線形性の診断」)。持ち越し規則は段階5b でこのパスに足す。
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use eml_diagnostics::{TextRange, TextSize};
-use eml_hir::{Body, Closure, ExprId, ExprKind, LocalId, PatId, PatKind, Res, Stmt};
+use eml_hir::{Body, ClauseSource, Closure, ExprId, ExprKind, LocalId, PatId, PatKind, Res, Stmt};
 
 use crate::check::BodyTyping;
 use crate::kind::{Bound, DropFix, KindOrigin, KindReason, Provenance, UnusedPath};
@@ -81,6 +81,7 @@ pub(crate) fn constrain(body: &Body, typing: &BodyTyping, table: &mut Table, rel
         reliable,
         by_name,
         scopes: HashMap::new(),
+        omitted_states: HashSet::new(),
     };
     let uses = usage.expr(body.root);
     for &param in &body.params {
@@ -98,6 +99,8 @@ struct Usage<'a, 'c> {
     /// 変数が見える範囲の式。同じ名前の後の束縛が、ある位置で前の変数を隠すかを決めるのに使う。変数を数え終える前に
     /// 記録するので、その変数のスコープの中の束縛は、数えるときにはすべてそろっている。
     scopes: HashMap<LocalId, ExprId>,
+    /// HIR が合成した `return` の節で、状態を受ける `_` のパターン。捨てたのは書き手の `_` ではないので、報告を変える。
+    omitted_states: HashSet<PatId>,
 }
 
 impl<'a> Usage<'a, '_> {
@@ -183,6 +186,11 @@ impl<'a> Usage<'a, '_> {
                 let inner = self.expr(handled.body);
                 let captured = self.captured_once(handled, inner, body.exprs[handled.body].range);
                 sequence(&mut uses, captured);
+                if ret.source == ClauseSource::Omitted
+                    && let Some(state) = ret.state()
+                {
+                    self.omitted_states.insert(state);
+                }
                 let inner = self.expr(ret.closure.body);
                 let captured =
                     self.captured_once(&ret.closure, inner, body.exprs[ret.closure.body].range);
@@ -303,7 +311,15 @@ impl<'a> Usage<'a, '_> {
             PatKind::Wildcard => {
                 if let Some(&ty) = self.typing.pats.get(pat) {
                     let range = self.body.pats[pat].range;
-                    self.with_origin(range, KindReason::Discarded, |table| {
+                    // 合成した `_` の範囲は `from` の初期値の式なので、報告はそこを指す (docs/spec/diagnostics.md の E3004)
+                    let reason = if self.omitted_states.contains(&pat) {
+                        KindReason::OmittedReturn {
+                            ty: self.table.export(ty).to_string(),
+                        }
+                    } else {
+                        KindReason::Discarded
+                    };
+                    self.with_origin(range, reason, |table| {
                         table.kind_at_most(ty, Bound::Const(Linearity::Unr))
                     });
                 }

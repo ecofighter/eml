@@ -770,3 +770,68 @@ fn a_carry_over_whose_row_has_no_known_multi_operation() {
       help: finish using `f` before this call
     ");
 }
+
+#[test]
+fn an_omitted_return_clause_discards_a_linear_state() {
+    let rest = "omitted : Unit -> <IO> Int\nomitted () =\n  handle ask () from open \"a.txt\" with\n    | ask () k f -> resume k 1 f";
+    insta::assert_snapshot!(diagnostics(rest), @"
+    E3004 9:22 the state of this handler is discarded by the omitted `return` clause
+      9:22 this state has a linear type `File`
+      note: linear values, such as files, the continuation of a `once` operation and closures that capture one, must be used exactly once
+      help: write a `return` clause that takes the state, such as `| return x st -> ...`, and consume the state there
+    ");
+}
+
+/// 書いた `return` の節を HIR が拒否すると、本体に誤りの跡が残り、使用回数のパスは由来を記録しない。E3004 を連鎖させない。
+#[test]
+fn a_rejected_return_clause_does_not_report_the_state_again() {
+    let rest = "rejected : Unit -> <IO> Int\nrejected () =\n  handle ask () from open \"a.txt\" with\n    | ask () k f -> resume k 1 f\n    | return x -> x";
+    let checked = check(&format!("{HEADER}{rest}"));
+    let codes: Vec<String> = checked
+        .diagnostics
+        .iter()
+        .map(|d| d.code.to_string())
+        .collect();
+    assert_eq!(codes, ["E1010"]);
+}
+
+#[test]
+fn a_clause_that_drops_k_must_still_consume_a_linear_state() {
+    let rest = "dropped : Unit -> <IO> Int\ndropped () =\n  handle ask () from open \"a.txt\" with\n    | ask () k f ->\n        drop k\n        0\n    | return x f ->\n        close f\n        x";
+    let checked = check(&format!("{HEADER}{rest}"));
+    let codes: Vec<String> = checked
+        .diagnostics
+        .iter()
+        .map(|d| d.code.to_string())
+        .collect();
+    assert_eq!(codes, ["E3003"]);
+}
+
+#[test]
+fn a_linear_state_is_kept_across_a_multi_operation_of_the_outer_row() {
+    let rest = "kept : Unit -> <Choose, IO> Int\nkept () =\n  handle ask () from open \"a.txt\" with\n    | ask () k f -> resume k 1 f\n    | return x f ->\n        close f\n        x";
+    let text = format!("effect Choose where\n  multi choose : Unit -> Bool\n\n{HEADER}{rest}");
+    let checked = check(&text);
+    insta::assert_snapshot!(full(&checked.files, &checked.diagnostics), @"
+    E3006 12:3 the state of this handler must be used exactly once, but it is kept alive across a call that may resume more than once
+      12:3 this handle may perform `choose`, a `multi` operation
+      12:22 the state of this handler
+      2:9 `choose` is declared `multi` here
+      note: a continuation of a `multi` operation can be resumed more than once, and each resumption would use the value again
+      help: finish using the state before this handle, or give the handler a state that is not linear
+    ");
+}
+
+#[test]
+fn values_held_while_the_initial_state_is_evaluated_are_carried() {
+    let rest = "early : Unit -> <Choose, IO> Int\nearly () =\n  let f = open \"a.txt\"\n  let n =\n    handle ask () from (if choose () then 1 else 2) with\n      | ask () k st -> resume k st st\n      | return x _ -> x\n  close f\n  n";
+    let text = format!("effect Choose where\n  multi choose : Unit -> Bool\n\n{HEADER}{rest}");
+    let checked = check(&text);
+    let codes: Vec<String> = checked
+        .diagnostics
+        .iter()
+        .map(|d| d.code.to_string())
+        .collect();
+    // `f` は初期値の `choose ()` をまたぐ。報告は最も前の呼び出しの1件だけである (docs/spec/diagnostics.md の E3006)
+    assert_eq!(codes, ["E3006"]);
+}

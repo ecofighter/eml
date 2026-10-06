@@ -1,0 +1,54 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: rendered
+input_file: tests/ui/check-fail/linearity/state.em
+---
+[E3004] Error: the state of this handler is discarded by the omitted `return` clause
+    ╭─[ check-fail/linearity/state.em:13:22 ]
+    │
+ 13 │   handle ask () from open "input.txt" with
+    │                      ────────┬───────  
+    │                              ╰───────── this state has a linear type `File`
+    │ 
+    │ Help: write a `return` clause that takes the state, such as `| return x st -> ...`, and consume the state there
+    │ 
+    │ Note: linear values, such as files, the continuation of a `once` operation and closures that capture one, must be used exactly once
+────╯
+[E3003] Error: `f` must be used exactly once, but it is not used
+    ╭─[ check-fail/linearity/state.em:19:15 ]
+    │
+ 19 │     | fail () f -> 0
+    │               ┬     │ 
+    │               ╰─────── `f` is bound here
+    │                     │ 
+    │                     ╰─ `f` is not used before the end of this scope
+    │ 
+    │ Help: pass `f` to `drop`
+    │ 
+    │ Note: linear values, such as files, the continuation of a `once` operation and closures that capture one, must be used exactly once
+────╯
+[E3006] Error: the state of this handler must be used exactly once, but it is kept alive across a call that may resume more than once
+    ╭─[ check-fail/linearity/state.em:26:3 ]
+    │
+ 26 │ ╭─▶   handle ask () from open "input.txt" with
+    ┆ ┆   
+ 30 │ ├─▶         x
+    │ │               
+    │ ╰─────────────── this handle may perform `choose`, a `multi` operation
+    │
+    ├─[ check-fail/linearity/state.em:26:3 ]
+    │
+ 26 │   handle ask () from open "input.txt" with
+    │                      ────────┬───────  
+    │                              ╰───────── the state of this handler
+    │
+    ├─[ check-fail/linearity/state.em:26:3 ]
+    │
+  9 │   multi choose : Unit -> Bool
+    │         ───┬──  
+    │            ╰──── `choose` is declared `multi` here
+    │ 
+    │ Help: finish using the state before this handle, or give the handler a state that is not linear
+    │ 
+    │ Note: a continuation of a `multi` operation can be resumed more than once, and each resumption would use the value again
+────╯
