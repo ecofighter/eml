@@ -190,3 +190,11 @@ fn data_without_constructors_is_reported_in_a_user_module() {
         ["E1025 1:6 `Empty` has no constructors"]
     );
 }
+
+#[test]
+fn data_missing_its_equals_sign_is_not_reported_as_having_no_constructors() {
+    assert_eq!(
+        diagnostics("data T | A | B\nf : T\nf = A"),
+        ["E0011 1:8 expected `=`"]
+    );
+}

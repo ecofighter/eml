@@ -2,7 +2,7 @@
 //! `ItemTree` から、item の ID、名前の表、定義に付く fixity、lang item を作る。名前を解決しなくても決まるものだけを
 //! 読むので、item の変換より先に作れる。
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use eml_diagnostics::{Diagnostic, FileId, Label, TextRange};
 use la_arena::{Idx, RawIdx};
@@ -33,7 +33,7 @@ pub enum ValueItem {
     Unusable,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum TypeItem {
     Type(TypeDefId),
     Effect(EffectId),
@@ -246,14 +246,11 @@ impl ModuleScope {
             names.sort_by_key(|definition| definition.range.start());
         }
         // 重複した宣言 (名前の2つ目以降の定義) の部品は使えない (規則2)
-        let duplicate = |item: TypeItem, types: &HashMap<String, Vec<Definition<TypeItem>>>| {
-            types.values().any(|names| {
-                names
-                    .iter()
-                    .skip(1)
-                    .any(|definition| definition.item == item)
-            })
-        };
+        let duplicates: HashSet<TypeItem> = self
+            .types
+            .values()
+            .flat_map(|names| names.iter().skip(1).map(|definition| definition.item))
+            .collect();
         for (k, function) in tree.functions.iter().enumerate() {
             let id = self.functions[k];
             push(
@@ -266,7 +263,7 @@ impl ModuleScope {
             );
         }
         for (k, data) in tree.data.iter().enumerate() {
-            let usable = !duplicate(TypeItem::Type(self.type_ids[k]), &self.types);
+            let usable = !duplicates.contains(&TypeItem::Type(self.type_ids[k]));
             for (j, constructor) in data.constructors.iter().enumerate() {
                 let id = self.constructors[k][j];
                 push(
@@ -280,7 +277,7 @@ impl ModuleScope {
             }
         }
         for (k, effect) in tree.effects.iter().enumerate() {
-            let usable = !duplicate(TypeItem::Effect(self.effects[k]), &self.types);
+            let usable = !duplicates.contains(&TypeItem::Effect(self.effects[k]));
             for (j, operation) in effect.operations.iter().enumerate() {
                 let id = self.operations[k][j];
                 push(

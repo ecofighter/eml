@@ -55,7 +55,7 @@
 |---|---|---|
 | `eml_diagnostics` | なし | `lib.rs` (診断の番号と E0004)、`source.rs` (`SourceFiles` と行と列)、`render.rs` (診断の表示) |
 | `eml_syntax` | `lexer.rs` (字句)、`literals.rs` (リテラルの値の解釈)、`parser.rs` (空のファイル、項目の解析と項目の間の回復、BOM と shebang)、`declarations.rs` (シグネチャの形、`data`、`effect`、fixity、`pub` / `type` / `import`)、`types.rs` (型と row)、`expressions.rs` (等式、パターン、適用やフィールドの参照などの式、ブロックと `let`、ラムダ、`use`、括弧の回復)、`operators.rs` (演算子の列、前置の `-`、セクション、被演算子の欠け)、`control.rs` (`if` と `match`)、`handlers.rs` (handler)、`nesting.rs` (入れ子の深さの上限)、`names.rs` (名前と経路のノード、import の CST)、`ast.rs` (型付き AST ラッパ。`data`、`match`、コンストラクタのパターン、型の適用の取り出し口)、`corpus.rs` (コーパス。ソースは `tests/corpus/` にあり、`s1.em` は S1 の構文、`later_stages.em` は S2 以降の構文を含む) | `layout.rs` (レイアウト段)、`parser/tests.rs` (パーサのマーカー、先読み、診断の位置)、`grammar/scan.rs` (回復の範囲の走査)、`syntax_kind.rs` と `token_set.rs` (構文の種類の表) |
-| `eml_hir` | `item_tree.rs` (item の収集、シグネチャと等式の並び方)、`def_map.rs` (スコープ表、重複の3つの規則、`pub`、定義に付く fixity)、`lower.rs` (名前解決と脱糖、未対応の構文の E0004)、`operators.rs` (演算子の組み直し)、`effects.rs` (エフェクトと操作)、`structure.rs` (HIR のデータ構造と走査)、`data.rs` (`data` の宣言、コンストラクタ、型の適用、パターン、`match`)、`tuples.rs` (タプルの式・型・パターン、リテラルのパターン、射影の E0004) | なし |
+| `eml_hir` | `item_tree.rs` (item の収集、シグネチャと等式の並び方)、`def_map.rs` (スコープ表、重複の3つの規則、`pub`、定義に付く fixity)、`scaling.rs` (名前の表を作る時間の伸び。release ビルドで流す)、`lower.rs` (名前解決と脱糖、未対応の構文の E0004)、`operators.rs` (演算子の組み直し)、`effects.rs` (エフェクトと操作)、`structure.rs` (HIR のデータ構造と走査)、`data.rs` (`data` の宣言、コンストラクタ、型の適用、パターン、`match`)、`tuples.rs` (タプルの式・型・パターン、リテラルのパターン、射影の E0004) | なし |
 | `eml_types` | `check.rs` (推論と型の診断)、`rows.rs` (エフェクトの row と E2002)、`effects.rs` (エフェクト、handler、継続、線形な継続 (E3001))、`data.rs` (型構成子の引数、データ型の Kind、パターンと `match` の型検査)、`exhaustive.rs` (網羅性の検査と漏れの例。タプルとリテラルを含む)、`tuples.rs` (タプルの型検査、リテラルのパターン、`==` の比べ方の決定と E2006)、`linearity.rs` (線形性の診断)、`scaling.rs` (型検査の時間の伸び。`#[ignore]`) | `table/tests.rs` (単一化と型の書き出し)、`kind/solve.rs` (Kind の問題の解き方と残す制約)、`shape.rs` (閉じた形と具体化)、`ty.rs` (型の表示)、`scc.rs` (関数の呼び出しの強連結成分)、`check/mod.rs` (診断の文言) |
 | `eml_core_ir` | `translate.rs` (Core IR への変換。変換の直後)、`simplify.rs` (`simplify` の書き換え。`simplify` の直後)、`perceus.rs` (`dup` / `decref` の位置と `saved`。Perceus の直後)、`verify.rs` (Core IR のテキストによる verifier) | `lib.rs` (子と atom の走査の順)、`builder.rs` (関数の組み立て)、`compact.rs` (アリーナの組み直しと、2回たどれる式などの誤り)、`verify.rs` (アリーナの形の検査)、`text.rs` (テキストの読み戻しと、読むときの誤り) |
 | `eml_runtime` | なし | `heap/tests.rs` (確保と解放、世代番号、リーク、フレームと継続の解放、`take` と `take_or_copy` による複製)、`output.rs` (`OutputSink`) |
@@ -114,6 +114,8 @@
 
 `crates/eml_types/tests/scaling.rs` は、合成プログラムの関数の数を4倍にしたときの型検査の時間の比を確かめる。形は、多相な関数の連鎖、独立した多相な関数、`data` と `match`、持ち越しの連鎖、環状の相互再帰の5つである。HIR まで作ってから `eml_types::check` の時間だけを測り、各大きさで3回測った最小を使う。関数の数は 2000 と 8000 で、比が6以下なら通る。時間を測るので `#[ignore]` を付け、release ビルドで流す。型検査の構造を変えたときに流す。
 
+`crates/eml_hir/tests/scaling.rs` は、名前の違う `data` と `effect` の宣言の数を 4000 から 16000 にしたときの、構文解析から `DefMap` までの時間の比を確かめる。比が6以下なら通る。`DefMap` の重複の判定を変えたときに流す。
+
 ## よく使うコマンド
 
 ```sh
@@ -123,4 +125,5 @@ cargo test -p eml_cli --test ui                      # UI テスト
 cargo insta review                                   # スナップショットの承認
 cargo clippy --all-targets && cargo fmt
 cargo test --release -p eml_types --test scaling -- --ignored   # 型検査の時間の伸び (性能のテスト)
+cargo test --release -p eml_hir --test scaling -- --ignored     # 名前の表を作る時間の伸び (性能のテスト)
 ```

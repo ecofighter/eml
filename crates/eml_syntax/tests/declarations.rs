@@ -326,6 +326,16 @@ fn data_needs_constructors() {
 }
 
 #[test]
+fn data_missing_its_equals_sign_still_parses_the_constructors() {
+    // `=` を書き忘れた形。選択肢を読むので、HIR はコンストラクタを引ける
+    assert_eq!(diagnostics("data T | A | B"), ["E0011 1:8 expected `=`"]);
+    assert_eq!(
+        diagnostics(&lines(&["data T", "  | A", "  | B"])),
+        ["E0011 2:3 expected `=`"]
+    );
+}
+
+#[test]
 fn fixity_needs_a_precedence() {
     assert_eq!(
         diagnostics("infixl +"),

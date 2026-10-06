@@ -663,8 +663,9 @@ impl DropExpr {
 
 impl DataItem {
     /// `=` とコンストラクタの並びを書いたか。
+    /// `=` か選択肢があるか。`=` を書き忘れた選択肢はパーサが報告済みなので、コンストラクタのない `data` には数えない。
     pub fn has_constructors(&self) -> bool {
-        support::token(&self.syntax, SyntaxKind::EQ).is_some()
+        support::token(&self.syntax, SyntaxKind::EQ).is_some() || self.alts().next().is_some()
     }
 
     pub fn name(&self) -> Option<Name> {

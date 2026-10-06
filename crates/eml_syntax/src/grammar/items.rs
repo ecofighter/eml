@@ -107,6 +107,10 @@ fn data_item(p: &mut Parser, m: Marker) {
     }
     if p.eat(EQ) {
         alts(p);
+    } else if p.at(PIPE) {
+        // `=` の書き忘れ。選択肢は読み、コンストラクタを使う位置に誤りを連鎖させない
+        expected(p, "`=`");
+        alts(p);
     }
     m.complete(p, DATA_ITEM);
 }
