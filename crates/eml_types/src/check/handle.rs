@@ -68,11 +68,8 @@ impl BodyCheck<'_, '_> {
     fn op_clause(&mut self, clause: &OpClause, result: Ty, outer: &Row, effect_args: &[Ty]) {
         let operation = &self.module.operations[clause.op];
         // 節の型は、操作の閉じた形にエフェクトの型引数を入れて作る。操作の型の作り方を1か所にするため
-        let signatures = self.signatures;
-        let mut ty = match signatures.operations.get(clause.op) {
-            Some(shape) => shape.instantiate_with_effect_args(self.table, effect_args),
-            None => self.table.error,
-        };
+        let mut ty = self.signatures.operations[clause.op]
+            .instantiate_with_effect_args(self.table, effect_args);
         for &param in &clause.params {
             match self.table.shape(ty).clone() {
                 TyShape::Fn {

@@ -79,7 +79,7 @@ impl Carrying<'_, '_> {
                     _ => None,
                 };
                 let mut live = after.clone();
-                // 手順を後ろからたどる。順は eml_hir::call_steps が決め、Core IR の変換も同じ手順を読む
+                // 手順を後ろからたどる
                 for step in eml_hir::call_steps(self.module, body, id).into_iter().rev() {
                     match step {
                         EvalStep::Arrow(index) => {

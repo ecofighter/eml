@@ -105,3 +105,27 @@ fn a_nested_pipe_is_a_callee() {
         ["eval 1", "eval 2 |> f", "arrow 0"]
     );
 }
+
+#[test]
+fn a_lambda_beyond_the_arity_is_passed_together() {
+    assert_eq!(
+        steps("t : Unit -> Int\nt () = h 1 (fn y -> y)"),
+        ["eval h", "eval 1", "eval fn y -> y", "arrow 0", "arrow 1"]
+    );
+}
+
+#[test]
+fn an_annotated_value_beyond_the_arity_is_passed_together() {
+    assert_eq!(
+        steps("t : Int -> Int\nt x = h 1 (x : Int)"),
+        ["eval h", "eval 1", "eval (x : Int)", "arrow 0", "arrow 1"]
+    );
+}
+
+#[test]
+fn a_pipe_into_a_call_beyond_the_arity_applies_before_the_piped_arrow() {
+    assert_eq!(
+        steps("t : Unit -> Int\nt () = g () |> h 1"),
+        ["eval g ()", "eval h", "eval 1", "arrow 0", "arrow 1"]
+    );
+}

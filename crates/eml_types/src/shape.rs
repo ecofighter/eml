@@ -560,6 +560,7 @@ impl Shape {
     /// 型引数) にし、残りの型変数と row 変数を新しい rigid 変数にする。節は、操作がどの型で呼ばれても動かなければならない
     /// ため (docs/spec/effects.md の「handler の意味」)。Kind 変数は新しい変数にする。
     pub fn instantiate_with_effect_args(&self, table: &mut Table<'_>, effect_args: &[Ty]) -> Ty {
+        debug_assert!(effect_args.len() <= self.rigids.len());
         let lin: Vec<KindVar> = (0..self.lin_vars).map(|_| table.fresh_lin_var()).collect();
         let mult: Vec<KindVar> = (0..self.mult_vars)
             .map(|_| table.fresh_mult_var())
