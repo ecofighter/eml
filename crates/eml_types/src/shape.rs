@@ -651,14 +651,24 @@ impl Shape {
                     .or_insert_with(|| Type::Rigid(name.clone()));
             }
             ShapeTy::Fn {
+                param: _,
                 lin: ShapeLin::Var(v),
-                ..
+                row: _,
+                ret: _,
             } => {
                 names
                     .entry(*v)
                     .or_insert_with(|| self.export_ty(ty, context));
             }
-            _ => {}
+            ShapeTy::Fn {
+                param: _,
+                lin: ShapeLin::Known(_),
+                row: _,
+                ret: _,
+            }
+            | ShapeTy::Con(_, _)
+            | ShapeTy::Record(_)
+            | ShapeTy::Error => {}
         }
         ty.for_each_child(|child| match child {
             ShapeChild::Ty(child) => self.collect_names(child, context, names),

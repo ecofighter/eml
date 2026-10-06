@@ -142,16 +142,17 @@ impl Table<'_> {
                 }
                 TyShape::Con(_, _) | TyShape::Record(_) | TyShape::Var(_) | TyShape::Error => {}
             }
-            let mut children = Vec::new();
+            // 子を前から作業の列に積み、積んだ範囲を裏返す。最初の子から取り出すので、Kind 変数は現れた順に並ぶ
+            let first_child = work.len();
             shape.for_each_child(|child| match child {
-                Child::Ty(child) => children.push(child),
+                Child::Ty(child) => work.push(child),
                 Child::Row(row) => {
                     for label in self.resolve_row(row).labels {
-                        children.extend(label.args);
+                        work.extend(label.args);
                     }
                 }
             });
-            work.extend(children.into_iter().rev());
+            work[first_child..].reverse();
         }
         (lin, mult)
     }

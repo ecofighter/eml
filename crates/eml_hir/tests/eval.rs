@@ -129,3 +129,12 @@ fn a_pipe_into_a_call_beyond_the_arity_applies_before_the_piped_arrow() {
         ["eval g ()", "eval h", "eval 1", "arrow 0", "arrow 1"]
     );
 }
+
+#[test]
+fn a_top_level_function_beyond_the_arity_is_passed_together() {
+    // 引数のあるトップレベルの関数の参照は値なので、前の引数とまとめる。引数のないトップレベルの値 (`v`) は値に入らない
+    assert_eq!(
+        steps("t : Unit -> Int\nt () = h 1 g"),
+        ["eval h", "eval 1", "eval g", "arrow 0", "arrow 1"]
+    );
+}

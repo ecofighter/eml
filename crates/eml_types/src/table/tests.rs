@@ -507,3 +507,27 @@ fn children_of_arrows_are_the_parameter_the_row_and_the_result() {
     });
     assert_eq!(seen, ["param", "row", "ret"]);
 }
+
+#[test]
+fn children_of_continuations_are_the_argument_the_row_and_the_result() {
+    let context = test_context();
+    let mut table = Table::new(&context);
+    let int = table.int;
+    let string = table.string;
+    let k = table.alloc(TyShape::Cont {
+        arg: int,
+        lin: ArrowLin::Known(Linearity::Lin),
+        row: Row::pure(),
+        ret: string,
+    });
+    let mut seen = Vec::new();
+    table.shape(k).for_each_child(|child| {
+        seen.push(match child {
+            Child::Ty(ty) if ty == int => "arg",
+            Child::Ty(ty) if ty == string => "ret",
+            Child::Ty(_) => "other",
+            Child::Row(_) => "row",
+        })
+    });
+    assert_eq!(seen, ["arg", "row", "ret"]);
+}
