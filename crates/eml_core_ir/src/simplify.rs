@@ -94,8 +94,8 @@ impl Simplify<'_> {
                         scope,
                     },
                 );
-                self.function.joins[inner.0 as usize] = node;
-                self.function.joins[join.0 as usize] = body;
+                self.function.define_join(inner, node);
+                self.function.define_join(join, body);
                 node = body;
             }
         }
@@ -253,9 +253,8 @@ impl Simplify<'_> {
                 } else {
                     false
                 };
-                let arm_join = JoinId(self.function.joins.len() as u32);
                 // 索引は、下で組み立てた `Join` の位置に直す
-                self.function.joins.push(arm.body);
+                let arm_join = self.function.new_join();
                 let mut args: Vec<Atom> =
                     arm.fields.iter().map(|&field| Atom::Var(field)).collect();
                 if whole {
@@ -311,7 +310,7 @@ impl Simplify<'_> {
                 body,
                 scope,
             });
-            self.function.joins[index] = inner;
+            self.function.define_join(join, inner);
             for (position, (_, arm_join, arm, arm_params, _)) in split.iter().enumerate().rev() {
                 let expr = CExpr::Join {
                     join: *arm_join,
@@ -326,7 +325,7 @@ impl Simplify<'_> {
                 } else {
                     self.push(expr)
                 };
-                self.function.joins[arm_join.0 as usize] = inner;
+                self.function.define_join(*arm_join, inner);
             }
         }
     }
@@ -467,7 +466,8 @@ impl Simplify<'_> {
         for id in self.reachable() {
             let CExpr::Let {
                 var,
-                rhs: Rhs::Call { call, .. },
+                // `saved` は Perceus が決めるので、この時点では空である。末尾呼び出しはフレームを残さないので捨てる
+                rhs: Rhs::Call { call, saved: _ },
                 body,
             } = self.expr(id)
             else {

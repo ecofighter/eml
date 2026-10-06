@@ -18,15 +18,11 @@ pub(crate) fn insert(program: &mut Program) {
 fn insert_rc(function: &mut CoreFn) {
     let live = analyze(function);
     let tracked = tracked(function);
-    let mut builder = FnBuilder::new();
-    for _ in &function.joins {
-        builder.new_join();
-    }
     let mut pass = Rebuild {
         old: &function.exprs,
         tracked: &tracked,
         live: &live,
-        new: builder,
+        new: FnBuilder::rebuilding(function.joins.len()),
     };
     let owned: Vars = function
         .params
@@ -239,7 +235,7 @@ impl Rebuild<'_> {
                 Step::Let { var, rhs, released } => {
                     // `live` は、この束縛の後で生きている変数である。呼び出しは、そのうち結果の変数以外を退避する
                     let rhs = match rhs {
-                        Rhs::Call { call, .. } => Rhs::Call {
+                        Rhs::Call { call, saved: _ } => Rhs::Call {
                             call,
                             saved: live.iter().copied().filter(|&v| v != var).collect(),
                         },

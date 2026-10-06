@@ -2,7 +2,7 @@
 //! たどれない式を捨てる。パスは木から外れた式をアリーナに残してよいので、次のパスと verifier が、アリーナの全体が
 //! 1本の木だと見なせるようにここで揃える。
 
-use crate::{CExpr, CExprId, CoreFn, JoinId};
+use crate::{Atom, CExpr, CExprId, CoreFn, JoinId};
 
 /// 式を前順に並べ直し、残った join point に元の番号の順で 0 から番号を振り直して索引を作り直す。
 /// 長い連鎖で再帰しないように、作業の列でたどる。
@@ -42,10 +42,28 @@ pub(crate) fn compact(function: &mut CoreFn) -> Result<(), String> {
     for (number, &old) in present.iter().enumerate() {
         join_numbers[old] = Some(JoinId(number as u32));
     }
+    // 式を古いアリーナから移すと `function` が書き換わるので、誤りはすべて移す前に見つける
+    for &id in &order {
+        if let CExpr::Jump { join, args: _ } = &function.exprs[id.0 as usize]
+            && join_numbers
+                .get(join.0 as usize)
+                .copied()
+                .flatten()
+                .is_none()
+        {
+            return Err(format!("jump to j{} has no join point in the tree", join.0));
+        }
+    }
 
+    // 古いアリーナは後で丸ごと置き換えるので、残る式は複製せずに移し、跡には安い式を置く
     let mut exprs: Vec<CExpr> = order
         .iter()
-        .map(|&id| function.exprs[id.0 as usize].clone())
+        .map(|&id| {
+            std::mem::replace(
+                &mut function.exprs[id.0 as usize],
+                CExpr::Return(Atom::Unit),
+            )
+        })
         .collect();
     let mut joins = vec![CExprId(0); present.len()];
     for (index, expr) in exprs.iter_mut().enumerate() {
@@ -53,13 +71,8 @@ pub(crate) fn compact(function: &mut CoreFn) -> Result<(), String> {
             *child =
                 new_ids[child.0 as usize].expect("a child of a reachable expression is reachable");
         });
-        if let CExpr::Jump { join, .. } = expr {
-            let old = *join;
-            *join = join_numbers
-                .get(old.0 as usize)
-                .copied()
-                .flatten()
-                .ok_or_else(|| format!("jump to j{} has no join point in the tree", old.0))?;
+        if let CExpr::Jump { join, args: _ } = expr {
+            *join = join_numbers[join.0 as usize].expect("checked above");
         }
         if let CExpr::Join { join, .. } = expr {
             *join = join_numbers[join.0 as usize].expect("a join point in the tree has a number");
@@ -75,8 +88,8 @@ pub(crate) fn compact(function: &mut CoreFn) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::VarInfo;
     use crate::builder::FnBuilder;
-    use crate::{Atom, VarInfo};
 
     fn unboxed(name: &str) -> VarInfo {
         VarInfo {
@@ -187,6 +200,40 @@ mod tests {
 
         let error = compact(&mut function).unwrap_err();
         assert_eq!(error, "jump to j0 has no join point in the tree");
+    }
+
+    #[test]
+    fn a_rejected_function_keeps_its_arena() {
+        let mut builder = FnBuilder::new();
+        let x = builder.var(unboxed("x"));
+        let join = builder.new_join();
+        let dead_body = builder.push(CExpr::Return(Atom::Int(0)));
+        let dead_scope = builder.push(CExpr::Return(Atom::Int(9)));
+        let dead = builder.push(CExpr::Join {
+            join,
+            params: Vec::new(),
+            captures: Vec::new(),
+            body: dead_body,
+            scope: dead_scope,
+        });
+        builder.define_join(join, dead);
+        let jump = builder.push(CExpr::Jump {
+            join,
+            args: Vec::new(),
+        });
+        let body = builder.push(CExpr::Let {
+            var: x,
+            rhs: crate::Rhs::Atom(Atom::Int(1)),
+            body: jump,
+        });
+        let mut function = builder.finish("f".to_string(), Vec::new(), body);
+        let exprs = function.exprs.clone();
+
+        compact(&mut function).unwrap_err();
+
+        assert_eq!(function.exprs, exprs);
+        assert_eq!(function.body, body);
+        assert_eq!(function.joins, [dead]);
     }
 
     #[test]

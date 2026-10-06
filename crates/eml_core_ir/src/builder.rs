@@ -18,19 +18,27 @@ impl FnBuilder {
         }
     }
 
+    /// すでにある関数の式のアリーナだけを作り直すための口。変数の表は元の関数が持ち続けるので、この builder には
+    /// 変数を足さず、`finish` ではなく `into_arenas` で取り出す。join point は元の番号のまま定義し直すので、
+    /// 元の関数の `joins` 個の番号を先に取っておく。
+    pub(crate) fn rebuilding(joins: usize) -> FnBuilder {
+        FnBuilder {
+            vars: Vec::new(),
+            exprs: Vec::new(),
+            joins: vec![None; joins],
+        }
+    }
+
     pub(crate) fn var(&mut self, info: VarInfo) -> VarId {
-        self.vars.push(info);
-        VarId(self.vars.len() as u32 - 1)
+        VarId(push_index(&mut self.vars, info))
     }
 
     pub(crate) fn push(&mut self, expr: CExpr) -> CExprId {
-        self.exprs.push(expr);
-        CExprId(self.exprs.len() as u32 - 1)
+        CExprId(push_index(&mut self.exprs, expr))
     }
 
     pub(crate) fn new_join(&mut self) -> JoinId {
-        self.joins.push(None);
-        JoinId(self.joins.len() as u32 - 1)
+        JoinId(push_index(&mut self.joins, None))
     }
 
     /// `join` の定義の位置を索引に入れる。`push` した `Join` の式を指す。
@@ -38,8 +46,12 @@ impl FnBuilder {
         self.joins[join.0 as usize] = Some(at);
     }
 
-    /// 式のアリーナと join point の索引だけを取り出す。変数の表を別に持つパスが、アリーナだけを作り直すときに使う。
+    /// 式のアリーナと join point の索引だけを取り出す。`rebuilding` で作った builder の出口である。
     pub(crate) fn into_arenas(self) -> (Vec<CExpr>, Vec<CExprId>) {
+        debug_assert!(
+            self.vars.is_empty(),
+            "the variables of a rebuilt arena stay with the function"
+        );
         let joins = self
             .joins
             .into_iter()
@@ -65,16 +77,32 @@ impl FnBuilder {
 impl CoreFn {
     /// 組み立て済みの関数をその場で書き換えるパスのための口。
     pub(crate) fn push(&mut self, expr: CExpr) -> CExprId {
-        self.exprs.push(expr);
-        CExprId(self.exprs.len() as u32 - 1)
+        CExprId(push_index(&mut self.exprs, expr))
     }
 
     /// `var` と同じ名前と性質の新しい変数。
     pub(crate) fn fresh_like(&mut self, var: VarId) -> VarId {
         let info = self.vars[var.0 as usize].clone();
-        self.vars.push(info);
-        VarId(self.vars.len() as u32 - 1)
+        VarId(push_index(&mut self.vars, info))
     }
+
+    /// 新しい join point の番号を取る。`Join` の式は、その番号へ飛ぶ `jump` を組んだ後で組むことがあるので、
+    /// 番号を取るときにはまだない。索引は `define_join` で `Join` の式を指すまで、仮に関数の根を指しておく。
+    pub(crate) fn new_join(&mut self) -> JoinId {
+        let placeholder = self.body;
+        JoinId(push_index(&mut self.joins, placeholder))
+    }
+
+    /// `join` の定義の位置を索引に入れる。その場で `Join` の式を作り直したり動かしたりしたパスが使う。
+    pub(crate) fn define_join(&mut self, join: JoinId, at: CExprId) {
+        self.joins[join.0 as usize] = at;
+    }
+}
+
+/// 表の末尾に足し、その位置を番号として返す。変数、式、join point の番号の払い出しをここ1か所にする。
+fn push_index<T>(table: &mut Vec<T>, item: T) -> u32 {
+    table.push(item);
+    table.len() as u32 - 1
 }
 
 #[cfg(test)]

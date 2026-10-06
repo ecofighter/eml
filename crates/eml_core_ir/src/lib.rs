@@ -209,7 +209,15 @@ impl CExpr {
             CExpr::Jump { join: _, args } => args.iter().for_each(|&atom| f(atom)),
             CExpr::Return(atom) => f(*atom),
             CExpr::TailCall(call) => call.for_each_atom(f),
-            CExpr::Join { .. } | CExpr::Dup { .. } | CExpr::Decref { .. } => {}
+            CExpr::Join {
+                join: _,
+                params: _,
+                captures: _,
+                body: _,
+                scope: _,
+            }
+            | CExpr::Dup { var: _, body: _ }
+            | CExpr::Decref { var: _, body: _ } => {}
         }
     }
 
@@ -224,7 +232,15 @@ impl CExpr {
             CExpr::Jump { join: _, args } => args.iter_mut().for_each(f),
             CExpr::Return(atom) => f(atom),
             CExpr::TailCall(call) => call.for_each_atom_mut(f),
-            CExpr::Join { .. } | CExpr::Dup { .. } | CExpr::Decref { .. } => {}
+            CExpr::Join {
+                join: _,
+                params: _,
+                captures: _,
+                body: _,
+                scope: _,
+            }
+            | CExpr::Dup { var: _, body: _ }
+            | CExpr::Decref { var: _, body: _ } => {}
         }
     }
 }
