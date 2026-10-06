@@ -8,8 +8,7 @@ use eml_syntax::ast::{self, OpSeqElement};
 
 use super::expr::BodyLowering;
 use super::ops::NEGATE_PRECEDENCE;
-use super::scope::Fixity;
-use crate::builtin::Assoc;
+use super::scope::{Assoc, Fixity};
 use crate::codes;
 use crate::hir::*;
 

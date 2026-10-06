@@ -837,14 +837,17 @@ fn lowercase_names(node: &SyntaxNode) -> impl Iterator<Item = Name> {
 }
 
 impl FixityItem {
-    /// `infixl`、`infixr`、`infix` のキーワード。
+    /// `infixl`、`infixr`、`infix` のキーワード。`pub` の後にもあるので、最初のトークンとは限らない。
     pub fn assoc(&self) -> Option<SyntaxToken> {
-        self.syntax.first_token().filter(|token| {
-            matches!(
-                token.kind(),
-                SyntaxKind::INFIXL_KW | SyntaxKind::INFIXR_KW | SyntaxKind::INFIX_KW
-            )
-        })
+        self.syntax
+            .children_with_tokens()
+            .filter_map(NodeOrToken::into_token)
+            .find(|token| {
+                matches!(
+                    token.kind(),
+                    SyntaxKind::INFIXL_KW | SyntaxKind::INFIXR_KW | SyntaxKind::INFIX_KW
+                )
+            })
     }
 
     pub fn precedence(&self) -> Option<SyntaxToken> {

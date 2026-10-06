@@ -381,3 +381,14 @@ fn file_operations_cannot_be_handled() {
         diagnostics(text)
     );
 }
+
+#[test]
+fn a_user_println_does_not_make_the_io_clause_handleable() {
+    // 節の名前が Prelude の `IO` の操作の名前なら、ユーザーが同じ名前の関数を定義していても E1009 にする
+    let text = "println : String -> Unit\nprintln s = ()\nf : Unit -> Unit\nf () = handle () with\n  | println s k -> resume k ()";
+    assert!(
+        diagnostics(text).contains(&"E1009 5:5 `IO` cannot be handled".to_string()),
+        "{:?}",
+        diagnostics(text)
+    );
+}

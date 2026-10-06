@@ -51,14 +51,11 @@ pub fn call_steps(module: &Module, body: &Body, call: ExprId) -> Vec<EvalStep> {
 pub fn is_value(module: &Module, body: &Body, expr: ExprId) -> bool {
     match &body.exprs[expr].kind {
         ExprKind::Literal(_) | ExprKind::Lambda(_) => true,
-        ExprKind::Path(
-            Res::Local(_) | Res::Builtin(_) | Res::Operation(_) | Res::Constructor(_),
-        ) => true,
+        ExprKind::Path(Res::Local(_) | Res::Operation(_) | Res::Constructor(_)) => true,
         // 引数のないトップレベルの値は、参照するたびに計算する (docs/spec/core-ir.md)
         ExprKind::Path(Res::Function(function)) => module.functions[*function]
-            .body
-            .as_ref()
-            .is_some_and(|body| !body.params.is_empty()),
+            .arity()
+            .is_some_and(|arity| arity > 0),
         ExprKind::Annot { expr, .. } => is_value(module, body, *expr),
         _ => false,
     }
@@ -70,11 +67,8 @@ pub fn is_value(module: &Module, body: &Body, expr: ExprId) -> bool {
 pub fn known_arity(module: &Module, body: &Body, callee: ExprId) -> Option<usize> {
     match &body.exprs[callee].kind {
         ExprKind::Path(Res::Function(function)) => module.functions[*function]
-            .body
-            .as_ref()
-            .map(|body| body.params.len())
+            .arity()
             .filter(|&arity| arity > 0),
-        ExprKind::Path(Res::Builtin(builtin)) => Some(builtin.arity()),
         ExprKind::Path(Res::Operation(op)) => Some(module.operations[*op].arity),
         ExprKind::Path(Res::Constructor(ctor)) => Some(module.constructors[*ctor].fields.len()),
         _ => None,

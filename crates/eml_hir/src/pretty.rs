@@ -76,6 +76,10 @@ pub fn pretty(module: &Module) -> String {
         }
     }
     for (_, function) in module.functions.iter() {
+        // intrinsic は Prelude の関数なので表示しない。Prelude の `Bool` を表示しないのと同じ
+        if function.intrinsic {
+            continue;
+        }
         // 本体の注釈もシグネチャの型変数を指す。シグネチャがなければ型変数は現れない
         let no_generics = Generics::default();
         let generics = function
@@ -313,14 +317,21 @@ impl Printer<'_> {
     fn res(&self, body: &Body, res: Res) -> String {
         match res {
             Res::Local(local) => local_name(body, local),
-            Res::Function(function) => format!("@{}", self.module.functions[function].name),
+            // intrinsic は Prelude の関数で、`@` を付けずに名前だけを出す。テストの表示を Prelude に左右させないため
+            Res::Function(function) => {
+                let function = &self.module.functions[function];
+                if function.intrinsic {
+                    function.name.clone()
+                } else {
+                    format!("@{}", function.name)
+                }
+            }
             Res::Operation(operation) => {
                 let operation = &self.module.operations[operation];
                 let effect = &self.module.effects[operation.effect].name;
                 format!("@{effect}.{}", operation.name)
             }
             Res::Constructor(ctor) => self.module.constructors[ctor].name.clone(),
-            Res::Builtin(builtin) => builtin.name().to_string(),
         }
     }
 

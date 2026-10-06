@@ -4,8 +4,7 @@ use eml_diagnostics::{Diagnostic, Label, TextRange, TextSize};
 use eml_syntax::ast::{self, OpSeqElement};
 
 use super::expr::BodyLowering;
-use super::scope::{Fixity, ValueItem};
-use crate::builtin::{Assoc, Builtin};
+use super::scope::{Assoc, Fixity, ValueItem};
 use crate::codes;
 use crate::hir::{ExprId, ExprKind, Res};
 
@@ -111,7 +110,7 @@ impl BodyLowering<'_> {
                     ));
                 }
                 let operand = self.climb(cursor, NEGATE_PRECEDENCE + 1, None);
-                let callee = self.alloc(ExprKind::Path(Res::Builtin(Builtin::IntNeg)), range);
+                let callee = self.alloc(ExprKind::Path(Res::Function(self.lang.negate)), range);
                 let whole = range.cover(self.exprs[operand].range);
                 self.alloc(
                     ExprKind::Call {
@@ -140,83 +139,79 @@ impl BodyLowering<'_> {
         rhs: ExprId,
     ) -> ExprId {
         let range = self.exprs[lhs].range.cover(self.exprs[rhs].range);
-        // ユーザーの定義は Prelude の演算子を隠す。脱糖する演算子 (`&&` など) も同じで、定義すれば普通の呼び出しになる
-        // (docs/spec/declarations.md の「fixity」)
-        if let Some(callee) = self.user_operator(op, op_range) {
-            return self.alloc(
-                ExprKind::Call {
-                    callee,
-                    args: vec![lhs, rhs],
-                    evaluate_first: None,
-                },
-                range,
-            );
-        }
-        match op {
+        // 解決した先が Prelude の脱糖する演算子のときだけ脱糖する。ユーザーの定義は Prelude の演算子を隠すので、
+        // `&&` を定義すれば普通の呼び出しになる (docs/spec/declarations.md の「fixity」)
+        let res = match self.items.value(op) {
             // 短絡評価にするため `if` に脱糖する (docs/spec/declarations.md)
-            "&&" => {
+            Some(ValueItem::Function(id)) if id == self.lang.and => {
                 let otherwise = self.alloc(
                     ExprKind::Path(Res::Constructor(self.lang.false_ctor)),
                     op_range,
                 );
-                self.alloc(
+                return self.alloc(
                     ExprKind::If {
                         condition: lhs,
                         then_branch: rhs,
                         else_branch: Some(otherwise),
                     },
                     range,
-                )
+                );
             }
-            "||" => {
+            Some(ValueItem::Function(id)) if id == self.lang.or => {
                 let then = self.alloc(
                     ExprKind::Path(Res::Constructor(self.lang.true_ctor)),
                     op_range,
                 );
-                self.alloc(
+                return self.alloc(
                     ExprKind::If {
                         condition: lhs,
                         then_branch: then,
                         else_branch: Some(rhs),
                     },
                     range,
-                )
+                );
             }
-            "|>" => self.pipe(lhs, rhs, range),
-            "<|" => self.call(lhs, vec![rhs], None, range),
-            _ => {
-                let callee = match Builtin::binary_operator(op) {
-                    Some(builtin) => self.alloc(ExprKind::Path(Res::Builtin(builtin)), op_range),
-                    None if op == "::" => self.unsupported(op_range, "lists are not supported yet"),
-                    None => {
-                        self.diagnostics.push(Diagnostic::error(
-                            codes::UNDEFINED_NAME,
-                            format!("cannot find operator `{op}`"),
-                            Label::new(self.file, op_range, "not found in this scope"),
-                        ));
-                        self.alloc(ExprKind::Missing, op_range)
-                    }
-                };
-                self.alloc(
+            Some(ValueItem::Function(id)) if id == self.lang.pipe => {
+                return self.pipe(lhs, rhs, range);
+            }
+            Some(ValueItem::Function(id)) if id == self.lang.apply => {
+                return self.call(lhs, vec![rhs], None, range);
+            }
+            Some(ValueItem::Function(id)) => Some(Res::Function(id)),
+            Some(ValueItem::Constructor(ctor)) => Some(Res::Constructor(ctor)),
+            Some(ValueItem::Operation(operation)) => Some(Res::Operation(operation)),
+            Some(ValueItem::Unusable) => None,
+            None if op == "::" => {
+                let callee = self.unsupported(op_range, "lists are not supported yet");
+                return self.alloc(
                     ExprKind::Call {
                         callee,
                         args: vec![lhs, rhs],
                         evaluate_first: None,
                     },
                     range,
-                )
+                );
             }
-        }
-    }
-
-    /// ユーザーが定義した演算子 (関数と中置のコンストラクタ) の参照。
-    fn user_operator(&mut self, op: &str, op_range: TextRange) -> Option<ExprId> {
-        let res = match self.items.value(op)? {
-            ValueItem::Function(id) => Res::Function(id),
-            ValueItem::Constructor(ctor) => Res::Constructor(ctor),
-            ValueItem::Unusable => return Some(self.alloc(ExprKind::Missing, op_range)),
-            ValueItem::Operation(_) | ValueItem::Builtin(_) => return None,
+            None => {
+                self.diagnostics.push(Diagnostic::error(
+                    codes::UNDEFINED_NAME,
+                    format!("cannot find operator `{op}`"),
+                    Label::new(self.file, op_range, "not found in this scope"),
+                ));
+                None
+            }
         };
-        Some(self.alloc(ExprKind::Path(res), op_range))
+        let callee = match res {
+            Some(res) => self.alloc(ExprKind::Path(res), op_range),
+            None => self.alloc(ExprKind::Missing, op_range),
+        };
+        self.alloc(
+            ExprKind::Call {
+                callee,
+                args: vec![lhs, rhs],
+                evaluate_first: None,
+            },
+            range,
+        )
     }
 }

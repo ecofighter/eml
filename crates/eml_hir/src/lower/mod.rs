@@ -14,11 +14,10 @@ use eml_diagnostics::{Diagnostic, FileId, Label, TextRange};
 use eml_syntax::{SyntaxKind, SyntaxToken, ast};
 use la_arena::Arena;
 
-use crate::builtin::Assoc;
 use crate::codes;
 use crate::hir::*;
 use expr::BodyLowering;
-use scope::{Fixity, ItemScope, ValueItem};
+use scope::{Assoc, Fixity, ItemScope, ValueItem};
 use types::{TypeLowering, Vars};
 
 /// 同じ名前のシグネチャと等式。名前で対応づけてから、並び方を検査する (docs/spec/declarations.md)。
@@ -42,9 +41,9 @@ pub fn lower(file: FileId, source: &ast::SourceFile) -> (Module, Vec<Diagnostic>
     let mut effects = Arena::new();
     let mut operations = Arena::new();
     let builtin = scope::builtin_items(&mut types, &mut effects, &mut scope);
-    let builtins = prelude::lower_prelude(&mut scope, &mut types, &mut constructors);
+    let prelude = prelude::lower_prelude(&mut scope, &mut types, &mut constructors, &mut functions);
     // ユーザーの定義が `Bool`、`True`、`False` を隠す前に引く
-    let lang = scope::lang_items(builtin, &scope, &constructors);
+    let lang = scope::lang_items(builtin, &scope, &constructors, &prelude);
     // 型の名前空間のユーザーの名前。`data` とエフェクトの間の重複も見つける
     let mut type_names = HashMap::new();
     let data = data::declare_data(
@@ -177,6 +176,7 @@ pub fn lower(file: FileId, source: &ast::SourceFile) -> (Module, Vec<Diagnostic>
             equation_ranges: equations.iter().map(|(_, _, range)| *range).collect(),
             signature,
             body: None,
+            intrinsic: false,
         });
         if let Some(ValueItem::Operation(operation)) = scope.define_function(&name, id) {
             diagnostics.push(duplicate(
@@ -227,7 +227,6 @@ pub fn lower(file: FileId, source: &ast::SourceFile) -> (Module, Vec<Diagnostic>
             constructors,
             effects,
             operations,
-            builtins,
             lang,
         },
         diagnostics,

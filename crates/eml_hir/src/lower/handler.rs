@@ -5,7 +5,6 @@ use eml_diagnostics::{Diagnostic, Label, TextRange};
 use eml_syntax::{SyntaxToken, ast};
 
 use super::expr::BodyLowering;
-use crate::builtin::Builtin;
 use crate::codes;
 use crate::hir::*;
 
@@ -245,7 +244,11 @@ impl BodyLowering<'_> {
     fn unknown_operation(&mut self, name: &SyntaxToken) {
         let text = name.text();
         let range = name.text_range();
-        let diagnostic = if Builtin::from_name(text).is_some_and(Builtin::is_io_operation) {
+        let io = self
+            .items
+            .prelude_function(text)
+            .is_some_and(|id| self.lang.io_operations.contains(&id));
+        let diagnostic = if io {
             Diagnostic::error(
                 codes::UNHANDLEABLE_EFFECT,
                 "`IO` cannot be handled",

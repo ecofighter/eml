@@ -271,3 +271,16 @@ fn a_section_operand_that_binds_looser_needs_parentheses() {
         ]
     );
 }
+
+#[test]
+fn user_definitions_hide_prelude_operators_and_skip_desugaring() {
+    let text = "(&&) : Int -> Int -> Int\na && b = a\n(+) : Int -> Int -> Int\na + b = b\nf : Int\nf = 1 && 2 + 3";
+    insta::assert_snapshot!(lower_text(text), @"
+    && : Int -> Int -> Int
+    && a#0 b#1 = a#0
+    + : Int -> Int -> Int
+    + a#0 b#1 = b#1
+    f : Int
+    f = (@+ (@&& 1 2) 3)
+    ");
+}

@@ -1,6 +1,5 @@
 //! HIR のデータ構造と走査関数のテスト。
 
-use eml_hir::builtin::BUILTINS;
 use eml_hir::{Body, ExprId, ExprKind, Function, LineStart, LocalId, Module, PatKind, TypeRefKind};
 
 /// 診断がないことを確かめて HIR を返す。
@@ -119,11 +118,17 @@ fn a_lambda_captures_what_its_nested_lambdas_capture() {
 }
 
 #[test]
-fn the_prelude_has_a_signature_for_every_builtin_function() {
-    let module = module("");
-    for info in BUILTINS {
-        assert!(module.builtins.contains_key(&info.builtin), "{}", info.name);
+fn prelude_signatures_without_equations_are_intrinsic_functions() {
+    let module = module("f : Int\nf = 1");
+    for name in ["println", "show_int", "negate", "+", "==", ">>", "&&", "|>"] {
+        let function = function(&module, name);
+        assert!(function.intrinsic, "{name}");
+        assert!(function.signature.is_some(), "{name}");
+        assert!(function.body.is_none(), "{name}");
     }
+    assert!(!function(&module, "f").intrinsic);
+    assert_eq!(function(&module, "+").arity(), Some(2));
+    assert_eq!(function(&module, ">>").arity(), Some(3));
 }
 
 #[test]

@@ -1,9 +1,7 @@
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeSet, HashSet};
 
 use eml_diagnostics::{FileId, TextRange, TextSize};
 use la_arena::{Arena, Idx};
-
-use crate::builtin::Builtin;
 
 pub type FunctionId = Idx<Function>;
 pub type ExprId = Idx<Expr>;
@@ -26,8 +24,6 @@ pub struct Module {
     pub effects: Arena<EffectDef>,
     /// エフェクトの操作。値の名前空間に置くトップレベルの値である (docs/spec/modules.md の「名前空間」)。
     pub operations: Arena<Operation>,
-    /// Prelude の組み込みのシグネチャ。
-    pub builtins: HashMap<Builtin, Signature>,
     pub lang: LangItems,
 }
 
@@ -122,6 +118,20 @@ pub struct LangItems {
     /// Prelude のものを指す。
     pub true_ctor: ConstructorId,
     pub false_ctor: ConstructorId,
+    /// 前置の `-` の脱糖が呼ぶ。Prelude で `pub` にしないので、ユーザーは名前で書けない。
+    pub negate: FunctionId,
+    /// `==` と `!=`。型検査が引数の型から比べ方を決める (docs/spec/declarations.md の標準の演算子の表)。
+    pub eq: FunctionId,
+    pub ne: FunctionId,
+    /// HIR が脱糖する演算子 `&&`、`||`、`|>`、`<|`。ユーザーが同じ演算子を定義すれば、それに解決して普通の呼び出しに
+    /// なる。
+    pub and: FunctionId,
+    pub or: FunctionId,
+    pub pipe: FunctionId,
+    pub apply: FunctionId,
+    /// 組み込みの `IO` の操作 (`println`、`open`、`read_all`、`close`)。R7d で Prelude の `effect IO` の操作になる
+    /// まで、handler の節の E1009 がこれを引く。
+    pub io_operations: [FunctionId; 4],
 }
 
 #[derive(Debug)]
@@ -138,6 +148,19 @@ pub struct Function {
     pub signature: Option<Signature>,
     /// 等式がなければ `None` で、E1005 は報告済み。
     pub body: Option<Body>,
+    /// Prelude の等式のないシグネチャ。実装は Core IR が名前から引く。
+    pub intrinsic: bool,
+}
+
+impl Function {
+    /// 引数がそろうまで本体が動かない引数の数。intrinsic はシグネチャの一番外側の `->` の数、ほかは等式の引数の数
+    /// である。本体のない関数 (E1005) は `None`。
+    pub fn arity(&self) -> Option<usize> {
+        if self.intrinsic {
+            return self.signature.as_ref().map(Signature::arity);
+        }
+        self.body.as_ref().map(|body| body.params.len())
+    }
 }
 
 pub type TypeVarId = Idx<TypeVarDecl>;
@@ -166,6 +189,19 @@ pub struct Signature {
     /// シグネチャの型の注釈。
     pub types: Arena<TypeRef>,
     pub generics: Generics,
+}
+
+impl Signature {
+    /// 一番外側の `->` の数。
+    pub fn arity(&self) -> usize {
+        let mut arity = 0;
+        let mut id = self.ty;
+        while let TypeRefKind::Fn { ret, .. } = &self.types[id].kind {
+            arity += 1;
+            id = *ret;
+        }
+        arity
+    }
 }
 
 /// 型変数と row 変数の表。関数と操作のシグネチャ、エフェクトと `data` の宣言が持つ。
@@ -526,7 +562,6 @@ pub enum Res {
     Function(FunctionId),
     Operation(OperationId),
     Constructor(ConstructorId),
-    Builtin(Builtin),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -1,40 +1,47 @@
 -- 組み込みの型 `Bool` と、関数と演算子のシグネチャ。型は docs/spec/declarations.md の標準の演算子の表と、
--- docs/spec/effects.md の組み込みの IO に従う。関数の名前と見え方と引数の数は eml_hir::builtin::BUILTINS にある。
--- 標準の演算子の fixity (docs/spec/declarations.md の表)。`&&`、`||`、`|>`、`<|` はシグネチャがなく HIR で脱糖し、
--- `::` は S2 のリストの演算子だが、fixity は Prelude の中でだけ宣言できる。
-infixr 0 <|
-infixl 1 |>
-infixr 2 ||
-infixr 3 &&
-infix 4 ==, !=, <, <=, >, >=
-infixr 5 ++, ::
-infixl 6 +, -
-infixl 7 *, /, %
-infixr 9 >>, <<
+-- docs/spec/effects.md の組み込みの IO に従う。`pub` がユーザーからの見え方を決める。等式のないシグネチャは intrinsic で、
+-- 実装は eml_core_ir が名前から引く。
+-- 標準の演算子の fixity (docs/spec/declarations.md の表)。`::` は S2 のリストの演算子で、まだ定義がないが、fixity は
+-- Prelude の中でだけ宣言できる。
+pub infixr 0 <|
+pub infixl 1 |>
+pub infixr 2 ||
+pub infixr 3 &&
+pub infix 4 ==, !=, <, <=, >, >=
+pub infixr 5 ++, ::
+pub infixl 6 +, -
+pub infixl 7 *, /, %
+pub infixr 9 >>, <<
 
-data Bool =
+pub data Bool =
   | False
   | True
 
-println : String -> <IO> Unit
-open : String -> <IO> File
-read_all : File -> <IO> (File, String)
-close : File -> <IO> Unit
-show_int : Int -> String
-not : Bool -> Bool
+pub println : String -> <IO> Unit
+pub open : String -> <IO> File
+pub read_all : File -> <IO> (File, String)
+pub close : File -> <IO> Unit
+pub show_int : Int -> String
+pub not : Bool -> Bool
+-- 前置の `-` の脱糖が呼ぶ。`pub` でないので、ユーザーは名前で書けない
 negate : Int -> Int
-(+) : Int -> Int -> Int
-(-) : Int -> Int -> Int
-(*) : Int -> Int -> Int
-(/) : Int -> Int -> Int
-(%) : Int -> Int -> Int
+pub (+) : Int -> Int -> Int
+pub (-) : Int -> Int -> Int
+pub (*) : Int -> Int -> Int
+pub (/) : Int -> Int -> Int
+pub (%) : Int -> Int -> Int
 -- `==` と `!=` で比べられるのは `Int`、`String`、`Bool` で、どれで比べるかは型検査が引数の型から決める
-(==) : a -> a -> Bool
-(!=) : a -> a -> Bool
-(<) : Int -> Int -> Bool
-(<=) : Int -> Int -> Bool
-(>) : Int -> Int -> Bool
-(>=) : Int -> Int -> Bool
-(++) : String -> String -> String
-(>>) : (a -> <e> b) -> (b -> <e> c) -> a -> <e> c
-(<<) : (b -> <e> c) -> (a -> <e> b) -> a -> <e> c
+pub (==) : a -> a -> Bool
+pub (!=) : a -> a -> Bool
+pub (<) : Int -> Int -> Bool
+pub (<=) : Int -> Int -> Bool
+pub (>) : Int -> Int -> Bool
+pub (>=) : Int -> Int -> Bool
+pub (++) : String -> String -> String
+pub (>>) : (a -> <e> b) -> (b -> <e> c) -> a -> <e> c
+pub (<<) : (b -> <e> c) -> (a -> <e> b) -> a -> <e> c
+-- HIR が脱糖する演算子。ユーザーが同じ演算子を定義すれば、普通の呼び出しになる
+pub (&&) : Bool -> Bool -> Bool
+pub (||) : Bool -> Bool -> Bool
+pub (|>) : a -> (a -> <e> b) -> <e> b
+pub (<|) : (a -> <e> b) -> a -> <e> b

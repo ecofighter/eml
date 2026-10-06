@@ -862,3 +862,15 @@ fn a_linear_state_does_not_cross_the_multi_operation_the_handler_handles() {
     let checked = check(&text);
     insta::assert_snapshot!(full(&checked.files, &checked.diagnostics), @"");
 }
+
+#[test]
+fn a_partial_application_of_an_intrinsic_keeps_a_captured_linear_value() {
+    // 部分適用した `>>` は、それまでの引数を捕まえる (docs/spec/types.md の「関数型」)。intrinsic の関数の Kind の
+    // スキームが、本体のない関数の空のスキームで上書きされると、この誤りが通ってしまう
+    let text = "twice : File -> <IO> Unit\ntwice h =\n  let g = (fn u -> close h) >> (fn u -> u)\n  g ()\n  g ()";
+    let checked = eml_test_support::check(text);
+    assert_eq!(
+        eml_test_support::short(&checked.files, &checked.diagnostics),
+        ["E3002 5:3 `g` must be used exactly once, but it is used more than once"]
+    );
+}

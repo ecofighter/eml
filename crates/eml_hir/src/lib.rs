@@ -1,6 +1,5 @@
 //! CST から HIR への変換と名前解決 (docs/implementation/architecture.md の「`eml_hir` で行う脱糖と検査」)。
 
-pub mod builtin;
 mod eval;
 mod hir;
 mod lower;
@@ -10,6 +9,9 @@ pub use eval::{EvalStep, call_steps, is_value, known_arity};
 pub use hir::*;
 pub use lower::lower;
 pub use pretty::pretty;
+
+/// Prelude のソース。HIR の変換が読み、Core IR の intrinsic の表のテストも読む。
+pub const PRELUDE_SOURCE: &str = include_str!("prelude.em");
 
 pub mod codes {
     use eml_diagnostics::ErrorCode;

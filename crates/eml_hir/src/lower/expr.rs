@@ -2,11 +2,11 @@ use eml_diagnostics::{Diagnostic, FileId, Label, TextRange};
 use eml_syntax::{SyntaxKind, SyntaxToken, ast};
 use la_arena::Arena;
 
+use super::scope::Assoc;
 use super::scope::Fixity;
 use super::scope::{ItemScope, ValueItem};
 use super::types::{TypeLowering, Vars};
 use super::{PathName, path_name};
-use crate::builtin::Assoc;
 use crate::codes;
 use crate::hir::*;
 
@@ -321,7 +321,6 @@ impl<'a> BodyLowering<'a> {
                     ValueItem::Function(id) => Some(Res::Function(id)),
                     ValueItem::Operation(id) => Some(Res::Operation(id)),
                     ValueItem::Constructor(id) => Some(Res::Constructor(id)),
-                    ValueItem::Builtin(builtin) => Some(Res::Builtin(builtin)),
                     ValueItem::Unusable => None,
                 })
             });

@@ -1,4 +1,4 @@
-//! トップレベルの名前の解決。名前空間は、値 (関数、組み込みの値) と型 (型名とエフェクト名) の2つである
+//! トップレベルの名前の解決。名前空間は、値 (関数、操作、コンストラクタ) と型 (型名とエフェクト名) の2つである
 //! (docs/spec/modules.md の「名前空間」)。
 
 use std::collections::HashMap;
@@ -7,11 +7,18 @@ use la_arena::Arena;
 
 use eml_diagnostics::TextRange;
 
-use crate::builtin::{Assoc, Builtin};
 use crate::hir::{
     Constructor, ConstructorId, EffectDef, EffectId, FunctionId, Generics, LangItems, OperationId,
     TypeDef, TypeDefId,
 };
+
+/// 演算子の結合の向き (docs/spec/declarations.md の「fixity」)。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Assoc {
+    Left,
+    Right,
+    None,
+}
 
 /// 演算子の優先順位と結合 (docs/spec/declarations.md の「fixity」)。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -33,7 +40,6 @@ pub(super) enum ValueItem {
     Function(FunctionId),
     Operation(OperationId),
     Constructor(ConstructorId),
-    Builtin(Builtin),
     /// 重複した `data` の型 (E1003) のコンストラクタ。使っても診断を足さない。
     Unusable,
 }
@@ -44,8 +50,8 @@ pub(super) enum TypeItem {
     Effect(EffectId),
 }
 
-/// 組み込みは名前解決の最も外側のスコープで、ユーザーの定義で隠せる。そのため、ユーザーの定義を先に引き、
-/// なければ組み込みを引く。
+/// Prelude の `pub` の関数は名前解決の最も外側のスコープで、ユーザーの定義で隠せる。そのため、ユーザーの定義を
+/// 先に引き、なければ Prelude の関数を引く。
 #[derive(Debug, Default)]
 pub(super) struct ItemScope {
     /// ユーザーが定義した値 (関数、操作、コンストラクタ)。
@@ -55,6 +61,8 @@ pub(super) struct ItemScope {
     effect_params: HashMap<EffectId, usize>,
     /// 型の型引数の個数。型の適用の型引数の個数を確かめるのに使う (E1015)。
     type_params: HashMap<TypeDefId, usize>,
+    /// Prelude の `pub` の関数。ユーザーの定義が隠せるように、`values` の後で引く。
+    prelude_functions: HashMap<String, FunctionId>,
     /// Prelude の演算子の fixity。
     prelude_fixities: HashMap<String, Fixity>,
     /// ユーザーが宣言した fixity と、宣言の演算子の位置。
@@ -119,11 +127,20 @@ impl ItemScope {
         self.effect_params.get(&id).copied().unwrap_or(0)
     }
 
+    pub(super) fn define_prelude_function(&mut self, name: &str, id: FunctionId) {
+        self.prelude_functions.insert(name.to_string(), id);
+    }
+
+    /// Prelude の `pub` の関数。ユーザーの定義に隠されていても引く。
+    pub(super) fn prelude_function(&self, name: &str) -> Option<FunctionId> {
+        self.prelude_functions.get(name).copied()
+    }
+
     pub(super) fn value(&self, name: &str) -> Option<ValueItem> {
         self.values
             .get(name)
             .copied()
-            .or_else(|| Builtin::from_name(name).map(ValueItem::Builtin))
+            .or_else(|| self.prelude_function(name).map(ValueItem::Function))
     }
 
     /// handler の節の先頭の名前は、エフェクトの操作だけから引く (docs/spec/modules.md の「名前の解決」)。
@@ -219,6 +236,7 @@ pub(super) fn lang_items(
     builtin: BuiltinItems,
     scope: &ItemScope,
     constructors: &Arena<Constructor>,
+    prelude: &HashMap<String, FunctionId>,
 ) -> LangItems {
     let Some(TypeItem::Type(bool)) = scope.type_item("Bool") else {
         unreachable!("the Prelude declares `Bool`");
@@ -233,6 +251,10 @@ pub(super) fn lang_items(
         (constructors[false_ctor].tag, constructors[true_ctor].tag),
         (0, 1)
     );
+    let function = |name: &str| match prelude.get(name) {
+        Some(&id) => id,
+        None => unreachable!("the Prelude declares `{name}`"),
+    };
     LangItems {
         int: builtin.int,
         string: builtin.string,
@@ -242,6 +264,14 @@ pub(super) fn lang_items(
         io: builtin.io,
         true_ctor,
         false_ctor,
+        negate: function("negate"),
+        eq: function("=="),
+        ne: function("!="),
+        and: function("&&"),
+        or: function("||"),
+        pipe: function("|>"),
+        apply: function("<|"),
+        io_operations: ["println", "open", "read_all", "close"].map(function),
     }
 }
 
@@ -251,20 +281,26 @@ mod tests {
     use crate::hir::Function;
 
     #[test]
-    fn user_functions_shadow_builtins() {
+    fn user_functions_shadow_prelude_functions() {
         let mut functions: Arena<Function> = Arena::new();
-        let id = functions.alloc(Function {
-            name: "not".to_string(),
-            name_range: Default::default(),
-            signature_name_range: None,
-            equation_ranges: Vec::new(),
-            signature: None,
-            body: None,
-        });
+        let mut function = |name: &str| {
+            functions.alloc(Function {
+                name: name.to_string(),
+                name_range: Default::default(),
+                signature_name_range: None,
+                equation_ranges: Vec::new(),
+                signature: None,
+                body: None,
+                intrinsic: false,
+            })
+        };
+        let (prelude, user) = (function("not"), function("not"));
         let mut scope = ItemScope::new();
-        assert_eq!(scope.value("not"), Some(ValueItem::Builtin(Builtin::Not)));
-        scope.define_function("not", id);
-        assert_eq!(scope.value("not"), Some(ValueItem::Function(id)));
+        scope.define_prelude_function("not", prelude);
+        assert_eq!(scope.value("not"), Some(ValueItem::Function(prelude)));
+        scope.define_function("not", user);
+        assert_eq!(scope.value("not"), Some(ValueItem::Function(user)));
+        assert_eq!(scope.prelude_function("not"), Some(prelude));
         assert_eq!(scope.value("nope"), None);
     }
 
