@@ -116,54 +116,42 @@ impl Table<'_> {
         let mut mult = Vec::new();
         let mut work = vec![ty];
         while let Some(ty) = work.pop() {
-            match self.shape(ty) {
+            let shape = self.shape(ty);
+            match shape {
                 TyShape::Rigid(rigid) => push_unique(&mut lin, self.rigid_linearity(*rigid)),
                 TyShape::Fn {
-                    param,
+                    param: _,
                     lin: m,
                     row,
-                    ret,
+                    ret: _,
+                }
+                | TyShape::Cont {
+                    arg: _,
+                    lin: m,
+                    row,
+                    ret: _,
                 } => {
                     if let ArrowLin::Var(v) = m {
                         push_unique(&mut lin, *v);
                     }
-                    let row = self.resolve_row(row);
-                    if let Tail::Var(tail) = row.tail
+                    if let Tail::Var(tail) = self.resolve_row(row).tail
                         && self.is_rigid_row(tail)
                     {
                         push_unique(&mut mult, self.row_multiplicity_var(tail));
                     }
-                    work.push(*ret);
-                    for label in row.labels.iter().rev() {
-                        work.extend(label.args.iter().rev().copied());
-                    }
-                    work.push(*param);
                 }
-                TyShape::Cont {
-                    arg,
-                    lin: m,
-                    row,
-                    ret,
-                } => {
-                    if let ArrowLin::Var(v) = m {
-                        push_unique(&mut lin, *v);
-                    }
-                    let row = self.resolve_row(row);
-                    if let Tail::Var(tail) = row.tail
-                        && self.is_rigid_row(tail)
-                    {
-                        push_unique(&mut mult, self.row_multiplicity_var(tail));
-                    }
-                    work.push(*ret);
-                    for label in row.labels.iter().rev() {
-                        work.extend(label.args.iter().rev().copied());
-                    }
-                    work.push(*arg);
-                }
-                TyShape::Record(fields) => work.extend(fields.iter().rev().map(|(_, f)| *f)),
-                TyShape::Con(_, args) => work.extend(args.iter().rev().copied()),
-                TyShape::Var(_) | TyShape::Error => {}
+                TyShape::Con(_, _) | TyShape::Record(_) | TyShape::Var(_) | TyShape::Error => {}
             }
+            let mut children = Vec::new();
+            shape.for_each_child(|child| match child {
+                Child::Ty(child) => children.push(child),
+                Child::Row(row) => {
+                    for label in self.resolve_row(row).labels {
+                        children.extend(label.args);
+                    }
+                }
+            });
+            work.extend(children.into_iter().rev());
         }
         (lin, mult)
     }

@@ -289,6 +289,36 @@ pub(crate) enum ShapeTy {
     Error,
 }
 
+/// 閉じた形の直接の子。
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum ShapeChild<'a> {
+    Ty(&'a ShapeTy),
+    Row(&'a ShapeRow),
+}
+
+impl ShapeTy {
+    /// 直接の子を、引数、row、戻り値の順に `f` に渡す。`..` を使わずにすべての欄を名前で受ける。
+    pub fn for_each_child<'a>(&'a self, mut f: impl FnMut(ShapeChild<'a>)) {
+        match self {
+            ShapeTy::Con(_, args) => args.iter().for_each(|arg| f(ShapeChild::Ty(arg))),
+            ShapeTy::Record(fields) => fields
+                .iter()
+                .for_each(|(_, field)| f(ShapeChild::Ty(field))),
+            ShapeTy::Fn {
+                param,
+                lin: _,
+                row,
+                ret,
+            } => {
+                f(ShapeChild::Ty(param));
+                f(ShapeChild::Row(row));
+                f(ShapeChild::Ty(ret));
+            }
+            ShapeTy::Rigid(_) | ShapeTy::Error => {}
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ShapeLin {
     Known(Linearity),
@@ -606,36 +636,25 @@ impl Shape {
                     .or_insert_with(|| Type::Rigid(name.clone()));
             }
             ShapeTy::Fn {
-                param,
-                lin,
-                row,
-                ret,
+                lin: ShapeLin::Var(v),
+                ..
             } => {
-                if let ShapeLin::Var(v) = lin {
-                    names
-                        .entry(*v)
-                        .or_insert_with(|| self.export_ty(ty, context));
-                }
-                self.collect_names(param, context, names);
+                names
+                    .entry(*v)
+                    .or_insert_with(|| self.export_ty(ty, context));
+            }
+            _ => {}
+        }
+        ty.for_each_child(|child| match child {
+            ShapeChild::Ty(child) => self.collect_names(child, context, names),
+            ShapeChild::Row(row) => {
                 for (_, args) in &row.labels {
                     for arg in args {
                         self.collect_names(arg, context, names);
                     }
                 }
-                self.collect_names(ret, context, names);
             }
-            ShapeTy::Record(fields) => {
-                for (_, field) in fields {
-                    self.collect_names(field, context, names);
-                }
-            }
-            ShapeTy::Con(_, args) => {
-                for arg in args {
-                    self.collect_names(arg, context, names);
-                }
-            }
-            ShapeTy::Error => {}
-        }
+        });
     }
 
     /// 多重度の Kind 変数の表示名。rigid な row 変数の `σ` はその名前で呼ぶ。

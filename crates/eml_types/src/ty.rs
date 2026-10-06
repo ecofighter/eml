@@ -80,47 +80,79 @@ pub enum RowTail {
     Error,
 }
 
+/// 書き出す型の直接の子。row の末尾も、`Error` を含むかを見るために子として渡す。
+#[derive(Debug, Clone, Copy)]
+pub enum TypeChild<'a> {
+    Type(&'a Type),
+    Tail(Option<&'a RowTail>),
+}
+
 impl Type {
     pub fn unit() -> Type {
         Type::Record(Vec::new())
     }
 
-    pub fn contains_error(&self) -> bool {
+    /// 直接の子を、引数、row のラベルの型引数、row の末尾、戻り値の順に `f` に渡す。欄を足したときに直し忘れないよう、
+    /// `..` を使わずにすべての欄を名前で受ける。
+    pub fn for_each_child<'a>(&'a self, mut f: impl FnMut(TypeChild<'a>)) {
         match self {
-            Type::Error => true,
-            Type::Record(fields) => fields.iter().any(|(_, ty)| ty.contains_error()),
+            Type::Con {
+                id: _,
+                name: _,
+                args,
+            } => args.iter().for_each(|arg| f(TypeChild::Type(arg))),
+            Type::Record(fields) => fields
+                .iter()
+                .for_each(|(_, field)| f(TypeChild::Type(field))),
             Type::Fn {
                 param,
                 effects,
                 tail,
                 ret,
-                ..
             } => {
-                param.contains_error()
-                    || ret.contains_error()
-                    || effects
-                        .iter()
-                        .any(|e| e.args.iter().any(Type::contains_error))
-                    || matches!(tail, Some(RowTail::Error))
+                f(TypeChild::Type(param));
+                row_children(effects, tail, &mut f);
+                f(TypeChild::Type(ret));
             }
             Type::Cont {
                 arg,
                 ret,
                 effects,
                 tail,
-                ..
             } => {
-                arg.contains_error()
-                    || ret.contains_error()
-                    || effects
-                        .iter()
-                        .any(|e| e.args.iter().any(Type::contains_error))
-                    || matches!(tail, Some(RowTail::Error))
+                f(TypeChild::Type(arg));
+                row_children(effects, tail, &mut f);
+                f(TypeChild::Type(ret));
             }
-            Type::Con { args, .. } => args.iter().any(Type::contains_error),
-            Type::Rigid(_) | Type::Flexible => false,
+            Type::Rigid(_) | Type::Flexible | Type::Error => {}
         }
     }
+
+    pub fn contains_error(&self) -> bool {
+        if let Type::Error = self {
+            return true;
+        }
+        let mut found = false;
+        self.for_each_child(|child| {
+            found = found
+                || match child {
+                    TypeChild::Type(ty) => ty.contains_error(),
+                    TypeChild::Tail(tail) => matches!(tail, Some(RowTail::Error)),
+                };
+        });
+        found
+    }
+}
+
+fn row_children<'a>(
+    effects: &'a [EffectLabel],
+    tail: &'a Option<RowTail>,
+    f: &mut impl FnMut(TypeChild<'a>),
+) {
+    for label in effects {
+        label.args.iter().for_each(|arg| f(TypeChild::Type(arg)));
+    }
+    f(TypeChild::Tail(tail.as_ref()));
 }
 
 impl fmt::Display for Type {

@@ -85,29 +85,18 @@ impl Table<'_> {
     }
 
     fn occurs(&self, var: TyVar, ty: Ty) -> bool {
-        match self.shape(ty) {
-            TyShape::Var(other) => *other == var,
-            TyShape::Record(fields) => fields.iter().any(|(_, field)| self.occurs(var, *field)),
-            TyShape::Fn {
-                param, row, ret, ..
-            }
-            | TyShape::Cont {
-                arg: param,
-                row,
-                ret,
-                ..
-            } => {
-                self.occurs(var, *param)
-                    || self.occurs(var, *ret)
-                    || self
-                        .resolve_row(row)
-                        .labels
-                        .iter()
-                        .any(|label| label.args.iter().any(|&arg| self.occurs(var, arg)))
-            }
-            TyShape::Con(_, args) => args.iter().any(|arg| self.occurs(var, *arg)),
-            TyShape::Rigid(_) | TyShape::Error => false,
+        let shape = self.shape(ty);
+        if let TyShape::Var(other) = shape {
+            return *other == var;
         }
+        shape.any_child(|child| match child {
+            Child::Ty(child) => self.occurs(var, child),
+            Child::Row(row) => self
+                .resolve_row(row)
+                .labels
+                .iter()
+                .any(|label| label.args.iter().any(|&arg| self.occurs(var, arg))),
+        })
     }
 
     fn unify_arrow_lin(&mut self, a: ArrowLin, b: ArrowLin) -> Result<(), UnifyError> {

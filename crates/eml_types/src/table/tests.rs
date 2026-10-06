@@ -488,3 +488,22 @@ fn an_infinite_label_argument_is_not_an_argument_mismatch() {
         Err(UnifyError::Occurs)
     );
 }
+
+#[test]
+fn children_of_arrows_are_the_parameter_the_row_and_the_result() {
+    let context = test_context();
+    let mut table = Table::new(&context);
+    let int = table.int;
+    let string = table.string;
+    let function = table.function(int, Row::pure(), string);
+    let mut seen = Vec::new();
+    table.shape(function).for_each_child(|child| {
+        seen.push(match child {
+            Child::Ty(ty) if ty == int => "param",
+            Child::Ty(ty) if ty == string => "ret",
+            Child::Ty(_) => "other",
+            Child::Row(_) => "row",
+        })
+    });
+    assert_eq!(seen, ["param", "row", "ret"]);
+}

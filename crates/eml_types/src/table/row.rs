@@ -183,26 +183,10 @@ impl Table<'_> {
     }
 
     fn row_occurs_in(&self, var: RowVar, ty: Ty) -> bool {
-        match self.shape(ty) {
-            TyShape::Record(fields) => fields
-                .iter()
-                .any(|(_, field)| self.row_occurs_in(var, *field)),
-            TyShape::Fn {
-                param, row, ret, ..
-            }
-            | TyShape::Cont {
-                arg: param,
-                row,
-                ret,
-                ..
-            } => {
-                self.row_occurs_in(var, *param)
-                    || self.row_occurs_in(var, *ret)
-                    || self.row_occurs(var, row)
-            }
-            TyShape::Con(_, args) => args.iter().any(|arg| self.row_occurs_in(var, *arg)),
-            TyShape::Var(_) | TyShape::Rigid(_) | TyShape::Error => false,
-        }
+        self.shape(ty).any_child(|child| match child {
+            Child::Ty(child) => self.row_occurs_in(var, child),
+            Child::Row(row) => self.row_occurs(var, row),
+        })
     }
 
     /// 呼び出し先の row `callee` のエフェクトが、今の row `ambient` にすべて含まれることを確かめる

@@ -109,6 +109,56 @@ pub(crate) enum TyShape {
     Error,
 }
 
+/// 型の直接の子。
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum Child<'a> {
+    Ty(Ty),
+    Row(&'a Row),
+}
+
+impl TyShape {
+    /// 直接の子を、引数、row、戻り値の順に `f` に渡す。型の木をたどる処理はすべてここを通す。欄を足したときに直し忘れ
+    /// ないよう、`..` を使わずにすべての欄を名前で受ける。矢印の線形性は Kind なので子に含めない。
+    pub fn for_each_child<'a>(&'a self, mut f: impl FnMut(Child<'a>)) {
+        match self {
+            TyShape::Con(_, args) => args.iter().for_each(|&arg| f(Child::Ty(arg))),
+            TyShape::Record(fields) => fields.iter().for_each(|(_, field)| f(Child::Ty(*field))),
+            TyShape::Fn {
+                param,
+                lin: _,
+                row,
+                ret,
+            } => {
+                f(Child::Ty(*param));
+                f(Child::Row(row));
+                f(Child::Ty(*ret));
+            }
+            TyShape::Cont {
+                arg,
+                lin: _,
+                row,
+                ret,
+            } => {
+                f(Child::Ty(*arg));
+                f(Child::Row(row));
+                f(Child::Ty(*ret));
+            }
+            TyShape::Var(_) | TyShape::Rigid(_) | TyShape::Error => {}
+        }
+    }
+
+    /// `f` が真を返す子があるか。見つけたら残りの子を見ない。
+    pub fn any_child<'a>(&'a self, mut f: impl FnMut(Child<'a>) -> bool) -> bool {
+        let mut found = false;
+        self.for_each_child(|child| {
+            if !found {
+                found = f(child);
+            }
+        });
+        found
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum UnifyError {
     Mismatch,
