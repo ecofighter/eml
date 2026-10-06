@@ -97,6 +97,9 @@ ast_node! {
     EffectItem => EFFECT_ITEM,
     OpDecl => OP_DECL,
     FixityItem => FIXITY_ITEM,
+    ImportItem => IMPORT_ITEM,
+    ImportList => IMPORT_LIST,
+    ImportName => IMPORT_NAME,
     Block => BLOCK,
     LetStmt => LET_STMT,
     UseStmt => USE_STMT,
@@ -144,7 +147,7 @@ ast_node! {
 }
 
 ast_enum! {
-    Item { Signature, Equation, DataItem, TypeItem, EffectItem, FixityItem }
+    Item { Signature, Equation, DataItem, TypeItem, EffectItem, FixityItem, ImportItem }
 }
 
 ast_enum! {
@@ -852,6 +855,48 @@ fn operator_token(node: &SyntaxNode) -> Option<SyntaxToken> {
     node.children_with_tokens()
         .filter_map(NodeOrToken::into_token)
         .find(|token| is_operator(token.kind()))
+}
+
+impl ImportItem {
+    pub fn import_keyword(&self) -> Option<SyntaxToken> {
+        support::token(&self.syntax, SyntaxKind::IMPORT_KW)
+    }
+
+    pub fn path(&self) -> Option<Path> {
+        support::child(&self.syntax)
+    }
+
+    /// `as X` の `X`。
+    pub fn alias(&self) -> Option<Name> {
+        support::child(&self.syntax)
+    }
+
+    pub fn list(&self) -> Option<ImportList> {
+        support::child(&self.syntax)
+    }
+}
+
+impl ImportList {
+    pub fn names(&self) -> AstChildren<ImportName> {
+        support::children(&self.syntax)
+    }
+}
+
+impl ImportName {
+    /// `parse`、`Style`。`(+)` の形では `None`。
+    pub fn name(&self) -> Option<NameRef> {
+        support::child(&self.syntax)
+    }
+
+    /// `(+)` の演算子。
+    pub fn operator(&self) -> Option<SyntaxToken> {
+        operator_token(&self.syntax)
+    }
+
+    /// `Style(..)` の形か。
+    pub fn all_constructors(&self) -> bool {
+        support::token(&self.syntax, SyntaxKind::DOT2).is_some()
+    }
 }
 
 impl OpRef {

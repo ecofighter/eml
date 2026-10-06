@@ -259,11 +259,66 @@ fn fixity_item(p: &mut Parser, m: Marker) {
     m.complete(p, FIXITY_ITEM);
 }
 
-/// S2 で実装する。今は E0004 を出して次の項目まで読み飛ばす。
+/// import_item ::= 'import' modpath ('as' UIDENT)? ('(' list(import_name) ')')?
+/// import は S2 で実装する。CST まで組み、E0004 は HIR が出す (docs/spec/grammar.md の「実装の段階」)。
 fn import_item(p: &mut Parser, m: Marker) {
-    not_yet_supported(p, "`import` is not supported yet");
-    skip_to_sep(p, false);
-    m.complete(p, ERROR);
+    p.bump(IMPORT_KW);
+    if p.at(UIDENT) {
+        qcon(p);
+    } else {
+        expected(p, "a module name");
+    }
+    if p.eat(AS_KW) {
+        expect_name(p, UIDENT);
+    }
+    if p.at(L_PAREN) {
+        import_list(p);
+    }
+    m.complete(p, IMPORT_ITEM);
+}
+
+fn import_list(p: &mut Parser) {
+    let m = p.start();
+    p.bump(L_PAREN);
+    // 閉じ括弧がないまま行が終わったときは、`close_bracket` に1件だけ報告させる (末尾の `,` は許す)
+    while !p.at(R_PAREN) && !p.current().is_virtual() && !p.at_eof() {
+        if !import_name(p) {
+            expected(p, "a name to import");
+            break;
+        }
+        if !p.eat(COMMA) {
+            break;
+        }
+    }
+    close_bracket(p, R_PAREN);
+    m.complete(p, IMPORT_LIST);
+}
+
+/// import_name ::= LIDENT | '(' OP ')' | UIDENT ('(' '..' ')')?
+fn import_name(p: &mut Parser) -> bool {
+    let m = p.start();
+    match p.current() {
+        LIDENT => name_ref(p),
+        UIDENT => {
+            name_ref(p);
+            if p.at(L_PAREN) && p.nth(1) == DOT2 && p.nth(2) == R_PAREN {
+                p.bump(L_PAREN);
+                p.bump(DOT2);
+                p.bump(R_PAREN);
+            }
+        }
+        L_PAREN if matches!(p.nth(1), OP | MINUS | CONOP) && p.nth(2) == R_PAREN => {
+            p.bump(L_PAREN);
+            p.bump_any();
+            p.bump(R_PAREN);
+        }
+        _ => {
+            m.abandon(p);
+            return false;
+        }
+    }
+    m.complete(p, IMPORT_NAME);
+    true
 }
 
 fn reserved_item(p: &mut Parser, m: Marker) {

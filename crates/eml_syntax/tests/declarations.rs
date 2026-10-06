@@ -246,14 +246,17 @@ fn pub_and_type_are_parsed_but_not_supported_yet() {
 }
 
 #[test]
-fn import_and_records_are_skipped_as_not_supported_yet() {
+fn import_is_parsed_and_records_are_skipped() {
     insta::assert_snapshot!(shape("import Report.Csv\nt : { name : String }"), @r#"
     SOURCE_FILE
-      ERROR
+      IMPORT_ITEM
         IMPORT_KW "import"
-        UIDENT "Report"
-        DOT "."
-        UIDENT "Csv"
+        PATH
+          NAME_REF
+            UIDENT "Report"
+          DOT "."
+          NAME_REF
+            UIDENT "Csv"
       SIGNATURE
         NAME
           LIDENT "t"
@@ -265,7 +268,6 @@ fn import_and_records_are_skipped_as_not_supported_yet() {
           UIDENT "String"
           R_BRACE "}"
     ---
-    E0004 1:1 `import` is not supported yet
     E0004 2:5 records are not supported yet
     "#);
 }

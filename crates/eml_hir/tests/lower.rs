@@ -307,3 +307,26 @@ fn minus_is_defined_by_its_name_token() {
     f = (@- 3 1)
     ");
 }
+
+#[test]
+fn imports_are_not_supported_yet() {
+    // パーサは import を CST まで組み、HIR が E0004 を出す (docs/spec/grammar.md の「実装の段階」)
+    assert_eq!(
+        diagnostics("import Report.Csv (parse)\nimport M\nf : Int\nf = 1"),
+        [
+            "E0004 1:1 `import` is not supported yet",
+            "E0004 2:1 `import` is not supported yet",
+        ]
+    );
+}
+
+#[test]
+fn an_unfinished_import_is_reported_once_by_each_stage() {
+    assert_eq!(
+        diagnostics("import M (a,\nf : Int\nf = 1"),
+        [
+            "E0004 1:1 `import` is not supported yet",
+            "E0011 1:13 expected `)`",
+        ]
+    );
+}

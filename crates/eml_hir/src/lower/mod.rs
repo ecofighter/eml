@@ -286,6 +286,16 @@ fn collect(
             ast::Item::FixityItem(item) => fixities.push(item),
             // `type` は構文の段階 S2 の構文で、パーサが E0004 を報告済み
             ast::Item::TypeItem(_) => {}
+            ast::Item::ImportItem(item) => {
+                let range = item
+                    .import_keyword()
+                    .map_or(item.range(), |keyword| keyword.text_range());
+                diagnostics.push(Diagnostic::not_yet_supported(
+                    file,
+                    range,
+                    "`import` is not supported yet",
+                ));
+            }
         }
     }
     (definitions, data, effects, fixities)

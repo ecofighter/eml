@@ -107,6 +107,9 @@ pub enum SyntaxKind {
     EFFECT_ITEM,
     OP_DECL,
     FIXITY_ITEM,
+    IMPORT_ITEM,
+    IMPORT_LIST,
+    IMPORT_NAME,
 
     BLOCK,
     LET_STMT,

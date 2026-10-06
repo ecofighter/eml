@@ -290,3 +290,93 @@ fn minus_can_be_defined_as_an_operator() {
               LIDENT "a"
     "#);
 }
+
+#[test]
+fn imports_hold_a_module_path_an_alias_and_a_list() {
+    let text = "import Report.Csv\nimport Report.Csv as C\nimport Report.Format (render, Style(..), (<+>),)";
+    insta::assert_snapshot!(shape(text), @r#"
+    SOURCE_FILE
+      IMPORT_ITEM
+        IMPORT_KW "import"
+        PATH
+          NAME_REF
+            UIDENT "Report"
+          DOT "."
+          NAME_REF
+            UIDENT "Csv"
+      IMPORT_ITEM
+        IMPORT_KW "import"
+        PATH
+          NAME_REF
+            UIDENT "Report"
+          DOT "."
+          NAME_REF
+            UIDENT "Csv"
+        AS_KW "as"
+        NAME
+          UIDENT "C"
+      IMPORT_ITEM
+        IMPORT_KW "import"
+        PATH
+          NAME_REF
+            UIDENT "Report"
+          DOT "."
+          NAME_REF
+            UIDENT "Format"
+        IMPORT_LIST
+          L_PAREN "("
+          IMPORT_NAME
+            NAME_REF
+              LIDENT "render"
+          COMMA ","
+          IMPORT_NAME
+            NAME_REF
+              UIDENT "Style"
+            L_PAREN "("
+            DOT2 ".."
+            R_PAREN ")"
+          COMMA ","
+          IMPORT_NAME
+            L_PAREN "("
+            OP "<+>"
+            R_PAREN ")"
+          COMMA ","
+          R_PAREN ")"
+    "#);
+}
+
+#[test]
+fn unfinished_imports_recover_at_the_next_item() {
+    insta::assert_snapshot!(shape("import\nimport M as\nimport M (a,\nf = 1"), @r#"
+    SOURCE_FILE
+      IMPORT_ITEM
+        IMPORT_KW "import"
+      IMPORT_ITEM
+        IMPORT_KW "import"
+        PATH
+          NAME_REF
+            UIDENT "M"
+        AS_KW "as"
+      IMPORT_ITEM
+        IMPORT_KW "import"
+        PATH
+          NAME_REF
+            UIDENT "M"
+        IMPORT_LIST
+          L_PAREN "("
+          IMPORT_NAME
+            NAME_REF
+              LIDENT "a"
+          COMMA ","
+      EQUATION
+        NAME
+          LIDENT "f"
+        EQ "="
+        LITERAL
+          INT "1"
+    ---
+    E0011 1:7 expected a module name
+    E0011 2:12 expected a capitalized name
+    E0011 3:13 expected `)`
+    "#);
+}
