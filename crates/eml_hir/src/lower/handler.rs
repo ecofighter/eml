@@ -94,7 +94,7 @@ impl BodyLowering<'_> {
         let body = self.lower_expr(clause.body(), clause.range());
         self.scope.truncate(mark);
         // 名前がなければパーサが報告済み
-        let Some(name) = clause.name() else {
+        let Some(name) = clause.name().map(|name| name.token()) else {
             return;
         };
         let name_range = name.text_range();

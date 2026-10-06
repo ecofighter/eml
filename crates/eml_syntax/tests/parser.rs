@@ -139,7 +139,9 @@ fn annotated_patterns_can_appear_in_any_pattern() {
         PAREN_PAT@2..18
           L_PAREN@2..3 "("
           CON_PAT@3..17
-            UIDENT@3..7 "Some"
+            PATH@3..7
+              NAME_REF@3..7
+                UIDENT@3..7 "Some"
             WHITESPACE@7..8 " "
             ANNOT_PAT@8..17
               L_PAREN@8..9 "("
@@ -149,14 +151,18 @@ fn annotated_patterns_can_appear_in_any_pattern() {
               COLON@11..12 ":"
               WHITESPACE@12..13 " "
               PATH_TYPE@13..16
-                UIDENT@13..16 "Int"
+                PATH@13..16
+                  NAME_REF@13..16
+                    UIDENT@13..16 "Int"
               R_PAREN@16..17 ")"
           R_PAREN@17..18 ")"
         WHITESPACE@18..19 " "
         EQ@19..20 "="
         WHITESPACE@20..21 " "
         PATH_EXPR@21..22
-          LIDENT@21..22 "x"
+          PATH@21..22
+            NAME_REF@21..22
+              LIDENT@21..22 "x"
       WHITESPACE@22..23 "\n"
       EQUATION@23..38
         LIDENT@23..24 "k"
@@ -169,13 +175,17 @@ fn annotated_patterns_can_appear_in_any_pattern() {
           COLON@28..29 ":"
           WHITESPACE@29..30 " "
           PATH_TYPE@30..33
-            UIDENT@30..33 "Int"
+            PATH@30..33
+              NAME_REF@30..33
+                UIDENT@30..33 "Int"
           R_PAREN@33..34 ")"
         WHITESPACE@34..35 " "
         EQ@35..36 "="
         WHITESPACE@36..37 " "
         PATH_EXPR@37..38
-          LIDENT@37..38 "x"
+          PATH@37..38
+            NAME_REF@37..38
+              LIDENT@37..38 "x"
       WHITESPACE@38..39 "\n"
       EQUATION@39..79
         LIDENT@39..40 "g"
@@ -186,7 +196,9 @@ fn annotated_patterns_can_appear_in_any_pattern() {
           MATCH_KW@43..48 "match"
           WHITESPACE@48..49 " "
           PATH_EXPR@49..50
-            LIDENT@49..50 "y"
+            PATH@49..50
+              NAME_REF@49..50
+                LIDENT@49..50 "y"
           WHITESPACE@50..51 " "
           WITH_KW@51..55 "with"
           WHITESPACE@55..58 "\n  "
@@ -203,7 +215,9 @@ fn annotated_patterns_can_appear_in_any_pattern() {
                 COLON@64..65 ":"
                 WHITESPACE@65..66 " "
                 PATH_TYPE@66..69
-                  UIDENT@66..69 "Int"
+                  PATH@66..69
+                    NAME_REF@66..69
+                      UIDENT@66..69 "Int"
                 R_PAREN@69..70 ")"
               COMMA@70..71 ","
               WHITESPACE@71..72 " "
@@ -214,7 +228,9 @@ fn annotated_patterns_can_appear_in_any_pattern() {
             THIN_ARROW@75..77 "->"
             WHITESPACE@77..78 " "
             PATH_EXPR@78..79
-              LIDENT@78..79 "a"
+              PATH@78..79
+                NAME_REF@78..79
+                  LIDENT@78..79 "a"
       WHITESPACE@79..80 "\n"
       EQUATION@80..106
         LIDENT@80..81 "h"
@@ -232,7 +248,9 @@ fn annotated_patterns_can_appear_in_any_pattern() {
             COLON@91..92 ":"
             WHITESPACE@92..93 " "
             PATH_TYPE@93..96
-              UIDENT@93..96 "Int"
+              PATH@93..96
+                NAME_REF@93..96
+                  UIDENT@93..96 "Int"
             R_PAREN@96..97 ")"
           WHITESPACE@97..98 " "
           EQ@98..99 "="
@@ -243,6 +261,8 @@ fn annotated_patterns_can_appear_in_any_pattern() {
           IN_KW@102..104 "in"
           WHITESPACE@104..105 " "
           PATH_EXPR@105..106
-            LIDENT@105..106 "z"
+            PATH@105..106
+              NAME_REF@105..106
+                LIDENT@105..106 "z"
     "#);
 }

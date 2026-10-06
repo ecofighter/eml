@@ -92,6 +92,11 @@ pub enum SyntaxKind {
 
     SOURCE_FILE,
     ERROR,
+    /// 参照する名前の1つのセグメント。
+    NAME_REF,
+    /// 修飾名 `M.N.x`。`NAME_REF` を `.` で平たく並べる。eml の修飾名は「モジュールの経路 + 最後の名前」の形しか
+    /// ないので、入れ子にしない (docs/spec/grammar.md の `qvar` と `qcon`)。
+    PATH,
     SIGNATURE,
     EQUATION,
     DATA_ITEM,

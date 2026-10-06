@@ -5,6 +5,7 @@ use la_arena::Arena;
 use super::scope::Fixity;
 use super::scope::{ItemScope, ValueItem};
 use super::types::{TypeLowering, Vars};
+use super::{PathName, path_name};
 use crate::builtin::Assoc;
 use crate::codes;
 use crate::hir::*;
@@ -296,9 +297,12 @@ impl<'a> BodyLowering<'a> {
     }
 
     fn lower_path(&mut self, path: &ast::PathExpr, range: TextRange) -> ExprId {
-        let segments: Vec<SyntaxToken> = path.segments().collect();
-        let [name] = segments.as_slice() else {
-            return self.unsupported(range, "qualified names are not supported yet");
+        let name = match path_name(path.path()) {
+            PathName::Plain(name) => name,
+            PathName::Qualified => {
+                return self.unsupported(range, "qualified names are not supported yet");
+            }
+            PathName::Missing => return self.alloc(ExprKind::Missing, range),
         };
         let text = name.text();
         let res = self
@@ -554,10 +558,12 @@ impl<'a> BodyLowering<'a> {
                         self.lower_pat_in_group(Some(arg), arg_range)
                     })
                     .collect();
-                let segments: Vec<SyntaxToken> = con.segments().collect();
-                match segments.as_slice() {
-                    [name] => self.constructor_pat(name, args, range),
-                    _ => self.unsupported_pat(range, "qualified names are not supported yet"),
+                match path_name(con.path()) {
+                    PathName::Plain(name) => self.constructor_pat(&name, args, range),
+                    PathName::Qualified => {
+                        self.unsupported_pat(range, "qualified names are not supported yet")
+                    }
+                    PathName::Missing => PatKind::Missing,
                 }
             }
             ast::Pat::InfixConPat(infix) => return self.lower_infix_pat(infix, range),

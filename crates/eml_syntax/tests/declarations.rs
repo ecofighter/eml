@@ -13,14 +13,20 @@ fn operator_signature() {
         COLON ":"
         FN_TYPE
           PATH_TYPE
-            UIDENT "Path"
+            PATH
+              NAME_REF
+                UIDENT "Path"
           THIN_ARROW "->"
           FN_TYPE
             PATH_TYPE
-              UIDENT "String"
+              PATH
+                NAME_REF
+                  UIDENT "String"
             THIN_ARROW "->"
             PATH_TYPE
-              UIDENT "Path"
+              PATH
+                NAME_REF
+                  UIDENT "Path"
     "#);
 }
 
@@ -74,7 +80,9 @@ fn data_declarations() {
             LIDENT "a"
           CONOP "::"
           APP_TYPE
-            UIDENT "List"
+            PATH
+              NAME_REF
+                UIDENT "List"
             VAR_TYPE
               LIDENT "a"
     "#);
@@ -117,7 +125,9 @@ fn effect_declaration() {
           COLON ":"
           FN_TYPE
             PATH_TYPE
-              UIDENT "Unit"
+              PATH
+                NAME_REF
+                  UIDENT "Unit"
             THIN_ARROW "->"
             VAR_TYPE
               LIDENT "s"
@@ -127,7 +137,9 @@ fn effect_declaration() {
           COLON ":"
           FN_TYPE
             PATH_TYPE
-              UIDENT "String"
+              PATH
+                NAME_REF
+                  UIDENT "String"
             THIN_ARROW "->"
             VAR_TYPE
               LIDENT "a"
@@ -193,10 +205,14 @@ fn pub_and_type_are_parsed_but_not_supported_yet() {
         TUPLE_TYPE
           L_PAREN "("
           PATH_TYPE
-            UIDENT "String"
+            PATH
+              NAME_REF
+                UIDENT "String"
           COMMA ","
           PATH_TYPE
-            UIDENT "Int"
+            PATH
+              NAME_REF
+                UIDENT "Int"
           R_PAREN ")"
     ---
     E0004 1:1 `pub` is not supported yet
@@ -238,18 +254,24 @@ fn errors_in_one_declaration_do_not_affect_the_next() {
         COLON ":"
         FN_TYPE
           PATH_TYPE
-            UIDENT "Int"
+            PATH
+              NAME_REF
+                UIDENT "Int"
           THIN_ARROW "->"
       SIGNATURE
         LIDENT "y"
         COLON ":"
         PATH_TYPE
-          UIDENT "Int"
+          PATH
+            NAME_REF
+              UIDENT "Int"
       SIGNATURE
         LIDENT "w"
         COLON ":"
         PATH_TYPE
-          UIDENT "Int"
+          PATH
+            NAME_REF
+              UIDENT "Int"
     ---
     E0009 1:9 expected an indented block after `->`
     "#);
@@ -317,12 +339,16 @@ fn infix_constructor_with_type_applications() {
         ALT
           PIPE "|"
           APP_TYPE
-            UIDENT "List"
+            PATH
+              NAME_REF
+                UIDENT "List"
             VAR_TYPE
               LIDENT "a"
           CONOP "::"
           APP_TYPE
-            UIDENT "L"
+            PATH
+              NAME_REF
+                UIDENT "L"
             VAR_TYPE
               LIDENT "a"
     "#);

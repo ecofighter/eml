@@ -1,0 +1,12 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: rendered
+input_file: tests/ui/check-fail/not-yet-supported/qualified_effect.em
+---
+[E0004] Error: qualified names are not supported yet
+   ╭─[ check-fail/not-yet-supported/qualified_effect.em:2:14 ]
+   │
+ 2 │ f : Unit -> <Log.Log> Unit
+   │              ───┬───  
+   │                 ╰───── this is implemented in a later stage
+───╯

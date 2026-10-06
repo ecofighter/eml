@@ -280,12 +280,28 @@ fn close_bracket(p: &mut Parser, kind: SyntaxKind) {
     }
 }
 
+/// `qcon ::= (UIDENT '.')* UIDENT`
 fn qcon(p: &mut Parser) {
-    while p.at(UIDENT) && p.nth(1) == DOT && p.nth(2) == UIDENT {
-        p.bump(UIDENT);
+    path(p, TokenSet::new(&[UIDENT]));
+}
+
+/// 修飾名を `PATH` にする。`last` は最後のセグメントになれるトークンで、`.` の後にそれが続く間だけ修飾として読む。
+/// 修飾のセグメントは大文字の名前だけである。
+fn path(p: &mut Parser, last: TokenSet) {
+    let m = p.start();
+    while p.at(UIDENT) && p.nth(1) == DOT && last.contains(p.nth(2)) {
+        name_ref(p);
         dot(p);
     }
-    p.bump(UIDENT);
+    name_ref(p);
+    m.complete(p, PATH);
+}
+
+/// 今のトークンを1つ読んで `NAME_REF` にする。呼び出し側が名前のトークンにいることを確かめる。
+fn name_ref(p: &mut Parser) {
+    let m = p.start();
+    p.bump_any();
+    m.complete(p, NAME_REF);
 }
 
 /// `.` の前後の空白を禁じるのは、修飾・フィールドアクセスと区別できるようにするため (docs/spec/grammar.md)。

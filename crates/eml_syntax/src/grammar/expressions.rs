@@ -297,12 +297,9 @@ fn unsupported_literal_message(kind: SyntaxKind) -> &'static str {
     }
 }
 
+/// `qvar ::= (UIDENT '.')* LIDENT` と `qcon`。
 fn qname(p: &mut Parser) {
-    while p.at(UIDENT) && p.nth(1) == DOT && matches!(p.nth(2), UIDENT | LIDENT) {
-        p.bump(UIDENT);
-        dot(p);
-    }
-    p.bump_any();
+    path(p, TokenSet::new(&[UIDENT, LIDENT]));
 }
 
 fn paren_expr(p: &mut Parser) -> SyntaxKind {
@@ -563,7 +560,11 @@ fn handler_clause(p: &mut Parser) -> bool {
         }
         RETURN_CLAUSE
     } else {
-        expect(p, LIDENT);
+        if p.at(LIDENT) {
+            name_ref(p);
+        } else {
+            expected(p, token_name(LIDENT));
+        }
         OP_CLAUSE
     };
     while patterns::at_apat_start(p) {

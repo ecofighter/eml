@@ -283,3 +283,16 @@ fn lambda_and_clause_parameters_are_one_group() {
         ]
     );
 }
+
+#[test]
+fn qualified_effects_are_not_supported_yet() {
+    // 不具合1: `ast::Effect::name()` が最初の `UIDENT` を取り、`M` を探して E1002 にしていた
+    let text = "f : Unit -> <M.E> Unit\nf () = ()\ng : Unit -> <M.State Int> Unit\ng () = ()";
+    assert_eq!(
+        diagnostics(text),
+        [
+            "E0004 1:14 qualified names are not supported yet",
+            "E0004 3:14 qualified names are not supported yet",
+        ]
+    );
+}

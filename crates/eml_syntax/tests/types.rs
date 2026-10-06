@@ -13,12 +13,16 @@ fn signature_with_function_type() {
         COLON ":"
         FN_TYPE
           APP_TYPE
-            UIDENT "List"
+            PATH
+              NAME_REF
+                UIDENT "List"
             VAR_TYPE
               LIDENT "a"
           THIN_ARROW "->"
           PATH_TYPE
-            UIDENT "Int"
+            PATH
+              NAME_REF
+                UIDENT "Int"
     "#);
 }
 
@@ -30,11 +34,16 @@ fn qualified_type_names() {
         LIDENT "x"
         COLON ":"
         APP_TYPE
-          UIDENT "Option"
-          DOT "."
-          UIDENT "Option"
+          PATH
+            NAME_REF
+              UIDENT "Option"
+            DOT "."
+            NAME_REF
+              UIDENT "Option"
           PATH_TYPE
-            UIDENT "Int"
+            PATH
+              NAME_REF
+                UIDENT "Int"
     "#);
 }
 
@@ -52,10 +61,14 @@ fn effect_row_with_effects_and_tail() {
           EFFECT_ROW
             L_ANGLE "<"
             EFFECT
-              UIDENT "IO"
+              PATH
+                NAME_REF
+                  UIDENT "IO"
             COMMA ","
             EFFECT
-              UIDENT "State"
+              PATH
+                NAME_REF
+                  UIDENT "State"
               VAR_TYPE
                 LIDENT "s"
             PIPE "|"
@@ -75,13 +88,17 @@ fn empty_row_is_split_from_one_operator_token() {
         COLON ":"
         FN_TYPE
           PATH_TYPE
-            UIDENT "Unit"
+            PATH
+              NAME_REF
+                UIDENT "Unit"
           THIN_ARROW "->"
           EFFECT_ROW
             L_ANGLE "<"
             R_ANGLE ">"
           PATH_TYPE
-            UIDENT "Unit"
+            PATH
+              NAME_REF
+                UIDENT "Unit"
     "#);
 }
 
@@ -94,14 +111,18 @@ fn row_variable_alone() {
         COLON ":"
         FN_TYPE
           PATH_TYPE
-            UIDENT "Unit"
+            PATH
+              NAME_REF
+                UIDENT "Unit"
           THIN_ARROW "->"
           EFFECT_ROW
             L_ANGLE "<"
             LIDENT "e"
             R_ANGLE ">"
           PATH_TYPE
-            UIDENT "Unit"
+            PATH
+              NAME_REF
+                UIDENT "Unit"
     "#);
 }
 
@@ -114,14 +135,20 @@ fn arrows_at_the_end_of_lines_continue_the_type() {
         COLON ":"
         FN_TYPE
           PATH_TYPE
-            UIDENT "Int"
+            PATH
+              NAME_REF
+                UIDENT "Int"
           THIN_ARROW "->"
           FN_TYPE
             PATH_TYPE
-              UIDENT "Int"
+              PATH
+                NAME_REF
+                  UIDENT "Int"
             THIN_ARROW "->"
             PATH_TYPE
-              UIDENT "Int"
+              PATH
+                NAME_REF
+                  UIDENT "Int"
     "#);
 }
 
@@ -135,16 +162,22 @@ fn tuple_and_parenthesized_types() {
         TUPLE_TYPE
           L_PAREN "("
           PATH_TYPE
-            UIDENT "Int"
+            PATH
+              NAME_REF
+                UIDENT "Int"
           COMMA ","
           PAREN_TYPE
             L_PAREN "("
             FN_TYPE
               PATH_TYPE
-                UIDENT "String"
+                PATH
+                  NAME_REF
+                    UIDENT "String"
               THIN_ARROW "->"
               PATH_TYPE
-                UIDENT "Int"
+                PATH
+                  NAME_REF
+                    UIDENT "Int"
             R_PAREN ")"
           R_PAREN ")"
     "#);
@@ -158,9 +191,12 @@ fn dot_with_spaces_in_a_qualified_name_is_an_error() {
         LIDENT "f"
         COLON ":"
         PATH_TYPE
-          UIDENT "Foo"
-          DOT "."
-          UIDENT "Bar"
+          PATH
+            NAME_REF
+              UIDENT "Foo"
+            DOT "."
+            NAME_REF
+              UIDENT "Bar"
     ---
     E0010 1:9 unexpected whitespace around `.`
     "#);
@@ -197,14 +233,20 @@ fn aligned_signature_lines_are_one_error() {
         COLON ":"
         FN_TYPE
           PATH_TYPE
-            UIDENT "Int"
+            PATH
+              NAME_REF
+                UIDENT "Int"
           THIN_ARROW "->"
           FN_TYPE
             PATH_TYPE
-              UIDENT "Int"
+              PATH
+                NAME_REF
+                  UIDENT "Int"
             THIN_ARROW "->"
             PATH_TYPE
-              UIDENT "Int"
+              PATH
+                NAME_REF
+                  UIDENT "Int"
     ---
     E0009 2:7 expected an indented block after `->`
     "#);
@@ -265,15 +307,21 @@ fn row_written_right_after_the_arrow() {
         COLON ":"
         FN_TYPE
           PATH_TYPE
-            UIDENT "Int"
+            PATH
+              NAME_REF
+                UIDENT "Int"
           THIN_ARROW "->"
           EFFECT_ROW
             L_ANGLE "<"
             EFFECT
-              UIDENT "IO"
+              PATH
+                NAME_REF
+                  UIDENT "IO"
             R_ANGLE ">"
           PATH_TYPE
-            UIDENT "Int"
+            PATH
+              NAME_REF
+                UIDENT "Int"
     "#);
     assert!(diagnostics("f : Int -><> Int").is_empty());
 }

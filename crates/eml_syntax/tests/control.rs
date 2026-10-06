@@ -17,17 +17,23 @@ fn if_with_else_on_separate_lines() {
             IF_EXPR
               IF_KW "if"
               PATH_EXPR
-                LIDENT "c"
+                PATH
+                  NAME_REF
+                    LIDENT "c"
               THEN_KW "then"
               BLOCK
                 EXPR_STMT
                   PATH_EXPR
-                    LIDENT "a"
+                    PATH
+                      NAME_REF
+                        LIDENT "a"
               ELSE_KW "else"
               BLOCK
                 EXPR_STMT
                   PATH_EXPR
-                    LIDENT "b"
+                    PATH
+                      NAME_REF
+                        LIDENT "b"
     "#);
 }
 
@@ -43,13 +49,19 @@ fn if_without_else() {
         IF_EXPR
           IF_KW "if"
           PATH_EXPR
-            LIDENT "c"
+            PATH
+              NAME_REF
+                LIDENT "c"
           THEN_KW "then"
           APP_EXPR
             PATH_EXPR
-              LIDENT "g"
+              PATH
+                NAME_REF
+                  LIDENT "g"
             PATH_EXPR
-              LIDENT "x"
+              PATH
+                NAME_REF
+                  LIDENT "x"
     "#);
 }
 
@@ -63,21 +75,31 @@ fn else_if_chain_on_one_line() {
         IF_EXPR
           IF_KW "if"
           PATH_EXPR
-            LIDENT "a"
+            PATH
+              NAME_REF
+                LIDENT "a"
           THEN_KW "then"
           PATH_EXPR
-            LIDENT "x"
+            PATH
+              NAME_REF
+                LIDENT "x"
           ELSE_KW "else"
           IF_EXPR
             IF_KW "if"
             PATH_EXPR
-              LIDENT "b"
+              PATH
+                NAME_REF
+                  LIDENT "b"
             THEN_KW "then"
             PATH_EXPR
-              LIDENT "y"
+              PATH
+                NAME_REF
+                  LIDENT "y"
             ELSE_KW "else"
             PATH_EXPR
-              LIDENT "z"
+              PATH
+                NAME_REF
+                  LIDENT "z"
     "#);
 }
 
@@ -97,13 +119,19 @@ fn else_on_the_next_line_after_a_one_line_then() {
             IF_EXPR
               IF_KW "if"
               PATH_EXPR
-                LIDENT "s"
+                PATH
+                  NAME_REF
+                    LIDENT "s"
               THEN_KW "then"
               PATH_EXPR
-                LIDENT "a"
+                PATH
+                  NAME_REF
+                    LIDENT "a"
               ELSE_KW "else"
               PATH_EXPR
-                LIDENT "b"
+                PATH
+                  NAME_REF
+                    LIDENT "b"
     "#);
 }
 
@@ -134,27 +162,37 @@ fn match_with_indented_arms() {
             MATCH_EXPR
               MATCH_KW "match"
               PATH_EXPR
-                LIDENT "b"
+                PATH
+                  NAME_REF
+                    LIDENT "b"
               WITH_KW "with"
               MATCH_ARM
                 PIPE "|"
                 CON_PAT
-                  UIDENT "True"
+                  PATH
+                    NAME_REF
+                      UIDENT "True"
                 THIN_ARROW "->"
                 LITERAL
                   INT "1"
               MATCH_ARM
                 PIPE "|"
                 CON_PAT
-                  UIDENT "False"
+                  PATH
+                    NAME_REF
+                      UIDENT "False"
                 THIN_ARROW "->"
                 BLOCK
                   EXPR_STMT
                     APP_EXPR
                       PATH_EXPR
-                        LIDENT "g"
+                        PATH
+                          NAME_REF
+                            LIDENT "g"
                       PATH_EXPR
-                        LIDENT "x"
+                        PATH
+                          NAME_REF
+                            LIDENT "x"
                   EXPR_STMT
                     LITERAL
                       INT "0"
@@ -173,19 +211,25 @@ fn match_on_one_line() {
         MATCH_EXPR
           MATCH_KW "match"
           PATH_EXPR
-            LIDENT "b"
+            PATH
+              NAME_REF
+                LIDENT "b"
           WITH_KW "with"
           MATCH_ARM
             PIPE "|"
             CON_PAT
-              UIDENT "True"
+              PATH
+                NAME_REF
+                  UIDENT "True"
             THIN_ARROW "->"
             LITERAL
               INT "1"
           MATCH_ARM
             PIPE "|"
             CON_PAT
-              UIDENT "False"
+              PATH
+                NAME_REF
+                  UIDENT "False"
             THIN_ARROW "->"
             LITERAL
               INT "0"
@@ -202,29 +246,39 @@ fn later_arms_on_one_line_belong_to_the_inner_match() {
         MATCH_EXPR
           MATCH_KW "match"
           PATH_EXPR
-            LIDENT "a"
+            PATH
+              NAME_REF
+                LIDENT "a"
           WITH_KW "with"
           MATCH_ARM
             PIPE "|"
             CON_PAT
-              UIDENT "X"
+              PATH
+                NAME_REF
+                  UIDENT "X"
             THIN_ARROW "->"
             MATCH_EXPR
               MATCH_KW "match"
               PATH_EXPR
-                LIDENT "b"
+                PATH
+                  NAME_REF
+                    LIDENT "b"
               WITH_KW "with"
               MATCH_ARM
                 PIPE "|"
                 CON_PAT
-                  UIDENT "Y"
+                  PATH
+                    NAME_REF
+                      UIDENT "Y"
                 THIN_ARROW "->"
                 LITERAL
                   INT "1"
               MATCH_ARM
                 PIPE "|"
                 CON_PAT
-                  UIDENT "Z"
+                  PATH
+                    NAME_REF
+                      UIDENT "Z"
                 THIN_ARROW "->"
                 LITERAL
                   INT "2"
@@ -269,28 +323,38 @@ fn arms_at_the_column_of_match_are_read_as_arms() {
             MATCH_EXPR
               MATCH_KW "match"
               PATH_EXPR
-                LIDENT "b"
+                PATH
+                  NAME_REF
+                    LIDENT "b"
               WITH_KW "with"
               MATCH_ARM
                 PIPE "|"
                 CON_PAT
-                  UIDENT "True"
+                  PATH
+                    NAME_REF
+                      UIDENT "True"
                 THIN_ARROW "->"
                 LITERAL
                   INT "1"
               MATCH_ARM
                 PIPE "|"
                 CON_PAT
-                  UIDENT "False"
+                  PATH
+                    NAME_REF
+                      UIDENT "False"
                 THIN_ARROW "->"
                 LITERAL
                   INT "0"
           EXPR_STMT
             APP_EXPR
               PATH_EXPR
-                LIDENT "g"
+                PATH
+                  NAME_REF
+                    LIDENT "g"
               PATH_EXPR
-                LIDENT "b"
+                PATH
+                  NAME_REF
+                    LIDENT "b"
     ---
     E0009 2:11 expected an indented block after `with`
     "#);

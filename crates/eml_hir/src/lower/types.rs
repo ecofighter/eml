@@ -3,6 +3,7 @@ use eml_syntax::{SyntaxToken, ast};
 use la_arena::Arena;
 
 use super::scope::{ItemScope, TypeItem};
+use super::{PathName, path_name};
 use crate::codes;
 use crate::hir::{
     EffectRef, Generics, RowRef, RowVarDecl, RowVarId, TypeRef, TypeRefId, TypeRefKind, TypeVarDecl,
@@ -36,10 +37,13 @@ impl TypeLowering<'_> {
         };
         let range = ty.range();
         let kind = match ty {
-            ast::Type::PathType(path) => {
-                let segments: Vec<SyntaxToken> = path.segments().collect();
-                self.applied(&segments, Vec::new(), range)
-            }
+            ast::Type::PathType(path) => match path_name(path.path()) {
+                PathName::Plain(name) => self.applied(&name, Vec::new(), range),
+                PathName::Qualified => {
+                    self.unsupported(range, "qualified names are not supported yet")
+                }
+                PathName::Missing => TypeRefKind::Error,
+            },
             ast::Type::ParenType(paren) => return self.lower(paren.ty(), range),
             ast::Type::FnType(function) => {
                 let param = self.lower(function.param(), range);
@@ -63,8 +67,13 @@ impl TypeLowering<'_> {
                         self.lower(Some(arg), range)
                     })
                     .collect();
-                let segments: Vec<SyntaxToken> = app.segments().collect();
-                self.applied(&segments, args, range)
+                match path_name(app.path()) {
+                    PathName::Plain(name) => self.applied(&name, args, range),
+                    PathName::Qualified => {
+                        self.unsupported(range, "qualified names are not supported yet")
+                    }
+                    PathName::Missing => TypeRefKind::Error,
+                }
             }
             ast::Type::TupleType(tuple) => TypeRefKind::Tuple(
                 tuple
@@ -81,13 +90,10 @@ impl TypeLowering<'_> {
 
     fn applied(
         &mut self,
-        segments: &[SyntaxToken],
+        name: &SyntaxToken,
         args: Vec<TypeRefId>,
         range: TextRange,
     ) -> TypeRefKind {
-        let [name] = segments else {
-            return self.unsupported(range, "qualified names are not supported yet");
-        };
         match self.items.type_item(name.text()) {
             Some(TypeItem::Type(id)) => {
                 let expected = self.items.type_params(id);
@@ -137,8 +143,18 @@ impl TypeLowering<'_> {
         };
         let mut effects = Vec::new();
         for effect in row.effects() {
-            let Some(name) = effect.name() else {
-                continue;
+            let name = match path_name(effect.path()) {
+                PathName::Plain(name) => name,
+                PathName::Qualified => {
+                    self.diagnostics.push(Diagnostic::not_yet_supported(
+                        self.file,
+                        effect.range(),
+                        "qualified names are not supported yet",
+                    ));
+                    valid = false;
+                    continue;
+                }
+                PathName::Missing => continue,
             };
             match self.items.type_item(name.text()) {
                 Some(TypeItem::Effect(id)) => {

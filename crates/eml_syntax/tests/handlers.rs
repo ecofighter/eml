@@ -23,19 +23,24 @@ fn handler_with_operation_and_return_clauses() {
               HANDLE_KW "handle"
               APP_EXPR
                 PATH_EXPR
-                  LIDENT "action"
+                  PATH
+                    NAME_REF
+                      LIDENT "action"
                 UNIT_EXPR
                   L_PAREN "("
                   R_PAREN ")"
               WITH_KW "with"
               OP_CLAUSE
                 PIPE "|"
-                LIDENT "fail"
+                NAME_REF
+                  LIDENT "fail"
                 WILDCARD_PAT
                   UNDERSCORE "_"
                 THIN_ARROW "->"
                 PATH_EXPR
-                  UIDENT "None"
+                  PATH
+                    NAME_REF
+                      UIDENT "None"
               RETURN_CLAUSE
                 PIPE "|"
                 RETURN_KW "return"
@@ -44,9 +49,13 @@ fn handler_with_operation_and_return_clauses() {
                 THIN_ARROW "->"
                 APP_EXPR
                   PATH_EXPR
-                    UIDENT "Some"
+                    PATH
+                      NAME_REF
+                        UIDENT "Some"
                   PATH_EXPR
-                    LIDENT "x"
+                    PATH
+                      NAME_REF
+                        LIDENT "x"
     "#);
 }
 
@@ -74,17 +83,22 @@ fn parameterized_handler() {
               HANDLE_KW "handle"
               APP_EXPR
                 PATH_EXPR
-                  LIDENT "action"
+                  PATH
+                    NAME_REF
+                      LIDENT "action"
                 UNIT_EXPR
                   L_PAREN "("
                   R_PAREN ")"
               FROM_KW "from"
               PATH_EXPR
-                LIDENT "init"
+                PATH
+                  NAME_REF
+                    LIDENT "init"
               WITH_KW "with"
               OP_CLAUSE
                 PIPE "|"
-                LIDENT "get"
+                NAME_REF
+                  LIDENT "get"
                 UNIT_PAT
                   L_PAREN "("
                   R_PAREN ")"
@@ -96,14 +110,21 @@ fn parameterized_handler() {
                 RESUME_EXPR
                   RESUME_KW "resume"
                   PATH_EXPR
-                    LIDENT "k"
+                    PATH
+                      NAME_REF
+                        LIDENT "k"
                   PATH_EXPR
-                    LIDENT "st"
+                    PATH
+                      NAME_REF
+                        LIDENT "st"
                   PATH_EXPR
-                    LIDENT "st"
+                    PATH
+                      NAME_REF
+                        LIDENT "st"
               OP_CLAUSE
                 PIPE "|"
-                LIDENT "put"
+                NAME_REF
+                  LIDENT "put"
                 BIND_PAT
                   LIDENT "st2"
                 BIND_PAT
@@ -114,12 +135,16 @@ fn parameterized_handler() {
                 RESUME_EXPR
                   RESUME_KW "resume"
                   PATH_EXPR
-                    LIDENT "k"
+                    PATH
+                      NAME_REF
+                        LIDENT "k"
                   UNIT_EXPR
                     L_PAREN "("
                     R_PAREN ")"
                   PATH_EXPR
-                    LIDENT "st2"
+                    PATH
+                      NAME_REF
+                        LIDENT "st2"
               RETURN_CLAUSE
                 PIPE "|"
                 RETURN_KW "return"
@@ -131,10 +156,14 @@ fn parameterized_handler() {
                 TUPLE_EXPR
                   L_PAREN "("
                   PATH_EXPR
-                    LIDENT "x"
+                    PATH
+                      NAME_REF
+                        LIDENT "x"
                   COMMA ","
                   PATH_EXPR
-                    LIDENT "st"
+                    PATH
+                      NAME_REF
+                        LIDENT "st"
                   R_PAREN ")"
     "#);
 }
@@ -150,14 +179,17 @@ fn handler_on_one_line_with_drop() {
           HANDLE_KW "handle"
           APP_EXPR
             PATH_EXPR
-              LIDENT "f"
+              PATH
+                NAME_REF
+                  LIDENT "f"
             UNIT_EXPR
               L_PAREN "("
               R_PAREN ")"
           WITH_KW "with"
           OP_CLAUSE
             PIPE "|"
-            LIDENT "ask"
+            NAME_REF
+              LIDENT "ask"
             BIND_PAT
               LIDENT "key"
             BIND_PAT
@@ -166,7 +198,9 @@ fn handler_on_one_line_with_drop() {
             DROP_EXPR
               DROP_KW "drop"
               PATH_EXPR
-                LIDENT "k"
+                PATH
+                  NAME_REF
+                    LIDENT "k"
     "#);
 }
 
@@ -181,7 +215,9 @@ fn resume_is_an_operand() {
           RESUME_EXPR
             RESUME_KW "resume"
             PATH_EXPR
-              LIDENT "k"
+              PATH
+                NAME_REF
+                  LIDENT "k"
             LITERAL
               INT "1"
           OP "+"

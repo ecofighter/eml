@@ -86,6 +86,8 @@ macro_rules! ast_enum {
 
 ast_node! {
     SourceFile => SOURCE_FILE,
+    NameRef => NAME_REF,
+    Path => PATH,
     Signature => SIGNATURE,
     Equation => EQUATION,
     DataItem => DATA_ITEM,
@@ -171,6 +173,33 @@ ast_enum! {
 ast_enum! {
     /// handler の節。
     Clause { OpClause, ReturnClause }
+}
+
+impl NameRef {
+    pub fn token(&self) -> SyntaxToken {
+        self.syntax
+            .first_token()
+            .expect("the parser puts one name token in every NAME_REF")
+    }
+
+    pub fn text(&self) -> String {
+        self.token().text().to_string()
+    }
+}
+
+impl Path {
+    pub fn segments(&self) -> AstChildren<NameRef> {
+        support::children(&self.syntax)
+    }
+
+    /// 最後のセグメント。修飾のない名前ならその名前である。
+    pub fn name(&self) -> Option<NameRef> {
+        self.segments().last()
+    }
+
+    pub fn is_qualified(&self) -> bool {
+        self.segments().nth(1).is_some()
+    }
 }
 
 impl LambdaExpr {
@@ -305,8 +334,8 @@ impl Literal {
 }
 
 impl PathExpr {
-    pub fn segments(&self) -> impl Iterator<Item = SyntaxToken> {
-        path_segments(&self.syntax)
+    pub fn path(&self) -> Option<Path> {
+        support::child(&self.syntax)
     }
 }
 
@@ -447,8 +476,8 @@ impl ParenPat {
 }
 
 impl PathType {
-    pub fn segments(&self) -> impl Iterator<Item = SyntaxToken> {
-        path_segments(&self.syntax)
+    pub fn path(&self) -> Option<Path> {
+        support::child(&self.syntax)
     }
 }
 
@@ -484,8 +513,8 @@ impl EffectRow {
 }
 
 impl Effect {
-    pub fn name(&self) -> Option<SyntaxToken> {
-        support::token(&self.syntax, SyntaxKind::UIDENT)
+    pub fn path(&self) -> Option<Path> {
+        support::child(&self.syntax)
     }
 
     /// row に書いたエフェクトの型引数。
@@ -566,9 +595,9 @@ impl HandleExpr {
 }
 
 impl OpClause {
-    /// 節の先頭の操作の名前。引数はパターンのノードなので、直下の最初の小文字の名前が操作の名前である。
-    pub fn name(&self) -> Option<SyntaxToken> {
-        support::token(&self.syntax, SyntaxKind::LIDENT)
+    /// 節の先頭の操作の名前。
+    pub fn name(&self) -> Option<NameRef> {
+        support::child(&self.syntax)
     }
 
     /// 操作の引数、`k`、(パラメータ付き handler なら) 状態のパターン。
@@ -664,8 +693,8 @@ impl MatchArm {
 }
 
 impl ConPat {
-    pub fn segments(&self) -> impl Iterator<Item = SyntaxToken> {
-        path_segments(&self.syntax)
+    pub fn path(&self) -> Option<Path> {
+        support::child(&self.syntax)
     }
 
     pub fn args(&self) -> AstChildren<Pat> {
@@ -688,9 +717,9 @@ impl InfixConPat {
 }
 
 impl AppType {
-    /// 適用する型の名前。型引数は子のノードなので、直下のトークンだけが名前になる。
-    pub fn segments(&self) -> impl Iterator<Item = SyntaxToken> {
-        path_segments(&self.syntax)
+    /// 適用する型の名前。
+    pub fn path(&self) -> Option<Path> {
+        support::child(&self.syntax)
     }
 
     pub fn args(&self) -> AstChildren<Type> {
@@ -735,12 +764,6 @@ impl LiteralPat {
             _ => crate::literal::decode_string(token.text()).map(LiteralValue::String),
         }
     }
-}
-
-fn path_segments(node: &SyntaxNode) -> impl Iterator<Item = SyntaxToken> {
-    node.children_with_tokens()
-        .filter_map(NodeOrToken::into_token)
-        .filter(|token| matches!(token.kind(), SyntaxKind::UIDENT | SyntaxKind::LIDENT))
 }
 
 /// 欠けた部分があっても前後の部分を取り違えないように、区切りのトークンの間で子を探す。

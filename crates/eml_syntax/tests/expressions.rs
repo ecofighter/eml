@@ -9,7 +9,9 @@ fn equation_with_a_constructor_pattern() {
       EQUATION
         LIDENT "len"
         CON_PAT
-          UIDENT "Nil"
+          PATH
+            NAME_REF
+              UIDENT "Nil"
         EQ "="
         LITERAL
           INT "0"
@@ -25,7 +27,9 @@ fn parameter_patterns() {
         PAREN_PAT
           L_PAREN "("
           CON_PAT
-            UIDENT "Some"
+            PATH
+              NAME_REF
+                UIDENT "Some"
             TUPLE_PAT
               L_PAREN "("
               BIND_PAT
@@ -56,7 +60,9 @@ fn parameter_patterns() {
           R_PAREN ")"
         EQ "="
         PATH_EXPR
-          LIDENT "x"
+          PATH
+            NAME_REF
+              LIDENT "x"
     "#);
 }
 
@@ -90,16 +96,24 @@ fn block_body_with_let_and_expression_statements() {
               LIDENT "n"
             COLON ":"
             PATH_TYPE
-              UIDENT "Int"
+              PATH
+                NAME_REF
+                  UIDENT "Int"
             EQ "="
             PATH_EXPR
-              LIDENT "x"
+              PATH
+                NAME_REF
+                  LIDENT "x"
           EXPR_STMT
             APP_EXPR
               PATH_EXPR
-                LIDENT "println"
+                PATH
+                  NAME_REF
+                    LIDENT "println"
               PATH_EXPR
-                LIDENT "x"
+                PATH
+                  NAME_REF
+                    LIDENT "x"
     "#);
 }
 
@@ -112,20 +126,27 @@ fn application_field_access_and_qualified_names() {
         EQ "="
         APP_EXPR
           PATH_EXPR
-            UIDENT "String"
-            DOT "."
-            LIDENT "split_once"
+            PATH
+              NAME_REF
+                UIDENT "String"
+              DOT "."
+              NAME_REF
+                LIDENT "split_once"
           LITERAL
             STRING "\" \""
           FIELD_EXPR
             PATH_EXPR
-              LIDENT "line"
+              PATH
+                NAME_REF
+                  LIDENT "line"
             DOT "."
             LIDENT "text"
           FIELD_EXPR
             FIELD_EXPR
               PATH_EXPR
-                LIDENT "t"
+                PATH
+                  NAME_REF
+                    LIDENT "t"
               DOT "."
               INT "0"
             DOT "."
@@ -145,10 +166,14 @@ fn annotation_and_unit() {
           ANNOT_EXPR
             L_PAREN "("
             PATH_EXPR
-              LIDENT "x"
+              PATH
+                NAME_REF
+                  LIDENT "x"
             COLON ":"
             PATH_TYPE
-              UIDENT "Int"
+              PATH
+                NAME_REF
+                  UIDENT "Int"
             R_PAREN ")"
           COMMA ","
           UNIT_EXPR
@@ -171,18 +196,28 @@ fn deeper_lines_continue_the_expression() {
             OP_SEQ
               APP_EXPR
                 PATH_EXPR
-                  LIDENT "lines"
+                  PATH
+                    NAME_REF
+                      LIDENT "lines"
                 PATH_EXPR
-                  LIDENT "s"
+                  PATH
+                    NAME_REF
+                      LIDENT "s"
               OP "|>"
               APP_EXPR
                 PATH_EXPR
-                  LIDENT "map"
+                  PATH
+                    NAME_REF
+                      LIDENT "map"
                 PATH_EXPR
-                  LIDENT "f"
+                  PATH
+                    NAME_REF
+                      LIDENT "f"
               OP "|>"
               PATH_EXPR
-                LIDENT "sum"
+                PATH
+                  NAME_REF
+                    LIDENT "sum"
     "#);
 }
 
@@ -195,7 +230,9 @@ fn dot_with_spaces_is_an_error() {
         EQ "="
         FIELD_EXPR
           PATH_EXPR
-            LIDENT "a"
+            PATH
+              NAME_REF
+                LIDENT "a"
           DOT "."
           LIDENT "b"
     ---
@@ -216,11 +253,17 @@ fn operator_definition() {
         EQ "="
         APP_EXPR
           PATH_EXPR
-            LIDENT "join"
+            PATH
+              NAME_REF
+                LIDENT "join"
           PATH_EXPR
-            LIDENT "dir"
+            PATH
+              NAME_REF
+                LIDENT "dir"
           PATH_EXPR
-            LIDENT "name"
+            PATH
+              NAME_REF
+                LIDENT "name"
     "#);
 }
 
@@ -281,10 +324,14 @@ fn let_in_as_a_statement() {
                 LIDENT "y"
               EQ "="
               PATH_EXPR
-                LIDENT "x"
+                PATH
+                  NAME_REF
+                    LIDENT "x"
               IN_KW "in"
               PATH_EXPR
-                LIDENT "y"
+                PATH
+                  NAME_REF
+                    LIDENT "y"
     "#);
 }
 
@@ -377,7 +424,9 @@ fn mismatched_closing_bracket_closes_the_innermost_bracket() {
         PAREN_EXPR
           L_PAREN "("
           PATH_EXPR
-            LIDENT "a"
+            PATH
+              NAME_REF
+                LIDENT "a"
           R_BRACK "]"
       EQUATION
         LIDENT "y"
@@ -437,9 +486,13 @@ fn trailing_lambda_with_a_block_body() {
         EQ "="
         APP_EXPR
           PATH_EXPR
-            LIDENT "each"
+            PATH
+              NAME_REF
+                LIDENT "each"
           PATH_EXPR
-            LIDENT "items"
+            PATH
+              NAME_REF
+                LIDENT "items"
           LAMBDA_EXPR
             FN_KW "fn"
             BIND_PAT
@@ -449,9 +502,13 @@ fn trailing_lambda_with_a_block_body() {
               EXPR_STMT
                 APP_EXPR
                   PATH_EXPR
-                    LIDENT "println"
+                    PATH
+                      NAME_REF
+                        LIDENT "println"
                   PATH_EXPR
-                    LIDENT "item"
+                    PATH
+                      NAME_REF
+                        LIDENT "item"
     "#);
 }
 
@@ -464,7 +521,9 @@ fn lambda_parameters() {
         EQ "="
         APP_EXPR
           PATH_EXPR
-            LIDENT "map"
+            PATH
+              NAME_REF
+                LIDENT "map"
           PAREN_EXPR
             L_PAREN "("
             LAMBDA_EXPR
@@ -475,7 +534,9 @@ fn lambda_parameters() {
                   LIDENT "x"
                 COLON ":"
                 PATH_TYPE
-                  UIDENT "Int"
+                  PATH
+                    NAME_REF
+                      UIDENT "Int"
                 R_PAREN ")"
               TUPLE_PAT
                 L_PAREN "("
@@ -487,10 +548,14 @@ fn lambda_parameters() {
                 R_PAREN ")"
               THIN_ARROW "->"
               PATH_EXPR
-                LIDENT "x"
+                PATH
+                  NAME_REF
+                    LIDENT "x"
             R_PAREN ")"
           PATH_EXPR
-            LIDENT "xs"
+            PATH
+              NAME_REF
+                LIDENT "xs"
     "#);
 }
 
@@ -503,11 +568,15 @@ fn lambda_as_an_operand() {
         EQ "="
         OP_SEQ
           PATH_EXPR
-            LIDENT "xs"
+            PATH
+              NAME_REF
+                LIDENT "xs"
           OP "|>"
           APP_EXPR
             PATH_EXPR
-              LIDENT "each"
+              PATH
+                NAME_REF
+                  LIDENT "each"
             LAMBDA_EXPR
               FN_KW "fn"
               BIND_PAT
@@ -515,9 +584,13 @@ fn lambda_as_an_operand() {
               THIN_ARROW "->"
               APP_EXPR
                 PATH_EXPR
-                  LIDENT "println"
+                  PATH
+                    NAME_REF
+                      LIDENT "println"
                 PATH_EXPR
-                  LIDENT "l"
+                  PATH
+                    NAME_REF
+                      LIDENT "l"
     "#);
 }
 
@@ -547,7 +620,9 @@ fn let_in_inside_parentheses() {
               INT "1"
             IN_KW "in"
             PATH_EXPR
-              LIDENT "x"
+              PATH
+                NAME_REF
+                  LIDENT "x"
           R_PAREN ")"
     "#);
 }
@@ -572,19 +647,27 @@ fn use_statements() {
           USE_STMT
             USE_KW "use"
             PATH_EXPR
-              LIDENT "with_env"
+              PATH
+                NAME_REF
+                  LIDENT "with_env"
           USE_STMT
             USE_KW "use"
             BIND_PAT
               LIDENT "tmp"
             LEFT_ARROW "<-"
             PATH_EXPR
-              LIDENT "with_temp_dir"
+              PATH
+                NAME_REF
+                  LIDENT "with_temp_dir"
           EXPR_STMT
             APP_EXPR
               PATH_EXPR
-                LIDENT "build"
+                PATH
+                  NAME_REF
+                    LIDENT "build"
               PATH_EXPR
-                LIDENT "tmp"
+                PATH
+                  NAME_REF
+                    LIDENT "tmp"
     "#);
 }

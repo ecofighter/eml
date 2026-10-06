@@ -113,8 +113,10 @@ fn literals_and_paths() {
         panic!("expected a path");
     };
     let segments: Vec<String> = path
+        .path()
+        .unwrap()
         .segments()
-        .map(|token| token.text().to_string())
+        .map(|segment| segment.text())
         .collect();
     assert_eq!(segments, ["Foo", "bar"]);
     let Expr::Literal(literal) = &parts[1] else {
@@ -136,6 +138,8 @@ fn every_node_in_the_corpus_has_an_ast_type() {
         RETURN_CLAUSE,
         EFFECT_ROW,
         EFFECT,
+        PATH,
+        NAME_REF,
     ];
     for node in file.syntax().descendants() {
         let kind = node.kind();
@@ -211,7 +215,7 @@ fn function_type_parts() {
     let row = ty.row().unwrap();
     let effects: Vec<String> = row
         .effects()
-        .map(|e| e.name().unwrap().text().to_string())
+        .map(|e| e.path().unwrap().name().unwrap().text())
         .collect();
     assert_eq!(effects, ["IO"]);
     assert_eq!(row.tail().unwrap().text(), "e");
@@ -238,7 +242,7 @@ fn parenthesized_and_annotated_parts() {
     let Some(Type::PathType(path)) = paren.ty() else {
         panic!("expected a type name");
     };
-    let segments: Vec<String> = path.segments().map(|s| s.text().to_string()).collect();
+    let segments: Vec<String> = path.path().unwrap().segments().map(|s| s.text()).collect();
     assert_eq!(segments, ["Int"]);
 }
 
@@ -408,8 +412,10 @@ fn match_arms_and_constructor_patterns() {
         panic!("expected a constructor pattern");
     };
     let segments: Vec<String> = con
+        .path()
+        .unwrap()
         .segments()
-        .map(|token| token.text().to_string())
+        .map(|segment| segment.text())
         .collect();
     assert_eq!(segments, ["Some"]);
     let args: Vec<SyntaxKind> = con.args().map(|pat| pat.syntax().kind()).collect();
@@ -436,8 +442,10 @@ fn type_application_parts() {
         panic!("expected a type application");
     };
     let segments: Vec<String> = app
+        .path()
+        .unwrap()
         .segments()
-        .map(|token| token.text().to_string())
+        .map(|segment| segment.text())
         .collect();
     assert_eq!(segments, ["Option"]);
     let args: Vec<SyntaxKind> = app.args().map(|ty| ty.syntax().kind()).collect();

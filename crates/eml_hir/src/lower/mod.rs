@@ -379,6 +379,24 @@ fn value_name(token: Option<SyntaxToken>) -> Option<SyntaxToken> {
     })
 }
 
+/// 名前の経路の読み方。修飾名は S2 で実装する (docs/spec/modules.md)。
+pub(super) enum PathName {
+    Plain(SyntaxToken),
+    Qualified,
+    /// パーサが報告済み。
+    Missing,
+}
+
+pub(super) fn path_name(path: Option<ast::Path>) -> PathName {
+    match path {
+        Some(path) if path.is_qualified() => PathName::Qualified,
+        Some(path) => path
+            .name()
+            .map_or(PathName::Missing, |name| PathName::Plain(name.token())),
+        None => PathName::Missing,
+    }
+}
+
 /// 同じ名前空間のトップレベルの定義の重複 (docs/spec/modules.md の「名前空間」)。ソースで後に書いた方を primary にする。
 pub(super) fn duplicate(file: FileId, name: &str, a: TextRange, b: TextRange) -> Diagnostic {
     let (first, again) = if a.start() <= b.start() {

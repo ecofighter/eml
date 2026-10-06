@@ -14,13 +14,19 @@ fn operator_sequence_is_flat_with_prefix_minus() {
         OP_SEQ
           MINUS "-"
           PATH_EXPR
-            LIDENT "a"
+            PATH
+              NAME_REF
+                LIDENT "a"
           OP "+"
           PATH_EXPR
-            LIDENT "b"
+            PATH
+              NAME_REF
+                LIDENT "b"
           OP "*"
           PATH_EXPR
-            LIDENT "c"
+            PATH
+              NAME_REF
+                LIDENT "c"
     "#);
 }
 
@@ -33,13 +39,17 @@ fn minus_after_a_function_is_subtraction() {
         EQ "="
         OP_SEQ
           PATH_EXPR
-            LIDENT "f"
+            PATH
+              NAME_REF
+                LIDENT "f"
           MINUS "-"
           LITERAL
             INT "1"
           CONOP "::"
           PATH_EXPR
-            LIDENT "xs"
+            PATH
+              NAME_REF
+                LIDENT "xs"
     "#);
 }
 
@@ -144,7 +154,9 @@ fn section_ending_with_an_operator_is_one_error() {
           OP "+"
           OP_SEQ
             PATH_EXPR
-              LIDENT "a"
+              PATH
+                NAME_REF
+                  LIDENT "a"
             OP "+"
           R_PAREN ")"
       EQUATION
@@ -194,20 +206,28 @@ fn sections_with_operator_sequences() {
             OP "+"
             OP_SEQ
               PATH_EXPR
-                LIDENT "a"
+                PATH
+                  NAME_REF
+                    LIDENT "a"
               OP "*"
               PATH_EXPR
-                LIDENT "b"
+                PATH
+                  NAME_REF
+                    LIDENT "b"
             R_PAREN ")"
           COMMA ","
           LEFT_SECTION
             L_PAREN "("
             OP_SEQ
               PATH_EXPR
-                LIDENT "a"
+                PATH
+                  NAME_REF
+                    LIDENT "a"
               OP "*"
               PATH_EXPR
-                LIDENT "b"
+                PATH
+                  NAME_REF
+                    LIDENT "b"
             OP "+"
             R_PAREN ")"
           COMMA ","
