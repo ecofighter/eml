@@ -13,20 +13,21 @@ use super::types::{TypeLowering, Vars};
 use crate::hir::{
     Constructor, Generics, ItemId, ModuleId, TypeDef, TypeDefId, TypeDefKind, TypeVarDecl,
 };
+use crate::item_tree::DataItem;
 
 /// 型の名前と型引数だけを先に登録する。フィールドの型と操作のシグネチャが、後ろで宣言した型も引けるようにするため。
 /// `declared` は型の名前空間のユーザーの名前で、エフェクトの宣言と共有して重複 (E1003) を見つける。
 pub(super) fn declare_data(
     file: FileId,
     module: ModuleId,
-    items: &[ast::DataItem],
+    items: &[DataItem],
     declared: &mut HashMap<String, TextRange>,
     scope: &mut ItemScope,
     types: &mut Arena<TypeDef>,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Vec<(TypeDefId, ast::DataItem)> {
     let mut lowered = Vec::new();
-    for item in items {
+    for item in items.iter().map(|item| &item.syntax) {
         // 名前がなければパーサが報告済み
         let Some(name) = item.name().map(|name| name.token()) else {
             continue;

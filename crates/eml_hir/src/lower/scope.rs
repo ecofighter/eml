@@ -8,32 +8,10 @@ use la_arena::Arena;
 use eml_diagnostics::TextRange;
 
 use crate::hir::{EffectDef, Generics, LangItems, TypeDef};
+pub(super) use crate::item_tree::{Assoc, Fixity};
 use crate::program::{
     ConstructorId, EffectId, FunctionId, ItemId, Items, Module, ModuleId, OperationId, TypeDefId,
 };
-
-/// 演算子の結合の向き (docs/spec/declarations.md の「fixity」)。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum Assoc {
-    Left,
-    Right,
-    None,
-}
-
-/// 演算子の優先順位と結合 (docs/spec/declarations.md の「fixity」)。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) struct Fixity {
-    pub precedence: u8,
-    pub assoc: Assoc,
-}
-
-impl Fixity {
-    /// fixity の宣言がない演算子 (Haskell と同じ)。
-    pub(super) const DEFAULT: Fixity = Fixity {
-        precedence: 9,
-        assoc: Assoc::Left,
-    };
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum ValueItem {

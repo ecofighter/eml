@@ -15,6 +15,7 @@ use crate::hir::{
     EffectDef, EffectId, Generics, ItemId, ModuleId, OpMultiplicity, Operation, RowRef, Signature,
     TypeRef, TypeRefId, TypeRefKind, TypeVarDecl, TypeVarId,
 };
+use crate::item_tree::EffectItem;
 use crate::program::Items;
 
 /// エフェクトの名前をすべて登録してから、操作のシグネチャを変換する。操作の引数の型の row で、後ろで宣言した
@@ -22,7 +23,7 @@ use crate::program::Items;
 pub(super) fn lower_effects(
     file: FileId,
     module: ModuleId,
-    items: &[ast::EffectItem],
+    items: &[EffectItem],
     declared: &mut HashMap<String, TextRange>,
     scope: &mut ItemScope,
     module_items: &mut Items,
@@ -34,7 +35,7 @@ pub(super) fn lower_effects(
         ..
     } = module_items;
     let mut lowered = Vec::new();
-    for item in items {
+    for item in items.iter().map(|item| &item.syntax) {
         // 名前がなければパーサが報告済み
         let Some(name) = item.name().map(|name| name.token()) else {
             continue;

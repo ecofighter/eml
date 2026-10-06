@@ -2,12 +2,14 @@
 
 mod eval;
 mod hir;
+mod item_tree;
 mod lower;
 mod pretty;
 mod program;
 
 pub use eval::{EvalStep, call_steps, is_value, known_arity};
 pub use hir::*;
+pub use item_tree::*;
 pub use lower::lower;
 pub use pretty::pretty;
 pub use program::*;

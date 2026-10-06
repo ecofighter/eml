@@ -25,17 +25,11 @@ pub(super) fn lower_prelude(
     let mut diagnostics = Vec::new();
     // シグネチャが `Bool` を引けるように、`data` を先に変換する。重複を見る名前の表は Prelude だけのもので、ユーザーの
     // 定義との重複は E1003 にしない。ユーザーの定義は後で同じ名前を上書きし、Prelude の名前を隠す
-    let data: Vec<ast::DataItem> = tree
-        .items()
-        .filter_map(|item| match item {
-            ast::Item::DataItem(data) => Some(data),
-            _ => None,
-        })
-        .collect();
+    let (items_of_tree, _) = crate::item_tree::item_tree(file, tree);
     let declared = declare_data(
         file,
         module,
-        &data,
+        &items_of_tree.data,
         &mut HashMap::new(),
         scope,
         &mut items.types,
@@ -54,7 +48,8 @@ pub(super) fn lower_prelude(
         let ast::Item::FixityItem(item) = item else {
             continue;
         };
-        let fixity = super::fixity_of(&item).expect("every Prelude fixity is well formed");
+        let fixity =
+            crate::item_tree::fixity_of(&item).expect("every Prelude fixity is well formed");
         for op in item.operators().map(|name| name.token()) {
             scope.declare_prelude_fixity(op.text(), fixity);
         }
