@@ -3,6 +3,8 @@
 
 use std::collections::{HashMap, HashSet};
 
+use eml_diagnostics::TextRange;
+
 use super::problem::{Bounds, Decl, KindProblem, KindScheme, OwnVars};
 use super::{Bound, CarriedInner, Carry, KindOrigin, KindReason, KindVar, Level, Provenance};
 use crate::ty::{Linearity, Multiplicity};
@@ -10,7 +12,8 @@ use crate::ty::{Linearity, Multiplicity};
 /// 1つの SCC を解いた結果。`schemes` は `members` と同じ順に並ぶ。
 pub(crate) struct Solution {
     pub schemes: Vec<KindScheme>,
-    /// 由来のある違反の由来。並べ替えと重複除去は、呼ぶ側がモジュール全体でまとめて行う。
+    /// 違反のうち `reportable` が報告すると決めたものの由来。由来を付け忘れた違反は、release ビルドでは
+    /// `unattributed_origin` の由来で入る。並べ替えと重複除去は、呼ぶ側がモジュール全体でまとめて行う。
     pub violated: Vec<KindOrigin>,
 }
 
@@ -67,11 +70,16 @@ fn reportable(provenance: &Provenance) -> Option<KindOrigin> {
         }
         Provenance::Unattributed(range) => {
             debug_assert!(false, "a violated Kind constraint has no origin");
-            Some(KindOrigin {
-                range: *range,
-                reason: KindReason::Unified,
-            })
+            Some(unattributed_origin(*range))
         }
+    }
+}
+
+/// 由来を付け忘れた違反を、release ビルドで報告するときの由来。
+fn unattributed_origin(range: TextRange) -> KindOrigin {
+    KindOrigin {
+        range,
+        reason: KindReason::Unified,
     }
 }
 
@@ -719,7 +727,6 @@ fn bound_key<T: Level>(bound: Bound<T>) -> (u8, usize, Option<T>) {
 
 #[cfg(test)]
 mod tests {
-    use eml_diagnostics::TextRange;
     use eml_hir::FunctionId;
     use eml_hir::builtin::Builtin;
     use la_arena::RawIdx;
@@ -1133,6 +1140,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(debug_assertions)]
     #[should_panic(expected = "has no origin")]
     fn an_unattributed_violation_is_a_bug() {
         let mut problem = KindProblem::default();
@@ -1149,6 +1157,17 @@ mod tests {
             Provenance::Unattributed(range),
         );
         solve_scc(&[(function(0), &problem)], &HashMap::new());
+    }
+
+    #[test]
+    fn the_fallback_for_an_unattributed_violation_points_at_its_range() {
+        assert_eq!(
+            unattributed_origin(range(3, 5)),
+            KindOrigin {
+                range: range(3, 5),
+                reason: KindReason::Unified,
+            }
+        );
     }
 
     #[test]

@@ -501,7 +501,7 @@ impl BodyCheck<'_, '_> {
         let body = self.body;
         let callee_expr = &body.exprs[callee];
         let name = callee_subject(self.module, body, callee);
-        let mut ty = match &callee_expr.kind {
+        let (mut ty, opened_later) = match &callee_expr.kind {
             // 呼ばれる位置のトップレベルの値は開かずに具体化し、矢印の row を宣言のまま記録する。持ち越し規則は宣言の
             // row で判定する (docs/spec/effects.md の「継続の多重度と持ち越し規則」)
             ExprKind::Path(
@@ -510,12 +510,10 @@ impl BodyCheck<'_, '_> {
             ) => {
                 let ty = self.path(callee, *res, callee_expr.range, false);
                 self.typing.exprs.insert(callee, ty);
-                ty
+                (ty, true)
             }
-            _ => self.infer_expr(callee),
+            _ => (self.infer_expr(callee), false),
         };
-        let opened_later =
-            matches!(&callee_expr.kind, ExprKind::Path(res) if !matches!(res, Res::Local(_)));
         let performs = match &callee_expr.kind {
             ExprKind::Path(Res::Operation(op)) => {
                 Some((self.module.operations[*op].arity.saturating_sub(1), *op))

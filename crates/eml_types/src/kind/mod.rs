@@ -124,28 +124,67 @@ pub(crate) enum KindReason {
 }
 
 impl KindReason {
-    /// 同じ範囲の由来を並べる順。種類は宣言の順で、同じ種類は名前と位置で比べる。同じ値の持ち越しの違反から報告する1件を、
-    /// 制約が並んだ順に左右されずに選ぶため (docs/spec/diagnostics.md の E3006)。
-    pub fn order_key(&self) -> (u8, String, (u32, u32)) {
-        let at = |range: TextRange| (u32::from(range.start()), u32::from(range.end()));
-        let none = (0, 0);
+    /// 同じ範囲の由来を並べる順。種類は宣言の順で、同じ種類は中身の名前と位置を順に比べる。中身の違う由来は鍵も違うので、
+    /// 同じ値の持ち越しの違反から報告する1件を、制約が並んだ順に左右されずに選べる (docs/spec/diagnostics.md の E3006)。
+    pub fn order_key(&self) -> (u8, Vec<KeyPart>) {
         match self {
-            KindReason::UsedMoreThanOnce { name, first, .. } => (0, name.clone(), at(*first)),
-            KindReason::NotUsed { name, .. } => (1, name.clone(), none),
-            KindReason::ContinuationNotUsed { name, clause } => (2, name.clone(), at(*clause)),
-            KindReason::Discarded => (3, String::new(), none),
-            KindReason::CapturedByClause(name) => (4, name.clone(), none),
-            KindReason::CapturedByLambda => (5, String::new(), none),
-            KindReason::Passed(name) => (6, name.clone(), none),
-            KindReason::Unified => (7, String::new(), none),
-            KindReason::CarriedAcross { value, .. } => (8, String::new(), at(value.key())),
-            KindReason::CarriedThrough { name, inner } => (
-                9,
-                name.clone(),
-                inner.as_ref().map_or(none, |inner| at(inner.range)),
-            ),
+            KindReason::UsedMoreThanOnce {
+                name,
+                first,
+                second,
+            } => (0, [vec![text(name)], span(*first), span(*second)].concat()),
+            KindReason::NotUsed { name, path, fix } => {
+                let fix = match fix {
+                    None => vec![number(0)],
+                    Some(fix) => vec![number(1), number(fix.offset.into()), number(fix.indent)],
+                };
+                (1, [vec![text(name)], path.order_key(), fix].concat())
+            }
+            KindReason::ContinuationNotUsed { name, clause } => {
+                (2, [vec![text(name)], span(*clause)].concat())
+            }
+            KindReason::Discarded => (3, Vec::new()),
+            KindReason::CapturedByClause(name) => (4, vec![text(name)]),
+            KindReason::CapturedByLambda => (5, Vec::new()),
+            KindReason::Passed(name) => (6, vec![text(name)]),
+            KindReason::Unified => (7, Vec::new()),
+            KindReason::CarriedAcross { value, multi, call } => {
+                let multi = match multi {
+                    None => vec![number(0)],
+                    Some(op) => vec![number(1), number(op.into_raw().into_u32())],
+                };
+                (8, [value.order_key(), multi, call.order_key()].concat())
+            }
+            KindReason::CarriedThrough { name, inner } => {
+                let inner = match inner {
+                    None => vec![number(0)],
+                    Some(inner) => {
+                        [vec![number(1)], span(inner.range), inner.label.order_key()].concat()
+                    }
+                };
+                (9, [vec![text(name)], inner].concat())
+            }
         }
     }
+}
+
+/// `KindReason::order_key` の鍵の1要素。
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum KeyPart {
+    Number(u32),
+    Text(String),
+}
+
+fn number(value: u32) -> KeyPart {
+    KeyPart::Number(value)
+}
+
+fn text(name: &str) -> KeyPart {
+    KeyPart::Text(name.to_string())
+}
+
+fn span(range: TextRange) -> Vec<KeyPart> {
+    vec![number(range.start().into()), number(range.end().into())]
 }
 
 /// 変数を使わなかった経路。E3003 の secondary が指す。
@@ -159,6 +198,18 @@ pub(crate) enum UnusedPath {
     ScopeEnd(TextRange),
     /// どの経路でも使わないうちに、同じブロックの後の `let` で隠された。範囲は隠した束縛である。
     Shadowed(TextRange),
+}
+
+impl UnusedPath {
+    fn order_key(&self) -> Vec<KeyPart> {
+        let (kind, range) = match self {
+            UnusedPath::Branch(range) => (0, range),
+            UnusedPath::NoElse(range) => (1, range),
+            UnusedPath::ScopeEnd(range) => (2, range),
+            UnusedPath::Shadowed(range) => (3, range),
+        };
+        [vec![number(kind)], span(*range)].concat()
+    }
 }
 
 /// 呼び出しをまたいで持っている値。E3006 の secondary が指す。
@@ -186,6 +237,18 @@ impl CarriedValue {
             CarriedValue::Temporary(range) => *range,
         }
     }
+
+    /// 同じ値を見分ける範囲を先に比べ、同じ値の由来を隣に並べる。
+    fn order_key(&self) -> Vec<KeyPart> {
+        let rest = match self {
+            CarriedValue::Local { name, .. } => vec![number(0), text(name)],
+            CarriedValue::Temporary(_) => vec![number(1)],
+            CarriedValue::ReturnCapture { name, clause, .. } => {
+                [vec![number(2), text(name)], span(*clause)].concat()
+            }
+        };
+        [span(self.key()), rest].concat()
+    }
 }
 
 /// 値がまたぐもの。持ち越しのパスが多重度の成分を作るのに使う。操作の直接の呼び出しでは、その操作の多重度だけを見る。
@@ -206,6 +269,17 @@ pub(crate) enum CallKind {
     Handle,
 }
 
+impl CallKind {
+    fn order_key(&self) -> Vec<KeyPart> {
+        match self {
+            CallKind::Call => vec![number(0)],
+            CallKind::Resume { k: None } => vec![number(1), number(0)],
+            CallKind::Resume { k: Some(k) } => vec![number(1), number(1), text(k)],
+            CallKind::Handle => vec![number(2)],
+        }
+    }
+}
+
 /// `CarriedThrough` が指す、呼んだ関数の中の持ち越しの1段分。報告は1段しかたどらないので入れ子にしない。入れ子にすると、
 /// 呼び出しの段数だけ由来が深くなり、複写のたびにその深さの時間がかかる (docs/spec/diagnostics.md の E3006)。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -223,6 +297,16 @@ pub(crate) enum InnerLabel {
     Through(String),
     /// 名前のない値を持ったまま呼んだ。
     Value,
+}
+
+impl InnerLabel {
+    fn order_key(&self) -> Vec<KeyPart> {
+        match self {
+            InnerLabel::Kept(name) => vec![number(0), text(name)],
+            InnerLabel::Through(name) => vec![number(1), text(name)],
+            InnerLabel::Value => vec![number(2)],
+        }
+    }
 }
 
 impl CarriedInner {
@@ -253,6 +337,8 @@ pub(crate) struct Carry {
 
 #[cfg(test)]
 mod tests {
+    use la_arena::RawIdx;
+
     use super::*;
 
     #[test]
@@ -267,5 +353,111 @@ mod tests {
         let a = KindReason::Passed("a".to_string());
         let b = KindReason::Passed("b".to_string());
         assert!(a.order_key() < b.order_key());
+
+        let reasons = distinct_reasons();
+        for (i, x) in reasons.iter().enumerate() {
+            for y in &reasons[i + 1..] {
+                assert_ne!(x.order_key(), y.order_key(), "{x:?} and {y:?}");
+            }
+        }
+        let sorted = |mut list: Vec<KindReason>| {
+            list.sort_by_cached_key(KindReason::order_key);
+            list
+        };
+        let reversed = reasons.iter().rev().cloned().collect();
+        let mut rotated = reasons.clone();
+        rotated.rotate_left(reasons.len() / 2);
+        assert_eq!(sorted(reversed), sorted(rotated));
+    }
+
+    /// 中身が1か所だけ違う由来を、種類ごとに並べる。
+    fn distinct_reasons() -> Vec<KindReason> {
+        let range = |start: u32, end: u32| TextRange::new(start.into(), end.into());
+        let op = |index: u32| OperationId::from_raw(RawIdx::from(index));
+        let local = |name: &str, start| CarriedValue::Local {
+            name: name.to_string(),
+            binding: range(start, start + 1),
+        };
+        let used = |second| KindReason::UsedMoreThanOnce {
+            name: "f".to_string(),
+            first: range(1, 2),
+            second,
+        };
+        let not_used = |path, fix| KindReason::NotUsed {
+            name: "f".to_string(),
+            path,
+            fix,
+        };
+        let across = |value, multi, call| KindReason::CarriedAcross { value, multi, call };
+        let through = |inner| KindReason::CarriedThrough {
+            name: "keep".to_string(),
+            inner,
+        };
+        let inner = |start, label| CarriedInner {
+            range: range(start, start + 1),
+            label,
+        };
+        vec![
+            used(range(3, 4)),
+            used(range(5, 6)),
+            not_used(UnusedPath::Branch(range(1, 2)), None),
+            not_used(UnusedPath::NoElse(range(1, 2)), None),
+            not_used(UnusedPath::ScopeEnd(range(1, 1)), None),
+            not_used(
+                UnusedPath::ScopeEnd(range(1, 1)),
+                Some(DropFix {
+                    offset: 1.into(),
+                    indent: 2,
+                }),
+            ),
+            not_used(
+                UnusedPath::ScopeEnd(range(1, 1)),
+                Some(DropFix {
+                    offset: 1.into(),
+                    indent: 4,
+                }),
+            ),
+            KindReason::ContinuationNotUsed {
+                name: "k".to_string(),
+                clause: range(1, 9),
+            },
+            KindReason::Discarded,
+            KindReason::CapturedByClause("f".to_string()),
+            KindReason::CapturedByLambda,
+            KindReason::Unified,
+            across(local("f", 1), None, CallKind::Call),
+            across(local("f", 1), Some(op(0)), CallKind::Call),
+            across(local("f", 1), Some(op(1)), CallKind::Call),
+            across(local("f", 1), Some(op(0)), CallKind::Handle),
+            across(local("f", 1), Some(op(0)), CallKind::Resume { k: None }),
+            across(
+                local("f", 1),
+                Some(op(0)),
+                CallKind::Resume {
+                    k: Some("k".to_string()),
+                },
+            ),
+            across(local("g", 1), Some(op(0)), CallKind::Call),
+            across(local("f", 3), Some(op(0)), CallKind::Call),
+            across(
+                CarriedValue::Temporary(range(1, 2)),
+                Some(op(0)),
+                CallKind::Call,
+            ),
+            across(
+                CarriedValue::ReturnCapture {
+                    name: "f".to_string(),
+                    binding: range(1, 2),
+                    clause: range(5, 9),
+                },
+                Some(op(0)),
+                CallKind::Handle,
+            ),
+            through(None),
+            through(Some(inner(1, InnerLabel::Value))),
+            through(Some(inner(1, InnerLabel::Kept("x".to_string())))),
+            through(Some(inner(1, InnerLabel::Through("keep2".to_string())))),
+            through(Some(inner(5, InnerLabel::Value))),
+        ]
     }
 }
