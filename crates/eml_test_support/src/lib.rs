@@ -107,6 +107,21 @@ pub fn lower(text: &str) -> Lowered {
     }
 }
 
+/// Prelude と入口のファイルの `ItemTree` から `DefMap` を作り、`def_map` の診断だけを返す。
+#[cfg(feature = "hir")]
+pub fn def_map(text: &str) -> (eml_hir::DefMap, Vec<String>) {
+    let parsed = parse(text);
+    let prelude = parsed
+        .prelude
+        .expect("the `hir` feature registers the Prelude");
+    let prelude_tree = eml_hir::parse_prelude(prelude);
+    let (prelude_items, _) = eml_hir::item_tree(prelude, &prelude_tree);
+    let (items, _) = eml_hir::item_tree(parsed.file, &parsed.parse.tree());
+    let (map, mut diagnostics) = eml_hir::def_map(&[prelude_items, items]);
+    sort_diagnostics(&mut diagnostics);
+    (map, short(&parsed.files, &diagnostics))
+}
+
 /// 前提として診断のないソースを使うテストのため。条件を緩めないよう、警告も1件として数える。
 pub fn parse_clean(text: &str) -> Parsed {
     let parsed = parse(text);

@@ -115,7 +115,7 @@ mod tests {
             (&["||"], 2, Assoc::Right),
             (&["&&"], 3, Assoc::Right),
             (&["==", "!=", "<", "<=", ">", ">="], 4, Assoc::None),
-            (&["++", "::"], 5, Assoc::Right),
+            (&["++"], 5, Assoc::Right),
             (&["+", "-"], 6, Assoc::Left),
             (&["*", "/", "%"], 7, Assoc::Left),
             (&[">>", "<<"], 9, Assoc::Right),

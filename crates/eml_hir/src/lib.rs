@@ -1,5 +1,6 @@
 //! CST から HIR への変換と名前解決 (docs/implementation/architecture.md の「`eml_hir` で行う脱糖と検査」)。
 
+mod def_map;
 mod eval;
 mod hir;
 mod item_tree;
@@ -7,6 +8,7 @@ mod lower;
 mod pretty;
 mod program;
 
+pub use def_map::*;
 pub use eval::{EvalStep, call_steps, is_value, known_arity};
 pub use hir::*;
 pub use item_tree::*;
