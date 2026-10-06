@@ -1,5 +1,4 @@
-//! テストのためにパイプラインを組む処理 (診断のないことを確かめるものを含む)、診断を文字列にする処理、手書きの Core IR の
-//! 部品 (docs/implementation/testing.md)。
+//! テストのためにパイプラインを組む処理 (診断のないことを確かめるものを含む)、診断を文字列にする処理 (docs/implementation/testing.md)。
 //!
 //! この crate は、テストする crate の型をそのまま使う。そのため、使ってよいのは各 crate の `tests/` にある結合テスト
 //! からだけである。`src/` の `#[cfg(test)]` から使うと、テストする crate が2つ別々にリンクされて型が合わなくなる。
@@ -234,39 +233,4 @@ pub fn full(files: &SourceFiles, diagnostics: &[Diagnostic]) -> String {
 
 fn position(files: &SourceFiles, label: &Label) -> LineCol {
     files.line_col(label.file, label.range.start())
-}
-
-/// フロントエンドからは作れない Core IR を手で組むテストが使う部品 (docs/implementation/testing.md の「テストの置き場所」)。
-#[cfg(feature = "core")]
-pub mod ir {
-    use eml_core_ir::{Atom, CoreFn, FnIdx, Program, VarId, VarInfo};
-
-    pub fn var(n: u32) -> Atom {
-        Atom::Var(VarId(n))
-    }
-
-    pub fn boxed(name: &str) -> VarInfo {
-        var_info(name, true)
-    }
-
-    pub fn unboxed(name: &str) -> VarInfo {
-        var_info(name, false)
-    }
-
-    fn var_info(name: &str, boxed: bool) -> VarInfo {
-        VarInfo {
-            name: name.to_string(),
-            boxed,
-        }
-    }
-
-    /// エフェクトを持つプログラムは `Program { effects, ..program(...) }` で組む。
-    pub fn program(functions: Vec<CoreFn>, entry: u32, strings: &[&str]) -> Program {
-        Program {
-            functions,
-            entry: FnIdx(entry),
-            strings: strings.iter().map(|s| s.to_string()).collect(),
-            effects: Vec::new(),
-        }
-    }
 }

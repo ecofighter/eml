@@ -1,9 +1,8 @@
-//! ソースから実行して確かめるテストは UI テスト (`tests/ui/run/`) に置く。ここには、手書きの Core IR や生成した
+//! ソースから実行して確かめるテストは UI テスト (`tests/ui/run/`) に置く。ここには、Core IR のテキストや生成した
 //! ソースが要るものだけを置く (docs/implementation/testing.md)。
 
-use eml_core_ir::{Atom, CExpr, CExprId, CoreFn, Program, Rhs, VarId};
+use eml_core_ir::Program;
 use eml_interp::RuntimeError;
-use eml_test_support::ir::{boxed, program, unboxed};
 use eml_test_support::{execute, run};
 
 fn main_with(body: &str) -> String {
@@ -12,22 +11,15 @@ fn main_with(body: &str) -> String {
 
 /// Perceus の挿入を経ない手書きの Core IR で、`debug_heap` がリークを見つけることを確かめる。
 fn leaking_program() -> Program {
-    let main = CoreFn {
-        name: "main".to_string(),
-        params: vec![],
-        vars: vec![unboxed("p"), boxed("s")],
-        body: CExprId(1),
-        exprs: vec![
-            CExpr::Return(Atom::Unit),
-            CExpr::Let {
-                var: VarId(1),
-                rhs: Rhs::ConstString(0),
-                body: CExprId(0),
-            },
-        ],
-        joins: Vec::new(),
-    };
-    program(vec![main], 0, &["leaked"])
+    eml_core_ir::parse(
+        r#"
+fn main() {
+  let s1^ = const "leaked"
+  return ()
+}
+"#,
+    )
+    .unwrap_or_else(|error| panic!("{error}"))
 }
 
 #[test]

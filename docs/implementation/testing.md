@@ -33,7 +33,7 @@
 |---|---|---|
 | 1 | 機能ごとの代表的なプログラムを `eml check` / `eml run` にかけたときにユーザーが見るもの。stdout、実行時エラー、プログラム全体が通るか落ちるか、代表的な診断の表示 | UI テスト (`tests/ui/`) |
 | 2 | 1つの段階の出力 (CST、HIR、推論したシグネチャ、Core IR) と、その段階の診断の細部 (位置、回復、端のケース) | その段階の crate の結合テスト (`crates/<段階>/tests/`)。ソースから `eml_test_support` で組み立てる |
-| 3 | フロントエンドからは作れない状態 (壊れた IR、`decref` の抜けた IR など) と、テストの中で生成した大きなソース | `eml_core_ir/tests/verify.rs` か `eml_interp/tests/`。Core IR は `eml_test_support::ir` で手書きする |
+| 3 | フロントエンドからは作れない状態 (壊れた IR、`decref` の抜けた IR など) と、テストの中で生成した大きなソース | `eml_core_ir/tests/verify.rs` か `eml_interp/tests/`。Core IR は、アリーナを組まずに IR のテキストで書き、`eml_core_ir::parse` で読む。アリーナの形そのものを確かめるテストだけは、`eml_core_ir` の単体テストで組む |
 | 4 | 公開の API から届かないか、内部の状態を直接組まないと確かめにくい部品の振る舞い。レイアウト段、パーサのマーカー、単一化の表、Kind の制約の解消、ヒープなど | `src/` の単体テスト |
 | 5 | lib API の流れ、CLI の終了コード、テスト補助そのもの | `eml_cli/tests/api.rs`、`eml_cli/tests/cli.rs`、`eml_test_support/tests/` |
 
@@ -47,7 +47,7 @@
 - crate の結合テストが使う表示の関数は `tests/common/mod.rs` に置く。複数の crate で使う部品は `eml_test_support` に置く
 - Core IR の結合テストは、確かめるパスごとのファイルに置き、`eml_test_support::core_until` でそのパスの直後の IR を見る。後のパスの書き換えや RC の命令を、確かめたいことと一緒に期待値に入れないためである
 - 単体テストは、ファイルの末尾の `#[cfg(test)] mod tests` に置く。テストが300行を超え、ファイルの半分ほどを占めるようになったら、`eml_types/src/table/tests.rs` のように隣の `tests.rs` に分ける
-- `crates/eml_test_support/` は、結合テストのためにパイプラインを組む関数 (`parse`、`lower`、`check`、`core`、`core_until`、`run`、`execute`) と、診断のないことを確かめて組む関数 (`parse_clean`、`lower_clean`)、診断を文字列にする関数 (`short`、`short_text`、`full`)、段階の表示に診断を足す関数 (`with_diagnostics`)、手書きの Core IR の部品 (`ir`) を持つ。開発専用の crate で、各 crate の `tests/` からだけ使う。段階は feature (`hir` < `types` < `core` < `run`) で選び、各 crate は自分の段階までを有効にする。下流の crate がまだ組み立たなくても、上流の段階のテストを流せるようにするためである。`src/` の `#[cfg(test)]` から使うと、テストする crate が2つ別々にリンクされて型が合わなくなる
+- `crates/eml_test_support/` は、結合テストのためにパイプラインを組む関数 (`parse`、`lower`、`check`、`core`、`core_until`、`run`、`execute`) と、診断のないことを確かめて組む関数 (`parse_clean`、`lower_clean`)、診断を文字列にする関数 (`short`、`short_text`、`full`)、段階の表示に診断を足す関数 (`with_diagnostics`)を持つ。開発専用の crate で、各 crate の `tests/` からだけ使う。段階は feature (`hir` < `types` < `core` < `run`) で選び、各 crate は自分の段階までを有効にする。下流の crate がまだ組み立たなくても、上流の段階のテストを流せるようにするためである。`src/` の `#[cfg(test)]` から使うと、テストする crate が2つ別々にリンクされて型が合わなくなる
 
 ### 今あるテストの地図
 
@@ -57,9 +57,9 @@
 | `eml_syntax` | `lexer.rs` (字句)、`literals.rs` (リテラルの値の解釈)、`parser.rs` (空のファイル、項目の解析と項目の間の回復、BOM と shebang)、`declarations.rs` (シグネチャの形、`data`、`effect`、fixity、`pub` / `type` / `import`)、`types.rs` (型と row)、`expressions.rs` (等式、パターン、適用やフィールドの参照などの式、ブロックと `let`、ラムダ、`use`、括弧の回復)、`operators.rs` (演算子の列、前置の `-`、セクション、被演算子の欠け)、`control.rs` (`if` と `match`)、`handlers.rs` (handler)、`nesting.rs` (入れ子の深さの上限)、`ast.rs` (型付き AST ラッパ。`data`、`match`、コンストラクタのパターン、型の適用の取り出し口)、`corpus.rs` (コーパス。ソースは `tests/corpus/` にあり、`s1.em` は S1 の構文、`later_stages.em` は S2 以降の構文を含む) | `layout.rs` (レイアウト段)、`parser/tests.rs` (パーサのマーカー、先読み、診断の位置)、`grammar/scan.rs` (回復の範囲の走査)、`syntax_kind.rs` と `token_set.rs` (構文の種類の表) |
 | `eml_hir` | `lower.rs` (名前解決と脱糖)、`operators.rs` (演算子の組み直し)、`effects.rs` (エフェクトと操作)、`structure.rs` (HIR のデータ構造と走査)、`data.rs` (`data` の宣言、コンストラクタ、型の適用、パターン、`match`)、`tuples.rs` (タプルの式・型・パターン、リテラルのパターン、射影の E0004) | `builtin.rs` (組み込みの表)、`lower/scope.rs` (名前空間) |
 | `eml_types` | `check.rs` (推論と型の診断)、`rows.rs` (エフェクトの row と E2002)、`effects.rs` (エフェクト、handler、継続、線形な継続 (E3001))、`data.rs` (型構成子の引数、データ型の Kind、パターンと `match` の型検査)、`exhaustive.rs` (網羅性の検査と漏れの例。タプルとリテラルを含む)、`tuples.rs` (タプルの型検査、リテラルのパターン、`==` の比べ方の決定と E2006)、`linearity.rs` (線形性の診断)、`scaling.rs` (型検査の時間の伸び。`#[ignore]`) | `table/tests.rs` (単一化と型の書き出し)、`kind/solve.rs` (Kind の問題の解き方と残す制約)、`shape.rs` (閉じた形と具体化)、`ty.rs` (型の表示)、`scc.rs` (関数の呼び出しの強連結成分)、`check/mod.rs` (診断の文言) |
-| `eml_core_ir` | `translate.rs` (Core IR への変換。変換の直後)、`simplify.rs` (`simplify` の書き換え。`simplify` の直後)、`perceus.rs` (`dup` / `decref` の位置と `saved`。Perceus の直後)、`verify.rs` (手書きの Core IR による verifier) | なし |
+| `eml_core_ir` | `translate.rs` (Core IR への変換。変換の直後)、`simplify.rs` (`simplify` の書き換え。`simplify` の直後)、`perceus.rs` (`dup` / `decref` の位置と `saved`。Perceus の直後)、`verify.rs` (Core IR のテキストによる verifier) | なし |
 | `eml_runtime` | なし | `heap/tests.rs` (確保と解放、世代番号、リーク、フレームと継続の解放、`take` と `take_or_copy` による複製)、`output.rs` (`OutputSink`) |
-| `eml_interp` | `run.rs` (手書きの Core IR や生成したソースによる実行)、`closures.rs` (手書きの Core IR によるクロージャ)、`data.rs` (手書きの Core IR による `data` の値と `Switch` の分解) | `lib.rs` (実行時エラーの表示と `RunConfig`) |
+| `eml_interp` | `run.rs` (Core IR のテキストや生成したソースによる実行)、`closures.rs` (Core IR のテキストによるクロージャ)、`data.rs` (Core IR のテキストによる `data` の値と `Switch` の分解) | `lib.rs` (実行時エラーの表示と `RunConfig`) |
 | `eml_cli` | `ui.rs` (UI テスト)、`api.rs` (lib API の `check` / `compile` / `execute` の流れ)、`cli.rs` (CLI の終了コード) | なし |
 | `eml_test_support` | `support.rs` (テスト補助そのもの) | なし |
 

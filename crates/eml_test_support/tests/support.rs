@@ -1,6 +1,5 @@
-use eml_core_ir::{Atom, CExpr, CExprId, CoreFn, FnIdx, Pass, Rhs, VarId, pretty, verify};
+use eml_core_ir::{Pass, pretty};
 use eml_diagnostics::{Diagnostic, ErrorCode, Label, TextRange};
-use eml_test_support::ir::{boxed, program, unboxed, var};
 use eml_test_support::{
     check, core, core_until, full, lower, lower_clean, parse, parse_clean, run, short, short_text,
     source, with_diagnostics,
@@ -138,43 +137,4 @@ fn lower_clean_returns_a_module_without_diagnostics() {
 #[should_panic(expected = "unexpected diagnostics")]
 fn lower_clean_rejects_an_undefined_name() {
     lower_clean("f : Int -> Int\nf x = g x");
-}
-
-#[test]
-fn ir_builds_a_program_the_verifier_accepts() {
-    // main () = let s = "s" in let n = 1 in decref s; ()
-    let main = CoreFn {
-        name: "main".to_string(),
-        params: vec![],
-        vars: vec![boxed("s"), unboxed("n")],
-        body: CExprId(3),
-        exprs: vec![
-            CExpr::Return(Atom::Unit),
-            CExpr::Decref {
-                var: VarId(0),
-                body: CExprId(0),
-            },
-            CExpr::Let {
-                var: VarId(1),
-                rhs: Rhs::Atom(Atom::Int(1)),
-                body: CExprId(1),
-            },
-            CExpr::Let {
-                var: VarId(0),
-                rhs: Rhs::ConstString(0),
-                body: CExprId(2),
-            },
-        ],
-        joins: Vec::new(),
-    };
-    let program = program(vec![main], 0, &["s"]);
-    assert_eq!(verify(&program).map_err(|error| error.to_string()), Ok(()));
-    assert_eq!(program.entry, FnIdx(0));
-    assert_eq!(program.strings, ["s"]);
-    assert!(program.effects.is_empty());
-    assert_eq!(var(3), Atom::Var(VarId(3)));
-    let s = &program.functions[0].vars[0];
-    assert_eq!((s.name.as_str(), s.boxed), ("s", true));
-    let n = &program.functions[0].vars[1];
-    assert_eq!((n.name.as_str(), n.boxed), ("n", false));
 }

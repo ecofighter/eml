@@ -208,3 +208,5 @@
 - `eml_core_ir/tests/common` の `core_text` は、表示を `eml_core_ir::parse` で読み直して同じ表示に戻ることも確かめるようにした。Core IR のスナップショットのテストは、すべて往復のテストを兼ねる。期待値は変えていない (種類3)
 - `VarInfo::linearity` を消したので、`eml_test_support::ir` の変数の組み立て、`eml_test_support/tests/support.rs` の `ir_builds_a_program_the_verifier_accepts` の比べる組、`eml_core_ir` の `builder.rs`、`compact.rs`、`verify.rs` の単体テストの組み立てから `linearity` を除いた。期待値は変えていない (種類3)
 - `eml_core_ir/tests/verify.rs` を、アリーナを組む代わりに Core IR のテキストと `eml_core_ir::parse` で書き直した (種類3)。変数の番号、boxed かどうか、join point の番号、文字列定数、エフェクトの表は元と同じで、テストの数 (40件) と期待値 (受け入れか、誤りの文言) も変えていない。単体テストへ移したテストはない。表の範囲の外の操作を指す `perform_names_an_operation_of_its_effect` は `perform Ask.#1()` で書いた
+- `eml_interp/tests/closures.rs`、`data.rs`、`run.rs` の手で組んだ Core IR を、アリーナを組む代わりに Core IR のテキストと `eml_core_ir::parse` で書き直した (種類3)。変数の番号、boxed かどうか、文字列定数は元と同じで、テストの数と期待値 (出力と `Result`) も変えていない。入口の `main` は最初の関数に置いた
+- 手で組む部品を使うテストがなくなったので、`eml_test_support::ir` (`var`、`boxed`、`unboxed`、`program`) を消した。部品だけを確かめていた `eml_test_support/tests/support.rs` の `ir_builds_a_program_the_verifier_accepts` も消した (種類1相当。確かめる対象の部品がなくなったため)

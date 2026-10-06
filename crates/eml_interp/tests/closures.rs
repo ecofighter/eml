@@ -1,175 +1,89 @@
-//! 手で組んだ Core IR で、クロージャの eval/apply を確かめる (docs/spec/core-ir.md)。
+//! Core IR のテキストで、クロージャの eval/apply を確かめる (docs/spec/core-ir.md)。
 
-use eml_core_ir::{Atom, CExpr, CExprId, Call, CoreFn, FnIdx, IoOp, PrimOp, Rhs, VarId};
-use eml_test_support::ir::{boxed, program, unboxed, var};
-
-enum Step {
-    Let(u32, Rhs),
-    Dup(u32),
-}
-
-fn function(name: &str, params: u32, vars: &[(&str, bool)], steps: Vec<Step>, ret: Atom) -> CoreFn {
-    let mut exprs = vec![CExpr::Return(ret)];
-    let mut body = CExprId(0);
-    for step in steps.into_iter().rev() {
-        exprs.push(match step {
-            Step::Let(var, rhs) => CExpr::Let {
-                var: VarId(var),
-                rhs,
-                body,
-            },
-            Step::Dup(var) => CExpr::Dup {
-                var: VarId(var),
-                body,
-            },
-        });
-        body = CExprId(exprs.len() as u32 - 1);
-    }
-    CoreFn {
-        name: name.to_string(),
-        params: (0..params).map(VarId).collect(),
-        vars: vars
-            .iter()
-            .map(|&(name, is_boxed)| if is_boxed { boxed(name) } else { unboxed(name) })
-            .collect(),
-        body,
-        exprs,
-        joins: Vec::new(),
-    }
-}
-
-fn run_program(functions: Vec<CoreFn>, main: u32, strings: &[&str]) -> String {
-    let (stdout, result) = eml_test_support::execute(program(functions, main, strings), true);
+fn run_program(text: &str) -> String {
+    let program = eml_core_ir::parse(text).unwrap_or_else(|error| panic!("{error}"));
+    let (stdout, result) = eml_test_support::execute(program, true);
     result.unwrap();
     stdout
 }
 
-/// `first a b = a`。
-fn first(boxed: bool) -> CoreFn {
-    function("first", 2, &[("a", boxed), ("b", false)], vec![], var(0))
-}
-
-/// 値 `n` の変数を文字列にして出力する。
-fn print_int(n: u32, show: u32, out: u32) -> Vec<Step> {
-    vec![
-        Step::Let(show, Rhs::Prim(PrimOp::ShowInt, vec![var(n)])),
-        Step::Let(out, Rhs::Io(IoOp::Println, vec![var(show)])),
-    ]
-}
-
 #[test]
 fn a_partial_application_waits_for_the_rest_of_the_arguments() {
-    let mut steps = vec![
-        Step::Let(1, Rhs::MakeClosure(FnIdx(0), vec![])),
-        Step::Let(2, Rhs::call(Call::Apply(var(1), vec![Atom::Int(10)]))),
-        Step::Let(3, Rhs::call(Call::Apply(var(2), vec![Atom::Int(20)]))),
-    ];
-    steps.extend(print_int(3, 4, 5));
-    let vars = [
-        ("p", false),
-        ("c", true),
-        ("d", true),
-        ("r", false),
-        ("s", true),
-        ("t", false),
-    ];
-    let main = function("main", 0, &vars, steps, var(5));
-    assert_eq!(run_program(vec![first(false), main], 1, &[]), "10\n");
+    let text = r#"
+fn main() {
+  let c1^ = closure first()
+  let d2^ = apply c1(10)
+  let r3 = apply d2(20)
+  let s4^ = prim show_int(r3)
+  let t5 = perform println(s4)
+  return t5
+}
+fn first(a0, b1) {
+  return a0
+}
+"#;
+    assert_eq!(run_program(text), "10\n");
 }
 
 #[test]
 fn a_returned_function_can_still_wait_for_more_arguments() {
-    let first3 = function(
-        "first3",
-        3,
-        &[("a", false), ("b", false), ("c", false)],
-        vec![],
-        var(0),
-    );
-    // make x = closure first3(x)
-    let make = function(
-        "make",
-        1,
-        &[("x", false), ("c", true)],
-        vec![Step::Let(1, Rhs::MakeClosure(FnIdx(0), vec![var(0)]))],
-        var(1),
-    );
-    let mut steps = vec![
-        Step::Let(1, Rhs::MakeClosure(FnIdx(1), vec![])),
-        Step::Let(
-            2,
-            Rhs::call(Call::Apply(var(1), vec![Atom::Int(5), Atom::Int(6)])),
-        ),
-        Step::Let(3, Rhs::call(Call::Apply(var(2), vec![Atom::Int(7)]))),
-    ];
-    steps.extend(print_int(3, 4, 5));
-    let vars = [
-        ("p", false),
-        ("m", true),
-        ("r", true),
-        ("s", false),
-        ("t", true),
-        ("u", false),
-    ];
-    let main = function("main", 0, &vars, steps, var(5));
-    assert_eq!(run_program(vec![first3, make, main], 2, &[]), "5\n");
+    let text = r#"
+fn main() {
+  let m1^ = closure make()
+  let r2^ = apply m1(5, 6)
+  let s3 = apply r2(7)
+  let t4^ = prim show_int(s3)
+  let u5 = perform println(t4)
+  return u5
+}
+fn first3(a0, b1, c2) {
+  return a0
+}
+fn make(x0) {
+  let c1^ = closure first3(x0)
+  return c1
+}
+"#;
+    assert_eq!(run_program(text), "5\n");
 }
 
 #[test]
 fn extra_arguments_are_applied_to_the_returned_function() {
-    // make x = closure first(x)
-    let make = function(
-        "make",
-        1,
-        &[("x", false), ("c", true)],
-        vec![Step::Let(1, Rhs::MakeClosure(FnIdx(0), vec![var(0)]))],
-        var(1),
-    );
-    let mut steps = vec![
-        Step::Let(1, Rhs::MakeClosure(FnIdx(1), vec![])),
-        Step::Let(
-            2,
-            Rhs::call(Call::Apply(var(1), vec![Atom::Int(5), Atom::Int(6)])),
-        ),
-    ];
-    steps.extend(print_int(2, 3, 4));
-    let vars = [
-        ("p", false),
-        ("m", true),
-        ("r", false),
-        ("s", true),
-        ("t", false),
-    ];
-    let main = function("main", 0, &vars, steps, var(4));
-    assert_eq!(run_program(vec![first(false), make, main], 2, &[]), "5\n");
+    let text = r#"
+fn main() {
+  let m1^ = closure make()
+  let r2 = apply m1(5, 6)
+  let s3^ = prim show_int(r2)
+  let t4 = perform println(s3)
+  return t4
+}
+fn first(a0, b1) {
+  return a0
+}
+fn make(x0) {
+  let c1^ = closure first(x0)
+  return c1
+}
+"#;
+    assert_eq!(run_program(text), "5\n");
 }
 
 #[test]
 fn a_shared_closure_keeps_its_captured_values() {
-    let steps = vec![
-        Step::Let(1, Rhs::ConstString(0)),
-        Step::Let(2, Rhs::MakeClosure(FnIdx(0), vec![var(1)])),
-        Step::Dup(2),
-        Step::Let(
-            3,
-            Rhs::Call {
-                call: Call::Apply(var(2), vec![Atom::Int(1)]),
-                saved: vec![VarId(2)],
-            },
-        ),
-        Step::Let(4, Rhs::Io(IoOp::Println, vec![var(3)])),
-        Step::Let(5, Rhs::call(Call::Apply(var(2), vec![Atom::Int(2)]))),
-        Step::Let(6, Rhs::Io(IoOp::Println, vec![var(5)])),
-    ];
-    let vars = [
-        ("p", false),
-        ("s", true),
-        ("c", true),
-        ("r", true),
-        ("t", false),
-        ("r", true),
-        ("t", false),
-    ];
-    let main = function("main", 0, &vars, steps, var(6));
-    assert_eq!(run_program(vec![first(true), main], 1, &["a"]), "a\na\n");
+    let text = r#"
+fn main() {
+  let s1^ = const "a"
+  let c2^ = closure first(s1)
+  dup c2
+  let r3^ = apply c2(1) [c2]
+  let t4 = perform println(r3)
+  let r5^ = apply c2(2)
+  let t6 = perform println(r5)
+  return t6
+}
+fn first(a0^, b1) {
+  return a0
+}
+"#;
+    assert_eq!(run_program(text), "a\na\n");
 }
