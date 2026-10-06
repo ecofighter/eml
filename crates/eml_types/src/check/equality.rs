@@ -2,8 +2,7 @@
 //! 比べられる型を `Int`、`String`、`Bool` に限る。
 
 use eml_diagnostics::{Diagnostic, Label};
-use eml_hir::ExprId;
-use eml_hir::builtin::Builtin;
+use eml_hir::{ExprId, FunctionId};
 
 use crate::table::{Ty, TyShape};
 use crate::{Equality, Type, codes};
@@ -15,7 +14,7 @@ use super::body::BodyCheck;
 pub(super) struct Comparison {
     /// 演算子を指す呼ばれる側の式。
     pub callee: ExprId,
-    pub operator: Builtin,
+    pub operator: FunctionId,
     /// 参照を具体化した型。最初の矢印の引数が比べる値の型である。
     pub ty: Ty,
 }
@@ -57,7 +56,7 @@ impl BodyCheck<'_, '_> {
 
     /// 比べられない型の値を比べた (E2006)。演算子を指す。
     fn not_comparable(&self, comparison: &Comparison, operand: &Type) -> Diagnostic {
-        let op = comparison.operator.name();
+        let op = &self.module.functions[comparison.operator].name;
         Diagnostic::error(
             codes::NOT_COMPARABLE,
             format!("values of type `{operand}` cannot be compared with `{op}`"),

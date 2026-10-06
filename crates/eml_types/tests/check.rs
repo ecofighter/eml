@@ -1,7 +1,6 @@
 mod common;
 
 use common::check_text;
-use eml_hir::builtin::Builtin;
 
 #[test]
 fn signatures_and_local_types() {
@@ -373,16 +372,21 @@ fn a_callee_that_is_not_a_name_is_described_without_quotes() {
 }
 
 #[test]
-fn builtin_schemes_are_exported() {
+fn intrinsic_schemes_are_exported() {
     let checked = eml_test_support::check("main : Unit -> <IO> Unit\nmain () = ()");
-    let ty = |builtin| checked.typed.builtins[&builtin].ty.to_string();
-    assert_eq!(ty(Builtin::Println), "String -> <IO> Unit");
-    assert_eq!(ty(Builtin::IntAdd), "Int -> Int -> Int");
-    assert_eq!(
-        ty(Builtin::ComposeFwd),
-        "(a -> <e> b) -> (b -> <e> c) -> a -> <e> c"
-    );
-    // コンストラクタは組み込みではなく、Prelude の `data Bool` のスキームとして書き出す
+    let ty = |name: &str| {
+        let (id, _) = checked
+            .module
+            .functions
+            .iter()
+            .find(|(_, function)| function.name == name)
+            .unwrap();
+        checked.typed.signatures[id].ty.to_string()
+    };
+    assert_eq!(ty("println"), "String -> <IO> Unit");
+    assert_eq!(ty("+"), "Int -> Int -> Int");
+    assert_eq!(ty(">>"), "(a -> <e> b) -> (b -> <e> c) -> a -> <e> c");
+    // コンストラクタは intrinsic ではなく、Prelude の `data Bool` のスキームとして書き出す
     assert_eq!(
         checked.typed.constructors[checked.module.lang.true_ctor]
             .ty

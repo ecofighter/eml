@@ -101,8 +101,10 @@ mod tests {
         let file = files.add("test.em", text);
         let (parse, _) = eml_syntax::parse(file, text);
         let (module, _) = eml_hir::lower(file, &parse.tree());
+        // Prelude の intrinsic の関数は、それぞれが1つだけの SCC になる。ここではソースの関数だけを見る
         components(&module)
             .into_iter()
+            .filter(|component| !component.iter().all(|&id| module.functions[id].intrinsic))
             .map(|component| {
                 component
                     .into_iter()

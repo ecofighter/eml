@@ -26,12 +26,17 @@ fn decided(text: &str, name: &str) -> Vec<(&'static str, Equality)> {
         .equalities
         .iter()
         .map(|(expr, &equality)| {
-            let ExprKind::Path(Res::Builtin(builtin)) = &body.exprs[expr].kind else {
+            let ExprKind::Path(Res::Function(function)) = &body.exprs[expr].kind else {
                 panic!("equalities are keyed by the operator");
+            };
+            let operator = if *function == checked.module.lang.eq {
+                "=="
+            } else {
+                "!="
             };
             (
                 u32::from(body.exprs[expr].range.start()),
-                builtin.name(),
+                operator,
                 equality,
             )
         })

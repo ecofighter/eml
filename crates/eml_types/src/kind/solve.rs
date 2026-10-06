@@ -728,7 +728,6 @@ fn bound_key<T: Level>(bound: Bound<T>) -> (u8, usize, Option<T>) {
 #[cfg(test)]
 mod tests {
     use eml_hir::FunctionId;
-    use eml_hir::builtin::Builtin;
     use la_arena::RawIdx;
 
     use super::*;
@@ -906,7 +905,7 @@ mod tests {
         let a = problem.lin.fresh();
         let copy = problem.lin.fresh();
         problem.instances.push(Instance {
-            decl: Decl::Builtin(Builtin::IntEq),
+            decl: function(1),
             lin: vec![copy],
             mult: vec![],
             origin: Provenance::Declaration,
@@ -918,7 +917,7 @@ mod tests {
             )],
             ..KindScheme::default()
         };
-        let schemes = HashMap::from([(Decl::Builtin(Builtin::IntEq), scheme)]);
+        let schemes = HashMap::from([(function(1), scheme)]);
         let merged = merge(&[(function(0), &problem)], &schemes);
         let values = solve(&merged.lin).0;
         assert_eq!(values[copy.index()], Linearity::Lin);

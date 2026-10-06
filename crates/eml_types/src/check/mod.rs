@@ -1,7 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
 use eml_diagnostics::{Diagnostic, Label};
-use eml_hir::builtin::{BUILTINS, Builtin};
 use eml_hir::{
     ConstructorId, FunctionId, Generics, Module, OperationId, RowRef, TypeRef, TypeRefId,
     TypeRefKind,
@@ -29,7 +28,6 @@ use report::AmbientSource;
 /// 段0の結果。宣言ごとの閉じた型の形である。
 pub(crate) struct Signatures {
     pub functions: ArenaMap<FunctionId, Shape>,
-    pub builtins: HashMap<Builtin, Shape>,
     pub operations: ArenaMap<OperationId, Shape>,
     pub constructors: ArenaMap<ConstructorId, Shape>,
 }
@@ -38,7 +36,6 @@ impl Signatures {
     pub fn get(&self, decl: Decl) -> Option<&Shape> {
         match decl {
             Decl::Function(id) => self.functions.get(id),
-            Decl::Builtin(builtin) => self.builtins.get(&builtin),
             Decl::Operation(id) => self.operations.get(id),
             Decl::Constructor(id) => self.constructors.get(id),
         }
@@ -82,10 +79,11 @@ pub(crate) fn check_module(module: &Module) -> (TypedModule, Vec<Diagnostic>) {
             problems.insert(id, checked.problem);
         }
     }
-    // 等式のない関数も参照されうるので、制約のないスキームを持たせる
+    // 等式のない関数も参照されうるので、制約のないスキームを持たせる。intrinsic のスキームは宣言から作ってあるので
+    // 上書きしない
     for (id, _) in signatures.functions.iter() {
         if problems.get(id).is_none() {
-            schemes.insert(Decl::Function(id), KindScheme::default());
+            schemes.entry(Decl::Function(id)).or_default();
         }
     }
     // 呼ばれる側の SCC から順に解き、SCC ごとに Kind を多相化する (docs/spec/types.md の「推論」)
@@ -118,13 +116,6 @@ pub(crate) fn signatures(module: &Module, context: &Context) -> Signatures {
             Some((id, signature_shape(context, signature)))
         })
         .collect();
-    let builtins = BUILTINS
-        .iter()
-        .filter_map(|info| {
-            let signature = module.builtins.get(&info.builtin)?;
-            Some((info.builtin, signature_shape(context, signature)))
-        })
-        .collect();
     let operations = module
         .operations
         .iter()
@@ -140,7 +131,6 @@ pub(crate) fn signatures(module: &Module, context: &Context) -> Signatures {
         .collect();
     Signatures {
         functions,
-        builtins,
         operations,
         constructors,
     }
@@ -217,17 +207,21 @@ fn declaration_schemes(
     signatures: &Signatures,
 ) -> HashMap<Decl, KindScheme> {
     let mut problems: Vec<(Decl, KindProblem)> = Vec::new();
-    for info in BUILTINS {
-        let (Some(shape), Some(signature)) = (
-            signatures.builtins.get(&info.builtin),
-            module.builtins.get(&info.builtin),
-        ) else {
+    // intrinsic は本体を持たないので、部分適用のクロージャの Kind だけを宣言から出す (docs/spec/types.md の「関数型」)
+    for (id, function) in module
+        .functions
+        .iter()
+        .filter(|(_, function)| function.intrinsic)
+    {
+        let (Some(shape), Some(signature)) = (signatures.functions.get(id), &function.signature)
+        else {
             continue;
         };
+        let arity = signature.arity();
         let problem = declaration_problem(context, shape, &signature.generics, |table, own| {
-            table.closure_kinds(own.ty, info.arity, &[]);
+            table.closure_kinds(own.ty, arity, &[]);
         });
-        problems.push((Decl::Builtin(info.builtin), problem));
+        problems.push((Decl::Function(id), problem));
     }
     for (id, operation) in module.operations.iter() {
         let shape = &signatures.operations[id];
@@ -337,11 +331,6 @@ fn typed_module(
             .collect(),
         bodies,
         main,
-        builtins: signatures
-            .builtins
-            .iter()
-            .map(|(&builtin, shape)| (builtin, export(Decl::Builtin(builtin), shape)))
-            .collect(),
         operations: signatures
             .operations
             .iter()

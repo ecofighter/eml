@@ -1,5 +1,4 @@
 use eml_diagnostics::{Diagnostic, FileId, Label, TextRange};
-use eml_hir::builtin::Builtin;
 use eml_hir::{
     Body, Closure, ConstructorId, ExprId, ExprKind, Function, Literal, LocalId, MatchArm, Module,
     OperationId, PatId, PatKind, Res, Stmt, TypeRefKind,
@@ -425,10 +424,13 @@ impl BodyCheck<'_, '_> {
     /// 記録し、部分適用の残りだけを開くため (docs/spec/effects.md の「継続の多重度と持ち越し規則」)。
     fn path(&mut self, id: ExprId, res: Res, range: TextRange, open: bool) -> Ty {
         let ty = self.value(res, range, open);
-        if let Res::Builtin(operator @ (Builtin::IntEq | Builtin::IntNe)) = res {
+        let lang = self.module.lang;
+        if let Res::Function(function) = res
+            && (function == lang.eq || function == lang.ne)
+        {
             self.comparisons.push(Comparison {
                 callee: id,
-                operator,
+                operator: function,
                 ty,
             });
         }
@@ -459,12 +461,6 @@ impl BodyCheck<'_, '_> {
                 let name = module.constructors[constructor].name.clone();
                 self.with_kind_origin(range, KindReason::Passed(name), |this| {
                     this.instantiate(Decl::Constructor(constructor))
-                })
-            }
-            Res::Builtin(builtin) => {
-                let reason = KindReason::Passed(builtin.name().to_string());
-                self.with_kind_origin(range, reason, |this| {
-                    this.instantiate(Decl::Builtin(builtin))
                 })
             }
             Res::Operation(operation) => {
@@ -519,10 +515,7 @@ impl BodyCheck<'_, '_> {
         let (mut ty, opened_later) = match &callee_expr.kind {
             // 呼ばれる位置のトップレベルの値は開かずに具体化し、矢印の row を宣言のまま記録する。持ち越し規則は宣言の
             // row で判定する (docs/spec/effects.md の「継続の多重度と持ち越し規則」)
-            ExprKind::Path(
-                res
-                @ (Res::Function(_) | Res::Builtin(_) | Res::Operation(_) | Res::Constructor(_)),
-            ) => {
+            ExprKind::Path(res @ (Res::Function(_) | Res::Operation(_) | Res::Constructor(_))) => {
                 let ty = self.path(callee, *res, callee_expr.range, false);
                 self.typing.exprs.insert(callee, ty);
                 (ty, true)

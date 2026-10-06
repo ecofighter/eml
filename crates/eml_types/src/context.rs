@@ -80,7 +80,8 @@ fn multiplicity(multiplicity: OpMultiplicity) -> Multiplicity {
 #[cfg(test)]
 pub(crate) fn test_context() -> Context {
     use eml_diagnostics::TextRange;
-    use eml_hir::Generics;
+    use eml_hir::{FunctionId, Generics};
+    use la_arena::RawIdx;
 
     let mut types = Arena::new();
     let mut effects = Arena::new();
@@ -99,6 +100,7 @@ pub(crate) fn test_context() -> Context {
             fields: Vec::new(),
         })
     };
+    let function = |index: u32| FunctionId::from_raw(RawIdx::from(index));
     let false_ctor = constructor("False", 0);
     let true_ctor = constructor("True", 1);
     let lang = LangItems {
@@ -114,6 +116,15 @@ pub(crate) fn test_context() -> Context {
         }),
         true_ctor,
         false_ctor,
+        // 関数の lang item は、型の表を作るときに読まない
+        negate: function(0),
+        eq: function(1),
+        ne: function(2),
+        and: function(3),
+        or: function(4),
+        pipe: function(5),
+        apply: function(6),
+        io_operations: [7, 8, 9, 10].map(function),
     };
     Context::new(lang, &types, &constructors, &effects, &Arena::new())
 }

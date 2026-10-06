@@ -1,7 +1,6 @@
 //! 段1が集める Kind の問題と、段2が残す Kind のスキーム (docs/spec/types.md の「推論」)。どちらも型の表を指さず、変数を
 //! 番号だけで表す。比べられる純粋なデータなので、クエリに載せたときに変わっていないかを確かめられる。
 
-use eml_hir::builtin::Builtin;
 use eml_hir::{ConstructorId, FunctionId, OperationId};
 
 use super::{Bound, Carry, KindVar, Provenance};
@@ -42,7 +41,6 @@ impl<T> Bounds<T> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum Decl {
     Function(FunctionId),
-    Builtin(Builtin),
     Operation(OperationId),
     Constructor(ConstructorId),
 }

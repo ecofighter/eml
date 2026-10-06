@@ -12,11 +12,9 @@ mod table;
 mod ty;
 mod usage;
 
-use std::collections::HashMap;
 use std::fmt::Write;
 
 use eml_diagnostics::{Diagnostic, FileId, Label, TextRange};
-use eml_hir::builtin::Builtin;
 use eml_hir::{ConstructorId, ExprId, FunctionId, LocalId, Module, OperationId, PatId};
 use la_arena::ArenaMap;
 
@@ -58,9 +56,6 @@ pub struct TypedModule {
     /// シグネチャと等式の両方がある関数だけを含む。
     pub bodies: ArenaMap<FunctionId, BodyTypes>,
     pub main: Option<FunctionId>,
-    /// Prelude のシグネチャから作った組み込みのスキーム。Core IR が、組み込みを包む関数の変数を boxed にするかを
-    /// 決めるのに使う。
-    pub builtins: HashMap<Builtin, Scheme>,
     /// エフェクトの操作のスキーム。Core IR が、操作を包む関数の変数を boxed にするかを決めるのに使う。
     pub operations: ArenaMap<OperationId, Scheme>,
     /// コンストラクタのスキーム。`Some : a -> Option a` の形である。Core IR が、コンストラクタを包む関数の変数を
@@ -124,6 +119,10 @@ pub fn dump(module: &Module, typed: &TypedModule) -> String {
         }
     }
     for (id, function) in module.functions.iter() {
+        // intrinsic は Prelude の関数なので表示しない。テストの表示を Prelude に左右させないため
+        if function.intrinsic {
+            continue;
+        }
         if let Some(scheme) = typed.signatures.get(id) {
             writeln!(out, "{} : {}", function.name, scheme.ty).unwrap();
             write_kinds(&mut out, scheme);

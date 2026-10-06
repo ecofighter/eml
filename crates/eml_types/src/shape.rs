@@ -768,12 +768,12 @@ mod tests {
         )
     }
 
-    /// ソースの最初の関数のシグネチャ。
+    /// ソースの最初の関数のシグネチャ。Prelude の intrinsic の関数は飛ばす。
     fn signature(module: &Module) -> &Signature {
         module
             .functions
             .iter()
-            .next()
+            .find(|(_, function)| !function.intrinsic)
             .and_then(|(_, function)| function.signature.as_ref())
             .unwrap()
     }
