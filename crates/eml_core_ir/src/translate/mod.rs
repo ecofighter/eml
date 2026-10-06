@@ -7,7 +7,9 @@ mod pattern;
 mod program;
 mod types;
 
-use eml_hir::{Body, ExprId, ExprKind, FunctionId, LocalId, Module, PatId, Stmt};
+use eml_hir::{
+    Body, ExprId, ExprKind, Function, ItemMap, LocalId, PatId, Program as HirProgram, Stmt,
+};
 use eml_types::{BodyTypes, Type, TypedModule};
 use la_arena::ArenaMap;
 
@@ -20,25 +22,19 @@ use types::{split_arrows, var_info};
 
 /// 誤りのない型付き HIR を、RC の命令のない Core IR にする。`captures` は空のままでよく、パイプラインが埋める
 /// (docs/spec/core-ir.md のパスの表)。
-pub(crate) fn translate(module: &Module, typed: &TypedModule) -> Program {
-    let mut builder = ProgramBuilder::new(module, typed);
-    let mut indices = ArenaMap::default();
+pub(crate) fn translate(hir: &HirProgram, typed: &TypedModule) -> Program {
+    let mut builder = ProgramBuilder::new(hir, typed);
+    let mut indices = ItemMap::default();
     // intrinsic は本体を持たず、呼び出しの位置で命令にするか、包む関数を作る (`program.rs` の `wrapper`)
-    let defined = || {
-        module
-            .functions
-            .iter()
-            .filter(|(_, function)| !function.intrinsic)
-    };
-    for (id, function) in defined() {
-        let body = function
-            .body
-            .as_ref()
+    let defined = || hir.functions().filter(|(_, function)| !function.intrinsic);
+    for (id, _) in defined() {
+        let body = hir
+            .body(id)
             .expect("a program without errors has an equation for every function");
         indices.insert(id, builder.reserve(body.params.len()));
     }
     for (id, function) in defined() {
-        let body = function.body.as_ref().expect("checked above");
+        let body = hir.body(id).expect("checked above");
         let signature = &typed
             .signatures
             .get(id)
@@ -54,7 +50,7 @@ pub(crate) fn translate(module: &Module, typed: &TypedModule) -> Program {
         let mut lambdas = 0;
         let mut handlers = 0;
         let core = FnLowering {
-            module,
+            hir,
             body,
             types: typed.bodies.get(id).expect("every body is type-checked"),
             indices: &indices,
@@ -76,7 +72,7 @@ pub(crate) fn translate(module: &Module, typed: &TypedModule) -> Program {
         .get(main)
         .expect("`main` has a signature")
         .ty;
-    let entry = builder.entry(module, indices[main], main_type);
+    let entry = builder.entry(hir, indices[main], main_type);
     Program {
         functions: builder
             .functions
@@ -85,7 +81,7 @@ pub(crate) fn translate(module: &Module, typed: &TypedModule) -> Program {
             .collect(),
         entry,
         strings: builder.strings.values,
-        effects: effect_table(module),
+        effects: effect_table(hir),
     }
 }
 
@@ -127,10 +123,10 @@ fn exit_with(exit: Exit, value: Atom) -> CExpr {
 }
 
 struct FnLowering<'a> {
-    module: &'a Module,
+    hir: &'a HirProgram,
     body: &'a Body,
     types: &'a BodyTypes,
-    indices: &'a ArenaMap<FunctionId, FnIdx>,
+    indices: &'a ItemMap<Function, FnIdx>,
     program: &'a mut ProgramBuilder,
     /// ラムダの関数の名前に使う、トップレベルの関数の名前と、その中のラムダの数。
     root_name: &'a str,
@@ -207,7 +203,7 @@ impl FnLowering<'_> {
             .collect();
         let function = self.program.reserve(captured.len() + params.len());
         let core = FnLowering {
-            module: self.module,
+            hir: self.hir,
             body: self.body,
             types: self.types,
             indices: self.indices,
@@ -244,7 +240,7 @@ impl FnLowering<'_> {
     }
 
     fn new_var(&mut self, name: &str, ty: &Type) -> VarId {
-        self.builder.var(var_info(name, ty, self.module))
+        self.builder.var(var_info(name, ty, self.hir))
     }
 
     fn push(&mut self, expr: CExpr) -> CExprId {

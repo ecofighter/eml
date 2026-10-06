@@ -5,12 +5,6 @@ use text_size::TextSize;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct FileId(u32);
 
-impl FileId {
-    /// 組み込みの Prelude の範囲に使う。Prelude の範囲が診断に出ることはない。出たら `SourceFiles` がこのファイルを
-    /// 引けずに panic するので、誤りにすぐ気づける。
-    pub const PRELUDE: FileId = FileId(u32::MAX);
-}
-
 /// 1 始まりの行と列。列は文字数で数える。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LineCol {

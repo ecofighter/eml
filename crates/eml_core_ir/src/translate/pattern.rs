@@ -226,10 +226,9 @@ impl FnLowering<'_> {
         out: &mut Bindings,
     ) -> CExpr {
         let body = self.body;
-        let module = self.module;
+        let hir = self.hir;
         let occurrence = occurrences[column].clone();
-        let TypeDefKind::Data { constructors } = &module.types[module.constructors[ctor].ty].kind
-        else {
+        let TypeDefKind::Data { constructors } = &hir[hir[ctor].ty].kind else {
             unreachable!("constructor patterns belong to data types")
         };
         let mentions = |ctor: ConstructorId, row: &Row| match head(body, row.cells[column]) {
@@ -284,7 +283,7 @@ impl FnLowering<'_> {
                 (fields, jump)
             };
             arms.push(Arm {
-                tag: module.constructors[ctor].tag,
+                tag: hir[ctor].tag,
                 fields,
                 body: code,
             });
@@ -434,13 +433,13 @@ impl FnLowering<'_> {
             Literal::Int(n) => (PrimOp::IntEq, Atom::Int(*n)),
             Literal::String(text) => {
                 let index = self.program.strings.intern(text);
-                let ty = self.lang_type(self.module.lang.string);
+                let ty = self.lang_type(self.hir.lang.string);
                 let value = self.bind(out, "s", &ty, Rhs::ConstString(index));
                 (PrimOp::StrEq, value)
             }
             Literal::Unit => unreachable!("`()` is a wildcard pattern, not a literal pattern"),
         };
-        let ty = self.lang_type(self.module.lang.bool);
+        let ty = self.lang_type(self.hir.lang.bool);
         self.bind(out, "t", &ty, Rhs::Prim(op, vec![scrutinee, value]))
     }
 
@@ -448,12 +447,12 @@ impl FnLowering<'_> {
     /// なければ置き換えず、型変数のままにする。型変数の値は boxed として扱うので、多めに RC の対象になるだけで正しく
     /// 動く (docs/spec/core-ir.md)。
     fn field_types(&self, ctor: ConstructorId, ty: &Type) -> Vec<Type> {
-        let constructor = &self.module.constructors[ctor];
+        let constructor = &self.hir[ctor];
         let (fields, _) = split_arrows(
             self.program.constructor_type(ctor),
             constructor.fields.len(),
         );
-        let names: Vec<String> = self.module.types[constructor.ty]
+        let names: Vec<String> = self.hir[constructor.ty]
             .generics
             .type_vars
             .iter()

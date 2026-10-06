@@ -2,7 +2,9 @@
 
 use std::collections::HashMap;
 
-use eml_hir::{ConstructorId, EffectId, FunctionId, Module, OpMultiplicity, OperationId};
+use eml_hir::{
+    ConstructorId, EffectId, FunctionId, OpMultiplicity, OperationId, Program as HirProgram,
+};
 use eml_types::{Type, TypedModule};
 
 use crate::builder::FnBuilder;
@@ -45,11 +47,10 @@ pub(super) struct ProgramBuilder {
 }
 
 impl ProgramBuilder {
-    pub(super) fn new(module: &Module, typed: &TypedModule) -> ProgramBuilder {
+    pub(super) fn new(hir: &HirProgram, typed: &TypedModule) -> ProgramBuilder {
         ProgramBuilder {
-            intrinsic_types: module
-                .functions
-                .iter()
+            intrinsic_types: hir
+                .functions()
                 .filter(|(_, function)| function.intrinsic)
                 .filter_map(|(id, _)| Some((id, typed.signatures.get(id)?.ty.clone())))
                 .collect(),
@@ -73,11 +74,11 @@ impl ProgramBuilder {
     }
 
     /// 操作を値や部分適用で使うときに、`perform` を末尾で呼ぶだけの関数を作る。操作ごとに1つだけ作る。
-    pub(super) fn operation_wrapper(&mut self, module: &Module, op: OperationId) -> FnIdx {
+    pub(super) fn operation_wrapper(&mut self, hir: &HirProgram, op: OperationId) -> FnIdx {
         if let Some(&function) = self.operation_wrappers.get(&op) {
             return function;
         }
-        let operation = &module.operations[op];
+        let operation = &hir[op];
         let arity = operation.arity;
         let ty = self
             .operation_types
@@ -87,12 +88,12 @@ impl ProgramBuilder {
         let mut builder = FnBuilder::new();
         let params: Vec<VarId> = param_types
             .iter()
-            .map(|ty| builder.var(var_info("p", ty, module)))
+            .map(|ty| builder.var(var_info("p", ty, hir)))
             .collect();
         let function = self.reserve(arity);
         self.operation_wrappers.insert(op, function);
         let args = params.iter().map(|&param| Atom::Var(param)).collect();
-        let body = builder.push(CExpr::TailCall(perform_call(module, op, args)));
+        let body = builder.push(CExpr::TailCall(perform_call(hir, op, args)));
         let core = builder.finish(format!("op${}", operation.name), params, body);
         self.finish(function, core);
         function
@@ -105,11 +106,11 @@ impl ProgramBuilder {
     }
 
     /// コンストラクタを値や部分適用で使うときに、値を作って返すだけの関数を作る。コンストラクタごとに1つだけ作る。
-    pub(super) fn constructor_wrapper(&mut self, module: &Module, ctor: ConstructorId) -> FnIdx {
+    pub(super) fn constructor_wrapper(&mut self, hir: &HirProgram, ctor: ConstructorId) -> FnIdx {
         if let Some(&function) = self.constructor_wrappers.get(&ctor) {
             return function;
         }
-        let constructor = &module.constructors[ctor];
+        let constructor = &hir[ctor];
         let arity = constructor.fields.len();
         let ty = self
             .constructor_types
@@ -119,9 +120,9 @@ impl ProgramBuilder {
         let mut builder = FnBuilder::new();
         let params: Vec<VarId> = param_types
             .iter()
-            .map(|ty| builder.var(var_info("p", ty, module)))
+            .map(|ty| builder.var(var_info("p", ty, hir)))
             .collect();
-        let result = builder.var(var_info("d", &result_type, module));
+        let result = builder.var(var_info("d", &result_type, hir));
         let function = self.reserve(arity);
         self.constructor_wrappers.insert(ctor, function);
         let ret = builder.push(CExpr::Return(Atom::Var(result)));
@@ -154,12 +155,12 @@ impl ProgramBuilder {
 
     /// 実行の入口。`main : Unit -> <IO> Unit` を `()` で呼ぶ。等式に引数のない `main = fn () -> ...` は関数値を返す
     /// ので、返った値に `()` を適用する (docs/spec/core-ir.md)。
-    pub(super) fn entry(&mut self, module: &Module, main: FnIdx, main_type: &Type) -> FnIdx {
+    pub(super) fn entry(&mut self, hir: &HirProgram, main: FnIdx, main_type: &Type) -> FnIdx {
         let function = self.reserve(0);
         let unit = vec![Atom::Unit];
         let mut builder = FnBuilder::new();
         let body = if self.arity(main) == 0 {
-            let value = builder.var(var_info("f", main_type, module));
+            let value = builder.var(var_info("f", main_type, hir));
             let apply = builder.push(CExpr::TailCall(Call::Apply(Atom::Var(value), unit)));
             builder.push(CExpr::Let {
                 var: value,
@@ -175,13 +176,13 @@ impl ProgramBuilder {
     }
 
     /// intrinsic を値や部分適用で使うときに、それを呼ぶだけの関数を作る。intrinsic ごとに1つだけ作る。
-    pub(super) fn wrapper(&mut self, module: &Module, intrinsic_fn: FunctionId) -> FnIdx {
+    pub(super) fn wrapper(&mut self, hir: &HirProgram, intrinsic_fn: FunctionId) -> FnIdx {
         if let Some(&function) = self.wrappers.get(&intrinsic_fn) {
             return function;
         }
-        let name = &module.functions[intrinsic_fn].name;
-        let arity = module.functions[intrinsic_fn]
-            .arity()
+        let name = &hir[intrinsic_fn].name;
+        let arity = hir
+            .arity(intrinsic_fn)
             .expect("an intrinsic has a signature");
         let ty = self
             .intrinsic_types
@@ -193,10 +194,10 @@ impl ProgramBuilder {
         let mut builder = FnBuilder::new();
         let params: Vec<VarId> = param_types
             .iter()
-            .map(|ty| builder.var(var_info("p", ty, module)))
+            .map(|ty| builder.var(var_info("p", ty, hir)))
             .collect();
         let atoms: Vec<Atom> = params.iter().map(|&param| Atom::Var(param)).collect();
-        let mut fresh = |ty: &Type| builder.var(var_info("t", ty, module));
+        let mut fresh = |ty: &Type| builder.var(var_info("t", ty, hir));
         let lowering =
             intrinsic(name).expect("every intrinsic reaching Core IR has an implementation");
         let (steps, last): (Vec<(VarId, Rhs)>, CExpr) = match lowering {
@@ -239,39 +240,40 @@ impl ProgramBuilder {
     }
 }
 
-/// エフェクトの番号は `EffectId` の添字である (`Program::effects`)。
-pub(super) fn effect_index(effect: EffectId) -> u32 {
-    u32::from(effect.into_raw())
+/// エフェクトの番号は、`eml_hir::Program::effects` の順 (Prelude の `IO`、入口のモジュールの宣言の順) の位置である。
+/// エフェクトの表 (`effect_table`) も同じ順に並べる。
+pub(super) fn effect_index(hir: &HirProgram, effect: EffectId) -> u32 {
+    hir.effects()
+        .position(|(id, _)| id == effect)
+        .expect("every effect is in the program") as u32
 }
 
 /// 操作の番号は、エフェクトの宣言の中の順番である。
-pub(super) fn perform_call(module: &Module, op: OperationId, args: Vec<Atom>) -> Call {
-    let effect = module.operations[op].effect;
-    let index = module.effects[effect]
+pub(super) fn perform_call(hir: &HirProgram, op: OperationId, args: Vec<Atom>) -> Call {
+    let effect = hir[op].effect;
+    let index = hir[effect]
         .operations
         .iter()
         .position(|&other| other == op)
         .expect("an operation belongs to its effect");
     Call::Perform {
-        effect: effect_index(effect),
+        effect: effect_index(hir, effect),
         op: index as u32,
-        resumable: module.operations[op].multiplicity != OpMultiplicity::Never,
+        resumable: hir[op].multiplicity != OpMultiplicity::Never,
         args,
     }
 }
 
-/// エフェクトの表。`EffectId` の添字の順に並べ、エフェクトの番号を `EffectId` の添字と同じにする。
-pub(super) fn effect_table(module: &Module) -> Vec<EffectInfo> {
-    module
-        .effects
-        .iter()
+/// エフェクトの表。`effect_index` と同じ順に並べる。
+pub(super) fn effect_table(hir: &HirProgram) -> Vec<EffectInfo> {
+    hir.effects()
         .map(|(_, effect)| EffectInfo {
             name: effect.name.clone(),
             operations: effect
                 .operations
                 .iter()
                 .map(|&op| {
-                    let operation = &module.operations[op];
+                    let operation = &hir[op];
                     OperationInfo {
                         name: operation.name.clone(),
                         arity: operation.arity,

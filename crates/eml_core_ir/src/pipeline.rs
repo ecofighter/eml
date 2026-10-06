@@ -1,7 +1,7 @@
 //! Core IR のパスの順番 (docs/spec/core-ir.md)。順番を知っているのはこのファイルだけにする。テストは `lower_until`
 //! で、確かめたいパスの直後の IR を見る。
 
-use eml_hir::Module;
+use eml_hir::Program as HirProgram;
 use eml_types::TypedModule;
 
 use crate::{
@@ -28,13 +28,13 @@ impl Pass {
 
 /// 診断のエラーがないプログラムだけを受け取る。エラーがあれば `eml_cli` は Core IR を作らない
 /// (docs/implementation/architecture.md)。
-pub fn lower(module: &Module, typed: &TypedModule) -> Program {
-    lower_until(module, typed, Pass::Perceus)
+pub fn lower(hir: &HirProgram, typed: &TypedModule) -> Program {
+    lower_until(hir, typed, Pass::Perceus)
 }
 
 /// `last` の直後で止める。止めたパスまでの検査は、debug ビルドでかける。
-pub fn lower_until(module: &Module, typed: &TypedModule, last: Pass) -> Program {
-    let mut program = translate::translate(module, typed);
+pub fn lower_until(hir: &HirProgram, typed: &TypedModule, last: Pass) -> Program {
+    let mut program = translate::translate(hir, typed);
     settle(&mut program, Pass::Translate);
     if last == Pass::Translate {
         return program;

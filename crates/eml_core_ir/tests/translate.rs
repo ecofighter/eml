@@ -877,3 +877,45 @@ fn a_handler_with_a_state_passes_its_initial_value_and_takes_the_state_from_its_
     }
     ");
 }
+
+#[test]
+fn effects_are_numbered_with_io_first_then_in_declaration_order() {
+    let text = "effect A where\n  a : Unit -> Int\neffect B where\n  b : Unit -> Int\nmain : Unit -> <IO> Unit\nmain () =\n  let x = handle a () with\n    | a () k -> resume k 1\n  let y = handle b () with\n    | b () k -> resume k 2\n  println (show_int (x + y))";
+    insta::assert_snapshot!(core_text(text, Pass::Translate), @"
+    effect A { a/1 }
+    effect B { b/1 }
+    fn main(p0) {
+      let t1 = handle A(&main$handle0, ()) {a: &main$handle0$a} return &main$handle0$return
+      let t2 = handle B(&main$handle1, ()) {b: &main$handle1$b} return &main$handle1$return
+      let t3 = prim +(t1, t2)
+      let t4^ = prim show_int(t3)
+      let t5 = perform println(t4)
+      return t5
+    }
+    fn main$handle0(p0) {
+      let t1 = perform A.a(())
+      return t1
+    }
+    fn main$handle0$a(p0, k1^, p2) {
+      let t3 = resume k1(1, ())
+      return t3
+    }
+    fn main$handle0$return($r0, p1) {
+      return $r0
+    }
+    fn main$handle1(p0) {
+      let t1 = perform B.b(())
+      return t1
+    }
+    fn main$handle1$b(p0, k1^, p2) {
+      let t3 = resume k1(2, ())
+      return t3
+    }
+    fn main$handle1$return($r0, p1) {
+      return $r0
+    }
+    fn entry$main() {
+      tailcall main(())
+    }
+    ");
+}

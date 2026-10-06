@@ -26,7 +26,7 @@ impl FnLowering<'_> {
     pub(super) fn lang_type(&self, id: TypeDefId) -> Type {
         Type::Con {
             id,
-            name: self.module.types[id].name.clone(),
+            name: self.hir[id].name.clone(),
             args: Vec::new(),
         }
     }
@@ -74,10 +74,13 @@ impl FnLowering<'_> {
         ty: &Type,
         out: &mut Bindings,
     ) -> Atom {
-        let intrinsic_fn = &self.module.functions[function];
-        let arity = intrinsic_fn.arity().expect("an intrinsic has a signature");
+        let intrinsic_fn = &self.hir[function];
+        let arity = self
+            .hir
+            .arity(function)
+            .expect("an intrinsic has a signature");
         if args.len() < arity {
-            let wrapper = self.program.wrapper(self.module, function);
+            let wrapper = self.program.wrapper(self.hir, function);
             return self.closure(wrapper, args, ty, out);
         }
         let rest = args.split_off(arity);
@@ -95,10 +98,9 @@ impl FnLowering<'_> {
                     .expect("the type checker decides how every `==` and `!=` compares");
                 Rhs::Prim(equality_op(equality, negated), args)
             }
-            Lowering::Compose { .. } => Rhs::call(Call::Direct(
-                self.program.wrapper(self.module, function),
-                args,
-            )),
+            Lowering::Compose { .. } => {
+                Rhs::call(Call::Direct(self.program.wrapper(self.hir, function), args))
+            }
         };
         if rest.is_empty() {
             return self.bind(out, "t", ty, rhs);
@@ -117,12 +119,12 @@ impl FnLowering<'_> {
         ty: &Type,
         out: &mut Bindings,
     ) -> Atom {
-        let arity = self.module.operations[op].arity;
+        let arity = self.hir[op].arity;
         if args.len() < arity {
-            let wrapper = self.program.operation_wrapper(self.module, op);
+            let wrapper = self.program.operation_wrapper(self.hir, op);
             return self.closure(wrapper, args, ty, out);
         }
-        let call = perform_call(self.module, op, args);
+        let call = perform_call(self.hir, op, args);
         self.bind(out, "t", ty, Rhs::call(call))
     }
 
@@ -135,10 +137,10 @@ impl FnLowering<'_> {
         ty: &Type,
         out: &mut Bindings,
     ) -> Atom {
-        let module = self.module;
-        let constructor = &module.constructors[ctor];
+        let hir = self.hir;
+        let constructor = &hir[ctor];
         if args.len() < constructor.fields.len() {
-            let wrapper = self.program.constructor_wrapper(module, ctor);
+            let wrapper = self.program.constructor_wrapper(hir, ctor);
             return self.closure(wrapper, args, ty, out);
         }
         self.bind(
@@ -160,7 +162,7 @@ impl FnLowering<'_> {
             unreachable!("call takes a call");
         };
         let callee_ty = self.ty(callee);
-        let steps = eml_hir::call_steps(self.module, body, id);
+        let steps = eml_hir::call_steps(self.hir, body, id);
         let mut atoms: Vec<Option<Atom>> = vec![None; args.len()];
         // 前のまとまりの結果か、評価した呼ばれる式。既知の呼ばれる式は評価せず、最初のまとまりで直接呼ぶ
         let mut function: Option<Atom> = None;
@@ -169,7 +171,7 @@ impl FnLowering<'_> {
         while index < steps.len() {
             match steps[index] {
                 EvalStep::Eval(expr) if expr == callee => {
-                    if eml_hir::known_arity(self.module, body, callee).is_none() {
+                    if eml_hir::known_arity(self.hir, body, callee).is_none() {
                         function = Some(self.atom(callee, out));
                     }
                     index += 1;
@@ -221,9 +223,7 @@ impl FnLowering<'_> {
         out: &mut Bindings,
     ) -> Atom {
         match &self.body.exprs[callee].kind {
-            ExprKind::Path(Res::Function(function))
-                if self.module.functions[*function].intrinsic =>
-            {
+            ExprKind::Path(Res::Function(function)) if self.hir[*function].intrinsic => {
                 self.call_intrinsic(*function, callee, callee_ty, args, ty, out)
             }
             ExprKind::Path(Res::Function(function)) => {
@@ -247,14 +247,12 @@ impl FnLowering<'_> {
             ExprKind::Literal(Literal::Unit) => Atom::Unit,
             ExprKind::Literal(Literal::String(text)) => {
                 let index = self.program.strings.intern(text);
-                let ty = self.lang_type(self.module.lang.string);
+                let ty = self.lang_type(self.hir.lang.string);
                 self.bind(out, "s", &ty, Rhs::ConstString(index))
             }
             ExprKind::Path(Res::Local(local)) => self.locals[*local],
-            ExprKind::Path(Res::Function(function))
-                if self.module.functions[*function].intrinsic =>
-            {
-                let wrapper = self.program.wrapper(self.module, *function);
+            ExprKind::Path(Res::Function(function)) if self.hir[*function].intrinsic => {
+                let wrapper = self.program.wrapper(self.hir, *function);
                 let ty = self.ty(id);
                 self.closure(wrapper, Vec::new(), &ty, out)
             }
@@ -263,7 +261,7 @@ impl FnLowering<'_> {
                 let target = self.indices[*function];
                 if self.program.arity(target) == 0 {
                     let ty = self.ty(id);
-                    let name = self.module.functions[*function].name.clone();
+                    let name = self.hir[*function].name.clone();
                     self.bind(out, &name, &ty, Rhs::call(Call::Direct(target, Vec::new())))
                 } else {
                     let ty = self.ty(id);
@@ -271,16 +269,16 @@ impl FnLowering<'_> {
                 }
             }
             ExprKind::Path(Res::Operation(op)) => {
-                let wrapper = self.program.operation_wrapper(self.module, *op);
+                let wrapper = self.program.operation_wrapper(self.hir, *op);
                 let ty = self.ty(id);
                 self.closure(wrapper, Vec::new(), &ty, out)
             }
             ExprKind::Path(Res::Constructor(ctor)) => {
-                let constructor = &self.module.constructors[*ctor];
+                let constructor = &self.hir[*ctor];
                 if constructor.fields.is_empty() {
                     Atom::Tag(constructor.tag)
                 } else {
-                    let wrapper = self.program.constructor_wrapper(self.module, *ctor);
+                    let wrapper = self.program.constructor_wrapper(self.hir, *ctor);
                     let ty = self.ty(id);
                     self.closure(wrapper, Vec::new(), &ty, out)
                 }
@@ -342,7 +340,7 @@ impl FnLowering<'_> {
                 // 状態を `()` にして最後の引数で受ける (docs/spec/core-ir.md)
                 let stateless = init.is_none();
                 // 節はエフェクトの操作の順に並べる。インタプリタは操作の番号で節を引く
-                let operations = self.module.effects[effect].operations.clone();
+                let operations = self.hir[effect].operations.clone();
                 let mut closures = Vec::new();
                 for op in operations {
                     let clause = clauses
@@ -358,7 +356,7 @@ impl FnLowering<'_> {
                     if stateless {
                         params.push((None, Type::unit()));
                     }
-                    let name = format!("{prefix}${}", self.module.operations[op].name);
+                    let name = format!("{prefix}${}", self.hir[op].name);
                     let captured = body.closure_captures(&clause.closure);
                     let closure = self.lift(
                         name,
@@ -390,7 +388,7 @@ impl FnLowering<'_> {
                     out,
                 );
                 let call = Call::Handle {
-                    effect: effect_index(effect),
+                    effect: effect_index(self.hir, effect),
                     init: init_atom,
                     body: handled_closure,
                     clauses: closures,

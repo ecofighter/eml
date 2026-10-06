@@ -1,6 +1,6 @@
 //! 型から決まる変数の性質 (boxed かどうか) と、intrinsic を Core IR のどの命令にするか。
 
-use eml_hir::{Module, TypeDefId, TypeDefKind};
+use eml_hir::{Program as HirProgram, TypeDefId, TypeDefKind};
 use eml_types::{Equality, Type};
 
 use crate::{IoOp, PrimOp, VarInfo};
@@ -8,10 +8,10 @@ use crate::{IoOp, PrimOp, VarInfo};
 /// ヒープに置く値の型。ボックス化した変数が RC の対象になる。関数値と型変数の値は、ヒープのクロージャや
 /// 文字列かもしれない。インタプリタの `dup` / `decref` はヒープにない値を無視するので、多めに対象にしても正しく動く
 /// (docs/spec/core-ir.md)。`File` はヒープのオブジェクトである。
-fn boxed(ty: &Type, module: &Module) -> bool {
+fn boxed(ty: &Type, hir: &HirProgram) -> bool {
     match ty {
         Type::Con { id, .. } => {
-            *id == module.lang.string || *id == module.lang.file || has_fields(module, *id)
+            *id == hir.lang.string || *id == hir.lang.file || has_fields(hir, *id)
         }
         Type::Fn { .. } | Type::Cont { .. } | Type::Rigid(_) | Type::Flexible => true,
         // 空のレコードは `Unit` で、値は `()` である。要素のあるレコード (タプル) はヒープのオブジェクトにする
@@ -22,19 +22,19 @@ fn boxed(ty: &Type, module: &Module) -> bool {
 
 /// 引数を持つコンストラクタが1つでもある `data` の値は、ヒープの箱かもしれない。同じ型の引数のないコンストラクタの
 /// 値は即値のタグで同じ変数に入るが、`dup` と `decref` はそれを無視する (docs/spec/core-ir.md の boxed の判定)。
-fn has_fields(module: &Module, id: TypeDefId) -> bool {
-    match &module.types[id].kind {
+fn has_fields(hir: &HirProgram, id: TypeDefId) -> bool {
+    match &hir[id].kind {
         TypeDefKind::Data { constructors } => constructors
             .iter()
-            .any(|&ctor| !module.constructors[ctor].fields.is_empty()),
+            .any(|&ctor| !hir[ctor].fields.is_empty()),
         TypeDefKind::Builtin => false,
     }
 }
 
-pub(super) fn var_info(name: &str, ty: &Type, module: &Module) -> VarInfo {
+pub(super) fn var_info(name: &str, ty: &Type, hir: &HirProgram) -> VarInfo {
     VarInfo {
         name: name.to_string(),
-        boxed: boxed(ty, module),
+        boxed: boxed(ty, hir),
     }
 }
 
@@ -118,7 +118,7 @@ pub(super) fn equality_op(equality: Equality, negated: bool) -> PrimOp {
 
 #[cfg(test)]
 mod tests {
-    use eml_diagnostics::FileId;
+    use eml_diagnostics::SourceFiles;
     use eml_syntax::ast;
 
     use super::{INTRINSICS, intrinsic};
@@ -128,7 +128,9 @@ mod tests {
 
     /// Prelude の等式のないシグネチャ (intrinsic) の名前。
     fn prelude_intrinsics() -> Vec<String> {
-        let (parse, errors) = eml_syntax::parse(FileId::PRELUDE, eml_hir::PRELUDE_SOURCE);
+        let mut files = SourceFiles::new();
+        let file = files.add(eml_hir::PRELUDE_PATH, eml_hir::PRELUDE_SOURCE);
+        let (parse, errors) = eml_syntax::parse(file, eml_hir::PRELUDE_SOURCE);
         // 壊れた Prelude で、確かめる名前が気づかないうちに減らないようにする
         assert!(errors.is_empty(), "{errors:?}");
         let items: Vec<ast::Item> = parse.tree().items().collect();
