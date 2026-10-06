@@ -455,7 +455,7 @@ impl OpClause {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReturnClause {
-    /// 本体の値の1つ。
+    /// 本体の値と、状態のある handler では状態の順。
     pub closure: Closure,
     pub source: ClauseSource,
     pub range: TextRange,

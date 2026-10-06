@@ -256,13 +256,11 @@ impl Printer<'_> {
                     }
                     write!(s, " -> {}", self.expr(body, clause.closure.body, indent)).unwrap();
                 }
-                write!(
-                    s,
-                    " | return {} -> {}",
-                    self.pat(body, ret.value()),
-                    self.expr(body, ret.closure.body, indent)
-                )
-                .unwrap();
+                s.push_str(" | return");
+                for &pat in &ret.closure.params {
+                    write!(s, " {}", self.pat(body, pat)).unwrap();
+                }
+                write!(s, " -> {}", self.expr(body, ret.closure.body, indent)).unwrap();
                 s + ")"
             }
             ExprKind::Resume { k, arg } => format!(

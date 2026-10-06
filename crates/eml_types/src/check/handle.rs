@@ -111,7 +111,9 @@ impl BodyCheck<'_, '_> {
             }
             self.check_expr(clause.closure.body, error, Origin::HandlerClause);
         }
-        self.bind_pat(ret.value(), error);
+        for &pat in &ret.closure.params {
+            self.bind_pat(pat, error);
+        }
         self.check_expr(ret.closure.body, error, Origin::HandlerClause);
         error
     }
