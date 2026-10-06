@@ -53,7 +53,7 @@ R7 は5回に分け、R7a → R7b → R7c → R7d → R7e の順に、それぞ�
 |---|---|---|
 | R7a | 構文: `NAME`、`NAME_REF`、`PATH`、import の CST、E0004 を HIR に寄せる、不具合1と3 | 2 |
 | R7b | `ItemTree`、`DefMap`、item ごとの変換、プログラム全体の ID、Prelude のモジュール、重複と fixity、lang item、session、intrinsic を本体のない関数にする、不具合2 | 1、3、4.2 |
-| R7c | 型検査の出力 (`TypedProgram`、`DeclType`)、由来の `Span` | 5 |
+| R7c | 型検査の出力 (`TypedProgram`、`DeclType`)、由来の `Span`、`main` を入口の引数にする | 5 |
 | R7d | `IO` のエフェクト、Prelude の本体、`&&` などの本体、`Bool` のタグ | 4.3〜4.5 |
 | R7e | Core IR: item をすべて関数にする、規則 I と `prune`、平らな `Switch` | 6 |
 
@@ -70,12 +70,12 @@ R7c を R7d より先にするのは、Prelude の本体が入ると、持ち越
 | スコープ表 | `eml_hir::def_map(&[ItemTree]) -> (DefMap, Vec<Diagnostic>)` | プログラム |
 | item ごとの変換 | `eml_hir::lower(&DefMap, &[ItemTree]) -> (hir::Program, Vec<Diagnostic>)` | item |
 | 型検査 | `eml_types::check(&hir::Program) -> (TypedProgram, Vec<Diagnostic>)` | 宣言、本体、SCC |
-| Core IR | `eml_core_ir::lower(&hir::Program, &TypedProgram) -> Program` | プログラム |
+| Core IR | `eml_core_ir::lower(&hir::Program, &TypedProgram, FunctionId) -> Program` | プログラム |
 
 - `ItemTree` はファイルごとの宣言の要約で、名前を解決しない (3.1)
 - `DefMap` は、モジュールの一覧 (`ModuleId` → ファイル、モジュール名) と、モジュールごとのスコープ表を持つ。重複の判定と fixity の付け先の決定は、すべてここで行う (3.2、3.3)
 - 3つの入口は公開し、`eml_hir` の結合テストから個別に呼べるようにする
-- `eml_core_ir::lower_until` も、`lower` と同じ引数に変える
+- `eml_core_ir::lower_until` も、`lower` と同じ引数に変える。入口の関数の `FunctionId` を引数で受け取るのは R7c からである (5.3)
 
 ### 1.2 ID
 
@@ -123,7 +123,7 @@ impl Session {
 }
 ```
 
-- `main` は入口のモジュールの `main` だけを探す。Prelude には `main` を置かない
+- `main` は入口のモジュールの `main` だけを探す (`Program::main()`、5.3)。Prelude には `main` を置かない
 - Prelude だけを検査して診断が出ないことを、`eml_cli` のテストで確かめる。Prelude の誤りは処理系の誤りだからである
 
 ### 1.5 `pub` と名前の解決の順
@@ -294,7 +294,7 @@ pub infixr 0 <|
 方式は item を単位にするので、スキームをほかのモジュールへ渡すために出力を損失なしにする必要は強くない。それでも次の理由で R7 のうちに直す。
 
 - Prelude の本体が入ると、持ち越しの由来が Prelude の中の位置を指す。由来にファイルが要る
-- 出力を宣言ごとの結果 (`Shape` と `KindScheme`) にそろえておけば、クエリ化のときに宣言ごとのクエリの結果として使える
+- 出力を宣言ごとの結果 (`Shape` と `KindScheme`) にそろえておけば、クエリ化のときに宣言ごとのクエリの結果として使える。REPL で前の入力の宣言を検査し直さずに使うときも、同じ結果を使い回せる
 - 表示のための `Scheme` が後の段階への出力を兼ねていて、`TypedModule` の役割がわかりにくい。今の `Scheme` への変換では、矢印の線形性、多重度の制約、変数どうしの制約、持ち越しの由来、Kind 変数の同一性が落ちる
 
 ### 5.1 出力の形
@@ -302,8 +302,7 @@ pub infixr 0 <|
 ```rust
 pub struct TypedProgram {
     pub decls: HashMap<Decl, DeclType>,
-    pub bodies: HashMap<FunctionId, BodyTypes>,   // BodyTypes は今のまま
-    pub main: Option<FunctionId>,
+    pub bodies: ItemMap<Function, BodyTypes>,   // BodyTypes は今のまま
 }
 
 pub enum Decl {
@@ -313,27 +312,40 @@ pub enum Decl {
 }
 
 pub struct DeclType {
-    pub shape: Shape,
-    pub kinds: KindScheme,
-}
-
-impl TypedProgram {
     /// 後の段階が読む、矢印の線形性のない型。
-    pub fn ty(&self, decl: Decl) -> Type;
+    pub ty: Type,
+    pub(crate) shape: Shape,
+    pub(crate) kinds: KindScheme,
 }
 ```
 
-- `Shape` と `KindScheme` は型を公開し、欄は crate の外から読めないようにする。外から読む口は `ty()` と `dump` の表示だけにする。後の段階が Kind を読まないという今の規律 ([architecture.md](../../implementation/architecture.md) の「`Table::export`」) を保つためである
-- `Scheme` と `KindConstraint` は `dump` の中の表示の型にして、公開の出力から外す
+- `ty` は、検査の最後に `shape.export(context)` で1回だけ作る。`Type` は型とエフェクトの名前を持ち、名前は `Context` から引くので、`Shape` だけでは `Type` を組み立てられないためである。後の段階は `typed.decls[&decl].ty` で読む
+- `shape` と `kinds` は crate の外から読めないようにする。後の段階が Kind を読まないという今の規律 ([architecture.md](../../implementation/architecture.md) の「`Table::export`」) を保つためである
+- `Scheme` と `KindConstraint` は `dump` の中だけで使う表示の型にして、公開をやめる
 - `Decl` は今の crate 内の `kind::problem::Decl` を公開にしたものである
+- `main` は型検査の結果ではないので、`TypedProgram` に持たせない (5.3)
+- 採らなかった形は次のとおり
+  - `ty(&self, program: &Program, decl)` で呼ぶたびに組み立てる形。本体の型 (`BodyTypes`) は名前を持つ `Type` のままなので、宣言の型だけを組み立て直しても得るものがない
+  - `Type` から名前をなくし、表示するときに `Program` から引く形。同じ名前の別の型を修飾して区別できる (REPL で `data T` を定義し直すと起きる) が、`Display`、診断の文言、`dump` の経路をすべて変えることになる。S2 で同じ名前の別の型の表示を決めるときに一緒に扱う ([status.md](../../implementation/status.md) の「次の作業の注意点」)。そのときも後の段階は `ty` の欄を読むだけなので、使う側は変わらない
 
 ### 5.2 由来とファイル
 
-- `Provenance` と `KindReason` が持つ位置を、`TextRange` から `Span { file: FileId, range: TextRange }` に変える
-- 診断の位置のファイルは、今は `module.file` に決め打ちしている。これをやめ、検査している本体のモジュールのファイルか、由来の `Span` のファイルを使う
-- `Context` (データ型の Kind、名前、多重度) は、プログラム全体の item から1回だけ作る。SCC の分割も、プログラム全体の関数で行う
+- 位置にファイルを持たせる型 `Span { file: FileId, range: TextRange }` を足す。使うのが `eml_types` だけなので、`eml_types` の中に置く
+- ファイルが変わりうる位置だけを `Span` にする。`KindOrigin { span: Span, reason }`、`CarriedInner { span: Span, label }`、`Provenance::Unattributed(Span)` の3か所である
+  - スキームから制約を複写するときは、由来を参照した位置のものに置き換える (`kind/solve.rs` の `copy_scheme`)。呼ばれた側の位置が残るのは、`CarriedThrough` の `inner` だけである。R7d で Prelude に本体が入ると、ここが Prelude の中を指す
+  - `KindReason` の中の位置 (`first`、`second`、`clause`、`binding`、`init`、`UnusedPath` の範囲、`DropFix` の位置) は、どれも由来を作った本体の中にある。`TextRange` のままにし、`KindOrigin.span` と同じファイルにあるという決まりを型のコメントに書く
+- 報告 (`check/report.rs`) は、入口のファイルの決め打ちをやめ、`origin.span.file` と `inner.span.file` を使う
+- 違反を並べるキー (`report_violations`) にファイルを足す。プログラム全体の違反を1つの列に並べるので、範囲だけで並べると別のファイルの違反が混ざるためである
+- `Context` (データ型の Kind、名前、多重度) と SCC の分割は、R7b-2 でプログラム全体から作るようにした。本体の検査の診断も、R7b-2 で本体のあるモジュールのファイルを使うようにした
 
-### 5.3 `dump`
+### 5.3 `main`
+
+- `eml_hir::Program::main() -> Option<FunctionId>` を足す。入口のモジュールの `main` を返す
+- `eml_types` は、E2004 の検査にこれを使う
+- `eml_core_ir::lower` と `lower_until` は、入口の関数を `entry: FunctionId` の引数で受け取る。`Session::compile` が `program.main()` を引き、`None` なら E2003 を足し、あれば `lower` に渡す。REPL では、`main` の代わりにその回の式から作った関数を渡せる
+- `eml_test_support` の `core`、`core_until`、`run` は、中で `program.main()` を引いて渡す。各 crate のテストの呼び出しの形は変わらない
+
+### 5.4 `dump`
 
 - `dump` は入口のモジュールの宣言だけを表示し、Prelude の宣言は表示しない。`kinds:` の行の書き方は変えない
 - `Type` の表示 (`Display`) は変えない
@@ -404,12 +416,12 @@ enum CasePattern { Tag(u32), Int(i64), String(u32) }   // String は文字列定
 | R7d | `eml_core_ir` の、`not`、`>>`、`<<` を使うもの |
 | R7e | `eml_core_ir` の `translate.rs` のほとんど、`simplify.rs` と `perceus.rs` の `switch` を含むもの (約30件)、`verify.rs` と `eml_interp/tests/data.rs` の `switch` を含むテキスト |
 
-種類3 (機械的な追随) は、ID の形と入口の引数の変更に合わせたテストの組み立ての書き換えである。
+種類3 (機械的な追随) は、ID の形と入口の引数の変更に合わせたテストの組み立ての書き換えである。R7c では、`eml_types/tests/check.rs` の `signatures` と `constructors` を `decls` から読む形にし、`eml_test_support` の `Checked::typed` の型の名前を変える。R7c は観測できるふるまいを変えないので、種類1と種類2の変更はない。
 
 新しく足すテストは次のとおり。
 
 - R7b: `ItemTree` と `DefMap` の結合テスト (重複の3つの規則、fixity の付け先、名前の解決の順)。Prelude だけを検査して診断が出ないことのテスト
-- R7c: 由来が Prelude の中を指す持ち越しの診断が、`Prelude.em` の位置を表示するテスト (R7d で Prelude の本体が入ってから足す)
+- R7c: `Program::main()` の `eml_hir` の結合テスト (入口のモジュールに `main` がある場合、ない場合、`main` が操作の名前である場合)。由来が Prelude の中を指す持ち越しの診断が、`Prelude.em` の位置を表示するテスト (R7d で Prelude の本体が入ってから足す)
 - R7e: I と `prune` のテスト (`simplify.rs`)、平らな `Switch` の verifier の誤りのテスト (`verify.rs`)、リテラルが1000個の `match` を debug ビルドで実行するテスト (`eml_interp/tests/run.rs`。ソースはテストの中で生成する)
 
 ### 7.2 `eml_test_support`
@@ -427,13 +439,13 @@ enum CasePattern { Tag(u32), Int(i64), String(u32) }   // String は文字列定
 | `spec/diagnostics.md` | E1025 | R7b |
 | `spec/effects.md` | `IO` を Prelude で宣言したエフェクトにすること | R7d |
 | `spec/core-ir.md` | item の関数、規則 I と `prune`、平らな `Switch` | R7e |
-| `implementation/architecture.md` | 段階の入口、ID、`ItemTree` と `DefMap`、`TypedProgram`、session。R7e の後、[ロードマップ](../../future/roadmap.md) の「文書の簡素化」のとおり細部の説明を減らす | 各回、R7e |
+| `implementation/architecture.md` | 段階の入口、ID、`ItemTree` と `DefMap`、`TypedProgram` と `DeclType`、由来の `Span`、`lower` の `entry` 引数、session。R7e の後、[ロードマップ](../../future/roadmap.md) の「文書の簡素化」のとおり細部の説明を減らす | 各回、R7e |
 | `implementation/testing.md` | テストの地図と `eml_test_support` | 各回 |
-| `implementation/status.md` | 回ごとに更新する。S2 に回したもの (import をたどるローダ、複数ファイルの fixture、ディレクトリを1件とする UI テスト、import の循環とモジュールの根の決定) を S2 の項目に移す | 各回 |
+| `implementation/status.md` | 回ごとに更新する。S2 に回したもの (import をたどるローダ、複数ファイルの fixture、ディレクトリを1件とする UI テスト、import の循環とモジュールの根の決定) を S2 の項目に移す。R7c で、同じ名前の別の型の表示の項目に、`Type` から名前をなくす案 (5.1) を書き足す | 各回 |
 
 ### 7.4 完了の条件
 
 1. 1〜6章の内容が入っていること。不具合1〜3が UI テストで確かめられていること
-2. 次のものがコードから消えていること: `Res::Builtin`、`Builtin`、`BUILTINS`、`Access`、`Module::builtins`、`TypedModule::builtins`、`Decl::Builtin`、`ValueItem::Builtin`、`FileId::PRELUDE`、`ItemScope` の `fixities` と `prelude_fixities`、`eml_core_ir` の `FALSE` と `TRUE`、`Lowering::Compose`、`call_builtin`、`call_operation`、`call_constructor`
+2. 次のものがコードから消えていること: `Res::Builtin`、`Builtin`、`BUILTINS`、`Access`、`Module::builtins`、`TypedModule::builtins`、`Decl::Builtin`、`ValueItem::Builtin`、`FileId::PRELUDE`、`ItemScope` の `fixities` と `prelude_fixities`、`eml_core_ir` の `FALSE` と `TRUE`、`Lowering::Compose`、`call_builtin`、`call_operation`、`call_constructor`、`TypedModule`、公開の `Scheme`、`check/report.rs` の入口のファイルの決め打ち
 3. `cargo test`、`cargo clippy --all-targets`、`cargo fmt` が通ること
 4. 型検査の性能のテスト (`crates/eml_types/tests/scaling.rs`、release ビルド) の比が6以下のままであること。Prelude をプログラムに含めて検査するようになるためである
