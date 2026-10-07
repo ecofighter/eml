@@ -1,4 +1,4 @@
-use crate::common::{diagnostics, lines, shape};
+use crate::common::{diagnostics, item_kinds, lines, shape};
 
 #[test]
 fn operator_signature() {
@@ -427,4 +427,84 @@ fn data_without_constructors_is_parsed() {
         NAME
           UIDENT "File"
     "#);
+}
+
+#[test]
+fn extern_declarations() {
+    insta::assert_snapshot!(shape(&lines(&[
+        "pub extern println : String -> <IO> Unit",
+        "pub extern data Int",
+        "pub extern effect IO",
+    ])), @r#"
+    SOURCE_FILE
+      SIGNATURE
+        PUB_KW "pub"
+        EXTERN_KW "extern"
+        NAME
+          LIDENT "println"
+        COLON ":"
+        FN_TYPE
+          PATH_TYPE
+            PATH
+              NAME_REF
+                UIDENT "String"
+          THIN_ARROW "->"
+          EFFECT_ROW
+            L_ANGLE "<"
+            EFFECT
+              PATH
+                NAME_REF
+                  UIDENT "IO"
+            R_ANGLE ">"
+          PATH_TYPE
+            PATH
+              NAME_REF
+                UIDENT "Unit"
+      DATA_ITEM
+        PUB_KW "pub"
+        EXTERN_KW "extern"
+        DATA_KW "data"
+        NAME
+          UIDENT "Int"
+      EFFECT_ITEM
+        PUB_KW "pub"
+        EXTERN_KW "extern"
+        EFFECT_KW "effect"
+        NAME
+          UIDENT "IO"
+    "#);
+}
+
+#[test]
+fn extern_on_other_items_is_one_error_each() {
+    let report: Vec<String> = [
+        "extern type T = Int",
+        "extern infixl 6 +",
+        "extern data T = | A",
+        "extern effect E where\n  op : Unit -> Unit",
+        "extern data T a",
+        "extern effect E a",
+        "extern pub f : Int",
+        "extern f x = x",
+    ]
+    .iter()
+    .map(|text| format!("{text:?} => {:?}", diagnostics(text)))
+    .collect();
+    insta::assert_debug_snapshot!(report, @r#"
+    [
+        "\"extern type T = Int\" => [\"E0011 1:1 `extern` cannot be written on this item\"]",
+        "\"extern infixl 6 +\" => [\"E0011 1:1 `extern` cannot be written on this item\"]",
+        "\"extern data T = | A\" => [\"E0011 1:15 `extern data` cannot have parameters, `=` or `where`\"]",
+        "\"extern effect E where\\n  op : Unit -> Unit\" => [\"E0011 1:17 `extern effect` cannot have parameters, `=` or `where`\"]",
+        "\"extern data T a\" => [\"E0011 1:15 `extern data` cannot have parameters, `=` or `where`\"]",
+        "\"extern effect E a\" => [\"E0011 1:17 `extern effect` cannot have parameters, `=` or `where`\"]",
+        "\"extern pub f : Int\" => [\"E0011 1:8 `extern` cannot be written before `pub`\"]",
+        "\"extern f x = x\" => [\"E0011 1:1 `extern` cannot be written on this item\"]",
+    ]
+    "#);
+}
+
+#[test]
+fn extern_equation_is_still_an_equation() {
+    assert_eq!(item_kinds("extern f x = x"), ["EQUATION"]);
 }

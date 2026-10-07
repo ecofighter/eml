@@ -16,7 +16,7 @@ enum ItemKind {
     OperatorEquation,
 }
 
-/// 今の位置から始まる項目の種類。`pub` は項目の前置きなので、ここでは見ない。`at_item_start` と `item` が同じ判定を
+/// 今の位置から始まる項目の種類。`pub` と `extern` は項目の前置きなので、ここでは見ない。`at_item_start` と `item` が同じ判定を
 /// 使うため、項目の種類を足すときはここだけを直す。
 fn item_kind(p: &Parser) -> Option<ItemKind> {
     Some(match p.current() {
@@ -35,7 +35,7 @@ fn item_kind(p: &Parser) -> Option<ItemKind> {
 }
 
 pub(super) fn at_item_start(p: &Parser) -> bool {
-    p.at(PUB_KW) || item_kind(p).is_some()
+    p.at(PUB_KW) || p.at(EXTERN_KW) || item_kind(p).is_some()
 }
 
 /// `LIDENT` の直後が `-` なら、演算子の定義 (`a - b = ...`) とみなす。関数の定義とは2トークンの先読みで区別する。
@@ -56,6 +56,16 @@ fn at_operator_signature(p: &Parser) -> bool {
 pub(super) fn item(p: &mut Parser, declared: bool) -> bool {
     let m = p.start();
     let public = p.eat(PUB_KW);
+    let external = p.eat(EXTERN_KW);
+    // `extern` は `pub` の後ろにだけ書く。誤りを1つ出したら `pub` を読み捨て、項目は今までどおり読む
+    if external && p.at(PUB_KW) {
+        p.error(
+            codes::SYNTAX_ERROR,
+            "`extern` cannot be written before `pub`",
+            "write `pub extern`",
+        );
+        p.bump(PUB_KW);
+    }
     let kind = item_kind(p);
     // `pub` は宣言だけに付く (docs/spec/grammar.md の `item`)。等式の関数はシグネチャで公開する
     if public {
@@ -73,7 +83,25 @@ pub(super) fn item(p: &mut Parser, declared: bool) -> bool {
             _ => {}
         }
     }
+    // `extern` は、等式のないシグネチャ、`=` のない `data`、`where` のない `effect` にだけ付く
+    // (docs/spec/grammar.md の `item`)
+    if external
+        && kind.is_some_and(|kind| {
+            !matches!(
+                kind,
+                ItemKind::Signature | ItemKind::Data | ItemKind::Effect
+            )
+        })
+    {
+        p.error_at_previous(
+            codes::SYNTAX_ERROR,
+            "`extern` cannot be written on this item",
+            "`extern` goes on a signature, a `data` without `=`, or an `effect` without `where`",
+        );
+    }
     match kind {
+        Some(ItemKind::Data) if external => extern_data(p, m),
+        Some(ItemKind::Effect) if external => extern_effect(p, m),
         Some(ItemKind::Data) => data_item(p, m),
         Some(ItemKind::Type) => type_item(p, m),
         Some(ItemKind::Effect) => effect_item(p, m),
@@ -132,6 +160,33 @@ fn data_item(p: &mut Parser, m: Marker) {
         alts(p);
     }
     m.complete(p, DATA_ITEM);
+}
+
+/// extern_decl ::= 'data' UIDENT。型引数、`=`、`where` は E0011 にして項目の終わりまで読み飛ばす
+/// (docs/spec/grammar.md の `item`)。
+fn extern_data(p: &mut Parser, m: Marker) {
+    p.bump(DATA_KW);
+    expect_name(p, UIDENT);
+    reject_extern_tail(p, "data");
+    m.complete(p, DATA_ITEM);
+}
+
+fn extern_effect(p: &mut Parser, m: Marker) {
+    p.bump(EFFECT_KW);
+    expect_name(p, UIDENT);
+    reject_extern_tail(p, "effect");
+    m.complete(p, EFFECT_ITEM);
+}
+
+fn reject_extern_tail(p: &mut Parser, keyword: &str) {
+    if p.at(LIDENT) || p.at(EQ) || p.at(PIPE) || p.at(WHERE_KW) {
+        p.error(
+            codes::SYNTAX_ERROR,
+            format!("`extern {keyword}` cannot have parameters, `=` or `where`"),
+            "an extern declaration is only the name",
+        );
+        skip_to_sep(p, false);
+    }
 }
 
 fn alts(p: &mut Parser) {

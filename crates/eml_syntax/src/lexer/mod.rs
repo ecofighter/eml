@@ -308,6 +308,7 @@ fn keyword(ident: &str) -> Option<SyntaxKind> {
         "effect" => EFFECT_KW,
         "where" => WHERE_KW,
         "pub" => PUB_KW,
+        "extern" => EXTERN_KW,
         "import" => IMPORT_KW,
         "as" => AS_KW,
         "infixl" => INFIXL_KW,

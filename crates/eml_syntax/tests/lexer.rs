@@ -68,7 +68,7 @@ fn resume_is_an_ordinary_name() {
 
 #[test]
 fn all_keywords() {
-    let text = "data type effect where pub import as infixl infixr infix \
+    let text = "data type effect where pub extern import as infixl infixr infix \
                 let in if then else match with handle from drop return \
                 never once multi use fn forall class instance";
     assert_eq!(
@@ -79,6 +79,7 @@ fn all_keywords() {
             "EFFECT_KW",
             "WHERE_KW",
             "PUB_KW",
+            "EXTERN_KW",
             "IMPORT_KW",
             "AS_KW",
             "INFIXL_KW",

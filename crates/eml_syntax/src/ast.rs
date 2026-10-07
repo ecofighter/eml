@@ -258,6 +258,10 @@ impl SourceFile {
 }
 
 impl Signature {
+    pub fn is_extern(&self) -> bool {
+        support::token(&self.syntax, SyntaxKind::EXTERN_KW).is_some()
+    }
+
     pub fn name(&self) -> Option<Name> {
         support::child(&self.syntax)
     }
@@ -549,6 +553,10 @@ impl Effect {
 }
 
 impl EffectItem {
+    pub fn is_extern(&self) -> bool {
+        support::token(&self.syntax, SyntaxKind::EXTERN_KW).is_some()
+    }
+
     pub fn name(&self) -> Option<Name> {
         support::children::<Name>(&self.syntax)
             .find(|name| name.token().kind() == SyntaxKind::UIDENT)
@@ -650,6 +658,10 @@ impl DropExpr {
 }
 
 impl DataItem {
+    pub fn is_extern(&self) -> bool {
+        support::token(&self.syntax, SyntaxKind::EXTERN_KW).is_some()
+    }
+
     /// `=` とコンストラクタの並びを書いたか。
     /// `=` か選択肢があるか。`=` を書き忘れた選択肢はパーサが報告済みなので、コンストラクタのない `data` には数えない。
     pub fn has_constructors(&self) -> bool {
