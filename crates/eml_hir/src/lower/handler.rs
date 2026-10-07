@@ -96,7 +96,7 @@ impl BodyLowering<'_> {
         let params = self.lower_param_group(clause.params(), clause.range());
         let body = self.lower_expr(clause.body(), clause.range());
         self.scope.truncate(mark);
-        // 名前がなければパーサが報告済み
+        // 節の先頭の `PATH` がないか、`PATH` にセグメントがなければ、どちらもパーサが報告済み
         let Some(path) = clause.path() else {
             return;
         };

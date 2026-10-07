@@ -394,6 +394,15 @@ fn an_import_after_a_declaration_is_an_error() {
 }
 
 #[test]
+fn a_pub_without_an_item_is_not_a_declaration() {
+    // 項目のない `pub` の後の import を、宣言の後の import (E0011) として重ねて報告しない
+    assert_eq!(
+        diagnostics("import M\npub\nimport N"),
+        ["E0003 2:4 expected an item"]
+    );
+}
+
+#[test]
 fn an_infix_constructor_in_an_import_list_is_an_error() {
     insta::assert_snapshot!(shape("import M ((:+), (<+>))"), @r#"
     SOURCE_FILE

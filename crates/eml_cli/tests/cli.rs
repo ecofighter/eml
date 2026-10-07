@@ -153,3 +153,27 @@ fn modules_are_read_from_the_entry_directory() {
     assert_eq!(String::from_utf8_lossy(&nested.stdout), "ok\n");
     assert_eq!(bare.status.code(), Some(0), "{bare:?}");
 }
+
+#[test]
+fn a_miscased_entry_path_is_still_the_entry() {
+    // 大文字小文字を区別しないファイルシステムでは `t/server.em` で `t/Server.em` を開ける。そのときも依存先の
+    // `import Server` は入口を指す E1030 で、入口を2回読んだ循環 (E1027) にしない (docs/spec/modules.md の「モジュール」)
+    let dir = temp_project(
+        "cli-entry-case",
+        &[
+            ("t/Server.em", "import Util\n"),
+            ("t/Util.em", "import Server\n"),
+        ],
+    );
+    let output = eml_in(&dir, &["check", "t/server.em"]);
+    std::fs::remove_dir_all(&dir).unwrap();
+    // 大文字小文字を区別するファイルシステムでは、入口が読めない使い方の誤りになる
+    if output.status.code() == Some(2) {
+        return;
+    }
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(1), "{stderr}");
+    assert_eq!(stderr.matches("[E1030]").count(), 1, "{stderr}");
+    assert!(!stderr.contains("[E1027]"), "{stderr}");
+    assert!(stderr.contains("t/Server.em"), "{stderr}");
+}

@@ -112,9 +112,23 @@ fn fs_provider_matches_the_case_of_every_segment() {
     let provider = FsProvider::new(&dir);
     let directory = provider.read(&module_path(&["Report", "Csv"]));
     let file = provider.read(&module_path(&["Util", "Csv"]));
+    let missing = provider.read(&module_path(&["Util", "Json"]));
     std::fs::remove_dir_all(&dir).unwrap();
-    assert_eq!(directory, Err(ReadError::NotFound));
-    assert_eq!(file, Err(ReadError::NotFound));
+    assert_eq!(
+        directory,
+        Err(ReadError::Unreadable(
+            "the file is named `report`, and module paths match the case of file names exactly"
+                .to_string()
+        ))
+    );
+    assert_eq!(
+        file,
+        Err(ReadError::Unreadable(
+            "the file is named `csv.em`, and module paths match the case of file names exactly"
+                .to_string()
+        ))
+    );
+    assert_eq!(missing, Err(ReadError::NotFound));
 }
 
 #[test]
@@ -122,7 +136,12 @@ fn a_module_in_a_differently_cased_directory_is_not_found() {
     let dir = temp_project("case", &[("report/Csv.em", "pub x : Int\nx = 1\n")]);
     let session = Session::load("main.em", "import Report.Csv\n", &FsProvider::new(&dir));
     std::fs::remove_dir_all(&dir).unwrap();
-    assert_eq!(codes(&session.check()), ["E1026"]);
+    let diagnostics = session.check();
+    assert_eq!(codes(&diagnostics), ["E1026"]);
+    assert_eq!(
+        diagnostics[0].message,
+        "cannot read module `Report.Csv`: the file is named `report`, and module paths match the case of file names exactly"
+    );
 }
 
 #[test]

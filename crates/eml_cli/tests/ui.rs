@@ -17,18 +17,34 @@ fn ui_root() -> PathBuf {
 
 /// スナップショットの中のパスを安定させるため、入口を `tests/ui` からの相対パスで渡す。モジュールの根は入口の
 /// ディレクトリである。
-fn load(path: &Path) -> Session {
+fn load(path: &Path, suffix: &str) -> Session {
     let relative = path
         .strip_prefix(ui_root())
         .unwrap()
         .to_string_lossy()
         .replace('\\', "/");
     let root = path.parent().expect("a test file has a directory");
-    Session::load(
+    let session = Session::load(
         &relative,
         &fs::read_to_string(path).unwrap(),
         &FsProvider::new(root),
-    )
+    );
+    // ディレクトリのテストの接尾辞は `.em` で終わらない (`classify`)
+    if suffix.ends_with(".em") {
+        assert_single_file(&session, suffix);
+    }
+    session
+}
+
+/// 単独のファイルのテストは import を書かない。分類のディレクトリにある別のテストのファイルを、モジュールとして読んで
+/// しまうため (docs/implementation/testing.md の「UI テスト」)。
+fn assert_single_file(session: &Session, suffix: &str) {
+    let modules: Vec<&str> = session.module_names().collect();
+    assert!(
+        modules.len() <= 2,
+        "{suffix} imports {}: a test that imports modules must be a directory with main.em",
+        modules[2..].join(", ")
+    );
 }
 
 /// glob に当たった `.em` の役割。
@@ -84,8 +100,8 @@ fn snapshot_settings(suffix: &str) -> insta::Settings {
 }
 
 /// 診断のエラーなしでコンパイルし、`debug_heap` を有効にして実行する。stdout、診断の表示、実行の結果を返す。
-fn compile_and_execute(path: &Path) -> (String, String, Result<(), RuntimeError>) {
-    let session = load(path);
+fn compile_and_execute(path: &Path, suffix: &str) -> (String, String, Result<(), RuntimeError>) {
+    let session = load(path, suffix);
     let compiled = session.compile();
     let stderr = render(&compiled.diagnostics, session.files());
     let program = compiled
@@ -110,7 +126,7 @@ fn run() {
         let Entry::Test(suffix) = classify(path, "run") else {
             return;
         };
-        let (stdout, stderr, result) = compile_and_execute(path);
+        let (stdout, stderr, result) = compile_and_execute(path, &suffix);
         assert_eq!(result, Ok(()), "{stderr}");
         snapshot_settings(&suffix).bind(|| {
             insta::assert_snapshot!(format!("--- stdout ---\n{stdout}--- stderr ---\n{stderr}"));
@@ -124,7 +140,7 @@ fn run_fail() {
         let Entry::Test(suffix) = classify(path, "run-fail") else {
             return;
         };
-        let (stdout, _, result) = compile_and_execute(path);
+        let (stdout, _, result) = compile_and_execute(path, &suffix);
         let Err(error) = result else {
             panic!("expected a runtime error");
         };
@@ -142,7 +158,7 @@ fn check_fail() {
         let Entry::Test(suffix) = classify(path, "check-fail") else {
             return;
         };
-        let session = load(path);
+        let session = load(path, &suffix);
         let diagnostics = session.check();
         let rendered = render(&diagnostics, session.files());
         assert!(
@@ -188,4 +204,12 @@ fn main_right_under_a_category_fails() {
 #[should_panic(expected = "belongs to no test")]
 fn a_module_without_main_fails() {
     classify(&ui_root().join("run/modules/no_such_test/Lib.em"), "run");
+}
+
+#[test]
+#[should_panic(expected = "basics/imports.em imports Util")]
+fn a_single_file_test_that_imports_a_module_fails() {
+    let source = eml_test_support::MemorySource(&[("Util.em", "")]);
+    let session = Session::load("run/basics/imports.em", "import Util\n", &source);
+    assert_single_file(&session, "basics/imports.em");
 }

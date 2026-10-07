@@ -38,18 +38,23 @@ pub(crate) fn source_file(p: &mut Parser) {
         } else {
             stray_tokens(p);
         }
-        if !p.at_sep() && !p.at_eof() && !p.at(LAYOUT_CLOSE) {
-            p.error(
-                codes::SYNTAX_ERROR,
-                unexpected(p),
-                "expected the end of the item",
-            );
-            let m = p.start();
-            skip_to_sep(p, false);
-            m.complete(p, ERROR);
-        }
+        end_of_item(p);
     }
     m.complete(p, SOURCE_FILE);
+}
+
+/// 項目の後ろに読み残したトークンを、1件の診断とともに `ERROR` にする。
+fn end_of_item(p: &mut Parser) {
+    if !p.at_sep() && !p.at_eof() && !p.at(LAYOUT_CLOSE) {
+        p.error(
+            codes::SYNTAX_ERROR,
+            unexpected(p),
+            "expected the end of the item",
+        );
+        let m = p.start();
+        skip_to_sep(p, false);
+        m.complete(p, ERROR);
+    }
 }
 
 /// 入れ子の深さを数えて `parse` を呼ぶ。上限を超えたら `too_deep` で読み飛ばし、`on_too_deep` を返す。

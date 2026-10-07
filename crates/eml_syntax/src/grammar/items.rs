@@ -94,7 +94,8 @@ pub(super) fn item(p: &mut Parser, declared: bool) -> bool {
             m.complete(p, ERROR);
         }
     }
-    !matches!(kind, Some(ItemKind::Import))
+    // 項目のない `pub` は宣言ではないので、後ろの import を E0011 にしない
+    kind.is_some_and(|kind| !matches!(kind, ItemKind::Import))
 }
 
 /// signature ::= var ':' type 、var ::= LIDENT | '(' OP ')'
@@ -303,6 +304,9 @@ fn import_item(p: &mut Parser, m: Marker, declared: bool) {
     if p.at(L_PAREN) {
         import_list(p);
     }
+    // `import Report.csv` の `.csv` のような読み残しを IMPORT_ITEM の中に置く。読めたパスだけでファイルを読むと、
+    // 書いたつもりと違うモジュールを黙って取り込むので、`item_tree` がこの import を壊れたものとして扱う
+    end_of_item(p);
     m.complete(p, IMPORT_ITEM);
 }
 

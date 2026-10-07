@@ -54,6 +54,14 @@ impl Session {
         self.loaded.entry
     }
 
+    /// 読み込んだモジュールの名前。番号の順で、Prelude、入口 (`Main`)、import でたどった依存先の順に並ぶ。
+    pub fn module_names(&self) -> impl Iterator<Item = &str> {
+        self.loaded
+            .modules
+            .iter()
+            .map(|module| module.name.as_str())
+    }
+
     pub fn check(&self) -> Vec<Diagnostic> {
         let mut diagnostics = self.front().2;
         sort_diagnostics(&mut diagnostics);
@@ -62,7 +70,7 @@ impl Session {
 
     pub fn compile(&self) -> Compiled {
         let (program, typed, mut diagnostics) = self.front();
-        // `main` がないことは実行するときだけ誤りにする。モジュール (M2) は `main` を持たないため (docs/spec/types.md)
+        // `main` がないことは実行するときだけ誤りにする。`main` を持たないファイルも検査できるようにするため (docs/spec/types.md)
         let main = program.main();
         if main.is_none() {
             diagnostics.push(eml_types::missing_main(self.loaded.entry));

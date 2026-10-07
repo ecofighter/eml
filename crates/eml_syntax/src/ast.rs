@@ -224,10 +224,6 @@ impl Path {
     pub fn name(&self) -> Option<NameRef> {
         self.segments().last()
     }
-
-    pub fn is_qualified(&self) -> bool {
-        self.segments().nth(1).is_some()
-    }
 }
 
 impl LambdaExpr {
@@ -908,6 +904,13 @@ impl ImportItem {
 
     pub fn list(&self) -> Option<ImportList> {
         support::child(&self.syntax)
+    }
+
+    /// import の後ろに読めないトークンがあり、パーサが `ERROR` にしたか。
+    pub fn has_trailing_error(&self) -> bool {
+        self.syntax
+            .children()
+            .any(|child| child.kind() == SyntaxKind::ERROR)
     }
 }
 

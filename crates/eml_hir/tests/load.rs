@@ -232,3 +232,23 @@ fn a_missing_module_imported_after_a_declaration_is_reported() {
     );
     assert_eq!(targets(&loaded, 1), [None]);
 }
+
+#[test]
+fn an_import_with_a_malformed_path_reads_no_module() {
+    // パスの後ろに構文の誤りがある import は壊れた import で、どのファイルも読まない。報告するのは構文の誤りだけである
+    let present: &[(&str, &str)] = &[("Report.em", "pub x : Int\nx = 1")];
+    for (entry, modules) in [
+        ("import Report.\n", &[][..]),
+        ("import Report.\n", present),
+        ("import Report.csv\n", present),
+    ] {
+        let (loaded, diagnostics) = load(entry, modules);
+        assert_eq!(names(&loaded), ["Prelude", "Main"], "{entry}");
+        assert_eq!(targets(&loaded, 1), [None], "{entry}");
+        assert_eq!(diagnostics.len(), 1, "{entry}: {diagnostics:?}");
+        assert!(
+            diagnostics[0].contains(" E0011 "),
+            "{entry}: {diagnostics:?}"
+        );
+    }
+}

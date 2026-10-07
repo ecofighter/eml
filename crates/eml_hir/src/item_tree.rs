@@ -105,6 +105,8 @@ pub struct ImportItem {
     pub list: Option<Vec<ImportName>>,
     /// import の全体。
     pub range: TextRange,
+    /// パスの後ろに構文の誤りがある。読み込みの段はファイルを読まずに壊れた import にする。
+    pub malformed: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -407,6 +409,7 @@ fn import_of(item: &ast::ImportItem) -> Option<ImportItem> {
         has_alias: alias.is_some(),
         list,
         range: item.range(),
+        malformed: item.has_trailing_error(),
     })
 }
 

@@ -27,9 +27,7 @@ impl ModuleSource for FsProvider {
     fn read(&self, path: &ModulePath) -> Result<String, ReadError> {
         let mut file = self.root.clone();
         for name in path.file_path().split('/') {
-            if !has_entry(&file, name)? {
-                return Err(ReadError::NotFound);
-            }
+            find_entry(&file, name)?;
             file.push(name);
         }
         fs::read_to_string(&file).map_err(|error| ReadError::Unreadable(error.to_string()))
@@ -37,18 +35,41 @@ impl ModuleSource for FsProvider {
 }
 
 /// ディレクトリの一覧の名前と1文字ずつ比べる。macOS のように大文字小文字を区別しないファイルシステムで、
-/// `import Main` が `main.em` に当たらないようにするため。
-fn has_entry(dir: &Path, name: &str) -> Result<bool, ReadError> {
-    match fs::read_dir(dir) {
-        Ok(entries) => Ok(entries.flatten().any(|entry| entry.file_name() == name)),
+/// `import Report.Csv` が `report/Csv.em` に当たらないようにするため (docs/spec/modules.md の「モジュール」)。
+/// 大文字小文字だけが違う名前があれば、ないと言うより実際の名前を示すほうが直しやすいので、読めない理由として返す。
+fn find_entry(dir: &Path, name: &str) -> Result<(), ReadError> {
+    let entries = match fs::read_dir(dir) {
+        Ok(entries) => entries,
         Err(error)
             if matches!(
                 error.kind(),
                 io::ErrorKind::NotFound | io::ErrorKind::NotADirectory
             ) =>
         {
-            Ok(false)
+            return Err(ReadError::NotFound);
         }
-        Err(error) => Err(ReadError::Unreadable(error.to_string())),
+        Err(error) => return Err(ReadError::Unreadable(error.to_string())),
+    };
+    let lowered = name.to_lowercase();
+    let mut differently_cased = None;
+    for entry in entries {
+        let actual = entry
+            .map_err(|error| ReadError::Unreadable(error.to_string()))?
+            .file_name();
+        if actual == name {
+            return Ok(());
+        }
+        if let Some(actual) = actual
+            .to_str()
+            .filter(|actual| actual.to_lowercase() == lowered)
+        {
+            differently_cased = Some(actual.to_string());
+        }
+    }
+    match differently_cased {
+        Some(actual) => Err(ReadError::Unreadable(format!(
+            "the file is named `{actual}`, and module paths match the case of file names exactly"
+        ))),
+        None => Err(ReadError::NotFound),
     }
 }

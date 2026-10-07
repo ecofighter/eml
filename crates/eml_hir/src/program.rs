@@ -162,7 +162,7 @@ impl<T, V: fmt::Debug> fmt::Debug for ItemMap<T, V> {
     }
 }
 
-/// プログラム全体の HIR。Prelude と入口のモジュールからなる。
+/// プログラム全体の HIR。Prelude、入口、import でたどった依存先のモジュールからなる。
 #[derive(Debug)]
 pub struct Program {
     pub modules: Arena<Module>,

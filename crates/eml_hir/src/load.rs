@@ -158,6 +158,11 @@ impl Loader<'_> {
     }
 
     fn target(&mut self, file: FileId, import: &ImportItem) -> ImportTarget {
+        // パスの後ろの構文の誤りはパーサが報告済みである。読めた部分のパスで読むと、書いたつもりと違うモジュールを
+        // 黙って取り込むか、E1026 を連鎖させる
+        if import.malformed {
+            return ImportTarget::Broken;
+        }
         let shown = format!("{}{}", self.root, import.path.file_path());
         if let Some(reserved) = self.reserved(import) {
             self.diagnostics

@@ -68,6 +68,8 @@ fn main() -> ExitCode {
 fn load(path: &Path) -> Option<Session> {
     match fs::read_to_string(path) {
         Ok(text) => {
+            let path = exact_spelling(path);
+            let path = path.as_path();
             // 根は入口のファイルのディレクトリである
             let root = path.parent().unwrap_or(Path::new(""));
             let source = FsProvider::new(root);
@@ -77,5 +79,39 @@ fn load(path: &Path) -> Option<Session> {
             eprintln!("error: cannot read `{}`: {error}", path.display());
             None
         }
+    }
+}
+
+/// 入口のファイル名を、ディレクトリの一覧にある綴りに直す。大文字小文字を区別しないファイルシステムでは
+/// `t/server.em` で `t/Server.em` を開ける。渡された綴りのままでは、依存先の `import Server` が入口を指すと分からず、
+/// 入口を別のモジュールとしてもう1回読んでしまう (docs/spec/modules.md の「モジュール」)。一覧を読めないか一致する
+/// 名前がなければ、渡されたパスをそのまま使う。
+fn exact_spelling(path: &Path) -> PathBuf {
+    let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+        return path.to_path_buf();
+    };
+    let dir = match path.parent() {
+        Some(parent) if !parent.as_os_str().is_empty() => parent,
+        _ => Path::new("."),
+    };
+    let Ok(entries) = fs::read_dir(dir) else {
+        return path.to_path_buf();
+    };
+    let lowered = name.to_lowercase();
+    let mut differently_cased = None;
+    for entry in entries.flatten() {
+        let Ok(actual) = entry.file_name().into_string() else {
+            continue;
+        };
+        if actual == name {
+            return path.to_path_buf();
+        }
+        if actual.to_lowercase() == lowered {
+            differently_cased = Some(actual);
+        }
+    }
+    match differently_cased {
+        Some(actual) => path.with_file_name(actual),
+        None => path.to_path_buf(),
     }
 }
