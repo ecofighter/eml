@@ -427,7 +427,8 @@ pub enum ExprKind {
         arms: Vec<MatchArm>,
         source: MatchSource,
     },
-    /// 要素は2つ以上である。数字ラベルのレコードへの変換は型検査で行う (docs/spec/records.md)。
+    /// 要素は2つ以上である。数字ラベルのレコードへの変換は型検査で行う
+    /// (docs/implementation/status.md の「タプルの扱い」)。
     Tuple(Vec<ExprId>),
     Drop(ExprId),
 }
@@ -587,7 +588,8 @@ pub enum TypeRefKind {
         row: RowRef,
         ret: TypeRefId,
     },
-    /// 要素は2つ以上である。数字ラベルの閉じたレコードへの変換は型検査で行う (docs/spec/records.md)。
+    /// 要素は2つ以上である。数字ラベルの閉じたレコードへの変換は型検査で行う
+    /// (docs/implementation/status.md の「タプルの扱い」)。
     Tuple(Vec<TypeRefId>),
 }
 

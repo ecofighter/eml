@@ -357,7 +357,7 @@ pub(super) fn not_found(
 }
 
 /// 名前を引けなかった結果の診断。`Silent` は、重複した宣言の部品 (E1003 で報告済み) か、壊れた import や並びで報告した
-/// 名前なので、診断を出さない (docs/spec/modules.md の「誤りからの回復」)。
+/// 名前なので、診断を出さない (docs/implementation/architecture.md の「名前解決の回復」)。
 pub(super) fn unresolved<T>(
     items: &Resolver<'_>,
     file: FileId,

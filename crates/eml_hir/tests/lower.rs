@@ -320,7 +320,8 @@ fn imports_of_missing_modules_are_reported() {
 
 #[test]
 fn an_unfinished_import_reports_only_the_syntax_error() {
-    // 並びが閉じていない import は壊れた import で、モジュールを探さない (docs/spec/modules.md の「誤りからの回復」)
+    // 並びが閉じていない import は壊れた import で、モジュールを探さない
+    // (docs/implementation/architecture.md の「名前解決の回復」)
     assert_eq!(
         diagnostics("import M (a,\nf : Int\nf = 1"),
         ["E0011 1:13 expected `)`"]
@@ -337,7 +338,8 @@ fn type_declarations_are_not_supported_yet() {
 
 #[test]
 fn later_stage_literals_are_not_supported_yet() {
-    // コマンドリテラルとリストは、パーサが E0004 を出す例外である (docs/spec/grammar.md の「実装の段階」)
+    // コマンドリテラルとリストは、パーサが E0004 を出す例外である
+    // (docs/implementation/status.md の「未対応の構文と E0004」)
     assert_eq!(
         diagnostics("x : Int\nx = (1.5, 'c', [1], r\"raw\", \"\"\"m\"\"\", `ls`)"),
         [

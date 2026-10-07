@@ -276,7 +276,7 @@ impl<'t> Parser<'t> {
     }
 
     /// 仮想トークンと EOF は次の行の先頭やテキストの終わりにあり、そこを指すと誤りのない行を指してしまう。
-    /// そのため、直前の実トークンの直後の空の範囲を指す (docs/spec/layout.md の「エラー回復」)。
+    /// そのため、直前の実トークンの直後の空の範囲を指す (docs/implementation/architecture.md の「構文解析の回復」)。
     fn error_range(&self) -> TextRange {
         match self.tokens.get(self.pos) {
             Some(token) if !token.kind.is_virtual() => token.range,

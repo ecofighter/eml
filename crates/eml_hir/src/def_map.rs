@@ -115,7 +115,7 @@ struct Definition<T> {
 #[derive(Debug, Clone, Copy)]
 struct Source<T> {
     /// `None` は、壊れた import の名前か、並びで報告した名前である。どの種類の名前にも「不明」と答える
-    /// (docs/spec/modules.md の「誤りからの回復」)。
+    /// (docs/implementation/architecture.md の「名前解決の回復」)。
     item: Option<T>,
     /// 名前を持ち込んだ import。E1028 の secondary に使う。
     import: TextRange,
@@ -136,7 +136,8 @@ struct Imports {
     values: HashMap<String, Vec<Source<Value>>>,
     types: HashMap<String, Vec<Source<TypeItem>>>,
     /// 部品の分からない `T(..)` か `E(..)` が並びにある。壊れた import の部品と、並びで報告した型の部品は名前が
-    /// 分からないので、見つからない値の名前をどれも「不明」として扱う (docs/spec/modules.md の「誤りからの回復」)。
+    /// 分からないので、見つからない値の名前をどれも「不明」として扱う
+    /// (docs/implementation/architecture.md の「名前解決の回復」)。
     unknown_parts: bool,
 }
 
@@ -254,8 +255,9 @@ enum Visit {
 }
 
 /// import の循環 (E1027)。モジュールの番号の順に、import を宣言の順に深さ優先でたどり、たどっている途中のモジュールに
-/// 戻る import を、循環を閉じる import として報告する。報告した後も名前解決を続ける (docs/spec/modules.md の
-/// 「誤りからの回復」)。import の鎖がいくら長くてもスタックを使い切らないよう、再帰せずに自前のスタックでたどる。
+/// 戻る import を、循環を閉じる import として報告する。報告した後も名前解決を続ける
+/// (docs/implementation/architecture.md の「名前解決の回復」)。import の鎖がいくら長くてもスタックを使い切らないよう、
+/// 再帰せずに自前のスタックでたどる。
 fn check_cycles(modules: &[LoadedModule], diagnostics: &mut Vec<Diagnostic>) {
     let mut state = vec![Visit::New; modules.len()];
     // たどっている途中のモジュールと、次に見る import の番号。モジュールの並びが循環の経路になる
@@ -657,7 +659,7 @@ impl ModuleScope {
 
 impl Imports {
     /// 並びの名前を引けなければ、並びの位置で1回だけ報告し、名前を壊れた印で登録する。本体でその名前を使った位置は、
-    /// 診断を出さずに誤りになる (docs/spec/modules.md の「誤りからの回復」)。
+    /// 診断を出さずに誤りになる (docs/implementation/architecture.md の「名前解決の回復」)。
     fn new(
         module: &LoadedModule,
         scopes: &[ModuleScope],
@@ -739,7 +741,7 @@ fn add<T: PartialEq>(found: &mut Vec<(T, Option<TextRange>)>, item: T, import: O
 }
 
 /// 壊れていない定義がちょうど1つならそれを使い、2つ以上なら曖昧にする。1つもなく壊れた import があれば、診断を出さずに
-/// 誤りにする (docs/spec/modules.md の「誤りからの回復」)。どれでもなければ `None` で、呼ぶ側が次を引く。
+/// 誤りにする (docs/implementation/architecture.md の「名前解決の回復」)。どれでもなければ `None` で、呼ぶ側が次を引く。
 fn decide<T>(mut found: Vec<(T, Option<TextRange>)>, broken: bool) -> Option<Hit<T>> {
     match found.len() {
         0 if broken => Some(Hit::Broken),
@@ -1056,7 +1058,7 @@ impl<'a> Resolver<'a> {
 
     /// 組み直しに使う fixity。名前を解決した先の定義に付き、別のモジュールの定義の fixity は宣言が `pub` のときだけ効く。
     /// 宣言がなければ `infixl 9` である (docs/spec/declarations.md の「fixity」)。曖昧な演算子と壊れた import から来た
-    /// 演算子は `None` で、組み直さない (docs/spec/modules.md の「誤りからの回復」)。
+    /// 演算子は `None` で、組み直さない (docs/implementation/architecture.md の「名前解決の回復」)。
     pub fn fixity(&self, op: NameRef<'_>) -> Option<Fixity> {
         let value = match self.lookup(op, |value: Value| Some(value)) {
             Hit::Found(value) => value,

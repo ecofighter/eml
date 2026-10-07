@@ -222,7 +222,8 @@ fn missing_block(
                 "the next line must be indented more than the enclosing block",
             ),
         );
-        // よくある誤りなので、直し方を示す (docs/spec/layout.md の「エラー回復」、docs/spec/declarations.md の
+        // よくある誤りなので、直し方を示す
+        // (docs/implementation/architecture.md の「構文解析の回復」、docs/spec/declarations.md の
         // 「シグネチャと等式」)。
         match starter.kind {
             WITH_KW => {

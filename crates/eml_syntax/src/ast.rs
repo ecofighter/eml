@@ -907,7 +907,8 @@ impl ImportItem {
     }
 
     /// パスの後ろ (別名と並びを含む) に構文の誤りがあるか。読めたところまでで import を解釈すると、書いたつもりと
-    /// 違う取り込み方を黙って選ぶことになる (docs/spec/modules.md の「誤りからの回復」)。並びの `(:+)` は名前だけを
+    /// 違う取り込み方を黙って選ぶことになる
+    /// (docs/implementation/architecture.md の「名前解決の回復」)。並びの `(:+)` は名前だけを
     /// 落とす誤りなので、ここには数えない。
     pub fn is_malformed(&self) -> bool {
         let has_error = self

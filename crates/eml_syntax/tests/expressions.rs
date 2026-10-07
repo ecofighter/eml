@@ -308,7 +308,8 @@ fn top_level_pattern_bindings_are_errors() {
 
 #[test]
 fn later_stage_literals_are_parsed() {
-    // 浮動小数、文字、raw 文字列、複数行の文字列の E0004 は HIR が出す (docs/spec/grammar.md の「実装の段階」)
+    // 浮動小数、文字、raw 文字列、複数行の文字列の E0004 は HIR が出す
+    // (docs/implementation/status.md の「未対応の構文と E0004」)
     assert_eq!(
         diagnostics("x = (1.5, 'c', [1], r\"raw\", \"\"\"m\"\"\", `ls`)"),
         [

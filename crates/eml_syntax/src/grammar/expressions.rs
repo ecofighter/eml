@@ -257,7 +257,7 @@ fn atom(p: &mut Parser) -> Option<CompletedMarker> {
         }
         COMMAND => {
             // コマンドリテラルは中身の穴を M9 で lexer のモードと一緒に読むので、パーサが E0004 を出す例外である
-            // (docs/spec/grammar.md の「実装の段階」)
+            // (docs/implementation/status.md の「未対応の構文と E0004」)
             not_yet_supported(p, "command literals are not supported yet");
             p.bump_any();
             LITERAL
@@ -437,7 +437,8 @@ fn match_expr(p: &mut Parser) {
 fn branches(p: &mut Parser, what: &str, branch: fn(&mut Parser) -> bool) {
     if p.at(LAYOUT_OPEN) {
         // 中身のないブロックは、`with` の次の行が字下げされていないときにレイアウト段が E0009 を出して作ったもの。
-        // 続く `|` の行はこの式の枝なので、診断を重ねずに枝として読む (docs/spec/layout.md の「エラー回復」)。
+        // 続く `|` の行はこの式の枝なので、診断を重ねずに枝として読む
+        // (docs/implementation/architecture.md の「構文解析の回復」)。
         let recovered = p.nth(1) == LAYOUT_CLOSE;
         block_of(p, what, branch);
         if recovered {

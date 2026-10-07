@@ -222,8 +222,8 @@ impl BodyLowering<'_> {
 
     /// 曖昧な演算子と壊れた import から来た演算子は、fixity が決まらない。既定の `infixl 9` で組むと E1006 や E1023 が
     /// 連鎖しうるので、そうした演算子を含む演算子の列、セクション、中置のパターンは、組まずに誤りにする。曖昧な演算子は
-    /// ここで E1028 を出し、壊れた import の演算子は import で報告済みなので何も出さない (docs/spec/modules.md の
-    /// 「誤りからの回復」)。
+    /// ここで E1028 を出し、壊れた import の演算子は import で報告済みなので何も出さない
+    /// (docs/implementation/architecture.md の「名前解決の回復」)。
     pub(super) fn undecided_operator(&mut self, op: &str, op_range: TextRange) -> bool {
         if self.items.fixity(NameRef::Plain(op)).is_some() {
             return false;
