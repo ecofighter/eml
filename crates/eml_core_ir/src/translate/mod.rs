@@ -47,6 +47,71 @@ fn reachable(hir: &HirProgram, entry: FunctionId) -> HashSet<FunctionId> {
     seen
 }
 
+/// 節の `k` の変換の形 (docs/spec/core-ir.md)。
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ContinuationForm {
+    /// `k` を生の継続のまま持ち、呼び出しを `Call::Resume` にする。`k` を捕まえた入れ子の関数でも生の継続のままである。
+    Direct,
+    /// 節の入口で、生の継続を `cont$` か `cont$state` のクロージャに包み、それを `k` とする。
+    Wrapped,
+}
+
+/// 本体の中の節の `k` ごとの変換の形。`k` の出現がすべて、引数をそろえた呼び出しの呼ばれる式か `drop` の値なら
+/// 直接の形にする。式の種類ごとに子をたどらず、arena の式を全部見て出現を数える。式の種類が増えて直接の呼び出しと
+/// して数え漏らした出現があっても、包む形になるだけで、生の継続を関数の値として `apply` することはない。`k` の
+/// 局所変数は本体の中で一意なので、入れ子のラムダや handle の中の出現も同じ数に入る。
+fn continuation_forms(body: &Body) -> ArenaMap<LocalId, ContinuationForm> {
+    // 出現の数と、そのうち直接の形で扱える出現の数
+    let mut counts: ArenaMap<LocalId, (usize, usize)> = body
+        .continuations
+        .iter()
+        .map(|(local, _)| (local, (0, 0)))
+        .collect();
+    let continuation = |expr: ExprId| match body.exprs[expr].kind {
+        ExprKind::Path(Res::Local(local)) => {
+            body.continuations.get(local).map(|&arity| (local, arity))
+        }
+        _ => None,
+    };
+    for (_, expr) in body.exprs.iter() {
+        // `k` を置いた位置と、そこで渡す引数の数。`drop` は引数の数によらない
+        let (operand, args) = match &expr.kind {
+            ExprKind::Path(Res::Local(local)) => {
+                if let Some((uses, _)) = counts.get_mut(*local) {
+                    *uses += 1;
+                }
+                continue;
+            }
+            ExprKind::Call { callee, args } => (*callee, Some(args.len())),
+            // Task 4 で表面の `resume` を消すまでの橋渡し。`k v [st]` の呼び出しと同じに数える
+            ExprKind::Resume {
+                k,
+                arg: _,
+                arg_end: _,
+                state,
+            } => (*k, Some(1 + usize::from(state.is_some()))),
+            ExprKind::Drop(value) => (*value, None),
+            _ => continue,
+        };
+        if let Some((local, arity)) = continuation(operand)
+            && args.is_none_or(|args| args >= arity)
+        {
+            counts[local].1 += 1;
+        }
+    }
+    counts
+        .iter()
+        .map(|(local, &(uses, direct))| {
+            let form = if uses == direct {
+                ContinuationForm::Direct
+            } else {
+                ContinuationForm::Wrapped
+            };
+            (local, form)
+        })
+        .collect()
+}
+
 /// 誤りのない型付き HIR を、RC の命令のない Core IR にする。`captures` は空のままでよく、パイプラインが埋める
 /// (docs/spec/core-ir.md のパスの表)。
 pub(crate) fn translate(hir: &HirProgram, typed: &TypedProgram, entry: FunctionId) -> Program {
@@ -81,6 +146,7 @@ pub(crate) fn translate(hir: &HirProgram, typed: &TypedProgram, entry: FunctionI
         let name = core_name(hir, id.module, &function.name);
         let mut lambdas = 0;
         let mut handlers = 0;
+        let forms = continuation_forms(body);
         let core = FnLowering {
             hir,
             body,
@@ -90,6 +156,7 @@ pub(crate) fn translate(hir: &HirProgram, typed: &TypedProgram, entry: FunctionI
             root_name: &name,
             lambdas: &mut lambdas,
             handlers: &mut handlers,
+            continuation_forms: &forms,
             builder: FnBuilder::new(),
             locals: ArenaMap::default(),
         }
@@ -162,6 +229,8 @@ struct FnLowering<'a> {
     lambdas: &'a mut u32,
     /// handle の本体と節の関数の名前に使う、トップレベルの関数の中の handle の数。
     handlers: &'a mut u32,
+    /// 本体の中の節の `k` の変換の形。持ち上げた入れ子の関数も同じ表を見て、捕まえた `k` を同じ形で扱う。
+    continuation_forms: &'a ArenaMap<LocalId, ContinuationForm>,
     builder: FnBuilder,
     locals: ArenaMap<LocalId, Atom>,
 }
@@ -184,6 +253,7 @@ impl FnLowering<'_> {
             vars.push(var);
         }
         let mut destructured = Vec::new();
+        let mut wrapped = Vec::new();
         for (pat, ty) in params {
             // 値を調べるか分解するパターンは名前のない引数で受け、本体の前で分解する
             let simple = pat.filter(|&pat| !needs_decision_tree(body, pat));
@@ -192,14 +262,24 @@ impl FnLowering<'_> {
             let var = self.new_var(name, ty);
             if let Some(local) = local {
                 self.locals.insert(local, Atom::Var(var));
+                if self.continuation_forms.get(local) == Some(&ContinuationForm::Wrapped) {
+                    wrapped.push((local, var, ty.clone()));
+                }
             }
             vars.push(var);
             if let Some(pat) = pat.filter(|&pat| needs_decision_tree(body, pat)) {
                 destructured.push((pat, var, ty.clone()));
             }
         }
-        // 引数の変数をすべて作ってから分解する。関数の引数の番号を、分解で作る変数より前にそろえるため
+        // 引数の変数をすべて作ってから包み、分解する。関数の引数の番号を、ほかの変数より前にそろえるため
         let mut bindings = Vec::new();
+        for (local, var, ty) in wrapped {
+            let wrapper = self
+                .program
+                .continuation_wrapper(body.continuations[local] == 2);
+            let closure = self.closure(wrapper, vec![Atom::Var(var)], &ty, &mut bindings);
+            self.locals.insert(local, closure);
+        }
         for (pat, var, ty) in destructured {
             self.destructure(pat, Atom::Var(var), ty, &mut bindings);
         }
@@ -240,6 +320,7 @@ impl FnLowering<'_> {
             root_name: self.root_name,
             lambdas: &mut *self.lambdas,
             handlers: &mut *self.handlers,
+            continuation_forms: self.continuation_forms,
             builder: FnBuilder::new(),
             locals: ArenaMap::default(),
         }

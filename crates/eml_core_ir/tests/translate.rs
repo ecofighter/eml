@@ -971,3 +971,85 @@ fn extra_arguments_of_a_known_call_take_the_mask_of_their_arrow() {
     }
     ");
 }
+
+const ASK: &str = "effect Ask where\n  ask : Unit -> Int\n\n";
+
+/// `ASK` と、handle の式 `handle` の結果の `Int` を表示する `main` の、translate 直後の Core IR。
+fn handled(extra: &str, handle: &str) -> String {
+    core_text(
+        &format!(
+            "{ASK}{extra}main : Unit -> <IO> Unit\nmain () =\n  let n =\n{handle}\n  println (show_int n)"
+        ),
+        Pass::Translate,
+    )
+}
+
+/// `k` を直接呼ぶだけなら、生の継続への `resume` にする (docs/spec/core-ir.md)。
+#[test]
+fn a_continuation_called_directly_is_resumed() {
+    let shown = handled("", "    handle ask () with\n      | ask () k -> k 1");
+    assert!(shown.contains("resume k1(1, ())"), "{shown}");
+    assert!(!shown.contains("cont$"), "{shown}");
+}
+
+/// 状態のある handler の `k st (st + 1)` は、引数を評価してから1つの `resume` になる。
+#[test]
+fn a_continuation_with_an_expression_argument_is_resumed_once() {
+    let shown = handled(
+        "",
+        "    handle ask () from 0 with\n      | ask () k st -> k st (st + 1)\n      | return x _ -> x",
+    );
+    assert_eq!(shown.matches("resume ").count(), 1, "{shown}");
+    assert!(
+        shown.find("prim +(").unwrap() < shown.find("resume ").unwrap(),
+        "{shown}"
+    );
+    assert!(!shown.contains("cont$"), "{shown}");
+}
+
+/// 入れ子の handle の本体が `k` を捕まえて直接呼ぶ形も、生の継続のまま `resume` する。
+#[test]
+fn a_continuation_called_inside_an_inner_handle_is_resumed() {
+    let shown = handled(
+        "effect Log where\n  log : Int -> Unit\n\n",
+        "    handle ask () with\n      | ask () k ->\n          handle k 1 with\n            | log _ j -> j ()",
+    );
+    assert!(shown.contains("resume k"), "{shown}");
+    assert!(!shown.contains("cont$"), "{shown}");
+}
+
+/// `k` を関数に渡すと、節の入口で `cont$` のクロージャに包み、渡した先の呼び出しは `apply` になる。
+#[test]
+fn a_continuation_passed_to_a_function_is_wrapped() {
+    let shown = handled(
+        "apply_one : (Int -> <e> Int) -> <e> Int\napply_one f = f 1\n\n",
+        "    handle ask () with\n      | ask () k -> apply_one k",
+    );
+    assert!(shown.contains("closure cont$(k"), "{shown}");
+    assert!(shown.contains("fn cont$(k0^, v1^) {"), "{shown}");
+    assert!(shown.contains("tailcall resume k0(v1, ())"), "{shown}");
+    assert!(!shown.contains("cont$state"), "{shown}");
+}
+
+/// 状態のある `k v` の部分適用は、`cont$state` のクロージャに包む。
+#[test]
+fn a_partial_continuation_is_wrapped_with_the_state_wrapper() {
+    let shown = handled(
+        "later : (Int -> <e> Int) -> Int -> <e> Int\nlater f s = f s\n\n",
+        "    handle ask () from 0 with\n      | ask () k st -> later (k 1) st\n      | return x _ -> x",
+    );
+    assert!(shown.contains("closure cont$state(k"), "{shown}");
+    assert!(shown.contains("fn cont$state(k0^, v1^, s2^) {"), "{shown}");
+    assert!(shown.contains("tailcall resume k0(v1, s2)"), "{shown}");
+}
+
+/// `drop k` だけなら包まない。
+#[test]
+fn a_dropped_continuation_is_not_wrapped() {
+    let shown = handled(
+        "",
+        "    handle ask () with\n      | ask () k ->\n          drop k\n          0",
+    );
+    assert!(!shown.contains("cont$"), "{shown}");
+    assert!(!shown.contains("resume "), "{shown}");
+}

@@ -9,7 +9,9 @@ use eml_hir::{
 use eml_types::{Decl, Type, TypedProgram};
 
 use crate::builder::FnBuilder;
-use crate::{Atom, CExpr, Call, CoreFn, EffectInfo, FnIdx, IoOp, OperationInfo, Rhs, VarId};
+use crate::{
+    Atom, CExpr, Call, CoreFn, EffectInfo, FnIdx, IoOp, OperationInfo, Rhs, VarId, VarInfo,
+};
 
 use super::types::{Lowering, intrinsic, split_arrows, var_info};
 
@@ -45,6 +47,8 @@ pub(super) struct ProgramBuilder {
     /// コンストラクタのスキームの型。コンストラクタを包む関数の変数が boxed かどうかを決める。
     constructor_types: HashMap<ConstructorId, Type>,
     constructor_wrappers: HashMap<ConstructorId, FnIdx>,
+    /// 状態のない handler 用と、状態のある handler 用の、継続を包む関数。
+    continuation_wrappers: [Option<FnIdx>; 2],
 }
 
 impl ProgramBuilder {
@@ -77,7 +81,50 @@ impl ProgramBuilder {
                 })
                 .collect(),
             constructor_wrappers: HashMap::new(),
+            continuation_wrappers: [None; 2],
         }
+    }
+
+    /// 節の `k` を関数の値として使うときに、生の継続を捕まえて包む関数を作る。状態のない handler 用の `cont$` は
+    /// `(k, v)` を、状態のある handler 用の `cont$state` は `(k, v, s)` を受け、`resume` を末尾呼び出しする
+    /// (docs/spec/core-ir.md)。それぞれ1つだけ作る。
+    pub(super) fn continuation_wrapper(&mut self, stateful: bool) -> FnIdx {
+        let slot = usize::from(stateful);
+        if let Some(function) = self.continuation_wrappers[slot] {
+            return function;
+        }
+        // 再開に渡す値と状態の型は節ごとに違うので、どれも boxed にする。`dup` と `decref` はヒープにない値を無視する
+        let mut builder = FnBuilder::new();
+        let mut param = |name: &str| {
+            builder.var(VarInfo {
+                name: name.to_string(),
+                boxed: true,
+            })
+        };
+        let k = param("k");
+        let v = param("v");
+        let mut params = vec![k, v];
+        let state = if stateful {
+            let s = param("s");
+            params.push(s);
+            Atom::Var(s)
+        } else {
+            Atom::Unit
+        };
+        let function = self.reserve(params.len());
+        self.continuation_wrappers[slot] = Some(function);
+        let body = builder.push(CExpr::TailCall {
+            call: Call::Resume {
+                k: Atom::Var(k),
+                arg: Atom::Var(v),
+                state,
+            },
+            mask: Vec::new(),
+        });
+        let name = if stateful { "cont$state" } else { "cont$" };
+        let core = builder.finish(name.to_string(), params, body);
+        self.finish(function, core);
+        function
     }
 
     /// 操作を値や部分適用で使うときの関数を作る。本体は `operation_rhs` の操作の呼び出しで、`perform` の末尾呼び出し、

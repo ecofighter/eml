@@ -11,7 +11,7 @@ use crate::{Atom, Call, FnIdx, Rhs, TUPLE};
 
 use super::program::{effect_index, operation_rhs};
 use super::types::{Lowering, equality_op, intrinsic, split_arrows};
-use super::{Binding, Bindings, Exit, FnLowering};
+use super::{Binding, Bindings, ContinuationForm, Exit, FnLowering};
 
 /// 既知の呼ばれる式の種類。`saturate` は、引数の数、足りないときの包む関数、ちょうどのときの命令を、この種類から決める
 /// (docs/implementation/architecture.md の「`eml_core_ir`、`eml_runtime`、`eml_interp` の内部」)。
@@ -26,6 +26,11 @@ enum Callee {
     },
     Operation(OperationId),
     Constructor(ConstructorId),
+    /// 直接の形の節の `k`。`k` は生の継続で、`arity` は状態のない handler で1、状態のある handler で2である。
+    Continuation {
+        k: Atom,
+        arity: usize,
+    },
 }
 
 impl FnLowering<'_> {
@@ -139,6 +144,7 @@ impl FnLowering<'_> {
                 .expect("an intrinsic has a signature"),
             Callee::Operation(op) => self.hir[op].arity,
             Callee::Constructor(ctor) => self.hir[ctor].fields.len(),
+            Callee::Continuation { k: _, arity } => arity,
         }
     }
 
@@ -149,6 +155,10 @@ impl FnLowering<'_> {
             Callee::Intrinsic { function, .. } => self.program.wrapper(self.hir, function),
             Callee::Operation(op) => self.program.operation_wrapper(self.hir, op),
             Callee::Constructor(ctor) => self.program.constructor_wrapper(self.hir, ctor),
+            // 引数の足りない `k` の呼び出しは `k` を関数の値として使うことになり、節を包む形にする (`continuation_forms`)
+            Callee::Continuation { k: _, arity: _ } => {
+                unreachable!("a continuation in the direct form is always saturated")
+            }
         }
     }
 
@@ -159,7 +169,7 @@ impl FnLowering<'_> {
         // `Prim`、`Perform`、`Con` は `mask` を持てない (docs/spec/core-ir.md)。型検査が `mask` を記録するように変わると、
         // ここで気づかないうちに落とすことになる
         debug_assert!(
-            matches!(callee, Callee::Function(_))
+            matches!(callee, Callee::Function(_) | Callee::Continuation { .. })
                 || (0..args.len()).all(|arrow| self.mask(id, arrow).is_empty()),
             "an intrinsic, operation or constructor call has no recorded mask"
         );
@@ -189,6 +199,14 @@ impl FnLowering<'_> {
                 ("t", rhs)
             }
             Callee::Operation(op) => ("t", operation_rhs(self.hir, op, args)),
+            // 状態ありの最初の矢印は row が空の部分適用なので、関数と同じく最後の矢印の `mask` を使う
+            Callee::Continuation { k, arity: _ } => {
+                let mask = self.mask(id, args.len() - 1);
+                let mut args = args.into_iter();
+                let arg = args.next().expect("a continuation takes a value");
+                let state = args.next().unwrap_or(Atom::Unit);
+                ("t", Rhs::masked_call(Call::Resume { k, arg, state }, mask))
+            }
             Callee::Constructor(ctor) => (
                 "d",
                 Rhs::Con {
@@ -279,6 +297,19 @@ impl FnLowering<'_> {
             ExprKind::Path(Res::Function(function)) => Callee::Function(self.indices[*function]),
             ExprKind::Path(Res::Operation(op)) => Callee::Operation(*op),
             ExprKind::Path(Res::Constructor(ctor)) => Callee::Constructor(*ctor),
+            ExprKind::Path(Res::Local(local)) => {
+                let k = self.locals[*local];
+                match self.continuation_forms[*local] {
+                    ContinuationForm::Direct => Callee::Continuation {
+                        k,
+                        arity: self.body.continuations[*local],
+                    },
+                    // 包んだ `k` はクロージャなので、ほかの関数値と同じく矢印ごとの `mask` で `apply` する
+                    ContinuationForm::Wrapped => {
+                        return self.apply(id, callee_ty, k, 0, args, ty, out);
+                    }
+                }
+            }
             _ => unreachable!("only a known callee is called without evaluating it"),
         };
         self.saturate(id, head, callee_ty, args, ty, out)
@@ -444,25 +475,27 @@ impl FnLowering<'_> {
                 };
                 self.bind(out, "t", &ty, Rhs::call(call))
             }
-            // 表面の `resume` を Task 4 で消すまでの橋渡し。型検査は `k v [st]` の呼び出しとして矢印ごとに `mask` を
-            // 記録するので、状態のある handler では最後の矢印 1 の記録を使う
+            // 表面の `resume` を Task 4 で消すまでの橋渡し。型検査は `k v [st]` の呼び出しとして扱うので、`call` と同じく
+            // 既知の呼ばれる式は評価せずに `call_head` で呼び、節の `k` の直接の形と包む形を同じ道で分ける
             ExprKind::Resume {
                 k,
                 arg,
                 arg_end: _,
                 state,
             } => {
-                let last_arrow = if state.is_some() { 1 } else { 0 };
-                let k = self.atom(*k, out);
-                let arg = self.atom(*arg, out);
-                let state = match state {
-                    Some(state) => self.atom(*state, out),
-                    None => Atom::Unit,
-                };
+                let function = eml_hir::known_arity(self.hir, body, *k)
+                    .is_none()
+                    .then(|| self.atom(*k, out));
+                let args = std::iter::once(*arg)
+                    .chain(*state)
+                    .map(|expr| self.atom(expr, out))
+                    .collect();
+                let k_ty = self.ty(*k);
                 let ty = self.ty(id);
-                let rhs =
-                    Rhs::masked_call(Call::Resume { k, arg, state }, self.mask(id, last_arrow));
-                self.bind(out, "t", &ty, rhs)
+                match function {
+                    None => self.call_head(id, *k, &k_ty, args, &ty, out),
+                    Some(function) => self.apply(id, &k_ty, function, 0, args, &ty, out),
+                }
             }
             ExprKind::Tuple(elements) => {
                 // 要素を左から評価し、コンストラクタが1つの `data` と同じ値にする (docs/spec/core-ir.md)
