@@ -37,13 +37,13 @@ spec とコードベースを、互換性を気にせずに作り直す。優先
 - 採らなかった案: row を集合にする案は、単一化の解が一意に決まらず、カプセル化を失う。lacks 制約は、シグネチャに新しい制約の形が要る。Koka と同じく包含を拒否して `mask` を構文にする案は、自分のエフェクトを起こしつつコールバックを呼ぶラッパーのすべてに `mask` を書かせる
 - 同じエフェクトのインスタンスが入れ子で並ぶ問題 (`Heap h` の入れ子の `run_heap`) は扱わない。名前付きの handler が要るかどうかは、可変参照を入れるときに決める
 
-### 継続 (S2)
+### 継続 (S2a)
 
 - 継続 `k` を普通の関数にし、`resume` キーワードを廃止する。再開は `k v`、状態付きの handler では `k v st` と書く。`once` の `k` は `Lin` の矢印、`multi` の `k` は `Unr` の矢印を持つ。状態があるかどうかは `from` の有無で構文的に決まる
 - `Cont` 型、状態の欄の推論 (Slot / SlotVar)、E2007、E1011、`carry.rs` の `resume` の特別扱いを削除する。引数の個数の誤りは普通の関数適用の誤りとして報告する。`drop k` は今のまま使える
-- `Lin` の矢印の診断での表示は S2 の spec で決める
+- `Lin` の矢印の診断での表示は S2a の spec で決める
 
-### 組み込み (S2)
+### 組み込み (S2b)
 
 - 宣言の修飾子 `extern` を足す (`pub extern println : String -> <IO> Unit`、`pub extern data Int`、`pub extern effect IO`)。「等式のないシグネチャ」「`=` のない `data`」を組み込みの印にする今の規則は廃止する
 - `IO` は操作を持たないラベルだけのエフェクトにする。`println` などは `<IO>` を持つ普通の extern 関数になる。extern のエフェクトは handle できない、という一般の規則が E1009 に代わる。`Rhs::Io`、`IoOp`、`op$Prelude.open` という包み関数を削除する
@@ -127,9 +127,10 @@ crate の並びと「各段階は純粋な関数」という規律は変えな�
 |---|---|---|---|
 | S0 運用と文書 | 下の「S0 の詳細」 | なし | 文書の更新が終わり、全テストが通る |
 | S1 row の健全性 | 暗黙の `mask` (型検査での記録、Core IR と CEK の `mask`)、`IO` の重なりをまとめる規則、健全性の短い議論を spec に書く | S0 | 上の `run` と `cb` のプログラムが `"str!"` を出す run テストになる。`<IO \| e>` に `<IO>` が入る形のプログラムと `examples.md` の最初の例と同じ形のプログラムが通る |
-| S2 機構を削る | 普通の関数としての `k`、`extern`、ラベルだけの `IO`、extern の表、`std/` ツリーのローダー | S1 | `Cont`、状態の欄、E2007、E1011、`Rhs::Io`、`IoOp`、`INTRINSICS` が消え、E1009 は extern のエフェクトを handle したときの診断に変わる。UI テストは `resume` を書き換えたうえで出力が変わらない |
-| S3a フロントエンドの土台 | `Send` な `ItemTree`、HIR の表示用フィールドの除去、名前解決の整理と `Reporter`、パイプラインの駆動の1本化 | S2 | `assert_send::<Session>()` が通る。UI テストの出力が変わらない |
-| S3b バックエンドの土台 | Core IR v2 (ブロック木、Repr と box/unbox、消費しない `Switch`、extern の表、位置情報、translate で作る末尾呼び出し)、simplify を縮約パスに置き換える、テキスト形式の作り直し、handler の連鎖、一意な文字列のその場の連結、不死のリテラル、ランタイムの形だけの対策の削除、runtime.md と multicore.md の整理 | S2 | UI テストの出力が変わらない (実行時エラーに位置が付く run-fail のスナップショットは除く)。エフェクトを使う再帰と文字列の連結が2乗の時間にならないことをテストで確かめる |
+| S2a 継続を関数にする | 普通の関数としての `k`、`resume` キーワードの廃止 | S1 | `Cont`、状態の欄、E2007、E1011、持ち越し規則の `resume` の特別扱いが消える。UI テストは `resume` を `k` の呼び出しに書き換えたうえで出力が変わらない |
+| S2b 組み込みを extern にする | `extern`、ラベルだけの `IO`、extern の表、`std/` ツリーのローダー | S1 | `Rhs::Io`、`IoOp`、`INTRINSICS` が消え、E1009 は extern のエフェクトを handle したときの診断に変わる。UI テストの出力が変わらない |
+| S3a フロントエンドの土台 | `Send` な `ItemTree`、HIR の表示用フィールドの除去、名前解決の整理と `Reporter`、パイプラインの駆動の1本化 | S2a、S2b | `assert_send::<Session>()` が通る。UI テストの出力が変わらない |
+| S3b バックエンドの土台 | Core IR v2 (ブロック木、Repr と box/unbox、消費しない `Switch`、extern の表、位置情報、translate で作る末尾呼び出し)、simplify を縮約パスに置き換える、テキスト形式の作り直し、handler の連鎖、一意な文字列のその場の連結、不死のリテラル、ランタイムの形だけの対策の削除、runtime.md と multicore.md の整理 | S2a、S2b | UI テストの出力が変わらない (実行時エラーに位置が付く run-fail のスナップショットは除く)。エフェクトを使う再帰と文字列の連結が2乗の時間にならないことをテストで確かめる |
 | S4 スクリプトの MVP | リスト、`Option`、`Result`、補間と文字列の形、名前的なレコード、`Eq` / `Ord` / `Show` と `deriving` と特殊化、ローカルの再帰関数、`try_io` と `exit`、extern の標準ライブラリ (`String`、`Env`、`Stdin`、`Fs`、`Proc.run`、`eprintln`)、`eml file.em args...` | S3a、S3b | wc、grep、ログの集計、CSV の変換、デプロイ手順の5本のスクリプトが UI テストとして動く |
 | S5 実例による判断 | 上の「S5 に回すもの」 | S4 | 各項目を採るか採らないか決め、採ったものを実装する |
 

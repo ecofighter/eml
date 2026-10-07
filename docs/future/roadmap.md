@@ -18,9 +18,10 @@
 
 | 段 | 中身 | 前提 | 完了の条件 |
 |---|---|---|---|
-| S2 機構を削る | 普通の関数としての `k`、`extern`、ラベルだけの `IO`、extern の表、`std/` ツリーのローダー | なし | `Cont`、状態の欄、E2007、E1011、`Rhs::Io`、`IoOp`、`INTRINSICS` が消え、E1009 は extern のエフェクトを handle したときの診断に変わる。UI テストは `resume` を書き換えたうえで出力が変わらない |
-| S3a フロントエンドの土台 | `Send` な `ItemTree`、HIR の表示用フィールドの除去、名前解決の整理と `Reporter`、パイプラインの駆動の1本化 | S2 | `assert_send::<Session>()` が通る。UI テストの出力が変わらない |
-| S3b バックエンドの土台 | Core IR v2、`simplify` の置き換え、テキストの形の作り直し、handler の連鎖、文字列のその場の連結、不死のリテラル、ランタイムの整理 | S2 | UI テストの出力が変わらない (実行時エラーに位置が付く run-fail のスナップショットは除く)。エフェクトを使う再帰と文字列の連結が2乗の時間にならない |
+| S2a 継続を関数にする | 普通の関数としての `k`、`resume` キーワードの廃止 | なし | `Cont`、状態の欄、E2007、E1011、持ち越し規則の `resume` の特別扱いが消える。UI テストは `resume` を `k` の呼び出しに書き換えたうえで出力が変わらない |
+| S2b 組み込みを extern にする | `extern`、ラベルだけの `IO`、extern の表、`std/` ツリーのローダー | なし | `Rhs::Io`、`IoOp`、`INTRINSICS` が消え、E1009 は extern のエフェクトを handle したときの診断に変わる。UI テストの出力が変わらない |
+| S3a フロントエンドの土台 | `Send` な `ItemTree`、HIR の表示用フィールドの除去、名前解決の整理と `Reporter`、パイプラインの駆動の1本化 | S2a、S2b | `assert_send::<Session>()` が通る。UI テストの出力が変わらない |
+| S3b バックエンドの土台 | Core IR v2、`simplify` の置き換え、テキストの形の作り直し、handler の連鎖、文字列のその場の連結、不死のリテラル、ランタイムの整理 | S2a、S2b | UI テストの出力が変わらない (実行時エラーに位置が付く run-fail のスナップショットは除く)。エフェクトを使う再帰と文字列の連結が2乗の時間にならない |
 | S4 スクリプトの MVP | リスト、文字列の形、名前的なレコード、`Eq` / `Ord` / `Show` と `deriving`、`try_io` と `exit`、ローカルの再帰関数、extern の標準ライブラリ、`eml file.em args...` | S3a、S3b | wc、grep、ログの集計、CSV の変換、デプロイ手順の5本のスクリプトが UI テストとして動く |
 | S5 実例による判断 | S4 のスクリプトを見て決める項目 | S4 | 各項目を採るか採らないか決め、採ったものを実装する |
 
@@ -41,14 +42,14 @@ S5 の後は、言語の項目を次の順に並べる。
 
 順序の理由は次のとおりである。
 
-- S2 を S3 の前に置くのは、S3b の Core IR v2 を、最終の形の継続と extern の上に作るためである
+- S2a と S2b を S3 の前に置くのは、S3b の Core IR v2 を、最終の形の継続と extern の上に作るためである。S2a を先にするのは、型検査の状態の欄と `Cont` 型を消すと、後の作業が軽くなるためである
 - S3 を S4 の前に置くのは、S4 の標準ライブラリとレコードの配置を、S3b の Repr と extern の表の上に載せるためである
 - S4 を型システムの実験より前に置くのは、線形型の負担 (`drop`、線形な値を返して受け渡すこと) が実用で許せるかを、機構を積む前に実際のスクリプトで確かめるためである。組み込みの型だけの多重定義を中継ぎに作って捨てる手間もなくなる
 - M2 の参照ごとの具体化の表 ([コンパイラの構成](../implementation/architecture.md) の「`eml_types` の内部」) は、S4 の組み込みのクラスの証拠の解決と、型クラスの段の土台になる
 - `Float`、`Char`、`Num` を型クラスの後に置くのは、`Num` をクラスとして入れ、型ごとの多重定義を別に作らないためである
 - バイト列と `Array` を `Num` の後に置くのは、`Byte` と `Int` で演算子を共有するためである
 
-## S2 機構を削る
+## S2a 継続を関数にする
 
 前提: なし。
 
@@ -56,19 +57,29 @@ S5 の後は、言語の項目を次の順に並べる。
 
 - 継続 `k` を普通の関数にし、`resume` キーワードを廃止する。再開は `k v`、状態のある handler では `k v st` と書く。`once` の `k` は `Lin` の矢印、`multi` の `k` は `Unr` の矢印を持つ。状態があるかどうかは `from` の有無で構文的に決まる
 - `Cont` 型、状態の欄の推論、E2007、E1011、持ち越し規則の `resume` の特別扱いを削除する。引数の個数の誤りは普通の関数適用の誤りとして報告する。`drop k` は今のまま使える
-- 宣言の修飾子 `extern` を足す (`pub extern println : String -> <IO> Unit`、`pub extern data Int`、`pub extern effect IO`)。等式のないシグネチャと `=` のない `data` を組み込みの印にする今の規則は廃止する
-- `IO` は操作を持たないラベルだけのエフェクトにする。`println` などは `<IO>` を持つ普通の extern 関数になる。extern のエフェクトは handle できない、という一般の規則が E1009 に代わる。row の中で重なったら1つにまとめ、`mask` に入れない handle できないラベル ([型と Kind](../spec/types.md) の「推論」) も、`IO` から extern のエフェクトに広げる
-- extern の実装は1枚の表で、名前、引数の数、純粋かどうか、Repr、Rust の実装を結ぶ。HIR、Core IR、インタプリタはこの表を引く。ネイティブ化では、この表がランタイムとの ABI の一覧になる
-- 標準ライブラリは、バイナリに埋め込んだ `std/` ツリーから読む。Prelude は `std/Prelude.em` になる。標準ライブラリを import なしで修飾付きで使える規則 ([モジュールと名前解決](../spec/modules.md)) はそのまま守る
 
 ### 論点
 
 - `Lin` の矢印を診断でどう表示するか。表面の構文では矢印の線形性を書けない
+
+## S2b 組み込みを extern にする
+
+前提: なし。S2a とは独立である。
+
+### 決めたこと
+
+- 宣言の修飾子 `extern` を足す (`pub extern println : String -> <IO> Unit`、`pub extern data Int`、`pub extern effect IO`)。等式のないシグネチャと `=` のない `data` を組み込みの印にする今の規則は廃止する
+- `IO` は操作を持たないラベルだけのエフェクトにする。`println` などは `<IO>` を持つ普通の extern 関数になる。extern のエフェクトは handle できない、という一般の規則が E1009 に代わる。row の中で重なったら1つにまとめ、`mask` に入れない handle できないラベル ([型と Kind](../spec/types.md) の「推論」) も、`IO` から extern のエフェクトに広げる
+- extern の実装は1枚の表で、名前、引数の数、純粋かどうか、Rust の実装を結ぶ。値の表現 (Repr) は S3b で表に足す。HIR、Core IR、インタプリタはこの表を引く。ネイティブ化では、この表がランタイムとの ABI の一覧になる
+- 標準ライブラリは、バイナリに埋め込んだ `std/` ツリーから読む。Prelude は `std/Prelude.em` になる。標準ライブラリを import なしで修飾付きで使える規則 ([モジュールと名前解決](../spec/modules.md)) はそのまま守る
+
+### 論点
+
 - verifier は、`mask` が `IO` を持たないことを確かめるとき、`IO` をエフェクトの名前 `Prelude.IO` で見分けている。`IO` がラベルだけの extern のエフェクトになったら、extern のエフェクトかどうかで確かめる形に置き換える
 
 ## S3a フロントエンドの土台
 
-前提: S2。
+前提: S2a、S2b。
 
 ### 決めたこと
 
@@ -79,14 +90,14 @@ S5 の後は、言語の項目を次の順に並べる。
 
 ## S3b バックエンドの土台
 
-前提: S2。
+前提: S2a、S2b。
 
 ### 決めたこと
 
 - Core IR をアリーナからブロック構造の木 (`Block { stmts, term }`) に変える。`compact`、`captures` のキャッシュ、`joins` の索引をなくす
 - 変数の値の表現を `boxed: bool` から Repr (`Obj`、`TObj`、`Int`、`Float`、`Enum`、`Unit`) に変え、box と unbox の命令を明示する
 - `Switch` を、scrutinee を消費しない形にする。フィールドの `dup` と scrutinee の `decref` は Perceus が明示する。借用パラメータと reuse を後で足せるようにするためである
-- extern の表 (S2) を Core IR の命令にし、呼び出しに位置を付ける。実行時エラーにファイルと行を出す
+- extern の表 (S2b) を Core IR の命令にし、呼び出しに位置を付ける。実行時エラーにファイルと行を出す
 - 末尾呼び出しは、`simplify` ではなく translate で作る
 - `simplify` の9つの書き換えを整理する。`match` のタプルは決定木の複数の列として、`&&` と `||` は条件の分岐として translate で変換し、残りは不動点まで回す小さな縮約パス1つにする
 - Core IR のテキストの形を、テスト用の規則的な構文に作り直す
@@ -282,7 +293,7 @@ Prelude と `std/` の標準ライブラリと、指定したモジュールを�
 
 前提: バイト列と `Array`。
 
-UTF-8 の核の extern を入れ、標準ライブラリを広げる。最初の標準ライブラリのモジュールは S2 (`std/` ツリー) と S4 (Rust で実装した extern) で入っている。
+UTF-8 の核の extern を入れ、標準ライブラリを広げる。最初の標準ライブラリのモジュールは S2b (`std/` ツリー) と S4 (Rust で実装した extern) で入っている。
 
 #### 決めたこと
 
@@ -343,7 +354,7 @@ UTF-8 の核の extern を入れ、標準ライブラリを広げる。最初の
 
 - インクリメンタル化: 各段階をクエリ (salsa など) に載せ替える。各段階を純粋な関数にしているのはこのため ([コンパイラの構成](../implementation/architecture.md))
 - LSP: 診断、hover (型と row の表示)、補完、code action。診断の構造体は、LSP の診断と code action に変換できる形にしてある ([診断](../spec/diagnostics.md))。前提: インクリメンタル化
-- ネイティブ化: Perceus の後の Core IR を、コード生成のバックエンドに渡す。バックエンド (Cranelift か LLVM か)、ネイティブのオブジェクトモデル、`Int` の幅、多相な位置での `Int` と `Float` の表現、バイトコード VM の要否は、この段階で決める。S2 の extern の表は、ネイティブのランタイムの C ABI の関数になる。前提: `Float`、`Char`、`Num`
+- ネイティブ化: Perceus の後の Core IR を、コード生成のバックエンドに渡す。バックエンド (Cranelift か LLVM か)、ネイティブのオブジェクトモデル、`Int` の幅、多相な位置での `Int` と `Float` の表現、バイトコード VM の要否は、この段階で決める。S2b の extern の表は、ネイティブのランタイムの C ABI の関数になる。前提: `Float`、`Char`、`Num`
 - evidence passing: エフェクトを generalized evidence passing と yield の bubbling (Koka 方式) で実装する。Perceus の前に置く、Core IR から Core IR への変換パスにする。今の CEK インタプリタは直接の意味論の参照実装として残し、差分テストの基準にする。スタックの切り替えは、性能が足りない場合の選択肢として残す ([evidence passing の設計](evidence-passing.md))
 - Perceus の最適化: reuse analysis (FBIP)、借用パラメータ。あわせて次の2点を見直す
   - Core IR の変数は Kind を持たず、ボックス化した変数はすべて Perceus の対象になる。`File` も RC で数え、`read_all` と `close` は一意性を求めないので正しく動く。`Lin` の変数を Perceus の対象から外すかを、借用と reuse と一緒に決める

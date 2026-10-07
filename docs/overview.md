@@ -30,9 +30,9 @@ eml の目的、言語の性格、確定した設計判断の一覧、文書全�
 | Kind の将来 | 内部では最初から Kind 変数と部分 Kind 関係を扱う。表面の構文では当面書かせず、将来ユーザーが Kind を書けるようにする | [型と Kind](spec/types.md) |
 | エフェクト | Row 多相 (Koka 方式、scoped labels)。row 変数にも Kind `Row<s>`、`s ∈ {Never ≤ Once ≤ Multi}` を持たせる。`Never` は将来のマルチコア対応のための要素 | [型と Kind](spec/types.md)、[エフェクトと handler](spec/effects.md) |
 | 継続の多重度 | 操作ごとに `never` / `once` / `multi` を宣言する。デフォルトは `once` | [エフェクトと handler](spec/effects.md) |
-| 継続 | 継続 `k` は普通の関数で、`k v` で再開する。状態のある handler では `k v st` と書く。`once` の `k` は `Lin` の矢印を持ち、handler は `k` を呼ぶか `drop k` を必ず書く。`multi` の `k` は `Unr` の矢印を持つ (S2 で入れる) | [エフェクトと handler](spec/effects.md) |
+| 継続 | 継続 `k` は普通の関数で、`k v` で再開する。状態のある handler では `k v st` と書く。`once` の `k` は `Lin` の矢印を持ち、handler は `k` を呼ぶか `drop k` を必ず書く。`multi` の `k` は `Unr` の矢印を持つ (S2a で入れる) | [エフェクトと handler](spec/effects.md) |
 | handler の意味 | deep handler。再開した継続の中でも同じ handler が有効なまま | [エフェクトと handler](spec/effects.md) |
-| `IO` | 操作を持たない、ラベルだけの組み込みのエフェクトである。`println` などは `<IO>` を持つ `extern` の関数で、`extern` のエフェクトは handle できない (S2 で入れる) | [エフェクトと handler](spec/effects.md) |
+| `IO` | 操作を持たない、ラベルだけの組み込みのエフェクトである。`println` などは `<IO>` を持つ `extern` の関数で、`extern` のエフェクトは handle できない (S2b で入れる) | [エフェクトと handler](spec/effects.md) |
 | 暗黙の後始末 | 通常の制御フローでは一切行わない。中断時 (`drop k` や `never` 操作) だけ、捕まっていた `Lin` 値を、その型に宣言された破棄処理で drop する | [線形性](spec/linearity.md)、[エフェクトと handler](spec/effects.md) |
 | 型付け | Bidirectional Typing + 単一化。トップレベルの関数は引数と戻り値の型注釈が必須。トップレベルの関数の row はシグネチャで決まり、省略した row は `<>` (純粋) である。Kind は推論する | [型と Kind](spec/types.md) |
 | 直積型 | レコードは名前的で、コンストラクタが1つの `data` にフィールドの名前を付けて宣言する (`data Person = Person { name : String, age : Int }`)。タプルは構造的なままで、`t.0` で射影する。Unit は 0 要素のタプル `()` である。Kind はフィールドの Kind の join で推論する (S4 で入れる) | [直積型とレコード](spec/records.md) |
@@ -63,7 +63,7 @@ eml の目的、言語の性格、確定した設計判断の一覧、文書全�
 | コマンドリテラル | バッククォート。シェルを介さず、引数のリストを組む (Julia 方式) | [字句](spec/lexical.md) |
 | fixity | ユーザーが宣言する。優先順位は整数 0〜9。CST では演算子の列を平たいまま持ち、HIR で組み直す | [宣言](spec/declarations.md)、[式](spec/expressions.md) |
 | モジュール | 1ファイル = 1モジュール。`pub` で公開する。import は既定で修飾付き。標準ライブラリは import なしで修飾付きで使える | [モジュールと名前解決](spec/modules.md) |
-| 組み込みの宣言 | 修飾子 `extern` で組み込みの関数、型、エフェクトを宣言する (`pub extern println : String -> <IO> Unit`)。標準ライブラリはバイナリに埋め込んだ `std/` のツリーから読み、Prelude は `std/Prelude.em` である (S2 で入れる) | [宣言](spec/declarations.md)、[モジュールと名前解決](spec/modules.md) |
+| 組み込みの宣言 | 修飾子 `extern` で組み込みの関数、型、エフェクトを宣言する (`pub extern println : String -> <IO> Unit`)。標準ライブラリはバイナリに埋め込んだ `std/` のツリーから読み、Prelude は `std/Prelude.em` である (S2b で入れる) | [宣言](spec/declarations.md)、[モジュールと名前解決](spec/modules.md) |
 | 並行処理 | 新しい構文は追加しない。エフェクトにより直接の形で書ける | [式](spec/expressions.md) |
 | コメント | `--` と、入れ子にできる `{- -}` | [字句](spec/lexical.md) |
 
@@ -88,5 +88,5 @@ eml の目的、言語の性格、確定した設計判断の一覧、文書全�
 | Perceus | 参照カウントの `dup` / `decref` を静的に挿入する方式。reuse analysis と借用の最適化は後で入れる |
 | Core IR | 型付き HIR から変換する ANF 形式の IR。RC とエフェクトの命令を明示する |
 | M1、M2 | 完了したマイルストーンである。M1 は言語の全体を一通り通した最初の vertical slice、M2 はモジュールと参照ごとの具体化の表である。今の範囲は [実装の現在地](implementation/status.md) にある |
-| S0〜S5 | 再設計のサブプロジェクトである。S0 運用と文書、S1 row の健全性、S2 機構を削る、S3a フロントエンドの土台、S3b バックエンドの土台、S4 スクリプトの MVP、S5 実例による判断がある。その後の言語の項目と処理系の項目は [ロードマップ](future/roadmap.md) の「段の列」にある。パイプラインの「段階」とは別の呼び方である |
+| S0〜S5 | 再設計のサブプロジェクトである。S0 運用と文書、S1 row の健全性、S2a 継続を関数にする、S2b 組み込みを extern にする、S3a フロントエンドの土台、S3b バックエンドの土台、S4 スクリプトの MVP、S5 実例による判断がある。その後の言語の項目と処理系の項目は [ロードマップ](future/roadmap.md) の「段の列」にある。パイプラインの「段階」とは別の呼び方である |
 | a1 / a2-wait / a2-cancel | 並列 API `par` を段階的に広げる計画の各段階。[マルチコア対応の設計](future/multicore.md) にある |
