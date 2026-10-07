@@ -350,7 +350,7 @@ fn a_function_type_with_other_effect_arguments_is_a_mismatch() {
 }
 
 #[test]
-fn a_continuation_of_a_multi_operation_may_be_resumed_twice() {
+fn a_continuation_of_a_multi_operation_may_be_called_twice() {
     let text = "effect Choice where\n  multi choose : Unit -> Bool\n\nboth : Unit -> Int\nboth () =\n  handle (if choose () then 1 else 2) with\n    | choose () k -> k True + k False";
     insta::assert_snapshot!(check_text(text), @"
     choose : Unit -> <Choice> Bool
@@ -406,7 +406,7 @@ fn continuations_of_handlers_with_a_state_carry_the_state() {
 }
 
 #[test]
-fn a_continuation_with_a_state_is_resumed_through_a_lambda_and_more_than_once() {
+fn a_continuation_with_a_state_is_called_through_a_lambda_and_more_than_once() {
     let text = "effect Choose where\n  multi choose : Unit -> Bool\n\nf : Unit -> Int\nf () =\n  handle (if choose () then 1 else 2) from 0 with\n    | choose () k st ->\n        let again = fn c -> c True (st + 1)\n        again k + k False (st + 2)\n    | return x st -> x + st";
     let checked = eml_test_support::check(text);
     assert!(checked.diagnostics.is_empty(), "{:?}", checked.diagnostics);
@@ -488,6 +488,28 @@ fn an_arrow_linearity_note_does_not_say_which_side_is_linear() {
     E2001 13:43 mismatched types
       13:43 expected `Int -> Int`, found `Int -> Int`
       13:36 the `then` branch has this type
+      note: these function types differ in how many times the function may be called: one can be called only once, the other any number of times
+    ");
+}
+
+/// 線形性の食い違いが大きな型の中にあっても、E2001 の note は付き、表示も成り立つ (docs/implementation/diagnostics.md)。
+#[test]
+fn an_arrow_linearity_note_appears_when_the_difference_is_nested_in_a_tuple() {
+    let text = "data Box =\n  | Box (Int -> Int)\n  | Done\n\neffect Ask where\n  ask : Unit -> Int\n\npick : Bool -> Box -> Int\npick c b =\n  match b with\n    | Box g ->\n        handle ask () with\n          | ask () k ->\n              let (f, n) = if c then (k, 1) else (g, 2)\n              f n\n          | return x -> x\n    | Done -> 0";
+    insta::assert_snapshot!(check_text(text), @"
+    ask : Unit -> <Ask> Int
+    pick : Bool -> Box -> Int
+      c#0 : Bool
+      b#1 : Box
+      g#2 : Int -> Int
+      k#3 : Int -> Int
+      f#4 : Int -> Int
+      n#5 : Int
+      x#6 : Int
+    ---
+    E2001 14:50 mismatched types
+      14:50 expected `(Int -> Int, Int)`, found `(Int -> Int, Int)`
+      14:38 the `then` branch has this type
       note: these function types differ in how many times the function may be called: one can be called only once, the other any number of times
     ");
 }

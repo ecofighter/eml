@@ -181,6 +181,17 @@ fn a_continuation_is_called_with_all_its_arguments_at_once() {
     );
 }
 
+/// 型を明示した節の `(k : …)` も、継続の引数の数を記録する。明示がなくても `k st (st + 1)` と同じ手順になる。
+#[test]
+fn an_annotated_clause_pattern_records_the_continuation_arity() {
+    assert_eq!(
+        continuation_steps(
+            "effect Tick where\n  tick : Unit -> Int\n\nt : Unit -> Int\nt () =\n  handle tick () from 0 with\n    | tick () (k : Int -> Int -> Int) st -> k st (st + 1)\n    | return x _ -> x"
+        ),
+        ["eval k", "eval st", "eval st + 1", "arrow 0", "arrow 1"]
+    );
+}
+
 /// 状態のない handler の `k` は引数の数が1なので、`k 1` の後の引数は呼び出しを待つ。
 #[test]
 fn an_argument_beyond_the_continuation_arity_waits_for_the_call() {

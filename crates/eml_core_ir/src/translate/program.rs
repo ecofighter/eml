@@ -47,8 +47,10 @@ pub(super) struct ProgramBuilder {
     /// コンストラクタのスキームの型。コンストラクタを包む関数の変数が boxed かどうかを決める。
     constructor_types: HashMap<ConstructorId, Type>,
     constructor_wrappers: HashMap<ConstructorId, FnIdx>,
-    /// 状態のない handler 用と、状態のある handler 用の、継続を包む関数。
-    continuation_wrappers: [Option<FnIdx>; 2],
+    /// 状態のない handler 用の、継続を包む関数。
+    stateless_continuation_wrapper: Option<FnIdx>,
+    /// 状態のある handler 用の、継続を包む関数。
+    stateful_continuation_wrapper: Option<FnIdx>,
 }
 
 impl ProgramBuilder {
@@ -81,7 +83,8 @@ impl ProgramBuilder {
                 })
                 .collect(),
             constructor_wrappers: HashMap::new(),
-            continuation_wrappers: [None; 2],
+            stateless_continuation_wrapper: None,
+            stateful_continuation_wrapper: None,
         }
     }
 
@@ -89,8 +92,12 @@ impl ProgramBuilder {
     /// `(k, v)` を、状態のある handler 用の `cont$state` は `(k, v, s)` を受け、`resume` を末尾呼び出しする
     /// (docs/spec/core-ir.md)。それぞれ1つだけ作る。
     pub(super) fn continuation_wrapper(&mut self, stateful: bool) -> FnIdx {
-        let slot = usize::from(stateful);
-        if let Some(function) = self.continuation_wrappers[slot] {
+        let cached = if stateful {
+            self.stateful_continuation_wrapper
+        } else {
+            self.stateless_continuation_wrapper
+        };
+        if let Some(function) = cached {
             return function;
         }
         // 再開に渡す値と状態の型は節ごとに違うので、どれも boxed にする。`dup` と `decref` はヒープにない値を無視する
@@ -112,7 +119,11 @@ impl ProgramBuilder {
             Atom::Unit
         };
         let function = self.reserve(params.len());
-        self.continuation_wrappers[slot] = Some(function);
+        if stateful {
+            self.stateful_continuation_wrapper = Some(function);
+        } else {
+            self.stateless_continuation_wrapper = Some(function);
+        }
         let body = builder.push(CExpr::TailCall {
             call: Call::Resume {
                 k: Atom::Var(k),
