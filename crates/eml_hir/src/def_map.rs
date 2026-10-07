@@ -266,7 +266,9 @@ fn check_cycles(modules: &[LoadedModule], diagnostics: &mut Vec<Diagnostic>) {
         }
         state[start] = Visit::Open;
         path.push((start, 0));
-        while let Some(&(module, next)) = path.last() {
+        while let Some(top) = path.last_mut() {
+            let (module, next) = *top;
+            top.1 += 1;
             let loaded = &modules[module];
             let (Some(import), Some(&target)) =
                 (loaded.tree.imports.get(next), loaded.targets.get(next))
@@ -275,9 +277,6 @@ fn check_cycles(modules: &[LoadedModule], diagnostics: &mut Vec<Diagnostic>) {
                 state[module] = Visit::Done;
                 continue;
             };
-            if let Some(top) = path.last_mut() {
-                top.1 += 1;
-            }
             let ImportTarget::Module(target) = target else {
                 continue;
             };
