@@ -3,7 +3,7 @@
 use eml_extern::{Extern, ExternEffect, ExternType, Purity};
 use eml_hir::{EffectKind, FunctionKind, Program, RowRef, Signature, TypeDefKind, TypeRefKind};
 
-use crate::common::diagnostics;
+use crate::common::{diagnostics, lower_text};
 
 /// 標準ライブラリだけのプログラム。入口は標準ライブラリを使うだけである。
 fn std_program() -> Program {
@@ -241,6 +241,15 @@ fn a_user_extern_effect_has_no_operations_and_no_row() {
 }
 
 #[test]
+fn a_distant_equation_of_a_user_extern_signature_is_ignored() {
+    let text = "extern f : Int -> Int\n\ng : Int -> Int\ng x = x\n\nf x = x";
+    assert_eq!(
+        diagnostics(text),
+        ["E1033 1:1 `extern` is only allowed in the standard library"]
+    );
+}
+
+#[test]
 fn parameters_written_on_a_user_extern_type_count_at_use_sites() {
     let text = "extern data T a\n\nf : T Int -> T Int\nf x = x";
     assert_eq!(
@@ -258,4 +267,30 @@ fn parameters_written_on_a_user_extern_type_count_at_use_sites() {
         .find(|(_, def)| def.name == "T")
         .expect("T");
     assert_eq!(def.generics.type_vars.len(), 1);
+}
+
+#[test]
+fn a_user_extern_function_in_a_clause_adds_nothing_to_e1033() {
+    let text = "extern effect E\n\nextern f : Int -> <E> Int\n\ng : Unit -> Int\ng () = handle 1 with\n  | f x k -> k 1";
+    assert_eq!(
+        diagnostics(text),
+        [
+            "E1033 1:1 `extern` is only allowed in the standard library",
+            "E1033 3:1 `extern` is only allowed in the standard library",
+        ]
+    );
+}
+
+#[test]
+fn the_hir_dump_shows_user_externs_with_the_keyword() {
+    let text = "extern data T\nextern effect E\nextern f : T -> <E> T";
+    insta::assert_snapshot!(lower_text(text), @"
+    extern data T
+    extern effect E
+    extern f : T -> <E> T
+    ---
+    E1033 1:1 `extern` is only allowed in the standard library
+    E1033 2:1 `extern` is only allowed in the standard library
+    E1033 3:1 `extern` is only allowed in the standard library
+    ");
 }

@@ -424,6 +424,18 @@ fn an_unknown_qualifier_in_a_clause_does_not_reach_the_extern_functions() {
     assert!(found[0].starts_with("E1031 "), "{found:?}");
 }
 
+#[test]
+fn an_ambiguous_clause_head_does_not_reach_the_extern_functions() {
+    // 曖昧な名前は E1028 のままで、`Prelude.println` へ引き直さない (E1009 にしない)
+    let entry = "import A (Out(..))\nimport B (Err(..))\n\nf : Unit -> Unit\nf () = handle () with\n  | println s k -> k ()";
+    let a = "pub effect Out where\n  println : String -> Unit";
+    let b = "pub effect Err where\n  println : String -> Unit";
+    let lowered = eml_test_support::lower_files(entry, &[("A.em", a), ("B.em", b)]);
+    let found = eml_test_support::short(&lowered.files, &lowered.diagnostics);
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert!(found[0].starts_with("E1028 "), "{found:?}");
+}
+
 fn report(text: &str) -> String {
     let lowered = eml_test_support::lower(text);
     eml_test_support::full(&lowered.files, &lowered.diagnostics)

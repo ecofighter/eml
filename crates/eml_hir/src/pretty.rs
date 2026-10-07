@@ -24,22 +24,25 @@ pub fn pretty(program: &Program) -> String {
     out
 }
 
+/// extern の宣言は、型、エフェクト、関数のどれも `extern` を付けて表示する。宣言があることと、本体を処理系が持つ
+/// ことの両方がダンプから読めるようにするため。
 fn items(program: &Program, module: &Module, out: &mut String) {
     let items = &module.items;
     for (_, def) in items.types.iter() {
-        let TypeDefKind::Data { constructors } = &def.kind else {
-            continue;
-        };
         let params: Vec<&str> = def
             .generics
             .type_vars
             .iter()
             .map(|(_, var)| var.name.as_str())
             .collect();
+        let (keyword, constructors) = match &def.kind {
+            TypeDefKind::Data { constructors } => ("data", constructors.as_slice()),
+            TypeDefKind::Extern(_) => ("extern data", [].as_slice()),
+        };
         if params.is_empty() {
-            writeln!(out, "data {}", def.name).unwrap();
+            writeln!(out, "{keyword} {}", def.name).unwrap();
         } else {
-            writeln!(out, "data {} {}", def.name, params.join(" ")).unwrap();
+            writeln!(out, "{keyword} {} {}", def.name, params.join(" ")).unwrap();
         }
         let printer = Printer {
             program,
@@ -56,10 +59,14 @@ fn items(program: &Program, module: &Module, out: &mut String) {
             .iter()
             .map(|(_, var)| var.name.as_str())
             .collect();
+        let keyword = match effect.kind {
+            EffectKind::Defined => "effect",
+            EffectKind::Extern(_) => "extern effect",
+        };
         if params.is_empty() {
-            writeln!(out, "effect {}", effect.name).unwrap();
+            writeln!(out, "{keyword} {}", effect.name).unwrap();
         } else {
-            writeln!(out, "effect {} {}", effect.name, params.join(" ")).unwrap();
+            writeln!(out, "{keyword} {} {}", effect.name, params.join(" ")).unwrap();
         }
         for &operation in &effect.operations {
             let operation = &program[operation];
@@ -155,6 +162,9 @@ impl Printer<'_> {
     }
 
     fn function(&self, function: &Function, body: Option<&Body>, out: &mut String) {
+        if let FunctionKind::Extern(_) = function.kind {
+            out.push_str("extern ");
+        }
         match &function.signature {
             Some(signature) => writeln!(
                 out,
@@ -166,7 +176,9 @@ impl Printer<'_> {
         }
         .unwrap();
         let Some(body) = body else {
-            writeln!(out, "{} = <no equation>", function.name).unwrap();
+            if function.kind == FunctionKind::Defined {
+                writeln!(out, "{} = <no equation>", function.name).unwrap();
+            }
             return;
         };
         out.push_str(&function.name);

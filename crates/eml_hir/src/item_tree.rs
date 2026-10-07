@@ -305,7 +305,12 @@ fn check_order(
         signature,
         equations,
     } = definition;
-    for pair in equations.windows(2) {
+    // extern のシグネチャに続く等式は、lower が診断なしで読み捨てる。E1033 のほかに置き場所の誤りを重ねない
+    // (docs/spec/declarations.md の「`extern`」)
+    let external = signature
+        .as_ref()
+        .is_some_and(|(_, node, _)| node.is_extern());
+    for pair in equations.windows(2).filter(|_| !external) {
         let (previous_index, _, previous_range) = &pair[0];
         let (index, _, range) = &pair[1];
         if *index != previous_index + 1 {
@@ -338,7 +343,7 @@ fn check_order(
             )),
         ),
         (Some((signature_index, _, signature_range)), Some((equation_index, _, range)))
-            if *equation_index != signature_index + 1 =>
+            if !external && *equation_index != signature_index + 1 =>
         {
             diagnostics.push(
                 Diagnostic::error(

@@ -220,6 +220,11 @@ impl BodyLowering<'_> {
         let Resolved::Found(function) = self.items.extern_function(at.name) else {
             return false;
         };
+        // ユーザーのモジュールの extern は E1033 を報告済みなので、節を捨てて診断を重ねない
+        // (docs/spec/declarations.md の「`extern`」)
+        if self.function(function).kind == FunctionKind::Extern(None) {
+            return true;
+        }
         let Some(effect) = self.extern_effect_of(function) else {
             return false;
         };
