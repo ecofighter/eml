@@ -4,7 +4,7 @@
 
 use eml_interp::{Fault, RuntimeError};
 
-use crate::common::run_core;
+use crate::common::{run_core, run_core_unverified};
 
 const UNIQUE: &str = r#"
 fn main() {
@@ -40,13 +40,13 @@ fn main() {
 
 #[test]
 fn a_unique_value_is_unpacked_by_taking_its_fields() {
-    let (stdout, result) = run_core(UNIQUE, true);
+    let (stdout, result) = run_core(UNIQUE);
     assert_eq!((stdout.as_str(), result), ("field\n", Ok(())));
 }
 
 #[test]
 fn a_shared_value_is_unpacked_by_copying_its_fields() {
-    let (stdout, result) = run_core(SHARED, true);
+    let (stdout, result) = run_core(SHARED);
     assert_eq!((stdout.as_str(), result), ("field\n", Ok(())));
 }
 
@@ -67,7 +67,7 @@ fn main() {
   }
 }
 "#;
-    let (stdout, result) = run_core(text, true);
+    let (stdout, result) = run_core(text);
     assert_eq!((stdout.as_str(), result), ("none\n", Ok(())));
 }
 
@@ -85,7 +85,7 @@ fn main() {
   }
 }
 "#;
-    let (_, result) = run_core(text, false);
+    let (_, result) = run_core_unverified(text);
     assert_eq!(
         result,
         Err(RuntimeError::Fault {
@@ -121,7 +121,7 @@ fn pick(s0^) {
 
 #[test]
 fn a_string_switch_releases_the_string_on_every_path() {
-    let (out, result) = run_core(STRING_SWITCH, true);
+    let (out, result) = run_core(STRING_SWITCH);
     assert!(result.is_ok(), "{result:?}");
     assert_eq!(out, "3\n");
 }
@@ -144,7 +144,7 @@ fn main() {
 
 #[test]
 fn a_value_with_fields_that_goes_to_the_default_is_released() {
-    let (out, result) = run_core(DEFAULT_WITH_FIELDS, true);
+    let (out, result) = run_core(DEFAULT_WITH_FIELDS);
     assert!(result.is_ok(), "{result:?}");
     assert_eq!(out, "default\n");
 }
@@ -167,7 +167,7 @@ fn main() {
   }
 }
 "#;
-    let (out, result) = run_core(text, true);
+    let (out, result) = run_core(text);
     assert!(result.is_ok(), "{result:?}");
     assert_eq!(out, "two\n");
 }

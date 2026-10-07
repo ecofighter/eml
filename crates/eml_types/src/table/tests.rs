@@ -495,7 +495,7 @@ fn a_rigid_callee_row_masks_the_handleable_labels_before_its_variable() {
         tail: Tail::Var(e),
     };
     let ambient = Row {
-        labels: vec![label.clone()],
+        labels: vec![label, Label::plain(table.lang.io)],
         tail: Tail::Var(e),
     };
     assert_eq!(table.include_row(&callee, &ambient), Ok(vec![state]));

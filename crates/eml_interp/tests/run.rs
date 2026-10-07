@@ -42,7 +42,7 @@ fn main() {
 /// Core IR のテキストにはコメントを書けないので、IR の説明はここに書く。
 #[test]
 fn a_mask_skips_outer_handlers_only() {
-    let (stdout, result) = run_core(include_str!("ir/mask.core"), true);
+    let (stdout, result) = run_core(include_str!("ir/mask.core"));
     assert_eq!(result, Ok(()));
     insta::assert_snapshot!(stdout, @"
     outer

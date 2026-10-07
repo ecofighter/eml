@@ -156,8 +156,8 @@ impl FnLowering<'_> {
     /// `mask` を付けるのは本体のある関数だけである。intrinsic、操作、コンストラクタは、型検査が row を開かずに宣言のまま
     /// 含めるので、`mask` が記録されない。
     fn saturated_rhs(&self, id: ExprId, callee: Callee, args: Vec<Atom>) -> (&'static str, Rhs) {
-        // `Prim`、`Perform`、`Con` は `mask` を持てない。型検査が `mask` を記録するように変わると、ここで気づかないうちに
-        // 落とすことになる
+        // `Prim`、`Perform`、`Con` は `mask` を持てない (docs/spec/core-ir.md)。型検査が `mask` を記録するように変わると、
+        // ここで気づかないうちに落とすことになる
         debug_assert!(
             matches!(callee, Callee::Function(_))
                 || (0..args.len()).all(|arrow| self.mask(id, arrow).is_empty()),

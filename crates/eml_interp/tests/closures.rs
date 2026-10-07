@@ -17,7 +17,7 @@ fn first(a0, b1) {
   return a0
 }
 "#;
-    assert_eq!(run_core(text, true), ("10\n".to_string(), Ok(())));
+    assert_eq!(run_core(text), ("10\n".to_string(), Ok(())));
 }
 
 #[test]
@@ -39,7 +39,7 @@ fn make(x0) {
   return c1
 }
 "#;
-    assert_eq!(run_core(text, true), ("5\n".to_string(), Ok(())));
+    assert_eq!(run_core(text), ("5\n".to_string(), Ok(())));
 }
 
 #[test]
@@ -60,7 +60,7 @@ fn make(x0) {
   return c1
 }
 "#;
-    assert_eq!(run_core(text, true), ("5\n".to_string(), Ok(())));
+    assert_eq!(run_core(text), ("5\n".to_string(), Ok(())));
 }
 
 #[test]
@@ -80,7 +80,7 @@ fn first(a0^, b1) {
   return a0
 }
 "#;
-    assert_eq!(run_core(text, true), ("a\na\n".to_string(), Ok(())));
+    assert_eq!(run_core(text), ("a\na\n".to_string(), Ok(())));
 }
 
 #[test]
@@ -107,7 +107,7 @@ fn make(x0) {
   return c1
 }
 "#;
-    assert_eq!(run_core(text, true), ("10\n5\n".to_string(), Ok(())));
+    assert_eq!(run_core(text), ("10\n5\n".to_string(), Ok(())));
 }
 
 #[test]
@@ -126,7 +126,7 @@ fn first(a0, b1) {
   return a0
 }
 "#;
-    assert_eq!(run_core(text, true), ("ok\n".to_string(), Ok(())));
+    assert_eq!(run_core(text), ("ok\n".to_string(), Ok(())));
 }
 
 #[test]
@@ -165,5 +165,5 @@ fn outer_ret(x0, s1) {
   return x0
 }
 "#;
-    assert_eq!(run_core(text, true), ("203\n".to_string(), Ok(())));
+    assert_eq!(run_core(text), ("203\n".to_string(), Ok(())));
 }
