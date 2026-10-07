@@ -954,3 +954,20 @@ main () =
     }
     ");
 }
+
+/// 既知の関数に引数の数より多くの引数を渡す呼び出しは、引数の数までを `call` し、残りを `apply` する。`call` は関数を
+/// 返すだけでエフェクトを起こさないので `mask` を付けず、残りの引数の矢印の `mask` は `apply` に付ける。
+#[test]
+fn extra_arguments_of_a_known_call_take_the_mask_of_their_arrow() {
+    let text = format!(
+        "{STATE}pick : Int -> (Unit -> <e> a) -> <e> a\npick _ = fn cb -> cb ()\n\nrun : (Unit -> <e> a) -> <State Int | e> a\nrun cb = pick 1 cb\n\n{}",
+        state_main("run (fn () -> 1)")
+    );
+    insta::assert_snapshot!(function(&core_text(&text, Pass::Translate), "run"), @"
+    fn run(cb0^) {
+      let t1^ = call pick(1)
+      let t2^ = mask[State] apply t1(cb0)
+      return t2
+    }
+    ");
+}
