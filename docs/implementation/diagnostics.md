@@ -33,8 +33,8 @@ E0xxx は `eml_syntax::codes` (E0004 だけは `eml_diagnostics`)、E1xxx は `e
 | E1027 | `IMPORT_CYCLE` | import の循環。循環を閉じる import を指し、循環の経路を note で示す |
 | E1028 | `AMBIGUOUS_NAME` | 修飾しない名前、または合流した修飾子の名前が、別々の定義を指して曖昧である。使った位置を primary にし、候補の import を secondary にする |
 | E1029 | `PRIVATE_NAME` | ユーザーのモジュールの `pub` でない名前を、修飾か import の並びで使った。名前を primary にし、定義を secondary にする |
-| E1030 | `RESERVED_MODULE` | 修飾子が `Prelude` になる import、`import Main`、入口のファイルを指す import。import を指す。`import Std` はラベルを「`Std` is the root of the standard library」にする。この検査はユーザーの import にだけかける |
-| E1031 | `UNKNOWN_QUALIFIER` | 修飾子がどの import にもない。2つ以上のセグメントの修飾子 (`Report.Csv.parse`) を含む。修飾子の全体を指し、そのモジュールを import していれば、使える修飾子 (`Csv.parse`) を help で示す。import が作る修飾子にないときは、標準ライブラリのモジュールの短い名前 (`Fs` など) を引いてから E1031 にする。短い名前はユーザーのモジュールでだけ使える |
+| E1030 | `RESERVED_MODULE` | 修飾子が `Prelude` になる import、`import Std.Prelude` (別名があってもなくても。別名を選ぶ help は付けない)、`import Main`、入口のファイルを指す import。import を指す。`import Std` はラベルを「`Std` is the root of the standard library」にする。この検査はユーザーの import にだけかける |
+| E1031 | `UNKNOWN_QUALIFIER` | 修飾子がどの import にもない。2つ以上のセグメントの修飾子 (`Report.Csv.parse`) を含む。修飾子の全体を指し、そのモジュールを import していれば、使える修飾子 (`Csv.parse`) を help で示す。import が作る修飾子にないときは、標準ライブラリのモジュールの短い名前 (`Fs` など) を引いてから E1031 にする。短い名前はユーザーのモジュールでだけ使える。修飾子が `Std.Fs` のように標準ライブラリのモジュールの正式な名前なら、`Fs.close` と書くか `import Std.Fs as F` とする help を付ける |
 | E1032 | `PRIVATE_IN_PUBLIC` | `pub` の item の型に、同じモジュールの `pub` でない型かエフェクトが現れた ([モジュールと名前解決](../spec/modules.md) の「公開の範囲」)。非公開の型かエフェクトの名前を primary にし、その定義を secondary にして、`pub` を付けるよう help で伝える |
 | E1033 | `EXTERN_OUTSIDE_STD` | ユーザーのモジュールに `extern` を書いた。見出しは「`extern` is only allowed in the standard library」で、ラベルを `extern` のキーワードに付ける (``user modules cannot declare externs``)。「`extern` を外す」ことは help で示し、自動の修正にはしない。外すと E1005 や E1025 になるためである。宣言ごとに1つで、宣言を使った位置には重ねない。宣言は extern として読むので、E1005、E1025、`where` がないことの誤りは重ねて出さない |
 | E2001 | `TYPE_MISMATCH` | 型の不一致。メッセージとラベルは制約の由来ごとに変える ([型と Kind](../spec/types.md))。呼び出しの row のエフェクトの型引数が今の row と一致しないときも E2001 にし、呼び出しを primary にする |

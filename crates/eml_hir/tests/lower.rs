@@ -802,3 +802,15 @@ fn a_constructor_operator_brings_its_public_fixity_through_type_imports() {
       | Int :+ P
     ");
 }
+
+#[test]
+fn a_full_std_name_as_a_qualifier_points_to_the_short_name() {
+    let entry = "f : Int\nf = Std.Fs.close\n\ng : Int\ng = Std.Nope.close";
+    insta::assert_snapshot!(module_report(entry, &[]), @"
+    E1031 test.em 2:5 unknown module qualifier `Std.Fs`
+      test.em 2:5 no import gives this qualifier
+      help: write `Fs.close`, or `import Std.Fs as F`
+    E1031 test.em 5:5 unknown module qualifier `Std.Nope`
+      test.em 5:5 no import gives this qualifier
+    ");
+}

@@ -453,7 +453,8 @@ pub(super) fn unresolved<T>(
 }
 
 /// E1031。修飾子は1つのセグメントなので、パス全体を書いた `Report.Csv.parse` もここに来る。そのモジュールを import して
-/// いれば、使える修飾子を help で示す (docs/spec/modules.md の「import」)。
+/// いれば、使える修飾子を help で示す (docs/spec/modules.md の「import」)。標準ライブラリのモジュールの正式な名前
+/// (`Std.Fs.close`) を書いたときは、短い名前の修飾子を示す (docs/spec/modules.md の「名前の解決」)。
 fn unknown_qualifier(
     items: &Resolver<'_>,
     file: FileId,
@@ -470,7 +471,13 @@ fn unknown_qualifier(
         Some(usable) => diagnostic.with_help(format!(
             "the import of `{qualifier}` gives the qualifier `{usable}`; write `{usable}.{name}`"
         )),
-        None => diagnostic,
+        None => match items.std_short_name_of(qualifier) {
+            Some(short) => diagnostic.with_help(format!(
+                "write `{short}.{name}`, or `import {qualifier} as {}`",
+                &short[..1]
+            )),
+            None => diagnostic,
+        },
     }
 }
 

@@ -278,14 +278,12 @@ impl Loader<'_> {
 
     fn reserved(&self, import: &ImportItem) -> Option<Reserved> {
         let name = import.path.dotted();
-        if name == PRELUDE || name == MAIN {
+        if name == PRELUDE || name == MAIN || is_std_prelude(&name) {
             Some(Reserved::Name)
         } else if import.qualifier.0 == PRELUDE {
             Some(Reserved::PreludeQualifier)
         } else if name == STD_ROOT {
             Some(Reserved::StdRoot)
-        } else if is_std_prelude(&name) {
-            Some(Reserved::Name)
         } else if import.path.file_path() == self.entry_file {
             Some(Reserved::Entry)
         } else {
@@ -295,7 +293,8 @@ impl Loader<'_> {
 }
 
 /// `Std.Prelude` は Prelude のファイルを指すが、Prelude は暗黙に取り込むので `Prelude` と同じく予約する。別名のない
-/// `import Std.Prelude` は修飾子が `Prelude` になるので、この検査より先に `Reserved::PreludeQualifier` になる。
+/// 別名のない `import Std.Prelude` は修飾子が `Prelude` になるが、別名で直せる誤りではないので、修飾子の検査より先に引いて
+/// 「別名を選べ」という help を付けない (docs/spec/modules.md の「標準ライブラリ」)。
 fn is_std_prelude(name: &str) -> bool {
     name.strip_prefix(STD_ROOT)
         .and_then(|rest| rest.strip_prefix('.'))

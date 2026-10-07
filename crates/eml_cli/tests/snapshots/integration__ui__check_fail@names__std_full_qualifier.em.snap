@@ -1,0 +1,23 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: rendered
+input_file: tests/ui/check-fail/names/std_full_qualifier.em
+---
+[E1031] Error: unknown module qualifier `Std.Fs`
+   ╭─[ check-fail/names/std_full_qualifier.em:4:11 ]
+   │
+ 4 │   let f = Std.Fs.open "a.txt"
+   │           ───┬──  
+   │              ╰──── no import gives this qualifier
+   │ 
+   │ Help: write `Fs.open`, or `import Std.Fs as F`
+───╯
+[E1031] Error: unknown module qualifier `Std.Fs`
+   ╭─[ check-fail/names/std_full_qualifier.em:5:3 ]
+   │
+ 5 │   Std.Fs.close f
+   │   ───┬──  
+   │      ╰──── no import gives this qualifier
+   │ 
+   │ Help: write `Fs.close`, or `import Std.Fs as F`
+───╯

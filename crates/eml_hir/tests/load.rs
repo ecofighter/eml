@@ -169,7 +169,7 @@ fn an_unreadable_module_reports_the_reason() {
 #[test]
 fn reserved_modules_and_the_entry_cannot_be_imported() {
     // 根に同じ名前のファイルがあっても読まない
-    let text = "import Prelude\nimport Prelude as P\nimport Util.Prelude\nimport A as Prelude\nimport Main\nimport Server";
+    let text = "import Prelude\nimport Prelude as P\nimport Util.Prelude\nimport A as Prelude\nimport Main\nimport Server\nimport Std.Prelude\nimport Std.Prelude as P";
     let modules = [
         ("Prelude.em", ""),
         ("Util/Prelude.em", ""),
@@ -194,9 +194,13 @@ fn reserved_modules_and_the_entry_cannot_be_imported() {
       5:1 `Main` is the name of the entry module
     E1030 6:1 the entry module cannot be imported
       6:1 `app/Server.em` is the entry file
+    E1030 7:1 the module `Std.Prelude` is reserved
+      7:1 the Prelude is imported implicitly
+    E1030 8:1 the module `Std.Prelude` is reserved
+      8:1 the Prelude is imported implicitly
     ");
     assert_eq!(names(&loaded), ["Prelude", "Main", "Std.Fs"]);
-    assert_eq!(targets(&loaded, 1), [None; 6]);
+    assert_eq!(targets(&loaded, 1), [None; 8]);
 }
 
 #[test]
@@ -522,14 +526,13 @@ fn the_std_root_is_reserved_for_user_imports() {
         &source,
     );
     sort_diagnostics(&mut diagnostics);
-    insta::assert_snapshot!(full(&loaded.files, &diagnostics), @r"
+    insta::assert_snapshot!(full(&loaded.files, &diagnostics), @"
     E1030 1:1 the module `Std` is reserved
       1:1 `Std` is the root of the standard library
     E1026 2:8 cannot find module `Std.Nope`
       2:8 there is no file `<std>/Nope.em`
-    E1030 3:1 the qualifier `Prelude` is reserved
-      3:1 `Prelude` always qualifies the names of the Prelude
-      help: choose another qualifier with `as`
+    E1030 3:1 the module `Std.Prelude` is reserved
+      3:1 the Prelude is imported implicitly
     E1030 4:1 the module `Std.Prelude` is reserved
       4:1 the Prelude is imported implicitly
     ");

@@ -1213,6 +1213,16 @@ impl<'a> Resolver<'a> {
         names
     }
 
+    /// 修飾子が標準ライブラリのモジュールの正式な名前 (`Std.Fs`) なら、その短い名前 (`Fs`)。E1031 の help が使う
+    /// (docs/spec/modules.md の「名前の解決」)。
+    pub fn std_short_name_of<'q>(&self, qualifier: &'q str) -> Option<&'q str> {
+        let short = qualifier.strip_prefix("Std.")?;
+        self.def_map
+            .std_short_names
+            .contains_key(short)
+            .then_some(short)
+    }
+
     fn lookup<V: Namespace, T: PartialEq>(
         &self,
         name: NameRef<'_>,
