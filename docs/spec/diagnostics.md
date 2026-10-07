@@ -67,11 +67,11 @@ struct Fix {
 | E1002 | `UNDEFINED_TYPE` | 未定義の型の名前、未定義のエフェクトの名前、本体の注釈に書いたシグネチャにない型変数と row 変数 |
 | E1003 | `DUPLICATE_DEFINITION` | 同じ名前空間でのトップレベルの定義の重複 |
 | E1004 | `MISSING_SIGNATURE` | シグネチャのない等式 |
-| E1005 | `MISSING_EQUATION` | 等式のないシグネチャ |
+| E1005 | `MISSING_EQUATION` | 等式のないシグネチャ。`extern` のシグネチャは対象にならない。どのモジュールでも同じである |
 | E1006 | `NON_ASSOCIATIVE_OPERATORS` | 結合しない演算子の並び、優先順位が同じで結合の向きが違う演算子の並び |
 | E1007 | `INVALID_OPERATION_SIGNATURE` | 操作のシグネチャの一番外側の `->` に row を書いた。または、シグネチャが関数型でない |
 | E1008 | `NEVER_RESULT_NOT_FREE` | `never` の操作の結果の型が、引数に現れない型変数でない |
-| E1009 | `UNHANDLEABLE_EFFECT` | handler に組み込みの `IO` の操作の節を書いた |
+| E1009 | `UNHANDLEABLE_EFFECT` | handler の節の先頭に、extern のエフェクト (`IO`) を起こす extern の関数 (`println`、`Fs.open` など) の名前を書いた。操作として引けず、extern の関数として引けたときだけである |
 | E1010 | `CLAUSE_ARITY` | handler の節の引数の個数の誤り |
 | E1011 | `DROP_ARITY` | `drop` の引数の個数の誤り |
 | E1012 | `MIXED_EFFECTS_IN_HANDLER` | 1つの handler に別のエフェクトの操作の節が混ざった |
@@ -84,17 +84,18 @@ struct Fix {
 | E1019 | `SIGNATURE_NOT_ADJACENT` | シグネチャと最初の等式が隣り合っていない |
 | E1020 | `EQUATION_ARITY_MISMATCH` | 等式ごとに引数の個数が違う |
 | E1021 | `DUPLICATE_FIXITY` | 同じ演算子への2回目の fixity の宣言。1つの宣言に同じ演算子を2回並べた場合を含む |
-| E1022 | `FIXITY_WITHOUT_DEFINITION` | このモジュールで定義していない演算子への fixity の宣言。Prelude の演算子の fixity を変えようとした場合を含む |
+| E1022 | `FIXITY_WITHOUT_DEFINITION` | このモジュールで定義していない演算子への fixity の宣言。標準ライブラリの演算子の fixity を変えようとした場合を含む |
 | E1023 | `INVALID_SECTION` | 優先順位の合わないセクション (`(* a + b)` や `(+ a + b)`) |
 | E1024 | `USE_AT_END_OF_BLOCK` | ブロックの最後の文が `use` である (包む残りがない) |
-| E1025 | `MISSING_CONSTRUCTORS` | ユーザーのモジュールの `data` にコンストラクタがない (`=` のない `data`)。`=` のない `data` は `Prelude` の intrinsic の型だけに使う |
-| E1026 | `MODULE_NOT_FOUND` | import したモジュールのファイルがない、または読めない (UTF-8 でない、IO の誤り) |
+| E1025 | `MISSING_CONSTRUCTORS` | `data` にコンストラクタがない (`=` のない `data`)。`extern data` は対象にならない。どのモジュールでも同じである |
+| E1026 | `MODULE_NOT_FOUND` | import したモジュールのファイルがない、または読めない (UTF-8 でない、IO の誤り)。`import Std.Nope` のように標準ライブラリを指す import で `std/` にファイルがない場合を含む |
 | E1027 | `IMPORT_CYCLE` | import の循環 |
 | E1028 | `AMBIGUOUS_NAME` | 修飾しない名前、または合流した修飾子の名前が、別々の定義を指して曖昧である |
 | E1029 | `PRIVATE_NAME` | ユーザーのモジュールの `pub` でない名前を、修飾か import の並びで使った |
-| E1030 | `RESERVED_MODULE` | 修飾子が `Prelude` になる import、`import Main`、入口のファイルを指す import |
-| E1031 | `UNKNOWN_QUALIFIER` | 修飾子がどの import にもない。2つ以上のセグメントの修飾子 (`Report.Csv.parse`) を含む |
+| E1030 | `RESERVED_MODULE` | 修飾子が `Prelude` になる import、`import Main`、入口のファイルを指す import、`import Std` (標準ライブラリの根) |
+| E1031 | `UNKNOWN_QUALIFIER` | 修飾子がどの import にも、標準ライブラリのモジュールにもない。2つ以上のセグメントの修飾子 (`Report.Csv.parse`) を含む |
 | E1032 | `PRIVATE_IN_PUBLIC` | `pub` の item の型に、同じモジュールの `pub` でない型かエフェクトが現れた ([モジュールと名前解決](modules.md) の「公開の範囲」) |
+| E1033 | `EXTERN_OUTSIDE_STD` | ユーザーのモジュールに `extern` を書いた。標準ライブラリ (`std/`) のモジュールだけが書ける ([宣言](declarations.md) の「`extern`」) |
 | E2001 | `TYPE_MISMATCH` | 型の不一致。呼び出しの row のエフェクトの型引数が今の row と一致しない場合を含む |
 | E2002 | `EFFECT_NOT_IN_ROW` | シグネチャの row に含まれないエフェクトを起こした。ラムダの本体の場合を含む |
 | E2003 | `MISSING_MAIN` | 入口のモジュールに `main` がない。import した `main` は数えない。`eml run` のときだけ出す |

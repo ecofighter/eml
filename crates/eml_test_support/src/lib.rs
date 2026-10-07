@@ -114,8 +114,9 @@ pub fn lower_files(entry: &str, modules: &[(&str, &str)]) -> Lowered {
     lower_loaded(eml_hir::load(ENTRY_PATH, entry, &MemorySource(modules)))
 }
 
-/// 標準ライブラリを `(ファイル名, 本文)` の並びに差し替えたプログラムを変換する。並びは `Prelude.em` を必ず含む。
-/// 標準ライブラリの中の item の扱いを確かめるテストのため。
+/// 標準ライブラリを `(ファイル名, 本文)` の並びに差し替えたプログラムを変換する。標準ライブラリの中の item の扱いを
+/// 確かめるテストのため。並びは `Prelude.em` と、本物の `Fs.em` (または同じ extern の宣言を持つもの) を含める。
+/// extern の索引が両方を引くので、足りないと panic する。
 #[cfg(feature = "hir")]
 pub fn lower_with_std(std: &[(&str, &str)], entry: &str) -> Lowered {
     lower_loaded(eml_hir::load_with_std(
@@ -192,7 +193,7 @@ pub fn check_files(entry: &str, modules: &[(&str, &str)]) -> Checked {
     check_lowered(lower_files(entry, modules))
 }
 
-/// 標準ライブラリを差し替えた `lower_with_std` の後に型検査をする。
+/// 標準ライブラリを差し替えた `lower_with_std` の後に型検査をする。並びの条件は `lower_with_std` と同じである。
 #[cfg(feature = "types")]
 pub fn check_with_std(std: &[(&str, &str)], entry: &str) -> Checked {
     check_lowered(lower_with_std(std, entry))

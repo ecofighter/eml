@@ -18,23 +18,25 @@ E0xxx は `eml_syntax::codes` (E0004 だけは `eml_diagnostics`)、E1xxx は `e
 | E1001 | `UNDEFINED_NAME` | 未定義の値の名前。修飾した名前と import の並びでは、メッセージにモジュールの名前を書く (「in module `Report.Csv`」) |
 | E1002 | `UNDEFINED_TYPE` | 未定義の型の名前、未定義のエフェクトの名前、本体の注釈に書いたシグネチャにない型変数と row 変数。修飾した名前と import の並びでは、E1001 と同じくメッセージにモジュールの名前を書く |
 | E1004 | `MISSING_SIGNATURE` | シグネチャのない等式。シグネチャの追加を提案する help を付ける |
+| E1009 | `UNHANDLEABLE_EFFECT` | handler の節の先頭の名前が、extern のエフェクトを起こす extern の関数である。見出しは「`IO` cannot be handled」で、エフェクトの名前を入れる。ラベルは「`println` is an extern function with the effect `IO`」である。節の先頭の名前を指す。操作として引けなかったときだけ、extern の関数だけに絞って引き直す |
 | E1013 | `MISSING_CLAUSE` | 節のない操作がある。操作の節が1つもない handler も含む。primary は `handle` で、節の追加を help で示す |
 | E1017 | `DUPLICATE_BINDING` | 1つのパターン、または1つの等式の引数の並び、ラムダの引数の並び、あるいは handler の節の引数の並び (操作の引数と `k`) の中で、同じ変数名を2回束縛した。2つ目の束縛を primary、1つ目を secondary にする |
 | E1018 | `NON_CONSECUTIVE_EQUATIONS` | 同じ名前の等式が連続していない (間に別の item がある)。離れた等式の関数名を primary、直前の等式の並びの最後の等式の関数名を secondary にする。等式をシグネチャの直後にまとめるよう help で伝える |
 | E1019 | `SIGNATURE_NOT_ADJACENT` | シグネチャと最初の等式が隣り合っていない。最初の等式の関数名を primary、シグネチャの関数名を secondary にする。等式をシグネチャの直後に置くよう help で伝える |
 | E1020 | `EQUATION_ARITY_MISMATCH` | 等式ごとに引数の個数が違う。個数の違う等式の関数名を primary、最初の等式の関数名を secondary にする |
 | E1021 | `DUPLICATE_FIXITY` | 同じ演算子への2回目の fixity の宣言。1つの宣言に同じ演算子を2回並べた場合を含む。2回目の宣言の演算子を primary、1回目を secondary にする |
-| E1022 | `FIXITY_WITHOUT_DEFINITION` | このモジュールで定義していない演算子への fixity の宣言。Prelude の演算子の fixity を変えようとした場合を含む。宣言の演算子を指す |
+| E1022 | `FIXITY_WITHOUT_DEFINITION` | このモジュールで定義していない演算子への fixity の宣言。標準ライブラリの演算子の fixity を変えようとした場合を含む。宣言の演算子を指す |
 | E1023 | `INVALID_SECTION` | 優先順位の合わないセクション (`(* a + b)` や `(+ a + b)`)。セクション全体を指し、被演算子を括弧で囲むよう help で伝える |
 | E1024 | `USE_AT_END_OF_BLOCK` | ブロックの最後の文が `use` である (包む残りがない)。`use` の文を指す |
-| E1025 | `MISSING_CONSTRUCTORS` | ユーザーのモジュールの `data` にコンストラクタがない (`=` のない `data`)。`data` の名前を指す。`=` のない `data` は `Prelude` の intrinsic の型だけに使う |
-| E1026 | `MODULE_NOT_FOUND` | import したモジュールのファイルがない、または読めない (UTF-8 でない、IO の誤り)。読めない理由をメッセージに書く。import のモジュールのパスを指す |
+| E1025 | `MISSING_CONSTRUCTORS` | `data` にコンストラクタがない (`=` のない `data`)。`data` の名前を指す。`extern data` は対象にならず、`extern` でなければ標準ライブラリを含むどのモジュールでも出す |
+| E1026 | `MODULE_NOT_FOUND` | import したモジュールのファイルがない、または読めない (UTF-8 でない、IO の誤り)。読めない理由をメッセージに書く。import のモジュールのパスを指す。`import Std.Nope` はラベルを「there is no file `<std>/Nope.em`」にし、ユーザーの根は読まない。`import Fs` は、ユーザーの根にファイルが見つからないときだけ `std/` を探す。大文字小文字だけが違うファイルがあるか読めないときは、`std/` へ進まない |
 | E1027 | `IMPORT_CYCLE` | import の循環。循環を閉じる import を指し、循環の経路を note で示す |
 | E1028 | `AMBIGUOUS_NAME` | 修飾しない名前、または合流した修飾子の名前が、別々の定義を指して曖昧である。使った位置を primary にし、候補の import を secondary にする |
 | E1029 | `PRIVATE_NAME` | ユーザーのモジュールの `pub` でない名前を、修飾か import の並びで使った。名前を primary にし、定義を secondary にする |
-| E1030 | `RESERVED_MODULE` | 修飾子が `Prelude` になる import、`import Main`、入口のファイルを指す import。import を指す |
-| E1031 | `UNKNOWN_QUALIFIER` | 修飾子がどの import にもない。2つ以上のセグメントの修飾子 (`Report.Csv.parse`) を含む。修飾子の全体を指し、そのモジュールを import していれば、使える修飾子 (`Csv.parse`) を help で示す |
+| E1030 | `RESERVED_MODULE` | 修飾子が `Prelude` になる import、`import Main`、入口のファイルを指す import。import を指す。`import Std` はラベルを「`Std` is the root of the standard library」にする。この検査はユーザーの import にだけかける |
+| E1031 | `UNKNOWN_QUALIFIER` | 修飾子がどの import にもない。2つ以上のセグメントの修飾子 (`Report.Csv.parse`) を含む。修飾子の全体を指し、そのモジュールを import していれば、使える修飾子 (`Csv.parse`) を help で示す。import が作る修飾子にないときは、標準ライブラリのモジュールの短い名前 (`Fs` など) を引いてから E1031 にする。短い名前はユーザーのモジュールでだけ使える |
 | E1032 | `PRIVATE_IN_PUBLIC` | `pub` の item の型に、同じモジュールの `pub` でない型かエフェクトが現れた ([モジュールと名前解決](../spec/modules.md) の「公開の範囲」)。非公開の型かエフェクトの名前を primary にし、その定義を secondary にして、`pub` を付けるよう help で伝える |
+| E1033 | `EXTERN_OUTSIDE_STD` | ユーザーのモジュールに `extern` を書いた。見出しは「`extern` is only allowed in the standard library」で、ラベルを `extern` のキーワードに付ける (``user modules cannot declare externs``)。「`extern` を外す」ことは help で示し、自動の修正にはしない。外すと E1005 や E1025 になるためである。宣言ごとに1つで、宣言を使った位置には重ねない。宣言は extern として読むので、E1005、E1025、`where` がないことの誤りは重ねて出さない |
 | E2001 | `TYPE_MISMATCH` | 型の不一致。メッセージとラベルは制約の由来ごとに変える ([型と Kind](../spec/types.md))。呼び出しの row のエフェクトの型引数が今の row と一致しないときも E2001 にし、呼び出しを primary にする |
 | E2002 | `EFFECT_NOT_IN_ROW` | シグネチャの row に含まれないエフェクトを起こした。シグネチャの矢印を指し、row を足す help を付ける。ラムダの本体の場合は、エフェクトを起こした場所を primary、ラムダの期待する型の由来 (シグネチャの引数の型や型の明示) を secondary にする |
 | E2005 | `INFINITE_TYPE` | 無限の型 (単一化の occurs check)。row のラベルの型引数を通して、型変数か row 変数が自分自身の中に現れる場合を含む。呼び出しの row で起きたときは、呼び出しを指す |

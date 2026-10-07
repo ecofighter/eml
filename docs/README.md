@@ -11,13 +11,13 @@ eml を実装するエージェントとプログラマのための文書群で�
 | [spec/lexical.md](spec/lexical.md) | 規範 | 字句 (識別子、キーワード、演算子、リテラル、文字列、コマンドリテラル) |
 | [spec/layout.md](spec/layout.md) | 規範 | レイアウト規則 (仮想トークン `OPEN` / `SEP` / `CLOSE`) |
 | [spec/grammar.md](spec/grammar.md) | 規範 | 文法と文法上の補足 |
-| [spec/declarations.md](spec/declarations.md) | 規範 | シグネチャと等式、`data` と `type`、`effect`、fixity と標準の演算子表、`pub` |
+| [spec/declarations.md](spec/declarations.md) | 規範 | シグネチャと等式、`data` と `type`、`effect`、`extern`、fixity と標準の演算子表、`pub` |
 | [spec/expressions.md](spec/expressions.md) | 規範 | 式と脱糖 (`let`、ラムダ、`if`、`match`、演算子の列、セクション、`use`、handler の構文) |
 | [spec/records.md](spec/records.md) | 規範 | 直積型とレコード (タプルと Unit を含む) |
-| [spec/modules.md](spec/modules.md) | 規範 | モジュール、import、名前の解決、名前空間、公開の範囲 |
+| [spec/modules.md](spec/modules.md) | 規範 | モジュール、import、標準ライブラリ、名前の解決、名前空間、公開の範囲 |
 | [spec/types.md](spec/types.md) | 規範 | Kind、関数型、型推論 |
 | [spec/linearity.md](spec/linearity.md) | 規範 | 線形性と `drop`、線形性の検査パス |
-| [spec/effects.md](spec/effects.md) | 規範 | 操作の多重度、持ち越し規則、handler の意味、組み込みの `IO` と `File` |
+| [spec/effects.md](spec/effects.md) | 規範 | 操作の多重度、持ち越し規則、handler の意味、extern のエフェクトの `IO`、標準ライブラリの `File` |
 | [spec/exhaustiveness.md](spec/exhaustiveness.md) | 規範 | 網羅性の検査 |
 | [spec/core-ir.md](spec/core-ir.md) | 規範 | Core IR の構成、評価と所有権の意味、パスの境界の不変条件、実行時エラー |
 | [spec/runtime.md](spec/runtime.md) | 規範 | ヒープと参照カウント、`eml_runtime` の API、マルチコアに備えた予防的な決定 |

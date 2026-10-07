@@ -32,7 +32,7 @@ eml の目的、言語の性格、確定した設計判断の一覧、文書全�
 | 継続の多重度 | 操作ごとに `never` / `once` / `multi` を宣言する。デフォルトは `once` | [エフェクトと handler](spec/effects.md) |
 | 継続 | 継続 `k` は普通の関数で、`k v` で再開する。状態のある handler では `k v st` と書く。`once` の `k` は `Lin` の矢印を持ち、handler は `k` を呼ぶか `drop k` を必ず書く。`multi` の `k` は `Unr` の矢印を持つ | [エフェクトと handler](spec/effects.md) |
 | handler の意味 | deep handler。再開した継続の中でも同じ handler が有効なまま | [エフェクトと handler](spec/effects.md) |
-| `IO` | 操作を持たない、ラベルだけの組み込みのエフェクトである。`println` などは `<IO>` を持つ `extern` の関数で、`extern` のエフェクトは handle できない (S2b で入れる) | [エフェクトと handler](spec/effects.md) |
+| `IO` | 操作を持たない、ラベルだけの組み込みのエフェクトである。`println` などは `<IO>` を持つ `extern` の関数で、`extern` のエフェクトは handle できない | [エフェクトと handler](spec/effects.md) |
 | 暗黙の後始末 | 通常の制御フローでは一切行わない。中断時 (`drop k` や `never` 操作) だけ、捕まっていた `Lin` 値を、その型に宣言された破棄処理で drop する | [線形性](spec/linearity.md)、[エフェクトと handler](spec/effects.md) |
 | 型付け | Bidirectional Typing + 単一化。トップレベルの関数は引数と戻り値の型注釈が必須。トップレベルの関数の row はシグネチャで決まり、省略した row は `<>` (純粋) である。Kind は推論する | [型と Kind](spec/types.md) |
 | 直積型 | レコードは名前的で、コンストラクタが1つの `data` にフィールドの名前を付けて宣言する (`data Person = Person { name : String, age : Int }`)。タプルは構造的なままで、`t.0` で射影する。Unit は 0 要素のタプル `()` である。Kind はフィールドの Kind の join で推論する (S4 で入れる) | [直積型とレコード](spec/records.md) |
@@ -62,8 +62,8 @@ eml の目的、言語の性格、確定した設計判断の一覧、文書全�
 | 文字列 | 補間は `"\{x}"`。複数行の `"""`、raw の `r"..."` | [字句](spec/lexical.md) |
 | コマンドリテラル | バッククォート。シェルを介さず、引数のリストを組む (Julia 方式) | [字句](spec/lexical.md) |
 | fixity | ユーザーが宣言する。優先順位は整数 0〜9。CST では演算子の列を平たいまま持ち、HIR で組み直す | [宣言](spec/declarations.md)、[式](spec/expressions.md) |
-| モジュール | 1ファイル = 1モジュール。`pub` で公開する。import は既定で修飾付き。標準ライブラリは import なしで修飾付きで使える | [モジュールと名前解決](spec/modules.md) |
-| 組み込みの宣言 | 修飾子 `extern` で組み込みの関数、型、エフェクトを宣言する (`pub extern println : String -> <IO> Unit`)。標準ライブラリはバイナリに埋め込んだ `std/` のツリーから読み、Prelude は `std/Prelude.em` である (S2b で入れる) | [宣言](spec/declarations.md)、[モジュールと名前解決](spec/modules.md) |
+| モジュール | 1ファイル = 1モジュール。`pub` で公開する。import は既定で修飾付き。標準ライブラリのモジュール (`Fs` など) は import なしで修飾付きで使える | [モジュールと名前解決](spec/modules.md) |
+| 組み込みの宣言 | 修飾子 `extern` で組み込みの関数、型、エフェクトを宣言する (`pub extern println : String -> <IO> Unit`)。標準ライブラリはバイナリに埋め込んだ `std/` のツリーから読み、Prelude は `std/Prelude.em` である。ファイルの操作は標準ライブラリのモジュール `Fs` (`Fs.open` など) にある | [宣言](spec/declarations.md)、[モジュールと名前解決](spec/modules.md) |
 | 並行処理 | 新しい構文は追加しない。エフェクトにより直接の形で書ける | [式](spec/expressions.md) |
 | コメント | `--` と、入れ子にできる `{- -}` | [字句](spec/lexical.md) |
 
@@ -81,7 +81,7 @@ eml の目的、言語の性格、確定した設計判断の一覧、文書全�
 | 多重度 | 操作ごとに宣言する `never` / `once` / `multi`。handler 側の継続 `k` の有無と線形性 (`once` なら `Lin`、`multi` なら `Unr`、`never` には `k` がない) を決める |
 | 持ち越し規則 | 操作の呼び出しをまたいで生きていてよい値の規則。`multi` の操作をまたげるのは `Unr` の値だけである |
 | 中断 | `drop k` や `never` 操作によって、継続が再開されずに捨てられること。暗黙の後始末は中断時にだけ起きる |
-| 破棄処理 | `Lin` 型に宣言された捨て方。組み込みリソース `File` では `close` |
+| 破棄処理 | `Lin` 型に宣言された捨て方。標準ライブラリのリソース `Fs.File` では `Fs.close` |
 | deep handler | 再開した継続の中でも同じ handler が有効なままの handler |
 | パラメータ付き handler | `handle e from init with` の形で、状態を節の最後の引数として受け渡す handler。状態は handler フレームに置き、脱糖しない |
 | レイアウト段 | lexer と parser の間で、仮想トークン `OPEN` / `SEP` / `CLOSE` (コードでは `LAYOUT_OPEN` / `LAYOUT_SEP` / `LAYOUT_CLOSE`) を挿入する段 |

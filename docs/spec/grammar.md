@@ -16,11 +16,12 @@ parser が受け付ける文法と、文法だけでは表しきれない補足�
 ```
 file        ::= (item (SEP item)*)?
 
-item        ::= 'pub'? decl
+item        ::= 'pub'? ('extern' extern_decl | decl)
               | equation
               | import_item
 decl        ::= signature | data_item | type_item | effect_item | fixity_item
 
+extern_decl ::= signature | 'data' UIDENT | 'effect' UIDENT
 signature   ::= var ':' type
 var         ::= LIDENT | '(' OP ')'
 equation    ::= LIDENT apat* '=' body
@@ -98,6 +99,7 @@ command     ::= CMD_START (CMD_TEXT | ESCAPE | '\{' '..'? expr '}')* CMD_END
 ## 文法上の補足
 
 - `import_item` は、ファイルの先頭で宣言より前に書く。宣言の後の `import_item` は E0011 にする。`import_name` の `'(' OP ')'` は `:` で始まらない演算子なので、`((:+))` も E0011 にする。CST はどちらも組む ([モジュールと名前解決](modules.md) の「import」)
+- `extern` は宣言の修飾子で、`pub` の後に書く。後ろに続けられるのは、等式のないシグネチャ、`=` のない型引数なしの `data`、`where` のない型引数なしの `effect` だけである。ほかの形 (`extern type`、`extern infixl`、`extern data T = …`、`extern effect E where …`、型引数のある `data` と `effect`、`extern pub`) は E0011 にする。`extern` を書けるのは標準ライブラリのモジュールだけで、ユーザーのモジュールに書くと HIR で E1033 になる ([宣言](declarations.md) の「`extern`」)
 - 型の位置では、`<` で始まる演算子のトークン (`<>` など) と `>` で始まる演算子のトークン (`>->` など) を、parser が分割して読む (Rust が `>>` を分割するのと同じ)。`->` の直後に row を空白なしで書いた `-><` も、`->` と `<` に分割して読む (`Int -><IO> Int`)
 - 型の位置での `<` は row の開始だけを意味する
 - `postfix` の `.INT` で、lexer が `t.0.1` の `0.1` を浮動小数のトークンにした場合、parser がフィールドアクセスの位置で分割する (Rust と同じ)

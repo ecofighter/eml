@@ -32,7 +32,7 @@
 - レコードの row の Kind を `RecRow<m>` とする。`m` はフィールドの Kind の join である
 - `{ ρ } : Type<m>` (ρ : `RecRow<m>`) とする。`Lin` なフィールドが1つでもあれば、レコード全体が `Lin` になる
 - 型の中の row 変数 (`{ age : Int | r }` の `r`) は、線形性の Kind 変数を持つ。シグネチャの型変数と同じく、使い方から制約を推論する ([型と Kind](types.md)、[線形性](linearity.md))
-- タプルの Kind が要素の Kind の join になること (`(File, String) : Type<Lin>`) は、この規則の特別な場合である
+- タプルの Kind が要素の Kind の join になること (`(Fs.File, String) : Type<Lin>`) は、この規則の特別な場合である
 
 ## 線形性の規則
 
@@ -44,17 +44,17 @@
 | 分解パターン | 各フィールドを別の変数に束縛する。`Lin` なレコードは、これで分解する |
 
 ```haskell
-type Job = { name : String, log : File }
+type Job = { name : String, log : Fs.File }
 
-log_of : Job -> File
+log_of : Job -> Fs.File
 log_of j = j.log                  -- OK: 残りの { name : String } は Unr
 
 name_of : Job -> String
-name_of j = j.name                -- エラー: 残りの { log : File } が Lin
+name_of j = j.name                -- エラー: 残りの { log : Fs.File } が Lin
                                   -- help: `let { name, log } = j` で分解する
 
-let n = (read_all f).1            -- エラー: 残りの .0 (File) が Lin
-let (f, text) = read_all f        -- OK
+let n = (Fs.read_all f).1         -- エラー: 残りの .0 (Fs.File) が Lin
+let (f, text) = Fs.read_all f     -- OK
 ```
 
 - 違反は線形性の診断 (E3xxx) とし、分解パターンへの書き換えを help と fix で提案する ([診断の出し方](../implementation/diagnostics.md) の「線形性の診断」)

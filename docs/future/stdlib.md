@@ -11,6 +11,7 @@
 - 標準入出力のハンドル: `Stdin` / `Stdout` / `Stderr` は別の型にして、取り違えを防ぐ。ハンドルは `Lin` で、バッファ付きの読み書きもハンドルにする。extern はハンドルに対する read/write の操作にとどめ、「行を流す」などのストリーム処理は標準ライブラリにエフェクトとして書く ([ロードマップ](roadmap.md) の「バイト列と `Array`」)
 - `Task a` を `Lin` にする: `Async.start` が返すタスクを、必ず `await` するか `drop` (キャンセル) させる。構造化された並行処理にする
 - `exit`: `exit : Int -> <IO> a` の組み込みにする。`never` の操作の中断と同じく `Lin` の値を後始末してから終了し、`try_io` は捕まえない。終了コードはこれで扱う ([ロードマップ](roadmap.md) の「S4 スクリプトの MVP」)
+- 最初の標準ライブラリのモジュールは `Fs` で、`std/` ツリーに `File`、`open`、`read_all`、`close` がある ([モジュールと名前解決](../spec/modules.md) の「標準ライブラリ」)。ファイル全体の読み書きは、S4 でこのモジュールに足す
 - `Prelude` の範囲: `Option`、`Result`、`List`、`Bool`、`println` / `eprintln`、`show_int`、`not`、`|>` などの標準の演算子と fixity ([宣言](../spec/declarations.md) の標準の演算子の表)。S4 で組み込みのクラス `Eq`、`Ord`、`Show` が入り、`Float`、`Char`、`Num` の段で `Num` が入る。`show_int` は S4 までの中継ぎである ([ロードマップ](roadmap.md) の「S4 スクリプトの MVP」)
 - モジュールの候補: `Fs`、`Path`、`Proc`、`Env`、`String`、`List`、`Map`、`Json`、`Csv`、`Toml`、`Regex`、`Http`、`Async`
 - 補間の穴は当面 `String` のみ: それまでは各型に `show_*` 関数を揃える。穴を `Show` に広げるかは S4 で決める

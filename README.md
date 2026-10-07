@@ -9,7 +9,7 @@ eml は「線形型 × 代数的エフェクト」の組み合わせを試す、
 - 関数型、式指向で、イミュータブルがデフォルトである。
 - 線形性を Kind で区別する。線形な値 (ファイルや `once` 操作の継続など) は、ちょうど1回使わなければならない。値を捨てるときは `drop` を明示する。
 - エフェクトは Koka 方式の Row 多相で扱う。操作ごとに継続の多重度 (`never` / `once` / `multi`) を宣言する。
-- 副作用は組み込みの `IO` エフェクトとして管理する。
+- 副作用は組み込みの `IO` エフェクトとして管理する。`IO` は操作のないラベルで、`println` やファイルの操作 (`Fs.open` など) は `extern` の関数である。
 - 型付きの Core IR を CEK 機械で実行する。メモリは Perceus 方式の参照カウントで管理する。
 - 1回の検査で、構文・名前解決・型・線形性・網羅性の誤りをまとめて報告する。
 
@@ -42,8 +42,8 @@ $ eml run ask.em
 ```
 main : Unit -> <IO> Unit
 main () =
-  let f = open "input.txt"
-  let (f, text) = read_all f
+  let f = Fs.open "input.txt"
+  let (f, text) = Fs.read_all f
   println text
 ```
 
@@ -52,7 +52,7 @@ $ eml check leak.em
 [E3003] Error: `f` must be used exactly once, but it is not used
    ╭─[ leak.em:4:8 ]
    │
- 4 │   let (f, text) = read_all f
+ 4 │   let (f, text) = Fs.read_all f
    │        ┬
    │        ╰── `f` is bound here
  5 │   println text

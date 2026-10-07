@@ -66,8 +66,9 @@ pub fn load(
     load_with_std(STD, entry_path, entry_text, source)
 }
 
-/// 標準ライブラリを `(ファイル名, 本文)` の並びで受け取る `load`。並びは `Prelude.em` を必ず含む。テストが標準ライブラリを
-/// 差し替えられるようにするため。標準ライブラリのモジュールは、使うかどうかによらずすべて読み込む。
+/// 標準ライブラリを `(ファイル名, 本文)` の並びで受け取る `load`。テストが標準ライブラリを差し替えられるようにするため。
+/// 並びは `Prelude.em` と、本物の `Fs.em` (または同じ extern の宣言を持つもの) を含める。extern の索引が両方を引くので、
+/// 足りないと `def_map` が panic する。標準ライブラリのモジュールは、使うかどうかによらずすべて読み込む。
 pub fn load_with_std(
     std: &[(&str, &str)],
     entry_path: &str,

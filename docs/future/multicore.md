@@ -130,7 +130,7 @@ else     { rc.fetch_sub(1, AcqRel); }
 ```
 row の Kind: Row<s>,  s ∈ { Never ≤ Once ≤ Multi }
   Never : never の操作だけを含む row
-  Once  : さらに once の操作 (組み込みの IO を含む) を含んでよい
+  Once  : さらに once の操作 (extern のエフェクトの IO を含む) を含んでよい
   Multi : さらに multi の操作を含んでよい
 ```
 
@@ -186,7 +186,7 @@ run_scheduler : (Unit -> <Async, IO> a) -> <IO> a
 ```
 
 - 並行処理はもともと非決定的なので、子タスクの row を閉じて `IO` を許す
-- `IO` は、各 worker の最下部にある組み込みの handler が処理する
+- `IO` は extern のエフェクトで、handler がない。各 worker が `IO` を起こす extern の関数をその場で実行する
 - ユーザー定義のエフェクトは、子タスクの中で handle し終えている必要がある (OCaml 5 の Eio と同じ扱い)
 - `Heap h` は閉じた row によって除外される
 - 並行処理のための新しい構文は追加しない。ラムダと `use` で書ける ([式](../spec/expressions.md) の「並行処理」)
@@ -231,7 +231,7 @@ run_scheduler : (Unit -> <Async, IO> a) -> <IO> a
                 │
    ┌────────────┼────────────┐
  worker 0    worker 1    worker N    各 OS スレッドが自分の CEK 機械を持つ
- (C, E, K)   (C, E, K)   (C, E, K)   K の最下部に組み込みの IO handler
+ (C, E, K)   (C, E, K)   (C, E, K)   K の最下部に `Frame::Root`
    └────────────┼────────────┘
           eml_runtime                オブジェクトのモデル、RC、共有の印、
                                      アロケータ、並列実行のプリミティブ

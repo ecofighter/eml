@@ -9,9 +9,9 @@
 ```haskell
 copy : String -> String -> <IO> Unit
 copy src dst =
-  let f = open src
-  let (f, text) = read_all f
-  close f
+  let f = Fs.open src
+  let (f, text) = Fs.read_all f
+  Fs.close f
   write_text dst text
 ```
 
@@ -39,7 +39,7 @@ each items (fn item ->
 
 - 関数はカリー化する。部分適用はクロージャになる
 - 関数適用 `e0 e1 … en` は、呼ばれる式 `e0` を評価し、`i = 1..n` の順に `ei` を評価してから、それまでの値に矢印 `i` を適用する。括弧は順を変えない (`(f 1) (g ())` と `f 1 (g ())` は同じ式である)。`x |> f a` は `(|>) x (f a)` の呼び出しなので、引数の順に `x` を先に評価する ([宣言](declarations.md) の `|>`)
-- 観測できる順を変えない範囲で、処理系は引数をまとめて1回の呼び出しで渡す。既知の関数、組み込み、操作、コンストラクタの引数の数までの引数は、本体が引数のそろうまで動かないのでまとめる。それを超える引数と関数値の呼び出しでは、値の引数を前とまとめる。引数のないトップレベルの値は、参照するたびに計算して関数値を返すので、既知の関数に含めず、関数値として扱う。値とは、リテラル、局所変数、ラムダ、組み込みと操作とコンストラクタの参照、引数のあるトップレベルの関数の参照、値に型注釈を付けた式である。handler の節の `k` は、引数の数が分かる呼び出し先として扱う (状態なしは1、状態ありは2)。そのため `k st (st + 1)` は、`k st` を部分適用してから `st + 1` を評価する手順にならず、1回の再開になる。まとめ方は持ち越し規則 ([エフェクトと handler](effects.md)) にも効くので、`eml_hir::call_steps` の1か所で決める
+- 観測できる順を変えない範囲で、処理系は引数をまとめて1回の呼び出しで渡す。既知の関数、extern の関数、操作、コンストラクタの引数の数までの引数は、本体が引数のそろうまで動かないのでまとめる。それを超える引数と関数値の呼び出しでは、値の引数を前とまとめる。引数のないトップレベルの値は、参照するたびに計算して関数値を返すので、既知の関数に含めず、関数値として扱う。値とは、リテラル、局所変数、ラムダ、extern の関数と操作とコンストラクタの参照、引数のあるトップレベルの関数の参照、値に型注釈を付けた式である。handler の節の `k` は、引数の数が分かる呼び出し先として扱う (状態なしは1、状態ありは2)。そのため `k st (st + 1)` は、`k st` を部分適用してから `st + 1` を評価する手順にならず、1回の再開になる。まとめ方は持ち越し規則 ([エフェクトと handler](effects.md)) にも効くので、`eml_hir::call_steps` の1か所で決める
 
 ## `if`
 
@@ -122,24 +122,24 @@ main () =
 
 - 節は `| op 引数... k -> 本体` と `| return x -> 本体` の2種類である
 - 節の引数の個数は、`never` の操作なら「操作の引数の個数」、それ以外なら「操作の引数の個数 + 1 (`k`)」とする。個数は HIR で検査する (E1010)
-- 節の先頭の名前は、エフェクトの操作だけから解決する ([モジュールと名前解決](modules.md))。操作でない名前は E1001 に、組み込みの `IO` の操作は E1009 にする
+- 節の先頭の名前は、エフェクトの操作だけから解決する ([モジュールと名前解決](modules.md))。操作でない名前は E1001 にする。ただし `IO` を起こす extern の関数 (`println`、`Fs.open` など) は E1009 にする
 - `return` の節は省略でき、省略したら `| return x -> x` とみなす
 - 継続 `k` は普通の関数で、状態のない handler では `k v` で再開する。`drop k` で捨てる。`drop` の引数が1個でなければ、HIR で E1011 にする
 - 1つの handler は1つのエフェクトのすべての操作に節を書く ([エフェクトと handler](effects.md) の「handler の意味」)
 
-handler の意味、`k` の線形性、`IO` の操作に節を書けないことなどは [エフェクトと handler](effects.md) で定める。
+handler の意味、`k` の線形性、extern のエフェクト `IO` を起こす関数に節を書けないことなどは [エフェクトと handler](effects.md) で定める。
 
 ## パラメータ付き handler
 
 ```haskell
 with_log : String -> (Unit -> <Log, IO | e> a) -> <IO | e> a
 with_log path action =
-  handle action () from open path with
+  handle action () from Fs.open path with
     | log lv msg k f ->
         let f = write f "[\{show_level lv}] \{msg}"
         k () f
     | return x f ->
-        close f
+        Fs.close f
         x
 ```
 
@@ -150,7 +150,7 @@ with_log path action =
   ```haskell
   (handle action () with
      | log lv msg k -> fn f -> (k ()) (... f ...)
-     | return x -> fn f -> ...) (open path)
+     | return x -> fn f -> ...) (Fs.open path)
   ```
 
   脱糖しないのは、状態を handler フレームに置くと、`| get () k st -> k st st` のような節がすぐに再開する形のまま残るためである。将来の evidence passing の最適化を、そのまま当てはめられる ([evidence passing の設計](../future/evidence-passing.md))

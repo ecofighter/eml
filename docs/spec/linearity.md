@@ -23,7 +23,7 @@
 
 ## 暗黙の後始末
 
-通常の制御フローでは、暗黙の後始末を一切行わない。`File` などのリソースは明示的に `open` / `close` し、`close` を忘れれば線形性の検査が検出する。Python の `with` や Haskell の `bracket` に当たる構文は用意しない。
+通常の制御フローでは、暗黙の後始末を一切行わない。`Fs.File` などのリソースは明示的に `Fs.open` / `Fs.close` し、`Fs.close` を忘れれば線形性の検査が検出する。Python の `with` や Haskell の `bracket` に当たる構文は用意しない。
 
 中断時 (`drop k` や `never` 操作) だけ、捕まっていた `Lin` 値を、その型に宣言された破棄処理で drop する ([エフェクトと handler](effects.md)、[Core IR とインタプリタ](core-ir.md))。
 
@@ -33,7 +33,7 @@
 
 ## パラメータ付き handler の状態
 
-パラメータ付き handler の状態は、節の中では普通の引数なので、線形性の検査がそのまま当てはまる。状態が `Lin` なら、各節で `k` の呼び出しに渡すか、`close` / `drop` しなければならない。`drop k` する節でも、状態の後始末を忘れればエラーになる。handle の本体を実行している間の状態の持ち越しは [エフェクトと handler](effects.md) の「パラメータ付き handler」で、構文は [式](expressions.md) の「パラメータ付き handler」で定める。
+パラメータ付き handler の状態は、節の中では普通の引数なので、線形性の検査がそのまま当てはまる。状態が `Lin` なら、各節で `k` の呼び出しに渡すか、`Fs.close` / `drop` しなければならない。`drop k` する節でも、状態の後始末を忘れればエラーになる。handle の本体を実行している間の状態の持ち越しは [エフェクトと handler](effects.md) の「パラメータ付き handler」で、構文は [式](expressions.md) の「パラメータ付き handler」で定める。
 
 ## 線形性の検査パス
 

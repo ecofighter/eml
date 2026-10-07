@@ -71,9 +71,9 @@ main () =
 ```haskell
 grep : String -> String -> <IO> Unit
 grep pat path =
-  let f = open path
-  let (f, text) = read_all f
-  close f
+  let f = Fs.open path
+  let (f, text) = Fs.read_all f
+  Fs.close f
   lines text
     |> filter (String.contains pat)
     |> each (fn line -> println "match: \{line}")
