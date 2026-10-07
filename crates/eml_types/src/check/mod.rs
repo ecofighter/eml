@@ -192,6 +192,7 @@ pub(crate) fn check_body(
             .instantiations
             .insert(expr, Instantiation { decl: *decl, args });
     }
+    types.masks = typing.masks;
     let own_vars = OwnVars {
         lin: own.lin,
         mult: own.mult,

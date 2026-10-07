@@ -206,8 +206,8 @@ fn a_closed_callee_row_is_included_in_a_larger_row() {
     let mut table = Table::new(&context);
     let io_effect = table.lang.io;
     let io = Row::closed(vec![Label::plain(io_effect)]);
-    assert_eq!(table.include_row(&Row::pure(), &io), Ok(()));
-    assert_eq!(table.include_row(&io, &io), Ok(()));
+    assert_eq!(table.include_row(&Row::pure(), &io), Ok(Vec::new()));
+    assert_eq!(table.include_row(&io, &io), Ok(Vec::new()));
     assert_eq!(
         table.include_row(&io, &Row::pure()),
         Err(UnifyError::MissingEffects(vec![io_effect]))
@@ -228,8 +228,8 @@ fn a_rigid_callee_row_needs_the_same_variable_in_the_ambient_row() {
         labels: vec![Label::plain(io)],
         tail: Tail::Var(e),
     };
-    assert_eq!(table.include_row(&callee, &wider), Ok(()));
-    assert_eq!(table.include_row(&callee, &callee.clone()), Ok(()));
+    assert_eq!(table.include_row(&callee, &wider), Ok(Vec::new()));
+    assert_eq!(table.include_row(&callee, &callee.clone()), Ok(Vec::new()));
     assert_eq!(
         table.include_row(&callee, &Row::closed(vec![Label::plain(io)])),
         Err(UnifyError::MissingRowVar("e".to_string()))
@@ -262,7 +262,7 @@ fn a_rigid_callee_row_extends_a_flexible_ambient_row() {
         labels: vec![],
         tail: Tail::Var(e),
     };
-    assert_eq!(table.include_row(&callee, &ambient), Ok(()));
+    assert_eq!(table.include_row(&callee, &ambient), Ok(Vec::new()));
     let resolved = table.resolve_row(&ambient);
     assert_eq!(resolved.labels, vec![Label::plain(io)]);
     assert_eq!(resolved.tail, Tail::Var(e));
@@ -342,17 +342,20 @@ fn an_error_row_is_included_and_includes_any_row() {
     let context = test_context();
     let mut table = Table::new(&context);
     let io = table.lang.io;
-    assert_eq!(table.include_row(&Row::error(), &Row::pure()), Ok(()));
+    assert_eq!(
+        table.include_row(&Row::error(), &Row::pure()),
+        Ok(Vec::new())
+    );
     assert_eq!(
         table.include_row(&Row::closed(vec![Label::plain(io)]), &Row::error()),
-        Ok(())
+        Ok(Vec::new())
     );
     let e = table.fresh_rigid_row("e");
     let rigid = Row {
         labels: vec![],
         tail: Tail::Var(e),
     };
-    assert_eq!(table.include_row(&rigid, &Row::error()), Ok(()));
+    assert_eq!(table.include_row(&rigid, &Row::error()), Ok(Vec::new()));
 }
 
 #[test]

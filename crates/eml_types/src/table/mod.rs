@@ -191,6 +191,8 @@ pub(crate) enum UnifyError {
     },
     /// 継続の状態の欄が、状態のない handler と状態のある handler で食い違う。
     StateSlot,
+    /// 呼び出し先の row が明示したエフェクトを、同じ包含の `mask` でも飛ばす必要がある (E2008)。
+    MaskConflict(EffectId),
 }
 
 struct TyVarInfo {

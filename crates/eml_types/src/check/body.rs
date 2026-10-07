@@ -1,6 +1,8 @@
+use std::collections::HashMap;
+
 use eml_diagnostics::{Diagnostic, FileId, Label, TextRange};
 use eml_hir::{
-    Body, Closure, ConstructorId, ExprId, ExprKind, Function, Literal, LocalId, MatchArm,
+    Body, Closure, ConstructorId, EffectId, ExprId, ExprKind, Function, Literal, LocalId, MatchArm,
     OperationId, PatId, PatKind, Program, Res, Stmt, TypeRefKind,
 };
 use la_arena::ArenaMap;
@@ -42,6 +44,9 @@ pub(crate) struct BodyTyping {
     pub instantiations: ArenaMap<ExprId, (Decl, Vec<Ty>)>,
     /// 呼び出しの row。持ち越しのパスが読む。
     pub calls: ArenaMap<ExprId, CallRows>,
+    /// 呼び出しの矢印ごとの `mask`。キーは呼び出しの式と矢印の番号で、`resume` は矢印 0 である。空の `mask` は入れない
+    /// (docs/spec/types.md の「推論」)。
+    pub masks: HashMap<(ExprId, usize), Vec<EffectId>>,
 }
 
 pub(super) struct BodyCheck<'a, 'c> {
@@ -532,7 +537,13 @@ impl BodyCheck<'_, '_> {
                         index,
                     };
                     self.check_expr(arg, param, origin);
-                    let ok = self.include_call_row(row, body.exprs[id].range, &name, !reported);
+                    let ok = self.include_call_row(
+                        row,
+                        (id, index),
+                        body.exprs[id].range,
+                        &name,
+                        !reported,
+                    );
                     reported |= !ok;
                     ty = ret;
                 }

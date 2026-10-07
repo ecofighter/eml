@@ -211,44 +211,75 @@ impl Table<'_> {
     /// 残りの末尾が推論中の row 変数なら、その row はまだ伸ばせるので、rigid な変数を末尾として受けさせる
     /// (ラムダ本体のように、今の row を推論している途中で呼び出すときのため)。
     /// 閉じた末尾か、別の rigid な変数なら含まれないので `MissingRowVar` にする。末尾が `Error` の呼び出し先は、閉じた末尾と同じく、既知のラベルだけを今の row に含める。
-    pub fn include_row(&mut self, callee: &Row, ambient: &Row) -> Result<(), UnifyError> {
+    /// 含まれるなら、その包含の `mask` を返す。rigid な末尾の手前に余ったラベルだけが `mask` になるので、ほかの末尾では
+    /// 空である (docs/spec/types.md の「推論」)。
+    pub fn include_row(
+        &mut self,
+        callee: &Row,
+        ambient: &Row,
+    ) -> Result<Vec<EffectId>, UnifyError> {
         let callee = self.resolve_row(callee);
         match callee.tail {
-            Tail::Var(tail) if !self.is_rigid_row(tail) => self.unify_row(&callee, ambient),
+            Tail::Var(tail) if !self.is_rigid_row(tail) => {
+                self.unify_row(&callee, ambient)?;
+                Ok(Vec::new())
+            }
             tail => {
                 let rest = self.fresh_row_var();
                 self.unify_row(
                     &Row {
-                        labels: callee.labels,
+                        labels: callee.labels.clone(),
                         tail: Tail::Var(rest),
                     },
                     ambient,
                 )?;
                 let Tail::Var(rigid) = tail else {
-                    return Ok(());
+                    return Ok(Vec::new());
                 };
                 let rest = self.resolve_row(&Row {
                     labels: Vec::new(),
                     tail: Tail::Var(rest),
                 });
                 match rest.tail {
-                    Tail::Var(open) if open == rigid => Ok(()),
+                    Tail::Var(open) if open == rigid => {}
                     // 今の row の末尾が `Error` なら、rigid な変数も受け入れる
-                    Tail::Error => Ok(()),
+                    Tail::Error => return Ok(Vec::new()),
                     Tail::Var(open) if !self.is_rigid_row(open) => self.bind_row(
                         open,
                         Row {
                             labels: Vec::new(),
                             tail: Tail::Var(rigid),
                         },
-                    ),
+                    )?,
                     _ => {
                         let name = self.row_vars[rigid.0 as usize].rigid.clone();
-                        Err(UnifyError::MissingRowVar(name.unwrap_or_default()))
+                        return Err(UnifyError::MissingRowVar(name.unwrap_or_default()));
                     }
                 }
+                self.mask(&callee, &rest)
             }
         }
+    }
+
+    /// rigid な末尾の手前に余ったラベル `rest` のうち、handle できるものが `mask` になる。呼び出し先の `e` の操作は、
+    /// 今の row でそれらの handler をすべて飛ばして `e` の handler に届く。呼び出し先が明示したラベルは今の row の先頭から
+    /// 対になっているので、同じエフェクトを `mask` で飛ばすと、明示したラベルの操作まで飛んでしまう
+    /// (docs/spec/effects.md)。
+    fn mask(&self, callee: &Row, rest: &Row) -> Result<Vec<EffectId>, UnifyError> {
+        let io = self.lang.io;
+        let mask: Vec<EffectId> = rest
+            .labels
+            .iter()
+            .map(|label| label.effect)
+            .filter(|&effect| effect != io)
+            .collect();
+        if let Some(&effect) = mask
+            .iter()
+            .find(|&&effect| callee.labels.iter().any(|label| label.effect == effect))
+        {
+            return Err(UnifyError::MaskConflict(effect));
+        }
+        Ok(mask)
     }
 
     /// 戻り値の側に並ぶ矢印の閉じた row を、新しい row 変数で開く。純粋な関数を、エフェクトを持つ関数型の引数に

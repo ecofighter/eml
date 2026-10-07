@@ -145,6 +145,7 @@ impl BodyCheck<'_, '_> {
     pub(super) fn include_call_row(
         &mut self,
         row: Row,
+        key: (ExprId, usize),
         range: TextRange,
         name: &str,
         report: bool,
@@ -156,7 +157,12 @@ impl BodyCheck<'_, '_> {
             this.table.include_row(&row, &ambient)
         });
         let missing: Vec<String> = match included {
-            Ok(()) => return true,
+            Ok(mask) => {
+                if !mask.is_empty() {
+                    self.typing.masks.insert(key, mask);
+                }
+                return true;
+            }
             Err(UnifyError::MissingEffects(effects)) => effects
                 .iter()
                 .map(|e| self.program.names.effect(*e).to_string())
@@ -192,6 +198,8 @@ impl BodyCheck<'_, '_> {
             }
             // include_row は rigid な row 変数を束縛しない。型引数の単一化の失敗は `EffectArgs` か `Occurs` になるので、
             // `Mismatch` と `StateSlot` は起きない
+            // E2008 の診断を足すまでは、診断を出さずに含まれない呼び出しとして扱う
+            Err(UnifyError::MaskConflict(_)) => return false,
             Err(UnifyError::Mismatch | UnifyError::StateSlot) => unreachable!(
                 "including a row reports only missing effects, a missing row variable, effect arguments or an infinite type"
             ),

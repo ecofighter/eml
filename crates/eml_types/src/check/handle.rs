@@ -223,7 +223,7 @@ impl BodyCheck<'_, '_> {
         }
         self.typing.calls.insert(id, CallRows::Resume(row.clone()));
         let range = self.body.exprs[id].range;
-        self.include_call_row(row, range, "`resume`", true);
+        self.include_call_row(row, (id, 0), range, "`resume`", true);
         result
     }
 

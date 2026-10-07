@@ -17,8 +17,8 @@ use std::collections::HashMap;
 
 use eml_diagnostics::{Diagnostic, FileId, Label, TextRange};
 use eml_hir::{
-    ConstructorId, ExprId, Function, FunctionId, ItemMap, LangItems, LocalId, OperationId, PatId,
-    Program,
+    ConstructorId, EffectId, ExprId, Function, FunctionId, ItemMap, LangItems, LocalId,
+    OperationId, PatId, Program,
 };
 use la_arena::ArenaMap;
 
@@ -111,6 +111,9 @@ pub struct BodyTypes {
     /// パターンのコンストラクタ、handler の節の操作、シグネチャのない参照は記録しない
     /// (docs/implementation/architecture.md の「`eml_types` の内部」)。
     pub instantiations: ArenaMap<ExprId, Instantiation>,
+    /// 呼び出しの矢印ごとの `mask` (docs/spec/types.md の「推論」)。キーは呼び出しの式と矢印の番号で、`resume` は
+    /// 矢印 0 である。Core IR が、その呼び出しで飛ばすエフェクトとして使う。
+    pub masks: HashMap<(ExprId, usize), Vec<EffectId>>,
 }
 
 /// 1つの参照の具体化。
