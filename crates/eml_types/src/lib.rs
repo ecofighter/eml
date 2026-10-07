@@ -63,7 +63,7 @@ pub struct TypedProgram {
     pub bodies: ItemMap<Function, BodyTypes>,
 }
 
-/// スキームを持つ宣言。具体化の記録が、どの宣言のスキームを使うかも指す。
+/// スキームを持つ宣言。Kind の具体化の記録 (`Instance`) と参照ごとの具体化の表が、どの宣言を指すかにも使う。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Decl {
     Function(FunctionId),
@@ -99,6 +99,19 @@ pub struct BodyTypes {
     /// `==` と `!=` の比べ方。キーは演算子を指す呼ばれる側の式である。Core IR が、どの比べる命令にするかを決めるのに
     /// 使う。
     pub equalities: ArenaMap<ExprId, Equality>,
+    /// 式の中のトップレベルの item への参照ごとの具体化。キーは参照を表す `ExprKind::Path` の式である。局所変数の参照、
+    /// パターンのコンストラクタ、handler の節の操作、シグネチャのない参照は記録しない
+    /// (docs/implementation/architecture.md の「`eml_types` の内部」)。
+    pub instantiations: ArenaMap<ExprId, Instantiation>,
+}
+
+/// 1つの参照の具体化。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Instantiation {
+    pub decl: Decl,
+    /// `Shape::rigids` の順 (関数はシグネチャに最初に現れた順、操作はエフェクトの型引数が先、コンストラクタは `data` の
+    /// 頭の型引数の順) に並べた型引数。row 変数と Kind 変数は持たない。
+    pub args: Vec<Type>,
 }
 
 pub fn check(program: &Program) -> (TypedProgram, Vec<Diagnostic>) {

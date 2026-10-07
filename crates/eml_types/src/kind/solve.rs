@@ -82,7 +82,7 @@ fn unattributed_origin(span: Span) -> KindOrigin {
     }
 }
 
-/// SCC の問題を1つの番号の空間に並べ、具体化の記録を展開したもの。
+/// SCC の問題を1つの番号の空間に並べ、Kind の具体化の記録を展開したもの。
 struct Merged {
     lin: Bounds<Linearity>,
     mult: Bounds<Multiplicity>,

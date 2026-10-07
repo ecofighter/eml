@@ -333,7 +333,6 @@ pub(crate) enum ShapeTail {
 pub(crate) struct Instantiated {
     pub ty: Ty,
     /// rigid な型変数を置き換えた新しい変数。`Shape::rigids` の順に並ぶ。
-    #[allow(dead_code)]
     pub args: Vec<Ty>,
     pub lin: Vec<KindVar>,
     pub mult: Vec<KindVar>,

@@ -14,7 +14,9 @@ use crate::kind::{Bound, KindOrigin, KindReason, KindVar, Provenance, Span};
 use crate::shape::{Own, Shape, constructor_shape, operation_shape, signature_shape};
 use crate::table::{Row, Table, TyShape};
 use crate::ty::{EffectLabel, Type};
-use crate::{BodyTypes, Decl, DeclType, TypedProgram, carry, codes, exhaustive, scc, usage};
+use crate::{
+    BodyTypes, Decl, DeclType, Instantiation, TypedProgram, carry, codes, exhaustive, scc, usage,
+};
 
 mod body;
 mod equality;
@@ -182,6 +184,13 @@ pub(crate) fn check_body(
     }
     for (pat, &ty) in typing.pats.iter() {
         types.pats.insert(pat, table.export(ty));
+    }
+    // `exprs` と同じく carry の後で書き出し、後の文の単一化で決まった型引数を取り込む
+    for (expr, (decl, args)) in typing.instantiations.iter() {
+        let args = args.iter().map(|&arg| table.export(arg)).collect();
+        types
+            .instantiations
+            .insert(expr, Instantiation { decl: *decl, args });
     }
     types.equalities = typing.equalities;
     let own_vars = OwnVars {

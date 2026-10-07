@@ -7,7 +7,7 @@ use la_arena::ArenaMap;
 
 use crate::kind::problem::Instance;
 use crate::kind::{KindOrigin, KindReason, Provenance, Span};
-use crate::shape::{Rigids, lower_type};
+use crate::shape::{Instantiated, Rigids, lower_type};
 use crate::table::{Row, Table, Tail, Ty, TyShape, UnifyError};
 use crate::{Decl, codes};
 
@@ -41,6 +41,8 @@ pub(crate) struct BodyTyping {
     pub pats: ArenaMap<PatId, Ty>,
     /// `==` と `!=` の比べ方。`resolve_equalities` が埋める。
     pub equalities: ArenaMap<ExprId, crate::Equality>,
+    /// 参照ごとの具体化。型引数は表の変数のままで、`check_body` が carry の後で書き出す。
+    pub instantiations: ArenaMap<ExprId, (Decl, Vec<Ty>)>,
     /// 呼び出しの row。持ち越しのパスが読む。
     pub calls: ArenaMap<ExprId, CallRows>,
 }
@@ -63,7 +65,7 @@ pub(super) struct BodyCheck<'a, 'c> {
     /// 比べ方をまだ決めていない `==` と `!=` の参照。本体の検査が終わってから `resolve_equalities` が決める。
     pub(super) comparisons: Vec<Comparison>,
     pub(super) typing: BodyTyping,
-    /// 参照の具体化の記録。段2が展開する。
+    /// Kind の具体化の記録 (`Instance`)。段2が展開する。
     pub(super) instances: Vec<Instance>,
     /// 検査中の操作の節。内側の節が後ろに積まれる。
     pub(super) clause_frames: Vec<ClauseFrame>,
@@ -390,21 +392,23 @@ impl BodyCheck<'_, '_> {
         }
     }
 
-    /// トップレベルの値を参照するたびに、宣言の型の形を具体化する。呼び出し先の Kind の制約は複写せず、具体化の記録を
-    /// 残して段2で展開する (docs/spec/types.md の「推論」)。
-    fn instantiate(&mut self, decl: Decl) -> Ty {
-        let signatures = self.signatures;
-        let Some(shape) = signatures.get(decl) else {
-            return self.table.error;
-        };
-        let instance = shape.instantiate(self.table);
+    /// トップレベルの値を参照するたびに、宣言の型の形を具体化する。呼び出し先の Kind の制約は複写せず、Kind の具体化の
+    /// 記録を残して段2で展開する (docs/spec/types.md の「推論」)。シグネチャがなければ `None` である。
+    fn instantiate(&mut self, decl: Decl) -> Option<(Ty, Vec<Ty>)> {
+        let shape = self.signatures.get(decl)?;
+        let Instantiated {
+            ty,
+            args,
+            lin,
+            mult,
+        } = shape.instantiate(self.table);
         self.instances.push(Instance {
             decl,
-            lin: instance.lin,
-            mult: instance.mult,
+            lin,
+            mult,
             origin: self.table.kind_origin(),
         });
-        instance.ty
+        Some((ty, args))
     }
 
     /// `check` の間だけ、作る Kind の制約の由来を設定する。
@@ -428,10 +432,40 @@ impl BodyCheck<'_, '_> {
 
     /// 名前の参照の型。`open` が偽なら、トップレベルの値の戻り値の側の row を開かない。呼び出しが矢印の row を宣言のまま
     /// 記録し、部分適用の残りだけを開くため (docs/spec/effects.md の「継続の多重度と持ち越し規則」)。
+    ///
+    /// 関数と組み込みの参照は、`open` なら、具体化した後に戻り値の側の閉じた row を開く。純粋な関数を、エフェクトを持つ関数型の
+    /// 引数に渡せるようにするため (docs/spec/types.md の「推論」)。局所変数の型は開かない。スキームから複写する Kind
+    /// の制約は、参照した場所を由来にする。
+    ///
+    /// トップレベルの値の参照は、参照ごとの具体化の表に型引数を記録する。M4 と M5 が型ごとの解決に使う
+    /// (docs/implementation/architecture.md の「`eml_types` の内部」)。
     fn path(&mut self, id: ExprId, res: Res, range: TextRange, open: bool) -> Ty {
-        let ty = self.value(res, range, open);
-        let lang = self.program.lang;
-        if let Res::Function(function) = res
+        let program = self.program;
+        let (decl, name) = match res {
+            Res::Local(local) => {
+                return self
+                    .typing
+                    .locals
+                    .get(local)
+                    .copied()
+                    .unwrap_or(self.table.error);
+            }
+            Res::Function(function) => (Decl::Function(function), &program[function].name),
+            Res::Constructor(constructor) => {
+                (Decl::Constructor(constructor), &program[constructor].name)
+            }
+            Res::Operation(operation) => (Decl::Operation(operation), &program[operation].name),
+        };
+        let instantiated = self.with_kind_origin(range, KindReason::Passed(name.clone()), |this| {
+            this.instantiate(decl)
+        });
+        let Some((ty, args)) = instantiated else {
+            return self.table.error;
+        };
+        self.typing.instantiations.insert(id, (decl, args));
+        let ty = if open { self.table.open_spine(ty) } else { ty };
+        let lang = program.lang;
+        if let Decl::Function(function) = decl
             && (function == lang.eq || function == lang.ne)
         {
             self.comparisons.push(Comparison {
@@ -441,42 +475,6 @@ impl BodyCheck<'_, '_> {
             });
         }
         ty
-    }
-
-    /// 関数と組み込みの参照は、`open` なら、具体化した後に戻り値の側の閉じた row を開く。純粋な関数を、エフェクトを持つ関数型の
-    /// 引数に渡せるようにするため (docs/spec/types.md の「推論」)。局所変数の型は開かない。スキームから複写する Kind
-    /// の制約は、参照した場所を由来にする。
-    fn value(&mut self, res: Res, range: TextRange, open: bool) -> Ty {
-        let program = self.program;
-        let ty = match res {
-            Res::Local(local) => {
-                return self
-                    .typing
-                    .locals
-                    .get(local)
-                    .copied()
-                    .unwrap_or(self.table.error);
-            }
-            Res::Function(function) => {
-                let name = program[function].name.clone();
-                self.with_kind_origin(range, KindReason::Passed(name), |this| {
-                    this.instantiate(Decl::Function(function))
-                })
-            }
-            Res::Constructor(constructor) => {
-                let name = program[constructor].name.clone();
-                self.with_kind_origin(range, KindReason::Passed(name), |this| {
-                    this.instantiate(Decl::Constructor(constructor))
-                })
-            }
-            Res::Operation(operation) => {
-                let name = program[operation].name.clone();
-                self.with_kind_origin(range, KindReason::Passed(name), |this| {
-                    this.instantiate(Decl::Operation(operation))
-                })
-            }
-        };
-        if open { self.table.open_spine(ty) } else { ty }
     }
 
     /// 呼ばれる値や期待する型がまだ推論用の変数のとき、それを関数型に決める。
@@ -717,9 +715,10 @@ impl BodyCheck<'_, '_> {
         expected: Ty,
     ) {
         let range = self.body.pats[pat].range;
-        let mut ty = self.with_kind_origin(range, KindReason::Unified, |this| {
+        let instantiated = self.with_kind_origin(range, KindReason::Unified, |this| {
             this.instantiate(Decl::Constructor(ctor))
         });
+        let mut ty = instantiated.map_or(self.table.error, |(ty, _)| ty);
         let mut fields = Vec::new();
         for _ in args {
             match self.table.shape(ty).clone() {

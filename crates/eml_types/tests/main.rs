@@ -7,6 +7,7 @@ mod check;
 mod data;
 mod effects;
 mod exhaustive;
+mod instantiations;
 mod linearity;
 mod modules;
 mod rows;
