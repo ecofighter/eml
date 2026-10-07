@@ -115,6 +115,19 @@ fn an_apply_frame_releases_its_arguments_and_the_rest_of_the_continuation() {
 }
 
 #[test]
+fn a_mask_frame_releases_the_rest_of_the_continuation() {
+    let mut heap = Heap::new();
+    let end = bottom(&mut heap);
+    let next = frame(&mut heap, vec![], end);
+    let mask = heap.alloc(Payload::Frame(Frame::Mask {
+        effects: vec![0],
+        next,
+    }));
+    heap.decref(mask).unwrap();
+    assert!(heap.live_objects().is_empty());
+}
+
+#[test]
 fn decref_to_zero_frees_the_object() {
     let mut heap = Heap::new();
     let s = string(&mut heap, "a");
@@ -230,7 +243,9 @@ fn segment(heap: &Heap, top: ObjRef) -> Vec<ObjRef> {
     let mut frames = vec![top];
     loop {
         let next = match heap.get(*frames.last().unwrap()).unwrap() {
-            Payload::Frame(Frame::Return { next, .. } | Frame::Apply { next, .. }) => *next,
+            Payload::Frame(
+                Frame::Return { next, .. } | Frame::Apply { next, .. } | Frame::Mask { next, .. },
+            ) => *next,
             Payload::Frame(Frame::Handler {
                 link: Some(link), ..
             }) => link.next,
@@ -299,6 +314,56 @@ fn take_or_copy_copies_the_segment_of_a_shared_continuation() {
     // 退避した文字列と節のクロージャは、両方の区間から参照される
     assert!(!heap.is_unique(s).unwrap());
     assert!(!heap.is_unique(clause).unwrap());
+    let copy = heap.alloc(Payload::Continuation {
+        top: copied_top,
+        handler: copied_handler,
+    });
+    heap.decref(copy).unwrap();
+    heap.decref(k).unwrap();
+    assert!(heap.live_objects().is_empty());
+}
+
+#[test]
+fn copying_a_segment_copies_its_mask_frames() {
+    let mut heap = Heap::new();
+    let s = string(&mut heap, "saved");
+    let detached = handler(&mut heap, vec![], None);
+    let below_mask = frame(&mut heap, vec![(0, Value::Obj(s))], detached);
+    // `mask` 付きの呼び出しの中で操作したので、区間の途中に `Mask` フレームが入る
+    let mask = heap.alloc(Payload::Frame(Frame::Mask {
+        effects: vec![0],
+        next: below_mask,
+    }));
+    let top = frame(&mut heap, vec![], mask);
+    let k = heap.alloc(Payload::Continuation {
+        top,
+        handler: detached,
+    });
+    heap.dup(k).unwrap();
+    let Payload::Continuation {
+        top: copied_top,
+        handler: copied_handler,
+    } = heap.take_or_copy(k).unwrap()
+    else {
+        panic!("not a continuation");
+    };
+    let original = segment(&heap, top);
+    let copied = segment(&heap, copied_top);
+    assert_eq!(original, [top, mask, below_mask, detached]);
+    assert_eq!(copied.len(), 4);
+    assert_eq!(copied[3], copied_handler);
+    assert!(copied.iter().all(|frame| !original.contains(frame)));
+    assert_eq!(
+        heap.get(copied[1]).unwrap(),
+        &Payload::Frame(Frame::Mask {
+            effects: vec![0],
+            next: copied[2],
+        })
+    );
+    for &frame in original.iter().chain(&copied) {
+        assert!(heap.is_unique(frame).unwrap());
+    }
+    assert!(!heap.is_unique(s).unwrap());
     let copy = heap.alloc(Payload::Continuation {
         top: copied_top,
         handler: copied_handler,

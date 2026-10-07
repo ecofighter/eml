@@ -210,6 +210,7 @@ dependencies = [
  "eml_core_ir",
  "eml_runtime",
  "eml_test_support",
+ "insta",
 ]
 
 [[package]]

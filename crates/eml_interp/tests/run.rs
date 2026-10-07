@@ -24,6 +24,29 @@ fn main() {
     .unwrap_or_else(|error| panic!("{error}"))
 }
 
+/// 手書きの Core IR を verifier に通してから `debug_heap` 付きで実行し、出力を返す。
+fn run_text(text: &str) -> String {
+    let program = eml_core_ir::parse(text).unwrap_or_else(|error| panic!("{error}"));
+    eml_core_ir::verify(&program).unwrap_or_else(|error| panic!("{error}"));
+    let (stdout, result) = execute(program, true);
+    result.unwrap();
+    stdout
+}
+
+/// `mask` 付きの呼び出しの中の操作は、呼び出しより外側の同じエフェクトの handler を、`mask` に並ぶ数だけ飛ばす。呼び出しの中で
+/// 設けた handler は飛ばさない (docs/spec/core-ir.md)。`ir/mask.core` は `Ask` の handler を2つ積み、内側の
+/// handler の下で、非末尾の `mask` 付きの呼び出しで `ask` し (`outer`)、`mask` 付きの呼び出しの中で設けた3つめの
+/// handler に `ask` し (`new`)、末尾の `mask` 付きの呼び出しで `ask` する (`outer`)。内側の handler は `inner` を返す。
+#[test]
+fn a_mask_skips_outer_handlers_only() {
+    let text = include_str!("ir/mask.core");
+    insta::assert_snapshot!(run_text(text), @"
+    outer
+    new
+    outer
+    ");
+}
+
 #[test]
 fn debug_heap_reports_leaks() {
     assert_eq!(

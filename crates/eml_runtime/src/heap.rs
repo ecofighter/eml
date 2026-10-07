@@ -113,6 +113,9 @@ pub enum Frame {
     },
     /// 戻った関数値に、余った引数を適用する (docs/spec/core-ir.md の eval/apply)。
     Apply { args: Vec<Value>, next: ObjRef },
+    /// `mask` 付きの呼び出しの間、外側の同じエフェクトの handler を飛ばす。`effects` はエフェクトの番号の昇順の多重集合で、
+    /// 値を所有しない (docs/implementation/architecture.md の「継続のフレーム」)。
+    Mask { effects: Vec<u32>, next: ObjRef },
     /// 継続の最下部にある `IO` の組み込みの handler (docs/implementation/architecture.md の「継続のフレーム」)。
     Io,
     /// handle の handler。節はエフェクトの操作の順に並ぶ。`link` が `None` なのは、継続に捕まえられて handle の
@@ -313,6 +316,7 @@ impl Heap {
                 Payload::Frame(
                     Frame::Return { next, .. }
                     | Frame::Apply { next, .. }
+                    | Frame::Mask { next, .. }
                     | Frame::Handler {
                         link: Some(Link { next, .. }),
                         ..
@@ -422,6 +426,10 @@ fn copy(payload: &Payload) -> Payload {
             args: args.clone(),
             next: *next,
         }),
+        Payload::Frame(Frame::Mask { effects, next }) => Payload::Frame(Frame::Mask {
+            effects: effects.clone(),
+            next: *next,
+        }),
         Payload::Frame(Frame::Io) => Payload::Frame(Frame::Io),
         Payload::Frame(Frame::Handler {
             effect,
@@ -444,7 +452,9 @@ fn copy(payload: &Payload) -> Payload {
 /// 写したフレームの次を、写した次のフレームにする。切り離された handler フレームだけが次を持たない。
 fn set_next(payload: &mut Payload, below: Option<ObjRef>) -> Result<(), HeapError> {
     match payload {
-        Payload::Frame(Frame::Return { next, .. } | Frame::Apply { next, .. }) => {
+        Payload::Frame(
+            Frame::Return { next, .. } | Frame::Apply { next, .. } | Frame::Mask { next, .. },
+        ) => {
             *next = below.ok_or(HeapError::BrokenSegment)?;
         }
         Payload::Frame(Frame::Handler { link, .. }) => match (link, below) {
@@ -473,6 +483,7 @@ fn children(payload: &Payload, work: &mut Vec<ObjRef>) {
             work.extend(args.iter().filter_map(object));
             work.push(*next);
         }
+        Payload::Frame(Frame::Mask { effects: _, next }) => work.push(*next),
         Payload::Frame(Frame::Handler {
             effect: _,
             clauses,

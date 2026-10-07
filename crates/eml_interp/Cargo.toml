@@ -15,6 +15,7 @@ eml_runtime.workspace = true
 
 [dev-dependencies]
 eml_test_support = { workspace = true, features = ["run"] }
+insta.workspace = true
 
 [[test]]
 name = "integration"

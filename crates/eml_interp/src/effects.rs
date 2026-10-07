@@ -4,19 +4,33 @@ use crate::error::Fault;
 use crate::machine::{Machine, Step};
 
 impl Machine<'_> {
-    /// 継続の連結リストを先頭から読み、同じエフェクトの一番内側の handler フレームを探す
-    /// (docs/implementation/architecture.md の「継続のフレーム」)。
+    /// 継続の連結リストを先頭から読み、同じエフェクトの一番内側の handler フレームを探す。`Mask` フレームを越えるたびに、
+    /// その中の同じエフェクトの数だけ外側の handler を飛ばす (docs/implementation/architecture.md の「継続のフレーム」)。
     pub(crate) fn find_handler(&self, effect: u32) -> Result<ObjRef, Fault> {
         let mut current = self.cont;
+        let mut skip = 0usize;
         loop {
             let Payload::Frame(frame) = self.heap.get(current).map_err(Fault::Heap)? else {
                 return Err(Fault::Internal("the continuation is not a frame"));
             };
             current = match frame {
-                Frame::Handler { effect: other, .. } if *other == effect => return Ok(current),
-                Frame::Handler { link, .. } => {
+                Frame::Handler { effect: other, .. } if *other == effect && skip == 0 => {
+                    return Ok(current);
+                }
+                Frame::Handler {
+                    effect: other,
+                    link,
+                    ..
+                } => {
+                    if *other == effect {
+                        skip -= 1;
+                    }
                     link.ok_or(Fault::Internal("a detached handler is in the continuation"))?
                         .next
+                }
+                Frame::Mask { effects, next } => {
+                    skip += effects.iter().filter(|&&masked| masked == effect).count();
+                    *next
                 }
                 Frame::Return { next, .. } | Frame::Apply { next, .. } => *next,
                 Frame::Io => return Err(Fault::Internal("an operation without a handler")),

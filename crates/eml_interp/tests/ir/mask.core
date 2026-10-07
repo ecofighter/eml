@@ -1,0 +1,36 @@
+effect Main.Ask { ask/1 }
+fn main() {
+  let t0 = handle Main.Ask(&outer_body, ()) {ask: &outer_ask} return &done
+  return t0
+}
+fn outer_body(u0) {
+  tailcall handle Main.Ask(&inner_body, ()) {ask: &inner_ask} return &done
+}
+fn inner_body(u0) {
+  let t1 = mask[Main.Ask] apply &asker(())
+  let t2 = mask[Main.Ask] apply &rehandle(())
+  tailcall mask[Main.Ask] apply &asker(())
+}
+fn asker(u0) {
+  let s1^ = perform Main.Ask.ask(())
+  let t2 = perform println(s1)
+  return t2
+}
+fn rehandle(u0) {
+  tailcall handle Main.Ask(&asker, ()) {ask: &new_ask} return &done
+}
+fn outer_ask(u0, k1^, s2) {
+  let s3^ = const "outer"
+  tailcall resume k1(s3, s2)
+}
+fn inner_ask(u0, k1^, s2) {
+  let s3^ = const "inner"
+  tailcall resume k1(s3, s2)
+}
+fn new_ask(u0, k1^, s2) {
+  let s3^ = const "new"
+  tailcall resume k1(s3, s2)
+}
+fn done(x0, s1) {
+  return x0
+}

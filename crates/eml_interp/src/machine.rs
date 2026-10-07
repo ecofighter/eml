@@ -106,7 +106,7 @@ impl<'p> Machine<'p> {
             }
             // 呼び出し元のフレームを積まない。verifier が、この時点で所有している参照が残っていないことを保証するので、
             // 今の環境はそのまま捨ててよい (docs/spec/core-ir.md)
-            CExpr::TailCall { call, mask: _ } => return self.call(call, None),
+            CExpr::TailCall { call, mask } => return self.call(call, mask, None),
             CExpr::Join {
                 join: _,
                 params: _,
@@ -161,17 +161,13 @@ impl<'p> Machine<'p> {
                 }
                 Value::Unit
             }
-            Rhs::Call {
-                call,
-                mask: _,
-                saved,
-            } => {
+            Rhs::Call { call, mask, saved } => {
                 let ret = ReturnPoint {
                     bind: var,
                     control: body,
                     saved,
                 };
-                return self.call(call, Some(ret));
+                return self.call(call, mask, Some(ret));
             }
             Rhs::MakeClosure(function, args) => {
                 let args = self.atoms(args)?;
@@ -238,9 +234,23 @@ impl<'p> Machine<'p> {
 
     /// 呼び出す。`ret` は戻った値を受ける変数と再開する位置で、`None` ならフレームを積まない (末尾呼び出し)。
     /// 引数はフレームを積んだ後に読む。`push_frame` は環境のスロットを読むだけで書き換えないので、順序は結果に影響しない。
-    fn call(&mut self, call: &Call, ret: Option<ReturnPoint<'p>>) -> Result<Step, Fault> {
+    fn call(
+        &mut self,
+        call: &Call,
+        mask: &[u32],
+        ret: Option<ReturnPoint<'p>>,
+    ) -> Result<Step, Fault> {
         if let Some(ret) = ret {
             self.push_frame(ret)?;
+        }
+        // 戻りのフレームの上に積むので、呼び出し先が値を返すと先に外れる。末尾呼び出しでは戻りのフレームの代わりになる。
+        // `resume` も、今の継続を読む前に積む (docs/implementation/architecture.md の「継続のフレーム」)
+        if !mask.is_empty() {
+            let frame = Frame::Mask {
+                effects: mask.to_vec(),
+                next: self.cont,
+            };
+            self.cont = self.heap.alloc(Payload::Frame(frame));
         }
         match call {
             Call::Direct(callee, args) => {
@@ -440,6 +450,8 @@ impl<'p> Machine<'p> {
                         Applied::Value(result) => value = result,
                     }
                 }
+                // 値はそのまま外側へ返す
+                Frame::Mask { effects: _, next } => self.cont = next,
                 Frame::Io => {
                     if let Value::Obj(obj) = value {
                         self.heap.decref(obj).map_err(Fault::Heap)?;
