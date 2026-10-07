@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 use eml_syntax::{SyntaxElement, SyntaxNode};
 use eml_test_support::{parse, short, short_text, with_diagnostics};
 

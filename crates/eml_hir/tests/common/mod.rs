@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 use eml_test_support::{lower, short, short_text, with_diagnostics};
 
 /// HIR の表示と、構文と HIR の診断を表示と同じ順に並べたもの。

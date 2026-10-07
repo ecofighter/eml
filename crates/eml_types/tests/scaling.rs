@@ -1,11 +1,11 @@
-//! 型検査の時間が、関数の数にほぼ比例して伸びることを確かめる (docs/implementation/testing.md の「性能のテスト」)。時間を
+//! 型検査の時間が、プログラムの大きさにほぼ比例して伸びることを確かめる (docs/implementation/testing.md の「性能のテスト」)。時間を
 //! 測るので release ビルドで流す: `cargo test --release -p eml_types --test integration scaling:: -- --ignored`
 
 use std::time::{Duration, Instant};
 
 use eml_test_support::lower_clean;
 
-/// 小さいほうの関数の数。大きいほうはこの4倍にする。
+/// 小さいほうの大きさ。形によって関数か `let` の数である。大きいほうはこの4倍にする。
 const SMALL: usize = 2000;
 /// 4倍の大きさに対して許す時間の比。ばらつきとハッシュ表の伸びの分の余裕を見込む。
 const MAX_RATIO: f64 = 6.0;
@@ -97,7 +97,7 @@ fn assert_linear(generate: fn(usize) -> String) {
     let ratio = large.as_secs_f64() / small.as_secs_f64();
     assert!(
         ratio <= MAX_RATIO,
-        "{SMALL} functions took {small:?} and {} took {large:?} (ratio {ratio:.1})",
+        "size {SMALL} took {small:?} and size {} took {large:?} (ratio {ratio:.1})",
         SMALL * 4
     );
 }
