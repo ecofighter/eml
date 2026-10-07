@@ -264,7 +264,7 @@ impl Table<'_> {
     /// rigid な末尾の手前に余ったラベル `rest` のうち、handle できるものが `mask` になる。呼び出し先の `e` の操作は、
     /// 今の row でそれらの handler をすべて飛ばして `e` の handler に届く。呼び出し先が明示したラベルは今の row の先頭から
     /// 対になっているので、同じエフェクトを `mask` で飛ばすと、明示したラベルの操作まで飛んでしまう
-    /// (docs/spec/effects.md)。
+    /// (docs/spec/effects.md の「健全性」)。
     fn mask(&self, callee: &Row, rest: &Row) -> Result<Vec<EffectId>, UnifyError> {
         let io = self.lang.io;
         let mask: Vec<EffectId> = rest

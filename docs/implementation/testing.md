@@ -82,6 +82,7 @@
 - `switch` は `switch x { #0 -> .., #1(a) -> .., _ -> .. }` や `switch x { 1 -> .., 2 -> .., _ -> .. }` と書き、`String` の case は `"a" -> ..` と書く
 - `perform` は `perform <エフェクト名>.<操作名>(…)` と書く。エフェクトの名前は `.` を含みうるが、操作の名前は含まないので、`parse` は最後の `.` でエフェクトの名前と操作の名前に分ける (`perform Report.Csv.Parse.next(t1)`)。 `perform` の `resumable` はテキストに書かず、`parse` が先頭のエフェクトの行の `never` から埋める。
 - `handle` は `handle Ask(c1, s2) {ask: c3} return c4` と書く。括弧の中は本体の関数と状態の初期値である。`resume` は `resume k1(v2, s3)` と書き、括弧の中は値と次の状態である。
+- 呼び出しの `mask` は、`let` の右辺の呼び出しと `tailcall` の後の呼び出しの前に、`mask[…]` で書く (`let t2^ = mask[State] apply cb0(())`、`let t1^ = mask[State] call twice(1, cb0)`、`let t3 = mask[State] resume k1(t2, ())`、`tailcall mask[Report.Csv.Parse] f(c0)`)。エフェクトは先頭のエフェクトの行の名前で書き、入口のモジュールのエフェクトは修飾せず (`State`)、ほかのモジュールのエフェクトは修飾する (`Report.Csv.Parse`)。番号の順に並べ、飛ばす数だけ同じ名前を繰り返す (`mask[State, State]`)。エフェクトの表にない番号は、操作と同じく `#N` で書き、`pretty` も `#N` で表示する。並びの順と `IO` は `parse` ではなく verifier が確かめる。`mask` のない呼び出しには何も書かない。`mask[` の `[` で、関数 `mask` の直接の呼び出し (`tailcall mask(1)`) と区別する。`handle` と `perform` の前の `mask` は、`parse` が誤りにする。
 - 行の字下げは読まない。連なりの区切りは、`}` と、連なりを終える命令 (`return`、`jump`、`tailcall`、`switch`) で決まる。`handle` の `return` の節は `}` と同じ行に書く。次の行の `return` は次の命令として読む。
 - 操作は名前のほかに `#N` (操作の番号) でも書ける。エフェクトにない番号も書けるので、誤りを含む IR を verifier に渡すテストに使う。`pretty` も、エフェクトにない番号の操作を `#N` で表示する。
 - `handle` の節は、エフェクトの操作の順に書く。`handle` の中で `#N` と書いた節は、`N` がその節の 0 から数えた位置と同じでなければならない。

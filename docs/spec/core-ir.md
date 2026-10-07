@@ -40,6 +40,13 @@
 - テキストの形 ([テスト戦略](../implementation/testing.md) の「Core IR のテキストの形」) は関数とエフェクトを名前で引くので、モジュールをまたいで名前が重なってはいけない。入口以外のモジュールでは、関数、操作を包む関数、コンストラクタを包む関数、エフェクトの表の名前に `モジュール名.` を付ける (`Report.Csv.parse`、`con$Report.Csv.Row`)。Prelude もこの規則に含める (`Prelude.not`、ラムダは `Prelude.>>$lambda0`、`op$Prelude.open`、`effect Prelude.IO`)。入口のモジュールの名前には付けない (`parse`、`op$get`)。intrinsic を包む関数 (`builtin$`) は Prelude の intrinsic にしか作らず重ならないので、付けない。
 - 変換は、`main` を `()` で呼ぶ入口の関数を作る。等式に引数のない `main` は関数値を返すので、入口の関数が返った値に `()` を適用する。
 - `handle`、`perform`、`resume` は呼び出しの一種である。呼び出しと同じく後で使う変数を退避し、末尾の位置ではフレームを積まない。
+- 呼び出し (`Rhs::Call` の `Call::Direct`、`Call::Apply`、`Call::Resume`) と末尾呼び出し (`CExpr::TailCall`) は `mask` を持つ ([エフェクトと handler](effects.md) の「handler の意味」)。`mask` は、呼び出しの間に飛ばすエフェクトの多重集合で、エフェクトの番号の昇順に並べ、飛ばす数だけ同じ番号を繰り返す。空なら `mask` なしである。`IO` は入れない。`Call::Handle` と `Call::Perform` は `mask` を持たない。`handle` の本体の中の呼び出しは、持ち上げた本体の関数の中の呼び出しとして `mask` を持つ。
+- 変換は、型検査が呼び出しの矢印ごとに記録した `mask` ([型と Kind](types.md) の「推論」) を、Core IR の呼び出しに付ける。操作のないエフェクトは handler を持てず、飛ばす handler もないので落とす。
+  - 引数がそろう既知の関数の呼び出し (`Call::Direct`) は、最後の矢印の `mask` を使う。前の矢印は部分適用で、エフェクトを起こさないためである。同じ理由で、引数が足りずにクロージャを作るときは `mask` を付けない。intrinsic、操作、コンストラクタの呼び出しには、型検査が `mask` を記録しない。
+  - 余った引数を `Call::Apply` で渡すときは、矢印ごとの `mask` が変わる境目で `apply` を分ける。`mask` は1つの Core IR の呼び出し全体に効くので、違う `mask` の矢印を1つの `apply` にまとめると、片方の矢印に余計な `mask` が効くためである。
+  - `mask` が効くのは呼び出しそのものだけで、引数の評価には効かない。ANF では引数を呼び出しより前に評価するので、これは形から決まる。
+- `mask` は、末尾かどうかと独立である。`mask` 付きの呼び出しも、末尾の位置では末尾呼び出しにする。`simplify` は、`mask` を保ったまま末尾呼び出しにする。`mask` は値を持たないので、生存解析、Perceus、`saved` の規則は変わらない。
+- verifier は、どちらの度合いでも、`mask` のエフェクトの番号がエフェクトの表にあること、昇順に並んでいること、`IO` を含まないこと、`mask` が `handle` と `perform` に付いていないことを確かめる。
 - handle の本体、操作の節、`return` の節は、ラムダと同じく、捕まえた変数を先頭の引数に持つ関数に持ち上げ、そのクロージャか関数の値を `handle` に渡す。本体の関数は `()` を受ける。節はエフェクトの操作の順に並べる。操作を値として使うときは、`perform` を呼ぶだけの関数で包む。
 - パラメータ付き handler は脱糖しない。Core IR では、すべての handler を状態のある handler として扱い、状態のない handler は状態を `()` にする。`handle` はつねに状態の初期値を、`resume` はつねに次の状態を持つ。状態のない handler の2引数の `resume k v` は、`resume k v ()` に変換する。この `()` は Core IR の中の決まりで、表面の構文では状態のない `k` に3引数の `resume` を書けない ([エフェクトと handler](effects.md) の「パラメータ付き handler」)。節のクロージャはつねに状態を最後の引数で受け、`return` の節はつねに本体の値と状態を受ける。呼び出しの規約を1つにして、インタプリタと将来の evidence passing で状態の有無を場合分けしないためである。`return` の節はつねにある。省略した handler は、HIR が `| return x -> x` の節 (状態のある handler では、状態を `_` で捨てる `| return x _ -> x`) を合成するので、本体の値をそのまま返し、状態の引数は Perceus が捨てる (boxed の状態だけ decref する)。省略した節は状態を `_` で捨てるので、状態の型は `Unr` である ([式](expressions.md) の「パラメータ付き handler」)。
 - メモリ管理は Perceus 方式の参照カウントである。`Lin` 値は静的に一意なので、RC 操作を付けない。
@@ -68,8 +75,9 @@
 
 - `jump` は同じ関数の中で制御を移すだけで、フレームを積まない。実行は入口の関数から始める。
 - `handle` は、節のクロージャか関数の値を handler として設け、本体のクロージャか関数の値に `()` を適用する。本体が値を返したら、handler を外し、その値と今の状態を `return` の節に渡す。
-- `perform` は、同じエフェクトの一番内側の handler を探し、`perform` からその handler までの継続を切り出して、`handle` の外側で節を呼ぶ。`once` と `multi` の操作は切り出した継続を `k` として渡し、`never` の操作は継続をその場で捨てる。操作が再開するかどうかは `perform` 自身が持つ (`resumable`)。インタプリタはエフェクトの表を引かない。verifier は、`resumable` がエフェクトの表と一致することを確かめる。
+- `perform` は、同じエフェクトの一番内側の handler を探し (`mask` が飛ばす handler は除く)、`perform` からその handler までの継続を切り出して、`handle` の外側で節を呼ぶ。`once` と `multi` の操作は切り出した継続を `k` として渡し、`never` の操作は継続をその場で捨てる。操作が再開するかどうかは `perform` 自身が持つ (`resumable`)。インタプリタはエフェクトの表を引かない。verifier は、`resumable` がエフェクトの表と一致することを確かめる。
 - `resume k v s` は、`k` の handler を今の継続の上に戻して状態を `s` にし、`k` を切り出した `perform` の結果として `v` を返す。`multi` の `k` は何度でも再開でき、どの再開も切り出したときの継続から始まる。
+- `mask` 付きの呼び出しは、呼び出しの間に起きた操作が handler を探すとき、呼び出しより外側にある同じエフェクトの handler を、`mask` に含まれる数だけ飛ばす。呼び出しの中で設けた handler は飛ばさない。`resume` の `mask` は、再開した継続の中の操作が `k` の handler より外側を探すときに効く。実行時の表し方は [コンパイラの構成](../implementation/architecture.md) の「継続のフレーム」にある。
 - handler は、つねに状態を持つ。`handle` は初期値を状態にし、`perform` は今の状態を節の最後の引数として渡す。`return` の節はつねにある。省略した節は、HIR が `| return x -> x` として合成する。状態のある handler では、状態を `_` で捨てる `| return x _ -> x` として合成する ([式](expressions.md) の「handler」と「パラメータ付き handler」)。
 - `drop k` と `never` の操作による中断は、継続が捕まえていた値を1回ずつ解放する。`Lin` の値の破棄処理はオブジェクトの解放そのものなので、捕まっていた `File` は、この解放で読み出し口が捨てられて閉じる ([ランタイム](runtime.md))。
 - `IO` は、すべての `handle` の外側にある組み込みの handler が扱う。標準出力は `run` に渡された `OutputSink` に書く。テストで出力を捕まえるためである ([ランタイム](runtime.md))。
