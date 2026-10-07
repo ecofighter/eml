@@ -1,0 +1,20 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: rendered
+input_file: tests/ui/check-fail/types/mask_conflict.em
+---
+[E2008] Error: `both` performs `Log` itself and also passes `Log` through its row variable to an outer handler
+    ╭─[ check-fail/types/mask_conflict.em:11:16 ]
+    │
+ 11 │ outer action = both action
+    │                ─────┬─────  
+    │                     ╰─────── the `Log` of this call cannot be told apart
+    │
+    ├─[ check-fail/types/mask_conflict.em:11:16 ]
+    │
+ 10 │ outer : (Unit -> <e> a) -> <Log, Log | e> a
+    │         ─────────────────┬─────────────────  
+    │                          ╰─────────────────── this row lists `Log` before the row variable
+    │ 
+    │ Note: the call's own `Log` goes to the innermost `Log` handler, but the `Log` of its row variable must skip it
+────╯
