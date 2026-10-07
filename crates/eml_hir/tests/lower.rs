@@ -746,3 +746,59 @@ fn a_missing_clause_is_suggested_with_the_qualifier_of_the_existing_clause() {
       help: add `| put _ k -> ...`
     ");
 }
+
+#[test]
+fn an_ambiguous_clause_head_does_not_report_missing_clauses() {
+    // 曖昧な節の先頭や壊れた import から来た節の先頭は、扱うエフェクトのどの操作を指すか分からない。書いてある節を
+    // 「節がない」と E1013 で重ねて報告しない
+    let modules = [
+        (
+            "A.em",
+            "pub effect State where\n  get : Unit -> Int\n  put : Int -> Unit",
+        ),
+        ("B.em", "pub effect Other where\n  get : Unit -> Int"),
+    ];
+    let entry = "import A (State(..))\nimport B (Other(..))\nimport Missing (Gone(..))\n\nf : Unit -> Int\nf () =\n  handle 0 with\n    | get () k -> resume k 1\n    | put _ k -> resume k ()\n\ng : Unit -> Int\ng () =\n  handle 0 with\n    | gone () k -> resume k 1\n    | put _ k -> resume k ()";
+    insta::assert_snapshot!(module_report(entry, &modules), @r"
+    E1026 test.em 3:8 cannot find module `Missing`
+      test.em 3:8 there is no file `Missing.em`
+    E1028 test.em 8:7 `get` is ambiguous
+      test.em 8:7 this name refers to more than one definition
+      test.em 1:1 one of the definitions is imported here
+      test.em 2:1 one of the definitions is imported here
+    ");
+}
+
+#[test]
+fn import_lists_explain_constructors_and_name_operators() {
+    // 並びの大文字の名前は型かエフェクトだけを指すので、コンストラクタは E1002 にして、型と一緒に取り込む形を help で示す。
+    // 見つからない `(op)` は、本体で使ったときと同じく演算子と呼ぶ
+    let modules = [(
+        "A.em",
+        "pub data Shape = | Circle Int | Square Int\n\npub (<+>) : Int -> Int -> Int\na <+> b = a",
+    )];
+    insta::assert_snapshot!(module_report("import A (Circle, (<->), (<+>))", &modules), @r"
+    E1002 test.em 1:11 cannot find type or effect `Circle` in module `A`
+      test.em 1:11 not found in this module
+      help: import the constructor with `Shape(..)`
+    E1001 test.em 1:20 cannot find operator `<->` in module `A`
+      test.em 1:20 not found in this module
+    ");
+}
+
+#[test]
+fn a_constructor_operator_brings_its_public_fixity_through_type_imports() {
+    // `T(..)` で取り込んだ中置のコンストラクタも、`pub` の fixity を連れてくる。既定の `infixl 9` なら
+    // `(x :+ y) :+ E` に組むところを、`infixr 5` で右に組む
+    let modules = [("A.em", "pub infixr 5 :+\npub data P = | E | Int :+ P")];
+    let entry = "import A (P(..))\n\nf : P -> Int\nf p = match p with | x :+ y :+ E -> x | _ -> 0";
+    insta::assert_snapshot!(lower_files_text(entry, &modules), @r"
+    -- Main
+    f : P -> Int
+    f p#0 = (match p#0 with | x#1 A.:+ (y#2 A.:+ A.E) -> x#1 | _ -> 0)
+    -- A
+    data P
+      | E
+      | Int :+ P
+    ");
+}

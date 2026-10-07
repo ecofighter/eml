@@ -255,62 +255,66 @@ enum Visit {
 
 /// import の循環 (E1027)。モジュールの番号の順に、import を宣言の順に深さ優先でたどり、たどっている途中のモジュールに
 /// 戻る import を、循環を閉じる import として報告する。報告した後も名前解決を続ける (docs/spec/modules.md の
-/// 「誤りからの回復」)。
+/// 「誤りからの回復」)。import の鎖がいくら長くてもスタックを使い切らないよう、再帰せずに自前のスタックでたどる。
 fn check_cycles(modules: &[LoadedModule], diagnostics: &mut Vec<Diagnostic>) {
     let mut state = vec![Visit::New; modules.len()];
-    let mut path = Vec::new();
+    // たどっている途中のモジュールと、次に見る import の番号。モジュールの並びが循環の経路になる
+    let mut path: Vec<(usize, usize)> = Vec::new();
     for start in 0..modules.len() {
-        if state[start] == Visit::New {
-            visit(modules, start, &mut state, &mut path, diagnostics);
-        }
-    }
-}
-
-fn visit(
-    modules: &[LoadedModule],
-    module: usize,
-    state: &mut [Visit],
-    path: &mut Vec<usize>,
-    diagnostics: &mut Vec<Diagnostic>,
-) {
-    state[module] = Visit::Open;
-    path.push(module);
-    let loaded = &modules[module];
-    for (import, target) in loaded.tree.imports.iter().zip(&loaded.targets) {
-        let ImportTarget::Module(target) = *target else {
+        if state[start] != Visit::New {
             continue;
-        };
-        let target = index(target);
-        match state[target] {
-            Visit::New => visit(modules, target, state, path, diagnostics),
-            Visit::Open => {
-                let start = path
-                    .iter()
-                    .position(|&open| open == target)
-                    .expect("an open module is on the path");
-                let cycle: Vec<String> = path[start..]
-                    .iter()
-                    .chain([&target])
-                    .map(|&m| format!("`{}`", modules[m].name))
-                    .collect();
-                diagnostics.push(
-                    Diagnostic::error(
-                        codes::IMPORT_CYCLE,
-                        format!("importing `{}` makes an import cycle", modules[target].name),
-                        Label::new(
-                            loaded.tree.file,
-                            import.range,
-                            "this import closes the cycle",
-                        ),
-                    )
-                    .with_note(format!("the cycle is {}", cycle.join(" -> "))),
-                );
+        }
+        state[start] = Visit::Open;
+        path.push((start, 0));
+        while let Some(&(module, next)) = path.last() {
+            let loaded = &modules[module];
+            let (Some(import), Some(&target)) =
+                (loaded.tree.imports.get(next), loaded.targets.get(next))
+            else {
+                path.pop();
+                state[module] = Visit::Done;
+                continue;
+            };
+            if let Some(top) = path.last_mut() {
+                top.1 += 1;
             }
-            Visit::Done => {}
+            let ImportTarget::Module(target) = target else {
+                continue;
+            };
+            let target = index(target);
+            match state[target] {
+                Visit::New => {
+                    state[target] = Visit::Open;
+                    path.push((target, 0));
+                }
+                Visit::Open => {
+                    let start = path
+                        .iter()
+                        .position(|&(open, _)| open == target)
+                        .expect("an open module is on the path");
+                    let cycle: Vec<String> = path[start..]
+                        .iter()
+                        .map(|&(m, _)| m)
+                        .chain([target])
+                        .map(|m| format!("`{}`", modules[m].name))
+                        .collect();
+                    diagnostics.push(
+                        Diagnostic::error(
+                            codes::IMPORT_CYCLE,
+                            format!("importing `{}` makes an import cycle", modules[target].name),
+                            Label::new(
+                                loaded.tree.file,
+                                import.range,
+                                "this import closes the cycle",
+                            ),
+                        )
+                        .with_note(format!("the cycle is {}", cycle.join(" -> "))),
+                    );
+                }
+                Visit::Done => {}
+            }
         }
     }
-    path.pop();
-    state[module] = Visit::Done;
 }
 
 /// 読み込みの段の番号のモジュールの ID。`lower` もモジュールを同じ順に置く。
@@ -574,11 +578,17 @@ impl ModuleScope {
             return None;
         }
         if !unusable {
+            // 本体で使った位置の E1001 と同じく、`(op)` は演算子と呼ぶ。値の名前は文字か `_` で始まる
+            let what = if name.starts_with(|c: char| c.is_alphabetic() || c == '_') {
+                "value"
+            } else {
+                "operator"
+            };
             diagnostics.push(not_in_module(
                 codes::UNDEFINED_NAME,
                 file,
                 range,
-                "value",
+                what,
                 name,
                 &[&self.name],
             ));
@@ -595,14 +605,21 @@ impl ModuleScope {
         diagnostics: &mut Vec<Diagnostic>,
     ) -> Option<(TypeItem, bool)> {
         let Some(definition) = self.types.get(name).and_then(|names| names.first()) else {
-            diagnostics.push(not_in_module(
+            let diagnostic = not_in_module(
                 codes::UNDEFINED_TYPE,
                 file,
                 range,
                 "type or effect",
                 name,
                 &[&self.name],
-            ));
+            );
+            // コンストラクタは型と一緒に `T(..)` で取り込む (docs/spec/modules.md の「import」)
+            diagnostics.push(match self.constructor_owner(name) {
+                Some(owner) => {
+                    diagnostic.with_help(format!("import the constructor with `{owner}(..)`"))
+                }
+                None => diagnostic,
+            });
             return None;
         };
         if !definition.public {
@@ -614,6 +631,28 @@ impl ModuleScope {
             ));
         }
         Some((definition.item, definition.public))
+    }
+
+    /// コンストラクタ `name` を持つ型の名前。
+    fn constructor_owner(&self, name: &str) -> Option<&str> {
+        let constructor = self
+            .values
+            .get(name)?
+            .iter()
+            .find(|definition| matches!(definition.item, Value::Constructor(_)))?
+            .item;
+        let (&owner, _) = self
+            .parts
+            .iter()
+            .find(|(_, parts)| parts.iter().any(|&(_, part)| part == constructor))?;
+        self.types
+            .iter()
+            .find(|(_, definitions)| {
+                definitions
+                    .iter()
+                    .any(|definition| definition.item == owner)
+            })
+            .map(|(name, _)| name.as_str())
     }
 }
 

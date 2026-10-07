@@ -21,6 +21,8 @@ struct Clauses {
     seen: Vec<(OperationId, TextRange)>,
     /// 操作の節を書いたか。解決できなかった節も含める。
     any_operation: bool,
+    /// 先頭が曖昧か壊れた import から来た節がある。その節はどの操作を指すか分からないので、節のない操作を報告しない。
+    unknown_operation: bool,
     clauses: Vec<OpClause>,
     ret: Option<ReturnClause>,
 }
@@ -108,6 +110,7 @@ impl BodyLowering<'_> {
         let op = match self.items.operation(at.name) {
             Resolved::Found(op) => op,
             other => {
+                out.unknown_operation |= matches!(other, Resolved::Ambiguous(_) | Resolved::Silent);
                 if let Some(diagnostic) =
                     unresolved(&self.items, self.file, NameKind::Operation, &at, other)
                 {
@@ -279,6 +282,7 @@ impl BodyLowering<'_> {
     /// 節があってエフェクトが決まらないときは、報告済みなので何も言わない。
     fn missing_clauses(&mut self, keyword: TextRange, clauses: &Clauses) {
         match clauses.effect {
+            Some(_) if clauses.unknown_operation => {}
             Some((effect_id, _)) => {
                 let effect = self.effect(effect_id);
                 let missing: Vec<&Operation> = effect

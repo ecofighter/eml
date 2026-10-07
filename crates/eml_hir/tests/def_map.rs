@@ -516,3 +516,26 @@ fn a_user_unit_qualifies_the_empty_record() {
     );
     assert_eq!(lowered.program.names.unit(), "Prelude.Unit");
 }
+
+/// `M0` が `M1` を、`M1` が `M2` を import する、`self.0` 個のモジュールの鎖。
+struct Chain(usize);
+
+impl eml_hir::ModuleSource for Chain {
+    fn read(&self, path: &eml_hir::ModulePath) -> Result<String, eml_hir::ReadError> {
+        let index: usize = path.dotted()[1..].parse().expect("a module of the chain");
+        Ok(if index + 1 < self.0 {
+            format!("import M{}\n", index + 1)
+        } else {
+            String::new()
+        })
+    }
+}
+
+#[test]
+fn a_long_import_chain_does_not_overflow_the_stack() {
+    // 循環の検査を再帰で深さ優先にたどると、鎖の長さだけスタックを使う
+    let (loaded, diagnostics) = eml_hir::load("test.em", "import M0\n", &Chain(100_000));
+    assert!(diagnostics.is_empty(), "{diagnostics:?}");
+    let (_, diagnostics) = eml_hir::def_map(&loaded.modules);
+    assert!(diagnostics.is_empty(), "{diagnostics:?}");
+}
