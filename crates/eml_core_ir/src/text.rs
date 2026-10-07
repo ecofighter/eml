@@ -624,7 +624,8 @@ impl<'t> Parser<'t> {
             "perform" if keyword => {
                 let line = self.line();
                 let word = self.word()?;
-                let (effect, op) = word.split_once('.').ok_or_else(|| {
+                // エフェクトの名前はモジュールの名前で修飾されて `.` を含むが、操作の名前は含まない (docs/spec/core-ir.md)
+                let (effect, op) = word.rsplit_once('.').ok_or_else(|| {
                     error(line, format!("expected `Effect.operation`, found `{word}`"))
                 })?;
                 let effect = self.effect_id(effect, line)?;
@@ -988,6 +989,14 @@ mod tests {
             "effect Ask { ask/1, never stop/1 }\n\
              fn pick(b0, s1^) {\n  join j0(t3^) [s1] {\n    let t4^ = prim ++(t3, s1)\n    return t4\n  }\n  switch b0 {\n    #0 ->\n      let s2^ = const \"none\"\n      jump j0(s2)\n    #1 ->\n      dup s1\n      jump j0(s1)\n  }\n}\n\
              fn entry$main() {\n  let c0^ = closure pick(#1)\n  let t1 = perform Ask.ask(()) [c0]\n  tailcall apply c0(-3)\n}\n",
+        );
+    }
+
+    #[test]
+    fn an_effect_of_a_nested_module_round_trips() {
+        round_trip(
+            "effect A.B.E { op/0 }\n\
+             fn f() {\n  let t0 = perform A.B.E.op()\n  return t0\n}\n",
         );
     }
 
