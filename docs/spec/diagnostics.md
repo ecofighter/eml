@@ -32,7 +32,7 @@ struct Fix {
 
 ## 診断の順
 
-`eml check` と `eml run` は、診断を (ファイル、primary の開始位置、番号) の順に並べて表示する。3つとも同じなら、段階が出した順を保つ。各段階は診断の順を約束しない。並べ替えは `eml_diagnostics::sort_diagnostics` の1か所で行い、CLI と結合テストのパイプライン (`eml_test_support`) がそれを呼ぶ。
+`eml check` と `eml run` は、診断を (ファイル、primary の開始位置、番号) の順に並べて表示する。3つとも同じなら、段階が出した順を保つ。各段階は診断の順を約束しない。並べ替えは `eml_diagnostics::sort_diagnostics` の1か所で行い、パイプラインを組む `eml_cli::Session` (CLI と結合テストが通る) と、構文の段だけを通す `eml_test_support::parse` がそれを呼ぶ。
 
 ## 番号の範囲
 
