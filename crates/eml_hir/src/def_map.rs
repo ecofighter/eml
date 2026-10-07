@@ -799,7 +799,7 @@ pub(crate) fn duplicate(
 }
 
 /// 修飾か import の並びで引いた名前が、そのモジュールにない (E1001、E1002)。合流した修飾子では、すべてのモジュールを並べる
-/// (docs/spec/modules.md の「新しい診断」)。
+/// (docs/spec/modules.md の「名前の解決」)。
 pub(crate) fn not_in_module(
     code: ErrorCode,
     file: FileId,

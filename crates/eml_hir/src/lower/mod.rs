@@ -332,7 +332,7 @@ impl<'a> NameUse<'a> {
     }
 }
 
-/// 名前が見つからない (E1001、E1002)。修飾した名前には、修飾子のモジュールを書く (docs/spec/modules.md の「新しい診断」)。
+/// 名前が見つからない (E1001、E1002)。修飾した名前には、修飾子のモジュールを書く (docs/spec/modules.md の「名前の解決」)。
 pub(super) fn not_found(
     items: &Resolver<'_>,
     file: FileId,

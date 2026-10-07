@@ -4,5 +4,6 @@
 mod common;
 
 mod api;
+mod citations;
 mod cli;
 mod ui;
