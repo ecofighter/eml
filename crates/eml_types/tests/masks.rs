@@ -87,7 +87,8 @@ fn a_label_twice_is_masked_twice() {
 
 #[test]
 fn a_lambda_body_masks_like_a_function_body() {
-    // `get ()` でラムダの row の先頭に `State Int` が入ってから `cb ()` を呼ぶので、`mask` は本体の `cb ()` に付き、外側の呼び出しには付かない
+    // `get ()` でラムダの row の先頭に `State Int` が入ってから `cb ()` を呼ぶので、`mask` は本体の `cb ()` に付き、
+    // 外側の呼び出しには付かない
     let text = format!(
         "{STATE}run : (Unit -> <e> a) -> <State Int | e> a\nrun cb = (fn () -> let n = get () in cb ()) ()\n"
     );
@@ -96,7 +97,8 @@ fn a_lambda_body_masks_like_a_function_body() {
 
 #[test]
 fn an_unconstrained_lambda_is_masked_at_its_call() {
-    // ラムダの row は本体の `cb ()` で `<e>` に決まるので、`mask` は外側の呼び出しに付く。ラムダの中で飛ばしても外側で飛ばしても、届く handler は同じである
+    // ラムダの row は本体の `cb ()` で `<e>` に決まるので、`mask` は外側の呼び出しに付く。ラムダの中で飛ばしても
+    // 外側で飛ばしても、届く handler は同じである
     let text = format!(
         "{STATE}run : (Unit -> <e> a) -> <State Int | e> a\nrun cb = (fn () -> cb ()) ()\n"
     );
