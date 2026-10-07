@@ -66,7 +66,8 @@ pub(super) struct BodyCheck<'a, 'c> {
     pub(super) clause_frames: Vec<ClauseFrame>,
 }
 
-/// 検査中の操作の節。E2007 の fix が、`resume` を囲む節の `k` と状態の変数を引く (docs/spec/diagnostics.md の E2007)。
+/// 検査中の操作の節。E2007 の fix が、`resume` を囲む節の `k` と状態の変数を引く
+/// (docs/implementation/diagnostics.md の E2007)。
 pub(super) struct ClauseFrame {
     pub k: Option<LocalId>,
     /// 状態の引数が変数の束縛 (型の明示を含む) なら、その変数。
@@ -99,7 +100,7 @@ impl BodyCheck<'_, '_> {
     }
 
     /// 本体の row が入る矢印の部分の型の範囲。シグネチャの型を、引数の数より1つ少ない回数だけ戻り値の側にたどる。
-    /// たどれないときと引数が1つ以下のときは、シグネチャの型全体を指す (docs/spec/diagnostics.md の E2002)。
+    /// たどれないときと引数が1つ以下のときは、シグネチャの型全体を指す (docs/implementation/diagnostics.md の E2002)。
     pub(super) fn body_arrow_range(&self) -> TextRange {
         let Some(signature) = &self.function.signature else {
             return self.function.name_range;
@@ -793,7 +794,7 @@ impl BodyCheck<'_, '_> {
                 Label::new(self.file(), range, "infinite type"),
             )),
             // `resume` の外で欄が食い違った。`k` をラムダに渡した後などである。`resume` の引数の数を直す場所は
-            // 分からないので、食い違いを見つけた式を指し、fix を付けない (docs/spec/diagnostics.md の E2007)
+            // 分からないので、食い違いを見つけた式を指し、fix を付けない (docs/implementation/diagnostics.md の E2007)
             Err(UnifyError::StateSlot) => self.diagnostics.push(
                 Diagnostic::error(
                     codes::RESUME_STATE_MISMATCH,

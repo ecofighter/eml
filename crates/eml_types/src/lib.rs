@@ -47,9 +47,9 @@ pub mod codes {
     pub const NON_EXHAUSTIVE_MATCH: ErrorCode = ErrorCode(4001);
     pub const NON_EXHAUSTIVE_EQUATION: ErrorCode = ErrorCode(4002);
     pub const REFUTABLE_PATTERN: ErrorCode = ErrorCode(4003);
-    /// 重大度は Warning である (docs/spec/diagnostics.md の「網羅性の診断」)。
+    /// 重大度は Warning である (docs/spec/diagnostics.md の「割り当て済みの番号」)。
     pub const UNREACHABLE_ARM: ErrorCode = ErrorCode(4004);
-    /// 重大度は Warning である (docs/spec/diagnostics.md の「網羅性の診断」)。
+    /// 重大度は Warning である (docs/spec/diagnostics.md の「割り当て済みの番号」)。
     pub const UNREACHABLE_EQUATION: ErrorCode = ErrorCode(4005);
 }
 

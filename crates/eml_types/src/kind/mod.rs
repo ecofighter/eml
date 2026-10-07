@@ -51,7 +51,8 @@ pub(crate) struct Span {
     pub range: TextRange,
 }
 
-/// Kind の制約の由来。制約が破れたときに E3001〜E3005 が指す場所と理由である (docs/spec/diagnostics.md の「線形性の診断」)。
+/// Kind の制約の由来。制約が破れたときに E3001〜E3005 が指す場所と理由である
+/// (docs/implementation/diagnostics.md の「線形性の診断」)。
 /// `reason` の中の位置は、どれも由来を作った本体の中にあり、`span` と同じファイルである。ただし `CarriedThrough` の `inner` は自分の `Span` を持ち、呼ばれた関数のファイルを指しうる。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct KindOrigin {
@@ -125,7 +126,7 @@ pub(crate) enum KindReason {
         call: CallKind,
     },
     /// スキームから複写した持ち越しの制約。由来の範囲は参照した位置である。`inner` は、呼んだ関数の中で値をまたがせている
-    /// 位置の要約である (docs/spec/diagnostics.md の E3006)。
+    /// 位置の要約である (docs/implementation/diagnostics.md の E3006)。
     CarriedThrough {
         name: String,
         inner: Option<CarriedInner>,
@@ -140,7 +141,8 @@ pub(crate) enum KindReason {
 
 impl KindReason {
     /// 同じ範囲の由来を並べる順。種類は宣言の順で、同じ種類は中身の名前と位置を順に比べる。中身の違う由来は鍵も違うので、
-    /// 同じ値の持ち越しの違反から報告する1件を、制約が並んだ順に左右されずに選べる (docs/spec/diagnostics.md の E3006)。
+    /// 同じ値の持ち越しの違反から報告する1件を、制約が並んだ順に左右されずに選べる
+    /// (docs/implementation/diagnostics.md の E3006)。
     pub fn order_key(&self) -> (u8, Vec<KeyPart>) {
         match self {
             KindReason::UsedMoreThanOnce {
@@ -257,7 +259,7 @@ pub(crate) enum CarriedValue {
 }
 
 impl CarriedValue {
-    /// 同じ値を見分ける範囲。同じ値の違反は1件だけ報告する (docs/spec/diagnostics.md の E3006)。
+    /// 同じ値を見分ける範囲。同じ値の違反は1件だけ報告する (docs/implementation/diagnostics.md の E3006)。
     pub fn key(&self) -> TextRange {
         match self {
             CarriedValue::Local { binding, .. } | CarriedValue::ReturnCapture { binding, .. } => {
@@ -312,7 +314,7 @@ impl CallKind {
 }
 
 /// `CarriedThrough` が指す、呼んだ関数の中の持ち越しの1段分。報告は1段しかたどらないので入れ子にしない。入れ子にすると、
-/// 呼び出しの段数だけ由来が深くなり、複写のたびにその深さの時間がかかる (docs/spec/diagnostics.md の E3006)。
+/// 呼び出しの段数だけ由来が深くなり、複写のたびにその深さの時間がかかる (docs/implementation/diagnostics.md の E3006)。
 /// 呼ばれた関数の中を指すので、呼んだ側の由来とは別のファイルでありうる。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct CarriedInner {

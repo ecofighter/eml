@@ -57,7 +57,7 @@ let n = (read_all f).1            -- エラー: 残りの .0 (File) が Lin
 let (f, text) = read_all f        -- OK
 ```
 
-- 違反は線形性の診断 (E3xxx) とし、分解パターンへの書き換えを help と fix で提案する ([診断](diagnostics.md))
+- 違反は線形性の診断 (E3xxx) とし、分解パターンへの書き換えを help と fix で提案する ([診断の出し方](../implementation/diagnostics.md) の「線形性の診断」)
 - `{ p with age = p.age + 1 }` は `p` を2回使うので、`p` の row 変数に `Unr` の制約が付く。`Lin` なレコードにも使える形は次のとおり
 
   ```haskell

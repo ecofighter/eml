@@ -259,7 +259,7 @@ fn an_omitted_return_clause_of_a_handler_with_a_state_discards_the_state() {
     assert_eq!(ret.source, eml_hir::ClauseSource::Omitted);
     let state = ret.state().unwrap();
     assert_eq!(body.pats[state].kind, eml_hir::PatKind::Wildcard);
-    // 合成した `_` は初期値を指す (docs/spec/diagnostics.md の E3004)
+    // 合成した `_` は初期値を指す (docs/implementation/diagnostics.md の E3004)
     assert_eq!(body.pats[state].range, body.exprs[init].range);
 }
 

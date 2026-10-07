@@ -185,7 +185,7 @@ impl Merged {
 
     /// 前の SCC の宣言のスキームを、具体化した変数について足す。参照した位置の由来 (`Passed`) は、呼んだ関数の中の
     /// 持ち越しを指す `CarriedThrough` にする。呼んだ側の違反が、呼んだ関数の中の呼び出しを指せるようにするため
-    /// (docs/spec/diagnostics.md の E3006)。
+    /// (docs/implementation/diagnostics.md の E3006)。
     fn copy_scheme(
         &mut self,
         scheme: &KindScheme,
@@ -634,7 +634,8 @@ pub(crate) fn residual_of<T: Level>(
 }
 
 /// 宣言 `member` のスキームに残す持ち越しの制約 (docs/spec/types.md の「推論」)。両側を下向きにたどり、出会った残す成分の
-/// 自分の変数と定数に置き換える。同じ組は1つにまとめ、由来は位置が最も前のものを残す (docs/spec/diagnostics.md の E3006)。
+/// 自分の変数と定数に置き換える。同じ組は1つにまとめ、由来は位置が最も前のものを残す
+/// (docs/implementation/diagnostics.md の E3006)。
 /// 由来ごとに残すと、多相な関数を重ねるたびに制約が増え、同じ違反を何度も報告するためである。
 fn carry_residual(
     carries: &[Carry],

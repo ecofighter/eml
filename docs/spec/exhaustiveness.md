@@ -27,7 +27,7 @@ is_error _ = False
 
 ## 診断
 
-各誤りの重大度と、診断が指す場所は [診断](diagnostics.md) の「網羅性の診断」で定める。番号の範囲は E4xxx である。
+各誤りの番号と重大度は [診断](diagnostics.md) の「割り当て済みの番号」で定める。診断が指す場所は [診断の出し方](../implementation/diagnostics.md) の「網羅性の診断」にある。番号の範囲は E4xxx である。
 
 ## 範囲外
 

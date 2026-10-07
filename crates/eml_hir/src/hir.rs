@@ -117,7 +117,7 @@ pub struct Function {
     /// 最初の等式の名前の位置。等式がなければシグネチャの名前の位置。
     pub name_range: TextRange,
     /// シグネチャの名前の位置。網羅されていない等式の診断 (E4002) は、ここを primary にする
-    /// (docs/spec/diagnostics.md の「網羅性の診断」)。
+    /// (docs/implementation/diagnostics.md の「網羅性の診断」)。
     pub signature_name_range: Option<TextRange>,
     /// 等式の関数名の位置。ソースの順である。網羅されていない等式の診断 (E4002) の secondary が指す。
     pub equation_ranges: Vec<TextRange>,
@@ -360,8 +360,8 @@ pub struct Expr {
     pub range: TextRange,
 }
 
-/// ブロックの最後の文の先頭と、その行の字下げ。消費漏れの fix が `drop x` の行を入れる (docs/spec/diagnostics.md の
-/// 「線形性の診断」)。
+/// ブロックの最後の文の先頭と、その行の字下げ。消費漏れの fix が `drop x` の行を入れる
+/// (docs/implementation/diagnostics.md の「線形性の診断」)。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LineStart {
     pub offset: TextSize,
@@ -414,7 +414,7 @@ pub enum ExprKind {
         arg: ExprId,
         /// 書いたとおりの値の引数の終わり。値を括弧で囲むと、HIR は括弧を落とすので `arg` の範囲は `)` の前で終わる。
         /// E2007 の fix は書いた引数の位置に状態を足したり消したりするので、括弧を含む終わりを持っておく
-        /// (docs/spec/diagnostics.md の E2007)。
+        /// (docs/implementation/diagnostics.md の E2007)。
         arg_end: TextSize,
         /// 3引数の `resume` の次の状態。
         state: Option<ExprId>,
@@ -434,7 +434,7 @@ pub enum ExprKind {
 }
 
 /// `match` の由来。等式から作った `match` は、網羅性の検査が `match` 式ではなく等式として報告する
-/// (docs/spec/diagnostics.md の「網羅性の診断」)。
+/// (docs/implementation/diagnostics.md の「網羅性の診断」)。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MatchSource {
     Expr,

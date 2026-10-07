@@ -171,7 +171,8 @@ fn internal_builtins_cannot_be_named() {
 
 #[test]
 fn a_block_records_where_its_last_line_starts() {
-    // fix が最後の文の前に行を入れるので、その位置と字下げを持つ (docs/spec/diagnostics.md の「線形性の診断」)
+    // fix が最後の文の前に行を入れるので、その位置と字下げを持つ
+    // (docs/implementation/diagnostics.md の「線形性の診断」)
     let module = module("f : Int -> Int\nf x =\n  let y = x\n  y");
     let body = body(&module, "f");
     let ExprKind::Block { last_line, .. } = &body.exprs[body.root].kind else {

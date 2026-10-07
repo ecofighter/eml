@@ -140,7 +140,7 @@ fn an_undefined_effect_row_does_not_pass_the_body_effects_to_callers() {
 #[test]
 fn a_missing_effect_points_at_the_arrow_of_the_body() {
     // 本体のエフェクトは、引数の数だけ矢印をたどった最後の矢印の row に入るので、その矢印を指す
-    // (docs/spec/diagnostics.md の E2002)
+    // (docs/implementation/diagnostics.md の E2002)
     let text = "f : Int -> Int -> Unit\nf a b = println \"x\"";
     insta::assert_snapshot!(check_text(text), @"
     f : Int -> Int -> Unit

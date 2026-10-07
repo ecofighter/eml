@@ -9,7 +9,7 @@ use crate::table::{Row, Ty, UnifyError};
 
 use super::body::BodyCheck;
 
-/// 型の不一致の由来。診断のラベルと note を決める (docs/spec/diagnostics.md の「型エラー」)。
+/// 型の不一致の由来。診断のラベルと note を決める (docs/implementation/diagnostics.md の「型エラー」)。
 #[derive(Debug, Clone)]
 pub(super) enum Origin {
     Argument {
@@ -52,7 +52,7 @@ pub(super) enum Origin {
     Inferred,
 }
 
-/// 今の row がどこから来たか。E2002 の言い方を決める (docs/spec/diagnostics.md)。
+/// 今の row がどこから来たか。E2002 の言い方を決める (docs/implementation/diagnostics.md の E2002)。
 #[derive(Debug, Clone)]
 pub(super) enum AmbientSource {
     Signature,
@@ -237,7 +237,7 @@ impl BodyCheck<'_, '_> {
                     format!("{name} performs {quoted}, which this lambda does not allow"),
                     Label::new(file, range, format!("this call performs {quoted}")),
                 );
-                // ラムダの row を決めた場所を secondary にする (docs/spec/diagnostics.md の E2002)
+                // ラムダの row を決めた場所を secondary にする (docs/implementation/diagnostics.md の E2002)
                 match origin {
                     Origin::Argument {
                         callee,
@@ -397,7 +397,7 @@ pub(super) fn count(n: usize, word: &str) -> String {
 
 const LINEAR_NOTE: &str = "linear values, such as files, the continuation of a `once` operation and closures that capture one, must be used exactly once";
 
-/// 線形な値の誤った使い方。破れた Kind の制約の由来から番号と指す場所を決める (docs/spec/diagnostics.md の
+/// 線形な値の誤った使い方。破れた Kind の制約の由来から番号と指す場所を決める (docs/implementation/diagnostics.md の
 /// 「線形性の診断」)。表に当たらない由来 (受け渡し、単一化、捕獲) は E3001 にする。
 pub(super) fn linear_misuse(program: &Program, origin: &KindOrigin) -> Diagnostic {
     let file = origin.span.file;
@@ -548,7 +548,7 @@ fn misused(origin: &KindOrigin, message: String, label: String) -> Diagnostic {
 
 const CARRY_NOTE: &str = "a continuation of a `multi` operation can be resumed more than once, and each resumption would use the value again";
 
-/// E3006。呼び出しをまたいで持っている値 (docs/spec/diagnostics.md の「線形性の診断」)。
+/// E3006。呼び出しをまたいで持っている値 (docs/implementation/diagnostics.md の「線形性の診断」)。
 fn carried_across(
     program: &Program,
     span: Span,
@@ -632,7 +632,8 @@ fn carried_across(
     diagnostic.with_note(CARRY_NOTE).with_help(help)
 }
 
-/// E3006。呼んだ関数のスキームから複写した持ち越しの制約が、呼んだ側で破れた (docs/spec/diagnostics.md の「線形性の診断」)。
+/// E3006。呼んだ関数のスキームから複写した持ち越しの制約が、呼んだ側で破れた
+/// (docs/implementation/diagnostics.md の「線形性の診断」)。
 /// secondary は、呼んだ関数の中で値をまたがせている位置で、1段だけたどる。
 fn carried_through(span: Span, name: &str, inner: Option<&CarriedInner>) -> Diagnostic {
     let mut diagnostic = Diagnostic::error(

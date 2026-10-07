@@ -287,7 +287,7 @@ fn declaration_problem(
 }
 
 /// Kind の制約の違反は、線形な値の誤った使い方である (docs/spec/linearity.md)。ファイルと位置の順に並べ、同じ範囲の由来は `KindReason::order_key` の順に並べる。
-/// 同じ値の持ち越しの違反は、呼び出しの位置が最も前のものだけを報告する (docs/spec/diagnostics.md の E3006)。
+/// 同じ値の持ち越しの違反は、呼び出しの位置が最も前のものだけを報告する (docs/implementation/diagnostics.md の E3006)。
 fn report_violations(program: &Program, mut origins: Vec<KindOrigin>) -> Vec<Diagnostic> {
     origins.sort_by_cached_key(|origin| {
         (

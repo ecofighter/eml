@@ -1,4 +1,4 @@
-//! 線形性の診断 (docs/spec/diagnostics.md の「線形性の診断」)。番号、文言、指す場所を確かめる。
+//! 線形性の診断 (docs/implementation/diagnostics.md の「線形性の診断」)。番号、文言、指す場所を確かめる。
 
 use eml_test_support::{check, fixes, full};
 
@@ -848,7 +848,8 @@ fn values_held_while_the_initial_state_is_evaluated_are_carried() {
         .iter()
         .map(|d| d.code.to_string())
         .collect();
-    // `f` は初期値の `choose ()` をまたぐ。報告は最も前の呼び出しの1件だけである (docs/spec/diagnostics.md の E3006)
+    // `f` は初期値の `choose ()` をまたぐ。報告は最も前の呼び出しの1件だけである
+    // (docs/implementation/diagnostics.md の E3006)
     assert_eq!(codes, ["E3006"]);
 }
 
