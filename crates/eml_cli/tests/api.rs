@@ -201,3 +201,10 @@ fn files_that_are_not_imported_are_not_read() {
     std::fs::remove_dir_all(&dir).unwrap();
     assert!(session.check().is_empty());
 }
+
+/// 読み込んだセッションを、別のスレッドに渡して使える (docs/implementation/architecture.md の「CLI と lib API」)。
+#[test]
+fn session_is_send_and_sync() {
+    fn assert_send_sync<T: Send + Sync>() {}
+    assert_send_sync::<Session>();
+}

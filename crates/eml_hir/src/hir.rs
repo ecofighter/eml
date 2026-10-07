@@ -148,8 +148,6 @@ pub type RowVarId = Idx<RowVarDecl>;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TypeVarDecl {
     pub name: String,
-    /// シグネチャで最初に現れた位置。
-    pub range: TextRange,
 }
 
 /// シグネチャの row 変数。型変数とは別の名前空間に置く (docs/spec/types.md の「推論」)。

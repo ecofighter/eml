@@ -8,7 +8,6 @@ use la_arena::Arena;
 use super::ItemLowering;
 use super::types::{TypeLowering, Vars};
 use crate::codes;
-use crate::def_map::duplicate;
 use crate::hir::{
     EffectDef, EffectId, EffectKind, Generics, ItemId, OpMultiplicity, Operation, RowRef,
     Signature, TypeRef, TypeRefId, TypeRefKind, TypeVarDecl, TypeVarId,
@@ -21,29 +20,17 @@ impl ItemLowering<'_> {
     /// 変換する。
     pub(super) fn declare_effects(&mut self, items: &[EffectItem], effects: &mut Arena<EffectDef>) {
         for (k, item) in items.iter().enumerate() {
-            let kind = match item.syntax.extern_keyword() {
+            let kind = match item.extern_keyword {
                 None => EffectKind::Defined,
                 Some(keyword) => EffectKind::Extern(self.extern_row(
-                    &keyword,
+                    keyword,
                     &item.name,
                     ExternEffect::from_name,
                 )),
             };
             let mut generics = Generics::default();
-            for param in item.syntax.params().map(|name| name.token()) {
-                let text = param.text();
-                let range = param.text_range();
-                if let Some((_, first)) =
-                    generics.type_vars.iter().find(|(_, var)| var.name == text)
-                {
-                    self.diagnostics
-                        .push(duplicate(self.file, text, first.range, range));
-                    continue;
-                }
-                generics.type_vars.alloc(TypeVarDecl {
-                    name: text.to_string(),
-                    range,
-                });
+            for (name, _) in &item.params {
+                generics.type_vars.alloc(TypeVarDecl { name: name.clone() });
             }
             let id = ItemId::new(
                 self.module,
@@ -97,7 +84,7 @@ impl ItemLowering<'_> {
         effect_generics: &Generics,
         public: bool,
     ) -> Operation {
-        let decl = &item.syntax;
+        let decl = item.ptr.to_node(self.root);
         let multiplicity = match decl.multiplicity() {
             Some(token) if token.kind() == SyntaxKind::NEVER_KW => OpMultiplicity::Never,
             Some(token) if token.kind() == SyntaxKind::MULTI_KW => OpMultiplicity::Multi,

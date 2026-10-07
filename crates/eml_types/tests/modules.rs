@@ -171,3 +171,13 @@ fn notes_name_builtin_types_by_their_display_names() {
       note: the pattern `()` matches only `Prelude.Unit`
     ");
 }
+
+/// 2つのモジュールで同じ種類の構文が同じバイトの範囲にあっても、それぞれのモジュールの構文木から引く。
+#[test]
+fn each_module_reads_its_own_syntax() {
+    // 2行目のシグネチャは、どちらのファイルでもバイト 9 から 27 にある
+    let entry = "import A\npub h : Int -> Int\nh x = x + 1\n";
+    let module = "-- 34567\npub k : a   ->   a\nk x = x\n";
+    let checked = eml_test_support::check_files(entry, &[("A.em", module)]);
+    assert!(checked.diagnostics.is_empty(), "{:?}", checked.diagnostics);
+}

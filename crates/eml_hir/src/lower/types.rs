@@ -249,7 +249,6 @@ impl TypeLowering<'_> {
         if self.vars == Vars::Define {
             let id = self.generics.type_vars.alloc(TypeVarDecl {
                 name: text.to_string(),
-                range,
             });
             return TypeRefKind::Var(id);
         }

@@ -10,7 +10,7 @@ use la_arena::{Idx, RawIdx};
 
 use crate::codes;
 use crate::hir::{ExternIndex, LangItems};
-use crate::item_tree::{Fixity, ImportName, ItemTree};
+use crate::item_tree::{Fixity, ImportName, ItemTree, duplicate};
 use crate::load::{ImportTarget, LoadedModule, STD_ROOT};
 use crate::names::DisplayNames;
 use crate::program::{
@@ -367,8 +367,7 @@ impl ModuleScope {
                 data.public,
                 true,
             );
-            self.type_params
-                .insert(id, unique_params(data.syntax.params().map(|p| p.text())));
+            self.type_params.insert(id, data.params.len());
         }
         for (k, effect) in tree.effects.iter().enumerate() {
             let id = self.effects[k];
@@ -380,8 +379,7 @@ impl ModuleScope {
                 effect.public,
                 true,
             );
-            self.effect_params
-                .insert(id, unique_params(effect.syntax.params().map(|p| p.text())));
+            self.effect_params.insert(id, effect.params.len());
         }
         for names in self.types.values_mut() {
             names.sort_by_key(|definition| definition.range.start());
@@ -397,7 +395,7 @@ impl ModuleScope {
             if function
                 .signature
                 .as_ref()
-                .is_some_and(|(signature, _)| signature.extern_keyword().is_some())
+                .is_some_and(|signature| signature.extern_keyword.is_some())
             {
                 self.extern_functions.insert(id);
             }
@@ -757,33 +755,6 @@ fn push<T>(
         public,
         usable,
     });
-}
-
-/// 重複した型引数 (E1003。宣言の変換が報告する) を除いた数。
-fn unique_params(names: impl Iterator<Item = String>) -> usize {
-    let mut seen: Vec<String> = Vec::new();
-    for name in names {
-        if !seen.contains(&name) {
-            seen.push(name);
-        }
-    }
-    seen.len()
-}
-
-/// 同じ名前空間の定義の重複 (docs/spec/modules.md の「名前空間」)。トップレベルの定義と、宣言の中の型引数に使う。
-/// ソースで後に書いた方を primary にする。
-pub(crate) fn duplicate(
-    file: FileId,
-    name: &str,
-    first: TextRange,
-    again: TextRange,
-) -> Diagnostic {
-    Diagnostic::error(
-        codes::DUPLICATE_DEFINITION,
-        format!("`{name}` is defined more than once"),
-        Label::new(file, again, "defined again here"),
-    )
-    .with_secondary(Label::new(file, first, "first defined here"))
 }
 
 fn defines_public<V: Namespace>(scope: &ModuleScope, name: &str) -> bool {

@@ -1,10 +1,14 @@
 //! item の収集 (docs/implementation/architecture.md の「`eml_hir` の内部」)。ファイルごとに宣言を集め、名前を解決
 //! しなくても判定できる並び方の誤りを出す。名前の表と重複の判定は `DefMap` が行う。
+//!
+//! `ItemTree` は構文木のノードを持たない。名前を解決する前に決まる情報 (名前、位置、`pub`、`extern`、型引数) は、
+//! ここで取り出して持つ。型やパターンの変換のように resolver の要るものだけを `AstPtr` で指し、`lower` がモジュールの
+//! 構文木の根から解決する。ノードを持たないので、`ItemTree` はスレッドをまたげる。
 
 use std::collections::HashMap;
 
 use eml_diagnostics::{Diagnostic, FileId, Label, TextRange};
-use eml_syntax::{SyntaxKind, SyntaxToken, ast};
+use eml_syntax::{AstPtr, Parse, SyntaxKind, SyntaxToken, ast};
 
 use crate::codes;
 
@@ -27,10 +31,17 @@ pub struct FunctionItem {
     /// 最初に現れたシグネチャか等式の名前の位置。
     pub first_range: TextRange,
     pub public: bool,
-    /// (シグネチャ、名前の位置)
-    pub signature: Option<(ast::Signature, TextRange)>,
+    pub signature: Option<SignatureItem>,
     /// (等式、名前の位置)。ソースの順である。
-    pub equations: Vec<(ast::Equation, TextRange)>,
+    pub equations: Vec<(AstPtr<ast::Equation>, TextRange)>,
+}
+
+#[derive(Debug)]
+pub struct SignatureItem {
+    pub ptr: AstPtr<ast::Signature>,
+    pub name_range: TextRange,
+    /// `extern` はシグネチャにだけ書ける (docs/spec/declarations.md の「`extern`」)。
+    pub extern_keyword: Option<TextRange>,
 }
 
 #[derive(Debug)]
@@ -38,7 +49,11 @@ pub struct DataItem {
     pub name: String,
     pub name_range: TextRange,
     pub public: bool,
-    pub syntax: ast::DataItem,
+    pub extern_keyword: Option<TextRange>,
+    /// 型引数 (名前、位置)。重複した名前 (E1003) は最初の1つだけを残す。
+    pub params: Vec<(String, TextRange)>,
+    /// `=` か選択肢を書いたか (`ast::DataItem::has_constructors`)。
+    pub has_constructors: bool,
     /// 名前のある選択肢。ソースの順で、コンストラクタの局所の番号の順である。
     pub constructors: Vec<ConstructorItem>,
 }
@@ -47,7 +62,7 @@ pub struct DataItem {
 pub struct ConstructorItem {
     pub name: String,
     pub name_range: TextRange,
-    pub syntax: ast::Alt,
+    pub ptr: AstPtr<ast::Alt>,
 }
 
 #[derive(Debug)]
@@ -55,7 +70,9 @@ pub struct EffectItem {
     pub name: String,
     pub name_range: TextRange,
     pub public: bool,
-    pub syntax: ast::EffectItem,
+    pub extern_keyword: Option<TextRange>,
+    /// 型引数 (名前、位置)。重複した名前 (E1003) は最初の1つだけを残す。
+    pub params: Vec<(String, TextRange)>,
     /// 名前のある操作の宣言。ソースの順で、操作の局所の番号の順である。
     pub operations: Vec<OperationItem>,
 }
@@ -64,7 +81,7 @@ pub struct EffectItem {
 pub struct OperationItem {
     pub name: String,
     pub name_range: TextRange,
-    pub syntax: ast::OpDecl,
+    pub ptr: AstPtr<ast::OpDecl>,
 }
 
 #[derive(Debug)]
@@ -149,15 +166,16 @@ struct Definition {
     name: String,
     first_range: TextRange,
     public: bool,
-    /// (item の番号, シグネチャ, 名前の位置)
-    signature: Option<(usize, ast::Signature, TextRange)>,
+    /// (item の番号, シグネチャ)
+    signature: Option<(usize, SignatureItem)>,
     /// (item の番号, 等式, 名前の位置)
-    equations: Vec<(usize, ast::Equation, TextRange)>,
+    equations: Vec<(usize, AstPtr<ast::Equation>, TextRange)>,
 }
 
-/// トップレベルの宣言を集める。E1003 (シグネチャの重複)、E1004、E1018、E1019 と、`type` の E0004 を出す。
-/// E1005 は、関数の種類 (extern かどうか) を決める `lower` が一緒に出す。
-pub fn item_tree(file: FileId, source: &ast::SourceFile) -> (ItemTree, Vec<Diagnostic>) {
+/// トップレベルの宣言を集める。E1003 (シグネチャと型引数の重複)、E1004、E1018、E1019 と、`type` の E0004 を出す。
+/// E1005 は、関数の種類 (extern かどうか) を決める `lower` が一緒に出す。ポインタを解決する木と取り違えないよう、
+/// 構文木ではなく `Parse` を受け取る。
+pub fn item_tree(file: FileId, parse: &Parse) -> (ItemTree, Vec<Diagnostic>) {
     let mut diagnostics = Vec::new();
     let mut definitions: Vec<Definition> = Vec::new();
     let mut by_name: HashMap<String, usize> = HashMap::new();
@@ -165,7 +183,7 @@ pub fn item_tree(file: FileId, source: &ast::SourceFile) -> (ItemTree, Vec<Diagn
     let mut effects = Vec::new();
     let mut fixities = Vec::new();
     let mut imports = Vec::new();
-    for (index, item) in source.items().enumerate() {
+    for (index, item) in parse.tree().items().enumerate() {
         let public = item.pub_keyword().is_some();
         match item {
             ast::Item::Signature(signature) => {
@@ -177,19 +195,21 @@ pub fn item_tree(file: FileId, source: &ast::SourceFile) -> (ItemTree, Vec<Diagn
                 let definition = &mut definitions[slot];
                 definition.public |= public;
                 match &definition.signature {
-                    Some((_, _, first)) => diagnostics.push(
-                        Diagnostic::error(
-                            codes::DUPLICATE_DEFINITION,
-                            format!("`{}` is defined more than once", name.text()),
-                            Label::new(file, range, "defined again here"),
-                        )
-                        .with_secondary(Label::new(
-                            file,
-                            *first,
-                            "first defined here",
-                        )),
-                    ),
-                    None => definition.signature = Some((index, signature, range)),
+                    Some((_, first)) => {
+                        diagnostics.push(duplicate(file, name.text(), first.name_range, range))
+                    }
+                    None => {
+                        definition.signature = Some((
+                            index,
+                            SignatureItem {
+                                ptr: AstPtr::new(&signature),
+                                name_range: range,
+                                extern_keyword: signature
+                                    .extern_keyword()
+                                    .map(|keyword| keyword.text_range()),
+                            },
+                        ))
+                    }
                 }
             }
             ast::Item::Equation(equation) => {
@@ -198,7 +218,9 @@ pub fn item_tree(file: FileId, source: &ast::SourceFile) -> (ItemTree, Vec<Diagn
                 };
                 let range = name.text_range();
                 let slot = slot(&mut definitions, &mut by_name, name.text(), range);
-                definitions[slot].equations.push((index, equation, range));
+                definitions[slot]
+                    .equations
+                    .push((index, AstPtr::new(&equation), range));
             }
             ast::Item::DataItem(item) => {
                 // 名前がなければパーサが報告済み
@@ -213,7 +235,7 @@ pub fn item_tree(file: FileId, source: &ast::SourceFile) -> (ItemTree, Vec<Diagn
                         Some(ConstructorItem {
                             name: name.text().to_string(),
                             name_range: name.text_range(),
-                            syntax: alt,
+                            ptr: AstPtr::new(&alt),
                         })
                     })
                     .collect();
@@ -221,7 +243,9 @@ pub fn item_tree(file: FileId, source: &ast::SourceFile) -> (ItemTree, Vec<Diagn
                     name: name.text().to_string(),
                     name_range: name.text_range(),
                     public,
-                    syntax: item,
+                    extern_keyword: item.extern_keyword().map(|keyword| keyword.text_range()),
+                    params: params(file, item.params(), &mut diagnostics),
+                    has_constructors: item.has_constructors(),
                     constructors,
                 });
             }
@@ -238,7 +262,7 @@ pub fn item_tree(file: FileId, source: &ast::SourceFile) -> (ItemTree, Vec<Diagn
                         Some(OperationItem {
                             name: name.text().to_string(),
                             name_range: name.text_range(),
-                            syntax: decl,
+                            ptr: AstPtr::new(&decl),
                         })
                     })
                     .collect();
@@ -246,7 +270,8 @@ pub fn item_tree(file: FileId, source: &ast::SourceFile) -> (ItemTree, Vec<Diagn
                     name: name.text().to_string(),
                     name_range: name.text_range(),
                     public,
-                    syntax: item,
+                    extern_keyword: item.extern_keyword().map(|keyword| keyword.text_range()),
+                    params: params(file, item.params(), &mut diagnostics),
                     operations,
                 });
             }
@@ -309,7 +334,7 @@ fn check_order(
     // (docs/spec/declarations.md の「`extern`」)
     let external = signature
         .as_ref()
-        .is_some_and(|(_, node, _)| node.is_extern());
+        .is_some_and(|(_, signature)| signature.extern_keyword.is_some());
     for pair in equations.windows(2).filter(|_| !external) {
         let (previous_index, _, previous_range) = &pair[0];
         let (index, _, range) = &pair[1];
@@ -342,7 +367,7 @@ fn check_order(
                 "add a signature `{name} : ...` on the line before this equation"
             )),
         ),
-        (Some((signature_index, _, signature_range)), Some((equation_index, _, range)))
+        (Some((signature_index, signature)), Some((equation_index, _, range)))
             if !external && *equation_index != signature_index + 1 =>
         {
             diagnostics.push(
@@ -355,7 +380,11 @@ fn check_order(
                         format!("this equation is not right after the signature of `{name}`"),
                     ),
                 )
-                .with_secondary(Label::new(file, *signature_range, "the signature is here"))
+                .with_secondary(Label::new(
+                    file,
+                    signature.name_range,
+                    "the signature is here",
+                ))
                 .with_help(format!(
                     "move the equations of `{name}` right after its signature"
                 )),
@@ -367,12 +396,46 @@ fn check_order(
         name,
         first_range,
         public,
-        signature: signature.map(|(_, node, range)| (node, range)),
+        signature: signature.map(|(_, signature)| signature),
         equations: equations
             .into_iter()
-            .map(|(_, node, range)| (node, range))
+            .map(|(_, ptr, range)| (ptr, range))
             .collect(),
     }
+}
+
+/// `data` と `effect` の型引数。重複した名前は E1003 にして、最初の1つだけを残す。
+fn params(
+    file: FileId,
+    names: impl Iterator<Item = ast::Name>,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Vec<(String, TextRange)> {
+    let mut params: Vec<(String, TextRange)> = Vec::new();
+    for name in names {
+        let token = name.token();
+        let (text, range) = (token.text(), token.text_range());
+        match params.iter().find(|(param, _)| param == text) {
+            Some((_, first)) => diagnostics.push(duplicate(file, text, *first, range)),
+            None => params.push((text.to_string(), range)),
+        }
+    }
+    params
+}
+
+/// 同じ名前空間の定義の重複 (docs/spec/modules.md の「名前空間」)。トップレベルの定義と、宣言の中の型引数に使う。
+/// ソースで後に書いた方を primary にする。
+pub(crate) fn duplicate(
+    file: FileId,
+    name: &str,
+    first: TextRange,
+    again: TextRange,
+) -> Diagnostic {
+    Diagnostic::error(
+        codes::DUPLICATE_DEFINITION,
+        format!("`{name}` is defined more than once"),
+        Label::new(file, again, "defined again here"),
+    )
+    .with_secondary(Label::new(file, first, "first defined here"))
 }
 
 fn slot(

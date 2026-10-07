@@ -7,7 +7,6 @@ use la_arena::Arena;
 use super::ItemLowering;
 use super::types::{TypeLowering, Vars};
 use crate::codes;
-use crate::def_map::duplicate;
 use crate::hir::{Constructor, Generics, ItemId, TypeDef, TypeDefKind, TypeVarDecl};
 use crate::item_tree::DataItem;
 
@@ -15,36 +14,21 @@ impl ItemLowering<'_> {
     /// 型の名前と型引数を置く。フィールドの型は `lower_constructors` が、すべての型を置いた後に変換する。
     pub(super) fn declare_data(&mut self, items: &[DataItem], types: &mut Arena<TypeDef>) {
         for (k, item) in items.iter().enumerate() {
-            let keyword = item.syntax.extern_keyword();
             let mut generics = Generics::default();
             // extern の型に書いた型引数はパーサが E0011 にした (docs/spec/declarations.md の「`extern`」)。それでも型引数として置き、使う位置の型引数の数 (E1015) と
             // 型検査の Kind を書いたとおりにそろえて、誤りを連鎖させない
-            for param in item.syntax.params().map(|name| name.token()) {
-                let text = param.text();
-                let range = param.text_range();
-                if let Some((_, first)) =
-                    generics.type_vars.iter().find(|(_, var)| var.name == text)
-                {
-                    self.diagnostics
-                        .push(duplicate(self.file, text, first.range, range));
-                    continue;
-                }
-                generics.type_vars.alloc(TypeVarDecl {
-                    name: text.to_string(),
-                    range,
-                });
+            for (name, _) in &item.params {
+                generics.type_vars.alloc(TypeVarDecl { name: name.clone() });
             }
             // extern でない `=` のない `data` は、値を作れないので E1025 にする。標準ライブラリでも同じである
             // (docs/spec/declarations.md の「`data` と `type`」)
             let data = TypeDefKind::Data {
                 constructors: Vec::new(),
             };
-            let kind = match (keyword, item.syntax.has_constructors()) {
-                (Some(keyword), _) => TypeDefKind::Extern(self.extern_row(
-                    &keyword,
-                    &item.name,
-                    ExternType::from_name,
-                )),
+            let kind = match (item.extern_keyword, item.has_constructors) {
+                (Some(keyword), _) => {
+                    TypeDefKind::Extern(self.extern_row(keyword, &item.name, ExternType::from_name))
+                }
                 (None, true) => data,
                 (None, false) => {
                     self.diagnostics.push(Diagnostic::error(
@@ -95,7 +79,8 @@ impl ItemLowering<'_> {
                     diagnostics: &mut *self.diagnostics,
                 };
                 let fields = constructor
-                    .syntax
+                    .ptr
+                    .to_node(self.root)
                     .fields()
                     .map(|field| {
                         let range = field.range();

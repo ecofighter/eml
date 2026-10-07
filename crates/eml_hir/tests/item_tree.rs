@@ -5,7 +5,7 @@ use eml_test_support::{parse, short};
 
 fn tree(text: &str) -> (eml_hir::ItemTree, Vec<String>) {
     let parsed = parse(text);
-    let (tree, mut diagnostics) = item_tree(parsed.file, &parsed.parse.tree());
+    let (tree, mut diagnostics) = item_tree(parsed.file, &parsed.parse);
     eml_diagnostics::sort_diagnostics(&mut diagnostics);
     (tree, short(&parsed.files, &diagnostics))
 }
@@ -36,6 +36,50 @@ fn data_effects_and_fixities_list_their_parts() {
     assert_eq!(constructors, ["A", "B"]);
     assert_eq!(tree.effects[0].operations[0].name, "get");
     assert_eq!(tree.fixities[0].operators[0].0, "<+>");
+}
+
+#[test]
+fn declarations_hold_what_is_known_before_resolving_names() {
+    let text = "data T a b a = | A\neffect E s s where\n  get : Unit -> s\npub extern data I\ndata U\nextern f : Int\ng : Int\ng = 1";
+    let (tree, diagnostics) = tree(text);
+    // 型引数の重複は、2つ目以降を E1003 にして並びから除く
+    assert_eq!(
+        diagnostics,
+        [
+            "E1003 1:12 `a` is defined more than once",
+            "E1003 2:12 `s` is defined more than once",
+        ]
+    );
+    let params = |params: &[(String, eml_diagnostics::TextRange)]| -> Vec<String> {
+        params
+            .iter()
+            .map(|(name, range)| {
+                assert_eq!(&text[*range], name.as_str());
+                name.clone()
+            })
+            .collect()
+    };
+    assert_eq!(params(&tree.data[0].params), ["a", "b"]);
+    assert_eq!(u32::from(tree.data[0].params[0].1.start()), 7);
+    assert_eq!(params(&tree.effects[0].params), ["s"]);
+    let keyword = |range: Option<eml_diagnostics::TextRange>| range.map(|range| &text[range]);
+    assert_eq!(keyword(tree.data[0].extern_keyword), None);
+    assert_eq!(keyword(tree.data[1].extern_keyword), Some("extern"));
+    assert_eq!(keyword(tree.effects[0].extern_keyword), None);
+    let constructors: Vec<bool> = tree.data.iter().map(|d| d.has_constructors).collect();
+    assert_eq!(constructors, [true, false, false]);
+    let signatures: Vec<(&str, Option<&str>)> = tree
+        .functions
+        .iter()
+        .map(|f| {
+            let signature = f.signature.as_ref().expect("a signature");
+            (
+                &text[signature.name_range],
+                keyword(signature.extern_keyword),
+            )
+        })
+        .collect();
+    assert_eq!(signatures, [("f", Some("extern")), ("g", None)]);
 }
 
 #[test]

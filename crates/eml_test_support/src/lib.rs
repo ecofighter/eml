@@ -154,7 +154,7 @@ pub fn def_map_files(entry: &str, modules: &[(&str, &str)]) -> (eml_hir::DefMap,
     let (loaded, _) = eml_hir::load(ENTRY_PATH, entry, &MemorySource(modules));
     // 読み込みの段は構文解析と `ItemTree` の診断を混ぜて返すので、入口の `ItemTree` の診断だけを作り直す
     let (parse, _) = eml_syntax::parse(loaded.entry, loaded.files.text(loaded.entry));
-    let (_, mut diagnostics) = eml_hir::item_tree(loaded.entry, &parse.tree());
+    let (_, mut diagnostics) = eml_hir::item_tree(loaded.entry, &parse);
     let (def_map, stage) = eml_hir::def_map(&loaded.modules);
     diagnostics.extend(stage);
     sort_diagnostics(&mut diagnostics);

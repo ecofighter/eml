@@ -258,10 +258,6 @@ impl SourceFile {
 }
 
 impl Signature {
-    pub fn is_extern(&self) -> bool {
-        self.extern_keyword().is_some()
-    }
-
     pub fn extern_keyword(&self) -> Option<SyntaxToken> {
         support::token(&self.syntax, SyntaxKind::EXTERN_KW)
     }
@@ -557,10 +553,6 @@ impl Effect {
 }
 
 impl EffectItem {
-    pub fn is_extern(&self) -> bool {
-        self.extern_keyword().is_some()
-    }
-
     pub fn extern_keyword(&self) -> Option<SyntaxToken> {
         support::token(&self.syntax, SyntaxKind::EXTERN_KW)
     }
@@ -666,10 +658,6 @@ impl DropExpr {
 }
 
 impl DataItem {
-    pub fn is_extern(&self) -> bool {
-        self.extern_keyword().is_some()
-    }
-
     pub fn extern_keyword(&self) -> Option<SyntaxToken> {
         support::token(&self.syntax, SyntaxKind::EXTERN_KW)
     }

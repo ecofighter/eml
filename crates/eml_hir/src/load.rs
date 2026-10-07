@@ -5,6 +5,7 @@
 use std::collections::HashMap;
 
 use eml_diagnostics::{Diagnostic, FileId, Label, SourceFiles};
+use eml_syntax::Parse;
 
 use crate::codes;
 use crate::def_map::module_id;
@@ -42,6 +43,8 @@ pub struct LoadedModule {
     /// `Prelude`、`Main`、`Std.Fs`、`Report.Csv`。標準ライブラリのモジュールは正式な名前である。
     pub name: String,
     pub origin: ModuleOrigin,
+    /// `tree` のポインタを解決する構文木。
+    pub parse: Parse,
     pub tree: ItemTree,
     /// `tree.imports` と同じ順。
     pub targets: Vec<ImportTarget>,
@@ -173,11 +176,12 @@ impl Loader<'_> {
         let file = self.files.add(path, text);
         let (parse, errors) = eml_syntax::parse(file, self.files.text(file));
         self.diagnostics.extend(errors);
-        let (tree, stage) = item_tree(file, &parse.tree());
+        let (tree, stage) = item_tree(file, &parse);
         self.diagnostics.extend(stage);
         self.modules.push(LoadedModule {
             name: name.to_string(),
             origin,
+            parse,
             tree,
             targets: Vec::new(),
         });

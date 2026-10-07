@@ -8,7 +8,7 @@ mod types;
 
 use eml_diagnostics::{Diagnostic, ErrorCode, FileId, Label, TextRange};
 use eml_extern::Extern;
-use eml_syntax::{SyntaxToken, ast};
+use eml_syntax::{SyntaxNode, SyntaxToken, ast};
 use la_arena::{Arena, ArenaMap, Idx};
 
 use crate::codes;
@@ -34,12 +34,15 @@ pub fn lower(def_map: &DefMap, modules: &[LoadedModule]) -> (Program, Vec<Diagno
         ));
         debug_assert_eq!(id, module);
     }
+    // `ItemTree` のポインタは、モジュールごとに1回だけ作った根から解決する
+    let roots: Vec<SyntaxNode> = modules.iter().map(|loaded| loaded.parse.syntax()).collect();
     for (index, loaded) in modules.iter().enumerate() {
         let module = module_id(index);
         lower_items(
             def_map,
             module,
             &loaded.tree,
+            &roots[index],
             &mut arena[module].items,
             &mut diagnostics,
         );
@@ -47,7 +50,14 @@ pub fn lower(def_map: &DefMap, modules: &[LoadedModule]) -> (Program, Vec<Diagno
     let lang = def_map.lang();
     for (index, loaded) in modules.iter().enumerate() {
         let module = module_id(index);
-        let bodies = lower_bodies(def_map, module, &loaded.tree, &mut arena, &mut diagnostics);
+        let bodies = lower_bodies(
+            def_map,
+            module,
+            &loaded.tree,
+            &roots[index],
+            &mut arena,
+            &mut diagnostics,
+        );
         arena[module].bodies = bodies;
     }
     (
@@ -68,12 +78,14 @@ fn lower_items(
     def_map: &DefMap,
     module: ModuleId,
     tree: &ItemTree,
+    root: &SyntaxNode,
     items: &mut Items,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     let mut lowering = ItemLowering {
         file: tree.file,
         module,
+        root,
         def_map,
         resolver: def_map.resolver(module),
         diagnostics,
@@ -90,6 +102,8 @@ fn lower_items(
 struct ItemLowering<'a> {
     file: FileId,
     module: ModuleId,
+    /// `ItemTree` のポインタを解決する、このモジュールの構文木の根。
+    root: &'a SyntaxNode,
     def_map: &'a DefMap,
     resolver: Resolver<'a>,
     diagnostics: &'a mut Vec<Diagnostic>,
@@ -107,11 +121,11 @@ impl ItemLowering<'_> {
             } = function;
             let keyword = signature
                 .as_ref()
-                .and_then(|(node, _)| node.extern_keyword());
+                .and_then(|signature| signature.extern_keyword);
             let kind = match keyword {
                 None => FunctionKind::Defined,
                 Some(keyword) => {
-                    FunctionKind::Extern(self.extern_row(&keyword, name, Extern::from_name))
+                    FunctionKind::Extern(self.extern_row(keyword, name, Extern::from_name))
                 }
             };
             // extern のシグネチャに続く等式は読み捨てる。E1033 のほかに診断を重ねないため
@@ -119,7 +133,7 @@ impl ItemLowering<'_> {
                 FunctionKind::Defined => equations.as_slice(),
                 FunctionKind::Extern(_) => &[],
             };
-            if let (Some((_, range)), None, FunctionKind::Defined) =
+            if let (Some(signature), None, FunctionKind::Defined) =
                 (signature, equations.first(), kind)
             {
                 self.diagnostics.push(Diagnostic::error(
@@ -127,13 +141,14 @@ impl ItemLowering<'_> {
                     format!("`{name}` has a signature but no equation"),
                     Label::new(
                         self.file,
-                        *range,
+                        signature.name_range,
                         format!("add an equation for `{name}` after this signature"),
                     ),
                 ));
             }
-            let signature_name_range = signature.as_ref().map(|(_, range)| *range);
-            let signature = signature.as_ref().map(|(node, _)| {
+            let signature_name_range = signature.as_ref().map(|signature| signature.name_range);
+            let signature = signature.as_ref().map(|signature| {
+                let node = signature.ptr.to_node(self.root);
                 let range = node.ty().map_or(node.range(), |ty| ty.range());
                 let mut types = Arena::new();
                 let mut generics = Generics::default();
@@ -174,7 +189,7 @@ impl ItemLowering<'_> {
     /// 重ねない。
     fn extern_row<T>(
         &mut self,
-        keyword: &SyntaxToken,
+        keyword: TextRange,
         name: &str,
         from_name: impl Fn(&str) -> Option<T>,
     ) -> Option<T> {
@@ -187,7 +202,7 @@ impl ItemLowering<'_> {
             }
             ModuleOrigin::User => {
                 self.diagnostics
-                    .push(extern_outside_std(self.file, keyword.text_range()));
+                    .push(extern_outside_std(self.file, keyword));
                 None
             }
         }
@@ -200,6 +215,7 @@ fn lower_bodies(
     def_map: &DefMap,
     module: ModuleId,
     tree: &ItemTree,
+    root: &SyntaxNode,
     modules: &mut Arena<Module>,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> ArenaMap<Idx<Function>, Body> {
@@ -219,6 +235,11 @@ fn lower_bodies(
             .as_mut()
             .map(|signature| std::mem::take(&mut signature.generics))
             .unwrap_or_default();
+        let equations: Vec<(ast::Equation, TextRange)> = function
+            .equations
+            .iter()
+            .map(|(ptr, range)| (ptr.to_node(root), *range))
+            .collect();
         let body = BodyLowering::new(
             tree.file,
             def_map.resolver(module),
@@ -228,7 +249,7 @@ fn lower_bodies(
             &mut generics,
             diagnostics,
         )
-        .lower_equations(&function.equations);
+        .lower_equations(&equations);
         if let Some(signature) = &mut modules[module].items.functions[id.local].signature {
             signature.generics = generics;
         }

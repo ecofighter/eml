@@ -15,6 +15,7 @@ use rowan::ast::AstNode;
 
 pub use debug_dump::debug_tree;
 pub use lexer::{Token, lex};
+pub use rowan::ast::AstPtr;
 pub use syntax_kind::{EmlLanguage, SyntaxElement, SyntaxKind, SyntaxNode, SyntaxToken};
 
 pub mod codes {
