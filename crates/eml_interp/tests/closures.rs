@@ -1,11 +1,6 @@
 //! Core IR のテキストで、クロージャの eval/apply を確かめる (docs/spec/core-ir.md)。
 
-fn run_program(text: &str) -> String {
-    let program = eml_core_ir::parse(text).unwrap_or_else(|error| panic!("{error}"));
-    let (stdout, result) = eml_test_support::execute(program, true);
-    result.unwrap();
-    stdout
-}
+use crate::common::run_core;
 
 #[test]
 fn a_partial_application_waits_for_the_rest_of_the_arguments() {
@@ -22,7 +17,7 @@ fn first(a0, b1) {
   return a0
 }
 "#;
-    assert_eq!(run_program(text), "10\n");
+    assert_eq!(run_core(text, true), ("10\n".to_string(), Ok(())));
 }
 
 #[test]
@@ -44,7 +39,7 @@ fn make(x0) {
   return c1
 }
 "#;
-    assert_eq!(run_program(text), "5\n");
+    assert_eq!(run_core(text, true), ("5\n".to_string(), Ok(())));
 }
 
 #[test]
@@ -65,7 +60,7 @@ fn make(x0) {
   return c1
 }
 "#;
-    assert_eq!(run_program(text), "5\n");
+    assert_eq!(run_core(text, true), ("5\n".to_string(), Ok(())));
 }
 
 #[test]
@@ -85,7 +80,7 @@ fn first(a0^, b1) {
   return a0
 }
 "#;
-    assert_eq!(run_program(text), "a\na\n");
+    assert_eq!(run_core(text, true), ("a\na\n".to_string(), Ok(())));
 }
 
 #[test]
@@ -112,7 +107,7 @@ fn make(x0) {
   return c1
 }
 "#;
-    assert_eq!(run_program(text), "10\n5\n");
+    assert_eq!(run_core(text, true), ("10\n5\n".to_string(), Ok(())));
 }
 
 #[test]
@@ -131,7 +126,7 @@ fn first(a0, b1) {
   return a0
 }
 "#;
-    assert_eq!(run_program(text), "ok\n");
+    assert_eq!(run_core(text, true), ("ok\n".to_string(), Ok(())));
 }
 
 #[test]
@@ -170,5 +165,5 @@ fn outer_ret(x0, s1) {
   return x0
 }
 "#;
-    assert_eq!(run_program(text), "203\n");
+    assert_eq!(run_core(text, true), ("203\n".to_string(), Ok(())));
 }

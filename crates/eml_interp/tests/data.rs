@@ -3,12 +3,8 @@
 //! 書く。
 
 use eml_interp::{Fault, RuntimeError};
-use eml_test_support::execute;
 
-fn run_text(text: &str) -> (String, Result<(), RuntimeError>) {
-    let program = eml_core_ir::parse(text).unwrap_or_else(|error| panic!("{error}"));
-    execute(program, true)
-}
+use crate::common::run_core;
 
 const UNIQUE: &str = r#"
 fn main() {
@@ -44,13 +40,13 @@ fn main() {
 
 #[test]
 fn a_unique_value_is_unpacked_by_taking_its_fields() {
-    let (stdout, result) = run_text(UNIQUE);
+    let (stdout, result) = run_core(UNIQUE, true);
     assert_eq!((stdout.as_str(), result), ("field\n", Ok(())));
 }
 
 #[test]
 fn a_shared_value_is_unpacked_by_copying_its_fields() {
-    let (stdout, result) = run_text(SHARED);
+    let (stdout, result) = run_core(SHARED, true);
     assert_eq!((stdout.as_str(), result), ("field\n", Ok(())));
 }
 
@@ -71,7 +67,7 @@ fn main() {
   }
 }
 "#;
-    let (stdout, result) = run_text(text);
+    let (stdout, result) = run_core(text, true);
     assert_eq!((stdout.as_str(), result), ("none\n", Ok(())));
 }
 
@@ -89,7 +85,7 @@ fn main() {
   }
 }
 "#;
-    let (_, result) = run_text(text);
+    let (_, result) = run_core(text, false);
     assert_eq!(
         result,
         Err(RuntimeError::Fault {
@@ -125,7 +121,7 @@ fn pick(s0^) {
 
 #[test]
 fn a_string_switch_releases_the_string_on_every_path() {
-    let (out, result) = run_text(STRING_SWITCH);
+    let (out, result) = run_core(STRING_SWITCH, true);
     assert!(result.is_ok(), "{result:?}");
     assert_eq!(out, "3\n");
 }
@@ -148,7 +144,7 @@ fn main() {
 
 #[test]
 fn a_value_with_fields_that_goes_to_the_default_is_released() {
-    let (out, result) = run_text(DEFAULT_WITH_FIELDS);
+    let (out, result) = run_core(DEFAULT_WITH_FIELDS, true);
     assert!(result.is_ok(), "{result:?}");
     assert_eq!(out, "default\n");
 }
@@ -171,7 +167,7 @@ fn main() {
   }
 }
 "#;
-    let (out, result) = run_text(text);
+    let (out, result) = run_core(text, true);
     assert!(result.is_ok(), "{result:?}");
     assert_eq!(out, "two\n");
 }

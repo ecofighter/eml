@@ -7,6 +7,8 @@ use eml_core_ir::Program;
 use eml_interp::RuntimeError;
 use eml_test_support::{execute, run};
 
+use crate::common::run_core;
+
 fn main_with(body: &str) -> String {
     format!("main : Unit -> <IO> Unit\nmain () =\n{body}")
 }
@@ -22,15 +24,6 @@ fn main() {
 "#,
     )
     .unwrap_or_else(|error| panic!("{error}"))
-}
-
-/// 手書きの Core IR を verifier に通してから `debug_heap` 付きで実行し、出力を返す。
-fn run_text(text: &str) -> String {
-    let program = eml_core_ir::parse(text).unwrap_or_else(|error| panic!("{error}"));
-    eml_core_ir::verify(&program).unwrap_or_else(|error| panic!("{error}"));
-    let (stdout, result) = execute(program, true);
-    result.unwrap();
-    stdout
 }
 
 /// `mask` 付きの呼び出しの中の操作は、呼び出しより外側の同じエフェクトの handler を、`mask` に並ぶ数だけ飛ばす。
@@ -49,8 +42,9 @@ fn run_text(text: &str) -> String {
 /// Core IR のテキストにはコメントを書けないので、IR の説明はここに書く。
 #[test]
 fn a_mask_skips_outer_handlers_only() {
-    let text = include_str!("ir/mask.core");
-    insta::assert_snapshot!(run_text(text), @"
+    let (stdout, result) = run_core(include_str!("ir/mask.core"), true);
+    assert_eq!(result, Ok(()));
+    insta::assert_snapshot!(stdout, @"
     outer
     new
     outer
