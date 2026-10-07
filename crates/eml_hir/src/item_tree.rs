@@ -409,7 +409,7 @@ fn import_of(item: &ast::ImportItem) -> Option<ImportItem> {
         has_alias: alias.is_some(),
         list,
         range: item.range(),
-        malformed: item.has_trailing_error(),
+        malformed: item.is_malformed(),
     })
 }
 

@@ -906,11 +906,20 @@ impl ImportItem {
         support::child(&self.syntax)
     }
 
-    /// import の後ろに読めないトークンがあり、パーサが `ERROR` にしたか。
-    pub fn has_trailing_error(&self) -> bool {
-        self.syntax
-            .children()
-            .any(|child| child.kind() == SyntaxKind::ERROR)
+    /// パスの後ろ (別名と並びを含む) に構文の誤りがあるか。読めたところまでで import を解釈すると、書いたつもりと
+    /// 違う取り込み方を黙って選ぶことになる (docs/spec/modules.md の「誤りからの回復」)。並びの `(:+)` は名前だけを
+    /// 落とす誤りなので、ここには数えない。
+    pub fn is_malformed(&self) -> bool {
+        let has_error = self
+            .syntax
+            .descendants()
+            .any(|node| node.kind() == SyntaxKind::ERROR);
+        let missing_alias =
+            support::token(&self.syntax, SyntaxKind::AS_KW).is_some() && self.alias().is_none();
+        let unclosed_list = self
+            .list()
+            .is_some_and(|list| support::token(list.syntax(), SyntaxKind::R_PAREN).is_none());
+        has_error || missing_alias || unclosed_list
     }
 }
 

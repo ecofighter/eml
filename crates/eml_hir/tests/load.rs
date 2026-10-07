@@ -235,12 +235,18 @@ fn a_missing_module_imported_after_a_declaration_is_reported() {
 
 #[test]
 fn an_import_with_a_malformed_path_reads_no_module() {
-    // パスの後ろに構文の誤りがある import は壊れた import で、どのファイルも読まない。報告するのは構文の誤りだけである
+    // パスの後ろ (別名と並びを含む) に構文の誤りがある import は壊れた import で、どのファイルも読まない。報告するのは
+    // 構文の誤りだけである (docs/spec/modules.md の「誤りからの回復」)
     let present: &[(&str, &str)] = &[("Report.em", "pub x : Int\nx = 1")];
     for (entry, modules) in [
         ("import Report.\n", &[][..]),
         ("import Report.\n", present),
         ("import Report.csv\n", present),
+        ("import Report as\n", present),
+        ("import Report as 1\n", present),
+        ("import Report (x, 1)\n", present),
+        ("import Report (x y)\n", present),
+        ("import Report (x\n", present),
     ] {
         let (loaded, diagnostics) = load(entry, modules);
         assert_eq!(names(&loaded), ["Prelude", "Main"], "{entry}");
@@ -251,4 +257,15 @@ fn an_import_with_a_malformed_path_reads_no_module() {
             "{entry}: {diagnostics:?}"
         );
     }
+}
+
+#[test]
+fn an_infix_constructor_in_an_import_list_still_loads_the_module() {
+    // `(:+)` は E0011 だが、spec はその名前だけを落とす形を定めているので、import そのものは壊れない
+    // (docs/spec/modules.md の「import」)
+    let present: &[(&str, &str)] = &[("Report.em", "pub x : Int\nx = 1")];
+    let (loaded, diagnostics) = load("import Report ((:+), x)\n", present);
+    assert_eq!(names(&loaded), ["Prelude", "Main", "Report"]);
+    assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+    assert!(diagnostics[0].contains(" E0011 "), "{diagnostics:?}");
 }

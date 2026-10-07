@@ -319,13 +319,11 @@ fn imports_of_missing_modules_are_reported() {
 }
 
 #[test]
-fn an_unfinished_import_is_reported_once_by_each_stage() {
+fn an_unfinished_import_reports_only_the_syntax_error() {
+    // 並びが閉じていない import は壊れた import で、モジュールを探さない (docs/spec/modules.md の「誤りからの回復」)
     assert_eq!(
         diagnostics("import M (a,\nf : Int\nf = 1"),
-        [
-            "E1026 1:8 cannot find module `M`",
-            "E0011 1:13 expected `)`",
-        ]
+        ["E0011 1:13 expected `)`"]
     );
 }
 
