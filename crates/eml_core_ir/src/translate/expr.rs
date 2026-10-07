@@ -4,7 +4,7 @@ use eml_extern::{Extern, ExternType};
 use eml_hir::EvalStep;
 use eml_hir::{
     Closure, ConstructorId, ExprId, ExprKind, FunctionId, FunctionKind, Literal, OperationId,
-    PatId, Program as HirProgram, Res, TypeDefId,
+    PatId, Program as HirProgram, Res, TypeDefId, ValueItem,
 };
 use eml_types::Type;
 
@@ -306,16 +306,18 @@ impl FnLowering<'_> {
         out: &mut Bindings,
     ) -> Atom {
         let head = match &self.body.exprs[callee].kind {
-            ExprKind::Path(Res::Function(function)) => match extern_row(self.hir, *function) {
-                Some(row) => Callee::Extern {
-                    function: *function,
-                    row,
-                    callee,
-                },
-                None => Callee::Function(self.indices[*function]),
-            },
-            ExprKind::Path(Res::Operation(op)) => Callee::Operation(*op),
-            ExprKind::Path(Res::Constructor(ctor)) => Callee::Constructor(*ctor),
+            ExprKind::Path(Res::Item(ValueItem::Function(function))) => {
+                match extern_row(self.hir, *function) {
+                    Some(row) => Callee::Extern {
+                        function: *function,
+                        row,
+                        callee,
+                    },
+                    None => Callee::Function(self.indices[*function]),
+                }
+            }
+            ExprKind::Path(Res::Item(ValueItem::Operation(op))) => Callee::Operation(*op),
+            ExprKind::Path(Res::Item(ValueItem::Constructor(ctor))) => Callee::Constructor(*ctor),
             ExprKind::Path(Res::Local(local)) => {
                 let k = self.locals[*local];
                 match self.continuation_forms[*local] {
@@ -349,7 +351,7 @@ impl FnLowering<'_> {
                 self.bind(out, "s", &ty, Rhs::ConstString(index))
             }
             ExprKind::Path(Res::Local(local)) => self.locals[*local],
-            ExprKind::Path(Res::Function(function)) => {
+            ExprKind::Path(Res::Item(ValueItem::Function(function))) => {
                 if let Some(row) = extern_row(self.hir, *function) {
                     let wrapper = self.program.wrapper(self.hir, *function, row);
                     let ty = self.ty(id);
@@ -366,12 +368,12 @@ impl FnLowering<'_> {
                     self.closure(target, Vec::new(), &ty, out)
                 }
             }
-            ExprKind::Path(Res::Operation(op)) => {
+            ExprKind::Path(Res::Item(ValueItem::Operation(op))) => {
                 let wrapper = self.program.operation_wrapper(self.hir, *op);
                 let ty = self.ty(id);
                 self.closure(wrapper, Vec::new(), &ty, out)
             }
-            ExprKind::Path(Res::Constructor(ctor)) => {
+            ExprKind::Path(Res::Item(ValueItem::Constructor(ctor))) => {
                 let constructor = &self.hir[*ctor];
                 if constructor.fields.is_empty() {
                     Atom::Tag(constructor.tag)

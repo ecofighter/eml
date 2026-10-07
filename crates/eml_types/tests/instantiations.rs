@@ -1,9 +1,8 @@
 //! 参照ごとの具体化の表 (docs/implementation/architecture.md の「`eml_types` の内部」)。記録する参照、記録しない参照、
 //! 型引数の順を確かめる。
 
-use eml_hir::{ExprKind, Res};
+use eml_hir::{ExprKind, Res, ValueItem};
 use eml_test_support::{Checked, check, check_files, short_text};
-use eml_types::Decl;
 
 /// モジュール `module` の関数 `name` の本体の記録を、式の位置の順に1行ずつ `<行:列> <宣言の名前> [<型引数>]` の形で
 /// 出す。位置はその関数のモジュールのファイルで数える。誤りのないプログラムだけを受け取る。
@@ -30,11 +29,7 @@ fn records(checked: &Checked, module: &str, name: &str) -> String {
         .iter()
         .map(|(expr, instantiation)| {
             let start = body.exprs[expr].range.start();
-            let decl = match instantiation.decl {
-                Decl::Function(id) => &program[id].name,
-                Decl::Constructor(id) => &program[id].name,
-                Decl::Operation(id) => &program[id].name,
-            };
+            let decl = program.value_name(instantiation.decl);
             let args: Vec<String> = instantiation
                 .args
                 .iter()
@@ -179,30 +174,26 @@ fn every_reference_to_an_item_with_a_signature_is_recorded() {
         };
         for (expr, instantiation) in types.instantiations.iter() {
             let decl = match body.exprs[expr].kind {
-                ExprKind::Path(Res::Function(id)) => Decl::Function(id),
-                ExprKind::Path(Res::Constructor(id)) => Decl::Constructor(id),
-                ExprKind::Path(Res::Operation(id)) => Decl::Operation(id),
+                ExprKind::Path(Res::Item(item)) => item,
                 ref kind => panic!("a record is keyed by a reference to an item, not {kind:?}"),
             };
             assert_eq!(instantiation.decl, decl);
             let rigids = match decl {
-                Decl::Function(id) => program[id]
+                ValueItem::Function(id) => program[id]
                     .signature
                     .as_ref()
                     .unwrap()
                     .generics
                     .type_vars
                     .len(),
-                Decl::Operation(id) => program[id].signature.generics.type_vars.len(),
-                Decl::Constructor(id) => program[program[id].ty].generics.type_vars.len(),
+                ValueItem::Operation(id) => program[id].signature.generics.type_vars.len(),
+                ValueItem::Constructor(id) => program[program[id].ty].generics.type_vars.len(),
             };
             assert_eq!(instantiation.args.len(), rigids, "{decl:?}");
         }
         for (expr, data) in body.exprs.iter() {
             let decl = match data.kind {
-                ExprKind::Path(Res::Function(id)) => Decl::Function(id),
-                ExprKind::Path(Res::Constructor(id)) => Decl::Constructor(id),
-                ExprKind::Path(Res::Operation(id)) => Decl::Operation(id),
+                ExprKind::Path(Res::Item(item)) => item,
                 _ => continue,
             };
             if checked.typed.decls.contains_key(&decl) {

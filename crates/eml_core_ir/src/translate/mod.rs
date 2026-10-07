@@ -11,9 +11,9 @@ use std::collections::HashSet;
 
 use eml_hir::{
     Body, ExprId, ExprKind, Function, FunctionId, FunctionKind, ItemMap, LocalId, PatId,
-    Program as HirProgram, Res, Stmt,
+    Program as HirProgram, Res, Stmt, ValueItem,
 };
-use eml_types::{BodyTypes, Decl, Type, TypedProgram};
+use eml_types::{BodyTypes, Type, TypedProgram};
 use la_arena::ArenaMap;
 
 use crate::builder::FnBuilder;
@@ -39,7 +39,7 @@ fn reachable(hir: &HirProgram, entry: FunctionId) -> HashSet<FunctionId> {
             continue;
         };
         for (_, expr) in body.exprs.iter() {
-            if let ExprKind::Path(Res::Function(callee)) = expr.kind {
+            if let ExprKind::Path(Res::Item(ValueItem::Function(callee))) = expr.kind {
                 work.push(callee);
             }
         }
@@ -126,7 +126,7 @@ pub(crate) fn translate(hir: &HirProgram, typed: &TypedProgram, entry: FunctionI
         let body = hir.body(id).expect("checked above");
         let signature = &typed
             .decls
-            .get(&Decl::Function(id))
+            .get(&ValueItem::Function(id))
             .expect("every function has a signature")
             .ty;
         let (param_types, _) = split_arrows(signature, body.params.len());
@@ -158,7 +158,7 @@ pub(crate) fn translate(hir: &HirProgram, typed: &TypedProgram, entry: FunctionI
     }
     let entry_type = &typed
         .decls
-        .get(&Decl::Function(entry))
+        .get(&ValueItem::Function(entry))
         .expect("the entry function has a signature")
         .ty;
     let entry_fn = builder.entry(hir, indices[entry], entry, entry_type);

@@ -93,6 +93,32 @@ pub type ConstructorId = ItemId<Constructor>;
 pub type EffectId = ItemId<EffectDef>;
 pub type OperationId = ItemId<Operation>;
 
+/// 値の名前空間の item (docs/spec/modules.md の「名前空間」)。名前解決の結果、HIR の参照 (`Res::Item`)、型検査の
+/// 宣言ごとの表のキーが、同じ型を使う。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ValueItem {
+    Function(FunctionId),
+    Operation(OperationId),
+    Constructor(ConstructorId),
+}
+
+impl ValueItem {
+    pub fn module(self) -> ModuleId {
+        match self {
+            ValueItem::Function(id) => id.module,
+            ValueItem::Operation(id) => id.module,
+            ValueItem::Constructor(id) => id.module,
+        }
+    }
+}
+
+/// 型の名前空間の item (docs/spec/modules.md の「名前空間」)。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum TypeItem {
+    Type(TypeDefId),
+    Effect(EffectId),
+}
+
 /// item の ID から値を引く表。モジュールごとに `ArenaMap` を持つ。`ArenaMap` と同じ使い方にして、下流の表の
 /// 置き換えを型の名前だけで済ませるため。
 pub struct ItemMap<T, V> {
@@ -258,6 +284,15 @@ impl Program {
 
     pub fn operations(&self) -> impl Iterator<Item = (OperationId, &Operation)> {
         self.items(|items| &items.operations)
+    }
+
+    /// 値の item の名前。
+    pub fn value_name(&self, item: ValueItem) -> &str {
+        match item {
+            ValueItem::Function(id) => &self[id].name,
+            ValueItem::Operation(id) => &self[id].name,
+            ValueItem::Constructor(id) => &self[id].name,
+        }
     }
 
     pub fn body(&self, id: FunctionId) -> Option<&Body> {

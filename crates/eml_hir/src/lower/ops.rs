@@ -6,8 +6,8 @@ use eml_syntax::ast::{self, OpSeqElement};
 use super::expr::BodyLowering;
 use super::{NameKind, NameUse, ambiguous, unresolved};
 use crate::codes;
-use crate::def_map::{NameRef, Resolved, ValueItem};
-use crate::hir::{ExprId, ExprKind, Res};
+use crate::def_map::{NameRef, Resolved};
+use crate::hir::{ExprId, ExprKind, Res, ValueItem};
 use crate::item_tree::{Assoc, Fixity};
 
 #[derive(Clone)]
@@ -121,7 +121,10 @@ impl BodyLowering<'_> {
                     ));
                 }
                 let operand = self.climb(cursor, NEGATE_PRECEDENCE + 1, None);
-                let callee = self.alloc(ExprKind::Path(Res::Function(self.negate)), range);
+                let callee = self.alloc(
+                    ExprKind::Path(Res::Item(ValueItem::Function(self.negate))),
+                    range,
+                );
                 let whole = range.cover(self.exprs[operand].range);
                 self.alloc(
                     ExprKind::Call {
@@ -155,7 +158,7 @@ impl BodyLowering<'_> {
         let res = match self.items.value(NameRef::Plain(op)) {
             Resolved::Found(ValueItem::Function(id)) if id == self.lang.and => {
                 let otherwise = self.alloc(
-                    ExprKind::Path(Res::Constructor(self.lang.false_ctor)),
+                    ExprKind::Path(Res::Item(ValueItem::Constructor(self.lang.false_ctor))),
                     op_range,
                 );
                 return self.alloc(
@@ -169,7 +172,7 @@ impl BodyLowering<'_> {
             }
             Resolved::Found(ValueItem::Function(id)) if id == self.lang.or => {
                 let then = self.alloc(
-                    ExprKind::Path(Res::Constructor(self.lang.true_ctor)),
+                    ExprKind::Path(Res::Item(ValueItem::Constructor(self.lang.true_ctor))),
                     op_range,
                 );
                 return self.alloc(
@@ -181,9 +184,7 @@ impl BodyLowering<'_> {
                     range,
                 );
             }
-            Resolved::Found(ValueItem::Function(id)) => Some(Res::Function(id)),
-            Resolved::Found(ValueItem::Constructor(ctor)) => Some(Res::Constructor(ctor)),
-            Resolved::Found(ValueItem::Operation(operation)) => Some(Res::Operation(operation)),
+            Resolved::Found(item) => Some(Res::Item(item)),
             Resolved::NotFound if op == "::" => {
                 let callee = self.unsupported(op_range, "lists are not supported yet");
                 return self.alloc(

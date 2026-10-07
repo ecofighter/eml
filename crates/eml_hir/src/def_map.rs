@@ -15,21 +15,8 @@ use crate::load::{ImportTarget, LoadedModule, STD_ROOT};
 use crate::names::DisplayNames;
 use crate::program::{
     ConstructorId, EffectId, FunctionId, ItemId, ModuleId, ModuleOrigin, OperationId, TypeDefId,
+    TypeItem, ValueItem,
 };
-
-/// 値の名前空間の定義を引いた結果。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ValueItem {
-    Function(FunctionId),
-    Operation(OperationId),
-    Constructor(ConstructorId),
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum TypeItem {
-    Type(TypeDefId),
-    Effect(EffectId),
-}
 
 /// 名前の参照。修飾子は1つのセグメントとは限らない (2つ以上は E1031)。
 #[derive(Debug, Clone, Copy)]
@@ -78,31 +65,6 @@ impl<T> Hit<T> {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-enum Value {
-    Function(FunctionId),
-    Operation(OperationId),
-    Constructor(ConstructorId),
-}
-
-impl Value {
-    fn item(self) -> ValueItem {
-        match self {
-            Value::Function(id) => ValueItem::Function(id),
-            Value::Operation(id) => ValueItem::Operation(id),
-            Value::Constructor(id) => ValueItem::Constructor(id),
-        }
-    }
-
-    fn module(self) -> ModuleId {
-        match self {
-            Value::Function(id) => id.module,
-            Value::Operation(id) => id.module,
-            Value::Constructor(id) => id.module,
-        }
-    }
-}
-
 #[derive(Debug, Clone, Copy)]
 struct Definition<T> {
     item: T,
@@ -134,7 +96,7 @@ struct Qualifier {
 struct Imports {
     /// import の順に並べる。合流した修飾子のモジュールを、診断で決まった順に示すため。
     qualifiers: Vec<Qualifier>,
-    values: HashMap<String, Vec<Source<Value>>>,
+    values: HashMap<String, Vec<Source<ValueItem>>>,
     types: HashMap<String, Vec<Source<TypeItem>>>,
     /// 部品の分からない `T(..)` か `E(..)` が並びにある。壊れた import の部品と、並びで報告した型の部品は名前が
     /// 分からないので、見つからない値の名前をどれも「不明」として扱う
@@ -150,12 +112,12 @@ trait Namespace: Copy {
     fn unknown(imports: &Imports) -> bool;
 }
 
-impl Namespace for Value {
-    fn definitions(scope: &ModuleScope) -> &HashMap<String, Vec<Definition<Value>>> {
+impl Namespace for ValueItem {
+    fn definitions(scope: &ModuleScope) -> &HashMap<String, Vec<Definition<ValueItem>>> {
         &scope.values
     }
 
-    fn imported(imports: &Imports) -> &HashMap<String, Vec<Source<Value>>> {
+    fn imported(imports: &Imports) -> &HashMap<String, Vec<Source<ValueItem>>> {
         &imports.values
     }
 
@@ -185,13 +147,13 @@ struct ModuleScope {
     /// E1029 の secondary が定義を指すのに使う。
     file: FileId,
     /// 名前ごとの定義。ソースの位置の順で、使える定義の最初が名前の定義である (規則1)。
-    values: HashMap<String, Vec<Definition<Value>>>,
+    values: HashMap<String, Vec<Definition<ValueItem>>>,
     types: HashMap<String, Vec<Definition<TypeItem>>>,
     /// 型引数の数 (E1015)。重複した型引数を除いた数である。
     type_params: HashMap<TypeDefId, usize>,
     effect_params: HashMap<EffectId, usize>,
     /// 定義に付いた fixity、宣言が `pub` か、宣言の演算子の位置。
-    fixities: HashMap<Value, (Fixity, bool, TextRange)>,
+    fixities: HashMap<ValueItem, (Fixity, bool, TextRange)>,
     functions: Vec<FunctionId>,
     /// `extern` のシグネチャを持つ関数。handler の節の先頭を extern の関数から引き直すのに使う (E1009)。
     extern_functions: HashSet<FunctionId>,
@@ -200,7 +162,7 @@ struct ModuleScope {
     effects: Vec<EffectId>,
     operations: Vec<Vec<OperationId>>,
     /// `T(..)` と `E(..)` が取り込む部品。型にはコンストラクタ、エフェクトには操作を、宣言の順に並べる。
-    parts: HashMap<TypeItem, Vec<(String, Value)>>,
+    parts: HashMap<TypeItem, Vec<(String, ValueItem)>>,
     imports: Imports,
 }
 
@@ -458,7 +420,7 @@ impl ModuleScope {
             push(
                 &mut self.values,
                 &function.name,
-                Value::Function(id),
+                ValueItem::Function(id),
                 function.first_range,
                 function.public,
                 true,
@@ -471,7 +433,7 @@ impl ModuleScope {
                 push(
                     &mut self.values,
                     &constructor.name,
-                    Value::Constructor(id),
+                    ValueItem::Constructor(id),
                     constructor.name_range,
                     data.public,
                     usable,
@@ -479,7 +441,7 @@ impl ModuleScope {
                 self.parts
                     .entry(TypeItem::Type(self.type_ids[k]))
                     .or_default()
-                    .push((constructor.name.clone(), Value::Constructor(id)));
+                    .push((constructor.name.clone(), ValueItem::Constructor(id)));
             }
         }
         for (k, effect) in tree.effects.iter().enumerate() {
@@ -489,7 +451,7 @@ impl ModuleScope {
                 push(
                     &mut self.values,
                     &operation.name,
-                    Value::Operation(id),
+                    ValueItem::Operation(id),
                     operation.name_range,
                     effect.public,
                     usable,
@@ -497,7 +459,7 @@ impl ModuleScope {
                 self.parts
                     .entry(TypeItem::Effect(self.effects[k]))
                     .or_default()
-                    .push((operation.name.clone(), Value::Operation(id)));
+                    .push((operation.name.clone(), ValueItem::Operation(id)));
             }
         }
         for names in self.values.values_mut() {
@@ -591,7 +553,7 @@ impl ModuleScope {
         name: &str,
         (file, range): (FileId, TextRange),
         diagnostics: &mut Vec<Diagnostic>,
-    ) -> Option<Value> {
+    ) -> Option<ValueItem> {
         let mut unusable = false;
         for definition in self.values.get(name).into_iter().flatten() {
             if !definition.usable {
@@ -680,7 +642,7 @@ impl ModuleScope {
             .values
             .get(name)?
             .iter()
-            .find(|definition| matches!(definition.item, Value::Constructor(_)))?
+            .find(|definition| matches!(definition.item, ValueItem::Constructor(_)))?
             .item;
         let (&owner, _) = self
             .parts
@@ -905,11 +867,11 @@ fn lang_items(prelude: &ModuleScope) -> LangItems {
         None => unreachable!("the Prelude declares `{name}`"),
     };
     let constructor = |name: &str| match value(name) {
-        Value::Constructor(id) => id,
+        ValueItem::Constructor(id) => id,
         _ => unreachable!("`{name}` is a constructor of the Prelude"),
     };
     let function = |name: &str| match value(name) {
-        Value::Function(id) => id,
+        ValueItem::Function(id) => id,
         _ => unreachable!("`{name}` is a function of the Prelude"),
     };
     LangItems {
@@ -978,8 +940,8 @@ fn extern_index(scopes: &[ModuleScope]) -> ExternIndex {
         canonical,
         |scope| &scope.values,
         |item| match item {
-            Value::Function(id) => Some(id),
-            Value::Operation(_) | Value::Constructor(_) => None,
+            ValueItem::Function(id) => Some(id),
+            ValueItem::Operation(_) | ValueItem::Constructor(_) => None,
         },
     )
     .unwrap_or_else(|| panic!("the standard library does not declare the function `{canonical}`"));
@@ -1004,7 +966,7 @@ fn display_names(scopes: &[ModuleScope], unit: TypeDefId) -> DisplayNames {
         }
         for (name, definitions) in &scope.values {
             for definition in definitions {
-                if let Value::Constructor(id) = definition.item {
+                if let ValueItem::Constructor(id) = definition.item {
                     constructors.push((id, module, name.as_str()));
                 }
             }
@@ -1104,14 +1066,13 @@ impl<'a> Resolver<'a> {
     }
 
     pub fn value(&self, name: NameRef<'_>) -> Resolved<ValueItem> {
-        self.lookup(name, |value: Value| Some(value.item()))
-            .resolved()
+        self.lookup(name, |value: ValueItem| Some(value)).resolved()
     }
 
     /// パターンの先頭の名前。コンストラクタだけから引く (規則3)。
     pub fn constructor(&self, name: NameRef<'_>) -> Resolved<ConstructorId> {
-        self.lookup(name, |value: Value| match value {
-            Value::Constructor(id) => Some(id),
+        self.lookup(name, |value: ValueItem| match value {
+            ValueItem::Constructor(id) => Some(id),
             _ => None,
         })
         .resolved()
@@ -1119,8 +1080,8 @@ impl<'a> Resolver<'a> {
 
     /// handler の節の先頭の名前。操作だけから引く (規則3、docs/spec/modules.md の「名前の解決」)。
     pub fn operation(&self, name: NameRef<'_>) -> Resolved<OperationId> {
-        self.lookup(name, |value: Value| match value {
-            Value::Operation(id) => Some(id),
+        self.lookup(name, |value: ValueItem| match value {
+            ValueItem::Operation(id) => Some(id),
             _ => None,
         })
         .resolved()
@@ -1129,8 +1090,10 @@ impl<'a> Resolver<'a> {
     /// handler の節の先頭の名前を、extern の関数だけから引く。操作として見つからなかった名前が、handle できない
     /// extern のエフェクトを起こす関数かを確かめるのに使う (E1009)。引き方は `operation` と同じである。
     pub fn extern_function(&self, name: NameRef<'_>) -> Resolved<FunctionId> {
-        self.lookup(name, |value: Value| match value {
-            Value::Function(id) if self.def_map.scope(id.module).extern_functions.contains(&id) => {
+        self.lookup(name, |value: ValueItem| match value {
+            ValueItem::Function(id)
+                if self.def_map.scope(id.module).extern_functions.contains(&id) =>
+            {
                 Some(id)
             }
             _ => None,
@@ -1176,7 +1139,7 @@ impl<'a> Resolver<'a> {
     /// 宣言がなければ `infixl 9` である (docs/spec/declarations.md の「fixity」)。曖昧な演算子と壊れた import から来た
     /// 演算子は `None` で、組み直さない (docs/implementation/architecture.md の「名前解決の回復」)。
     pub fn fixity(&self, op: NameRef<'_>) -> Option<Fixity> {
-        let value = match self.lookup(op, |value: Value| Some(value)) {
+        let value = match self.lookup(op, |value: ValueItem| Some(value)) {
             Hit::Found(value) => value,
             Hit::Broken | Hit::Ambiguous(_) => return None,
             Hit::Unusable | Hit::NotFound | Hit::Private(..) | Hit::UnknownQualifier => {
@@ -1246,7 +1209,7 @@ impl<'a> Resolver<'a> {
             let defined = if types {
                 defines_public::<TypeItem>(std, name)
             } else {
-                defines_public::<Value>(std, name)
+                defines_public::<ValueItem>(std, name)
             };
             defined.then_some(short.as_str())
         })

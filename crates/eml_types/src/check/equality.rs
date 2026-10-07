@@ -3,10 +3,10 @@
 
 use eml_diagnostics::{Diagnostic, Label};
 use eml_extern::{Extern, ExternType};
-use eml_hir::{ExprId, FunctionId, FunctionKind};
+use eml_hir::{ExprId, FunctionId, FunctionKind, ValueItem};
 
 use crate::table::TyShape;
-use crate::{Decl, Type, codes, equality};
+use crate::{Type, codes, equality};
 
 use super::body::BodyCheck;
 
@@ -19,7 +19,7 @@ impl BodyCheck<'_, '_> {
         let body_has_error = self.diagnostics.iter().any(Diagnostic::is_error);
         let mut found = Vec::new();
         for (callee, (decl, args)) in self.typing.instantiations.iter() {
-            let Decl::Function(operator) = *decl else {
+            let ValueItem::Function(operator) = *decl else {
                 continue;
             };
             if !matches!(

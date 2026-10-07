@@ -2,7 +2,7 @@
 //! Core IR の変換 (`eml_core_ir`) の両方がここを読む。2か所で順を組み立てると、ずれたときに持ち越し規則が実行と食い違い、
 //! 健全でなくなるため。
 
-use crate::{Body, ExprId, ExprKind, Program, Res};
+use crate::{Body, ExprId, ExprKind, Program, Res, ValueItem};
 
 /// 呼び出しの評価の1歩。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -38,9 +38,11 @@ pub fn call_steps(program: &Program, body: &Body, call: ExprId) -> Vec<EvalStep>
 pub fn is_value(program: &Program, body: &Body, expr: ExprId) -> bool {
     match &body.exprs[expr].kind {
         ExprKind::Literal(_) | ExprKind::Lambda(_) => true,
-        ExprKind::Path(Res::Local(_) | Res::Operation(_) | Res::Constructor(_)) => true,
+        ExprKind::Path(
+            Res::Local(_) | Res::Item(ValueItem::Operation(_) | ValueItem::Constructor(_)),
+        ) => true,
         // 引数のないトップレベルの値は、参照するたびに計算する (docs/spec/core-ir.md)
-        ExprKind::Path(Res::Function(function)) => {
+        ExprKind::Path(Res::Item(ValueItem::Function(function))) => {
             program.arity(*function).is_some_and(|arity| arity > 0)
         }
         ExprKind::Annot { expr, .. } => is_value(program, body, *expr),
@@ -54,11 +56,13 @@ pub fn is_value(program: &Program, body: &Body, expr: ExprId) -> bool {
 /// 変換が同じ手順で `k v st` を1回の再開にするよう、節の `k` もここで引数の数を答える。
 pub fn known_arity(program: &Program, body: &Body, callee: ExprId) -> Option<usize> {
     match &body.exprs[callee].kind {
-        ExprKind::Path(Res::Function(function)) => {
+        ExprKind::Path(Res::Item(ValueItem::Function(function))) => {
             program.arity(*function).filter(|&arity| arity > 0)
         }
-        ExprKind::Path(Res::Operation(op)) => Some(program[*op].arity),
-        ExprKind::Path(Res::Constructor(ctor)) => Some(program[*ctor].fields.len()),
+        ExprKind::Path(Res::Item(ValueItem::Operation(op))) => Some(program[*op].arity),
+        ExprKind::Path(Res::Item(ValueItem::Constructor(ctor))) => {
+            Some(program[*ctor].fields.len())
+        }
         ExprKind::Path(Res::Local(local)) => body.continuations.get(*local).copied(),
         _ => None,
     }

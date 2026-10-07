@@ -3,15 +3,15 @@ use std::collections::HashMap;
 use eml_diagnostics::{Diagnostic, FileId, Label, TextRange};
 use eml_hir::{
     Body, Closure, ConstructorId, EffectId, ExprId, ExprKind, Function, Literal, LocalId, MatchArm,
-    OperationId, PatId, PatKind, Program, Res, RowRef, Stmt, TypeRefId, TypeRefKind,
+    OperationId, PatId, PatKind, Program, Res, RowRef, Stmt, TypeRefId, TypeRefKind, ValueItem,
 };
 use la_arena::ArenaMap;
 
+use crate::codes;
 use crate::kind::problem::Instance;
 use crate::kind::{KindOrigin, KindReason, Provenance, Span};
 use crate::shape::{Instantiated, Rigids, lower_type};
 use crate::table::{Row, Table, Tail, Ty, TyShape, UnifyError};
-use crate::{Decl, codes};
 
 use super::Signatures;
 use super::report::{AmbientSource, Origin, callee_subject};
@@ -39,7 +39,7 @@ pub(crate) struct BodyTyping {
     /// パターンが受けた値の型。`_` で受けた値の Kind に制約を出すのに使う。
     pub pats: ArenaMap<PatId, Ty>,
     /// 参照ごとの具体化。型引数は表の変数のままで、`check_body` が carry の後で書き出す。
-    pub instantiations: ArenaMap<ExprId, (Decl, Vec<Ty>)>,
+    pub instantiations: ArenaMap<ExprId, (ValueItem, Vec<Ty>)>,
     /// 呼び出しの row。持ち越しのパスが読む。
     pub calls: ArenaMap<ExprId, CallRows>,
     /// 呼び出しの矢印ごとの `mask`。キーは呼び出しの式と矢印の番号である。空の `mask` は入れない
@@ -399,7 +399,7 @@ impl BodyCheck<'_, '_> {
 
     /// トップレベルの値を参照するたびに、宣言の型の形を具体化する。呼び出し先の Kind の制約は複写せず、Kind の具体化の
     /// 記録を残して段2で展開する (docs/spec/types.md の「推論」)。シグネチャがなければ `None` である。
-    fn instantiate(&mut self, decl: Decl) -> Option<(Ty, Vec<Ty>)> {
+    fn instantiate(&mut self, decl: ValueItem) -> Option<(Ty, Vec<Ty>)> {
         let shape = self.signatures.get(decl)?;
         let Instantiated {
             ty,
@@ -445,8 +445,7 @@ impl BodyCheck<'_, '_> {
     /// トップレベルの値の参照は、参照ごとの具体化の表に型引数を記録する。S4 の組み込みのクラスと、
     /// 後の型クラスが型ごとの解決に使う (docs/implementation/architecture.md の「`eml_types` の内部」)。
     fn path(&mut self, id: ExprId, res: Res, range: TextRange, open: bool) -> Ty {
-        let program = self.program;
-        let (decl, name) = match res {
+        let item = match res {
             Res::Local(local) => {
                 return self
                     .typing
@@ -455,19 +454,16 @@ impl BodyCheck<'_, '_> {
                     .copied()
                     .unwrap_or(self.table.error);
             }
-            Res::Function(function) => (Decl::Function(function), &program[function].name),
-            Res::Constructor(constructor) => {
-                (Decl::Constructor(constructor), &program[constructor].name)
-            }
-            Res::Operation(operation) => (Decl::Operation(operation), &program[operation].name),
+            Res::Item(item) => item,
         };
-        let instantiated = self.with_kind_origin(range, KindReason::Passed(name.clone()), |this| {
-            this.instantiate(decl)
+        let name = self.program.value_name(item).to_string();
+        let instantiated = self.with_kind_origin(range, KindReason::Passed(name), |this| {
+            this.instantiate(item)
         });
         let Some((ty, args)) = instantiated else {
             return self.table.error;
         };
-        self.typing.instantiations.insert(id, (decl, args));
+        self.typing.instantiations.insert(id, (item, args));
         if open { self.table.open_spine(ty) } else { ty }
     }
 
@@ -513,7 +509,7 @@ impl BodyCheck<'_, '_> {
         let (mut ty, opened_later) = match &callee_expr.kind {
             // 呼ばれる位置のトップレベルの値は開かずに具体化し、矢印の row を宣言のまま記録する。持ち越し規則は宣言の
             // row で判定する (docs/spec/effects.md の「継続の多重度と持ち越し規則」)
-            ExprKind::Path(res @ (Res::Function(_) | Res::Operation(_) | Res::Constructor(_))) => {
+            ExprKind::Path(res @ Res::Item(_)) => {
                 let ty = self.path(callee, *res, callee_expr.range, false);
                 self.typing.exprs.insert(callee, ty);
                 (ty, true)
@@ -521,7 +517,7 @@ impl BodyCheck<'_, '_> {
             _ => (self.infer_expr(callee), false),
         };
         let performs = match &callee_expr.kind {
-            ExprKind::Path(Res::Operation(op)) => {
+            ExprKind::Path(Res::Item(ValueItem::Operation(op))) => {
                 Some((self.program[*op].arity.saturating_sub(1), *op))
             }
             _ => None,
@@ -716,7 +712,7 @@ impl BodyCheck<'_, '_> {
     ) {
         let range = self.body.pats[pat].range;
         let instantiated = self.with_kind_origin(range, KindReason::Unified, |this| {
-            this.instantiate(Decl::Constructor(ctor))
+            this.instantiate(ValueItem::Constructor(ctor))
         });
         let mut ty = instantiated.map_or(self.table.error, |(ty, _)| ty);
         let mut fields = Vec::new();

@@ -1,8 +1,9 @@
 //! 段1が集める Kind の問題と、段2が残す Kind のスキーム (docs/spec/types.md の「推論」)。どちらも型の表を指さず、変数を
 //! 番号だけで表す。比べられる純粋なデータなので、クエリに載せたときに変わっていないかを確かめられる。
 
+use eml_hir::ValueItem;
+
 use super::{Bound, Carry, KindVar, Provenance};
-use crate::Decl;
 use crate::ty::{Linearity, Multiplicity};
 
 /// 1つの束の上の制約 `下限 ≤ 上限` の集まり。変数は 0 から `vars` 未満の番号を持つ。
@@ -41,7 +42,7 @@ impl<T> Bounds<T> {
 /// (docs/spec/types.md の「推論」)。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Instance {
-    pub decl: Decl,
+    pub decl: ValueItem,
     /// `Shape` の線形性の Kind 変数の番号の順に並べた、具体化した新しい変数。
     pub lin: Vec<KindVar>,
     /// `Shape` の多重度の Kind 変数の番号の順に並べた、具体化した新しい変数。

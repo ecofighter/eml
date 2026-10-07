@@ -317,7 +317,7 @@ impl Printer<'_> {
         match res {
             Res::Local(local) => local_name(body, local),
             // extern の関数は `@` を付けずに名前だけを出す。テストの表示を標準ライブラリに左右させないため
-            Res::Function(id) => {
+            Res::Item(ValueItem::Function(id)) => {
                 let function = &self.program[id];
                 match function.kind {
                     FunctionKind::Extern(_) => function.name.clone(),
@@ -326,7 +326,7 @@ impl Printer<'_> {
                     }
                 }
             }
-            Res::Operation(id) => {
+            Res::Item(ValueItem::Operation(id)) => {
                 let operation = &self.program[id];
                 let effect = &self.program[operation.effect].name;
                 format!(
@@ -334,7 +334,9 @@ impl Printer<'_> {
                     self.qualified(id.module, &format!("{effect}.{}", operation.name))
                 )
             }
-            Res::Constructor(id) => self.qualified(id.module, &self.program[id].name),
+            Res::Item(ValueItem::Constructor(id)) => {
+                self.qualified(id.module, &self.program[id].name)
+            }
         }
     }
 

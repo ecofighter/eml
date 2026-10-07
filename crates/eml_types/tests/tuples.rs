@@ -3,8 +3,8 @@
 
 use crate::common::check_text;
 use eml_extern::Extern;
-use eml_hir::FunctionKind;
-use eml_types::{Decl, Equality};
+use eml_hir::{FunctionKind, ValueItem};
+use eml_types::Equality;
 
 /// 関数 `name` の本体で決まった `==` / `!=` の比べ方を、ソースの順に並べる。
 fn decided(text: &str, name: &str) -> Vec<(&'static str, Equality)> {
@@ -25,7 +25,7 @@ fn decided(text: &str, name: &str) -> Vec<(&'static str, Equality)> {
         .instantiations
         .iter()
         .filter_map(|(expr, instantiation)| {
-            let Decl::Function(function) = instantiation.decl else {
+            let ValueItem::Function(function) = instantiation.decl else {
                 return None;
             };
             let operator = match program[function].kind {

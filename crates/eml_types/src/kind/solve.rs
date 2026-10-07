@@ -3,9 +3,10 @@
 
 use std::collections::{HashMap, HashSet};
 
+use eml_hir::ValueItem;
+
 use super::problem::{Bounds, KindProblem, KindScheme, OwnVars};
 use super::{Bound, CarriedInner, Carry, KindOrigin, KindReason, KindVar, Level, Provenance, Span};
-use crate::Decl;
 use crate::ty::{Linearity, Multiplicity};
 
 /// 1つの SCC を解いた結果。`schemes` は `members` と同じ順に並ぶ。
@@ -18,8 +19,8 @@ pub(crate) struct Solution {
 
 /// `members` は1つの SCC の宣言とその問題、`schemes` は前の SCC と本体のない宣言のスキームである。
 pub(crate) fn solve_scc(
-    members: &[(Decl, &KindProblem)],
-    schemes: &HashMap<Decl, KindScheme>,
+    members: &[(ValueItem, &KindProblem)],
+    schemes: &HashMap<ValueItem, KindScheme>,
 ) -> Solution {
     let merged = merge(members, schemes);
     let (lin, lin_violated) = solve(&merged.lin);
@@ -91,7 +92,10 @@ struct Merged {
     own: Vec<OwnVars>,
 }
 
-fn merge(members: &[(Decl, &KindProblem)], schemes: &HashMap<Decl, KindScheme>) -> Merged {
+fn merge(
+    members: &[(ValueItem, &KindProblem)],
+    schemes: &HashMap<ValueItem, KindScheme>,
+) -> Merged {
     let mut offsets = Vec::new();
     let (mut lin_vars, mut mult_vars) = (0, 0);
     for (_, problem) in members {
@@ -99,7 +103,7 @@ fn merge(members: &[(Decl, &KindProblem)], schemes: &HashMap<Decl, KindScheme>) 
         lin_vars += problem.lin.vars;
         mult_vars += problem.mult.vars;
     }
-    let position: HashMap<Decl, usize> = members
+    let position: HashMap<ValueItem, usize> = members
         .iter()
         .enumerate()
         .map(|(index, (decl, _))| (*decl, index))
@@ -749,8 +753,8 @@ mod tests {
         Bounds::default()
     }
 
-    fn function(index: u32) -> Decl {
-        Decl::Function(FunctionId::new(
+    fn function(index: u32) -> ValueItem {
+        ValueItem::Function(FunctionId::new(
             ModuleId::from_raw(RawIdx::from(0)),
             Idx::from_raw(RawIdx::from(index)),
         ))

@@ -3,7 +3,7 @@
 
 use std::collections::HashMap;
 
-use eml_hir::{ExprKind, FunctionId, Program, Res};
+use eml_hir::{ExprKind, FunctionId, Program, Res, ValueItem};
 
 /// SCC を、呼ばれる側が先になる順に返す。Tarjan の方法で、関数の数が多くても Rust のスタックを使わないように、
 /// 明示的なスタックでたどる。
@@ -81,7 +81,7 @@ fn callees(program: &Program, id: FunctionId) -> Vec<FunctionId> {
     };
     let mut out = Vec::new();
     for (_, expr) in body.exprs.iter() {
-        if let ExprKind::Path(Res::Function(callee)) = expr.kind
+        if let ExprKind::Path(Res::Item(ValueItem::Function(callee))) = expr.kind
             && !out.contains(&callee)
         {
             out.push(callee);

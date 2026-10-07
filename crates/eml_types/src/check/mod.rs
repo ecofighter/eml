@@ -3,7 +3,7 @@ use std::collections::{HashMap, HashSet};
 use eml_diagnostics::{Diagnostic, Label};
 use eml_hir::{
     Constructor, Function, FunctionId, FunctionKind, Generics, ItemMap, Operation, Program, RowRef,
-    TypeRef, TypeRefId, TypeRefKind,
+    TypeRef, TypeRefId, TypeRefKind, ValueItem,
 };
 use la_arena::Arena;
 
@@ -15,7 +15,7 @@ use crate::shape::{Own, Shape, constructor_shape, operation_shape, signature_sha
 use crate::table::{Row, Table, TyShape};
 use crate::ty::{EffectLabel, Type};
 use crate::{
-    BodyTypes, Decl, DeclType, Instantiation, TypedProgram, carry, codes, exhaustive, scc, usage,
+    BodyTypes, DeclType, Instantiation, TypedProgram, carry, codes, exhaustive, scc, usage,
 };
 
 mod body;
@@ -35,11 +35,11 @@ pub(crate) struct Signatures {
 }
 
 impl Signatures {
-    pub fn get(&self, decl: Decl) -> Option<&Shape> {
+    pub fn get(&self, decl: ValueItem) -> Option<&Shape> {
         match decl {
-            Decl::Function(id) => self.functions.get(id),
-            Decl::Operation(id) => self.operations.get(id),
-            Decl::Constructor(id) => self.constructors.get(id),
+            ValueItem::Function(id) => self.functions.get(id),
+            ValueItem::Operation(id) => self.operations.get(id),
+            ValueItem::Constructor(id) => self.constructors.get(id),
         }
     }
 }
@@ -75,15 +75,15 @@ pub(crate) fn check_module(program: &Program) -> (TypedProgram, Vec<Diagnostic>)
     // 上書きしない
     for (id, _) in signatures.functions.iter() {
         if problems.get(id).is_none() {
-            schemes.entry(Decl::Function(id)).or_default();
+            schemes.entry(ValueItem::Function(id)).or_default();
         }
     }
     // 呼ばれる側の SCC から順に解き、SCC ごとに Kind を多相化する (docs/spec/types.md の「推論」)
     let mut violated = Vec::new();
     for component in &components {
-        let members: Vec<(Decl, &KindProblem)> = component
+        let members: Vec<(ValueItem, &KindProblem)> = component
             .iter()
-            .filter_map(|&id| Some((Decl::Function(id), problems.get(id)?)))
+            .filter_map(|&id| Some((ValueItem::Function(id), problems.get(id)?)))
             .collect();
         let solution = solve_scc(&members, &schemes);
         for (&(decl, _), scheme) in members.iter().zip(solution.schemes) {
@@ -205,8 +205,8 @@ fn declaration_schemes(
     program: &Program,
     context: &Context,
     signatures: &Signatures,
-) -> HashMap<Decl, KindScheme> {
-    let mut problems: Vec<(Decl, KindProblem)> = Vec::new();
+) -> HashMap<ValueItem, KindScheme> {
+    let mut problems: Vec<(ValueItem, KindProblem)> = Vec::new();
     // extern の関数は本体を持たないので、部分適用のクロージャの Kind だけを宣言から出す
     // (docs/spec/types.md の「関数型」)
     for (id, function) in program
@@ -221,7 +221,7 @@ fn declaration_schemes(
         let problem = declaration_problem(context, shape, &signature.generics, |table, own| {
             table.closure_kinds(own.ty, arity, &[]);
         });
-        problems.push((Decl::Function(id), problem));
+        problems.push((ValueItem::Function(id), problem));
     }
     for (id, operation) in program.operations() {
         let shape = &signatures.operations[id];
@@ -249,7 +249,7 @@ fn declaration_schemes(
                 spine = ret;
             }
         });
-        problems.push((Decl::Operation(id), problem));
+        problems.push((ValueItem::Operation(id), problem));
     }
     for (id, constructor) in program.constructors() {
         let shape = &signatures.constructors[id];
@@ -257,7 +257,7 @@ fn declaration_schemes(
         let problem = declaration_problem(context, shape, generics, |table, own| {
             table.closure_kinds(own.ty, constructor.fields.len(), &[]);
         });
-        problems.push((Decl::Constructor(id), problem));
+        problems.push((ValueItem::Constructor(id), problem));
     }
     let mut schemes = HashMap::new();
     for (decl, problem) in &problems {
@@ -318,24 +318,24 @@ fn report_violations(program: &Program, mut origins: Vec<KindOrigin>) -> Vec<Dia
 /// スキームを)、解いた SCC の関数は SCC の解が入れるためである。
 fn typed_program(
     signatures: &Signatures,
-    mut schemes: HashMap<Decl, KindScheme>,
+    mut schemes: HashMap<ValueItem, KindScheme>,
     bodies: ItemMap<Function, BodyTypes>,
 ) -> TypedProgram {
     let shapes = signatures
         .functions
         .iter()
-        .map(|(id, shape)| (Decl::Function(id), shape))
+        .map(|(id, shape)| (ValueItem::Function(id), shape))
         .chain(
             signatures
                 .operations
                 .iter()
-                .map(|(id, shape)| (Decl::Operation(id), shape)),
+                .map(|(id, shape)| (ValueItem::Operation(id), shape)),
         )
         .chain(
             signatures
                 .constructors
                 .iter()
-                .map(|(id, shape)| (Decl::Constructor(id), shape)),
+                .map(|(id, shape)| (ValueItem::Constructor(id), shape)),
         );
     let decls = shapes
         .map(|(decl, shape)| {

@@ -2,13 +2,13 @@
 
 use std::fmt::Write;
 
-use eml_hir::{DisplayNames, ModuleId, ModuleOrigin, Program};
+use eml_hir::{DisplayNames, ModuleId, ModuleOrigin, Program, ValueItem};
 
 use crate::kind::Bound;
 use crate::kind::problem::KindScheme;
 use crate::shape::Shape;
 use crate::ty::{KindConstraint, KindTerm, Linearity, Multiplicity, RowTerm};
-use crate::{Decl, DeclType, TypedProgram};
+use crate::{DeclType, TypedProgram};
 
 /// ユーザーのモジュールを、モジュールの番号の順に表示する。標準ライブラリのモジュールはどのプログラムにもあるので、テストの
 /// 表示を標準ライブラリに左右させないため。モジュールが2つ以上なら、`eml_hir::pretty` と同じく各モジュールの前に `-- 名前`
@@ -27,13 +27,13 @@ pub fn dump(program: &Program, typed: &TypedProgram) -> String {
             writeln!(out, "-- {}", program.modules[module].name).unwrap();
         }
         for (id, operation) in program.operations().filter(|(id, _)| id.module == module) {
-            if let Some(declared) = typed.decls.get(&Decl::Operation(id)) {
+            if let Some(declared) = typed.decls.get(&ValueItem::Operation(id)) {
                 writeln!(out, "{} : {}", operation.name, declared.ty.display(names)).unwrap();
                 write_kinds(&mut out, names, declared);
             }
         }
         for (id, function) in program.functions().filter(|(id, _)| id.module == module) {
-            if let Some(declared) = typed.decls.get(&Decl::Function(id)) {
+            if let Some(declared) = typed.decls.get(&ValueItem::Function(id)) {
                 writeln!(out, "{} : {}", function.name, declared.ty.display(names)).unwrap();
                 write_kinds(&mut out, names, declared);
             }

@@ -423,9 +423,7 @@ impl BodyCheck<'_, '_> {
 /// 地の文の `this expression` にする。名前のない式を引用符で囲むと、そういう名前があるように読めてしまうため。
 pub(super) fn callee_subject(program: &Program, body: &Body, callee: ExprId) -> String {
     let name = match &body.exprs[callee].kind {
-        ExprKind::Path(Res::Function(function)) => program[*function].name.as_str(),
-        ExprKind::Path(Res::Operation(operation)) => program[*operation].name.as_str(),
-        ExprKind::Path(Res::Constructor(ctor)) => program[*ctor].name.as_str(),
+        ExprKind::Path(Res::Item(item)) => program.value_name(*item),
         ExprKind::Path(Res::Local(local)) => body.locals[*local].name.as_str(),
         _ => return "this expression".to_string(),
     };

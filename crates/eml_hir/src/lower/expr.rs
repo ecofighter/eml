@@ -5,7 +5,7 @@ use la_arena::{Arena, ArenaMap};
 use super::types::{TypeLowering, Vars};
 use super::{NameKind, NameUse, path_name, unresolved};
 use crate::codes;
-use crate::def_map::{NameRef, Resolved, Resolver, ValueItem};
+use crate::def_map::{NameRef, Resolved, Resolver};
 use crate::hir::*;
 use crate::item_tree::{Assoc, Fixity};
 use crate::program::Module;
@@ -336,9 +336,7 @@ impl<'a> BodyLowering<'a> {
         let res = match local {
             Some(local) => Res::Local(local),
             None => match self.items.value(at.name) {
-                Resolved::Found(ValueItem::Function(id)) => Res::Function(id),
-                Resolved::Found(ValueItem::Operation(id)) => Res::Operation(id),
-                Resolved::Found(ValueItem::Constructor(id)) => Res::Constructor(id),
+                Resolved::Found(item) => Res::Item(item),
                 other => {
                     let kind = if name
                         .token()

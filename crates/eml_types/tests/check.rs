@@ -1,5 +1,5 @@
 use crate::common::check_text;
-use eml_types::Decl;
+use eml_hir::ValueItem;
 
 #[test]
 fn signatures_and_local_types() {
@@ -379,7 +379,7 @@ fn extern_schemes_are_exported() {
             .functions()
             .find(|(_, function)| function.name == name)
             .unwrap();
-        checked.typed.decls[&Decl::Function(id)]
+        checked.typed.decls[&ValueItem::Function(id)]
             .ty
             .display(&checked.program.names)
             .to_string()
@@ -389,7 +389,7 @@ fn extern_schemes_are_exported() {
     assert_eq!(ty(">>"), "(a -> <e> b) -> (b -> <e> c) -> a -> <e> c");
     // コンストラクタは extern ではなく、Prelude の `data Bool` のスキームとして書き出す
     assert_eq!(
-        checked.typed.decls[&Decl::Constructor(checked.program.lang.true_ctor)]
+        checked.typed.decls[&ValueItem::Constructor(checked.program.lang.true_ctor)]
             .ty
             .display(&checked.program.names)
             .to_string(),
@@ -407,7 +407,7 @@ fn operation_types_are_exported() {
             .operations()
             .find(|(_, operation)| operation.name == name)
             .unwrap();
-        checked.typed.decls[&Decl::Operation(id)]
+        checked.typed.decls[&ValueItem::Operation(id)]
             .ty
             .display(&checked.program.names)
             .to_string()

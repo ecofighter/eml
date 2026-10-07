@@ -5,7 +5,7 @@ use eml_extern::{Extern, ExternEffect, ExternType};
 use la_arena::{Arena, ArenaMap, Idx};
 
 pub use crate::program::{
-    ConstructorId, EffectId, FunctionId, ItemId, ModuleId, OperationId, TypeDefId,
+    ConstructorId, EffectId, FunctionId, ItemId, ModuleId, OperationId, TypeDefId, ValueItem,
 };
 
 pub type ExprId = Idx<Expr>;
@@ -516,9 +516,7 @@ pub enum Literal {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Res {
     Local(LocalId),
-    Function(FunctionId),
-    Operation(OperationId),
-    Constructor(ConstructorId),
+    Item(ValueItem),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

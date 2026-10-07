@@ -5,9 +5,9 @@ use std::collections::HashMap;
 use eml_extern::Extern;
 use eml_hir::{
     ConstructorId, EffectDef, EffectId, EffectKind, FunctionId, FunctionKind, ModuleId,
-    OpMultiplicity, OperationId, Program as HirProgram,
+    OpMultiplicity, OperationId, Program as HirProgram, ValueItem,
 };
-use eml_types::{Decl, Type, TypedProgram};
+use eml_types::{Type, TypedProgram};
 
 use crate::builder::FnBuilder;
 use crate::{Atom, CExpr, Call, CoreFn, EffectInfo, FnIdx, OperationInfo, Rhs, VarId, VarInfo};
@@ -58,7 +58,9 @@ impl ProgramBuilder {
             extern_types: hir
                 .functions()
                 .filter(|(_, function)| matches!(function.kind, FunctionKind::Extern(_)))
-                .filter_map(|(id, _)| Some((id, typed.decls.get(&Decl::Function(id))?.ty.clone())))
+                .filter_map(|(id, _)| {
+                    Some((id, typed.decls.get(&ValueItem::Function(id))?.ty.clone()))
+                })
                 .collect(),
             functions: Vec::new(),
             arities: Vec::new(),
@@ -68,7 +70,7 @@ impl ProgramBuilder {
                 .decls
                 .iter()
                 .filter_map(|(decl, declared)| match decl {
-                    Decl::Operation(id) => Some((*id, declared.ty.clone())),
+                    ValueItem::Operation(id) => Some((*id, declared.ty.clone())),
                     _ => None,
                 })
                 .collect(),
@@ -77,7 +79,7 @@ impl ProgramBuilder {
                 .decls
                 .iter()
                 .filter_map(|(decl, declared)| match decl {
-                    Decl::Constructor(id) => Some((*id, declared.ty.clone())),
+                    ValueItem::Constructor(id) => Some((*id, declared.ty.clone())),
                     _ => None,
                 })
                 .collect(),

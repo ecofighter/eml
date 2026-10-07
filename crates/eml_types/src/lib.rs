@@ -17,10 +17,7 @@ use std::collections::HashMap;
 
 use eml_diagnostics::{Diagnostic, FileId, Label, TextRange};
 use eml_extern::ExternType;
-use eml_hir::{
-    ConstructorId, EffectId, ExprId, Function, FunctionId, ItemMap, LocalId, OperationId, PatId,
-    Program,
-};
+use eml_hir::{EffectId, ExprId, Function, ItemMap, LocalId, PatId, Program, ValueItem};
 use la_arena::ArenaMap;
 
 use crate::kind::problem::KindScheme;
@@ -60,17 +57,9 @@ pub mod codes {
 #[derive(Debug, Default)]
 pub struct TypedProgram {
     /// シグネチャのある関数、操作、コンストラクタの型。
-    pub decls: HashMap<Decl, DeclType>,
+    pub decls: HashMap<ValueItem, DeclType>,
     /// シグネチャと等式の両方がある関数だけを含む。
     pub bodies: ItemMap<Function, BodyTypes>,
-}
-
-/// スキームを持つ宣言。Kind の具体化の記録 (`Instance`) と参照ごとの具体化の表が、どの宣言を指すかにも使う。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum Decl {
-    Function(FunctionId),
-    Operation(OperationId),
-    Constructor(ConstructorId),
 }
 
 /// 1つの宣言の型検査の結果。
@@ -126,7 +115,7 @@ pub struct BodyTypes {
 /// 1つの参照の具体化。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Instantiation {
-    pub decl: Decl,
+    pub decl: ValueItem,
     /// `Shape::rigids` の順 (関数はシグネチャに最初に現れた順、操作はエフェクトの型引数が先、コンストラクタは `data` の
     /// 頭の型引数の順) に並べた型引数。row 変数と Kind 変数は持たない。
     pub args: Vec<Type>,

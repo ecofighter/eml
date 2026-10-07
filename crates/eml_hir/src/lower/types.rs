@@ -4,10 +4,11 @@ use la_arena::Arena;
 
 use super::{NameKind, NameUse, not_found, path_name, unresolved};
 use crate::codes;
-use crate::def_map::{Resolved, Resolver, TypeItem};
+use crate::def_map::{Resolved, Resolver};
 use crate::hir::{
     EffectRef, Generics, RowRef, RowVarDecl, RowVarId, TypeRef, TypeRefId, TypeRefKind, TypeVarDecl,
 };
+use crate::program::TypeItem;
 
 /// 型変数と row 変数の名前の引き方。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
