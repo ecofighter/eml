@@ -1,8 +1,6 @@
 //! `data` の宣言、コンストラクタ、型の適用、パターン、`match` の変換。
 
-mod common;
-
-use common::{diagnostics, lower_text};
+use crate::common::{diagnostics, lower_text};
 use eml_hir::{Body, ExprKind, Program, TypeDefKind};
 
 #[test]

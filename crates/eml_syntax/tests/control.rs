@@ -1,6 +1,4 @@
-mod common;
-
-use common::{diagnostics, helps, lines, shape};
+use crate::common::{diagnostics, helps, lines, shape};
 
 #[test]
 fn if_with_else_on_separate_lines() {

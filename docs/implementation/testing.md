@@ -44,7 +44,9 @@
 ### crate の中の置き方
 
 - 結合テストは、話題ごとに1ファイルにする。ファイル名は spec の節か言語の機能から付ける (`effects.rs`、`operators.rs`)。1つのファイルが複数の話題にまたがったら、話題で分ける
-- crate の結合テストが使う表示の関数は `tests/common/mod.rs` に置く。複数の crate で使う部品は `eml_test_support` に置く
+- 結合テストは、crate ごとに1つのバイナリ (`integration`) にまとめる。`Cargo.toml` に `autotests = false` と `[[test]]` を書き、`tests/main.rs` で各ファイルを `mod` で宣言する。テストのバイナリが増えると、リンクと、macOS が新しい実行ファイルを最初に起動するときの検査に時間がかかるためである。`tests/main.rs` で宣言しないファイルはコンパイルされず、テストが流れない
+- lib には `doctest = false` を付ける。doc コメントは説明だけで、実行する例を書かない。単体テストのない lib (`eml_hir`、`eml_cli`、`eml_test_support`) と `eml_cli` の bin には `test = false` も付け、空のテストのバイナリを作らない。単体テストを足すときは `test = false` を外す
+- crate の結合テストが使う表示の関数は `tests/common/mod.rs` に置き、`tests/main.rs` で1回だけ宣言して、各ファイルから `crate::common` で使う。複数の crate で使う部品は `eml_test_support` に置く
 - Core IR の結合テストは、確かめるパスごとのファイルに置き、`eml_test_support::core_until` でそのパスの直後の IR を見る。後のパスの書き換えや RC の命令を、確かめたいことと一緒に期待値に入れないためである
 - 単体テストは、ファイルの末尾の `#[cfg(test)] mod tests` に置く。テストが300行を超え、ファイルの半分ほどを占めるようになったら、`eml_types/src/table/tests.rs` のように隣の `tests.rs` に分ける
 - `crates/eml_test_support/` は、結合テストのためにパイプラインを組む関数 (`parse`、`lower`、`check`、`core`、`core_until`、`run`、`execute`) と、診断のないことを確かめて組む関数 (`parse_clean`、`lower_clean`)、診断を文字列にする関数 (`short`、`short_text`、`full`) と fix を文字列にする関数 (`fixes`)、段階の表示に診断を足す関数 (`with_diagnostics`)を持つ。`lower` は Prelude を `SourceFiles` に登録し、`item_tree`、`def_map`、`lower` の順に変換する。`def_map` は `DefMap` と、入口のファイルの `ItemTree` と `DefMap` の診断を返す。構文解析の診断は含めない。`Lowered` と `Checked` は HIR の `Program` を持つ。開発専用の crate で、各 crate の `tests/` からだけ使う。段階は feature (`hir` < `types` < `core` < `run`) で選び、各 crate は自分の段階までを有効にする。下流の crate がまだ組み立たなくても、上流の段階のテストを流せるようにするためである。`src/` の `#[cfg(test)]` から使うと、テストする crate が2つ別々にリンクされて型が合わなくなる
@@ -121,10 +123,10 @@
 
 ```sh
 cargo test                                           # すべてのテスト
-cargo test -p eml_syntax --test parser empty_file    # 1つのテスト
+cargo test -p eml_syntax --test integration parser::empty_file    # 1つのテスト
 cargo test -p eml_cli --test ui                      # UI テスト
 cargo insta review                                   # スナップショットの承認
 cargo clippy --all-targets && cargo fmt
-cargo test --release -p eml_types --test scaling -- --ignored   # 型検査の時間の伸び (性能のテスト)
-cargo test --release -p eml_hir --test scaling -- --ignored     # 名前の表を作る時間の伸び (性能のテスト)
+cargo test --release -p eml_types --test integration scaling:: -- --ignored   # 型検査の時間の伸び (性能のテスト)
+cargo test --release -p eml_hir --test integration scaling:: -- --ignored     # 名前の表を作る時間の伸び (性能のテスト)
 ```

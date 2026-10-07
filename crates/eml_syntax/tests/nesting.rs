@@ -1,6 +1,4 @@
-mod common;
-
-use common::diagnostics;
+use crate::common::diagnostics;
 
 fn assert_one_nesting_error(text: &str) {
     let found = diagnostics(text);

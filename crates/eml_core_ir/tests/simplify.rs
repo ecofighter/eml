@@ -1,8 +1,6 @@
 //! Core IR の `simplify` の書き換え (docs/spec/core-ir.md)。
 
-mod common;
-
-use common::core_text;
+use crate::common::core_text;
 use eml_core_ir::Pass;
 
 #[test]

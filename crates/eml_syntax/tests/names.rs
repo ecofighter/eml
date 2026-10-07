@@ -1,6 +1,4 @@
-mod common;
-
-use common::shape;
+use crate::common::shape;
 
 #[test]
 fn qualified_and_plain_names_are_paths_of_name_refs() {

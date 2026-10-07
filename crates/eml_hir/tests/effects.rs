@@ -1,6 +1,4 @@
-mod common;
-
-use common::{diagnostics, lower_text};
+use crate::common::{diagnostics, lower_text};
 use eml_test_support::lower_clean;
 
 #[test]

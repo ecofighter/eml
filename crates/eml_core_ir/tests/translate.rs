@@ -1,8 +1,6 @@
 //! 型付き HIR から Core IR への変換 (docs/spec/core-ir.md)。`simplify` と Perceus より前の形を見る。
 
-mod common;
-
-use common::core_text;
+use crate::common::core_text;
 use eml_core_ir::Pass;
 
 #[test]

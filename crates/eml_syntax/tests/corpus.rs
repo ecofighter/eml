@@ -1,6 +1,4 @@
-mod common;
-
-use common::{diagnostics, item_kinds};
+use crate::common::{diagnostics, item_kinds};
 
 const S1: &str = include_str!("corpus/s1.em");
 const LATER_STAGES: &str = include_str!("corpus/later_stages.em");

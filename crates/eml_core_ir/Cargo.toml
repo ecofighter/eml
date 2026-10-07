@@ -3,6 +3,11 @@ name = "eml_core_ir"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+# 結合テストは1つのバイナリにまとめる (docs/implementation/testing.md の「crate の中の置き方」)
+autotests = false
+
+[lib]
+doctest = false
 
 [dependencies]
 eml_hir.workspace = true
@@ -14,3 +19,7 @@ eml_diagnostics.workspace = true
 eml_syntax.workspace = true
 eml_test_support = { workspace = true, features = ["core"] }
 insta.workspace = true
+
+[[test]]
+name = "integration"
+path = "tests/main.rs"

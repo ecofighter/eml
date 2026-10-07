@@ -1,6 +1,4 @@
-mod common;
-
-use common::check_text;
+use crate::common::check_text;
 
 #[test]
 fn applied_types_are_displayed_with_their_arguments() {

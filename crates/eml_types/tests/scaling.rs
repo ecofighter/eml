@@ -1,5 +1,5 @@
 //! 型検査の時間が、関数の数にほぼ比例して伸びることを確かめる (docs/implementation/testing.md の「性能のテスト」)。時間を
-//! 測るので release ビルドで流す: `cargo test --release -p eml_types --test scaling -- --ignored`
+//! 測るので release ビルドで流す: `cargo test --release -p eml_types --test integration scaling:: -- --ignored`
 
 use std::time::{Duration, Instant};
 

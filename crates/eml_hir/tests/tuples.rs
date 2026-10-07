@@ -1,8 +1,6 @@
 //! タプルの式・型・パターンと、リテラルのパターンの変換。
 
-mod common;
-
-use common::{diagnostics, lower_text};
+use crate::common::{diagnostics, lower_text};
 use eml_hir::{Body, ExprKind, LocalId, Program, Stmt};
 
 #[test]

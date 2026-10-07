@@ -1,5 +1,5 @@
 //! 名前の表を作る時間が、item の数にほぼ比例して伸びることを確かめる (docs/implementation/testing.md の「性能のテスト」)。
-//! 時間を測るので release ビルドで流す: `cargo test --release -p eml_hir --test scaling -- --ignored`
+//! 時間を測るので release ビルドで流す: `cargo test --release -p eml_hir --test integration scaling:: -- --ignored`
 
 use std::time::{Duration, Instant};
 

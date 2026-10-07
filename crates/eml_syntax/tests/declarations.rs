@@ -1,6 +1,4 @@
-mod common;
-
-use common::{diagnostics, lines, shape};
+use crate::common::{diagnostics, lines, shape};
 
 #[test]
 fn operator_signature() {

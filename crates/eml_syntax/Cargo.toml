@@ -3,6 +3,11 @@ name = "eml_syntax"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+# 結合テストは1つのバイナリにまとめる (docs/implementation/testing.md の「crate の中の置き方」)
+autotests = false
+
+[lib]
+doctest = false
 
 [dependencies]
 eml_diagnostics.workspace = true
@@ -12,3 +17,7 @@ rowan.workspace = true
 [dev-dependencies]
 eml_test_support.workspace = true
 insta.workspace = true
+
+[[test]]
+name = "integration"
+path = "tests/main.rs"

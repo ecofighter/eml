@@ -1,9 +1,7 @@
 //! タプル、リテラルのパターン、`==` の比べ方の型検査 (docs/spec/records.md、docs/spec/declarations.md の標準の
 //! 演算子の表)。
 
-mod common;
-
-use common::check_text;
+use crate::common::check_text;
 use eml_hir::{ExprKind, Res};
 use eml_types::Equality;
 

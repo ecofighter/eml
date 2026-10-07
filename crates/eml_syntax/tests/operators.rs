@@ -1,8 +1,6 @@
 //! 演算子の列、前置の `-`、セクション、被演算子の欠けの構文。
 
-mod common;
-
-use common::{diagnostics, shape};
+use crate::common::{diagnostics, shape};
 
 #[test]
 fn operator_sequence_is_flat_with_prefix_minus() {

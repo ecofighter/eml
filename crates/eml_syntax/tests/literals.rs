@@ -1,6 +1,4 @@
-mod common;
-
-use common::diagnostics;
+use crate::common::diagnostics;
 use eml_syntax::ast::{Literal, LiteralValue};
 use rowan::ast::AstNode;
 

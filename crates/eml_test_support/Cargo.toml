@@ -4,6 +4,13 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 publish = false
+# 結合テストは1つのバイナリにまとめる (docs/implementation/testing.md の「crate の中の置き方」)
+autotests = false
+
+# 単体テストがないので、空のテストのバイナリを作らない。単体テストを足すときは `test = false` を外す
+[lib]
+test = false
+doctest = false
 
 # 段階ごとに feature を分け、各 crate のテストが自分より下流の crate を組み立てずに済むようにする。破壊的な変更の途中で
 # 下流がまだ組み立たなくても、変更している段階のテストは流せる (docs/implementation/testing.md)。
@@ -22,3 +29,7 @@ eml_interp = { workspace = true, optional = true }
 eml_runtime = { workspace = true, optional = true }
 eml_syntax.workspace = true
 eml_types = { workspace = true, optional = true }
+
+[[test]]
+name = "integration"
+path = "tests/main.rs"

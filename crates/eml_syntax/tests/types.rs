@@ -1,8 +1,6 @@
 //! 型と row の構文。
 
-mod common;
-
-use common::{diagnostics, helps, lines, shape};
+use crate::common::{diagnostics, helps, lines, shape};
 
 #[test]
 fn signature_with_function_type() {

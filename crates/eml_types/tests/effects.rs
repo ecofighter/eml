@@ -1,6 +1,4 @@
-mod common;
-
-use common::check_text;
+use crate::common::check_text;
 
 #[test]
 fn operations_have_the_row_of_their_effect() {

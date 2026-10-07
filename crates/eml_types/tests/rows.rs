@@ -1,8 +1,6 @@
 //! エフェクトの row の検査 (E2002、row 変数、未定義のエフェクト)。
 
-mod common;
-
-use common::check_text;
+use crate::common::check_text;
 
 #[test]
 fn effects_must_be_in_the_signature() {

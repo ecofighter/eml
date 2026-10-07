@@ -23,7 +23,7 @@ The dev environment is a Nix flake (`direnv` with `use flake`). The devShell pro
 ```sh
 cargo build                          # all crates
 cargo test                           # all tests
-cargo test -p eml_syntax --test parser empty_file   # a single test
+cargo test -p eml_syntax --test integration parser::empty_file   # a single test
 cargo test -p eml_cli --test ui      # UI tests
 cargo insta review                   # accept snapshots
 cargo clippy --all-targets && cargo fmt
@@ -57,6 +57,7 @@ eml_diagnostics  Diagnostic, FileId/SourceFiles, ariadne rendering (does not dep
 ## Testing
 
 - Work test-first (TDD). Snapshots use `insta`, mostly inline (`@"..."`).
+- Each crate's integration tests build into one binary, `integration` (`autotests = false`; `tests/main.rs` declares every file as a module). A file not declared there does not run. Libs set `doctest = false`, and libs without unit tests also set `test = false` (`docs/implementation/testing.md`).
 - UI tests (`crates/eml_cli/tests/ui.rs`): `tests/ui/run/**/*.em` must run to completion and `tests/ui/run-fail/**/*.em` must compile cleanly and end in a runtime error, and `tests/ui/check-fail/**/*.em` must produce at least one error; output is snapshotted. Pass/fail expectation is decided by the top-level directory, and every test sits in a category subdirectory below it (`docs/implementation/testing.md`). Run tests always enable `debug_heap`.
 - `crates/eml_cli/tests/cli.rs` checks the binary's exit codes (0 success / 1 diagnostic or runtime error / 2 usage error).
 - Test changes come in three kinds (`docs/implementation/testing.md`): (1) behavior changes (UI output, diagnostic codes or wording, pass/fail, deleting or moving tests) need agreement beforehand; (2) changes to internal-representation snapshots (e.g. Core IR dumps) are listed in the work's spec, and approving the spec is the agreement; (3) mechanical follow-ups that keep every expected value byte-identical are allowed when the plan says so. For kinds 1 and 2, write the reason in the work's spec and the commit message.

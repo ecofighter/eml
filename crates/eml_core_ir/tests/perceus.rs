@@ -1,8 +1,6 @@
 //! Perceus の `dup` / `decref` の位置と、呼び出しの `saved` (docs/spec/core-ir.md)。
 
-mod common;
-
-use common::core_text;
+use crate::common::core_text;
 use eml_core_ir::Pass;
 
 #[test]

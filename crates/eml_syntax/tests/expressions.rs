@@ -1,6 +1,4 @@
-mod common;
-
-use common::{diagnostics, lines, shape};
+use crate::common::{diagnostics, lines, shape};
 
 #[test]
 fn equation_with_a_constructor_pattern() {

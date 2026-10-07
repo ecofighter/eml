@@ -3,6 +3,13 @@ name = "eml_hir"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+# 結合テストは1つのバイナリにまとめる (docs/implementation/testing.md の「crate の中の置き方」)
+autotests = false
+
+# 単体テストがないので、空のテストのバイナリを作らない。単体テストを足すときは `test = false` を外す
+[lib]
+test = false
+doctest = false
 
 [dependencies]
 eml_diagnostics.workspace = true
@@ -12,3 +19,7 @@ la-arena.workspace = true
 [dev-dependencies]
 eml_test_support = { workspace = true, features = ["hir"] }
 insta.workspace = true
+
+[[test]]
+name = "integration"
+path = "tests/main.rs"

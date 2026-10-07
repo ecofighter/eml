@@ -1,6 +1,4 @@
-mod common;
-
-use common::check_text;
+use crate::common::check_text;
 use eml_types::Decl;
 
 #[test]

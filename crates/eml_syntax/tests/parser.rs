@@ -1,6 +1,4 @@
-mod common;
-
-use common::{diagnostics, item_kinds};
+use crate::common::{diagnostics, item_kinds};
 use eml_diagnostics::render;
 use eml_syntax::debug_tree;
 use eml_test_support::{parse, with_diagnostics};
