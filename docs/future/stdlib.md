@@ -8,13 +8,13 @@
 
 - handler でリソースを持つ API を中心にする: `with_log`、`with_output`、`with_temp_dir`、`with_cwd`、`with_env` など。`use` で並べて使う形を想定する ([式](../spec/expressions.md) の「`use`」と「パラメータ付き handler」)
 - `Cmd` 型: コマンドリテラルの結果。`run : Cmd -> <IO> Int`、`read : Cmd -> <IO> String`、`spawn : Cmd -> <IO> Child`、パイプ (`.|` などの演算子)、リダイレクト、環境変数、作業ディレクトリの設定を用意する ([字句](../spec/lexical.md) の「コマンドリテラル」)
-- 標準入出力のハンドル: `Stdin` / `Stdout` / `Stderr` は別の型にして、取り違えを防ぐ。ハンドルは `Lin` で、バッファ付きの読み書きもハンドルにする。intrinsic はハンドルに対する read/write の操作にとどめ、「行を流す」などのストリーム処理は M8 の標準ライブラリにエフェクトとして書く ([ロードマップ](roadmap.md) の「M7 バイト列と入出力」)
+- 標準入出力のハンドル: `Stdin` / `Stdout` / `Stderr` は別の型にして、取り違えを防ぐ。ハンドルは `Lin` で、バッファ付きの読み書きもハンドルにする。extern はハンドルに対する read/write の操作にとどめ、「行を流す」などのストリーム処理は標準ライブラリにエフェクトとして書く ([ロードマップ](roadmap.md) の「バイト列と `Array`」)
 - `Task a` を `Lin` にする: `Async.start` が返すタスクを、必ず `await` するか `drop` (キャンセル) させる。構造化された並行処理にする
 - `exit`: `never` の操作として、`IO` 側に用意する。終了コードはこれで扱う
-- `Prelude` の範囲: `Option`、`Result`、`List`、`Bool`、`println` / `eprintln`、`show_int`、`not`、`|>` などの標準の演算子と fixity ([宣言](../spec/declarations.md) の標準の演算子の表)。M5 の後は、クラス `Eq`、`Ord`、`Num` と表示用のクラスも入る。`show_int` は M5 までの中継ぎである ([ロードマップ](roadmap.md) の「M5 型クラス」)
+- `Prelude` の範囲: `Option`、`Result`、`List`、`Bool`、`println` / `eprintln`、`show_int`、`not`、`|>` などの標準の演算子と fixity ([宣言](../spec/declarations.md) の標準の演算子の表)。S4 で組み込みのクラス `Eq`、`Ord`、`Show` が入り、`Float`、`Char`、`Num` の段で `Num` が入る。`show_int` は S4 までの中継ぎである ([ロードマップ](roadmap.md) の「S4 スクリプトの MVP」)
 - モジュールの候補: `Fs`、`Path`、`Proc`、`Env`、`String`、`List`、`Map`、`Json`、`Csv`、`Toml`、`Regex`、`Http`、`Async`
 - 補間の穴は M5 まで `String` のみ: それまでは各型に `show_*` 関数を揃える。M5 で穴を表示用のクラスに広げる
-- `Bytes` と UTF-8: `String` は常に妥当な UTF-8 である。intrinsic は、検証付きのデコード、エンコード、バイト長、バイト位置から `Char` と次の位置を読む操作、境界を検査する切り出しにとどめる。分割、検索、反復は eml で書く ([ロードマップ](roadmap.md) の「M8 UTF-8 と標準ライブラリ」)
+- `Bytes` と UTF-8: `String` は常に妥当な UTF-8 である。extern は、検証付きのデコード、エンコード、バイト長、バイト位置から `Char` と次の位置を読む操作、境界を検査する切り出しにとどめる。分割、検索、反復は、S4 では Rust の extern として入れる。eml で書き直すかは後で決める ([ロードマップ](roadmap.md) の「UTF-8 と標準ライブラリ」)
 
 ## マルチコア対応の設計からの申し送り
 
