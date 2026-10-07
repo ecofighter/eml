@@ -107,7 +107,7 @@ fn types_patterns_and_effects_hold_paths() {
 
 #[test]
 fn a_clause_names_its_operation_with_a_path() {
-    insta::assert_snapshot!(shape("f = handle g () with\n  | get () k -> resume k 1"), @r#"
+    insta::assert_snapshot!(shape("f = handle g () with\n  | get () k -> k 1"), @r#"
     SOURCE_FILE
       EQUATION
         NAME
@@ -136,8 +136,7 @@ fn a_clause_names_its_operation_with_a_path() {
               NAME
                 LIDENT "k"
             THIN_ARROW "->"
-            RESUME_EXPR
-              RESUME_KW "resume"
+            APP_EXPR
               PATH_EXPR
                 PATH
                   NAME_REF

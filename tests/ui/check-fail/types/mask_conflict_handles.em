@@ -10,8 +10,8 @@ both action =
 outer : (Unit -> <e> a) -> <e> a
 outer action =
   handle (handle both action with
-            | log _ k -> resume k ()) with
-    | log _ k -> resume k ()
+            | log _ k -> k ()) with
+    | log _ k -> k ()
 
 main : Unit -> <IO> Unit
 main () = println "x"

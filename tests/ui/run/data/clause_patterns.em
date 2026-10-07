@@ -14,7 +14,7 @@ program () =
 answer : Unit -> Int
 answer () =
   handle program () with
-    | ask (Box q) k -> resume k (q * 2)
+    | ask (Box q) k -> k (q * 2)
     | return (Box r) -> r
 
 main : Unit -> <IO> Unit

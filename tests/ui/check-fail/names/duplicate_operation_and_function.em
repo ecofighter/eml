@@ -8,5 +8,5 @@ ask () = 1
 main : Unit -> <IO> Unit
 main () =
   let n = handle ask () with
-    | ask () k -> resume k 2
+    | ask () k -> k 2
   println (show_int n)

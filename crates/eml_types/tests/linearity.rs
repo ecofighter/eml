@@ -13,22 +13,22 @@ fn diagnostics(rest: &str) -> String {
 
 #[test]
 fn a_value_used_twice_points_at_both_uses() {
-    let rest = "twice : Unit -> Int\ntwice () =\n  handle ask () with\n    | ask () k ->\n        let j = k\n        resume j 1 + resume j 2";
-    insta::assert_snapshot!(diagnostics(rest), @r"
-    E3002 12:29 `j` must be used exactly once, but it is used more than once
-      12:29 used again here
-      12:16 first used here
+    let rest = "twice : Unit -> Int\ntwice () =\n  handle ask () with\n    | ask () k ->\n        let j = k\n        j 1 + j 2";
+    insta::assert_snapshot!(diagnostics(rest), @"
+    E3002 12:15 `j` must be used exactly once, but it is used more than once
+      12:15 used again here
+      12:9 first used here
       note: linear values, such as files, the continuation of a `once` operation and closures that capture one, must be used exactly once
     ");
 }
 
 #[test]
 fn a_branch_that_does_not_use_a_value() {
-    let rest = "branch : Unit -> Int\nbranch () =\n  handle ask () with\n    | ask () k ->\n        let j = k\n        if flag () then resume j 1 else 0";
-    insta::assert_snapshot!(diagnostics(rest), @r"
+    let rest = "branch : Unit -> Int\nbranch () =\n  handle ask () with\n    | ask () k ->\n        let j = k\n        if flag () then j 1 else 0";
+    insta::assert_snapshot!(diagnostics(rest), @"
     E3003 11:13 `j` must be used exactly once, but some paths do not use it
       11:13 `j` is bound here
-      12:41 this branch does not use `j`
+      12:34 this branch does not use `j`
       note: linear values, such as files, the continuation of a `once` operation and closures that capture one, must be used exactly once
       help: pass `j` to `drop`
     ");
@@ -48,7 +48,7 @@ fn an_omitted_else_does_not_use_a_value() {
 
 #[test]
 fn a_match_arm_that_does_not_use_a_value() {
-    let rest = "arm : Bool -> Int\narm b =\n  handle ask () with\n    | ask () k ->\n        let j = k\n        match b with\n          | True -> resume j 1\n          | False -> 0";
+    let rest = "arm : Bool -> Int\narm b =\n  handle ask () with\n    | ask () k ->\n        let j = k\n        match b with\n          | True -> j 1\n          | False -> 0";
     insta::assert_snapshot!(diagnostics(rest), @r"
     E3003 11:13 `j` must be used exactly once, but some paths do not use it
       11:13 `j` is bound here
@@ -84,7 +84,7 @@ fn a_shadowed_value_is_not_consumed() {
 
 #[test]
 fn a_continuation_unused_on_some_paths_points_at_the_clause() {
-    let rest = "partial : Unit -> Int\npartial () =\n  handle ask () with\n    | ask () k -> if flag () then resume k 1 else 0";
+    let rest = "partial : Unit -> Int\npartial () =\n  handle ask () with\n    | ask () k -> if flag () then k 1 else 0";
     insta::assert_snapshot!(diagnostics(rest), @"
     E3005 10:5 the continuation `k` of a `once` operation must be called or dropped
       10:5 this clause
@@ -96,7 +96,7 @@ fn a_continuation_unused_on_some_paths_points_at_the_clause() {
 
 #[test]
 fn a_body_with_a_type_error_reports_no_linearity_errors() {
-    let rest = "broken : Unit -> Int\nbroken () =\n  handle ask () with\n    | ask () k ->\n        let j = k\n        resume j \"no\" + resume j 2";
+    let rest = "broken : Unit -> Int\nbroken () =\n  handle ask () with\n    | ask () k ->\n        let j = k\n        j \"no\" + j 2";
     let checked = check(&format!("{HEADER}{rest}"));
     let codes: Vec<String> = checked
         .diagnostics
@@ -122,7 +122,7 @@ fn the_fix_inserts_drop_before_the_last_statement_of_the_scope() {
 
 #[test]
 fn the_fix_inserts_drop_into_a_branch_that_is_a_block() {
-    let rest = "arm : Bool -> Int\narm b =\n  handle ask () with\n    | ask () k ->\n        let j = k\n        match b with\n          | True -> resume j 1\n          | False ->\n              let n = 0\n              n";
+    let rest = "arm : Bool -> Int\narm b =\n  handle ask () with\n    | ask () k ->\n        let j = k\n        match b with\n          | True -> j 1\n          | False ->\n              let n = 0\n              n";
     insta::assert_snapshot!(fix_text(rest), @r#"
     E3003 11:13 insert `drop j`
       16:15..16:15 "drop j\n              "
@@ -131,7 +131,7 @@ fn the_fix_inserts_drop_into_a_branch_that_is_a_block() {
 
 #[test]
 fn no_fix_for_a_branch_on_one_line() {
-    let rest = "branch : Unit -> Int\nbranch () =\n  handle ask () with\n    | ask () k ->\n        let j = k\n        if flag () then resume j 1 else 0";
+    let rest = "branch : Unit -> Int\nbranch () =\n  handle ask () with\n    | ask () k ->\n        let j = k\n        if flag () then j 1 else 0";
     assert_eq!(fix_text(rest), "");
 }
 
@@ -234,7 +234,7 @@ const TWO_OPS: &str = "effect Two where\n  one : Unit -> Unit\n  two : Unit -> U
 #[test]
 fn two_operation_clauses_capturing_one_file_report_once() {
     let text = format!(
-        "{TWO_OPS}main : Unit -> <IO> Unit\nmain () =\n  let f = open \"a.txt\"\n  handle one () with\n    | one () k -> resume k (close f)\n    | two () k -> resume k (close f)"
+        "{TWO_OPS}main : Unit -> <IO> Unit\nmain () =\n  let f = open \"a.txt\"\n  handle one () with\n    | one () k -> k (close f)\n    | two () k -> k (close f)"
     );
     let checked = check(&text);
     let codes: Vec<String> = checked
@@ -253,7 +253,7 @@ fn two_operation_clauses_capturing_one_file_report_once() {
 #[test]
 fn a_file_captured_by_the_body_and_the_return_clause() {
     let text = format!(
-        "{TWO_OPS}main : Unit -> <IO> Unit\nmain () =\n  let f = open \"a.txt\"\n  handle close f with\n    | one () k -> resume k ()\n    | two () k -> resume k ()\n    | return x -> close f"
+        "{TWO_OPS}main : Unit -> <IO> Unit\nmain () =\n  let f = open \"a.txt\"\n  handle close f with\n    | one () k -> k ()\n    | two () k -> k ()\n    | return x -> close f"
     );
     insta::assert_snapshot!(plain(&text), @r"
     E3002 11:19 `f` must be used exactly once, but it is used more than once
@@ -323,11 +323,11 @@ fn a_shadowing_let_after_a_lambda_with_the_same_name() {
 
 #[test]
 fn a_value_used_twice_inside_one_branch() {
-    let rest = "inbranch : Unit -> Int\ninbranch () =\n  handle ask () with\n    | ask () k ->\n        let j = k\n        if flag () then resume j 1 + resume j 2 else resume j 0";
-    insta::assert_snapshot!(diagnostics(rest), @r"
-    E3002 12:45 `j` must be used exactly once, but it is used more than once
-      12:45 used again here
-      12:32 first used here
+    let rest = "inbranch : Unit -> Int\ninbranch () =\n  handle ask () with\n    | ask () k ->\n        let j = k\n        if flag () then j 1 + j 2 else j 0";
+    insta::assert_snapshot!(diagnostics(rest), @"
+    E3002 12:31 `j` must be used exactly once, but it is used more than once
+      12:31 used again here
+      12:25 first used here
       note: linear values, such as files, the continuation of a `once` operation and closures that capture one, must be used exactly once
     ");
 }
@@ -359,11 +359,11 @@ fn an_unused_arm_pattern_variable_points_at_the_end_of_the_arm() {
 #[test]
 fn a_continuation_used_twice_on_one_path_is_a_double_use() {
     // 2回使う経路があれば、使わない経路があっても E3005 ではなく E3002 にする
-    let rest = "twice_or_none : Unit -> Int\ntwice_or_none () =\n  handle ask () with\n    | ask () k -> if flag () then resume k 1 + resume k 2 else 0";
-    insta::assert_snapshot!(diagnostics(rest), @r"
-    E3002 10:55 `k` must be used exactly once, but it is used more than once
-      10:55 used again here
-      10:42 first used here
+    let rest = "twice_or_none : Unit -> Int\ntwice_or_none () =\n  handle ask () with\n    | ask () k -> if flag () then k 1 + k 2 else 0";
+    insta::assert_snapshot!(diagnostics(rest), @"
+    E3002 10:41 `k` must be used exactly once, but it is used more than once
+      10:41 used again here
+      10:35 first used here
       note: linear values, such as files, the continuation of a `once` operation and closures that capture one, must be used exactly once
     ");
 }
@@ -392,7 +392,7 @@ fn carried(rest: &str) -> String {
 #[test]
 fn a_file_kept_across_a_multi_operation() {
     let rest = "held : Unit -> <Choice, IO> Unit\nheld () =\n  let f = open \"a.txt\"\n  let b = choose ()\n  close f";
-    insta::assert_snapshot!(carried(rest), @r"
+    insta::assert_snapshot!(carried(rest), @"
     E3006 23:11 `f` must be used exactly once, but it is kept alive across a call that may resume more than once
       23:11 this call may perform `choose`, a `multi` operation
       22:7 `f` is bound here
@@ -405,7 +405,7 @@ fn a_file_kept_across_a_multi_operation() {
 #[test]
 fn an_evaluated_argument_is_kept_across_a_later_argument() {
     let rest = "temporary : Unit -> <Choice, IO> Unit\ntemporary () =\n  let f = open \"a.txt\"\n  consume f (choose ())";
-    insta::assert_snapshot!(carried(rest), @r"
+    insta::assert_snapshot!(carried(rest), @"
     E3006 23:14 a linear value must be used exactly once, but it is kept alive across a call that may resume more than once
       23:14 this call may perform `choose`, a `multi` operation
       23:11 this value is kept alive across the call
@@ -418,7 +418,7 @@ fn an_evaluated_argument_is_kept_across_a_later_argument() {
 #[test]
 fn an_evaluated_tuple_element_is_kept_across_a_later_element() {
     let rest = "paired : Unit -> <Choice, IO> Unit\npaired () =\n  let f = open \"a.txt\"\n  let (g, b) = (f, choose ())\n  close g";
-    insta::assert_snapshot!(carried(rest), @r"
+    insta::assert_snapshot!(carried(rest), @"
     E3006 23:20 a linear value must be used exactly once, but it is kept alive across a call that may resume more than once
       23:20 this call may perform `choose`, a `multi` operation
       23:17 this value is kept alive across the call
@@ -431,7 +431,7 @@ fn an_evaluated_tuple_element_is_kept_across_a_later_element() {
 #[test]
 fn a_call_of_a_function_that_performs_a_multi_operation() {
     let rest = "pick : Unit -> <Choice> Bool\npick () = choose ()\n\nthrough : Unit -> <Choice, IO> Unit\nthrough () =\n  let f = open \"a.txt\"\n  let b = pick ()\n  close f";
-    insta::assert_snapshot!(carried(rest), @r"
+    insta::assert_snapshot!(carried(rest), @"
     E3006 26:11 `f` must be used exactly once, but it is kept alive across a call that may resume more than once
       26:11 this call may perform `choose`, a `multi` operation
       25:7 `f` is bound here
@@ -444,7 +444,7 @@ fn a_call_of_a_function_that_performs_a_multi_operation() {
 #[test]
 fn a_value_kept_across_two_calls_is_reported_once() {
     let rest = "twice : Unit -> <Choice, IO> Unit\ntwice () =\n  let f = open \"a.txt\"\n  let a = choose ()\n  let b = choose ()\n  close f";
-    insta::assert_snapshot!(carried(rest), @r"
+    insta::assert_snapshot!(carried(rest), @"
     E3006 23:11 `f` must be used exactly once, but it is kept alive across a call that may resume more than once
       23:11 this call may perform `choose`, a `multi` operation
       22:7 `f` is bound here
@@ -459,7 +459,7 @@ fn a_value_kept_across_two_calls_is_reported_once() {
 #[test]
 fn a_local_lambda_takes_the_row_of_its_caller() {
     let rest = "logged : Unit -> <Choice, IO> Unit\nlogged () =\n  let f = open \"a.txt\"\n  let log = fn () -> println \"x\"\n  log ()\n  close f";
-    insta::assert_snapshot!(carried(rest), @r"
+    insta::assert_snapshot!(carried(rest), @"
     E3006 24:3 `f` must be used exactly once, but it is kept alive across a call that may resume more than once
       24:3 this call may perform `choose`, a `multi` operation
       22:7 `f` is bound here
@@ -472,7 +472,7 @@ fn a_local_lambda_takes_the_row_of_its_caller() {
 #[test]
 fn a_multi_operation_of_an_effect_with_once_operations() {
     let rest = "many_held : Unit -> <Mixed, IO> Unit\nmany_held () =\n  let f = open \"a.txt\"\n  let n = many ()\n  close f";
-    insta::assert_snapshot!(carried(rest), @r"
+    insta::assert_snapshot!(carried(rest), @"
     E3006 23:11 `f` must be used exactly once, but it is kept alive across a call that may resume more than once
       23:11 this call may perform `many`, a `multi` operation
       22:7 `f` is bound here
@@ -484,8 +484,8 @@ fn a_multi_operation_of_an_effect_with_once_operations() {
 
 #[test]
 fn a_once_continuation_kept_across_a_multi_operation_in_a_clause() {
-    let rest = "inner : Unit -> <Choice> Int\ninner () =\n  handle ask () with\n    | ask () k ->\n        let b = choose ()\n        resume k (if b then 1 else 2)";
-    insta::assert_snapshot!(carried(rest), @r"
+    let rest = "inner : Unit -> <Choice> Int\ninner () =\n  handle ask () with\n    | ask () k ->\n        let b = choose ()\n        k (if b then 1 else 2)";
+    insta::assert_snapshot!(carried(rest), @"
     E3006 24:17 `k` must be used exactly once, but it is kept alive across a call that may resume more than once
       24:17 this call may perform `choose`, a `multi` operation
       23:14 `k` is bound here
@@ -498,7 +498,7 @@ fn a_once_continuation_kept_across_a_multi_operation_in_a_clause() {
 #[test]
 fn a_piped_value_is_kept_across_the_call() {
     let rest = "consume_after : Bool -> File -> <IO> Unit\nconsume_after b f = close f\n\npiped : Unit -> <Choice, IO> Unit\npiped () =\n  let f = open \"a.txt\"\n  f |> consume_after (choose ())";
-    insta::assert_snapshot!(carried(rest), @r"
+    insta::assert_snapshot!(carried(rest), @"
     E3006 26:23 a linear value must be used exactly once, but it is kept alive across a call that may resume more than once
       26:23 this call may perform `choose`, a `multi` operation
       26:3 this value is kept alive across the call
@@ -511,7 +511,7 @@ fn a_piped_value_is_kept_across_the_call() {
 #[test]
 fn an_argument_for_a_later_arrow_is_kept_across_the_call() {
     let rest = "choose_then : Unit -> <Choice> (File -> <IO> Unit)\nchoose_then () =\n  let b = choose ()\n  fn f -> close f\n\napplied : Unit -> <Choice, IO> Unit\napplied () =\n  let f = open \"a.txt\"\n  choose_then () f";
-    insta::assert_snapshot!(carried(rest), @r"
+    insta::assert_snapshot!(carried(rest), @"
     E3006 28:3 a linear value must be used exactly once, but it is kept alive across a call that may resume more than once
       28:3 this call may perform `choose`, a `multi` operation
       28:18 this value is kept alive across the call
@@ -524,7 +524,7 @@ fn an_argument_for_a_later_arrow_is_kept_across_the_call() {
 #[test]
 fn an_applied_function_is_kept_across_a_later_argument() {
     let rest = "make : File -> <IO> (Unit -> <IO> Unit)\nmake f = fn () -> close f\n\napplied : Unit -> <Choice, IO> Unit\napplied () =\n  let f = open \"a.txt\"\n  make f (if choose () then () else ())";
-    insta::assert_snapshot!(carried(rest), @r"
+    insta::assert_snapshot!(carried(rest), @"
     E3006 26:14 a linear value must be used exactly once, but it is kept alive across a call that may resume more than once
       26:14 this call may perform `choose`, a `multi` operation
       26:3 this value is kept alive across the call
@@ -565,7 +565,7 @@ fn a_piped_value_is_kept_across_the_arrow_applied_before_a_later_argument() {
 #[test]
 fn a_lambda_body_is_checked_on_its_own() {
     let rest = "in_lambda : Unit -> <Choice, IO> Unit\nin_lambda () =\n  let f = open \"a.txt\"\n  let later = fn () ->\n    let b = choose ()\n    close f\n  later ()";
-    insta::assert_snapshot!(carried(rest), @r"
+    insta::assert_snapshot!(carried(rest), @"
     E3006 24:13 `f` must be used exactly once, but it is kept alive across a call that may resume more than once
       24:13 this call may perform `choose`, a `multi` operation
       22:7 `f` is bound here
@@ -578,7 +578,7 @@ fn a_lambda_body_is_checked_on_its_own() {
 #[test]
 fn a_value_kept_on_one_branch() {
     let rest = "branch : Bool -> <Choice, IO> Unit\nbranch c =\n  let f = open \"a.txt\"\n  if c then\n    let b = choose ()\n    close f\n  else close f";
-    insta::assert_snapshot!(carried(rest), @r"
+    insta::assert_snapshot!(carried(rest), @"
     E3006 24:13 `f` must be used exactly once, but it is kept alive across a call that may resume more than once
       24:13 this call may perform `choose`, a `multi` operation
       22:7 `f` is bound here
@@ -626,13 +626,13 @@ fn a_file_passed_to_the_call_is_not_kept_across_it() {
 
 #[test]
 fn unrestricted_values_may_be_kept_across_a_multi_operation() {
-    let rest = "counted : Unit -> <Choice> Int\ncounted () =\n  let n = 1\n  let b = choose ()\n  n\n\nnested : Unit -> <Choice> Int\nnested () =\n  handle (if choose () then 1 else 2) with\n    | choose () k ->\n        let b = choose ()\n        resume k b";
+    let rest = "counted : Unit -> <Choice> Int\ncounted () =\n  let n = 1\n  let b = choose ()\n  n\n\nnested : Unit -> <Choice> Int\nnested () =\n  handle (if choose () then 1 else 2) with\n    | choose () k ->\n        let b = choose ()\n        k b";
     assert_eq!(carried(rest), "");
 }
 
 #[test]
 fn a_clause_argument_kept_across_a_resume() {
-    let rest = "use_then_choose : File -> <Use, Choice> Unit\nuse_then_choose f =\n  use_file f\n  let b = choose ()\n  ()\n\nresumed : Unit -> <Choice, IO> Unit\nresumed () =\n  let f = open \"a.txt\"\n  handle use_then_choose f with\n    | use_file g k ->\n        let r = resume k ()\n        close g\n        r";
+    let rest = "use_then_choose : File -> <Use, Choice> Unit\nuse_then_choose f =\n  use_file f\n  let b = choose ()\n  ()\n\nresumed : Unit -> <Choice, IO> Unit\nresumed () =\n  let f = open \"a.txt\"\n  handle use_then_choose f with\n    | use_file g k ->\n        let r = k ()\n        close g\n        r";
     insta::assert_snapshot!(carried(rest), @"
     E3006 31:17 `g` must be used exactly once, but it is kept alive across a call that may resume more than once
       31:17 this call may perform `choose`, a `multi` operation
@@ -645,8 +645,8 @@ fn a_clause_argument_kept_across_a_resume() {
 
 #[test]
 fn a_file_kept_across_a_handle_whose_body_performs_a_multi_operation() {
-    let rest = "across_handle : Unit -> <Choice, IO> Unit\nacross_handle () =\n  let f = open \"a.txt\"\n  let n =\n    handle (if choose () then ask () else 0) with\n      | ask () k -> resume k 1\n  close f";
-    insta::assert_snapshot!(carried(rest), @r"
+    let rest = "across_handle : Unit -> <Choice, IO> Unit\nacross_handle () =\n  let f = open \"a.txt\"\n  let n =\n    handle (if choose () then ask () else 0) with\n      | ask () k -> k 1\n  close f";
+    insta::assert_snapshot!(carried(rest), @"
     E3006 24:5 `f` must be used exactly once, but it is kept alive across a call that may resume more than once
       24:5 this handle may perform `choose`, a `multi` operation
       22:7 `f` is bound here
@@ -659,8 +659,8 @@ fn a_file_kept_across_a_handle_whose_body_performs_a_multi_operation() {
 /// 外側の `multi` の handler が内側の handler フレームを写すと、`return` の節のクロージャも写される (spec の「健全性の根拠」)。
 #[test]
 fn a_return_clause_capture_under_an_outer_multi_operation() {
-    let rest = "returned : Unit -> <Choice, IO> Unit\nreturned () =\n  let f = open \"a.txt\"\n  handle (if choose () then ask () else 0) with\n    | ask () k -> resume k 1\n    | return n -> close f";
-    insta::assert_snapshot!(carried(rest), @r"
+    let rest = "returned : Unit -> <Choice, IO> Unit\nreturned () =\n  let f = open \"a.txt\"\n  handle (if choose () then ask () else 0) with\n    | ask () k -> k 1\n    | return n -> close f";
+    insta::assert_snapshot!(carried(rest), @"
     E3006 23:3 `f` must be used exactly once, but it is kept alive across a call that may resume more than once
       23:3 this handle may perform `choose`, a `multi` operation
       25:5 the `return` clause captures `f`
@@ -672,7 +672,7 @@ fn a_return_clause_capture_under_an_outer_multi_operation() {
 
 #[test]
 fn a_file_may_be_kept_across_a_handle_and_a_resume_without_multi() {
-    let rest = "fine_return : Unit -> <IO> Unit\nfine_return () =\n  let f = open \"a.txt\"\n  handle ask () with\n    | ask () k -> resume k 1\n    | return n -> close f\n\nfine_resume : Unit -> <IO> Unit\nfine_resume () =\n  let f = open \"a.txt\"\n  handle use_file f with\n    | use_file g k ->\n        let r = resume k ()\n        close g\n        r";
+    let rest = "fine_return : Unit -> <IO> Unit\nfine_return () =\n  let f = open \"a.txt\"\n  handle ask () with\n    | ask () k -> k 1\n    | return n -> close f\n\nfine_resume : Unit -> <IO> Unit\nfine_resume () =\n  let f = open \"a.txt\"\n  handle use_file f with\n    | use_file g k ->\n        let r = k ()\n        close g\n        r";
     assert_eq!(carried(rest), "");
 }
 
@@ -717,7 +717,7 @@ fn a_scheme_keeps_the_carry_over_across_a_multi_operation() {
 #[test]
 fn a_file_kept_by_a_polymorphic_function_across_a_multi_operation() {
     let rest = "kept : Unit -> <Choice, IO> Unit\nkept () =\n  let f = open \"a.txt\"\n  let g = keep f chooser\n  close g";
-    insta::assert_snapshot!(polymorphic(rest), @r"
+    insta::assert_snapshot!(polymorphic(rest), @"
     E3006 33:11 `keep` keeps a linear value alive across a call that may resume more than once
       33:11 `keep` is used here
       22:3 `x` is kept alive across this call
@@ -728,7 +728,7 @@ fn a_file_kept_by_a_polymorphic_function_across_a_multi_operation() {
 #[test]
 fn a_carry_over_passes_through_two_functions() {
     let rest = "keep2 : a -> (Unit -> <e> Unit) -> <e> a\nkeep2 x action = keep x action\n\nkept2 : Unit -> <Choice, IO> Unit\nkept2 () =\n  let f = open \"a.txt\"\n  let g = keep2 f chooser\n  close g";
-    insta::assert_snapshot!(polymorphic(rest), @r"
+    insta::assert_snapshot!(polymorphic(rest), @"
     E3006 36:11 `keep2` keeps a linear value alive across a call that may resume more than once
       36:11 `keep2` is used here
       31:18 through this use of `keep`
@@ -739,7 +739,7 @@ fn a_carry_over_passes_through_two_functions() {
 #[test]
 fn a_carry_over_through_three_functions_is_reported_once() {
     let rest = "keep2 : a -> (Unit -> <e> Unit) -> <e> a\nkeep2 x action =\n  action ()\n  keep x action\n\nkeep3 : a -> (Unit -> <e> Unit) -> <e> a\nkeep3 x action =\n  action ()\n  keep2 x action\n\nkept3 : Unit -> <Choice, IO> Unit\nkept3 () =\n  let f = open \"a.txt\"\n  let g = keep3 f chooser\n  close g";
-    insta::assert_snapshot!(polymorphic(rest), @r"
+    insta::assert_snapshot!(polymorphic(rest), @"
     E3006 43:11 `keep3` keeps a linear value alive across a call that may resume more than once
       43:11 `keep3` is used here
       37:3 `x` is kept alive across this call
@@ -750,7 +750,7 @@ fn a_carry_over_through_three_functions_is_reported_once() {
 #[test]
 fn a_file_given_to_a_function_that_keeps_it_across_a_multi_operation() {
     let rest = "keep_choose : a -> <Choice> a\nkeep_choose x =\n  let b = choose ()\n  x\n\nchosen : Unit -> <Choice, IO> Unit\nchosen () =\n  let f = open \"a.txt\"\n  let g = keep_choose f\n  close g";
-    insta::assert_snapshot!(polymorphic(rest), @r"
+    insta::assert_snapshot!(polymorphic(rest), @"
     E3006 38:11 `keep_choose` keeps a linear value alive across a call that may resume more than once
       38:11 `keep_choose` is used here
       32:11 `x` is kept alive across this call
@@ -761,7 +761,7 @@ fn a_file_given_to_a_function_that_keeps_it_across_a_multi_operation() {
 #[test]
 fn a_multi_action_given_to_a_function_that_keeps_a_file() {
     let rest = "with_file : (Unit -> <e> Unit) -> <IO | e> Unit\nwith_file action =\n  let f = open \"a.txt\"\n  action ()\n  close f\n\nfiled : Unit -> <Choice, IO> Unit\nfiled () = with_file chooser";
-    insta::assert_snapshot!(polymorphic(rest), @r"
+    insta::assert_snapshot!(polymorphic(rest), @"
     E3006 37:12 `with_file` keeps a linear value alive across a call that may resume more than once
       37:12 `with_file` is used here
       33:3 `f` is kept alive across this call
@@ -777,7 +777,7 @@ fn a_polymorphic_function_may_keep_unrestricted_values_or_avoid_multi() {
 
 #[test]
 fn a_carry_over_whose_row_has_no_known_multi_operation() {
-    let rest = "ping : (Unit -> <e> Unit) -> Int -> <IO | e> Unit\nping action n =\n  let f = open \"a.txt\"\n  action ()\n  close f\n  pong n\n\npong : Int -> <IO | e> Unit\npong n =\n  handle ping chooser n with\n    | choose () k -> resume k True\n\nchooser : Unit -> <Choice> Unit\nchooser () =\n  let b = choose ()\n  ()";
+    let rest = "ping : (Unit -> <e> Unit) -> Int -> <IO | e> Unit\nping action n =\n  let f = open \"a.txt\"\n  action ()\n  close f\n  pong n\n\npong : Int -> <IO | e> Unit\npong n =\n  handle ping chooser n with\n    | choose () k -> k True\n\nchooser : Unit -> <Choice> Unit\nchooser () =\n  let b = choose ()\n  ()";
     insta::assert_snapshot!(carried(rest), @"
     E3006 23:3 `f` must be used exactly once, but it is kept alive across a call that may resume more than once
       23:3 this call may perform `multi` operations
@@ -789,7 +789,7 @@ fn a_carry_over_whose_row_has_no_known_multi_operation() {
 
 #[test]
 fn an_omitted_return_clause_discards_a_linear_state() {
-    let rest = "omitted : Unit -> <IO> Int\nomitted () =\n  handle ask () from open \"a.txt\" with\n    | ask () k f -> resume k 1 f";
+    let rest = "omitted : Unit -> <IO> Int\nomitted () =\n  handle ask () from open \"a.txt\" with\n    | ask () k f -> k 1 f";
     insta::assert_snapshot!(diagnostics(rest), @"
     E3004 9:22 the state of this handler is discarded by the omitted `return` clause
       9:22 this state has a linear type `File`
@@ -801,7 +801,7 @@ fn an_omitted_return_clause_discards_a_linear_state() {
 /// 書いた `return` の節を HIR が拒否すると、本体に誤りの跡が残り、使用回数のパスは由来を記録しない。E3004 を連鎖させない。
 #[test]
 fn a_rejected_return_clause_does_not_report_the_state_again() {
-    let rest = "rejected : Unit -> <IO> Int\nrejected () =\n  handle ask () from open \"a.txt\" with\n    | ask () k f -> resume k 1 f\n    | return x -> x";
+    let rest = "rejected : Unit -> <IO> Int\nrejected () =\n  handle ask () from open \"a.txt\" with\n    | ask () k f -> k 1 f\n    | return x -> x";
     let checked = check(&format!("{HEADER}{rest}"));
     let codes: Vec<String> = checked
         .diagnostics
@@ -825,7 +825,7 @@ fn a_clause_that_drops_k_must_still_consume_a_linear_state() {
 
 #[test]
 fn a_linear_state_is_kept_across_a_multi_operation_of_the_outer_row() {
-    let rest = "kept : Unit -> <Choose, IO> Int\nkept () =\n  handle ask () from open \"a.txt\" with\n    | ask () k f -> resume k 1 f\n    | return x f ->\n        close f\n        x";
+    let rest = "kept : Unit -> <Choose, IO> Int\nkept () =\n  handle ask () from open \"a.txt\" with\n    | ask () k f -> k 1 f\n    | return x f ->\n        close f\n        x";
     let text = format!("effect Choose where\n  multi choose : Unit -> Bool\n\n{HEADER}{rest}");
     let checked = check(&text);
     insta::assert_snapshot!(full(&checked.files, &checked.diagnostics), @"
@@ -840,7 +840,7 @@ fn a_linear_state_is_kept_across_a_multi_operation_of_the_outer_row() {
 
 #[test]
 fn values_held_while_the_initial_state_is_evaluated_are_carried() {
-    let rest = "early : Unit -> <Choose, IO> Int\nearly () =\n  let f = open \"a.txt\"\n  let n =\n    handle ask () from (if choose () then 1 else 2) with\n      | ask () k st -> resume k st st\n      | return x _ -> x\n  close f\n  n";
+    let rest = "early : Unit -> <Choose, IO> Int\nearly () =\n  let f = open \"a.txt\"\n  let n =\n    handle ask () from (if choose () then 1 else 2) with\n      | ask () k st -> k st st\n      | return x _ -> x\n  close f\n  n";
     let text = format!("effect Choose where\n  multi choose : Unit -> Bool\n\n{HEADER}{rest}");
     let checked = check(&text);
     let codes: Vec<String> = checked
@@ -857,7 +857,7 @@ fn values_held_while_the_initial_state_is_evaluated_are_carried() {
 /// 初期値の `choose ()` をまたぐ (docs/spec/expressions.md の「パラメータ付き handler」)。
 #[test]
 fn a_value_used_only_by_the_handled_body_is_carried_across_the_initial_state() {
-    let rest = "use_file : File -> <Ask, IO> Int\nuse_file f =\n  close f\n  ask ()\n\nearly : Unit -> <Choose, IO> Int\nearly () =\n  let f = open \"a.txt\"\n  handle use_file f from (if choose () then 1 else 2) with\n    | ask () k st -> resume k st st\n    | return x _ -> x";
+    let rest = "use_file : File -> <Ask, IO> Int\nuse_file f =\n  close f\n  ask ()\n\nearly : Unit -> <Choose, IO> Int\nearly () =\n  let f = open \"a.txt\"\n  handle use_file f from (if choose () then 1 else 2) with\n    | ask () k st -> k st st\n    | return x _ -> x";
     let text = format!("effect Choose where\n  multi choose : Unit -> Bool\n\n{HEADER}{rest}");
     let checked = check(&text);
     insta::assert_snapshot!(full(&checked.files, &checked.diagnostics), @"
@@ -874,7 +874,7 @@ fn a_value_used_only_by_the_handled_body_is_carried_across_the_initial_state() {
 /// (docs/spec/linearity.md)。
 #[test]
 fn a_linear_state_does_not_cross_the_multi_operation_the_handler_handles() {
-    let rest = "main : Unit -> <IO> Unit\nmain () =\n  let n =\n    handle (if choose () then 1 else 2) from open \"a.txt\" with\n      | choose () k f -> resume k True f\n      | return x f ->\n          close f\n          x\n  println (show_int n)";
+    let rest = "main : Unit -> <IO> Unit\nmain () =\n  let n =\n    handle (if choose () then 1 else 2) from open \"a.txt\" with\n      | choose () k f -> k True f\n      | return x f ->\n          close f\n          x\n  println (show_int n)";
     let text = format!("effect Choose where\n  multi choose : Unit -> Bool\n\n{HEADER}{rest}");
     let checked = check(&text);
     insta::assert_snapshot!(full(&checked.files, &checked.diagnostics), @"");

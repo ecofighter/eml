@@ -11,7 +11,7 @@ effect Choose where
 omitted : Unit -> <IO> Int
 omitted () =
   handle ask () from open "input.txt" with
-    | ask () k f -> resume k 1 f
+    | ask () k f -> k 1 f
 
 dropped : Unit -> <IO> Int
 dropped () =
@@ -24,7 +24,7 @@ dropped () =
 kept : Unit -> <Choose, IO> Int
 kept () =
   handle ask () from open "input.txt" with
-    | ask () k f -> resume k 1 f
+    | ask () k f -> k 1 f
     | return x f ->
         close f
         x

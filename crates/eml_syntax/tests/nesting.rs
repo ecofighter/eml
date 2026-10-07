@@ -21,13 +21,6 @@ fn deep_if_chain_reports_one_error() {
 }
 
 #[test]
-fn deep_chain_of_misplaced_resumes_does_not_overflow_the_stack() {
-    let found = diagnostics(&format!("x = g {}k", "resume k ".repeat(10_000)));
-    let too_deep = found.iter().filter(|d| d.starts_with("E0013 ")).count();
-    assert_eq!(too_deep, 1, "{found:?}");
-}
-
-#[test]
 fn deep_chain_of_drops_reports_the_nesting_limit() {
     let found = diagnostics(&format!("x = g {}k", "drop ".repeat(10_000)));
     let too_deep = found.iter().filter(|d| d.starts_with("E0013 ")).count();

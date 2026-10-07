@@ -13,11 +13,11 @@ main : Unit -> <IO> Unit
 main () =
   let captured =
     handle plus_one () with
-      | ask () k -> twice (fn n -> resume k n)
+      | ask () k -> twice (fn n -> k n)
   println (show_int captured)
   let passed =
     handle plus_one () with
       | ask () k ->
-          let go = fn cont value -> resume cont value
+          let go = fn cont value -> cont value
           go k 1 * go k 2
   println (show_int passed)

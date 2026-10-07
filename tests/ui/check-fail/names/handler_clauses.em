@@ -17,25 +17,25 @@ arity : Unit -> <Log, Fail> String
 arity () =
   handle run () with
     | ask key -> key
-    | ask_twice key k -> resume k key
+    | ask_twice key k -> k key
 
 mixed : Unit -> <Ask, Fail> String
 mixed () =
   handle run () with
-    | log message k -> resume k ()
-    | ask key k -> resume k key
+    | log message k -> k ()
+    | ask key k -> k key
 
 missing : Unit -> <Log, Fail> String
 missing () =
   handle run () with
-    | ask key k -> resume k key
+    | ask key k -> k key
 
 duplicate : Unit -> <Log, Fail> String
 duplicate () =
   handle run () with
-    | ask key k -> resume k key
-    | ask_twice key k -> resume k key
-    | ask key k -> resume k "again"
+    | ask key k -> k key
+    | ask_twice key k -> k key
+    | ask key k -> k "again"
     | return x -> x
     | return y -> y
 

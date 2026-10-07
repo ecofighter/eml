@@ -14,6 +14,6 @@ main : Unit -> <IO> Unit
 main () =
   let total =
     handle counted (open "../files/input.txt") with
-      | single () k -> resume k 1
-      | many () k -> resume k 10 + resume k 20
+      | single () k -> k 1
+      | many () k -> k 10 + k 20
   println (show_int total)

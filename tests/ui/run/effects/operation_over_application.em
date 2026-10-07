@@ -9,5 +9,5 @@ main : Unit -> <IO> Unit
 main () =
   let n =
     handle use_it () with
-      | ask () k -> resume k (fn x -> x + 1)
+      | ask () k -> k (fn x -> x + 1)
   println (show_int n)

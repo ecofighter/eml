@@ -245,18 +245,6 @@ impl Body {
                 }
                 f(ret.closure.body);
             }
-            ExprKind::Resume {
-                k,
-                arg,
-                arg_end: _,
-                state,
-            } => {
-                f(*k);
-                f(*arg);
-                if let Some(state) = state {
-                    f(*state);
-                }
-            }
             ExprKind::Match {
                 scrutinee, arms, ..
             } => {
@@ -411,16 +399,6 @@ pub enum ExprKind {
         effect: Option<EffectId>,
         clauses: Vec<OpClause>,
         ret: ReturnClause,
-    },
-    Resume {
-        k: ExprId,
-        arg: ExprId,
-        /// 書いたとおりの値の引数の終わり。値を括弧で囲むと、HIR は括弧を落とすので `arg` の範囲は `)` の前で終わる。
-        /// E2007 の fix は書いた引数の位置に状態を足したり消したりするので、括弧を含む終わりを持っておく
-        /// (docs/implementation/diagnostics.md の E2007)。
-        arg_end: TextSize,
-        /// 3引数の `resume` の次の状態。
-        state: Option<ExprId>,
     },
     /// 枝のパターンが束縛する変数は、その枝の本体だけで見える (docs/spec/expressions.md の「`match`」)。
     /// 等式が2つ以上ある関数の本体は、引数のタプル (引数が1つならその変数、0個なら `()`) に対する `Equations` の

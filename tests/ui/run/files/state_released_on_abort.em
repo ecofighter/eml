@@ -13,7 +13,7 @@ body () =
 inner : Unit -> <Fail, IO> Unit
 inner () =
   handle body () from open "input.txt" with
-    | tick () k f -> resume k () f
+    | tick () k f -> k () f
     | return x f -> close f
 
 main : Unit -> <IO> Unit

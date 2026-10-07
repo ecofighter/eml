@@ -18,8 +18,8 @@ run_counter : Int -> Int
 run_counter start =
   let run =
     handle counter () with
-      | get () k -> fn s -> (resume k s) s
-      | put n k -> fn _ -> (resume k ()) n
+      | get () k -> fn s -> (k s) s
+      | put n k -> fn _ -> (k ()) n
       | return x -> fn _ -> x
   run start
 
@@ -29,15 +29,15 @@ greeting () = "hello " ++ ask ()
 with_name : String -> String
 with_name name =
   handle greeting () with
-    | ask () k -> resume k name
+    | ask () k -> k name
 
 both_ways : (r -> r -> String) -> <Reader r> String
 both_ways f = f (ask ()) (ask ())
 
 nested : Unit -> String
 nested () =
-  handle (handle greeting () with | ask () k -> resume k (show_int (ask ()))) with
-    | ask () k -> resume k 7
+  handle (handle greeting () with | ask () k -> k (show_int (ask ()))) with
+    | ask () k -> k 7
 
 main : Unit -> <IO> Unit
 main () =
@@ -45,10 +45,10 @@ main () =
   println (with_name "Ada")
   let ints =
     handle both_ways (fn a b -> show_int (a + b)) with
-      | ask () k -> resume k 21
+      | ask () k -> k 21
   println ints
   let strings =
     handle both_ways (fn a b -> a ++ b) with
-      | ask () k -> resume k "ab"
+      | ask () k -> k "ab"
   println strings
   println (nested ())

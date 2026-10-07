@@ -219,23 +219,6 @@ impl Carrying<'_, '_> {
                     None => live,
                 }
             }
-            // 表面の `resume` を Task 4 で消すまでの橋渡しとして、`k v [st]` の呼び出しの最後の矢印の row で持ち越しを
-            // 調べる。最初の矢印の row は空なので、最後の矢印だけを見ればよい (docs/spec/effects.md の「継続の多重度と持ち越し規則」)
-            ExprKind::Resume {
-                k,
-                arg,
-                arg_end: _,
-                state,
-            } => {
-                if let Some(CallRows::Call { arrows, .. }) = typing.calls.get(id)
-                    && let Some(row) = arrows.last()
-                {
-                    self.carry(id, after, &Across::Row(row.clone()), &CallKind::Call);
-                }
-                let mut parts = vec![*k, *arg];
-                parts.extend(state);
-                self.parts(&parts, after)
-            }
             ExprKind::Match {
                 scrutinee, arms, ..
             } => {

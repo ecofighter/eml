@@ -475,28 +475,6 @@ impl FnLowering<'_> {
                 };
                 self.bind(out, "t", &ty, Rhs::call(call))
             }
-            // 表面の `resume` を Task 4 で消すまでの橋渡し。型検査は `k v [st]` の呼び出しとして扱うので、`call` と同じく
-            // 既知の呼ばれる式は評価せずに `call_head` で呼び、節の `k` の直接の形と包む形を同じ道で分ける
-            ExprKind::Resume {
-                k,
-                arg,
-                arg_end: _,
-                state,
-            } => {
-                let function = eml_hir::known_arity(self.hir, body, *k)
-                    .is_none()
-                    .then(|| self.atom(*k, out));
-                let args = std::iter::once(*arg)
-                    .chain(*state)
-                    .map(|expr| self.atom(expr, out))
-                    .collect();
-                let k_ty = self.ty(*k);
-                let ty = self.ty(id);
-                match function {
-                    None => self.call_head(id, *k, &k_ty, args, &ty, out),
-                    Some(function) => self.apply(id, &k_ty, function, 0, args, &ty, out),
-                }
-            }
             ExprKind::Tuple(elements) => {
                 // 要素を左から評価し、コンストラクタが1つの `data` と同じ値にする (docs/spec/core-ir.md)
                 let args = elements

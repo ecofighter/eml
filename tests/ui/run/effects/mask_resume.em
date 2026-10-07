@@ -9,9 +9,9 @@ f : (Unit -> <Ask | e> Int) -> <e> Int
 f action =
   handle action () with
     | ask () k ->
-        handle resume k 1 with
+        handle k 1 with
           | log m k2 ->
-              resume k2 ()
+              k2 ()
 
 act : Unit -> <Ask, Log> Int
 act () =
@@ -24,5 +24,5 @@ main () =
   let r = handle f act with
             | log m k ->
                 println ("outer " ++ m)
-                resume k ()
+                k ()
   println (show_int r)

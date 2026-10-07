@@ -12,13 +12,13 @@ greet () =
 with_answers : Unit -> String
 with_answers () =
   handle greet () with
-    | ask key k -> resume k (key ++ "!")
+    | ask key k -> k (key ++ "!")
 
 logged : Unit -> <IO> String
 logged () =
   handle greet () with
     | ask key k ->
-        let answer = resume k key
+        let answer = k key
         println ("asked " ++ key)
         answer
     | return result -> "[" ++ result ++ "]"

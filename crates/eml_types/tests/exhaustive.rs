@@ -102,7 +102,7 @@ fn refutable_let_and_lambda_patterns() {
 #[test]
 fn refutable_clause_parameters() {
     // 節は持ち上げる関数で、引数のパターンもラムダの引数と同じ経路で分解するので、同じ E4003 で調べる
-    let text = "data Option a = | None | Some a\n\neffect Ask where\n  ask : Option Int -> Int\n\nf : Unit -> Int\nf () =\n  handle Some (ask (Some 1)) with\n    | ask (Some q) k -> resume k q\n    | return (Some r) -> r";
+    let text = "data Option a = | None | Some a\n\neffect Ask where\n  ask : Option Int -> Int\n\nf : Unit -> Int\nf () =\n  handle Some (ask (Some 1)) with\n    | ask (Some q) k -> k q\n    | return (Some r) -> r";
     insta::assert_snapshot!(diagnostics(text), @r"
     E4003 9:12 this pattern does not match every value
       9:12 a parameter needs a pattern that matches every value

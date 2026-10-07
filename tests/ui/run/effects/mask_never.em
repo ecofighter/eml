@@ -8,7 +8,7 @@ effect Log where
 quiet : (Unit -> <e> a) -> <e> a
 quiet action =
   handle run action with
-    | log _ k -> resume k ()
+    | log _ k -> k ()
 
 run : (Unit -> <e> a) -> <Log | e> a
 run action =
@@ -25,6 +25,6 @@ main () =
   let r = handle (handle quiet boom with
                     | log m k ->
                         println m
-                        resume k ()) with
+                        k ()) with
             | fail msg -> msg
   println r

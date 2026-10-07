@@ -18,6 +18,6 @@ main () =
   let r =
     handle ask () with
       | ask () k ->
-          handle seq (put inc) (seq (put (fn x -> resume k x)) 0) with
-            | put f k2 -> f 1 + f 2 + resume k2 ()
+          handle seq (put inc) (seq (put (fn x -> k x)) 0) with
+            | put f k2 -> f 1 + f 2 + k2 ()
   println (show_int r)

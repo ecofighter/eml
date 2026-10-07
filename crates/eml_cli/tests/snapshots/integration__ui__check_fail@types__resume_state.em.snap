@@ -6,18 +6,18 @@ input_file: tests/ui/check-fail/types/resume_state.em
 [E2001] Error: mismatched types
    ╭─[ check-fail/types/resume_state.em:8:22 ]
    │
- 8 │     | ask () k st -> resume k st
-   │                      ─────┬─────  
-   │                           ╰─────── expected `Int`, found `Int -> Int`
+ 8 │     | ask () k st -> k st
+   │                      ──┬─  
+   │                        ╰─── expected `Int`, found `Int -> Int`
    │ 
    │ Note: each clause of a handler must have the type of the whole `handle` expression
 ───╯
 [E2001] Error: `k` takes 1 argument but 2 were given
-    ╭─[ check-fail/types/resume_state.em:14:30 ]
+    ╭─[ check-fail/types/resume_state.em:14:23 ]
     │
- 14 │     | ask () k -> resume k 1 2
-    │                              ┬  
-    │                              ╰── unexpected argument
+ 14 │     | ask () k -> k 1 2
+    │                       ┬  
+    │                       ╰── unexpected argument
 ────╯
 [E2001] Error: mismatched types
     ╭─[ check-fail/types/resume_state.em:21:9 ]

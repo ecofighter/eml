@@ -246,21 +246,6 @@ impl<'a> Usage<'a, '_> {
                 );
                 uses
             }
-            ExprKind::Resume {
-                k,
-                arg,
-                arg_end: _,
-                state,
-            } => {
-                let mut uses = self.expr(*k);
-                let next = self.expr(*arg);
-                sequence(&mut uses, next);
-                if let Some(state) = state {
-                    let next = self.expr(*state);
-                    sequence(&mut uses, next);
-                }
-                uses
-            }
             // 枝は `if` の枝と同じく別の経路である。枝のパターンの変数は枝の外から見えないので、枝ごとに数え終える
             ExprKind::Match {
                 scrutinee, arms, ..

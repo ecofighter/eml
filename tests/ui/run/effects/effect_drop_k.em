@@ -15,7 +15,7 @@ main () =
     handle pick () with
       | choose question k ->
           drop question
-          resume k True
+          k True
   println taken
   let dropped =
     handle pick () with

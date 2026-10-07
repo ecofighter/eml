@@ -10,10 +10,10 @@ input_file: tests/ui/check-fail/syntax/unparenthesized_lambda.em
     │          ─┬  
     │           ╰── wrap it in parentheses
 ────╯
-[E0012] Error: `resume` expression must be parenthesized here
-    ╭─[ check-fail/syntax/unparenthesized_lambda.em:19:23 ]
+[E0012] Error: `drop` expression must be parenthesized here
+    ╭─[ check-fail/syntax/unparenthesized_lambda.em:19:25 ]
     │
- 19 │     | ask () k -> inc resume k 1
-    │                       ───┬──  
-    │                          ╰──── wrap it in parentheses
+ 19 │     | ask () k -> after drop k
+    │                         ──┬─  
+    │                           ╰─── wrap it in parentheses
 ────╯

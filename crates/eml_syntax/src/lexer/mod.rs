@@ -322,7 +322,6 @@ fn keyword(ident: &str) -> Option<SyntaxKind> {
         "with" => WITH_KW,
         "handle" => HANDLE_KW,
         "from" => FROM_KW,
-        "resume" => RESUME_KW,
         "drop" => DROP_KW,
         "return" => RETURN_KW,
         "never" => NEVER_KW,

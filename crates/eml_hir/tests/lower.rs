@@ -379,7 +379,7 @@ fn a_user_defined_cons_constructor_is_matched() {
 #[test]
 fn modules_other_than_the_prelude_are_printed_in_order() {
     let entry = "import Report.Csv\n\nf : Bool -> Bool\nf b = not b";
-    let csv = "import Report.Format\n\npub data Row =\n  | Row Int\n\npub effect Parse where\n  next : Unit -> Int\n\npub parse : Unit -> <Parse> Row\nparse () = Row (next ())\n\npub first : Row -> String\nfirst r = match r with\n  | Row n -> show_int n\n\npub run : Unit -> Row\nrun () = handle parse () with\n  | next () k -> resume k 1";
+    let csv = "import Report.Format\n\npub data Row =\n  | Row Int\n\npub effect Parse where\n  next : Unit -> Int\n\npub parse : Unit -> <Parse> Row\nparse () = Row (next ())\n\npub first : Row -> String\nfirst r = match r with\n  | Row n -> show_int n\n\npub run : Unit -> Row\nrun () = handle parse () with\n  | next () k -> k 1";
     let format = "pub width : Int\nwidth = 8";
     insta::assert_snapshot!(
         lower_files_text(entry, &[("Report/Csv.em", csv), ("Report/Format.em", format)]),
@@ -397,7 +397,7 @@ fn modules_other_than_the_prelude_are_printed_in_order() {
     first : Row -> String
     first r#0 = (match r#0 with | Report.Csv.Row n#1 -> (show_int n#1))
     run : Unit -> Row
-    run () = (handle (@Report.Csv.parse ()) with | Report.Csv.next () k#0 -> (resume k#0 1) | return $r#1 -> $r#1)
+    run () = (handle (@Report.Csv.parse ()) with | Report.Csv.next () k#0 -> (k#0 1) | return $r#1 -> $r#1)
     -- Report.Format
     width : Int
     width = 8
@@ -452,7 +452,7 @@ fn an_ambiguous_name_is_reported_where_it_is_used() {
         ("A.em", "pub get : Unit -> Int\nget () = 1"),
         ("B.em", "pub effect E where\n  get : Unit -> Int"),
     ];
-    let entry = "import A (get)\nimport B (E(..))\n\nf : Unit -> Int\nf () = get ()\n\ng : Unit -> Int\ng () =\n  handle 1 with\n    | get () k -> resume k 2\n    | return x -> x";
+    let entry = "import A (get)\nimport B (E(..))\n\nf : Unit -> Int\nf () = get ()\n\ng : Unit -> Int\ng () =\n  handle 1 with\n    | get () k -> k 2\n    | return x -> x";
     insta::assert_snapshot!(module_report(entry, &modules), @r"
     E1028 test.em 5:8 `get` is ambiguous
       test.em 5:8 this name refers to more than one definition
@@ -486,14 +486,14 @@ fn an_import_after_a_declaration_is_still_resolved() {
 #[test]
 fn parts_of_a_broken_import_are_silent_errors() {
     // `T(..)` と `E(..)` の部品は分からないので、コンストラクタと節の先頭の操作を使った位置も診断を出さない
-    let entry = "import Missing (T(..), E(..))\n\nf : Int -> Int\nf x = match x with\n  | Mk n -> n\n\ng : Unit -> Int\ng () =\n  handle 1 with\n    | get () k -> resume k 2\n    | return x -> x";
+    let entry = "import Missing (T(..), E(..))\n\nf : Int -> Int\nf x = match x with\n  | Mk n -> n\n\ng : Unit -> Int\ng () =\n  handle 1 with\n    | get () k -> k 2\n    | return x -> x";
     assert_eq!(module_codes(entry, &[]), ["E1026 test.em 1:8"]);
 }
 
 #[test]
 fn parts_of_a_type_missing_from_the_import_list_are_silent_errors() {
     let modules = [("A.em", "pub x : Int\nx = 1")];
-    let entry = "import A (T(..), E(..))\n\nf : Int -> Int\nf x = match x with\n  | Mk n -> Mk n\n\ng : Unit -> Int\ng () =\n  handle 1 with\n    | get () k -> resume k 2\n    | return x -> x";
+    let entry = "import A (T(..), E(..))\n\nf : Int -> Int\nf x = match x with\n  | Mk n -> Mk n\n\ng : Unit -> Int\ng () =\n  handle 1 with\n    | get () k -> k 2\n    | return x -> x";
     assert_eq!(
         module_codes(entry, &modules),
         ["E1002 test.em 1:11", "E1002 test.em 1:18"]
@@ -507,7 +507,7 @@ fn qualified_names_resolve_in_every_position() {
         "State.em",
         "pub effect State where\n  get : Unit -> Int\n\npub data Box = | Box Int\n\npub unbox : Box -> Int\nunbox (Box n) = n",
     )];
-    let entry = "import State\n\ncounter : Unit -> <State.State> Int\ncounter () = State.get () + 1\n\nunbox : State.Box -> Int\nunbox (State.Box n) = State.unbox (State.Box n)\n\nrun : Int -> Int\nrun n =\n  handle counter () with\n    | State.get () k -> resume k n\n    | return x -> x";
+    let entry = "import State\n\ncounter : Unit -> <State.State> Int\ncounter () = State.get () + 1\n\nunbox : State.Box -> Int\nunbox (State.Box n) = State.unbox (State.Box n)\n\nrun : Int -> Int\nrun n =\n  handle counter () with\n    | State.get () k -> k n\n    | return x -> x";
     assert_eq!(module_report(entry, &modules), "");
     let shown = lower_files_text(entry, &modules);
     assert!(
@@ -713,7 +713,7 @@ fn private_in_public_in_a_dependency_points_into_its_file() {
 
 #[test]
 fn mixed_effects_are_named_by_their_display_names() {
-    let entry = "import Report\n\neffect Log where\n  log : String -> Unit\n\nf : Unit -> Unit\nf () =\n  handle () with\n    | log s k -> resume k ()\n    | Report.note s k -> resume k ()";
+    let entry = "import Report\n\neffect Log where\n  log : String -> Unit\n\nf : Unit -> Unit\nf () =\n  handle () with\n    | log s k -> k ()\n    | Report.note s k -> k ()";
     let lowered = eml_test_support::lower_files(
         entry,
         &[("Report.em", "pub effect Log where\n  note : String -> Unit")],
@@ -729,7 +729,7 @@ fn mixed_effects_are_named_by_their_display_names() {
 
 #[test]
 fn a_missing_clause_is_suggested_with_the_qualifier_of_the_existing_clause() {
-    let entry = "import Report as R\nimport Report (State(..))\n\neffect State where\n  tick : Unit -> Unit\n\nf : Unit -> Int\nf () =\n  handle 0 with\n    | R.get () k -> resume k 1\n\ng : Unit -> Int\ng () =\n  handle 0 with\n    | get () k -> resume k 1";
+    let entry = "import Report as R\nimport Report (State(..))\n\neffect State where\n  tick : Unit -> Unit\n\nf : Unit -> Int\nf () =\n  handle 0 with\n    | R.get () k -> k 1\n\ng : Unit -> Int\ng () =\n  handle 0 with\n    | get () k -> k 1";
     let lowered = eml_test_support::lower_files(
         entry,
         &[(
@@ -758,7 +758,7 @@ fn an_ambiguous_clause_head_does_not_report_missing_clauses() {
         ),
         ("B.em", "pub effect Other where\n  get : Unit -> Int"),
     ];
-    let entry = "import A (State(..))\nimport B (Other(..))\nimport Missing (Gone(..))\n\nf : Unit -> Int\nf () =\n  handle 0 with\n    | get () k -> resume k 1\n    | put _ k -> resume k ()\n\ng : Unit -> Int\ng () =\n  handle 0 with\n    | gone () k -> resume k 1\n    | put _ k -> resume k ()";
+    let entry = "import A (State(..))\nimport B (Other(..))\nimport Missing (Gone(..))\n\nf : Unit -> Int\nf () =\n  handle 0 with\n    | get () k -> k 1\n    | put _ k -> k ()\n\ng : Unit -> Int\ng () =\n  handle 0 with\n    | gone () k -> k 1\n    | put _ k -> k ()";
     insta::assert_snapshot!(module_report(entry, &modules), @r"
     E1026 test.em 3:8 cannot find module `Missing`
       test.em 3:8 there is no file `Missing.em`

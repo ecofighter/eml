@@ -20,7 +20,7 @@ try action =
 with_env : (Unit -> <Ask, IO | e> a) -> <IO | e> a
 with_env action =
   handle action () with
-    | ask key k -> resume k "host"
+    | ask key k -> k "host"
 
 deploy : Unit -> <Ask, Fail, IO> Unit
 deploy () =

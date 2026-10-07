@@ -11,11 +11,11 @@ inner () =
   handle ask () with
     | ask () k ->
         let b = choose ()
-        resume k (if b then 1 else 2)
+        k (if b then 1 else 2)
 
 main : Unit -> <IO> Unit
 main () =
   let total =
     handle inner () with
-      | choose () c -> resume c True + resume c False
+      | choose () c -> c True + c False
   println (show_int total)

@@ -28,7 +28,7 @@ main : Unit -> <IO> Unit
 main () =
   let total =
     handle add_two () with
-      | ask () k -> resume k 21
+      | ask () k -> k 21
   println (show_int total)
 ```
 

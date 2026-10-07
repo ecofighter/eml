@@ -59,7 +59,7 @@ fn names_outside_the_entry_are_qualified_with_their_module() {
     // テキストの形は関数とエフェクトを名前で引くので、入口以外のモジュールの名前には `モジュール名.` を付ける
     // (docs/spec/core-ir.md)。入れ子のモジュールのエフェクトの `perform` と `handle` も読み戻せることを確かめる
     let csv = "pub data Row = | Row Int\n\npub effect Parse where\n  next : Unit -> Int\n\npub parse : Unit -> <Parse> Row\nparse () =\n  let get = next\n  let make = Row\n  make (get ())";
-    let main = "import Report.Csv\n\napply : (a -> <e> b) -> a -> <e> b\napply f x = f x\n\nmain : Unit -> <IO> Unit\nmain () =\n  let r =\n    handle Csv.parse () with\n      | Csv.next () k -> resume k 1\n      | return r -> r\n  let Csv.Row n = r\n  apply println (show_int n)";
+    let main = "import Report.Csv\n\napply : (a -> <e> b) -> a -> <e> b\napply f x = f x\n\nmain : Unit -> <IO> Unit\nmain () =\n  let r =\n    handle Csv.parse () with\n      | Csv.next () k -> k 1\n      | return r -> r\n  let Csv.Row n = r\n  apply println (show_int n)";
     insta::assert_snapshot!(core_text_files(main, &[("Report/Csv.em", csv)], Pass::Translate), @"
     effect Prelude.IO { println/1, open/1, read_all/1, close/1 }
     effect Report.Csv.Parse { next/1 }
@@ -116,7 +116,7 @@ fn names_outside_the_entry_are_qualified_with_their_module() {
 fn an_entry_operation_does_not_collide_with_a_prelude_operation() {
     // 入口の `println` という操作を包む関数と、Prelude の `println` を包む関数は、Prelude の側に `Prelude.` が付くので
     // 名前が重ならない (docs/spec/core-ir.md)
-    let text = "effect Log where\n  println : String -> Unit\n\neach : (String -> <e> Unit) -> <e> Unit\neach f = f \"x\"\n\nlogged : Unit -> <Log> Unit\nlogged () = each println\n\nmain : Unit -> <IO> Unit\nmain () =\n  handle logged () with\n    | println s k -> resume k ()\n  each Prelude.println";
+    let text = "effect Log where\n  println : String -> Unit\n\neach : (String -> <e> Unit) -> <e> Unit\neach f = f \"x\"\n\nlogged : Unit -> <Log> Unit\nlogged () = each println\n\nmain : Unit -> <IO> Unit\nmain () =\n  handle logged () with\n    | println s k -> k ()\n  each Prelude.println";
     let shown = core_text(text, Pass::Translate);
     assert!(
         shown.contains("fn op$println(p0^) {\n  tailcall perform Log.println(p0)\n}"),
@@ -362,7 +362,7 @@ fn nested_join_points_capture_what_outer_join_points_need() {
 
 #[test]
 fn handlers_are_lifted_to_closures() {
-    let text = "effect Ask where\n  ask : String -> Int\n\nmain : Unit -> <IO> Unit\nmain () =\n  let prefix = \"n = \"\n  let n =\n    handle ask \"x\" with\n      | ask key k -> resume k 1\n      | return x -> x + 1\n  println (prefix ++ show_int n)";
+    let text = "effect Ask where\n  ask : String -> Int\n\nmain : Unit -> <IO> Unit\nmain () =\n  let prefix = \"n = \"\n  let n =\n    handle ask \"x\" with\n      | ask key k -> k 1\n      | return x -> x + 1\n  println (prefix ++ show_int n)";
     insta::assert_snapshot!(core_text(text, Pass::Translate), @r#"
     effect Prelude.IO { println/1, open/1, read_all/1, close/1 }
     effect Ask { ask/1 }
@@ -501,7 +501,7 @@ fn a_variable_pattern_after_a_switch_binds_the_scrutinee() {
 #[test]
 fn constructor_patterns_in_handler_clause_parameters() {
     // 操作の節と `return` の節はラムダと同じく関数に持ち上げるので、引数のコンストラクタのパターンも同じ経路で分解する
-    let text = "data Box a = | Box a\n\neffect Give where\n  give : Box Int -> Int\n\nrun : Unit -> Int\nrun () =\n  handle Box (give (Box 1)) with\n    | give (Box n) k -> resume k n\n    | return (Box r) -> r\n\nmain : Unit -> <IO> Unit\nmain () = ()";
+    let text = "data Box a = | Box a\n\neffect Give where\n  give : Box Int -> Int\n\nrun : Unit -> Int\nrun () =\n  handle Box (give (Box 1)) with\n    | give (Box n) k -> k n\n    | return (Box r) -> r\n\nmain : Unit -> <IO> Unit\nmain () = ()";
     insta::assert_snapshot!(core_text(text, Pass::Translate), @"
     effect Prelude.IO { println/1, open/1, read_all/1, close/1 }
     effect Give { give/1 }
@@ -626,7 +626,7 @@ fn functions_without_captures_are_values() {
 
 #[test]
 fn a_handler_with_a_state_passes_its_initial_value_and_takes_the_state_from_its_clauses() {
-    let text = "effect Ask where\n  ask : Unit -> Int\n\nmain : Unit -> <IO> Unit\nmain () =\n  let n =\n    handle ask () + ask () from 10 with\n      | ask () k st -> resume k st (st + 1)\n      | return x st -> x * st\n  println (show_int n)";
+    let text = "effect Ask where\n  ask : Unit -> Int\n\nmain : Unit -> <IO> Unit\nmain () =\n  let n =\n    handle ask () + ask () from 10 with\n      | ask () k st -> k st (st + 1)\n      | return x st -> x * st\n  println (show_int n)";
     insta::assert_snapshot!(core_text(text, Pass::Translate), @"
     effect Prelude.IO { println/1, open/1, read_all/1, close/1 }
     effect Ask { ask/1 }
@@ -659,7 +659,7 @@ fn a_handler_with_a_state_passes_its_initial_value_and_takes_the_state_from_its_
 
 #[test]
 fn effects_are_numbered_with_io_first_then_in_declaration_order() {
-    let text = "effect A where\n  a : Unit -> Int\neffect B where\n  b : Unit -> Int\nmain : Unit -> <IO> Unit\nmain () =\n  let x = handle a () with\n    | a () k -> resume k 1\n  let y = handle b () with\n    | b () k -> resume k 2\n  println (show_int (x + y))";
+    let text = "effect A where\n  a : Unit -> Int\neffect B where\n  b : Unit -> Int\nmain : Unit -> <IO> Unit\nmain () =\n  let x = handle a () with\n    | a () k -> k 1\n  let y = handle b () with\n    | b () k -> k 2\n  println (show_int (x + y))";
     insta::assert_snapshot!(core_text(text, Pass::Translate), @"
     effect Prelude.IO { println/1, open/1, read_all/1, close/1 }
     effect A { a/1 }
@@ -785,7 +785,7 @@ fn an_arm_reached_by_one_leaf_sits_at_the_leaf() {
 fn effects_of_the_same_name_in_two_modules_stay_apart() {
     // エフェクトの表は名前で引くので、入口の `Log` と `Audit.Log` は別の名前になる (docs/spec/core-ir.md)
     let audit = "pub effect Log where\n  emit : Int -> Unit\n\npub audited : Unit -> <Log> Unit\naudited () = emit 1";
-    let main = "import Audit\n\neffect Log where\n  emit : Int -> Unit\n\nlocal : Unit -> <Log> Unit\nlocal () = emit 2\n\nmain : Unit -> <IO> Unit\nmain () =\n  handle Audit.audited () with\n    | Audit.emit n k -> resume k (println (show_int n))\n  handle local () with\n    | emit n k -> resume k (println (show_int n))";
+    let main = "import Audit\n\neffect Log where\n  emit : Int -> Unit\n\nlocal : Unit -> <Log> Unit\nlocal () = emit 2\n\nmain : Unit -> <IO> Unit\nmain () =\n  handle Audit.audited () with\n    | Audit.emit n k -> k (println (show_int n))\n  handle local () with\n    | emit n k -> k (println (show_int n))";
     let shown = core_text_files(main, &[("Audit.em", audit)], Pass::Translate);
     for expected in [
         "effect Log { emit/1 }",
@@ -838,7 +838,7 @@ effect State s where
 /// `body` を `State Int` の handler の中で動かす `main`。変換は入口から届く関数だけを作るので、確かめる関数をここから呼ぶ。
 fn state_main(body: &str) -> String {
     format!(
-        "main : Unit -> <IO> Unit\nmain () =\n  let n =\n    handle {body} from 0 with\n      | get () k st -> resume k st st\n      | put s k _ -> resume k () s\n      | return x _ -> x\n  println (show_int n)\n"
+        "main : Unit -> <IO> Unit\nmain () =\n  let n =\n    handle {body} from 0 with\n      | get () k st -> k st st\n      | put s k _ -> k () s\n      | return x _ -> x\n  println (show_int n)\n"
     )
 }
 
@@ -904,7 +904,7 @@ fn arrows_with_different_masks_are_applied_apart() {
 #[test]
 fn a_resume_in_its_clause_has_no_mask() {
     let text = format!(
-        "{STATE}run : (Unit -> <State Int | e> a) -> <e> a\nrun action =\n  handle action () from 0 with\n    | get () k st -> resume k st st\n    | put n k _ -> resume k () n\n    | return x _ -> x\n\nmain : Unit -> <IO> Unit\nmain () = println (show_int (run (fn () -> get ())))\n"
+        "{STATE}run : (Unit -> <State Int | e> a) -> <e> a\nrun action =\n  handle action () from 0 with\n    | get () k st -> k st st\n    | put n k _ -> k () n\n    | return x _ -> x\n\nmain : Unit -> <IO> Unit\nmain () = println (show_int (run (fn () -> get ())))\n"
     );
     insta::assert_snapshot!(function(&core_text(&text, Pass::Translate), "run$handle0$get"), @"
     fn run$handle0$get(p0, k1^, st2) {
@@ -914,7 +914,7 @@ fn a_resume_in_its_clause_has_no_mask() {
     ");
 }
 
-/// 節の中の handle の本体にある `resume` は、その handle が足したラベルを飛ばす。型検査が `resume` の式の矢印 0 に
+/// 節の中の handle の本体にある `resume` は、その handle が足したラベルを飛ばす。型検査が継続の呼び出しの矢印 0 に
 /// 記録した `mask` を使う。
 #[test]
 fn a_resume_inside_an_inner_handle_is_masked() {
@@ -929,9 +929,9 @@ f : (Unit -> <Ask | e> Int) -> <e> Int
 f action =
   handle action () with
     | ask () k ->
-        handle resume k 1 with
+        handle k 1 with
           | log m k2 ->
-              resume k2 ()
+              k2 ()
 
 act : Unit -> <Ask, Log> Int
 act () =
@@ -944,7 +944,7 @@ main () =
   let r = handle f act with
             | log m k ->
                 println (\"outer \" ++ m)
-                resume k ()
+                k ()
   println (show_int r)
 ";
     insta::assert_snapshot!(function(&core_text(text, Pass::Translate), "f$handle1"), @"
@@ -1014,7 +1014,7 @@ fn a_continuation_called_inside_an_inner_handle_is_resumed() {
         "effect Log where\n  log : Int -> Unit\n\n",
         "    handle ask () with\n      | ask () k ->\n          handle k 1 with\n            | log _ j -> j ()",
     );
-    assert!(shown.contains("resume k"), "{shown}");
+    assert!(shown.contains("k"), "{shown}");
     assert!(!shown.contains("cont$"), "{shown}");
 }
 

@@ -1,4 +1,4 @@
-//! handler、`resume`、`drop` の変換と検査 (docs/spec/expressions.md の「handler」)。1つの handler は1つのエフェクトを
+//! handler と `drop` の変換と検査 (docs/spec/expressions.md の「handler」)。1つの handler は1つのエフェクトを
 //! 扱い、そのすべての操作に節を書く (docs/spec/effects.md の「handler の意味」)。
 
 use eml_diagnostics::{Diagnostic, Label, TextRange};
@@ -355,50 +355,13 @@ impl BodyLowering<'_> {
         }
     }
 
-    pub(super) fn lower_resume(&mut self, resume: &ast::ResumeExpr, range: TextRange) -> ExprId {
-        let written: Vec<TextRange> = resume.args().map(|arg| arg.range()).collect();
-        let args = self.keyword_args(resume.args());
-        match args.as_slice() {
-            [k, arg] => self.alloc(
-                ExprKind::Resume {
-                    k: *k,
-                    arg: *arg,
-                    arg_end: written[1].end(),
-                    state: None,
-                },
-                range,
-            ),
-            // 引数の数がどちらに合うかは、`k` の型の状態の欄の単一化で決まる (docs/spec/effects.md の「パラメータ付き handler」)
-            [k, arg, state] => self.alloc(
-                ExprKind::Resume {
-                    k: *k,
-                    arg: *arg,
-                    arg_end: written[1].end(),
-                    state: Some(*state),
-                },
-                range,
-            ),
-            _ => {
-                self.diagnostics.push(Diagnostic::error(
-                    codes::KEYWORD_ARITY,
-                    format!(
-                        "`resume` takes a continuation, a value, and an optional state, but {} given",
-                        arguments(args.len())
-                    ),
-                    Label::new(self.file, resume.keyword_range(), "this `resume`"),
-                ));
-                self.alloc(ExprKind::Missing, range)
-            }
-        }
-    }
-
     pub(super) fn lower_drop(&mut self, drop: &ast::DropExpr, range: TextRange) -> ExprId {
         let args = self.keyword_args(drop.args());
         match args.as_slice() {
             [value] => self.alloc(ExprKind::Drop(*value), range),
             _ => {
                 self.diagnostics.push(Diagnostic::error(
-                    codes::KEYWORD_ARITY,
+                    codes::DROP_ARITY,
                     format!(
                         "`drop` takes one value, but {} given",
                         arguments(args.len())

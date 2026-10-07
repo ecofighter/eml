@@ -83,13 +83,6 @@ fn continuation_forms(body: &Body) -> ArenaMap<LocalId, ContinuationForm> {
                 continue;
             }
             ExprKind::Call { callee, args } => (*callee, Some(args.len())),
-            // Task 4 で表面の `resume` を消すまでの橋渡し。`k v [st]` の呼び出しと同じに数える
-            ExprKind::Resume {
-                k,
-                arg: _,
-                arg_end: _,
-                state,
-            } => (*k, Some(1 + usize::from(state.is_some()))),
             ExprKind::Drop(value) => (*value, None),
             _ => continue,
         };

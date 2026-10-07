@@ -8,7 +8,7 @@ effect Name where
 named : (Unit -> <e> a) -> <e> a
 named action =
   handle inner action with
-    | name () k -> resume k "inner"
+    | name () k -> k "inner"
 
 inner : (Unit -> <e> a) -> <Name | e> a
 inner action = action ()
@@ -21,6 +21,6 @@ pick () =
 main : Unit -> <IO> Unit
 main () =
   let r = handle (handle named pick with
-                    | name () k -> resume k "outer") with
-            | choose () k -> resume k True ++ " " ++ resume k False
+                    | name () k -> k "outer") with
+            | choose () k -> k True ++ " " ++ k False
   println r

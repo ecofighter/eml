@@ -1,6 +1,5 @@
 ---
 source: crates/eml_cli/tests/ui.rs
-assertion_line: 99
 expression: rendered
 input_file: tests/ui/check-fail/exhaustiveness/refutable_pattern.em
 ---

@@ -8,7 +8,7 @@ main () =
     handle load () from open "input.txt" with
       | load () k f ->
           let (f, s) = read_all f
-          resume k s f
+          k s f
       | return x f ->
           close f
           x

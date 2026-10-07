@@ -275,22 +275,6 @@ impl Printer<'_> {
                 write!(s, " -> {}", self.expr(body, ret.closure.body, indent)).unwrap();
                 s + ")"
             }
-            ExprKind::Resume {
-                k,
-                arg,
-                arg_end: _,
-                state,
-            } => {
-                let mut s = format!(
-                    "(resume {} {}",
-                    self.expr(body, *k, indent),
-                    self.expr(body, *arg, indent)
-                );
-                if let Some(state) = state {
-                    write!(s, " {}", self.expr(body, *state, indent)).unwrap();
-                }
-                s + ")"
-            }
             ExprKind::Match {
                 scrutinee, arms, ..
             } => {

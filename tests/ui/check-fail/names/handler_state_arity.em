@@ -1,4 +1,4 @@
--- E1010 and E1011 for handlers with a state.
+-- E1010 for handlers with a state, and a continuation called with too many arguments.
 effect Ask where
   ask : Unit -> Int
 
@@ -8,7 +8,7 @@ effect Fail where
 clause : Unit -> Int
 clause () =
   handle ask () from 0 with
-    | ask () k -> resume k 1 0
+    | ask () k -> k 1 0
     | return x st -> x
 
 never_clause : Unit -> Int
@@ -20,11 +20,11 @@ never_clause () =
 return_clause : Unit -> Int
 return_clause () =
   handle ask () from 0 with
-    | ask () k st -> resume k 1 st
+    | ask () k st -> k 1 st
     | return x -> x
 
-resume_arity : Unit -> Int
-resume_arity () =
+continuation_arity : Unit -> Int
+continuation_arity () =
   handle ask () from 0 with
-    | ask () k st -> resume k 1 st st
+    | ask () k st -> k 1 st st
     | return x st -> x

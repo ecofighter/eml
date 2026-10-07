@@ -10,5 +10,5 @@ main : Unit -> <IO> Unit
 main () =
   let total =
     handle loop 10000 0 with
-      | choose () k -> resume k False + resume k True
+      | choose () k -> k False + k True
   println (show_int total)

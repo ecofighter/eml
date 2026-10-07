@@ -263,7 +263,7 @@ pub(crate) struct Shape {
     pub mult_vars: usize,
 }
 
-/// 閉じた形の型。推論用の変数と継続の型は、シグネチャから作る型に現れないので持たない。
+/// 閉じた形の型。推論用の変数は、シグネチャから作る型に現れないので持たない。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ShapeTy {
     Con(TypeDefId, Vec<ShapeTy>),

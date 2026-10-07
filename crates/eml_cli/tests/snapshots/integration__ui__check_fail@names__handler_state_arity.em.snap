@@ -6,7 +6,7 @@ input_file: tests/ui/check-fail/names/handler_state_arity.em
 [E1010] Error: the clause for `ask` takes 3 parameters, but this one has 2
     ╭─[ check-fail/names/handler_state_arity.em:11:7 ]
     │
- 11 │     | ask () k -> resume k 1 0
+ 11 │     | ask () k -> k 1 0
     │       ─┬─  
     │        ╰─── this clause
     │ 
@@ -30,10 +30,10 @@ input_file: tests/ui/check-fail/names/handler_state_arity.em
     │ 
     │ Note: the second parameter receives the state of the handler
 ────╯
-[E1011] Error: `resume` takes a continuation, a value, and an optional state, but 4 arguments were given
-    ╭─[ check-fail/names/handler_state_arity.em:29:22 ]
+[E2001] Error: `k` takes 2 arguments but 3 were given
+    ╭─[ check-fail/names/handler_state_arity.em:29:29 ]
     │
- 29 │     | ask () k st -> resume k 1 st st
-    │                      ───┬──  
-    │                         ╰──── this `resume`
+ 29 │     | ask () k st -> k 1 st st
+    │                             ─┬  
+    │                              ╰── unexpected argument
 ────╯

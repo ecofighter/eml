@@ -114,7 +114,6 @@ ast_node! {
     LetExpr => LET_EXPR,
     OpSeq => OP_SEQ,
     AppExpr => APP_EXPR,
-    ResumeExpr => RESUME_EXPR,
     DropExpr => DROP_EXPR,
     FieldExpr => FIELD_EXPR,
     PathExpr => PATH_EXPR,
@@ -157,7 +156,7 @@ ast_enum! {
 ast_enum! {
     /// `body ::= block(stmt) | expr` を1つの型で受けられるように、字下げしたブロック (`Block`) も式に含める。
     Expr {
-        Block, IfExpr, MatchExpr, HandleExpr, LambdaExpr, LetExpr, OpSeq, AppExpr, ResumeExpr,
+        Block, IfExpr, MatchExpr, HandleExpr, LambdaExpr, LetExpr, OpSeq, AppExpr,
         DropExpr, FieldExpr, PathExpr, Literal, UnitExpr, ParenExpr, TupleExpr, AnnotExpr, OpRef,
         LeftSection, RightSection, FieldSection,
     }
@@ -641,13 +640,6 @@ impl ReturnClause {
 
     pub fn body(&self) -> Option<Expr> {
         child_between(&self.syntax, Some(SyntaxKind::THIN_ARROW), None)
-    }
-}
-
-impl ResumeExpr {
-    /// 個数は文法で制限せず、HIR で検査する (docs/spec/grammar.md の「文法上の補足」)。
-    pub fn args(&self) -> AstChildren<Expr> {
-        support::children(&self.syntax)
     }
 }
 

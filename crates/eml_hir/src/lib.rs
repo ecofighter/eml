@@ -39,7 +39,7 @@ pub mod codes {
     pub const NEVER_RESULT_NOT_FREE: ErrorCode = ErrorCode(1008);
     pub const UNHANDLEABLE_EFFECT: ErrorCode = ErrorCode(1009);
     pub const CLAUSE_ARITY: ErrorCode = ErrorCode(1010);
-    pub const KEYWORD_ARITY: ErrorCode = ErrorCode(1011);
+    pub const DROP_ARITY: ErrorCode = ErrorCode(1011);
     pub const MIXED_EFFECTS_IN_HANDLER: ErrorCode = ErrorCode(1012);
     pub const MISSING_CLAUSE: ErrorCode = ErrorCode(1013);
     pub const DUPLICATE_CLAUSE: ErrorCode = ErrorCode(1014);

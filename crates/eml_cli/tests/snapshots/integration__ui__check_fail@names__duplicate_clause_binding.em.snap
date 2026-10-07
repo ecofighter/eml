@@ -6,7 +6,7 @@ input_file: tests/ui/check-fail/names/duplicate_clause_binding.em
 [E1017] Error: `n` is bound more than once
     ╭─[ check-fail/names/duplicate_clause_binding.em:11:13 ]
     │
- 11 │     | ask n n -> resume n 1
+ 11 │     | ask n n -> n 1
     │           ┬ ┬  
     │           ╰──── first bound here
     │             │  

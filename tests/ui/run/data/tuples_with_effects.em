@@ -12,8 +12,8 @@ collect : Unit -> (String, Int)
 collect () =
   handle both () with
     | pick (a, b) k ->
-      let (x, n) = resume k a
-      let (y, m) = resume k b
+      let (x, n) = k a
+      let (y, m) = k b
       (x ++ " " ++ y, n + m)
 
 main : Unit -> <IO> Unit

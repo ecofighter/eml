@@ -20,7 +20,7 @@ main () =
   handle run () with
     | log level message k ->
         println (level ++ ": " ++ message)
-        resume k ()
+        k ()
     | note message k ->
         println ("note: " ++ message)
-        resume k ()
+        k ()

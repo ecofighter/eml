@@ -15,5 +15,5 @@ main : Unit -> <IO> Unit
 main () =
   let result =
     handle sum_asks 100000 0 "total: " with
-      | ask () k -> resume k 2
+      | ask () k -> k 2
   println result

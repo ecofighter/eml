@@ -317,9 +317,8 @@ fn effect_declaration_parts() {
 }
 
 #[test]
-fn handler_clauses_resume_and_drop() {
-    let file =
-        source("h = handle f () with\n  | ask key k -> resume k key\n  | return x -> drop x");
+fn handler_clauses_call_the_continuation_and_drop() {
+    let file = source("h = handle f () with\n  | ask key k -> k key\n  | return x -> drop x");
     let equation = first_equation(&file);
     let Some(Expr::HandleExpr(handle)) = equation.body() else {
         panic!("expected a handler");
@@ -332,10 +331,10 @@ fn handler_clauses_resume_and_drop() {
     };
     assert_eq!(op.path().unwrap().name().unwrap().text(), "ask");
     assert_eq!(op.params().count(), 2);
-    let Some(Expr::ResumeExpr(resume)) = op.body() else {
-        panic!("expected `resume`");
+    let Some(Expr::AppExpr(call)) = op.body() else {
+        panic!("expected a call of `k`");
     };
-    assert_eq!(resume.args().count(), 2);
+    assert_eq!(call.args().count(), 1);
     assert_eq!(ret.params().count(), 1);
     let Some(Expr::DropExpr(drop)) = ret.body() else {
         panic!("expected `drop`");

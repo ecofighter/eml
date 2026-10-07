@@ -24,9 +24,6 @@ const ATOM_START: TokenSet = TokenSet::new(&[
 /// これにより、`match e with` の `e` が `with` の手前で終わる。
 const EXPR_FORMS: TokenSet = TokenSet::new(&[IF_KW, MATCH_KW, HANDLE_KW, FN_KW, LET_KW]);
 
-/// 引数が atom なので右へ伸びず、演算の項には書けるが、引数の位置では括弧が要る (docs/spec/grammar.md の「文法上の補足」)。
-const KEYWORD_APPS: TokenSet = TokenSet::new(&[RESUME_KW, DROP_KW]);
-
 pub(super) fn body(p: &mut Parser) {
     if p.at(LAYOUT_OPEN) {
         let m = p.start();
@@ -173,7 +170,7 @@ fn op_expr_inner(p: &mut Parser, section: bool) -> OpExpr {
 }
 
 fn operand(p: &mut Parser) -> bool {
-    if p.at_ts(ATOM_START) || p.at_ts(KEYWORD_APPS) {
+    if p.at_ts(ATOM_START) || p.at(DROP_KW) {
         app(p);
     } else if p.at_ts(EXPR_FORMS) {
         misplaced(p);
@@ -186,13 +183,10 @@ fn operand(p: &mut Parser) -> bool {
 /// 引数がなければ `APP_EXPR` を作らない。1つの atom を余計なノードで包まないため。
 fn app(p: &mut Parser) {
     let m = p.start();
-    let keyword = match p.current() {
-        RESUME_KW => Some(RESUME_EXPR),
-        DROP_KW => Some(DROP_EXPR),
-        _ => None,
-    };
-    // `resume` と `drop` の最初の引数も、ほかの引数と同じループで層を確かめる。
-    if keyword.is_some() {
+    // `drop` は引数が atom なので右へ伸びず、演算の項には書けるが、引数の位置では括弧が要る (docs/spec/grammar.md の「文法上の補足」)
+    let is_drop = p.at(DROP_KW);
+    // `drop` の最初の引数も、ほかの引数と同じループで層を確かめる。
+    if is_drop {
         p.bump_any();
     } else {
         postfix(p);
@@ -202,7 +196,7 @@ fn app(p: &mut Parser) {
         if p.at_ts(ATOM_START) {
             postfix(p);
             args += 1;
-        } else if p.at_ts(EXPR_FORMS) || p.at_ts(KEYWORD_APPS) {
+        } else if p.at_ts(EXPR_FORMS) || p.at(DROP_KW) {
             misplaced(p);
             args += 1;
             break;
@@ -210,17 +204,15 @@ fn app(p: &mut Parser) {
             break;
         }
     }
-    if keyword.is_some() && args == 0 {
+    if is_drop && args == 0 {
         expected(p, "an expression");
     }
-    match keyword {
-        Some(kind) => {
-            m.complete(p, kind);
-        }
-        None if args > 0 => {
-            m.complete(p, APP_EXPR);
-        }
-        None => m.abandon(p),
+    if is_drop {
+        m.complete(p, DROP_EXPR);
+    } else if args > 0 {
+        m.complete(p, APP_EXPR);
+    } else {
+        m.abandon(p);
     }
 }
 
@@ -373,10 +365,10 @@ fn paren_expr(p: &mut Parser) -> SyntaxKind {
     PAREN_EXPR
 }
 
-/// E0012 を出した後も、回復のためにその形を本来の層で読む。`resume` と `drop` を `app` で読むのは、
-/// `g resume k 1 + 2` を `g (resume k 1) + 2` と同じ木にして、`+ 2` を取り込まないため。
+/// E0012 を出した後も、回復のためにその形を本来の層で読む。`drop` を `app` で読むのは、
+/// `g drop k + 2` を `g (drop k) + 2` と同じ木にして、`+ 2` を取り込まないため。
 /// 深さは E0012 より先に数える。上限に達した位置で E0013 を出すためである (同じ位置の診断は1件しか残らない)。
-/// `app` は自分では深さを数えないので、`g resume k resume k …` の再帰もここで数える。`expr` の形は `expr` でも
+/// `app` は自分では深さを数えないので、`g drop drop …` の再帰もここで数える。`expr` の形は `expr` でも
 /// 数えるので1段多くなるが、上限に少し早く届くだけである。
 fn misplaced(p: &mut Parser) {
     nested(p, (), |p| {
@@ -388,7 +380,7 @@ fn misplaced(p: &mut Parser) {
             ),
             "wrap it in parentheses",
         );
-        if p.at_ts(KEYWORD_APPS) {
+        if p.at(DROP_KW) {
             app(p);
         } else {
             expr(p);

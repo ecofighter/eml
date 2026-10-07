@@ -37,8 +37,8 @@ try action =
 run_state : s -> (Unit -> <State s | e> a) -> <e> (a, s)
 run_state init action =
   handle action () from init with
-    | get () k st -> resume k st st
-    | put st2 k _ -> resume k () st2
+    | get () k st -> k st st
+    | put st2 k _ -> k () st2
     | return x st -> (x, st)
 
 counter : Unit -> <State Int> Int
@@ -49,7 +49,7 @@ counter () =
 
 first : (Unit -> <Choose | e> a) -> <e> a
 first action =
-  handle action () with | choose () k -> resume k True
+  handle action () with | choose () k -> k True
 
 classify : Int -> String
 classify n =

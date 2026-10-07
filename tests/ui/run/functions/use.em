@@ -7,7 +7,7 @@ with_log body =
   handle body () with
     | log s k ->
         println ("log: " ++ s)
-        resume k ()
+        k ()
 
 twice : (Int -> <IO> Unit) -> <IO> Unit
 twice k =

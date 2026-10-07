@@ -15,13 +15,13 @@ input_file: tests/ui/check-fail/names/handler_clauses.em
 [E1012] Error: a handler can handle only one effect
     ╭─[ check-fail/names/handler_clauses.em:26:7 ]
     │
- 26 │     | ask key k -> resume k key
+ 26 │     | ask key k -> k key
     │       ─┬─  
     │        ╰─── `ask` is an operation of `Ask`
     │
     ├─[ check-fail/names/handler_clauses.em:26:7 ]
     │
- 25 │     | log message k -> resume k ()
+ 25 │     | log message k -> k ()
     │       ─┬─  
     │        ╰─── this handler handles `Log` because of this clause
     │ 
@@ -39,13 +39,13 @@ input_file: tests/ui/check-fail/names/handler_clauses.em
 [E1014] Error: `ask` has more than one clause in this handler
     ╭─[ check-fail/names/handler_clauses.em:38:7 ]
     │
- 38 │     | ask key k -> resume k "again"
+ 38 │     | ask key k -> k "again"
     │       ─┬─  
     │        ╰─── another clause for `ask`
     │
     ├─[ check-fail/names/handler_clauses.em:38:7 ]
     │
- 36 │     | ask key k -> resume k key
+ 36 │     | ask key k -> k key
     │       ─┬─  
     │        ╰─── the first clause
 ────╯

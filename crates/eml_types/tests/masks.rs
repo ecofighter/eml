@@ -57,8 +57,8 @@ fn io_before_the_row_variable_is_not_masked() {
 
 #[test]
 fn a_resume_inside_an_inner_handle_skips_its_label() {
-    // `resume k 1` は内側の handle の本体にあり、今の row `<Log | e>` の `Log` が `k` の row `<e>` に余る。`mask` は
-    // `resume` の式の矢印 0 に付く。`log` の節の `resume k2 ()` は外側の row で動くので、`mask` が付かない
+    // `k 1` は内側の handle の本体にあり、今の row `<Log | e>` の `Log` が `k` の row `<e>` に余る。`mask` は
+    // `k 1` の式の矢印 0 に付く。`log` の節の `k2 ()` は外側の row で動くので、`mask` が付かない
     let text = "\
 effect Ask where
   ask : Unit -> Int
@@ -70,9 +70,9 @@ f : (Unit -> <Ask | e> Int) -> <e> Int
 f action =
   handle action () with
     | ask () k ->
-        handle resume k 1 with
+        handle k 1 with
           | log m k2 ->
-              resume k2 ()
+              k2 ()
 ";
     insta::assert_snapshot!(masks(text, "f"), @"11:16#0 [Log]");
 }

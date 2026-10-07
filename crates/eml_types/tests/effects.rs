@@ -40,7 +40,7 @@ fn operations_are_values_and_can_be_partially_applied() {
 
 #[test]
 fn a_handler_removes_its_effect_and_types_the_continuation() {
-    let text = "effect Ask where\n  ask : String -> Int\n\nrun : Unit -> <Ask, IO> Int\nrun () =\n  let n = ask \"n\"\n  println \"asked\"\n  n + 1\n\nmain : Unit -> <IO> Unit\nmain () =\n  let total =\n    handle run () with\n      | ask key k -> resume k 41\n      | return x -> show_int x\n  println total";
+    let text = "effect Ask where\n  ask : String -> Int\n\nrun : Unit -> <Ask, IO> Int\nrun () =\n  let n = ask \"n\"\n  println \"asked\"\n  n + 1\n\nmain : Unit -> <IO> Unit\nmain () =\n  let total =\n    handle run () with\n      | ask key k -> k 41\n      | return x -> show_int x\n  println total";
     insta::assert_snapshot!(check_text(text), @"
     ask : String -> <Ask> Int
     run : Unit -> <Ask, IO> Int
@@ -94,7 +94,7 @@ fn a_partial_continuation_capturing_a_linear_value_is_linear() {
 
 #[test]
 fn type_variables_of_an_operation_are_rigid_in_its_clause() {
-    let text = "effect Pick where\n  pick : a -> a -> a\n\nfirst : Unit -> Int\nfirst () =\n  handle pick 1 2 with\n    | pick x y k -> resume k x\n\nwrong : Unit -> Int\nwrong () =\n  handle pick 1 2 with\n    | pick x y k -> resume k 0";
+    let text = "effect Pick where\n  pick : a -> a -> a\n\nfirst : Unit -> Int\nfirst () =\n  handle pick 1 2 with\n    | pick x y k -> k x\n\nwrong : Unit -> Int\nwrong () =\n  handle pick 1 2 with\n    | pick x y k -> k 0";
     insta::assert_snapshot!(check_text(text), @"
     pick : a -> a -> <Pick> a
       kinds: a <= Unr
@@ -109,27 +109,27 @@ fn type_variables_of_an_operation_are_rigid_in_its_clause() {
       k#2 : a -> Int
       $r#3 : Int
     ---
-    E2001 12:30 mismatched types
-      12:30 expected `a`, found `Int`
-      12:28 argument 1 of `k`
+    E2001 12:23 mismatched types
+      12:23 expected `a`, found `Int`
+      12:21 argument 1 of `k`
     ");
 }
 
 #[test]
-fn resume_needs_a_function_and_drop_takes_any_value() {
-    let text = "f : Int -> Int\nf n =\n  drop n\n  resume n 1";
+fn drop_takes_any_value_and_a_non_function_cannot_be_called() {
+    let text = "f : Int -> Int\nf n =\n  drop n\n  n 1";
     insta::assert_snapshot!(check_text(text), @"
     f : Int -> Int
       n#0 : Int
     ---
-    E2001 4:12 `n` is not a function
-      4:12 unexpected argument
+    E2001 4:5 `n` is not a function
+      4:5 unexpected argument
     ");
 }
 
 #[test]
 fn the_body_of_a_handler_may_perform_only_the_handled_effect_and_the_outer_row() {
-    let text = "effect Ask where\n  ask : Unit -> Int\n\nnoisy : Unit -> <IO> Int\nnoisy () =\n  println \"x\"\n  1\n\nf : Unit -> Int\nf () =\n  handle noisy () with\n    | ask () k -> resume k 1";
+    let text = "effect Ask where\n  ask : Unit -> Int\n\nnoisy : Unit -> <IO> Int\nnoisy () =\n  println \"x\"\n  1\n\nf : Unit -> Int\nf () =\n  handle noisy () with\n    | ask () k -> k 1";
     insta::assert_snapshot!(check_text(text), @"
     ask : Unit -> <Ask> Int
     noisy : Unit -> <IO> Int
@@ -146,7 +146,7 @@ fn the_body_of_a_handler_may_perform_only_the_handled_effect_and_the_outer_row()
 
 #[test]
 fn a_continuation_of_a_once_operation_must_be_used_exactly_once() {
-    let text = "effect Ask where\n  ask : Unit -> Int\n\ntwice : Unit -> Int\ntwice () =\n  handle ask () with\n    | ask () k -> resume k 1 + resume k 2\n\nunused : Unit -> Int\nunused () =\n  handle ask () with\n    | ask () k -> 0\n\ndiscarded : Unit -> Int\ndiscarded () =\n  handle ask () with\n    | ask () _ -> 0\n\ncaptured : Unit -> <Ask> Int\ncaptured () =\n  handle ask () with\n    | ask () k ->\n        handle ask () with\n          | ask () inner -> resume k (resume inner 1)";
+    let text = "effect Ask where\n  ask : Unit -> Int\n\ntwice : Unit -> Int\ntwice () =\n  handle ask () with\n    | ask () k -> k 1 + k 2\n\nunused : Unit -> Int\nunused () =\n  handle ask () with\n    | ask () k -> 0\n\ndiscarded : Unit -> Int\ndiscarded () =\n  handle ask () with\n    | ask () _ -> 0\n\ncaptured : Unit -> <Ask> Int\ncaptured () =\n  handle ask () with\n    | ask () k ->\n        handle ask () with\n          | ask () inner -> k (inner 1)";
     insta::assert_snapshot!(check_text(text), @"
     ask : Unit -> <Ask> Int
     twice : Unit -> Int
@@ -163,9 +163,9 @@ fn a_continuation_of_a_once_operation_must_be_used_exactly_once() {
       $r#2 : Int
       $r#3 : Int
     ---
-    E3002 7:39 `k` must be used exactly once, but it is used more than once
-      7:39 used again here
-      7:26 first used here
+    E3002 7:25 `k` must be used exactly once, but it is used more than once
+      7:25 used again here
+      7:19 first used here
       note: linear values, such as files, the continuation of a `once` operation and closures that capture one, must be used exactly once
     E3005 12:5 the continuation `k` of a `once` operation must be called or dropped
       12:5 this clause
@@ -185,7 +185,7 @@ fn a_continuation_of_a_once_operation_must_be_used_exactly_once() {
 
 #[test]
 fn a_closure_capturing_a_continuation_cannot_be_used_twice() {
-    let text = "effect Ask where\n  ask : Unit -> Int\n\ntwice : (Int -> Int) -> Int\ntwice f = f (f 0)\n\ng : Unit -> Int\ng () =\n  handle ask () with\n    | ask () k -> twice (fn n -> resume k n)";
+    let text = "effect Ask where\n  ask : Unit -> Int\n\ntwice : (Int -> Int) -> Int\ntwice f = f (f 0)\n\ng : Unit -> Int\ng () =\n  handle ask () with\n    | ask () k -> twice (fn n -> k n)";
     insta::assert_snapshot!(check_text(text), @"
     ask : Unit -> <Ask> Int
     twice : (Int -> Int) -> Int
@@ -204,21 +204,22 @@ fn a_closure_capturing_a_continuation_cannot_be_used_twice() {
 
 #[test]
 fn a_body_with_a_reported_error_does_not_report_linear_values() {
-    let text = "effect Ask where\n  ask : Unit -> Int\n\nf : Unit -> Int\nf () =\n  handle ask () with\n    | ask () k -> resume k";
+    let text = "effect Ask where\n  ask : Unit -> Int\n\nf : Unit -> Int\nf () =\n  handle ask () with\n    | ask () k -> k";
     insta::assert_snapshot!(check_text(text), @"
     ask : Unit -> <Ask> Int
     f : Unit -> Int
       k#0 : Int -> Int
       $r#1 : Int
     ---
-    E1011 7:19 `resume` takes a continuation, a value, and an optional state, but 1 argument was given
-      7:19 this `resume`
+    E2001 7:19 mismatched types
+      7:19 expected `Int`, found `Int -> Int`
+      note: each clause of a handler must have the type of the whole `handle` expression
     ");
 }
 
 #[test]
 fn a_continuation_cannot_pass_through_a_polymorphic_operation_parameter() {
-    let text = "effect Ask where\n  ask : Unit -> Int\n\neffect Sink where\n  sink : a -> Unit\n\neffect Pair where\n  pair : a -> (a -> a -> b) -> b\n\nsunk : Unit -> <Sink> Int\nsunk () =\n  handle ask () with\n    | ask () k ->\n        sink k\n        0\n\npaired : Unit -> <Pair> Int\npaired () =\n  handle ask () with\n    | ask () k ->\n        let f = pair 1 (fn x y -> fn u -> resume k (x + y))\n        f ()";
+    let text = "effect Ask where\n  ask : Unit -> Int\n\neffect Sink where\n  sink : a -> Unit\n\neffect Pair where\n  pair : a -> (a -> a -> b) -> b\n\nsunk : Unit -> <Sink> Int\nsunk () =\n  handle ask () with\n    | ask () k ->\n        sink k\n        0\n\npaired : Unit -> <Pair> Int\npaired () =\n  handle ask () with\n    | ask () k ->\n        let f = pair 1 (fn x y -> fn u -> k (x + y))\n        f ()";
     insta::assert_snapshot!(check_text(text), @"
     ask : Unit -> <Ask> Int
     sink : a -> <Sink> Unit
@@ -247,7 +248,7 @@ fn a_continuation_cannot_pass_through_a_polymorphic_operation_parameter() {
 
 #[test]
 fn a_clause_dropped_by_an_error_does_not_cause_linear_misuse() {
-    let text = "effect Ask where\n  ask : Unit -> Int\n\neffect Log where\n  log : String -> Unit\n\nf : Unit -> Int\nf () =\n  handle ask () with\n    | ask () k ->\n        handle 1 with\n          | log m k2 -> resume k2 ()\n          | return x -> x\n          | return y -> resume k y";
+    let text = "effect Ask where\n  ask : Unit -> Int\n\neffect Log where\n  log : String -> Unit\n\nf : Unit -> Int\nf () =\n  handle ask () with\n    | ask () k ->\n        handle 1 with\n          | log m k2 -> k2 ()\n          | return x -> x\n          | return y -> k y";
     insta::assert_snapshot!(check_text(text), @"
     ask : Unit -> <Ask> Int
     log : String -> <Log> Unit
@@ -292,7 +293,7 @@ fn type_arguments_of_a_performed_effect_must_match_the_row() {
 
 #[test]
 fn a_handler_takes_the_type_arguments_of_its_effect_from_the_body() {
-    let text = "effect Reader r where\n  ask : Unit -> r\n\ngreeting : Unit -> <Reader String> String\ngreeting () = ask ()\n\nrun : Unit -> String\nrun () =\n  handle greeting () with\n    | ask () k -> resume k \"x\"\n\nwrong : Unit -> String\nwrong () =\n  handle greeting () with\n    | ask () k -> resume k 1";
+    let text = "effect Reader r where\n  ask : Unit -> r\n\ngreeting : Unit -> <Reader String> String\ngreeting () = ask ()\n\nrun : Unit -> String\nrun () =\n  handle greeting () with\n    | ask () k -> k \"x\"\n\nwrong : Unit -> String\nwrong () =\n  handle greeting () with\n    | ask () k -> k 1";
     insta::assert_snapshot!(check_text(text), @"
     ask : Unit -> <Reader r> r
     greeting : Unit -> <Reader String> String
@@ -303,9 +304,9 @@ fn a_handler_takes_the_type_arguments_of_its_effect_from_the_body() {
       k#0 : String -> String
       $r#1 : String
     ---
-    E2001 15:28 mismatched types
-      15:28 expected `String`, found `Int`
-      15:26 argument 1 of `k`
+    E2001 15:21 mismatched types
+      15:21 expected `String`, found `Int`
+      15:19 argument 1 of `k`
     ");
 }
 
@@ -328,7 +329,7 @@ fn a_function_type_with_other_effect_arguments_is_a_mismatch() {
 
 #[test]
 fn a_continuation_of_a_multi_operation_may_be_resumed_twice() {
-    let text = "effect Choice where\n  multi choose : Unit -> Bool\n\nboth : Unit -> Int\nboth () =\n  handle (if choose () then 1 else 2) with\n    | choose () k -> resume k True + resume k False";
+    let text = "effect Choice where\n  multi choose : Unit -> Bool\n\nboth : Unit -> Int\nboth () =\n  handle (if choose () then 1 else 2) with\n    | choose () k -> k True + k False";
     insta::assert_snapshot!(check_text(text), @"
     choose : Unit -> <Choice> Bool
     both : Unit -> Int
@@ -339,7 +340,7 @@ fn a_continuation_of_a_multi_operation_may_be_resumed_twice() {
 
 #[test]
 fn the_return_clause_of_a_multi_handler_cannot_capture_a_linear_value() {
-    let text = "effect Ask where\n  ask : Unit -> Int\n\neffect Choice where\n  multi choose : Unit -> Bool\n\ncaptured : Unit -> Int\ncaptured () =\n  handle ask () with\n    | ask () k ->\n        handle (if choose () then 1 else 2) with\n          | choose () c -> resume c True + resume c False\n          | return n -> resume k n";
+    let text = "effect Ask where\n  ask : Unit -> Int\n\neffect Choice where\n  multi choose : Unit -> Bool\n\ncaptured : Unit -> Int\ncaptured () =\n  handle ask () with\n    | ask () k ->\n        handle (if choose () then 1 else 2) with\n          | choose () c -> c True + c False\n          | return n -> k n";
     insta::assert_snapshot!(check_text(text), @"
     ask : Unit -> <Ask> Int
     choose : Unit -> <Choice> Bool
@@ -360,7 +361,7 @@ fn the_return_clause_of_a_multi_handler_cannot_capture_a_linear_value() {
 
 #[test]
 fn the_return_clause_of_a_multi_handler_may_capture_an_unrestricted_value() {
-    let text = "effect Choice where\n  multi choose : Unit -> Bool\n\ncaptured : Int -> Int\ncaptured base =\n  handle (if choose () then 1 else 2) with\n    | choose () c -> resume c True + resume c False\n    | return n -> n + base";
+    let text = "effect Choice where\n  multi choose : Unit -> Bool\n\ncaptured : Int -> Int\ncaptured base =\n  handle (if choose () then 1 else 2) with\n    | choose () c -> c True + c False\n    | return n -> n + base";
     insta::assert_snapshot!(check_text(text), @"
     choose : Unit -> <Choice> Bool
     captured : Int -> Int
@@ -372,7 +373,7 @@ fn the_return_clause_of_a_multi_handler_may_capture_an_unrestricted_value() {
 
 #[test]
 fn continuations_of_handlers_with_a_state_carry_the_state() {
-    let text = "effect Ask where\n  ask : Unit -> Int\n\nf : Unit -> Int\nf () =\n  handle ask () from \"s\" with\n    | ask () k st -> resume k 1 st\n    | return x st -> x\n\ng : Unit -> Int\ng () =\n  handle ask () from () with\n    | ask () k st -> resume k 1 st\n    | return x st -> x";
+    let text = "effect Ask where\n  ask : Unit -> Int\n\nf : Unit -> Int\nf () =\n  handle ask () from \"s\" with\n    | ask () k st -> k 1 st\n    | return x st -> x\n\ng : Unit -> Int\ng () =\n  handle ask () from () with\n    | ask () k st -> k 1 st\n    | return x st -> x";
     let dump = check_text(text);
     assert!(
         dump.contains("k#") && dump.contains(": Int -> String -> Int"),
@@ -384,14 +385,14 @@ fn continuations_of_handlers_with_a_state_carry_the_state() {
 
 #[test]
 fn a_continuation_with_a_state_is_resumed_through_a_lambda_and_more_than_once() {
-    let text = "effect Choose where\n  multi choose : Unit -> Bool\n\nf : Unit -> Int\nf () =\n  handle (if choose () then 1 else 2) from 0 with\n    | choose () k st ->\n        let again = fn c -> resume c True (st + 1)\n        again k + resume k False (st + 2)\n    | return x st -> x + st";
+    let text = "effect Choose where\n  multi choose : Unit -> Bool\n\nf : Unit -> Int\nf () =\n  handle (if choose () then 1 else 2) from 0 with\n    | choose () k st ->\n        let again = fn c -> c True (st + 1)\n        again k + k False (st + 2)\n    | return x st -> x + st";
     let checked = eml_test_support::check(text);
     assert!(checked.diagnostics.is_empty(), "{:?}", checked.diagnostics);
 }
 
 #[test]
 fn the_arity_of_a_continuation_follows_the_state_of_its_handler() {
-    let text = "effect Ask where\n  ask : Unit -> Int\n\nmissing : Unit -> Int\nmissing () =\n  handle ask () from 0 with\n    | ask () k st -> resume k st\n    | return x st -> x\n\nextra : Unit -> Int\nextra () =\n  handle ask () with\n    | ask () k -> resume k 1 2";
+    let text = "effect Ask where\n  ask : Unit -> Int\n\nmissing : Unit -> Int\nmissing () =\n  handle ask () from 0 with\n    | ask () k st -> k st\n    | return x st -> x\n\nextra : Unit -> Int\nextra () =\n  handle ask () with\n    | ask () k -> k 1 2";
     insta::assert_snapshot!(check_text(text), @"
     ask : Unit -> <Ask> Int
     missing : Unit -> Int
@@ -406,16 +407,16 @@ fn the_arity_of_a_continuation_follows_the_state_of_its_handler() {
     E2001 7:22 mismatched types
       7:22 expected `Int`, found `Int -> Int`
       note: each clause of a handler must have the type of the whole `handle` expression
-    E2001 13:30 `k` takes 1 argument but 2 were given
-      13:30 unexpected argument
+    E2001 13:23 `k` takes 1 argument but 2 were given
+      13:23 unexpected argument
     ");
 }
 
 #[test]
 fn a_continuation_with_a_state_called_without_it_in_a_lambda_is_a_mismatch() {
-    // ラムダの中の `resume c 1` は `c` に引数を1つだけ渡す。状態のある `k` を渡すと、`again k` が部分適用の関数になり、
+    // ラムダの中の `c 1` は `c` に引数を1つだけ渡す。状態のある `k` を渡すと、`again k` が部分適用の関数になり、
     // 節の型と食い違う
-    let text = "effect Ask where\n  ask : Unit -> Int\n\nf : Unit -> Int\nf () =\n  handle ask () from 0 with\n    | ask () k st ->\n        let again = fn c -> resume c 1\n        again k\n    | return x _ -> x";
+    let text = "effect Ask where\n  ask : Unit -> Int\n\nf : Unit -> Int\nf () =\n  handle ask () from 0 with\n    | ask () k st ->\n        let again = fn c -> c 1\n        again k\n    | return x _ -> x";
     let checked = eml_test_support::check(text);
     let codes: Vec<String> = checked
         .diagnostics
@@ -427,7 +428,7 @@ fn a_continuation_with_a_state_called_without_it_in_a_lambda_is_a_mismatch() {
 
 #[test]
 fn a_handler_of_an_unknown_effect_still_checks_its_initial_state() {
-    let text = "f : Unit -> Int\nf () =\n  handle 1 from (1 + \"a\") with\n    | nope () k st -> resume k 1 st\n    | return x st -> x";
+    let text = "f : Unit -> Int\nf () =\n  handle 1 from (1 + \"a\") with\n    | nope () k st -> k 1 st\n    | return x st -> x";
     let checked = eml_test_support::check(text);
     let codes: Vec<String> = checked
         .diagnostics

@@ -8,5 +8,5 @@ effect Ask where
 main : Unit -> <IO> Unit
 main () =
   let n = handle tell () with
-    | tell () k -> resume k 2
+    | tell () k -> k 2
   println (show_int n)

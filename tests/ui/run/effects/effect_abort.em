@@ -32,7 +32,7 @@ ask_checked answer =
   handle sum_two () with
     | ask () k ->
         let n = checked answer
-        resume k n
+        k n
 
 bounded : Int -> String
 bounded answer =

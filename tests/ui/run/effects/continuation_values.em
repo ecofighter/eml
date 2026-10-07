@@ -10,12 +10,12 @@ main () =
   let passed =
     handle add_two () with
       | ask () k ->
-          let go = fn cont value -> resume cont value
+          let go = fn cont value -> cont value
           go k 20
   println (show_int passed)
   let captured =
     handle add_two () with
       | ask () k ->
-          let later = fn n -> resume k n
+          let later = fn n -> k n
           later 7
   println (show_int captured)

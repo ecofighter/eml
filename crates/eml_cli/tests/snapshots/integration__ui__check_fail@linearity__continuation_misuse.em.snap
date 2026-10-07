@@ -4,13 +4,13 @@ expression: rendered
 input_file: tests/ui/check-fail/linearity/continuation_misuse.em
 ---
 [E3002] Error: `k` must be used exactly once, but it is used more than once
-   ╭─[ check-fail/linearity/continuation_misuse.em:8:39 ]
+   ╭─[ check-fail/linearity/continuation_misuse.em:8:25 ]
    │
- 8 │     | ask () k -> resume k 1 + resume k 2
-   │                          ┬            ┬  
-   │                          ╰─────────────── first used here
-   │                                       │  
-   │                                       ╰── used again here
+ 8 │     | ask () k -> k 1 + k 2
+   │                   ┬     ┬  
+   │                   ╰──────── first used here
+   │                         │  
+   │                         ╰── used again here
    │ 
    │ Note: linear values, such as files, the continuation of a `once` operation and closures that capture one, must be used exactly once
 ───╯

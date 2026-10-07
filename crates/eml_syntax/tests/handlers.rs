@@ -66,8 +66,8 @@ fn parameterized_handler() {
     let text = lines(&[
         "run_state init action =",
         "  handle action () from init with",
-        "    | get () k st -> resume k st st",
-        "    | put st2 k _ -> resume k () st2",
+        "    | get () k st -> k st st",
+        "    | put st2 k _ -> k () st2",
         "    | return x st -> (x, st)",
     ]);
     insta::assert_snapshot!(shape(&text), @r#"
@@ -115,8 +115,7 @@ fn parameterized_handler() {
                   NAME
                     LIDENT "st"
                 THIN_ARROW "->"
-                RESUME_EXPR
-                  RESUME_KW "resume"
+                APP_EXPR
                   PATH_EXPR
                     PATH
                       NAME_REF
@@ -143,8 +142,7 @@ fn parameterized_handler() {
                 WILDCARD_PAT
                   UNDERSCORE "_"
                 THIN_ARROW "->"
-                RESUME_EXPR
-                  RESUME_KW "resume"
+                APP_EXPR
                   PATH_EXPR
                     PATH
                       NAME_REF
@@ -222,22 +220,20 @@ fn handler_on_one_line_with_drop() {
 }
 
 #[test]
-fn resume_is_an_operand() {
-    insta::assert_snapshot!(shape("y = resume k 1 + 2"), @r#"
+fn drop_is_an_operand() {
+    insta::assert_snapshot!(shape("y = drop k + 2"), @r#"
     SOURCE_FILE
       EQUATION
         NAME
           LIDENT "y"
         EQ "="
         OP_SEQ
-          RESUME_EXPR
-            RESUME_KW "resume"
+          DROP_EXPR
+            DROP_KW "drop"
             PATH_EXPR
               PATH
                 NAME_REF
                   LIDENT "k"
-            LITERAL
-              INT "1"
           OP "+"
           LITERAL
             INT "2"
@@ -245,11 +241,29 @@ fn resume_is_an_operand() {
 }
 
 #[test]
-fn resume_and_drop_must_be_parenthesized_as_arguments() {
-    assert_eq!(
-        diagnostics("f = g resume k 1"),
-        ["E0012 1:7 `resume` expression must be parenthesized here"]
-    );
+fn resume_is_an_ordinary_name() {
+    insta::assert_snapshot!(shape("y = resume k 1"), @r#"
+    SOURCE_FILE
+      EQUATION
+        NAME
+          LIDENT "y"
+        EQ "="
+        APP_EXPR
+          PATH_EXPR
+            PATH
+              NAME_REF
+                LIDENT "resume"
+          PATH_EXPR
+            PATH
+              NAME_REF
+                LIDENT "k"
+          LITERAL
+            INT "1"
+    "#);
+}
+
+#[test]
+fn drop_must_be_parenthesized_as_an_argument() {
     assert_eq!(
         diagnostics("f = g drop k"),
         ["E0012 1:7 `drop` expression must be parenthesized here"]
@@ -257,20 +271,20 @@ fn resume_and_drop_must_be_parenthesized_as_arguments() {
 }
 
 #[test]
-fn the_first_argument_of_resume_and_drop_follows_the_layers() {
+fn the_first_argument_of_drop_follows_the_layers() {
     assert_eq!(
         diagnostics("f = drop if c then a else b"),
         ["E0012 1:10 `if` expression must be parenthesized here"]
     );
     assert_eq!(
-        diagnostics("f = resume fn x -> x"),
-        ["E0012 1:12 `fn` expression must be parenthesized here"]
+        diagnostics("f = drop fn x -> x"),
+        ["E0012 1:10 `fn` expression must be parenthesized here"]
     );
 }
 
 #[test]
-fn resume_as_an_argument_is_read_as_an_operand() {
-    insta::assert_snapshot!(shape("f = g resume k 1 + 2"), @r#"
+fn drop_as_an_argument_is_read_as_an_operand() {
+    insta::assert_snapshot!(shape("f = g drop k + 2"), @r#"
     SOURCE_FILE
       EQUATION
         NAME
@@ -282,19 +296,17 @@ fn resume_as_an_argument_is_read_as_an_operand() {
               PATH
                 NAME_REF
                   LIDENT "g"
-            RESUME_EXPR
-              RESUME_KW "resume"
+            DROP_EXPR
+              DROP_KW "drop"
               PATH_EXPR
                 PATH
                   NAME_REF
                     LIDENT "k"
-              LITERAL
-                INT "1"
           OP "+"
           LITERAL
             INT "2"
     ---
-    E0012 1:7 `resume` expression must be parenthesized here
+    E0012 1:7 `drop` expression must be parenthesized here
     "#);
 }
 
@@ -352,7 +364,7 @@ fn clauses_at_the_column_of_handle_are_read_as_clauses() {
 
 #[test]
 fn a_clause_head_can_be_qualified() {
-    insta::assert_snapshot!(shape("f = handle g () with | A.B.get () k -> resume k 1"), @r#"
+    insta::assert_snapshot!(shape("f = handle g () with | A.B.get () k -> k 1"), @r#"
     SOURCE_FILE
       EQUATION
         NAME
@@ -387,8 +399,7 @@ fn a_clause_head_can_be_qualified() {
               NAME
                 LIDENT "k"
             THIN_ARROW "->"
-            RESUME_EXPR
-              RESUME_KW "resume"
+            APP_EXPR
               PATH_EXPR
                 PATH
                   NAME_REF

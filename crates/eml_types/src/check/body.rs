@@ -263,16 +263,6 @@ impl BodyCheck<'_, '_> {
                 clauses,
                 ret,
             } => self.handle(id, *effect, *init, handled, clauses, ret),
-            // 表面の `resume` を Task 4 で消すまでの橋渡しとして、`resume k v [st]` を `k v [st]` の呼び出しとして型付けする
-            ExprKind::Resume {
-                k,
-                arg,
-                arg_end: _,
-                state,
-            } => {
-                let args: Vec<ExprId> = std::iter::once(*arg).chain(*state).collect();
-                self.call(id, *k, &args)
-            }
             ExprKind::Match {
                 scrutinee, arms, ..
             } => self.match_expr(*scrutinee, arms, Expectation::None),

@@ -62,9 +62,14 @@ fn keywords_and_identifiers() {
 }
 
 #[test]
+fn resume_is_an_ordinary_name() {
+    assert_eq!(kinds("resume"), ["LIDENT"]);
+}
+
+#[test]
 fn all_keywords() {
     let text = "data type effect where pub import as infixl infixr infix \
-                let in if then else match with handle from resume drop return \
+                let in if then else match with handle from drop return \
                 never once multi use fn forall class instance";
     assert_eq!(
         kinds(text),
@@ -88,7 +93,6 @@ fn all_keywords() {
             "WITH_KW",
             "HANDLE_KW",
             "FROM_KW",
-            "RESUME_KW",
             "DROP_KW",
             "RETURN_KW",
             "NEVER_KW",

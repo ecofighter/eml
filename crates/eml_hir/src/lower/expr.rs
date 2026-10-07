@@ -291,7 +291,6 @@ impl<'a> BodyLowering<'a> {
                     range,
                 )
             }
-            ast::Expr::ResumeExpr(e) => self.lower_resume(&e, range),
             ast::Expr::DropExpr(e) => self.lower_drop(&e, range),
             ast::Expr::FieldExpr(_) => self.unsupported(range, "field access is not supported yet"),
             ast::Expr::TupleExpr(tuple) => {

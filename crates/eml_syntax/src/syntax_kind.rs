@@ -42,7 +42,6 @@ pub enum SyntaxKind {
     WITH_KW,
     HANDLE_KW,
     FROM_KW,
-    RESUME_KW,
     DROP_KW,
     RETURN_KW,
     NEVER_KW,
@@ -128,7 +127,6 @@ pub enum SyntaxKind {
     /// (docs/spec/expressions.md)。前置の `-` もトークンのまま入る。
     OP_SEQ,
     APP_EXPR,
-    RESUME_EXPR,
     DROP_EXPR,
     FIELD_EXPR,
     PATH_EXPR,
