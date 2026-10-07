@@ -786,7 +786,7 @@ fn a_switch_with_two_defaults_does_not_parse() {
 }
 
 #[test]
-fn a_mask_must_name_known_effects_in_order_without_io() {
+fn a_mask_must_name_known_effects_in_order() {
     let unknown = "\
 effect Main.State { get/1, put/1 }
 fn entry$main(c0^) {
@@ -800,15 +800,8 @@ fn entry$main(c0^) {
   tailcall mask[Main.B, Main.A] apply c0(())
 }
 ";
-    let io = "\
-effect Prelude.IO { println/1, open/1, read_all/1, close/1 }
-fn entry$main(c0^) {
-  tailcall mask[Prelude.IO] apply c0(())
-}
-";
     insta::assert_snapshot!(check(unknown).unwrap_err(), @"a mask names an unknown effect #5 in `entry$main`");
     insta::assert_snapshot!(check(unordered).unwrap_err(), @"a mask is not in ascending order in `entry$main`");
-    insta::assert_snapshot!(check(io).unwrap_err(), @"a mask names IO in `entry$main`");
 }
 
 #[test]

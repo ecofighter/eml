@@ -371,7 +371,7 @@ fn check_main(
     let expected = Type::Fn {
         param: Box::new(Type::unit()),
         effects: vec![EffectLabel {
-            id: program.lang.io,
+            id: program.io(),
             args: Vec::new(),
         }],
         tail: None,

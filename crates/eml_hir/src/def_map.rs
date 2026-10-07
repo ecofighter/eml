@@ -5,7 +5,7 @@
 use std::collections::{HashMap, HashSet};
 
 use eml_diagnostics::{Diagnostic, ErrorCode, FileId, Label, TextRange};
-use eml_extern::{Extern, ExternType};
+use eml_extern::{Extern, ExternEffect, ExternType};
 use la_arena::{Idx, RawIdx};
 
 use crate::codes;
@@ -193,6 +193,8 @@ struct ModuleScope {
     /// 定義に付いた fixity、宣言が `pub` か、宣言の演算子の位置。
     fixities: HashMap<Value, (Fixity, bool, TextRange)>,
     functions: Vec<FunctionId>,
+    /// `extern` のシグネチャを持つ関数。handler の節の先頭を extern の関数から引き直すのに使う (E1009)。
+    extern_functions: HashSet<FunctionId>,
     type_ids: Vec<TypeDefId>,
     constructors: Vec<Vec<ConstructorId>>,
     effects: Vec<EffectId>,
@@ -396,6 +398,7 @@ impl ModuleScope {
             effect_params: HashMap::new(),
             fixities: HashMap::new(),
             functions,
+            extern_functions: HashSet::new(),
             type_ids,
             constructors,
             effects,
@@ -445,6 +448,13 @@ impl ModuleScope {
             .collect();
         for (k, function) in tree.functions.iter().enumerate() {
             let id = self.functions[k];
+            if function
+                .signature
+                .as_ref()
+                .is_some_and(|(signature, _)| signature.extern_keyword().is_some())
+            {
+                self.extern_functions.insert(id);
+            }
             push(
                 &mut self.values,
                 &function.name,
@@ -884,13 +894,6 @@ fn lang_items(prelude: &ModuleScope) -> LangItems {
         }) => *id,
         _ => unreachable!("the Prelude declares the type `{name}`"),
     };
-    let effect = |name: &str| match prelude.types.get(name).and_then(|names| names.first()) {
-        Some(Definition {
-            item: TypeItem::Effect(id),
-            ..
-        }) => *id,
-        _ => unreachable!("the Prelude declares the effect `{name}`"),
-    };
     let value = |name: &str| match prelude.values.get(name).and_then(|names| names.first()) {
         Some(definition) => definition.item,
         None => unreachable!("the Prelude declares `{name}`"),
@@ -905,7 +908,6 @@ fn lang_items(prelude: &ModuleScope) -> LangItems {
     };
     LangItems {
         bool: ty("Bool"),
-        io: effect("IO"),
         true_ctor: constructor("True"),
         false_ctor: constructor("False"),
         and: function("&&"),
@@ -953,6 +955,17 @@ fn extern_index(scopes: &[ModuleScope]) -> ExternIndex {
             (ty, id)
         })
         .collect();
+    let canonical = ExternEffect::Io.row().name;
+    let io = find(
+        scopes,
+        canonical,
+        |scope| &scope.types,
+        |item| match item {
+            TypeItem::Effect(id) => Some(id),
+            TypeItem::Type(_) => None,
+        },
+    )
+    .unwrap_or_else(|| panic!("the standard library does not declare the effect `{canonical}`"));
     let canonical = Extern::IntNeg.row().name;
     let negate = find(
         scopes,
@@ -964,7 +977,7 @@ fn extern_index(scopes: &[ModuleScope]) -> ExternIndex {
         },
     )
     .unwrap_or_else(|| panic!("the standard library does not declare the function `{canonical}`"));
-    ExternIndex { types, negate }
+    ExternIndex { types, io, negate }
 }
 
 /// 名前の表から表示名の表を作る。HIR の診断は `lower` の途中で出るので、`Program` より先に作る。重複した宣言の部品も
@@ -1102,6 +1115,18 @@ impl<'a> Resolver<'a> {
     pub fn operation(&self, name: NameRef<'_>) -> Resolved<OperationId> {
         self.lookup(name, |value: Value| match value {
             Value::Operation(id) => Some(id),
+            _ => None,
+        })
+        .resolved()
+    }
+
+    /// handler の節の先頭の名前を、extern の関数だけから引く。操作として見つからなかった名前が、handle できない
+    /// extern のエフェクトを起こす関数かを確かめるのに使う (E1009)。引き方は `operation` と同じである。
+    pub fn extern_function(&self, name: NameRef<'_>) -> Resolved<FunctionId> {
+        self.lookup(name, |value: Value| match value {
+            Value::Function(id) if self.def_map.scope(id.module).extern_functions.contains(&id) => {
+                Some(id)
+            }
             _ => None,
         })
         .resolved()

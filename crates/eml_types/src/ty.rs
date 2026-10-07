@@ -250,7 +250,8 @@ fn atomic(ty: &Type, names: &DisplayNames) -> String {
 #[cfg(test)]
 mod tests {
     use eml_hir::{
-        ConstructorId, DisplayNames, EffectDef, Generics, ItemId, ModuleId, TypeDef, TypeDefKind,
+        ConstructorId, DisplayNames, EffectDef, EffectKind, Generics, ItemId, ModuleId, TypeDef,
+        TypeDefKind,
     };
     use la_arena::{Arena, Idx, RawIdx};
 
@@ -282,14 +283,18 @@ mod tests {
         };
         let (int, bool, unit) = (ty("Int"), ty("Bool"), ty("Unit"));
         let mut effects = Arena::new();
-        let mut effect = |name: &str| {
+        let mut effect = |name: &str, kind| {
             id(effects.alloc(EffectDef {
                 name: name.to_string(),
                 generics: Generics::default(),
                 operations: Vec::new(),
+                kind,
             }))
         };
-        let (io, state) = (effect("IO"), effect("State"));
+        let (io, state) = (
+            effect("IO", EffectKind::Extern(None)),
+            effect("State", EffectKind::Defined),
+        );
         let names = DisplayNames::new(
             [
                 (int, "Prelude", "Int"),

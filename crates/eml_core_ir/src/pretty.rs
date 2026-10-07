@@ -8,9 +8,6 @@ use crate::{Atom, CExpr, CExprId, Call, CasePattern, CoreFn, EffectInfo, Program
 pub fn pretty(program: &Program) -> String {
     let mut out = String::new();
     for effect in &program.effects {
-        if effect.operations.is_empty() {
-            continue;
-        }
         let operations: Vec<String> = effect
             .operations
             .iter()
@@ -186,7 +183,6 @@ fn rhs_text(program: &Program, function: &CoreFn, rhs: &Rhs) -> String {
         }
         Rhs::Extern(e, a) => format!("extern {}({})", e.row().name, args(a)),
         Rhs::ConstString(index) => format!("const {:?}", program.strings[*index as usize]),
-        Rhs::Io(op, a) => format!("perform {}({})", op.name(), args(a)),
         Rhs::Drop(a) => format!("drop {}", atom(program, function, a)),
     }
 }

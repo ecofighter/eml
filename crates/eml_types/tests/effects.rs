@@ -381,6 +381,22 @@ fn the_return_clause_of_a_multi_handler_cannot_capture_a_linear_value() {
     ");
 }
 
+/// `IO` の多重度は `Once` なので、`multi` の操作の節の中でも、`IO` を起こす呼び出しをまたいで線形の値を持ち越せる
+/// (docs/spec/types.md の「Kind」)。
+#[test]
+fn a_linear_value_may_be_kept_across_an_io_call_in_a_multi_clause() {
+    let text = "effect Choice where\n  multi choose : Unit -> Bool\n\nsay : String -> <IO> Unit\nsay s = println s\n\nboth : Unit -> <IO> Int\nboth () =\n  handle (if choose () then 1 else 2) with\n    | choose () k ->\n        let file = open \"a\"\n        say \"x\"\n        close file\n        k True + k False";
+    insta::assert_snapshot!(check_text(text), @"
+    choose : Unit -> <Choice> Bool
+    say : String -> <IO> Unit
+      s#0 : String
+    both : Unit -> <IO> Int
+      k#0 : Bool -> <IO> Int
+      file#1 : File
+      $r#2 : Int
+    ");
+}
+
 #[test]
 fn the_return_clause_of_a_multi_handler_may_capture_an_unrestricted_value() {
     let text = "effect Choice where\n  multi choose : Unit -> Bool\n\ncaptured : Int -> Int\ncaptured base =\n  handle (if choose () then 1 else 2) with\n    | choose () c -> c True + c False\n    | return n -> n + base";

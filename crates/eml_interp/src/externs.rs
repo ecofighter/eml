@@ -1,8 +1,10 @@
-use eml_core_ir::{FALSE, TRUE};
-use eml_extern::Extern;
-use eml_runtime::{Payload, Value};
+use std::io::Read;
 
-use crate::error::Fault;
+use eml_core_ir::{FALSE, TRUE, TUPLE};
+use eml_extern::Extern;
+use eml_runtime::{FileHandle, ObjRef, Payload, Value};
+
+use crate::error::{Fault, io_reason};
 use crate::machine::Machine;
 
 impl Machine<'_> {
@@ -17,6 +19,39 @@ impl Machine<'_> {
         let overflow = || Fault::IntegerOverflow;
         let tag = |b: bool| Value::Tag(if b { TRUE } else { FALSE });
         Ok(match e {
+            Extern::Println => {
+                let text = self.take_string(args[0])?;
+                self.out
+                    .write_str(&format!("{text}\n"))
+                    .map_err(|error| Fault::Output(error.to_string()))?;
+                Value::Unit
+            }
+            Extern::Open => {
+                let path = self.take_string(args[0])?;
+                // 絶対パスなら `join` がそのパスを返す
+                let file = std::fs::File::open(self.file_root.join(&path)).map_err(|error| {
+                    Fault::FileOpen {
+                        path: path.clone(),
+                        reason: io_reason(error.kind()),
+                    }
+                })?;
+                let handle = FileHandle::new(path, Box::new(file));
+                Value::Obj(self.heap.alloc(Payload::File(handle)))
+            }
+            Extern::ReadAll => {
+                let Value::Obj(file) = args[0] else {
+                    return Err(Fault::Internal("`read_all` on a value that is not a file"));
+                };
+                self.read_all(file)?
+            }
+            // 破棄処理はオブジェクトの解放で、読み出し口を捨てると閉じる (docs/spec/runtime.md)
+            Extern::Close => {
+                let Value::Obj(file) = args[0] else {
+                    return Err(Fault::Internal("`close` on a value that is not a file"));
+                };
+                self.heap.decref(file).map_err(Fault::Heap)?;
+                Value::Unit
+            }
             Extern::IntAdd => Value::Int(int(0)?.checked_add(int(1)?).ok_or_else(overflow)?),
             Extern::IntSub => Value::Int(int(0)?.checked_sub(int(1)?).ok_or_else(overflow)?),
             Extern::IntMul => Value::Int(int(0)?.checked_mul(int(1)?).ok_or_else(overflow)?),
@@ -72,7 +107,39 @@ impl Machine<'_> {
         })
     }
 
-    /// extern と `IO` の操作は引数の所有権を受け取るので、読んだ文字列は decref する。
+    /// 受け取った `File` の参照を、そのまま返す組に移す (docs/spec/effects.md の「組み込みの `IO`」)。
+    fn read_all(&mut self, file: ObjRef) -> Result<Value, Fault> {
+        let read = match self.heap.get_mut(file).map_err(Fault::Heap)? {
+            Payload::File(handle) => {
+                let mut bytes = Vec::new();
+                match handle.reader.read_to_end(&mut bytes) {
+                    Ok(_) => String::from_utf8(bytes).map_err(|_| Fault::FileNotUtf8 {
+                        path: handle.path.clone(),
+                    }),
+                    Err(error) => Err(Fault::FileRead {
+                        path: handle.path.clone(),
+                        reason: io_reason(error.kind()),
+                    }),
+                }
+            }
+            _ => Err(Fault::Internal("`read_all` on a value that is not a file")),
+        };
+        let text = match read {
+            Ok(text) => text,
+            // 実行はここで止まるが、受け取った参照を手放す規律はエラーの経路でも保ち、ファイルをすぐに閉じる
+            Err(fault) => {
+                self.heap.decref(file).map_err(Fault::Heap)?;
+                return Err(fault);
+            }
+        };
+        let text = self.heap.alloc(Payload::Str(text));
+        Ok(Value::Obj(self.heap.alloc(Payload::Data {
+            tag: TUPLE,
+            fields: vec![Value::Obj(file), Value::Obj(text)],
+        })))
+    }
+
+    /// extern は引数の所有権を受け取るので、読んだ文字列は decref する。
     pub(crate) fn take_string(&mut self, value: Value) -> Result<String, Fault> {
         let Value::Obj(obj) = value else {
             return Err(Fault::Internal(

@@ -380,22 +380,53 @@ fn a_repeated_operation_name_is_not_a_missing_clause() {
 #[test]
 fn file_operations_cannot_be_handled() {
     let text = "f : Unit -> Int\nf () =\n  handle 1 with\n    | open p k -> k 1";
-    assert!(
-        diagnostics(text).contains(&"E1009 4:7 `IO` cannot be handled".to_string()),
-        "{:?}",
-        diagnostics(text)
-    );
+    insta::assert_snapshot!(report(text), @"
+    E1009 4:7 `IO` cannot be handled
+      4:7 `open` is an extern function with the effect `IO`
+    ");
 }
 
 #[test]
 fn a_user_println_does_not_make_the_io_clause_handleable() {
-    // 節の名前が Prelude の `IO` の操作の名前なら、ユーザーが同じ名前の関数を定義していても E1009 にする
+    // 節の先頭は extern の関数だけから引き直すので、ユーザーが同じ名前の関数を定義していても Prelude の `println` に
+    // 届き、E1009 にする
     let text = "println : String -> Unit\nprintln s = ()\nf : Unit -> Unit\nf () = handle () with\n  | println s k -> k ()";
-    assert!(
-        diagnostics(text).contains(&"E1009 5:5 `IO` cannot be handled".to_string()),
-        "{:?}",
-        diagnostics(text)
+    insta::assert_snapshot!(report(text), @"
+    E1009 5:5 `IO` cannot be handled
+      5:5 `println` is an extern function with the effect `IO`
+    ");
+}
+
+#[test]
+fn a_qualified_extern_function_in_a_clause_cannot_be_handled() {
+    let text = "f : Unit -> Unit\nf () = handle () with\n  | Prelude.println s k -> k ()";
+    insta::assert_snapshot!(report(text), @"
+    E1009 3:5 `IO` cannot be handled
+      3:5 `println` is an extern function with the effect `IO`
+    ");
+}
+
+#[test]
+fn a_pure_extern_function_in_a_clause_is_not_an_operation() {
+    // extern のエフェクトを起こさない extern の関数は E1009 の対象ではないので、見つからない操作の E1001 のままにする
+    let text = "f : Unit -> Int\nf () = handle 1 with\n  | show_int x k -> k 1";
+    assert_eq!(
+        diagnostics(text),
+        ["E1001 3:5 cannot find effect operation `show_int`"]
     );
+}
+
+#[test]
+fn an_unknown_qualifier_in_a_clause_does_not_reach_the_extern_functions() {
+    let text = "f : Unit -> Unit\nf () = handle () with\n  | Nope.println s k -> k ()";
+    let found = diagnostics(text);
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert!(found[0].starts_with("E1031 "), "{found:?}");
+}
+
+fn report(text: &str) -> String {
+    let lowered = eml_test_support::lower(text);
+    eml_test_support::full(&lowered.files, &lowered.diagnostics)
 }
 
 #[test]

@@ -14,17 +14,19 @@ impl Table<'_> {
                 None => break,
             }
         }
-        // handle できない `IO` は組み込みの handler だけが処理するので、row の中に何回あっても同じ意味になる。2つ目以降を
-        // 落とし、単一化、包含、表示のすべてで1つとして扱う (docs/spec/types.md の「推論」)
-        let io = self.lang.io;
-        let mut seen_io = false;
+        // handle できない extern のエフェクトは handler を選ばないので、row の中に何回あっても同じ意味になる。エフェクト
+        // ごとに2つ目以降を落とし、単一化、包含、表示のすべてで1つとして扱う。extern のエフェクトは型引数を持たないので、
+        // 落としても型引数は食い違わない (docs/spec/types.md の「推論」)
+        let mut seen: Vec<EffectId> = Vec::new();
         labels.retain(|label| {
-            if label.effect != io {
+            if !self.context.is_extern_effect(label.effect) {
                 return true;
             }
-            let first = !seen_io;
-            seen_io = true;
-            first
+            if seen.contains(&label.effect) {
+                return false;
+            }
+            seen.push(label.effect);
+            true
         });
         Row { labels, tail }
     }
@@ -262,12 +264,11 @@ impl Table<'_> {
     /// 対になっているので、同じエフェクトを `mask` で飛ばすと、明示したラベルの操作まで飛んでしまう
     /// (docs/spec/effects.md の「健全性」)。
     fn mask(&self, callee: &Row, rest: &Row) -> Result<Vec<EffectId>, UnifyError> {
-        let io = self.lang.io;
         let mask: Vec<EffectId> = rest
             .labels
             .iter()
             .map(|label| label.effect)
-            .filter(|&effect| effect != io)
+            .filter(|&effect| !self.context.is_extern_effect(effect))
             .collect();
         if let Some(&effect) = mask
             .iter()

@@ -10,7 +10,7 @@ use eml_extern::Extern;
 
 use crate::builder::FnBuilder;
 use crate::{
-    Atom, CExpr, CExprId, Call, Case, CasePattern, CoreFn, EffectInfo, FnIdx, IoOp, JoinId,
+    Atom, CExpr, CExprId, Call, Case, CasePattern, CoreFn, EffectInfo, FnIdx, JoinId,
     OperationInfo, Program, Rhs, VarId, VarInfo,
 };
 
@@ -599,14 +599,6 @@ impl<'t> Parser<'t> {
                 self.pos += 1;
                 Rhs::Drop(self.atom(state)?)
             }
-            "perform" if matches!(self.peek_at(1), Some(Tok::Word(op)) if !op.contains('.')) => {
-                self.pos += 1;
-                let line = self.line();
-                let name = self.word()?;
-                let op = IoOp::from_name(&name)
-                    .ok_or_else(|| error(line, format!("unknown IO operation `{name}`")))?;
-                Rhs::Io(op, self.list('(', ')', |p| p.atom(state))?)
-            }
             "apply" | "handle" | "perform" | "resume" => {
                 let call = self.call(state, false)?;
                 self.saved_call(state, call, mask)?
@@ -631,7 +623,7 @@ impl<'t> Parser<'t> {
     }
 
     /// `mask[E1, E2]` を読む。エフェクトはエフェクトの行の名前か `#N` で書く。`#N` は操作の `#N` と同じく、表にない
-    /// 番号を書いて誤りを含む IR を verifier に渡すためにある。並びの順と `IO` は verifier が確かめる
+    /// 番号を書いて誤りを含む IR を verifier に渡すためにある。並びの順は verifier が確かめる
     /// (docs/implementation/testing.md の「Core IR のテキストの形」)。`mask(` は関数 `mask` の呼び出しである。
     fn mask(&mut self) -> Result<Vec<u32>, ParseError> {
         if !(self.at_word("mask") && self.peek_at(1) == Some(&Tok::Punct('['))) {

@@ -15,7 +15,7 @@ fn inner_body(u0) {
 }
 fn asker(u0) {
   let s1^ = perform Main.Ask.ask(())
-  let t2 = perform println(s1)
+  let t2 = extern Prelude.println(s1)
   return t2
 }
 fn rehandle(u0) {

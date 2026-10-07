@@ -11,7 +11,7 @@ fn string(heap: &mut Heap, text: &str) -> ObjRef {
 
 /// 継続の最下部のフレーム。
 fn bottom(heap: &mut Heap) -> ObjRef {
-    heap.alloc(Payload::Frame(Frame::Io))
+    heap.alloc(Payload::Frame(Frame::Root))
 }
 
 fn frame(heap: &mut Heap, saved: Vec<(u32, Value)>, next: ObjRef) -> ObjRef {

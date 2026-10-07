@@ -319,9 +319,6 @@ pub enum Rhs {
         tag: u32,
         args: Vec<Atom>,
     },
-    /// `IO` の操作。最下部の組み込みの handler が必ずすぐに1回再開するので、継続を遡らずにその場で実行する
-    /// (docs/implementation/architecture.md の「継続のフレーム」)。
-    Io(IoOp, Vec<Atom>),
     /// 値の所有権を受け取って捨てる。値は `()` である (docs/spec/core-ir.md の `drop x`)。
     Drop(Atom),
 }
@@ -356,10 +353,9 @@ impl Rhs {
                 mask: _,
                 saved: _,
             } => call.for_each_atom(f),
-            Rhs::MakeClosure(_, args)
-            | Rhs::Extern(_, args)
-            | Rhs::Io(_, args)
-            | Rhs::Con { tag: _, args } => args.iter().for_each(|&atom| f(atom)),
+            Rhs::MakeClosure(_, args) | Rhs::Extern(_, args) | Rhs::Con { tag: _, args } => {
+                args.iter().for_each(|&atom| f(atom))
+            }
             Rhs::ConstString(_) => {}
         }
     }
@@ -372,10 +368,9 @@ impl Rhs {
                 mask: _,
                 saved: _,
             } => call.for_each_atom_mut(f),
-            Rhs::MakeClosure(_, args)
-            | Rhs::Extern(_, args)
-            | Rhs::Io(_, args)
-            | Rhs::Con { tag: _, args } => args.iter_mut().for_each(f),
+            Rhs::MakeClosure(_, args) | Rhs::Extern(_, args) | Rhs::Con { tag: _, args } => {
+                args.iter_mut().for_each(f)
+            }
             Rhs::ConstString(_) => {}
         }
     }
@@ -495,48 +490,6 @@ pub enum Atom {
     Fn(FnIdx),
 }
 
-/// 変種と表示の名前の表から、`name` と、その逆の `from_name` を作る。`name` の `match` は網羅を検査されるので、
-/// 変種を足して表に書き忘れるとコンパイルエラーになる。`from_name` も同じ表から作るので、読み戻しから漏れない。
-macro_rules! named_ops {
-    ($ty:ident { $($variant:ident => $name:literal,)* }) => {
-        impl $ty {
-            /// 表示での名前。`pretty` が書き、`parse` が `from_name` で読み戻す。
-            pub fn name(self) -> &'static str {
-                match self {
-                    $($ty::$variant => $name,)*
-                }
-            }
-
-            /// `name` の逆。表にない名前は `None` である。
-            pub fn from_name(name: &str) -> Option<$ty> {
-                match name {
-                    $($name => Some($ty::$variant),)*
-                    _ => None,
-                }
-            }
-
-            #[cfg(test)]
-            const VARIANTS: &[$ty] = &[$($ty::$variant,)*];
-        }
-    };
-}
-
-/// 表示での名前 (`name`) は Prelude の名前と同じである。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum IoOp {
-    Println,
-    Open,
-    ReadAll,
-    Close,
-}
-
-named_ops!(IoOp {
-    Println => "println",
-    Open => "open",
-    ReadAll => "read_all",
-    Close => "close",
-});
-
 /// `Bool` のタグ (docs/spec/core-ir.md)。
 pub const FALSE: u32 = 0;
 pub const TRUE: u32 = 1;
@@ -589,13 +542,5 @@ mod tests {
         let mut atoms = Vec::new();
         apply.for_each_atom(|atom| atoms.push(atom));
         assert_eq!(atoms, [Atom::Var(VarId(7)), Atom::Int(1)]);
-    }
-
-    #[test]
-    fn every_operation_name_reads_back() {
-        for &op in IoOp::VARIANTS {
-            assert_eq!(IoOp::from_name(op.name()), Some(op));
-        }
-        assert_eq!(IoOp::from_name("+"), None);
     }
 }

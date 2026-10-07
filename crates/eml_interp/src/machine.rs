@@ -36,14 +36,14 @@ pub(crate) struct Machine<'p> {
     /// 今の関数の環境。読み出しはスロットを書き換えない。参照の所有は Core IR の命令 (使用、`dup`、`decref`) が表し、
     /// verifier がその釣り合いを確かめる (docs/spec/core-ir.md)。
     slots: Vec<Option<Value>>,
-    /// 継続の先頭のフレーム。最下部には常に `Frame::Io` がある。
+    /// 継続の先頭のフレーム。最下部には常に `Frame::Root` がある。
     pub(crate) cont: ObjRef,
 }
 
 impl<'p> Machine<'p> {
     pub(crate) fn new(program: &'p Program, out: &'p OutputSink, file_root: &'p Path) -> Self {
         let mut heap = Heap::new();
-        let cont = heap.alloc(Payload::Frame(Frame::Io));
+        let cont = heap.alloc(Payload::Frame(Frame::Root));
         let entry = program.function(program.entry);
         Machine {
             program,
@@ -149,10 +149,6 @@ impl<'p> Machine<'p> {
             Rhs::Extern(e, args) => {
                 let args = self.atoms(args)?;
                 self.call_extern(*e, &args)?
-            }
-            Rhs::Io(op, args) => {
-                let args = self.atoms(args)?;
-                self.io(*op, &args)?
             }
             // 所有している参照を1つ手放す。継続も RC が1のオブジェクトなので、これで解放される (docs/spec/core-ir.md)
             Rhs::Drop(atom) => {
@@ -395,7 +391,7 @@ impl<'p> Machine<'p> {
         Ok(())
     }
 
-    /// 継続の先頭のフレームに値を返す。最下部の `Frame::Io` に届いたら、プログラムが終わる。
+    /// 継続の先頭のフレームに値を返す。最下部の `Frame::Root` に届いたら、プログラムが終わる。
     /// 余った引数のフレームが続く間はループで適用し、Rust の再帰を使わない。
     pub(crate) fn ret(&mut self, mut value: Value) -> Result<Step, Fault> {
         loop {
@@ -452,7 +448,7 @@ impl<'p> Machine<'p> {
                 }
                 // 値はそのまま外側へ返す
                 Frame::Mask { effects: _, next } => self.cont = next,
-                Frame::Io => {
+                Frame::Root => {
                     if let Value::Obj(obj) = value {
                         self.heap.decref(obj).map_err(Fault::Heap)?;
                     }

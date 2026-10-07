@@ -221,7 +221,7 @@ pub struct Items {
     pub types: Arena<TypeDef>,
     /// `data` の宣言のコンストラクタ。値の名前空間に置くトップレベルの値である (docs/spec/modules.md の「名前空間」)。
     pub constructors: Arena<Constructor>,
-    /// エフェクトの item。Prelude では組み込みの `IO`、ユーザーのモジュールでは `effect` の宣言。
+    /// エフェクトの item。`effect` の宣言で、標準ライブラリでは extern のエフェクト (`IO`) も含む。
     pub effects: Arena<EffectDef>,
     /// エフェクトの操作。値の名前空間に置くトップレベルの値である (docs/spec/modules.md の「名前空間」)。
     pub operations: Arena<Operation>,
@@ -277,6 +277,11 @@ impl Program {
     /// extern の型を宣言した item。
     pub fn extern_type(&self, ty: ExternType) -> TypeDefId {
         self.externs.ty(ty)
+    }
+
+    /// `IO` を宣言した item。
+    pub fn io(&self) -> EffectId {
+        self.externs.io
     }
 
     /// 前置の `-` の脱糖が呼ぶ extern の関数。

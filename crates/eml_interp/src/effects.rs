@@ -33,7 +33,7 @@ impl Machine<'_> {
                     *next
                 }
                 Frame::Return { next, .. } | Frame::Apply { next, .. } => *next,
-                Frame::Io => return Err(Fault::Internal("an operation without a handler")),
+                Frame::Root => return Err(Fault::Internal("an operation without a handler")),
             };
         }
     }

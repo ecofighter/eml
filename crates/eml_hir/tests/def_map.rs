@@ -160,7 +160,7 @@ fn types_and_effects_share_the_type_namespace() {
     );
     assert_eq!(
         resolver.type_item(Plain("IO")),
-        Resolved::Found(TypeItem::Effect(map.lang().io))
+        Resolved::Found(TypeItem::Effect(map.externs().io))
     );
     assert_eq!(resolver.type_item(Plain("Console")), Resolved::NotFound);
 }
@@ -489,7 +489,7 @@ fn names_defined_by_two_modules_are_qualified() {
     let names = &program.names;
     assert_eq!(names.ty(program.lang.bool), "Prelude.Bool");
     assert_eq!(names.ty(program.extern_type(ExternType::Int)), "Int");
-    assert_eq!(names.effect(program.lang.io), "IO");
+    assert_eq!(names.effect(program.io()), "IO");
     assert_eq!(names.constructor(program.lang.true_ctor), "True");
     assert_eq!(names.unit(), "Unit");
 }

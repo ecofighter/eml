@@ -565,9 +565,8 @@ impl<'a> Checker<'a> {
         Ok(())
     }
 
-    /// `mask` はエフェクトの表にある番号を昇順に並べた多重集合で、`IO` を含まない。`IO` の操作は handler を探さずに
-    /// その場で実行するので (docs/implementation/architecture.md の「継続のフレーム」)、飛ばす handler がないためで
-    /// ある。`handle` と `perform` は `mask` を持たない (docs/spec/core-ir.md)。
+    /// `mask` はエフェクトの表にある番号を昇順に並べた多重集合である。extern のエフェクトは表にないので、`mask` にも
+    /// 現れない。`handle` と `perform` は `mask` を持たない (docs/spec/core-ir.md)。
     fn check_mask(&self, call: &Call, mask: &[u32]) -> Result<(), String> {
         if mask.is_empty() {
             return Ok(());
@@ -585,15 +584,6 @@ impl<'a> Checker<'a> {
         }
         if !mask.is_sorted() {
             return Err("a mask is not in ascending order".to_string());
-        }
-        // Core IR の表は HIR の `lang.io` を持たないので、Prelude の `IO` の修飾した名前で引く
-        let io = self
-            .program
-            .effects
-            .iter()
-            .position(|info| info.name == "Prelude.IO");
-        if io.is_some_and(|io| mask.contains(&(io as u32))) {
-            return Err("a mask names IO".to_string());
         }
         Ok(())
     }

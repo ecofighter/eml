@@ -144,7 +144,7 @@ fn signature(p: &mut Parser, m: Marker) {
 }
 
 /// data_item ::= 'data' UIDENT LIDENT* ('=' alts)?
-/// `=` のない `data` は、Prelude では intrinsic の型で、ユーザーのモジュールでは HIR が E1025 にする
+/// `=` のない `data` は、`extern data` なら extern の型で、そうでなければどのモジュールでも HIR が E1025 にする
 /// (docs/spec/declarations.md の「`data` と `type`」)。
 fn data_item(p: &mut Parser, m: Marker) {
     p.bump(DATA_KW);

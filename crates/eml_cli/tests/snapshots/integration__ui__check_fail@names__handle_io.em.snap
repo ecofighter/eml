@@ -8,7 +8,5 @@ input_file: tests/ui/check-fail/names/handle_io.em
    │
  5 │     | println text k -> k ()
    │       ───┬───  
-   │          ╰───── `println` is an operation of the built-in `IO`
-   │ 
-   │ Note: the runtime handles `IO` itself
+   │          ╰───── `println` is an extern function with the effect `IO`
 ───╯

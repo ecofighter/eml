@@ -4,15 +4,13 @@ use std::collections::HashMap;
 
 use eml_extern::Extern;
 use eml_hir::{
-    ConstructorId, EffectId, FunctionId, FunctionKind, ModuleId, OpMultiplicity, OperationId,
-    Program as HirProgram,
+    ConstructorId, EffectDef, EffectId, EffectKind, FunctionId, FunctionKind, ModuleId,
+    OpMultiplicity, OperationId, Program as HirProgram,
 };
 use eml_types::{Decl, Type, TypedProgram};
 
 use crate::builder::FnBuilder;
-use crate::{
-    Atom, CExpr, Call, CoreFn, EffectInfo, FnIdx, IoOp, OperationInfo, Rhs, VarId, VarInfo,
-};
+use crate::{Atom, CExpr, Call, CoreFn, EffectInfo, FnIdx, OperationInfo, Rhs, VarId, VarInfo};
 
 use super::types::{split_arrows, var_info};
 
@@ -139,8 +137,7 @@ impl ProgramBuilder {
         function
     }
 
-    /// 操作を値や部分適用で使うときの関数を作る。本体は `operation_rhs` の操作の呼び出しで、`perform` の末尾呼び出し、
-    /// または `IO` の操作の `Rhs::Io` (結果を返す) になる (docs/spec/effects.md の「組み込みの `IO`」)。操作ごとに1つだけ作る。
+    /// 操作を値や部分適用で使うときの関数を作る。本体は `perform` の末尾呼び出しである。操作ごとに1つだけ作る。
     pub(super) fn operation_wrapper(&mut self, hir: &HirProgram, op: OperationId) -> FnIdx {
         if let Some(&function) = self.operation_wrappers.get(&op) {
             return function;
@@ -151,7 +148,7 @@ impl ProgramBuilder {
             .operation_types
             .get(&op)
             .expect("every operation has a scheme");
-        let (param_types, result_type) = split_arrows(ty, arity);
+        let (param_types, _) = split_arrows(ty, arity);
         let mut builder = FnBuilder::new();
         let params: Vec<VarId> = param_types
             .iter()
@@ -160,22 +157,10 @@ impl ProgramBuilder {
         let function = self.reserve(arity);
         self.operation_wrappers.insert(op, function);
         let args = params.iter().map(|&param| Atom::Var(param)).collect();
-        let body = match operation_rhs(hir, op, args) {
-            Rhs::Call {
-                call,
-                mask,
-                saved: _,
-            } => builder.push(CExpr::TailCall { call, mask }),
-            rhs => {
-                let result = builder.var(var_info("t", &result_type, hir));
-                let ret = builder.push(CExpr::Return(Atom::Var(result)));
-                builder.push(CExpr::Let {
-                    var: result,
-                    rhs,
-                    body: ret,
-                })
-            }
-        };
+        let body = builder.push(CExpr::TailCall {
+            call: perform_call(hir, op, args),
+            mask: Vec::new(),
+        });
         let name = format!("op${}", core_name(hir, op.module, &operation.name));
         let core = builder.finish(name, params, body);
         self.finish(function, core);
@@ -319,24 +304,26 @@ impl ProgramBuilder {
     }
 }
 
-/// エフェクトの番号は、`eml_hir::Program::effects` の順 (モジュールの番号の順、モジュールの中の宣言の順) の位置である。
-/// エフェクトの表 (`effect_table`) も同じ順に並べる。
-pub(super) fn effect_index(hir: &HirProgram, effect: EffectId) -> u32 {
-    hir.effects()
-        .position(|(id, _)| id == effect)
-        .expect("every effect is in the program") as u32
+/// Core IR のエフェクトの表に入るエフェクト。`eml_hir::Program::effects` の順 (モジュールの番号の順、モジュールの中の
+/// 宣言の順) に並べる。extern のエフェクトは `handle`、`perform`、`mask` が指さないので入れない。番号 (`effect_index`)
+/// と表 (`effect_table`) をどちらもここから作る。`IO` は Prelude の最初のエフェクトなので、片方だけで飛ばすと、
+/// ユーザーのエフェクトの番号が1つずれる。
+fn core_effects(hir: &HirProgram) -> impl Iterator<Item = (EffectId, &EffectDef)> {
+    hir.effects().filter(|(_, effect)| match effect.kind {
+        EffectKind::Defined => true,
+        EffectKind::Extern(_) => false,
+    })
 }
 
-/// 操作の呼び出し。`IO` の操作は実行時がその場で処理するので、`perform` ではなく `Rhs::Io` にする
-/// (docs/spec/effects.md の「組み込みの `IO`」)。
-pub(super) fn operation_rhs(hir: &HirProgram, op: OperationId, args: Vec<Atom>) -> Rhs {
-    let operation = &hir[op];
-    if operation.effect == hir.lang.io {
-        let io = IoOp::from_name(&operation.name).expect("every `IO` operation has an `IoOp`");
-        Rhs::Io(io, args)
-    } else {
-        Rhs::call(perform_call(hir, op, args))
-    }
+/// エフェクトの番号は、`core_effects` の中の位置である。
+pub(super) fn effect_index(hir: &HirProgram, effect: EffectId) -> u32 {
+    assert!(
+        hir[effect].kind == EffectKind::Defined,
+        "an extern effect never reaches Core IR"
+    );
+    core_effects(hir)
+        .position(|(id, _)| id == effect)
+        .expect("every effect is in the program") as u32
 }
 
 /// Core IR の関数とエフェクトの名前。テキストの形は関数とエフェクトを名前で引くので、入口以外のモジュールの名前には
@@ -349,8 +336,8 @@ pub(super) fn core_name(hir: &HirProgram, module: ModuleId, name: &str) -> Strin
     }
 }
 
-/// 操作の番号は、エフェクトの宣言の中の順番である。
-fn perform_call(hir: &HirProgram, op: OperationId, args: Vec<Atom>) -> Call {
+/// 操作の呼び出し。操作の番号は、エフェクトの宣言の中の順番である。
+pub(super) fn perform_call(hir: &HirProgram, op: OperationId, args: Vec<Atom>) -> Call {
     let effect = hir[op].effect;
     let index = hir[effect]
         .operations
@@ -367,7 +354,7 @@ fn perform_call(hir: &HirProgram, op: OperationId, args: Vec<Atom>) -> Call {
 
 /// エフェクトの表。`effect_index` と同じ順に並べる。
 pub(super) fn effect_table(hir: &HirProgram) -> Vec<EffectInfo> {
-    hir.effects()
+    core_effects(hir)
         .map(|(id, effect)| EffectInfo {
             name: core_name(hir, id.module, &effect.name),
             operations: effect

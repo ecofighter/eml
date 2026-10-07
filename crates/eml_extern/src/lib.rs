@@ -67,8 +67,36 @@ impl ExternType {
     }
 }
 
+/// 操作を持たないラベルのエフェクト。`Effectful` の extern の関数が起こす。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum ExternEffect {
+    Io,
+}
+
+pub struct EffectRow {
+    pub name: &'static str,
+}
+
+impl ExternEffect {
+    pub const ALL: &[ExternEffect] = &[ExternEffect::Io];
+
+    pub fn row(self) -> EffectRow {
+        match self {
+            ExternEffect::Io => EffectRow { name: "Prelude.IO" },
+        }
+    }
+
+    pub fn from_name(name: &str) -> Option<ExternEffect> {
+        Self::ALL.iter().copied().find(|e| e.row().name == name)
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Extern {
+    Println,
+    Open,
+    ReadAll,
+    Close,
     ShowInt,
     IntNeg,
     IntAdd,
@@ -102,6 +130,10 @@ pub struct FunctionRow {
 
 impl Extern {
     pub const ALL: &[Extern] = &[
+        Extern::Println,
+        Extern::Open,
+        Extern::ReadAll,
+        Extern::Close,
         Extern::ShowInt,
         Extern::IntNeg,
         Extern::IntAdd,
@@ -132,6 +164,10 @@ impl Extern {
             by_type: false,
         };
         match self {
+            Extern::Println => row("Prelude.println", 1, Purity::Effectful),
+            Extern::Open => row("Prelude.open", 1, Purity::Effectful),
+            Extern::ReadAll => row("Prelude.read_all", 1, Purity::Effectful),
+            Extern::Close => row("Prelude.close", 1, Purity::Effectful),
             Extern::ShowInt => row("Prelude.show_int", 1, Purity::Pure),
             Extern::IntNeg => row("Prelude.negate", 1, Purity::MayFail),
             Extern::IntAdd => row("Prelude.+", 2, Purity::MayFail),

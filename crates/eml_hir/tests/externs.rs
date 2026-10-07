@@ -1,7 +1,7 @@
 //! extern の宣言と、`eml_extern` の表と標準ライブラリの照らし合わせ。
 
-use eml_extern::{Extern, ExternType, Purity};
-use eml_hir::{FunctionKind, Program, RowRef, TypeDefKind, TypeRefKind};
+use eml_extern::{Extern, ExternEffect, ExternType, Purity};
+use eml_hir::{EffectKind, FunctionKind, Program, RowRef, Signature, TypeDefKind, TypeRefKind};
 
 use crate::common::diagnostics;
 
@@ -59,18 +59,65 @@ fn every_extern_function_is_declared_once_in_std() {
         let signature = function.signature.as_ref().expect("a signature");
         assert_eq!(signature.arity(), row.arity, "{}", row.name);
         assert_eq!(program.arity(id), Some(row.arity), "{}", row.name);
-        if matches!(row.purity, Purity::Pure | Purity::MayFail) {
-            for (_, ty) in signature.types.iter() {
-                if let TypeRefKind::Fn { row: effects, .. } = &ty.kind {
-                    let empty = match effects {
-                        RowRef::Omitted => true,
-                        RowRef::Closed { effects, .. } => effects.is_empty(),
-                        RowRef::Open { .. } | RowRef::Error => false,
-                    };
-                    assert!(empty, "{} has an effect", row.name);
+        // `Effectful` の行だけが、最後の外側の矢印に extern のエフェクトを書く。ほかの矢印の row はどれも空である
+        let last = last_outer_arrow(signature);
+        for (id, ty) in signature.types.iter() {
+            let TypeRefKind::Fn { row: effects, .. } = &ty.kind else {
+                continue;
+            };
+            if row.purity == Purity::Effectful && Some(id) == last {
+                let RowRef::Closed { effects, .. } = effects else {
+                    panic!("{} has no closed row on its last arrow", row.name);
+                };
+                assert!(!effects.is_empty(), "{} performs no effect", row.name);
+                for effect in effects {
+                    assert!(
+                        matches!(program[effect.effect].kind, EffectKind::Extern(Some(_))),
+                        "{} performs an effect that is not extern",
+                        row.name
+                    );
                 }
+            } else {
+                let empty = match effects {
+                    RowRef::Omitted => true,
+                    RowRef::Closed { effects, .. } => effects.is_empty(),
+                    RowRef::Open { .. } | RowRef::Error => false,
+                };
+                assert!(empty, "{} has an effect on an inner arrow", row.name);
             }
         }
+    }
+}
+
+/// シグネチャの型を右へたどった最後の矢印。
+fn last_outer_arrow(signature: &Signature) -> Option<eml_hir::TypeRefId> {
+    let mut last = None;
+    let mut id = signature.ty;
+    while let TypeRefKind::Fn { ret, .. } = &signature.types[id].kind {
+        last = Some(id);
+        id = *ret;
+    }
+    last
+}
+
+#[test]
+fn every_extern_effect_is_declared_once_in_std() {
+    let program = std_program();
+    for &e in ExternEffect::ALL {
+        let row = e.row();
+        let found: Vec<_> = program
+            .effects()
+            .filter(|(id, def)| canonical(&program, id.module, &def.name) == row.name)
+            .collect();
+        assert_eq!(found.len(), 1, "{}", row.name);
+        let (id, def) = found[0];
+        assert_eq!(def.kind, EffectKind::Extern(Some(e)), "{}", row.name);
+        assert!(def.operations.is_empty(), "{}", row.name);
+        assert!(def.generics.type_vars.is_empty(), "{}", row.name);
+        let indexed = match e {
+            ExternEffect::Io => program.io(),
+        };
+        assert_eq!(indexed, id, "{}", row.name);
     }
 }
 
@@ -89,6 +136,12 @@ fn every_extern_declaration_in_std_names_a_row() {
             assert_eq!(t.row().name, canonical(&program, id.module, &def.name));
         }
     }
+    for (id, def) in program.effects() {
+        if let EffectKind::Extern(e) = def.kind {
+            let e = e.unwrap_or_else(|| panic!("`{}` has no row", def.name));
+            assert_eq!(e.row().name, canonical(&program, id.module, &def.name));
+        }
+    }
     assert_eq!(program[program.negate()].name, "negate");
 }
 
@@ -100,7 +153,11 @@ fn the_names_of_the_rows_read_back() {
     for &e in Extern::ALL {
         assert_eq!(Extern::from_name(e.row().name), Some(e));
     }
+    for &e in ExternEffect::ALL {
+        assert_eq!(ExternEffect::from_name(e.row().name), Some(e));
+    }
     assert_eq!(Extern::from_name("Prelude.not"), None);
+    assert_eq!(ExternEffect::from_name("Prelude.Int"), None);
 }
 
 #[test]
@@ -168,4 +225,16 @@ fn a_signature_without_equation_is_missing_one_in_std_too() {
         .map(|d| d.code.to_string())
         .collect();
     assert_eq!(codes, ["E1005", "E1025"]);
+}
+
+#[test]
+fn a_user_extern_effect_has_no_operations_and_no_row() {
+    let lowered = eml_test_support::lower("extern effect E");
+    let (_, def) = lowered
+        .program
+        .effects()
+        .find(|(_, def)| def.name == "E")
+        .expect("E");
+    assert_eq!(def.kind, EffectKind::Extern(None));
+    assert!(def.operations.is_empty());
 }

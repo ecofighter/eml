@@ -41,6 +41,10 @@ impl<'a> BodyLowering<'a> {
         &self.modules[id.module].items.operations[id.local]
     }
 
+    pub(super) fn function(&self, id: FunctionId) -> &'a Function {
+        &self.modules[id.module].items.functions[id.local]
+    }
+
     pub(super) fn effect(&self, id: EffectId) -> &'a EffectDef {
         &self.modules[id.module].items.effects[id.local]
     }

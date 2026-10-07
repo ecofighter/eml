@@ -1,7 +1,7 @@
 use std::collections::{BTreeSet, HashMap, HashSet};
 
 use eml_diagnostics::{TextRange, TextSize};
-use eml_extern::{Extern, ExternType};
+use eml_extern::{Extern, ExternEffect, ExternType};
 use la_arena::{Arena, ArenaMap, Idx};
 
 pub use crate::program::{
@@ -49,8 +49,19 @@ pub struct EffectDef {
     pub name: String,
     /// 宣言の型引数。エフェクトの引数は型だけで、row 変数は持たない (docs/spec/declarations.md の「`effect`」)。
     pub generics: Generics,
-    /// 宣言した順の操作。組み込みの `IO` の操作は組み込みの関数なので、ここには入らない。
+    /// 宣言した順の操作。extern のエフェクトは操作を持たず、空である。
     pub operations: Vec<OperationId>,
+    pub kind: EffectKind,
+}
+
+/// エフェクトの種類。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EffectKind {
+    /// `where` と操作を持つ `effect` の宣言。
+    Defined,
+    /// `extern effect`。extern の関数だけが起こすラベルで、handle できない。ユーザーのモジュールの extern (E1033) は
+    /// 行を持たない。
+    Extern(Option<ExternEffect>),
 }
 
 /// 操作の多重度 (docs/spec/effects.md)。
@@ -79,7 +90,6 @@ pub struct Operation {
 #[derive(Debug, Clone, Copy)]
 pub struct LangItems {
     pub bool: TypeDefId,
-    pub io: EffectId,
     /// `&&` と `||` の脱糖が使う `Bool` のコンストラクタ。ユーザーが同じ名前のコンストラクタで隠しても、脱糖は
     /// Prelude のものを指す。
     pub true_ctor: ConstructorId,
@@ -90,10 +100,12 @@ pub struct LangItems {
     pub or: FunctionId,
 }
 
-/// extern の表の行から、標準ライブラリの宣言を引く索引。使い手のある行 (extern の型と `negate`) だけを持つ。
+/// extern の表の行から、標準ライブラリの宣言を引く索引。使い手のある行 (extern の型、`IO`、`negate`) だけを持つ。
 #[derive(Debug, Clone)]
 pub struct ExternIndex {
     pub(crate) types: HashMap<ExternType, TypeDefId>,
+    /// `main` の型の検査が引く。
+    pub io: EffectId,
     /// 前置の `-` の脱糖が呼ぶ。Prelude で `pub` にしないので、ユーザーは名前で書けない。
     pub negate: FunctionId,
 }

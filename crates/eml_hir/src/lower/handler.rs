@@ -5,7 +5,7 @@ use eml_diagnostics::{Diagnostic, Label, TextRange};
 use eml_syntax::ast;
 
 use super::expr::BodyLowering;
-use super::{NameKind, path_name, unresolved};
+use super::{NameKind, NameUse, path_name, unresolved};
 use crate::codes;
 use crate::def_map::Resolved;
 use crate::hir::*;
@@ -109,6 +109,7 @@ impl BodyLowering<'_> {
         };
         let op = match self.items.operation(at.name) {
             Resolved::Found(op) => op,
+            Resolved::NotFound if self.unhandleable_clause(&at, name_range) => return,
             other => {
                 out.unknown_operation |= matches!(other, Resolved::Ambiguous(_) | Resolved::Silent);
                 if let Some(diagnostic) =
@@ -121,22 +122,6 @@ impl BodyLowering<'_> {
         };
         let text = at.last();
         let operation = self.operation(op);
-        // `IO` の操作は実行時がその場で処理するので、handle できない (docs/spec/effects.md の「組み込みの `IO`」)
-        if operation.effect == self.lang.io {
-            self.diagnostics.push(
-                Diagnostic::error(
-                    codes::UNHANDLEABLE_EFFECT,
-                    "`IO` cannot be handled",
-                    Label::new(
-                        self.file,
-                        name_range,
-                        format!("`{text}` is an operation of the built-in `IO`"),
-                    ),
-                )
-                .with_note("the runtime handles `IO` itself"),
-            );
-            return;
-        }
         let effect = operation.effect;
         let never = operation.multiplicity == OpMultiplicity::Never;
         let arity = operation.arity;
@@ -226,6 +211,61 @@ impl BodyLowering<'_> {
             resumes: !never,
             range: clause.range(),
         });
+    }
+
+    /// 操作として見つからなかった節の先頭が、extern のエフェクトを起こす extern の関数なら E1009 を出して `true` を
+    /// 返す。extern のエフェクトは操作を持たないので、名前を書けるのはそれを起こす extern の関数である。extern の関数は
+    /// handler を通らずにその場で実行するので、節を書いても使われない (docs/spec/effects.md の「組み込みの `IO`」)。
+    fn unhandleable_clause(&mut self, at: &NameUse<'_>, name_range: TextRange) -> bool {
+        let Resolved::Found(function) = self.items.extern_function(at.name) else {
+            return false;
+        };
+        let Some(effect) = self.extern_effect_of(function) else {
+            return false;
+        };
+        let effect = self.items.names().effect(effect);
+        self.diagnostics.push(Diagnostic::error(
+            codes::UNHANDLEABLE_EFFECT,
+            format!("`{effect}` cannot be handled"),
+            Label::new(
+                self.file,
+                name_range,
+                format!(
+                    "`{}` is an extern function with the effect `{effect}`",
+                    at.last()
+                ),
+            ),
+        ));
+        true
+    }
+
+    /// extern の関数のシグネチャの最後の外側の矢印の row にある、最初の extern のエフェクト。
+    fn extern_effect_of(&self, function: FunctionId) -> Option<EffectId> {
+        let signature = self.function(function).signature.as_ref()?;
+        let mut row = None;
+        let mut id = signature.ty;
+        while let TypeRefKind::Fn {
+            param: _,
+            row: arrow,
+            ret,
+        } = &signature.types[id].kind
+        {
+            row = Some(arrow);
+            id = *ret;
+        }
+        let effects = match row? {
+            RowRef::Closed { effects, range: _ }
+            | RowRef::Open {
+                effects,
+                tail: _,
+                range: _,
+            } => effects,
+            RowRef::Omitted | RowRef::Error => return None,
+        };
+        effects
+            .iter()
+            .map(|effect| effect.effect)
+            .find(|&effect| matches!(self.effect(effect).kind, EffectKind::Extern(_)))
     }
 
     /// 節の `k` が変数の束縛なら、継続の引数の数を表に残す。引数の数が分かれば、`k v st` を1回の再開として扱える

@@ -14,7 +14,7 @@ fn main() {
     #0 ->
       return ()
     #1(x2^) ->
-      let o3 = perform println(x2)
+      let o3 = extern Prelude.println(x2)
       return o3
   }
 }
@@ -31,7 +31,7 @@ fn main() {
       decref d1
       return ()
     #1(x2^) ->
-      let o3 = perform println(x2)
+      let o3 = extern Prelude.println(x2)
       decref d1
       return o3
   }
@@ -59,7 +59,7 @@ fn main() {
   switch d0 {
     #0 ->
       let s2^ = const "none"
-      let o3 = perform println(s2)
+      let o3 = extern Prelude.println(s2)
       return o3
     #1(x1^) ->
       decref x1
@@ -106,7 +106,7 @@ fn main() {
   let n3 = call pick(s2) [n1]
   let t4 = extern Prelude.+(n1, n3)
   let t5^ = extern Prelude.show_int(t4)
-  let o6 = perform println(t5)
+  let o6 = extern Prelude.println(t5)
   return o6
 }
 fn pick(s0^) {
@@ -136,7 +136,7 @@ fn main() {
       return ()
     _ ->
       let s2^ = const "default"
-      let o3 = perform println(s2)
+      let o3 = extern Prelude.println(s2)
       return o3
   }
 }
@@ -156,11 +156,11 @@ fn main() {
   switch 2 {
     1 ->
       let s0^ = const "one"
-      let o1 = perform println(s0)
+      let o1 = extern Prelude.println(s0)
       return o1
     2 ->
       let s2^ = const "two"
-      let o3 = perform println(s2)
+      let o3 = extern Prelude.println(s2)
       return o3
     _ ->
       return ()

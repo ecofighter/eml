@@ -10,7 +10,7 @@ use eml_types::Type;
 
 use crate::{Atom, Call, FnIdx, Rhs, TUPLE};
 
-use super::program::{effect_index, operation_rhs};
+use super::program::{effect_index, perform_call};
 use super::types::{equality_extern, split_arrows};
 use super::{Binding, Bindings, ContinuationForm, Exit, FnLowering};
 
@@ -216,7 +216,7 @@ impl FnLowering<'_> {
                 };
                 ("t", Rhs::Extern(row, args))
             }
-            Callee::Operation(op) => ("t", operation_rhs(self.hir, op, args)),
+            Callee::Operation(op) => ("t", Rhs::call(perform_call(self.hir, op, args))),
             // 状態ありの最初の矢印は row が空の部分適用なので、関数と同じく最後の矢印の `mask` を使う
             Callee::Continuation { k, arity: _ } => {
                 let mask = self.mask(id, args.len() - 1);

@@ -22,12 +22,13 @@ pub data Bool =
   | False
   | True
 
--- 組み込みの `IO`。操作は実行時がその場で処理するので、ユーザーは handle できない (docs/spec/effects.md の「組み込みの `IO`」)
-pub effect IO where
-  println : String -> Unit
-  open : String -> File
-  read_all : File -> (File, String)
-  close : File -> Unit
+-- 組み込みの `IO`。操作のないラベルで、下の extern の関数がこのエフェクトを起こす。extern の関数は handler を
+-- 通らずにその場で実行するので、ユーザーは handle できない (docs/spec/effects.md の「組み込みの `IO`」)
+pub extern effect IO
+pub extern println : String -> <IO> Unit
+pub extern open : String -> <IO> File
+pub extern read_all : File -> <IO> (File, String)
+pub extern close : File -> <IO> Unit
 
 pub extern show_int : Int -> String
 pub not : Bool -> Bool

@@ -116,8 +116,9 @@ pub enum Frame {
     /// `mask` 付きの呼び出しの間、外側の同じエフェクトの handler を飛ばす。`effects` はエフェクトの番号の昇順の多重集合で、
     /// 値を所有しない (docs/implementation/architecture.md の「継続のフレーム」)。
     Mask { effects: Vec<u32>, next: ObjRef },
-    /// 継続の最下部にある `IO` の組み込みの handler (docs/implementation/architecture.md の「継続のフレーム」)。
-    Io,
+    /// 継続の最下部。ここへ戻ればプログラムが終わる。handler ではないので、操作の handler を探してここに届いたら内部の
+    /// 誤りである (docs/implementation/architecture.md の「継続のフレーム」)。
+    Root,
     /// handle の handler。節はエフェクトの操作の順に並ぶ。`link` が `None` なのは、継続に捕まえられて handle の
     /// 外側から切り離されている間である (docs/implementation/architecture.md の「継続のフレーム」)。
     Handler {
@@ -430,7 +431,7 @@ fn copy(payload: &Payload) -> Payload {
             effects: effects.clone(),
             next: *next,
         }),
-        Payload::Frame(Frame::Io) => Payload::Frame(Frame::Io),
+        Payload::Frame(Frame::Root) => Payload::Frame(Frame::Root),
         Payload::Frame(Frame::Handler {
             effect,
             clauses,
@@ -501,7 +502,7 @@ fn children(payload: &Payload, work: &mut Vec<ObjRef>) {
         Payload::Continuation { top, .. } => work.push(*top),
         Payload::Closure(closure) => work.extend(closure.args.iter().filter_map(object)),
         Payload::Data { fields, .. } => work.extend(fields.iter().filter_map(object)),
-        Payload::Frame(Frame::Io) | Payload::Str(_) | Payload::File(_) => {}
+        Payload::Frame(Frame::Root) | Payload::Str(_) | Payload::File(_) => {}
     }
 }
 

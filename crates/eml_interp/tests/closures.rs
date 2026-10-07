@@ -10,7 +10,7 @@ fn main() {
   let d2^ = apply c1(10)
   let r3 = apply d2(20)
   let s4^ = extern Prelude.show_int(r3)
-  let t5 = perform println(s4)
+  let t5 = extern Prelude.println(s4)
   return t5
 }
 fn first(a0, b1) {
@@ -28,7 +28,7 @@ fn main() {
   let r2^ = apply m1(5, 6)
   let s3 = apply r2(7)
   let t4^ = extern Prelude.show_int(s3)
-  let u5 = perform println(t4)
+  let u5 = extern Prelude.println(t4)
   return u5
 }
 fn first3(a0, b1, c2) {
@@ -49,7 +49,7 @@ fn main() {
   let m1^ = &make
   let r2 = apply m1(5, 6)
   let s3^ = extern Prelude.show_int(r2)
-  let t4 = perform println(s3)
+  let t4 = extern Prelude.println(s3)
   return t4
 }
 fn first(a0, b1) {
@@ -71,9 +71,9 @@ fn main() {
   let c2^ = closure first(s1)
   dup c2
   let r3^ = apply c2(1) [c2]
-  let t4 = perform println(r3)
+  let t4 = extern Prelude.println(r3)
   let r5^ = apply c2(2)
-  let t6 = perform println(r5)
+  let t6 = extern Prelude.println(r5)
   return t6
 }
 fn first(a0^, b1) {
@@ -92,11 +92,11 @@ fn main() {
   let d2^ = apply f1(10)
   let r3 = apply d2(20)
   let s4^ = extern Prelude.show_int(r3)
-  let t5 = perform println(s4)
+  let t5 = extern Prelude.println(s4)
   let m6^ = &make
   let r7 = apply m6(5, 6)
   let s8^ = extern Prelude.show_int(r7)
-  let t9 = perform println(s8)
+  let t9 = extern Prelude.println(s8)
   return t9
 }
 fn first(a0, b1) {
@@ -119,7 +119,7 @@ fn main() {
   let d2^ = con #0(f1, f1)
   decref d2
   let s3^ = const "ok"
-  let t4 = perform println(s3)
+  let t4 = extern Prelude.println(s3)
   return t4
 }
 fn first(a0, b1) {
@@ -138,7 +138,7 @@ effect Ask { ask/1 }
 fn main() {
   let t0 = handle Choose(&outer_body, ()) {choose: &choose} return &outer_ret
   let s1^ = extern Prelude.show_int(t0)
-  let t2 = perform println(s1)
+  let t2 = extern Prelude.println(s1)
   return t2
 }
 fn outer_body(u0) {

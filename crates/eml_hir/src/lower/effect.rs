@@ -2,19 +2,20 @@
 //! 置く (docs/spec/modules.md の「名前空間」)。
 
 use eml_diagnostics::{Diagnostic, FileId, Label};
+use eml_extern::ExternEffect;
 use eml_syntax::{SyntaxKind, ast};
 use la_arena::Arena;
 
-use super::extern_outside_std;
+use super::extern_row;
 use super::types::{TypeLowering, Vars};
 use crate::codes;
 use crate::def_map::{DefMap, Resolver, duplicate};
 use crate::hir::{
-    EffectDef, EffectId, Generics, ItemId, ModuleId, OpMultiplicity, Operation, RowRef, Signature,
-    TypeRef, TypeRefId, TypeRefKind, TypeVarDecl, TypeVarId,
+    EffectDef, EffectId, EffectKind, Generics, ItemId, ModuleId, OpMultiplicity, Operation, RowRef,
+    Signature, TypeRef, TypeRefId, TypeRefKind, TypeVarDecl, TypeVarId,
 };
 use crate::item_tree::EffectItem;
-use crate::program::{Items, ModuleOrigin};
+use crate::program::Items;
 
 /// エフェクトの名前と型引数を置く。操作のシグネチャは `lower_operations` が、すべての型とエフェクトを置いた後に
 /// 変換する。
@@ -27,11 +28,18 @@ pub(super) fn declare_effects(
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     for (k, item) in items.iter().enumerate() {
-        if let Some(keyword) = item.syntax.extern_keyword()
-            && def_map.origin(module) == ModuleOrigin::User
-        {
-            diagnostics.push(extern_outside_std(file, keyword.text_range()));
-        }
+        let kind = match item.syntax.extern_keyword() {
+            None => EffectKind::Defined,
+            Some(keyword) => EffectKind::Extern(extern_row(
+                def_map,
+                module,
+                file,
+                &keyword,
+                &item.name,
+                ExternEffect::from_name,
+                diagnostics,
+            )),
+        };
         let mut generics = Generics::default();
         for param in item.syntax.params().map(|name| name.token()) {
             let text = param.text();
@@ -51,6 +59,7 @@ pub(super) fn declare_effects(
                 name: item.name.clone(),
                 generics,
                 operations: Vec::new(),
+                kind,
             }),
         );
         debug_assert_eq!(id, def_map.effect_id(module, k));

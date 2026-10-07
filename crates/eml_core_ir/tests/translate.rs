@@ -4,22 +4,76 @@ use crate::common::{core_text, core_text_files};
 use eml_core_ir::Pass;
 
 #[test]
-fn an_io_operation_used_as_a_value_is_wrapped_with_its_io_call() {
-    // `IO` の操作は perform せずに実行時がその場で処理する (docs/spec/effects.md の「組み込みの `IO`」)
+fn an_extern_function_with_an_effect_used_as_a_value_is_wrapped_with_its_extern_call() {
+    // `println` は extern の関数なので、ほかの extern の関数と同じく包む関数の中で `Rhs::Extern` にする
     let text = "each : (String -> <IO> Unit) -> <IO> Unit\neach f = f \"x\"\n\nmain : Unit -> <IO> Unit\nmain () = each println";
     let shown = core_text(text, Pass::Translate);
-    assert!(shown.contains("fn op$Prelude.println(p0^) {"), "{shown}");
-    assert!(shown.contains("perform println(p0)"), "{shown}");
-    assert!(!shown.contains("perform Prelude.IO."), "{shown}");
+    assert!(
+        shown.contains("fn extern$Prelude.println(p0^) {"),
+        "{shown}"
+    );
+    assert!(shown.contains("extern Prelude.println(p0)"), "{shown}");
+    assert!(!shown.contains("perform"), "{shown}");
+}
+
+/// extern のエフェクトはエフェクトの表に入らず、番号も持たない。`IO` は Prelude の最初のエフェクトなので、番号を表と同じく
+/// 飛ばさないと、`mask`、`handle`、`perform` がユーザーのエフェクトを1つずれて指す。
+#[test]
+fn effect_numbers_skip_the_extern_effects() {
+    let text = "effect A where\n  ask : Unit -> Int\n\neffect B where\n  tell : Int -> Unit\n\nneeds_a : (Unit -> <e> Int) -> <A | e> Int\nneeds_a f = ask () + f ()\n\ntold : Unit -> <B> Int\ntold () =\n  tell 1\n  2\n\nmain : Unit -> <IO> Unit\nmain () =\n  let n =\n    handle (handle needs_a told with | ask () k -> k 1) with\n      | tell m k -> k ()\n  println (show_int n)";
+    insta::assert_snapshot!(core_text(text, Pass::Translate), @"
+    effect A { ask/1 }
+    effect B { tell/1 }
+    fn needs_a(f0^) {
+      let t1 = perform A.ask(())
+      let t2 = mask[A] apply f0(())
+      let t3 = extern Prelude.+(t1, t2)
+      return t3
+    }
+    fn told(p0) {
+      let t1 = perform B.tell(1)
+      return 2
+    }
+    fn main(p0) {
+      let t1 = handle B(&main$handle0, ()) {tell: &main$handle0$tell} return &main$handle0$return
+      let t2^ = extern Prelude.show_int(t1)
+      let t3 = extern Prelude.println(t2)
+      return t3
+    }
+    fn main$handle0(p0) {
+      let t1 = handle A(&main$handle1, ()) {ask: &main$handle1$ask} return &main$handle1$return
+      return t1
+    }
+    fn main$handle1(p0) {
+      let t1 = call needs_a(&told)
+      return t1
+    }
+    fn main$handle1$ask(p0, k1^, p2) {
+      let t3 = resume k1(1, ())
+      return t3
+    }
+    fn main$handle1$return($r0, p1) {
+      return $r0
+    }
+    fn main$handle0$tell(m0, k1^, p2) {
+      let t3 = resume k1((), ())
+      return t3
+    }
+    fn main$handle0$return($r0, p1) {
+      return $r0
+    }
+    fn entry$main() {
+      tailcall main(())
+    }
+    ");
 }
 
 #[test]
 fn hello_world() {
     insta::assert_snapshot!(core_text("main : Unit -> <IO> Unit\nmain () = println \"hi\"", Pass::Translate), @r#"
-    effect Prelude.IO { println/1, open/1, read_all/1, close/1 }
     fn main(p0) {
       let s1^ = const "hi"
-      let t2 = perform println(s1)
+      let t2 = extern Prelude.println(s1)
       return t2
     }
     fn entry$main() {
@@ -42,10 +96,9 @@ fn the_entry_function_is_chosen_by_the_caller() {
         .expect("alt");
     let program = eml_core_ir::lower_until(&checked.program, &checked.typed, alt, Pass::Translate);
     insta::assert_snapshot!(eml_core_ir::pretty(&program), @r#"
-    effect Prelude.IO { println/1, open/1, read_all/1, close/1 }
     fn alt(p0) {
       let s1^ = const "alt"
-      let t2 = perform println(s1)
+      let t2 = extern Prelude.println(s1)
       return t2
     }
     fn entry$alt() {
@@ -61,7 +114,6 @@ fn names_outside_the_entry_are_qualified_with_their_module() {
     let csv = "pub data Row = | Row Int\n\npub effect Parse where\n  next : Unit -> Int\n\npub parse : Unit -> <Parse> Row\nparse () =\n  let get = next\n  let make = Row\n  make (get ())";
     let main = "import Report.Csv\n\napply : (a -> <e> b) -> a -> <e> b\napply f x = f x\n\nmain : Unit -> <IO> Unit\nmain () =\n  let r =\n    handle Csv.parse () with\n      | Csv.next () k -> k 1\n      | return r -> r\n  let Csv.Row n = r\n  apply println (show_int n)";
     insta::assert_snapshot!(core_text_files(main, &[("Report/Csv.em", csv)], Pass::Translate), @"
-    effect Prelude.IO { println/1, open/1, read_all/1, close/1 }
     effect Report.Csv.Parse { next/1 }
     fn apply(f0^, x1^) {
       let t2^ = apply f0(x1)
@@ -71,7 +123,7 @@ fn names_outside_the_entry_are_qualified_with_their_module() {
       let t1^ = handle Report.Csv.Parse(&main$handle0, ()) {next: &main$handle0$next} return &main$handle0$return
       join j0(n2) [] {
         let t4^ = extern Prelude.show_int(n2)
-        let t5 = call apply(&op$Prelude.println, t4)
+        let t5 = call apply(&extern$Prelude.println, t4)
         return t5
       }
       switch t1 {
@@ -95,8 +147,8 @@ fn names_outside_the_entry_are_qualified_with_their_module() {
     fn main$handle0$return(r0^, p1) {
       return r0
     }
-    fn op$Prelude.println(p0^) {
-      let t1 = perform println(p0)
+    fn extern$Prelude.println(p0^) {
+      let t1 = extern Prelude.println(p0)
       return t1
     }
     fn op$Report.Csv.next(p0) {
@@ -124,7 +176,7 @@ fn an_entry_operation_does_not_collide_with_a_prelude_operation() {
     );
     assert!(
         shown.contains(
-            "fn op$Prelude.println(p0^) {\n  let t1 = perform println(p0)\n  return t1\n}"
+            "fn extern$Prelude.println(p0^) {\n  let t1 = extern Prelude.println(p0)\n  return t1\n}"
         ),
         "{shown}"
     );
@@ -144,7 +196,6 @@ fn only_functions_reachable_from_the_entry_are_lowered() {
 fn recursion_and_top_level_values() {
     let text = "answer : Int\nanswer = 42\n\ncount : Int -> Int\ncount n = if n == 0 then answer else count (n - 1)\n\nmain : Unit -> <IO> Unit\nmain () = println (show_int (count 3))";
     insta::assert_snapshot!(core_text(text, Pass::Translate), @"
-    effect Prelude.IO { println/1, open/1, read_all/1, close/1 }
     fn answer() {
       return 42
     }
@@ -163,7 +214,7 @@ fn recursion_and_top_level_values() {
     fn main(p0) {
       let t1 = call count(3)
       let t2^ = extern Prelude.show_int(t1)
-      let t3 = perform println(t2)
+      let t3 = extern Prelude.println(t2)
       return t3
     }
     fn entry$main() {
@@ -176,7 +227,6 @@ fn recursion_and_top_level_values() {
 fn partial_and_extra_arguments_use_closures() {
     let text = "add : Int -> Int -> Int\nadd a b = a + b\n\nadder : Int -> Int -> Int\nadder x = add x\n\nmain : Unit -> <IO> Unit\nmain () =\n  let f = add 1\n  let n = f 2 + adder 3 4\n  println (show_int n)";
     insta::assert_snapshot!(core_text(text, Pass::Translate), @"
-    effect Prelude.IO { println/1, open/1, read_all/1, close/1 }
     fn add(a0, b1) {
       let t2 = extern Prelude.+(a0, b1)
       return t2
@@ -192,7 +242,7 @@ fn partial_and_extra_arguments_use_closures() {
       let t4 = apply t3(4)
       let t5 = extern Prelude.+(t2, t4)
       let t6^ = extern Prelude.show_int(t5)
-      let t7 = perform println(t6)
+      let t7 = extern Prelude.println(t6)
       return t7
     }
     fn entry$main() {
@@ -205,7 +255,6 @@ fn partial_and_extra_arguments_use_closures() {
 fn builtins_used_as_values_are_wrapped() {
     let text = "apply : (a -> <e> b) -> a -> <e> b\napply f x = f x\n\nmain : Unit -> <IO> Unit\nmain () =\n  let g = not >> not\n  apply println (show_int 1)";
     insta::assert_snapshot!(core_text(text, Pass::Translate), @"
-    effect Prelude.IO { println/1, open/1, read_all/1, close/1 }
     fn Prelude.not($00) {
       switch $00 {
         #0 ->
@@ -225,7 +274,7 @@ fn builtins_used_as_values_are_wrapped() {
     fn main(p0) {
       let t1^ = call Prelude.>>(&Prelude.not, &Prelude.not)
       let t2^ = extern Prelude.show_int(1)
-      let t3 = call apply(&op$Prelude.println, t2)
+      let t3 = call apply(&extern$Prelude.println, t2)
       return t3
     }
     fn Prelude.>>$lambda0(f0^, g1^, x2^) {
@@ -233,8 +282,8 @@ fn builtins_used_as_values_are_wrapped() {
       let t4^ = apply g1(t3)
       return t4
     }
-    fn op$Prelude.println(p0^) {
-      let t1 = perform println(p0)
+    fn extern$Prelude.println(p0^) {
+      let t1 = extern Prelude.println(p0)
       return t1
     }
     fn entry$main() {
@@ -247,7 +296,6 @@ fn builtins_used_as_values_are_wrapped() {
 fn lambdas_are_lifted_with_their_captures_first() {
     let text = "apply : (a -> <e> b) -> a -> <e> b\napply f x = f x\n\nmain : Unit -> <IO> Unit\nmain () =\n  let s = \"!\"\n  let shout = fn t -> t ++ s\n  println (apply shout \"hi\")\n  println s";
     insta::assert_snapshot!(core_text(text, Pass::Translate), @r#"
-    effect Prelude.IO { println/1, open/1, read_all/1, close/1 }
     fn apply(f0^, x1^) {
       let t2^ = apply f0(x1)
       return t2
@@ -257,8 +305,8 @@ fn lambdas_are_lifted_with_their_captures_first() {
       let c2^ = closure main$lambda0(s1)
       let s3^ = const "hi"
       let t4^ = call apply(c2, s3)
-      let t5 = perform println(t4)
-      let t6 = perform println(s1)
+      let t5 = extern Prelude.println(t4)
+      let t6 = extern Prelude.println(s1)
       return t6
     }
     fn main$lambda0(s0^, t1^) {
@@ -275,7 +323,6 @@ fn lambdas_are_lifted_with_their_captures_first() {
 fn a_zero_arity_callee_is_evaluated_before_its_arguments() {
     let text = "k : Int -> Int -> Int\nk a b = a\n\nfive : Int -> Int\nfive = k 5\n\nmain : Unit -> <IO> Unit\nmain () = println (show_int (five (1 + 2)))";
     insta::assert_snapshot!(core_text(text, Pass::Translate), @"
-    effect Prelude.IO { println/1, open/1, read_all/1, close/1 }
     fn k(a0, b1) {
       return a0
     }
@@ -288,7 +335,7 @@ fn a_zero_arity_callee_is_evaluated_before_its_arguments() {
       let t2 = extern Prelude.+(1, 2)
       let t3 = apply five1(t2)
       let t4^ = extern Prelude.show_int(t3)
-      let t5 = perform println(t4)
+      let t5 = extern Prelude.println(t4)
       return t5
     }
     fn entry$main() {
@@ -301,7 +348,6 @@ fn a_zero_arity_callee_is_evaluated_before_its_arguments() {
 fn a_tail_if_returns_from_each_arm() {
     let text = "sign : Int -> String\nsign n = if n < 0 then \"negative\" else \"non-negative\"\n\nmain : Unit -> <IO> Unit\nmain () = ()";
     insta::assert_snapshot!(core_text(text, Pass::Translate), @"
-    effect Prelude.IO { println/1, open/1, read_all/1, close/1 }
     fn main(p0) {
       return ()
     }
@@ -315,7 +361,6 @@ fn a_tail_if_returns_from_each_arm() {
 fn calls_in_tail_position_return_their_result_before_simplify() {
     let text = "loop : Int -> Int -> Int\nloop n acc = if n == 0 then acc else loop (n - 1) (acc + 1)\n\ncall_twice : (Int -> Int) -> Int -> Int\ncall_twice f x = f (f x)\n\nmain : Unit -> <IO> Unit\nmain () = ()";
     insta::assert_snapshot!(core_text(text, Pass::Translate), @"
-    effect Prelude.IO { println/1, open/1, read_all/1, close/1 }
     fn main(p0) {
       return ()
     }
@@ -329,13 +374,12 @@ fn calls_in_tail_position_return_their_result_before_simplify() {
 fn the_entry_applies_a_point_free_main_to_unit() {
     let text = "main : Unit -> <IO> Unit\nmain = fn () -> println \"point-free\"";
     insta::assert_snapshot!(core_text(text, Pass::Translate), @r#"
-    effect Prelude.IO { println/1, open/1, read_all/1, close/1 }
     fn main() {
       return &main$lambda0
     }
     fn main$lambda0(p0) {
       let s1^ = const "point-free"
-      let t2 = perform println(s1)
+      let t2 = extern Prelude.println(s1)
       return t2
     }
     fn entry$main() {
@@ -350,7 +394,6 @@ fn nested_join_points_capture_what_outer_join_points_need() {
     // 内側の join point の本体は外側の join point へ jump するので、外側の本体が使う `s2` も捕まえる
     let text = "label : Bool -> Bool -> String -> String\nlabel a b s =\n  let t =\n    if a then\n      let u = if b then s ++ \"!\" else \"plain\"\n      u ++ \"?\"\n    else s\n  t ++ s\n\nmain : Unit -> <IO> Unit\nmain () = ()";
     insta::assert_snapshot!(core_text(text, Pass::Translate), @"
-    effect Prelude.IO { println/1, open/1, read_all/1, close/1 }
     fn main(p0) {
       return ()
     }
@@ -364,14 +407,13 @@ fn nested_join_points_capture_what_outer_join_points_need() {
 fn handlers_are_lifted_to_closures() {
     let text = "effect Ask where\n  ask : String -> Int\n\nmain : Unit -> <IO> Unit\nmain () =\n  let prefix = \"n = \"\n  let n =\n    handle ask \"x\" with\n      | ask key k -> k 1\n      | return x -> x + 1\n  println (prefix ++ show_int n)";
     insta::assert_snapshot!(core_text(text, Pass::Translate), @r#"
-    effect Prelude.IO { println/1, open/1, read_all/1, close/1 }
     effect Ask { ask/1 }
     fn main(p0) {
       let s1^ = const "n = "
       let t2 = handle Ask(&main$handle0, ()) {ask: &main$handle0$ask} return &main$handle0$return
       let t3^ = extern Prelude.show_int(t2)
       let t4^ = extern Prelude.++(s1, t3)
-      let t5 = perform println(t4)
+      let t5 = extern Prelude.println(t4)
       return t5
     }
     fn main$handle0(p0) {
@@ -397,11 +439,10 @@ fn handlers_are_lifted_to_closures() {
 fn operations_as_values_and_drop() {
     let text = "effect Log where\n  log : String -> String -> Unit\n\nrun : Unit -> <Log> Unit\nrun () =\n  let info = log \"info\"\n  info \"a\"\n\ndiscard : String -> Unit\ndiscard s = drop s\n\nmain : Unit -> <IO> Unit\nmain () = println \"x\"";
     insta::assert_snapshot!(core_text(text, Pass::Translate), @r#"
-    effect Prelude.IO { println/1, open/1, read_all/1, close/1 }
     effect Log { log/2 }
     fn main(p0) {
       let s1^ = const "x"
-      let t2 = perform println(s1)
+      let t2 = extern Prelude.println(s1)
       return t2
     }
     fn entry$main() {
@@ -414,7 +455,6 @@ fn operations_as_values_and_drop() {
 fn constructors_with_fields_build_values() {
     let text = "data Option a =\n  | None\n  | Some a\n\nwrap : Int -> Option Int\nwrap n = Some n\n\nnest : Unit -> Option (Option Int)\nnest () = Some (Some 1)\n\nmain : Unit -> <IO> Unit\nmain () = ()";
     insta::assert_snapshot!(core_text(text, Pass::Translate), @"
-    effect Prelude.IO { println/1, open/1, read_all/1, close/1 }
     fn main(p0) {
       return ()
     }
@@ -428,7 +468,6 @@ fn constructors_with_fields_build_values() {
 fn a_constructor_used_as_a_function_value_is_wrapped() {
     let text = "data Pair a b =\n  | Pair a b\n\npairs : Int -> Pair Int Int\npairs n =\n  let make = Pair n\n  make 2\n\nmain : Unit -> <IO> Unit\nmain () = ()";
     insta::assert_snapshot!(core_text(text, Pass::Translate), @"
-    effect Prelude.IO { println/1, open/1, read_all/1, close/1 }
     fn main(p0) {
       return ()
     }
@@ -443,7 +482,6 @@ fn a_match_compiles_to_a_decision_tree_with_arm_join_points() {
     // 各枝の本体を join point にし、選んだ欄に現れないコンストラクタ (`None`) は残りの行列の join point へ jump する
     let text = "data Option a = | None | Some a\n\nf : Option (Option Int) -> Int\nf o = match o with\n  | Some (Some n) -> n\n  | _ -> 0\n\nmain : Unit -> <IO> Unit\nmain () = ()";
     insta::assert_snapshot!(core_text(text, Pass::Translate), @"
-    effect Prelude.IO { println/1, open/1, read_all/1, close/1 }
     fn main(p0) {
       return ()
     }
@@ -458,7 +496,6 @@ fn tail_and_non_tail_matches() {
     // 末尾にない `match` は、`if` と同じく値を受ける join point の範囲に入り、枝の本体はその join point へ jump する
     let text = "data Option a = | None | Some a\n\ng : Option Int -> Int\ng o =\n  let n = match o with\n    | Some m -> m\n    | None -> 0\n  n + 1\n\nh : Option Int -> Int\nh o = match o with | Some m -> m | None -> 0\n\nmain : Unit -> <IO> Unit\nmain () = ()";
     insta::assert_snapshot!(core_text(text, Pass::Translate), @"
-    effect Prelude.IO { println/1, open/1, read_all/1, close/1 }
     fn main(p0) {
       return ()
     }
@@ -473,7 +510,6 @@ fn constructor_patterns_in_let_lambda_and_equation_parameters() {
     // コンストラクタを含むパターンは、続きを本体にする join point の引数で変数を受け、枝が1つの決定木で分解する
     let text = "data Box a = | Box a\n\nby_equation : Box Int -> Int\nby_equation (Box n) = n\n\nby_let : Box Int -> Int\nby_let b =\n  let Box m = b\n  m + 1\n\nby_lambda : Box Int -> Int\nby_lambda b = (fn (Box k) -> k) b\n\nmain : Unit -> <IO> Unit\nmain () = ()";
     insta::assert_snapshot!(core_text(text, Pass::Translate), @"
-    effect Prelude.IO { println/1, open/1, read_all/1, close/1 }
     fn main(p0) {
       return ()
     }
@@ -488,7 +524,6 @@ fn a_variable_pattern_after_a_switch_binds_the_scrutinee() {
     // `ys` は `xs` の `Switch` の後で、`xs` そのものを受ける。残りの行列の join point は `xs` を捕まえる
     let text = "data List a = | Nil | Cons a (List a)\n\nsize : List Int -> Int\nsize xs = 2\n\ndescribe : List Int -> Int\ndescribe xs = match xs with\n  | Cons _ Nil -> 1\n  | ys -> size ys\n\nmain : Unit -> <IO> Unit\nmain () = ()";
     insta::assert_snapshot!(core_text(text, Pass::Translate), @"
-    effect Prelude.IO { println/1, open/1, read_all/1, close/1 }
     fn main(p0) {
       return ()
     }
@@ -503,7 +538,6 @@ fn constructor_patterns_in_handler_clause_parameters() {
     // 操作の節と `return` の節はラムダと同じく関数に持ち上げるので、引数のコンストラクタのパターンも同じ経路で分解する
     let text = "data Box a = | Box a\n\neffect Give where\n  give : Box Int -> Int\n\nrun : Unit -> Int\nrun () =\n  handle Box (give (Box 1)) with\n    | give (Box n) k -> k n\n    | return (Box r) -> r\n\nmain : Unit -> <IO> Unit\nmain () = ()";
     insta::assert_snapshot!(core_text(text, Pass::Translate), @"
-    effect Prelude.IO { println/1, open/1, read_all/1, close/1 }
     effect Give { give/1 }
     fn main(p0) {
       return ()
@@ -519,7 +553,6 @@ fn equality_picks_the_comparison_of_the_operand_type() {
     // 比べ方ごとの extern は、型の名前を前に付けた名前 (`Prelude.int_eq`、`Prelude.string_eq`、`Prelude.bool_ne`) で表示する
     let text = "same : String -> Bool\nsame s = \"a\" == s\n\nflip : Bool -> Bool\nflip b = b != True\n\nmain : Unit -> <IO> Unit\nmain () = ()";
     insta::assert_snapshot!(core_text(text, Pass::Translate), @"
-    effect Prelude.IO { println/1, open/1, read_all/1, close/1 }
     fn main(p0) {
       return ()
     }
@@ -534,7 +567,6 @@ fn tuples_are_built_and_taken_apart_by_parameters_and_let() {
     // タプルの値はタグ 0 のコンストラクタの値で、タプルのパターンは枝が1つの `Switch` で分解する
     let text = "swap : (Int, String) -> (String, Int)\nswap (n, s) = (s, n)\n\nfirst : (Int, Int) -> Int\nfirst p =\n  let (a, _) = p\n  a\n\nmain : Unit -> <IO> Unit\nmain () = ()";
     insta::assert_snapshot!(core_text(text, Pass::Translate), @"
-    effect Prelude.IO { println/1, open/1, read_all/1, close/1 }
     fn main(p0) {
       return ()
     }
@@ -549,7 +581,6 @@ fn a_tuple_column_is_a_single_constructor() {
     // タプルの欄を分解してから、その中の `Option` の欄で `Switch` する
     let text = "data Option a = | None | Some a\n\npick : (Option Int, Int) -> Int\npick p = match p with\n  | (Some n, _) -> n\n  | (None, k) -> k\n\nmain : Unit -> <IO> Unit\nmain () = ()";
     insta::assert_snapshot!(core_text(text, Pass::Translate), @"
-    effect Prelude.IO { println/1, open/1, read_all/1, close/1 }
     fn main(p0) {
       return ()
     }
@@ -564,7 +595,6 @@ fn int_literals_compare_in_order_and_fall_back_to_the_rest() {
     // 異なるリテラルを上の行から順に比べ、最後の等しくない枝は残りの行列 (`_` の行) に進む
     let text = "describe : Int -> String\ndescribe n = match n with\n  | 0 -> \"zero\"\n  | 1 -> \"one\"\n  | -1 -> \"minus one\"\n  | _ -> \"many\"\n\nmain : Unit -> <IO> Unit\nmain () = ()";
     insta::assert_snapshot!(core_text(text, Pass::Translate), @"
-    effect Prelude.IO { println/1, open/1, read_all/1, close/1 }
     fn main(p0) {
       return ()
     }
@@ -579,7 +609,6 @@ fn string_literals_build_each_literal_for_its_comparison() {
     // `String` のリテラルは比べるたびに作る。変数の枝は、比べた出現そのものを受ける
     let text = "greet : String -> String\ngreet name = match name with\n  | \"en\" -> \"hello\"\n  | \"ja\" -> \"konnichiwa\"\n  | other -> other\n\nmain : Unit -> <IO> Unit\nmain () = ()";
     insta::assert_snapshot!(core_text(text, Pass::Translate), @"
-    effect Prelude.IO { println/1, open/1, read_all/1, close/1 }
     fn main(p0) {
       return ()
     }
@@ -595,7 +624,6 @@ fn a_literal_column_inside_a_tuple() {
     // 行がないので、残りの行列の join point を作る
     let text = "classify : (Int, Bool) -> Int\nclassify p = match p with\n  | (0, True) -> 1\n  | (_, False) -> 2\n  | (n, _) -> n\n\nmain : Unit -> <IO> Unit\nmain () = ()";
     insta::assert_snapshot!(core_text(text, Pass::Translate), @"
-    effect Prelude.IO { println/1, open/1, read_all/1, close/1 }
     fn main(p0) {
       return ()
     }
@@ -606,10 +634,14 @@ fn a_literal_column_inside_a_tuple() {
 }
 
 #[test]
-fn file_operations_are_performed_on_the_io_handler() {
+fn file_operations_are_extern_calls() {
     let text = "main : Unit -> <IO> Unit\nmain () =\n  let f = open \"a.txt\"\n  let (f, s) = read_all f\n  close f\n  println s";
     let ir = core_text(text, Pass::Translate);
-    for op in ["perform open(", "perform read_all(", "perform close("] {
+    for op in [
+        "extern Prelude.open(",
+        "extern Prelude.read_all(",
+        "extern Prelude.close(",
+    ] {
         assert!(ir.contains(op), "{ir}");
     }
 }
@@ -628,12 +660,11 @@ fn functions_without_captures_are_values() {
 fn a_handler_with_a_state_passes_its_initial_value_and_takes_the_state_from_its_clauses() {
     let text = "effect Ask where\n  ask : Unit -> Int\n\nmain : Unit -> <IO> Unit\nmain () =\n  let n =\n    handle ask () + ask () from 10 with\n      | ask () k st -> k st (st + 1)\n      | return x st -> x * st\n  println (show_int n)";
     insta::assert_snapshot!(core_text(text, Pass::Translate), @"
-    effect Prelude.IO { println/1, open/1, read_all/1, close/1 }
     effect Ask { ask/1 }
     fn main(p0) {
       let t1 = handle Ask(&main$handle0, 10) {ask: &main$handle0$ask} return &main$handle0$return
       let t2^ = extern Prelude.show_int(t1)
-      let t3 = perform println(t2)
+      let t3 = extern Prelude.println(t2)
       return t3
     }
     fn main$handle0(p0) {
@@ -658,10 +689,9 @@ fn a_handler_with_a_state_passes_its_initial_value_and_takes_the_state_from_its_
 }
 
 #[test]
-fn effects_are_numbered_with_io_first_then_in_declaration_order() {
+fn effects_are_numbered_in_declaration_order() {
     let text = "effect A where\n  a : Unit -> Int\neffect B where\n  b : Unit -> Int\nmain : Unit -> <IO> Unit\nmain () =\n  let x = handle a () with\n    | a () k -> k 1\n  let y = handle b () with\n    | b () k -> k 2\n  println (show_int (x + y))";
     insta::assert_snapshot!(core_text(text, Pass::Translate), @"
-    effect Prelude.IO { println/1, open/1, read_all/1, close/1 }
     effect A { a/1 }
     effect B { b/1 }
     fn main(p0) {
@@ -669,7 +699,7 @@ fn effects_are_numbered_with_io_first_then_in_declaration_order() {
       let t2 = handle B(&main$handle1, ()) {b: &main$handle1$b} return &main$handle1$return
       let t3 = extern Prelude.+(t1, t2)
       let t4^ = extern Prelude.show_int(t3)
-      let t5 = perform println(t4)
+      let t5 = extern Prelude.println(t4)
       return t5
     }
     fn main$handle0(p0) {
@@ -734,7 +764,6 @@ fn an_arm_reached_by_one_leaf_sits_at_the_leaf() {
     // `default` と、外側の `default` の2つの葉から届く
     let text = "data Shape = | Dot | Box Int Int\n\narea : Shape -> Int\narea s =\n  match s with\n    | Box w h -> w * h\n    | Dot -> 0\n\npick : Int -> Int -> Int\npick a b =\n  match (a, b) with\n    | (0, 1) -> 0\n    | (n, _) -> n\n\nmain : Unit -> <IO> Unit\nmain () = println (show_int (area (Box 2 3) + pick 0 1))";
     insta::assert_snapshot!(core_text(text, Pass::Translate), @"
-    effect Prelude.IO { println/1, open/1, read_all/1, close/1 }
     fn area(s0^) {
       switch s0 {
         #0 ->
@@ -772,7 +801,7 @@ fn an_arm_reached_by_one_leaf_sits_at_the_leaf() {
       let t3 = call pick(0, 1)
       let t4 = extern Prelude.+(t2, t3)
       let t5^ = extern Prelude.show_int(t4)
-      let t6 = perform println(t5)
+      let t6 = extern Prelude.println(t5)
       return t6
     }
     fn entry$main() {
@@ -804,7 +833,6 @@ fn each_comparison_picks_the_instruction_of_its_operand_type() {
     // 比べる命令は、型検査が `==` と `!=` の参照に記録した型引数から選ぶ
     let text = "compare : Int -> String -> Bool -> (Bool, Bool, Bool, Bool, Bool, Bool)\ncompare n s b = (n == 1, n != 2, s == \"a\", s != \"b\", b == True, b != False)\n\nmain : Unit -> <IO> Unit\nmain () =\n  let _ = compare 1 \"a\" True\n  ()";
     insta::assert_snapshot!(core_text(text, Pass::Translate), @r#"
-    effect Prelude.IO { println/1, open/1, read_all/1, close/1 }
     fn compare(n0, s1^, b2) {
       let t3 = extern Prelude.int_eq(n0, 1)
       let t4 = extern Prelude.int_ne(n0, 2)

@@ -54,7 +54,7 @@ fn the_occurs_check_rejects_infinite_types() {
 fn closed_rows_unify_regardless_of_order() {
     let context = test_context();
     let mut table = Table::new(&context);
-    let io = table.lang.io;
+    let io = table.context.externs.io;
     let a = Row::closed(vec![Label::plain(io)]);
     assert_eq!(table.unify_row(&a, &a.clone()), Ok(()));
     assert_eq!(
@@ -67,7 +67,7 @@ fn closed_rows_unify_regardless_of_order() {
 fn an_open_row_absorbs_the_missing_labels() {
     let context = test_context();
     let mut table = Table::new(&context);
-    let io = table.lang.io;
+    let io = table.context.externs.io;
     let r = table.fresh_row_var();
     let open = Row {
         labels: vec![],
@@ -92,7 +92,7 @@ fn an_open_row_absorbs_the_missing_labels() {
 fn an_open_row_cannot_add_labels_to_a_closed_row() {
     let context = test_context();
     let mut table = Table::new(&context);
-    let io = table.lang.io;
+    let io = table.context.externs.io;
     let r = table.fresh_row_var();
     let open = Row {
         labels: vec![Label::plain(io)],
@@ -108,7 +108,7 @@ fn an_open_row_cannot_add_labels_to_a_closed_row() {
 fn two_open_rows_share_a_fresh_tail() {
     let context = test_context();
     let mut table = Table::new(&context);
-    let io = table.lang.io;
+    let io = table.context.externs.io;
     let r1 = table.fresh_row_var();
     let r2 = table.fresh_row_var();
     let a = Row {
@@ -131,7 +131,7 @@ fn two_open_rows_share_a_fresh_tail() {
 fn rows_with_the_same_tail_and_different_labels_report_the_missing_effects() {
     let context = test_context();
     let mut table = Table::new(&context);
-    let io = table.lang.io;
+    let io = table.context.externs.io;
     let r = table.fresh_row_var();
     let a = Row {
         labels: vec![Label::plain(io)],
@@ -161,7 +161,7 @@ fn a_variable_unified_with_error_becomes_error() {
 fn export_keeps_an_open_row() {
     let context = test_context();
     let mut table = Table::new(&context);
-    let io = table.lang.io;
+    let io = table.context.externs.io;
     let r = table.fresh_row_var();
     let f = table.function(
         table.int,
@@ -194,7 +194,7 @@ fn rigid_variables_unify_only_with_themselves_and_flexible_variables() {
 fn a_rigid_row_variable_cannot_be_bound() {
     let context = test_context();
     let mut table = Table::new(&context);
-    let io = table.lang.io;
+    let io = table.context.externs.io;
     let e = table.fresh_rigid_row("e");
     let rigid = Row {
         labels: vec![],
@@ -212,7 +212,7 @@ fn a_rigid_row_variable_cannot_be_bound() {
 fn a_closed_callee_row_is_included_in_a_larger_row() {
     let context = test_context();
     let mut table = Table::new(&context);
-    let io_effect = table.lang.io;
+    let io_effect = table.context.externs.io;
     let io = Row::closed(vec![Label::plain(io_effect)]);
     assert_eq!(table.include_row(&Row::pure(), &io), Ok(Vec::new()));
     assert_eq!(table.include_row(&io, &io), Ok(Vec::new()));
@@ -226,7 +226,7 @@ fn a_closed_callee_row_is_included_in_a_larger_row() {
 fn a_rigid_callee_row_needs_the_same_variable_in_the_ambient_row() {
     let context = test_context();
     let mut table = Table::new(&context);
-    let io = table.lang.io;
+    let io = table.context.externs.io;
     let e = table.fresh_rigid_row("e");
     let callee = Row {
         labels: vec![],
@@ -259,7 +259,7 @@ fn open_spine_opens_only_the_rows_on_the_return_side() {
 fn a_rigid_callee_row_extends_a_flexible_ambient_row() {
     let context = test_context();
     let mut table = Table::new(&context);
-    let io = table.lang.io;
+    let io = table.context.externs.io;
     let e = table.fresh_rigid_row("e");
     let fresh = table.fresh_row_var();
     let ambient = Row {
@@ -313,7 +313,7 @@ fn closure_kinds_bound_each_partial_application() {
 fn an_error_row_unifies_with_any_row_without_binding() {
     let context = test_context();
     let mut table = Table::new(&context);
-    let io = table.lang.io;
+    let io = table.context.externs.io;
     let e = table.fresh_rigid_row("e");
     assert_eq!(
         table.unify_row(&Row::error(), &Row::closed(vec![Label::plain(io)])),
@@ -331,7 +331,7 @@ fn an_error_row_unifies_with_any_row_without_binding() {
 fn a_flexible_row_unified_with_an_error_row_becomes_an_error_row() {
     let context = test_context();
     let mut table = Table::new(&context);
-    let io = table.lang.io;
+    let io = table.context.externs.io;
     let r = table.fresh_row_var();
     let open = Row {
         labels: vec![],
@@ -349,7 +349,7 @@ fn a_flexible_row_unified_with_an_error_row_becomes_an_error_row() {
 fn an_error_row_is_included_and_includes_any_row() {
     let context = test_context();
     let mut table = Table::new(&context);
-    let io = table.lang.io;
+    let io = table.context.externs.io;
     assert_eq!(
         table.include_row(&Row::error(), &Row::pure()),
         Ok(Vec::new())
@@ -372,7 +372,7 @@ fn an_error_row_keeps_its_own_labels() {
     // 含まれなければ報告する。綴り誤りの E1002 と無関係なエフェクトの誤りを隠さないため
     let context = test_context();
     let mut table = Table::new(&context);
-    let io = table.lang.io;
+    let io = table.context.externs.io;
     let io_error = Row {
         labels: vec![Label::plain(io)],
         tail: Tail::Error,
@@ -397,10 +397,21 @@ fn an_error_row_keeps_its_own_labels() {
 }
 
 #[test]
+fn an_extern_effect_is_performed_at_most_once() {
+    // 操作の多重度の最大を取ると、操作のない extern のエフェクトは `Never` になってしまう (docs/spec/types.md の「Kind」)
+    let context = test_context();
+    let table = Table::new(&context);
+    assert_eq!(
+        table.effect_multiplicity(table.context.externs.io),
+        Multiplicity::Once
+    );
+}
+
+#[test]
 fn a_repeated_io_label_resolves_to_one() {
     let context = test_context();
     let mut table = Table::new(&context);
-    let io = Label::plain(table.lang.io);
+    let io = Label::plain(table.context.externs.io);
     let tail = table.fresh_row_var();
     let row = Row {
         labels: vec![io.clone()],
@@ -424,7 +435,7 @@ fn a_repeated_io_label_keeps_the_other_labels_in_place() {
     let program = crate::test_program("effect Fail where\n  fail : Unit -> Unit");
     let context = Context::new(&program);
     let mut table = Table::new(&context);
-    let io = Label::plain(table.lang.io);
+    let io = Label::plain(table.context.externs.io);
     let fail = Label::plain(effect_named(&program, "Fail"));
     let tail = table.fresh_row_var();
     let row = Row {
@@ -460,7 +471,7 @@ fn a_rigid_callee_row_masks_the_handleable_labels_before_its_variable() {
         tail: Tail::Var(e),
     };
     let ambient = Row {
-        labels: vec![label, Label::plain(table.lang.io)],
+        labels: vec![label, Label::plain(table.context.externs.io)],
         tail: Tail::Var(e),
     };
     assert_eq!(table.include_row(&callee, &ambient), Ok(vec![state]));
@@ -514,7 +525,7 @@ fn labels_of_one_effect_pair_up_in_order() {
 fn labels_with_different_type_arguments_do_not_unify() {
     let context = test_context();
     let mut table = Table::new(&context);
-    let io = table.lang.io;
+    let io = table.context.externs.io;
     let left = Label {
         effect: io,
         args: vec![table.string],
@@ -536,7 +547,7 @@ fn labels_with_different_type_arguments_do_not_unify() {
 fn a_row_variable_cannot_occur_in_a_label_argument_of_its_row() {
     let context = test_context();
     let mut table = Table::new(&context);
-    let io = table.lang.io;
+    let io = table.context.externs.io;
     let r = table.fresh_row_var();
     let open = Row {
         labels: Vec::new(),
@@ -558,7 +569,7 @@ fn a_row_variable_cannot_occur_in_a_label_argument_of_its_row() {
 fn an_infinite_label_argument_is_not_an_argument_mismatch() {
     let context = test_context();
     let mut table = Table::new(&context);
-    let io = table.lang.io;
+    let io = table.context.externs.io;
     let int = table.int;
     let x = table.fresh_var();
     let label = |args: Vec<Ty>| Label { effect: io, args };
