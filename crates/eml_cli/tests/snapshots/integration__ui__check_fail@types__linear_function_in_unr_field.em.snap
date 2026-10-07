@@ -1,0 +1,16 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: rendered
+input_file: tests/ui/check-fail/types/linear_function_in_unr_field.em
+---
+[E2001] Error: mismatched types
+    ╭─[ check-fail/types/linear_function_in_unr_field.em:12:23 ]
+    │
+ 12 │     | ask () k -> Box k
+    │                   ─┬─ ┬  
+    │                    ╰───── argument 1 of `Box`
+    │                       │  
+    │                       ╰── expected `Int -> Box`, found `Int -> Box`
+    │ 
+    │ Note: this function can be called only once (it is a `once` continuation or captures a linear value), but this position needs a function that can be called any number of times
+────╯

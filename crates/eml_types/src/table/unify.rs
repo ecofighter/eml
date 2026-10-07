@@ -83,7 +83,7 @@ impl Table<'_> {
     fn unify_arrow_lin(&mut self, a: ArrowLin, b: ArrowLin) -> Result<(), UnifyError> {
         match (a, b) {
             (ArrowLin::Known(x), ArrowLin::Known(y)) if x == y => Ok(()),
-            (ArrowLin::Known(_), ArrowLin::Known(_)) => Err(UnifyError::Mismatch),
+            (ArrowLin::Known(_), ArrowLin::Known(_)) => Err(UnifyError::ArrowLinearity),
             (ArrowLin::Var(v), other) | (other, ArrowLin::Var(v)) => {
                 let other = match other {
                     ArrowLin::Known(l) => Bound::Const(l),

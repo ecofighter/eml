@@ -144,6 +144,8 @@ impl TyShape {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum UnifyError {
     Mismatch,
+    /// 型は同じで、矢印の線形性 `Lin` と `Unr` だけが食い違う。表示される型は線形性を持たないので、E2001 に説明を足す。
+    ArrowLinearity,
     Occurs,
     /// 閉じた row に含まれないエフェクト。
     MissingEffects(Vec<EffectId>),

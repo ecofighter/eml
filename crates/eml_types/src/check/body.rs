@@ -808,7 +808,10 @@ impl BodyCheck<'_, '_> {
                 "this expression would have an infinite type",
                 Label::new(self.file(), range, "infinite type"),
             )),
-            Err(_) => self.mismatch(range, expected, found, origin),
+            Err(error) => {
+                let arrow_linearity = error == UnifyError::ArrowLinearity;
+                self.report_mismatch(range, expected, found, origin, arrow_linearity);
+            }
         }
     }
 }

@@ -228,7 +228,7 @@ impl BodyCheck<'_, '_> {
             }
             // include_row は rigid な row 変数を束縛しない。型引数の単一化の失敗は `EffectArgs` か `Occurs` になるので、
             // `Mismatch` は起きない
-            Err(UnifyError::Mismatch) => unreachable!(
+            Err(UnifyError::Mismatch | UnifyError::ArrowLinearity) => unreachable!(
                 "including a row reports only missing effects, a missing row variable, effect arguments or an infinite type"
             ),
         };
@@ -306,6 +306,19 @@ impl BodyCheck<'_, '_> {
     }
 
     pub(super) fn mismatch(&mut self, range: TextRange, expected: Ty, found: Ty, origin: &Origin) {
+        self.report_mismatch(range, expected, found, origin, false);
+    }
+
+    /// 食い違いが矢印の線形性だけによるときは、期待した型と実際の型が同じ表示になるので、理由を note で足す
+    /// (docs/spec/types.md)。
+    pub(super) fn report_mismatch(
+        &mut self,
+        range: TextRange,
+        expected: Ty,
+        found: Ty,
+        origin: &Origin,
+        arrow_linearity: bool,
+    ) {
         let file = self.file();
         let expected = self
             .table
@@ -397,6 +410,11 @@ impl BodyCheck<'_, '_> {
             ),
             Origin::Inferred => diagnostic,
         };
+        if arrow_linearity {
+            diagnostic = diagnostic.with_note(
+                "this function can be called only once (it is a `once` continuation or captures a linear value), but this position needs a function that can be called any number of times",
+            );
+        }
         self.diagnostics.push(diagnostic);
     }
 }
