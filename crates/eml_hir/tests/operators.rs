@@ -31,9 +31,9 @@ fn prefix_minus_has_precedence_six() {
 
 #[test]
 fn and_and_or_become_if() {
-    insta::assert_snapshot!(lower_text("b : Bool\nb = True && False || True"), @r"
+    insta::assert_snapshot!(lower_text("b : Bool\nb = True && False || True"), @"
     b : Bool
-    b = (if (if True False False) True True)
+    b = (if (if Prelude.True Prelude.False Prelude.False) Prelude.True Prelude.True)
     ");
 }
 
@@ -46,9 +46,9 @@ fn pipes_are_calls_of_prelude_functions() {
     g : Int -> Int -> Int
     g a#0 b#1 = a#0
     p : Int
-    p = (@|> (@|> 1 @f) (@g 2))
+    p = (@Prelude.|> (@Prelude.|> 1 @f) (@g 2))
     q : Int
-    q = (@<| (@g 1) (@f 2))
+    q = (@Prelude.<| (@g 1) (@f 2))
     ");
 }
 
@@ -96,7 +96,7 @@ fn mixed_associativity_is_rejected_in_both_orders() {
     x : Int
     x = <missing>
     y : Int
-    y = (@>> 1 <missing>)
+    y = (@Prelude.>> 1 <missing>)
     ---
     E1001 2:7 cannot find operator `<+>`
     E1006 2:13 `<+>` and `>>` cannot be combined without parentheses
@@ -108,7 +108,7 @@ fn mixed_associativity_is_rejected_in_both_orders() {
 fn composition_operators_are_prelude_calls() {
     insta::assert_snapshot!(lower_text("h : Bool -> Bool\nh = not >> not << not"), @"
     h : Bool -> Bool
-    h = (@>> @not (@<< @not @not))
+    h = (@Prelude.>> @Prelude.not (@Prelude.<< @Prelude.not @Prelude.not))
     ");
 }
 
@@ -187,11 +187,11 @@ fn a_user_operator_without_a_fixity_is_infixl_9() {
 fn a_user_definition_hides_a_desugared_operator() {
     // ユーザーが `&&` を定義すると、短絡の `if` ではなく普通の呼び出しになる
     let text = "(&&) : Bool -> Bool -> Bool\na && b = b\n\nf : Bool\nf = True && False";
-    insta::assert_snapshot!(lower_text(text), @r"
+    insta::assert_snapshot!(lower_text(text), @"
     && : Bool -> Bool -> Bool
     && a#0 b#1 = b#1
     f : Bool
-    f = (@&& True False)
+    f = (@&& Prelude.True Prelude.False)
     ");
 }
 
@@ -206,7 +206,7 @@ fn operator_references_and_sections_become_lambdas() {
     c : Int -> Int
     c = (fn $x#0 -> (- 10 $x#0))
     d : Bool -> Bool -> Bool
-    d = (fn $a#0 $b#1 -> (if $a#0 $b#1 False))
+    d = (fn $a#0 $b#1 -> (if $a#0 $b#1 Prelude.False))
     e : Int
     e = (negate 1)
     ");

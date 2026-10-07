@@ -1,10 +1,10 @@
-use crate::common::{diagnostics, lower_text};
+use crate::common::{diagnostics, lower_files_text, lower_text};
 
 #[test]
 fn a_signature_and_an_equation_become_a_function() {
     insta::assert_snapshot!(lower_text("f : Int -> <IO> Unit\nf x = println (show_int x)"), @"
     f : Int -> <IO> Unit
-    f x#0 = (@IO.println (show_int x#0))
+    f x#0 = (@Prelude.IO.println (show_int x#0))
     ");
 }
 
@@ -41,7 +41,7 @@ fn if_without_else_and_annotations() {
     insta::assert_snapshot!(lower_text(text), @r#"
     f : Bool -> Unit
     f b#0 = {
-      (if b#0 (@IO.println "yes"))
+      (if b#0 (@Prelude.IO.println "yes"))
       (() : Unit)
     }
     "#);
@@ -52,7 +52,7 @@ fn unit_and_wildcard_parameters_and_literals() {
     let text = "g : Unit -> Bool -> String\ng () _ = if True then \"a\\n\" else \"b\"";
     insta::assert_snapshot!(lower_text(text), @r#"
     g : Unit -> Bool -> String
-    g () _ = (if True "a\n" "b")
+    g () _ = (if Prelude.True "a\n" "b")
     "#);
 }
 
@@ -373,4 +373,33 @@ fn cons_patterns_are_not_supported_yet() {
 fn a_user_defined_cons_constructor_is_matched() {
     let text = "data L = | Nil | Int :: L\nf : L -> Int\nf l = match l with\n  | y :: ys -> y\n  | Nil -> 0";
     assert_eq!(diagnostics(text), Vec::<String>::new());
+}
+
+#[test]
+fn modules_other_than_the_prelude_are_printed_in_order() {
+    let entry = "import Report.Csv\n\nf : Bool -> Bool\nf b = not b";
+    let csv = "import Report.Format\n\npub data Row =\n  | Row Int\n\npub effect Parse where\n  next : Unit -> Int\n\npub parse : Unit -> <Parse> Row\nparse () = Row (next ())\n\npub first : Row -> String\nfirst r = match r with\n  | Row n -> show_int n\n\npub run : Unit -> Row\nrun () = handle parse () with\n  | next () k -> resume k 1";
+    let format = "pub width : Int\nwidth = 8";
+    insta::assert_snapshot!(
+        lower_files_text(entry, &[("Report/Csv.em", csv), ("Report/Format.em", format)]),
+        @"
+    -- Main
+    f : Bool -> Bool
+    f b#0 = (@Prelude.not b#0)
+    -- Report.Csv
+    data Row
+      | Row Int
+    effect Parse
+      next : Unit -> Int
+    parse : Unit -> <Parse> Row
+    parse () = (Report.Csv.Row (@Report.Csv.Parse.next ()))
+    first : Row -> String
+    first r#0 = (match r#0 with | Report.Csv.Row n#1 -> (show_int n#1))
+    run : Unit -> Row
+    run () = (handle (@Report.Csv.parse ()) with | Report.Csv.next () k#0 -> (resume k#0 1) | return $r#1 -> $r#1)
+    -- Report.Format
+    width : Int
+    width = 8
+    "
+    );
 }

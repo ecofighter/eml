@@ -3,13 +3,29 @@
 use std::fmt::Write;
 
 use crate::hir::*;
-use crate::program::Program;
+use crate::program::{Module, ModuleId, Program};
 
-/// 入口のモジュールだけを表示する。Prelude はどのプログラムにもあるので、テストの表示に出さない。
+/// Prelude 以外のモジュールを番号の順に表示する。Prelude はどのプログラムにもあるので、テストの表示に出さない。
+/// 見出しはモジュールが2つ以上のときだけ付け、1ファイルのテストの表示を変えない。
 pub fn pretty(program: &Program) -> String {
-    let module = &program.modules[program.entry];
-    let items = &module.items;
+    let modules: Vec<&Module> = program
+        .modules
+        .iter()
+        .filter(|&(id, _)| id != program.prelude)
+        .map(|(_, module)| module)
+        .collect();
     let mut out = String::new();
+    for module in &modules {
+        if modules.len() > 1 {
+            writeln!(out, "-- {}", module.name).unwrap();
+        }
+        items(program, module, &mut out);
+    }
+    out
+}
+
+fn items(program: &Program, module: &Module, out: &mut String) {
+    let items = &module.items;
     for (_, def) in items.types.iter() {
         let TypeDefKind::Data { constructors } = &def.kind else {
             continue;
@@ -73,9 +89,8 @@ pub fn pretty(program: &Program) -> String {
             .signature
             .as_ref()
             .map_or(&no_generics, |signature| &signature.generics);
-        Printer { program, generics }.function(function, module.bodies.get(local), &mut out);
+        Printer { program, generics }.function(function, module.bodies.get(local), out);
     }
-    out
 }
 
 struct Printer<'a> {
@@ -84,6 +99,16 @@ struct Printer<'a> {
 }
 
 impl Printer<'_> {
+    /// 入口の外のモジュールの item への参照に、そのモジュールの名前を付ける。名前の解決のテストで、同じ名前の
+    /// どの定義に解決したかを読み分けるため。
+    fn qualified(&self, module: ModuleId, name: &str) -> String {
+        if module == self.program.entry {
+            name.to_string()
+        } else {
+            format!("{}.{name}", self.program.modules[module].name)
+        }
+    }
+
     fn constructor(&self, def: &TypeDef, ctor: &Constructor) -> String {
         // 中置のコンストラクタは、宣言と同じく2つのフィールドの間に書く
         if ctor.name.starts_with(':') && ctor.fields.len() == 2 {
@@ -236,7 +261,8 @@ impl Printer<'_> {
                 }
                 s.push_str(" with");
                 for clause in clauses {
-                    write!(s, " | {}", self.program[clause.op].name).unwrap();
+                    let op = &self.program[clause.op].name;
+                    write!(s, " | {}", self.qualified(clause.op.module, op)).unwrap();
                     for &pat in &clause.closure.params {
                         write!(s, " {}", self.pat(body, pat)).unwrap();
                     }
@@ -295,20 +321,23 @@ impl Printer<'_> {
         match res {
             Res::Local(local) => local_name(body, local),
             // intrinsic は Prelude の関数で、`@` を付けずに名前だけを出す。テストの表示を Prelude に左右させないため
-            Res::Function(function) => {
-                let function = &self.program[function];
+            Res::Function(id) => {
+                let function = &self.program[id];
                 if function.intrinsic {
                     function.name.clone()
                 } else {
-                    format!("@{}", function.name)
+                    format!("@{}", self.qualified(id.module, &function.name))
                 }
             }
-            Res::Operation(operation) => {
-                let operation = &self.program[operation];
+            Res::Operation(id) => {
+                let operation = &self.program[id];
                 let effect = &self.program[operation.effect].name;
-                format!("@{effect}.{}", operation.name)
+                format!(
+                    "@{}",
+                    self.qualified(id.module, &format!("{effect}.{}", operation.name))
+                )
             }
-            Res::Constructor(ctor) => self.program[ctor].name.clone(),
+            Res::Constructor(id) => self.qualified(id.module, &self.program[id].name),
         }
     }
 
@@ -319,12 +348,13 @@ impl Printer<'_> {
             PatKind::Wildcard => "_".to_string(),
             PatKind::Unit => "()".to_string(),
             PatKind::Con { ctor, args } => {
-                let name = &self.program[*ctor].name;
+                let bare = &self.program[*ctor].name;
+                let name = self.qualified(ctor.module, bare);
                 let args: Vec<String> = args.iter().map(|&arg| self.pat_atom(body, arg)).collect();
-                if name.starts_with(':') && args.len() == 2 {
+                if bare.starts_with(':') && args.len() == 2 {
                     format!("{} {name} {}", args[0], args[1])
                 } else if args.is_empty() {
-                    name.clone()
+                    name
                 } else {
                     format!("{name} {}", args.join(" "))
                 }
