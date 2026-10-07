@@ -517,6 +517,30 @@ fn a_user_unit_qualifies_the_empty_record() {
     assert_eq!(lowered.program.names.unit(), "Prelude.Unit");
 }
 
+#[test]
+fn a_std_name_defined_by_a_user_module_is_qualified_by_the_canonical_name() {
+    let std = [
+        ("Prelude.em", eml_hir::PRELUDE_SOURCE),
+        ("Fs.em", "pub data Tag = | A\n\npub data Only = | O"),
+    ];
+    let lowered = eml_test_support::lower_with_std(&std, "data Tag = | B");
+    assert_eq!(
+        eml_test_support::short(&lowered.files, &lowered.diagnostics),
+        Vec::<String>::new()
+    );
+    assert_eq!(
+        shown_names(&lowered),
+        [
+            "type Main.Tag -> Main.Tag",
+            "type Std.Fs.Tag -> Std.Fs.Tag",
+            "type Std.Fs.Only -> Only",
+            "constructor Main.B -> B",
+            "constructor Std.Fs.A -> A",
+            "constructor Std.Fs.O -> O",
+        ]
+    );
+}
+
 /// `M0` が `M1` を、`M1` が `M2` を import する、`self.0` 個のモジュールの鎖。
 struct Chain(usize);
 

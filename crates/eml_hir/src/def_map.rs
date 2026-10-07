@@ -10,10 +10,10 @@ use la_arena::{Idx, RawIdx};
 use crate::codes;
 use crate::hir::LangItems;
 use crate::item_tree::{Fixity, ImportName, ItemTree};
-use crate::load::{ImportTarget, LoadedModule};
+use crate::load::{ImportTarget, LoadedModule, STD_ROOT};
 use crate::names::DisplayNames;
 use crate::program::{
-    ConstructorId, EffectId, FunctionId, ItemId, ModuleId, OperationId, TypeDefId,
+    ConstructorId, EffectId, FunctionId, ItemId, ModuleId, ModuleOrigin, OperationId, TypeDefId,
 };
 
 /// 値の名前空間の定義を引いた結果。
@@ -180,6 +180,7 @@ impl Namespace for TypeItem {
 #[derive(Debug)]
 struct ModuleScope {
     name: String,
+    origin: ModuleOrigin,
     /// E1029 の secondary が定義を指すのに使う。
     file: FileId,
     /// 名前ごとの定義。ソースの位置の順で、使える定義の最初が名前の定義である (規則1)。
@@ -206,6 +207,9 @@ pub struct DefMap {
     modules: Vec<ModuleScope>,
     prelude: ModuleId,
     entry: ModuleId,
+    /// Prelude を除く標準ライブラリのモジュールの、短い名前 (`Fs`) からの表。ユーザーのモジュールが import なしで書く
+    /// 修飾子を引く。
+    std_short_names: HashMap<String, ModuleId>,
     lang: LangItems,
     names: DisplayNames,
 }
@@ -218,7 +222,7 @@ pub fn def_map(modules: &[LoadedModule]) -> (DefMap, Vec<Diagnostic>) {
         .iter()
         .enumerate()
         .map(|(index, module)| {
-            let mut scope = ModuleScope::new(module_id(index), &module.name, &module.tree);
+            let mut scope = ModuleScope::new(module_id(index), module);
             scope.check_duplicates(module.tree.file, &mut diagnostics);
             scope.attach_fixities(&module.tree, &mut diagnostics);
             scope
@@ -235,11 +239,21 @@ pub fn def_map(modules: &[LoadedModule]) -> (DefMap, Vec<Diagnostic>) {
     check_cycles(modules, &mut diagnostics);
     let lang = lang_items(&scopes[0]);
     let names = display_names(&scopes, lang.unit);
+    let std_short_names = scopes
+        .iter()
+        .enumerate()
+        .filter(|(_, scope)| scope.origin == ModuleOrigin::Std)
+        .filter_map(|(index, scope)| {
+            let short = scope.name.strip_prefix(STD_ROOT)?.strip_prefix('.')?;
+            Some((short.to_string(), module_id(index)))
+        })
+        .collect();
     (
         DefMap {
             modules: scopes,
             prelude: module_id(0),
             entry: module_id(1),
+            std_short_names,
             lang,
             names,
         },
@@ -330,7 +344,8 @@ fn item_id<T>(module: ModuleId, local: usize) -> ItemId<T> {
 impl ModuleScope {
     /// 局所の番号は `ItemTree` の順に振る。コンストラクタと操作は、宣言の順に通し番号に
     /// する。`lower` も同じ順にアリーナへ置く。
-    fn new(module: ModuleId, name: &str, tree: &ItemTree) -> ModuleScope {
+    fn new(module: ModuleId, loaded: &LoadedModule) -> ModuleScope {
+        let tree = &loaded.tree;
         let functions = (0..tree.functions.len())
             .map(|k| item_id(module, k))
             .collect();
@@ -368,7 +383,8 @@ impl ModuleScope {
             })
             .collect();
         let mut scope = ModuleScope {
-            name: name.to_string(),
+            name: loaded.name.clone(),
+            origin: loaded.origin,
             file: tree.file,
             values: HashMap::new(),
             types: HashMap::new(),
@@ -554,7 +570,8 @@ impl ModuleScope {
     }
 
     /// import の並びの小文字の名前と `(op)`。見つからない名前と `pub` でない名前は、並びの位置で報告して `None` を返す。
-    /// 重複した宣言の部品だけがある名前は、E1003 で報告済みなので黙って `None` を返す。
+    /// 重複した宣言の部品だけがある名前は、E1003 で報告済みなので黙って `None` を返す。標準ライブラリの `pub` でない
+    /// item は、定義がないものとして扱う (docs/spec/modules.md の「Prelude」)。
     fn export_value(
         &self,
         name: &str,
@@ -569,6 +586,9 @@ impl ModuleScope {
             }
             if definition.public {
                 return Some(definition.item);
+            }
+            if self.origin == ModuleOrigin::Std {
+                break;
             }
             diagnostics.push(private_name(
                 file,
@@ -598,14 +618,20 @@ impl ModuleScope {
     }
 
     /// import の並びの大文字の名前。型かエフェクトだけを見る (docs/spec/modules.md の「import」)。見つかれば、定義と
-    /// `pub` かを返す。`pub` でなければ並びの位置で報告する。
+    /// `pub` かを返す。`pub` でなければ並びの位置で報告する。標準ライブラリの `pub` でない item は、定義がないものとして
+    /// 扱う。
     fn export_type(
         &self,
         name: &str,
         (file, range): (FileId, TextRange),
         diagnostics: &mut Vec<Diagnostic>,
     ) -> Option<(TypeItem, bool)> {
-        let Some(definition) = self.types.get(name).and_then(|names| names.first()) else {
+        let Some(definition) = self
+            .types
+            .get(name)
+            .and_then(|names| names.first())
+            .filter(|definition| definition.public || self.origin == ModuleOrigin::User)
+        else {
             let diagnostic = not_in_module(
                 codes::UNDEFINED_TYPE,
                 file,
@@ -930,6 +956,10 @@ impl DefMap {
         &self.scope(module).name
     }
 
+    pub fn origin(&self, module: ModuleId) -> ModuleOrigin {
+        self.scope(module).origin
+    }
+
     pub fn lang(&self) -> LangItems {
         self.lang
     }
@@ -1197,8 +1227,8 @@ impl<'a> Resolver<'a> {
                 }
                 if definition.public {
                     add(&mut found, item, import);
-                } else if module != self.def_map.prelude {
-                    // Prelude の `pub` でない item は、定義がないものとして扱う (docs/spec/modules.md の「Prelude」)
+                } else if scope.origin == ModuleOrigin::User {
+                    // 標準ライブラリの `pub` でない item は、定義がないものとして扱う (docs/spec/modules.md の「Prelude」)
                     private.get_or_insert((scope.file, definition.range));
                 }
                 break;
@@ -1215,7 +1245,9 @@ impl<'a> Resolver<'a> {
     }
 
     /// 修飾子が指すモジュールと、それを作った import。`Prelude` はどのモジュールでも使える暗黙の修飾子で、import を
-    /// 持たない (docs/spec/modules.md の「Prelude」)。
+    /// 持たない (docs/spec/modules.md の「Prelude」)。どの import も作らない修飾子は、ユーザーのモジュールでだけ、同じ
+    /// 短い名前の標準ライブラリのモジュールを指す。import していないユーザーのモジュールは、修飾子にならない。標準ライブラリの
+    /// モジュールどうしは import で明示して使い、依存がすべて import に現れるようにする (循環の検査 E1027 のため)。
     fn targets(&self, qualifier: &str) -> Vec<(ImportTarget, Option<TextRange>)> {
         let mut targets: Vec<(ImportTarget, Option<TextRange>)> = self
             .own()
@@ -1230,6 +1262,12 @@ impl<'a> Resolver<'a> {
             .is_some_and(|prelude| prelude.name == qualifier)
         {
             targets.push((ImportTarget::Module(self.def_map.prelude), None));
+        }
+        if targets.is_empty()
+            && self.own().origin == ModuleOrigin::User
+            && let Some(&module) = self.def_map.std_short_names.get(qualifier)
+        {
+            targets.push((ImportTarget::Module(module), None));
         }
         targets
     }

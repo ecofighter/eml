@@ -11,17 +11,11 @@ const CHOICE: &str = "pub effect Choice where\n  multi choose : Unit -> Bool\n";
 /// Prelude の末尾に `extra` を足したプログラムを検査し、診断を「番号 文言」と、ラベルごとの「ファイル "指す文字列" 文言」
 /// の行にする。Prelude の行番号は Prelude を変えるたびに動くので、位置は指す文字列で示す。
 fn check_with_prelude(extra: &str, text: &str) -> String {
-    let lowered = eml_test_support::lower_with_prelude(
-        &format!("{}\n{extra}", eml_hir::PRELUDE_SOURCE),
-        text,
-    );
-    let (_, stage) = eml_types::check(&lowered.program);
-    let mut diagnostics = lowered.diagnostics;
-    diagnostics.extend(stage);
-    eml_diagnostics::sort_diagnostics(&mut diagnostics);
-    let files = &lowered.files;
+    let prelude = format!("{}\n{extra}", eml_hir::PRELUDE_SOURCE);
+    let checked = eml_test_support::check_with_std(&[("Prelude.em", &prelude)], text);
+    let files = &checked.files;
     let mut out = String::new();
-    for d in &diagnostics {
+    for d in &checked.diagnostics {
         writeln!(out, "{} {}", d.code, d.message).unwrap();
         for label in std::iter::once(&d.primary).chain(&d.secondary) {
             writeln!(out, "  {}", shown(files, label)).unwrap();
@@ -42,9 +36,9 @@ fn a_linear_misuse_in_the_prelude_points_into_the_prelude() {
     );
     insta::assert_snapshot!(check_with_prelude(&extra, ""), @r#"
     E3006 `f` must be used exactly once, but it is kept alive across a call that may resume more than once
-      Prelude.em "choose ()" this call may perform `choose`, a `multi` operation
-      Prelude.em "f" `f` is bound here
-      Prelude.em "choose" `choose` is declared `multi` here
+      <std>/Prelude.em "choose ()" this call may perform `choose`, a `multi` operation
+      <std>/Prelude.em "f" `f` is bound here
+      <std>/Prelude.em "choose" `choose` is declared `multi` here
     "#);
 }
 
@@ -57,7 +51,7 @@ fn a_carry_over_through_a_prelude_function_points_into_the_prelude() {
     insta::assert_snapshot!(check_with_prelude(&extra, text), @r#"
     E3006 `keep` keeps a linear value alive across a call that may resume more than once
       test.em "keep" `keep` is used here
-      Prelude.em "action ()" `x` is kept alive across this call
+      <std>/Prelude.em "action ()" `x` is kept alive across this call
     "#);
 }
 
@@ -67,7 +61,7 @@ fn linear_misuses_in_the_prelude_point_into_the_prelude() {
     let shown = check_with_prelude(extra, "");
     // どの診断も、すべてのラベルが Prelude の中を指す
     for line in shown.lines().filter(|line| line.starts_with("  ")) {
-        assert!(line.starts_with("  Prelude.em "), "{shown}");
+        assert!(line.starts_with("  <std>/Prelude.em "), "{shown}");
     }
     for code in ["E3002", "E3003", "E3004"] {
         assert!(shown.contains(code), "{code}\n{shown}");
@@ -81,7 +75,7 @@ fn a_carry_over_through_a_composition_points_into_the_prelude() {
     let shown = check_with_prelude(CHOICE, text);
     assert!(shown.starts_with("E3006 "), "{shown}");
     assert!(shown.contains("  test.em \">>\" "), "{shown}");
-    assert!(shown.contains("  Prelude.em "), "{shown}");
+    assert!(shown.contains("  <std>/Prelude.em "), "{shown}");
 }
 
 /// 入口と依存先のモジュールを検査し、推論結果と診断を並べる。

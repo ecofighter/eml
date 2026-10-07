@@ -149,7 +149,7 @@ fn prelude_functions_with_equations_are_not_intrinsic() {
         "{}\npub twice : Int -> Int\ntwice x = x + x\n",
         eml_hir::PRELUDE_SOURCE
     );
-    let lowered = eml_test_support::lower_with_prelude(&prelude, "");
+    let lowered = eml_test_support::lower_with_std(&[("Prelude.em", &prelude)], "");
     assert!(lowered.diagnostics.is_empty(), "{:?}", lowered.diagnostics);
     let program = lowered.program;
     let twice = function_id(&program, "twice");
@@ -259,7 +259,7 @@ fn a_main_in_the_prelude_is_not_the_entry_function() {
         "{}\nmain : Unit -> <IO> Unit\nmain () = ()\n",
         eml_hir::PRELUDE_SOURCE
     );
-    let lowered = eml_test_support::lower_with_prelude(&prelude, "");
+    let lowered = eml_test_support::lower_with_std(&[("Prelude.em", &prelude)], "");
     assert!(lowered.diagnostics.is_empty(), "{:?}", lowered.diagnostics);
     let program = lowered.program;
     assert!(

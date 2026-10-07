@@ -6,6 +6,8 @@ use std::collections::{HashMap, HashSet};
 use crate::program::{ConstructorId, EffectId, TypeDefId};
 
 /// ID から表示名を引く表。2つ以上のモジュールが定義する名前だけを、`Prelude.Bool` のようにモジュール名で修飾する。
+/// 標準ライブラリのモジュールの名前は正式な名前 (`Std.Fs`) なので、短い名前の修飾子とは違う `Std.Fs.File` になる。
+/// ユーザーのモジュールの `Fs` と見分けるため。
 #[derive(Debug, Clone)]
 pub struct DisplayNames {
     types: HashMap<TypeDefId, String>,

@@ -20,11 +20,16 @@ pub use names::DisplayNames;
 pub use pretty::pretty;
 pub use program::*;
 
-/// Prelude のソース。読み込みの段が読み、Core IR の intrinsic の表のテストも読む。
-pub const PRELUDE_SOURCE: &str = include_str!("prelude.em");
+/// 埋め込んだ標準ライブラリ。リポジトリの根の `std/` のファイル名と本文の組で、最初が Prelude である。`load` が読む。
+/// crate の外のファイルを埋め込むので `cargo package` は通らないが、eml は公開前なので受け入れた。並びが `std/` の
+/// ファイルと一致することは `eml_hir` の結合テストが確かめる。
+pub const STD: &[(&str, &str)] = &[("Prelude.em", include_str!("../../../std/Prelude.em"))];
 
-/// 診断の表示に使う Prelude のパス。
-pub const PRELUDE_PATH: &str = "Prelude.em";
+/// Prelude のソース。Core IR の intrinsic の表のテストも読む。
+pub const PRELUDE_SOURCE: &str = STD[0].1;
+
+/// 診断の表示に使う Prelude のパス。標準ライブラリのパスは `<std>/` で始め、手元の相対パスと見誤らないようにする。
+pub const PRELUDE_PATH: &str = "<std>/Prelude.em";
 
 pub mod codes {
     use eml_diagnostics::ErrorCode;

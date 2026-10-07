@@ -36,14 +36,15 @@ fn load(path: &Path, suffix: &str) -> Session {
     session
 }
 
-/// 単独のファイルのテストは import を書かない。分類のディレクトリにある別のテストのファイルを、モジュールとして読んで
-/// しまうため (docs/implementation/testing.md の「UI テスト」)。
+/// 単独のファイルのテストは、ユーザーのモジュールを import しない。分類のディレクトリにある別のテストのファイルを、
+/// モジュールとして読んでしまうため (docs/implementation/testing.md の「UI テスト」)。標準ライブラリのモジュールは
+/// いつも読み込むので数えない。
 fn assert_single_file(session: &Session, suffix: &str) {
-    let modules: Vec<&str> = session.module_names().collect();
+    let modules: Vec<&str> = session.user_module_names().collect();
     assert!(
-        modules.len() <= 2,
+        modules.len() <= 1,
         "{suffix} imports {}: a test that imports modules must be a directory with main.em",
-        modules[2..].join(", ")
+        modules[1..].join(", ")
     );
 }
 
@@ -204,6 +205,17 @@ fn main_right_under_a_category_fails() {
 #[should_panic(expected = "belongs to no test")]
 fn a_module_without_main_fails() {
     classify(&ui_root().join("run/modules/no_such_test/Lib.em"), "run");
+}
+
+#[test]
+fn a_single_file_test_may_use_the_standard_library() {
+    let session = Session::load(
+        "run/basics/hello.em",
+        "",
+        &eml_test_support::MemorySource(&[]),
+    );
+    assert!(session.module_names().count() > session.user_module_names().count());
+    assert_single_file(&session, "basics/hello.em");
 }
 
 #[test]

@@ -15,7 +15,12 @@ fn repo_root() -> PathBuf {
 /// 引用を探すファイル。`docs/superpowers` は作業中の設計と計画で、移す前の節を引くので除く。
 fn sources(root: &Path) -> Vec<PathBuf> {
     let mut files = vec![root.join("CLAUDE.md"), root.join("README.md")];
-    let mut dirs = vec![root.join("crates"), root.join("docs"), root.join("tests")];
+    let mut dirs = vec![
+        root.join("crates"),
+        root.join("docs"),
+        root.join("std"),
+        root.join("tests"),
+    ];
     while let Some(dir) = dirs.pop() {
         if dir.ends_with("docs/superpowers") || dir.ends_with("target") {
             continue;

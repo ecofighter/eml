@@ -54,11 +54,22 @@ impl Session {
         self.loaded.entry
     }
 
-    /// 読み込んだモジュールの名前。番号の順で、Prelude、入口 (`Main`)、import でたどった依存先の順に並ぶ。
+    /// 読み込んだモジュールの名前。番号の順で、Prelude、入口 (`Main`)、Prelude を除く標準ライブラリ、import でたどった
+    /// 依存先の順に並ぶ。
     pub fn module_names(&self) -> impl Iterator<Item = &str> {
         self.loaded
             .modules
             .iter()
+            .map(|module| module.name.as_str())
+    }
+
+    /// 出どころがユーザーのモジュールの名前。入口 (`Main`) と、import でたどった依存先である。標準ライブラリはいつも
+    /// 読み込むので、UI テストの harness は 1ファイルのテストが import していないことをこれで確かめる。
+    pub fn user_module_names(&self) -> impl Iterator<Item = &str> {
+        self.loaded
+            .modules
+            .iter()
+            .filter(|module| module.origin == eml_hir::ModuleOrigin::User)
             .map(|module| module.name.as_str())
     }
 

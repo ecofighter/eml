@@ -68,12 +68,23 @@ fn a_session_registers_the_prelude_for_rendering() {
     let diagnostic =
         eml_diagnostics::Diagnostic::error(eml_diagnostics::NOT_YET_SUPPORTED, "test", label);
     let rendered = eml_diagnostics::render(&[diagnostic], session.files());
-    assert!(rendered.contains("Prelude.em"));
+    assert!(rendered.contains("<std>/Prelude.em"));
 }
 
 #[test]
 fn the_prelude_alone_has_no_diagnostics() {
     assert!(single("").check().is_empty());
+}
+
+#[test]
+fn user_module_names_leave_out_the_standard_library() {
+    let source = MemorySource(&[("Util.em", "")]);
+    let session = Session::load("main.em", "import Util\n", &source);
+    assert_eq!(session.module_names().next(), Some("Prelude"));
+    assert_eq!(
+        session.user_module_names().collect::<Vec<_>>(),
+        ["Main", "Util"]
+    );
 }
 
 #[test]

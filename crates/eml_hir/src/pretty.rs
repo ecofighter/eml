@@ -3,15 +3,15 @@
 use std::fmt::Write;
 
 use crate::hir::*;
-use crate::program::{Module, ModuleId, Program};
+use crate::program::{Module, ModuleId, ModuleOrigin, Program};
 
-/// Prelude 以外のモジュールを番号の順に表示する。Prelude はどのプログラムにもあるので、テストの表示に出さない。
-/// 見出しはモジュールが2つ以上のときだけ付け、1ファイルのテストの表示を変えない。
+/// ユーザーのモジュールを番号の順に表示する。標準ライブラリのモジュールはどのプログラムにもあるので、テストの表示に
+/// 出さない。見出しはモジュールが2つ以上のときだけ付け、1ファイルのテストの表示を変えない。
 pub fn pretty(program: &Program) -> String {
     let modules: Vec<&Module> = program
         .modules
         .iter()
-        .filter(|&(id, _)| id != program.prelude)
+        .filter(|&(_, module)| module.origin == ModuleOrigin::User)
         .map(|(_, module)| module)
         .collect();
     let mut out = String::new();

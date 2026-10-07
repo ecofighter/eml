@@ -2,7 +2,7 @@
 
 use std::fmt::Write;
 
-use eml_hir::{DisplayNames, ModuleId, Program};
+use eml_hir::{DisplayNames, ModuleId, ModuleOrigin, Program};
 
 use crate::kind::Bound;
 use crate::kind::problem::KindScheme;
@@ -10,15 +10,16 @@ use crate::shape::Shape;
 use crate::ty::{KindConstraint, KindTerm, Linearity, Multiplicity, RowTerm};
 use crate::{Decl, DeclType, TypedProgram};
 
-/// Prelude 以外のモジュールを、モジュールの番号の順に表示する。Prelude はどのプログラムにもあるので、テストの表示を Prelude に
-/// 左右させないため。モジュールが2つ以上なら、`eml_hir::pretty` と同じく各モジュールの前に `-- 名前` の見出しを付ける。
+/// ユーザーのモジュールを、モジュールの番号の順に表示する。標準ライブラリのモジュールはどのプログラムにもあるので、テストの
+/// 表示を標準ライブラリに左右させないため。モジュールが2つ以上なら、`eml_hir::pretty` と同じく各モジュールの前に `-- 名前`
+/// の見出しを付ける。
 pub fn dump(program: &Program, typed: &TypedProgram) -> String {
     let names = &program.names;
     let modules: Vec<ModuleId> = program
         .modules
         .iter()
         .map(|(id, _)| id)
-        .filter(|&id| id != program.prelude)
+        .filter(|&id| program.origin(id) == ModuleOrigin::User)
         .collect();
     let mut out = String::new();
     for &module in &modules {

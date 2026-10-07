@@ -16,6 +16,15 @@ use crate::names::DisplayNames;
 
 pub type ModuleId = Idx<Module>;
 
+/// モジュールの出どころ。標準ライブラリのモジュールは、import の探し方、短い名前の修飾子、`pub` でない名前の扱いが
+/// ユーザーのモジュールと違う (docs/spec/modules.md の「モジュール」)。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ModuleOrigin {
+    /// 埋め込んだ `std/` のモジュール。Prelude を含む。
+    Std,
+    User,
+}
+
 /// item の ID。モジュールと、モジュールの中の番号の組で、プログラム全体で一意である。
 pub struct ItemId<T> {
     pub module: ModuleId,
@@ -162,7 +171,7 @@ impl<T, V: fmt::Debug> fmt::Debug for ItemMap<T, V> {
     }
 }
 
-/// プログラム全体の HIR。Prelude、入口、import でたどった依存先のモジュールからなる。
+/// プログラム全体の HIR。Prelude、入口、Prelude を除く標準ライブラリ、import でたどった依存先のモジュールからなる。
 #[derive(Debug)]
 pub struct Program {
     pub modules: Arena<Module>,
@@ -179,7 +188,9 @@ pub struct Program {
 #[derive(Debug)]
 pub struct Module {
     pub file: FileId,
+    /// 標準ライブラリのモジュールは正式な名前 (`Prelude`、`Std.Fs`) である。
     pub name: String,
+    pub origin: ModuleOrigin,
     /// ほかのモジュールと型検査の段0が見るもの。
     pub items: Items,
     /// 関数の本体。等式のある関数だけを含む。本体を item から分けるのは、本体を書き換えても item が変わらない
@@ -188,10 +199,11 @@ pub struct Module {
 }
 
 impl Module {
-    pub fn new(file: FileId, name: &str) -> Module {
+    pub fn new(file: FileId, name: &str, origin: ModuleOrigin) -> Module {
         Module {
             file,
             name: name.to_string(),
+            origin,
             items: Items::default(),
             bodies: ArenaMap::default(),
         }
@@ -261,6 +273,10 @@ impl Program {
 
     pub fn file(&self, module: ModuleId) -> FileId {
         self.modules[module].file
+    }
+
+    pub fn origin(&self, module: ModuleId) -> ModuleOrigin {
+        self.modules[module].origin
     }
 
     /// `eml run` が実行を始める関数。入口のモジュールだけから探し、Prelude には置かない

@@ -26,7 +26,11 @@ pub fn lower(def_map: &DefMap, modules: &[LoadedModule]) -> (Program, Vec<Diagno
     let mut arena = Arena::new();
     for (index, loaded) in modules.iter().enumerate() {
         let module = module_id(index);
-        let id = arena.alloc(Module::new(loaded.tree.file, def_map.module_name(module)));
+        let id = arena.alloc(Module::new(
+            loaded.tree.file,
+            def_map.module_name(module),
+            def_map.origin(module),
+        ));
         debug_assert_eq!(id, module);
     }
     for (index, loaded) in modules.iter().enumerate() {
