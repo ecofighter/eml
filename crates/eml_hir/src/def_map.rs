@@ -4,13 +4,13 @@
 
 use std::collections::{HashMap, HashSet};
 
-use eml_diagnostics::{Diagnostic, FileId, Label, TextRange};
+use eml_diagnostics::{Diagnostic, ErrorCode, FileId, Label, TextRange};
 use la_arena::{Idx, RawIdx};
 
 use crate::codes;
 use crate::hir::LangItems;
-use crate::item_tree::{Fixity, ItemTree};
-use crate::load::LoadedModule;
+use crate::item_tree::{Fixity, ImportName, ItemTree};
+use crate::load::{ImportTarget, LoadedModule};
 use crate::program::{
     ConstructorId, EffectId, FunctionId, ItemId, ModuleId, OperationId, TypeDefId,
 };
@@ -21,8 +21,6 @@ pub enum ValueItem {
     Function(FunctionId),
     Operation(OperationId),
     Constructor(ConstructorId),
-    /// 重複した `data` のコンストラクタか、重複した `effect` の操作。使った位置は診断を出さずに `Missing` にする。
-    Unusable,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -31,13 +29,51 @@ pub enum TypeItem {
     Effect(EffectId),
 }
 
-/// 種類を指定して名前を引いた結果 (規則3)。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Lookup<T> {
+/// 名前の参照。修飾子は1つのセグメントとは限らない (2つ以上は E1031)。
+#[derive(Debug, Clone, Copy)]
+pub enum NameRef<'a> {
+    Plain(&'a str),
+    Qualified { qualifier: &'a str, name: &'a str },
+}
+
+/// 名前を引いた結果。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Resolved<T> {
     Found(T),
-    /// 使えない定義だけが見つかった。診断を出さずに `Missing` にする。
-    Unusable,
+    /// 診断を出さずに誤りにする (重複した宣言の部品、壊れた import を通る参照)。
+    Silent,
     NotFound,
+    /// E1028。候補の定義を持ち込んだ import の位置 (自分のモジュールのファイル)。
+    Ambiguous(Vec<TextRange>),
+    /// E1029。ユーザーのモジュールの `pub` でない定義 (ファイル、位置)。
+    Private(FileId, TextRange),
+    /// E1031。
+    UnknownQualifier,
+}
+
+/// `Resolved` の内訳。`fixity` は、重複した宣言の部品には既定の fixity を使い、壊れた import から来た演算子には
+/// fixity を決めない。そのため、`Silent` の2つの理由をここでは分ける。
+enum Hit<T> {
+    Found(T),
+    Unusable,
+    Broken,
+    NotFound,
+    Ambiguous(Vec<TextRange>),
+    Private(FileId, TextRange),
+    UnknownQualifier,
+}
+
+impl<T> Hit<T> {
+    fn resolved(self) -> Resolved<T> {
+        match self {
+            Hit::Found(item) => Resolved::Found(item),
+            Hit::Unusable | Hit::Broken => Resolved::Silent,
+            Hit::NotFound => Resolved::NotFound,
+            Hit::Ambiguous(imports) => Resolved::Ambiguous(imports),
+            Hit::Private(file, range) => Resolved::Private(file, range),
+            Hit::UnknownQualifier => Resolved::UnknownQualifier,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -55,6 +91,14 @@ impl Value {
             Value::Constructor(id) => ValueItem::Constructor(id),
         }
     }
+
+    fn module(self) -> ModuleId {
+        match self {
+            Value::Function(id) => id.module,
+            Value::Operation(id) => id.module,
+            Value::Constructor(id) => id.module,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -66,9 +110,63 @@ struct Definition<T> {
     usable: bool,
 }
 
+/// import の並びで修飾なしにした名前の出どころ。
+#[derive(Debug, Clone, Copy)]
+struct Source<T> {
+    /// `None` は、壊れた import の名前か、並びで報告した名前である。どの種類の名前にも「不明」と答える
+    /// (docs/spec/modules.md の「誤りからの回復」)。
+    item: Option<T>,
+    /// 名前を持ち込んだ import。E1028 の secondary に使う。
+    import: TextRange,
+}
+
+#[derive(Debug)]
+struct Qualifier {
+    name: String,
+    target: ImportTarget,
+    import: TextRange,
+}
+
+/// モジュールの import のスコープ (docs/spec/modules.md の「import」)。
+#[derive(Debug, Default)]
+struct Imports {
+    /// import の順に並べる。合流した修飾子のモジュールを、診断で決まった順に示すため。
+    qualifiers: Vec<Qualifier>,
+    values: HashMap<String, Vec<Source<Value>>>,
+    types: HashMap<String, Vec<Source<TypeItem>>>,
+}
+
+/// 値と型の名前空間を同じ手順で引くための口。
+trait Namespace: Copy {
+    fn definitions(scope: &ModuleScope) -> &HashMap<String, Vec<Definition<Self>>>;
+    fn imported(imports: &Imports) -> &HashMap<String, Vec<Source<Self>>>;
+}
+
+impl Namespace for Value {
+    fn definitions(scope: &ModuleScope) -> &HashMap<String, Vec<Definition<Value>>> {
+        &scope.values
+    }
+
+    fn imported(imports: &Imports) -> &HashMap<String, Vec<Source<Value>>> {
+        &imports.values
+    }
+}
+
+impl Namespace for TypeItem {
+    fn definitions(scope: &ModuleScope) -> &HashMap<String, Vec<Definition<TypeItem>>> {
+        &scope.types
+    }
+
+    fn imported(imports: &Imports) -> &HashMap<String, Vec<Source<TypeItem>>> {
+        &imports.types
+    }
+}
+
 #[derive(Debug)]
 struct ModuleScope {
     name: String,
+    /// E1029 の secondary が定義を指すのに使う。
+    file: FileId,
     /// 名前ごとの定義。ソースの位置の順で、使える定義の最初が名前の定義である (規則1)。
     values: HashMap<String, Vec<Definition<Value>>>,
     types: HashMap<String, Vec<Definition<TypeItem>>>,
@@ -82,6 +180,9 @@ struct ModuleScope {
     constructors: Vec<Vec<ConstructorId>>,
     effects: Vec<EffectId>,
     operations: Vec<Vec<OperationId>>,
+    /// `T(..)` と `E(..)` が取り込む部品。型にはコンストラクタ、エフェクトには操作を、宣言の順に並べる。
+    parts: HashMap<TypeItem, Vec<(String, Value)>>,
+    imports: Imports,
 }
 
 /// プログラム全体の名前の表。
@@ -93,11 +194,11 @@ pub struct DefMap {
     lang: LangItems,
 }
 
-/// `modules[0]` を Prelude、`modules[1]` を入口のモジュールとして読む (読み込みの段の番号)。モジュールの名前は読み込みの段が
-/// 決める。値と型の名前空間の重複 (E1003)、fixity の重複 (E1021)、このモジュールにない演算子の fixity (E1022) を出す。
+/// モジュール 0 を Prelude、1 を入口として読む。値と型の名前空間の重複 (E1003)、fixity の重複 (E1021)、このモジュールに
+/// ない演算子の fixity (E1022)、import の並びの名前 (E1001、E1002、E1029)、import の循環 (E1027) を出す。
 pub fn def_map(modules: &[LoadedModule]) -> (DefMap, Vec<Diagnostic>) {
     let mut diagnostics = Vec::new();
-    let scopes: Vec<ModuleScope> = modules
+    let mut scopes: Vec<ModuleScope> = modules
         .iter()
         .enumerate()
         .map(|(index, module)| {
@@ -107,6 +208,15 @@ pub fn def_map(modules: &[LoadedModule]) -> (DefMap, Vec<Diagnostic>) {
             scope
         })
         .collect();
+    // 並びの名前は取り込む先のモジュールの表から引くので、すべてのモジュールの表を作ってから組む
+    let imports: Vec<Imports> = modules
+        .iter()
+        .map(|module| Imports::new(module, &scopes, &mut diagnostics))
+        .collect();
+    for (scope, imports) in scopes.iter_mut().zip(imports) {
+        scope.imports = imports;
+    }
+    check_cycles(modules, &mut diagnostics);
     let lang = lang_items(&scopes[0]);
     (
         DefMap {
@@ -117,6 +227,73 @@ pub fn def_map(modules: &[LoadedModule]) -> (DefMap, Vec<Diagnostic>) {
         },
         diagnostics,
     )
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Visit {
+    New,
+    Open,
+    Done,
+}
+
+/// import の循環 (E1027)。モジュールの番号の順に、import を宣言の順に深さ優先でたどり、たどっている途中のモジュールに
+/// 戻る import を、循環を閉じる import として報告する。報告した後も名前解決を続ける (docs/spec/modules.md の
+/// 「誤りからの回復」)。
+fn check_cycles(modules: &[LoadedModule], diagnostics: &mut Vec<Diagnostic>) {
+    let mut state = vec![Visit::New; modules.len()];
+    let mut path = Vec::new();
+    for start in 0..modules.len() {
+        if state[start] == Visit::New {
+            visit(modules, start, &mut state, &mut path, diagnostics);
+        }
+    }
+}
+
+fn visit(
+    modules: &[LoadedModule],
+    module: usize,
+    state: &mut [Visit],
+    path: &mut Vec<usize>,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    state[module] = Visit::Open;
+    path.push(module);
+    let loaded = &modules[module];
+    for (import, target) in loaded.tree.imports.iter().zip(&loaded.targets) {
+        let ImportTarget::Module(target) = *target else {
+            continue;
+        };
+        let target = index(target);
+        match state[target] {
+            Visit::New => visit(modules, target, state, path, diagnostics),
+            Visit::Open => {
+                let start = path
+                    .iter()
+                    .position(|&open| open == target)
+                    .expect("an open module is on the path");
+                let cycle: Vec<String> = path[start..]
+                    .iter()
+                    .chain([&target])
+                    .map(|&m| format!("`{}`", modules[m].name))
+                    .collect();
+                diagnostics.push(
+                    Diagnostic::error(
+                        codes::IMPORT_CYCLE,
+                        format!("importing `{}` makes an import cycle", modules[target].name),
+                        Label::new(
+                            loaded.tree.file,
+                            import.range,
+                            "this import closes the cycle",
+                        ),
+                    )
+                    .with_note(format!("the cycle is {}", cycle.join(" -> "))),
+                );
+            }
+            Visit::Done => {}
+        }
+    }
+    path.pop();
+    state[module] = Visit::Done;
 }
 
 /// 読み込みの段の番号のモジュールの ID。`lower` もモジュールを同じ順に置く。
@@ -170,6 +347,7 @@ impl ModuleScope {
             .collect();
         let mut scope = ModuleScope {
             name: name.to_string(),
+            file: tree.file,
             values: HashMap::new(),
             types: HashMap::new(),
             type_params: HashMap::new(),
@@ -180,6 +358,8 @@ impl ModuleScope {
             constructors,
             effects,
             operations,
+            parts: HashMap::new(),
+            imports: Imports::default(),
         };
         scope.declare(tree);
         scope
@@ -244,6 +424,10 @@ impl ModuleScope {
                     data.public,
                     usable,
                 );
+                self.parts
+                    .entry(TypeItem::Type(self.type_ids[k]))
+                    .or_default()
+                    .push((constructor.name.clone(), Value::Constructor(id)));
             }
         }
         for (k, effect) in tree.effects.iter().enumerate() {
@@ -258,6 +442,10 @@ impl ModuleScope {
                     effect.public,
                     usable,
                 );
+                self.parts
+                    .entry(TypeItem::Effect(self.effects[k]))
+                    .or_default()
+                    .push((operation.name.clone(), Value::Operation(id)));
             }
         }
         for names in self.values.values_mut() {
@@ -342,6 +530,173 @@ impl ModuleScope {
             }
         }
     }
+
+    /// import の並びの小文字の名前と `(op)`。見つからない名前と `pub` でない名前は、並びの位置で報告して `None` を返す。
+    /// 重複した宣言の部品だけがある名前は、E1003 で報告済みなので黙って `None` を返す。
+    fn export_value(
+        &self,
+        name: &str,
+        (file, range): (FileId, TextRange),
+        diagnostics: &mut Vec<Diagnostic>,
+    ) -> Option<Value> {
+        let mut unusable = false;
+        for definition in self.values.get(name).into_iter().flatten() {
+            if !definition.usable {
+                unusable = true;
+                continue;
+            }
+            if definition.public {
+                return Some(definition.item);
+            }
+            diagnostics.push(private_name(
+                file,
+                range,
+                name,
+                (self.file, definition.range),
+            ));
+            return None;
+        }
+        if !unusable {
+            diagnostics.push(not_in_module(
+                codes::UNDEFINED_NAME,
+                file,
+                range,
+                "value",
+                name,
+                &[&self.name],
+            ));
+        }
+        None
+    }
+
+    /// import の並びの大文字の名前。型かエフェクトだけを見る (docs/spec/modules.md の「import」)。見つかれば、定義と
+    /// `pub` かを返す。`pub` でなければ並びの位置で報告する。
+    fn export_type(
+        &self,
+        name: &str,
+        (file, range): (FileId, TextRange),
+        diagnostics: &mut Vec<Diagnostic>,
+    ) -> Option<(TypeItem, bool)> {
+        let Some(definition) = self.types.get(name).and_then(|names| names.first()) else {
+            diagnostics.push(not_in_module(
+                codes::UNDEFINED_TYPE,
+                file,
+                range,
+                "type or effect",
+                name,
+                &[&self.name],
+            ));
+            return None;
+        };
+        if !definition.public {
+            diagnostics.push(private_name(
+                file,
+                range,
+                name,
+                (self.file, definition.range),
+            ));
+        }
+        Some((definition.item, definition.public))
+    }
+}
+
+impl Imports {
+    /// 並びの名前を引けなければ、並びの位置で1回だけ報告し、名前を壊れた印で登録する。本体でその名前を使った位置は、
+    /// 診断を出さずに誤りになる (docs/spec/modules.md の「誤りからの回復」)。
+    fn new(
+        module: &LoadedModule,
+        scopes: &[ModuleScope],
+        diagnostics: &mut Vec<Diagnostic>,
+    ) -> Imports {
+        let file = module.tree.file;
+        let mut imports = Imports::default();
+        for (import, &target) in module.tree.imports.iter().zip(&module.targets) {
+            imports.qualifiers.push(Qualifier {
+                name: import.qualifier.0.clone(),
+                target,
+                import: import.range,
+            });
+            let target_scope = match target {
+                ImportTarget::Module(id) => Some(&scopes[index(id)]),
+                ImportTarget::Broken => None,
+            };
+            for listed in import.list.iter().flatten() {
+                match listed {
+                    ImportName::Value { name, range } => {
+                        let item = target_scope.and_then(|scope| {
+                            scope.export_value(name, (file, *range), diagnostics)
+                        });
+                        push_source(&mut imports.values, name, item, import.range);
+                    }
+                    ImportName::Type { name, range, all } => {
+                        let Some(scope) = target_scope else {
+                            push_source(&mut imports.types, name, None, import.range);
+                            continue;
+                        };
+                        let Some((item, public)) =
+                            scope.export_type(name, (file, *range), diagnostics)
+                        else {
+                            push_source(&mut imports.types, name, None, import.range);
+                            continue;
+                        };
+                        push_source(
+                            &mut imports.types,
+                            name,
+                            public.then_some(item),
+                            import.range,
+                        );
+                        if *all {
+                            for (part, value) in scope.parts.get(&item).into_iter().flatten() {
+                                push_source(
+                                    &mut imports.values,
+                                    part,
+                                    public.then_some(*value),
+                                    import.range,
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        imports
+    }
+}
+
+fn push_source<T>(
+    table: &mut HashMap<String, Vec<Source<T>>>,
+    name: &str,
+    item: Option<T>,
+    import: TextRange,
+) {
+    table
+        .entry(name.to_string())
+        .or_default()
+        .push(Source { item, import });
+}
+
+/// 同じ定義は、いくつの import が持ち込んでも1つと数える (docs/spec/modules.md の「名前の解決」)。
+fn add<T: PartialEq>(found: &mut Vec<(T, Option<TextRange>)>, item: T, import: Option<TextRange>) {
+    if !found.iter().any(|(seen, _)| *seen == item) {
+        found.push((item, import));
+    }
+}
+
+/// 壊れていない定義がちょうど1つならそれを使い、2つ以上なら曖昧にする。1つもなく壊れた import があれば、診断を出さずに
+/// 誤りにする (docs/spec/modules.md の「誤りからの回復」)。どれでもなければ `None` で、呼ぶ側が次を引く。
+fn decide<T>(mut found: Vec<(T, Option<TextRange>)>, broken: bool) -> Option<Hit<T>> {
+    match found.len() {
+        0 if broken => Some(Hit::Broken),
+        0 => None,
+        1 => found.pop().map(|(item, _)| Hit::Found(item)),
+        _ => Some(Hit::Ambiguous(
+            found.into_iter().filter_map(|(_, import)| import).collect(),
+        )),
+    }
+}
+
+fn index(module: ModuleId) -> usize {
+    u32::from(module.into_raw()) as usize
 }
 
 fn push<T>(
@@ -385,6 +740,50 @@ pub(crate) fn duplicate(
         Label::new(file, again, "defined again here"),
     )
     .with_secondary(Label::new(file, first, "first defined here"))
+}
+
+/// 修飾か import の並びで引いた名前が、そのモジュールにない (E1001、E1002)。合流した修飾子では、すべてのモジュールを並べる
+/// (docs/spec/modules.md の「新しい診断」)。
+pub(crate) fn not_in_module(
+    code: ErrorCode,
+    file: FileId,
+    range: TextRange,
+    what: &str,
+    name: &str,
+    modules: &[&str],
+) -> Diagnostic {
+    let names: Vec<String> = modules.iter().map(|module| format!("`{module}`")).collect();
+    let (place, label) = match names.len() {
+        1 => ("module", "not found in this module"),
+        _ => ("modules", "not found in these modules"),
+    };
+    Diagnostic::error(
+        code,
+        format!(
+            "cannot find {what} `{name}` in {place} {}",
+            names.join(", ")
+        ),
+        Label::new(file, range, label),
+    )
+}
+
+/// ユーザーのモジュールの `pub` でない名前を、修飾か import の並びで使った (E1029)。
+pub(crate) fn private_name(
+    file: FileId,
+    range: TextRange,
+    name: &str,
+    (definition_file, definition): (FileId, TextRange),
+) -> Diagnostic {
+    Diagnostic::error(
+        codes::PRIVATE_NAME,
+        format!("`{name}` is not public"),
+        Label::new(file, range, "private to its module"),
+    )
+    .with_secondary(Label::new(
+        definition_file,
+        definition,
+        "defined here without `pub`",
+    ))
 }
 
 /// Prelude から、処理系が役割で引く item を名前で引く。`pub` によらない。Prelude は処理系と一緒に配るソースなので、
@@ -480,12 +879,12 @@ impl DefMap {
     }
 
     fn scope(&self, module: ModuleId) -> &ModuleScope {
-        &self.modules[u32::from(module.into_raw()) as usize]
+        &self.modules[index(module)]
     }
 }
 
-/// モジュールの中から名前を引く口。名前を引く順は「自分のモジュール → Prelude の `pub` の名前」である
-/// (docs/spec/modules.md の「名前の解決」)。
+/// モジュールの中から名前を引く口。修飾しない名前は「自分のモジュール → import の並びの名前 → Prelude の `pub` の名前」
+/// の順に引き、修飾した名前は修飾子のモジュールだけを引く (docs/spec/modules.md の「名前の解決」)。
 #[derive(Clone, Copy)]
 pub struct Resolver<'a> {
     def_map: &'a DefMap,
@@ -506,74 +905,31 @@ impl<'a> Resolver<'a> {
         (self.module != self.def_map.prelude).then(|| self.def_map.scope(self.def_map.prelude))
     }
 
-    pub fn value(&self, name: &str) -> Option<ValueItem> {
-        if let Some(definitions) = self.own().values.get(name) {
-            if let Some(definition) = definitions.iter().find(|definition| definition.usable) {
-                return Some(definition.item.item());
-            }
-            if !definitions.is_empty() {
-                return Some(ValueItem::Unusable);
-            }
-        }
-        self.prelude()?
-            .values
-            .get(name)?
-            .iter()
-            .find(|definition| definition.usable && definition.public)
-            .map(|definition| definition.item.item())
+    pub fn value(&self, name: NameRef<'_>) -> Resolved<ValueItem> {
+        self.lookup(name, |value: Value| Some(value.item()))
+            .resolved()
     }
 
     /// パターンの先頭の名前。コンストラクタだけから引く (規則3)。
-    pub fn constructor(&self, name: &str) -> Lookup<ConstructorId> {
-        self.lookup(name, |value| match value {
+    pub fn constructor(&self, name: NameRef<'_>) -> Resolved<ConstructorId> {
+        self.lookup(name, |value: Value| match value {
             Value::Constructor(id) => Some(id),
             _ => None,
         })
+        .resolved()
     }
 
     /// handler の節の先頭の名前。操作だけから引く (規則3、docs/spec/modules.md の「名前の解決」)。
-    pub fn operation(&self, name: &str) -> Lookup<OperationId> {
-        self.lookup(name, |value| match value {
+    pub fn operation(&self, name: NameRef<'_>) -> Resolved<OperationId> {
+        self.lookup(name, |value: Value| match value {
             Value::Operation(id) => Some(id),
             _ => None,
         })
+        .resolved()
     }
 
-    fn lookup<T>(&self, name: &str, kind: impl Fn(Value) -> Option<T>) -> Lookup<T> {
-        let mut unusable = false;
-        for definition in self.own().values.get(name).into_iter().flatten() {
-            let Some(found) = kind(definition.item) else {
-                continue;
-            };
-            if definition.usable {
-                return Lookup::Found(found);
-            }
-            unusable = true;
-        }
-        if unusable {
-            return Lookup::Unusable;
-        }
-        let from_prelude = self.prelude().and_then(|prelude| {
-            prelude
-                .values
-                .get(name)?
-                .iter()
-                .filter(|definition| definition.usable && definition.public)
-                .find_map(|definition| kind(definition.item))
-        });
-        from_prelude.map_or(Lookup::NotFound, Lookup::Found)
-    }
-
-    pub fn type_item(&self, name: &str) -> Option<TypeItem> {
-        if let Some(definition) = self.own().types.get(name).and_then(|names| names.first()) {
-            return Some(definition.item);
-        }
-        self.prelude()?
-            .types
-            .get(name)?
-            .iter()
-            .find(|definition| definition.public)
-            .map(|definition| definition.item)
+    pub fn type_item(&self, name: NameRef<'_>) -> Resolved<TypeItem> {
+        self.lookup(name, |item: TypeItem| Some(item)).resolved()
     }
 
     pub fn type_params(&self, id: TypeDefId) -> usize {
@@ -594,23 +950,162 @@ impl<'a> Resolver<'a> {
             .unwrap_or(0)
     }
 
-    /// 演算子の fixity。名前を解決した先の定義に付く。別のモジュールの定義の fixity は、宣言が `pub` のときだけ効く。
-    /// 宣言がなければ `infixl 9` (docs/spec/declarations.md の「fixity」)。
-    pub fn fixity(&self, op: &str) -> Fixity {
-        let value = match self.value(op) {
-            Some(ValueItem::Function(id)) => Value::Function(id),
-            Some(ValueItem::Operation(id)) => Value::Operation(id),
-            Some(ValueItem::Constructor(id)) => Value::Constructor(id),
-            Some(ValueItem::Unusable) | None => return Fixity::DEFAULT,
+    /// 組み直しに使う fixity。名前を解決した先の定義に付き、別のモジュールの定義の fixity は宣言が `pub` のときだけ効く。
+    /// 宣言がなければ `infixl 9` である (docs/spec/declarations.md の「fixity」)。曖昧な演算子と壊れた import から来た
+    /// 演算子は `None` で、組み直さない (docs/spec/modules.md の「誤りからの回復」)。
+    pub fn fixity(&self, op: NameRef<'_>) -> Option<Fixity> {
+        let value = match self.lookup(op, |value: Value| Some(value)) {
+            Hit::Found(value) => value,
+            Hit::Broken | Hit::Ambiguous(_) => return None,
+            Hit::Unusable | Hit::NotFound | Hit::Private(..) | Hit::UnknownQualifier => {
+                return Some(Fixity::DEFAULT);
+            }
         };
-        let module = match value {
-            Value::Function(id) => id.module,
-            Value::Operation(id) => id.module,
-            Value::Constructor(id) => id.module,
-        };
+        let module = value.module();
         match self.def_map.scope(module).fixities.get(&value) {
-            Some((fixity, public, _)) if module == self.module || *public => *fixity,
-            _ => Fixity::DEFAULT,
+            Some((fixity, public, _)) if module == self.module || *public => Some(*fixity),
+            _ => Some(Fixity::DEFAULT),
         }
+    }
+
+    /// 修飾子が指すモジュールの名前 (`Report.Csv`)。壊れた import は数えない。E1001 と E1002 の「in module」に使う。
+    pub fn qualifier_modules(&self, qualifier: &str) -> Vec<&'a str> {
+        let mut names: Vec<&'a str> = Vec::new();
+        for (target, _) in self.targets(qualifier) {
+            if let ImportTarget::Module(module) = target {
+                let name = self.def_map.scope(module).name.as_str();
+                if !names.contains(&name) {
+                    names.push(name);
+                }
+            }
+        }
+        names
+    }
+
+    fn lookup<V: Namespace, T: PartialEq>(
+        &self,
+        name: NameRef<'_>,
+        kind: impl Fn(V) -> Option<T>,
+    ) -> Hit<T> {
+        match name {
+            NameRef::Plain(name) => self.plain(name, kind),
+            NameRef::Qualified { qualifier, name } => self.qualified(qualifier, name, kind),
+        }
+    }
+
+    /// 種類の決まった位置では、どの段でも `kind` の種類の定義だけを見る。曖昧さも同じ種類の定義どうしでだけ数える
+    /// (docs/spec/modules.md の「名前の解決」)。
+    fn plain<V: Namespace, T: PartialEq>(
+        &self,
+        name: &str,
+        kind: impl Fn(V) -> Option<T>,
+    ) -> Hit<T> {
+        let own = self.own();
+        let mut unusable = false;
+        for definition in V::definitions(own).get(name).into_iter().flatten() {
+            let Some(item) = kind(definition.item) else {
+                continue;
+            };
+            if definition.usable {
+                return Hit::Found(item);
+            }
+            unusable = true;
+        }
+        // 重複した宣言の部品だけがある名前も、自分のモジュールの名前として import と Prelude の名前を隠す
+        // (docs/spec/modules.md の「名前空間」の規則2)
+        if unusable {
+            return Hit::Unusable;
+        }
+        let mut found = Vec::new();
+        let mut broken = false;
+        for source in V::imported(&own.imports).get(name).into_iter().flatten() {
+            match source.item.map(&kind) {
+                None => broken = true,
+                Some(None) => {}
+                Some(Some(item)) => add(&mut found, item, Some(source.import)),
+            }
+        }
+        if let Some(hit) = decide(found, broken) {
+            return hit;
+        }
+        let Some(prelude) = self.prelude() else {
+            return Hit::NotFound;
+        };
+        V::definitions(prelude)
+            .get(name)
+            .into_iter()
+            .flatten()
+            .filter(|definition| definition.usable && definition.public)
+            .find_map(|definition| kind(definition.item))
+            .map_or(Hit::NotFound, Hit::Found)
+    }
+
+    /// 修飾子のモジュールだけを引く。合流した修飾子では、すべてのモジュールを合わせて引く (docs/spec/modules.md の
+    /// 「import」)。
+    fn qualified<V: Namespace, T: PartialEq>(
+        &self,
+        qualifier: &str,
+        name: &str,
+        kind: impl Fn(V) -> Option<T>,
+    ) -> Hit<T> {
+        let targets = self.targets(qualifier);
+        if targets.is_empty() {
+            return Hit::UnknownQualifier;
+        }
+        let mut found = Vec::new();
+        let mut broken = false;
+        let mut private = None;
+        let mut unusable = false;
+        for (target, import) in targets {
+            let ImportTarget::Module(module) = target else {
+                broken = true;
+                continue;
+            };
+            let scope = self.def_map.scope(module);
+            for definition in V::definitions(scope).get(name).into_iter().flatten() {
+                let Some(item) = kind(definition.item) else {
+                    continue;
+                };
+                if !definition.usable {
+                    unusable = true;
+                    continue;
+                }
+                if definition.public {
+                    add(&mut found, item, import);
+                } else if module != self.def_map.prelude {
+                    // Prelude の `pub` でない item は、定義がないものとして扱う (docs/spec/modules.md の「Prelude」)
+                    private.get_or_insert((scope.file, definition.range));
+                }
+                break;
+            }
+        }
+        if let Some(hit) = decide(found, broken) {
+            return hit;
+        }
+        match private {
+            Some((file, range)) => Hit::Private(file, range),
+            None if unusable => Hit::Unusable,
+            None => Hit::NotFound,
+        }
+    }
+
+    /// 修飾子が指すモジュールと、それを作った import。`Prelude` はどのモジュールでも使える暗黙の修飾子で、import を
+    /// 持たない (docs/spec/modules.md の「Prelude」)。
+    fn targets(&self, qualifier: &str) -> Vec<(ImportTarget, Option<TextRange>)> {
+        let mut targets: Vec<(ImportTarget, Option<TextRange>)> = self
+            .own()
+            .imports
+            .qualifiers
+            .iter()
+            .filter(|bound| bound.name == qualifier)
+            .map(|bound| (bound.target, Some(bound.import)))
+            .collect();
+        if self
+            .prelude()
+            .is_some_and(|prelude| prelude.name == qualifier)
+        {
+            targets.push((ImportTarget::Module(self.def_map.prelude), None));
+        }
+        targets
     }
 }

@@ -1,4 +1,4 @@
-use crate::common::{diagnostics, lower_files_text, lower_text};
+use crate::common::{diagnostics, lower_files_text, lower_text, module_codes, module_report};
 
 #[test]
 fn a_signature_and_an_equation_become_a_function() {
@@ -401,5 +401,83 @@ fn modules_other_than_the_prelude_are_printed_in_order() {
     width : Int
     width = 8
     "
+    );
+}
+
+#[test]
+fn an_import_cycle_is_reported_at_the_import_that_closes_it() {
+    // 循環を報告した後も名前解決を続けるので、入口の未定義の名前も報告する
+    let modules = [
+        ("A.em", "import B\n\npub a : Int\na = 1"),
+        ("B.em", "import A\n\npub b : Int\nb = 2"),
+    ];
+    insta::assert_snapshot!(module_report("import A\n\nmain : Unit -> Unit\nmain () = nope", &modules), @r"
+    E1001 test.em 4:11 cannot find value `nope`
+      test.em 4:11 not found in this scope
+    E1027 B.em 1:1 importing `A` makes an import cycle
+      B.em 1:1 this import closes the cycle
+      note: the cycle is `A` -> `B` -> `A`
+    ");
+}
+
+#[test]
+fn a_module_importing_itself_is_a_cycle() {
+    let modules = [("A.em", "import A\n\npub a : Int\na = 1")];
+    insta::assert_snapshot!(module_report("import A\n\nf : Int\nf = 1", &modules), @r"
+    E1027 A.em 1:1 importing `A` makes an import cycle
+      A.em 1:1 this import closes the cycle
+      note: the cycle is `A` -> `A`
+    ");
+}
+
+#[test]
+fn shared_dependencies_are_not_a_cycle() {
+    // A と B が同じ D を読む菱形の依存は、D を1回だけ読み、循環にしない
+    let modules = [
+        ("A.em", "import D (d)\n\npub a : Int\na = d"),
+        ("B.em", "import D (d)\n\npub b : Int\nb = d"),
+        ("D.em", "pub d : Int\nd = 1"),
+    ];
+    assert_eq!(
+        module_codes("import A (a)\nimport B (b)\n\nf : Int\nf = a", &modules),
+        Vec::<String>::new()
+    );
+}
+
+#[test]
+fn an_ambiguous_name_is_reported_where_it_is_used() {
+    // 節の先頭は操作だけを見るので、同じ `get` でも曖昧にならない
+    let modules = [
+        ("A.em", "pub get : Unit -> Int\nget () = 1"),
+        ("B.em", "pub effect E where\n  get : Unit -> Int"),
+    ];
+    let entry = "import A (get)\nimport B (E(..))\n\nf : Unit -> Int\nf () = get ()\n\ng : Unit -> Int\ng () =\n  handle 1 with\n    | get () k -> resume k 2\n    | return x -> x";
+    insta::assert_snapshot!(module_report(entry, &modules), @r"
+    E1028 test.em 5:8 `get` is ambiguous
+      test.em 5:8 this name refers to more than one definition
+      test.em 1:1 one of the definitions is imported here
+      test.em 2:1 one of the definitions is imported here
+    ");
+}
+
+#[test]
+fn a_name_from_a_broken_import_is_a_silent_error() {
+    // `import Missing (show_int)` は Prelude の `show_int` を隠し、使った位置は診断を出さずに誤りの式になる
+    assert_eq!(
+        module_codes(
+            "import Missing (show_int)\n\nf : Int -> String\nf n = show_int n",
+            &[]
+        ),
+        ["E1026 test.em 1:8"]
+    );
+}
+
+#[test]
+fn an_import_after_a_declaration_is_still_resolved() {
+    // E0011 だけを出し、import そのものは読み込んでスコープに登録する
+    let modules = [("A.em", "pub x : Int\nx = 1")];
+    assert_eq!(
+        module_codes("f : Int\nf = x\n\nimport A (x)", &modules),
+        ["E0011 test.em 4:1"]
     );
 }

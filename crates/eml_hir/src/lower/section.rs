@@ -140,7 +140,7 @@ impl BodyLowering<'_> {
 
     /// `$x op e` と組むときの、右の被演算子に許される最小の優先順位。`climb` が演算子の直後で使う値と同じ。
     fn right_operand_minimum(&self, op: &str) -> u8 {
-        let Fixity { precedence, assoc } = self.items.fixity(op);
+        let Fixity { precedence, assoc } = self.fixity(op);
         if assoc == Assoc::Right {
             precedence
         } else {
@@ -154,7 +154,7 @@ impl BodyLowering<'_> {
     /// 右が空いたセクションの先頭の `-` は、優先順位 6 の左結合の演算子として数える (`(- 2 *)` は E1023、`(- 2 +)` は可)。
     /// 左が空いたセクションの先頭の `-` は、`section` が E1006 として検査する。
     fn looser_operator(&self, op: &str, seq: &ast::OpSeq, hole: Hole) -> Option<SyntaxToken> {
-        let outer = self.items.fixity(op);
+        let outer = self.fixity(op);
         // 左が空いていれば `$x op (e)` と組むので右結合、右が空いていれば `(e) op $x` と組むので左結合が合う
         let toward_hole = match hole {
             Hole::Left => Assoc::Right,
@@ -178,7 +178,7 @@ impl BodyLowering<'_> {
                     } else if prefix {
                         continue;
                     } else {
-                        self.items.fixity(token.text())
+                        self.fixity(token.text())
                     };
                     let tighter = inner.precedence > outer.precedence;
                     let same_side = inner.precedence == outer.precedence

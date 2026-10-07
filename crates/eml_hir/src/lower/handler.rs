@@ -5,9 +5,9 @@ use eml_diagnostics::{Diagnostic, Label, TextRange};
 use eml_syntax::ast;
 
 use super::expr::BodyLowering;
-use super::{PathName, path_name};
+use super::{NameKind, NameUse, PathName, path_name, unresolved};
 use crate::codes;
-use crate::def_map::Lookup;
+use crate::def_map::{NameRef, Resolved};
 use crate::hir::*;
 
 /// 節を読みながら集める情報。
@@ -111,16 +111,13 @@ impl BodyLowering<'_> {
             PathName::Missing => return,
         };
         let name_range = name.text_range();
-        let op = match self.items.operation(name.text()) {
-            Lookup::Found(op) => op,
-            // 重複した effect の操作である。重複は E1003 で報告済み
-            Lookup::Unusable => return,
-            Lookup::NotFound => {
-                self.diagnostics.push(Diagnostic::error(
-                    codes::UNDEFINED_NAME,
-                    format!("cannot find effect operation `{}`", name.text()),
-                    Label::new(self.file, name_range, "not an operation of any effect"),
-                ));
+        let op = match self.items.operation(NameRef::Plain(name.text())) {
+            Resolved::Found(op) => op,
+            other => {
+                let at = NameUse::plain(name.text(), name_range);
+                if let Some(diagnostic) = unresolved(self.file, NameKind::Operation, &at, other) {
+                    self.diagnostics.push(diagnostic);
+                }
                 return;
             }
         };

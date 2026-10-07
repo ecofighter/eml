@@ -6,12 +6,12 @@ mod ops;
 mod section;
 mod types;
 
-use eml_diagnostics::{Diagnostic, Label};
+use eml_diagnostics::{Diagnostic, ErrorCode, FileId, Label, TextRange};
 use eml_syntax::{SyntaxToken, ast};
 use la_arena::{Arena, ArenaMap, Idx};
 
 use crate::codes;
-use crate::def_map::{DefMap, module_id};
+use crate::def_map::{DefMap, NameRef, Resolved, module_id};
 use crate::hir::*;
 use crate::item_tree::{FunctionItem, ItemTree};
 use crate::load::LoadedModule;
@@ -207,4 +207,116 @@ pub(super) fn path_name(path: Option<ast::Path>) -> PathName {
             .map_or(PathName::Missing, |name| PathName::Plain(name.token())),
         None => PathName::Missing,
     }
+}
+
+/// 名前の種類。引けなかったときの診断の番号と文言を決める。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum NameKind {
+    Value,
+    Constructor,
+    Operator,
+    Operation,
+    Type,
+    Effect,
+}
+
+impl NameKind {
+    fn code(self) -> ErrorCode {
+        match self {
+            NameKind::Type | NameKind::Effect => codes::UNDEFINED_TYPE,
+            NameKind::Value | NameKind::Constructor | NameKind::Operator | NameKind::Operation => {
+                codes::UNDEFINED_NAME
+            }
+        }
+    }
+
+    fn noun(self) -> &'static str {
+        match self {
+            NameKind::Value => "value",
+            NameKind::Constructor => "constructor",
+            NameKind::Operator => "operator",
+            NameKind::Operation => "effect operation",
+            NameKind::Type => "type",
+            NameKind::Effect => "effect",
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            NameKind::Operation => "not an operation of any effect",
+            _ => "not found in this scope",
+        }
+    }
+}
+
+/// 名前を使った位置。
+pub(super) struct NameUse<'a> {
+    pub name: NameRef<'a>,
+    /// 名前の全体の位置。E1001、E1002、E1028 が指す。
+    pub range: TextRange,
+}
+
+impl<'a> NameUse<'a> {
+    pub(super) fn plain(name: &'a str, range: TextRange) -> NameUse<'a> {
+        NameUse {
+            name: NameRef::Plain(name),
+            range,
+        }
+    }
+
+    /// 書いたままの名前 (`Csv.parse`)。
+    pub(super) fn written(&self) -> String {
+        match self.name {
+            NameRef::Plain(name) => name.to_string(),
+            NameRef::Qualified { qualifier, name } => format!("{qualifier}.{name}"),
+        }
+    }
+}
+
+/// 名前が見つからない (E1001、E1002)。
+pub(super) fn not_found(file: FileId, kind: NameKind, at: &NameUse<'_>) -> Diagnostic {
+    Diagnostic::error(
+        kind.code(),
+        format!("cannot find {} `{}`", kind.noun(), at.written()),
+        Label::new(file, at.range, kind.label()),
+    )
+}
+
+/// 名前を引けなかった結果の診断。`Silent` は、重複した宣言の部品 (E1003 で報告済み) か、壊れた import や並びで報告した
+/// 名前なので、診断を出さない (docs/spec/modules.md の「誤りからの回復」)。
+pub(super) fn unresolved<T>(
+    file: FileId,
+    kind: NameKind,
+    at: &NameUse<'_>,
+    result: Resolved<T>,
+) -> Option<Diagnostic> {
+    match result {
+        Resolved::NotFound => Some(not_found(file, kind, at)),
+        Resolved::Ambiguous(imports) => Some(ambiguous(file, at, &imports)),
+        // 修飾しない名前は修飾子の誤りにならず、`pub` でない名前は import の並びで報告済みである
+        Resolved::Found(_)
+        | Resolved::Silent
+        | Resolved::Private(..)
+        | Resolved::UnknownQualifier => None,
+    }
+}
+
+/// E1028。secondary は、別々の定義をそれぞれ持ち込んだ import である (docs/spec/modules.md の「名前の解決」)。
+pub(super) fn ambiguous(file: FileId, at: &NameUse<'_>, imports: &[TextRange]) -> Diagnostic {
+    let diagnostic = Diagnostic::error(
+        codes::AMBIGUOUS_NAME,
+        format!("`{}` is ambiguous", at.written()),
+        Label::new(
+            file,
+            at.range,
+            "this name refers to more than one definition",
+        ),
+    );
+    imports.iter().fold(diagnostic, |diagnostic, &import| {
+        diagnostic.with_secondary(Label::new(
+            file,
+            import,
+            "one of the definitions is imported here",
+        ))
+    })
 }

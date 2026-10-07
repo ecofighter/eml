@@ -2,9 +2,9 @@ use eml_diagnostics::{Diagnostic, FileId, Label, TextRange};
 use eml_syntax::{SyntaxToken, ast};
 use la_arena::Arena;
 
-use super::{PathName, path_name};
+use super::{NameKind, NameUse, PathName, not_found, path_name, unresolved};
 use crate::codes;
-use crate::def_map::{Resolver, TypeItem};
+use crate::def_map::{Resolved, Resolver, TypeItem};
 use crate::hir::{
     EffectRef, Generics, RowRef, RowVarDecl, RowVarId, TypeRef, TypeRefId, TypeRefKind, TypeVarDecl,
 };
@@ -38,7 +38,9 @@ impl TypeLowering<'_> {
         let range = ty.range();
         let kind = match ty {
             ast::Type::PathType(path) => match path_name(path.path()) {
-                PathName::Plain(name) => self.applied(&name, Vec::new(), range),
+                PathName::Plain(name) => {
+                    self.applied(&NameUse::plain(name.text(), range), Vec::new(), range)
+                }
                 PathName::Qualified => {
                     self.unsupported(range, "qualified names are not supported yet")
                 }
@@ -68,7 +70,9 @@ impl TypeLowering<'_> {
                     })
                     .collect();
                 match path_name(app.path()) {
-                    PathName::Plain(name) => self.applied(&name, args, range),
+                    PathName::Plain(name) => {
+                        self.applied(&NameUse::plain(name.text(), range), args, range)
+                    }
                     PathName::Qualified => {
                         self.unsupported(range, "qualified names are not supported yet")
                     }
@@ -88,27 +92,26 @@ impl TypeLowering<'_> {
         self.alloc(kind, range)
     }
 
-    fn applied(
-        &mut self,
-        name: &SyntaxToken,
-        args: Vec<TypeRefId>,
-        range: TextRange,
-    ) -> TypeRefKind {
-        match self.items.type_item(name.text()) {
-            Some(TypeItem::Type(id)) => {
+    fn applied(&mut self, at: &NameUse<'_>, args: Vec<TypeRefId>, range: TextRange) -> TypeRefKind {
+        match self.items.type_item(at.name) {
+            Resolved::Found(TypeItem::Type(id)) => {
                 let expected = self.items.type_params(id);
                 if args.len() != expected {
-                    self.arity_error(name.text(), expected, args.len(), range);
+                    self.arity_error(&at.written(), expected, args.len(), range);
                     return TypeRefKind::Error;
                 }
                 TypeRefKind::Con(id, args)
             }
-            Some(TypeItem::Effect(_)) | None => {
-                self.diagnostics.push(Diagnostic::error(
-                    codes::UNDEFINED_TYPE,
-                    format!("cannot find type `{}`", name.text()),
-                    Label::new(self.file, range, "not found in this scope"),
-                ));
+            // エフェクトの名前は型の位置に書けない
+            Resolved::Found(TypeItem::Effect(_)) => {
+                self.diagnostics
+                    .push(not_found(self.file, NameKind::Type, at));
+                TypeRefKind::Error
+            }
+            other => {
+                if let Some(diagnostic) = unresolved(self.file, NameKind::Type, at, other) {
+                    self.diagnostics.push(diagnostic);
+                }
                 TypeRefKind::Error
             }
         }
@@ -156,8 +159,9 @@ impl TypeLowering<'_> {
                 }
                 PathName::Missing => continue,
             };
-            match self.items.type_item(name.text()) {
-                Some(TypeItem::Effect(id)) => {
+            let at = NameUse::plain(name.text(), effect.range());
+            match self.items.type_item(at.name) {
+                Resolved::Found(TypeItem::Effect(id)) => {
                     let args: Vec<TypeRefId> = effect
                         .args()
                         .map(|arg| {
@@ -167,18 +171,22 @@ impl TypeLowering<'_> {
                         .collect();
                     let expected = self.items.effect_params(id);
                     if args.len() != expected {
-                        self.arity_error(name.text(), expected, args.len(), effect.range());
+                        self.arity_error(&at.written(), expected, args.len(), effect.range());
                         valid = false;
                         continue;
                     }
                     effects.push(EffectRef { effect: id, args });
                 }
-                Some(TypeItem::Type(_)) | None => {
-                    self.diagnostics.push(Diagnostic::error(
-                        codes::UNDEFINED_TYPE,
-                        format!("cannot find effect `{}`", name.text()),
-                        Label::new(self.file, effect.range(), "not found in this scope"),
-                    ));
+                // 型の名前は row に書けない
+                Resolved::Found(TypeItem::Type(_)) => {
+                    self.diagnostics
+                        .push(not_found(self.file, NameKind::Effect, &at));
+                    valid = false;
+                }
+                other => {
+                    if let Some(diagnostic) = unresolved(self.file, NameKind::Effect, &at, other) {
+                        self.diagnostics.push(diagnostic);
+                    }
                     valid = false;
                 }
             }

@@ -3,9 +3,9 @@ use eml_syntax::{SyntaxKind, SyntaxToken, ast};
 use la_arena::Arena;
 
 use super::types::{TypeLowering, Vars};
-use super::{PathName, path_name};
+use super::{NameKind, NameUse, PathName, path_name, unresolved};
 use crate::codes;
-use crate::def_map::{Lookup, Resolver, ValueItem};
+use crate::def_map::{NameRef, Resolved, Resolver, ValueItem};
 use crate::hir::*;
 use crate::item_tree::{Assoc, Fixity};
 use crate::program::Module;
@@ -324,32 +324,27 @@ impl<'a> BodyLowering<'a> {
             .find(|(local, _)| local == text)
             .map(|&(_, local)| local);
         let res = match local {
-            Some(local) => Some(Res::Local(local)),
-            None => match self.items.value(text) {
-                Some(ValueItem::Function(id)) => Some(Res::Function(id)),
-                Some(ValueItem::Operation(id)) => Some(Res::Operation(id)),
-                Some(ValueItem::Constructor(id)) => Some(Res::Constructor(id)),
-                // 重複した宣言の部品である。重複は E1003 で報告済み (docs/spec/modules.md の「名前空間」の規則2)
-                Some(ValueItem::Unusable) => return self.alloc(ExprKind::Missing, range),
-                None => None,
+            Some(local) => Res::Local(local),
+            None => match self.items.value(NameRef::Plain(text)) {
+                Resolved::Found(ValueItem::Function(id)) => Res::Function(id),
+                Resolved::Found(ValueItem::Operation(id)) => Res::Operation(id),
+                Resolved::Found(ValueItem::Constructor(id)) => Res::Constructor(id),
+                other => {
+                    let kind = if name.kind() == SyntaxKind::UIDENT {
+                        NameKind::Constructor
+                    } else {
+                        NameKind::Value
+                    };
+                    if let Some(diagnostic) =
+                        unresolved(self.file, kind, &NameUse::plain(text, range), other)
+                    {
+                        self.diagnostics.push(diagnostic);
+                    }
+                    return self.alloc(ExprKind::Missing, range);
+                }
             },
         };
-        match res {
-            Some(res) => self.alloc(ExprKind::Path(res), range),
-            None => {
-                let what = if name.kind() == SyntaxKind::UIDENT {
-                    "constructor"
-                } else {
-                    "value"
-                };
-                self.diagnostics.push(Diagnostic::error(
-                    codes::UNDEFINED_NAME,
-                    format!("cannot find {what} `{text}`"),
-                    Label::new(self.file, range, "not found in this scope"),
-                ));
-                self.alloc(ExprKind::Missing, range)
-            }
-        }
+        self.alloc(ExprKind::Path(res), range)
     }
 
     /// `(f a) b` を、引数の揃った1つの呼び出しとして型検査できるように、入れ子の呼び出しを平たくする。
@@ -549,7 +544,11 @@ impl<'a> BodyLowering<'a> {
                     })
                     .collect();
                 match path_name(con.path()) {
-                    PathName::Plain(name) => self.constructor_pat(&name, args, range),
+                    PathName::Plain(name) => self.constructor_pat(
+                        &NameUse::plain(name.text(), name.text_range()),
+                        args,
+                        range,
+                    ),
                     PathName::Qualified => {
                         self.unsupported_pat(range, "qualified names are not supported yet")
                     }
@@ -634,7 +633,7 @@ impl<'a> BodyLowering<'a> {
         let mut lhs = operands[*position];
         while let Some(operator) = operators.get(*position) {
             let text = operator.text().to_string();
-            let Fixity { precedence, assoc } = self.items.fixity(&text);
+            let Fixity { precedence, assoc } = self.fixity(&text);
             if precedence < min_precedence {
                 break;
             }
@@ -670,7 +669,11 @@ impl<'a> BodyLowering<'a> {
                 ));
                 PatKind::Missing
             } else {
-                self.constructor_pat(operator, vec![lhs, rhs], whole)
+                self.constructor_pat(
+                    &NameUse::plain(operator.text(), operator.text_range()),
+                    vec![lhs, rhs],
+                    whole,
+                )
             };
             lhs = self.pats.alloc(Pat { kind, range: whole });
             previous = Some((text, precedence, assoc));
@@ -680,25 +683,17 @@ impl<'a> BodyLowering<'a> {
 
     /// 引数のパターンは呼び出し側が先に変換する。コンストラクタが決まらなくても引数の変数を束縛し、枝の本体で名前の
     /// 誤りを連鎖させないため。
-    fn constructor_pat(
-        &mut self,
-        name: &SyntaxToken,
-        args: Vec<PatId>,
-        range: TextRange,
-    ) -> PatKind {
-        let ctor = match self.items.constructor(name.text()) {
-            Lookup::Found(ctor) => ctor,
-            Lookup::Unusable => return PatKind::Missing,
-            Lookup::NotFound => {
-                // `::` は M3 のリストのコンストラクタである。ユーザーが同じ名前のコンストラクタを定義していれば、上で引ける
-                if name.text() == "::" {
-                    return self.unsupported_pat(name.text_range(), "lists are not supported yet");
+    fn constructor_pat(&mut self, at: &NameUse<'_>, args: Vec<PatId>, range: TextRange) -> PatKind {
+        let ctor = match self.items.constructor(at.name) {
+            Resolved::Found(ctor) => ctor,
+            // `::` は M3 のリストのコンストラクタである。ユーザーが同じ名前のコンストラクタを定義していれば、上で引ける
+            Resolved::NotFound if matches!(at.name, NameRef::Plain("::")) => {
+                return self.unsupported_pat(at.range, "lists are not supported yet");
+            }
+            other => {
+                if let Some(diagnostic) = unresolved(self.file, NameKind::Constructor, at, other) {
+                    self.diagnostics.push(diagnostic);
                 }
-                self.diagnostics.push(Diagnostic::error(
-                    codes::UNDEFINED_NAME,
-                    format!("cannot find constructor `{}`", name.text()),
-                    Label::new(self.file, name.text_range(), "not found in this scope"),
-                ));
                 return PatKind::Missing;
             }
         };
@@ -712,7 +707,7 @@ impl<'a> BodyLowering<'a> {
                 codes::CONSTRUCTOR_ARITY,
                 format!(
                     "`{}` takes {}, but {given}",
-                    name.text(),
+                    at.written(),
                     arguments(expected)
                 ),
                 Label::new(

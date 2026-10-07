@@ -4,8 +4,9 @@ use eml_diagnostics::{Diagnostic, Label, TextRange, TextSize};
 use eml_syntax::ast::{self, OpSeqElement};
 
 use super::expr::BodyLowering;
+use super::{NameKind, NameUse, unresolved};
 use crate::codes;
-use crate::def_map::ValueItem;
+use crate::def_map::{NameRef, Resolved, ValueItem};
 use crate::hir::{ExprId, ExprKind, Res};
 use crate::item_tree::{Assoc, Fixity};
 
@@ -64,7 +65,7 @@ impl BodyLowering<'_> {
         let mut lhs = self.operand(cursor, min_precedence);
         while let Some(Piece::Operator { text, range }) = cursor.peek() {
             // fixity は名前が解決した先の定義に付く (docs/spec/declarations.md の「fixity」)
-            let Fixity { precedence, assoc } = self.items.fixity(&text);
+            let Fixity { precedence, assoc } = self.fixity(&text);
             if precedence < min_precedence {
                 break;
             }
@@ -142,8 +143,8 @@ impl BodyLowering<'_> {
         // 解決した先が Prelude の `&&` か `||` のときだけ、短絡評価にするため `if` に脱糖する。
         // ユーザーの定義は Prelude の演算子を隠すので、`&&` を定義すれば普通の呼び出しになる
         // (docs/spec/declarations.md の「fixity」)
-        let res = match self.items.value(op) {
-            Some(ValueItem::Function(id)) if id == self.lang.and => {
+        let res = match self.items.value(NameRef::Plain(op)) {
+            Resolved::Found(ValueItem::Function(id)) if id == self.lang.and => {
                 let otherwise = self.alloc(
                     ExprKind::Path(Res::Constructor(self.lang.false_ctor)),
                     op_range,
@@ -157,7 +158,7 @@ impl BodyLowering<'_> {
                     range,
                 );
             }
-            Some(ValueItem::Function(id)) if id == self.lang.or => {
+            Resolved::Found(ValueItem::Function(id)) if id == self.lang.or => {
                 let then = self.alloc(
                     ExprKind::Path(Res::Constructor(self.lang.true_ctor)),
                     op_range,
@@ -171,11 +172,10 @@ impl BodyLowering<'_> {
                     range,
                 );
             }
-            Some(ValueItem::Function(id)) => Some(Res::Function(id)),
-            Some(ValueItem::Constructor(ctor)) => Some(Res::Constructor(ctor)),
-            Some(ValueItem::Operation(operation)) => Some(Res::Operation(operation)),
-            Some(ValueItem::Unusable) => None,
-            None if op == "::" => {
+            Resolved::Found(ValueItem::Function(id)) => Some(Res::Function(id)),
+            Resolved::Found(ValueItem::Constructor(ctor)) => Some(Res::Constructor(ctor)),
+            Resolved::Found(ValueItem::Operation(operation)) => Some(Res::Operation(operation)),
+            Resolved::NotFound if op == "::" => {
                 let callee = self.unsupported(op_range, "lists are not supported yet");
                 return self.alloc(
                     ExprKind::Call {
@@ -185,12 +185,15 @@ impl BodyLowering<'_> {
                     range,
                 );
             }
-            None => {
-                self.diagnostics.push(Diagnostic::error(
-                    codes::UNDEFINED_NAME,
-                    format!("cannot find operator `{op}`"),
-                    Label::new(self.file, op_range, "not found in this scope"),
-                ));
+            other => {
+                if let Some(diagnostic) = unresolved(
+                    self.file,
+                    NameKind::Operator,
+                    &NameUse::plain(op, op_range),
+                    other,
+                ) {
+                    self.diagnostics.push(diagnostic);
+                }
                 None
             }
         };
@@ -205,5 +208,13 @@ impl BodyLowering<'_> {
             },
             range,
         )
+    }
+
+    /// 組み直しに使う fixity。曖昧な演算子と壊れた import から来た演算子は fixity が決まらないので、既定の `infixl 9`
+    /// で組む。演算子そのものの誤りは、`binary` と `constructor_pat` が報告する。
+    pub(super) fn fixity(&self, op: &str) -> Fixity {
+        self.items
+            .fixity(NameRef::Plain(op))
+            .unwrap_or(Fixity::DEFAULT)
     }
 }

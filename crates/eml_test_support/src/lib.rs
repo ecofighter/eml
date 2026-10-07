@@ -323,13 +323,27 @@ pub fn fixes(files: &SourceFiles, diagnostics: &[Diagnostic]) -> String {
 
 /// 1件を、先頭の行に続けてラベル、note、help を字下げした行にする。
 pub fn full(files: &SourceFiles, diagnostics: &[Diagnostic]) -> String {
+    report(diagnostics, |label| position(files, label).to_string())
+}
+
+/// 位置の前にファイルの表示のパスを付けた `full`。複数のモジュールのテストで、診断がどのファイルを指すかを読み分けるため。
+pub fn full_with_paths(files: &SourceFiles, diagnostics: &[Diagnostic]) -> String {
+    report(diagnostics, |label| located(files, label))
+}
+
+/// `test.em 1:2` の形の位置。
+pub fn located(files: &SourceFiles, label: &Label) -> String {
+    format!("{} {}", files.path(label.file), position(files, label))
+}
+
+fn report(diagnostics: &[Diagnostic], at: impl Fn(&Label) -> String) -> String {
     let mut out = String::new();
     for d in diagnostics {
-        let at = position(files, &d.primary);
-        writeln!(out, "{} {at} {}", d.code, d.message).unwrap();
-        writeln!(out, "  {at} {}", d.primary.message).unwrap();
+        let primary = at(&d.primary);
+        writeln!(out, "{} {primary} {}", d.code, d.message).unwrap();
+        writeln!(out, "  {primary} {}", d.primary.message).unwrap();
         for label in &d.secondary {
-            writeln!(out, "  {} {}", position(files, label), label.message).unwrap();
+            writeln!(out, "  {} {}", at(label), label.message).unwrap();
         }
         for note in &d.notes {
             writeln!(out, "  note: {note}").unwrap();
