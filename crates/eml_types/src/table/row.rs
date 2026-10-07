@@ -14,6 +14,18 @@ impl Table<'_> {
                 None => break,
             }
         }
+        // handle できない `IO` は組み込みの handler だけが処理するので、row の中に何回あっても同じ意味になる。2つ目以降を
+        // 落とし、単一化、包含、表示のすべてで1つとして扱う (docs/spec/types.md の「推論」)
+        let io = self.lang.io;
+        let mut seen_io = false;
+        labels.retain(|label| {
+            if label.effect != io {
+                return true;
+            }
+            let first = !seen_io;
+            seen_io = true;
+            first
+        });
         Row { labels, tail }
     }
 

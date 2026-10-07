@@ -1,5 +1,5 @@
 use super::*;
-use crate::context::test_context;
+use crate::context::{Context, test_context};
 use crate::kind::solve::{residual_of, solve};
 
 /// Prelude だけのプログラムの表示名で型を書く。Prelude の名前は重ならないので、修飾しない。
@@ -421,11 +421,41 @@ fn continuations_unify_by_their_parts_and_are_linear() {
 }
 
 #[test]
-fn labels_of_one_effect_pair_up_in_order() {
+fn a_repeated_io_label_resolves_to_one() {
     let context = test_context();
     let mut table = Table::new(&context);
-    let io = table.lang.io;
-    let label = |args: Vec<Ty>| Label { effect: io, args };
+    let io = Label::plain(table.lang.io);
+    let tail = table.fresh_row_var();
+    let row = Row {
+        labels: vec![io.clone()],
+        tail: Tail::Var(tail),
+    };
+    assert_eq!(
+        table.unify_row(
+            &Row {
+                labels: Vec::new(),
+                tail: Tail::Var(tail)
+            },
+            &Row::closed(vec![io.clone()])
+        ),
+        Ok(())
+    );
+    assert_eq!(table.resolve_row(&row), Row::closed(vec![io]));
+}
+
+#[test]
+fn labels_of_one_effect_pair_up_in_order() {
+    let program = crate::test_program("effect State s where\n  get : Unit -> s");
+    let context = Context::new(&program);
+    let mut table = Table::new(&context);
+    let (state, _) = program
+        .effects()
+        .find(|&(id, _)| id != table.lang.io)
+        .unwrap();
+    let label = |args: Vec<Ty>| Label {
+        effect: state,
+        args,
+    };
     let a = Row::closed(vec![label(vec![table.int]), label(vec![table.string])]);
     let x = table.fresh_var();
     let y = table.fresh_var();

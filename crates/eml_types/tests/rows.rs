@@ -1,5 +1,7 @@
 //! エフェクトの row の検査 (E2002、row 変数、未定義のエフェクト)。
 
+use eml_test_support::{check, short_text};
+
 use crate::common::check_text;
 
 #[test]
@@ -179,4 +181,30 @@ fn an_unknown_qualifier_in_a_row_is_reported_once() {
     E1031 1:14 unknown module qualifier `Log`
       1:14 no import gives this qualifier
     ");
+}
+
+/// handle できない `IO` は、row の中で重なっても1つとして扱う (docs/spec/types.md の「推論」)。`<IO | e>` に
+/// `e := <IO>` が入っても、`<IO>` の `main` から呼べる。
+#[test]
+fn io_from_a_row_variable_does_not_count_twice() {
+    let text = "\
+effect Fail where
+  never fail : String -> a
+
+try : (Unit -> <Fail | e> a) -> <IO | e> Int
+try action =
+  handle action () with
+    | fail msg -> 0
+    | return x -> 1
+
+work : Unit -> <Fail, IO> Unit
+work () = println \"x\"
+
+main : Unit -> <IO> Unit
+main () =
+  let n = try (fn () -> work ())
+  println (show_int n)
+";
+    let checked = check(text);
+    assert_eq!(short_text(&checked.files, &checked.diagnostics), "");
 }
