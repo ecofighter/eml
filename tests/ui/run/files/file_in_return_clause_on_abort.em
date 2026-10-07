@@ -5,7 +5,7 @@ effect Fail where
 
 main : Unit -> <IO> Unit
 main () =
-  let f = open "input.txt"
+  let f = Fs.open "input.txt"
   handle fail () with
     | fail () -> println "aborted"
-    | return x -> close f
+    | return x -> Fs.close f

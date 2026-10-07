@@ -8,10 +8,10 @@ effect Ask where
 
 pick : Unit -> <Choice, IO> Unit
 pick () =
-  let f = open "input.txt"
+  let f = Fs.open "input.txt"
   handle (if choose () then ask () else 0) with
     | ask () k -> k 1
-    | return n -> close f
+    | return n -> Fs.close f
 
 main : Unit -> <IO> Unit
 main () =

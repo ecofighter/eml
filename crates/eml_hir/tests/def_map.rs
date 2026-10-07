@@ -473,6 +473,7 @@ fn names_defined_by_two_modules_are_qualified() {
         [
             "type Main.Bool -> Main.Bool",
             "type Main.Cont -> Cont",
+            "type Std.Fs.File -> File",
             "type Report.Row -> Report.Row",
             "type Report.Answer -> Answer",
             "effect Main.Log -> Main.Log",
@@ -502,6 +503,7 @@ fn a_duplicate_in_one_module_counts_once() {
         [
             "type Main.T -> T",
             "type Main.T -> T",
+            "type Std.Fs.File -> File",
             "constructor Main.A -> A",
             "constructor Main.B -> B",
         ]
@@ -513,17 +515,22 @@ fn a_user_unit_qualifies_the_empty_record() {
     let lowered = eml_test_support::lower("data Unit = | U");
     assert_eq!(
         shown_names(&lowered),
-        ["type Main.Unit -> Main.Unit", "constructor Main.U -> U"]
+        [
+            "type Main.Unit -> Main.Unit",
+            "type Std.Fs.File -> File",
+            "constructor Main.U -> U"
+        ]
     );
     assert_eq!(lowered.program.names.unit(), "Prelude.Unit");
 }
 
 #[test]
 fn a_std_name_defined_by_a_user_module_is_qualified_by_the_canonical_name() {
-    let std = [
-        ("Prelude.em", eml_hir::PRELUDE_SOURCE),
-        ("Fs.em", "pub data Tag = | A\n\npub data Only = | O"),
-    ];
+    let fs = format!(
+        "{}\npub data Tag = | A\n\npub data Only = | O",
+        eml_hir::STD[1].1
+    );
+    let std = [("Prelude.em", eml_hir::PRELUDE_SOURCE), ("Fs.em", &fs)];
     let lowered = eml_test_support::lower_with_std(&std, "data Tag = | B");
     assert_eq!(
         eml_test_support::short(&lowered.files, &lowered.diagnostics),
@@ -533,6 +540,7 @@ fn a_std_name_defined_by_a_user_module_is_qualified_by_the_canonical_name() {
         shown_names(&lowered),
         [
             "type Main.Tag -> Main.Tag",
+            "type Std.Fs.File -> File",
             "type Std.Fs.Tag -> Std.Fs.Tag",
             "type Std.Fs.Only -> Only",
             "constructor Main.B -> B",

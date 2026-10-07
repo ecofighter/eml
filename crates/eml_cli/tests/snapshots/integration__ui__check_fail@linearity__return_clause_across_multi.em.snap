@@ -8,11 +8,11 @@ input_file: tests/ui/check-fail/linearity/return_clause_across_multi.em
     │
  12 │ ╭─▶   handle (if choose () then ask () else 0) with
     ┆ ┆   
- 14 │ ├─▶     | return n -> close f
-    │ │       ──────────┬──────────   
-    │ │                 ╰───────────── the `return` clause captures `f`
-    │ │                               
-    │ ╰─────────────────────────────── this handle may perform `choose`, a `multi` operation
+ 14 │ ├─▶     | return n -> Fs.close f
+    │ │       ────────────┬───────────   
+    │ │                   ╰────────────── the `return` clause captures `f`
+    │ │                                  
+    │ ╰────────────────────────────────── this handle may perform `choose`, a `multi` operation
     │
     ├─[ check-fail/linearity/return_clause_across_multi.em:12:3 ]
     │

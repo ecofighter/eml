@@ -23,7 +23,10 @@ pub use program::*;
 /// 埋め込んだ標準ライブラリ。リポジトリの根の `std/` のファイル名と本文の組で、最初が Prelude である。`load` が読む。
 /// crate の外のファイルを埋め込むので `cargo package` は通らないが、eml は公開前なので受け入れた。並びが `std/` の
 /// ファイルと一致することは `eml_hir` の結合テストが確かめる。
-pub const STD: &[(&str, &str)] = &[("Prelude.em", include_str!("../../../std/Prelude.em"))];
+pub const STD: &[(&str, &str)] = &[
+    ("Prelude.em", include_str!("../../../std/Prelude.em")),
+    ("Fs.em", include_str!("../../../std/Fs.em")),
+];
 
 /// Prelude のソース。標準ライブラリの Prelude を差し替えるテストが、本文に宣言を足すのに使う。
 pub const PRELUDE_SOURCE: &str = STD[0].1;

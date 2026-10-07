@@ -2,14 +2,14 @@
 effect Ask where
   ask : Unit -> Int
 
-use_file : File -> <Ask, IO> Int
+use_file : Fs.File -> <Ask, IO> Int
 use_file f =
-  close f
+  Fs.close f
   ask ()
 
 main : Unit -> <IO> Unit
 main () =
-  let f = open "input.txt"
+  let f = Fs.open "input.txt"
   let n =
     handle use_file f with
       | ask () k -> k 41

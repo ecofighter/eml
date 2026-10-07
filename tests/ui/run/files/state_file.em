@@ -5,11 +5,11 @@ effect Load where
 main : Unit -> <IO> Unit
 main () =
   let text =
-    handle load () from open "input.txt" with
+    handle load () from Fs.open "input.txt" with
       | load () k f ->
-          let (f, s) = read_all f
+          let (f, s) = Fs.read_all f
           k s f
       | return x f ->
-          close f
+          Fs.close f
           x
   println text

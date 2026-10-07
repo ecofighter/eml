@@ -2,12 +2,12 @@
 effect Fail where
   never fail : Unit -> a
 
-checked : File -> <Fail, IO> Unit
+checked : Fs.File -> <Fail, IO> Unit
 checked f =
   fail ()
-  close f
+  Fs.close f
 
 main : Unit -> <IO> Unit
 main () =
-  handle checked (open "input.txt") with
+  handle checked (Fs.open "input.txt") with
     | fail () -> println "aborted"

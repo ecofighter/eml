@@ -4,9 +4,9 @@ effect Choice where
 
 pick : Unit -> <Choice, IO> Unit
 pick () =
-  let f = open "input.txt"
+  let f = Fs.open "input.txt"
   let b = choose ()
-  close f
+  Fs.close f
 
 main : Unit -> <IO> Unit
 main () =

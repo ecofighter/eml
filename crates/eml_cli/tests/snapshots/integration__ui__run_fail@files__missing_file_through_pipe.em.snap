@@ -5,4 +5,4 @@ input_file: tests/ui/run-fail/files/missing_file_through_pipe.em
 ---
 --- stdout ---
 --- runtime error ---
-cannot open `missing.txt`: not found in `extern$Prelude.open`
+cannot open `missing.txt`: not found in `extern$Std.Fs.open`

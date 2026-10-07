@@ -75,13 +75,17 @@ fn modules_are_numbered_in_breadth_first_order() {
         ],
     );
     assert!(diagnostics.is_empty(), "{diagnostics:?}");
-    assert_eq!(names(&loaded), ["Prelude", "Main", "B", "A.C", "D"]);
+    assert_eq!(
+        names(&loaded),
+        ["Prelude", "Main", "Std.Fs", "B", "A.C", "D"]
+    );
     // 表示のパスは、入口の表示のパスのディレクトリに根からの相対パスをつないだもの
     assert_eq!(
         paths(&loaded),
         [
             "<std>/Prelude.em",
             "app/main.em",
+            "<std>/Fs.em",
             "app/B.em",
             "app/A/C.em",
             "app/D.em"
@@ -90,25 +94,28 @@ fn modules_are_numbered_in_breadth_first_order() {
     assert_eq!(loaded.files.path(loaded.prelude), "<std>/Prelude.em");
     assert_eq!(loaded.files.path(loaded.entry), "app/main.em");
     assert_eq!(targets(&loaded, 0), Vec::<Option<u32>>::new());
-    assert_eq!(targets(&loaded, 1), [Some(2), Some(3)]);
-    assert_eq!(targets(&loaded, 2), [Some(4)]);
-    assert_eq!(targets(&loaded, 3), [Some(4), Some(2)]);
+    assert_eq!(targets(&loaded, 1), [Some(3), Some(4)]);
+    assert_eq!(targets(&loaded, 3), [Some(5)]);
+    assert_eq!(targets(&loaded, 4), [Some(5), Some(3)]);
 }
 
 #[test]
 fn an_entry_without_a_directory_uses_the_root_relative_path() {
     let (loaded, diagnostics) = load("import Report.Csv", &[("Report/Csv.em", "")]);
     assert!(diagnostics.is_empty(), "{diagnostics:?}");
-    assert_eq!(names(&loaded), ["Prelude", "Main", "Report.Csv"]);
-    assert_eq!(&paths(&loaded)[1..], ["test.em", "Report/Csv.em"]);
+    assert_eq!(names(&loaded), ["Prelude", "Main", "Std.Fs", "Report.Csv"]);
+    assert_eq!(
+        &paths(&loaded)[1..],
+        ["test.em", "<std>/Fs.em", "Report/Csv.em"]
+    );
 }
 
 #[test]
 fn a_module_imported_twice_is_loaded_once() {
     let (loaded, diagnostics) = load("import A\nimport A as X", &[("A.em", "")]);
     assert!(diagnostics.is_empty(), "{diagnostics:?}");
-    assert_eq!(names(&loaded), ["Prelude", "Main", "A"]);
-    assert_eq!(targets(&loaded, 1), [Some(2), Some(2)]);
+    assert_eq!(names(&loaded), ["Prelude", "Main", "Std.Fs", "A"]);
+    assert_eq!(targets(&loaded, 1), [Some(3), Some(3)]);
 }
 
 #[test]
@@ -116,8 +123,8 @@ fn a_cycle_loads_each_module_once() {
     // 循環の報告 (E1027) は `def_map` が行う。読み込みの段は止まればよい
     let (loaded, diagnostics) = load("import A", &[("A.em", "import B"), ("B.em", "import A")]);
     assert!(diagnostics.is_empty(), "{diagnostics:?}");
-    assert_eq!(names(&loaded), ["Prelude", "Main", "A", "B"]);
-    assert_eq!(targets(&loaded, 3), [Some(2)]);
+    assert_eq!(names(&loaded), ["Prelude", "Main", "Std.Fs", "A", "B"]);
+    assert_eq!(targets(&loaded, 4), [Some(3)]);
 }
 
 #[test]
@@ -134,7 +141,7 @@ fn a_missing_module_is_reported_at_its_path() {
     E1026 2:8 cannot find module `M`
       2:8 there is no file `app/M.em`
     ");
-    assert_eq!(names(&loaded), ["Prelude", "Main"]);
+    assert_eq!(names(&loaded), ["Prelude", "Main", "Std.Fs"]);
     assert_eq!(targets(&loaded, 1), [None, None]);
 }
 
@@ -188,7 +195,7 @@ fn reserved_modules_and_the_entry_cannot_be_imported() {
     E1030 6:1 the entry module cannot be imported
       6:1 `app/Server.em` is the entry file
     ");
-    assert_eq!(names(&loaded), ["Prelude", "Main"]);
+    assert_eq!(names(&loaded), ["Prelude", "Main", "Std.Fs"]);
     assert_eq!(targets(&loaded, 1), [None; 6]);
 }
 
@@ -199,7 +206,7 @@ fn a_dependency_cannot_import_the_entry() {
         diagnostics,
         ["app/A.em 1:1 E1030 the entry module cannot be imported"]
     );
-    assert_eq!(targets(&loaded, 2), [None]);
+    assert_eq!(targets(&loaded, 3), [None]);
 }
 
 #[test]
@@ -212,7 +219,7 @@ fn diagnostics_of_a_dependency_point_into_its_file() {
             "A.em 2:1 E1004 `h` has no type signature",
         ]
     );
-    assert_eq!(targets(&loaded, 2), [None]);
+    assert_eq!(targets(&loaded, 3), [None]);
 }
 
 #[test]
@@ -223,7 +230,7 @@ fn an_import_after_a_declaration_is_still_loaded() {
         diagnostics,
         ["test.em 3:1 E0011 imports must come before declarations"]
     );
-    assert_eq!(names(&loaded), ["Prelude", "Main", "A"]);
+    assert_eq!(names(&loaded), ["Prelude", "Main", "Std.Fs", "A"]);
 }
 
 #[test]
@@ -256,7 +263,7 @@ fn an_import_with_a_malformed_path_reads_no_module() {
         ("import Report (x\n", present),
     ] {
         let (loaded, diagnostics) = load(entry, modules);
-        assert_eq!(names(&loaded), ["Prelude", "Main"], "{entry}");
+        assert_eq!(names(&loaded), ["Prelude", "Main", "Std.Fs"], "{entry}");
         assert_eq!(targets(&loaded, 1), [None], "{entry}");
         assert_eq!(diagnostics.len(), 1, "{entry}: {diagnostics:?}");
         assert!(
@@ -272,15 +279,21 @@ fn an_infix_constructor_in_an_import_list_still_loads_the_module() {
     // (docs/implementation/architecture.md の「名前解決の回復」)
     let present: &[(&str, &str)] = &[("Report.em", "pub x : Int\nx = 1")];
     let (loaded, diagnostics) = load("import Report ((:+), x)\n", present);
-    assert_eq!(names(&loaded), ["Prelude", "Main", "Report"]);
+    assert_eq!(names(&loaded), ["Prelude", "Main", "Std.Fs", "Report"]);
     assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
     assert!(diagnostics[0].contains(" E0011 "), "{diagnostics:?}");
 }
 
-const FAKE_FS: &str = "pub greet : Unit -> String\ngreet () = \"hi\"\n\nhidden : Unit -> String\nhidden () = \"no\"\n";
-
+/// 本物の `Fs` に関数を足したもの。`Fs` が標準ライブラリのモジュールとして振る舞うことを、本物の宣言を保ったまま確かめる。
 fn fake_std() -> Vec<(&'static str, &'static str)> {
-    vec![("Prelude.em", eml_hir::PRELUDE_SOURCE), ("Fs.em", FAKE_FS)]
+    let fake_fs = format!(
+        "{}\npub greet : Unit -> String\ngreet () = \"hi\"\n\nhidden : Unit -> String\nhidden () = \"no\"\n",
+        eml_hir::STD[1].1
+    );
+    vec![
+        ("Prelude.em", eml_hir::PRELUDE_SOURCE),
+        ("Fs.em", Box::leak(fake_fs.into_boxed_str())),
+    ]
 }
 
 /// 読んだパスを記録する読み方。読まないはずのユーザーのファイルを読んでいないことを確かめるため。
@@ -543,12 +556,17 @@ fn private_names_of_a_std_module_are_undefined() {
     );
 }
 
+/// `head` の後ろに本物の `Fs` を続けたもの。診断の行を `head` の中に保ったまま、`File` などの宣言を残すため。
+fn fs_after(head: &str) -> String {
+    format!("{head}\n{}", eml_hir::STD[1].1)
+}
+
 #[test]
 fn a_std_module_reaches_another_only_through_an_import() {
     let other = "pub x : Int\nx = 1\n";
     let without = [
         ("Prelude.em", eml_hir::PRELUDE_SOURCE),
-        ("Fs.em", "pub f : Unit -> Int\nf () = Other.x\n"),
+        ("Fs.em", &fs_after("pub f : Unit -> Int\nf () = Other.x\n")),
         ("Other.em", other),
     ];
     let lowered = lower_std(&without, "", &MemorySource(&[]));
@@ -560,7 +578,7 @@ fn a_std_module_reaches_another_only_through_an_import() {
         ("Prelude.em", eml_hir::PRELUDE_SOURCE),
         (
             "Fs.em",
-            "import Other\n\npub f : Unit -> Int\nf () = Other.x\n",
+            &fs_after("import Other\n\npub f : Unit -> Int\nf () = Other.x\n"),
         ),
         ("Other.em", other),
     ];

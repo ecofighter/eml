@@ -218,7 +218,8 @@ fn a_signature_without_equation_is_missing_one_in_std_too() {
         "{}\nhelper : Int -> Int\ndata Empty\n",
         eml_hir::PRELUDE_SOURCE
     );
-    let lowered = eml_test_support::lower_with_std(&[("Prelude.em", &prelude)], "");
+    let lowered =
+        eml_test_support::lower_with_std(&[("Prelude.em", &prelude), eml_hir::STD[1]], "");
     let codes: Vec<String> = lowered
         .diagnostics
         .iter()

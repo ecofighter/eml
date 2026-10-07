@@ -6,7 +6,7 @@ input_file: tests/ui/check-fail/linearity/file_discarded.em
 [E3004] Error: a linear value cannot be discarded with `_`
    ╭─[ check-fail/linearity/file_discarded.em:4:8 ]
    │
- 4 │   let (_, text) = read_all (open "input.txt")
+ 4 │   let (_, text) = Fs.read_all (Fs.open "input.txt")
    │        ┬  
    │        ╰── this pattern discards it
    │ 

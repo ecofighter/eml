@@ -12,9 +12,9 @@ body () =
 
 inner : Unit -> <Fail, IO> Unit
 inner () =
-  handle body () from open "input.txt" with
+  handle body () from Fs.open "input.txt" with
     | tick () k f -> k () f
-    | return x f -> close f
+    | return x f -> Fs.close f
 
 main : Unit -> <IO> Unit
 main () =

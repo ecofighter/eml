@@ -76,7 +76,7 @@ fn a_continuation_is_a_function() {
 /// 状態のある `multi` の `k` を部分適用したクロージャは、`Lin` の値を捕まえると1回しか呼べない (docs/spec/effects.md)。
 #[test]
 fn a_partial_continuation_capturing_a_linear_value_is_linear() {
-    let text = "effect Pick where\n  multi pick : Unit -> File\n\nrun : Unit -> <IO> Unit\nrun () =\n  handle pick () from () with\n    | pick () k st ->\n        let g = k (open \"a\")\n        g st\n        g st\n    | return f _ -> close f";
+    let text = "effect Pick where\n  multi pick : Unit -> Fs.File\n\nrun : Unit -> <IO> Unit\nrun () =\n  handle pick () from () with\n    | pick () k st ->\n        let g = k (Fs.open \"a\")\n        g st\n        g st\n    | return f _ -> Fs.close f";
     insta::assert_snapshot!(check_text(text), @"
     pick : Unit -> <Pick> File
     run : Unit -> <IO> Unit
@@ -385,7 +385,7 @@ fn the_return_clause_of_a_multi_handler_cannot_capture_a_linear_value() {
 /// (docs/spec/types.md の「Kind」)。
 #[test]
 fn a_linear_value_may_be_kept_across_an_io_call_in_a_multi_clause() {
-    let text = "effect Choice where\n  multi choose : Unit -> Bool\n\nsay : String -> <IO> Unit\nsay s = println s\n\nboth : Unit -> <IO> Int\nboth () =\n  handle (if choose () then 1 else 2) with\n    | choose () k ->\n        let file = open \"a\"\n        say \"x\"\n        close file\n        k True + k False";
+    let text = "effect Choice where\n  multi choose : Unit -> Bool\n\nsay : String -> <IO> Unit\nsay s = println s\n\nboth : Unit -> <IO> Int\nboth () =\n  handle (if choose () then 1 else 2) with\n    | choose () k ->\n        let file = Fs.open \"a\"\n        say \"x\"\n        Fs.close file\n        k True + k False";
     insta::assert_snapshot!(check_text(text), @"
     choose : Unit -> <Choice> Bool
     say : String -> <IO> Unit

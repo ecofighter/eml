@@ -6,9 +6,9 @@ input_file: tests/ui/check-fail/linearity/state.em
 [E3004] Error: the state of this handler is discarded by the omitted `return` clause
     ╭─[ check-fail/linearity/state.em:13:22 ]
     │
- 13 │   handle ask () from open "input.txt" with
-    │                      ────────┬───────  
-    │                              ╰───────── this state has a linear type `File`
+ 13 │   handle ask () from Fs.open "input.txt" with
+    │                      ─────────┬─────────  
+    │                               ╰─────────── this state has a linear type `File`
     │ 
     │ Help: write a `return` clause that takes the state, such as `| return x st -> ...`, and consume the state there
     │ 
@@ -30,7 +30,7 @@ input_file: tests/ui/check-fail/linearity/state.em
 [E3006] Error: the state of this handler must be used exactly once, but it is kept alive across a call that may resume more than once
     ╭─[ check-fail/linearity/state.em:26:3 ]
     │
- 26 │ ╭─▶   handle ask () from open "input.txt" with
+ 26 │ ╭─▶   handle ask () from Fs.open "input.txt" with
     ┆ ┆   
  30 │ ├─▶         x
     │ │               
@@ -38,9 +38,9 @@ input_file: tests/ui/check-fail/linearity/state.em
     │
     ├─[ check-fail/linearity/state.em:26:3 ]
     │
- 26 │   handle ask () from open "input.txt" with
-    │                      ────────┬───────  
-    │                              ╰───────── the state of this handler
+ 26 │   handle ask () from Fs.open "input.txt" with
+    │                      ─────────┬─────────  
+    │                               ╰─────────── the state of this handler
     │
     ├─[ check-fail/linearity/state.em:26:3 ]
     │

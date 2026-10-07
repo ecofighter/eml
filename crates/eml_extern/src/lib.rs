@@ -58,7 +58,7 @@ impl ExternType {
             ExternType::Int => row("Prelude.Int", Linearity::Unr, false, false),
             ExternType::String => row("Prelude.String", Linearity::Unr, true, false),
             ExternType::Unit => row("Prelude.Unit", Linearity::Unr, false, true),
-            ExternType::File => row("Prelude.File", Linearity::Lin, true, false),
+            ExternType::File => row("Std.Fs.File", Linearity::Lin, true, false),
         }
     }
 
@@ -165,9 +165,9 @@ impl Extern {
         };
         match self {
             Extern::Println => row("Prelude.println", 1, Purity::Effectful),
-            Extern::Open => row("Prelude.open", 1, Purity::Effectful),
-            Extern::ReadAll => row("Prelude.read_all", 1, Purity::Effectful),
-            Extern::Close => row("Prelude.close", 1, Purity::Effectful),
+            Extern::Open => row("Std.Fs.open", 1, Purity::Effectful),
+            Extern::ReadAll => row("Std.Fs.read_all", 1, Purity::Effectful),
+            Extern::Close => row("Std.Fs.close", 1, Purity::Effectful),
             Extern::ShowInt => row("Prelude.show_int", 1, Purity::Pure),
             Extern::IntNeg => row("Prelude.negate", 1, Purity::MayFail),
             Extern::IntAdd => row("Prelude.+", 2, Purity::MayFail),

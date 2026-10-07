@@ -6,7 +6,7 @@ input_file: tests/ui/check-fail/linearity/file_never_closed.em
 [E3003] Error: `f` must be used exactly once, but it is not used
    ╭─[ check-fail/linearity/file_never_closed.em:4:7 ]
    │
- 4 │   let f = open "input.txt"
+ 4 │   let f = Fs.open "input.txt"
    │       ┬  
    │       ╰── `f` is bound here
  5 │   println "forgot"

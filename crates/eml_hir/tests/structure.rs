@@ -157,7 +157,8 @@ fn prelude_functions_with_equations_are_not_extern() {
         "{}\npub twice : Int -> Int\ntwice x = x + x\n",
         eml_hir::PRELUDE_SOURCE
     );
-    let lowered = eml_test_support::lower_with_std(&[("Prelude.em", &prelude)], "");
+    let lowered =
+        eml_test_support::lower_with_std(&[("Prelude.em", &prelude), eml_hir::STD[1]], "");
     assert!(lowered.diagnostics.is_empty(), "{:?}", lowered.diagnostics);
     let program = lowered.program;
     let twice = function_id(&program, "twice");
@@ -239,7 +240,7 @@ fn imported_modules_follow_the_entry() {
         .iter()
         .map(|(_, module)| module.name.as_str())
         .collect();
-    assert_eq!(names, ["Prelude", "Main", "Report.Csv"]);
+    assert_eq!(names, ["Prelude", "Main", "Std.Fs", "Report.Csv"]);
     let g = function_id(program, "g");
     assert_eq!(lowered.files.path(program.file(g.module)), "Report/Csv.em");
     assert!(program.body(g).is_some());
@@ -270,7 +271,8 @@ fn a_main_in_the_prelude_is_not_the_entry_function() {
         "{}\nmain : Unit -> <IO> Unit\nmain () = ()\n",
         eml_hir::PRELUDE_SOURCE
     );
-    let lowered = eml_test_support::lower_with_std(&[("Prelude.em", &prelude)], "");
+    let lowered =
+        eml_test_support::lower_with_std(&[("Prelude.em", &prelude), eml_hir::STD[1]], "");
     assert!(lowered.diagnostics.is_empty(), "{:?}", lowered.diagnostics);
     let program = lowered.program;
     assert!(

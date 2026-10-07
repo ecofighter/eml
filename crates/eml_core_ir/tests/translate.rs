@@ -635,12 +635,12 @@ fn a_literal_column_inside_a_tuple() {
 
 #[test]
 fn file_operations_are_extern_calls() {
-    let text = "main : Unit -> <IO> Unit\nmain () =\n  let f = open \"a.txt\"\n  let (f, s) = read_all f\n  close f\n  println s";
+    let text = "main : Unit -> <IO> Unit\nmain () =\n  let f = Fs.open \"a.txt\"\n  let (f, s) = Fs.read_all f\n  Fs.close f\n  println s";
     let ir = core_text(text, Pass::Translate);
     for op in [
-        "extern Prelude.open(",
-        "extern Prelude.read_all(",
-        "extern Prelude.close(",
+        "extern Std.Fs.open(",
+        "extern Std.Fs.read_all(",
+        "extern Std.Fs.close(",
     ] {
         assert!(ir.contains(op), "{ir}");
     }

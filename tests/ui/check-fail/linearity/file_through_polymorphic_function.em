@@ -15,9 +15,9 @@ chooser () =
 
 pick : Unit -> <Choice, IO> Unit
 pick () =
-  let f = open "input.txt"
+  let f = Fs.open "input.txt"
   let g = keep f chooser
-  close g
+  Fs.close g
 
 main : Unit -> <IO> Unit
 main () =

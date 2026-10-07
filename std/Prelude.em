@@ -16,7 +16,6 @@ pub infixr 9 >>, <<
 pub extern data Int
 pub extern data String
 pub extern data Unit
-pub extern data File
 
 pub data Bool =
   | False
@@ -26,9 +25,6 @@ pub data Bool =
 -- 通らずにその場で実行するので、ユーザーは handle できない (docs/spec/effects.md の「組み込みの `IO`」)
 pub extern effect IO
 pub extern println : String -> <IO> Unit
-pub extern open : String -> <IO> File
-pub extern read_all : File -> <IO> (File, String)
-pub extern close : File -> <IO> Unit
 
 pub extern show_int : Int -> String
 pub not : Bool -> Bool

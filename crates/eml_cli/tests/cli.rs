@@ -106,7 +106,7 @@ fn run_opens_an_absolute_path_as_is() {
     std::fs::write(&input, "from an absolute path").unwrap();
     let program = dir.join("absolute.em");
     let source = format!(
-        "main : Unit -> <IO> Unit\nmain () =\n  let f = open \"{}\"\n  let (f, text) = read_all f\n  close f\n  println text\n",
+        "main : Unit -> <IO> Unit\nmain () =\n  let f = Fs.open \"{}\"\n  let (f, text) = Fs.read_all f\n  Fs.close f\n  println text\n",
         input.display()
     );
     std::fs::write(&program, source).unwrap();

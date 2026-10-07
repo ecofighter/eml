@@ -4,16 +4,16 @@ effect Mixed where
   single : Unit -> Int
   multi many : Unit -> Int
 
-counted : File -> <Mixed, IO> Int
+counted : Fs.File -> <Mixed, IO> Int
 counted f =
   let n = single ()
-  close f
+  Fs.close f
   n + many ()
 
 main : Unit -> <IO> Unit
 main () =
   let total =
-    handle counted (open "../files/input.txt") with
+    handle counted (Fs.open "../files/input.txt") with
       | single () k -> k 1
       | many () k -> k 10 + k 20
   println (show_int total)
