@@ -107,7 +107,7 @@
   - E3001 は今は `eml_types` が出すが、出す crate ではなく番号の範囲に従って `linearity/` に置く
   - E0004 (まだ対応していない構文) は、どの段階が出しても `not-yet-supported/` に置く
 - サブディレクトリの名前は、親の `check-fail` と同じくケバブケースにする
-- スナップショットの名前は、最上位のディレクトリからの相対パスで固定する (`run/basics/hello.em` は `ui__run@basics__hello.em.snap`)。insta の既定では、分類が1つしかないディレクトリの名前に分類が入らず、分類が増えたときに名前が変わるためである。テストのパスが名前になるので、UI テストの移動はスナップショットの名前を変え、種類1の変更になる
+- スナップショットの名前は、最上位のディレクトリからの相対パスで固定する (`run/basics/hello.em` は `integration__ui__run@basics__hello.em.snap`。頭の `integration__ui__` は、insta が付けるテストのバイナリとモジュールの名前である)。insta の既定では、分類が1つしかないディレクトリの名前に分類が入らず、分類が増えたときに名前が変わるためである。テストのパスが名前になるので、UI テストの移動はスナップショットの名前を変え、種類1の変更になる
 
 ## CLI のテスト
 
@@ -124,7 +124,7 @@
 ```sh
 cargo test                                           # すべてのテスト
 cargo test -p eml_syntax --test integration parser::empty_file    # 1つのテスト
-cargo test -p eml_cli --test ui                      # UI テスト
+cargo test -p eml_cli --test integration ui::            # UI テスト
 cargo insta review                                   # スナップショットの承認
 cargo clippy --all-targets && cargo fmt
 cargo test --release -p eml_types --test integration scaling:: -- --ignored   # 型検査の時間の伸び (性能のテスト)

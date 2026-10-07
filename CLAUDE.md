@@ -24,7 +24,7 @@ The dev environment is a Nix flake (`direnv` with `use flake`). The devShell pro
 cargo build                          # all crates
 cargo test                           # all tests
 cargo test -p eml_syntax --test integration parser::empty_file   # a single test
-cargo test -p eml_cli --test ui      # UI tests
+cargo test -p eml_cli --test integration ui::   # UI tests
 cargo insta review                   # accept snapshots
 cargo clippy --all-targets && cargo fmt
 cargo run -p eml_cli -- check <file.em>    # or: run [--debug-heap] <file.em>
