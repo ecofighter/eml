@@ -554,6 +554,6 @@ fn substitute(ty: &Type, names: &[String], args: &[Type]) -> Type {
                 .map(|(label, field)| (label.clone(), substitute(field, names, args)))
                 .collect(),
         ),
-        Type::Fn { .. } | Type::Cont { .. } | Type::Flexible | Type::Error => ty.clone(),
+        Type::Fn { .. } | Type::Flexible | Type::Error => ty.clone(),
     }
 }

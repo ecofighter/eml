@@ -105,7 +105,7 @@ pub(crate) enum KindReason {
         path: UnusedPath,
         fix: Option<DropFix>,
     },
-    /// `once` の操作の節の `k` を、ある経路で `resume` も `drop` もしなかった。`clause` は節の範囲。
+    /// `once` の操作の節の `k` を、ある経路で呼びも `drop` もしなかった。`clause` は節の範囲。
     ContinuationNotUsed { name: String, clause: TextRange },
     /// `_` で受けた値。
     Discarded,
@@ -295,10 +295,6 @@ pub(crate) enum Across {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum CallKind {
     Call,
-    /// `resume k v`。`k` が変数ならその名前。
-    Resume {
-        k: Option<String>,
-    },
     Handle,
 }
 
@@ -306,9 +302,7 @@ impl CallKind {
     fn order_key(&self) -> Vec<KeyPart> {
         match self {
             CallKind::Call => vec![number(0)],
-            CallKind::Resume { k: None } => vec![number(1), number(0)],
-            CallKind::Resume { k: Some(k) } => vec![number(1), number(1), text(k)],
-            CallKind::Handle => vec![number(2)],
+            CallKind::Handle => vec![number(1)],
         }
     }
 }
@@ -475,14 +469,6 @@ mod tests {
             across(local("f", 1), Some(op(0)), CallKind::Call),
             across(local("f", 1), Some(op(1)), CallKind::Call),
             across(local("f", 1), Some(op(0)), CallKind::Handle),
-            across(local("f", 1), Some(op(0)), CallKind::Resume { k: None }),
-            across(
-                local("f", 1),
-                Some(op(0)),
-                CallKind::Resume {
-                    k: Some("k".to_string()),
-                },
-            ),
             across(local("g", 1), Some(op(0)), CallKind::Call),
             across(local("f", 3), Some(op(0)), CallKind::Call),
             across(

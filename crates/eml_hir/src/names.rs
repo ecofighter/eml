@@ -5,9 +5,6 @@ use std::collections::{HashMap, HashSet};
 
 use crate::program::{ConstructorId, EffectId, TypeDefId};
 
-/// 継続の型の表示。どのモジュールの定義でもないが、ユーザーの `Cont` と区別できるよう、定義の1つとして数える。
-const CONT: &str = "Cont";
-
 /// ID から表示名を引く表。2つ以上のモジュールが定義する名前だけを、`Prelude.Bool` のようにモジュール名で修飾する。
 #[derive(Debug, Clone)]
 pub struct DisplayNames {
@@ -30,14 +27,12 @@ impl DisplayNames {
         let effects: Vec<(EffectId, &str, &str)> = effects.into_iter().collect();
         let constructors: Vec<(ConstructorId, &str, &str)> = constructors.into_iter().collect();
         // 型とエフェクトは同じ名前空間にあるので合わせて数える (docs/spec/modules.md の「名前空間」)
-        let mut type_definers = definers(
+        let type_definers = definers(
             types
                 .iter()
                 .map(|&(_, module, name)| (module, name))
                 .chain(effects.iter().map(|&(_, module, name)| (module, name))),
         );
-        // 空の文字列は、どのモジュールの名前とも重ならない
-        type_definers.entry(CONT).or_default().insert("");
         let constructor_definers =
             definers(constructors.iter().map(|&(_, module, name)| (module, name)));
         let types: HashMap<TypeDefId, String> = types

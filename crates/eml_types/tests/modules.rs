@@ -126,17 +126,17 @@ fn types_of_the_same_name_are_qualified_with_their_module() {
 }
 
 #[test]
-fn a_user_unit_and_cont_are_told_apart_from_the_builtin_ones() {
-    // 空のレコードは Prelude の `Unit` の表示名で書く。継続の型の `Cont` は修飾せず、ユーザーの `Cont` を修飾する
+fn a_user_unit_is_told_apart_from_the_builtin_one() {
+    // 空のレコードは Prelude の `Unit` の表示名で書く。継続は普通の関数型で表示するので、ユーザーの `Cont` は修飾しない
     let text = "data Unit = | U\n\ndata Cont = | C\n\neffect Ask where\n  ask : Int -> Int\n\nf : Cont -> Unit\nf c = ()\n\ng : Int -> Int\ng n =\n  handle ask n with\n    | ask x k -> resume k x";
-    insta::assert_snapshot!(crate::common::check_text(text), @r"
+    insta::assert_snapshot!(crate::common::check_text(text), @"
     ask : Int -> <Ask> Int
-    f : Main.Cont -> Main.Unit
-      c#0 : Main.Cont
+    f : Cont -> Main.Unit
+      c#0 : Cont
     g : Int -> Int
       n#0 : Int
       x#1 : Int
-      k#2 : Cont Int Int <>
+      k#2 : Int -> Int
       $r#3 : Int
     ---
     E2001 9:7 mismatched types

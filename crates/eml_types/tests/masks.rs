@@ -78,6 +78,28 @@ f action =
 }
 
 #[test]
+fn a_call_of_a_continuation_with_a_state_is_masked_at_its_last_arrow() {
+    // 状態のある handler の `k 1 st` は、最初の矢印の row が空なので何も起こさない。`Log` は最後の矢印 1 の row
+    // `<e>` に余るので、`mask` は矢印 1 に付く
+    let text = "\
+effect Ask where
+  ask : Unit -> Int
+
+effect Log where
+  log : String -> Unit
+
+f : (Unit -> <Ask | e> Int) -> <e> Int
+f action =
+  handle action () from 0 with
+    | ask () k st ->
+        handle k 1 st with
+          | log m k2 -> k2 ()
+    | return x _ -> x
+";
+    insta::assert_snapshot!(masks(text, "f"), @"11:16#1 [Log]");
+}
+
+#[test]
 fn a_label_twice_is_masked_twice() {
     let text = format!(
         "{STATE}run : (Unit -> <e> a) -> <State Int, State String | e> a\nrun cb = cb ()\n"

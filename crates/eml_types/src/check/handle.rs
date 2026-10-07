@@ -1,16 +1,11 @@
-//! handle、`resume` の検査 (docs/spec/effects.md の「handler の意味」)。
+//! handle の検査 (docs/spec/effects.md の「handler の意味」)。
 
-use eml_diagnostics::{Diagnostic, Label as DiagnosticLabel, TextEdit, TextRange, TextSize};
-use eml_hir::{
-    Closure, EffectId, ExprId, ExprKind, LocalId, OpClause, OpMultiplicity, PatId, PatKind, Res,
-    ReturnClause,
-};
+use eml_hir::{Closure, EffectId, ExprId, OpClause, OpMultiplicity, PatId, ReturnClause};
 
-use crate::codes;
-use crate::table::{ArrowLin, Label, Row, Slot, Tail, Ty, TyShape};
+use crate::table::{ArrowLin, Label, Row, Ty, TyShape};
 use crate::ty::Linearity;
 
-use super::body::{BodyCheck, CallRows, ClauseFrame};
+use super::body::{BodyCheck, CallRows};
 use super::report::Origin;
 
 impl BodyCheck<'_, '_> {
@@ -30,10 +25,7 @@ impl BodyCheck<'_, '_> {
         };
         // 初期値は本体より先に、handle の外の row で評価する。その型が状態の型 σ である
         // (docs/spec/effects.md の「パラメータ付き handler」)
-        let state = match init {
-            Some(init) => Slot::State(self.infer_expr(init)),
-            None => Slot::Stateless,
-        };
+        let state = init.map(|init| self.infer_expr(init));
         let outer = self.ambient.clone();
         // handle ごとにエフェクトの型引数を新しい変数にする。本体の操作の呼び出しと節が、この変数を通じて型引数を共有する
         let program = self.program;
@@ -73,25 +65,23 @@ impl BodyCheck<'_, '_> {
 
     /// 節の状態の引数を σ で束縛する。HIR は状態のある handler の節にだけ状態の引数を作るので、状態のない handler に
     /// 状態の引数があることはない。あっても型を `Error` にして、診断を連鎖させない。
-    fn bind_state(&mut self, pat: Option<PatId>, state: Slot) {
+    fn bind_state(&mut self, pat: Option<PatId>, state: Option<Ty>) {
         if let Some(pat) = pat {
-            let ty = match state {
-                Slot::State(sigma) => sigma,
-                Slot::Stateless | Slot::Var(_) => self.table.error,
-            };
+            let ty = state.unwrap_or(self.table.error);
             self.bind_pat(pat, ty);
         }
     }
 
     /// 節の引数は操作の引数の型で、`k` は「操作の結果を受け、handle 式の値を返し、外側の row のエフェクトを起こす」
-    /// 継続である。`once` の操作の `k` は `Lin`、`multi` の操作の `k` は `Unr` である (docs/spec/effects.md の「継続の多重度と持ち越し規則」)。
+    /// 関数である。状態のある handler の `k` は、操作の結果の次に状態を受ける。`once` の操作の `k` の矢印は `Lin`、
+    /// `multi` の操作の `k` の矢印は `Unr` である (docs/spec/effects.md の「継続の多重度と持ち越し規則」)。
     fn op_clause(
         &mut self,
         clause: &OpClause,
         result: Ty,
         outer: &Row,
         effect_args: &[Ty],
-        state: Slot,
+        state: Option<Ty>,
     ) {
         let operation = &self.program[clause.op];
         // 節の型は、操作の閉じた形にエフェクトの型引数を入れて作る。操作の型の作り方を1か所にするため
@@ -121,31 +111,32 @@ impl BodyCheck<'_, '_> {
                 OpMultiplicity::Multi => Linearity::Unr,
                 OpMultiplicity::Once | OpMultiplicity::Never => Linearity::Lin,
             };
-            let continuation = self.table.alloc(TyShape::Cont {
-                arg: ty,
-                lin: ArrowLin::Known(lin),
-                row: outer.clone(),
-                ret: result,
-                state,
-            });
+            let continuation = match state {
+                None => self
+                    .table
+                    .function_with(ty, ArrowLin::Known(lin), outer.clone(), result),
+                Some(sigma) => {
+                    // `once` の `k v` は `once` の継続を捕まえるので、2つ目の矢印も `Lin` になる
+                    let inner_lin = match lin {
+                        Linearity::Lin => ArrowLin::Known(Linearity::Lin),
+                        Linearity::Unr => self.table.fresh_arrow_lin(),
+                    };
+                    let inner = self
+                        .table
+                        .function_with(sigma, inner_lin, outer.clone(), result);
+                    // `k v` は部分適用で何も起こさないので、最初の矢印の row は空の閉じた row にする
+                    let continuation =
+                        self.table
+                            .function_with(ty, ArrowLin::Known(lin), Row::pure(), inner);
+                    // `k v` の部分適用は `v` を捕まえるので、2つ目の矢印は `a` の Kind 以上になる。コンストラクタや
+                    // ラムダの部分適用と同じ規則である (docs/spec/types.md の「関数型」)
+                    self.table.closure_kinds(continuation, 2, &[]);
+                    continuation
+                }
+            };
             self.bind_pat(k, continuation);
         }
-        let frame = ClauseFrame {
-            k: clause.k().and_then(|pat| self.bound_variable(pat)),
-            state: clause.state().and_then(|pat| self.bound_variable(pat)),
-        };
-        self.clause_frames.push(frame);
         self.check_expr(clause.closure.body, result, Origin::HandlerClause);
-        self.clause_frames.pop();
-    }
-
-    /// 変数の束縛 (型の明示を含む) のパターンが束縛する変数。タプルなどの分解は変数1つで表せないので `None` にする。
-    fn bound_variable(&self, pat: PatId) -> Option<LocalId> {
-        match &self.body.pats[pat].kind {
-            PatKind::Bind(local) => Some(*local),
-            PatKind::Annot { pat, .. } => self.bound_variable(*pat),
-            _ => None,
-        }
     }
 
     /// 扱うエフェクトが決まらない handler は HIR が報告済みである。本体のエフェクトをすべて受け入れ、型を `Error` に
@@ -174,136 +165,5 @@ impl BodyCheck<'_, '_> {
         }
         self.check_expr(ret.closure.body, error, Origin::HandlerClause);
         error
-    }
-
-    /// `resume k v` は、`k` の継続の型を関数型 `a -<ρ'>-> b` のように呼ぶ。`k` の型がまだ決まらない場合 (ラムダの
-    /// 引数など) にも検査できるよう、推論用の変数でできた継続の型と単一化する。状態の欄も推論用の変数にして、
-    /// 引数の数に合う欄と単一化する。
-    pub(super) fn resume(
-        &mut self,
-        id: ExprId,
-        k: ExprId,
-        arg: ExprId,
-        arg_end: TextSize,
-        state: Option<ExprId>,
-    ) -> Ty {
-        let value = self.table.fresh_var();
-        let result = self.table.fresh_var();
-        let row = Row {
-            labels: Vec::new(),
-            tail: Tail::Var(self.table.fresh_row_var()),
-        };
-        let lin = self.table.fresh_arrow_lin();
-        let slot = self.table.fresh_slot();
-        let expected = self.table.alloc(TyShape::Cont {
-            arg: value,
-            lin,
-            row: row.clone(),
-            ret: result,
-            state: slot,
-        });
-        self.check_expr(k, expected, Origin::Continuation);
-        // 引数の数と `k` の欄を単一化する。どちらの数が合うかは単一化で決まるので、別の検査は要らない
-        // (docs/spec/effects.md の「パラメータ付き handler」)
-        let (wanted, next) = match state {
-            Some(_) => {
-                let sigma = self.table.fresh_var();
-                (Slot::State(sigma), Some(sigma))
-            }
-            None => (Slot::Stateless, None),
-        };
-        if self.table.unify_slot(slot, wanted).is_err() {
-            self.resume_state_mismatch(id, k, arg_end, state);
-        }
-        // 欄が食い違っても、値と状態の中の誤りは報告する。食い違ったときの σ は新しい変数のままなので、状態の式の
-        // 型では誤りにならない
-        self.check_expr(arg, value, Origin::ResumeValue);
-        if let (Some(state), Some(sigma)) = (state, next) {
-            self.check_expr(state, sigma, Origin::ResumeState);
-        }
-        self.typing.calls.insert(id, CallRows::Resume(row.clone()));
-        let range = self.body.exprs[id].range;
-        self.include_call_row(row, (id, 0), range, "`resume`", true);
-        result
-    }
-
-    /// `resume` の引数の数が `k` の状態の欄と合わない (docs/spec/diagnostics.md の E2007)。
-    fn resume_state_mismatch(
-        &mut self,
-        id: ExprId,
-        k: ExprId,
-        arg_end: TextSize,
-        state: Option<ExprId>,
-    ) {
-        let range = self.body.exprs[id].range;
-        let diagnostic = match state {
-            None => {
-                let diagnostic = Diagnostic::error(
-                    codes::RESUME_STATE_MISMATCH,
-                    "this continuation comes from a handler with a state, so `resume` needs the next state",
-                    DiagnosticLabel::new(self.file(), range, "the next state is missing"),
-                )
-                .with_help("pass the next state as the third argument: `resume k v st`");
-                match self.current_state_for(k, id) {
-                    Some(name) => {
-                        let title = format!("pass the current state `{name}`");
-                        diagnostic.with_fix(
-                            title,
-                            vec![TextEdit {
-                                file: self.file(),
-                                range: TextRange::empty(arg_end),
-                                replacement: format!(" {name}"),
-                            }],
-                        )
-                    }
-                    None => diagnostic,
-                }
-            }
-            Some(_) => {
-                // 状態の引数を括弧で囲んでも `resume` の式は `)` で終わるので、式の終わりまで消す
-                let to = range.end();
-                Diagnostic::error(
-                    codes::RESUME_STATE_MISMATCH,
-                    "this continuation comes from a handler without a state, so `resume` takes no state",
-                    DiagnosticLabel::new(self.file(), range, "the state argument is not expected"),
-                )
-                .with_help("remove the third argument")
-                .with_fix(
-                    "remove the state argument",
-                    vec![TextEdit {
-                        file: self.file(),
-                        range: TextRange::new(arg_end, to),
-                        replacement: String::new(),
-                    }],
-                )
-            }
-        };
-        self.diagnostics.push(diagnostic);
-    }
-
-    /// `resume` が再開する `k` が、囲む節の `k` そのもので、その節の状態の変数がここで見えるときだけ、状態の変数の
-    /// 名前を返す。型検査器には変数のスコープの表がないので、同じ名前の別の変数が状態の引数より後で、`resume` より前に
-    /// 束縛されていれば、隠されているかもしれないとして返さない。付けるべき fix を付けないことはあるが、誤った fix は
-    /// 付けない。
-    fn current_state_for(&self, k: ExprId, resume: ExprId) -> Option<String> {
-        let ExprKind::Path(Res::Local(local)) = self.body.exprs[k].kind else {
-            return None;
-        };
-        let frame = self
-            .clause_frames
-            .iter()
-            .rev()
-            .find(|frame| frame.k == Some(local))?;
-        let state = frame.state?;
-        let name = &self.body.locals[state].name;
-        let state_start: TextSize = self.body.locals[state].range.start();
-        let resume_start = self.body.exprs[resume].range.start();
-        let shadowed = self.body.locals.iter().any(|(other, data)| {
-            other != state
-                && data.name == *name
-                && data.range.start() > state_start
-                && data.range.start() < resume_start
-        });
-        (!shadowed).then(|| name.clone())
     }
 }

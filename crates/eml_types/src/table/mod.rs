@@ -1,7 +1,7 @@
 use crate::context::Context;
 use crate::kind::problem::{Bounds, Instance, KindProblem, OwnVars};
 use crate::kind::{Bound, Carry, KindVar, Provenance};
-use crate::ty::{ContState, EffectLabel, Linearity, Multiplicity, RowTail, Type};
+use crate::ty::{EffectLabel, Linearity, Multiplicity, RowTail, Type};
 use eml_hir::{EffectId, LangItems, OperationId, TypeDefId};
 
 mod export;
@@ -31,18 +31,6 @@ pub(crate) enum ArrowLin {
     Known(Linearity),
     Var(KindVar),
 }
-
-/// 継続の型の状態の欄 (docs/spec/effects.md の「パラメータ付き handler」)。型とは別の推論用の変数を持ち、型の位置には
-/// 現れない。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Slot {
-    Stateless,
-    State(Ty),
-    Var(SlotVar),
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub(crate) struct SlotVar(u32);
 
 /// row の末尾。`Error` は未定義のエフェクトか解決できない row 変数の跡で、型の `Error` と同じく、どのエフェクトも
 /// 受け入れて束縛されない (docs/spec/types.md の「エラーの扱い」)。
@@ -108,31 +96,20 @@ pub(crate) enum TyShape {
         row: Row,
         ret: Ty,
     },
-    /// 継続 `k` の型。`lin` は継続の線形性で、`once` の操作の `k` は `Lin` である (docs/spec/effects.md)。`resume` の
-    /// 検査では、まだ決まらない継続を推論用の変数で表すので、矢印と同じ `ArrowLin` を使う。`state` は handler の
-    /// 状態の欄である。
-    Cont {
-        arg: Ty,
-        lin: ArrowLin,
-        row: Row,
-        ret: Ty,
-        state: Slot,
-    },
     Var(TyVar),
     Rigid(RigidVar),
     Error,
 }
 
-/// 型の直接の子。`Slot` を受ける側は `Table::resolve_slot` で欄を追い、`State(ty)` なら `ty` を型の子として扱う。
+/// 型の直接の子。
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum Child<'a> {
     Ty(Ty),
     Row(&'a Row),
-    Slot(Slot),
 }
 
 impl TyShape {
-    /// 直接の子を、引数、row、戻り値、状態の欄の順に `f` に渡す。型の木をたどる処理はすべてここを通す。欄を足したときに直し忘れ
+    /// 直接の子を、引数、row、戻り値の順に `f` に渡す。型の木をたどる処理はすべてここを通す。欄を足したときに直し忘れ
     /// ないよう、`..` を使わずにすべての欄を名前で受ける。矢印の線形性は Kind なので子に含めない。
     pub fn for_each_child<'a>(&'a self, mut f: impl FnMut(Child<'a>)) {
         match self {
@@ -147,18 +124,6 @@ impl TyShape {
                 f(Child::Ty(*param));
                 f(Child::Row(row));
                 f(Child::Ty(*ret));
-            }
-            TyShape::Cont {
-                arg,
-                lin: _,
-                row,
-                ret,
-                state,
-            } => {
-                f(Child::Ty(*arg));
-                f(Child::Row(row));
-                f(Child::Ty(*ret));
-                f(Child::Slot(*state));
             }
             TyShape::Var(_) | TyShape::Rigid(_) | TyShape::Error => {}
         }
@@ -189,8 +154,6 @@ pub(crate) enum UnifyError {
         left: Label,
         right: Label,
     },
-    /// 継続の状態の欄が、状態のない handler と状態のある handler で食い違う。
-    StateSlot,
     /// 呼び出し先の row が明示したエフェクトを、同じ包含の `mask` でも飛ばす必要がある (E2008)。
     MaskConflict(EffectId),
 }
@@ -222,8 +185,6 @@ pub(crate) struct Table<'c> {
     ty_vars: Vec<TyVarInfo>,
     row_vars: Vec<RowVarInfo>,
     rigids: Vec<RigidInfo>,
-    /// 状態の欄の推論用の変数の束縛。
-    slot_vars: Vec<Option<Slot>>,
     /// 線形性の束の制約。段1は集めるだけで、解くのは段2である (docs/implementation/architecture.md の「`eml_types` の内部」)。
     linearity: Bounds<Linearity>,
     kind_origin: Provenance,
@@ -277,7 +238,6 @@ impl<'c> Table<'c> {
             ty_vars: Vec::new(),
             row_vars: Vec::new(),
             rigids: Vec::new(),
-            slot_vars: Vec::new(),
             linearity: Bounds::default(),
             kind_origin: Provenance::Declaration,
             multiplicity: Bounds::default(),
@@ -381,22 +341,6 @@ impl<'c> Table<'c> {
             rigid: None,
         });
         RowVar(self.row_vars.len() as u32 - 1)
-    }
-
-    pub fn fresh_slot(&mut self) -> Slot {
-        self.slot_vars.push(None);
-        Slot::Var(SlotVar(self.slot_vars.len() as u32 - 1))
-    }
-
-    /// 束縛を追った欄。`Var` が返るのは、まだ決まっていない欄だけである。
-    pub fn resolve_slot(&self, mut slot: Slot) -> Slot {
-        while let Slot::Var(var) = slot {
-            match self.slot_vars[var.0 as usize] {
-                Some(bound) => slot = bound,
-                None => break,
-            }
-        }
-        slot
     }
 
     pub fn fresh_rigid(&mut self, name: &str) -> (Ty, RigidVar) {

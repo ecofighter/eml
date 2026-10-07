@@ -13,7 +13,7 @@ fn boxed(ty: &Type, hir: &HirProgram) -> bool {
         Type::Con { id, .. } => {
             *id == hir.lang.string || *id == hir.lang.file || has_fields(hir, *id)
         }
-        Type::Fn { .. } | Type::Cont { .. } | Type::Rigid(_) | Type::Flexible => true,
+        Type::Fn { .. } | Type::Rigid(_) | Type::Flexible => true,
         // 空のレコードは `Unit` で、値は `()` である。要素のあるレコード (タプル) はヒープのオブジェクトにする
         Type::Record(fields) => !fields.is_empty(),
         Type::Error => false,

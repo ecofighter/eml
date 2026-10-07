@@ -22,7 +22,7 @@ impl Table<'_> {
                 .iter()
                 .flat_map(|(_, field)| self.kind_bounds(*field))
                 .collect(),
-            TyShape::Fn { lin, .. } | TyShape::Cont { lin, .. } => vec![match lin {
+            TyShape::Fn { lin, .. } => vec![match lin {
                 ArrowLin::Known(l) => Bound::Const(*l),
                 ArrowLin::Var(v) => Bound::Var(*v),
             }],
@@ -124,13 +124,6 @@ impl Table<'_> {
                     lin: m,
                     row,
                     ret: _,
-                }
-                | TyShape::Cont {
-                    arg: _,
-                    lin: m,
-                    row,
-                    ret: _,
-                    state: _,
                 } => {
                     if let ArrowLin::Var(v) = m {
                         push_unique(&mut lin, *v);
@@ -150,11 +143,6 @@ impl Table<'_> {
                 Child::Row(row) => {
                     for label in self.resolve_row(row).labels {
                         work.extend(label.args);
-                    }
-                }
-                Child::Slot(slot) => {
-                    if let Slot::State(state) = self.resolve_slot(slot) {
-                        work.push(state);
                     }
                 }
             });

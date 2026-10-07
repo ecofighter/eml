@@ -466,12 +466,12 @@ fn names_defined_by_two_modules_are_qualified() {
         eml_test_support::short(&lowered.files, &lowered.diagnostics),
         Vec::<String>::new()
     );
-    // 型とエフェクトは合わせて数え、コンストラクタは別に数える。継続の型の `Cont` も1つの定義として数える
+    // 型とエフェクトは合わせて数え、コンストラクタは別に数える。継続は普通の関数型なので、`Cont` はユーザーの定義だけである
     assert_eq!(
         shown_names(&lowered),
         [
             "type Main.Bool -> Main.Bool",
-            "type Main.Cont -> Main.Cont",
+            "type Main.Cont -> Cont",
             "type Report.Row -> Report.Row",
             "type Report.Answer -> Answer",
             "effect Main.Log -> Main.Log",

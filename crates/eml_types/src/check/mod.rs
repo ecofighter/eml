@@ -165,7 +165,6 @@ pub(crate) fn check_body(
         ambient_source: AmbientSource::Signature,
         typing: BodyTyping::default(),
         instances: Vec::new(),
-        clause_frames: Vec::new(),
     };
     checker.check_function(own.ty);
     checker.check_comparisons();

@@ -3,7 +3,7 @@ source: crates/eml_cli/tests/ui.rs
 expression: rendered
 input_file: tests/ui/check-fail/linearity/continuation_not_handled.em
 ---
-[E3005] Error: the continuation `k` of a `once` operation must be resumed or dropped
+[E3005] Error: the continuation `k` of a `once` operation must be called or dropped
    ╭─[ check-fail/linearity/continuation_not_handled.em:9:7 ]
    │
  9 │       | ask () k -> 0
@@ -12,7 +12,7 @@ input_file: tests/ui/check-fail/linearity/continuation_not_handled.em
    │                │       
    │                ╰─────── `k` is bound here
    │ 
-   │ Help: call `resume k v` or `drop k` on every path
+   │ Help: call `k` or `drop k` on every path
    │ 
    │ Note: linear values, such as files, the continuation of a `once` operation and closures that capture one, must be used exactly once
 ───╯

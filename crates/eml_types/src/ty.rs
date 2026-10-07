@@ -64,32 +64,11 @@ pub enum Type {
         tail: Option<RowTail>,
         ret: Box<Type>,
     },
-    /// 継続 `k` の型 (docs/spec/effects.md)。表面の構文に名前を持たず、診断の表示だけに使う。
-    Cont {
-        /// 操作の結果の型。`resume` に渡す値の型である。
-        arg: Box<Type>,
-        /// handle の結果の型。`resume` の値の型である。
-        ret: Box<Type>,
-        /// handle の外側の row。`resume` が起こすエフェクトである。
-        effects: Vec<EffectLabel>,
-        tail: Option<RowTail>,
-        /// handler の状態の欄 (docs/spec/effects.md の「パラメータ付き handler」)。
-        state: ContState,
-    },
     /// シグネチャの型変数。
     Rigid(String),
     /// 推論で解けなかった変数。`_` と表示する。
     Flexible,
     Error,
-}
-
-/// 継続の型の状態の欄。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ContState {
-    Stateless,
-    State(Box<Type>),
-    /// 誤りの後に解けなかった欄。`Stateless` と同じく `from` を表示しない。
-    Unknown,
 }
 
 /// row の末尾。シグネチャの row 変数は名前を持つ。推論で解けなかった row 変数は `_` と表示する。
@@ -113,7 +92,7 @@ impl Type {
         Type::Record(Vec::new())
     }
 
-    /// 直接の子を、引数、row のラベルの型引数、row の末尾、戻り値、状態の型の順に `f` に渡す。欄を足したときに直し忘れないよう、
+    /// 直接の子を、引数、row のラベルの型引数、row の末尾、戻り値の順に `f` に渡す。欄を足したときに直し忘れないよう、
     /// `..` を使わずにすべての欄を名前で受ける。
     pub fn for_each_child<'a>(&'a self, mut f: impl FnMut(TypeChild<'a>)) {
         match self {
@@ -130,20 +109,6 @@ impl Type {
                 f(TypeChild::Type(param));
                 row_children(effects, tail, &mut f);
                 f(TypeChild::Type(ret));
-            }
-            Type::Cont {
-                arg,
-                ret,
-                effects,
-                tail,
-                state,
-            } => {
-                f(TypeChild::Type(arg));
-                row_children(effects, tail, &mut f);
-                f(TypeChild::Type(ret));
-                if let ContState::State(state) = state {
-                    f(TypeChild::Type(state));
-                }
             }
             Type::Rigid(_) | Type::Flexible | Type::Error => {}
         }
@@ -238,27 +203,6 @@ impl fmt::Display for TypeDisplay<'_> {
                 }
                 write!(f, "{}", ret.display(names))
             }
-            // 継続の row は、空でも書く。何も起こさない `resume` であることを示すため。`Cont` は表示名の表が定義の1つ
-            // として数えるので、ユーザーの `Cont` は修飾されて区別できる
-            Type::Cont {
-                arg,
-                ret,
-                effects,
-                tail,
-                state,
-            } => {
-                write!(
-                    f,
-                    "Cont {} {} <{}>",
-                    atomic(arg, names),
-                    atomic(ret, names),
-                    row_text(effects, tail, names)
-                )?;
-                match state {
-                    ContState::State(state) => write!(f, " from {}", atomic(state, names)),
-                    ContState::Stateless | ContState::Unknown => Ok(()),
-                }
-            }
             Type::Rigid(name) => f.write_str(name),
             Type::Flexible => f.write_str("_"),
             Type::Error => f.write_str("{error}"),
@@ -294,10 +238,10 @@ fn row_text(effects: &[EffectLabel], tail: &Option<RowTail>, names: &DisplayName
     }
 }
 
-/// 型の適用の引数の位置に置く形。関数型、継続の型、引数を持つ型の適用は括弧で囲む。
+/// 型の適用の引数の位置に置く形。関数型と、引数を持つ型の適用は括弧で囲む。
 fn atomic(ty: &Type, names: &DisplayNames) -> String {
     match ty {
-        Type::Fn { .. } | Type::Cont { .. } => format!("({})", ty.display(names)),
+        Type::Fn { .. } => format!("({})", ty.display(names)),
         Type::Con { args, .. } if !args.is_empty() => format!("({})", ty.display(names)),
         _ => ty.display(names).to_string(),
     }
@@ -389,55 +333,6 @@ mod tests {
         };
         assert_eq!(pure.display(&names).to_string(), "Int -> Bool");
         assert_eq!(io.display(&names).to_string(), "(Int -> Bool) -> <IO> Unit");
-    }
-
-    #[test]
-    fn continuations_are_displayed_with_their_row() {
-        let Fixture { int, io, names, .. } = fixture();
-        let unit = Type::unit();
-        let k = Type::Cont {
-            arg: Box::new(int.clone()),
-            ret: Box::new(unit.clone()),
-            effects: vec![EffectLabel {
-                id: io,
-                args: vec![],
-            }],
-            tail: None,
-            state: ContState::Stateless,
-        };
-        assert_eq!(k.display(&names).to_string(), "Cont Int Unit <IO>");
-        let pure = Type::Cont {
-            arg: Box::new(Type::Fn {
-                param: Box::new(int.clone()),
-                effects: vec![],
-                tail: None,
-                ret: Box::new(int.clone()),
-            }),
-            ret: Box::new(unit.clone()),
-            effects: vec![],
-            tail: Some(RowTail::Rigid("e".to_string())),
-            state: ContState::Stateless,
-        };
-        assert_eq!(
-            pure.display(&names).to_string(),
-            "Cont (Int -> Int) Unit <e>"
-        );
-        let stateful = Type::Cont {
-            arg: Box::new(int.clone()),
-            ret: Box::new(unit.clone()),
-            effects: vec![],
-            tail: None,
-            state: ContState::State(Box::new(Type::Fn {
-                param: Box::new(int.clone()),
-                effects: vec![],
-                tail: None,
-                ret: Box::new(unit.clone()),
-            })),
-        };
-        assert_eq!(
-            stateful.display(&names).to_string(),
-            "Cont Int Unit <> from (Int -> Unit)"
-        );
     }
 
     #[test]

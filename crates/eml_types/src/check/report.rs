@@ -42,12 +42,6 @@ pub(super) enum Origin {
     LambdaBody,
     /// handler の節の本体。handle 式全体の型を持つ。
     HandlerClause,
-    /// `resume` の最初の引数。
-    Continuation,
-    /// `resume` に渡す値。
-    ResumeValue,
-    /// `resume` に渡す次の状態。
-    ResumeState,
     /// 推論で決まる型。根拠の場所はない。
     Inferred,
 }
@@ -233,8 +227,8 @@ impl BodyCheck<'_, '_> {
                 return false;
             }
             // include_row は rigid な row 変数を束縛しない。型引数の単一化の失敗は `EffectArgs` か `Occurs` になるので、
-            // `Mismatch` と `StateSlot` は起きない
-            Err(UnifyError::Mismatch | UnifyError::StateSlot) => unreachable!(
+            // `Mismatch` は起きない
+            Err(UnifyError::Mismatch) => unreachable!(
                 "including a row reports only missing effects, a missing row variable, effect arguments or an infinite type"
             ),
         };
@@ -393,15 +387,6 @@ impl BodyCheck<'_, '_> {
             Origin::HandlerClause => diagnostic.with_note(
                 "each clause of a handler must have the type of the whole `handle` expression",
             ),
-            Origin::Continuation => {
-                diagnostic.with_note("the first argument of `resume` must be a continuation")
-            }
-            Origin::ResumeValue => {
-                diagnostic.with_note("`resume` passes this value as the result of the operation")
-            }
-            Origin::ResumeState => {
-                diagnostic.with_note("`resume` passes this value as the next state of the handler")
-            }
             Origin::LambdaParameter => diagnostic.with_note(
                 "an annotated lambda parameter must have the parameter type the lambda is expected to have",
             ),
@@ -539,7 +524,7 @@ pub(super) fn linear_misuse(program: &Program, origin: &KindOrigin) -> Diagnosti
         ),
         KindReason::ContinuationNotUsed { name, clause } => Diagnostic::error(
             codes::CONTINUATION_NOT_HANDLED,
-            format!("the continuation `{name}` of a `once` operation must be resumed or dropped"),
+            format!("the continuation `{name}` of a `once` operation must be called or dropped"),
             Label::new(file, *clause, "this clause"),
         )
         .with_secondary(Label::new(
@@ -548,9 +533,7 @@ pub(super) fn linear_misuse(program: &Program, origin: &KindOrigin) -> Diagnosti
             format!("`{name}` is bound here"),
         ))
         .with_note(LINEAR_NOTE)
-        .with_help(format!(
-            "call `resume {name} v` or `drop {name}` on every path"
-        )),
+        .with_help(format!("call `{name}` or `drop {name}` on every path")),
         KindReason::CapturedByClause(name) => misused(
             origin,
             format!("`{name}` must be used exactly once, but an operation clause captures it"),
@@ -607,10 +590,8 @@ fn carried_across(
         CarriedValue::HandlerState { .. } => "the state of this handler".to_string(),
     };
     let what = match call {
-        CallKind::Call => "this call".to_string(),
-        CallKind::Resume { k: Some(k) } => format!("resuming `{k}`"),
-        CallKind::Resume { k: None } => "resuming the continuation".to_string(),
-        CallKind::Handle => "this handle".to_string(),
+        CallKind::Call => "this call",
+        CallKind::Handle => "this handle",
     };
     let operation = multi;
     let primary = match operation {
@@ -656,13 +637,9 @@ fn carried_across(
             format!("`{}` is declared `multi` here", declared.name),
         ));
     }
-    let before = match call {
-        CallKind::Handle => "this handle",
-        CallKind::Call | CallKind::Resume { .. } => "this call",
-    };
     let help = match value {
-        CarriedValue::Local { name, .. } => format!("finish using `{name}` before {before}"),
-        CarriedValue::Temporary(_) => format!("finish using the value before {before}"),
+        CarriedValue::Local { name, .. } => format!("finish using `{name}` before {what}"),
+        CarriedValue::Temporary(_) => format!("finish using the value before {what}"),
         CarriedValue::ReturnCapture { name, .. } => {
             format!("do not capture `{name}` in the `return` clause")
         }

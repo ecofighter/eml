@@ -26,7 +26,7 @@ use crate::kind::problem::KindScheme;
 use crate::shape::Shape;
 
 pub use dump::dump;
-pub use ty::{ContState, EffectLabel, Linearity, Multiplicity, RowTail, Type};
+pub use ty::{EffectLabel, Linearity, Multiplicity, RowTail, Type};
 
 pub mod codes {
     use eml_diagnostics::ErrorCode;
@@ -43,7 +43,6 @@ pub mod codes {
     pub const INVALID_MAIN_TYPE: ErrorCode = ErrorCode(2004);
     pub const INFINITE_TYPE: ErrorCode = ErrorCode(2005);
     pub const NOT_COMPARABLE: ErrorCode = ErrorCode(2006);
-    pub const RESUME_STATE_MISMATCH: ErrorCode = ErrorCode(2007);
     pub const MASK_CONFLICT: ErrorCode = ErrorCode(2008);
     pub const NON_EXHAUSTIVE_MATCH: ErrorCode = ErrorCode(4001);
     pub const NON_EXHAUSTIVE_EQUATION: ErrorCode = ErrorCode(4002);
@@ -112,8 +111,8 @@ pub struct BodyTypes {
     /// パターンのコンストラクタ、handler の節の操作、シグネチャのない参照は記録しない
     /// (docs/implementation/architecture.md の「`eml_types` の内部」)。
     pub instantiations: ArenaMap<ExprId, Instantiation>,
-    /// 呼び出しの矢印ごとの `mask` (docs/spec/types.md の「推論」)。キーは呼び出しの式と矢印の番号で、`resume` は
-    /// 矢印 0 である。Core IR が、その呼び出しで飛ばすエフェクトとして使う。
+    /// 呼び出しの矢印ごとの `mask` (docs/spec/types.md の「推論」)。キーは呼び出しの式と矢印の番号である。
+    /// Core IR が、その呼び出しで飛ばすエフェクトとして使う。
     pub masks: HashMap<(ExprId, usize), Vec<EffectId>>,
 }
 

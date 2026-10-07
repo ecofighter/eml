@@ -3,30 +3,28 @@ source: crates/eml_cli/tests/ui.rs
 expression: rendered
 input_file: tests/ui/check-fail/types/resume_state.em
 ---
-[E2007] Error: this continuation comes from a handler with a state, so `resume` needs the next state
+[E2001] Error: mismatched types
    ╭─[ check-fail/types/resume_state.em:8:22 ]
    │
  8 │     | ask () k st -> resume k st
    │                      ─────┬─────  
-   │                           ╰─────── the next state is missing
+   │                           ╰─────── expected `Int`, found `Int -> Int`
    │ 
-   │ Help: pass the next state as the third argument: `resume k v st`
+   │ Note: each clause of a handler must have the type of the whole `handle` expression
 ───╯
-[E2007] Error: this continuation comes from a handler without a state, so `resume` takes no state
-    ╭─[ check-fail/types/resume_state.em:14:19 ]
+[E2001] Error: `k` takes 1 argument but 2 were given
+    ╭─[ check-fail/types/resume_state.em:14:30 ]
     │
  14 │     | ask () k -> resume k 1 2
-    │                   ──────┬─────  
-    │                         ╰─────── the state argument is not expected
-    │ 
-    │ Help: remove the third argument
+    │                              ┬  
+    │                              ╰── unexpected argument
 ────╯
-[E2007] Error: a continuation of a handler with a state meets one of a handler without a state
-    ╭─[ check-fail/types/resume_state.em:21:15 ]
+[E2001] Error: mismatched types
+    ╭─[ check-fail/types/resume_state.em:21:9 ]
     │
  21 │         again k
-    │               ┬  
-    │               ╰── the states of the continuations differ here
+    │         ───┬───  
+    │            ╰───── expected `Int`, found `Int -> Int`
     │ 
-    │ Note: a continuation of a handler with a state is resumed with three arguments, and one without a state with two
+    │ Note: each clause of a handler must have the type of the whole `handle` expression
 ────╯

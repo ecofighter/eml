@@ -1,4 +1,4 @@
--- E2007: `resume` passes a state exactly when its continuation comes from a handler with a state.
+-- E2001: a continuation takes the next state after the value exactly when its handler has a state.
 effect Ask where
   ask : Unit -> Int
 

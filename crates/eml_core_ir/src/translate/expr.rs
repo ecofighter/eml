@@ -444,12 +444,15 @@ impl FnLowering<'_> {
                 };
                 self.bind(out, "t", &ty, Rhs::call(call))
             }
+            // 表面の `resume` を Task 4 で消すまでの橋渡し。型検査は `k v [st]` の呼び出しとして矢印ごとに `mask` を
+            // 記録するので、状態のある handler では最後の矢印 1 の記録を使う
             ExprKind::Resume {
                 k,
                 arg,
                 arg_end: _,
                 state,
             } => {
+                let last_arrow = if state.is_some() { 1 } else { 0 };
                 let k = self.atom(*k, out);
                 let arg = self.atom(*arg, out);
                 let state = match state {
@@ -457,7 +460,8 @@ impl FnLowering<'_> {
                     None => Atom::Unit,
                 };
                 let ty = self.ty(id);
-                let rhs = Rhs::masked_call(Call::Resume { k, arg, state }, self.mask(id, 0));
+                let rhs =
+                    Rhs::masked_call(Call::Resume { k, arg, state }, self.mask(id, last_arrow));
                 self.bind(out, "t", &ty, rhs)
             }
             ExprKind::Tuple(elements) => {

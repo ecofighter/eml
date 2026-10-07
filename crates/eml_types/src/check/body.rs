@@ -27,8 +27,6 @@ pub(crate) enum CallRows {
         results: Vec<Ty>,
         performs: Option<(usize, OperationId)>,
     },
-    /// `resume k v`。`k` の型の、handle の外側の row。
-    Resume(Row),
     /// handle。本体の row と、外側の row。
     Handle { body: Row, outer: Row },
 }
@@ -44,7 +42,7 @@ pub(crate) struct BodyTyping {
     pub instantiations: ArenaMap<ExprId, (Decl, Vec<Ty>)>,
     /// 呼び出しの row。持ち越しのパスが読む。
     pub calls: ArenaMap<ExprId, CallRows>,
-    /// 呼び出しの矢印ごとの `mask`。キーは呼び出しの式と矢印の番号で、`resume` は矢印 0 である。空の `mask` は入れない
+    /// 呼び出しの矢印ごとの `mask`。キーは呼び出しの式と矢印の番号である。空の `mask` は入れない
     /// (docs/spec/types.md の「推論」)。
     pub masks: HashMap<(ExprId, usize), Vec<EffectId>>,
 }
@@ -67,16 +65,6 @@ pub(super) struct BodyCheck<'a, 'c> {
     pub(super) typing: BodyTyping,
     /// Kind の具体化の記録 (`Instance`)。段2が展開する。
     pub(super) instances: Vec<Instance>,
-    /// 検査中の操作の節。内側の節が後ろに積まれる。
-    pub(super) clause_frames: Vec<ClauseFrame>,
-}
-
-/// 検査中の操作の節。E2007 の fix が、`resume` を囲む節の `k` と状態の変数を引く
-/// (docs/implementation/diagnostics.md の E2007)。
-pub(super) struct ClauseFrame {
-    pub k: Option<LocalId>,
-    /// 状態の引数が変数の束縛 (型の明示を含む) なら、その変数。
-    pub state: Option<LocalId>,
 }
 
 /// 式に期待する型。check と infer で `if` とブロックの処理を共有するため。
@@ -275,12 +263,16 @@ impl BodyCheck<'_, '_> {
                 clauses,
                 ret,
             } => self.handle(id, *effect, *init, handled, clauses, ret),
+            // 表面の `resume` を Task 4 で消すまでの橋渡しとして、`resume k v [st]` を `k v [st]` の呼び出しとして型付けする
             ExprKind::Resume {
                 k,
                 arg,
-                arg_end,
+                arg_end: _,
                 state,
-            } => self.resume(id, *k, *arg, *arg_end, *state),
+            } => {
+                let args: Vec<ExprId> = std::iter::once(*arg).chain(*state).collect();
+                self.call(id, *k, &args)
+            }
             ExprKind::Match {
                 scrutinee, arms, ..
             } => self.match_expr(*scrutinee, arms, Expectation::None),
@@ -826,16 +818,6 @@ impl BodyCheck<'_, '_> {
                 "this expression would have an infinite type",
                 Label::new(self.file(), range, "infinite type"),
             )),
-            // `resume` の外で欄が食い違った。`k` をラムダに渡した後などである。`resume` の引数の数を直す場所は
-            // 分からないので、食い違いを見つけた式を指し、fix を付けない (docs/implementation/diagnostics.md の E2007)
-            Err(UnifyError::StateSlot) => self.diagnostics.push(
-                Diagnostic::error(
-                    codes::RESUME_STATE_MISMATCH,
-                    "a continuation of a handler with a state meets one of a handler without a state",
-                    Label::new(self.file(), range, "the states of the continuations differ here"),
-                )
-                .with_note("a continuation of a handler with a state is resumed with three arguments, and one without a state with two"),
-            ),
             Err(_) => self.mismatch(range, expected, found, origin),
         }
     }

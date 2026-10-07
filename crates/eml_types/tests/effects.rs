@@ -41,15 +41,54 @@ fn operations_are_values_and_can_be_partially_applied() {
 #[test]
 fn a_handler_removes_its_effect_and_types_the_continuation() {
     let text = "effect Ask where\n  ask : String -> Int\n\nrun : Unit -> <Ask, IO> Int\nrun () =\n  let n = ask \"n\"\n  println \"asked\"\n  n + 1\n\nmain : Unit -> <IO> Unit\nmain () =\n  let total =\n    handle run () with\n      | ask key k -> resume k 41\n      | return x -> show_int x\n  println total";
-    insta::assert_snapshot!(check_text(text), @r"
+    insta::assert_snapshot!(check_text(text), @"
     ask : String -> <Ask> Int
     run : Unit -> <Ask, IO> Int
       n#0 : Int
     main : Unit -> <IO> Unit
       key#0 : String
-      k#1 : Cont Int String <IO>
+      k#1 : Int -> <IO> String
       x#2 : Int
       total#3 : String
+    ");
+}
+
+/// 節の `k` は普通の関数型である。状態のある handler では2引数で、row は最後の矢印に付く (docs/spec/effects.md)。
+#[test]
+fn a_continuation_is_a_function() {
+    let stateless = "effect Ask where\n  ask : Unit -> Int\n\nrun : Unit -> <IO> String\nrun () =\n  handle ask () with\n    | ask () k -> k 1\n    | return x -> show_int x";
+    let stateful = "effect Tick where\n  tick : Unit -> Int\n\nrun : Unit -> Int\nrun () =\n  handle tick () from \"s\" with\n    | tick () k st -> k 1 st\n    | return x _ -> x";
+    insta::assert_snapshot!(check_text(stateless), @"
+    ask : Unit -> <Ask> Int
+    run : Unit -> <IO> String
+      k#0 : Int -> <IO> String
+      x#1 : Int
+    ");
+    insta::assert_snapshot!(check_text(stateful), @"
+    tick : Unit -> <Tick> Int
+    run : Unit -> Int
+      k#0 : Int -> String -> Int
+      st#1 : String
+      x#2 : Int
+    ");
+}
+
+/// 状態のある `multi` の `k` を部分適用したクロージャは、`Lin` の値を捕まえると1回しか呼べない (docs/spec/effects.md)。
+#[test]
+fn a_partial_continuation_capturing_a_linear_value_is_linear() {
+    let text = "effect Pick where\n  multi pick : Unit -> File\n\nrun : Unit -> <IO> Unit\nrun () =\n  handle pick () from () with\n    | pick () k st ->\n        let g = k (open \"a\")\n        g st\n        g st\n    | return f _ -> close f";
+    insta::assert_snapshot!(check_text(text), @"
+    pick : Unit -> <Pick> File
+    run : Unit -> <IO> Unit
+      k#0 : File -> Unit -> <IO> Unit
+      st#1 : Unit
+      g#2 : Unit -> <IO> Unit
+      f#3 : File
+    ---
+    E3002 10:9 `g` must be used exactly once, but it is used more than once
+      10:9 used again here
+      9:9 first used here
+      note: linear values, such as files, the continuation of a `once` operation and closures that capture one, must be used exactly once
     ");
 }
 
@@ -62,30 +101,29 @@ fn type_variables_of_an_operation_are_rigid_in_its_clause() {
     first : Unit -> Int
       x#0 : a
       y#1 : a
-      k#2 : Cont a Int <>
+      k#2 : a -> Int
       $r#3 : Int
     wrong : Unit -> Int
       x#0 : a
       y#1 : a
-      k#2 : Cont a Int <>
+      k#2 : a -> Int
       $r#3 : Int
     ---
     E2001 12:30 mismatched types
       12:30 expected `a`, found `Int`
-      note: `resume` passes this value as the result of the operation
+      12:28 argument 1 of `k`
     ");
 }
 
 #[test]
-fn resume_needs_a_continuation_and_drop_takes_any_value() {
+fn resume_needs_a_function_and_drop_takes_any_value() {
     let text = "f : Int -> Int\nf n =\n  drop n\n  resume n 1";
-    insta::assert_snapshot!(check_text(text), @r"
+    insta::assert_snapshot!(check_text(text), @"
     f : Int -> Int
       n#0 : Int
     ---
-    E2001 4:10 mismatched types
-      4:10 expected `Cont _ _ <_>`, found `Int`
-      note: the first argument of `resume` must be a continuation
+    E2001 4:12 `n` is not a function
+      4:12 unexpected argument
     ");
 }
 
@@ -96,7 +134,7 @@ fn the_body_of_a_handler_may_perform_only_the_handled_effect_and_the_outer_row()
     ask : Unit -> <Ask> Int
     noisy : Unit -> <IO> Int
     f : Unit -> Int
-      k#0 : Cont Int Int <>
+      k#0 : Int -> Int
       $r#1 : Int
     ---
     E2002 11:10 `noisy` performs `IO`, which the signature of `f` does not allow
@@ -112,16 +150,16 @@ fn a_continuation_of_a_once_operation_must_be_used_exactly_once() {
     insta::assert_snapshot!(check_text(text), @"
     ask : Unit -> <Ask> Int
     twice : Unit -> Int
-      k#0 : Cont Int Int <>
+      k#0 : Int -> Int
       $r#1 : Int
     unused : Unit -> Int
-      k#0 : Cont Int Int <>
+      k#0 : Int -> Int
       $r#1 : Int
     discarded : Unit -> Int
       $r#0 : Int
     captured : Unit -> <Ask> Int
-      k#0 : Cont Int Int <Ask>
-      inner#1 : Cont Int Int <Ask>
+      k#0 : Int -> <Ask> Int
+      inner#1 : Int -> <Ask> Int
       $r#2 : Int
       $r#3 : Int
     ---
@@ -129,11 +167,11 @@ fn a_continuation_of_a_once_operation_must_be_used_exactly_once() {
       7:39 used again here
       7:26 first used here
       note: linear values, such as files, the continuation of a `once` operation and closures that capture one, must be used exactly once
-    E3005 12:5 the continuation `k` of a `once` operation must be resumed or dropped
+    E3005 12:5 the continuation `k` of a `once` operation must be called or dropped
       12:5 this clause
       12:14 `k` is bound here
       note: linear values, such as files, the continuation of a `once` operation and closures that capture one, must be used exactly once
-      help: call `resume k v` or `drop k` on every path
+      help: call `k` or `drop k` on every path
     E3004 17:14 a linear value cannot be discarded with `_`
       17:14 this pattern discards it
       note: linear values, such as files, the continuation of a `once` operation and closures that capture one, must be used exactly once
@@ -154,7 +192,7 @@ fn a_closure_capturing_a_continuation_cannot_be_used_twice() {
       kinds: (Int -> Int) <= Unr
       f#0 : Int -> Int
     g : Unit -> Int
-      k#0 : Cont Int Int <>
+      k#0 : Int -> Int
       n#1 : Int
       $r#2 : Int
     ---
@@ -170,7 +208,7 @@ fn a_body_with_a_reported_error_does_not_report_linear_values() {
     insta::assert_snapshot!(check_text(text), @"
     ask : Unit -> <Ask> Int
     f : Unit -> Int
-      k#0 : Cont Int Int <>
+      k#0 : Int -> Int
       $r#1 : Int
     ---
     E1011 7:19 `resume` takes a continuation, a value, and an optional state, but 1 argument was given
@@ -188,10 +226,10 @@ fn a_continuation_cannot_pass_through_a_polymorphic_operation_parameter() {
     pair : a -> (a -> a -> b) -> <Pair> b
       kinds: a <= Unr, (a -> a -> b) <= Unr, (a -> b) <= Unr, b <= Unr
     sunk : Unit -> <Sink> Int
-      k#0 : Cont Int Int <Sink>
+      k#0 : Int -> <Sink> Int
       $r#1 : Int
     paired : Unit -> <Pair> Int
-      k#0 : Cont Int Int <Pair>
+      k#0 : Int -> <Pair> Int
       x#1 : Int
       y#2 : Int
       u#3 : Unit
@@ -214,9 +252,9 @@ fn a_clause_dropped_by_an_error_does_not_cause_linear_misuse() {
     ask : Unit -> <Ask> Int
     log : String -> <Log> Unit
     f : Unit -> Int
-      k#0 : Cont Int Int <>
+      k#0 : Int -> Int
       m#1 : String
-      k2#2 : Cont Unit Int <>
+      k2#2 : Unit -> Int
       x#3 : Int
       $r#5 : Int
     ---
@@ -259,15 +297,15 @@ fn a_handler_takes_the_type_arguments_of_its_effect_from_the_body() {
     ask : Unit -> <Reader r> r
     greeting : Unit -> <Reader String> String
     run : Unit -> String
-      k#0 : Cont String String <>
+      k#0 : String -> String
       $r#1 : String
     wrong : Unit -> String
-      k#0 : Cont String String <>
+      k#0 : String -> String
       $r#1 : String
     ---
     E2001 15:28 mismatched types
       15:28 expected `String`, found `Int`
-      note: `resume` passes this value as the result of the operation
+      15:26 argument 1 of `k`
     ");
 }
 
@@ -294,7 +332,7 @@ fn a_continuation_of_a_multi_operation_may_be_resumed_twice() {
     insta::assert_snapshot!(check_text(text), @"
     choose : Unit -> <Choice> Bool
     both : Unit -> Int
-      k#0 : Cont Bool Int <>
+      k#0 : Bool -> Int
       $r#1 : Int
     ");
 }
@@ -306,8 +344,8 @@ fn the_return_clause_of_a_multi_handler_cannot_capture_a_linear_value() {
     ask : Unit -> <Ask> Int
     choose : Unit -> <Choice> Bool
     captured : Unit -> Int
-      k#0 : Cont Int Int <>
-      c#1 : Cont Bool Int <>
+      k#0 : Int -> Int
+      c#1 : Bool -> Int
       n#2 : Int
       $r#3 : Int
     ---
@@ -323,11 +361,11 @@ fn the_return_clause_of_a_multi_handler_cannot_capture_a_linear_value() {
 #[test]
 fn the_return_clause_of_a_multi_handler_may_capture_an_unrestricted_value() {
     let text = "effect Choice where\n  multi choose : Unit -> Bool\n\ncaptured : Int -> Int\ncaptured base =\n  handle (if choose () then 1 else 2) with\n    | choose () c -> resume c True + resume c False\n    | return n -> n + base";
-    insta::assert_snapshot!(check_text(text), @r"
+    insta::assert_snapshot!(check_text(text), @"
     choose : Unit -> <Choice> Bool
     captured : Int -> Int
       base#0 : Int
-      c#1 : Cont Bool Int <>
+      c#1 : Bool -> Int
       n#2 : Int
     ");
 }
@@ -337,10 +375,10 @@ fn continuations_of_handlers_with_a_state_carry_the_state() {
     let text = "effect Ask where\n  ask : Unit -> Int\n\nf : Unit -> Int\nf () =\n  handle ask () from \"s\" with\n    | ask () k st -> resume k 1 st\n    | return x st -> x\n\ng : Unit -> Int\ng () =\n  handle ask () from () with\n    | ask () k st -> resume k 1 st\n    | return x st -> x";
     let dump = check_text(text);
     assert!(
-        dump.contains("k#") && dump.contains(": Cont Int Int <> from String"),
+        dump.contains("k#") && dump.contains(": Int -> String -> Int"),
         "{dump}"
     );
-    assert!(dump.contains(": Cont Int Int <> from Unit"), "{dump}");
+    assert!(dump.contains(": Int -> Unit -> Int"), "{dump}");
     assert!(!dump.contains("E2"), "{dump}");
 }
 
@@ -352,31 +390,31 @@ fn a_continuation_with_a_state_is_resumed_through_a_lambda_and_more_than_once() 
 }
 
 #[test]
-fn resume_must_match_the_state_of_its_continuation() {
+fn the_arity_of_a_continuation_follows_the_state_of_its_handler() {
     let text = "effect Ask where\n  ask : Unit -> Int\n\nmissing : Unit -> Int\nmissing () =\n  handle ask () from 0 with\n    | ask () k st -> resume k st\n    | return x st -> x\n\nextra : Unit -> Int\nextra () =\n  handle ask () with\n    | ask () k -> resume k 1 2";
     insta::assert_snapshot!(check_text(text), @"
     ask : Unit -> <Ask> Int
     missing : Unit -> Int
-      k#0 : Cont Int Int <> from Int
+      k#0 : Int -> Int -> Int
       st#1 : Int
       x#2 : Int
       st#3 : Int
     extra : Unit -> Int
-      k#0 : Cont Int Int <>
+      k#0 : Int -> Int
       $r#1 : Int
     ---
-    E2007 7:22 this continuation comes from a handler with a state, so `resume` needs the next state
-      7:22 the next state is missing
-      help: pass the next state as the third argument: `resume k v st`
-    E2007 13:19 this continuation comes from a handler without a state, so `resume` takes no state
-      13:19 the state argument is not expected
-      help: remove the third argument
+    E2001 7:22 mismatched types
+      7:22 expected `Int`, found `Int -> Int`
+      note: each clause of a handler must have the type of the whole `handle` expression
+    E2001 13:30 `k` takes 1 argument but 2 were given
+      13:30 unexpected argument
     ");
 }
 
 #[test]
-fn a_continuation_passed_to_a_lambda_is_checked_where_the_states_meet() {
-    // ラムダの中の2引数の `resume` が欄を「状態なし」にし、状態のある `k` を渡したところで食い違う
+fn a_continuation_with_a_state_called_without_it_in_a_lambda_is_a_mismatch() {
+    // ラムダの中の `resume c 1` は `c` に引数を1つだけ渡す。状態のある `k` を渡すと、`again k` が部分適用の関数になり、
+    // 節の型と食い違う
     let text = "effect Ask where\n  ask : Unit -> Int\n\nf : Unit -> Int\nf () =\n  handle ask () from 0 with\n    | ask () k st ->\n        let again = fn c -> resume c 1\n        again k\n    | return x _ -> x";
     let checked = eml_test_support::check(text);
     let codes: Vec<String> = checked
@@ -384,7 +422,7 @@ fn a_continuation_passed_to_a_lambda_is_checked_where_the_states_meet() {
         .iter()
         .map(|d| d.code.to_string())
         .collect();
-    assert_eq!(codes, ["E2007"]);
+    assert_eq!(codes, ["E2001"]);
 }
 
 #[test]
@@ -398,104 +436,6 @@ fn a_handler_of_an_unknown_effect_still_checks_its_initial_state() {
         .collect();
     assert!(codes.contains(&"E1001".to_string()), "{codes:?}");
     assert!(codes.contains(&"E2001".to_string()), "{codes:?}");
-}
-
-fn fix_text(text: &str) -> String {
-    let checked = eml_test_support::check(text);
-    eml_test_support::fixes(&checked.files, &checked.diagnostics)
-}
-
-const ASK: &str = "effect Ask where\n  ask : Unit -> Int\n\n";
-
-#[test]
-fn the_state_argument_is_removed_from_a_continuation_without_a_state() {
-    let text = format!(
-        "{ASK}f : Unit -> Int\nf () =\n  handle ask () with\n    | ask () k -> resume k 1 2"
-    );
-    insta::assert_snapshot!(fix_text(&text), @r#"
-    E2007 7:19 remove the state argument
-      7:29..7:31 ""
-    "#);
-}
-
-#[test]
-fn the_current_state_is_passed_when_the_clause_binds_it_to_a_name() {
-    let text = format!(
-        "{ASK}f : Unit -> Int\nf () =\n  handle ask () from 0 with\n    | ask () k (st : Int) -> resume k st\n    | return x _ -> x"
-    );
-    insta::assert_snapshot!(fix_text(&text), @r#"
-    E2007 7:30 pass the current state `st`
-      7:41..7:41 " st"
-    "#);
-}
-
-#[test]
-fn no_state_is_passed_when_the_state_is_a_pattern() {
-    let text = format!(
-        "{ASK}f : Unit -> Int\nf () =\n  handle ask () from (0, 0) with\n    | ask () k (a, b) -> resume k a\n    | return x _ -> x"
-    );
-    assert_eq!(fix_text(&text), "");
-}
-
-#[test]
-fn no_state_is_passed_when_its_name_is_shadowed() {
-    let text = format!(
-        "{ASK}f : Unit -> Int\nf () =\n  handle ask () from 0 with\n    | ask () k st ->\n        let st = 5\n        resume k st\n    | return x _ -> x"
-    );
-    assert_eq!(fix_text(&text), "");
-}
-
-#[test]
-fn no_state_is_passed_for_a_continuation_outside_its_clause() {
-    let text = format!(
-        "{ASK}f : Unit -> Int\nf () =\n  handle ask () from 0 with\n    | ask () k st ->\n        let j = k\n        resume j st\n    | return x _ -> x"
-    );
-    let fixes = fix_text(&text);
-    assert!(!fixes.contains("pass the current state"), "{fixes}");
-}
-
-#[test]
-fn the_state_of_the_clause_that_binds_k_is_passed_in_nested_handlers() {
-    let text = format!(
-        "{ASK}f : Unit -> Int\nf () =\n  handle ask () from 0 with\n    | ask () k outer ->\n        handle ask () from 1 with\n          | ask () j inner -> resume k inner\n          | return y _ -> y\n    | return x _ -> x"
-    );
-    insta::assert_snapshot!(fix_text(&text), @r#"
-    E2007 9:31 pass the current state `outer`
-      9:45..9:45 " outer"
-    "#);
-}
-
-#[test]
-fn the_state_argument_is_removed_up_to_its_closing_paren() {
-    let text = format!(
-        "{ASK}f : Unit -> Int\nf () =\n  handle ask () with\n    | ask () k -> resume k 1 (2)"
-    );
-    insta::assert_snapshot!(fix_text(&text), @r#"
-    E2007 7:19 remove the state argument
-      7:29..7:33 ""
-    "#);
-}
-
-#[test]
-fn the_state_argument_is_removed_after_the_closing_paren_of_the_value() {
-    let text = format!(
-        "{ASK}f : Unit -> Int\nf () =\n  handle ask () with\n    | ask () k -> resume k (1) 2"
-    );
-    insta::assert_snapshot!(fix_text(&text), @r#"
-    E2007 7:19 remove the state argument
-      7:31..7:33 ""
-    "#);
-}
-
-#[test]
-fn the_current_state_is_passed_after_the_closing_paren_of_the_value() {
-    let text = format!(
-        "{ASK}f : Unit -> Int\nf () =\n  handle ask () from 0 with\n    | ask () k st -> resume k (st + 1)\n    | return x _ -> x"
-    );
-    insta::assert_snapshot!(fix_text(&text), @r#"
-    E2007 7:22 pass the current state `st`
-      7:39..7:39 " st"
-    "#);
 }
 
 #[test]

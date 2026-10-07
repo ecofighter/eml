@@ -183,7 +183,7 @@ impl Table<'_> {
         Ok(())
     }
 
-    /// row 変数 `var` が `row` の中に現れるかを調べる。ラベルの型引数は関数型や継続の型を持てるので、その row の
+    /// row 変数 `var` が `row` の中に現れるかを調べる。ラベルの型引数は関数型を持てるので、その row の
     /// 中までたどる。現れるのに束縛すると、row の展開が終わらなくなる。
     fn row_occurs(&self, var: RowVar, row: &Row) -> bool {
         let row = self.resolve_row(row);
@@ -198,10 +198,6 @@ impl Table<'_> {
         self.shape(ty).any_child(|child| match child {
             Child::Ty(child) => self.row_occurs_in(var, child),
             Child::Row(row) => self.row_occurs(var, row),
-            Child::Slot(slot) => match self.resolve_slot(slot) {
-                Slot::State(state) => self.row_occurs_in(var, state),
-                Slot::Stateless | Slot::Var(_) => false,
-            },
         })
     }
 

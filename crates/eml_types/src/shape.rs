@@ -493,9 +493,7 @@ impl Closer<'_, '_> {
                 ShapeTy::Rigid(self.rigid_index[&rigid])
             }
             TyShape::Error => ShapeTy::Error,
-            TyShape::Var(_) | TyShape::Cont { .. } => {
-                unreachable!("a signature has no inference variables or continuations")
-            }
+            TyShape::Var(_) => unreachable!("a signature has no inference variables"),
         }
     }
 }

@@ -219,25 +219,18 @@ impl Carrying<'_, '_> {
                     None => live,
                 }
             }
-            // 再開した継続が外側の `multi` の操作を起こすと、節の手元の値も写される。同じ handler のエフェクトは区間の
-            // 中で処理されるので、外側の row だけを見ればよい (docs/spec/effects.md の「継続の多重度と持ち越し規則」)
+            // 表面の `resume` を Task 4 で消すまでの橋渡しとして、`k v [st]` の呼び出しの最後の矢印の row で持ち越しを
+            // 調べる。最初の矢印の row は空なので、最後の矢印だけを見ればよい (docs/spec/effects.md の「継続の多重度と持ち越し規則」)
             ExprKind::Resume {
                 k,
                 arg,
                 arg_end: _,
                 state,
             } => {
-                if let Some(CallRows::Resume(row)) = typing.calls.get(id) {
-                    let name = match &body.exprs[*k].kind {
-                        ExprKind::Path(Res::Local(local)) => Some(body.locals[*local].name.clone()),
-                        _ => None,
-                    };
-                    self.carry(
-                        id,
-                        after,
-                        &Across::Row(row.clone()),
-                        &CallKind::Resume { k: name },
-                    );
+                if let Some(CallRows::Call { arrows, .. }) = typing.calls.get(id)
+                    && let Some(row) = arrows.last()
+                {
+                    self.carry(id, after, &Across::Row(row.clone()), &CallKind::Call);
                 }
                 let mut parts = vec![*k, *arg];
                 parts.extend(state);
