@@ -23,7 +23,7 @@ pub(super) fn declare_data(
     for (k, item) in items.iter().enumerate() {
         let keyword = item.syntax.extern_keyword();
         let mut generics = Generics::default();
-        // extern の型に書いた型引数はパーサが E0011 にした。それでも型引数として置き、使う位置の型引数の数 (E1015) と
+        // extern の型に書いた型引数はパーサが E0011 にした (docs/spec/declarations.md の「`extern`」)。それでも型引数として置き、使う位置の型引数の数 (E1015) と
         // 型検査の Kind を書いたとおりにそろえて、誤りを連鎖させない
         for param in item.syntax.params().map(|name| name.token()) {
             let text = param.text();

@@ -183,6 +183,7 @@ fn extern_effect(p: &mut Parser, m: Marker) {
     m.complete(p, EFFECT_ITEM);
 }
 
+/// extern の `data` / `effect` に型引数、`=`、`where` は書けない (docs/spec/declarations.md の「`extern`」)。
 /// 誤って書いた型引数も名前として読む。使う位置の型引数の数 (E1015) が書いたとおりになり、誤りが連鎖しない。
 fn reject_extern_tail(p: &mut Parser, keyword: &str) {
     if p.at(LIDENT) || p.at(EQ) || p.at(PIPE) || p.at(WHERE_KW) {

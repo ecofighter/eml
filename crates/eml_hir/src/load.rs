@@ -149,6 +149,8 @@ struct Loader<'a> {
     files: SourceFiles,
     modules: Vec<LoadedModule>,
     /// 読んだモジュール。標準ライブラリとユーザーの根に同じパスのモジュールがありうるので、出どころと組にする。
+    /// ユーザーの根にファイルがなく標準ライブラリにフォールバックしたときも、`(User, path)` の鍵に標準ライブラリの
+    /// モジュールを入れる。同じパスでユーザーの根を何度も探さないためである (docs/spec/modules.md の「標準ライブラリ」)。
     by_path: HashMap<(ModuleOrigin, ModulePath), ModuleId>,
     diagnostics: Vec<Diagnostic>,
 }
