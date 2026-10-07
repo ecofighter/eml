@@ -198,8 +198,36 @@ impl BodyCheck<'_, '_> {
             }
             // include_row は rigid な row 変数を束縛しない。型引数の単一化の失敗は `EffectArgs` か `Occurs` になるので、
             // `Mismatch` と `StateSlot` は起きない
-            // E2008 の診断を足すまでは、診断を出さずに含まれない呼び出しとして扱う
-            Err(UnifyError::MaskConflict(_)) => return false,
+            // 呼び出し先が自分で起こす `L` は今の row の先頭の `L` に届き、row 変数を通る `L` は余った `L` をすべて飛ばす
+            // 必要がある。`mask` は呼び出しの中の `L` の操作をすべて同じだけ飛ばすので、両方を満たせない (docs/spec/effects.md)
+            Err(UnifyError::MaskConflict(effect)) => {
+                if report {
+                    let effect = self.program.names.effect(effect).to_string();
+                    let mut diagnostic = Diagnostic::error(
+                        codes::MASK_CONFLICT,
+                        format!(
+                            "{name} performs `{effect}` itself and also passes `{effect}` through its row variable to an outer handler"
+                        ),
+                        Label::new(
+                            self.file(),
+                            range,
+                            format!("the `{effect}` of this call cannot be told apart"),
+                        ),
+                    )
+                    .with_note(format!(
+                        "the call's own `{effect}` goes to the innermost `{effect}` handler, but the `{effect}` of its row variable must skip it"
+                    ));
+                    if let AmbientSource::Signature = self.ambient_source {
+                        diagnostic = diagnostic.with_secondary(Label::new(
+                            self.file(),
+                            self.body_arrow_range(),
+                            format!("this row lists `{effect}` before the row variable"),
+                        ));
+                    }
+                    self.diagnostics.push(diagnostic);
+                }
+                return false;
+            }
             Err(UnifyError::Mismatch | UnifyError::StateSlot) => unreachable!(
                 "including a row reports only missing effects, a missing row variable, effect arguments or an infinite type"
             ),

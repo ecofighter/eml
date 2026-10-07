@@ -94,3 +94,21 @@ fn only_the_arrow_that_needs_it_is_masked() {
     );
     insta::assert_snapshot!(masks(&text, "h"), @"6:7#0 [State]");
 }
+
+#[test]
+fn a_callee_that_performs_the_masked_effect_itself_is_rejected() {
+    let text = "\
+effect Log where
+  log : String -> Unit
+
+both : (Unit -> <e> a) -> <Log | e> a
+both action =
+  log \"x\"
+  action ()
+
+outer : (Unit -> <e> a) -> <Log, Log | e> a
+outer action = both action
+";
+    let checked = check(text);
+    insta::assert_snapshot!(short_text(&checked.files, &checked.diagnostics), @"E2008 10:16 `both` performs `Log` itself and also passes `Log` through its row variable to an outer handler");
+}

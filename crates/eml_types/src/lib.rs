@@ -44,6 +44,7 @@ pub mod codes {
     pub const INFINITE_TYPE: ErrorCode = ErrorCode(2005);
     pub const NOT_COMPARABLE: ErrorCode = ErrorCode(2006);
     pub const RESUME_STATE_MISMATCH: ErrorCode = ErrorCode(2007);
+    pub const MASK_CONFLICT: ErrorCode = ErrorCode(2008);
     pub const NON_EXHAUSTIVE_MATCH: ErrorCode = ErrorCode(4001);
     pub const NON_EXHAUSTIVE_EQUATION: ErrorCode = ErrorCode(4002);
     pub const REFUTABLE_PATTERN: ErrorCode = ErrorCode(4003);
