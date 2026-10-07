@@ -3,7 +3,8 @@
 use std::collections::HashMap;
 
 use eml_hir::{
-    ConstructorId, EffectId, FunctionId, OpMultiplicity, OperationId, Program as HirProgram,
+    ConstructorId, EffectId, FunctionId, ModuleId, OpMultiplicity, OperationId,
+    Program as HirProgram,
 };
 use eml_types::{Decl, Type, TypedProgram};
 
@@ -112,7 +113,8 @@ impl ProgramBuilder {
                 })
             }
         };
-        let core = builder.finish(format!("op${}", operation.name), params, body);
+        let name = format!("op${}", core_name(hir, op.module, &operation.name));
+        let core = builder.finish(name, params, body);
         self.finish(function, core);
         function
     }
@@ -152,7 +154,8 @@ impl ProgramBuilder {
             },
             body: ret,
         });
-        let core = builder.finish(format!("con${}", constructor.name), params, body);
+        let name = format!("con${}", core_name(hir, ctor.module, &constructor.name));
+        let core = builder.finish(name, params, body);
         self.finish(function, core);
         function
     }
@@ -194,7 +197,11 @@ impl ProgramBuilder {
         } else {
             builder.push(CExpr::TailCall(Call::Direct(target, unit)))
         };
-        let core = builder.finish(format!("entry${}", hir[target_id].name), Vec::new(), body);
+        let name = format!(
+            "entry${}",
+            core_name(hir, target_id.module, &hir[target_id].name)
+        );
+        let core = builder.finish(name, Vec::new(), body);
         self.finish(function, core);
         function
     }
@@ -244,7 +251,7 @@ impl ProgramBuilder {
     }
 }
 
-/// エフェクトの番号は、`eml_hir::Program::effects` の順 (Prelude の `IO`、入口のモジュールの宣言の順) の位置である。
+/// エフェクトの番号は、`eml_hir::Program::effects` の順 (モジュールの番号の順、モジュールの中の宣言の順) の位置である。
 /// エフェクトの表 (`effect_table`) も同じ順に並べる。
 pub(super) fn effect_index(hir: &HirProgram, effect: EffectId) -> u32 {
     hir.effects()
@@ -261,6 +268,16 @@ pub(super) fn operation_rhs(hir: &HirProgram, op: OperationId, args: Vec<Atom>) 
         Rhs::Io(io, args)
     } else {
         Rhs::call(perform_call(hir, op, args))
+    }
+}
+
+/// Core IR の関数とエフェクトの名前。テキストの形は関数とエフェクトを名前で引くので、入口以外のモジュールの名前には
+/// `モジュール名.` を付け、モジュールをまたいで重ならないようにする。Prelude もこの規則に従う (docs/spec/core-ir.md)。
+pub(super) fn core_name(hir: &HirProgram, module: ModuleId, name: &str) -> String {
+    if module == hir.entry {
+        name.to_string()
+    } else {
+        format!("{}.{name}", hir.modules[module].name)
     }
 }
 
@@ -283,8 +300,8 @@ fn perform_call(hir: &HirProgram, op: OperationId, args: Vec<Atom>) -> Call {
 /// エフェクトの表。`effect_index` と同じ順に並べる。
 pub(super) fn effect_table(hir: &HirProgram) -> Vec<EffectInfo> {
     hir.effects()
-        .map(|(_, effect)| EffectInfo {
-            name: effect.name.clone(),
+        .map(|(id, effect)| EffectInfo {
+            name: core_name(hir, id.module, &effect.name),
             operations: effect
                 .operations
                 .iter()

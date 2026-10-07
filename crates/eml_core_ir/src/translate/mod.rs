@@ -23,7 +23,7 @@ use crate::{
 };
 
 use pattern::needs_decision_tree;
-use program::{ProgramBuilder, effect_table};
+use program::{ProgramBuilder, core_name, effect_table};
 use types::{split_arrows, var_info};
 
 /// 入口の関数から届く関数。使わない Prelude の関数を Core IR に入れないため、関数の本体の参照をたどって集める
@@ -78,13 +78,7 @@ pub(crate) fn translate(hir: &HirProgram, typed: &TypedProgram, entry: FunctionI
             .map(|&pat| Some(pat))
             .zip(param_types)
             .collect();
-        // Prelude の関数の名前には `Prelude.` を付け、ユーザーが同じ名前の関数を定義しても重ならないようにする
-        // (docs/spec/core-ir.md)
-        let name = if id.module == hir.prelude {
-            format!("Prelude.{}", function.name)
-        } else {
-            function.name.clone()
-        };
+        let name = core_name(hir, id.module, &function.name);
         let mut lambdas = 0;
         let mut handlers = 0;
         let core = FnLowering {
