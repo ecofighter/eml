@@ -105,11 +105,12 @@ pub fn check(program: &Program) -> (TypedProgram, Vec<Diagnostic>) {
     check::check_module(program)
 }
 
-/// `main` がないこと。`eml check` では検査せず、`eml run` だけが報告する (docs/spec/types.md の「推論」)。
+/// 入口のモジュールに `main` がないこと。`eml check` では検査せず、`eml run` だけが報告する (docs/spec/types.md の
+/// 「推論」)。import した `main` は実行を始める関数にならないので、メッセージは入口のモジュールの定義を求める。
 pub fn missing_main(file: FileId) -> Diagnostic {
     Diagnostic::error(
         codes::MISSING_MAIN,
-        "`main` is not defined",
+        "the entry module does not define `main`",
         Label::new(
             file,
             TextRange::empty(0.into()),

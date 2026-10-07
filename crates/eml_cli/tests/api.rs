@@ -99,6 +99,19 @@ fn a_missing_main_points_at_the_entry() {
 }
 
 #[test]
+fn an_imported_main_does_not_start_the_program() {
+    // `main` は入口のモジュールからだけ探すので、import した `main` があっても E2003 にする (docs/spec/types.md)
+    let source = MemorySource(&[("Util.em", "pub main : Unit -> <IO> Unit\nmain () = ()")]);
+    let session = Session::load("main.em", "import Util (main)\n", &source);
+    let compiled = session.compile();
+    assert_eq!(codes(&compiled.diagnostics), ["E2003"]);
+    assert_eq!(
+        compiled.diagnostics[0].message,
+        "the entry module does not define `main`"
+    );
+}
+
+#[test]
 fn fs_provider_reads_a_module_under_the_root() {
     let dir = temp_project("fs-read", &[("Report/Csv.em", "pub x : Int\nx = 1\n")]);
     let read = FsProvider::new(&dir).read(&module_path(&["Report", "Csv"]));

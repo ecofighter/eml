@@ -281,6 +281,10 @@ impl BodyCheck<'_, '_> {
             .export(found)
             .display(&self.program.names)
             .to_string();
+        // 注記の Prelude の型も、同じ名前のユーザーの型と区別できるよう表示名で書く
+        let names = &self.program.names;
+        let unit = names.unit();
+        let bool = names.ty(self.program.lang.bool);
         let mut diagnostic = Diagnostic::error(
             codes::TYPE_MISMATCH,
             "mismatched types",
@@ -314,7 +318,7 @@ impl BodyCheck<'_, '_> {
                 "expected because of this annotation",
             )),
             Origin::IfCondition => {
-                diagnostic.with_note("the condition of `if` must have type `Bool`")
+                diagnostic.with_note(format!("the condition of `if` must have type `{bool}`"))
             }
             Origin::IfBranches(then_branch) => diagnostic.with_secondary(Label::new(
                 file,
@@ -335,11 +339,15 @@ impl BodyCheck<'_, '_> {
             Origin::LiteralPattern => diagnostic
                 .with_note("a literal pattern matches only values of the type of the literal"),
             Origin::IfWithoutElse => {
-                diagnostic.with_note("an `if` without `else` must have type `Unit`")
+                diagnostic.with_note(format!("an `if` without `else` must have type `{unit}`"))
             }
             Origin::Statement => diagnostic
-                .with_note("a statement that is not the last one in a block must have type `Unit`"),
-            Origin::UnitPattern => diagnostic.with_note("the pattern `()` matches only `Unit`"),
+                .with_note(format!(
+                "a statement that is not the last one in a block must have type `{unit}`"
+            )),
+            Origin::UnitPattern => {
+                diagnostic.with_note(format!("the pattern `()` matches only `{unit}`"))
+            }
             Origin::HandlerClause => diagnostic.with_note(
                 "each clause of a handler must have the type of the whole `handle` expression",
             ),

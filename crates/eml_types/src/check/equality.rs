@@ -57,7 +57,9 @@ impl BodyCheck<'_, '_> {
     /// 比べられない型の値を比べた (E2006)。演算子を指す。
     fn not_comparable(&self, comparison: &Comparison, operand: &Type) -> Diagnostic {
         let op = &self.program[comparison.operator].name;
-        let operand = operand.display(&self.program.names);
+        let names = &self.program.names;
+        let lang = self.program.lang;
+        let operand = operand.display(names);
         Diagnostic::error(
             codes::NOT_COMPARABLE,
             format!("values of type `{operand}` cannot be compared with `{op}`"),
@@ -67,6 +69,11 @@ impl BodyCheck<'_, '_> {
                 format!("`{op}` cannot compare `{operand}`"),
             ),
         )
-        .with_note("`==` and `!=` compare only values of type `Int`, `String` and `Bool`")
+        .with_note(format!(
+            "`==` and `!=` compare only values of type `{}`, `{}` and `{}`",
+            names.ty(lang.int),
+            names.ty(lang.string),
+            names.ty(lang.bool)
+        ))
     }
 }

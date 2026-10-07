@@ -371,7 +371,10 @@ fn check_main(
     if !found.contains_error() && found != expected {
         diagnostics.push(Diagnostic::error(
             codes::INVALID_MAIN_TYPE,
-            "`main` must have type `Unit -> <IO> Unit`",
+            format!(
+                "`main` must have type `{}`",
+                expected.display(&program.names)
+            ),
             Label::new(
                 program.file(id.module),
                 signature.range,

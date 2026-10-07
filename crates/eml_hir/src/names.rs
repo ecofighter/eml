@@ -9,7 +9,7 @@ use crate::program::{ConstructorId, EffectId, TypeDefId};
 const CONT: &str = "Cont";
 
 /// ID から表示名を引く表。2つ以上のモジュールが定義する名前だけを、`Prelude.Bool` のようにモジュール名で修飾する。
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct DisplayNames {
     types: HashMap<TypeDefId, String>,
     effects: HashMap<EffectId, String>,

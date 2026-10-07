@@ -780,3 +780,21 @@ fn an_arm_reached_by_one_leaf_sits_at_the_leaf() {
     }
     ");
 }
+
+#[test]
+fn effects_of_the_same_name_in_two_modules_stay_apart() {
+    // エフェクトの表は名前で引くので、入口の `Log` と `Audit.Log` は別の名前になる (docs/spec/core-ir.md)
+    let audit = "pub effect Log where\n  emit : Int -> Unit\n\npub audited : Unit -> <Log> Unit\naudited () = emit 1";
+    let main = "import Audit\n\neffect Log where\n  emit : Int -> Unit\n\nlocal : Unit -> <Log> Unit\nlocal () = emit 2\n\nmain : Unit -> <IO> Unit\nmain () =\n  handle Audit.audited () with\n    | Audit.emit n k -> resume k (println (show_int n))\n  handle local () with\n    | emit n k -> resume k (println (show_int n))";
+    let shown = core_text_files(main, &[("Audit.em", audit)], Pass::Translate);
+    for expected in [
+        "effect Log { emit/1 }",
+        "effect Audit.Log { emit/1 }",
+        "perform Log.emit(",
+        "perform Audit.Log.emit(",
+        "handle Log(",
+        "handle Audit.Log(",
+    ] {
+        assert!(shown.contains(expected), "{expected}\n{shown}");
+    }
+}

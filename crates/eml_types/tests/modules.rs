@@ -144,3 +144,30 @@ fn a_user_unit_and_cont_are_told_apart_from_the_builtin_ones() {
       8:5 expected because of the signature of `f`
     ");
 }
+
+#[test]
+fn notes_name_builtin_types_by_their_display_names() {
+    // E2004、E2006 と型の不一致の注記も、Prelude の型を表示名で書く。ユーザーが `Bool` と `Unit` を定義すると、
+    // Prelude のほうは `Prelude.Bool` と `Prelude.Unit` になる
+    let text = "data Bool = | Yes | No\n\ndata Unit = | U\n\nmain : Unit -> <IO> Prelude.Unit\nmain u = ()\n\ncondition : Bool -> Int\ncondition b = if b then 1 else 0\n\ncompare : Bool -> Prelude.Bool\ncompare b = b == b\n\nwithout_else : Prelude.Bool -> Prelude.Unit\nwithout_else b = if b then 1\n\nstatement : Int -> Int\nstatement n =\n  n\n  n\n\nunit_pattern : Int -> Int\nunit_pattern () = 1";
+    let checked = eml_test_support::check(text);
+    insta::assert_snapshot!(eml_test_support::full(&checked.files, &checked.diagnostics), @r"
+    E2004 5:8 `main` must have type `Prelude.Unit -> <IO> Prelude.Unit`
+      5:8 found `Main.Unit -> <IO> Prelude.Unit`
+    E2001 9:18 mismatched types
+      9:18 expected `Prelude.Bool`, found `Main.Bool`
+      note: the condition of `if` must have type `Prelude.Bool`
+    E2006 12:15 values of type `Main.Bool` cannot be compared with `==`
+      12:15 `==` cannot compare `Main.Bool`
+      note: `==` and `!=` compare only values of type `Int`, `String` and `Prelude.Bool`
+    E2001 15:28 mismatched types
+      15:28 expected `Prelude.Unit`, found `Int`
+      note: an `if` without `else` must have type `Prelude.Unit`
+    E2001 19:3 mismatched types
+      19:3 expected `Prelude.Unit`, found `Int`
+      note: a statement that is not the last one in a block must have type `Prelude.Unit`
+    E2001 23:14 mismatched types
+      23:14 expected `Int`, found `Prelude.Unit`
+      note: the pattern `()` matches only `Prelude.Unit`
+    ");
+}

@@ -1,0 +1,9 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{stderr}\")"
+input_file: tests/ui/run/modules/same_effect_name/main.em
+---
+--- stdout ---
+audit 1
+local 2
+--- stderr ---
