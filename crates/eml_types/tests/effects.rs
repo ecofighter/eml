@@ -92,6 +92,28 @@ fn a_partial_continuation_capturing_a_linear_value_is_linear() {
     ");
 }
 
+/// 状態のある `once` の操作の `k v` は、状態を受ける関数も `Lin` になるので2回呼べない。`m₂` が `m` を受けることの確認
+/// (docs/spec/effects.md)。
+#[test]
+fn a_partial_continuation_of_a_once_operation_with_a_state_is_linear() {
+    let text = "effect Ask where\n  ask : Unit -> Int\n\nrun : Unit -> Int\nrun () =\n  handle ask () from 0 with\n    | ask () k st ->\n        let g = k 1\n        let a = g st\n        let b = g st\n        a + b\n    | return x _ -> x";
+    insta::assert_snapshot!(check_text(text), @"
+    ask : Unit -> <Ask> Int
+    run : Unit -> Int
+      k#0 : Int -> Int -> Int
+      st#1 : Int
+      g#2 : Int -> Int
+      a#3 : Int
+      b#4 : Int
+      x#5 : Int
+    ---
+    E3002 10:17 `g` must be used exactly once, but it is used more than once
+      10:17 used again here
+      9:17 first used here
+      note: linear values, such as files, the continuation of a `once` operation and closures that capture one, must be used exactly once
+    ");
+}
+
 #[test]
 fn type_variables_of_an_operation_are_rigid_in_its_clause() {
     let text = "effect Pick where\n  pick : a -> a -> a\n\nfirst : Unit -> Int\nfirst () =\n  handle pick 1 2 with\n    | pick x y k -> k x\n\nwrong : Unit -> Int\nwrong () =\n  handle pick 1 2 with\n    | pick x y k -> k 0";

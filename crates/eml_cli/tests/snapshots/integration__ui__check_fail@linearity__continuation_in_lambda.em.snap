@@ -1,0 +1,16 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: rendered
+input_file: tests/ui/check-fail/linearity/continuation_in_lambda.em
+---
+[E3002] Error: `f` must be used exactly once, but it is used more than once
+    ╭─[ check-fail/linearity/continuation_in_lambda.em:10:15 ]
+    │
+ 10 │         f 1 + f 2
+    │         ┬     ┬  
+    │         ╰──────── first used here
+    │               │  
+    │               ╰── used again here
+    │ 
+    │ Note: linear values, such as files, the continuation of a `once` operation and closures that capture one, must be used exactly once
+────╯

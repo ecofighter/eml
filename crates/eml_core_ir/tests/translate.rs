@@ -1018,6 +1018,55 @@ fn a_continuation_called_inside_an_inner_handle_is_resumed() {
     assert!(!shown.contains("cont$"), "{shown}");
 }
 
+/// 入れ子のラムダが `k` を飽和で呼ぶだけなら、ラムダの関数の中でも生の継続を `resume` し、`cont$` で包まない
+/// (docs/spec/core-ir.md)。
+#[test]
+fn a_continuation_called_saturated_in_a_lambda_is_resumed_there() {
+    let shown = handled(
+        "",
+        "    handle ask () with\n      | ask () k ->\n          let f = fn x -> k x\n          f 1",
+    );
+    assert!(shown.contains("resume k"), "{shown}");
+    assert!(!shown.contains("cont$"), "{shown}");
+}
+
+/// 状態のある `k v st` の `mask` は、継続の呼び出しの矢印 1 に記録された row から付く。
+#[test]
+fn a_stateful_continuation_called_inside_an_inner_handle_carries_its_mask() {
+    let text = "\
+effect Ask where
+  ask : Unit -> Int
+
+effect Log where
+  log : String -> Unit
+
+f : (Unit -> <Ask | e> Int) -> <e> Int
+f action =
+  handle action () from 0 with
+    | ask () k st ->
+        handle k 1 st with
+          | log m k2 ->
+              k2 ()
+    | return x _ -> x
+
+act : Unit -> <Ask, Log> Int
+act () =
+  let n = ask ()
+  log \"after\"
+  n + 1
+
+main : Unit -> <IO> Unit
+main () =
+  let r = handle f act with
+            | log m k ->
+                println (\"outer \" ++ m)
+                k ()
+  println (show_int r)
+";
+    let shown = core_text(text, Pass::Translate);
+    assert!(shown.contains("mask[Log] resume k"), "{shown}");
+}
+
 /// `k` を関数に渡すと、節の入口で `cont$` のクロージャに包み、渡した先の呼び出しは `apply` になる。
 #[test]
 fn a_continuation_passed_to_a_function_is_wrapped() {
