@@ -208,28 +208,26 @@ impl Loader<'_> {
         if import.malformed {
             return ImportTarget::Broken;
         }
-        match origin {
-            // 標準ライブラリはユーザーの根に左右されないよう、`std/` だけを探す。予約の検査はユーザーの誤りのためにある
-            ModuleOrigin::Std => self.std_target(file, import, &import.path),
-            ModuleOrigin::User => self.user_target(file, import),
-        }
-    }
-
-    /// ユーザーのモジュールの import。`Std.` で始まるパスは標準ライブラリだけを探す。ほかはユーザーの根を探し、ファイルが
-    /// ない (`NotFound`) ときだけ同じ名前の標準ライブラリのモジュールを探す。読めないファイルは書いたつもりのモジュールが
-    /// ある印なので、標準ライブラリへ進まない。
-    fn user_target(&mut self, file: FileId, import: &ImportItem) -> ImportTarget {
-        let shown = format!("{}{}", self.root, import.path.file_path());
-        if let Some(reserved) = self.reserved(import) {
+        if let Some(reserved) = self.reserved(origin, import) {
+            let shown = format!("{}{}", self.root, import.path.file_path());
             self.diagnostics
                 .push(reserved_import(file, import, reserved, &shown));
             return ImportTarget::Broken;
         }
-        if let [root, rest @ ..] = import.path.0.as_slice()
-            && root == STD_ROOT
-        {
-            return self.std_target(file, import, &ModulePath(rest.to_vec()));
+        match (origin, std_relative(&import.path)) {
+            (_, Some(path)) => self.std_target(file, import, &path),
+            // 標準ライブラリはユーザーの根に左右されないよう、`std/` だけを探す。`import Fs` と `import Std.Fs` の
+            // どちらでも書ける (docs/spec/modules.md の「標準ライブラリ」)
+            (ModuleOrigin::Std, None) => self.std_target(file, import, &import.path),
+            (ModuleOrigin::User, None) => self.user_target(file, import),
         }
+    }
+
+    /// ユーザーのモジュールの、`Std.` で始まらない import。ユーザーの根を探し、ファイルがない (`NotFound`) ときだけ
+    /// 同じ名前の標準ライブラリのモジュールを探す。読めないファイルは書いたつもりのモジュールがある印なので、標準
+    /// ライブラリへ進まない。
+    fn user_target(&mut self, file: FileId, import: &ImportItem) -> ImportTarget {
+        let shown = format!("{}{}", self.root, import.path.file_path());
         let key = (ModuleOrigin::User, import.path.clone());
         if let Some(&id) = self.by_path.get(&key) {
             return ImportTarget::Module(id);
@@ -243,7 +241,11 @@ impl Loader<'_> {
             }
             Err(ReadError::NotFound) => {
                 match self.by_path.get(&(ModuleOrigin::Std, import.path.clone())) {
-                    Some(&id) => ImportTarget::Module(id),
+                    Some(&id) => {
+                        // 同じパスを import するほかのモジュールが、ユーザーの根を読み直さないようにする
+                        self.by_path.insert(key, id);
+                        ImportTarget::Module(id)
+                    }
                     None => {
                         self.diagnostics.push(unreadable(
                             file,
@@ -276,7 +278,10 @@ impl Loader<'_> {
         }
     }
 
-    fn reserved(&self, import: &ImportItem) -> Option<Reserved> {
+    /// 標準ライブラリのモジュールも Prelude を暗黙に取り込むので、予約した名前の規則は出どころによらない。入口の
+    /// ファイルはユーザーの根にあり、標準ライブラリの import は根を探さないので、入口の検査はユーザーの import だけに
+    /// かける。
+    fn reserved(&self, origin: ModuleOrigin, import: &ImportItem) -> Option<Reserved> {
         let name = import.path.dotted();
         if name == PRELUDE || name == MAIN || is_std_prelude(&name) {
             Some(Reserved::Name)
@@ -284,7 +289,7 @@ impl Loader<'_> {
             Some(Reserved::PreludeQualifier)
         } else if name == STD_ROOT {
             Some(Reserved::StdRoot)
-        } else if import.path.file_path() == self.entry_file {
+        } else if origin == ModuleOrigin::User && import.path.file_path() == self.entry_file {
             Some(Reserved::Entry)
         } else {
             None
@@ -292,8 +297,18 @@ impl Loader<'_> {
     }
 }
 
+/// `Std.` で始まるパスの、`std/` からのパス。
+fn std_relative(path: &ModulePath) -> Option<ModulePath> {
+    match path.0.as_slice() {
+        [root, rest @ ..] if root == STD_ROOT && !rest.is_empty() => {
+            Some(ModulePath(rest.to_vec()))
+        }
+        _ => None,
+    }
+}
+
 /// `Std.Prelude` は Prelude のファイルを指すが、Prelude は暗黙に取り込むので `Prelude` と同じく予約する。別名のない
-/// 別名のない `import Std.Prelude` は修飾子が `Prelude` になるが、別名で直せる誤りではないので、修飾子の検査より先に引いて
+/// `import Std.Prelude` は修飾子が `Prelude` になるが、別名で直せる誤りではないので、修飾子の検査より先に引いて
 /// 「別名を選べ」という help を付けない (docs/spec/modules.md の「標準ライブラリ」)。
 fn is_std_prelude(name: &str) -> bool {
     name.strip_prefix(STD_ROOT)

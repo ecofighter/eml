@@ -408,14 +408,24 @@ pub(super) fn not_found(
             format!("cannot find {} `{name}`", kind.noun()),
             Label::new(file, at.range, kind.label()),
         ),
-        NameRef::Qualified { qualifier, name } => not_in_module(
-            kind.code(),
-            file,
-            at.range,
-            kind.noun(),
-            name,
-            &items.qualifier_modules(qualifier),
-        ),
+        NameRef::Qualified { qualifier, name } => {
+            let diagnostic = not_in_module(
+                kind.code(),
+                file,
+                at.range,
+                kind.noun(),
+                name,
+                &items.qualifier_modules(qualifier),
+            );
+            let types = matches!(kind, NameKind::Type | NameKind::Effect);
+            match items.hidden_std_module(qualifier, name, types) {
+                Some(short) => diagnostic.with_help(format!(
+                    "the standard `{short}` is hidden by your module `{short}`; `import Std.{short} as {}` reaches it",
+                    &short[..1]
+                )),
+                None => diagnostic,
+            }
+        }
     }
 }
 

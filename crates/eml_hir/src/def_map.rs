@@ -840,6 +840,12 @@ pub(crate) fn duplicate(
     .with_secondary(Label::new(file, first, "first defined here"))
 }
 
+fn defines_public<V: Namespace>(scope: &ModuleScope, name: &str) -> bool {
+    V::definitions(scope)
+        .get(name)
+        .is_some_and(|definitions| definitions.iter().any(|definition| definition.public))
+}
+
 /// 修飾か import の並びで引いた名前が、そのモジュールにない (E1001、E1002)。合流した修飾子では、すべてのモジュールを並べる
 /// (docs/spec/modules.md の「名前の解決」)。
 pub(crate) fn not_in_module(
@@ -1221,6 +1227,29 @@ impl<'a> Resolver<'a> {
             .std_short_names
             .contains_key(short)
             .then_some(short)
+    }
+
+    /// 修飾子が指すユーザーのモジュールが同じパスの標準ライブラリのモジュールを隠し、そちらが `name` を `pub` で
+    /// 定義しているなら、その標準ライブラリのモジュールの短い名前 (`Fs`)。修飾して引けなかった名前の E1001 と E1002 の
+    /// help が使う (docs/spec/modules.md の「標準ライブラリ」)。`types` は型の名前空間で引くか。
+    pub fn hidden_std_module(&self, qualifier: &str, name: &str, types: bool) -> Option<&'a str> {
+        self.targets(qualifier).into_iter().find_map(|(target, _)| {
+            let ImportTarget::Module(module) = target else {
+                return None;
+            };
+            let scope = self.def_map.scope(module);
+            if scope.origin != ModuleOrigin::User {
+                return None;
+            }
+            let (short, &std) = self.def_map.std_short_names.get_key_value(&scope.name)?;
+            let std = self.def_map.scope(std);
+            let defined = if types {
+                defines_public::<TypeItem>(std, name)
+            } else {
+                defines_public::<Value>(std, name)
+            };
+            defined.then_some(short.as_str())
+        })
     }
 
     fn lookup<V: Namespace, T: PartialEq>(

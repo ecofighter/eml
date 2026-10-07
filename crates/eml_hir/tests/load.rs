@@ -3,6 +3,7 @@
 use std::cell::RefCell;
 use std::fs;
 use std::path::Path;
+use std::sync::LazyLock;
 
 use eml_diagnostics::sort_diagnostics;
 use eml_hir::{
@@ -289,14 +290,17 @@ fn an_infix_constructor_in_an_import_list_still_loads_the_module() {
 }
 
 /// 本物の `Fs` に関数を足したもの。`Fs` が標準ライブラリのモジュールとして振る舞うことを、本物の宣言を保ったまま確かめる。
-fn fake_std() -> Vec<(&'static str, &'static str)> {
-    let fake_fs = format!(
+static FAKE_FS: LazyLock<String> = LazyLock::new(|| {
+    format!(
         "{}\npub greet : Unit -> String\ngreet () = \"hi\"\n\nhidden : Unit -> String\nhidden () = \"no\"\n",
         eml_hir::STD[1].1
-    );
+    )
+});
+
+fn fake_std() -> Vec<(&'static str, &'static str)> {
     vec![
         ("Prelude.em", eml_hir::PRELUDE_SOURCE),
-        ("Fs.em", Box::leak(fake_fs.into_boxed_str())),
+        ("Fs.em", FAKE_FS.as_str()),
     ]
 }
 
@@ -457,6 +461,23 @@ fn an_import_prefers_the_user_module_of_the_same_name() {
 }
 
 #[test]
+fn a_user_module_hiding_a_std_module_suggests_the_canonical_import() {
+    // help は、隠れた標準ライブラリのモジュールがその名前を定義しているときだけ付ける
+    let entry = "import Fs\n\nf : String -> <IO> Fs.File\nf p = Fs.open p\n\ng : Int\ng = Fs.nope";
+    let lowered = eml_test_support::lower_files(entry, &[("Fs.em", "")]);
+    insta::assert_snapshot!(full(&lowered.files, &lowered.diagnostics), @"
+    E1002 3:20 cannot find type `File` in module `Fs`
+      3:20 not found in this module
+      help: the standard `Fs` is hidden by your module `Fs`; `import Std.Fs as F` reaches it
+    E1001 4:7 cannot find value `open` in module `Fs`
+      4:7 not found in this module
+      help: the standard `Fs` is hidden by your module `Fs`; `import Std.Fs as F` reaches it
+    E1001 7:5 cannot find value `nope` in module `Fs`
+      7:5 not found in this module
+    ");
+}
+
+#[test]
 fn an_unimported_user_module_does_not_shadow_a_std_module() {
     let user = [("Fs.em", "pub greet : Unit -> String\ngreet () = \"user\"")];
     let source = Recording::new(&user);
@@ -502,6 +523,16 @@ fn an_import_falls_back_to_the_std_module_when_the_file_is_missing() {
     assert_eq!(targets(&loaded, 1), [Some(2), Some(2)]);
     // `import Std.Fs` はユーザーの根を読まない
     assert_eq!(source.read_paths(), ["Fs.em"]);
+}
+
+#[test]
+fn a_fallback_to_the_std_module_reads_the_user_root_once() {
+    let source = Recording::new(&[("A.em", "import Fs")]);
+    let (loaded, diagnostics) =
+        eml_hir::load_with_std(&fake_std(), ENTRY_PATH, "import Fs\nimport A", &source);
+    assert!(diagnostics.is_empty(), "{diagnostics:?}");
+    assert_eq!(targets(&loaded, 3), [Some(2)]);
+    assert_eq!(source.read_paths(), ["Fs.em", "A.em"]);
 }
 
 #[test]
@@ -598,6 +629,46 @@ fn a_std_module_reaches_another_only_through_an_import() {
 }
 
 #[test]
+fn a_std_module_reaches_another_by_its_canonical_name_too() {
+    let other = "pub x : Int\nx = 1\n";
+    let std = [
+        ("Prelude.em", eml_hir::PRELUDE_SOURCE),
+        (
+            "Fs.em",
+            &fs_after("import Std.Other\n\npub f : Unit -> Int\nf () = Other.x\n"),
+        ),
+        ("Other.em", other),
+    ];
+    let source = Recording::new(&[]);
+    let lowered = lower_std(&std, "", &source);
+    assert_eq!(lowered.diagnostics, Vec::<String>::new());
+    assert_eq!(targets(&lowered.loaded, 2), [Some(3)]);
+    assert_eq!(source.read_paths(), Vec::<String>::new());
+}
+
+#[test]
+fn a_std_module_cannot_import_the_prelude() {
+    // 標準ライブラリのモジュールも Prelude を暗黙に取り込むので、書いた `import Prelude` は誤りである
+    let std = [
+        ("Prelude.em", eml_hir::PRELUDE_SOURCE),
+        (
+            "Fs.em",
+            &fs_after("import Prelude\nimport Std.Prelude as P\n"),
+        ),
+    ];
+    let (loaded, mut diagnostics) =
+        eml_hir::load_with_std(&std, ENTRY_PATH, "", &MemorySource(&[]));
+    sort_diagnostics(&mut diagnostics);
+    insta::assert_snapshot!(full(&loaded.files, &diagnostics), @"
+    E1030 1:1 the module `Prelude` is reserved
+      1:1 the Prelude is imported implicitly
+    E1030 2:1 the module `Std.Prelude` is reserved
+      2:1 the Prelude is imported implicitly
+    ");
+    assert_eq!(targets(&loaded, 2), [None, None]);
+}
+
+#[test]
 fn a_std_directory_in_the_user_root_is_never_read() {
     let user = [("std/Prelude.em", "broken ="), ("std/Fs.em", "broken =")];
     let source = Recording::new(&user);
@@ -616,14 +687,8 @@ fn a_std_directory_in_the_user_root_is_never_read() {
 #[test]
 fn the_embedded_std_matches_the_std_directory() {
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../std");
-    let mut on_disk: Vec<(String, String)> = fs::read_dir(&dir)
-        .unwrap()
-        .map(|entry| {
-            let path = entry.unwrap().path();
-            let name = path.file_name().unwrap().to_string_lossy().into_owned();
-            (name, fs::read_to_string(&path).unwrap())
-        })
-        .collect();
+    let mut on_disk = Vec::new();
+    std_files(&dir, "", &mut on_disk);
     on_disk.sort();
     let mut embedded: Vec<(String, String)> = eml_hir::STD
         .iter()
@@ -632,4 +697,17 @@ fn the_embedded_std_matches_the_std_directory() {
     embedded.sort();
     assert_eq!(embedded, on_disk);
     assert_eq!(eml_hir::STD[0], ("Prelude.em", eml_hir::PRELUDE_SOURCE));
+}
+
+/// `dir` の下のファイルを、`std/` からの `/` で区切ったパスと本文の組にして集める。埋め込んだ並びのパスと同じ形である。
+fn std_files(dir: &Path, prefix: &str, out: &mut Vec<(String, String)>) {
+    for entry in fs::read_dir(dir).unwrap() {
+        let path = entry.unwrap().path();
+        let name = format!("{prefix}{}", path.file_name().unwrap().to_string_lossy());
+        if path.is_dir() {
+            std_files(&path, &format!("{name}/"), out);
+        } else {
+            out.push((name, fs::read_to_string(&path).unwrap()));
+        }
+    }
 }
