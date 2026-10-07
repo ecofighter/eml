@@ -27,7 +27,8 @@ impl BodyLowering<'_> {
         };
         let (a_pat, a) = self.hidden_param("$a", range);
         let (b_pat, b) = self.hidden_param("$b", range);
-        let body = self.binary(op.text(), op.text_range(), a, b);
+        let resolved = self.items.value(NameRef::Plain(op.text()));
+        let body = self.binary(op.text(), op.text_range(), resolved, a, b);
         self.alloc(
             ExprKind::Lambda(Closure {
                 params: vec![a_pat, b_pat],
@@ -67,12 +68,14 @@ impl BodyLowering<'_> {
         hole: Hole,
         range: TextRange,
     ) -> ExprId {
-        if self.undecided_operator(op.text(), op.text_range()) {
+        let resolved = self.items.value(NameRef::Plain(op.text()));
+        let Some(fixity) = self.items.fixity_of(&resolved) else {
+            self.report_undecided(op.text(), op.text_range(), &resolved);
             self.lower_discarded(operand);
             return self.alloc(ExprKind::Missing, range);
-        }
+        };
         if let Some(ast::Expr::OpSeq(seq)) = &operand
-            && let Some(inner) = self.looser_operator(op.text(), seq, hole)
+            && let Some(inner) = self.looser_operator(fixity, seq, hole)
         {
             self.lower_discarded(operand);
             self.diagnostics.push(
@@ -105,7 +108,7 @@ impl BodyLowering<'_> {
             _ => None,
         };
         if let Some(minus) = leading_minus
-            && self.right_operand_minimum(op.text()) > NEGATE_PRECEDENCE
+            && right_operand_minimum(fixity) > NEGATE_PRECEDENCE
         {
             self.diagnostics.push(Diagnostic::error(
                 codes::NON_ASSOCIATIVE_OPERATORS,
@@ -123,8 +126,8 @@ impl BodyLowering<'_> {
         let value = self.lower_expr(operand, operand_range);
         let (pat, x) = self.hidden_param("$x", range);
         let body = match hole {
-            Hole::Left => self.binary(op.text(), op.text_range(), x, value),
-            Hole::Right => self.binary(op.text(), op.text_range(), value, x),
+            Hole::Left => self.binary(op.text(), op.text_range(), resolved, x, value),
+            Hole::Right => self.binary(op.text(), op.text_range(), resolved, value, x),
         };
         self.alloc(
             ExprKind::Lambda(Closure {
@@ -143,22 +146,12 @@ impl BodyLowering<'_> {
         }
     }
 
-    /// `$x op e` と組むときの、右の被演算子に許される最小の優先順位。`climb` が演算子の直後で使う値と同じ。
-    fn right_operand_minimum(&self, op: &str) -> u8 {
-        let Fixity { precedence, assoc } = self.fixity(op);
-        if assoc == Assoc::Right {
-            precedence
-        } else {
-            precedence + 1
-        }
-    }
-
     /// セクションの演算子を根にして組めない、被演算子の中の二項演算子。被演算子の中の演算子は、セクションの演算子より
     /// 強く結合するか、優先順位が同じで両方の結合の向きが空いた側に合っていなければならない (docs/spec/expressions.md の
     /// 「セクション」)。演算子の直後の `-` は前置の `-` で、被演算子自身の組み直しが扱う。
     /// 右が空いたセクションの先頭の `-` は、優先順位 6 の左結合の演算子として数える (`(- 2 *)` は E1023、`(- 2 +)` は可)。
     /// 左が空いたセクションの先頭の `-` は、`section` が E1006 として検査する。
-    fn looser_operator(&self, op: &str, seq: &ast::OpSeq, hole: Hole) -> Option<SyntaxToken> {
+    fn looser_operator(&self, outer: Fixity, seq: &ast::OpSeq, hole: Hole) -> Option<SyntaxToken> {
         // 被演算子の列は、fixity の決まらない演算子を含めば `lower_op_seq` が誤りの式にするので、ここで推測して報告しない
         if seq.elements().any(|element| {
             matches!(element, OpSeqElement::Operator(token)
@@ -166,7 +159,6 @@ impl BodyLowering<'_> {
         }) {
             return None;
         }
-        let outer = self.fixity(op);
         // 左が空いていれば `$x op (e)` と組むので右結合、右が空いていれば `(e) op $x` と組むので左結合が合う
         let toward_hole = match hole {
             Hole::Left => Assoc::Right,
@@ -190,7 +182,10 @@ impl BodyLowering<'_> {
                     } else if prefix {
                         continue;
                     } else {
-                        self.fixity(token.text())
+                        // 上で fixity の決まらない演算子を除いた
+                        self.items
+                            .fixity(NameRef::Plain(token.text()))
+                            .unwrap_or(Fixity::DEFAULT)
                     };
                     let tighter = inner.precedence > outer.precedence;
                     let same_side = inner.precedence == outer.precedence
@@ -203,5 +198,14 @@ impl BodyLowering<'_> {
             }
         }
         None
+    }
+}
+
+/// `$x op e` と組むときの、右の被演算子に許される最小の優先順位。`climb` が演算子の直後で使う値と同じ。
+fn right_operand_minimum(Fixity { precedence, assoc }: Fixity) -> u8 {
+    if assoc == Assoc::Right {
+        precedence
+    } else {
+        precedence + 1
     }
 }

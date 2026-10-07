@@ -620,9 +620,19 @@ impl<'a> BodyLowering<'a> {
             .into_iter()
             .map(|pat| self.lower_pat_in_group(pat, range))
             .collect();
+        // fixity は値として引く。`:` で始まる演算子はコンストラクタにしかならないので、式と同じ fixity になる。
+        // コンストラクタは `constructor_pat` が引き直す
+        let mut fixities = Vec::new();
         let mut undecided = false;
         for operator in &operators {
-            undecided |= self.undecided_operator(operator.text(), operator.text_range());
+            let resolved = self.items.value(NameRef::Plain(operator.text()));
+            match self.items.fixity_of(&resolved) {
+                Some(fixity) => fixities.push(fixity),
+                None => {
+                    self.report_undecided(operator.text(), operator.text_range(), &resolved);
+                    undecided = true;
+                }
+            }
         }
         if undecided {
             return self.pats.alloc(Pat {
@@ -631,7 +641,7 @@ impl<'a> BodyLowering<'a> {
             });
         }
         let mut position = 0;
-        self.climb_pat(&operands, &operators, &mut position, 0, None)
+        self.climb_pat(&operands, &operators, &fixities, &mut position, 0, None)
     }
 
     /// 式の `climb` と同じ優先順位の上昇法である。ユーザーは `:` で始まる演算子に fixity を宣言できるので、
@@ -640,6 +650,7 @@ impl<'a> BodyLowering<'a> {
         &mut self,
         operands: &[PatId],
         operators: &[SyntaxToken],
+        fixities: &[Fixity],
         position: &mut usize,
         min_precedence: u8,
         mut previous: Option<(String, u8, Assoc)>,
@@ -647,7 +658,7 @@ impl<'a> BodyLowering<'a> {
         let mut lhs = operands[*position];
         while let Some(operator) = operators.get(*position) {
             let text = operator.text().to_string();
-            let Fixity { precedence, assoc } = self.fixity(&text);
+            let Fixity { precedence, assoc } = fixities[*position];
             if precedence < min_precedence {
                 break;
             }
@@ -663,6 +674,7 @@ impl<'a> BodyLowering<'a> {
             let rhs = self.climb_pat(
                 operands,
                 operators,
+                fixities,
                 position,
                 next_min,
                 Some((text.clone(), precedence, assoc)),

@@ -439,7 +439,7 @@ pub(super) fn unresolved<T>(
     result: Resolved<T>,
 ) -> Option<Diagnostic> {
     match result {
-        Resolved::Found(_) | Resolved::Silent => None,
+        Resolved::Found(_) | Resolved::Silent(_) => None,
         Resolved::NotFound => Some(not_found(items, file, kind, at)),
         Resolved::Ambiguous(imports) => Some(ambiguous(file, at, &imports)),
         Resolved::Private(definition_file, definition) => Some(private_name(

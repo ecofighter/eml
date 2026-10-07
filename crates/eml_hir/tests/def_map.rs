@@ -2,7 +2,7 @@
 
 use eml_extern::ExternType;
 use eml_hir::NameRef::{self, Plain};
-use eml_hir::{Assoc, DefMap, Fixity, Resolved, TypeItem, ValueItem};
+use eml_hir::{Assoc, DefMap, Fixity, Resolved, Silence, TypeItem, ValueItem};
 use eml_test_support::{def_map, def_map_files};
 
 fn qualified<'a>(qualifier: &'a str, name: &'a str) -> NameRef<'a> {
@@ -66,9 +66,18 @@ fn parts_of_a_duplicate_declaration_are_unusable() {
         ]
     );
     let resolver = map.resolver(map.entry());
-    assert_eq!(resolver.value(Plain("B")), Resolved::Silent);
-    assert_eq!(resolver.constructor(Plain("B")), Resolved::Silent);
-    assert_eq!(resolver.operation(Plain("y")), Resolved::Silent);
+    assert_eq!(
+        resolver.value(Plain("B")),
+        Resolved::Silent(Silence::Unusable)
+    );
+    assert_eq!(
+        resolver.constructor(Plain("B")),
+        Resolved::Silent(Silence::Unusable)
+    );
+    assert_eq!(
+        resolver.operation(Plain("y")),
+        Resolved::Silent(Silence::Unusable)
+    );
     assert!(matches!(
         resolver.value(Plain("x")),
         Resolved::Found(ValueItem::Operation(_))
@@ -334,11 +343,26 @@ fn import_lists_report_missing_and_private_names_once() {
     let resolver = map.resolver(map.entry());
     assert_eq!(found_in(&map, resolver.value(Plain("x"))), Some("A"));
     // 並びで報告した名前は、本体で使っても診断を重ねない
-    assert_eq!(resolver.value(Plain("nope")), Resolved::Silent);
-    assert_eq!(resolver.value(Plain("secret")), Resolved::Silent);
-    assert_eq!(resolver.type_item(Plain("Nope")), Resolved::Silent);
-    assert_eq!(resolver.type_item(Plain("Hidden")), Resolved::Silent);
-    assert_eq!(resolver.constructor(Plain("H")), Resolved::Silent);
+    assert_eq!(
+        resolver.value(Plain("nope")),
+        Resolved::Silent(Silence::Broken)
+    );
+    assert_eq!(
+        resolver.value(Plain("secret")),
+        Resolved::Silent(Silence::Broken)
+    );
+    assert_eq!(
+        resolver.type_item(Plain("Nope")),
+        Resolved::Silent(Silence::Broken)
+    );
+    assert_eq!(
+        resolver.type_item(Plain("Hidden")),
+        Resolved::Silent(Silence::Broken)
+    );
+    assert_eq!(
+        resolver.constructor(Plain("H")),
+        Resolved::Silent(Silence::Broken)
+    );
     assert!(matches!(
         resolver.type_item(Plain("Shown")),
         Resolved::Found(TypeItem::Type(_))
@@ -356,14 +380,31 @@ fn broken_imports_answer_unknown_without_diagnostics() {
     );
     let resolver = map.resolver(map.entry());
     // 壊れた import の並びの名前も、Prelude の名前を隠す
-    assert_eq!(resolver.value(Plain("show_int")), Resolved::Silent);
+    assert_eq!(
+        resolver.value(Plain("show_int")),
+        Resolved::Silent(Silence::Broken)
+    );
     // 合流した修飾子は、壊れていないモジュールの定義がちょうど1つ見つかれば、それを使う
     assert_eq!(
         found_in(&map, resolver.value(qualified("M", "x"))),
         Some("A")
     );
-    assert_eq!(resolver.value(qualified("M", "y")), Resolved::Silent);
+    assert_eq!(
+        resolver.value(qualified("M", "y")),
+        Resolved::Silent(Silence::Broken)
+    );
     assert_eq!(resolver.qualifier_modules("M"), ["A"]);
+}
+
+#[test]
+fn unusable_operators_take_the_default_fixity() {
+    // 重複した宣言の部品は E1003 で報告済みなので、組み直しは既定の fixity で続ける。壊れた import の演算子とは違い、
+    // 列を誤りにしない
+    let (map, _) = def_map("data T = | A\ndata T = | Int :+ Int");
+    let resolver = map.resolver(map.entry());
+    let resolved = resolver.value(Plain(":+"));
+    assert_eq!(resolved, Resolved::Silent(Silence::Unusable));
+    assert_eq!(resolver.fixity_of(&resolved), Some(Fixity::DEFAULT));
 }
 
 #[test]

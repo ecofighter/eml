@@ -29,8 +29,8 @@ pub enum NameRef<'a> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Resolved<T> {
     Found(T),
-    /// 診断を出さずに誤りにする (重複した宣言の部品、壊れた import を通る参照)。
-    Silent,
+    /// 診断を出さずに誤りにする。理由は fixity の求め方だけが見分ける (`Resolver::fixity_of`)。
+    Silent(Silence),
     NotFound,
     /// E1028。候補の定義を持ち込んだ import の位置 (自分のモジュールのファイル)。
     Ambiguous(Vec<TextRange>),
@@ -40,29 +40,13 @@ pub enum Resolved<T> {
     UnknownQualifier,
 }
 
-/// `Resolved` の内訳。`fixity` は、重複した宣言の部品には既定の fixity を使い、壊れた import から来た演算子には
-/// fixity を決めない。そのため、`Silent` の2つの理由をここでは分ける。
-enum Hit<T> {
-    Found(T),
+/// 診断を出さずに誤りにする理由 (docs/implementation/architecture.md の「名前解決の回復」)。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Silence {
+    /// 重複した宣言の部品だけがある (E1003 で報告済み)。
     Unusable,
+    /// 壊れた import か、import の並びで報告した名前から来た。
     Broken,
-    NotFound,
-    Ambiguous(Vec<TextRange>),
-    Private(FileId, TextRange),
-    UnknownQualifier,
-}
-
-impl<T> Hit<T> {
-    fn resolved(self) -> Resolved<T> {
-        match self {
-            Hit::Found(item) => Resolved::Found(item),
-            Hit::Unusable | Hit::Broken => Resolved::Silent,
-            Hit::NotFound => Resolved::NotFound,
-            Hit::Ambiguous(imports) => Resolved::Ambiguous(imports),
-            Hit::Private(file, range) => Resolved::Private(file, range),
-            Hit::UnknownQualifier => Resolved::UnknownQualifier,
-        }
-    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -744,12 +728,12 @@ fn add<T: PartialEq>(found: &mut Vec<(T, Option<TextRange>)>, item: T, import: O
 
 /// 壊れていない定義がちょうど1つならそれを使い、2つ以上なら曖昧にする。1つもなく壊れた import があれば、診断を出さずに
 /// 誤りにする (docs/implementation/architecture.md の「名前解決の回復」)。どれでもなければ `None` で、呼ぶ側が次を引く。
-fn decide<T>(mut found: Vec<(T, Option<TextRange>)>, broken: bool) -> Option<Hit<T>> {
+fn decide<T>(mut found: Vec<(T, Option<TextRange>)>, broken: bool) -> Option<Resolved<T>> {
     match found.len() {
-        0 if broken => Some(Hit::Broken),
+        0 if broken => Some(Resolved::Silent(Silence::Broken)),
         0 => None,
-        1 => found.pop().map(|(item, _)| Hit::Found(item)),
-        _ => Some(Hit::Ambiguous(
+        1 => found.pop().map(|(item, _)| Resolved::Found(item)),
+        _ => Some(Resolved::Ambiguous(
             found.into_iter().filter_map(|(_, import)| import).collect(),
         )),
     }
@@ -1066,7 +1050,7 @@ impl<'a> Resolver<'a> {
     }
 
     pub fn value(&self, name: NameRef<'_>) -> Resolved<ValueItem> {
-        self.lookup(name, |value: ValueItem| Some(value)).resolved()
+        self.lookup(name, |value: ValueItem| Some(value))
     }
 
     /// パターンの先頭の名前。コンストラクタだけから引く (規則3)。
@@ -1075,7 +1059,6 @@ impl<'a> Resolver<'a> {
             ValueItem::Constructor(id) => Some(id),
             _ => None,
         })
-        .resolved()
     }
 
     /// handler の節の先頭の名前。操作だけから引く (規則3、docs/spec/modules.md の「名前の解決」)。
@@ -1084,7 +1067,6 @@ impl<'a> Resolver<'a> {
             ValueItem::Operation(id) => Some(id),
             _ => None,
         })
-        .resolved()
     }
 
     /// handler の節の先頭の名前を、extern の関数だけから引く。操作として見つからなかった名前が、handle できない
@@ -1098,11 +1080,10 @@ impl<'a> Resolver<'a> {
             }
             _ => None,
         })
-        .resolved()
     }
 
     pub fn type_item(&self, name: NameRef<'_>) -> Resolved<TypeItem> {
-        self.lookup(name, |item: TypeItem| Some(item)).resolved()
+        self.lookup(name, |item: TypeItem| Some(item))
     }
 
     /// 自分のモジュールの `pub` でない型かエフェクトなら、その名前と定義の位置。公開の範囲の検査 (E1032) に使う
@@ -1136,21 +1117,29 @@ impl<'a> Resolver<'a> {
     }
 
     /// 組み直しに使う fixity。名前を解決した先の定義に付き、別のモジュールの定義の fixity は宣言が `pub` のときだけ効く。
-    /// 宣言がなければ `infixl 9` である (docs/spec/declarations.md の「fixity」)。曖昧な演算子と壊れた import から来た
-    /// 演算子は `None` で、組み直さない (docs/implementation/architecture.md の「名前解決の回復」)。
-    pub fn fixity(&self, op: NameRef<'_>) -> Option<Fixity> {
-        let value = match self.lookup(op, |value: ValueItem| Some(value)) {
-            Hit::Found(value) => value,
-            Hit::Broken | Hit::Ambiguous(_) => return None,
-            Hit::Unusable | Hit::NotFound | Hit::Private(..) | Hit::UnknownQualifier => {
-                return Some(Fixity::DEFAULT);
-            }
+    /// 宣言がなければ `infixl 9` である (docs/spec/declarations.md の「fixity」)。重複した宣言の部品と、引けなかった名前も
+    /// `infixl 9` で組む。曖昧な演算子と壊れた import から来た演算子は `None` で、組み直さない
+    /// (docs/implementation/architecture.md の「名前解決の回復」)。
+    pub fn fixity_of(&self, resolved: &Resolved<ValueItem>) -> Option<Fixity> {
+        let item = match resolved {
+            Resolved::Found(item) => *item,
+            Resolved::Silent(Silence::Broken) | Resolved::Ambiguous(_) => return None,
+            Resolved::Silent(Silence::Unusable)
+            | Resolved::NotFound
+            | Resolved::Private(..)
+            | Resolved::UnknownQualifier => return Some(Fixity::DEFAULT),
         };
-        let module = value.module();
-        match self.def_map.scope(module).fixities.get(&value) {
+        let module = item.module();
+        match self.def_map.scope(module).fixities.get(&item) {
             Some((fixity, public, _)) if module == self.module || *public => Some(*fixity),
             _ => Some(Fixity::DEFAULT),
         }
+    }
+
+    /// 名前を引いて `fixity_of` を求める。セクションの被演算子の先読みと中置のパターンのように、引いた結果を
+    /// 組み直しのほかに使わない位置で使う。
+    pub fn fixity(&self, op: NameRef<'_>) -> Option<Fixity> {
+        self.fixity_of(&self.value(op))
     }
 
     /// 修飾子が指すモジュールの名前 (`Report.Csv`)。壊れた import は数えない。E1001 と E1002 の「in module」に使う。
@@ -1219,7 +1208,7 @@ impl<'a> Resolver<'a> {
         &self,
         name: NameRef<'_>,
         kind: impl Fn(V) -> Option<T>,
-    ) -> Hit<T> {
+    ) -> Resolved<T> {
         match name {
             NameRef::Plain(name) => self.plain(name, kind),
             NameRef::Qualified { qualifier, name } => self.qualified(qualifier, name, kind),
@@ -1232,7 +1221,7 @@ impl<'a> Resolver<'a> {
         &self,
         name: &str,
         kind: impl Fn(V) -> Option<T>,
-    ) -> Hit<T> {
+    ) -> Resolved<T> {
         let own = self.own();
         let mut unusable = false;
         for definition in V::definitions(own).get(name).into_iter().flatten() {
@@ -1240,14 +1229,14 @@ impl<'a> Resolver<'a> {
                 continue;
             };
             if definition.usable {
-                return Hit::Found(item);
+                return Resolved::Found(item);
             }
             unusable = true;
         }
         // 重複した宣言の部品だけがある名前も、自分のモジュールの名前として import と Prelude の名前を隠す
         // (docs/spec/modules.md の「名前空間」の規則2)
         if unusable {
-            return Hit::Unusable;
+            return Resolved::Silent(Silence::Unusable);
         }
         let mut found = Vec::new();
         let mut broken = false;
@@ -1258,8 +1247,8 @@ impl<'a> Resolver<'a> {
                 Some(Some(item)) => add(&mut found, item, Some(source.import)),
             }
         }
-        if let Some(hit) = decide(found, broken) {
-            return hit;
+        if let Some(resolved) = decide(found, broken) {
+            return resolved;
         }
         let from_prelude = self.prelude().and_then(|prelude| {
             V::definitions(prelude)
@@ -1270,10 +1259,10 @@ impl<'a> Resolver<'a> {
                 .find_map(|definition| kind(definition.item))
         });
         match from_prelude {
-            Some(item) => Hit::Found(item),
+            Some(item) => Resolved::Found(item),
             // 部品の分からない `T(..)` は Prelude の名前を隠さない。名前を知らないので、どの名前を隠すかも決まらない
-            None if V::unknown(&own.imports) => Hit::Broken,
-            None => Hit::NotFound,
+            None if V::unknown(&own.imports) => Resolved::Silent(Silence::Broken),
+            None => Resolved::NotFound,
         }
     }
 
@@ -1284,10 +1273,10 @@ impl<'a> Resolver<'a> {
         qualifier: &str,
         name: &str,
         kind: impl Fn(V) -> Option<T>,
-    ) -> Hit<T> {
+    ) -> Resolved<T> {
         let targets = self.targets(qualifier);
         if targets.is_empty() {
-            return Hit::UnknownQualifier;
+            return Resolved::UnknownQualifier;
         }
         let mut found = Vec::new();
         let mut broken = false;
@@ -1316,13 +1305,13 @@ impl<'a> Resolver<'a> {
                 break;
             }
         }
-        if let Some(hit) = decide(found, broken) {
-            return hit;
+        if let Some(resolved) = decide(found, broken) {
+            return resolved;
         }
         match private {
-            Some((file, range)) => Hit::Private(file, range),
-            None if unusable => Hit::Unusable,
-            None => Hit::NotFound,
+            Some((file, range)) => Resolved::Private(file, range),
+            None if unusable => Resolved::Silent(Silence::Unusable),
+            None => Resolved::NotFound,
         }
     }
 

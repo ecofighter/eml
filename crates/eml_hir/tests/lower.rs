@@ -616,6 +616,15 @@ fn operator_sequences_with_ambiguous_or_broken_operators_are_silent_errors() {
 }
 
 #[test]
+fn an_undecided_sequence_reports_no_other_operator() {
+    // 組み直しの決まらない列は `binary` を呼ばないので、定義のない `<?>` の E1001 を出さない
+    let operator = "pub (<+>) : Int -> Int -> Int\na <+> b = a";
+    let modules = [("A.em", operator), ("B.em", operator)];
+    let entry = "import A ((<+>))\nimport B ((<+>))\n\nf : Int -> Int\nf x = x <+> 1 <?> 2";
+    assert_eq!(module_codes(entry, &modules), ["E1028 test.em 5:9"]);
+}
+
+#[test]
 fn sections_of_ambiguous_or_broken_operators_are_silent_errors() {
     // セクションの演算子か、被演算子の中の演算子の fixity が決まらないときは、既定の fixity で推測した E1023 を出さない
     let operator = "pub (<+>) : Int -> Int -> Int\na <+> b = a";

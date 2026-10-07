@@ -13,7 +13,16 @@ use crate::item_tree::{Assoc, Fixity};
 #[derive(Clone)]
 enum Piece {
     Operand(ExprId),
-    Operator { text: String, range: TextRange },
+    Operator(Operator),
+}
+
+/// 列の中の演算子。名前は組み直す前に1回だけ引き、組み直しの fixity と `binary` の呼ぶ先が同じ結果を使う。
+#[derive(Clone)]
+struct Operator {
+    text: String,
+    range: TextRange,
+    resolved: Resolved<ValueItem>,
+    fixity: Fixity,
 }
 
 struct Cursor {
@@ -36,25 +45,33 @@ impl BodyLowering<'_> {
     pub(super) fn lower_op_seq(&mut self, seq: &ast::OpSeq) -> ExprId {
         let range = seq.range();
         let mut pieces = Vec::new();
+        let mut undecided = Vec::new();
         for element in seq.elements() {
             match element {
                 OpSeqElement::Operand(expr) => {
                     let expr_range = expr.range();
                     pieces.push(Piece::Operand(self.lower_expr(Some(expr), expr_range)));
                 }
-                OpSeqElement::Operator(token) => pieces.push(Piece::Operator {
-                    text: token.text().to_string(),
-                    range: token.text_range(),
-                }),
+                OpSeqElement::Operator(token) => {
+                    let text = token.text().to_string();
+                    let op_range = token.text_range();
+                    let resolved = self.items.value(NameRef::Plain(&text));
+                    match self.items.fixity_of(&resolved) {
+                        Some(fixity) => pieces.push(Piece::Operator(Operator {
+                            text,
+                            range: op_range,
+                            resolved,
+                            fixity,
+                        })),
+                        None => undecided.push((text, op_range, resolved)),
+                    }
+                }
             }
         }
-        let mut undecided = false;
-        for piece in &pieces {
-            if let Piece::Operator { text, range } = piece {
-                undecided |= self.undecided_operator(text, *range);
+        if !undecided.is_empty() {
+            for (text, op_range, resolved) in &undecided {
+                self.report_undecided(text, *op_range, resolved);
             }
-        }
-        if undecided {
             return self.alloc(ExprKind::Missing, range);
         }
         let mut cursor = Cursor {
@@ -72,9 +89,15 @@ impl BodyLowering<'_> {
         mut previous: Option<(String, u8, Assoc)>,
     ) -> ExprId {
         let mut lhs = self.operand(cursor, min_precedence);
-        while let Some(Piece::Operator { text, range }) = cursor.peek() {
+        while let Some(Piece::Operator(Operator {
+            text,
+            range,
+            resolved,
+            fixity,
+        })) = cursor.peek()
+        {
             // fixity は名前が解決した先の定義に付く (docs/spec/declarations.md の「fixity」)
-            let Fixity { precedence, assoc } = self.fixity(&text);
+            let Fixity { precedence, assoc } = fixity;
             if precedence < min_precedence {
                 break;
             }
@@ -102,7 +125,7 @@ impl BodyLowering<'_> {
                 let whole = self.exprs[lhs].range.cover(self.exprs[rhs].range);
                 lhs = self.alloc(ExprKind::Missing, whole);
             } else {
-                lhs = self.binary(&text, range, lhs, rhs);
+                lhs = self.binary(&text, range, resolved, lhs, rhs);
             }
             previous = Some((text, precedence, assoc));
         }
@@ -111,7 +134,7 @@ impl BodyLowering<'_> {
 
     fn operand(&mut self, cursor: &mut Cursor, min_precedence: u8) -> ExprId {
         match cursor.peek() {
-            Some(Piece::Operator { text, range }) if text == "-" => {
+            Some(Piece::Operator(Operator { text, range, .. })) if text == "-" => {
                 cursor.pos += 1;
                 if min_precedence > NEGATE_PRECEDENCE {
                     self.diagnostics.push(Diagnostic::error(
@@ -139,15 +162,18 @@ impl BodyLowering<'_> {
                 expr
             }
             // 欠けた被演算子はパーサが報告済み
-            Some(Piece::Operator { range, .. }) => self.alloc(ExprKind::Missing, range),
+            Some(Piece::Operator(operator)) => self.alloc(ExprKind::Missing, operator.range),
             None => self.alloc(ExprKind::Missing, TextRange::empty(cursor.end)),
         }
     }
 
+    /// `resolved` は `op` を値の名前として引いた結果である。呼ぶ側が fixity を求めるのに引いた結果を渡し、
+    /// 同じトークンを引き直さない。
     pub(super) fn binary(
         &mut self,
         op: &str,
         op_range: TextRange,
+        resolved: Resolved<ValueItem>,
         lhs: ExprId,
         rhs: ExprId,
     ) -> ExprId {
@@ -155,7 +181,7 @@ impl BodyLowering<'_> {
         // 解決した先が Prelude の `&&` か `||` のときだけ、短絡評価にするため `if` に脱糖する。
         // ユーザーの定義は Prelude の演算子を隠すので、`&&` を定義すれば普通の呼び出しになる
         // (docs/spec/declarations.md の「fixity」)
-        let res = match self.items.value(NameRef::Plain(op)) {
+        let res = match resolved {
             Resolved::Found(ValueItem::Function(id)) if id == self.lang.and => {
                 let otherwise = self.alloc(
                     ExprKind::Path(Res::Item(ValueItem::Constructor(self.lang.false_ctor))),
@@ -221,25 +247,19 @@ impl BodyLowering<'_> {
         )
     }
 
-    /// 曖昧な演算子と壊れた import から来た演算子は、fixity が決まらない。既定の `infixl 9` で組むと E1006 や E1023 が
-    /// 連鎖しうるので、そうした演算子を含む演算子の列、セクション、中置のパターンは、組まずに誤りにする。曖昧な演算子は
-    /// ここで E1028 を出し、壊れた import の演算子は import で報告済みなので何も出さない
-    /// (docs/implementation/architecture.md の「名前解決の回復」)。
-    pub(super) fn undecided_operator(&mut self, op: &str, op_range: TextRange) -> bool {
-        if self.items.fixity(NameRef::Plain(op)).is_some() {
-            return false;
-        }
-        if let Resolved::Ambiguous(imports) = self.items.value(NameRef::Plain(op)) {
+    /// 曖昧な演算子と壊れた import から来た演算子は、fixity が決まらない (`Resolver::fixity_of` が `None`)。既定の
+    /// `infixl 9` で組むと E1006 や E1023 が連鎖しうるので、そうした演算子を含む演算子の列、セクション、中置のパターンは、
+    /// 組まずに誤りにする。曖昧な演算子はここで E1028 を出し、壊れた import の演算子は import で報告済みなので何も
+    /// 出さない (docs/implementation/architecture.md の「名前解決の回復」)。
+    pub(super) fn report_undecided(
+        &mut self,
+        op: &str,
+        op_range: TextRange,
+        resolved: &Resolved<ValueItem>,
+    ) {
+        if let Resolved::Ambiguous(imports) = resolved {
             let at = NameUse::plain(op, op_range);
-            self.diagnostics.push(ambiguous(self.file, &at, &imports));
+            self.diagnostics.push(ambiguous(self.file, &at, imports));
         }
-        true
-    }
-
-    /// 組み直しに使う fixity。fixity の決まらない演算子は、呼ぶ側が先に `undecided_operator` で除く。
-    pub(super) fn fixity(&self, op: &str) -> Fixity {
-        self.items
-            .fixity(NameRef::Plain(op))
-            .unwrap_or(Fixity::DEFAULT)
     }
 }

@@ -111,7 +111,8 @@ impl BodyLowering<'_> {
             Resolved::Found(op) => op,
             Resolved::NotFound if self.unhandleable_clause(&at, name_range) => return,
             other => {
-                out.unknown_operation |= matches!(other, Resolved::Ambiguous(_) | Resolved::Silent);
+                out.unknown_operation |=
+                    matches!(other, Resolved::Ambiguous(_) | Resolved::Silent(_));
                 if let Some(diagnostic) =
                     unresolved(&self.items, self.file, NameKind::Operation, &at, other)
                 {
