@@ -19,7 +19,7 @@
 | 分岐 | `switch x { #0 -> e, #1(y1, .., yn) -> e, 1 -> e, "a" -> e, _ -> e }` (case はタグ、`Int`、`String` のどれかで比べる。引数を持つコンストラクタの case はフィールドを束縛し、`_` は `default` である) |
 | RC (`Unr` のヒープ値のみ) | `dup x`、`decref x` |
 | 線形値 | `drop x` (宣言された破棄処理を呼ぶ) |
-| エフェクト | `perform op args`、`handle body init { ops; return }`、`resume k v s`、`drop k` |
+| エフェクト | `perform op args`、`handle body init { ops; return }`、`resume k v s` (内部の命令)、`drop k` |
 
 - 表面の構文には `perform` はない。HIR から Core IR への変換で、操作の呼び出しを `perform` 命令に変える。
 - 型の情報はほぼ消去し、各変数にはボックス化の有無だけを残す。型変数の型を持つ変数は、ヒープの値かもしれないものとして扱う。Kind (`Unr` / `Lin`) は残さず、ボックス化した変数をすべて RC の対象にする。RC 操作が付くのは使用回数が 0 か2以上の変数で、その変数の Kind には `Unr` の制約が付いているので、`Lin` の値に RC 操作は付かない ([線形性](linearity.md))。
@@ -39,7 +39,7 @@
 - 変換は、入口の関数から届く関数だけを Core IR にする。届くかどうかは、HIR の本体に現れる関数の参照 (`Res::Function`) をたどって決める。Prelude のうち使わない関数は Core IR に入らない。
 - テキストの形 ([テスト戦略](../implementation/testing.md) の「Core IR のテキストの形」) は関数とエフェクトを名前で引くので、モジュールをまたいで名前が重なってはいけない。入口以外のモジュールでは、関数、操作を包む関数、コンストラクタを包む関数、エフェクトの表の名前に `モジュール名.` を付ける (`Report.Csv.parse`、`con$Report.Csv.Row`)。Prelude もこの規則に含める (`Prelude.not`、ラムダは `Prelude.>>$lambda0`、`op$Prelude.open`、`effect Prelude.IO`)。入口のモジュールの名前には付けない (`parse`、`op$get`)。intrinsic を包む関数 (`builtin$`) は Prelude の intrinsic にしか作らず重ならないので、付けない。
 - 変換は、`main` を `()` で呼ぶ入口の関数を作る。等式に引数のない `main` は関数値を返すので、入口の関数が返った値に `()` を適用する。
-- `handle`、`perform`、`resume` は呼び出しの一種である。呼び出しと同じく後で使う変数を退避し、末尾の位置ではフレームを積まない。
+- `handle`、`perform`、`resume` は呼び出しの一種である。表面の構文に `resume` はなく、`resume` は変換が作る Core IR の内部の命令 (`Call::Resume`) である。呼び出しと同じく後で使う変数を退避し、末尾の位置ではフレームを積まない。
 - 呼び出し (`Rhs::Call` の `Call::Direct`、`Call::Apply`、`Call::Resume`) と末尾呼び出し (`CExpr::TailCall`) は `mask` を持つ ([エフェクトと handler](effects.md) の「handler の意味」)。`mask` は、呼び出しの間に飛ばすエフェクトの多重集合で、エフェクトの番号の昇順に並べ、飛ばす数だけ同じ番号を繰り返す。空なら `mask` なしである。`IO` は入れない。`Call::Handle` と `Call::Perform` は `mask` を持たない。`handle` の本体の中の呼び出しは、持ち上げた本体の関数の中の呼び出しとして `mask` を持つ。
 - 変換は、型検査が呼び出しの矢印ごとに記録した `mask` ([型と Kind](types.md) の「推論」) を、Core IR の呼び出しに付ける。
   - 引数がそろう既知の関数の呼び出し (`Call::Direct`) は、最後の矢印の `mask` を使う。前の矢印は部分適用で、エフェクトを起こさないためである。同じ理由で、引数が足りずにクロージャを作るときは `mask` を付けない。intrinsic、操作、コンストラクタの呼び出しには、型検査が `mask` を記録しない。
@@ -48,7 +48,11 @@
 - `mask` は、末尾かどうかと独立である。`mask` 付きの呼び出しも、末尾の位置では末尾呼び出しにする。`simplify` は、`mask` を保ったまま末尾呼び出しにする。`mask` は値を持たないので、生存解析、Perceus、`saved` の規則は変わらない。
 - verifier は、どちらの度合いでも、`mask` のエフェクトの番号がエフェクトの表にあること、昇順に並んでいること、`IO` を含まないこと、`mask` が `handle` と `perform` に付いていないことを確かめる。
 - handle の本体、操作の節、`return` の節は、ラムダと同じく、捕まえた変数を先頭の引数に持つ関数に持ち上げ、そのクロージャか関数の値を `handle` に渡す。本体の関数は `()` を受ける。節はエフェクトの操作の順に並べる。操作を値として使うときは、`perform` を呼ぶだけの関数で包む。
-- パラメータ付き handler は脱糖しない。Core IR では、すべての handler を状態のある handler として扱い、状態のない handler は状態を `()` にする。`handle` はつねに状態の初期値を、`resume` はつねに次の状態を持つ。状態のない handler の2引数の `resume k v` は、`resume k v ()` に変換する。この `()` は Core IR の中の決まりで、表面の構文では状態のない `k` に3引数の `resume` を書けない ([エフェクトと handler](effects.md) の「パラメータ付き handler」)。節のクロージャはつねに状態を最後の引数で受け、`return` の節はつねに本体の値と状態を受ける。呼び出しの規約を1つにして、インタプリタと将来の evidence passing で状態の有無を場合分けしないためである。`return` の節はつねにある。省略した handler は、HIR が `| return x -> x` の節 (状態のある handler では、状態を `_` で捨てる `| return x _ -> x`) を合成するので、本体の値をそのまま返し、状態の引数は Perceus が捨てる (boxed の状態だけ decref する)。省略した節は状態を `_` で捨てるので、状態の型は `Unr` である ([式](expressions.md) の「パラメータ付き handler」)。
+- 変換は、節ごとに `k` の使い方を HIR で調べ、次の2つの形のどちらかにする。
+  - 直接の形: 節の本体のどこでも (入れ子のラムダや handle の本体の中を含む)、`k` の使用がすべて引数をそろえた直接の呼び出し (`k v`、状態ありなら `k v st`) か `drop k` なら、クロージャを作らない。その呼び出しを、生の継続への `Call::Resume` にする。生の継続をラムダや handle の本体が捕まえても、`Call::Resume` で再開できる。引数が余る呼び出し (`r` が関数型のときの `k v x`) は、`Call::Resume` の結果への `apply` を続ける。`mask` は、その呼び出しの最後の矢印の記録を付ける。
+  - 包む形: `k` を関数の値として使う (渡す、しまう、部分適用する) なら、節の入口で、生の継続を継続を包む関数のクロージャにし、それを `k` とする。`k` の呼び出しは普通の関数値の呼び出し (`Call::Apply`) になる。
+- 継続を包む関数は、状態のない handler 用の `cont$` と、状態のある handler 用の `cont$state` の2つで、使うときだけプログラムに1つずつ作る。`cont$` は `k` と `v` を受けて `resume k(v, ())` を、`cont$state` は `k`、`v`、`s` を受けて `resume k(v, s)` を、それぞれ末尾呼び出しする。`once` の `k` は1回しか使わないので、Perceus は `dup` / `decref` を付けず、包んだクロージャも一意で、呼ぶと消費される。包んだ `k` を `drop` するとクロージャが解放され、それが継続を解放する。
+- パラメータ付き handler は脱糖しない。Core IR では、すべての handler を状態のある handler として扱い、状態のない handler は状態を `()` にする。`handle` はつねに状態の初期値を、`resume` はつねに次の状態を持つ。状態のない handler の `k v` は、`resume k v ()` に変換する。この `()` は Core IR の中の決まりで、表面の構文では状態のない `k` は1引数の関数である ([エフェクトと handler](effects.md) の「パラメータ付き handler」)。節のクロージャはつねに状態を最後の引数で受け、`return` の節はつねに本体の値と状態を受ける。呼び出しの規約を1つにして、インタプリタと将来の evidence passing で状態の有無を場合分けしないためである。`return` の節はつねにある。省略した handler は、HIR が `| return x -> x` の節 (状態のある handler では、状態を `_` で捨てる `| return x _ -> x`) を合成するので、本体の値をそのまま返し、状態の引数は Perceus が捨てる (boxed の状態だけ decref する)。省略した節は状態を `_` で捨てるので、状態の型は `Unr` である ([式](expressions.md) の「パラメータ付き handler」)。
 - メモリ管理は Perceus 方式の参照カウントである。`Lin` 値は静的に一意なので、RC 操作を付けない。
 
 ## パス

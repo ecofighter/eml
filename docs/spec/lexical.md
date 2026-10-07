@@ -32,7 +32,7 @@
 
 ```
 data type effect where pub import as infixl infixr infix
-let in if then else match with handle from resume drop return
+let in if then else match with handle from drop return
 never once multi use fn
 ```
 

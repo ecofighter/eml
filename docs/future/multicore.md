@@ -139,7 +139,7 @@ row の Kind: Row<s>,  s ∈ { Never ≤ Once ≤ Multi }
 
 ### 子タスクに `never` の操作だけを許す理由
 
-- 一般の handler は並列と組み合わせられない: `once` / `multi` の handler は、状態を継続の構造の中に持つ。例えば [エフェクトと handler](../spec/effects.md) の `run_state` の節 `| get () k st -> resume k st st` は、関数を返す handler に脱糖され、状態を継続の構造の中に持つ。二つの子タスクがこうした操作を同時に perform すると、どちらの節の `resume` に計算の続きを返すかが決まらない
+- 一般の handler は並列と組み合わせられない: `once` / `multi` の handler は、状態を継続の構造の中に持つ。例えば [エフェクトと handler](../spec/effects.md) の `run_state` の節 `| get () k st -> k st st` は、関数を返す handler に脱糖され、状態を継続の構造の中に持つ。二つの子タスクがこうした操作を同時に perform すると、どちらの節の `k` に計算の続きを返すかが決まらない
 - `never` の操作は再開しない: handler の節は、子をすべて片付けた後に、親のスレッドで1回だけ実行すればよい。節が並行に走ることがないので、ロックも、子のスレッドから親のフレームをたどる処理も要らない
 - データ並列にはこれで足りる: データ並列の処理は、もともと純粋な関数と、失敗の通知 (`Fail` のような `never` のエフェクト) で書ける
 
@@ -176,7 +176,7 @@ row の Kind: Row<s>,  s ∈ { Never ≤ Once ≤ Multi }
 
 ### すぐに再開する handler の最適化
 
-handler の節が `resume k v` を末尾で1回だけ呼ぶ場合、継続を取り出さない直接の呼び出しにコンパイルできる (Koka や evidence passing の主要な最適化)。これは並列とは関係なく、コンパイラが handler ごとに構文から判定する。エフェクトの宣言に操作の種類を追加する必要はない。実装の方針は [evidence passing の設計](evidence-passing.md) の「すぐに再開する節」にある。
+handler の節が `k v` を末尾で1回だけ呼ぶ場合、継続を取り出さない直接の呼び出しにコンパイルできる (Koka や evidence passing の主要な最適化)。これは並列とは関係なく、コンパイラが handler ごとに構文から判定する。エフェクトの宣言に操作の種類を追加する必要はない。実装の方針は [evidence passing の設計](evidence-passing.md) の「すぐに再開する節」にある。
 
 ### 並行処理
 
@@ -201,15 +201,15 @@ run_scheduler : (Unit -> <Async, IO> a) -> <IO> a
 
 ### `once` の継続の移動
 
-- 非同期のスケジューラでは、`await` したタスクの継続 `k` (`once`、`Lin`) を handler がキューに入れ、別の worker が `resume` する
-- `k` の続きに `Heap h` の操作があれば、`resume k v` の row (handle 式の外側の row) に `Heap h` が現れる。キューや `run_scheduler` の型は閉じた row なので、そのような `k` はキューに入れられない (型エラー)
+- 非同期のスケジューラでは、`await` したタスクの継続 `k` (`once`、`Lin`) を handler がキューに入れ、別の worker が `k` を呼んで再開する
+- `k` の続きに `Heap h` の操作があれば、`k v` の row (handle 式の外側の row) に `Heap h` が現れる。キューや `run_scheduler` の型は閉じた row なので、そのような `k` はキューに入れられない (型エラー)
 - 移動するときは、送り手が継続のフレームから到達できるオブジェクトに共有の印を付ける。一度移動した継続のフレームにはすでに印が付いているので、次に移動するときは、その後に積んだフレームだけをたどればよい
 - work stealing のキューは常に盗まれ得るので、キューに入れた時点で印を付ける。その代償として、移動しない継続も atomic な RC になる。印付けを実際に移動するものだけに限る private deque 方式 (Acar らの方式) は、将来の最適化とする
 
 ### `multi` の継続の並列な再開
 
 ```haskell
-| choose () k -> par (fn () -> resume k True) (fn () -> resume k False)
+| choose () k -> par (fn () -> k True) (fn () -> k False)
 ```
 
 - [エフェクトと handler](../spec/effects.md) の持ち越し規則により、`multi` の操作をまたいで `Lin` の値は生きていない。`k` が捕まえているのは `Unr` の値だけなので、共有しても安全である

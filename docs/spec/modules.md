@@ -84,7 +84,7 @@ counter () = State.get () + 1
 run : Int -> Int
 run n =
   handle counter () with
-    | State.get () k -> resume k n
+    | State.get () k -> k n
     | return x -> x
 ```
 

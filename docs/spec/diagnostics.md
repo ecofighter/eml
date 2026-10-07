@@ -41,7 +41,7 @@ struct Fix {
 | 範囲 | 段階 |
 |---|---|
 | E0xxx | 字句・構文 |
-| E1xxx | 名前解決と HIR での検査 (重複定義、未定義の名前、handler の節と `resume` の引数の個数など) |
+| E1xxx | 名前解決と HIR での検査 (重複定義、未定義の名前、handler の節と `drop` の引数の個数など) |
 | E2xxx | 型・Kind・row |
 | E3xxx | 線形性・継続の多重度 |
 | E4xxx | パターンの網羅性 |
@@ -73,7 +73,7 @@ struct Fix {
 | E1008 | `NEVER_RESULT_NOT_FREE` | `never` の操作の結果の型が、引数に現れない型変数でない |
 | E1009 | `UNHANDLEABLE_EFFECT` | handler に組み込みの `IO` の操作の節を書いた |
 | E1010 | `CLAUSE_ARITY` | handler の節の引数の個数の誤り |
-| E1011 | `KEYWORD_ARITY` | `resume` と `drop` の引数の個数の誤り |
+| E1011 | `DROP_ARITY` | `drop` の引数の個数の誤り |
 | E1012 | `MIXED_EFFECTS_IN_HANDLER` | 1つの handler に別のエフェクトの操作の節が混ざった |
 | E1013 | `MISSING_CLAUSE` | 節のない操作がある。操作の節が1つもない handler も含む |
 | E1014 | `DUPLICATE_CLAUSE` | 同じ操作の節、または `return` の節が2つある |
@@ -101,19 +101,20 @@ struct Fix {
 | E2004 | `INVALID_MAIN_TYPE` | `main` のシグネチャが `Unit -> <IO> Unit` でない |
 | E2005 | `INFINITE_TYPE` | 無限の型 (単一化の occurs check)。row のラベルの型引数を通して、型変数か row 変数が自分自身の中に現れる場合を含む |
 | E2006 | `NOT_COMPARABLE` | `==` か `!=` で、`Int`、`String`、`Bool` のどれでもない型の値を比べた |
-| E2007 | `RESUME_STATE_MISMATCH` | `resume` の引数の個数が、`k` の状態の欄と合わない。`resume` 以外の単一化で欄が食い違った場合を含む |
 | E2008 | `MASK_CONFLICT` | 呼び出し先が自分で起こすエフェクトを、同じ呼び出しで row 変数のために飛ばす必要がある |
 | E3001 | `LINEAR_VALUE_MISUSED` | 線形な値の誤った使い方のうち、E3002〜E3005 に当たらないもの (関数への受け渡し、型の単一化、ラムダや節の捕獲) |
 | E3002 | `LINEAR_VALUE_USED_TWICE` | 線形な値を、ある経路で2回以上使った |
 | E3003 | `LINEAR_VALUE_NOT_CONSUMED` | 線形な値を、ある経路で使わなかった |
 | E3004 | `LINEAR_VALUE_DISCARDED` | 線形な値を `_` で受けた。状態のある handler で省いた `return` の節が `Lin` の状態を捨てた場合を含む |
-| E3005 | `CONTINUATION_NOT_HANDLED` | `once` の操作の節の `k` を、ある経路で `resume` も `drop` もしなかった |
-| E3006 | `LINEAR_VALUE_KEPT_ACROSS_MULTI` | 線形な値を持ったまま、`multi` の操作を起こしうる呼び出し、`resume`、`handle` をまたいだ (持ち越し規則)。呼んだ関数のスキームを通る持ち越しを含む |
+| E3005 | `CONTINUATION_NOT_HANDLED` | `once` の操作の節の `k` を、ある経路で呼びも `drop` もしなかった |
+| E3006 | `LINEAR_VALUE_KEPT_ACROSS_MULTI` | 線形な値を持ったまま、`multi` の操作を起こしうる呼び出し、`handle` をまたいだ (持ち越し規則)。呼んだ関数のスキームを通る持ち越しを含む |
 | E4001 | `NON_EXHAUSTIVE_MATCH` | 網羅されていない `match` |
 | E4002 | `NON_EXHAUSTIVE_EQUATION` | 網羅されていない等式 |
 | E4003 | `REFUTABLE_PATTERN` | 反駁可能な `let` の左辺、ラムダの引数、handler の節の引数と `return` の節の引数のパターン |
 | E4004 | `UNREACHABLE_ARM` | 到達しない枝 (Warning) |
 | E4005 | `UNREACHABLE_EQUATION` | 到達しない等式 (Warning) |
+
+E2007 は欠番である。もとは `resume` の状態の欄の食い違いに使っていた番号で、ほかの診断には使わない。
 
 E0004 (`NOT_YET_SUPPORTED`) は、まだ実装していない構文に使う。S4 とコマンドリテラルの段で入れる構文と、字句として予約した浮動小数と文字のリテラル (`Float`、`Char`、`Num` の段) である。どの段階でも「後で実装する」という同じ意味なので、番号を分けない。HIR 以降の段階は、対応していない構文を、診断を出さずに無視することはしない。見つけた段階で E0004 を出して回復する。
 

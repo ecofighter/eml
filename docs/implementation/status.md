@@ -14,7 +14,7 @@ M1 (言語の全体を一通り通す vertical slice と、本番の構文の最
 - シグネチャの型変数と row 変数による多相
 - fixity の宣言とユーザー定義の演算子、演算子のセクション、`use`
 - `drop` キーワード
-- エフェクトの宣言 (`never` / `once` / `multi`、型引数)、`handle` (deep)、`resume`、`drop k`、パラメータ付き handler (`handle ... from ... with`)
+- エフェクトの宣言 (`never` / `once` / `multi`、型引数)、`handle` (deep)、`k` の呼び出しによる再開、`drop k`、パラメータ付き handler (`handle ... from ... with`)
 - `IO` エフェクト (Prelude の `pub effect IO`) の `println`、`open`、`read_all`、`close` と、線形型 `File`。ユーザーは `IO` を handle できない ([エフェクトと handler](../spec/effects.md) の「組み込みの `IO`」)
 - 線形性、持ち越し規則、網羅性の検査
 - モジュール: 入口のファイルのディレクトリを根にして import をたどる読み込み、`pub`、修飾した名前、別名、import の並び、`T(..)` と `E(..)`、修飾子の合流、モジュールとしての Prelude と `Prelude.` の修飾、import の循環の禁止 (E1027)、公開の範囲の検査 (E1032) ([モジュールと名前解決](../spec/modules.md))
@@ -62,4 +62,4 @@ M1 (言語の全体を一通り通す vertical slice と、本番の構文の最
 ### 型と row の推論
 
 - `let` で束縛したラムダの row は、最初の呼び出しで決まる。ローカルの `let` は単相で、関数型の局所変数の型は開かない ([型と Kind](../spec/types.md) の「推論」) ためである。例えば `<IO>` の本体で `let g = fn x -> x + 1` を呼んでから `g` を `(Int -> Int)` の引数に渡すと、E2001 か E2002 になる。どちらになるかは、呼び出しと受け渡しの順で変わる。`let` で束縛したラムダの値の row 変数だけを多相化する案があり、これには spec の決定が要る
-- 持ち越し規則は、開いた row の呼び出しを今の row と同じとみなす。`include_row` が、末尾が推論用の変数の row を今の row とまるごと単一化するためである。例えば `<Choice, IO>` の本体で `let log = fn () -> println "x"` を呼ぶと、`log` の row が `<Choice, IO>` になり、`log ()` をまたいで持っている `File` が E3006 になる。エフェクト多相な関数に純粋な関数を渡す `keep f (fn () -> ())` も同じである。`handle` と `resume` の外側の row も handle の位置の今の row なので、今の row に `multi` があれば、本体が `multi` の操作を起こさなくても、handle をまたぐ `File` が拒否される。どれも健全な側に外れるだけである。`let` で束縛したラムダの row を閉じて使う位置で開くか、row の包摂を入れるか、handle の本体が起こすエフェクトを本体の中の呼び出しの row から集めるときに見直す
+- 持ち越し規則は、開いた row の呼び出しを今の row と同じとみなす。`include_row` が、末尾が推論用の変数の row を今の row とまるごと単一化するためである。例えば `<Choice, IO>` の本体で `let log = fn () -> println "x"` を呼ぶと、`log` の row が `<Choice, IO>` になり、`log ()` をまたいで持っている `File` が E3006 になる。エフェクト多相な関数に純粋な関数を渡す `keep f (fn () -> ())` も同じである。`handle` の外側の row と `k` の呼び出しの row (handle の外側の row) も、handle の位置の今の row なので、今の row に `multi` があれば、本体が `multi` の操作を起こさなくても、handle をまたぐ `File` が拒否される。どれも健全な側に外れるだけである。`let` で束縛したラムダの row を閉じて使う位置で開くか、row の包摂を入れるか、handle の本体が起こすエフェクトを本体の中の呼び出しの row から集めるときに見直す

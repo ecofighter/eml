@@ -89,8 +89,8 @@ effect State s where
 run_state : s -> (Unit -> <State s | e> a) -> <e> (a, s)
 run_state init action =
   handle action () from init with
-    | get () k st -> resume k st st
-    | put st2 k _ -> resume k () st2
+    | get () k st -> k st st
+    | put st2 k _ -> k () st2
     | return x st -> (x, st)
 
 counter : Unit -> <State Int> Int
@@ -115,7 +115,7 @@ effect Ask where
 with_env : (Unit -> <Ask, IO | e> a) -> <IO | e> a
 with_env action =
   handle action () with
-    | ask key k -> resume k (Option.default "" (Env.get key))
+    | ask key k -> k (Option.default "" (Env.get key))
 
 deploy : List String -> <Ask, Fail, IO> Unit
 deploy files =
