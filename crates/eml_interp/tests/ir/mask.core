@@ -1,4 +1,5 @@
 effect Main.Ask { ask/1 }
+effect Main.Yield { yield/1 }
 fn main() {
   let t0 = handle Main.Ask(&outer_body, ()) {ask: &outer_ask} return &done
   return t0
@@ -7,8 +8,9 @@ fn outer_body(u0) {
   tailcall handle Main.Ask(&inner_body, ()) {ask: &inner_ask} return &done
 }
 fn inner_body(u0) {
-  let t1 = mask[Main.Ask] apply &asker(())
+  let t1 = mask[Main.Ask] call asker(())
   let t2 = mask[Main.Ask] apply &rehandle(())
+  let t3 = call resumer(())
   tailcall mask[Main.Ask] apply &asker(())
 }
 fn asker(u0) {
@@ -18,6 +20,17 @@ fn asker(u0) {
 }
 fn rehandle(u0) {
   tailcall handle Main.Ask(&asker, ()) {ask: &new_ask} return &done
+}
+fn resumer(u0) {
+  tailcall handle Main.Yield(&yielder, ()) {yield: &yield_clause} return &done
+}
+fn yielder(u0) {
+  let t1 = perform Main.Yield.yield(())
+  tailcall apply &asker(())
+}
+fn yield_clause(u0, k1^, s2) {
+  let t3 = mask[Main.Ask] resume k1((), s2)
+  tailcall apply &asker(())
 }
 fn outer_ask(u0, k1^, s2) {
   let s3^ = const "outer"

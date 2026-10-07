@@ -33,16 +33,28 @@ fn run_text(text: &str) -> String {
     stdout
 }
 
-/// `mask` 付きの呼び出しの中の操作は、呼び出しより外側の同じエフェクトの handler を、`mask` に並ぶ数だけ飛ばす。呼び出しの中で
-/// 設けた handler は飛ばさない (docs/spec/core-ir.md)。`ir/mask.core` は `Ask` の handler を2つ積み、内側の
-/// handler の下で、非末尾の `mask` 付きの呼び出しで `ask` し (`outer`)、`mask` 付きの呼び出しの中で設けた3つめの
-/// handler に `ask` し (`new`)、末尾の `mask` 付きの呼び出しで `ask` する (`outer`)。内側の handler は `inner` を返す。
+/// `mask` 付きの呼び出しの中の操作は、呼び出しより外側の同じエフェクトの handler を、`mask` に並ぶ数だけ飛ばす。
+/// 呼び出しの中で設けた handler は飛ばさない (docs/spec/core-ir.md)。`ir/mask.core` は `Ask` の handler を2つ積む。
+/// 外側の handler は `outer`、内側の handler は `inner` を返す。内側の handler の下で、次の順に `ask` する。
+///
+/// 1. 非末尾の `mask` 付きの `call` で `ask` する (`outer`)
+/// 2. `mask` 付きの `apply` の中で3つめの handler を設けて `ask` する。その handler が `new` を返す
+/// 3. `Yield` の節が `mask` 付きの `resume` で本体を再開し、本体が `ask` する。この `ask` は `Yield` の handler を
+///    越えて `Ask` の handler を探す (`outer`)。`resume` が今の継続を読む前に `Mask` フレームを積むので、`Mask`
+///    フレームは再開した handler の下に入る。`Mask` フレームを積まないか、継続を読んだ後に積むと、ここは `inner` になり、
+///    出力は `outer`、`new`、`inner`、`inner`、`outer` になる
+/// 4. 3の `resume` から戻った節で `ask` する。`Mask` フレームはもう外れているので `inner` になる
+/// 5. 末尾の `mask` 付きの `apply` で `ask` する (`outer`)
+///
+/// Core IR のテキストにはコメントを書けないので、IR の説明はここに書く。
 #[test]
 fn a_mask_skips_outer_handlers_only() {
     let text = include_str!("ir/mask.core");
     insta::assert_snapshot!(run_text(text), @"
     outer
     new
+    outer
+    inner
     outer
     ");
 }
