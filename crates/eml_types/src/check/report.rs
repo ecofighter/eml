@@ -196,8 +196,6 @@ impl BodyCheck<'_, '_> {
                 }
                 return false;
             }
-            // include_row は rigid な row 変数を束縛しない。型引数の単一化の失敗は `EffectArgs` か `Occurs` になるので、
-            // `Mismatch` と `StateSlot` は起きない
             // 呼び出し先が自分で起こす `L` は今の row の先頭の `L` に届き、row 変数を通る `L` は余った `L` をすべて飛ばす
             // 必要がある。`mask` は呼び出しの中の `L` の操作をすべて同じだけ飛ばすので、両方を満たせない
             // (docs/spec/effects.md の「健全性」)
@@ -234,6 +232,8 @@ impl BodyCheck<'_, '_> {
                 }
                 return false;
             }
+            // include_row は rigid な row 変数を束縛しない。型引数の単一化の失敗は `EffectArgs` か `Occurs` になるので、
+            // `Mismatch` と `StateSlot` は起きない
             Err(UnifyError::Mismatch | UnifyError::StateSlot) => unreachable!(
                 "including a row reports only missing effects, a missing row variable, effect arguments or an infinite type"
             ),
