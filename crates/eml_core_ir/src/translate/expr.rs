@@ -53,8 +53,10 @@ impl FnLowering<'_> {
 
     /// 呼ぶ相手の引数の個数と比べ、揃えば命令にし、足りなければ包む関数のクロージャにし、余れば命令の結果に残りを
     /// 適用する (docs/spec/core-ir.md の eval/apply)。呼ばれる式の種類によらず、この1か所で場合分けする。
+    /// `id` は呼び出しの式で、`args` は矢印 0 から渡す。既知の呼ばれる式は最初のまとまりで呼ぶためである。
     fn saturate(
         &mut self,
+        id: ExprId,
         callee: Callee,
         callee_ty: &Type,
         mut args: Vec<Atom>,
@@ -62,18 +64,75 @@ impl FnLowering<'_> {
         out: &mut Bindings,
     ) -> Atom {
         let arity = self.callee_arity(callee);
+        // 部分適用はクロージャを作るだけでエフェクトを起こさないので、`mask` を付けない
         if args.len() < arity {
             let wrapper = self.callee_wrapper(callee);
             return self.closure(wrapper, args, ty, out);
         }
         let rest = args.split_off(arity);
-        let (name, rhs) = self.saturated_rhs(callee, args);
+        let (name, rhs) = self.saturated_rhs(id, callee, args);
         if rest.is_empty() {
             return self.bind(out, name, ty, rhs);
         }
         let (_, function_ty) = split_arrows(callee_ty, arity);
         let function = self.bind(out, name, &function_ty, rhs);
-        self.bind(out, "t", ty, Rhs::call(Call::Apply(function, rest)))
+        self.apply(id, callee_ty, function, arity, rest, ty, out)
+    }
+
+    /// `function` に、呼び出し `id` の矢印 `first` からの引数 `args` を渡す。`ty` は最後の `apply` の結果の型である。
+    /// `mask` は1回の Core IR の呼び出し全体に効くので、矢印ごとの `mask` が変わる境目で `apply` を分ける。違う `mask`
+    /// の矢印を1つにまとめると、片方の矢印に余計な `mask` が効くためである (docs/spec/core-ir.md)。
+    #[allow(clippy::too_many_arguments)]
+    fn apply(
+        &mut self,
+        id: ExprId,
+        callee_ty: &Type,
+        mut function: Atom,
+        first: usize,
+        args: Vec<Atom>,
+        ty: &Type,
+        out: &mut Bindings,
+    ) -> Atom {
+        let last = first + args.len();
+        let mut args = args.into_iter();
+        let mut start = first;
+        while start < last {
+            let mask = self.mask(id, start);
+            let mut end = start + 1;
+            while end < last && self.mask(id, end) == mask {
+                end += 1;
+            }
+            let part = args.by_ref().take(end - start).collect();
+            let part_ty = if end == last {
+                ty.clone()
+            } else {
+                split_arrows(callee_ty, end).1
+            };
+            let rhs = Rhs::masked_call(Call::Apply(function, part), mask);
+            function = self.bind(out, "t", &part_ty, rhs);
+            start = end;
+        }
+        function
+    }
+
+    /// 型検査が記録した、呼び出し `call` の矢印 `arrow` の `mask` を、エフェクトの番号の昇順で返す (docs/spec/core-ir.md)。
+    /// 操作のないエフェクトは handler を持てず、飛ばす handler もないので落とす。`pretty` はそのエフェクトを表に書かない
+    /// ので、残すとテキストの形から読み戻せない。
+    fn mask(&self, call: ExprId, arrow: usize) -> Vec<u32> {
+        let mut mask: Vec<u32> = self
+            .types
+            .masks
+            .get(&(call, arrow))
+            .map(|effects| {
+                effects
+                    .iter()
+                    .filter(|&&effect| !self.hir[effect].operations.is_empty())
+                    .map(|&effect| effect_index(self.hir, effect))
+                    .collect()
+            })
+            .unwrap_or_default();
+        mask.sort_unstable();
+        mask
     }
 
     /// 本体が動き出すまでに受け取る引数の数。intrinsic と操作はシグネチャの外側の矢印の数、コンストラクタはフィールドの
@@ -101,9 +160,15 @@ impl FnLowering<'_> {
     }
 
     /// 引数がちょうどそろったときの命令と、その結果を束縛する変数の名前。
-    fn saturated_rhs(&self, callee: Callee, args: Vec<Atom>) -> (&'static str, Rhs) {
+    /// `mask` を付けるのは本体のある関数だけである。intrinsic、操作、コンストラクタは、型検査が row を開かずに宣言のまま
+    /// 含めるので、`mask` が記録されない。
+    fn saturated_rhs(&self, id: ExprId, callee: Callee, args: Vec<Atom>) -> (&'static str, Rhs) {
         match callee {
-            Callee::Function(target) => ("t", Rhs::call(Call::Direct(target, args))),
+            // 前の矢印は部分適用でエフェクトを起こさないので、最後の矢印の `mask` だけを使う (docs/spec/core-ir.md)
+            Callee::Function(target) => {
+                let mask = self.mask(id, args.len() - 1);
+                ("t", Rhs::masked_call(Call::Direct(target, args), mask))
+            }
             Callee::Intrinsic { function, callee } => {
                 let lowering = intrinsic(&self.hir[function].name)
                     .expect("every intrinsic reaching Core IR has an implementation");
@@ -174,6 +239,7 @@ impl FnLowering<'_> {
                         );
                         index += 1;
                     }
+                    let first = applied;
                     applied += group.len();
                     let group_ty = if applied == args.len() {
                         ty.clone()
@@ -181,9 +247,9 @@ impl FnLowering<'_> {
                         split_arrows(&callee_ty, applied).1
                     };
                     let result = match function {
-                        None => self.call_head(callee, &callee_ty, group, &group_ty, out),
+                        None => self.call_head(id, callee, &callee_ty, group, &group_ty, out),
                         Some(value) => {
-                            self.bind(out, "t", &group_ty, Rhs::call(Call::Apply(value, group)))
+                            self.apply(id, &callee_ty, value, first, group, &group_ty, out)
                         }
                     };
                     function = Some(result);
@@ -196,6 +262,7 @@ impl FnLowering<'_> {
     /// 既知の呼ばれる式 (`eml_hir::known_arity` が `Some`) を、最初のまとまりの引数で呼ぶ。
     fn call_head(
         &mut self,
+        id: ExprId,
         callee: ExprId,
         callee_ty: &Type,
         args: Vec<Atom>,
@@ -214,7 +281,7 @@ impl FnLowering<'_> {
             ExprKind::Path(Res::Constructor(ctor)) => Callee::Constructor(*ctor),
             _ => unreachable!("only a known callee is called without evaluating it"),
         };
-        self.saturate(head, callee_ty, args, ty, out)
+        self.saturate(id, head, callee_ty, args, ty, out)
     }
 
     /// 式の値をアトムにする。値の計算に要る束縛は `out` に積む。
@@ -390,7 +457,8 @@ impl FnLowering<'_> {
                     None => Atom::Unit,
                 };
                 let ty = self.ty(id);
-                self.bind(out, "t", &ty, Rhs::call(Call::Resume { k, arg, state }))
+                let rhs = Rhs::masked_call(Call::Resume { k, arg, state }, self.mask(id, 0));
+                self.bind(out, "t", &ty, rhs)
             }
             ExprKind::Tuple(elements) => {
                 // 要素を左から評価し、コンストラクタが1つの `data` と同じ値にする (docs/spec/core-ir.md)

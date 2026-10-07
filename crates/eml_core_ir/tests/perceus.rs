@@ -181,3 +181,14 @@ fn equations_allocate_no_tuple_for_their_arguments() {
             .map_or(core.len(), |end| start + end)];
     assert!(!f.contains("con #"), "{f}");
 }
+
+#[test]
+fn a_masked_call_keeps_its_mask_through_simplify_and_perceus() {
+    // T 規則は `mask` を保ったまま末尾呼び出しにする (docs/spec/core-ir.md)
+    let text = "effect State s where\n  get : Unit -> s\n  put : s -> Unit\n\nrun : (Unit -> <e> a) -> <State Int | e> a\nrun cb =\n  let n = get ()\n  cb ()\n\nmain : Unit -> <IO> Unit\nmain () =\n  let n =\n    handle run (fn () -> 1) from 0 with\n      | get () k st -> resume k st st\n      | put s k _ -> resume k () s\n      | return x _ -> x\n  println (show_int n)\n";
+    let core = core_text(text, Pass::Perceus);
+    assert!(
+        core.contains("tailcall mask[State] apply cb0(())"),
+        "{core}"
+    );
+}

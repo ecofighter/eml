@@ -827,3 +827,89 @@ fn each_comparison_picks_the_instruction_of_its_operand_type() {
     }
     "#);
 }
+
+const STATE: &str = "\
+effect State s where
+  get : Unit -> s
+  put : s -> Unit
+
+";
+
+/// `body` を `State Int` の handler の中で動かす `main`。変換は入口から届く関数だけを作るので、確かめる関数をここから呼ぶ。
+fn state_main(body: &str) -> String {
+    format!(
+        "main : Unit -> <IO> Unit\nmain () =\n  let n =\n    handle {body} from 0 with\n      | get () k st -> resume k st st\n      | put s k _ -> resume k () s\n      | return x _ -> x\n  println (show_int n)\n"
+    )
+}
+
+/// 表示したプログラムから、関数 `name` の定義だけを取り出す。
+fn function(core: &str, name: &str) -> String {
+    let start = core
+        .find(&format!("fn {name}("))
+        .unwrap_or_else(|| panic!("no function `{name}`\n{core}"));
+    let end = core[start..]
+        .find("\n}\n")
+        .map_or(core.len(), |end| start + end + 2);
+    core[start..end].to_string()
+}
+
+/// 型検査が記録した `mask` を、その呼び出しに付ける (docs/spec/core-ir.md)。
+#[test]
+fn a_masked_callback_call() {
+    let text = format!(
+        "{STATE}run : (Unit -> <e> a) -> <State Int | e> a\nrun cb =\n  let n = get ()\n  cb ()\n\n{}",
+        state_main("run (fn () -> 1)")
+    );
+    insta::assert_snapshot!(function(&core_text(&text, Pass::Translate), "run"), @"
+    fn run(cb0^) {
+      let t1 = perform State.get(())
+      let t2^ = mask[State] apply cb0(())
+      return t2
+    }
+    ");
+}
+
+/// 引数がそろう既知の関数の呼び出しは、最後の矢印の `mask` を使う。前の矢印は部分適用で、エフェクトを起こさない。
+#[test]
+fn a_saturated_known_call_takes_the_mask_of_its_last_arrow() {
+    let text = format!(
+        "{STATE}twice : Int -> (Unit -> <e> a) -> <e> a\ntwice _ cb =\n  let _ = cb ()\n  cb ()\n\nrun : (Unit -> <e> a) -> <State Int | e> a\nrun cb = twice 1 cb\n\n{}",
+        state_main("run (fn () -> 1)")
+    );
+    insta::assert_snapshot!(function(&core_text(&text, Pass::Translate), "run"), @"
+    fn run(cb0^) {
+      let t1^ = mask[State] call twice(1, cb0)
+      return t1
+    }
+    ");
+}
+
+/// 矢印ごとの `mask` が変わる境目で `apply` を分ける。
+#[test]
+fn arrows_with_different_masks_are_applied_apart() {
+    let text = format!(
+        "{STATE}h : (Int -> <e> Int -> <State Int | e> Int) -> <State Int | e> Int\nh f = f 1 2\n\n{}",
+        state_main("h (fn x y -> x + y)")
+    );
+    insta::assert_snapshot!(function(&core_text(&text, Pass::Translate), "h"), @"
+    fn h(f0^) {
+      let t1^ = mask[State] apply f0(1)
+      let t2 = apply t1(2)
+      return t2
+    }
+    ");
+}
+
+/// `resume` の `mask`。節は handle の外側の row で動くので、ふつうは `mask` が要らない。
+#[test]
+fn a_resume_in_its_clause_has_no_mask() {
+    let text = format!(
+        "{STATE}run : (Unit -> <State Int | e> a) -> <e> a\nrun action =\n  handle action () from 0 with\n    | get () k st -> resume k st st\n    | put n k _ -> resume k () n\n    | return x _ -> x\n\nmain : Unit -> <IO> Unit\nmain () = println (show_int (run (fn () -> get ())))\n"
+    );
+    insta::assert_snapshot!(function(&core_text(&text, Pass::Translate), "run$handle0$get"), @"
+    fn run$handle0$get(p0, k1^, st2) {
+      let t3^ = resume k1(st2, st2)
+      return t3
+    }
+    ");
+}
