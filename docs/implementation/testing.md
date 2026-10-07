@@ -17,13 +17,14 @@
 
 | 種類 | 何が変わるか | 合意と記録 |
 |---|---|---|
-| 1. 振る舞いの変更 | 言語として観測できる期待値。UI テストの出力、診断の番号と文言、成功か失敗か。テストの削除と移動もここに入れる | 事前に合意を取る。変えた理由は、その作業の spec とコミットメッセージに書く |
-| 2. 内部表現の変更 | 中間表現のダンプなど、内部の設計を写したスナップショットの期待値 | 作業の spec に、変わるテストと理由を列挙する。spec の承認を合意とみなす |
-| 3. 機械的な追随 | テストの組み立てだけが変わる。スナップショットの文字列と `assert` の値は1文字も変えない | 作業の計画で、この種類の変更を許すと宣言する。記録はコミットメッセージで足りる |
+| 成否の変更 | `run` / `run-fail` / `check-fail` の間でのテストの移動と、UI テストの削除 | 作業の spec に1件ずつ挙げる。spec の承認を合意とみなす |
+| 期待値の変更 | UI テストの出力、診断の番号と文言、各段階のダンプのスナップショット、成否を変えない UI テストの移動 | 作業の spec に、変わるテストを範囲で書く (「E2007 を使う UI テストはすべて書き換える」「Core IR のダンプはすべて取り直す」など)。spec の承認を、その範囲の変更すべてへの合意とみなす |
+| 機械的な追随 | テストの組み立てだけが変わり、スナップショットの文字列と `assert` の値は1文字も変わらない | 合意は要らない。記録はコミットメッセージで足りる |
 
-- テストを変えないことを理由に設計を曲げない。テストが壊れると分かったら、その変更が1〜3のどれに当たるかを示して、変更を提案する
-- 作業の計画の全体制約は「期待値は、このプランで名前を挙げたテストだけを変える。期待値を変えない機械的な追随は許す」と書く
-- UI テストは最も強い仕様として扱い、種類1でしか変えない
+- テストを変えないことを理由に設計を曲げない。テストの変更が要ると分かったら、上のどの種類に当たるかを示して、作業の spec に書く
+- 成否の変更と期待値の変更では、変える理由を作業の spec とコミットメッセージに書く
+- 作業の計画の全体制約は「成否と期待値は、spec に挙げたテストと範囲の中だけで変える。期待値を変えない機械的な追随は許す」と書く
+- UI テストの最上位のディレクトリが成否を決める
 
 ## テストの置き場所
 
@@ -50,20 +51,6 @@
 - Core IR の結合テストは、確かめるパスごとのファイルに置き、`eml_test_support::core_until` でそのパスの直後の IR を見る。後のパスの書き換えや RC の命令を、確かめたいことと一緒に期待値に入れないためである
 - 単体テストは、ファイルの末尾の `#[cfg(test)] mod tests` に置く。テストが300行を超え、ファイルの半分ほどを占めるようになったら、`eml_types/src/table/tests.rs` のように隣の `tests.rs` に分ける
 - `crates/eml_test_support/` は、結合テストのためにパイプラインを組む関数 (`parse`、`lower`、`check`、`core`、`core_until`、`run`、`execute`) と、診断のないことを確かめて組む関数 (`parse_clean`、`lower_clean`)、診断を文字列にする関数 (`short`、`short_text`、`full`) と fix を文字列にする関数 (`fixes`)、段階の表示に診断を足す関数 (`with_diagnostics`)を持つ。`lower` は、メモリ上の `(パス, 本文)` の並びを読む `MemorySource` を読み込みの段 (`eml_hir::load`) に渡してモジュールを読み、`def_map`、`lower` の順に変換する。結果の診断には読み込みの段の診断も入る。`def_map` と `def_map_files` は、`DefMap` と、入口のファイルの `ItemTree` と `DefMap` の診断を返し、構文解析と読み込みの段の診断は含めない。複数のファイルのテストには `*_files` の関数 (`lower_files`、`def_map_files`、`check_files`、`core_files`、`core_until_files`、`run_files`) を使う。入口の本文と、根からの相対パス (`Report/Csv.em`) と本文の組の並びを受け取る。1つのテキストの関数は、並びが空の `*_files` と同じ経路を通る。入口の表示のパスは `ENTRY_PATH` (`test.em`) である。Prelude に定義を足したプログラムは、`lower_with_prelude` で変換する。Prelude の本文を `eml_hir::load_with_prelude` に渡し、Prelude の中の item の扱いを確かめるテスト (`eml_hir` の `structure.rs`、`eml_types` の `modules.rs`) が使う。`Lowered` と `Checked` は HIR の `Program` を持つ。開発専用の crate で、各 crate の `tests/` からだけ使う。段階は feature (`hir` < `types` < `core` < `run`) で選び、各 crate は自分の段階までを有効にする。下流の crate がまだ組み立たなくても、上流の段階のテストを流せるようにするためである。`src/` の `#[cfg(test)]` から使うと、テストする crate が2つ別々にリンクされて型が合わなくなる
-
-### 今あるテストの地図
-
-| crate | 結合テスト (`tests/`) | 単体テスト (`src/`) |
-|---|---|---|
-| `eml_diagnostics` | なし | `lib.rs` (診断の番号と E0004)、`source.rs` (`SourceFiles` と行と列)、`render.rs` (診断の表示) |
-| `eml_syntax` | `lexer.rs` (字句)、`literals.rs` (リテラルの値の解釈)、`parser.rs` (空のファイル、項目の解析と項目の間の回復、BOM と shebang)、`declarations.rs` (シグネチャの形、`data`、`effect`、fixity、`pub` / `type` / `import`)、`types.rs` (型と row)、`expressions.rs` (等式、パターン、適用やフィールドの参照などの式、ブロックと `let`、ラムダ、`use`、括弧の回復)、`operators.rs` (演算子の列、前置の `-`、セクション、被演算子の欠け)、`control.rs` (`if` と `match`)、`handlers.rs` (handler)、`nesting.rs` (入れ子の深さの上限)、`names.rs` (名前と経路のノード、import の CST)、`ast.rs` (型付き AST ラッパ。`data`、`match`、コンストラクタのパターン、型の適用の取り出し口)、`corpus.rs` (コーパス。ソースは `tests/corpus/` にあり、`s1.em` は M1 で実装した構文、`later_stages.em` は import と、まだ実装していない構文を含む) | `layout.rs` (レイアウト段)、`parser/tests.rs` (パーサのマーカー、先読み、診断の位置)、`grammar/scan.rs` (回復の範囲の走査)、`syntax_kind.rs` と `token_set.rs` (構文の種類の表) |
-| `eml_hir` | `eval.rs` (呼び出しの評価の手順と、引数をまとめて渡す範囲)、`item_tree.rs` (item の収集、シグネチャと等式の並び方)、`load.rs` (読み込みの段。たどる順と番号、E1026、E1030、表示のパス)、`def_map.rs` (スコープ表、重複の3つの規則、`pub`、定義に付く fixity、import のスコープ、循環、import の並びの検査、表示名の数え方)、`scaling.rs` (名前の表を作る時間の伸び。release ビルドで流す)、`lower.rs` (名前解決と脱糖、解決の順、修飾した名前、合流と曖昧さ、壊れた import からの回復、E1032、未対応の構文の E0004)、`operators.rs` (演算子の組み直し)、`effects.rs` (エフェクトと操作)、`structure.rs` (HIR のデータ構造と走査)、`data.rs` (`data` の宣言、コンストラクタ、型の適用、パターン、`match`)、`tuples.rs` (タプルの式・型・パターン、リテラルのパターン、射影の E0004) | なし |
-| `eml_types` | `check.rs` (推論と型の診断)、`rows.rs` (エフェクトの row と E2002)、`effects.rs` (エフェクト、handler、継続、線形な継続 (E3001))、`data.rs` (型構成子の引数、データ型の Kind、パターンと `match` の型検査)、`exhaustive.rs` (網羅性の検査と漏れの例。タプルとリテラルを含む)、`tuples.rs` (タプルの型検査、リテラルのパターン、`==` の比べ方の決定と E2006)、`instantiations.rs` (参照ごとの具体化の表。記録する参照、記録しない参照、型引数の順)、`linearity.rs` (線形性の診断)、`modules.rs` (モジュールをまたぐ検査と、同じ名前の型の表示、複数のモジュールの `dump`。Prelude のソースに本体を足して、診断が指すファイルを確かめる。Prelude の本体の中の線形性の誤り (E3002〜E3004) と、`>>` の本体を通る持ち越し (E3006) も確かめる)、`scaling.rs` (型検査の時間の伸び。`#[ignore]`) | `table/tests.rs` (単一化と型の書き出し)、`kind/solve.rs` (Kind の問題の解き方と残す制約)、`shape.rs` (閉じた形と具体化)、`ty.rs` (型の表示)、`scc.rs` (関数の呼び出しの強連結成分)、`check/mod.rs` (診断の文言と、`report_violations` のファイルをまたぐ並びと重複の除去) |
-| `eml_core_ir` | `translate.rs` (Core IR への変換。変換の直後。入口から届く関数だけを変換することと、モジュール名で修飾した名前、Prelude の `Bool` のタグを含む)、`simplify.rs` (`simplify` の書き換え。`simplify` の直後。K1 が `default` に進む場合と、B2 が `default` を join point に切り出す場合と、F が `match` の枝の join point を外へ出して B2 が `switch` に届く場合を含む)、`perceus.rs` (`dup` / `decref` の位置と `saved`。Perceus の直後)、`verify.rs` (Core IR のテキストによる verifier。平らな `Switch` の規則として、case の種類がそろうこと、リテラルの `Switch` に `default` があること、同じ case が2回ないこと、リテラルの case がフィールドを持たないこと、`String` の番号が表の中にあることと、テキストの `switch` に `default` が2つあると読めないことを含む) | `lib.rs` (子と atom の走査の順)、`builder.rs` (関数の組み立て)、`compact.rs` (アリーナの組み直しと、2回たどれる式などの誤り)、`verify.rs` (アリーナの形の検査)、`text.rs` (テキストの読み戻しと、読むときの誤り) |
-| `eml_runtime` | なし | `heap/tests.rs` (確保と解放、世代番号、リーク、フレームと継続の解放、`take` と `take_or_copy` による複製)、`output.rs` (`OutputSink`) |
-| `eml_interp` | `run.rs` (Core IR のテキストや生成したソースによる実行。リテラルが1000個の `match` を debug ビルドで実行するテストを含む)、`closures.rs` (Core IR のテキストによるクロージャ)、`data.rs` (Core IR のテキストによる `data` の値と `Switch` の分解。フィールドを持つ値が `default` に進むとき分解せずに手放すことと、`String` の scrutinee を、case に一致するときも `default` に進むときも比べ終えて手放すことを含む) | `error.rs` (実行時エラーの表示)、`lib.rs` (`RunConfig`) |
-| `eml_cli` | `ui.rs` (UI テスト)、`api.rs` (lib API の `load` / `check` / `compile` / `execute` の流れと、`FsProvider` の大文字小文字の検査)、`cli.rs` (CLI の終了コード) | なし |
-| `eml_test_support` | `support.rs` (テスト補助そのもの) | なし |
 
 ## 層ごとの方法
 
@@ -109,7 +96,7 @@
   - E3001 は今は `eml_types` が出すが、出す crate ではなく番号の範囲に従って `linearity/` に置く
   - E0004 (まだ対応していない構文) は、どの段階が出しても `not-yet-supported/` に置く
 - サブディレクトリの名前は、親の `check-fail` と同じくケバブケースにする
-- スナップショットの名前は、最上位のディレクトリからの相対パスで固定する (`run/basics/hello.em` は `integration__ui__run@basics__hello.em.snap`。頭の `integration__ui__` は、insta が付けるテストのバイナリとモジュールの名前である)。insta の既定では、分類が1つしかないディレクトリの名前に分類が入らず、分類が増えたときに名前が変わるためである。ディレクトリのテストの名前はディレクトリのパスで、`check-fail/names/import_cycle/` は `integration__ui__check_fail@names__import_cycle.snap` になる。テストのパスが名前になるので、UI テストの移動はスナップショットの名前を変え、種類1の変更になる
+- スナップショットの名前は、最上位のディレクトリからの相対パスで固定する (`run/basics/hello.em` は `integration__ui__run@basics__hello.em.snap`。頭の `integration__ui__` は、insta が付けるテストのバイナリとモジュールの名前である)。insta の既定では、分類が1つしかないディレクトリの名前に分類が入らず、分類が増えたときに名前が変わるためである。ディレクトリのテストの名前はディレクトリのパスで、`check-fail/names/import_cycle/` は `integration__ui__check_fail@names__import_cycle.snap` になる。テストのパスが名前になるので、UI テストを移動するとスナップショットの名前が変わる。成否を変えない移動は期待値の変更で、最上位のディレクトリをまたぐ移動は成否の変更である (「テストの変更の運用」)
 
 ## 文書の引用の検査
 
