@@ -14,7 +14,7 @@ eml を実装するエージェントとプログラマのための文書群で�
 | [spec/declarations.md](spec/declarations.md) | 規範 | シグネチャと等式、`data` と `type`、`effect`、fixity と標準の演算子表、`pub` |
 | [spec/expressions.md](spec/expressions.md) | 規範 | 式と脱糖 (`let`、ラムダ、`if`、`match`、演算子の列、セクション、`use`、handler の構文) |
 | [spec/records.md](spec/records.md) | 規範 | 直積型とレコード (タプルと Unit を含む) |
-| [spec/modules.md](spec/modules.md) | 規範 | モジュール、import、名前の解決、名前空間 |
+| [spec/modules.md](spec/modules.md) | 規範 | モジュール、import、名前の解決、名前空間、公開の範囲、誤りからの回復 |
 | [spec/types.md](spec/types.md) | 規範 | Kind、関数型、型推論 |
 | [spec/linearity.md](spec/linearity.md) | 規範 | 線形性と `drop`、線形性の検査パス |
 | [spec/effects.md](spec/effects.md) | 規範 | 操作の多重度、持ち越し規則、handler の意味、組み込みの `IO` と `File` |

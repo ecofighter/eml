@@ -37,7 +37,7 @@
 - `switch` は scrutinee、case の並び、省略できる `default` を持つ。case は、タグ (`#N`)、`Int`、`String` (文字列定数の番号) のどれかで比べ、1つの `switch` の case は同じ種類にする。リテラルの `switch` はつねに `default` を持つ。`#N(x, ..)` の case だけがフィールドを束縛し、リテラルの case はフィールドを持たない。同じ case を2回書かない。テキストの形は `switch x { #0 -> .., #1(a) -> .., _ -> .. }` や `switch x { 1 -> .., 2 -> .., _ -> .. }` で、`String` は `"a" -> ..` と書く。
 - 関数の末尾の呼び出しは末尾呼び出しにし、呼び出し元のフレームを積まない。HIR の式から作った呼び出しは、`simplify` の T が末尾呼び出しにする (下の「パス」)。
 - 変換は、入口の関数から届く関数だけを Core IR にする。届くかどうかは、HIR の本体に現れる関数の参照 (`Res::Function`) をたどって決める。Prelude のうち使わない関数は Core IR に入らない。
-- テキストの形は関数とエフェクトを名前で引くので、モジュールをまたいで名前が重なってはいけない。入口以外のモジュールでは、関数、操作を包む関数、コンストラクタを包む関数、エフェクトの表の名前に `モジュール名.` を付ける。Prelude もこの規則に含める (`Prelude.not`、ラムダは `Prelude.>>$lambda0`、`op$Prelude.open`、`effect Prelude.IO`、`Report.Csv.parse`、`con$Report.Csv.Row`)。入口のモジュールの名前には付けない (`parse`、`op$get`)。intrinsic を包む関数 (`builtin$`) は Prelude の intrinsic にしか作らず重ならないので、付けない。
+- テキストの形は関数とエフェクトを名前で引くので、モジュールをまたいで名前が重なってはいけない。入口以外のモジュールでは、関数、操作を包む関数、コンストラクタを包む関数、エフェクトの表の名前に `モジュール名.` を付ける (`Report.Csv.parse`、`con$Report.Csv.Row`)。Prelude もこの規則に含める (`Prelude.not`、ラムダは `Prelude.>>$lambda0`、`op$Prelude.open`、`effect Prelude.IO`)。入口のモジュールの名前には付けない (`parse`、`op$get`)。intrinsic を包む関数 (`builtin$`) は Prelude の intrinsic にしか作らず重ならないので、付けない。
 - 変換は、`main` を `()` で呼ぶ入口の関数を作る。等式に引数のない `main` は関数値を返すので、入口の関数が返った値に `()` を適用する。
 - `handle`、`perform`、`resume` は呼び出しの一種である。呼び出しと同じく後で使う変数を退避し、末尾の位置ではフレームを積まない。
 - handle の本体、操作の節、`return` の節は、ラムダと同じく、捕まえた変数を先頭の引数に持つ関数に持ち上げ、そのクロージャか関数の値を `handle` に渡す。本体の関数は `()` を受ける。節はエフェクトの操作の順に並べる。操作を値として使うときは、`perform` を呼ぶだけの関数で包む。
