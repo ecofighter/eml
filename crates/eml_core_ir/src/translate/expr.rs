@@ -94,30 +94,24 @@ impl FnLowering<'_> {
         out: &mut Bindings,
     ) -> Atom {
         let last = first + args.len();
+        let masks: Vec<Vec<u32>> = (first..last).map(|arrow| self.mask(id, arrow)).collect();
         let mut args = args.into_iter();
-        let mut start = first;
-        while start < last {
-            let mask = self.mask(id, start);
-            let mut end = start + 1;
-            while end < last && self.mask(id, end) == mask {
-                end += 1;
-            }
-            let part = args.by_ref().take(end - start).collect();
+        let mut end = first;
+        for run in masks.chunk_by(|a, b| a == b) {
+            end += run.len();
+            let part = args.by_ref().take(run.len()).collect();
             let part_ty = if end == last {
                 ty.clone()
             } else {
                 split_arrows(callee_ty, end).1
             };
-            let rhs = Rhs::masked_call(Call::Apply(function, part), mask);
+            let rhs = Rhs::masked_call(Call::Apply(function, part), run[0].clone());
             function = self.bind(out, "t", &part_ty, rhs);
-            start = end;
         }
         function
     }
 
     /// 型検査が記録した、呼び出し `call` の矢印 `arrow` の `mask` を、エフェクトの番号の昇順で返す (docs/spec/core-ir.md)。
-    /// 操作のないエフェクトは handler を持てず、飛ばす handler もないので落とす。`pretty` はそのエフェクトを表に書かない
-    /// ので、残すとテキストの形から読み戻せない。
     fn mask(&self, call: ExprId, arrow: usize) -> Vec<u32> {
         let mut mask: Vec<u32> = self
             .types
@@ -126,7 +120,6 @@ impl FnLowering<'_> {
             .map(|effects| {
                 effects
                     .iter()
-                    .filter(|&&effect| !self.hir[effect].operations.is_empty())
                     .map(|&effect| effect_index(self.hir, effect))
                     .collect()
             })
@@ -163,6 +156,13 @@ impl FnLowering<'_> {
     /// `mask` を付けるのは本体のある関数だけである。intrinsic、操作、コンストラクタは、型検査が row を開かずに宣言のまま
     /// 含めるので、`mask` が記録されない。
     fn saturated_rhs(&self, id: ExprId, callee: Callee, args: Vec<Atom>) -> (&'static str, Rhs) {
+        // `Prim`、`Perform`、`Con` は `mask` を持てない。型検査が `mask` を記録するように変わると、ここで気づかないうちに
+        // 落とすことになる
+        debug_assert!(
+            matches!(callee, Callee::Function(_))
+                || (0..args.len()).all(|arrow| self.mask(id, arrow).is_empty()),
+            "an intrinsic, operation or constructor call has no recorded mask"
+        );
         match callee {
             // 前の矢印は部分適用でエフェクトを起こさないので、最後の矢印の `mask` だけを使う (docs/spec/core-ir.md)
             Callee::Function(target) => {
