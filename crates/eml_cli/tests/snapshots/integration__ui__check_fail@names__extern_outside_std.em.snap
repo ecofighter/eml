@@ -1,0 +1,14 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: rendered
+input_file: tests/ui/check-fail/names/extern_outside_std.em
+---
+[E1033] Error: `extern` is only allowed in the standard library
+   ╭─[ check-fail/names/extern_outside_std.em:2:1 ]
+   │
+ 2 │ extern shout : String -> String
+   │ ───┬──  
+   │    ╰──── user modules cannot declare externs
+   │ 
+   │ Help: remove `extern` and define the declaration in eml
+───╯

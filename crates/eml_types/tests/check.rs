@@ -371,7 +371,7 @@ fn a_callee_that_is_not_a_name_is_described_without_quotes() {
 }
 
 #[test]
-fn intrinsic_schemes_are_exported() {
+fn extern_schemes_are_exported() {
     let checked = eml_test_support::check("main : Unit -> <IO> Unit\nmain () = ()");
     let ty = |name: &str| {
         let (id, _) = checked
@@ -398,7 +398,7 @@ fn intrinsic_schemes_are_exported() {
     assert_eq!(operation("println"), "String -> <IO> Unit");
     assert_eq!(ty("+"), "Int -> Int -> Int");
     assert_eq!(ty(">>"), "(a -> <e> b) -> (b -> <e> c) -> a -> <e> c");
-    // コンストラクタは intrinsic ではなく、Prelude の `data Bool` のスキームとして書き出す
+    // コンストラクタは extern ではなく、Prelude の `data Bool` のスキームとして書き出す
     assert_eq!(
         checked.typed.decls[&Decl::Constructor(checked.program.lang.true_ctor)]
             .ty
@@ -494,4 +494,17 @@ fn an_annotated_pattern_must_have_the_type_of_its_value() {
       4:9 expected `Int`, found `String`
       note: an annotated pattern must have the type of the value it matches
     ");
+}
+
+#[test]
+fn a_user_extern_adds_no_type_error() {
+    // ユーザーのモジュールの extern は E1033 の後も宣言として使え、型検査は誤りを重ねない
+    let text = "extern f : Int -> Int\n\ng : Int -> Int\ng x = f x\n\nextern data T\n\nh : T -> T\nh x = x\n\nextern effect E\n\nk : Unit -> <E> Unit\nk () = ()";
+    let checked = eml_test_support::check(text);
+    let codes: Vec<String> = checked
+        .diagnostics
+        .iter()
+        .map(|d| d.code.to_string())
+        .collect();
+    assert_eq!(codes, ["E1033", "E1033", "E1033"]);
 }

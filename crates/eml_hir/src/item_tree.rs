@@ -156,8 +156,7 @@ struct Definition {
 }
 
 /// トップレベルの宣言を集める。E1003 (シグネチャの重複)、E1004、E1018、E1019 と、`type` の E0004 を出す。
-/// E1005 は、Prelude の等式のないシグネチャが intrinsic であり、モジュールの種類を知らないここでは決められないので、
-/// `lower` が出す。
+/// E1005 は、関数の種類 (extern かどうか) を決める `lower` が一緒に出す。
 pub fn item_tree(file: FileId, source: &ast::SourceFile) -> (ItemTree, Vec<Diagnostic>) {
     let mut diagnostics = Vec::new();
     let mut definitions: Vec<Definition> = Vec::new();

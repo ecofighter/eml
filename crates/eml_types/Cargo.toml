@@ -10,6 +10,7 @@ autotests = false
 doctest = false
 
 [dependencies]
+eml_extern.workspace = true
 eml_diagnostics.workspace = true
 eml_hir.workspace = true
 la-arena.workspace = true

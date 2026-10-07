@@ -12,6 +12,7 @@ test = false
 doctest = false
 
 [dependencies]
+eml_extern.workspace = true
 eml_diagnostics.workspace = true
 eml_syntax.workspace = true
 la-arena.workspace = true

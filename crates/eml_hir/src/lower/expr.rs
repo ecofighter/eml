@@ -19,6 +19,8 @@ pub(super) struct BodyLowering<'a> {
     modules: &'a Arena<Module>,
     /// `&&` と `||` の脱糖が引く `Bool` のコンストラクタ。
     pub(super) lang: LangItems,
+    /// 前置の `-` の脱糖が呼ぶ extern の関数。
+    pub(super) negate: FunctionId,
     /// 本体の型の注釈。
     types: Arena<TypeRef>,
     /// 本体の注釈が引く、シグネチャの型変数と row 変数の表。
@@ -55,6 +57,7 @@ impl<'a> BodyLowering<'a> {
         items: Resolver<'a>,
         modules: &'a Arena<Module>,
         lang: LangItems,
+        negate: FunctionId,
         generics: &'a mut Generics,
         diagnostics: &'a mut Vec<Diagnostic>,
     ) -> Self {
@@ -63,6 +66,7 @@ impl<'a> BodyLowering<'a> {
             items,
             modules,
             lang,
+            negate,
             types: Arena::new(),
             generics,
             diagnostics,

@@ -70,7 +70,7 @@ fn names_outside_the_entry_are_qualified_with_their_module() {
     fn main(p0) {
       let t1^ = handle Report.Csv.Parse(&main$handle0, ()) {next: &main$handle0$next} return &main$handle0$return
       join j0(n2) [] {
-        let t4^ = prim show_int(n2)
+        let t4^ = extern Prelude.show_int(n2)
         let t5 = call apply(&op$Prelude.println, t4)
         return t5
       }
@@ -149,10 +149,10 @@ fn recursion_and_top_level_values() {
       return 42
     }
     fn count(n0) {
-      let t1 = prim ==(n0, 0)
+      let t1 = extern Prelude.int_eq(n0, 0)
       switch t1 {
         #0 ->
-          let t3 = prim -(n0, 1)
+          let t3 = extern Prelude.-(n0, 1)
           let t4 = call count(t3)
           return t4
         #1 ->
@@ -162,7 +162,7 @@ fn recursion_and_top_level_values() {
     }
     fn main(p0) {
       let t1 = call count(3)
-      let t2^ = prim show_int(t1)
+      let t2^ = extern Prelude.show_int(t1)
       let t3 = perform println(t2)
       return t3
     }
@@ -178,7 +178,7 @@ fn partial_and_extra_arguments_use_closures() {
     insta::assert_snapshot!(core_text(text, Pass::Translate), @"
     effect Prelude.IO { println/1, open/1, read_all/1, close/1 }
     fn add(a0, b1) {
-      let t2 = prim +(a0, b1)
+      let t2 = extern Prelude.+(a0, b1)
       return t2
     }
     fn adder(x0) {
@@ -190,8 +190,8 @@ fn partial_and_extra_arguments_use_closures() {
       let t2 = apply c1(2)
       let t3^ = call adder(3)
       let t4 = apply t3(4)
-      let t5 = prim +(t2, t4)
-      let t6^ = prim show_int(t5)
+      let t5 = extern Prelude.+(t2, t4)
+      let t6^ = extern Prelude.show_int(t5)
       let t7 = perform println(t6)
       return t7
     }
@@ -224,7 +224,7 @@ fn builtins_used_as_values_are_wrapped() {
     }
     fn main(p0) {
       let t1^ = call Prelude.>>(&Prelude.not, &Prelude.not)
-      let t2^ = prim show_int(1)
+      let t2^ = extern Prelude.show_int(1)
       let t3 = call apply(&op$Prelude.println, t2)
       return t3
     }
@@ -262,7 +262,7 @@ fn lambdas_are_lifted_with_their_captures_first() {
       return t6
     }
     fn main$lambda0(s0^, t1^) {
-      let t2^ = prim ++(t1, s0)
+      let t2^ = extern Prelude.++(t1, s0)
       return t2
     }
     fn entry$main() {
@@ -285,9 +285,9 @@ fn a_zero_arity_callee_is_evaluated_before_its_arguments() {
     }
     fn main(p0) {
       let five1^ = call five()
-      let t2 = prim +(1, 2)
+      let t2 = extern Prelude.+(1, 2)
       let t3 = apply five1(t2)
-      let t4^ = prim show_int(t3)
+      let t4^ = extern Prelude.show_int(t3)
       let t5 = perform println(t4)
       return t5
     }
@@ -369,8 +369,8 @@ fn handlers_are_lifted_to_closures() {
     fn main(p0) {
       let s1^ = const "n = "
       let t2 = handle Ask(&main$handle0, ()) {ask: &main$handle0$ask} return &main$handle0$return
-      let t3^ = prim show_int(t2)
-      let t4^ = prim ++(s1, t3)
+      let t3^ = extern Prelude.show_int(t2)
+      let t4^ = extern Prelude.++(s1, t3)
       let t5 = perform println(t4)
       return t5
     }
@@ -384,7 +384,7 @@ fn handlers_are_lifted_to_closures() {
       return t3
     }
     fn main$handle0$return(x0, p1) {
-      let t2 = prim +(x0, 1)
+      let t2 = extern Prelude.+(x0, 1)
       return t2
     }
     fn entry$main() {
@@ -516,7 +516,7 @@ fn constructor_patterns_in_handler_clause_parameters() {
 
 #[test]
 fn equality_picks_the_comparison_of_the_operand_type() {
-    // `Int` の `==` は今までどおり `prim ==` のまま表示し、`String` と `Bool` は型を前に付けた名前で表示する
+    // 比べ方ごとの extern は、型の名前を前に付けた名前 (`Prelude.int_eq`、`Prelude.string_eq`、`Prelude.bool_ne`) で表示する
     let text = "same : String -> Bool\nsame s = \"a\" == s\n\nflip : Bool -> Bool\nflip b = b != True\n\nmain : Unit -> <IO> Unit\nmain () = ()";
     insta::assert_snapshot!(core_text(text, Pass::Translate), @"
     effect Prelude.IO { println/1, open/1, read_all/1, close/1 }
@@ -632,23 +632,23 @@ fn a_handler_with_a_state_passes_its_initial_value_and_takes_the_state_from_its_
     effect Ask { ask/1 }
     fn main(p0) {
       let t1 = handle Ask(&main$handle0, 10) {ask: &main$handle0$ask} return &main$handle0$return
-      let t2^ = prim show_int(t1)
+      let t2^ = extern Prelude.show_int(t1)
       let t3 = perform println(t2)
       return t3
     }
     fn main$handle0(p0) {
       let t1 = perform Ask.ask(())
       let t2 = perform Ask.ask(())
-      let t3 = prim +(t1, t2)
+      let t3 = extern Prelude.+(t1, t2)
       return t3
     }
     fn main$handle0$ask(p0, k1^, st2) {
-      let t3 = prim +(st2, 1)
+      let t3 = extern Prelude.+(st2, 1)
       let t4 = resume k1(st2, t3)
       return t4
     }
     fn main$handle0$return(x0, st1) {
-      let t2 = prim *(x0, st1)
+      let t2 = extern Prelude.*(x0, st1)
       return t2
     }
     fn entry$main() {
@@ -667,8 +667,8 @@ fn effects_are_numbered_with_io_first_then_in_declaration_order() {
     fn main(p0) {
       let t1 = handle A(&main$handle0, ()) {a: &main$handle0$a} return &main$handle0$return
       let t2 = handle B(&main$handle1, ()) {b: &main$handle1$b} return &main$handle1$return
-      let t3 = prim +(t1, t2)
-      let t4^ = prim show_int(t3)
+      let t3 = extern Prelude.+(t1, t2)
+      let t4^ = extern Prelude.show_int(t3)
       let t5 = perform println(t4)
       return t5
     }
@@ -742,7 +742,7 @@ fn an_arm_reached_by_one_leaf_sits_at_the_leaf() {
         #1(w4, h5) ->
           let w1 = w4
           let h2 = h5
-          let t3 = prim *(w1, h2)
+          let t3 = extern Prelude.*(w1, h2)
           return t3
       }
     }
@@ -770,8 +770,8 @@ fn an_arm_reached_by_one_leaf_sits_at_the_leaf() {
       let d1^ = con #1(2, 3)
       let t2 = call area(d1)
       let t3 = call pick(0, 1)
-      let t4 = prim +(t2, t3)
-      let t5^ = prim show_int(t4)
+      let t4 = extern Prelude.+(t2, t3)
+      let t5^ = extern Prelude.show_int(t4)
       let t6 = perform println(t5)
       return t6
     }
@@ -806,14 +806,14 @@ fn each_comparison_picks_the_instruction_of_its_operand_type() {
     insta::assert_snapshot!(core_text(text, Pass::Translate), @r#"
     effect Prelude.IO { println/1, open/1, read_all/1, close/1 }
     fn compare(n0, s1^, b2) {
-      let t3 = prim ==(n0, 1)
-      let t4 = prim !=(n0, 2)
+      let t3 = extern Prelude.int_eq(n0, 1)
+      let t4 = extern Prelude.int_ne(n0, 2)
       let s5^ = const "a"
-      let t6 = prim string==(s1, s5)
+      let t6 = extern Prelude.string_eq(s1, s5)
       let s7^ = const "b"
-      let t8 = prim string!=(s1, s7)
-      let t9 = prim bool==(b2, #1)
-      let t10 = prim bool!=(b2, #0)
+      let t8 = extern Prelude.string_ne(s1, s7)
+      let t9 = extern Prelude.bool_eq(b2, #1)
+      let t10 = extern Prelude.bool_ne(b2, #0)
       let d11^ = con #0(t3, t4, t6, t8, t9, t10)
       return d11
     }
@@ -1001,7 +1001,7 @@ fn a_continuation_with_an_expression_argument_is_resumed_once() {
     );
     assert_eq!(shown.matches("resume ").count(), 1, "{shown}");
     assert!(
-        shown.find("prim +(").unwrap() < shown.find("resume ").unwrap(),
+        shown.find("extern Prelude.+(").unwrap() < shown.find("resume ").unwrap(),
         "{shown}"
     );
     assert!(!shown.contains("cont$"), "{shown}");
@@ -1150,4 +1150,22 @@ main () =
 ";
     let shown = core_text(text, Pass::Translate);
     assert!(shown.contains("mask[Log] apply"), "{shown}");
+}
+
+#[test]
+fn externs_are_called_by_their_canonical_name() {
+    // `==` と `!=` は、型検査が記録した型引数から比べ方の行を選ぶ。`(==)` は HIR がラムダに脱糖するので、包む関数を作らない
+    let text = "apply : (a -> <e> b) -> a -> <e> b\napply f x = f x\n\neq : Int -> Int -> Bool\neq = (==)\n\nmain : Unit -> <IO> Unit\nmain () =\n  let _ = (1 + 2, \"a\" == \"b\", True != False, eq 1 2)\n  println (apply show_int 3)";
+    let shown = core_text(text, Pass::Translate);
+    for expected in [
+        "extern Prelude.+(1, 2)",
+        "extern Prelude.string_eq(",
+        "extern Prelude.bool_ne(#1, #0)",
+        "extern Prelude.int_eq(",
+        "call apply(&extern$Prelude.show_int, 3)",
+        "fn extern$Prelude.show_int(p0) {\n  let t1^ = extern Prelude.show_int(p0)\n  return t1\n}",
+    ] {
+        assert!(shown.contains(expected), "{expected}\n{shown}");
+    }
+    assert!(!shown.contains("extern$Prelude.=="), "{shown}");
 }

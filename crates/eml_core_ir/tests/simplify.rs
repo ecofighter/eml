@@ -286,7 +286,7 @@ fn unused_bindings_that_can_fail_are_kept() {
     // `/` はゼロ除算で実行時エラーになるので、使われなくても消さない
     let text = "f : Int -> Int\nf x =\n  let q = x / 0\n  1\n\nmain : Unit -> <IO> Unit\nmain () = println (show_int (f 1))";
     let f = function(&core_text(text, Pass::Simplify), "f");
-    assert!(f.contains("prim /("), "{f}");
+    assert!(f.contains("extern Prelude./("), "{f}");
 }
 
 #[test]
@@ -367,7 +367,7 @@ fn a_known_and_an_unknown_jump_share_the_split_arm() {
     insta::assert_snapshot!(pick, @"
     fn pick(c0) {
       join j0(t6) [] {
-        let t7 = prim +(t6, 1)
+        let t7 = extern Prelude.+(t6, 1)
         return t7
       }
       join j1(v8) [] {
@@ -399,7 +399,7 @@ fn a_known_and_an_unknown_jump_share_an_arm_that_uses_the_whole_value() {
     insta::assert_snapshot!(pick, @"
     fn pick(c0) {
       join j0(t6) [] {
-        let t7 = prim +(t6, 1)
+        let t7 = extern Prelude.+(t6, 1)
         return t7
       }
       join j1(t8^) [] {
@@ -434,7 +434,7 @@ fn a_known_tag_reaching_a_default_that_uses_the_scrutinee_passes_the_value() {
     insta::assert_snapshot!(pick, @"
     fn pick(b0) {
       join j0(t4) [] {
-        let t5 = prim +(t4, 1)
+        let t5 = extern Prelude.+(t4, 1)
         return t5
       }
       join j1(t6) [] {
@@ -473,7 +473,7 @@ fn a_call_moved_into_a_branch_becomes_a_tail_call() {
     }
     fn main(p0) {
       let t1 = call f(#1, 1)
-      let t2^ = prim show_int(t1)
+      let t2^ = extern Prelude.show_int(t1)
       let t3 = perform println(t2)
       return t3
     }
@@ -500,7 +500,7 @@ fn every_kind_of_call_in_tail_position_becomes_a_tail_call() {
     }
     fn main(p0) {
       let t1 = call answer(())
-      let t2^ = prim show_int(t1)
+      let t2^ = extern Prelude.show_int(t1)
       let t3 = perform println(t2)
       return t3
     }

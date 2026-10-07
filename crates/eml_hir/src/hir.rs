@@ -1,6 +1,7 @@
-use std::collections::{BTreeSet, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 use eml_diagnostics::{TextRange, TextSize};
+use eml_extern::{Extern, ExternType};
 use la_arena::{Arena, ArenaMap, Idx};
 
 pub use crate::program::{
@@ -22,22 +23,11 @@ pub struct TypeDef {
     pub kind: TypeDefKind,
 }
 
-impl TypeDef {
-    /// 型引数もコンストラクタも持たない組み込みの型。
-    pub fn builtin(name: &str) -> TypeDef {
-        TypeDef {
-            name: name.to_string(),
-            generics: Generics::default(),
-            types: Arena::new(),
-            kind: TypeDefKind::Builtin,
-        }
-    }
-}
-
 #[derive(Debug)]
 pub enum TypeDefKind {
-    /// `Int`、`String` など、宣言を持たない組み込みの型。
-    Builtin,
+    /// `extern data`。値の表し方と Kind は extern の表の行が決める。ユーザーのモジュールの extern (E1033) は行を
+    /// 持たず、型引数のない `Unr` の型として扱う。
+    Extern(Option<ExternType>),
     /// 宣言した順のコンストラクタ。
     Data { constructors: Vec<ConstructorId> },
 }
@@ -85,30 +75,43 @@ pub struct Operation {
     pub arity: usize,
 }
 
-/// 処理系が名前ではなく役割で引く item。
+/// 処理系が名前ではなく役割で引く、extern でない item。extern の宣言は `ExternIndex` か関数の種類で引く。
 #[derive(Debug, Clone, Copy)]
 pub struct LangItems {
-    pub int: TypeDefId,
-    pub string: TypeDefId,
     pub bool: TypeDefId,
-    pub unit: TypeDefId,
-    /// 組み込みの線形型。Kind はつねに `Lin` である。
-    pub file: TypeDefId,
     pub io: EffectId,
     /// `&&` と `||` の脱糖が使う `Bool` のコンストラクタ。ユーザーが同じ名前のコンストラクタで隠しても、脱糖は
     /// Prelude のものを指す。
     pub true_ctor: ConstructorId,
     pub false_ctor: ConstructorId,
-    /// 前置の `-` の脱糖が呼ぶ。Prelude で `pub` にしないので、ユーザーは名前で書けない。
-    pub negate: FunctionId,
-    /// `==` と `!=`。型検査が参照ごとの型引数を記録し、比べ方は `eml_types::equality` がそこから選ぶ
-    /// (docs/spec/core-ir.md、docs/spec/declarations.md の標準の演算子の表)。
-    pub eq: FunctionId,
-    pub ne: FunctionId,
     /// HIR が短絡して評価するために脱糖する演算子 `&&` と `||`。
     /// ユーザーが同じ演算子を定義すれば、それに解決して普通の呼び出しになる。
     pub and: FunctionId,
     pub or: FunctionId,
+}
+
+/// extern の表の行から、標準ライブラリの宣言を引く索引。使い手のある行 (extern の型と `negate`) だけを持つ。
+#[derive(Debug, Clone)]
+pub struct ExternIndex {
+    pub(crate) types: HashMap<ExternType, TypeDefId>,
+    /// 前置の `-` の脱糖が呼ぶ。Prelude で `pub` にしないので、ユーザーは名前で書けない。
+    pub negate: FunctionId,
+}
+
+impl ExternIndex {
+    pub fn ty(&self, ty: ExternType) -> TypeDefId {
+        self.types[&ty]
+    }
+}
+
+/// 関数の種類。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FunctionKind {
+    /// 等式で定義した関数。等式のないもの (E1005) も含む。
+    Defined,
+    /// `extern` のシグネチャ。本体を持たず、実装は extern の表の行が指す。ユーザーのモジュールの extern (E1033) は
+    /// 行を持たない。
+    Extern(Option<Extern>),
 }
 
 #[derive(Debug)]
@@ -123,8 +126,7 @@ pub struct Function {
     pub equation_ranges: Vec<TextRange>,
     /// なければ `None` で、E1004 は報告済み。
     pub signature: Option<Signature>,
-    /// Prelude の等式のないシグネチャ。実装は Core IR が名前から引く。
-    pub intrinsic: bool,
+    pub kind: FunctionKind,
 }
 
 pub type TypeVarId = Idx<TypeVarDecl>;

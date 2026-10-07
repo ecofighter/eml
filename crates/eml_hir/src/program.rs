@@ -9,8 +9,11 @@ use std::ops::{Index, IndexMut};
 use eml_diagnostics::FileId;
 use la_arena::{Arena, ArenaMap, Idx, RawIdx};
 
+use eml_extern::ExternType;
+
 use crate::hir::{
-    Body, Constructor, EffectDef, Function, LangItems, Operation, Signature, TypeDef,
+    Body, Constructor, EffectDef, ExternIndex, Function, FunctionKind, LangItems, Operation,
+    Signature, TypeDef,
 };
 use crate::names::DisplayNames;
 
@@ -179,6 +182,7 @@ pub struct Program {
     /// `eml check` と `eml run` に渡したファイルのモジュール。`main` はここから探す。
     pub entry: ModuleId,
     pub lang: LangItems,
+    pub externs: ExternIndex,
     /// 型、エフェクト、コンストラクタの表示名。診断、`dump`、`pretty` が引く。
     pub names: DisplayNames,
 }
@@ -213,8 +217,7 @@ impl Module {
 #[derive(Debug, Default)]
 pub struct Items {
     pub functions: Arena<Function>,
-    /// 型の item。Prelude では組み込みの `Int`、`String`、`Unit`、`File` と `Bool`、ユーザーのモジュールでは `data` の
-    /// 宣言。
+    /// 型の item。`data` の宣言で、標準ライブラリでは extern の型 (`Int` など) も含む。
     pub types: Arena<TypeDef>,
     /// `data` の宣言のコンストラクタ。値の名前空間に置くトップレベルの値である (docs/spec/modules.md の「名前空間」)。
     pub constructors: Arena<Constructor>,
@@ -261,14 +264,24 @@ impl Program {
         self.modules[id.module].bodies.get(id.local)
     }
 
-    /// 引数がそろうまで本体が動かない引数の数。intrinsic はシグネチャの一番外側の `->` の数、ほかは等式の引数の数
-    /// である。本体のない関数 (E1005) は `None`。
+    /// 引数がそろうまで本体が動かない引数の数。extern の関数はシグネチャの一番外側の `->` の数、ほかは等式の引数の
+    /// 数である。本体のない関数 (E1005) は `None`。
     pub fn arity(&self, id: FunctionId) -> Option<usize> {
         let function = &self[id];
-        if function.intrinsic {
-            return function.signature.as_ref().map(Signature::arity);
+        match function.kind {
+            FunctionKind::Extern(_) => function.signature.as_ref().map(Signature::arity),
+            FunctionKind::Defined => self.body(id).map(|body| body.params.len()),
         }
-        self.body(id).map(|body| body.params.len())
+    }
+
+    /// extern の型を宣言した item。
+    pub fn extern_type(&self, ty: ExternType) -> TypeDefId {
+        self.externs.ty(ty)
+    }
+
+    /// 前置の `-` の脱糖が呼ぶ extern の関数。
+    pub fn negate(&self) -> FunctionId {
+        self.externs.negate
     }
 
     pub fn file(&self, module: ModuleId) -> FileId {

@@ -881,9 +881,9 @@ fn a_linear_state_does_not_cross_the_multi_operation_the_handler_handles() {
 }
 
 #[test]
-fn a_partial_application_of_an_intrinsic_keeps_a_captured_linear_value() {
-    // 部分適用した `>>` は、それまでの引数を捕まえる (docs/spec/types.md の「関数型」)。intrinsic の関数の Kind の
-    // スキームが、本体のない関数の空のスキームで上書きされると、この誤りが通ってしまう
+fn a_partial_application_of_a_prelude_function_keeps_a_captured_linear_value() {
+    // 部分適用した `>>` は、それまでの引数を捕まえる (docs/spec/types.md の「関数型」)。`>>` は本体を持つので、
+    // 部分適用のクロージャの Kind は本体の検査から決まる
     let text = "twice : File -> <IO> Unit\ntwice h =\n  let g = (fn u -> close h) >> (fn u -> u)\n  g ()\n  g ()";
     let checked = eml_test_support::check(text);
     assert_eq!(

@@ -2,6 +2,7 @@ use crate::context::Context;
 use crate::kind::problem::{Bounds, Instance, KindProblem, OwnVars};
 use crate::kind::{Bound, Carry, KindVar, Provenance};
 use crate::ty::{EffectLabel, Linearity, Multiplicity, RowTail, Type};
+use eml_extern::ExternType;
 use eml_hir::{EffectId, LangItems, OperationId, TypeDefId};
 
 mod export;
@@ -207,6 +208,11 @@ impl<'c> Table<'c> {
         std::mem::replace(&mut self.kind_origin, origin)
     }
 
+    /// extern の型を宣言した item。
+    pub fn extern_type(&self, ty: ExternType) -> TypeDefId {
+        self.context.externs.ty(ty)
+    }
+
     pub fn kind_origin(&self) -> Provenance {
         self.kind_origin.clone()
     }
@@ -251,8 +257,9 @@ impl<'c> Table<'c> {
             lang,
             carries: Vec::new(),
         };
-        table.int = table.alloc(TyShape::Con(lang.int, Vec::new()));
-        table.string = table.alloc(TyShape::Con(lang.string, Vec::new()));
+        let externs = &context.externs;
+        table.int = table.alloc(TyShape::Con(externs.ty(ExternType::Int), Vec::new()));
+        table.string = table.alloc(TyShape::Con(externs.ty(ExternType::String), Vec::new()));
         table.bool = table.alloc(TyShape::Con(lang.bool, Vec::new()));
         table.unit = table.alloc(TyShape::Record(Vec::new()));
         table.error = table.alloc(TyShape::Error);

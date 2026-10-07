@@ -1,6 +1,6 @@
 -- 組み込みの型と、関数と演算子のシグネチャ。型は docs/spec/declarations.md の標準の演算子の表と、
--- docs/spec/effects.md の組み込みの IO に従う。`pub` がユーザーからの見え方を決める。等式のないシグネチャは intrinsic で、
--- 実装は eml_core_ir が名前から引く。
+-- docs/spec/effects.md の組み込みの IO に従う。`pub` がユーザーからの見え方を決める。`extern` の宣言は、
+-- `Prelude.<名前>` の正式な名前で crates/eml_extern の表の行を指し、実装は処理系が持つ。
 -- 標準の演算子の fixity (docs/spec/declarations.md の表)。
 pub infixr 0 <|
 pub infixl 1 |>
@@ -12,11 +12,11 @@ pub infixl 6 +, -
 pub infixl 7 *, /, %
 pub infixr 9 >>, <<
 
--- 組み込みの型。`=` のない `data` は Prelude では intrinsic の型で、値の表し方は処理系が決める
-pub data Int
-pub data String
-pub data Unit
-pub data File
+-- 組み込みの型。値の表し方と Kind は extern の表の行が決める
+pub extern data Int
+pub extern data String
+pub extern data Unit
+pub extern data File
 
 pub data Bool =
   | False
@@ -29,25 +29,32 @@ pub effect IO where
   read_all : File -> (File, String)
   close : File -> Unit
 
-pub show_int : Int -> String
+pub extern show_int : Int -> String
 pub not : Bool -> Bool
 not True = False
 not False = True
 -- 前置の `-` の脱糖が呼ぶ。`pub` でないので、ユーザーは名前で書けない
-negate : Int -> Int
-pub (+) : Int -> Int -> Int
-pub (-) : Int -> Int -> Int
-pub (*) : Int -> Int -> Int
-pub (/) : Int -> Int -> Int
-pub (%) : Int -> Int -> Int
--- `==` と `!=` で比べられるのは `Int`、`String`、`Bool` で、どれで比べるかは、型検査が記録した参照ごとの型引数から `eml_types::equality` が選ぶ
-pub (==) : a -> a -> Bool
-pub (!=) : a -> a -> Bool
-pub (<) : Int -> Int -> Bool
-pub (<=) : Int -> Int -> Bool
-pub (>) : Int -> Int -> Bool
-pub (>=) : Int -> Int -> Bool
-pub (++) : String -> String -> String
+extern negate : Int -> Int
+pub extern (+) : Int -> Int -> Int
+pub extern (-) : Int -> Int -> Int
+pub extern (*) : Int -> Int -> Int
+pub extern (/) : Int -> Int -> Int
+pub extern (%) : Int -> Int -> Int
+-- `==` と `!=` で比べられるのは `Int`、`String`、`Bool` である。translate が、型検査の記録した参照ごとの型引数から
+-- `eml_types::equality` で比べ方を決め、下の比べ方ごとの extern の呼び出しにする
+pub extern (==) : a -> a -> Bool
+pub extern (!=) : a -> a -> Bool
+extern int_eq : Int -> Int -> Bool
+extern int_ne : Int -> Int -> Bool
+extern string_eq : String -> String -> Bool
+extern string_ne : String -> String -> Bool
+extern bool_eq : Bool -> Bool -> Bool
+extern bool_ne : Bool -> Bool -> Bool
+pub extern (<) : Int -> Int -> Bool
+pub extern (<=) : Int -> Int -> Bool
+pub extern (>) : Int -> Int -> Bool
+pub extern (>=) : Int -> Int -> Bool
+pub extern (++) : String -> String -> String
 pub (>>) : (a -> <e> b) -> (b -> <e> c) -> a -> <e> c
 f >> g = fn x -> g (f x)
 pub (<<) : (b -> <e> c) -> (a -> <e> b) -> a -> <e> c

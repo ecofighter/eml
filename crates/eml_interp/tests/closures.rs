@@ -9,7 +9,7 @@ fn main() {
   let c1^ = &first
   let d2^ = apply c1(10)
   let r3 = apply d2(20)
-  let s4^ = prim show_int(r3)
+  let s4^ = extern Prelude.show_int(r3)
   let t5 = perform println(s4)
   return t5
 }
@@ -27,7 +27,7 @@ fn main() {
   let m1^ = &make
   let r2^ = apply m1(5, 6)
   let s3 = apply r2(7)
-  let t4^ = prim show_int(s3)
+  let t4^ = extern Prelude.show_int(s3)
   let u5 = perform println(t4)
   return u5
 }
@@ -48,7 +48,7 @@ fn extra_arguments_are_applied_to_the_returned_function() {
 fn main() {
   let m1^ = &make
   let r2 = apply m1(5, 6)
-  let s3^ = prim show_int(r2)
+  let s3^ = extern Prelude.show_int(r2)
   let t4 = perform println(s3)
   return t4
 }
@@ -91,11 +91,11 @@ fn main() {
   let f1^ = &first
   let d2^ = apply f1(10)
   let r3 = apply d2(20)
-  let s4^ = prim show_int(r3)
+  let s4^ = extern Prelude.show_int(r3)
   let t5 = perform println(s4)
   let m6^ = &make
   let r7 = apply m6(5, 6)
-  let s8^ = prim show_int(r7)
+  let s8^ = extern Prelude.show_int(r7)
   let t9 = perform println(s8)
   return t9
 }
@@ -137,7 +137,7 @@ effect Choose { choose/1 }
 effect Ask { ask/1 }
 fn main() {
   let t0 = handle Choose(&outer_body, ()) {choose: &choose} return &outer_ret
-  let s1^ = prim show_int(t0)
+  let s1^ = extern Prelude.show_int(t0)
   let t2 = perform println(s1)
   return t2
 }
@@ -148,7 +148,7 @@ fn inner_body(u0) {
   tailcall perform Choose.choose(())
 }
 fn inner_ret(x0, s1) {
-  let t2 = prim +(x0, 100)
+  let t2 = extern Prelude.+(x0, 100)
   return t2
 }
 fn ask(u0, k1^, s2) {
@@ -158,7 +158,7 @@ fn choose(u0, k1^, s2) {
   dup k1
   let a3 = resume k1(1, s2) [k1]
   let b4 = resume k1(2, ()) [a3]
-  let t5 = prim +(a3, b4)
+  let t5 = extern Prelude.+(a3, b4)
   return t5
 }
 fn outer_ret(x0, s1) {

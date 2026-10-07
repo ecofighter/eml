@@ -7,6 +7,7 @@ mod section;
 mod types;
 
 use eml_diagnostics::{Diagnostic, ErrorCode, FileId, Label, TextRange};
+use eml_extern::Extern;
 use eml_syntax::{SyntaxToken, ast};
 use la_arena::{Arena, ArenaMap, Idx};
 
@@ -15,7 +16,7 @@ use crate::def_map::{DefMap, NameRef, Resolved, Resolver, module_id, not_in_modu
 use crate::hir::*;
 use crate::item_tree::{FunctionItem, ItemTree};
 use crate::load::LoadedModule;
-use crate::program::{ItemId, Items, Module, ModuleId, Program};
+use crate::program::{ItemId, Items, Module, ModuleId, ModuleOrigin, Program};
 use expr::BodyLowering;
 use types::{TypeLowering, Vars};
 
@@ -55,6 +56,7 @@ pub fn lower(def_map: &DefMap, modules: &[LoadedModule]) -> (Program, Vec<Diagno
             prelude: def_map.prelude(),
             entry: def_map.entry(),
             lang,
+            externs: def_map.externs().clone(),
             names: def_map.display_names().clone(),
         },
         diagnostics,
@@ -96,7 +98,6 @@ fn lower_items(
         &mut items.constructors,
         diagnostics,
     );
-    let in_prelude = module == def_map.prelude();
     let resolver = def_map.resolver(module);
     for (k, function) in tree.functions.iter().enumerate() {
         let FunctionItem {
@@ -106,10 +107,29 @@ fn lower_items(
             signature,
             equations,
         } = function;
-        // Prelude の等式のないシグネチャは intrinsic の関数で、E1005 にしない
-        // (docs/implementation/architecture.md の「`eml_hir` の内部」)
-        let intrinsic = in_prelude && equations.is_empty();
-        if let (Some((_, range)), None, false) = (signature, equations.first(), intrinsic) {
+        let keyword = signature
+            .as_ref()
+            .and_then(|(node, _)| node.extern_keyword());
+        let kind = match keyword {
+            None => FunctionKind::Defined,
+            Some(keyword) => FunctionKind::Extern(extern_row(
+                def_map,
+                module,
+                file,
+                &keyword,
+                name,
+                Extern::from_name,
+                diagnostics,
+            )),
+        };
+        // extern のシグネチャに続く等式は読み捨てる。E1033 のほかに診断を重ねないため
+        let equations = match kind {
+            FunctionKind::Defined => equations.as_slice(),
+            FunctionKind::Extern(_) => &[],
+        };
+        if let (Some((_, range)), None, FunctionKind::Defined) =
+            (signature, equations.first(), kind)
+        {
             diagnostics.push(Diagnostic::error(
                 codes::MISSING_EQUATION,
                 format!("`{name}` has a signature but no equation"),
@@ -150,7 +170,7 @@ fn lower_items(
                 signature_name_range,
                 equation_ranges: equations.iter().map(|(_, range)| *range).collect(),
                 signature,
-                intrinsic,
+                kind,
             }),
         );
         debug_assert_eq!(id, def_map.function_id(module, k));
@@ -168,10 +188,12 @@ fn lower_bodies(
 ) -> ArenaMap<Idx<Function>, Body> {
     let mut bodies = ArenaMap::default();
     for (k, function) in tree.functions.iter().enumerate() {
-        if function.equations.is_empty() {
+        let id = def_map.function_id(module, k);
+        if function.equations.is_empty()
+            || modules[module].items.functions[id.local].kind != FunctionKind::Defined
+        {
             continue;
         }
-        let id = def_map.function_id(module, k);
         // シグネチャの型変数の表は関数のアリーナの中にあり、本体の変換はほかの item を同じアリーナから読む。
         // そのため、変換の間だけ表を取り出す。シグネチャがなければ、本体の注釈は型変数を引けない
         // (docs/spec/types.md の「推論」)
@@ -185,6 +207,7 @@ fn lower_bodies(
             def_map.resolver(module),
             modules,
             def_map.lang(),
+            def_map.externs().negate,
             &mut generics,
             diagnostics,
         )
@@ -195,6 +218,42 @@ fn lower_bodies(
         bodies.insert(id.local, body);
     }
     bodies
+}
+
+/// extern の宣言が指す表の行。標準ライブラリでは正式な名前 (`Prelude.+`) で表を引き、ない名前は `std/` の誤りなので
+/// panic する。ユーザーのモジュールでは E1033 を出して `None` にする。宣言は extern として読むので、E1005 や E1025 は
+/// 重ねない。
+pub(super) fn extern_row<T>(
+    def_map: &DefMap,
+    module: ModuleId,
+    file: FileId,
+    keyword: &SyntaxToken,
+    name: &str,
+    from_name: impl Fn(&str) -> Option<T>,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Option<T> {
+    match def_map.origin(module) {
+        ModuleOrigin::Std => {
+            let canonical = format!("{}.{name}", def_map.module_name(module));
+            let row = from_name(&canonical)
+                .unwrap_or_else(|| panic!("`{canonical}` is not in the extern table"));
+            Some(row)
+        }
+        ModuleOrigin::User => {
+            diagnostics.push(extern_outside_std(file, keyword.text_range()));
+            None
+        }
+    }
+}
+
+/// E1033。`extern` を外すと E1005 や E1025 になるので、自動の修正にはせず help で示すだけにする。
+pub(super) fn extern_outside_std(file: FileId, keyword: TextRange) -> Diagnostic {
+    Diagnostic::error(
+        codes::EXTERN_OUTSIDE_STD,
+        "`extern` is only allowed in the standard library",
+        Label::new(file, keyword, "user modules cannot declare externs"),
+    )
+    .with_help("remove `extern` and define the declaration in eml")
 }
 
 /// 名前の経路の読み方 (docs/spec/modules.md の「名前の解決」)。

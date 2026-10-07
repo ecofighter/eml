@@ -121,7 +121,7 @@ impl BodyLowering<'_> {
                     ));
                 }
                 let operand = self.climb(cursor, NEGATE_PRECEDENCE + 1, None);
-                let callee = self.alloc(ExprKind::Path(Res::Function(self.lang.negate)), range);
+                let callee = self.alloc(ExprKind::Path(Res::Function(self.negate)), range);
                 let whole = range.cover(self.exprs[operand].range);
                 self.alloc(
                     ExprKind::Call {

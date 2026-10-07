@@ -23,7 +23,7 @@ fn pick(dup_before_jump: bool) -> String {
     format!(
         "fn pick(b0, s1^) {{
   join j0(t3^) [s1] {{
-    let t4^ = prim ++(t3, s1)
+    let t4^ = extern Prelude.++(t3, s1)
     return t4
   }}
   switch b0 {{
@@ -44,7 +44,7 @@ fn two_values(passed: &str) -> String {
     format!(
         "fn two(s0^) {{
   join j0(a2^, b3^) [] {{
-    let c4^ = prim ++(a2, b3)
+    let c4^ = extern Prelude.++(a2, b3)
     return c4
   }}
   let u1^ = const \"s\"
@@ -118,7 +118,7 @@ fn main$handle0$return(x0, s1) {{
 fn a_duplicated_string_used_twice_is_accepted() {
     let text = r#"fn twice(s0^) {
   dup s0
-  let t1^ = prim ++(s0, s0)
+  let t1^ = extern Prelude.++(s0, s0)
   return t1
 }
 "#;
@@ -183,7 +183,7 @@ fn a_jump_outside_its_join_scope_is_rejected() {
 #[test]
 fn a_use_after_a_move_is_rejected() {
     let text = r#"fn twice(s0^) {
-  let t1^ = prim ++(s0, s0)
+  let t1^ = extern Prelude.++(s0, s0)
   return t1
 }
 "#;
@@ -296,7 +296,7 @@ fn a_call_that_does_not_save_an_owned_variable_is_rejected() {
         "{IDENTITY}fn f(s0^) {{
   dup s0
   let t1^ = call g(s0)
-  let t2^ = prim ++(t1, s0)
+  let t2^ = extern Prelude.++(t1, s0)
   return t2
 }}
 "
@@ -329,7 +329,7 @@ fn a_variable_not_saved_by_a_call_is_out_of_scope_after_it() {
 }
 fn f(n0) {
   let t1 = call k(n0)
-  let t2 = prim +(n0, t1)
+  let t2 = extern Prelude.+(n0, t1)
   return t2
 }
 "#;
@@ -346,7 +346,7 @@ fn a_jump_after_a_call_needs_the_variables_of_the_join_body_in_scope() {
 }
 fn f(n0) {
   join j0(t1) [n0] {
-    let t2 = prim +(n0, t1)
+    let t2 = extern Prelude.+(n0, t1)
     return t2
   }
   let t3 = call z()
@@ -366,7 +366,7 @@ fn a_call_that_saves_a_variable_twice_is_rejected() {
         "{IDENTITY}fn f(s0^) {{
   dup s0
   let t1^ = call g(s0) [s0, s0]
-  let t2^ = prim ++(t1, s0)
+  let t2^ = extern Prelude.++(t1, s0)
   return t2
 }}
 "
@@ -455,7 +455,7 @@ fn a_join_body_that_uses_a_variable_missing_from_its_captures_is_rejected() {
     // f n = join j0(t) [] { let u = n + t; return u } in jump j0(1)
     let text = r#"fn f(n0) {
   join j0(t1) [] {
-    let u2 = prim +(n0, t1)
+    let u2 = extern Prelude.+(n0, t1)
     return u2
   }
   jump j0(1)
@@ -516,7 +516,7 @@ fn an_unused_capture_released_by_the_body_is_accepted() {
 fn scopes_accept_a_value_used_twice_without_dup() {
     // Perceus より前の IR には `dup` がないので、所有は数えない
     let text = r#"fn twice(s0^) {
-  let t1^ = prim ++(s0, s0)
+  let t1^ = extern Prelude.++(s0, s0)
   return t1
 }
 "#;
@@ -536,7 +536,7 @@ fn scopes_keep_variables_in_scope_after_a_call() {
 }
 fn f(n0) {
   let t1 = call k(n0)
-  let t2 = prim +(n0, t1)
+  let t2 = extern Prelude.+(n0, t1)
   return t2
 }
 "#;
@@ -547,7 +547,7 @@ fn f(n0) {
 fn scopes_reject_a_dup() {
     let text = r#"fn twice(s0^) {
   dup s0
-  let t1^ = prim ++(s0, s0)
+  let t1^ = extern Prelude.++(s0, s0)
   return t1
 }
 "#;
@@ -822,4 +822,24 @@ fn entry$main(c0^) {
 }
 ";
     assert_eq!(check(text), Ok(()));
+}
+
+#[test]
+fn an_extern_with_the_wrong_number_of_arguments_is_rejected() {
+    // テキストの形は引数をいくつでも読み、数は verifier が表の値と比べる
+    let text = "fn f(a0) {\n  let t1 = extern Prelude.+(a0)\n  return t1\n}\n";
+    assert_eq!(
+        check(text),
+        Err("`Prelude.+` takes 2 arguments but is given 1 in `f`".to_string())
+    );
+}
+
+#[test]
+fn an_extern_chosen_by_type_is_rejected() {
+    // `==` と `!=` は translate が比べ方ごとの行に置き換えるので、Core IR に届かない
+    let text = "fn f(a0, b1) {\n  let t2 = extern Prelude.==(a0, b1)\n  return t2\n}\n";
+    assert_eq!(
+        check(text),
+        Err("`Prelude.==` is chosen by type and must not reach Core IR in `f`".to_string())
+    );
 }

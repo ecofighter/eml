@@ -1,5 +1,6 @@
 //! モジュールごとのスコープ表 (docs/implementation/architecture.md の「`eml_hir` の内部」)。
 
+use eml_extern::ExternType;
 use eml_hir::NameRef::{self, Plain};
 use eml_hir::{Assoc, DefMap, Fixity, Resolved, TypeItem, ValueItem};
 use eml_test_support::{def_map, def_map_files};
@@ -82,9 +83,9 @@ fn the_entry_sees_only_public_prelude_names() {
         resolver.value(Plain("println")),
         Resolved::Found(_)
     ));
-    // `negate` は `pub` でないので名前で引けない。lang item としては引ける
+    // `negate` は `pub` でないので名前で引けない。extern の索引からは引ける
     assert_eq!(resolver.value(Plain("negate")), Resolved::NotFound);
-    assert_eq!(map.lang().negate.module, map.prelude());
+    assert_eq!(map.externs().negate.module, map.prelude());
 }
 
 #[test]
@@ -155,7 +156,7 @@ fn types_and_effects_share_the_type_namespace() {
     let resolver = map.resolver(map.entry());
     assert_eq!(
         resolver.type_item(Plain("Int")),
-        Resolved::Found(TypeItem::Type(map.lang().int))
+        Resolved::Found(TypeItem::Type(map.externs().ty(ExternType::Int)))
     );
     assert_eq!(
         resolver.type_item(Plain("IO")),
@@ -487,7 +488,7 @@ fn names_defined_by_two_modules_are_qualified() {
     let program = &lowered.program;
     let names = &program.names;
     assert_eq!(names.ty(program.lang.bool), "Prelude.Bool");
-    assert_eq!(names.ty(program.lang.int), "Int");
+    assert_eq!(names.ty(program.extern_type(ExternType::Int)), "Int");
     assert_eq!(names.effect(program.lang.io), "IO");
     assert_eq!(names.constructor(program.lang.true_ctor), "True");
     assert_eq!(names.unit(), "Unit");

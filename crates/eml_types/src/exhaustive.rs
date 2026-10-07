@@ -370,7 +370,7 @@ impl<'a> Exhaustive<'a> {
         let ty = self.program[ctor].ty;
         match &self.program[ty].kind {
             TypeDefKind::Data { constructors } => Ok((ty, constructors)),
-            TypeDefKind::Builtin => Err(Mixed),
+            TypeDefKind::Extern(_) => Err(Mixed),
         }
     }
 

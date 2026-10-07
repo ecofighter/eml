@@ -6,9 +6,9 @@ use eml_runtime::OutputSink;
 
 mod effects;
 mod error;
+mod externs;
 mod io;
 mod machine;
-mod prim;
 
 pub use error::{Fault, RuntimeError};
 

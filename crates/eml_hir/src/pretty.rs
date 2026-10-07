@@ -304,13 +304,14 @@ impl Printer<'_> {
     fn res(&self, body: &Body, res: Res) -> String {
         match res {
             Res::Local(local) => local_name(body, local),
-            // intrinsic は Prelude の関数で、`@` を付けずに名前だけを出す。テストの表示を Prelude に左右させないため
+            // extern の関数は `@` を付けずに名前だけを出す。テストの表示を標準ライブラリに左右させないため
             Res::Function(id) => {
                 let function = &self.program[id];
-                if function.intrinsic {
-                    function.name.clone()
-                } else {
-                    format!("@{}", self.qualified(id.module, &function.name))
+                match function.kind {
+                    FunctionKind::Extern(_) => function.name.clone(),
+                    FunctionKind::Defined => {
+                        format!("@{}", self.qualified(id.module, &function.name))
+                    }
                 }
             }
             Res::Operation(id) => {

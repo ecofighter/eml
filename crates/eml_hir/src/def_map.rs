@@ -1,14 +1,15 @@
 //! モジュールごとのスコープ表 (docs/implementation/architecture.md の「`eml_hir` の内部」)。全モジュールの
-//! `ItemTree` から、item の ID、名前の表、定義に付く fixity、lang item を作る。名前を解決しなくても決まるものだけを
-//! 読むので、item の変換より先に作れる。
+//! `ItemTree` から、item の ID、名前の表、定義に付く fixity、lang item、extern の索引を作る。名前を解決しなくても
+//! 決まるものだけを読むので、item の変換より先に作れる。
 
 use std::collections::{HashMap, HashSet};
 
 use eml_diagnostics::{Diagnostic, ErrorCode, FileId, Label, TextRange};
+use eml_extern::{Extern, ExternType};
 use la_arena::{Idx, RawIdx};
 
 use crate::codes;
-use crate::hir::LangItems;
+use crate::hir::{ExternIndex, LangItems};
 use crate::item_tree::{Fixity, ImportName, ItemTree};
 use crate::load::{ImportTarget, LoadedModule, STD_ROOT};
 use crate::names::DisplayNames;
@@ -211,6 +212,7 @@ pub struct DefMap {
     /// 修飾子を引く。
     std_short_names: HashMap<String, ModuleId>,
     lang: LangItems,
+    externs: ExternIndex,
     names: DisplayNames,
 }
 
@@ -238,7 +240,8 @@ pub fn def_map(modules: &[LoadedModule]) -> (DefMap, Vec<Diagnostic>) {
     }
     check_cycles(modules, &mut diagnostics);
     let lang = lang_items(&scopes[0]);
-    let names = display_names(&scopes, lang.unit);
+    let externs = extern_index(&scopes);
+    let names = display_names(&scopes, externs.ty(ExternType::Unit));
     let std_short_names = scopes
         .iter()
         .enumerate()
@@ -255,6 +258,7 @@ pub fn def_map(modules: &[LoadedModule]) -> (DefMap, Vec<Diagnostic>) {
             entry: module_id(1),
             std_short_names,
             lang,
+            externs,
             names,
         },
         diagnostics,
@@ -900,20 +904,67 @@ fn lang_items(prelude: &ModuleScope) -> LangItems {
         _ => unreachable!("`{name}` is a function of the Prelude"),
     };
     LangItems {
-        int: ty("Int"),
-        string: ty("String"),
         bool: ty("Bool"),
-        unit: ty("Unit"),
-        file: ty("File"),
         io: effect("IO"),
         true_ctor: constructor("True"),
         false_ctor: constructor("False"),
-        negate: function("negate"),
-        eq: function("=="),
-        ne: function("!="),
         and: function("&&"),
         or: function("||"),
     }
+}
+
+/// extern の表の行を、標準ライブラリのモジュールの正式な名前で引く。`std/` は処理系と一緒に配るソースなので、行の
+/// 宣言がなければ名前を添えて panic する。行と宣言の対応は `eml_hir` の結合テストが確かめる。
+fn extern_index(scopes: &[ModuleScope]) -> ExternIndex {
+    // 正式な名前を、モジュールの正式な名前と、そのモジュールの中の名前に分けて引く。演算子の名前は `.` を含みうるので、
+    // 最後の `.` では分けない
+    fn find<T: Copy, I>(
+        scopes: &[ModuleScope],
+        canonical: &str,
+        table: impl Fn(&ModuleScope) -> &HashMap<String, Vec<Definition<T>>>,
+        item: impl Fn(T) -> Option<I>,
+    ) -> Option<I> {
+        scopes
+            .iter()
+            .filter(|scope| scope.origin == ModuleOrigin::Std)
+            .find_map(|scope| {
+                let name = canonical
+                    .strip_prefix(scope.name.as_str())?
+                    .strip_prefix('.')?;
+                item(table(scope).get(name)?.first()?.item)
+            })
+    }
+    let types = ExternType::ALL
+        .iter()
+        .map(|&ty| {
+            let canonical = ty.row().name;
+            let id = find(
+                scopes,
+                canonical,
+                |scope| &scope.types,
+                |item| match item {
+                    TypeItem::Type(id) => Some(id),
+                    TypeItem::Effect(_) => None,
+                },
+            )
+            .unwrap_or_else(|| {
+                panic!("the standard library does not declare the type `{canonical}`")
+            });
+            (ty, id)
+        })
+        .collect();
+    let canonical = Extern::IntNeg.row().name;
+    let negate = find(
+        scopes,
+        canonical,
+        |scope| &scope.values,
+        |item| match item {
+            Value::Function(id) => Some(id),
+            Value::Operation(_) | Value::Constructor(_) => None,
+        },
+    )
+    .unwrap_or_else(|| panic!("the standard library does not declare the function `{canonical}`"));
+    ExternIndex { types, negate }
 }
 
 /// 名前の表から表示名の表を作る。HIR の診断は `lower` の途中で出るので、`Program` より先に作る。重複した宣言の部品も
@@ -962,6 +1013,10 @@ impl DefMap {
 
     pub fn lang(&self) -> LangItems {
         self.lang
+    }
+
+    pub fn externs(&self) -> &ExternIndex {
+        &self.externs
     }
 
     pub fn display_names(&self) -> &DisplayNames {

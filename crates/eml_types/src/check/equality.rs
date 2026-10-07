@@ -2,7 +2,8 @@
 //! ないので、比べられる型を `Int`、`String`、`Bool` に限る。
 
 use eml_diagnostics::{Diagnostic, Label};
-use eml_hir::{ExprId, FunctionId};
+use eml_extern::{Extern, ExternType};
+use eml_hir::{ExprId, FunctionId, FunctionKind};
 
 use crate::table::TyShape;
 use crate::{Decl, Type, codes, equality};
@@ -16,19 +17,21 @@ impl BodyCheck<'_, '_> {
     /// あれば本体に誤りがある。1つの比べ方の E2006 が別の比べ方の E2006 を抑えないよう、比べ方を見る前に1回だけ数える。
     pub(super) fn check_comparisons(&mut self) {
         let body_has_error = self.diagnostics.iter().any(Diagnostic::is_error);
-        let lang = self.program.lang;
         let mut found = Vec::new();
         for (callee, (decl, args)) in self.typing.instantiations.iter() {
             let Decl::Function(operator) = *decl else {
                 continue;
             };
-            if operator != lang.eq && operator != lang.ne {
+            if !matches!(
+                self.program[operator].kind,
+                FunctionKind::Extern(Some(Extern::Eq | Extern::Ne))
+            ) {
                 continue;
             }
             // `==` と `!=` は `a -> a -> Bool` なので、最初の型引数が比べる値の型である
             let operand = args[0];
             let exported = self.table.export(operand);
-            if equality(&lang, &exported).is_some() {
+            if equality(self.program, &exported).is_some() {
                 continue;
             }
             // 同じ本体に別の誤りがあるとき、決まらない型はその誤りの連鎖である。誤りを直せば型が決まるので、
@@ -49,7 +52,6 @@ impl BodyCheck<'_, '_> {
     fn not_comparable(&self, callee: ExprId, operator: FunctionId, operand: &Type) -> Diagnostic {
         let op = &self.program[operator].name;
         let names = &self.program.names;
-        let lang = self.program.lang;
         let operand = operand.display(names);
         Diagnostic::error(
             codes::NOT_COMPARABLE,
@@ -62,9 +64,9 @@ impl BodyCheck<'_, '_> {
         )
         .with_note(format!(
             "`==` and `!=` compare only values of type `{}`, `{}` and `{}`",
-            names.ty(lang.int),
-            names.ty(lang.string),
-            names.ty(lang.bool)
+            names.ty(self.program.extern_type(ExternType::Int)),
+            names.ty(self.program.extern_type(ExternType::String)),
+            names.ty(self.program.lang.bool)
         ))
     }
 }

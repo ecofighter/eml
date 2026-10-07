@@ -1,9 +1,10 @@
-//! 変換の途中で関数を足していく表と、intrinsic と操作を包む関数、入口の関数、エフェクトの表。
+//! 変換の途中で関数を足していく表と、extern の関数と操作を包む関数、入口の関数、エフェクトの表。
 
 use std::collections::HashMap;
 
+use eml_extern::Extern;
 use eml_hir::{
-    ConstructorId, EffectId, FunctionId, ModuleId, OpMultiplicity, OperationId,
+    ConstructorId, EffectId, FunctionId, FunctionKind, ModuleId, OpMultiplicity, OperationId,
     Program as HirProgram,
 };
 use eml_types::{Decl, Type, TypedProgram};
@@ -13,7 +14,7 @@ use crate::{
     Atom, CExpr, Call, CoreFn, EffectInfo, FnIdx, IoOp, OperationInfo, Rhs, VarId, VarInfo,
 };
 
-use super::types::{Lowering, intrinsic, split_arrows, var_info};
+use super::types::{split_arrows, var_info};
 
 #[derive(Default)]
 pub(super) struct Strings {
@@ -33,10 +34,10 @@ impl Strings {
     }
 }
 
-/// 変換の途中で、ラムダと包んだ組み込みの関数を足していく関数の表。番号を先に取り、中身は変換が終わってから入れる。
+/// 変換の途中で、ラムダと包んだ extern の関数などを足していく関数の表。番号を先に取り、中身は変換が終わってから入れる。
 pub(super) struct ProgramBuilder {
-    /// Prelude の intrinsic のスキームの型。intrinsic を包む関数の変数が boxed かどうかを決める。
-    intrinsic_types: HashMap<FunctionId, Type>,
+    /// extern の関数のスキームの型。extern の関数を包む関数の変数が boxed かどうかを決める。
+    extern_types: HashMap<FunctionId, Type>,
     pub(super) functions: Vec<Option<CoreFn>>,
     arities: Vec<usize>,
     pub(super) strings: Strings,
@@ -56,9 +57,9 @@ pub(super) struct ProgramBuilder {
 impl ProgramBuilder {
     pub(super) fn new(hir: &HirProgram, typed: &TypedProgram) -> ProgramBuilder {
         ProgramBuilder {
-            intrinsic_types: hir
+            extern_types: hir
                 .functions()
-                .filter(|(_, function)| function.intrinsic)
+                .filter(|(_, function)| matches!(function.kind, FunctionKind::Extern(_)))
                 .filter_map(|(id, _)| Some((id, typed.decls.get(&Decl::Function(id))?.ty.clone())))
                 .collect(),
             functions: Vec::new(),
@@ -274,46 +275,45 @@ impl ProgramBuilder {
         function
     }
 
-    /// intrinsic を値や部分適用で使うときに、それを呼ぶだけの関数を作る。intrinsic ごとに1つだけ作る。
-    pub(super) fn wrapper(&mut self, hir: &HirProgram, intrinsic_fn: FunctionId) -> FnIdx {
-        if let Some(&function) = self.wrappers.get(&intrinsic_fn) {
+    /// extern の関数を値や部分適用で使うときに、それを呼ぶだけの関数を作る。extern の関数ごとに1つだけ作る。名前は
+    /// 表の行の正式な名前で `extern$<正式な名前>` とし、どのモジュールの宣言でも同じ形にする。
+    pub(super) fn wrapper(
+        &mut self,
+        hir: &HirProgram,
+        extern_fn: FunctionId,
+        row: Extern,
+    ) -> FnIdx {
+        if let Some(&function) = self.wrappers.get(&extern_fn) {
             return function;
         }
-        let name = &hir[intrinsic_fn].name;
-        let arity = hir
-            .arity(intrinsic_fn)
-            .expect("an intrinsic has a signature");
+        // `==` と `!=` は演算子の構文からしか書けず、2つの引数がそろって呼ばれる。演算子の参照 `(==)` とセクションは
+        // HIR がラムダに脱糖するので (docs/spec/expressions.md)、型で選ぶ行を包む関数は作らない
+        assert!(
+            !row.row().by_type,
+            "`==` and `!=` are always called with both operands"
+        );
+        let arity = row.row().arity;
         let ty = self
-            .intrinsic_types
-            .get(&intrinsic_fn)
-            .expect("every intrinsic has a Prelude signature");
+            .extern_types
+            .get(&extern_fn)
+            .expect("every extern function has a signature");
         let (param_types, result_type) = split_arrows(ty, arity);
         let function = self.reserve(arity);
-        self.wrappers.insert(intrinsic_fn, function);
+        self.wrappers.insert(extern_fn, function);
         let mut builder = FnBuilder::new();
         let params: Vec<VarId> = param_types
             .iter()
             .map(|ty| builder.var(var_info("p", ty, hir)))
             .collect();
         let atoms: Vec<Atom> = params.iter().map(|&param| Atom::Var(param)).collect();
-        let lowering =
-            intrinsic(name).expect("every intrinsic reaching Core IR has an implementation");
-        let op = match lowering {
-            Lowering::Prim(op) => op,
-            // `==` と `!=` は演算子の構文からしか書けず、2つの引数がそろって呼ばれる。演算子の参照 `(==)` とセクションは
-            // HIR がラムダに脱糖するので (docs/spec/expressions.md)、値として包む関数は作らない
-            Lowering::Equality { .. } => {
-                unreachable!("`==` and `!=` are always called with both operands")
-            }
-        };
         let result = builder.var(var_info("t", &result_type, hir));
         let ret = builder.push(CExpr::Return(Atom::Var(result)));
         let body = builder.push(CExpr::Let {
             var: result,
-            rhs: Rhs::Prim(op, atoms),
+            rhs: Rhs::Extern(row, atoms),
             body: ret,
         });
-        let core = builder.finish(format!("builtin${name}"), params, body);
+        let core = builder.finish(format!("extern${}", row.row().name), params, body);
         self.finish(function, core);
         function
     }

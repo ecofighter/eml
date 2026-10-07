@@ -97,7 +97,7 @@ mod tests {
 
     fn names(text: &str) -> Vec<Vec<String>> {
         let program = crate::test_program(text);
-        // Prelude の intrinsic の関数は、それぞれが1つだけの SCC になる。ここではソースの関数だけを見る
+        // Prelude の extern の関数は、それぞれが1つだけの SCC になる。ここではソースの関数だけを見る
         components(&program)
             .into_iter()
             .filter(|component| component.iter().all(|id| id.module == program.entry))

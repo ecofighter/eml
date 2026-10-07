@@ -1,5 +1,7 @@
 //! Core IR (docs/spec/core-ir.md)。型付き HIR から変換する ANF 形式の IR で、RC とエフェクトを明示する。
 
+use eml_extern::Extern;
+
 mod builder;
 mod compact;
 mod liveness;
@@ -307,7 +309,9 @@ pub enum Rhs {
     /// 関数と先頭の引数の並びからクロージャを作る。並びの値の所有権はクロージャに移る。ラムダの捕獲と部分適用は、
     /// どちらもこの形になる (docs/spec/core-ir.md)。
     MakeClosure(FnIdx, Vec<Atom>),
-    Prim(PrimOp, Vec<Atom>),
+    /// extern の関数の呼び出し。その場で実行して値を返す1階の命令で、eml のコードを呼び返さず、継続のフレームも
+    /// 積まない。引数の数は表の行と等しく、型で選ぶ行 (`Prelude.==`) は translate が置き換えるので現れない。
+    Extern(Extern, Vec<Atom>),
     ConstString(u32),
     /// 引数を持つコンストラクタの値を作る。`args` の所有権は値に移る。引数のないコンストラクタの値は `Atom::Tag` で
     /// ある (docs/spec/core-ir.md)。
@@ -337,7 +341,7 @@ impl Rhs {
         }
     }
 
-    /// 右辺が使う値。関数、プリミティブ、`perform` の引数は、どれも所有権を受け取る (docs/spec/core-ir.md)。
+    /// 右辺が使う値。関数、extern、`perform` の引数は、どれも所有権を受け取る (docs/spec/core-ir.md)。
     pub fn atoms(&self) -> Vec<Atom> {
         let mut atoms = Vec::new();
         self.for_each_atom(|atom| atoms.push(atom));
@@ -353,7 +357,7 @@ impl Rhs {
                 saved: _,
             } => call.for_each_atom(f),
             Rhs::MakeClosure(_, args)
-            | Rhs::Prim(_, args)
+            | Rhs::Extern(_, args)
             | Rhs::Io(_, args)
             | Rhs::Con { tag: _, args } => args.iter().for_each(|&atom| f(atom)),
             Rhs::ConstString(_) => {}
@@ -369,7 +373,7 @@ impl Rhs {
                 saved: _,
             } => call.for_each_atom_mut(f),
             Rhs::MakeClosure(_, args)
-            | Rhs::Prim(_, args)
+            | Rhs::Extern(_, args)
             | Rhs::Io(_, args)
             | Rhs::Con { tag: _, args } => args.iter_mut().for_each(f),
             Rhs::ConstString(_) => {}
@@ -517,65 +521,6 @@ macro_rules! named_ops {
     };
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PrimOp {
-    IntAdd,
-    IntSub,
-    IntMul,
-    IntDiv,
-    IntMod,
-    IntNeg,
-    IntEq,
-    IntNe,
-    IntLt,
-    IntLe,
-    IntGt,
-    IntGe,
-    StrConcat,
-    StrEq,
-    StrNe,
-    BoolEq,
-    BoolNe,
-    ShowInt,
-}
-
-impl PrimOp {
-    /// 実行時エラーを起こしうるプリミティブ。整数の演算はオーバーフローとゼロ除算で止まる (docs/spec/declarations.md の
-    /// 標準の演算子の表)。`simplify` の DCE は、これらを使われなくても消さない。
-    pub fn may_fail(self) -> bool {
-        matches!(
-            self,
-            PrimOp::IntAdd
-                | PrimOp::IntSub
-                | PrimOp::IntMul
-                | PrimOp::IntDiv
-                | PrimOp::IntMod
-                | PrimOp::IntNeg
-        )
-    }
-}
-
-named_ops!(PrimOp {
-    IntAdd => "+",
-    IntSub => "-",
-    IntMul => "*",
-    IntDiv => "/",
-    IntMod => "%",
-    IntNeg => "negate",
-    IntEq => "==",
-    IntNe => "!=",
-    IntLt => "<",
-    IntLe => "<=",
-    IntGt => ">",
-    IntGe => ">=",
-    StrConcat => "++",
-    StrEq => "string==",
-    StrNe => "string!=",
-    BoolEq => "bool==",
-    BoolNe => "bool!=",
-    ShowInt => "show_int",
-});
-
 /// 表示での名前 (`name`) は Prelude の名前と同じである。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IoOp {
@@ -648,13 +593,9 @@ mod tests {
 
     #[test]
     fn every_operation_name_reads_back() {
-        for &op in PrimOp::VARIANTS {
-            assert_eq!(PrimOp::from_name(op.name()), Some(op));
-        }
         for &op in IoOp::VARIANTS {
             assert_eq!(IoOp::from_name(op.name()), Some(op));
         }
-        assert_eq!(PrimOp::from_name("println"), None);
         assert_eq!(IoOp::from_name("+"), None);
     }
 }

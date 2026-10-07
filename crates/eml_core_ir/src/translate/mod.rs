@@ -10,8 +10,8 @@ mod types;
 use std::collections::HashSet;
 
 use eml_hir::{
-    Body, ExprId, ExprKind, Function, FunctionId, ItemMap, LocalId, PatId, Program as HirProgram,
-    Res, Stmt,
+    Body, ExprId, ExprKind, Function, FunctionId, FunctionKind, ItemMap, LocalId, PatId,
+    Program as HirProgram, Res, Stmt,
 };
 use eml_types::{BodyTypes, Decl, Type, TypedProgram};
 use la_arena::ArenaMap;
@@ -111,10 +111,10 @@ pub(crate) fn translate(hir: &HirProgram, typed: &TypedProgram, entry: FunctionI
     let mut builder = ProgramBuilder::new(hir, typed);
     let mut indices = ItemMap::default();
     let reached = reachable(hir, entry);
-    // intrinsic は本体を持たず、呼び出しの位置で命令にするか、包む関数を作る (`program.rs` の `wrapper`)
+    // extern の関数は本体を持たず、呼び出しの位置で `Rhs::Extern` にするか、包む関数を作る (`program.rs` の `wrapper`)
     let defined = || {
         hir.functions()
-            .filter(|(id, function)| !function.intrinsic && reached.contains(id))
+            .filter(|(id, function)| function.kind == FunctionKind::Defined && reached.contains(id))
     };
     for (id, _) in defined() {
         let body = hir

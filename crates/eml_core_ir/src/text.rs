@@ -6,10 +6,12 @@
 use std::collections::HashMap;
 use std::fmt;
 
+use eml_extern::Extern;
+
 use crate::builder::FnBuilder;
 use crate::{
     Atom, CExpr, CExprId, Call, Case, CasePattern, CoreFn, EffectInfo, FnIdx, IoOp, JoinId,
-    OperationInfo, PrimOp, Program, Rhs, VarId, VarInfo,
+    OperationInfo, Program, Rhs, VarId, VarInfo,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -564,13 +566,15 @@ impl<'t> Parser<'t> {
                 let target = self.function_name()?;
                 Rhs::MakeClosure(target, self.list('(', ')', |p| p.atom(state))?)
             }
-            "prim" => {
+            // 引数はいくつでも読む。誤りを含む IR も読み戻して verifier に報告させるため、引数の数は verifier が表の値と
+            // 比べる (docs/implementation/testing.md)
+            "extern" => {
                 self.pos += 1;
                 let line = self.line();
                 let name = self.word()?;
-                let op = PrimOp::from_name(&name)
-                    .ok_or_else(|| error(line, format!("unknown primitive `{name}`")))?;
-                Rhs::Prim(op, self.list('(', ')', |p| p.atom(state))?)
+                let e = Extern::from_name(&name)
+                    .ok_or_else(|| error(line, format!("unknown extern `{name}`")))?;
+                Rhs::Extern(e, self.list('(', ')', |p| p.atom(state))?)
             }
             "const" => {
                 self.pos += 1;
@@ -1040,7 +1044,7 @@ mod tests {
     fn a_program_with_joins_switches_and_effects_round_trips() {
         round_trip(
             "effect Ask { ask/1, never stop/1 }\n\
-             fn pick(b0, s1^) {\n  join j0(t3^) [s1] {\n    let t4^ = prim ++(t3, s1)\n    return t4\n  }\n  switch b0 {\n    #0 ->\n      let s2^ = const \"none\"\n      jump j0(s2)\n    #1 ->\n      dup s1\n      jump j0(s1)\n  }\n}\n\
+             fn pick(b0, s1^) {\n  join j0(t3^) [s1] {\n    let t4^ = extern Prelude.++(t3, s1)\n    return t4\n  }\n  switch b0 {\n    #0 ->\n      let s2^ = const \"none\"\n      jump j0(s2)\n    #1 ->\n      dup s1\n      jump j0(s1)\n  }\n}\n\
              fn entry$main() {\n  let c0^ = closure pick(#1)\n  let t1 = perform Ask.ask(()) [c0]\n  tailcall apply c0(-3)\n}\n",
         );
     }

@@ -16,9 +16,10 @@ mod usage;
 use std::collections::HashMap;
 
 use eml_diagnostics::{Diagnostic, FileId, Label, TextRange};
+use eml_extern::ExternType;
 use eml_hir::{
-    ConstructorId, EffectId, ExprId, Function, FunctionId, ItemMap, LangItems, LocalId,
-    OperationId, PatId, Program,
+    ConstructorId, EffectId, ExprId, Function, FunctionId, ItemMap, LocalId, OperationId, PatId,
+    Program,
 };
 use la_arena::ArenaMap;
 
@@ -91,13 +92,19 @@ pub enum Equality {
 }
 
 /// `==` と `!=` の比べ方。比べられない型なら `None`。型検査の E2006 と Core IR の命令の選択が、同じ判定を使うため
-/// にここに置く。
-pub fn equality(lang: &LangItems, ty: &Type) -> Option<Equality> {
-    match ty {
-        Type::Con { id, .. } if *id == lang.int => Some(Equality::Int),
-        Type::Con { id, .. } if *id == lang.string => Some(Equality::String),
-        Type::Con { id, .. } if *id == lang.bool => Some(Equality::Bool),
-        _ => None,
+/// にここに置く。`Int` と `String` は extern の型なので索引から、`Bool` は lang item から引く。
+pub fn equality(program: &Program, ty: &Type) -> Option<Equality> {
+    let Type::Con { id, .. } = ty else {
+        return None;
+    };
+    if *id == program.extern_type(ExternType::Int) {
+        Some(Equality::Int)
+    } else if *id == program.extern_type(ExternType::String) {
+        Some(Equality::String)
+    } else if *id == program.lang.bool {
+        Some(Equality::Bool)
+    } else {
+        None
     }
 }
 

@@ -1,0 +1,10 @@
+[package]
+name = "eml_extern"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# 単体テストがないので、空のテストのバイナリを作らない。表と標準ライブラリの照らし合わせは eml_hir の結合テストにある
+[lib]
+test = false
+doctest = false

@@ -1,18 +1,20 @@
-//! 型から決まる変数の性質 (boxed かどうか) と、intrinsic を Core IR のどの命令にするか。
+//! 型から決まる変数の性質 (boxed かどうか) と、`==` と `!=` を比べ方ごとのどの extern にするか。
 
+use eml_extern::Extern;
 use eml_hir::{Program as HirProgram, TypeDefId, TypeDefKind};
 use eml_types::{Equality, Type};
 
-use crate::{PrimOp, VarInfo};
+use crate::VarInfo;
 
 /// ヒープに置く値の型。ボックス化した変数が RC の対象になる。関数値と型変数の値は、ヒープのクロージャや
 /// 文字列かもしれない。インタプリタの `dup` / `decref` はヒープにない値を無視するので、多めに対象にしても正しく動く
-/// (docs/spec/core-ir.md)。`File` はヒープのオブジェクトである。
+/// (docs/spec/core-ir.md)。extern の型がヒープのオブジェクトか (`String`、`File`) は、表の行が決める。
 fn boxed(ty: &Type, hir: &HirProgram) -> bool {
     match ty {
-        Type::Con { id, .. } => {
-            *id == hir.lang.string || *id == hir.lang.file || has_fields(hir, *id)
-        }
+        Type::Con { id, .. } => match &hir[*id].kind {
+            TypeDefKind::Extern(row) => row.is_some_and(|ty| ty.row().heap),
+            TypeDefKind::Data { constructors: _ } => has_fields(hir, *id),
+        },
         Type::Fn { .. } | Type::Rigid(_) | Type::Flexible => true,
         // 空のレコードは `Unit` で、値は `()` である。要素のあるレコード (タプル) はヒープのオブジェクトにする
         Type::Record(fields) => !fields.is_empty(),
@@ -27,7 +29,7 @@ fn has_fields(hir: &HirProgram, id: TypeDefId) -> bool {
         TypeDefKind::Data { constructors } => constructors
             .iter()
             .any(|&ctor| !hir[ctor].fields.is_empty()),
-        TypeDefKind::Builtin => false,
+        TypeDefKind::Extern(_) => false,
     }
 }
 
@@ -52,54 +54,16 @@ pub(super) fn split_arrows(ty: &Type, count: usize) -> (Vec<Type>, Type) {
     (params, ty.clone())
 }
 
-/// intrinsic を Core IR のどの命令にするか。引数の数は intrinsic のシグネチャ (`hir::Program::arity`) から、引数と結果の
-/// 型は Prelude のスキームから引くので、ここには変換の種類だけを置く。
-#[derive(Debug, Clone, Copy)]
-pub(super) enum Lowering {
-    Prim(PrimOp),
-    /// `==` と `!=`。比べ方は、型検査が参照ごとに記録した型引数 (`BodyTypes::instantiations`) から決める
-    /// (docs/spec/declarations.md の標準の演算子の表)。
-    Equality {
-        negated: bool,
-    },
-}
-
-/// Prelude の intrinsic の名前と、Core IR の命令。名前と実装の対応はここだけに置き、網羅のテストが行ごとに Prelude と
-/// 照らし合わせる (docs/implementation/architecture.md の「`eml_core_ir`、`eml_runtime`、`eml_interp` の内部」)。
-const INTRINSICS: &[(&str, Lowering)] = &[
-    ("show_int", Lowering::Prim(PrimOp::ShowInt)),
-    ("negate", Lowering::Prim(PrimOp::IntNeg)),
-    ("+", Lowering::Prim(PrimOp::IntAdd)),
-    ("-", Lowering::Prim(PrimOp::IntSub)),
-    ("*", Lowering::Prim(PrimOp::IntMul)),
-    ("/", Lowering::Prim(PrimOp::IntDiv)),
-    ("%", Lowering::Prim(PrimOp::IntMod)),
-    ("==", Lowering::Equality { negated: false }),
-    ("!=", Lowering::Equality { negated: true }),
-    ("<", Lowering::Prim(PrimOp::IntLt)),
-    ("<=", Lowering::Prim(PrimOp::IntLe)),
-    (">", Lowering::Prim(PrimOp::IntGt)),
-    (">=", Lowering::Prim(PrimOp::IntGe)),
-    ("++", Lowering::Prim(PrimOp::StrConcat)),
-];
-
-/// Prelude の intrinsic の名前から、Core IR の命令を引く。
-pub(super) fn intrinsic(name: &str) -> Option<Lowering> {
-    INTRINSICS
-        .iter()
-        .find(|(intrinsic, _)| *intrinsic == name)
-        .map(|&(_, lowering)| lowering)
-}
-
-/// 比べ方の命令。
-pub(super) fn equality_op(equality: Equality, negated: bool) -> PrimOp {
+/// `==` と `!=` の比べ方と否定の有無から、比べ方ごとの extern の行を選ぶ。比べ方は、型検査が参照ごとに記録した
+/// 型引数から `eml_types::equality` が決める (docs/spec/declarations.md の標準の演算子の表)。
+pub(super) fn equality_extern(equality: Equality, negated: bool) -> Extern {
     match (equality, negated) {
-        (Equality::Int, false) => PrimOp::IntEq,
-        (Equality::Int, true) => PrimOp::IntNe,
-        (Equality::String, false) => PrimOp::StrEq,
-        (Equality::String, true) => PrimOp::StrNe,
-        (Equality::Bool, false) => PrimOp::BoolEq,
-        (Equality::Bool, true) => PrimOp::BoolNe,
+        (Equality::Int, false) => Extern::IntEq,
+        (Equality::Int, true) => Extern::IntNe,
+        (Equality::String, false) => Extern::StrEq,
+        (Equality::String, true) => Extern::StrNe,
+        (Equality::Bool, false) => Extern::BoolEq,
+        (Equality::Bool, true) => Extern::BoolNe,
     }
 }
 
@@ -109,33 +73,6 @@ mod tests {
     use eml_syntax::ast;
 
     use crate::IoOp;
-
-    use super::{INTRINSICS, intrinsic};
-
-    /// Prelude の等式のないシグネチャ (intrinsic) の名前。
-    fn prelude_intrinsics() -> Vec<String> {
-        let mut files = SourceFiles::new();
-        let file = files.add(eml_hir::PRELUDE_PATH, eml_hir::PRELUDE_SOURCE);
-        let (parse, errors) = eml_syntax::parse(file, eml_hir::PRELUDE_SOURCE);
-        // 壊れた Prelude で、確かめる名前が気づかないうちに減らないようにする
-        assert!(errors.is_empty(), "{errors:?}");
-        let items: Vec<ast::Item> = parse.tree().items().collect();
-        let defined: Vec<String> = items
-            .iter()
-            .filter_map(|item| match item {
-                ast::Item::Equation(equation) => Some(equation.name()?.text()),
-                _ => None,
-            })
-            .collect();
-        items
-            .iter()
-            .filter_map(|item| match item {
-                ast::Item::Signature(signature) => Some(signature.name()?.text()),
-                _ => None,
-            })
-            .filter(|name| !defined.contains(name))
-            .collect()
-    }
 
     /// Prelude の `effect IO` の操作の名前。
     fn prelude_io_operations() -> Vec<String> {
@@ -165,22 +102,6 @@ mod tests {
         }
         for op in IoOp::VARIANTS {
             assert!(names.iter().any(|name| name == op.name()), "{}", op.name());
-        }
-    }
-
-    #[test]
-    fn every_prelude_intrinsic_has_an_implementation() {
-        for name in prelude_intrinsics() {
-            assert!(intrinsic(&name).is_some(), "{name}");
-        }
-    }
-
-    #[test]
-    fn every_implementation_names_a_prelude_intrinsic() {
-        let names = prelude_intrinsics();
-        for (name, _) in INTRINSICS {
-            assert!(names.iter().any(|n| n == name), "{name}");
-            assert!(intrinsic(name).is_some(), "{name}");
         }
     }
 }

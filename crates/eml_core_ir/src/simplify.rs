@@ -20,6 +20,8 @@
 
 use std::collections::HashMap;
 
+use eml_extern::Purity;
+
 use crate::{Atom, CExpr, CExprId, Case, CasePattern, CoreFn, JoinId, Program, Rhs, VarId};
 
 pub(crate) fn simplify(program: &mut Program) {
@@ -768,12 +770,12 @@ fn movable(atom: Atom, params: &[VarId]) -> bool {
     }
 }
 
-/// 消してもよい右辺。値を作るだけで、エフェクトも実行時エラーも起こさない。`con` と `MakeClosure` が所有権を受け取る
+/// 消してもよい右辺。値を作るだけで、エフェクトも実行時エラーも起こさない。extern は表の行が `Pure` のものだけである。`con` と `MakeClosure` が所有権を受け取る
 /// 値は、消すと Perceus がその値の生存の終わりに `decref` を入れるので、解放が早まるだけである。
 fn pure(rhs: &Rhs) -> bool {
     match rhs {
         Rhs::Atom(_) | Rhs::ConstString(_) | Rhs::Con { .. } | Rhs::MakeClosure(..) => true,
-        Rhs::Prim(op, _) => !op.may_fail(),
+        Rhs::Extern(e, _) => e.row().purity == Purity::Pure,
         Rhs::Call { .. } | Rhs::Io(..) | Rhs::Drop(_) => false,
     }
 }

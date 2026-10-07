@@ -7,6 +7,7 @@ mod data;
 mod def_map;
 mod effects;
 mod eval;
+mod externs;
 mod item_tree;
 mod load;
 mod lower;

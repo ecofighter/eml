@@ -2,6 +2,7 @@
 //! Kind は `a` の Kind になる。フィールドに定数の `Lin` の型 (`File` など) があれば、型引数によらず `Lin` になる。
 //! どちらも宣言だけで決まるので、検査の前に1回だけ求める。
 
+use eml_extern::Linearity;
 use eml_hir::{ItemMap, Program, TypeDef, TypeDefKind, TypeRef, TypeRefId, TypeRefKind, TypeVarId};
 use la_arena::Arena;
 
@@ -10,7 +11,7 @@ use la_arena::Arena;
 pub(crate) struct DataKind {
     /// 型引数の位置ごとに、Kind に効くかどうか。組み込みの型は型引数を持たないので空である。
     pub params: Vec<bool>,
-    /// 定数の `Lin` の型を、関数型の外のフィールドに含む。組み込みでは `File` だけが真である。
+    /// 定数の `Lin` の型を、関数型の外のフィールドに含む。extern の型は表の行の Kind が決める (`File` が `Lin`)。
     pub lin: bool,
 }
 
@@ -20,7 +21,10 @@ pub(crate) fn data_kinds(program: &Program) -> ItemMap<TypeDef, DataKind> {
         .map(|(id, def)| {
             let kind = DataKind {
                 params: vec![false; def.generics.type_vars.len()],
-                lin: id == program.lang.file,
+                lin: match def.kind {
+                    TypeDefKind::Extern(Some(ty)) => ty.row().linearity == Linearity::Lin,
+                    TypeDefKind::Extern(None) | TypeDefKind::Data { constructors: _ } => false,
+                },
             };
             (id, kind)
         })

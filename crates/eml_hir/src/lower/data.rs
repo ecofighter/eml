@@ -1,8 +1,10 @@
 //! `data` の宣言の変換 (docs/spec/declarations.md の「`data` と `type`」)。名前の表と重複の判定は `DefMap` が持つ。
 
 use eml_diagnostics::{Diagnostic, FileId, Label};
+use eml_extern::ExternType;
 use la_arena::Arena;
 
+use super::extern_row;
 use super::types::{TypeLowering, Vars};
 use crate::codes;
 use crate::def_map::{DefMap, Resolver, duplicate};
@@ -19,8 +21,11 @@ pub(super) fn declare_data(
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     for (k, item) in items.iter().enumerate() {
+        let keyword = item.syntax.extern_keyword();
         let mut generics = Generics::default();
-        for param in item.syntax.params().map(|name| name.token()) {
+        // extern の型は型引数を持たない。書いた型引数はパーサが E0011 にした
+        let params = item.syntax.params().filter(|_| keyword.is_none());
+        for param in params.map(|name| name.token()) {
             let text = param.text();
             let range = param.text_range();
             if let Some((_, first)) = generics.type_vars.iter().find(|(_, var)| var.name == text) {
@@ -32,15 +37,23 @@ pub(super) fn declare_data(
                 range,
             });
         }
-        // `=` のない `data` は、Prelude では処理系が表し方を決める intrinsic の型である。ユーザーのモジュールでは
-        // 値を作れないので E1025 にする (docs/spec/declarations.md の「`data` と `type`」)
+        // extern でない `=` のない `data` は、値を作れないので E1025 にする。標準ライブラリでも同じである
+        // (docs/spec/declarations.md の「`data` と `type`」)
         let data = TypeDefKind::Data {
             constructors: Vec::new(),
         };
-        let kind = match (item.syntax.has_constructors(), module == def_map.prelude()) {
-            (true, _) => data,
-            (false, true) => TypeDefKind::Builtin,
-            (false, false) => {
+        let kind = match (keyword, item.syntax.has_constructors()) {
+            (Some(keyword), _) => TypeDefKind::Extern(extern_row(
+                def_map,
+                module,
+                file,
+                &keyword,
+                &item.name,
+                ExternType::from_name,
+                diagnostics,
+            )),
+            (None, true) => data,
+            (None, false) => {
                 diagnostics.push(Diagnostic::error(
                     codes::MISSING_CONSTRUCTORS,
                     format!("`{}` has no constructors", item.name),

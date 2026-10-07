@@ -1,17 +1,28 @@
 //! 式ごとの変換と、呼び出しの引数の個数による場合分け (docs/spec/core-ir.md の eval/apply)。
 
+use eml_extern::{Extern, ExternType};
 use eml_hir::EvalStep;
 use eml_hir::{
-    Closure, ConstructorId, ExprId, ExprKind, FunctionId, Literal, OperationId, PatId, Res,
-    TypeDefId,
+    Closure, ConstructorId, ExprId, ExprKind, FunctionId, FunctionKind, Literal, OperationId,
+    PatId, Program as HirProgram, Res, TypeDefId,
 };
 use eml_types::Type;
 
 use crate::{Atom, Call, FnIdx, Rhs, TUPLE};
 
 use super::program::{effect_index, operation_rhs};
-use super::types::{Lowering, equality_op, intrinsic, split_arrows};
+use super::types::{equality_extern, split_arrows};
 use super::{Binding, Bindings, ContinuationForm, Exit, FnLowering};
+
+/// extern の関数なら、その表の行。誤りのないプログラムの extern は、どれも標準ライブラリの宣言で行を持つ。
+fn extern_row(hir: &HirProgram, function: FunctionId) -> Option<Extern> {
+    match hir[function].kind {
+        FunctionKind::Extern(row) => {
+            Some(row.expect("a program without errors has no user extern"))
+        }
+        FunctionKind::Defined => None,
+    }
+}
 
 /// 既知の呼ばれる式の種類。`saturate` は、引数の数、足りないときの包む関数、ちょうどのときの命令を、この種類から決める
 /// (docs/implementation/architecture.md の「`eml_core_ir`、`eml_runtime`、`eml_interp` の内部」)。
@@ -19,9 +30,11 @@ use super::{Binding, Bindings, ContinuationForm, Exit, FnLowering};
 enum Callee {
     /// 本体のある関数。足りないときの包む関数は、その関数自身である。
     Function(FnIdx),
-    /// intrinsic。`callee` は呼ばれる式で、`==` と `!=` の比べる値の型を `BodyTypes::instantiations` から引くのに使う。
-    Intrinsic {
+    /// extern の関数。`callee` は呼ばれる式で、型で選ぶ行 (`==` と `!=`) の比べる値の型を
+    /// `BodyTypes::instantiations` から引くのに使う。
+    Extern {
         function: FunctionId,
+        row: Extern,
         callee: ExprId,
     },
     Operation(OperationId),
@@ -133,15 +146,16 @@ impl FnLowering<'_> {
         mask
     }
 
-    /// 本体が動き出すまでに受け取る引数の数。intrinsic と操作はシグネチャの外側の矢印の数、コンストラクタはフィールドの
-    /// 数である。
+    /// 本体が動き出すまでに受け取る引数の数。extern の関数は表の行の引数の数、操作はシグネチャの外側の矢印の数、
+    /// コンストラクタはフィールドの数である。
     fn callee_arity(&self, callee: Callee) -> usize {
         match callee {
             Callee::Function(target) => self.program.arity(target),
-            Callee::Intrinsic { function, .. } => self
-                .hir
-                .arity(function)
-                .expect("an intrinsic has a signature"),
+            Callee::Extern {
+                function: _,
+                row,
+                callee: _,
+            } => row.row().arity,
             Callee::Operation(op) => self.hir[op].arity,
             Callee::Constructor(ctor) => self.hir[ctor].fields.len(),
             Callee::Continuation { k: _, arity } => arity,
@@ -152,7 +166,11 @@ impl FnLowering<'_> {
     fn callee_wrapper(&mut self, callee: Callee) -> FnIdx {
         match callee {
             Callee::Function(target) => target,
-            Callee::Intrinsic { function, .. } => self.program.wrapper(self.hir, function),
+            Callee::Extern {
+                function,
+                row,
+                callee: _,
+            } => self.program.wrapper(self.hir, function, row),
             Callee::Operation(op) => self.program.operation_wrapper(self.hir, op),
             Callee::Constructor(ctor) => self.program.constructor_wrapper(self.hir, ctor),
             // 引数の足りない `k` の呼び出しは `k` を関数の値として使うことになり、節を包む形にする (`continuation_forms`)
@@ -163,15 +181,15 @@ impl FnLowering<'_> {
     }
 
     /// 引数がちょうどそろったときの命令と、その結果を束縛する変数の名前。
-    /// `mask` を付けるのは本体のある関数だけである。intrinsic、操作、コンストラクタは、型検査が row を開かずに宣言のまま
-    /// 含めるので、`mask` が記録されない。
+    /// `mask` を付けるのは本体のある関数だけである。extern の関数、操作、コンストラクタは、型検査が row を開かずに
+    /// 宣言のまま含めるので、`mask` が記録されない。
     fn saturated_rhs(&self, id: ExprId, callee: Callee, args: Vec<Atom>) -> (&'static str, Rhs) {
-        // `Prim`、`Perform`、`Con` は `mask` を持てない (docs/spec/core-ir.md)。型検査が `mask` を記録するように変わると、
-        // ここで気づかないうちに落とすことになる
+        // `Extern`、`Perform`、`Con` は `mask` を持てない (docs/spec/core-ir.md)。型検査が `mask` を記録するように
+        // 変わると、ここで気づかないうちに落とすことになる
         debug_assert!(
             matches!(callee, Callee::Function(_) | Callee::Continuation { .. })
                 || (0..args.len()).all(|arrow| self.mask(id, arrow).is_empty()),
-            "an intrinsic, operation or constructor call has no recorded mask"
+            "an extern, operation or constructor call has no recorded mask"
         );
         match callee {
             // 前の矢印は部分適用でエフェクトを起こさないので、最後の矢印の `mask` だけを使う (docs/spec/core-ir.md)
@@ -179,24 +197,24 @@ impl FnLowering<'_> {
                 let mask = self.mask(id, args.len() - 1);
                 ("t", Rhs::masked_call(Call::Direct(target, args), mask))
             }
-            Callee::Intrinsic { function, callee } => {
-                let lowering = intrinsic(&self.hir[function].name)
-                    .expect("every intrinsic reaching Core IR has an implementation");
-                let rhs = match lowering {
-                    Lowering::Prim(op) => Rhs::Prim(op, args),
-                    Lowering::Equality { negated } => {
-                        let instantiation =
-                            self.types.instantiations.get(callee).expect(
-                                "the type checker records every reference to `==` and `!=`",
-                            );
-                        let equality = eml_types::equality(&self.hir.lang, &instantiation.args[0])
-                            .expect(
-                                "the type checker reports every `==` and `!=` it cannot decide",
-                            );
-                        Rhs::Prim(equality_op(equality, negated), args)
-                    }
+            Callee::Extern {
+                function: _,
+                row,
+                callee,
+            } => {
+                let row = if row.row().by_type {
+                    let instantiation = self
+                        .types
+                        .instantiations
+                        .get(callee)
+                        .expect("the type checker records every reference to `==` and `!=`");
+                    let equality = eml_types::equality(self.hir, &instantiation.args[0])
+                        .expect("the type checker reports every `==` and `!=` it cannot decide");
+                    equality_extern(equality, row == Extern::Ne)
+                } else {
+                    row
                 };
-                ("t", rhs)
+                ("t", Rhs::Extern(row, args))
             }
             Callee::Operation(op) => ("t", operation_rhs(self.hir, op, args)),
             // 状態ありの最初の矢印は row が空の部分適用なので、関数と同じく最後の矢印の `mask` を使う
@@ -288,13 +306,14 @@ impl FnLowering<'_> {
         out: &mut Bindings,
     ) -> Atom {
         let head = match &self.body.exprs[callee].kind {
-            ExprKind::Path(Res::Function(function)) if self.hir[*function].intrinsic => {
-                Callee::Intrinsic {
+            ExprKind::Path(Res::Function(function)) => match extern_row(self.hir, *function) {
+                Some(row) => Callee::Extern {
                     function: *function,
+                    row,
                     callee,
-                }
-            }
-            ExprKind::Path(Res::Function(function)) => Callee::Function(self.indices[*function]),
+                },
+                None => Callee::Function(self.indices[*function]),
+            },
             ExprKind::Path(Res::Operation(op)) => Callee::Operation(*op),
             ExprKind::Path(Res::Constructor(ctor)) => Callee::Constructor(*ctor),
             ExprKind::Path(Res::Local(local)) => {
@@ -326,17 +345,17 @@ impl FnLowering<'_> {
             ExprKind::Literal(Literal::Unit) => Atom::Unit,
             ExprKind::Literal(Literal::String(text)) => {
                 let index = self.program.strings.intern(text);
-                let ty = self.lang_type(self.hir.lang.string);
+                let ty = self.lang_type(self.hir.extern_type(ExternType::String));
                 self.bind(out, "s", &ty, Rhs::ConstString(index))
             }
             ExprKind::Path(Res::Local(local)) => self.locals[*local],
-            ExprKind::Path(Res::Function(function)) if self.hir[*function].intrinsic => {
-                let wrapper = self.program.wrapper(self.hir, *function);
-                let ty = self.ty(id);
-                self.closure(wrapper, Vec::new(), &ty, out)
-            }
-            // 引数のないトップレベルの値は、参照するたびに呼び出す (docs/spec/core-ir.md)
             ExprKind::Path(Res::Function(function)) => {
+                if let Some(row) = extern_row(self.hir, *function) {
+                    let wrapper = self.program.wrapper(self.hir, *function, row);
+                    let ty = self.ty(id);
+                    return self.closure(wrapper, Vec::new(), &ty, out);
+                }
+                // 引数のないトップレベルの値は、参照するたびに呼び出す (docs/spec/core-ir.md)
                 let target = self.indices[*function];
                 if self.program.arity(target) == 0 {
                     let ty = self.ty(id);

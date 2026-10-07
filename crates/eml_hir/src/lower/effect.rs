@@ -5,6 +5,7 @@ use eml_diagnostics::{Diagnostic, FileId, Label};
 use eml_syntax::{SyntaxKind, ast};
 use la_arena::Arena;
 
+use super::extern_outside_std;
 use super::types::{TypeLowering, Vars};
 use crate::codes;
 use crate::def_map::{DefMap, Resolver, duplicate};
@@ -13,7 +14,7 @@ use crate::hir::{
     TypeRef, TypeRefId, TypeRefKind, TypeVarDecl, TypeVarId,
 };
 use crate::item_tree::EffectItem;
-use crate::program::Items;
+use crate::program::{Items, ModuleOrigin};
 
 /// エフェクトの名前と型引数を置く。操作のシグネチャは `lower_operations` が、すべての型とエフェクトを置いた後に
 /// 変換する。
@@ -26,6 +27,11 @@ pub(super) fn declare_effects(
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     for (k, item) in items.iter().enumerate() {
+        if let Some(keyword) = item.syntax.extern_keyword()
+            && def_map.origin(module) == ModuleOrigin::User
+        {
+            diagnostics.push(extern_outside_std(file, keyword.text_range()));
+        }
         let mut generics = Generics::default();
         for param in item.syntax.params().map(|name| name.token()) {
             let text = param.text();

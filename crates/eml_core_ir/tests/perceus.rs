@@ -10,7 +10,7 @@ fn strings_are_dupped_and_decreffed() {
     effect Prelude.IO { println/1, open/1, read_all/1, close/1 }
     fn twice(s0^) {
       dup s0
-      let t1^ = prim ++(s0, s0)
+      let t1^ = extern Prelude.++(s0, s0)
       return t1
     }
     fn main(p0) {
@@ -33,7 +33,7 @@ fn shadowed_and_discarded_strings() {
     fn main(p0) {
       let s1^ = const "x"
       let s2^ = const "y"
-      let t3^ = prim ++(s1, s2)
+      let t3^ = extern Prelude.++(s1, s2)
       let t5 = perform println(t3)
       return t5
     }
@@ -132,7 +132,7 @@ fn a_scrutinee_used_in_an_arm_is_dupped_before_the_switch() {
 
 #[test]
 fn a_string_compared_twice_is_dupped_before_each_comparison() {
-    // 比べる `prim` は出現の所有権を受け取るので、後の比較と枝でも使う `name0` を比べるたびに複製する。使わない枝は
+    // 比べる extern は出現の所有権を受け取るので、後の比較と枝でも使う `name0` を比べるたびに複製する。使わない枝は
     // 入口で捨てる
     let text = "greet : String -> String\ngreet name = match name with\n  | \"en\" -> \"hello\"\n  | \"ja\" -> \"konnichiwa\"\n  | other -> other\n\nmain : Unit -> <IO> Unit\nmain () = ()";
     insta::assert_snapshot!(core_text(text, Pass::Perceus), @"

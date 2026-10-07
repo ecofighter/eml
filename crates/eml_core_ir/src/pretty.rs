@@ -184,7 +184,7 @@ fn rhs_text(program: &Program, function: &CoreFn, rhs: &Rhs) -> String {
         Rhs::MakeClosure(target, a) => {
             format!("closure {}({})", program.function(*target).name, args(a))
         }
-        Rhs::Prim(op, a) => format!("prim {}({})", op.name(), args(a)),
+        Rhs::Extern(e, a) => format!("extern {}({})", e.row().name, args(a)),
         Rhs::ConstString(index) => format!("const {:?}", program.strings[*index as usize]),
         Rhs::Io(op, a) => format!("perform {}({})", op.name(), args(a)),
         Rhs::Drop(a) => format!("drop {}", atom(program, function, a)),

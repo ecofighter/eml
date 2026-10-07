@@ -469,6 +469,24 @@ impl<'a> Checker<'a> {
                     ));
                 }
             }
+            Rhs::Extern(e, args) => {
+                let row = e.row();
+                // 型で選ぶ行は translate が比べ方ごとの行に置き換える
+                if row.by_type {
+                    return Err(format!(
+                        "`{}` is chosen by type and must not reach Core IR",
+                        row.name
+                    ));
+                }
+                if args.len() != row.arity {
+                    return Err(format!(
+                        "`{}` takes {} arguments but is given {}",
+                        row.name,
+                        row.arity,
+                        args.len()
+                    ));
+                }
+            }
             _ => {}
         }
         for atom in rhs.atoms() {

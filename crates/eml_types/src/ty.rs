@@ -249,7 +249,9 @@ fn atomic(ty: &Type, names: &DisplayNames) -> String {
 
 #[cfg(test)]
 mod tests {
-    use eml_hir::{ConstructorId, DisplayNames, EffectDef, Generics, ItemId, ModuleId, TypeDef};
+    use eml_hir::{
+        ConstructorId, DisplayNames, EffectDef, Generics, ItemId, ModuleId, TypeDef, TypeDefKind,
+    };
     use la_arena::{Arena, Idx, RawIdx};
 
     use super::*;
@@ -270,7 +272,14 @@ mod tests {
 
     fn fixture() -> Fixture {
         let mut types = Arena::new();
-        let mut ty = |name: &str| id(types.alloc(TypeDef::builtin(name)));
+        let mut ty = |name: &str| {
+            id(types.alloc(TypeDef {
+                name: name.to_string(),
+                generics: Generics::default(),
+                types: Arena::new(),
+                kind: TypeDefKind::Extern(None),
+            }))
+        };
         let (int, bool, unit) = (ty("Int"), ty("Bool"), ty("Unit"));
         let mut effects = Arena::new();
         let mut effect = |name: &str| {

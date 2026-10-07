@@ -104,8 +104,8 @@ fn main() {
   let n1 = call pick(s0)
   let s2^ = const "b"
   let n3 = call pick(s2) [n1]
-  let t4 = prim +(n1, n3)
-  let t5^ = prim show_int(t4)
+  let t4 = extern Prelude.+(n1, n3)
+  let t5^ = extern Prelude.show_int(t4)
   let o6 = perform println(t5)
   return o6
 }

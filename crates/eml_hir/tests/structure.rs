@@ -1,7 +1,8 @@
 //! HIR のデータ構造と走査関数のテスト。
 
 use eml_hir::{
-    Body, ExprId, ExprKind, Function, FunctionId, LineStart, LocalId, PatKind, Program, TypeRefKind,
+    Body, ExprId, ExprKind, Function, FunctionId, FunctionKind, LineStart, LocalId, PatKind,
+    Program, TypeRefKind,
 };
 
 /// 診断がないことを確かめて HIR を返す。
@@ -123,28 +124,35 @@ fn a_lambda_captures_what_its_nested_lambdas_capture() {
 }
 
 #[test]
-fn prelude_signatures_without_equations_are_intrinsic_functions() {
+fn prelude_extern_signatures_are_extern_functions() {
     let module = module("f : Int\nf = 1");
     for name in ["show_int", "negate", "+", "=="] {
         let function = function(&module, name);
-        assert!(function.intrinsic, "{name}");
+        assert!(
+            matches!(function.kind, FunctionKind::Extern(Some(_))),
+            "{name}"
+        );
         assert!(function.signature.is_some(), "{name}");
         assert!(module.body(function_id(&module, name)).is_none(), "{name}");
     }
-    // eml で書いた Prelude の関数は intrinsic ではない (docs/spec/declarations.md の標準の演算子の表)
+    // eml で書いた Prelude の関数は extern ではない (docs/spec/declarations.md の標準の演算子の表)
     for name in ["not", "&&", "||", ">>", "<<", "|>", "<|"] {
-        assert!(!function(&module, name).intrinsic, "{name}");
+        assert_eq!(
+            function(&module, name).kind,
+            FunctionKind::Defined,
+            "{name}"
+        );
         assert!(module.body(function_id(&module, name)).is_some(), "{name}");
     }
-    assert!(!function(&module, "f").intrinsic);
+    assert_eq!(function(&module, "f").kind, FunctionKind::Defined);
     assert_eq!(module.arity(function_id(&module, "+")), Some(2));
     assert_eq!(module.arity(function_id(&module, ">>")), Some(2));
 }
 
 #[test]
-fn prelude_functions_with_equations_are_not_intrinsic() {
-    // Prelude の関数は本体を持てる (docs/spec/declarations.md の標準の演算子の表)。intrinsic は等式の
-    // ないシグネチャだけである
+fn prelude_functions_with_equations_are_not_extern() {
+    // Prelude の関数は本体を持てる (docs/spec/declarations.md の標準の演算子の表)。extern は `extern` と書いた
+    // シグネチャだけである
     let prelude = format!(
         "{}\npub twice : Int -> Int\ntwice x = x + x\n",
         eml_hir::PRELUDE_SOURCE
@@ -153,9 +161,12 @@ fn prelude_functions_with_equations_are_not_intrinsic() {
     assert!(lowered.diagnostics.is_empty(), "{:?}", lowered.diagnostics);
     let program = lowered.program;
     let twice = function_id(&program, "twice");
-    assert!(!program[twice].intrinsic);
+    assert_eq!(program[twice].kind, FunctionKind::Defined);
     assert!(program.body(twice).is_some());
-    assert!(program[function_id(&program, "show_int")].intrinsic);
+    assert_eq!(
+        program[function_id(&program, "show_int")].kind,
+        FunctionKind::Extern(Some(eml_extern::Extern::ShowInt))
+    );
 }
 
 #[test]

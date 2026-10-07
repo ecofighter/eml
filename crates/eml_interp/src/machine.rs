@@ -146,9 +146,9 @@ impl<'p> Machine<'p> {
                 let text = self.program.strings[*index as usize].clone();
                 Value::Obj(self.heap.alloc(Payload::Str(text)))
             }
-            Rhs::Prim(op, args) => {
+            Rhs::Extern(e, args) => {
                 let args = self.atoms(args)?;
-                self.prim(*op, &args)?
+                self.call_extern(*e, &args)?
             }
             Rhs::Io(op, args) => {
                 let args = self.atoms(args)?;

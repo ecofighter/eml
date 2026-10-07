@@ -4,6 +4,7 @@
 
 use std::collections::HashMap;
 
+use eml_extern::ExternType;
 use eml_hir::{
     Constructor, EffectId, EffectRef, Generics, Operation, RowRef, RowVarId, Signature, TypeDef,
     TypeDefId, TypeRef, TypeRefId, TypeRefKind, TypeVarId,
@@ -118,9 +119,9 @@ fn lower(
     match &types[id].kind {
         TypeRefKind::Error => table.error,
         // `Unit` は空のレコードである (docs/spec/records.md)
-        TypeRefKind::Con(id, _) if *id == table.lang.unit => table.unit,
-        TypeRefKind::Con(id, _) if *id == table.lang.int => table.int,
-        TypeRefKind::Con(id, _) if *id == table.lang.string => table.string,
+        TypeRefKind::Con(id, _) if *id == table.extern_type(ExternType::Unit) => table.unit,
+        TypeRefKind::Con(id, _) if *id == table.extern_type(ExternType::Int) => table.int,
+        TypeRefKind::Con(id, _) if *id == table.extern_type(ExternType::String) => table.string,
         TypeRefKind::Con(id, _) if *id == table.lang.bool => table.bool,
         TypeRefKind::Con(id, args) => {
             let mut lowered = Vec::new();

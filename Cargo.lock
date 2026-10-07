@@ -176,6 +176,7 @@ name = "eml_core_ir"
 version = "0.1.0"
 dependencies = [
  "eml_diagnostics",
+ "eml_extern",
  "eml_hir",
  "eml_syntax",
  "eml_test_support",
@@ -193,10 +194,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "eml_extern"
+version = "0.1.0"
+
+[[package]]
 name = "eml_hir"
 version = "0.1.0"
 dependencies = [
  "eml_diagnostics",
+ "eml_extern",
  "eml_syntax",
  "eml_test_support",
  "insta",
@@ -208,6 +214,7 @@ name = "eml_interp"
 version = "0.1.0"
 dependencies = [
  "eml_core_ir",
+ "eml_extern",
  "eml_runtime",
  "eml_test_support",
  "insta",
@@ -246,6 +253,7 @@ name = "eml_types"
 version = "0.1.0"
 dependencies = [
  "eml_diagnostics",
+ "eml_extern",
  "eml_hir",
  "eml_test_support",
  "insta",

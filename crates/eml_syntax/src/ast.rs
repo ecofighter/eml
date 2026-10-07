@@ -259,7 +259,11 @@ impl SourceFile {
 
 impl Signature {
     pub fn is_extern(&self) -> bool {
-        support::token(&self.syntax, SyntaxKind::EXTERN_KW).is_some()
+        self.extern_keyword().is_some()
+    }
+
+    pub fn extern_keyword(&self) -> Option<SyntaxToken> {
+        support::token(&self.syntax, SyntaxKind::EXTERN_KW)
     }
 
     pub fn name(&self) -> Option<Name> {
@@ -554,7 +558,11 @@ impl Effect {
 
 impl EffectItem {
     pub fn is_extern(&self) -> bool {
-        support::token(&self.syntax, SyntaxKind::EXTERN_KW).is_some()
+        self.extern_keyword().is_some()
+    }
+
+    pub fn extern_keyword(&self) -> Option<SyntaxToken> {
+        support::token(&self.syntax, SyntaxKind::EXTERN_KW)
     }
 
     pub fn name(&self) -> Option<Name> {
@@ -659,7 +667,11 @@ impl DropExpr {
 
 impl DataItem {
     pub fn is_extern(&self) -> bool {
-        support::token(&self.syntax, SyntaxKind::EXTERN_KW).is_some()
+        self.extern_keyword().is_some()
+    }
+
+    pub fn extern_keyword(&self) -> Option<SyntaxToken> {
+        support::token(&self.syntax, SyntaxKind::EXTERN_KW)
     }
 
     /// `=` とコンストラクタの並びを書いたか。

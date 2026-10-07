@@ -2,6 +2,8 @@
 //! 演算子の表)。
 
 use crate::common::check_text;
+use eml_extern::Extern;
+use eml_hir::FunctionKind;
 use eml_types::{Decl, Equality};
 
 /// 関数 `name` の本体で決まった `==` / `!=` の比べ方を、ソースの順に並べる。
@@ -18,17 +20,20 @@ fn decided(text: &str, name: &str) -> Vec<(&'static str, Equality)> {
         .find(|(_, function)| function.name == name)
         .unwrap();
     let body = checked.program.body(id).unwrap();
-    let lang = &checked.program.lang;
+    let program = &checked.program;
     let mut found: Vec<(u32, &'static str, Equality)> = checked.typed.bodies[id]
         .instantiations
         .iter()
         .filter_map(|(expr, instantiation)| {
-            let operator = match instantiation.decl {
-                Decl::Function(function) if function == lang.eq => "==",
-                Decl::Function(function) if function == lang.ne => "!=",
+            let Decl::Function(function) = instantiation.decl else {
+                return None;
+            };
+            let operator = match program[function].kind {
+                FunctionKind::Extern(Some(Extern::Eq)) => "==",
+                FunctionKind::Extern(Some(Extern::Ne)) => "!=",
                 _ => return None,
             };
-            let equality = eml_types::equality(lang, &instantiation.args[0])
+            let equality = eml_types::equality(program, &instantiation.args[0])
                 .expect("a body without errors decides every comparison");
             Some((
                 u32::from(body.exprs[expr].range.start()),

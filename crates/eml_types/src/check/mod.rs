@@ -2,8 +2,8 @@ use std::collections::{HashMap, HashSet};
 
 use eml_diagnostics::{Diagnostic, Label};
 use eml_hir::{
-    Constructor, Function, FunctionId, Generics, ItemMap, Operation, Program, RowRef, TypeRef,
-    TypeRefId, TypeRefKind,
+    Constructor, Function, FunctionId, FunctionKind, Generics, ItemMap, Operation, Program, RowRef,
+    TypeRef, TypeRefId, TypeRefKind,
 };
 use la_arena::Arena;
 
@@ -71,7 +71,7 @@ pub(crate) fn check_module(program: &Program) -> (TypedProgram, Vec<Diagnostic>)
             problems.insert(id, checked.problem);
         }
     }
-    // 等式のない関数も参照されうるので、制約のないスキームを持たせる。intrinsic のスキームは宣言から作ってあるので
+    // 等式のない関数も参照されうるので、制約のないスキームを持たせる。extern の関数のスキームは宣言から作ってあるので
     // 上書きしない
     for (id, _) in signatures.functions.iter() {
         if problems.get(id).is_none() {
@@ -207,10 +207,11 @@ fn declaration_schemes(
     signatures: &Signatures,
 ) -> HashMap<Decl, KindScheme> {
     let mut problems: Vec<(Decl, KindProblem)> = Vec::new();
-    // intrinsic は本体を持たないので、部分適用のクロージャの Kind だけを宣言から出す (docs/spec/types.md の「関数型」)
+    // extern の関数は本体を持たないので、部分適用のクロージャの Kind だけを宣言から出す
+    // (docs/spec/types.md の「関数型」)
     for (id, function) in program
         .functions()
-        .filter(|(_, function)| function.intrinsic)
+        .filter(|(_, function)| matches!(function.kind, FunctionKind::Extern(_)))
     {
         let (Some(shape), Some(signature)) = (signatures.functions.get(id), &function.signature)
         else {
@@ -312,9 +313,9 @@ fn report_violations(program: &Program, mut origins: Vec<KindOrigin>) -> Vec<Dia
     out
 }
 
-/// 段0の形と段2のスキームを、宣言ごとの結果にまとめる。この時点で、形を持つ宣言はすべてスキームを持つ。intrinsic、操作、
-/// コンストラクタは `declaration_schemes` が、本体に問題のない関数は `check_module` が (制約がなければ空のスキームを)、解いた
-/// SCC の関数は SCC の解が入れるためである。
+/// 段0の形と段2のスキームを、宣言ごとの結果にまとめる。この時点で、形を持つ宣言はすべてスキームを持つ。extern の
+/// 関数、操作、コンストラクタは `declaration_schemes` が、本体に問題のない関数は `check_module` が (制約がなければ空の
+/// スキームを)、解いた SCC の関数は SCC の解が入れるためである。
 fn typed_program(
     signatures: &Signatures,
     mut schemes: HashMap<Decl, KindScheme>,

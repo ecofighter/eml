@@ -10,6 +10,7 @@ license = "MIT"
 [workspace.dependencies]
 eml_diagnostics = { path = "crates/eml_diagnostics" }
 eml_syntax = { path = "crates/eml_syntax" }
+eml_extern = { path = "crates/eml_extern" }
 eml_hir = { path = "crates/eml_hir" }
 eml_types = { path = "crates/eml_types" }
 eml_core_ir = { path = "crates/eml_core_ir" }

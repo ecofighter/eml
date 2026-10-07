@@ -25,7 +25,7 @@ pub use program::*;
 /// ファイルと一致することは `eml_hir` の結合テストが確かめる。
 pub const STD: &[(&str, &str)] = &[("Prelude.em", include_str!("../../../std/Prelude.em"))];
 
-/// Prelude のソース。Core IR の intrinsic の表のテストも読む。
+/// Prelude のソース。標準ライブラリの Prelude を差し替えるテストが、本文に宣言を足すのに使う。
 pub const PRELUDE_SOURCE: &str = STD[0].1;
 
 /// 診断の表示に使う Prelude のパス。標準ライブラリのパスは `<std>/` で始め、手元の相対パスと見誤らないようにする。
@@ -66,4 +66,5 @@ pub mod codes {
     pub const RESERVED_MODULE: ErrorCode = ErrorCode(1030);
     pub const UNKNOWN_QUALIFIER: ErrorCode = ErrorCode(1031);
     pub const PRIVATE_IN_PUBLIC: ErrorCode = ErrorCode(1032);
+    pub const EXTERN_OUTSIDE_STD: ErrorCode = ErrorCode(1033);
 }
