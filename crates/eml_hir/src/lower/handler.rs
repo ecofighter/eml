@@ -113,11 +113,13 @@ impl BodyLowering<'_> {
             other => {
                 out.unknown_operation |=
                     matches!(other, Resolved::Ambiguous(_) | Resolved::Silent(_));
-                if let Some(diagnostic) =
-                    unresolved(&self.items, self.file, NameKind::Operation, &at, other)
-                {
-                    self.diagnostics.push(diagnostic);
-                }
+                self.diagnostics.extend(unresolved(
+                    &self.items,
+                    self.file,
+                    NameKind::Operation,
+                    &at,
+                    other,
+                ));
                 return;
             }
         };

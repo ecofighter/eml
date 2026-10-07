@@ -113,11 +113,13 @@ impl TypeLowering<'_> {
                 TypeRefKind::Error
             }
             other => {
-                if let Some(diagnostic) =
-                    unresolved(&self.items, self.file, NameKind::Type, at, other)
-                {
-                    self.diagnostics.push(diagnostic);
-                }
+                self.diagnostics.extend(unresolved(
+                    &self.items,
+                    self.file,
+                    NameKind::Type,
+                    at,
+                    other,
+                ));
                 TypeRefKind::Error
             }
         }
@@ -211,11 +213,13 @@ impl TypeLowering<'_> {
                     valid = false;
                 }
                 other => {
-                    if let Some(diagnostic) =
-                        unresolved(&self.items, self.file, NameKind::Effect, &at, other)
-                    {
-                        self.diagnostics.push(diagnostic);
-                    }
+                    self.diagnostics.extend(unresolved(
+                        &self.items,
+                        self.file,
+                        NameKind::Effect,
+                        &at,
+                        other,
+                    ));
                     valid = false;
                 }
             }

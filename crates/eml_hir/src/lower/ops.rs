@@ -222,15 +222,13 @@ impl BodyLowering<'_> {
                 );
             }
             other => {
-                if let Some(diagnostic) = unresolved(
+                self.diagnostics.extend(unresolved(
                     &self.items,
                     self.file,
                     NameKind::Operator,
                     &NameUse::plain(op, op_range),
                     other,
-                ) {
-                    self.diagnostics.push(diagnostic);
-                }
+                ));
                 None
             }
         };

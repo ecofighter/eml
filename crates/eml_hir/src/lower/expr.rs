@@ -53,9 +53,6 @@ impl<'a> BodyLowering<'a> {
         &self.modules[id.module].items.constructors[id.local]
     }
 
-    // 呼び出し元は1か所だけである。引数は、本体の変換が読む item の表と、シグネチャの型引数と、診断の出力先で、
-    // まとめる型を作っても使う場所が増えない
-    #[allow(clippy::too_many_arguments)]
     pub(super) fn new(
         file: FileId,
         items: Resolver<'a>,
@@ -346,9 +343,8 @@ impl<'a> BodyLowering<'a> {
                     } else {
                         NameKind::Value
                     };
-                    if let Some(diagnostic) = unresolved(&self.items, self.file, kind, &at, other) {
-                        self.diagnostics.push(diagnostic);
-                    }
+                    self.diagnostics
+                        .extend(unresolved(&self.items, self.file, kind, &at, other));
                     return self.alloc(ExprKind::Missing, range);
                 }
             },
@@ -717,11 +713,13 @@ impl<'a> BodyLowering<'a> {
                 return self.unsupported_pat(at.range, "lists are not supported yet");
             }
             other => {
-                if let Some(diagnostic) =
-                    unresolved(&self.items, self.file, NameKind::Constructor, at, other)
-                {
-                    self.diagnostics.push(diagnostic);
-                }
+                self.diagnostics.extend(unresolved(
+                    &self.items,
+                    self.file,
+                    NameKind::Constructor,
+                    at,
+                    other,
+                ));
                 return PatKind::Missing;
             }
         };

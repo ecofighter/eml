@@ -71,109 +71,126 @@ fn lower_items(
     items: &mut Items,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
-    let file = tree.file;
-    data::declare_data(
-        file,
+    let mut lowering = ItemLowering {
+        file: tree.file,
         module,
-        &tree.data,
         def_map,
-        &mut items.types,
+        resolver: def_map.resolver(module),
         diagnostics,
-    );
-    effect::declare_effects(
-        file,
-        module,
-        &tree.effects,
-        def_map,
-        &mut items.effects,
-        diagnostics,
-    );
-    effect::lower_operations(file, module, &tree.effects, def_map, items, diagnostics);
-    data::lower_constructors(
-        file,
-        module,
-        &tree.data,
-        def_map,
-        &mut items.types,
-        &mut items.constructors,
-        diagnostics,
-    );
-    let resolver = def_map.resolver(module);
-    for (k, function) in tree.functions.iter().enumerate() {
-        let FunctionItem {
-            name,
-            first_range,
-            public,
-            signature,
-            equations,
-        } = function;
-        let keyword = signature
-            .as_ref()
-            .and_then(|(node, _)| node.extern_keyword());
-        let kind = match keyword {
-            None => FunctionKind::Defined,
-            Some(keyword) => FunctionKind::Extern(extern_row(
-                def_map,
-                module,
-                file,
-                &keyword,
+    };
+    lowering.declare_data(&tree.data, &mut items.types);
+    lowering.declare_effects(&tree.effects, &mut items.effects);
+    lowering.lower_operations(&tree.effects, items);
+    lowering.lower_constructors(&tree.data, &mut items.types, &mut items.constructors);
+    lowering.lower_functions(&tree.functions, &mut items.functions);
+}
+
+/// 1つのモジュールの item を変換する文脈。宣言の変換は、どれもこのモジュールのスコープで名前を引き、このファイルの
+/// 診断を足す。
+struct ItemLowering<'a> {
+    file: FileId,
+    module: ModuleId,
+    def_map: &'a DefMap,
+    resolver: Resolver<'a>,
+    diagnostics: &'a mut Vec<Diagnostic>,
+}
+
+impl ItemLowering<'_> {
+    fn lower_functions(&mut self, items: &[FunctionItem], functions: &mut Arena<Function>) {
+        for (k, function) in items.iter().enumerate() {
+            let FunctionItem {
                 name,
-                Extern::from_name,
-                diagnostics,
-            )),
-        };
-        // extern のシグネチャに続く等式は読み捨てる。E1033 のほかに診断を重ねないため
-        let equations = match kind {
-            FunctionKind::Defined => equations.as_slice(),
-            FunctionKind::Extern(_) => &[],
-        };
-        if let (Some((_, range)), None, FunctionKind::Defined) =
-            (signature, equations.first(), kind)
-        {
-            diagnostics.push(Diagnostic::error(
-                codes::MISSING_EQUATION,
-                format!("`{name}` has a signature but no equation"),
-                Label::new(
-                    file,
-                    *range,
-                    format!("add an equation for `{name}` after this signature"),
-                ),
-            ));
-        }
-        let signature_name_range = signature.as_ref().map(|(_, range)| *range);
-        let signature = signature.as_ref().map(|(node, _)| {
-            let range = node.ty().map_or(node.range(), |ty| ty.range());
-            let mut types = Arena::new();
-            let mut generics = Generics::default();
-            let ty = TypeLowering {
-                file,
-                types: &mut types,
-                generics: &mut generics,
-                items: resolver,
-                vars: Vars::Define,
-                public_item: public.then_some(name.as_str()),
-                diagnostics: &mut *diagnostics,
-            }
-            .lower(node.ty(), range);
-            Signature {
-                ty,
-                range,
-                types,
-                generics,
-            }
-        });
-        let id = ItemId::new(
-            module,
-            items.functions.alloc(Function {
-                name: name.clone(),
-                name_range: equations.first().map_or(*first_range, |(_, range)| *range),
-                signature_name_range,
-                equation_ranges: equations.iter().map(|(_, range)| *range).collect(),
+                first_range,
+                public,
                 signature,
-                kind,
-            }),
-        );
-        debug_assert_eq!(id, def_map.function_id(module, k));
+                equations,
+            } = function;
+            let keyword = signature
+                .as_ref()
+                .and_then(|(node, _)| node.extern_keyword());
+            let kind = match keyword {
+                None => FunctionKind::Defined,
+                Some(keyword) => {
+                    FunctionKind::Extern(self.extern_row(&keyword, name, Extern::from_name))
+                }
+            };
+            // extern のシグネチャに続く等式は読み捨てる。E1033 のほかに診断を重ねないため
+            let equations = match kind {
+                FunctionKind::Defined => equations.as_slice(),
+                FunctionKind::Extern(_) => &[],
+            };
+            if let (Some((_, range)), None, FunctionKind::Defined) =
+                (signature, equations.first(), kind)
+            {
+                self.diagnostics.push(Diagnostic::error(
+                    codes::MISSING_EQUATION,
+                    format!("`{name}` has a signature but no equation"),
+                    Label::new(
+                        self.file,
+                        *range,
+                        format!("add an equation for `{name}` after this signature"),
+                    ),
+                ));
+            }
+            let signature_name_range = signature.as_ref().map(|(_, range)| *range);
+            let signature = signature.as_ref().map(|(node, _)| {
+                let range = node.ty().map_or(node.range(), |ty| ty.range());
+                let mut types = Arena::new();
+                let mut generics = Generics::default();
+                let ty = TypeLowering {
+                    file: self.file,
+                    types: &mut types,
+                    generics: &mut generics,
+                    items: self.resolver,
+                    vars: Vars::Define,
+                    public_item: public.then_some(name.as_str()),
+                    diagnostics: &mut *self.diagnostics,
+                }
+                .lower(node.ty(), range);
+                Signature {
+                    ty,
+                    range,
+                    types,
+                    generics,
+                }
+            });
+            let id = ItemId::new(
+                self.module,
+                functions.alloc(Function {
+                    name: name.clone(),
+                    name_range: equations.first().map_or(*first_range, |(_, range)| *range),
+                    signature_name_range,
+                    equation_ranges: equations.iter().map(|(_, range)| *range).collect(),
+                    signature,
+                    kind,
+                }),
+            );
+            debug_assert_eq!(id, self.def_map.function_id(self.module, k));
+        }
+    }
+
+    /// extern の宣言が指す表の行。標準ライブラリでは正式な名前 (`Prelude.+`) で表を引き、ない名前は `std/` の誤りなので
+    /// panic する。ユーザーのモジュールでは E1033 を出して `None` にする。宣言は extern として読むので、E1005 や E1025 は
+    /// 重ねない。
+    fn extern_row<T>(
+        &mut self,
+        keyword: &SyntaxToken,
+        name: &str,
+        from_name: impl Fn(&str) -> Option<T>,
+    ) -> Option<T> {
+        match self.def_map.origin(self.module) {
+            ModuleOrigin::Std => {
+                let canonical = format!("{}.{name}", self.def_map.module_name(self.module));
+                let row = from_name(&canonical)
+                    .unwrap_or_else(|| panic!("`{canonical}` is not in the extern table"));
+                Some(row)
+            }
+            ModuleOrigin::User => {
+                self.diagnostics
+                    .push(extern_outside_std(self.file, keyword.text_range()));
+                None
+            }
+        }
     }
 }
 
@@ -220,34 +237,8 @@ fn lower_bodies(
     bodies
 }
 
-/// extern の宣言が指す表の行。標準ライブラリでは正式な名前 (`Prelude.+`) で表を引き、ない名前は `std/` の誤りなので
-/// panic する。ユーザーのモジュールでは E1033 を出して `None` にする。宣言は extern として読むので、E1005 や E1025 は
-/// 重ねない。
-pub(super) fn extern_row<T>(
-    def_map: &DefMap,
-    module: ModuleId,
-    file: FileId,
-    keyword: &SyntaxToken,
-    name: &str,
-    from_name: impl Fn(&str) -> Option<T>,
-    diagnostics: &mut Vec<Diagnostic>,
-) -> Option<T> {
-    match def_map.origin(module) {
-        ModuleOrigin::Std => {
-            let canonical = format!("{}.{name}", def_map.module_name(module));
-            let row = from_name(&canonical)
-                .unwrap_or_else(|| panic!("`{canonical}` is not in the extern table"));
-            Some(row)
-        }
-        ModuleOrigin::User => {
-            diagnostics.push(extern_outside_std(file, keyword.text_range()));
-            None
-        }
-    }
-}
-
 /// E1033。`extern` を外すと E1005 や E1025 になるので、自動の修正にはせず help で示すだけにする。
-pub(super) fn extern_outside_std(file: FileId, keyword: TextRange) -> Diagnostic {
+fn extern_outside_std(file: FileId, keyword: TextRange) -> Diagnostic {
     Diagnostic::error(
         codes::EXTERN_OUTSIDE_STD,
         "`extern` is only allowed in the standard library",
