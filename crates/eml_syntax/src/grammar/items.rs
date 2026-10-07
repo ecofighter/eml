@@ -56,19 +56,23 @@ fn at_operator_signature(p: &Parser) -> bool {
 pub(super) fn item(p: &mut Parser, declared: bool) -> bool {
     let m = p.start();
     let public = p.eat(PUB_KW);
-    let external = p.eat(EXTERN_KW);
-    // `extern` は `pub` の後ろにだけ書く。誤りを1つ出したら `pub` を読み捨て、項目は今までどおり読む
-    if external && p.at(PUB_KW) {
+    // 誤った `extern` は、`extern` のトークンに E0011 を1つだけ出す。`pub` の誤りも重ねない。`extern` を直した後に
+    // 残る誤りは、そのとき報告すれば足りるため
+    let misordered = p.at(EXTERN_KW) && p.nth(1) == PUB_KW;
+    if misordered {
         p.error(
             codes::SYNTAX_ERROR,
             "`extern` cannot be written before `pub`",
             "write `pub extern`",
         );
+    }
+    let external = p.eat(EXTERN_KW);
+    if misordered {
         p.bump(PUB_KW);
     }
     let kind = item_kind(p);
     // `pub` は宣言だけに付く (docs/spec/grammar.md の `item`)。等式の関数はシグネチャで公開する
-    if public {
+    if public && !external {
         match kind {
             Some(ItemKind::Equation | ItemKind::OperatorEquation) => p.error_at_previous(
                 codes::SYNTAX_ERROR,
@@ -86,6 +90,7 @@ pub(super) fn item(p: &mut Parser, declared: bool) -> bool {
     // `extern` は、等式のないシグネチャ、`=` のない `data`、`where` のない `effect` にだけ付く
     // (docs/spec/grammar.md の `item`)
     if external
+        && !misordered
         && kind.is_some_and(|kind| {
             !matches!(
                 kind,
@@ -162,8 +167,8 @@ fn data_item(p: &mut Parser, m: Marker) {
     m.complete(p, DATA_ITEM);
 }
 
-/// extern_decl ::= 'data' UIDENT。型引数、`=`、`where` は E0011 にして項目の終わりまで読み飛ばす
-/// (docs/spec/grammar.md の `item`)。
+/// extern_decl ::= 'data' UIDENT。型引数、`=`、`where` は E0011 にする。型引数は名前として読み、残りは項目の終わり
+/// まで読み飛ばす (docs/spec/grammar.md の `item`)。
 fn extern_data(p: &mut Parser, m: Marker) {
     p.bump(DATA_KW);
     expect_name(p, UIDENT);
@@ -178,6 +183,7 @@ fn extern_effect(p: &mut Parser, m: Marker) {
     m.complete(p, EFFECT_ITEM);
 }
 
+/// 誤って書いた型引数も名前として読む。使う位置の型引数の数 (E1015) が書いたとおりになり、誤りが連鎖しない。
 fn reject_extern_tail(p: &mut Parser, keyword: &str) {
     if p.at(LIDENT) || p.at(EQ) || p.at(PIPE) || p.at(WHERE_KW) {
         p.error(
@@ -185,6 +191,9 @@ fn reject_extern_tail(p: &mut Parser, keyword: &str) {
             format!("`extern {keyword}` cannot have parameters, `=` or `where`"),
             "an extern declaration is only the name",
         );
+        while p.at(LIDENT) {
+            name(p);
+        }
         skip_to_sep(p, false);
     }
 }

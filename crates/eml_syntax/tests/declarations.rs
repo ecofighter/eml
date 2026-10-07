@@ -498,9 +498,54 @@ fn extern_on_other_items_is_one_error_each() {
         "\"extern effect E where\\n  op : Unit -> Unit\" => [\"E0011 1:17 `extern effect` cannot have parameters, `=` or `where`\"]",
         "\"extern data T a\" => [\"E0011 1:15 `extern data` cannot have parameters, `=` or `where`\"]",
         "\"extern effect E a\" => [\"E0011 1:17 `extern effect` cannot have parameters, `=` or `where`\"]",
-        "\"extern pub f : Int\" => [\"E0011 1:8 `extern` cannot be written before `pub`\"]",
+        "\"extern pub f : Int\" => [\"E0011 1:1 `extern` cannot be written before `pub`\"]",
         "\"extern f x = x\" => [\"E0011 1:1 `extern` cannot be written on this item\"]",
     ]
+    "#);
+}
+
+#[test]
+fn misplaced_extern_is_one_error_at_extern() {
+    let report: Vec<String> = [
+        "extern",
+        "extern\nf : Int",
+        "extern data T U",
+        "extern pub type T",
+        "extern pub type T = Int",
+        "pub extern f x = x",
+        "pub extern import M",
+    ]
+    .iter()
+    .map(|text| format!("{text:?} => {:?}", diagnostics(text)))
+    .collect();
+    insta::assert_debug_snapshot!(report, @r#"
+    [
+        "\"extern\" => [\"E0003 1:7 expected an item\"]",
+        "\"extern\\nf : Int\" => [\"E0003 1:7 expected an item\"]",
+        "\"extern data T U\" => [\"E0011 1:15 unexpected `U`\"]",
+        "\"extern pub type T\" => [\"E0011 1:1 `extern` cannot be written before `pub`\", \"E0011 1:18 expected `=`\"]",
+        "\"extern pub type T = Int\" => [\"E0011 1:1 `extern` cannot be written before `pub`\"]",
+        "\"pub extern f x = x\" => [\"E0011 1:5 `extern` cannot be written on this item\"]",
+        "\"pub extern import M\" => [\"E0011 1:5 `extern` cannot be written on this item\"]",
+    ]
+    "#);
+    // 項目のない `extern` の後も、次の項目から読み直す
+    assert_eq!(item_kinds("extern\nf : Int"), ["ERROR", "SIGNATURE"]);
+}
+
+#[test]
+fn parameters_of_extern_data_are_still_names() {
+    insta::assert_snapshot!(shape("extern data T a"), @r#"
+    SOURCE_FILE
+      DATA_ITEM
+        EXTERN_KW "extern"
+        DATA_KW "data"
+        NAME
+          UIDENT "T"
+        NAME
+          LIDENT "a"
+    ---
+    E0011 1:15 `extern data` cannot have parameters, `=` or `where`
     "#);
 }
 
