@@ -1,4 +1,5 @@
-//! テストで Core IR を確かめるための表示。`text.rs` の `parse` が同じ形を読む (docs/spec/core-ir.md の「テキストの形」)。
+//! テストで Core IR を確かめるための表示。`text.rs` の `parse` が同じ形を読む
+//! (docs/implementation/testing.md の「Core IR のテキストの形」)。
 
 use std::fmt::Write;
 
@@ -256,7 +257,7 @@ pub(crate) fn case_pattern(program: &Program, pattern: CasePattern) -> String {
 }
 
 /// 表にない番号は `#N` で書く。誤りを含む IR も表示でき、`parse` が読み戻せるようにするためである
-/// (docs/spec/core-ir.md の「テキストの形」)。
+/// (docs/implementation/testing.md の「Core IR のテキストの形」)。
 fn operation(info: &EffectInfo, op: u32) -> String {
     info.operations
         .get(op as usize)

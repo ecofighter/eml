@@ -113,10 +113,10 @@ pub enum Frame {
     },
     /// 戻った関数値に、余った引数を適用する (docs/spec/core-ir.md の eval/apply)。
     Apply { args: Vec<Value>, next: ObjRef },
-    /// 継続の最下部にある `IO` の組み込みの handler (docs/spec/core-ir.md)。
+    /// 継続の最下部にある `IO` の組み込みの handler (docs/implementation/architecture.md の「継続のフレーム」)。
     Io,
     /// handle の handler。節はエフェクトの操作の順に並ぶ。`link` が `None` なのは、継続に捕まえられて handle の
-    /// 外側から切り離されている間である (docs/spec/core-ir.md)。
+    /// 外側から切り離されている間である (docs/implementation/architecture.md の「継続のフレーム」)。
     Handler {
         effect: u32,
         clauses: Vec<Value>,

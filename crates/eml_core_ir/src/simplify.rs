@@ -1,4 +1,5 @@
-//! join point を書き換える最適化 (docs/spec/core-ir.md)。変換の後、Perceus の前に置く。RC の命令がまだないので、
+//! join point を書き換える最適化
+//! (docs/implementation/architecture.md の「`simplify` の書き換え」)。変換の後、Perceus の前に置く。RC の命令がまだないので、
 //! 所有権を扱わずに書き換えられる。`captures` は古くなりうるが、このパスの後にパイプラインが埋め直す。
 //!
 //! F (join point の外出し)、B3 (jump が1つ)、K1 (分かっているコンストラクタの `switch`)、B2 (分かっているタグと
@@ -178,12 +179,13 @@ impl Simplify<'_> {
     }
 
     /// B2: 引数を1つだけ持ち、本体がその引数で分岐する join point に、分かっているコンストラクタの値を渡す jump があれば、
-    /// その値の枝を join point に切り出し、jump をその枝へ直接向ける (docs/spec/core-ir.md)。引数のない枝はすべて切り出し、
+    /// その値の枝を join point に切り出し、jump をその枝へ直接向ける
+    /// (docs/implementation/architecture.md の「`simplify` の書き換え」)。引数のない枝はすべて切り出し、
     /// 枝の中の引数をタグの定数に置き換える。フィールドを持つ枝は、分かっている値が届くものだけを、フィールドを引数に取る
     /// join point にし、jump はフィールドの値を渡す。枝が値全体も使うなら、値も最後の引数で渡す。
     /// 分かっている値のタグの case がなければ、値は `default` に進む。`default` は、そこへ進む値があるときだけ切り出す。
     /// `default` には複数のタグが届きうるので、本体の引数はタグの定数に置き換えず、本体が値全体を使うときだけ値を渡す
-    /// (docs/spec/core-ir.md の「パス」)。
+    /// (docs/implementation/architecture.md の「`simplify` の書き換え」)。
     /// 切り出した join point の引数は新しい変数にする。元の枝のフィールドと join point の引数は、どちらも束縛だからである。
     fn split_known_tags(&mut self) {
         let known = self.known_constructors();
@@ -557,7 +559,8 @@ impl Simplify<'_> {
     }
 
     /// T: 呼び出しの結果をそのまま返す `let x = call …` と `return x` を末尾呼び出しにする。末尾呼び出しを作る場所を
-    /// ここ1か所にする。B3 や B5 が枝へ動かした呼び出しも、ここで末尾呼び出しになる (docs/spec/core-ir.md)。
+    /// ここ1か所にする。B3 や B5 が枝へ動かした呼び出しも、ここで末尾呼び出しになる
+    /// (docs/implementation/architecture.md の「`simplify` の書き換え」)。
     /// 書き換えた `let` の古い本体 `return` は木から外れ、`compact` が捨てる。
     fn tail_calls(&mut self) {
         for id in self.reachable() {

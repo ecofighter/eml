@@ -317,7 +317,8 @@ impl FnLowering<'_> {
         id
     }
 
-    /// 式の値を `exit` に渡すコード。末尾呼び出しは simplify の T が作る (docs/spec/core-ir.md)。
+    /// 式の値を `exit` に渡すコード。末尾呼び出しは simplify の T が作る
+    /// (docs/implementation/architecture.md の「`simplify` の書き換え」)。
     fn tail(&mut self, expr: ExprId, exit: Exit) -> CExprId {
         self.tail_after(Vec::new(), expr, exit)
     }

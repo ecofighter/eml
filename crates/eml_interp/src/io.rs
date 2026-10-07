@@ -8,7 +8,7 @@ use crate::machine::Machine;
 
 impl Machine<'_> {
     /// `IO` はユーザーが handle できず、最下部の handler が必ずすぐに再開するので、継続を遡らずにその場で実行する
-    /// (docs/spec/core-ir.md)。
+    /// (docs/implementation/architecture.md の「継続のフレーム」)。
     pub(crate) fn io(&mut self, op: IoOp, args: &[Value]) -> Result<Value, Fault> {
         match op {
             IoOp::Println => {

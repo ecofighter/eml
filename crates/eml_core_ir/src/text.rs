@@ -1,4 +1,5 @@
-//! Core IR のテキストを読む (docs/spec/core-ir.md の「テキストの形」)。`pretty` の表示をそのまま読むので、
+//! Core IR のテキストを読む
+//! (docs/implementation/testing.md の「Core IR のテキストの形」)。`pretty` の表示をそのまま読むので、
 //! 表示したものを読み直すと同じ表示に戻る。手で書く IR のテストも、アリーナを組まずにこの形で書く。
 //! 字句に分けてから、行をまたいで再帰下降で読む。行の字下げは見ず、区切りは `}` と連なりを終える命令で決まる。
 
@@ -144,7 +145,7 @@ fn is_name_char(c: char) -> bool {
 
 /// 末尾の数字の並びを番号とし、その前を名前とする。番号は 0 で始まらないので、並びの先頭の 0 は名前に入れる
 /// (`$00` は名前 `$0` の 0 番)。名前が数字で終わると表示の切れ目は決まらないが、表示が同じなら読み直した表示も
-/// 同じになる (docs/spec/core-ir.md の「テキストの形」)。
+/// 同じになる (docs/implementation/testing.md の「Core IR のテキストの形」)。
 fn split_var(word: &str) -> Option<(&str, u32)> {
     if !word.chars().all(is_name_char) {
         return None;
@@ -624,7 +625,8 @@ impl<'t> Parser<'t> {
             "perform" if keyword => {
                 let line = self.line();
                 let word = self.word()?;
-                // エフェクトの名前はモジュールの名前で修飾されて `.` を含むが、操作の名前は含まない (docs/spec/core-ir.md)
+                // エフェクトの名前はモジュールの名前で修飾されて `.` を含むが、操作の名前は含まない
+                // (docs/implementation/testing.md の「Core IR のテキストの形」)
                 let (effect, op) = word.rsplit_once('.').ok_or_else(|| {
                     error(line, format!("expected `Effect.operation`, found `{word}`"))
                 })?;

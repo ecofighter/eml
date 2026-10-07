@@ -19,13 +19,13 @@ eml を実装するエージェントとプログラマのための文書群で�
 | [spec/linearity.md](spec/linearity.md) | 規範 | 線形性と `drop`、線形性の検査パス |
 | [spec/effects.md](spec/effects.md) | 規範 | 操作の多重度、持ち越し規則、handler の意味、組み込みの `IO` と `File` |
 | [spec/exhaustiveness.md](spec/exhaustiveness.md) | 規範 | 網羅性の検査 |
-| [spec/core-ir.md](spec/core-ir.md) | 規範 | Core IR と CEK インタプリタ |
+| [spec/core-ir.md](spec/core-ir.md) | 規範 | Core IR の構成、評価と所有権の意味、パスの境界の不変条件、実行時エラー |
 | [spec/runtime.md](spec/runtime.md) | 規範 | ヒープと参照カウント、`eml_runtime` の API、マルチコアに備えた予防的な決定 |
 | [spec/diagnostics.md](spec/diagnostics.md) | 規範 | 診断のデータ構造、番号の範囲と割り当て済みの番号、各診断が指す場所 |
 | [spec/examples.md](spec/examples.md) | 説明 | 本番の構文で書いたプログラム例 |
 | **implementation/** | 手引き | どう作るか、今どこまでできているか |
-| [implementation/architecture.md](implementation/architecture.md) | 手引き | プログラム全体の構成と採らなかった形、crate の構成、各段階の規律、エラー回復、各 crate の内部、CLI と lib API |
-| [implementation/testing.md](implementation/testing.md) | 手引き | テスト戦略、テストの置き場所、UI テスト、テストの変更の運用 |
+| [implementation/architecture.md](implementation/architecture.md) | 手引き | プログラム全体の構成と採らなかった形、crate の構成、各段階の規律、エラー回復、各 crate の内部、CLI と lib API、`simplify` の書き換え、継続のフレーム、構文解析と名前解決の回復 |
+| [implementation/testing.md](implementation/testing.md) | 手引き | テスト戦略、テストの変更の運用、テストの置き場所、UI テスト、Core IR のテキストの形、文書の引用の検査 |
 | [implementation/status.md](implementation/status.md) | 手引き | 今の言語の範囲、既知の制限 |
 | **future/** | 将来の設計 | まだ実装しない方針 |
 | [future/roadmap.md](future/roadmap.md) | 将来の設計 | 今後のマイルストーン (M3〜M9) と、その後の項目 (型システム、言語機能と構文、処理系、マルチコア) |

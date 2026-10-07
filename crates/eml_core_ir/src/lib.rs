@@ -305,7 +305,7 @@ pub enum Rhs {
         args: Vec<Atom>,
     },
     /// `IO` の操作。最下部の組み込みの handler が必ずすぐに1回再開するので、継続を遡らずにその場で実行する
-    /// (docs/spec/core-ir.md)。
+    /// (docs/implementation/architecture.md の「継続のフレーム」)。
     Io(IoOp, Vec<Atom>),
     /// 値の所有権を受け取って捨てる。値は `()` である (docs/spec/core-ir.md の `drop x`)。
     Drop(Atom),

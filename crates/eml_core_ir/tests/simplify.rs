@@ -1,4 +1,4 @@
-//! Core IR の `simplify` の書き換え (docs/spec/core-ir.md)。
+//! Core IR の `simplify` の書き換え (docs/implementation/architecture.md の「`simplify` の書き換え」)。
 
 use crate::common::core_text;
 use eml_core_ir::Pass;
@@ -485,7 +485,8 @@ fn a_call_moved_into_a_branch_becomes_a_tail_call() {
 
 #[test]
 fn every_kind_of_call_in_tail_position_becomes_a_tail_call() {
-    // 関数値の適用、`handle`、`resume`、操作の `perform` のどれも、T で末尾呼び出しになる (docs/spec/core-ir.md の「パス」)
+    // 関数値の適用、`handle`、`resume`、操作の `perform` のどれも、T で末尾呼び出しになる
+    // (docs/implementation/architecture.md の「`simplify` の書き換え」)
     let text = "effect Ask where\n  ask : String -> Int\n\ntwice : (Int -> Int) -> Int -> Int\ntwice f x = f (f x)\n\nasked : Unit -> <Ask> Int\nasked () = ask \"x\"\n\nanswer : Unit -> Int\nanswer () =\n  handle asked () with\n    | ask key k -> resume k 1\n\nmain : Unit -> <IO> Unit\nmain () = println (show_int (answer ()))";
     insta::assert_snapshot!(core_text(text, Pass::Simplify), @r#"
     effect Prelude.IO { println/1, open/1, read_all/1, close/1 }
@@ -520,7 +521,8 @@ fn every_kind_of_call_in_tail_position_becomes_a_tail_call() {
 
 #[test]
 fn a_known_tag_without_a_case_takes_the_default() {
-    // K1: 分かっているタグの case がなければ `default` の本体で置き換える (docs/spec/core-ir.md の「パス」)
+    // K1: 分かっているタグの case がなければ `default` の本体で置き換える
+    // (docs/implementation/architecture.md の「`simplify` の書き換え」)
     let text = "data Color = | Red | Green | Blue\n\nmain : Unit -> <IO> Unit\nmain () =\n  let c = Green\n  let n = match c with\n    | Red -> 1\n    | _ -> 2\n  println (show_int n)";
     let shown = core_text(text, Pass::Simplify);
     let main = shown.split("fn entry$main").next().unwrap();
