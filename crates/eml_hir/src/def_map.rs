@@ -585,7 +585,7 @@ impl ModuleScope {
 
     /// import の並びの小文字の名前と `(op)`。見つからない名前と `pub` でない名前は、並びの位置で報告して `None` を返す。
     /// 重複した宣言の部品だけがある名前は、E1003 で報告済みなので黙って `None` を返す。標準ライブラリの `pub` でない
-    /// item は、定義がないものとして扱う (docs/spec/modules.md の「Prelude」)。
+    /// item は、定義がないものとして扱う (docs/spec/modules.md の「標準ライブラリ」)。
     fn export_value(
         &self,
         name: &str,
@@ -1308,7 +1308,7 @@ impl<'a> Resolver<'a> {
                 if definition.public {
                     add(&mut found, item, import);
                 } else if scope.origin == ModuleOrigin::User {
-                    // 標準ライブラリの `pub` でない item は、定義がないものとして扱う (docs/spec/modules.md の「Prelude」)
+                    // 標準ライブラリの `pub` でない item は、定義がないものとして扱う (docs/spec/modules.md の「標準ライブラリ」)
                     private.get_or_insert((scope.file, definition.range));
                 }
                 break;
@@ -1326,7 +1326,7 @@ impl<'a> Resolver<'a> {
 
     /// 修飾子が指すモジュールと、それを作った import。`Prelude` はどのモジュールでも使える暗黙の修飾子で、import を
     /// 持たない (docs/spec/modules.md の「Prelude」)。どの import も作らない修飾子は、ユーザーのモジュールでだけ、同じ
-    /// 短い名前の標準ライブラリのモジュールを指す。import していないユーザーのモジュールは、修飾子にならない。標準ライブラリの
+    /// 短い名前の標準ライブラリのモジュールを指す (docs/spec/modules.md の「名前の解決」と「標準ライブラリ」)。import していないユーザーのモジュールは、修飾子にならない。標準ライブラリの
     /// モジュールどうしは import で明示して使い、依存がすべて import に現れるようにする (循環の検査 E1027 のため)。
     fn targets(&self, qualifier: &str) -> Vec<(ImportTarget, Option<TextRange>)> {
         let mut targets: Vec<(ImportTarget, Option<TextRange>)> = self
