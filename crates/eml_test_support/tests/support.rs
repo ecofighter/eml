@@ -59,7 +59,7 @@ fn the_files_variants_read_modules_from_memory() {
     assert_eq!(run_files(entry, &clean), ("hi\n".to_string(), Ok(())));
     let missing = lower_files("import Util", &[]);
     assert_eq!(
-        short(&missing.files, &missing.diagnostics),
+        short(missing.files(), &missing.diagnostics),
         ["E1026 1:8 cannot find module `Util`"]
     );
     // 入口以外のモジュールの `main` は、実行を始める関数でも E2004 の対象でもない (docs/spec/types.md)

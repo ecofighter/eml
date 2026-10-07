@@ -160,7 +160,7 @@ fn check_fail() {
             return;
         };
         let session = load(path, &suffix);
-        let diagnostics = session.check();
+        let diagnostics = session.check().diagnostics;
         let rendered = render(&diagnostics, session.files());
         assert!(
             has_errors(&diagnostics),

@@ -237,6 +237,7 @@ dependencies = [
 name = "eml_test_support"
 version = "0.1.0"
 dependencies = [
+ "eml_cli",
  "eml_core_ir",
  "eml_diagnostics",
  "eml_hir",

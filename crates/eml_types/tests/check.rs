@@ -446,7 +446,7 @@ fn an_equality_section_compares_by_the_type_it_is_used_at() {
 fn an_equality_reference_with_an_unknown_type_is_not_comparable() {
     let text = "f : Int -> Int\nf x =\n  let eq = (==)\n  x";
     let checked = eml_test_support::check(text);
-    let lines = eml_test_support::short(&checked.files, &checked.diagnostics);
+    let lines = eml_test_support::short(checked.files(), &checked.diagnostics);
     assert!(
         lines.iter().any(|line| line.starts_with("E2006 3:13")),
         "{lines:?}"
@@ -459,7 +459,7 @@ fn a_broken_signature_adds_no_effect_errors_to_the_equation() {
     let text =
         "f : Int -> Undefined\nf a b = println \"x\"\n\ng : Int -> Unit\ng a b = println \"x\"";
     let checked = eml_test_support::check(text);
-    let lines = eml_test_support::short(&checked.files, &checked.diagnostics);
+    let lines = eml_test_support::short(checked.files(), &checked.diagnostics);
     assert!(
         lines.iter().any(|line| line.starts_with("E1002")),
         "{lines:?}"
@@ -478,7 +478,7 @@ fn a_broken_signature_adds_no_effect_errors_to_the_equation() {
 fn an_annotated_pattern_must_have_the_type_of_its_value() {
     let text = "data Option a = | None | Some a\n\nf : Option Int -> Int\nf (Some (x : String)) = 1\nf None = 0";
     let checked = eml_test_support::check(text);
-    insta::assert_snapshot!(eml_test_support::full(&checked.files, &checked.diagnostics), @"
+    insta::assert_snapshot!(eml_test_support::full(checked.files(), &checked.diagnostics), @"
     E2001 4:9 mismatched types
       4:9 expected `Int`, found `String`
       note: an annotated pattern must have the type of the value it matches

@@ -660,7 +660,7 @@ fn infix_patterns_with_ambiguous_or_broken_constructors_are_silent_errors() {
 fn private_in_public_signature() {
     let lowered =
         eml_test_support::lower("data Secret = | S\n\npub reveal : Unit -> Secret\nreveal () = S");
-    insta::assert_snapshot!(eml_test_support::full(&lowered.files, &lowered.diagnostics), @r"
+    insta::assert_snapshot!(eml_test_support::full(lowered.files(), &lowered.diagnostics), @r"
     E1032 3:22 the public `reveal` uses the private type `Secret`
       3:22 `Secret` is not `pub`
       1:6 `Secret` is defined here
@@ -709,13 +709,13 @@ fn private_in_public_in_a_dependency_points_into_its_file() {
         )],
     );
     assert_eq!(
-        eml_test_support::short(&lowered.files, &lowered.diagnostics),
+        eml_test_support::short(lowered.files(), &lowered.diagnostics),
         ["E1032 3:23 the public `parse` uses the private type `Row`"]
     );
     let diagnostic = &lowered.diagnostics[0];
-    assert_eq!(lowered.files.path(diagnostic.primary.file), "Report.em");
+    assert_eq!(lowered.files().path(diagnostic.primary.file), "Report.em");
     assert_eq!(
-        lowered.files.path(diagnostic.secondary[0].file),
+        lowered.files().path(diagnostic.secondary[0].file),
         "Report.em"
     );
 }
@@ -727,7 +727,7 @@ fn mixed_effects_are_named_by_their_display_names() {
         entry,
         &[("Report.em", "pub effect Log where\n  note : String -> Unit")],
     );
-    let full = eml_test_support::full(&lowered.files, &lowered.diagnostics);
+    let full = eml_test_support::full(lowered.files(), &lowered.diagnostics);
     assert!(full.starts_with("E1012 10:"), "{full}");
     assert!(full.contains("is an operation of `Report.Log`"), "{full}");
     assert!(
@@ -746,7 +746,7 @@ fn a_missing_clause_is_suggested_with_the_qualifier_of_the_existing_clause() {
             "pub effect State where\n  get : Unit -> Int\n  put : Int -> Unit",
         )],
     );
-    insta::assert_snapshot!(eml_test_support::full(&lowered.files, &lowered.diagnostics), @r"
+    insta::assert_snapshot!(eml_test_support::full(lowered.files(), &lowered.diagnostics), @r"
     E1013 9:3 this handler has no clause for `put` of `Report.State`
       9:3 this handler
       help: add `| R.put _ k -> ...`

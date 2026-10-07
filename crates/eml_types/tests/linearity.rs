@@ -8,7 +8,7 @@ const HEADER: &str =
 
 fn diagnostics(rest: &str) -> String {
     let checked = check(&format!("{HEADER}{rest}"));
-    full(&checked.files, &checked.diagnostics)
+    full(checked.files(), &checked.diagnostics)
 }
 
 #[test]
@@ -108,7 +108,7 @@ fn a_body_with_a_type_error_reports_no_linearity_errors() {
 
 fn fix_text(rest: &str) -> String {
     let checked = check(&format!("{HEADER}{rest}"));
-    fixes(&checked.files, &checked.diagnostics)
+    fixes(checked.files(), &checked.diagnostics)
 }
 
 #[test]
@@ -161,7 +161,7 @@ fn the_fix_in_a_crlf_source_points_after_the_line_break() {
     // 字下げは `\r\n` の後から数え、`\r` を含めない。入れる行の改行は `\n` のままである
     let rest = "unused : Unit -> Int\nunused () =\n  handle ask () with\n    | ask () k ->\n        let j = k\n        0";
     let checked = check(&format!("{HEADER}{rest}").replace('\n', "\r\n"));
-    insta::assert_snapshot!(fixes(&checked.files, &checked.diagnostics), @r#"
+    insta::assert_snapshot!(fixes(checked.files(), &checked.diagnostics), @r#"
     E3003 11:13 insert `drop j`
       12:9..12:9 "drop j\n        "
     "#);
@@ -180,7 +180,7 @@ fn the_fix_copies_a_tab_indent() {
 /// HEADER を付けずに検査する。
 fn plain(text: &str) -> String {
     let checked = check(text);
-    full(&checked.files, &checked.diagnostics)
+    full(checked.files(), &checked.diagnostics)
 }
 
 #[test]
@@ -254,7 +254,7 @@ fn no_fix_for_a_function_body_on_one_line() {
       help: pass `f` to `drop`
     ");
     let checked = check(text);
-    assert_eq!(fixes(&checked.files, &checked.diagnostics), "");
+    assert_eq!(fixes(checked.files(), &checked.diagnostics), "");
 }
 
 const TWO_OPS: &str = "effect Two where\n  one : Unit -> Unit\n  two : Unit -> Unit\n\n";
@@ -274,7 +274,7 @@ fn two_operation_clauses_capturing_one_file_report_once() {
         codes,
         ["E3001"],
         "{}",
-        full(&checked.files, &checked.diagnostics)
+        full(checked.files(), &checked.diagnostics)
     );
 }
 
@@ -304,7 +304,7 @@ fn a_type_error_in_one_body_does_not_hide_linearity_errors_in_another() {
         codes,
         ["E2001", "E3002"],
         "{}",
-        full(&checked.files, &checked.diagnostics)
+        full(checked.files(), &checked.diagnostics)
     );
 }
 
@@ -414,7 +414,7 @@ const CARRY: &str = "effect Choice where\n  multi choose : Unit -> Bool\n\neffec
 
 fn carried(rest: &str) -> String {
     let checked = check(&format!("{CARRY}{rest}"));
-    full(&checked.files, &checked.diagnostics)
+    full(checked.files(), &checked.diagnostics)
 }
 
 #[test]
@@ -856,7 +856,7 @@ fn a_linear_state_is_kept_across_a_multi_operation_of_the_outer_row() {
     let rest = "kept : Unit -> <Choose, IO> Int\nkept () =\n  handle ask () from Fs.open \"a.txt\" with\n    | ask () k f -> k 1 f\n    | return x f ->\n        Fs.close f\n        x";
     let text = format!("effect Choose where\n  multi choose : Unit -> Bool\n\n{HEADER}{rest}");
     let checked = check(&text);
-    insta::assert_snapshot!(full(&checked.files, &checked.diagnostics), @"
+    insta::assert_snapshot!(full(checked.files(), &checked.diagnostics), @"
     E3006 12:3 the state of this handler must be used exactly once, but it is kept alive across a call that may resume more than once
       12:3 this handle may perform `choose`, a `multi` operation
       12:22 the state of this handler
@@ -888,7 +888,7 @@ fn a_value_used_only_by_the_handled_body_is_carried_across_the_initial_state() {
     let rest = "use_file : Fs.File -> <Ask, IO> Int\nuse_file f =\n  Fs.close f\n  ask ()\n\nearly : Unit -> <Choose, IO> Int\nearly () =\n  let f = Fs.open \"a.txt\"\n  handle use_file f from (if choose () then 1 else 2) with\n    | ask () k st -> k st st\n    | return x _ -> x";
     let text = format!("effect Choose where\n  multi choose : Unit -> Bool\n\n{HEADER}{rest}");
     let checked = check(&text);
-    insta::assert_snapshot!(full(&checked.files, &checked.diagnostics), @"
+    insta::assert_snapshot!(full(checked.files(), &checked.diagnostics), @"
     E3006 18:30 `f` must be used exactly once, but it is kept alive across a call that may resume more than once
       18:30 this call may perform `choose`, a `multi` operation
       17:7 `f` is bound here
@@ -905,7 +905,7 @@ fn a_linear_state_does_not_cross_the_multi_operation_the_handler_handles() {
     let rest = "main : Unit -> <IO> Unit\nmain () =\n  let n =\n    handle (if choose () then 1 else 2) from Fs.open \"a.txt\" with\n      | choose () k f -> k True f\n      | return x f ->\n          Fs.close f\n          x\n  println (show_int n)";
     let text = format!("effect Choose where\n  multi choose : Unit -> Bool\n\n{HEADER}{rest}");
     let checked = check(&text);
-    insta::assert_snapshot!(full(&checked.files, &checked.diagnostics), @"");
+    insta::assert_snapshot!(full(checked.files(), &checked.diagnostics), @"");
 }
 
 #[test]
@@ -915,7 +915,7 @@ fn a_partial_application_of_a_prelude_function_keeps_a_captured_linear_value() {
     let text = "twice : Fs.File -> <IO> Unit\ntwice h =\n  let g = (fn u -> Fs.close h) >> (fn u -> u)\n  g ()\n  g ()";
     let checked = eml_test_support::check(text);
     assert_eq!(
-        eml_test_support::short(&checked.files, &checked.diagnostics),
+        eml_test_support::short(checked.files(), &checked.diagnostics),
         ["E3002 5:3 `g` must be used exactly once, but it is used more than once"]
     );
 }

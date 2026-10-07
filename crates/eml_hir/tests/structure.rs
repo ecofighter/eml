@@ -211,8 +211,8 @@ fn the_prelude_and_the_entry_are_separate_modules() {
     let entry = &program.modules[program.entry];
     assert_eq!(prelude.name, "Prelude");
     assert_eq!(entry.name, "Main");
-    assert_eq!(lowered.files.path(prelude.file), eml_hir::PRELUDE_PATH);
-    assert_eq!(entry.file, lowered.file);
+    assert_eq!(lowered.files().path(prelude.file), eml_hir::PRELUDE_PATH);
+    assert_eq!(entry.file, lowered.file());
     // Prelude の item は Prelude のモジュールに、ユーザーの関数は入口のモジュールにある
     let (plus, _) = program.functions().find(|(_, f)| f.name == "+").unwrap();
     let (f, _) = program.functions().find(|(_, f)| f.name == "f").unwrap();
@@ -236,7 +236,7 @@ fn imported_modules_follow_the_entry() {
     assert!(
         lowered.diagnostics.is_empty(),
         "{}",
-        eml_test_support::short_text(&lowered.files, &lowered.diagnostics)
+        eml_test_support::short_text(lowered.files(), &lowered.diagnostics)
     );
     let program = &lowered.program;
     let names: Vec<&str> = program
@@ -246,7 +246,10 @@ fn imported_modules_follow_the_entry() {
         .collect();
     assert_eq!(names, ["Prelude", "Main", "Std.Fs", "Report.Csv"]);
     let g = function_id(program, "g");
-    assert_eq!(lowered.files.path(program.file(g.module)), "Report/Csv.em");
+    assert_eq!(
+        lowered.files().path(program.file(g.module)),
+        "Report/Csv.em"
+    );
     assert!(program.body(g).is_some());
 }
 

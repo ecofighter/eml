@@ -6,7 +6,7 @@ use eml_test_support::{check, full};
 /// 型検査までの診断を、ラベルと note まで表示する。
 fn diagnostics(text: &str) -> String {
     let checked = check(text);
-    full(&checked.files, &checked.diagnostics)
+    full(checked.files(), &checked.diagnostics)
 }
 
 #[test]
@@ -63,7 +63,7 @@ fn more_than_three_examples_are_cut_short() {
 fn an_arm_after_a_wildcard_is_unreachable() {
     let text = "data Option a = | None | Some a\n\nf : Option Int -> Int\nf o = match o with\n  | _ -> 0\n  | Some n -> n";
     let checked = check(text);
-    insta::assert_snapshot!(full(&checked.files, &checked.diagnostics), @r"
+    insta::assert_snapshot!(full(checked.files(), &checked.diagnostics), @r"
     E4004 6:5 unreachable `match` arm
       6:5 the arms above already match every value of this pattern
     ");
@@ -281,7 +281,7 @@ fn an_equation_after_a_catch_all_is_unreachable() {
     let text = "g : Int -> Int\ng _ = 0\ng 1 = 1";
     let checked = check(text);
     assert!(!has_errors(&checked.diagnostics));
-    insta::assert_snapshot!(full(&checked.files, &checked.diagnostics), @r"
+    insta::assert_snapshot!(full(checked.files(), &checked.diagnostics), @r"
     E4005 3:3 unreachable equation
       3:3 the equations above already match these arguments
     ");
@@ -321,7 +321,7 @@ fn a_missing_constructor_of_the_same_name_is_qualified() {
     let entry = "import Report\n\ndata Answer = | Yes | No\n\nf : Report.Answer -> Int\nf a = match a with\n  | Report.Yes -> 1";
     let checked =
         eml_test_support::check_files(entry, &[("Report.em", "pub data Answer = | Yes | No")]);
-    insta::assert_snapshot!(full(&checked.files, &checked.diagnostics), @r"
+    insta::assert_snapshot!(full(checked.files(), &checked.diagnostics), @r"
     E4001 6:7 `match` does not cover every value
       6:7 no arm matches some values
       note: not covered: `Report.No`

@@ -15,15 +15,24 @@ doctest = false
 name = "eml"
 path = "src/main.rs"
 test = false
+required-features = ["run"]
+
+# `eml_test_support` はこの crate でパイプラインを組むので、段階ごとに feature を分ける。各 crate のテストは自分より
+# 下流の crate を組み立てずに済む (docs/implementation/testing.md)。
+[features]
+default = ["run"]
+types = ["dep:eml_types"]
+core = ["types", "dep:eml_core_ir"]
+run = ["core", "dep:eml_interp", "dep:eml_runtime"]
 
 [dependencies]
 clap.workspace = true
-eml_core_ir.workspace = true
+eml_core_ir = { workspace = true, optional = true }
 eml_diagnostics.workspace = true
 eml_hir.workspace = true
-eml_interp.workspace = true
-eml_runtime.workspace = true
-eml_types.workspace = true
+eml_interp = { workspace = true, optional = true }
+eml_runtime = { workspace = true, optional = true }
+eml_types = { workspace = true, optional = true }
 
 [dev-dependencies]
 eml_test_support = { workspace = true, features = ["hir"] }

@@ -1,6 +1,7 @@
 use eml_cli::{
     FsProvider, ModulePath, ModuleSource, OutputSink, ReadError, RunConfig, Session, execute,
 };
+use eml_core_ir::{Pass, pretty};
 use eml_diagnostics::{Diagnostic, has_errors};
 use eml_test_support::MemorySource;
 
@@ -17,6 +18,50 @@ fn codes(diagnostics: &[Diagnostic]) -> Vec<String> {
 
 fn module_path(segments: &[&str]) -> ModulePath {
     ModulePath(segments.iter().map(|segment| segment.to_string()).collect())
+}
+
+#[test]
+fn each_stage_collects_the_diagnostics_of_the_stages_before_it() {
+    // `nope` は def_map の段の E1001、`h` は型の E2001、`g` は HIR の E1001、`€` は字句の E0001 になる
+    let source = MemorySource(&[("Util.em", "")]);
+    let text = "import Util (nope)\n\nh : Int\nh = \"s\"\n\nf : Int -> Int\nf x = g x\n€";
+    let session = Session::load("a.em", text, &source);
+    assert_eq!(codes(&session.def_map().diagnostics), ["E1001", "E0001"]);
+    assert_eq!(
+        codes(&session.lower().diagnostics),
+        ["E1001", "E1001", "E0001"]
+    );
+    assert_eq!(
+        codes(&session.check().diagnostics),
+        ["E1001", "E2001", "E1001", "E0001"]
+    );
+}
+
+#[test]
+fn load_with_std_reads_the_given_standard_library() {
+    let prelude = format!("{}\npub extra : Int\nextra = 1\n", eml_hir::PRELUDE_SOURCE);
+    let session = Session::load_with_std(
+        &[("Prelude.em", &prelude), eml_hir::STD[1]],
+        "a.em",
+        "f : Int\nf = extra",
+        &MemorySource(&[]),
+    );
+    assert!(session.check().diagnostics.is_empty());
+}
+
+#[test]
+fn compile_until_stops_after_the_named_pass() {
+    // `s` を2回使うので、Perceus の後にだけ `dup` が入る
+    let session = single(
+        "twice : String -> String\ntwice s = s ++ s\n\nmain : Unit -> <IO> Unit\nmain () = println (twice \"x\")",
+    );
+    let shown = |last| pretty(&session.compile_until(last).program.unwrap());
+    assert!(!shown(Pass::Simplify).contains("dup"));
+    assert!(shown(Pass::Perceus).contains("dup"));
+    assert_eq!(
+        shown(Pass::Perceus),
+        pretty(&session.compile().program.unwrap())
+    );
 }
 
 #[test]
@@ -52,13 +97,18 @@ fn compile_reports_a_missing_main() {
 
 #[test]
 fn check_accepts_a_file_without_main() {
-    assert!(single("f : Int -> Int\nf x = x").check().is_empty());
+    assert!(
+        single("f : Int -> Int\nf x = x")
+            .check()
+            .diagnostics
+            .is_empty()
+    );
 }
 
 #[test]
 fn a_session_registers_the_prelude_for_rendering() {
     let session = single("main : Unit -> <IO> Unit\nmain () = println \"x\"");
-    assert!(session.check().is_empty());
+    assert!(session.check().diagnostics.is_empty());
     let prelude = session.prelude();
     assert_eq!(session.files().path(prelude), eml_hir::PRELUDE_PATH);
     assert_eq!(session.files().text(prelude), eml_hir::PRELUDE_SOURCE);
@@ -73,7 +123,7 @@ fn a_session_registers_the_prelude_for_rendering() {
 
 #[test]
 fn the_prelude_alone_has_no_diagnostics() {
-    assert!(single("").check().is_empty());
+    assert!(single("").check().diagnostics.is_empty());
 }
 
 #[test]
@@ -91,7 +141,7 @@ fn user_module_names_leave_out_the_standard_library() {
 fn a_session_registers_a_dependency_under_the_entry_directory() {
     let source = MemorySource(&[("Report/Csv.em", "x : Int\nx = y")]);
     let session = Session::load("app/main.em", "import Report.Csv\n", &source);
-    let diagnostics = session.check();
+    let diagnostics = session.check().diagnostics;
     assert_eq!(codes(&diagnostics), ["E1001"]);
     assert_eq!(
         session.files().path(diagnostics[0].primary.file),
@@ -160,7 +210,7 @@ fn a_module_in_a_differently_cased_directory_is_not_found() {
     let dir = temp_project("case", &[("report/Csv.em", "pub x : Int\nx = 1\n")]);
     let session = Session::load("main.em", "import Report.Csv\n", &FsProvider::new(&dir));
     std::fs::remove_dir_all(&dir).unwrap();
-    let diagnostics = session.check();
+    let diagnostics = session.check().diagnostics;
     assert_eq!(codes(&diagnostics), ["E1026"]);
     assert_eq!(
         diagnostics[0].message,
@@ -174,7 +224,7 @@ fn a_dependency_that_is_not_utf8_cannot_be_read() {
     std::fs::write(dir.join("Bad.em"), [0x66, 0x6e, 0xff, 0xfe]).unwrap();
     let session = Session::load("main.em", "import Bad\n", &FsProvider::new(&dir));
     std::fs::remove_dir_all(&dir).unwrap();
-    let diagnostics = session.check();
+    let diagnostics = session.check().diagnostics;
     assert_eq!(codes(&diagnostics), ["E1026"]);
     assert!(
         diagnostics[0]
@@ -190,7 +240,7 @@ fn a_directory_named_like_a_module_file_cannot_be_read() {
     let dir = temp_project("dir-module", &[("Csv.em/x.em", "")]);
     let session = Session::load("main.em", "import Csv\n", &FsProvider::new(&dir));
     std::fs::remove_dir_all(&dir).unwrap();
-    assert_eq!(codes(&session.check()), ["E1026"]);
+    assert_eq!(codes(&session.check().diagnostics), ["E1026"]);
 }
 
 #[test]
@@ -199,7 +249,7 @@ fn files_that_are_not_imported_are_not_read() {
     let dir = temp_project("unrelated", &[("Broken.em", "€")]);
     let session = Session::load("main.em", "f : Int\nf = 1\n", &FsProvider::new(&dir));
     std::fs::remove_dir_all(&dir).unwrap();
-    assert!(session.check().is_empty());
+    assert!(session.check().diagnostics.is_empty());
 }
 
 /// 読み込んだセッションを、別のスレッドに渡して使える (docs/implementation/architecture.md の「CLI と lib API」)。

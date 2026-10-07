@@ -14,7 +14,7 @@ fn std_program() -> Program {
     assert!(
         lowered.diagnostics.is_empty(),
         "{}",
-        eml_test_support::short_text(&lowered.files, &lowered.diagnostics)
+        eml_test_support::short_text(lowered.files(), &lowered.diagnostics)
     );
     lowered.program
 }

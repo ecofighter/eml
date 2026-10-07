@@ -505,7 +505,7 @@ fn names_defined_by_two_modules_are_qualified() {
     let report = "pub data Row = | Row Int\n\npub effect Log where\n  note : String -> Unit\n\npub data Answer = | Yes | No";
     let lowered = eml_test_support::lower_files(entry, &[("Report.em", report)]);
     assert_eq!(
-        eml_test_support::short(&lowered.files, &lowered.diagnostics),
+        eml_test_support::short(lowered.files(), &lowered.diagnostics),
         Vec::<String>::new()
     );
     // 型とエフェクトは合わせて数え、コンストラクタは別に数える。継続は普通の関数型なので、`Cont` はユーザーの定義だけである
@@ -574,7 +574,7 @@ fn a_std_name_defined_by_a_user_module_is_qualified_by_the_canonical_name() {
     let std = [("Prelude.em", eml_hir::PRELUDE_SOURCE), ("Fs.em", &fs)];
     let lowered = eml_test_support::lower_with_std(&std, "data Tag = | B");
     assert_eq!(
-        eml_test_support::short(&lowered.files, &lowered.diagnostics),
+        eml_test_support::short(lowered.files(), &lowered.diagnostics),
         Vec::<String>::new()
     );
     assert_eq!(

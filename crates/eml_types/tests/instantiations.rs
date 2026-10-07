@@ -10,7 +10,7 @@ fn table(checked: &Checked, module: &str, name: &str) -> String {
     assert!(
         checked.diagnostics.is_empty(),
         "{}",
-        short_text(&checked.files, &checked.diagnostics)
+        short_text(checked.files(), &checked.diagnostics)
     );
     records(checked, module, name)
 }
@@ -35,7 +35,7 @@ fn records(checked: &Checked, module: &str, name: &str) -> String {
                 .iter()
                 .map(|arg| arg.display(&program.names).to_string())
                 .collect();
-            let at = checked.files.line_col(file, start);
+            let at = checked.files().line_col(file, start);
             (start, format!("{at} {decl} [{}]\n", args.join(", ")))
         })
         .collect();
@@ -164,7 +164,7 @@ fn every_reference_to_an_item_with_a_signature_is_recorded() {
     assert!(
         checked.diagnostics.is_empty(),
         "{}",
-        short_text(&checked.files, &checked.diagnostics)
+        short_text(checked.files(), &checked.diagnostics)
     );
     let program = &checked.program;
     let mut recorded = 0;
@@ -227,7 +227,7 @@ fn a_reference_used_as_a_value_is_recorded() {
 fn a_reference_without_a_signature_is_not_recorded() {
     let text = "f x = x\n\ng : Int -> Int\ng n = f n";
     let checked = check(text);
-    insta::assert_snapshot!(short_text(&checked.files, &checked.diagnostics), @"E1004 1:1 `f` has no type signature");
+    insta::assert_snapshot!(short_text(checked.files(), &checked.diagnostics), @"E1004 1:1 `f` has no type signature");
     insta::assert_snapshot!(records(&checked, "Main", "g"), @"");
 }
 
@@ -235,6 +235,6 @@ fn a_reference_without_a_signature_is_not_recorded() {
 fn a_comparison_reported_as_not_comparable_is_still_recorded() {
     let text = "poly : a -> a -> Bool\npoly x y = x == y";
     let checked = check(text);
-    insta::assert_snapshot!(short_text(&checked.files, &checked.diagnostics), @"E2006 2:14 values of type `a` cannot be compared with `==`");
+    insta::assert_snapshot!(short_text(checked.files(), &checked.diagnostics), @"E2006 2:14 values of type `a` cannot be compared with `==`");
     insta::assert_snapshot!(records(&checked, "Main", "poly"), @"2:14 == [a]");
 }

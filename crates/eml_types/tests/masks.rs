@@ -6,7 +6,7 @@ use eml_test_support::{Checked, check, short_text};
 /// 入口のモジュールの関数 `name` の本体の `mask` を、式の位置の順に `<行:列>#<矢印> [<エフェクト>, …]` の形で出す。
 fn masks(text: &str, name: &str) -> String {
     let checked: Checked = check(text);
-    assert_eq!(short_text(&checked.files, &checked.diagnostics), "");
+    assert_eq!(short_text(checked.files(), &checked.diagnostics), "");
     let program = &checked.program;
     let (id, _) = program
         .functions()
@@ -23,7 +23,7 @@ fn masks(text: &str, name: &str) -> String {
                 .iter()
                 .map(|&effect| program.names.effect(effect))
                 .collect();
-            let at = checked.files.line_col(file, start);
+            let at = checked.files().line_col(file, start);
             (
                 (start, arrow),
                 format!("{at}#{arrow} [{}]\n", names.join(", ")),
@@ -156,5 +156,5 @@ outer : (Unit -> <e> a) -> <Log, Log | e> a
 outer action = both action
 ";
     let checked = check(text);
-    insta::assert_snapshot!(short_text(&checked.files, &checked.diagnostics), @"E2008 10:16 `both` performs `Log` itself and also passes `Log` through its row variable to an outer handler");
+    insta::assert_snapshot!(short_text(checked.files(), &checked.diagnostics), @"E2008 10:16 `both` performs `Log` itself and also passes `Log` through its row variable to an outer handler");
 }

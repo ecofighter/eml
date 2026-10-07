@@ -34,7 +34,7 @@ fn main() -> ExitCode {
             let Some(session) = load(&file) else {
                 return ExitCode::from(2);
             };
-            let diagnostics = session.check();
+            let diagnostics = session.check().diagnostics;
             eprint!("{}", render(&diagnostics, session.files()));
             if has_errors(&diagnostics) {
                 ExitCode::from(1)

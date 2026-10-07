@@ -12,7 +12,7 @@ fn decided(text: &str, name: &str) -> Vec<(&'static str, Equality)> {
     assert!(
         checked.diagnostics.is_empty(),
         "{}",
-        eml_test_support::short_text(&checked.files, &checked.diagnostics)
+        eml_test_support::short_text(checked.files(), &checked.diagnostics)
     );
     let (id, _) = checked
         .program

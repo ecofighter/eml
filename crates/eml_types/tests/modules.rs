@@ -21,7 +21,7 @@ fn check_with_std_extras(prelude_extra: &str, fs_extra: &str, text: &str) -> Str
     let fs = format!("{}\n{fs_extra}", eml_hir::STD[1].1);
     let checked =
         eml_test_support::check_with_std(&[("Prelude.em", &prelude), ("Fs.em", &fs)], text);
-    let files = &checked.files;
+    let files = checked.files();
     let mut out = String::new();
     for d in &checked.diagnostics {
         writeln!(out, "{} {}", d.code, d.message).unwrap();
@@ -89,7 +89,7 @@ fn check_modules(entry: &str, modules: &[(&str, &str)]) -> String {
     let checked = eml_test_support::check_files(entry, modules);
     eml_test_support::with_diagnostics(
         eml_types::dump(&checked.program, &checked.typed),
-        &eml_test_support::full(&checked.files, &checked.diagnostics),
+        &eml_test_support::full(checked.files(), &checked.diagnostics),
     )
 }
 
@@ -151,7 +151,7 @@ fn notes_name_builtin_types_by_their_display_names() {
     // Prelude のほうは `Prelude.Bool` と `Prelude.Unit` になる
     let text = "data Bool = | Yes | No\n\ndata Unit = | U\n\nmain : Unit -> <IO> Prelude.Unit\nmain u = ()\n\ncondition : Bool -> Int\ncondition b = if b then 1 else 0\n\ncompare : Bool -> Prelude.Bool\ncompare b = b == b\n\nwithout_else : Prelude.Bool -> Prelude.Unit\nwithout_else b = if b then 1\n\nstatement : Int -> Int\nstatement n =\n  n\n  n\n\nunit_pattern : Int -> Int\nunit_pattern () = 1";
     let checked = eml_test_support::check(text);
-    insta::assert_snapshot!(eml_test_support::full(&checked.files, &checked.diagnostics), @r"
+    insta::assert_snapshot!(eml_test_support::full(checked.files(), &checked.diagnostics), @r"
     E2004 5:8 `main` must have type `Prelude.Unit -> <IO> Prelude.Unit`
       5:8 found `Main.Unit -> <IO> Prelude.Unit`
     E2001 9:18 mismatched types

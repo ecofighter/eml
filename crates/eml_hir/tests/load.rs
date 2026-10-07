@@ -465,7 +465,7 @@ fn a_user_module_hiding_a_std_module_suggests_the_canonical_import() {
     // help は、隠れた標準ライブラリのモジュールがその名前を定義しているときだけ付ける
     let entry = "import Fs\n\nf : String -> <IO> Fs.File\nf p = Fs.open p\n\ng : Int\ng = Fs.nope";
     let lowered = eml_test_support::lower_files(entry, &[("Fs.em", "")]);
-    insta::assert_snapshot!(full(&lowered.files, &lowered.diagnostics), @"
+    insta::assert_snapshot!(full(lowered.files(), &lowered.diagnostics), @"
     E1002 3:20 cannot find type `File` in module `Fs`
       3:20 not found in this module
       help: the standard `Fs` is hidden by your module `Fs`; `import Std.Fs as F` reaches it

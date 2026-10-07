@@ -15,7 +15,7 @@ fn steps(t: &str) -> Vec<String> {
         .unwrap();
     let body = program.body(id).unwrap();
     assert!(matches!(body.exprs[body.root].kind, ExprKind::Call { .. }));
-    let source = lowered.files.text(lowered.file);
+    let source = lowered.files().text(lowered.file());
     call_steps(program, body, body.root)
         .into_iter()
         .map(|step| match step {
@@ -148,7 +148,7 @@ fn continuation_steps(t: &str) -> Vec<String> {
         .find(|(_, function)| function.name == "t")
         .unwrap();
     let body = program.body(id).unwrap();
-    let source = lowered.files.text(lowered.file);
+    let source = lowered.files().text(lowered.file());
     let (call, _) = body
         .exprs
         .iter()

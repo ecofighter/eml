@@ -13,15 +13,18 @@ test = false
 doctest = false
 
 # 段階ごとに feature を分け、各 crate のテストが自分より下流の crate を組み立てずに済むようにする。破壊的な変更の途中で
-# 下流がまだ組み立たなくても、変更している段階のテストは流せる (docs/implementation/testing.md)。
+# 下流がまだ組み立たなくても、変更している段階のテストは流せる (docs/implementation/testing.md)。パイプラインは
+# `eml_cli` で組むので、`eml_cli` の feature も同じ段階まで有効にする。段階の crate にも直接依存するのは、公開の関数が
+# それらの型 (`eml_hir::Program`、`Pass`、`RuntimeError` など) を名前で使うためである。
 [features]
 default = ["run"]
-hir = ["dep:eml_hir"]
-types = ["hir", "dep:eml_types"]
-core = ["types", "dep:eml_core_ir"]
-run = ["core", "dep:eml_interp", "dep:eml_runtime"]
+hir = ["dep:eml_hir", "dep:eml_cli"]
+types = ["hir", "dep:eml_types", "eml_cli/types"]
+core = ["types", "dep:eml_core_ir", "eml_cli/core"]
+run = ["core", "dep:eml_interp", "dep:eml_runtime", "eml_cli/run"]
 
 [dependencies]
+eml_cli = { workspace = true, optional = true }
 eml_core_ir = { workspace = true, optional = true }
 eml_diagnostics.workspace = true
 eml_hir = { workspace = true, optional = true }

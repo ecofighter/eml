@@ -484,7 +484,7 @@ fn operations_of_a_duplicate_effect_do_not_cascade() {
     let text = "effect E where\n  x : Unit -> Int\neffect E where\n  y : Unit -> Int\n\nf : Unit -> Int\nf () = y ()";
     let checked = eml_test_support::check(text);
     assert_eq!(
-        eml_test_support::short(&checked.files, &checked.diagnostics),
+        eml_test_support::short(checked.files(), &checked.diagnostics),
         ["E1003 3:8 `E` is defined more than once"]
     );
 }

@@ -136,10 +136,10 @@ fn a_user_bool_hides_the_prelude_bool() {
     let text = "data Bool = | False | True\nf : Int -> Int\nf x = if True then x else 0";
     let checked = eml_test_support::check(text);
     assert_eq!(
-        eml_test_support::short(&checked.files, &checked.diagnostics),
+        eml_test_support::short(checked.files(), &checked.diagnostics),
         ["E2001 3:10 mismatched types"]
     );
-    let full = eml_test_support::full(&checked.files, &checked.diagnostics);
+    let full = eml_test_support::full(checked.files(), &checked.diagnostics);
     assert!(
         full.contains("expected `Prelude.Bool`, found `Main.Bool`"),
         "{full}"
@@ -151,7 +151,7 @@ fn a_user_int_hides_the_prelude_int() {
     // 整数のリテラルは lang item の `Int` の型を持つ。ユーザーの `Int` は名前だけを隠す
     let text = "data Int = | I\nf : Int\nf = 1";
     let checked = eml_test_support::check(text);
-    let full = eml_test_support::full(&checked.files, &checked.diagnostics);
+    let full = eml_test_support::full(checked.files(), &checked.diagnostics);
     assert!(
         full.contains("expected `Main.Int`, found `Prelude.Int`"),
         "{full}"

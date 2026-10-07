@@ -206,5 +206,5 @@ main () =
   println (show_int n)
 ";
     let checked = check(text);
-    assert_eq!(short_text(&checked.files, &checked.diagnostics), "");
+    assert_eq!(short_text(checked.files(), &checked.diagnostics), "");
 }
