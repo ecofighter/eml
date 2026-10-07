@@ -1014,7 +1014,7 @@ fn a_continuation_called_inside_an_inner_handle_is_resumed() {
         "effect Log where\n  log : Int -> Unit\n\n",
         "    handle ask () with\n      | ask () k ->\n          handle k 1 with\n            | log _ j -> j ()",
     );
-    assert!(shown.contains("k"), "{shown}");
+    assert!(shown.contains("resume k"), "{shown}");
     assert!(!shown.contains("cont$"), "{shown}");
 }
 
@@ -1101,4 +1101,53 @@ fn a_dropped_continuation_is_not_wrapped() {
     );
     assert!(!shown.contains("cont$"), "{shown}");
     assert!(!shown.contains("resume "), "{shown}");
+}
+
+/// handle の結果が関数のとき、`k v x` は `k v` の `resume` と、その結果への `apply` に分かれる。
+#[test]
+fn a_continuation_applied_to_extra_arguments_is_resumed_then_applied() {
+    let text = format!(
+        "{ASK}main : Unit -> <IO> Unit\nmain () =\n  let h = handle ask () with\n    | ask () k ->\n        let r = k 1 2\n        fn y -> r + y\n    | return x -> fn y -> x + y\n  println (show_int (h 5))"
+    );
+    let shown = core_text(&text, Pass::Translate);
+    assert!(shown.contains("let t3^ = resume k1(1, ())"), "{shown}");
+    assert!(shown.contains("let t4 = apply t3(2)"), "{shown}");
+    assert!(!shown.contains("cont$"), "{shown}");
+}
+
+/// 値として包んだ `k` を、型検査が `mask` を記録した位置で呼ぶと、`apply` に `mask` が付く。
+#[test]
+fn a_wrapped_continuation_called_where_a_mask_is_recorded_carries_the_mask() {
+    let text = "\
+effect Ask where
+  ask : Unit -> Int
+
+effect Log where
+  log : String -> Unit
+
+f : (Unit -> <Ask | e> Int) -> <e> Int
+f action =
+  handle action () with
+    | ask () k ->
+        let g = k
+        handle g 1 with
+          | log m k2 ->
+              k2 ()
+
+act : Unit -> <Ask, Log> Int
+act () =
+  let n = ask ()
+  log \"after\"
+  n + 1
+
+main : Unit -> <IO> Unit
+main () =
+  let r = handle f act with
+            | log m k ->
+                println (\"outer \" ++ m)
+                k ()
+  println (show_int r)
+";
+    let shown = core_text(text, Pass::Translate);
+    assert!(shown.contains("mask[Log] apply"), "{shown}");
 }

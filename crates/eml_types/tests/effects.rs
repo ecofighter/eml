@@ -471,3 +471,23 @@ fn operations_of_a_duplicate_effect_do_not_cascade() {
         ["E1003 3:8 `E` is defined more than once"]
     );
 }
+
+/// 線形性だけが食い違う E2001 の note は、どちら側が `Lin` でも成り立つ言い方にする (docs/implementation/diagnostics.md)。
+#[test]
+fn an_arrow_linearity_note_does_not_say_which_side_is_linear() {
+    let text = "data Box =\n  | Box (Int -> Int)\n  | Done\n\neffect Ask where\n  ask : Unit -> Int\n\npick : Bool -> Box -> Int\npick c b =\n  match b with\n    | Box g ->\n        handle ask () with\n          | ask () k -> (if c then k else g) 1\n          | return x -> x\n    | Done -> 0";
+    insta::assert_snapshot!(check_text(text), @"
+    ask : Unit -> <Ask> Int
+    pick : Bool -> Box -> Int
+      c#0 : Bool
+      b#1 : Box
+      g#2 : Int -> Int
+      k#3 : Int -> Int
+      x#4 : Int
+    ---
+    E2001 13:43 mismatched types
+      13:43 expected `Int -> Int`, found `Int -> Int`
+      13:36 the `then` branch has this type
+      note: these function types differ in how many times the function may be called: one can be called only once, the other any number of times
+    ");
+}

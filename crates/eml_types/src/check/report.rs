@@ -412,7 +412,7 @@ impl BodyCheck<'_, '_> {
         };
         if arrow_linearity {
             diagnostic = diagnostic.with_note(
-                "this function can be called only once (it is a `once` continuation or captures a linear value), but this position needs a function that can be called any number of times",
+                "these function types differ in how many times the function may be called: one can be called only once, the other any number of times",
             );
         }
         self.diagnostics.push(diagnostic);

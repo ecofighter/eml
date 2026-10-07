@@ -12,5 +12,5 @@ input_file: tests/ui/check-fail/types/linear_function_in_unr_field.em
     │                       │  
     │                       ╰── expected `Int -> Box`, found `Int -> Box`
     │ 
-    │ Note: this function can be called only once (it is a `once` continuation or captures a linear value), but this position needs a function that can be called any number of times
+    │ Note: these function types differ in how many times the function may be called: one can be called only once, the other any number of times
 ────╯
