@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use eml_diagnostics::{Diagnostic, FileId, Label, TextRange};
 use eml_hir::{
     Body, Closure, ConstructorId, EffectId, ExprId, ExprKind, Function, Literal, LocalId, MatchArm,
-    OperationId, PatId, PatKind, Program, Res, Stmt, TypeRefKind,
+    OperationId, PatId, PatKind, Program, Res, RowRef, Stmt, TypeRefId, TypeRefKind,
 };
 use la_arena::ArenaMap;
 
@@ -110,17 +110,39 @@ impl BodyCheck<'_, '_> {
         let Some(signature) = &self.function.signature else {
             return self.function.name_range;
         };
+        match self.body_arrow() {
+            Some(id) if self.body.params.len() > 1 => signature.types[id].range,
+            _ => signature.range,
+        }
+    }
+
+    /// シグネチャに書いた本体の row が、row 変数の手前に `effect` を並べているか。handle の本体の今の row には
+    /// handle が足したラベルも入るので、今の row ではなくシグネチャを読む (docs/implementation/diagnostics.md の E2008)。
+    pub(super) fn signature_row_lists(&self, effect: EffectId) -> bool {
+        let (Some(signature), Some(id)) = (&self.function.signature, self.body_arrow()) else {
+            return false;
+        };
+        match &signature.types[id].kind {
+            TypeRefKind::Fn {
+                row: RowRef::Open { effects, .. },
+                ..
+            } => effects.iter().any(|listed| listed.effect == effect),
+            _ => false,
+        }
+    }
+
+    /// 本体の row を持つシグネチャの矢印。引数がないときと、引数の数だけ矢印をたどれないときは `None` である。
+    fn body_arrow(&self) -> Option<TypeRefId> {
+        let signature = self.function.signature.as_ref()?;
         let mut id = signature.ty;
         for _ in 1..self.body.params.len() {
             match &signature.types[id].kind {
                 TypeRefKind::Fn { ret, .. } => id = *ret,
-                _ => return signature.range,
+                _ => return None,
             }
         }
-        match &signature.types[id].kind {
-            TypeRefKind::Fn { .. } if self.body.params.len() > 1 => signature.types[id].range,
-            _ => signature.range,
-        }
+        let is_arrow = matches!(signature.types[id].kind, TypeRefKind::Fn { .. });
+        (is_arrow && !self.body.params.is_empty()).then_some(id)
     }
 
     /// 等式 `f x y = e` は `fn x -> fn y -> e` と同じなので、引数を1つ消費するごとにシグネチャの矢印を1つたどる。

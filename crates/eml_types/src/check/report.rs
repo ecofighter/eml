@@ -203,6 +203,11 @@ impl BodyCheck<'_, '_> {
             // (docs/spec/effects.md の「健全性」)
             Err(UnifyError::MaskConflict(effect)) => {
                 if report {
+                    // 余った `L` のうち、いちばん後ろのものがシグネチャの row の `L` になるのは、シグネチャがそれを
+                    // 並べたときだけである。handle は今の row の先頭にラベルを足すので、handle の `L` だけが余ることもある
+                    // (docs/implementation/diagnostics.md の E2008)
+                    let from_signature = matches!(self.ambient_source, AmbientSource::Signature)
+                        && self.signature_row_lists(effect);
                     let effect = self.program.names.effect(effect).to_string();
                     let mut diagnostic = Diagnostic::error(
                         codes::MASK_CONFLICT,
@@ -218,7 +223,7 @@ impl BodyCheck<'_, '_> {
                     .with_note(format!(
                         "the call's own `{effect}` goes to the innermost `{effect}` handler, but the `{effect}` of its row variable must skip it"
                     ));
-                    if let AmbientSource::Signature = self.ambient_source {
+                    if from_signature {
                         diagnostic = diagnostic.with_secondary(Label::new(
                             self.file(),
                             self.body_arrow_range(),
