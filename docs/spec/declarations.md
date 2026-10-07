@@ -145,5 +145,6 @@ dir </> name = join_path dir name
 - シグネチャ、`data`、`type`、`effect`、fixity に `pub` を付けると公開される。付けないものはモジュールの中だけで見える
 - 等式と import には `pub` を付けられず、付けると構文エラー (E0011) になる。等式で定義する関数は、シグネチャに `pub` を付けて公開する
 - `pub data` は、型とコンストラクタを公開する。コンストラクタを隠した抽象型は、将来の課題とする ([ロードマップ](../future/roadmap.md))
+- `pub` を付けた item の型に、同じモジュールの `pub` でない型かエフェクトが現れたら E1032 にする ([モジュールと名前解決](modules.md) の「公開の範囲」)
 
-`Prelude` は、ユーザーに見せる名前を `pub` で選ぶ。`pub` でない `Prelude` の item (`negate` など) はユーザーには見えず、処理系だけが lang item として引く。ユーザーのモジュールに書いた `pub` は、import する側がまだないので効果がない。モジュールと import は M2 で実装する。モジュールの規則は [モジュールと名前解決](modules.md) にある。
+`Prelude` は、ユーザーに見せる名前を `pub` で選ぶ。`pub` でない `Prelude` の item (`negate` など) はユーザーには見えず、処理系だけが lang item として引く。モジュールの規則は [モジュールと名前解決](modules.md) にある。

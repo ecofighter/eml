@@ -25,7 +25,6 @@ eml の処理系をどの crate に分け、各段階がどんな規律に従う
 - モジュールごとに Core IR を作ってリンクすること。インタプリタでは得るものがない
 - HIR の位置を今 source map に移すこと。利点が出るのはクエリ化した後である ([ロードマップ](../future/roadmap.md))
 - プログラム全体の item を1つのアリーナに置くこと。モジュールの変換が共有のアリーナを書き換えるので、段階が純粋な関数でなくなる
-- 型検査の出力の `Type` から名前をなくすこと。M2 で同じ名前の別の型の表示を決めるときに扱う ([ロードマップ](../future/roadmap.md) の「M2 モジュール」)。今は `DeclType::ty` が、書き出した `Type` を持つ
 - どの item も Core IR の関数にして、`simplify` の規則で命令に戻し、使わない関数を取り除くパスで消すこと。変換が満ちた呼び出しをすでに命令にしているので、飽和の場合分けを `saturate` にまとめれば足りる
 - `Bool` のタグをインタプリタまで運ぶこと。タグは Prelude の宣言の順で決まるので、定数 `FALSE` と `TRUE` をテストで照らし合わせれば足りる
 
@@ -65,7 +64,7 @@ eml_interp       Core IR を CEK 機械で実行する
 eml_runtime      オブジェクトのモデル、ヒープ、参照カウント、debug_heap の検査、OutputSink
 eml_core_ir      型付き HIR → Core IR。dup/decref の挿入パス
 eml_types        Kind・型・row の推論、線形性・多重度の検査、match の網羅性検査
-eml_hir          CST → HIR の変換、名前解決、脱糖
+eml_hir          モジュールの読み込み、CST → HIR の変換、名前解決、脱糖
 eml_syntax       SyntaxKind、lexer、レイアウト段、イベント方式のパーサ、rowan、型付き AST ラッパ
 eml_diagnostics  Diagnostic 型、FileId と SourceFiles、行と列、ariadne による表示
 ```
@@ -86,7 +85,7 @@ eml_diagnostics  Diagnostic 型、FileId と SourceFiles、行と列、ariadne �
 | crate | 関数 |
 |---|---|
 | `eml_syntax` | `parse(FileId, &str) -> (Parse, Vec<Diagnostic>)` |
-| `eml_hir` | `item_tree(FileId, &ast::SourceFile) -> (ItemTree, Vec<Diagnostic>)`、`def_map(&[ItemTree]) -> (DefMap, Vec<Diagnostic>)`、`lower(&DefMap, &[ItemTree]) -> (Program, Vec<Diagnostic>)` の順に呼ぶ。`ItemTree` の並びは、0番目が Prelude、1番目が入口のファイルである |
+| `eml_hir` | `load(&str, &str, &dyn ModuleSource) -> (Loaded, Vec<Diagnostic>)`、`def_map(&[LoadedModule]) -> (DefMap, Vec<Diagnostic>)`、`lower(&DefMap, &[LoadedModule]) -> (Program, Vec<Diagnostic>)` の順に呼ぶ。`load` は入口の表示のパスと本文を受け取り、ファイルごとに `item_tree(FileId, &ast::SourceFile) -> (ItemTree, Vec<Diagnostic>)` を呼ぶ。モジュールの並びは、0番目が Prelude、1番目が入口のモジュール、2番目からが import で見つけた順のモジュールである |
 | `eml_types` | `check(&Program) -> (TypedProgram, Vec<Diagnostic>)` |
 | `eml_core_ir` | `lower(&hir::Program, &TypedProgram, FunctionId) -> Program`。途中のパスで止める `lower_until` もある。入口の関数は呼ぶ側が渡す |
 | `eml_interp` | `run(Arc<Program>, &RunConfig, &OutputSink) -> Result<(), RuntimeError>` |
@@ -130,9 +129,10 @@ HIR への変換では、名前解決に加えて、名前の重複と未定義�
 
 ## `eml_hir` の内部
 
-- トップレベルの名前の解決は3つの段階に分ける。`item_tree` はファイルごとに宣言を集め、シグネチャと等式を名前で1つの関数にまとめ、名前を解決しなくても判定できる誤りを出す。`def_map` は全モジュールの `ItemTree` から、item の ID、モジュールごとの名前の表、定義に付く fixity、lang item を作る。`lower` は `DefMap` で名前を引き、item を `DefMap` と同じ局所の番号の順にアリーナへ置く
+- 読み込みの段 (`load.rs`) は、入口の本文を parse して `ItemTree` を作り、import を宣言の順に幅優先でたどって読む。ファイルの読み方は `ModuleSource` の trait で受け取り、IO は実装 (`eml_cli` の `FsProvider`、`eml_test_support` の `MemorySource`) だけが持つ。同じ読み方を渡せば同じ結果を返すので、段階は純粋な関数のままである。依存先の表示のパスは、入口の表示のパスのディレクトリに根からの相対パスをつないだものにする。E1026 と E1030 はこの段で報告する。`load` は Prelude の本文に `PRELUDE_SOURCE` を使う。`load_with_prelude` は Prelude の本文を引数で受け取る形で、Prelude に定義を足したプログラムを変換するテストが、`eml_test_support::lower_with_prelude` を通して使う
+- トップレベルの名前の解決は3つの段階に分ける。`item_tree` はファイルごとに宣言を集め、シグネチャと等式を名前で1つの関数にまとめ、名前を解決しなくても判定できる誤りを出す。`def_map` は読み込んだモジュールの列から、item の ID、モジュールごとの名前の表、import のスコープ (修飾子からモジュールの列への表と、修飾なしにした名前の表)、定義に付く fixity、lang item、表示名の表 `DisplayNames` を作り、import の循環 (E1027) と import の並びを検査する。`lower` は `DefMap` で名前を引き、item を `DefMap` と同じ局所の番号の順にアリーナへ置く
 - 名前を変換より先にすべて集めるので、宣言の順によらず、`data` どうしの相互再帰や、後ろで宣言したエフェクトへの参照ができる
-- HIR の出力は `Program` で、Prelude と入口のモジュールを持つ。item の ID はモジュールと局所の番号の組で、プログラム全体で一意である。各モジュールは item のアリーナと関数の本体を分けて持つ。本体を書き換えても item が変わらないようにするため。本体は関数ごとの `Body` で、後でクエリ化したときに関数単位で再計算できるようにする (rust-analyzer と同じ分け方)。型の注釈も、シグネチャのものと本体のものを分けて置き、本体を書き換えてもシグネチャが変わらないようにする
+- HIR の出力は `Program` で、読み込みの段が読んだモジュールの列と、表示名の表を持つ。モジュールの番号は、Prelude が 0、入口が 1、依存先は見つけた順に 2 以降で、順が決まるので診断の並びが安定する。item の ID はモジュールと局所の番号の組で、プログラム全体で一意である。各モジュールは item のアリーナと関数の本体を分けて持つ。本体を書き換えても item が変わらないようにするため。本体は関数ごとの `Body` で、後でクエリ化したときに関数単位で再計算できるようにする (rust-analyzer と同じ分け方)。型の注釈も、シグネチャのものと本体のものを分けて置き、本体を書き換えてもシグネチャが変わらないようにする
 - `DefMap` は、モジュールごとに値と型の2つの名前空間を持ち、名前ごとに定義をソースの順にすべて持つ。重複の扱いは [modules.md](../spec/modules.md) の「名前空間」、引く順は「名前の解決」が定める。重複した `data` のコンストラクタと `effect` の操作は使えない印を持ち、それらへの参照は診断を重ねずに `Missing` にする
 - 組み込みは eml のソースで書いた Prelude (`crates/eml_hir/src/prelude.em`) で、`SourceFiles` に登録した普通のファイルとして、入口のファイルとは別のモジュールに変換する。Prelude の等式のないシグネチャは、本体のない intrinsic の関数で、E1005 にしない。処理系が役割で引く item (`negate`、`==`、`&&`、`Bool` のコンストラクタ、`IO` など) は lang item で、`pub` によらず Prelude から名前で引く
 - シグネチャか等式のない関数も `Function` として残し、呼び出し側で名前の誤りを連鎖させない。引数の個数の違う等式 (E1020) は `match` の枝に入れず、本体に誤りの印を立てる
@@ -156,6 +156,7 @@ HIR への変換では、名前解決に加えて、名前の重複と未定義�
 - 由来の位置は、ファイルと範囲の組 (`Span`) で持つ。具体化を通った由来は、呼んだ関数のある別のモジュール (Prelude など) の中を指しうるためである。報告は由来のファイルを使い、ファイル、範囲の順に並べる
 - row の末尾には `Error` がある。未定義のエフェクトか解決できない row 変数の跡で、相手の側にしかないエフェクトを受け入れるが、自分の側の既知のエフェクトは受け入れない。綴り誤りの E1002 と無関係なエフェクトの誤りを隠さないためである。ラムダやシグネチャの矢印が壊れているときも、末尾が `Error` の row で本体を検査し、エフェクトの誤りを連鎖させない
 - 型の走査は `Type`、`TyShape`、`ShapeTy` の `for_each_child` だけがたどり、そこでは `..` を使わず欄をすべて名前で受ける。欄を足したときに、occurs の検査などから漏れないようにするためである。内部の型の形は `TyShape`、矢印の線形性は `ArrowLin` と呼び、Kind と取り違えないようにする
+- `Type::Con` と `EffectLabel` は ID だけを持ち、名前を持たない。表示は `ty.display(&names)` で、`eml_hir` の `DisplayNames` を引く。同じ名前の型やエフェクトを、名前を定義するモジュールが2つ以上あるときだけモジュール名で修飾して表示するためである。表がモジュールの文脈によらないので、HIR の診断、型検査の診断、`dump`、`pretty` が同じ表を引ける
 
 ## `eml_core_ir`、`eml_runtime`、`eml_interp` の内部
 
@@ -165,7 +166,7 @@ HIR への変換では、名前解決に加えて、名前の重複と未定義�
 - 既知の呼ばれる式への呼び出しは、種類 (`Callee`) ごとに、引数の数、足りないときの包む関数、ちょうどのときの命令だけを決める。足りない・ちょうど・余るの場合分けは `saturate` の1か所で行う
 - 変数が boxed かどうかは、型から `boxed` の1か所で決める。intrinsic の名前と実装の対応を置くのは `INTRINSICS` だけで、`eml_core_ir` の単体テストが、Prelude の intrinsic のすべてが表に行を持ち、表の行がすべて Prelude にあることを確かめる。本体のある Prelude の関数は表に持たず、普通の関数として変換する
 - 変換は、渡された入口の関数を `()` で呼ぶ関数 `entry$<名前>` を足す。入口の関数を引数で受け取るのは、REPL で `main` の代わりにその回の式から作った関数を渡せるようにするためである
-- 持ち上げた関数の名前は、ラムダが `外側の名前$lambdaN`、handle の本体と節が `外側の名前$handleN` (と `$操作名`、`$return`)、値として使う intrinsic、コンストラクタ、操作を包む関数が `builtin$`、`con$`、`op$` である。Core IR のエフェクトの番号は `eml_hir::Program::effects` の順である
+- 持ち上げた関数の名前は、ラムダが `外側の名前$lambdaN`、handle の本体と節が `外側の名前$handleN` (と `$操作名`、`$return`)、値として使う intrinsic、コンストラクタ、操作を包む関数が `builtin$`、`con$`、`op$` である。入口以外のモジュールの関数、`con$` と `op$` の後ろの名前、エフェクトの表の名前には、`モジュール名.` を付ける (`Report.Csv.parse`、`con$Report.Csv.Row`、`op$Prelude.open`)。ラムダと handle の関数は外側の名前を前に付けるので、同じく修飾される。`builtin$` は Prelude の intrinsic にしか作らないので付けない ([Core IR とインタプリタ](../spec/core-ir.md))。Core IR のエフェクトの番号は `eml_hir::Program::effects` の順である
 - Core IR の関数は ANF の木をアリーナに置き、`CExprId` で参照する。継続のフレームが再開する位置を ID で持てるようにするため。アリーナはパスのたびに `compact` が作り直す。式、変数、join point の番号の払い出しは `builder.rs` の1か所に置く
 - 子の式をたどる処理 (生存解析、Perceus、verifier、`simplify`、`pretty`、インタプリタ) は、visitor (`for_each_child` など) を通すか、`..` を使わずに欄をすべて名前で受ける `match` で式を分解する。子を持つ欄を IR に足したときに、たどる処理のすべてがコンパイルエラーになるようにするため
 - 生存解析は、`Let` の連鎖と join point の本体の連なりが長くなりうるので、再帰ではなく作業の列でたどる。`jump` が届かない join point でも `captures` を `Join` まで生かしておく。verifier が `captures` を `Join` の位置で範囲にあることを求めるためである
@@ -174,7 +175,7 @@ HIR への変換では、名前解決に加えて、名前の重複と未定義�
 
 ## ソースファイルと位置
 
-- `FileId` と `SourceFiles` (`FileId` → パスとテキスト) は `eml_diagnostics` に置く。`SourceFiles` には Prelude と入口のファイルが入る
+- `FileId` と `SourceFiles` (`FileId` → パスとテキスト) は `eml_diagnostics` に置く。`SourceFiles` には読み込みの段が読んだすべてのファイルが入る。`FileId` はモジュールの番号と同じ順である
 - `TextRange` は `text-size` crate を直接使う (`rowan` が再公開しているものと同じ型)。`eml_diagnostics` は `rowan` に依存しない
 - `SourceFiles::add` は、テキストの先頭の BOM を取り除いてから保存する ([字句](../spec/lexical.md))。lexer、レイアウト段、表示は BOM を扱わない
 - 将来クエリ化するときは、`SourceFiles` を salsa の入力に置き換え、必要なら別の crate に切り出す
@@ -184,13 +185,13 @@ HIR への変換では、名前解決に加えて、名前の重複と未定義�
 - 引数の解析は `clap` (derive) を使う
 - `eml check <file>` は、診断を stderr に表示する。`eml run <file>` は、診断 (警告を含む) を先に stderr に表示し、エラーがなければ実行する。警告がプログラムの出力の後に出ないようにするため
 - `eml run --debug-heap` は、RC のリーク検出と解放済みアクセスの検出を有効にする
-- 終了コードは、0 = 成功、1 = 診断のエラーあり、または実行時エラー、2 = 使い方の誤り (引数の誤り、ファイルが読めない) とする。2 は、clap が引数の誤りで返す値に合わせた
+- 終了コードは、0 = 成功、1 = 診断のエラーあり、または実行時エラー、2 = 使い方の誤り (引数の誤り、入口のファイルが読めない) とする。2 は、clap が引数の誤りで返す値に合わせた。import したモジュールが見つからないことは診断 (E1026) なので 1 である
 
 `eml_cli` の lib は次の API を公開する。UI テストはこれをプロセス内で呼ぶ。
 
-- `Session` は1回の検査や実行で読むソースの集まりで、`new` が Prelude を登録する。`add_file` で入口のファイルを登録する。import をたどるローダは M2 で足す。実行を始める `main` は入口のモジュールからだけ探し (`hir::Program::main`)、Prelude には置かない
-- `Session::check(file_id) -> Vec<Diagnostic>`。`check` と `compile` は、診断を `sort_diagnostics` で並べて返す。各段階は診断の順を約束しない
-- `Session::compile(file_id) -> Compiled`。`Compiled` は、検査で出た診断 (警告を含む) と、エラーがなければ `Program` を持つ。`main` がないこと (E2003) は `compile` だけが検査する ([型と Kind](../spec/types.md) の「推論」)
+- `Session::load(entry_path, entry_text, &dyn ModuleSource) -> Session` は、入口の表示のパスと本文を受け取り、読み込みの段で Prelude と import したモジュールを読む。`Session` は1回の検査や実行で読むソースの集まりである。入口のファイルは `main.rs` が読み、読めなければ終了コード 2 にする。ファイルシステムから読む `ModuleSource` は `FsProvider` で、パスの各段の名前がディレクトリの一覧と大文字小文字まで一致することを確かめる。macOS のように大文字小文字を区別しないファイルシステムで、`import Report.Csv` が `report/Csv.em` に当たらないようにするためである。実行を始める `main` は入口のモジュールからだけ探し (`hir::Program::main`)、Prelude には置かない
+- `Session::check() -> Vec<Diagnostic>`。`check` と `compile` は、診断を `sort_diagnostics` で並べて返す。各段階は診断の順を約束しない
+- `Session::compile() -> Compiled`。`Compiled` は、検査で出た診断 (警告を含む) と、エラーがなければ `Program` を持つ。`main` がないこと (E2003) は `compile` だけが検査する ([型と Kind](../spec/types.md) の「推論」)
 - `execute(Arc<Program>, &RunConfig, stdout: OutputSink) -> Result<(), RuntimeError>`
 
 検査と実行を別の関数に分けるのは、呼び出し側が実行の前に診断を表示できるようにするためである。CLI と UI テストは、`compile` の診断を表示してから `execute` を呼ぶ。

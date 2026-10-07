@@ -65,8 +65,8 @@ E0xxx は `eml_syntax::codes` (E0004 だけは `eml_diagnostics`)、E1xxx は `e
 | E0011 | `SYNTAX_ERROR` | その他の構文エラー |
 | E0012 | `NEEDS_PARENS` | 括弧の要る形を括弧なしで書いた。`if`、`match`、`handle`、`fn`、`let ... in` を引数や演算の項の位置に書いた場合と、`resume`、`drop` を引数の位置に書いた場合である ([文法](grammar.md) の「文法上の補足」) |
 | E0013 | `NESTING_TOO_DEEP` | 式・パターン・型の入れ子が深すぎる (256 を超えた。[文法](grammar.md)) |
-| E1001 | `UNDEFINED_NAME` | 未定義の値の名前 |
-| E1002 | `UNDEFINED_TYPE` | 未定義の型の名前、未定義のエフェクトの名前、本体の注釈に書いたシグネチャにない型変数と row 変数 |
+| E1001 | `UNDEFINED_NAME` | 未定義の値の名前。修飾した名前と import の並びでは、メッセージにモジュールの名前を書く (「in module `Report.Csv`」) |
+| E1002 | `UNDEFINED_TYPE` | 未定義の型の名前、未定義のエフェクトの名前、本体の注釈に書いたシグネチャにない型変数と row 変数。修飾した名前と import の並びでは、E1001 と同じくメッセージにモジュールの名前を書く |
 | E1003 | `DUPLICATE_DEFINITION` | 同じ名前空間でのトップレベルの定義の重複 |
 | E1004 | `MISSING_SIGNATURE` | シグネチャのない等式。シグネチャの追加を提案する help を付ける |
 | E1005 | `MISSING_EQUATION` | 等式のないシグネチャ |
@@ -90,6 +90,13 @@ E0xxx は `eml_syntax::codes` (E0004 だけは `eml_diagnostics`)、E1xxx は `e
 | E1023 | `INVALID_SECTION` | 優先順位の合わないセクション (`(* a + b)` や `(+ a + b)`)。セクション全体を指し、被演算子を括弧で囲むよう help で伝える |
 | E1024 | `USE_AT_END_OF_BLOCK` | ブロックの最後の文が `use` である (包む残りがない)。`use` の文を指す |
 | E1025 | `MISSING_CONSTRUCTORS` | ユーザーのモジュールの `data` にコンストラクタがない (`=` のない `data`)。`data` の名前を指す。`=` のない `data` は `Prelude` の intrinsic の型だけに使う |
+| E1026 | `MODULE_NOT_FOUND` | import したモジュールのファイルがない、または読めない (UTF-8 でない、IO の誤り)。読めない理由をメッセージに書く。import のモジュールのパスを指す |
+| E1027 | `IMPORT_CYCLE` | import の循環。循環を閉じる import を指し、循環の経路を note で示す |
+| E1028 | `AMBIGUOUS_NAME` | 修飾しない名前、または合流した修飾子の名前が、別々の定義を指して曖昧である。使った位置を primary にし、候補の import を secondary にする |
+| E1029 | `PRIVATE_NAME` | ユーザーのモジュールの `pub` でない名前を、修飾か import の並びで使った。名前を primary にし、定義を secondary にする |
+| E1030 | `RESERVED_MODULE` | 修飾子が `Prelude` になる import、`import Main`、入口のファイルを指す import。import を指す |
+| E1031 | `UNKNOWN_QUALIFIER` | 修飾子がどの import にもない。2つ以上のセグメントの修飾子 (`Report.Csv.parse`) を含む。修飾子の全体を指し、そのモジュールを import していれば、使える修飾子 (`Csv.parse`) を help で示す |
+| E1032 | `PRIVATE_IN_PUBLIC` | `pub` の item の型に、同じモジュールの `pub` でない型かエフェクトが現れた ([モジュールと名前解決](modules.md) の「公開の範囲」)。非公開の型かエフェクトの名前を primary にし、その定義を secondary にして、`pub` を付けるよう help で伝える |
 | E2001 | `TYPE_MISMATCH` | 型の不一致。メッセージとラベルは制約の由来ごとに変える ([型と Kind](types.md))。呼び出しの row のエフェクトの型引数が今の row と一致しないときも E2001 にし、呼び出しを primary にする |
 | E2002 | `EFFECT_NOT_IN_ROW` | シグネチャの row に含まれないエフェクトを起こした。シグネチャの矢印を指し、row を足す help を付ける。ラムダの本体の場合は、エフェクトを起こした場所を primary、ラムダの期待する型の由来 (シグネチャの引数の型や型の明示) を secondary にする |
 | E2003 | `MISSING_MAIN` | `main` がない。`eml run` のときだけ出す |
@@ -109,7 +116,7 @@ E0xxx は `eml_syntax::codes` (E0004 だけは `eml_diagnostics`)、E1xxx は `e
 | E4004 | `UNREACHABLE_ARM` | 到達しない枝 (Warning) |
 | E4005 | `UNREACHABLE_EQUATION` | 到達しない等式 (Warning) |
 
-E0004 (`NOT_YET_SUPPORTED`) は、まだ実装していない構文に使う。M2、M3、M9 の構文と、字句として予約した浮動小数と文字のリテラル (M4) である。どの段階でも「後で実装する」という同じ意味なので、番号を分けない。HIR 以降の段階は、対応していない構文を、診断を出さずに無視することはしない。見つけた段階で E0004 を出して回復する。
+E0004 (`NOT_YET_SUPPORTED`) は、まだ実装していない構文に使う。M3、M9 の構文と、字句として予約した浮動小数と文字のリテラル (M4) である。どの段階でも「後で実装する」という同じ意味なので、番号を分けない。HIR 以降の段階は、対応していない構文を、診断を出さずに無視することはしない。見つけた段階で E0004 を出して回復する。
 
 ## 番号を割り当てていない診断
 
@@ -118,7 +125,6 @@ E0004 (`NOT_YET_SUPPORTED`) は、まだ実装していない構文に使う。M
 | 範囲 | 例 |
 |---|---|
 | E0xxx | 閉じていない補間 |
-| E1xxx | 修飾なしの名前の衝突 |
 | E3xxx | 射影で `Lin` な残りを捨てる、更新で `Lin` な古い値を捨てる |
 
 シグネチャに関する E1xxx の診断には、シグネチャの追加を提案する help を付ける ([宣言](declarations.md))。
