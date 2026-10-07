@@ -9,6 +9,7 @@ use eml_syntax::ast::{self, OpSeqElement};
 use super::expr::BodyLowering;
 use super::ops::NEGATE_PRECEDENCE;
 use crate::codes;
+use crate::def_map::NameRef;
 use crate::hir::*;
 use crate::item_tree::{Assoc, Fixity};
 
@@ -66,6 +67,10 @@ impl BodyLowering<'_> {
         hole: Hole,
         range: TextRange,
     ) -> ExprId {
+        if self.undecided_operator(op.text(), op.text_range()) {
+            self.lower_discarded(operand);
+            return self.alloc(ExprKind::Missing, range);
+        }
         if let Some(ast::Expr::OpSeq(seq)) = &operand
             && let Some(inner) = self.looser_operator(op.text(), seq, hole)
         {
@@ -154,6 +159,13 @@ impl BodyLowering<'_> {
     /// 右が空いたセクションの先頭の `-` は、優先順位 6 の左結合の演算子として数える (`(- 2 *)` は E1023、`(- 2 +)` は可)。
     /// 左が空いたセクションの先頭の `-` は、`section` が E1006 として検査する。
     fn looser_operator(&self, op: &str, seq: &ast::OpSeq, hole: Hole) -> Option<SyntaxToken> {
+        // 被演算子の列は、fixity の決まらない演算子を含めば `lower_op_seq` が誤りの式にするので、ここで推測して報告しない
+        if seq.elements().any(|element| {
+            matches!(element, OpSeqElement::Operator(token)
+                if self.items.fixity(NameRef::Plain(token.text())).is_none())
+        }) {
+            return None;
+        }
         let outer = self.fixity(op);
         // 左が空いていれば `$x op (e)` と組むので右結合、右が空いていれば `(e) op $x` と組むので左結合が合う
         let toward_hole = match hole {

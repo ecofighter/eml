@@ -612,6 +612,16 @@ impl<'a> BodyLowering<'a> {
             .into_iter()
             .map(|pat| self.lower_pat_in_group(pat, range))
             .collect();
+        let mut undecided = false;
+        for operator in &operators {
+            undecided |= self.undecided_operator(operator.text(), operator.text_range());
+        }
+        if undecided {
+            return self.pats.alloc(Pat {
+                kind: PatKind::Missing,
+                range,
+            });
+        }
         let mut position = 0;
         self.climb_pat(&operands, &operators, &mut position, 0, None)
     }

@@ -614,3 +614,35 @@ fn operator_sequences_with_ambiguous_or_broken_operators_are_silent_errors() {
     assert!(shown.contains("f = <missing>"), "{shown}");
     assert!(shown.contains("g = <missing>"), "{shown}");
 }
+
+#[test]
+fn sections_of_ambiguous_or_broken_operators_are_silent_errors() {
+    // セクションの演算子か、被演算子の中の演算子の fixity が決まらないときは、既定の fixity で推測した E1023 を出さない
+    let operator = "pub (<+>) : Int -> Int -> Int\na <+> b = a";
+    let modules = [("A.em", operator), ("B.em", operator)];
+    let entry = "import A ((<+>))\nimport B ((<+>))\nimport Missing ((<*>))\n\ninfixr 9 <.>\n(<.>) : Int -> Int -> Int\na <.> b = a\n\nf : Int -> Int\nf = (<+> 1 + 2)\n\ng : Int -> Int\ng = (<*> 1 + 2)\n\nh : Int -> Int\nh = (<.> 1 <+> 2)";
+    assert_eq!(
+        module_codes(entry, &modules),
+        [
+            "E1026 test.em 3:8",
+            "E1028 test.em 10:6",
+            "E1028 test.em 16:12"
+        ]
+    );
+    let shown = lower_files_text(entry, &modules);
+    assert!(shown.contains("f = <missing>"), "{shown}");
+    assert!(shown.contains("g = <missing>"), "{shown}");
+}
+
+#[test]
+fn infix_patterns_with_ambiguous_or_broken_constructors_are_silent_errors() {
+    // 既定の `infixl 9` で組むと、`infixr 9` の `:*` と並べたときに E1006 が連鎖する。`:-` は、部品の分からない `T(..)`
+    // から来たかもしれないコンストラクタである
+    let data = "pub data P = | E | Int :+ Int";
+    let modules = [("A.em", data), ("B.em", data)];
+    let entry = "import A (P(..))\nimport B (P(..))\nimport Missing (T(..))\n\ninfixr 9 :*\ndata Q = | Q | Int :* Int\n\nf : Int -> Int\nf x = match x with\n  | a :+ b :* c -> a\n  | a :- b :* c -> b";
+    assert_eq!(
+        module_codes(entry, &modules),
+        ["E1026 test.em 3:8", "E1028 test.em 10:7"]
+    );
+}

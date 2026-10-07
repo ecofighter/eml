@@ -48,21 +48,10 @@ impl BodyLowering<'_> {
                 }),
             }
         }
-        // 曖昧な演算子と壊れた import から来た演算子は fixity が決まらない。既定の `infixl 9` で組むと E1006 が連鎖しうる
-        // ので、列全体を誤りの式にする。曖昧な演算子だけは、ここで E1028 を出す (docs/spec/modules.md の「誤りからの回復」)
         let mut undecided = false;
         for piece in &pieces {
-            if let Piece::Operator {
-                text,
-                range: op_range,
-            } = piece
-                && self.items.fixity(NameRef::Plain(text)).is_none()
-            {
-                undecided = true;
-                if let Resolved::Ambiguous(imports) = self.items.value(NameRef::Plain(text)) {
-                    let at = NameUse::plain(text, *op_range);
-                    self.diagnostics.push(ambiguous(self.file, &at, &imports));
-                }
+            if let Piece::Operator { text, range } = piece {
+                undecided |= self.undecided_operator(text, *range);
             }
         }
         if undecided {
@@ -231,9 +220,22 @@ impl BodyLowering<'_> {
         )
     }
 
-    /// 組み直しに使う fixity。演算子の列は、fixity の決まらない演算子 (曖昧か、壊れた import から来たもの) があれば
-    /// `lower_op_seq` が先に誤りの式にする。ここで既定の `infixl 9` を使うのは、セクションと中置のパターンの演算子で、
-    /// その演算子そのものの誤りは `binary` と `constructor_pat` が報告する。
+    /// 曖昧な演算子と壊れた import から来た演算子は、fixity が決まらない。既定の `infixl 9` で組むと E1006 や E1023 が
+    /// 連鎖しうるので、そうした演算子を含む演算子の列、セクション、中置のパターンは、組まずに誤りにする。曖昧な演算子は
+    /// ここで E1028 を出し、壊れた import の演算子は import で報告済みなので何も出さない (docs/spec/modules.md の
+    /// 「誤りからの回復」)。
+    pub(super) fn undecided_operator(&mut self, op: &str, op_range: TextRange) -> bool {
+        if self.items.fixity(NameRef::Plain(op)).is_some() {
+            return false;
+        }
+        if let Resolved::Ambiguous(imports) = self.items.value(NameRef::Plain(op)) {
+            let at = NameUse::plain(op, op_range);
+            self.diagnostics.push(ambiguous(self.file, &at, &imports));
+        }
+        true
+    }
+
+    /// 組み直しに使う fixity。fixity の決まらない演算子は、呼ぶ側が先に `undecided_operator` で除く。
     pub(super) fn fixity(&self, op: &str) -> Fixity {
         self.items
             .fixity(NameRef::Plain(op))
