@@ -2,67 +2,75 @@
 
 use std::fmt::Write;
 
-use eml_hir::Program;
+use eml_hir::{DisplayNames, ModuleId, Program};
 
-use crate::context::Context;
 use crate::kind::Bound;
 use crate::kind::problem::KindScheme;
 use crate::shape::Shape;
 use crate::ty::{KindConstraint, KindTerm, Linearity, Multiplicity, RowTerm};
 use crate::{Decl, DeclType, TypedProgram};
 
-/// 入口のモジュールだけを表示する。Prelude はどのプログラムにもあるので、テストの表示を Prelude に左右させないため。
+/// Prelude 以外のモジュールを、モジュールの番号の順に表示する。Prelude はどのプログラムにもあるので、テストの表示を Prelude に
+/// 左右させないため。モジュールが2つ以上なら、`eml_hir::pretty` と同じく各モジュールの前に `-- 名前` の見出しを付ける。
 pub fn dump(program: &Program, typed: &TypedProgram) -> String {
-    // Kind の制約の表示に型の名前が要る。テストの表示にしか使わないので、`Context` を作り直す費用は問題にしない
-    let context = Context::new(program);
+    let names = &program.names;
+    let modules: Vec<ModuleId> = program
+        .modules
+        .iter()
+        .map(|(id, _)| id)
+        .filter(|&id| id != program.prelude)
+        .collect();
     let mut out = String::new();
-    for (id, operation) in program.operations() {
-        if id.module != program.entry {
-            continue;
+    for &module in &modules {
+        if modules.len() > 1 {
+            writeln!(out, "-- {}", program.modules[module].name).unwrap();
         }
-        if let Some(declared) = typed.decls.get(&Decl::Operation(id)) {
-            writeln!(out, "{} : {}", operation.name, declared.ty).unwrap();
-            write_kinds(&mut out, &context, declared);
+        for (id, operation) in program.operations().filter(|(id, _)| id.module == module) {
+            if let Some(declared) = typed.decls.get(&Decl::Operation(id)) {
+                writeln!(out, "{} : {}", operation.name, declared.ty.display(names)).unwrap();
+                write_kinds(&mut out, names, declared);
+            }
         }
-    }
-    for (id, function) in program.functions() {
-        if id.module != program.entry {
-            continue;
-        }
-        if let Some(declared) = typed.decls.get(&Decl::Function(id)) {
-            writeln!(out, "{} : {}", function.name, declared.ty).unwrap();
-            write_kinds(&mut out, &context, declared);
-        }
-        let (Some(body), Some(types)) = (program.body(id), typed.bodies.get(id)) else {
-            continue;
-        };
-        for (local, data) in body.locals.iter() {
-            if let Some(ty) = types.locals.get(local) {
-                writeln!(
-                    out,
-                    "  {}#{} : {ty}",
-                    data.name,
-                    u32::from(local.into_raw())
-                )
-                .unwrap();
+        for (id, function) in program.functions().filter(|(id, _)| id.module == module) {
+            if let Some(declared) = typed.decls.get(&Decl::Function(id)) {
+                writeln!(out, "{} : {}", function.name, declared.ty.display(names)).unwrap();
+                write_kinds(&mut out, names, declared);
+            }
+            let (Some(body), Some(types)) = (program.body(id), typed.bodies.get(id)) else {
+                continue;
+            };
+            for (local, data) in body.locals.iter() {
+                if let Some(ty) = types.locals.get(local) {
+                    writeln!(
+                        out,
+                        "  {}#{} : {}",
+                        data.name,
+                        u32::from(local.into_raw()),
+                        ty.display(names)
+                    )
+                    .unwrap();
+                }
             }
         }
     }
     out
 }
 
-fn write_kinds(out: &mut String, context: &Context, declared: &DeclType) {
-    let constraints = kind_constraints(context, &declared.shape, &declared.kinds);
+fn write_kinds(out: &mut String, names: &DisplayNames, declared: &DeclType) {
+    let constraints = kind_constraints(&declared.shape, &declared.kinds);
     if !constraints.is_empty() {
-        let kinds: Vec<String> = constraints.iter().map(ToString::to_string).collect();
+        let kinds: Vec<String> = constraints
+            .iter()
+            .map(|constraint| constraint.show(names))
+            .collect();
         writeln!(out, "  kinds: {}", kinds.join(", ")).unwrap();
     }
 }
 
 /// スキームに残った制約のうち、定数を片側に持つものを表示用にする。変数どうしの制約は出さない。テストで確かめたいのは
 /// `Unr` の上限が付いたかどうかで、変数どうしの制約は部分適用のたびに増えて読みにくくなるため。
-fn kind_constraints(context: &Context, shape: &Shape, scheme: &KindScheme) -> Vec<KindConstraint> {
-    let names = shape.kind_names(context);
+fn kind_constraints(shape: &Shape, scheme: &KindScheme) -> Vec<KindConstraint> {
+    let names = shape.kind_names();
     let rows = shape.row_names();
     let term = |bound: Bound<Linearity>| match bound {
         Bound::Const(Linearity::Unr) => Some(KindTerm::Unr),

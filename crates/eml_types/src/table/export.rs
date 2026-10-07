@@ -7,7 +7,6 @@ impl Table<'_> {
         match self.shape(ty).clone() {
             TyShape::Con(id, args) => Type::Con {
                 id,
-                name: self.context.type_names[id].clone(),
                 args: args.into_iter().map(|arg| self.export(arg)).collect(),
             },
             TyShape::Record(fields) => Type::Record(
@@ -57,7 +56,6 @@ impl Table<'_> {
     pub fn export_label(&self, label: &Label) -> EffectLabel {
         EffectLabel {
             id: label.effect,
-            name: self.context.effect_names[label.effect].clone(),
             args: label.args.iter().map(|&arg| self.export(arg)).collect(),
         }
     }

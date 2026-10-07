@@ -10,9 +10,6 @@ pub(crate) struct Context {
     pub lang: LangItems,
     /// 型構成子ごとの、Kind の決まり方 (`crate::data`)。
     pub data_kinds: ItemMap<TypeDef, DataKind>,
-    /// 名前を持つのは、`Program` を渡さずに型を書き出せるようにするため。
-    pub type_names: ItemMap<TypeDef, String>,
-    pub effect_names: ItemMap<EffectDef, String>,
     /// エフェクトがその row に入れる操作の上限。操作の多重度の最大である (docs/spec/types.md の「Kind」)。
     pub effect_multiplicities: ItemMap<EffectDef, Multiplicity>,
     pub operation_multiplicities: ItemMap<Operation, Multiplicity>,
@@ -41,14 +38,6 @@ impl Context {
         Context {
             lang,
             data_kinds: data_kinds(program),
-            type_names: program
-                .types()
-                .map(|(id, def)| (id, def.name.clone()))
-                .collect(),
-            effect_names: program
-                .effects()
-                .map(|(id, def)| (id, def.name.clone()))
-                .collect(),
             effect_multiplicities,
             operation_multiplicities,
         }

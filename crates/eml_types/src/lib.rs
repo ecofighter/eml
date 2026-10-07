@@ -74,8 +74,7 @@ pub enum Decl {
 /// 1つの宣言の型検査の結果。
 #[derive(Debug)]
 pub struct DeclType {
-    /// 後の段階が読む、矢印の線形性のない型。`Type` は名前を持ち、名前は `Context` から引くので、検査の最後に1回だけ
-    /// 書き出しておく。
+    /// 後の段階が読む、矢印の線形性のない型。検査の最後に1回だけ書き出しておく。
     pub ty: Type,
     /// 後の段階は Kind を読まない (docs/implementation/architecture.md の「`eml_types` の内部」) ので、外からは読めなくする。
     pub(crate) shape: Shape,

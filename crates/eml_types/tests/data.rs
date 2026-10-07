@@ -131,8 +131,8 @@ fn constructors_of_a_duplicate_data_type_do_not_cascade() {
 
 #[test]
 fn a_user_bool_hides_the_prelude_bool() {
-    // status.md の「既知の制限」にある、同じ名前の別の型を区別して表示しない件。Prelude と入口のモジュールが分かれても同じに
-    // 振る舞う
+    // 同じ名前の別の型は、定義したモジュールの名前で修飾して表示する。条件は lang item の `Bool` を期待し、`True` は
+    // ユーザーの `Bool` のコンストラクタを指す
     let text = "data Bool = | False | True\nf : Int -> Int\nf x = if True then x else 0";
     let checked = eml_test_support::check(text);
     assert_eq!(
@@ -140,7 +140,10 @@ fn a_user_bool_hides_the_prelude_bool() {
         ["E2001 3:10 mismatched types"]
     );
     let full = eml_test_support::full(&checked.files, &checked.diagnostics);
-    assert!(full.contains("expected `Bool`, found `Bool`"), "{full}");
+    assert!(
+        full.contains("expected `Prelude.Bool`, found `Main.Bool`"),
+        "{full}"
+    );
 }
 
 #[test]
@@ -149,5 +152,8 @@ fn a_user_int_hides_the_prelude_int() {
     let text = "data Int = | I\nf : Int\nf = 1";
     let checked = eml_test_support::check(text);
     let full = eml_test_support::full(&checked.files, &checked.diagnostics);
-    assert!(full.contains("expected `Int`, found `Int`"), "{full}");
+    assert!(
+        full.contains("expected `Main.Int`, found `Prelude.Int`"),
+        "{full}"
+    );
 }

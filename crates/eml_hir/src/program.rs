@@ -12,6 +12,7 @@ use la_arena::{Arena, ArenaMap, Idx, RawIdx};
 use crate::hir::{
     Body, Constructor, EffectDef, Function, LangItems, Operation, Signature, TypeDef,
 };
+use crate::names::DisplayNames;
 
 pub type ModuleId = Idx<Module>;
 
@@ -169,6 +170,8 @@ pub struct Program {
     /// `eml check` と `eml run` に渡したファイルのモジュール。`main` はここから探す。
     pub entry: ModuleId,
     pub lang: LangItems,
+    /// 型、エフェクト、コンストラクタの表示名。診断、`dump`、`pretty` が引く。
+    pub names: DisplayNames,
 }
 
 /// HIR のノードは `SyntaxNodePtr` ではなく範囲を持つ。演算子の列を組み直した部分式のように、対応する構文ノードの

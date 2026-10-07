@@ -57,6 +57,7 @@ impl BodyCheck<'_, '_> {
     /// 比べられない型の値を比べた (E2006)。演算子を指す。
     fn not_comparable(&self, comparison: &Comparison, operand: &Type) -> Diagnostic {
         let op = &self.program[comparison.operator].name;
+        let operand = operand.display(&self.program.names);
         Diagnostic::error(
             codes::NOT_COMPARABLE,
             format!("values of type `{operand}` cannot be compared with `{op}`"),

@@ -315,3 +315,15 @@ fn a_dropped_equation_adds_no_exhaustiveness_errors() {
     );
     assert!(!text_out.contains("E4005"), "{text_out}");
 }
+
+#[test]
+fn a_missing_constructor_of_the_same_name_is_qualified() {
+    let entry = "import Report\n\ndata Answer = | Yes | No\n\nf : Report.Answer -> Int\nf a = match a with\n  | Report.Yes -> 1";
+    let checked =
+        eml_test_support::check_files(entry, &[("Report.em", "pub data Answer = | Yes | No")]);
+    insta::assert_snapshot!(full(&checked.files, &checked.diagnostics), @r"
+    E4001 6:7 `match` does not cover every value
+      6:7 no arm matches some values
+      note: not covered: `Report.No`
+    ");
+}

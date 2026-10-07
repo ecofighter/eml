@@ -6,6 +6,7 @@ mod hir;
 mod item_tree;
 mod load;
 mod lower;
+mod names;
 mod pretty;
 mod program;
 
@@ -15,6 +16,7 @@ pub use hir::*;
 pub use item_tree::*;
 pub use load::*;
 pub use lower::lower;
+pub use names::DisplayNames;
 pub use pretty::pretty;
 pub use program::*;
 

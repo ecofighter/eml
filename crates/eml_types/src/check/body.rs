@@ -734,10 +734,10 @@ impl BodyCheck<'_, '_> {
             this.table.unify(ty, expected)
         });
         if unified.is_err() {
-            let constructor = &self.program[ctor];
+            let names = &self.program.names;
             let origin = Origin::ConstructorPattern {
-                constructor: constructor.name.clone(),
-                ty: self.program[constructor.ty].name.clone(),
+                constructor: names.constructor(ctor).to_string(),
+                ty: names.ty(self.program[ctor].ty).to_string(),
             };
             self.mismatch(range, expected, ty, &origin);
             // 型の合わないパターンの中は検査しない。網羅性の検査は、`Error` の型のパターンを含む `match` を飛ばす

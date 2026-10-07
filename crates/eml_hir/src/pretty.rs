@@ -379,7 +379,7 @@ impl Printer<'_> {
         match &types[id].kind {
             TypeRefKind::Error => "<error>".to_string(),
             TypeRefKind::Con(id, args) => {
-                let mut text = self.program[*id].name.clone();
+                let mut text = self.program.names.ty(*id).to_string();
                 for &arg in args {
                     write!(text, " {}", self.ty_atom(types, arg)).unwrap();
                 }
@@ -399,7 +399,7 @@ impl Printer<'_> {
                     effects
                         .iter()
                         .map(|effect| {
-                            let mut text = self.program[effect.effect].name.clone();
+                            let mut text = self.program.names.effect(effect.effect).to_string();
                             for &arg in &effect.args {
                                 write!(text, " {}", self.ty_atom(types, arg)).unwrap();
                             }

@@ -414,3 +414,105 @@ fn an_import_qualified_as_prelude_does_not_merge_with_the_implicit_qualifier() {
     );
     assert_eq!(resolver.qualifier_modules("Prelude"), ["Prelude"]);
 }
+
+/// Prelude 以外の型、エフェクト、コンストラクタを `種類 モジュール.名前 -> 表示名` の行にする。
+fn shown_names(lowered: &eml_test_support::Lowered) -> Vec<String> {
+    let program = &lowered.program;
+    let names = &program.names;
+    let module = |id: eml_hir::ModuleId| program.modules[id].name.clone();
+    let mut out = Vec::new();
+    for (id, def) in program
+        .types()
+        .filter(|(id, _)| id.module != program.prelude)
+    {
+        out.push(format!(
+            "type {}.{} -> {}",
+            module(id.module),
+            def.name,
+            names.ty(id)
+        ));
+    }
+    for (id, def) in program
+        .effects()
+        .filter(|(id, _)| id.module != program.prelude)
+    {
+        out.push(format!(
+            "effect {}.{} -> {}",
+            module(id.module),
+            def.name,
+            names.effect(id)
+        ));
+    }
+    for (id, def) in program
+        .constructors()
+        .filter(|(id, _)| id.module != program.prelude)
+    {
+        out.push(format!(
+            "constructor {}.{} -> {}",
+            module(id.module),
+            def.name,
+            names.constructor(id)
+        ));
+    }
+    out
+}
+
+#[test]
+fn names_defined_by_two_modules_are_qualified() {
+    let entry = "import Report\n\ndata Bool = | Yes\n\ndata Cont = | C\n\neffect Log where\n  log : String -> Unit\n\neffect Row where\n  row : Unit -> Unit";
+    let report = "pub data Row = | Row Int\n\npub effect Log where\n  note : String -> Unit\n\npub data Answer = | Yes | No";
+    let lowered = eml_test_support::lower_files(entry, &[("Report.em", report)]);
+    assert_eq!(
+        eml_test_support::short(&lowered.files, &lowered.diagnostics),
+        Vec::<String>::new()
+    );
+    // 型とエフェクトは合わせて数え、コンストラクタは別に数える。継続の型の `Cont` も1つの定義として数える
+    assert_eq!(
+        shown_names(&lowered),
+        [
+            "type Main.Bool -> Main.Bool",
+            "type Main.Cont -> Main.Cont",
+            "type Report.Row -> Report.Row",
+            "type Report.Answer -> Answer",
+            "effect Main.Log -> Main.Log",
+            "effect Main.Row -> Main.Row",
+            "effect Report.Log -> Report.Log",
+            "constructor Main.Yes -> Main.Yes",
+            "constructor Main.C -> C",
+            "constructor Report.Row -> Row",
+            "constructor Report.Yes -> Report.Yes",
+            "constructor Report.No -> No",
+        ]
+    );
+    let program = &lowered.program;
+    let names = &program.names;
+    assert_eq!(names.ty(program.lang.bool), "Prelude.Bool");
+    assert_eq!(names.ty(program.lang.int), "Int");
+    assert_eq!(names.effect(program.lang.io), "IO");
+    assert_eq!(names.constructor(program.lang.true_ctor), "True");
+    assert_eq!(names.unit(), "Unit");
+}
+
+#[test]
+fn a_duplicate_in_one_module_counts_once() {
+    let lowered = eml_test_support::lower("data T = | A\n\ndata T = | B");
+    assert_eq!(
+        shown_names(&lowered),
+        [
+            "type Main.T -> T",
+            "type Main.T -> T",
+            "constructor Main.A -> A",
+            "constructor Main.B -> B",
+        ]
+    );
+}
+
+#[test]
+fn a_user_unit_qualifies_the_empty_record() {
+    let lowered = eml_test_support::lower("data Unit = | U");
+    assert_eq!(
+        shown_names(&lowered),
+        ["type Main.Unit -> Main.Unit", "constructor Main.U -> U"]
+    );
+    assert_eq!(lowered.program.names.unit(), "Prelude.Unit");
+}

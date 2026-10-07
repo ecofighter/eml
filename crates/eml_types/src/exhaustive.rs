@@ -529,14 +529,16 @@ impl<'a> Exhaustive<'a> {
         match pat {
             Pat::Wild => "_".to_string(),
             Pat::Con(Ctor::Data(ctor), args) => {
-                let name = &self.program[*ctor].name;
+                let name = self.program.names.constructor(*ctor);
+                // 中置のコンストラクタは `:` で始まる演算子である (docs/spec/declarations.md の「`data` と `type`」)。
+                // 表示名は修飾されうるので、宣言の名前で見分ける
+                let infix = self.program[*ctor].name.starts_with(':');
                 match args.as_slice() {
-                    [] => name.clone(),
-                    // 中置のコンストラクタは `:` で始まる演算子である (docs/spec/declarations.md の「`data` と `type`」)
-                    [left, right] if name.starts_with(':') => {
+                    [] => name.to_string(),
+                    [left, right] if infix => {
                         format!("{} {name} {}", self.atomic(left), self.atomic(right))
                     }
-                    args => iter::once(name.clone())
+                    args => iter::once(name.to_string())
                         .chain(args.iter().map(|arg| self.atomic(arg)))
                         .collect::<Vec<_>>()
                         .join(" "),

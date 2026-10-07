@@ -379,7 +379,10 @@ fn intrinsic_schemes_are_exported() {
             .functions()
             .find(|(_, function)| function.name == name)
             .unwrap();
-        checked.typed.decls[&Decl::Function(id)].ty.to_string()
+        checked.typed.decls[&Decl::Function(id)]
+            .ty
+            .display(&checked.program.names)
+            .to_string()
     };
     let operation = |name: &str| {
         let (id, _) = checked
@@ -387,7 +390,10 @@ fn intrinsic_schemes_are_exported() {
             .operations()
             .find(|(_, operation)| operation.name == name)
             .unwrap();
-        checked.typed.decls[&Decl::Operation(id)].ty.to_string()
+        checked.typed.decls[&Decl::Operation(id)]
+            .ty
+            .display(&checked.program.names)
+            .to_string()
     };
     assert_eq!(operation("println"), "String -> <IO> Unit");
     assert_eq!(ty("+"), "Int -> Int -> Int");
@@ -396,6 +402,7 @@ fn intrinsic_schemes_are_exported() {
     assert_eq!(
         checked.typed.decls[&Decl::Constructor(checked.program.lang.true_ctor)]
             .ty
+            .display(&checked.program.names)
             .to_string(),
         "Bool"
     );
@@ -411,7 +418,10 @@ fn operation_types_are_exported() {
             .operations()
             .find(|(_, operation)| operation.name == name)
             .unwrap();
-        checked.typed.decls[&Decl::Operation(id)].ty.to_string()
+        checked.typed.decls[&Decl::Operation(id)]
+            .ty
+            .display(&checked.program.names)
+            .to_string()
     };
     assert_eq!(ty("get"), "Unit -> <State> Int");
     assert_eq!(ty("put"), "Int -> <State> Unit");

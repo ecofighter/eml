@@ -55,7 +55,7 @@ pub(crate) fn check_module(program: &Program) -> (TypedProgram, Vec<Diagnostic>)
     let mut diagnostics = Vec::new();
     let main = program.main();
     if let Some(id) = main {
-        check_main(program, &context, &signatures, id, &mut diagnostics);
+        check_main(program, &signatures, id, &mut diagnostics);
     }
     // 本体の検査は関数ごとに独立しているので、アリーナの順に回す。診断の順は表示する側が決める
     // (docs/spec/diagnostics.md の「診断の順」)
@@ -90,7 +90,7 @@ pub(crate) fn check_module(program: &Program) -> (TypedProgram, Vec<Diagnostic>)
         violated.extend(solution.violated);
     }
     diagnostics.extend(report_violations(program, violated));
-    let typed = typed_program(&context, &signatures, schemes, bodies);
+    let typed = typed_program(&signatures, schemes, bodies);
     // 網羅性は型推論と使用回数のパスの後に、書き出した型の上で調べる (docs/spec/exhaustiveness.md の「検査パス」)
     diagnostics.extend(exhaustive::check(program, &typed));
     (typed, diagnostics)
@@ -171,7 +171,7 @@ pub(crate) fn check_body(
     let typing = checker.typing;
     let instances = checker.instances;
     let reliable = usage::reliable(body, diagnostics.is_empty());
-    usage::constrain(file, body, &typing, &mut table, reliable);
+    usage::constrain(file, body, &typing, &mut table, reliable, &program.names);
     carry::constrain(program, file, body, &typing, &mut table, reliable);
     let mut types = BodyTypes::default();
     for (expr, &ty) in typing.exprs.iter() {
@@ -308,7 +308,6 @@ fn report_violations(program: &Program, mut origins: Vec<KindOrigin>) -> Vec<Dia
 /// コンストラクタは `declaration_schemes` が、本体に問題のない関数は `check_module` が (制約がなければ空のスキームを)、解いた
 /// SCC の関数は SCC の解が入れるためである。
 fn typed_program(
-    context: &Context,
     signatures: &Signatures,
     mut schemes: HashMap<Decl, KindScheme>,
     bodies: ItemMap<Function, BodyTypes>,
@@ -332,7 +331,7 @@ fn typed_program(
     let decls = shapes
         .map(|(decl, shape)| {
             let declared = DeclType {
-                ty: shape.export(context),
+                ty: shape.export(),
                 shape: shape.clone(),
                 kinds: schemes
                     .remove(&decl)
@@ -346,7 +345,6 @@ fn typed_program(
 
 fn check_main(
     program: &Program,
-    context: &Context,
     signatures: &Signatures,
     id: FunctionId,
     diagnostics: &mut Vec<Diagnostic>,
@@ -360,12 +358,11 @@ fn check_main(
     if has_error(&signature.types, signature.ty) {
         return;
     }
-    let found = shape.export(context);
+    let found = shape.export();
     let expected = Type::Fn {
         param: Box::new(Type::unit()),
         effects: vec![EffectLabel {
             id: program.lang.io,
-            name: program[program.lang.io].name.clone(),
             args: Vec::new(),
         }],
         tail: None,
@@ -378,7 +375,7 @@ fn check_main(
             Label::new(
                 program.file(id.module),
                 signature.range,
-                format!("found `{found}`"),
+                format!("found `{}`", found.display(&program.names)),
             ),
         ));
     }

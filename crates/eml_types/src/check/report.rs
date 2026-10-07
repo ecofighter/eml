@@ -92,7 +92,11 @@ impl BodyCheck<'_, '_> {
         param: PatId,
         index: usize,
     ) -> Diagnostic {
-        let expected = self.table.export(expected);
+        let expected = self
+            .table
+            .export(expected)
+            .display(&self.program.names)
+            .to_string();
         Diagnostic::error(
             codes::TYPE_MISMATCH,
             format!(
@@ -155,14 +159,15 @@ impl BodyCheck<'_, '_> {
             Ok(()) => return true,
             Err(UnifyError::MissingEffects(effects)) => effects
                 .iter()
-                .map(|e| self.program[*e].name.clone())
+                .map(|e| self.program.names.effect(*e).to_string())
                 .collect(),
             Err(UnifyError::MissingRowVar(var)) => vec![var],
             Err(UnifyError::EffectArgs { left, right }) => {
                 // 呼び出し先の row が左辺である (`Table::include_row`)
                 if report {
-                    let found = self.table.export_label(&left);
-                    let allowed = self.table.export_label(&right);
+                    let names = &self.program.names;
+                    let found = self.table.export_label(&left).display(names).to_string();
+                    let allowed = self.table.export_label(&right).display(names).to_string();
                     self.diagnostics.push(
                         Diagnostic::error(
                             codes::TYPE_MISMATCH,
@@ -266,8 +271,16 @@ impl BodyCheck<'_, '_> {
 
     pub(super) fn mismatch(&mut self, range: TextRange, expected: Ty, found: Ty, origin: &Origin) {
         let file = self.file();
-        let expected = self.table.export(expected);
-        let found = self.table.export(found);
+        let expected = self
+            .table
+            .export(expected)
+            .display(&self.program.names)
+            .to_string();
+        let found = self
+            .table
+            .export(found)
+            .display(&self.program.names)
+            .to_string();
         let mut diagnostic = Diagnostic::error(
             codes::TYPE_MISMATCH,
             "mismatched types",

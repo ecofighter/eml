@@ -2,6 +2,14 @@ use super::*;
 use crate::context::test_context;
 use crate::kind::solve::{residual_of, solve};
 
+/// Prelude だけのプログラムの表示名で型を書く。Prelude の名前は重ならないので、修飾しない。
+fn shown(table: &Table, ty: Ty) -> String {
+    table
+        .export(ty)
+        .display(&crate::test_program("").names)
+        .to_string()
+}
+
 #[test]
 fn constructors_unify_only_with_themselves() {
     let context = test_context();
@@ -22,7 +30,7 @@ fn variables_are_bound_by_unification() {
     let f = table.function(table.int, Row::pure(), v);
     let g = table.function(table.int, Row::pure(), table.bool);
     assert_eq!(table.unify(f, g), Ok(()));
-    assert_eq!(table.export(v).to_string(), "Bool");
+    assert_eq!(shown(&table, v), "Bool");
 }
 
 #[test]
@@ -155,9 +163,9 @@ fn export_keeps_an_open_row() {
         },
         table.int,
     );
-    assert_eq!(table.export(f).to_string(), "Int -> <IO | _> Int");
+    assert_eq!(shown(&table, f), "Int -> <IO | _> Int");
     let v = table.fresh_var();
-    assert_eq!(table.export(v).to_string(), "_");
+    assert_eq!(shown(&table, v), "_");
 }
 
 #[test]
@@ -171,7 +179,7 @@ fn rigid_variables_unify_only_with_themselves_and_flexible_variables() {
     assert_eq!(table.unify(a, table.int), Err(UnifyError::Mismatch));
     let v = table.fresh_var();
     assert_eq!(table.unify(v, a), Ok(()));
-    assert_eq!(table.export(v).to_string(), "a");
+    assert_eq!(shown(&table, v), "a");
 }
 
 #[test]
@@ -189,7 +197,7 @@ fn a_rigid_row_variable_cannot_be_bound() {
         Err(UnifyError::Mismatch)
     );
     let f = table.function(table.int, rigid.clone(), table.int);
-    assert_eq!(table.export(f).to_string(), "Int -> <e> Int");
+    assert_eq!(shown(&table, f), "Int -> <e> Int");
 }
 
 #[test]
@@ -236,10 +244,7 @@ fn open_spine_opens_only_the_rows_on_the_return_side() {
     let inner = table.function(table.int, Row::pure(), table.int);
     let f = table.function(param, Row::pure(), inner);
     let opened = table.open_spine(f);
-    assert_eq!(
-        table.export(opened).to_string(),
-        "(Int -> Int) -> <_> Int -> <_> Int"
-    );
+    assert_eq!(shown(&table, opened), "(Int -> Int) -> <_> Int -> <_> Int");
 }
 
 #[test]
@@ -426,8 +431,8 @@ fn labels_of_one_effect_pair_up_in_order() {
     let y = table.fresh_var();
     let b = Row::closed(vec![label(vec![x]), label(vec![y])]);
     assert_eq!(table.unify_row(&a, &b), Ok(()));
-    assert_eq!(table.export(x).to_string(), "Int");
-    assert_eq!(table.export(y).to_string(), "String");
+    assert_eq!(shown(&table, x), "Int");
+    assert_eq!(shown(&table, y), "String");
 }
 
 #[test]
@@ -586,7 +591,7 @@ fn state_slots_unify_by_kind_and_state_type() {
     );
     let x = table.fresh_var();
     assert_eq!(table.unify_slot(Slot::State(int), Slot::State(x)), Ok(()));
-    assert_eq!(table.export(x).to_string(), "Int");
+    assert_eq!(shown(&table, x), "Int");
     let slot = table.fresh_slot();
     let other = table.fresh_slot();
     assert_eq!(table.unify_slot(slot, other), Ok(()));

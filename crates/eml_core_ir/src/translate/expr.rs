@@ -41,7 +41,6 @@ impl FnLowering<'_> {
     pub(super) fn lang_type(&self, id: TypeDefId) -> Type {
         Type::Con {
             id,
-            name: self.hir[id].name.clone(),
             args: Vec::new(),
         }
     }

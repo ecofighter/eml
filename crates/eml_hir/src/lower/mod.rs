@@ -51,6 +51,7 @@ pub fn lower(def_map: &DefMap, modules: &[LoadedModule]) -> (Program, Vec<Diagno
             prelude: def_map.prelude(),
             entry: def_map.entry(),
             lang,
+            names: def_map.display_names().clone(),
         },
         diagnostics,
     )

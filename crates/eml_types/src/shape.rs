@@ -582,24 +582,20 @@ impl Shape {
     }
 
     /// 後の段階に渡す型。rigid な変数は名前で書く。
-    pub fn export(&self, context: &Context) -> Type {
-        self.export_ty(&self.ty, context)
+    pub fn export(&self) -> Type {
+        self.export_ty(&self.ty)
     }
 
-    fn export_ty(&self, ty: &ShapeTy, context: &Context) -> Type {
+    fn export_ty(&self, ty: &ShapeTy) -> Type {
         match ty {
             ShapeTy::Con(id, args) => Type::Con {
                 id: *id,
-                name: context.type_names[*id].clone(),
-                args: args
-                    .iter()
-                    .map(|arg| self.export_ty(arg, context))
-                    .collect(),
+                args: args.iter().map(|arg| self.export_ty(arg)).collect(),
             },
             ShapeTy::Record(fields) => Type::Record(
                 fields
                     .iter()
-                    .map(|(label, field)| (label.clone(), self.export_ty(field, context)))
+                    .map(|(label, field)| (label.clone(), self.export_ty(field)))
                     .collect(),
             ),
             ShapeTy::Fn {
@@ -610,11 +606,7 @@ impl Shape {
                     .iter()
                     .map(|(effect, args)| EffectLabel {
                         id: *effect,
-                        name: context.effect_names[*effect].clone(),
-                        args: args
-                            .iter()
-                            .map(|arg| self.export_ty(arg, context))
-                            .collect(),
+                        args: args.iter().map(|arg| self.export_ty(arg)).collect(),
                     })
                     .collect();
                 let tail = match row.tail {
@@ -623,10 +615,10 @@ impl Shape {
                     ShapeTail::Error => Some(RowTail::Error),
                 };
                 Type::Fn {
-                    param: Box::new(self.export_ty(param, context)),
+                    param: Box::new(self.export_ty(param)),
                     effects,
                     tail,
-                    ret: Box::new(self.export_ty(ret, context)),
+                    ret: Box::new(self.export_ty(ret)),
                 }
             }
             ShapeTy::Rigid(index) => Type::Rigid(self.rigids[*index].0.clone()),
@@ -636,13 +628,13 @@ impl Shape {
 
     /// 線形性の Kind 変数の表示名。rigid な型変数の `μ` はその型変数、矢印の `m` はその矢印の型で呼ぶ。外側から順に見て、
     /// 最初に現れた部分を使う。スキームに残った制約を表示するのに使う。
-    pub fn kind_names(&self, context: &Context) -> HashMap<KindVar, Type> {
+    pub fn kind_names(&self) -> HashMap<KindVar, Type> {
         let mut names = HashMap::new();
-        self.collect_names(&self.ty, context, &mut names);
+        self.collect_names(&self.ty, &mut names);
         names
     }
 
-    fn collect_names(&self, ty: &ShapeTy, context: &Context, names: &mut HashMap<KindVar, Type>) {
+    fn collect_names(&self, ty: &ShapeTy, names: &mut HashMap<KindVar, Type>) {
         match ty {
             ShapeTy::Rigid(index) => {
                 let (name, mu) = &self.rigids[*index];
@@ -656,9 +648,7 @@ impl Shape {
                 row: _,
                 ret: _,
             } => {
-                names
-                    .entry(*v)
-                    .or_insert_with(|| self.export_ty(ty, context));
+                names.entry(*v).or_insert_with(|| self.export_ty(ty));
             }
             ShapeTy::Fn {
                 param: _,
@@ -671,11 +661,11 @@ impl Shape {
             | ShapeTy::Error => {}
         }
         ty.for_each_child(|child| match child {
-            ShapeChild::Ty(child) => self.collect_names(child, context, names),
+            ShapeChild::Ty(child) => self.collect_names(child, names),
             ShapeChild::Row(row) => {
                 for (_, args) in &row.labels {
                     for arg in args {
-                        self.collect_names(arg, context, names);
+                        self.collect_names(arg, names);
                     }
                 }
             }
@@ -775,7 +765,7 @@ mod tests {
         let context = context(&program);
         let shape = signature_shape(&context, signature(&program));
         assert_eq!(
-            shape.export(&context).to_string(),
+            shape.export().display(&program.names).to_string(),
             "(a -> <e> a) -> a -> <e> a"
         );
     }
@@ -790,7 +780,7 @@ mod tests {
         let own = shape.instantiate_rigid(&mut table, &signature.generics);
         assert_eq!(table.kind_vars(own.ty), (own.lin.clone(), own.mult.clone()));
         assert_eq!(
-            table.export(own.ty).to_string(),
+            table.export(own.ty).display(&program.names).to_string(),
             "(a -> <e> a) -> a -> <e> a"
         );
     }
@@ -810,7 +800,7 @@ mod tests {
         let int = table.int;
         let ty = shape.instantiate_with_effect_args(&mut table, &[int]);
         assert_eq!(
-            table.export(ty).to_string(),
+            table.export(ty).display(&program.names).to_string(),
             "a -> Int -> <State Int> (a, Int)"
         );
     }
@@ -823,7 +813,10 @@ mod tests {
         let mut table = Table::new(&context);
         let first = shape.instantiate(&mut table);
         let second = shape.instantiate(&mut table);
-        assert_eq!(table.export(first.ty).to_string(), "_ -> <_> _");
+        assert_eq!(
+            table.export(first.ty).display(&program.names).to_string(),
+            "_ -> <_> _"
+        );
         assert_ne!(first.lin, second.lin);
         assert_ne!(first.mult, second.mult);
     }
@@ -833,11 +826,17 @@ mod tests {
         let program = program("f : Int -> <Missing> Int\nf x = x");
         let context = context(&program);
         let shape = signature_shape(&context, signature(&program));
-        assert_eq!(shape.export(&context).to_string(), "Int -> <{error}> Int");
+        assert_eq!(
+            shape.export().display(&program.names).to_string(),
+            "Int -> <{error}> Int"
+        );
         let mut table = Table::new(&context);
         let instance = shape.instantiate(&mut table);
         assert_eq!(
-            table.export(instance.ty).to_string(),
+            table
+                .export(instance.ty)
+                .display(&program.names)
+                .to_string(),
             "Int -> <{error}> Int"
         );
     }

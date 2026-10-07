@@ -1,6 +1,6 @@
 use std::fmt;
 
-use eml_hir::{EffectId, TypeDefId};
+use eml_hir::{DisplayNames, EffectId, TypeDefId};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Linearity {
@@ -16,19 +16,29 @@ pub enum Multiplicity {
     Multi,
 }
 
-/// 外に出す型の row のラベル。名前を持つのは、`Program` を渡さずに表示するため。
+/// 外に出す型の row のラベル。表示名は `display` が `DisplayNames` から引く。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EffectLabel {
     pub id: EffectId,
-    pub name: String,
     pub args: Vec<Type>,
 }
 
-impl fmt::Display for EffectLabel {
+impl EffectLabel {
+    pub fn display<'a>(&'a self, names: &'a DisplayNames) -> impl fmt::Display + 'a {
+        LabelDisplay { label: self, names }
+    }
+}
+
+struct LabelDisplay<'a> {
+    label: &'a EffectLabel,
+    names: &'a DisplayNames,
+}
+
+impl fmt::Display for LabelDisplay<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.name)?;
-        for arg in &self.args {
-            write!(f, " {}", atomic(arg))?;
+        f.write_str(self.names.effect(self.label.id))?;
+        for arg in &self.label.args {
+            write!(f, " {}", atomic(arg, self.names))?;
         }
         Ok(())
     }
@@ -37,10 +47,10 @@ impl fmt::Display for EffectLabel {
 /// 型検査の結果として後の段階に渡す型。推論用の変数は解決済みで、解けずに残った変数は `Flexible` になる。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Type {
-    /// 型構成子とその型引数。`Int` などの組み込みの型は引数を持たない。
+    /// 型構成子とその型引数。`Int` などの組み込みの型は引数を持たない。型の同一性は ID で決まり、表示名は `display` が
+    /// `DisplayNames` から引く。
     Con {
         id: TypeDefId,
-        name: String,
         args: Vec<Type>,
     },
     /// 閉じたレコード。`Unit` は空のレコード、タプルは数字ラベルのレコードである (docs/spec/records.md)。
@@ -107,11 +117,7 @@ impl Type {
     /// `..` を使わずにすべての欄を名前で受ける。
     pub fn for_each_child<'a>(&'a self, mut f: impl FnMut(TypeChild<'a>)) {
         match self {
-            Type::Con {
-                id: _,
-                name: _,
-                args,
-            } => args.iter().for_each(|arg| f(TypeChild::Type(arg))),
+            Type::Con { id: _, args } => args.iter().for_each(|arg| f(TypeChild::Type(arg))),
             Type::Record(fields) => fields
                 .iter()
                 .for_each(|(_, field)| f(TypeChild::Type(field))),
@@ -170,17 +176,29 @@ fn row_children<'a>(
     f(TypeChild::Tail(tail.as_ref()));
 }
 
-impl fmt::Display for Type {
+impl Type {
+    pub fn display<'a>(&'a self, names: &'a DisplayNames) -> impl fmt::Display + 'a {
+        TypeDisplay { ty: self, names }
+    }
+}
+
+struct TypeDisplay<'a> {
+    ty: &'a Type,
+    names: &'a DisplayNames,
+}
+
+impl fmt::Display for TypeDisplay<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Type::Con { name, args, .. } => {
-                f.write_str(name)?;
+        let names = self.names;
+        match self.ty {
+            Type::Con { id, args } => {
+                f.write_str(names.ty(*id))?;
                 for arg in args {
-                    write!(f, " {}", atomic(arg))?;
+                    write!(f, " {}", atomic(arg, names))?;
                 }
                 Ok(())
             }
-            Type::Record(fields) if fields.is_empty() => f.write_str("Unit"),
+            Type::Record(fields) if fields.is_empty() => f.write_str(names.unit()),
             // ラベルが 0 から連番の閉じたレコードは、タプルの書き方で表示する (docs/spec/records.md の「構成」)
             Type::Record(fields) if is_tuple(fields) => {
                 f.write_str("(")?;
@@ -188,7 +206,7 @@ impl fmt::Display for Type {
                     if index > 0 {
                         f.write_str(", ")?;
                     }
-                    write!(f, "{ty}")?;
+                    write!(f, "{}", ty.display(names))?;
                 }
                 f.write_str(")")
             }
@@ -198,7 +216,7 @@ impl fmt::Display for Type {
                     if index > 0 {
                         f.write_str(", ")?;
                     }
-                    write!(f, "{label} : {ty}")?;
+                    write!(f, "{label} : {}", ty.display(names))?;
                 }
                 f.write_str(" }")
             }
@@ -207,21 +225,21 @@ impl fmt::Display for Type {
                 effects,
                 tail,
                 ret,
-                ..
             } => {
                 if matches!(**param, Type::Fn { .. }) {
-                    write!(f, "({param}) -> ")?;
+                    write!(f, "({}) -> ", param.display(names))?;
                 } else {
-                    write!(f, "{param} -> ")?;
+                    write!(f, "{} -> ", param.display(names))?;
                 }
                 // 空の閉じた row は書かない。省略した row が `<>` だから (docs/spec/types.md)
-                let row = row_text(effects, tail);
+                let row = row_text(effects, tail, names);
                 if !row.is_empty() {
                     write!(f, "<{row}> ")?;
                 }
-                write!(f, "{ret}")
+                write!(f, "{}", ret.display(names))
             }
-            // 継続の row は、空でも書く。何も起こさない `resume` であることを示すため
+            // 継続の row は、空でも書く。何も起こさない `resume` であることを示すため。`Cont` は表示名の表が定義の1つ
+            // として数えるので、ユーザーの `Cont` は修飾されて区別できる
             Type::Cont {
                 arg,
                 ret,
@@ -232,12 +250,12 @@ impl fmt::Display for Type {
                 write!(
                     f,
                     "Cont {} {} <{}>",
-                    atomic(arg),
-                    atomic(ret),
-                    row_text(effects, tail)
+                    atomic(arg, names),
+                    atomic(ret, names),
+                    row_text(effects, tail, names)
                 )?;
                 match state {
-                    ContState::State(state) => write!(f, " from {}", atomic(state)),
+                    ContState::State(state) => write!(f, " from {}", atomic(state, names)),
                     ContState::Stateless | ContState::Unknown => Ok(()),
                 }
             }
@@ -258,10 +276,10 @@ fn is_tuple(fields: &[(String, Type)]) -> bool {
 }
 
 /// row の中身。`<` と `>` は呼び出し側が付ける。
-fn row_text(effects: &[EffectLabel], tail: &Option<RowTail>) -> String {
-    let names = effects
+fn row_text(effects: &[EffectLabel], tail: &Option<RowTail>, names: &DisplayNames) -> String {
+    let labels = effects
         .iter()
-        .map(|e| e.to_string())
+        .map(|e| e.display(names).to_string())
         .collect::<Vec<String>>();
     let tail = match tail {
         Some(RowTail::Rigid(name)) => Some(name.as_str()),
@@ -270,95 +288,124 @@ fn row_text(effects: &[EffectLabel], tail: &Option<RowTail>) -> String {
         None => None,
     };
     match tail {
-        Some(tail) if names.is_empty() => tail.to_string(),
-        Some(tail) => format!("{} | {tail}", names.join(", ")),
-        None => names.join(", "),
+        Some(tail) if labels.is_empty() => tail.to_string(),
+        Some(tail) => format!("{} | {tail}", labels.join(", ")),
+        None => labels.join(", "),
     }
 }
 
 /// 型の適用の引数の位置に置く形。関数型、継続の型、引数を持つ型の適用は括弧で囲む。
-fn atomic(ty: &Type) -> String {
+fn atomic(ty: &Type, names: &DisplayNames) -> String {
     match ty {
-        Type::Fn { .. } | Type::Cont { .. } => format!("({ty})"),
-        Type::Con { args, .. } if !args.is_empty() => format!("({ty})"),
-        _ => ty.to_string(),
+        Type::Fn { .. } | Type::Cont { .. } => format!("({})", ty.display(names)),
+        Type::Con { args, .. } if !args.is_empty() => format!("({})", ty.display(names)),
+        _ => ty.display(names).to_string(),
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use eml_hir::{EffectDef, Generics, ItemId, ModuleId, TypeDef};
+    use eml_hir::{ConstructorId, DisplayNames, EffectDef, Generics, ItemId, ModuleId, TypeDef};
     use la_arena::{Arena, Idx, RawIdx};
 
     use super::*;
 
-    /// 表示は名前だけを使うので、ID はどのモジュールのものでもよい。
+    /// 表示は表示名の表だけを引くので、ID はどのモジュールのものでもよい。
     fn id<T>(local: Idx<T>) -> ItemId<T> {
         ItemId::new(ModuleId::from_raw(RawIdx::from(0)), local)
     }
 
-    #[test]
-    fn function_types_are_displayed_like_the_surface_syntax() {
+    /// 単体テストが使う型とエフェクト。どの名前も1つのモジュールにしかないので、修飾せずに表示する。
+    struct Fixture {
+        int: Type,
+        bool: Type,
+        io: EffectId,
+        state: EffectId,
+        names: DisplayNames,
+    }
+
+    fn fixture() -> Fixture {
         let mut types = Arena::new();
+        let mut ty = |name: &str| id(types.alloc(TypeDef::builtin(name)));
+        let (int, bool, unit) = (ty("Int"), ty("Bool"), ty("Unit"));
         let mut effects = Arena::new();
-        let mut con = |name: &str| Type::Con {
-            id: id(types.alloc(TypeDef::builtin(name))),
-            name: name.to_string(),
-            args: Vec::new(),
-        };
-        let pure = Type::Fn {
-            param: Box::new(con("Int")),
-            effects: vec![],
-            tail: None,
-            ret: Box::new(con("Bool")),
-        };
-        let io = EffectLabel {
-            id: id(effects.alloc(EffectDef {
-                name: "IO".to_string(),
+        let mut effect = |name: &str| {
+            id(effects.alloc(EffectDef {
+                name: name.to_string(),
                 generics: Generics::default(),
                 operations: Vec::new(),
-            })),
-            name: "IO".to_string(),
-            args: vec![],
+            }))
+        };
+        let (io, state) = (effect("IO"), effect("State"));
+        let names = DisplayNames::new(
+            [
+                (int, "Prelude", "Int"),
+                (bool, "Prelude", "Bool"),
+                (unit, "Prelude", "Unit"),
+            ],
+            [(io, "Prelude", "IO"), (state, "Main", "State")],
+            Vec::<(ConstructorId, &str, &str)>::new(),
+            unit,
+        );
+        Fixture {
+            int: con(int),
+            bool: con(bool),
+            io,
+            state,
+            names,
+        }
+    }
+
+    fn con(id: TypeDefId) -> Type {
+        Type::Con {
+            id,
+            args: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn function_types_are_displayed_like_the_surface_syntax() {
+        let Fixture {
+            int,
+            bool,
+            io,
+            names,
+            ..
+        } = fixture();
+        let pure = Type::Fn {
+            param: Box::new(int),
+            effects: vec![],
+            tail: None,
+            ret: Box::new(bool),
         };
         let io = Type::Fn {
             param: Box::new(pure.clone()),
-            effects: vec![io],
+            effects: vec![EffectLabel {
+                id: io,
+                args: vec![],
+            }],
             tail: None,
             ret: Box::new(Type::unit()),
         };
-        assert_eq!(pure.to_string(), "Int -> Bool");
-        assert_eq!(io.to_string(), "(Int -> Bool) -> <IO> Unit");
+        assert_eq!(pure.display(&names).to_string(), "Int -> Bool");
+        assert_eq!(io.display(&names).to_string(), "(Int -> Bool) -> <IO> Unit");
     }
 
     #[test]
     fn continuations_are_displayed_with_their_row() {
-        let mut types = Arena::new();
-        let mut effects = Arena::new();
-        let mut con = |name: &str| Type::Con {
-            id: id(types.alloc(TypeDef::builtin(name))),
-            name: name.to_string(),
-            args: Vec::new(),
-        };
-        let int = con("Int");
+        let Fixture { int, io, names, .. } = fixture();
         let unit = Type::unit();
-        let io = EffectLabel {
-            id: id(effects.alloc(EffectDef {
-                name: "IO".to_string(),
-                generics: Generics::default(),
-                operations: Vec::new(),
-            })),
-            name: "IO".to_string(),
-            args: vec![],
-        };
         let k = Type::Cont {
             arg: Box::new(int.clone()),
             ret: Box::new(unit.clone()),
-            effects: vec![io],
+            effects: vec![EffectLabel {
+                id: io,
+                args: vec![],
+            }],
             tail: None,
             state: ContState::Stateless,
         };
-        assert_eq!(k.to_string(), "Cont Int Unit <IO>");
+        assert_eq!(k.display(&names).to_string(), "Cont Int Unit <IO>");
         let pure = Type::Cont {
             arg: Box::new(Type::Fn {
                 param: Box::new(int.clone()),
@@ -371,7 +418,10 @@ mod tests {
             tail: Some(RowTail::Rigid("e".to_string())),
             state: ContState::Stateless,
         };
-        assert_eq!(pure.to_string(), "Cont (Int -> Int) Unit <e>");
+        assert_eq!(
+            pure.display(&names).to_string(),
+            "Cont (Int -> Int) Unit <e>"
+        );
         let stateful = Type::Cont {
             arg: Box::new(int.clone()),
             ret: Box::new(unit.clone()),
@@ -384,23 +434,17 @@ mod tests {
                 ret: Box::new(unit.clone()),
             })),
         };
-        assert_eq!(stateful.to_string(), "Cont Int Unit <> from (Int -> Unit)");
+        assert_eq!(
+            stateful.display(&names).to_string(),
+            "Cont Int Unit <> from (Int -> Unit)"
+        );
     }
 
     #[test]
     fn effect_labels_are_displayed_with_their_type_arguments() {
-        let mut types = Arena::new();
-        let mut effects = Arena::new();
-        let int = Type::Con {
-            id: id(types.alloc(TypeDef::builtin("Int"))),
-            name: "Int".to_string(),
-            args: Vec::new(),
-        };
-        let id = id(effects.alloc(EffectDef {
-            name: "State".to_string(),
-            generics: Generics::default(),
-            operations: Vec::new(),
-        }));
+        let Fixture {
+            int, state, names, ..
+        } = fixture();
         let function = Type::Fn {
             param: Box::new(int.clone()),
             effects: vec![],
@@ -411,13 +455,11 @@ mod tests {
             param: Box::new(Type::unit()),
             effects: vec![
                 EffectLabel {
-                    id,
-                    name: "State".to_string(),
+                    id: state,
                     args: vec![int.clone()],
                 },
                 EffectLabel {
-                    id,
-                    name: "State".to_string(),
+                    id: state,
                     args: vec![function],
                 },
             ],
@@ -425,7 +467,7 @@ mod tests {
             ret: Box::new(int),
         };
         assert_eq!(
-            ty.to_string(),
+            ty.display(&names).to_string(),
             "Unit -> <State Int, State (Int -> Int) | e> Int"
         );
     }
@@ -465,26 +507,31 @@ impl fmt::Display for RowTerm {
     }
 }
 
-impl fmt::Display for KindTerm {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+impl KindTerm {
+    fn show(&self, names: &DisplayNames) -> String {
         match self {
-            KindTerm::Unr => f.write_str("Unr"),
-            KindTerm::Lin => f.write_str("Lin"),
-            KindTerm::Of(ty @ Type::Fn { .. }) => write!(f, "({ty})"),
-            KindTerm::Of(ty) => write!(f, "{ty}"),
+            KindTerm::Unr => "Unr".to_string(),
+            KindTerm::Lin => "Lin".to_string(),
+            KindTerm::Of(ty @ Type::Fn { .. }) => format!("({})", ty.display(names)),
+            KindTerm::Of(ty) => ty.display(names).to_string(),
         }
     }
 }
 
-impl fmt::Display for KindConstraint {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+impl KindConstraint {
+    /// テストの表示。型の名前は表示名の表から引く。
+    pub(crate) fn show(&self, names: &DisplayNames) -> String {
         match self {
-            KindConstraint::Linearity { lower, upper } => write!(f, "{lower} <= {upper}"),
+            KindConstraint::Linearity { lower, upper } => {
+                format!("{} <= {}", lower.show(names), upper.show(names))
+            }
             KindConstraint::Carry {
                 value: KindTerm::Lin,
                 row,
-            } => write!(f, "{row} <= Once"),
-            KindConstraint::Carry { value, row } => write!(f, "{value} => {row} <= Once"),
+            } => format!("{row} <= Once"),
+            KindConstraint::Carry { value, row } => {
+                format!("{} => {row} <= Once", value.show(names))
+            }
         }
     }
 }

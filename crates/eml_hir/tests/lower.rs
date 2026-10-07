@@ -710,3 +710,39 @@ fn private_in_public_in_a_dependency_points_into_its_file() {
         "Report.em"
     );
 }
+
+#[test]
+fn mixed_effects_are_named_by_their_display_names() {
+    let entry = "import Report\n\neffect Log where\n  log : String -> Unit\n\nf : Unit -> Unit\nf () =\n  handle () with\n    | log s k -> resume k ()\n    | Report.note s k -> resume k ()";
+    let lowered = eml_test_support::lower_files(
+        entry,
+        &[("Report.em", "pub effect Log where\n  note : String -> Unit")],
+    );
+    let full = eml_test_support::full(&lowered.files, &lowered.diagnostics);
+    assert!(full.starts_with("E1012 10:"), "{full}");
+    assert!(full.contains("is an operation of `Report.Log`"), "{full}");
+    assert!(
+        full.contains("this handler handles `Main.Log` because of this clause"),
+        "{full}"
+    );
+}
+
+#[test]
+fn a_missing_clause_is_suggested_with_the_qualifier_of_the_existing_clause() {
+    let entry = "import Report as R\nimport Report (State(..))\n\neffect State where\n  tick : Unit -> Unit\n\nf : Unit -> Int\nf () =\n  handle 0 with\n    | R.get () k -> resume k 1\n\ng : Unit -> Int\ng () =\n  handle 0 with\n    | get () k -> resume k 1";
+    let lowered = eml_test_support::lower_files(
+        entry,
+        &[(
+            "Report.em",
+            "pub effect State where\n  get : Unit -> Int\n  put : Int -> Unit",
+        )],
+    );
+    insta::assert_snapshot!(eml_test_support::full(&lowered.files, &lowered.diagnostics), @r"
+    E1013 9:3 this handler has no clause for `put` of `Report.State`
+      9:3 this handler
+      help: add `| R.put _ k -> ...`
+    E1013 14:3 this handler has no clause for `put` of `Report.State`
+      14:3 this handler
+      help: add `| put _ k -> ...`
+    ");
+}

@@ -15,6 +15,8 @@ use crate::hir::*;
 struct Clauses {
     /// 最初に解決できた節の操作のエフェクトと、その節の操作名の範囲。
     effect: Option<(EffectId, TextRange)>,
+    /// エフェクトを決めた節の先頭の修飾子。E1013 の help は、節の先頭をこの修飾子で書く。
+    qualifier: Option<String>,
     /// 節を書いた操作と、その節の操作名の範囲。引数の個数を誤った節も含める。節のない操作として二重に報告しないため。
     seen: Vec<(OperationId, TextRange)>,
     /// 操作の節を書いたか。解決できなかった節も含める。
@@ -151,10 +153,14 @@ impl BodyLowering<'_> {
             return;
         }
         match out.effect {
-            None => out.effect = Some((effect, name_range)),
+            None => {
+                out.effect = Some((effect, name_range));
+                out.qualifier = clause_qualifier(clause);
+            }
             Some((handled, first)) if handled != effect => {
-                let handled = &self.effect(handled).name;
-                let other = &self.effect(effect).name;
+                let names = self.items.names();
+                let handled = names.effect(handled);
+                let other = names.effect(effect);
                 self.diagnostics.push(
                     Diagnostic::error(
                         codes::MIXED_EFFECTS_IN_HANDLER,
@@ -273,8 +279,8 @@ impl BodyLowering<'_> {
     /// 節があってエフェクトが決まらないときは、報告済みなので何も言わない。
     fn missing_clauses(&mut self, keyword: TextRange, clauses: &Clauses) {
         match clauses.effect {
-            Some((effect, _)) => {
-                let effect = self.effect(effect);
+            Some((effect_id, _)) => {
+                let effect = self.effect(effect_id);
                 let missing: Vec<&Operation> = effect
                     .operations
                     .iter()
@@ -290,14 +296,19 @@ impl BodyLowering<'_> {
                     .collect();
                 let examples: Vec<String> = missing
                     .iter()
-                    .map(|operation| format!("`{}`", clause_example(operation)))
+                    .map(|operation| {
+                        format!(
+                            "`{}`",
+                            clause_example(operation, clauses.qualifier.as_deref())
+                        )
+                    })
                     .collect();
                 let diagnostic = Diagnostic::error(
                     codes::MISSING_CLAUSE,
                     format!(
                         "this handler has no clause for {} of `{}`",
                         names.join(", "),
-                        effect.name
+                        self.items.names().effect(effect_id)
                     ),
                     Label::new(self.file, keyword, "this handler"),
                 )
@@ -381,9 +392,23 @@ impl BodyLowering<'_> {
     }
 }
 
-/// E1013 の help に出す節の書き方。
-fn clause_example(operation: &Operation) -> String {
-    let mut example = format!("| {}", operation.name);
+/// 節の先頭の修飾子 (`| R.get () k` の `R`)。修飾していなければ `None`。
+fn clause_qualifier(clause: &ast::OpClause) -> Option<String> {
+    let segments: Vec<String> = clause
+        .path()?
+        .segments()
+        .map(|segment| segment.text())
+        .collect();
+    let (_, qualifier) = segments.split_last()?;
+    (!qualifier.is_empty()).then(|| qualifier.join("."))
+}
+
+/// E1013 の help に出す節の書き方。既存の節と同じ修飾子で書き、その handler にそのまま足せる形にする。
+fn clause_example(operation: &Operation, qualifier: Option<&str>) -> String {
+    let mut example = match qualifier {
+        Some(qualifier) => format!("| {qualifier}.{}", operation.name),
+        None => format!("| {}", operation.name),
+    };
     for _ in 0..operation.arity {
         example.push_str(" _");
     }

@@ -11,6 +11,7 @@ use crate::codes;
 use crate::hir::LangItems;
 use crate::item_tree::{Fixity, ImportName, ItemTree};
 use crate::load::{ImportTarget, LoadedModule};
+use crate::names::DisplayNames;
 use crate::program::{
     ConstructorId, EffectId, FunctionId, ItemId, ModuleId, OperationId, TypeDefId,
 };
@@ -205,6 +206,7 @@ pub struct DefMap {
     prelude: ModuleId,
     entry: ModuleId,
     lang: LangItems,
+    names: DisplayNames,
 }
 
 /// モジュール 0 を Prelude、1 を入口として読む。値と型の名前空間の重複 (E1003)、fixity の重複 (E1021)、このモジュールに
@@ -231,12 +233,14 @@ pub fn def_map(modules: &[LoadedModule]) -> (DefMap, Vec<Diagnostic>) {
     }
     check_cycles(modules, &mut diagnostics);
     let lang = lang_items(&scopes[0]);
+    let names = display_names(&scopes, lang.unit);
     (
         DefMap {
             modules: scopes,
             prelude: module_id(0),
             entry: module_id(1),
             lang,
+            names,
         },
         diagnostics,
     )
@@ -846,6 +850,33 @@ fn lang_items(prelude: &ModuleScope) -> LangItems {
     }
 }
 
+/// 名前の表から表示名の表を作る。HIR の診断は `lower` の途中で出るので、`Program` より先に作る。重複した宣言の部品も
+/// ID を持つので、使えるかによらず入れる。
+fn display_names(scopes: &[ModuleScope], unit: TypeDefId) -> DisplayNames {
+    let mut types = Vec::new();
+    let mut effects = Vec::new();
+    let mut constructors = Vec::new();
+    for scope in scopes {
+        let module = scope.name.as_str();
+        for (name, definitions) in &scope.types {
+            for definition in definitions {
+                match definition.item {
+                    TypeItem::Type(id) => types.push((id, module, name.as_str())),
+                    TypeItem::Effect(id) => effects.push((id, module, name.as_str())),
+                }
+            }
+        }
+        for (name, definitions) in &scope.values {
+            for definition in definitions {
+                if let Value::Constructor(id) = definition.item {
+                    constructors.push((id, module, name.as_str()));
+                }
+            }
+        }
+    }
+    DisplayNames::new(types, effects, constructors, unit)
+}
+
 impl DefMap {
     pub fn prelude(&self) -> ModuleId {
         self.prelude
@@ -861,6 +892,10 @@ impl DefMap {
 
     pub fn lang(&self) -> LangItems {
         self.lang
+    }
+
+    pub fn display_names(&self) -> &DisplayNames {
+        &self.names
     }
 
     /// `module` の中から名前を引く口。
@@ -908,6 +943,11 @@ pub struct Resolver<'a> {
 impl<'a> Resolver<'a> {
     pub fn module(&self) -> ModuleId {
         self.module
+    }
+
+    /// HIR の診断が型、エフェクト、コンストラクタを書くときの表示名。
+    pub fn names(&self) -> &'a DisplayNames {
+        &self.def_map.names
     }
 
     fn own(&self) -> &'a ModuleScope {

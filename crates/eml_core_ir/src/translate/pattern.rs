@@ -541,13 +541,8 @@ fn substitute(ty: &Type, names: &[String], args: &[Type]) -> Type {
             .iter()
             .position(|candidate| candidate == name)
             .map_or_else(|| ty.clone(), |index| args[index].clone()),
-        Type::Con {
-            id,
-            name,
-            args: inner,
-        } => Type::Con {
+        Type::Con { id, args: inner } => Type::Con {
             id: *id,
-            name: name.clone(),
             args: inner
                 .iter()
                 .map(|arg| substitute(arg, names, args))

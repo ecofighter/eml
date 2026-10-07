@@ -5,7 +5,9 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use eml_diagnostics::{FileId, TextRange, TextSize};
-use eml_hir::{Body, ClauseSource, Closure, ExprId, ExprKind, LocalId, PatId, PatKind, Res, Stmt};
+use eml_hir::{
+    Body, ClauseSource, Closure, DisplayNames, ExprId, ExprKind, LocalId, PatId, PatKind, Res, Stmt,
+};
 
 use crate::check::BodyTyping;
 use crate::kind::{Bound, DropFix, KindOrigin, KindReason, Provenance, Span, UnusedPath};
@@ -75,6 +77,7 @@ pub(crate) fn constrain(
     typing: &BodyTyping,
     table: &mut Table,
     reliable: bool,
+    names: &DisplayNames,
 ) {
     let mut by_name: HashMap<&str, Vec<LocalId>> = HashMap::new();
     for (local, data) in body.locals.iter() {
@@ -90,6 +93,7 @@ pub(crate) fn constrain(
         typing,
         table,
         reliable,
+        names,
         by_name,
         scopes: HashMap::new(),
         omitted_states: HashSet::new(),
@@ -106,6 +110,8 @@ struct Usage<'a, 'c> {
     typing: &'a BodyTyping,
     table: &'a mut Table<'c>,
     reliable: bool,
+    /// 合成した `return` の節が捨てる状態の型を、診断に書くため。
+    names: &'a DisplayNames,
     /// 名前ごとの局所変数を、束縛の位置の順に並べたもの。消費漏れの fix と診断が、同じ名前の後の束縛を探すのに使う。
     by_name: HashMap<&'a str, Vec<LocalId>>,
     /// 変数が見える範囲の式。同じ名前の後の束縛が、ある位置で前の変数を隠すかを決めるのに使う。変数を数え終える前に
@@ -330,7 +336,7 @@ impl<'a> Usage<'a, '_> {
                     // 合成した `_` の範囲は `from` の初期値の式なので、報告はそこを指す (docs/spec/diagnostics.md の E3004)
                     let reason = if self.omitted_states.contains(&pat) {
                         KindReason::OmittedReturn {
-                            ty: self.table.export(ty).to_string(),
+                            ty: self.table.export(ty).display(self.names).to_string(),
                         }
                     } else {
                         KindReason::Discarded
