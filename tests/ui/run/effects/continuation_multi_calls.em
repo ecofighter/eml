@@ -1,4 +1,4 @@
--- `multi` operations may be resumed any number of times. A `resume` that is not the last use of the continuation
+-- `multi` operations may be resumed any number of times. A call of `k` that is not the last use of the continuation
 -- copies the captured frames, so each resumption runs the rest of the computation on its own. Dropping the
 -- continuation or not using it releases the frames and the strings they saved.
 effect Choice where

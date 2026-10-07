@@ -1,7 +1,7 @@
 ---
 source: crates/eml_cli/tests/ui.rs
 expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{stderr}\")"
-input_file: tests/ui/run/effects/multi_resume.em
+input_file: tests/ui/run/effects/continuation_multi_calls.em
 ---
 --- stdout ---
 picked 1 and picked 2

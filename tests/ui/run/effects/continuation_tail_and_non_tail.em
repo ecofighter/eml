@@ -1,4 +1,4 @@
--- `once` operations resumed in tail position and not in tail position. After a resume that is not in tail
+-- `once` operations called in tail position and not in tail position. After a call of the continuation that is not in tail
 -- position, the clause runs the rest of its body with the value of the whole handler.
 effect Ask where
   ask : String -> String

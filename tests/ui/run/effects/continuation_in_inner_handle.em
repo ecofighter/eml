@@ -1,4 +1,4 @@
--- 節の中の handle の本体で `resume` すると、再開した `act` の `log` はその handle を飛ばし、`main` の handler に届く。
+-- 節の中の handle の本体で `k 1` を呼ぶと、再開した `act` の `log` はその handle を飛ばし、`main` の handler に届く。
 effect Ask where
   ask : Unit -> Int
 

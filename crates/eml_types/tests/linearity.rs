@@ -631,7 +631,7 @@ fn unrestricted_values_may_be_kept_across_a_multi_operation() {
 }
 
 #[test]
-fn a_clause_argument_kept_across_a_resume() {
+fn a_clause_argument_kept_across_a_continuation_call() {
     let rest = "use_then_choose : File -> <Use, Choice> Unit\nuse_then_choose f =\n  use_file f\n  let b = choose ()\n  ()\n\nresumed : Unit -> <Choice, IO> Unit\nresumed () =\n  let f = open \"a.txt\"\n  handle use_then_choose f with\n    | use_file g k ->\n        let r = k ()\n        close g\n        r";
     insta::assert_snapshot!(carried(rest), @"
     E3006 31:17 `g` must be used exactly once, but it is kept alive across a call that may resume more than once
@@ -671,7 +671,7 @@ fn a_return_clause_capture_under_an_outer_multi_operation() {
 }
 
 #[test]
-fn a_file_may_be_kept_across_a_handle_and_a_resume_without_multi() {
+fn a_file_may_be_kept_across_a_handle_and_a_continuation_call_without_multi() {
     let rest = "fine_return : Unit -> <IO> Unit\nfine_return () =\n  let f = open \"a.txt\"\n  handle ask () with\n    | ask () k -> k 1\n    | return n -> close f\n\nfine_resume : Unit -> <IO> Unit\nfine_resume () =\n  let f = open \"a.txt\"\n  handle use_file f with\n    | use_file g k ->\n        let r = k ()\n        close g\n        r";
     assert_eq!(carried(rest), "");
 }

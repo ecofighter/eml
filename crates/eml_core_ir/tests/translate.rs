@@ -900,9 +900,9 @@ fn arrows_with_different_masks_are_applied_apart() {
     ");
 }
 
-/// `resume` の `mask`。節は handle の外側の row で動くので、ふつうは `mask` が要らない。
+/// 節の中の継続の呼び出しの `mask`。節は handle の外側の row で動くので、ふつうは `mask` が要らない。
 #[test]
-fn a_resume_in_its_clause_has_no_mask() {
+fn a_continuation_call_in_its_clause_has_no_mask() {
     let text = format!(
         "{STATE}run : (Unit -> <State Int | e> a) -> <e> a\nrun action =\n  handle action () from 0 with\n    | get () k st -> k st st\n    | put n k _ -> k () n\n    | return x _ -> x\n\nmain : Unit -> <IO> Unit\nmain () = println (show_int (run (fn () -> get ())))\n"
     );
@@ -914,10 +914,10 @@ fn a_resume_in_its_clause_has_no_mask() {
     ");
 }
 
-/// 節の中の handle の本体にある `resume` は、その handle が足したラベルを飛ばす。型検査が継続の呼び出しの矢印 0 に
+/// 節の中の handle の本体にある継続の呼び出しは、その handle が足したラベルを飛ばす。型検査が継続の呼び出しの矢印 0 に
 /// 記録した `mask` を使う。
 #[test]
-fn a_resume_inside_an_inner_handle_is_masked() {
+fn a_continuation_call_inside_an_inner_handle_is_masked() {
     let text = "\
 effect Ask where
   ask : Unit -> Int

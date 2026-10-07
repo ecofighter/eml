@@ -1,9 +1,11 @@
 ---
 source: crates/eml_cli/tests/ui.rs
 expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{stderr}\")"
-input_file: tests/ui/run/effects/mask_resume.em
+input_file: tests/ui/run/effects/continuation_tail_and_non_tail.em
 ---
 --- stdout ---
-outer after
-2
+hello name! from place!
+asked place
+asked name
+[hello name from place]
 --- stderr ---
