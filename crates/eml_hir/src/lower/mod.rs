@@ -14,39 +14,40 @@ use crate::codes;
 use crate::def_map::{DefMap, module_id};
 use crate::hir::*;
 use crate::item_tree::{FunctionItem, ItemTree};
+use crate::load::LoadedModule;
 use crate::program::{ItemId, Items, Module, ModuleId, Program};
 use expr::BodyLowering;
 use types::{TypeLowering, Vars};
 
 /// 全モジュールの item と本体を変換する。名前は `def_map` で引き、item はその局所の番号の順にアリーナへ置く
 /// (docs/implementation/architecture.md の「`eml_hir` の内部」)。
-pub fn lower(def_map: &DefMap, trees: &[ItemTree]) -> (Program, Vec<Diagnostic>) {
+pub fn lower(def_map: &DefMap, modules: &[LoadedModule]) -> (Program, Vec<Diagnostic>) {
     let mut diagnostics = Vec::new();
-    let mut modules = Arena::new();
-    for (index, tree) in trees.iter().enumerate() {
+    let mut arena = Arena::new();
+    for (index, loaded) in modules.iter().enumerate() {
         let module = module_id(index);
-        let id = modules.alloc(Module::new(tree.file, def_map.module_name(module)));
+        let id = arena.alloc(Module::new(loaded.tree.file, def_map.module_name(module)));
         debug_assert_eq!(id, module);
     }
-    for (index, tree) in trees.iter().enumerate() {
+    for (index, loaded) in modules.iter().enumerate() {
         let module = module_id(index);
         lower_items(
             def_map,
             module,
-            tree,
-            &mut modules[module].items,
+            &loaded.tree,
+            &mut arena[module].items,
             &mut diagnostics,
         );
     }
     let lang = def_map.lang();
-    for (index, tree) in trees.iter().enumerate() {
+    for (index, loaded) in modules.iter().enumerate() {
         let module = module_id(index);
-        let bodies = lower_bodies(def_map, module, tree, &mut modules, &mut diagnostics);
-        modules[module].bodies = bodies;
+        let bodies = lower_bodies(def_map, module, &loaded.tree, &mut arena, &mut diagnostics);
+        arena[module].bodies = bodies;
     }
     (
         Program {
-            modules,
+            modules: arena,
             prelude: def_map.prelude(),
             entry: def_map.entry(),
             lang,

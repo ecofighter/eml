@@ -1,8 +1,8 @@
 use eml_core_ir::{Pass, pretty};
 use eml_diagnostics::{Diagnostic, ErrorCode, Label, TextRange};
 use eml_test_support::{
-    check, core, core_until, full, lower, lower_clean, parse, parse_clean, run, short, short_text,
-    source, with_diagnostics,
+    check, check_files, core, core_until, full, lower, lower_clean, lower_files, parse,
+    parse_clean, run, run_files, short, short_text, source, with_diagnostics,
 };
 
 fn range(start: u32, end: u32) -> TextRange {
@@ -43,6 +43,35 @@ fn stages_collect_the_diagnostics_of_earlier_stages() {
     assert_eq!(codes(&parse(text).diagnostics), ["E0001"]);
     assert_eq!(codes(&lower(text).diagnostics), ["E0001", "E1001"]);
     assert_eq!(codes(&check(text).diagnostics), ["E0001", "E1001"]);
+}
+
+#[test]
+fn the_files_variants_read_modules_from_memory() {
+    let entry = "import Util\n\nmain : Unit -> <IO> Unit\nmain () = println \"hi\"";
+    let codes = |diagnostics: &[Diagnostic]| -> Vec<String> {
+        diagnostics.iter().map(|d| d.code.to_string()).collect()
+    };
+    // 依存先の字句の誤りも、読み込みの段の診断として結果に入る
+    let broken = [("Util.em", "€")];
+    assert_eq!(codes(&lower_files(entry, &broken).diagnostics), ["E0001"]);
+    assert_eq!(codes(&check_files(entry, &broken).diagnostics), ["E0001"]);
+    let clean = [("Util.em", "pub x : Int\nx = 1")];
+    assert_eq!(run_files(entry, &clean), ("hi\n".to_string(), Ok(())));
+    let missing = lower_files("import Util", &[]);
+    assert_eq!(
+        short(&missing.files, &missing.diagnostics),
+        ["E1026 1:8 cannot find module `Util`"]
+    );
+    // 入口以外のモジュールの `main` は、実行を始める関数でも E2004 の対象でもない (docs/spec/types.md)
+    let library_main = [("Util.em", "pub main : Int\nmain = 1")];
+    assert_eq!(
+        codes(&check_files(entry, &library_main).diagnostics),
+        Vec::<String>::new()
+    );
+    assert_eq!(
+        run_files(entry, &library_main),
+        ("hi\n".to_string(), Ok(()))
+    );
 }
 
 #[test]

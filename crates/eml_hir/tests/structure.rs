@@ -145,22 +145,13 @@ fn prelude_signatures_without_equations_are_intrinsic_functions() {
 fn prelude_functions_with_equations_are_not_intrinsic() {
     // Prelude の関数は本体を持てる (docs/spec/declarations.md の標準の演算子の表)。intrinsic は等式の
     // ないシグネチャだけである
-    let mut files = eml_diagnostics::SourceFiles::new();
-    let source = format!(
+    let prelude = format!(
         "{}\npub twice : Int -> Int\ntwice x = x + x\n",
         eml_hir::PRELUDE_SOURCE
     );
-    let prelude = files.add(eml_hir::PRELUDE_PATH, source);
-    let entry = files.add("test.em", "");
-    let trees = [prelude, entry].map(|file| {
-        let (parse, errors) = eml_syntax::parse(file, files.text(file));
-        assert!(errors.is_empty(), "{errors:?}");
-        eml_hir::item_tree(file, &parse.tree()).0
-    });
-    let (def_map, diagnostics) = eml_hir::def_map(&trees);
-    assert!(diagnostics.is_empty(), "{diagnostics:?}");
-    let (program, diagnostics) = eml_hir::lower(&def_map, &trees);
-    assert!(diagnostics.is_empty(), "{diagnostics:?}");
+    let lowered = eml_test_support::lower_with_prelude(&prelude, "");
+    assert!(lowered.diagnostics.is_empty(), "{:?}", lowered.diagnostics);
+    let program = lowered.program;
     let twice = function_id(&program, "twice");
     assert!(!program[twice].intrinsic);
     assert!(program.body(twice).is_some());
@@ -220,6 +211,29 @@ fn the_prelude_and_the_entry_are_separate_modules() {
 }
 
 #[test]
+fn imported_modules_follow_the_entry() {
+    let lowered = eml_test_support::lower_files(
+        "import Report.Csv\n\nf : Int\nf = 1",
+        &[("Report/Csv.em", "pub g : Int\ng = 2")],
+    );
+    assert!(
+        lowered.diagnostics.is_empty(),
+        "{}",
+        eml_test_support::short_text(&lowered.files, &lowered.diagnostics)
+    );
+    let program = &lowered.program;
+    let names: Vec<&str> = program
+        .modules
+        .iter()
+        .map(|(_, module)| module.name.as_str())
+        .collect();
+    assert_eq!(names, ["Prelude", "Main", "Report.Csv"]);
+    let g = function_id(program, "g");
+    assert_eq!(lowered.files.path(program.file(g.module)), "Report/Csv.em");
+    assert!(program.body(g).is_some());
+}
+
+#[test]
 fn main_is_the_entry_function_named_main() {
     let program = module("f : Int\nf = 1\n\nmain : Unit -> <IO> Unit\nmain () = ()");
     let main = program.main().expect("main");
@@ -240,22 +254,13 @@ fn an_operation_named_main_is_not_the_entry_function() {
 #[test]
 fn a_main_in_the_prelude_is_not_the_entry_function() {
     // `main` は入口のモジュールからだけ探す (docs/implementation/architecture.md の「CLI と lib API」)
-    let mut files = eml_diagnostics::SourceFiles::new();
-    let source = format!(
+    let prelude = format!(
         "{}\nmain : Unit -> <IO> Unit\nmain () = ()\n",
         eml_hir::PRELUDE_SOURCE
     );
-    let prelude = files.add(eml_hir::PRELUDE_PATH, source);
-    let entry = files.add("test.em", "");
-    let trees = [prelude, entry].map(|file| {
-        let (parse, errors) = eml_syntax::parse(file, files.text(file));
-        assert!(errors.is_empty(), "{errors:?}");
-        eml_hir::item_tree(file, &parse.tree()).0
-    });
-    let (def_map, diagnostics) = eml_hir::def_map(&trees);
-    assert!(diagnostics.is_empty(), "{diagnostics:?}");
-    let (program, diagnostics) = eml_hir::lower(&def_map, &trees);
-    assert!(diagnostics.is_empty(), "{diagnostics:?}");
+    let lowered = eml_test_support::lower_with_prelude(&prelude, "");
+    assert!(lowered.diagnostics.is_empty(), "{:?}", lowered.diagnostics);
+    let program = lowered.program;
     assert!(
         program
             .functions()

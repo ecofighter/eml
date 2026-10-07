@@ -123,15 +123,18 @@ pub fn missing_main(file: FileId) -> Diagnostic {
 /// 単体テストのための `Program`。Prelude と、`text` を入口にしたモジュールを変換する。
 #[cfg(test)]
 pub(crate) fn test_program(text: &str) -> eml_hir::Program {
-    let mut files = eml_diagnostics::SourceFiles::new();
-    let prelude = files.add(eml_hir::PRELUDE_PATH, eml_hir::PRELUDE_SOURCE);
-    let main = files.add("test.em", text);
-    let (parse, _) = eml_syntax::parse(main, files.text(main));
-    let prelude_tree = eml_hir::parse_prelude(prelude);
-    let trees = [
-        eml_hir::item_tree(prelude, &prelude_tree).0,
-        eml_hir::item_tree(main, &parse.tree()).0,
-    ];
-    let (def_map, _) = eml_hir::def_map(&trees);
-    eml_hir::lower(&def_map, &trees).0
+    let (loaded, _) = eml_hir::load("test.em", text, &NoModules);
+    let (def_map, _) = eml_hir::def_map(&loaded.modules);
+    eml_hir::lower(&def_map, &loaded.modules).0
+}
+
+/// 単体テストの入口は import を書かないので、依存先を読む手段は要らない。
+#[cfg(test)]
+struct NoModules;
+
+#[cfg(test)]
+impl eml_hir::ModuleSource for NoModules {
+    fn read(&self, _: &eml_hir::ModulePath) -> Result<String, eml_hir::ReadError> {
+        Err(eml_hir::ReadError::NotFound)
+    }
 }

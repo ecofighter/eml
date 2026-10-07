@@ -11,32 +11,20 @@ const CHOICE: &str = "pub effect Choice where\n  multi choose : Unit -> Bool\n";
 /// Prelude の末尾に `extra` を足したプログラムを検査し、診断を「番号 文言」と、ラベルごとの「ファイル "指す文字列" 文言」
 /// の行にする。Prelude の行番号は Prelude を変えるたびに動くので、位置は指す文字列で示す。
 fn check_with_prelude(extra: &str, text: &str) -> String {
-    let mut files = SourceFiles::new();
-    let prelude = files.add(
-        eml_hir::PRELUDE_PATH,
-        format!("{}\n{extra}", eml_hir::PRELUDE_SOURCE),
+    let lowered = eml_test_support::lower_with_prelude(
+        &format!("{}\n{extra}", eml_hir::PRELUDE_SOURCE),
+        text,
     );
-    let entry = files.add("test.em", text);
-    let mut diagnostics = Vec::new();
-    let trees = [prelude, entry].map(|file| {
-        let (parse, errors) = eml_syntax::parse(file, files.text(file));
-        assert!(errors.is_empty(), "{errors:?}");
-        let (tree, stage) = eml_hir::item_tree(file, &parse.tree());
-        diagnostics.extend(stage);
-        tree
-    });
-    let (def_map, stage) = eml_hir::def_map(&trees);
-    diagnostics.extend(stage);
-    let (program, stage) = eml_hir::lower(&def_map, &trees);
-    diagnostics.extend(stage);
-    let (_, stage) = eml_types::check(&program);
+    let (_, stage) = eml_types::check(&lowered.program);
+    let mut diagnostics = lowered.diagnostics;
     diagnostics.extend(stage);
     eml_diagnostics::sort_diagnostics(&mut diagnostics);
+    let files = &lowered.files;
     let mut out = String::new();
     for d in &diagnostics {
         writeln!(out, "{} {}", d.code, d.message).unwrap();
         for label in std::iter::once(&d.primary).chain(&d.secondary) {
-            writeln!(out, "  {}", shown(&files, label)).unwrap();
+            writeln!(out, "  {}", shown(files, label)).unwrap();
         }
     }
     out

@@ -8,6 +8,7 @@ mod def_map;
 mod effects;
 mod eval;
 mod item_tree;
+mod load;
 mod lower;
 mod operators;
 mod scaling;

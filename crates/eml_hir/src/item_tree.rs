@@ -12,6 +12,8 @@ use crate::codes;
 #[derive(Debug)]
 pub struct ItemTree {
     pub file: FileId,
+    /// ソースの順。宣言の後の import (E0011) も含む。読み込みの段が、この順にたどる。
+    pub imports: Vec<ImportItem>,
     pub functions: Vec<FunctionItem>,
     pub data: Vec<DataItem>,
     pub effects: Vec<EffectItem>,
@@ -74,6 +76,49 @@ pub struct FixityItem {
     pub operators: Vec<(String, TextRange)>,
 }
 
+/// モジュールのパス。`Report.Csv` は ["Report", "Csv"]。
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ModulePath(pub Vec<String>);
+
+impl ModulePath {
+    pub fn dotted(&self) -> String {
+        self.0.join(".")
+    }
+
+    /// 根からの相対パス。モジュール名とパスは大文字小文字まで一致させる (docs/spec/modules.md の「モジュール」)。
+    pub fn file_path(&self) -> String {
+        format!("{}.em", self.0.join("/"))
+    }
+
+    pub fn last(&self) -> &str {
+        self.0.last().expect("a module path has a segment")
+    }
+}
+
+#[derive(Debug)]
+pub struct ImportItem {
+    pub path: ModulePath,
+    pub path_range: TextRange,
+    /// 修飾子 (別名か最後のセグメント) と、その位置 (別名がなければパスの位置)。
+    pub qualifier: (String, TextRange),
+    pub has_alias: bool,
+    pub list: Option<Vec<ImportName>>,
+    /// import の全体。
+    pub range: TextRange,
+}
+
+#[derive(Debug, Clone)]
+pub enum ImportName {
+    /// 小文字の名前か `(op)`。
+    Value { name: String, range: TextRange },
+    /// 大文字の名前。`T(..)` / `E(..)` なら `all` が真。
+    Type {
+        name: String,
+        range: TextRange,
+        all: bool,
+    },
+}
+
 /// 演算子の結合の向き (docs/spec/declarations.md の「fixity」)。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Assoc {
@@ -108,7 +153,7 @@ struct Definition {
     equations: Vec<(usize, ast::Equation, TextRange)>,
 }
 
-/// トップレベルの宣言を集める。E1003 (シグネチャの重複)、E1004、E1018、E1019 と、`type` と import の E0004 を出す。
+/// トップレベルの宣言を集める。E1003 (シグネチャの重複)、E1004、E1018、E1019 と、`type` の E0004 を出す。
 /// E1005 は、Prelude の等式のないシグネチャが intrinsic であり、モジュールの種類を知らないここでは決められないので、
 /// `lower` が出す。
 pub fn item_tree(file: FileId, source: &ast::SourceFile) -> (ItemTree, Vec<Diagnostic>) {
@@ -118,6 +163,7 @@ pub fn item_tree(file: FileId, source: &ast::SourceFile) -> (ItemTree, Vec<Diagn
     let mut data = Vec::new();
     let mut effects = Vec::new();
     let mut fixities = Vec::new();
+    let mut imports = Vec::new();
     for (index, item) in source.items().enumerate() {
         let public = item.pub_keyword().is_some();
         match item {
@@ -224,16 +270,7 @@ pub fn item_tree(file: FileId, source: &ast::SourceFile) -> (ItemTree, Vec<Diagn
                     "`type` declarations are not supported yet",
                 ));
             }
-            ast::Item::ImportItem(item) => {
-                let range = item
-                    .import_keyword()
-                    .map_or(item.range(), |keyword| keyword.text_range());
-                diagnostics.push(Diagnostic::not_yet_supported(
-                    file,
-                    range,
-                    "`import` is not supported yet",
-                ));
-            }
+            ast::Item::ImportItem(item) => imports.extend(import_of(&item)),
         }
     }
     let functions = definitions
@@ -243,6 +280,7 @@ pub fn item_tree(file: FileId, source: &ast::SourceFile) -> (ItemTree, Vec<Diagn
     (
         ItemTree {
             file,
+            imports,
             functions,
             data,
             effects,
@@ -346,6 +384,54 @@ fn slot(
             equations: Vec::new(),
         });
         definitions.len() - 1
+    })
+}
+
+/// パスが読めなかった import はパーサが報告済みなので、読み込みもスコープへの登録もしない。
+fn import_of(item: &ast::ImportItem) -> Option<ImportItem> {
+    let path = item.path()?;
+    let path_range = path.range();
+    let module = ModulePath(path.segments().map(|segment| segment.text()).collect());
+    let alias = item.alias().map(|name| name.token());
+    let qualifier = match &alias {
+        Some(token) => (token.text().to_string(), token.text_range()),
+        None => (module.last().to_string(), path_range),
+    };
+    let list = item
+        .list()
+        .map(|list| list.names().filter_map(|name| import_name(&name)).collect());
+    Some(ImportItem {
+        path: module,
+        path_range,
+        qualifier,
+        has_alias: alias.is_some(),
+        list,
+        range: item.range(),
+    })
+}
+
+/// 並びの名前。大文字の名前は型かエフェクトだけを指す (docs/spec/modules.md の「import」)。
+fn import_name(name: &ast::ImportName) -> Option<ImportName> {
+    if let Some(name_ref) = name.name() {
+        let token = name_ref.token();
+        let text = token.text().to_string();
+        let range = token.text_range();
+        return Some(match token.kind() {
+            SyntaxKind::UIDENT => ImportName::Type {
+                name: text,
+                range,
+                all: name.all_constructors(),
+            },
+            _ => ImportName::Value { name: text, range },
+        });
+    }
+    // `:` で始まる演算子はパーサが E0011 にした。中置のコンストラクタは `T(..)` で取り込む (docs/spec/modules.md の「import」)
+    let operator = name
+        .operator()
+        .filter(|token| token.kind() != SyntaxKind::CONOP)?;
+    Some(ImportName::Value {
+        name: operator.text().to_string(),
+        range: operator.text_range(),
     })
 }
 

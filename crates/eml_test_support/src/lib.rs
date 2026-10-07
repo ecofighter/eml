@@ -48,20 +48,38 @@ pub struct Checked {
     pub diagnostics: Vec<Diagnostic>,
 }
 
+/// UI テスト以外のテストで登録する、入口のファイルの表示のパス。
+pub const ENTRY_PATH: &str = "test.em";
+
+/// メモリ上の (根からの相対パス, 本文)。複数のファイルのテストでも、CLI と同じ読み込みの段を通すため。
+pub struct MemorySource<'a>(pub &'a [(&'a str, &'a str)]);
+
+#[cfg(feature = "hir")]
+impl eml_hir::ModuleSource for MemorySource<'_> {
+    fn read(&self, path: &eml_hir::ModulePath) -> Result<String, eml_hir::ReadError> {
+        let wanted = path.file_path();
+        self.0
+            .iter()
+            .find(|(file, _)| *file == wanted)
+            .map(|(_, text)| text.to_string())
+            .ok_or(eml_hir::ReadError::NotFound)
+    }
+}
+
 pub fn source(text: &str) -> (SourceFiles, FileId) {
     let (files, _, file) = source_with_prelude(text);
     (files, file)
 }
 
-/// `eml_cli::Session` と同じく、Prelude を先に登録する。診断はファイルの番号の順に並ぶので、Prelude の範囲を指す診断が
-/// 出たときに、テストと CLI で並びをそろえるため。
+/// 読み込みの段 (`eml_hir::load`) と同じく、Prelude を先に登録する。診断はファイルの番号の順に並ぶので、Prelude の範囲を
+/// 指す診断が出たときに、テストと CLI で並びをそろえるため。
 fn source_with_prelude(text: &str) -> (SourceFiles, Option<FileId>, FileId) {
     let mut files = SourceFiles::new();
     #[cfg(feature = "hir")]
     let prelude = Some(files.add(eml_hir::PRELUDE_PATH, eml_hir::PRELUDE_SOURCE));
     #[cfg(not(feature = "hir"))]
     let prelude = None;
-    let file = files.add("test.em", text);
+    let file = files.add(ENTRY_PATH, text);
     (files, prelude, file)
 }
 
@@ -87,58 +105,58 @@ pub fn parse(text: &str) -> Parsed {
 
 #[cfg(feature = "hir")]
 pub fn lower(text: &str) -> Lowered {
-    let (parsed, trees, def_map, mut diagnostics) = items(text);
-    let (program, stage) = eml_hir::lower(&def_map, &trees);
+    lower_files(text, &[])
+}
+
+/// `modules` は根からの相対パス (`"Report/Csv.em"`) と本文の組である。診断には読み込みの段のものも入る。
+#[cfg(feature = "hir")]
+pub fn lower_files(entry: &str, modules: &[(&str, &str)]) -> Lowered {
+    lower_loaded(eml_hir::load(ENTRY_PATH, entry, &MemorySource(modules)))
+}
+
+/// Prelude に定義を足したプログラムを変換する。Prelude の中の item の扱いを確かめるテストのため。
+#[cfg(feature = "hir")]
+pub fn lower_with_prelude(prelude: &str, entry: &str) -> Lowered {
+    lower_loaded(eml_hir::load_with_prelude(
+        prelude,
+        ENTRY_PATH,
+        entry,
+        &MemorySource(&[]),
+    ))
+}
+
+#[cfg(feature = "hir")]
+fn lower_loaded((loaded, mut diagnostics): (eml_hir::Loaded, Vec<Diagnostic>)) -> Lowered {
+    let (def_map, stage) = eml_hir::def_map(&loaded.modules);
+    diagnostics.extend(stage);
+    let (program, stage) = eml_hir::lower(&def_map, &loaded.modules);
     diagnostics.extend(stage);
     sort_diagnostics(&mut diagnostics);
     Lowered {
-        files: parsed.files,
-        file: parsed.file,
+        files: loaded.files,
+        file: loaded.entry,
         program,
         diagnostics,
     }
 }
 
-/// Prelude と入口のファイルの `ItemTree` から `DefMap` を作り、`def_map` の診断だけを返す。
 #[cfg(feature = "hir")]
 pub fn def_map(text: &str) -> (eml_hir::DefMap, Vec<String>) {
-    let parsed = parse(text);
-    let (_, def_map, mut diagnostics) = item_stages(&parsed);
+    def_map_files(text, &[])
+}
+
+/// 読み込みの段の後に `DefMap` を作り、入口の `ItemTree` の診断と `def_map` の診断を返す。構文解析と読み込みの段の
+/// 診断は入れない。
+#[cfg(feature = "hir")]
+pub fn def_map_files(entry: &str, modules: &[(&str, &str)]) -> (eml_hir::DefMap, Vec<String>) {
+    let (loaded, _) = eml_hir::load(ENTRY_PATH, entry, &MemorySource(modules));
+    // 読み込みの段は構文解析と `ItemTree` の診断を混ぜて返すので、入口の `ItemTree` の診断だけを作り直す
+    let (parse, _) = eml_syntax::parse(loaded.entry, loaded.files.text(loaded.entry));
+    let (_, mut diagnostics) = eml_hir::item_tree(loaded.entry, &parse.tree());
+    let (def_map, stage) = eml_hir::def_map(&loaded.modules);
+    diagnostics.extend(stage);
     sort_diagnostics(&mut diagnostics);
-    (def_map, short(&parsed.files, &diagnostics))
-}
-
-/// 構文解析から `DefMap` までの段階を流す。診断は構文解析、`ItemTree`、`DefMap` のものを合わせる。
-#[cfg(feature = "hir")]
-fn items(
-    text: &str,
-) -> (
-    Parsed,
-    [eml_hir::ItemTree; 2],
-    eml_hir::DefMap,
-    Vec<Diagnostic>,
-) {
-    let mut parsed = parse(text);
-    let (trees, def_map, stage) = item_stages(&parsed);
-    let mut diagnostics = std::mem::take(&mut parsed.diagnostics);
-    diagnostics.extend(stage);
-    (parsed, trees, def_map, diagnostics)
-}
-
-/// `ItemTree` と `DefMap` を作り、その2つの段階の診断を返す。
-#[cfg(feature = "hir")]
-fn item_stages(parsed: &Parsed) -> ([eml_hir::ItemTree; 2], eml_hir::DefMap, Vec<Diagnostic>) {
-    let prelude = parsed
-        .prelude
-        .expect("the `hir` feature registers the Prelude");
-    let prelude_tree = eml_hir::parse_prelude(prelude);
-    let (prelude_items, stage) = eml_hir::item_tree(prelude, &prelude_tree);
-    debug_assert!(stage.is_empty(), "{stage:?}");
-    let (items, mut diagnostics) = eml_hir::item_tree(parsed.file, &parsed.parse.tree());
-    let trees = [prelude_items, items];
-    let (def_map, stage) = eml_hir::def_map(&trees);
-    diagnostics.extend(stage);
-    (trees, def_map, diagnostics)
+    (def_map, short(&loaded.files, &diagnostics))
 }
 
 /// 前提として診断のないソースを使うテストのため。条件を緩めないよう、警告も1件として数える。
@@ -165,12 +183,17 @@ fn assert_clean(files: &SourceFiles, diagnostics: &[Diagnostic]) {
 
 #[cfg(feature = "types")]
 pub fn check(text: &str) -> Checked {
+    check_files(text, &[])
+}
+
+#[cfg(feature = "types")]
+pub fn check_files(entry: &str, modules: &[(&str, &str)]) -> Checked {
     let Lowered {
         files,
         file,
         program,
         mut diagnostics,
-    } = lower(text);
+    } = lower_files(entry, modules);
     let (typed, stage) = eml_types::check(&program);
     diagnostics.extend(stage);
     sort_diagnostics(&mut diagnostics);
@@ -185,20 +208,35 @@ pub fn check(text: &str) -> Checked {
 
 #[cfg(feature = "core")]
 pub fn core(text: &str) -> Program {
-    let checked = check_without_errors(text);
-    eml_core_ir::lower(&checked.program, &checked.typed, entry(&checked))
+    core_files(text, &[])
+}
+
+#[cfg(feature = "core")]
+pub fn core_files(entry: &str, modules: &[(&str, &str)]) -> Program {
+    let checked = check_without_errors(entry, modules);
+    eml_core_ir::lower(&checked.program, &checked.typed, main_function(&checked))
 }
 
 /// 確かめたいパスの直後の Core IR を見るテストのため (docs/implementation/testing.md)。
 #[cfg(feature = "core")]
 pub fn core_until(text: &str, last: Pass) -> Program {
-    let checked = check_without_errors(text);
-    eml_core_ir::lower_until(&checked.program, &checked.typed, entry(&checked), last)
+    core_until_files(text, &[], last)
+}
+
+#[cfg(feature = "core")]
+pub fn core_until_files(entry: &str, modules: &[(&str, &str)], last: Pass) -> Program {
+    let checked = check_without_errors(entry, modules);
+    eml_core_ir::lower_until(
+        &checked.program,
+        &checked.typed,
+        main_function(&checked),
+        last,
+    )
 }
 
 /// `eml run` と同じく、入口のモジュールの `main` から実行する。
 #[cfg(feature = "core")]
-fn entry(checked: &Checked) -> eml_hir::FunctionId {
+fn main_function(checked: &Checked) -> eml_hir::FunctionId {
     checked
         .program
         .main()
@@ -207,8 +245,8 @@ fn entry(checked: &Checked) -> eml_hir::FunctionId {
 
 /// Core IR は診断のエラーがないプログラムだけを受け取る (docs/implementation/architecture.md)。
 #[cfg(feature = "core")]
-fn check_without_errors(text: &str) -> Checked {
-    let checked = check(text);
+fn check_without_errors(entry: &str, modules: &[(&str, &str)]) -> Checked {
+    let checked = check_files(entry, modules);
     assert!(
         !has_errors(&checked.diagnostics),
         "{:#?}",
@@ -220,7 +258,12 @@ fn check_without_errors(text: &str) -> Checked {
 /// 実行のテストでは、つねに `debug_heap` を有効にする (docs/implementation/testing.md)。
 #[cfg(feature = "run")]
 pub fn run(text: &str) -> (String, Result<(), RuntimeError>) {
-    execute(core(text), true)
+    run_files(text, &[])
+}
+
+#[cfg(feature = "run")]
+pub fn run_files(entry: &str, modules: &[(&str, &str)]) -> (String, Result<(), RuntimeError>) {
+    execute(core_files(entry, modules), true)
 }
 
 #[cfg(feature = "run")]

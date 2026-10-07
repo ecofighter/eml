@@ -307,13 +307,12 @@ fn minus_is_defined_by_its_name_token() {
 }
 
 #[test]
-fn imports_are_not_supported_yet() {
-    // パーサは import を CST まで組み、HIR が E0004 を出す (docs/spec/grammar.md の「実装の段階」)
+fn imports_of_missing_modules_are_reported() {
     assert_eq!(
         diagnostics("import Report.Csv (parse)\nimport M\nf : Int\nf = 1"),
         [
-            "E0004 1:1 `import` is not supported yet",
-            "E0004 2:1 `import` is not supported yet",
+            "E1026 1:8 cannot find module `Report.Csv`",
+            "E1026 2:8 cannot find module `M`",
         ]
     );
 }
@@ -323,7 +322,7 @@ fn an_unfinished_import_is_reported_once_by_each_stage() {
     assert_eq!(
         diagnostics("import M (a,\nf : Int\nf = 1"),
         [
-            "E0004 1:1 `import` is not supported yet",
+            "E1026 1:8 cannot find module `M`",
             "E0011 1:13 expected `)`",
         ]
     );

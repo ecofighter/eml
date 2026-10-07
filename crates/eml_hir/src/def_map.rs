@@ -10,6 +10,7 @@ use la_arena::{Idx, RawIdx};
 use crate::codes;
 use crate::hir::LangItems;
 use crate::item_tree::{Fixity, ItemTree};
+use crate::load::LoadedModule;
 use crate::program::{
     ConstructorId, EffectId, FunctionId, ItemId, ModuleId, OperationId, TypeDefId,
 };
@@ -92,27 +93,25 @@ pub struct DefMap {
     lang: LangItems,
 }
 
-/// `trees[0]` を Prelude、`trees[1]` を入口のモジュールとして読む。値と型の名前空間の重複 (E1003)、fixity の重複
-/// (E1021)、このモジュールにない演算子の fixity (E1022) を出す。
-pub fn def_map(trees: &[ItemTree]) -> (DefMap, Vec<Diagnostic>) {
+/// `modules[0]` を Prelude、`modules[1]` を入口のモジュールとして読む (読み込みの段の番号)。モジュールの名前は読み込みの段が
+/// 決める。値と型の名前空間の重複 (E1003)、fixity の重複 (E1021)、このモジュールにない演算子の fixity (E1022) を出す。
+pub fn def_map(modules: &[LoadedModule]) -> (DefMap, Vec<Diagnostic>) {
     let mut diagnostics = Vec::new();
-    let prelude = module_id(0);
-    let modules: Vec<ModuleScope> = trees
+    let scopes: Vec<ModuleScope> = modules
         .iter()
         .enumerate()
-        .map(|(index, tree)| {
-            let module = module_id(index);
-            let mut scope = ModuleScope::new(module, module == prelude, tree);
-            scope.check_duplicates(tree.file, &mut diagnostics);
-            scope.attach_fixities(tree, &mut diagnostics);
+        .map(|(index, module)| {
+            let mut scope = ModuleScope::new(module_id(index), &module.name, &module.tree);
+            scope.check_duplicates(module.tree.file, &mut diagnostics);
+            scope.attach_fixities(&module.tree, &mut diagnostics);
             scope
         })
         .collect();
-    let lang = lang_items(&modules[0]);
+    let lang = lang_items(&scopes[0]);
     (
         DefMap {
-            modules,
-            prelude,
+            modules: scopes,
+            prelude: module_id(0),
             entry: module_id(1),
             lang,
         },
@@ -120,7 +119,7 @@ pub fn def_map(trees: &[ItemTree]) -> (DefMap, Vec<Diagnostic>) {
     )
 }
 
-/// `trees` の番号のモジュールの ID。`lower` もモジュールを同じ順に置く。
+/// 読み込みの段の番号のモジュールの ID。`lower` もモジュールを同じ順に置く。
 pub(crate) fn module_id(index: usize) -> ModuleId {
     ModuleId::from_raw(RawIdx::from(index as u32))
 }
@@ -132,8 +131,7 @@ fn item_id<T>(module: ModuleId, local: usize) -> ItemId<T> {
 impl ModuleScope {
     /// 局所の番号は `ItemTree` の順に振る。コンストラクタと操作は、宣言の順に通し番号に
     /// する。`lower` も同じ順にアリーナへ置く。
-    fn new(module: ModuleId, is_prelude: bool, tree: &ItemTree) -> ModuleScope {
-        let name = if is_prelude { "Prelude" } else { "Main" };
+    fn new(module: ModuleId, name: &str, tree: &ItemTree) -> ModuleScope {
         let functions = (0..tree.functions.len())
             .map(|k| item_id(module, k))
             .collect();

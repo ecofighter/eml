@@ -1,6 +1,6 @@
 //! item の収集 (docs/implementation/architecture.md の「`eml_hir` の内部」)。
 
-use eml_hir::item_tree;
+use eml_hir::{ImportItem, ImportName, ModulePath, item_tree};
 use eml_test_support::{parse, short};
 
 fn tree(text: &str) -> (eml_hir::ItemTree, Vec<String>) {
@@ -52,4 +52,61 @@ fn ordering_errors_are_reported_without_resolving_names() {
             "E1019 11:1 the signature of `m` is not followed by its equations",
         ]
     );
+}
+
+#[test]
+fn imports_hold_their_path_qualifier_and_list() {
+    let text = "import Report.Csv\nimport Report.Format as F (render, Style(..), Row, (<+>))\nimport M ((:+), x)\nimport";
+    let (tree, diagnostics) = tree(text);
+    assert!(diagnostics.is_empty(), "{diagnostics:?}");
+    // 最後の `import` はパスがないので集めない (パーサが報告済み)
+    assert_eq!(tree.imports.len(), 3);
+    let csv = &tree.imports[0];
+    assert_eq!(
+        csv.path,
+        ModulePath(vec!["Report".to_string(), "Csv".to_string()])
+    );
+    assert_eq!(csv.path.dotted(), "Report.Csv");
+    assert_eq!(csv.path.file_path(), "Report/Csv.em");
+    assert_eq!(csv.path.last(), "Csv");
+    assert_eq!(&text[csv.path_range], "Report.Csv");
+    // 別名がなければ、最後のセグメントが修飾子で、その位置はパス全体である
+    assert_eq!(csv.qualifier, ("Csv".to_string(), csv.path_range));
+    assert!(!csv.has_alias);
+    assert!(csv.list.is_none());
+    assert_eq!(text[csv.range].trim_end(), "import Report.Csv");
+    let format = &tree.imports[1];
+    assert_eq!(format.qualifier.0, "F");
+    assert_eq!(&text[format.qualifier.1], "F");
+    assert!(format.has_alias);
+    assert_eq!(
+        import_names(text, format),
+        ["value render", "type Style (..)", "type Row", "value <+>"]
+    );
+    // `:` で始まる演算子はパーサが E0011 にしたので集めない
+    assert_eq!(import_names(text, &tree.imports[2]), ["value x"]);
+}
+
+/// 並びの名前を `value x`、`type T`、`type T (..)` の形にする。名前の位置がその名前を指すことも確かめる。
+fn import_names(text: &str, import: &ImportItem) -> Vec<String> {
+    import
+        .list
+        .as_ref()
+        .expect("an import list")
+        .iter()
+        .map(|name| match name {
+            ImportName::Value { name, range } => {
+                assert_eq!(&text[*range], name.as_str());
+                format!("value {name}")
+            }
+            ImportName::Type { name, range, all } => {
+                assert_eq!(&text[*range], name.as_str());
+                if *all {
+                    format!("type {name} (..)")
+                } else {
+                    format!("type {name}")
+                }
+            }
+        })
+        .collect()
 }

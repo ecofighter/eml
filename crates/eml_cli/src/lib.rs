@@ -80,20 +80,26 @@ impl Session {
 
     /// エラーがあっても止めずに、検査の段階をすべて実行する。1回の実行で、独立した複数のエラーを報告するため。
     fn front(&self, entry: FileId) -> (eml_hir::Program, eml_types::TypedProgram, Vec<Diagnostic>) {
-        let (parse, mut diagnostics) = eml_syntax::parse(entry, self.files.text(entry));
-        let prelude = eml_hir::parse_prelude(self.prelude);
-        let (prelude_items, stage) = eml_hir::item_tree(self.prelude, &prelude);
-        debug_assert!(stage.is_empty(), "{stage:?}");
-        let (items, stage) = eml_hir::item_tree(entry, &parse.tree());
+        // 読み込みの段は Prelude と入口をこの `Session` と同じ順に登録するので、診断の `FileId` は `self.files` を指す
+        let (loaded, mut diagnostics) =
+            eml_hir::load(self.files.path(entry), self.files.text(entry), &NoModules);
+        debug_assert_eq!(loaded.entry, entry);
+        let (def_map, stage) = eml_hir::def_map(&loaded.modules);
         diagnostics.extend(stage);
-        let trees = [prelude_items, items];
-        let (def_map, stage) = eml_hir::def_map(&trees);
-        diagnostics.extend(stage);
-        let (program, stage) = eml_hir::lower(&def_map, &trees);
+        let (program, stage) = eml_hir::lower(&def_map, &loaded.modules);
         diagnostics.extend(stage);
         let (typed, stage) = eml_types::check(&program);
         diagnostics.extend(stage);
         (program, typed, diagnostics)
+    }
+}
+
+/// `Session` はファイルシステムから依存先を読まないので、どの import も E1026 になる。
+struct NoModules;
+
+impl eml_hir::ModuleSource for NoModules {
+    fn read(&self, _: &eml_hir::ModulePath) -> Result<String, eml_hir::ReadError> {
+        Err(eml_hir::ReadError::NotFound)
     }
 }
 
