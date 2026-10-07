@@ -19,6 +19,7 @@ use scan::Nesting;
 
 pub(crate) fn source_file(p: &mut Parser) {
     let m = p.start();
+    let mut declared = false;
     loop {
         while p.at_sep() {
             p.bump_any();
@@ -33,7 +34,7 @@ pub(crate) fn source_file(p: &mut Parser) {
         }
         p.set_too_deep(false);
         if items::at_item_start(p) {
-            items::item(p);
+            declared |= items::item(p, declared);
         } else {
             stray_tokens(p);
         }

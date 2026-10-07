@@ -292,6 +292,15 @@ fn qname(p: &mut Parser) {
     path(p, TokenSet::new(&[UIDENT, LIDENT]));
 }
 
+/// 節の先頭は操作の名前なので `qvar` に限る。`M.N` のような `qcon` は、ここでは読まずに誤りにする。
+fn at_qvar(p: &Parser) -> bool {
+    let mut n = 0;
+    while p.peek(n) == UIDENT && p.peek(n + 1) == DOT {
+        n += 2;
+    }
+    p.peek(n) == LIDENT
+}
+
 fn paren_expr(p: &mut Parser) -> SyntaxKind {
     p.bump(L_PAREN);
     if p.eat(R_PAREN) {
@@ -561,8 +570,8 @@ fn handler_clause(p: &mut Parser) -> bool {
         }
         RETURN_CLAUSE
     } else {
-        if p.at(LIDENT) {
-            name_ref(p);
+        if at_qvar(p) {
+            qname(p);
         } else {
             expected(p, token_name(LIDENT));
         }

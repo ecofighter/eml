@@ -32,8 +32,9 @@ fn handler_with_operation_and_return_clauses() {
               WITH_KW "with"
               OP_CLAUSE
                 PIPE "|"
-                NAME_REF
-                  LIDENT "fail"
+                PATH
+                  NAME_REF
+                    LIDENT "fail"
                 WILDCARD_PAT
                   UNDERSCORE "_"
                 THIN_ARROW "->"
@@ -101,8 +102,9 @@ fn parameterized_handler() {
               WITH_KW "with"
               OP_CLAUSE
                 PIPE "|"
-                NAME_REF
-                  LIDENT "get"
+                PATH
+                  NAME_REF
+                    LIDENT "get"
                 UNIT_PAT
                   L_PAREN "("
                   R_PAREN ")"
@@ -129,8 +131,9 @@ fn parameterized_handler() {
                         LIDENT "st"
               OP_CLAUSE
                 PIPE "|"
-                NAME_REF
-                  LIDENT "put"
+                PATH
+                  NAME_REF
+                    LIDENT "put"
                 BIND_PAT
                   NAME
                     LIDENT "st2"
@@ -199,8 +202,9 @@ fn handler_on_one_line_with_drop() {
           WITH_KW "with"
           OP_CLAUSE
             PIPE "|"
-            NAME_REF
-              LIDENT "ask"
+            PATH
+              NAME_REF
+                LIDENT "ask"
             BIND_PAT
               NAME
                 LIDENT "key"
@@ -343,5 +347,61 @@ fn clauses_at_the_column_of_handle_are_read_as_clauses() {
     assert_eq!(
         diagnostics(&lines(&["f =", "  handle g () with", "  | return x -> x"])),
         ["E0009 2:15 expected an indented block after `with`"]
+    );
+}
+
+#[test]
+fn a_clause_head_can_be_qualified() {
+    insta::assert_snapshot!(shape("f = handle g () with | A.B.get () k -> resume k 1"), @r#"
+    SOURCE_FILE
+      EQUATION
+        NAME
+          LIDENT "f"
+        EQ "="
+        HANDLE_EXPR
+          HANDLE_KW "handle"
+          APP_EXPR
+            PATH_EXPR
+              PATH
+                NAME_REF
+                  LIDENT "g"
+            UNIT_EXPR
+              L_PAREN "("
+              R_PAREN ")"
+          WITH_KW "with"
+          OP_CLAUSE
+            PIPE "|"
+            PATH
+              NAME_REF
+                UIDENT "A"
+              DOT "."
+              NAME_REF
+                UIDENT "B"
+              DOT "."
+              NAME_REF
+                LIDENT "get"
+            UNIT_PAT
+              L_PAREN "("
+              R_PAREN ")"
+            BIND_PAT
+              NAME
+                LIDENT "k"
+            THIN_ARROW "->"
+            RESUME_EXPR
+              RESUME_KW "resume"
+              PATH_EXPR
+                PATH
+                  NAME_REF
+                    LIDENT "k"
+              LITERAL
+                INT "1"
+    "#);
+}
+
+#[test]
+fn a_qualified_clause_head_must_end_with_a_lowercase_name() {
+    assert_eq!(
+        diagnostics("h = handle f () with | M.N x -> 2"),
+        ["E0011 1:24 expected a lowercase name"]
     );
 }

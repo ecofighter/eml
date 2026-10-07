@@ -1,4 +1,4 @@
-use crate::common::shape;
+use crate::common::{diagnostics, item_kinds, shape};
 
 #[test]
 fn qualified_and_plain_names_are_paths_of_name_refs() {
@@ -106,7 +106,7 @@ fn types_patterns_and_effects_hold_paths() {
 }
 
 #[test]
-fn a_clause_names_its_operation_with_a_name_ref() {
+fn a_clause_names_its_operation_with_a_path() {
     insta::assert_snapshot!(shape("f = handle g () with\n  | get () k -> resume k 1"), @r#"
     SOURCE_FILE
       EQUATION
@@ -126,8 +126,9 @@ fn a_clause_names_its_operation_with_a_name_ref() {
           WITH_KW "with"
           OP_CLAUSE
             PIPE "|"
-            NAME_REF
-              LIDENT "get"
+            PATH
+              NAME_REF
+                LIDENT "get"
             UNIT_PAT
               L_PAREN "("
               R_PAREN ")"
@@ -376,5 +377,44 @@ fn unfinished_imports_recover_at_the_next_item() {
     E0011 1:7 expected a module name
     E0011 2:12 expected a capitalized name
     E0011 3:13 expected `)`
+    "#);
+}
+
+#[test]
+fn an_import_after_a_declaration_is_an_error() {
+    assert_eq!(
+        diagnostics("import M\nf = 1\nimport N\npub import O"),
+        [
+            "E0011 3:1 imports must come before declarations",
+            "E0011 4:1 `pub` cannot be written on an import",
+            "E0011 4:5 imports must come before declarations",
+        ]
+    );
+    assert_eq!(item_kinds("f = 1\nimport N"), ["EQUATION", "IMPORT_ITEM"]);
+}
+
+#[test]
+fn an_infix_constructor_in_an_import_list_is_an_error() {
+    insta::assert_snapshot!(shape("import M ((:+), (<+>))"), @r#"
+    SOURCE_FILE
+      IMPORT_ITEM
+        IMPORT_KW "import"
+        PATH
+          NAME_REF
+            UIDENT "M"
+        IMPORT_LIST
+          L_PAREN "("
+          IMPORT_NAME
+            L_PAREN "("
+            CONOP ":+"
+            R_PAREN ")"
+          COMMA ","
+          IMPORT_NAME
+            L_PAREN "("
+            OP "<+>"
+            R_PAREN ")"
+          R_PAREN ")"
+    ---
+    E0011 1:12 an infix constructor cannot be listed in an import
     "#);
 }

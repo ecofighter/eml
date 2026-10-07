@@ -623,8 +623,8 @@ impl HandleExpr {
 }
 
 impl OpClause {
-    /// 節の先頭の操作の名前。
-    pub fn name(&self) -> Option<NameRef> {
+    /// 節の先頭の操作の名前。修飾できる (docs/spec/grammar.md の `clause`)。
+    pub fn path(&self) -> Option<Path> {
         support::child(&self.syntax)
     }
 

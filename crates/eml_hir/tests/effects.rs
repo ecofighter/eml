@@ -401,3 +401,12 @@ fn a_clause_for_an_operation_of_a_duplicate_effect_is_dropped_silently() {
         ["E1003 3:8 `E` is defined more than once"]
     );
 }
+
+#[test]
+fn qualified_clause_heads_are_not_supported_yet() {
+    let text = "effect Ask where\n  ask : Unit -> Int\n\nf : Unit -> Int\nf () = handle 1 with | M.ask () k -> resume k 1";
+    assert_eq!(
+        diagnostics(text),
+        ["E0004 5:24 qualified names are not supported yet"]
+    );
+}

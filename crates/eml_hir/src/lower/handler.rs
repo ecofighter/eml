@@ -5,6 +5,7 @@ use eml_diagnostics::{Diagnostic, Label, TextRange};
 use eml_syntax::ast;
 
 use super::expr::BodyLowering;
+use super::{PathName, path_name};
 use crate::codes;
 use crate::def_map::Lookup;
 use crate::hir::*;
@@ -94,8 +95,20 @@ impl BodyLowering<'_> {
         let body = self.lower_expr(clause.body(), clause.range());
         self.scope.truncate(mark);
         // 名前がなければパーサが報告済み
-        let Some(name) = clause.name().map(|name| name.token()) else {
+        let Some(path) = clause.path() else {
             return;
+        };
+        let name = match path_name(Some(path.clone())) {
+            PathName::Plain(name) => name,
+            PathName::Qualified => {
+                self.diagnostics.push(Diagnostic::not_yet_supported(
+                    self.file,
+                    path.range(),
+                    "qualified names are not supported yet",
+                ));
+                return;
+            }
+            PathName::Missing => return,
         };
         let name_range = name.text_range();
         let op = match self.items.operation(name.text()) {

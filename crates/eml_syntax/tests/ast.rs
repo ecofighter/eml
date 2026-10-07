@@ -330,7 +330,7 @@ fn handler_clauses_resume_and_drop() {
     let [Clause::OpClause(op), Clause::ReturnClause(ret)] = clauses.as_slice() else {
         panic!("{clauses:?}");
     };
-    assert_eq!(op.name().unwrap().text(), "ask");
+    assert_eq!(op.path().unwrap().name().unwrap().text(), "ask");
     assert_eq!(op.params().count(), 2);
     let Some(Expr::ResumeExpr(resume)) = op.body() else {
         panic!("expected `resume`");

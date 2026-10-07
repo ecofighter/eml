@@ -52,7 +52,8 @@ fn at_operator_signature(p: &Parser) -> bool {
     p.at(L_PAREN) && matches!(p.nth(1), OP | MINUS) && p.nth(2) == R_PAREN
 }
 
-pub(super) fn item(p: &mut Parser) {
+/// 項目を1つ読み、import 以外の項目だったかを返す。`declared` は、ファイルの中でこれより前に import 以外の項目があったか。
+pub(super) fn item(p: &mut Parser, declared: bool) -> bool {
     let m = p.start();
     let public = p.eat(PUB_KW);
     let kind = item_kind(p);
@@ -77,7 +78,7 @@ pub(super) fn item(p: &mut Parser) {
         Some(ItemKind::Type) => type_item(p, m),
         Some(ItemKind::Effect) => effect_item(p, m),
         Some(ItemKind::Fixity) => fixity_item(p, m),
-        Some(ItemKind::Import) => import_item(p, m),
+        Some(ItemKind::Import) => import_item(p, m, declared),
         Some(ItemKind::Reserved) => reserved_item(p, m),
         Some(ItemKind::Signature) => signature(p, m),
         Some(ItemKind::Equation) => equation(p, m),
@@ -93,6 +94,7 @@ pub(super) fn item(p: &mut Parser) {
             m.complete(p, ERROR);
         }
     }
+    !matches!(kind, Some(ItemKind::Import))
 }
 
 /// signature ::= var ':' type 、var ::= LIDENT | '(' OP ')'
@@ -279,8 +281,16 @@ fn fixity_item(p: &mut Parser, m: Marker) {
 }
 
 /// import_item ::= 'import' modpath ('as' UIDENT)? ('(' list(import_name) ')')?
-/// import は M2 で実装する。CST まで組み、E0004 は HIR が出す (docs/spec/grammar.md の「実装の段階」)。
-fn import_item(p: &mut Parser, m: Marker) {
+/// import は宣言より前に書く (docs/spec/grammar.md)。宣言の後の import も、後の段階が回復できるよう同じ形の CST に組む
+/// (docs/spec/modules.md)。
+fn import_item(p: &mut Parser, m: Marker, declared: bool) {
+    if declared {
+        p.error(
+            codes::SYNTAX_ERROR,
+            "imports must come before declarations",
+            "move this import above the first declaration",
+        );
+    }
     p.bump(IMPORT_KW);
     if p.at(UIDENT) {
         qcon(p);
@@ -314,6 +324,8 @@ fn import_list(p: &mut Parser) {
 }
 
 /// import_name ::= LIDENT | '(' OP ')' | UIDENT ('(' '..' ')')?
+/// `(CONOP)` は文法の外だが、CST は `(OP)` と同じ形に組んで E0011 にする。中置のコンストラクタは型と一緒に `T(..)` で
+/// 取り込む (docs/spec/modules.md)。
 fn import_name(p: &mut Parser) -> bool {
     let m = p.start();
     match p.current() {
@@ -328,6 +340,13 @@ fn import_name(p: &mut Parser) -> bool {
         }
         L_PAREN if matches!(p.nth(1), OP | MINUS | CONOP) && p.nth(2) == R_PAREN => {
             p.bump(L_PAREN);
+            if p.at(CONOP) {
+                p.error(
+                    codes::SYNTAX_ERROR,
+                    "an infix constructor cannot be listed in an import",
+                    "import it together with its type, as in `T(..)`",
+                );
+            }
             p.bump_any();
             p.bump(R_PAREN);
         }
