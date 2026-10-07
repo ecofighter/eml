@@ -36,8 +36,9 @@ impl<T> Bounds<T> {
     }
 }
 
-/// 宣言の型の形を具体化した、Kind の具体化の記録。呼び出し先の制約は段1で複写せず、段2で展開する。段1が呼び出し先の Kind のスキームを
-/// 待たずに済むようにするため (docs/spec/types.md の「推論」)。
+/// Kind の具体化の記録。宣言の型の形を具体化したときの Kind 変数を持つ。
+/// 呼び出し先の制約は段1で複写せず、段2で展開する。段1が呼び出し先の Kind のスキームを待たずに済むようにするため
+/// (docs/spec/types.md の「推論」)。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Instance {
     pub decl: Decl,

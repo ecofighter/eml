@@ -184,7 +184,8 @@ pub(crate) fn check_body(
     for (pat, &ty) in typing.pats.iter() {
         types.pats.insert(pat, table.export(ty));
     }
-    // `exprs` と同じく carry の後で書き出し、後の文の単一化で決まった型引数を取り込む
+    // 本体全体の検査が終わってから `exprs` と一緒に書き出す。後の文の単一化で決まった型引数を含めるためで、
+    // carry が足すのは Kind の制約だけである
     for (expr, (decl, args)) in typing.instantiations.iter() {
         let args = args.iter().map(|&arg| table.export(arg)).collect();
         types

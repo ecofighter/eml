@@ -101,7 +101,8 @@ pub struct LangItems {
     pub false_ctor: ConstructorId,
     /// 前置の `-` の脱糖が呼ぶ。Prelude で `pub` にしないので、ユーザーは名前で書けない。
     pub negate: FunctionId,
-    /// `==` と `!=`。型検査が引数の型から比べ方を決める (docs/spec/declarations.md の標準の演算子の表)。
+    /// `==` と `!=`。型検査が参照ごとの型引数を記録し、比べ方は `eml_types::equality` がそこから選ぶ
+    /// (docs/spec/core-ir.md、docs/spec/declarations.md の標準の演算子の表)。
     pub eq: FunctionId,
     pub ne: FunctionId,
     /// HIR が短絡して評価するために脱糖する演算子 `&&` と `||`。

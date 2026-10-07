@@ -40,7 +40,7 @@ pub (-) : Int -> Int -> Int
 pub (*) : Int -> Int -> Int
 pub (/) : Int -> Int -> Int
 pub (%) : Int -> Int -> Int
--- `==` と `!=` で比べられるのは `Int`、`String`、`Bool` で、どれで比べるかは型検査が引数の型から決める
+-- `==` と `!=` で比べられるのは `Int`、`String`、`Bool` で、どれで比べるかは、型検査が記録した参照ごとの型引数から `eml_types::equality` が選ぶ
 pub (==) : a -> a -> Bool
 pub (!=) : a -> a -> Bool
 pub (<) : Int -> Int -> Bool
