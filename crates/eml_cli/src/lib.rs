@@ -107,7 +107,7 @@ impl Session {
         diagnostics.extend(stage);
         let (program, stage) = eml_hir::lower(&def_map, &self.loaded.modules);
         diagnostics.extend(stage);
-        let (typed, stage) = eml_types::check(&program);
+        let (typed, stage) = eml_types::check(&program, &self.loaded.files);
         diagnostics.extend(stage);
         (program, typed, diagnostics)
     }

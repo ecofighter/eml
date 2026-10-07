@@ -15,7 +15,7 @@ mod usage;
 
 use std::collections::HashMap;
 
-use eml_diagnostics::{Diagnostic, FileId, Label, TextRange};
+use eml_diagnostics::{Diagnostic, FileId, Label, SourceFiles, TextRange};
 use eml_extern::ExternType;
 use eml_hir::{EffectId, ExprId, Function, ItemMap, LocalId, PatId, Program, ValueItem};
 use la_arena::ArenaMap;
@@ -121,8 +121,9 @@ pub struct Instantiation {
     pub args: Vec<Type>,
 }
 
-pub fn check(program: &Program) -> (TypedProgram, Vec<Diagnostic>) {
-    check::check_module(program)
+/// `files` は、E3003 の fix の字下げをソースから求めるのに使う (docs/implementation/diagnostics.md の「線形性の診断」)。
+pub fn check(program: &Program, files: &SourceFiles) -> (TypedProgram, Vec<Diagnostic>) {
+    check::check_module(program, files)
 }
 
 /// 入口のモジュールに `main` がないこと。`eml check` では検査せず、`eml run` だけが報告する (docs/spec/types.md の
@@ -143,9 +144,16 @@ pub fn missing_main(file: FileId) -> Diagnostic {
 /// 単体テストのための `Program`。Prelude と、`text` を入口にしたモジュールを変換する。
 #[cfg(test)]
 pub(crate) fn test_program(text: &str) -> eml_hir::Program {
+    test_program_with_files(text).0
+}
+
+/// `test_program` と、そのソース。診断を作るテストが使う。
+#[cfg(test)]
+pub(crate) fn test_program_with_files(text: &str) -> (eml_hir::Program, SourceFiles) {
     let (loaded, _) = eml_hir::load("test.em", text, &NoModules);
     let (def_map, _) = eml_hir::def_map(&loaded.modules);
-    eml_hir::lower(&def_map, &loaded.modules).0
+    let program = eml_hir::lower(&def_map, &loaded.modules).0;
+    (program, loaded.files)
 }
 
 /// 単体テストの入口は import を書かないので、依存先を読む手段は要らない。

@@ -293,21 +293,6 @@ impl Block {
     }
 }
 
-impl Stmt {
-    /// 文が行の最初のトークンで始まるとき、その行の字下げ (空白の数)。fix が文の前に行を入れるのに使う。trivia は
-    /// 囲むノードに付くので、文の最初のトークンの直前のトークンが、前の行の終わりからの空白である。タブは字句の段階で
-    /// 誤りなので、空白だけを数えればよい (docs/spec/lexical.md)。
-    pub fn line_indent(&self) -> Option<u32> {
-        let first = self.syntax().first_token()?;
-        let previous = first.prev_token()?;
-        if previous.kind() != SyntaxKind::WHITESPACE {
-            return None;
-        }
-        let (_, indent) = previous.text().rsplit_once('\n')?;
-        Some(indent.len() as u32)
-    }
-}
-
 /// 前置の `-` は、列の先頭か別の演算子の直後にある `Operator` として現れる。単項マイナスも fixity と一緒に HIR で
 /// 組み直すため (docs/spec/expressions.md)。
 #[derive(Debug, Clone, PartialEq, Eq)]

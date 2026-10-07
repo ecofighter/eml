@@ -654,9 +654,9 @@ impl Imports {
         for (import, &target) in module.tree.imports.iter().zip(&module.targets) {
             // 修飾子が `Prelude` になる import は読み込みの段が E1030 にした。暗黙の修飾子 `Prelude` と合流させないため、
             // 修飾子には登録しない (docs/spec/modules.md の「Prelude」)
-            if import.qualifier.0 != scopes[0].name {
+            if import.qualifier != scopes[0].name {
                 imports.qualifiers.push(Qualifier {
-                    name: import.qualifier.0.clone(),
+                    name: import.qualifier.clone(),
                     target,
                     import: import.range,
                 });

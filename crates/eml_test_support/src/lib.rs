@@ -207,7 +207,7 @@ fn check_lowered(lowered: Lowered) -> Checked {
         program,
         mut diagnostics,
     } = lowered;
-    let (typed, stage) = eml_types::check(&program);
+    let (typed, stage) = eml_types::check(&program, &files);
     diagnostics.extend(stage);
     sort_diagnostics(&mut diagnostics);
     Checked {

@@ -291,7 +291,7 @@ impl Loader<'_> {
         let name = import.path.dotted();
         if name == PRELUDE || name == MAIN || is_std_prelude(&name) {
             Some(Reserved::Name)
-        } else if import.qualifier.0 == PRELUDE {
+        } else if import.qualifier == PRELUDE {
             Some(Reserved::PreludeQualifier)
         } else if name == STD_ROOT {
             Some(Reserved::StdRoot)

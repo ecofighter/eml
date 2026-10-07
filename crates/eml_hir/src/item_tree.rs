@@ -117,8 +117,7 @@ pub struct ImportItem {
     pub path: ModulePath,
     pub path_range: TextRange,
     /// 修飾子 (別名か最後のセグメント) と、その位置 (別名がなければパスの位置)。
-    pub qualifier: (String, TextRange),
-    pub has_alias: bool,
+    pub qualifier: String,
     pub list: Option<Vec<ImportName>>,
     /// import の全体。
     pub range: TextRange,
@@ -461,10 +460,9 @@ fn import_of(item: &ast::ImportItem) -> Option<ImportItem> {
     let path = item.path()?;
     let path_range = path.range();
     let module = ModulePath(path.segments().map(|segment| segment.text()).collect());
-    let alias = item.alias().map(|name| name.token());
-    let qualifier = match &alias {
-        Some(token) => (token.text().to_string(), token.text_range()),
-        None => (module.last().to_string(), path_range),
+    let qualifier = match item.alias() {
+        Some(alias) => alias.token().text().to_string(),
+        None => module.last().to_string(),
     };
     let list = item
         .list()
@@ -473,7 +471,6 @@ fn import_of(item: &ast::ImportItem) -> Option<ImportItem> {
         path: module,
         path_range,
         qualifier,
-        has_alias: alias.is_some(),
         list,
         range: item.range(),
         malformed: item.is_malformed(),

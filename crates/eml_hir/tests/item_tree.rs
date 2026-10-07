@@ -114,15 +114,12 @@ fn imports_hold_their_path_qualifier_and_list() {
     assert_eq!(csv.path.file_path(), "Report/Csv.em");
     assert_eq!(csv.path.last(), "Csv");
     assert_eq!(&text[csv.path_range], "Report.Csv");
-    // 別名がなければ、最後のセグメントが修飾子で、その位置はパス全体である
-    assert_eq!(csv.qualifier, ("Csv".to_string(), csv.path_range));
-    assert!(!csv.has_alias);
+    // 別名がなければ、最後のセグメントが修飾子である
+    assert_eq!(csv.qualifier, "Csv");
     assert!(csv.list.is_none());
     assert_eq!(text[csv.range].trim_end(), "import Report.Csv");
     let format = &tree.imports[1];
-    assert_eq!(format.qualifier.0, "F");
-    assert_eq!(&text[format.qualifier.1], "F");
-    assert!(format.has_alias);
+    assert_eq!(format.qualifier, "F");
     assert_eq!(
         import_names(text, format),
         ["value render", "type Style (..)", "type Row", "value <+>"]

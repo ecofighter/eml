@@ -10,7 +10,7 @@ use eml_hir::{
 };
 
 use crate::check::BodyTyping;
-use crate::kind::{Bound, DropFix, KindOrigin, KindReason, Provenance, Span, UnusedPath};
+use crate::kind::{Bound, KindOrigin, KindReason, Provenance, Span, UnusedPath};
 use crate::table::Table;
 use crate::ty::Linearity;
 
@@ -413,37 +413,35 @@ impl<'a> Usage<'a, '_> {
         self.unr_local(local, reason);
     }
 
-    /// 経路の式がブロックで、その最後の文が行の先頭で始まるとき、その前に `drop x` の行を入れる。最後の文が束縛より前
-    /// (束縛する `let` そのもの) のときと、入れる位置で同じ名前の後の束縛が見えているときは付けない。後者では、入れた
-    /// `drop x` がシャドーイングした別の変数を指してしまう。
-    fn drop_fix(&self, local: LocalId, target: ExprId) -> Option<DropFix> {
+    /// 経路の式がブロックのとき、その最後の文の前に `drop x` の行を入れる位置。最後の文が束縛より前 (束縛する `let`
+    /// そのもの) のときと、入れる位置で同じ名前の後の束縛が見えているときは付けない。後者では、入れた `drop x` が
+    /// シャドーイングした別の変数を指してしまう。最後の文が行の最初のトークンかは、報告するときにソースで調べる
+    /// (`check::report`)。
+    fn drop_fix(&self, local: LocalId, target: ExprId) -> Option<TextSize> {
         let ExprKind::Block {
-            last_line: Some(line),
+            last_start: Some(offset),
             ..
-        } = &self.body.exprs[target].kind
+        } = self.body.exprs[target].kind
         else {
             return None;
         };
         let binding = &self.body.locals[local];
-        if line.offset < binding.range.end() {
+        if offset < binding.range.end() {
             return None;
         }
         // 入れる位置に近い束縛ほど、その位置を含むスコープを持ちやすいので、後ろから調べる
         let later = self.later_namesakes(local);
         let before_line =
-            later.partition_point(|&other| self.body.locals[other].range.start() < line.offset);
+            later.partition_point(|&other| self.body.locals[other].range.start() < offset);
         let hidden = later[..before_line].iter().rev().any(|other| {
             self.scopes
                 .get(other)
-                .is_some_and(|&scope| self.body.exprs[scope].range.contains(line.offset))
+                .is_some_and(|&scope| self.body.exprs[scope].range.contains(offset))
         });
         if hidden {
             return None;
         }
-        Some(DropFix {
-            offset: line.offset,
-            indent: line.indent,
-        })
+        Some(offset)
     }
 
     fn unused_path(&self, local: LocalId, missing: Option<Missing>, scope: ExprId) -> UnusedPath {

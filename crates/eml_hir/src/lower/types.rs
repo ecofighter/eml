@@ -274,7 +274,6 @@ impl TypeLowering<'_> {
         if self.vars == Vars::Define {
             return Some(self.generics.row_vars.alloc(RowVarDecl {
                 name: text.to_string(),
-                range,
             }));
         }
         self.diagnostics.push(Diagnostic::error(

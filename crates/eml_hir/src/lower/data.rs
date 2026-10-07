@@ -97,7 +97,6 @@ impl ItemLowering<'_> {
                     self.module,
                     constructors.alloc(Constructor {
                         name: constructor.name.clone(),
-                        range: constructor.name_range,
                         ty,
                         tag: declared.len() as u32,
                         fields,

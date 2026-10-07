@@ -1,4 +1,4 @@
-use eml_diagnostics::{Diagnostic, Label, TextEdit, TextRange};
+use eml_diagnostics::{Diagnostic, FileId, Label, SourceFiles, TextEdit, TextRange, TextSize};
 use eml_hir::{Body, ExprId, ExprKind, OperationId, PatId, Program, Res};
 
 use crate::codes;
@@ -442,7 +442,11 @@ const LINEAR_NOTE: &str = "linear values, such as files, the continuation of a `
 
 /// 線形な値の誤った使い方。破れた Kind の制約の由来から番号と指す場所を決める (docs/implementation/diagnostics.md の
 /// 「線形性の診断」)。表に当たらない由来 (受け渡し、単一化、捕獲) は E3001 にする。
-pub(super) fn linear_misuse(program: &Program, origin: &KindOrigin) -> Diagnostic {
+pub(super) fn linear_misuse(
+    program: &Program,
+    files: &SourceFiles,
+    origin: &KindOrigin,
+) -> Diagnostic {
     let file = origin.span.file;
     let range = origin.span.range;
     match &origin.reason {
@@ -505,13 +509,13 @@ pub(super) fn linear_misuse(program: &Program, origin: &KindOrigin) -> Diagnosti
             .with_secondary(label)
             .with_note(LINEAR_NOTE)
             .with_help(help);
-            match fix {
-                Some(fix) => diagnostic.with_fix(
+            match fix.and_then(|offset| Some((offset, line_indent(files, file, offset)?))) {
+                Some((offset, indent)) => diagnostic.with_fix(
                     format!("insert `drop {name}`"),
                     vec![TextEdit {
                         file,
-                        range: TextRange::empty(fix.offset),
-                        replacement: format!("drop {name}\n{}", " ".repeat(fix.indent as usize)),
+                        range: TextRange::empty(offset),
+                        replacement: format!("drop {name}\n{indent}"),
                     }],
                 ),
                 None => diagnostic,
@@ -575,6 +579,17 @@ pub(super) fn linear_misuse(program: &Program, origin: &KindOrigin) -> Diagnosti
             "this expression".to_string(),
         ),
     }
+}
+
+/// `offset` が行の最初のトークンのとき、その行の字下げ。行の先頭から `offset` までが空白とタブだけなら、それをそのまま
+/// 写す。ほかの文字 (`{- c -}` や前の文) があれば、`offset` の前に行を入れられないので `None` を返す。
+fn line_indent(files: &SourceFiles, file: FileId, offset: TextSize) -> Option<&str> {
+    let before = &files.text(file)[..usize::from(offset)];
+    let indent = before.rsplit_once('\n').map_or(before, |(_, line)| line);
+    indent
+        .chars()
+        .all(|c| matches!(c, ' ' | '\t'))
+        .then_some(indent)
 }
 
 /// E3001。違反した制約の由来を指す。

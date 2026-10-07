@@ -36,7 +36,6 @@ pub enum TypeDefKind {
 pub struct Constructor {
     /// 中置のコンストラクタは演算子 (`:+`) が名前である。
     pub name: String,
-    pub range: TextRange,
     pub ty: TypeDefId,
     /// 宣言の中の順の番号。Core IR のタグになる。
     pub tag: u32,
@@ -154,7 +153,6 @@ pub struct TypeVarDecl {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RowVarDecl {
     pub name: String,
-    pub range: TextRange,
 }
 
 #[derive(Debug)]
@@ -363,14 +361,6 @@ pub struct Expr {
     pub range: TextRange,
 }
 
-/// ブロックの最後の文の先頭と、その行の字下げ。消費漏れの fix が `drop x` の行を入れる
-/// (docs/implementation/diagnostics.md の「線形性の診断」)。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct LineStart {
-    pub offset: TextSize,
-    pub indent: u32,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ExprKind {
     /// 構文エラーや未対応の構文、未定義の名前の跡。診断は報告済みなので、後の段階は何も言わない。
@@ -392,8 +382,9 @@ pub enum ExprKind {
     Block {
         stmts: Vec<Stmt>,
         tail: Option<ExprId>,
-        /// 最後の文が行の最初のトークンで始まるときだけ持つ。
-        last_line: Option<LineStart>,
+        /// 最後の文の開始位置。消費漏れの fix が、この前に `drop x` の行を入れる
+        /// (docs/implementation/diagnostics.md の「線形性の診断」)。`let … in` から作ったブロックは `None` である。
+        last_start: Option<TextSize>,
     },
     Annot {
         expr: ExprId,

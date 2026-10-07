@@ -82,7 +82,7 @@ fn check_time(text: &str) -> Duration {
     (0..3)
         .map(|_| {
             let start = Instant::now();
-            let (_, diagnostics) = eml_types::check(&lowered.program);
+            let (_, diagnostics) = eml_types::check(&lowered.program, &lowered.files);
             let elapsed = start.elapsed();
             assert!(diagnostics.is_empty(), "the generated program has errors");
             elapsed

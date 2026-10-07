@@ -84,13 +84,6 @@ impl Provenance {
     }
 }
 
-/// `drop x` の行を入れる位置と、その行の字下げ。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct DropFix {
-    pub offset: TextSize,
-    pub indent: u32,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum KindReason {
     /// ある経路で2回以上使った変数。名前と、その経路で1回目と2回目に使った位置。
@@ -99,11 +92,12 @@ pub(crate) enum KindReason {
         first: TextRange,
         second: TextRange,
     },
-    /// ある経路で使わなかった変数。`fix` は `drop x` の行を入れる先である。
+    /// ある経路で使わなかった変数。`fix` は `drop x` の行を入れる位置である。行の字下げは、報告するときにソースから
+    /// 求める。
     NotUsed {
         name: String,
         path: UnusedPath,
-        fix: Option<DropFix>,
+        fix: Option<TextSize>,
     },
     /// `once` の操作の節の `k` を、ある経路で呼びも `drop` もしなかった。`clause` は節の範囲。
     ContinuationNotUsed { name: String, clause: TextRange },
@@ -151,9 +145,9 @@ impl KindReason {
                 second,
             } => (0, [vec![text(name)], span(*first), span(*second)].concat()),
             KindReason::NotUsed { name, path, fix } => {
-                let fix = match fix {
+                let fix = match *fix {
                     None => vec![number(0)],
-                    Some(fix) => vec![number(1), number(fix.offset.into()), number(fix.indent)],
+                    Some(offset) => vec![number(1), number(offset.into())],
                 };
                 (1, [vec![text(name)], path.order_key(), fix].concat())
             }
@@ -443,20 +437,7 @@ mod tests {
             not_used(UnusedPath::Branch(range(1, 2)), None),
             not_used(UnusedPath::NoElse(range(1, 2)), None),
             not_used(UnusedPath::ScopeEnd(range(1, 1)), None),
-            not_used(
-                UnusedPath::ScopeEnd(range(1, 1)),
-                Some(DropFix {
-                    offset: 1.into(),
-                    indent: 2,
-                }),
-            ),
-            not_used(
-                UnusedPath::ScopeEnd(range(1, 1)),
-                Some(DropFix {
-                    offset: 1.into(),
-                    indent: 4,
-                }),
-            ),
+            not_used(UnusedPath::ScopeEnd(range(1, 1)), Some(1.into())),
             KindReason::ContinuationNotUsed {
                 name: "k".to_string(),
                 clause: range(1, 9),

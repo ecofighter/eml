@@ -291,7 +291,7 @@ impl<'a> BodyLowering<'a> {
                     ExprKind::Block {
                         stmts: vec![Stmt::Let { pat, ty, init }],
                         tail: Some(tail),
-                        last_line: None,
+                        last_start: None,
                     },
                     range,
                 )
@@ -416,17 +416,12 @@ impl<'a> BodyLowering<'a> {
             }
         }
         self.scope.truncate(mark);
-        let last_line = all[..end].last().and_then(|stmt| {
-            Some(LineStart {
-                offset: stmt.range().start(),
-                indent: stmt.line_indent()?,
-            })
-        });
+        let last_start = all[..end].last().map(|stmt| stmt.range().start());
         self.alloc(
             ExprKind::Block {
                 stmts,
                 tail,
-                last_line,
+                last_start,
             },
             range,
         )

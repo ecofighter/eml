@@ -148,6 +148,35 @@ fn no_fix_when_the_binding_is_the_last_statement() {
     assert!(diagnostics(rest).starts_with("E3003 11:13"));
 }
 
+#[test]
+fn no_fix_when_a_comment_comes_first_on_the_line() {
+    // `0` はブロックの列にあるので文の始まりだが、行の先頭から `0` までにコメントがあり、前に行を入れられない
+    let rest = "unused : Unit -> Int\nunused () =\n  handle ask () with\n    | ask () k ->\n        let j = k\n{- c -} 0";
+    assert_eq!(fix_text(rest), "");
+    assert!(diagnostics(rest).starts_with("E3003 11:13"));
+}
+
+#[test]
+fn the_fix_in_a_crlf_source_points_after_the_line_break() {
+    // 字下げは `\r\n` の後から数え、`\r` を含めない。入れる行の改行は `\n` のままである
+    let rest = "unused : Unit -> Int\nunused () =\n  handle ask () with\n    | ask () k ->\n        let j = k\n        0";
+    let checked = check(&format!("{HEADER}{rest}").replace('\n', "\r\n"));
+    insta::assert_snapshot!(fixes(&checked.files, &checked.diagnostics), @r#"
+    E3003 11:13 insert `drop j`
+      12:9..12:9 "drop j\n        "
+    "#);
+}
+
+#[test]
+fn the_fix_copies_a_tab_indent() {
+    // タブの字下げは E0006 の誤りだが、型検査は続く。fix は行の字下げをそのまま写す
+    let rest = "unused : Unit -> Int\nunused () =\n\thandle ask () with\n\t\t| ask () k ->\n\t\t\tlet j = k\n\t\t\t0";
+    insta::assert_snapshot!(fix_text(rest), @r#"
+    E3003 11:8 insert `drop j`
+      12:4..12:4 "drop j\n\t\t\t"
+    "#);
+}
+
 /// HEADER を付けずに検査する。
 fn plain(text: &str) -> String {
     let checked = check(text);

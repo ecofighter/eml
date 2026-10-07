@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
-use eml_diagnostics::{Diagnostic, Label};
+use eml_diagnostics::{Diagnostic, Label, SourceFiles};
 use eml_hir::{
     Constructor, Function, FunctionId, FunctionKind, Generics, ItemMap, Operation, Program, RowRef,
     TypeRef, TypeRefId, TypeRefKind, ValueItem,
@@ -50,7 +50,10 @@ pub(crate) struct Checked {
     pub problem: KindProblem,
 }
 
-pub(crate) fn check_module(program: &Program) -> (TypedProgram, Vec<Diagnostic>) {
+pub(crate) fn check_module(
+    program: &Program,
+    files: &SourceFiles,
+) -> (TypedProgram, Vec<Diagnostic>) {
     let context = Context::new(program);
     let signatures = signatures(program, &context);
     let mut schemes = declaration_schemes(program, &context, &signatures);
@@ -91,7 +94,7 @@ pub(crate) fn check_module(program: &Program) -> (TypedProgram, Vec<Diagnostic>)
         }
         violated.extend(solution.violated);
     }
-    diagnostics.extend(report_violations(program, violated));
+    diagnostics.extend(report_violations(program, files, violated));
     let typed = typed_program(&signatures, schemes, bodies);
     // 網羅性は型推論と使用回数のパスの後に、書き出した型の上で調べる (docs/spec/exhaustiveness.md の「検査パス」)
     diagnostics.extend(exhaustive::check(program, &typed));
@@ -289,7 +292,11 @@ fn declaration_problem(
 
 /// Kind の制約の違反は、線形な値の誤った使い方である (docs/spec/linearity.md)。ファイルと位置の順に並べ、同じ範囲の由来は `KindReason::order_key` の順に並べる。
 /// 同じ値の持ち越しの違反は、呼び出しの位置が最も前のものだけを報告する (docs/implementation/diagnostics.md の E3006)。
-fn report_violations(program: &Program, mut origins: Vec<KindOrigin>) -> Vec<Diagnostic> {
+fn report_violations(
+    program: &Program,
+    files: &SourceFiles,
+    mut origins: Vec<KindOrigin>,
+) -> Vec<Diagnostic> {
     origins.sort_by_cached_key(|origin| {
         (
             origin.span.file,
@@ -308,7 +315,7 @@ fn report_violations(program: &Program, mut origins: Vec<KindOrigin>) -> Vec<Dia
         {
             continue;
         }
-        out.push(report::linear_misuse(program, &origin));
+        out.push(report::linear_misuse(program, files, &origin));
     }
     out
 }
@@ -431,7 +438,7 @@ mod tests {
     #[test]
     fn carried_values_in_different_files_are_reported_separately() {
         // 範囲が同じでも、ファイルが違えば別の値である
-        let program = crate::test_program("");
+        let (program, files) = crate::test_program_with_files("");
         let prelude = program.file(program.prelude);
         let entry = program.file(program.entry);
         let range = TextRange::new(0.into(), 1.into());
@@ -443,7 +450,7 @@ mod tests {
                 call: CallKind::Call,
             },
         };
-        let reported = report_violations(&program, vec![origin(entry), origin(prelude)]);
+        let reported = report_violations(&program, &files, vec![origin(entry), origin(prelude)]);
         let files: Vec<_> = reported.iter().map(|d| d.primary.file).collect();
         assert_eq!(files, vec![prelude, entry]);
     }

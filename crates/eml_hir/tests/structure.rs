@@ -1,8 +1,8 @@
 //! HIR のデータ構造と走査関数のテスト。
 
 use eml_hir::{
-    Body, ExprId, ExprKind, Function, FunctionId, FunctionKind, LineStart, LocalId, PatKind,
-    Program, TypeRefKind,
+    Body, ExprId, ExprKind, Function, FunctionId, FunctionKind, LocalId, PatKind, Program,
+    TypeRefKind,
 };
 
 /// 診断がないことを確かめて HIR を返す。
@@ -182,20 +182,24 @@ fn internal_builtins_cannot_be_named() {
 }
 
 #[test]
-fn a_block_records_where_its_last_line_starts() {
-    // fix が最後の文の前に行を入れるので、その位置と字下げを持つ
+fn a_block_records_where_its_last_statement_starts() {
+    // fix が最後の文の前に行を入れるので、その位置を持つ。行の最初のトークンかどうかは問わない
     // (docs/implementation/diagnostics.md の「線形性の診断」)
-    let module = module("f : Int -> Int\nf x =\n  let y = x\n  y");
-    let body = body(&module, "f");
-    let ExprKind::Block { last_line, .. } = &body.exprs[body.root].kind else {
-        panic!("the body is a block");
+    let last_start = |text: &str| {
+        let module = module(text);
+        let body = body(&module, "f");
+        let ExprKind::Block { last_start, .. } = body.exprs[body.root].kind else {
+            panic!("the body is a block");
+        };
+        last_start
     };
     assert_eq!(
-        *last_line,
-        Some(LineStart {
-            offset: 35.into(),
-            indent: 2,
-        })
+        last_start("f : Int -> Int\nf x =\n  let y = x\n  y"),
+        Some(35.into())
+    );
+    assert_eq!(
+        last_start("f : Int -> Int\nf x =\n  let y = x; y"),
+        Some(34.into())
     );
 }
 
