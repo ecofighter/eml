@@ -102,7 +102,11 @@ impl ProgramBuilder {
         self.operation_wrappers.insert(op, function);
         let args = params.iter().map(|&param| Atom::Var(param)).collect();
         let body = match operation_rhs(hir, op, args) {
-            Rhs::Call { call, .. } => builder.push(CExpr::TailCall(call)),
+            Rhs::Call {
+                call,
+                mask,
+                saved: _,
+            } => builder.push(CExpr::TailCall { call, mask }),
             rhs => {
                 let result = builder.var(var_info("t", &result_type, hir));
                 let ret = builder.push(CExpr::Return(Atom::Var(result)));
@@ -188,14 +192,20 @@ impl ProgramBuilder {
         let mut builder = FnBuilder::new();
         let body = if self.arity(target) == 0 {
             let value = builder.var(var_info("f", target_type, hir));
-            let apply = builder.push(CExpr::TailCall(Call::Apply(Atom::Var(value), unit)));
+            let apply = builder.push(CExpr::TailCall {
+                call: Call::Apply(Atom::Var(value), unit),
+                mask: Vec::new(),
+            });
             builder.push(CExpr::Let {
                 var: value,
                 rhs: Rhs::call(Call::Direct(target, Vec::new())),
                 body: apply,
             })
         } else {
-            builder.push(CExpr::TailCall(Call::Direct(target, unit)))
+            builder.push(CExpr::TailCall {
+                call: Call::Direct(target, unit),
+                mask: Vec::new(),
+            })
         };
         let name = format!(
             "entry${}",

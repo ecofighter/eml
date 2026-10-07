@@ -784,3 +784,42 @@ fn a_switch_with_two_defaults_does_not_parse() {
     let error = eml_core_ir::parse(text).unwrap_err().to_string();
     assert!(error.contains("two defaults"), "{error}");
 }
+
+#[test]
+fn a_mask_must_name_known_effects_in_order_without_io() {
+    let unknown = "\
+effect Main.State { get/1, put/1 }
+fn entry$main(c0^) {
+  tailcall mask[#5] apply c0(())
+}
+";
+    let unordered = "\
+effect Main.A { a/1 }
+effect Main.B { b/1 }
+fn entry$main(c0^) {
+  tailcall mask[Main.B, Main.A] apply c0(())
+}
+";
+    let io = "\
+effect Prelude.IO { println/1, open/1, read_all/1, close/1 }
+fn entry$main(c0^) {
+  tailcall mask[Prelude.IO] apply c0(())
+}
+";
+    insta::assert_snapshot!(check(unknown).unwrap_err(), @"a mask names an unknown effect #5 in `entry$main`");
+    insta::assert_snapshot!(check(unordered).unwrap_err(), @"a mask is not in ascending order in `entry$main`");
+    insta::assert_snapshot!(check(io).unwrap_err(), @"a mask names IO in `entry$main`");
+}
+
+#[test]
+fn a_mask_may_name_one_effect_twice() {
+    let text = "\
+effect Main.A { a/1 }
+effect Main.B { b/1 }
+fn entry$main(c0^) {
+  let t1^ = mask[Main.A, Main.A, Main.B] apply c0(())
+  tailcall mask[Main.B] apply t1(())
+}
+";
+    assert_eq!(check(text), Ok(()));
+}

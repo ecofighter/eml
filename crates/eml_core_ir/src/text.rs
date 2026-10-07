@@ -432,7 +432,17 @@ impl<'t> Parser<'t> {
                     let args = self.list('(', ')', |p| p.atom(state))?;
                     break CExpr::Jump { join, args };
                 }
-                "tailcall" => break CExpr::TailCall(self.call(state, true)?),
+                "tailcall" => {
+                    let mask = self.mask()?;
+                    if !mask.is_empty()
+                        && (self.at_word("handle") || self.at_word("perform"))
+                        && self.peek_at(1) != Some(&Tok::Punct('('))
+                    {
+                        return Err(self.mask_on_wrong_call());
+                    }
+                    let call = self.call(state, true)?;
+                    break CExpr::TailCall { call, mask };
+                }
                 "switch" => {
                     let scrutinee = self.atom(state)?;
                     let (cases, default) = self.cases(state)?;
@@ -531,6 +541,13 @@ impl<'t> Parser<'t> {
     }
 
     fn rhs(&mut self, state: &mut FnState) -> Result<Rhs, ParseError> {
+        let mask = self.mask()?;
+        let maskable = ["call", "apply", "resume"]
+            .iter()
+            .any(|word| self.at_word(word));
+        if !mask.is_empty() && !maskable {
+            return Err(self.mask_on_wrong_call());
+        }
         let keyword = match self.peek() {
             Some(Tok::Word(word)) => word.clone(),
             _ => return Ok(Rhs::Atom(self.atom(state)?)),
@@ -540,7 +557,7 @@ impl<'t> Parser<'t> {
                 self.pos += 1;
                 let callee = self.function_name()?;
                 let args = self.list('(', ')', |p| p.atom(state))?;
-                self.saved_call(state, Call::Direct(callee, args))?
+                self.saved_call(state, Call::Direct(callee, args), mask)?
             }
             "closure" => {
                 self.pos += 1;
@@ -588,20 +605,48 @@ impl<'t> Parser<'t> {
             }
             "apply" | "handle" | "perform" | "resume" => {
                 let call = self.call(state, false)?;
-                self.saved_call(state, call)?
+                self.saved_call(state, call, mask)?
             }
             _ => Rhs::Atom(self.atom(state)?),
         };
         Ok(rhs)
     }
 
-    fn saved_call(&mut self, state: &mut FnState, call: Call) -> Result<Rhs, ParseError> {
+    fn saved_call(
+        &mut self,
+        state: &mut FnState,
+        call: Call,
+        mask: Vec<u32>,
+    ) -> Result<Rhs, ParseError> {
         let saved = if self.at_punct('[') {
             self.list('[', ']', |p| p.var(state))?
         } else {
             Vec::new()
         };
-        Ok(Rhs::Call { call, saved })
+        Ok(Rhs::Call { call, mask, saved })
+    }
+
+    /// `mask[E1, E2]` を読む。エフェクトはエフェクトの行の名前か `#N` で書く。`#N` は操作の `#N` と同じく、表にない
+    /// 番号を書いて誤りを含む IR を verifier に渡すためにある。並びの順と `IO` は verifier が確かめる
+    /// (docs/implementation/testing.md の「Core IR のテキストの形」)。`mask(` は関数 `mask` の呼び出しである。
+    fn mask(&mut self) -> Result<Vec<u32>, ParseError> {
+        if !(self.at_word("mask") && self.peek_at(1) == Some(&Tok::Punct('['))) {
+            return Ok(Vec::new());
+        }
+        self.pos += 1;
+        self.list('[', ']', |p| {
+            let line = p.line();
+            let word = p.word()?;
+            match tag_number(&word) {
+                Some(index) => Ok(index),
+                None => p.effect_id(&word, line),
+            }
+        })
+    }
+
+    /// `mask` を持つのは `Direct`、`Apply`、`Resume` の呼び出しだけである (docs/spec/core-ir.md)。
+    fn mask_on_wrong_call(&self) -> ParseError {
+        error(self.line(), "a mask is only on call, apply and resume")
     }
 
     /// `tailcall` の後と、`let` の右辺の呼び出し。`let` の右辺では、`Direct` の呼び出しに `call` を前に付けるので、
@@ -1108,12 +1153,18 @@ mod tests {
         let f = &program.functions[2];
         assert_eq!(
             f.expr(f.body),
-            &CExpr::TailCall(Call::Direct(FnIdx(0), vec![Atom::Int(1)]))
+            &CExpr::TailCall {
+                call: Call::Direct(FnIdx(0), vec![Atom::Int(1)]),
+                mask: Vec::new(),
+            }
         );
         let g = &program.functions[3];
         assert_eq!(
             g.expr(g.body),
-            &CExpr::TailCall(Call::Direct(FnIdx(1), vec![Atom::Int(2)]))
+            &CExpr::TailCall {
+                call: Call::Direct(FnIdx(1), vec![Atom::Int(2)]),
+                mask: Vec::new(),
+            }
         );
     }
 
@@ -1127,7 +1178,10 @@ mod tests {
         let f = &program.functions[0];
         assert_eq!(
             f.expr(f.body),
-            &CExpr::TailCall(Call::Apply(Atom::Unit, vec![Atom::Var(VarId(0))]))
+            &CExpr::TailCall {
+                call: Call::Apply(Atom::Unit, vec![Atom::Var(VarId(0))]),
+                mask: Vec::new(),
+            }
         );
     }
 
@@ -1201,6 +1255,53 @@ mod tests {
             error.message,
             "expected a statement; a chain ends with return, jump, tailcall or switch, found `}`"
         );
+    }
+
+    #[test]
+    fn a_mask_reads_back() {
+        round_trip(
+            "\
+effect Main.State { get/1, put/1 }
+fn entry$main(c0^) {
+  let t1^ = mask[Main.State, Main.State] apply c0(())
+  tailcall mask[Main.State] apply t1(())
+}
+",
+        );
+        round_trip(
+            "effect Main.State { get/1, put/1 }\n\
+             fn f(c0^, k1^) {\n  let t2 = mask[#3] call f(c0, k1) [c0]\n  let t3 = mask[Main.State] resume k1(t2, ())\n  tailcall mask[Main.State] f(c0, t3)\n}\n",
+        );
+    }
+
+    #[test]
+    fn a_function_named_mask_is_called_without_a_mask() {
+        let text = "fn mask(x0) {\n  return x0\n}\nfn f() {\n  tailcall mask(1)\n}\n";
+        round_trip(text);
+        let program = parse(text).unwrap();
+        let f = &program.functions[1];
+        assert_eq!(
+            f.expr(f.body),
+            &CExpr::TailCall {
+                call: Call::Direct(FnIdx(0), vec![Atom::Int(1)]),
+                mask: Vec::new(),
+            }
+        );
+    }
+
+    #[test]
+    fn a_mask_on_handle_or_perform_is_an_error() {
+        let error = parse_error(
+            "effect Ask { ask/1 }\nfn f(c0^, c1^, c2^) {\n  let t3 = mask[Ask] handle Ask(c0, ()) {ask: c1} return c2\n  return t3\n}\n",
+        );
+        assert_eq!(error.line, 3);
+        assert_eq!(error.message, "a mask is only on call, apply and resume");
+
+        let error = parse_error(
+            "effect Ask { ask/1 }\nfn f() {\n  tailcall mask[Ask] perform Ask.ask(1)\n}\n",
+        );
+        assert_eq!(error.line, 3);
+        assert_eq!(error.message, "a mask is only on call, apply and resume");
     }
 
     #[test]

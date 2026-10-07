@@ -567,16 +567,24 @@ impl Simplify<'_> {
             let CExpr::Let {
                 var,
                 // `saved` は Perceus が決めるので、この時点では空である (docs/spec/core-ir.md のパスの表)。末尾呼び出しは
-                // フレームを残さないので捨てる
-                rhs: Rhs::Call { call, saved: _ },
+                // フレームを残さないので捨てる。`mask` は末尾かどうかと独立なので、そのまま運ぶ (docs/spec/core-ir.md)
+                rhs:
+                    Rhs::Call {
+                        call,
+                        mask,
+                        saved: _,
+                    },
                 body,
             } = self.expr(id)
             else {
                 continue;
             };
             if self.expr(*body) == &CExpr::Return(Atom::Var(*var)) {
-                let call = call.clone();
-                self.set(id, CExpr::TailCall(call));
+                let tail = CExpr::TailCall {
+                    call: call.clone(),
+                    mask: mask.clone(),
+                };
+                self.set(id, tail);
             }
         }
     }

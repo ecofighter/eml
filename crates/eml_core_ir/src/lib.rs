@@ -137,8 +137,13 @@ pub enum CExpr {
         args: Vec<Atom>,
     },
     Return(Atom),
-    /// 関数の末尾の呼び出し。呼び出し元のフレームを積まない。
-    TailCall(Call),
+    /// 関数の末尾の呼び出し。呼び出し元のフレームを積まない。`mask` は呼び出しの間に飛ばすエフェクトの多重集合で、
+    /// エフェクトの番号の昇順に並び、空なら `mask` なしである。末尾かどうかと `mask` は独立である
+    /// (docs/spec/core-ir.md)。
+    TailCall {
+        call: Call,
+        mask: Vec<u32>,
+    },
     Dup {
         var: VarId,
         body: CExprId,
@@ -181,7 +186,9 @@ impl CExpr {
                     f(*default);
                 }
             }
-            CExpr::Jump { join: _, args: _ } | CExpr::Return(_) | CExpr::TailCall(_) => {}
+            CExpr::Jump { join: _, args: _ }
+            | CExpr::Return(_)
+            | CExpr::TailCall { call: _, mask: _ } => {}
         }
     }
 
@@ -214,7 +221,9 @@ impl CExpr {
                     f(default);
                 }
             }
-            CExpr::Jump { join: _, args: _ } | CExpr::Return(_) | CExpr::TailCall(_) => {}
+            CExpr::Jump { join: _, args: _ }
+            | CExpr::Return(_)
+            | CExpr::TailCall { call: _, mask: _ } => {}
         }
     }
 
@@ -229,7 +238,7 @@ impl CExpr {
             CExpr::Switch { scrutinee, .. } => f(*scrutinee),
             CExpr::Jump { join: _, args } => args.iter().for_each(|&atom| f(atom)),
             CExpr::Return(atom) => f(*atom),
-            CExpr::TailCall(call) => call.for_each_atom(f),
+            CExpr::TailCall { call, mask: _ } => call.for_each_atom(f),
             CExpr::Join {
                 join: _,
                 params: _,
@@ -252,7 +261,7 @@ impl CExpr {
             CExpr::Switch { scrutinee, .. } => f(scrutinee),
             CExpr::Jump { join: _, args } => args.iter_mut().for_each(f),
             CExpr::Return(atom) => f(atom),
-            CExpr::TailCall(call) => call.for_each_atom_mut(f),
+            CExpr::TailCall { call, mask: _ } => call.for_each_atom_mut(f),
             CExpr::Join {
                 join: _,
                 params: _,
@@ -288,9 +297,11 @@ pub enum CasePattern {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Rhs {
     Atom(Atom),
-    /// 呼び出しの後で使う変数 (`saved`) を、呼び出しのフレームに退避する (docs/spec/core-ir.md)。
+    /// 呼び出しの後で使う変数 (`saved`) を、呼び出しのフレームに退避する (docs/spec/core-ir.md)。`mask` は
+    /// `TailCall` と同じである。
     Call {
         call: Call,
+        mask: Vec<u32>,
         saved: Vec<VarId>,
     },
     /// 関数と先頭の引数の並びからクロージャを作る。並びの値の所有権はクロージャに移る。ラムダの捕獲と部分適用は、
@@ -314,8 +325,14 @@ pub enum Rhs {
 impl Rhs {
     /// 退避する変数をまだ決めていない呼び出し。Perceus が、呼び出しの後で生きている変数で埋める。
     pub fn call(call: Call) -> Rhs {
+        Rhs::masked_call(call, Vec::new())
+    }
+
+    /// `mask` 付きの呼び出し。
+    pub fn masked_call(call: Call, mask: Vec<u32>) -> Rhs {
         Rhs::Call {
             call,
+            mask,
             saved: Vec::new(),
         }
     }
@@ -330,7 +347,11 @@ impl Rhs {
     pub(crate) fn for_each_atom(&self, mut f: impl FnMut(Atom)) {
         match self {
             Rhs::Atom(atom) | Rhs::Drop(atom) => f(*atom),
-            Rhs::Call { call, saved: _ } => call.for_each_atom(f),
+            Rhs::Call {
+                call,
+                mask: _,
+                saved: _,
+            } => call.for_each_atom(f),
             Rhs::MakeClosure(_, args)
             | Rhs::Prim(_, args)
             | Rhs::Io(_, args)
@@ -342,7 +363,11 @@ impl Rhs {
     pub(crate) fn for_each_atom_mut(&mut self, mut f: impl FnMut(&mut Atom)) {
         match self {
             Rhs::Atom(atom) | Rhs::Drop(atom) => f(atom),
-            Rhs::Call { call, saved: _ } => call.for_each_atom_mut(f),
+            Rhs::Call {
+                call,
+                mask: _,
+                saved: _,
+            } => call.for_each_atom_mut(f),
             Rhs::MakeClosure(_, args)
             | Rhs::Prim(_, args)
             | Rhs::Io(_, args)
@@ -598,7 +623,10 @@ mod tests {
             clauses: vec![Atom::Var(VarId(2)), Atom::Var(VarId(3))],
             ret: Atom::Var(VarId(4)),
         };
-        let handle = CExpr::TailCall(call.clone());
+        let handle = CExpr::TailCall {
+            call: call.clone(),
+            mask: Vec::new(),
+        };
         let mut atoms = Vec::new();
         handle.for_each_atom(|atom| atoms.push(atom));
         assert_eq!(atoms, [0, 1, 2, 3, 4].map(|n| Atom::Var(VarId(n))));
@@ -609,7 +637,10 @@ mod tests {
         handle.for_each_atom_mut(|atom| atoms_mut.push(*atom));
         assert_eq!(atoms_mut, atoms);
 
-        let apply = CExpr::TailCall(Call::Apply(Atom::Var(VarId(7)), vec![Atom::Int(1)]));
+        let apply = CExpr::TailCall {
+            call: Call::Apply(Atom::Var(VarId(7)), vec![Atom::Int(1)]),
+            mask: Vec::new(),
+        };
         let mut atoms = Vec::new();
         apply.for_each_atom(|atom| atoms.push(atom));
         assert_eq!(atoms, [Atom::Var(VarId(7)), Atom::Int(1)]);

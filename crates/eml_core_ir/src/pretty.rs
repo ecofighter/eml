@@ -108,8 +108,14 @@ fn expr(program: &Program, function: &CoreFn, id: CExprId, indent: usize, out: &
                 writeln!(out, "{pad}jump j{}({})", join.0, args.join(", ")).unwrap();
                 return;
             }
-            CExpr::TailCall(call) => {
-                writeln!(out, "{pad}tailcall {}", call_text(program, function, call)).unwrap();
+            CExpr::TailCall { call, mask } => {
+                writeln!(
+                    out,
+                    "{pad}tailcall {}{}",
+                    mask_text(program, mask),
+                    call_text(program, function, call)
+                )
+                .unwrap();
                 return;
             }
             CExpr::Switch {
@@ -161,11 +167,12 @@ fn rhs_text(program: &Program, function: &CoreFn, rhs: &Rhs) -> String {
     };
     match rhs {
         Rhs::Atom(a) => atom(program, function, a),
-        Rhs::Call { call, saved } => {
-            let text = match call {
+        Rhs::Call { call, mask, saved } => {
+            let call_text = match call {
                 Call::Direct(..) => format!("call {}", call_text(program, function, call)),
                 _ => call_text(program, function, call),
             };
+            let text = format!("{}{call_text}", mask_text(program, mask));
             if saved.is_empty() {
                 text
             } else {
@@ -245,6 +252,22 @@ fn call_text(program: &Program, function: &CoreFn, call: &Call) -> String {
             )
         }
     }
+}
+
+/// `mask` を `mask[E1, E1, E2] ` の形にする。空なら何も出さない (docs/implementation/testing.md の
+/// 「Core IR のテキストの形」)。表にない番号は、操作の番号と同じく `#N` で出す。
+fn mask_text(program: &Program, mask: &[u32]) -> String {
+    if mask.is_empty() {
+        return String::new();
+    }
+    let names: Vec<String> = mask
+        .iter()
+        .map(|&effect| match program.effects.get(effect as usize) {
+            Some(info) => info.name.clone(),
+            None => format!("#{effect}"),
+        })
+        .collect();
+    format!("mask[{}] ", names.join(", "))
 }
 
 /// case の頭。文字列の case は `const` と同じく文字列定数の表を引いて書く。verifier の誤りの文言もこの形を使う。

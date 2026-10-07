@@ -106,7 +106,7 @@ impl<'p> Machine<'p> {
             }
             // 呼び出し元のフレームを積まない。verifier が、この時点で所有している参照が残っていないことを保証するので、
             // 今の環境はそのまま捨ててよい (docs/spec/core-ir.md)
-            CExpr::TailCall(call) => return self.call(call, None),
+            CExpr::TailCall { call, mask: _ } => return self.call(call, None),
             CExpr::Join {
                 join: _,
                 params: _,
@@ -161,7 +161,11 @@ impl<'p> Machine<'p> {
                 }
                 Value::Unit
             }
-            Rhs::Call { call, saved } => {
+            Rhs::Call {
+                call,
+                mask: _,
+                saved,
+            } => {
                 let ret = ReturnPoint {
                     bind: var,
                     control: body,

@@ -157,10 +157,10 @@ impl Rebuild<'_> {
                     let owned = self.owned(&segment, &live);
                     break (self.transform_return(*atom, &owned), live);
                 }
-                CExpr::TailCall(call) => {
+                CExpr::TailCall { call, mask } => {
                     let live = self.live.at_end(expr);
                     let owned = self.owned(&segment, &live);
-                    break (self.transform_tail_call(call, &owned), live);
+                    break (self.transform_tail_call(call, mask, &owned), live);
                 }
                 CExpr::Jump { join, args } => {
                     let live = self.live.at_end(expr);
@@ -245,8 +245,13 @@ impl Rebuild<'_> {
                 Step::Let { var, rhs, released } => {
                     // `live` は、この束縛の後で生きている変数である。呼び出しは、そのうち結果の変数以外を退避する
                     let rhs = match rhs {
-                        Rhs::Call { call, saved: _ } => Rhs::Call {
+                        Rhs::Call {
                             call,
+                            mask,
+                            saved: _,
+                        } => Rhs::Call {
+                            call,
+                            mask,
                             saved: live.iter().copied().filter(|&v| v != var).collect(),
                         },
                         rhs => rhs,
@@ -316,9 +321,12 @@ impl Rebuild<'_> {
     }
 
     /// 末尾呼び出しの後で使う変数はないので、呼び出しが使わない変数をすべて捨てる。
-    fn transform_tail_call(&mut self, call: &Call, owned: &Vars) -> CExprId {
+    fn transform_tail_call(&mut self, call: &Call, mask: &[u32], owned: &Vars) -> CExprId {
         let uses = self.uses(&call.atoms());
-        let code = self.push(CExpr::TailCall(call.clone()));
+        let code = self.push(CExpr::TailCall {
+            call: call.clone(),
+            mask: mask.to_vec(),
+        });
         self.release_and_duplicate(code, owned, &uses, |_| false)
     }
 

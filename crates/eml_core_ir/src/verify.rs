@@ -162,7 +162,12 @@ impl<'a> Checker<'a> {
                     if let Rhs::MakeClosure(target, args) = rhs {
                         self.closures.insert(*var, (*target, args.len()));
                     }
-                    if let Rhs::Call { call: _, saved } = rhs {
+                    if let Rhs::Call {
+                        call: _,
+                        mask: _,
+                        saved,
+                    } = rhs
+                    {
                         match self.level {
                             Level::Scopes if !saved.is_empty() => {
                                 return Err(format!(
@@ -199,7 +204,8 @@ impl<'a> Checker<'a> {
                     self.consume(&mut state, atom)?;
                     return self.nothing_owned(&state);
                 }
-                CExpr::TailCall(call) => {
+                CExpr::TailCall { call, mask } => {
+                    self.check_mask(call, mask)?;
                     self.check_call(&mut state, call)?;
                     return self.nothing_owned(&state);
                 }
@@ -438,7 +444,14 @@ impl<'a> Checker<'a> {
 
     fn check_rhs(&self, state: &mut State, rhs: &Rhs) -> Result<(), String> {
         match rhs {
-            Rhs::Call { call, saved: _ } => return self.check_call(state, call),
+            Rhs::Call {
+                call,
+                mask,
+                saved: _,
+            } => {
+                self.check_mask(call, mask)?;
+                return self.check_call(state, call);
+            }
             Rhs::MakeClosure(target, args) => {
                 let target = self.program.function(*target);
                 if args.is_empty() {
@@ -530,6 +543,39 @@ impl<'a> Checker<'a> {
         }
         for atom in call.atoms() {
             self.consume(state, &atom)?;
+        }
+        Ok(())
+    }
+
+    /// `mask` はエフェクトの表にある番号を昇順に並べた多重集合で、`IO` を含まない。`IO` の操作は handler を探さずに
+    /// その場で実行するので (docs/implementation/architecture.md の「継続のフレーム」)、飛ばす handler がないためで
+    /// ある。`handle` と `perform` は `mask` を持たない (docs/spec/core-ir.md)。
+    fn check_mask(&self, call: &Call, mask: &[u32]) -> Result<(), String> {
+        if mask.is_empty() {
+            return Ok(());
+        }
+        match call {
+            Call::Handle { .. } => return Err("a mask on handle".to_string()),
+            Call::Perform { .. } => return Err("a mask on perform".to_string()),
+            Call::Direct(..) | Call::Apply(..) | Call::Resume { .. } => {}
+        }
+        if let Some(&unknown) = mask
+            .iter()
+            .find(|&&effect| effect as usize >= self.program.effects.len())
+        {
+            return Err(format!("a mask names an unknown effect #{unknown}"));
+        }
+        if !mask.is_sorted() {
+            return Err("a mask is not in ascending order".to_string());
+        }
+        // Core IR の表は HIR の `lang.io` を持たないので、Prelude の `IO` の修飾した名前で引く
+        let io = self
+            .program
+            .effects
+            .iter()
+            .position(|info| info.name == "Prelude.IO");
+        if io.is_some_and(|io| mask.contains(&(io as u32))) {
+            return Err("a mask names IO".to_string());
         }
         Ok(())
     }
@@ -741,6 +787,27 @@ mod tests {
         );
     }
 
+    /// テキストは `handle` と `perform` の前の `mask` を読まないので、読んだ後で `mask` を付ける。
+    #[test]
+    fn a_mask_on_handle_or_perform_is_rejected() {
+        let texts = [
+            "effect Ask { ask/1 }\nfn f(c0^, c1^, c2^) {\n  tailcall handle Ask(c0, ()) {ask: c1} return c2\n}\n",
+            "effect Ask { ask/1 }\nfn f() {\n  tailcall perform Ask.ask(1)\n}\n",
+        ];
+        let mut errors = Vec::new();
+        for text in texts {
+            let mut program = crate::parse(text).unwrap();
+            let function = &mut program.functions[0];
+            let root = function.body;
+            let CExpr::TailCall { call: _, mask } = function.expr_mut(root) else {
+                panic!("not a tail call");
+            };
+            mask.push(0);
+            errors.push(verify_scopes(&program).unwrap_err().message);
+        }
+        assert_eq!(errors, ["a mask on handle", "a mask on perform"]);
+    }
+
     #[test]
     fn a_perform_must_agree_with_the_effect_on_resuming() {
         let mut program = crate::parse(
@@ -749,7 +816,11 @@ mod tests {
         .unwrap();
         let function = &mut program.functions[0];
         let root = function.body;
-        let CExpr::TailCall(Call::Perform { resumable, .. }) = function.expr_mut(root) else {
+        let CExpr::TailCall {
+            call: Call::Perform { resumable, .. },
+            mask: _,
+        } = function.expr_mut(root)
+        else {
             panic!("not a perform");
         };
         *resumable = true;

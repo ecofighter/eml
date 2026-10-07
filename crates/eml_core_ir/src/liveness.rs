@@ -34,7 +34,7 @@ impl BlockLiveness {
     pub(crate) fn at_end(&self, expr: &CExpr) -> Vars {
         match expr {
             CExpr::Return(atom) => var_of(atom).into_iter().collect(),
-            CExpr::TailCall(call) => call.atoms().iter().filter_map(var_of).collect(),
+            CExpr::TailCall { call, mask: _ } => call.atoms().iter().filter_map(var_of).collect(),
             // 範囲の外への `Jump` は verifier が報告するので、ここでは求めていない `captures` を空として扱う
             CExpr::Jump { join, args } => {
                 let mut vars = self
@@ -180,7 +180,9 @@ pub(crate) fn analyze(function: &mut CoreFn) -> BlockLiveness {
                                 .map(|body| Step::Visit(body, Start::Block)),
                         );
                     }
-                    CExpr::Jump { join: _, args: _ } | CExpr::Return(_) | CExpr::TailCall(_) => {}
+                    CExpr::Jump { join: _, args: _ }
+                    | CExpr::Return(_)
+                    | CExpr::TailCall { call: _, mask: _ } => {}
                     CExpr::Let {
                         var: _,
                         rhs: _,
