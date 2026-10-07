@@ -75,6 +75,7 @@ pub(super) fn lower_operations(
                 effect,
                 &effects[effect.local].generics,
                 resolver,
+                item.public.then_some(decl.name.as_str()),
                 diagnostics,
             )
             .expect("an operation of the item tree has a name");
@@ -100,6 +101,7 @@ fn lower_operation(
     effect: EffectId,
     effect_generics: &Generics,
     scope: Resolver<'_>,
+    public_item: Option<&str>,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Option<Operation> {
     // 名前がなければパーサが報告済み
@@ -123,6 +125,7 @@ fn lower_operation(
         generics: &mut generics,
         items: scope,
         vars: Vars::Define,
+        public_item,
         diagnostics: &mut *diagnostics,
     }
     .lower(decl.ty(), range);

@@ -27,6 +27,9 @@ pub(super) struct TypeLowering<'a> {
     pub generics: &'a mut Generics,
     pub items: Resolver<'a>,
     pub vars: Vars,
+    /// `pub` の item の型を変換するときの、その item の名前。型に同じモジュールの `pub` でない型かエフェクトが現れたら
+    /// E1032 にする (docs/spec/modules.md の「公開の範囲」)。`pub` でない item と本体の注釈では `None` である。
+    pub public_item: Option<&'a str>,
     pub diagnostics: &'a mut Vec<Diagnostic>,
 }
 
@@ -36,6 +39,13 @@ impl TypeLowering<'_> {
             return self.alloc(TypeRefKind::Error, fallback);
         };
         let range = ty.range();
+        // E1032 は型の全体ではなく、書いた名前 (修飾子を含む) を指す
+        let path_range = match &ty {
+            ast::Type::PathType(path) => path.path(),
+            ast::Type::AppType(app) => app.path(),
+            _ => None,
+        }
+        .map(|path| path.range());
         let kind = match ty {
             ast::Type::PathType(path) => match path_name(path.path()).at(range) {
                 Some(at) => self.applied(&at, Vec::new(), range),
@@ -79,6 +89,9 @@ impl TypeLowering<'_> {
                     .collect(),
             ),
         };
+        if let (TypeRefKind::Con(id, _), Some(path_range)) = (&kind, path_range) {
+            self.check_exposed(TypeItem::Type(*id), path_range);
+        }
         self.alloc(kind, range)
     }
 
@@ -126,6 +139,35 @@ impl TypeLowering<'_> {
         ));
     }
 
+    /// 公開の範囲の誤り (E1032)。非公開の型を返す公開の関数を許すと、`pub data` の形で入れる予定の抽象型より先に、
+    /// 裏口の抽象型ができてしまう。非公開のエフェクトは、import する側が名前を書けず handle できない
+    /// (docs/spec/modules.md の「公開の範囲」)。
+    fn check_exposed(&mut self, item: TypeItem, range: TextRange) {
+        let Some(owner) = self.public_item else {
+            return;
+        };
+        let Some((name, defined)) = self.items.private_type_item(item) else {
+            return;
+        };
+        let kind = match item {
+            TypeItem::Type(_) => "type",
+            TypeItem::Effect(_) => "effect",
+        };
+        self.diagnostics.push(
+            Diagnostic::error(
+                codes::PRIVATE_IN_PUBLIC,
+                format!("the public `{owner}` uses the private {kind} `{name}`"),
+                Label::new(self.file, range, format!("`{name}` is not `pub`")),
+            )
+            .with_secondary(Label::new(
+                self.file,
+                defined,
+                format!("`{name}` is defined here"),
+            ))
+            .with_help(format!("add `pub` to the declaration of `{name}`")),
+        );
+    }
+
     fn row(&mut self, row: &ast::EffectRow) -> RowRef {
         let mut valid = true;
         let tail = match row.tail() {
@@ -157,6 +199,8 @@ impl TypeLowering<'_> {
                         valid = false;
                         continue;
                     }
+                    let path_range = effect.path().map_or(effect.range(), |path| path.range());
+                    self.check_exposed(TypeItem::Effect(id), path_range);
                     effects.push(EffectRef { effect: id, args });
                 }
                 // 型の名前は row に書けない

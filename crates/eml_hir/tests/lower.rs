@@ -646,3 +646,67 @@ fn infix_patterns_with_ambiguous_or_broken_constructors_are_silent_errors() {
         ["E1026 test.em 3:8", "E1028 test.em 10:7"]
     );
 }
+
+#[test]
+fn private_in_public_signature() {
+    let lowered =
+        eml_test_support::lower("data Secret = | S\n\npub reveal : Unit -> Secret\nreveal () = S");
+    insta::assert_snapshot!(eml_test_support::full(&lowered.files, &lowered.diagnostics), @r"
+    E1032 3:22 the public `reveal` uses the private type `Secret`
+      3:22 `Secret` is not `pub`
+      1:6 `Secret` is defined here
+      help: add `pub` to the declaration of `Secret`
+    ");
+}
+
+#[test]
+fn private_in_public_constructor_fields_and_operations() {
+    let text = "data Secret = | S\n\npub data Box = | Box Secret\n\ndata Token = | Token\n\npub effect Auth where\n  login : Unit -> Token";
+    assert_eq!(
+        diagnostics(text),
+        [
+            "E1032 3:22 the public `Box` uses the private type `Secret`",
+            "E1032 8:19 the public `login` uses the private type `Token`",
+        ]
+    );
+}
+
+#[test]
+fn private_in_public_rows_and_type_arguments() {
+    let text = "effect Log where\n  log : String -> Unit\n\npub run : Unit -> <Log> Unit\nrun () = log \"x\"\n\ndata Secret = | S\n\npub data Box a = | Box a\n\npub wrap : Unit -> Box Secret\nwrap () = Box S";
+    assert_eq!(
+        diagnostics(text),
+        [
+            "E1032 4:20 the public `run` uses the private effect `Log`",
+            "E1032 11:24 the public `wrap` uses the private type `Secret`",
+        ]
+    );
+}
+
+#[test]
+fn private_in_public_ignores_private_items_and_bodies() {
+    // `pub` でない item の型と、`pub` の関数の本体の注釈は検査しない
+    let text = "data Secret = | S\n\nhidden : Unit -> Secret\nhidden () = S\n\npub f : Unit -> Unit\nf () =\n  let x = (S : Secret)\n  ()";
+    assert_eq!(diagnostics(text), Vec::<String>::new());
+}
+
+#[test]
+fn private_in_public_in_a_dependency_points_into_its_file() {
+    let lowered = eml_test_support::lower_files(
+        "import Report",
+        &[(
+            "Report.em",
+            "data Row = | Row Int\n\npub parse : String -> Row\nparse s = Row 1",
+        )],
+    );
+    assert_eq!(
+        eml_test_support::short(&lowered.files, &lowered.diagnostics),
+        ["E1032 3:23 the public `parse` uses the private type `Row`"]
+    );
+    let diagnostic = &lowered.diagnostics[0];
+    assert_eq!(lowered.files.path(diagnostic.primary.file), "Report.em");
+    assert_eq!(
+        lowered.files.path(diagnostic.secondary[0].file),
+        "Report.em"
+    );
+}

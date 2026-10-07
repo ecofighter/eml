@@ -97,9 +97,9 @@ fn lower_items(
         let FunctionItem {
             name,
             first_range,
+            public,
             signature,
             equations,
-            ..
         } = function;
         // Prelude の等式のないシグネチャは intrinsic の関数で、E1005 にしない
         // (docs/implementation/architecture.md の「`eml_hir` の内部」)
@@ -126,6 +126,7 @@ fn lower_items(
                 generics: &mut generics,
                 items: resolver,
                 vars: Vars::Define,
+                public_item: public.then_some(name.as_str()),
                 diagnostics: &mut *diagnostics,
             }
             .lower(node.ty(), range);

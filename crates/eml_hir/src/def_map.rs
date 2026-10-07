@@ -946,6 +946,18 @@ impl<'a> Resolver<'a> {
         self.lookup(name, |item: TypeItem| Some(item)).resolved()
     }
 
+    /// 自分のモジュールの `pub` でない型かエフェクトなら、その名前と定義の位置。公開の範囲の検査 (E1032) に使う
+    /// (docs/spec/modules.md の「公開の範囲」)。ほかのモジュールの `pub` でない定義は名前で引けないので、自分の
+    /// モジュールだけを見ればよい。
+    pub fn private_type_item(&self, item: TypeItem) -> Option<(&'a str, TextRange)> {
+        self.own().types.iter().find_map(|(name, definitions)| {
+            definitions
+                .iter()
+                .find(|definition| definition.item == item && !definition.public)
+                .map(|definition| (name.as_str(), definition.range))
+        })
+    }
+
     pub fn type_params(&self, id: TypeDefId) -> usize {
         self.def_map
             .scope(id.module)

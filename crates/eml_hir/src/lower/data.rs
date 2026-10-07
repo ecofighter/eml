@@ -89,6 +89,7 @@ pub(super) fn lower_constructors(
                 generics: &mut def.generics,
                 items: resolver,
                 vars: Vars::Data,
+                public_item: item.public.then_some(constructor.name.as_str()),
                 diagnostics: &mut *diagnostics,
             };
             let fields = constructor
