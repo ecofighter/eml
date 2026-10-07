@@ -39,7 +39,7 @@ HIR が持つ位置は、ソースに書かれた名前やノードの位置に�
 - `ExprKind::Block { last_line: Option<LineStart> }` を `last_start: Option<TextSize>` にする。最後の文の開始位置で、文から作るブロックでは常に入れる。`let … in` から作るブロックは今と同じく `None` である。`LineStart` と `ast::Stmt::line_indent` は削除する
 - `Usage::drop_fix` の意味の判定 (束縛の終わりより後か、同じ名前の後の束縛が見えるか) は、`last_start` で今のとおりに行う。`DropFix { offset, indent }` は削除し、`KindReason::NotUsed` は `fix: Option<TextSize>` を持つ。`order_key` から indent が外れるが、indent は (file, offset) から決まるので並びは変わらない
 - `eml_types::check` は `(program: &Program, files: &SourceFiles)` を受け取る。report.rs は E3003 の fix を作るとき、offset の行の先頭から offset までのテキストを見る。空白とタブだけなら、それをそのまま写したインデントで `drop x` の行を入れる fix を出す。ほかの文字があれば fix を出さない。この処理は report.rs に置き、`eml_diagnostics` は変えない
-- タブのインデントの扱いが1つ変わる。今はタブで字下げした行に空白1つの誤った fix を出す。新しい形では、タブを写した fix になる。タブのインデントは E0006 の誤りで、この場合を確かめるテストはない
+- タブのインデントの扱いが1つ変わる。今はタブで字下げした行に、タブ1つを空白1つに数えた誤った fix を出す。新しい形では、タブを写した fix になる。タブのインデントは E0006 の誤りで、今はこの場合を確かめるテストがない
 - 読み手のないフィールドを削除する。`Constructor.range`、`RowVarDecl.range`、`TypeVarDecl.range` (E1003 を `item_tree` に移すと読み手がなくなる)、`ImportItem.has_alias` である。`ImportItem.qualifier` は範囲を持たない `String` にする
 - `Function.signature_name_range` と `Function.equation_ranges` は、書かれた名前の位置なので残す。等式の数は、E1020 の後の網羅性の診断の連鎖を抑えるのにも使う
 
@@ -52,10 +52,10 @@ HIR が持つ位置は、ソースに書かれた名前やノードの位置に�
   - `Found(item)` は、その item の fixity (宣言がない、または見えない位置の宣言なら既定の fixity)
   - `Silent(Unusable)`、`NotFound`、`Private`、`UnknownQualifier` は既定の fixity
   - `Silent(Broken)` と `Ambiguous` は `None` (組み直さない)
-- `Resolver::fixity(name)` は `fixity_of(&value(name))` として残す。section の先読み (`looser_operator`、`right_operand_minimum`) が、オペランドを変換する前に fixity を引くためである
-- ops.rs の組み直しでは、`Piece::Operator` が解決の結果と fixity を持ち、`binary` はその結果を受け取る。こうして、`lower_op_seq` の中では1つのトークンを1回だけ解決する。解決できなかったときの診断は、今と同じく `binary` で出す。組み直しが決まらない列 (E1028) では `binary` を呼ばないので、ほかの演算子の E1001 を出さない
+- `Resolver::fixity(name)` は `fixity_of(&value(name))` として残す。section の先読み (`looser_operator`) が、オペランドを変換する前にオペランドの中の演算子の fixity を引くためである
+- ops.rs の組み直しでは、`Piece::Operator` が解決の結果と fixity を持ち、`binary` はその結果を受け取る。こうして、`lower_op_seq` の中では1つのトークンを1回だけ解決する。section と中置のパターンも、演算子を1回だけ値として引き、その fixity を使う (`undecided_operator` と `BodyLowering::fixity` は、解決の結果を受け取る1つの関数に置き換える)。解決できなかったときの診断は、今と同じく `binary` で出す。組み直しが決まらない列 (E1028) では `binary` を呼ばないので、ほかの演算子の E1001 を出さない
 - パターンの演算子は、今のとおり `constructor()` で引き直す。`:` で始まる演算子は文法上コンストラクタにしかならないので、式と同じ fixity になる。この理由を architecture.md の「式とパターンの組み直しは同じ fixity を引く」の所に書く
-- lower の item の変換は、モジュールごとの文脈 `ItemLowering { file, module, def_map, resolver, diagnostics }` で行う。`declare_data`、`lower_constructors`、`declare_effects`、`lower_operations`、`lower_operation`、`check_signature`、`extern_row` はそのメソッドになる。roadmap の「`Reporter`」は作らない。`file` と診断の組だけを束ねても、受け渡しの多い組の半分しかまとまらず、複数のファイルを扱う箇所 (`check_cycles`、`Loader`) には合わないためである
+- lower の item の変換は、モジュールごとの文脈 `ItemLowering { file, module, def_map, resolver, root, diagnostics }` で行う。`root` はそのモジュールの構文木の根で、`AstPtr` を解決するのに使う。関数の item の変換 (`lower_functions`)、`declare_data`、`lower_constructors`、`declare_effects`、`lower_operations`、`lower_operation`、`check_signature`、`extern_row` はそのメソッドになる。roadmap の「`Reporter`」は作らない。`file` と診断の組だけを束ねても、受け渡しの多い組の半分しかまとまらず、複数のファイルを扱う箇所 (`check_cycles`、`Loader`) には合わないためである
 - `if let Some(d) = unresolved(..) { diagnostics.push(d) }` の6か所は `diagnostics.extend(unresolved(..))` にする
 - expr.rs の `BodyLowering::new` に付いた `#[allow(clippy::too_many_arguments)]` とその理由のコメントを削除する。引数は7つで、clippy の上限を超えていない
 
@@ -97,7 +97,7 @@ HIR が持つ位置は、ソースに書かれた名前やノードの位置に�
 ### 足すテスト
 
 - `eml_cli/tests/api.rs`: `Session` が `Send + Sync` であること
-- `eml_types/tests/linearity.rs`: 最後の文の前に `{- c -}` があるときに fix を出さないこと。CRLF のソースで fix を出し、その位置とインデントが正しいこと
+- `eml_types/tests/linearity.rs`: 最後の文の前に `{- c -}` があるときに fix を出さないこと。CRLF のソースで fix を出し、その位置とインデントが正しいこと。タブで字下げした行に、タブを写した fix を出すこと
 
 ### テストの変更
 
@@ -122,7 +122,7 @@ HIR が持つ位置は、ソースに書かれた名前やノードの位置に�
 ## 確認の手順
 
 - `cargo test`、`cargo clippy --all-targets`、`cargo fmt --check`
-- 既定でない feature の組み合わせは、ワークスペースの clippy では検査されない。`cargo clippy -p eml_cli --no-default-features`、`--no-default-features --features types`、`--no-default-features --features core` と、`eml_test_support` の同じ組み合わせも通す
+- 既定でない feature の組み合わせは、ワークスペースの clippy では検査されない。`cargo clippy -p eml_cli --no-default-features`、`--no-default-features --features types`、`--no-default-features --features core` と、`eml_test_support` の同じ組み合わせも通す。テストと bin は `run` を要るので、これらには `--all-targets` を付けない
 - `cargo test -p eml_hir` と `cargo test -p eml_types` が、それぞれ下流の crate をビルドしないこと (`cargo tree -e normal,dev` で確かめる)
 - `nix build`
 - `Cargo.lock` の変更もコミットする
