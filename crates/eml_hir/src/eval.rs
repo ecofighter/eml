@@ -50,7 +50,8 @@ pub fn is_value(program: &Program, body: &Body, expr: ExprId) -> bool {
 
 /// 引数がそろうまで本体が動かない、呼ばれる式の引数の数。引数のないトップレベルの値は、参照するたびに計算して関数値を
 /// 返すので含めない。`Some` の呼ばれる式は、クロージャを作らずに最初のまとまりで直接呼ぶ。`call_steps` はこの式の
-/// `Eval` も並べるが、Core IR の変換は評価を飛ばす。Core IR の変換も、直接呼ぶかどうかをこれで決める。
+/// `Eval` も並べるが、Core IR の変換は評価を飛ばす。Core IR の変換も、直接呼ぶかどうかをこれで決める。持ち越し規則と
+/// 変換が同じ手順で `k v st` を1回の再開にするよう、節の `k` もここで引数の数を答える。
 pub fn known_arity(program: &Program, body: &Body, callee: ExprId) -> Option<usize> {
     match &body.exprs[callee].kind {
         ExprKind::Path(Res::Function(function)) => {
@@ -58,6 +59,7 @@ pub fn known_arity(program: &Program, body: &Body, callee: ExprId) -> Option<usi
         }
         ExprKind::Path(Res::Operation(op)) => Some(program[*op].arity),
         ExprKind::Path(Res::Constructor(ctor)) => Some(program[*ctor].fields.len()),
+        ExprKind::Path(Res::Local(local)) => body.continuations.get(*local).copied(),
         _ => None,
     }
 }

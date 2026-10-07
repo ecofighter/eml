@@ -216,6 +216,9 @@ impl BodyLowering<'_> {
             );
             return;
         }
+        if !never {
+            self.record_continuation(params[arity], 1 + usize::from(stateful));
+        }
         out.clauses.push(OpClause {
             op,
             closure: Closure { params, body },
@@ -223,6 +226,27 @@ impl BodyLowering<'_> {
             resumes: !never,
             range: clause.range(),
         });
+    }
+
+    /// 節の `k` が変数の束縛なら、継続の引数の数を表に残す。引数の数が分かれば、`k v st` を1回の再開として扱える
+    /// (docs/spec/effects.md)。`k` を分解するパターンは変数に束縛されないので対象外である。
+    fn record_continuation(&mut self, pat: PatId, arity: usize) {
+        match &self.pats[pat].kind {
+            PatKind::Bind(local) => {
+                let local = *local;
+                self.continuations.insert(local, arity);
+            }
+            PatKind::Annot { pat, ty: _ } => {
+                let pat = *pat;
+                self.record_continuation(pat, arity);
+            }
+            PatKind::Missing
+            | PatKind::Wildcard
+            | PatKind::Unit
+            | PatKind::Con { ctor: _, args: _ }
+            | PatKind::Tuple(_)
+            | PatKind::Literal(_) => {}
+        }
     }
 
     fn return_clause(&mut self, clause: &ast::ReturnClause, stateful: bool, out: &mut Clauses) {

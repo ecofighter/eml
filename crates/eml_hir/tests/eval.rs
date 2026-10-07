@@ -1,6 +1,6 @@
 //! 呼び出しの評価の手順と、引数をまとめて渡す範囲 (docs/spec/expressions.md の「関数適用」)。
 
-use eml_hir::{EvalStep, ExprKind, call_steps};
+use eml_hir::{EvalStep, ExprKind, Res, call_steps};
 use eml_test_support::lower_clean;
 
 const PRELUDE: &str = "f : Int -> Int -> Int\nf a b = a\n\ng : Unit -> Int\ng () = 1\n\nh : Int -> (Int -> Int)\nh a = fn b -> a + b\n\nw : Int -> Int -> Int\nw = fn a b -> a\n\nv : Int\nv = g ()\n\neffect Combine where\n  combine : Int -> Int -> Int\n\n";
@@ -136,5 +136,58 @@ fn a_top_level_function_beyond_the_arity_is_passed_together() {
     assert_eq!(
         steps("t : Unit -> Int\nt () = h 1 g"),
         ["eval h", "eval 1", "eval g", "arrow 0", "arrow 1"]
+    );
+}
+
+/// 関数 `t` の本体のうち、節の `k` を呼ぶ呼び出しの手順を `steps` と同じ形で表す。
+fn continuation_steps(t: &str) -> Vec<String> {
+    let lowered = lower_clean(&format!("{PRELUDE}{t}"));
+    let program = &lowered.program;
+    let (id, _) = program
+        .functions()
+        .find(|(_, function)| function.name == "t")
+        .unwrap();
+    let body = program.body(id).unwrap();
+    let source = lowered.files.text(lowered.file);
+    let (call, _) = body
+        .exprs
+        .iter()
+        .find(|(_, expr)| match &expr.kind {
+            ExprKind::Call { callee, args: _ } => matches!(
+                body.exprs[*callee].kind,
+                ExprKind::Path(Res::Local(local)) if body.continuations.contains_idx(local)
+            ),
+            _ => false,
+        })
+        .unwrap();
+    call_steps(program, body, call)
+        .into_iter()
+        .map(|step| match step {
+            EvalStep::Eval(expr) => format!("eval {}", &source[body.exprs[expr].range]),
+            EvalStep::Arrow(index) => format!("arrow {index}"),
+        })
+        .collect()
+}
+
+/// 節の `k` は引数の数の分かる呼び出し先なので、状態のある handler の `k st (st + 1)` は、引数をすべて評価してから
+/// 1回で呼ぶ手順になる (docs/spec/expressions.md の「関数適用」)。
+#[test]
+fn a_continuation_is_called_with_all_its_arguments_at_once() {
+    assert_eq!(
+        continuation_steps(
+            "effect Tick where\n  tick : Unit -> Int\n\nt : Unit -> Int\nt () =\n  handle tick () from 0 with\n    | tick () k st -> k st (st + 1)\n    | return x _ -> x"
+        ),
+        ["eval k", "eval st", "eval st + 1", "arrow 0", "arrow 1"]
+    );
+}
+
+/// 状態のない handler の `k` は引数の数が1なので、`k 1` の後の引数は呼び出しを待つ。
+#[test]
+fn an_argument_beyond_the_continuation_arity_waits_for_the_call() {
+    assert_eq!(
+        continuation_steps(
+            "effect Ask where\n  ask : Unit -> Int\n\nt : Unit -> Int\nt () =\n  let f =\n    handle ask () with\n      | ask () k -> k 1 (g ())\n      | return x -> fn y -> x + y\n  f 2"
+        ),
+        ["eval k", "eval 1", "arrow 0", "eval g ()", "arrow 1"]
     );
 }

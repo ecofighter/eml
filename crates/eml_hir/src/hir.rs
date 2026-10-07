@@ -1,7 +1,7 @@
 use std::collections::{BTreeSet, HashSet};
 
 use eml_diagnostics::{TextRange, TextSize};
-use la_arena::{Arena, Idx};
+use la_arena::{Arena, ArenaMap, Idx};
 
 pub use crate::program::{
     ConstructorId, EffectId, FunctionId, ItemId, ModuleId, OperationId, TypeDefId,
@@ -189,6 +189,9 @@ pub struct Body {
     /// 本体の変換で診断を報告したか。誤りのある節などは `Missing` を残さずに捨てるので、`Missing` の有無だけでは
     /// 本体に誤りがあったかを判断できない。後の段階が診断の連鎖を止めるのに使う。
     pub has_errors: bool,
+    /// handler の節の `k` を束縛した局所変数と、その継続の引数の数 (状態なしは1、状態ありは2)。評価の手順は節の `k` を
+    /// 引数の数の分かる呼び出し先として扱い、`k v st` を1回の再開にする (docs/spec/effects.md)。
+    pub continuations: ArenaMap<LocalId, usize>,
 }
 
 impl Body {

@@ -1,6 +1,6 @@
 use eml_diagnostics::{Diagnostic, FileId, Label, TextRange};
 use eml_syntax::{SyntaxKind, SyntaxToken, ast};
-use la_arena::Arena;
+use la_arena::{Arena, ArenaMap};
 
 use super::types::{TypeLowering, Vars};
 use super::{NameKind, NameUse, path_name, unresolved};
@@ -27,6 +27,7 @@ pub(super) struct BodyLowering<'a> {
     pub(super) exprs: Arena<Expr>,
     pub(super) pats: Arena<Pat>,
     locals: Arena<Local>,
+    pub(super) continuations: ArenaMap<LocalId, usize>,
     /// 内側の束縛ほど後ろにある。後の `let` が前の同じ名前を隠す (docs/spec/expressions.md)。
     pub(super) scope: Vec<(String, LocalId)>,
     /// 今変換しているパターンの組が `scope` に積み始めた位置。組の中で同じ名前を2回束縛したら E1017 にする。
@@ -68,6 +69,7 @@ impl<'a> BodyLowering<'a> {
             exprs: Arena::new(),
             pats: Arena::new(),
             locals: Arena::new(),
+            continuations: ArenaMap::default(),
             scope: Vec::new(),
             group_start: 0,
         }
@@ -94,6 +96,7 @@ impl<'a> BodyLowering<'a> {
             locals: self.locals,
             types: self.types,
             has_errors: self.diagnostics.len() > reported,
+            continuations: self.continuations,
         }
     }
 
