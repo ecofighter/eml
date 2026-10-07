@@ -23,10 +23,10 @@ eml_diagnostics.workspace = true
 eml_hir.workspace = true
 eml_interp.workspace = true
 eml_runtime.workspace = true
-eml_syntax.workspace = true
 eml_types.workspace = true
 
 [dev-dependencies]
+eml_test_support = { workspace = true, features = ["hir"] }
 insta.workspace = true
 
 [[test]]

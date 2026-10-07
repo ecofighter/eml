@@ -1,12 +1,16 @@
 //! UI テストからプロセス内で呼べるように、CLI の中身をバイナリではなく lib に置く。
 
+mod fs_provider;
+
 use std::sync::Arc;
 
 use eml_core_ir::Program;
 use eml_diagnostics::{Diagnostic, FileId, SourceFiles, has_errors, sort_diagnostics};
 
+pub use eml_hir::{ModulePath, ModuleSource, ReadError};
 pub use eml_interp::{RunConfig, RuntimeError};
 pub use eml_runtime::{Captured, OutputSink};
+pub use fs_provider::FsProvider;
 
 /// 呼び出し側が実行の前に診断を表示できるように、検査と実行を別の関数にする (docs/implementation/architecture.md)。
 #[derive(Debug)]
@@ -17,52 +21,51 @@ pub struct Compiled {
     pub program: Option<Arc<Program>>,
 }
 
-/// 1回の検査や実行で読むソースの集まり。Prelude を最初に登録し、入口のファイルと一緒に変換する
-/// (docs/implementation/architecture.md の「CLI と lib API」)。import をたどるローダは M2 で足す。
+/// 1回の検査や実行で読むソースの集まり。読み込みの段が Prelude、入口、import でたどった依存先を登録する
+/// (docs/implementation/architecture.md の「CLI と lib API」)。`eml_cli` は段階をつなぐだけで、診断を自分では作らない。
 pub struct Session {
-    files: SourceFiles,
-    prelude: FileId,
-}
-
-impl Default for Session {
-    fn default() -> Self {
-        Session::new()
-    }
+    loaded: eml_hir::Loaded,
+    /// 構文解析、`ItemTree`、読み込みの段の診断。
+    load_diagnostics: Vec<Diagnostic>,
 }
 
 impl Session {
-    pub fn new() -> Session {
-        let mut files = SourceFiles::new();
-        let prelude = files.add(eml_hir::PRELUDE_PATH, eml_hir::PRELUDE_SOURCE);
-        Session { files, prelude }
-    }
-
-    pub fn add_file(&mut self, path: impl Into<String>, text: impl Into<String>) -> FileId {
-        self.files.add(path, text)
+    /// ファイルはここで読み終える。`check` と `compile` は同じ読み込みの結果を使う。
+    pub fn load(entry_path: &str, entry_text: &str, source: &dyn ModuleSource) -> Session {
+        let (loaded, load_diagnostics) = eml_hir::load(entry_path, entry_text, source);
+        Session {
+            loaded,
+            load_diagnostics,
+        }
     }
 
     /// 診断の表示に使う。
     pub fn files(&self) -> &SourceFiles {
-        &self.files
+        &self.loaded.files
     }
 
     /// Prelude の番号。Prelude の範囲を指す診断を確かめるのに使う。
     pub fn prelude(&self) -> FileId {
-        self.prelude
+        self.loaded.prelude
     }
 
-    pub fn check(&self, entry: FileId) -> Vec<Diagnostic> {
-        let mut diagnostics = self.front(entry).2;
+    /// 入口のファイルの番号。`main` がないことの診断はここを指す。
+    pub fn entry(&self) -> FileId {
+        self.loaded.entry
+    }
+
+    pub fn check(&self) -> Vec<Diagnostic> {
+        let mut diagnostics = self.front().2;
         sort_diagnostics(&mut diagnostics);
         diagnostics
     }
 
-    pub fn compile(&self, entry: FileId) -> Compiled {
-        let (program, typed, mut diagnostics) = self.front(entry);
+    pub fn compile(&self) -> Compiled {
+        let (program, typed, mut diagnostics) = self.front();
         // `main` がないことは実行するときだけ誤りにする。モジュール (M2) は `main` を持たないため (docs/spec/types.md)
         let main = program.main();
         if main.is_none() {
-            diagnostics.push(eml_types::missing_main(entry));
+            diagnostics.push(eml_types::missing_main(self.loaded.entry));
         }
         sort_diagnostics(&mut diagnostics);
         // Core IR は誤りのないプログラムだけを受け取る (docs/implementation/architecture.md)
@@ -79,27 +82,15 @@ impl Session {
     }
 
     /// エラーがあっても止めずに、検査の段階をすべて実行する。1回の実行で、独立した複数のエラーを報告するため。
-    fn front(&self, entry: FileId) -> (eml_hir::Program, eml_types::TypedProgram, Vec<Diagnostic>) {
-        // 読み込みの段は Prelude と入口をこの `Session` と同じ順に登録するので、診断の `FileId` は `self.files` を指す
-        let (loaded, mut diagnostics) =
-            eml_hir::load(self.files.path(entry), self.files.text(entry), &NoModules);
-        debug_assert_eq!(loaded.entry, entry);
-        let (def_map, stage) = eml_hir::def_map(&loaded.modules);
+    fn front(&self) -> (eml_hir::Program, eml_types::TypedProgram, Vec<Diagnostic>) {
+        let mut diagnostics = self.load_diagnostics.clone();
+        let (def_map, stage) = eml_hir::def_map(&self.loaded.modules);
         diagnostics.extend(stage);
-        let (program, stage) = eml_hir::lower(&def_map, &loaded.modules);
+        let (program, stage) = eml_hir::lower(&def_map, &self.loaded.modules);
         diagnostics.extend(stage);
         let (typed, stage) = eml_types::check(&program);
         diagnostics.extend(stage);
         (program, typed, diagnostics)
-    }
-}
-
-/// `Session` はファイルシステムから依存先を読まないので、どの import も E1026 になる。
-struct NoModules;
-
-impl eml_hir::ModuleSource for NoModules {
-    fn read(&self, _: &eml_hir::ModulePath) -> Result<String, eml_hir::ReadError> {
-        Err(eml_hir::ReadError::NotFound)
     }
 }
 

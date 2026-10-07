@@ -1,9 +1,19 @@
+use std::path::Path;
 use std::process::{Command, Output};
 
+use crate::common::temp_project;
+
 fn eml(args: &[&str]) -> Output {
+    eml_in(
+        Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/ui")),
+        args,
+    )
+}
+
+fn eml_in(dir: &Path, args: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_eml"))
         .args(args)
-        .current_dir(concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/ui"))
+        .current_dir(dir)
         .output()
         .unwrap()
 }
@@ -107,4 +117,39 @@ fn run_opens_an_absolute_path_as_is() {
         String::from_utf8_lossy(&output.stdout),
         "from an absolute path\n"
     );
+}
+
+#[test]
+fn a_missing_module_is_a_diagnostic_error() {
+    let dir = temp_project("cli-missing", &[("main.em", "import Missing\n")]);
+    let output = eml_in(&dir, &["check", "main.em"]);
+    std::fs::remove_dir_all(&dir).unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("[E1026]"));
+}
+
+#[test]
+fn modules_are_read_from_the_entry_directory() {
+    let dir = temp_project(
+        "cli-root",
+        &[
+            (
+                "app/main.em",
+                "import Report.Csv\n\nmain : Unit -> <IO> Unit\nmain () = println \"ok\"\n",
+            ),
+            ("app/Report/Csv.em", "pub x : Int\nx = 1\n"),
+        ],
+    );
+    let nested = eml_in(&dir, &["run", "--debug-heap", "app/main.em"]);
+    // ディレクトリのない入口のパスでは、根が作業ディレクトリになる
+    let bare = eml_in(&dir.join("app"), &["check", "main.em"]);
+    let dotted = eml_in(&dir, &["check", "./app/main.em"]);
+    let absolute_path = dir.join("app/main.em");
+    let absolute = eml_in(&dir, &["check", absolute_path.to_str().unwrap()]);
+    std::fs::remove_dir_all(&dir).unwrap();
+    assert_eq!(dotted.status.code(), Some(0), "{dotted:?}");
+    assert_eq!(absolute.status.code(), Some(0), "{absolute:?}");
+    assert_eq!(nested.status.code(), Some(0), "{nested:?}");
+    assert_eq!(String::from_utf8_lossy(&nested.stdout), "ok\n");
+    assert_eq!(bare.status.code(), Some(0), "{bare:?}");
 }

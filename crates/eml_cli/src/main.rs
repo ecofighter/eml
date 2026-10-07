@@ -3,8 +3,8 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
-use eml_cli::{OutputSink, RunConfig, Session};
-use eml_diagnostics::{FileId, has_errors, render};
+use eml_cli::{FsProvider, OutputSink, RunConfig, Session};
+use eml_diagnostics::{has_errors, render};
 
 #[derive(Parser)]
 #[command(name = "eml", version, about = "The eml programming language")]
@@ -31,10 +31,10 @@ fn main() -> ExitCode {
     let cli = Cli::parse();
     match cli.command {
         Command::Check { file } => {
-            let Some((session, id)) = load(&file) else {
+            let Some(session) = load(&file) else {
                 return ExitCode::from(2);
             };
-            let diagnostics = session.check(id);
+            let diagnostics = session.check();
             eprint!("{}", render(&diagnostics, session.files()));
             if has_errors(&diagnostics) {
                 ExitCode::from(1)
@@ -43,12 +43,12 @@ fn main() -> ExitCode {
             }
         }
         Command::Run { debug_heap, file } => {
-            let Some((session, id)) = load(&file) else {
+            let Some(session) = load(&file) else {
                 return ExitCode::from(2);
             };
             let config = RunConfig::default().with_debug_heap(debug_heap);
             // 警告がプログラムの出力の後に出ないように、実行の前に表示する。
-            let compiled = session.compile(id);
+            let compiled = session.compile();
             eprint!("{}", render(&compiled.diagnostics, session.files()));
             let Some(program) = compiled.program else {
                 return ExitCode::from(1);
@@ -64,12 +64,14 @@ fn main() -> ExitCode {
     }
 }
 
-fn load(path: &Path) -> Option<(Session, FileId)> {
+/// 入口が読めないことは、読み込みの段に入る前に使い方の誤りとして報告する。依存先が読めないことは E1026 である。
+fn load(path: &Path) -> Option<Session> {
     match fs::read_to_string(path) {
         Ok(text) => {
-            let mut session = Session::new();
-            let id = session.add_file(path.display().to_string(), text);
-            Some((session, id))
+            // 根は入口のファイルのディレクトリである
+            let root = path.parent().unwrap_or(Path::new(""));
+            let source = FsProvider::new(root);
+            Some(Session::load(&path.display().to_string(), &text, &source))
         }
         Err(error) => {
             eprintln!("error: cannot read `{}`: {error}", path.display());
