@@ -28,7 +28,7 @@ eml を実装するエージェントとプログラマのための文書群で�
 | [implementation/testing.md](implementation/testing.md) | 手引き | テスト戦略、テストの置き場所、UI テスト、テストの変更の運用 |
 | [implementation/status.md](implementation/status.md) | 手引き | 今の言語の範囲、既知の制限 |
 | **future/** | 将来の設計 | まだ実装しない方針 |
-| [future/roadmap.md](future/roadmap.md) | 将来の設計 | 今後のマイルストーン (M2〜M9) と、その後の項目 (型システム、言語機能と構文、処理系、マルチコア) |
+| [future/roadmap.md](future/roadmap.md) | 将来の設計 | 今後のマイルストーン (M3〜M9) と、その後の項目 (型システム、言語機能と構文、処理系、マルチコア) |
 | [future/multicore.md](future/multicore.md) | 将来の設計 | マルチコア対応の設計 (共有の印方式の RC、`par`、並行処理、継続の移動) |
 | [future/stdlib.md](future/stdlib.md) | 将来の設計 | 標準ライブラリ spec への申し送り |
 | [future/evidence-passing.md](future/evidence-passing.md) | 将来の設計 | ネイティブ化でのエフェクトの実装 (generalized evidence passing、すぐに再開する節、多重度ごとの実装) |
