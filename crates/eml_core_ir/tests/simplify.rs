@@ -275,6 +275,17 @@ fn unused_bindings_that_can_fail_are_kept() {
 }
 
 #[test]
+fn unused_pure_extern_bindings_are_removed() {
+    // 行が `Pure` の extern は止まらないので、使われなければ消す
+    let text = "f : Int -> Int\nf x =\n  let s = show_int x\n  let b = x < 0\n  1\n\nmain : Unit -> <IO> Unit\nmain () = println (show_int (f 1))";
+    let before = function(&core_text(text, Pass::Translate), "f");
+    assert!(before.contains("extern Prelude.show_int("), "{before}");
+    assert!(before.contains("extern Prelude.<("), "{before}");
+    let f = function(&core_text(text, Pass::Simplify), "f");
+    assert!(!f.contains("extern"), "{f}");
+}
+
+#[test]
 fn a_switch_on_a_join_point_argument_is_not_known() {
     // 両方の jump が関数の呼び出しの結果を渡すので、join point の引数の値は分からない。K1 は引数への `switch` を残す
     let text = "data Option a = | None | Some a\n\nlookup : Int -> Option Int\nlookup n = Some n\n\npick : Bool -> Int\npick c =\n  let o = if c then lookup 1 else lookup 2\n  let n = match o with\n    | Some v -> v\n    | None -> 0\n  n + 1\n\nmain : Unit -> <IO> Unit\nmain () = println (show_int (pick True))";

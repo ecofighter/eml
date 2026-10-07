@@ -249,6 +249,7 @@ fn atomic(ty: &Type, names: &DisplayNames) -> String {
 
 #[cfg(test)]
 mod tests {
+    use eml_extern::ExternEffect;
     use eml_hir::{
         ConstructorId, DisplayNames, EffectDef, EffectKind, Generics, ItemId, ModuleId, TypeDef,
         TypeDefKind,
@@ -292,7 +293,7 @@ mod tests {
             }))
         };
         let (io, state) = (
-            effect("IO", EffectKind::Extern(None)),
+            effect("IO", EffectKind::Extern(Some(ExternEffect::Io))),
             effect("State", EffectKind::Defined),
         );
         let names = DisplayNames::new(
