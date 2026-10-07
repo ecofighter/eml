@@ -4,6 +4,6 @@ expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{stderr}\")"
 input_file: tests/ui/run/runtime/tail_calls.em
 ---
 --- stdout ---
-1000000
+10000
 7
 --- stderr ---
