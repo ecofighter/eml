@@ -80,6 +80,10 @@ pub(crate) fn constrain(
     for (local, data) in body.locals.iter() {
         by_name.entry(data.name.as_str()).or_default().push(local);
     }
+    // 後の束縛を二分探索で探すため
+    for locals in by_name.values_mut() {
+        locals.sort_by_key(|&local| body.locals[local].range.start());
+    }
     let mut usage = Usage {
         file,
         body,
@@ -102,7 +106,7 @@ struct Usage<'a, 'c> {
     typing: &'a BodyTyping,
     table: &'a mut Table<'c>,
     reliable: bool,
-    /// 名前ごとの局所変数。消費漏れの fix と診断が、同じ名前の後の束縛を探すのに使う。
+    /// 名前ごとの局所変数を、束縛の位置の順に並べたもの。消費漏れの fix と診断が、同じ名前の後の束縛を探すのに使う。
     by_name: HashMap<&'a str, Vec<LocalId>>,
     /// 変数が見える範囲の式。同じ名前の後の束縛が、ある位置で前の変数を隠すかを決めるのに使う。変数を数え終える前に
     /// 記録するので、その変数のスコープの中の束縛は、数えるときにはすべてそろっている。
@@ -431,12 +435,14 @@ impl<'a> Usage<'a, '_> {
         if line.offset < binding.range.end() {
             return None;
         }
-        let hidden = self.later_namesakes(local).any(|other| {
-            self.body.locals[other].range.start() < line.offset
-                && self
-                    .scopes
-                    .get(&other)
-                    .is_some_and(|&scope| self.body.exprs[scope].range.contains(line.offset))
+        // 入れる位置に近い束縛ほど、その位置を含むスコープを持ちやすいので、後ろから調べる
+        let later = self.later_namesakes(local);
+        let before_line =
+            later.partition_point(|&other| self.body.locals[other].range.start() < line.offset);
+        let hidden = later[..before_line].iter().rev().any(|other| {
+            self.scopes
+                .get(other)
+                .is_some_and(|&scope| self.body.exprs[scope].range.contains(line.offset))
         });
         if hidden {
             return None;
@@ -463,21 +469,21 @@ impl<'a> Usage<'a, '_> {
     /// 入れ子のスコープ (ラムダの引数など) の同じ名前は、その外で前の変数がまた見えるので数えない。
     fn shadowed_by(&self, local: LocalId, scope: ExprId) -> Option<LocalId> {
         self.later_namesakes(local)
-            .filter(|other| self.scopes.get(other) == Some(&scope))
-            .min_by_key(|&other| self.body.locals[other].range.start())
+            .iter()
+            .copied()
+            .find(|other| self.scopes.get(other) == Some(&scope))
     }
 
-    /// `local` より後に束縛された、同じ名前の別の変数。
-    fn later_namesakes(&self, local: LocalId) -> impl Iterator<Item = LocalId> {
+    /// `local` より後に束縛された、同じ名前の別の変数。位置の順に並ぶ。
+    fn later_namesakes(&self, local: LocalId) -> &[LocalId] {
         let binding = &self.body.locals[local];
-        self.by_name
+        let namesakes = self
+            .by_name
             .get(binding.name.as_str())
-            .into_iter()
-            .flatten()
-            .copied()
-            .filter(move |&other| {
-                other != local && self.body.locals[other].range.start() > binding.range.end()
-            })
+            .map_or(&[][..], Vec::as_slice);
+        let first = namesakes
+            .partition_point(|&other| self.body.locals[other].range.start() <= binding.range.end());
+        &namesakes[first..]
     }
 
     /// スコープの終わり。ブロックでは、最後の文の直後を指す。

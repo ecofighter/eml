@@ -66,6 +66,16 @@ fn ring(n: usize) -> String {
     text
 }
 
+/// 1つの本体で、同じ名前の `let` が続く連鎖。使わない変数ごとに、同じ名前の後の束縛を探す。
+fn shadowing_lets(n: usize) -> String {
+    let mut text = String::from("f : Unit -> Int\nf () =\n");
+    for _ in 0..n {
+        text.push_str("  let s = \"x\"\n");
+    }
+    text.push_str("  1\n");
+    text
+}
+
 /// 型検査だけの時間。3回測って最小を使い、ほかの処理の割り込みによるばらつきを除く。
 fn check_time(text: &str) -> Duration {
     let lowered = lower_clean(text);
@@ -120,4 +130,10 @@ fn a_chain_of_carry_overs() {
 #[ignore = "release ビルドで時間を測る"]
 fn a_ring_of_functions() {
     assert_linear(ring);
+}
+
+#[test]
+#[ignore = "release ビルドで時間を測る"]
+fn a_chain_of_shadowing_lets() {
+    assert_linear(shadowing_lets);
 }

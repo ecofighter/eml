@@ -307,6 +307,21 @@ fn a_same_name_in_an_unrelated_lambda_keeps_the_fix() {
 }
 
 #[test]
+fn a_shadowing_let_after_a_lambda_with_the_same_name() {
+    // ラムダの引数の `j` を飛ばして、同じブロックの後の `let` を隠した束縛として指す。最後の文の位置ではその `let` が
+    // 見えているので、fix は付けない
+    let rest = "skip : Unit -> Int\nskip () =\n  handle ask () with\n    | ask () k ->\n        let j = k\n        let f = fn j -> j + 1\n        let j = 1\n        f j";
+    insta::assert_snapshot!(diagnostics(rest), @r"
+    E3003 11:13 `j` must be used exactly once, but it is not used
+      11:13 `j` is bound here
+      13:13 `j` is shadowed here
+      note: linear values, such as files, the continuation of a `once` operation and closures that capture one, must be used exactly once
+      help: pass `j` to `drop` before it is shadowed
+    ");
+    assert_eq!(fix_text(rest), "");
+}
+
+#[test]
 fn a_value_used_twice_inside_one_branch() {
     let rest = "inbranch : Unit -> Int\ninbranch () =\n  handle ask () with\n    | ask () k ->\n        let j = k\n        if flag () then resume j 1 + resume j 2 else resume j 0";
     insta::assert_snapshot!(diagnostics(rest), @r"
