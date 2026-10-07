@@ -57,7 +57,7 @@ pub(super) fn split_arrows(ty: &Type, count: usize) -> (Vec<Type>, Type) {
 #[derive(Debug, Clone, Copy)]
 pub(super) enum Lowering {
     Prim(PrimOp),
-    /// `==` と `!=`。比べ方は型検査が引数の型から決め、`BodyTypes::equalities` に入れてある
+    /// `==` と `!=`。比べ方は、型検査が参照ごとに記録した型引数 (`BodyTypes::instantiations`) から決める
     /// (docs/spec/declarations.md の標準の演算子の表)。
     Equality {
         negated: bool,
@@ -91,7 +91,7 @@ pub(super) fn intrinsic(name: &str) -> Option<Lowering> {
         .map(|&(_, lowering)| lowering)
 }
 
-/// 型検査が決めた比べ方の命令。
+/// 比べ方の命令。
 pub(super) fn equality_op(equality: Equality, negated: bool) -> PrimOp {
     match (equality, negated) {
         (Equality::Int, false) => PrimOp::IntEq,

@@ -12,7 +12,6 @@ use crate::table::{Row, Table, Tail, Ty, TyShape, UnifyError};
 use crate::{Decl, codes};
 
 use super::Signatures;
-use super::equality::Comparison;
 use super::report::{AmbientSource, Origin, callee_subject};
 
 /// 呼び出しの row。持ち越しのパスが読む (docs/spec/effects.md の「継続の多重度と持ち越し規則」)。
@@ -39,8 +38,6 @@ pub(crate) struct BodyTyping {
     pub locals: ArenaMap<LocalId, Ty>,
     /// パターンが受けた値の型。`_` で受けた値の Kind に制約を出すのに使う。
     pub pats: ArenaMap<PatId, Ty>,
-    /// `==` と `!=` の比べ方。`resolve_equalities` が埋める。
-    pub equalities: ArenaMap<ExprId, crate::Equality>,
     /// 参照ごとの具体化。型引数は表の変数のままで、`check_body` が carry の後で書き出す。
     pub instantiations: ArenaMap<ExprId, (Decl, Vec<Ty>)>,
     /// 呼び出しの row。持ち越しのパスが読む。
@@ -62,8 +59,6 @@ pub(super) struct BodyCheck<'a, 'c> {
     /// 矢印の row である。
     pub(super) ambient: Row,
     pub(super) ambient_source: AmbientSource,
-    /// 比べ方をまだ決めていない `==` と `!=` の参照。本体の検査が終わってから `resolve_equalities` が決める。
-    pub(super) comparisons: Vec<Comparison>,
     pub(super) typing: BodyTyping,
     /// Kind の具体化の記録 (`Instance`)。段2が展開する。
     pub(super) instances: Vec<Instance>,
@@ -463,18 +458,7 @@ impl BodyCheck<'_, '_> {
             return self.table.error;
         };
         self.typing.instantiations.insert(id, (decl, args));
-        let ty = if open { self.table.open_spine(ty) } else { ty };
-        let lang = program.lang;
-        if let Decl::Function(function) = decl
-            && (function == lang.eq || function == lang.ne)
-        {
-            self.comparisons.push(Comparison {
-                callee: id,
-                operator: function,
-                ty,
-            });
-        }
-        ty
+        if open { self.table.open_spine(ty) } else { ty }
     }
 
     /// 呼ばれる値や期待する型がまだ推論用の変数のとき、それを関数型に決める。

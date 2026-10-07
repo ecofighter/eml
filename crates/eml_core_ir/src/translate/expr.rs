@@ -19,7 +19,7 @@ use super::{Binding, Bindings, Exit, FnLowering};
 enum Callee {
     /// 本体のある関数。足りないときの包む関数は、その関数自身である。
     Function(FnIdx),
-    /// intrinsic。`callee` は呼ばれる式で、`==` と `!=` の比べ方を `BodyTypes::equalities` から引くのに使う。
+    /// intrinsic。`callee` は呼ばれる式で、`==` と `!=` の比べる値の型を `BodyTypes::instantiations` から引くのに使う。
     Intrinsic {
         function: FunctionId,
         callee: ExprId,
@@ -110,9 +110,13 @@ impl FnLowering<'_> {
                 let rhs = match lowering {
                     Lowering::Prim(op) => Rhs::Prim(op, args),
                     Lowering::Equality { negated } => {
-                        let equality =
-                            self.types.equalities.get(callee).copied().expect(
-                                "the type checker decides how every `==` and `!=` compares",
+                        let instantiation =
+                            self.types.instantiations.get(callee).expect(
+                                "the type checker records every reference to `==` and `!=`",
+                            );
+                        let equality = eml_types::equality(&self.hir.lang, &instantiation.args[0])
+                            .expect(
+                                "the type checker reports every `==` and `!=` it cannot decide",
                             );
                         Rhs::Prim(equality_op(equality, negated), args)
                     }

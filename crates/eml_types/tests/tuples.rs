@@ -2,8 +2,7 @@
 //! 演算子の表)。
 
 use crate::common::check_text;
-use eml_hir::{ExprKind, Res};
-use eml_types::Equality;
+use eml_types::{Decl, Equality};
 
 /// 関数 `name` の本体で決まった `==` / `!=` の比べ方を、ソースの順に並べる。
 fn decided(text: &str, name: &str) -> Vec<(&'static str, Equality)> {
@@ -19,23 +18,23 @@ fn decided(text: &str, name: &str) -> Vec<(&'static str, Equality)> {
         .find(|(_, function)| function.name == name)
         .unwrap();
     let body = checked.program.body(id).unwrap();
+    let lang = &checked.program.lang;
     let mut found: Vec<(u32, &'static str, Equality)> = checked.typed.bodies[id]
-        .equalities
+        .instantiations
         .iter()
-        .map(|(expr, &equality)| {
-            let ExprKind::Path(Res::Function(function)) = &body.exprs[expr].kind else {
-                panic!("equalities are keyed by the operator");
+        .filter_map(|(expr, instantiation)| {
+            let operator = match instantiation.decl {
+                Decl::Function(function) if function == lang.eq => "==",
+                Decl::Function(function) if function == lang.ne => "!=",
+                _ => return None,
             };
-            let operator = if *function == checked.program.lang.eq {
-                "=="
-            } else {
-                "!="
-            };
-            (
+            let equality = eml_types::equality(lang, &instantiation.args[0])
+                .expect("a body without errors decides every comparison");
+            Some((
                 u32::from(body.exprs[expr].range.start()),
                 operator,
                 equality,
-            )
+            ))
         })
         .collect();
     found.sort_by_key(|&(start, _, _)| start);
@@ -177,5 +176,45 @@ fn an_undecided_operand_is_not_reported_when_the_body_has_another_error() {
     E2001 4:7 mismatched types
       4:7 expected `Int`, found `_ -> <_> Bool`
       4:5 argument 2 of `+`
+    ");
+}
+
+#[test]
+fn two_undecided_comparisons_in_one_body_are_both_reported() {
+    // 本体に別の誤りがあるかは比べ方を決める前に1回だけ決めるので、先の E2006 が後の E2006 を抑えない
+    let text = "both : Unit -> Bool\nboth () =\n  let same = fn x -> fn y -> x == y\n  let differ = fn x -> fn y -> x != y\n  True";
+    insta::assert_snapshot!(check_text(text), @"
+    both : Unit -> Bool
+      x#0 : _
+      y#1 : _
+      same#2 : _ -> <_> _ -> <_> Bool
+      x#3 : _
+      y#4 : _
+      differ#5 : _ -> <_> _ -> <_> Bool
+    ---
+    E2006 3:32 values of type `_` cannot be compared with `==`
+      3:32 `==` cannot compare `_`
+      note: `==` and `!=` compare only values of type `Int`, `String` and `Bool`
+    E2006 4:34 values of type `_` cannot be compared with `!=`
+      4:34 `!=` cannot compare `_`
+      note: `==` and `!=` compare only values of type `Int`, `String` and `Bool`
+    ");
+}
+
+#[test]
+fn an_undecided_comparison_suppresses_the_linearity_diagnostics() {
+    // E2006 は線形性の検査より前に決まり、本体の誤りに数えるので、`f` を使わないことの E3003 を出さない
+    // (docs/spec/diagnostics.md の「連鎖する診断の抑止」)
+    let text = "leak : File -> Bool\nleak f =\n  let same = fn x -> fn y -> x == y\n  True";
+    insta::assert_snapshot!(check_text(text), @"
+    leak : File -> Bool
+      f#0 : File
+      x#1 : _
+      y#2 : _
+      same#3 : _ -> <_> _ -> <_> Bool
+    ---
+    E2006 3:32 values of type `_` cannot be compared with `==`
+      3:32 `==` cannot compare `_`
+      note: `==` and `!=` compare only values of type `Int`, `String` and `Bool`
     ");
 }

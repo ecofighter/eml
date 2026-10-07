@@ -17,7 +17,8 @@ use std::collections::HashMap;
 
 use eml_diagnostics::{Diagnostic, FileId, Label, TextRange};
 use eml_hir::{
-    ConstructorId, ExprId, Function, FunctionId, ItemMap, LocalId, OperationId, PatId, Program,
+    ConstructorId, ExprId, Function, FunctionId, ItemMap, LangItems, LocalId, OperationId, PatId,
+    Program,
 };
 use la_arena::ArenaMap;
 
@@ -81,13 +82,23 @@ pub struct DeclType {
     pub(crate) kinds: KindScheme,
 }
 
-/// `==` と `!=` の比べ方。型クラスがないので、型検査が引数の型から決め、比べられる型を限る
-/// (docs/spec/declarations.md の標準の演算子の表)。
+/// `==` と `!=` の比べ方。型クラスがないので、比べられる型を限る (docs/spec/declarations.md の標準の演算子の表)。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Equality {
     Int,
     String,
     Bool,
+}
+
+/// `==` と `!=` の比べ方。比べられない型なら `None`。型検査の E2006 と Core IR の命令の選択が、同じ判定を使うため
+/// にここに置く。
+pub fn equality(lang: &LangItems, ty: &Type) -> Option<Equality> {
+    match ty {
+        Type::Con { id, .. } if *id == lang.int => Some(Equality::Int),
+        Type::Con { id, .. } if *id == lang.string => Some(Equality::String),
+        Type::Con { id, .. } if *id == lang.bool => Some(Equality::Bool),
+        _ => None,
+    }
 }
 
 #[derive(Debug, Default)]
@@ -96,9 +107,6 @@ pub struct BodyTypes {
     pub locals: ArenaMap<LocalId, Type>,
     /// パターンが受けた値の型。Core IR が、handler の節の引数の変数を作るのに使う。
     pub pats: ArenaMap<PatId, Type>,
-    /// `==` と `!=` の比べ方。キーは演算子を指す呼ばれる側の式である。Core IR が、どの比べる命令にするかを決めるのに
-    /// 使う。
-    pub equalities: ArenaMap<ExprId, Equality>,
     /// 式の中のトップレベルの item への参照ごとの具体化。キーは参照を表す `ExprKind::Path` の式である。局所変数の参照、
     /// パターンのコンストラクタ、handler の節の操作、シグネチャのない参照は記録しない
     /// (docs/implementation/architecture.md の「`eml_types` の内部」)。

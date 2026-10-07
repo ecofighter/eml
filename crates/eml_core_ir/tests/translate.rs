@@ -798,3 +798,32 @@ fn effects_of_the_same_name_in_two_modules_stay_apart() {
         assert!(shown.contains(expected), "{expected}\n{shown}");
     }
 }
+
+#[test]
+fn each_comparison_picks_the_instruction_of_its_operand_type() {
+    // 比べる命令は、型検査が `==` と `!=` の参照に記録した型引数から選ぶ
+    let text = "compare : Int -> String -> Bool -> (Bool, Bool, Bool, Bool, Bool, Bool)\ncompare n s b = (n == 1, n != 2, s == \"a\", s != \"b\", b == True, b != False)\n\nmain : Unit -> <IO> Unit\nmain () =\n  let _ = compare 1 \"a\" True\n  ()";
+    insta::assert_snapshot!(core_text(text, Pass::Translate), @r#"
+    effect Prelude.IO { println/1, open/1, read_all/1, close/1 }
+    fn compare(n0, s1^, b2) {
+      let t3 = prim ==(n0, 1)
+      let t4 = prim !=(n0, 2)
+      let s5^ = const "a"
+      let t6 = prim string==(s1, s5)
+      let s7^ = const "b"
+      let t8 = prim string!=(s1, s7)
+      let t9 = prim bool==(b2, #1)
+      let t10 = prim bool!=(b2, #0)
+      let d11^ = con #0(t3, t4, t6, t8, t9, t10)
+      return d11
+    }
+    fn main(p0) {
+      let s1^ = const "a"
+      let t2^ = call compare(1, s1, #1)
+      return ()
+    }
+    fn entry$main() {
+      tailcall main(())
+    }
+    "#);
+}

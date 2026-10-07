@@ -1,62 +1,53 @@
-//! `==` と `!=` の比べ方を、引数の型から決める (docs/spec/declarations.md の標準の演算子の表)。型クラスがないので、
-//! 比べられる型を `Int`、`String`、`Bool` に限る。
+//! `==` と `!=` で比べられない型の値を比べた参照を報告する (docs/spec/declarations.md の標準の演算子の表)。型クラスが
+//! ないので、比べられる型を `Int`、`String`、`Bool` に限る。
 
 use eml_diagnostics::{Diagnostic, Label};
 use eml_hir::{ExprId, FunctionId};
 
-use crate::table::{Ty, TyShape};
-use crate::{Equality, Type, codes};
+use crate::table::TyShape;
+use crate::{Decl, Type, codes, equality};
 
 use super::body::BodyCheck;
 
-/// `==` か `!=` の参照。引数の型は、後の文の単一化で決まることがある (`let` で束縛したラムダの引数など)。そのため、
-/// 参照の位置では記録だけをし、本体の検査が終わってから比べ方を決める。
-pub(super) struct Comparison {
-    /// 演算子を指す呼ばれる側の式。
-    pub callee: ExprId,
-    pub operator: FunctionId,
-    /// 参照を具体化した型。最初の矢印の引数が比べる値の型である。
-    pub ty: Ty,
-}
-
 impl BodyCheck<'_, '_> {
-    /// 本体の検査が終わってから呼ぶ。`self.diagnostics` はこの本体だけの診断なので、そこに誤りがあれば本体に誤りがある。
-    pub(super) fn resolve_equalities(&mut self) {
+    /// 本体の検査が終わってから、`usage::reliable` より前に呼ぶ。比べる値の型は後の文の単一化で決まることがある
+    /// (`let` で束縛したラムダの引数など) ためと、E2006 を本体の誤りに数え、線形性の診断を連鎖させないためである
+    /// (docs/spec/diagnostics.md の「連鎖する診断の抑止」)。`self.diagnostics` はこの本体だけの診断なので、そこに誤りが
+    /// あれば本体に誤りがある。1つの比べ方の E2006 が別の比べ方の E2006 を抑えないよう、比べ方を見る前に1回だけ数える。
+    pub(super) fn check_comparisons(&mut self) {
         let body_has_error = self.diagnostics.iter().any(Diagnostic::is_error);
         let lang = self.program.lang;
-        for comparison in std::mem::take(&mut self.comparisons) {
-            // Prelude のシグネチャがなければ参照の型は `Error` で、矢印を持たない
-            let TyShape::Fn { param, .. } = self.table.shape(comparison.ty).clone() else {
+        let mut found = Vec::new();
+        for (callee, (decl, args)) in self.typing.instantiations.iter() {
+            let Decl::Function(operator) = *decl else {
                 continue;
             };
-            let equality = match self.table.shape(param) {
-                TyShape::Con(id, _) if *id == lang.int => Some(Equality::Int),
-                TyShape::Con(id, _) if *id == lang.string => Some(Equality::String),
-                TyShape::Con(id, _) if *id == lang.bool => Some(Equality::Bool),
-                _ => None,
-            };
-            if let Some(equality) = equality {
-                self.typing.equalities.insert(comparison.callee, equality);
+            if operator != lang.eq && operator != lang.ne {
+                continue;
+            }
+            // `==` と `!=` は `a -> a -> Bool` なので、最初の型引数が比べる値の型である
+            let operand = args[0];
+            let exported = self.table.export(operand);
+            if equality(&lang, &exported).is_some() {
                 continue;
             }
             // 同じ本体に別の誤りがあるとき、決まらない型はその誤りの連鎖である。誤りを直せば型が決まるので、
             // E2006 を重ねない (docs/spec/diagnostics.md の「連鎖する診断の抑止」)
-            if body_has_error && matches!(self.table.shape(param), TyShape::Var(_)) {
+            if body_has_error && matches!(self.table.shape(operand), TyShape::Var(_)) {
                 continue;
             }
-            let operand = self.table.export(param);
             // 報告済みの誤りの跡には診断を重ねない (docs/spec/diagnostics.md の「連鎖する診断の抑止」)
-            if operand.contains_error() {
+            if exported.contains_error() {
                 continue;
             }
-            let diagnostic = self.not_comparable(&comparison, &operand);
-            self.diagnostics.push(diagnostic);
+            found.push(self.not_comparable(callee, operator, &exported));
         }
+        self.diagnostics.extend(found);
     }
 
     /// 比べられない型の値を比べた (E2006)。演算子を指す。
-    fn not_comparable(&self, comparison: &Comparison, operand: &Type) -> Diagnostic {
-        let op = &self.program[comparison.operator].name;
+    fn not_comparable(&self, callee: ExprId, operator: FunctionId, operand: &Type) -> Diagnostic {
+        let op = &self.program[operator].name;
         let names = &self.program.names;
         let lang = self.program.lang;
         let operand = operand.display(names);
@@ -65,7 +56,7 @@ impl BodyCheck<'_, '_> {
             format!("values of type `{operand}` cannot be compared with `{op}`"),
             Label::new(
                 self.file(),
-                self.body.exprs[comparison.callee].range,
+                self.body.exprs[callee].range,
                 format!("`{op}` cannot compare `{operand}`"),
             ),
         )

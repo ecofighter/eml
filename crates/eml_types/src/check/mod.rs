@@ -163,13 +163,12 @@ pub(crate) fn check_body(
         diagnostics: &mut diagnostics,
         ambient: Row::pure(),
         ambient_source: AmbientSource::Signature,
-        comparisons: Vec::new(),
         typing: BodyTyping::default(),
         instances: Vec::new(),
         clause_frames: Vec::new(),
     };
     checker.check_function(own.ty);
-    checker.resolve_equalities();
+    checker.check_comparisons();
     let typing = checker.typing;
     let instances = checker.instances;
     let reliable = usage::reliable(body, diagnostics.is_empty());
@@ -192,7 +191,6 @@ pub(crate) fn check_body(
             .instantiations
             .insert(expr, Instantiation { decl: *decl, args });
     }
-    types.equalities = typing.equalities;
     let own_vars = OwnVars {
         lin: own.lin,
         mult: own.mult,
