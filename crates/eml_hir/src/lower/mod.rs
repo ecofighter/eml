@@ -11,7 +11,7 @@ use eml_syntax::{SyntaxToken, ast};
 use la_arena::{Arena, ArenaMap, Idx};
 
 use crate::codes;
-use crate::def_map::{DefMap, NameRef, Resolved, module_id};
+use crate::def_map::{DefMap, NameRef, Resolved, Resolver, module_id, not_in_module, private_name};
 use crate::hir::*;
 use crate::item_tree::{FunctionItem, ItemTree};
 use crate::load::LoadedModule;
@@ -191,21 +191,68 @@ fn lower_bodies(
     bodies
 }
 
-/// 名前の経路の読み方。修飾名は M2 で実装する (docs/spec/modules.md)。
+/// 名前の経路の読み方 (docs/spec/modules.md の「名前の解決」)。
 pub(super) enum PathName {
     Plain(SyntaxToken),
-    Qualified,
+    /// `Csv.parse`。修飾子は最後より前のセグメントを `.` でつないだもので、2つ以上のセグメントなら E1031 になる。
+    Qualified {
+        qualifier: String,
+        qualifier_range: TextRange,
+        name: SyntaxToken,
+    },
     /// パーサが報告済み。
     Missing,
 }
 
 pub(super) fn path_name(path: Option<ast::Path>) -> PathName {
-    match path {
-        Some(path) if path.is_qualified() => PathName::Qualified,
-        Some(path) => path
-            .name()
-            .map_or(PathName::Missing, |name| PathName::Plain(name.token())),
-        None => PathName::Missing,
+    let Some(path) = path else {
+        return PathName::Missing;
+    };
+    let segments: Vec<SyntaxToken> = path.segments().map(|segment| segment.token()).collect();
+    match segments.as_slice() {
+        [] => PathName::Missing,
+        [name] => PathName::Plain(name.clone()),
+        [qualifier @ .., name] => PathName::Qualified {
+            qualifier: qualifier
+                .iter()
+                .map(|segment| segment.text())
+                .collect::<Vec<_>>()
+                .join("."),
+            qualifier_range: qualifier[0]
+                .text_range()
+                .cover(qualifier[qualifier.len() - 1].text_range()),
+            name: name.clone(),
+        },
+    }
+}
+
+impl PathName {
+    /// 最後のセグメント。
+    pub(super) fn token(&self) -> Option<&SyntaxToken> {
+        match self {
+            PathName::Plain(name) | PathName::Qualified { name, .. } => Some(name),
+            PathName::Missing => None,
+        }
+    }
+
+    /// `range` は、修飾子を含む名前の全体の位置である。
+    pub(super) fn at(&self, range: TextRange) -> Option<NameUse<'_>> {
+        match self {
+            PathName::Plain(name) => Some(NameUse::plain(name.text(), range)),
+            PathName::Qualified {
+                qualifier,
+                qualifier_range,
+                name,
+            } => Some(NameUse {
+                name: NameRef::Qualified {
+                    qualifier,
+                    name: name.text(),
+                },
+                range,
+                qualifier_range: Some(*qualifier_range),
+            }),
+            PathName::Missing => None,
+        }
     }
 }
 
@@ -252,8 +299,10 @@ impl NameKind {
 /// 名前を使った位置。
 pub(super) struct NameUse<'a> {
     pub name: NameRef<'a>,
-    /// 名前の全体の位置。E1001、E1002、E1028 が指す。
+    /// 修飾子を含む名前の全体。E1001、E1002、E1028、E1029 が指す。
     pub range: TextRange,
+    /// 修飾子の位置。修飾した名前だけが持ち、E1031 が指す。
+    pub qualifier_range: Option<TextRange>,
 }
 
 impl<'a> NameUse<'a> {
@@ -261,6 +310,14 @@ impl<'a> NameUse<'a> {
         NameUse {
             name: NameRef::Plain(name),
             range,
+            qualifier_range: None,
+        }
+    }
+
+    /// 修飾子を除いた名前。
+    pub(super) fn last(&self) -> &'a str {
+        match self.name {
+            NameRef::Plain(name) | NameRef::Qualified { name, .. } => name,
         }
     }
 
@@ -273,31 +330,82 @@ impl<'a> NameUse<'a> {
     }
 }
 
-/// 名前が見つからない (E1001、E1002)。
-pub(super) fn not_found(file: FileId, kind: NameKind, at: &NameUse<'_>) -> Diagnostic {
-    Diagnostic::error(
-        kind.code(),
-        format!("cannot find {} `{}`", kind.noun(), at.written()),
-        Label::new(file, at.range, kind.label()),
-    )
+/// 名前が見つからない (E1001、E1002)。修飾した名前には、修飾子のモジュールを書く (docs/spec/modules.md の「新しい診断」)。
+pub(super) fn not_found(
+    items: &Resolver<'_>,
+    file: FileId,
+    kind: NameKind,
+    at: &NameUse<'_>,
+) -> Diagnostic {
+    match at.name {
+        NameRef::Plain(name) => Diagnostic::error(
+            kind.code(),
+            format!("cannot find {} `{name}`", kind.noun()),
+            Label::new(file, at.range, kind.label()),
+        ),
+        NameRef::Qualified { qualifier, name } => not_in_module(
+            kind.code(),
+            file,
+            at.range,
+            kind.noun(),
+            name,
+            &items.qualifier_modules(qualifier),
+        ),
+    }
 }
 
 /// 名前を引けなかった結果の診断。`Silent` は、重複した宣言の部品 (E1003 で報告済み) か、壊れた import や並びで報告した
 /// 名前なので、診断を出さない (docs/spec/modules.md の「誤りからの回復」)。
 pub(super) fn unresolved<T>(
+    items: &Resolver<'_>,
     file: FileId,
     kind: NameKind,
     at: &NameUse<'_>,
     result: Resolved<T>,
 ) -> Option<Diagnostic> {
     match result {
-        Resolved::NotFound => Some(not_found(file, kind, at)),
+        Resolved::Found(_) | Resolved::Silent => None,
+        Resolved::NotFound => Some(not_found(items, file, kind, at)),
         Resolved::Ambiguous(imports) => Some(ambiguous(file, at, &imports)),
-        // 修飾しない名前は修飾子の誤りにならず、`pub` でない名前は import の並びで報告済みである
-        Resolved::Found(_)
-        | Resolved::Silent
-        | Resolved::Private(..)
-        | Resolved::UnknownQualifier => None,
+        Resolved::Private(definition_file, definition) => Some(private_name(
+            file,
+            at.range,
+            at.last(),
+            (definition_file, definition),
+        )),
+        Resolved::UnknownQualifier => match at.name {
+            NameRef::Qualified { qualifier, name } => Some(unknown_qualifier(
+                items,
+                file,
+                qualifier,
+                name,
+                at.qualifier_range.unwrap_or(at.range),
+            )),
+            // 修飾しない名前は修飾子の誤りにならない
+            NameRef::Plain(_) => None,
+        },
+    }
+}
+
+/// E1031。修飾子は1つのセグメントなので、パス全体を書いた `Report.Csv.parse` もここに来る。そのモジュールを import して
+/// いれば、使える修飾子を help で示す (docs/spec/modules.md の「import」)。
+fn unknown_qualifier(
+    items: &Resolver<'_>,
+    file: FileId,
+    qualifier: &str,
+    name: &str,
+    range: TextRange,
+) -> Diagnostic {
+    let diagnostic = Diagnostic::error(
+        codes::UNKNOWN_QUALIFIER,
+        format!("unknown module qualifier `{qualifier}`"),
+        Label::new(file, range, "no import gives this qualifier"),
+    );
+    match items.qualifiers_of(qualifier).first() {
+        Some(usable) => diagnostic.with_help(format!(
+            "the import of `{qualifier}` gives the qualifier `{usable}`; write `{usable}.{name}`"
+        )),
+        None => diagnostic,
     }
 }
 

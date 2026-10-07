@@ -996,6 +996,21 @@ impl<'a> Resolver<'a> {
         names
     }
 
+    /// モジュールの名前 (`Report.Csv`) に、このモジュールの import が与えた修飾子。import の順に並べる。E1031 の help が、
+    /// パス全体を書いた修飾子の代わりに使える修飾子を示すのに使う (docs/spec/modules.md の「import」)。
+    pub fn qualifiers_of(&self, module: &str) -> Vec<&'a str> {
+        let mut names: Vec<&'a str> = Vec::new();
+        for bound in &self.own().imports.qualifiers {
+            let ImportTarget::Module(target) = bound.target else {
+                continue;
+            };
+            if self.def_map.scope(target).name == module && !names.contains(&bound.name.as_str()) {
+                names.push(&bound.name);
+            }
+        }
+        names
+    }
+
     fn lookup<V: Namespace, T: PartialEq>(
         &self,
         name: NameRef<'_>,

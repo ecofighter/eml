@@ -3,7 +3,7 @@ use eml_syntax::{SyntaxKind, SyntaxToken, ast};
 use la_arena::Arena;
 
 use super::types::{TypeLowering, Vars};
-use super::{NameKind, NameUse, PathName, path_name, unresolved};
+use super::{NameKind, NameUse, path_name, unresolved};
 use crate::codes;
 use crate::def_map::{NameRef, Resolved, Resolver, ValueItem};
 use crate::hir::*;
@@ -309,35 +309,36 @@ impl<'a> BodyLowering<'a> {
     }
 
     fn lower_path(&mut self, path: &ast::PathExpr, range: TextRange) -> ExprId {
-        let name = match path_name(path.path()) {
-            PathName::Plain(name) => name,
-            PathName::Qualified => {
-                return self.unsupported(range, "qualified names are not supported yet");
-            }
-            PathName::Missing => return self.alloc(ExprKind::Missing, range),
+        let name = path_name(path.path());
+        let Some(at) = name.at(range) else {
+            return self.alloc(ExprKind::Missing, range);
         };
-        let text = name.text();
-        let local = self
-            .scope
-            .iter()
-            .rev()
-            .find(|(local, _)| local == text)
-            .map(|&(_, local)| local);
+        // 局所の束縛は、修飾しない名前だけが引く (docs/spec/modules.md の「名前の解決」)
+        let local = match at.name {
+            NameRef::Plain(text) => self
+                .scope
+                .iter()
+                .rev()
+                .find(|(local, _)| local == text)
+                .map(|&(_, local)| local),
+            NameRef::Qualified { .. } => None,
+        };
         let res = match local {
             Some(local) => Res::Local(local),
-            None => match self.items.value(NameRef::Plain(text)) {
+            None => match self.items.value(at.name) {
                 Resolved::Found(ValueItem::Function(id)) => Res::Function(id),
                 Resolved::Found(ValueItem::Operation(id)) => Res::Operation(id),
                 Resolved::Found(ValueItem::Constructor(id)) => Res::Constructor(id),
                 other => {
-                    let kind = if name.kind() == SyntaxKind::UIDENT {
+                    let kind = if name
+                        .token()
+                        .is_some_and(|token| token.kind() == SyntaxKind::UIDENT)
+                    {
                         NameKind::Constructor
                     } else {
                         NameKind::Value
                     };
-                    if let Some(diagnostic) =
-                        unresolved(self.file, kind, &NameUse::plain(text, range), other)
-                    {
+                    if let Some(diagnostic) = unresolved(&self.items, self.file, kind, &at, other) {
                         self.diagnostics.push(diagnostic);
                     }
                     return self.alloc(ExprKind::Missing, range);
@@ -543,16 +544,11 @@ impl<'a> BodyLowering<'a> {
                         self.lower_pat_in_group(Some(arg), arg_range)
                     })
                     .collect();
-                match path_name(con.path()) {
-                    PathName::Plain(name) => self.constructor_pat(
-                        &NameUse::plain(name.text(), name.text_range()),
-                        args,
-                        range,
-                    ),
-                    PathName::Qualified => {
-                        self.unsupported_pat(range, "qualified names are not supported yet")
-                    }
-                    PathName::Missing => PatKind::Missing,
+                let path = con.path();
+                let name_range = path.as_ref().map_or(range, |path| path.range());
+                match path_name(path).at(name_range) {
+                    Some(at) => self.constructor_pat(&at, args, range),
+                    None => PatKind::Missing,
                 }
             }
             ast::Pat::InfixConPat(infix) => return self.lower_infix_pat(infix, range),
@@ -691,7 +687,9 @@ impl<'a> BodyLowering<'a> {
                 return self.unsupported_pat(at.range, "lists are not supported yet");
             }
             other => {
-                if let Some(diagnostic) = unresolved(self.file, NameKind::Constructor, at, other) {
+                if let Some(diagnostic) =
+                    unresolved(&self.items, self.file, NameKind::Constructor, at, other)
+                {
                     self.diagnostics.push(diagnostic);
                 }
                 return PatKind::Missing;

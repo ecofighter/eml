@@ -5,9 +5,9 @@ use eml_diagnostics::{Diagnostic, Label, TextRange};
 use eml_syntax::ast;
 
 use super::expr::BodyLowering;
-use super::{NameKind, NameUse, PathName, path_name, unresolved};
+use super::{NameKind, path_name, unresolved};
 use crate::codes;
-use crate::def_map::{NameRef, Resolved};
+use crate::def_map::Resolved;
 use crate::hir::*;
 
 /// 節を読みながら集める情報。
@@ -98,33 +98,26 @@ impl BodyLowering<'_> {
         let Some(path) = clause.path() else {
             return;
         };
-        let name = match path_name(Some(path.clone())) {
-            PathName::Plain(name) => name,
-            PathName::Qualified => {
-                self.diagnostics.push(Diagnostic::not_yet_supported(
-                    self.file,
-                    path.range(),
-                    "qualified names are not supported yet",
-                ));
-                return;
-            }
-            PathName::Missing => return,
+        let name_range = path.range();
+        let path = path_name(Some(path));
+        let Some(at) = path.at(name_range) else {
+            return;
         };
-        let name_range = name.text_range();
-        let op = match self.items.operation(NameRef::Plain(name.text())) {
+        let op = match self.items.operation(at.name) {
             Resolved::Found(op) => op,
             other => {
-                let at = NameUse::plain(name.text(), name_range);
-                if let Some(diagnostic) = unresolved(self.file, NameKind::Operation, &at, other) {
+                if let Some(diagnostic) =
+                    unresolved(&self.items, self.file, NameKind::Operation, &at, other)
+                {
                     self.diagnostics.push(diagnostic);
                 }
                 return;
             }
         };
+        let text = at.last();
         let operation = self.operation(op);
         // `IO` の操作は実行時がその場で処理するので、handle できない (docs/spec/effects.md の「組み込みの `IO`」)
         if operation.effect == self.lang.io {
-            let text = name.text();
             self.diagnostics.push(
                 Diagnostic::error(
                     codes::UNHANDLEABLE_EFFECT,
@@ -142,7 +135,6 @@ impl BodyLowering<'_> {
         let effect = operation.effect;
         let never = operation.multiplicity == OpMultiplicity::Never;
         let arity = operation.arity;
-        let text = name.text();
         if let Some(&(_, first)) = out.seen.iter().find(|(seen, _)| *seen == op) {
             self.diagnostics.push(
                 Diagnostic::error(

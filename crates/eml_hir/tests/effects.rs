@@ -403,10 +403,10 @@ fn a_clause_for_an_operation_of_a_duplicate_effect_is_dropped_silently() {
 }
 
 #[test]
-fn qualified_clause_heads_are_not_supported_yet() {
+fn a_qualified_clause_head_with_an_unknown_qualifier_is_dropped() {
     let text = "effect Ask where\n  ask : Unit -> Int\n\nf : Unit -> Int\nf () = handle 1 with | M.ask () k -> resume k 1";
     assert_eq!(
         diagnostics(text),
-        ["E0004 5:24 qualified names are not supported yet"]
+        ["E1031 5:24 unknown module qualifier `M`"]
     );
 }

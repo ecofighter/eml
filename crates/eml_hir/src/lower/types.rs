@@ -2,7 +2,7 @@ use eml_diagnostics::{Diagnostic, FileId, Label, TextRange};
 use eml_syntax::{SyntaxToken, ast};
 use la_arena::Arena;
 
-use super::{NameKind, NameUse, PathName, not_found, path_name, unresolved};
+use super::{NameKind, NameUse, not_found, path_name, unresolved};
 use crate::codes;
 use crate::def_map::{Resolved, Resolver, TypeItem};
 use crate::hir::{
@@ -37,14 +37,9 @@ impl TypeLowering<'_> {
         };
         let range = ty.range();
         let kind = match ty {
-            ast::Type::PathType(path) => match path_name(path.path()) {
-                PathName::Plain(name) => {
-                    self.applied(&NameUse::plain(name.text(), range), Vec::new(), range)
-                }
-                PathName::Qualified => {
-                    self.unsupported(range, "qualified names are not supported yet")
-                }
-                PathName::Missing => TypeRefKind::Error,
+            ast::Type::PathType(path) => match path_name(path.path()).at(range) {
+                Some(at) => self.applied(&at, Vec::new(), range),
+                None => TypeRefKind::Error,
             },
             ast::Type::ParenType(paren) => return self.lower(paren.ty(), range),
             ast::Type::FnType(function) => {
@@ -69,14 +64,9 @@ impl TypeLowering<'_> {
                         self.lower(Some(arg), range)
                     })
                     .collect();
-                match path_name(app.path()) {
-                    PathName::Plain(name) => {
-                        self.applied(&NameUse::plain(name.text(), range), args, range)
-                    }
-                    PathName::Qualified => {
-                        self.unsupported(range, "qualified names are not supported yet")
-                    }
-                    PathName::Missing => TypeRefKind::Error,
+                match path_name(app.path()).at(range) {
+                    Some(at) => self.applied(&at, args, range),
+                    None => TypeRefKind::Error,
                 }
             }
             ast::Type::TupleType(tuple) => TypeRefKind::Tuple(
@@ -105,11 +95,13 @@ impl TypeLowering<'_> {
             // エフェクトの名前は型の位置に書けない
             Resolved::Found(TypeItem::Effect(_)) => {
                 self.diagnostics
-                    .push(not_found(self.file, NameKind::Type, at));
+                    .push(not_found(&self.items, self.file, NameKind::Type, at));
                 TypeRefKind::Error
             }
             other => {
-                if let Some(diagnostic) = unresolved(self.file, NameKind::Type, at, other) {
+                if let Some(diagnostic) =
+                    unresolved(&self.items, self.file, NameKind::Type, at, other)
+                {
                     self.diagnostics.push(diagnostic);
                 }
                 TypeRefKind::Error
@@ -146,20 +138,10 @@ impl TypeLowering<'_> {
         };
         let mut effects = Vec::new();
         for effect in row.effects() {
-            let name = match path_name(effect.path()) {
-                PathName::Plain(name) => name,
-                PathName::Qualified => {
-                    self.diagnostics.push(Diagnostic::not_yet_supported(
-                        self.file,
-                        effect.range(),
-                        "qualified names are not supported yet",
-                    ));
-                    valid = false;
-                    continue;
-                }
-                PathName::Missing => continue,
+            let path = path_name(effect.path());
+            let Some(at) = path.at(effect.range()) else {
+                continue;
             };
-            let at = NameUse::plain(name.text(), effect.range());
             match self.items.type_item(at.name) {
                 Resolved::Found(TypeItem::Effect(id)) => {
                     let args: Vec<TypeRefId> = effect
@@ -180,11 +162,13 @@ impl TypeLowering<'_> {
                 // 型の名前は row に書けない
                 Resolved::Found(TypeItem::Type(_)) => {
                     self.diagnostics
-                        .push(not_found(self.file, NameKind::Effect, &at));
+                        .push(not_found(&self.items, self.file, NameKind::Effect, &at));
                     valid = false;
                 }
                 other => {
-                    if let Some(diagnostic) = unresolved(self.file, NameKind::Effect, &at, other) {
+                    if let Some(diagnostic) =
+                        unresolved(&self.items, self.file, NameKind::Effect, &at, other)
+                    {
                         self.diagnostics.push(diagnostic);
                     }
                     valid = false;
@@ -259,12 +243,6 @@ impl TypeLowering<'_> {
             Vars::Data => "not a parameter of this `data` declaration",
             Vars::Define | Vars::Signature => "not found in the signature",
         }
-    }
-
-    fn unsupported(&mut self, range: TextRange, message: &str) -> TypeRefKind {
-        self.diagnostics
-            .push(Diagnostic::not_yet_supported(self.file, range, message));
-        TypeRefKind::Error
     }
 
     fn alloc(&mut self, kind: TypeRefKind, range: TextRange) -> TypeRefId {

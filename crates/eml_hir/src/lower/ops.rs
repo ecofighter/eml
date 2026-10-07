@@ -4,7 +4,7 @@ use eml_diagnostics::{Diagnostic, Label, TextRange, TextSize};
 use eml_syntax::ast::{self, OpSeqElement};
 
 use super::expr::BodyLowering;
-use super::{NameKind, NameUse, unresolved};
+use super::{NameKind, NameUse, ambiguous, unresolved};
 use crate::codes;
 use crate::def_map::{NameRef, Resolved, ValueItem};
 use crate::hir::{ExprId, ExprKind, Res};
@@ -47,6 +47,26 @@ impl BodyLowering<'_> {
                     range: token.text_range(),
                 }),
             }
+        }
+        // 曖昧な演算子と壊れた import から来た演算子は fixity が決まらない。既定の `infixl 9` で組むと E1006 が連鎖しうる
+        // ので、列全体を誤りの式にする。曖昧な演算子だけは、ここで E1028 を出す (docs/spec/modules.md の「誤りからの回復」)
+        let mut undecided = false;
+        for piece in &pieces {
+            if let Piece::Operator {
+                text,
+                range: op_range,
+            } = piece
+                && self.items.fixity(NameRef::Plain(text)).is_none()
+            {
+                undecided = true;
+                if let Resolved::Ambiguous(imports) = self.items.value(NameRef::Plain(text)) {
+                    let at = NameUse::plain(text, *op_range);
+                    self.diagnostics.push(ambiguous(self.file, &at, &imports));
+                }
+            }
+        }
+        if undecided {
+            return self.alloc(ExprKind::Missing, range);
         }
         let mut cursor = Cursor {
             pieces,
@@ -187,6 +207,7 @@ impl BodyLowering<'_> {
             }
             other => {
                 if let Some(diagnostic) = unresolved(
+                    &self.items,
                     self.file,
                     NameKind::Operator,
                     &NameUse::plain(op, op_range),
@@ -210,8 +231,9 @@ impl BodyLowering<'_> {
         )
     }
 
-    /// 組み直しに使う fixity。曖昧な演算子と壊れた import から来た演算子は fixity が決まらないので、既定の `infixl 9`
-    /// で組む。演算子そのものの誤りは、`binary` と `constructor_pat` が報告する。
+    /// 組み直しに使う fixity。演算子の列は、fixity の決まらない演算子 (曖昧か、壊れた import から来たもの) があれば
+    /// `lower_op_seq` が先に誤りの式にする。ここで既定の `infixl 9` を使うのは、セクションと中置のパターンの演算子で、
+    /// その演算子そのものの誤りは `binary` と `constructor_pat` が報告する。
     pub(super) fn fixity(&self, op: &str) -> Fixity {
         self.items
             .fixity(NameRef::Plain(op))

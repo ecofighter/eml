@@ -159,7 +159,7 @@ fn operator_definitions_and_qualified_names() {
     f : Int -> Int
     f x#0 = (<missing> x#0)
     ---
-    E0004 4:9 qualified names are not supported yet
+    E1031 4:9 unknown module qualifier `List`
     ");
 }
 
@@ -283,14 +283,15 @@ fn lambda_and_clause_parameters_are_one_group() {
 }
 
 #[test]
-fn qualified_effects_are_not_supported_yet() {
-    // 不具合1: `ast::Effect::name()` が最初の `UIDENT` を取り、`M` を探して E1002 にしていた
+fn unknown_qualifiers_in_rows_are_reported_once_each() {
+    // 不具合1: `ast::Effect::name()` が最初の `UIDENT` を取り、`M` を探して E1002 にしていた。修飾子だけを指す E1031 に
+    // なり、E1002 は出ない
     let text = "f : Unit -> <M.E> Unit\nf () = ()\ng : Unit -> <M.State Int> Unit\ng () = ()";
     assert_eq!(
         diagnostics(text),
         [
-            "E0004 1:14 qualified names are not supported yet",
-            "E0004 3:14 qualified names are not supported yet",
+            "E1031 1:14 unknown module qualifier `M`",
+            "E1031 3:14 unknown module qualifier `M`",
         ]
     );
 }
@@ -497,4 +498,119 @@ fn parts_of_a_type_missing_from_the_import_list_are_silent_errors() {
         module_codes(entry, &modules),
         ["E1002 test.em 1:11", "E1002 test.em 1:18"]
     );
+}
+
+#[test]
+fn qualified_names_resolve_in_every_position() {
+    // 式、型、パターン、row のエフェクト、handler の節の先頭。自分の `unbox` があっても `State.unbox` は `State` の定義を指す
+    let modules = [(
+        "State.em",
+        "pub effect State where\n  get : Unit -> Int\n\npub data Box = | Box Int\n\npub unbox : Box -> Int\nunbox (Box n) = n",
+    )];
+    let entry = "import State\n\ncounter : Unit -> <State.State> Int\ncounter () = State.get () + 1\n\nunbox : State.Box -> Int\nunbox (State.Box n) = State.unbox (State.Box n)\n\nrun : Int -> Int\nrun n =\n  handle counter () with\n    | State.get () k -> resume k n\n    | return x -> x";
+    assert_eq!(module_report(entry, &modules), "");
+    let shown = lower_files_text(entry, &modules);
+    assert!(
+        shown.contains("counter () = (+ (@State.State.get ()) 1)"),
+        "{shown}"
+    );
+    assert!(
+        shown.contains("= (@State.unbox (State.Box n#0))"),
+        "{shown}"
+    );
+}
+
+#[test]
+fn a_path_as_a_qualifier_is_unknown_and_the_help_shows_the_usable_one() {
+    let modules = [
+        ("Report/Csv.em", "pub parse : Int\nparse = 1"),
+        ("Util.em", "pub size : Int\nsize = 2"),
+    ];
+    let entry = "import Report.Csv\nimport Report.Csv as C\nimport Util as U\n\nf : Int\nf = Report.Csv.parse\n\ng : Int\ng = Nope.parse\n\nh : Int\nh = Util.size";
+    insta::assert_snapshot!(module_report(entry, &modules), @r"
+    E1031 test.em 6:5 unknown module qualifier `Report.Csv`
+      test.em 6:5 no import gives this qualifier
+      help: the import of `Report.Csv` gives the qualifier `Csv`; write `Csv.parse`
+    E1031 test.em 9:5 unknown module qualifier `Nope`
+      test.em 9:5 no import gives this qualifier
+    E1031 test.em 12:5 unknown module qualifier `Util`
+      test.em 12:5 no import gives this qualifier
+      help: the import of `Util` gives the qualifier `U`; write `U.size`
+    ");
+}
+
+#[test]
+fn names_missing_from_a_module_say_which_module() {
+    let modules = [("A.em", "pub x : Int\nx = 1")];
+    let entry = "import A\n\nf : A.Nope -> Int\nf x = A.nope\n\ng : Unit -> <A.E> Unit\ng () = ()\n\nh : Int -> Int\nh (A.Mk n) = n";
+    insta::assert_snapshot!(module_report(entry, &modules), @r"
+    E1002 test.em 3:5 cannot find type `Nope` in module `A`
+      test.em 3:5 not found in this module
+    E1001 test.em 4:7 cannot find value `nope` in module `A`
+      test.em 4:7 not found in this module
+    E1002 test.em 6:14 cannot find effect `E` in module `A`
+      test.em 6:14 not found in this module
+    E1001 test.em 10:4 cannot find constructor `Mk` in module `A`
+      test.em 10:4 not found in this module
+    ");
+}
+
+#[test]
+fn the_prelude_qualifier_reaches_hidden_and_public_names_only() {
+    // `pub` でない Prelude の `negate` は、定義がないものとして E1001 にし、Prelude の中の位置を出さない
+    let entry = "not : Bool -> Bool\nnot b = b\n\nf : Bool -> Bool\nf b = Prelude.not b\n\ng : Int\ng = Prelude.negate 1";
+    insta::assert_snapshot!(module_report(entry, &[]), @r"
+    E1001 test.em 8:5 cannot find value `negate` in module `Prelude`
+      test.em 8:5 not found in this module
+    ");
+    let shown = lower_files_text(entry, &[]);
+    assert!(shown.contains("f b#0 = (@Prelude.not b#0)"), "{shown}");
+}
+
+#[test]
+fn private_names_through_a_qualifier() {
+    let modules = [("A.em", "secret : Int\nsecret = 1\n\ndata Hidden = | H")];
+    let entry = "import A\n\nf : Int\nf = A.secret\n\ng : A.Hidden -> Int\ng h = 1";
+    insta::assert_snapshot!(module_report(entry, &modules), @r"
+    E1029 test.em 4:5 `secret` is not public
+      test.em 4:5 private to its module
+      A.em 1:1 defined here without `pub`
+    E1029 test.em 6:5 `Hidden` is not public
+      test.em 6:5 private to its module
+      A.em 4:6 defined here without `pub`
+    ");
+}
+
+#[test]
+fn merged_qualifiers_look_in_every_module() {
+    let modules = [
+        ("A.em", "pub x : Int\nx = 1\n\npub z : Int\nz = 1"),
+        ("B.em", "pub y : Int\ny = 2\n\npub z : Int\nz = 2"),
+    ];
+    let entry = "import A as Q\nimport B as Q\n\nf : Int\nf = Q.x + Q.y\n\ng : Int\ng = Q.nope\n\nh : Int\nh = Q.z";
+    insta::assert_snapshot!(module_report(entry, &modules), @r"
+    E1001 test.em 8:5 cannot find value `nope` in modules `A`, `B`
+      test.em 8:5 not found in these modules
+    E1028 test.em 11:5 `Q.z` is ambiguous
+      test.em 11:5 this name refers to more than one definition
+      test.em 1:1 one of the definitions is imported here
+      test.em 2:1 one of the definitions is imported here
+    ");
+    let shown = lower_files_text(entry, &modules);
+    assert!(shown.contains("f = (+ @A.x @B.y)"), "{shown}");
+}
+
+#[test]
+fn operator_sequences_with_ambiguous_or_broken_operators_are_silent_errors() {
+    // fixity が決まらない演算子を含む列は組み直さないので、`==` の並びの E1006 も出ない
+    let operator = "pub (<+>) : Int -> Int -> Int\na <+> b = a";
+    let modules = [("A.em", operator), ("B.em", operator)];
+    let entry = "import A ((<+>))\nimport B ((<+>))\nimport Missing ((<*>))\n\nf : Bool\nf = 1 <+> 2 == 3 == 4\n\ng : Bool\ng = 1 <*> 2 == 3 == 4";
+    assert_eq!(
+        module_codes(entry, &modules),
+        ["E1026 test.em 3:8", "E1028 test.em 6:7"]
+    );
+    let shown = lower_files_text(entry, &modules);
+    assert!(shown.contains("f = <missing>"), "{shown}");
+    assert!(shown.contains("g = <missing>"), "{shown}");
 }

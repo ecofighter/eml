@@ -166,3 +166,17 @@ fn an_undefined_effect_does_not_hide_an_unrelated_missing_effect() {
     );
     assert!(out.contains("E2002 8:3 `l` performs `IO`"), "{out}");
 }
+
+#[test]
+fn an_unknown_qualifier_in_a_row_is_reported_once() {
+    // 修飾子の誤りの row は、未定義のエフェクトの row と同じくどのエフェクトも受け入れる。本体の `IO` も、呼び出す `main`
+    // も誤りにならない (docs/spec/types.md の「エラーの扱い」)
+    let text = "f : Unit -> <Log.State Int> Unit\nf () = println \"x\"\n\nmain : Unit -> <IO> Unit\nmain () = f ()";
+    insta::assert_snapshot!(check_text(text), @"
+    f : Unit -> <{error}> Unit
+    main : Unit -> <IO> Unit
+    ---
+    E1031 1:14 unknown module qualifier `Log`
+      1:14 no import gives this qualifier
+    ");
+}
