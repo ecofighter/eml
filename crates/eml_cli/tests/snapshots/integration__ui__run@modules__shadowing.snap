@@ -1,0 +1,11 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{stderr}\")"
+input_file: tests/ui/run/modules/shadowing/main.em
+---
+--- stdout ---
+15
+10
+True
+False
+--- stderr ---

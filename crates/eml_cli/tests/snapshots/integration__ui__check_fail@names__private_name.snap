@@ -1,0 +1,31 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: rendered
+input_file: tests/ui/check-fail/names/private_name/main.em
+---
+[E1029] Error: `hidden` is not public
+   ╭─[ check-fail/names/private_name/main.em:3:13 ]
+   │
+ 3 │ import Lib (hidden)
+   │             ───┬──  
+   │                ╰──── private to its module
+   │
+   ├─[ check-fail/names/private_name/Lib.em:4:1 ]
+   │
+ 4 │ hidden : Int -> Int
+   │ ───┬──  
+   │    ╰──── defined here without `pub`
+───╯
+[E1029] Error: `hidden` is not public
+   ╭─[ check-fail/names/private_name/main.em:7:22 ]
+   │
+ 7 │   println (show_int (Lib.hidden 1))
+   │                      ─────┬────  
+   │                           ╰────── private to its module
+   │
+   ├─[ check-fail/names/private_name/Lib.em:4:1 ]
+   │
+ 4 │ hidden : Int -> Int
+   │ ───┬──  
+   │    ╰──── defined here without `pub`
+───╯

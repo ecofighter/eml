@@ -1,0 +1,12 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: rendered
+input_file: tests/ui/check-fail/names/module_not_found/main.em
+---
+[E1026] Error: cannot find module `Report.Missing`
+   ╭─[ check-fail/names/module_not_found/main.em:2:8 ]
+   │
+ 2 │ import Report.Missing (load)
+   │        ───────┬──────  
+   │               ╰──────── there is no file `check-fail/names/module_not_found/Report/Missing.em`
+───╯

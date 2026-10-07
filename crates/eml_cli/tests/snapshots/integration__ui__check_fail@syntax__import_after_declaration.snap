@@ -1,0 +1,12 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: rendered
+input_file: tests/ui/check-fail/syntax/import_after_declaration/main.em
+---
+[E0011] Error: imports must come before declarations
+   ╭─[ check-fail/syntax/import_after_declaration/main.em:6:1 ]
+   │
+ 6 │ import Text
+   │ ───┬──  
+   │    ╰──── move this import above the first declaration
+───╯

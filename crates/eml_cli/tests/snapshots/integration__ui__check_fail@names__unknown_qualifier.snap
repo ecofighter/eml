@@ -1,0 +1,21 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: rendered
+input_file: tests/ui/check-fail/names/unknown_qualifier/main.em
+---
+[E1031] Error: unknown module qualifier `Report.Csv`
+   ╭─[ check-fail/names/unknown_qualifier/main.em:7:22 ]
+   │
+ 7 │   println (show_int (Report.Csv.parse "a"))
+   │                      ─────┬────  
+   │                           ╰────── no import gives this qualifier
+   │ 
+   │ Help: the import of `Report.Csv` gives the qualifier `Csv`; write `Csv.parse`
+───╯
+[E1031] Error: unknown module qualifier `Json`
+   ╭─[ check-fail/names/unknown_qualifier/main.em:8:22 ]
+   │
+ 8 │   println (show_int (Json.parse "b"))
+   │                      ──┬─  
+   │                        ╰─── no import gives this qualifier
+───╯

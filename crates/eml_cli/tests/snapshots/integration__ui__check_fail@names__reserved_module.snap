@@ -1,0 +1,19 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: rendered
+input_file: tests/ui/check-fail/names/reserved_module/main.em
+---
+[E1030] Error: the module `Prelude` is reserved
+   ╭─[ check-fail/names/reserved_module/main.em:2:1 ]
+   │
+ 2 │ import Prelude
+   │ ───────┬──────  
+   │        ╰──────── the Prelude is imported implicitly
+───╯
+[E1030] Error: the module `Main` is reserved
+   ╭─[ check-fail/names/reserved_module/main.em:3:1 ]
+   │
+ 3 │ import Main
+   │ ─────┬─────  
+   │      ╰─────── `Main` is the name of the entry module
+───╯

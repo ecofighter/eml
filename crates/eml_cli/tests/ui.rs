@@ -1,6 +1,6 @@
 //! 成功すべきか失敗すべきかは最上位のディレクトリ (`run/`、`run-fail/`、`check-fail/`) で決める。スナップショットの承認を
-//! 誤っても、成功と失敗の入れ替わりを検出できるようにするため。テストはその下の分類のサブディレクトリに置く
-//! (docs/implementation/testing.md の「UI テスト」)。
+//! 誤っても、成功と失敗の入れ替わりを検出できるようにするため。テストはその下の分類のサブディレクトリに置き、1つの
+//! ファイルか、`main.em` を入口とする1つのディレクトリである (docs/implementation/testing.md の「UI テスト」)。
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -31,18 +31,55 @@ fn load(path: &Path) -> Session {
     )
 }
 
-/// スナップショットの名前を、最上位のディレクトリからの相対パス (`basics/hello.em`) で固定する。insta の既定はすべての
-/// 一致に共通の接頭辞を除くので、分類が1つしかないディレクトリでは名前に分類が入らず、分類が増えたときに名前が変わる。
-/// 直下の .em は分類の規則に反するので拒む。成功や失敗の確かめより先に呼び、置き場所の誤りを先に伝える。
-fn categorized(path: &Path, top: &str) -> insta::Settings {
-    let relative = path.strip_prefix(ui_root().join(top)).unwrap();
-    assert!(
-        relative.components().count() >= 2,
-        "{} must be in a category directory under tests/ui/{top}/",
-        relative.display()
-    );
+/// glob に当たった `.em` の役割。
+#[derive(Debug, PartialEq)]
+enum Entry {
+    /// テストの入口。スナップショットの名前の接尾辞を持つ。
+    Test(String),
+    /// ディレクトリのテストの `main.em` から読むモジュール。単独のテストにしない。
+    Module,
+}
+
+/// 置き場所の規則を確かめて、`.em` の役割を決める。成功や失敗の確かめより先に呼び、置き場所の誤りを先に伝える。
+/// 接尾辞は最上位のディレクトリからの相対パス (`basics/hello.em`。ディレクトリのテストは `names/import_cycle`) にする。
+/// insta の既定はすべての一致に共通の接頭辞を除くので、分類が1つしかないディレクトリでは名前に分類が入らず、分類が
+/// 増えたときに名前が変わるため。
+fn classify(path: &Path, top: &str) -> Entry {
+    let top_dir = ui_root().join(top);
+    let relative = path.strip_prefix(&top_dir).unwrap();
+    let parts: Vec<String> = relative
+        .components()
+        .map(|part| part.as_os_str().to_string_lossy().into_owned())
+        .collect();
+    match parts.as_slice() {
+        [category, file] => {
+            // `main.em` はディレクトリのテストの入口の名前なので、分類の直下にあれば置き場所の誤りである
+            assert!(
+                file != "main.em",
+                "tests/ui/{top}/{category}/main.em must be in a test directory: tests/ui/{top}/{category}/<name>/main.em"
+            );
+            Entry::Test(format!("{category}/{file}"))
+        }
+        [category, name, file] if file == "main.em" => Entry::Test(format!("{category}/{name}")),
+        [category, name, _, ..] => {
+            // `main.em` を書き忘れたディレクトリのモジュールが、単独のテストとして黙って通らないようにする
+            assert!(
+                top_dir.join(category).join(name).join("main.em").is_file(),
+                "{} belongs to no test: add tests/ui/{top}/{category}/{name}/main.em",
+                relative.display()
+            );
+            Entry::Module
+        }
+        _ => panic!(
+            "{} must be in a category directory under tests/ui/{top}/",
+            relative.display()
+        ),
+    }
+}
+
+fn snapshot_settings(suffix: &str) -> insta::Settings {
     let mut settings = insta::Settings::clone_current();
-    settings.set_snapshot_suffix(relative.to_string_lossy().replace('\\', "/"));
+    settings.set_snapshot_suffix(suffix);
     settings
 }
 
@@ -70,10 +107,12 @@ fn compile_and_execute(path: &Path) -> (String, String, Result<(), RuntimeError>
 #[test]
 fn run() {
     insta::glob!("../../../tests/ui", "run/**/*.em", |path| {
-        let settings = categorized(path, "run");
+        let Entry::Test(suffix) = classify(path, "run") else {
+            return;
+        };
         let (stdout, stderr, result) = compile_and_execute(path);
         assert_eq!(result, Ok(()), "{stderr}");
-        settings.bind(|| {
+        snapshot_settings(&suffix).bind(|| {
             insta::assert_snapshot!(format!("--- stdout ---\n{stdout}--- stderr ---\n{stderr}"));
         });
     });
@@ -82,12 +121,14 @@ fn run() {
 #[test]
 fn run_fail() {
     insta::glob!("../../../tests/ui", "run-fail/**/*.em", |path| {
-        let settings = categorized(path, "run-fail");
+        let Entry::Test(suffix) = classify(path, "run-fail") else {
+            return;
+        };
         let (stdout, _, result) = compile_and_execute(path);
         let Err(error) = result else {
             panic!("expected a runtime error");
         };
-        settings.bind(|| {
+        snapshot_settings(&suffix).bind(|| {
             insta::assert_snapshot!(format!(
                 "--- stdout ---\n{stdout}--- runtime error ---\n{error}\n"
             ));
@@ -98,7 +139,9 @@ fn run_fail() {
 #[test]
 fn check_fail() {
     insta::glob!("../../../tests/ui", "check-fail/**/*.em", |path| {
-        let settings = categorized(path, "check-fail");
+        let Entry::Test(suffix) = classify(path, "check-fail") else {
+            return;
+        };
         let session = load(path);
         let diagnostics = session.check();
         let rendered = render(&diagnostics, session.files());
@@ -106,8 +149,43 @@ fn check_fail() {
             has_errors(&diagnostics),
             "expected at least one error, got:\n{rendered}"
         );
-        settings.bind(|| {
+        snapshot_settings(&suffix).bind(|| {
             insta::assert_snapshot!(rendered);
         });
     });
+}
+
+#[test]
+fn the_layout_decides_what_each_file_is() {
+    let root = ui_root();
+    assert_eq!(
+        classify(&root.join("run/basics/hello.em"), "run"),
+        Entry::Test("basics/hello.em".to_string())
+    );
+    assert_eq!(
+        classify(&root.join("run/modules/qualified/main.em"), "run"),
+        Entry::Test("modules/qualified".to_string())
+    );
+    assert_eq!(
+        classify(&root.join("run/modules/qualified/Report/Csv.em"), "run"),
+        Entry::Module
+    );
+}
+
+#[test]
+#[should_panic(expected = "must be in a category directory")]
+fn a_file_right_under_the_top_directory_fails() {
+    classify(&ui_root().join("run/hello.em"), "run");
+}
+
+#[test]
+#[should_panic(expected = "must be in a test directory")]
+fn main_right_under_a_category_fails() {
+    classify(&ui_root().join("run/modules/main.em"), "run");
+}
+
+#[test]
+#[should_panic(expected = "belongs to no test")]
+fn a_module_without_main_fails() {
+    classify(&ui_root().join("run/modules/no_such_test/Lib.em"), "run");
 }

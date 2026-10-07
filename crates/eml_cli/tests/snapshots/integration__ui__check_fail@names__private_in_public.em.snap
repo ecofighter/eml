@@ -1,0 +1,20 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: rendered
+input_file: tests/ui/check-fail/names/private_in_public.em
+---
+[E1032] Error: the public `reveal` uses the private type `Secret`
+   ╭─[ check-fail/names/private_in_public.em:4:21 ]
+   │
+ 4 │ pub reveal : Int -> Secret
+   │                     ───┬──  
+   │                        ╰──── `Secret` is not `pub`
+   │
+   ├─[ check-fail/names/private_in_public.em:4:21 ]
+   │
+ 2 │ data Secret = | Secret Int
+   │      ───┬──  
+   │         ╰──── `Secret` is defined here
+   │ 
+   │ Help: add `pub` to the declaration of `Secret`
+───╯

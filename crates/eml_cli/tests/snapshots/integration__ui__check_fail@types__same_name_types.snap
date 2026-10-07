@@ -1,0 +1,14 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: rendered
+input_file: tests/ui/check-fail/types/same_name_types/main.em
+---
+[E2001] Error: mismatched types
+   ╭─[ check-fail/types/same_name_types/main.em:9:31 ]
+   │
+ 9 │ main () = println (Paint.name Blue)
+   │                    ─────┬──── ──┬─  
+   │                         ╰─────────── argument 1 of `name`
+   │                                 │   
+   │                                 ╰─── expected `Paint.Color`, found `Main.Color`
+───╯

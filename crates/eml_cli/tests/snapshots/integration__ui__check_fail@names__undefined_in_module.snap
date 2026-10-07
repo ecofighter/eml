@@ -1,0 +1,19 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: rendered
+input_file: tests/ui/check-fail/names/undefined_in_module/main.em
+---
+[E1002] Error: cannot find type `Count` in module `Lib`
+   ╭─[ check-fail/names/undefined_in_module/main.em:4:7 ]
+   │
+ 4 │ two : Lib.Count
+   │       ────┬────  
+   │           ╰────── not found in this module
+───╯
+[E1001] Error: cannot find value `uno` in module `Lib`
+   ╭─[ check-fail/names/undefined_in_module/main.em:5:17 ]
+   │
+ 5 │ two = Lib.one + Lib.uno
+   │                 ───┬───  
+   │                    ╰───── not found in this module
+───╯
