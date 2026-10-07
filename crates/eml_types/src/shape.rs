@@ -332,6 +332,9 @@ pub(crate) enum ShapeTail {
 /// 多相な具体化の結果。Kind 変数は `Shape` の番号の順に並ぶ。
 pub(crate) struct Instantiated {
     pub ty: Ty,
+    /// rigid な型変数を置き換えた新しい変数。`Shape::rigids` の順に並ぶ。
+    #[allow(dead_code)]
+    pub args: Vec<Ty>,
     pub lin: Vec<KindVar>,
     pub mult: Vec<KindVar>,
 }
@@ -517,7 +520,12 @@ impl Shape {
             .map(|(_, sigma)| Tail::Var(table.fresh_row_var_with(mult[sigma.index()])))
             .collect();
         let ty = build(table, &self.ty, &tys, &rows, &lin);
-        Instantiated { ty, lin, mult }
+        Instantiated {
+            ty,
+            args: tys,
+            lin,
+            mult,
+        }
     }
 
     /// 自分の本体のための rigid な具体化。rigid な変数を表の rigid 変数にし、Kind 変数を新しい変数にする。本体の注釈が
@@ -819,6 +827,24 @@ mod tests {
         );
         assert_ne!(first.lin, second.lin);
         assert_ne!(first.mult, second.mult);
+    }
+
+    #[test]
+    fn instantiation_returns_the_type_arguments_in_the_order_of_the_rigids() {
+        let program = program("f : a -> b -> a\nf x y = x");
+        let context = context(&program);
+        let shape = signature_shape(&context, signature(&program));
+        let mut table = Table::new(&context);
+        let first = shape.instantiate(&mut table);
+        let second = shape.instantiate(&mut table);
+        assert_eq!(first.args.len(), 2);
+        assert_ne!(first.args, second.args);
+        let int = table.int;
+        assert!(table.unify(first.args[0], int).is_ok());
+        assert_eq!(
+            table.export(first.ty).display(&program.names).to_string(),
+            "Int -> _ -> Int"
+        );
     }
 
     #[test]
