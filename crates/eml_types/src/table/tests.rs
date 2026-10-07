@@ -10,6 +10,14 @@ fn shown(table: &Table, ty: Ty) -> String {
         .to_string()
 }
 
+fn effect_named(program: &eml_hir::Program, name: &str) -> EffectId {
+    program
+        .effects()
+        .find(|(_, effect)| effect.name == name)
+        .map(|(id, _)| id)
+        .unwrap()
+}
+
 #[test]
 fn constructors_unify_only_with_themselves() {
     let context = test_context();
@@ -447,14 +455,83 @@ fn a_repeated_io_label_resolves_to_one() {
 }
 
 #[test]
+fn a_repeated_io_label_keeps_the_other_labels_in_place() {
+    let program = crate::test_program("effect Fail where\n  fail : Unit -> Unit");
+    let context = Context::new(&program);
+    let mut table = Table::new(&context);
+    let io = Label::plain(table.lang.io);
+    let fail = Label::plain(effect_named(&program, "Fail"));
+    let tail = table.fresh_row_var();
+    let row = Row {
+        labels: vec![io.clone(), fail.clone()],
+        tail: Tail::Var(tail),
+    };
+    assert_eq!(
+        table.unify_row(
+            &Row {
+                labels: Vec::new(),
+                tail: Tail::Var(tail)
+            },
+            &Row::closed(vec![io.clone()])
+        ),
+        Ok(())
+    );
+    assert_eq!(table.resolve_row(&row), Row::closed(vec![io, fail]));
+}
+
+#[test]
+fn a_rigid_callee_row_masks_the_handleable_labels_before_its_variable() {
+    let program = crate::test_program("effect State s where\n  get : Unit -> s");
+    let context = Context::new(&program);
+    let mut table = Table::new(&context);
+    let state = effect_named(&program, "State");
+    let label = Label {
+        effect: state,
+        args: vec![table.int],
+    };
+    let e = table.fresh_rigid_row("e");
+    let callee = Row {
+        labels: Vec::new(),
+        tail: Tail::Var(e),
+    };
+    let ambient = Row {
+        labels: vec![label.clone()],
+        tail: Tail::Var(e),
+    };
+    assert_eq!(table.include_row(&callee, &ambient), Ok(vec![state]));
+}
+
+#[test]
+fn a_mask_cannot_skip_an_effect_the_callee_names() {
+    let program = crate::test_program("effect State s where\n  get : Unit -> s");
+    let context = Context::new(&program);
+    let mut table = Table::new(&context);
+    let state = effect_named(&program, "State");
+    let label = Label {
+        effect: state,
+        args: vec![table.int],
+    };
+    let e = table.fresh_rigid_row("e");
+    let callee = Row {
+        labels: vec![label.clone()],
+        tail: Tail::Var(e),
+    };
+    let ambient = Row {
+        labels: vec![label.clone(), label],
+        tail: Tail::Var(e),
+    };
+    assert_eq!(
+        table.include_row(&callee, &ambient),
+        Err(UnifyError::MaskConflict(state))
+    );
+}
+
+#[test]
 fn labels_of_one_effect_pair_up_in_order() {
     let program = crate::test_program("effect State s where\n  get : Unit -> s");
     let context = Context::new(&program);
     let mut table = Table::new(&context);
-    let (state, _) = program
-        .effects()
-        .find(|&(id, _)| id != table.lang.io)
-        .unwrap();
+    let state = effect_named(&program, "State");
     let label = |args: Vec<Ty>| Label {
         effect: state,
         args,
