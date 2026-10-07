@@ -261,8 +261,9 @@ UI の `check-fail/` は、[テスト](../../implementation/testing.md) の規�
 
 - `eml_core_ir` の `translate.rs`、`simplify.rs`、`perceus.rs` のスナップショットで、`effect IO {` が `effect Prelude.IO {` に、`op$println` などの Prelude の操作の包みが `op$Prelude.println` などになる。ほかは変わらない
 - `eml_core_ir` の `translate.rs:11-13` の assert は、`fn op$Prelude.println(` を期待する形にする。否定の assert は、Prelude のエフェクトの `perform` が出ないことを確かめる形 (`!shown.contains("perform Prelude.IO.")`) にする。名前だけを置き換えると、何も確かめない assert になるためである
-- `eml_hir` の `data.rs`、`lower.rs`、`operators.rs` の HIR のスナップショットで、Prelude の intrinsic でない関数、コンストラクタ、操作への参照に `Prelude.` が付く (`@Prelude.not`、`Prelude.True`、`@Prelude.IO.println`)
-- `eml_syntax` の CST のスナップショットで、handler の節の名前が `PATH` のノードになる
+- `eml_hir` の `lower.rs` と `operators.rs` の HIR のスナップショットで、Prelude の intrinsic でない関数、コンストラクタ、操作への参照に `Prelude.` が付く (`@Prelude.not`、`Prelude.True`、`@Prelude.IO.println`)
+- `eml_syntax` の CST のスナップショットで、handler の節の名前が `PATH` のノードになる。`names.rs` の `a_clause_names_its_operation_with_a_name_ref` は、節の名前が `NAME_REF` でなくなるので `a_clause_names_its_operation_with_a_path` に改名する
+- `eml_hir` の `tests/def_map.rs` の既存の assert は、`Resolver` の結果の型が `Option` と `Lookup` から `Resolved` に変わるので、式を書き換える (`Unusable` は `Silent`、`None` は `NotFound`、`fixity` は `Some(..)`)。確かめる意味は変えない
 
 ### 種類3 (機械的な書き換え)
 
@@ -270,6 +271,7 @@ UI の `check-fail/` は、[テスト](../../implementation/testing.md) の規�
 
 - `Session` と `eml_test_support` の API の変更に伴う呼び出しの書き換え
 - `def_map` の引数の変更に伴う、`def_map` を直接呼ぶ箇所の書き換え (`eml_hir` の `structure.rs`、`eml_types` の `tests/modules.rs` と `test_program`)。1つの補助関数を通す形にそろえる
+- `eml_syntax` の `tests/ast.rs` で、`OpClause::name` を `OpClause::path` に読み替える書き換え
 - `Display` を `ty.display(&names)` に置き換えることに伴う書き換え (`eml_types` の `check.rs` の `.ty.to_string()`、`table/tests.rs`、`ty.rs` の単体テスト)
 
 ## 文書の更新
@@ -281,8 +283,8 @@ UI の `check-fail/` は、[テスト](../../implementation/testing.md) の規�
 - `spec/core-ir.md`: 名前の修飾と、テキストの `perform` を最後の `.` で分けること
 - `spec/types.md`: 71行目の `main` の規則を「入口のモジュールに `main` があれば」にする
 - `spec/examples.md`: 9行目の import を未実装とする記述を消す
-- `implementation/architecture.md`: 読み込みの段と `ModuleSource`、`Session`。「採らなかった形」の `Type` から名前をなくす項目を消す。`def_map` の引数、「`Program` は Prelude と入口のモジュールを持つ」、「`SourceFiles` には Prelude と入口のファイル」を、モジュールの列に合わせて直す
-- `implementation/testing.md`: ディレクトリの UI テストの形とハーネスの検査、`eml_test_support` の複数ファイルの入口、コーパスの `later_stages.em` の説明 (import は実装済みになる)
+- `implementation/architecture.md`: 読み込みの段と `ModuleSource`、`Session`、Prelude に定義を足して読む `load_with_prelude`。持ち上げた関数の名前 (`op$` など) の説明にモジュール名の接頭辞を足す。「採らなかった形」の `Type` から名前をなくす項目を消す。`def_map` の引数、「`Program` は Prelude と入口のモジュールを持つ」、「`SourceFiles` には Prelude と入口のファイル」を、モジュールの列に合わせて直す
+- `implementation/testing.md`: ディレクトリの UI テストの形とハーネスの検査、`eml_test_support` の複数ファイルの入口と `lower_with_prelude`、コーパスの `later_stages.em` の説明 (import は実装済みになる)
 - `implementation/status.md`: 今の言語の範囲。既知の制限から同じ名前の型の表示を消し、`op$open` を `op$Prelude.open` にする
 - `future/roadmap.md`: M2 の節を M2b の分だけ残す
 - `CLAUDE.md`: M2 を実装した構文に含める
