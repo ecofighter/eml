@@ -633,15 +633,21 @@ impl<'t> Parser<'t> {
         if !(self.at_word("mask") && self.peek_at(1) == Some(&Tok::Punct('['))) {
             return Ok(Vec::new());
         }
+        let line = self.line();
         self.pos += 1;
-        self.list('[', ']', |p| {
+        let mask = self.list('[', ']', |p| {
             let line = p.line();
             let word = p.word()?;
             match tag_number(&word) {
                 Some(index) => Ok(index),
                 None => p.effect_id(&word, line),
             }
-        })
+        })?;
+        // `pretty` は空の `mask` を書かない。`mask[]` を受け入れると、表示と同じ形に戻らないテキストが読めてしまう
+        if mask.is_empty() {
+            return Err(error(line, "an empty mask"));
+        }
+        Ok(mask)
     }
 
     /// `mask` を持つのは `Direct`、`Apply`、`Resume` の呼び出しだけである (docs/spec/core-ir.md)。
@@ -1302,6 +1308,14 @@ fn entry$main(c0^) {
         );
         assert_eq!(error.line, 3);
         assert_eq!(error.message, "a mask is only on call, apply and resume");
+    }
+
+    #[test]
+    fn an_empty_mask_is_an_error() {
+        let error =
+            parse_error("fn g(x0) {\n  return x0\n}\nfn f() {\n  tailcall mask[] g(1)\n}\n");
+        assert_eq!(error.line, 5);
+        assert_eq!(error.message, "an empty mask");
     }
 
     #[test]
