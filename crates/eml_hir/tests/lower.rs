@@ -481,3 +481,20 @@ fn an_import_after_a_declaration_is_still_resolved() {
         ["E0011 test.em 4:1"]
     );
 }
+
+#[test]
+fn parts_of_a_broken_import_are_silent_errors() {
+    // `T(..)` と `E(..)` の部品は分からないので、コンストラクタと節の先頭の操作を使った位置も診断を出さない
+    let entry = "import Missing (T(..), E(..))\n\nf : Int -> Int\nf x = match x with\n  | Mk n -> n\n\ng : Unit -> Int\ng () =\n  handle 1 with\n    | get () k -> resume k 2\n    | return x -> x";
+    assert_eq!(module_codes(entry, &[]), ["E1026 test.em 1:8"]);
+}
+
+#[test]
+fn parts_of_a_type_missing_from_the_import_list_are_silent_errors() {
+    let modules = [("A.em", "pub x : Int\nx = 1")];
+    let entry = "import A (T(..), E(..))\n\nf : Int -> Int\nf x = match x with\n  | Mk n -> Mk n\n\ng : Unit -> Int\ng () =\n  handle 1 with\n    | get () k -> resume k 2\n    | return x -> x";
+    assert_eq!(
+        module_codes(entry, &modules),
+        ["E1002 test.em 1:11", "E1002 test.em 1:18"]
+    );
+}

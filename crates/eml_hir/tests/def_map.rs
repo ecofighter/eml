@@ -390,3 +390,27 @@ fn imported_operators_carry_public_fixities() {
     assert_eq!(resolver.fixity(Plain("<%>")), None);
     assert_eq!(resolver.fixity(Plain("<*>")), None);
 }
+
+#[test]
+fn an_import_qualified_as_prelude_does_not_merge_with_the_implicit_qualifier() {
+    // 修飾子が `Prelude` になる import は E1030 で、暗黙の修飾子 `Prelude` と合流させない (docs/spec/modules.md の「Prelude」)
+    let modules = [("A.em", "pub x : Int\nx = 1")];
+    let (map, _) = def_map_files(
+        "import Prelude\nimport Util.Prelude\nimport A as Prelude\n\nnot : Bool -> Bool\nnot b = b",
+        &modules,
+    );
+    let resolver = map.resolver(map.entry());
+    assert_eq!(
+        found_in(&map, resolver.value(qualified("Prelude", "not"))),
+        Some("Prelude")
+    );
+    assert_eq!(
+        resolver.value(qualified("Prelude", "nope")),
+        Resolved::NotFound
+    );
+    assert_eq!(
+        resolver.value(qualified("Prelude", "x")),
+        Resolved::NotFound
+    );
+    assert_eq!(resolver.qualifier_modules("Prelude"), ["Prelude"]);
+}

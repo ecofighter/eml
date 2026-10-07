@@ -134,12 +134,17 @@ struct Imports {
     qualifiers: Vec<Qualifier>,
     values: HashMap<String, Vec<Source<Value>>>,
     types: HashMap<String, Vec<Source<TypeItem>>>,
+    /// 部品の分からない `T(..)` か `E(..)` が並びにある。壊れた import の部品と、並びで報告した型の部品は名前が
+    /// 分からないので、見つからない値の名前をどれも「不明」として扱う (docs/spec/modules.md の「誤りからの回復」)。
+    unknown_parts: bool,
 }
 
 /// 値と型の名前空間を同じ手順で引くための口。
 trait Namespace: Copy {
     fn definitions(scope: &ModuleScope) -> &HashMap<String, Vec<Definition<Self>>>;
     fn imported(imports: &Imports) -> &HashMap<String, Vec<Source<Self>>>;
+    /// どこにも見つからない名前を、診断を出さずに誤りにするか。
+    fn unknown(imports: &Imports) -> bool;
 }
 
 impl Namespace for Value {
@@ -150,6 +155,10 @@ impl Namespace for Value {
     fn imported(imports: &Imports) -> &HashMap<String, Vec<Source<Value>>> {
         &imports.values
     }
+
+    fn unknown(imports: &Imports) -> bool {
+        imports.unknown_parts
+    }
 }
 
 impl Namespace for TypeItem {
@@ -159,6 +168,10 @@ impl Namespace for TypeItem {
 
     fn imported(imports: &Imports) -> &HashMap<String, Vec<Source<TypeItem>>> {
         &imports.types
+    }
+
+    fn unknown(_: &Imports) -> bool {
+        false
     }
 }
 
@@ -611,11 +624,15 @@ impl Imports {
         let file = module.tree.file;
         let mut imports = Imports::default();
         for (import, &target) in module.tree.imports.iter().zip(&module.targets) {
-            imports.qualifiers.push(Qualifier {
-                name: import.qualifier.0.clone(),
-                target,
-                import: import.range,
-            });
+            // 修飾子が `Prelude` になる import は読み込みの段が E1030 にした。暗黙の修飾子 `Prelude` と合流させないため、
+            // 修飾子には登録しない (docs/spec/modules.md の「Prelude」)
+            if import.qualifier.0 != scopes[0].name {
+                imports.qualifiers.push(Qualifier {
+                    name: import.qualifier.0.clone(),
+                    target,
+                    import: import.range,
+                });
+            }
             let target_scope = match target {
                 ImportTarget::Module(id) => Some(&scopes[index(id)]),
                 ImportTarget::Broken => None,
@@ -629,14 +646,11 @@ impl Imports {
                         push_source(&mut imports.values, name, item, import.range);
                     }
                     ImportName::Type { name, range, all } => {
-                        let Some(scope) = target_scope else {
+                        let Some((scope, (item, public))) = target_scope.and_then(|scope| {
+                            Some((scope, scope.export_type(name, (file, *range), diagnostics)?))
+                        }) else {
                             push_source(&mut imports.types, name, None, import.range);
-                            continue;
-                        };
-                        let Some((item, public)) =
-                            scope.export_type(name, (file, *range), diagnostics)
-                        else {
-                            push_source(&mut imports.types, name, None, import.range);
+                            imports.unknown_parts |= *all;
                             continue;
                         };
                         push_source(
@@ -1028,16 +1042,20 @@ impl<'a> Resolver<'a> {
         if let Some(hit) = decide(found, broken) {
             return hit;
         }
-        let Some(prelude) = self.prelude() else {
-            return Hit::NotFound;
-        };
-        V::definitions(prelude)
-            .get(name)
-            .into_iter()
-            .flatten()
-            .filter(|definition| definition.usable && definition.public)
-            .find_map(|definition| kind(definition.item))
-            .map_or(Hit::NotFound, Hit::Found)
+        let from_prelude = self.prelude().and_then(|prelude| {
+            V::definitions(prelude)
+                .get(name)
+                .into_iter()
+                .flatten()
+                .filter(|definition| definition.usable && definition.public)
+                .find_map(|definition| kind(definition.item))
+        });
+        match from_prelude {
+            Some(item) => Hit::Found(item),
+            // 部品の分からない `T(..)` は Prelude の名前を隠さない。名前を知らないので、どの名前を隠すかも決まらない
+            None if V::unknown(&own.imports) => Hit::Broken,
+            None => Hit::NotFound,
+        }
     }
 
     /// 修飾子のモジュールだけを引く。合流した修飾子では、すべてのモジュールを合わせて引く (docs/spec/modules.md の
