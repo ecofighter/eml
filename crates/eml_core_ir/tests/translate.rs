@@ -913,3 +913,44 @@ fn a_resume_in_its_clause_has_no_mask() {
     }
     ");
 }
+
+/// 節の中の handle の本体にある `resume` は、その handle が足したラベルを飛ばす。型検査が `resume` の式の矢印 0 に
+/// 記録した `mask` を使う。
+#[test]
+fn a_resume_inside_an_inner_handle_is_masked() {
+    let text = "\
+effect Ask where
+  ask : Unit -> Int
+
+effect Log where
+  log : String -> Unit
+
+f : (Unit -> <Ask | e> Int) -> <e> Int
+f action =
+  handle action () with
+    | ask () k ->
+        handle resume k 1 with
+          | log m k2 ->
+              resume k2 ()
+
+act : Unit -> <Ask, Log> Int
+act () =
+  let n = ask ()
+  log \"after\"
+  n + 1
+
+main : Unit -> <IO> Unit
+main () =
+  let r = handle f act with
+            | log m k ->
+                println (\"outer \" ++ m)
+                resume k ()
+  println (show_int r)
+";
+    insta::assert_snapshot!(function(&core_text(text, Pass::Translate), "f$handle1"), @"
+    fn f$handle1(k0^, p1) {
+      let t2 = mask[Log] resume k0(1, ())
+      return t2
+    }
+    ");
+}
