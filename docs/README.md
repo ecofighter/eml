@@ -22,14 +22,14 @@ eml を実装するエージェントとプログラマのための文書群で�
 | [spec/core-ir.md](spec/core-ir.md) | 規範 | Core IR の構成、評価と所有権の意味、パスの境界の不変条件、実行時エラー |
 | [spec/runtime.md](spec/runtime.md) | 規範 | ヒープと参照カウント、`eml_runtime` の API、マルチコアに備えた予防的な決定 |
 | [spec/diagnostics.md](spec/diagnostics.md) | 規範 | 診断のデータ構造、診断の順、番号の範囲と各番号の意味、連鎖する診断の抑止 |
-| [spec/examples.md](spec/examples.md) | 説明 | 本番の構文で書いたプログラム例 |
+| [spec/examples.md](spec/examples.md) | 説明 | まだ動かない、本番の構文で書いたプログラム例 |
 | **implementation/** | 手引き | どう作るか、今どこまでできているか |
 | [implementation/architecture.md](implementation/architecture.md) | 手引き | プログラム全体の構成と採らなかった形、crate の構成、各段階の規律、エラー回復、各 crate の内部、CLI と lib API、`simplify` の書き換え、継続のフレーム、構文解析と名前解決の回復 |
 | [implementation/testing.md](implementation/testing.md) | 手引き | テスト戦略、テストの変更の運用、テストの置き場所、UI テスト、Core IR のテキストの形、文書の引用の検査 |
 | [implementation/status.md](implementation/status.md) | 手引き | 今の言語の範囲、既知の制限 |
 | [implementation/diagnostics.md](implementation/diagnostics.md) | 手引き | 番号ごとの診断が指す場所、help と fix の文言と付ける条件、型エラー・線形性・網羅性の診断の表示 |
 | **future/** | 将来の設計 | まだ実装しない方針 |
-| [future/roadmap.md](future/roadmap.md) | 将来の設計 | 今後のマイルストーン (M3〜M9) と、その後の項目 (型システム、言語機能と構文、処理系、マルチコア) |
+| [future/roadmap.md](future/roadmap.md) | 将来の設計 | 再設計の段 (S1〜S5)、その後の言語の項目と処理系の項目 |
 | [future/multicore.md](future/multicore.md) | 将来の設計 | マルチコア対応の設計 (共有の印方式の RC、`par`、並行処理、継続の移動) |
 | [future/stdlib.md](future/stdlib.md) | 将来の設計 | 標準ライブラリ spec への申し送り |
 | [future/evidence-passing.md](future/evidence-passing.md) | 将来の設計 | ネイティブ化でのエフェクトの実装 (generalized evidence passing、すぐに再開する節、多重度ごとの実装) |
@@ -53,6 +53,6 @@ eml を実装するエージェントとプログラマのための文書群で�
 - `spec/` が実装の規範である。仕様を変えるときは、まず `spec/` の該当文書を直す。
 - `implementation/status.md` は実装の現在地を書く。実装が進んだら更新する。
 - `future/` の内容はまだ実装しない。実装に進むときは、決まった部分を `spec/` に移す。今の実装に入れた予防的な決定は、すでに [spec/runtime.md](spec/runtime.md) などに反映してある。
-- 今後のマイルストーンと将来の論点の一覧は [future/roadmap.md](future/roadmap.md) を正とする。マルチコア、標準ライブラリ、エフェクトのネイティブな実装の詳細は、それぞれ [future/multicore.md](future/multicore.md)、[future/stdlib.md](future/stdlib.md)、[future/evidence-passing.md](future/evidence-passing.md) にある。
+- 今後の段と将来の論点の一覧は [future/roadmap.md](future/roadmap.md) を正とする。マルチコア、標準ライブラリ、エフェクトのネイティブな実装の詳細は、それぞれ [future/multicore.md](future/multicore.md)、[future/stdlib.md](future/stdlib.md)、[future/evidence-passing.md](future/evidence-passing.md) にある。
 - 構文で迷ったときは Haskell の慣習に寄せる。
 - 文書は日本語で書く。

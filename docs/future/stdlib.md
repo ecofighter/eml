@@ -13,7 +13,7 @@
 - `exit`: `never` の操作として、`IO` 側に用意する。終了コードはこれで扱う
 - `Prelude` の範囲: `Option`、`Result`、`List`、`Bool`、`println` / `eprintln`、`show_int`、`not`、`|>` などの標準の演算子と fixity ([宣言](../spec/declarations.md) の標準の演算子の表)。S4 で組み込みのクラス `Eq`、`Ord`、`Show` が入り、`Float`、`Char`、`Num` の段で `Num` が入る。`show_int` は S4 までの中継ぎである ([ロードマップ](roadmap.md) の「S4 スクリプトの MVP」)
 - モジュールの候補: `Fs`、`Path`、`Proc`、`Env`、`String`、`List`、`Map`、`Json`、`Csv`、`Toml`、`Regex`、`Http`、`Async`
-- 補間の穴は M5 まで `String` のみ: それまでは各型に `show_*` 関数を揃える。M5 で穴を表示用のクラスに広げる
+- 補間の穴は当面 `String` のみ: それまでは各型に `show_*` 関数を揃える。穴を `Show` に広げるかは S4 で決める
 - `Bytes` と UTF-8: `String` は常に妥当な UTF-8 である。extern は、検証付きのデコード、エンコード、バイト長、バイト位置から `Char` と次の位置を読む操作、境界を検査する切り出しにとどめる。分割、検索、反復は、S4 では Rust の extern として入れる。eml で書き直すかは後で決める ([ロードマップ](roadmap.md) の「UTF-8 と標準ライブラリ」)
 
 ## マルチコア対応の設計からの申し送り
@@ -31,5 +31,5 @@
 - 並行処理のライブラリ: `Async` の handler、`spawn`、channel
 - 並行処理用の共有の可変状態: channel や atomic な参照などのプリミティブを、`IO` か `Async` の側に用意する。`Heap` では、並行タスクの間で共有する可変状態を書けないため
 - `freeze`: 一意性だけが理由の `Lin` な型 (後始末のない可変バッファなど) には、型ごとに `freeze` を用意する (例: `freeze : MutArray a -> Array a`)。後始末を持つ型には定義しない
-- 配列: `Array a` と `Bytes` は意味が不変の値で、RC が 1 ならその場で書き換える (M7)。分割と結合と並列の書き換えのために、`Lin` の `MutArray` を後で足す。`write : MutArray a -> Int -> a -> MutArray a` のように値を線形に受け渡す API と、分割と結合のプリミティブを持つ。Perceus の reuse analysis が前提になる
+- 配列: `Array a` と `Bytes` は意味が不変の値で、RC が 1 ならその場で書き換える (バイト列と `Array` の段)。分割と結合と並列の書き換えのために、`Lin` の `MutArray` を後で足す。`write : MutArray a -> Int -> a -> MutArray a` のように値を線形に受け渡す API と、分割と結合のプリミティブを持つ。Perceus の reuse analysis が前提になる
 - `trace` は用意しない: row に現れないデバッグ出力の抜け道は作らない

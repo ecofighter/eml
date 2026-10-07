@@ -256,8 +256,8 @@ fn atom(p: &mut Parser) -> Option<CompletedMarker> {
             LITERAL
         }
         COMMAND => {
-            // コマンドリテラルは中身の穴を M9 で lexer のモードと一緒に読むので、パーサが E0004 を出す例外である
-            // (docs/implementation/status.md の「未対応の構文と E0004」)
+            // コマンドリテラルは中身の穴をコマンドリテラルの段で lexer のモードと一緒に読むので、
+            // パーサが E0004 を出す例外である (docs/implementation/status.md の「未対応の構文と E0004」)
             not_yet_supported(p, "command literals are not supported yet");
             p.bump_any();
             LITERAL

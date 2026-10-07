@@ -1,5 +1,5 @@
-//! 文字列、複数行の文字列、raw 文字列、コマンドリテラルの字句。補間、複数行の文字列、raw 文字列は M3、コマンド
-//! リテラルは M9 で実装する。今は閉じまでを1つのトークンにして、診断を1件だけ出す。
+//! 文字列、複数行の文字列、raw 文字列、コマンドリテラルの字句。補間、複数行の文字列、raw 文字列は S4、コマンド
+//! リテラルはコマンドリテラルの段で実装する。今は閉じまでを1つのトークンにして、診断を1件だけ出す。
 
 use super::Lexer;
 use crate::SyntaxKind::*;
@@ -82,7 +82,7 @@ impl Lexer<'_> {
         end
     }
 
-    /// 補間は M3 で実装する。今は対応する `}` まで読み飛ばして E0004 を出す。穴の中の文字列も読み飛ばすのは、
+    /// 補間は S4 で実装する。今は対応する `}` まで読み飛ばして E0004 を出す。穴の中の文字列も読み飛ばすのは、
     /// `"\{f "x"}"` の内側の `"` で外側の文字列を終わらせないため。
     pub(super) fn interpolation(&mut self, i: usize) -> usize {
         let text = self.text;
@@ -116,7 +116,7 @@ impl Lexer<'_> {
         j
     }
 
-    /// M3 で実装する。今は閉じの `"""` までを1つのトークンにして、HIR が E0004 を1件だけ出せるようにする
+    /// S4 で実装する。今は閉じの `"""` までを1つのトークンにして、HIR が E0004 を1件だけ出せるようにする
     /// (docs/implementation/status.md の「未対応の構文と E0004」)。
     pub(super) fn multiline_string(&mut self) {
         let text = self.text;
@@ -137,7 +137,7 @@ impl Lexer<'_> {
         self.push(MULTILINE_STRING, end);
     }
 
-    /// M3 で実装する。今は閉じまでを1つのトークンにして、HIR が E0004 を1件だけ出せるようにする
+    /// S4 で実装する。今は閉じまでを1つのトークンにして、HIR が E0004 を1件だけ出せるようにする
     /// (docs/implementation/status.md の「未対応の構文と E0004」)。
     pub(super) fn raw_string(&mut self, hashes: usize) {
         let text = self.text;
@@ -160,7 +160,8 @@ impl Lexer<'_> {
         self.push(RAW_STRING, end);
     }
 
-    /// M9 で実装する。今は閉じのバッククォートまでを1つのトークンにして、parser が E0004 を1件だけ出せるようにする。
+    /// コマンドリテラルの段で実装する。今は閉じのバッククォートまでを1つのトークンにして、
+    /// parser が E0004 を1件だけ出せるようにする。
     pub(super) fn command(&mut self) {
         let text = self.text;
         let start = self.pos;

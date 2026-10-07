@@ -433,8 +433,8 @@ impl BodyCheck<'_, '_> {
     /// 引数に渡せるようにするため (docs/spec/types.md の「推論」)。局所変数の型は開かない。スキームから複写する Kind
     /// の制約は、参照した場所を由来にする。
     ///
-    /// トップレベルの値の参照は、参照ごとの具体化の表に型引数を記録する。M4 と M5 が型ごとの解決に使う
-    /// (docs/implementation/architecture.md の「`eml_types` の内部」)。
+    /// トップレベルの値の参照は、参照ごとの具体化の表に型引数を記録する。S4 の組み込みのクラスと、
+    /// 後の型クラスが型ごとの解決に使う (docs/implementation/architecture.md の「`eml_types` の内部」)。
     fn path(&mut self, id: ExprId, res: Res, range: TextRange, open: bool) -> Ty {
         let program = self.program;
         let (decl, name) = match res {

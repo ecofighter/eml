@@ -44,7 +44,7 @@ pub(crate) fn int_value(text: &str) -> Option<i64> {
     i64::from_str_radix(body, radix).ok()
 }
 
-/// 通常の文字列リテラル `"..."` の値。補間を含むもの (M3)、不正なエスケープを含むもの、閉じていないものは `None`
+/// 通常の文字列リテラル `"..."` の値。補間を含むもの (S4)、不正なエスケープを含むもの、閉じていないものは `None`
 /// で、どれも字句解析が報告している。
 pub(crate) fn decode_string(text: &str) -> Option<String> {
     if text.len() < 2 {
