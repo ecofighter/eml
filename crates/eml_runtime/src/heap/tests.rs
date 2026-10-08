@@ -601,3 +601,110 @@ fn copying_a_segment_shares_the_state_of_an_attached_handler() {
     heap.decref(k).unwrap();
     assert!(heap.live_objects().is_empty());
 }
+
+/// 文字列のリテラルと同じ形の不死の物体。数は 0 で始まる。
+fn literal(heap: &mut Heap, text: &str) -> ObjRef {
+    heap.alloc_immortal(Payload::Str(text.to_string()))
+}
+
+#[test]
+fn an_immortal_object_counts_the_references_it_hands_out() {
+    let mut heap = Heap::new();
+    let s = literal(&mut heap, "lit");
+    // リテラルの表から作るのは実行の仕事ではないので、写したバイトに数えない
+    assert_eq!(heap.string_bytes_written(), 0);
+    assert_eq!(heap.get(s), Err(HeapError::UseAfterFree));
+    heap.acquire_immortal(s).unwrap();
+    heap.dup(s).unwrap();
+    assert_eq!(heap.live_objects(), [("String".to_string(), 2)]);
+    heap.decref(s).unwrap();
+    assert_eq!(heap.get(s).unwrap(), &Payload::Str("lit".to_string()));
+    heap.decref(s).unwrap();
+    assert!(heap.live_objects().is_empty());
+}
+
+#[test]
+fn an_immortal_object_is_not_freed_at_zero() {
+    let mut heap = Heap::new();
+    let s = literal(&mut heap, "lit");
+    heap.acquire_immortal(s).unwrap();
+    heap.decref(s).unwrap();
+    // スロットは空かないので、次の確保は別のスロットに入り、同じ参照でまた数を増やせる
+    let other = string(&mut heap, "other");
+    assert_ne!(other.index, s.index);
+    heap.acquire_immortal(s).unwrap();
+    assert_eq!(heap.get(s).unwrap(), &Payload::Str("lit".to_string()));
+    heap.decref(s).unwrap();
+    heap.decref(other).unwrap();
+    assert!(heap.live_objects().is_empty());
+}
+
+#[test]
+fn every_operation_on_an_immortal_object_at_zero_is_use_after_free() {
+    let mut heap = Heap::new();
+    let s = literal(&mut heap, "lit");
+    heap.acquire_immortal(s).unwrap();
+    heap.decref(s).unwrap();
+    assert_eq!(heap.get(s), Err(HeapError::UseAfterFree));
+    assert_eq!(heap.get_mut(s), Err(HeapError::UseAfterFree));
+    assert_eq!(heap.dup(s), Err(HeapError::UseAfterFree));
+    assert_eq!(heap.decref(s), Err(HeapError::UseAfterFree));
+    assert_eq!(heap.is_unique(s), Err(HeapError::UseAfterFree));
+    assert_eq!(heap.take(s), Err(HeapError::UseAfterFree));
+    assert_eq!(heap.take_or_copy(s), Err(HeapError::UseAfterFree));
+}
+
+#[test]
+fn an_immortal_object_is_never_unique() {
+    let mut heap = Heap::new();
+    let s = literal(&mut heap, "lit");
+    heap.acquire_immortal(s).unwrap();
+    assert_eq!(heap.is_unique(s), Ok(false));
+    assert_eq!(heap.take(s), Err(HeapError::Shared));
+    // 断った `take` は参照を手放さない
+    assert_eq!(heap.live_objects(), [("String".to_string(), 1)]);
+    heap.decref(s).unwrap();
+    assert!(heap.live_objects().is_empty());
+}
+
+#[test]
+fn take_or_copy_copies_an_immortal_string() {
+    let mut heap = Heap::new();
+    let s = literal(&mut heap, "lit");
+    heap.acquire_immortal(s).unwrap();
+    assert_eq!(heap.take_or_copy(s), Ok(Payload::Str("lit".to_string())));
+    assert_eq!(heap.string_bytes_written(), 3);
+    // 写した後に元の参照を手放すので、数は 0 に戻る
+    assert_eq!(heap.get(s), Err(HeapError::UseAfterFree));
+    assert!(heap.live_objects().is_empty());
+}
+
+#[test]
+fn leaked_references_to_an_immortal_object_are_each_counted() {
+    let mut heap = Heap::new();
+    let s = literal(&mut heap, "lit");
+    // 数が 0 の不死の物体は報告しない
+    literal(&mut heap, "unused");
+    // 1つのリテラルを2回評価して、どちらも手放し忘れた
+    heap.acquire_immortal(s).unwrap();
+    heap.acquire_immortal(s).unwrap();
+    string(&mut heap, "ordinary");
+    assert_eq!(heap.live_objects(), [("String".to_string(), 3)]);
+}
+
+#[test]
+fn releasing_a_parent_releases_its_immortal_child_without_freeing_it() {
+    let mut heap = Heap::new();
+    let s = literal(&mut heap, "lit");
+    heap.acquire_immortal(s).unwrap();
+    let data = heap.alloc(Payload::Data {
+        tag: 0,
+        fields: vec![Value::Obj(s)],
+    });
+    heap.decref(data).unwrap();
+    assert!(heap.live_objects().is_empty());
+    heap.acquire_immortal(s).unwrap();
+    assert_eq!(heap.get(s).unwrap(), &Payload::Str("lit".to_string()));
+    heap.decref(s).unwrap();
+    assert!(heap.live_objects().is_empty());
+}

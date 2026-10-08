@@ -23,7 +23,8 @@ pub struct Program {
     pub functions: Vec<CoreFn>,
     /// 実行の入口。`main` を `()` で呼ぶ、引数のない関数 (docs/spec/core-ir.md)。
     pub entry: FnIdx,
-    /// 文字列リテラルの定数表。`ConstString` が添字で引き、実行のたびに新しい文字列をヒープに作る。
+    /// 文字列リテラルの定数表。`ConstString` と `CasePattern::String` が添字で引く。インタプリタは項目ごとに不死の
+    /// 物体を1つ作り、`ConstString` はその物体の参照を1つ作る (docs/spec/runtime.md)。
     pub strings: Vec<String>,
     /// エフェクトの表。添字は `Call::Handle` と `Call::Perform` のエフェクトの番号で、HIR の `EffectId` の添字と同じである。
     pub effects: Vec<EffectInfo>,
@@ -311,6 +312,8 @@ pub enum Rhs {
     /// extern の関数の呼び出し。その場で実行して値を返す1階の命令で、eml のコードを呼び返さず、継続のフレームも
     /// 積まない。引数の数は表の行と等しく、型で選ぶ行 (`Prelude.==`) は translate が置き換えるので現れない。
     Extern(Extern, Vec<Atom>),
+    /// 文字列リテラルの参照を1つ作る。リテラルは不死の物体だが、ほかの文字列と同じく `dup` と `decref` の釣り合いを
+    /// 保つ。RC の操作を飛ばしてよいのは、検査付きヒープを持たないバックエンドだけである (docs/spec/runtime.md)。
     ConstString(u32),
     /// 引数を持つコンストラクタの値を作る。`args` の所有権は値に移る。引数のないコンストラクタの値は `Atom::Tag` で
     /// ある (docs/spec/core-ir.md)。

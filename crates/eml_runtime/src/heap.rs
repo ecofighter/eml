@@ -130,8 +130,11 @@ impl fmt::Display for HeapError {
     }
 }
 
+/// 普通の物体の `rc` は1以上で、0 になったら解放する。不死の物体 (`immortal`) は解放せず、`rc` は外に出ている参照の
+/// 数である。数が 0 の間は、`acquire_immortal` のほかの操作を断る (docs/spec/runtime.md)。
 struct Header {
     rc: u32,
+    immortal: bool,
 }
 
 struct Object {
@@ -175,30 +178,37 @@ impl Heap {
         if let Payload::Str(text) = &payload {
             self.string_bytes_written += text.len() as u64;
         }
-        let object = Object {
-            header: Header { rc: 1 },
+        self.insert(Object {
+            header: Header {
+                rc: 1,
+                immortal: false,
+            },
             payload,
-        };
-        match self.free.pop() {
-            Some(index) => {
-                let slot = &mut self.slots[index as usize];
-                slot.object = Some(object);
-                ObjRef {
-                    index,
-                    generation: slot.generation,
-                }
-            }
-            None => {
-                self.slots.push(Slot {
-                    generation: 0,
-                    object: Some(object),
-                });
-                ObjRef {
-                    index: self.slots.len() as u32 - 1,
-                    generation: 0,
-                }
-            }
-        }
+        })
+    }
+
+    /// 不死の物体を作る。数は 0 で始まり、`acquire_immortal` が参照を1つずつ作る。文字列のリテラルの表から1回だけ
+    /// 作るので、中身のバイトは実行の仕事として数えない (docs/spec/runtime.md)。
+    pub fn alloc_immortal(&mut self, payload: Payload) -> ObjRef {
+        self.insert(Object {
+            header: Header {
+                rc: 0,
+                immortal: true,
+            },
+            payload,
+        })
+    }
+
+    /// 不死の物体の参照を1つ作る (`Rhs::ConstString`)。数が 0 の物体を使えるのはこの操作だけなので、`object` の
+    /// 判定を通らずにスロットを引く。
+    pub fn acquire_immortal(&mut self, obj: ObjRef) -> Result<(), HeapError> {
+        let object = self.slot_object_mut(obj).ok_or(HeapError::UseAfterFree)?;
+        debug_assert!(
+            object.header.immortal,
+            "`acquire_immortal` takes an immortal object"
+        );
+        object.header.rc += 1;
+        Ok(())
     }
 
     pub fn get(&self, obj: ObjRef) -> Result<&Payload, HeapError> {
@@ -214,20 +224,21 @@ impl Heap {
         Ok(())
     }
 
+    /// 不死の物体は一意にならない。中身を書き換えたり取り出したりすると、同じリテラルのほかの評価に見えるため
+    /// (docs/spec/runtime.md)。
     pub fn is_unique(&self, obj: ObjRef) -> Result<bool, HeapError> {
-        Ok(self.object(obj)?.header.rc == 1)
+        let header = &self.object(obj)?.header;
+        Ok(header.rc == 1 && !header.immortal)
     }
 
     /// 子は再帰ではなく作業リストでたどる。長い連鎖の解放で Rust のスタックを溢れさせないため (docs/spec/runtime.md)。
+    /// 不死の物体は数が 0 になっても解放しない。
     pub fn decref(&mut self, obj: ObjRef) -> Result<(), HeapError> {
         let mut work = vec![obj];
         while let Some(obj) = work.pop() {
-            let remaining = {
-                let rc = &mut self.object_mut(obj)?.header.rc;
-                *rc -= 1;
-                *rc
-            };
-            if remaining == 0 {
+            let header = &mut self.object_mut(obj)?.header;
+            header.rc -= 1;
+            if header.rc == 0 && !header.immortal {
                 let payload = self.release(obj);
                 children(&payload, &mut work);
             }
@@ -235,7 +246,8 @@ impl Heap {
         Ok(())
     }
 
-    /// 一意なオブジェクトを解放して中身を返す。子の所有権は呼び出し側に移る。
+    /// 一意なオブジェクトを解放して中身を返す。子の所有権は呼び出し側に移る。不死の物体は一意にならないので、
+    /// `Shared` で断る。
     pub fn take(&mut self, obj: ObjRef) -> Result<Payload, HeapError> {
         if !self.is_unique(obj)? {
             return Err(HeapError::Shared);
@@ -243,10 +255,10 @@ impl Heap {
         Ok(self.release(obj))
     }
 
-    /// オブジェクトの所有権を受け取って中身を使う側のための手続き。一意なら解放して中身を返す。共有されていれば
-    /// 中身を写し、写した中身の子の参照を1つずつ増やしてから、元の参照を1つ手放す。子は解放と同じ `children` で
-    /// 数えるので、写すときと解放するときで数える参照が一致する。継続オブジェクトは区間のフレームごと写す。フレームを
-    /// 共有させないためである (docs/spec/runtime.md)。
+    /// オブジェクトの所有権を受け取って中身を使う側のための手続き。一意なら解放して中身を返す。共有されているか
+    /// 不死の物体なら中身を写し、写した中身の子の参照を1つずつ増やしてから、元の参照を1つ手放す。子は解放と同じ
+    /// `children` で数えるので、写すときと解放するときで数える参照が一致する。継続オブジェクトは区間のフレームごと
+    /// 写す。フレームを共有させないためである (docs/spec/runtime.md)。
     pub fn take_or_copy(&mut self, obj: ObjRef) -> Result<Payload, HeapError> {
         if self.is_unique(obj)? {
             return self.take(obj);
@@ -327,11 +339,19 @@ impl Heap {
     }
 
     /// まだ解放されていないオブジェクトの数を、種類の名前 (`Payload::kind_name`) ごとに数える。`debug_heap` のリーク
-    /// 検出で使う。
+    /// 検出で使う。不死の物体は解放しないので、外に出ている参照の数を足す。数が 0 なら手放し忘れはないので、何も
+    /// 足さない (docs/spec/runtime.md)。
     pub fn live_objects(&self) -> Vec<(String, usize)> {
         let mut counts: BTreeMap<&'static str, usize> = BTreeMap::new();
         for object in self.slots.iter().filter_map(|slot| slot.object.as_ref()) {
-            *counts.entry(object.payload.kind_name()).or_default() += 1;
+            let count = if object.header.immortal {
+                object.header.rc as usize
+            } else {
+                1
+            };
+            if count > 0 {
+                *counts.entry(object.payload.kind_name()).or_default() += count;
+            }
         }
         counts
             .into_iter()
@@ -339,20 +359,53 @@ impl Heap {
             .collect()
     }
 
+    /// 普通の物体は数が 0 になると解放するので、スロットに残る数 0 の物体は不死の物体だけである。その物体の使用も、
+    /// 解放済みの物体の使用と同じ誤りにする。判定はここと `object_mut` の2か所だけに置く。
     fn object(&self, obj: ObjRef) -> Result<&Object, HeapError> {
         self.slots
             .get(obj.index as usize)
             .filter(|slot| slot.generation == obj.generation)
             .and_then(|slot| slot.object.as_ref())
+            .filter(|object| object.header.rc > 0)
             .ok_or(HeapError::UseAfterFree)
     }
 
     fn object_mut(&mut self, obj: ObjRef) -> Result<&mut Object, HeapError> {
+        self.slot_object_mut(obj)
+            .filter(|object| object.header.rc > 0)
+            .ok_or(HeapError::UseAfterFree)
+    }
+
+    /// 世代番号だけを確かめてスロットの物体を引く。数を見ないので、`object_mut` と `acquire_immortal` のほかは使わない。
+    fn slot_object_mut(&mut self, obj: ObjRef) -> Option<&mut Object> {
         self.slots
             .get_mut(obj.index as usize)
             .filter(|slot| slot.generation == obj.generation)
             .and_then(|slot| slot.object.as_mut())
-            .ok_or(HeapError::UseAfterFree)
+    }
+
+    /// スロットに物体を置く。空いたスロットがあれば使い、その世代番号の参照を返す。
+    fn insert(&mut self, object: Object) -> ObjRef {
+        match self.free.pop() {
+            Some(index) => {
+                let slot = &mut self.slots[index as usize];
+                slot.object = Some(object);
+                ObjRef {
+                    index,
+                    generation: slot.generation,
+                }
+            }
+            None => {
+                self.slots.push(Slot {
+                    generation: 0,
+                    object: Some(object),
+                });
+                ObjRef {
+                    index: self.slots.len() as u32 - 1,
+                    generation: 0,
+                }
+            }
+        }
     }
 
     /// スロットを空けて世代番号を進める。古い `ObjRef` は、以後の検査で解放済みとして見つかる。

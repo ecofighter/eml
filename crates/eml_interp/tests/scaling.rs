@@ -45,3 +45,27 @@ fn concatenation_writes_the_bytes_of_both_sides() {
     assert!(stats.string_bytes_copied >= 4, "{stats:?}");
     assert_eq!(stats.handler_visits, 0);
 }
+
+#[test]
+fn evaluating_a_literal_copies_nothing() {
+    // 文字列のリテラルは不死の物体で、`Rhs::ConstString` は中身を写さずに参照を1つ作る (docs/spec/runtime.md)。
+    // 64 バイトのリテラルを n 回評価して文字列の `Switch` で比べるので、1回でも写すと上限を超える。残る数は
+    // `show_int` の結果の分だけである
+    let literal = "x".repeat(64);
+    let n = 2000;
+    let source = format!(
+        "same : String -> Int\n\
+         same s = match s with\n  | \"{literal}\" -> 1\n  | _ -> 0\n\n\
+         count : Int -> Int -> Int\n\
+         count n acc = if n == 0 then acc else count (n - 1) (acc + same \"{literal}\")\n\n\
+         main : Unit -> <IO> Unit\n\
+         main () = println (show_int (count {n} 0))\n"
+    );
+    let (out, stats) = eml_test_support::run_stats(&source);
+    assert_eq!(out, format!("{n}\n"));
+    let stats = stats.unwrap();
+    assert!(
+        stats.string_bytes_copied < literal.len() as u64,
+        "{stats:?}"
+    );
+}

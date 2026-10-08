@@ -39,6 +39,8 @@ pub(crate) struct Machine<'p> {
     slots: Vec<Option<Value>>,
     /// 継続の先頭のフレーム。最下部には常に `Frame::Root` がある。
     pub(crate) cont: ObjRef,
+    /// `Program::strings` の項目ごとの不死の物体。`Rhs::ConstString` は写さずに参照を1つ作る (docs/spec/runtime.md)。
+    literals: Vec<ObjRef>,
     /// `find_handler` が調べたフレームの数 (`RunStats::handler_visits`)。
     pub(crate) handler_visits: u64,
 }
@@ -47,6 +49,11 @@ impl<'p> Machine<'p> {
     pub(crate) fn new(program: &'p Program, out: &'p OutputSink, file_root: &'p Path) -> Self {
         let mut heap = Heap::new();
         let cont = heap.alloc(Payload::Frame(Frame::Root));
+        let literals = program
+            .strings
+            .iter()
+            .map(|text| heap.alloc_immortal(Payload::Str(text.clone())))
+            .collect();
         let entry = program.function(program.entry);
         Machine {
             program,
@@ -57,6 +64,7 @@ impl<'p> Machine<'p> {
             control: entry.body,
             slots: vec![None; entry.vars.len()],
             cont,
+            literals,
             handler_visits: 0,
         }
     }
@@ -147,8 +155,9 @@ impl<'p> Machine<'p> {
         let value = match rhs {
             Rhs::Atom(atom) => self.atom(atom)?,
             Rhs::ConstString(index) => {
-                let text = self.program.strings[*index as usize].clone();
-                Value::Obj(self.heap.alloc(Payload::Str(text)))
+                let literal = self.literals[*index as usize];
+                self.heap.acquire_immortal(literal).map_err(Fault::Heap)?;
+                Value::Obj(literal)
             }
             Rhs::Extern(e, args) => {
                 let args = self.atoms(args)?;
