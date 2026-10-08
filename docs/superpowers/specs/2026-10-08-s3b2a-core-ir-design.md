@@ -94,21 +94,21 @@ verifier が検査する。
 - `switch` は case を選び、`Case` のフィールドに書いてから、行き先の先頭へ進む
 - `Unpack` は、S3b-2a では消費する `switch` と同じく `take_or_copy` し、タグを確かめる。違えば内部の誤りである
 - `Frame::Return` の再開の番地は、実行する側が意味を決める `u64` にする。`eml_runtime` はその中身を解釈しない。インタプリタは、呼び出しの文の `(ブロック, 文)` を入れる。戻ったら、その文の `Let` の変数に結果を入れ、次の文から続ける。`Frame::Return.bind` は削除し、`saved` の鍵は「実行する側が決めるスロットの番号」と文書に書く。将来のバイトコード VM は、ここに自分の `pc` を入れる
-- 実行時エラーは `RuntimeError::Fault { fault, function, at: Option<SourceLocation { path, line, column }> }` にする。位置を持つ `Rhs::Extern` が起こした誤りにだけ、その位置を付ける。表示は次の2つである
+- 実行時エラーは `RuntimeError::Fault { fault, function, at: Option<SourceLocation { path, line, column }> }` にする。位置を持つ `Rhs::Extern` の呼び出しの中で起きた誤りにだけ、その位置を付ける。ヒープや内部の誤りでも、extern の中で起きたなら付ける。引数の読み出し、`dup`、`decref`、`switch`、`Unpack` で起きた誤りには付けない。表示は次の2つである
 
   ```
   {fault}
     at {path}:{line}:{column}
   ```
 
-  位置がないとき (ヒープ、内部の誤り、位置のない手書きの IR) は、今と同じ ``{fault} in `{function}` `` にする。リークの表示は変えない
+  位置がないとき (extern の外で起きた誤り、位置のない手書きの IR) は、今と同じ ``{fault} in `{function}` `` にする。リークの表示は変えない
 
 ### translate
 
 **組み立て方**
 
 - 前から組み立てる。`FnBuilder` は、文を足す (`emit`)、終端を置いてブロックを閉じる (`terminate`)、ラベルを作る (`new_label`)、ラベルをブロックとして置いて今のブロックにする (`place`)、開いたままのブロックに戻る (`reopen`) を持つ。複数のブロックを開いたまま持てる
-- 終端はラベルを指し、`finish` が1回のループでラベルを `BlockId` に写す。ブロックは置いた順に番号が付き、この順は前向きの辺だけになる
+- ラベルは、置いたときに初めてブロックになる。ブロックは置いた順に番号が付き、この順は前向きの辺だけになる。`finish` は、たたんだブロックを除いて番号を1回のループで詰める
 
 **ラベルの解決**
 
@@ -145,7 +145,7 @@ verifier が検査する。
    - 葉が1つの枝は、その葉のブロックで変換し、枝の変数を出現のアトムに対応させる (別名の `let` を作らない)
    - 葉が2つ以上の枝は、葉から枝のブロックへ `jump` し、枝のブロックを木の後に置く
 
-- `Unpack` を出すのは、コンストラクタが1つだけの型で、フィールドが1つ以上あるときだけである
+- `Unpack` を出すのは、コンストラクタが1つだけの型で、フィールドが1つ以上あり、値が `obj` の変数のときだけである。`tobj` の値は、case が1つの `switch` で分ける (R8)
 - フィールドのない唯一のコンストラクタは、`()` と同じくワイルドカードとして扱い、何も出さない
 
 **タプルの列**
@@ -199,10 +199,10 @@ verifier が検査する。
 - **Perceus:** ブロックを前からたどり、その場で書き換える
   - `switch` の行き先の入口は、(`switch` の前の所有 − scrutinee) に RC の対象のフィールドを足したものを所有する。S3b-2a では、行き先が scrutinee を使うなら `switch` の前で `dup` する (今と同じ)
   - 合流するブロックの入口は、(入口の生存集合 − 引数) のうち RC の対象と、RC の対象の引数を所有する
-  - ブロックの先頭で、所有していて死んでいる変数を `decref` する。各文の後で、その文が定義した RC の対象の変数のうち死んでいるものを `decref` する。`jump` の前で、渡さない所有を `decref` する
+  - ブロックの先頭で、所有していて死んでいる変数を `decref` する。各文の後で、その文が定義した RC の対象の変数のうち死んでいるものを `decref` する。ブロックの先頭と定義の直後で手放すので、`jump` の前に、渡さない所有は残らない
   - `saved` は、呼び出しの後で生きている変数から、結果の変数を除いたものである
   - 終端を「文と新しい終端」に置き換える編集を、その場でできる形にしておく (S3b-2b の `TailCall` の降格のため)
-- **verifier:** ブロックを前からたどる1回のループで、次を行う。生存解析は使わない
+- **verifier:** ブロックを前からたどる線形のパスを3回 (辺と支配木、支配木の前順と後順の番号、本体の検査) 行う。不動点の反復と生存解析は使わない
   - 支配木を Cooper-Harvey-Kennedy の方法で求める。番号の順が前向きなので1回で済む
   - 変数ごとに定義の位置 (ブロック、文。引数は -1) を記録し、支配を前順と後順の番号で調べる
   - 所有の多重集合は、合流を待つブロックごとに疎に持つ
@@ -245,6 +245,10 @@ b3(t.3: int):
 - 呼び出しの結果に対する case-of-case と、translate の後に現れる case-of-case。将来のインライン化と一緒に、jump threading として入れる
 - ループ化 (後ろ向きの辺)、バイトコード VM、ネイティブ化
 - `decide` のパターンの大きさの分の再帰
+- `simplify` が行っていた次の書き換え。jump threading と一緒に考える
+  - 値を渡すだけの合流のブロックの転送
+  - 枝の中で、タグが分かっている scrutinee をそのタグに置き換えること
+  - 引数が2つ以上で、返すだけのブロックのたたみ込み
 
 ## テスト
 
@@ -269,6 +273,7 @@ b3(t.3: int):
   - `eml_diagnostics`: 大きなファイルでの `line_col`
   - 往復: 2万の条件を持つ IR で、debug ビルドの pretty → parse → pretty
   - UI の run テスト: `data Token = Token` を、引数、`let`、case の枝で使う
+  - UI の run-fail テスト: 取り込んだモジュールで起きた実行時エラーが、そのモジュールのファイルの位置を出す
 
 ### テストの変更
 
@@ -296,7 +301,7 @@ b3(t.3: int):
 - run-fail のスナップショット7本 (`tests/ui/run-fail/{basics,files}`) と `crates/eml_cli/tests/cli.rs` の stderr の比較。位置が付き、関数の名前が消える
 - 深さのテスト
   - `a_long_run_of_if_statements_is_verified_in_linear_time` (`tests/verify.rs`) と、`eml_interp/tests/run.rs` の文の `if` の連鎖のテストを、`step : Bool -> <IO> Unit` に `if b then ..` を並べる形に書き直し、`switch` が N 個出ることも確かめる。今の `if True` は定数としてたたまれ、`switch` が出なくなるためである
-  - 1000 の共有された枝のテストは、scrutinee を引数にする
+  - 1000 の共有された枝のテストを、scrutinee を引数にして translate と `eml_interp/tests/run.rs` に足す。S3b-1 の時点では、この深さのテストはなく、status.md の既知の制限だけがあった
 - `eml_test_support/tests/support.rs::core_until_stops_after_the_named_pass` と `eml_cli/tests/api.rs::compile_until_stops_after_the_named_pass`。join と `captures` の代わりに、DCE を証拠にする
 - `tests/verify.rs` の合流のテストを、R6 のテストに書き直す
 - `eml_runtime` のヒープのテストのうち、`Frame::Return` の値を比べるもの
@@ -323,15 +328,13 @@ b3(t.3: int):
 
 ## 更新する文書
 
-作業の途中で直すもの。
+v2 のモジュールで段階を踏むので、新しい名前は切り替えのタスクで初めて決まる。そのため、次の文書はすべて切り替えの後にまとめて直す。
 
 - `docs/spec/core-ir.md` を書き直す。ブロックの列、R1〜R8、並列な代入、`Unpack`、フィールドの束縛の規則、Repr の表と `ret`、位置、実行時エラーの形、要求としての `TailCall`、パスの順と各パスの境界の不変条件、生存解析を使わない verifier
 - `docs/implementation/testing.md`: Core IR のテキストの形、置き場所の表の記述、パスごとの規則、`runtime/` の分類の説明
 - `docs/future/evidence-passing.md`: join point を「引数を持つ合流のブロック」に、「`simplify` などのパス」を「translate と Perceus の間のパス」に直す
 - `docs/README.md` の行
 - `CLAUDE.md`: パイプライン、`Pass` の名前、`eml_diagnostics` を使う crate の一覧、Core IR の記述
-
-段の終わりに1回で直すもの。
 
 - `docs/implementation/architecture.md`: `eml_core_ir` の内部、builder、パス、インタプリタの制御と再開の番地、`eml_core_ir` から `eml_diagnostics` への依存
 - `docs/implementation/status.md`: `extern$` の制限と、共有された枝の深さの制限を、それぞれを確かめるテストが入ってから消す
@@ -340,7 +343,7 @@ b3(t.3: int):
   - S3b-2 の論点 (縮約パスの範囲、E0013 と深さ、別名の伝播と定数の畳み込み) を閉じる
   - 処理系の項目に「ブロックの引数を通した既知のコンストラクタの jump threading」を足す。インライン化と一緒に入れること、R3 を守る作り方 (辺のブロックと合流のブロック、番号の振り直し、到達しないブロックの掃除)、最初の段として合流の引数のタプルを展開する規則を書く
   - ループ化の項目を、印を付けたループの頭へ戻る後ろ向きの辺を許す形で書き直す
-  - backtrace の項目の例を、場所ごとのラッパーの名前に直す
+  - backtrace の項目を、位置が付いた後に残るもの (呼び出しの連なりと、extern の外で起きた誤りの表示) に書き直す
 - `docs/superpowers/specs/2026-10-07-redesign-design.md` の S3 の記述 (「ブロック木」を「前向きの辺だけの基本ブロックの列」に)
 
 最後に、`grep -rn -e 'join point' -e simplify -e captures -e アリーナ -e 'extern\$' -e 'ブロック構造の木' docs CLAUDE.md` が、意図して残す記述だけを出すことを確かめる。
