@@ -20,21 +20,28 @@ impl Machine<'_> {
         let tag = |b: bool| Value::Tag(if b { TRUE } else { FALSE });
         Ok(match e {
             Extern::Println => {
-                let text = self.take_string(args[0])?;
-                self.out
-                    .write_str(&format!("{text}\n"))
-                    .map_err(|error| Fault::Output(error.to_string()))?;
+                let (obj, text) = self.string(args[0])?;
+                // 中身を借りたまま書き、書き終えてから手放す。書けなかったときも参照は手放す
+                let written = self.out.write_line(text);
+                self.heap.decref(obj).map_err(Fault::Heap)?;
+                written.map_err(|error| Fault::Output(error.to_string()))?;
                 Value::Unit
             }
             Extern::Open => {
-                let path = self.take_string(args[0])?;
+                let (obj, path) = self.string(args[0])?;
+                // パスは `FileHandle` か誤りの文言が持つので、ここで1回だけ写す
+                let path = path.to_string();
+                self.heap.decref(obj).map_err(Fault::Heap)?;
                 // 絶対パスなら `join` がそのパスを返す
-                let file = std::fs::File::open(self.file_root.join(&path)).map_err(|error| {
-                    Fault::FileOpen {
-                        path: path.clone(),
-                        reason: io_reason(error.kind()),
+                let file = match std::fs::File::open(self.file_root.join(&path)) {
+                    Ok(file) => file,
+                    Err(error) => {
+                        return Err(Fault::FileOpen {
+                            path,
+                            reason: io_reason(error.kind()),
+                        });
                     }
-                })?;
+                };
                 let handle = FileHandle::new(path, Box::new(file));
                 Value::Obj(self.heap.alloc(Payload::File(handle)))
             }
@@ -79,16 +86,15 @@ impl Machine<'_> {
                 let text = int(0)?.to_string();
                 Value::Obj(self.heap.alloc(Payload::Str(text)))
             }
-            Extern::StrConcat => {
-                let left = self.take_string(args[0])?;
-                let right = self.take_string(args[1])?;
-                Value::Obj(self.heap.alloc(Payload::Str(left + &right)))
-            }
-            // extern は引数の所有権を受け取るので、比べた後に両方の文字列を手放す (`take_string`)
+            Extern::StrConcat => self.concat(args[0], args[1])?,
             Extern::StrEq | Extern::StrNe => {
-                let left = self.take_string(args[0])?;
-                let right = self.take_string(args[1])?;
-                tag((left == right) == (e == Extern::StrEq))
+                let (left, head) = self.string(args[0])?;
+                let (right, tail) = self.string(args[1])?;
+                let equal = head == tail;
+                // extern は引数の所有権を受け取るので、比べた後に両方の文字列を手放す
+                self.heap.decref(left).map_err(Fault::Heap)?;
+                self.heap.decref(right).map_err(Fault::Heap)?;
+                tag(equal == (e == Extern::StrEq))
             }
             Extern::BoolEq | Extern::BoolNe => {
                 let (Value::Tag(left), Value::Tag(right)) = (args[0], args[1]) else {
@@ -139,22 +145,36 @@ impl Machine<'_> {
         })))
     }
 
-    /// extern は引数の所有権を受け取るので、読んだ文字列は decref する。
-    pub(crate) fn take_string(&mut self, value: Value) -> Result<String, Fault> {
+    /// `++`。左辺が一意なら、右辺をその場で足して右辺だけを手放す。共有された左辺と不死のリテラルは書き換えられない
+    /// ので、両辺の長さの和の容量で新しい文字列を作り、両辺を手放す。`x ++ x` は Perceus の `dup` で RC が 2 になって
+    /// 届くので、写す側に進む (docs/spec/runtime.md の「ランタイムの API」)。
+    fn concat(&mut self, left: Value, right: Value) -> Result<Value, Fault> {
+        let (left, head) = self.string(left)?;
+        let (right, tail) = self.string(right)?;
+        let joined = if self.heap.is_unique(left).map_err(Fault::Heap)? {
+            self.heap.append_str(left, right).map_err(Fault::Heap)?;
+            left
+        } else {
+            let mut text = String::with_capacity(head.len() + tail.len());
+            text.push_str(head);
+            text.push_str(tail);
+            self.heap.decref(left).map_err(Fault::Heap)?;
+            self.heap.alloc(Payload::Str(text))
+        };
+        self.heap.decref(right).map_err(Fault::Heap)?;
+        Ok(Value::Obj(joined))
+    }
+
+    /// 文字列の物体の参照と中身。中身は借りるだけで写さない。extern は引数の所有権を受け取るので、呼び出し側が中身を
+    /// 使い終えてから参照を手放す。
+    fn string(&self, value: Value) -> Result<(ObjRef, &str), Fault> {
+        let not_a_string = Fault::Internal("a string operation on a value that is not a string");
         let Value::Obj(obj) = value else {
-            return Err(Fault::Internal(
-                "a string operation on a value that is not a string",
-            ));
+            return Err(not_a_string);
         };
-        let text = match self.heap.get(obj).map_err(Fault::Heap)? {
-            Payload::Str(text) => text.clone(),
-            _ => {
-                return Err(Fault::Internal(
-                    "a string operation on a value that is not a string",
-                ));
-            }
-        };
-        self.heap.decref(obj).map_err(Fault::Heap)?;
-        Ok(text)
+        match self.heap.get(obj).map_err(Fault::Heap)? {
+            Payload::Str(text) => Ok((obj, text)),
+            _ => Err(not_a_string),
+        }
     }
 }

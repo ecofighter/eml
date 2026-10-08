@@ -27,6 +27,14 @@ impl OutputSink {
         writer.write_all(text.as_bytes())?;
         writer.flush()
     }
+
+    /// `println` のため。中身を写して改行を付けた文字列を作らずに書き、flush は1回だけにする。
+    pub fn write_line(&self, text: &str) -> io::Result<()> {
+        let mut writer = self.0.borrow_mut();
+        writer.write_all(text.as_bytes())?;
+        writer.write_all(b"\n")?;
+        writer.flush()
+    }
 }
 
 /// `OutputSink::capture` が捕まえた出力。
@@ -73,5 +81,12 @@ mod tests {
         sink.write_str("hello ").unwrap();
         clone.write_str("world\n").unwrap();
         assert_eq!(captured.contents(), "hello world\n");
+    }
+
+    #[test]
+    fn write_line_ends_the_text_with_a_newline() {
+        let (sink, captured) = OutputSink::capture();
+        sink.write_line("hello").unwrap();
+        assert_eq!(captured.contents(), "hello\n");
     }
 }

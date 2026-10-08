@@ -708,3 +708,59 @@ fn releasing_a_parent_releases_its_immortal_child_without_freeing_it() {
     heap.decref(s).unwrap();
     assert!(heap.live_objects().is_empty());
 }
+
+#[test]
+fn append_str_extends_a_unique_string_in_place() {
+    let mut heap = Heap::new();
+    let left = string(&mut heap, "ab");
+    let right = string(&mut heap, "cde");
+    let before = heap.string_bytes_written();
+    assert_eq!(heap.append_str(left, right), Ok(3));
+    // 足したのは右辺の分だけで、左辺は写さない
+    assert_eq!(heap.string_bytes_written() - before, 3);
+    assert_eq!(heap.get(left).unwrap(), &Payload::Str("abcde".to_string()));
+    assert_eq!(heap.get(right).unwrap(), &Payload::Str("cde".to_string()));
+    heap.decref(left).unwrap();
+    heap.decref(right).unwrap();
+    assert!(heap.live_objects().is_empty());
+}
+
+#[test]
+fn append_str_refuses_a_shared_left_side() {
+    // `x ++ x` の形。同じ物体を両辺に渡すと RC が 2 なので、その場で足さない
+    let mut heap = Heap::new();
+    let left = string(&mut heap, "ab");
+    heap.dup(left).unwrap();
+    assert_eq!(heap.append_str(left, left), Err(HeapError::Shared));
+    assert_eq!(heap.get(left).unwrap(), &Payload::Str("ab".to_string()));
+    heap.decref(left).unwrap();
+    heap.decref(left).unwrap();
+    assert!(heap.live_objects().is_empty());
+}
+
+#[test]
+fn append_str_refuses_an_immortal_left_side() {
+    // 不死のリテラルは外に出ている参照が1つでも一意にならない。その場で足すと、次に評価したリテラルの中身が変わる
+    let mut heap = Heap::new();
+    let lit = literal(&mut heap, "lit");
+    heap.acquire_immortal(lit).unwrap();
+    let right = string(&mut heap, "x");
+    assert_eq!(heap.append_str(lit, right), Err(HeapError::Shared));
+    assert_eq!(heap.get(lit).unwrap(), &Payload::Str("lit".to_string()));
+    heap.decref(lit).unwrap();
+    heap.decref(right).unwrap();
+    assert!(heap.live_objects().is_empty());
+}
+
+#[test]
+fn append_str_keeps_the_left_side_when_the_right_side_is_not_a_string() {
+    let mut heap = Heap::new();
+    let left = string(&mut heap, "ab");
+    let end = bottom(&mut heap);
+    let before = heap.string_bytes_written();
+    assert_eq!(heap.append_str(left, end), Err(HeapError::NotAString));
+    assert_eq!(heap.append_str(end, left), Err(HeapError::NotAString));
+    // 取り出した左辺の中身は、誤りの経路でも戻っている
+    assert_eq!(heap.get(left).unwrap(), &Payload::Str("ab".to_string()));
+    assert_eq!(heap.string_bytes_written(), before);
+}

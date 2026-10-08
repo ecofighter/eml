@@ -1,0 +1,12 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{stderr}\")"
+input_file: tests/ui/run/runtime/concat_copies_shared_strings.em
+---
+--- stdout ---
+xy
+xyz
+xyzxyz
+lit
+lit!
+--- stderr ---

@@ -115,6 +115,8 @@ pub enum HeapError {
     /// 継続の区間が、切り離された handler フレームで終わっていない。
     BrokenSegment,
     NotCopyable,
+    /// 文字列の操作に、文字列でない物体が渡された。
+    NotAString,
 }
 
 impl fmt::Display for HeapError {
@@ -126,6 +128,7 @@ impl fmt::Display for HeapError {
                 f.write_str("a continuation does not end at a detached handler")
             }
             HeapError::NotCopyable => f.write_str("a file cannot be copied"),
+            HeapError::NotAString => f.write_str("an object is not a string"),
         }
     }
 }
@@ -244,6 +247,38 @@ impl Heap {
             }
         }
         Ok(())
+    }
+
+    /// 一意な左辺の文字列の後に右辺の文字列を足し、足したバイト数を返す。スロットを解放して取り直さないので、左辺の
+    /// `ObjRef` はそのまま使える。左辺の中身をいったん取り出してから右辺を借りる。左辺と右辺が同じ物体なら RC は 2
+    /// 以上なので、先に一意の検査で断る。不死の物体も一意にならないので `Shared` になる
+    /// (docs/spec/runtime.md の「ランタイムの API」)。
+    pub fn append_str(&mut self, left: ObjRef, right: ObjRef) -> Result<usize, HeapError> {
+        if !self.is_unique(left)? {
+            return Err(HeapError::Shared);
+        }
+        let Payload::Str(text) = &mut self.object_mut(left)?.payload else {
+            return Err(HeapError::NotAString);
+        };
+        let mut text = std::mem::take(text);
+        let appended = self.str(right).map(|tail| {
+            text.push_str(tail);
+            tail.len()
+        });
+        // 右辺が文字列でなくても、取り出した中身を左辺に戻してから誤りを返す
+        if let Payload::Str(slot) = &mut self.object_mut(left)?.payload {
+            *slot = text;
+        }
+        let appended = appended?;
+        self.string_bytes_written += appended as u64;
+        Ok(appended)
+    }
+
+    fn str(&self, obj: ObjRef) -> Result<&str, HeapError> {
+        match &self.object(obj)?.payload {
+            Payload::Str(text) => Ok(text),
+            _ => Err(HeapError::NotAString),
+        }
     }
 
     /// 一意なオブジェクトを解放して中身を返す。子の所有権は呼び出し側に移る。不死の物体は一意にならないので、

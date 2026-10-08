@@ -69,3 +69,26 @@ fn evaluating_a_literal_copies_nothing() {
         "{stats:?}"
     );
 }
+
+/// リテラルから始めて、一意な左辺に `"x"` を n 回つなぐプログラム。`grow` の `acc` は各枝で1回だけ使うので、
+/// Perceus は `dup` を入れず、2回目からの `++` には RC が 1 の左辺が届く。
+fn growing_string(n: usize) -> String {
+    format!(
+        "grow : Int -> String -> String\n\
+         grow n acc = if n == 0 then acc else grow (n - 1) (acc ++ \"x\")\n\
+         \n\
+         main : Unit -> <IO> Unit\n\
+         main () = println (grow {n} \"s\")\n"
+    )
+}
+
+#[test]
+fn appending_to_a_unique_string_copies_only_the_right_side() {
+    // 最初の `++` だけが不死のリテラル "s" を写し、残りは一意な左辺の後に 1 バイトずつ足す。左辺を毎回写すと、
+    // 2 + 3 + … + (n + 1) バイトになる
+    let n = 2000;
+    let (out, result) = eml_test_support::run_stats(&growing_string(n));
+    let stats = result.unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(out, format!("s{}\n", "x".repeat(n)));
+    assert!(stats.string_bytes_copied <= 4 * n as u64, "{stats:?}");
+}
