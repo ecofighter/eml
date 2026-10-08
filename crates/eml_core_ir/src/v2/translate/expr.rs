@@ -11,6 +11,7 @@ use eml_types::Type;
 use crate::v2::{Rhs, Stmt};
 use crate::{Atom, Call, FnIdx, TUPLE};
 
+use super::pattern::Known;
 use super::program::{effect_index, perform_call, plain_call};
 use super::types::{equality_extern, split_arrows, var_info};
 use super::{ContinuationForm, Exit, FnLowering};
@@ -73,9 +74,18 @@ impl FnLowering<'_> {
         }
     }
 
-    /// `rhs` の値を新しい変数に束縛する文を今のブロックに足す。
+    /// `rhs` の値を新しい変数に束縛する文を今のブロックに足す。`con` で作った変数は中身を覚え、後の決定木がその頭で
+    /// case を選べるようにする (docs/spec/core-ir.md)。
     pub(super) fn bind(&mut self, name: &str, ty: &Type, rhs: Rhs) -> Atom {
         let var = self.builder.var(var_info(name, ty, self.hir));
+        if let Rhs::Con { tag, args } = &rhs {
+            let known = Known {
+                tag: *tag,
+                args: args.clone(),
+                ty: ty.clone(),
+            };
+            self.cons.insert(var, known);
+        }
         self.builder.emit(Stmt::Let { var, rhs });
         Atom::Var(var)
     }
@@ -356,8 +366,23 @@ impl FnLowering<'_> {
         self.saturate(id, head, callee_ty, args, ty)
     }
 
-    /// 式の値をアトムにする。値の計算に要る文は今のブロックに足す。値の `if` は、続きをラベルにして枝からそこへ
-    /// 向かう。続きに向かうブロックが1本なら、そのブロックで続きを変換する。
+    /// 値の `if` と `match` の値。続きをラベルにして、枝からそこへ向かう。続きに向かうブロックが1本なら、そのブロック
+    /// で続きを変換する。
+    fn through_continuation(&mut self, id: ExprId) -> Atom {
+        let ty = self.ty(id);
+        let after = self.builder.new_label(vec![var_info("t", &ty, self.hir)]);
+        self.tail_expr(id, Exit::Jump(after));
+        let args = self
+            .builder
+            .resolve(after)
+            .expect("some arm of a value `if` or `match` reaches its continuation");
+        let [value] = args[..] else {
+            unreachable!("the continuation takes the value");
+        };
+        value
+    }
+
+    /// 式の値をアトムにする。値の計算に要る文は今のブロックに足す。
     pub(super) fn atom(&mut self, id: ExprId) -> Atom {
         let body = self.body;
         match &body.exprs[id].kind {
@@ -407,18 +432,10 @@ impl FnLowering<'_> {
                 let ty = self.ty(id);
                 self.call(id, *callee, &ty)
             }
-            ExprKind::If { .. } | ExprKind::Match { .. } => {
-                let ty = self.ty(id);
-                let after = self.builder.new_label(vec![var_info("t", &ty, self.hir)]);
-                self.tail_expr(id, Exit::Jump(after));
-                let args = self
-                    .builder
-                    .resolve(after)
-                    .expect("some arm of a value `if` or `match` reaches its continuation");
-                let [value] = args[..] else {
-                    unreachable!("the continuation takes the value");
-                };
-                value
+            ExprKind::If { .. } | ExprKind::Match { .. } => self.through_continuation(id),
+            // `let x = S; match x` は `S` を `match` の文脈で変換するので、`match` と同じく続きで値を受ける
+            ExprKind::Block { stmts, tail, .. } if self.fused_match(stmts, *tail).is_some() => {
+                self.through_continuation(id)
             }
             ExprKind::Block { stmts, tail, .. } => {
                 self.stmts(stmts);

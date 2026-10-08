@@ -54,6 +54,10 @@ impl FnBuilder {
         VarId(self.vars.len() as u32 - 1)
     }
 
+    pub(super) fn repr(&self, var: VarId) -> Repr {
+        self.vars[var.0 as usize].repr
+    }
+
     /// 関数の引数。入口のブロックの引数になる。
     pub(super) fn param(&mut self, info: VarInfo) -> VarId {
         let var = self.var(info);
@@ -96,6 +100,14 @@ impl FnBuilder {
             "only an open block is reopened"
         );
         self.current = Some(block);
+    }
+
+    /// 今のブロックを開いたまま手放す。後で `reopen` で戻る。値をそのまま調べる文脈が、値の分からないブロックを
+    /// 集めるのに使う。
+    pub(super) fn suspend(&mut self) -> BlockId {
+        self.current
+            .take()
+            .expect("only an open block is suspended")
     }
 
     pub(super) fn new_label(&mut self, params: Vec<VarInfo>) -> Label {

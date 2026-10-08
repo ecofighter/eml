@@ -1,27 +1,30 @@
 //! 型付き HIR から、前向きの辺だけを持つブロックの列への変換 (docs/spec/core-ir.md)。式の値の渡し先 (出口) と、
-//! 条件の分かれ方という制御の骨組みをここに置く。ブロックの組み立ては `builder.rs`、式ごとの変換は `expr.rs`、関数の
-//! 表と包む関数は `program.rs`、型から決まる Repr は `types.rs` にある。
+//! 条件の分かれ方という制御の骨組みをここに置く。ブロックの組み立ては `builder.rs`、式ごとの変換は `expr.rs`、
+//! パターンの決定木と case-of-case は `pattern.rs`、関数の表と包む関数は `program.rs`、型から決まる Repr は
+//! `types.rs` にある。
 
 mod builder;
 mod expr;
+mod pattern;
 mod program;
 mod types;
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use eml_diagnostics::{FileId, SourceFiles};
 use eml_hir::{
-    Body, ExprId, ExprKind, Function, FunctionId, FunctionKind, ItemMap, LocalId, PatId, PatKind,
-    Program as HirProgram, Res, Stmt as HirStmt, ValueItem,
+    Body, ExprId, ExprKind, Function, FunctionId, FunctionKind, ItemMap, LocalId, MatchArm, PatId,
+    PatKind, Program as HirProgram, Res, Stmt as HirStmt, ValueItem,
 };
 use eml_types::{BodyTypes, Type, TypedProgram};
 use la_arena::ArenaMap;
 
 use crate::v2::{Case, CoreFn, Loc, Program, Rhs, Term};
-use crate::{Atom, CasePattern, FALSE, FnIdx, TRUE};
+use crate::{Atom, CasePattern, FALSE, FnIdx, TRUE, VarId};
 
 use builder::{FnBuilder, Label};
 use expr::extern_row;
+use pattern::{Known, MatchCtx, Occ, Scrutinee, destructures};
 use program::{ProgramBuilder, core_name, effect_table};
 use types::{repr, split_arrows, var_info};
 
@@ -211,6 +214,7 @@ pub(crate) fn translate(
             builder: FnBuilder::new(),
             locals: ArenaMap::default(),
             contexts: Vec::new(),
+            cons: HashMap::new(),
         }
         .lower(&name, &[], &params, body.root, &ret);
         builder.finish(indices[id], core);
@@ -256,6 +260,8 @@ enum Ctx {
         on_false: Label,
         unknown: Label,
     },
+    /// `match`、分解する `let`、分解する引数の文脈。枝のパターンと枝ごとのラベルを持つ (`pattern.rs`)。
+    Match(MatchCtx),
 }
 
 /// 位置 (`Loc`) を作るための、本体のファイル。
@@ -282,18 +288,11 @@ struct FnLowering<'a> {
     builder: FnBuilder,
     locals: ArenaMap<LocalId, Atom>,
     contexts: Vec<Ctx>,
+    /// この関数で `con` で作った変数の中身。決定木が頭のコンストラクタを知るのに使う。
+    cons: HashMap<VarId, Known>,
 }
 
-/// パターンが値を調べるか分解するか。どちらもしなければ、値をそのまま局所変数に対応させればよく、決定木は要らない。
-fn destructures(body: &Body, pat: PatId) -> bool {
-    match &body.pats[pat].kind {
-        PatKind::Con { .. } | PatKind::Tuple(_) | PatKind::Literal(_) => true,
-        PatKind::Annot { pat, .. } => destructures(body, *pat),
-        PatKind::Bind(_) | PatKind::Wildcard | PatKind::Unit | PatKind::Missing => false,
-    }
-}
-
-impl FnLowering<'_> {
+impl<'a> FnLowering<'a> {
     /// ラムダと handle の本体と節は、捕まえた変数を先頭の引数に持つ (docs/spec/core-ir.md)。トップレベルの関数では
     /// `captured` は空である。引数のパターンが `None` なら、名前のない引数 (handle の本体が受ける `()`) である。
     /// `ret` は本体の値の型で、関数の `ret` の Repr を決める。
@@ -313,11 +312,13 @@ impl FnLowering<'_> {
             self.locals.insert(*local, Atom::Var(var));
         }
         let mut wrapped = Vec::new();
+        let mut destructured = Vec::new();
         for (pat, ty) in params {
-            if pat.is_some_and(|pat| destructures(body, pat)) {
-                unimplemented!("parameter patterns that take values apart");
-            }
-            let local = pat.and_then(|pat| body.pat_bindings(pat).first().copied());
+            // 値を調べるか分解するパターンは名前のない引数で受け、本体の前で分解する
+            let pattern = pat.filter(|&pat| destructures(body, self.hir, pat));
+            let local = pat
+                .filter(|_| pattern.is_none())
+                .and_then(|pat| body.pat_bindings(pat).first().copied());
             let name = local.map_or("p", |local| body.locals[local].name.as_str());
             let var = self.builder.param(var_info(name, ty, self.hir));
             if let Some(local) = local {
@@ -326,14 +327,20 @@ impl FnLowering<'_> {
                     wrapped.push((local, var, ty.clone()));
                 }
             }
+            if let Some(pattern) = pattern {
+                destructured.push((pattern, var, ty.clone()));
+            }
         }
-        // 引数の変数をすべて作ってから包む。関数の引数の番号を、ほかの変数より前にそろえるため
+        // 引数の変数をすべて作ってから包み、分解する。関数の引数の番号を、ほかの変数より前にそろえるため
         for (local, var, ty) in wrapped {
             let wrapper = self
                 .program
                 .continuation_wrapper(body.continuations[local] == 2);
             let closure = self.closure(wrapper, vec![Atom::Var(var)], &ty);
             self.locals.insert(local, closure);
+        }
+        for (pat, var, ty) in destructured {
+            self.destructure(pat, Scrutinee::Occ(Occ::Atom(Atom::Var(var), ty)));
         }
         self.tail_expr(root, Exit::Return);
         self.builder.finish(name.to_string(), repr(ret, self.hir))
@@ -376,6 +383,7 @@ impl FnLowering<'_> {
             builder: FnBuilder::new(),
             locals: ArenaMap::default(),
             contexts: Vec::new(),
+            cons: HashMap::new(),
         }
         .lower(&name, &captured, params, root, ret);
         self.program.finish(function, core);
@@ -413,8 +421,8 @@ impl FnLowering<'_> {
         }
     }
 
-    /// 式の値を `exit` に渡す。`if` と、文の後に続く値は、同じ出口のまま中へ進む。条件の `if` が入れ子でも、内側の
-    /// 枝は外側の文脈に直接値を渡すので、真偽値を作らずに分かれる。
+    /// 式の値を `exit` に渡す。`if`、`match` と、文の後に続く値は、同じ出口のまま中へ進む。条件の `if` が入れ子でも、
+    /// 内側の枝は外側の文脈に直接値を渡すので、真偽値を作らずに分かれる。
     fn tail_expr(&mut self, id: ExprId, exit: Exit) {
         let body = self.body;
         match &body.exprs[id].kind {
@@ -423,42 +431,88 @@ impl FnLowering<'_> {
                 then_branch,
                 else_branch,
             } => self.branch(*condition, *then_branch, *else_branch, exit),
-            ExprKind::Match { .. } => unimplemented!("`match` in the block-list translate"),
-            ExprKind::Block { stmts, tail, .. } => {
-                self.stmts(stmts);
-                match tail {
-                    Some(tail) => self.tail_expr(*tail, exit),
-                    None => self.deliver(exit, Atom::Unit),
+            ExprKind::Match {
+                scrutinee, arms, ..
+            } => self.lower_match(*scrutinee, None, arms, exit),
+            ExprKind::Block { stmts, tail, .. } => match self.fused_match(stmts, *tail) {
+                Some((local, init, arms)) => {
+                    self.stmts(&stmts[..stmts.len() - 1]);
+                    self.lower_match(init, Some(local), arms, exit);
                 }
-            }
+                None => {
+                    self.stmts(stmts);
+                    match tail {
+                        Some(tail) => self.tail_expr(*tail, exit),
+                        None => self.deliver(exit, Occ::Atom(Atom::Unit, Type::unit())),
+                    }
+                }
+            },
             ExprKind::Annot { expr, .. } => self.tail_expr(*expr, exit),
             _ => {
-                let value = self.atom(id);
+                let value = self.occurrence(id);
                 self.deliver(exit, value);
             }
         }
     }
 
-    fn deliver(&mut self, exit: Exit, value: Atom) {
+    /// `let x = S` の直後の本体が `match x` である形なら、`x`、`S` と `match` の枝。`S` を `match` の文脈で変換し、
+    /// `x` は値全体を使う枝にだけ渡す (docs/spec/core-ir.md)。
+    fn fused_match(
+        &self,
+        stmts: &[HirStmt],
+        tail: Option<ExprId>,
+    ) -> Option<(LocalId, ExprId, &'a [MatchArm])> {
+        let body = self.body;
+        let ExprKind::Match {
+            scrutinee, arms, ..
+        } = &body.exprs[tail?].kind
+        else {
+            return None;
+        };
+        let ExprKind::Path(Res::Local(local)) = body.exprs[*scrutinee].kind else {
+            return None;
+        };
+        let Some(HirStmt::Let { pat, init, .. }) = stmts.last() else {
+            return None;
+        };
+        matches!(body.pats[*pat].kind, PatKind::Bind(bound) if bound == local).then_some((
+            local,
+            *init,
+            arms.as_slice(),
+        ))
+    }
+
+    /// 値を `exit` に渡す。`return` と続きのラベルには値を作って渡し、文脈には出現のまま渡す。
+    fn deliver(&mut self, exit: Exit, value: Occ) {
         match exit {
-            Exit::Return => self.builder.terminate(Term::Return(value)),
-            Exit::Jump(label) => self.builder.jump(label, vec![value]),
+            Exit::Return => {
+                let value = self.materialize(value);
+                self.builder.terminate(Term::Return(value));
+            }
+            Exit::Jump(label) => {
+                let value = self.materialize(value);
+                self.builder.jump(label, vec![value]);
+            }
             Exit::Scrutinize(ctx) => self.select(ctx, value),
         }
     }
 
-    /// 文脈に値を渡す。値が分かれば行き先へ直接向かい、分からなければ `unknown` へ向かう。
-    fn select(&mut self, ctx: CtxId, value: Atom) {
-        match self.contexts[ctx.0] {
-            Ctx::Bool {
+    /// 文脈に値を渡す。値が分かれば行き先へ直接向かい、分からなければ値の分からない出口として扱う。
+    fn select(&mut self, ctx: CtxId, value: Occ) {
+        match &self.contexts[ctx.0] {
+            &Ctx::Bool {
                 on_true,
                 on_false,
                 unknown,
             } => match value {
-                Atom::Tag(TRUE) => self.builder.jump(on_true, Vec::new()),
-                Atom::Tag(FALSE) => self.builder.jump(on_false, Vec::new()),
-                _ => self.builder.jump(unknown, vec![value]),
+                Occ::Atom(Atom::Tag(TRUE), _) => self.builder.jump(on_true, Vec::new()),
+                Occ::Atom(Atom::Tag(FALSE), _) => self.builder.jump(on_false, Vec::new()),
+                value => {
+                    let value = self.materialize(value);
+                    self.builder.jump(unknown, vec![value]);
+                }
             },
+            Ctx::Match(_) => self.select_arm(ctx, value),
         }
     }
 
@@ -496,7 +550,7 @@ impl FnLowering<'_> {
             match else_branch {
                 Some(else_branch) => self.tail_expr(else_branch, exit),
                 // `else` のない `if` の値は `()` である
-                None => self.deliver(exit, Atom::Unit),
+                None => self.deliver(exit, Occ::Atom(Atom::Unit, Type::unit())),
             }
         }
     }
@@ -530,11 +584,12 @@ impl FnLowering<'_> {
         for stmt in stmts {
             match stmt {
                 HirStmt::Let { pat, init, .. } => {
-                    if destructures(self.body, *pat) {
-                        unimplemented!("`let` patterns that take values apart");
+                    if destructures(self.body, self.hir, *pat) {
+                        self.destructure(*pat, Scrutinee::Expr(*init));
+                    } else {
+                        let value = self.atom(*init);
+                        self.bind_pat(*pat, value);
                     }
-                    let value = self.atom(*init);
-                    self.bind_pat(*pat, value);
                 }
                 // 式文の値は `Unit` なので捨ててよい
                 HirStmt::Expr(expr) => {
