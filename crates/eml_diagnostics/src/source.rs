@@ -21,7 +21,16 @@ impl fmt::Display for LineCol {
 /// 将来クエリ化するときは salsa の入力に置き換える。
 #[derive(Debug, Default)]
 pub struct SourceFiles {
-    files: Vec<(String, String)>,
+    files: Vec<SourceFile>,
+}
+
+#[derive(Debug)]
+struct SourceFile {
+    path: String,
+    text: String,
+    /// 各行の先頭の位置で、最初はいつも 0 である。`line_col` は1つのファイルに何度も呼ばれるので、呼ばれるたびに
+    /// ファイルの先頭から行を数えずに済むよう、読み込み時に1回だけ作る。
+    line_starts: Vec<TextSize>,
 }
 
 impl SourceFiles {
@@ -37,37 +46,52 @@ impl SourceFiles {
         if text.starts_with('\u{feff}') {
             text.drain(..'\u{feff}'.len_utf8());
         }
-        self.files.push((path.into(), text));
+        let line_starts = std::iter::once(0)
+            .chain(text.match_indices('\n').map(|(newline, _)| newline + 1))
+            .map(|start| TextSize::try_from(start).expect("source file too large"))
+            .collect();
+        self.files.push(SourceFile {
+            path: path.into(),
+            text,
+            line_starts,
+        });
         id
     }
 
     pub fn path(&self, id: FileId) -> &str {
-        &self.files[id.0 as usize].0
+        &self.files[id.0 as usize].path
     }
 
     pub fn text(&self, id: FileId) -> &str {
-        &self.files[id.0 as usize].1
+        &self.files[id.0 as usize].text
     }
 
     /// 位置を行と列にする。`offset` は、このファイルのテキストの中の文字の境界でなければならない。
     pub fn line_col(&self, file: FileId, offset: TextSize) -> LineCol {
-        let before = &self.text(file)[..usize::from(offset)];
-        let line_start = before.rfind('\n').map_or(0, |newline| newline + 1);
+        let file = &self.files[file.0 as usize];
+        // `line_starts` の最初は 0 なので、`offset` 以下の先頭は少なくとも1つあり、その数が1始まりの行になる。
+        let line = file.line_starts.partition_point(|&start| start <= offset);
+        let line_start = file.line_starts[line - 1];
+        let column = file.text[usize::from(line_start)..usize::from(offset)]
+            .chars()
+            .count();
         LineCol {
-            line: u32::try_from(before.matches('\n').count() + 1).expect("too many lines"),
-            column: u32::try_from(before[line_start..].chars().count() + 1).expect("line too long"),
+            line: u32::try_from(line).expect("too many lines"),
+            column: u32::try_from(column + 1).expect("line too long"),
         }
     }
 
     pub(crate) fn iter(&self) -> impl Iterator<Item = (&str, &str)> {
         self.files
             .iter()
-            .map(|(path, text)| (path.as_str(), text.as_str()))
+            .map(|file| (file.path.as_str(), file.text.as_str()))
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::time::{Duration, Instant};
+
     use super::*;
 
     #[test]
@@ -109,5 +133,35 @@ mod tests {
         // BOM は読み込み時に除くので (docs/spec/lexical.md)、位置は BOM を除いたテキストで数える。
         assert_eq!(position("\u{feff}ab", 1), "1:2");
         assert_eq!(position("\u{feff}a\nb", 2), "2:1");
+    }
+
+    #[test]
+    fn line_col_finds_every_line_of_a_large_file() {
+        // 呼ぶたびにファイルの先頭から数えると、行の数の2乗の時間がかかる。行の先頭の表を二分探索する実装なら
+        // debug ビルドでも1秒かからない。2乗の実装でテストが長く止まらないよう、上限を超えたところで失敗にする。
+        const LINE: &str = "αβ x\n";
+        const LIMIT: Duration = Duration::from_secs(5);
+        let lines = 50_000;
+        let mut files = SourceFiles::new();
+        let file = files.add("a.em", LINE.repeat(lines));
+        let at = |offset: usize| files.line_col(file, TextSize::try_from(offset).unwrap());
+        let start = Instant::now();
+        for index in 0..lines {
+            let line = u32::try_from(index + 1).unwrap();
+            let line_start = index * LINE.len();
+            assert_eq!(at(line_start), LineCol { line, column: 1 });
+            // `α` と `β` は2バイトずつなので、`x` は行の先頭からバイト位置 5、4文字目にある。
+            assert_eq!(at(line_start + 5), LineCol { line, column: 4 });
+            assert_eq!(at(line_start + 6), LineCol { line, column: 5 });
+            let elapsed = start.elapsed();
+            assert!(elapsed < LIMIT, "took {elapsed:?} up to line {line}");
+        }
+        assert_eq!(
+            at(LINE.len() * lines),
+            LineCol {
+                line: 50_001,
+                column: 1
+            }
+        );
     }
 }
