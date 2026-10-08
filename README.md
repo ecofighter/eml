@@ -90,7 +90,7 @@ nix build                                    # eml のバイナリをビルド�
 | `eml_cli` | `check` / `run` のコマンド。各段階をつなぐ |
 | `eml_interp` | Core IR を CEK 機械で実行する |
 | `eml_runtime` | オブジェクトモデル、ヒープ、参照カウント、`debug_heap` の検査 |
-| `eml_core_ir` | 型付き HIR から Core IR (基本ブロックの列) への変換と、縮約、`dup` / `decref` の挿入 |
+| `eml_core_ir` | 型付き HIR から Core IR (基本ブロックの列) への変換と、縮約、`dup` / `decref` / `release` の挿入 |
 | `eml_types` | Kind、型、row の推論と、線形性、多重度、網羅性の検査 |
 | `eml_hir` | CST から HIR への変換と名前解決 |
 | `eml_syntax` | lexer、レイアウト段、パーサ、rowan の CST |

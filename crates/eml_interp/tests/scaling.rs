@@ -210,10 +210,9 @@ fn rc_increments(n: u64, traverse: &str, expected: &str) -> u64 {
 
 #[test]
 fn traversing_a_unique_list_does_not_dup_per_cell() {
-    // 一意なリストのセルは、たどるときに箱を空けてフィールドの参照をそのまま受け取れるので、セルごとの `dup` は
-    // 要らない。長さを2倍にしても `rc_increments` は変わらない。今の実装でも通る見張りで、`switch` を消費しない
-    // 形にしたのに一意な箱を空ける手段を入れなかったとき (セルごとにフィールドを `dup` して箱を `decref` する) に
-    // 落ちる
+    // 一意なリストのセルは、`release` が箱だけを解放し、フィールドが箱の参照をそのまま受け取るので、セルごとの
+    // `dup` は要らない。長さを2倍にしても `rc_increments` は変わらない。`release` の代わりにフィールドを `dup` して
+    // 箱を `decref` する形に戻ると落ちる
     let traverse = "  println (show_int (sum (range 1 {n})))";
     let n = 1000;
     let short = rc_increments(n, traverse, &format!("{}\n", n * (n + 1) / 2));
@@ -225,7 +224,7 @@ fn traversing_a_unique_list_does_not_dup_per_cell() {
 fn traversing_a_shared_list_dups_each_cell_at_most_once() {
     // `sum` の後で `length` が同じリストを使うので、`sum` がたどるセルは共有されている。`sum` に渡す前に `xs` を
     // 1回、`sum` が各セルで残りのリストを1回 `dup` するので、数は n になる。上限は n に小さな余裕を足したもので、
-    // セルを2回以上 `dup` する形になれば超える。今の実装でも通る見張りである
+    // セルを2回以上 `dup` する形になれば超える
     let traverse =
         "  let xs = range 1 {n}\n  println (show_int (sum xs))\n  println (show_int (length xs))";
     let n = 1000;

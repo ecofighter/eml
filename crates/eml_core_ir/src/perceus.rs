@@ -85,7 +85,7 @@ fn insert_rc(function: &mut CoreFn) {
 
 /// ブロックの文を書き換える。後ろからたどって各文の後で生きている変数を求め、複製と解放と `saved` を決めてから、
 /// 前から並べ直す。終端の前に足す文は `stmts` の末尾に置くので、終端を「文と新しい終端」に置き換える書き換え
-/// (S3b-2b の `TailCall` の降格) も、ここで終端を差し替えればその場でできる。`destructured` は、このブロックが
+/// (S3b-2c の `TailCall` の降格) も、ここで終端を差し替えればその場でできる。`destructured` は、このブロックが
 /// case の行き先なら、その case が分解した値である。
 fn rewrite(
     block: &mut Block,

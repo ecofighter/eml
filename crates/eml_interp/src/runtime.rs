@@ -36,7 +36,7 @@ enum Applied {
 }
 
 /// 実行中の関数の環境。スロットは変数の番号で引き、読み出しはスロットを書き換えない。参照の所有は Core IR の命令
-/// (使用、`dup`、`decref`) が表し、verifier がその釣り合いを確かめる (docs/spec/core-ir.md)。
+/// (消費、`dup`、`decref`、`release`) が表し、verifier がその釣り合いを確かめる (docs/spec/core-ir.md)。
 pub(crate) struct Env(Vec<Option<Value>>);
 
 impl Env {
