@@ -99,7 +99,7 @@ Core IR に、データの配置の表と extern の表の Repr を持たせる�
 - 型の行は、使われていない `heap` の代わりに `repr: Repr` を持つ (`Int` は `int`、`String` と `File` は `obj`、`Unit` は `unit`)
 - 関数の行は、`arity` の代わりに `params: &'static [Repr]` と `ret: Repr` を持つ。引数の数は `params.len()` である。`by_type` の行 (`==`、`!=`) も、シグネチャどおり `[tobj, tobj]` と `enum` を持つ
 - translate の `types.rs` は、extern の型の Repr を行から読む
-- extern が作るデータは、今は `Fs.read_all` の組だけである。組の配置は大きさだけで決まるので、行は配置を持たない。S4 で std の extern が名前的なデータ (`List`、`Option`、`Result`) を作るようになったら、行がその型の正規の名前を持ち、translate がその配置を表に入れる。この規則はロードマップの S4 に書く
+- extern が作るデータは、今は比べる extern の `Bool` と、`Fs.read_all` の組である。`Bool` のタグは機械の定数で決まっていて (下の結び付けのテストが確かめる)、組の配置は大きさだけで決まるので、行は配置を持たない。S4 で std の extern が名前的なデータ (`List`、`Option`、`Result`) を作るようになったら、行がその型の正規の名前を持ち、translate がその配置を表に入れる。この規則はロードマップの S4 に書く
 - 結び付けのテスト (`crates/eml_core_ir/tests/externs.rs`) を足す。translate の型から Repr への規則を、公開の `eml_core_ir::type_repr` で使う
   - 各関数の行の `params` と `ret` を、std のシグネチャの型の Repr と比べる
   - 各型の行の `repr` を、型検査がその型に与える型の Repr と比べる (`Unit` は空のレコード)
@@ -108,7 +108,7 @@ Core IR に、データの配置の表と extern の表の Repr を持たせる�
 
 ### verifier
 
-検査はどちらの段 (scope の段と所有の段) でも走る。spec では、R8 (Repr) に extern の検査を足し、配置の規則を新しく R9 として書く。今ある検査を先に行い、その文言は変えない。文言の後には、今と同じく ``in `f` `` が付く。
+検査はどちらの段 (scope の段と所有の段) でも走る。spec では、R8 (Repr) に extern の検査を足し、配置の規則を新しく R9 として書く。今ある形の検査を先に行い、その文言は変えない。新しい検査は、その次で、範囲と所有の検査 (R5、R6) より前に行う。どちらの段でも同じ文言で報告するためである。文言の後には、今と同じく ``in `f` `` が付く。
 
 - R8 (extern): 引数の数を確かめた後で、引数と結果の Repr を行と比べる。定数は今の当てはめの規則 (`Int` は `int`、`()` は `unit`、`#N` は `enum` か `tobj`、`&f` は `tobj`) で比べる
   - ``argument 0 of `Prelude.+` is `s.0` (obj), but the extern takes int``
@@ -153,8 +153,8 @@ Core IR に、データの配置の表と extern の表の Repr を持たせる�
 
 - S3b-2c-2 の項目 (上の「段の分け方」)
 - 上の「段の分け方」で S3b-2c から外す3つ
-- 配置の ID の順を translate のたどり方によらない正規の順にすること。定義ごとに Core IR を保存する REPL の段で入れる
-- extern の行の、引数ごとの所有と借用の列。借用パラメータと一緒に入れる
+- 配置の ID の順を translate のたどり方によらない正規の順にすること。定義ごとに Core IR を保存する REPL の段で入れる。ロードマップの REPL の節に書く
+- extern の行の、引数ごとの所有と借用の列。借用パラメータと一緒に入れる。ロードマップの借用パラメータの約束に書く
 
 ## テスト
 
@@ -162,7 +162,7 @@ Core IR に、データの配置の表と extern の表の Repr を持たせる�
 
 - **テキスト** (`eml_core_ir/tests/text.rs`): データ、組の `(,)` と `(,,)`、空の配置、4つの命令それぞれの表にない `#N` を含む往復。上の `parse` の誤りの文言ごとのテスト
 - **verifier** (`eml_core_ir/tests/verify.rs`): 上の R8 と R9 の文言ごとのテスト。同じ配置で範囲の中の違うタグを名前に書いた `release` が出どころの文言で拒まれること
-- **translate** (`eml_core_ir/tests/translate.rs`): 総称的なデータのフィールドの Repr (`Pair a Int` が `Pair(tobj, int)`)。2つの具体化の `Option` が同じ配置を使うこと。`if` が `Prelude.Bool` を指すこと。組の大きさ2と3の配置。使わない `data` の型が表に入らないこと。ほかのモジュールの型が修飾され、入口のモジュールの型が修飾されないこと。最初に使った順に番号が振られること
+- **translate** (`eml_core_ir/tests/translate.rs`): 総称的なデータのフィールドの Repr (`Pair a Int` が `Pair(tobj, int)`)。2つの具体化の `Option` が同じ配置を使うこと。`if` が `Prelude.Bool` を指すこと。組の大きさ2と3の配置。使わない `data` の型が表に入らないこと。ほかのモジュールの型が修飾され、入口のモジュールの型が修飾されないこと。短い名前が同じ2つのモジュールの型が別の配置になること。最初に使った順に番号が振られること
 - **extern** (`eml_core_ir/tests/externs.rs`、新しいファイル): 上の結び付けのテスト
 - **eml_interp** (`eml_interp/tests/data.rs`): 配置の違う値を読む IR が verifier を通り、実行すると機械の内部の誤りになること (R9 の限界を固定する)
 
@@ -186,6 +186,7 @@ Core IR に、データの配置の表と extern の表の Repr を持たせる�
 **機械的な追随**
 
 - `eml_hir/tests/externs.rs` の `row.arity` を `row.params.len()` にする
+- `eml_core_ir/tests/verify.rs` の `the_result_of_a_call_is_not_compared_with_the_callee` のコメントの段の名前を S3b-2c-2 にする。本体と期待値は変えない
 
 ## 確認の手順
 
@@ -208,7 +209,7 @@ Core IR に、データの配置の表と extern の表の Repr を持たせる�
   - フィールドのない `#N` の行き先の `decref` を、配置の ID を見てバックエンドが消すことを、ネイティブ化の項目に書く
   - 所有の都合による `TailCall` の降格を、「Perceus の最適化」の借用パラメータの約束に移す
   - S4 に、std の extern が作る名前的なデータの規則と、多相な extern の行の Repr の比べ方を決めることを書く
-- `docs/implementation/status.md`、`docs/overview.md` の段の一覧、`docs/README.md`、`CLAUDE.md` (`eml_extern` が Repr を持つこと、Core IR の配置の表)、[全体設計](2026-10-07-redesign-design.md) の S3b の記述
+- `docs/implementation/status.md` の既知の制限 (R9 が値を作った配置を追わないこと、呼び出しの境界と `tobj` のフィールドを S3b-2c-2 まで比べないこと)、`docs/overview.md` の段の一覧、`docs/README.md`、`CLAUDE.md` (`eml_extern` が Repr を持つこと、Core IR の配置の表)、[全体設計](2026-10-07-redesign-design.md) の S3b の記述
 - コードのコメント: `eml_extern` のモジュールと行、`Program`、`Stmt::Unpack` と `Stmt::Release`、`Term::Switch`、verifier の冒頭
 
 最後に、`grep -rn -e 'S3b-2c-1' -e 'one-case' docs CLAUDE.md crates` と `grep -rn -e 'arity' -e 'heap' crates/eml_extern` が、意図して残す記述だけを出すことを確かめる。
