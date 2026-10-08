@@ -93,9 +93,9 @@ pub enum Frame {
         outer: ObjRef,
     },
     /// 継続の最下部。ここへ戻ればプログラムが終わる。handler ではないので、操作の handler を探してここに届いたら内部の
-    /// 誤りである (docs/spec/runtime.md の「handler の連鎖」)。
+    /// 誤りである (docs/implementation/architecture.md の「継続のフレーム」)。
     Root,
-    /// handle の handler。節はエフェクトの操作の順に並ぶ (docs/spec/runtime.md の「handler の連鎖」)。
+    /// handle の handler。節はエフェクトの操作の順に並ぶ (docs/spec/core-ir.md の「Core IR」)。
     Handler {
         effect: u32,
         clauses: Vec<Value>,
