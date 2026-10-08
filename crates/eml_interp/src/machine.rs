@@ -19,10 +19,10 @@ pub(crate) enum Step {
     Finished,
 }
 
-/// 呼び出しから戻った後に再開するところと、呼び出しのフレームに退避する変数。
+/// 呼び出しから戻った後に再開するところと、呼び出しのフレームに退避する変数。`call` は呼び出しを持つ `Let` で、
+/// 戻った値の受け先と続きはその `Let` から読む。
 struct ReturnPoint<'p> {
-    bind: VarId,
-    control: CExprId,
+    call: CExprId,
     saved: &'p [VarId],
 }
 
@@ -176,9 +176,9 @@ impl<'p> Machine<'p> {
                 Value::Unit
             }
             Rhs::Call { call, mask, saved } => {
+                // `step` から来たので、`control` はまだこの `Let` を指している
                 let ret = ReturnPoint {
-                    bind: var,
-                    control: body,
+                    call: self.control,
                     saved,
                 };
                 return self.call(call, mask, Some(ret));
@@ -404,8 +404,7 @@ impl<'p> Machine<'p> {
             .collect::<Result<Vec<_>, Fault>>()?;
         let frame = Frame::Return {
             function: self.function.0,
-            resume: ret.control.0,
-            bind: ret.bind.0,
+            resume: u64::from(ret.call.0),
             saved,
             next: self.cont,
         };
@@ -432,20 +431,31 @@ impl<'p> Machine<'p> {
                 }
                 Frame::Return {
                     function,
-                    resume: control,
-                    bind,
+                    resume,
                     saved,
                     next,
                 } => {
                     let function = FnIdx(function);
-                    let mut slots = vec![None; self.program.function(function).vars.len()];
+                    let caller = self.program.function(function);
+                    let (var, body) = u32::try_from(resume)
+                        .ok()
+                        .and_then(|call| match caller.expr(CExprId(call)) {
+                            CExpr::Let {
+                                var,
+                                rhs: Rhs::Call { .. },
+                                body,
+                            } => Some((*var, *body)),
+                            _ => None,
+                        })
+                        .ok_or(Fault::Internal("a return frame does not resume at a call"))?;
+                    let mut slots = vec![None; caller.vars.len()];
                     for (var, saved) in saved {
                         slots[var as usize] = Some(saved);
                     }
-                    slots[bind as usize] = Some(value);
+                    slots[var.0 as usize] = Some(value);
                     self.slots = slots;
                     self.function = function;
-                    self.control = CExprId(control);
+                    self.control = body;
                     self.cont = next;
                     return Ok(Step::Continue);
                 }

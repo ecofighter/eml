@@ -74,11 +74,12 @@ pub struct Closure {
 #[derive(Debug, PartialEq)]
 pub enum Frame {
     /// 呼び出し元の関数に戻る。呼び出しの後で使う変数だけを退避し、それぞれ参照を1つ所有する
-    /// (docs/spec/core-ir.md)。
+    /// (docs/spec/core-ir.md)。`resume` は再開の番地、`saved` の鍵はスロットの番号で、どちらも実行する側が意味を
+    /// 決める。ランタイムはその中身を解釈しない。番地を `u64` にしたのは、実行する側が自分の制御の位置 (将来の
+    /// バイトコード VM なら `pc`) をそのまま入れられるようにするためである。
     Return {
         function: u32,
-        resume: u32,
-        bind: u32,
+        resume: u64,
         saved: Vec<(u32, Value)>,
         next: ObjRef,
     },
@@ -525,13 +526,11 @@ fn copy(payload: &Payload) -> Payload {
         Payload::Frame(Frame::Return {
             function,
             resume,
-            bind,
             saved,
             next,
         }) => Payload::Frame(Frame::Return {
             function: *function,
             resume: *resume,
-            bind: *bind,
             saved: saved.clone(),
             next: *next,
         }),
@@ -629,7 +628,6 @@ fn children(payload: &Payload, work: &mut Vec<ObjRef>) {
         Payload::Frame(Frame::Return {
             function: _,
             resume: _,
-            bind: _,
             saved,
             next,
         }) => {

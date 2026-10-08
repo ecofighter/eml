@@ -18,7 +18,6 @@ fn frame(heap: &mut Heap, saved: Vec<(u32, Value)>, next: ObjRef) -> ObjRef {
     heap.alloc(Payload::Frame(Frame::Return {
         function: 0,
         resume: 0,
-        bind: 0,
         saved,
         next,
     }))
@@ -361,6 +360,50 @@ fn take_or_copy_copies_the_segment_of_a_shared_continuation() {
     // 退避した文字列と節のクロージャは、両方の区間から参照される
     assert!(!heap.is_unique(s).unwrap());
     assert!(!heap.is_unique(clause).unwrap());
+    let copy = heap.alloc(Payload::Continuation {
+        top: copied_top,
+        handler: copied_handler,
+    });
+    heap.decref(copy).unwrap();
+    heap.decref(k).unwrap();
+    assert!(heap.live_objects().is_empty());
+}
+
+#[test]
+fn copying_a_segment_keeps_the_resume_address_of_a_return_frame() {
+    // 再開の番地は実行する側が意味を決める `u64` で、ランタイムは解釈せずにそのまま写す。
+    // 上位の32ビットも落とさないことを確かめる
+    let mut heap = Heap::new();
+    let resume = (7 << 32) | 3;
+    let detached = detached_handler(&mut heap, vec![]);
+    let top = heap.alloc(Payload::Frame(Frame::Return {
+        function: 2,
+        resume,
+        saved: vec![(5, Value::Int(1))],
+        next: detached,
+    }));
+    let k = heap.alloc(Payload::Continuation {
+        top,
+        handler: detached,
+    });
+    heap.dup(k).unwrap();
+    let Payload::Continuation {
+        top: copied_top,
+        handler: copied_handler,
+    } = heap.take_or_copy(k).unwrap()
+    else {
+        panic!("not a continuation");
+    };
+    assert_ne!(copied_top, top);
+    assert_eq!(
+        heap.get(copied_top),
+        Ok(&Payload::Frame(Frame::Return {
+            function: 2,
+            resume,
+            saved: vec![(5, Value::Int(1))],
+            next: copied_handler,
+        }))
+    );
     let copy = heap.alloc(Payload::Continuation {
         top: copied_top,
         handler: copied_handler,
