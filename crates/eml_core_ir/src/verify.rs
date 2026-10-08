@@ -1,7 +1,8 @@
 //! Core IR の不変条件の検査 (docs/spec/core-ir.md)。ブロックの列の形 (R1〜R4)、変数の定義と支配 (R5、R6)、
 //! `jump` と `unpack` と `return` の Repr (R8) と、引き継いだ検査 (`mask` の順、`handle` の節の数、再開できるかどうか、
 //! 直接呼び出しと extern の引数の数、型で選ぶ extern、case の種類) を確かめる (`verify_scopes`)。Perceus の後は、
-//! RC の対象の所有の多重集合と、呼び出しの後に見える変数 (R6、R7) も確かめる (`verify`)。
+//! RC の対象の所有の多重集合と、呼び出しの後に見える変数 (R6、R7) も確かめる (`verify`)。`switch` と `unpack` の
+//! フィールドは値から借りて始まり、自分か持ち主が所有を持つ間だけ有効である。
 //!
 //! 辺の検査、支配木、本体の検査は、それぞれブロックを番号の順に1回たどるだけで、反復も生存解析も使わない。辺は
 //! 前向きなので、ブロックに着いたときには入る辺がすべて出そろっている。支配木は辺1本につき深さの対数の手間で
@@ -42,7 +43,7 @@ pub fn verify_scopes(program: &Program) -> Result<(), VerifyError> {
     verify_at(program, Level::Scopes)
 }
 
-/// 検査の段。Perceus より前の IR には、所有を確かめる材料 (`dup`、`decref`、`save`) がまだない。
+/// 検査の段。Perceus より前の IR には、所有を確かめる材料 (`dup`、`decref`、`release`、`save`) がまだない。
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Level {
     Scopes,
@@ -257,6 +258,15 @@ impl GrowingTree {
     }
 }
 
+/// フィールドの出どころ。分解した値、タグ、フィールドの数、位置である。`release` が名前を書いた変数を確かめるのに使う。
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct Origin {
+    value: VarId,
+    tag: u32,
+    arity: usize,
+    slot: usize,
+}
+
 /// 定義と使用の位置。`index` はブロックの中の文の番号で、ブロックの引数と case のフィールドは -1、終端は文の数である。
 #[derive(Clone, Copy)]
 struct Site {
@@ -291,6 +301,11 @@ struct Checker<'a> {
     pending: HashMap<u32, Entry>,
     /// `closure` で束縛した変数の、関数とすでに渡した引数の数。`handle` の節の引数の数を確かめるのに使う。
     closures: HashMap<VarId, (FnIdx, usize)>,
+    /// フィールドの持ち主と出どころ。持ち主は、分解した値が束縛の時点で所有を持っていればその値、なければその値の
+    /// 持ち主である。変数は1回だけ定義されるので (R5)、経路ごとではなく関数に1つの表にする
+    /// (docs/spec/core-ir.md の「verifier」)。
+    owners: Vec<Option<VarId>>,
+    origins: Vec<Option<Origin>>,
 }
 
 impl<'a> Checker<'a> {
@@ -315,6 +330,8 @@ impl<'a> Checker<'a> {
             },
             pending: HashMap::new(),
             closures: HashMap::new(),
+            owners: vec![None; function.vars.len()],
+            origins: vec![None; function.vars.len()],
         }
     }
 
@@ -419,11 +436,7 @@ impl<'a> Checker<'a> {
                 }
                 self.define(owned, *var, self.at)
             }
-            Stmt::Unpack {
-                value,
-                tag: _,
-                fields,
-            } => {
+            Stmt::Unpack { value, tag, fields } => {
                 let repr = self.function.repr(*value);
                 if repr != Repr::Obj {
                     return Err(format!(
@@ -438,34 +451,33 @@ impl<'a> Checker<'a> {
                         self.name(*value)
                     ));
                 }
-                // S3b-2a の `unpack` は、消費する `switch` と同じく値の所有を受け取る
-                self.consume(owned, Atom::Var(*value))?;
-                for &field in fields {
-                    self.define(owned, field, self.at)?;
-                }
-                Ok(())
+                self.read(owned, *value, "unpacked")?;
+                self.bind_fields(owned, *value, *tag, fields, self.at)
             }
             Stmt::Dup(var) => {
                 self.rc_allowed(*var, "duplicated")?;
-                *self.count(owned, *var, "duplicated")? += 1;
+                self.read(owned, *var, "duplicated")?;
+                if !self.function.repr(*var).is_rc() {
+                    return Err(format!(
+                        "`{}` is duplicated but is not reference counted",
+                        self.name(*var)
+                    ));
+                }
+                *owned.entry(*var).or_insert(0) += 1;
                 Ok(())
             }
             Stmt::Decref(var) => {
                 self.rc_allowed(*var, "released")?;
                 self.give_up(owned, *var, "released")
             }
-            Stmt::Release {
-                value,
-                tag: _,
-                fields,
-            } => {
+            Stmt::Release { value, tag, fields } => {
                 if self.level == Level::Scopes {
                     return Err(format!(
                         "`{}` is released with its fields before Perceus",
                         self.name(*value)
                     ));
                 }
-                self.release(owned, *value, fields)
+                self.release(owned, *value, *tag, fields)
             }
         }
     }
@@ -515,7 +527,11 @@ impl<'a> Checker<'a> {
                 if cases.iter().any(|case| !case.fields.is_empty()) {
                     self.fields_allowed(*scrutinee)?;
                 }
-                self.consume(&mut owned, *scrutinee)?;
+                // `switch` は scrutinee を読むだけなので、どの行き先も scrutinee の所有を引き継ぐ
+                match *scrutinee {
+                    Atom::Var(var) => self.read(&owned, var, "switched on")?,
+                    atom => self.consume(&mut owned, atom)?,
+                }
                 // 行き先は辺を1本しか持たないので (R3)、ここで入口の状態を決める。フィールドは行き先の先頭で定義する
                 for case in cases {
                     let mut entry = owned.clone();
@@ -523,8 +539,8 @@ impl<'a> Checker<'a> {
                         block: case.target.0,
                         index: -1,
                     };
-                    for &field in &case.fields {
-                        self.define(&mut entry, field, site)?;
+                    if let (Atom::Var(value), CasePattern::Tag(tag)) = (*scrutinee, case.pattern) {
+                        self.bind_fields(&mut entry, value, tag, &case.fields, site)?;
                     }
                     self.pending.insert(
                         case.target.0,
@@ -746,7 +762,8 @@ impl<'a> Checker<'a> {
         Ok(())
     }
 
-    /// RC の対象の変数の、所有している参照の数。0 なら、`what` (使う、複製する、捨てる) ことはできない。
+    /// RC の対象の変数の、所有している参照の数。0 なら、`what` (使う、捨てる) ことはできない。持ち主が所有を持つ
+    /// フィールドは、借りているだけなので所有を渡せない。
     fn count<'s>(
         &self,
         owned: &'s mut Owned,
@@ -760,10 +777,68 @@ impl<'a> Checker<'a> {
                 self.name(var)
             ));
         }
-        match owned.get_mut(&var) {
-            Some(count) => Ok(count),
+        if !owned.contains_key(&var) {
+            return Err(match self.owners[var.0 as usize] {
+                Some(owner) if owned.contains_key(&owner) => format!(
+                    "`{}` is {what} but is only borrowed from `{}`",
+                    self.name(var),
+                    self.name(owner)
+                ),
+                _ => format!("`{}` is {what} after it was moved", self.name(var)),
+            });
+        }
+        Ok(owned.get_mut(&var).expect("checked above"))
+    }
+
+    /// 値を読む (`switch` の scrutinee、`unpack` の値、`dup`)。所有の検査の段では、RC の対象の変数は有効でなければ
+    /// ならない。つまり、自分か持ち主が所有を持つ。所有を持つ経路は実際の参照を持つので物体は生きていて、data は
+    /// 書き換わらないので、そこからたどれる物体もすべて生きている (docs/spec/core-ir.md の「verifier」)。
+    fn read(&self, owned: &Owned, var: VarId, what: &str) -> Result<(), String> {
+        self.visible(var)?;
+        if self.level == Level::Scopes
+            || !self.function.repr(var).is_rc()
+            || owned.contains_key(&var)
+        {
+            return Ok(());
+        }
+        match self.owners[var.0 as usize] {
+            Some(owner) if owned.contains_key(&owner) => Ok(()),
+            Some(owner) => Err(format!(
+                "`{}` is {what} after its owner `{}` was given up",
+                self.name(var),
+                self.name(owner)
+            )),
             None => Err(format!("`{}` is {what} after it was moved", self.name(var))),
         }
+    }
+
+    /// `case` か `unpack` のフィールドを定義する。RC の対象のフィールドは所有を持たずに始まる (借りる)。持ち主と
+    /// 出どころは定義のときに1回だけ決める。
+    fn bind_fields(
+        &mut self,
+        owned: &mut Owned,
+        value: VarId,
+        tag: u32,
+        fields: &[VarId],
+        site: Site,
+    ) -> Result<(), String> {
+        let owner = if owned.contains_key(&value) {
+            Some(value)
+        } else {
+            self.owners[value.0 as usize]
+        };
+        for (slot, &field) in fields.iter().enumerate() {
+            self.define(owned, field, site)?;
+            owned.remove(&field);
+            self.owners[field.0 as usize] = owner;
+            self.origins[field.0 as usize] = Some(Origin {
+                value,
+                tag,
+                arity: fields.len(),
+                slot,
+            });
+        }
+        Ok(())
     }
 
     /// 参照を1つ手放す。所有しなくなった変数は表から除き、写す状態を小さく保つ。
@@ -776,12 +851,13 @@ impl<'a> Checker<'a> {
         Ok(())
     }
 
-    /// `release x #t(p1, .., pn)`。x の参照を1つ手放し、名前を書いた変数が参照を1つずつ受け取る。名前を書いた変数が、
-    /// x を分解したときの同じ位置のフィールドかどうかは、まだ確かめない (docs/spec/core-ir.md)。
+    /// `release x #t(p1, .., pn)`。x の参照を1つ手放し、名前を書いた変数が参照を1つずつ受け取る。名前を書いた変数は、
+    /// x を同じタグとフィールドの数で分解したときの、同じ位置のフィールドである (docs/spec/core-ir.md)。
     fn release(
         &self,
         owned: &mut Owned,
         value: VarId,
+        tag: u32,
         fields: &[Option<VarId>],
     ) -> Result<(), String> {
         if fields.iter().all(Option::is_none) {
@@ -790,12 +866,26 @@ impl<'a> Checker<'a> {
                 self.name(value)
             ));
         }
-        for &field in fields.iter().flatten() {
+        for (slot, field) in fields.iter().enumerate() {
+            let Some(field) = *field else { continue };
             self.visible(field)?;
             if !self.function.repr(field).is_rc() {
                 return Err(format!(
                     "`{}` is kept but is not reference counted",
                     self.name(field)
+                ));
+            }
+            let origin = Origin {
+                value,
+                tag,
+                arity: fields.len(),
+                slot,
+            };
+            if self.origins[field.0 as usize] != Some(origin) {
+                return Err(format!(
+                    "`{}` is not field {slot} of `{}` #{tag}",
+                    self.name(field),
+                    self.name(value)
                 ));
             }
         }

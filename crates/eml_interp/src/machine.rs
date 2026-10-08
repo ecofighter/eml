@@ -120,8 +120,8 @@ impl<'p> Machine<'p> {
         Ok(Step::Continue)
     }
 
-    /// 消費する `switch` の1つの case と同じく、値を `take_or_copy` で分解し、フィールドは参照を1つずつ所有して
-    /// 始まる (docs/spec/core-ir.md)。
+    /// `switch` の1つの case と同じく、値を読むだけで分解する。参照の数は変えず、フィールドは値から借りて始まる
+    /// (docs/spec/core-ir.md)。
     fn unpack(&mut self, value: VarId, tag: u32, fields: &[VarId]) -> Result<(), Fault> {
         let Value::Obj(obj) = self.env.read(value)? else {
             return Err(Fault::Internal(
@@ -131,11 +131,11 @@ impl<'p> Machine<'p> {
         let Payload::Data {
             tag: found,
             fields: values,
-        } = self.rt.heap.take_or_copy(obj).map_err(Fault::Heap)?
+        } = self.rt.heap.get(obj).map_err(Fault::Heap)?
         else {
             return Err(Fault::Internal("an unpack of an object that is not data"));
         };
-        if found != tag {
+        if *found != tag {
             return Err(Fault::Internal(
                 "an unpack names a different tag than the value has",
             ));
@@ -145,7 +145,7 @@ impl<'p> Machine<'p> {
                 "an unpack binds a different number of fields than the value has",
             ));
         }
-        for (&field, value) in fields.iter().zip(values) {
+        for (&field, &value) in fields.iter().zip(values) {
             self.env.write(field, value);
         }
         Ok(())

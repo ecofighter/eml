@@ -189,6 +189,14 @@ impl Stmt {
             Stmt::Dup(_) | Stmt::Decref(_) | Stmt::Release { .. } => {}
         }
     }
+
+    /// 値の使いのうち、参照を1つ受け取る「消費」。`unpack` の値は読むだけなので数えない (docs/spec/core-ir.md)。
+    pub fn for_each_consumed(&self, f: impl FnMut(Atom)) {
+        match self {
+            Stmt::Let { var: _, rhs } => rhs.for_each_atom(f),
+            Stmt::Unpack { .. } | Stmt::Dup(_) | Stmt::Decref(_) | Stmt::Release { .. } => {}
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -256,6 +264,14 @@ impl Term {
                 cases: _,
                 default: _,
             } => f(*scrutinee),
+        }
+    }
+
+    /// 値の使いのうち、参照を1つ受け取る「消費」。`switch` の scrutinee は読むだけなので数えない
+    /// (docs/spec/core-ir.md)。
+    pub fn for_each_consumed(&self, f: impl FnMut(Atom)) {
+        if !matches!(self, Term::Switch { .. }) {
+            self.for_each_atom(f);
         }
     }
 

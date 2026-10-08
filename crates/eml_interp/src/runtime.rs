@@ -159,12 +159,11 @@ impl<'p> Runtime<'p> {
         Ok(())
     }
 
-    /// `Switch` の scrutinee に合う case と、その case に入れるフィールド。scrutinee は move で受け取る。合う case の
-    /// ある `data` の値は、`take_or_copy` でフィールドを複製して箱を手放すので、共有されていても case はフィールドの
-    /// 参照を1つずつ所有して始まる。比べ終えた文字列と、`default` に進む `data` の値は、分解せずに手放す。`default`
-    /// はフィールドを束縛しないので、手放すフィールドが残らない (docs/spec/core-ir.md)。
+    /// `Switch` の scrutinee に合う case と、その case に入れるフィールド。scrutinee もフィールドも読むだけで、参照の
+    /// 数を変えない。フィールドは scrutinee から借り、所有にするのは行き先の `dup` か `release` である
+    /// (docs/spec/core-ir.md)。
     pub(crate) fn select_case<'c, C>(
-        &mut self,
+        &self,
         value: Value,
         cases: &'c [C],
         pattern: impl Fn(&C) -> CasePattern,
@@ -180,29 +179,23 @@ impl<'p> Runtime<'p> {
                 ));
             }
         };
-        let strings = self.strings;
-        let found = match self.heap.get(obj).map_err(Fault::Heap)? {
-            Payload::Data { tag, .. } => find(CasePattern::Tag(*tag)),
-            Payload::Str(text) => cases.iter().find(|case| {
-                matches!(pattern(case), CasePattern::String(index)
-                    if strings[index as usize] == *text)
+        match self.heap.get(obj).map_err(Fault::Heap)? {
+            // `default` はフィールドを束縛しないので、合う case があるときだけフィールドを渡す
+            Payload::Data { tag, fields } => Ok(match find(CasePattern::Tag(*tag)) {
+                Some(case) => (Some(case), fields.clone()),
+                None => (None, Vec::new()),
             }),
-            _ => {
-                return Err(Fault::Internal(
-                    "a switch on an object that is neither data nor a string",
-                ));
+            Payload::Str(text) => {
+                let found = cases.iter().find(|case| {
+                    matches!(pattern(case), CasePattern::String(index)
+                        if self.strings[index as usize] == *text)
+                });
+                Ok((found, Vec::new()))
             }
-        };
-        if let Some(case) = found
-            && matches!(pattern(case), CasePattern::Tag(_))
-        {
-            return match self.heap.take_or_copy(obj).map_err(Fault::Heap)? {
-                Payload::Data { fields, .. } => Ok((Some(case), fields)),
-                _ => Err(Fault::Internal("a switch on an object that is not data")),
-            };
+            _ => Err(Fault::Internal(
+                "a switch on an object that is neither data nor a string",
+            )),
         }
-        self.heap.decref(obj).map_err(Fault::Heap)?;
-        Ok((found, Vec::new()))
     }
 
     /// 呼び出しのフレームを積む。末尾呼び出しは積まない。

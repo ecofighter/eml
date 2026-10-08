@@ -1,5 +1,5 @@
--- The scrutinee is used again inside an arm and after the match, so the arm unpacks a shared value: it copies
--- the fields and keeps the cell.
+-- 枝の中と `match` の後で、scrutinee をもう一度使う。scrutinee は枝の後も生きているので、枝は箱を残したまま、
+-- 使うフィールドを複製する。
 data Option a =
   | None
   | Some a

@@ -6,46 +6,6 @@ use eml_interp::{Fault, RuntimeError};
 
 use crate::common::{run_core, run_core_unverified};
 
-const UNIQUE: &str = "\
-fn main() -> unit {
-  let s.0: obj = const \"field\"
-  let d.1: tobj = con #1(s.0)
-  switch d.1 { #0 -> b1, #1(x.2: obj) -> b2 }
-b1:
-  return ()
-b2:
-  let o.3: unit = extern Prelude.println(x.2)
-  return o.3
-}
-";
-
-/// `switch` の前で `d.1` を複製し、両方の行き先で `d.1` を捨てる。
-const SHARED: &str = "\
-fn main() -> unit {
-  let s.0: obj = const \"field\"
-  let d.1: tobj = con #1(s.0)
-  dup d.1
-  switch d.1 { #0 -> b1, #1(x.2: obj) -> b2 }
-b1:
-  decref d.1
-  return ()
-b2:
-  let o.3: unit = extern Prelude.println(x.2)
-  decref d.1
-  return o.3
-}
-";
-
-#[test]
-fn a_unique_value_is_unpacked_by_taking_its_fields() {
-    assert_eq!(run_core(UNIQUE), ("field\n".to_string(), Ok(())));
-}
-
-#[test]
-fn a_shared_value_is_unpacked_by_copying_its_fields() {
-    assert_eq!(run_core(SHARED), ("field\n".to_string(), Ok(())));
-}
-
 #[test]
 fn a_tobj_variable_holding_a_tag_takes_its_case() {
     // 引数のないコンストラクタの値は、`tobj` の変数にも即値で入る
@@ -56,11 +16,12 @@ fn main() -> unit {
 fn show(d.0: tobj) -> unit {
   switch d.0 { #0 -> b1, #1(x.1: obj) -> b2 }
 b1:
+  decref d.0
   let s.2: obj = const \"none\"
   let o.3: unit = extern Prelude.println(s.2)
   return o.3
 b2:
-  decref x.1
+  decref d.0
   return ()
 }
 ";
@@ -92,7 +53,8 @@ b2:
     );
 }
 
-/// 文字列のリテラルの case に一致する値と、`default` に進む値。どちらも `Switch` が文字列を1回だけ手放す。
+/// 文字列のリテラルの case に一致する値と、`default` に進む値。`Switch` は文字列を読むだけで、どの行き先も文字列を
+/// 1回だけ手放す。
 const STRING_SWITCH: &str = "\
 fn main() -> unit {
   let s.0: obj = const \"a\"
@@ -107,28 +69,32 @@ fn main() -> unit {
 fn pick(s.0: obj) -> int {
   switch s.0 { \"a\" -> b1, _ -> b2 }
 b1:
+  decref s.0
   return 1
 b2:
+  decref s.0
   return 2
 }
 ";
 
 #[test]
-fn a_string_switch_releases_the_string_on_every_path() {
+fn a_string_switch_leaves_the_string_to_its_targets() {
     assert_eq!(run_core(STRING_SWITCH), ("3\n".to_string(), Ok(())));
 }
 
 #[test]
 fn a_value_with_fields_that_goes_to_the_default_is_released() {
-    // `default` はフィールドを束縛しないので、`Switch` は値を分解せずに手放す
+    // `default` はフィールドを束縛しないので、行き先は値を `decref` で手放す
     let text = "\
 fn main() -> unit {
   let s.0: obj = const \"field\"
   let d.1: tobj = con #1(s.0)
   switch d.1 { #0 -> b1, _ -> b2 }
 b1:
+  decref d.1
   return ()
 b2:
+  decref d.1
   let s.2: obj = const \"default\"
   let o.3: unit = extern Prelude.println(s.2)
   return o.3
@@ -157,22 +123,24 @@ b3:
     assert_eq!(run_core(text), ("two\n".to_string(), Ok(())));
 }
 
-/// 組を2回分解する。1回目は共有された箱からフィールドを写し、2回目は一意になった箱からフィールドを取り出す。
+/// 組を2回分解する。`unpack` は箱を読むだけなので、1回目の後も箱は残る。1回目はフィールドを複製し、2回目は
+/// `release` で箱を手放してフィールドを受け取る。
 const UNPACK_TWICE: &str = "\
 fn main() -> unit {
   let s.0: obj = const \"first\"
   let p.1: obj = con #0(s.0, 2)
-  dup p.1
   unpack p.1 #0(a.2: obj, n.3: int)
+  dup a.2
   let o.4: unit = extern Prelude.println(a.2)
   unpack p.1 #0(b.5: obj, m.6: int)
+  release p.1 #0(b.5, _)
   let o.7: unit = extern Prelude.println(b.5)
   return o.7
 }
 ";
 
 #[test]
-fn an_unpack_takes_or_copies_the_fields() {
+fn an_unpack_reads_the_fields_without_taking_the_box() {
     assert_eq!(
         run_core(UNPACK_TWICE),
         ("first\nfirst\n".to_string(), Ok(()))
@@ -180,7 +148,7 @@ fn an_unpack_takes_or_copies_the_fields() {
 }
 
 /// `#1` の箱を `unpack` の文で分解する。verifier はコンストラクタの定義を知らないので、タグとフィールドの数の違いは
-/// 実行して初めて分かり、インタプリタの内部の誤りになる。分解したフィールドを捨てないので、verifier を通さない。
+/// 実行して初めて分かり、インタプリタの内部の誤りになる。分解した値を手放さないので、verifier を通さない。
 fn unpack_of_tag_one(unpack: &str) -> Result<(), RuntimeError> {
     let text = format!(
         "\
@@ -263,9 +231,9 @@ fn main() -> unit {
 
 // release
 
-/// `d.1` の箱を `release` で手放し、`s.0` がフィールドの参照を受け取る。`s.0` はフィールドと同じ値を指すので、名前に
-/// 書ける。文字列のリテラルは不死なので、`show_int` で作った文字列をフィールドに入れ、解放の誤りが `debug_heap`
-/// に見えるようにする。`shared` が真なら `release` の前に箱を複製し、`release` は共有の側を通る。
+/// `switch` で `d.1` を分解し、行き先が `release` で箱を手放して、フィールドの `x.2` が参照を受け取る。文字列の
+/// リテラルは不死なので、`show_int` で作った文字列をフィールドに入れ、解放の誤りが `debug_heap` に見えるようにする。
+/// `shared` が真なら `switch` の前に箱を複製し、`release` は共有の側を通る。
 fn release_one_field(shared: bool) -> String {
     let (dup, decref) = if shared {
         ("  dup d.1\n", "  decref d.1\n")
@@ -277,9 +245,14 @@ fn release_one_field(shared: bool) -> String {
 fn main() -> unit {{
   let s.0: obj = extern Prelude.show_int(7)
   let d.1: tobj = con #1(s.0)
-{dup}  release d.1 #1(s.0)
-  let o.2: unit = extern Prelude.println(s.0)
-{decref}  return o.2
+{dup}  switch d.1 {{ #0 -> b1, #1(x.2: obj) -> b2 }}
+b1:
+{decref}  decref d.1
+  return ()
+b2:
+  release d.1 #1(x.2)
+  let o.3: unit = extern Prelude.println(x.2)
+{decref}  return o.3
 }}
 "
     )
@@ -308,10 +281,11 @@ fn main() -> unit {
   let s.0: obj = extern Prelude.show_int(7)
   dup s.0
   let d.1: obj = con #0(s.0, s.0)
-  release d.1 #0(s.0, s.0)
-  let t.2: obj = extern Prelude.++(s.0, s.0)
-  let o.3: unit = extern Prelude.println(t.2)
-  return o.3
+  unpack d.1 #0(x.2: obj, y.3: obj)
+  release d.1 #0(x.2, y.3)
+  let t.4: obj = extern Prelude.++(x.2, y.3)
+  let o.5: unit = extern Prelude.println(t.4)
+  return o.5
 }
 ";
     assert_eq!(run_core(text), ("77\n".to_string(), Ok(())));

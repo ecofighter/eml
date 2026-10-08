@@ -1,10 +1,11 @@
-//! Perceus の `dup` / `decref` の挿入と、呼び出しの `saved` (docs/spec/core-ir.md の「パス」)。変数を使うことを所有権の
-//! 移動として扱い、後でも使う変数を複製し、使わなくなった変数をできるだけ早く捨てる。対象は RC の対象 (`Repr::is_rc`)
-//! の変数だけである。ブロックを前からたどり、その場で書き換える。
+//! Perceus の `dup` / `decref` / `release` の挿入と、呼び出しの `saved` (docs/spec/core-ir.md の「パス」)。値を消費する
+//! 使いを所有権の移動として扱い、後でも使う変数を複製し、使わなくなった変数をできるだけ早く捨てる。`switch` と
+//! `unpack` は値を読むだけで、フィールドは値から借りて始まる。行き先の入口と `unpack` の直後で、生きているフィールドを
+//! 所有にする。対象は RC の対象 (`Repr::is_rc`) の変数だけである。ブロックを前からたどり、その場で書き換える。
 
 use std::collections::{BTreeSet, HashMap};
 
-use crate::{Atom, Block, BlockId, CoreFn, Program, Rhs, Stmt, Term, VarId};
+use crate::{Atom, Block, BlockId, CasePattern, CoreFn, Program, Rhs, Stmt, Term, VarId};
 
 use crate::liveness::{insert_var, live_after_term, live_in, step_back};
 
@@ -18,9 +19,10 @@ pub fn perceus(program: &mut Program) {
 fn insert_rc(function: &mut CoreFn) {
     let live_in = live_in(function);
     let rc: Vec<bool> = function.vars.iter().map(|var| var.repr.is_rc()).collect();
-    // `switch` の行き先には、その `switch` の辺1本だけが入る (R3)。入口の所有は `switch` のブロックで決まるので、
-    // 行き先に着くまでここに置く
+    // `switch` の行き先には、その `switch` の辺1本だけが入る (R3)。入口の所有と、case が分解した値は `switch` の
+    // ブロックで決まるので、行き先に着くまでここに置く
     let mut switch_entries: HashMap<BlockId, Vec<VarId>> = HashMap::new();
+    let mut case_values: HashMap<BlockId, Destructured> = HashMap::new();
     for index in 0..function.blocks.len() {
         let id = BlockId(index as u32);
         let after_term = live_after_term(function, &function.blocks[index].term, &live_in);
@@ -31,39 +33,64 @@ fn insert_rc(function: &mut CoreFn) {
             owned.extend(block.params.iter().copied());
             owned.into_iter().filter(|var| rc[var.0 as usize]).collect()
         });
+        let destructured = case_values.remove(&id);
         if let Term::Switch {
-            scrutinee: _,
+            scrutinee,
             cases,
             default,
         } = &block.term
         {
-            // 行き先は、(`switch` の前の所有 − scrutinee) にフィールドを足したものを所有する。scrutinee を行き先でも
-            // 使うなら、`switch` の前で複製した分を所有する。この集合は終端の後で生きている RC の対象と同じである
-            let kept: Vec<VarId> = after_term
+            // `switch` は scrutinee を読むだけなので、どの行き先も `switch` の前の所有をそのまま引き継ぐ。それは終端の
+            // 後で生きている RC の対象に scrutinee を足したものである。フィールドは借りて始まるので、所有に入らない
+            let value = match *scrutinee {
+                Atom::Var(var) if rc[var.0 as usize] => Some(var),
+                _ => None,
+            };
+            let mut kept: BTreeSet<VarId> = after_term
                 .iter()
                 .copied()
                 .filter(|var| rc[var.0 as usize])
                 .collect();
+            kept.extend(value);
+            let kept: Vec<VarId> = kept.into_iter().collect();
             for case in cases {
-                let mut entry = kept.clone();
-                entry.extend(case.fields.iter().copied().filter(|var| rc[var.0 as usize]));
-                entry.sort_unstable();
-                switch_entries.insert(case.target, entry);
+                switch_entries.insert(case.target, kept.clone());
+                if let (Some(value), CasePattern::Tag(tag)) = (value, case.pattern)
+                    && !case.fields.is_empty()
+                {
+                    case_values.insert(
+                        case.target,
+                        Destructured {
+                            value,
+                            tag,
+                            fields: case.fields.clone(),
+                        },
+                    );
+                }
             }
             if let Some(default) = default {
                 switch_entries.insert(*default, kept);
             }
         }
-        rewrite(block, &owned, after_term, &live_in[index], &rc);
+        rewrite(
+            block,
+            &owned,
+            destructured.as_ref(),
+            after_term,
+            &live_in[index],
+            &rc,
+        );
     }
 }
 
 /// ブロックの文を書き換える。後ろからたどって各文の後で生きている変数を求め、複製と解放と `saved` を決めてから、
 /// 前から並べ直す。終端の前に足す文は `stmts` の末尾に置くので、終端を「文と新しい終端」に置き換える書き換え
-/// (S3b-2b の `TailCall` の降格) も、ここで終端を差し替えればその場でできる。
+/// (S3b-2b の `TailCall` の降格) も、ここで終端を差し替えればその場でできる。`destructured` は、このブロックが
+/// case の行き先なら、その case が分解した値である。
 fn rewrite(
     block: &mut Block,
     owned: &[VarId],
+    destructured: Option<&Destructured>,
     mut live: BTreeSet<VarId>,
     live_in: &[VarId],
     rc: &[bool],
@@ -71,7 +98,7 @@ fn rewrite(
     let mut uses = Vec::new();
     block
         .term
-        .for_each_atom(|atom| push_rc_var(&mut uses, atom, rc));
+        .for_each_consumed(|atom| push_rc_var(&mut uses, atom, rc));
     let term_dups = dups(uses, &live);
     block.term.for_each_atom(|atom| insert_var(&mut live, atom));
     let mut plans = Vec::with_capacity(block.stmts.len());
@@ -93,32 +120,63 @@ fn rewrite(
         {
             *saved = live.iter().copied().filter(|v| v != var).collect();
         }
-        let dead: Vec<VarId> = stmt
-            .defs()
-            .iter()
-            .copied()
-            .filter(|var| rc[var.0 as usize] && !live.contains(var))
-            .collect();
+        // 文の直後に足す文。`unpack` の後では借りたフィールドを所有にし、ほかの文では定義して使わない変数を捨てる
+        let after: Vec<Stmt> = match stmt {
+            Stmt::Unpack { value, tag, fields } => {
+                let destructured = Destructured {
+                    value: *value,
+                    tag: *tag,
+                    fields: fields.clone(),
+                };
+                match destructured.own(|var| live.contains(&var), rc) {
+                    Owning::Dups(vars) => vars.into_iter().map(Stmt::Dup).collect(),
+                    Owning::Release(release) => vec![release],
+                    Owning::Decref => vec![Stmt::Decref(*value)],
+                }
+            }
+            _ => stmt
+                .defs()
+                .iter()
+                .copied()
+                .filter(|var| rc[var.0 as usize] && !live.contains(var))
+                .map(Stmt::Decref)
+                .collect(),
+        };
         let mut uses = Vec::new();
-        stmt.for_each_atom(|atom| push_rc_var(&mut uses, atom, rc));
-        plans.push((dups(uses, &live), dead));
+        stmt.for_each_consumed(|atom| push_rc_var(&mut uses, atom, rc));
+        plans.push((dups(uses, &live), after));
         step_back(stmt, &mut live);
     }
     debug_assert!(live.iter().eq(live_in.iter()), "the block's live-in set");
 
     let old = std::mem::take(&mut block.stmts);
     let stmts = &mut block.stmts;
-    // 所有していて入口で死んでいる変数 (使わない引数、フィールド、ほかの行き先だけが使う変数) は先頭で捨てる
+    let is_live = |var: VarId| live_in.binary_search(&var).is_ok();
+    // 入口の順は、フィールドの複製、死んだ所有の `decref` (変数の番号の順)、`release` である。translate は束縛の順に
+    // 番号を振るので、親が先に手放され、入れ子の値の参照が1つに戻って `release` が一意の側を通れる
+    // (docs/spec/core-ir.md の「Perceus」)
+    let mut release = None;
+    if let Some(destructured) = destructured {
+        match destructured.own(is_live, rc) {
+            Owning::Dups(vars) => stmts.extend(vars.into_iter().map(Stmt::Dup)),
+            Owning::Release(stmt) => release = Some((destructured.value, stmt)),
+            Owning::Decref => {}
+        }
+    }
+    let released = release.as_ref().map(|&(value, _)| value);
+    // 所有していて入口で死んでいる変数 (使わない引数、ほかの行き先だけが使う変数、フィールドを使わない scrutinee) は
+    // 先頭で捨てる
     stmts.extend(
         owned
             .iter()
-            .filter(|var| live_in.binary_search(var).is_err())
+            .filter(|&&var| !is_live(var) && Some(var) != released)
             .map(|&var| Stmt::Decref(var)),
     );
-    for (stmt, (dups, dead)) in old.into_iter().zip(plans.into_iter().rev()) {
+    stmts.extend(release.map(|(_, stmt)| stmt));
+    for (stmt, (dups, after)) in old.into_iter().zip(plans.into_iter().rev()) {
         stmts.extend(dups.into_iter().map(Stmt::Dup));
         stmts.push(stmt);
-        stmts.extend(dead.into_iter().map(Stmt::Decref));
+        stmts.extend(after);
     }
     // 終端が渡さない所有は残らない。生きている変数は、最後に使う位置で所有権ごと渡り、死んだ変数は先頭か定義の直後で
     // 捨ててあるためである
@@ -144,5 +202,55 @@ fn push_rc_var(uses: &mut Vec<VarId>, atom: Atom, rc: &[bool]) {
         && rc[var.0 as usize]
     {
         uses.push(var);
+    }
+}
+
+/// `case` か `unpack` が分解した値と、その値から借りて始まるフィールド。
+struct Destructured {
+    value: VarId,
+    tag: u32,
+    fields: Vec<VarId>,
+}
+
+/// 借りたフィールドのうち、生きているものを所有にする方法 (docs/spec/core-ir.md の「Perceus」)。
+enum Owning {
+    /// 値が生きているので、生きているフィールドを複製する。
+    Dups(Vec<VarId>),
+    /// 値が死ぬので、生きているフィールドを名前に書いた `release` で値を手放す。
+    Release(Stmt),
+    /// 値が死に、生きているフィールドもないので、値を `decref` で手放す。
+    Decref,
+}
+
+impl Destructured {
+    fn own(&self, is_live: impl Fn(VarId) -> bool, rc: &[bool]) -> Owning {
+        let live: Vec<bool> = self
+            .fields
+            .iter()
+            .map(|&var| rc[var.0 as usize] && is_live(var))
+            .collect();
+        if is_live(self.value) {
+            return Owning::Dups(
+                self.fields
+                    .iter()
+                    .zip(&live)
+                    .filter(|&(_, &live)| live)
+                    .map(|(&var, _)| var)
+                    .collect(),
+            );
+        }
+        if !live.contains(&true) {
+            return Owning::Decref;
+        }
+        Owning::Release(Stmt::Release {
+            value: self.value,
+            tag: self.tag,
+            fields: self
+                .fields
+                .iter()
+                .zip(&live)
+                .map(|(&var, &live)| live.then_some(var))
+                .collect(),
+        })
     }
 }

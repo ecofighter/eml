@@ -57,37 +57,26 @@ const IDENTITY: &str = "fn g(s.0: obj) -> obj {\n  return s.0\n}\n";
 /// `k n = n`。
 const K: &str = "fn k(a.0: int) -> int {\n  return a.0\n}\n";
 
-/// 両方の枝が scrutinee の `d` を返す。`switch` は `d` を消費するので、枝で使うには前で複製する。
-fn keep_scrutinee(dup: bool) -> String {
-    let dup = if dup { "  dup d.0\n" } else { "" };
+/// `d` を `switch` で分解し、`#1` の行き先 b2 の `body` が、`d` から借りたフィールド `x` を使う。`#0` の行き先は
+/// 所有をすべて手放す。`c` は `apply` で呼ぶ値である。
+fn borrowing_arm(body: &str) -> String {
     format!(
-        "\
-fn f(d.0: tobj) -> tobj {{
-{dup}  switch d.0 {{ #0 -> b1, #1(x.1: obj) -> b2 }}
+        "{IDENTITY}{K}fn f(d.0: tobj, c.1: tobj) -> obj {{
+  switch d.0 {{ #0 -> b1, #1(x.2: obj) -> b2 }}
 b1:
-  return d.0
+  decref d.0
+  decref c.1
+  let e.3: obj = const \"e\"
+  return e.3
 b2:
-  decref x.1
-  return d.0
-}}
+{body}}}
 "
     )
 }
 
-/// `release` は、フィールドを持つ枝が `x` を解放するかどうか。
-fn unused_field(release: bool) -> String {
-    let decref = if release { "  decref x.1\n" } else { "" };
-    format!(
-        "\
-fn f(d.0: tobj) -> unit {{
-  switch d.0 {{ #0 -> b1, #1(x.1: obj) -> b2 }}
-b1:
-  return ()
-b2:
-{decref}  return ()
-}}
-"
-    )
+/// `p` を `unpack` で分解し、`body` が `p` から借りたフィールド `a` と `b` を使う。
+fn unpacking(body: &str) -> String {
+    format!("fn f(p.0: obj) -> obj {{\n  unpack p.0 #0(a.1: obj, b.2: tobj)\n{body}}}\n")
 }
 
 /// `n` を使う合流のブロックの前で、片方の経路だけが呼び出しをする。`saved` はその呼び出しの `save` の部分である。
@@ -443,6 +432,7 @@ fn a_field_is_in_scope_in_the_blocks_its_arm_dominates() {
 fn f(d.0: tobj, c.1: enum) -> obj {
   switch d.0 { #0 -> b1, #1(x.2: obj) -> b2 }
 b1:
+  decref d.0
   let e.3: obj = const \"e\"
   return e.3
 b2:
@@ -452,6 +442,7 @@ b3:
 b4:
   jump b5()
 b5:
+  release d.0 #1(x.2)
   return x.2
 }
 ";
@@ -682,26 +673,285 @@ fn the_result_of_a_call_is_not_compared_with_the_callee() {
     assert_eq!(check_scopes(&text), Ok(()));
 }
 
-// Unpack の所有
+// 借りたフィールド
 
 #[test]
-fn an_unpack_consumes_its_value_and_owns_its_fields() {
-    let released = "\
-fn f(p.0: obj) -> int {
-  unpack p.0 #0(a.1: int, s.2: obj)
-  decref s.2
-  return a.1
+fn a_borrowed_field_cannot_be_consumed() {
+    let borrowed = "`x.2` is used but is only borrowed from `d.0` in `f`";
+    for body in [
+        "  return x.2\n",
+        "  let t.4: obj = call g(x.2) save [d.0, c.1]\n  return t.4\n",
+        "  let t.4: obj = con #0(x.2)\n  return t.4\n",
+        "  let t.4: obj = extern Prelude.++(x.2, x.2)\n  return t.4\n",
+        "  let t.4: obj = apply c.1(x.2)\n  return t.4\n",
+        "  let t.4: obj = apply x.2(1)\n  return t.4\n",
+    ] {
+        assert_eq!(
+            check(&borrowing_arm(body)),
+            Err(borrowed.to_string()),
+            "{body}"
+        );
+    }
+    assert_eq!(
+        check(&borrowing_arm("  decref x.2\n  return x.2\n")),
+        Err("`x.2` is released but is only borrowed from `d.0` in `f`".to_string())
+    );
+}
+
+#[test]
+fn a_borrowed_field_cannot_be_passed_to_a_block() {
+    let text = "\
+fn f(d.0: tobj) -> obj {
+  switch d.0 { #0 -> b1, #1(x.1: obj) -> b2 }
+b1:
+  decref d.0
+  let e.2: obj = const \"e\"
+  jump b3(e.2)
+b2:
+  jump b3(x.1)
+b3(r.3: obj):
+  return r.3
 }
 ";
-    assert_eq!(check(released), Ok(()));
     assert_eq!(
-        check(&released.replace("  decref s.2\n", "")),
-        Err("`s.2` is still owned at the end of the function in `f`".to_string())
+        check(text),
+        Err("`x.1` is used but is only borrowed from `d.0` in `f`".to_string())
+    );
+}
+
+#[test]
+fn a_borrowed_field_cannot_be_saved() {
+    assert_eq!(
+        check(&borrowing_arm(
+            "  let t.4: int = call k(1) save [d.0, c.1, x.2]\n  return x.2\n"
+        )),
+        Err("a call saves [d.0, c.1, x.2] but owns [d.0, c.1] in `f`".to_string())
+    );
+}
+
+#[test]
+fn a_field_cannot_be_read_after_its_owner_is_given_up() {
+    let given_up = |field: &str, what: &str| {
+        Err(format!(
+            "`{field}` is {what} after its owner `p.0` was given up in `f`"
+        ))
+    };
+    // `release` が残さなかったフィールド
+    assert_eq!(
+        check(&unpacking(
+            "  release p.0 #0(a.1, _)\n  dup b.2\n  decref b.2\n  return a.1\n"
+        )),
+        given_up("b.2", "duplicated")
     );
     assert_eq!(
-        check(&released.replace("  decref s.2\n", "  decref s.2\n  decref p.0\n")),
+        check(&unpacking(
+            "  release p.0 #0(a.1, _)\n  switch b.2 { #0 -> b1, #1(z.3: obj) -> b2 }\nb1:\n  return a.1\nb2:\n  return a.1\n"
+        )),
+        given_up("b.2", "switched on")
+    );
+    // `decref` と消費で手放した持ち主
+    assert_eq!(
+        check(&unpacking("  decref p.0\n  dup a.1\n  return a.1\n")),
+        given_up("a.1", "duplicated")
+    );
+    assert_eq!(
+        check(&unpacking(
+            "  let t.3: obj = con #0(p.0)\n  dup a.1\n  decref t.3\n  return a.1\n"
+        )),
+        given_up("a.1", "duplicated")
+    );
+    assert_eq!(
+        check(&unpacking(
+            "  decref p.0\n  unpack a.1 #0(z.3: obj)\n  return z.3\n"
+        )),
+        given_up("a.1", "unpacked")
+    );
+}
+
+#[test]
+fn a_release_keeps_only_the_fields_of_its_value() {
+    let not_field = |field: &str, slot: usize, value: &str, tag: u32| {
+        Err(format!(
+            "`{field}` is not field {slot} of `{value}` #{tag} in `f`"
+        ))
+    };
+    // 孫は `xs` のフィールドではない
+    let grandchild = "\
+fn f(xs.0: obj) -> obj {
+  unpack xs.0 #0(y.1: obj)
+  unpack y.1 #0(z.2: obj)
+  release xs.0 #0(z.2)
+  return z.2
+}
+";
+    assert_eq!(check(grandchild), not_field("z.2", 0, "xs.0", 0));
+    // 2回目の `unpack` の位置 0 のフィールドを、位置 1 に書く
+    assert_eq!(
+        check(&unpacking(
+            "  unpack p.0 #0(c.3: obj, d.4: tobj)\n  release p.0 #0(a.1, c.3)\n  return a.1\n"
+        )),
+        not_field("c.3", 1, "p.0", 0)
+    );
+    assert_eq!(
+        check(&unpacking("  release p.0 #1(a.1, _)\n  return a.1\n")),
+        not_field("a.1", 0, "p.0", 1)
+    );
+    assert_eq!(
+        check(&unpacking("  release p.0 #0(a.1)\n  return a.1\n")),
+        not_field("a.1", 0, "p.0", 0)
+    );
+    let other = "\
+fn f(p.0: obj, q.1: obj) -> obj {
+  unpack p.0 #0(a.2: obj)
+  unpack q.1 #0(b.3: obj)
+  release p.0 #0(b.3)
+  decref q.1
+  return b.3
+}
+";
+    assert_eq!(check(other), not_field("b.3", 0, "p.0", 0));
+}
+
+#[test]
+fn a_release_cannot_keep_a_field_of_a_branch_that_does_not_dominate_it() {
+    let text = "\
+fn f(d.0: tobj) -> obj {
+  switch d.0 { #0 -> b1, #1(x.1: obj) -> b2 }
+b1:
+  jump b3()
+b2:
+  jump b3()
+b3:
+  release d.0 #1(x.1)
+  return x.1
+}
+";
+    assert_eq!(
+        check(text),
+        Err("`x.1` is used outside its scope in `f`".to_string())
+    );
+}
+
+#[test]
+fn a_value_is_released_once() {
+    assert_eq!(
+        check(&unpacking(
+            "  release p.0 #0(a.1, _)\n  release p.0 #0(a.1, _)\n  return a.1\n"
+        )),
         Err("`p.0` is released after it was moved in `f`".to_string())
     );
+}
+
+#[test]
+fn a_borrowed_value_cannot_be_released() {
+    let text = "\
+fn f(d.0: obj) -> obj {
+  unpack d.0 #0(y.1: obj)
+  unpack y.1 #0(z.2: obj)
+  release y.1 #0(z.2)
+  decref d.0
+  return z.2
+}
+";
+    assert_eq!(
+        check(text),
+        Err("`y.1` is released but is only borrowed from `d.0` in `f`".to_string())
+    );
+}
+
+#[test]
+fn a_nested_release_is_accepted() {
+    let text = "\
+fn f(xs.0: obj) -> obj {
+  unpack xs.0 #0(y.1: obj, w.2: obj)
+  release xs.0 #0(y.1, _)
+  unpack y.1 #0(z.3: obj)
+  release y.1 #0(z.3)
+  return z.3
+}
+";
+    assert_eq!(check(text), Ok(()));
+}
+
+#[test]
+fn a_field_duplicated_before_its_owner_is_given_up_stays_owned() {
+    assert_eq!(
+        check(&unpacking("  dup a.1\n  decref p.0\n  return a.1\n")),
+        Ok(())
+    );
+}
+
+#[test]
+fn a_borrowed_field_can_be_switched_on_while_its_owner_is_owned() {
+    let text = "\
+fn f(d.0: obj) -> obj {
+  unpack d.0 #0(y.1: tobj)
+  switch y.1 { #0 -> b1, #1(z.2: obj) -> b2 }
+b1:
+  decref d.0
+  let e.3: obj = const \"e\"
+  return e.3
+b2:
+  dup z.2
+  decref d.0
+  return z.2
+}
+";
+    assert_eq!(check(text), Ok(()));
+}
+
+#[test]
+fn a_value_owned_twice_is_still_owned_after_a_release() {
+    // `release` が手放すのは参照1つなので、`p` は所有されたままで、残さなかった `b` も有効である
+    assert_eq!(
+        check(&unpacking(
+            "  dup p.0\n  release p.0 #0(a.1, _)\n  dup b.2\n  decref p.0\n  decref b.2\n  return a.1\n"
+        )),
+        Ok(())
+    );
+}
+
+#[test]
+fn what_perceus_gives_a_target_that_uses_its_scrutinee_is_accepted() {
+    // `label` はフィールドのない行き先と、フィールドを使う行き先の両方で、scrutinee を後でも使う。`rest` は
+    // `| Nil -> xs` の形で、フィールドのない行き先が scrutinee をそのまま返す
+    let text = "\
+data Option a =
+  | None
+  | Some a
+
+data List a =
+  | Nil
+  | Cons a (List a)
+
+show : Option String -> String
+show o = match o with
+  | Some s -> s
+  | None -> \"none\"
+
+label : Option String -> String
+label o =
+  let first = match o with
+    | Some s -> s ++ show o
+    | None -> show o
+  first ++ show o
+
+rest : List Int -> List Int
+rest xs = match xs with
+  | Nil -> xs
+  | Cons _ t -> t
+
+size : List Int -> Int
+size xs = match xs with
+  | Nil -> 0
+  | Cons _ t -> 1 + size t
+
+main : Unit -> <IO> Unit
+main () =
+  println (label (Some \"a\"))
+  println (show_int (size (rest (Cons 1 Nil))))
+";
+    assert_eq!(verify(&eml_test_support::core(text)), Ok(()));
 }
 
 // 所有の数え方
@@ -872,31 +1122,15 @@ fn a_switch_that_binds_fields_is_accepted() {
 fn f(d.0: tobj) -> obj {
   switch d.0 { #0 -> b1, #1(x.1: obj) -> b2 }
 b1:
+  decref d.0
   let e.2: obj = const \"e\"
   return e.2
 b2:
+  release d.0 #1(x.1)
   return x.1
 }
 ";
     assert_eq!(check(text), Ok(()));
-}
-
-#[test]
-fn an_unused_field_must_be_released() {
-    assert_eq!(check(&unused_field(true)), Ok(()));
-    assert_eq!(
-        check(&unused_field(false)),
-        Err("`x.1` is still owned at the end of the function in `f`".to_string())
-    );
-}
-
-#[test]
-fn a_scrutinee_used_in_an_arm_is_duplicated_before_the_switch() {
-    assert_eq!(check(&keep_scrutinee(true)), Ok(()));
-    assert_eq!(
-        check(&keep_scrutinee(false)),
-        Err("`d.0` is used after it was moved in `f`".to_string())
-    );
 }
 
 #[test]
@@ -1375,6 +1609,35 @@ fn a_long_chain_of_switches_is_verified_in_linear_time() {
     let start = std::time::Instant::now();
     assert_eq!(verify_scopes(&before), Ok(()));
     assert_eq!(verify(&after), Ok(()));
+    let elapsed = start.elapsed();
+    assert!(
+        elapsed < std::time::Duration::from_secs(10),
+        "took {elapsed:?}"
+    );
+}
+
+/// 借りたフィールドへの `switch` が `n` 段続く関数。どの段のフィールドも、引数の `d` を持ち主にする。
+fn borrowed_chain(n: u32) -> String {
+    let mut text = String::from("fn f(d.0: obj) -> int {\n  switch d.0 { #0(y.1: obj) -> b1 }\n");
+    for i in 1..n {
+        text.push_str(&format!(
+            "b{i}:\n  switch y.{i} {{ #0(y.{}: obj) -> b{} }}\n",
+            i + 1,
+            i + 1
+        ));
+    }
+    text.push_str(&format!(
+        "b{n}:\n  dup y.{n}\n  decref d.0\n  decref y.{n}\n  return 1\n}}\n"
+    ));
+    text
+}
+
+#[test]
+fn a_long_chain_of_switches_on_borrowed_fields_is_verified_in_linear_time() {
+    // 借りた変数が有効かどうかは、変数と持ち主の所有を1回ずつ見れば決まる。親を1段ずつたどると2乗の時間がかかる
+    let program = read(&borrowed_chain(100_000));
+    let start = std::time::Instant::now();
+    assert_eq!(verify(&program), Ok(()));
     let elapsed = start.elapsed();
     assert!(
         elapsed < std::time::Duration::from_secs(10),

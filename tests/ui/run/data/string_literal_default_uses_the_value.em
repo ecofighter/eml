@@ -1,4 +1,5 @@
--- 文字列のリテラルの `match` で、`default` の枝が値そのものを使う。`Switch` の前で値を複製し、二重に解放しない。
+-- 文字列のリテラルの `match` で、`default` の枝が値そのものを使う。`switch` は値を読むだけで、`default` の枝が値を
+-- 受け取り、ほかの枝が値を手放す。
 shout : String -> String
 shout s =
   match s with
