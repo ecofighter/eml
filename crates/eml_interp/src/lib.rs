@@ -8,7 +8,6 @@ mod error;
 mod externs;
 mod machine;
 mod runtime;
-pub mod v2;
 
 pub use error::{Fault, RuntimeError, SourceLocation};
 

@@ -84,9 +84,12 @@ fn run_fails_without_main_but_check_succeeds() {
 fn runtime_errors_exit_with_one() {
     let output = eml(&["run", "--debug-heap", "run-fail/basics/division_by_zero.em"]);
     assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        String::from_utf8_lossy(&output.stderr)
-            .contains("runtime error: division by zero in `divide`")
+        stderr.contains(
+            "runtime error: division by zero\n  at run-fail/basics/division_by_zero.em:3:16"
+        ),
+        "{stderr}"
     );
 }
 

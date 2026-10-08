@@ -3,9 +3,7 @@
 
 use eml_extern::Purity;
 
-use crate::Atom;
-
-use super::{Block, CoreFn, Program, Rhs, Stmt, Term};
+use crate::{Atom, Block, CoreFn, Program, Rhs, Stmt, Term};
 
 pub fn contract(program: &mut Program) {
     for function in &mut program.functions {

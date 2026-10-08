@@ -1,17 +1,16 @@
-//! Core IR のテキストを読む
-//! (docs/implementation/testing.md の「Core IR のテキストの形」)。`pretty` の表示をそのまま読むので、
-//! 表示したものを読み直すと同じ表示に戻る。手で書く IR のテストも、アリーナを組まずにこの形で書く。
-//! 字句に分けてから、行をまたいで再帰下降で読む。行の字下げは見ず、区切りは `}` と連なりを終える命令で決まる。
+//! Core IR のテキストを読む (docs/implementation/testing.md の「Core IR のテキストの形」)。`pretty` の表示をそのまま
+//! 読むので、表示したものを読み直すと同じ表示に戻る。手で書く IR のテストもこの形で書く。
+//! 構文だけを検査する。後ろ向きの `jump`、引数の数の誤り、見えない変数の使用などは verifier に報告させるため読める。
+//! ブロックも文も平らに並ぶので、プログラムの大きさに比例して再帰しない (docs/spec/core-ir.md)。
 
 use std::collections::HashMap;
 use std::fmt;
 
 use eml_extern::Extern;
 
-use crate::builder::FnBuilder;
 use crate::{
-    Atom, CExpr, CExprId, Call, Case, CasePattern, CoreFn, EffectInfo, FnIdx, JoinId,
-    OperationInfo, Program, Rhs, VarId, VarInfo,
+    Atom, Block, BlockId, Call, Case, CasePattern, CoreFn, EffectInfo, FnIdx, Loc, OperationInfo,
+    Program, Repr, Rhs, Stmt, Term, VarId, VarInfo,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -38,7 +37,7 @@ pub fn parse(text: &str) -> Result<Program, ParseError> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Tok {
     /// 空白、括弧、`,`、`"` を含まない字の並び。関数の名前は演算子の字を含むので、名前の字で区切らずに
-    /// まとめて取り、読む側が変数、整数、タグなどに分ける。
+    /// まとめて取り、読む側が変数、整数、タグ、ラベルなどに分ける。
     Word(String),
     Str(String),
     Punct(char),
@@ -51,6 +50,8 @@ struct Token {
 }
 
 const PUNCTS: &[char] = &['(', ')', '{', '}', '[', ']', ','];
+
+const REPRS: [Repr; 5] = [Repr::Obj, Repr::TObj, Repr::Int, Repr::Enum, Repr::Unit];
 
 fn lex(text: &str) -> Result<Vec<Token>, ParseError> {
     let mut tokens = Vec::new();
@@ -93,7 +94,7 @@ fn lex(text: &str) -> Result<Vec<Token>, ParseError> {
     Ok(tokens)
 }
 
-/// `pretty` は文字列定数を Rust の `{:?}` で書くので、その逃がし方を戻す。
+/// `pretty` は文字列定数とパスを Rust の `{:?}` で書くので、その逃がし方を戻す。
 fn string_literal(
     chars: &mut std::iter::Peekable<std::str::Chars<'_>>,
     line: usize,
@@ -140,36 +141,35 @@ fn string_literal(
     }
 }
 
-/// 変数の名前の字。末尾の数字の並びが番号になる。
 fn is_name_char(c: char) -> bool {
     c.is_ascii_alphanumeric() || c == '_' || c == '$' || c == '\''
 }
 
-/// 末尾の数字の並びを番号とし、その前を名前とする。番号は 0 で始まらないので、並びの先頭の 0 は名前に入れる
-/// (`$00` は名前 `$0` の 0 番)。名前が数字で終わると表示の切れ目は決まらないが、表示が同じなら読み直した表示も
-/// 同じになる (docs/implementation/testing.md の「Core IR のテキストの形」)。
+/// `name.N` を名前と番号に分ける。名前は数字で始まらないので、`1.5` のような語を変数と読み違えない。
 fn split_var(word: &str) -> Option<(&str, u32)> {
-    if !word.chars().all(is_name_char) {
+    let (name, digits) = word.rsplit_once('.')?;
+    let first = name.chars().next()?;
+    if first.is_ascii_digit() || !name.chars().all(is_name_char) {
         return None;
     }
-    let digits_start = word.trim_end_matches(|c: char| c.is_ascii_digit()).len();
-    let digits = &word[digits_start..];
-    let zeros = digits.len() - digits.trim_start_matches('0').len();
-    let number_start = digits_start + zeros.min(digits.len().saturating_sub(1));
-    let (name, number) = word.split_at(number_start);
-    if digits_start == 0 || number.is_empty() {
-        return None;
-    }
-    Some((name, number.parse().ok()?))
+    Some((name, number(digits)?))
 }
 
 fn tag_number(word: &str) -> Option<u32> {
     number(word.strip_prefix('#')?)
 }
 
-/// `#N` と `jN` の番号。`u32::from_str` は先頭の `+` も読むので、変数の番号と同じく数字の並びだけを読む。
+fn block_number(word: &str) -> Option<u32> {
+    number(word.strip_prefix('b')?)
+}
+
+/// 変数、タグ、ブロック、操作の番号。`u32::from_str` は先頭の `+` も読むので、数字の並びだけを読む。先頭の 0 を
+/// 許すと、読み直した表示が元と変わるので許さない。
 fn number(digits: &str) -> Option<u32> {
-    if digits.is_empty() || !digits.chars().all(|c| c.is_ascii_digit()) {
+    if digits.is_empty()
+        || !digits.chars().all(|c| c.is_ascii_digit())
+        || (digits.len() > 1 && digits.starts_with('0'))
+    {
         return None;
     }
     digits.parse().ok()
@@ -183,41 +183,15 @@ fn is_int(word: &str) -> bool {
 /// 関数の中で読んだ変数。番号を名前から切り出すので、同じ番号の変数が同じ名前で書かれているかを確かめる。
 struct VarSlot {
     name: String,
-    /// 束縛の位置で読むまでは分からない。使用の位置には `^` を書かない。
-    boxed: Option<bool>,
+    /// 束縛の位置で読むまでは分からない。使用の位置には Repr を書かない。
+    repr: Option<Repr>,
 }
 
-/// `join` の定義。範囲 (`scope`) は、続きの連なりを読み終えてから決まる。
-struct JoinHead {
-    join: JoinId,
-    params: Vec<VarId>,
-    captures: Vec<VarId>,
-    body: CExprId,
-    line: usize,
-}
-
-enum Stmt {
-    Let(VarId, Rhs),
-    Dup(VarId),
-    Decref(VarId),
-    Join(JoinHead),
-}
-
-/// 読んでいる関数。変数と join point の番号はテキストに書いてあるので、関数を読み終えてから番号の順に `FnBuilder`
-/// に入れる。
+/// 読んでいる関数。行き先のブロックは後に書いてよいので、関数を読み終えてから確かめる。
+#[derive(Default)]
 struct FnState {
-    builder: FnBuilder,
     vars: Vec<Option<VarSlot>>,
-    /// join point の番号から、その `Join` の式。
-    joins: HashMap<u32, CExprId>,
-    /// `jump` の行き先の番号と行。行き先は後に定義してもよいので、関数を読み終えてから確かめる。
-    jumps: Vec<(u32, usize)>,
-}
-
-impl FnState {
-    fn push(&mut self, expr: CExpr) -> CExprId {
-        self.builder.push(expr)
-    }
+    targets: Vec<(u32, usize)>,
 }
 
 struct Parser<'t> {
@@ -228,6 +202,8 @@ struct Parser<'t> {
     functions: HashMap<String, FnIdx>,
     strings: Vec<String>,
     string_ids: HashMap<String, u32>,
+    files: Vec<String>,
+    file_ids: HashMap<String, u32>,
 }
 
 impl<'t> Parser<'t> {
@@ -240,6 +216,8 @@ impl<'t> Parser<'t> {
             functions: HashMap::new(),
             strings: Vec::new(),
             string_ids: HashMap::new(),
+            files: Vec::new(),
+            file_ids: HashMap::new(),
         }
     }
 
@@ -265,55 +243,55 @@ impl<'t> Parser<'t> {
             entry,
             strings: self.strings,
             effects: self.effects,
+            files: self.files,
         })
     }
 
     fn effect(&mut self) -> Result<(), ParseError> {
         let line = self.expect_word("effect")?;
         let name = self.word()?;
-        self.expect_punct('{')?;
+        let declared = self.list('{', '}', |p| {
+            let line = p.line();
+            let operation = p.operation_decl()?;
+            Ok((operation, line))
+        })?;
         let mut operations: Vec<OperationInfo> = Vec::new();
-        loop {
-            let never = self.at_word("never") && matches!(self.peek_at(1), Some(Tok::Word(_)));
-            if never {
-                self.pos += 1;
-            }
-            let op_line = self.line();
-            let word = self.word()?;
-            // 関数の名前と同じく操作の名前も `/` を含みうるので、最後の `/` で分ける
-            let (op, arity) = word
-                .rsplit_once('/')
-                .and_then(|(op, arity)| Some((op, number(arity)?)))
-                .filter(|(op, _)| !op.is_empty())
-                .ok_or_else(|| {
-                    error(
-                        op_line,
-                        format!("expected `operation/arity`, found `{word}`"),
-                    )
-                })?;
-            let op = op.to_string();
-            if operations.iter().any(|other| other.name == op) {
+        for (operation, op_line) in declared {
+            if operations.iter().any(|other| other.name == operation.name) {
                 return Err(error(
                     op_line,
-                    format!("operation `{op}` is declared twice"),
+                    format!("operation `{}` is declared twice", operation.name),
                 ));
             }
-            operations.push(OperationInfo {
-                name: op,
-                arity: arity as usize,
-                resumable: !never,
-            });
-            if !self.eat_punct(',') {
-                break;
-            }
+            operations.push(operation);
         }
-        self.expect_punct('}')?;
         let index = self.effects.len() as u32;
         if self.effect_ids.insert(name.clone(), index).is_some() {
             return Err(error(line, format!("effect `{name}` is declared twice")));
         }
         self.effects.push(EffectInfo { name, operations });
         Ok(())
+    }
+
+    /// `[never] operation/arity`。
+    fn operation_decl(&mut self) -> Result<OperationInfo, ParseError> {
+        let never = self.at_word("never") && matches!(self.peek_at(1), Some(Tok::Word(_)));
+        if never {
+            self.pos += 1;
+        }
+        let line = self.line();
+        let word = self.word()?;
+        // 関数の名前と同じく操作の名前も `/` を含みうるので、最後の `/` で分ける
+        let (op, arity) = word
+            .rsplit_once('/')
+            .and_then(|(op, arity)| Some((op, number(arity)?)))
+            .filter(|(op, _)| !op.is_empty())
+            .ok_or_else(|| error(line, format!("expected `operation/arity`, found `{word}`")))?;
+        Ok(OperationInfo {
+            name: op.to_string(),
+            arity: arity as usize,
+            resumable: !never,
+        })
     }
 
     /// 呼び出しは後に書いた関数も指すので、先に `fn` の名前だけを拾って番号を振る。
@@ -346,59 +324,86 @@ impl<'t> Parser<'t> {
         Ok(())
     }
 
+    /// `fn name(params) -> repr {` に、入口のブロックとラベルの付いたブロックの列が続く。
     fn function(&mut self) -> Result<CoreFn, ParseError> {
-        let line = self.expect_word("fn")?;
+        self.expect_word("fn")?;
         let name = self.word()?;
-        let mut state = FnState {
-            builder: FnBuilder::new(),
-            vars: Vec::new(),
-            joins: HashMap::new(),
-            jumps: Vec::new(),
-        };
+        let mut state = FnState::default();
         let params = self.list('(', ')', |p| p.binder(&mut state))?;
+        self.expect_word("->")?;
+        let ret = self.repr()?;
         self.expect_punct('{')?;
-        let body = self.chain(&mut state)?;
-        self.expect_punct('}')?;
-
-        let FnState {
-            mut builder,
+        let mut blocks = vec![self.block(&mut state, params)?];
+        while !self.eat_punct('}') {
+            if !matches!(self.peek(), Some(Tok::Word(_))) {
+                return Err(self.error_here("expected `}`"));
+            }
+            let params = self.label(&mut state, blocks.len() as u32)?;
+            blocks.push(self.block(&mut state, params)?);
+        }
+        if let Some((number, line)) = state
+            .targets
+            .iter()
+            .find(|(number, _)| *number as usize >= blocks.len())
+        {
+            return Err(error(*line, format!("unknown block `b{number}`")));
+        }
+        let vars = state
+            .vars
+            .into_iter()
+            .map(|slot| {
+                // 表示に現れない番号は埋める。パスが消した変数の番号は飛んでよい
+                slot.map_or(
+                    VarInfo {
+                        name: String::new(),
+                        repr: Repr::Unit,
+                    },
+                    |slot| VarInfo {
+                        name: slot.name,
+                        repr: slot.repr.unwrap_or(Repr::Unit),
+                    },
+                )
+            })
+            .collect();
+        Ok(CoreFn {
+            name,
             vars,
-            joins,
-            jumps,
-        } = state;
-        if let Some((number, line)) = jumps.iter().find(|(number, _)| !joins.contains_key(number)) {
-            return Err(error(*line, format!("unknown join point `j{number}`")));
-        }
-        for number in 0..joins.len() as u32 {
-            let Some(&at) = joins.get(&number) else {
-                return Err(error(
-                    line,
-                    format!("the join points of `{name}` skip `j{number}`"),
-                ));
-            };
-            let join = builder.new_join();
-            builder.define_join(join, at);
-        }
-        for slot in vars {
-            let (name, boxed) = slot.map_or((String::new(), false), |slot| {
-                (slot.name, slot.boxed.unwrap_or(false))
-            });
-            builder.var(VarInfo { name, boxed });
-        }
-        Ok(builder.finish(name, params, body))
+            ret,
+            blocks,
+        })
     }
 
-    /// `let`、`dup`、`decref`、`join` の並びと、それを終える命令。長い連なりで再帰しないように、文を集めてから
-    /// 後ろから式にする。
-    fn chain(&mut self, state: &mut FnState) -> Result<CExprId, ParseError> {
+    /// `bN:` か `bN(params):`。ブロックは書いた順に番号が付くので、`N` はその番号でなければならない。
+    fn label(&mut self, state: &mut FnState, expected: u32) -> Result<Vec<VarId>, ParseError> {
+        let line = self.line();
+        let word = self.word()?;
+        let (head, params) = match word.strip_suffix(':') {
+            Some(head) => (head, Vec::new()),
+            None => {
+                let params = self.list('(', ')', |p| p.binder(state))?;
+                self.expect_word(":")?;
+                (word.as_str(), params)
+            }
+        };
+        if block_number(head) != Some(expected) {
+            return Err(error(
+                line,
+                format!("expected the label `b{expected}`, found `{word}`"),
+            ));
+        }
+        Ok(params)
+    }
+
+    /// 文の並びと、それを終える終端。
+    fn block(&mut self, state: &mut FnState, params: Vec<VarId>) -> Result<Block, ParseError> {
         let mut stmts = Vec::new();
-        let last = loop {
+        let term = loop {
             let line = self.line();
             let keyword = match self.peek() {
                 Some(Tok::Word(word)) => word.clone(),
                 _ => {
                     return Err(self.error_here(
-                        "expected a statement; a chain ends with return, jump, tailcall or switch",
+                        "expected a statement; a block ends with return, tail, jump or switch",
                     ));
                 }
             };
@@ -408,47 +413,31 @@ impl<'t> Parser<'t> {
                     let var = self.binder(state)?;
                     self.expect_word("=")?;
                     let rhs = self.rhs(state)?;
-                    stmts.push(Stmt::Let(var, rhs));
+                    stmts.push(Stmt::Let { var, rhs });
+                }
+                "unpack" => {
+                    let value = self.var(state)?;
+                    let tag = self.tag()?;
+                    let fields = self.list('(', ')', |p| p.binder(state))?;
+                    stmts.push(Stmt::Unpack { value, tag, fields });
                 }
                 "dup" => stmts.push(Stmt::Dup(self.var(state)?)),
                 "decref" => stmts.push(Stmt::Decref(self.var(state)?)),
-                "join" => {
-                    let join = self.join_name()?;
-                    let params = self.list('(', ')', |p| p.binder(state))?;
-                    let captures = self.list('[', ']', |p| p.var(state))?;
-                    self.expect_punct('{')?;
-                    let body = self.chain(state)?;
-                    self.expect_punct('}')?;
-                    stmts.push(Stmt::Join(JoinHead {
-                        join,
-                        params,
-                        captures,
-                        body,
-                        line,
-                    }));
-                }
-                "return" => break CExpr::Return(self.atom(state)?),
-                "jump" => {
-                    let join = self.join_name()?;
-                    state.jumps.push((join.0, line));
-                    let args = self.list('(', ')', |p| p.atom(state))?;
-                    break CExpr::Jump { join, args };
-                }
-                "tailcall" => {
+                "return" => break Term::Return(self.atom(state)?),
+                "tail" => {
                     let mask = self.mask()?;
-                    if !mask.is_empty()
-                        && (self.at_word("handle") || self.at_word("perform"))
-                        && self.peek_at(1) != Some(&Tok::Punct('('))
-                    {
-                        return Err(self.mask_on_wrong_call());
-                    }
-                    let call = self.call(state, true)?;
-                    break CExpr::TailCall { call, mask };
+                    let call = self.call(state)?;
+                    break Term::TailCall { call, mask };
+                }
+                "jump" => {
+                    let target = self.target(state)?;
+                    let args = self.list('(', ')', |p| p.atom(state))?;
+                    break Term::Jump { target, args };
                 }
                 "switch" => {
                     let scrutinee = self.atom(state)?;
                     let (cases, default) = self.cases(state)?;
-                    break CExpr::Switch {
+                    break Term::Switch {
                         scrutinee,
                         cases,
                         default,
@@ -462,62 +451,50 @@ impl<'t> Parser<'t> {
                 }
             }
         };
-        let mut id = state.push(last);
-        for stmt in stmts.into_iter().rev() {
-            id = match stmt {
-                Stmt::Let(var, rhs) => state.push(CExpr::Let { var, rhs, body: id }),
-                Stmt::Dup(var) => state.push(CExpr::Dup { var, body: id }),
-                Stmt::Decref(var) => state.push(CExpr::Decref { var, body: id }),
-                Stmt::Join(head) => {
-                    let at = state.push(CExpr::Join {
-                        join: head.join,
-                        params: head.params,
-                        captures: head.captures,
-                        body: head.body,
-                        scope: id,
-                    });
-                    if state.joins.insert(head.join.0, at).is_some() {
-                        return Err(error(
-                            head.line,
-                            format!("join point `j{}` is defined twice", head.join.0),
-                        ));
-                    }
-                    at
-                }
-            };
-        }
-        Ok(id)
+        Ok(Block {
+            params,
+            stmts,
+            term,
+        })
     }
 
-    fn cases(&mut self, state: &mut FnState) -> Result<(Vec<Case>, Option<CExprId>), ParseError> {
+    fn cases(&mut self, state: &mut FnState) -> Result<(Vec<Case>, Option<BlockId>), ParseError> {
         self.expect_punct('{')?;
         let mut cases = Vec::new();
         let mut default = None;
-        while !self.eat_punct('}') {
+        if self.eat_punct('}') {
+            return Ok((cases, default));
+        }
+        loop {
             let line = self.line();
             if self.at_word("_") {
                 self.pos += 1;
                 self.expect_word("->")?;
-                if default.replace(self.chain(state)?).is_some() {
+                if default.replace(self.target(state)?).is_some() {
                     return Err(error(line, "a switch has two defaults"));
                 }
-                continue;
-            }
-            let pattern = self.case_pattern(line)?;
-            let fields = if self.at_punct('(') {
-                self.list('(', ')', |p| p.binder(state))?
             } else {
-                Vec::new()
-            };
-            self.expect_word("->")?;
-            let body = self.chain(state)?;
-            cases.push(Case {
-                pattern,
-                fields,
-                body,
-            });
+                let pattern = self.case_pattern(line)?;
+                let fields = if self.at_punct('(') {
+                    self.list('(', ')', |p| p.binder(state))?
+                } else {
+                    Vec::new()
+                };
+                self.expect_word("->")?;
+                let target = self.target(state)?;
+                cases.push(Case {
+                    pattern,
+                    fields,
+                    target,
+                });
+            }
+            if self.eat_punct('}') {
+                return Ok((cases, default));
+            }
+            if !self.eat_punct(',') {
+                return Err(self.error_here("expected `,` or `}`"));
+            }
         }
-        Ok((cases, default))
     }
 
     /// `#N` はタグ、整数は `Int`、文字列は `const` と同じく文字列定数の表に入れて `String` にする。
@@ -542,42 +519,51 @@ impl<'t> Parser<'t> {
         ))
     }
 
+    fn target(&mut self, state: &mut FnState) -> Result<BlockId, ParseError> {
+        let line = self.line();
+        let word = self.word()?;
+        let number = block_number(&word)
+            .ok_or_else(|| error(line, format!("expected a block `bN`, found `{word}`")))?;
+        state.targets.push((number, line));
+        Ok(BlockId(number))
+    }
+
     fn rhs(&mut self, state: &mut FnState) -> Result<Rhs, ParseError> {
         let mask = self.mask()?;
-        let maskable = ["call", "apply", "resume"]
-            .iter()
-            .any(|word| self.at_word(word));
-        if !mask.is_empty() && !maskable {
-            return Err(self.mask_on_wrong_call());
-        }
+        let line = self.line();
         let keyword = match self.peek() {
             Some(Tok::Word(word)) => word.clone(),
-            _ => return Ok(Rhs::Atom(self.atom(state)?)),
+            _ => return Err(self.error_here("expected a right-hand side")),
         };
+        if matches!(
+            keyword.as_str(),
+            "call" | "apply" | "handle" | "perform" | "resume"
+        ) {
+            let call = self.call(state)?;
+            let saved = self.saved(state)?;
+            return Ok(Rhs::Call { call, mask, saved });
+        }
+        if !mask.is_empty() {
+            return Err(error(line, "a mask is only on call, apply and resume"));
+        }
+        self.pos += 1;
         let rhs = match keyword.as_str() {
-            "call" => {
-                self.pos += 1;
-                let callee = self.function_name()?;
-                let args = self.list('(', ')', |p| p.atom(state))?;
-                self.saved_call(state, Call::Direct(callee, args), mask)?
-            }
             "closure" => {
-                self.pos += 1;
                 let target = self.function_name()?;
                 Rhs::MakeClosure(target, self.list('(', ')', |p| p.atom(state))?)
             }
             // 引数はいくつでも読む。誤りを含む IR も読み戻して verifier に報告させるため、引数の数は verifier が表の値と
-            // 比べる (docs/implementation/testing.md)
+            // 比べる
             "extern" => {
-                self.pos += 1;
                 let line = self.line();
                 let name = self.word()?;
-                let e = Extern::from_name(&name)
+                let ext = Extern::from_name(&name)
                     .ok_or_else(|| error(line, format!("unknown extern `{name}`")))?;
-                Rhs::Extern(e, self.list('(', ')', |p| p.atom(state))?)
+                let args = self.list('(', ')', |p| p.atom(state))?;
+                let at = self.position()?;
+                Rhs::Extern { ext, args, at }
             }
             "const" => {
-                self.pos += 1;
                 let value = match self.next() {
                     Some(Tok::Str(value)) => value.clone(),
                     _ => return Err(self.error_before("expected a string after `const`")),
@@ -585,48 +571,74 @@ impl<'t> Parser<'t> {
                 Rhs::ConstString(self.intern(value))
             }
             "con" => {
-                self.pos += 1;
-                let line = self.line();
-                let word = self.word()?;
-                let tag = tag_number(&word)
-                    .ok_or_else(|| error(line, format!("expected a tag `#N`, found `{word}`")))?;
+                let tag = self.tag()?;
                 Rhs::Con {
                     tag,
                     args: self.list('(', ')', |p| p.atom(state))?,
                 }
             }
-            "drop" => {
-                self.pos += 1;
-                Rhs::Drop(self.atom(state)?)
+            "drop" => Rhs::Drop(self.atom(state)?),
+            other => {
+                return Err(error(
+                    line,
+                    format!("expected a right-hand side, found `{other}`"),
+                ));
             }
-            "apply" | "handle" | "perform" | "resume" => {
-                let call = self.call(state, false)?;
-                self.saved_call(state, call, mask)?
-            }
-            _ => Rhs::Atom(self.atom(state)?),
         };
         Ok(rhs)
     }
 
-    fn saved_call(
-        &mut self,
-        state: &mut FnState,
-        call: Call,
-        mask: Vec<u32>,
-    ) -> Result<Rhs, ParseError> {
-        let saved = if self.at_punct('[') {
-            self.list('[', ']', |p| p.var(state))?
-        } else {
-            Vec::new()
-        };
-        Ok(Rhs::Call { call, mask, saved })
+    /// `save [..]`。`pretty` は空の `save` を書かないので、`save []` は読まない。
+    fn saved(&mut self, state: &mut FnState) -> Result<Vec<VarId>, ParseError> {
+        if !self.at_word("save") {
+            return Ok(Vec::new());
+        }
+        let line = self.line();
+        self.pos += 1;
+        let saved = self.list('[', ']', |p| p.var(state))?;
+        if saved.is_empty() {
+            return Err(error(line, "an empty save"));
+        }
+        Ok(saved)
     }
 
-    /// `mask[E1, E2]` を読む。エフェクトはエフェクトの行の名前か `#N` で書く。`#N` は操作の `#N` と同じく、表にない
-    /// 番号を書いて誤りを含む IR を verifier に渡すためにある。並びの順は verifier が確かめる
-    /// (docs/implementation/testing.md の「Core IR のテキストの形」)。`mask(` は関数 `mask` の呼び出しである。
+    /// `@"path":line:column`。パスは現れた順に `Program.files` に入れる。
+    fn position(&mut self) -> Result<Option<Loc>, ParseError> {
+        if !self.at_word("@") {
+            return Ok(None);
+        }
+        self.pos += 1;
+        let path = match self.next() {
+            Some(Tok::Str(path)) => path.clone(),
+            _ => return Err(self.error_before("expected a path after `@`")),
+        };
+        let line = self.line();
+        let word = self.word()?;
+        let (row, column) = word
+            .strip_prefix(':')
+            .and_then(|rest| rest.split_once(':'))
+            .and_then(|(row, column)| Some((number(row)?, number(column)?)))
+            .ok_or_else(|| error(line, format!("expected `:line:column`, found `{word}`")))?;
+        let file = match self.file_ids.get(&path) {
+            Some(&file) => file,
+            None => {
+                let file = self.files.len() as u32;
+                self.files.push(path.clone());
+                self.file_ids.insert(path, file);
+                file
+            }
+        };
+        Ok(Some(Loc {
+            file,
+            line: row,
+            column,
+        }))
+    }
+
+    /// `mask [E1, E2]` を読む。エフェクトはエフェクトの行の名前か `#N` で書く。`#N` は表にない番号を書いて、
+    /// 誤りを含む IR を verifier に渡すためにある。並びの順は verifier が確かめる。
     fn mask(&mut self) -> Result<Vec<u32>, ParseError> {
-        if !(self.at_word("mask") && self.peek_at(1) == Some(&Tok::Punct('['))) {
+        if !self.at_word("mask") {
             return Ok(Vec::new());
         }
         let line = self.line();
@@ -639,60 +651,54 @@ impl<'t> Parser<'t> {
                 None => p.effect_id(&word, line),
             }
         })?;
-        // `pretty` は空の `mask` を書かない。`mask[]` を受け入れると、表示と同じ形に戻らないテキストが読めてしまう
+        // `pretty` は空の `mask` を書かない。`mask []` を受け入れると、表示と同じ形に戻らないテキストが読めてしまう
         if mask.is_empty() {
             return Err(error(line, "an empty mask"));
+        }
+        if self.at_word("handle") || self.at_word("perform") {
+            return Err(error(line, "a mask is only on call, apply and resume"));
         }
         Ok(mask)
     }
 
-    /// `mask` を持つのは `Direct`、`Apply`、`Resume` の呼び出しだけである (docs/spec/core-ir.md)。
-    fn mask_on_wrong_call(&self) -> ParseError {
-        error(self.line(), "a mask is only on call, apply and resume")
-    }
-
-    /// `tailcall` の後と、`let` の右辺の呼び出し。`let` の右辺では、`Direct` の呼び出しに `call` を前に付けるので、
-    /// `direct` が偽になる。キーワードの直後が `(` なら、同じ名前の関数の呼び出しとして読む。ただし `apply ()(` と
-    /// `resume ()(` は、呼ばれる値が `()` の `apply` と `resume` として読む。誤りを含む IR の表示も読み戻すためである。
-    /// 引数のない関数の呼び出しの後に `(` は続かないので、この読み方で関数の呼び出しを取り違えることはない。
-    fn call(&mut self, state: &mut FnState, direct: bool) -> Result<Call, ParseError> {
+    /// `let` の右辺と `tail` の後の呼び出し。どれもキーワードで始まるので、関数の名前とぶつからない。
+    fn call(&mut self, state: &mut FnState) -> Result<Call, ParseError> {
         let line = self.line();
         let word = self.word()?;
-        let unit_callee = matches!(word.as_str(), "apply" | "resume")
-            && self.peek_at(1) == Some(&Tok::Punct(')'))
-            && self.peek_at(2) == Some(&Tok::Punct('('));
-        let keyword = !self.at_punct('(') || unit_callee;
         match word.as_str() {
-            "apply" if keyword => {
+            "call" => {
+                let callee = self.function_name()?;
+                let args = self.list('(', ')', |p| p.atom(state))?;
+                Ok(Call::Direct(callee, args))
+            }
+            "apply" => {
                 let callee = self.atom(state)?;
                 let args = self.list('(', ')', |p| p.atom(state))?;
                 Ok(Call::Apply(callee, args))
             }
-            "handle" if keyword => self.handle(state),
-            "perform" if keyword => {
+            "handle" => self.handle(state),
+            "perform" => {
+                let never = self.at_word("never") && matches!(self.peek_at(1), Some(Tok::Word(_)));
+                if never {
+                    self.pos += 1;
+                }
                 let line = self.line();
                 let word = self.word()?;
                 // エフェクトの名前はモジュールの名前で修飾されて `.` を含むが、操作の名前は含まない
-                // (docs/implementation/testing.md の「Core IR のテキストの形」)
                 let (effect, op) = word.rsplit_once('.').ok_or_else(|| {
                     error(line, format!("expected `Effect.operation`, found `{word}`"))
                 })?;
                 let effect = self.effect_id(effect, line)?;
                 let op = self.operation(effect, op, line)?;
-                // 表にない操作番号も読み戻せるようにする。誤りは verifier が報告する
-                let resumable = self.effects[effect as usize]
-                    .operations
-                    .get(op as usize)
-                    .is_some_and(|operation| operation.resumable);
                 let args = self.list('(', ')', |p| p.atom(state))?;
                 Ok(Call::Perform {
                     effect,
                     op,
-                    resumable,
+                    resumable: !never,
                     args,
                 })
             }
-            "resume" if keyword => {
+            "resume" => {
                 let k = self.atom(state)?;
                 self.expect_punct('(')?;
                 let arg = self.atom(state)?;
@@ -705,23 +711,19 @@ impl<'t> Parser<'t> {
                     state: next,
                 })
             }
-            _ if direct => {
-                let callee = self.resolve_function(&word, line)?;
-                let args = self.list('(', ')', |p| p.atom(state))?;
-                Ok(Call::Direct(callee, args))
-            }
             _ => Err(error(line, format!("expected a call, found `{word}`"))),
         }
     }
 
+    /// `handle E(init, body) { op: clause, .. } return ret`。
     fn handle(&mut self, state: &mut FnState) -> Result<Call, ParseError> {
         let line = self.line();
         let name = self.word()?;
         let effect = self.effect_id(&name, line)?;
         self.expect_punct('(')?;
-        let body = self.atom(state)?;
-        self.expect_punct(',')?;
         let init = self.atom(state)?;
+        self.expect_punct(',')?;
+        let body = self.atom(state)?;
         self.expect_punct(')')?;
         self.expect_punct('{')?;
         let mut clauses = Vec::new();
@@ -751,7 +753,7 @@ impl<'t> Parser<'t> {
         }
         let close = self.line();
         self.expect_punct('}')?;
-        // 次の行の `return` は続く命令なので、`return` の節は `}` と同じ行にあるときだけ読む
+        // 次の行の `return` は終端なので、`return` の節は `}` と同じ行にあるときだけ読む
         if !(self.at_word("return") && self.line() == close) {
             return Err(error(
                 close,
@@ -802,13 +804,10 @@ impl<'t> Parser<'t> {
             .ok_or_else(|| error(line, format!("unknown function `{name}`")))
     }
 
-    fn join_name(&mut self) -> Result<JoinId, ParseError> {
+    fn tag(&mut self) -> Result<u32, ParseError> {
         let line = self.line();
         let word = self.word()?;
-        word.strip_prefix('j')
-            .and_then(number)
-            .map(JoinId)
-            .ok_or_else(|| error(line, format!("expected a join point `jN`, found `{word}`")))
+        tag_number(&word).ok_or_else(|| error(line, format!("expected a tag `#N`, found `{word}`")))
     }
 
     fn atom(&mut self, state: &mut FnState) -> Result<Atom, ParseError> {
@@ -840,24 +839,44 @@ impl<'t> Parser<'t> {
         self.var_named(state, &word, None, line)
     }
 
+    /// 束縛の位置の `name.N: repr`。
     fn binder(&mut self, state: &mut FnState) -> Result<VarId, ParseError> {
         let line = self.line();
         let word = self.word()?;
-        match word.strip_suffix('^') {
-            Some(name) => self.var_named(state, name, Some(true), line),
-            None => self.var_named(state, &word, Some(false), line),
-        }
+        let name = word
+            .strip_suffix(':')
+            .ok_or_else(|| error(line, format!("expected `name.N:`, found `{word}`")))?;
+        let repr = self.repr()?;
+        self.var_named(state, name, Some(repr), line)
+    }
+
+    fn repr(&mut self) -> Result<Repr, ParseError> {
+        let line = self.line();
+        let word = self.word()?;
+        REPRS
+            .into_iter()
+            .find(|repr| repr.name() == word)
+            .ok_or_else(|| {
+                error(
+                    line,
+                    format!("expected a repr (obj, tobj, int, enum or unit), found `{word}`"),
+                )
+            })
     }
 
     fn var_named(
         &self,
         state: &mut FnState,
         word: &str,
-        boxed: Option<bool>,
+        repr: Option<Repr>,
         line: usize,
     ) -> Result<VarId, ParseError> {
-        let (name, number) = split_var(word)
-            .ok_or_else(|| error(line, format!("expected a variable, found `{word}`")))?;
+        let (name, number) = split_var(word).ok_or_else(|| {
+            error(
+                line,
+                format!("expected a variable `name.N`, found `{word}`"),
+            )
+        })?;
         let index = number as usize;
         if index > self.var_limit() {
             return Err(error(
@@ -870,25 +889,29 @@ impl<'t> Parser<'t> {
         }
         let slot = state.vars[index].get_or_insert_with(|| VarSlot {
             name: name.to_string(),
-            boxed: None,
+            repr: None,
         });
         if slot.name != name {
             return Err(error(
                 line,
                 format!(
-                    "variable {number} is written both as `{}{number}` and `{word}`",
+                    "variable {number} is written both as `{}.{number}` and `{word}`",
                     slot.name
                 ),
             ));
         }
-        if let Some(boxed) = boxed {
-            if slot.boxed.is_some_and(|known| known != boxed) {
+        if let Some(repr) = repr {
+            if let Some(known) = slot.repr.filter(|&known| known != repr) {
                 return Err(error(
                     line,
-                    format!("`{word}` is bound both with and without `^`"),
+                    format!(
+                        "`{word}` is bound both as `{}` and `{}`",
+                        known.name(),
+                        repr.name()
+                    ),
                 ));
             }
-            slot.boxed = Some(boxed);
+            slot.repr = Some(repr);
         }
         Ok(VarId(number))
     }
@@ -1020,318 +1043,5 @@ fn error(line: usize, message: impl Into<String>) -> ParseError {
     ParseError {
         line,
         message: message.into(),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn round_trip(text: &str) {
-        let program = parse(text).unwrap_or_else(|error| panic!("{error}"));
-        assert_eq!(crate::pretty(&program), text);
-    }
-
-    #[test]
-    fn a_program_with_joins_switches_and_effects_round_trips() {
-        round_trip(
-            "effect Ask { ask/1, never stop/1 }\n\
-             fn pick(b0, s1^) {\n  join j0(t3^) [s1] {\n    let t4^ = extern Prelude.++(t3, s1)\n    return t4\n  }\n  switch b0 {\n    #0 ->\n      let s2^ = const \"none\"\n      jump j0(s2)\n    #1 ->\n      dup s1\n      jump j0(s1)\n  }\n}\n\
-             fn entry$main() {\n  let c0^ = closure pick(#1)\n  let t1 = perform Ask.ask(()) [c0]\n  tailcall apply c0(-3)\n}\n",
-        );
-    }
-
-    #[test]
-    fn an_effect_of_a_nested_module_round_trips() {
-        round_trip(
-            "effect A.B.E { op/0 }\n\
-             fn f() {\n  let t0 = perform A.B.E.op()\n  return t0\n}\n",
-        );
-    }
-
-    #[test]
-    fn a_name_that_ends_with_a_digit_round_trips() {
-        round_trip("fn f(x10^) {\n  return x10\n}\n");
-    }
-
-    #[test]
-    fn a_name_that_ends_with_zero_keeps_the_zero_in_the_name() {
-        let program = parse("fn f($00) {\n  return $00\n}\n").unwrap();
-        assert_eq!(program.functions[0].vars[0].name, "$0");
-        round_trip("fn f($00, $11) {\n  return $00\n}\n");
-    }
-
-    #[test]
-    fn string_escapes_round_trip() {
-        // `{:?}` は表示できる文字 (絵文字) をそのまま書き、表示できない文字 (DEL) を `\u{…}` で書く
-        round_trip(
-            "fn f() {\n  let s0^ = const \"a\\\"b\\\\c\\nd\u{1f600}\\u{7f}\"\n  return s0\n}\n",
-        );
-    }
-
-    #[test]
-    fn the_return_after_the_return_clause_is_the_next_instruction() {
-        round_trip(
-            "effect Ask { ask/1 }\n\
-             fn h(c0^, c1^, c2^) {\n  let t3 = handle Ask(c0, ()) {ask: c1} return c2\n  return t3\n}\n",
-        );
-    }
-
-    #[test]
-    fn a_handle_without_a_return_clause_is_an_error() {
-        let error = parse_error(
-            "effect Ask { ask/1 }\nfn h(c0^, c1^) {\n  let t2 = handle Ask(c0, ()) {ask: c1}\n  return t2\n}\n",
-        );
-        assert_eq!(error.line, 3);
-        assert_eq!(
-            error.message,
-            "expected `return` after the clauses of `handle`"
-        );
-    }
-
-    #[test]
-    fn an_operation_needs_its_arity_after_the_last_slash() {
-        let program = parse("effect E { a/b/2 }\nfn f() {\n  return 1\n}\n").unwrap();
-        assert_eq!(program.effects[0].operations[0].name, "a/b");
-        assert_eq!(program.effects[0].operations[0].arity, 2);
-
-        let error = parse_error("effect E { ask }\nfn f() {\n  return 1\n}\n");
-        assert_eq!(error.line, 1);
-        assert_eq!(error.message, "expected `operation/arity`, found `ask`");
-
-        let error = parse_error("effect E { ask/x }\nfn f() {\n  return 1\n}\n");
-        assert_eq!(error.message, "expected `operation/arity`, found `ask/x`");
-    }
-
-    #[test]
-    fn an_unknown_function_is_an_error_with_its_line() {
-        let error = parse("fn f() {\n  tailcall g(1)\n}\n").unwrap_err();
-        assert_eq!(error.line, 2);
-    }
-
-    #[test]
-    fn a_function_value_round_trips_even_before_its_definition() {
-        round_trip(
-            "fn f() {\n  let c0^ = &g\n  tailcall apply c0(1)\n}\nfn g(x0) {\n  return x0\n}\n",
-        );
-    }
-
-    #[test]
-    fn a_function_value_of_an_unknown_function_is_an_error_with_its_line() {
-        let error = parse("fn f() {\n  return &g\n}\n").unwrap_err();
-        assert_eq!(error.line, 2);
-    }
-
-    #[test]
-    fn a_variable_number_beyond_the_limit_is_an_error_with_its_line() {
-        let error = parse("fn f() {\n  return x4000000000\n}\n").unwrap_err();
-        assert_eq!(error.line, 2);
-        assert!(error.message.contains("too large"), "{}", error.message);
-    }
-
-    #[test]
-    fn an_operation_number_outside_the_effect_round_trips() {
-        round_trip(
-            "effect Ask { ask/0 }\n\
-             fn f(c0^, c1^, c2^, c3^) {\n  let t4 = perform Ask.#3()\n  let t5 = handle Ask(c0, ()) {ask: c1, #1: c2} return c3\n  return t5\n}\n",
-        );
-    }
-
-    fn parse_error(text: &str) -> ParseError {
-        match parse(text) {
-            Ok(program) => panic!("expected an error, read:\n{}", crate::pretty(&program)),
-            Err(error) => error,
-        }
-    }
-
-    #[test]
-    fn a_keyword_followed_by_a_paren_is_a_direct_call_in_tail_position() {
-        let text = "fn apply(x0) {\n  return x0\n}\n\
-                    fn resume(x0) {\n  return x0\n}\n\
-                    fn f() {\n  tailcall apply(1)\n}\n\
-                    fn g() {\n  tailcall resume(2)\n}\n";
-        round_trip(text);
-        let program = parse(text).unwrap();
-        let f = &program.functions[2];
-        assert_eq!(
-            f.expr(f.body),
-            &CExpr::TailCall {
-                call: Call::Direct(FnIdx(0), vec![Atom::Int(1)]),
-                mask: Vec::new(),
-            }
-        );
-        let g = &program.functions[3];
-        assert_eq!(
-            g.expr(g.body),
-            &CExpr::TailCall {
-                call: Call::Direct(FnIdx(1), vec![Atom::Int(2)]),
-                mask: Vec::new(),
-            }
-        );
-    }
-
-    #[test]
-    fn apply_and_resume_of_unit_round_trip() {
-        round_trip(
-            "fn f(x0) {\n  let t1 = apply ()(x0)\n  let t2 = resume ()(t1, ())\n  tailcall apply ()(t2)\n}\n",
-        );
-        round_trip("fn f(x0) {\n  tailcall resume ()(x0, ())\n}\n");
-        let program = parse("fn f(x0) {\n  tailcall apply ()(x0)\n}\n").unwrap();
-        let f = &program.functions[0];
-        assert_eq!(
-            f.expr(f.body),
-            &CExpr::TailCall {
-                call: Call::Apply(Atom::Unit, vec![Atom::Var(VarId(0))]),
-                mask: Vec::new(),
-            }
-        );
-    }
-
-    #[test]
-    fn one_variable_number_with_two_names_is_an_error() {
-        let error = parse_error("fn f(x0) {\n  return y0\n}\n");
-        assert_eq!(error.line, 2);
-        assert_eq!(error.message, "variable 0 is written both as `x0` and `y0`");
-    }
-
-    #[test]
-    fn one_variable_bound_with_and_without_a_caret_is_an_error() {
-        let error = parse_error("fn f(x0^) {\n  let x0 = 1\n  return x0\n}\n");
-        assert_eq!(error.line, 2);
-        assert_eq!(error.message, "`x0` is bound both with and without `^`");
-
-        let error = parse_error("fn f(x0) {\n  let x0^ = 1\n  return x0\n}\n");
-        assert_eq!(error.line, 2);
-        assert_eq!(error.message, "`x0` is bound both with and without `^`");
-    }
-
-    #[test]
-    fn a_gap_in_the_join_point_numbers_is_an_error() {
-        let error = parse_error("fn f() {\n  join j1() [] {\n    return 1\n  }\n  jump j1()\n}\n");
-        assert_eq!(error.line, 1);
-        assert_eq!(error.message, "the join points of `f` skip `j0`");
-    }
-
-    #[test]
-    fn a_join_point_defined_twice_is_an_error() {
-        let error = parse_error(
-            "fn f() {\n  join j0() [] {\n    return 1\n  }\n  join j0() [] {\n    return 2\n  }\n  jump j0()\n}\n",
-        );
-        assert_eq!(error.message, "join point `j0` is defined twice");
-        // 連なりは後ろから式にするので、先に書いた方の定義の行で報告する
-        assert_eq!(error.line, 2);
-    }
-
-    #[test]
-    fn a_jump_to_an_unknown_join_point_is_an_error() {
-        let error = parse_error("fn f() {\n  let x0 = 1\n  jump j0(x0)\n}\n");
-        assert_eq!(error.line, 3);
-        assert_eq!(error.message, "unknown join point `j0`");
-    }
-
-    #[test]
-    fn variable_numbers_that_do_not_appear_are_filled() {
-        let text = "fn f(x0, x3^) {\n  return x0\n}\n";
-        round_trip(text);
-        let program = parse(text).unwrap();
-        let vars = &program.functions[0].vars;
-        assert_eq!(vars.len(), 4);
-        for filler in &vars[1..3] {
-            assert_eq!((filler.name.as_str(), filler.boxed), ("", false));
-        }
-        assert_eq!((vars[3].name.as_str(), vars[3].boxed), ("x", true));
-    }
-
-    #[test]
-    fn an_unclosed_brace_is_an_error_at_the_end() {
-        let error = parse_error("fn f() {\n  return 1\n");
-        assert_eq!(error.line, 2);
-        assert_eq!(error.message, "expected `}`, found the end of the text");
-    }
-
-    #[test]
-    fn a_chain_without_a_final_instruction_is_an_error() {
-        let error = parse_error("fn f() {\n  let x0 = 1\n}\n");
-        assert_eq!(error.line, 3);
-        assert_eq!(
-            error.message,
-            "expected a statement; a chain ends with return, jump, tailcall or switch, found `}`"
-        );
-    }
-
-    #[test]
-    fn a_mask_reads_back() {
-        round_trip(
-            "\
-effect Main.State { get/1, put/1 }
-fn entry$main(c0^) {
-  let t1^ = mask[Main.State, Main.State] apply c0(())
-  tailcall mask[Main.State] apply t1(())
-}
-",
-        );
-        round_trip(
-            "effect Main.State { get/1, put/1 }\n\
-             fn f(c0^, k1^) {\n  let t2 = mask[#3] call f(c0, k1) [c0]\n  let t3 = mask[Main.State] resume k1(t2, ())\n  tailcall mask[Main.State] f(c0, t3)\n}\n",
-        );
-    }
-
-    #[test]
-    fn a_function_named_mask_is_called_without_a_mask() {
-        let text = "fn mask(x0) {\n  return x0\n}\nfn f() {\n  tailcall mask(1)\n}\n";
-        round_trip(text);
-        let program = parse(text).unwrap();
-        let f = &program.functions[1];
-        assert_eq!(
-            f.expr(f.body),
-            &CExpr::TailCall {
-                call: Call::Direct(FnIdx(0), vec![Atom::Int(1)]),
-                mask: Vec::new(),
-            }
-        );
-    }
-
-    #[test]
-    fn a_mask_on_handle_or_perform_is_an_error() {
-        let error = parse_error(
-            "effect Ask { ask/1 }\nfn f(c0^, c1^, c2^) {\n  let t3 = mask[Ask] handle Ask(c0, ()) {ask: c1} return c2\n  return t3\n}\n",
-        );
-        assert_eq!(error.line, 3);
-        assert_eq!(error.message, "a mask is only on call, apply and resume");
-
-        let error = parse_error(
-            "effect Ask { ask/1 }\nfn f() {\n  tailcall mask[Ask] perform Ask.ask(1)\n}\n",
-        );
-        assert_eq!(error.line, 3);
-        assert_eq!(error.message, "a mask is only on call, apply and resume");
-    }
-
-    #[test]
-    fn an_empty_mask_is_an_error() {
-        let error =
-            parse_error("fn g(x0) {\n  return x0\n}\nfn f() {\n  tailcall mask[] g(1)\n}\n");
-        assert_eq!(error.line, 5);
-        assert_eq!(error.message, "an empty mask");
-    }
-
-    #[test]
-    fn tag_join_and_operation_numbers_are_ascii_digits() {
-        let error = parse_error("fn f() {\n  return #+1\n}\n");
-        assert_eq!(error.line, 2);
-        assert_eq!(error.message, "expected a variable, found `#+1`");
-
-        let error = parse_error("fn f() {\n  let x0 = con #+1(2)\n  return x0\n}\n");
-        assert_eq!(error.line, 2);
-        assert_eq!(error.message, "expected a tag `#N`, found `#+1`");
-
-        let error = parse_error("fn f() {\n  jump j+0()\n}\n");
-        assert_eq!(error.line, 2);
-        assert_eq!(error.message, "expected a join point `jN`, found `j+0`");
-
-        let error = parse_error(
-            "effect Ask { ask/0 }\nfn f() {\n  let t0 = perform Ask.#+0()\n  return t0\n}\n",
-        );
-        assert_eq!(error.line, 3);
-        assert_eq!(error.message, "`Ask` has no operation `#+0`");
     }
 }

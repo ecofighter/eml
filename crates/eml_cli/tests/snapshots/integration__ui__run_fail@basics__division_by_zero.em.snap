@@ -5,4 +5,5 @@ input_file: tests/ui/run-fail/basics/division_by_zero.em
 ---
 --- stdout ---
 --- runtime error ---
-division by zero in `divide`
+division by zero
+  at run-fail/basics/division_by_zero.em:3:16

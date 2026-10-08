@@ -1,7 +1,7 @@
 //! contract のパス (docs/spec/core-ir.md の「パス」)。使われない純粋な `let` を消すことと、消したブロックの末尾に
 //! 末尾呼び出しの規則をもう一度当てることを、IR のテキストで確かめる。
 
-use eml_core_ir::v2::{contract, parse, pretty, tail_call, verify_scopes};
+use eml_core_ir::{contract, parse, pretty, tail_call, verify_scopes};
 
 /// 入力と出力が、どちらも scope の段の verifier を通ることも確かめる。
 fn contract_text(text: &str) -> String {

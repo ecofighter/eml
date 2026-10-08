@@ -6,4 +6,5 @@ input_file: tests/ui/run-fail/basics/integer_overflow.em
 --- stdout ---
 before
 --- runtime error ---
-integer overflow in `main`
+integer overflow
+  at run-fail/basics/integer_overflow.em:5:42

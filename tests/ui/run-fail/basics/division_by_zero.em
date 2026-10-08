@@ -1,4 +1,4 @@
--- Division by zero stops the program and names the function.
+-- Division by zero stops the program and reports where the division is.
 divide : Int -> Int -> Int
 divide a b = a / b
 

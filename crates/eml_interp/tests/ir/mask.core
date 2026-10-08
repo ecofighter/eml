@@ -1,49 +1,49 @@
 effect Main.Ask { ask/1 }
 effect Main.Yield { yield/1 }
-fn main() {
-  let t0 = handle Main.Ask(&outer_body, ()) {ask: &outer_ask} return &done
-  return t0
+fn main() -> unit {
+  let t.0: unit = handle Main.Ask((), &outer_body) { ask: &outer_ask } return &done
+  return t.0
 }
-fn outer_body(u0) {
-  tailcall handle Main.Ask(&inner_body, ()) {ask: &inner_ask} return &done
+fn outer_body(u.0: unit) -> unit {
+  tail handle Main.Ask((), &inner_body) { ask: &inner_ask } return &done
 }
-fn inner_body(u0) {
-  let t1 = mask[Main.Ask] call asker(())
-  let t2 = mask[Main.Ask] apply &rehandle(())
-  let t3 = call resumer(())
-  tailcall mask[Main.Ask] apply &asker(())
+fn inner_body(u.0: unit) -> unit {
+  let t.1: unit = mask [Main.Ask] call asker(())
+  let t.2: unit = mask [Main.Ask] apply &rehandle(())
+  let t.3: unit = call resumer(())
+  tail mask [Main.Ask] apply &asker(())
 }
-fn asker(u0) {
-  let s1^ = perform Main.Ask.ask(())
-  let t2 = extern Prelude.println(s1)
-  return t2
+fn asker(u.0: unit) -> unit {
+  let s.1: obj = perform Main.Ask.ask(())
+  let t.2: unit = extern Prelude.println(s.1)
+  return t.2
 }
-fn rehandle(u0) {
-  tailcall handle Main.Ask(&asker, ()) {ask: &new_ask} return &done
+fn rehandle(u.0: unit) -> unit {
+  tail handle Main.Ask((), &asker) { ask: &new_ask } return &done
 }
-fn resumer(u0) {
-  tailcall handle Main.Yield(&yielder, ()) {yield: &yield_clause} return &done
+fn resumer(u.0: unit) -> unit {
+  tail handle Main.Yield((), &yielder) { yield: &yield_clause } return &done
 }
-fn yielder(u0) {
-  let t1 = perform Main.Yield.yield(())
-  tailcall apply &asker(())
+fn yielder(u.0: unit) -> unit {
+  let t.1: unit = perform Main.Yield.yield(())
+  tail apply &asker(())
 }
-fn yield_clause(u0, k1^, s2) {
-  let t3 = mask[Main.Ask] resume k1((), s2)
-  tailcall apply &asker(())
+fn yield_clause(u.0: unit, k.1: obj, s.2: unit) -> unit {
+  let t.3: unit = mask [Main.Ask] resume k.1((), s.2)
+  tail apply &asker(())
 }
-fn outer_ask(u0, k1^, s2) {
-  let s3^ = const "outer"
-  tailcall resume k1(s3, s2)
+fn outer_ask(u.0: unit, k.1: obj, s.2: unit) -> unit {
+  let s.3: obj = const "outer"
+  tail resume k.1(s.3, s.2)
 }
-fn inner_ask(u0, k1^, s2) {
-  let s3^ = const "inner"
-  tailcall resume k1(s3, s2)
+fn inner_ask(u.0: unit, k.1: obj, s.2: unit) -> unit {
+  let s.3: obj = const "inner"
+  tail resume k.1(s.3, s.2)
 }
-fn new_ask(u0, k1^, s2) {
-  let s3^ = const "new"
-  tailcall resume k1(s3, s2)
+fn new_ask(u.0: unit, k.1: obj, s.2: unit) -> unit {
+  let s.3: obj = const "new"
+  tail resume k.1(s.3, s.2)
 }
-fn done(x0, s1) {
-  return x0
+fn done(x.0: unit, s.1: unit) -> unit {
+  return x.0
 }

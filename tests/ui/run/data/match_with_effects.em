@@ -1,5 +1,5 @@
 -- A non-tail `match` whose arms perform a multi-shot operation. The string saved across the operation, the
--- field bound by the arm and the arguments of the arm's join point survive every resumption.
+-- field bound by the arm and the parameters of the arm's merge block survive every resumption.
 effect Choice where
   multi choose : Unit -> Bool
 

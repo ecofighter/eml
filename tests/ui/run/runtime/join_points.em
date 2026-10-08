@@ -1,5 +1,5 @@
--- Non-tail `if`s become join points: an `if` inside a branch, an `if` without `else` used as a statement,
--- and strings that live across the joins or are dropped before them. Every string must be freed exactly once.
+-- Non-tail `if`s become merge blocks: an `if` inside a branch, an `if` without `else` used as a statement,
+-- and strings that live across the merges or are dropped before them. Every string must be freed exactly once.
 label : Bool -> Bool -> String -> String
 label a b s =
   let unused = "dropped"

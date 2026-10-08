@@ -5,4 +5,5 @@ input_file: tests/ui/run-fail/files/missing_file.em
 ---
 --- stdout ---
 --- runtime error ---
-cannot open `missing.txt`: not found in `main`
+cannot open `missing.txt`: not found
+  at run-fail/files/missing_file.em:4:11

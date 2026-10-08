@@ -1,5 +1,5 @@
 -- Values live across calls are saved in the call's frame: a string passed to a call and used again,
--- an integer used after a call, and a call inside a branch whose join point uses a value from before the `if`.
+-- an integer used after a call, and a call inside a branch whose merge block uses a value from before the `if`.
 twice : String -> String
 twice s = s ++ s
 

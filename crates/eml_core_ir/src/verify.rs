@@ -1,17 +1,18 @@
-//! Core IR の不変条件の検査 (docs/spec/core-ir.md)。Perceus の後のプログラムについては、変数と join point の範囲、
-//! 直接呼び出しとクロージャと `handle` の節の引数の数、RC の対象の変数の所有権の釣り合いを確かめる (`verify`)。
-//! Perceus より前のプログラムについては、範囲と引数の数を確かめ、RC の命令がまだないことを確かめる
-//! (`verify_scopes`)。どちらも join point の `captures` を宣言として扱い、生存解析には頼らない。
+//! Core IR の不変条件の検査 (docs/spec/core-ir.md)。ブロックの列の形 (R1〜R4)、変数の定義と支配 (R5、R6)、
+//! `jump` と `unpack` と `return` の Repr (R8) と、引き継いだ検査 (`mask` の順、`handle` の節の数、再開できるかどうか、
+//! 直接呼び出しと extern の引数の数、型で選ぶ extern、case の種類) を確かめる (`verify_scopes`)。Perceus の後は、
+//! RC の対象の所有の多重集合と、呼び出しの後に見える変数 (R6、R7) も確かめる (`verify`)。
+//!
+//! 辺の検査、支配木、本体の検査は、それぞれブロックを番号の順に1回たどるだけで、反復も生存解析も使わない。辺は
+//! 前向きなので、ブロックに着いたときには入る辺がすべて出そろっている。
 
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt;
 use std::mem::discriminant;
 
-use crate::liveness::{Vars, tracked};
-use crate::pretty::case_pattern;
 use crate::{
-    Atom, CExpr, CExprId, Call, Case, CasePattern, CoreFn, EffectInfo, FnIdx, JoinId, Program, Rhs,
-    VarId,
+    Atom, Block, BlockId, Call, Case, CasePattern, CoreFn, EffectInfo, FnIdx, Program, Repr, Rhs,
+    Stmt, Term, VarId,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -28,17 +29,18 @@ impl fmt::Display for VerifyError {
 
 impl std::error::Error for VerifyError {}
 
-/// Perceus の後の IR を確かめる。範囲と引数の数に加えて、RC の対象の変数の所有権が釣り合うことを確かめる。
+/// Perceus の後の IR を確かめる。形と範囲に加えて、RC の対象の変数の所有が釣り合うことと、呼び出しの後に見える
+/// 変数が退避したものと結果だけであることを確かめる。
 pub fn verify(program: &Program) -> Result<(), VerifyError> {
     verify_at(program, Level::Ownership)
 }
 
-/// Perceus より前の IR を確かめる。範囲と引数の数を確かめ、RC の命令と `saved` がまだないことを確かめる。
+/// Perceus より前の IR を確かめる。形と範囲を確かめ、RC の命令と `save` がまだないことを確かめる。
 pub fn verify_scopes(program: &Program) -> Result<(), VerifyError> {
     verify_at(program, Level::Scopes)
 }
 
-/// 検査の度合い。Perceus より前の IR には、所有権を確かめる材料 (`dup`、`decref`、`saved`) がまだない。
+/// 検査の段。Perceus より前の IR には、所有を確かめる材料 (`dup`、`decref`、`save`) がまだない。
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Level {
     Scopes,
@@ -47,8 +49,8 @@ enum Level {
 
 fn verify_at(program: &Program, level: Level) -> Result<(), VerifyError> {
     for function in &program.functions {
-        check_tree(function)
-            .and_then(|()| Checker::new(program, function, level).run())
+        shape(function)
+            .and_then(|dominators| Checker::new(program, function, level, dominators).run())
             .map_err(|message| VerifyError {
                 function: function.name.clone(),
                 message,
@@ -57,235 +59,481 @@ fn verify_at(program: &Program, level: Level) -> Result<(), VerifyError> {
     Ok(())
 }
 
-/// アリーナのどの式も、根からちょうど1回たどれることを確かめる。後の検査と Perceus は式を木として扱うので、
-/// 共有された式やたどれない式があると、検査も書き換えも食い違う (docs/spec/core-ir.md)。
-fn check_tree(function: &CoreFn) -> Result<(), String> {
-    let mut seen = vec![false; function.exprs.len()];
-    let mut count = 0;
-    let mut work = vec![function.body];
-    while let Some(id) = work.pop() {
-        if std::mem::replace(&mut seen[id.0 as usize], true) {
-            return Err(format!("expression e{} is reachable twice", id.0));
+/// 支配木の前順と後順の番号。`a` が `b` を支配するのは、`b` が `a` の部分木にあるときである。
+struct Dominators {
+    pre: Vec<u32>,
+    post: Vec<u32>,
+}
+
+impl Dominators {
+    /// `idom[b]` は `b` の直接の支配者で、つねに `b` より番号が小さい。木は深くなりうるので、再帰せずにたどる。
+    fn new(idom: &[u32]) -> Self {
+        let mut children = vec![Vec::new(); idom.len()];
+        for (block, &parent) in idom.iter().enumerate().skip(1) {
+            children[parent as usize].push(block as u32);
         }
-        count += 1;
-        function.expr(id).for_each_child(|child| work.push(child));
+        let mut pre = vec![0; idom.len()];
+        let mut post = vec![0; idom.len()];
+        let mut clock = 1;
+        let mut stack = vec![(0u32, 0usize)];
+        while let Some((node, next)) = stack.last_mut() {
+            if let Some(&child) = children[*node as usize].get(*next) {
+                *next += 1;
+                pre[child as usize] = clock;
+                clock += 1;
+                stack.push((child, 0));
+            } else {
+                post[*node as usize] = clock;
+                clock += 1;
+                stack.pop();
+            }
+        }
+        Dominators { pre, post }
     }
-    if count < function.exprs.len() {
-        let orphan = seen
-            .iter()
-            .position(|&seen| !seen)
-            .expect("some expression is unseen");
-        return Err(format!(
-            "expression e{orphan} is not reachable from the body"
-        ));
+
+    fn dominates(&self, a: u32, b: u32) -> bool {
+        let (a, b) = (a as usize, b as usize);
+        self.pre[a] <= self.pre[b] && self.post[b] <= self.post[a]
     }
-    Ok(())
 }
 
-/// 経路ごとの状態。`Switch` の各枝と join point の範囲は、同じ状態の写しから始まる。写すのは今所有している変数と
-/// `Jump` してよい join point だけで、どちらも小さい。束縛の範囲は `Checker` が取り消しの記録で戻す。
-#[derive(Clone, Default)]
-struct State {
-    /// RC の対象の変数ごとの、所有している参照の数。0 になった変数は除く。
-    owned: BTreeMap<VarId, u32>,
-    /// `Jump` してよい join point。
-    joins: BTreeSet<JoinId>,
+/// 辺の規則 (R1〜R4) を確かめ、支配木を作る。支配者は Cooper-Harvey-Kennedy の方法で求める。辺がすべて番号の
+/// 大きいブロックへ向かうので、番号の順が逆後順になり、反復せず1回で決まる。
+fn shape(function: &CoreFn) -> Result<Dominators, String> {
+    let count = function.blocks.len();
+    let mut idom: Vec<Option<u32>> = vec![None; count];
+    idom[0] = Some(0);
+    let mut jumps_in = vec![0u32; count];
+    let mut switches_in = vec![0u32; count];
+    for (from, block) in function.blocks.iter().enumerate() {
+        let from = from as u32;
+        for target in block.term.successors() {
+            let to = target.0;
+            if to as usize >= count {
+                return Err(format!(
+                    "an edge from b{from} goes to b{to}, which does not exist"
+                ));
+            }
+            if target == BlockId::ENTRY {
+                return Err(format!("an edge from b{from} goes to the entry block"));
+            }
+            if to <= from {
+                return Err(format!("an edge from b{from} goes back to b{to}"));
+            }
+            match &block.term {
+                Term::Jump { target: _, args } => {
+                    jumps_in[to as usize] += 1;
+                    let params = function.block(target).params.len();
+                    if args.len() != params {
+                        return Err(format!(
+                            "a jump to b{to} passes {} values, but b{to} takes {params}",
+                            args.len()
+                        ));
+                    }
+                }
+                Term::Switch {
+                    scrutinee: _,
+                    cases: _,
+                    default: _,
+                } => switches_in[to as usize] += 1,
+                Term::Return(_) | Term::TailCall { call: _, mask: _ } => {
+                    unreachable!("a return and a tail call have no successors")
+                }
+            }
+            // 入る辺のないブロックからの辺は支配に数えない。そのブロックは下の R4 の検査で誤りになる
+            if idom[from as usize].is_some() {
+                idom[to as usize] = Some(match idom[to as usize] {
+                    None => from,
+                    Some(other) => intersect(&idom, other, from),
+                });
+            }
+        }
+    }
+    for (index, block) in function.blocks.iter().enumerate().skip(1) {
+        let (jumps, switches) = (jumps_in[index], switches_in[index]);
+        if switches > 0 {
+            if jumps > 0 {
+                return Err(format!(
+                    "b{index} is the target of both a switch and a jump"
+                ));
+            }
+            if switches > 1 {
+                return Err(format!("b{index} is the target of {switches} switch edges"));
+            }
+            if !block.params.is_empty() {
+                return Err(format!(
+                    "b{index} is the target of a switch but takes parameters"
+                ));
+            }
+        } else if jumps == 0 {
+            return Err(format!("b{index} has no edge into it"));
+        }
+    }
+    // R4 を満たせば、どのブロックにも番号の小さいブロックから辺が入るので、入口から届き、支配者が決まっている
+    let idom: Vec<u32> = idom
+        .into_iter()
+        .map(|parent| parent.expect("every block is reachable"))
+        .collect();
+    Ok(Dominators::new(&idom))
 }
 
+/// 2つのブロックの共通の支配者のうち、最も近いもの。支配者はつねに番号が小さいので、大きい方を上へ動かす。
+fn intersect(idom: &[Option<u32>], mut a: u32, mut b: u32) -> u32 {
+    while a != b {
+        while a > b {
+            a = idom[a as usize].expect("a processed block has its dominator");
+        }
+        while b > a {
+            b = idom[b as usize].expect("a processed block has its dominator");
+        }
+    }
+    a
+}
+
+/// 定義と使用の位置。`index` はブロックの中の文の番号で、ブロックの引数と case のフィールドは -1、終端は文の数である。
+#[derive(Clone, Copy)]
+struct Site {
+    block: u32,
+    index: i64,
+}
+
+/// RC の対象の変数ごとの、所有している参照の数。0 になった変数は除く。
+type Owned = BTreeMap<VarId, u32>;
+
+/// まだ着いていないブロックの入口の状態。`switch` の行き先は1本の辺から、合流するブロックは最初の `jump` から作る。
+struct Entry {
+    owned: Owned,
+    /// 入る辺の出どころのブロックと、その辺での区間。合流するブロックの区間を決めるのに使う。
+    incoming: Vec<(u32, u32)>,
+}
+
+/// 区間は、呼び出しで区切った IR の範囲である。呼び出しの後と、区間の違う辺が合流するブロックで新しい区間が始まる。
+/// 変数が見えるのは、定義の位置が使う位置を支配し、さらに定義した区間が今の区間と同じか、今の区間に入れ直した
+/// 変数であるときだけである (R7)。Perceus より前は呼び出しで区切らないので、区間は 0 だけである。
 struct Checker<'a> {
     program: &'a Program,
     function: &'a CoreFn,
     level: Level,
-    tracked: Vec<bool>,
-    bound: HashSet<VarId>,
-    /// 変数ごとの、範囲に入れたときの区間の番号。区間は呼び出しのたびに新しくなり、呼び出しで退避した変数を新しい
-    /// 区間に入れ直す。今の区間の番号を持つ変数だけが範囲にある。枝ごとに写すと、文の `if` が続く関数で文の数の
-    /// 2乗の時間がかかるので、変更を `scope_log` に記録し、枝や範囲を確かめ終えたら巻き戻す。
-    stamps: Vec<Option<u32>>,
-    scope_log: Vec<(VarId, Option<u32>)>,
+    dominators: Dominators,
+    defs: Vec<Option<Site>>,
+    def_epochs: Vec<u32>,
+    /// 区間ごとの、入れ直した変数 (昇順)。呼び出しの区間は `save` の変数、合流の区間は入るどの辺でも見える変数である。
+    epochs: Vec<Vec<VarId>>,
     epoch: u32,
-    next_epoch: u32,
-    defined_joins: HashSet<JoinId>,
+    at: Site,
+    pending: HashMap<u32, Entry>,
     /// `closure` で束縛した変数の、関数とすでに渡した引数の数。`handle` の節の引数の数を確かめるのに使う。
     closures: HashMap<VarId, (FnIdx, usize)>,
 }
 
 impl<'a> Checker<'a> {
-    fn new(program: &'a Program, function: &'a CoreFn, level: Level) -> Self {
-        // Perceus より前は所有を数えないので、どの変数も RC の対象として扱わない。束縛、使用、join point の入口、
-        // `jump` の所有の検査は、これで範囲の検査だけになる
-        let tracked = match level {
-            Level::Ownership => tracked(function),
-            Level::Scopes => vec![false; function.vars.len()],
-        };
+    fn new(
+        program: &'a Program,
+        function: &'a CoreFn,
+        level: Level,
+        dominators: Dominators,
+    ) -> Self {
         Checker {
             program,
             function,
             level,
-            tracked,
-            bound: HashSet::new(),
-            stamps: vec![None; function.vars.len()],
-            scope_log: Vec::new(),
+            dominators,
+            defs: vec![None; function.vars.len()],
+            def_epochs: vec![0; function.vars.len()],
+            epochs: vec![Vec::new()],
             epoch: 0,
-            next_epoch: 1,
-            defined_joins: HashSet::new(),
+            at: Site {
+                block: 0,
+                index: -1,
+            },
+            pending: HashMap::new(),
             closures: HashMap::new(),
         }
     }
 
     fn run(mut self) -> Result<(), String> {
-        let mut state = State::default();
-        for &param in &self.function.params {
-            self.bind(&mut state, param)?;
-        }
-        self.check(self.function.body, state)
-    }
-
-    fn name(&self, var: VarId) -> String {
-        format!("{}{}", self.function.vars[var.0 as usize].name, var.0)
-    }
-
-    fn names<'v>(&self, vars: impl IntoIterator<Item = &'v VarId>) -> String {
-        let names: Vec<String> = vars.into_iter().map(|&var| self.name(var)).collect();
-        format!("[{}]", names.join(", "))
-    }
-
-    /// `Let` の連鎖と、join point の本体の連なりはループで歩く。再帰するのは `Switch` の case と `default`、join point
-    /// の範囲だけである。
-    fn check(&mut self, id: CExprId, mut state: State) -> Result<(), String> {
         let function = self.function;
-        let mut id = id;
-        loop {
-            match function.expr(id) {
-                CExpr::Let { var, rhs, body } => {
-                    self.check_rhs(&mut state, rhs)?;
-                    if let Rhs::MakeClosure(target, args) = rhs {
-                        self.closures.insert(*var, (*target, args.len()));
-                    }
-                    if let Rhs::Call {
+        for (index, block) in function.blocks.iter().enumerate() {
+            let index = index as u32;
+            let mut owned = if index == 0 {
+                Owned::new()
+            } else {
+                self.enter(index)
+            };
+            self.at = Site {
+                block: index,
+                index: -1,
+            };
+            for &param in &block.params {
+                self.define(&mut owned, param, self.at)?;
+            }
+            self.check_block(index, block, owned)?;
+        }
+        Ok(())
+    }
+
+    /// ブロックの入口の状態を取り出し、区間を決める。区間の違う辺が合流するなら、入るどの辺でも見える変数を入れ直した
+    /// 新しい区間を始める。その変数は、どれかの辺の区間で入れ直した変数に限られる。ほかの変数は、区間の違う辺の
+    /// どれかで見えないからである。
+    fn enter(&mut self, block: u32) -> Owned {
+        let entry = self
+            .pending
+            .remove(&block)
+            .expect("R3 and R4 give every block an edge from an earlier block");
+        let first = entry.incoming[0].1;
+        if entry.incoming.iter().all(|&(_, epoch)| epoch == first) {
+            self.epoch = first;
+            return entry.owned;
+        }
+        let mut candidates: Vec<VarId> = entry
+            .incoming
+            .iter()
+            .flat_map(|&(_, epoch)| self.epochs[epoch as usize].iter().copied())
+            .collect();
+        candidates.sort();
+        candidates.dedup();
+        candidates.retain(|&var| {
+            entry
+                .incoming
+                .iter()
+                .all(|&(from, epoch)| self.visible_at_end(var, from, epoch))
+        });
+        self.epoch = self.epochs.len() as u32;
+        self.epochs.push(candidates);
+        entry.owned
+    }
+
+    /// `from` の終端の、区間 `epoch` の位置で `var` が見えるかどうか。
+    fn visible_at_end(&self, var: VarId, from: u32, epoch: u32) -> bool {
+        let Some(site) = self.defs[var.0 as usize] else {
+            return false;
+        };
+        self.dominators.dominates(site.block, from)
+            && (self.def_epochs[var.0 as usize] == epoch
+                || self.epochs[epoch as usize].binary_search(&var).is_ok())
+    }
+
+    fn check_block(&mut self, index: u32, block: &Block, mut owned: Owned) -> Result<(), String> {
+        for (at, stmt) in block.stmts.iter().enumerate() {
+            self.at = Site {
+                block: index,
+                index: at as i64,
+            };
+            self.check_stmt(&mut owned, stmt)?;
+        }
+        self.at = Site {
+            block: index,
+            index: block.stmts.len() as i64,
+        };
+        self.check_term(index, owned, &block.term)
+    }
+
+    fn check_stmt(&mut self, owned: &mut Owned, stmt: &Stmt) -> Result<(), String> {
+        match stmt {
+            Stmt::Let { var, rhs } => {
+                self.check_rhs(owned, rhs)?;
+                match rhs {
+                    Rhs::Call {
                         call: _,
                         mask: _,
                         saved,
-                    } = rhs
-                    {
-                        match self.level {
-                            Level::Scopes if !saved.is_empty() => {
-                                return Err(format!(
-                                    "a call saves {} before Perceus",
-                                    self.names(saved)
-                                ));
-                            }
-                            Level::Scopes => {}
-                            Level::Ownership => {
-                                self.check_saved(&state, saved)?;
-                                // 呼び出しの後は、退避した変数だけが範囲に残る
-                                self.epoch = self.next_epoch;
-                                self.next_epoch += 1;
-                                for &var in saved {
-                                    self.enter_scope(var);
-                                }
-                            }
-                        }
+                    } => self.after_call(owned, saved)?,
+                    Rhs::MakeClosure(target, args) => {
+                        self.closures.insert(*var, (*target, args.len()));
                     }
-                    self.bind(&mut state, *var)?;
-                    id = *body;
+                    Rhs::Extern {
+                        ext: _,
+                        args: _,
+                        at: _,
+                    }
+                    | Rhs::ConstString(_)
+                    | Rhs::Con { tag: _, args: _ }
+                    | Rhs::Drop(_) => {}
                 }
-                CExpr::Dup { var, body } => {
-                    self.rc_allowed(*var, "duplicated")?;
-                    *self.count(&mut state, *var, "duplicated")? += 1;
-                    id = *body;
+                self.define(owned, *var, self.at)
+            }
+            Stmt::Unpack {
+                value,
+                tag: _,
+                fields,
+            } => {
+                let repr = self.function.repr(*value);
+                if repr != Repr::Obj {
+                    return Err(format!(
+                        "`{}` ({}) is unpacked, but only obj can be",
+                        self.name(*value),
+                        repr.name()
+                    ));
                 }
-                CExpr::Decref { var, body } => {
-                    self.rc_allowed(*var, "released")?;
-                    self.give_up(&mut state, *var, "released")?;
-                    id = *body;
+                if fields.is_empty() {
+                    return Err(format!(
+                        "an unpack of `{}` binds no fields",
+                        self.name(*value)
+                    ));
                 }
-                CExpr::Return(atom) => {
-                    self.consume(&mut state, atom)?;
-                    return self.nothing_owned(&state);
+                // S3b-2a の `unpack` は、消費する `switch` と同じく値の所有を受け取る
+                self.consume(owned, Atom::Var(*value))?;
+                for &field in fields {
+                    self.define(owned, field, self.at)?;
                 }
-                CExpr::TailCall { call, mask } => {
-                    self.check_mask(call, mask)?;
-                    self.check_call(&mut state, call)?;
-                    return self.nothing_owned(&state);
-                }
-                CExpr::Jump { join, args } => return self.check_jump(state, *join, args),
-                CExpr::Switch {
-                    scrutinee,
-                    cases,
-                    default,
-                } => {
-                    self.switch_cases(cases, *default)?;
-                    if cases.iter().any(|case| !case.fields.is_empty()) {
-                        self.fields_allowed(scrutinee)?;
-                    }
-                    self.consume(&mut state, scrutinee)?;
-                    for case in cases {
-                        self.check_branch(case.body, state.clone(), &case.fields)?;
-                    }
-                    if let Some(default) = default {
-                        self.check_branch(*default, state, &[])?;
-                    }
-                    return Ok(());
-                }
-                CExpr::Join {
-                    join,
-                    params,
-                    captures,
-                    body,
-                    scope,
-                } => {
-                    if !self.defined_joins.insert(*join) {
-                        return Err(format!("`j{}` is defined twice", join.0));
-                    }
-                    if function.joins.get(join.0 as usize) != Some(&id) {
-                        return Err(format!("the join index does not point at `j{}`", join.0));
-                    }
-                    if !captures.is_sorted_by(|a, b| a < b) {
-                        return Err(format!(
-                            "the captures of `j{}` are not in increasing order",
-                            join.0
-                        ));
-                    }
-                    for &var in captures {
-                        if !self.in_scope(var) {
-                            return Err(format!(
-                                "`j{}` captures `{}`, which is not in scope",
-                                join.0,
-                                self.name(var)
-                            ));
-                        }
-                    }
-                    // 範囲は今の状態から始まり、この join point に `Jump` できる
-                    let mut scope_state = state.clone();
-                    scope_state.joins.insert(*join);
-                    self.check_branch(*scope, scope_state, &[])?;
-                    // 本体は、関数の本体と同じく、`captures` と引数だけが範囲にある状態から始まり、`captures` のうち
-                    // RC の対象を1つずつ所有する。`captures` の書き漏れは、本体での範囲の誤りとして見つかる
-                    self.epoch = self.next_epoch;
-                    self.next_epoch += 1;
-                    for &var in captures {
-                        self.enter_scope(var);
-                    }
-                    state.owned = captures
-                        .iter()
-                        .copied()
-                        .filter(|var| self.tracked[var.0 as usize])
-                        .map(|var| (var, 1))
-                        .collect();
-                    for &param in params {
-                        self.bind(&mut state, param)?;
-                    }
-                    id = *body;
-                }
+                Ok(())
+            }
+            Stmt::Dup(var) => {
+                self.rc_allowed(*var, "duplicated")?;
+                *self.count(owned, *var, "duplicated")? += 1;
+                Ok(())
+            }
+            Stmt::Decref(var) => {
+                self.rc_allowed(*var, "released")?;
+                self.give_up(owned, *var, "released")
             }
         }
     }
 
-    /// 1つの `Switch` の case の種類がそろい、同じ case が2回なく、リテラルの case はフィールドを持たず、リテラルの
-    /// `Switch` が `default` を持つこと (docs/spec/core-ir.md)。リテラルは無限にあるので、`default` がないと合わない
-    /// 値が行き場を失う。
-    fn switch_cases(&self, cases: &[Case], default: Option<CExprId>) -> Result<(), String> {
+    fn check_term(&mut self, index: u32, mut owned: Owned, term: &Term) -> Result<(), String> {
+        match term {
+            Term::Return(atom) => {
+                self.consume(&mut owned, *atom)?;
+                if let Atom::Var(var) = *atom {
+                    let repr = self.function.repr(var);
+                    if repr != self.function.ret {
+                        return Err(format!(
+                            "`{}` ({}) is returned from a function that returns {}",
+                            self.name(var),
+                            repr.name(),
+                            self.function.ret.name()
+                        ));
+                    }
+                }
+                self.nothing_owned(&owned)
+            }
+            Term::TailCall { call, mask } => {
+                self.check_mask(call, mask)?;
+                self.check_call(&mut owned, call)?;
+                self.nothing_owned(&owned)
+            }
+            Term::Jump { target, args } => {
+                let params = &self.function.block(*target).params;
+                for (&arg, &param) in args.iter().zip(params) {
+                    self.check_passed(*target, arg, param)?;
+                }
+                for &arg in args {
+                    self.consume(&mut owned, arg)?;
+                }
+                self.merge(index, *target, owned)
+            }
+            Term::Switch {
+                scrutinee,
+                cases,
+                default,
+            } => {
+                self.switch_cases(cases)?;
+                self.literal_default(cases, *default)?;
+                if cases.iter().any(|case| !case.fields.is_empty()) {
+                    self.fields_allowed(*scrutinee)?;
+                }
+                self.consume(&mut owned, *scrutinee)?;
+                // 行き先は辺を1本しか持たないので (R3)、ここで入口の状態を決める。フィールドは行き先の先頭で定義する
+                for case in cases {
+                    let mut entry = owned.clone();
+                    let site = Site {
+                        block: case.target.0,
+                        index: -1,
+                    };
+                    for &field in &case.fields {
+                        self.define(&mut entry, field, site)?;
+                    }
+                    self.pending.insert(
+                        case.target.0,
+                        Entry {
+                            owned: entry,
+                            incoming: vec![(index, self.epoch)],
+                        },
+                    );
+                }
+                if let Some(default) = default {
+                    self.pending.insert(
+                        default.0,
+                        Entry {
+                            owned,
+                            incoming: vec![(index, self.epoch)],
+                        },
+                    );
+                }
+                Ok(())
+            }
+        }
+    }
+
+    /// 合流するブロックに入る `jump` は、渡す値を除いて、どれも同じ多重集合を所有する。その集合が入口の所有になる (R6)。
+    fn merge(&mut self, from: u32, target: BlockId, owned: Owned) -> Result<(), String> {
+        let incoming = (from, self.epoch);
+        let Some(entry) = self.pending.get(&target.0) else {
+            self.pending.insert(
+                target.0,
+                Entry {
+                    owned,
+                    incoming: vec![incoming],
+                },
+            );
+            return Ok(());
+        };
+        if entry.owned != owned {
+            return Err(format!(
+                "a jump to b{} owns {} but an earlier jump to it owns {}",
+                target.0,
+                self.owned_names(&owned),
+                self.owned_names(&entry.owned)
+            ));
+        }
+        self.pending
+            .get_mut(&target.0)
+            .expect("the entry was just found")
+            .incoming
+            .push(incoming);
+        Ok(())
+    }
+
+    /// `jump` の実引数が変数なら、行き先の引数と Repr が同じである。定数は、行き先の引数の Repr に収まる (R8)。
+    fn check_passed(&self, target: BlockId, arg: Atom, param: VarId) -> Result<(), String> {
+        let expected = self.function.repr(param);
+        let fits = match arg {
+            Atom::Var(var) => {
+                let repr = self.function.repr(var);
+                if repr != expected {
+                    return Err(format!(
+                        "a jump to b{} passes `{}` ({}) to `{}` ({})",
+                        target.0,
+                        self.name(var),
+                        repr.name(),
+                        self.name(param),
+                        expected.name()
+                    ));
+                }
+                true
+            }
+            Atom::Int(_) => expected == Repr::Int,
+            Atom::Unit => expected == Repr::Unit,
+            // 引数のないコンストラクタは、`enum` のタグにも、`tobj` の即値にもなる
+            Atom::Tag(_) => matches!(expected, Repr::Enum | Repr::TObj),
+            Atom::Fn(_) => expected == Repr::TObj,
+        };
+        if fits {
+            Ok(())
+        } else {
+            Err(format!(
+                "a jump to b{} passes {} to `{}` ({})",
+                target.0,
+                self.atom_text(arg),
+                self.name(param),
+                expected.name()
+            ))
+        }
+    }
+
+    /// 1つの `switch` の case の種類がそろい、同じ case が2回なく、リテラルの case はフィールドを持たず、文字列の case
+    /// は定数の表にあること。
+    fn switch_cases(&self, cases: &[Case]) -> Result<(), String> {
         let kinds: HashSet<_> = cases
             .iter()
             .map(|case| discriminant(&case.pattern))
@@ -293,14 +541,9 @@ impl<'a> Checker<'a> {
         if kinds.len() > 1 {
             return Err("a switch mixes kinds of cases".to_string());
         }
-        let literal = cases
-            .iter()
-            .any(|case| !matches!(case.pattern, CasePattern::Tag(_)));
-        if literal && default.is_none() {
-            return Err("a switch on literals has no default".to_string());
-        }
         let mut seen = HashSet::new();
         for case in cases {
+            let literal = !matches!(case.pattern, CasePattern::Tag(_));
             if literal && !case.fields.is_empty() {
                 return Err("a literal case binds fields".to_string());
             }
@@ -314,109 +557,140 @@ impl<'a> Checker<'a> {
             if !seen.insert(case.pattern) {
                 return Err(format!(
                     "a switch has two cases for {}",
-                    case_pattern(self.program, case.pattern)
+                    self.pattern_text(case.pattern)
                 ));
             }
         }
         Ok(())
     }
 
-    /// 枝や範囲を確かめ、その中での範囲の変更を巻き戻す。`bindings` は入口で束縛する変数 (`Switch` の枝のフィールド)
-    /// で、範囲はその枝の中だけである。
-    fn check_branch(
-        &mut self,
-        id: CExprId,
-        mut state: State,
-        bindings: &[VarId],
-    ) -> Result<(), String> {
-        let mark = self.scope_log.len();
-        let epoch = self.epoch;
-        for &var in bindings {
-            self.bind(&mut state, var)?;
+    /// リテラルは無限にあるので、`default` がないと合わない値が行き場を失う。
+    fn literal_default(&self, cases: &[Case], default: Option<BlockId>) -> Result<(), String> {
+        let literal = cases
+            .iter()
+            .any(|case| !matches!(case.pattern, CasePattern::Tag(_)));
+        if literal && default.is_none() {
+            return Err("a switch on literals has no default".to_string());
         }
-        self.check(id, state)?;
-        for (var, stamp) in self.scope_log.drain(mark..).rev() {
-            self.stamps[var.0 as usize] = stamp;
-        }
-        self.epoch = epoch;
         Ok(())
     }
 
-    /// フィールドを持つ値は boxed な変数に入る (docs/spec/core-ir.md の boxed の判定)。定数の scrutinee は、B2 が
-    /// 引数をタグに置き換えた枝の中にできるので、フィールドを束縛する枝があってもよい。その枝には入らない。
-    fn fields_allowed(&self, scrutinee: &Atom) -> Result<(), String> {
-        match *scrutinee {
-            Atom::Var(var) if !self.function.vars[var.0 as usize].boxed => Err(format!(
-                "`{}` is not boxed, but a switch binds its fields",
-                self.name(var)
+    /// フィールドを持つ値は RC の対象の変数に入る (docs/spec/core-ir.md)。
+    fn fields_allowed(&self, scrutinee: Atom) -> Result<(), String> {
+        match scrutinee {
+            Atom::Var(var) if !self.function.repr(var).is_rc() => Err(format!(
+                "`{}` ({}) is not reference counted, but a switch binds its fields",
+                self.name(var),
+                self.function.repr(var).name()
             )),
             _ => Ok(()),
         }
     }
 
-    fn enter_scope(&mut self, var: VarId) {
-        self.scope_log.push((var, self.stamps[var.0 as usize]));
-        self.stamps[var.0 as usize] = Some(self.epoch);
+    /// 呼び出しの後に見える変数は、退避した変数と結果だけである。退避する変数は呼び出しの前に見えていて、RC の対象の
+    /// 部分は所有している多重集合とちょうど一致する。フレームがちょうど所有している参照だけを持つためである (R7)。
+    fn after_call(&mut self, owned: &Owned, saved: &[VarId]) -> Result<(), String> {
+        if self.level == Level::Scopes {
+            if saved.is_empty() {
+                return Ok(());
+            }
+            return Err(format!("a call saves {} before Perceus", self.names(saved)));
+        }
+        for &var in saved {
+            self.visible(var)?;
+        }
+        // 同じ変数を2回退避すると、解放や複製のときに所有していない参照まで数えるので、重なりも含めて比べる
+        let mut saved_rc: Vec<VarId> = saved
+            .iter()
+            .copied()
+            .filter(|&var| self.function.repr(var).is_rc())
+            .collect();
+        saved_rc.sort();
+        if flatten(owned) != saved_rc {
+            return Err(format!(
+                "a call saves {} but owns {}",
+                self.names(&saved_rc),
+                self.owned_names(owned)
+            ));
+        }
+        let mut reentered = saved.to_vec();
+        reentered.sort();
+        reentered.dedup();
+        self.epoch = self.epochs.len() as u32;
+        self.epochs.push(reentered);
+        Ok(())
     }
 
-    fn bind(&mut self, state: &mut State, var: VarId) -> Result<(), String> {
-        if !self.bound.insert(var) {
-            return Err(format!("`{}` is bound twice", self.name(var)));
+    /// 変数を1回だけ定義し (R5)、RC の対象なら所有を1つ持つ。
+    fn define(&mut self, owned: &mut Owned, var: VarId, site: Site) -> Result<(), String> {
+        let slot = &mut self.defs[var.0 as usize];
+        if slot.is_some() {
+            return Err(format!("`{}` is defined twice", self.name(var)));
         }
-        self.enter_scope(var);
-        if self.tracked[var.0 as usize] {
-            state.owned.insert(var, 1);
+        *slot = Some(site);
+        self.def_epochs[var.0 as usize] = self.epoch;
+        if self.level == Level::Ownership && self.function.repr(var).is_rc() {
+            owned.insert(var, 1);
         }
         Ok(())
     }
 
-    fn in_scope(&self, var: VarId) -> bool {
-        self.stamps[var.0 as usize] == Some(self.epoch)
-    }
-
+    /// 定義の位置が今の位置を支配し (R6)、所有の検査の段では、間の呼び出しがすべて退避している (R7)。
     fn visible(&self, var: VarId) -> Result<(), String> {
-        if self.in_scope(var) {
-            Ok(())
-        } else {
-            Err(format!("`{}` is used outside its scope", self.name(var)))
+        let dominated = self.defs[var.0 as usize].is_some_and(|site| {
+            if site.block == self.at.block {
+                site.index < self.at.index
+            } else {
+                self.dominators.dominates(site.block, self.at.block)
+            }
+        });
+        if !dominated {
+            return Err(format!("`{}` is used outside its scope", self.name(var)));
         }
+        if self.def_epochs[var.0 as usize] != self.epoch
+            && self.epochs[self.epoch as usize]
+                .binary_search(&var)
+                .is_err()
+        {
+            return Err(format!(
+                "`{}` is used after a call that does not save it",
+                self.name(var)
+            ));
+        }
+        Ok(())
     }
 
     /// RC の対象の変数の、所有している参照の数。0 なら、`what` (使う、複製する、捨てる) ことはできない。
     fn count<'s>(
         &self,
-        state: &'s mut State,
+        owned: &'s mut Owned,
         var: VarId,
         what: &str,
     ) -> Result<&'s mut u32, String> {
         self.visible(var)?;
-        if !self.tracked[var.0 as usize] {
+        if !self.function.repr(var).is_rc() {
             return Err(format!(
                 "`{}` is {what} but is not reference counted",
                 self.name(var)
             ));
         }
-        let name = self.name(var);
-        match state.owned.get_mut(&var) {
-            Some(count) if *count > 0 => Ok(count),
-            _ => Err(format!("`{name}` is {what} after it was moved")),
+        match owned.get_mut(&var) {
+            Some(count) => Ok(count),
+            None => Err(format!("`{}` is {what} after it was moved", self.name(var))),
         }
     }
 
     /// 参照を1つ手放す。所有しなくなった変数は表から除き、写す状態を小さく保つ。
-    fn give_up(&self, state: &mut State, var: VarId, what: &str) -> Result<(), String> {
-        let left = {
-            let count = self.count(state, var, what)?;
-            *count -= 1;
-            *count
-        };
-        if left == 0 {
-            state.owned.remove(&var);
+    fn give_up(&self, owned: &mut Owned, var: VarId, what: &str) -> Result<(), String> {
+        let count = self.count(owned, var, what)?;
+        *count -= 1;
+        if *count == 0 {
+            owned.remove(&var);
         }
         Ok(())
     }
 
-    /// RC の命令は Perceus だけが入れる (docs/spec/core-ir.md のパスの表)。
+    /// RC の命令は Perceus だけが入れる。
     fn rc_allowed(&self, var: VarId, what: &str) -> Result<(), String> {
         if self.level == Level::Scopes {
             return Err(format!("`{}` is {what} before Perceus", self.name(var)));
@@ -424,9 +698,9 @@ impl<'a> Checker<'a> {
         Ok(())
     }
 
-    /// 値を使う。RC の対象なら、所有権を1つ渡す。
-    fn consume(&self, state: &mut State, atom: &Atom) -> Result<(), String> {
-        let var = match *atom {
+    /// 値を使う。所有の検査の段では、RC の対象なら所有を1つ渡す。
+    fn consume(&self, owned: &mut Owned, atom: Atom) -> Result<(), String> {
+        let var = match atom {
             Atom::Var(var) => var,
             Atom::Fn(target) if target.0 as usize >= self.program.functions.len() => {
                 return Err(format!(
@@ -434,15 +708,29 @@ impl<'a> Checker<'a> {
                     target.0
                 ));
             }
-            _ => return Ok(()),
+            Atom::Fn(_) | Atom::Int(_) | Atom::Unit | Atom::Tag(_) => return Ok(()),
         };
-        if !self.tracked[var.0 as usize] {
+        if self.level == Level::Scopes || !self.function.repr(var).is_rc() {
             return self.visible(var);
         }
-        self.give_up(state, var, "used")
+        self.give_up(owned, var, "used")
     }
 
-    fn check_rhs(&self, state: &mut State, rhs: &Rhs) -> Result<(), String> {
+    fn consume_all(
+        &self,
+        owned: &mut Owned,
+        for_each: impl FnOnce(&mut dyn FnMut(Atom)),
+    ) -> Result<(), String> {
+        let mut result = Ok(());
+        for_each(&mut |atom| {
+            if result.is_ok() {
+                result = self.consume(owned, atom);
+            }
+        });
+        result
+    }
+
+    fn check_rhs(&self, owned: &mut Owned, rhs: &Rhs) -> Result<(), String> {
         match rhs {
             Rhs::Call {
                 call,
@@ -450,27 +738,27 @@ impl<'a> Checker<'a> {
                 saved: _,
             } => {
                 self.check_mask(call, mask)?;
-                return self.check_call(state, call);
+                return self.check_call(owned, call);
             }
             Rhs::MakeClosure(target, args) => {
-                let target = self.program.function(*target);
+                let target = self.function_at(*target)?;
                 if args.is_empty() {
                     return Err(format!(
                         "a closure of `{0}` has no arguments; use `&{0}`",
                         target.name
                     ));
                 }
-                if args.len() >= target.params.len() {
+                let params = target.params().len();
+                if args.len() >= params {
                     return Err(format!(
-                        "a closure of `{}` has {} arguments, but it must have fewer than {}",
+                        "a closure of `{}` has {} arguments, but it must have fewer than {params}",
                         target.name,
-                        args.len(),
-                        target.params.len()
+                        args.len()
                     ));
                 }
             }
-            Rhs::Extern(e, args) => {
-                let row = e.row();
+            Rhs::Extern { ext, args, at: _ } => {
+                let row = ext.row();
                 // 型で選ぶ行は translate が比べ方ごとの行に置き換える
                 if row.by_type {
                     return Err(format!(
@@ -487,24 +775,28 @@ impl<'a> Checker<'a> {
                     ));
                 }
             }
-            _ => {}
+            Rhs::ConstString(index) => {
+                if *index as usize >= self.program.strings.len() {
+                    return Err(format!(
+                        "a constant refers to string {index}, which does not exist"
+                    ));
+                }
+            }
+            Rhs::Con { tag: _, args: _ } | Rhs::Drop(_) => {}
         }
-        for atom in rhs.atoms() {
-            self.consume(state, &atom)?;
-        }
-        Ok(())
+        self.consume_all(owned, |f| rhs.for_each_atom(f))
     }
 
-    fn check_call(&self, state: &mut State, call: &Call) -> Result<(), String> {
+    fn check_call(&self, owned: &mut Owned, call: &Call) -> Result<(), String> {
         match call {
             Call::Direct(target, args) => {
-                let target = self.program.function(*target);
-                if args.len() != target.params.len() {
+                let target = self.function_at(*target)?;
+                let params = target.params().len();
+                if args.len() != params {
                     return Err(format!(
-                        "a direct call to `{}` passes {} arguments, but it takes {}",
+                        "a direct call to `{}` passes {} arguments, but it takes {params}",
                         target.name,
-                        args.len(),
-                        target.params.len()
+                        args.len()
                     ));
                 }
             }
@@ -524,7 +816,7 @@ impl<'a> Checker<'a> {
                         info.operations.len()
                     ));
                 }
-                self.check_clause_arities(info, clauses, ret)?;
+                self.check_clause_arities(info, clauses, *ret)?;
             }
             Call::Perform {
                 effect,
@@ -559,10 +851,7 @@ impl<'a> Checker<'a> {
                 state: _,
             } => {}
         }
-        for atom in call.atoms() {
-            self.consume(state, &atom)?;
-        }
-        Ok(())
+        self.consume_all(owned, |f| call.for_each_atom(f))
     }
 
     /// `mask` はエフェクトの表にある番号を昇順に並べた多重集合である。extern のエフェクトは表にないので、`mask` にも
@@ -594,9 +883,9 @@ impl<'a> Checker<'a> {
         &self,
         info: &EffectInfo,
         clauses: &[Atom],
-        ret: &Atom,
+        ret: Atom,
     ) -> Result<(), String> {
-        for (op, clause) in info.operations.iter().zip(clauses) {
+        for (op, &clause) in info.operations.iter().zip(clauses) {
             let Some(has) = self.parameters_left(clause) else {
                 continue;
             };
@@ -621,224 +910,87 @@ impl<'a> Checker<'a> {
         }
     }
 
-    /// 呼ばれる値の関数が、すでに渡した引数の後にまだ受ける引数の数。静的に分からなければ `None`。
-    fn parameters_left(&self, atom: &Atom) -> Option<usize> {
-        let (function, passed) = self.known_function(atom)?;
+    /// 呼ばれる値の関数が、すでに渡した引数の後にまだ受ける引数の数。関数の値か、同じ関数の中で `closure` で作った
+    /// 値のときだけ分かる。変数は1回だけ定義されるので、`closure` の記録は関数全体で引ける。
+    fn parameters_left(&self, atom: Atom) -> Option<usize> {
+        let (function, passed) = match atom {
+            Atom::Fn(function) => (function, 0),
+            Atom::Var(var) => self.closures.get(&var).copied()?,
+            Atom::Int(_) | Atom::Unit | Atom::Tag(_) => return None,
+        };
         let params = self
             .program
             .functions
             .get(function.0 as usize)?
-            .params
+            .params()
             .len();
         Some(params.saturating_sub(passed))
     }
 
-    /// 呼ばれる値の関数と、すでに渡した引数の数。関数の値か、同じ関数の中で `closure` で作った値のときだけ分かる。
-    fn known_function(&self, atom: &Atom) -> Option<(FnIdx, usize)> {
-        match atom {
-            Atom::Fn(function) => Some((*function, 0)),
-            Atom::Var(var) => self.closures.get(var).copied(),
-            Atom::Int(_) | Atom::Unit | Atom::Tag(_) => None,
-        }
-    }
-
-    fn effect(&self, effect: u32) -> Result<&EffectInfo, String> {
+    fn effect(&self, effect: u32) -> Result<&'a EffectInfo, String> {
         self.program
             .effects
             .get(effect as usize)
             .ok_or_else(|| format!("effect {effect} is not in the effect table"))
     }
 
-    /// 退避する変数は範囲の中にあり、RC の対象のうち所有している変数とちょうど一致する。フレームがちょうど所有して
-    /// いる参照だけを持つためである (docs/spec/core-ir.md)。
-    fn check_saved(&self, state: &State, saved: &[VarId]) -> Result<(), String> {
-        for &var in saved {
-            self.visible(var)?;
-        }
-        // 同じ変数を2回退避すると、解放や複製のときに所有していない参照まで数えるので、重なりも含めて比べる
-        let mut saved_tracked: Vec<VarId> = saved
-            .iter()
-            .copied()
-            .filter(|var| self.tracked[var.0 as usize])
-            .collect();
-        saved_tracked.sort();
-        let owned: Vec<VarId> = state
-            .owned
-            .iter()
-            .flat_map(|(&var, &count)| std::iter::repeat_n(var, count as usize))
-            .collect();
-        if owned != saved_tracked {
-            return Err(format!(
-                "a call saves {} but owns {}",
-                self.names(&saved_tracked),
-                self.names(&owned)
-            ));
-        }
-        Ok(())
+    fn function_at(&self, target: FnIdx) -> Result<&'a CoreFn, String> {
+        self.program
+            .functions
+            .get(target.0 as usize)
+            .ok_or_else(|| format!("a call refers to the unknown function #{}", target.0))
     }
 
-    /// 渡す値の数が行き先の引数の数と一致し、渡す値を除き、行き先の join point の `captures` のうち RC の対象を、
-    /// ちょうど1つずつ所有している。
-    fn check_jump(&self, mut state: State, join: JoinId, args: &[Atom]) -> Result<(), String> {
-        if !state.joins.contains(&join) {
-            return Err(format!("a jump to `j{}` is outside its scope", join.0));
-        }
-        let (params, _) = self.function.join(join);
-        if args.len() != params.len() {
-            return Err(format!(
-                "a jump to `j{}` passes {} values, but its join takes {}",
-                join.0,
-                args.len(),
-                params.len()
-            ));
-        }
-        let captures = self.function.captures(join);
-        // 呼び出しの後に `Jump` する経路で、本体が使う変数を退避し忘れていないこと
-        for &var in captures {
-            self.visible(var)?;
-        }
-        for arg in args {
-            self.consume(&mut state, arg)?;
-        }
-        let needs: Vars = captures
-            .iter()
-            .copied()
-            .filter(|var| self.tracked[var.0 as usize])
-            .collect();
-        let owned: Vec<VarId> = state
-            .owned
-            .iter()
-            .flat_map(|(&var, &count)| std::iter::repeat_n(var, count as usize))
-            .collect();
-        if owned.iter().copied().collect::<Vars>() != needs || owned.len() != needs.len() {
-            return Err(format!(
-                "a jump to `j{}` owns {} but its join needs {}",
-                join.0,
-                self.names(&owned),
-                self.names(&needs)
-            ));
-        }
-        Ok(())
-    }
-
-    fn nothing_owned(&self, state: &State) -> Result<(), String> {
-        match state.owned.iter().find(|&(_, &count)| count > 0) {
-            Some((&var, _)) => Err(format!(
+    fn nothing_owned(&self, owned: &Owned) -> Result<(), String> {
+        match owned.keys().next() {
+            Some(&var) => Err(format!(
                 "`{}` is still owned at the end of the function",
                 self.name(var)
             )),
             None => Ok(()),
         }
     }
+
+    /// テキストの形と同じ `名前.N`。
+    fn name(&self, var: VarId) -> String {
+        format!("{}.{}", self.function.vars[var.0 as usize].name, var.0)
+    }
+
+    fn names(&self, vars: &[VarId]) -> String {
+        let names: Vec<String> = vars.iter().map(|&var| self.name(var)).collect();
+        format!("[{}]", names.join(", "))
+    }
+
+    fn owned_names(&self, owned: &Owned) -> String {
+        self.names(&flatten(owned))
+    }
+
+    fn atom_text(&self, atom: Atom) -> String {
+        match atom {
+            Atom::Var(var) => format!("`{}`", self.name(var)),
+            Atom::Int(n) => n.to_string(),
+            Atom::Unit => "()".to_string(),
+            Atom::Tag(tag) => format!("#{tag}"),
+            Atom::Fn(target) => match self.program.functions.get(target.0 as usize) {
+                Some(function) => format!("&{}", function.name),
+                None => format!("&#{}", target.0),
+            },
+        }
+    }
+
+    fn pattern_text(&self, pattern: CasePattern) -> String {
+        match pattern {
+            CasePattern::Tag(tag) => format!("#{tag}"),
+            CasePattern::Int(n) => n.to_string(),
+            CasePattern::String(index) => format!("{:?}", self.program.strings[index as usize]),
+        }
+    }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::VarInfo;
-    use crate::builder::FnBuilder;
-
-    fn program_of(function: CoreFn) -> Program {
-        Program {
-            functions: vec![function],
-            entry: crate::FnIdx(0),
-            strings: Vec::new(),
-            effects: Vec::new(),
-        }
-    }
-
-    #[test]
-    fn a_child_shared_by_two_parents_is_rejected() {
-        let mut builder = FnBuilder::new();
-        let x = builder.var(VarInfo {
-            name: "x".to_string(),
-            boxed: false,
-        });
-        let shared = builder.push(CExpr::Return(Atom::Int(1)));
-        let first = builder.push(CExpr::Dup {
-            var: x,
-            body: shared,
-        });
-        let second = builder.push(CExpr::Dup {
-            var: x,
-            body: shared,
-        });
-        let join = builder.new_join();
-        let at = builder.push(CExpr::Join {
-            join,
-            params: Vec::new(),
-            captures: Vec::new(),
-            body: first,
-            scope: second,
-        });
-        builder.define_join(join, at);
-        let function = builder.finish("f".to_string(), vec![x], at);
-        let error = verify_scopes(&program_of(function)).unwrap_err();
-        assert!(
-            error.message.contains("is reachable twice"),
-            "{}",
-            error.message
-        );
-    }
-
-    #[test]
-    fn an_expression_outside_the_tree_is_rejected() {
-        let mut builder = FnBuilder::new();
-        let _orphan = builder.push(CExpr::Return(Atom::Int(0)));
-        let body = builder.push(CExpr::Return(Atom::Int(1)));
-        let function = builder.finish("f".to_string(), Vec::new(), body);
-        let error = verify_scopes(&program_of(function)).unwrap_err();
-        assert!(
-            error.message.contains("is not reachable from the body"),
-            "{}",
-            error.message
-        );
-    }
-
-    /// テキストは `handle` と `perform` の前の `mask` を読まないので、読んだ後で `mask` を付ける。
-    #[test]
-    fn a_mask_on_handle_or_perform_is_rejected() {
-        let texts = [
-            "effect Ask { ask/1 }\nfn f(c0^, c1^, c2^) {\n  tailcall handle Ask(c0, ()) {ask: c1} return c2\n}\n",
-            "effect Ask { ask/1 }\nfn f() {\n  tailcall perform Ask.ask(1)\n}\n",
-        ];
-        let mut errors = Vec::new();
-        for text in texts {
-            let mut program = crate::parse(text).unwrap();
-            let function = &mut program.functions[0];
-            let root = function.body;
-            let CExpr::TailCall { call: _, mask } = function.expr_mut(root) else {
-                panic!("not a tail call");
-            };
-            mask.push(0);
-            errors.push(verify_scopes(&program).unwrap_err().message);
-        }
-        assert_eq!(errors, ["a mask on handle", "a mask on perform"]);
-    }
-
-    #[test]
-    fn a_perform_must_agree_with_the_effect_on_resuming() {
-        let mut program = crate::parse(
-            "effect Fail { never fail/1 }\nfn f() {\n  tailcall perform Fail.fail(())\n}\n",
-        )
-        .unwrap();
-        let function = &mut program.functions[0];
-        let root = function.body;
-        let CExpr::TailCall {
-            call: Call::Perform { resumable, .. },
-            mask: _,
-        } = function.expr_mut(root)
-        else {
-            panic!("not a perform");
-        };
-        *resumable = true;
-        let error = verify_scopes(&program).unwrap_err();
-        assert!(
-            error
-                .message
-                .contains("`Fail.fail` never resumes, but this perform resumes"),
-            "{}",
-            error.message
-        );
-    }
+/// 所有の多重集合を、参照の数だけ変数を並べた昇順の列にする。
+fn flatten(owned: &Owned) -> Vec<VarId> {
+    owned
+        .iter()
+        .flat_map(|(&var, &count)| std::iter::repeat_n(var, count as usize))
+        .collect()
 }

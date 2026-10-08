@@ -5,4 +5,5 @@ input_file: tests/ui/run-fail/files/not_utf8.em
 ---
 --- stdout ---
 --- runtime error ---
-`not_utf8.txt` is not valid UTF-8 in `main`
+`not_utf8.txt` is not valid UTF-8
+  at run-fail/files/not_utf8.em:5:19

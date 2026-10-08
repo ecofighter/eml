@@ -1,5 +1,5 @@
 -- A hundred thousand operations resumed in tail position do not grow the continuation. The values saved across
--- each operation, including one bound by a join point, are freed exactly once.
+-- each operation, including one passed to a merge block, are freed exactly once.
 effect Ask where
   ask : Unit -> Int
 

@@ -1,10 +1,10 @@
 //! Core IR のテキストの形 (docs/implementation/testing.md の「Core IR のテキストの形」)。`parse` が読んだものを
 //! `pretty` で表示すると元のテキストに戻ることと、構文の誤りの報告を確かめる。
 
-use eml_core_ir::v2::{
+use eml_core_ir::{Atom, Call, CasePattern, FnIdx, VarId};
+use eml_core_ir::{
     BlockId, Loc, ParseError, Program, Repr, Rhs, Stmt, Term, parse, pretty, pretty_with_positions,
 };
-use eml_core_ir::{Atom, Call, CasePattern, FnIdx, VarId};
 
 /// 読んで表示し直すと元に戻ることを確かめ、読んだプログラムを返す。
 fn round_trip(text: &str) -> Program {

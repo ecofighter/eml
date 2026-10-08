@@ -167,14 +167,21 @@ impl Session {
     /// (`eml_core_ir::lower_until`)。
     #[cfg(feature = "core")]
     pub fn compile_until(&self, last: Pass) -> Compiled {
-        self.compile_with(|hir, typed, main| eml_core_ir::lower_until(hir, typed, main, last))
+        self.compile_with(|hir, typed, main, files| {
+            eml_core_ir::lower_until(hir, typed, main, files, last)
+        })
     }
 
     /// パスの順番は `eml_core_ir` だけが知るので、Core IR を作る関数を受け取る。
     #[cfg(feature = "core")]
     fn compile_with(
         &self,
-        lower: impl FnOnce(&eml_hir::Program, &eml_types::TypedProgram, eml_hir::FunctionId) -> Program,
+        lower: impl FnOnce(
+            &eml_hir::Program,
+            &eml_types::TypedProgram,
+            eml_hir::FunctionId,
+            &SourceFiles,
+        ) -> Program,
     ) -> Compiled {
         let Checked {
             program,
@@ -189,7 +196,9 @@ impl Session {
         sort_diagnostics(&mut diagnostics);
         // Core IR は誤りのないプログラムだけを受け取る (docs/implementation/architecture.md)
         let program = match main {
-            Some(main) if !has_errors(&diagnostics) => Some(lower(&program, &typed, main)),
+            Some(main) if !has_errors(&diagnostics) => {
+                Some(lower(&program, &typed, main, self.files()))
+            }
             _ => None,
         };
         Compiled {

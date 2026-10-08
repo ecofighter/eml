@@ -1,42 +1,48 @@
-//! 型から決まる変数の性質 (boxed かどうか) と、`==` と `!=` を比べ方ごとのどの extern にするか。
+//! 型から決まる値の表現 (Repr) と、`==` と `!=` を比べ方ごとのどの extern にするか。
 
-use eml_extern::Extern;
-use eml_hir::{Program as HirProgram, TypeDefId, TypeDefKind};
+use eml_extern::{Extern, ExternType};
+use eml_hir::{Program as HirProgram, TypeDefKind};
 use eml_types::{Equality, Type};
 
-use crate::VarInfo;
+use crate::{Repr, VarInfo};
 
-/// ヒープに置く値の型。ボックス化した変数が RC の対象になる。関数値と型変数の値は、ヒープのクロージャや
-/// 文字列かもしれない。インタプリタの `dup` / `decref` はヒープにない値を無視するので、多めに対象にしても正しく動く
-/// (docs/spec/core-ir.md)。extern の型がヒープのオブジェクトか (`String`、`File`) は、表の行が決める。
-fn boxed(ty: &Type, hir: &HirProgram) -> bool {
+/// 型の Repr (docs/spec/core-ir.md)。総称的な位置の束縛も、S3b-2a では具体化した型から決める。
+/// 関数の値と型変数の値は、即値 (捕まえた変数のない関数、引数のないコンストラクタ) にもヒープの物体にもなるので
+/// `tobj` にする。
+pub(super) fn repr(ty: &Type, hir: &HirProgram) -> Repr {
     match ty {
-        Type::Con { id, .. } => match &hir[*id].kind {
-            TypeDefKind::Extern(row) => row.is_some_and(|ty| ty.row().heap),
-            TypeDefKind::Data { constructors: _ } => has_fields(hir, *id),
+        Type::Con { id, args: _ } => match &hir[*id].kind {
+            TypeDefKind::Extern(row) => match row {
+                Some(ExternType::Int) => Repr::Int,
+                Some(ExternType::String | ExternType::File) => Repr::Obj,
+                Some(ExternType::Unit) | None => Repr::Unit,
+            },
+            TypeDefKind::Data { constructors } => {
+                let with_fields = constructors
+                    .iter()
+                    .filter(|&&ctor| !hir[ctor].fields.is_empty())
+                    .count();
+                if with_fields == 0 {
+                    Repr::Enum
+                } else if with_fields == constructors.len() {
+                    Repr::Obj
+                } else {
+                    Repr::TObj
+                }
+            }
         },
-        Type::Fn { .. } | Type::Rigid(_) | Type::Flexible => true,
-        // 空のレコードは `Unit` で、値は `()` である。要素のあるレコード (タプル) はヒープのオブジェクトにする
-        Type::Record(fields) => !fields.is_empty(),
-        Type::Error => false,
-    }
-}
-
-/// 引数を持つコンストラクタが1つでもある `data` の値は、ヒープの箱かもしれない。同じ型の引数のないコンストラクタの
-/// 値は即値のタグで同じ変数に入るが、`dup` と `decref` はそれを無視する (docs/spec/core-ir.md の boxed の判定)。
-fn has_fields(hir: &HirProgram, id: TypeDefId) -> bool {
-    match &hir[id].kind {
-        TypeDefKind::Data { constructors } => constructors
-            .iter()
-            .any(|&ctor| !hir[ctor].fields.is_empty()),
-        TypeDefKind::Extern(_) => false,
+        Type::Fn { .. } | Type::Rigid(_) | Type::Flexible => Repr::TObj,
+        // 空のレコードは `Unit` で、値は `()` である。要素のあるレコード (タプル) はヒープの物体にする
+        Type::Record(fields) if fields.is_empty() => Repr::Unit,
+        Type::Record(_) => Repr::Obj,
+        Type::Error => Repr::Unit,
     }
 }
 
 pub(super) fn var_info(name: &str, ty: &Type, hir: &HirProgram) -> VarInfo {
     VarInfo {
         name: name.to_string(),
-        boxed: boxed(ty, hir),
+        repr: repr(ty, hir),
     }
 }
 

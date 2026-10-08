@@ -51,12 +51,14 @@ fn load_with_std_reads_the_given_standard_library() {
 
 #[test]
 fn compile_until_stops_after_the_named_pass() {
-    // `s` を2回使うので、Perceus の後にだけ `dup` が入る
+    // contract が使われない `"unused"` を消す。`s` を2回使うので、Perceus の後にだけ `dup` が入る
     let session = single(
-        "twice : String -> String\ntwice s = s ++ s\n\nmain : Unit -> <IO> Unit\nmain () = println (twice \"x\")",
+        "twice : String -> String\ntwice s =\n  let _ = \"unused\"\n  s ++ s\n\nmain : Unit -> <IO> Unit\nmain () = println (twice \"x\")",
     );
     let shown = |last| pretty(&session.compile_until(last).program.unwrap());
-    assert!(!shown(Pass::Simplify).contains("dup"));
+    assert!(shown(Pass::Translate).contains("\"unused\""));
+    assert!(!shown(Pass::Contract).contains("\"unused\""));
+    assert!(!shown(Pass::Contract).contains("dup"));
     assert!(shown(Pass::Perceus).contains("dup"));
     assert_eq!(
         shown(Pass::Perceus),

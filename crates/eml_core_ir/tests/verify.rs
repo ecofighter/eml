@@ -1,74 +1,74 @@
 //! Core IR のテキストで書いた IR で、verifier が正しいものを受け入れ、壊れたものを拒むことを確かめる (docs/spec/core-ir.md)。
+//! 構造の規則 R1 から R8 と、前の形の IR から引き継いだ検査を1つずつ確かめる。
 
-use eml_core_ir::{verify, verify_scopes};
+use eml_core_ir::{Program, Term, parse, verify, verify_scopes};
+
+fn read(text: &str) -> Program {
+    parse(text).unwrap_or_else(|error| panic!("{error}"))
+}
 
 fn check(text: &str) -> Result<(), String> {
-    let program = eml_core_ir::parse(text).unwrap_or_else(|error| panic!("{error}"));
-    verify(&program).map_err(|error| error.to_string())
+    verify(&read(text)).map_err(|error| error.to_string())
 }
 
 fn check_scopes(text: &str) -> Result<(), String> {
-    let program = eml_core_ir::parse(text).unwrap_or_else(|error| panic!("{error}"));
-    verify_scopes(&program).map_err(|error| error.to_string())
+    verify_scopes(&read(text)).map_err(|error| error.to_string())
 }
 
-/// `pick b s = let t = if b then s else "none" in t ++ s` の Perceus の後の形。
-/// `dup_before_jump` が偽のとき、then 枝は `s` を複製せずに渡す。
-fn pick(dup_before_jump: bool) -> String {
-    let dup = if dup_before_jump {
-        "      dup s1\n"
-    } else {
-        ""
-    };
-    format!(
-        "fn pick(b0, s1^) {{
-  join j0(t3^) [s1] {{
-    let t4^ = extern Prelude.++(t3, s1)
-    return t4
-  }}
-  switch b0 {{
-    #0 ->
-      let s2^ = const \"s\"
-      jump j0(s2)
-    #1 ->
-{dup}      jump j0(s1)
-  }}
-}}
-"
-    )
+/// spec の「テキストの形」の例。RC の対象の変数がないので、どちらの段でも通る。
+const SPEC_EXAMPLE: &str = "\
+fn f(x.0: int) -> int {
+  let c.1: enum = extern Prelude.<(x.0, 10)
+  switch c.1 { #0 -> b1, #1 -> b2 }
+b1:
+  jump b3(x.0)
+b2:
+  let t.2: int = extern Prelude.+(x.0, 1) @\"main.em\":2:20
+  jump b3(t.2)
+b3(t.3: int):
+  return t.3
 }
+";
 
-/// `two s = let u = "s" in join j0(a, b) [] { let c = a ++ b; return c } in jump j0(s, u)` の Perceus の後の形。
-/// `passed` を変えて、`jump` が渡す値の数を変える。
-fn two_values(passed: &str) -> String {
+/// `pick b s = let t = if b then "s" else s in t ++ s` の Perceus の後の形。`dup` が偽のとき、b2 は `s` を複製せずに
+/// 渡すので、b3 へ入る2本の `jump` の所有がそろわない。
+fn pick(dup: bool) -> String {
+    let dup = if dup { "  dup s.1\n" } else { "" };
     format!(
-        "fn two(s0^) {{
-  join j0(a2^, b3^) [] {{
-    let c4^ = extern Prelude.++(a2, b3)
-    return c4
-  }}
-  let u1^ = const \"s\"
-  jump j0({passed})
+        "\
+fn pick(b.0: enum, s.1: obj) -> obj {{
+  switch b.0 {{ #0 -> b1, #1 -> b2 }}
+b1:
+  let s.2: obj = const \"s\"
+  jump b3(s.2)
+b2:
+{dup}  jump b3(s.1)
+b3(t.3: obj):
+  let t.4: obj = extern Prelude.++(t.3, s.1)
+  return t.4
 }}
 "
     )
 }
 
 /// `g s = s`。
-const IDENTITY: &str = "fn g(s0^) {\n  return s0\n}\n";
+const IDENTITY: &str = "fn g(s.0: obj) -> obj {\n  return s.0\n}\n";
 
-/// 両方の枝が scrutinee の `d` を返す。`Switch` は `d` を move で受け取るので、枝で使うには前で複製する。
+/// `k n = n`。
+const K: &str = "fn k(a.0: int) -> int {\n  return a.0\n}\n";
+
+/// 両方の枝が scrutinee の `d` を返す。`switch` は `d` を消費するので、枝で使うには前で複製する。
 fn keep_scrutinee(dup: bool) -> String {
-    let dup = if dup { "  dup d0\n" } else { "" };
+    let dup = if dup { "  dup d.0\n" } else { "" };
     format!(
-        "fn f(d0^) {{
-{dup}  switch d0 {{
-    #0 ->
-      return d0
-    #1(x1^) ->
-      decref x1
-      return d0
-  }}
+        "\
+fn f(d.0: tobj) -> tobj {{
+{dup}  switch d.0 {{ #0 -> b1, #1(x.1: obj) -> b2 }}
+b1:
+  return d.0
+b2:
+  decref x.1
+  return d.0
 }}
 "
     )
@@ -76,15 +76,39 @@ fn keep_scrutinee(dup: bool) -> String {
 
 /// `release` は、フィールドを持つ枝が `x` を解放するかどうか。
 fn unused_field(release: bool) -> String {
-    let decref = if release { "      decref x1\n" } else { "" };
+    let decref = if release { "  decref x.1\n" } else { "" };
     format!(
-        "fn f(d0^) {{
-  switch d0 {{
-    #0 ->
-      return ()
-    #1(x1^) ->
-{decref}      return ()
-  }}
+        "\
+fn f(d.0: tobj) -> unit {{
+  switch d.0 {{ #0 -> b1, #1(x.1: obj) -> b2 }}
+b1:
+  return ()
+b2:
+{decref}  return ()
+}}
+"
+    )
+}
+
+/// `n` を使う合流のブロックの前で、片方の経路だけが呼び出しをする。`saved` はその呼び出しの `save` の部分である。
+/// `call_first` が偽なら、呼び出しのない経路を先のブロックに置く。合流のブロックの区間が、先に着いた `jump` の区間
+/// で決まらないことを確かめるためである。
+fn call_on_one_path(saved: &str, call_first: bool) -> String {
+    let call = format!("  let t.2: int = call k(1){saved}\n  jump b3(t.2)\n");
+    let other = "  jump b3(1)\n";
+    let (first, second) = if call_first {
+        (call.as_str(), other)
+    } else {
+        (other, call.as_str())
+    };
+    format!(
+        "{K}fn f(n.0: int, c.1: enum) -> int {{
+  switch c.1 {{ #0 -> b1, #1 -> b2 }}
+b1:
+{first}b2:
+{second}b3(r.3: int):
+  let u.4: int = extern Prelude.+(n.0, r.3)
+  return u.4
 }}
 "
     )
@@ -95,267 +119,414 @@ const ASK: &str = "effect Ask { ask/1 }\n";
 /// `handle ask 1 with | ask x k -> resume k x` を持ち上げた形。`effects` は先頭のエフェクトの行。
 fn handler_program(effects: &str) -> String {
     format!(
-        "{effects}fn main() {{
-  let c0^ = &main$handle0
-  let c1^ = &main$handle0$ask
-  let t2 = handle Ask(c0, ()) {{ask: c1}} return &main$handle0$return
-  return t2
+        "{effects}fn main() -> int {{
+  let c.0: tobj = closure main$handle0(1)
+  let c.1: tobj = closure main$handle0$ask(2)
+  let t.2: int = handle Ask((), c.0) {{ ask: c.1 }} return &main$handle0$return
+  return t.2
 }}
-fn main$handle0(p0) {{
-  tailcall perform Ask.ask(1)
+fn main$handle0(n.0: int, p.1: unit) -> int {{
+  tail perform Ask.ask(n.0)
 }}
-fn main$handle0$ask(x0, k1^, s2) {{
-  tailcall resume k1(x0, s2)
+fn main$handle0$ask(m.0: int, x.1: int, k.2: tobj, s.3: unit) -> int {{
+  tail resume k.2(x.1, s.3)
 }}
-fn main$handle0$return(x0, s1) {{
-  return x0
+fn main$handle0$return(x.0: int, s.1: unit) -> int {{
+  return x.0
 }}
 "
     )
 }
 
 #[test]
-fn a_duplicated_string_used_twice_is_accepted() {
-    let text = r#"fn twice(s0^) {
-  dup s0
-  let t1^ = extern Prelude.++(s0, s0)
-  return t1
-}
-"#;
-    assert_eq!(check(text), Ok(()));
+fn the_spec_example_is_accepted() {
+    assert_eq!(check_scopes(SPEC_EXAMPLE), Ok(()));
+    assert_eq!(check(SPEC_EXAMPLE), Ok(()));
 }
 
 #[test]
-fn a_join_point_is_accepted() {
-    assert_eq!(check(&pick(true)), Ok(()));
+fn a_duplicated_string_used_twice_is_accepted() {
+    let text = "\
+fn twice(s.0: obj) -> obj {
+  dup s.0
+  let t.1: obj = extern Prelude.++(s.0, s.0)
+  return t.1
+}
+";
+    assert_eq!(check(text), Ok(()));
 }
 
 #[test]
 fn a_tail_call_that_takes_every_owned_value_is_accepted() {
-    let text = r#"fn id(s0^) {
-  return s0
-}
-fn caller(s0^) {
-  tailcall id(s0)
-}
-"#;
-    assert_eq!(check(text), Ok(()));
+    let text = format!("{IDENTITY}fn caller(s.0: obj) -> obj {{\n  tail call g(s.0)\n}}\n");
+    assert_eq!(check(&text), Ok(()));
 }
 
-#[test]
-fn a_variable_bound_twice_is_rejected() {
-    let text = r#"fn f() {
-  let s0^ = const "s"
-  let s0^ = const "s"
-  return s0
-}
-"#;
-    assert_eq!(check(text), Err("`s0` is bound twice in `f`".to_string()));
-}
+// R1
 
 #[test]
-fn a_variable_used_outside_its_scope_is_rejected() {
-    let text = r#"fn f() {
-  return s0
-}
-"#;
+fn an_edge_to_the_entry_block_is_rejected() {
+    let text = "fn f(x.0: int) -> int {\n  jump b1()\nb1:\n  jump b0(x.0)\n}\n";
     assert_eq!(
-        check(text),
-        Err("`s0` is used outside its scope in `f`".to_string())
+        check_scopes(text),
+        Err("an edge from b1 goes to the entry block in `f`".to_string())
+    );
+}
+
+// R2
+
+#[test]
+fn an_edge_back_to_an_earlier_block_is_rejected() {
+    let text = "fn f() -> int {\n  jump b1()\nb1:\n  jump b2()\nb2:\n  jump b1()\n}\n";
+    assert_eq!(
+        check_scopes(text),
+        Err("an edge from b2 goes back to b1 in `f`".to_string())
     );
 }
 
 #[test]
-fn a_jump_outside_its_join_scope_is_rejected() {
-    let text = r#"fn f() {
-  join j0(t0) [] {
-    jump j0(1)
-  }
-  jump j0(2)
-}
-"#;
+fn an_edge_to_itself_is_rejected() {
+    let text = "fn f() -> int {\n  jump b1()\nb1:\n  jump b1()\n}\n";
     assert_eq!(
-        check(text),
-        Err("a jump to `j0` is outside its scope in `f`".to_string())
+        check_scopes(text),
+        Err("an edge from b1 goes back to b1 in `f`".to_string())
     );
 }
 
 #[test]
-fn a_use_after_a_move_is_rejected() {
-    let text = r#"fn twice(s0^) {
-  let t1^ = extern Prelude.++(s0, s0)
-  return t1
-}
-"#;
+fn an_edge_to_a_missing_block_is_rejected() {
+    let mut program = read("fn f() -> int {\n  jump b1()\nb1:\n  return 1\n}\n");
+    program.functions[0].blocks.pop();
     assert_eq!(
-        check(text),
-        Err("`s0` is used after it was moved in `twice`".to_string())
+        verify_scopes(&program).map_err(|error| error.to_string()),
+        Err("an edge from b0 goes to b1, which does not exist in `f`".to_string())
+    );
+}
+
+// R3
+
+#[test]
+fn a_switch_target_entered_by_a_jump_is_rejected() {
+    let text = "\
+fn f(x.0: int) -> int {
+  switch x.0 { 1 -> b1, _ -> b2 }
+b1:
+  jump b2()
+b2:
+  return x.0
+}
+";
+    assert_eq!(
+        check_scopes(text),
+        Err("b2 is the target of both a switch and a jump in `f`".to_string())
     );
 }
 
 #[test]
-fn a_missing_decref_is_rejected() {
-    let text = r#"fn ignore(s0^) {
+fn a_switch_target_with_parameters_is_rejected() {
+    let text = "\
+fn f(x.0: int) -> int {
+  switch x.0 { 1 -> b1, _ -> b2 }
+b1:
   return 1
+b2(y.1: int):
+  return y.1
 }
-"#;
+";
     assert_eq!(
-        check(text),
-        Err("`s0` is still owned at the end of the function in `ignore`".to_string())
+        check_scopes(text),
+        Err("b2 is the target of a switch but takes parameters in `f`".to_string())
     );
 }
 
 #[test]
-fn a_double_decref_is_rejected() {
-    let text = r#"fn ignore(s0^) {
-  decref s0
-  decref s0
-  return 1
+fn a_block_entered_by_two_switch_edges_is_rejected() {
+    let text = "\
+fn f(x.0: int) -> int {
+  switch x.0 { 1 -> b1, _ -> b1 }
+b1:
+  return x.0
 }
-"#;
+";
     assert_eq!(
-        check(text),
-        Err("`s0` is released after it was moved in `ignore`".to_string())
+        check_scopes(text),
+        Err("b1 is the target of 2 switch edges in `f`".to_string())
     );
 }
 
-#[test]
-fn a_jump_that_owns_too_much_is_rejected() {
-    let text = r#"fn f(s0^) {
-  join j0(t1) [] {
-    return t1
-  }
-  jump j0(1)
-}
-"#;
-    assert_eq!(
-        check(text),
-        Err("a jump to `j0` owns [s0] but its join needs [] in `f`".to_string())
-    );
-}
+// R4
 
 #[test]
-fn a_jump_that_owns_too_little_is_rejected() {
+fn a_block_without_an_edge_into_it_is_rejected() {
+    let text = "fn f() -> int {\n  return 1\nb1:\n  return 2\n}\n";
     assert_eq!(
-        check(&pick(false)),
-        Err("a jump to `j0` owns [] but its join needs [s1] in `pick`".to_string())
+        check_scopes(text),
+        Err("b1 has no edge into it in `f`".to_string())
     );
-}
-
-#[test]
-fn a_join_point_with_two_parameters_is_accepted() {
-    // 本体は2つの引数をどちらも所有して始まり、`jump` は渡す値の所有権を渡す
-    assert_eq!(check(&two_values("s0, u1")), Ok(()));
 }
 
 #[test]
 fn a_jump_with_the_wrong_number_of_values_is_rejected() {
+    let text = "fn f() -> int {\n  jump b1(1, 2)\nb1(y.0: int):\n  return y.0\n}\n";
     assert_eq!(
-        check(&two_values("s0")),
-        Err("a jump to `j0` passes 1 values, but its join takes 2 in `two`".to_string())
+        check_scopes(text),
+        Err("a jump to b1 passes 2 values, but b1 takes 1 in `f`".to_string())
     );
 }
 
 #[test]
-fn a_direct_call_with_the_wrong_number_of_arguments_is_rejected() {
-    let text = r#"fn g(a0) {
-  return a0
+fn a_merge_block_with_two_parameters_is_accepted() {
+    // 合流のブロックは、RC の対象の引数をどちらも所有して始まり、`jump` は渡す値の所有を渡す
+    let text = "\
+fn two(s.0: obj) -> obj {
+  let u.1: obj = const \"s\"
+  jump b1(s.0, u.1)
+b1(a.2: obj, b.3: obj):
+  let c.4: obj = extern Prelude.++(a.2, b.3)
+  return c.4
 }
-fn f() {
-  let t0 = call g(1, 2)
-  return t0
+";
+    assert_eq!(check(text), Ok(()));
 }
-"#;
+
+// R5
+
+#[test]
+fn a_variable_defined_twice_is_rejected() {
+    let text = "\
+fn f() -> obj {
+  let s.0: obj = const \"s\"
+  let s.0: obj = const \"s\"
+  return s.0
+}
+";
     assert_eq!(
         check(text),
-        Err("a direct call to `g` passes 2 arguments, but it takes 1 in `f`".to_string())
+        Err("`s.0` is defined twice in `f`".to_string())
     );
 }
 
 #[test]
-fn a_long_run_of_if_statements_is_verified_in_linear_time() {
-    // 文の `if` が続くと、join point の本体が長く連なる。範囲や枝ごとに変数の範囲を写すと、文の数の2乗の時間がかかる。
-    // `lower` はデバッグビルドで毎回 verify するので、文の数に比例する時間で終わらなければならない
-    let mut text = String::from("main : Unit -> <IO> Unit\nmain () =\n  let s = \"keep\"\n");
-    text.push_str(&"  if True then println \"x\"\n".repeat(20000));
-    text.push_str("  println s");
-    let start = std::time::Instant::now();
-    let program = eml_test_support::core(&text);
-    assert_eq!(verify(&program), Ok(()));
-    let elapsed = start.elapsed();
-    assert!(
-        elapsed < std::time::Duration::from_secs(10),
-        "took {elapsed:?}"
+fn a_variable_defined_in_two_blocks_is_rejected() {
+    // 両方の経路で定義しても、合流のブロックでは使えない。値は引数で渡す
+    let text = "\
+fn f(x.0: int) -> int {
+  switch x.0 { 1 -> b1, _ -> b2 }
+b1:
+  let t.1: int = extern Prelude.+(x.0, 1)
+  jump b3()
+b2:
+  let t.1: int = extern Prelude.+(x.0, 2)
+  jump b3()
+b3:
+  return t.1
+}
+";
+    assert_eq!(
+        check_scopes(text),
+        Err("`t.1` is defined twice in `f`".to_string())
     );
 }
+
+#[test]
+fn a_field_and_a_parameter_with_one_number_are_rejected() {
+    let text = "\
+fn f(d.0: tobj) -> unit {
+  switch d.0 { #0 -> b1, #1(d.0: tobj) -> b2 }
+b1:
+  return ()
+b2:
+  return ()
+}
+";
+    assert_eq!(
+        check_scopes(text),
+        Err("`d.0` is defined twice in `f`".to_string())
+    );
+}
+
+// R6: 支配
+
+#[test]
+fn a_variable_used_outside_its_scope_is_rejected() {
+    let text = "fn f() -> obj {\n  return s.0\n}\n";
+    assert_eq!(
+        check(text),
+        Err("`s.0` is used outside its scope in `f`".to_string())
+    );
+}
+
+#[test]
+fn a_variable_used_before_its_definition_is_rejected() {
+    let text = "\
+fn f(x.0: int) -> int {
+  let a.1: int = extern Prelude.+(b.2, 1)
+  let b.2: int = extern Prelude.+(x.0, 1)
+  return a.1
+}
+";
+    assert_eq!(
+        check_scopes(text),
+        Err("`b.2` is used outside its scope in `f`".to_string())
+    );
+}
+
+#[test]
+fn a_variable_used_in_its_own_definition_is_rejected() {
+    let text = "fn f() -> int {\n  let a.0: int = extern Prelude.+(a.0, 1)\n  return a.0\n}\n";
+    assert_eq!(
+        check_scopes(text),
+        Err("`a.0` is used outside its scope in `f`".to_string())
+    );
+}
+
+#[test]
+fn a_variable_of_another_branch_is_rejected() {
+    let text = "\
+fn f(x.0: int) -> int {
+  switch x.0 { 1 -> b1, _ -> b2 }
+b1:
+  let t.1: int = extern Prelude.+(x.0, 1)
+  jump b3(t.1)
+b2:
+  jump b3(t.1)
+b3(r.2: int):
+  return r.2
+}
+";
+    assert_eq!(
+        check_scopes(text),
+        Err("`t.1` is used outside its scope in `f`".to_string())
+    );
+}
+
+#[test]
+fn a_merge_block_does_not_see_a_variable_defined_on_one_path() {
+    let text = "\
+fn f(x.0: int) -> int {
+  switch x.0 { 1 -> b1, _ -> b2 }
+b1:
+  let t.1: int = extern Prelude.+(x.0, 1)
+  jump b3()
+b2:
+  jump b3()
+b3:
+  return t.1
+}
+";
+    assert_eq!(
+        check_scopes(text),
+        Err("`t.1` is used outside its scope in `f`".to_string())
+    );
+}
+
+#[test]
+fn a_field_is_in_scope_only_in_its_arm() {
+    let text = "\
+fn f(d.0: tobj) -> obj {
+  switch d.0 { #0 -> b1, #1(x.1: obj) -> b2 }
+b1:
+  return x.1
+b2:
+  return x.1
+}
+";
+    assert_eq!(
+        check_scopes(text),
+        Err("`x.1` is used outside its scope in `f`".to_string())
+    );
+}
+
+#[test]
+fn a_field_is_in_scope_in_the_blocks_its_arm_dominates() {
+    let text = "\
+fn f(d.0: tobj, c.1: enum) -> obj {
+  switch d.0 { #0 -> b1, #1(x.2: obj) -> b2 }
+b1:
+  let e.3: obj = const \"e\"
+  return e.3
+b2:
+  switch c.1 { #0 -> b3, #1 -> b4 }
+b3:
+  jump b5()
+b4:
+  jump b5()
+b5:
+  return x.2
+}
+";
+    assert_eq!(check(text), Ok(()));
+}
+
+// R6: 所有
+
+#[test]
+fn a_merge_block_is_accepted() {
+    assert_eq!(check(&pick(true)), Ok(()));
+}
+
+#[test]
+fn jumps_that_own_different_values_are_rejected() {
+    assert_eq!(
+        check(&pick(false)),
+        Err("a jump to b3 owns [] but an earlier jump to it owns [s.1] in `pick`".to_string())
+    );
+}
+
+#[test]
+fn scopes_accept_a_merge_block_before_perceus() {
+    assert_eq!(check_scopes(&pick(false)), Ok(()));
+}
+
+#[test]
+fn a_value_owned_by_every_jump_is_owned_by_the_merge_block() {
+    let released = "\
+fn f(s.0: obj, c.1: enum) -> int {
+  switch c.1 { #0 -> b1, #1 -> b2 }
+b1:
+  jump b3(1)
+b2:
+  jump b3(2)
+b3(n.2: int):
+  decref s.0
+  return n.2
+}
+";
+    assert_eq!(check(released), Ok(()));
+    let kept = released.replace("  decref s.0\n", "");
+    assert_eq!(
+        check(&kept),
+        Err("`s.0` is still owned at the end of the function in `f`".to_string())
+    );
+}
+
+// R7
 
 #[test]
 fn a_call_that_does_not_save_an_owned_variable_is_rejected() {
-    // f s = dup s; let t = g s; s を退避しないまま t ++ s
     let text = format!(
-        "{IDENTITY}fn f(s0^) {{
-  dup s0
-  let t1^ = call g(s0)
-  let t2^ = extern Prelude.++(t1, s0)
-  return t2
+        "{IDENTITY}fn f(s.0: obj) -> obj {{
+  dup s.0
+  let t.1: obj = call g(s.0)
+  let t.2: obj = extern Prelude.++(t.1, s.0)
+  return t.2
 }}
 "
     );
     assert_eq!(
         check(&text),
-        Err("a call saves [] but owns [s0] in `f`".to_string())
+        Err("a call saves [] but owns [s.0] in `f`".to_string())
     );
 }
 
 #[test]
 fn a_call_that_saves_a_variable_it_does_not_own_is_rejected() {
     let text = format!(
-        "{IDENTITY}fn f(s0^) {{
-  let t1^ = call g(s0) [s0]
-  return t1
-}}
-"
+        "{IDENTITY}fn f(s.0: obj) -> obj {{\n  let t.1: obj = call g(s.0) save [s.0]\n  return t.1\n}}\n"
     );
     assert_eq!(
         check(&text),
-        Err("a call saves [s0] but owns [] in `f`".to_string())
-    );
-}
-
-#[test]
-fn a_variable_not_saved_by_a_call_is_out_of_scope_after_it() {
-    let text = r#"fn k(a0) {
-  return a0
-}
-fn f(n0) {
-  let t1 = call k(n0)
-  let t2 = extern Prelude.+(n0, t1)
-  return t2
-}
-"#;
-    assert_eq!(
-        check(text),
-        Err("`n0` is used outside its scope in `f`".to_string())
-    );
-}
-
-#[test]
-fn a_jump_after_a_call_needs_the_variables_of_the_join_body_in_scope() {
-    let text = r#"fn z() {
-  return 1
-}
-fn f(n0) {
-  join j0(t1) [n0] {
-    let t2 = extern Prelude.+(n0, t1)
-    return t2
-  }
-  let t3 = call z()
-  jump j0(t3)
-}
-"#;
-    assert_eq!(
-        check(text),
-        Err("`n0` is used outside its scope in `f`".to_string())
+        Err("a call saves [s.0] but owns [] in `f`".to_string())
     );
 }
 
@@ -363,251 +534,295 @@ fn f(n0) {
 fn a_call_that_saves_a_variable_twice_is_rejected() {
     // 退避する変数が重なると、フレームが所有していない参照を、解放や複製のときに数えてしまう
     let text = format!(
-        "{IDENTITY}fn f(s0^) {{
-  dup s0
-  let t1^ = call g(s0) [s0, s0]
-  let t2^ = extern Prelude.++(t1, s0)
-  return t2
+        "{IDENTITY}fn f(s.0: obj) -> obj {{
+  dup s.0
+  let t.1: obj = call g(s.0) save [s.0, s.0]
+  let t.2: obj = extern Prelude.++(t.1, s.0)
+  return t.2
 }}
 "
     );
     assert_eq!(
         check(&text),
-        Err("a call saves [s0, s0] but owns [s0] in `f`".to_string())
+        Err("a call saves [s.0, s.0] but owns [s.0] in `f`".to_string())
     );
 }
 
 #[test]
-fn handlers_operations_and_resume_are_calls() {
-    assert_eq!(check(&handler_program(ASK)), Ok(()));
-}
-
-#[test]
-fn a_handler_has_a_clause_for_each_operation() {
-    let text = handler_program("effect Ask { ask/1, tell/1 }\n");
+fn a_call_that_saves_an_invisible_variable_is_rejected() {
+    let text =
+        format!("{K}fn f() -> int {{\n  let t.0: int = call k(1) save [n.1]\n  return t.0\n}}\n");
     assert_eq!(
         check(&text),
-        Err(
-            "a handler of `Ask` has clauses for 1 operations, but the effect has 2 in `main`"
-                .to_string()
-        )
+        Err("`n.1` is used outside its scope in `f`".to_string())
     );
 }
 
 #[test]
-fn a_clause_receives_the_arguments_k_and_the_state_after_its_captures() {
-    let text = "effect Ask { ask/1 }\nfn f() {\n  let t0 = handle Ask(&body, ()) {ask: &clause} return &ret\n  return t0\n}\nfn body(u0) {\n  return 1\n}\nfn clause(x0, k1^) {\n  tailcall resume k1(x0, ())\n}\nfn ret(x0, s1) {\n  return x0\n}\n";
-    let error = check(text).unwrap_err();
-    assert!(
-        error.contains("the clause for `ask` needs 3 parameters after its captures (1 for the arguments, `k`, and the state), but it has 2"),
-        "{error}"
+fn a_non_rc_variable_not_saved_by_a_call_is_not_visible_after_it() {
+    let text = format!(
+        "{K}fn f(n.0: int) -> int {{
+  let t.1: int = call k(n.0)
+  let t.2: int = extern Prelude.+(n.0, t.1)
+  return t.2
+}}
+"
     );
-    // 節の引数の数は所有権に関わらないので、Perceus より前の IR でも確かめる
-    let error = check_scopes(text).unwrap_err();
-    assert!(
-        error.contains("the clause for `ask` needs 3 parameters after its captures (1 for the arguments, `k`, and the state), but it has 2"),
-        "{error}"
-    );
-}
-
-#[test]
-fn a_clause_of_a_never_operation_receives_the_arguments_and_the_state() {
-    let text = "effect Fail { never fail/1 }\nfn f(n0) {\n  let c1^ = closure clause(n0)\n  let t2 = handle Fail(&body, ()) {fail: c1} return &ret\n  return t2\n}\nfn body(u0) {\n  return 1\n}\nfn clause(n0, x1, k2, s3) {\n  return n0\n}\nfn ret(x0, s1) {\n  return x0\n}\n";
-    let error = check(text).unwrap_err();
-    assert!(
-        error.contains("the clause for `fail` needs 2 parameters after its captures (1 for the arguments and the state), but it has 3"),
-        "{error}"
-    );
-}
-
-#[test]
-fn a_return_clause_receives_the_value_and_the_state_after_its_captures() {
-    let text = "effect Ask { ask/1 }\nfn f(n0) {\n  let c1^ = closure ret(n0)\n  let t2 = handle Ask(&body, ()) {ask: &clause} return c1\n  return t2\n}\nfn body(u0) {\n  return 1\n}\nfn clause(x0, k1^, s2) {\n  tailcall resume k1(x0, s2)\n}\nfn ret(n0, x1) {\n  return x1\n}\n";
-    let error = check(text).unwrap_err();
-    assert!(
-        error.contains("the `return` clause needs 2 parameters after its captures (the value and the state), but it has 1"),
-        "{error}"
-    );
-}
-
-#[test]
-fn perform_names_an_operation_of_its_effect() {
-    let text = format!("{ASK}fn f() {{\n  tailcall perform Ask.#1()\n}}\n");
     assert_eq!(
         check(&text),
-        Err("`perform` names operation 1 of `Ask`, which has 1 operations in `f`".to_string())
+        Err("`n.0` is used after a call that does not save it in `f`".to_string())
     );
+    let saved = text.replace("call k(n.0)", "call k(n.0) save [n.0]");
+    assert_eq!(check(&saved), Ok(()));
 }
 
 #[test]
-fn drop_takes_the_ownership_of_its_value() {
-    let once = "fn f(s0^) {\n  let t1 = drop s0\n  return t1\n}\n";
-    assert_eq!(check(once), Ok(()));
-    let twice = "fn g(s0^) {\n  let t1 = drop s0\n  let u2 = drop s0\n  return u2\n}\n";
-    assert_eq!(
-        check(twice),
-        Err("`s0` is used after it was moved in `g`".to_string())
-    );
-}
-
-#[test]
-fn a_join_body_that_uses_a_variable_missing_from_its_captures_is_rejected() {
-    // f n = join j0(t) [] { let u = n + t; return u } in jump j0(1)
-    let text = r#"fn f(n0) {
-  join j0(t1) [] {
-    let u2 = extern Prelude.+(n0, t1)
-    return u2
-  }
-  jump j0(1)
-}
-"#;
-    assert_eq!(
-        check(text),
-        Err("`n0` is used outside its scope in `f`".to_string())
-    );
-}
-
-#[test]
-fn a_capture_out_of_scope_at_its_join_is_rejected() {
-    // f n = join j0(t) [x] { return t } in jump j0(n)。`x` はどこでも束縛していない
-    let text = r#"fn f(n0) {
-  join j0(t1) [x2] {
-    return t1
-  }
-  jump j0(n0)
-}
-"#;
-    assert_eq!(
-        check(text),
-        Err("`j0` captures `x2`, which is not in scope in `f`".to_string())
-    );
-}
-
-#[test]
-fn captures_out_of_order_are_rejected() {
-    let text = r#"fn f(a0, b1) {
-  join j0(t2) [b1, a0] {
-    return t2
-  }
-  jump j0(1)
-}
-"#;
-    assert_eq!(
-        check(text),
-        Err("the captures of `j0` are not in increasing order in `f`".to_string())
-    );
-}
-
-#[test]
-fn an_unused_capture_released_by_the_body_is_accepted() {
-    // f s = join j0(t) [s] { decref s; return t } in jump j0(1)。`captures` は最小でなくてよい
-    let text = r#"fn f(s0^) {
-  join j0(t1) [s0] {
-    decref s0
-    return t1
-  }
-  jump j0(1)
-}
-"#;
-    assert_eq!(check(text), Ok(()));
-}
-
-#[test]
-fn scopes_accept_a_value_used_twice_without_dup() {
-    // Perceus より前の IR には `dup` がないので、所有は数えない
-    let text = r#"fn twice(s0^) {
-  let t1^ = extern Prelude.++(s0, s0)
-  return t1
-}
-"#;
-    assert_eq!(check_scopes(text), Ok(()));
-}
-
-#[test]
-fn scopes_accept_a_join_point_before_perceus() {
-    assert_eq!(check_scopes(&pick(false)), Ok(()));
+fn a_merge_block_does_not_see_a_variable_that_one_path_did_not_save() {
+    for call_first in [true, false] {
+        assert_eq!(
+            check(&call_on_one_path("", call_first)),
+            Err("`n.0` is used after a call that does not save it in `f`".to_string())
+        );
+        assert_eq!(check(&call_on_one_path(" save [n.0]", call_first)), Ok(()));
+    }
 }
 
 #[test]
 fn scopes_keep_variables_in_scope_after_a_call() {
-    // `saved` は Perceus が決めるので、その前は呼び出しの後で範囲を区切り直さない
-    let text = r#"fn k(a0) {
-  return a0
-}
-fn f(n0) {
-  let t1 = call k(n0)
-  let t2 = extern Prelude.+(n0, t1)
-  return t2
-}
-"#;
-    assert_eq!(check_scopes(text), Ok(()));
-}
-
-#[test]
-fn scopes_reject_a_dup() {
-    let text = r#"fn twice(s0^) {
-  dup s0
-  let t1^ = extern Prelude.++(s0, s0)
-  return t1
-}
-"#;
-    assert_eq!(
-        check_scopes(text),
-        Err("`s0` is duplicated before Perceus in `twice`".to_string())
+    // `saved` は Perceus が決めるので、その前は呼び出しの後で見える変数を区切り直さない
+    let text = format!(
+        "{K}fn f(n.0: int) -> int {{
+  let t.1: int = call k(n.0)
+  let t.2: int = extern Prelude.+(n.0, t.1)
+  return t.2
+}}
+"
     );
-}
-
-#[test]
-fn scopes_reject_a_decref() {
-    let text = r#"fn ignore(s0^) {
-  decref s0
-  return 1
-}
-"#;
-    assert_eq!(
-        check_scopes(text),
-        Err("`s0` is released before Perceus in `ignore`".to_string())
-    );
+    assert_eq!(check_scopes(&text), Ok(()));
+    assert_eq!(check_scopes(&call_on_one_path("", true)), Ok(()));
 }
 
 #[test]
 fn scopes_reject_a_saved_list() {
     let text = format!(
-        "{IDENTITY}fn f(s0^) {{
-  let t1^ = call g(s0) [s0]
-  return t1
-}}
-"
+        "{IDENTITY}fn f(s.0: obj) -> obj {{\n  let t.1: obj = call g(s.0) save [s.0]\n  return t.1\n}}\n"
     );
     assert_eq!(
         check_scopes(&text),
-        Err("a call saves [s0] before Perceus in `f`".to_string())
+        Err("a call saves [s.0] before Perceus in `f`".to_string())
+    );
+}
+
+// R8
+
+#[test]
+fn a_jump_with_a_variable_of_another_repr_is_rejected() {
+    let text = "fn f(x.0: int) -> obj {\n  jump b1(x.0)\nb1(s.1: obj):\n  return s.1\n}\n";
+    assert_eq!(
+        check_scopes(text),
+        Err("a jump to b1 passes `x.0` (int) to `s.1` (obj) in `f`".to_string())
+    );
+}
+
+#[test]
+fn a_jump_with_a_constant_that_does_not_fit_is_rejected() {
+    let text = "fn f() -> int {\n  jump b1(#1)\nb1(y.0: int):\n  return y.0\n}\n";
+    assert_eq!(
+        check_scopes(text),
+        Err("a jump to b1 passes #1 to `y.0` (int) in `f`".to_string())
+    );
+}
+
+#[test]
+fn constants_fit_the_reprs_of_their_values() {
+    // タグは `enum` にも、即値を持てる `tobj` にも入る。関数の値は `tobj` の即値である
+    let text = "\
+fn f() -> unit {
+  jump b1(3, #1, #0, &f, ())
+b1(n.0: int, e.1: enum, t.2: tobj, g.3: tobj, u.4: unit):
+  decref t.2
+  decref g.3
+  return u.4
+}
+";
+    assert_eq!(check(text), Ok(()));
+}
+
+#[test]
+fn an_unpack_of_a_value_that_is_not_obj_is_rejected() {
+    let text = "fn f(p.0: tobj) -> int {\n  unpack p.0 #0(a.1: int)\n  return a.1\n}\n";
+    assert_eq!(
+        check_scopes(text),
+        Err("`p.0` (tobj) is unpacked, but only obj can be in `f`".to_string())
+    );
+}
+
+#[test]
+fn an_unpack_without_fields_is_rejected() {
+    let text = "fn f(p.0: obj) -> unit {\n  unpack p.0 #3()\n  return ()\n}\n";
+    assert_eq!(
+        check_scopes(text),
+        Err("an unpack of `p.0` binds no fields in `f`".to_string())
+    );
+}
+
+#[test]
+fn a_returned_variable_has_the_repr_of_the_function() {
+    let text = "fn f(s.0: obj) -> int {\n  return s.0\n}\n";
+    assert_eq!(
+        check_scopes(text),
+        Err("`s.0` (obj) is returned from a function that returns int in `f`".to_string())
+    );
+}
+
+#[test]
+fn the_result_of_a_call_is_not_compared_with_the_callee() {
+    // S3b-2a は、呼び出しの結果と呼ばれる関数の `ret` を比べない (docs/spec/core-ir.md)
+    let text = format!("{K}fn f() -> obj {{\n  let t.0: obj = call k(1)\n  return t.0\n}}\n");
+    assert_eq!(check_scopes(&text), Ok(()));
+}
+
+// Unpack の所有
+
+#[test]
+fn an_unpack_consumes_its_value_and_owns_its_fields() {
+    let released = "\
+fn f(p.0: obj) -> int {
+  unpack p.0 #0(a.1: int, s.2: obj)
+  decref s.2
+  return a.1
+}
+";
+    assert_eq!(check(released), Ok(()));
+    assert_eq!(
+        check(&released.replace("  decref s.2\n", "")),
+        Err("`s.2` is still owned at the end of the function in `f`".to_string())
+    );
+    assert_eq!(
+        check(&released.replace("  decref s.2\n", "  decref s.2\n  decref p.0\n")),
+        Err("`p.0` is released after it was moved in `f`".to_string())
+    );
+}
+
+// 所有の数え方
+
+#[test]
+fn a_use_after_a_move_is_rejected() {
+    let text = "\
+fn twice(s.0: obj) -> obj {
+  let t.1: obj = extern Prelude.++(s.0, s.0)
+  return t.1
+}
+";
+    assert_eq!(
+        check(text),
+        Err("`s.0` is used after it was moved in `twice`".to_string())
+    );
+}
+
+#[test]
+fn a_missing_decref_is_rejected() {
+    let text = "fn ignore(s.0: obj) -> int {\n  return 1\n}\n";
+    assert_eq!(
+        check(text),
+        Err("`s.0` is still owned at the end of the function in `ignore`".to_string())
+    );
+}
+
+#[test]
+fn a_double_decref_is_rejected() {
+    let text = "fn ignore(s.0: obj) -> int {\n  decref s.0\n  decref s.0\n  return 1\n}\n";
+    assert_eq!(
+        check(text),
+        Err("`s.0` is released after it was moved in `ignore`".to_string())
+    );
+}
+
+#[test]
+fn a_dup_of_a_variable_that_is_not_rc_is_rejected() {
+    let text = "fn f(n.0: int) -> int {\n  dup n.0\n  return n.0\n}\n";
+    assert_eq!(
+        check(text),
+        Err("`n.0` is duplicated but is not reference counted in `f`".to_string())
+    );
+}
+
+#[test]
+fn drop_takes_the_ownership_of_its_value() {
+    let once = "fn f(s.0: obj) -> unit {\n  let t.1: unit = drop s.0\n  return t.1\n}\n";
+    assert_eq!(check(once), Ok(()));
+    let twice = "\
+fn g(s.0: obj) -> unit {
+  let t.1: unit = drop s.0
+  let u.2: unit = drop s.0
+  return u.2
+}
+";
+    assert_eq!(
+        check(twice),
+        Err("`s.0` is used after it was moved in `g`".to_string())
+    );
+}
+
+#[test]
+fn scopes_accept_a_value_used_twice_without_dup() {
+    // Perceus より前の IR には `dup` がないので、所有は数えない
+    let text = "\
+fn twice(s.0: obj) -> obj {
+  let t.1: obj = extern Prelude.++(s.0, s.0)
+  return t.1
+}
+";
+    assert_eq!(check_scopes(text), Ok(()));
+}
+
+#[test]
+fn scopes_reject_a_dup() {
+    let text = "\
+fn twice(s.0: obj) -> obj {
+  dup s.0
+  let t.1: obj = extern Prelude.++(s.0, s.0)
+  return t.1
+}
+";
+    assert_eq!(
+        check_scopes(text),
+        Err("`s.0` is duplicated before Perceus in `twice`".to_string())
+    );
+}
+
+#[test]
+fn scopes_reject_a_decref() {
+    let text = "fn ignore(s.0: obj) -> int {\n  decref s.0\n  return 1\n}\n";
+    assert_eq!(
+        check_scopes(text),
+        Err("`s.0` is released before Perceus in `ignore`".to_string())
     );
 }
 
 #[test]
 fn scopes_reject_a_variable_used_outside_its_scope() {
-    let text = r#"fn f() {
-  return s0
-}
-"#;
+    let text = "fn f() -> obj {\n  return s.0\n}\n";
     assert_eq!(
         check_scopes(text),
-        Err("`s0` is used outside its scope in `f`".to_string())
+        Err("`s.0` is used outside its scope in `f`".to_string())
     );
 }
 
+// switch
+
 #[test]
 fn a_switch_that_binds_fields_is_accepted() {
-    let text = r#"fn f(d0^) {
-  switch d0 {
-    #0 ->
-      return ()
-    #1(x1^) ->
-      return x1
-  }
+    let text = "\
+fn f(d.0: tobj) -> obj {
+  switch d.0 { #0 -> b1, #1(x.1: obj) -> b2 }
+b1:
+  let e.2: obj = const \"e\"
+  return e.2
+b2:
+  return x.1
 }
-"#;
+";
     assert_eq!(check(text), Ok(()));
 }
 
@@ -616,7 +831,7 @@ fn an_unused_field_must_be_released() {
     assert_eq!(check(&unused_field(true)), Ok(()));
     assert_eq!(
         check(&unused_field(false)),
-        Err("`x1` is still owned at the end of the function in `f`".to_string())
+        Err("`x.1` is still owned at the end of the function in `f`".to_string())
     );
 }
 
@@ -625,65 +840,42 @@ fn a_scrutinee_used_in_an_arm_is_duplicated_before_the_switch() {
     assert_eq!(check(&keep_scrutinee(true)), Ok(()));
     assert_eq!(
         check(&keep_scrutinee(false)),
-        Err("`d0` is used after it was moved in `f`".to_string())
+        Err("`d.0` is used after it was moved in `f`".to_string())
     );
 }
 
 #[test]
-fn a_field_is_in_scope_only_in_its_arm() {
-    let text = r#"fn f(d0^) {
-  switch d0 {
-    #0 ->
-      return x1
-    #1(x1^) ->
-      return x1
-  }
+fn a_switch_on_a_variable_that_is_not_rc_cannot_bind_fields() {
+    let text = "\
+fn f(d.0: enum) -> obj {
+  switch d.0 { #0 -> b1, #1(x.1: obj) -> b2 }
+b1:
+  let e.2: obj = const \"e\"
+  return e.2
+b2:
+  return x.1
 }
-"#;
+";
     assert_eq!(
         check_scopes(text),
-        Err("`x1` is used outside its scope in `f`".to_string())
-    );
-}
-
-#[test]
-fn a_switch_on_an_unboxed_variable_cannot_bind_fields() {
-    let text = r#"fn f(d0) {
-  switch d0 {
-    #0 ->
-      return ()
-    #1(x1^) ->
-      return x1
-  }
-}
-"#;
-    assert_eq!(
-        check_scopes(text),
-        Err("`d0` is not boxed, but a switch binds its fields in `f`".to_string())
-    );
-}
-
-#[test]
-fn a_closure_without_arguments_is_rejected() {
-    let text = "fn f() {\n  let c0^ = closure g()\n  return c0\n}\nfn g(x0) {\n  return x0\n}\n";
-    let error = check(text).unwrap_err();
-    assert!(
-        error.contains("a closure of `g` has no arguments; use `&g`"),
-        "{error}"
+        Err(
+            "`d.0` (enum) is not reference counted, but a switch binds its fields in `f`"
+                .to_string()
+        )
     );
 }
 
 #[test]
 fn a_literal_switch_with_a_default_is_accepted() {
-    let text = "fn main(n0) {
-  switch n0 {
-    1 ->
-      return 10
-    2 ->
-      return 20
-    _ ->
-      return 0
-  }
+    let text = "\
+fn main(n.0: int) -> int {
+  switch n.0 { 1 -> b1, 2 -> b2, _ -> b3 }
+b1:
+  return 10
+b2:
+  return 20
+b3:
+  return 0
 }
 ";
     assert_eq!(check(text), Ok(()));
@@ -691,136 +883,147 @@ fn a_literal_switch_with_a_default_is_accepted() {
 
 #[test]
 fn a_literal_switch_without_a_default_is_rejected() {
-    let text = "fn main(n0) {
-  switch n0 {
-    1 ->
-      return 10
-  }
-}
-";
-    let error = check(text).unwrap_err();
-    assert!(error.contains("default"), "{error}");
+    let text = "fn main(n.0: int) -> int {\n  switch n.0 { 1 -> b1 }\nb1:\n  return 10\n}\n";
+    assert_eq!(
+        check(text),
+        Err("a switch on literals has no default in `main`".to_string())
+    );
 }
 
 #[test]
 fn a_switch_that_mixes_kinds_of_cases_is_rejected() {
-    let text = "fn main(n0) {
-  switch n0 {
-    #0 ->
-      return 10
-    1 ->
-      return 20
-    _ ->
-      return 0
-  }
+    let text = "\
+fn main(n.0: int) -> int {
+  switch n.0 { #0 -> b1, 1 -> b2, _ -> b3 }
+b1:
+  return 10
+b2:
+  return 20
+b3:
+  return 0
 }
 ";
-    let error = check(text).unwrap_err();
-    assert!(error.contains("mixes"), "{error}");
+    assert_eq!(
+        check(text),
+        Err("a switch mixes kinds of cases in `main`".to_string())
+    );
 }
 
 #[test]
 fn a_switch_with_two_cases_for_one_literal_is_rejected() {
-    let text = "fn main(n0) {
-  switch n0 {
-    1 ->
-      return 10
-    1 ->
-      return 20
-    _ ->
-      return 0
-  }
+    let text = "\
+fn main(n.0: int) -> int {
+  switch n.0 { 1 -> b1, 1 -> b2, _ -> b3 }
+b1:
+  return 10
+b2:
+  return 20
+b3:
+  return 0
 }
 ";
-    let error = check(text).unwrap_err();
-    assert!(error.contains("two cases"), "{error}");
+    assert_eq!(
+        check(text),
+        Err("a switch has two cases for 1 in `main`".to_string())
+    );
 }
 
 #[test]
 fn a_literal_case_that_binds_fields_is_rejected() {
-    let text = "fn main(n0) {
-  switch n0 {
-    1(x1) ->
-      return x1
-    _ ->
-      return 0
-  }
+    let text = "\
+fn main(n.0: int) -> int {
+  switch n.0 { 1(x.1: int) -> b1, _ -> b2 }
+b1:
+  return x.1
+b2:
+  return 0
 }
 ";
-    let error = check(text).unwrap_err();
-    assert!(error.contains("binds fields"), "{error}");
+    assert_eq!(
+        check(text),
+        Err("a literal case binds fields in `main`".to_string())
+    );
 }
 
 #[test]
 fn a_string_case_without_its_constant_is_rejected() {
-    let text = r#"fn main(s0^) {
-  switch s0 {
-    "a" ->
-      return 1
-    _ ->
-      return 0
-  }
+    let text = "\
+fn main(s.0: obj) -> int {
+  switch s.0 { \"a\" -> b1, _ -> b2 }
+b1:
+  return 1
+b2:
+  return 0
 }
-"#;
-    let mut program = eml_core_ir::parse(text).unwrap_or_else(|error| panic!("{error}"));
+";
+    let mut program = read(text);
     program.strings.clear();
-    let error = verify(&program).unwrap_err().to_string();
-    assert!(error.contains("does not exist"), "{error}");
+    assert_eq!(
+        verify(&program).map_err(|error| error.to_string()),
+        Err("a case refers to string constant 0, which does not exist in `main`".to_string())
+    );
+}
+
+#[test]
+fn a_constant_without_its_string_is_rejected() {
+    let mut program = read("fn f() -> obj {\n  let s.0: obj = const \"a\"\n  return s.0\n}\n");
+    program.strings.clear();
+    assert_eq!(
+        verify_scopes(&program).map_err(|error| error.to_string()),
+        Err("a constant refers to string 0, which does not exist in `f`".to_string())
+    );
 }
 
 #[test]
 fn a_switch_with_two_defaults_does_not_parse() {
-    let text = "fn main(n0) {
-  switch n0 {
-    1 ->
-      return 10
-    _ ->
-      return 0
-    _ ->
-      return 1
-  }
+    let text = "\
+fn main(n.0: int) -> int {
+  switch n.0 { 1 -> b1, _ -> b2, _ -> b3 }
+b1:
+  return 10
+b2:
+  return 0
+b3:
+  return 1
 }
 ";
-    let error = eml_core_ir::parse(text).unwrap_err().to_string();
+    let error = parse(text).unwrap_err().to_string();
     assert!(error.contains("two defaults"), "{error}");
 }
 
+// 呼び出し、クロージャ、extern
+
 #[test]
-fn a_mask_must_name_known_effects_in_order() {
-    let unknown = "\
-effect Main.State { get/1, put/1 }
-fn entry$main(c0^) {
-  tailcall mask[#5] apply c0(())
-}
-";
-    let unordered = "\
-effect Main.A { a/1 }
-effect Main.B { b/1 }
-fn entry$main(c0^) {
-  tailcall mask[Main.B, Main.A] apply c0(())
-}
-";
-    insta::assert_snapshot!(check(unknown).unwrap_err(), @"a mask names an unknown effect #5 in `entry$main`");
-    insta::assert_snapshot!(check(unordered).unwrap_err(), @"a mask is not in ascending order in `entry$main`");
+fn a_direct_call_with_the_wrong_number_of_arguments_is_rejected() {
+    let text = format!("{K}fn f() -> int {{\n  let t.0: int = call k(1, 2)\n  return t.0\n}}\n");
+    assert_eq!(
+        check(&text),
+        Err("a direct call to `k` passes 2 arguments, but it takes 1 in `f`".to_string())
+    );
 }
 
 #[test]
-fn a_mask_may_name_one_effect_twice() {
-    let text = "\
-effect Main.A { a/1 }
-effect Main.B { b/1 }
-fn entry$main(c0^) {
-  let t1^ = mask[Main.A, Main.A, Main.B] apply c0(())
-  tailcall mask[Main.B] apply t1(())
+fn a_closure_without_arguments_is_rejected() {
+    let text = format!("fn f() -> tobj {{\n  let c.0: tobj = closure k()\n  return c.0\n}}\n{K}");
+    assert_eq!(
+        check(&text),
+        Err("a closure of `k` has no arguments; use `&k` in `f`".to_string())
+    );
 }
-";
-    assert_eq!(check(text), Ok(()));
+
+#[test]
+fn a_closure_with_every_argument_is_rejected() {
+    let text = format!("fn f() -> tobj {{\n  let c.0: tobj = closure k(1)\n  return c.0\n}}\n{K}");
+    assert_eq!(
+        check(&text),
+        Err("a closure of `k` has 1 arguments, but it must have fewer than 1 in `f`".to_string())
+    );
 }
 
 #[test]
 fn an_extern_with_the_wrong_number_of_arguments_is_rejected() {
     // テキストの形は引数をいくつでも読み、数は verifier が表の値と比べる
-    let text = "fn f(a0) {\n  let t1 = extern Prelude.+(a0)\n  return t1\n}\n";
+    let text = "fn f(a.0: int) -> int {\n  let t.1: int = extern Prelude.+(a.0)\n  return t.1\n}\n";
     assert_eq!(
         check(text),
         Err("`Prelude.+` takes 2 arguments but is given 1 in `f`".to_string())
@@ -830,9 +1033,263 @@ fn an_extern_with_the_wrong_number_of_arguments_is_rejected() {
 #[test]
 fn an_extern_chosen_by_type_is_rejected() {
     // `==` と `!=` は translate が比べ方ごとの行に置き換えるので、Core IR に届かない
-    let text = "fn f(a0, b1) {\n  let t2 = extern Prelude.==(a0, b1)\n  return t2\n}\n";
+    let text = "\
+fn f(a.0: int, b.1: int) -> enum {
+  let t.2: enum = extern Prelude.==(a.0, b.1)
+  return t.2
+}
+";
     assert_eq!(
         check(text),
         Err("`Prelude.==` is chosen by type and must not reach Core IR in `f`".to_string())
     );
+}
+
+// エフェクト
+
+#[test]
+fn handlers_operations_and_resume_are_calls() {
+    assert_eq!(check(&handler_program(ASK)), Ok(()));
+}
+
+#[test]
+fn a_handler_has_a_clause_for_each_operation() {
+    assert_eq!(
+        check(&handler_program("effect Ask { ask/1, tell/1 }\n")),
+        Err(
+            "a handler of `Ask` has clauses for 1 operations, but the effect has 2 in `main`"
+                .to_string()
+        )
+    );
+}
+
+#[test]
+fn a_clause_receives_the_arguments_k_and_the_state_after_its_captures() {
+    let text = "\
+effect Ask { ask/1 }
+fn f() -> int {
+  let t.0: int = handle Ask((), &body) { ask: &clause } return &ret
+  return t.0
+}
+fn body(u.0: unit) -> int {
+  return 1
+}
+fn clause(x.0: int, k.1: tobj) -> int {
+  tail resume k.1(x.0, ())
+}
+fn ret(x.0: int, s.1: unit) -> int {
+  return x.0
+}
+";
+    let expected = "the clause for `ask` needs 3 parameters after its captures (1 for the arguments, `k`, and the state), but it has 2 in `f`";
+    assert_eq!(check(text), Err(expected.to_string()));
+    // 節の引数の数は所有に関わらないので、Perceus より前の IR でも確かめる
+    assert_eq!(check_scopes(text), Err(expected.to_string()));
+}
+
+#[test]
+fn a_clause_of_a_never_operation_receives_the_arguments_and_the_state() {
+    let text = "\
+effect Fail { never fail/1 }
+fn f(n.0: int) -> int {
+  let c.1: tobj = closure clause(n.0)
+  let t.2: int = handle Fail((), &body) { fail: c.1 } return &ret
+  return t.2
+}
+fn body(u.0: unit) -> int {
+  return 1
+}
+fn clause(n.0: int, x.1: int, k.2: tobj, s.3: unit) -> int {
+  return n.0
+}
+fn ret(x.0: int, s.1: unit) -> int {
+  return x.0
+}
+";
+    assert_eq!(
+        check(text),
+        Err("the clause for `fail` needs 2 parameters after its captures (1 for the arguments and the state), but it has 3 in `f`".to_string())
+    );
+}
+
+#[test]
+fn a_return_clause_receives_the_value_and_the_state_after_its_captures() {
+    let text = "\
+effect Ask { ask/1 }
+fn f(n.0: int) -> int {
+  let c.1: tobj = closure ret(n.0)
+  let t.2: int = handle Ask((), &body) { ask: &clause } return c.1
+  return t.2
+}
+fn body(u.0: unit) -> int {
+  return 1
+}
+fn clause(x.0: int, k.1: tobj, s.2: unit) -> int {
+  tail resume k.1(x.0, s.2)
+}
+fn ret(n.0: int, x.1: int) -> int {
+  return x.1
+}
+";
+    assert_eq!(
+        check(text),
+        Err("the `return` clause needs 2 parameters after its captures (the value and the state), but it has 1 in `f`".to_string())
+    );
+}
+
+#[test]
+fn perform_names_an_operation_of_its_effect() {
+    let text = format!("{ASK}fn f() -> int {{\n  tail perform Ask.#1()\n}}\n");
+    assert_eq!(
+        check(&text),
+        Err("`perform` names operation 1 of `Ask`, which has 1 operations in `f`".to_string())
+    );
+}
+
+#[test]
+fn a_perform_must_agree_with_the_effect_on_resuming() {
+    let resumes =
+        "effect Fail { never fail/1 }\nfn f() -> int {\n  tail perform Fail.fail(())\n}\n";
+    assert_eq!(
+        check(resumes),
+        Err("`Fail.fail` never resumes, but this perform resumes in `f`".to_string())
+    );
+    let never = "effect Ask { ask/1 }\nfn f() -> int {\n  tail perform never Ask.ask(1)\n}\n";
+    assert_eq!(
+        check(never),
+        Err("`Ask.ask` resumes, but this perform never resumes in `f`".to_string())
+    );
+}
+
+/// テキストは `handle` と `perform` の前の `mask` を読まないので、読んだ後で `mask` を付ける。
+#[test]
+fn a_mask_on_handle_or_perform_is_rejected() {
+    let texts = [
+        "effect Ask { ask/1 }\nfn f(b.0: tobj, c.1: tobj, r.2: tobj) -> int {\n  tail handle Ask((), b.0) { ask: c.1 } return r.2\n}\n",
+        "effect Ask { ask/1 }\nfn f() -> int {\n  tail perform Ask.ask(1)\n}\n",
+    ];
+    let errors: Vec<String> = texts
+        .into_iter()
+        .map(|text| {
+            let mut program = read(text);
+            let Term::TailCall { call: _, mask } = &mut program.functions[0].blocks[0].term else {
+                panic!("not a tail call");
+            };
+            mask.push(0);
+            verify_scopes(&program).unwrap_err().message
+        })
+        .collect();
+    assert_eq!(errors, ["a mask on handle", "a mask on perform"]);
+}
+
+#[test]
+fn a_mask_must_name_known_effects_in_order() {
+    let unknown = "\
+effect Main.State { get/1, put/1 }
+fn entry$main(c.0: tobj) -> unit {
+  tail mask [#5] apply c.0(())
+}
+";
+    let unordered = "\
+effect Main.A { a/1 }
+effect Main.B { b/1 }
+fn entry$main(c.0: tobj) -> unit {
+  tail mask [Main.B, Main.A] apply c.0(())
+}
+";
+    assert_eq!(
+        check(unknown),
+        Err("a mask names an unknown effect #5 in `entry$main`".to_string())
+    );
+    assert_eq!(
+        check(unordered),
+        Err("a mask is not in ascending order in `entry$main`".to_string())
+    );
+}
+
+#[test]
+fn a_mask_may_name_one_effect_twice() {
+    let text = "\
+effect Main.A { a/1 }
+effect Main.B { b/1 }
+fn entry$main(c.0: tobj) -> unit {
+  let t.1: tobj = mask [Main.A, Main.A, Main.B] apply c.0(())
+  tail mask [Main.B] apply t.1(())
+}
+";
+    assert_eq!(check(text), Ok(()));
+}
+
+// 大きさ
+
+/// `n` 個の `switch` が続き、片方の枝が呼び出しをして合流する関数。所有の検査の段では、合流のブロックの数だけ、
+/// 見える変数の集合を決め直す。`save` は呼び出しの `save` の部分で、Perceus より前の形では空にする。
+fn chain_of_switches(n: u32, save: &str) -> String {
+    let mut text = format!(
+        "{K}fn f(s.0: obj, n.1: int, c.2: enum) -> obj {{\n  switch c.2 {{ #0 -> b1, #1 -> b2 }}\n"
+    );
+    for i in 0..n {
+        let (call, other, merge) = (3 * i + 1, 3 * i + 2, 3 * i + 3);
+        text.push_str(&format!(
+            "b{call}:\n  let t.{}: int = call k(n.1){save}\n  jump b{merge}()\nb{other}:\n  jump b{merge}()\nb{merge}:\n",
+            i + 3
+        ));
+        if i + 1 < n {
+            text.push_str(&format!(
+                "  switch c.2 {{ #0 -> b{}, #1 -> b{} }}\n",
+                merge + 1,
+                merge + 2
+            ));
+        } else {
+            text.push_str("  return s.0\n");
+        }
+    }
+    text.push_str("}\n");
+    text
+}
+
+#[test]
+fn a_long_chain_of_switches_is_verified_in_linear_time() {
+    // `lower` は debug ビルドで毎回 verify するので、ブロックの数に比例する時間で終わらなければならない。合流の
+    // ブロックごとに所有や見える変数を関数の先頭から数え直すと、2乗の時間がかかる
+    let before = read(&chain_of_switches(20000, ""));
+    let after = read(&chain_of_switches(20000, " save [s.0, n.1, c.2]"));
+    let start = std::time::Instant::now();
+    assert_eq!(verify_scopes(&before), Ok(()));
+    assert_eq!(verify(&after), Ok(()));
+    let elapsed = start.elapsed();
+    assert!(
+        elapsed < std::time::Duration::from_secs(10),
+        "took {elapsed:?}"
+    );
+}
+
+#[test]
+fn a_long_run_of_if_statements_is_verified_in_linear_time() {
+    // 文の `if` が続くと、`switch` と合流するブロックが文の数だけ連なる。`lower` はデバッグビルドで毎回 verify するので、
+    // 文の数に比例する時間で終わらなければならない。条件は引数にする。`if True` は translate がその場で枝を選び、
+    // `switch` を出さないためである
+    const COUNT: usize = 20000;
+    let mut text = String::from("step : Bool -> <IO> Unit\nstep b =\n  let s = \"keep\"\n");
+    text.push_str(&"  if b then println \"x\"\n".repeat(COUNT));
+    text.push_str("  println s\n\nmain : Unit -> <IO> Unit\nmain () = step True");
+    let start = std::time::Instant::now();
+    let program = eml_test_support::core(&text);
+    assert_eq!(verify(&program), Ok(()));
+    let elapsed = start.elapsed();
+    assert!(
+        elapsed < std::time::Duration::from_secs(10),
+        "took {elapsed:?}"
+    );
+    let step = program
+        .functions
+        .iter()
+        .find(|function| function.name == "step")
+        .expect("step");
+    let switches = step
+        .blocks
+        .iter()
+        .filter(|block| matches!(block.term, Term::Switch { .. }))
+        .count();
+    assert_eq!(switches, COUNT);
 }

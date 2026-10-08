@@ -1,362 +1,148 @@
-//! Perceus の `dup` / `decref` の挿入 (docs/spec/core-ir.md)。変数を使うことを所有権の移動として扱い、後でも使う
-//! 変数を複製し、使わなくなった変数をできるだけ早く捨てる。対象は `Unr` でボックス化した変数だけである。呼び出しの
-//! フレームに退避する変数 (`saved`) も、同じ生存の集合からここで決める。
+//! Perceus の `dup` / `decref` の挿入と、呼び出しの `saved` (docs/spec/core-ir.md の「パス」)。変数を使うことを所有権の
+//! 移動として扱い、後でも使う変数を複製し、使わなくなった変数をできるだけ早く捨てる。対象は RC の対象 (`Repr::is_rc`)
+//! の変数だけである。ブロックを前からたどり、その場で書き換える。
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeSet, HashMap};
 
-use crate::builder::FnBuilder;
-use crate::liveness::{BlockLiveness, Vars, analyze, tracked};
-use crate::{Atom, CExpr, CExprId, Call, Case, CoreFn, JoinId, Program, Rhs, VarId};
+use crate::{Atom, Block, BlockId, CoreFn, Program, Rhs, Stmt, Term, VarId};
 
-/// 変換の後に、プログラム全体にかける。変換の途中の関数ごとではなく、独立したパスにする (docs/spec/core-ir.md)。
-pub(crate) fn insert(program: &mut Program) {
+use crate::liveness::{insert_var, live_after_term, live_in, step_back};
+
+/// 変換と contract の後に、プログラム全体に1回だけかける。入力は RC の命令を持たない。
+pub fn perceus(program: &mut Program) {
     for function in &mut program.functions {
         insert_rc(function);
     }
 }
 
 fn insert_rc(function: &mut CoreFn) {
-    let live = analyze(function);
-    let tracked = tracked(function);
-    let mut pass = Rebuild {
-        old: &function.exprs,
-        tracked: &tracked,
-        live: &live,
-        new: FnBuilder::rebuilding(function.joins.len()),
-    };
-    let owned: Vars = function
-        .params
-        .iter()
-        .copied()
-        .filter(|var| tracked[var.0 as usize])
-        .collect();
-    let body = pass.transform(function.body, &owned);
-    let Rebuild { new, .. } = pass;
-    let (exprs, joins) = new.into_arenas();
-    function.body = body;
-    function.exprs = exprs;
-    function.joins = joins;
-}
-
-struct Rebuild<'a> {
-    old: &'a [CExpr],
-    tracked: &'a [bool],
-    live: &'a BlockLiveness,
-    new: FnBuilder,
-}
-
-/// 連鎖の今の段で所有している変数の求め方。
-enum Segment {
-    /// 連鎖の始まり (関数、`Switch` の枝、join point の範囲と本体の入口)。所有は入口の所有そのものである。
-    Start(Vars),
-    /// `Let` の後。後でも使う RC の対象はすべて所有し、使わなくなった変数は使った時点で手放しているので、所有は
-    /// 生きている RC の対象と、直前に束縛した変数 (使わなくても次の段の前までは所有する) になる。
-    After(VarId),
-}
-
-impl Rebuild<'_> {
-    fn atom_var(&self, atom: &Atom) -> Option<VarId> {
-        match atom {
-            Atom::Var(var) if self.tracked[var.0 as usize] => Some(*var),
-            _ => None,
+    let live_in = live_in(function);
+    let rc: Vec<bool> = function.vars.iter().map(|var| var.repr.is_rc()).collect();
+    // `switch` の行き先には、その `switch` の辺1本だけが入る (R3)。入口の所有は `switch` のブロックで決まるので、
+    // 行き先に着くまでここに置く
+    let mut switch_entries: HashMap<BlockId, Vec<VarId>> = HashMap::new();
+    for index in 0..function.blocks.len() {
+        let id = BlockId(index as u32);
+        let after_term = live_after_term(function, &function.blocks[index].term, &live_in);
+        let block = &mut function.blocks[index];
+        // 入口と合流するブロックは、生きている変数と引数を1つずつ所有して始まる。使わない引数は先頭で捨てる
+        let owned = switch_entries.remove(&id).unwrap_or_else(|| {
+            let mut owned: BTreeSet<VarId> = live_in[index].iter().copied().collect();
+            owned.extend(block.params.iter().copied());
+            owned.into_iter().filter(|var| rc[var.0 as usize]).collect()
+        });
+        if let Term::Switch {
+            scrutinee: _,
+            cases,
+            default,
+        } = &block.term
+        {
+            // 行き先は、(`switch` の前の所有 − scrutinee) にフィールドを足したものを所有する。scrutinee を行き先でも
+            // 使うなら、`switch` の前で複製した分を所有する。この集合は終端の後で生きている RC の対象と同じである
+            let kept: Vec<VarId> = after_term
+                .iter()
+                .copied()
+                .filter(|var| rc[var.0 as usize])
+                .collect();
+            for case in cases {
+                let mut entry = kept.clone();
+                entry.extend(case.fields.iter().copied().filter(|var| rc[var.0 as usize]));
+                entry.sort_unstable();
+                switch_entries.insert(case.target, entry);
+            }
+            if let Some(default) = default {
+                switch_entries.insert(*default, kept);
+            }
         }
+        rewrite(block, &owned, after_term, &live_in[index], &rc);
     }
+}
 
-    /// 値が使う変数を、使う回数の分だけ並べる。
-    fn uses(&self, atoms: &[Atom]) -> Vec<VarId> {
-        atoms
+/// ブロックの文を書き換える。後ろからたどって各文の後で生きている変数を求め、複製と解放と `saved` を決めてから、
+/// 前から並べ直す。終端の前に足す文は `stmts` の末尾に置くので、終端を「文と新しい終端」に置き換える書き換え
+/// (S3b-2b の `TailCall` の降格) も、ここで終端を差し替えればその場でできる。
+fn rewrite(
+    block: &mut Block,
+    owned: &[VarId],
+    mut live: BTreeSet<VarId>,
+    live_in: &[VarId],
+    rc: &[bool],
+) {
+    let mut uses = Vec::new();
+    block
+        .term
+        .for_each_atom(|atom| push_rc_var(&mut uses, atom, rc));
+    let term_dups = dups(uses, &live);
+    block.term.for_each_atom(|atom| insert_var(&mut live, atom));
+    let mut plans = Vec::with_capacity(block.stmts.len());
+    for stmt in block.stmts.iter_mut().rev() {
+        debug_assert!(
+            !matches!(stmt, Stmt::Dup(_) | Stmt::Decref(_)),
+            "Perceus runs once on code without RC instructions"
+        );
+        // `live` はこの文の後で生きている変数である。呼び出しは、そのうち結果の変数以外を退避する
+        if let Stmt::Let {
+            var,
+            rhs:
+                Rhs::Call {
+                    call: _,
+                    mask: _,
+                    saved,
+                },
+        } = stmt
+        {
+            *saved = live.iter().copied().filter(|v| v != var).collect();
+        }
+        let dead: Vec<VarId> = stmt
+            .defs()
             .iter()
-            .filter_map(|atom| self.atom_var(atom))
-            .collect()
-    }
-
-    fn tracked_only(&self, vars: &Vars) -> Vars {
-        vars.iter()
             .copied()
-            .filter(|var| self.tracked[var.0 as usize])
-            .collect()
+            .filter(|var| rc[var.0 as usize] && !live.contains(var))
+            .collect();
+        let mut uses = Vec::new();
+        stmt.for_each_atom(|atom| push_rc_var(&mut uses, atom, rc));
+        plans.push((dups(uses, &live), dead));
+        step_back(stmt, &mut live);
     }
+    debug_assert!(live.iter().eq(live_in.iter()), "the block's live-in set");
 
-    fn owned(&self, segment: &Segment, live: &Vars) -> Vars {
-        match segment {
-            Segment::Start(owned) => owned.clone(),
-            Segment::After(last) => {
-                let mut owned = self.tracked_only(live);
-                if self.tracked[last.0 as usize] {
-                    owned.insert(*last);
-                }
-                owned
-            }
-        }
+    let old = std::mem::take(&mut block.stmts);
+    let stmts = &mut block.stmts;
+    // 所有していて入口で死んでいる変数 (使わない引数、フィールド、ほかの行き先だけが使う変数) は先頭で捨てる
+    stmts.extend(
+        owned
+            .iter()
+            .filter(|var| live_in.binary_search(var).is_err())
+            .map(|&var| Stmt::Decref(var)),
+    );
+    for (stmt, (dups, dead)) in old.into_iter().zip(plans.into_iter().rev()) {
+        stmts.extend(dups.into_iter().map(Stmt::Dup));
+        stmts.push(stmt);
+        stmts.extend(dead.into_iter().map(Stmt::Decref));
     }
-
-    fn push(&mut self, expr: CExpr) -> CExprId {
-        self.new.push(expr)
-    }
-
-    /// `owned` は入口で所有している変数。どの経路も `Return`、`TailCall`、`Jump` で終わり、その時点で渡すもの以外は所有して
-    /// いない。
-    ///
-    /// `Let` の連鎖と join point の本体の連なりは長くなりうるので、その向きはループで歩いて各段を記録し、最後に
-    /// 逆順で組み立てる。逆順に組み立てるときに生きている変数の集合を1つだけ更新するので、`Let` ごとの集合を持たない。
-    /// 再帰するのは `Switch` の case と `default`、join point の範囲だけである。
-    fn transform(&mut self, id: CExprId, owned: &Vars) -> CExprId {
-        let old = self.old;
-        let mut steps: Vec<Step> = Vec::new();
-        let mut id = id;
-        let mut segment = Segment::Start(owned.clone());
-        let (mut code, mut live) = loop {
-            let expr = &old[id.0 as usize];
-            match expr {
-                CExpr::Let { var, rhs, body } => {
-                    // この束縛の前で捨てうるのは、連鎖の始まりなら入口の所有、そうでなければ直前に束縛した変数だけである
-                    let released = match std::mem::replace(&mut segment, Segment::After(*var)) {
-                        Segment::Start(owned) => owned,
-                        Segment::After(last) => self.tracked[last.0 as usize]
-                            .then_some(last)
-                            .into_iter()
-                            .collect(),
-                    };
-                    steps.push(Step::Let {
-                        var: *var,
-                        rhs: rhs.clone(),
-                        released,
-                    });
-                    id = *body;
-                }
-                CExpr::Join {
-                    join,
-                    params,
-                    captures,
-                    body,
-                    scope,
-                } => {
-                    // 範囲は今の所有から始まる。本体は、引数と、`captures` のうち RC の対象を1つずつ所有して始まる
-                    let before = self.live.at_end(expr);
-                    let owned = self.owned(&segment, &before);
-                    let scope = self.transform(*scope, &owned);
-                    steps.push(Step::Join {
-                        join: *join,
-                        params: params.clone(),
-                        captures: captures.clone(),
-                        scope,
-                        before,
-                    });
-                    let mut owned = self.tracked_only(self.live.captures(*join));
-                    owned.extend(
-                        params
-                            .iter()
-                            .copied()
-                            .filter(|param| self.tracked[param.0 as usize]),
-                    );
-                    segment = Segment::Start(owned);
-                    id = *body;
-                }
-                CExpr::Return(atom) => {
-                    let live = self.live.at_end(expr);
-                    let owned = self.owned(&segment, &live);
-                    break (self.transform_return(*atom, &owned), live);
-                }
-                CExpr::TailCall { call, mask } => {
-                    let live = self.live.at_end(expr);
-                    let owned = self.owned(&segment, &live);
-                    break (self.transform_tail_call(call, mask, &owned), live);
-                }
-                CExpr::Jump { join, args } => {
-                    let live = self.live.at_end(expr);
-                    let owned = self.owned(&segment, &live);
-                    break (self.transform_jump(*join, args, &owned), live);
-                }
-                CExpr::Switch {
-                    scrutinee,
-                    cases,
-                    default,
-                } => {
-                    let live = self.live.at_end(expr);
-                    let mut owned = self.owned(&segment, &live);
-                    // `Switch` は scrutinee を1回使う (move)。枝の中でも使うなら、`Switch` の前で複製し、枝はその分を
-                    // 所有して始まる。どの枝も使わなければ、枝は scrutinee を所有しない (docs/spec/core-ir.md)
-                    let consumed = self.atom_var(scrutinee);
-                    let kept = consumed.filter(|var| {
-                        cases
-                            .iter()
-                            .map(|case| case.body)
-                            .chain(*default)
-                            .any(|body| self.live.entry(body).contains(var))
-                    });
-                    if let (Some(var), None) = (consumed, kept) {
-                        owned.remove(&var);
-                    }
-                    let cases = cases
-                        .iter()
-                        .map(|case| {
-                            // 枝はフィールドの参照を1つずつ所有して始まる。使わないフィールドは、連鎖の始まりの
-                            // 所有として、最初の段で捨てる
-                            let mut owned = owned.clone();
-                            owned.extend(
-                                case.fields
-                                    .iter()
-                                    .copied()
-                                    .filter(|var| self.tracked[var.0 as usize]),
-                            );
-                            Case {
-                                pattern: case.pattern,
-                                fields: case.fields.clone(),
-                                body: self.transform(case.body, &owned),
-                            }
-                        })
-                        .collect();
-                    // `default` はフィールドを束縛しないので、`Switch` の前の所有のまま始まる
-                    let default = default.map(|default| self.transform(default, &owned));
-                    let mut code = self.push(CExpr::Switch {
-                        scrutinee: *scrutinee,
-                        cases,
-                        default,
-                    });
-                    if let Some(var) = kept {
-                        code = self.push(CExpr::Dup { var, body: code });
-                    }
-                    break (code, live);
-                }
-                CExpr::Dup { var: _, body: _ } | CExpr::Decref { var: _, body: _ } => {
-                    unreachable!("the pass runs once on code without RC instructions")
-                }
-            }
-        };
-        for step in steps.into_iter().rev() {
-            match step {
-                Step::Join {
-                    join,
-                    params,
-                    captures,
-                    scope,
-                    before,
-                } => {
-                    code = self.push(CExpr::Join {
-                        join,
-                        params,
-                        captures,
-                        body: code,
-                        scope,
-                    });
-                    self.new.define_join(join, code);
-                    live = before;
-                }
-                Step::Let { var, rhs, released } => {
-                    // `live` は、この束縛の後で生きている変数である。呼び出しは、そのうち結果の変数以外を退避する
-                    let rhs = match rhs {
-                        Rhs::Call {
-                            call,
-                            mask,
-                            saved: _,
-                        } => Rhs::Call {
-                            call,
-                            mask,
-                            saved: live.iter().copied().filter(|&v| v != var).collect(),
-                        },
-                        rhs => rhs,
-                    };
-                    let atoms = rhs.atoms();
-                    let uses = self.uses(&atoms);
-                    code = self.push(CExpr::Let {
-                        var,
-                        rhs,
-                        body: code,
-                    });
-                    let later = |used: VarId| used != var && live.contains(&used);
-                    code = self.release_and_duplicate(code, &released, &uses, later);
-                    live.remove(&var);
-                    live.extend(atoms.iter().filter_map(|atom| match atom {
-                        Atom::Var(v) => Some(*v),
-                        _ => None,
-                    }));
-                }
-            }
-        }
-        code
-    }
-
-    /// `code` の前で、後で使わない変数を捨てる。`uses` は使うたびに所有権を1つ受け取るので、2回目以降の使用と、
-    /// 後でも使う変数の分を複製する。
-    fn release_and_duplicate(
-        &mut self,
-        mut code: CExprId,
-        owned: &Vars,
-        uses: &[VarId],
-        later: impl Fn(VarId) -> bool,
-    ) -> CExprId {
-        for &dead in owned.iter().rev() {
-            if !uses.contains(&dead) && !later(dead) {
-                code = self.push(CExpr::Decref {
-                    var: dead,
-                    body: code,
-                });
-            }
-        }
-        let mut counts: BTreeMap<VarId, usize> = BTreeMap::new();
-        for &used in uses {
-            *counts.entry(used).or_default() += 1;
-        }
-        for (&used, &count) in counts.iter().rev() {
-            let dups = count - usize::from(!later(used));
-            for _ in 0..dups {
-                code = self.push(CExpr::Dup {
-                    var: used,
-                    body: code,
-                });
-            }
-        }
-        code
-    }
-
-    fn transform_return(&mut self, atom: Atom, owned: &Vars) -> CExprId {
-        let returned = self.atom_var(&atom);
-        let mut code = self.push(CExpr::Return(atom));
-        for &var in owned.iter().rev() {
-            if Some(var) != returned {
-                code = self.push(CExpr::Decref { var, body: code });
-            }
-        }
-        code
-    }
-
-    /// 末尾呼び出しの後で使う変数はないので、呼び出しが使わない変数をすべて捨てる。
-    fn transform_tail_call(&mut self, call: &Call, mask: &[u32], owned: &Vars) -> CExprId {
-        let uses = self.uses(&call.atoms());
-        let code = self.push(CExpr::TailCall {
-            call: call.clone(),
-            mask: mask.to_vec(),
-        });
-        self.release_and_duplicate(code, owned, &uses, |_| false)
-    }
-
-    /// join point の本体は、`captures` のうち RC の対象をちょうど1つずつ所有して始まる。それ以外を捨て、渡す値を
-    /// 本体でも使うなら複製する。同じ変数を2つの引数に渡すときは、2つ目の分も複製する。
-    fn transform_jump(&mut self, join: JoinId, args: &[Atom], owned: &Vars) -> CExprId {
-        let needs = self.tracked_only(self.live.captures(join));
-        let uses = self.uses(args);
-        let code = self.push(CExpr::Jump {
-            join,
-            args: args.to_vec(),
-        });
-        self.release_and_duplicate(code, owned, &uses, |var| needs.contains(&var))
-    }
+    // 終端が渡さない所有は残らない。生きている変数は、最後に使う位置で所有権ごと渡り、死んだ変数は先頭か定義の直後で
+    // 捨ててあるためである
+    stmts.extend(term_dups.into_iter().map(Stmt::Dup));
 }
 
-/// `transform` が連鎖を歩いた間に記録する1段分。
-enum Step {
-    Join {
-        join: JoinId,
-        params: Vec<VarId>,
-        captures: Vec<VarId>,
-        scope: CExprId,
-        /// join point の定義の直前 (範囲の入口) で生きている変数。
-        before: Vars,
-    },
-    Let {
-        var: VarId,
-        rhs: Rhs,
-        /// この束縛の前で捨てうる変数。
-        released: Vars,
-    },
+/// 使うたびに所有権を1つ渡すので、2回目以降の使用と、後でも生きている変数の分を複製する。`uses` は使う順の RC の
+/// 対象の変数で、結果は変数の昇順に並ぶ。
+fn dups(mut uses: Vec<VarId>, live_after: &BTreeSet<VarId>) -> Vec<VarId> {
+    uses.sort_unstable();
+    let mut dups = Vec::new();
+    for (index, &var) in uses.iter().enumerate() {
+        let last = uses.get(index + 1) != Some(&var);
+        if !last || live_after.contains(&var) {
+            dups.push(var);
+        }
+    }
+    dups
+}
+
+fn push_rc_var(uses: &mut Vec<VarId>, atom: Atom, rc: &[bool]) {
+    if let Atom::Var(var) = atom
+        && rc[var.0 as usize]
+    {
+        uses.push(var);
+    }
 }

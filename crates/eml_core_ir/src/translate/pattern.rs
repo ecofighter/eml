@@ -1,17 +1,87 @@
-//! `match` と、`let`・ラムダ・等式の引数のパターンを、決定木にコンパイルする (docs/spec/core-ir.md)。同じ値を二度
-//! 調べないように、行列の欄ごとに `Switch` する。決定木の1つの葉からだけ届く枝の本体は、その葉の位置に置く。複数の
-//! 葉から届く枝の本体だけを join point にして、各葉から jump する。タプルはコンストラクタが1つの型として分解し、
-//! リテラルはリテラルの case を並べた1つの `Switch` で調べる。
+//! `match`、分解する `let`、分解する引数のパターンを決定木にし、ブロックに出す (docs/spec/core-ir.md)。
+//! 値は出現 (`Occ`) で表し、頭のコンストラクタかリテラルが分かっている出現では、`switch` を出さずにその場で case を
+//! 選ぶ。scrutinee は値をそのまま調べる文脈 (`Ctx::Match`) で変換する。出口の値が、値を調べずに1つの枝に行き着けば、
+//! その枝のラベルへ直接向かう (case-of-case)。行き着かない出口だけを集め、そこで決定木を出す。
+
+use std::mem;
 
 use eml_hir::{
-    Body, ConstructorId, ExprId, Literal, LocalId, MatchArm, PatId, PatKind, TypeDefKind,
+    Body, ConstructorId, ExprId, ExprKind, Literal, LocalId, MatchArm, PatId, PatKind,
+    Program as HirProgram, Res, TypeDefKind, ValueItem,
 };
 use eml_types::Type;
 
-use crate::{Atom, CExpr, CExprId, Case, CasePattern, JoinId, Rhs, TUPLE, VarId};
+use crate::{Atom, BlockId, Case, CasePattern, Repr, Rhs, Stmt, TUPLE, Term, VarId, VarInfo};
 
-use super::types::split_arrows;
-use super::{Binding, Bindings, Exit, FnLowering};
+use super::builder::Label;
+use super::types::{split_arrows, var_info};
+use super::{Ctx, CtxId, Exit, FnLowering};
+
+/// 値の出現 (docs/spec/core-ir.md)。`Con` は頭のコンストラクタが分かっている値で、タプルはタグ 0 の
+/// コンストラクタである。`value` はその値を持つアトムで、`None` ならまだ作っていない。値全体が要る葉でだけ作る。
+#[derive(Clone)]
+pub(super) enum Occ {
+    Atom(Atom, Type),
+    Con {
+        tag: u32,
+        fields: Vec<Occ>,
+        value: Option<Atom>,
+        ty: Type,
+    },
+}
+
+impl Occ {
+    fn ty(&self) -> &Type {
+        match self {
+            Occ::Atom(_, ty) | Occ::Con { ty, .. } => ty,
+        }
+    }
+}
+
+/// 同じ関数の中で `con` で作った変数の中身。変数は1回だけ定義され、定義は使う位置を支配するので、変数を見れば
+/// いつでもこの値である (docs/spec/core-ir.md)。
+pub(super) struct Known {
+    pub(super) tag: u32,
+    pub(super) args: Vec<Atom>,
+    pub(super) ty: Type,
+}
+
+/// scrutinee を値をそのまま調べる文脈。枝ごとのラベルと、値の分からなかった出口を持つ。
+pub(super) struct MatchCtx {
+    /// 枝の順のパターン。
+    pats: Vec<PatId>,
+    /// 枝のラベル。引数はパターンの変数 (`Body::pat_bindings` の順) で、`alias` を使う枝はその後に値全体を受ける。
+    arms: Vec<Label>,
+    /// 枝が、`let x = S` の直後の本体が `match x` である形の `x` を受けるか。
+    passes_alias: Vec<bool>,
+    /// 値の分からなかった出口。開いたままのブロックと、そこで渡す出現。
+    unknown: Vec<(BlockId, Occ)>,
+}
+
+/// 調べる値の入り方。`match` と分解する `let` は式を、分解する引数は引数の変数を調べる。
+pub(super) enum Scrutinee {
+    Expr(ExprId),
+    Occ(Occ),
+}
+
+/// 決定木 (docs/spec/core-ir.md)。葉の `bound` は、パターンの変数とそれが受ける出現である。
+enum Decision {
+    Switch {
+        scrutinee: Atom,
+        cases: Vec<(CasePattern, Vec<VarId>, Decision)>,
+        default: Option<Box<Decision>>,
+    },
+    Unpack {
+        value: VarId,
+        tag: u32,
+        fields: Vec<VarId>,
+        next: Box<Decision>,
+    },
+    Leaf {
+        arm: usize,
+        bound: Vec<(LocalId, Occ)>,
+    },
+}
 
 /// 行列の欄。特殊化で増えたワイルドカードは、HIR のパターンを持たない。
 #[derive(Clone, Copy)]
@@ -24,12 +94,11 @@ enum Cell {
 enum Head<'a> {
     Any(Option<LocalId>),
     Con(ConstructorId, &'a [PatId]),
-    /// タプルは、タグ 0 のコンストラクタが1つの型として分解する (docs/spec/core-ir.md)。
     Tuple(&'a [PatId]),
     Literal(&'a Literal),
 }
 
-fn head(body: &Body, cell: Cell) -> Head<'_> {
+fn head<'a>(body: &'a Body, hir: &HirProgram, cell: Cell) -> Head<'a> {
     let Cell::Pat(mut pat) = cell else {
         return Head::Any(None);
     };
@@ -37,47 +106,43 @@ fn head(body: &Body, cell: Cell) -> Head<'_> {
         match &body.pats[pat].kind {
             PatKind::Annot { pat: inner, .. } => pat = *inner,
             PatKind::Bind(local) => return Head::Any(Some(*local)),
+            // フィールドのない唯一のコンストラクタは値が1つしかないので、`()` と同じくワイルドカードである
+            // (docs/spec/core-ir.md)
+            PatKind::Con { ctor, args } if args.is_empty() && single_constructor(hir, *ctor) => {
+                return Head::Any(None);
+            }
             PatKind::Con { ctor, args } => return Head::Con(*ctor, args),
             PatKind::Tuple(elements) => return Head::Tuple(elements),
             PatKind::Literal(literal) => return Head::Literal(literal),
-            // `()` は値が1つしかないので、ワイルドカードと同じに扱える
             PatKind::Wildcard | PatKind::Unit | PatKind::Missing => return Head::Any(None),
         }
     }
 }
 
-/// 欄を分解するコンストラクタ。特殊化とフィールドの名前で、`data` のコンストラクタとタプルを同じに扱う。
-#[derive(Clone, Copy)]
-enum Shape {
-    Con(ConstructorId),
-    Tuple,
-}
-
-/// 欄の先頭が `shape` のコンストラクタ (タプル) なら、その引数のパターン。
-fn shape_args(head: Head<'_>, shape: Shape) -> Option<&[PatId]> {
-    match (head, shape) {
-        (Head::Con(other, args), Shape::Con(ctor)) if other == ctor => Some(args),
-        (Head::Tuple(args), Shape::Tuple) => Some(args),
-        _ => None,
-    }
+fn single_constructor(hir: &HirProgram, ctor: ConstructorId) -> bool {
+    matches!(&hir[hir[ctor].ty].kind, TypeDefKind::Data { constructors } if constructors.len() == 1)
 }
 
 /// パターンが値を調べるか分解するか。どちらもしなければ、値をそのまま局所変数に対応させればよく、決定木は要らない。
-pub(super) fn needs_decision_tree(body: &Body, pat: PatId) -> bool {
-    match &body.pats[pat].kind {
-        PatKind::Con { .. } | PatKind::Tuple(_) | PatKind::Literal(_) => true,
-        PatKind::Annot { pat, .. } => needs_decision_tree(body, *pat),
-        PatKind::Bind(_) | PatKind::Wildcard | PatKind::Unit | PatKind::Missing => false,
+pub(super) fn destructures(body: &Body, hir: &HirProgram, pat: PatId) -> bool {
+    !matches!(head(body, hir, Cell::Pat(pat)), Head::Any(_))
+}
+
+/// 欄の先頭が、タグ `tag` のコンストラクタ (タプル) なら、その引数のパターン。
+fn shape_args<'a>(hir: &HirProgram, head: Head<'a>, tag: u32) -> Option<&'a [PatId]> {
+    match head {
+        Head::Con(ctor, args) if hir[ctor].tag == tag => Some(args),
+        Head::Tuple(args) => Some(args),
+        _ => None,
     }
 }
 
 #[derive(Clone)]
 struct Row {
     cells: Vec<Cell>,
-    /// 葉で jump する先 (`Target`) の番号。
-    target: usize,
+    arm: usize,
     /// これまでに通った欄で、変数のパターンが受けた出現。
-    bound: Vec<(LocalId, Atom)>,
+    bound: Vec<(LocalId, Occ)>,
 }
 
 impl Row {
@@ -89,328 +154,424 @@ impl Row {
     }
 }
 
-/// 葉の行き先。`locals` は join point の引数の順 (`Body::pat_bindings` の順) である。
-struct Target {
-    locals: Vec<LocalId>,
-    /// この行き先に届く葉の位置と、その葉が渡す出現。葉の式は、届く葉の数が分かってから埋める。
-    leaves: Vec<(CExprId, Vec<Atom>)>,
-}
-
-impl Target {
-    fn new(locals: Vec<LocalId>) -> Target {
-        Target {
-            locals,
-            leaves: Vec::new(),
-        }
-    }
-}
-
-/// 調べる値と、その型。型は、フィールドの変数が boxed かどうかを決めるのに使う。
-#[derive(Clone)]
-struct Occurrence {
-    atom: Atom,
-    ty: Type,
+/// `column` の出現を `fields` で置き換えた出現の列。
+fn splice(occs: &[Occ], column: usize, fields: impl IntoIterator<Item = Occ>) -> Vec<Occ> {
+    let mut occs = occs.to_vec();
+    occs.splice(column..=column, fields);
+    occs
 }
 
 impl FnLowering<'_> {
-    /// `match` の値を `exit` に渡す決定木を返す。枝の本体は先に組み立てておく。どの葉から届くかは決定木を作るまで
-    /// 分からないので、葉には仮の式を置く。決定木を作った後で、1つの葉からだけ届く枝は本体をその葉の位置に移す。
-    /// 残りの枝だけに join point の番号を取って決定木の外側に置き、葉をその join point への jump にする。枝ごとの
-    /// join point は互いの範囲に入れ子になるので、すべてを join point にすると、枝の数だけ深い連なりになるためである
-    /// (docs/spec/core-ir.md)。番号を決定木の後で取るのは、木に置かない
-    /// join point の番号を取らないためである。`FnBuilder::finish` は、番号を取った join point がすべて木にあることを
-    /// 求める。葉から届かない枝も join point にし、simplify の B4 が消す。
+    /// `match` を変換する。枝は枝の順に、そこへ向かうブロックがあるときだけ変換する。向かうブロックが1つなら
+    /// そのブロックで、2つ以上ならラベルを置いたブロックで変換する (docs/spec/core-ir.md)。
     pub(super) fn lower_match(
         &mut self,
         scrutinee: ExprId,
+        alias: Option<LocalId>,
         arms: &[MatchArm],
         exit: Exit,
-        out: &mut Bindings,
-    ) -> CExprId {
-        let value = self.atom(scrutinee, out);
-        let ty = self.ty(scrutinee);
-        let mut targets = Vec::new();
-        let mut bodies = Vec::new();
-        for arm in arms {
-            let (locals, params) = self.bind_params(arm.pat);
-            bodies.push((params, self.tail(arm.body, exit)));
-            targets.push(Target::new(locals));
-        }
-        let rows = arms
+    ) {
+        let pats = arms.iter().map(|arm| arm.pat).collect();
+        let passes_alias = arms
             .iter()
-            .enumerate()
-            .map(|(target, arm)| Row {
-                cells: vec![Cell::Pat(arm.pat)],
-                target,
-                bound: Vec::new(),
-            })
+            .map(|arm| alias.is_some_and(|alias| self.uses(arm.body, alias)))
             .collect();
-        let tree = self.decide(&[Occurrence { atom: value, ty }], rows, &mut targets);
-        for (target, (params, body)) in targets.into_iter().zip(bodies) {
-            if let [(leaf, args)] = target.leaves.as_slice() {
-                self.inline_arm(*leaf, &params, args, body);
-            } else {
-                let join = self.new_join();
-                self.jump_from_leaves(join, target.leaves);
-                out.push(Binding::Shared { join, params, body });
+        let labels = self.scrutinize(Scrutinee::Expr(scrutinee), pats, alias, passes_alias);
+        for (arm, label) in arms.iter().zip(labels) {
+            if let Some(args) = self.builder.resolve(label) {
+                self.bind_arm(arm.pat, alias, args);
+                self.tail_expr(arm.body, exit);
             }
         }
-        tree
     }
 
-    /// 1つの葉からだけ届く枝の本体を、その葉の位置に置く。引数は、葉が渡す出現の `let` にする。simplify の
-    /// B3 が jump が1つの join point を戻す形と同じである。
-    fn inline_arm(&mut self, leaf: CExprId, params: &[VarId], args: &[Atom], body: CExprId) {
-        let mut code = body;
-        for (&param, &arg) in params.iter().zip(args).rev() {
-            code = self.push(CExpr::Let {
-                var: param,
-                rhs: Rhs::Atom(arg),
-                body: code,
-            });
+    /// 値を調べるか分解する `let` と引数のパターン。枝が1つの `match` と同じに変換し、葉が1つなら今のブロックで、
+    /// 2つ以上なら変数を引数にした続きのブロックで、後を続ける (docs/spec/core-ir.md)。
+    pub(super) fn destructure(&mut self, pat: PatId, scrutinee: Scrutinee) {
+        let [label] = self.scrutinize(scrutinee, vec![pat], None, vec![false])[..] else {
+            unreachable!("one pattern has one label");
+        };
+        let args = self
+            .builder
+            .resolve(label)
+            .expect("some exit of the value reaches its only pattern");
+        self.bind_arm(pat, None, args);
+    }
+
+    /// パターンの変数 (と、渡されていれば `alias`) を、枝のラベルの引数の値に対応させる。
+    fn bind_arm(&mut self, pat: PatId, alias: Option<LocalId>, args: Vec<Atom>) {
+        let locals = self.body.pat_bindings(pat);
+        let mut args = args.into_iter();
+        for local in locals {
+            let value = args.next().expect("one argument per pattern variable");
+            self.locals.insert(local, value);
         }
-        self.builder.move_expr(code, leaf);
-    }
-
-    /// 行き先に届く葉を、すべて `join` への jump にする。
-    fn jump_from_leaves(&mut self, join: JoinId, leaves: Vec<(CExprId, Vec<Atom>)>) {
-        for (leaf, args) in leaves {
-            self.builder.set(leaf, CExpr::Jump { join, args });
+        if let Some(value) = args.next() {
+            let alias = alias.expect("only an alias is passed after the pattern variables");
+            self.locals.insert(alias, value);
         }
     }
 
-    /// 値を調べるか分解する `let` と引数のパターン。続きの式を本体にする join point の引数で変数を受け、枝が1つの
-    /// `match` と同じ決定木で値を分解する。jump は1つなので、simplify の B3 がその位置に戻す。
-    pub(super) fn destructure(&mut self, pat: PatId, value: Atom, ty: Type, out: &mut Bindings) {
-        let join = self.new_join();
-        let (locals, params) = self.bind_params(pat);
-        let rows = vec![Row {
-            cells: vec![Cell::Pat(pat)],
-            target: 0,
-            bound: Vec::new(),
-        }];
-        let mut targets = [Target::new(locals)];
-        let scope = self.decide(&[Occurrence { atom: value, ty }], rows, &mut targets);
-        let [target] = targets;
-        self.jump_from_leaves(join, target.leaves);
-        out.push(Binding::Join {
-            join,
-            params,
-            scope,
-        });
-    }
-
-    /// パターンが束縛する変数ごとに join point の引数の変数を作り、局所変数をそれに対応させる。
-    fn bind_params(&mut self, pat: PatId) -> (Vec<LocalId>, Vec<VarId>) {
-        let body = self.body;
-        let locals = body.pat_bindings(pat);
-        let params = locals
+    /// scrutinee を文脈 `Ctx::Match` で変換し、値の分からなかった出口で決定木を出す。枝のラベルを返す。
+    /// 分からない出口が1つならそのブロックに戻り、出現のまま決定木を作るので、タプルのリテラルの要素はそのまま
+    /// 決定木の列になる。2つ以上なら値を作って未知の値のラベルに集め、その引数で決定木を作る
+    /// (docs/spec/core-ir.md)。
+    fn scrutinize(
+        &mut self,
+        scrutinee: Scrutinee,
+        pats: Vec<PatId>,
+        alias: Option<LocalId>,
+        passes_alias: Vec<bool>,
+    ) -> Vec<Label> {
+        let ty = match &scrutinee {
+            Scrutinee::Expr(expr) => self.ty(*expr),
+            Scrutinee::Occ(occ) => occ.ty().clone(),
+        };
+        let arms: Vec<Label> = pats
             .iter()
-            .map(|&local| {
-                let ty = self
-                    .types
-                    .locals
-                    .get(local)
-                    .cloned()
-                    .expect("every local is typed");
-                let var = self.new_var(&body.locals[local].name, &ty);
-                self.locals.insert(local, Atom::Var(var));
-                var
+            .zip(&passes_alias)
+            .map(|(&pat, &passes)| {
+                let mut params: Vec<VarInfo> = self
+                    .body
+                    .pat_bindings(pat)
+                    .into_iter()
+                    .map(|local| self.local_info(local))
+                    .collect();
+                if passes {
+                    params.push(self.local_info(alias.expect("only an alias is passed")));
+                }
+                self.builder.new_label(params)
             })
             .collect();
-        (locals, params)
+        self.contexts.push(Ctx::Match(MatchCtx {
+            pats,
+            arms: arms.clone(),
+            passes_alias,
+            unknown: Vec::new(),
+        }));
+        let ctx = CtxId(self.contexts.len() - 1);
+        match scrutinee {
+            Scrutinee::Expr(expr) => self.tail_expr(expr, Exit::Scrutinize(ctx)),
+            Scrutinee::Occ(occ) => self.select(ctx, occ),
+        }
+        let mut unknown = mem::take(&mut self.match_ctx(ctx).unknown);
+        let root = match unknown.len() {
+            0 => None,
+            1 => {
+                let (block, occ) = unknown.pop().expect("one exit");
+                self.builder.reopen(block);
+                Some(occ)
+            }
+            _ => {
+                let name = alias.map_or("c", |alias| self.body.locals[alias].name.as_str());
+                let merge = self.builder.new_label(vec![var_info(name, &ty, self.hir)]);
+                for (block, occ) in unknown {
+                    self.builder.reopen(block);
+                    let value = self.materialize(occ);
+                    self.builder.jump(merge, vec![value]);
+                }
+                let args = self.builder.resolve(merge).expect("two exits reach it");
+                let [value] = args[..] else {
+                    unreachable!("the unknown label takes the value");
+                };
+                Some(Occ::Atom(value, ty))
+            }
+        };
+        if let Some(root) = root {
+            let rows = self.rows(ctx);
+            let decision = self
+                .decide(std::slice::from_ref(&root), rows, false)
+                .expect("a full decision tree always exists");
+            self.emit(decision, ctx, &root);
+        }
+        arms
     }
 
-    /// 行列から決定木を作り、その根の式を返す。最初の行がすべてワイルドカードなら葉にする。そうでなければ、最初の行で
-    /// 値を調べるいちばん左の欄を選び、その欄の種類で分ける。行列は網羅性の検査を通っているので、空にならない。
-    fn decide(
-        &mut self,
-        occurrences: &[Occurrence],
-        mut rows: Vec<Row>,
-        targets: &mut [Target],
-    ) -> CExprId {
+    fn match_ctx(&mut self, ctx: CtxId) -> &mut MatchCtx {
+        let Ctx::Match(context) = &mut self.contexts[ctx.0] else {
+            unreachable!("the context matches data");
+        };
+        context
+    }
+
+    fn rows(&mut self, ctx: CtxId) -> Vec<Row> {
+        self.match_ctx(ctx)
+            .pats
+            .iter()
+            .enumerate()
+            .map(|(arm, &pat)| Row {
+                cells: vec![Cell::Pat(pat)],
+                arm,
+                bound: Vec::new(),
+            })
+            .collect()
+    }
+
+    /// 文脈 `Ctx::Match` に出口の値を渡す。値を調べずに1つの枝に行き着けば、その枝のラベルへ向かい、コンストラクタは
+    /// 作らない。行き着かなければ、今のブロックを開いたまま、値の分からない出口として残す。
+    pub(super) fn select_arm(&mut self, ctx: CtxId, occ: Occ) {
+        let rows = self.rows(ctx);
+        match self.decide(std::slice::from_ref(&occ), rows, true) {
+            Some(leaf) => self.emit(leaf, ctx, &occ),
+            None => {
+                let block = self.builder.suspend();
+                self.match_ctx(ctx).unknown.push((block, occ));
+            }
+        }
+    }
+
+    /// 出現の値のアトム。値をまだ作っていなければ、ここで作る。
+    pub(super) fn materialize(&mut self, occ: Occ) -> Atom {
+        match occ {
+            Occ::Atom(atom, _) => atom,
+            Occ::Con {
+                value: Some(value), ..
+            } => value,
+            Occ::Con {
+                tag,
+                fields,
+                value: None,
+                ty,
+            } => {
+                let args = fields
+                    .into_iter()
+                    .map(|field| self.materialize(field))
+                    .collect();
+                self.bind("d", &ty, Rhs::Con { tag, args })
+            }
+        }
+    }
+
+    /// 式の出現。scrutinee の位置にあるタプルのリテラルとコンストラクタの適用は、値を作らずに要素の出現を持つ。
+    /// 要素は左から評価する (docs/spec/expressions.md の「関数適用」)。
+    pub(super) fn occurrence(&mut self, id: ExprId) -> Occ {
         let body = self.body;
+        match &body.exprs[id].kind {
+            ExprKind::Annot { expr, .. } => self.occurrence(*expr),
+            ExprKind::Tuple(elements) => {
+                let fields = elements
+                    .iter()
+                    .map(|&element| self.occurrence(element))
+                    .collect();
+                Occ::Con {
+                    tag: TUPLE,
+                    fields,
+                    value: None,
+                    ty: self.ty(id),
+                }
+            }
+            ExprKind::Call { callee, args }
+                if matches!(
+                    body.exprs[*callee].kind,
+                    ExprKind::Path(Res::Item(ValueItem::Constructor(ctor)))
+                        if self.hir[ctor].fields.len() == args.len()
+                ) =>
+            {
+                let ExprKind::Path(Res::Item(ValueItem::Constructor(ctor))) =
+                    body.exprs[*callee].kind
+                else {
+                    unreachable!("checked above");
+                };
+                let fields = args.iter().map(|&arg| self.occurrence(arg)).collect();
+                Occ::Con {
+                    tag: self.hir[ctor].tag,
+                    fields,
+                    value: None,
+                    ty: self.ty(id),
+                }
+            }
+            _ => {
+                let atom = self.atom(id);
+                Occ::Atom(atom, self.ty(id))
+            }
+        }
+    }
+
+    /// アトムの出現を、分かっている範囲で開く。引数のないコンストラクタのタグと、同じ関数で `con` で作った変数は、
+    /// 頭のコンストラクタが分かる。フィールドは開かずにアトムのまま持ち、決定木がその欄を選んだときに開く。
+    /// 長い `con` の連なりで再帰しないためである。
+    fn expand(&self, occ: Occ) -> Occ {
+        match occ {
+            Occ::Atom(Atom::Tag(tag), ty) => Occ::Con {
+                tag,
+                fields: Vec::new(),
+                value: Some(Atom::Tag(tag)),
+                ty,
+            },
+            Occ::Atom(Atom::Var(var), ty) => match self.cons.get(&var) {
+                Some(known) => {
+                    let types = self.con_field_types(known.tag, &known.ty, known.args.len());
+                    Occ::Con {
+                        tag: known.tag,
+                        fields: known
+                            .args
+                            .iter()
+                            .zip(types)
+                            .map(|(&arg, ty)| Occ::Atom(arg, ty))
+                            .collect(),
+                        value: Some(Atom::Var(var)),
+                        ty,
+                    }
+                }
+                None => Occ::Atom(Atom::Var(var), ty),
+            },
+            other => other,
+        }
+    }
+
+    /// 行列から決定木を作る。最初の行がすべてワイルドカードなら葉にする。そうでなければ、最初の行で値を調べる
+    /// いちばん左の欄を選ぶ。出現の頭が分かっていれば、その場で case を選んで続ける。`statically` なら、値を調べる
+    /// 必要が出たところで `None` を返し、変数を作らない。行列は網羅性の検査を通っているので、空にならない。
+    fn decide(&mut self, occs: &[Occ], mut rows: Vec<Row>, statically: bool) -> Option<Decision> {
+        let body = self.body;
+        let hir = self.hir;
         let first = rows.first().expect("type-checked patterns are exhaustive");
         let Some(column) = first
             .cells
             .iter()
-            .position(|&cell| !matches!(head(body, cell), Head::Any(_)))
+            .position(|&cell| !matches!(head(body, hir, cell), Head::Any(_)))
         else {
-            return self.leaf(occurrences, rows.swap_remove(0), targets);
+            return Some(leaf(body, hir, occs, rows.swap_remove(0)));
         };
         let cell = first.cells[column];
-        let occurrence = occurrences[column].atom;
+        let occ = self.expand(occs[column].clone());
         // 変数のパターンはこの欄の出現を受け、以後はワイルドカードとして扱う
         for row in &mut rows {
-            if let Head::Any(Some(local)) = head(body, row.cells[column]) {
-                row.bound.push((local, occurrence));
+            if let Head::Any(Some(local)) = head(body, hir, row.cells[column]) {
+                row.bound.push((local, occ.clone()));
             }
         }
-        match head(body, cell) {
-            Head::Con(ctor, _) => {
-                self.switch_constructors(occurrences, &rows, column, ctor, targets)
+        match (head(body, hir, cell), occ) {
+            (Head::Con(..) | Head::Tuple(_), Occ::Con { tag, fields, .. }) => {
+                let rows = specialize(body, hir, &rows, column, tag, fields.len());
+                self.decide(&splice(occs, column, fields), rows, statically)
             }
-            Head::Tuple(elements) => {
-                self.switch_tuple(occurrences, &rows, column, elements.len(), targets)
+            (Head::Literal(_), Occ::Atom(Atom::Int(n), _)) => {
+                let literal = Literal::Int(n);
+                let rows = remove_column(body, hir, &rows, column, Some(&literal));
+                let remaining = splice(occs, column, []);
+                self.decide(&remaining, rows, statically)
             }
-            Head::Literal(_) => self.compare_literals(occurrences, &rows, column, targets),
-            Head::Any(_) => unreachable!("the chosen column is not a wildcard"),
+            _ if statically => None,
+            (Head::Tuple(elements), Occ::Atom(value, ty)) => {
+                let types = tuple_field_types(&ty, elements.len());
+                self.single(occs, &rows, column, TUPLE, value, types)
+            }
+            (Head::Con(ctor, _), Occ::Atom(value, ty)) if single_constructor(hir, ctor) => {
+                let types = self.field_types(ctor, &ty);
+                self.single(occs, &rows, column, hir[ctor].tag, value, types)
+            }
+            (Head::Con(ctor, _), Occ::Atom(value, ty)) => {
+                Some(self.switch_constructors(occs, &rows, column, ctor, value, &ty))
+            }
+            (Head::Literal(_), Occ::Atom(value, _)) => {
+                Some(self.compare_literals(occs, &rows, column, value))
+            }
+            (Head::Literal(_), Occ::Con { .. }) => {
+                unreachable!("a literal pattern never meets a constructor")
+            }
+            (Head::Any(_), _) => unreachable!("the chosen column is not a wildcard"),
         }
     }
 
+    /// コンストラクタが1つだけの型 (タプルを含む) の欄。値を調べずに分解する。`Unpack` は値が `obj` の変数のときだけ
+    /// 出し、型変数として扱う値 (`tobj`) は、case が1つの `switch` で分解する (docs/spec/core-ir.md の R8)。
+    fn single(
+        &mut self,
+        occs: &[Occ],
+        rows: &[Row],
+        column: usize,
+        tag: u32,
+        value: Atom,
+        types: Vec<Type>,
+    ) -> Option<Decision> {
+        let fields = self.field_vars(rows, column, tag, &types);
+        let rows = specialize(self.body, self.hir, rows, column, tag, fields.len());
+        let field_occs = fields
+            .iter()
+            .zip(types)
+            .map(|(&field, ty)| Occ::Atom(Atom::Var(field), ty));
+        let next = self.decide(&splice(occs, column, field_occs), rows, false)?;
+        Some(match value {
+            Atom::Var(var) if self.builder.repr(var) == Repr::Obj => Decision::Unpack {
+                value: var,
+                tag,
+                fields,
+                next: Box::new(next),
+            },
+            _ => Decision::Switch {
+                scrutinee: value,
+                cases: vec![(CasePattern::Tag(tag), fields, next)],
+                default: None,
+            },
+        })
+    }
+
     /// コンストラクタの欄。欄に現れるコンストラクタの case と、現れないコンストラクタがあればそれを受ける `default`
-    /// を持つ `Switch` にする。
+    /// を持つ `switch` にする。現れないコンストラクタは、どれもワイルドカードの行だけの同じ行列に進むので、1つの
+    /// `default` にまとめる。
     fn switch_constructors(
         &mut self,
-        occurrences: &[Occurrence],
+        occs: &[Occ],
         rows: &[Row],
         column: usize,
         ctor: ConstructorId,
-        targets: &mut [Target],
-    ) -> CExprId {
+        scrutinee: Atom,
+        ty: &Type,
+    ) -> Decision {
         let body = self.body;
         let hir = self.hir;
-        let occurrence = occurrences[column].clone();
         let TypeDefKind::Data { constructors } = &hir[hir[ctor].ty].kind else {
             unreachable!("constructor patterns belong to data types")
         };
-        let mentions = |ctor: ConstructorId, row: &Row| match head(body, row.cells[column]) {
-            Head::Con(other, _) => other == ctor,
-            _ => false,
-        };
-        let default = if constructors
-            .iter()
-            .all(|&ctor| rows.iter().any(|row| mentions(ctor, row)))
-        {
-            None
-        } else {
-            // 選んだ欄に現れないコンストラクタは、どれもワイルドカードの行だけの同じ行列に進む。1つの `default` に
-            // まとめ、コンストラクタごとの枝と join point を作らない (docs/spec/core-ir.md)
-            let mut remaining = occurrences.to_vec();
-            remaining.remove(column);
-            let otherwise: Vec<Row> = rows
-                .iter()
-                .filter(|row| matches!(head(body, row.cells[column]), Head::Any(_)))
-                .map(|row| row.replace(column, []))
-                .collect();
-            Some(self.decide(&remaining, otherwise, targets))
-        };
+        let mentions = |ctor: ConstructorId, row: &Row| matches!(head(body, hir, row.cells[column]), Head::Con(other, _) if other == ctor);
         let mut cases = Vec::new();
         for &ctor in constructors {
             if !rows.iter().any(|row| mentions(ctor, row)) {
                 continue;
             }
-            let field_types = self.field_types(ctor, &occurrence.ty);
-            let (fields, code) = self.branch(
-                occurrences,
-                rows,
-                column,
-                Shape::Con(ctor),
-                field_types,
-                targets,
-            );
-            cases.push(Case {
-                pattern: CasePattern::Tag(hir[ctor].tag),
-                fields,
-                body: code,
-            });
+            let tag = hir[ctor].tag;
+            let types = self.field_types(ctor, ty);
+            let fields = self.field_vars(rows, column, tag, &types);
+            let specialized = specialize(body, hir, rows, column, tag, fields.len());
+            let field_occs = fields
+                .iter()
+                .zip(types)
+                .map(|(&field, ty)| Occ::Atom(Atom::Var(field), ty));
+            let next = self
+                .decide(&splice(occs, column, field_occs), specialized, false)
+                .expect("a full decision tree always exists");
+            cases.push((CasePattern::Tag(tag), fields, next));
         }
-        self.push(CExpr::Switch {
-            scrutinee: occurrence.atom,
+        let default = (cases.len() < constructors.len()).then(|| {
+            let otherwise = remove_column(body, hir, rows, column, None);
+            let next = self
+                .decide(&splice(occs, column, []), otherwise, false)
+                .expect("a full decision tree always exists");
+            Box::new(next)
+        });
+        Decision::Switch {
+            scrutinee,
             cases,
             default,
-        })
+        }
     }
 
-    /// タプルの欄。タグ 0 のコンストラクタが1つの型として、枝が1つの `Switch` で分解する (docs/spec/core-ir.md)。
-    /// コンストラクタの集合はつねにそろっているので、残りの行列はない。
-    fn switch_tuple(
-        &mut self,
-        occurrences: &[Occurrence],
-        rows: &[Row],
-        column: usize,
-        arity: usize,
-        targets: &mut [Target],
-    ) -> CExprId {
-        let occurrence = occurrences[column].clone();
-        let field_types = tuple_field_types(&occurrence.ty, arity);
-        let (fields, code) = self.branch(
-            occurrences,
-            rows,
-            column,
-            Shape::Tuple,
-            field_types,
-            targets,
-        );
-        self.push(CExpr::Switch {
-            scrutinee: occurrence.atom,
-            cases: vec![Case {
-                pattern: CasePattern::Tag(TUPLE),
-                fields,
-                body: code,
-            }],
-            default: None,
-        })
-    }
-
-    /// `shape` の枝。フィールドを新しい出現として束縛し、行列を特殊化して決定木を続ける。フィールドは元の欄の位置に
-    /// 並べる。左から深さ優先で欄を選ぶためである。
-    fn branch(
-        &mut self,
-        occurrences: &[Occurrence],
-        rows: &[Row],
-        column: usize,
-        shape: Shape,
-        field_types: Vec<Type>,
-        targets: &mut [Target],
-    ) -> (Vec<VarId>, CExprId) {
-        let body = self.body;
-        let fields: Vec<VarId> = field_types
-            .iter()
-            .enumerate()
-            .map(|(index, ty)| {
-                let name = field_name(body, rows, column, shape, index);
-                self.new_var(&name, ty)
-            })
-            .collect();
-        let mut specialized_occurrences = occurrences[..column].to_vec();
-        specialized_occurrences.extend(fields.iter().zip(&field_types).map(|(&var, ty)| {
-            Occurrence {
-                atom: Atom::Var(var),
-                ty: ty.clone(),
-            }
-        }));
-        specialized_occurrences.extend_from_slice(&occurrences[column + 1..]);
-        let specialized: Vec<Row> = rows
-            .iter()
-            .filter_map(|row| match head(body, row.cells[column]) {
-                Head::Any(_) => Some(row.replace(column, fields.iter().map(|_| Cell::Any))),
-                other => shape_args(other, shape)
-                    .map(|args| row.replace(column, args.iter().map(|&arg| Cell::Pat(arg)))),
-            })
-            .collect();
-        let code = self.decide(&specialized_occurrences, specialized, targets);
-        (fields, code)
-    }
-
-    /// リテラルの欄。上の行から現れる異なるリテラルの順に case を並べた1つの `Switch` にする。case はそのリテラルで
-    /// 特殊化した行列に、`default` はワイルドカードの行だけの行列に進む。リテラルは無限にあるので、網羅性の検査を
-    /// 通った行列では `default` の行列が空にならない (docs/spec/exhaustiveness.md)。比べる命令の連なりにしないのは、
-    /// リテラルの数だけ入れ子が深くならないようにするため (docs/spec/core-ir.md)。
+    /// リテラルの欄。上の行から現れる異なるリテラルの順に case を並べた1つの `switch` にする。リテラルは無限にあるので、
+    /// 網羅性の検査を通った行列では `default` の行列が空にならない (docs/spec/exhaustiveness.md)。
     fn compare_literals(
         &mut self,
-        occurrences: &[Occurrence],
+        occs: &[Occ],
         rows: &[Row],
         column: usize,
-        targets: &mut [Target],
-    ) -> CExprId {
+        scrutinee: Atom,
+    ) -> Decision {
         let body = self.body;
-        let scrutinee = occurrences[column].atom;
-        let mut remaining = occurrences.to_vec();
-        remaining.remove(column);
+        let hir = self.hir;
+        let remaining = splice(occs, column, []);
         let mut literals: Vec<&Literal> = Vec::new();
         for row in rows {
-            if let Head::Literal(literal) = head(body, row.cells[column])
+            if let Head::Literal(literal) = head(body, hir, row.cells[column])
                 && !literals.contains(&literal)
             {
                 literals.push(literal);
@@ -418,33 +579,134 @@ impl FnLowering<'_> {
         }
         let mut cases = Vec::new();
         for literal in literals {
-            let specialized: Vec<Row> = rows
-                .iter()
-                .filter(|row| match head(body, row.cells[column]) {
-                    Head::Literal(other) => other == literal,
-                    Head::Any(_) => true,
-                    Head::Con(..) | Head::Tuple(_) => false,
-                })
-                .map(|row| row.replace(column, []))
-                .collect();
-            let code = self.decide(&remaining, specialized, targets);
-            cases.push(Case {
-                pattern: self.literal_pattern(literal),
-                fields: Vec::new(),
-                body: code,
-            });
+            let specialized = remove_column(body, hir, rows, column, Some(literal));
+            let next = self
+                .decide(&remaining, specialized, false)
+                .expect("a full decision tree always exists");
+            cases.push((self.literal_pattern(literal), Vec::new(), next));
         }
-        let otherwise: Vec<Row> = rows
-            .iter()
-            .filter(|row| matches!(head(body, row.cells[column]), Head::Any(_)))
-            .map(|row| row.replace(column, []))
-            .collect();
-        let default = self.decide(&remaining, otherwise, targets);
-        self.push(CExpr::Switch {
+        let otherwise = remove_column(body, hir, rows, column, None);
+        let default = self
+            .decide(&remaining, otherwise, false)
+            .expect("a full decision tree always exists");
+        Decision::Switch {
             scrutinee,
             cases,
-            default: Some(default),
-        })
+            default: Some(Box::new(default)),
+        }
+    }
+
+    /// 決定木をブロックに出す。`switch` の行き先は case の順、`default` の順に作る。葉は、枝のパターンの変数と、
+    /// 枝が使えば値全体 (`root`) を作って、枝のラベルへ向かう。
+    fn emit(&mut self, decision: Decision, ctx: CtxId, root: &Occ) {
+        match decision {
+            Decision::Switch {
+                scrutinee,
+                cases,
+                default,
+            } => {
+                let targets: Vec<BlockId> =
+                    cases.iter().map(|_| self.builder.new_block()).collect();
+                let default_target = default.as_ref().map(|_| self.builder.new_block());
+                let mut nexts = Vec::with_capacity(cases.len());
+                let cases = cases
+                    .into_iter()
+                    .zip(&targets)
+                    .map(|((pattern, fields, next), &target)| {
+                        nexts.push(next);
+                        Case {
+                            pattern,
+                            fields,
+                            target,
+                        }
+                    })
+                    .collect();
+                self.builder.terminate(Term::Switch {
+                    scrutinee,
+                    cases,
+                    default: default_target,
+                });
+                for (next, target) in nexts.into_iter().zip(targets) {
+                    self.builder.reopen(target);
+                    self.emit(next, ctx, root);
+                }
+                if let (Some(next), Some(target)) = (default, default_target) {
+                    self.builder.reopen(target);
+                    self.emit(*next, ctx, root);
+                }
+            }
+            Decision::Unpack {
+                value,
+                tag,
+                fields,
+                next,
+            } => {
+                self.builder.emit(Stmt::Unpack { value, tag, fields });
+                self.emit(*next, ctx, root);
+            }
+            Decision::Leaf { arm, bound } => {
+                let context = self.match_ctx(ctx);
+                let (pat, label, passes) = (
+                    context.pats[arm],
+                    context.arms[arm],
+                    context.passes_alias[arm],
+                );
+                let mut args = Vec::new();
+                for local in self.body.pat_bindings(pat) {
+                    let (_, occ) = bound
+                        .iter()
+                        .find(|(bound, _)| *bound == local)
+                        .expect("every pattern variable is bound on the way to its leaf");
+                    args.push(self.materialize(occ.clone()));
+                }
+                if passes {
+                    args.push(self.materialize(root.clone()));
+                }
+                self.builder.jump(label, args);
+            }
+        }
+    }
+
+    /// フィールドの変数。その位置を変数のパターンで受ける行があれば、その変数の名前にする。
+    fn field_vars(&mut self, rows: &[Row], column: usize, tag: u32, types: &[Type]) -> Vec<VarId> {
+        let body = self.body;
+        let hir = self.hir;
+        types
+            .iter()
+            .enumerate()
+            .map(|(index, ty)| {
+                let name = rows
+                    .iter()
+                    .find_map(|row| {
+                        let args = shape_args(hir, head(body, hir, row.cells[column]), tag)?;
+                        match head(body, hir, Cell::Pat(args[index])) {
+                            Head::Any(Some(local)) => Some(body.locals[local].name.as_str()),
+                            _ => None,
+                        }
+                    })
+                    .unwrap_or("x");
+                self.builder.var(var_info(name, ty, hir))
+            })
+            .collect()
+    }
+
+    /// 局所変数を受けるラベルの引数。
+    fn local_info(&self, local: LocalId) -> VarInfo {
+        let ty = self.types.locals.get(local).expect("every local is typed");
+        var_info(&self.body.locals[local].name, ty, self.hir)
+    }
+
+    /// 式 `root` の中で局所変数 `local` を使うか。`let x = S; match x` の枝が `x` を使うかを決める。
+    fn uses(&self, root: ExprId, local: LocalId) -> bool {
+        let mut work = vec![root];
+        while let Some(id) = work.pop() {
+            if matches!(self.body.exprs[id].kind, ExprKind::Path(Res::Local(used)) if used == local)
+            {
+                return true;
+            }
+            self.body.walk_child_exprs(id, |child| work.push(child));
+        }
+        false
     }
 
     /// リテラルのパターンの case。`String` は文字列定数の表に入れる。
@@ -456,35 +718,26 @@ impl FnLowering<'_> {
         }
     }
 
-    /// 葉。最初の行の残りの変数を束縛し、その行の行き先に、引数の順に出現を記録する。葉の式は、行き先に届く葉の数が
-    /// 分かってから、枝の本体か jump で埋める。ここでは仮の式を置き、その位置を返す。
-    fn leaf(&mut self, occurrences: &[Occurrence], row: Row, targets: &mut [Target]) -> CExprId {
-        let body = self.body;
-        let mut bound = row.bound;
-        for (&cell, occurrence) in row.cells.iter().zip(occurrences) {
-            if let Head::Any(Some(local)) = head(body, cell) {
-                bound.push((local, occurrence.atom));
-            }
+    /// `con` で作った値のフィールドの型。
+    fn con_field_types(&self, tag: u32, ty: &Type, arity: usize) -> Vec<Type> {
+        match ty {
+            Type::Con { id, .. } => match &self.hir[*id].kind {
+                TypeDefKind::Data { constructors } => {
+                    let ctor = constructors
+                        .iter()
+                        .copied()
+                        .find(|&ctor| self.hir[ctor].tag == tag)
+                        .expect("the tag names a constructor of the type");
+                    self.field_types(ctor, ty)
+                }
+                TypeDefKind::Extern(_) => unreachable!("an extern type has no constructors"),
+            },
+            _ => tuple_field_types(ty, arity),
         }
-        let target = &mut targets[row.target];
-        let args: Vec<Atom> = target
-            .locals
-            .iter()
-            .map(|local| {
-                bound
-                    .iter()
-                    .find(|(bound, _)| bound == local)
-                    .map(|&(_, atom)| atom)
-                    .expect("every pattern variable is bound on the way to its leaf")
-            })
-            .collect();
-        let slot = self.push(CExpr::Return(Atom::Unit));
-        target.leaves.push((slot, args));
-        slot
     }
 
     /// コンストラクタのフィールドの型。スキームの型引数を、調べる値の型の引数で置き換える。値の型が型構成子の適用で
-    /// なければ置き換えず、型変数のままにする。型変数の値は boxed として扱うので、多めに RC の対象になるだけで正しく
+    /// なければ置き換えず、型変数のままにする。型変数の値は `tobj` として扱うので、多めに RC の対象になるだけで正しく
     /// 動く (docs/spec/core-ir.md)。
     fn field_types(&self, ctor: ConstructorId, ty: &Type) -> Vec<Type> {
         let constructor = &self.hir[ctor];
@@ -508,22 +761,60 @@ impl FnLowering<'_> {
     }
 }
 
-/// フィールドの変数の名前。その位置を変数のパターンで受ける行があれば、その変数の名前にする。
-fn field_name(body: &Body, rows: &[Row], column: usize, shape: Shape, index: usize) -> String {
+/// 葉。最初の行の残りの変数を束縛する。
+fn leaf(body: &Body, hir: &HirProgram, occs: &[Occ], row: Row) -> Decision {
+    let mut bound = row.bound;
+    for (&cell, occ) in row.cells.iter().zip(occs) {
+        if let Head::Any(Some(local)) = head(body, hir, cell) {
+            bound.push((local, occ.clone()));
+        }
+    }
+    Decision::Leaf {
+        arm: row.arm,
+        bound,
+    }
+}
+
+/// タグ `tag` のコンストラクタ (タプル) で行列を特殊化する。そのコンストラクタの行はフィールドのパターンに、
+/// ワイルドカードの行は `arity` 個のワイルドカードに置き換え、ほかのコンストラクタの行は落とす。
+fn specialize(
+    body: &Body,
+    hir: &HirProgram,
+    rows: &[Row],
+    column: usize,
+    tag: u32,
+    arity: usize,
+) -> Vec<Row> {
     rows.iter()
-        .find_map(|row| {
-            let args = shape_args(head(body, row.cells[column]), shape)?;
-            match head(body, Cell::Pat(args[index])) {
-                Head::Any(Some(local)) => Some(body.locals[local].name.clone()),
-                _ => None,
-            }
+        .filter_map(|row| match head(body, hir, row.cells[column]) {
+            Head::Any(_) => Some(row.replace(column, (0..arity).map(|_| Cell::Any))),
+            other => shape_args(hir, other, tag)
+                .map(|args| row.replace(column, args.iter().map(|&arg| Cell::Pat(arg)))),
         })
-        .unwrap_or_else(|| "x".to_string())
+        .collect()
+}
+
+/// 欄 `column` が `literal` の行とワイルドカードの行を残し、その欄を除いた行列。`literal` が `None` ならワイルドカード
+/// の行だけを残す。リテラルの case と、コンストラクタとリテラルの欄の `default` に使う。
+fn remove_column(
+    body: &Body,
+    hir: &HirProgram,
+    rows: &[Row],
+    column: usize,
+    literal: Option<&Literal>,
+) -> Vec<Row> {
+    rows.iter()
+        .filter(|row| match head(body, hir, row.cells[column]) {
+            Head::Any(_) => true,
+            Head::Literal(other) => Some(other) == literal,
+            Head::Con(..) | Head::Tuple(_) => false,
+        })
+        .map(|row| row.replace(column, []))
+        .collect()
 }
 
 /// タプルの要素の型。型検査はタプルを数字ラベルの閉じたレコードにし、ラベルの順に並べる (docs/spec/records.md)。
-/// レコードでなければ置き換えずに型変数として扱う。型変数の値は boxed として扱うので、多めに RC の対象になるだけで
-/// 正しく動く。
+/// レコードでなければ置き換えずに型変数として扱う。
 fn tuple_field_types(ty: &Type, arity: usize) -> Vec<Type> {
     match ty {
         Type::Record(fields) if fields.len() == arity => {
@@ -533,7 +824,7 @@ fn tuple_field_types(ty: &Type, arity: usize) -> Vec<Type> {
     }
 }
 
-/// スキームの型の中の型引数 (`names`) を `args` で置き換える。関数型と継続は中身によらず boxed で、パターンで
+/// スキームの型の中の型引数 (`names`) を `args` で置き換える。関数型と継続は中身によらず `tobj` で、パターンで
 /// 分解もしないので、中を置き換えなくてよい。
 fn substitute(ty: &Type, names: &[String], args: &[Type]) -> Type {
     match ty {
