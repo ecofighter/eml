@@ -244,15 +244,13 @@ fn string_bytes_written_counts_the_contents_of_string_objects() {
     let s = string(&mut heap, "abc");
     let end = bottom(&mut heap);
     assert_eq!(heap.string_bytes_written(), 3);
-    // 一意な文字列は、取り出しても写さない
     let t = string(&mut heap, "de");
-    assert_eq!(heap.take_or_copy(t), Ok(Payload::Str("de".to_string())));
     assert_eq!(heap.string_bytes_written(), 5);
-    // 共有された文字列は、取り出すときに中身を写す
-    heap.dup(s).unwrap();
-    assert_eq!(heap.take_or_copy(s), Ok(Payload::Str("abc".to_string())));
-    assert_eq!(heap.string_bytes_written(), 8);
+    // 連結は、右辺の中身を左辺の後ろに書く
+    assert_eq!(heap.append_str(s, t), Ok(2));
+    assert_eq!(heap.string_bytes_written(), 7);
     heap.decref(s).unwrap();
+    heap.decref(t).unwrap();
     heap.decref(end).unwrap();
     assert!(heap.live_objects().is_empty());
 }
@@ -271,8 +269,17 @@ fn take_requires_a_unique_object() {
 #[test]
 fn take_or_copy_takes_a_unique_object() {
     let mut heap = Heap::new();
-    let s = string(&mut heap, "a");
-    assert_eq!(heap.take_or_copy(s), Ok(Payload::Str("a".to_string())));
+    let closure = heap.alloc(Payload::Closure(Closure {
+        function: 0,
+        args: vec![Value::Int(1)],
+    }));
+    assert_eq!(
+        heap.take_or_copy(closure),
+        Ok(Payload::Closure(Closure {
+            function: 0,
+            args: vec![Value::Int(1)],
+        }))
+    );
     assert!(heap.live_objects().is_empty());
 }
 
@@ -296,6 +303,33 @@ fn take_or_copy_copies_a_shared_object_and_its_children() {
     // 元のクロージャと写した中身が、捕まえた文字列の参照を1つずつ持つ
     heap.decref(closure).unwrap();
     heap.decref(s).unwrap();
+    assert!(heap.live_objects().is_empty());
+}
+
+#[test]
+fn take_or_copy_refuses_data_strings_and_files() {
+    let mut heap = Heap::new();
+    let s = string(&mut heap, "a");
+    let data = heap.alloc(Payload::Data {
+        tag: 1,
+        fields: vec![Value::Obj(s)],
+    });
+    let dropped = Rc::new(Cell::new(false));
+    let f = file(&mut heap, &dropped);
+    // 物体の種類だけで断り、一意かどうかは見ない
+    for obj in [s, data, f] {
+        assert_eq!(heap.take_or_copy(obj), Err(HeapError::NotCopyable));
+    }
+    heap.dup(data).unwrap();
+    assert_eq!(heap.take_or_copy(data), Err(HeapError::NotCopyable));
+    // 断った `take_or_copy` は参照を手放さない
+    assert_eq!((rc(&heap, data), rc(&heap, s), rc(&heap, f)), (2, 1, 1));
+    assert_eq!((heap.rc_increments(), heap.rc_decrements()), (1, 0));
+    assert!(!dropped.get());
+    heap.decref(data).unwrap();
+    heap.decref(data).unwrap();
+    heap.decref(f).unwrap();
+    assert!(dropped.get());
     assert!(heap.live_objects().is_empty());
 }
 
@@ -522,51 +556,6 @@ fn a_data_object_releases_its_fields() {
     assert!(heap.live_objects().is_empty());
 }
 
-#[test]
-fn take_or_copy_takes_a_unique_data_object_with_its_fields() {
-    let mut heap = Heap::new();
-    let s = string(&mut heap, "a");
-    let data = heap.alloc(Payload::Data {
-        tag: 1,
-        fields: vec![Value::Obj(s)],
-    });
-    assert_eq!(
-        heap.take_or_copy(data),
-        Ok(Payload::Data {
-            tag: 1,
-            fields: vec![Value::Obj(s)],
-        })
-    );
-    // 箱は解放され、フィールドの参照は取り出した側に移る
-    assert_eq!(heap.live_objects(), [("String".to_string(), 1)]);
-    heap.decref(s).unwrap();
-    assert!(heap.live_objects().is_empty());
-}
-
-#[test]
-fn take_or_copy_copies_a_shared_data_object_and_dups_its_fields() {
-    let mut heap = Heap::new();
-    let s = string(&mut heap, "a");
-    let data = heap.alloc(Payload::Data {
-        tag: 1,
-        fields: vec![Value::Obj(s), Value::Int(2)],
-    });
-    heap.dup(data).unwrap();
-    let copy = heap.take_or_copy(data).unwrap();
-    assert_eq!(
-        copy,
-        Payload::Data {
-            tag: 1,
-            fields: vec![Value::Obj(s), Value::Int(2)],
-        }
-    );
-    // 元の箱と取り出したフィールドが、文字列の参照を1つずつ持つ
-    heap.decref(data).unwrap();
-    assert_eq!(heap.live_objects(), [("String".to_string(), 1)]);
-    heap.decref(s).unwrap();
-    assert!(heap.live_objects().is_empty());
-}
-
 /// 捨てられたことを旗で知らせる読み出し口。
 struct Flagged(Rc<Cell<bool>>);
 
@@ -622,8 +611,8 @@ fn a_shared_file_is_not_copied() {
     heap.dup(f).unwrap();
     assert!(matches!(heap.take_or_copy(f), Err(HeapError::NotCopyable)));
     assert!(!dropped.get());
-    // take_or_copy did not decref when it returned error, so refcount is still 2.
-    // Release both references to verify no leak or double-free.
+    // `File` は参照の数によらず写さない。断った `take_or_copy` は参照を手放さないので、数は 2 のままである。
+    // 2つの参照を手放して、漏れも二重の解放もないことを確かめる
     heap.decref(f).unwrap();
     heap.decref(f).unwrap();
     assert!(dropped.get());
@@ -767,18 +756,6 @@ fn an_immortal_object_is_never_unique() {
     // 断った `take` は参照を手放さない
     assert_eq!(heap.live_objects(), [("String".to_string(), 1)]);
     heap.decref(s).unwrap();
-    assert!(heap.live_objects().is_empty());
-}
-
-#[test]
-fn take_or_copy_copies_an_immortal_string() {
-    let mut heap = Heap::new();
-    let s = literal(&mut heap, "lit");
-    heap.acquire_immortal(s).unwrap();
-    assert_eq!(heap.take_or_copy(s), Ok(Payload::Str("lit".to_string())));
-    assert_eq!(heap.string_bytes_written(), 3);
-    // 写した後に元の参照を手放すので、数は 0 に戻る
-    assert_eq!(heap.get(s), Err(HeapError::UseAfterFree));
     assert!(heap.live_objects().is_empty());
 }
 

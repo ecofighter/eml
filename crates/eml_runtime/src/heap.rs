@@ -128,6 +128,7 @@ pub enum HeapError {
     Shared,
     /// 継続の区間が切り離された handler フレームで終わっていないか、区間の中の handler の連鎖が区間の外を指す。
     BrokenSegment,
+    /// `take_or_copy` に、クロージャと継続のほかの物体が渡された。
     NotCopyable,
     /// 文字列の操作に、文字列でない物体が渡された。
     NotAString,
@@ -141,7 +142,7 @@ impl fmt::Display for HeapError {
             HeapError::UseAfterFree => f.write_str("use of a freed object"),
             HeapError::Shared => f.write_str("an object is still shared"),
             HeapError::BrokenSegment => f.write_str("a continuation segment is broken"),
-            HeapError::NotCopyable => f.write_str("a file cannot be copied"),
+            HeapError::NotCopyable => f.write_str("an object cannot be copied"),
             HeapError::NotAString => f.write_str("an object is not a string"),
             HeapError::WrongLayout => {
                 f.write_str("an object does not have the tag and number of fields a release names")
@@ -170,7 +171,7 @@ struct Slot {
 pub struct Heap {
     slots: Vec<Slot>,
     free: Vec<u32>,
-    /// 文字列の物体の中身を書くのはヒープの手続き (確保と写し) なので、ヒープが数える。インタプリタはこれを
+    /// 文字列の物体の中身を書くのはヒープの手続き (確保と連結) なので、ヒープが数える。インタプリタはこれを
     /// `RunStats` の `string_bytes_copied` として返す。
     string_bytes_written: u64,
     /// 参照の数を書き換えた回数。増やす側 (`dup`、`acquire_immortal`) と減らす側 (`decref`、連鎖を含む) を分けて
@@ -331,22 +332,21 @@ impl Heap {
         Ok(self.free_slot(obj))
     }
 
-    /// オブジェクトの所有権を受け取って中身を使う側のための手続き。一意なら解放して中身を返す。共有されているか
-    /// 不死の物体なら中身を写し、写した中身の子の参照を1つずつ増やしてから、元の参照を1つ手放す。子は解放と同じ
+    /// クロージャか継続の所有権を受け取って中身を使う側のための手続き。一意なら解放して中身を返す。共有されて
+    /// いれば中身を写し、写した中身の子の参照を1つずつ増やしてから、元の参照を1つ手放す。子は解放と同じ
     /// `children` で数えるので、写すときと解放するときで数える参照が一致する。継続オブジェクトは区間のフレームごと
-    /// 写す。フレームを共有させないためである (docs/spec/runtime.md)。
+    /// 写す。フレームを共有させないためである。`data`、文字列、`File` は、一意かどうかによらず `NotCopyable` で
+    /// 断り、参照を手放さない。`data` は写さずに `release_fields` で分解し、`File` は線形である
+    /// (docs/spec/runtime.md)。
     pub fn take_or_copy(&mut self, obj: ObjRef) -> Result<Payload, HeapError> {
+        let segment = match &self.object(obj)?.payload {
+            Payload::Continuation { top, .. } => Some(*top),
+            Payload::Closure(_) => None,
+            _ => return Err(HeapError::NotCopyable),
+        };
         if self.is_unique(obj)? {
             return self.take(obj);
         }
-        // `File` は線形で、型検査が共有させない。共有されていたら処理系の誤りなので、写さずに止める
-        if matches!(self.object(obj)?.payload, Payload::File(_)) {
-            return Err(HeapError::NotCopyable);
-        }
-        let segment = match &self.object(obj)?.payload {
-            Payload::Continuation { top, .. } => Some(*top),
-            _ => None,
-        };
         let copy = match segment {
             Some(top) => {
                 let (top, handler) = self.copy_segment(top)?;
@@ -354,9 +354,6 @@ impl Heap {
             }
             None => {
                 let copy = copy(&self.object(obj)?.payload);
-                if let Payload::Str(text) = &copy {
-                    self.string_bytes_written += text.len() as u64;
-                }
                 let mut shared = Vec::new();
                 children(&copy, &mut shared);
                 for child in shared {
@@ -581,11 +578,6 @@ impl Heap {
 /// 写すので、ここでは扱わない。
 fn copy(payload: &Payload) -> Payload {
     match payload {
-        Payload::Str(text) => Payload::Str(text.clone()),
-        Payload::Data { tag, fields } => Payload::Data {
-            tag: *tag,
-            fields: fields.clone(),
-        },
         Payload::Closure(closure) => Payload::Closure(Closure {
             function: closure.function,
             args: closure.args.clone(),
@@ -629,7 +621,9 @@ fn copy(payload: &Payload) -> Payload {
         Payload::Continuation { .. } => {
             unreachable!("a shared continuation is copied with its segment by `copy_segment`")
         }
-        Payload::File(_) => unreachable!("`take_or_copy` refuses to copy a file"),
+        Payload::Str(_) | Payload::Data { .. } | Payload::File(_) => {
+            unreachable!("`take_or_copy` copies only closures and continuations")
+        }
     }
 }
 
