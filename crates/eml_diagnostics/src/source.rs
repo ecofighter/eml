@@ -67,8 +67,8 @@ impl SourceFiles {
     }
 
     /// 位置を行と列にする。`offset` は、このファイルのテキストの中の文字の境界でなければならない。
-    pub fn line_col(&self, file: FileId, offset: TextSize) -> LineCol {
-        let file = &self.files[file.0 as usize];
+    pub fn line_col(&self, id: FileId, offset: TextSize) -> LineCol {
+        let file = &self.files[id.0 as usize];
         // `line_starts` の最初は 0 なので、`offset` 以下の先頭は少なくとも1つあり、その数が1始まりの行になる。
         let line = file.line_starts.partition_point(|&start| start <= offset);
         let line_start = file.line_starts[line - 1];

@@ -790,6 +790,106 @@ fn a_variable_number_beyond_the_limit_is_an_error_with_its_line() {
 }
 
 #[test]
+fn a_variable_number_beyond_u32_is_too_large() {
+    let error = parse_error("fn f(x.4294967296: int) -> int {\n  return 1\n}\n");
+    assert_eq!(error.line, 1);
+    assert_eq!(error.message, "variable number 4294967296 is too large");
+}
+
+/// 表示し直すと元のテキストに戻らない整数の書き方は読まない。
+#[test]
+fn integers_are_written_as_they_print() {
+    for (text, word) in [
+        ("fn f() -> int {\n  return 007\n}\n", "007"),
+        ("fn f() -> int {\n  return -0\n}\n", "-0"),
+        (
+            "fn f(n.0: int) -> int {\n  switch n.0 { 01 -> b1, _ -> b2 }\nb1:\n  return 1\nb2:\n  return 0\n}\n",
+            "01",
+        ),
+    ] {
+        let error = parse_error(text);
+        assert_eq!(error.line, 2, "{text}");
+        assert_eq!(
+            error.message,
+            format!("`{word}` is not written as an integer prints (no leading 0, no `-0`)")
+        );
+    }
+    round_trip("fn f() -> int {\n  return -10\n}\n");
+}
+
+#[test]
+fn a_tail_call_with_save_is_an_error() {
+    let error = parse_error("fn f(x.0: int) -> int {\n  tail call f(x.0) save [x.0]\n}\n");
+    assert_eq!(error.line, 2);
+    assert_eq!(
+        error.message,
+        "a tail call saves nothing; `save` is only on `let`"
+    );
+}
+
+#[test]
+fn malformed_declarations_names_and_strings_are_errors_with_their_lines() {
+    let cases = [
+        (
+            "effect A { a/1 }\neffect A { b/1 }\nfn f() -> int {\n  return 1\n}\n",
+            2,
+            "effect `A` is declared twice",
+        ),
+        (
+            "effect A { a/1,\n  a/2 }\nfn f() -> int {\n  return 1\n}\n",
+            2,
+            "operation `a` is declared twice",
+        ),
+        (
+            "fn f() -> int {\n  return 1\n}\nfn f() -> int {\n  return 2\n}\n",
+            4,
+            "function `f` is defined twice",
+        ),
+        (
+            "fn f() -> int {\n  tail perform B.b(1)\n}\n",
+            2,
+            "unknown effect `B`",
+        ),
+        (
+            "fn f() -> int {\n  let x.0: int = extern Prelude.nope(1)\n  return x.0\n}\n",
+            2,
+            "unknown extern `Prelude.nope`",
+        ),
+        (
+            "fn f() -> obj {\n  let s.0: obj = const \"abc\n  return s.0\n}\n",
+            2,
+            "a string is not closed",
+        ),
+        (
+            "fn f() -> obj {\n  let s.0: obj = const \"\\u{110000}\"\n  return s.0\n}\n",
+            2,
+            "a `\\u{…}` escape is not a character",
+        ),
+        (
+            "effect A { a/1, b/1 }\nfn f(x.0: tobj, y.1: tobj, r.2: tobj) -> int {\n  tail handle A((), x.0) { b: y.1, a: y.1 } return r.2\n}\n",
+            3,
+            "the clause for `b` is out of order; clauses follow the operations of `A`",
+        ),
+    ];
+    for (text, line, message) in cases {
+        let error = parse_error(text);
+        assert_eq!(
+            (error.line, error.message.as_str()),
+            (line, message),
+            "{text}"
+        );
+    }
+}
+
+#[test]
+fn the_entry_is_entry_main_wherever_it_is_written() {
+    let program =
+        parse("fn f() -> unit {\n  return ()\n}\nfn entry$main() -> unit {\n  tail call f()\n}\n")
+            .unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(program.entry, FnIdx(1));
+}
+
+#[test]
 fn an_operation_number_outside_the_effect_round_trips() {
     round_trip(
         "\

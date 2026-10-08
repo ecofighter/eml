@@ -145,14 +145,15 @@ fn is_name_char(c: char) -> bool {
     c.is_ascii_alphanumeric() || c == '_' || c == '$' || c == '\''
 }
 
-/// `name.N` を名前と番号に分ける。名前は数字で始まらないので、`1.5` のような語を変数と読み違えない。
-fn split_var(word: &str) -> Option<(&str, u32)> {
+/// `name.N` を名前と番号の数字に分ける。名前は数字で始まらないので、`1.5` のような語を変数と読み違えない。番号が
+/// 大きすぎるかどうかは、形とは別の誤りとして呼ぶ側が報告する。
+fn split_var(word: &str) -> Option<(&str, &str)> {
     let (name, digits) = word.rsplit_once('.')?;
     let first = name.chars().next()?;
-    if first.is_ascii_digit() || !name.chars().all(is_name_char) {
+    if first.is_ascii_digit() || !name.chars().all(is_name_char) || !is_digits(digits) {
         return None;
     }
-    Some((name, number(digits)?))
+    Some((name, digits))
 }
 
 fn tag_number(word: &str) -> Option<u32> {
@@ -163,21 +164,35 @@ fn block_number(word: &str) -> Option<u32> {
     number(word.strip_prefix('b')?)
 }
 
-/// 変数、タグ、ブロック、操作の番号。`u32::from_str` は先頭の `+` も読むので、数字の並びだけを読む。先頭の 0 を
-/// 許すと、読み直した表示が元と変わるので許さない。
+/// 変数、タグ、ブロック、操作の番号。`u32::from_str` は先頭の `+` も読むので、数字の並びだけを読む。
 fn number(digits: &str) -> Option<u32> {
-    if digits.is_empty()
-        || !digits.chars().all(|c| c.is_ascii_digit())
-        || (digits.len() > 1 && digits.starts_with('0'))
-    {
+    if !is_digits(digits) {
         return None;
     }
     digits.parse().ok()
 }
 
-fn is_int(word: &str) -> bool {
+/// 先頭の 0 のない数字の並び。先頭の 0 を許すと、読み直した表示が元と変わるので許さない。
+fn is_digits(digits: &str) -> bool {
+    !digits.is_empty()
+        && digits.chars().all(|c| c.is_ascii_digit())
+        && (digits == "0" || !digits.starts_with('0'))
+}
+
+/// 整数の定数の書き方。`-` と数字だけでできた語のうち、表示と同じ形のものを `Ok(true)` にする。同じ理由で `-0` も
+/// 読まない。数字でできているのに表示と違う形の語は、変数の形の誤りにせず、ここで報告する。
+fn int_word(word: &str, line: usize) -> Result<bool, ParseError> {
     let digits = word.strip_prefix('-').unwrap_or(word);
-    !digits.is_empty() && digits.chars().all(|c| c.is_ascii_digit())
+    if digits.is_empty() || !digits.chars().all(|c| c.is_ascii_digit()) {
+        return Ok(false);
+    }
+    if !is_digits(digits) || word == "-0" {
+        return Err(error(
+            line,
+            format!("`{word}` is not written as an integer prints (no leading 0, no `-0`)"),
+        ));
+    }
+    Ok(true)
 }
 
 /// 関数の中で読んだ変数。番号を名前から切り出すので、同じ番号の変数が同じ名前で書かれているかを確かめる。
@@ -275,10 +290,7 @@ impl<'t> Parser<'t> {
 
     /// `[never] operation/arity`。
     fn operation_decl(&mut self) -> Result<OperationInfo, ParseError> {
-        let never = self.at_word("never") && matches!(self.peek_at(1), Some(Tok::Word(_)));
-        if never {
-            self.pos += 1;
-        }
+        let never = self.eat_never();
         let line = self.line();
         let word = self.word()?;
         // 関数の名前と同じく操作の名前も `/` を含みうるので、最後の `/` で分ける
@@ -425,8 +437,13 @@ impl<'t> Parser<'t> {
                 "decref" => stmts.push(Stmt::Decref(self.var(state)?)),
                 "return" => break Term::Return(self.atom(state)?),
                 "tail" => {
-                    let mask = self.mask()?;
-                    let call = self.call(state)?;
+                    let (mask, call) = self.masked_call(state)?;
+                    if self.at_word("save") {
+                        return Err(error(
+                            line,
+                            "a tail call saves nothing; `save` is only on `let`",
+                        ));
+                    }
                     break Term::TailCall { call, mask };
                 }
                 "jump" => {
@@ -507,7 +524,7 @@ impl<'t> Parser<'t> {
         if let Some(tag) = tag_number(&word) {
             return Ok(CasePattern::Tag(tag));
         }
-        if is_int(&word) {
+        if int_word(&word, line)? {
             return word
                 .parse()
                 .map(CasePattern::Int)
@@ -529,7 +546,6 @@ impl<'t> Parser<'t> {
     }
 
     fn rhs(&mut self, state: &mut FnState) -> Result<Rhs, ParseError> {
-        let mask = self.mask()?;
         let line = self.line();
         let keyword = match self.peek() {
             Some(Tok::Word(word)) => word.clone(),
@@ -537,14 +553,11 @@ impl<'t> Parser<'t> {
         };
         if matches!(
             keyword.as_str(),
-            "call" | "apply" | "handle" | "perform" | "resume"
+            "mask" | "call" | "apply" | "handle" | "perform" | "resume"
         ) {
-            let call = self.call(state)?;
+            let (mask, call) = self.masked_call(state)?;
             let saved = self.saved(state)?;
             return Ok(Rhs::Call { call, mask, saved });
-        }
-        if !mask.is_empty() {
-            return Err(error(line, "a mask is only on call, apply and resume"));
         }
         self.pos += 1;
         let rhs = match keyword.as_str() {
@@ -655,10 +668,17 @@ impl<'t> Parser<'t> {
         if mask.is_empty() {
             return Err(error(line, "an empty mask"));
         }
-        if self.at_word("handle") || self.at_word("perform") {
+        Ok(mask)
+    }
+
+    /// `mask` を前に付けてよい呼び出し。`mask` は call、apply、resume にだけ付く (docs/spec/core-ir.md)。
+    fn masked_call(&mut self, state: &mut FnState) -> Result<(Vec<u32>, Call), ParseError> {
+        let line = self.line();
+        let mask = self.mask()?;
+        if !mask.is_empty() && !["call", "apply", "resume"].iter().any(|w| self.at_word(w)) {
             return Err(error(line, "a mask is only on call, apply and resume"));
         }
-        Ok(mask)
+        Ok((mask, self.call(state)?))
     }
 
     /// `let` の右辺と `tail` の後の呼び出し。どれもキーワードで始まるので、関数の名前とぶつからない。
@@ -678,10 +698,7 @@ impl<'t> Parser<'t> {
             }
             "handle" => self.handle(state),
             "perform" => {
-                let never = self.at_word("never") && matches!(self.peek_at(1), Some(Tok::Word(_)));
-                if never {
-                    self.pos += 1;
-                }
+                let never = self.eat_never();
                 let line = self.line();
                 let word = self.word()?;
                 // エフェクトの名前はモジュールの名前で修飾されて `.` を含むが、操作の名前は含まない
@@ -713,6 +730,15 @@ impl<'t> Parser<'t> {
             }
             _ => Err(error(line, format!("expected a call, found `{word}`"))),
         }
+    }
+
+    /// 操作の前の `never`。後に語が続くときだけ読むので、`never` という名前の操作も書ける。
+    fn eat_never(&mut self) -> bool {
+        let never = self.at_word("never") && matches!(self.peek_at(1), Some(Tok::Word(_)));
+        if never {
+            self.pos += 1;
+        }
+        never
     }
 
     /// `handle E(init, body) { op: clause, .. } return ret`。
@@ -824,7 +850,7 @@ impl<'t> Parser<'t> {
         if let Some(tag) = tag_number(&word) {
             return Ok(Atom::Tag(tag));
         }
-        if is_int(&word) {
+        if int_word(&word, line)? {
             return word
                 .parse()
                 .map(Atom::Int)
@@ -871,19 +897,22 @@ impl<'t> Parser<'t> {
         repr: Option<Repr>,
         line: usize,
     ) -> Result<VarId, ParseError> {
-        let (name, number) = split_var(word).ok_or_else(|| {
+        let (name, digits) = split_var(word).ok_or_else(|| {
             error(
                 line,
                 format!("expected a variable `name.N`, found `{word}`"),
             )
         })?;
+        let number: u32 = match digits.parse() {
+            Ok(number) if number as usize <= self.var_limit() => number,
+            _ => {
+                return Err(error(
+                    line,
+                    format!("variable number {digits} is too large"),
+                ));
+            }
+        };
         let index = number as usize;
-        if index > self.var_limit() {
-            return Err(error(
-                line,
-                format!("variable number {number} is too large"),
-            ));
-        }
         if state.vars.len() <= index {
             state.vars.resize_with(index + 1, || None);
         }
