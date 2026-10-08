@@ -53,7 +53,7 @@ fn main() -> ExitCode {
             let Some(program) = compiled.program else {
                 return ExitCode::from(1);
             };
-            match eml_cli::execute(program, &config, OutputSink::stdout()) {
+            match eml_cli::execute(&program, &config, OutputSink::stdout()) {
                 Ok(()) => ExitCode::SUCCESS,
                 Err(error) => {
                     eprintln!("runtime error: {error}");

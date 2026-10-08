@@ -8,8 +8,6 @@
 //! テストを依存させない。
 
 use std::fmt::Write;
-#[cfg(feature = "core")]
-use std::sync::Arc;
 
 #[cfg(feature = "hir")]
 use eml_cli::Session;
@@ -224,29 +222,29 @@ fn check_session(session: Session) -> Checked {
 }
 
 #[cfg(feature = "core")]
-pub fn core(text: &str) -> Arc<Program> {
+pub fn core(text: &str) -> Program {
     core_files(text, &[])
 }
 
 #[cfg(feature = "core")]
-pub fn core_files(entry: &str, modules: &[(&str, &str)]) -> Arc<Program> {
+pub fn core_files(entry: &str, modules: &[(&str, &str)]) -> Program {
     compiled(load(entry, modules).compile())
 }
 
 /// 確かめたいパスの直後の Core IR を見るテストのため (docs/implementation/testing.md)。
 #[cfg(feature = "core")]
-pub fn core_until(text: &str, last: Pass) -> Arc<Program> {
+pub fn core_until(text: &str, last: Pass) -> Program {
     core_until_files(text, &[], last)
 }
 
 #[cfg(feature = "core")]
-pub fn core_until_files(entry: &str, modules: &[(&str, &str)], last: Pass) -> Arc<Program> {
+pub fn core_until_files(entry: &str, modules: &[(&str, &str)], last: Pass) -> Program {
     compiled(load(entry, modules).compile_until(last))
 }
 
 /// `eml run` と同じく、エラーがあれば Core IR を作らない。`main` がないこともエラーである。
 #[cfg(feature = "core")]
-fn compiled(compiled: eml_cli::Compiled) -> Arc<Program> {
+fn compiled(compiled: eml_cli::Compiled) -> Program {
     compiled
         .program
         .unwrap_or_else(|| panic!("{:#?}", compiled.diagnostics))
@@ -260,18 +258,18 @@ pub fn run(text: &str) -> (String, Result<(), RuntimeError>) {
 
 #[cfg(feature = "run")]
 pub fn run_files(entry: &str, modules: &[(&str, &str)]) -> (String, Result<(), RuntimeError>) {
-    run_program(core_files(entry, modules), true)
+    run_program(&core_files(entry, modules), true)
 }
 
 /// 手で書いた Core IR を実行する。
 #[cfg(feature = "run")]
 pub fn execute(program: Program, debug_heap: bool) -> (String, Result<(), RuntimeError>) {
-    run_program(Arc::new(program), debug_heap)
+    run_program(&program, debug_heap)
 }
 
 /// 実行の設定と出力の受け口は、ここだけで組み立てる。
 #[cfg(feature = "run")]
-fn run_program(program: Arc<Program>, debug_heap: bool) -> (String, Result<(), RuntimeError>) {
+fn run_program(program: &Program, debug_heap: bool) -> (String, Result<(), RuntimeError>) {
     let (sink, captured) = OutputSink::capture();
     let config = RunConfig::default().with_debug_heap(debug_heap);
     let result = eml_cli::execute(program, &config, sink);

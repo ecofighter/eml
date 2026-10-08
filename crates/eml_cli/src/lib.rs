@@ -7,9 +7,6 @@
 mod fs_provider;
 
 #[cfg(feature = "core")]
-use std::sync::Arc;
-
-#[cfg(feature = "core")]
 use eml_core_ir::{Pass, Program};
 #[cfg(feature = "core")]
 use eml_diagnostics::has_errors;
@@ -47,7 +44,7 @@ pub struct Compiled {
     /// 警告を含む。
     pub diagnostics: Vec<Diagnostic>,
     /// エラーがあれば `None`。
-    pub program: Option<Arc<Program>>,
+    pub program: Option<Program>,
 }
 
 /// 1回の検査や実行で読むソースの集まり。読み込みの段が Prelude、入口、import でたどった依存先を登録する
@@ -192,9 +189,7 @@ impl Session {
         sort_diagnostics(&mut diagnostics);
         // Core IR は誤りのないプログラムだけを受け取る (docs/implementation/architecture.md)
         let program = match main {
-            Some(main) if !has_errors(&diagnostics) => {
-                Some(Arc::new(lower(&program, &typed, main)))
-            }
+            Some(main) if !has_errors(&diagnostics) => Some(lower(&program, &typed, main)),
             _ => None,
         };
         Compiled {
@@ -206,7 +201,7 @@ impl Session {
 
 #[cfg(feature = "run")]
 pub fn execute(
-    program: Arc<Program>,
+    program: &Program,
     config: &RunConfig,
     stdout: OutputSink,
 ) -> Result<(), RuntimeError> {

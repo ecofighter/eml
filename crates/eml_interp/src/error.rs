@@ -7,7 +7,7 @@ use eml_runtime::HeapError;
 pub enum RuntimeError {
     /// 実行中の関数で止まった。
     Fault { fault: Fault, function: String },
-    /// `debug_heap` で、終了時に解放されていないオブジェクトがあった。記述子の名前ごとの数。
+    /// `debug_heap` で、終了時に解放されていないオブジェクトがあった。オブジェクトの種類の名前ごとの数。
     Leak(Vec<(String, usize)>),
 }
 

@@ -1,6 +1,6 @@
+use std::cell::Cell;
 use std::io::Read;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::rc::Rc;
 
 use super::*;
 use crate::FileHandle;
@@ -185,7 +185,7 @@ fn releasing_a_long_chain_does_not_overflow_the_stack() {
 }
 
 #[test]
-fn live_objects_are_counted_by_descriptor() {
+fn live_objects_are_counted_by_kind() {
     let mut heap = Heap::new();
     string(&mut heap, "a");
     string(&mut heap, "b");
@@ -394,16 +394,6 @@ fn copying_a_long_segment_does_not_overflow_the_stack() {
 }
 
 #[test]
-fn mark_shared_is_reserved_for_multicore() {
-    let mut heap = Heap::new();
-    let s = string(&mut heap, "a");
-    assert_eq!(
-        heap.mark_shared(s),
-        Err(HeapError::NotImplemented("mark_shared"))
-    );
-}
-
-#[test]
 fn a_data_object_releases_its_fields() {
     let mut heap = Heap::new();
     let s = string(&mut heap, "a");
@@ -465,7 +455,7 @@ fn take_or_copy_copies_a_shared_data_object_and_dups_its_fields() {
 }
 
 /// 捨てられたことを旗で知らせる読み出し口。
-struct Flagged(Arc<AtomicBool>);
+struct Flagged(Rc<Cell<bool>>);
 
 impl Read for Flagged {
     fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
@@ -475,11 +465,11 @@ impl Read for Flagged {
 
 impl Drop for Flagged {
     fn drop(&mut self) {
-        self.0.store(true, Ordering::SeqCst);
+        self.0.set(true);
     }
 }
 
-fn file(heap: &mut Heap, dropped: &Arc<AtomicBool>) -> ObjRef {
+fn file(heap: &mut Heap, dropped: &Rc<Cell<bool>>) -> ObjRef {
     heap.alloc(Payload::File(FileHandle::new(
         "a.txt".to_string(),
         Box::new(Flagged(dropped.clone())),
@@ -489,41 +479,41 @@ fn file(heap: &mut Heap, dropped: &Arc<AtomicBool>) -> ObjRef {
 #[test]
 fn releasing_a_file_drops_its_reader() {
     let mut heap = Heap::new();
-    let dropped = Arc::new(AtomicBool::new(false));
+    let dropped = Rc::new(Cell::new(false));
     let f = file(&mut heap, &dropped);
     assert_eq!(heap.live_objects(), [("File".to_string(), 1)]);
     heap.decref(f).unwrap();
-    assert!(dropped.load(Ordering::SeqCst));
+    assert!(dropped.get());
     assert!(heap.live_objects().is_empty());
 }
 
 #[test]
 fn a_file_inside_data_is_released_with_it() {
     let mut heap = Heap::new();
-    let dropped = Arc::new(AtomicBool::new(false));
+    let dropped = Rc::new(Cell::new(false));
     let f = file(&mut heap, &dropped);
     let pair = heap.alloc(Payload::Data {
         tag: 0,
         fields: vec![Value::Obj(f), Value::Int(1)],
     });
     heap.decref(pair).unwrap();
-    assert!(dropped.load(Ordering::SeqCst));
+    assert!(dropped.get());
     assert!(heap.live_objects().is_empty());
 }
 
 #[test]
 fn a_shared_file_is_not_copied() {
     let mut heap = Heap::new();
-    let dropped = Arc::new(AtomicBool::new(false));
+    let dropped = Rc::new(Cell::new(false));
     let f = file(&mut heap, &dropped);
     heap.dup(f).unwrap();
     assert!(matches!(heap.take_or_copy(f), Err(HeapError::NotCopyable)));
-    assert!(!dropped.load(Ordering::SeqCst));
+    assert!(!dropped.get());
     // take_or_copy did not decref when it returned error, so refcount is still 2.
     // Release both references to verify no leak or double-free.
     heap.decref(f).unwrap();
     heap.decref(f).unwrap();
-    assert!(dropped.load(Ordering::SeqCst));
+    assert!(dropped.get());
     assert!(heap.live_objects().is_empty());
 }
 

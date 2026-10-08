@@ -7,12 +7,11 @@ use std::io::Read;
 pub struct FileHandle {
     /// `open` に渡したパス。実行時エラーの文言に使う。
     pub path: String,
-    /// マルチコアに備え、どのスレッドで捨ててもよいものに限る (docs/spec/runtime.md)。
-    pub reader: Box<dyn Read + Send + Sync>,
+    pub reader: Box<dyn Read>,
 }
 
 impl FileHandle {
-    pub fn new(path: String, reader: Box<dyn Read + Send + Sync>) -> FileHandle {
+    pub fn new(path: String, reader: Box<dyn Read>) -> FileHandle {
         FileHandle { path, reader }
     }
 }

@@ -3,7 +3,6 @@
 
 use std::collections::BTreeMap;
 use std::fmt;
-use std::sync::atomic::{AtomicI32, Ordering};
 
 use crate::FileHandle;
 
@@ -25,36 +24,7 @@ pub enum Value {
     Obj(ObjRef),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-struct DescId(u32);
-
-impl DescId {
-    const STRING: DescId = DescId(0);
-    const FRAME: DescId = DescId(1);
-    const CLOSURE: DescId = DescId(2);
-    const CONTINUATION: DescId = DescId(3);
-    const DATA: DescId = DescId(4);
-    const FILE: DescId = DescId(5);
-}
-
-/// オブジェクトの種類。ヘッダから引けるようにし、後の段階で型ごとのフィールドのレイアウトを足す
-/// (docs/spec/runtime.md の「オブジェクトのヘッダ」)。`Lin` の破棄処理はオブジェクトの解放で済む。`File` の読み出し口は、解放で捨てると閉じる。
-/// `data` のオブジェクトは、型によらず1つの記述子にする。
-struct Descriptor {
-    name: &'static str,
-}
-
-const DESCRIPTORS: [Descriptor; 6] = [
-    Descriptor { name: "String" },
-    Descriptor { name: "Frame" },
-    Descriptor { name: "Closure" },
-    Descriptor {
-        name: "Continuation",
-    },
-    Descriptor { name: "Data" },
-    Descriptor { name: "File" },
-];
-
+/// オブジェクトの中身。enum の形がレイアウトで、`Lin` の値の破棄処理はオブジェクトの解放で済む (docs/spec/runtime.md)。
 #[derive(Debug, PartialEq)]
 pub enum Payload {
     Str(String),
@@ -79,15 +49,16 @@ pub enum Payload {
 }
 
 impl Payload {
-    /// 記述子はペイロードの種類から決める。フレームはどの種類も継続の連結リストの要素なので、同じ記述子にする。
-    fn desc(&self) -> DescId {
+    /// `debug_heap` がリークを数えるときの種類の名前。フレームはどの種類も継続の連結リストの要素なので、1つの名前にする。
+    /// `data` のオブジェクトも、型によらず1つの名前にする。
+    pub fn kind_name(&self) -> &'static str {
         match self {
-            Payload::Str(_) => DescId::STRING,
-            Payload::Closure(_) => DescId::CLOSURE,
-            Payload::Frame(_) => DescId::FRAME,
-            Payload::Continuation { .. } => DescId::CONTINUATION,
-            Payload::Data { .. } => DescId::DATA,
-            Payload::File(_) => DescId::FILE,
+            Payload::Str(_) => "String",
+            Payload::Closure(_) => "Closure",
+            Payload::Frame(_) => "Frame",
+            Payload::Continuation { .. } => "Continuation",
+            Payload::Data { .. } => "Data",
+            Payload::File(_) => "File",
         }
     }
 }
@@ -143,7 +114,6 @@ pub enum HeapError {
     Shared,
     /// 継続の区間が、切り離された handler フレームで終わっていない。
     BrokenSegment,
-    NotImplemented(&'static str),
     NotCopyable,
 }
 
@@ -155,16 +125,13 @@ impl fmt::Display for HeapError {
             HeapError::BrokenSegment => {
                 f.write_str("a continuation does not end at a detached handler")
             }
-            HeapError::NotImplemented(name) => write!(f, "`{name}` is not implemented yet"),
             HeapError::NotCopyable => f.write_str("a file cannot be copied"),
         }
     }
 }
 
 struct Header {
-    /// 正なら局所、負なら共有を表す。今は常に正である (docs/spec/runtime.md)。
-    rc: AtomicI32,
-    desc: DescId,
+    rc: u32,
 }
 
 struct Object {
@@ -198,10 +165,7 @@ impl Heap {
 
     pub fn alloc(&mut self, payload: Payload) -> ObjRef {
         let object = Object {
-            header: Header {
-                rc: AtomicI32::new(1),
-                desc: payload.desc(),
-            },
+            header: Header { rc: 1 },
             payload,
         };
         match self.free.pop() {
@@ -235,12 +199,12 @@ impl Heap {
     }
 
     pub fn dup(&mut self, obj: ObjRef) -> Result<(), HeapError> {
-        *self.object_mut(obj)?.header.rc.get_mut() += 1;
+        self.object_mut(obj)?.header.rc += 1;
         Ok(())
     }
 
     pub fn is_unique(&self, obj: ObjRef) -> Result<bool, HeapError> {
-        Ok(self.object(obj)?.header.rc.load(Ordering::Relaxed) == 1)
+        Ok(self.object(obj)?.header.rc == 1)
     }
 
     /// 子は再帰ではなく作業リストでたどる。長い連鎖の解放で Rust のスタックを溢れさせないため (docs/spec/runtime.md)。
@@ -248,7 +212,7 @@ impl Heap {
         let mut work = vec![obj];
         while let Some(obj) = work.pop() {
             let remaining = {
-                let rc = self.object_mut(obj)?.header.rc.get_mut();
+                let rc = &mut self.object_mut(obj)?.header.rc;
                 *rc -= 1;
                 *rc
             };
@@ -348,19 +312,12 @@ impl Heap {
         }
     }
 
-    /// 共有の印付けは、名前だけ予約する。実装はマルチコアの段階で行う (docs/spec/runtime.md)。
-    pub fn mark_shared(&mut self, obj: ObjRef) -> Result<(), HeapError> {
-        self.object(obj)?;
-        Err(HeapError::NotImplemented("mark_shared"))
-    }
-
-    /// まだ解放されていないオブジェクトの数を、記述子の名前ごとに数える。`debug_heap` のリーク検出で使う。
+    /// まだ解放されていないオブジェクトの数を、種類の名前 (`Payload::kind_name`) ごとに数える。`debug_heap` のリーク
+    /// 検出で使う。
     pub fn live_objects(&self) -> Vec<(String, usize)> {
         let mut counts: BTreeMap<&'static str, usize> = BTreeMap::new();
         for object in self.slots.iter().filter_map(|slot| slot.object.as_ref()) {
-            *counts
-                .entry(DESCRIPTORS[object.header.desc.0 as usize].name)
-                .or_default() += 1;
+            *counts.entry(object.payload.kind_name()).or_default() += 1;
         }
         counts
             .into_iter()

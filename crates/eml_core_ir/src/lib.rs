@@ -18,7 +18,6 @@ pub use pretty::pretty;
 pub use text::{ParseError, parse};
 pub use verify::{VerifyError, verify, verify_scopes};
 
-/// 複数のスレッドが同じプログラムを実行できるように、実行時は `Arc<Program>` で読み取り専用で共有する。
 #[derive(Debug)]
 pub struct Program {
     pub functions: Vec<CoreFn>,

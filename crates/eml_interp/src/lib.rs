@@ -1,5 +1,4 @@
 use std::path::PathBuf;
-use std::sync::Arc;
 
 use eml_core_ir::Program;
 use eml_runtime::OutputSink;
@@ -13,7 +12,7 @@ pub use error::{Fault, RuntimeError};
 
 use machine::Machine;
 
-/// 将来 `threads` などを足しても呼び出し側を壊さないように、`non_exhaustive` にして `RunConfig::default()` から作らせる。
+/// フィールドを足しても呼び出し側を壊さないように、`non_exhaustive` にして `RunConfig::default()` から作らせる。
 #[derive(Debug, Clone, Default)]
 #[non_exhaustive]
 pub struct RunConfig {
@@ -34,12 +33,8 @@ impl RunConfig {
     }
 }
 
-pub fn run(
-    program: Arc<Program>,
-    config: &RunConfig,
-    out: &OutputSink,
-) -> Result<(), RuntimeError> {
-    let mut machine = Machine::new(&program, out, &config.file_root);
+pub fn run(program: &Program, config: &RunConfig, out: &OutputSink) -> Result<(), RuntimeError> {
+    let mut machine = Machine::new(program, out, &config.file_root);
     machine.run()?;
     // 実行時エラーで止まった場合はリークを数えない。途中のフレームが残っているのは当然だから
     if config.debug_heap {
