@@ -8,9 +8,11 @@ use crate::{Atom, Call, CasePattern, EffectInfo, FnIdx, VarId};
 
 mod pretty;
 mod text;
+mod verify;
 
 pub use pretty::{pretty, pretty_with_positions};
 pub use text::{ParseError, parse};
+pub use verify::{VerifyError, verify, verify_scopes};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Program {
