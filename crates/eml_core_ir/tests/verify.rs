@@ -668,7 +668,7 @@ fn a_returned_variable_has_the_repr_of_the_function() {
 
 #[test]
 fn the_result_of_a_call_is_not_compared_with_the_callee() {
-    // S3b-2a は、呼び出しの結果と呼ばれる関数の `ret` を比べない (docs/spec/core-ir.md)
+    // 呼び出しの結果と呼ばれる関数の `ret` は、S3b-2c まで比べない (docs/spec/core-ir.md の「構造の規則」)
     let text = format!("{K}fn f() -> obj {{\n  let t.0: obj = call k(1)\n  return t.0\n}}\n");
     assert_eq!(check_scopes(&text), Ok(()));
 }
@@ -765,6 +765,22 @@ fn a_field_cannot_be_read_after_its_owner_is_given_up() {
             "  decref p.0\n  unpack a.1 #0(z.3: obj)\n  return z.3\n"
         )),
         given_up("a.1", "unpacked")
+    );
+}
+
+#[test]
+fn a_field_consumed_after_its_owner_is_given_up_was_moved() {
+    // 持ち主も手放した後の借りた変数の消費は、借りた変数の誤りではなく、移動の後の使用として報告する
+    // (docs/spec/core-ir.md の「verifier」)
+    assert_eq!(
+        check(&unpacking("  decref p.0\n  return a.1\n")),
+        Err("`a.1` is used after it was moved in `f`".to_string())
+    );
+    assert_eq!(
+        check(&unpacking(
+            "  release p.0 #0(a.1, _)\n  decref b.2\n  return a.1\n"
+        )),
+        Err("`b.2` is released after it was moved in `f`".to_string())
     );
 }
 

@@ -1,6 +1,6 @@
-//! 生存解析と Perceus の `dup` / `decref` の位置、呼び出しの `saved` (docs/spec/core-ir.md の「パス」)。IR のテキストを
-//! 入力にするテストは、入力が scope の段の verifier を、出力が所有の段の verifier を通ることも確かめる。後半は、
-//! ソースからパイプラインを通した結果を見る。
+//! 生存解析と Perceus の `dup` / `decref` / `release` の位置、呼び出しの `saved` (docs/spec/core-ir.md の「パス」)。
+//! IR のテキストを入力にするテストは、入力が scope の段の verifier を、出力が所有の段の verifier を通ることも
+//! 確かめる。後半は、ソースからパイプラインを通した結果を見る。
 
 use crate::common::{core_text, function};
 use eml_core_ir::liveness::live_in;
@@ -622,6 +622,35 @@ fn a_nested_pattern_gives_up_the_parent_before_the_release() {
       return a.3
     }
     "#);
+}
+
+#[test]
+fn a_target_dups_the_fields_of_a_live_scrutinee_before_it_decrefs_a_dead_value() {
+    // `o` はまだ生きているので、使わない `y` を手放すより先に、`o` のフィールドを複製する
+    // (docs/spec/core-ir.md の「Perceus」)
+    let text = "\
+fn f(o.0: tobj, y.1: obj) -> obj {
+  switch o.0 { #0 -> b1, #1(s.2: obj) -> b2 }
+b1:
+  return y.1
+b2:
+  let p.3: obj = con #0(s.2, o.0)
+  return p.3
+}
+";
+    insta::assert_snapshot!(perceus_text(text), @"
+    fn f(o.0: tobj, y.1: obj) -> obj {
+      switch o.0 { #0 -> b1, #1(s.2: obj) -> b2 }
+    b1:
+      decref o.0
+      return y.1
+    b2:
+      dup s.2
+      decref y.1
+      let p.3: obj = con #0(s.2, o.0)
+      return p.3
+    }
+    ");
 }
 
 #[test]

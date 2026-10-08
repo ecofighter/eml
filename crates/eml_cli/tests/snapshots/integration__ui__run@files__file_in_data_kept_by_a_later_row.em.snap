@@ -1,0 +1,9 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{stderr}\")"
+input_file: tests/ui/run/files/file_in_data_kept_by_a_later_row.em
+---
+--- stdout ---
+x
+y!
+--- stderr ---

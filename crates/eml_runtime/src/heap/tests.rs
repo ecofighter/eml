@@ -228,7 +228,8 @@ fn reference_count_writes_are_counted_but_frees_are_not() {
     heap.dup(s).unwrap();
     heap.acquire_immortal(lit).unwrap();
     assert_eq!((heap.rc_increments(), heap.rc_decrements()), (2, 0));
-    // 連鎖する解放は、フレーム、退避した文字列、下のフレームの数を1つずつ減らす
+    // 連鎖する解放は、フレーム、退避した文字列、下のフレームの数を1つずつ減らす。文字列は上で `dup` したので、数が
+    // 1 に戻るだけで解放されない
     heap.decref(outer).unwrap();
     assert_eq!(heap.rc_decrements(), 3);
     heap.decref(lit).unwrap();
@@ -1183,6 +1184,19 @@ fn release_fields_refuses_a_value_of_another_layout_and_changes_nothing() {
     );
     assert_eq!((rc(&heap, data), rc(&heap, s)), (1, 1));
     assert_eq!((heap.rc_increments(), heap.rc_decrements()), (0, 0));
+    // 共有された箱でも、残すフィールドの `dup` と箱の `decref` より先に形を確かめる
+    heap.dup(data).unwrap();
+    assert_eq!(
+        heap.release_fields(data, 0, &[true]),
+        Err(HeapError::WrongLayout)
+    );
+    assert_eq!(
+        heap.release_fields(data, 1, &[true, false]),
+        Err(HeapError::WrongLayout)
+    );
+    assert_eq!((rc(&heap, data), rc(&heap, s)), (2, 1));
+    assert_eq!((heap.rc_increments(), heap.rc_decrements()), (1, 0));
+    heap.decref(data).unwrap();
     heap.decref(data).unwrap();
     assert!(heap.live_objects().is_empty());
 }
