@@ -684,7 +684,7 @@ fn a_returned_variable_has_the_repr_of_the_function() {
 
 #[test]
 fn the_result_of_a_call_is_not_compared_with_the_callee() {
-    // 呼び出しの結果と呼ばれる関数の `ret` は、S3b-2c まで比べない (docs/spec/core-ir.md の「構造の規則」)
+    // 呼び出しの結果と呼ばれる関数の `ret` は、S3b-2c-2 まで比べない (docs/spec/core-ir.md の「構造の規則」)
     let text = format!("{K}fn f() -> obj {{\n  let t.0: obj = call k(1)\n  return t.0\n}}\n");
     assert_eq!(check_scopes(&text), Ok(()));
 }

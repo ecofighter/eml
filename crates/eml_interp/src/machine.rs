@@ -135,7 +135,9 @@ impl<'p> Machine<'p> {
     }
 
     /// `switch` の1つの case と同じく、値を読むだけで分解する。参照の数は変えず、フィールドは値から借りて始まる
-    /// (docs/spec/core-ir.md)。
+    /// (docs/spec/core-ir.md)。機械は配置の表を読まず、タグだけを使う。タグと数の検査は内部の誤りの見張りで、
+    /// verifier の R9 は値を作った配置を追わないので、verifier を通った IR でも起きうる。`switch` の case と
+    /// `release` の見張りも同じである (docs/spec/core-ir.md の「インタプリタ (CEK 機械)」)。
     fn unpack(&mut self, value: VarId, tag: u32, fields: &[VarId]) -> Result<(), Fault> {
         let Value::Obj(obj) = self.env.read(value)? else {
             return Err(Fault::Internal(

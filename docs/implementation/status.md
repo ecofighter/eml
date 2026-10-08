@@ -71,3 +71,8 @@ M1 (言語の全体を一通り通す vertical slice と、本番の構文の最
 ### HIR の位置
 
 - HIR の関数は、シグネチャの関数名の位置 (`Function::signature_name_range`) と等式の関数名の位置 (`Function::equation_ranges`) を持つ。S3a で HIR から見た目の情報 (行頭と字下げ) を除いたが、この2つはソースに書かれた名前の位置なので残した。等式の数は、E1020 の後の網羅性の診断の連鎖を抑えるのにも使う。HIR の位置を別の表に分けるのは、[ロードマップ](../future/roadmap.md) の「処理系」にある source map の項目で行う
+
+### Core IR の verifier
+
+- R9 は、`con`、タグの `switch`、`unpack`、`release` を、それぞれが指す配置と比べるだけで、値がどの配置で作られたかを追わない。そのため、配置の違う値を読む IR も verifier を通る。タグかフィールドの数が違えば、実行したときにインタプリタが内部の誤りで止まり、形が同じなら気付かない。translate の型が、この形を作らないことを保証する ([Core IR とインタプリタ](../spec/core-ir.md) の「構造の規則」)
+- 直接の呼び出し、`apply`、`perform`、`resume`、`handle` の引数と結果の Repr と、宣言した Repr が `tobj` のフィールドは、まだ比べない。多相な位置の Repr の規則と一緒に S3b-2c-2 で比べる ([ロードマップ](../future/roadmap.md) の「S3b-2c-2 Core IR v2 の境界」)

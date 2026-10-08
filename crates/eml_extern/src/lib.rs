@@ -159,7 +159,8 @@ pub struct FunctionRow {
     pub name: &'static str,
     /// 引数の Repr。数はシグネチャの一番外側の `->` の数と等しい。
     pub params: &'static [Repr],
-    /// 結果の Repr。
+    /// 結果の Repr。データを返す行は、比べる extern の `Bool` と、`Std.Fs.read_all` の組である。`Bool` のタグは
+    /// 決まっていて、組の配置は大きさだけで決まるので、行は配置を持たない (docs/spec/core-ir.md の「データの配置」)。
     pub ret: Repr,
     pub purity: Purity,
     /// 型で選ぶ行。translate が型引数から比べ方の行に置き換えるので、Core IR には届かない。
