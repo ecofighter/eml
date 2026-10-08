@@ -131,6 +131,8 @@ pub enum HeapError {
     NotCopyable,
     /// 文字列の操作に、文字列でない物体が渡された。
     NotAString,
+    /// `release_fields` に渡した物体が、名指したタグとフィールドの数の `data` でない。
+    WrongLayout,
 }
 
 impl fmt::Display for HeapError {
@@ -141,6 +143,9 @@ impl fmt::Display for HeapError {
             HeapError::BrokenSegment => f.write_str("a continuation segment is broken"),
             HeapError::NotCopyable => f.write_str("a file cannot be copied"),
             HeapError::NotAString => f.write_str("an object is not a string"),
+            HeapError::WrongLayout => {
+                f.write_str("an object does not have the tag and number of fields a release names")
+            }
         }
     }
 }
@@ -170,7 +175,8 @@ pub struct Heap {
     string_bytes_written: u64,
     /// 参照の数を書き換えた回数。増やす側 (`dup`、`acquire_immortal`) と減らす側 (`decref`、連鎖を含む) を分けて
     /// 数える。数を書くのはこの3つの手続きだけなので、ここで数えれば漏れない。箱の解放そのものは数を書かないので
-    /// 数えない。インタプリタはこれを `RunStats` の `rc_increments` と `rc_decrements` として返す。
+    /// 数えない。ただし `release_fields` は、一意な箱を数を書かずに空けるときも、箱の参照を1つ手放したことを減らす
+    /// 側に1回数える。インタプリタはこれを `RunStats` の `rc_increments` と `rc_decrements` として返す。
     rc_increments: u64,
     rc_decrements: u64,
 }
@@ -273,7 +279,7 @@ impl Heap {
             let freed = header.rc == 0 && !header.immortal;
             self.rc_decrements += 1;
             if freed {
-                let payload = self.release(obj);
+                let payload = self.free_slot(obj);
                 children(&payload, &mut work);
             }
         }
@@ -322,7 +328,7 @@ impl Heap {
         if !self.is_unique(obj)? {
             return Err(HeapError::Shared);
         }
-        Ok(self.release(obj))
+        Ok(self.free_slot(obj))
     }
 
     /// オブジェクトの所有権を受け取って中身を使う側のための手続き。一意なら解放して中身を返す。共有されているか
@@ -361,6 +367,48 @@ impl Heap {
         };
         self.decref(obj)?;
         Ok(copy)
+    }
+
+    /// `data` の物体の参照を1つ手放し、`keep[i]` が真のフィールドの参照を1つずつ呼び出し側に渡す。一意な箱は箱だけを
+    /// 解放し、残さないフィールドの参照を手放す。残すフィールドは箱の参照をそのまま受け継ぐ。共有された箱と不死の
+    /// 箱は、残すフィールドを `dup` してから箱の参照を1つ手放す。物体の形が名指しと違えば、何も変えずに
+    /// `WrongLayout` を返す (docs/spec/runtime.md の「ランタイムの API」)。
+    pub fn release_fields(
+        &mut self,
+        obj: ObjRef,
+        tag: u32,
+        keep: &[bool],
+    ) -> Result<(), HeapError> {
+        let Payload::Data { tag: found, fields } = &self.object(obj)?.payload else {
+            return Err(HeapError::WrongLayout);
+        };
+        if *found != tag || fields.len() != keep.len() {
+            return Err(HeapError::WrongLayout);
+        }
+        let unique = self.is_unique(obj)?;
+        // 参照の数を動かすのは、一意な箱なら残さないフィールド、そうでなければ残すフィールドである
+        let moved: Vec<ObjRef> = fields
+            .iter()
+            .zip(keep)
+            .filter(|&(_, &kept)| kept != unique)
+            .filter_map(|(value, _)| match value {
+                Value::Obj(field) => Some(*field),
+                _ => None,
+            })
+            .collect();
+        if unique {
+            self.free_slot(obj);
+            self.rc_decrements += 1;
+            for field in moved {
+                self.decref(field)?;
+            }
+            Ok(())
+        } else {
+            for field in moved {
+                self.dup(field)?;
+            }
+            self.decref(obj)
+        }
     }
 
     /// 継続の区間を、先頭のフレームから切り離された handler フレームまで写し、写した区間の先頭と handler フレームを
@@ -517,7 +565,7 @@ impl Heap {
     }
 
     /// スロットを空けて世代番号を進める。古い `ObjRef` は、以後の検査で解放済みとして見つかる。
-    fn release(&mut self, obj: ObjRef) -> Payload {
+    fn free_slot(&mut self, obj: ObjRef) -> Payload {
         let slot = &mut self.slots[obj.index as usize];
         let object = slot
             .object

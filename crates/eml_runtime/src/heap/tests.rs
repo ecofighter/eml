@@ -1058,3 +1058,177 @@ fn acquiring_a_stale_immortal_reference_is_use_after_free() {
     heap.decref(s).unwrap();
     assert_eq!(heap.acquire_immortal(s), Err(HeapError::UseAfterFree));
 }
+
+/// 生きている物体の参照の数。
+fn rc(heap: &Heap, obj: ObjRef) -> u32 {
+    heap.object(obj).unwrap().header.rc
+}
+
+#[test]
+fn release_fields_frees_a_unique_box_and_drops_the_fields_it_does_not_keep() {
+    let mut heap = Heap::new();
+    let (a, b) = (string(&mut heap, "a"), string(&mut heap, "b"));
+    let data = heap.alloc(Payload::Data {
+        tag: 1,
+        fields: vec![Value::Obj(a), Value::Int(3), Value::Obj(b)],
+    });
+    heap.release_fields(data, 1, &[true, false, false]).unwrap();
+    assert_eq!(heap.get(data), Err(HeapError::UseAfterFree));
+    assert_eq!(heap.get(b), Err(HeapError::UseAfterFree));
+    // 残した `a` は箱の参照を受け継ぐので、数は変わらない
+    assert_eq!(rc(&heap, a), 1);
+    // 箱の参照と `b` の参照を1回ずつ減らしたと数える。一意な箱は数を書かずに空けるが、参照を1つ手放している
+    assert_eq!((heap.rc_increments(), heap.rc_decrements()), (0, 2));
+    heap.decref(a).unwrap();
+    assert!(heap.live_objects().is_empty());
+}
+
+#[test]
+fn release_fields_on_a_shared_box_dups_the_kept_fields_and_gives_up_the_box() {
+    let mut heap = Heap::new();
+    let (a, b) = (string(&mut heap, "a"), string(&mut heap, "b"));
+    let data = heap.alloc(Payload::Data {
+        tag: 0,
+        fields: vec![Value::Obj(a), Value::Obj(b)],
+    });
+    heap.dup(data).unwrap();
+    heap.release_fields(data, 0, &[false, true]).unwrap();
+    // 箱はもう1つの参照で生きていて、フィールドの参照を持ったままである
+    assert_eq!((rc(&heap, data), rc(&heap, a), rc(&heap, b)), (1, 1, 2));
+    assert_eq!((heap.rc_increments(), heap.rc_decrements()), (2, 1));
+    heap.decref(b).unwrap();
+    heap.decref(data).unwrap();
+    assert!(heap.live_objects().is_empty());
+}
+
+#[test]
+fn release_fields_treats_one_value_in_two_fields_as_two_references() {
+    let mut heap = Heap::new();
+    // 一意な箱では、残す位置の参照を受け継ぎ、残さない位置の参照を手放す
+    let a = string(&mut heap, "a");
+    heap.dup(a).unwrap();
+    let data = heap.alloc(Payload::Data {
+        tag: 0,
+        fields: vec![Value::Obj(a), Value::Obj(a)],
+    });
+    heap.release_fields(data, 0, &[true, false]).unwrap();
+    assert_eq!(rc(&heap, a), 1);
+    heap.decref(a).unwrap();
+    assert!(heap.live_objects().is_empty());
+    // 共有された箱では、残す位置ごとに1回 `dup` する
+    let a = string(&mut heap, "a");
+    heap.dup(a).unwrap();
+    let data = heap.alloc(Payload::Data {
+        tag: 0,
+        fields: vec![Value::Obj(a), Value::Obj(a)],
+    });
+    heap.dup(data).unwrap();
+    heap.release_fields(data, 0, &[true, true]).unwrap();
+    assert_eq!((rc(&heap, data), rc(&heap, a)), (1, 4));
+    heap.decref(a).unwrap();
+    heap.decref(a).unwrap();
+    heap.decref(data).unwrap();
+    assert!(heap.live_objects().is_empty());
+}
+
+#[test]
+fn release_fields_closes_a_file_it_does_not_keep_and_hands_over_one_it_keeps() {
+    let mut heap = Heap::new();
+    let dropped = Rc::new(Cell::new(false));
+    let f = file(&mut heap, &dropped);
+    let s = string(&mut heap, "text");
+    let data = heap.alloc(Payload::Data {
+        tag: 0,
+        fields: vec![Value::Obj(f), Value::Obj(s)],
+    });
+    heap.release_fields(data, 0, &[false, true]).unwrap();
+    assert!(dropped.get());
+    heap.decref(s).unwrap();
+    let kept = Rc::new(Cell::new(false));
+    let f = file(&mut heap, &kept);
+    let data = heap.alloc(Payload::Data {
+        tag: 0,
+        fields: vec![Value::Obj(f), Value::Int(1)],
+    });
+    heap.release_fields(data, 0, &[true, false]).unwrap();
+    assert!(!kept.get());
+    assert_eq!(rc(&heap, f), 1);
+    heap.decref(f).unwrap();
+    assert!(kept.get());
+    assert!(heap.live_objects().is_empty());
+}
+
+#[test]
+fn release_fields_on_an_immortal_value_takes_the_shared_path() {
+    let mut heap = Heap::new();
+    let s = string(&mut heap, "a");
+    let data = heap.alloc_immortal(Payload::Data {
+        tag: 0,
+        fields: vec![Value::Obj(s)],
+    });
+    heap.acquire_immortal(data).unwrap();
+    heap.release_fields(data, 0, &[true]).unwrap();
+    // 不死の箱は一意にならないので、残すフィールドを `dup` する。箱は数が 0 になっても解放しない
+    assert_eq!(rc(&heap, s), 2);
+    heap.decref(s).unwrap();
+    heap.acquire_immortal(data).unwrap();
+    assert_eq!(
+        heap.get(data).unwrap(),
+        &Payload::Data {
+            tag: 0,
+            fields: vec![Value::Obj(s)],
+        }
+    );
+    heap.decref(data).unwrap();
+    // 文字列に残った参照は、不死の箱が持っている
+    assert_eq!(heap.live_objects(), [("String".to_string(), 1)]);
+}
+
+#[test]
+fn release_fields_refuses_a_value_of_another_layout_and_changes_nothing() {
+    let mut heap = Heap::new();
+    let s = string(&mut heap, "s");
+    let data = heap.alloc(Payload::Data {
+        tag: 1,
+        fields: vec![Value::Obj(s)],
+    });
+    assert_eq!(
+        heap.release_fields(s, 0, &[true]),
+        Err(HeapError::WrongLayout)
+    );
+    assert_eq!(
+        heap.release_fields(data, 0, &[true]),
+        Err(HeapError::WrongLayout)
+    );
+    assert_eq!(
+        heap.release_fields(data, 1, &[true, false]),
+        Err(HeapError::WrongLayout)
+    );
+    assert_eq!((rc(&heap, data), rc(&heap, s)), (1, 1));
+    assert_eq!((heap.rc_increments(), heap.rc_decrements()), (0, 0));
+    heap.decref(data).unwrap();
+    assert!(heap.live_objects().is_empty());
+}
+
+#[test]
+fn release_fields_on_a_freed_value_is_use_after_free() {
+    let mut heap = Heap::new();
+    let s = string(&mut heap, "s");
+    let data = heap.alloc(Payload::Data {
+        tag: 0,
+        fields: vec![Value::Obj(s)],
+    });
+    heap.release_fields(data, 0, &[true]).unwrap();
+    assert_eq!(
+        heap.release_fields(data, 0, &[true]),
+        Err(HeapError::UseAfterFree)
+    );
+    heap.decref(s).unwrap();
+    // 数が 0 の不死の物体も同じである
+    let lit = literal(&mut heap, "lit");
+    assert_eq!(
+        heap.release_fields(lit, 0, &[]),
+        Err(HeapError::UseAfterFree)
+    );
+    assert!(heap.live_objects().is_empty());
+}
