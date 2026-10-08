@@ -35,7 +35,7 @@ fn a_continuation_entered_by_two_jumps_is_a_merge_block() {
     let text = "pick : Bool -> Int\npick b =\n  let n = if b then 1 else 2\n  n + 1\n\nmain : Unit -> <IO> Unit\nmain () = println (show_int (pick True))";
     insta::assert_snapshot!(function(&core_text(text, Pass::Translate), "pick"), @"
     fn pick(b.0: enum) -> int {
-      switch b.0 { #0 -> b1, #1 -> b2 }
+      switch b.0 Prelude.Bool { #0 -> b1, #1 -> b2 }
     b1:
       jump b3(2)
     b2:
@@ -55,12 +55,12 @@ fn and_branches_without_building_a_bool() {
     insta::assert_snapshot!(function(&core_text(text, Pass::Translate), "inside"), @r#"
     fn inside(a.0: int, b.1: int) -> obj {
       let t.2: enum = extern Prelude.<(a.0, b.1)
-      switch t.2 { #0 -> b1, #1 -> b2 }
+      switch t.2 Prelude.Bool { #0 -> b1, #1 -> b2 }
     b1:
       jump b5()
     b2:
       let t.3: enum = extern Prelude.<(b.1, 10)
-      switch t.3 { #0 -> b3, #1 -> b4 }
+      switch t.3 Prelude.Bool { #0 -> b3, #1 -> b4 }
     b3:
       jump b5()
     b4:
@@ -79,10 +79,10 @@ fn or_branches_without_building_a_bool() {
     insta::assert_snapshot!(function(&core_text(text, Pass::Translate), "outside"), @r#"
     fn outside(a.0: int, b.1: int) -> obj {
       let t.2: enum = extern Prelude.<(a.0, 0)
-      switch t.2 { #0 -> b1, #1 -> b2 }
+      switch t.2 Prelude.Bool { #0 -> b1, #1 -> b2 }
     b1:
       let t.3: enum = extern Prelude.<(b.1, 0)
-      switch t.3 { #0 -> b3, #1 -> b4 }
+      switch t.3 Prelude.Bool { #0 -> b3, #1 -> b4 }
     b2:
       jump b5()
     b3:
@@ -104,13 +104,13 @@ fn a_nested_if_in_a_condition_meets_at_one_switch() {
     let text = "choose : Bool -> Bool -> Bool -> String\nchoose a b c = if (if a then b else c) then \"yes\" else \"no\"\n\nmain : Unit -> <IO> Unit\nmain () = println (choose True False True)";
     insta::assert_snapshot!(function(&core_text(text, Pass::Translate), "choose"), @r#"
     fn choose(a.0: enum, b.1: enum, c.2: enum) -> obj {
-      switch a.0 { #0 -> b1, #1 -> b2 }
+      switch a.0 Prelude.Bool { #0 -> b1, #1 -> b2 }
     b1:
       jump b3(c.2)
     b2:
       jump b3(b.1)
     b3(c.3: enum):
-      switch c.3 { #0 -> b4, #1 -> b5 }
+      switch c.3 Prelude.Bool { #0 -> b4, #1 -> b5 }
     b4:
       let s.5: obj = const "no"
       return s.5
@@ -141,7 +141,7 @@ fn an_if_statement_continues_after_a_merge_of_unit() {
     let text = "step : Bool -> <IO> Unit\nstep b =\n  if b then println \"a\"\n  if b then println \"b\"\n  println \"c\"\n\nmain : Unit -> <IO> Unit\nmain () = step True";
     insta::assert_snapshot!(function(&core_text(text, Pass::Translate), "step"), @r#"
     fn step(b.0: enum) -> unit {
-      switch b.0 { #0 -> b1, #1 -> b2 }
+      switch b.0 Prelude.Bool { #0 -> b1, #1 -> b2 }
     b1:
       jump b3(())
     b2:
@@ -149,7 +149,7 @@ fn an_if_statement_continues_after_a_merge_of_unit() {
       let t.2: unit = extern Prelude.println(s.1)
       jump b3(t.2)
     b3(t.3: unit):
-      switch b.0 { #0 -> b4, #1 -> b5 }
+      switch b.0 Prelude.Bool { #0 -> b4, #1 -> b5 }
     b4:
       jump b6(())
     b5:
@@ -171,7 +171,7 @@ fn a_returned_if_value_becomes_tail_calls_in_each_arm() {
     let text = "f : Int -> Int\nf x = x + 1\n\ng : Int -> Int\ng x = x - 1\n\nh : Bool -> Int -> Int\nh c x =\n  let y = if c then f x else g x\n  y\n\nmain : Unit -> <IO> Unit\nmain () = println (show_int (h True 1))";
     insta::assert_snapshot!(function(&core_text(text, Pass::Translate), "h"), @"
     fn h(c.0: enum, x.1: int) -> int {
-      switch c.0 { #0 -> b1, #1 -> b2 }
+      switch c.0 Prelude.Bool { #0 -> b1, #1 -> b2 }
     b1:
       tail call g(x.1)
     b2:
@@ -187,12 +187,12 @@ fn a_chain_of_returned_continuations_folds_in_one_pass() {
     let text = "f : Int -> Int\nf x = x + 1\n\ng : Int -> Int\ng x = x - 1\n\nh : Bool -> Bool -> Int -> Int\nh a b x =\n  let y =\n    if a then\n      let z = if b then f x else g x\n      z\n    else f (x + 2)\n  y\n\nmain : Unit -> <IO> Unit\nmain () = println (show_int (h True False 1))";
     insta::assert_snapshot!(function(&core_text(text, Pass::Translate), "h"), @"
     fn h(a.0: enum, b.1: enum, x.2: int) -> int {
-      switch a.0 { #0 -> b1, #1 -> b2 }
+      switch a.0 Prelude.Bool { #0 -> b1, #1 -> b2 }
     b1:
       let t.6: int = extern Prelude.+(x.2, 2)
       tail call f(t.6)
     b2:
-      switch b.1 { #0 -> b3, #1 -> b4 }
+      switch b.1 Prelude.Bool { #0 -> b3, #1 -> b4 }
     b3:
       tail call g(x.2)
     b4:
@@ -294,10 +294,10 @@ fn reprs_follow_the_types() {
     let text = "data Shape =\n  | Dot\n  | Circle Int\n\nmake : Int -> Bool -> String -> Shape\nmake n b s =\n  let pair = (n, s)\n  let f = fn x -> x + n\n  let shape = Circle (f 1)\n  drop pair\n  shape\n\nmain : Unit -> <IO> Unit\nmain () =\n  let shape = make 1 True \"s\"\n  drop shape\n  println \"done\"";
     insta::assert_snapshot!(function(&core_text(text, Pass::Translate), "make"), @"
     fn make(n.0: int, b.1: enum, s.2: obj) -> tobj {
-      let d.3: obj = con #0(n.0, s.2)
+      let d.3: obj = con (,) #0(n.0, s.2)
       let c.4: tobj = closure make$lambda0(n.0)
       let t.5: int = apply c.4(1)
-      let d.6: tobj = con #1(t.5)
+      let d.6: tobj = con Shape #1(t.5)
       let t.7: unit = drop d.3
       return d.6
     }
@@ -443,7 +443,7 @@ fn a_destructuring_let_of_an_if_builds_no_tuple() {
     let text = "order : Bool -> Int -> Int -> Int\norder c a b =\n  let (lo, hi) = if c then (a, b) else (b, a)\n  hi - lo\n\nmain : Unit -> <IO> Unit\nmain () = println (show_int (order True 1 2))";
     insta::assert_snapshot!(function(&core_text(text, Pass::Translate), "order"), @"
     fn order(c.0: enum, a.1: int, b.2: int) -> int {
-      switch c.0 { #0 -> b1, #1 -> b2 }
+      switch c.0 Prelude.Bool { #0 -> b1, #1 -> b2 }
     b1:
       jump b3(b.2, a.1)
     b2:
@@ -464,7 +464,7 @@ fn a_value_matched_right_after_its_let_goes_straight_to_its_arm() {
     insta::assert_snapshot!(function(&core_text(&text, Pass::Translate), "describe"), @r#"
     fn describe(n.0: int) -> obj {
       let t.1: enum = extern Prelude.>(n.0, 0)
-      switch t.1 { #0 -> b1, #1 -> b2 }
+      switch t.1 Prelude.Bool { #0 -> b1, #1 -> b2 }
     b1:
       let s.3: obj = const "none"
       return s.3
@@ -483,12 +483,12 @@ fn an_arm_that_uses_the_matched_variable_receives_it() {
     );
     insta::assert_snapshot!(function(&core_text(&text, Pass::Translate), "pick"), @"
     fn pick(c.0: enum, k.1: int) -> int {
-      switch c.0 { #0 -> b1, #1 -> b2 }
+      switch c.0 Prelude.Bool { #0 -> b1, #1 -> b2 }
     b1:
       let t.3: tobj = call lookup(k.1)
-      switch t.3 { #0 -> b3, #1(x.4: int) -> b4 }
+      switch t.3 Option { #0 -> b3, #1(x.4: int) -> b4 }
     b2:
-      let d.2: tobj = con #1(1)
+      let d.2: tobj = con Option #1(1)
       jump b5(d.2)
     b3:
       return 0
@@ -506,7 +506,7 @@ fn a_match_on_an_if_takes_each_known_arm() {
     insta::assert_snapshot!(function(&core_text(text, Pass::Translate), "check"), @r#"
     fn check(n.0: int) -> obj {
       let t.1: enum = extern Prelude.<(n.0, 0)
-      switch t.1 { #0 -> b1, #1 -> b2 }
+      switch t.1 Prelude.Bool { #0 -> b1, #1 -> b2 }
     b1:
       let t.3: obj = extern Prelude.show_int(n.0)
       return t.3
@@ -526,7 +526,7 @@ fn two_unknown_values_meet_at_one_switch() {
     );
     insta::assert_snapshot!(function(&core_text(&text, Pass::Translate), "pick"), @"
     fn pick(c.0: enum) -> int {
-      switch c.0 { #0 -> b1, #1 -> b2 }
+      switch c.0 Prelude.Bool { #0 -> b1, #1 -> b2 }
     b1:
       let t.2: tobj = call lookup(2)
       jump b3(t.2)
@@ -534,7 +534,7 @@ fn two_unknown_values_meet_at_one_switch() {
       let t.1: tobj = call lookup(1)
       jump b3(t.1)
     b3(found.3: tobj):
-      switch found.3 { #0 -> b4, #1(v.4: int) -> b5 }
+      switch found.3 Option { #0 -> b4, #1(v.4: int) -> b5 }
     b4:
       return 0
     b5:
@@ -552,12 +552,12 @@ fn an_arm_that_binds_the_whole_value_builds_it_only_at_its_leaf() {
     );
     insta::assert_snapshot!(function(&core_text(&text, Pass::Translate), "pick"), @"
     fn pick(c.0: enum, k.1: int) -> int {
-      switch c.0 { #0 -> b1, #1 -> b2 }
+      switch c.0 Prelude.Bool { #0 -> b1, #1 -> b2 }
     b1:
       let t.3: tobj = call lookup(k.1)
-      switch t.3 { #0 -> b3, _ -> b4 }
+      switch t.3 Option { #0 -> b3, _ -> b4 }
     b2:
-      let d.2: tobj = con #1(1)
+      let d.2: tobj = con Option #1(1)
       jump b5(d.2)
     b3:
       return 0
@@ -575,9 +575,9 @@ fn nested_case_of_case_goes_straight_to_the_outer_arm() {
     let text = "data Color =\n  | Red\n  | Green\n  | Blue\n\ncode : Bool -> Bool -> Int\ncode a b = match (match (if a then Red else if b then Green else Blue) with | Red -> True | _ -> False) with\n  | True -> 1\n  | False -> 0\n\nmain : Unit -> <IO> Unit\nmain () = println (show_int (code True False))";
     insta::assert_snapshot!(function(&core_text(text, Pass::Translate), "code"), @"
     fn code(a.0: enum, b.1: enum) -> int {
-      switch a.0 { #0 -> b1, #1 -> b2 }
+      switch a.0 Prelude.Bool { #0 -> b1, #1 -> b2 }
     b1:
-      switch b.1 { #0 -> b3, #1 -> b4 }
+      switch b.1 Prelude.Bool { #0 -> b3, #1 -> b4 }
     b2:
       return 1
     b3:
@@ -597,7 +597,7 @@ fn a_match_in_a_condition_branches_without_a_bool() {
     );
     insta::assert_snapshot!(function(&core_text(&text, Pass::Translate), "has"), @r#"
     fn has(o.0: tobj) -> obj {
-      switch o.0 { #0 -> b1, #1(x.1: int) -> b2 }
+      switch o.0 Option { #0 -> b1, #1(x.1: int) -> b2 }
     b1:
       let s.3: obj = const "no"
       return s.3
@@ -617,7 +617,7 @@ fn a_constructor_bound_by_let_is_known_later() {
     );
     insta::assert_snapshot!(function(&core_text(&text, Pass::Translate), "unwrap"), @r#"
     fn unwrap(x.0: int) -> int {
-      let d.1: tobj = con #1(x.0)
+      let d.1: tobj = con Option #1(x.0)
       let s.2: obj = const "built"
       let t.3: unit = extern Prelude.println(s.2)
       let t.4: int = extern Prelude.+(x.0, 1)
@@ -655,9 +655,9 @@ fn equations_take_their_parameters_as_columns() {
     );
     insta::assert_snapshot!(function(&core_text(&text, Pass::Translate), "both"), @"
     fn both($0.0: tobj, $1.1: tobj) -> int {
-      switch $0.0 { #1(a.2: int) -> b1, _ -> b2 }
+      switch $0.0 Option { #1(a.2: int) -> b1, _ -> b2 }
     b1:
-      switch $1.1 { #1(b.3: int) -> b3, _ -> b4 }
+      switch $1.1 Option { #1(b.3: int) -> b3, _ -> b4 }
     b2:
       jump b5()
     b3:
@@ -681,13 +681,13 @@ fn a_row_that_binds_the_whole_tuple_builds_it_at_its_leaf() {
     b1:
       return 0
     b2:
-      let d.2: obj = con #0(a.0, b.1)
+      let d.2: obj = con (,) #0(a.0, b.1)
       tail call first(d.2)
     }
     ");
     insta::assert_snapshot!(function(&shown, "first"), @"
     fn first(p.0: obj) -> int {
-      unpack p.0 #0(a.1: int, x.2: int)
+      unpack p.0 (,) #0(a.1: int, x.2: int)
       return a.1
     }
     ");
@@ -699,7 +699,7 @@ fn a_leaf_builds_a_known_value_once_however_often_it_passes_it() {
     let text = "pair : Int -> (Int, Int) -> (Int, Int) -> Int\npair a b c = a\n\nf : Int -> Int\nf n =\n  let p = (n, n)\n  match p with\n    | q -> pair n q p\n\nmain : Unit -> <IO> Unit\nmain () = println (show_int (f 1))";
     insta::assert_snapshot!(function(&core_text(text, Pass::Translate), "f"), @"
     fn f(n.0: int) -> int {
-      let d.1: obj = con #0(n.0, n.0)
+      let d.1: obj = con (,) #0(n.0, n.0)
       tail call pair(n.0, d.1, d.1)
     }
     ");
@@ -729,11 +729,11 @@ fn an_arm_reached_from_two_leaves_is_placed_after_the_tree() {
     let text = "data Color =\n  | Red\n  | Green\n  | Blue\n\nsame : Color -> Color -> Int\nsame a b = match (a, b) with\n  | (Red, Red) -> 1\n  | (Green, Green) -> 2\n  | _ -> 0\n\nmain : Unit -> <IO> Unit\nmain () = println (show_int (same Red Blue))";
     insta::assert_snapshot!(function(&core_text(text, Pass::Translate), "same"), @"
     fn same(a.0: enum, b.1: enum) -> int {
-      switch a.0 { #0 -> b1, #1 -> b2, _ -> b3 }
+      switch a.0 Color { #0 -> b1, #1 -> b2, _ -> b3 }
     b1:
-      switch b.1 { #0 -> b4, _ -> b5 }
+      switch b.1 Color { #0 -> b4, _ -> b5 }
     b2:
-      switch b.1 { #1 -> b6, _ -> b7 }
+      switch b.1 Color { #1 -> b6, _ -> b7 }
     b3:
       jump b8()
     b4:
@@ -755,7 +755,7 @@ fn a_lone_constructor_with_fields_is_unpacked_without_a_switch() {
     let text = "data Box a =\n  | Box a\n\nunbox : Box String -> String\nunbox (Box s) = s\n\nmain : Unit -> <IO> Unit\nmain () = println (unbox (Box \"b\"))";
     insta::assert_snapshot!(function(&core_text(text, Pass::Translate), "unbox"), @"
     fn unbox(p.0: obj) -> obj {
-      unpack p.0 #0(s.1: obj)
+      unpack p.0 Box #0(s.1: obj)
       return s.1
     }
     ");
@@ -780,7 +780,7 @@ fn a_returned_match_value_becomes_tail_calls_in_each_arm() {
     );
     insta::assert_snapshot!(function(&core_text(&text, Pass::Translate), "h"), @"
     fn h(o.0: tobj) -> int {
-      switch o.0 { #0 -> b1, #1(v.1: int) -> b2 }
+      switch o.0 Option { #0 -> b1, #1(v.1: int) -> b2 }
     b1:
       tail call g(0)
     b2:
@@ -796,7 +796,7 @@ fn returning_a_field_of_a_call_result_is_not_a_tail_call() {
     insta::assert_snapshot!(function(&core_text(text, Pass::Translate), "first"), @"
     fn first(x.0: int) -> int {
       let t.1: obj = call split(x.0)
-      unpack t.1 #0(y.2: int, x.3: int)
+      unpack t.1 (,) #0(y.2: int, x.3: int)
       return y.2
     }
     ");
@@ -931,13 +931,14 @@ fn names_outside_the_entry_are_qualified_with_their_module() {
     let csv = "pub data Row = | Row Int\n\npub effect Parse where\n  next : Unit -> Int\n\npub parse : Unit -> <Parse> Row\nparse () =\n  let get = next\n  let make = Row\n  make (get ())";
     let main = "import Report.Csv\n\napply : (a -> <e> b) -> a -> <e> b\napply f x = f x\n\nmain : Unit -> <IO> Unit\nmain () =\n  let r =\n    handle Csv.parse () with\n      | Csv.next () k -> k 1\n      | return r -> r\n  let Csv.Row n = r\n  apply println (show_int n)";
     insta::assert_snapshot!(core_text_files(main, &[("Report/Csv.em", csv)], Pass::Translate), @"
+    layout Report.Csv.Row { Row(int) }
     effect Report.Csv.Parse { next/1 }
     fn apply(f.0: tobj, x.1: tobj) -> tobj {
       tail apply f.0(x.1)
     }
     fn main(p.0: unit) -> unit {
       let t.1: obj = handle Report.Csv.Parse((), &main$handle0) { next: &main$handle0$next } return &main$handle0$return
-      unpack t.1 #0(n.2: int)
+      unpack t.1 Report.Csv.Row #0(n.2: int)
       let t.3: obj = extern Prelude.show_int(n.2)
       tail call apply(&main$extern0, t.3)
     }
@@ -962,7 +963,7 @@ fn names_outside_the_entry_are_qualified_with_their_module() {
       tail perform Report.Csv.Parse.next(p.0)
     }
     fn con$Report.Csv.Row(p.0: int) -> obj {
-      let d.1: obj = con #0(p.0)
+      let d.1: obj = con Report.Csv.Row #0(p.0)
       return d.1
     }
     fn entry$main() -> unit {
@@ -1004,12 +1005,13 @@ fn only_functions_reachable_from_the_entry_are_lowered() {
 fn recursion_and_top_level_values() {
     let text = "answer : Int\nanswer = 42\n\ncount : Int -> Int\ncount n = if n == 0 then answer else count (n - 1)\n\nmain : Unit -> <IO> Unit\nmain () = println (show_int (count 3))";
     insta::assert_snapshot!(core_text(text, Pass::Translate), @"
+    layout Prelude.Bool { False, True }
     fn answer() -> int {
       return 42
     }
     fn count(n.0: int) -> int {
       let t.1: enum = extern Prelude.int_eq(n.0, 0)
-      switch t.1 { #0 -> b1, #1 -> b2 }
+      switch t.1 Prelude.Bool { #0 -> b1, #1 -> b2 }
     b1:
       let t.3: int = extern Prelude.-(n.0, 1)
       tail call count(t.3)
@@ -1060,8 +1062,9 @@ fn partial_and_extra_arguments_use_closures() {
 fn builtins_used_as_values_are_wrapped() {
     let text = "apply : (a -> <e> b) -> a -> <e> b\napply f x = f x\n\nmain : Unit -> <IO> Unit\nmain () =\n  let g = not >> not\n  apply println (show_int 1)";
     insta::assert_snapshot!(core_text(text, Pass::Translate), @"
+    layout Prelude.Bool { False, True }
     fn Prelude.not($0.0: enum) -> enum {
-      switch $0.0 { #0 -> b1, #1 -> b2 }
+      switch $0.0 Prelude.Bool { #0 -> b1, #1 -> b2 }
     b1:
       return #1
     b2:
@@ -1151,7 +1154,7 @@ fn a_tail_if_returns_from_each_arm() {
     insta::assert_snapshot!(function(&shown, "sign"), @r#"
     fn sign(n.0: int) -> obj {
       let t.1: enum = extern Prelude.<(n.0, 0)
-      switch t.1 { #0 -> b1, #1 -> b2 }
+      switch t.1 Prelude.Bool { #0 -> b1, #1 -> b2 }
     b1:
       let s.3: obj = const "non-negative"
       return s.3
@@ -1169,7 +1172,7 @@ fn calls_in_tail_position_are_tail_calls() {
     insta::assert_snapshot!(function(&shown, "loop"), @"
     fn loop(n.0: int, acc.1: int) -> int {
       let t.2: enum = extern Prelude.int_eq(n.0, 0)
-      switch t.2 { #0 -> b1, #1 -> b2 }
+      switch t.2 Prelude.Bool { #0 -> b1, #1 -> b2 }
     b1:
       let t.3: int = extern Prelude.-(n.0, 1)
       let t.4: int = extern Prelude.+(acc.1, 1)
@@ -1194,11 +1197,11 @@ fn nested_value_ifs_meet_in_their_own_merge_blocks() {
     let shown = core_text(text, Pass::Translate);
     insta::assert_snapshot!(function(&shown, "label"), @r#"
     fn label(a.0: enum, b.1: enum, s.2: obj) -> obj {
-      switch a.0 { #0 -> b1, #1 -> b2 }
+      switch a.0 Prelude.Bool { #0 -> b1, #1 -> b2 }
     b1:
       jump b6(s.2)
     b2:
-      switch b.1 { #0 -> b3, #1 -> b4 }
+      switch b.1 Prelude.Bool { #0 -> b3, #1 -> b4 }
     b3:
       let s.5: obj = const "plain"
       jump b5(s.5)
@@ -1278,14 +1281,14 @@ fn constructors_with_fields_build_values() {
     let shown = core_text(text, Pass::Translate);
     insta::assert_snapshot!(function(&shown, "wrap"), @"
     fn wrap(n.0: int) -> tobj {
-      let d.1: tobj = con #1(n.0)
+      let d.1: tobj = con Option #1(n.0)
       return d.1
     }
     ");
     insta::assert_snapshot!(function(&shown, "nest"), @"
     fn nest(p.0: unit) -> tobj {
-      let d.1: tobj = con #1(1)
-      let d.2: tobj = con #1(d.1)
+      let d.1: tobj = con Option #1(1)
+      let d.2: tobj = con Option #1(d.1)
       return d.2
     }
     ");
@@ -1303,7 +1306,7 @@ fn a_constructor_used_as_a_function_value_is_wrapped() {
     ");
     insta::assert_snapshot!(function(&shown, "con$Pair"), @"
     fn con$Pair(p.0: tobj, p.1: tobj) -> obj {
-      let d.2: obj = con #0(p.0, p.1)
+      let d.2: obj = con Pair #0(p.0, p.1)
       return d.2
     }
     ");
@@ -1316,9 +1319,9 @@ fn a_match_compiles_to_a_decision_tree() {
     let shown = core_text(text, Pass::Translate);
     insta::assert_snapshot!(function(&shown, "f"), @"
     fn f(o.0: tobj) -> int {
-      switch o.0 { #1(x.1: tobj) -> b1, _ -> b2 }
+      switch o.0 Option { #1(x.1: tobj) -> b1, _ -> b2 }
     b1:
-      switch x.1 { #1(n.2: int) -> b3, _ -> b4 }
+      switch x.1 Option { #1(n.2: int) -> b3, _ -> b4 }
     b2:
       jump b5()
     b3:
@@ -1338,7 +1341,7 @@ fn tail_and_non_tail_matches() {
     let shown = core_text(text, Pass::Translate);
     insta::assert_snapshot!(function(&shown, "g"), @"
     fn g(o.0: tobj) -> int {
-      switch o.0 { #0 -> b1, #1(m.1: int) -> b2 }
+      switch o.0 Option { #0 -> b1, #1(m.1: int) -> b2 }
     b1:
       jump b3(0)
     b2:
@@ -1350,7 +1353,7 @@ fn tail_and_non_tail_matches() {
     ");
     insta::assert_snapshot!(function(&shown, "h"), @"
     fn h(o.0: tobj) -> int {
-      switch o.0 { #0 -> b1, #1(m.1: int) -> b2 }
+      switch o.0 Option { #0 -> b1, #1(m.1: int) -> b2 }
     b1:
       return 0
     b2:
@@ -1366,13 +1369,13 @@ fn constructor_patterns_in_let_lambda_and_equation_parameters() {
     let shown = core_text(text, Pass::Translate);
     insta::assert_snapshot!(function(&shown, "by_equation"), @"
     fn by_equation(p.0: obj) -> int {
-      unpack p.0 #0(n.1: int)
+      unpack p.0 Box #0(n.1: int)
       return n.1
     }
     ");
     insta::assert_snapshot!(function(&shown, "by_let"), @"
     fn by_let(b.0: obj) -> int {
-      unpack b.0 #0(m.1: int)
+      unpack b.0 Box #0(m.1: int)
       let t.2: int = extern Prelude.+(m.1, 1)
       return t.2
     }
@@ -1384,7 +1387,7 @@ fn constructor_patterns_in_let_lambda_and_equation_parameters() {
     ");
     insta::assert_snapshot!(function(&shown, "by_lambda$lambda0"), @"
     fn by_lambda$lambda0(p.0: obj) -> int {
-      unpack p.0 #0(k.1: int)
+      unpack p.0 Box #0(k.1: int)
       return k.1
     }
     ");
@@ -1397,9 +1400,9 @@ fn a_variable_pattern_after_a_switch_binds_the_scrutinee() {
     let shown = core_text(text, Pass::Translate);
     insta::assert_snapshot!(function(&shown, "describe"), @"
     fn describe(xs.0: tobj) -> int {
-      switch xs.0 { #1(x.1: int, x.2: tobj) -> b1, _ -> b2 }
+      switch xs.0 List { #1(x.1: int, x.2: tobj) -> b1, _ -> b2 }
     b1:
-      switch x.2 { #0 -> b3, _ -> b4 }
+      switch x.2 List { #0 -> b3, _ -> b4 }
     b2:
       jump b5(xs.0)
     b3:
@@ -1419,13 +1422,13 @@ fn constructor_patterns_in_handler_clause_parameters() {
     let shown = core_text(text, Pass::Translate);
     insta::assert_snapshot!(function(&shown, "run$handle0$give"), @"
     fn run$handle0$give(p.0: obj, k.1: tobj, p.2: unit) -> int {
-      unpack p.0 #0(n.3: int)
+      unpack p.0 Box #0(n.3: int)
       tail resume k.1(n.3, ())
     }
     ");
     insta::assert_snapshot!(function(&shown, "run$handle0$return"), @"
     fn run$handle0$return(p.0: obj, p.1: unit) -> int {
-      unpack p.0 #0(r.2: int)
+      unpack p.0 Box #0(r.2: int)
       return r.2
     }
     ");
@@ -1458,14 +1461,14 @@ fn tuples_are_built_and_taken_apart_by_parameters_and_let() {
     let shown = core_text(text, Pass::Translate);
     insta::assert_snapshot!(function(&shown, "swap"), @"
     fn swap(p.0: obj) -> obj {
-      unpack p.0 #0(n.1: int, s.2: obj)
-      let d.3: obj = con #0(s.2, n.1)
+      unpack p.0 (,) #0(n.1: int, s.2: obj)
+      let d.3: obj = con (,) #0(s.2, n.1)
       return d.3
     }
     ");
     insta::assert_snapshot!(function(&shown, "first"), @"
     fn first(p.0: obj) -> int {
-      unpack p.0 #0(a.1: int, x.2: int)
+      unpack p.0 (,) #0(a.1: int, x.2: int)
       return a.1
     }
     ");
@@ -1478,8 +1481,8 @@ fn a_tuple_column_is_a_single_constructor() {
     let shown = core_text(text, Pass::Translate);
     insta::assert_snapshot!(function(&shown, "pick"), @"
     fn pick(p.0: obj) -> int {
-      unpack p.0 #0(x.1: tobj, k.2: int)
-      switch x.1 { #0 -> b1, #1(n.3: int) -> b2 }
+      unpack p.0 (,) #0(x.1: tobj, k.2: int)
+      switch x.1 Option { #0 -> b1, #1(n.3: int) -> b2 }
     b1:
       return k.2
     b2:
@@ -1540,12 +1543,12 @@ fn a_literal_column_inside_a_tuple() {
     let shown = core_text(text, Pass::Translate);
     insta::assert_snapshot!(function(&shown, "classify"), @"
     fn classify(p.0: obj) -> int {
-      unpack p.0 #0(n.1: int, x.2: enum)
+      unpack p.0 (,) #0(n.1: int, x.2: enum)
       switch n.1 { 0 -> b1, _ -> b2 }
     b1:
-      switch x.2 { #0 -> b3, #1 -> b4 }
+      switch x.2 Prelude.Bool { #0 -> b3, #1 -> b4 }
     b2:
-      switch x.2 { #0 -> b5, _ -> b6 }
+      switch x.2 Prelude.Bool { #0 -> b5, _ -> b6 }
     b3:
       jump b7()
     b4:
@@ -1685,8 +1688,9 @@ fn an_arm_reached_by_one_leaf_sits_at_the_leaf() {
     // (docs/spec/core-ir.md)。`pick` の `(n, _)` は、`0` の case の `default` と、外側の `default` の2つの葉から届く
     let text = "data Shape = | Dot | Box Int Int\n\narea : Shape -> Int\narea s =\n  match s with\n    | Box w h -> w * h\n    | Dot -> 0\n\npick : Int -> Int -> Int\npick a b =\n  match (a, b) with\n    | (0, 1) -> 0\n    | (n, _) -> n * 2\n\nmain : Unit -> <IO> Unit\nmain () = println (show_int (area (Box 2 3) + pick 0 1))";
     insta::assert_snapshot!(core_text(text, Pass::Translate), @"
+    layout Shape { Dot, Box(int, int) }
     fn area(s.0: tobj) -> int {
-      switch s.0 { #0 -> b1, #1(w.1: int, h.2: int) -> b2 }
+      switch s.0 Shape { #0 -> b1, #1(w.1: int, h.2: int) -> b2 }
     b1:
       return 0
     b2:
@@ -1708,7 +1712,7 @@ fn an_arm_reached_by_one_leaf_sits_at_the_leaf() {
       return t.3
     }
     fn main(p.0: unit) -> unit {
-      let d.1: tobj = con #1(2, 3)
+      let d.1: tobj = con Shape #1(2, 3)
       let t.2: int = call area(d.1)
       let t.3: int = call pick(0, 1)
       let t.4: int = extern Prelude.+(t.2, t.3)
@@ -1745,6 +1749,7 @@ fn each_comparison_picks_the_instruction_of_its_operand_type() {
     // 比べる命令は、型検査が `==` と `!=` の参照に記録した型引数から選ぶ
     let text = "compare : Int -> String -> Bool -> (Bool, Bool, Bool, Bool, Bool, Bool)\ncompare n s b = (n == 1, n != 2, s == \"a\", s != \"b\", b == True, b != False)\n\nmain : Unit -> <IO> Unit\nmain () =\n  let _ = compare 1 \"a\" True\n  ()";
     insta::assert_snapshot!(core_text(text, Pass::Translate), @r#"
+    layout (,,,,,) { (,,,,,)(tobj, tobj, tobj, tobj, tobj, tobj) }
     fn compare(n.0: int, s.1: obj, b.2: enum) -> obj {
       let t.3: enum = extern Prelude.int_eq(n.0, 1)
       let t.4: enum = extern Prelude.int_ne(n.0, 2)
@@ -1754,7 +1759,7 @@ fn each_comparison_picks_the_instruction_of_its_operand_type() {
       let t.8: enum = extern Prelude.string_ne(s.1, s.7)
       let t.9: enum = extern Prelude.bool_eq(b.2, #1)
       let t.10: enum = extern Prelude.bool_ne(b.2, #0)
-      let d.11: obj = con #0(t.3, t.4, t.6, t.8, t.9, t.10)
+      let d.11: obj = con (,,,,,) #0(t.3, t.4, t.6, t.8, t.9, t.10)
       return d.11
     }
     fn main(p.0: unit) -> unit {
@@ -2096,7 +2101,7 @@ fn a_condition_true_on_every_path_meets_at_one_block() {
       let s.1: obj = const "other"
       let s.2: obj = const "a"
       let t.3: enum = call noisy(s.2, #1)
-      switch t.3 { #0 -> b1, #1 -> b2 }
+      switch t.3 Prelude.Bool { #0 -> b1, #1 -> b2 }
     b1:
       jump b3()
     b2:
@@ -2131,7 +2136,7 @@ fn a_wildcard_arm_does_not_block_the_known_tags() {
     let text = "data Color = | Red | Green | Blue\n\npick : Bool -> Int\npick b =\n  let n = match (if b then Red else Green) with\n    | Red -> 1\n    | _ -> 2\n  n + 1\n\nmain : Unit -> <IO> Unit\nmain () = println (show_int (pick True))";
     insta::assert_snapshot!(function(&core_text(text, Pass::Translate), "pick"), @"
     fn pick(b.0: enum) -> int {
-      switch b.0 { #0 -> b1, #1 -> b2 }
+      switch b.0 Prelude.Bool { #0 -> b1, #1 -> b2 }
     b1:
       jump b3(2)
     b2:
@@ -2150,7 +2155,7 @@ fn known_values_take_their_arms_through_a_literal_column() {
     let text = "data Opt = | No | Yes Int\n\npick : Bool -> Int\npick b =\n  match (if b then Yes 0 else No) with\n    | Yes 0 -> 1\n    | _ -> 2\n\nmain : Unit -> <IO> Unit\nmain () = println (show_int (pick True))";
     insta::assert_snapshot!(function(&core_text(text, Pass::Translate), "pick"), @"
     fn pick(b.0: enum) -> int {
-      switch b.0 { #0 -> b1, #1 -> b2 }
+      switch b.0 Prelude.Bool { #0 -> b1, #1 -> b2 }
     b1:
       return 2
     b2:
@@ -2168,10 +2173,10 @@ fn a_known_and_an_unknown_value_share_an_arm() {
     );
     insta::assert_snapshot!(function(&core_text(&text, Pass::Translate), "pick"), @"
     fn pick(c.0: enum) -> int {
-      switch c.0 { #0 -> b1, #1 -> b2 }
+      switch c.0 Prelude.Bool { #0 -> b1, #1 -> b2 }
     b1:
       let t.1: tobj = call lookup(2)
-      switch t.1 { #0 -> b3, #1(v.2: int) -> b4 }
+      switch t.1 Option { #0 -> b3, #1(v.2: int) -> b4 }
     b2:
       jump b5(1)
     b3:
@@ -2194,7 +2199,7 @@ fn a_known_tag_reaching_a_default_that_uses_the_scrutinee_passes_the_value() {
     let text = "data Color = | Red | Green | Blue\n\ncode : Color -> Int\ncode c = 7\n\npick : Bool -> Int\npick b =\n  let n = match (if b then Red else Green) with\n    | Red -> 1\n    | x -> code x\n  n + 1\n\nmain : Unit -> <IO> Unit\nmain () = println (show_int (pick True))";
     insta::assert_snapshot!(function(&core_text(text, Pass::Translate), "pick"), @"
     fn pick(b.0: enum) -> int {
-      switch b.0 { #0 -> b1, #1 -> b2 }
+      switch b.0 Prelude.Bool { #0 -> b1, #1 -> b2 }
     b1:
       let t.1: int = call code(#1)
       jump b3(t.1)
@@ -2226,7 +2231,7 @@ fn known_tags_that_take_the_default_jump_straight_to_it() {
     let text = "data Color = | Red | Green | Blue\n\npick : Bool -> Int\npick b =\n  match (if b then Green else Blue) with\n    | Red -> 1\n    | _ -> 2\n\nmain : Unit -> <IO> Unit\nmain () = println (show_int (pick True))";
     insta::assert_snapshot!(function(&core_text(text, Pass::Translate), "pick"), @"
     fn pick(b.0: enum) -> int {
-      switch b.0 { #0 -> b1, #1 -> b2 }
+      switch b.0 Prelude.Bool { #0 -> b1, #1 -> b2 }
     b1:
       jump b3()
     b2:
@@ -2234,5 +2239,46 @@ fn known_tags_that_take_the_default_jump_straight_to_it() {
     b3:
       return 2
     }
+    ");
+}
+
+/// 表示の先頭の配置の行。
+fn layouts(shown: &str) -> String {
+    shown
+        .lines()
+        .filter(|line| line.starts_with("layout "))
+        .map(|line| format!("{line}\n"))
+        .collect()
+}
+
+#[test]
+fn layouts_hold_the_declared_field_reprs_in_order_of_first_use() {
+    // `Pair a Int` のフィールドは宣言の型で決まる。`Option` は2つの具体化で1つの配置を使う。使わない `Unused` は
+    // 配置を持たない。タプルは要素の数ごとに1つの配置で、フィールドはどれも `tobj` である。`pick` の `(a, b)` は
+    // 作らずに分解するので、配置を足さない
+    let text = "data Pair a =\n  | Pair a Int\n\ndata Unused =\n  | Unused Int\n\ndata Option a =\n  | None\n  | Some a\n\nfirst : Pair a -> a\nfirst (Pair x _) = x\n\npick : Option Int -> Option String -> Int\npick a b = match (a, b) with\n  | (Some n, _) -> n\n  | (None, Some _) -> 1\n  | (None, None) -> 0\n\nmain : Unit -> <IO> Unit\nmain () =\n  let t = ((1, 2), 3, 4)\n  drop t\n  println (show_int (first (Pair (pick (Some 1) None) 2)))";
+    insta::assert_snapshot!(layouts(&core_text(text, Pass::Translate)), @"
+    layout Pair { Pair(tobj, int) }
+    layout Option { None, Some(tobj) }
+    layout (,) { (,)(tobj, tobj) }
+    layout (,,) { (,,)(tobj, tobj, tobj) }
+    ");
+}
+
+#[test]
+fn an_if_names_the_bool_of_the_prelude() {
+    let text = "f : Bool -> Int\nf b = if b then 1 else 0\n\nmain : Unit -> <IO> Unit\nmain () = println (show_int (f True))";
+    insta::assert_snapshot!(layouts(&core_text(text, Pass::Translate)), @"layout Prelude.Bool { False, True }");
+}
+
+#[test]
+fn a_type_named_like_a_type_of_another_module_gets_its_own_layout() {
+    // 配置は型の定義ごとに1つで、名前はモジュールで修飾するので、短い名前が同じ2つの型は別の配置になる
+    // (docs/spec/core-ir.md の「データの配置」)
+    let csv = "pub data Row = | Row Int\n\npub row : Int -> Row\nrow n = Row n";
+    let main = "import Report.Csv\n\ndata Row =\n  | Row String\n\nrow : String -> Row\nrow s = Row s\n\nmain : Unit -> <IO> Unit\nmain () =\n  let Row s = row \"a\"\n  let Csv.Row n = Csv.row 1\n  println s\n  println (show_int n)";
+    insta::assert_snapshot!(layouts(&core_text_files(main, &[("Report/Csv.em", csv)], Pass::Translate)), @"
+    layout Row { Row(obj) }
+    layout Report.Csv.Row { Row(int) }
     ");
 }

@@ -9,8 +9,8 @@ use std::fmt;
 use eml_extern::Extern;
 
 use crate::{
-    Atom, Block, BlockId, Call, Case, CasePattern, CoreFn, EffectInfo, FnIdx, Loc, OperationInfo,
-    Program, Repr, Rhs, Stmt, Term, VarId, VarInfo,
+    Atom, Block, BlockId, Call, Case, CasePattern, CoreFn, Ctor, EffectInfo, FnIdx, Layout,
+    LayoutCtor, LayoutId, Loc, OperationInfo, Program, Repr, Rhs, Stmt, Term, VarId, VarInfo,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -212,6 +212,8 @@ struct FnState {
 struct Parser<'t> {
     tokens: &'t [Token],
     pos: usize,
+    layouts: Vec<Layout>,
+    layout_ids: HashMap<String, LayoutId>,
     effects: Vec<EffectInfo>,
     effect_ids: HashMap<String, u32>,
     functions: HashMap<String, FnIdx>,
@@ -226,6 +228,8 @@ impl<'t> Parser<'t> {
         Parser {
             tokens,
             pos: 0,
+            layouts: Vec::new(),
+            layout_ids: HashMap::new(),
             effects: Vec::new(),
             effect_ids: HashMap::new(),
             functions: HashMap::new(),
@@ -237,6 +241,9 @@ impl<'t> Parser<'t> {
     }
 
     fn program(mut self) -> Result<Program, ParseError> {
+        while self.at_word("layout") {
+            self.layout()?;
+        }
         while self.at_word("effect") {
             self.effect()?;
         }
@@ -257,9 +264,96 @@ impl<'t> Parser<'t> {
             functions,
             entry,
             strings: self.strings,
+            layouts: self.layouts,
             effects: self.effects,
             files: self.files,
         })
+    }
+
+    /// `layout Name { Ctor, Ctor(repr, ..) }`。配置は書いた順に番号が付く。
+    fn layout(&mut self) -> Result<(), ParseError> {
+        let line = self.expect_word("layout")?;
+        let name = self.layout_name()?;
+        // 参照の `#N` は表の番号と読むので、`#` で始まる名前の配置は名前で引けない
+        if name.starts_with('#') {
+            return Err(error(line, "a layout name cannot be `#N`"));
+        }
+        let constructors = self.list('{', '}', |p| {
+            let name = p.layout_name()?;
+            let fields = if p.at_punct('(') {
+                let line = p.line();
+                let fields = p.list('(', ')', |p| p.repr())?;
+                // `pretty` はフィールドのないコンストラクタに括弧を書かない
+                if fields.is_empty() {
+                    return Err(error(line, "an empty field list"));
+                }
+                fields
+            } else {
+                Vec::new()
+            };
+            Ok(LayoutCtor { name, fields })
+        })?;
+        // 組の配置は要素の数だけで決まる (docs/spec/core-ir.md の「データの配置」)。名前と形が食い違う表を読まない
+        if name.starts_with('(') {
+            let arity = name.len() - 1;
+            let tuple = matches!(&constructors[..], [ctor] if ctor.name == name
+                && ctor.fields.len() == arity
+                && ctor.fields.iter().all(|&field| field == Repr::TObj));
+            if !tuple {
+                return Err(error(
+                    line,
+                    format!(
+                        "the tuple layout `{name}` must have one constructor `{name}` with {arity} tobj fields"
+                    ),
+                ));
+            }
+        }
+        let id = LayoutId(self.layouts.len() as u32);
+        if self.layout_ids.insert(name.clone(), id).is_some() {
+            return Err(error(line, format!("layout `{name}` is declared twice")));
+        }
+        self.layouts.push(Layout { name, constructors });
+        Ok(())
+    }
+
+    /// 配置とコンストラクタの名前。語か、タプルの名前 `(,)`、`(,,)` である。
+    fn layout_name(&mut self) -> Result<String, ParseError> {
+        if self.at_punct('(') && self.peek_at(1) == Some(&Tok::Punct(',')) {
+            self.pos += 1;
+            let mut name = String::from("(");
+            while self.eat_punct(',') {
+                name.push(',');
+            }
+            self.expect_punct(')')?;
+            name.push(')');
+            return Ok(name);
+        }
+        self.word()
+    }
+
+    /// 配置の名前か `#N`。`#N` は、`mask` と操作の番号と同じく表の番号で、表にない番号も書ける。表にない番号は、
+    /// 誤りを含む IR を verifier に渡すテストのためにある。
+    fn layout_ref(&mut self) -> Result<LayoutId, ParseError> {
+        let line = self.line();
+        let tuple = self.at_punct('(') && self.peek_at(1) == Some(&Tok::Punct(','));
+        if !(tuple || matches!(self.peek(), Some(Tok::Word(_)))) {
+            return Err(self.error_here("expected a layout"));
+        }
+        let name = self.layout_name()?;
+        if let Some(number) = tag_number(&name) {
+            return Ok(LayoutId(number));
+        }
+        self.layout_ids
+            .get(&name)
+            .copied()
+            .ok_or_else(|| error(line, format!("unknown layout `{name}`")))
+    }
+
+    /// `L #t`。
+    fn ctor(&mut self) -> Result<Ctor, ParseError> {
+        let layout = self.layout_ref()?;
+        let tag = self.tag()?;
+        Ok(Ctor { layout, tag })
     }
 
     fn effect(&mut self) -> Result<(), ParseError> {
@@ -429,15 +523,19 @@ impl<'t> Parser<'t> {
                 }
                 "unpack" => {
                     let value = self.var(state)?;
-                    let tag = self.tag()?;
+                    let ctor = self.ctor()?;
                     let fields = self.list('(', ')', |p| p.binder(state))?;
-                    stmts.push(Stmt::Unpack { value, tag, fields });
+                    stmts.push(Stmt::Unpack {
+                        value,
+                        ctor,
+                        fields,
+                    });
                 }
                 "dup" => stmts.push(Stmt::Dup(self.var(state)?)),
                 "decref" => stmts.push(Stmt::Decref(self.var(state)?)),
                 "release" => {
                     let value = self.var(state)?;
-                    let tag = self.tag()?;
+                    let ctor = self.ctor()?;
                     let fields = self.list('(', ')', |p| {
                         if p.at_word("_") {
                             p.pos += 1;
@@ -449,7 +547,11 @@ impl<'t> Parser<'t> {
                     if fields.iter().all(Option::is_none) {
                         return Err(error(line, "a release keeps no field; write `decref`"));
                     }
-                    stmts.push(Stmt::Release { value, tag, fields });
+                    stmts.push(Stmt::Release {
+                        value,
+                        ctor,
+                        fields,
+                    });
                 }
                 "return" => break Term::Return(self.atom(state)?),
                 "tail" => {
@@ -469,9 +571,15 @@ impl<'t> Parser<'t> {
                 }
                 "switch" => {
                     let scrutinee = self.atom(state)?;
+                    let layout = if self.at_punct('{') {
+                        None
+                    } else {
+                        Some(self.layout_ref()?)
+                    };
                     let (cases, default) = self.cases(state)?;
                     break Term::Switch {
                         scrutinee,
+                        layout,
                         cases,
                         default,
                     };
@@ -600,9 +708,9 @@ impl<'t> Parser<'t> {
                 Rhs::ConstString(self.intern(value))
             }
             "con" => {
-                let tag = self.tag()?;
+                let ctor = self.ctor()?;
                 Rhs::Con {
-                    tag,
+                    ctor,
                     args: self.list('(', ')', |p| p.atom(state))?,
                 }
             }
@@ -847,6 +955,10 @@ impl<'t> Parser<'t> {
     }
 
     fn tag(&mut self) -> Result<u32, ParseError> {
+        // 配置のない古い形 `con #1(x)` は `#1` を配置と読んでここに来る。名前がないという誤りより、タグがないと言う
+        if !matches!(self.peek(), Some(Tok::Word(_))) {
+            return Err(self.error_here("expected a tag `#N`"));
+        }
         let line = self.line();
         let word = self.word()?;
         tag_number(&word).ok_or_else(|| error(line, format!("expected a tag `#N`, found `{word}`")))

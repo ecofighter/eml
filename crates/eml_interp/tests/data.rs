@@ -10,11 +10,12 @@ use crate::common::{run_core, run_core_unverified};
 fn a_tobj_variable_holding_a_tag_takes_its_case() {
     // 引数のないコンストラクタの値は、`tobj` の変数にも即値で入る
     let text = "\
+layout Option { None, Some(tobj) }
 fn main() -> unit {
   tail call show(#0)
 }
 fn show(d.0: tobj) -> unit {
-  switch d.0 { #0 -> b1, #1(x.1: obj) -> b2 }
+  switch d.0 Option { #0 -> b1, #1(x.1: obj) -> b2 }
 b1:
   decref d.0
   let s.2: obj = const \"none\"
@@ -31,10 +32,12 @@ b2:
 #[test]
 fn a_case_with_a_different_number_of_fields_is_an_internal_error() {
     let text = "\
+layout List { Nil, Cons(tobj, tobj) }
+layout Option { None, Some(tobj) }
 fn main() -> unit {
   let s.0: obj = const \"field\"
-  let d.1: tobj = con #1(s.0)
-  switch d.1 { #0 -> b1, #1(x.2: obj, y.3: obj) -> b2 }
+  let d.1: tobj = con Option #1(s.0)
+  switch d.1 List { #0 -> b1, #1(x.2: obj, y.3: obj) -> b2 }
 b1:
   return ()
 b2:
@@ -86,10 +89,11 @@ fn a_string_switch_leaves_the_string_to_its_targets() {
 fn a_value_with_fields_that_goes_to_the_default_is_released() {
     // `default` はフィールドを束縛しないので、行き先は値を `decref` で手放す
     let text = "\
+layout Option { None, Some(tobj) }
 fn main() -> unit {
   let s.0: obj = const \"field\"
-  let d.1: tobj = con #1(s.0)
-  switch d.1 { #0 -> b1, _ -> b2 }
+  let d.1: tobj = con Option #1(s.0)
+  switch d.1 Option { #0 -> b1, _ -> b2 }
 b1:
   decref d.1
   return ()
@@ -126,14 +130,15 @@ b3:
 /// 組を2回分解する。`unpack` は箱を読むだけなので、1回目の後も箱は残る。1回目はフィールドを複製し、2回目は
 /// `release` で箱を手放してフィールドを受け取る。
 const UNPACK_TWICE: &str = "\
+layout (,) { (,)(tobj, tobj) }
 fn main() -> unit {
   let s.0: obj = const \"first\"
-  let p.1: obj = con #0(s.0, 2)
-  unpack p.1 #0(a.2: obj, n.3: int)
+  let p.1: obj = con (,) #0(s.0, 2)
+  unpack p.1 (,) #0(a.2: obj, n.3: int)
   dup a.2
   let o.4: unit = extern Prelude.println(a.2)
-  unpack p.1 #0(b.5: obj, m.6: int)
-  release p.1 #0(b.5, _)
+  unpack p.1 (,) #0(b.5: obj, m.6: int)
+  release p.1 (,) #0(b.5, _)
   let o.7: unit = extern Prelude.println(b.5)
   return o.7
 }
@@ -152,9 +157,10 @@ fn an_unpack_reads_the_fields_without_taking_the_box() {
 fn unpack_of_tag_one(unpack: &str) -> Result<(), RuntimeError> {
     let text = format!(
         "\
+layout Option {{ None, Some(tobj) }}
 fn main() -> unit {{
   let s.0: obj = const \"field\"
-  let p.1: obj = con #1(s.0)
+  let p.1: obj = con Option #1(s.0)
   {unpack}
   return ()
 }}
@@ -166,7 +172,7 @@ fn main() -> unit {{
 #[test]
 fn an_unpack_with_a_different_tag_is_an_internal_error() {
     assert_eq!(
-        unpack_of_tag_one("unpack p.1 #0(a.2: obj)"),
+        unpack_of_tag_one("unpack p.1 Option #0(a.2: obj)"),
         Err(RuntimeError::Fault {
             fault: Fault::Internal("an unpack names a different tag than the value has"),
             function: "main".to_string(),
@@ -178,7 +184,7 @@ fn an_unpack_with_a_different_tag_is_an_internal_error() {
 #[test]
 fn an_unpack_with_a_different_number_of_fields_is_an_internal_error() {
     assert_eq!(
-        unpack_of_tag_one("unpack p.1 #1(a.2: obj, b.3: obj)"),
+        unpack_of_tag_one("unpack p.1 Option #1(a.2: obj, b.3: obj)"),
         Err(RuntimeError::Fault {
             fault: Fault::Internal(
                 "an unpack binds a different number of fields than the value has"
@@ -193,9 +199,10 @@ fn an_unpack_with_a_different_number_of_fields_is_an_internal_error() {
 fn an_unpack_of_a_value_that_is_not_an_object_is_an_internal_error() {
     // verifier は R8 で `obj` でない値の `unpack` を拒むので、通さずに実行する
     let text = "\
+layout Box { Box(tobj) }
 fn main() -> unit {
   let n.0: int = extern Prelude.+(1, 2)
-  unpack n.0 #0(a.1: obj)
+  unpack n.0 Box #0(a.1: obj)
   return ()
 }
 ";
@@ -213,9 +220,10 @@ fn main() -> unit {
 fn an_unpack_of_an_object_that_is_not_data_is_an_internal_error() {
     // 文字列も `obj` なので verifier は通すが、コンストラクタの値ではない
     let text = "\
+layout Box { Box(tobj) }
 fn main() -> unit {
   let s.0: obj = extern Prelude.show_int(1)
-  unpack s.0 #0(a.1: obj)
+  unpack s.0 Box #0(a.1: obj)
   return ()
 }
 ";
@@ -242,15 +250,16 @@ fn release_one_field(shared: bool) -> String {
     };
     format!(
         "\
+layout Option {{ None, Some(tobj) }}
 fn main() -> unit {{
   let s.0: obj = extern Prelude.show_int(7)
-  let d.1: tobj = con #1(s.0)
-{dup}  switch d.1 {{ #0 -> b1, #1(x.2: obj) -> b2 }}
+  let d.1: tobj = con Option #1(s.0)
+{dup}  switch d.1 Option {{ #0 -> b1, #1(x.2: obj) -> b2 }}
 b1:
 {decref}  decref d.1
   return ()
 b2:
-  release d.1 #1(x.2)
+  release d.1 Option #1(x.2)
   let o.3: unit = extern Prelude.println(x.2)
 {decref}  return o.3
 }}
@@ -277,12 +286,13 @@ fn a_release_of_a_shared_box_dups_its_field() {
 #[test]
 fn a_release_keeps_one_value_in_two_fields_twice() {
     let text = "\
+layout (,) { (,)(tobj, tobj) }
 fn main() -> unit {
   let s.0: obj = extern Prelude.show_int(7)
   dup s.0
-  let d.1: obj = con #0(s.0, s.0)
-  unpack d.1 #0(x.2: obj, y.3: obj)
-  release d.1 #0(x.2, y.3)
+  let d.1: obj = con (,) #0(s.0, s.0)
+  unpack d.1 (,) #0(x.2: obj, y.3: obj)
+  release d.1 (,) #0(x.2, y.3)
   let t.4: obj = extern Prelude.++(x.2, y.3)
   let o.5: unit = extern Prelude.println(t.4)
   return o.5
@@ -296,9 +306,10 @@ fn main() -> unit {
 fn release_of_tag_one(release: &str) -> Result<(), RuntimeError> {
     let text = format!(
         "\
+layout Option {{ None, Some(tobj) }}
 fn main() -> unit {{
   let s.0: obj = extern Prelude.show_int(7)
-  let p.1: obj = con #1(s.0)
+  let p.1: obj = con Option #1(s.0)
   {release}
   return ()
 }}
@@ -316,18 +327,19 @@ fn a_release_of_another_layout_is_an_internal_error() {
         function: "main".to_string(),
         at: None,
     });
-    assert_eq!(release_of_tag_one("release p.1 #0(s.0)"), fault);
-    assert_eq!(release_of_tag_one("release p.1 #1(s.0, _)"), fault);
+    assert_eq!(release_of_tag_one("release p.1 Option #0(s.0)"), fault);
+    assert_eq!(release_of_tag_one("release p.1 Option #1(s.0, _)"), fault);
     // 文字列も `obj` だが、コンストラクタの値ではない
-    assert_eq!(release_of_tag_one("release s.0 #1(s.0)"), fault);
+    assert_eq!(release_of_tag_one("release s.0 Option #1(s.0)"), fault);
 }
 
 #[test]
 fn a_release_of_a_value_that_is_not_an_object_is_an_internal_error() {
     let text = "\
+layout Box { Box(tobj) }
 fn main() -> unit {
   let n.0: int = extern Prelude.+(1, 2)
-  release n.0 #0(n.0)
+  release n.0 Box #0(n.0)
   return ()
 }
 ";

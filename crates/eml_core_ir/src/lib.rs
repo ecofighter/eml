@@ -29,6 +29,9 @@ pub struct Program {
     /// 文字列リテラルの定数表。`ConstString` と `CasePattern::String` が添字で引く。インタプリタは項目ごとに不死の
     /// 物体を1つ作り、`ConstString` はその物体の参照を1つ作る (docs/spec/runtime.md の「不死の物体」)。
     pub strings: Vec<String>,
+    /// データの配置の表。`con`、`switch`、`unpack`、`release` が `LayoutId` で引く。translate は最初に使った順に入れる
+    /// (docs/spec/core-ir.md の「データの配置」)。
+    pub layouts: Vec<Layout>,
     /// エフェクトの表。添字は `Call::Handle` と `Call::Perform` のエフェクトの番号で、HIR の `EffectId` の添字と同じである。
     pub effects: Vec<EffectInfo>,
     /// 表示用のパスの表。`Loc.file` が添字で引く。
@@ -38,6 +41,61 @@ pub struct Program {
 impl Program {
     pub fn function(&self, idx: FnIdx) -> &CoreFn {
         &self.functions[idx.0 as usize]
+    }
+
+    /// 表にない番号なら `None` である。誤りを含む IR も表示できるようにする。
+    pub fn layout(&self, id: LayoutId) -> Option<&Layout> {
+        self.layouts.get(id.0 as usize)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct LayoutId(pub u32);
+
+/// `con`、`unpack`、`release` が指すコンストラクタ。タグは配置の中の添字で、宣言の順である。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Ctor {
+    pub layout: LayoutId,
+    pub tag: u32,
+}
+
+/// data の型1つか、タプルの要素の数1つの配置 (docs/spec/core-ir.md の「データの配置」)。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Layout {
+    /// テキストの形で引く名前。関数と同じく、入口以外のモジュールの型は修飾する (`Prelude.Bool`)。タプルは `(,)`。
+    pub name: String,
+    /// タグの順のコンストラクタ。
+    pub constructors: Vec<LayoutCtor>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LayoutCtor {
+    pub name: String,
+    /// 宣言したフィールドの型の Repr。型変数は `tobj` で、具体化した型は見ない。
+    pub fields: Vec<Repr>,
+}
+
+impl Layout {
+    /// 値の Repr。型の Repr と同じ規則で、コンストラクタのフィールドの数だけから決まる。
+    pub fn repr(&self) -> Repr {
+        data_repr(self.constructors.iter().map(|ctor| ctor.fields.len()))
+    }
+}
+
+/// data の値の Repr。フィールドのないコンストラクタだけなら `enum`、どれもフィールドを持てば `obj`、混ざれば `tobj`
+/// である。コンストラクタのない型は `enum` になる。
+pub(crate) fn data_repr(arities: impl IntoIterator<Item = usize>) -> Repr {
+    let (mut count, mut with_fields) = (0, 0);
+    for arity in arities {
+        count += 1;
+        with_fields += usize::from(arity > 0);
+    }
+    if with_fields == 0 {
+        Repr::Enum
+    } else if with_fields == count {
+        Repr::Obj
+    } else {
+        Repr::TObj
     }
 }
 
@@ -117,17 +175,17 @@ pub enum Stmt {
     /// フィールドは `Case` のフィールドと同じ規則で束縛する (docs/spec/core-ir.md)。
     Unpack {
         value: VarId,
-        tag: u32,
+        ctor: Ctor,
         fields: Vec<VarId>,
     },
     Dup(VarId),
     Decref(VarId),
-    /// `release x #t(p1, .., pn)`。Perceus だけが入れる RC の命令である。分解した値 `x` の参照を1つ手放し、名前を
+    /// `release x L #t(p1, .., pn)`。Perceus だけが入れる RC の命令である。分解した値 `x` の参照を1つ手放し、名前を
     /// 書いた位置の変数が、そのフィールドの参照を1つずつ受け取る。`None` は残さない位置である
     /// (docs/spec/core-ir.md)。
     Release {
         value: VarId,
-        tag: u32,
+        ctor: Ctor,
         fields: Vec<Option<VarId>>,
     },
 }
@@ -139,7 +197,7 @@ impl Stmt {
             Stmt::Let { var, rhs: _ } => std::slice::from_ref(var),
             Stmt::Unpack {
                 value: _,
-                tag: _,
+                ctor: _,
                 fields,
             } => fields,
             Stmt::Dup(_) | Stmt::Decref(_) | Stmt::Release { .. } => &[],
@@ -152,7 +210,7 @@ impl Stmt {
             Stmt::Let { var: _, rhs } => rhs.for_each_atom(f),
             Stmt::Unpack {
                 value,
-                tag: _,
+                ctor: _,
                 fields: _,
             } => f(Atom::Var(*value)),
             Stmt::Dup(_) | Stmt::Decref(_) | Stmt::Release { .. } => {}
@@ -181,9 +239,11 @@ pub enum Term {
         target: BlockId,
         args: Vec<Atom>,
     },
-    /// 合う case がなければ `default` に進む。行き先は引数を持たない (docs/spec/core-ir.md)。
+    /// 合う case がなければ `default` に進む。行き先は引数を持たない。`layout` は、タグの case を持つ `switch` だけが
+    /// 持つ (docs/spec/core-ir.md)。
     Switch {
         scrutinee: Atom,
+        layout: Option<LayoutId>,
         cases: Vec<Case>,
         default: Option<BlockId>,
     },
@@ -196,6 +256,7 @@ impl Term {
             Term::Jump { target, args: _ } => (Some(*target), &[][..], None),
             Term::Switch {
                 scrutinee: _,
+                layout: _,
                 cases,
                 default,
             } => (None, &cases[..], *default),
@@ -211,6 +272,7 @@ impl Term {
             Term::Jump { target, args: _ } => f(target),
             Term::Switch {
                 scrutinee: _,
+                layout: _,
                 cases,
                 default,
             } => {
@@ -230,6 +292,7 @@ impl Term {
             Term::Jump { target: _, args } => args.iter().for_each(|&atom| f(atom)),
             Term::Switch {
                 scrutinee,
+                layout: _,
                 cases: _,
                 default: _,
             } => f(*scrutinee),
@@ -251,6 +314,7 @@ impl Term {
             Term::Jump { target: _, args } => args.iter_mut().for_each(f),
             Term::Switch {
                 scrutinee,
+                layout: _,
                 cases: _,
                 default: _,
             } => f(scrutinee),
@@ -298,7 +362,7 @@ pub enum Rhs {
     ConstString(u32),
     /// 引数を持つコンストラクタの値を作る。`args` の所有権は値に移る。引数のないコンストラクタの値は `Atom::Tag` で
     /// ある (docs/spec/core-ir.md)。
-    Con { tag: u32, args: Vec<Atom> },
+    Con { ctor: Ctor, args: Vec<Atom> },
     /// 値の所有権を受け取って捨てる。値は `()` である。
     Drop(Atom),
 }
@@ -318,7 +382,7 @@ impl Rhs {
                 args,
                 at: _,
             }
-            | Rhs::Con { tag: _, args } => args.iter().for_each(|&atom| f(atom)),
+            | Rhs::Con { ctor: _, args } => args.iter().for_each(|&atom| f(atom)),
             Rhs::Drop(atom) => f(*atom),
             Rhs::ConstString(_) => {}
         }
@@ -337,7 +401,7 @@ impl Rhs {
                 args,
                 at: _,
             }
-            | Rhs::Con { tag: _, args } => args.iter_mut().for_each(f),
+            | Rhs::Con { ctor: _, args } => args.iter_mut().for_each(f),
             Rhs::Drop(atom) => f(atom),
             Rhs::ConstString(_) => {}
         }

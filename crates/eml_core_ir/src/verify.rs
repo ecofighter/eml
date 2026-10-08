@@ -137,6 +137,7 @@ fn shape(function: &CoreFn) -> Result<Dominators, String> {
                 }
                 Term::Switch {
                     scrutinee: _,
+                    layout: _,
                     cases: _,
                     default: _,
                 } => switches_in[to as usize] += 1,
@@ -431,12 +432,16 @@ impl<'a> Checker<'a> {
                         at: _,
                     }
                     | Rhs::ConstString(_)
-                    | Rhs::Con { tag: _, args: _ }
+                    | Rhs::Con { ctor: _, args: _ }
                     | Rhs::Drop(_) => {}
                 }
                 self.define(owned, *var, self.at)
             }
-            Stmt::Unpack { value, tag, fields } => {
+            Stmt::Unpack {
+                value,
+                ctor,
+                fields,
+            } => {
                 let repr = self.function.repr(*value);
                 if repr != Repr::Obj {
                     return Err(format!(
@@ -452,7 +457,7 @@ impl<'a> Checker<'a> {
                     ));
                 }
                 self.read(owned, *value, "unpacked")?;
-                self.bind_fields(owned, *value, *tag, fields, self.at)
+                self.bind_fields(owned, *value, ctor.tag, fields, self.at)
             }
             Stmt::Dup(var) => {
                 self.rc_allowed(*var, "duplicated")?;
@@ -470,9 +475,13 @@ impl<'a> Checker<'a> {
                 self.rc_allowed(*var, "released")?;
                 self.give_up(owned, *var, "released")
             }
-            Stmt::Release { value, tag, fields } => {
+            Stmt::Release {
+                value,
+                ctor,
+                fields,
+            } => {
                 self.rc_allowed(*value, "released with its fields")?;
-                self.release(owned, *value, *tag, fields)
+                self.release(owned, *value, ctor.tag, fields)
             }
         }
     }
@@ -511,6 +520,7 @@ impl<'a> Checker<'a> {
             }
             Term::Switch {
                 scrutinee,
+                layout: _,
                 cases,
                 default,
             } => {
@@ -850,7 +860,7 @@ impl<'a> Checker<'a> {
         Ok(())
     }
 
-    /// `release x #t(p1, .., pn)`。x の参照を1つ手放し、名前を書いた変数が参照を1つずつ受け取る。名前を書いた変数は、
+    /// `release x L #t(p1, .., pn)`。x の参照を1つ手放し、名前を書いた変数が参照を1つずつ受け取る。名前を書いた変数は、
     /// x を同じタグとフィールドの数で分解したときの、同じ位置のフィールドである (docs/spec/core-ir.md)。
     fn release(
         &self,
@@ -1008,13 +1018,13 @@ impl<'a> Checker<'a> {
                 }
             }
             // フィールドのないコンストラクタの値は、`#N` の1つの書き方にそろえる (docs/spec/core-ir.md)
-            Rhs::Con { tag: _, args } if args.is_empty() => {
+            Rhs::Con { ctor: _, args } if args.is_empty() => {
                 return Err(
                     "a constructor value without fields is written as a tag `#N`, not `con`"
                         .to_string(),
                 );
             }
-            Rhs::Con { tag: _, args: _ } | Rhs::Drop(_) => {}
+            Rhs::Con { ctor: _, args: _ } | Rhs::Drop(_) => {}
         }
         self.consume_all(owned, |f| rhs.for_each_atom(f))
     }

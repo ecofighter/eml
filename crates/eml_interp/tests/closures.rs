@@ -116,12 +116,13 @@ fn each(f.0: tobj, m.1: tobj) -> unit {{
 fn a_function_value_needs_no_reference_counting() {
     let text = format!(
         "\
+layout (,) {{ (,)(tobj, tobj) }}
 fn main() -> unit {{
   tail call pair(&first)
 }}
 fn pair(f.0: tobj) -> unit {{
   dup f.0
-  let d.1: obj = con #0(f.0, f.0)
+  let d.1: obj = con (,) #0(f.0, f.0)
   decref d.1
   let s.2: obj = const \"ok\"
   let t.3: unit = extern Prelude.println(s.2)

@@ -53,10 +53,6 @@ impl FnBuilder {
         VarId(self.vars.len() as u32 - 1)
     }
 
-    pub(super) fn repr(&self, var: VarId) -> Repr {
-        self.vars[var.0 as usize].repr
-    }
-
     /// 関数の引数。入口のブロックの引数になる。
     pub(super) fn param(&mut self, info: VarInfo) -> VarId {
         let var = self.var(info);

@@ -103,7 +103,7 @@ fn remove_dead_lets(function: &mut CoreFn) -> Vec<usize> {
 /// 早まるだけである。
 fn pure(rhs: &Rhs) -> bool {
     match rhs {
-        Rhs::ConstString(_) | Rhs::Con { tag: _, args: _ } | Rhs::MakeClosure(_, _) => true,
+        Rhs::ConstString(_) | Rhs::Con { ctor: _, args: _ } | Rhs::MakeClosure(_, _) => true,
         Rhs::Extern {
             ext,
             args: _,

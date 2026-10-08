@@ -76,10 +76,18 @@ impl<'p> Machine<'p> {
         };
         match stmt {
             Stmt::Let { var, rhs } => return self.bind(*var, rhs),
-            Stmt::Unpack { value, tag, fields } => self.unpack(*value, *tag, fields)?,
+            Stmt::Unpack {
+                value,
+                ctor,
+                fields,
+            } => self.unpack(*value, ctor.tag, fields)?,
             Stmt::Dup(var) => self.rt.dup(self.env.read(*var)?)?,
             Stmt::Decref(var) => self.rt.decref(self.env.read(*var)?)?,
-            Stmt::Release { value, tag, fields } => self.release(*value, *tag, fields)?,
+            Stmt::Release {
+                value,
+                ctor,
+                fields,
+            } => self.release(*value, ctor.tag, fields)?,
         }
         self.stmt += 1;
         Ok(Step::Continue)
@@ -109,9 +117,12 @@ impl<'p> Machine<'p> {
                     .map_err(|fault| Failure { fault, at: *at })?
             }
             Rhs::ConstString(index) => self.rt.const_string(*index)?,
-            Rhs::Con { tag, args } => {
+            Rhs::Con { ctor, args } => {
                 let fields = self.env.atoms(args)?;
-                self.rt.alloc(Payload::Data { tag: *tag, fields })
+                self.rt.alloc(Payload::Data {
+                    tag: ctor.tag,
+                    fields,
+                })
             }
             Rhs::Drop(atom) => {
                 self.rt.decref(self.env.atom(atom)?)?;
@@ -205,6 +216,7 @@ impl<'p> Machine<'p> {
             }
             Term::Switch {
                 scrutinee,
+                layout: _,
                 cases,
                 default,
             } => {

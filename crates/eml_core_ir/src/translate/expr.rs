@@ -8,7 +8,7 @@ use eml_hir::{
 };
 use eml_types::Type;
 
-use crate::{Atom, Call, FnIdx, Rhs, Stmt, TUPLE};
+use crate::{Atom, Call, Ctor, FnIdx, Rhs, Stmt, TUPLE};
 
 use super::pattern::Known;
 use super::program::{effect_index, perform_call, plain_call};
@@ -78,9 +78,9 @@ impl FnLowering<'_> {
     /// case を選べるようにする (docs/spec/core-ir.md)。
     pub(super) fn bind(&mut self, name: &str, ty: &Type, rhs: Rhs) -> Atom {
         let var = self.builder.var(var_info(name, ty, self.ctx.hir));
-        if let Rhs::Con { tag, args } = &rhs {
+        if let Rhs::Con { ctor, args } = &rhs {
             let known = Known {
-                tag: *tag,
+                tag: ctor.tag,
                 args: args.clone(),
                 ty: ty.clone(),
             };
@@ -263,7 +263,7 @@ impl FnLowering<'_> {
             Callee::Constructor(ctor) => (
                 "d",
                 Rhs::Con {
-                    tag: self.ctx.hir[ctor].tag,
+                    ctor: self.program.ctor(self.ctx.hir, ctor),
                     args,
                 },
             ),
@@ -504,9 +504,13 @@ impl FnLowering<'_> {
             }
             ExprKind::Tuple(elements) => {
                 // 要素を左から評価し、コンストラクタが1つの `data` と同じ値にする (docs/spec/core-ir.md)
-                let args = elements.iter().map(|&element| self.atom(element)).collect();
+                let args: Vec<Atom> = elements.iter().map(|&element| self.atom(element)).collect();
                 let ty = self.ty(id);
-                self.bind("d", &ty, Rhs::Con { tag: TUPLE, args })
+                let ctor = Ctor {
+                    layout: self.program.tuple_layout(args.len()),
+                    tag: TUPLE,
+                };
+                self.bind("d", &ty, Rhs::Con { ctor, args })
             }
             ExprKind::Drop(value) => {
                 let value = self.atom(*value);

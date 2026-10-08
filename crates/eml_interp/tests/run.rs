@@ -164,9 +164,10 @@ fn a_fault_outside_an_extern_has_no_position() {
     // 位置を付けるのは extern の呼び出しが起こした誤りだけである。同じ関数に位置付きの extern があっても、`decref` の
     // 誤りには付けない
     let text = "\
+layout (,) { (,)(tobj, tobj) }
 fn main() -> unit {
   let n.0: int = extern Prelude.+(1, 2) @\"main.em\":1:1
-  let d.1: obj = con #0(n.0, n.0)
+  let d.1: obj = con (,) #0(n.0, n.0)
   decref d.1
   decref d.1
   return ()

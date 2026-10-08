@@ -5,12 +5,13 @@ use std::collections::HashMap;
 use eml_extern::Extern;
 use eml_hir::{
     ConstructorId, EffectDef, EffectId, EffectKind, FunctionId, FunctionKind, ModuleId,
-    OpMultiplicity, OperationId, Program as HirProgram, ValueItem,
+    OpMultiplicity, OperationId, Program as HirProgram, TypeDefId, TypeDefKind, ValueItem,
 };
 use eml_types::{Type, TypedProgram};
 
 use crate::{
-    Atom, Call, CoreFn, EffectInfo, FnIdx, Loc, OperationInfo, Repr, Rhs, Stmt, Term, VarInfo,
+    Atom, Call, CoreFn, Ctor, EffectInfo, FnIdx, Layout, LayoutCtor, LayoutId, Loc, OperationInfo,
+    Repr, Rhs, Stmt, Term, VarInfo,
 };
 
 use super::builder::FnBuilder;
@@ -35,6 +36,13 @@ impl Interner {
     }
 }
 
+/// 配置の表の鍵。タプルの配置は要素の数だけで決まる。
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+enum LayoutKey {
+    Data(TypeDefId),
+    Tuple(usize),
+}
+
 /// 変換の途中で、ラムダと包む関数などを足していく関数の表。番号を先に取り、中身は変換が終わってから入れる。
 pub(super) struct ProgramBuilder {
     /// extern の関数のスキームの型。extern の関数を包む関数の変数の Repr を決める。
@@ -44,6 +52,9 @@ pub(super) struct ProgramBuilder {
     pub(super) strings: Interner,
     /// `Loc.file` が引く表示用のパス (`Program.files`)。
     pub(super) files: Interner,
+    /// IR が名指す data の型とタプルの配置 (`Program.layouts`)。最初に使った順に番号を振る。
+    pub(super) layouts: Vec<Layout>,
+    layout_ids: HashMap<LayoutKey, LayoutId>,
     /// 操作のスキームの型。操作を包む関数の変数の Repr を決める。
     operation_types: HashMap<OperationId, Type>,
     operation_wrappers: HashMap<OperationId, FnIdx>,
@@ -70,6 +81,8 @@ impl ProgramBuilder {
             arities: Vec::new(),
             strings: Interner::default(),
             files: Interner::default(),
+            layouts: Vec::new(),
+            layout_ids: HashMap::new(),
             operation_types: typed
                 .decls
                 .iter()
@@ -90,6 +103,65 @@ impl ProgramBuilder {
             constructor_wrappers: HashMap::new(),
             stateless_continuation_wrapper: None,
             stateful_continuation_wrapper: None,
+        }
+    }
+
+    /// data の型の配置。フィールドの Repr は、コンストラクタのスキームの、宣言したフィールドの型から決める。
+    pub(super) fn data_layout(&mut self, hir: &HirProgram, ty: TypeDefId) -> LayoutId {
+        if let Some(&id) = self.layout_ids.get(&LayoutKey::Data(ty)) {
+            return id;
+        }
+        let TypeDefKind::Data { constructors } = &hir[ty].kind else {
+            unreachable!("only data types have constructors")
+        };
+        let constructors = constructors
+            .iter()
+            .map(|&ctor| {
+                let constructor = &hir[ctor];
+                let (fields, _) =
+                    split_arrows(self.constructor_type(ctor), constructor.fields.len());
+                LayoutCtor {
+                    name: constructor.name.clone(),
+                    fields: fields.iter().map(|field| repr(field, hir)).collect(),
+                }
+            })
+            .collect();
+        let name = core_name(hir, ty.module, &hir[ty].name);
+        self.add_layout(LayoutKey::Data(ty), name, constructors)
+    }
+
+    /// タプルの配置。タプルには宣言がないので、フィールドはどれも `tobj` である。
+    pub(super) fn tuple_layout(&mut self, arity: usize) -> LayoutId {
+        if let Some(&id) = self.layout_ids.get(&LayoutKey::Tuple(arity)) {
+            return id;
+        }
+        // 要素が1つのタプルはなく、要素のないタプルは `()` で、どちらも配置を持たない
+        debug_assert!(arity >= 2, "a tuple has at least two elements");
+        let name = format!("({})", ",".repeat(arity - 1));
+        let constructor = LayoutCtor {
+            name: name.clone(),
+            fields: vec![Repr::TObj; arity],
+        };
+        self.add_layout(LayoutKey::Tuple(arity), name, vec![constructor])
+    }
+
+    fn add_layout(
+        &mut self,
+        key: LayoutKey,
+        name: String,
+        constructors: Vec<LayoutCtor>,
+    ) -> LayoutId {
+        let id = LayoutId(self.layouts.len() as u32);
+        self.layouts.push(Layout { name, constructors });
+        self.layout_ids.insert(key, id);
+        id
+    }
+
+    /// コンストラクタの `Ctor`。
+    pub(super) fn ctor(&mut self, hir: &HirProgram, ctor: ConstructorId) -> Ctor {
+        Ctor {
+            layout: self.data_layout(hir, hir[ctor].ty),
+            tag: hir[ctor].tag,
         }
     }
 
@@ -223,11 +295,14 @@ impl ProgramBuilder {
             .map(|ty| var_info("p", ty, hir))
             .collect();
         let name = format!("con${}", core_name(hir, ctor.module, &constructor.name));
-        let tag = constructor.tag;
+        let ctor_id = self.ctor(hir, ctor);
         let function = self.simple(
             name,
             params,
-            |args| Rhs::Con { tag, args },
+            |args| Rhs::Con {
+                ctor: ctor_id,
+                args,
+            },
             var_info("d", &result_type, hir),
         );
         self.constructor_wrappers.insert(ctor, function);

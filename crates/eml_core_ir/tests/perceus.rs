@@ -24,13 +24,15 @@ fn live_in_holds_every_variable_used_later() {
     // RC の対象でない変数も入る。`saved` が使うためである。jump の引数と case のフィールドは行き先の入口で生きている
     let program = parse(
         "\
+layout Prelude.Bool { False, True }
+layout Option { None, Some(tobj) }
 fn f(x.0: int, o.1: tobj) -> int {
   let c.2: enum = extern Prelude.<(x.0, 10)
-  switch c.2 { #0 -> b1, #1 -> b2 }
+  switch c.2 Prelude.Bool { #0 -> b1, #1 -> b2 }
 b1:
   jump b4(x.0)
 b2:
-  switch o.1 { #0 -> b3, #1(y.3: int) -> b5 }
+  switch o.1 Option { #0 -> b3, #1(y.3: int) -> b5 }
 b3:
   jump b4(1)
 b4(t.4: int):
@@ -86,8 +88,9 @@ fn first(a.0: obj, b.1: tobj, n.2: int) -> obj {
 fn a_variable_that_dies_on_one_edge_is_released_in_that_block() {
     // `b1` は `s.1` を使わずに `b3` へ行くので、入口で捨てる。`b2` は `s.1` を引数で渡す
     let text = "\
+layout Prelude.Bool { False, True }
 fn pick(c.0: enum, s.1: obj) -> obj {
-  switch c.0 { #0 -> b1, #1 -> b2 }
+  switch c.0 Prelude.Bool { #0 -> b1, #1 -> b2 }
 b1:
   let t.2: obj = const \"none\"
   jump b3(t.2)
@@ -98,8 +101,9 @@ b3(r.3: obj):
 }
 ";
     insta::assert_snapshot!(perceus_text(text), @r#"
+    layout Prelude.Bool { False, True }
     fn pick(c.0: enum, s.1: obj) -> obj {
-      switch c.0 { #0 -> b1, #1 -> b2 }
+      switch c.0 Prelude.Bool { #0 -> b1, #1 -> b2 }
     b1:
       decref s.1
       let t.2: obj = const "none"
@@ -115,8 +119,9 @@ b3(r.3: obj):
 #[test]
 fn an_unused_parameter_of_a_merge_block_is_released_at_its_start() {
     let text = "\
+layout Prelude.Bool { False, True }
 fn ignore(c.0: enum, s.1: obj) -> int {
-  switch c.0 { #0 -> b1, #1 -> b2 }
+  switch c.0 Prelude.Bool { #0 -> b1, #1 -> b2 }
 b1:
   jump b3(s.1)
 b2:
@@ -127,8 +132,9 @@ b3(r.3: obj):
 }
 ";
     insta::assert_snapshot!(perceus_text(text), @"
+    layout Prelude.Bool { False, True }
     fn ignore(c.0: enum, s.1: obj) -> int {
-      switch c.0 { #0 -> b1, #1 -> b2 }
+      switch c.0 Prelude.Bool { #0 -> b1, #1 -> b2 }
     b1:
       jump b3(s.1)
     b2:
@@ -145,15 +151,17 @@ b3(r.3: obj):
 #[test]
 fn an_unused_unpack_field_is_released_after_the_unpack() {
     let text = "\
+layout (,) { (,)(tobj, tobj) }
 fn first(p.0: obj) -> obj {
-  unpack p.0 #0(a.1: obj, b.2: obj)
+  unpack p.0 (,) #0(a.1: obj, b.2: obj)
   return a.1
 }
 ";
     insta::assert_snapshot!(perceus_text(text), @"
+    layout (,) { (,)(tobj, tobj) }
     fn first(p.0: obj) -> obj {
-      unpack p.0 #0(a.1: obj, b.2: obj)
-      release p.0 #0(a.1, _)
+      unpack p.0 (,) #0(a.1: obj, b.2: obj)
+      release p.0 (,) #0(a.1, _)
       return a.1
     }
     ");
@@ -163,17 +171,19 @@ fn first(p.0: obj) -> obj {
 fn a_live_unpacked_value_dups_the_fields_used_later() {
     // `unpack` は値を読むだけなので、後でも使う `p` は複製しない。借りたフィールドのうち使う `b` だけを複製する
     let text = "\
+layout (,) { (,)(tobj, tobj) }
 fn again(p.0: obj) -> obj {
-  unpack p.0 #0(a.1: int, b.2: obj)
-  let r.3: obj = con #0(p.0, b.2)
+  unpack p.0 (,) #0(a.1: int, b.2: obj)
+  let r.3: obj = con (,) #0(p.0, b.2)
   return r.3
 }
 ";
     insta::assert_snapshot!(perceus_text(text), @"
+    layout (,) { (,)(tobj, tobj) }
     fn again(p.0: obj) -> obj {
-      unpack p.0 #0(a.1: int, b.2: obj)
+      unpack p.0 (,) #0(a.1: int, b.2: obj)
       dup b.2
-      let r.3: obj = con #0(p.0, b.2)
+      let r.3: obj = con (,) #0(p.0, b.2)
       return r.3
     }
     ");
@@ -184,8 +194,9 @@ fn a_target_releases_its_scrutinee_and_keeps_the_fields_it_uses() {
     // どの行き先も scrutinee を所有して始まる。フィールドのない b1 は scrutinee をそのまま返し、b2 は使う `t` だけを
     // 残して scrutinee を手放す
     let text = "\
+layout List { Nil, Cons(tobj, tobj) }
 fn describe(xs.0: tobj) -> tobj {
-  switch xs.0 { #0 -> b1, #1(h.1: obj, t.2: tobj) -> b2 }
+  switch xs.0 List { #0 -> b1, #1(h.1: obj, t.2: tobj) -> b2 }
 b1:
   return xs.0
 b2:
@@ -193,12 +204,13 @@ b2:
 }
 ";
     insta::assert_snapshot!(perceus_text(text), @"
+    layout List { Nil, Cons(tobj, tobj) }
     fn describe(xs.0: tobj) -> tobj {
-      switch xs.0 { #0 -> b1, #1(h.1: obj, t.2: tobj) -> b2 }
+      switch xs.0 List { #0 -> b1, #1(h.1: obj, t.2: tobj) -> b2 }
     b1:
       return xs.0
     b2:
-      release xs.0 #1(_, t.2)
+      release xs.0 List #1(_, t.2)
       return t.2
     }
     ");
@@ -207,8 +219,9 @@ b2:
 #[test]
 fn a_field_used_twice_is_dupped_after_the_release() {
     let text = "\
+layout Option { None, Some(tobj) }
 fn twice(o.0: tobj) -> obj {
-  switch o.0 { #0 -> b1, #1(s.1: obj) -> b2 }
+  switch o.0 Option { #0 -> b1, #1(s.1: obj) -> b2 }
 b1:
   let e.2: obj = const \"e\"
   return e.2
@@ -218,14 +231,15 @@ b2:
 }
 ";
     insta::assert_snapshot!(perceus_text(text), @r#"
+    layout Option { None, Some(tobj) }
     fn twice(o.0: tobj) -> obj {
-      switch o.0 { #0 -> b1, #1(s.1: obj) -> b2 }
+      switch o.0 Option { #0 -> b1, #1(s.1: obj) -> b2 }
     b1:
       decref o.0
       let e.2: obj = const "e"
       return e.2
     b2:
-      release o.0 #1(s.1)
+      release o.0 Option #1(s.1)
       dup s.1
       let t.3: obj = extern Prelude.++(s.1, s.1)
       return t.3
@@ -237,8 +251,9 @@ b2:
 fn a_field_used_after_a_call_is_owned_before_the_call_saves_it() {
     // 借りたフィールドは `save` に入れられないので、入口の `release` で所有にしてから退避する
     let text = "\
+layout Option { None, Some(tobj) }
 fn keep(o.0: tobj) -> obj {
-  switch o.0 { #0 -> b1, #1(s.1: obj) -> b2 }
+  switch o.0 Option { #0 -> b1, #1(s.1: obj) -> b2 }
 b1:
   let e.2: obj = const \"e\"
   return e.2
@@ -251,14 +266,15 @@ fn k(a.0: int) -> int {
 }
 ";
     insta::assert_snapshot!(perceus_text(text), @r#"
+    layout Option { None, Some(tobj) }
     fn keep(o.0: tobj) -> obj {
-      switch o.0 { #0 -> b1, #1(s.1: obj) -> b2 }
+      switch o.0 Option { #0 -> b1, #1(s.1: obj) -> b2 }
     b1:
       decref o.0
       let e.2: obj = const "e"
       return e.2
     b2:
-      release o.0 #1(s.1)
+      release o.0 Option #1(s.1)
       let n.3: int = call k(1) save [s.1]
       return s.1
     }
@@ -324,33 +340,39 @@ fn a_field_passed_to_an_arm_and_used_after_it_is_dupped_before_the_jump() {
     // case-of-case で枝のラベルへフィールドを渡し、枝の後でも使う形。`b3` は `v.2` を引数で渡し、`b5` でも使うので
     // jump の前で複製する。`b4` は `v.2` を渡さないので、所有をそのまま `b5` へ持っていく
     let text = "\
+layout Option { None, Some(tobj) }
+layout Prelude.Bool { False, True }
+layout (,) { (,)(tobj, tobj) }
 fn pair(o.0: tobj, c.1: enum) -> obj {
-  switch o.0 { #0 -> b1, #1(v.2: obj) -> b2 }
+  switch o.0 Option { #0 -> b1, #1(v.2: obj) -> b2 }
 b1:
   let e.3: obj = const \"none\"
   return e.3
 b2:
-  switch c.1 { #0 -> b3, #1 -> b4 }
+  switch c.1 Prelude.Bool { #0 -> b3, #1 -> b4 }
 b3:
   jump b5(v.2)
 b4:
   let n.4: obj = const \"n\"
   jump b5(n.4)
 b5(x.5: obj):
-  let r.6: obj = con #0(x.5, v.2)
+  let r.6: obj = con (,) #0(x.5, v.2)
   return r.6
 }
 ";
     insta::assert_snapshot!(perceus_text(text), @r#"
+    layout Option { None, Some(tobj) }
+    layout Prelude.Bool { False, True }
+    layout (,) { (,)(tobj, tobj) }
     fn pair(o.0: tobj, c.1: enum) -> obj {
-      switch o.0 { #0 -> b1, #1(v.2: obj) -> b2 }
+      switch o.0 Option { #0 -> b1, #1(v.2: obj) -> b2 }
     b1:
       decref o.0
       let e.3: obj = const "none"
       return e.3
     b2:
-      release o.0 #1(v.2)
-      switch c.1 { #0 -> b3, #1 -> b4 }
+      release o.0 Option #1(v.2)
+      switch c.1 Prelude.Bool { #0 -> b3, #1 -> b4 }
     b3:
       dup v.2
       jump b5(v.2)
@@ -358,7 +380,7 @@ b5(x.5: obj):
       let n.4: obj = const "n"
       jump b5(n.4)
     b5(x.5: obj):
-      let r.6: obj = con #0(x.5, v.2)
+      let r.6: obj = con (,) #0(x.5, v.2)
       return r.6
     }
     "#);
@@ -393,14 +415,16 @@ fn join(a.0: obj, b.1: obj) -> obj {
 #[test]
 fn twenty_thousand_conditions_are_rewritten() {
     const CONDITIONS: u32 = 20_000;
-    let mut text = String::from("fn entry$main(b.0: enum, s.1: obj) -> obj {\n");
+    let mut text = String::from(
+        "layout Prelude.Bool { False, True }\nfn entry$main(b.0: enum, s.1: obj) -> obj {\n",
+    );
     for n in 0..CONDITIONS {
         let base = 3 * n;
         if n > 0 {
             text.push_str(&format!("b{base}:\n"));
         }
         text.push_str(&format!(
-            "  switch b.0 {{ #0 -> b{}, #1 -> b{} }}\nb{}:\n  jump b{}()\nb{}:\n  let t.{}: obj = const \"x\"\n  jump b{}()\n",
+            "  switch b.0 Prelude.Bool {{ #0 -> b{}, #1 -> b{} }}\nb{}:\n  jump b{}()\nb{}:\n  let t.{}: obj = const \"x\"\n  jump b{}()\n",
             base + 1,
             base + 2,
             base + 1,
@@ -459,7 +483,7 @@ fn a_non_tail_if_keeps_strings_used_later() {
     let text = "pick : Bool -> String -> String\npick b s =\n  let t = if b then s else \"none\"\n  t ++ s\n\nmain : Unit -> <IO> Unit\nmain () = println (pick True \"s\")";
     insta::assert_snapshot!(function(&core_text(text, Pass::Perceus), "pick"), @r#"
     fn pick(b.0: enum, s.1: obj) -> obj {
-      switch b.0 { #0 -> b1, #1 -> b2 }
+      switch b.0 Prelude.Bool { #0 -> b1, #1 -> b2 }
     b1:
       let s.2: obj = const "none"
       jump b3(s.2)
@@ -480,7 +504,7 @@ fn calls_save_the_variables_used_after_them() {
     fn around(n.0: int, s.1: obj) -> obj {
       let t.2: int = extern Prelude.+(n.0, 1)
       let t.3: enum = extern Prelude.>(n.0, 0)
-      switch t.3 { #0 -> b1, #1 -> b2 }
+      switch t.3 Prelude.Bool { #0 -> b1, #1 -> b2 }
     b1:
       jump b3(s.1)
     b2:
@@ -500,7 +524,7 @@ fn constructor_arguments_are_owned_by_the_value() {
     insta::assert_snapshot!(function(&core_text(text, Pass::Perceus), "twice"), @"
     fn twice(s.0: obj) -> obj {
       dup s.0
-      let d.1: obj = con #0(s.0, s.0)
+      let d.1: obj = con Pair #0(s.0, s.0)
       return d.1
     }
     ");
@@ -514,9 +538,9 @@ fn a_known_value_that_skips_its_field_releases_it() {
     insta::assert_snapshot!(function(&core_text(text, Pass::Perceus), "pick"), @r#"
     fn pick(a.0: enum, b.1: enum, s.2: obj) -> obj {
       decref s.2
-      switch a.0 { #0 -> b1, #1 -> b2 }
+      switch a.0 Prelude.Bool { #0 -> b1, #1 -> b2 }
     b1:
-      switch b.1 { #0 -> b3, #1 -> b4 }
+      switch b.1 Prelude.Bool { #0 -> b3, #1 -> b4 }
     b2:
       let s.4: obj = const "none"
       return s.4
@@ -537,7 +561,7 @@ fn a_dead_scrutinee_whose_fields_are_unused_is_decreffed() {
     let text = "data Option a = | None | Some a\n\nflag : Option String -> Int\nflag o = match o with\n  | Some _ -> 0\n  | None -> 1\n\nmain : Unit -> <IO> Unit\nmain () = println (show_int (flag None))";
     insta::assert_snapshot!(function(&core_text(text, Pass::Perceus), "flag"), @"
     fn flag(o.0: tobj) -> int {
-      switch o.0 { #0 -> b1, #1(x.1: obj) -> b2 }
+      switch o.0 Option { #0 -> b1, #1(x.1: obj) -> b2 }
     b1:
       decref o.0
       return 1
@@ -555,10 +579,10 @@ fn a_default_target_owns_the_scrutinee_without_a_dup() {
     let text = "data List a = | Nil | Cons a (List a)\n\nsize : List Int -> Int\nsize xs = 2\n\ndescribe : List Int -> Int\ndescribe xs = match xs with\n  | Cons _ Nil -> 1\n  | ys -> size ys\n\nmain : Unit -> <IO> Unit\nmain () = println (show_int (describe Nil))";
     insta::assert_snapshot!(function(&core_text(text, Pass::Perceus), "describe"), @"
     fn describe(xs.0: tobj) -> int {
-      switch xs.0 { #1(x.1: int, x.2: tobj) -> b1, _ -> b2 }
+      switch xs.0 List { #1(x.1: int, x.2: tobj) -> b1, _ -> b2 }
     b1:
       dup x.2
-      switch x.2 { #0 -> b3, _ -> b4 }
+      switch x.2 List { #0 -> b3, _ -> b4 }
     b2:
       jump b5(xs.0)
     b3:
@@ -603,14 +627,14 @@ fn a_nested_pattern_gives_up_the_parent_before_the_release() {
     let text = "data List a =\n  | Nil\n  | Cons a (List a)\n\nlength : List a -> Int\nlength xs = match xs with\n  | Nil -> 0\n  | Cons _ rest -> 1 + length rest\n\ndescribe : List (List String) -> String\ndescribe w = match w with\n  | Cons (Cons a _) _ -> a\n  | Cons Nil _ -> show_int (length w)\n  | Nil -> \"empty\"\n\nmain : Unit -> <IO> Unit\nmain () = println (describe Nil)";
     insta::assert_snapshot!(function(&core_text(text, Pass::Perceus), "describe"), @r#"
     fn describe(w.0: tobj) -> obj {
-      switch w.0 { #0 -> b1, #1(x.1: tobj, x.2: tobj) -> b2 }
+      switch w.0 List { #0 -> b1, #1(x.1: tobj, x.2: tobj) -> b2 }
     b1:
       decref w.0
       let s.7: obj = const "empty"
       return s.7
     b2:
       dup x.1
-      switch x.1 { #0 -> b3, #1(a.3: obj, x.4: tobj) -> b4 }
+      switch x.1 List { #0 -> b3, #1(a.3: obj, x.4: tobj) -> b4 }
     b3:
       decref x.1
       let t.5: int = call length(w.0)
@@ -618,7 +642,7 @@ fn a_nested_pattern_gives_up_the_parent_before_the_release() {
       return t.6
     b4:
       decref w.0
-      release x.1 #1(a.3, _)
+      release x.1 List #1(a.3, _)
       return a.3
     }
     "#);
@@ -629,25 +653,29 @@ fn a_target_dups_the_fields_of_a_live_scrutinee_before_it_decrefs_a_dead_value()
     // `o` がまだ生きているので、そのフィールドを複製する。順は入口の順で、死んだ `y` の `decref` より先になる
     // (docs/spec/core-ir.md の「Perceus」)
     let text = "\
+layout Option { None, Some(tobj) }
+layout (,) { (,)(tobj, tobj) }
 fn f(o.0: tobj, y.1: obj) -> obj {
-  switch o.0 { #0 -> b1, #1(s.2: obj) -> b2 }
+  switch o.0 Option { #0 -> b1, #1(s.2: obj) -> b2 }
 b1:
   return y.1
 b2:
-  let p.3: obj = con #0(s.2, o.0)
+  let p.3: obj = con (,) #0(s.2, o.0)
   return p.3
 }
 ";
     insta::assert_snapshot!(perceus_text(text), @"
+    layout Option { None, Some(tobj) }
+    layout (,) { (,)(tobj, tobj) }
     fn f(o.0: tobj, y.1: obj) -> obj {
-      switch o.0 { #0 -> b1, #1(s.2: obj) -> b2 }
+      switch o.0 Option { #0 -> b1, #1(s.2: obj) -> b2 }
     b1:
       decref o.0
       return y.1
     b2:
       dup s.2
       decref y.1
-      let p.3: obj = con #0(s.2, o.0)
+      let p.3: obj = con (,) #0(s.2, o.0)
       return p.3
     }
     ");
@@ -662,11 +690,11 @@ fn a_file_taken_out_of_a_tuple_is_neither_dupped_nor_decreffed() {
       let s.1: obj = const "input.txt"
       let t.2: obj = extern Std.Fs.open(s.1)
       let t.3: obj = extern Std.Fs.read_all(t.2)
-      unpack t.3 #0(f.4: obj, first.5: obj)
-      release t.3 #0(f.4, first.5)
+      unpack t.3 (,) #0(f.4: obj, first.5: obj)
+      release t.3 (,) #0(f.4, first.5)
       let t.6: obj = extern Std.Fs.read_all(f.4)
-      unpack t.6 #0(f.7: obj, rest.8: obj)
-      release t.6 #0(f.7, rest.8)
+      unpack t.6 (,) #0(f.7: obj, rest.8: obj)
+      release t.6 (,) #0(f.7, rest.8)
       let t.9: unit = extern Std.Fs.close(f.7)
       let t.10: unit = extern Prelude.println(first.5)
       let s.11: obj = const "["
@@ -715,4 +743,15 @@ fn a_masked_call_keeps_its_mask_through_the_passes() {
     let text = "effect State s where\n  get : Unit -> s\n  put : s -> Unit\n\nrun : (Unit -> <e> a) -> <State Int | e> a\nrun cb =\n  let n = get ()\n  cb ()\n\nmain : Unit -> <IO> Unit\nmain () =\n  let n =\n    handle run (fn () -> 1) from 0 with\n      | get () k st -> k st st\n      | put s k _ -> k () s\n      | return x _ -> x\n  println (show_int n)\n";
     let core = core_text(text, Pass::Perceus);
     assert!(core.contains("tail mask [State] apply cb.0(())"), "{core}");
+}
+
+#[test]
+#[should_panic(expected = "a switch with tag cases has a layout")]
+fn a_tag_switch_without_a_layout_stops_perceus() {
+    // `release` に写す `Ctor` が決まらない。黙って飛ばすと、フィールドを所有にする `release` が抜ける
+    let mut program = parse(
+        "fn f(d.0: tobj) -> obj {\n  switch d.0 { #0 -> b1, #1(x.1: obj) -> b2 }\nb1:\n  let e.2: obj = const \"e\"\n  return e.2\nb2:\n  return x.1\n}\n",
+    )
+    .unwrap_or_else(|error| panic!("{error}"));
+    perceus(&mut program);
 }

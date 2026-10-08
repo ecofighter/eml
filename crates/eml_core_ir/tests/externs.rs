@@ -1,7 +1,8 @@
 //! extern の表の行の Repr と、std の宣言の型の Repr の照らし合わせ (docs/spec/core-ir.md)。行の名前と矢印の数は
 //! `eml_hir` の結合テストが照らし合わせる。型から Repr を決める規則は translate にあるので、ここで確かめる。
+//! extern が作る値のタグと、translate が作る配置も照らし合わせる。
 
-use eml_core_ir::type_repr;
+use eml_core_ir::{FALSE, TRUE, TUPLE, type_repr};
 use eml_extern::{Extern, ExternType};
 use eml_hir::{Function, FunctionKind, ValueItem};
 use eml_test_support::Checked;
@@ -125,4 +126,34 @@ fn extern_function_rows_not_chosen_by_type_are_monomorphic() {
         }
         assert!(!has_type_var(extern_type(&checked, e)), "{}", row.name);
     }
+}
+
+/// 機械の extern は、`Bool` と組の値を配置の表を見ずに `FALSE`、`TRUE`、`TUPLE` のタグで作る。そのタグが、translate
+/// が std の宣言から作る配置の添字と合うことを確かめる。
+#[test]
+fn the_tags_externs_build_name_the_constructors_of_their_layouts() {
+    let program = eml_test_support::core(
+        "main : Unit -> <IO> Unit\nmain () =\n  let f = Fs.open \"a.txt\"\n  let (f, text) = Fs.read_all f\n  Fs.close f\n  if text == \"\" then println \"empty\" else println text",
+    );
+    let constructors = |name: &str| -> Vec<&str> {
+        let layout = program
+            .layouts
+            .iter()
+            .find(|layout| layout.name == name)
+            .unwrap_or_else(|| panic!("no layout `{name}`"));
+        layout
+            .constructors
+            .iter()
+            .map(|ctor| ctor.name.as_str())
+            .collect()
+    };
+    let bool = constructors("Prelude.Bool");
+    assert_eq!(bool, ["False", "True"]);
+    assert_eq!(
+        (bool[FALSE as usize], bool[TRUE as usize]),
+        ("False", "True")
+    );
+    // `Fs.read_all` の結果は、要素が2つの組の配置の唯一のコンストラクタである
+    assert_eq!(constructors("(,)"), ["(,)"]);
+    assert_eq!(TUPLE, 0);
 }

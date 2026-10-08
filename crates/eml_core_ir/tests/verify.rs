@@ -3,6 +3,12 @@
 
 use eml_core_ir::{Program, Stmt, Term, parse, verify, verify_scopes};
 
+/// 手で書く IR の配置の行。プログラムの先頭に置く。
+const BOOL: &str = "layout Prelude.Bool { False, True }\n";
+const OPTION: &str = "layout Option { None, Some(tobj) }\n";
+const PAIR: &str = "layout (,) { (,)(tobj, tobj) }\n";
+const BOX: &str = "layout Box { Box(tobj) }\n";
+
 fn read(text: &str) -> Program {
     parse(text).unwrap_or_else(|error| panic!("{error}"))
 }
@@ -17,9 +23,10 @@ fn check_scopes(text: &str) -> Result<(), String> {
 
 /// spec の「テキストの形」の例。RC の対象の変数がないので、どちらの段でも通る。
 const SPEC_EXAMPLE: &str = "\
+layout Prelude.Bool { False, True }
 fn f(x.0: int) -> int {
   let c.1: enum = extern Prelude.<(x.0, 10)
-  switch c.1 { #0 -> b1, #1 -> b2 }
+  switch c.1 Prelude.Bool { #0 -> b1, #1 -> b2 }
 b1:
   jump b3(x.0)
 b2:
@@ -35,9 +42,8 @@ b3(t.3: int):
 fn pick(dup: bool) -> String {
     let dup = if dup { "  dup s.1\n" } else { "" };
     format!(
-        "\
-fn pick(b.0: enum, s.1: obj) -> obj {{
-  switch b.0 {{ #0 -> b1, #1 -> b2 }}
+        "{BOOL}fn pick(b.0: enum, s.1: obj) -> obj {{
+  switch b.0 Prelude.Bool {{ #0 -> b1, #1 -> b2 }}
 b1:
   let s.2: obj = const \"s\"
   jump b3(s.2)
@@ -61,8 +67,8 @@ const K: &str = "fn k(a.0: int) -> int {\n  return a.0\n}\n";
 /// 所有をすべて手放す。`c` は `apply` で呼ぶ値である。
 fn borrowing_arm(body: &str) -> String {
     format!(
-        "{IDENTITY}{K}fn f(d.0: tobj, c.1: tobj) -> obj {{
-  switch d.0 {{ #0 -> b1, #1(x.2: obj) -> b2 }}
+        "{OPTION}{BOX}{IDENTITY}{K}fn f(d.0: tobj, c.1: tobj) -> obj {{
+  switch d.0 Option {{ #0 -> b1, #1(x.2: obj) -> b2 }}
 b1:
   decref d.0
   decref c.1
@@ -76,7 +82,9 @@ b2:
 
 /// `p` を `unpack` で分解し、`body` が `p` から借りたフィールド `a` と `b` を使う。
 fn unpacking(body: &str) -> String {
-    format!("fn f(p.0: obj) -> obj {{\n  unpack p.0 #0(a.1: obj, b.2: tobj)\n{body}}}\n")
+    format!(
+        "{PAIR}{OPTION}{BOX}fn f(p.0: obj) -> obj {{\n  unpack p.0 (,) #0(a.1: obj, b.2: tobj)\n{body}}}\n"
+    )
 }
 
 /// `n` を使う合流のブロックの前で、片方の経路だけが呼び出しをする。`saved` はその呼び出しの `save` の部分である。
@@ -91,8 +99,8 @@ fn call_on_one_path(saved: &str, call_first: bool) -> String {
         (other, call.as_str())
     };
     format!(
-        "{K}fn f(n.0: int, c.1: enum) -> int {{
-  switch c.1 {{ #0 -> b1, #1 -> b2 }}
+        "{BOOL}{K}fn f(n.0: int, c.1: enum) -> int {{
+  switch c.1 Prelude.Bool {{ #0 -> b1, #1 -> b2 }}
 b1:
 {first}b2:
 {second}b3(r.3: int):
@@ -320,8 +328,9 @@ b3:
 #[test]
 fn a_field_and_a_parameter_with_one_number_are_rejected() {
     let text = "\
+layout Option { None, Some(tobj) }
 fn f(d.0: tobj) -> unit {
-  switch d.0 { #0 -> b1, #1(d.0: tobj) -> b2 }
+  switch d.0 Option { #0 -> b1, #1(d.0: tobj) -> b2 }
 b1:
   return ()
 b2:
@@ -412,8 +421,9 @@ b3:
 #[test]
 fn a_field_is_in_scope_only_in_its_arm() {
     let text = "\
+layout Option { None, Some(tobj) }
 fn f(d.0: tobj) -> obj {
-  switch d.0 { #0 -> b1, #1(x.1: obj) -> b2 }
+  switch d.0 Option { #0 -> b1, #1(x.1: obj) -> b2 }
 b1:
   return x.1
 b2:
@@ -429,20 +439,22 @@ b2:
 #[test]
 fn a_field_is_in_scope_in_the_blocks_its_arm_dominates() {
     let text = "\
+layout Prelude.Bool { False, True }
+layout Option { None, Some(tobj) }
 fn f(d.0: tobj, c.1: enum) -> obj {
-  switch d.0 { #0 -> b1, #1(x.2: obj) -> b2 }
+  switch d.0 Option { #0 -> b1, #1(x.2: obj) -> b2 }
 b1:
   decref d.0
   let e.3: obj = const \"e\"
   return e.3
 b2:
-  switch c.1 { #0 -> b3, #1 -> b4 }
+  switch c.1 Prelude.Bool { #0 -> b3, #1 -> b4 }
 b3:
   jump b5()
 b4:
   jump b5()
 b5:
-  release d.0 #1(x.2)
+  release d.0 Option #1(x.2)
   return x.2
 }
 ";
@@ -472,8 +484,9 @@ fn scopes_accept_a_merge_block_before_perceus() {
 #[test]
 fn a_value_owned_by_every_jump_is_owned_by_the_merge_block() {
     let released = "\
+layout Prelude.Bool { False, True }
 fn f(s.0: obj, c.1: enum) -> int {
-  switch c.1 { #0 -> b1, #1 -> b2 }
+  switch c.1 Prelude.Bool { #0 -> b1, #1 -> b2 }
 b1:
   jump b3(1)
 b2:
@@ -641,7 +654,7 @@ b1(n.0: int, e.1: enum, t.2: tobj, g.3: tobj, u.4: unit):
 
 #[test]
 fn an_unpack_of_a_value_that_is_not_obj_is_rejected() {
-    let text = "fn f(p.0: tobj) -> int {\n  unpack p.0 #0(a.1: int)\n  return a.1\n}\n";
+    let text = "layout Box { Box(tobj) }\nfn f(p.0: tobj) -> int {\n  unpack p.0 Box #0(a.1: int)\n  return a.1\n}\n";
     assert_eq!(
         check_scopes(text),
         Err("`p.0` (tobj) is unpacked, but only obj can be in `f`".to_string())
@@ -650,7 +663,7 @@ fn an_unpack_of_a_value_that_is_not_obj_is_rejected() {
 
 #[test]
 fn an_unpack_without_fields_is_rejected() {
-    let text = "fn f(p.0: obj) -> unit {\n  unpack p.0 #3()\n  return ()\n}\n";
+    let text = "layout Box { Box(tobj) }\nfn f(p.0: obj) -> unit {\n  unpack p.0 Box #0()\n  return ()\n}\n";
     assert_eq!(
         check_scopes(text),
         Err("an unpack of `p.0` binds no fields in `f`".to_string())
@@ -727,7 +740,7 @@ fn a_borrowed_field_cannot_be_consumed() {
     for body in [
         "  return x.2\n",
         "  let t.4: obj = call g(x.2) save [d.0, c.1]\n  return t.4\n",
-        "  let t.4: obj = con #0(x.2)\n  return t.4\n",
+        "  let t.4: obj = con Box #0(x.2)\n  return t.4\n",
         "  let t.4: obj = extern Prelude.++(x.2, x.2)\n  return t.4\n",
         "  let t.4: obj = apply c.1(x.2)\n  return t.4\n",
         "  let t.4: obj = apply x.2(1)\n  return t.4\n",
@@ -747,8 +760,9 @@ fn a_borrowed_field_cannot_be_consumed() {
 #[test]
 fn a_borrowed_field_cannot_be_passed_to_a_block() {
     let text = "\
+layout Option { None, Some(tobj) }
 fn f(d.0: tobj) -> obj {
-  switch d.0 { #0 -> b1, #1(x.1: obj) -> b2 }
+  switch d.0 Option { #0 -> b1, #1(x.1: obj) -> b2 }
 b1:
   decref d.0
   let e.2: obj = const \"e\"
@@ -785,13 +799,13 @@ fn a_field_cannot_be_read_after_its_owner_is_given_up() {
     // `release` が残さなかったフィールド
     assert_eq!(
         check(&unpacking(
-            "  release p.0 #0(a.1, _)\n  dup b.2\n  decref b.2\n  return a.1\n"
+            "  release p.0 (,) #0(a.1, _)\n  dup b.2\n  decref b.2\n  return a.1\n"
         )),
         given_up("b.2", "duplicated")
     );
     assert_eq!(
         check(&unpacking(
-            "  release p.0 #0(a.1, _)\n  switch b.2 { #0 -> b1, #1(z.3: obj) -> b2 }\nb1:\n  return a.1\nb2:\n  return a.1\n"
+            "  release p.0 (,) #0(a.1, _)\n  switch b.2 Option { #0 -> b1, #1(z.3: obj) -> b2 }\nb1:\n  return a.1\nb2:\n  return a.1\n"
         )),
         given_up("b.2", "switched on")
     );
@@ -802,13 +816,13 @@ fn a_field_cannot_be_read_after_its_owner_is_given_up() {
     );
     assert_eq!(
         check(&unpacking(
-            "  let t.3: obj = con #0(p.0)\n  dup a.1\n  decref t.3\n  return a.1\n"
+            "  let t.3: obj = con Box #0(p.0)\n  dup a.1\n  decref t.3\n  return a.1\n"
         )),
         given_up("a.1", "duplicated")
     );
     assert_eq!(
         check(&unpacking(
-            "  decref p.0\n  unpack a.1 #0(z.3: obj)\n  return z.3\n"
+            "  decref p.0\n  unpack a.1 Box #0(z.3: obj)\n  return z.3\n"
         )),
         given_up("a.1", "unpacked")
     );
@@ -824,7 +838,7 @@ fn a_field_consumed_after_its_owner_is_given_up_was_moved() {
     );
     assert_eq!(
         check(&unpacking(
-            "  release p.0 #0(a.1, _)\n  decref b.2\n  return a.1\n"
+            "  release p.0 (,) #0(a.1, _)\n  decref b.2\n  return a.1\n"
         )),
         Err("`b.2` is released after it was moved in `f`".to_string())
     );
@@ -839,10 +853,11 @@ fn a_release_keeps_only_the_fields_of_its_value() {
     };
     // 孫は `xs` のフィールドではない
     let grandchild = "\
+layout Box { Box(tobj) }
 fn f(xs.0: obj) -> obj {
-  unpack xs.0 #0(y.1: obj)
-  unpack y.1 #0(z.2: obj)
-  release xs.0 #0(z.2)
+  unpack xs.0 Box #0(y.1: obj)
+  unpack y.1 Box #0(z.2: obj)
+  release xs.0 Box #0(z.2)
   return z.2
 }
 ";
@@ -850,23 +865,24 @@ fn f(xs.0: obj) -> obj {
     // 2回目の `unpack` の位置 0 のフィールドを、位置 1 に書く
     assert_eq!(
         check(&unpacking(
-            "  unpack p.0 #0(c.3: obj, d.4: tobj)\n  release p.0 #0(a.1, c.3)\n  return a.1\n"
+            "  unpack p.0 (,) #0(c.3: obj, d.4: tobj)\n  release p.0 (,) #0(a.1, c.3)\n  return a.1\n"
         )),
         not_field("c.3", 1, "p.0", 0)
     );
     assert_eq!(
-        check(&unpacking("  release p.0 #1(a.1, _)\n  return a.1\n")),
+        check(&unpacking("  release p.0 (,) #1(a.1, _)\n  return a.1\n")),
         not_field("a.1", 0, "p.0", 1)
     );
     assert_eq!(
-        check(&unpacking("  release p.0 #0(a.1)\n  return a.1\n")),
+        check(&unpacking("  release p.0 (,) #0(a.1)\n  return a.1\n")),
         not_field("a.1", 0, "p.0", 0)
     );
     let other = "\
+layout Box { Box(tobj) }
 fn f(p.0: obj, q.1: obj) -> obj {
-  unpack p.0 #0(a.2: obj)
-  unpack q.1 #0(b.3: obj)
-  release p.0 #0(b.3)
+  unpack p.0 Box #0(a.2: obj)
+  unpack q.1 Box #0(b.3: obj)
+  release p.0 Box #0(b.3)
   decref q.1
   return b.3
 }
@@ -877,14 +893,15 @@ fn f(p.0: obj, q.1: obj) -> obj {
 #[test]
 fn a_release_cannot_keep_a_field_of_a_branch_that_does_not_dominate_it() {
     let text = "\
+layout Option { None, Some(tobj) }
 fn f(d.0: tobj) -> obj {
-  switch d.0 { #0 -> b1, #1(x.1: obj) -> b2 }
+  switch d.0 Option { #0 -> b1, #1(x.1: obj) -> b2 }
 b1:
   jump b3()
 b2:
   jump b3()
 b3:
-  release d.0 #1(x.1)
+  release d.0 Option #1(x.1)
   return x.1
 }
 ";
@@ -898,7 +915,7 @@ b3:
 fn a_value_is_released_once() {
     assert_eq!(
         check(&unpacking(
-            "  release p.0 #0(a.1, _)\n  release p.0 #0(a.1, _)\n  return a.1\n"
+            "  release p.0 (,) #0(a.1, _)\n  release p.0 (,) #0(a.1, _)\n  return a.1\n"
         )),
         Err("`p.0` is released after it was moved in `f`".to_string())
     );
@@ -907,10 +924,11 @@ fn a_value_is_released_once() {
 #[test]
 fn a_borrowed_value_cannot_be_released() {
     let text = "\
+layout Box { Box(tobj) }
 fn f(d.0: obj) -> obj {
-  unpack d.0 #0(y.1: obj)
-  unpack y.1 #0(z.2: obj)
-  release y.1 #0(z.2)
+  unpack d.0 Box #0(y.1: obj)
+  unpack y.1 Box #0(z.2: obj)
+  release y.1 Box #0(z.2)
   decref d.0
   return z.2
 }
@@ -924,11 +942,13 @@ fn f(d.0: obj) -> obj {
 #[test]
 fn a_nested_release_is_accepted() {
     let text = "\
+layout (,) { (,)(tobj, tobj) }
+layout Box { Box(tobj) }
 fn f(xs.0: obj) -> obj {
-  unpack xs.0 #0(y.1: obj, w.2: obj)
-  release xs.0 #0(y.1, _)
-  unpack y.1 #0(z.3: obj)
-  release y.1 #0(z.3)
+  unpack xs.0 (,) #0(y.1: obj, w.2: obj)
+  release xs.0 (,) #0(y.1, _)
+  unpack y.1 Box #0(z.3: obj)
+  release y.1 Box #0(z.3)
   return z.3
 }
 ";
@@ -946,9 +966,11 @@ fn a_field_duplicated_before_its_owner_is_given_up_stays_owned() {
 #[test]
 fn a_borrowed_field_can_be_switched_on_while_its_owner_is_owned() {
     let text = "\
+layout Box { Box(tobj) }
+layout Option { None, Some(tobj) }
 fn f(d.0: obj) -> obj {
-  unpack d.0 #0(y.1: tobj)
-  switch y.1 { #0 -> b1, #1(z.2: obj) -> b2 }
+  unpack d.0 Box #0(y.1: tobj)
+  switch y.1 Option { #0 -> b1, #1(z.2: obj) -> b2 }
 b1:
   decref d.0
   let e.3: obj = const \"e\"
@@ -967,7 +989,7 @@ fn a_value_owned_twice_is_still_owned_after_a_release() {
     // `release` が手放すのは参照1つなので、`p` は所有されたままで、残さなかった `b` も有効である
     assert_eq!(
         check(&unpacking(
-            "  dup p.0\n  release p.0 #0(a.1, _)\n  dup b.2\n  decref p.0\n  decref b.2\n  return a.1\n"
+            "  dup p.0\n  release p.0 (,) #0(a.1, _)\n  dup b.2\n  decref p.0\n  decref b.2\n  return a.1\n"
         )),
         Ok(())
     );
@@ -1114,9 +1136,10 @@ fn scopes_reject_a_decref() {
 
 /// 組を分解し、`release` で先頭のフィールドだけを残す。
 const RELEASE: &str = "\
+layout (,) { (,)(tobj, tobj) }
 fn f(p.0: obj) -> obj {
-  unpack p.0 #0(a.1: obj, b.2: obj)
-  release p.0 #0(a.1, _)
+  unpack p.0 (,) #0(a.1: obj, b.2: obj)
+  release p.0 (,) #0(a.1, _)
   return a.1
 }
 ";
@@ -1146,9 +1169,10 @@ fn a_release_that_keeps_no_field_is_rejected() {
 #[test]
 fn a_release_that_keeps_a_field_that_is_not_rc_is_rejected() {
     let text = "\
+layout (,) { (,)(tobj, tobj) }
 fn f(p.0: obj) -> int {
-  unpack p.0 #0(n.1: int, s.2: obj)
-  release p.0 #0(n.1, _)
+  unpack p.0 (,) #0(n.1: int, s.2: obj)
+  release p.0 (,) #0(n.1, _)
   return n.1
 }
 ";
@@ -1160,7 +1184,7 @@ fn f(p.0: obj) -> int {
 
 #[test]
 fn a_constructor_value_without_fields_is_rejected() {
-    let text = "fn f() -> tobj {\n  let d.0: tobj = con #1()\n  return d.0\n}\n";
+    let text = "layout Option { None, Some(tobj) }\nfn f() -> tobj {\n  let d.0: tobj = con Option #1()\n  return d.0\n}\n";
     let message =
         "a constructor value without fields is written as a tag `#N`, not `con` in `f`".to_string();
     assert_eq!(check_scopes(text), Err(message.clone()));
@@ -1181,14 +1205,15 @@ fn scopes_reject_a_variable_used_outside_its_scope() {
 #[test]
 fn a_switch_that_binds_fields_is_accepted() {
     let text = "\
+layout Option { None, Some(tobj) }
 fn f(d.0: tobj) -> obj {
-  switch d.0 { #0 -> b1, #1(x.1: obj) -> b2 }
+  switch d.0 Option { #0 -> b1, #1(x.1: obj) -> b2 }
 b1:
   decref d.0
   let e.2: obj = const \"e\"
   return e.2
 b2:
-  release d.0 #1(x.1)
+  release d.0 Option #1(x.1)
   return x.1
 }
 ";
@@ -1198,8 +1223,9 @@ b2:
 #[test]
 fn a_switch_on_a_variable_that_is_not_rc_cannot_bind_fields() {
     let text = "\
+layout Option { None, Some(tobj) }
 fn f(d.0: enum) -> obj {
-  switch d.0 { #0 -> b1, #1(x.1: obj) -> b2 }
+  switch d.0 Option { #0 -> b1, #1(x.1: obj) -> b2 }
 b1:
   let e.2: obj = const \"e\"
   return e.2
@@ -1220,8 +1246,9 @@ b2:
 fn a_switch_on_a_constant_cannot_bind_fields() {
     // 定数の値はフィールドを持たないので、実行するとフィールドの数が合わずに止まる
     let text = "\
+layout Option { None, Some(tobj) }
 fn f() -> int {
-  switch #1 { #1(x.0: obj) -> b1 }
+  switch #1 Option { #1(x.0: obj) -> b1 }
 b1:
   decref x.0
   return 1
@@ -1523,9 +1550,10 @@ fn ret(n.0: int, x.1: int) -> int {
 fn a_clause_outside_its_scope_is_rejected_before_its_parameters_are_counted() {
     // `c.1` は b1 だけで定義され、`handle` のある b3 を支配しない。引数の数も合わないが、先に範囲の誤りを報告する
     let text = "\
+layout Prelude.Bool { False, True }
 effect Ask { ask/1 }
 fn f(k.0: enum) -> int {
-  switch k.0 { #0 -> b1, #1 -> b2 }
+  switch k.0 Prelude.Bool { #0 -> b1, #1 -> b2 }
 b1:
   let c.1: tobj = closure g(5)
   jump b3()
@@ -1640,7 +1668,7 @@ fn entry$main(c.0: tobj) -> unit {
 /// 見える変数の集合を決め直す。`save` は呼び出しの `save` の部分で、Perceus より前の形では空にする。
 fn chain_of_switches(n: u32, save: &str) -> String {
     let mut text = format!(
-        "{K}fn f(s.0: obj, n.1: int, c.2: enum) -> obj {{\n  switch c.2 {{ #0 -> b1, #1 -> b2 }}\n"
+        "{BOOL}{K}fn f(s.0: obj, n.1: int, c.2: enum) -> obj {{\n  switch c.2 Prelude.Bool {{ #0 -> b1, #1 -> b2 }}\n"
     );
     for i in 0..n {
         let (call, other, merge) = (3 * i + 1, 3 * i + 2, 3 * i + 3);
@@ -1650,7 +1678,7 @@ fn chain_of_switches(n: u32, save: &str) -> String {
         ));
         if i + 1 < n {
             text.push_str(&format!(
-                "  switch c.2 {{ #0 -> b{}, #1 -> b{} }}\n",
+                "  switch c.2 Prelude.Bool {{ #0 -> b{}, #1 -> b{} }}\n",
                 merge + 1,
                 merge + 2
             ));
@@ -1680,10 +1708,11 @@ fn a_long_chain_of_switches_is_verified_in_linear_time() {
 
 /// 借りたフィールドへの `switch` が `n` 段続く関数。どの段のフィールドも、引数の `d` を持ち主にする。
 fn borrowed_chain(n: u32) -> String {
-    let mut text = String::from("fn f(d.0: obj) -> int {\n  switch d.0 { #0(y.1: obj) -> b1 }\n");
+    let mut text =
+        format!("{BOX}fn f(d.0: obj) -> int {{\n  switch d.0 Box {{ #0(y.1: obj) -> b1 }}\n");
     for i in 1..n {
         text.push_str(&format!(
-            "b{i}:\n  switch y.{i} {{ #0(y.{}: obj) -> b{} }}\n",
+            "b{i}:\n  switch y.{i} Box {{ #0(y.{}: obj) -> b{} }}\n",
             i + 1,
             i + 1
         ));
@@ -1711,7 +1740,7 @@ fn a_long_chain_of_switches_on_borrowed_fields_is_verified_in_linear_time() {
 /// 入る。i 番目の辺のブロックは支配木の深さ i + 1 にあるので、合流のブロックには深さの違う `n` 本の辺が入る。
 fn or_chain(n: u32) -> String {
     let merge = 2 * n + 1;
-    let mut text = String::from("fn f(c.0: enum) -> int {\n");
+    let mut text = format!("{BOOL}fn f(c.0: enum) -> int {{\n");
     for i in 0..n {
         if i > 0 {
             text.push_str(&format!("b{}:\n", 2 * i));
@@ -1719,7 +1748,7 @@ fn or_chain(n: u32) -> String {
         let edge = 2 * i + 1;
         let next = if i + 1 < n { 2 * i + 2 } else { 2 * n };
         text.push_str(&format!(
-            "  switch c.0 {{ #1 -> b{edge}, #0 -> b{next} }}\nb{edge}:\n  jump b{merge}(1)\n"
+            "  switch c.0 Prelude.Bool {{ #1 -> b{edge}, #0 -> b{next} }}\nb{edge}:\n  jump b{merge}(1)\n"
         ));
     }
     text.push_str(&format!(

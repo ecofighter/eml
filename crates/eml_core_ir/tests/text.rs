@@ -1,7 +1,7 @@
 //! Core IR のテキストの形 (docs/implementation/testing.md の「Core IR のテキストの形」)。`parse` が読んだものを
 //! `pretty` で表示すると元のテキストに戻ることと、構文の誤りの報告を確かめる。
 
-use eml_core_ir::{Atom, Call, CasePattern, FnIdx, VarId};
+use eml_core_ir::{Atom, Call, CasePattern, Ctor, FnIdx, LayoutId, VarId};
 use eml_core_ir::{
     BlockId, Loc, ParseError, Program, Repr, Rhs, Stmt, Term, parse, pretty, pretty_with_positions,
 };
@@ -25,9 +25,10 @@ fn v(n: u32) -> Atom {
 }
 
 const SPEC_EXAMPLE: &str = "\
+layout Prelude.Bool { False, True }
 fn f(x.0: int) -> int {
   let c.1: enum = extern Prelude.<(x.0, 10)
-  switch c.1 { #0 -> b1, #1 -> b2 }
+  switch c.1 Prelude.Bool { #0 -> b1, #1 -> b2 }
 b1:
   jump b3(x.0)
 b2:
@@ -110,8 +111,9 @@ fn f(a.0: obj, b.1: tobj, c.2: int, d.3: enum, e.4: unit) -> unit {
 fn a_let_round_trips() {
     let program = round_trip(
         "\
+layout P { P(obj, int) }
 fn f(x.0: obj) -> obj {
-  let y.1: obj = con #0(x.0, 2)
+  let y.1: obj = con P #0(x.0, 2)
   return y.1
 }
 ",
@@ -121,7 +123,10 @@ fn f(x.0: obj) -> obj {
         [Stmt::Let {
             var: VarId(1),
             rhs: Rhs::Con {
-                tag: 0,
+                ctor: Ctor {
+                    layout: LayoutId(0),
+                    tag: 0,
+                },
                 args: vec![v(0), Atom::Int(2)],
             },
         }]
@@ -132,8 +137,9 @@ fn f(x.0: obj) -> obj {
 fn an_unpack_round_trips() {
     let program = round_trip(
         "\
+layout (,) { (,)(tobj, tobj) }
 fn f(p.0: obj) -> int {
-  unpack p.0 #0(a.1: int, s.2: obj)
+  unpack p.0 (,) #0(a.1: int, s.2: obj)
   decref s.2
   return a.1
 }
@@ -143,12 +149,15 @@ fn f(p.0: obj) -> int {
         program.functions[0].blocks[0].stmts[0],
         Stmt::Unpack {
             value: VarId(0),
-            tag: 0,
+            ctor: Ctor {
+                layout: LayoutId(0),
+                tag: 0,
+            },
             fields: vec![VarId(1), VarId(2)],
         }
     );
-    // フィールドのない `Unpack` は verifier が拒む。テキストには書ける
-    round_trip("fn f(p.0: obj) -> unit {\n  unpack p.0 #3()\n  return ()\n}\n");
+    // フィールドのない `Unpack` と表にない配置は verifier が拒む。テキストには書ける
+    round_trip("fn f(p.0: obj) -> unit {\n  unpack p.0 #0 #3()\n  return ()\n}\n");
 }
 
 #[test]
@@ -178,9 +187,10 @@ fn a_decref_round_trips() {
 fn a_release_round_trips() {
     let program = round_trip(
         "\
+layout (,) { (,)(tobj, tobj) }
 fn f(p.0: obj) -> obj {
-  unpack p.0 #0(a.1: obj, b.2: obj)
-  release p.0 #0(a.1, _)
+  unpack p.0 (,) #0(a.1: obj, b.2: obj)
+  release p.0 (,) #0(a.1, _)
   return a.1
 }
 ",
@@ -190,7 +200,10 @@ fn f(p.0: obj) -> obj {
         *release,
         Stmt::Release {
             value: VarId(0),
-            tag: 0,
+            ctor: Ctor {
+                layout: LayoutId(0),
+                tag: 0,
+            },
             fields: vec![Some(VarId(1)), None],
         }
     );
@@ -205,7 +218,7 @@ fn f(p.0: obj) -> obj {
 fn a_release_that_keeps_nothing_does_not_parse() {
     for fields in ["_, _", ""] {
         let error = parse_error(&format!(
-            "fn f(p.0: obj) -> unit {{\n  release p.0 #0({fields})\n  return ()\n}}\n"
+            "fn f(p.0: obj) -> unit {{\n  release p.0 #0 #0({fields})\n  return ()\n}}\n"
         ));
         assert_eq!(error.line, 2);
         assert_eq!(error.message, "a release keeps no field; write `decref`");
@@ -214,10 +227,10 @@ fn a_release_that_keeps_nothing_does_not_parse() {
 
 #[test]
 fn a_release_names_variables_without_reprs() {
-    let error = parse_error("fn f(p.0: obj) -> unit {\n  release p.0 #0(1)\n  return ()\n}\n");
+    let error = parse_error("fn f(p.0: obj) -> unit {\n  release p.0 #0 #0(1)\n  return ()\n}\n");
     assert_eq!(error.message, "expected a variable `name.N`, found `1`");
     let error =
-        parse_error("fn f(p.0: obj) -> unit {\n  release p.0 #0(a.1: obj)\n  return ()\n}\n");
+        parse_error("fn f(p.0: obj) -> unit {\n  release p.0 #0 #0(a.1: obj)\n  return ()\n}\n");
     assert_eq!(error.message, "expected a variable `name.N`, found `a.1:`");
 }
 
@@ -297,8 +310,9 @@ b2(y.2: int, t.3: obj, e.4: enum, u.5: unit):
 fn a_switch_on_tags_round_trips() {
     let program = round_trip(
         "\
+layout List { Nil, Cons(tobj, tobj) }
 fn f(o.0: tobj) -> int {
-  switch o.0 { #0 -> b1, #1(x.1: int, r.2: tobj) -> b2 }
+  switch o.0 List { #0 -> b1, #1(x.1: int, r.2: tobj) -> b2 }
 b1:
   return 0
 b2:
@@ -308,6 +322,7 @@ b2:
     );
     let Term::Switch {
         scrutinee,
+        layout,
         cases,
         default,
     } = &program.functions[0].blocks[0].term
@@ -315,6 +330,7 @@ b2:
         panic!("expected a switch");
     };
     assert_eq!(*scrutinee, v(0));
+    assert_eq!(*layout, Some(LayoutId(0)));
     assert_eq!(
         cases
             .iter()
@@ -347,9 +363,16 @@ b4:
     );
     assert_eq!(program.strings, ["a", "b"]);
     let f = &program.functions[0];
-    let Term::Switch { cases, default, .. } = &f.blocks[1].term else {
+    let Term::Switch {
+        layout,
+        cases,
+        default,
+        ..
+    } = &f.blocks[1].term
+    else {
         panic!("expected a switch");
     };
+    assert_eq!(*layout, None);
     assert_eq!(cases[1].pattern, CasePattern::String(1));
     assert_eq!(*default, Some(BlockId(4)));
 }
@@ -456,8 +479,9 @@ fn f() -> obj {
 fn a_con_round_trips() {
     let program = round_trip(
         "\
+layout T { A, B, C(int, enum, unit, tobj) }
 fn f(x.0: int) -> obj {
-  let p.1: obj = con #2(x.0, #1, (), &f)
+  let p.1: obj = con T #2(x.0, #1, (), &f)
   return p.1
 }
 ",
@@ -467,7 +491,10 @@ fn f(x.0: int) -> obj {
         Stmt::Let {
             var: VarId(1),
             rhs: Rhs::Con {
-                tag: 2,
+                ctor: Ctor {
+                    layout: LayoutId(0),
+                    tag: 2,
+                },
                 args: vec![v(0), Atom::Tag(1), Atom::Unit, Atom::Fn(FnIdx(0))],
             },
         }
@@ -988,7 +1015,7 @@ fn one_variable_number_with_two_names_is_an_error() {
 #[test]
 fn one_variable_bound_with_two_reprs_is_an_error() {
     let error =
-        parse_error("fn f(x.0: obj) -> int {\n  let x.0: int = con #0(1)\n  return x.0\n}\n");
+        parse_error("fn f(x.0: obj) -> int {\n  let x.0: int = con #0 #0(1)\n  return x.0\n}\n");
     assert_eq!(error.line, 2);
     assert_eq!(error.message, "`x.0` is bound both as `obj` and `int`");
 }
@@ -1068,7 +1095,7 @@ fn tag_block_variable_and_operation_numbers_are_plain_digits() {
     assert_eq!(error.line, 2);
     assert_eq!(error.message, "expected a variable `name.N`, found `#+1`");
 
-    let error = parse_error("fn f() -> obj {\n  let x.0: obj = con #+1(2)\n  return x.0\n}\n");
+    let error = parse_error("fn f() -> obj {\n  let x.0: obj = con #0 #+1(2)\n  return x.0\n}\n");
     assert_eq!(error.line, 2);
     assert_eq!(error.message, "expected a tag `#N`, found `#+1`");
 
@@ -1098,7 +1125,7 @@ fn successors_and_atoms_come_in_a_fixed_order() {
 effect Ask { ask/1 }
 fn f(o.0: tobj, i.1: int, b.2: tobj, a.3: tobj, r.4: tobj) -> int {
   let t.5: int = handle Ask(i.1, b.2) { ask: a.3 } return r.4
-  unpack o.0 #0(x.6: int)
+  unpack o.0 #0 #0(x.6: int)
   switch t.5 { 1 -> b2, 2 -> b1, _ -> b3 }
 b1:
   jump b3(x.6, 7)
@@ -1145,14 +1172,15 @@ b3:
 #[test]
 fn twenty_thousand_conditions_round_trip() {
     const CONDITIONS: u32 = 20_000;
-    let mut text = String::from("fn entry$main(b.0: enum) -> unit {\n");
+    let mut text =
+        String::from("layout Prelude.Bool { False, True }\nfn entry$main(b.0: enum) -> unit {\n");
     for n in 0..CONDITIONS {
         let base = 3 * n;
         if n > 0 {
             text.push_str(&format!("b{base}:\n"));
         }
         text.push_str(&format!(
-            "  switch b.0 {{ #0 -> b{}, #1 -> b{} }}\nb{}:\n  jump b{}()\nb{}:\n  jump b{}()\n",
+            "  switch b.0 Prelude.Bool {{ #0 -> b{}, #1 -> b{} }}\nb{}:\n  jump b{}()\nb{}:\n  jump b{}()\n",
             base + 1,
             base + 2,
             base + 1,
@@ -1167,4 +1195,181 @@ fn twenty_thousand_conditions_round_trip() {
         program.functions[0].blocks.len(),
         3 * CONDITIONS as usize + 1
     );
+}
+
+#[test]
+fn layouts_round_trip() {
+    let program = round_trip(
+        "\
+layout Prelude.Bool { False, True }
+layout Pair { Pair(tobj, int) }
+layout (,) { (,)(tobj, tobj) }
+layout (,,) { (,,)(tobj, tobj, tobj) }
+layout Void {}
+effect Ask { ask/1 }
+fn f(p.0: obj, t.1: obj, b.2: enum) -> int {
+  unpack p.0 Pair #0(x.3: tobj, n.4: int)
+  unpack t.1 (,,) #0(a.5: tobj, b.6: tobj, c.7: tobj)
+  let q.8: obj = con (,) #0(x.3, n.4)
+  switch b.2 Prelude.Bool { #0 -> b1, #1 -> b2 }
+b1:
+  return n.4
+b2:
+  return 0
+}
+",
+    );
+    assert_eq!(program.layouts.len(), 5);
+    assert_eq!(program.layouts[1].name, "Pair");
+    assert_eq!(
+        program.layouts[1].constructors[0].fields,
+        [Repr::TObj, Repr::Int]
+    );
+    assert_eq!(program.layouts[1].repr(), Repr::Obj);
+    assert_eq!(program.layouts[0].repr(), Repr::Enum);
+    assert_eq!(program.layouts[4].repr(), Repr::Enum);
+    assert!(program.layouts[4].constructors.is_empty());
+}
+
+/// 表にない配置は `#N` で書き、そのまま読み戻せる。誤りを含む IR を verifier に渡すためである。
+#[test]
+fn layouts_outside_the_table_round_trip() {
+    let program = round_trip(
+        "\
+layout Prelude.Bool { False, True }
+fn f(p.0: obj, b.1: tobj) -> tobj {
+  unpack p.0 #1 #0(x.2: tobj)
+  release p.0 #2 #0(x.2)
+  let d.3: obj = con #3 #1(x.2)
+  switch b.1 #4 { #0 -> b1, _ -> b2 }
+b1:
+  return d.3
+b2:
+  return #1
+}
+",
+    );
+    let block = &program.functions[0].blocks[0];
+    let layouts: Vec<LayoutId> = block
+        .stmts
+        .iter()
+        .map(|stmt| match stmt {
+            Stmt::Unpack { ctor, .. } | Stmt::Release { ctor, .. } => ctor.layout,
+            Stmt::Let {
+                rhs: Rhs::Con { ctor, .. },
+                ..
+            } => ctor.layout,
+            _ => panic!("expected an unpack, a release or a con"),
+        })
+        .collect();
+    assert_eq!(layouts, [1, 2, 3].map(LayoutId));
+    let Term::Switch { layout, .. } = &block.term else {
+        panic!("expected a switch");
+    };
+    assert_eq!(*layout, Some(LayoutId(4)));
+}
+
+/// 表にある配置も、`mask` や操作の番号と同じく `#N` で書ける。表示すると名前に戻る。
+#[test]
+fn a_layout_number_in_the_table_reads_as_that_layout() {
+    let program = parse(
+        "layout Option { None, Some(tobj) }\nfn f(x.0: tobj) -> tobj {\n  let d.1: tobj = con #0 #1(x.0)\n  return d.1\n}\n",
+    )
+    .unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(
+        program.functions[0].blocks[0].stmts[0],
+        Stmt::Let {
+            var: VarId(1),
+            rhs: Rhs::Con {
+                ctor: Ctor {
+                    layout: LayoutId(0),
+                    tag: 1,
+                },
+                args: vec![v(0)],
+            },
+        }
+    );
+    assert_eq!(
+        pretty(&program),
+        "layout Option { None, Some(tobj) }\nfn f(x.0: tobj) -> tobj {\n  let d.1: tobj = con Option #1(x.0)\n  return d.1\n}\n"
+    );
+}
+
+#[test]
+fn malformed_layouts_are_errors_with_their_lines() {
+    let error = parse_error(
+        "layout Option { None }\nlayout Option { None }\nfn f() -> unit {\n  return ()\n}\n",
+    );
+    assert_eq!(error.line, 2);
+    assert_eq!(error.message, "layout `Option` is declared twice");
+
+    let error =
+        parse_error("layout Option { None(), Some(tobj) }\nfn f() -> unit {\n  return ()\n}\n");
+    assert_eq!(error.line, 1);
+    assert_eq!(error.message, "an empty field list");
+
+    let error = parse_error("layout Option { Some(tob) }\nfn f() -> unit {\n  return ()\n}\n");
+    assert_eq!(error.line, 1);
+    assert_eq!(
+        error.message,
+        "expected a repr (obj, tobj, int, enum or unit), found `tob`"
+    );
+
+    // 参照の `#0` は表の番号と読むので、この名前の配置は名前で引けない
+    let error = parse_error("layout #0 { A(tobj) }\nfn f() -> unit {\n  return ()\n}\n");
+    assert_eq!(error.line, 1);
+    assert_eq!(error.message, "a layout name cannot be `#N`");
+
+    // 配置の行はエフェクトの行より前に書く
+    let error = parse_error(
+        "effect Ask { ask/1 }\nlayout Option { None }\nfn f() -> unit {\n  return ()\n}\n",
+    );
+    assert_eq!(error.line, 2);
+    assert_eq!(error.message, "expected `fn`, found `layout`");
+}
+
+/// 組の配置の名前は形を決める。コンストラクタは配置と同じ名前の1つで、フィールドはカンマの数より1つ多い `tobj` である。
+#[test]
+fn a_tuple_layout_has_the_shape_of_its_name() {
+    for constructors in [
+        "(,)(tobj, int)",
+        "(,)(tobj, tobj, tobj)",
+        "Pair(tobj, tobj)",
+        "(,)(tobj, tobj), (,)(tobj, tobj)",
+        "",
+    ] {
+        let error = parse_error(&format!(
+            "layout (,) {{ {constructors} }}\nfn f() -> unit {{\n  return ()\n}}\n"
+        ));
+        assert_eq!(error.line, 1);
+        assert_eq!(
+            error.message,
+            "the tuple layout `(,)` must have one constructor `(,)` with 2 tobj fields"
+        );
+    }
+    let error = parse_error("layout (,,) { (,,)(tobj, tobj) }\nfn f() -> unit {\n  return ()\n}\n");
+    assert_eq!(
+        error.message,
+        "the tuple layout `(,,)` must have one constructor `(,,)` with 3 tobj fields"
+    );
+}
+
+#[test]
+fn an_instruction_names_a_layout() {
+    let error = parse_error(
+        "layout Option { None, Some(tobj) }\nfn f(x.0: tobj) -> tobj {\n  let d.1: tobj = con Optoin #1(x.0)\n  return d.1\n}\n",
+    );
+    assert_eq!(error.line, 3);
+    assert_eq!(error.message, "unknown layout `Optoin`");
+
+    let error =
+        parse_error("fn f(x.0: tobj) -> obj {\n  let d.1: obj = con (x.0)\n  return d.1\n}\n");
+    assert_eq!(error.line, 2);
+    assert_eq!(error.message, "expected a layout, found `(`");
+
+    // 配置のない古い形 `con #1(..)` は、`#1` を表にない配置と読み、タグがないことを報告する
+    let error =
+        parse_error("fn f(x.0: tobj) -> obj {\n  let d.1: obj = con #1(x.0)\n  return d.1\n}\n");
+    assert_eq!(error.line, 2);
+    assert_eq!(error.message, "expected a tag `#N`, found `(`");
 }

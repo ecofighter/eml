@@ -4,7 +4,7 @@ use eml_extern::Extern;
 use eml_hir::{Program as HirProgram, TypeDefKind};
 use eml_types::{Equality, Type};
 
-use crate::{Repr, VarInfo};
+use crate::{Repr, VarInfo, data_repr};
 
 /// 型の Repr (docs/spec/core-ir.md)。総称的な位置の束縛も、S3b-2c でその規則を決めるまでは具体化した型から
 /// 決める。関数の値と型変数の値は、即値 (捕まえた変数のない関数、引数のないコンストラクタ) にもヒープの物体にも
@@ -20,17 +20,7 @@ pub fn repr(ty: &Type, hir: &HirProgram) -> Repr {
                 .repr
             }
             TypeDefKind::Data { constructors } => {
-                let with_fields = constructors
-                    .iter()
-                    .filter(|&&ctor| !hir[ctor].fields.is_empty())
-                    .count();
-                if with_fields == 0 {
-                    Repr::Enum
-                } else if with_fields == constructors.len() {
-                    Repr::Obj
-                } else {
-                    Repr::TObj
-                }
+                data_repr(constructors.iter().map(|&ctor| hir[ctor].fields.len()))
             }
         },
         Type::Fn { .. } | Type::Rigid(_) | Type::Flexible => Repr::TObj,

@@ -4,7 +4,8 @@
 use std::fmt::Write;
 
 use crate::{
-    Atom, Block, BlockId, Call, CasePattern, CoreFn, EffectInfo, Program, Rhs, Stmt, Term, VarId,
+    Atom, Block, BlockId, Call, CasePattern, CoreFn, Ctor, EffectInfo, LayoutId, Program, Rhs,
+    Stmt, Term, VarId,
 };
 
 /// 位置を出さない表示。translate のテストの多くは位置を見ないので、既定では出さない。
@@ -33,6 +34,32 @@ struct Printer<'p> {
 impl Printer<'_> {
     fn program(&self) -> String {
         let mut out = String::new();
+        for layout in &self.program.layouts {
+            let constructors: Vec<String> = layout
+                .constructors
+                .iter()
+                .map(|ctor| {
+                    if ctor.fields.is_empty() {
+                        ctor.name.clone()
+                    } else {
+                        let fields: Vec<&str> =
+                            ctor.fields.iter().map(|repr| repr.name()).collect();
+                        format!("{}({})", ctor.name, fields.join(", "))
+                    }
+                })
+                .collect();
+            if constructors.is_empty() {
+                writeln!(out, "layout {} {{}}", layout.name).unwrap();
+            } else {
+                writeln!(
+                    out,
+                    "layout {} {{ {} }}",
+                    layout.name,
+                    constructors.join(", ")
+                )
+                .unwrap();
+            }
+        }
         for effect in &self.program.effects {
             let operations: Vec<String> = effect
                 .operations
@@ -95,21 +122,31 @@ impl Printer<'_> {
                         self.rhs(function, rhs)
                     )
                 }
-                Stmt::Unpack { value, tag, fields } => format!(
-                    "unpack {} #{tag}({})",
+                Stmt::Unpack {
+                    value,
+                    ctor,
+                    fields,
+                } => format!(
+                    "unpack {} {}({})",
                     var(function, *value),
+                    self.ctor(*ctor),
                     binders(function, fields)
                 ),
                 Stmt::Dup(v) => format!("dup {}", var(function, *v)),
                 Stmt::Decref(v) => format!("decref {}", var(function, *v)),
-                Stmt::Release { value, tag, fields } => {
+                Stmt::Release {
+                    value,
+                    ctor,
+                    fields,
+                } => {
                     let kept: Vec<String> = fields
                         .iter()
                         .map(|field| field.map_or_else(|| "_".to_string(), |v| var(function, v)))
                         .collect();
                     format!(
-                        "release {} #{tag}({})",
+                        "release {} {}({})",
                         var(function, *value),
+                        self.ctor(*ctor),
                         kept.join(", ")
                     )
                 }
@@ -126,6 +163,7 @@ impl Printer<'_> {
             }
             Term::Switch {
                 scrutinee,
+                layout,
                 cases,
                 default,
             } => {
@@ -147,11 +185,12 @@ impl Printer<'_> {
                 if let Some(default) = default {
                     arms.push(format!("_ -> b{}", default.0));
                 }
+                let layout = layout.map_or_else(String::new, |id| format!(" {}", self.layout(id)));
                 if arms.is_empty() {
-                    format!("switch {} {{}}", self.atom(function, scrutinee))
+                    format!("switch {}{layout} {{}}", self.atom(function, scrutinee))
                 } else {
                     format!(
-                        "switch {} {{ {} }}",
+                        "switch {}{layout} {{ {} }}",
                         self.atom(function, scrutinee),
                         arms.join(", ")
                     )
@@ -190,7 +229,9 @@ impl Printer<'_> {
             Rhs::ConstString(index) => {
                 format!("const {:?}", self.program.strings[*index as usize])
             }
-            Rhs::Con { tag, args } => format!("con #{tag}({})", self.atoms(function, args)),
+            Rhs::Con { ctor, args } => {
+                format!("con {}({})", self.ctor(*ctor), self.atoms(function, args))
+            }
             Rhs::Drop(a) => format!("drop {}", self.atom(function, a)),
         }
     }
@@ -278,6 +319,18 @@ impl Printer<'_> {
             })
             .collect();
         format!("mask [{}] ", names.join(", "))
+    }
+
+    /// 配置の名前。表にない番号は、エフェクトと同じく `#N` で書く。
+    fn layout(&self, id: LayoutId) -> String {
+        self.program
+            .layout(id)
+            .map_or_else(|| format!("#{}", id.0), |layout| layout.name.clone())
+    }
+
+    /// `L #t`。
+    fn ctor(&self, ctor: Ctor) -> String {
+        format!("{} #{}", self.layout(ctor.layout), ctor.tag)
     }
 
     /// 文字列の case は `const` と同じく文字列定数の表を引いて書く。

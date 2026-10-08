@@ -5,7 +5,7 @@
 
 use std::collections::{BTreeSet, HashMap};
 
-use crate::{Atom, Block, BlockId, CasePattern, CoreFn, Program, Rhs, Stmt, Term, VarId};
+use crate::{Atom, Block, BlockId, CasePattern, CoreFn, Ctor, Program, Rhs, Stmt, Term, VarId};
 
 use crate::liveness::{insert_var, live_after_term, live_in, step_back};
 
@@ -36,6 +36,7 @@ fn insert_rc(function: &mut CoreFn) {
         let destructured = case_values.remove(&id);
         if let Term::Switch {
             scrutinee,
+            layout,
             cases,
             default,
         } = &block.term
@@ -55,14 +56,20 @@ fn insert_rc(function: &mut CoreFn) {
             let kept: Vec<VarId> = kept.into_iter().collect();
             for case in cases {
                 switch_entries.insert(case.target, kept.clone());
-                if let (Some(value), CasePattern::Tag(tag)) = (value, case.pattern)
+                let CasePattern::Tag(tag) = case.pattern else {
+                    continue;
+                };
+                // タグの `switch` はいつも配置を持つ (docs/spec/core-ir.md の「データの配置」)。持たない IR を黙って飛ばすと
+                // `release` が抜けるので、止める
+                let layout = layout.expect("a switch with tag cases has a layout");
+                if let Some(value) = value
                     && !case.fields.is_empty()
                 {
                     case_values.insert(
                         case.target,
                         Destructured {
                             value,
-                            tag,
+                            ctor: Ctor { layout, tag },
                             fields: case.fields.clone(),
                         },
                     );
@@ -122,13 +129,15 @@ fn rewrite(
         }
         // 文の直後に足す文。`unpack` の後では借りたフィールドを所有にし、ほかの文では定義して使わない変数を捨てる
         let after: Vec<Stmt> = match stmt {
-            Stmt::Unpack { value, tag, fields } => {
-                match own(*value, *tag, fields, |var| live.contains(&var), rc) {
-                    Owning::Dups(vars) => vars.into_iter().map(Stmt::Dup).collect(),
-                    Owning::Release(release) => vec![release],
-                    Owning::Decref => vec![Stmt::Decref(*value)],
-                }
-            }
+            Stmt::Unpack {
+                value,
+                ctor,
+                fields,
+            } => match own(*value, *ctor, fields, |var| live.contains(&var), rc) {
+                Owning::Dups(vars) => vars.into_iter().map(Stmt::Dup).collect(),
+                Owning::Release(release) => vec![release],
+                Owning::Decref => vec![Stmt::Decref(*value)],
+            },
             _ => stmt
                 .defs()
                 .iter()
@@ -154,7 +163,7 @@ fn rewrite(
     if let Some(destructured) = destructured {
         match own(
             destructured.value,
-            destructured.tag,
+            destructured.ctor,
             &destructured.fields,
             is_live,
             rc,
@@ -210,7 +219,7 @@ fn push_rc_var(uses: &mut Vec<VarId>, atom: Atom, rc: &[bool]) {
 /// 写して持つ。
 struct Destructured {
     value: VarId,
-    tag: u32,
+    ctor: Ctor,
     fields: Vec<VarId>,
 }
 
@@ -226,7 +235,7 @@ enum Owning {
 
 fn own(
     value: VarId,
-    tag: u32,
+    ctor: Ctor,
     fields: &[VarId],
     is_live: impl Fn(VarId) -> bool,
     rc: &[bool],
@@ -250,7 +259,7 @@ fn own(
     }
     Owning::Release(Stmt::Release {
         value,
-        tag,
+        ctor,
         fields: fields
             .iter()
             .zip(&live)

@@ -43,6 +43,7 @@ pub(crate) fn live_after_term(
         Term::Jump { target, args: _ } => add(*target, &function.block(*target).params),
         Term::Switch {
             scrutinee: _,
+            layout: _,
             cases,
             default,
         } => {
@@ -69,7 +70,7 @@ pub(crate) fn step_back(stmt: &Stmt, live: &mut BTreeSet<VarId>) {
         }
         Stmt::Release {
             value,
-            tag: _,
+            ctor: _,
             fields,
         } => {
             live.insert(*value);
@@ -78,7 +79,7 @@ pub(crate) fn step_back(stmt: &Stmt, live: &mut BTreeSet<VarId>) {
         Stmt::Let { var: _, rhs: _ }
         | Stmt::Unpack {
             value: _,
-            tag: _,
+            ctor: _,
             fields: _,
         } => stmt.for_each_atom(|atom| insert_var(live, atom)),
     }

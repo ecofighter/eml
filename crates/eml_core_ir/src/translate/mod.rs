@@ -227,6 +227,7 @@ pub(crate) fn translate(
             .collect(),
         entry: entry_fn,
         strings: builder.strings.values,
+        layouts: builder.layouts,
         effects: effect_table(hir),
         files: builder.files.values,
     }
@@ -564,8 +565,12 @@ impl<'a> FnLowering<'a> {
             let block = self.builder.new_block();
             (tag, label, block)
         });
+        let layout = self
+            .program
+            .data_layout(self.ctx.hir, self.ctx.hir.lang.bool);
         self.builder.terminate(Term::Switch {
             scrutinee,
+            layout: Some(layout),
             cases: targets
                 .iter()
                 .map(|&(tag, _, target)| Case {

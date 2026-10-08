@@ -11,23 +11,34 @@ use eml_hir::{
 };
 use eml_types::Type;
 
-use crate::{Atom, BlockId, Case, CasePattern, Repr, Rhs, Stmt, TUPLE, Term, VarId, VarInfo};
+use crate::{
+    Atom, BlockId, Case, CasePattern, Ctor, LayoutId, Rhs, Stmt, TUPLE, Term, VarId, VarInfo,
+};
 
 use super::builder::Label;
 use super::types::{split_arrows, var_info};
 use super::{Ctx, CtxId, Exit, FnLowering};
 
 /// 値の出現 (docs/spec/core-ir.md)。`Con` は頭のコンストラクタが分かっている値で、タプルはタグ 0 の
-/// コンストラクタである。`value` はその値を持つアトムで、`None` ならまだ作っていない。値全体が要る葉でだけ作る。
+/// コンストラクタである。値全体が要る葉でだけ値を作る。
 #[derive(Clone, PartialEq)]
 pub(super) enum Occ {
     Atom(Atom, Type),
     Con {
         tag: u32,
         fields: Vec<Occ>,
-        value: Option<Atom>,
+        value: ConValue,
         ty: Type,
     },
+}
+
+/// 頭の分かっている出現の値。まだ作っていない値は、作るときに配置を引く。決定木が値を作らずに枝を選べば、
+/// その配置は IR に現れないので表に入れない。
+#[derive(Clone, Copy, PartialEq)]
+pub(super) enum ConValue {
+    Made(Atom),
+    Data(ConstructorId),
+    Tuple,
 }
 
 impl Occ {
@@ -68,12 +79,13 @@ pub(super) enum Scrutinee {
 enum Decision {
     Switch {
         scrutinee: Atom,
+        layout: Option<LayoutId>,
         cases: Vec<(CasePattern, Vec<VarId>, Decision)>,
         default: Option<Box<Decision>>,
     },
     Unpack {
         value: VarId,
-        tag: u32,
+        ctor: Ctor,
         fields: Vec<VarId>,
         next: Box<Decision>,
     },
@@ -334,22 +346,29 @@ impl FnLowering<'_> {
         match occ {
             Occ::Atom(atom, _) => *atom,
             Occ::Con {
-                value: Some(value), ..
+                value: ConValue::Made(value),
+                ..
             } => *value,
             Occ::Con {
                 tag,
                 fields,
-                value: None,
+                value,
                 ty,
             } => {
                 if let Some(&(_, atom)) = built.iter().find(|(done, _)| done == occ) {
                     return atom;
                 }
-                let args = fields
+                let args: Vec<Atom> = fields
                     .iter()
                     .map(|field| self.materialize_once(field, built))
                     .collect();
-                let atom = self.bind("d", ty, Rhs::Con { tag: *tag, args });
+                let layout = match *value {
+                    ConValue::Data(ctor) => self.program.ctor(self.ctx.hir, ctor).layout,
+                    ConValue::Tuple => self.program.tuple_layout(args.len()),
+                    ConValue::Made(_) => unreachable!("a made value is returned above"),
+                };
+                let ctor = Ctor { layout, tag: *tag };
+                let atom = self.bind("d", ty, Rhs::Con { ctor, args });
                 built.push((occ.clone(), atom));
                 atom
             }
@@ -376,7 +395,7 @@ impl FnLowering<'_> {
             return Occ::Con {
                 tag: self.ctx.hir[ctor].tag,
                 fields,
-                value: None,
+                value: ConValue::Data(ctor),
                 ty: self.ty(id),
             };
         }
@@ -390,7 +409,7 @@ impl FnLowering<'_> {
                 Occ::Con {
                     tag: TUPLE,
                     fields,
-                    value: None,
+                    value: ConValue::Tuple,
                     ty: self.ty(id),
                 }
             }
@@ -409,7 +428,7 @@ impl FnLowering<'_> {
             Occ::Atom(Atom::Tag(tag), ty) => Occ::Con {
                 tag,
                 fields: Vec::new(),
-                value: Some(Atom::Tag(tag)),
+                value: ConValue::Made(Atom::Tag(tag)),
                 ty,
             },
             Occ::Atom(Atom::Var(var), ty) => match self.cons.get(&var) {
@@ -423,7 +442,7 @@ impl FnLowering<'_> {
                             .zip(types)
                             .map(|(&arg, ty)| Occ::Atom(arg, ty))
                             .collect(),
-                        value: Some(Atom::Var(var)),
+                        value: ConValue::Made(Atom::Var(var)),
                         ty,
                     }
                 }
@@ -469,11 +488,16 @@ impl FnLowering<'_> {
             _ if statically => None,
             (Head::Tuple(elements), Occ::Atom(value, ty)) => {
                 let types = tuple_field_types(&ty, elements.len());
-                Some(self.single(occs, &rows, column, TUPLE, value, types))
+                let ctor = Ctor {
+                    layout: self.program.tuple_layout(elements.len()),
+                    tag: TUPLE,
+                };
+                Some(self.single(occs, &rows, column, ctor, value, types))
             }
             (Head::Con(ctor, _), Occ::Atom(value, ty)) if single_constructor(hir, ctor) => {
                 let types = self.field_types(ctor, &ty);
-                Some(self.single(occs, &rows, column, hir[ctor].tag, value, types))
+                let ctor = self.program.ctor(hir, ctor);
+                Some(self.single(occs, &rows, column, ctor, value, types))
             }
             (Head::Con(ctor, _), Occ::Atom(value, ty)) => {
                 Some(self.switch_constructors(occs, &rows, column, ctor, value, &ty))
@@ -488,19 +512,25 @@ impl FnLowering<'_> {
         }
     }
 
-    /// コンストラクタが1つだけの型 (タプルを含む) の欄。値を調べずに分解する。`Unpack` は値が `obj` の変数のときだけ
-    /// 出し、型変数として扱う値 (`tobj`) は、case が1つの `switch` で分解する (docs/spec/core-ir.md の R8)。
+    /// コンストラクタが1つだけの型 (タプルを含む) の欄。値を調べずに `unpack` で分解する (docs/spec/core-ir.md)。
     fn single(
         &mut self,
         occs: &[Occ],
         rows: &[Row],
         column: usize,
-        tag: u32,
+        ctor: Ctor,
         value: Atom,
         types: Vec<Type>,
     ) -> Decision {
-        let fields = self.field_vars(rows, column, tag, &types);
-        let rows = specialize(self.ctx.body, self.ctx.hir, rows, column, tag, fields.len());
+        let fields = self.field_vars(rows, column, ctor.tag, &types);
+        let rows = specialize(
+            self.ctx.body,
+            self.ctx.hir,
+            rows,
+            column,
+            ctor.tag,
+            fields.len(),
+        );
         let field_occs = fields
             .iter()
             .zip(types)
@@ -508,18 +538,16 @@ impl FnLowering<'_> {
         let next = self
             .decide(&splice(occs, column, field_occs), rows, false)
             .expect("a full decision tree always exists");
-        match value {
-            Atom::Var(var) if self.builder.repr(var) == Repr::Obj => Decision::Unpack {
-                value: var,
-                tag,
-                fields,
-                next: Box::new(next),
-            },
-            _ => Decision::Switch {
-                scrutinee: value,
-                cases: vec![(CasePattern::Tag(tag), fields, next)],
-                default: None,
-            },
+        // フィールドを持つ値は定数にならない。パターンが型をその data かタプルに決めるので、値の Repr はつねに `obj`
+        // である。verifier は `obj` でない値の `unpack` を拒む (R8)
+        let Atom::Var(value) = value else {
+            unreachable!("a value with fields is a variable")
+        };
+        Decision::Unpack {
+            value,
+            ctor,
+            fields,
+            next: Box::new(next),
         }
     }
 
@@ -540,6 +568,7 @@ impl FnLowering<'_> {
         let TypeDefKind::Data { constructors } = &hir[hir[ctor].ty].kind else {
             unreachable!("constructor patterns belong to data types")
         };
+        let layout = self.program.data_layout(hir, hir[ctor].ty);
         let mentions = |ctor: ConstructorId, row: &Row| matches!(head(body, hir, row.cells[column]), Head::Con(other, _) if other == ctor);
         let mut cases = Vec::new();
         for &ctor in constructors {
@@ -568,6 +597,7 @@ impl FnLowering<'_> {
         });
         Decision::Switch {
             scrutinee,
+            layout: Some(layout),
             cases,
             default,
         }
@@ -607,6 +637,7 @@ impl FnLowering<'_> {
             .expect("a full decision tree always exists");
         Decision::Switch {
             scrutinee,
+            layout: None,
             cases,
             default: Some(Box::new(default)),
         }
@@ -618,6 +649,7 @@ impl FnLowering<'_> {
         match decision {
             Decision::Switch {
                 scrutinee,
+                layout,
                 cases,
                 default,
             } => {
@@ -639,6 +671,7 @@ impl FnLowering<'_> {
                     .collect();
                 self.builder.terminate(Term::Switch {
                     scrutinee,
+                    layout,
                     cases,
                     default: default_target,
                 });
@@ -653,11 +686,15 @@ impl FnLowering<'_> {
             }
             Decision::Unpack {
                 value,
-                tag,
+                ctor,
                 fields,
                 next,
             } => {
-                self.builder.emit(Stmt::Unpack { value, tag, fields });
+                self.builder.emit(Stmt::Unpack {
+                    value,
+                    ctor,
+                    fields,
+                });
                 self.emit(*next, ctx, root);
             }
             Decision::Leaf { arm, bound } => {
