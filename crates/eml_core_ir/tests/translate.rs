@@ -2254,7 +2254,7 @@ fn layouts(shown: &str) -> String {
 #[test]
 fn layouts_hold_the_declared_field_reprs_in_order_of_first_use() {
     // `Pair a Int` のフィールドは宣言の型で決まる。`Option` は2つの具体化で1つの配置を使う。使わない `Unused` は
-    // 配置を持たない。タプルは要素の数ごとに1つの配置で、フィールドはどれも `tobj` である。
+    // 配置を持たない。タプルは要素の数ごとに1つの配置で、フィールドはどれも `tobj` である
     let text = "data Pair a =\n  | Pair a Int\n\ndata Unused =\n  | Unused Int\n\ndata Option a =\n  | None\n  | Some a\n\nfirst : Pair a -> a\nfirst (Pair x _) = x\n\npick : Option Int -> Option String -> Int\npick a b = match (a, b) with\n  | (Some n, _) -> n\n  | (None, Some _) -> 1\n  | (None, None) -> 0\n\nmain : Unit -> <IO> Unit\nmain () =\n  let t = ((1, 2), 3, 4)\n  drop t\n  println (show_int (first (Pair (pick (Some 1) None) 2)))";
     insta::assert_snapshot!(layouts(&core_text(text, Pass::Translate)), @"
     layout Pair { Pair(tobj, int) }

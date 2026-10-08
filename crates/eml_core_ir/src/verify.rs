@@ -1489,7 +1489,7 @@ fn flatten(owned: &Owned) -> Vec<VarId> {
         .collect()
 }
 
-/// フィールドの数の食い違いを、命令の言い方 (`a con of `L` #t` など) を主語にして報告する (R9)。
+/// フィールドの数の食い違いを、命令の言い方 (``a con of `L` #t`` など) を主語にして報告する (R9)。
 fn field_count(subject: String, given: usize, constructor: &LayoutCtor) -> Result<(), String> {
     if given == constructor.fields.len() {
         return Ok(());
