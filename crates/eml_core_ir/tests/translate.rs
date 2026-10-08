@@ -2254,8 +2254,7 @@ fn layouts(shown: &str) -> String {
 #[test]
 fn layouts_hold_the_declared_field_reprs_in_order_of_first_use() {
     // `Pair a Int` のフィールドは宣言の型で決まる。`Option` は2つの具体化で1つの配置を使う。使わない `Unused` は
-    // 配置を持たない。タプルは要素の数ごとに1つの配置で、フィールドはどれも `tobj` である。`pick` の `(a, b)` は
-    // 作らずに分解するので、配置を足さない
+    // 配置を持たない。タプルは要素の数ごとに1つの配置で、フィールドはどれも `tobj` である。
     let text = "data Pair a =\n  | Pair a Int\n\ndata Unused =\n  | Unused Int\n\ndata Option a =\n  | None\n  | Some a\n\nfirst : Pair a -> a\nfirst (Pair x _) = x\n\npick : Option Int -> Option String -> Int\npick a b = match (a, b) with\n  | (Some n, _) -> n\n  | (None, Some _) -> 1\n  | (None, None) -> 0\n\nmain : Unit -> <IO> Unit\nmain () =\n  let t = ((1, 2), 3, 4)\n  drop t\n  println (show_int (first (Pair (pick (Some 1) None) 2)))";
     insta::assert_snapshot!(layouts(&core_text(text, Pass::Translate)), @"
     layout Pair { Pair(tobj, int) }
@@ -2263,6 +2262,13 @@ fn layouts_hold_the_declared_field_reprs_in_order_of_first_use() {
     layout (,) { (,)(tobj, tobj) }
     layout (,,) { (,,)(tobj, tobj, tobj) }
     ");
+}
+
+#[test]
+fn a_tuple_taken_apart_without_being_built_adds_no_layout() {
+    // `match (a, b)` のタプルは決定木が分解するだけで作らないので、タプルの配置は表に入らない
+    let text = "pick : Int -> Int -> Int\npick a b = match (a, b) with\n  | (0, _) -> 1\n  | (_, 0) -> 2\n  | _ -> 3\n\nmain : Unit -> <IO> Unit\nmain () = println (show_int (pick 1 2))";
+    insta::assert_snapshot!(layouts(&core_text(text, Pass::Translate)), @"");
 }
 
 #[test]

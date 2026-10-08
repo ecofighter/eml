@@ -318,7 +318,7 @@ impl<'t> Parser<'t> {
 
     /// 配置とコンストラクタの名前。語か、タプルの名前 `(,)`、`(,,)` である。
     fn layout_name(&mut self) -> Result<String, ParseError> {
-        if self.at_punct('(') && self.peek_at(1) == Some(&Tok::Punct(',')) {
+        if self.at_tuple_name() {
             self.pos += 1;
             let mut name = String::from("(");
             while self.eat_punct(',') {
@@ -335,7 +335,7 @@ impl<'t> Parser<'t> {
     /// 誤りを含む IR を verifier に渡すテストのためにある。
     fn layout_ref(&mut self) -> Result<LayoutId, ParseError> {
         let line = self.line();
-        let tuple = self.at_punct('(') && self.peek_at(1) == Some(&Tok::Punct(','));
+        let tuple = self.at_tuple_name();
         if !(tuple || matches!(self.peek(), Some(Tok::Word(_)))) {
             return Err(self.error_here("expected a layout"));
         }
@@ -349,7 +349,6 @@ impl<'t> Parser<'t> {
             .ok_or_else(|| error(line, format!("unknown layout `{name}`")))
     }
 
-    /// `L #t`。
     fn ctor(&mut self) -> Result<Ctor, ParseError> {
         let layout = self.layout_ref()?;
         let tag = self.tag()?;
@@ -1141,6 +1140,10 @@ impl<'t> Parser<'t> {
 
     fn at_punct(&self, c: char) -> bool {
         self.peek() == Some(&Tok::Punct(c))
+    }
+
+    fn at_tuple_name(&self) -> bool {
+        self.at_punct('(') && self.peek_at(1) == Some(&Tok::Punct(','))
     }
 
     fn eat_punct(&mut self, c: char) -> bool {

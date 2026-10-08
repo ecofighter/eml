@@ -12,17 +12,17 @@ use eml_types::Type;
 const PROBES: &str = "\
 import Std.Fs
 
-int : Int -> Int
-int x = x
+probe_int : Int -> Int
+probe_int x = x
 
-string : String -> String
-string s = s
+probe_string : String -> String
+probe_string s = s
 
-unit : Unit -> Unit
-unit u = u
+probe_unit : Unit -> Unit
+probe_unit u = u
 
-file : Fs.File -> Fs.File
-file f = f
+probe_file : Fs.File -> Fs.File
+probe_file f = f
 
 main : Unit -> <IO> Unit
 main () = println \"x\"
@@ -31,10 +31,10 @@ main () = println \"x\"
 /// 型の行を読む `PROBES` の関数。`_` の腕を書かないので、型の行を足すとここがコンパイルできなくなる。
 fn probe(ty: ExternType) -> &'static str {
     match ty {
-        ExternType::Int => "int",
-        ExternType::String => "string",
-        ExternType::Unit => "unit",
-        ExternType::File => "file",
+        ExternType::Int => "probe_int",
+        ExternType::String => "probe_string",
+        ExternType::Unit => "probe_unit",
+        ExternType::File => "probe_file",
     }
 }
 

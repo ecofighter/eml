@@ -764,6 +764,11 @@ fn every_layout_reference_is_in_the_table() {
         layout_error(&switch),
         "a switch refers to the unknown layout #3"
     );
+    let literals = switching("", "n.0: int", "switch n.0 #3 { 1 -> b1, _ -> b2 }");
+    assert_eq!(
+        layout_error(&literals),
+        "a switch refers to the unknown layout #3"
+    );
     let unpack = "fn f(p.0: obj) -> int {\n  unpack p.0 #3 #0(x.1: tobj)\n  return 0\n}\n";
     assert_eq!(
         layout_error(unpack),

@@ -328,7 +328,6 @@ impl Printer<'_> {
             .map_or_else(|| format!("#{}", id.0), |layout| layout.name.clone())
     }
 
-    /// `L #t`。
     fn ctor(&self, ctor: Ctor) -> String {
         format!("{} #{}", self.layout(ctor.layout), ctor.tag)
     }

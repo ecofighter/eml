@@ -5,7 +5,8 @@
 //! (R6、R7) も確かめる (`verify`)。`switch` と `unpack` のフィールドは値から借りて始まり、自分か持ち主が所有を持つ
 //! 間だけ有効である。
 //!
-//! R9 は、`con`、タグの `switch`、`unpack`、`release` を、その命令が指す配置と比べる。値がどの配置で作られたかは
+//! R9 は、`con`、タグの `switch`、`unpack`、`release` を、その命令が指す配置と比べる。配置を持つ `switch` はタグの
+//! case を持つものだけで、リテラルの `switch` では scrutinee の Repr を比べる。値がどの配置で作られたかは
 //! 追わない。それを保証するのは translate の型なので、配置の違う値を読む IR もこの検査を通りうる
 //! (docs/spec/core-ir.md の「データの配置」)。
 //!
@@ -463,8 +464,7 @@ impl<'a> Checker<'a> {
                         repr.name()
                     ));
                 }
-                let (layout, constructor) = self.ctor(*ctor, "an unpack")?;
-                let layout_repr = self.layout_repr(ctor.layout);
+                let (layout, layout_repr, constructor) = self.ctor(*ctor, "an unpack")?;
                 if layout_repr != Repr::Obj {
                     return Err(format!(
                         "`{}` (obj) is unpacked as `{}`, which is {}",
@@ -481,16 +481,16 @@ impl<'a> Checker<'a> {
                         layout.constructors.len()
                     ));
                 }
-                if fields.len() != constructor.fields.len() {
-                    return Err(format!(
-                        "an unpack of `{}` as `{}` #{} has {} fields, but the constructor has {}",
+                field_count(
+                    format!(
+                        "an unpack of `{}` as `{}` #{}",
                         self.name(*value),
                         layout.name,
-                        ctor.tag,
-                        fields.len(),
-                        constructor.fields.len()
-                    ));
-                }
+                        ctor.tag
+                    ),
+                    fields.len(),
+                    constructor,
+                )?;
                 self.field_reprs(layout, ctor.tag, constructor, fields)?;
                 self.read(owned, *value, "unpacked")?;
                 self.bind_fields(owned, *value, *ctor, fields, self.at)
@@ -654,6 +654,7 @@ impl<'a> Checker<'a> {
                     expected.name()
                 ));
             }
+            return Ok(());
         }
         if self.fits(arg, expected) {
             Ok(())
@@ -681,22 +682,19 @@ impl<'a> Checker<'a> {
     }
 
     /// 配置の番号を表で引く。`what` は誤りの文の主語 (`a con`) である。
-    fn layout(&self, id: LayoutId, what: &str) -> Result<&'a Layout, String> {
-        self.program
+    fn layout(&self, id: LayoutId, what: &str) -> Result<(&'a Layout, Repr), String> {
+        let layout = self
+            .program
             .layout(id)
-            .ok_or_else(|| format!("{what} refers to the unknown layout #{}", id.0))
-    }
-
-    /// 表にあると確かめた配置の Repr。
-    fn layout_repr(&self, id: LayoutId) -> Repr {
-        self.layout_reprs[id.0 as usize]
+            .ok_or_else(|| format!("{what} refers to the unknown layout #{}", id.0))?;
+        Ok((layout, self.layout_reprs[id.0 as usize]))
     }
 
     /// `con`、`unpack`、`release` のコンストラクタを配置の表で引く (R9)。
-    fn ctor(&self, ctor: Ctor, what: &str) -> Result<(&'a Layout, &'a LayoutCtor), String> {
-        let layout = self.layout(ctor.layout, what)?;
+    fn ctor(&self, ctor: Ctor, what: &str) -> Result<(&'a Layout, Repr, &'a LayoutCtor), String> {
+        let (layout, repr) = self.layout(ctor.layout, what)?;
         match layout.constructors.get(ctor.tag as usize) {
-            Some(constructor) => Ok((layout, constructor)),
+            Some(constructor) => Ok((layout, repr, constructor)),
             None => Err(format!(
                 "{what} names #{}, but `{}` has {} constructors",
                 ctor.tag,
@@ -742,13 +740,11 @@ impl<'a> Checker<'a> {
     ) -> Result<(), String> {
         let first = cases.first().map(|case| case.pattern);
         let (layout, layout_repr) = match (layout, first) {
-            (Some(id), Some(CasePattern::Tag(_))) => {
-                (self.layout(id, "a switch")?, self.layout_repr(id))
-            }
+            (Some(id), Some(CasePattern::Tag(_))) => self.layout(id, "a switch")?,
             (Some(id), _) => {
                 return Err(format!(
                     "a switch without tag cases has the layout `{}`",
-                    self.layout(id, "a switch")?.name
+                    self.layout(id, "a switch")?.0.name
                 ));
             }
             (None, Some(CasePattern::Tag(_))) => {
@@ -791,14 +787,11 @@ impl<'a> Checker<'a> {
                     layout.constructors.len()
                 ));
             };
-            if case.fields.len() != constructor.fields.len() {
-                return Err(format!(
-                    "a case of `{}` #{tag} has {} fields, but the constructor has {}",
-                    layout.name,
-                    case.fields.len(),
-                    constructor.fields.len()
-                ));
-            }
+            field_count(
+                format!("a case of `{}` #{tag}", layout.name),
+                case.fields.len(),
+                constructor,
+            )?;
             self.field_reprs(layout, tag, constructor, &case.fields)?;
         }
         // 網羅は `default` のないときだけ見る。通る IR ではそのとき case がコンストラクタの数だけあるので、表の大きさは
@@ -1062,17 +1055,17 @@ impl<'a> Checker<'a> {
             ));
         }
         // 数を先に配置で確かめるので、出どころは数を比べない
-        let (layout, constructor) = self.ctor(ctor, "a release")?;
-        if fields.len() != constructor.fields.len() {
-            return Err(format!(
-                "a release of `{}` as `{}` #{} has {} fields, but the constructor has {}",
+        let (layout, _, constructor) = self.ctor(ctor, "a release")?;
+        field_count(
+            format!(
+                "a release of `{}` as `{}` #{}",
                 self.name(value),
                 layout.name,
-                ctor.tag,
-                fields.len(),
-                constructor.fields.len()
-            ));
-        }
+                ctor.tag
+            ),
+            fields.len(),
+            constructor,
+        )?;
         for (slot, field) in fields.iter().enumerate() {
             let Some(field) = *field else { continue };
             self.visible(field)?;
@@ -1227,18 +1220,13 @@ impl<'a> Checker<'a> {
     /// `con` のフィールドの数は、コンストラクタと同じである。束縛する変数の Repr は配置の Repr と同じで、宣言した
     /// Repr が `tobj` でないフィールドの値はその Repr に収まる (R9)。
     fn check_con(&self, var: VarId, ctor: Ctor, args: &[Atom]) -> Result<(), String> {
-        let (layout, constructor) = self.ctor(ctor, "a con")?;
-        if args.len() != constructor.fields.len() {
-            return Err(format!(
-                "a con of `{}` #{} has {} fields, but the constructor has {}",
-                layout.name,
-                ctor.tag,
-                args.len(),
-                constructor.fields.len()
-            ));
-        }
+        let (layout, layout_repr, constructor) = self.ctor(ctor, "a con")?;
+        field_count(
+            format!("a con of `{}` #{}", layout.name, ctor.tag),
+            args.len(),
+            constructor,
+        )?;
         let repr = self.function.repr(var);
-        let layout_repr = self.layout_repr(ctor.layout);
         if repr != layout_repr {
             return Err(format!(
                 "`{}` ({}) is bound to a con of `{}`, which is {}",
@@ -1499,4 +1487,15 @@ fn flatten(owned: &Owned) -> Vec<VarId> {
         .iter()
         .flat_map(|(&var, &count)| std::iter::repeat_n(var, count as usize))
         .collect()
+}
+
+/// フィールドの数の食い違いを、命令の言い方 (`a con of `L` #t` など) を主語にして報告する (R9)。
+fn field_count(subject: String, given: usize, constructor: &LayoutCtor) -> Result<(), String> {
+    if given == constructor.fields.len() {
+        return Ok(());
+    }
+    Err(format!(
+        "{subject} has {given} fields, but the constructor has {}",
+        constructor.fields.len()
+    ))
 }

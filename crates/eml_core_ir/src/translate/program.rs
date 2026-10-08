@@ -157,7 +157,6 @@ impl ProgramBuilder {
         id
     }
 
-    /// コンストラクタの `Ctor`。
     pub(super) fn ctor(&mut self, hir: &HirProgram, ctor: ConstructorId) -> Ctor {
         Ctor {
             layout: self.data_layout(hir, hir[ctor].ty),
