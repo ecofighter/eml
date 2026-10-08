@@ -168,6 +168,11 @@ pub struct Heap {
     /// 文字列の物体の中身を書くのはヒープの手続き (確保と写し) なので、ヒープが数える。インタプリタはこれを
     /// `RunStats` の `string_bytes_copied` として返す。
     string_bytes_written: u64,
+    /// 参照の数を書き換えた回数。増やす側 (`dup`、`acquire_immortal`) と減らす側 (`decref`、連鎖を含む) を分けて
+    /// 数える。数を書くのはこの3つの手続きだけなので、ここで数えれば漏れない。箱の解放そのものは数を書かないので
+    /// 数えない。インタプリタはこれを `RunStats` の `rc_increments` と `rc_decrements` として返す。
+    rc_increments: u64,
+    rc_decrements: u64,
 }
 
 impl Default for Heap {
@@ -182,11 +187,21 @@ impl Heap {
             slots: Vec::new(),
             free: Vec::new(),
             string_bytes_written: 0,
+            rc_increments: 0,
+            rc_decrements: 0,
         }
     }
 
     pub fn string_bytes_written(&self) -> u64 {
         self.string_bytes_written
+    }
+
+    pub fn rc_increments(&self) -> u64 {
+        self.rc_increments
+    }
+
+    pub fn rc_decrements(&self) -> u64 {
+        self.rc_decrements
     }
 
     pub fn alloc(&mut self, payload: Payload) -> ObjRef {
@@ -223,6 +238,7 @@ impl Heap {
             "`acquire_immortal` takes an immortal object"
         );
         object.header.rc += 1;
+        self.rc_increments += 1;
         Ok(())
     }
 
@@ -236,6 +252,7 @@ impl Heap {
 
     pub fn dup(&mut self, obj: ObjRef) -> Result<(), HeapError> {
         self.object_mut(obj)?.header.rc += 1;
+        self.rc_increments += 1;
         Ok(())
     }
 
@@ -253,7 +270,9 @@ impl Heap {
         while let Some(obj) = work.pop() {
             let header = &mut self.object_mut(obj)?.header;
             header.rc -= 1;
-            if header.rc == 0 && !header.immortal {
+            let freed = header.rc == 0 && !header.immortal;
+            self.rc_decrements += 1;
+            if freed {
                 let payload = self.release(obj);
                 children(&payload, &mut work);
             }

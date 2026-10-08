@@ -423,6 +423,8 @@ impl<'p> Runtime<'p> {
         RunStats {
             handler_visits: self.handler_visits,
             string_bytes_copied: self.heap.string_bytes_written(),
+            rc_increments: self.heap.rc_increments(),
+            rc_decrements: self.heap.rc_decrements(),
         }
     }
 

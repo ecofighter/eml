@@ -219,6 +219,26 @@ fn live_objects_are_counted_by_kind() {
 }
 
 #[test]
+fn reference_count_writes_are_counted_but_frees_are_not() {
+    let mut heap = Heap::new();
+    let s = string(&mut heap, "a");
+    let end = bottom(&mut heap);
+    let outer = frame(&mut heap, vec![(0, Value::Obj(s))], end);
+    let lit = literal(&mut heap, "lit");
+    heap.dup(s).unwrap();
+    heap.acquire_immortal(lit).unwrap();
+    assert_eq!((heap.rc_increments(), heap.rc_decrements()), (2, 0));
+    // 連鎖する解放は、フレーム、退避した文字列、下のフレームの数を1つずつ減らす
+    heap.decref(outer).unwrap();
+    assert_eq!(heap.rc_decrements(), 3);
+    heap.decref(lit).unwrap();
+    // `take` は数を書かずに箱を空けるので、数えない
+    assert_eq!(heap.take(s), Ok(Payload::Str("a".to_string())));
+    assert_eq!((heap.rc_increments(), heap.rc_decrements()), (2, 4));
+    assert!(heap.live_objects().is_empty());
+}
+
+#[test]
 fn string_bytes_written_counts_the_contents_of_string_objects() {
     let mut heap = Heap::new();
     let s = string(&mut heap, "abc");

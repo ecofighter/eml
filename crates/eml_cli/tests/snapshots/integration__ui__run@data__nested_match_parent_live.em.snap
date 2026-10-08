@@ -1,0 +1,10 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{stderr}\")"
+input_file: tests/ui/run/data/nested_match_parent_live.em
+---
+--- stdout ---
+a
+2
+empty
+--- stderr ---

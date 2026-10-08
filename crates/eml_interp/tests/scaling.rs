@@ -171,3 +171,64 @@ main () =
     let visits = handler_visits(n, &rest);
     assert!(visits <= 4 * n, "handler_visits = {visits}");
 }
+
+/// リストの関数と、本体が `traverse` の `main` を並べたプログラム。`traverse` の中の `{n}` を n に置き換える。
+fn list_traversal(n: u64, traverse: &str) -> String {
+    format!(
+        "data List a =
+  | Nil
+  | Cons a (List a)
+
+range : Int -> Int -> List Int
+range lo hi = if lo > hi then Nil else Cons lo (range (lo + 1) hi)
+
+sum : List Int -> Int
+sum xs = match xs with
+  | Nil -> 0
+  | Cons x rest -> x + sum rest
+
+length : List a -> Int
+length xs = match xs with
+  | Nil -> 0
+  | Cons _ rest -> 1 + length rest
+
+main : Unit -> <IO> Unit
+main () =
+{traverse}
+"
+    )
+    .replace("{n}", &n.to_string())
+}
+
+/// `list_traversal` を実行して `rc_increments` を返す。
+fn rc_increments(n: u64, traverse: &str, expected: &str) -> u64 {
+    let (out, result) = run_stats(&list_traversal(n, traverse));
+    let stats = result.unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(out, expected);
+    stats.rc_increments
+}
+
+#[test]
+fn traversing_a_unique_list_does_not_dup_per_cell() {
+    // 一意なリストのセルは、たどるときに箱を空けてフィールドの参照をそのまま受け取れるので、セルごとの `dup` は
+    // 要らない。長さを2倍にしても `rc_increments` は変わらない。今の実装でも通る見張りで、`switch` を消費しない
+    // 形にしたのに一意な箱を空ける手段を入れなかったとき (セルごとにフィールドを `dup` して箱を `decref` する) に
+    // 落ちる
+    let traverse = "  println (show_int (sum (range 1 {n})))";
+    let n = 1000;
+    let short = rc_increments(n, traverse, &format!("{}\n", n * (n + 1) / 2));
+    let long = rc_increments(2 * n, traverse, &format!("{}\n", n * (2 * n + 1)));
+    assert_eq!(short, long);
+}
+
+#[test]
+fn traversing_a_shared_list_dups_each_cell_at_most_once() {
+    // `sum` の後で `length` が同じリストを使うので、`sum` がたどるセルは共有されている。`sum` に渡す前に `xs` を
+    // 1回、`sum` が各セルで残りのリストを1回 `dup` するので、数は n になる。上限は n に小さな余裕を足したもので、
+    // セルを2回以上 `dup` する形になれば超える。今の実装でも通る見張りである
+    let traverse =
+        "  let xs = range 1 {n}\n  println (show_int (sum xs))\n  println (show_int (length xs))";
+    let n = 1000;
+    let increments = rc_increments(n, traverse, &format!("{}\n{n}\n", n * (n + 1) / 2));
+    assert!(increments <= n + 2, "rc_increments = {increments}");
+}
