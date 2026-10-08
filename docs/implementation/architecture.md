@@ -64,7 +64,7 @@ eml/
 eml_cli          check / run コマンド。パイプラインを組む唯一の場所 (Session)。テストから呼べる lib API を公開する
 eml_interp       Core IR を CEK 機械で実行する
 eml_runtime      オブジェクトのモデル、ヒープ、参照カウント、debug_heap の検査、OutputSink
-eml_core_ir      型付き HIR → Core IR (基本ブロックの列)。縮約と dup/decref の挿入のパス
+eml_core_ir      型付き HIR → Core IR (基本ブロックの列)。縮約と dup/decref/release の挿入のパス
 eml_types        Kind・型・row の推論、線形性・多重度の検査、match の網羅性検査
 eml_hir          モジュールの読み込み、CST → HIR の変換、名前解決、脱糖
 eml_syntax       SyntaxKind、lexer、レイアウト段、イベント方式のパーサ、rowan、型付き AST ラッパ
@@ -212,7 +212,7 @@ HIR への変換では、名前解決に加えて、名前の重複と未定義�
 - extern を値として使うときは、参照する場所ごとに包む関数を作り、その `extern` 命令に参照した場所の位置を持たせる。extern ごとに1つの共有の包みにすると、実行時エラーが包む関数の中を指し、どこで使った extern かが分からなくなるためである
 - `lower` は `SourceFiles` を受け取り、extern の呼び出しの位置 (`Loc`) を `SourceFiles::line_col` で行と列にする。`Program.files` には、位置に使った表示用のパスを使った順に入れる。`eml_core_ir` が `eml_diagnostics` に依存するのはこのためで、診断は出さない。`line_col` は、`SourceFiles::add` が作った行の先頭の表を二分探索し、その行の中だけ文字を数える
 - 文と終端の値と行き先をたどる処理 (生存解析、Perceus、verifier、縮約、`pretty`、インタプリタ) は、`Stmt::for_each_atom`、`Term::successors` などの visitor を通すか、`..` を使わずに欄をすべて名前で受ける `match` で分解する。欄を IR に足したときに、たどる処理のすべてがコンパイルエラーになるようにするため
-- 原子の使い方は「消費」と「読む」に分かれる ([Core IR とインタプリタ](../spec/core-ir.md))。`for_each_atom` は両方を返し、`Stmt::for_each_consumed` と `Term::for_each_consumed` は消費だけを返す (`unpack` の値と `switch` の scrutinee を除く)。生存解析は前者を使い、Perceus は後者で `dup` の数を決める。verifier は、読む使いを `Unpack`、`Dup`、`Switch` の腕で直接確かめる
+- アトムの使い方は「消費」と「読む」に分かれる ([Core IR とインタプリタ](../spec/core-ir.md))。`for_each_atom` は両方を返し、`Stmt::for_each_consumed` と `Term::for_each_consumed` は消費だけを返す (`unpack` の値と `switch` の scrutinee を除く)。生存解析は前者を使い、Perceus は後者で `dup` の数を決める。verifier は、読む使いを `Unpack`、`Dup`、`Switch` の腕で直接確かめる
 - パス、verifier、`pretty`、`parse`、インタプリタは、ブロックと文の並びをループでたどり、IR の大きさに比例して再帰しない。生存解析は、ブロックを後ろからたどる1回のループで、ブロックごとの入口の生存集合を側の表 (`liveness::live_in`) に返す。辺がすべて前向きなので、不動点の計算は要らない
 - 縮約 (`contract.rs`) は、使われない純粋な `let` を消し、消したブロックの末尾にだけ末尾呼び出しの規則をもう一度当てるパスである。S3b-1 までの `simplify` の書き換え (合流の畳み込み、値が分かっているコンストラクタへの `switch`、case-of-case、末尾呼び出し) は、translate が組み立てるときに行う。`simplify` は書き換えのたびに枝の部分木を置き換えたので、長い `else if` の連鎖で2乗の時間がかかり、続きを `switch` の枝の中へ移して入れ子を深くした
 - インタプリタの環境 (`Env`) のスロットは値だけを持ち、読み出しはスロットを書き換えない。参照の所有は Core IR の命令が表し、verifier が釣り合いを確かめる。`Payload` は `Clone` を導出しないので、`ObjRef` を `dup` せずに複製できない

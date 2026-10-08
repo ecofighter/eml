@@ -42,7 +42,7 @@
   - 所有の上では、x の参照が1つ減り、名前を書いた変数の参照がそれぞれ1つ増える
   - 名前は1つ以上書く。1つも残さないときは `decref x` を使う
   - Perceus だけが出す RC の命令である。`Stmt::defs` は空で、`dup` や `decref` と同じく値の使いとは数えない
-- 原子の使い方は「消費」と「読む」に分かれる。`switch` の scrutinee と `unpack` の値だけが「読む」で、参照を受け取らない。ほかの使い方 (呼び出し、`apply`、呼ばれる側、extern、`con`、`closure`、`perform`、`resume`、`handle` の引数、`drop`、`return`、`tail`、`jump` の実引数) はすべて「消費」で、参照を1つ受け取る
+- 値 (アトム) の使い方は「消費」と「読む」に分かれる。`switch` の scrutinee と `unpack` の値だけが「読む」で、参照を受け取らない。ほかの使い方 (呼び出し、`apply`、呼ばれる側、extern、`con`、`closure`、`perform`、`resume`、`handle` の引数、`drop`、`return`、`tail`、`jump` の実引数) はすべて「消費」で、参照を1つ受け取る
 - `tail <呼び出し>` (`TailCall`) は、translate が出す末尾呼び出しの要求である。呼び出し元のフレームを積まずに呼ぶ。所有の都合で `let r = <呼び出し>` と `return r` に戻す降格は、S3b-2c の Perceus が行ってよい
 
 ### 構造の規則
@@ -75,7 +75,7 @@ R1 と R2 から、ブロックの番号の順は辺の向きに沿った順 (�
 
 - `obj` はつねにヒープの物体を指す。`tobj` は、即値 (タグか関数の値) かヒープの物体を指す。RC の対象は `obj` と `tobj` の変数で、Perceus はこの変数にだけ RC の命令を付ける
 - 多相な位置 (総称的なフィールド、`apply`、`perform`、`resume`、`handle` の結果) の束縛は、具体化した型から Repr を決める。その位置の規則と `Float` の Repr は S3b-2c で決める
-- `Lin` の値には `dup` が付かない。`Lin` の値はちょうど1回使われ ([線形性](linearity.md))、2回以上消費されることがないためである。分解した `Lin` の値はその分解で死に、ちょうど1回手放される。生きている RC の対象のフィールドがあれば、それをすべて名前で書いた `release` で手放し、なければ `decref` で手放す。`Lin` のフィールドは必ず使われるので、`release` はすべての `Lin` のフィールドを名前で書き、`decref` が捨てるのは箱と `Unr` のフィールドだけである。型が一意を保つので、この `release` と `decref` は共有の側を通らない。IR は Kind を持たないので、これは決まりとして書き、verifier では確かめない
+- `Lin` の値は2回以上消費されない。`Lin` の値はちょうど1回使われる ([線形性](linearity.md)) ので、消費のための `dup` は要らない。ただし、後の行のパターンが分解した値そのものかその祖先を束縛するとき (`| other -> ..`、`| W h _ -> ..`) は、分解した `Lin` の値が分解の後も生きていることがある。このとき Perceus は、ほかの値と同じフィールドの規則で、生きているフィールドを `Lin` のものも含めて `dup` する。内側の `release` や `decref` も共有の側を通ることがある。`Lin` のフィールドを消費する腕は、祖先も使うと同じ値を2回使うことになるので、祖先を使わない。そのため、その腕の入口では祖先が死んでいる。入口の順 (フィールドの `dup`、死んだ所有の `decref`、`release`) で祖先を先に手放すので、`Lin` のフィールドは消費する時には参照が1つに戻っている。`Lin` のフィールドは必ず使われるので、`release` は生きているすべての `Lin` のフィールドを名前で書く。IR は Kind を持たないので、これは決まりとして書き、verifier では確かめない
 
 ### 変換の規則
 
@@ -121,7 +121,7 @@ R1 と R2 から、ブロックの番号の順は辺の向きに沿った順 (�
 - 包んだ `k` は、`once` なら1回しか使わないので、Perceus は `dup` / `decref` を付けず、クロージャも一意で、呼ぶと消費される。
 - 包んだ `k` を `drop` するとクロージャが解放され、それが継続を解放する。
 - パラメータ付き handler は脱糖しない。Core IR では、すべての handler を状態のある handler として扱い、状態のない handler は状態を `()` にする。`handle` はつねに状態の初期値を、`resume` はつねに次の状態を持つ。状態のない handler の `k v` は、直接の形なら `resume k(v, ())` に変換し、包む形なら `cont$` を通って `resume k(v, ())` になる。この `()` は Core IR の中の決まりで、表面の構文では状態のない `k` は1引数の関数である ([エフェクトと handler](effects.md) の「パラメータ付き handler」)。節のクロージャはつねに状態を最後の引数で受け、`return` の節はつねに本体の値と状態を受ける。呼び出しの規約を1つにして、インタプリタと将来の evidence passing で状態の有無を場合分けしないためである。`return` の節はつねにある。省略した handler は、HIR が `| return x -> x` の節 (状態のある handler では、状態を `_` で捨てる `| return x _ -> x`) を合成するので、本体の値をそのまま返し、状態の引数は Perceus が捨てる (RC の対象の状態だけ decref する)。省略した節は状態を `_` で捨てるので、状態の型は `Unr` である ([式](expressions.md) の「パラメータ付き handler」)。
-- メモリ管理は Perceus 方式の参照カウントである。`Lin` 値は静的に一意なので、`dup` を付けず、分解した値はちょうど1回 `release` か `decref` で手放す (上の「値の表現」)。
+- メモリ管理は Perceus 方式の参照カウントである。`Lin` の値は2回以上消費されないが、`dup` や共有の側を通る `release` を受けることはある (上の「値の表現」)。
 
 ### 位置
 
@@ -192,11 +192,11 @@ R1 と R2 から、ブロックの番号の順は辺の向きに沿った順 (�
   - 持ち主を手放した後は、間の変数を後で `dup` していても、借りた変数を拒む。保守的だが健全で、Perceus はその形を出さない。親をたどる規則に緩めることは、IR を変えずに後でできる
 - `verify_scopes` は `release` を拒む (`` `d.0` is released with its fields before Perceus ``)。引数のない `con` は、どちらの段でも拒む (`` a constructor value without fields is written as a tag `#N`, not `con` ``)
 - 所有の段の誤りの文言は次のとおりである
-  - `` `x.1` is {used|released} but is only borrowed from `d.0` ``: 持ち主が所有されている間に、所有の数0の変数を消費したか `decref` した
+  - `` `x.1` is {used|released} but is only borrowed from `d.0` ``: 持ち主が所有されている間に、所有の数0の変数を消費したか、`decref` か `release` で手放した
   - `` `x.1` is {duplicated|switched on|unpacked} after its owner `d.0` was given up ``: 無効な変数を読んだ
   - `` `x.1` is not field 0 of `d.0` #1 ``: `release` の名前の出どころが違う
   - `` a release of `d.0` keeps no field `` と `` `x.1` is kept but is not reference counted ``: `release` の名前の誤り
-  - 持ち主のない変数と、持ち主も手放した変数の消費は、今までと同じく `` `x.1` is used after it was moved `` で報告する
+  - 持ち主のない変数を読むか消費するか手放したときと、持ち主も手放した変数を消費するか手放したときは、今までと同じく `` `x.1` is {used|released|duplicated|switched on|unpacked} after it was moved `` で報告する
 - 引き継ぐ検査は次のとおりである。`mask` の順と番号、直接呼び出しとクロージャの引数の数、文字列定数と関数の番号が表にあること、`extern` 命令の引数の数、`Prelude.==` と `Prelude.!=` の行を残さないこと、case の種類 (1つの `switch` の case が同じ種類であること、リテラルの case がフィールドを持たないこと)、`switch` が行き先を1つ以上持つこと、フィールドを束縛する case を持つ `switch` の scrutinee が RC の対象 (`obj` か `tobj`) の変数であること、リテラルの `switch` の `default`、`perform` の `resumable` がエフェクトの表と一致すること、`handle` の節の数。`handle` の節と `return` の節の関数が分かるとき (関数の値か、同じ関数の中で `closure` で作った値のとき) は、節が捕獲の後にちょうど「操作の引数 + `k` (再開する操作) + 状態」個の引数を持つこと、`return` の節が捕獲の後にちょうど2つ (値と状態) の引数を持つことも確かめる。操作の引数の数は、エフェクトの表の操作が持つ
 - verifier は生存解析を使わない。ブロックを番号の順にたどるだけで、反復しない。辺は前向きなので、ブロックに着いたときには入る辺がすべて出そろっている
   - 支配木は Cooper-Harvey-Kennedy の方法で求める。番号の順が辺の向きに沿っているので、1回たどれば決まる。2つのブロックの共通の支配者は、支配木の skew-binary の飛び先 (Myers) を使って、深さの対数の歩みで求める。1段ずつ登ると、深さの違う辺が多く1つのブロックに合流したとき (`a || b || ...` の真の行き先など)、時間はブロックの数と深さの積になる
