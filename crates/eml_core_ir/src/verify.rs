@@ -4,7 +4,9 @@
 //! RC の対象の所有の多重集合と、呼び出しの後に見える変数 (R6、R7) も確かめる (`verify`)。
 //!
 //! 辺の検査、支配木、本体の検査は、それぞれブロックを番号の順に1回たどるだけで、反復も生存解析も使わない。辺は
-//! 前向きなので、ブロックに着いたときには入る辺がすべて出そろっている。
+//! 前向きなので、ブロックに着いたときには入る辺がすべて出そろっている。支配木は辺1本につき深さの対数の手間で
+//! 育つ。所有の多重集合は辺ごとに写して比べるので、その手間は辺の数と所有の大きさの積に比例する
+//! (docs/spec/core-ir.md の「verifier」)。
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt;
@@ -101,12 +103,13 @@ impl Dominators {
 /// 大きいブロックへ向かうので、番号の順が逆後順になり、反復せず1回で決まる。
 fn shape(function: &CoreFn) -> Result<Dominators, String> {
     let count = function.blocks.len();
-    let mut idom: Vec<Option<u32>> = vec![None; count];
-    idom[0] = Some(0);
+    let mut tree = GrowingTree::new(count);
     let mut jumps_in = vec![0u32; count];
     let mut switches_in = vec![0u32; count];
     for (from, block) in function.blocks.iter().enumerate() {
         let from = from as u32;
+        // 入る辺はすべて番号の小さいブロックから来るので、ここで `from` の支配者は決まっている
+        tree.attach(from);
         for target in block.term.successors() {
             let to = target.0;
             if to as usize >= count {
@@ -140,13 +143,7 @@ fn shape(function: &CoreFn) -> Result<Dominators, String> {
                     unreachable!("a return and a tail call have no successors")
                 }
             }
-            // 入る辺のないブロックからの辺は支配に数えない。そのブロックは下の R4 の検査で誤りになる
-            if idom[from as usize].is_some() {
-                idom[to as usize] = Some(match idom[to as usize] {
-                    None => from,
-                    Some(other) => intersect(&idom, other, from),
-                });
-            }
+            tree.add_edge(from, to);
         }
     }
     for (index, block) in function.blocks.iter().enumerate().skip(1) {
@@ -170,24 +167,94 @@ fn shape(function: &CoreFn) -> Result<Dominators, String> {
         }
     }
     // R4 を満たせば、どのブロックにも番号の小さいブロックから辺が入るので、入口から届き、支配者が決まっている
-    let idom: Vec<u32> = idom
+    let idom: Vec<u32> = tree
+        .idom
         .into_iter()
         .map(|parent| parent.expect("every block is reachable"))
         .collect();
     Ok(Dominators::new(&idom))
 }
 
-/// 2つのブロックの共通の支配者のうち、最も近いもの。支配者はつねに番号が小さいので、大きい方を上へ動かす。
-fn intersect(idom: &[Option<u32>], mut a: u32, mut b: u32) -> u32 {
-    while a != b {
-        while a > b {
-            a = idom[a as usize].expect("a processed block has its dominator");
-        }
-        while b > a {
-            b = idom[b as usize].expect("a processed block has its dominator");
+/// ブロックを番号の順に加えながら育てる支配木。`jump` は Myers の skew-binary の飛び先で、深さだけで決まる。
+/// 共通の支配者を探す歩みは、これを使うと深さの対数で済む。1段ずつ登ると、深さの違う辺が多く1つのブロックに
+/// 合流したとき (`a || b || ...` の真の行き先など)、深さの和だけ、つまり2乗の時間がかかる。
+struct GrowingTree {
+    idom: Vec<Option<u32>>,
+    depth: Vec<u32>,
+    jump: Vec<u32>,
+}
+
+impl GrowingTree {
+    fn new(count: usize) -> Self {
+        let mut idom = vec![None; count];
+        idom[0] = Some(0);
+        GrowingTree {
+            idom,
+            depth: vec![0; count],
+            jump: vec![0; count],
         }
     }
-    a
+
+    /// 支配者が決まった `block` を木に加える。入る辺のないブロックは加えない。そのブロックは R4 の検査で誤りになる。
+    fn attach(&mut self, block: u32) {
+        if block == 0 {
+            return;
+        }
+        let Some(parent) = self.idom[block as usize] else {
+            return;
+        };
+        let (b, p) = (block as usize, parent as usize);
+        let j = self.jump[p] as usize;
+        let jj = self.jump[j] as usize;
+        self.depth[b] = self.depth[p] + 1;
+        self.jump[b] = if self.depth[p] - self.depth[j] == self.depth[j] - self.depth[jj] {
+            jj as u32
+        } else {
+            parent
+        };
+    }
+
+    /// 辺 `from -> to` を `to` の支配者に織り込む。入る辺のないブロックからの辺は支配に数えない。
+    fn add_edge(&mut self, from: u32, to: u32) {
+        if self.idom[from as usize].is_none() {
+            return;
+        }
+        self.idom[to as usize] = Some(match self.idom[to as usize] {
+            None => from,
+            Some(other) => self.intersect(other, from),
+        });
+    }
+
+    fn parent(&self, block: u32) -> u32 {
+        self.idom[block as usize].expect("a block in the tree has its dominator")
+    }
+
+    /// 2つのブロックの共通の支配者のうち、最も近いもの。深い方を同じ深さまで上げてから、2つを一緒に上げる。
+    /// 同じ深さのブロックの飛び先は同じ深さにあるので、飛び先が違う間は飛んでも共通の支配者を越えない。
+    fn intersect(&self, a: u32, b: u32) -> u32 {
+        let depth = |block: u32| self.depth[block as usize];
+        let jump = |block: u32| self.jump[block as usize];
+        let lift = |mut block: u32, to: u32| {
+            while depth(block) > to {
+                block = if depth(jump(block)) >= to {
+                    jump(block)
+                } else {
+                    self.parent(block)
+                };
+            }
+            block
+        };
+        let to = depth(a).min(depth(b));
+        let (mut a, mut b) = (lift(a, to), lift(b, to));
+        while a != b {
+            if jump(a) != jump(b) {
+                (a, b) = (jump(a), jump(b));
+            } else {
+                (a, b) = (self.parent(a), self.parent(b));
+            }
+        }
+        a
+    }
 }
 
 /// 定義と使用の位置。`index` はブロックの中の文の番号で、ブロックの引数と case のフィールドは -1、終端は文の数である。
@@ -427,6 +494,9 @@ impl<'a> Checker<'a> {
                 cases,
                 default,
             } => {
+                if cases.is_empty() && default.is_none() {
+                    return Err("a switch has no targets".to_string());
+                }
                 self.switch_cases(cases)?;
                 self.literal_default(cases, *default)?;
                 if cases.iter().any(|case| !case.fields.is_empty()) {
@@ -575,7 +645,7 @@ impl<'a> Checker<'a> {
         Ok(())
     }
 
-    /// フィールドを持つ値は RC の対象の変数に入る (docs/spec/core-ir.md)。
+    /// フィールドを持つ値は RC の対象の変数に入る。定数はフィールドを持たない (docs/spec/core-ir.md の「verifier」)。
     fn fields_allowed(&self, scrutinee: Atom) -> Result<(), String> {
         match scrutinee {
             Atom::Var(var) if !self.function.repr(var).is_rc() => Err(format!(
@@ -583,7 +653,10 @@ impl<'a> Checker<'a> {
                 self.name(var),
                 self.function.repr(var).name()
             )),
-            _ => Ok(()),
+            Atom::Var(_) => Ok(()),
+            Atom::Int(_) | Atom::Unit | Atom::Tag(_) | Atom::Fn(_) => {
+                Err("a switch on a constant binds fields".to_string())
+            }
         }
     }
 
@@ -621,7 +694,7 @@ impl<'a> Checker<'a> {
         Ok(())
     }
 
-    /// 変数を1回だけ定義し (R5)、RC の対象なら所有を1つ持つ。
+    /// 変数を多くとも1回定義し (R5)、RC の対象なら所有を1つ持つ。
     fn define(&mut self, owned: &mut Owned, var: VarId, site: Site) -> Result<(), String> {
         let slot = &mut self.defs[var.0 as usize];
         if slot.is_some() {
@@ -816,6 +889,12 @@ impl<'a> Checker<'a> {
                         info.operations.len()
                     ));
                 }
+                // 節の引数の数は範囲の外の `closure` からも数えられるので、先に節が見えることを確かめる
+                for &atom in clauses.iter().chain([ret]) {
+                    if let Atom::Var(var) = atom {
+                        self.visible(var)?;
+                    }
+                }
                 self.check_clause_arities(info, clauses, *ret)?;
             }
             Call::Perform {
@@ -861,9 +940,26 @@ impl<'a> Checker<'a> {
             return Ok(());
         }
         match call {
-            Call::Handle { .. } => return Err("a mask on handle".to_string()),
-            Call::Perform { .. } => return Err("a mask on perform".to_string()),
-            Call::Direct(..) | Call::Apply(..) | Call::Resume { .. } => {}
+            Call::Handle {
+                effect: _,
+                init: _,
+                body: _,
+                clauses: _,
+                ret: _,
+            } => return Err("a mask on handle".to_string()),
+            Call::Perform {
+                effect: _,
+                op: _,
+                resumable: _,
+                args: _,
+            } => return Err("a mask on perform".to_string()),
+            Call::Direct(_, _)
+            | Call::Apply(_, _)
+            | Call::Resume {
+                k: _,
+                arg: _,
+                state: _,
+            } => {}
         }
         if let Some(&unknown) = mask
             .iter()

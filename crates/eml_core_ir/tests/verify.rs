@@ -866,6 +866,37 @@ b2:
 }
 
 #[test]
+fn a_switch_on_a_constant_cannot_bind_fields() {
+    // 定数の値はフィールドを持たないので、実行するとフィールドの数が合わずに止まる
+    let text = "\
+fn f() -> int {
+  switch #1 { #1(x.0: obj) -> b1 }
+b1:
+  decref x.0
+  return 1
+}
+";
+    assert_eq!(
+        check(text),
+        Err("a switch on a constant binds fields in `f`".to_string())
+    );
+}
+
+#[test]
+fn a_switch_without_targets_is_rejected() {
+    // 行き先のない `switch` は、所有している値を手放さないまま関数を終える
+    let text = "fn f(s.0: obj, b.1: enum) -> unit {\n  switch b.1 {}\n}\n";
+    assert_eq!(
+        check(text),
+        Err("a switch has no targets in `f`".to_string())
+    );
+    assert_eq!(
+        check_scopes(text),
+        Err("a switch has no targets in `f`".to_string())
+    );
+}
+
+#[test]
 fn a_literal_switch_with_a_default_is_accepted() {
     let text = "\
 fn main(n.0: int) -> int {
@@ -1138,6 +1169,38 @@ fn ret(n.0: int, x.1: int) -> int {
 }
 
 #[test]
+fn a_clause_outside_its_scope_is_rejected_before_its_parameters_are_counted() {
+    // `c.1` は b1 だけで定義され、`handle` のある b3 を支配しない。引数の数も合わないが、先に範囲の誤りを報告する
+    let text = "\
+effect Ask { ask/1 }
+fn f(k.0: enum) -> int {
+  switch k.0 { #0 -> b1, #1 -> b2 }
+b1:
+  let c.1: tobj = closure g(5)
+  jump b3()
+b2:
+  jump b3()
+b3:
+  let t.2: int = handle Ask((), &body) { ask: c.1 } return &ret
+  return t.2
+}
+fn g(y.0: int, x.1: int) -> int {
+  return x.1
+}
+fn body(u.0: unit) -> int {
+  return 1
+}
+fn ret(x.0: int, s.1: unit) -> int {
+  return x.0
+}
+";
+    assert_eq!(
+        check_scopes(text),
+        Err("`c.1` is used outside its scope in `f`".to_string())
+    );
+}
+
+#[test]
 fn perform_names_an_operation_of_its_effect() {
     let text = format!("{ASK}fn f() -> int {{\n  tail perform Ask.#1()\n}}\n");
     assert_eq!(
@@ -1257,6 +1320,42 @@ fn a_long_chain_of_switches_is_verified_in_linear_time() {
     let start = std::time::Instant::now();
     assert_eq!(verify_scopes(&before), Ok(()));
     assert_eq!(verify(&after), Ok(()));
+    let elapsed = start.elapsed();
+    assert!(
+        elapsed < std::time::Duration::from_secs(10),
+        "took {elapsed:?}"
+    );
+}
+
+/// `c || c || ... || c` の形。`n` 個の `switch` が並び、真の辺はそれぞれ辺のブロックを通って1つの合流のブロックへ
+/// 入る。i 番目の辺のブロックは支配木の深さ i + 1 にあるので、合流のブロックには深さの違う `n` 本の辺が入る。
+fn or_chain(n: u32) -> String {
+    let merge = 2 * n + 1;
+    let mut text = String::from("fn f(c.0: enum) -> int {\n");
+    for i in 0..n {
+        if i > 0 {
+            text.push_str(&format!("b{}:\n", 2 * i));
+        }
+        let edge = 2 * i + 1;
+        let next = if i + 1 < n { 2 * i + 2 } else { 2 * n };
+        text.push_str(&format!(
+            "  switch c.0 {{ #1 -> b{edge}, #0 -> b{next} }}\nb{edge}:\n  jump b{merge}(1)\n"
+        ));
+    }
+    text.push_str(&format!(
+        "b{}:\n  jump b{merge}(0)\nb{merge}(r.1: int):\n  return r.1\n}}\n",
+        2 * n
+    ));
+    text
+}
+
+#[test]
+fn many_deep_jumps_into_one_block_are_verified_in_near_linear_time() {
+    // 合流のブロックの支配者を、入る辺ごとに支配木を1段ずつ登って求めると、深さの和だけ、つまり2乗の時間がかかる
+    let program = read(&or_chain(100_000));
+    let start = std::time::Instant::now();
+    assert_eq!(verify_scopes(&program), Ok(()));
+    assert_eq!(verify(&program), Ok(()));
     let elapsed = start.elapsed();
     assert!(
         elapsed < std::time::Duration::from_secs(10),
