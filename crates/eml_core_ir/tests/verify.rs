@@ -770,7 +770,7 @@ fn a_field_cannot_be_read_after_its_owner_is_given_up() {
 
 #[test]
 fn a_field_consumed_after_its_owner_is_given_up_was_moved() {
-    // 持ち主も手放した後の借りた変数の消費は、借りた変数の誤りではなく、移動の後の使用として報告する
+    // 持ち主も手放した後に借りた変数を消費するか手放すと、移動の後の使用として報告する
     // (docs/spec/core-ir.md の「verifier」)
     assert_eq!(
         check(&unpacking("  decref p.0\n  return a.1\n")),

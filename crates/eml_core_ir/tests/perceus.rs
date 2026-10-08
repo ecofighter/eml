@@ -626,7 +626,7 @@ fn a_nested_pattern_gives_up_the_parent_before_the_release() {
 
 #[test]
 fn a_target_dups_the_fields_of_a_live_scrutinee_before_it_decrefs_a_dead_value() {
-    // `o` はまだ生きているので、使わない `y` を手放すより先に、`o` のフィールドを複製する
+    // `o` がまだ生きているので、そのフィールドを複製する。順は入口の順で、死んだ `y` の `decref` より先になる
     // (docs/spec/core-ir.md の「Perceus」)
     let text = "\
 fn f(o.0: tobj, y.1: obj) -> obj {

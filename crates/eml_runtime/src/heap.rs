@@ -404,8 +404,8 @@ impl Heap {
                 .collect();
             self.decref_all(dropped)
         } else {
-            // 参照の数を動かすのは残すフィールドだけである。`dup` がヒープを書き換えるので、フィールドは借りたまま
-            // 集めず、`dup` のたびに読み直す
+            // 参照の数を動かすのは残すフィールドだけである。`dup` がヒープを書き換えるので、フィールドを借りたままにはできない。
+            // 集めて確保する代わりに、`dup` のたびに読み直す
             for (index, &kept) in keep.iter().enumerate() {
                 let Payload::Data { fields, .. } = &self.object(obj)?.payload else {
                     unreachable!("the layout was checked above");
