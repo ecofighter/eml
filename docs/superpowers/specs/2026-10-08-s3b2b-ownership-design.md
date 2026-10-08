@@ -45,7 +45,7 @@
   - 名前は1つ以上書く。1つも残さないときは `decref x` を使う
   - Perceus だけが出す RC の命令である。`verify_scopes` は拒む。`Stmt::defs` は空で、`dup` や `decref` と同じく値の使いとは数えない
 - 原子の使い方を「消費」と「読む」に分ける。`switch` の scrutinee と `unpack` の値だけが「読む」で、ほかの使い方 (呼び出し、`apply`、呼ばれる側、extern、`con`、`closure`、`perform`、`resume`、`handle` の引数、`drop`、`return`、`tail`、`jump` の実引数) はすべて「消費」である
-- `Lin` の値には `dup` も `decref` も付かない。分解した `Lin` の値はその分解で死ぬので、`Lin` のフィールドをすべて名前で書いた `release` をちょうど1回受ける。型が一意を保つので、共有の側は通らない。IR は Kind を持たないので、これは決まりとして書き、verifier では確かめない
+- `Lin` の値には `dup` が付かない。分解した `Lin` の値はその分解で死に、ちょうど1回手放される。生きている RC のフィールドがあれば、それをすべて名前で書いた `release` で、なければ `decref` で手放す。`Lin` のフィールドは必ず使われるので、`decref` が捨てるのは箱と `Unr` のフィールドだけである。型が一意を保つので、共有の側は通らない。IR は Kind を持たないので、これは決まりとして書き、verifier では確かめない
 - `con` は引数を1つ以上とる。フィールドのないコンストラクタの値は `#N` (`Atom::Tag`) の1つの書き方にそろえる
 
 ### verifier (所有の段)
@@ -72,7 +72,7 @@
   - `` `x.1` is kept but is not reference counted ``
   - `` `d.0` is released with its fields before Perceus `` (scope の段)
   - `` a constructor value without fields is written as a tag `#N`, not `con` ``
-  - 今の文言 (`after it was moved`、`still owned at the end`、`a call saves .. but owns ..`) は変えない
+  - 今の文言 (`after it was moved`、`still owned at the end`、`a call saves .. but owns ..`) は変えない。持ち主も手放した後の借りた変数を消費したときは、`after it was moved` を出す
 
 ### Perceus
 
@@ -123,10 +123,10 @@
 - **verifier**
   - 拒む: 借りたフィールドの消費 (`return`、呼び出し、`con`、`jump`、extern、`apply` の引数、呼ばれる側)、`decref`、`save`。`release x` や `decref x` や x の消費の後に、残さなかったフィールドを `dup` か `switch` する。孫を名前に書いた `release`。出どころの違い。ほかの分解のフィールド。支配しない枝のフィールド。RC でない名前。二重の `release`。借りた x の `release`。`con #N()`。scope の段の `release`
   - 受け入れる: 入れ子の `release`。どの辺でも x が所有されているときに、合流の後で使う借りたフィールド。持ち主の `decref` の前に `dup` したフィールド。持ち主が所有されている借りたフィールドへの `switch` と、内側のフィールドの `dup`。2回所有した x の `release` (その後も x は所有されている)。Perceus が出す `label` と `| Nil -> xs` の形
-  - 2万の深さの、借りたフィールドへの `switch` の連鎖が線形の時間で通る
+  - 10万の深さの、借りたフィールドへの `switch` の連鎖が線形の時間で通る
 - **Perceus のスナップショット**: `unpack` の後の `release`。case の入口でフィールドの一部を残す `release`。2回使うフィールド (`release` の後の `dup`)。生きている scrutinee (フィールドの `dup` だけ)。フィールドを使わない死んだ scrutinee (`decref`)。scrutinee が生きているフィールドのない行き先。`default` の行き先。行き先が scrutinee を使う文字列の `switch` (`switch` の前に `dup` しない)。入れ子のパターン。呼び出しをまたいで保存するフィールド。`read_file` の形 (`File` に `dup` も `decref` も付かない)。入口での順
-- **テキスト**: `release` の往復。すべて `_` の `release` を読まない
-- **eml_runtime**: `release_fields` の一意の側 (箱を解放し、残さないフィールドを `decref` し、残すフィールドは変えない)、共有の側、同じ値が2つの位置にある場合、`File` のフィールドを残す場合と残さない場合 (閉じる)、不死の値、データでない値、タグと数の違い、解放後の使用
+- **テキスト**: `release` の往復。すべて `_` の `release` を読まない。変数でも `_` でもない項目と、repr を付けた項目を読まない
+- **eml_runtime**: `release_fields` の一意の側 (箱を解放し、残さないフィールドを `decref` し、残すフィールドは変えない)、共有の側、同じ値が2つの位置にある場合、`File` のフィールドを残す場合と残さない場合 (閉じる)、不死の値、データでない値、タグと数の違い、解放後の使用。RC の操作の数え方 (`dup`、`decref`、`acquire_immortal` を数え、箱の解放を数えない)。`take_or_copy` がデータ、文字列、ファイルを断ること
 - **eml_interp**: `debug_heap` 付きの `release` (一意、共有、同じ値が2つの位置にある場合)。検証しない IR での `release` の内部の誤り
 - **スケーリング** (`eml_interp/tests/scaling.rs`): 一意なリストを長さ n と 2n でたどり、`rc_increments` が長さによらず同じであること。共有されたリストでは `rc_increments` が n + 定数以下であること。この2つは今の main でも通る。消費しない形にしたのに `release` を入れなかったときの後退を捕まえる見張りである
 
@@ -164,6 +164,7 @@
 
 - `tests/ui/run/data/shared_scrutinee.em` と `tests/ui/run/data/string_literal_default_uses_the_value.em` の先頭のコメント、`unpack_of_tag_one` のコメント、perceus.rs の古い規則を書いたコメント。出力は変わらない
 - `a_shared_file_is_not_copied` のコメント (ファイルは参照の数によらず複製できない)
+- `eml_interp/tests/data.rs` の `STRING_SWITCH` のコメント
 
 ## 確認の手順
 
@@ -179,13 +180,13 @@
 - `docs/spec/core-ir.md`: 文の表と RC の命令 (`release`)、フィールドの束縛の規則 (借りたフィールド)、S3b-2b を指す記述を S3b-2c に向け直す (`TailCall` の降格、R8 の呼び出しの結果、多相な位置)、`Lin` の決まり、Perceus の規則 (消費と読む、入口の規則と順)、`verify_scopes` (`release` と引数のない `con`)、所有の検査 (持ち主と出どころ)、移動の原則が「読む」使いを名指しすること、`switch` と `unpack` の意味、位置のない実行時エラーに `release` を足すこと
 - `docs/spec/runtime.md`: `Lin` の記述、不死の物体と操作の一覧 (`release_fields`、`take_or_copy` の範囲)、ランタイムの API、`match` が `take_or_copy` を使わないこと、`RunStats` の数
 - `docs/implementation/architecture.md`: 原子の使い方の区別、機械の `release`、RC の数を数える場所
-- `docs/implementation/testing.md`: ヒープの単体テストの一覧、テキストの形 (`release` の項目、使う位置)、スケーリングのテストと数
+- `docs/implementation/testing.md`: Core IR のスナップショットの説明 (`release` の位置)、ヒープの単体テストの一覧、テキストの形 (`release` の項目、使う位置)、スケーリングのテストと数
 - `docs/future/roadmap.md`
   - 段の表の S3b-2b の行と節を「S3b-2b Core IR v2 の所有」と「S3b-2c Core IR v2 の表現」に分ける。S4 の前提は S3b-2c にする。S3b-2b の節は段の終わりに削除する
   - S3b-2b の論点 (`Lin` の scrutinee、一意な箱での RC の操作の数、呼び出しをまたぐ借用、定数の scrutinee) を閉じる
   - `| ys -> f ys` の項目を消す
   - 「Perceus の最適化」に次を書く: 借用パラメータの約束 (1つの呼び出しでは所有の引数を消費した後で借用の引数を確かめる、`save` に借用の部分を足す、借用のブロック引数は持ち主を宣言する)、reuse のトークンを `save` に入れないこと、借用の推論で「同じ配置の `con` を作る行き先の scrutinee」を所有にすること、フィールドを死ぬ所で手放す遅らせる形
-- `docs/overview.md` の段の一覧、`docs/README.md`、`CLAUDE.md` (Core IR の文の一覧)、[全体設計](2026-10-07-redesign-design.md) の S3b の記述
+- リポジトリの根の `README.md` (crate の表の `release`)、`docs/overview.md` の段の一覧と、`Lin` の RC の記述と Perceus の用語、`docs/README.md`、`CLAUDE.md` (Core IR の文の一覧)、[全体設計](2026-10-07-redesign-design.md) の S3b の記述
 - コードのコメント: Perceus、verifier、機械、ランタイム、ヒープで古い規則を書いた所
 
 最後に、`grep -rn -e take_or_copy -e 'S3b-2b' docs CLAUDE.md crates` が、意図して残す記述だけを出すことを確かめる。
