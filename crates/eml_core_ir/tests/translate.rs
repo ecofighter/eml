@@ -1,7 +1,7 @@
 //! 型付き HIR からブロックの列への変換 (docs/spec/core-ir.md)。translate の直後の形を見る。
 
 use crate::common::{core_text, core_text_files, core_text_with_positions, function};
-use eml_core_ir::{Pass, Term};
+use eml_core_ir::{Pass, Term, parse, pretty_with_positions};
 
 #[test]
 fn hello_world() {
@@ -241,6 +241,18 @@ fn each_reference_to_an_extern_as_a_value_gets_its_own_wrapper() {
       tail call main(())
     }
     "#);
+}
+
+#[test]
+fn the_file_table_holds_only_the_paths_that_positions_use() {
+    // `Prelude.not` は extern を呼ばないので、Prelude のパスは位置に使われず、表に入らない。位置付きの表示を読み直すと
+    // `@"…"` のパスから表を作り直すので、同じ表に戻る
+    let text =
+        "main : Unit -> <IO> Unit\nmain () = if not True then println \"a\" else println \"b\"";
+    let program = eml_test_support::core_until(text, Pass::Translate);
+    assert_eq!(program.files, ["test.em"]);
+    let read = parse(&pretty_with_positions(&program)).unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(read.files, program.files);
 }
 
 #[test]
@@ -676,6 +688,18 @@ fn a_row_that_binds_the_whole_tuple_builds_it_at_its_leaf() {
     fn first(p.0: obj) -> int {
       unpack p.0 #0(a.1: int, x.2: int)
       return a.1
+    }
+    ");
+}
+
+#[test]
+fn a_leaf_builds_a_known_value_once_however_often_it_passes_it() {
+    // `q` は値全体を束縛し、`let p` と `match p` の融合で `p` も同じ値を枝へ渡す。葉は同じ `con` を1回だけ作る
+    let text = "pair : Int -> (Int, Int) -> (Int, Int) -> Int\npair a b c = a\n\nf : Int -> Int\nf n =\n  let p = (n, n)\n  match p with\n    | q -> pair n q p\n\nmain : Unit -> <IO> Unit\nmain () = println (show_int (f 1))";
+    insta::assert_snapshot!(function(&core_text(text, Pass::Translate), "f"), @"
+    fn f(n.0: int) -> int {
+      let d.1: obj = con #0(n.0, n.0)
+      tail call pair(n.0, d.1, d.1)
     }
     ");
 }

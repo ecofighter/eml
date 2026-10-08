@@ -10,11 +10,16 @@ pub fn contract(program: &mut Program) {
         for index in remove_dead_lets(function) {
             tail_call(&mut function.blocks[index]);
         }
-        debug_assert!(
-            remove_dead_lets(function).is_empty(),
-            "one backward pass removes every dead binding in `{}`",
-            function.name
-        );
+        // 1回のパスで不動点に達することを確かめる (docs/spec/core-ir.md の「縮約」)。確かめるパスも IR を書き換えうるので、
+        // その副作用を `debug_assert!` の式に隠さない
+        if cfg!(debug_assertions) {
+            let left = remove_dead_lets(function);
+            assert!(
+                left.is_empty(),
+                "one backward pass removes every dead binding in `{}`",
+                function.name
+            );
+        }
     }
 }
 

@@ -322,8 +322,9 @@ fn join(a.0: obj, b.1: obj) -> obj {
     ");
 }
 
-/// どのパスも、プログラムの大きさに比例して Rust のスタックを使わない (docs/spec/core-ir.md の「パス」)。2万の条件の
-/// 列を debug ビルドで処理し、どの条件の枝でも使わない文字列を1つずつ捨てることを確かめる。
+/// 生存解析、Perceus、verifier、テキストの表示と読み込みは、プログラムの大きさに比例して Rust のスタックを使わない
+/// (docs/spec/core-ir.md の「パス」)。2万の条件の列を debug ビルドで処理し、どの条件の枝でも使わない文字列を1つずつ
+/// 捨てることを確かめる。translate から通す長い列は tests/verify.rs が確かめる。
 #[test]
 fn twenty_thousand_conditions_are_rewritten() {
     const CONDITIONS: u32 = 20_000;

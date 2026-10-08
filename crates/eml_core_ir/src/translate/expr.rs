@@ -58,7 +58,8 @@ fn masked_call(call: Call, mask: Vec<u32>) -> Rhs {
 
 impl FnLowering<'_> {
     pub(super) fn ty(&self, expr: ExprId) -> Type {
-        self.types
+        self.ctx
+            .types
             .exprs
             .get(expr)
             .cloned()
@@ -76,7 +77,7 @@ impl FnLowering<'_> {
     /// `rhs` の値を新しい変数に束縛する文を今のブロックに足す。`con` で作った変数は中身を覚え、後の決定木がその頭で
     /// case を選べるようにする (docs/spec/core-ir.md)。
     pub(super) fn bind(&mut self, name: &str, ty: &Type, rhs: Rhs) -> Atom {
-        let var = self.builder.var(var_info(name, ty, self.hir));
+        let var = self.builder.var(var_info(name, ty, self.ctx.hir));
         if let Rhs::Con { tag, args } = &rhs {
             let known = Known {
                 tag: *tag,
@@ -91,11 +92,11 @@ impl FnLowering<'_> {
 
     /// 値として使う extern の参照 `site` ごとの包む関数 (docs/spec/core-ir.md)。
     fn extern_wrapper(&mut self, site: ExprId, function: FunctionId, row: Extern) -> FnIdx {
-        let number = self.numbering.externs[site];
-        let name = format!("{}$extern{number}", self.root_name);
+        let number = self.ctx.numbering.externs[site];
+        let name = format!("{}$extern{number}", self.ctx.root_name);
         let at = self.loc(site);
         self.program
-            .extern_wrapper(self.hir, function, row, name, at)
+            .extern_wrapper(self.ctx.hir, function, row, name, at)
     }
 
     /// 呼ぶ相手の引数の個数と比べ、揃えば命令にし、足りなければ包む関数のクロージャにし、余れば命令の結果に残りを
@@ -158,13 +159,14 @@ impl FnLowering<'_> {
     /// 型検査が記録した、呼び出し `call` の矢印 `arrow` の `mask` を、エフェクトの番号の昇順で返す (docs/spec/core-ir.md)。
     fn mask(&self, call: ExprId, arrow: usize) -> Vec<u32> {
         let mut mask: Vec<u32> = self
+            .ctx
             .types
             .masks
             .get(&(call, arrow))
             .map(|effects| {
                 effects
                     .iter()
-                    .map(|&effect| effect_index(self.hir, effect))
+                    .map(|&effect| effect_index(self.ctx.hir, effect))
                     .collect()
             })
             .unwrap_or_default();
@@ -182,8 +184,8 @@ impl FnLowering<'_> {
                 row,
                 callee: _,
             } => row.row().arity,
-            Callee::Operation(op) => self.hir[op].arity,
-            Callee::Constructor(ctor) => self.hir[ctor].fields.len(),
+            Callee::Operation(op) => self.ctx.hir[op].arity,
+            Callee::Constructor(ctor) => self.ctx.hir[ctor].fields.len(),
             Callee::Continuation { k: _, arity } => arity,
         }
     }
@@ -197,8 +199,8 @@ impl FnLowering<'_> {
                 row,
                 callee,
             } => self.extern_wrapper(callee, function, row),
-            Callee::Operation(op) => self.program.operation_wrapper(self.hir, op),
-            Callee::Constructor(ctor) => self.program.constructor_wrapper(self.hir, ctor),
+            Callee::Operation(op) => self.program.operation_wrapper(self.ctx.hir, op),
+            Callee::Constructor(ctor) => self.program.constructor_wrapper(self.ctx.hir, ctor),
             // 引数の足りない `k` の呼び出しは `k` を関数の値として使うことになり、節を包む形にする (`continuation_forms`)
             Callee::Continuation { k: _, arity: _ } => {
                 unreachable!("a continuation in the direct form is always saturated")
@@ -235,11 +237,12 @@ impl FnLowering<'_> {
             } => {
                 let ext = if row.row().by_type {
                     let instantiation = self
+                        .ctx
                         .types
                         .instantiations
                         .get(callee)
                         .expect("the type checker records every reference to `==` and `!=`");
-                    let equality = eml_types::equality(self.hir, &instantiation.args[0])
+                    let equality = eml_types::equality(self.ctx.hir, &instantiation.args[0])
                         .expect("the type checker reports every `==` and `!=` it cannot decide");
                     equality_extern(equality, row == Extern::Ne)
                 } else {
@@ -248,7 +251,7 @@ impl FnLowering<'_> {
                 let at = Some(self.loc(callee));
                 ("t", Rhs::Extern { ext, args, at })
             }
-            Callee::Operation(op) => ("t", plain_call(perform_call(self.hir, op, args))),
+            Callee::Operation(op) => ("t", plain_call(perform_call(self.ctx.hir, op, args))),
             // 状態ありの最初の矢印は row が空の部分適用なので、関数と同じく最後の矢印の `mask` を使う
             Callee::Continuation { k, arity: _ } => {
                 let mask = self.mask(id, args.len() - 1);
@@ -260,7 +263,7 @@ impl FnLowering<'_> {
             Callee::Constructor(ctor) => (
                 "d",
                 Rhs::Con {
-                    tag: self.hir[ctor].tag,
+                    tag: self.ctx.hir[ctor].tag,
                     args,
                 },
             ),
@@ -270,12 +273,12 @@ impl FnLowering<'_> {
     /// `call_steps` の手順どおりに評価し、続けて並ぶ矢印を1回の呼び出しにする (docs/spec/expressions.md の「関数適用」)。
     /// 最初のまとまりは、呼ばれる式が既知なら呼ぶ相手の引数の数で場合分けし、それ以外は前の値への `Apply` にする。
     fn call(&mut self, id: ExprId, callee: ExprId, ty: &Type) -> Atom {
-        let body = self.body;
+        let body = self.ctx.body;
         let ExprKind::Call { args, .. } = &body.exprs[id].kind else {
             unreachable!("call takes a call");
         };
         let callee_ty = self.ty(callee);
-        let steps = eml_hir::call_steps(self.hir, body, id);
+        let steps = eml_hir::call_steps(self.ctx.hir, body, id);
         let mut atoms: Vec<Option<Atom>> = vec![None; args.len()];
         // 前のまとまりの結果か、評価した呼ばれる式。既知の呼ばれる式は評価せず、最初のまとまりで直接呼ぶ
         let mut function: Option<Atom> = None;
@@ -284,7 +287,7 @@ impl FnLowering<'_> {
         while index < steps.len() {
             match steps[index] {
                 EvalStep::Eval(expr) if expr == callee => {
-                    if eml_hir::known_arity(self.hir, body, callee).is_none() {
+                    if eml_hir::known_arity(self.ctx.hir, body, callee).is_none() {
                         function = Some(self.atom(callee));
                     }
                     index += 1;
@@ -334,25 +337,25 @@ impl FnLowering<'_> {
         args: Vec<Atom>,
         ty: &Type,
     ) -> Atom {
-        let head = match &self.body.exprs[callee].kind {
+        let head = match &self.ctx.body.exprs[callee].kind {
             ExprKind::Path(Res::Item(ValueItem::Function(function))) => {
-                match extern_row(self.hir, *function) {
+                match extern_row(self.ctx.hir, *function) {
                     Some(row) => Callee::Extern {
                         function: *function,
                         row,
                         callee,
                     },
-                    None => Callee::Function(self.indices[*function]),
+                    None => Callee::Function(self.ctx.indices[*function]),
                 }
             }
             ExprKind::Path(Res::Item(ValueItem::Operation(op))) => Callee::Operation(*op),
             ExprKind::Path(Res::Item(ValueItem::Constructor(ctor))) => Callee::Constructor(*ctor),
             ExprKind::Path(Res::Local(local)) => {
                 let k = self.locals[*local];
-                match self.continuation_forms[*local] {
+                match self.ctx.continuation_forms[*local] {
                     ContinuationForm::Direct => Callee::Continuation {
                         k,
-                        arity: self.body.continuations[*local],
+                        arity: self.ctx.body.continuations[*local],
                     },
                     // 包んだ `k` はクロージャなので、ほかの関数値と同じく矢印ごとの `mask` で `apply` する
                     ContinuationForm::Wrapped => {
@@ -369,7 +372,9 @@ impl FnLowering<'_> {
     /// で続きを変換する。
     fn through_continuation(&mut self, id: ExprId) -> Atom {
         let ty = self.ty(id);
-        let after = self.builder.new_label(vec![var_info("t", &ty, self.hir)]);
+        let after = self
+            .builder
+            .new_label(vec![var_info("t", &ty, self.ctx.hir)]);
         self.tail_expr(id, Exit::Jump(after));
         let args = self
             .builder
@@ -383,7 +388,7 @@ impl FnLowering<'_> {
 
     /// 式の値をアトムにする。値の計算に要る文は今のブロックに足す。
     pub(super) fn atom(&mut self, id: ExprId) -> Atom {
-        let body = self.body;
+        let body = self.ctx.body;
         match &body.exprs[id].kind {
             ExprKind::Missing => {
                 unreachable!("a program without errors has no missing expressions")
@@ -392,37 +397,37 @@ impl FnLowering<'_> {
             ExprKind::Literal(Literal::Unit) => Atom::Unit,
             ExprKind::Literal(Literal::String(text)) => {
                 let index = self.program.strings.intern(text);
-                let ty = self.lang_type(self.hir.extern_type(ExternType::String));
+                let ty = self.lang_type(self.ctx.hir.extern_type(ExternType::String));
                 self.bind("s", &ty, Rhs::ConstString(index))
             }
             ExprKind::Path(Res::Local(local)) => self.locals[*local],
             ExprKind::Path(Res::Item(ValueItem::Function(function))) => {
-                if let Some(row) = extern_row(self.hir, *function) {
+                if let Some(row) = extern_row(self.ctx.hir, *function) {
                     let wrapper = self.extern_wrapper(id, *function, row);
                     let ty = self.ty(id);
                     return self.closure(wrapper, Vec::new(), &ty);
                 }
                 // 引数のないトップレベルの値は、参照するたびに呼び出す (docs/spec/core-ir.md)
-                let target = self.indices[*function];
+                let target = self.ctx.indices[*function];
                 let ty = self.ty(id);
                 if self.program.arity(target) == 0 {
-                    let name = self.hir[*function].name.clone();
+                    let name = self.ctx.hir[*function].name.clone();
                     self.bind(&name, &ty, plain_call(Call::Direct(target, Vec::new())))
                 } else {
                     self.closure(target, Vec::new(), &ty)
                 }
             }
             ExprKind::Path(Res::Item(ValueItem::Operation(op))) => {
-                let wrapper = self.program.operation_wrapper(self.hir, *op);
+                let wrapper = self.program.operation_wrapper(self.ctx.hir, *op);
                 let ty = self.ty(id);
                 self.closure(wrapper, Vec::new(), &ty)
             }
             ExprKind::Path(Res::Item(ValueItem::Constructor(ctor))) => {
-                let constructor = &self.hir[*ctor];
+                let constructor = &self.ctx.hir[*ctor];
                 if constructor.fields.is_empty() {
                     Atom::Tag(constructor.tag)
                 } else {
-                    let wrapper = self.program.constructor_wrapper(self.hir, *ctor);
+                    let wrapper = self.program.constructor_wrapper(self.ctx.hir, *ctor);
                     let ty = self.ty(id);
                     self.closure(wrapper, Vec::new(), &ty)
                 }
@@ -459,7 +464,10 @@ impl FnLowering<'_> {
                     Some(init) => self.atom(*init),
                     None => Atom::Unit,
                 };
-                let prefix = format!("{}$handle{}", self.root_name, self.numbering.handlers[id]);
+                let prefix = format!(
+                    "{}$handle{}",
+                    self.ctx.root_name, self.ctx.numbering.handlers[id]
+                );
                 let unit = [(None, Type::unit())];
                 let handled_ty = self.ty(handled.body);
                 let handled_closure = self.lift(
@@ -474,57 +482,19 @@ impl FnLowering<'_> {
                 // 状態を `()` にして最後の引数で受ける (docs/spec/core-ir.md)
                 let stateless = init.is_none();
                 // 節はエフェクトの操作の順に並べる。インタプリタは操作の番号で節を引く
-                let operations = self.hir[effect].operations.clone();
+                let operations = self.ctx.hir[effect].operations.clone();
                 let mut closures = Vec::new();
                 for op in operations {
                     let clause = clauses
                         .iter()
                         .find(|clause| clause.op == op)
                         .expect("a program without errors has a clause for every operation");
-                    let mut params: Vec<(Option<PatId>, Type)> = clause
-                        .closure
-                        .params
-                        .iter()
-                        .map(|&pat| (Some(pat), self.pat_type(pat)))
-                        .collect();
-                    if stateless {
-                        params.push((None, Type::unit()));
-                    }
-                    let name = format!("{prefix}${}", self.hir[op].name);
-                    let captured = body.closure_captures(&clause.closure);
-                    let clause_ty = self.ty(clause.closure.body);
-                    let closure = self.lift(
-                        name,
-                        captured,
-                        &params,
-                        clause.closure.body,
-                        &clause_ty,
-                        &Type::Flexible,
-                    );
-                    closures.push(closure);
+                    let name = format!("{prefix}${}", self.ctx.hir[op].name);
+                    closures.push(self.lift_clause(name, &clause.closure, stateless));
                 }
-                let mut params: Vec<(Option<PatId>, Type)> = ret
-                    .closure
-                    .params
-                    .iter()
-                    .map(|&pat| (Some(pat), self.pat_type(pat)))
-                    .collect();
-                if stateless {
-                    params.push((None, Type::unit()));
-                }
-                let captured = body.closure_captures(&ret.closure);
-                let name = format!("{prefix}$return");
-                let ret_ty = self.ty(ret.closure.body);
-                let ret = self.lift(
-                    name,
-                    captured,
-                    &params,
-                    ret.closure.body,
-                    &ret_ty,
-                    &Type::Flexible,
-                );
+                let ret = self.lift_clause(format!("{prefix}$return"), &ret.closure, stateless);
                 let call = Call::Handle {
-                    effect: effect_index(self.hir, effect),
+                    effect: effect_index(self.ctx.hir, effect),
                     init: init_atom,
                     body: handled_closure,
                     clauses: closures,
@@ -554,10 +524,29 @@ impl FnLowering<'_> {
                     .map(|&pat| Some(pat))
                     .zip(param_types)
                     .collect();
-                let name = format!("{}$lambda{}", self.root_name, self.numbering.lambdas[id]);
+                let name = format!(
+                    "{}$lambda{}",
+                    self.ctx.root_name, self.ctx.numbering.lambdas[id]
+                );
                 let captured = body.closure_captures(closure);
                 self.lift(name, captured, &params, *lambda_body, &ret_ty, &lambda_ty)
             }
         }
+    }
+
+    /// handler の節か `return` の節を持ち上げる。状態のない handler の節は、最後の引数で状態の `()` を受ける
+    /// (docs/spec/core-ir.md)。
+    fn lift_clause(&mut self, name: String, closure: &Closure, stateless: bool) -> Atom {
+        let mut params: Vec<(Option<PatId>, Type)> = closure
+            .params
+            .iter()
+            .map(|&pat| (Some(pat), self.pat_type(pat)))
+            .collect();
+        if stateless {
+            params.push((None, Type::unit()));
+        }
+        let captured = self.ctx.body.closure_captures(closure);
+        let ty = self.ty(closure.body);
+        self.lift(name, captured, &params, closure.body, &ty, &Type::Flexible)
     }
 }

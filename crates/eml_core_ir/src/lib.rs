@@ -390,13 +390,7 @@ pub enum Call {
 
 impl Call {
     /// 呼び出しが使う値。関数値の呼び出しでは、呼ばれる値が先に来る。
-    pub fn atoms(&self) -> Vec<Atom> {
-        let mut atoms = Vec::new();
-        self.for_each_atom(|atom| atoms.push(atom));
-        atoms
-    }
-
-    pub(crate) fn for_each_atom(&self, mut f: impl FnMut(Atom)) {
+    pub fn for_each_atom(&self, mut f: impl FnMut(Atom)) {
         match self {
             Call::Direct(_, args)
             | Call::Perform {
@@ -429,7 +423,7 @@ impl Call {
         }
     }
 
-    pub(crate) fn for_each_atom_mut(&mut self, mut f: impl FnMut(&mut Atom)) {
+    pub fn for_each_atom_mut(&mut self, mut f: impl FnMut(&mut Atom)) {
         match self {
             Call::Direct(_, args)
             | Call::Perform {

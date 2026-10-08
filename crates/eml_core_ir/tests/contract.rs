@@ -175,11 +175,13 @@ fn ret(v.0: int, t.1: unit) -> int {
 }
 ";
     let mut program = parse(text).unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(verify_scopes(&program), Ok(()));
     for function in &mut program.functions {
         for block in &mut function.blocks {
             tail_call(block);
         }
     }
+    assert_eq!(verify_scopes(&program), Ok(()));
     insta::assert_snapshot!(pretty(&program), @"
     effect Ask { ask/1 }
     fn by_call(x.0: int) -> int {

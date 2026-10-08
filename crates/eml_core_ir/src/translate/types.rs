@@ -15,7 +15,10 @@ pub(super) fn repr(ty: &Type, hir: &HirProgram) -> Repr {
             TypeDefKind::Extern(row) => match row {
                 Some(ExternType::Int) => Repr::Int,
                 Some(ExternType::String | ExternType::File) => Repr::Obj,
-                Some(ExternType::Unit) | None => Repr::Unit,
+                Some(ExternType::Unit) => Repr::Unit,
+                None => unreachable!(
+                    "an extern type outside the standard library is E1033, and Core IR receives only programs without errors"
+                ),
             },
             TypeDefKind::Data { constructors } => {
                 let with_fields = constructors

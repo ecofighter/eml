@@ -194,28 +194,20 @@ pub(crate) fn translate(
         let name = core_name(hir, id.module, &function.name);
         let forms = continuation_forms(body);
         let numbers = numbering(hir, body);
-        let file_id = hir.modules[id.module].file;
-        let file = builder.files.intern(files.path(file_id));
-        let core = FnLowering {
+        let ctx = BodyCtx {
             hir,
             body,
             types: typed.bodies.get(id).expect("every body is type-checked"),
             indices: &indices,
-            program: &mut builder,
             root_name: &name,
             numbering: &numbers,
             continuation_forms: &forms,
             source: Source {
                 files,
-                file_id,
-                file,
+                file_id: hir.modules[id.module].file,
             },
-            builder: FnBuilder::new(),
-            locals: ArenaMap::default(),
-            contexts: Vec::new(),
-            cons: HashMap::new(),
-        }
-        .lower(&name, &[], &params, body.root, &ret);
+        };
+        let core = FnLowering::new(ctx, &mut builder).lower(&name, &[], &params, body.root, &ret);
         builder.finish(indices[id], core);
     }
     let entry_type = &typed
@@ -263,27 +255,32 @@ enum Ctx {
     Match(MatchCtx),
 }
 
-/// 位置 (`Loc`) を作るための、本体のファイル。
+/// 位置 (`Loc`) を作るための、本体のファイル。`Program.files` には、位置を作るときに初めて入れる
+/// (docs/implementation/architecture.md)。
 #[derive(Clone, Copy)]
 struct Source<'a> {
     files: &'a SourceFiles,
     file_id: FileId,
-    /// `Program.files` の添字。
-    file: u32,
 }
 
-struct FnLowering<'a> {
+/// トップレベルの本体1つを変換する間に変わらない参照。持ち上げた入れ子の関数も同じものを使う。
+#[derive(Clone, Copy)]
+struct BodyCtx<'a> {
     hir: &'a HirProgram,
     body: &'a Body,
     types: &'a BodyTypes,
     indices: &'a ItemMap<Function, FnIdx>,
-    program: &'a mut ProgramBuilder,
     /// ラムダ、handle、extern を包む関数の名前に使う、トップレベルの関数の名前。
     root_name: &'a str,
     numbering: &'a Numbering,
     /// 本体の中の節の `k` の変換の形。持ち上げた入れ子の関数も同じ表を見て、捕まえた `k` を同じ形で扱う。
     continuation_forms: &'a ArenaMap<LocalId, ContinuationForm>,
     source: Source<'a>,
+}
+
+struct FnLowering<'a> {
+    ctx: BodyCtx<'a>,
+    program: &'a mut ProgramBuilder,
     builder: FnBuilder,
     locals: ArenaMap<LocalId, Atom>,
     contexts: Vec<Ctx>,
@@ -292,6 +289,17 @@ struct FnLowering<'a> {
 }
 
 impl<'a> FnLowering<'a> {
+    fn new(ctx: BodyCtx<'a>, program: &'a mut ProgramBuilder) -> Self {
+        FnLowering {
+            ctx,
+            program,
+            builder: FnBuilder::new(),
+            locals: ArenaMap::default(),
+            contexts: Vec::new(),
+            cons: HashMap::new(),
+        }
+    }
+
     /// ラムダと handle の本体と節は、捕まえた変数を先頭の引数に持つ (docs/spec/core-ir.md)。トップレベルの関数では
     /// `captured` は空である。引数のパターンが `None` なら、名前のない引数 (handle の本体が受ける `()`) である。
     /// `ret` は本体の値の型で、関数の `ret` の Repr を決める。
@@ -303,26 +311,26 @@ impl<'a> FnLowering<'a> {
         root: ExprId,
         ret: &Type,
     ) -> CoreFn {
-        let body = self.body;
+        let body = self.ctx.body;
         for (local, ty) in captured {
             let var = self
                 .builder
-                .param(var_info(&body.locals[*local].name, ty, self.hir));
+                .param(var_info(&body.locals[*local].name, ty, self.ctx.hir));
             self.locals.insert(*local, Atom::Var(var));
         }
         let mut wrapped = Vec::new();
         let mut destructured = Vec::new();
         for (pat, ty) in params {
             // 値を調べるか分解するパターンは名前のない引数で受け、本体の前で分解する
-            let pattern = pat.filter(|&pat| destructures(body, self.hir, pat));
+            let pattern = pat.filter(|&pat| destructures(body, self.ctx.hir, pat));
             let local = pat
                 .filter(|_| pattern.is_none())
                 .and_then(|pat| body.pat_bindings(pat).first().copied());
             let name = local.map_or("p", |local| body.locals[local].name.as_str());
-            let var = self.builder.param(var_info(name, ty, self.hir));
+            let var = self.builder.param(var_info(name, ty, self.ctx.hir));
             if let Some(local) = local {
                 self.locals.insert(local, Atom::Var(var));
-                if self.continuation_forms.get(local) == Some(&ContinuationForm::Wrapped) {
+                if self.ctx.continuation_forms.get(local) == Some(&ContinuationForm::Wrapped) {
                     wrapped.push((local, var, ty.clone()));
                 }
             }
@@ -342,7 +350,8 @@ impl<'a> FnLowering<'a> {
             self.destructure(pat, Scrutinee::Occ(Occ::Atom(Atom::Var(var), ty)));
         }
         self.tail_expr(root, Exit::Return);
-        self.builder.finish(name.to_string(), repr(ret, self.hir))
+        self.builder
+            .finish(name.to_string(), repr(ret, self.ctx.hir))
     }
 
     /// `root` を、捕まえた変数を先頭の引数に持つ関数に持ち上げ、そのクロージャを作る (docs/spec/core-ir.md)。ラムダと、
@@ -360,6 +369,7 @@ impl<'a> FnLowering<'a> {
             .into_iter()
             .map(|local| {
                 let ty = self
+                    .ctx
                     .types
                     .locals
                     .get(local)
@@ -369,22 +379,8 @@ impl<'a> FnLowering<'a> {
             })
             .collect();
         let function = self.program.reserve(captured.len() + params.len());
-        let core = FnLowering {
-            hir: self.hir,
-            body: self.body,
-            types: self.types,
-            indices: self.indices,
-            program: &mut *self.program,
-            root_name: self.root_name,
-            numbering: self.numbering,
-            continuation_forms: self.continuation_forms,
-            source: self.source,
-            builder: FnBuilder::new(),
-            locals: ArenaMap::default(),
-            contexts: Vec::new(),
-            cons: HashMap::new(),
-        }
-        .lower(&name, &captured, params, root, ret);
+        let core = FnLowering::new(self.ctx, &mut *self.program)
+            .lower(&name, &captured, params, root, ret);
         self.program.finish(function, core);
         let atoms = captured
             .iter()
@@ -402,7 +398,8 @@ impl<'a> FnLowering<'a> {
     }
 
     fn pat_type(&self, pat: PatId) -> Type {
-        self.types
+        self.ctx
+            .types
             .pats
             .get(pat)
             .cloned()
@@ -410,11 +407,12 @@ impl<'a> FnLowering<'a> {
     }
 
     /// 式の位置。呼ばれる側の範囲の先頭 (演算子のトークンか extern の名前) を渡す (docs/spec/core-ir.md)。
-    fn loc(&self, expr: ExprId) -> Loc {
-        let start = self.body.exprs[expr].range.start();
-        let position = self.source.files.line_col(self.source.file_id, start);
+    fn loc(&mut self, expr: ExprId) -> Loc {
+        let Source { files, file_id } = self.ctx.source;
+        let start = self.ctx.body.exprs[expr].range.start();
+        let position = files.line_col(file_id, start);
         Loc {
-            file: self.source.file,
+            file: self.program.files.intern(files.path(file_id)),
             line: position.line,
             column: position.column,
         }
@@ -423,7 +421,7 @@ impl<'a> FnLowering<'a> {
     /// 式の値を `exit` に渡す。`if`、`match` と、文の後に続く値は、同じ出口のまま中へ進む。条件の `if` が入れ子でも、
     /// 内側の枝は外側の文脈に直接値を渡すので、真偽値を作らずに分かれる。
     fn tail_expr(&mut self, id: ExprId, exit: Exit) {
-        let body = self.body;
+        let body = self.ctx.body;
         match &body.exprs[id].kind {
             ExprKind::If {
                 condition,
@@ -461,7 +459,7 @@ impl<'a> FnLowering<'a> {
         stmts: &[HirStmt],
         tail: Option<ExprId>,
     ) -> Option<(LocalId, ExprId, &'a [MatchArm])> {
-        let body = self.body;
+        let body = self.ctx.body;
         let ExprKind::Match {
             scrutinee, arms, ..
         } = &body.exprs[tail?].kind
@@ -528,7 +526,9 @@ impl<'a> FnLowering<'a> {
         let on_true = self.builder.new_label(Vec::new());
         let on_false = self.builder.new_label(Vec::new());
         let ty = self.ty(condition);
-        let unknown = self.builder.new_label(vec![var_info("c", &ty, self.hir)]);
+        let unknown = self
+            .builder
+            .new_label(vec![var_info("c", &ty, self.ctx.hir)]);
         self.contexts.push(Ctx::Bool {
             on_true,
             on_false,
@@ -583,7 +583,7 @@ impl<'a> FnLowering<'a> {
         for stmt in stmts {
             match stmt {
                 HirStmt::Let { pat, init, .. } => {
-                    if destructures(self.body, self.hir, *pat) {
+                    if destructures(self.ctx.body, self.ctx.hir, *pat) {
                         self.destructure(*pat, Scrutinee::Expr(*init));
                     } else {
                         let value = self.atom(*init);
@@ -600,7 +600,7 @@ impl<'a> FnLowering<'a> {
 
     /// `_` と `()` で受けた値は以後使われないので、Perceus が decref する。
     fn bind_pat(&mut self, pat: PatId, value: Atom) {
-        for local in self.body.pat_bindings(pat) {
+        for local in self.ctx.body.pat_bindings(pat) {
             self.locals.insert(local, value);
         }
     }

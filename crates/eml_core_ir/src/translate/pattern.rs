@@ -19,7 +19,7 @@ use super::{Ctx, CtxId, Exit, FnLowering};
 
 /// 値の出現 (docs/spec/core-ir.md)。`Con` は頭のコンストラクタが分かっている値で、タプルはタグ 0 の
 /// コンストラクタである。`value` はその値を持つアトムで、`None` ならまだ作っていない。値全体が要る葉でだけ作る。
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 pub(super) enum Occ {
     Atom(Atom, Type),
     Con {
@@ -200,7 +200,7 @@ impl FnLowering<'_> {
 
     /// パターンの変数 (と、渡されていれば `alias`) を、枝のラベルの引数の値に対応させる。
     fn bind_arm(&mut self, pat: PatId, alias: Option<LocalId>, args: Vec<Atom>) {
-        let locals = self.body.pat_bindings(pat);
+        let locals = self.ctx.body.pat_bindings(pat);
         let mut args = args.into_iter();
         for local in locals {
             let value = args.next().expect("one argument per pattern variable");
@@ -232,6 +232,7 @@ impl FnLowering<'_> {
             .zip(&passes_alias)
             .map(|(&pat, &passes)| {
                 let mut params: Vec<VarInfo> = self
+                    .ctx
                     .body
                     .pat_bindings(pat)
                     .into_iter()
@@ -263,8 +264,10 @@ impl FnLowering<'_> {
                 Some(occ)
             }
             _ => {
-                let name = alias.map_or("c", |alias| self.body.locals[alias].name.as_str());
-                let merge = self.builder.new_label(vec![var_info(name, &ty, self.hir)]);
+                let name = alias.map_or("c", |alias| self.ctx.body.locals[alias].name.as_str());
+                let merge = self
+                    .builder
+                    .new_label(vec![var_info(name, &ty, self.ctx.hir)]);
                 for (block, occ) in unknown {
                     self.builder.reopen(block);
                     let value = self.materialize(occ);
@@ -322,22 +325,33 @@ impl FnLowering<'_> {
 
     /// 出現の値のアトム。値をまだ作っていなければ、ここで作る。
     pub(super) fn materialize(&mut self, occ: Occ) -> Atom {
+        self.materialize_once(&occ, &mut Vec::new())
+    }
+
+    /// `built` は、同じ葉でもう作った出現とその値である。葉が同じ値を何度渡しても、`con` は1回だけ作る
+    /// (docs/spec/core-ir.md の「変換の規則」)。
+    fn materialize_once(&mut self, occ: &Occ, built: &mut Vec<(Occ, Atom)>) -> Atom {
         match occ {
-            Occ::Atom(atom, _) => atom,
+            Occ::Atom(atom, _) => *atom,
             Occ::Con {
                 value: Some(value), ..
-            } => value,
+            } => *value,
             Occ::Con {
                 tag,
                 fields,
                 value: None,
                 ty,
             } => {
+                if let Some(&(_, atom)) = built.iter().find(|(done, _)| done == occ) {
+                    return atom;
+                }
                 let args = fields
-                    .into_iter()
-                    .map(|field| self.materialize(field))
+                    .iter()
+                    .map(|field| self.materialize_once(field, built))
                     .collect();
-                self.bind("d", &ty, Rhs::Con { tag, args })
+                let atom = self.bind("d", ty, Rhs::Con { tag: *tag, args });
+                built.push((occ.clone(), atom));
+                atom
             }
         }
     }
@@ -345,7 +359,27 @@ impl FnLowering<'_> {
     /// 式の出現。scrutinee の位置にあるタプルのリテラルとコンストラクタの適用は、値を作らずに要素の出現を持つ。
     /// 要素は左から評価する (docs/spec/expressions.md の「関数適用」)。
     pub(super) fn occurrence(&mut self, id: ExprId) -> Occ {
-        let body = self.body;
+        let body = self.ctx.body;
+        let saturated = match &body.exprs[id].kind {
+            ExprKind::Call { callee, args } => match body.exprs[*callee].kind {
+                ExprKind::Path(Res::Item(ValueItem::Constructor(ctor)))
+                    if self.ctx.hir[ctor].fields.len() == args.len() =>
+                {
+                    Some((ctor, args))
+                }
+                _ => None,
+            },
+            _ => None,
+        };
+        if let Some((ctor, args)) = saturated {
+            let fields = args.iter().map(|&arg| self.occurrence(arg)).collect();
+            return Occ::Con {
+                tag: self.ctx.hir[ctor].tag,
+                fields,
+                value: None,
+                ty: self.ty(id),
+            };
+        }
         match &body.exprs[id].kind {
             ExprKind::Annot { expr, .. } => self.occurrence(*expr),
             ExprKind::Tuple(elements) => {
@@ -355,26 +389,6 @@ impl FnLowering<'_> {
                     .collect();
                 Occ::Con {
                     tag: TUPLE,
-                    fields,
-                    value: None,
-                    ty: self.ty(id),
-                }
-            }
-            ExprKind::Call { callee, args }
-                if matches!(
-                    body.exprs[*callee].kind,
-                    ExprKind::Path(Res::Item(ValueItem::Constructor(ctor)))
-                        if self.hir[ctor].fields.len() == args.len()
-                ) =>
-            {
-                let ExprKind::Path(Res::Item(ValueItem::Constructor(ctor))) =
-                    body.exprs[*callee].kind
-                else {
-                    unreachable!("checked above");
-                };
-                let fields = args.iter().map(|&arg| self.occurrence(arg)).collect();
-                Occ::Con {
-                    tag: self.hir[ctor].tag,
                     fields,
                     value: None,
                     ty: self.ty(id),
@@ -423,8 +437,8 @@ impl FnLowering<'_> {
     /// いちばん左の欄を選ぶ。出現の頭が分かっていれば、その場で case を選んで続ける。`statically` なら、値を調べる
     /// 必要が出たところで `None` を返し、変数を作らない。行列は網羅性の検査を通っているので、空にならない。
     fn decide(&mut self, occs: &[Occ], mut rows: Vec<Row>, statically: bool) -> Option<Decision> {
-        let body = self.body;
-        let hir = self.hir;
+        let body = self.ctx.body;
+        let hir = self.ctx.hir;
         let first = rows.first().expect("type-checked patterns are exhaustive");
         let Some(column) = first
             .cells
@@ -455,11 +469,11 @@ impl FnLowering<'_> {
             _ if statically => None,
             (Head::Tuple(elements), Occ::Atom(value, ty)) => {
                 let types = tuple_field_types(&ty, elements.len());
-                self.single(occs, &rows, column, TUPLE, value, types)
+                Some(self.single(occs, &rows, column, TUPLE, value, types))
             }
             (Head::Con(ctor, _), Occ::Atom(value, ty)) if single_constructor(hir, ctor) => {
                 let types = self.field_types(ctor, &ty);
-                self.single(occs, &rows, column, hir[ctor].tag, value, types)
+                Some(self.single(occs, &rows, column, hir[ctor].tag, value, types))
             }
             (Head::Con(ctor, _), Occ::Atom(value, ty)) => {
                 Some(self.switch_constructors(occs, &rows, column, ctor, value, &ty))
@@ -484,15 +498,17 @@ impl FnLowering<'_> {
         tag: u32,
         value: Atom,
         types: Vec<Type>,
-    ) -> Option<Decision> {
+    ) -> Decision {
         let fields = self.field_vars(rows, column, tag, &types);
-        let rows = specialize(self.body, self.hir, rows, column, tag, fields.len());
+        let rows = specialize(self.ctx.body, self.ctx.hir, rows, column, tag, fields.len());
         let field_occs = fields
             .iter()
             .zip(types)
             .map(|(&field, ty)| Occ::Atom(Atom::Var(field), ty));
-        let next = self.decide(&splice(occs, column, field_occs), rows, false)?;
-        Some(match value {
+        let next = self
+            .decide(&splice(occs, column, field_occs), rows, false)
+            .expect("a full decision tree always exists");
+        match value {
             Atom::Var(var) if self.builder.repr(var) == Repr::Obj => Decision::Unpack {
                 value: var,
                 tag,
@@ -504,7 +520,7 @@ impl FnLowering<'_> {
                 cases: vec![(CasePattern::Tag(tag), fields, next)],
                 default: None,
             },
-        })
+        }
     }
 
     /// コンストラクタの欄。欄に現れるコンストラクタの case と、現れないコンストラクタがあればそれを受ける `default`
@@ -519,8 +535,8 @@ impl FnLowering<'_> {
         scrutinee: Atom,
         ty: &Type,
     ) -> Decision {
-        let body = self.body;
-        let hir = self.hir;
+        let body = self.ctx.body;
+        let hir = self.ctx.hir;
         let TypeDefKind::Data { constructors } = &hir[hir[ctor].ty].kind else {
             unreachable!("constructor patterns belong to data types")
         };
@@ -566,8 +582,8 @@ impl FnLowering<'_> {
         column: usize,
         scrutinee: Atom,
     ) -> Decision {
-        let body = self.body;
-        let hir = self.hir;
+        let body = self.ctx.body;
+        let hir = self.ctx.hir;
         let remaining = splice(occs, column, []);
         let mut literals: Vec<&Literal> = Vec::new();
         for row in rows {
@@ -652,15 +668,16 @@ impl FnLowering<'_> {
                     context.passes_alias[arm],
                 );
                 let mut args = Vec::new();
-                for local in self.body.pat_bindings(pat) {
+                let mut built = Vec::new();
+                for local in self.ctx.body.pat_bindings(pat) {
                     let (_, occ) = bound
                         .iter()
                         .find(|(bound, _)| *bound == local)
                         .expect("every pattern variable is bound on the way to its leaf");
-                    args.push(self.materialize(occ.clone()));
+                    args.push(self.materialize_once(occ, &mut built));
                 }
                 if passes {
-                    args.push(self.materialize(root.clone()));
+                    args.push(self.materialize_once(root, &mut built));
                 }
                 self.builder.jump(label, args);
             }
@@ -669,8 +686,8 @@ impl FnLowering<'_> {
 
     /// フィールドの変数。その位置を変数のパターンで受ける行があれば、その変数の名前にする。
     fn field_vars(&mut self, rows: &[Row], column: usize, tag: u32, types: &[Type]) -> Vec<VarId> {
-        let body = self.body;
-        let hir = self.hir;
+        let body = self.ctx.body;
+        let hir = self.ctx.hir;
         types
             .iter()
             .enumerate()
@@ -692,19 +709,24 @@ impl FnLowering<'_> {
 
     /// 局所変数を受けるラベルの引数。
     fn local_info(&self, local: LocalId) -> VarInfo {
-        let ty = self.types.locals.get(local).expect("every local is typed");
-        var_info(&self.body.locals[local].name, ty, self.hir)
+        let ty = self
+            .ctx
+            .types
+            .locals
+            .get(local)
+            .expect("every local is typed");
+        var_info(&self.ctx.body.locals[local].name, ty, self.ctx.hir)
     }
 
     /// 式 `root` の中で局所変数 `local` を使うか。`let x = S; match x` の枝が `x` を使うかを決める。
     fn uses(&self, root: ExprId, local: LocalId) -> bool {
         let mut work = vec![root];
         while let Some(id) = work.pop() {
-            if matches!(self.body.exprs[id].kind, ExprKind::Path(Res::Local(used)) if used == local)
+            if matches!(self.ctx.body.exprs[id].kind, ExprKind::Path(Res::Local(used)) if used == local)
             {
                 return true;
             }
-            self.body.walk_child_exprs(id, |child| work.push(child));
+            self.ctx.body.walk_child_exprs(id, |child| work.push(child));
         }
         false
     }
@@ -721,12 +743,12 @@ impl FnLowering<'_> {
     /// `con` で作った値のフィールドの型。
     fn con_field_types(&self, tag: u32, ty: &Type, arity: usize) -> Vec<Type> {
         match ty {
-            Type::Con { id, .. } => match &self.hir[*id].kind {
+            Type::Con { id, .. } => match &self.ctx.hir[*id].kind {
                 TypeDefKind::Data { constructors } => {
                     let ctor = constructors
                         .iter()
                         .copied()
-                        .find(|&ctor| self.hir[ctor].tag == tag)
+                        .find(|&ctor| self.ctx.hir[ctor].tag == tag)
                         .expect("the tag names a constructor of the type");
                     self.field_types(ctor, ty)
                 }
@@ -740,12 +762,12 @@ impl FnLowering<'_> {
     /// なければ置き換えず、型変数のままにする。型変数の値は `tobj` として扱うので、多めに RC の対象になるだけで正しく
     /// 動く (docs/spec/core-ir.md)。
     fn field_types(&self, ctor: ConstructorId, ty: &Type) -> Vec<Type> {
-        let constructor = &self.hir[ctor];
+        let constructor = &self.ctx.hir[ctor];
         let (fields, _) = split_arrows(
             self.program.constructor_type(ctor),
             constructor.fields.len(),
         );
-        let names: Vec<String> = self.hir[constructor.ty]
+        let names: Vec<String> = self.ctx.hir[constructor.ty]
             .generics
             .type_vars
             .iter()
