@@ -57,8 +57,8 @@ fn every_extern_function_is_declared_once_in_std() {
         assert!(function.equation_ranges.is_empty(), "{}", row.name);
         assert!(program.body(id).is_none(), "{}", row.name);
         let signature = function.signature.as_ref().expect("a signature");
-        assert_eq!(signature.arity(), row.arity, "{}", row.name);
-        assert_eq!(program.arity(id), Some(row.arity), "{}", row.name);
+        assert_eq!(signature.arity(), row.params.len(), "{}", row.name);
+        assert_eq!(program.arity(id), Some(row.params.len()), "{}", row.name);
         // `Effectful` の行だけが、最後の外側の矢印に extern のエフェクトを書く。ほかの矢印の row はどれも空である
         let last = last_outer_arrow(signature);
         for (id, ty) in signature.types.iter() {

@@ -673,6 +673,52 @@ fn the_result_of_a_call_is_not_compared_with_the_callee() {
     assert_eq!(check_scopes(&text), Ok(()));
 }
 
+/// 所有を見る前に断る IR の誤り。どちらの段でも同じ誤りになる。
+fn rejected_at_both_levels(text: &str) -> String {
+    let error = check_scopes(text).expect_err(text);
+    assert_eq!(check(text), Err(error.clone()));
+    error
+}
+
+#[test]
+fn an_extern_argument_of_another_repr_is_rejected() {
+    let text =
+        "fn f(s.0: obj) -> int {\n  let t.1: int = extern Prelude.+(s.0, 1)\n  return t.1\n}\n";
+    assert_eq!(
+        rejected_at_both_levels(text),
+        "argument 0 of `Prelude.+` is `s.0` (obj), but the extern takes int in `f`"
+    );
+}
+
+#[test]
+fn an_extern_argument_constant_that_does_not_fit_is_rejected() {
+    let text =
+        "fn f(n.0: int) -> int {\n  let t.1: int = extern Prelude.+(n.0, ())\n  return t.1\n}\n";
+    assert_eq!(
+        rejected_at_both_levels(text),
+        "argument 1 of `Prelude.+` is (), but the extern takes int in `f`"
+    );
+}
+
+#[test]
+fn an_extern_result_bound_to_another_repr_is_rejected() {
+    let text =
+        "fn f(n.0: int) -> obj {\n  let t.1: obj = extern Prelude.<(n.0, 1)\n  return t.1\n}\n";
+    assert_eq!(
+        rejected_at_both_levels(text),
+        "`t.1` (obj) is bound to `Prelude.<`, which returns enum in `f`"
+    );
+}
+
+#[test]
+fn an_extern_takes_constants_that_fit_its_row() {
+    // 引数のないコンストラクタは `enum` の引数に収まる
+    let text =
+        "fn f() -> enum {\n  let c.0: enum = extern Prelude.bool_eq(#1, #0)\n  return c.0\n}\n";
+    assert_eq!(check_scopes(text), Ok(()));
+    assert_eq!(check(text), Ok(()));
+}
+
 // 借りたフィールド
 
 #[test]

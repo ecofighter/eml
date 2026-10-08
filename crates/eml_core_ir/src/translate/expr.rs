@@ -183,7 +183,7 @@ impl FnLowering<'_> {
                 function: _,
                 row,
                 callee: _,
-            } => row.row().arity,
+            } => row.row().params.len(),
             Callee::Operation(op) => self.ctx.hir[op].arity,
             Callee::Constructor(ctor) => self.ctx.hir[ctor].fields.len(),
             Callee::Continuation { k: _, arity } => arity,

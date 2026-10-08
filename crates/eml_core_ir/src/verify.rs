@@ -1,8 +1,8 @@
 //! Core IR の不変条件の検査 (docs/spec/core-ir.md)。ブロックの列の形 (R1〜R4)、変数の定義と支配 (R5、R6)、
-//! `jump` と `unpack` と `return` の Repr (R8) と、引き継いだ検査 (`mask` の順、`handle` の節の数、再開できるかどうか、
-//! 直接呼び出しと extern の引数の数、型で選ぶ extern、case の種類) を確かめる (`verify_scopes`)。Perceus の後は、
-//! RC の対象の所有の多重集合と、呼び出しの後に見える変数 (R6、R7) も確かめる (`verify`)。`switch` と `unpack` の
-//! フィールドは値から借りて始まり、自分か持ち主が所有を持つ間だけ有効である。
+//! `jump` と `unpack` と `return` の Repr と extern の引数と結果の Repr (R8) と、引き継いだ検査 (`mask` の順、
+//! `handle` の節の数、再開できるかどうか、直接呼び出しと extern の引数の数、型で選ぶ extern、case の種類) を確かめる
+//! (`verify_scopes`)。Perceus の後は、RC の対象の所有の多重集合と、呼び出しの後に見える変数 (R6、R7) も確かめる
+//! (`verify`)。`switch` と `unpack` のフィールドは値から借りて始まり、自分か持ち主が所有を持つ間だけ有効である。
 //!
 //! 辺の検査、支配木、本体の検査は、それぞれブロックを番号の順に1回たどるだけで、反復も生存解析も使わない。辺は
 //! 前向きなので、ブロックに着いたときには入る辺がすべて出そろっている。支配木は辺1本につき深さの対数の手間で
@@ -415,7 +415,7 @@ impl<'a> Checker<'a> {
     fn check_stmt(&mut self, owned: &mut Owned, stmt: &Stmt) -> Result<(), String> {
         match stmt {
             Stmt::Let { var, rhs } => {
-                self.check_rhs(owned, rhs)?;
+                self.check_rhs(owned, *var, rhs)?;
                 match rhs {
                     Rhs::Call {
                         call: _,
@@ -591,28 +591,20 @@ impl<'a> Checker<'a> {
     /// `jump` の実引数が変数なら、行き先の引数と Repr が同じである。定数は、行き先の引数の Repr に収まる (R8)。
     fn check_passed(&self, target: BlockId, arg: Atom, param: VarId) -> Result<(), String> {
         let expected = self.function.repr(param);
-        let fits = match arg {
-            Atom::Var(var) => {
-                let repr = self.function.repr(var);
-                if repr != expected {
-                    return Err(format!(
-                        "a jump to b{} passes `{}` ({}) to `{}` ({})",
-                        target.0,
-                        self.name(var),
-                        repr.name(),
-                        self.name(param),
-                        expected.name()
-                    ));
-                }
-                true
+        if let Atom::Var(var) = arg {
+            let repr = self.function.repr(var);
+            if repr != expected {
+                return Err(format!(
+                    "a jump to b{} passes `{}` ({}) to `{}` ({})",
+                    target.0,
+                    self.name(var),
+                    repr.name(),
+                    self.name(param),
+                    expected.name()
+                ));
             }
-            Atom::Int(_) => expected == Repr::Int,
-            Atom::Unit => expected == Repr::Unit,
-            // 引数のないコンストラクタは、`enum` のタグにも、`tobj` の即値にもなる
-            Atom::Tag(_) => matches!(expected, Repr::Enum | Repr::TObj),
-            Atom::Fn(_) => expected == Repr::TObj,
-        };
-        if fits {
+        }
+        if self.fits(arg, expected) {
             Ok(())
         } else {
             Err(format!(
@@ -622,6 +614,18 @@ impl<'a> Checker<'a> {
                 self.name(param),
                 expected.name()
             ))
+        }
+    }
+
+    /// 変数は Repr が同じとき、定数はその Repr の値になれるときに収まる (R8)。
+    fn fits(&self, atom: Atom, expected: Repr) -> bool {
+        match atom {
+            Atom::Var(var) => self.function.repr(var) == expected,
+            Atom::Int(_) => expected == Repr::Int,
+            Atom::Unit => expected == Repr::Unit,
+            // 引数のないコンストラクタは、`enum` のタグにも、`tobj` の即値にもなる
+            Atom::Tag(_) => matches!(expected, Repr::Enum | Repr::TObj),
+            Atom::Fn(_) => expected == Repr::TObj,
         }
     }
 
@@ -931,7 +935,7 @@ impl<'a> Checker<'a> {
         result
     }
 
-    fn check_rhs(&self, owned: &mut Owned, rhs: &Rhs) -> Result<(), String> {
+    fn check_rhs(&self, owned: &mut Owned, var: VarId, rhs: &Rhs) -> Result<(), String> {
         match rhs {
             Rhs::Call {
                 call,
@@ -967,12 +971,32 @@ impl<'a> Checker<'a> {
                         row.name
                     ));
                 }
-                if args.len() != row.arity {
+                if args.len() != row.params.len() {
                     return Err(format!(
                         "`{}` takes {} arguments but is given {}",
                         row.name,
-                        row.arity,
+                        row.params.len(),
                         args.len()
+                    ));
+                }
+                for (index, (&arg, &expected)) in args.iter().zip(row.params).enumerate() {
+                    if !self.fits(arg, expected) {
+                        return Err(format!(
+                            "argument {index} of `{}` is {}, but the extern takes {}",
+                            row.name,
+                            self.typed_atom_text(arg),
+                            expected.name()
+                        ));
+                    }
+                }
+                let repr = self.function.repr(var);
+                if repr != row.ret {
+                    return Err(format!(
+                        "`{}` ({}) is bound to `{}`, which returns {}",
+                        self.name(var),
+                        repr.name(),
+                        row.name,
+                        row.ret.name()
                     ));
                 }
             }
@@ -1206,6 +1230,14 @@ impl<'a> Checker<'a> {
                 Some(function) => format!("&{}", function.name),
                 None => format!("&#{}", target.0),
             },
+        }
+    }
+
+    /// 変数には Repr を添える (`` `c.1` (int) ``)。定数は `atom_text` と同じである。
+    fn typed_atom_text(&self, atom: Atom) -> String {
+        match atom {
+            Atom::Var(var) => format!("`{}` ({})", self.name(var), self.function.repr(var).name()),
+            _ => self.atom_text(atom),
         }
     }
 

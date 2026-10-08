@@ -3,7 +3,8 @@
 //! なる (docs/future/roadmap.md)。
 //!
 //! 行の正式な名前は、`std/` の宣言をモジュールの正式な名前で修飾したもの (`Prelude.Int`、`Prelude.+`) である。
-//! どの行も `std/` でちょうど1回宣言されていることは、`eml_hir` の結合テストが確かめる。
+//! どの行も `std/` でちょうど1回宣言されていることは、`eml_hir` の結合テストが確かめる。行の Repr が std の宣言の
+//! 型の Repr と同じであることは、`eml_core_ir` の結合テストが確かめる。
 
 /// 型の Kind。extern の型は型引数を持たないので、`Unr` か `Lin` だけで決まる。
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -22,6 +23,40 @@ pub enum Purity {
     Effectful,
 }
 
+/// 値の表現。Core IR の変数と extern の行が持ち、RC の対象かどうかもここから決まる (docs/spec/core-ir.md)。
+/// extern の行が持つので、依存のないこの crate に置き、`eml_core_ir` が再公開する。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Repr {
+    /// つねにヒープの物体を指す値。
+    Obj,
+    /// 即値 (引数のないコンストラクタのタグ、捕まえた変数のない関数) か、ヒープの物体を指す値。
+    TObj,
+    Int,
+    /// 引数のないコンストラクタだけの data のタグ。
+    Enum,
+    Unit,
+}
+
+impl Repr {
+    pub fn is_rc(self) -> bool {
+        match self {
+            Repr::Obj | Repr::TObj => true,
+            Repr::Int | Repr::Enum | Repr::Unit => false,
+        }
+    }
+
+    /// テキストの形での名前 (docs/implementation/testing.md の「Core IR のテキストの形」)。
+    pub fn name(self) -> &'static str {
+        match self {
+            Repr::Obj => "obj",
+            Repr::TObj => "tobj",
+            Repr::Int => "int",
+            Repr::Enum => "enum",
+            Repr::Unit => "unit",
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ExternType {
     Int,
@@ -33,8 +68,9 @@ pub enum ExternType {
 pub struct TypeRow {
     pub name: &'static str,
     pub linearity: Linearity,
-    /// 値がヒープのオブジェクトか。translate が箱に入れるかを決めるのに使う。
-    pub heap: bool,
+    /// 値の Repr。translate は extern の型の Repr をここから読む。型検査は `Unit` を空のレコードにするので、translate は
+    /// `Unit` の行を読まない。この行が空のレコードの Repr と同じであることは、結合テストが確かめる。
+    pub repr: Repr,
     /// 型検査は `Unit` を空のレコード `{}` として扱うので、この行は型の形と表示にだけ使う。
     pub empty_record: bool,
 }
@@ -48,17 +84,17 @@ impl ExternType {
     ];
 
     pub fn row(self) -> TypeRow {
-        let row = |name, linearity, heap, empty_record| TypeRow {
+        let row = |name, linearity, repr, empty_record| TypeRow {
             name,
             linearity,
-            heap,
+            repr,
             empty_record,
         };
         match self {
-            ExternType::Int => row("Prelude.Int", Linearity::Unr, false, false),
-            ExternType::String => row("Prelude.String", Linearity::Unr, true, false),
-            ExternType::Unit => row("Prelude.Unit", Linearity::Unr, false, true),
-            ExternType::File => row("Std.Fs.File", Linearity::Lin, true, false),
+            ExternType::Int => row("Prelude.Int", Linearity::Unr, Repr::Int, false),
+            ExternType::String => row("Prelude.String", Linearity::Unr, Repr::Obj, false),
+            ExternType::Unit => row("Prelude.Unit", Linearity::Unr, Repr::Unit, true),
+            ExternType::File => row("Std.Fs.File", Linearity::Lin, Repr::Obj, false),
         }
     }
 
@@ -121,8 +157,10 @@ pub enum Extern {
 
 pub struct FunctionRow {
     pub name: &'static str,
-    /// 引数の数。シグネチャの一番外側の `->` の数と等しい。
-    pub arity: usize,
+    /// 引数の Repr。数はシグネチャの一番外側の `->` の数と等しい。
+    pub params: &'static [Repr],
+    /// 結果の Repr。
+    pub ret: Repr,
     pub purity: Purity,
     /// 型で選ぶ行。translate が型引数から比べ方の行に置き換えるので、Core IR には届かない。
     pub by_type: bool,
@@ -157,43 +195,45 @@ impl Extern {
     ];
 
     pub fn row(self) -> FunctionRow {
-        let row = |name, arity, purity| FunctionRow {
+        use Repr::{Enum, Int, Obj, TObj, Unit};
+        let row = |name, params, ret, purity| FunctionRow {
             name,
-            arity,
+            params,
+            ret,
             purity,
             by_type: false,
         };
         match self {
-            Extern::Println => row("Prelude.println", 1, Purity::Effectful),
-            Extern::Open => row("Std.Fs.open", 1, Purity::Effectful),
-            Extern::ReadAll => row("Std.Fs.read_all", 1, Purity::Effectful),
-            Extern::Close => row("Std.Fs.close", 1, Purity::Effectful),
-            Extern::ShowInt => row("Prelude.show_int", 1, Purity::Pure),
-            Extern::IntNeg => row("Prelude.negate", 1, Purity::MayFail),
-            Extern::IntAdd => row("Prelude.+", 2, Purity::MayFail),
-            Extern::IntSub => row("Prelude.-", 2, Purity::MayFail),
-            Extern::IntMul => row("Prelude.*", 2, Purity::MayFail),
-            Extern::IntDiv => row("Prelude./", 2, Purity::MayFail),
-            Extern::IntMod => row("Prelude.%", 2, Purity::MayFail),
-            Extern::IntLt => row("Prelude.<", 2, Purity::Pure),
-            Extern::IntLe => row("Prelude.<=", 2, Purity::Pure),
-            Extern::IntGt => row("Prelude.>", 2, Purity::Pure),
-            Extern::IntGe => row("Prelude.>=", 2, Purity::Pure),
-            Extern::StrConcat => row("Prelude.++", 2, Purity::Pure),
+            Extern::Println => row("Prelude.println", &[Obj], Unit, Purity::Effectful),
+            Extern::Open => row("Std.Fs.open", &[Obj], Obj, Purity::Effectful),
+            Extern::ReadAll => row("Std.Fs.read_all", &[Obj], Obj, Purity::Effectful),
+            Extern::Close => row("Std.Fs.close", &[Obj], Unit, Purity::Effectful),
+            Extern::ShowInt => row("Prelude.show_int", &[Int], Obj, Purity::Pure),
+            Extern::IntNeg => row("Prelude.negate", &[Int], Int, Purity::MayFail),
+            Extern::IntAdd => row("Prelude.+", &[Int, Int], Int, Purity::MayFail),
+            Extern::IntSub => row("Prelude.-", &[Int, Int], Int, Purity::MayFail),
+            Extern::IntMul => row("Prelude.*", &[Int, Int], Int, Purity::MayFail),
+            Extern::IntDiv => row("Prelude./", &[Int, Int], Int, Purity::MayFail),
+            Extern::IntMod => row("Prelude.%", &[Int, Int], Int, Purity::MayFail),
+            Extern::IntLt => row("Prelude.<", &[Int, Int], Enum, Purity::Pure),
+            Extern::IntLe => row("Prelude.<=", &[Int, Int], Enum, Purity::Pure),
+            Extern::IntGt => row("Prelude.>", &[Int, Int], Enum, Purity::Pure),
+            Extern::IntGe => row("Prelude.>=", &[Int, Int], Enum, Purity::Pure),
+            Extern::StrConcat => row("Prelude.++", &[Obj, Obj], Obj, Purity::Pure),
             Extern::Eq => FunctionRow {
                 by_type: true,
-                ..row("Prelude.==", 2, Purity::Pure)
+                ..row("Prelude.==", &[TObj, TObj], Enum, Purity::Pure)
             },
             Extern::Ne => FunctionRow {
                 by_type: true,
-                ..row("Prelude.!=", 2, Purity::Pure)
+                ..row("Prelude.!=", &[TObj, TObj], Enum, Purity::Pure)
             },
-            Extern::IntEq => row("Prelude.int_eq", 2, Purity::Pure),
-            Extern::IntNe => row("Prelude.int_ne", 2, Purity::Pure),
-            Extern::StrEq => row("Prelude.string_eq", 2, Purity::Pure),
-            Extern::StrNe => row("Prelude.string_ne", 2, Purity::Pure),
-            Extern::BoolEq => row("Prelude.bool_eq", 2, Purity::Pure),
-            Extern::BoolNe => row("Prelude.bool_ne", 2, Purity::Pure),
+            Extern::IntEq => row("Prelude.int_eq", &[Int, Int], Enum, Purity::Pure),
+            Extern::IntNe => row("Prelude.int_ne", &[Int, Int], Enum, Purity::Pure),
+            Extern::StrEq => row("Prelude.string_eq", &[Obj, Obj], Enum, Purity::Pure),
+            Extern::StrNe => row("Prelude.string_ne", &[Obj, Obj], Enum, Purity::Pure),
+            Extern::BoolEq => row("Prelude.bool_eq", &[Enum, Enum], Enum, Purity::Pure),
+            Extern::BoolNe => row("Prelude.bool_ne", &[Enum, Enum], Enum, Purity::Pure),
         }
     }
 

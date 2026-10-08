@@ -27,6 +27,9 @@ use pattern::{Known, MatchCtx, Occ, Scrutinee, destructures};
 use program::{ProgramBuilder, core_name, effect_table};
 use types::{repr, split_arrows, var_info};
 
+// extern の表の行と std の宣言を照らし合わせる結合テスト (tests/externs.rs) が、translate と同じ規則で型の Repr を決める
+pub use types::repr as type_repr;
+
 /// 入口の関数から届く関数。使わない Prelude の関数を Core IR に入れないため、関数の本体の参照をたどって集める
 /// (docs/spec/core-ir.md)。
 fn reachable(hir: &HirProgram, entry: FunctionId) -> HashSet<FunctionId> {
@@ -128,7 +131,7 @@ fn numbering(hir: &HirProgram, body: &Body) -> Numbering {
                     return None;
                 };
                 let row = extern_row(hir, function)?;
-                (args.len() >= row.row().arity).then_some(*callee)
+                (args.len() >= row.row().params.len()).then_some(*callee)
             }
             _ => None,
         })

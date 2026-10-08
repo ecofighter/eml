@@ -4,6 +4,7 @@
 mod common;
 
 mod contract;
+mod externs;
 mod perceus;
 mod text;
 mod translate;

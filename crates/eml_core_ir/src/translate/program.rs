@@ -261,7 +261,7 @@ impl ProgramBuilder {
             .extern_types
             .get(&extern_fn)
             .expect("every extern function has a signature");
-        let (param_types, result_type) = split_arrows(ty, row.row().arity);
+        let (param_types, result_type) = split_arrows(ty, row.row().params.len());
         let params = param_types
             .iter()
             .map(|ty| var_info("p", ty, hir))

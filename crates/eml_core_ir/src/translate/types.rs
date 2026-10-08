@@ -1,6 +1,6 @@
 //! 型から決まる値の表現 (Repr) と、`==` と `!=` を比べ方ごとのどの extern にするか。
 
-use eml_extern::{Extern, ExternType};
+use eml_extern::Extern;
 use eml_hir::{Program as HirProgram, TypeDefKind};
 use eml_types::{Equality, Type};
 
@@ -9,17 +9,16 @@ use crate::{Repr, VarInfo};
 /// 型の Repr (docs/spec/core-ir.md)。総称的な位置の束縛も、S3b-2c でその規則を決めるまでは具体化した型から
 /// 決める。関数の値と型変数の値は、即値 (捕まえた変数のない関数、引数のないコンストラクタ) にもヒープの物体にも
 /// なるので `tobj` にする。
-pub(super) fn repr(ty: &Type, hir: &HirProgram) -> Repr {
+pub fn repr(ty: &Type, hir: &HirProgram) -> Repr {
     match ty {
         Type::Con { id, args: _ } => match &hir[*id].kind {
-            TypeDefKind::Extern(row) => match row {
-                Some(ExternType::Int) => Repr::Int,
-                Some(ExternType::String | ExternType::File) => Repr::Obj,
-                Some(ExternType::Unit) => Repr::Unit,
-                None => unreachable!(
-                    "an extern type outside the standard library is E1033, and Core IR receives only programs without errors"
-                ),
-            },
+            TypeDefKind::Extern(row) => {
+                row.expect(
+                    "an extern type outside the standard library is E1033, and Core IR receives only programs without errors",
+                )
+                .row()
+                .repr
+            }
             TypeDefKind::Data { constructors } => {
                 let with_fields = constructors
                     .iter()

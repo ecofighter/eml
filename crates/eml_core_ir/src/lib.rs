@@ -2,6 +2,7 @@
 //! エフェクトを明示する。
 
 use eml_extern::Extern;
+pub use eml_extern::Repr;
 
 mod contract;
 pub mod liveness;
@@ -17,6 +18,7 @@ pub use perceus::perceus;
 pub use pipeline::{Pass, lower, lower_until};
 pub use pretty::{pretty, pretty_with_positions};
 pub use text::{ParseError, parse};
+pub use translate::type_repr;
 pub use verify::{VerifyError, verify, verify_scopes};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -89,39 +91,6 @@ impl CoreFn {
 pub struct VarInfo {
     pub name: String,
     pub repr: Repr,
-}
-
-/// 値の表現。型から決まり、RC の対象かどうかもここから決まる (docs/spec/core-ir.md)。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum Repr {
-    /// つねにヒープの物体を指す値。
-    Obj,
-    /// 即値 (引数のないコンストラクタのタグ、捕まえた変数のない関数) か、ヒープの物体を指す値。
-    TObj,
-    Int,
-    /// 引数のないコンストラクタだけの data のタグ。
-    Enum,
-    Unit,
-}
-
-impl Repr {
-    pub fn is_rc(self) -> bool {
-        match self {
-            Repr::Obj | Repr::TObj => true,
-            Repr::Int | Repr::Enum | Repr::Unit => false,
-        }
-    }
-
-    /// テキストの形での名前 (docs/implementation/testing.md の「Core IR のテキストの形」)。
-    pub fn name(self) -> &'static str {
-        match self {
-            Repr::Obj => "obj",
-            Repr::TObj => "tobj",
-            Repr::Int => "int",
-            Repr::Enum => "enum",
-            Repr::Unit => "unit",
-        }
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
