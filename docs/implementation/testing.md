@@ -75,7 +75,7 @@
 
 ## Core IR のテキストの形
 
-テストは、Core IR を `eml_core_ir::pretty` の表示で確かめる。`eml_core_ir::parse` はこの表示を読んで `Program` に戻し、読み直した IR を表示すると元の表示と同じになる。手で書く IR のテストもこの形で書く。`pretty` は extern の呼び出しの位置を出さず、`pretty_with_positions` が出す。
+テストは、Core IR を `eml_core_ir::pretty` の表示で確かめる。`eml_core_ir::parse` はこの表示を読んで `Program` に戻し、読み直した IR を表示すると、下の往復の項の条件のもとで元の表示と同じになる。手で書く IR のテストもこの形で書く。`pretty` は extern の呼び出しの位置を出さず、`pretty_with_positions` が出す。
 
 ```
 layout Prelude.Bool { False, True }

@@ -53,7 +53,7 @@ S3b-2a で Core IR を前向きの辺だけを持つ基本ブロックの列に�
 
 - Repr を確定する。多相な位置 (総称的なフィールド、`apply`、`perform`、`resume`、`handle` の結果) の束縛の Repr の規則を決める
 - box と unbox の命令を明示し、それを入れるパスを足す。`unbox` は、`switch` の scrutinee と同じく値を読む使いにする。`box` と `unbox` が要るのは、スカラーと参照の間だけである。`obj` の値は変換なしで `tobj` のフィールドに置け、`tobj` のフィールドは `obj` の変数に束縛できる
-- verifier は、宣言した Repr が `tobj` のフィールド、呼び出しの引数と結果 (呼ばれる関数の `ret` を含む)、`apply`、`perform`、`resume`、`handle`、`return` と `tail` の Repr を比べる。配置のフィールドの Repr と extern の行の Repr は、S3b-2c-1 の R8 と R9 がすでに読んでいる
+- verifier は、宣言した Repr が `tobj` のフィールド、呼び出しの引数と結果 (呼ばれる関数の `ret` を含む)、`apply`、`perform`、`resume`、`handle`、`return` の定数と `tail` の Repr を比べる。配置のフィールドの Repr と extern の行の Repr は、S3b-2c-1 の R8 と R9 がすでに読んでいる
 - 末尾呼び出しを作る場所を、box と unbox を入れるパスとの順で決め直す。今は translate が末尾呼び出しを作る
 - evidence passing、ネイティブのオブジェクトモデル、`Int` の幅、コード生成のバックエンド、バイトコード VM は、ネイティブ化の段階で決める
 
