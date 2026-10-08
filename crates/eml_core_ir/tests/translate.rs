@@ -246,7 +246,8 @@ fn each_reference_to_an_extern_as_a_value_gets_its_own_wrapper() {
 #[test]
 fn the_file_table_holds_only_the_paths_that_positions_use() {
     // `Prelude.not` は extern を呼ばないので、Prelude のパスは位置に使われず、表に入らない。位置付きの表示を読み直すと
-    // `@"…"` のパスから表を作り直すので、同じ表に戻る
+    // `@"…"` のパスから表を作り直す。このプログラムではパスが1つなので同じ表に戻るが、表の順は一般には変わりうる。
+    // 持ち上げた関数は外側の関数を変換する間にパスを入れ、表示では後ろに並ぶためである
     let text =
         "main : Unit -> <IO> Unit\nmain () = if not True then println \"a\" else println \"b\"";
     let program = eml_test_support::core_until(text, Pass::Translate);
