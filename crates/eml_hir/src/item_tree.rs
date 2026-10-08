@@ -1,5 +1,6 @@
 //! item の収集 (docs/implementation/architecture.md の「`eml_hir` の内部」)。ファイルごとに宣言を集め、名前を解決
-//! しなくても判定できる並び方の誤りを出す。名前の表と重複の判定は `DefMap` が行う。
+//! しなくても判定できる並び方の誤りを出す。名前の表と、トップレベルの名前の重複の判定は `DefMap` が行う。シグネチャの重複と
+//! 型引数の重複 (E1003) は、ここで報告する。
 //!
 //! `ItemTree` は構文木のノードを持たない。名前を解決する前に決まる情報 (名前、位置、`pub`、`extern`、型引数) は、
 //! ここで取り出して持つ。型やパターンの変換のように resolver の要るものだけを `AstPtr` で指し、`lower` がモジュールの
@@ -116,7 +117,7 @@ impl ModulePath {
 pub struct ImportItem {
     pub path: ModulePath,
     pub path_range: TextRange,
-    /// 修飾子 (別名か最後のセグメント) と、その位置 (別名がなければパスの位置)。
+    /// 修飾子 (別名か最後のセグメント)。
     pub qualifier: String,
     pub list: Option<Vec<ImportName>>,
     /// import の全体。

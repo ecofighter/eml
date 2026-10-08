@@ -45,7 +45,7 @@ pub enum Resolved<T> {
 pub enum Silence {
     /// 重複した宣言の部品だけがある (E1003 で報告済み)。
     Unusable,
-    /// 壊れた import か、import の並びで報告した名前から来た。
+    /// 壊れた import から来た名前、import の並びで報告済みの名前、不明な `T(..)` の部分のどれかである。
     Broken,
 }
 
@@ -1107,8 +1107,8 @@ impl<'a> Resolver<'a> {
         }
     }
 
-    /// 名前を引いて `fixity_of` を求める。セクションの被演算子の先読みと中置のパターンのように、引いた結果を
-    /// 組み直しのほかに使わない位置で使う。
+    /// 名前を引いて `fixity_of` を求める。セクションの被演算子の先読み (`looser_operator`) だけが使う。中置のパターンは
+    /// 解決の結果を変換にも使うので、`value` で引いて `fixity_of` に渡す。
     pub fn fixity(&self, op: NameRef<'_>) -> Option<Fixity> {
         self.fixity_of(&self.value(op))
     }

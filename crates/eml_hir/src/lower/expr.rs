@@ -635,7 +635,7 @@ impl<'a> BodyLowering<'a> {
         self.climb_pat(&operands, &operators, &fixities, &mut position, 0, None)
     }
 
-    /// 式の `climb` と同じ優先順位の上昇法である。ユーザーは `:` で始まる演算子に fixity を宣言できるので、
+    /// 式の `climb` と同じ優先順位の上昇法である。`fixities` は `operators` と添字が揃っている。ユーザーは `:` で始まる演算子に fixity を宣言できるので、
     /// 同じ優先順位で結合の向きが違う並びも起きる。その場合は式と同じく E1006 を報告し、パターンを `Missing` にする。
     fn climb_pat(
         &mut self,

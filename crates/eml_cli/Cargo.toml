@@ -41,3 +41,4 @@ insta.workspace = true
 [[test]]
 name = "integration"
 path = "tests/main.rs"
+required-features = ["run"]

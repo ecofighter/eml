@@ -33,7 +33,7 @@ pub struct Parsed {
 pub struct Lowered {
     session: Session,
     pub program: eml_hir::Program,
-    /// 読み込み、構文、HIR の診断を、表示と同じ順 (`sort_diagnostics`) に並べたもの。
+    /// 読み込み、構文、def_map、HIR の診断を、表示と同じ順 (`sort_diagnostics`) に並べたもの。
     pub diagnostics: Vec<Diagnostic>,
 }
 

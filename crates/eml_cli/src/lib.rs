@@ -22,7 +22,7 @@ pub use eml_interp::{RunConfig, RuntimeError};
 pub use eml_runtime::{Captured, OutputSink};
 pub use fs_provider::FsProvider;
 
-/// 段階の結果の診断は、読み込みの段からその段階までのすべての診断を、表示と同じ順 (`sort_diagnostics`) に並べたものである。
+/// `DefMap` と、読み込みの段と def_map の段の診断。
 pub struct DefMapped {
     pub def_map: eml_hir::DefMap,
     pub diagnostics: Vec<Diagnostic>,
@@ -54,7 +54,8 @@ pub struct Compiled {
 /// (docs/implementation/architecture.md の「CLI と lib API」)。`eml_cli` は段階をつなぐだけで、診断を自分では作らない。
 ///
 /// 段階のメソッドは、エラーがあっても止めずに、読み込みの結果から呼ばれた段階までをすべて実行する。1回の実行で、
-/// 独立した複数のエラーを報告するため。途中の結果は持たない。
+/// 独立した複数のエラーを報告するため。途中の結果は持たない。段階の結果の診断は、読み込みの段からその段階までの
+/// すべての診断を、表示と同じ順 (`sort_diagnostics`) に並べたものである。
 pub struct Session {
     loaded: eml_hir::Loaded,
     /// 構文解析、`ItemTree`、読み込みの段の診断。
