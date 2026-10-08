@@ -54,7 +54,8 @@
 検査付きヒープ (インタプリタ) での扱い。
 
 - `Header` は `rc: u32` と `immortal: bool` を持つ。不死の物体の `rc` は、外に出ている参照の数である
-- `ConstString` は、専用の `Heap::acquire_immortal` で数を1増やす。`dup` は1増やし、`decref` は1減らす。数が 0 になっても解放しない
+- `Machine::new` は `Heap::alloc_immortal` で、数が 0 の不死の物体を作る。リテラルを作るのは実行の仕事ではないので、`string_bytes_copied` に数えない
+- `ConstString` は、専用の `Heap::acquire_immortal` で数を1増やす。不死でない物体に呼ぶのはインタプリタの誤りなので、`debug_assert!` で確かめる。`dup` は1増やし、`decref` は1減らす。数が 0 になっても解放しない
 - 数が 0 の不死の物体には、どの操作 (`get`、`get_mut`、`dup`、`decref`、`is_unique`、`take`、`take_or_copy`) も `UseAfterFree` を返す。判定は `object()` と `object_mut()` の1か所に置く。`acquire_immortal` だけがこの判定を通らない
 - `debug_heap` の実行が正常に終わったとき、数が 0 でない不死の物体は、その数だけリークとして種類の名前の下に足す。数が 0 の不死の物体は報告しない。今のリークを報告するテスト (`const "leaked"` を手放さない) は、今と同じく `[("String", 1)]` を報告する
 - 弱くなる検出が1つある。同じリテラルを何回評価しても、参照は1つの数にまとめられる。片方の参照を余分に `decref` し、もう片方を手放し忘れると、2つの誤りが打ち消し合って見つからない。今はリテラルを評価するたびに別の物体を作るので、この形も見つかる。この限界は `runtime.md` の `debug_heap` の節に書く
@@ -63,7 +64,8 @@
 
 - `eml_runtime` に `Heap::append_str(left, right) -> Result<usize, HeapError>` を足す。左辺の `String` の後に右辺の文字列を足し、写したバイト数を返す。左辺の `String` をいったん取り出し、右辺を借りて足してから戻す
 - `++` (`Extern::StrConcat`) は、左辺が一意なら `append_str` で足し、右辺を `decref` して左辺を返す。左辺が一意でない場合 (共有された文字列と不死のリテラル) は、両辺の長さの和の容量で新しい文字列を作り、両辺を `decref` する。`x ++ x` は Perceus の `dup` で RC が 2 になって届くので、写す側に進む
-- `take_string` (写してから `decref`) をやめ、借りて使ってから `decref` する形にする。`println`、`StrEq`、`StrNe` は写さなくなる。`open` は、`FileHandle` と誤りの文言のためにパスを1回だけ写す
+- `append_str` は、左辺が一意でなければ (共有と不死) `Shared` を返し、どちらかの辺が文字列でなければ新しい `HeapError::NotAString` を返す。インタプリタは `append_str` を呼ぶ前に両辺が文字列であることを確かめ、今と同じ `Fault::Internal` の文言で断るので、`NotAString` はヒープの中だけの誤りである
+- `take_string` (写してから `decref`) をやめ、借りて使ってから `decref` する形にする。`println`、`StrEq`、`StrNe` は写さなくなる。`println` は、新しい `OutputSink::write_line` で中身と改行を書き、flush を1回で済ませる。`open` は、`FileHandle` と誤りの文言のためにパスを1回だけ写す
 
 ### handler の連鎖
 
@@ -108,7 +110,7 @@
 `eml_interp` は、実行の仕事を数える `RunStats` を持つ。
 
 - `handler_visits`: `find_handler` が調べたフレームの数。今は継続のすべてのフレームを数え、連鎖を入れた後は連鎖のフレームだけを数える
-- `string_bytes_copied`: インタプリタが文字列の物体の中身に書いたバイト数。今は `ConstString` と `take_string` が写す分を数える。連鎖と不死のリテラルを入れた後は、`++` の写す側の |左辺| + |右辺| と、その場で足す側の |右辺| を数える。`String` の容量の再確保と、出力への書き込みは数えない
+- `string_bytes_copied`: 文字列の物体の中身に書いたバイト数。中身を書くのはヒープの手続きなので、ヒープが数える。文字列の物体を作るとき (`++` の結果、`show_int`、`read_all`、T3 より前の `ConstString`)、共有された文字列を `take_or_copy` で写すとき、`append_str` で足すときに、書いた長さを足す。不死のリテラルを作るとき、Rust の `String` への一時的な写し、`String` の容量の再確保、出力への書き込みは数えない。今の `++` は、両辺を足した新しい物体を作るので、左辺の長さに比例して数が増える
 
 API は次のとおりである。
 
@@ -127,10 +129,13 @@ API は次のとおりである。
 
 ### 足すテスト
 
+- `crates/eml_runtime/src/output.rs`: `OutputSink` が `Send` でない書き込み先を受け取れること、`write_line` が改行を付けること
 - `crates/eml_runtime/src/heap/tests.rs`
+  - 文字列の数: 文字列の物体を作るときと、共有された文字列を写すときに数えること
   - 不死の物体: `acquire_immortal` と `dup` と `decref` の数、数が 0 になっても解放しないこと、数が 0 のときの各操作の `UseAfterFree`、`is_unique` が偽であること、`take` が `Shared` を返し `take_or_copy` が写すこと、リークの報告に数を足すこと (1つのリテラルを2回手放し忘れると2)
-  - `append_str`: 足したバイト数と結果の文字列
-  - 連鎖: `copy_segment` が区間の中の `outer` と h の `inner` を写した側に付け替えること、区間の外を指す連鎖の参照が `BrokenSegment` になること
+  - `append_str`: 足したバイト数と結果の文字列、共有された左辺と不死の左辺を `Shared` で断ること、文字列でない辺で `NotAString` を返して左辺を変えないこと
+  - 連鎖: `copy_segment` が区間の中の `outer` と h の `inner` を写した側に付け替えること、区間の外を指す連鎖の参照 (`Mask` の `outer` と h の `inner`) が `BrokenSegment` になること
+- `tests/ui/run/runtime/concat_copies_shared_strings.em`: 後で使う文字列、リテラル、同じ変数を両辺に持つ `++` が、元の文字列を書き換えないこと。今のコードでも通る。その場で足す実装の後も同じ出力になることを確かめるためのものである
 - `crates/eml_interp/tests/scaling.rs` (`tests/main.rs` で宣言する): 時間ではなく回数を比べるので、`#[ignore]` を付けずにふだんの `cargo test` で走らせる。各テストはテストの中でソースを生成し、n = 2000 で回数の上限を確かめる。今のコードではどれも2乗になって通らない
 
   | 形 | 確かめる回数 | 上限 |
@@ -139,6 +144,9 @@ API は次のとおりである。
   | 外に `Ask` の handler を置き、その内側に1つだけ `Tell` の handler を置き、その中で同じ再帰 | `handler_visits` | 3n |
   | `tests/ui/run/effects/mask_callback.em` と同じ形 (外の `Ask`、内の `Ask`、`mask` 付きで呼ぶコールバックの中で同じ再帰) | `handler_visits` | 4n |
   | リテラルから始めて `acc ++ "x"` を n 回つなぐ | `string_bytes_copied` | 4n |
+  | 64 バイトのリテラルを n 回評価する | `string_bytes_copied` | 64 未満 (1回でも写すと超える) |
+
+  このほか、数え方そのものを確かめるテストを置く。`perform` も文字列もないプログラムでは数がすべて 0 であること、`perform` は少なくとも1つのフレームを調べること、`"ab" ++ "cd"` は少なくとも4バイトを書くことである。この3つは、T2 から T5 のどの実装でも成り立つ
 
 ### テストの変更
 
@@ -152,6 +160,7 @@ API は次のとおりである。
 - 機械的な追随
   - `live_objects_are_counted_by_descriptor` の名前を `live_objects_are_counted_by_kind` にする
   - `heap/tests.rs` で `Link`、`Frame::Mask`、handler のフレームを組み立てる箇所を、新しい形に合わせる
+  - `heap/tests.rs` の読み出し口 `Flagged` の旗を `Arc<AtomicBool>` から `Rc<Cell<bool>>` にする。`FileHandle` が `Send` でない読み出し口を受け取れることを、この型で確かめる
   - `RunStats` の戻り値に合わせて、`eml_cli` の `main.rs`、`tests/ui.rs`、`tests/api.rs` と `eml_test_support` を直す
   - `Arc<Program>` をやめることに合わせて、`eml_cli`、`eml_test_support`、各 crate のテストを直す
 - 変わらないもの: UI テストの出力と、`eml_interp/tests/run.rs` のリークを報告するテスト
@@ -173,19 +182,21 @@ API は次のとおりである。
   - 足す: 不死の物体の意味、一意な文字列のその場の連結、ランタイムの側から見た handler の連鎖 (`outer` と `inner` は所有せず、`children` はたどらず、`copy_segment` が付け替える)
   - 「ランタイムの API」と「実行の API」の見出しは残す。`core-ir.md` と `architecture.md` が参照している
   - 表を削除する前に、ほかの話題の行が別の文書にあることを確かめる (`Never ≤ Once ≤ Multi` の束は types.md と effects.md にある)
-- `docs/spec/core-ir.md`: `Arc<Program>` で共有する文と、「CEK 機械の状態を `Send` にする」の文を削除する
+- `docs/spec/runtime.md` の「将来の LLVM バックエンドも、このランタイムを C ABI でリンクして使う」と「マルチコア化では `eml_runtime` の内部だけを差し替える」も削除する。ネイティブのオブジェクトモデルはネイティブ化の段階で決め、`eml_runtime` はインタプリタの検査付きヒープとして残すためである
+- `docs/spec/core-ir.md`: `Arc<Program>` で共有する文と、「CEK 機械の状態を `Send` にする」の文を削除する。`Rc` を使わない規則には、上の「シングルスレッドのランタイム」の理由を書く
+- `docs/future/evidence-passing.md`: 「マルチコア対応の設計と同じく、ネイティブのバグをインタプリタで再現できる」の文を直す。もとの主張は multicore.md の削除する節にある
 - `docs/future/multicore.md`: 冒頭の runtime.md への参照、決定の表、「マルチコアのインタプリタ」の節を、インタプリタはシングルスレッドで並列化はネイティブだけ、という決定に合わせて整理する。自身の「マルチコアに備えた予防的な決定」の節は削除する。「可変状態」と「`par` の段階」の見出しは、ほかの文書が参照しているので残す。記述子が `Lin` の破棄処理を持つ話は、ネイティブの要件として書き直す
 - `docs/future/roadmap.md`
   - 段の表と S3b の節を、S3b-1 と S3b-2 に分ける。S3b-2 の節に、この文書の「S3b の分け方」の S3b-2 の項目と、今の S3b の論点 (縮約パスの範囲、E0013 と深さ、別名の伝播と定数の畳み込み) を残す
   - 論点「ネイティブで包んだ `k` を `drop` したときの破棄処理」を S3b から外し、「その後の項目」の「記述子」の項目にまとめる。その項目の「S3b で名前しか持たない今の記述子を削除し」を、S3b-1 で削除した事実に直す
 - `docs/overview.md` と `docs/README.md`: S3b への言及を S3b-1 か S3b-2 に直し、runtime.md の説明と「予防的な決定は spec/runtime.md に反映してある」の文を直す
-- `docs/implementation/testing.md`: `eml_test_support` の関数の一覧に `run_stats` を足し、`core*` が `Program` を返すことにする。ヒープの単体テストの行に、不死の物体、その場の連結、連鎖の付け替えを足す。性能のテストの節に、回数を比べるテストが `#[ignore]` なしでふだんのテストに入ることを書く
-- `CLAUDE.md`: `Send + Sync` の文を `Session` だけにし、理由をフロントエンドの側に直す。`eml_test_support` の説明で、`core*` が `Program` を返すことと `run_stats` を足す
+- `docs/implementation/testing.md`: 「テストの変更の運用」の成否の変更に、単体テストの削除を含める (この文書は、機能ごと消す単体テストの削除を成否の変更として挙げる)。`eml_test_support` の関数の一覧に `run_stats` を足し、`core*` が `Program` を返すことにする。ヒープの単体テストの行に、不死の物体、その場の連結、連鎖の付け替えを足す。性能のテストの節に、回数を比べるテストが `#[ignore]` なしでふだんのテストに入ることを書く
+- `CLAUDE.md`: テストの変更の種類の (1) に単体テストの削除を含める。`Send + Sync` の文を `Session` だけにし、理由をフロントエンドの側に直す。`eml_test_support` の説明で、`core*` が `Program` を返すことと `run_stats` を足す
 - コードのコメント: `eml_core_ir/src/lib.rs` の `Arc<Program>` と `ConstString` (「実行のたびに新しい文字列をヒープに作る」)、`eml_interp/src/error.rs` の「記述子の名前ごとの数」、`eml_interp/src/lib.rs` の `RunConfig`、`eml_runtime` の `heap.rs`、`file.rs`、`output.rs`
 
 段の終わりに1回で直すもの。
 
-- `docs/implementation/architecture.md`: 「継続のフレーム」(連鎖、`Mask` の `outer`、`perform` のたどり方、連鎖の検査)、`eml_interp::run` と `eml_cli::execute` のシグネチャ、`Arc<Program>` の規約、実行の API で将来足すものへのリンク
+- `docs/implementation/architecture.md`: 「継続のフレーム」(連鎖、`Mask` の `outer`、`perform` のたどり方、連鎖の検査)、`eml_interp::run` と `eml_cli::execute` のシグネチャ、`Arc<Program>` の規約、実行の API で将来足すものへのリンク、`Session` が `Send + Sync` である理由 (フロントエンドの側)
 - `docs/implementation/status.md`: 「深さと性能」に、この文書の「対象外」にある2つの限界 (各段で別のエフェクトの handler を設ける再帰と、先頭に足す連結) を書く
 - `docs/future/roadmap.md`: S3b-1 の節を削除する
 
