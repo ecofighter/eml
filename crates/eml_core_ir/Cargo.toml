@@ -10,6 +10,7 @@ autotests = false
 doctest = false
 
 [dependencies]
+eml_diagnostics.workspace = true
 eml_extern.workspace = true
 eml_hir.workspace = true
 eml_types.workspace = true

@@ -9,12 +9,15 @@ use crate::{Atom, Call, CasePattern, EffectInfo, FnIdx, VarId};
 mod contract;
 pub mod liveness;
 mod perceus;
+mod pipeline;
 mod pretty;
 mod text;
+mod translate;
 mod verify;
 
 pub use contract::{contract, tail_call};
 pub use perceus::perceus;
+pub use pipeline::{Pass, lower, lower_until};
 pub use pretty::{pretty, pretty_with_positions};
 pub use text::{ParseError, parse};
 pub use verify::{VerifyError, verify, verify_scopes};
