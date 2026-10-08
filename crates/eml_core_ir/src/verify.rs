@@ -1,8 +1,13 @@
 //! Core IR の不変条件の検査 (docs/spec/core-ir.md)。ブロックの列の形 (R1〜R4)、変数の定義と支配 (R5、R6)、
-//! `jump` と `unpack` と `return` の Repr と extern の引数と結果の Repr (R8) と、引き継いだ検査 (`mask` の順、
-//! `handle` の節の数、再開できるかどうか、直接呼び出しと extern の引数の数、型で選ぶ extern、case の種類) を確かめる
-//! (`verify_scopes`)。Perceus の後は、RC の対象の所有の多重集合と、呼び出しの後に見える変数 (R6、R7) も確かめる
-//! (`verify`)。`switch` と `unpack` のフィールドは値から借りて始まり、自分か持ち主が所有を持つ間だけ有効である。
+//! `jump` と `unpack` と `return` の Repr と extern の引数と結果の Repr (R8)、データの配置 (R9) と、引き継いだ検査
+//! (`mask` の順、`handle` の節の数、再開できるかどうか、直接呼び出しと extern の引数の数、型で選ぶ extern、case の
+//! 種類) を確かめる (`verify_scopes`)。Perceus の後は、RC の対象の所有の多重集合と、呼び出しの後に見える変数
+//! (R6、R7) も確かめる (`verify`)。`switch` と `unpack` のフィールドは値から借りて始まり、自分か持ち主が所有を持つ
+//! 間だけ有効である。
+//!
+//! R9 は、`con`、タグの `switch`、`unpack`、`release` を、その命令が指す配置と比べる。値がどの配置で作られたかは
+//! 追わない。それを保証するのは translate の型なので、配置の違う値を読む IR もこの検査を通りうる
+//! (docs/spec/core-ir.md の「データの配置」)。
 //!
 //! 辺の検査、支配木、本体の検査は、それぞれブロックを番号の順に1回たどるだけで、反復も生存解析も使わない。辺は
 //! 前向きなので、ブロックに着いたときには入る辺がすべて出そろっている。支配木は辺1本につき深さの対数の手間で
@@ -14,8 +19,8 @@ use std::fmt;
 use std::mem::discriminant;
 
 use crate::{
-    Atom, Block, BlockId, Call, Case, CasePattern, CoreFn, EffectInfo, FnIdx, Program, Repr, Rhs,
-    Stmt, Term, VarId,
+    Atom, Block, BlockId, Call, Case, CasePattern, CoreFn, Ctor, EffectInfo, FnIdx, Layout,
+    LayoutCtor, LayoutId, Program, Repr, Rhs, Stmt, Term, VarId,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -51,9 +56,13 @@ enum Level {
 }
 
 fn verify_at(program: &Program, level: Level) -> Result<(), VerifyError> {
+    // 配置の Repr はコンストラクタをすべてたどって決まるので、命令ごとでなく表ごとに1回だけ求める
+    let layout_reprs: Vec<Repr> = program.layouts.iter().map(Layout::repr).collect();
     for function in &program.functions {
         shape(function)
-            .and_then(|dominators| Checker::new(program, function, level, dominators).run())
+            .and_then(|dominators| {
+                Checker::new(program, &layout_reprs, function, level, dominators).run()
+            })
             .map_err(|message| VerifyError {
                 function: function.name.clone(),
                 message,
@@ -259,12 +268,12 @@ impl GrowingTree {
     }
 }
 
-/// フィールドの出どころ。分解した値、タグ、フィールドの数、位置である。`release` が名前を書いた変数を確かめるのに使う。
+/// フィールドの出どころ。分解した値、コンストラクタ、位置である。`release` が名前を書いた変数を確かめるのに使う。
+/// フィールドの数は、分解と `release` のどちらも配置で確かめるので持たない (R9)。
 #[derive(Clone, Copy, PartialEq, Eq)]
 struct Origin {
     value: VarId,
-    tag: u32,
-    arity: usize,
+    ctor: Ctor,
     slot: usize,
 }
 
@@ -290,6 +299,8 @@ struct Entry {
 /// 変数であるときだけである (R7)。Perceus より前は呼び出しで区切らないので、区間は 0 だけである。
 struct Checker<'a> {
     program: &'a Program,
+    /// `program.layouts` と同じ順の、配置の Repr。
+    layout_reprs: &'a [Repr],
     function: &'a CoreFn,
     level: Level,
     dominators: Dominators,
@@ -312,12 +323,14 @@ struct Checker<'a> {
 impl<'a> Checker<'a> {
     fn new(
         program: &'a Program,
+        layout_reprs: &'a [Repr],
         function: &'a CoreFn,
         level: Level,
         dominators: Dominators,
     ) -> Self {
         Checker {
             program,
+            layout_reprs,
             function,
             level,
             dominators,
@@ -450,14 +463,37 @@ impl<'a> Checker<'a> {
                         repr.name()
                     ));
                 }
-                if fields.is_empty() {
+                let (layout, constructor) = self.ctor(*ctor, "an unpack")?;
+                let layout_repr = self.layout_repr(ctor.layout);
+                if layout_repr != Repr::Obj {
                     return Err(format!(
-                        "an unpack of `{}` binds no fields",
-                        self.name(*value)
+                        "`{}` (obj) is unpacked as `{}`, which is {}",
+                        self.name(*value),
+                        layout.name,
+                        layout_repr.name()
                     ));
                 }
+                if layout.constructors.len() != 1 {
+                    return Err(format!(
+                        "an unpack of `{}` names `{}`, which has {} constructors",
+                        self.name(*value),
+                        layout.name,
+                        layout.constructors.len()
+                    ));
+                }
+                if fields.len() != constructor.fields.len() {
+                    return Err(format!(
+                        "an unpack of `{}` as `{}` #{} has {} fields, but the constructor has {}",
+                        self.name(*value),
+                        layout.name,
+                        ctor.tag,
+                        fields.len(),
+                        constructor.fields.len()
+                    ));
+                }
+                self.field_reprs(layout, ctor.tag, constructor, fields)?;
                 self.read(owned, *value, "unpacked")?;
-                self.bind_fields(owned, *value, ctor.tag, fields, self.at)
+                self.bind_fields(owned, *value, *ctor, fields, self.at)
             }
             Stmt::Dup(var) => {
                 self.rc_allowed(*var, "duplicated")?;
@@ -481,7 +517,7 @@ impl<'a> Checker<'a> {
                 fields,
             } => {
                 self.rc_allowed(*value, "released with its fields")?;
-                self.release(owned, *value, ctor.tag, fields)
+                self.release(owned, *value, *ctor, fields)
             }
         }
     }
@@ -520,7 +556,7 @@ impl<'a> Checker<'a> {
             }
             Term::Switch {
                 scrutinee,
-                layout: _,
+                layout,
                 cases,
                 default,
             } => {
@@ -532,6 +568,7 @@ impl<'a> Checker<'a> {
                 if cases.iter().any(|case| !case.fields.is_empty()) {
                     self.fields_allowed(*scrutinee)?;
                 }
+                self.switch_layout(*scrutinee, *layout, cases, *default)?;
                 // `switch` は scrutinee を読むだけなので、どの行き先も scrutinee の所有を引き継ぐ
                 match *scrutinee {
                     Atom::Var(var) => self.read(&owned, var, "switched on")?,
@@ -544,8 +581,12 @@ impl<'a> Checker<'a> {
                         block: case.target.0,
                         index: -1,
                     };
-                    if let (Atom::Var(value), CasePattern::Tag(tag)) = (*scrutinee, case.pattern) {
-                        self.bind_fields(&mut entry, value, tag, &case.fields, site)?;
+                    // 配置とタグは `switch_layout` が確かめた
+                    if let (Atom::Var(value), Some(layout), CasePattern::Tag(tag)) =
+                        (*scrutinee, *layout, case.pattern)
+                    {
+                        let ctor = Ctor { layout, tag };
+                        self.bind_fields(&mut entry, value, ctor, &case.fields, site)?;
                     }
                     self.pending.insert(
                         case.target.0,
@@ -637,6 +678,156 @@ impl<'a> Checker<'a> {
             Atom::Tag(_) => matches!(expected, Repr::Enum | Repr::TObj),
             Atom::Fn(_) => expected == Repr::TObj,
         }
+    }
+
+    /// 配置の番号を表で引く。`what` は誤りの文の主語 (`a con`) である。
+    fn layout(&self, id: LayoutId, what: &str) -> Result<&'a Layout, String> {
+        self.program
+            .layout(id)
+            .ok_or_else(|| format!("{what} refers to the unknown layout #{}", id.0))
+    }
+
+    /// 表にあると確かめた配置の Repr。
+    fn layout_repr(&self, id: LayoutId) -> Repr {
+        self.layout_reprs[id.0 as usize]
+    }
+
+    /// `con`、`unpack`、`release` のコンストラクタを配置の表で引く (R9)。
+    fn ctor(&self, ctor: Ctor, what: &str) -> Result<(&'a Layout, &'a LayoutCtor), String> {
+        let layout = self.layout(ctor.layout, what)?;
+        match layout.constructors.get(ctor.tag as usize) {
+            Some(constructor) => Ok((layout, constructor)),
+            None => Err(format!(
+                "{what} names #{}, but `{}` has {} constructors",
+                ctor.tag,
+                layout.name,
+                layout.constructors.len()
+            )),
+        }
+    }
+
+    /// case と `unpack` のフィールドは、宣言した Repr が `tobj` でなければ、その Repr の変数である (R9)。`tobj` の
+    /// フィールドには `obj` の変数も束縛できるので、S3b-2c-2 で `box` と `unbox` と一緒に確かめる。
+    fn field_reprs(
+        &self,
+        layout: &Layout,
+        tag: u32,
+        constructor: &LayoutCtor,
+        fields: &[VarId],
+    ) -> Result<(), String> {
+        for (slot, (&field, &declared)) in fields.iter().zip(&constructor.fields).enumerate() {
+            let repr = self.function.repr(field);
+            if declared != Repr::TObj && repr != declared {
+                return Err(format!(
+                    "field {slot} of `{}` #{tag} is `{}` ({}), but the layout has {}",
+                    layout.name,
+                    self.name(field),
+                    repr.name(),
+                    declared.name()
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    /// `switch` の配置と scrutinee (R9)。タグの case を持つ `switch` だけが配置を持ち、その scrutinee は、Repr が
+    /// 配置の Repr と同じ変数である。case はコンストラクタのフィールドをすべて束縛し、`default` がなければ、どの
+    /// コンストラクタにも case がある。リテラルの `switch` の scrutinee は、そのリテラルの型の Repr に収まる。
+    fn switch_layout(
+        &self,
+        scrutinee: Atom,
+        layout: Option<LayoutId>,
+        cases: &[Case],
+        default: Option<BlockId>,
+    ) -> Result<(), String> {
+        let first = cases.first().map(|case| case.pattern);
+        let (layout, layout_repr) = match (layout, first) {
+            (Some(id), Some(CasePattern::Tag(_))) => {
+                (self.layout(id, "a switch")?, self.layout_repr(id))
+            }
+            (Some(id), _) => {
+                return Err(format!(
+                    "a switch without tag cases has the layout `{}`",
+                    self.layout(id, "a switch")?.name
+                ));
+            }
+            (None, Some(CasePattern::Tag(_))) => {
+                return Err("a switch with tag cases has no layout".to_string());
+            }
+            (None, Some(CasePattern::Int(_))) => {
+                return self.literal_scrutinee(scrutinee, Repr::Int, "Int");
+            }
+            (None, Some(CasePattern::String(_))) => {
+                return self.literal_scrutinee(scrutinee, Repr::Obj, "String");
+            }
+            // case のない `switch` は `default` へ進むだけで、値を比べない
+            (None, None) => return Ok(()),
+        };
+        let Atom::Var(var) = scrutinee else {
+            return Err(format!(
+                "a switch on `{}` has the constant {} as its scrutinee",
+                layout.name,
+                self.atom_text(scrutinee)
+            ));
+        };
+        let repr = self.function.repr(var);
+        if repr != layout_repr {
+            return Err(format!(
+                "`{}` ({}) is switched on as `{}`, which is {}",
+                self.name(var),
+                repr.name(),
+                layout.name,
+                layout_repr.name()
+            ));
+        }
+        for case in cases {
+            let CasePattern::Tag(tag) = case.pattern else {
+                unreachable!("`switch_cases` gives one switch one kind of cases")
+            };
+            let Some(constructor) = layout.constructors.get(tag as usize) else {
+                return Err(format!(
+                    "a case names #{tag}, but `{}` has {} constructors",
+                    layout.name,
+                    layout.constructors.len()
+                ));
+            };
+            if case.fields.len() != constructor.fields.len() {
+                return Err(format!(
+                    "a case of `{}` #{tag} has {} fields, but the constructor has {}",
+                    layout.name,
+                    case.fields.len(),
+                    constructor.fields.len()
+                ));
+            }
+            self.field_reprs(layout, tag, constructor, &case.fields)?;
+        }
+        // 網羅は `default` のないときだけ見る。通る IR ではそのとき case がコンストラクタの数だけあるので、表の大きさは
+        // case の数を超えない
+        if default.is_none() {
+            let mut covered = vec![false; layout.constructors.len()];
+            for case in cases {
+                if let CasePattern::Tag(tag) = case.pattern {
+                    covered[tag as usize] = true;
+                }
+            }
+            if let Some(missing) = covered.iter().position(|&covered| !covered) {
+                return Err(format!(
+                    "a switch on `{}` has no default and no case for #{missing}",
+                    layout.name
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    fn literal_scrutinee(&self, scrutinee: Atom, repr: Repr, kind: &str) -> Result<(), String> {
+        if self.fits(scrutinee, repr) {
+            return Ok(());
+        }
+        Err(format!(
+            "{} is switched on {kind} literals",
+            self.typed_atom_text(scrutinee)
+        ))
     }
 
     /// 1つの `switch` の case の種類がそろい、同じ case が2回なく、リテラルの case はフィールドを持たず、文字列の case
@@ -827,7 +1018,7 @@ impl<'a> Checker<'a> {
         &mut self,
         owned: &mut Owned,
         value: VarId,
-        tag: u32,
+        ctor: Ctor,
         fields: &[VarId],
         site: Site,
     ) -> Result<(), String> {
@@ -840,12 +1031,7 @@ impl<'a> Checker<'a> {
             self.define(owned, field, site)?;
             owned.remove(&field);
             self.owners[field.0 as usize] = owner;
-            self.origins[field.0 as usize] = Some(Origin {
-                value,
-                tag,
-                arity: fields.len(),
-                slot,
-            });
+            self.origins[field.0 as usize] = Some(Origin { value, ctor, slot });
         }
         Ok(())
     }
@@ -861,18 +1047,30 @@ impl<'a> Checker<'a> {
     }
 
     /// `release x L #t(p1, .., pn)`。x の参照を1つ手放し、名前を書いた変数が参照を1つずつ受け取る。名前を書いた変数は、
-    /// x を同じタグとフィールドの数で分解したときの、同じ位置のフィールドである (docs/spec/core-ir.md)。
+    /// x を同じ配置とタグで分解したときの、同じ位置のフィールドである (docs/spec/core-ir.md)。
     fn release(
         &self,
         owned: &mut Owned,
         value: VarId,
-        tag: u32,
+        ctor: Ctor,
         fields: &[Option<VarId>],
     ) -> Result<(), String> {
         if fields.iter().all(Option::is_none) {
             return Err(format!(
                 "a release of `{}` keeps no field",
                 self.name(value)
+            ));
+        }
+        // 数を先に配置で確かめるので、出どころは数を比べない
+        let (layout, constructor) = self.ctor(ctor, "a release")?;
+        if fields.len() != constructor.fields.len() {
+            return Err(format!(
+                "a release of `{}` as `{}` #{} has {} fields, but the constructor has {}",
+                self.name(value),
+                layout.name,
+                ctor.tag,
+                fields.len(),
+                constructor.fields.len()
             ));
         }
         for (slot, field) in fields.iter().enumerate() {
@@ -884,17 +1082,13 @@ impl<'a> Checker<'a> {
                     self.name(field)
                 ));
             }
-            let origin = Origin {
-                value,
-                tag,
-                arity: fields.len(),
-                slot,
-            };
-            if self.origins[field.0 as usize] != Some(origin) {
+            if self.origins[field.0 as usize] != Some(Origin { value, ctor, slot }) {
                 return Err(format!(
-                    "`{}` is not field {slot} of `{}` #{tag}",
+                    "`{}` is not field {slot} of `{}` as `{}` #{}",
                     self.name(field),
-                    self.name(value)
+                    self.name(value),
+                    layout.name,
+                    ctor.tag
                 ));
             }
         }
@@ -1024,9 +1218,48 @@ impl<'a> Checker<'a> {
                         .to_string(),
                 );
             }
-            Rhs::Con { ctor: _, args: _ } | Rhs::Drop(_) => {}
+            Rhs::Con { ctor, args } => self.check_con(var, *ctor, args)?,
+            Rhs::Drop(_) => {}
         }
         self.consume_all(owned, |f| rhs.for_each_atom(f))
+    }
+
+    /// `con` のフィールドの数は、コンストラクタと同じである。束縛する変数の Repr は配置の Repr と同じで、宣言した
+    /// Repr が `tobj` でないフィールドの値はその Repr に収まる (R9)。
+    fn check_con(&self, var: VarId, ctor: Ctor, args: &[Atom]) -> Result<(), String> {
+        let (layout, constructor) = self.ctor(ctor, "a con")?;
+        if args.len() != constructor.fields.len() {
+            return Err(format!(
+                "a con of `{}` #{} has {} fields, but the constructor has {}",
+                layout.name,
+                ctor.tag,
+                args.len(),
+                constructor.fields.len()
+            ));
+        }
+        let repr = self.function.repr(var);
+        let layout_repr = self.layout_repr(ctor.layout);
+        if repr != layout_repr {
+            return Err(format!(
+                "`{}` ({}) is bound to a con of `{}`, which is {}",
+                self.name(var),
+                repr.name(),
+                layout.name,
+                layout_repr.name()
+            ));
+        }
+        for (index, (&arg, &declared)) in args.iter().zip(&constructor.fields).enumerate() {
+            if declared != Repr::TObj && !self.fits(arg, declared) {
+                return Err(format!(
+                    "argument {index} of a con of `{}` #{} is {}, but the layout has {}",
+                    layout.name,
+                    ctor.tag,
+                    self.typed_atom_text(arg),
+                    declared.name()
+                ));
+            }
+        }
+        Ok(())
     }
 
     fn check_call(&self, owned: &mut Owned, call: &Call) -> Result<(), String> {

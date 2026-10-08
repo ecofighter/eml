@@ -43,7 +43,7 @@ impl Program {
         &self.functions[idx.0 as usize]
     }
 
-    /// 表にない番号なら `None` である。誤りを含む IR も表示できるようにする。
+    /// 表にない番号なら `None` である。誤りを含む IR を表示でき、verifier がその番号を誤りとして報告できるようにする。
     pub fn layout(&self, id: LayoutId) -> Option<&Layout> {
         self.layouts.get(id.0 as usize)
     }

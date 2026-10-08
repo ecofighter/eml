@@ -56,6 +56,39 @@ b2:
     );
 }
 
+#[test]
+fn a_value_read_with_another_layout_passes_the_verifier_and_faults() {
+    // verifier は命令をその命令が指す配置と比べるだけで、値を作った配置を追わない (docs/spec/core-ir.md の
+    // 「データの配置」)。`Option` で作った値を `List` として分解する IR は verifier を通り、機械の見張りで止まる
+    let text = "\
+layout List { Nil, Cons(tobj, tobj) }
+layout Option { None, Some(tobj) }
+fn main() -> unit {
+  let s.0: obj = const \"field\"
+  let d.1: tobj = con Option #1(s.0)
+  switch d.1 List { #0 -> b1, #1(x.2: obj, y.3: obj) -> b2 }
+b1:
+  decref d.1
+  return ()
+b2:
+  release d.1 List #1(x.2, y.3)
+  decref x.2
+  decref y.3
+  return ()
+}
+";
+    assert_eq!(
+        run_core(text).1,
+        Err(RuntimeError::Fault {
+            fault: Fault::Internal(
+                "a switch case binds a different number of fields than the value has"
+            ),
+            function: "main".to_string(),
+            at: None,
+        })
+    );
+}
+
 /// 文字列のリテラルの case に一致する値と、`default` に進む値。`Switch` は文字列を読むだけで、どの行き先も文字列を
 /// 1回だけ手放す。
 const STRING_SWITCH: &str = "\
@@ -152,8 +185,10 @@ fn an_unpack_reads_the_fields_without_taking_the_box() {
     );
 }
 
-/// `#1` の箱を `unpack` の文で分解する。verifier はコンストラクタの定義を知らないので、タグとフィールドの数の違いは
-/// 実行して初めて分かり、インタプリタの内部の誤りになる。分解した値を手放さないので、verifier を通さない。
+/// `#1` の箱を `unpack` の文で分解する。タグとフィールドの数の違いは実行して初めて分かり、インタプリタの内部の
+/// 誤りになる。verifier は値を作った配置を追わないので、この誤りは verifier を通った IR でも起きうる
+/// (`a_value_read_with_another_layout_passes_the_verifier_and_faults`)。ここの IR は `tobj` の配置の値を `obj` に
+/// 束縛して `unpack` するので verifier が拒み、通さずに実行する。
 fn unpack_of_tag_one(unpack: &str) -> Result<(), RuntimeError> {
     let text = format!(
         "\
@@ -301,8 +336,8 @@ fn main() -> unit {
     assert_eq!(run_core(text), ("77\n".to_string(), Ok(())));
 }
 
-/// `#1` の箱を `release` で手放す。タグとフィールドの数の違いは、`unpack` と同じく実行して初めて分かる。どの形も
-/// verifier が拒むので、通さずに実行する。
+/// `#1` の箱を `release` で手放す。タグとフィールドの数の違いは、`unpack` と同じく実行して初めて分かり、verifier
+/// を通った IR でも起きうる。ここの形はどれも verifier が拒むので、通さずに実行する。
 fn release_of_tag_one(release: &str) -> Result<(), RuntimeError> {
     let text = format!(
         "\

@@ -1,5 +1,5 @@
 //! Core IR のテキストで書いた IR で、verifier が正しいものを受け入れ、壊れたものを拒むことを確かめる (docs/spec/core-ir.md)。
-//! 構造の規則 R1 から R8 と、前の形の IR から引き継いだ検査を1つずつ確かめる。
+//! 構造の規則 R1 から R9 と、前の形の IR から引き継いだ検査を1つずつ確かめる。
 
 use eml_core_ir::{Program, Stmt, Term, parse, verify, verify_scopes};
 
@@ -666,7 +666,10 @@ fn an_unpack_without_fields_is_rejected() {
     let text = "layout Box { Box(tobj) }\nfn f(p.0: obj) -> unit {\n  unpack p.0 Box #0()\n  return ()\n}\n";
     assert_eq!(
         check_scopes(text),
-        Err("an unpack of `p.0` binds no fields in `f`".to_string())
+        Err(
+            "an unpack of `p.0` as `Box` #0 has 0 fields, but the constructor has 1 in `f`"
+                .to_string()
+        )
     );
 }
 
@@ -728,6 +731,273 @@ fn an_extern_takes_constants_that_fit_its_row() {
     // 引数のないコンストラクタは `enum` の引数に収まる
     let text =
         "fn f() -> enum {\n  let c.0: enum = extern Prelude.bool_eq(#1, #0)\n  return c.0\n}\n";
+    assert_eq!(check_scopes(text), Ok(()));
+    assert_eq!(check(text), Ok(()));
+}
+
+// R9: データの配置
+
+/// どちらの段でも同じ誤りになることを確かめ、文言から末尾の `` in `f` `` を除いて返す。
+fn layout_error(text: &str) -> String {
+    let error = rejected_at_both_levels(text);
+    error
+        .strip_suffix(" in `f`")
+        .unwrap_or_else(|| panic!("{error}"))
+        .to_string()
+}
+
+/// 終端が `switch` だけの関数 `f`。行き先 b1, b2, .. は、それぞれの番号を返す。`head` は先頭の配置の行である。
+fn switching(head: &str, params: &str, switch: &str) -> String {
+    let targets = switch.matches("-> b").count();
+    let blocks: String = (1..=targets)
+        .map(|block| format!("b{block}:\n  return {block}\n"))
+        .collect();
+    format!("{head}fn f({params}) -> int {{\n  {switch}\n{blocks}}}\n")
+}
+
+#[test]
+fn every_layout_reference_is_in_the_table() {
+    let con = "fn f(x.0: tobj) -> obj {\n  let d.1: obj = con #3 #0(x.0)\n  return d.1\n}\n";
+    assert_eq!(layout_error(con), "a con refers to the unknown layout #3");
+    let switch = switching("", "d.0: tobj", "switch d.0 #3 { #0 -> b1, _ -> b2 }");
+    assert_eq!(
+        layout_error(&switch),
+        "a switch refers to the unknown layout #3"
+    );
+    let unpack = "fn f(p.0: obj) -> int {\n  unpack p.0 #3 #0(x.1: tobj)\n  return 0\n}\n";
+    assert_eq!(
+        layout_error(unpack),
+        "an unpack refers to the unknown layout #3"
+    );
+    let release = "\
+layout Box { Box(tobj) }
+fn f(p.0: obj) -> obj {
+  unpack p.0 Box #0(x.1: obj)
+  release p.0 #3 #0(x.1)
+  return x.1
+}
+";
+    assert_eq!(
+        check(release),
+        Err("a release refers to the unknown layout #3 in `f`".to_string())
+    );
+}
+
+#[test]
+fn only_a_switch_with_tag_cases_has_a_layout() {
+    let tags = switching("", "c.0: enum", "switch c.0 { #0 -> b1, #1 -> b2 }");
+    assert_eq!(layout_error(&tags), "a switch with tag cases has no layout");
+    let message = "a switch without tag cases has the layout `Prelude.Bool`";
+    let literals = switching(
+        BOOL,
+        "n.0: int",
+        "switch n.0 Prelude.Bool { 1 -> b1, _ -> b2 }",
+    );
+    assert_eq!(layout_error(&literals), message);
+    // `default` だけの `switch` は値を比べないので、配置を持たない
+    let default = switching(BOOL, "c.0: enum", "switch c.0 Prelude.Bool { _ -> b1 }");
+    assert_eq!(layout_error(&default), message);
+    let default = switching("", "c.0: enum", "switch c.0 { _ -> b1 }");
+    assert_eq!(check_scopes(&default), Ok(()));
+    assert_eq!(check(&default), Ok(()));
+}
+
+#[test]
+fn tags_are_in_the_range_of_their_layout() {
+    let con = format!(
+        "{BOOL}fn f(x.0: tobj) -> obj {{\n  let d.1: obj = con Prelude.Bool #2(x.0)\n  return d.1\n}}\n"
+    );
+    assert_eq!(
+        layout_error(&con),
+        "a con names #2, but `Prelude.Bool` has 2 constructors"
+    );
+    let case = switching(
+        BOOL,
+        "c.0: enum",
+        "switch c.0 Prelude.Bool { #0 -> b1, #2 -> b2, _ -> b3 }",
+    );
+    assert_eq!(
+        layout_error(&case),
+        "a case names #2, but `Prelude.Bool` has 2 constructors"
+    );
+    let unpack =
+        format!("{BOX}fn f(p.0: obj) -> int {{\n  unpack p.0 Box #1(x.1: tobj)\n  return 0\n}}\n");
+    assert_eq!(
+        layout_error(&unpack),
+        "an unpack names #1, but `Box` has 1 constructors"
+    );
+}
+
+/// フィールドの Repr が `tobj` と `int` の配置。
+const PAIR_INT: &str = "layout Pair { Pair(tobj, int) }\n";
+
+#[test]
+fn every_instruction_has_the_fields_of_its_constructor() {
+    let con = format!(
+        "{OPTION}fn f(x.0: tobj) -> tobj {{\n  let d.1: tobj = con Option #1(x.0, x.0)\n  return d.1\n}}\n"
+    );
+    assert_eq!(
+        layout_error(&con),
+        "a con of `Option` #1 has 2 fields, but the constructor has 1"
+    );
+    let case = switching(
+        OPTION,
+        "d.0: tobj",
+        "switch d.0 Option { #0 -> b1, #1 -> b2 }",
+    );
+    assert_eq!(
+        layout_error(&case),
+        "a case of `Option` #1 has 0 fields, but the constructor has 1"
+    );
+    let unpack = format!(
+        "{PAIR_INT}fn f(p.0: obj) -> int {{\n  unpack p.0 Pair #0(a.1: tobj)\n  return 0\n}}\n"
+    );
+    assert_eq!(
+        layout_error(&unpack),
+        "an unpack of `p.0` as `Pair` #0 has 1 fields, but the constructor has 2"
+    );
+    let release = "\
+layout Option { None, Some(tobj) }
+fn f(d.0: tobj) -> obj {
+  switch d.0 Option { #0 -> b1, #1(x.1: obj) -> b2 }
+b1:
+  decref d.0
+  let e.2: obj = const \"e\"
+  return e.2
+b2:
+  release d.0 Option #1(x.1, _)
+  return x.1
+}
+";
+    assert_eq!(
+        check(release),
+        Err(
+            "a release of `d.0` as `Option` #1 has 2 fields, but the constructor has 1 in `f`"
+                .to_string()
+        )
+    );
+}
+
+#[test]
+fn a_tag_switch_is_on_a_variable_with_the_repr_of_its_layout() {
+    let repr = switching(
+        BOOL,
+        "c.1: int",
+        "switch c.1 Prelude.Bool { #0 -> b1, #1 -> b2 }",
+    );
+    assert_eq!(
+        layout_error(&repr),
+        "`c.1` (int) is switched on as `Prelude.Bool`, which is enum"
+    );
+    let constant = switching(OPTION, "", "switch #1 Option { #0 -> b1, _ -> b2 }");
+    assert_eq!(
+        layout_error(&constant),
+        "a switch on `Option` has the constant #1 as its scrutinee"
+    );
+}
+
+#[test]
+fn a_tag_switch_without_a_default_has_a_case_for_every_constructor() {
+    let text = switching(
+        OPTION,
+        "d.0: tobj",
+        "switch d.0 Option { #1(x.1: obj) -> b1 }",
+    );
+    assert_eq!(
+        layout_error(&text),
+        "a switch on `Option` has no default and no case for #0"
+    );
+}
+
+#[test]
+fn a_literal_switch_is_on_the_repr_of_its_literals() {
+    let cases = [
+        (
+            "s.0: obj",
+            "switch s.0 { 1 -> b1, _ -> b2 }",
+            "`s.0` (obj) is switched on Int literals",
+        ),
+        (
+            "n.0: int",
+            "switch n.0 { \"a\" -> b1, _ -> b2 }",
+            "`n.0` (int) is switched on String literals",
+        ),
+        (
+            "",
+            "switch () { 1 -> b1, _ -> b2 }",
+            "() is switched on Int literals",
+        ),
+    ];
+    for (params, switch, message) in cases {
+        assert_eq!(layout_error(&switching("", params, switch)), message);
+    }
+}
+
+#[test]
+fn an_unpack_names_a_layout_with_one_constructor_with_fields() {
+    let enumeration =
+        "layout U { U }\nfn f(p.0: obj) -> int {\n  unpack p.0 U #0(x.1: tobj)\n  return 0\n}\n";
+    assert_eq!(
+        layout_error(enumeration),
+        "`p.0` (obj) is unpacked as `U`, which is enum"
+    );
+    let shape = "\
+layout Shape { Dot(int), Box(int, int) }
+fn f(s.0: obj) -> int {
+  unpack s.0 Shape #0(n.1: int)
+  return n.1
+}
+";
+    assert_eq!(
+        layout_error(shape),
+        "an unpack of `s.0` names `Shape`, which has 2 constructors"
+    );
+}
+
+#[test]
+fn a_con_binds_the_repr_of_its_layout() {
+    let text = format!(
+        "{OPTION}fn f(x.0: tobj) -> obj {{\n  let d.1: obj = con Option #1(x.0)\n  return d.1\n}}\n"
+    );
+    assert_eq!(
+        layout_error(&text),
+        "`d.1` (obj) is bound to a con of `Option`, which is tobj"
+    );
+}
+
+#[test]
+fn a_field_that_is_not_tobj_has_its_declared_repr() {
+    let message = "field 1 of `Pair` #0 is `n.2` (obj), but the layout has int";
+    let unpack = format!(
+        "{PAIR_INT}fn f(p.0: obj) -> int {{\n  unpack p.0 Pair #0(a.1: tobj, n.2: obj)\n  return 0\n}}\n"
+    );
+    assert_eq!(layout_error(&unpack), message);
+    let case = switching(
+        PAIR_INT,
+        "p.0: obj",
+        "switch p.0 Pair { #0(a.1: tobj, n.2: obj) -> b1 }",
+    );
+    assert_eq!(layout_error(&case), message);
+    let con = format!(
+        "{PAIR_INT}fn f(x.0: tobj) -> obj {{\n  let p.1: obj = con Pair #0(x.0, ())\n  return p.1\n}}\n"
+    );
+    assert_eq!(
+        layout_error(&con),
+        "argument 1 of a con of `Pair` #0 is (), but the layout has int"
+    );
+}
+
+#[test]
+fn a_tobj_field_takes_an_obj_variable() {
+    // `obj` の値は変換なしで `tobj` のフィールドに置け、`tobj` のフィールドは `obj` の変数に束縛できる
+    let text = "\
+layout Pair { Pair(tobj, int) }
+fn f(s.0: obj) -> obj {
+  let p.1: obj = con Pair #0(s.0, 1)
+  unpack p.1 Pair #0(t.2: obj, n.3: int)
+  return p.1
+}
+";
     assert_eq!(check_scopes(text), Ok(()));
     assert_eq!(check(text), Ok(()));
 }
@@ -846,9 +1116,9 @@ fn a_field_consumed_after_its_owner_is_given_up_was_moved() {
 
 #[test]
 fn a_release_keeps_only_the_fields_of_its_value() {
-    let not_field = |field: &str, slot: usize, value: &str, tag: u32| {
+    let not_field = |field: &str, slot: usize, value: &str, layout: &str, tag: u32| {
         Err(format!(
-            "`{field}` is not field {slot} of `{value}` #{tag} in `f`"
+            "`{field}` is not field {slot} of `{value}` as `{layout}` #{tag} in `f`"
         ))
     };
     // 孫は `xs` のフィールドではない
@@ -861,21 +1131,25 @@ fn f(xs.0: obj) -> obj {
   return z.2
 }
 ";
-    assert_eq!(check(grandchild), not_field("z.2", 0, "xs.0", 0));
+    assert_eq!(check(grandchild), not_field("z.2", 0, "xs.0", "Box", 0));
     // 2回目の `unpack` の位置 0 のフィールドを、位置 1 に書く
     assert_eq!(
         check(&unpacking(
             "  unpack p.0 (,) #0(c.3: obj, d.4: tobj)\n  release p.0 (,) #0(a.1, c.3)\n  return a.1\n"
         )),
-        not_field("c.3", 1, "p.0", 0)
+        not_field("c.3", 1, "p.0", "(,)", 0)
     );
+    // 範囲の外のタグと違う数は、出どころを見る前に配置で拒む
     assert_eq!(
         check(&unpacking("  release p.0 (,) #1(a.1, _)\n  return a.1\n")),
-        not_field("a.1", 0, "p.0", 1)
+        Err("a release names #1, but `(,)` has 1 constructors in `f`".to_string())
     );
     assert_eq!(
         check(&unpacking("  release p.0 (,) #0(a.1)\n  return a.1\n")),
-        not_field("a.1", 0, "p.0", 0)
+        Err(
+            "a release of `p.0` as `(,)` #0 has 1 fields, but the constructor has 2 in `f`"
+                .to_string()
+        )
     );
     let other = "\
 layout Box { Box(tobj) }
@@ -887,7 +1161,32 @@ fn f(p.0: obj, q.1: obj) -> obj {
   return b.3
 }
 ";
-    assert_eq!(check(other), not_field("b.3", 0, "p.0", 0));
+    assert_eq!(check(other), not_field("b.3", 0, "p.0", "Box", 0));
+    // 同じタグと位置でも、ほかの配置で分解したフィールドではない
+    let layout = "\
+layout Box { Box(tobj) }
+layout Cell { Cell(tobj) }
+fn f(p.0: obj) -> obj {
+  unpack p.0 Box #0(a.1: obj)
+  release p.0 Cell #0(a.1)
+  return a.1
+}
+";
+    assert_eq!(check(layout), not_field("a.1", 0, "p.0", "Cell", 0));
+    // 同じ配置と位置でも、ほかのタグで分解したフィールドではない
+    let tag = "\
+layout Either { Left(tobj), Right(tobj) }
+fn f(d.0: obj) -> obj {
+  switch d.0 Either { #0(x.1: obj) -> b1, #1(y.2: obj) -> b2 }
+b1:
+  release d.0 Either #1(x.1)
+  return x.1
+b2:
+  release d.0 Either #1(y.2)
+  return y.2
+}
+";
+    assert_eq!(check(tag), not_field("x.1", 0, "d.0", "Either", 1));
 }
 
 #[test]
