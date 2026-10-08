@@ -93,6 +93,7 @@ fn main() {
                 "a switch case binds a different number of fields than the value has"
             ),
             function: "main".to_string(),
+            at: None,
         })
     );
 }

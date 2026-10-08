@@ -1,9 +1,9 @@
 use eml_runtime::{Attachment, Frame, ObjRef, Payload, Value};
 
 use crate::error::Fault;
-use crate::machine::{Machine, Step};
+use crate::runtime::{Runtime, Transfer};
 
-impl Machine<'_> {
+impl Runtime<'_> {
     /// handler の連鎖を先頭から `outer` でたどり、同じエフェクトの一番内側の handler フレームを探す。`Mask` フレームを
     /// 越えるたびに、その中の同じエフェクトの数だけ外側の handler を飛ばす。連鎖は handler と `Mask` のフレームだけで
     /// できていて、`Mask` は handler より多くならない (docs/spec/effects.md の「健全性」) ので、たどる数は handler の
@@ -61,7 +61,7 @@ impl Machine<'_> {
         op: u32,
         resumable: bool,
         mut args: Vec<Value>,
-    ) -> Result<Step, Fault> {
+    ) -> Result<Transfer, Fault> {
         let handler = self.find_handler(effect)?;
         let Payload::Frame(Frame::Handler { clauses, link, .. }) =
             self.heap.get_mut(handler).map_err(Fault::Heap)?
@@ -106,7 +106,12 @@ impl Machine<'_> {
     /// 一意なので、handler フレームを書き換えてよい。handler の連鎖は、handler フレームの `outer` を今の連鎖の先頭に
     /// し、先頭を区間の中の `inner` にしてつなぎ直す。`mask` 付きの `resume` では、その前に積んだ `Mask` フレームが
     /// 今の連鎖の先頭である (docs/implementation/architecture.md の「継続のフレーム」)。
-    pub(crate) fn resume(&mut self, k: Value, value: Value, state: Value) -> Result<Step, Fault> {
+    pub(crate) fn resume(
+        &mut self,
+        k: Value,
+        value: Value,
+        state: Value,
+    ) -> Result<Transfer, Fault> {
         let Value::Obj(obj) = k else {
             return Err(Fault::Internal(
                 "resuming a value that is not a continuation",

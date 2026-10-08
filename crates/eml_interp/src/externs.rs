@@ -5,9 +5,9 @@ use eml_extern::Extern;
 use eml_runtime::{FileHandle, ObjRef, Payload, Value};
 
 use crate::error::{Fault, io_reason};
-use crate::machine::Machine;
+use crate::runtime::Runtime;
 
-impl Machine<'_> {
+impl Runtime<'_> {
     /// extern の関数を実行する。既定の腕を置かないので、表に行を足して実装を忘れるとコンパイルが通らない。
     pub(crate) fn call_extern(&mut self, e: Extern, args: &[Value]) -> Result<Value, Fault> {
         let int = |index: usize| match args[index] {

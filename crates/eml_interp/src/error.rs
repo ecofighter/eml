@@ -5,10 +5,23 @@ use eml_runtime::HeapError;
 /// 実行時エラー (docs/spec/core-ir.md の「実行時エラー」)。表示は CLI と UI テストが使う文言である。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RuntimeError {
-    /// 実行中の関数で止まった。
-    Fault { fault: Fault, function: String },
+    /// 実行中の関数で止まった。`at` は、位置を持つ extern の呼び出しが起こした誤りにだけ付く。
+    Fault {
+        fault: Fault,
+        function: String,
+        at: Option<SourceLocation>,
+    },
     /// `debug_heap` で、終了時に解放されていないオブジェクトがあった。オブジェクトの種類の名前ごとの数。
     Leak(Vec<(String, usize)>),
+}
+
+/// 実行時エラーを起こしたソースの位置。`column` は1から数える文字の位置である。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SourceLocation {
+    /// 表示用のパス。
+    pub path: String,
+    pub line: u32,
+    pub column: u32,
 }
 
 /// 実行中の関数で起きた誤り。
@@ -52,7 +65,16 @@ impl fmt::Display for Fault {
 impl fmt::Display for RuntimeError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            RuntimeError::Fault { fault, function } => write!(f, "{fault} in `{function}`"),
+            RuntimeError::Fault {
+                fault,
+                function: _,
+                at: Some(at),
+            } => write!(f, "{fault}\n  at {}:{}:{}", at.path, at.line, at.column),
+            RuntimeError::Fault {
+                fault,
+                function,
+                at: None,
+            } => write!(f, "{fault} in `{function}`"),
             RuntimeError::Leak(live) => {
                 let parts: Vec<String> =
                     live.iter().map(|(name, n)| format!("{n} {name}")).collect();
@@ -97,6 +119,7 @@ mod tests {
             RuntimeError::Fault {
                 fault,
                 function: "f".to_string(),
+                at: None,
             }
             .to_string()
         };
@@ -114,6 +137,22 @@ mod tests {
             fault(Fault::Internal("a switch without a matching case")),
             "internal error: a switch without a matching case in `f`"
         );
+    }
+
+    #[test]
+    fn a_runtime_error_with_a_location_names_the_place_instead_of_the_function() {
+        // 位置があれば関数の名前を出さない。値として使う extern を包む関数の名前 (`main$extern0`) より、呼び出した場所の
+        // ほうが役に立つためである (docs/spec/core-ir.md の「実行時エラー」)
+        let error = RuntimeError::Fault {
+            fault: Fault::DivisionByZero,
+            function: "main$extern0".to_string(),
+            at: Some(SourceLocation {
+                path: "main.em".to_string(),
+                line: 2,
+                column: 20,
+            }),
+        };
+        assert_eq!(error.to_string(), "division by zero\n  at main.em:2:20");
     }
 
     #[test]

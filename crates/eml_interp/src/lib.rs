@@ -7,10 +7,13 @@ mod effects;
 mod error;
 mod externs;
 mod machine;
+mod runtime;
+pub mod v2;
 
-pub use error::{Fault, RuntimeError};
+pub use error::{Fault, RuntimeError, SourceLocation};
 
 use machine::Machine;
+use runtime::Runtime;
 
 /// フィールドを足しても呼び出し側を壊さないように、`non_exhaustive` にして `RunConfig::default()` から作らせる。
 #[derive(Debug, Clone, Default)]
@@ -53,11 +56,15 @@ pub fn run(
 ) -> Result<RunStats, RuntimeError> {
     let mut machine = Machine::new(program, out, &config.file_root);
     machine.run()?;
-    // 実行時エラーで止まった場合はリークを数えない。途中のフレームが残っているのは当然だから
+    finish(&machine.rt, config)
+}
+
+/// 正常に終わった実行の後始末。実行時エラーで止まった場合はリークを数えない。途中のフレームが残っているのは当然だから。
+fn finish(rt: &Runtime<'_>, config: &RunConfig) -> Result<RunStats, RuntimeError> {
     if config.debug_heap {
-        machine.check_leaks()?;
+        rt.check_leaks()?;
     }
-    Ok(machine.stats())
+    Ok(rt.stats())
 }
 
 #[cfg(test)]
