@@ -33,14 +33,31 @@ impl RunConfig {
     }
 }
 
-pub fn run(program: &Program, config: &RunConfig, out: &OutputSink) -> Result<(), RuntimeError> {
+/// 実行の仕事の回数。時間ではなく回数を比べて、実行の費用が入力の大きさに比例して伸びることをテストで確かめるために
+/// 数える (docs/spec/runtime.md の「実行の API」)。数えるものを後で足しても呼び出し側を壊さないよう、`non_exhaustive`
+/// にする。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct RunStats {
+    /// `perform` が handler を探すときに調べたフレームの数。
+    pub handler_visits: u64,
+    /// 文字列の物体の中身に書いたバイト数。`String` の容量の再確保と、出力への書き込みは数えない。
+    pub string_bytes_copied: u64,
+}
+
+/// 実行時エラーとリークのときは `RunStats` を返さない。回数を比べるテストは、正常に終わった実行だけを見る。
+pub fn run(
+    program: &Program,
+    config: &RunConfig,
+    out: &OutputSink,
+) -> Result<RunStats, RuntimeError> {
     let mut machine = Machine::new(program, out, &config.file_root);
     machine.run()?;
     // 実行時エラーで止まった場合はリークを数えない。途中のフレームが残っているのは当然だから
     if config.debug_heap {
         machine.check_leaks()?;
     }
-    Ok(())
+    Ok(machine.stats())
 }
 
 #[cfg(test)]

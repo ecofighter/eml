@@ -147,6 +147,9 @@ struct Slot {
 pub struct Heap {
     slots: Vec<Slot>,
     free: Vec<u32>,
+    /// 文字列の物体の中身を書くのはヒープの手続き (確保と写し) なので、ヒープが数える。インタプリタはこれを
+    /// `RunStats` の `string_bytes_copied` として返す。
+    string_bytes_written: u64,
 }
 
 impl Default for Heap {
@@ -160,10 +163,18 @@ impl Heap {
         Heap {
             slots: Vec::new(),
             free: Vec::new(),
+            string_bytes_written: 0,
         }
     }
 
+    pub fn string_bytes_written(&self) -> u64 {
+        self.string_bytes_written
+    }
+
     pub fn alloc(&mut self, payload: Payload) -> ObjRef {
+        if let Payload::Str(text) = &payload {
+            self.string_bytes_written += text.len() as u64;
+        }
         let object = Object {
             header: Header { rc: 1 },
             payload,
@@ -255,6 +266,9 @@ impl Heap {
             }
             None => {
                 let copy = copy(&self.object(obj)?.payload);
+                if let Payload::Str(text) = &copy {
+                    self.string_bytes_written += text.len() as u64;
+                }
                 let mut shared = Vec::new();
                 children(&copy, &mut shared);
                 for child in shared {

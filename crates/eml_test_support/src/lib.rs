@@ -15,7 +15,7 @@ use eml_cli::Session;
 use eml_core_ir::{Pass, Program};
 use eml_diagnostics::{Diagnostic, FileId, Label, LineCol, SourceFiles, sort_diagnostics};
 #[cfg(feature = "run")]
-use eml_interp::{RunConfig, RuntimeError};
+use eml_interp::{RunConfig, RunStats, RuntimeError};
 #[cfg(feature = "run")]
 use eml_runtime::OutputSink;
 
@@ -258,22 +258,36 @@ pub fn run(text: &str) -> (String, Result<(), RuntimeError>) {
 
 #[cfg(feature = "run")]
 pub fn run_files(entry: &str, modules: &[(&str, &str)]) -> (String, Result<(), RuntimeError>) {
-    run_program(&core_files(entry, modules), true)
+    without_stats(run_program(&core_files(entry, modules), true))
+}
+
+/// 実行の仕事の回数も返す。回数を比べるテスト (`eml_interp` の `scaling.rs`) のため。
+#[cfg(feature = "run")]
+pub fn run_stats(text: &str) -> (String, Result<RunStats, RuntimeError>) {
+    run_program(&core(text), true)
 }
 
 /// 手で書いた Core IR を実行する。
 #[cfg(feature = "run")]
 pub fn execute(program: Program, debug_heap: bool) -> (String, Result<(), RuntimeError>) {
-    run_program(&program, debug_heap)
+    without_stats(run_program(&program, debug_heap))
 }
 
 /// 実行の設定と出力の受け口は、ここだけで組み立てる。
 #[cfg(feature = "run")]
-fn run_program(program: &Program, debug_heap: bool) -> (String, Result<(), RuntimeError>) {
+fn run_program(program: &Program, debug_heap: bool) -> (String, Result<RunStats, RuntimeError>) {
     let (sink, captured) = OutputSink::capture();
     let config = RunConfig::default().with_debug_heap(debug_heap);
     let result = eml_cli::execute(program, &config, sink);
     (captured.contents(), result)
+}
+
+/// 回数を見ないテストの期待値を `Ok(())` のままにするため、回数を捨てる。
+#[cfg(feature = "run")]
+fn without_stats(
+    (out, result): (String, Result<RunStats, RuntimeError>),
+) -> (String, Result<(), RuntimeError>) {
+    (out, result.map(|_| ()))
 }
 
 /// 1件を `E0001 1:2 message` の1行にする。期待値を読みやすくするため、位置はバイトではなく行と列にする。

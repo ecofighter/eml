@@ -14,7 +14,7 @@ use eml_diagnostics::{Diagnostic, FileId, SourceFiles, sort_diagnostics};
 
 pub use eml_hir::{ModulePath, ModuleSource, ReadError};
 #[cfg(feature = "run")]
-pub use eml_interp::{RunConfig, RuntimeError};
+pub use eml_interp::{RunConfig, RunStats, RuntimeError};
 #[cfg(feature = "run")]
 pub use eml_runtime::{Captured, OutputSink};
 pub use fs_provider::FsProvider;
@@ -199,11 +199,12 @@ impl Session {
     }
 }
 
+/// 仕事の回数 (`RunStats`) はテストが比べるためのもので、CLI は使わない。
 #[cfg(feature = "run")]
 pub fn execute(
     program: &Program,
     config: &RunConfig,
     stdout: OutputSink,
-) -> Result<(), RuntimeError> {
+) -> Result<RunStats, RuntimeError> {
     eml_interp::run(program, config, &stdout)
 }

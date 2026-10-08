@@ -54,7 +54,7 @@ fn main() -> ExitCode {
                 return ExitCode::from(1);
             };
             match eml_cli::execute(&program, &config, OutputSink::stdout()) {
-                Ok(()) => ExitCode::SUCCESS,
+                Ok(_) => ExitCode::SUCCESS,
                 Err(error) => {
                     eprintln!("runtime error: {error}");
                     ExitCode::from(1)

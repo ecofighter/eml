@@ -197,6 +197,25 @@ fn live_objects_are_counted_by_kind() {
 }
 
 #[test]
+fn string_bytes_written_counts_the_contents_of_string_objects() {
+    let mut heap = Heap::new();
+    let s = string(&mut heap, "abc");
+    let end = bottom(&mut heap);
+    assert_eq!(heap.string_bytes_written(), 3);
+    // 一意な文字列は、取り出しても写さない
+    let t = string(&mut heap, "de");
+    assert_eq!(heap.take_or_copy(t), Ok(Payload::Str("de".to_string())));
+    assert_eq!(heap.string_bytes_written(), 5);
+    // 共有された文字列は、取り出すときに中身を写す
+    heap.dup(s).unwrap();
+    assert_eq!(heap.take_or_copy(s), Ok(Payload::Str("abc".to_string())));
+    assert_eq!(heap.string_bytes_written(), 8);
+    heap.decref(s).unwrap();
+    heap.decref(end).unwrap();
+    assert!(heap.live_objects().is_empty());
+}
+
+#[test]
 fn take_requires_a_unique_object() {
     let mut heap = Heap::new();
     let s = string(&mut heap, "a");

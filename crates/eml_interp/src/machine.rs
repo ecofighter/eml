@@ -4,6 +4,7 @@ use std::path::Path;
 use eml_core_ir::{Atom, CExpr, CExprId, Call, Case, CasePattern, FnIdx, Program, Rhs, VarId};
 use eml_runtime::{Closure, Frame, Heap, Link, ObjRef, OutputSink, Payload, Value};
 
+use crate::RunStats;
 use crate::error::{Fault, RuntimeError};
 
 /// 関数値の適用の結果。関数に入ったか、値ができたか (足りない引数のクロージャ)。
@@ -38,6 +39,8 @@ pub(crate) struct Machine<'p> {
     slots: Vec<Option<Value>>,
     /// 継続の先頭のフレーム。最下部には常に `Frame::Root` がある。
     pub(crate) cont: ObjRef,
+    /// `find_handler` が調べたフレームの数 (`RunStats::handler_visits`)。
+    pub(crate) handler_visits: u64,
 }
 
 impl<'p> Machine<'p> {
@@ -54,6 +57,7 @@ impl<'p> Machine<'p> {
             control: entry.body,
             slots: vec![None; entry.vars.len()],
             cont,
+            handler_visits: 0,
         }
     }
 
@@ -476,6 +480,13 @@ impl<'p> Machine<'p> {
 
     fn atoms(&self, atoms: &[Atom]) -> Result<Vec<Value>, Fault> {
         atoms.iter().map(|atom| self.atom(atom)).collect()
+    }
+
+    pub(crate) fn stats(&self) -> RunStats {
+        RunStats {
+            handler_visits: self.handler_visits,
+            string_bytes_copied: self.heap.string_bytes_written(),
+        }
     }
 
     pub(crate) fn check_leaks(&self) -> Result<(), RuntimeError> {

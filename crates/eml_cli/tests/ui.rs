@@ -117,7 +117,7 @@ fn compile_and_execute(path: &Path, suffix: &str) -> (String, String, Result<(),
     let config = RunConfig::default()
         .with_debug_heap(true)
         .with_file_root(root);
-    let result = eml_cli::execute(&program, &config, sink);
+    let result = eml_cli::execute(&program, &config, sink).map(|_| ());
     (captured.contents(), stderr, result)
 }
 

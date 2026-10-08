@@ -6,10 +6,11 @@ use crate::machine::{Machine, Step};
 impl Machine<'_> {
     /// 継続の連結リストを先頭から読み、同じエフェクトの一番内側の handler フレームを探す。`Mask` フレームを越えるたびに、
     /// その中の同じエフェクトの数だけ外側の handler を飛ばす (docs/implementation/architecture.md の「継続のフレーム」)。
-    pub(crate) fn find_handler(&self, effect: u32) -> Result<ObjRef, Fault> {
+    pub(crate) fn find_handler(&mut self, effect: u32) -> Result<ObjRef, Fault> {
         let mut current = self.cont;
         let mut skip = 0usize;
         loop {
+            self.handler_visits += 1;
             let Payload::Frame(frame) = self.heap.get(current).map_err(Fault::Heap)? else {
                 return Err(Fault::Internal("the continuation is not a frame"));
             };

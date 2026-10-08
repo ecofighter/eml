@@ -85,7 +85,10 @@ fn execute_runs_a_compiled_program() {
         .program
         .unwrap();
     let (sink, _) = OutputSink::capture();
-    assert_eq!(execute(&program, &RunConfig::default(), sink), Ok(()));
+    assert_eq!(
+        execute(&program, &RunConfig::default(), sink).map(|_| ()),
+        Ok(())
+    );
 }
 
 #[test]
