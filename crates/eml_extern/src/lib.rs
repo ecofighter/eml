@@ -12,7 +12,7 @@ pub enum Linearity {
     Lin,
 }
 
-/// 関数を呼んだときに起こりうること。contract のパスは、使われない `Pure` の呼び出しだけを消す (docs/spec/core-ir.md)。
+/// 関数を呼んだときに起こりうること。縮約のパスは `Pure` の呼び出しだけを、使われなければ消す (docs/spec/core-ir.md の「縮約」)。
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Purity {
     Pure,

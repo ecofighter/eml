@@ -63,8 +63,8 @@ B は `multi` にスタックのコピーが要り、LLVM の側にスタック�
 ### yield の bubbling
 
 - すぐに再開しない操作は、目印まで yield する。yield は、呼び出しから返るたびに「yield 中か」の印を確かめ、各フレームが自分の続きを継続に足しながら1フレームずつ戻る
-- 続きは、その時点の join point と生きている変数を持つクロージャになる。継続はこのクロージャの列である (論文の short-cut resumption)
-- yield しない経路では、クロージャを作らない。bind を展開し、続きを join point として共有する (論文の bind-inlining と join-point sharing)。Core IR にはすでに join point があるので、これを使う
+- 続きは、その時点の引数を持つ合流のブロックと生きている変数を持つクロージャになる。継続はこのクロージャの列である (論文の short-cut resumption)
+- yield しない経路では、クロージャを作らない。bind を展開し、続きを引数を持つ合流のブロックとして共有する (論文の bind-inlining と join-point sharing)。Core IR にはすでに引数を持つ合流のブロックがあるので、これを使う
 
 ## 多重度ごとの実装
 
@@ -82,7 +82,7 @@ B は `multi` にスタックのコピーが要り、LLVM の側にスタック�
 
 ## Perceus と線形性との関係
 
-- 変換は、HIR から Core IR への変換の後、Perceus の `dup` / `decref` の挿入の前に置く。変換がクロージャと join point を新しく作るので、それらにも RC の操作を付ける必要があるためである。Perceus はすでに変換の後の独立したパスなので、その前に新しいパスを挟むだけで済む
+- 変換は、HIR から Core IR への変換の後、Perceus の `dup` / `decref` の挿入の前に置く。変換がクロージャと引数を持つ合流のブロックを新しく作るので、それらにも RC の操作を付ける必要があるためである。Perceus はすでに変換の後の独立したパスなので、その前に新しいパスを挟むだけで済む
 - 継続のクロージャに入った `Lin` の値は、`drop k` と `never` の中断のときに、記述子から破棄処理を引いて解放する。インタプリタが継続の区間を解放するときに、捕まっていた値を解放する (`File` はその解放で閉じる) のと同じ考え方である
 - パラメータ付き handler の状態は evidence の handler の欄に置く。`perform` で節に渡し、`k v st` の再開で戻す動きは、インタプリタの handler フレームと同じである ([コンパイラの構成](../implementation/architecture.md) の「継続のフレーム」)
 
@@ -94,14 +94,14 @@ B は `multi` にスタックのコピーが要り、LLVM の側にスタック�
 
 ## 実装に進むときの条件
 
-- **Core IR の row**: Core IR に row の情報を持たせる。関数の本体の row、`perform`、閉じた row を開く箇所に要る。今の Core IR は row を持たないので、evidence passing を入れるときに HIR から Core IR への変換で足し、`simplify` などのパスがそれを保つようにする
+- **Core IR の row**: Core IR に row の情報を持たせる。関数の本体の row、`perform`、閉じた row を開く箇所に要る。今の Core IR は row を持たないので、evidence passing を入れるときに HIR から Core IR への変換で足し、translate と Perceus の間のパスがそれを保つようにする
 - **ラベルの順序**: エフェクトのラベルの順序を決める。プログラム全体を1回でコンパイルするあいだは、そのコンパイルの中で決まった順序でよい。分割コンパイルをするなら、モジュールをまたいでも変わらない修飾名の順にする
 - **handler の状態**: パラメータ付き handler の状態を handler フレームに持たせていること (実装済み)
 - **差分テスト**: 変換後の IR をインタプリタで実行し、UI テストの出力が変換の有無で一致することを確かめる
 
 ## 未決の論点
 
-- 「yield 中か」の確認の費用。bind の展開と join point の共有を、既存の join point の変換とどう組み合わせるか
+- 「yield 中か」の確認の費用。bind の展開と続きの共有を、translate が作る引数を持つ合流のブロックとどう組み合わせるか
 - インタプリタの既定の実行を、変換後の IR に切り替えるか
 - 開いた row で evidence を探すときのキャッシュ
 - `never` の中断で、途中のフレームの `Lin` の値をどう drop するか。yield の経路に drop の命令を生成するか、継続を組み立ててから解放するか

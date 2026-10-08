@@ -53,7 +53,7 @@ spec とコードベースを、互換性を気にせずに作り直す。優先
 ### 土台 (S3)
 
 - インタプリタはシングルスレッドにする。`par` の子は決定的なので、順に実行しても意味は変わらない。実際の並列化はネイティブのランタイムだけで行う
-- Core IR v2 では、値の表現 (Repr) と box/unbox、scrutinee を消費しない `Switch` を、ブロック木への書き換えと同時に入れる。Perceus、verifier、インタプリタの `Switch` を1回で作り直すためである
+- Core IR v2 は2つの段で入れる。S3b-2a で、Core IR を前向きの辺だけを持つ基本ブロックの列にし、verifier、生存解析、Perceus、インタプリタ、translate を作り直す。S3b-2b で、値の表現 (Repr) の確定と box/unbox、scrutinee を消費しない `Switch` を入れる。`Switch` の所有と Repr には、ブロックの形と関係のない論点が多いためである。S3b-2a は、S3b-2b の命令と規則を足しても IR のテストを作り直さずに済む形にしておく
 - evidence passing、ネイティブのオブジェクトモデル、`Int` の幅、コード生成のバックエンド (Cranelift か LLVM か)、バイトコード VM は、ネイティブ化の段階で決める。evidence passing を入れても、今の CEK は直接の意味論の参照実装として残し、差分テストの基準にする
 
 ### スクリプトの MVP (S4)
@@ -130,7 +130,7 @@ crate の並びと「各段階は純粋な関数」という規律は変えな�
 | S2a 継続を関数にする | 普通の関数としての `k`、`resume` キーワードの廃止 | S1 | `Cont`、状態の欄、E2007、E1011、持ち越し規則の `resume` の特別扱いが消える。UI テストは `resume` を `k` の呼び出しに書き換えたうえで出力が変わらない |
 | S2b 組み込みを extern にする | `extern`、ラベルだけの `IO`、extern の表、`std/` ツリーのローダー | S1 | `Rhs::Io`、`IoOp`、`INTRINSICS` が消え、E1009 は extern のエフェクトを handle したときの診断に変わる。UI テストの出力が変わらない |
 | S3a フロントエンドの土台 | `Send` な `ItemTree`、HIR の表示用フィールドの除去、名前解決の整理と `Reporter`、パイプラインの駆動の1本化 | S2a、S2b | `assert_send::<Session>()` が通る。UI テストの出力が変わらない |
-| S3b バックエンドの土台 | Core IR v2 (ブロック木、Repr と box/unbox、消費しない `Switch`、extern の表、位置情報、translate で作る末尾呼び出し)、simplify を縮約パスに置き換える、テキスト形式の作り直し、handler の連鎖、一意な文字列のその場の連結、不死のリテラル、ランタイムの形だけの対策の削除、runtime.md と multicore.md の整理 | S2a、S2b | UI テストの出力が変わらない (実行時エラーに位置が付く run-fail のスナップショットは除く)。エフェクトを使う再帰と文字列の連結が2乗の時間にならないことをテストで確かめる |
+| S3b バックエンドの土台 | Core IR v2 (前向きの辺だけの基本ブロックの列、Repr と box/unbox、消費しない `Switch`、extern の表、位置情報、translate で作る末尾呼び出し)、simplify を縮約パスに置き換える、テキスト形式の作り直し、handler の連鎖、一意な文字列のその場の連結、不死のリテラル、ランタイムの形だけの対策の削除、runtime.md と multicore.md の整理 | S2a、S2b | UI テストの出力が変わらない (実行時エラーに位置が付く run-fail のスナップショットは除く)。エフェクトを使う再帰と文字列の連結が2乗の時間にならないことをテストで確かめる |
 | S4 スクリプトの MVP | リスト、`Option`、`Result`、補間と文字列の形、名前的なレコード、`Eq` / `Ord` / `Show` と `deriving` と特殊化、ローカルの再帰関数、`try_io` と `exit`、extern の標準ライブラリ (`String`、`Env`、`Stdin`、`Fs`、`Proc.run`、`eprintln`)、`eml file.em args...` | S3a、S3b | wc、grep、ログの集計、CSV の変換、デプロイ手順の5本のスクリプトが UI テストとして動く |
 | S5 実例による判断 | 上の「S5 に回すもの」 | S4 | 各項目を採るか採らないか決め、採ったものを実装する |
 
