@@ -220,3 +220,43 @@ fn an_unpack_with_a_different_number_of_fields_is_an_internal_error() {
         })
     );
 }
+
+#[test]
+fn an_unpack_of_a_value_that_is_not_an_object_is_an_internal_error() {
+    // verifier は R8 で `obj` でない値の `unpack` を拒むので、通さずに実行する
+    let text = "\
+fn main() -> unit {
+  let n.0: int = extern Prelude.+(1, 2)
+  unpack n.0 #0(a.1: obj)
+  return ()
+}
+";
+    assert_eq!(
+        run_core_unverified(text).1,
+        Err(RuntimeError::Fault {
+            fault: Fault::Internal("an unpack of a value that is not an object"),
+            function: "main".to_string(),
+            at: None,
+        })
+    );
+}
+
+#[test]
+fn an_unpack_of_an_object_that_is_not_data_is_an_internal_error() {
+    // 文字列も `obj` なので verifier は通すが、コンストラクタの値ではない
+    let text = "\
+fn main() -> unit {
+  let s.0: obj = extern Prelude.show_int(1)
+  unpack s.0 #0(a.1: obj)
+  return ()
+}
+";
+    assert_eq!(
+        run_core_unverified(text).1,
+        Err(RuntimeError::Fault {
+            fault: Fault::Internal("an unpack of an object that is not data"),
+            function: "main".to_string(),
+            at: None,
+        })
+    );
+}

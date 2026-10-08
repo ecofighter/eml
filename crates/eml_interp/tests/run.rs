@@ -183,6 +183,50 @@ fn main() -> unit {
     );
 }
 
+#[test]
+fn a_heap_fault_inside_an_extern_with_a_position_carries_it() {
+    // 位置は extern の呼び出しが起こした誤りすべてに付き、ヒープの誤りも含む (docs/spec/core-ir.md の「実行時エラー」)
+    let text = "\
+fn main() -> unit {
+  let s.0: obj = extern Prelude.show_int(1)
+  decref s.0
+  let t.1: unit = extern Prelude.println(s.0) @\"main.em\":2:3
+  return t.1
+}
+";
+    let (_, result) = run_core_unverified(text);
+    let error = result.unwrap_err();
+    assert_eq!(
+        error,
+        RuntimeError::Fault {
+            fault: Fault::Heap(eml_runtime::HeapError::UseAfterFree),
+            function: "main".to_string(),
+            at: Some(SourceLocation {
+                path: "main.em".to_string(),
+                line: 2,
+                column: 3,
+            }),
+        }
+    );
+    assert_eq!(error.to_string(), "use of a freed object\n  at main.em:2:3");
+}
+
+#[test]
+fn a_jump_with_a_different_number_of_arguments_is_an_internal_error() {
+    // verifier は R4 でこの形を拒むので、通さずに実行する
+    let text = "fn main() -> unit {\n  jump b1(1)\nb1:\n  return ()\n}\n";
+    assert_eq!(
+        run_core_unverified(text).1,
+        Err(RuntimeError::Fault {
+            fault: Fault::Internal(
+                "a jump passes a different number of arguments than the block has parameters"
+            ),
+            function: "main".to_string(),
+            at: None,
+        })
+    );
+}
+
 fn main_with(body: &str) -> String {
     format!("main : Unit -> <IO> Unit\nmain () =\n{body}")
 }

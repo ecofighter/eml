@@ -238,7 +238,12 @@ impl<'p> Machine<'p> {
                 {
                     Some(Stmt::Let {
                         var,
-                        rhs: Rhs::Call { .. },
+                        rhs:
+                            Rhs::Call {
+                                call: _,
+                                mask: _,
+                                saved: _,
+                            },
                     }) => *var,
                     _ => {
                         return Err(Fault::Internal("a return frame does not resume at a call"));
@@ -265,7 +270,8 @@ fn resume_address(block: BlockId, stmt: usize) -> u64 {
 }
 
 fn resume_point(address: u64) -> (BlockId, usize) {
-    let block = u32::try_from(address >> 32).expect("the block fits in the upper 32 bits");
-    let stmt = address & u64::from(u32::MAX);
+    // 上位と下位の32ビットに分けるので、どちらの切り詰めも値を失わない
+    let block = (address >> 32) as u32;
+    let stmt = address as u32;
     (BlockId(block), stmt as usize)
 }
