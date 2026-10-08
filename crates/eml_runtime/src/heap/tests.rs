@@ -24,7 +24,7 @@ fn frame(heap: &mut Heap, saved: Vec<(u32, Value)>, next: ObjRef) -> ObjRef {
     }))
 }
 
-fn handler(heap: &mut Heap, clauses: Vec<Value>, link: Option<Link>) -> ObjRef {
+fn handler(heap: &mut Heap, clauses: Vec<Value>, link: Attachment) -> ObjRef {
     heap.alloc(Payload::Frame(Frame::Handler {
         effect: 1,
         clauses,
@@ -33,11 +33,33 @@ fn handler(heap: &mut Heap, clauses: Vec<Value>, link: Option<Link>) -> ObjRef {
     }))
 }
 
-fn attached(next: ObjRef) -> Option<Link> {
-    Some(Link {
+fn attached(next: ObjRef, outer: ObjRef) -> Attachment {
+    Attachment::Attached {
         next,
         state: Value::Unit,
-    })
+        outer,
+    }
+}
+
+/// 切り離された handler フレーム。`inner` は自身を指す (区間に連鎖のフレームがない形)。自身を指すために、先に
+/// フレームを確保してから中身を入れる。
+fn detached_handler(heap: &mut Heap, clauses: Vec<Value>) -> ObjRef {
+    let frame = bottom(heap);
+    *heap.get_mut(frame).unwrap() = Payload::Frame(Frame::Handler {
+        effect: 1,
+        clauses,
+        ret: Value::Unit,
+        link: Attachment::Detached { inner: frame },
+    });
+    frame
+}
+
+/// 切り離された handler フレームの `inner` を、区間の中でいちばん内側の連鎖のフレームにする。
+fn set_inner(heap: &mut Heap, detached: ObjRef, inner: ObjRef) {
+    let Payload::Frame(Frame::Handler { link, .. }) = heap.get_mut(detached).unwrap() else {
+        panic!("not a handler frame");
+    };
+    *link = Attachment::Detached { inner };
 }
 
 #[test]
@@ -56,7 +78,7 @@ fn a_handler_frame_releases_its_clauses_and_the_rest_of_the_continuation() {
         effect: 1,
         clauses: vec![Value::Obj(clause)],
         ret: Value::Obj(ret),
-        link: attached(end),
+        link: attached(end, end),
     }));
     heap.decref(frame).unwrap();
     assert!(heap.live_objects().is_empty());
@@ -68,7 +90,7 @@ fn releasing_a_continuation_stops_at_its_detached_handler() {
     // handler の外側は機械の継続が持っている
     let outside = bottom(&mut heap);
     let s = string(&mut heap, "saved");
-    let detached = handler(&mut heap, vec![], None);
+    let detached = detached_handler(&mut heap, vec![]);
     let top = frame(&mut heap, vec![(0, Value::Obj(s))], detached);
     let k = heap.alloc(Payload::Continuation {
         top,
@@ -122,6 +144,7 @@ fn a_mask_frame_releases_the_rest_of_the_continuation() {
     let mask = heap.alloc(Payload::Frame(Frame::Mask {
         effects: vec![0],
         next,
+        outer: end,
     }));
     heap.decref(mask).unwrap();
     assert!(heap.live_objects().is_empty());
@@ -266,9 +289,13 @@ fn segment(heap: &Heap, top: ObjRef) -> Vec<ObjRef> {
                 Frame::Return { next, .. } | Frame::Apply { next, .. } | Frame::Mask { next, .. },
             ) => *next,
             Payload::Frame(Frame::Handler {
-                link: Some(link), ..
-            }) => link.next,
-            Payload::Frame(Frame::Handler { link: None, .. }) => return frames,
+                link: Attachment::Attached { next, .. },
+                ..
+            }) => *next,
+            Payload::Frame(Frame::Handler {
+                link: Attachment::Detached { .. },
+                ..
+            }) => return frames,
             other => panic!("not a frame: {other:?}"),
         };
         frames.push(next);
@@ -278,7 +305,7 @@ fn segment(heap: &Heap, top: ObjRef) -> Vec<ObjRef> {
 #[test]
 fn take_or_copy_takes_a_unique_continuation_without_copying() {
     let mut heap = Heap::new();
-    let detached = handler(&mut heap, vec![], None);
+    let detached = detached_handler(&mut heap, vec![]);
     let top = frame(&mut heap, vec![], detached);
     let k = heap.alloc(Payload::Continuation {
         top,
@@ -303,10 +330,11 @@ fn take_or_copy_copies_the_segment_of_a_shared_continuation() {
         function: 0,
         args: vec![],
     }));
-    let detached = handler(&mut heap, vec![Value::Obj(clause)], None);
+    let detached = detached_handler(&mut heap, vec![Value::Obj(clause)]);
     let below_attached = frame(&mut heap, vec![], detached);
     // 本体の中の別の handle は、外側につながったまま区間に入る
-    let attached = handler(&mut heap, vec![], attached(below_attached));
+    let attached = handler(&mut heap, vec![], attached(below_attached, detached));
+    set_inner(&mut heap, detached, attached);
     let top = frame(&mut heap, vec![(0, Value::Obj(s))], attached);
     let k = heap.alloc(Payload::Continuation {
         top,
@@ -346,13 +374,15 @@ fn take_or_copy_copies_the_segment_of_a_shared_continuation() {
 fn copying_a_segment_copies_its_mask_frames() {
     let mut heap = Heap::new();
     let s = string(&mut heap, "saved");
-    let detached = handler(&mut heap, vec![], None);
+    let detached = detached_handler(&mut heap, vec![]);
     let below_mask = frame(&mut heap, vec![(0, Value::Obj(s))], detached);
     // `mask` 付きの呼び出しの中で操作したので、区間の途中に `Mask` フレームが入る
     let mask = heap.alloc(Payload::Frame(Frame::Mask {
         effects: vec![0],
         next: below_mask,
+        outer: detached,
     }));
+    set_inner(&mut heap, detached, mask);
     let top = frame(&mut heap, vec![], mask);
     let k = heap.alloc(Payload::Continuation {
         top,
@@ -377,6 +407,7 @@ fn copying_a_segment_copies_its_mask_frames() {
         &Payload::Frame(Frame::Mask {
             effects: vec![0],
             next: copied[2],
+            outer: copied[3],
         })
     );
     for &frame in original.iter().chain(&copied) {
@@ -395,7 +426,7 @@ fn copying_a_segment_copies_its_mask_frames() {
 #[test]
 fn copying_a_long_segment_does_not_overflow_the_stack() {
     let mut heap = Heap::new();
-    let detached = handler(&mut heap, vec![], None);
+    let detached = detached_handler(&mut heap, vec![]);
     let mut top = detached;
     for _ in 0..200_000 {
         top = frame(&mut heap, vec![], top);
@@ -544,10 +575,11 @@ fn an_attached_handler_releases_its_state() {
     let frame = handler(
         &mut heap,
         vec![],
-        Some(Link {
+        Attachment::Attached {
             next: end,
             state: Value::Obj(state),
-        }),
+            outer: end,
+        },
     );
     heap.decref(frame).unwrap();
     assert!(heap.live_objects().is_empty());
@@ -557,17 +589,19 @@ fn an_attached_handler_releases_its_state() {
 fn copying_a_segment_shares_the_state_of_an_attached_handler() {
     let mut heap = Heap::new();
     let state = string(&mut heap, "state");
-    let detached = handler(&mut heap, vec![], None);
+    let detached = detached_handler(&mut heap, vec![]);
     let below_attached = frame(&mut heap, vec![], detached);
     // 本体の中の別の handle は、状態を持ったまま区間に入る
     let inner = handler(
         &mut heap,
         vec![],
-        Some(Link {
+        Attachment::Attached {
             next: below_attached,
             state: Value::Obj(state),
-        }),
+            outer: detached,
+        },
     );
+    set_inner(&mut heap, detached, inner);
     let top = frame(&mut heap, vec![], inner);
     let k = heap.alloc(Payload::Continuation {
         top,
@@ -585,13 +619,19 @@ fn copying_a_segment_shares_the_state_of_an_attached_handler() {
     assert_eq!(copied.len(), 4);
     // 写した内側の handler フレームは、写した次のフレームにつながり、同じ状態を指す
     let Payload::Frame(Frame::Handler {
-        link: Some(link), ..
+        link:
+            Attachment::Attached {
+                next,
+                state: copied_state,
+                ..
+            },
+        ..
     }) = heap.get(copied[1]).unwrap()
     else {
         panic!("the copied inner handler is not attached");
     };
-    assert_eq!(link.next, copied[2]);
-    assert_eq!(link.state, Value::Obj(state));
+    assert_eq!(*next, copied[2]);
+    assert_eq!(*copied_state, Value::Obj(state));
     assert!(!heap.is_unique(state).unwrap());
     let copy = heap.alloc(Payload::Continuation {
         top: copied_top,
@@ -763,4 +803,118 @@ fn append_str_keeps_the_left_side_when_the_right_side_is_not_a_string() {
     // 取り出した左辺の中身は、誤りの経路でも戻っている
     assert_eq!(heap.get(left).unwrap(), &Payload::Str("ab".to_string()));
     assert_eq!(heap.string_bytes_written(), before);
+}
+
+/// 連鎖のフレームが指す次の連鎖のフレーム。`Mask` とつながった handler フレームは `outer`、切り離された handler
+/// フレームは `inner` である。
+fn chain_link(heap: &Heap, frame: ObjRef) -> ObjRef {
+    match heap.get(frame).unwrap() {
+        Payload::Frame(
+            Frame::Mask { outer, .. }
+            | Frame::Handler {
+                link: Attachment::Attached { outer, .. },
+                ..
+            },
+        ) => *outer,
+        Payload::Frame(Frame::Handler {
+            link: Attachment::Detached { inner },
+            ..
+        }) => *inner,
+        other => panic!("not a frame of the handler chain: {other:?}"),
+    }
+}
+
+#[test]
+fn copying_a_segment_remaps_its_handler_chain() {
+    let mut heap = Heap::new();
+    let detached = detached_handler(&mut heap, vec![]);
+    let below = frame(&mut heap, vec![], detached);
+    let inner = handler(&mut heap, vec![], attached(below, detached));
+    // `mask` 付きの呼び出しの中の handle の本体で操作したので、区間の連鎖は mask、inner、detached の順につながる
+    let mask = heap.alloc(Payload::Frame(Frame::Mask {
+        effects: vec![1],
+        next: inner,
+        outer: inner,
+    }));
+    let top = frame(&mut heap, vec![], mask);
+    set_inner(&mut heap, detached, mask);
+    let k = heap.alloc(Payload::Continuation {
+        top,
+        handler: detached,
+    });
+    heap.dup(k).unwrap();
+    let Payload::Continuation {
+        top: copied_top,
+        handler: copied_handler,
+    } = heap.take_or_copy(k).unwrap()
+    else {
+        panic!("not a continuation");
+    };
+    assert_eq!(segment(&heap, top), [top, mask, inner, below, detached]);
+    let copied = segment(&heap, copied_top);
+    assert_eq!(copied.len(), 5);
+    assert_eq!(copied[4], copied_handler);
+    // 写した区間の連鎖は写した区間の中だけを指し、元の区間の連鎖は変わらない
+    assert_eq!(chain_link(&heap, copied_handler), copied[1]);
+    assert_eq!(chain_link(&heap, copied[1]), copied[2]);
+    assert_eq!(chain_link(&heap, copied[2]), copied_handler);
+    assert_eq!(chain_link(&heap, detached), mask);
+    assert_eq!(chain_link(&heap, mask), inner);
+    assert_eq!(chain_link(&heap, inner), detached);
+    let copy = heap.alloc(Payload::Continuation {
+        top: copied_top,
+        handler: copied_handler,
+    });
+    heap.decref(copy).unwrap();
+    heap.decref(k).unwrap();
+    assert!(heap.live_objects().is_empty());
+}
+
+#[test]
+fn a_chain_link_out_of_the_segment_breaks_the_segment() {
+    let mut heap = Heap::new();
+    // 区間の外の連鎖のフレーム
+    let outside = bottom(&mut heap);
+    let detached = detached_handler(&mut heap, vec![]);
+    let mask = heap.alloc(Payload::Frame(Frame::Mask {
+        effects: vec![1],
+        next: detached,
+        outer: outside,
+    }));
+    set_inner(&mut heap, detached, mask);
+    let k = heap.alloc(Payload::Continuation {
+        top: mask,
+        handler: detached,
+    });
+    heap.dup(k).unwrap();
+    assert_eq!(heap.take_or_copy(k), Err(HeapError::BrokenSegment));
+    // 写す前に誤りになるので、何も確保せず、`k` の参照も手放さない
+    assert_eq!(
+        heap.live_objects(),
+        [("Continuation".to_string(), 1), ("Frame".to_string(), 3)]
+    );
+    heap.decref(k).unwrap();
+    heap.decref(k).unwrap();
+    heap.decref(outside).unwrap();
+    assert!(heap.live_objects().is_empty());
+}
+
+#[test]
+fn an_inner_link_out_of_the_segment_breaks_the_segment() {
+    let mut heap = Heap::new();
+    let outside = bottom(&mut heap);
+    let detached = detached_handler(&mut heap, vec![]);
+    let top = frame(&mut heap, vec![], detached);
+    // 区間に連鎖のフレームがないので、`inner` は自身を指さなければならない
+    set_inner(&mut heap, detached, outside);
+    let k = heap.alloc(Payload::Continuation {
+        top,
+        handler: detached,
+    });
+    heap.dup(k).unwrap();
+    assert_eq!(heap.take_or_copy(k), Err(HeapError::BrokenSegment));
+    heap.decref(k).unwrap();
+    heap.decref(k).unwrap();
+    heap.decref(outside).unwrap();
+    assert!(heap.live_objects().is_empty());
 }

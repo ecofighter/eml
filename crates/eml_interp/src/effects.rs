@@ -1,40 +1,50 @@
-use eml_runtime::{Frame, Link, ObjRef, Payload, Value};
+use eml_runtime::{Attachment, Frame, ObjRef, Payload, Value};
 
 use crate::error::Fault;
 use crate::machine::{Machine, Step};
 
 impl Machine<'_> {
-    /// 継続の連結リストを先頭から読み、同じエフェクトの一番内側の handler フレームを探す。`Mask` フレームを越えるたびに、
-    /// その中の同じエフェクトの数だけ外側の handler を飛ばす (docs/implementation/architecture.md の「継続のフレーム」)。
+    /// handler の連鎖を先頭から `outer` でたどり、同じエフェクトの一番内側の handler フレームを探す。`Mask` フレームを
+    /// 越えるたびに、その中の同じエフェクトの数だけ外側の handler を飛ばす。連鎖は handler と `Mask` のフレームだけで
+    /// できていて、`Mask` は handler より多くならない (docs/spec/effects.md の「健全性」) ので、たどる数は handler の
+    /// 数に比例する (docs/implementation/architecture.md の「継続のフレーム」)。
     pub(crate) fn find_handler(&mut self, effect: u32) -> Result<ObjRef, Fault> {
-        let mut current = self.cont;
+        let mut current = self.handlers;
         let mut skip = 0usize;
         loop {
             self.handler_visits += 1;
             let Payload::Frame(frame) = self.heap.get(current).map_err(Fault::Heap)? else {
-                return Err(Fault::Internal("the continuation is not a frame"));
+                return Err(Fault::Internal("the handler chain is not a frame"));
             };
             current = match frame {
-                Frame::Handler { effect: other, .. } if *other == effect && skip == 0 => {
-                    return Ok(current);
-                }
                 Frame::Handler {
                     effect: other,
                     link,
                     ..
                 } => {
+                    let Attachment::Attached { outer, .. } = link else {
+                        return Err(Fault::Internal(
+                            "a detached handler is in the handler chain",
+                        ));
+                    };
                     if *other == effect {
+                        if skip == 0 {
+                            return Ok(current);
+                        }
                         skip -= 1;
                     }
-                    link.ok_or(Fault::Internal("a detached handler is in the continuation"))?
-                        .next
+                    *outer
                 }
-                Frame::Mask { effects, next } => {
+                Frame::Mask { effects, outer, .. } => {
                     skip += effects.iter().filter(|&&masked| masked == effect).count();
-                    *next
+                    *outer
                 }
-                Frame::Return { next, .. } | Frame::Apply { next, .. } => *next,
                 Frame::Root => return Err(Fault::Internal("an operation without a handler")),
+                Frame::Return { .. } | Frame::Apply { .. } => {
+                    return Err(Fault::Internal(
+                        "the handler chain reaches a frame that is neither a handler nor a mask",
+                    ));
+                }
             };
         }
     }
@@ -42,7 +52,8 @@ impl Machine<'_> {
     /// handler フレームの外側を切り離して機械の継続に戻し、節を呼ぶ。先頭から handler フレームまでの区間が継続で、
     /// `once` の操作はそれを継続オブジェクトにして `k` として渡す。`never` の操作は再開しないので、区間をここで
     /// 解放する。区間のフレームが退避した値も、子をたどる解放で1回ずつ解放される。handler フレームの状態は
-    /// 切り離した `Link` から取り出し、節の最後の引数として渡す
+    /// 切り離した `Attachment` から取り出し、節の最後の引数として渡す。連鎖の先頭は handle の外側の連鎖に戻し、
+    /// 区間の中の連鎖の先頭は、切り離した handler フレームの `inner` に残す
     /// (docs/implementation/architecture.md の「継続のフレーム」)。
     pub(crate) fn perform(
         &mut self,
@@ -60,17 +71,25 @@ impl Machine<'_> {
         let clause = *clauses
             .get(op as usize)
             .ok_or(Fault::Internal("an operation without a clause"))?;
-        let Link {
+        let Attachment::Attached {
             next: outside,
             state,
-        } = link
-            .take()
-            .ok_or(Fault::Internal("performing through a detached handler"))?;
+            outer,
+        } = *link
+        else {
+            return Err(Fault::Internal("performing through a detached handler"));
+        };
+        // 今の連鎖の先頭は、区間の中でいちばん内側の連鎖のフレームである。区間に連鎖のフレームがなければ handler
+        // フレーム自身になる
+        *link = Attachment::Detached {
+            inner: self.handlers,
+        };
         // 節のクロージャは handler フレームにも残るので、呼ぶ分の参照を足す
         if let Value::Obj(obj) = clause {
             self.heap.dup(obj).map_err(Fault::Heap)?;
         }
         let top = std::mem::replace(&mut self.cont, outside);
+        self.handlers = outer;
         if resumable {
             let k = self.heap.alloc(Payload::Continuation { top, handler });
             args.push(Value::Obj(k));
@@ -83,8 +102,10 @@ impl Machine<'_> {
 
     /// 継続オブジェクトの handler フレームの外側に今の継続をつなぎ、`state` をその handler フレームの状態に戻して、
     /// 先頭のフレームに値を返す。末尾でない `resume` では、その前に呼び出しのフレームが積まれている。`multi` の
-    /// 継続をもう一度使うなら継続は共有されていて、`take_or_copy` が区間を写す。どちらの場合も区間のフレームは一意なので、handler フレームを書き換えてよい
-    /// (docs/implementation/architecture.md の「継続のフレーム」)。
+    /// 継続をもう一度使うなら継続は共有されていて、`take_or_copy` が区間を写す。どちらの場合も区間のフレームは
+    /// 一意なので、handler フレームを書き換えてよい。handler の連鎖は、handler フレームの `outer` を今の連鎖の先頭に
+    /// し、先頭を区間の中の `inner` にしてつなぎ直す。`mask` 付きの `resume` では、その前に積んだ `Mask` フレームが
+    /// 今の連鎖の先頭である (docs/implementation/architecture.md の「継続のフレーム」)。
     pub(crate) fn resume(&mut self, k: Value, value: Value, state: Value) -> Result<Step, Fault> {
         let Value::Obj(obj) = k else {
             return Err(Fault::Internal(
@@ -98,21 +119,37 @@ impl Machine<'_> {
                 "resuming an object that is not a continuation",
             ));
         };
-        let current = self.cont;
-        match self.heap.get_mut(handler).map_err(Fault::Heap)? {
+        let attached = Attachment::Attached {
+            next: self.cont,
+            state,
+            outer: self.handlers,
+        };
+        let inner = match self.heap.get_mut(handler).map_err(Fault::Heap)? {
             Payload::Frame(Frame::Handler { link, .. }) => {
-                *link = Some(Link {
-                    next: current,
-                    state,
-                });
+                let Attachment::Detached { inner } = *link else {
+                    return Err(Fault::Internal(
+                        "resuming a continuation whose handler is attached",
+                    ));
+                };
+                *link = attached;
+                inner
             }
             _ => {
                 return Err(Fault::Internal(
                     "a continuation whose handler is not a handler frame",
                 ));
             }
+        };
+        if !matches!(
+            self.heap.get(inner).map_err(Fault::Heap)?,
+            Payload::Frame(Frame::Handler { .. } | Frame::Mask { .. })
+        ) {
+            return Err(Fault::Internal(
+                "the handler chain of a continuation starts at a frame that is neither a handler nor a mask",
+            ));
         }
         self.cont = top;
+        self.handlers = inner;
         self.ret(value)
     }
 }

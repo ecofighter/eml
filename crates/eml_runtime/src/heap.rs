@@ -1,7 +1,7 @@
 //! ヒープと参照カウント (docs/spec/runtime.md)。インデックス方式のアリーナと世代番号で、解放済みのオブジェクトへの
 //! アクセスを `unsafe` なしに検出する。
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fmt;
 
 use crate::FileHandle;
@@ -31,9 +31,9 @@ pub enum Payload {
     Closure(Closure),
     Frame(Frame),
     /// `perform` で捕まえた継続。先頭のフレーム `top` から `next` をたどった先に `handler` のフレームがある。`top`
-    /// だけを所有し、`handler` は所有せずに指す。`handler` の `next` は捕まえられている間 `None` なので、継続を
-    /// 解放すると `top` から `handler` までの区間だけが解放される (docs/spec/runtime.md)。共有された継続を写すときは、
-    /// 区間のフレームごと写す (`take_or_copy`)。
+    /// だけを所有し、`handler` は所有せずに指す。`handler` は捕まえられている間 `Attachment::Detached` で `next` を
+    /// 持たないので、継続を解放すると `top` から `handler` までの区間だけが解放される (docs/spec/runtime.md)。共有
+    /// された継続を写すときは、区間のフレームごと写す (`take_or_copy`)。
     Continuation {
         top: ObjRef,
         handler: ObjRef,
@@ -85,34 +85,47 @@ pub enum Frame {
     /// 戻った関数値に、余った引数を適用する (docs/spec/core-ir.md の eval/apply)。
     Apply { args: Vec<Value>, next: ObjRef },
     /// `mask` 付きの呼び出しの間、外側の同じエフェクトの handler を飛ばす。`effects` はエフェクトの番号の昇順の多重集合で、
-    /// 値を所有しない (docs/implementation/architecture.md の「継続のフレーム」)。
-    Mask { effects: Vec<u32>, next: ObjRef },
+    /// 値を所有しない。`outer` は handler の連鎖で外側の次のフレーム (handler、`Mask`、`Root` のどれか) を指し、所有しない
+    /// (docs/implementation/architecture.md の「継続のフレーム」)。
+    Mask {
+        effects: Vec<u32>,
+        next: ObjRef,
+        outer: ObjRef,
+    },
     /// 継続の最下部。ここへ戻ればプログラムが終わる。handler ではないので、操作の handler を探してここに届いたら内部の
     /// 誤りである (docs/implementation/architecture.md の「継続のフレーム」)。
     Root,
-    /// handle の handler。節はエフェクトの操作の順に並ぶ。`link` が `None` なのは、継続に捕まえられて handle の
-    /// 外側から切り離されている間である (docs/implementation/architecture.md の「継続のフレーム」)。
+    /// handle の handler。節はエフェクトの操作の順に並ぶ (docs/implementation/architecture.md の「継続のフレーム」)。
     Handler {
         effect: u32,
         clauses: Vec<Value>,
         ret: Value,
-        link: Option<Link>,
+        link: Attachment,
     },
 }
 
-/// つながっている handler フレームの外側と状態。切り離すと状態は節に渡るので、2つを一緒に持つ
-/// (docs/spec/runtime.md)。
+/// handler フレームと handle の外側のつながり。`perform` は handler と `Mask` のフレームだけを `outer` でたどるので、
+/// 費用は継続の深さではなく handler の数に比例する (docs/implementation/architecture.md の「継続のフレーム」)。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Link {
-    pub next: ObjRef,
-    pub state: Value,
+pub enum Attachment {
+    /// handle の外側につながっている。`next` (外側の継続) と `state` は参照を1つずつ所有する。`outer` は handler の
+    /// 連鎖で外側の次のフレームを指し、所有しない。切り離すと状態は節に渡るので、3つを一緒に持つ。
+    Attached {
+        next: ObjRef,
+        state: Value,
+        outer: ObjRef,
+    },
+    /// 継続に捕まえられて、handle の外側から切り離されている。`inner` は捕まえた区間の中でいちばん内側の連鎖の
+    /// フレームで、区間に連鎖のフレームがなければこの handler 自身を指す。所有しない。`resume` は、区間をたどらずに
+    /// `inner` から連鎖をつなぎ直す。
+    Detached { inner: ObjRef },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HeapError {
     UseAfterFree,
     Shared,
-    /// 継続の区間が、切り離された handler フレームで終わっていない。
+    /// 継続の区間が切り離された handler フレームで終わっていないか、区間の中の handler の連鎖が区間の外を指す。
     BrokenSegment,
     NotCopyable,
     /// 文字列の操作に、文字列でない物体が渡された。
@@ -124,9 +137,7 @@ impl fmt::Display for HeapError {
         match self {
             HeapError::UseAfterFree => f.write_str("use of a freed object"),
             HeapError::Shared => f.write_str("an object is still shared"),
-            HeapError::BrokenSegment => {
-                f.write_str("a continuation does not end at a detached handler")
-            }
+            HeapError::BrokenSegment => f.write_str("a continuation segment is broken"),
             HeapError::NotCopyable => f.write_str("a file cannot be copied"),
             HeapError::NotAString => f.write_str("an object is not a string"),
         }
@@ -328,35 +339,26 @@ impl Heap {
         Ok(copy)
     }
 
-    /// 継続の区間を、先頭のフレームから切り離された handler フレーム (`next` が `None`) まで写し、写した区間の先頭と
-    /// handler フレームを返す。写したフレームは `next` 以外の子の参照を1つずつ増やし、`next` は写した次のフレームを
-    /// 指す。元のフレームの参照の数は変えないので、写した後も両方の区間のフレームは一意である。長い区間で Rust の
-    /// スタックを溢れさせないよう、ループでたどる (docs/spec/runtime.md)。
+    /// 継続の区間を、先頭のフレームから切り離された handler フレームまで写し、写した区間の先頭と handler フレームを
+    /// 返す。写したフレームは `next` 以外の子の参照を1つずつ増やし、`next` は写した次のフレームを指す。元のフレームの
+    /// 参照の数は変えないので、写した後も両方の区間のフレームは一意である。handler の連鎖の参照 (`outer` と `inner`)
+    /// は所有しないので数えず、元のフレームから写したフレームへの対応で付け替える。長い区間で Rust のスタックを
+    /// 溢れさせないよう、ループでたどる (docs/spec/runtime.md)。
     fn copy_segment(&mut self, top: ObjRef) -> Result<(ObjRef, ObjRef), HeapError> {
-        let mut frames = Vec::new();
-        let mut current = top;
-        loop {
-            frames.push(current);
-            current = match &self.object(current)?.payload {
-                Payload::Frame(Frame::Handler { link: None, .. }) => break,
-                Payload::Frame(
-                    Frame::Return { next, .. }
-                    | Frame::Apply { next, .. }
-                    | Frame::Mask { next, .. }
-                    | Frame::Handler {
-                        link: Some(Link { next, .. }),
-                        ..
-                    },
-                ) => *next,
-                _ => return Err(HeapError::BrokenSegment),
-            };
-        }
+        let frames = self.segment_frames(top)?;
+        let mut copies = HashMap::with_capacity(frames.len());
         // 下から写し、写した次のフレームを `next` に入れる
         let mut below = None;
-        let mut handler = None;
         for &frame in frames.iter().rev() {
             let mut payload = copy(&self.object(frame)?.payload);
             set_next(&mut payload, below)?;
+            // `outer` は区間の下の方のフレームを指すので、もう写してある。h の `inner` は上の方を指すので、すべて
+            // 写した後で付け替える
+            if below.is_some()
+                && let Some(outer) = chain_link(&mut payload)
+            {
+                *outer = remap(&copies, *outer)?;
+            }
             let mut shared = Vec::new();
             children(&payload, &mut shared);
             // 写した次のフレームは、この写しだけが所有する
@@ -364,12 +366,59 @@ impl Heap {
                 self.dup(child)?;
             }
             let copied = self.alloc(payload);
-            handler.get_or_insert(copied);
+            copies.insert(frame, copied);
             below = Some(copied);
         }
-        match (below, handler) {
-            (Some(top), Some(handler)) => Ok((top, handler)),
-            _ => Err(HeapError::BrokenSegment),
+        let top = below.ok_or(HeapError::BrokenSegment)?;
+        let handler = remap(&copies, *frames.last().ok_or(HeapError::BrokenSegment)?)?;
+        let inner = chain_link(self.get_mut(handler)?).ok_or(HeapError::BrokenSegment)?;
+        *inner = remap(&copies, *inner)?;
+        Ok((top, handler))
+    }
+
+    /// 区間のフレームを、先頭から切り離された handler フレーム h まで並べる。たどるついでに、区間の中の handler の
+    /// 連鎖が h の `inner` から `outer` で h までつながり、区間の外を指さないことを確かめる。区間をすべてたどるのは
+    /// 写すときだけなので、検査の費用は写す費用に含まれる (docs/implementation/architecture.md の「継続のフレーム」)。
+    fn segment_frames(&self, top: ObjRef) -> Result<Vec<ObjRef>, HeapError> {
+        let mut frames = Vec::new();
+        // 区間の中でいちばん内側の連鎖のフレームと、直前の連鎖のフレームの `outer`
+        let mut innermost = None;
+        let mut expected = None;
+        let mut current = top;
+        loop {
+            frames.push(current);
+            let (next, outer) = match &self.object(current)?.payload {
+                Payload::Frame(Frame::Handler {
+                    link: Attachment::Detached { inner },
+                    ..
+                }) => {
+                    if expected.is_some_and(|outer| outer != current)
+                        || *inner != innermost.unwrap_or(current)
+                    {
+                        return Err(HeapError::BrokenSegment);
+                    }
+                    return Ok(frames);
+                }
+                Payload::Frame(
+                    Frame::Mask { next, outer, .. }
+                    | Frame::Handler {
+                        link: Attachment::Attached { next, outer, .. },
+                        ..
+                    },
+                ) => (*next, Some(*outer)),
+                Payload::Frame(Frame::Return { next, .. } | Frame::Apply { next, .. }) => {
+                    (*next, None)
+                }
+                _ => return Err(HeapError::BrokenSegment),
+            };
+            if let Some(outer) = outer {
+                if expected.is_some_and(|expected| expected != current) {
+                    return Err(HeapError::BrokenSegment);
+                }
+                innermost.get_or_insert(current);
+                expected = Some(outer);
+            }
+            current = next;
         }
     }
 
@@ -486,9 +535,14 @@ fn copy(payload: &Payload) -> Payload {
             args: args.clone(),
             next: *next,
         }),
-        Payload::Frame(Frame::Mask { effects, next }) => Payload::Frame(Frame::Mask {
+        Payload::Frame(Frame::Mask {
+            effects,
+            next,
+            outer,
+        }) => Payload::Frame(Frame::Mask {
             effects: effects.clone(),
             next: *next,
+            outer: *outer,
         }),
         Payload::Frame(Frame::Root) => Payload::Frame(Frame::Root),
         Payload::Frame(Frame::Handler {
@@ -511,20 +565,53 @@ fn copy(payload: &Payload) -> Payload {
 
 /// 写したフレームの次を、写した次のフレームにする。切り離された handler フレームだけが次を持たない。
 fn set_next(payload: &mut Payload, below: Option<ObjRef>) -> Result<(), HeapError> {
-    match payload {
-        Payload::Frame(
-            Frame::Return { next, .. } | Frame::Apply { next, .. } | Frame::Mask { next, .. },
-        ) => {
-            *next = below.ok_or(HeapError::BrokenSegment)?;
-        }
-        Payload::Frame(Frame::Handler { link, .. }) => match (link, below) {
-            (Some(link), Some(below)) => link.next = below,
-            (None, None) => {}
-            _ => return Err(HeapError::BrokenSegment),
-        },
+    match (payload, below) {
+        (
+            Payload::Frame(
+                Frame::Return { next, .. }
+                | Frame::Apply { next, .. }
+                | Frame::Mask { next, .. }
+                | Frame::Handler {
+                    link: Attachment::Attached { next, .. },
+                    ..
+                },
+            ),
+            Some(below),
+        ) => *next = below,
+        (
+            Payload::Frame(Frame::Handler {
+                link: Attachment::Detached { .. },
+                ..
+            }),
+            None,
+        ) => {}
         _ => return Err(HeapError::BrokenSegment),
     }
     Ok(())
+}
+
+/// handler の連鎖の参照。`Mask` とつながった handler フレームは `outer`、切り離された handler フレームは `inner`
+/// である。どれも所有しない。
+fn chain_link(payload: &mut Payload) -> Option<&mut ObjRef> {
+    match payload {
+        Payload::Frame(
+            Frame::Mask { outer, .. }
+            | Frame::Handler {
+                link: Attachment::Attached { outer, .. },
+                ..
+            },
+        ) => Some(outer),
+        Payload::Frame(Frame::Handler {
+            link: Attachment::Detached { inner },
+            ..
+        }) => Some(inner),
+        _ => None,
+    }
+}
+
+/// 元の区間のフレームを、写した区間のフレームに対応させる。対応にない参照は区間の外を指している。
+fn remap(copies: &HashMap<ObjRef, ObjRef>, frame: ObjRef) -> Result<ObjRef, HeapError> {
+    copies.get(&frame).copied().ok_or(HeapError::BrokenSegment)
 }
 
 /// 子のオブジェクト。解放と、共有されたオブジェクトの複製 (`take_or_copy`) が、同じ子を数える。
@@ -535,7 +622,13 @@ fn children(payload: &Payload, work: &mut Vec<ObjRef>) {
     };
     match payload {
         // 退避した値はそれぞれ参照を1つ所有するので、1回ずつ解放する
-        Payload::Frame(Frame::Return { saved, next, .. }) => {
+        Payload::Frame(Frame::Return {
+            function: _,
+            resume: _,
+            bind: _,
+            saved,
+            next,
+        }) => {
             work.extend(saved.iter().filter_map(|(_, value)| object(value)));
             work.push(*next);
         }
@@ -543,7 +636,12 @@ fn children(payload: &Payload, work: &mut Vec<ObjRef>) {
             work.extend(args.iter().filter_map(object));
             work.push(*next);
         }
-        Payload::Frame(Frame::Mask { effects: _, next }) => work.push(*next),
+        // handler の連鎖の `outer` と `inner` は所有しない
+        Payload::Frame(Frame::Mask {
+            effects: _,
+            next,
+            outer: _,
+        }) => work.push(*next),
         Payload::Frame(Frame::Handler {
             effect: _,
             clauses,
@@ -552,9 +650,16 @@ fn children(payload: &Payload, work: &mut Vec<ObjRef>) {
         }) => {
             work.extend(clauses.iter().filter_map(object));
             work.extend(object(ret));
-            if let Some(Link { next, state }) = link {
-                work.extend(object(state));
-                work.push(*next);
+            match link {
+                Attachment::Attached {
+                    next,
+                    state,
+                    outer: _,
+                } => {
+                    work.extend(object(state));
+                    work.push(*next);
+                }
+                Attachment::Detached { inner: _ } => {}
             }
         }
         // `handler` は所有しない。`top` からたどれる

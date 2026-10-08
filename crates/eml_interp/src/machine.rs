@@ -2,7 +2,7 @@ use std::cmp::Ordering;
 use std::path::Path;
 
 use eml_core_ir::{Atom, CExpr, CExprId, Call, Case, CasePattern, FnIdx, Program, Rhs, VarId};
-use eml_runtime::{Closure, Frame, Heap, Link, ObjRef, OutputSink, Payload, Value};
+use eml_runtime::{Attachment, Closure, Frame, Heap, ObjRef, OutputSink, Payload, Value};
 
 use crate::RunStats;
 use crate::error::{Fault, RuntimeError};
@@ -39,6 +39,10 @@ pub(crate) struct Machine<'p> {
     slots: Vec<Option<Value>>,
     /// 継続の先頭のフレーム。最下部には常に `Frame::Root` がある。
     pub(crate) cont: ObjRef,
+    /// handler の連鎖の先頭。`cont` から `next` でたどって最初に会う handler か `Mask` のフレームで、どちらもなければ
+    /// `Root` のフレームである。`perform` はここから `outer` だけをたどる (docs/implementation/architecture.md の
+    /// 「継続のフレーム」)。
+    pub(crate) handlers: ObjRef,
     /// `Program::strings` の項目ごとの不死の物体。`Rhs::ConstString` は写さずに参照を1つ作る (docs/spec/runtime.md)。
     literals: Vec<ObjRef>,
     /// `find_handler` が調べたフレームの数 (`RunStats::handler_visits`)。
@@ -64,6 +68,7 @@ impl<'p> Machine<'p> {
             control: entry.body,
             slots: vec![None; entry.vars.len()],
             cont,
+            handlers: cont,
             literals,
             handler_visits: 0,
         }
@@ -258,8 +263,10 @@ impl<'p> Machine<'p> {
             let frame = Frame::Mask {
                 effects: mask.to_vec(),
                 next: self.cont,
+                outer: self.handlers,
             };
             self.cont = self.heap.alloc(Payload::Frame(frame));
+            self.handlers = self.cont;
         }
         match call {
             Call::Direct(callee, args) => {
@@ -287,12 +294,14 @@ impl<'p> Machine<'p> {
                     effect: *effect,
                     clauses,
                     ret: on_return,
-                    link: Some(Link {
+                    link: Attachment::Attached {
                         next: self.cont,
                         state: init,
-                    }),
+                        outer: self.handlers,
+                    },
                 };
                 self.cont = self.heap.alloc(Payload::Frame(frame));
+                self.handlers = self.cont;
                 self.apply_and_continue(body, vec![Value::Unit])
             }
             Call::Perform {
@@ -408,8 +417,9 @@ impl<'p> Machine<'p> {
     /// 余った引数のフレームが続く間はループで適用し、Rust の再帰を使わない。
     pub(crate) fn ret(&mut self, mut value: Value) -> Result<Step, Fault> {
         loop {
+            let top = self.cont;
             // フレームはつねに一意である。共有されうるのは継続オブジェクトだけで、再開するときに区間を写す (docs/spec/runtime.md)
-            let Payload::Frame(frame) = self.heap.take(self.cont).map_err(Fault::Heap)? else {
+            let Payload::Frame(frame) = self.heap.take(top).map_err(Fault::Heap)? else {
                 return Err(Fault::Internal("the continuation is not a frame"));
             };
             match frame {
@@ -451,8 +461,10 @@ impl<'p> Machine<'p> {
                             self.heap.decref(obj).map_err(Fault::Heap)?;
                         }
                     }
-                    let Link { next, state } =
-                        link.ok_or(Fault::Internal("a detached handler received a value"))?;
+                    let Attachment::Attached { next, state, outer } = link else {
+                        return Err(Fault::Internal("a detached handler received a value"));
+                    };
+                    self.pop_chain(top, outer)?;
                     self.cont = next;
                     match self.apply(on_return, vec![value, state])? {
                         Applied::Entered => return Ok(Step::Continue),
@@ -460,7 +472,14 @@ impl<'p> Machine<'p> {
                     }
                 }
                 // 値はそのまま外側へ返す
-                Frame::Mask { effects: _, next } => self.cont = next,
+                Frame::Mask {
+                    effects: _,
+                    next,
+                    outer,
+                } => {
+                    self.pop_chain(top, outer)?;
+                    self.cont = next;
+                }
                 Frame::Root => {
                     if let Value::Obj(obj) = value {
                         self.heap.decref(obj).map_err(Fault::Heap)?;
@@ -469,6 +488,18 @@ impl<'p> Machine<'p> {
                 }
             }
         }
+    }
+
+    /// 外す handler か `Mask` のフレームを連鎖から外す。外すフレームは連鎖の先頭のはずなので、O(1) で確かめる
+    /// (docs/implementation/architecture.md の「継続のフレーム」)。
+    fn pop_chain(&mut self, frame: ObjRef, outer: ObjRef) -> Result<(), Fault> {
+        if frame != self.handlers {
+            return Err(Fault::Internal(
+                "a popped handler or mask is not the head of the handler chain",
+            ));
+        }
+        self.handlers = outer;
+        Ok(())
     }
 
     /// 変数の値。読み出しはスロットを書き換えない。ヒープの値の所有権を渡すかどうかは Core IR の命令が決める

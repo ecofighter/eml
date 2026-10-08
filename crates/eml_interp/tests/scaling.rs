@@ -92,3 +92,82 @@ fn appending_to_a_unique_string_copies_only_the_right_side() {
     assert_eq!(out, format!("s{}\n", "x".repeat(n)));
     assert!(stats.string_bytes_copied <= 4 * n as u64, "{stats:?}");
 }
+
+/// handler の下の非末尾の再帰。深さごとに1回 `ask` するので、`count n` は n 回 `ask` する。継続の全体をたどると、
+/// 深さ d の `ask` は d に比例する数のフレームを調べ、合わせて n²/2 ほどになる。
+const ASK_RECURSION: &str = "effect Ask where
+  ask : Unit -> Int
+
+count : Int -> <Ask> Int
+count n = if n == 0 then 0 else ask () + count (n - 1)
+";
+
+/// `ASK_RECURSION` の後に `rest` (`main` とその前の宣言) を置いて実行し、`handler_visits` を返す。どの形でも
+/// `ask` は 1 を返す handler に届くので、出力は n である。
+fn handler_visits(n: u64, rest: &str) -> u64 {
+    let (out, result) = run_stats(&format!("{ASK_RECURSION}\n{rest}"));
+    let stats = result.unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(out, format!("{n}\n"));
+    stats.handler_visits
+}
+
+#[test]
+fn a_perform_under_one_handler_visits_only_that_handler() {
+    // 連鎖は `Ask` の handler だけなので、`ask` ごとに1つ調べる
+    let n = 2000;
+    let rest = format!(
+        "main : Unit -> <IO> Unit
+main () =
+  let r = handle count {n} with
+            | ask () k -> k 1
+  println (show_int r)
+"
+    );
+    let visits = handler_visits(n, &rest);
+    assert!(visits <= 2 * n, "handler_visits = {visits}");
+}
+
+#[test]
+fn a_perform_passes_an_inner_handler_of_another_effect_once() {
+    // 連鎖は `Tell` と `Ask` の handler なので、`ask` ごとに2つ調べる
+    let n = 2000;
+    let rest = format!(
+        "effect Tell where
+  tell : Int -> Unit
+
+main : Unit -> <IO> Unit
+main () =
+  let r = handle (handle count {n} with
+                    | tell _ k -> k ()) with
+            | ask () k -> k 1
+  println (show_int r)
+"
+    );
+    let visits = handler_visits(n, &rest);
+    assert!(visits <= 3 * n, "handler_visits = {visits}");
+}
+
+#[test]
+fn a_perform_in_a_masked_callback_skips_the_inner_handler_once() {
+    // tests/ui/run/effects/mask_callback.em と同じ形。`run` は `cb` を `mask` 付きで呼ぶので、`count` の `ask` は
+    // 内側の `Ask` の handler を飛ばして外側に届く (内側に届くと出力は 2n になる)。連鎖は `Mask`、内側の handler、
+    // 外側の handler なので、`ask` ごとに3つ調べる
+    let n = 2000;
+    let rest = format!(
+        "run : (Unit -> <e> a) -> <Ask | e> a
+run cb = cb ()
+
+go : Unit -> <Ask> Int
+go () = count {n}
+
+main : Unit -> <IO> Unit
+main () =
+  let r = handle (handle run go with
+                    | ask () k -> k 2) with
+            | ask () k -> k 1
+  println (show_int r)
+"
+    );
+    let visits = handler_visits(n, &rest);
+    assert!(visits <= 4 * n, "handler_visits = {visits}");
+}
