@@ -24,7 +24,7 @@ pub struct Program {
     /// 実行の入口。`main` を `()` で呼ぶ、引数のない関数 (docs/spec/core-ir.md)。
     pub entry: FnIdx,
     /// 文字列リテラルの定数表。`ConstString` と `CasePattern::String` が添字で引く。インタプリタは項目ごとに不死の
-    /// 物体を1つ作り、`ConstString` はその物体の参照を1つ作る (docs/spec/runtime.md)。
+    /// 物体を1つ作り、`ConstString` はその物体の参照を1つ作る (docs/spec/runtime.md の「不死の物体」)。
     pub strings: Vec<String>,
     /// エフェクトの表。添字は `Call::Handle` と `Call::Perform` のエフェクトの番号で、HIR の `EffectId` の添字と同じである。
     pub effects: Vec<EffectInfo>,

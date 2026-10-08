@@ -94,7 +94,7 @@ eml_extern       extern の表 (型、エフェクト、関数)。依存を持�
 | `eml_hir` | `load(&str, &str, &dyn ModuleSource) -> (Loaded, Vec<Diagnostic>)`、`def_map(&[LoadedModule]) -> (DefMap, Vec<Diagnostic>)`、`lower(&DefMap, &[LoadedModule]) -> (Program, Vec<Diagnostic>)` の順に呼ぶ。`load` は入口の表示のパスと本文を受け取り、ファイルごとに `item_tree(FileId, &Parse) -> (ItemTree, Vec<Diagnostic>)` を呼ぶ。モジュールの並びは、0番目が Prelude、1番目が入口のモジュールで、その後に Prelude を除く標準ライブラリのモジュール、import で見つけた順のモジュールが続く |
 | `eml_types` | `check(&Program, &SourceFiles) -> (TypedProgram, Vec<Diagnostic>)`。`SourceFiles` は E3003 の fix の字下げを求めるのに使う |
 | `eml_core_ir` | `lower(&hir::Program, &TypedProgram, FunctionId) -> Program`。途中のパスで止める `lower_until` もある。入口の関数は呼ぶ側が渡す |
-| `eml_interp` | `run(Arc<Program>, &RunConfig, &OutputSink) -> Result<(), RuntimeError>` |
+| `eml_interp` | `run(&Program, &RunConfig, &OutputSink) -> Result<RunStats, RuntimeError>` |
 
 ## エラーが出ても止まらない
 
@@ -201,7 +201,7 @@ HIR への変換では、名前解決に加えて、名前の重複と未定義�
 
 ## `eml_core_ir`、`eml_runtime`、`eml_interp` の内部
 
-- Core IR の構成、評価と所有権の意味、パスの境界の不変条件は [Core IR とインタプリタ](../spec/core-ir.md) が、ヒープと RC は [ランタイム](../spec/runtime.md) が定める。`simplify` の書き換えと継続のフレームは、下の「`simplify` の書き換え」と「継続のフレーム」に書く。`Rc` を使わず `Arc<Program>` で共有する規約は、core-ir.md の「実行時の規約」にある
+- Core IR の構成、評価と所有権の意味、パスの境界の不変条件は [Core IR とインタプリタ](../spec/core-ir.md) が、ヒープと RC は [ランタイム](../spec/runtime.md) が定める。`simplify` の書き換えと継続のフレームは、下の「`simplify` の書き換え」と「継続のフレーム」に書く。値とフレームに `Rc` と `RefCell` を使わない規約は、core-ir.md の「実行時の規約」にある
 - パスの順番は `pipeline.rs` だけが持つ。join point の `captures` はパスの間でつねに正しく保つ。RC の命令を入れる前のパスの後では生存解析で埋め直してから範囲を検査し、Perceus の後では所有権まで検査する。verifier はデバッグビルドだけでかける。`compact` が見つけた木の誤りは、共有された式が入れ子になるとたどる時間が指数的に増えるので、どのビルドでも報告する
 - 変換 (`translate/`) は入口の関数から届く関数だけを変換する。`mod.rs` は値の渡し先と join point の骨組み、`expr.rs` は式ごとの変換、`program.rs` は関数の表と包む関数、`types.rs` は型から決まる性質と、`==` と `!=` から比べ方ごとの extern の行を選ぶ関数、`pattern.rs` は決定木を持つ。handler の節の `k` は、節ごとに HIR で使い方を調べ、2つの形のどちらかに変換する。使用がすべて引数をそろえた直接の呼び出しか `drop k` なら、クロージャを作らず、呼び出しを生の継続への `Call::Resume` にする (直接の形)。`k` を関数の値として使うなら、節の入口で生の継続を `cont$` か `cont$state` のクロージャに包んで `k` とし、呼び出しを `Call::Apply` にする (包む形)。`cont$` と `cont$state` は、使うときだけ1つずつ作る ([Core IR とインタプリタ](../spec/core-ir.md))
 - 既知の呼ばれる式への呼び出しは、種類 (`Callee`) ごとに、引数の数、足りないときの包む関数、ちょうどのときの命令だけを決める。足りない・ちょうど・余るの場合分けは `saturate` の1か所で行う
@@ -213,6 +213,7 @@ HIR への変換では、名前解決に加えて、名前の重複と未定義�
 - 生存解析は、`Let` の連鎖と join point の本体の連なりが長くなりうるので、再帰ではなく作業の列でたどる。`jump` が届かない join point でも `captures` を `Join` まで生かしておく。verifier が `captures` を `Join` の位置で範囲にあることを求めるためである
 - インタプリタの環境のスロットは値だけを持ち、読み出しはスロットを書き換えない。参照の所有は Core IR の命令が表し、verifier が釣り合いを確かめる。`Payload` は `Clone` を導出しないので、`ObjRef` を `dup` せずに複製できない
 - `eml_interp` は関心ごとにファイル (`machine.rs`、`effects.rs`、`externs.rs`、`error.rs`) を分け、`externs.rs` の `call_extern` が `Extern` のすべての行を、既定の腕のない `match` で実行する (行を足して実装を忘れるとコンパイルが通らない)。`Machine` の処理を `impl` ごとに書く。フレームに積む戻り位置は `ReturnPoint` と呼び、継続の `resume` と名前が重ならないようにする
+- `RunStats` の `handler_visits` は `find_handler` が数え、`string_bytes_copied` はヒープが数える (`Heap::string_bytes_written`)。文字列の物体の中身を書くのは、ヒープの確保、写し、`append_str` だけで、ヒープはそこで書いた長さを足す。`alloc_immortal` が作る不死のリテラルは数えない
 
 ### `simplify` の書き換え
 
@@ -232,16 +233,20 @@ HIR への変換では、名前解決に加えて、名前の重複と未定義�
 ### 継続のフレーム
 
 - 継続は、ヒープ上のイミュータブルなフレームの連結リストで表す。handler フレームは、その中の目印になる。
-- `handle` は、節のクロージャか関数の値を持つ handler フレームを積み、本体のクロージャか関数の値に `()` を適用する。本体の値が handler フレームに届いたら、フレームを外す。`return` の節への受け渡しは、下の状態の欄の項で定める。
-- `perform` は、連結リストを遡って、同じエフェクトの一番内側の handler フレームを探す。`Mask` フレームが飛ばす handler は数えない (下の `find_handler`)。先頭からその handler フレームまでの区間が継続になる。handler フレームの次 (handle の外側) を切り離して機械の継続に戻し、節を呼ぶ。`once` と `multi` の操作は区間を継続オブジェクトにして `k` として渡し、`never` の操作は区間をその場で解放する。
-- `resume` は、継続オブジェクトの handler フレームの次に今の継続をつなぎ、区間の先頭に `v` を返す。区間のフレームはつねに一意なので、つなぎ直しは書き換え1回で済む。一意なオブジェクトの書き換えは観測できないので、フレームをイミュータブルとして扱う前提と両立する (Perceus の reuse と同じ理屈)。継続オブジェクトが共有されていれば (`multi` の `k` をもう一度使う場合)、区間のフレームを写してから、写した handler フレームの次に今の継続をつなぐ。元の区間はそのまま残るので、継続を何度でも再開できる。最後の1回の再開では継続が一意なので、写さずに書き換える。
-- handler フレームは、つねに状態の欄を持つ。`handle` は初期値を欄に入れてフレームを積む。`perform` は区間を切り出すときに欄から状態を取り出し、節の最後の引数として渡す。区間に残る handler フレームの欄は空になる。`resume k v s` は、区間の handler フレームの欄に `s` を入れてからつなぎ直す。区間を写す場合は、写した handler フレームに入れる。本体の値が handler フレームに届いたら、欄から状態を取り出し、値と一緒に `return` の節に渡す。`return` の節はつねにある。省略した節は、HIR が `| return x -> x` として合成する。状態のある handler では、状態を `_` で捨てる `| return x _ -> x` として合成する ([式](../spec/expressions.md) の「handler」と「パラメータ付き handler」)。
+- `handle` は、節のクロージャか関数の値を持つ handler フレームを積み、本体のクロージャか関数の値に `()` を適用する。本体の値が handler フレームに届いたら、フレームを外す。`return` の節への受け渡しは、下の状態の項で定める。
+- handler フレームと `Mask` フレームは、連結リストのほかに、外側へ向かう連鎖でもつながる ([ランタイム](../spec/runtime.md) の「handler の連鎖」)。機械は `handlers` を持ち、`cont` から `next` でたどって最初に会う連鎖のフレーム (handler、`Mask`、`Root` のどれか) を指す。連鎖のフレームを積むときは、そのフレームの `outer` (handler フレームでは `Attached` の `outer`) を `handlers` にし、`handlers` をそのフレームにする。値が届いてフレームを外すときは、`handlers` をそのフレームの `outer` に戻す。`perform` が handler を探すときは連鎖だけをたどるので、費用は継続の深さによらず、間にある handler と `Mask` のフレームの数に比例する。`Mask` フレームの数は handler フレームの数を超えない ([エフェクトと handler](../spec/effects.md) の「健全性」)。
+- `perform` は、`handlers` から `outer` で連鎖を遡って、同じエフェクトの一番内側の handler フレーム h を探す。`Mask` フレームが飛ばす handler は数えない (下の `find_handler`)。先頭から h までの区間が継続になる。h の `Attached { next, state, outer }` を読み、機械の継続を `next`、`handlers` を `outer` にして、節を呼ぶ。h は `Detached { inner }` にし、`inner` には元の `handlers` を入れる。元の `handlers` は、区間の中でいちばん内側の連鎖のフレームで、区間に連鎖のフレームがなければ h 自身である。`once` と `multi` の操作は区間を継続オブジェクトにして `k` として渡し、`never` の操作は区間をその場で解放する。
+- `resume` は、継続オブジェクトの h の `Detached { inner }` を読み、h を `Attached { next: 今の継続, state, outer: handlers }` にしてから、`handlers` を `inner` にし、区間の先頭に `v` を返す。区間のフレームはつねに一意なので、つなぎ直しは書き換え1回で済む。一意なオブジェクトの書き換えは観測できないので、フレームをイミュータブルとして扱う前提と両立する (Perceus の reuse と同じ理屈)。継続オブジェクトが共有されていれば (`multi` の `k` をもう一度使う場合)、区間のフレームを写してから、写した h を今の継続につなぐ。写すときは、区間の中の連鎖の参照も写した側に付け替える。元の区間はそのまま残るので、継続を何度でも再開できる。最後の1回の再開では継続が一意なので、写さずに書き換える。
+- handler フレームは、つながっている間つねに状態を持つ。`handle` は初期値を状態にしてフレームを積む。`perform` は区間を切り出すときに `Attached` から状態を取り出し、節の最後の引数として渡す。区間に残る h は `Detached` で、状態を持たない。`resume k v s` は、h を `Attached` に戻すときに状態を `s` にする。区間を写す場合は、写した h に入れる。本体の値が handler フレームに届いたら、状態を取り出し、値と一緒に `return` の節に渡す。`return` の節はつねにある。省略した節は、HIR が `| return x -> x` として合成する。状態のある handler では、状態を `_` で捨てる `| return x _ -> x` として合成する ([式](../spec/expressions.md) の「handler」と「パラメータ付き handler」)。
 - `drop k` と `never` の操作による中断は、継続の区間を解放する。フレームは退避した値だけを所有するので、子をたどる解放が、捕まっていた値を1回ずつ解放する。`Lin` の値の破棄処理はオブジェクトの解放そのものなので、捕まっていた `File` は、この解放で読み出し口が捨てられて閉じる ([ランタイム](../spec/runtime.md))。
-- `mask` 付きの呼び出しは、`Mask` フレーム (`Frame::Mask { effects, next }`) を1つ積んでから呼ぶ。`effects` は `mask` の多重集合で、フレームは `next` のほかに値を持たない。末尾でない呼び出しでは戻りのフレームの上に積むので、呼び出し先が値を返すと先に外れる。末尾呼び出しでは、戻りのフレームの代わりに積む。`resume` では、`resume` が今の継続を読む前に積むので、再開した区間の handler フレームの次が `Mask` フレームになる。値が `Mask` フレームに届いたら、フレームを外して値をそのまま次へ返す。
-- `find_handler` は、探すエフェクトについて飛ばす数を数えながら連結リストを遡る。`Mask` フレームでは、その数に `effects` の中の同じエフェクトの数を足す。同じエフェクトの handler フレームでは、数が正なら1減らして飛ばし、0 ならその handler を選ぶ。
-- `Mask` フレームは、ほかのフレームと同じく継続の区間に入り、`multi` の再開では写され、中断では解放される。区間の複写 (`copy_segment`)、子のたどり方 (`children`)、`debug_heap` のリークの数え方では、引数のない `Apply` フレームと同じに扱う。
+- `mask` 付きの呼び出しは、`Mask` フレーム (`Frame::Mask { effects, next, outer }`) を1つ積んでから呼ぶ。`effects` は `mask` の多重集合で、フレームは値を持たない。末尾でない呼び出しでは戻りのフレームの上に積むので、呼び出し先が値を返すと先に外れる。末尾呼び出しでは、戻りのフレームの代わりに積む。`resume` では、`resume` が今の継続を読む前に積むので、再開した区間の h の `next` と `outer` は、どちらもその `Mask` フレームになる。値が `Mask` フレームに届いたら、フレームを外して値をそのまま次へ返す。
+- `find_handler` は、探すエフェクトについて飛ばす数を数えながら連鎖を遡る。`Mask` フレームでは、その数に `effects` の中の同じエフェクトの数を足す。同じエフェクトの handler フレームでは、数が正なら1減らして飛ばし、0 ならその handler を選ぶ。調べた連鎖のフレームの数を、`RunStats` の `handler_visits` に足す。
+- `Mask` フレームは、ほかのフレームと同じく継続の区間に入り、`multi` の再開では写され、中断では解放される。子のたどり方 (`children`) と `debug_heap` のリークの数え方では、引数のない `Apply` フレームと同じに扱う。`outer` は所有しないので `children` はたどらず、区間の複写 (`copy_segment`) が写した側のフレームに付け替える。
+- 連鎖の不変条件は2つある。`handlers` は、`cont` から `next` でたどって最初に会う連鎖のフレームである。捕まえた区間の中の連鎖の参照は区間の外を指さず、区間のいちばん外側の連鎖のフレームの `outer` は h を指す。
+- インタプリタは、次の O(1) の検査を `debug_heap` によらず常に行い、破れていれば `Fault::Internal` にする。`ret` が `Mask` か handler のフレームを外すとき、そのフレームが `handlers` と同じであること。`perform` のたどりが `Attached` の handler で終わること。`resume` で、h が `Detached` であり、`inner` が handler か `Mask` のフレームであること。`copy_segment` は区間をすべてたどるので、そのついでに、区間の中の連鎖が `inner` から `outer` で h までつながっていることを確かめる。
+- `perform` ごとに継続の全体をたどる検査は入れない。`debug_heap` は UI テストとテストの補助で常に付くので、全体をたどるとどのテストも2乗の時間になるためである。
 - 末尾の `mask` 付き呼び出しで、継続の先頭がすでに `Mask` フレームなら、2つを1つのフレームに併合しても意味は変わらない。間に handler フレームがないので、飛ばす数を足す順が結果に影響しないためである。この併合は許される最適化だが、今は行わない。`Mask` フレームの数は handler フレームの数以下に収まり ([エフェクトと handler](../spec/effects.md) の「健全性」)、併合で減るのは定数倍にとどまるためである。
-- 連結リストの最下部には、プログラムの終わりを表す `Frame::Root` がある。値がここに戻れば実行が終わる。操作の handler を探してここに届いたら、内部の誤りである。
+- 連結リストの最下部には、プログラムの終わりを表す `Frame::Root` がある。連鎖のいちばん外側も `Root` で、`handlers` は始めに `Root` を指す。値がここに戻れば実行が終わる。操作の handler を探してここに届いたら、内部の誤りである。
 - `extern` 命令は、連結リストを遡らず、フレームも積まずにその場で実行して値を返す。extern は eml のコードを呼び返さないので、継続を切り出す必要がないためである。
 
 ## ソースファイルと位置
@@ -258,17 +263,17 @@ HIR への変換では、名前解決に加えて、名前の重複と未定義�
 - `eml run --debug-heap` は、RC のリーク検出と解放済みアクセスの検出を有効にする
 - 終了コードは、0 = 成功、1 = 診断のエラーあり、または実行時エラー、2 = 使い方の誤り (引数の誤り、入口のファイルが読めない) とする。2 は、clap が引数の誤りで返す値に合わせた。import したモジュールが見つからないことは診断 (E1026) なので 1 である
 
-`eml_cli` の lib は次の API を公開する。`Session` はパイプラインを組む唯一の場所で、CLI、UI テスト、`eml_test_support` がこれを通す。UI テストはこれをプロセス内で呼ぶ。どのメソッドも読み込みの結果から計算し直し、途中の結果を持たない。途中の結果を使い回すのは、salsa でクエリ化するときに考える。`Session` は `Send + Sync` である。読み込みの結果が持つのは緑の木 (green tree) と `AstPtr` だけで、ノードを持たないためである。
+`eml_cli` の lib は次の API を公開する。`Session` はパイプラインを組む唯一の場所で、CLI、UI テスト、`eml_test_support` がこれを通す。UI テストはこれをプロセス内で呼ぶ。どのメソッドも読み込みの結果から計算し直し、途中の結果を持たない。途中の結果を使い回すのは、salsa でクエリ化するときに考える。`Session` は `Send + Sync` で、`crates/eml_cli/tests/api.rs` が確かめる。salsa への載せ替えと、フロントエンドの並列のコンパイルに備えるためで、インタプリタとは関係ない。読み込みの結果が持つのは緑の木 (green tree) と `AstPtr` だけで、ノードを持たないので `Send + Sync` にできる。
 
 - `Session::load(entry_path, entry_text, &dyn ModuleSource) -> Session` は、入口の表示のパスと本文を受け取り、読み込みの段で標準ライブラリ全体と import したモジュールを読む。`Session::user_module_names` は出どころがユーザーのモジュールの名前を返し、UI テストの harness が1ファイルのテストの import を確かめるのに使う。`Session` は1回の検査や実行で読むソースの集まりである。入口のファイルは `main.rs` が読み、読めなければ終了コード 2 にする。ファイルシステムから読む `ModuleSource` は `FsProvider` で、パスの各段の名前がディレクトリの一覧と大文字小文字まで一致することを確かめる。macOS のように大文字小文字を区別しないファイルシステムで、`import Report.Csv` が `report/Csv.em` に当たらないようにするためである。大文字小文字だけが違う名前があれば、実際の名前を読めない理由として返す (E1026)。`main.rs` は、入口のファイル名をディレクトリの一覧にある綴りに直してから `Session::load` に渡す。`t/server.em` で `t/Server.em` を開けたときも、依存先の `import Server` が入口を指すと分かるようにするためである。実行を始める `main` は入口のモジュールからだけ探し (`hir::Program::main`)、Prelude には置かない
 - `Session::def_map() -> DefMapped`、`Session::lower() -> Lowered`、`Session::check() -> Checked` (feature `types`)。結果は段階の出力 (`DefMap`、HIR の `Program`、`TypedProgram`) と診断を持つ。診断は読み込みの段からその段階までのすべてで、`sort_diagnostics` で並べて返す。各段階は診断の順を約束しない。`eml check` は `check().diagnostics` を表示する
-- `Session::compile() -> Compiled` (feature `core`)。`Compiled` は、検査で出た診断 (警告を含む) と、エラーがなければ `Arc<Program>` を持つ。`main` がないこと (E2003) は `compile` だけが検査する ([型と Kind](../spec/types.md) の「推論」)
+- `Session::compile() -> Compiled` (feature `core`)。`Compiled` は、検査で出た診断 (警告を含む) と、エラーがなければ Core IR の `Program` (`Option<Program>`) を持つ。`main` がないこと (E2003) は `compile` だけが検査する ([型と Kind](../spec/types.md) の「推論」)
 - テストのための口が2つある。`Session::load_with_std(std, entry_path, entry_text, source)` は標準ライブラリを `(ファイル名, 本文)` の並びに差し替えて読み、`Session::compile_until(last: Pass) -> Compiled` は Core IR を `last` のパスの直後で止める。`eml_hir` の `load` / `load_with_std` と、`eml_core_ir` の `lower` / `lower_until` の組に合わせて置く
-- `execute(Arc<Program>, &RunConfig, stdout: OutputSink) -> Result<(), RuntimeError>` (feature `run`)
+- `execute(&Program, &RunConfig, stdout: OutputSink) -> Result<RunStats, RuntimeError>` (feature `run`)。`RunStats` は実行の仕事の回数で、CLI は使わない。テストが2乗の時間にならないことを確かめるのに使う
 
 検査と実行を別の関数に分けるのは、呼び出し側が実行の前に診断を表示できるようにするためである。CLI と UI テストは、`compile` の診断を表示してから `execute` を呼ぶ。
 
-`RunConfig` は `eml_interp` で定義し、`eml_cli` が再公開する。`#[non_exhaustive]` にしてあり、`RunConfig::default()` から作ってフィールドを代入する。`OutputSink` と `RunConfig` に将来足すものは [ランタイム](../spec/runtime.md) の「実行の API」にある。
+`RunConfig` と `RunStats` は `eml_interp` で定義し、`eml_cli` が再公開する。`RunConfig` は `#[non_exhaustive]` にしてあり、`RunConfig::default()` から作ってフィールドを代入する。`OutputSink` と `RunStats` の定めは [ランタイム](../spec/runtime.md) の「実行の API」にある。
 
 ## 外部 crate
 

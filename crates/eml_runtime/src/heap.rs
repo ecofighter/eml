@@ -86,16 +86,16 @@ pub enum Frame {
     Apply { args: Vec<Value>, next: ObjRef },
     /// `mask` 付きの呼び出しの間、外側の同じエフェクトの handler を飛ばす。`effects` はエフェクトの番号の昇順の多重集合で、
     /// 値を所有しない。`outer` は handler の連鎖で外側の次のフレーム (handler、`Mask`、`Root` のどれか) を指し、所有しない
-    /// (docs/implementation/architecture.md の「継続のフレーム」)。
+    /// (docs/spec/runtime.md の「handler の連鎖」)。
     Mask {
         effects: Vec<u32>,
         next: ObjRef,
         outer: ObjRef,
     },
     /// 継続の最下部。ここへ戻ればプログラムが終わる。handler ではないので、操作の handler を探してここに届いたら内部の
-    /// 誤りである (docs/implementation/architecture.md の「継続のフレーム」)。
+    /// 誤りである (docs/spec/runtime.md の「handler の連鎖」)。
     Root,
-    /// handle の handler。節はエフェクトの操作の順に並ぶ (docs/implementation/architecture.md の「継続のフレーム」)。
+    /// handle の handler。節はエフェクトの操作の順に並ぶ (docs/spec/runtime.md の「handler の連鎖」)。
     Handler {
         effect: u32,
         clauses: Vec<Value>,
@@ -105,7 +105,7 @@ pub enum Frame {
 }
 
 /// handler フレームと handle の外側のつながり。`perform` は handler と `Mask` のフレームだけを `outer` でたどるので、
-/// 費用は継続の深さではなく handler の数に比例する (docs/implementation/architecture.md の「継続のフレーム」)。
+/// 費用は継続の深さではなく handler の数に比例する (docs/spec/runtime.md の「handler の連鎖」)。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Attachment {
     /// handle の外側につながっている。`next` (外側の継続) と `state` は参照を1つずつ所有する。`outer` は handler の
@@ -263,7 +263,7 @@ impl Heap {
     /// 一意な左辺の文字列の後に右辺の文字列を足し、足したバイト数を返す。スロットを解放して取り直さないので、左辺の
     /// `ObjRef` はそのまま使える。左辺の中身をいったん取り出してから右辺を借りる。左辺と右辺が同じ物体なら RC は 2
     /// 以上なので、先に一意の検査で断る。不死の物体も一意にならないので `Shared` になる
-    /// (docs/spec/runtime.md の「ランタイムの API」)。
+    /// (docs/spec/runtime.md の「文字列の連結」)。
     pub fn append_str(&mut self, left: ObjRef, right: ObjRef) -> Result<usize, HeapError> {
         if !self.is_unique(left)? {
             return Err(HeapError::Shared);
@@ -378,7 +378,7 @@ impl Heap {
 
     /// 区間のフレームを、先頭から切り離された handler フレーム h まで並べる。たどるついでに、区間の中の handler の
     /// 連鎖が h の `inner` から `outer` で h までつながり、区間の外を指さないことを確かめる。区間をすべてたどるのは
-    /// 写すときだけなので、検査の費用は写す費用に含まれる (docs/implementation/architecture.md の「継続のフレーム」)。
+    /// 写すときだけなので、検査の費用は写す費用に含まれる (docs/spec/runtime.md の「handler の連鎖」)。
     fn segment_frames(&self, top: ObjRef) -> Result<Vec<ObjRef>, HeapError> {
         let mut frames = Vec::new();
         // 区間の中でいちばん内側の連鎖のフレームと、直前の連鎖のフレームの `outer`

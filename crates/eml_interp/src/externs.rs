@@ -147,7 +147,7 @@ impl Machine<'_> {
 
     /// `++`。左辺が一意なら、右辺をその場で足して右辺だけを手放す。共有された左辺と不死のリテラルは書き換えられない
     /// ので、両辺の長さの和の容量で新しい文字列を作り、両辺を手放す。`x ++ x` は Perceus の `dup` で RC が 2 になって
-    /// 届くので、写す側に進む (docs/spec/runtime.md の「ランタイムの API」)。
+    /// 届くので、写す側に進む (docs/spec/runtime.md の「文字列の連結」)。
     fn concat(&mut self, left: Value, right: Value) -> Result<Value, Fault> {
         let (left, head) = self.string(left)?;
         let (right, tail) = self.string(right)?;
