@@ -46,7 +46,7 @@
 
 - 結合テストは、話題ごとに1ファイルにする。ファイル名は spec の節か言語の機能から付ける (`effects.rs`、`operators.rs`)。1つのファイルが複数の話題にまたがったら、話題で分ける
 - 結合テストは、crate ごとに1つのバイナリ (`integration`) にまとめる。`Cargo.toml` に `autotests = false` と `[[test]]` を書き、`tests/main.rs` で各ファイルを `mod` で宣言する。テストのバイナリが増えると、リンクと、macOS が新しい実行ファイルを最初に起動するときの検査に時間がかかるためである。`tests/main.rs` で宣言しないファイルはコンパイルされず、テストが流れない
-- lib には `doctest = false` を付ける。doc コメントは説明だけで、実行する例を書かない。単体テストのない lib (`eml_hir`、`eml_cli`、`eml_test_support`) と `eml_cli` の bin には `test = false` も付け、空のテストのバイナリを作らない。単体テストを足すときは `test = false` を外す
+- lib には `doctest = false` を付ける。doc コメントは説明だけで、実行する例を書かない。単体テストのない lib (`eml_extern`、`eml_hir`、`eml_core_ir`、`eml_cli`、`eml_test_support`) と `eml_cli` の bin には `test = false` も付け、空のテストのバイナリを作らない。単体テストを足すときは `test = false` を外す
 - crate の結合テストが使う表示の関数は `tests/common/mod.rs` に置き、`tests/main.rs` で1回だけ宣言して、各ファイルから `crate::common` で使う。複数の crate で使う部品は `eml_test_support` に置く
 - Core IR の結合テストは、確かめるパスごとのファイル (`translate.rs`、`contract.rs`、`perceus.rs`、`verify.rs`) に置く。translate のテストはソースから組み、ほとんどは `Pass::Translate` の直後の IR を見る。縮約のテストと Perceus の前半のテストは、入力の IR をテキストで書き、そのパスだけをかけた出力を見る。Perceus の後半のテストと translate の一部のテストは、ソースからパイプラインを通し、`core_until` で縮約や Perceus の直後の IR を見る。パスごとに見るのは、後のパスの書き換えや RC の命令を、確かめたいことと一緒に期待値に入れないためである。テキストの形の読み書きは `text.rs` で確かめる
 - 単体テストは、ファイルの末尾の `#[cfg(test)] mod tests` に置く。テストが300行を超え、ファイルの半分ほどを占めるようになったら、`eml_types/src/table/tests.rs` のように隣の `tests.rs` に分ける
@@ -98,7 +98,7 @@ b3(t.3: int):
 - 文は `let x.N: r = <右辺>`、`unpack v.N #t(f.N: r, ..)`、`dup v.N`、`decref v.N` と書く。`unpack` は、フィールドがなくても括弧を書く (`unpack p.0 #3()`)。verifier のテストで、フィールドのない `unpack` を書くためである。
 - 右辺は、`call f(..)`、`apply c(..)`、`perform E.op(..)`、`perform never E.op(..)`、`resume k(v, s)`、`handle E(init, body) { 節 } return r`、`closure f(..)`、`con #t(..)`、`const ".."`、`extern X.y(..)`、`drop a` のどれかである。
 - 終端は、`return a`、`tail <呼び出し>`、`jump bN(..)`、`switch a { .. }` のどれかである。`jump` は、引数がなくても括弧を書く (`jump b1()`)。
-- `switch` は `switch o.0 { #0 -> b1, #1(x.1: int, r.2: tobj) -> b2 }` や `switch n.0 { 1 -> b1, 2 -> b2, _ -> b3 }` と書き、`String` の case は `"a" -> b1` と書く。フィールドのない case は `#0` と書く。`#0()` も読むが、表示は `#0` になる。読み直して表示が変わる形はこれだけである。case のない `switch` は `switch a {}` と書く。
+- `switch` は `switch o.0 { #0 -> b1, #1(x.1: int, r.2: tobj) -> b2 }` や `switch n.0 { 1 -> b1, 2 -> b2, _ -> b3 }` と書き、`String` の case は `"a" -> b1` と書く。フィールドのない case は `#0` と書く。`#0()` も読むが、表示は `#0` になる。読み直して表示が変わる形はこれだけである。case のない `switch` は `switch a {}` と書く。行き先のない `switch` は verifier が誤りにする。
 - `apply ()(…)` と `resume ()(…)` は、呼ばれる値が `()` の `apply` と `resume` である。誤りを含む IR の表示も読み戻すためである。
 - extern の呼び出しは `extern <正式な名前>(…)` と書く (`let t.2: unit = extern Prelude.println(s.1)`、`extern Prelude.+(a.0, b.1)`、`extern Std.Fs.open(p.0)`)。`parse` は正式な名前を `eml_extern` の表で引き、引数はいくつでも読む。引数の数が表と合うかは verifier が確かめる。誤りを含む IR も読み戻して verifier に報告させるためである。verifier は `Prelude.==` と `Prelude.!=` の `extern` も誤りにする。位置は、呼び出しの後に `@"パス":行:列` と書く。
 - 文字列は `"` で囲み、エスケープ `\"`、`\'`、`\\`、`\n`、`\r`、`\t`、`\0`、`\u{…}` を読む。
@@ -107,7 +107,7 @@ b3(t.3: int):
 - 呼び出しの `mask` は、`let` の右辺の呼び出しと `tail` の後の呼び出しの前に、`mask [...]` で書く (`let t.2: tobj = mask [State] apply c.0(())`、`let t.3: int = mask [State] resume k.1(t.2, ())`、`tail mask [Report.Csv.Parse] call f(c.0)`)。エフェクトは先頭のエフェクトの行の名前で書き、入口のモジュールのエフェクトは修飾せず (`State`)、ほかのモジュールのエフェクトは修飾する (`Report.Csv.Parse`)。番号の順に並べ、飛ばす数だけ同じ名前を繰り返す (`mask [State, State]`)。エフェクトの表にない番号は、操作と同じく `#N` で書き、`pretty` も `#N` で表示する。並びの順は `parse` ではなく verifier が確かめる。`mask` のない呼び出しには何も書かない。`handle` と `perform` の前の `mask` は、`parse` が誤りにする。
 - Perceus の後の呼び出しは、後ろに `save [..]` を付ける (`let t.2: int = call f(c.0) save [c.0]`)。`saved` が空なら何も書かない。
 - 操作は名前のほかに `#N` (操作の番号) でも書ける。エフェクトにない番号も書けるので、誤りを含む IR を verifier に渡すテストに使う。`pretty` も、エフェクトにない番号の操作を `#N` で表示する。`handle` の中で `#N` と書いた節は、`N` がその節の 0 から数えた位置と同じでなければならない。
-- `parse` は構文だけを検査する。後ろ向きの `jump`、引数の数の誤り、見えない変数の使用などの不正な IR を書け、verifier のテストに使う。空の `mask []` と `save []`、末尾のカンマ、0 で始まる番号は誤りにする。どれも、読み直して表示すると表示が変わる形だからである。
+- `parse` は構文だけを検査する。後ろ向きの `jump`、引数の数の誤り、見えない変数の使用などの不正な IR を書け、verifier のテストに使う。空の `mask []` と `save []`、末尾のカンマ、0 で始まる番号と整数、`-0` は誤りにする。どれも、読み直して表示すると表示が変わる形だからである。`tail` の後の `save` も誤りにする。
 - `parse` と `pretty` は、ブロックと文の並びをループでたどり、プログラムの大きさに比例して再帰しない。
 
 ## UI テスト
@@ -160,6 +160,8 @@ b3(t.3: int):
 `crates/eml_hir/tests/scaling.rs` は、名前の違う `data` と `effect` の宣言の数を 4000 から 16000 にしたときの、構文解析から `DefMap` までの時間の比を確かめる。比が6以下なら通る。`DefMap` の重複の判定を変えたときに流す。
 
 `crates/eml_interp/tests/scaling.rs` は、時間ではなくインタプリタの仕事の回数 (`RunStats`) を上限と比べる。handler の下の非末尾の再帰 (handler が1つ、内側に別のエフェクトの handler が1つ、`mask` 付きのコールバックの中) は `handler_visits` を、リテラルから始めて `acc ++ "x"` を n 回つなぐ連結は `string_bytes_copied` を、n = 2000 で n の定数倍の上限と比べる。2乗の実装では上限を超える。64 バイトのリテラルを n 回評価するテストは、`string_bytes_copied` が 64 未満であること (1回でも写せば超える) を確かめる。ほかに、数え方そのものを確かめるテストがある (`perform` も文字列もなければ数はすべて 0、`perform` は少なくとも1つのフレームを調べる、`"ab" ++ "cd"` は少なくとも4バイトを書く)。各テストはソースをテストの中で作り、`eml_test_support::run_stats` で実行する。回数は機械の速さに左右されないので、`#[ignore]` を付けず、ふだんの `cargo test` で流す。
+
+`SourceFiles::line_col` の表のテスト (`eml_diagnostics` の `source.rs`) と、verifier の大きな IR のテスト (`eml_core_ir` の `tests/verify.rs` の、長い `switch` の連鎖、長い文の `if` の列、1つのブロックに深さの違う辺が多く合流する形) は、数えられる仕事の回数がないので時間を測る。2乗の実装だけが超える緩い上限 (5 秒と 10 秒) を置き、`#[ignore]` を付けずに debug ビルドのふだんの `cargo test` で流す。
 
 ## feature の組み合わせの確認
 
