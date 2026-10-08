@@ -6,6 +6,8 @@ mod common;
 mod perceus;
 mod simplify;
 mod translate;
+mod v2_contract;
+mod v2_perceus;
 mod v2_text;
 mod v2_verify;
 mod verify;

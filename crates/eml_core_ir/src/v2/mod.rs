@@ -6,10 +6,15 @@ use eml_extern::Extern;
 
 use crate::{Atom, Call, CasePattern, EffectInfo, FnIdx, VarId};
 
+mod contract;
+pub mod liveness;
+mod perceus;
 mod pretty;
 mod text;
 mod verify;
 
+pub use contract::{contract, tail_call};
+pub use perceus::perceus;
 pub use pretty::{pretty, pretty_with_positions};
 pub use text::{ParseError, parse};
 pub use verify::{VerifyError, verify, verify_scopes};
