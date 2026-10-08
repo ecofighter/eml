@@ -1,9 +1,15 @@
+#[cfg(feature = "core")]
 use eml_core_ir::{Pass, pretty};
 use eml_diagnostics::{Diagnostic, ErrorCode, Label, TextRange};
-use eml_test_support::{
-    check, check_files, core, core_until, full, lower, lower_clean, lower_files, parse,
-    parse_clean, run, run_files, short, short_text, source, with_diagnostics,
-};
+#[cfg(feature = "hir")]
+use eml_test_support::lower_clean;
+#[cfg(feature = "types")]
+use eml_test_support::{check, check_files, lower, lower_files, parse};
+#[cfg(feature = "core")]
+use eml_test_support::{core, core_until};
+use eml_test_support::{full, parse_clean, short, short_text, source, with_diagnostics};
+#[cfg(feature = "run")]
+use eml_test_support::{run, run_files};
 
 fn range(start: u32, end: u32) -> TextRange {
     TextRange::new(start.into(), end.into())
@@ -33,6 +39,7 @@ fn full_adds_labels_notes_and_help() {
     );
 }
 
+#[cfg(feature = "types")]
 #[test]
 fn stages_collect_the_diagnostics_of_earlier_stages() {
     // `€` は字句の E0001、`g` は HIR の E1001 (未定義の名前) になる。
@@ -45,6 +52,7 @@ fn stages_collect_the_diagnostics_of_earlier_stages() {
     assert_eq!(codes(&check(text).diagnostics), ["E0001", "E1001"]);
 }
 
+#[cfg(feature = "types")]
 #[test]
 fn the_files_variants_read_modules_from_memory() {
     let entry = "import Util\n\nmain : Unit -> <IO> Unit\nmain () = println \"hi\"";
@@ -55,7 +63,9 @@ fn the_files_variants_read_modules_from_memory() {
     let broken = [("Util.em", "€")];
     assert_eq!(codes(&lower_files(entry, &broken).diagnostics), ["E0001"]);
     assert_eq!(codes(&check_files(entry, &broken).diagnostics), ["E0001"]);
+    #[cfg(feature = "run")]
     let clean = [("Util.em", "pub x : Int\nx = 1")];
+    #[cfg(feature = "run")]
     assert_eq!(run_files(entry, &clean), ("hi\n".to_string(), Ok(())));
     let missing = lower_files("import Util", &[]);
     assert_eq!(
@@ -68,6 +78,7 @@ fn the_files_variants_read_modules_from_memory() {
         codes(&check_files(entry, &library_main).diagnostics),
         Vec::<String>::new()
     );
+    #[cfg(feature = "run")]
     assert_eq!(
         run_files(entry, &library_main),
         ("hi\n".to_string(), Ok(()))
@@ -75,18 +86,21 @@ fn the_files_variants_read_modules_from_memory() {
 }
 
 #[test]
+#[cfg(feature = "run")]
 fn run_executes_with_the_heap_checks() {
     let (stdout, result) = run("main : Unit -> <IO> Unit\nmain () = println \"hi\"");
     assert_eq!(stdout, "hi\n");
     assert_eq!(result, Ok(()));
 }
 
+#[cfg(feature = "core")]
 #[test]
 #[should_panic]
 fn core_rejects_programs_with_errors() {
     core("f : Int -> Int\nf x = g x");
 }
 
+#[cfg(feature = "core")]
 #[test]
 fn core_until_stops_after_the_named_pass() {
     // `simplify` は、値を返すだけの join point を消す
@@ -148,6 +162,7 @@ fn parse_clean_rejects_a_syntax_error() {
     parse_clean("x = €");
 }
 
+#[cfg(feature = "hir")]
 #[test]
 fn lower_clean_returns_a_module_without_diagnostics() {
     let lowered = lower_clean("f : Int -> Int\nf x = x");
@@ -160,6 +175,7 @@ fn lower_clean_returns_a_module_without_diagnostics() {
     );
 }
 
+#[cfg(feature = "hir")]
 #[test]
 #[should_panic(expected = "unexpected diagnostics")]
 fn lower_clean_rejects_an_undefined_name() {

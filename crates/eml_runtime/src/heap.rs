@@ -261,10 +261,14 @@ impl Heap {
     }
 
     /// 一意な左辺の文字列の後に右辺の文字列を足し、足したバイト数を返す。スロットを解放して取り直さないので、左辺の
-    /// `ObjRef` はそのまま使える。左辺の中身をいったん取り出してから右辺を借りる。左辺と右辺が同じ物体なら RC は 2
-    /// 以上なので、先に一意の検査で断る。不死の物体も一意にならないので `Shared` になる
+    /// `ObjRef` はそのまま使える。左辺の中身をいったん取り出してから右辺を借りる。左辺と右辺が同じ物体なら、
+    /// 取り出した後の右辺が空に見えて何も足さずに終わるので、RC によらず先に `Shared` で断る。RC が 1 のまま
+    /// 同じ参照を両辺に渡すのは数え誤りである。共有された物体や不死の物体も一意にならないので `Shared` になる
     /// (docs/spec/runtime.md の「文字列の連結」)。
     pub fn append_str(&mut self, left: ObjRef, right: ObjRef) -> Result<usize, HeapError> {
+        if left == right {
+            return Err(HeapError::Shared);
+        }
         if !self.is_unique(left)? {
             return Err(HeapError::Shared);
         }

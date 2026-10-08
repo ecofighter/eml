@@ -779,6 +779,19 @@ fn append_str_refuses_a_shared_left_side() {
 }
 
 #[test]
+fn append_str_refuses_one_unique_object_on_both_sides() {
+    // RC が 1 のまま両辺に同じ物体を渡すのは参照の数え誤りなので、黙って空を足さずに断る
+    let mut heap = Heap::new();
+    let s = string(&mut heap, "ab");
+    let before = heap.string_bytes_written();
+    assert_eq!(heap.append_str(s, s), Err(HeapError::Shared));
+    assert_eq!(heap.get(s).unwrap(), &Payload::Str("ab".to_string()));
+    assert_eq!(heap.string_bytes_written(), before);
+    heap.decref(s).unwrap();
+    assert!(heap.live_objects().is_empty());
+}
+
+#[test]
 fn append_str_refuses_an_immortal_left_side() {
     // 不死のリテラルは外に出ている参照が1つでも一意にならない。その場で足すと、次に評価したリテラルの中身が変わる
     let mut heap = Heap::new();
@@ -912,9 +925,73 @@ fn an_inner_link_out_of_the_segment_breaks_the_segment() {
         handler: detached,
     });
     heap.dup(k).unwrap();
+    let live = heap.live_objects();
     assert_eq!(heap.take_or_copy(k), Err(HeapError::BrokenSegment));
+    assert_eq!(heap.live_objects(), live);
     heap.decref(k).unwrap();
     heap.decref(k).unwrap();
     heap.decref(outside).unwrap();
     assert!(heap.live_objects().is_empty());
+}
+
+#[test]
+fn an_inner_link_to_a_chain_frame_that_is_not_the_innermost_breaks_the_segment() {
+    let mut heap = Heap::new();
+    let detached = detached_handler(&mut heap, vec![]);
+    let outer_mask = heap.alloc(Payload::Frame(Frame::Mask {
+        effects: vec![1],
+        next: detached,
+        outer: detached,
+    }));
+    let inner_mask = heap.alloc(Payload::Frame(Frame::Mask {
+        effects: vec![1],
+        next: outer_mask,
+        outer: outer_mask,
+    }));
+    // いちばん内側は `inner_mask` なのに、`inner` が外側の mask を指す
+    set_inner(&mut heap, detached, outer_mask);
+    let k = heap.alloc(Payload::Continuation {
+        top: inner_mask,
+        handler: detached,
+    });
+    heap.dup(k).unwrap();
+    let live = heap.live_objects();
+    assert_eq!(heap.take_or_copy(k), Err(HeapError::BrokenSegment));
+    assert_eq!(heap.live_objects(), live);
+    heap.decref(k).unwrap();
+    heap.decref(k).unwrap();
+    assert!(heap.live_objects().is_empty());
+}
+
+#[test]
+fn a_mask_whose_outer_is_not_a_chain_frame_breaks_the_segment() {
+    let mut heap = Heap::new();
+    let detached = detached_handler(&mut heap, vec![]);
+    let plain = frame(&mut heap, vec![], detached);
+    // `outer` は連鎖のフレームを指さなければならないが、`Return` フレームを指す
+    let mask = heap.alloc(Payload::Frame(Frame::Mask {
+        effects: vec![1],
+        next: plain,
+        outer: plain,
+    }));
+    set_inner(&mut heap, detached, mask);
+    let k = heap.alloc(Payload::Continuation {
+        top: mask,
+        handler: detached,
+    });
+    heap.dup(k).unwrap();
+    let live = heap.live_objects();
+    assert_eq!(heap.take_or_copy(k), Err(HeapError::BrokenSegment));
+    assert_eq!(heap.live_objects(), live);
+    heap.decref(k).unwrap();
+    heap.decref(k).unwrap();
+    assert!(heap.live_objects().is_empty());
+}
+
+#[test]
+fn acquiring_a_stale_immortal_reference_is_use_after_free() {
+    let mut heap = Heap::new();
+    let s = string(&mut heap, "gone");
+    heap.decref(s).unwrap();
+    assert_eq!(heap.acquire_immortal(s), Err(HeapError::UseAfterFree));
 }
