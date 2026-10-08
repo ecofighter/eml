@@ -11,6 +11,7 @@ mod pretty;
 mod simplify;
 mod text;
 mod translate;
+pub mod v2;
 mod verify;
 
 pub use pipeline::{Pass, lower, lower_until};
