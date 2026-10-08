@@ -1,4 +1,4 @@
-//! Core IR のテキストで、`data` の値の確保と、`switch` と `unpack` による分解を確かめる (docs/spec/core-ir.md)。
+//! Core IR のテキストで、`data` の値の確保、`switch` と `unpack` による分解、`release` を確かめる (docs/spec/core-ir.md)。
 //! 共有された値の分解や、`tobj` の変数に入った引数のないコンストラクタは、ソースの `match`
 //! からは狙って作りにくいので、ここで書く。
 
@@ -255,6 +255,112 @@ fn main() -> unit {
         run_core_unverified(text).1,
         Err(RuntimeError::Fault {
             fault: Fault::Internal("an unpack of an object that is not data"),
+            function: "main".to_string(),
+            at: None,
+        })
+    );
+}
+
+// release
+
+/// `d.1` の箱を `release` で手放し、`s.0` がフィールドの参照を受け取る。`s.0` はフィールドと同じ値を指すので、名前に
+/// 書ける。文字列のリテラルは不死なので、`show_int` で作った文字列をフィールドに入れ、解放の誤りが `debug_heap`
+/// に見えるようにする。`shared` が真なら `release` の前に箱を複製し、`release` は共有の側を通る。
+fn release_one_field(shared: bool) -> String {
+    let (dup, decref) = if shared {
+        ("  dup d.1\n", "  decref d.1\n")
+    } else {
+        ("", "")
+    };
+    format!(
+        "\
+fn main() -> unit {{
+  let s.0: obj = extern Prelude.show_int(7)
+  let d.1: tobj = con #1(s.0)
+{dup}  release d.1 #1(s.0)
+  let o.2: unit = extern Prelude.println(s.0)
+{decref}  return o.2
+}}
+"
+    )
+}
+
+#[test]
+fn a_release_of_a_unique_box_hands_its_field_over() {
+    assert_eq!(
+        run_core(&release_one_field(false)),
+        ("7\n".to_string(), Ok(()))
+    );
+}
+
+#[test]
+fn a_release_of_a_shared_box_dups_its_field() {
+    assert_eq!(
+        run_core(&release_one_field(true)),
+        ("7\n".to_string(), Ok(()))
+    );
+}
+
+#[test]
+fn a_release_keeps_one_value_in_two_fields_twice() {
+    let text = "\
+fn main() -> unit {
+  let s.0: obj = extern Prelude.show_int(7)
+  dup s.0
+  let d.1: obj = con #0(s.0, s.0)
+  release d.1 #0(s.0, s.0)
+  let t.2: obj = extern Prelude.++(s.0, s.0)
+  let o.3: unit = extern Prelude.println(t.2)
+  return o.3
+}
+";
+    assert_eq!(run_core(text), ("77\n".to_string(), Ok(())));
+}
+
+/// `#1` の箱を `release` で手放す。タグとフィールドの数の違いは、`unpack` と同じく実行して初めて分かる。どの形も
+/// verifier が拒むので、通さずに実行する。
+fn release_of_tag_one(release: &str) -> Result<(), RuntimeError> {
+    let text = format!(
+        "\
+fn main() -> unit {{
+  let s.0: obj = extern Prelude.show_int(7)
+  let p.1: obj = con #1(s.0)
+  {release}
+  return ()
+}}
+"
+    );
+    run_core_unverified(&text).1
+}
+
+#[test]
+fn a_release_of_another_layout_is_an_internal_error() {
+    let fault = Err(RuntimeError::Fault {
+        fault: Fault::Internal(
+            "a release names a tag and number of fields the value does not have",
+        ),
+        function: "main".to_string(),
+        at: None,
+    });
+    assert_eq!(release_of_tag_one("release p.1 #0(s.0)"), fault);
+    assert_eq!(release_of_tag_one("release p.1 #1(s.0, _)"), fault);
+    // 文字列も `obj` だが、コンストラクタの値ではない
+    assert_eq!(release_of_tag_one("release s.0 #1(s.0)"), fault);
+}
+
+#[test]
+fn a_release_of_a_value_that_is_not_an_object_is_an_internal_error() {
+    let text = "\
+fn main() -> unit {
+  let n.0: int = extern Prelude.+(1, 2)
+  release n.0 #0(n.0)
+  return ()
+}
+";
+    assert_eq!(
+        run_core_unverified(text).1,
+        Err(RuntimeError::Fault {
+            fault: Fault::Internal("a release of a value that is not an object"),
             function: "main".to_string(),
             at: None,
         })

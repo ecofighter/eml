@@ -57,7 +57,8 @@ pub(crate) fn live_after_term(
     live
 }
 
-/// 文の前で生きている変数に更新する。`dup` と `decref` も変数を使うものとして数え、Perceus の後の IR にも使えるようにする。
+/// 文の前で生きている変数に更新する。`dup`、`decref`、`release` も変数を使うものとして数え、Perceus の後の IR にも
+/// 使えるようにする。
 pub(crate) fn step_back(stmt: &Stmt, live: &mut BTreeSet<VarId>) {
     for var in stmt.defs() {
         live.remove(var);
@@ -65,6 +66,14 @@ pub(crate) fn step_back(stmt: &Stmt, live: &mut BTreeSet<VarId>) {
     match stmt {
         Stmt::Dup(var) | Stmt::Decref(var) => {
             live.insert(*var);
+        }
+        Stmt::Release {
+            value,
+            tag: _,
+            fields,
+        } => {
+            live.insert(*value);
+            live.extend(fields.iter().flatten().copied());
         }
         Stmt::Let { var: _, rhs: _ }
         | Stmt::Unpack {

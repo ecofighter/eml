@@ -454,6 +454,19 @@ impl<'a> Checker<'a> {
                 self.rc_allowed(*var, "released")?;
                 self.give_up(owned, *var, "released")
             }
+            Stmt::Release {
+                value,
+                tag: _,
+                fields,
+            } => {
+                if self.level == Level::Scopes {
+                    return Err(format!(
+                        "`{}` is released with its fields before Perceus",
+                        self.name(*value)
+                    ));
+                }
+                self.release(owned, *value, fields)
+            }
         }
     }
 
@@ -763,6 +776,36 @@ impl<'a> Checker<'a> {
         Ok(())
     }
 
+    /// `release x #t(p1, .., pn)`。x の参照を1つ手放し、名前を書いた変数が参照を1つずつ受け取る。名前を書いた変数が、
+    /// x を分解したときの同じ位置のフィールドかどうかは、まだ確かめない (docs/spec/core-ir.md)。
+    fn release(
+        &self,
+        owned: &mut Owned,
+        value: VarId,
+        fields: &[Option<VarId>],
+    ) -> Result<(), String> {
+        if fields.iter().all(Option::is_none) {
+            return Err(format!(
+                "a release of `{}` keeps no field",
+                self.name(value)
+            ));
+        }
+        for &field in fields.iter().flatten() {
+            self.visible(field)?;
+            if !self.function.repr(field).is_rc() {
+                return Err(format!(
+                    "`{}` is kept but is not reference counted",
+                    self.name(field)
+                ));
+            }
+        }
+        self.give_up(owned, value, "released")?;
+        for &field in fields.iter().flatten() {
+            *owned.entry(field).or_insert(0) += 1;
+        }
+        Ok(())
+    }
+
     /// RC の命令は Perceus だけが入れる。
     fn rc_allowed(&self, var: VarId, what: &str) -> Result<(), String> {
         if self.level == Level::Scopes {
@@ -854,6 +897,13 @@ impl<'a> Checker<'a> {
                         "a constant refers to string {index}, which does not exist"
                     ));
                 }
+            }
+            // フィールドのないコンストラクタの値は、`#N` の1つの書き方にそろえる (docs/spec/core-ir.md)
+            Rhs::Con { tag: _, args } if args.is_empty() => {
+                return Err(
+                    "a constructor value without fields is written as a tag `#N`, not `con`"
+                        .to_string(),
+                );
             }
             Rhs::Con { tag: _, args: _ } | Rhs::Drop(_) => {}
         }

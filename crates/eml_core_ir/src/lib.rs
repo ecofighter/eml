@@ -153,6 +153,14 @@ pub enum Stmt {
     },
     Dup(VarId),
     Decref(VarId),
+    /// `release x #t(p1, .., pn)`。Perceus だけが入れる RC の命令である。分解した値 `x` の参照を1つ手放し、名前を
+    /// 書いた位置の変数が、そのフィールドの参照を1つずつ受け取る。`None` は残さない位置である
+    /// (docs/spec/core-ir.md)。
+    Release {
+        value: VarId,
+        tag: u32,
+        fields: Vec<Option<VarId>>,
+    },
 }
 
 impl Stmt {
@@ -165,11 +173,11 @@ impl Stmt {
                 tag: _,
                 fields,
             } => fields,
-            Stmt::Dup(_) | Stmt::Decref(_) => &[],
+            Stmt::Dup(_) | Stmt::Decref(_) | Stmt::Release { .. } => &[],
         }
     }
 
-    /// 文が値として使う変数と定数。`Dup` と `Decref` は Perceus の命令なので、値の使用に数えない。
+    /// 文が値として使う変数と定数。`Dup`、`Decref`、`Release` は Perceus の命令なので、値の使用に数えない。
     pub fn for_each_atom(&self, mut f: impl FnMut(Atom)) {
         match self {
             Stmt::Let { var: _, rhs } => rhs.for_each_atom(f),
@@ -178,7 +186,7 @@ impl Stmt {
                 tag: _,
                 fields: _,
             } => f(Atom::Var(*value)),
-            Stmt::Dup(_) | Stmt::Decref(_) => {}
+            Stmt::Dup(_) | Stmt::Decref(_) | Stmt::Release { .. } => {}
         }
     }
 }

@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use eml_core_ir::{BlockId, FnIdx, Loc, Program, Rhs, Stmt, Term, VarId};
-use eml_runtime::{Closure, OutputSink, Payload, Value};
+use eml_runtime::{Closure, HeapError, OutputSink, Payload, Value};
 
 use crate::error::{Fault, RuntimeError, SourceLocation};
 use crate::runtime::{Env, Runtime, Step, Transfer};
@@ -76,6 +76,7 @@ impl<'p> Machine<'p> {
             Stmt::Unpack { value, tag, fields } => self.unpack(*value, *tag, fields)?,
             Stmt::Dup(var) => self.rt.dup(self.env.read(*var)?)?,
             Stmt::Decref(var) => self.rt.decref(self.env.read(*var)?)?,
+            Stmt::Release { value, tag, fields } => self.release(*value, *tag, fields)?,
         }
         self.stmt += 1;
         Ok(Step::Continue)
@@ -148,6 +149,26 @@ impl<'p> Machine<'p> {
             self.env.write(field, value);
         }
         Ok(())
+    }
+
+    /// 分解した値の参照を1つ手放し、名前を書いた位置のフィールドの参照を1つずつ受け取る。フィールドの値は変数に
+    /// 入っているので、ここでは参照の数だけを動かす (docs/spec/core-ir.md)。
+    fn release(&mut self, value: VarId, tag: u32, fields: &[Option<VarId>]) -> Result<(), Fault> {
+        let Value::Obj(obj) = self.env.read(value)? else {
+            return Err(Fault::Internal(
+                "a release of a value that is not an object",
+            ));
+        };
+        let keep: Vec<bool> = fields.iter().map(Option::is_some).collect();
+        self.rt
+            .heap
+            .release_fields(obj, tag, &keep)
+            .map_err(|error| match error {
+                HeapError::WrongLayout => Fault::Internal(
+                    "a release names a tag and number of fields the value does not have",
+                ),
+                error => Fault::Heap(error),
+            })
     }
 
     fn terminate(&mut self, term: &'p Term) -> Result<Step, Fault> {

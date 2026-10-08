@@ -175,6 +175,53 @@ fn a_decref_round_trips() {
 }
 
 #[test]
+fn a_release_round_trips() {
+    let program = round_trip(
+        "\
+fn f(p.0: obj) -> obj {
+  unpack p.0 #0(a.1: obj, b.2: obj)
+  release p.0 #0(a.1, _)
+  return a.1
+}
+",
+    );
+    let release = &program.functions[0].blocks[0].stmts[1];
+    assert_eq!(
+        *release,
+        Stmt::Release {
+            value: VarId(0),
+            tag: 0,
+            fields: vec![Some(VarId(1)), None],
+        }
+    );
+    // `dup` や `decref` と同じく、変数を定義せず、値の使いにも数えない
+    assert!(release.defs().is_empty());
+    let mut atoms = Vec::new();
+    release.for_each_atom(|atom| atoms.push(atom));
+    assert!(atoms.is_empty());
+}
+
+#[test]
+fn a_release_that_keeps_nothing_does_not_parse() {
+    for fields in ["_, _", ""] {
+        let error = parse_error(&format!(
+            "fn f(p.0: obj) -> unit {{\n  release p.0 #0({fields})\n  return ()\n}}\n"
+        ));
+        assert_eq!(error.line, 2);
+        assert_eq!(error.message, "a release keeps no field; write `decref`");
+    }
+}
+
+#[test]
+fn a_release_names_variables_without_reprs() {
+    let error = parse_error("fn f(p.0: obj) -> unit {\n  release p.0 #0(1)\n  return ()\n}\n");
+    assert_eq!(error.message, "expected a variable `name.N`, found `1`");
+    let error =
+        parse_error("fn f(p.0: obj) -> unit {\n  release p.0 #0(a.1: obj)\n  return ()\n}\n");
+    assert_eq!(error.message, "expected a variable `name.N`, found `a.1:`");
+}
+
+#[test]
 fn a_return_round_trips() {
     let program = round_trip(
         "\

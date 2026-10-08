@@ -1,7 +1,7 @@
 //! Core IR のテキストで書いた IR で、verifier が正しいものを受け入れ、壊れたものを拒むことを確かめる (docs/spec/core-ir.md)。
 //! 構造の規則 R1 から R8 と、前の形の IR から引き継いだ検査を1つずつ確かめる。
 
-use eml_core_ir::{Program, Term, parse, verify, verify_scopes};
+use eml_core_ir::{Program, Stmt, Term, parse, verify, verify_scopes};
 
 fn read(text: &str) -> Program {
     parse(text).unwrap_or_else(|error| panic!("{error}"))
@@ -798,6 +798,61 @@ fn scopes_reject_a_decref() {
         check_scopes(text),
         Err("`s.0` is released before Perceus in `ignore`".to_string())
     );
+}
+
+/// 組を分解し、`release` で先頭のフィールドだけを残す。
+const RELEASE: &str = "\
+fn f(p.0: obj) -> obj {
+  unpack p.0 #0(a.1: obj, b.2: obj)
+  release p.0 #0(a.1, _)
+  return a.1
+}
+";
+
+#[test]
+fn scopes_reject_a_release() {
+    assert_eq!(
+        check_scopes(RELEASE),
+        Err("`p.0` is released with its fields before Perceus in `f`".to_string())
+    );
+}
+
+#[test]
+fn a_release_that_keeps_no_field_is_rejected() {
+    // テキストの形では書けないので、読んだ IR の項目を消す
+    let mut program = read(RELEASE);
+    let Stmt::Release { fields, .. } = &mut program.functions[0].blocks[0].stmts[1] else {
+        panic!("the second statement is the release");
+    };
+    fields[0] = None;
+    assert_eq!(
+        verify(&program).map_err(|error| error.to_string()),
+        Err("a release of `p.0` keeps no field in `f`".to_string())
+    );
+}
+
+#[test]
+fn a_release_that_keeps_a_field_that_is_not_rc_is_rejected() {
+    let text = "\
+fn f(p.0: obj) -> int {
+  unpack p.0 #0(n.1: int, s.2: obj)
+  release p.0 #0(n.1, _)
+  return n.1
+}
+";
+    assert_eq!(
+        check(text),
+        Err("`n.1` is kept but is not reference counted in `f`".to_string())
+    );
+}
+
+#[test]
+fn a_constructor_value_without_fields_is_rejected() {
+    let text = "fn f() -> tobj {\n  let d.0: tobj = con #1()\n  return d.0\n}\n";
+    let message =
+        "a constructor value without fields is written as a tag `#N`, not `con` in `f`".to_string();
+    assert_eq!(check_scopes(text), Err(message.clone()));
+    assert_eq!(check(text), Err(message));
 }
 
 #[test]

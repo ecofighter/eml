@@ -102,6 +102,17 @@ impl Printer<'_> {
                 ),
                 Stmt::Dup(v) => format!("dup {}", var(function, *v)),
                 Stmt::Decref(v) => format!("decref {}", var(function, *v)),
+                Stmt::Release { value, tag, fields } => {
+                    let kept: Vec<String> = fields
+                        .iter()
+                        .map(|field| field.map_or("_".to_string(), |v| var(function, v)))
+                        .collect();
+                    format!(
+                        "release {} #{tag}({})",
+                        var(function, *value),
+                        kept.join(", ")
+                    )
+                }
             };
             writeln!(out, "  {text}").unwrap();
         }

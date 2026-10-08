@@ -435,6 +435,22 @@ impl<'t> Parser<'t> {
                 }
                 "dup" => stmts.push(Stmt::Dup(self.var(state)?)),
                 "decref" => stmts.push(Stmt::Decref(self.var(state)?)),
+                "release" => {
+                    let value = self.var(state)?;
+                    let tag = self.tag()?;
+                    let fields = self.list('(', ')', |p| {
+                        if p.at_word("_") {
+                            p.pos += 1;
+                            Ok(None)
+                        } else {
+                            p.var(state).map(Some)
+                        }
+                    })?;
+                    if fields.iter().all(Option::is_none) {
+                        return Err(error(line, "a release keeps no field; write `decref`"));
+                    }
+                    stmts.push(Stmt::Release { value, tag, fields });
+                }
                 "return" => break Term::Return(self.atom(state)?),
                 "tail" => {
                     let (mask, call) = self.masked_call(state)?;

@@ -77,7 +77,7 @@ fn rewrite(
     let mut plans = Vec::with_capacity(block.stmts.len());
     for stmt in block.stmts.iter_mut().rev() {
         debug_assert!(
-            !matches!(stmt, Stmt::Dup(_) | Stmt::Decref(_)),
+            !matches!(stmt, Stmt::Dup(_) | Stmt::Decref(_) | Stmt::Release { .. }),
             "Perceus runs once on code without RC instructions"
         );
         // `live` はこの文の後で生きている変数である。呼び出しは、そのうち結果の変数以外を退避する
