@@ -471,12 +471,7 @@ impl<'a> Checker<'a> {
                 self.give_up(owned, *var, "released")
             }
             Stmt::Release { value, tag, fields } => {
-                if self.level == Level::Scopes {
-                    return Err(format!(
-                        "`{}` is released with its fields before Perceus",
-                        self.name(*value)
-                    ));
-                }
+                self.rc_allowed(*value, "released with its fields")?;
                 self.release(owned, *value, *tag, fields)
             }
         }

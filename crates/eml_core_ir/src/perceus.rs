@@ -123,12 +123,7 @@ fn rewrite(
         // 文の直後に足す文。`unpack` の後では借りたフィールドを所有にし、ほかの文では定義して使わない変数を捨てる
         let after: Vec<Stmt> = match stmt {
             Stmt::Unpack { value, tag, fields } => {
-                let destructured = Destructured {
-                    value: *value,
-                    tag: *tag,
-                    fields: fields.clone(),
-                };
-                match destructured.own(|var| live.contains(&var), rc) {
+                match own(*value, *tag, fields, |var| live.contains(&var), rc) {
                     Owning::Dups(vars) => vars.into_iter().map(Stmt::Dup).collect(),
                     Owning::Release(release) => vec![release],
                     Owning::Decref => vec![Stmt::Decref(*value)],
@@ -157,7 +152,13 @@ fn rewrite(
     // (docs/spec/core-ir.md の「Perceus」)
     let mut release = None;
     if let Some(destructured) = destructured {
-        match destructured.own(is_live, rc) {
+        match own(
+            destructured.value,
+            destructured.tag,
+            &destructured.fields,
+            is_live,
+            rc,
+        ) {
             Owning::Dups(vars) => stmts.extend(vars.into_iter().map(Stmt::Dup)),
             Owning::Release(stmt) => release = Some((destructured.value, stmt)),
             Owning::Decref => {}
@@ -205,7 +206,8 @@ fn push_rc_var(uses: &mut Vec<VarId>, atom: Atom, rc: &[bool]) {
     }
 }
 
-/// `case` か `unpack` が分解した値と、その値から借りて始まるフィールド。
+/// `case` が分解した値と、その値から借りて始まるフィールド。行き先のブロックを書き換える間も持つので、フィールドを
+/// 写して持つ。
 struct Destructured {
     value: VarId,
     tag: u32,
@@ -222,35 +224,37 @@ enum Owning {
     Decref,
 }
 
-impl Destructured {
-    fn own(&self, is_live: impl Fn(VarId) -> bool, rc: &[bool]) -> Owning {
-        let live: Vec<bool> = self
-            .fields
-            .iter()
-            .map(|&var| rc[var.0 as usize] && is_live(var))
-            .collect();
-        if is_live(self.value) {
-            return Owning::Dups(
-                self.fields
-                    .iter()
-                    .zip(&live)
-                    .filter(|&(_, &live)| live)
-                    .map(|(&var, _)| var)
-                    .collect(),
-            );
-        }
-        if !live.contains(&true) {
-            return Owning::Decref;
-        }
-        Owning::Release(Stmt::Release {
-            value: self.value,
-            tag: self.tag,
-            fields: self
-                .fields
+fn own(
+    value: VarId,
+    tag: u32,
+    fields: &[VarId],
+    is_live: impl Fn(VarId) -> bool,
+    rc: &[bool],
+) -> Owning {
+    let live: Vec<bool> = fields
+        .iter()
+        .map(|&var| rc[var.0 as usize] && is_live(var))
+        .collect();
+    if is_live(value) {
+        return Owning::Dups(
+            fields
                 .iter()
                 .zip(&live)
-                .map(|(&var, &live)| live.then_some(var))
+                .filter(|&(_, &live)| live)
+                .map(|(&var, _)| var)
                 .collect(),
-        })
+        );
     }
+    if !live.contains(&true) {
+        return Owning::Decref;
+    }
+    Owning::Release(Stmt::Release {
+        value,
+        tag,
+        fields: fields
+            .iter()
+            .zip(&live)
+            .map(|(&var, &live)| live.then_some(var))
+            .collect(),
+    })
 }

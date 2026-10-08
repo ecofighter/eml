@@ -27,6 +27,8 @@ pub(crate) struct Machine<'p> {
     /// 次に実行する文の番号。ブロックの文の数と等しければ、終端を実行する。
     stmt: usize,
     env: Env,
+    /// `release` が残すフィールドの位置。実行のたびに確保しないよう、使い回す。
+    keep: Vec<bool>,
 }
 
 impl<'p> Machine<'p> {
@@ -40,6 +42,7 @@ impl<'p> Machine<'p> {
             block: BlockId::ENTRY,
             stmt: 0,
             env: Env::new(entry.vars.len()),
+            keep: Vec::new(),
         }
     }
 
@@ -159,10 +162,11 @@ impl<'p> Machine<'p> {
                 "a release of a value that is not an object",
             ));
         };
-        let keep: Vec<bool> = fields.iter().map(Option::is_some).collect();
+        self.keep.clear();
+        self.keep.extend(fields.iter().map(Option::is_some));
         self.rt
             .heap
-            .release_fields(obj, tag, &keep)
+            .release_fields(obj, tag, &self.keep)
             .map_err(|error| match error {
                 HeapError::WrongLayout => Fault::Internal(
                     "a release names a tag and number of fields the value does not have",
@@ -213,7 +217,7 @@ impl<'p> Machine<'p> {
                                 "a switch case binds a different number of fields than the value has",
                             ));
                         }
-                        for (&field, value) in case.fields.iter().zip(fields) {
+                        for (&field, &value) in case.fields.iter().zip(fields) {
                             self.env.write(field, value);
                         }
                         case.target

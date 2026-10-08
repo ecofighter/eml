@@ -273,7 +273,12 @@ impl Heap {
     /// 子は再帰ではなく作業リストでたどる。長い連鎖の解放で Rust のスタックを溢れさせないため (docs/spec/runtime.md)。
     /// 不死の物体は数が 0 になっても解放しない。
     pub fn decref(&mut self, obj: ObjRef) -> Result<(), HeapError> {
-        let mut work = vec![obj];
+        self.decref_all(vec![obj])
+    }
+
+    /// `release_fields` が、残さないフィールドを集めたリストをそのまま作業リストにして手放せるように、`decref` から
+    /// 分けてある。
+    fn decref_all(&mut self, mut work: Vec<ObjRef>) -> Result<(), HeapError> {
         while let Some(obj) = work.pop() {
             let header = &mut self.object_mut(obj)?.header;
             header.rc -= 1;
@@ -335,8 +340,8 @@ impl Heap {
     /// クロージャか継続の所有権を受け取って中身を使う側のための手続き。一意なら解放して中身を返す。共有されて
     /// いれば中身を写し、写した中身の子の参照を1つずつ増やしてから、元の参照を1つ手放す。子は解放と同じ
     /// `children` で数えるので、写すときと解放するときで数える参照が一致する。継続オブジェクトは区間のフレームごと
-    /// 写す。フレームを共有させないためである。`data`、文字列、`File` は、一意かどうかによらず `NotCopyable` で
-    /// 断り、参照を手放さない。`data` は写さずに `release_fields` で分解し、`File` は線形である
+    /// 写す。フレームを共有させないためである。クロージャと継続のほかの物体は、一意かどうかによらず
+    /// `NotCopyable` で断り、参照を手放さない。`data` は写さずに `release_fields` で分解し、`File` は線形である
     /// (docs/spec/runtime.md)。
     pub fn take_or_copy(&mut self, obj: ObjRef) -> Result<Payload, HeapError> {
         let segment = match &self.object(obj)?.payload {
@@ -382,27 +387,32 @@ impl Heap {
         if *found != tag || fields.len() != keep.len() {
             return Err(HeapError::WrongLayout);
         }
-        let unique = self.is_unique(obj)?;
-        // 参照の数を動かすのは、一意な箱なら残さないフィールド、そうでなければ残すフィールドである
-        let moved: Vec<ObjRef> = fields
-            .iter()
-            .zip(keep)
-            .filter(|&(_, &kept)| kept != unique)
-            .filter_map(|(value, _)| match value {
-                Value::Obj(field) => Some(*field),
-                _ => None,
-            })
-            .collect();
-        if unique {
-            self.free_slot(obj);
+        if self.is_unique(obj)? {
+            let Payload::Data { fields, .. } = self.free_slot(obj) else {
+                unreachable!("the layout was checked above");
+            };
             self.rc_decrements += 1;
-            for field in moved {
-                self.decref(field)?;
-            }
-            Ok(())
+            // 参照の数を動かすのは残さないフィールドだけである。手放すフィールドを1つの作業リストにまとめ、解放の連鎖に
+            // そのまま渡す
+            let dropped = fields
+                .into_iter()
+                .zip(keep)
+                .filter_map(|(value, &kept)| match value {
+                    Value::Obj(field) if !kept => Some(field),
+                    _ => None,
+                })
+                .collect();
+            self.decref_all(dropped)
         } else {
-            for field in moved {
-                self.dup(field)?;
+            // 参照の数を動かすのは残すフィールドだけである。`dup` がヒープを書き換えるので、フィールドは借りたまま
+            // 集めず、`dup` のたびに読み直す
+            for (index, &kept) in keep.iter().enumerate() {
+                let Payload::Data { fields, .. } = &self.object(obj)?.payload else {
+                    unreachable!("the layout was checked above");
+                };
+                if let (Value::Obj(field), true) = (fields[index], kept) {
+                    self.dup(field)?;
+                }
             }
             self.decref(obj)
         }
@@ -574,8 +584,9 @@ impl Heap {
     }
 }
 
-/// 中身の写し。子の参照は数え直さないので、`take_or_copy` と `copy_segment` だけが使う。継続オブジェクトは区間ごと
-/// 写すので、ここでは扱わない。
+/// クロージャとフレームの中身の写し。子の参照は数え直さないので、`take_or_copy` (クロージャ) と `copy_segment`
+/// (区間のフレーム) だけが使う。継続オブジェクトは区間ごと写し、データ、文字列、`File` は写さないので、ここでは
+/// 扱わない (docs/spec/runtime.md)。
 fn copy(payload: &Payload) -> Payload {
     match payload {
         Payload::Closure(closure) => Payload::Closure(Closure {

@@ -1,4 +1,4 @@
-use eml_runtime::{Attachment, Frame, ObjRef, Payload, Value};
+use eml_runtime::{Attachment, Frame, HeapError, ObjRef, Payload, Value};
 
 use crate::error::Fault;
 use crate::runtime::{Runtime, Transfer};
@@ -117,12 +117,14 @@ impl Runtime<'_> {
                 "resuming a value that is not a continuation",
             ));
         };
-        let Payload::Continuation { top, handler } =
-            self.heap.take_or_copy(obj).map_err(Fault::Heap)?
-        else {
-            return Err(Fault::Internal(
-                "resuming an object that is not a continuation",
-            ));
+        let (top, handler) = match self.heap.take_or_copy(obj) {
+            Ok(Payload::Continuation { top, handler }) => (top, handler),
+            Ok(_) | Err(HeapError::NotCopyable) => {
+                return Err(Fault::Internal(
+                    "resuming an object that is not a continuation",
+                ));
+            }
+            Err(error) => return Err(Fault::Heap(error)),
         };
         let attached = Attachment::Attached {
             next: self.cont,

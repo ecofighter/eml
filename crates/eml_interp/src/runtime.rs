@@ -2,7 +2,9 @@ use std::cmp::Ordering;
 use std::path::Path;
 
 use eml_core_ir::{Atom, Call, CasePattern, FnIdx, VarId};
-use eml_runtime::{Attachment, Closure, Frame, Heap, ObjRef, OutputSink, Payload, Value};
+use eml_runtime::{
+    Attachment, Closure, Frame, Heap, HeapError, ObjRef, OutputSink, Payload, Value,
+};
 
 use crate::RunStats;
 use crate::error::{Fault, RuntimeError};
@@ -162,16 +164,16 @@ impl<'p> Runtime<'p> {
     /// `Switch` の scrutinee に合う case と、その case に入れるフィールド。scrutinee もフィールドも読むだけで、参照の
     /// 数を変えない。フィールドは scrutinee から借り、所有にするのは行き先の `dup` か `release` である
     /// (docs/spec/core-ir.md)。
-    pub(crate) fn select_case<'c, C>(
-        &self,
+    pub(crate) fn select_case<'s, 'c, C>(
+        &'s self,
         value: Value,
         cases: &'c [C],
         pattern: impl Fn(&C) -> CasePattern,
-    ) -> Result<(Option<&'c C>, Vec<Value>), Fault> {
+    ) -> Result<(Option<&'c C>, &'s [Value]), Fault> {
         let find = |wanted: CasePattern| cases.iter().find(|case| pattern(case) == wanted);
         let obj = match value {
-            Value::Tag(tag) => return Ok((find(CasePattern::Tag(tag)), Vec::new())),
-            Value::Int(n) => return Ok((find(CasePattern::Int(n)), Vec::new())),
+            Value::Tag(tag) => return Ok((find(CasePattern::Tag(tag)), &[])),
+            Value::Int(n) => return Ok((find(CasePattern::Int(n)), &[])),
             Value::Obj(obj) => obj,
             _ => {
                 return Err(Fault::Internal(
@@ -182,15 +184,15 @@ impl<'p> Runtime<'p> {
         match self.heap.get(obj).map_err(Fault::Heap)? {
             // `default` はフィールドを束縛しないので、合う case があるときだけフィールドを渡す
             Payload::Data { tag, fields } => Ok(match find(CasePattern::Tag(*tag)) {
-                Some(case) => (Some(case), fields.clone()),
-                None => (None, Vec::new()),
+                Some(case) => (Some(case), fields),
+                None => (None, &[]),
             }),
             Payload::Str(text) => {
                 let found = cases.iter().find(|case| {
                     matches!(pattern(case), CasePattern::String(index)
                         if self.strings[index as usize] == *text)
                 });
-                Ok((found, Vec::new()))
+                Ok((found, &[]))
             }
             _ => Err(Fault::Internal(
                 "a switch on an object that is neither data nor a string",
@@ -323,9 +325,12 @@ impl<'p> Runtime<'p> {
     /// 呼び出しはクロージャの所有権を受け取る。共有されていれば、ランタイムが中身を写して子の参照を数え直す
     /// (docs/spec/runtime.md)。
     fn take_closure(&mut self, obj: ObjRef) -> Result<Closure, Fault> {
-        match self.heap.take_or_copy(obj).map_err(Fault::Heap)? {
-            Payload::Closure(closure) => Ok(closure),
-            _ => Err(Fault::Internal("applying an object that is not a closure")),
+        match self.heap.take_or_copy(obj) {
+            Ok(Payload::Closure(closure)) => Ok(closure),
+            Ok(_) | Err(HeapError::NotCopyable) => {
+                Err(Fault::Internal("applying an object that is not a closure"))
+            }
+            Err(error) => Err(Fault::Heap(error)),
         }
     }
 

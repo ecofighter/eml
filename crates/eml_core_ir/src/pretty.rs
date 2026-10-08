@@ -105,7 +105,7 @@ impl Printer<'_> {
                 Stmt::Release { value, tag, fields } => {
                     let kept: Vec<String> = fields
                         .iter()
-                        .map(|field| field.map_or("_".to_string(), |v| var(function, v)))
+                        .map(|field| field.map_or_else(|| "_".to_string(), |v| var(function, v)))
                         .collect();
                     format!(
                         "release {} #{tag}({})",
