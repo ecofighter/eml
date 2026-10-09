@@ -1,3 +1,4 @@
+use super::unify::Unified;
 use super::*;
 
 impl Table<'_> {
@@ -33,6 +34,16 @@ impl Table<'_> {
 
     /// Leijen の scoped labels の書き換えで単一化する (docs/spec/types.md)。
     pub fn unify_row(&mut self, a: &Row, b: &Row) -> Result<(), UnifyError> {
+        self.unify_row_in(a, b, &mut Unified::new())
+    }
+
+    /// ラベルの型引数も型の中の部分なので、関数型を単一化している途中なら、その記録 `done` を使う。
+    pub(super) fn unify_row_in(
+        &mut self,
+        a: &Row,
+        b: &Row,
+        done: &mut Unified,
+    ) -> Result<(), UnifyError> {
         let a = self.resolve_row(a);
         let b = self.resolve_row(b);
         let mut only_b = b.labels.clone();
@@ -53,7 +64,7 @@ impl Table<'_> {
                 .zip(right.args.iter().copied())
                 .collect();
             for (x, y) in args {
-                match self.unify(x, y) {
+                match self.unify_in(x, y, done) {
                     Ok(()) => {}
                     // 無限の型は型引数の不一致ではないので、E2005 として報告させる (docs/spec/diagnostics.md)
                     Err(UnifyError::Occurs) => return Err(UnifyError::Occurs),
@@ -188,6 +199,11 @@ impl Table<'_> {
     /// row 変数 `var` が `row` の中に現れるかを調べる。ラベルの型引数は関数型を持てるので、その row の
     /// 中までたどる。現れるのに束縛すると、row の展開が終わらなくなる。
     fn row_occurs(&self, var: RowVar, row: &Row) -> bool {
+        let _walk = self.start_walk();
+        self.row_occurs_within(var, row)
+    }
+
+    fn row_occurs_within(&self, var: RowVar, row: &Row) -> bool {
         let row = self.resolve_row(row);
         row.tail == Tail::Var(var)
             || row
@@ -196,10 +212,15 @@ impl Table<'_> {
                 .any(|label| label.args.iter().any(|&arg| self.row_occurs_in(var, arg)))
     }
 
+    /// `occurs_in` と同じく、2回目に訪れた代表は `var` を含まない。
     fn row_occurs_in(&self, var: RowVar, ty: Ty) -> bool {
-        self.shape(ty).any_child(|child| match child {
+        let ty = self.resolve(ty);
+        if !self.first_visit(ty) {
+            return false;
+        }
+        self.shapes[ty.0 as usize].any_child(|child| match child {
             Child::Ty(child) => self.row_occurs_in(var, child),
-            Child::Row(row) => self.row_occurs(var, row),
+            Child::Row(row) => self.row_occurs_within(var, row),
         })
     }
 

@@ -1,34 +1,50 @@
 use super::*;
+use std::collections::HashSet;
 
 impl Table<'_> {
     /// 型の Kind の上界の候補。レコードとデータ型の Kind はフィールドの join なので、フィールドごとの境界を並べる
     /// (docs/spec/types.md)。データ型では、Kind に効く位置の型引数の境界を並べる。`File` を含むデータ型は定数の `Lin` である。
+    /// 境界は最初に現れた順に重複なく並べる。表は部分を共有するので、重複を残すと境界の数が型の深さの指数になる。
     pub fn kind_bounds(&self, ty: Ty) -> Vec<Bound<Linearity>> {
-        match self.shape(ty) {
+        let _walk = self.start_walk();
+        let mut bounds = Bounded::default();
+        self.push_kind_bounds(ty, &mut bounds);
+        bounds.list
+    }
+
+    fn push_kind_bounds(&self, ty: Ty, bounds: &mut Bounded) {
+        let ty = self.resolve(ty);
+        if !self.first_visit(ty) {
+            return;
+        }
+        match &self.shapes[ty.0 as usize] {
             TyShape::Con(id, args) => {
                 let kind = &self.context.data_kinds[*id];
                 if kind.lin {
-                    return vec![Bound::Const(Linearity::Lin)];
+                    bounds.push(Bound::Const(Linearity::Lin));
+                    return;
                 }
-                let mut bounds = vec![Bound::Const(Linearity::Unr)];
+                bounds.push(Bound::Const(Linearity::Unr));
                 for (&arg, &effective) in args.iter().zip(&kind.params) {
                     if effective {
-                        bounds.extend(self.kind_bounds(arg));
+                        self.push_kind_bounds(arg, bounds);
                     }
                 }
-                bounds
             }
-            TyShape::Record(fields) => fields
-                .iter()
-                .flat_map(|(_, field)| self.kind_bounds(*field))
-                .collect(),
-            TyShape::Fn { lin, .. } => vec![match lin {
+            TyShape::Record(fields) => {
+                for (_, field) in fields {
+                    self.push_kind_bounds(*field, bounds);
+                }
+            }
+            TyShape::Fn { lin, .. } => bounds.push(match lin {
                 ArrowLin::Known(l) => Bound::Const(*l),
                 ArrowLin::Var(v) => Bound::Var(*v),
-            }],
-            TyShape::Var(var) => vec![Bound::Var(self.ty_vars[var.0 as usize].linearity)],
-            TyShape::Rigid(rigid) => vec![Bound::Var(self.rigid_linearity(*rigid))],
-            TyShape::Error => Vec::new(),
+            }),
+            TyShape::Var(var) => {
+                bounds.push(Bound::Var(self.ty_vars[var.0 as usize].linearity));
+            }
+            TyShape::Rigid(rigid) => bounds.push(Bound::Var(self.rigid_linearity(*rigid))),
+            TyShape::Error => {}
         }
     }
 
@@ -115,8 +131,14 @@ impl Table<'_> {
         let mut lin = Vec::new();
         let mut mult = Vec::new();
         let mut work = vec![ty];
+        let _walk = self.start_walk();
         while let Some(ty) = work.pop() {
-            let shape = self.shape(ty);
+            // 前から深さ優先でたどるので、2回目に訪れた代表の Kind 変数は1回目にすべて並べてある
+            let ty = self.resolve(ty);
+            if !self.first_visit(ty) {
+                continue;
+            }
+            let shape = &self.shapes[ty.0 as usize];
             match shape {
                 TyShape::Rigid(rigid) => push_unique(&mut lin, self.rigid_linearity(*rigid)),
                 TyShape::Fn {
@@ -149,6 +171,21 @@ impl Table<'_> {
             work[first_child..].reverse();
         }
         (lin, mult)
+    }
+}
+
+/// 現れた順の境界の並び。重複は集合で調べる。境界の数は型の大きさに比例しうるので、並びを線形に探さない。
+#[derive(Default)]
+struct Bounded {
+    list: Vec<Bound<Linearity>>,
+    seen: HashSet<Bound<Linearity>>,
+}
+
+impl Bounded {
+    fn push(&mut self, bound: Bound<Linearity>) {
+        if self.seen.insert(bound) {
+            self.list.push(bound);
+        }
     }
 }
 

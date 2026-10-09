@@ -601,3 +601,170 @@ fn children_of_arrows_are_the_parameter_the_row_and_the_result() {
     });
     assert_eq!(seen, ["param", "row", "ret"]);
 }
+
+/// 共有する型の段の数。各段は1つ下の段を2回使うので、木として書き下すと 2^60 個の節点になる。代表ごとに1回だけ
+/// 訪れる実装でなければ終わらない。
+const SHARED_DEPTH: usize = 60;
+
+/// 各段が `下の段 -> 下の段` である型。
+fn shared_functions(table: &mut Table, bottom: Ty) -> Ty {
+    let mut ty = bottom;
+    for _ in 0..SHARED_DEPTH {
+        ty = table.function(ty, Row::pure(), ty);
+    }
+    ty
+}
+
+/// 各段が `Int -> <IO 下の段> 下の段` である型。下の段をラベルの型引数と戻り値の2か所で使う。
+fn shared_through_labels(table: &mut Table, bottom: Ty) -> Ty {
+    let io = table.context.externs.io;
+    let int = table.int;
+    let mut ty = bottom;
+    for _ in 0..SHARED_DEPTH {
+        let row = Row::closed(vec![Label {
+            effect: io,
+            args: vec![ty],
+        }]);
+        ty = table.function(int, row, ty);
+    }
+    ty
+}
+
+#[test]
+fn the_occurs_check_visits_a_shared_type_once() {
+    let context = test_context();
+    let mut table = Table::new(&context);
+    let int = table.int;
+    let y = table.fresh_var();
+    let shared = shared_functions(&mut table, y);
+    let v = table.fresh_var();
+    assert_eq!(table.unify(v, shared), Ok(()));
+    assert_eq!(table.resolve(v), shared);
+    // 前の呼び出しで印を付けた型も、次の呼び出しではもう一度たどる
+    let f = table.function(shared, Row::pure(), int);
+    assert_eq!(table.unify(y, f), Err(UnifyError::Occurs));
+    let w = table.fresh_var();
+    let g = table.function(shared, Row::pure(), w);
+    assert_eq!(table.unify(w, g), Err(UnifyError::Occurs));
+}
+
+#[test]
+fn the_row_occurs_check_visits_a_shared_type_once() {
+    let context = test_context();
+    let mut table = Table::new(&context);
+    let io = table.context.externs.io;
+    let int = table.int;
+    let shared = shared_functions(&mut table, int);
+    let r = table.fresh_row_var();
+    let open = Row {
+        labels: Vec::new(),
+        tail: Tail::Var(r),
+    };
+    let g = table.function(shared, open.clone(), int);
+    let with_g = Row {
+        labels: vec![Label {
+            effect: io,
+            args: vec![g],
+        }],
+        tail: Tail::Var(table.fresh_row_var()),
+    };
+    assert_eq!(table.unify_row(&open, &with_g), Err(UnifyError::Occurs));
+    let s = table.fresh_row_var();
+    let other = Row {
+        labels: Vec::new(),
+        tail: Tail::Var(s),
+    };
+    let with_shared = Row::closed(vec![Label {
+        effect: io,
+        args: vec![shared],
+    }]);
+    assert_eq!(table.unify_row(&other, &with_shared), Ok(()));
+    assert_eq!(table.resolve_row(&other), with_shared);
+}
+
+#[test]
+fn unifying_two_equal_shared_types_visits_each_pair_once() {
+    let context = test_context();
+    let mut table = Table::new(&context);
+    let int = table.int;
+    let x = table.fresh_var();
+    let a = shared_functions(&mut table, x);
+    let b = shared_functions(&mut table, int);
+    assert_eq!(table.unify(a, b), Ok(()));
+    assert_eq!(shown(&table, x), "Int");
+}
+
+#[test]
+fn unifying_label_arguments_remembers_the_unified_pairs() {
+    let context = test_context();
+    let mut table = Table::new(&context);
+    let int = table.int;
+    let x = table.fresh_var();
+    let a = shared_through_labels(&mut table, x);
+    let b = shared_through_labels(&mut table, int);
+    assert_eq!(table.unify(a, b), Ok(()));
+    assert_eq!(shown(&table, x), "Int");
+}
+
+#[test]
+fn kind_bounds_of_a_shared_type_list_each_bound_once() {
+    let context = test_context();
+    let mut table = Table::new(&context);
+    let (int, string) = (table.int, table.string);
+    let mx = table.fresh_lin_var();
+    let x = table.fresh_var_with(mx);
+    let my = table.fresh_lin_var();
+    let y = table.fresh_var_with(my);
+    // `Int` と `String` は別の節点だが、境界はどちらも `Unr` なので1つにまとまる
+    let mut shared = table.tuple(vec![x, int, y, string]);
+    for _ in 0..SHARED_DEPTH {
+        shared = table.tuple(vec![shared, shared]);
+    }
+    assert_eq!(
+        table.kind_bounds(shared),
+        vec![Bound::Var(mx), Bound::Const(Linearity::Unr), Bound::Var(my)]
+    );
+}
+
+#[test]
+fn kind_vars_of_a_shared_type_list_each_variable_once() {
+    let context = test_context();
+    let mut table = Table::new(&context);
+    let (a, ra) = table.fresh_rigid("a");
+    let mut shared = a;
+    let mut arrows = Vec::new();
+    for _ in 0..SHARED_DEPTH {
+        let m = table.fresh_lin_var();
+        arrows.push(m);
+        shared = table.function_with(shared, ArrowLin::Var(m), Row::pure(), shared);
+    }
+    // 外側の矢印から順に並び、最後に一番内側の rigid 変数が来る
+    arrows.reverse();
+    arrows.push(table.rigid_linearity(ra));
+    assert_eq!(table.kind_vars(shared), (arrows, Vec::new()));
+}
+
+#[test]
+fn each_walk_ends_before_the_next_one_starts() {
+    let context = test_context();
+    let mut table = Table::new(&context);
+    let int = table.int;
+    let x = table.fresh_var();
+    let pair = table.tuple(vec![x, int]);
+    // 入口ごとに印の処理を終えていなければ、次の入口の開始で debug ビルドが止まる
+    assert_eq!(table.kind_bounds(pair).len(), 2);
+    let v = table.fresh_var();
+    assert_eq!(table.unify(v, pair), Ok(()));
+    assert_eq!(table.kind_vars(pair), (Vec::new(), Vec::new()));
+    assert_eq!(table.kind_bounds(pair).len(), 2);
+}
+
+#[cfg(debug_assertions)]
+#[test]
+#[should_panic(expected = "a marking walk started inside another")]
+fn a_walk_cannot_start_inside_another() {
+    let context = test_context();
+    let table = Table::new(&context);
+    let _outer = table.start_walk();
+    let _inner = table.start_walk();
+}

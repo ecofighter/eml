@@ -4,6 +4,7 @@ use crate::kind::{Bound, Carry, KindVar, Provenance};
 use crate::ty::{EffectLabel, Linearity, Multiplicity, RowTail, Type};
 use eml_extern::ExternType;
 use eml_hir::{EffectId, LangItems, OperationId, TypeDefId};
+use std::cell::RefCell;
 
 mod export;
 mod kinds;
@@ -12,7 +13,7 @@ mod row;
 mod tests;
 mod unify;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct Ty(u32);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -181,6 +182,28 @@ struct RigidInfo {
     linearity: KindVar,
 }
 
+/// 表をたどる処理が訪れた代表の印。呼び出しごとに表の大きさの配列を作ると、呼び出しが多いときに2乗の時間になる。
+/// そこで配列を使い回し、`stamp` が今の世代と等しい節点を訪れたとみなす。
+#[derive(Default)]
+struct Marks {
+    stamp: Vec<u32>,
+    generation: u32,
+    /// 印を使う処理の途中か。途中で別の処理を始めると世代が進み、外側の処理が訪れた節点をもう一度たどる。そうなると
+    /// 型の深さの指数の時間になるので、debug ビルドでは入れ子の開始を止める。
+    walking: bool,
+}
+
+/// 印を使う処理が続いている間だけ持つ。手放すと処理の終わりを記録する。
+struct Walk<'t> {
+    marks: &'t RefCell<Marks>,
+}
+
+impl Drop for Walk<'_> {
+    fn drop(&mut self) {
+        self.marks.borrow_mut().walking = false;
+    }
+}
+
 pub(crate) struct Table<'c> {
     /// プログラム全体の情報。表ごとに作り直さず借りる。
     context: &'c Context,
@@ -200,6 +223,8 @@ pub(crate) struct Table<'c> {
     pub lang: LangItems,
     /// 持ち越しの制約 (docs/spec/types.md の「推論」)。
     carries: Vec<Carry>,
+    /// `occurs` などは `&self` で子をたどるので、印は内側から書き換える。
+    marks: RefCell<Marks>,
 }
 
 impl<'c> Table<'c> {
@@ -256,6 +281,7 @@ impl<'c> Table<'c> {
             error: Ty(0),
             lang,
             carries: Vec::new(),
+            marks: RefCell::default(),
         };
         let externs = &context.externs;
         table.int = table.alloc(TyShape::Con(externs.ty(ExternType::Int), Vec::new()));
@@ -411,6 +437,33 @@ impl<'c> Table<'c> {
             }
         }
         ty
+    }
+
+    /// 型をたどる処理の入口で呼び、前の処理の印を無効にする。処理の中の再帰では呼ばない。返す値は処理が終わるまで
+    /// 持つ。たどる間は表を変更しないので、配列はここで表の大きさまで伸ばせば足りる。
+    fn start_walk(&self) -> Walk<'_> {
+        let mut marks = self.marks.borrow_mut();
+        debug_assert!(!marks.walking, "a marking walk started inside another");
+        marks.walking = true;
+        marks.generation = marks.generation.wrapping_add(1);
+        if marks.generation == 0 {
+            // 一巡した世代は古い印と区別できないので、印を消してからやり直す
+            marks.stamp.fill(0);
+            marks.generation = 1;
+        }
+        let len = self.shapes.len();
+        marks.stamp.resize(len, 0);
+        Walk { marks: &self.marks }
+    }
+
+    /// 代表 `ty` をこの処理で初めて訪れたなら、印を付けて真を返す。子をたどる間は借りない。
+    fn first_visit(&self, ty: Ty) -> bool {
+        let mut marks = self.marks.borrow_mut();
+        let generation = marks.generation;
+        let stamp = &mut marks.stamp[ty.0 as usize];
+        let first = *stamp != generation;
+        *stamp = generation;
+        first
     }
 
     /// 束縛を辿った先の形。

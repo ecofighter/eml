@@ -1,9 +1,21 @@
 use super::*;
+use std::collections::HashSet;
+
+/// 1回の単一化の中で、単一化を終えた複合の型 (型構成子、レコード、関数型) の代表の組。表は部分を共有するので、
+/// 覚えないと同じ組を何度もたどり、型の深さの指数の時間がかかる。もう一度たどっても同じ Kind の制約を同じ由来で
+/// 出すだけなので、飛ばしても結果は変わらない。表は occurs の検査で輪を持たないので、単一化の途中の組をもう一度
+/// 訪れることはない。
+pub(super) type Unified = HashSet<(Ty, Ty)>;
 
 impl Table<'_> {
     pub fn unify(&mut self, a: Ty, b: Ty) -> Result<(), UnifyError> {
+        // `HashSet::new` は領域を確保しない。記録の領域は、複合の型の組を初めて覚えるときに作られる
+        self.unify_in(a, b, &mut Unified::new())
+    }
+
+    pub(super) fn unify_in(&mut self, a: Ty, b: Ty, done: &mut Unified) -> Result<(), UnifyError> {
         let (a, b) = (self.resolve(a), self.resolve(b));
-        if a == b {
+        if a == b || done.contains(&(a, b)) {
             return Ok(());
         }
         match (
@@ -18,16 +30,18 @@ impl Table<'_> {
             (TyShape::Rigid(x), TyShape::Rigid(y)) if x == y => Ok(()),
             (TyShape::Con(x, xs), TyShape::Con(y, ys)) if x == y && xs.len() == ys.len() => {
                 for (x, y) in xs.iter().zip(&ys) {
-                    self.unify(*x, *y)?;
+                    self.unify_in(*x, *y, done)?;
                 }
+                done.insert((a, b));
                 Ok(())
             }
             (TyShape::Record(xs), TyShape::Record(ys))
                 if xs.len() == ys.len() && xs.iter().zip(&ys).all(|((l, _), (m, _))| l == m) =>
             {
                 for ((_, x), (_, y)) in xs.iter().zip(&ys) {
-                    self.unify(*x, *y)?;
+                    self.unify_in(*x, *y, done)?;
                 }
+                done.insert((a, b));
                 Ok(())
             }
             (
@@ -44,10 +58,12 @@ impl Table<'_> {
                     ret: t2,
                 },
             ) => {
-                self.unify(p1, p2)?;
+                self.unify_in(p1, p2, done)?;
                 self.unify_arrow_lin(l1, l2)?;
-                self.unify_row(&r1, &r2)?;
-                self.unify(t1, t2)
+                self.unify_row_in(&r1, &r2, done)?;
+                self.unify_in(t1, t2, done)?;
+                done.insert((a, b));
+                Ok(())
             }
             _ => Err(UnifyError::Mismatch),
         }
@@ -66,17 +82,27 @@ impl Table<'_> {
     }
 
     fn occurs(&self, var: TyVar, ty: Ty) -> bool {
-        let shape = self.shape(ty);
+        let _walk = self.start_walk();
+        self.occurs_in(var, ty)
+    }
+
+    /// 2回目に訪れた代表は、1回目に `var` を含まなかったと分かっている。含んでいれば、そこで探索を終えているため。
+    fn occurs_in(&self, var: TyVar, ty: Ty) -> bool {
+        let ty = self.resolve(ty);
+        if !self.first_visit(ty) {
+            return false;
+        }
+        let shape = &self.shapes[ty.0 as usize];
         if let TyShape::Var(other) = shape {
             return *other == var;
         }
         shape.any_child(|child| match child {
-            Child::Ty(child) => self.occurs(var, child),
+            Child::Ty(child) => self.occurs_in(var, child),
             Child::Row(row) => self
                 .resolve_row(row)
                 .labels
                 .iter()
-                .any(|label| label.args.iter().any(|&arg| self.occurs(var, arg))),
+                .any(|label| label.args.iter().any(|&arg| self.occurs_in(var, arg))),
         })
     }
 
