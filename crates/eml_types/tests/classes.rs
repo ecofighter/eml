@@ -144,33 +144,51 @@ fn a_derived_instance_cannot_take_the_superclass_context() {
     ");
 }
 
-#[test]
-fn a_method_without_parameters_is_not_told_to_change_its_signature() {
-    // メソッドのシグネチャはクラスが決めるので、`()` を取る関数に変える help は出せない。引数を書いて定義する help にする
-    let text = "class Combine a where\n  combine : a -> a -> <IO> a\n\ninstance Combine Int where\n  combine =\n    println \"x\"\n    fn x y -> x + y";
-    let lines: Vec<String> = check(text)
+/// 診断ごとの番号と help。
+fn codes_and_helps(text: &str) -> Vec<(String, Vec<String>)> {
+    check(text)
         .diagnostics
         .into_iter()
-        .flat_map(|diagnostic| diagnostic.help)
-        .collect();
+        .map(|diagnostic| (diagnostic.code.to_string(), diagnostic.help))
+        .collect()
+}
+
+#[test]
+fn a_method_defined_with_too_few_parameters_is_told_how_many_it_needs() {
+    // メソッドのシグネチャはクラスが決めるので、`()` を取る関数に変える help は出せない。クラスの row がエフェクトを
+    // 許す矢印まで引数を書けば、本体の row がその矢印の row になる
+    let class =
+        "class Combine a where\n  combine : a -> a -> <IO> a\n\ninstance Combine Int where\n";
+    let help = "define `combine` with 2 parameters, so that it performs `IO` when it is called";
+    for body in [
+        "  combine =\n    println \"x\"\n    fn x y -> x + y",
+        "  combine x =\n    println \"x\"\n    fn y -> x + y",
+    ] {
+        assert_eq!(
+            codes_and_helps(&format!("{class}{body}")),
+            [("E2002".to_string(), vec![help.to_string()])],
+            "{body}"
+        );
+    }
+}
+
+#[test]
+fn a_method_whose_class_row_lacks_the_effect_is_told_to_change_the_class() {
+    // どの矢印の row もエフェクトを許さなければ、引数を書いても直らない。ユーザーのクラスならクラスの row を足す
+    let text = "class Combine a where\n  combine : a -> a -> a\n\ninstance Combine Int where\n  combine =\n    println \"x\"\n    fn x y -> x + y";
     assert_eq!(
-        lines,
-        ["define `combine` with its parameters, so that it performs `IO` when it is called"]
+        codes_and_helps(text),
+        [(
+            "E2002".to_string(),
+            vec!["the signature of `combine` comes from the class `Combine`; add `IO` to its row there, as in `-> <IO> ...`".to_string()]
+        )]
     );
-    // 引数を取らないメソッドは、どの定義でもエフェクトを起こせないので help を出さない
+    // 標準ライブラリのクラスは書き換えられず、矢印のないメソッドには row がないので、help を出さない
+    let text =
+        "data C = | C\n\ninstance Show C where\n  show =\n    println \"x\"\n    fn _ -> \"o\"";
+    assert_eq!(codes_and_helps(text), [("E2002".to_string(), vec![])]);
     let text = "class Zero a where\n  zero : a\n\ninstance Zero Int where\n  zero =\n    println \"x\"\n    1";
-    let checked = check(text);
-    let codes: Vec<String> = checked
-        .diagnostics
-        .iter()
-        .map(|diagnostic| diagnostic.code.to_string())
-        .collect();
-    assert_eq!(codes, ["E2002"]);
-    assert!(
-        checked.diagnostics[0].help.is_empty(),
-        "{:?}",
-        checked.diagnostics
-    );
+    assert_eq!(codes_and_helps(text), [("E2002".to_string(), vec![])]);
 }
 
 #[test]

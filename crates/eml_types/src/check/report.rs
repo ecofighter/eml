@@ -1,6 +1,7 @@
 use eml_diagnostics::{Diagnostic, FileId, Label, SourceFiles, TextEdit, TextRange, TextSize};
 use eml_hir::{
-    Body, ExprId, ExprKind, FunctionKind, ModuleOrigin, OperationId, PatId, Program, Res,
+    Body, ExprId, ExprKind, FunctionKind, ModuleOrigin, OperationId, PatId, Program, Res, RowRef,
+    Signature, TypeRefKind,
 };
 
 use crate::codes;
@@ -257,26 +258,32 @@ impl BodyCheck<'_, '_> {
                     FunctionKind::Defined | FunctionKind::Extern(_) => None,
                 };
                 let help = match method {
-                    // メソッドのシグネチャはクラスが決めるので、`()` を取る関数に変えられない。引数を書けば、本体の
-                    // row がシグネチャの矢印の row になる。引数のないメソッドは、どう定義してもエフェクトを起こせない
-                    Some(method) if self.body.params.is_empty() => {
-                        (method.signature.arity() > 0).then(|| {
-                            format!(
-                                "define `{}` with its parameters, so that it performs {quoted} when it is called",
-                                method.name
-                            )
-                        })
+                    // メソッドのシグネチャはクラスが決めるので、`()` を取る関数に変えられない。クラスの row が
+                    // エフェクトを許す矢印まで引数を書けば、本体の row がその矢印の row になる。そのような矢印がなければ、
+                    // 直す先はクラスのシグネチャである。標準ライブラリのクラスは書き換えられず、矢印のないメソッドには
+                    // row がないので、help を出さない
+                    Some(method) => {
+                        match allowing_arrow(self.program, &method.signature, self.body.params.len(), &missing) {
+                            Some(arrow) => {
+                                let count = arrow + 1;
+                                let noun = if count == 1 { "parameter" } else { "parameters" };
+                                Some(format!(
+                                    "define `{}` with {count} {noun}, so that it performs {quoted} when it is called",
+                                    method.name
+                                ))
+                            }
+                            None => (method.signature.arity() > 0
+                                && self.program.origin(method.class.module) == ModuleOrigin::User)
+                                .then(|| {
+                                    format!(
+                                        "the signature of `{}` comes from the class `{}`; add {quoted} to its row there, as in `-> <{}> ...`",
+                                        method.name,
+                                        self.program.names.class(method.class),
+                                        missing.join(", ")
+                                    )
+                                }),
+                        }
                     }
-                    // 引数を書いたメソッドの row もクラスのシグネチャが決める。標準ライブラリのクラスは書き換えられない
-                    Some(method) => (self.program.origin(method.class.module) == ModuleOrigin::User)
-                        .then(|| {
-                            format!(
-                                "the signature of `{}` comes from the class `{}`; add {quoted} to its row there, as in `-> <{}> ...`",
-                                method.name,
-                                self.program.names.class(method.class),
-                                missing.join(", ")
-                            )
-                        }),
                     // 引数のない関数は矢印を持たず、row を足す先がない。`()` を取る関数にする規則を案内する
                     // (docs/spec/declarations.md)
                     None if self.body.params.is_empty() => Some(format!(
@@ -735,4 +742,33 @@ fn carried_through(span: Span, name: &str, inner: Option<&CarriedInner>) -> Diag
             diagnostic.with_secondary(Label::new(inner.span.file, inner.span.range, label));
     }
     diagnostic.with_note(CARRY_NOTE)
+}
+
+/// 本体の引数の数 `params` より後ろの矢印のうち、row が `missing` をすべて許す最初の矢印の番号 (0 から数える)。
+/// 開いた row は、row 変数を通してどのエフェクトも許すとみなす。
+fn allowing_arrow(
+    program: &Program,
+    signature: &Signature,
+    params: usize,
+    missing: &[String],
+) -> Option<usize> {
+    let mut id = signature.ty;
+    let mut arrow = 0;
+    while let TypeRefKind::Fn { row, ret, .. } = &signature.types[id].kind {
+        let allows = match row {
+            RowRef::Open { .. } => true,
+            RowRef::Closed { effects, .. } => missing.iter().all(|name| {
+                effects
+                    .iter()
+                    .any(|listed| program.names.effect(listed.effect) == name.as_str())
+            }),
+            RowRef::Omitted | RowRef::Error => false,
+        };
+        if arrow >= params && allows {
+            return Some(arrow);
+        }
+        id = *ret;
+        arrow += 1;
+    }
+    None
 }
