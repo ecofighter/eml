@@ -7,11 +7,13 @@ mod data;
 mod dump;
 mod exhaustive;
 mod kind;
+mod resolve;
 mod scc;
 mod shape;
 mod store;
 mod table;
 mod ty;
+mod uniform;
 mod usage;
 
 use std::collections::HashMap;
@@ -25,8 +27,10 @@ use crate::kind::problem::KindScheme;
 use crate::shape::Shape;
 
 pub use dump::dump;
+pub use resolve::{Resolution, resolve};
 pub use store::{EffectLabel, RowTail, Substitution, TypeId, TypeKind, TypeStore};
 pub use ty::{Linearity, Multiplicity};
+pub use uniform::{InstanceNode, Uniform};
 
 pub mod codes {
     use eml_diagnostics::ErrorCode;
@@ -47,6 +51,7 @@ pub mod codes {
     pub const AMBIGUOUS_CONSTRAINT: ErrorCode = ErrorCode(2009);
     pub const LINEAR_INSTANCE_HEAD: ErrorCode = ErrorCode(2010);
     pub const METHOD_KIND_MISMATCH: ErrorCode = ErrorCode(2011);
+    pub const CONSTRAINED_POLYMORPHIC_RECURSION: ErrorCode = ErrorCode(2012);
     pub const NON_EXHAUSTIVE_MATCH: ErrorCode = ErrorCode(4001);
     pub const NON_EXHAUSTIVE_EQUATION: ErrorCode = ErrorCode(4002);
     pub const REFUTABLE_PATTERN: ErrorCode = ErrorCode(4003);
@@ -67,6 +72,8 @@ pub struct TypedProgram {
     pub decls: HashMap<ValueItem, DeclType>,
     /// シグネチャと等式の両方がある関数だけを含む。
     pub bodies: ItemMap<Function, BodyTypes>,
+    /// 単相化で一様にする型変数の位置。
+    pub uniform: Uniform,
 }
 
 /// 1つの宣言の型検査の結果。

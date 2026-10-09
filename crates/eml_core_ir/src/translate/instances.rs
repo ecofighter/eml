@@ -4,9 +4,7 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 
 use eml_hir::{ExprId, FunctionId, FunctionKind, Program as HirProgram, ValueItem};
-use eml_types::{
-    BodyTypes, Instantiation, Substitution, TypeId, TypeKind, TypeStore, TypedProgram,
-};
+use eml_types::{BodyTypes, Instantiation, Substitution, TypeId, TypeStore, TypedProgram};
 use la_arena::ArenaMap;
 
 use super::program::core_name;
@@ -49,7 +47,6 @@ struct Found {
 }
 
 pub(super) fn collect(hir: &HirProgram, typed: &TypedProgram, entry: FunctionId) -> Instances {
-    let uniform = uniform_positions(hir, typed);
     let mut store = typed.types.clone();
     let mut found: Vec<Found> = Vec::new();
     let mut keys: HashMap<(FunctionId, Vec<TypeId>), usize> = HashMap::new();
@@ -107,7 +104,7 @@ pub(super) fn collect(hir: &HirProgram, typed: &TypedProgram, entry: FunctionId)
                     .iter()
                     .enumerate()
                     .map(|(position, &arg)| {
-                        if uniform.contains(&(callee, position)) {
+                        if typed.uniform.function(callee, position) {
                             store.flexible()
                         } else {
                             arg
@@ -166,71 +163,6 @@ pub(super) fn collect(hir: &HirProgram, typed: &TypedProgram, entry: FunctionId)
     order(hir, found, entry_index, store)
 }
 
-/// 多相再帰で大きくなる型変数の位置 (docs/spec/core-ir.md の「変換の規則」)。節点は (関数, 型変数の番号) で、関数 f
-/// の本体の参照 `g @[T0, …]` の Tj に f の型変数 i が現れるとき (f, i) から (g, j) へ辺を引く。Tj が i そのもの
-/// でなければ大きくなる辺である。大きくなる辺の両端を含む強連結成分の節点を、一様な位置とする。
-fn uniform_positions(hir: &HirProgram, typed: &TypedProgram) -> HashSet<(FunctionId, usize)> {
-    let mut nodes: Vec<(FunctionId, usize)> = Vec::new();
-    let mut node_of: HashMap<(FunctionId, usize), usize> = HashMap::new();
-    for (id, function) in hir.functions() {
-        if !function.kind.has_equations() {
-            continue;
-        }
-        for position in 0..type_vars(hir, id).len() {
-            node_of.insert((id, position), nodes.len());
-            nodes.push((id, position));
-        }
-    }
-    let mut edges: Vec<Vec<(usize, bool)>> = vec![Vec::new(); nodes.len()];
-    for (f, function) in hir.functions() {
-        if !function.kind.has_equations() {
-            continue;
-        }
-        let names = type_vars(hir, f);
-        if names.is_empty() {
-            continue;
-        }
-        let Some(body) = typed.bodies.get(f) else {
-            continue;
-        };
-        // 本体の中で共有された型を、各節点1回だけたどる
-        let mut occurrences = HashMap::new();
-        for (_, instantiation) in body.instantiations.iter() {
-            let ValueItem::Function(g) = instantiation.decl else {
-                continue;
-            };
-            if hir[g].kind != FunctionKind::Defined {
-                continue;
-            }
-            for (j, &arg) in instantiation.args.iter().enumerate() {
-                let occurs = vars_in(&typed.types, arg, &names, &mut occurrences);
-                for (i, name) in names.iter().enumerate() {
-                    if occurs[i] {
-                        let grow =
-                            !matches!(typed.types.kind(arg), TypeKind::Rigid(n) if n == name);
-                        edges[node_of[&(f, i)]].push((node_of[&(g, j)], grow));
-                    }
-                }
-            }
-        }
-    }
-    let component = strongly_connected(&edges);
-    let mut growing = HashSet::new();
-    for (from, out) in edges.iter().enumerate() {
-        for &(to, grow) in out {
-            if grow && component[from] == component[to] {
-                growing.insert(component[from]);
-            }
-        }
-    }
-    nodes
-        .into_iter()
-        .enumerate()
-        .filter(|(node, _)| growing.contains(&component[*node]))
-        .map(|(_, position)| position)
-        .collect()
-}
-
 /// シグネチャの型変数の名前。並びは具体化の表の型引数の順と同じである。
 fn type_vars(hir: &HirProgram, function: FunctionId) -> Vec<String> {
     hir[function]
@@ -245,123 +177,6 @@ fn type_vars(hir: &HirProgram, function: FunctionId) -> Vec<String> {
                 .collect()
         })
         .unwrap_or_default()
-}
-
-/// `ty` に現れる `names` の型変数 (番号ごとの真偽)。`substitute` がたどる位置 (型構成子の引数、関数型の引数と結果と
-/// エフェクトの型引数、レコードとタプルの要素) を見る。結果を `memo` に覚え、共有された型は1回だけたどる。
-fn vars_in(
-    types: &TypeStore,
-    ty: TypeId,
-    names: &[String],
-    memo: &mut HashMap<TypeId, Vec<bool>>,
-) -> Vec<bool> {
-    if !types.contains_type_vars(ty) {
-        return vec![false; names.len()];
-    }
-    if let Some(found) = memo.get(&ty) {
-        return found.clone();
-    }
-    let mut found = vec![false; names.len()];
-    let mut merge = |child: Vec<bool>| {
-        for (slot, child) in found.iter_mut().zip(child) {
-            *slot |= child;
-        }
-    };
-    match types.kind(ty) {
-        TypeKind::Rigid(name) => {
-            if let Some(position) = names.iter().position(|n| n == name) {
-                merge({
-                    let mut one = vec![false; names.len()];
-                    one[position] = true;
-                    one
-                });
-            }
-        }
-        TypeKind::Con { args, .. } => {
-            for &arg in args {
-                merge(vars_in(types, arg, names, memo));
-            }
-        }
-        TypeKind::Record(fields) => {
-            for &(_, field) in fields {
-                merge(vars_in(types, field, names, memo));
-            }
-        }
-        TypeKind::Fn {
-            param,
-            effects,
-            ret,
-            ..
-        } => {
-            merge(vars_in(types, *param, names, memo));
-            for label in effects {
-                for &arg in &label.args {
-                    merge(vars_in(types, arg, names, memo));
-                }
-            }
-            merge(vars_in(types, *ret, names, memo));
-        }
-        TypeKind::OpVar(_) | TypeKind::Flexible | TypeKind::Error => {}
-    }
-    memo.insert(ty, found.clone());
-    found
-}
-
-/// 強連結成分の番号。Tarjan の方法を作業の列で行い、グラフの深さに比例して Rust のスタックを使わない。
-fn strongly_connected(edges: &[Vec<(usize, bool)>]) -> Vec<usize> {
-    const UNSEEN: usize = usize::MAX;
-    let mut index = vec![UNSEEN; edges.len()];
-    let mut low = vec![0; edges.len()];
-    let mut on_stack = vec![false; edges.len()];
-    let mut stack = Vec::new();
-    let mut component = vec![UNSEEN; edges.len()];
-    let (mut next_index, mut next_component) = (0, 0);
-    for root in 0..edges.len() {
-        if index[root] != UNSEEN {
-            continue;
-        }
-        // (節点, 次に見る辺の位置)
-        let mut work = vec![(root, 0)];
-        index[root] = next_index;
-        low[root] = next_index;
-        next_index += 1;
-        stack.push(root);
-        on_stack[root] = true;
-        while let Some(&(node, edge)) = work.last() {
-            if let Some(&(to, _)) = edges[node].get(edge) {
-                work.last_mut().expect("read above").1 += 1;
-                if index[to] == UNSEEN {
-                    index[to] = next_index;
-                    low[to] = next_index;
-                    next_index += 1;
-                    stack.push(to);
-                    on_stack[to] = true;
-                    work.push((to, 0));
-                } else if on_stack[to] {
-                    low[node] = low[node].min(index[to]);
-                }
-                continue;
-            }
-            work.pop();
-            if let Some(&(parent, _)) = work.last() {
-                low[parent] = low[parent].min(low[node]);
-            }
-            if low[node] == index[node] {
-                loop {
-                    let member = stack
-                        .pop()
-                        .expect("the root of a component is on the stack");
-                    on_stack[member] = false;
-                    component[member] = next_component;
-                    if member == node {
-                        break;
-                    }
-                }
-                next_component += 1;
-            }
-        }
-    }
-    component
 }
 
 /// `@[` と `]` の間の上限の文字数。部分を共有する型では表示が指数の長さになるので、超えたら順番の名前にする。

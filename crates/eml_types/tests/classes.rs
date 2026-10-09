@@ -237,3 +237,24 @@ fn ordinary_instances_and_defaults_have_no_kind_error() {
     );
     assert_eq!(lines(&text), Vec::<String>::new());
 }
+
+#[test]
+fn constrained_polymorphic_recursion_is_rejected() {
+    let text = format!(
+        "{SAME}depth : Same a => Int -> a -> Int\ndepth n x = if n == 0 then 0 else depth (n - 1) (x, x)"
+    );
+    let checked = check(&text);
+    insta::assert_snapshot!(eml_test_support::full(checked.files(), &checked.diagnostics), @"
+    E2012 6:1 `depth` would need an instance of `Same` at infinitely many types
+      6:1 a constrained type variable grows on each recursive call
+      note: instances are chosen at compile time, so a constraint cannot follow polymorphic recursion
+    E2006 7:35 no instance of `Same` for `(a, a)`
+      7:35 `depth` requires `Same (a, a)`
+    ");
+    let text = "class C a where\n  m : Show2 b => a -> Int -> b -> Int\n\nclass Show2 a where\n  show2 : a -> Int\n\ninstance C Int where\n  m x n y = if n == 0 then show2 y else m x (n - 1) (y, y)";
+    assert!(
+        lines(text).iter().any(|line| line.starts_with("E2012")),
+        "{:?}",
+        lines(text)
+    );
+}

@@ -18,7 +18,8 @@ use crate::store::{EffectLabel, TypeKind, TypeStore};
 use crate::table::{Exporter, Row, Table, TyShape};
 use crate::ty::Linearity;
 use crate::{
-    BodyTypes, DeclType, Instantiation, TypedProgram, carry, codes, exhaustive, scc, usage,
+    BodyTypes, DeclType, Instantiation, TypedProgram, Uniform, carry, codes, exhaustive, scc,
+    uniform, usage,
 };
 
 mod body;
@@ -119,7 +120,10 @@ pub(crate) fn check_module(
         &schemes,
     ));
     diagnostics.extend(report_violations(program, files, &types, violated));
-    let typed = typed_program(&signatures, schemes, bodies, types);
+    let mut typed = typed_program(&signatures, schemes, bodies, types);
+    let (uniform, found) = uniform::uniform(program, &typed.types, &typed.bodies);
+    typed.uniform = uniform;
+    diagnostics.extend(found);
     // 網羅性は型推論と使用回数のパスの後に、書き出した型の上で調べる (docs/spec/exhaustiveness.md の「検査パス」)
     diagnostics.extend(exhaustive::check(program, &typed));
     (typed, diagnostics)
@@ -215,7 +219,7 @@ fn check_instances(program: &Program, context: &Context, diagnostics: &mut Vec<D
 const METHOD_ARROWS: Arrows = Arrows::Method { outermost: true };
 
 /// instance の頭の型の表示 (`Box a`)。
-fn instance_head(program: &Program, id: InstanceId) -> String {
+pub(crate) fn instance_head(program: &Program, id: InstanceId) -> String {
     let instance = &program[id];
     std::iter::once(program.names.ty(instance.head))
         .chain(
@@ -652,6 +656,7 @@ fn typed_program(
         types,
         decls,
         bodies,
+        uniform: Uniform::default(),
     }
 }
 
