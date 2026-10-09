@@ -1,0 +1,12 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{stderr}\")"
+input_file: tests/ui/run/classes/derived.em
+---
+--- stdout ---
+True True True
+GT True
+True True
+Blue Some (Some (-3)) Point 4 (-5)
+Some "a\"b" None
+--- stderr ---

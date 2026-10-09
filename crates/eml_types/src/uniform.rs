@@ -7,13 +7,13 @@ use std::collections::{HashMap, HashSet};
 use eml_diagnostics::{Diagnostic, FileId, Label, TextRange};
 use eml_hir::{
     ClassId, Function, FunctionId, FunctionKind, InstanceId, InstanceOrigin, ItemMap, MethodId,
-    MethodImpl, Program, Signature, TypeVarId, ValueItem,
+    MethodImpl, Program, Signature, TypeDefKind, TypeVarId, ValueItem,
 };
 
 use crate::check::instance_head;
 use crate::resolve::{Resolution, resolve};
 use crate::store::{TypeId, TypeKind, TypeStore};
-use crate::{BodyTypes, codes};
+use crate::{BodyTypes, DeclType, codes};
 
 /// 多相再帰で大きくなる型変数の位置 (spec の「一様な位置と制約付きの多相再帰」)。
 #[derive(Debug, Default)]
@@ -36,7 +36,7 @@ impl Uniform {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum InstanceNode {
     Declared(InstanceId),
-    /// 要素の数ごとのタプルの instance (Task 9)。
+    /// 要素の数ごとのタプルの instance。`Eq`、`Ord`、`Show` で1つの節点を共有する。`Unit` は位置を持たない。
     Tuple(usize),
 }
 
@@ -53,10 +53,11 @@ enum Node {
 pub(crate) fn uniform(
     program: &Program,
     types: &TypeStore,
+    decls: &HashMap<ValueItem, DeclType>,
     bodies: &ItemMap<Function, BodyTypes>,
 ) -> (Uniform, Vec<Diagnostic>) {
     let mut graph = Graph::new(program);
-    graph.instance_edges();
+    graph.instance_edges(types, decls);
     graph.method_edges();
     for (f, function) in program.functions() {
         if !function.kind.has_equations() {
@@ -111,9 +112,9 @@ struct Graph<'a> {
     node_of: HashMap<Node, usize>,
     /// 節点ごとの (行き先, 大きくなる辺か)。
     edges: Vec<Vec<(usize, bool)>>,
-    /// 辺の 5. の、省いたメソッドの既定のメソッドへの辺の出どころ。(instance の節点, instance, 既定のメソッドの関数)。
+    /// 辺の 5. の、既定のメソッドへの辺の出どころ。(instance の節点, instance, 既定のメソッドの関数)。
     /// 既定のメソッドの位置の E2012 が、どの instance の頭を指すかを決める。
-    default_edges: Vec<(usize, InstanceId, FunctionId)>,
+    default_edges: Vec<(usize, InstanceNode, FunctionId)>,
 }
 
 impl<'a> Graph<'a> {
@@ -156,35 +157,114 @@ impl<'a> Graph<'a> {
     }
 
     /// 辺の 5.: instance の節点から、instance のメソッドの関数へ大きくならない辺を、省いたメソッドの既定のメソッドの
-    /// クラスの型変数へ大きくなる辺を引く。導出した instance は Task 9 で足す。
-    fn instance_edges(&mut self) {
+    /// クラスの型変数へ大きくなる辺を引く。導出した instance は、生成する関数が使わない既定のメソッドへ同じ辺を引き、
+    /// 生成する関数が求めるフィールドの型の制約を、節点を本体とみなして 4. の規則で解く。
+    fn instance_edges(&mut self, types: &TypeStore, decls: &HashMap<ValueItem, DeclType>) {
         let program = self.program;
         for (id, instance) in program.instances() {
-            if instance.origin != InstanceOrigin::Written {
+            let node = InstanceNode::Declared(id);
+            let count = instance.generics.type_vars.len();
+            if let InstanceOrigin::Derived(_) = instance.origin {
+                self.default_edges_of(node, instance.class, count);
+                self.field_edges(types, decls, id);
                 continue;
             }
-            let node = InstanceNode::Declared(id);
             for &method in &program[instance.class].methods {
-                for position in 0..instance.generics.type_vars.len() {
-                    let from = Node::Instance(node, position);
-                    match instance.method(method) {
-                        Some(MethodImpl::Function(function)) => {
+                match instance.method(method) {
+                    Some(MethodImpl::Function(function)) => {
+                        for position in 0..count {
+                            let from = Node::Instance(node, position);
                             self.edge(from, Node::Function(function, position), false);
                         }
-                        Some(MethodImpl::Extern(_)) => {}
-                        None => {
-                            let Some(default) = program[method].default else {
-                                continue;
-                            };
-                            self.edge(from, Node::Function(default, 0), true);
-                            if let Some(&from) = self.node_of.get(&from) {
-                                self.default_edges.push((from, id, default));
-                            }
-                        }
                     }
+                    Some(MethodImpl::Extern(_)) => {}
+                    None => self.default_edge(node, method, count),
                 }
             }
         }
+    }
+
+    /// (instance の節点, j) から、メソッド `method` の既定のメソッドのクラスの型変数へ、大きくなる辺を引く。
+    fn default_edge(&mut self, node: InstanceNode, method: MethodId, count: usize) {
+        let Some(default) = self.program[method].default else {
+            return;
+        };
+        for position in 0..count {
+            let from = Node::Instance(node, position);
+            self.edge(from, Node::Function(default, 0), true);
+            if let Some(&from) = self.node_of.get(&from) {
+                self.default_edges.push((from, node, default));
+            }
+        }
+    }
+
+    /// 導出した instance とタプルの instance が、クラス `class` の既定のメソッドを使う辺。生成するメソッドのほかは、
+    /// どれも既定のメソッドを通る。
+    fn default_edges_of(&mut self, node: InstanceNode, class: ClassId, count: usize) {
+        let program = self.program;
+        for &method in &program[class].methods {
+            if program.core_method(method).is_none() {
+                self.default_edge(node, method, count);
+            }
+        }
+    }
+
+    /// 導出した instance の生成する関数は、フィールドの型 `F` の `C F` を求める。フィールドの型は、コンストラクタの
+    /// 宣言の型の矢印の引数で、`data` の型引数は頭の型変数と同じ名前である。
+    fn field_edges(
+        &mut self,
+        types: &TypeStore,
+        decls: &HashMap<ValueItem, DeclType>,
+        id: InstanceId,
+    ) {
+        let program = self.program;
+        let instance = &program[id];
+        let TypeDefKind::Data { constructors } = &program[instance.head].kind else {
+            return;
+        };
+        let names: Vec<String> = instance
+            .generics
+            .type_vars
+            .values()
+            .map(|var| var.name.clone())
+            .collect();
+        let mut wanted = Wanted::default();
+        for &constructor in constructors {
+            let mut spine = decls[&ValueItem::Constructor(constructor)].ty;
+            for _ in &program[constructor].fields {
+                let TypeKind::Fn { param, ret, .. } = types.kind(spine) else {
+                    break;
+                };
+                wanted.push(instance.class, *param);
+                spine = *ret;
+            }
+        }
+        let mut flow = Flow {
+            owner: Owner::Instance(InstanceNode::Declared(id)),
+            names: &names,
+            types,
+            occurrences: HashMap::new(),
+        };
+        self.resolve_wanted(&mut flow, wanted);
+    }
+
+    /// 要素の数 `count` のタプルの instance の節点。初めて使うときに作り、既定のメソッドへの辺を引く。生成する関数が
+    /// 求める要素の制約は要素の型変数そのものなので、ほかの辺はない。
+    fn tuple(&mut self, count: usize) -> InstanceNode {
+        let node = InstanceNode::Tuple(count);
+        if count > 0 && !self.node_of.contains_key(&Node::Instance(node, 0)) {
+            for position in 0..count {
+                self.node_of
+                    .insert(Node::Instance(node, position), self.nodes.len());
+                self.nodes.push(Node::Instance(node, position));
+                self.edges.push(Vec::new());
+            }
+            let lang = &self.program.lang;
+            for class in [lang.eq, lang.ord, lang.show] {
+                self.default_edges_of(node, class, count);
+            }
+        }
+        node
     }
 
     /// 辺の 6.: メソッドの節点から、メソッドを定義するすべての instance のメソッドの関数と既定のメソッドの、同じ
@@ -224,7 +304,7 @@ impl<'a> Graph<'a> {
     fn body_edges(&mut self, types: &TypeStore, f: FunctionId, names: &[String], body: &BodyTypes) {
         let program = self.program;
         let mut flow = Flow {
-            f,
+            owner: Owner::Function(f),
             names,
             types,
             occurrences: HashMap::new(),
@@ -262,13 +342,22 @@ impl<'a> Graph<'a> {
         let Some((&root, own)) = args.split_first() else {
             return;
         };
+        let generated = program.core_method(m).is_some();
         match resolve(program, flow.types, method.class, root) {
             Resolution::Instance {
                 instance,
                 args: head,
             } => {
                 let def = &program[instance];
+                let derived = matches!(def.origin, InstanceOrigin::Derived(_));
                 match def.method(m) {
+                    // 生成する関数の鍵の位置は、instance の節点の一様な位置に従う
+                    _ if derived && generated => {
+                        let node = InstanceNode::Declared(instance);
+                        for (j, &arg) in head.iter().enumerate() {
+                            self.flow(flow, arg, Node::Instance(node, j));
+                        }
+                    }
                     Some(MethodImpl::Function(function)) => {
                         for (j, &arg) in head.iter().enumerate() {
                             self.flow(flow, arg, Node::Function(function, j));
@@ -278,60 +367,84 @@ impl<'a> Graph<'a> {
                         }
                     }
                     Some(MethodImpl::Extern(_)) => {}
-                    None => {
-                        let Some(default) = method.default else {
-                            return;
-                        };
-                        self.flow(flow, root, Node::Function(default, 0));
-                        for (l, &arg) in own.iter().enumerate() {
-                            self.flow(flow, arg, Node::Function(default, l + 1));
-                        }
-                        // 既定のメソッドはクラスの型変数への制約 `C a` を与えられた制約として持ち、同じ instance の
-                        // ほかのメソッドと上位クラスの instance をその証拠として呼ぶ。spec の 3. のとおり、既定の
-                        // メソッドの本体はその参照に辺を引かないので、証拠の辺は呼び出し側が根ごと 4. で引く
-                        wanted.push(method.class, root);
-                        return;
-                    }
+                    None => return self.default_reference(flow, m, root, own, wanted),
                 }
                 wanted.context(program, instance, &head);
             }
+            Resolution::Tuple(elements) if generated => {
+                let node = self.tuple(elements.len());
+                for (j, &element) in elements.iter().enumerate() {
+                    self.flow(flow, element, Node::Instance(node, j));
+                    wanted.push(method.class, element);
+                }
+            }
+            Resolution::Tuple(_) => self.default_reference(flow, m, root, own, wanted),
             Resolution::Given => {
                 for (l, &arg) in own.iter().enumerate() {
                     self.flow(flow, arg, Node::Method(m, l + 1));
                 }
             }
-            // タプルの instance は Task 9 で足す。解けない制約は型検査が報告済みである
-            Resolution::Tuple(_) | Resolution::Missing => {}
+            // 解けない制約は型検査が報告済みである
+            Resolution::Missing => {}
         }
     }
 
-    /// 辺の 4.: 制約の解決の木の、instance で解いた節点ごとに、頭の型引数から instance の節点へ辺を引く。上位クラスの
-    /// 同じ頭の instance と、各 instance の文脈も同じ列でたどる。
+    /// 既定のメソッドに解決したメソッドの参照 `m @[root, own…]` の辺。
+    fn default_reference(
+        &mut self,
+        flow: &mut Flow,
+        m: MethodId,
+        root: TypeId,
+        own: &[TypeId],
+        wanted: &mut Wanted,
+    ) {
+        let method = &self.program[m];
+        let Some(default) = method.default else {
+            return;
+        };
+        self.flow(flow, root, Node::Function(default, 0));
+        for (l, &arg) in own.iter().enumerate() {
+            self.flow(flow, arg, Node::Function(default, l + 1));
+        }
+        // 既定のメソッドはクラスの型変数への制約 `C a` を与えられた制約として持ち、同じ instance のほかのメソッドと
+        // 上位クラスの instance をその証拠として呼ぶ。spec の 3. のとおり、既定のメソッドの本体はその参照に辺を
+        // 引かないので、証拠の辺は呼び出し側が根ごと 4. で引く
+        wanted.push(method.class, root);
+    }
+
+    /// 辺の 4.: 制約の解決の木の、instance とタプルで解いた節点ごとに、頭の型引数 (タプルなら要素) から instance の
+    /// 節点へ辺を引く。上位クラスの同じ頭の instance と、各 instance の文脈 (タプルなら要素の制約) も同じ列でたどる。
     fn resolve_wanted(&mut self, flow: &mut Flow, mut wanted: Wanted) {
         let program = self.program;
         while let Some((class, ty)) = wanted.work.pop() {
-            let Resolution::Instance {
-                instance,
-                args: head,
-            } = resolve(program, flow.types, class, ty)
-            else {
-                continue;
-            };
-            for (j, &arg) in head.iter().enumerate() {
-                self.flow(
-                    flow,
-                    arg,
-                    Node::Instance(InstanceNode::Declared(instance), j),
-                );
+            match resolve(program, flow.types, class, ty) {
+                Resolution::Instance {
+                    instance,
+                    args: head,
+                } => {
+                    let node = InstanceNode::Declared(instance);
+                    for (j, &arg) in head.iter().enumerate() {
+                        self.flow(flow, arg, Node::Instance(node, j));
+                    }
+                    wanted.context(program, instance, &head);
+                }
+                Resolution::Tuple(elements) => {
+                    let node = self.tuple(elements.len());
+                    for (j, &element) in elements.iter().enumerate() {
+                        self.flow(flow, element, Node::Instance(node, j));
+                        wanted.push(class, element);
+                    }
+                }
+                Resolution::Given | Resolution::Missing => continue,
             }
-            wanted.context(program, instance, &head);
             for &superclass in &program[class].superclasses {
                 wanted.push(superclass, ty);
             }
         }
     }
 
-    /// `ty` に `f` の型変数 i が現れるとき、(f, i) から `to` へ辺を引く。`ty` が i そのものでなければ大きくなる辺である。
+    /// `ty` に本体の型変数 i が現れるとき、(本体, i) から `to` へ辺を引く。`ty` が i そのものでなければ大きくなる辺
+    /// である。
     fn flow(&mut self, flow: &mut Flow, ty: TypeId, to: Node) {
         if !self.node_of.contains_key(&to) {
             return;
@@ -340,7 +453,7 @@ impl<'a> Graph<'a> {
         for (i, name) in flow.names.iter().enumerate() {
             if occurs[i] {
                 let grow = !matches!(flow.types.kind(ty), TypeKind::Rigid(n) if n == name);
-                self.edge(Node::Function(flow.f, i), to, grow);
+                self.edge(flow.owner.node(i), to, grow);
             }
         }
     }
@@ -351,7 +464,7 @@ impl<'a> Graph<'a> {
         default: FunctionId,
         component: &[usize],
         of: usize,
-    ) -> Option<InstanceId> {
+    ) -> Option<InstanceNode> {
         let root = *self.node_of.get(&Node::Function(default, 0))?;
         if component[root] != of {
             return None;
@@ -383,8 +496,11 @@ impl<'a> Graph<'a> {
                     // 含む成分の中で既定のメソッドへの辺を引いた instance の頭を指す
                     FunctionKind::DefaultMethod(method) => {
                         match self.default_instance(id, component, component[index]) {
-                            Some(instance) => Constrained::at_instance(program, instance, class),
-                            None => Constrained {
+                            Some(InstanceNode::Declared(instance)) => {
+                                Constrained::at_instance(program, instance, class)
+                            }
+                            // タプルの節点からの辺は既定のメソッドに入るだけで、大きくなる成分に戻らない
+                            Some(InstanceNode::Tuple(_)) | None => Constrained {
                                 file: program.file(method.module),
                                 range: program[method].name_range,
                                 name: program[method].name.clone(),
@@ -403,9 +519,25 @@ impl<'a> Graph<'a> {
     }
 }
 
+/// 辺の 1. から 4. を引く本体。導出した instance の節点は、生成する関数の本体として扱う。
+#[derive(Clone, Copy)]
+enum Owner {
+    Function(FunctionId),
+    Instance(InstanceNode),
+}
+
+impl Owner {
+    fn node(self, position: usize) -> Node {
+        match self {
+            Owner::Function(function) => Node::Function(function, position),
+            Owner::Instance(instance) => Node::Instance(instance, position),
+        }
+    }
+}
+
 /// 本体の中で共有された型を、各節点1回だけたどるための覚え書き。
 struct Flow<'a> {
-    f: FunctionId,
+    owner: Owner,
     names: &'a [String],
     types: &'a TypeStore,
     occurrences: HashMap<TypeId, Vec<bool>>,

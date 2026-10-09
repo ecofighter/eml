@@ -1,6 +1,7 @@
 //! 一様な位置のグラフ (docs/superpowers/specs/2026-10-10-s5-type-classes-design.md の「一様な位置と制約付きの多相再帰」)。
 
 use eml_test_support::{check, short};
+use eml_types::InstanceNode;
 
 fn uniform_functions(text: &str) -> Vec<(String, usize)> {
     let checked = check(text);
@@ -70,6 +71,30 @@ fn a_default_method_reaches_the_instance_it_was_resolved_from() {
     insta::assert_snapshot!(eml_test_support::full(checked.files(), &checked.diagnostics), @"
     E2012 8:25 `Same (Box a)` would need an instance of `Same` at infinitely many types
       8:25 a constrained type variable grows on each recursive call
+      note: instances are chosen at compile time, so a constraint cannot follow polymorphic recursion
+    ");
+}
+
+#[test]
+fn a_derived_nested_type_is_a_growing_instance_node() {
+    // フィールド `Nested (a, a)` の制約を解くと、導出した instance の節点から自分へ大きくなる辺が引かれる (spec の辺の
+    // 5.)。文脈 `Show a` を持つ位置なので E2012 になり、`deriving` のクラス名を指す
+    let text = "data Nested a =\n  | Flat a\n  | Nest (Nested (a, a))\n  deriving Show";
+    let checked = check(text);
+    let program = &checked.program;
+    let (instance, _) = program
+        .instances()
+        .find(|(_, def)| program.names.ty(def.head) == "Nested")
+        .expect("the derived instance");
+    assert!(
+        checked
+            .typed
+            .uniform
+            .instance(InstanceNode::Declared(instance), 0)
+    );
+    insta::assert_snapshot!(eml_test_support::full(checked.files(), &checked.diagnostics), @"
+    E2012 4:12 `Show (Nested a)` would need an instance of `Show` at infinitely many types
+      4:12 a constrained type variable grows on each recursive call
       note: instances are chosen at compile time, so a constraint cannot follow polymorphic recursion
     ");
 }

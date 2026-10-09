@@ -4,6 +4,8 @@ use eml_diagnostics::{TextRange, TextSize};
 use eml_extern::{Extern, ExternEffect, ExternType};
 use la_arena::{Arena, ArenaMap, Idx};
 
+use crate::item_tree::Fixity;
+
 pub use crate::program::{
     ClassId, ConstructorId, EffectId, FunctionId, InstanceId, ItemId, MethodId, ModuleId,
     OperationId, TypeDefId, ValueItem,
@@ -42,6 +44,10 @@ pub struct Constructor {
     pub tag: u32,
     /// フィールドの型。属する `TypeDef` の `types` と `generics` で解決する。
     pub fields: Vec<TypeRefId>,
+    /// 中置のコンストラクタの fixity。宣言がなければ `Fixity::DEFAULT` で、前置のコンストラクタは `None` である。
+    /// 導出した `Show` が括弧の位置を決めるのに使う
+    /// (docs/superpowers/specs/2026-10-10-s5-type-classes-design.md の「HIR の形」)。
+    pub fixity: Option<Fixity>,
 }
 
 #[derive(Debug)]
@@ -180,7 +186,7 @@ pub enum MethodImpl {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InstanceOrigin {
     Written,
-    /// `deriving` のクラスの名前の位置 (Task 9)。
+    /// `deriving` のクラスの名前の位置。
     Derived(TextRange),
 }
 

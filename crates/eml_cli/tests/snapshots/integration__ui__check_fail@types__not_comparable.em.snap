@@ -10,10 +10,3 @@ input_file: tests/ui/check-fail/types/not_comparable.em
    │              ─┬  
    │               ╰── `==` requires `Eq Color`
 ───╯
-[E2006] Error: no instance of `Eq` for `(Int, Int)`
-    ╭─[ check-fail/types/not_comparable.em:10:12 ]
-    │
- 10 │ pair p = p != (1, 2)
-    │            ─┬  
-    │             ╰── `!=` requires `Eq (Int, Int)`
-────╯

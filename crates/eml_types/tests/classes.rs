@@ -258,3 +258,27 @@ fn constrained_polymorphic_recursion_is_rejected() {
         lines(text)
     );
 }
+
+#[test]
+fn a_derived_field_without_an_instance_is_reported_at_the_deriving_class() {
+    // 誤りは `deriving` のクラス名を指し、どのフィールドの制約かを note で示す
+    let text = "data Box a = | Box a deriving Show\n\ndata Wrap = | Wrap Int (Box (Int -> Int)) deriving Show";
+    let checked = check(text);
+    insta::assert_snapshot!(eml_test_support::full(checked.files(), &checked.diagnostics), @"
+    E2006 3:52 no instance of `Show` for `Int -> Int`
+      3:52 `deriving Show` needs it for a field of `Wrap`
+      note: the field of type `Box (Int -> Int)` needs `Show (Box (Int -> Int))`
+    ");
+}
+
+#[test]
+fn deriving_ord_needs_eq() {
+    let text = "data Color =\n  | Red\n  | Green\n  deriving Ord";
+    let checked = check(text);
+    insta::assert_snapshot!(eml_test_support::full(checked.files(), &checked.diagnostics), @"
+    E2006 4:12 no instance of `Eq` for `Color`
+      4:12 `Ord` requires `Eq`, its superclass
+    ");
+    let text = "data Color =\n  | Red\n  | Green\n  deriving (Eq, Ord)";
+    assert_eq!(lines(text), Vec::<String>::new());
+}

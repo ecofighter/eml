@@ -1,0 +1,11 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{stderr}\")"
+input_file: tests/ui/run/classes/derived_recursive_types.em
+---
+--- stdout ---
+Cons 1 (Cons 2 Nil)
+True LT
+Node (More (Leaf 1) Empty)
+False
+--- stderr ---

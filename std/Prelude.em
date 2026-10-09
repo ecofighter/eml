@@ -21,12 +21,14 @@ pub extern data Unit
 pub data Bool =
   | False
   | True
+  deriving (Ord, Show)
 
 -- 比較の結果。`compare` の extern の行は、この宣言の順のタグ (`LT` が 0) を返す (eml_core_ir のテストが確かめる)
 pub data Ordering =
   | LT
   | EQ
   | GT
+  deriving (Eq, Ord, Show)
 
 -- 組み込みの `IO`。操作のないラベルで、下の extern の関数がこのエフェクトを起こす。extern の関数は handler を
 -- 通らずにその場で実行するので、ユーザーは handle できない (docs/spec/effects.md の「組み込みの `IO`」)
@@ -103,35 +105,6 @@ instance Show String where
 instance Eq Bool where
   extern (==)
   extern (!=)
-
--- Task 9 で `deriving` に置き換える
-instance Ord Bool where
-  compare False True = LT
-  compare True False = GT
-  compare _ _ = EQ
-
-instance Show Bool where
-  show False = "False"
-  show True = "True"
-
-instance Eq Ordering where
-  LT == LT = True
-  EQ == EQ = True
-  GT == GT = True
-  _ == _ = False
-
-instance Ord Ordering where
-  compare a b = compare (ordinal a) (ordinal b)
-
-instance Show Ordering where
-  show LT = "LT"
-  show EQ = "EQ"
-  show GT = "GT"
-
-ordinal : Ordering -> Int
-ordinal LT = 0
-ordinal EQ = 1
-ordinal GT = 2
 
 pub extern (++) : String -> String -> String
 pub (>>) : (a -> <e> b) -> (b -> <e> c) -> a -> <e> c

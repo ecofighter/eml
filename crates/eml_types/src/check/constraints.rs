@@ -5,21 +5,21 @@
 use std::collections::HashSet;
 
 use eml_diagnostics::{Diagnostic, Label};
-use eml_hir::{ClassId, ExprId, FunctionKind, TypeVarId, ValueItem};
+use eml_hir::{ClassId, ExprId, FunctionKind, Program, TypeVarId, ValueItem};
 
 use crate::codes;
 use crate::kind::{Bound, KindReason};
-use crate::store::{TypeId, TypeKind};
-use crate::table::{Exporter, RigidVar, Ty, TyShape};
+use crate::store::{TypeId, TypeKind, TypeStore};
+use crate::table::{Exporter, RigidVar, Table, Ty, TyShape};
 use crate::ty::Linearity;
 
 use super::body::BodyCheck;
 
 /// 求める制約 `C T`。
-type Wanted = (ClassId, Ty);
+pub(super) type Wanted = (ClassId, Ty);
 
 /// 解けなかった制約。`root` は参照が求めた制約で、`leaf` は解いた先で解けなかった制約である。
-enum Failure {
+pub(super) enum Failure {
     NoInstance {
         root: (ClassId, Ty),
         leaf: (ClassId, Ty),
@@ -32,9 +32,8 @@ impl BodyCheck<'_, '_> {
     /// 本体の検査が終わってから、`usage::reliable` より前に呼ぶ。制約の型は後の文の単一化で決まることがあるためと、
     /// E2006 と E2009 を本体の誤りに数え、線形性の診断を連鎖させないためである (今の E2006 の扱いと同じ)。
     ///
-    /// instance で解いた節点の型引数には、参照を由来に `Unr` を求める。instance の本体は頭の型変数を `Unr` とみなして
-    /// 検査したためである (docs/superpowers/specs/2026-10-10-s5-type-classes-design.md の「クラスの性質」)。誤りに
-    /// なった参照には求めない。誤りは報告済みで、線形性の診断を重ねないため。
+    /// instance とタプルで解いた節点の型引数には、参照を由来に `Unr` を求める (`solve`)。誤りになった参照には求めない。
+    /// 誤りは報告済みで、線形性の診断を重ねないため。
     pub(super) fn solve_constraints(&mut self) {
         let body_has_error = self.diagnostics.iter().any(Diagnostic::is_error);
         let givens = self.givens();
@@ -48,8 +47,8 @@ impl BodyCheck<'_, '_> {
         for (expr, decl, wanted) in references {
             let mut resolved = Vec::new();
             let mut failed = None;
-            for (class, ty) in wanted {
-                match self.solve(class, ty, &givens, body_has_error) {
+            for wanted in wanted {
+                match solve(self.program, self.table, wanted, &givens, body_has_error) {
                     Ok(args) => resolved.extend(args),
                     Err(failure) => {
                         failed = Some(failure);
@@ -113,69 +112,6 @@ impl BodyCheck<'_, '_> {
         own.into_iter().chain(constraints).collect()
     }
 
-    /// 作業の列で解く。instance の文脈は頭の型引数へ写すので、列に足す型は元の型の部分になり、列はいつか尽きる。
-    /// 解ければ instance で解いた節点の型引数を、解けなければ最初の失敗を返す。
-    ///
-    /// 列には、同じクラスと同じ代表の組を1回だけ足す。推論の表は部分を共有するので、型を木としてたどると型の深さの
-    /// 指数の時間がかかるためである (docs/implementation/architecture.md の「`eml_types` の内部」)。代表で比べるのは、
-    /// `Pair a a` の2つの引数のように、別の変数が後で同じ節点に束縛されることがあるためである。
-    fn solve(
-        &self,
-        class: ClassId,
-        ty: Ty,
-        givens: &[(ClassId, RigidVar)],
-        body_has_error: bool,
-    ) -> Result<Vec<Ty>, Failure> {
-        let root = (class, ty);
-        let mut seen = HashSet::from([(class, self.table.resolve(ty))]);
-        let mut work = vec![root];
-        let mut next = 0;
-        let mut resolved = Vec::new();
-        while let Some(&(class, ty)) = work.get(next) {
-            next += 1;
-            match self.table.shape(ty) {
-                TyShape::Con(id, args) => {
-                    let Some(instance) = self.program.instance(class, *id) else {
-                        return Err(Failure::NoInstance {
-                            root,
-                            leaf: (class, ty),
-                        });
-                    };
-                    resolved.extend(args.iter().copied());
-                    for constraint in &self.program[instance].context {
-                        let arg = args[index(constraint.var)];
-                        if seen.insert((constraint.class, self.table.resolve(arg))) {
-                            work.push((constraint.class, arg));
-                        }
-                    }
-                }
-                TyShape::Rigid(var) => {
-                    // 操作ごとの型変数は与えられた制約に入らないので、ここで E2006 になる
-                    if !givens.contains(&(class, *var)) {
-                        return Err(Failure::NoInstance {
-                            root,
-                            leaf: (class, ty),
-                        });
-                    }
-                }
-                // 同じ本体に別の誤りがあるとき、決まらない型はその誤りの連鎖である。誤りを直せば型が決まるので、
-                // E2009 を重ねない
-                TyShape::Var(_) if body_has_error => {}
-                TyShape::Var(_) => return Err(Failure::Ambiguous { root, class }),
-                // タプルの instance は Task 9 で足す
-                TyShape::Record(_) | TyShape::Fn { .. } => {
-                    return Err(Failure::NoInstance {
-                        root,
-                        leaf: (class, ty),
-                    });
-                }
-                // 報告済みの誤りの跡には診断を重ねない
-                TyShape::Error => {}
-            }
-        }
-        Ok(resolved)
-    }
-
     /// 解けなかった制約の診断。型が `Error` を含めば、報告済みの誤りの連鎖なので `None` を返す。
     fn constraint_error(
         &mut self,
@@ -194,8 +130,8 @@ impl BodyCheck<'_, '_> {
                 if self.types.contains_error(root_ty) || self.types.contains_error(leaf_ty) {
                     return None;
                 }
-                let root_shown = self.show_constraint(root.0, root_ty);
-                let leaf_shown = self.show_constraint(leaf.0, leaf_ty);
+                let root_shown = show_constraint(self.program, self.types, root.0, root_ty);
+                let leaf_shown = show_constraint(self.program, self.types, leaf.0, leaf_ty);
                 let mut diagnostic = Diagnostic::error(
                     codes::NO_INSTANCE,
                     format!(
@@ -242,21 +178,100 @@ impl BodyCheck<'_, '_> {
             }
         }
     }
+}
 
-    /// 制約 `C T` の表示。`T` が引数のある型構成子か関数型なら、括弧で囲む (`Same (Box (Int -> Int))`)。タプルは
-    /// 自分の括弧を持つ。文字列の空白で決めないのは、`(Int, Int) -> Int` のように括弧で始まる関数型があるためである。
-    fn show_constraint(&self, class: ClassId, ty: TypeId) -> String {
-        let names = &self.program.names;
-        let shown = self.types.display(ty, names);
-        let class = names.class(class);
-        match self.types.kind(ty) {
-            TypeKind::Fn { .. } => format!("{class} ({shown})"),
-            TypeKind::Con { args, .. } if !args.is_empty() => format!("{class} ({shown})"),
-            _ => format!("{class} {shown}"),
-        }
+/// 制約 `C T` の表示。`T` が引数のある型構成子か関数型なら、括弧で囲む (`Same (Box (Int -> Int))`)。タプルは
+/// 自分の括弧を持つ。文字列の空白で決めないのは、`(Int, Int) -> Int` のように括弧で始まる関数型があるためである。
+pub(super) fn show_constraint(
+    program: &Program,
+    types: &TypeStore,
+    class: ClassId,
+    ty: TypeId,
+) -> String {
+    let names = &program.names;
+    let shown = types.display(ty, names);
+    let class = names.class(class);
+    match types.kind(ty) {
+        TypeKind::Fn { .. } => format!("{class} ({shown})"),
+        TypeKind::Con { args, .. } if !args.is_empty() => format!("{class} ({shown})"),
+        _ => format!("{class} {shown}"),
     }
 }
 
 fn index(var: TypeVarId) -> usize {
     u32::from(var.into_raw()) as usize
+}
+
+/// 制約 `wanted` を、与えられた制約 `givens` のもとで作業の列で解く。instance の文脈は頭の型引数へ写し、タプルは要素へ
+/// 進むので、列に足す型は元の型の部分になり、列はいつか尽きる。解ければ instance とタプルで解いた節点の型引数を、
+/// 解けなければ最初の失敗を返す。本体の参照と導出した instance のフィールドが、同じ規則で解く。
+///
+/// 返す型引数には、呼び出し側が `Unr` を求める。instance の本体は頭の型変数を `Unr` とみなして検査するためである。
+/// タプルの要素にも同じく求める。シグネチャの制約の型変数を `Unr` とみなして本体を検査できるのは、制約をどの解き方で
+/// 解いても、解いた先の型にこの `Unr` を求めるからである
+/// (docs/superpowers/specs/2026-10-10-s5-type-classes-design.md の「クラスの性質」)。
+///
+/// 列には、同じクラスと同じ代表の組を1回だけ足す。推論の表は部分を共有するので、型を木としてたどると型の深さの
+/// 指数の時間がかかるためである (docs/implementation/architecture.md の「`eml_types` の内部」)。代表で比べるのは、
+/// `Pair a a` の2つの引数のように、別の変数が後で同じ節点に束縛されることがあるためである。
+pub(super) fn solve(
+    program: &Program,
+    table: &Table<'_>,
+    wanted: Wanted,
+    givens: &[(ClassId, RigidVar)],
+    body_has_error: bool,
+) -> Result<Vec<Ty>, Failure> {
+    let root = wanted;
+    let (class, ty) = wanted;
+    let mut seen = HashSet::from([(class, table.resolve(ty))]);
+    let mut work = vec![root];
+    let mut next = 0;
+    let mut resolved = Vec::new();
+    let no_instance = |leaf| Failure::NoInstance { root, leaf };
+    while let Some(&(class, ty)) = work.get(next) {
+        next += 1;
+        let mut push = |class: ClassId, ty: Ty| {
+            if seen.insert((class, table.resolve(ty))) {
+                work.push((class, ty));
+            }
+        };
+        match table.shape(ty) {
+            TyShape::Con(id, args) => {
+                let Some(instance) = program.instance(class, *id) else {
+                    return Err(no_instance((class, ty)));
+                };
+                resolved.extend(args.iter().copied());
+                for constraint in &program[instance].context {
+                    push(constraint.class, args[index(constraint.var)]);
+                }
+            }
+            // タプルと `Unit` は、`Eq`、`Ord`、`Show` だけを要素ごとに構造的に持つ
+            TyShape::Record(fields) if structural(program, class) => {
+                for &(_, element) in fields {
+                    resolved.push(element);
+                    push(class, element);
+                }
+            }
+            TyShape::Rigid(var) => {
+                // 操作ごとの型変数は与えられた制約に入らないので、ここで E2006 になる
+                if !givens.contains(&(class, *var)) {
+                    return Err(no_instance((class, ty)));
+                }
+            }
+            // 同じ本体に別の誤りがあるとき、決まらない型はその誤りの連鎖である。誤りを直せば型が決まるので、
+            // E2009 を重ねない
+            TyShape::Var(_) if body_has_error => {}
+            TyShape::Var(_) => return Err(Failure::Ambiguous { root, class }),
+            TyShape::Record(_) | TyShape::Fn { .. } => return Err(no_instance((class, ty))),
+            // 報告済みの誤りの跡には診断を重ねない
+            TyShape::Error => {}
+        }
+    }
+    Ok(resolved)
+}
+
+/// タプルと `Unit` が構造的な instance を持つクラス (Prelude の `Eq`、`Ord`、`Show`)。
+pub(crate) fn structural(program: &Program, class: ClassId) -> bool {
+    let lang = &program.lang;
+    [lang.eq, lang.ord, lang.show].contains(&class)
 }

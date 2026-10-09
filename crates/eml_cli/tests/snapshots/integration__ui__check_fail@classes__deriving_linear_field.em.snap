@@ -1,0 +1,14 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: rendered
+input_file: tests/ui/check-fail/classes/deriving_linear_field.em
+---
+[E2010] Error: `Handle` is linear, so it cannot have an instance of `Eq`
+   ╭─[ check-fail/classes/deriving_linear_field.em:2:41 ]
+   │
+ 2 │ data Handle = | Handle Fs.File deriving Eq
+   │                                         ─┬  
+   │                                          ╰── a linear type
+   │ 
+   │ Note: the methods of a class may copy or drop their arguments, which a linear value forbids
+───╯

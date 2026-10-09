@@ -2479,3 +2479,108 @@ fn extern_methods_used_as_values_are_wrapped_per_instance() {
     "#);
     assert!(!shown.contains("shown@[Bool]$extern"), "{shown}");
 }
+
+#[test]
+fn derived_instances_generate_their_methods() {
+    // 導出した instance の中心のメソッドは、translate が Core IR として作る
+    // (docs/superpowers/specs/2026-10-10-s5-type-classes-design.md の「導出とタプルの生成器」)
+    let text = "data Color =\n  | Red\n  | Green\n  deriving (Eq, Ord, Show)\n\ndata Option a =\n  | None\n  | Some a\n  deriving (Eq, Ord, Show)\n\nmain : Unit -> <IO> Unit\nmain () =\n  println (show (Red == Green) ++ show (Some 1 < None))\n  println (show (Some 1))";
+    let shown = core_text(text, Pass::Translate);
+    insta::assert_snapshot!(function(&shown, "Eq Color.=="), @r#"
+    fn "Eq Color.=="(x.0: enum, y.1: enum) -> enum {
+      switch x.0 Color { #0 -> b1, #1 -> b2 }
+    b1:
+      switch y.1 Color { #0 -> b3, _ -> b4 }
+    b2:
+      switch y.1 Color { #1 -> b5, _ -> b6 }
+    b3:
+      return #1
+    b4:
+      return #0
+    b5:
+      return #1
+    b6:
+      return #0
+    }
+    "#);
+    insta::assert_snapshot!(function(&shown, "Ord Option.compare@[Int]"), @r#"
+    fn "Ord Option.compare@[Int]"(x.0: tobj, y.1: tobj) -> enum {
+      switch x.0 Option { #0 -> b1, #1(a.2: int) -> b2 }
+    b1:
+      switch y.1 Option { #0 -> b3, _ -> b4 }
+    b2:
+      switch y.1 Option { #1(b.6: int) -> b5, _ -> b6 }
+    b3:
+      return #1
+    b4:
+      let t.3: int = call tag$Option(x.0)
+      let t.4: int = call tag$Option(y.1)
+      let t.5: enum = extern "Prelude.Ord Int.compare"(t.3, t.4)
+      return t.5
+    b5:
+      let t.7: enum = extern "Prelude.Ord Int.compare"(a.2, b.6)
+      return t.7
+    b6:
+      let t.8: int = call tag$Option(x.0)
+      let t.9: int = call tag$Option(y.1)
+      let t.10: enum = extern "Prelude.Ord Int.compare"(t.8, t.9)
+      return t.10
+    }
+    "#);
+    insta::assert_snapshot!(function(&shown, "tag$Option"), @"
+    fn tag$Option(x.0: tobj) -> int {
+      switch x.0 Option { #0 -> b1, #1(a.1: tobj) -> b2 }
+    b1:
+      return 0
+    b2:
+      return 1
+    }
+    ");
+    insta::assert_snapshot!(function(&shown, "Show Option.show_prec@[Int]"), @r#"
+    fn "Show Option.show_prec@[Int]"(d.0: int, x.1: tobj) -> obj {
+      switch x.1 Option { #0 -> b1, #1(a.2: int) -> b2 }
+    b1:
+      let s.3: obj = const "None"
+      return s.3
+    b2:
+      let s.4: obj = const "Some "
+      let t.5: obj = call "Prelude.Show Int.show_prec"(11, a.2)
+      let s.6: obj = extern Prelude.++(s.4, t.5)
+      let c.7: enum = extern "Prelude.Ord Int.>"(d.0, 10)
+      switch c.7 Prelude.Bool { #0 -> b3, #1 -> b4 }
+    b3:
+      return s.6
+    b4:
+      let s.8: obj = const "("
+      let s.9: obj = extern Prelude.++(s.8, s.6)
+      let s.10: obj = const ")"
+      let s.11: obj = extern Prelude.++(s.9, s.10)
+      return s.11
+    }
+    "#);
+}
+
+#[test]
+fn tuple_instances_are_generated_per_size() {
+    let text = "main : Unit -> <IO> Unit\nmain () =\n  println (show ((1, \"a\") == (2, \"b\")))\n  println (show ())";
+    let shown = core_text(text, Pass::Translate);
+    insta::assert_snapshot!(function(&shown, "Prelude.Eq (,).==@[Int, String]"), @r#"
+    fn "Prelude.Eq (,).==@[Int, String]"(x.0: obj, y.1: obj) -> enum {
+      unpack x.0 (,) #0(a.2: int, a.3: obj)
+      unpack y.1 (,) #0(b.4: int, b.5: obj)
+      let t.6: enum = extern "Prelude.Eq Int.=="(a.2, b.4)
+      switch t.6 Prelude.Bool { #0 -> b1, #1 -> b2 }
+    b1:
+      return #0
+    b2:
+      let t.7: enum = extern "Prelude.Eq String.=="(a.3, b.5)
+      return t.7
+    }
+    "#);
+    insta::assert_snapshot!(function(&shown, "Prelude.Show ().show"), @r#"
+    fn "Prelude.Show ().show"(x.0: unit) -> obj {
+      let t.1: obj = call "Prelude.Show ().show_prec"(0, x.0)
+      return t.1
+    }
+    "#);
+}

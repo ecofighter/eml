@@ -59,6 +59,8 @@ pub struct DataItem {
     pub has_constructors: bool,
     /// 名前のある選択肢。ソースの順で、コンストラクタの局所の番号の順である。
     pub constructors: Vec<ConstructorItem>,
+    /// `deriving` に書いたクラス (名前、位置)。書いた順で、重複 (E1035) もそのまま持つ。
+    pub deriving: Vec<(AstPtr<ast::Path>, TextRange)>,
 }
 
 #[derive(Debug)]
@@ -66,6 +68,8 @@ pub struct ConstructorItem {
     pub name: String,
     pub name_range: TextRange,
     pub ptr: AstPtr<ast::Alt>,
+    /// 演算子の名前の中置のコンストラクタ (`Int :+ Chain`) か。
+    pub infix: bool,
 }
 
 #[derive(Debug)]
@@ -303,24 +307,26 @@ pub fn item_tree(file: FileId, parse: &Parse) -> (ItemTree, Vec<Diagnostic>) {
                 let Some(name) = item.name().map(|name| name.token()) else {
                     continue;
                 };
-                if let Some(deriving) = item.deriving() {
-                    diagnostics.push(Diagnostic::not_yet_supported(
-                        file,
-                        deriving
-                            .keyword()
-                            .map_or(deriving.range(), |keyword| keyword.text_range()),
-                        "`deriving` is not supported yet",
-                    ));
-                }
+                let deriving = item
+                    .deriving()
+                    .into_iter()
+                    .flat_map(|deriving| deriving.classes())
+                    .map(|class| (AstPtr::new(&class), class.range()))
+                    .collect();
                 let constructors = item
                     .alts()
                     .filter_map(|alt| {
                         // 名前も演算子もなければパーサが報告済み
-                        let name = alt.name().or_else(|| alt.operator())?.token();
+                        let (name, infix) = match alt.name() {
+                            Some(name) => (name, false),
+                            None => (alt.operator()?, true),
+                        };
+                        let name = name.token();
                         Some(ConstructorItem {
                             name: name.text().to_string(),
                             name_range: name.text_range(),
                             ptr: AstPtr::new(&alt),
+                            infix,
                         })
                     })
                     .collect();
@@ -332,6 +338,7 @@ pub fn item_tree(file: FileId, parse: &Parse) -> (ItemTree, Vec<Diagnostic>) {
                     params: params(file, item.params(), &mut diagnostics),
                     has_constructors: item.has_constructors(),
                     constructors,
+                    deriving,
                 });
             }
             ast::Item::EffectItem(item) => {

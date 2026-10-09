@@ -1,9 +1,10 @@
 //! 型付き HIR から、前向きの辺だけを持つブロックの列への変換 (docs/spec/core-ir.md)。式の値の渡し先 (出口) と、
 //! 条件の分かれ方という制御の骨組みをここに置く。ブロックの組み立ては `builder.rs`、式ごとの変換は `expr.rs`、
 //! パターンの決定木と case-of-case は `pattern.rs`、関数の表と包む関数は `program.rs`、型から決まる Repr は
-//! `types.rs` にある。
+//! `types.rs`、導出した instance とタプルの instance の生成器は `derive.rs` にある。
 
 mod builder;
+mod derive;
 mod expr;
 mod instances;
 mod pattern;
@@ -27,7 +28,7 @@ use crate::{
 
 use builder::{FnBuilder, Label};
 use expr::extern_row;
-use instances::Target;
+use instances::{InstanceKind, Target};
 use pattern::{Known, MatchCtx, Occ, Scrutinee, destructures};
 use program::{ProgramBuilder, effect_table};
 use types::{named, repr, split_arrows, var_info};
@@ -160,17 +161,37 @@ pub(crate) fn translate(
     let indices: Vec<FnIdx> = instances
         .list
         .iter()
-        .map(|instance| {
-            let body = hir
-                .body(instance.function)
-                .expect("a program without errors has an equation for every function");
-            builder.reserve(body.params.len())
+        .map(|instance| match &instance.kind {
+            InstanceKind::Function(function) => {
+                let body = hir
+                    .body(function.function)
+                    .expect("a program without errors has an equation for every function");
+                builder.reserve(body.params.len())
+            }
+            InstanceKind::Generated(generated) => {
+                builder.reserve(generated.generated.method.arity())
+            }
         })
         .collect();
     for (instance, &index) in instances.list.iter().zip(&indices) {
-        let id = instance.function;
+        let function = match &instance.kind {
+            InstanceKind::Function(function) => function,
+            InstanceKind::Generated(generated) => {
+                let core = derive::generate(
+                    hir,
+                    store,
+                    &mut builder,
+                    &indices,
+                    &instance.name,
+                    generated,
+                );
+                builder.finish(index, core);
+                continue;
+            }
+        };
+        let id = function.function;
         let body = hir.body(id).expect("checked above");
-        let (param_types, ret) = split_arrows(store, instance.signature, body.params.len());
+        let (param_types, ret) = split_arrows(store, function.signature, body.params.len());
         let params: Vec<(Option<PatId>, Repr)> = body
             .params
             .iter()
@@ -178,16 +199,16 @@ pub(crate) fn translate(
             .map(|(&pat, &ty)| (Some(pat), repr(store, ty, hir)))
             .collect();
         let forms = continuation_forms(body);
-        let numbers = numbering(hir, body, &instance.targets);
+        let numbers = numbering(hir, body, &function.targets);
         let ctx = BodyCtx {
             hir,
             body,
             store,
-            types: instance
+            types: function
                 .types
                 .as_ref()
                 .unwrap_or_else(|| typed.bodies.get(id).expect("every body is type-checked")),
-            targets: &instance.targets,
+            targets: &function.targets,
             indices: &indices,
             root_name: &instance.name,
             numbering: &numbers,
@@ -207,7 +228,9 @@ pub(crate) fn translate(
         );
         builder.finish(index, core);
     }
-    let entry_instance = &instances.list[instances.entry.0];
+    let InstanceKind::Function(entry_instance) = &instances.list[instances.entry.0].kind else {
+        unreachable!("the entry is a function of the program")
+    };
     let entry_fn = builder.entry(
         hir,
         store,

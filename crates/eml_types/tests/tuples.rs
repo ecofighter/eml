@@ -70,8 +70,6 @@ fn only_int_string_and_bool_can_be_compared() {
     ---
     E2006 6:16 no instance of `Eq` for `Color`
       6:16 `==` requires `Eq Color`
-    E2006 9:13 no instance of `Eq` for `(Int, Int)`
-      9:13 `!=` requires `Eq (Int, Int)`
     E2006 12:12 no instance of `Eq` for `Int -> Int`
       12:12 `==` requires `Eq (Int -> Int)`
     E2006 15:14 no instance of `Eq` for `a`

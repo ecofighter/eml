@@ -316,6 +316,22 @@ impl Program {
         self.instance_index.get(&(class, head)).copied()
     }
 
+    /// 導出した instance とタプルの instance で、処理系が本体を生成するメソッドなら、その種類。ほかのメソッドは
+    /// クラスの既定のメソッドを通る
+    /// (docs/superpowers/specs/2026-10-10-s5-type-classes-design.md の「導出とタプルの生成器」)。
+    pub fn core_method(&self, method: MethodId) -> Option<CoreMethod> {
+        let lang = &self.lang;
+        let method = &self[method];
+        let core = match method.name.as_str() {
+            "==" => (lang.eq, CoreMethod::Eq),
+            "compare" => (lang.ord, CoreMethod::Compare),
+            "show_prec" => (lang.show, CoreMethod::ShowPrec),
+            "show" => (lang.show, CoreMethod::Show),
+            _ => return None,
+        };
+        (core.0 == method.class).then_some(core.1)
+    }
+
     /// 上位クラスの推移的な閉包。自分は含まない。循環は HIR が E1042 で切ってあるが、作業の列は訪れた印で止める。
     pub fn superclasses(&self, class: ClassId) -> Vec<ClassId> {
         let mut seen = vec![class];
@@ -415,4 +431,17 @@ program_index! {
     ClassDef => classes,
     Method => methods,
     InstanceDef => instances,
+}
+
+/// 処理系が本体を生成する、Prelude の `Eq`、`Ord`、`Show` の中心のメソッド。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum CoreMethod {
+    /// `Eq` の `==`
+    Eq,
+    /// `Ord` の `compare`
+    Compare,
+    /// `Show` の `show_prec`
+    ShowPrec,
+    /// `Show` の `show`
+    Show,
 }

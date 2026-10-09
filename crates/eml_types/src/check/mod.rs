@@ -3,8 +3,8 @@ use std::collections::{HashMap, HashSet};
 use eml_diagnostics::{Diagnostic, Label, SourceFiles};
 use eml_hir::{
     ClassId, Constructor, Function, FunctionId, FunctionKind, Generics, InstanceId, InstanceOrigin,
-    ItemMap, Method, Operation, Program, RowRef, Signature, TypeRef, TypeRefId, TypeRefKind,
-    TypeVarId, ValueItem,
+    ItemMap, Method, Operation, Program, RowRef, Signature, TypeDefKind, TypeRef, TypeRefId,
+    TypeRefKind, TypeVarId, ValueItem,
 };
 use la_arena::Arena;
 
@@ -15,12 +15,13 @@ use crate::kind::solve::solve_scc;
 use crate::kind::{Bound, KindOrigin, KindReason, KindVar, Provenance, Span};
 use crate::shape::{Arrows, Own, Shape, constructor_shape, operation_shape, signature_shape};
 use crate::store::{EffectLabel, TypeKind, TypeStore};
-use crate::table::{Exporter, Row, Table, TyShape};
+use crate::table::{Exporter, RigidVar, Row, Table, TyShape};
 use crate::ty::Linearity;
 use crate::{
     BodyTypes, DeclType, Instantiation, TypedProgram, Uniform, carry, codes, exhaustive, scc,
     uniform, usage,
 };
+use constraints::{Failure, show_constraint, solve};
 
 mod body;
 mod constraints;
@@ -29,6 +30,7 @@ mod report;
 
 use body::BodyCheck;
 pub(crate) use body::{BodyTyping, CallRows};
+pub(crate) use constraints::structural;
 use report::AmbientSource;
 
 /// 段0の結果。宣言ごとの閉じた型の形である。
@@ -64,12 +66,12 @@ pub(crate) fn check_module(
 ) -> (TypedProgram, Vec<Diagnostic>) {
     let mut diagnostics = Vec::new();
     let context = Context::new(program);
-    check_instances(program, &context, &mut diagnostics);
-    let signatures = signatures(program, &context);
-    let mut schemes = declaration_schemes(program, &context, &signatures);
     // 宣言と本体の型を1つの表に登録する。表は追記だけするので、本体を独立に検査する順は結果の意味を変えない
     // (docs/implementation/architecture.md の「`eml_types` の内部」)
     let mut types = TypeStore::new(program);
+    check_instances(program, &context, &mut types, &mut diagnostics);
+    let signatures = signatures(program, &context);
+    let mut schemes = declaration_schemes(program, &context, &signatures);
     let main = program.main();
     if let Some(id) = main {
         check_main(program, &signatures, id, &mut types, &mut diagnostics);
@@ -120,7 +122,7 @@ pub(crate) fn check_module(
     ));
     diagnostics.extend(report_violations(program, files, &types, violated));
     let mut typed = typed_program(&signatures, schemes, bodies, types);
-    let (uniform, found) = uniform::uniform(program, &typed.types, &typed.bodies);
+    let (uniform, found) = uniform::uniform(program, &typed.types, &typed.decls, &typed.bodies);
     typed.uniform = uniform;
     diagnostics.extend(found);
     // 網羅性は型推論と使用回数のパスの後に、書き出した型の上で調べる (docs/spec/exhaustiveness.md の「検査パス」)
@@ -128,16 +130,19 @@ pub(crate) fn check_module(
     (typed, diagnostics)
 }
 
-/// 手で書いた instance ごとに、頭が `Unr` であることと、クラスの直接の上位クラスの instance が頭の型にあり、その文脈が
-/// この instance の文脈から導けることを確かめる
-/// (docs/superpowers/specs/2026-10-10-s5-type-classes-design.md の「クラスの性質」と「instance と既定のメソッドの検査」)。
-/// 上位クラスの instance の頭の型変数は、同じ `data` の型引数なので、番号でこの instance の型変数に対応する。
-fn check_instances(program: &Program, context: &Context, diagnostics: &mut Vec<Diagnostic>) {
+/// instance ごとに、頭が `Unr` であることと、クラスの直接の上位クラスの instance が頭の型にあり、その文脈が
+/// この instance の文脈から導けることを確かめる。導出した instance は、フィールドの制約が解けることも確かめる
+/// (docs/superpowers/specs/2026-10-10-s5-type-classes-design.md の「クラスの性質」、「instance と既定のメソッドの検査」
+/// と「導出した instance」)。上位クラスの instance の頭の型変数は、同じ `data` の型引数なので、番号でこの instance の
+/// 型変数に対応する。
+fn check_instances(
+    program: &Program,
+    context: &Context,
+    types: &mut TypeStore,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
     let names = &program.names;
     for (id, instance) in program.instances() {
-        if instance.origin != InstanceOrigin::Written {
-            continue;
-        }
         let class = instance.class;
         let vars: Vec<&str> = instance
             .generics
@@ -147,7 +152,8 @@ fn check_instances(program: &Program, context: &Context, diagnostics: &mut Vec<D
             .collect();
         let head = instance_head(program, id);
         // 頭の型変数を `Unr` とすれば、頭が `Lin` になるのは定数の `Lin` を含むときだけである
-        if context.data_kinds[instance.head].lin {
+        let linear = context.data_kinds[instance.head].lin;
+        if linear {
             diagnostics.push(
                 Diagnostic::error(
                     codes::LINEAR_INSTANCE_HEAD,
@@ -161,6 +167,12 @@ fn check_instances(program: &Program, context: &Context, diagnostics: &mut Vec<D
                     "the methods of a class may copy or drop their arguments, which a linear value forbids",
                 ),
             );
+        }
+        // `Lin` のフィールドには instance がないので、E2010 に E2006 を重ねない
+        if let InstanceOrigin::Derived(_) = instance.origin
+            && !linear
+        {
+            diagnostics.extend(check_derived_fields(program, context, types, id));
         }
         let given: Vec<(ClassId, TypeVarId)> = instance
             .context
@@ -210,6 +222,81 @@ fn check_instances(program: &Program, context: &Context, diagnostics: &mut Vec<D
             }
         }
     }
+}
+
+/// 導出した instance の各フィールドの型 `F` について、文脈を与えられた制約として `C F` を解く。解けなければ
+/// `deriving` のクラス名を指して E2006 にする。フィールドの型は、`data` の型引数を rigid 変数として使い捨ての表に
+/// 下ろす。同じ位置に誤りを重ねないよう、報告は instance ごとに最初のフィールドの1つだけにする。
+fn check_derived_fields(
+    program: &Program,
+    context: &Context,
+    types: &mut TypeStore,
+    id: InstanceId,
+) -> Option<Diagnostic> {
+    let instance = &program[id];
+    let def = &program[instance.head];
+    let TypeDefKind::Data { constructors } = &def.kind else {
+        return None;
+    };
+    for &constructor in constructors {
+        let fields = program[constructor].fields.len();
+        let mut table = Table::new(context);
+        let own = constructor_shape(context, def, &program[constructor])
+            .instantiate_rigid(&mut table, &def.generics);
+        let givens: Vec<(ClassId, RigidVar)> = instance
+            .context
+            .iter()
+            .flat_map(|constraint| {
+                let var = own.rigids.vars()[u32::from(constraint.var.into_raw()) as usize];
+                std::iter::once(constraint.class)
+                    .chain(program.superclasses(constraint.class))
+                    .map(move |class| (class, var))
+            })
+            .collect();
+        let mut spine = own.ty;
+        for _ in 0..fields {
+            let TyShape::Fn { param, ret, .. } = table.shape(spine).clone() else {
+                break;
+            };
+            spine = ret;
+            let Err(Failure::NoInstance { root, leaf }) =
+                solve(program, &table, (instance.class, param), &givens, false)
+            else {
+                continue;
+            };
+            let mut exporter = Exporter::new(&table, types);
+            let (field, leaf_ty) = (exporter.export(root.1), exporter.export(leaf.1));
+            if types.contains_error(field) {
+                continue;
+            }
+            let names = &program.names;
+            let class = names.class(instance.class);
+            return Some(
+                Diagnostic::error(
+                    codes::NO_INSTANCE,
+                    format!(
+                        "no instance of `{}` for `{}`",
+                        names.class(leaf.0),
+                        types.display(leaf_ty, names)
+                    ),
+                    Label::new(
+                        program.file(id.module),
+                        instance.head_range,
+                        format!(
+                            "`deriving {class}` needs it for a field of `{}`",
+                            names.constructor(constructor)
+                        ),
+                    ),
+                )
+                .with_note(format!(
+                    "the field of type `{}` needs `{}`",
+                    types.display(field, names),
+                    show_constraint(program, types, root.0, field)
+                )),
+            );
+        }
+    }
+    None
 }
 
 /// メソッドと、それを定義する関数の矢印の決め方。本体の検査の `instantiate_rigid` は形から作るので、既定のメソッドと

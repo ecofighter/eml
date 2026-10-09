@@ -15,8 +15,8 @@ use crate::codes;
 use crate::def_map::Resolved;
 use crate::hir::{
     ClassId, Constraint, EffectRef, Function, FunctionKind, Generics, InstanceDef, InstanceId,
-    InstanceOrigin, ItemId, MethodId, MethodImpl, RowRef, Signature, TypeDefId, TypeRef, TypeRefId,
-    TypeRefKind, TypeVarDecl, TypeVarId,
+    InstanceOrigin, ItemId, MethodId, MethodImpl, RowRef, Signature, TypeDefId, TypeDefKind,
+    TypeRef, TypeRefId, TypeRefKind, TypeVarDecl, TypeVarId,
 };
 use crate::item_tree::{ItemTree, MemberItem};
 use crate::program::{Module, TypeItem};
@@ -92,21 +92,7 @@ impl ItemLowering<'_> {
                 ));
                 continue;
             }
-            if let Some(first) = index.get(&(class, head.ty)) {
-                let first_module = &modules[first.module];
-                let first_range = first_module.items.instances[first.local].head_range;
-                self.diagnostics.push(
-                    Diagnostic::error(
-                        codes::DUPLICATE_INSTANCE,
-                        format!("`{ty_name}` already has an instance of `{class_name}`"),
-                        Label::new(self.file, head_range, "defined again here"),
-                    )
-                    .with_secondary(Label::new(
-                        first_module.file,
-                        first_range,
-                        "first defined here",
-                    )),
-                );
+            if self.duplicate(modules, index, class, head.ty, head_range) {
                 continue;
             }
             let class_def = &modules[class.module].items.classes[class.local];
@@ -220,6 +206,117 @@ impl ItemLowering<'_> {
         }
     }
 
+    /// このモジュールの `data` の `deriving` ごとに、導出した instance を置く
+    /// (docs/superpowers/specs/2026-10-10-s5-type-classes-design.md の「導出した instance」)。重複 (E1035) を手で書いた
+    /// instance と同じ索引で判定するので、このモジュールの `lower_instances` の後に呼ぶ。導出できるのは Prelude の
+    /// `Eq`、`Ord`、`Show` だけで、名前でなく解決したクラスで判定する (E1038)。
+    pub(super) fn derive_instances(
+        &mut self,
+        tree: &ItemTree,
+        modules: &mut Arena<Module>,
+        index: &mut HashMap<(ClassId, TypeDefId), InstanceId>,
+    ) {
+        let lang = self.def_map.lang();
+        for (k, item) in tree.data.iter().enumerate() {
+            let ty = self.def_map.type_id(self.module, k);
+            for (ptr, range) in &item.deriving {
+                let Some(class) = self.resolve_class(Some(ptr.to_node(self.root))) else {
+                    continue;
+                };
+                if ![lang.eq, lang.ord, lang.show].contains(&class) {
+                    self.diagnostics.push(Diagnostic::error(
+                        codes::NOT_DERIVABLE,
+                        format!(
+                            "`{}` cannot be derived",
+                            self.def_map.display_names().class(class)
+                        ),
+                        Label::new(
+                            self.file,
+                            *range,
+                            "only `Eq`, `Ord` and `Show` can be derived",
+                        ),
+                    ));
+                    continue;
+                }
+                if self.duplicate(modules, index, class, ty, *range) {
+                    continue;
+                }
+                let items = &modules[self.module].items;
+                let def = &items.types[ty.local];
+                let mut occurs = vec![false; def.generics.type_vars.len()];
+                if let TypeDefKind::Data { constructors } = &def.kind {
+                    for constructor in constructors {
+                        for &field in &items.constructors[constructor.local].fields {
+                            mark_vars(&def.types, field, &mut occurs);
+                        }
+                    }
+                }
+                // Haskell と違い、フィールドの制約を簡約した最小の文脈は求めず、現れる型引数すべてに制約を置く
+                let context = def
+                    .generics
+                    .type_vars
+                    .iter()
+                    .zip(&occurs)
+                    .filter(|(_, occurs)| **occurs)
+                    .map(|((var, _), _)| Constraint {
+                        class,
+                        var,
+                        range: *range,
+                    })
+                    .collect();
+                let generics = def.generics.clone();
+                let instance = ItemId::new(
+                    self.module,
+                    modules[self.module].items.instances.alloc(InstanceDef {
+                        class,
+                        head: ty,
+                        head_range: *range,
+                        generics,
+                        context,
+                        methods: Vec::new(),
+                        origin: InstanceOrigin::Derived(*range),
+                    }),
+                );
+                index.insert((class, ty), instance);
+            }
+        }
+    }
+
+    /// (クラス, 型) の instance がすでにあれば E1035 を出して真を返す。プログラムのモジュールの順に置くので、後に
+    /// 置くものが重複になる。
+    fn duplicate(
+        &mut self,
+        modules: &Arena<Module>,
+        index: &HashMap<(ClassId, TypeDefId), InstanceId>,
+        class: ClassId,
+        ty: TypeDefId,
+        range: TextRange,
+    ) -> bool {
+        let Some(first) = index.get(&(class, ty)) else {
+            return false;
+        };
+        let names = self.def_map.display_names();
+        let first_module = &modules[first.module];
+        let first_range = first_module.items.instances[first.local].head_range;
+        self.diagnostics.push(
+            Diagnostic::error(
+                codes::DUPLICATE_INSTANCE,
+                format!(
+                    "`{}` already has an instance of `{}`",
+                    names.ty(ty),
+                    names.class(class)
+                ),
+                Label::new(self.file, range, "defined again here"),
+            )
+            .with_secondary(Label::new(
+                first_module.file,
+                first_range,
+                "first defined here",
+            )),
+        );
+        true
+    }
+
     /// instance の頭を検査する。頭は、`data` の型か extern の型のコンストラクタに、互いに異なる型変数を宣言の数だけ
     /// 適用した形でなければならない (E1039、E1015)。誤りがあれば報告して `None` を返す。
     fn instance_head(&mut self, ty: ast::Type) -> Option<Head> {
@@ -324,6 +421,31 @@ impl ItemLowering<'_> {
             "an instance head must be a type constructor applied to distinct type variables",
             Label::new(self.file, range, label),
         ));
+    }
+}
+
+/// 型の注釈 `id` に現れる型変数の印を `occurs` に付ける。関数型の引数、結果、row のエフェクトの型引数の中も見る。
+/// 木の深さは E0013 で抑えられているので再帰でたどる。
+fn mark_vars(types: &Arena<TypeRef>, id: TypeRefId, occurs: &mut [bool]) {
+    match &types[id].kind {
+        TypeRefKind::Error => {}
+        TypeRefKind::Var(var) => occurs[u32::from(var.into_raw()) as usize] = true,
+        TypeRefKind::Con(_, args) | TypeRefKind::Tuple(args) => {
+            for &arg in args {
+                mark_vars(types, arg, occurs);
+            }
+        }
+        TypeRefKind::Fn { param, row, ret } => {
+            mark_vars(types, *param, occurs);
+            if let RowRef::Closed { effects, .. } | RowRef::Open { effects, .. } = row {
+                for effect in effects {
+                    for &arg in &effect.args {
+                        mark_vars(types, arg, occurs);
+                    }
+                }
+            }
+            mark_vars(types, *ret, occurs);
+        }
     }
 }
 

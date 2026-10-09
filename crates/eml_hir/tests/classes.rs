@@ -1,6 +1,6 @@
 //! クラス、メソッド、instance の HIR (docs/superpowers/specs/2026-10-10-s5-type-classes-design.md の「名前解決と HIR」)。
 
-use eml_hir::{FunctionKind, MethodImpl};
+use eml_hir::{FunctionKind, InstanceOrigin, MethodImpl};
 use eml_test_support::{lower, lower_files, short};
 
 const COLOR: &str = "data Color =\n  | Red\n  | Green\n\n";
@@ -198,5 +198,47 @@ fn instance_members_are_grouped_by_name() {
             "E1003 13:10 `big` is defined more than once",
             "E1003 14:10 `big` is defined more than once",
         ]
+    );
+}
+
+#[test]
+fn deriving_makes_instances_with_a_context_per_parameter() {
+    // 文脈は、フィールドに現れる型引数ごとに置く。関数型の中の `b` にも置き、現れない `c` には置かない
+    let text = "data Pair a b c = | Pair a (Int -> b) deriving Eq";
+    let lowered = lower(text);
+    assert!(lowered.diagnostics.is_empty(), "{:?}", lowered.diagnostics);
+    let program = &lowered.program;
+    let (instance, def) = program
+        .instances()
+        .find(|(_, def)| program.names.ty(def.head) == "Pair")
+        .expect("the derived instance");
+    assert_eq!(def.class, program.lang.eq);
+    assert!(matches!(def.origin, InstanceOrigin::Derived(_)));
+    assert!(def.methods.is_empty());
+    assert_eq!(program.instance(program.lang.eq, def.head), Some(instance));
+    let context: Vec<(&str, &str)> = def
+        .context
+        .iter()
+        .map(|constraint| {
+            (
+                program.names.class(constraint.class),
+                def.generics.type_vars[constraint.var].name.as_str(),
+            )
+        })
+        .collect();
+    assert_eq!(context, [("Eq", "a"), ("Eq", "b")]);
+}
+
+#[test]
+fn deriving_twice_or_with_a_written_instance_is_a_duplicate() {
+    let text = "data Color =\n  | Red\n  | Green\n  deriving (Show, Show)\n\ndata Size = | Size Int deriving Eq\n\ninstance Eq Size where\n  _ == _ = True";
+    let found = lines(text);
+    assert_eq!(
+        found
+            .iter()
+            .filter(|line| line.starts_with("E1035"))
+            .count(),
+        2,
+        "{found:?}"
     );
 }
