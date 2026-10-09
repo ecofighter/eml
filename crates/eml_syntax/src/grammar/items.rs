@@ -16,6 +16,8 @@ enum ItemKind {
     Signature,
     Equation,
     OperatorEquation,
+    /// `=>` を演算子として定義しようとした等式やシグネチャ。E0011 にし、次の項目から回復する。
+    ReservedOperator,
 }
 
 /// 今の位置から始まる項目の種類。`pub` と `extern` は項目の前置きなので、ここでは見ない。`at_item_start` と `item` が同じ判定を
@@ -34,6 +36,7 @@ fn item_kind(p: &Parser) -> Option<ItemKind> {
         _ if at_operator_signature(p) => ItemKind::Signature,
         _ if at_equation(p) => ItemKind::Equation,
         _ if at_operator_equation(p) => ItemKind::OperatorEquation,
+        _ if at_reserved_operator(p) => ItemKind::ReservedOperator,
         _ => return None,
     })
 }
@@ -54,6 +57,13 @@ fn at_operator_equation(p: &Parser) -> bool {
 
 fn at_operator_signature(p: &Parser) -> bool {
     p.at(L_PAREN) && matches!(p.nth(1), OP | MINUS) && p.nth(2) == R_PAREN
+}
+
+/// `(=>)` や `a => b` は、演算子のシグネチャや等式と同じ形で `=>` を使う。`=>` は予約記号なので
+/// (docs/spec/lexical.md の「演算子」)、項目の始まりとして認めたうえで E0011 にする。
+fn at_reserved_operator(p: &Parser) -> bool {
+    (p.at(L_PAREN) && p.nth(1) == FAT_ARROW && p.nth(2) == R_PAREN)
+        || patterns::apat_len(p).is_some_and(|len| p.nth(len) == FAT_ARROW)
 }
 
 /// 項目を1つ読み、import 以外の項目だったかを返す。`declared` は、ファイルの中でこれより前に import 以外の項目があったか。
@@ -103,7 +113,10 @@ pub(super) fn item(p: &mut Parser, declared: bool) -> bool {
         && kind.is_some_and(|kind| {
             !matches!(
                 kind,
-                ItemKind::Signature | ItemKind::Data | ItemKind::Effect
+                ItemKind::Signature
+                    | ItemKind::Data
+                    | ItemKind::Effect
+                    | ItemKind::ReservedOperator
             )
         })
     {
@@ -127,6 +140,7 @@ pub(super) fn item(p: &mut Parser, declared: bool) -> bool {
         Some(ItemKind::Signature) => signature(p, m),
         Some(ItemKind::Equation) => equation(p, m),
         Some(ItemKind::OperatorEquation) => operator_equation(p, m),
+        Some(ItemKind::ReservedOperator) => reserved_operator(p, m, false),
         None => {
             // `pub` の後ろに項目がない
             p.error(
@@ -504,6 +518,7 @@ fn class_member(p: &mut Parser) -> bool {
         Some(ItemKind::Signature) => signature(p, m),
         Some(ItemKind::Equation) => equation(p, m),
         Some(ItemKind::OperatorEquation) => operator_equation(p, m),
+        Some(ItemKind::ReservedOperator) => reserved_operator(p, m, true),
         _ => {
             m.abandon(p);
             return false;
@@ -575,6 +590,7 @@ fn instance_member(p: &mut Parser) -> bool {
         }
         Some(ItemKind::Equation) => equation(p, m),
         Some(ItemKind::OperatorEquation) => operator_equation(p, m),
+        Some(ItemKind::ReservedOperator) => reserved_operator(p, m, true),
         _ => {
             m.abandon(p);
             return false;
@@ -662,6 +678,19 @@ fn reserved_item(p: &mut Parser, m: Marker) {
         "not usable yet",
     );
     skip_to_sep(p, false);
+    m.complete(p, ERROR);
+}
+
+fn reserved_operator(p: &mut Parser, m: Marker, in_block: bool) {
+    if !p.eat(L_PAREN) {
+        patterns::apat(p);
+    }
+    p.error(
+        codes::SYNTAX_ERROR,
+        "`=>` is reserved and cannot be defined as an operator",
+        "`=>` only ends a context, as in `Eq a => a`",
+    );
+    skip_to_sep(p, in_block);
     m.complete(p, ERROR);
 }
 

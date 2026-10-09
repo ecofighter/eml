@@ -3,17 +3,17 @@ source: crates/eml_cli/tests/ui.rs
 expression: rendered
 input_file: tests/ui/check-fail/syntax/fat_arrow_is_reserved.em
 ---
-[E0003] Error: expected an item
-   ╭─[ check-fail/syntax/fat_arrow_is_reserved.em:2:1 ]
+[E0011] Error: `=>` is reserved and cannot be defined as an operator
+   ╭─[ check-fail/syntax/fat_arrow_is_reserved.em:2:2 ]
    │
  2 │ (=>) : Int -> Int -> Int
-   │ ┬  
-   │ ╰── not the start of an item
+   │  ─┬  
+   │   ╰── `=>` only ends a context, as in `Eq a => a`
 ───╯
-[E0003] Error: expected an item
-   ╭─[ check-fail/syntax/fat_arrow_is_reserved.em:3:1 ]
+[E0011] Error: `=>` is reserved and cannot be defined as an operator
+   ╭─[ check-fail/syntax/fat_arrow_is_reserved.em:3:3 ]
    │
  3 │ a => b = a + b
-   │ ┬  
-   │ ╰── not the start of an item
+   │   ─┬  
+   │    ╰── `=>` only ends a context, as in `Eq a => a`
 ───╯

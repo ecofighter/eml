@@ -1,7 +1,8 @@
 use eml_diagnostics::TextRange;
 use eml_syntax::SyntaxKind::{self, *};
 use eml_syntax::ast::{
-    AppExpr, Clause, Expr, Item, LiteralValue, OpSeqElement, Pat, SourceFile, Stmt, Type,
+    AppExpr, ClassMember, Clause, Expr, InstanceMember, Item, LiteralValue, OpSeqElement, Pat,
+    SourceFile, Stmt, Type,
 };
 use rowan::ast::AstNode;
 
@@ -508,4 +509,72 @@ fn a_public_fixity_still_has_its_associativity() {
     };
     assert_eq!(fixity.assoc().unwrap().kind(), SyntaxKind::INFIXR_KW);
     assert_eq!(fixity.precedence().unwrap().text(), "6");
+}
+
+#[test]
+fn deriving_lists_its_classes() {
+    let file = source("data T = | A deriving (Eq, Std.Show)\ndata U = | B deriving Ord");
+    let derived: Vec<Vec<Vec<String>>> = file
+        .items()
+        .map(|item| {
+            let Item::DataItem(data) = item else {
+                panic!("expected a data declaration");
+            };
+            data.deriving()
+                .expect("a deriving clause")
+                .classes()
+                .map(|path| path.segments().map(|segment| segment.text()).collect())
+                .collect()
+        })
+        .collect();
+    assert_eq!(
+        derived,
+        [
+            vec![
+                vec!["Eq".to_string()],
+                vec!["Std".to_string(), "Show".to_string()]
+            ],
+            vec![vec!["Ord".to_string()]],
+        ]
+    );
+}
+
+#[test]
+fn class_name_variable_and_members() {
+    let file = source(
+        "class Eq a => Ord a where\n  compare : a -> a -> Int\n  (<) : a -> a -> Bool\n  a < b = compare a b == 0",
+    );
+    let Some(Item::ClassItem(class)) = file.items().next() else {
+        panic!("expected a class");
+    };
+    assert_eq!(class.name().unwrap().text(), "Ord");
+    assert_eq!(class.var().unwrap().text(), "a");
+    let members: Vec<String> = class
+        .members()
+        .map(|member| match member {
+            ClassMember::Signature(signature) => {
+                format!("signature {}", signature.name().unwrap().text())
+            }
+            ClassMember::Equation(equation) => {
+                format!("equation {}", equation.name().unwrap().text())
+            }
+        })
+        .collect();
+    assert_eq!(members, ["signature compare", "signature <", "equation <"]);
+}
+
+#[test]
+fn extern_methods_of_an_instance_have_names() {
+    let file = source("instance Show Int where\n  extern show\n  extern (<>)\n  f x = x");
+    let Some(Item::InstanceItem(instance)) = file.items().next() else {
+        panic!("expected an instance");
+    };
+    let externs: Vec<String> = instance
+        .members()
+        .filter_map(|member| match member {
+            InstanceMember::ExternMethod(method) => Some(method.name().unwrap().text()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(externs, ["show", "<>"]);
 }

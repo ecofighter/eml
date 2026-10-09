@@ -598,8 +598,26 @@ fn an_instance_cannot_be_public_or_have_signatures() {
 
 #[test]
 fn a_fat_arrow_outside_a_context_is_an_error() {
-    // `=>` は予約の記号なので、演算子の定義にも式にも書けない
-    assert_eq!(diagnostics("x => y = x"), ["E0003 1:1 expected an item"]);
+    // `=>` は予約の記号なので、演算子の定義にも式にも書けない。定義の形なら `=>` を指して、次の項目から読み直す
+    assert_eq!(
+        diagnostics("x => y = x\nf = 1"),
+        ["E0011 1:3 `=>` is reserved and cannot be defined as an operator"]
+    );
+    assert_eq!(
+        diagnostics("(=>) : Int -> Int -> Int\nf = 1"),
+        ["E0011 1:2 `=>` is reserved and cannot be defined as an operator"]
+    );
+    assert_eq!(
+        item_kinds("(=>) : Int\nx => y = x\nf = 1"),
+        ["ERROR", "ERROR", "EQUATION"]
+    );
+    assert_eq!(
+        diagnostics("class C a where\n  (=>) : a -> a -> a\ninstance C Int where\n  x => y = x"),
+        [
+            "E0011 2:4 `=>` is reserved and cannot be defined as an operator",
+            "E0011 4:5 `=>` is reserved and cannot be defined as an operator",
+        ]
+    );
     assert_eq!(
         diagnostics("f : a -> (Eq a => a)"),
         ["E0011 1:16 expected `)`"]
