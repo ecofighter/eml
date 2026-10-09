@@ -1,7 +1,8 @@
 use crate::context::Context;
 use crate::kind::problem::{Bounds, Instance, KindProblem, OwnVars};
 use crate::kind::{Bound, Carry, KindVar, Provenance};
-use crate::ty::{EffectLabel, Linearity, Multiplicity, RowTail, Type};
+use crate::store::{EffectLabel, RowTail, TypeId, TypeKind, TypeStore};
+use crate::ty::{Linearity, Multiplicity};
 use eml_extern::ExternType;
 use eml_hir::{EffectId, LangItems, OperationId, TypeDefId};
 use std::cell::RefCell;
@@ -12,6 +13,8 @@ mod row;
 #[cfg(test)]
 mod tests;
 mod unify;
+
+pub(crate) use export::Exporter;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct Ty(u32);

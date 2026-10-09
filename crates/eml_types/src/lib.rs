@@ -9,6 +9,7 @@ mod exhaustive;
 mod kind;
 mod scc;
 mod shape;
+mod store;
 mod table;
 mod ty;
 mod usage;
@@ -24,7 +25,8 @@ use crate::kind::problem::KindScheme;
 use crate::shape::Shape;
 
 pub use dump::dump;
-pub use ty::{EffectLabel, Linearity, Multiplicity, RowTail, Type};
+pub use store::{EffectLabel, RowTail, TypeId, TypeKind, TypeStore};
+pub use ty::{Linearity, Multiplicity};
 
 pub mod codes {
     use eml_diagnostics::ErrorCode;
@@ -54,8 +56,10 @@ pub mod codes {
 /// 型付き HIR。HIR は複製せず、型を別テーブルに持つ (docs/implementation/architecture.md)。
 /// 宣言の結果を宣言ごとに持つのは、クエリ化と REPL で、宣言ごとに結果を使い回せるようにするため
 /// (docs/implementation/architecture.md の「`eml_types` の内部」)。
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct TypedProgram {
+    /// 宣言と本体の型がすべて指す、プログラムに1つの型の表。
+    pub types: TypeStore,
     /// シグネチャのある関数、操作、コンストラクタの型。
     pub decls: HashMap<ValueItem, DeclType>,
     /// シグネチャと等式の両方がある関数だけを含む。
@@ -66,7 +70,7 @@ pub struct TypedProgram {
 #[derive(Debug)]
 pub struct DeclType {
     /// 後の段階が読む、矢印の線形性のない型。検査の最後に1回だけ書き出しておく。
-    pub ty: Type,
+    pub ty: TypeId,
     /// 後の段階は Kind を読まない (docs/implementation/architecture.md の「`eml_types` の内部」) ので、外からは読めなくする。
     pub(crate) shape: Shape,
     pub(crate) kinds: KindScheme,
@@ -82,8 +86,8 @@ pub enum Equality {
 
 /// `==` と `!=` の比べ方。比べられない型なら `None`。型検査の E2006 と Core IR の命令の選択が、同じ判定を使うため
 /// にここに置く。`Int` と `String` は extern の型なので索引から、`Bool` は lang item から引く。
-pub fn equality(program: &Program, ty: &Type) -> Option<Equality> {
-    let Type::Con { id, .. } = ty else {
+pub fn equality(program: &Program, types: &TypeStore, ty: TypeId) -> Option<Equality> {
+    let TypeKind::Con { id, .. } = types.kind(ty) else {
         return None;
     };
     if *id == program.extern_type(ExternType::Int) {
@@ -99,10 +103,12 @@ pub fn equality(program: &Program, ty: &Type) -> Option<Equality> {
 
 #[derive(Debug, Default)]
 pub struct BodyTypes {
-    pub exprs: ArenaMap<ExprId, Type>,
-    pub locals: ArenaMap<LocalId, Type>,
-    /// パターンが受けた値の型。Core IR が、handler の節の引数の変数を作るのに使う。
-    pub pats: ArenaMap<PatId, Type>,
+    pub exprs: ArenaMap<ExprId, TypeId>,
+    pub locals: ArenaMap<LocalId, TypeId>,
+    /// パターンが受けた値の型。`bind_pat` が束縛するパターンを記録するので、コンストラクタとタプルの引数のパターンは
+    /// どれも入る。ラムダの引数の外側にある注釈のパターンは入らない (check/body.rs の `bind_param`)。Core IR が、
+    /// handler の節の引数の変数と、`unpack` と `switch` で作るフィールドの変数の Repr を決めるのに使う。
+    pub pats: ArenaMap<PatId, TypeId>,
     /// 式の中のトップレベルの item への参照ごとの具体化。キーは参照を表す `ExprKind::Path` の式である。局所変数の参照、
     /// パターンのコンストラクタ、handler の節の操作、シグネチャのない参照は記録しない
     /// (docs/implementation/architecture.md の「`eml_types` の内部」)。
@@ -118,7 +124,7 @@ pub struct Instantiation {
     pub decl: ValueItem,
     /// `Shape::rigids` の順 (関数はシグネチャに最初に現れた順、操作はエフェクトの型引数が先、コンストラクタは `data` の
     /// 頭の型引数の順) に並べた型引数。row 変数と Kind 変数は持たない。
-    pub args: Vec<Type>,
+    pub args: Vec<TypeId>,
 }
 
 /// `files` は、E3003 の fix の字下げをソースから求めるのに使う (docs/implementation/diagnostics.md の「線形性の診断」)。

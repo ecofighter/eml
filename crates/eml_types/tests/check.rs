@@ -379,9 +379,13 @@ fn extern_schemes_are_exported() {
             .functions()
             .find(|(_, function)| function.name == name)
             .unwrap();
-        checked.typed.decls[&ValueItem::Function(id)]
-            .ty
-            .display(&checked.program.names)
+        checked
+            .typed
+            .types
+            .display(
+                checked.typed.decls[&ValueItem::Function(id)].ty,
+                &checked.program.names,
+            )
             .to_string()
     };
     assert_eq!(ty("println"), "String -> <IO> Unit");
@@ -389,9 +393,13 @@ fn extern_schemes_are_exported() {
     assert_eq!(ty(">>"), "(a -> <e> b) -> (b -> <e> c) -> a -> <e> c");
     // コンストラクタは extern ではなく、Prelude の `data Bool` のスキームとして書き出す
     assert_eq!(
-        checked.typed.decls[&ValueItem::Constructor(checked.program.lang.true_ctor)]
-            .ty
-            .display(&checked.program.names)
+        checked
+            .typed
+            .types
+            .display(
+                checked.typed.decls[&ValueItem::Constructor(checked.program.lang.true_ctor)].ty,
+                &checked.program.names
+            )
             .to_string(),
         "Bool"
     );
@@ -407,9 +415,13 @@ fn operation_types_are_exported() {
             .operations()
             .find(|(_, operation)| operation.name == name)
             .unwrap();
-        checked.typed.decls[&ValueItem::Operation(id)]
-            .ty
-            .display(&checked.program.names)
+        checked
+            .typed
+            .types
+            .display(
+                checked.typed.decls[&ValueItem::Operation(id)].ty,
+                &checked.program.names,
+            )
             .to_string()
     };
     assert_eq!(ty("get"), "Unit -> <State> Int");

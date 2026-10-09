@@ -6,7 +6,7 @@ use eml_hir::{
     Closure, ConstructorId, ExprId, ExprKind, FunctionId, FunctionKind, Literal, OperationId,
     PatId, Program as HirProgram, Res, ValueItem,
 };
-use eml_types::Type;
+use eml_types::TypeId;
 
 use crate::{Atom, Call, Ctor, FnIdx, Repr, Rhs, Stmt, TUPLE};
 
@@ -57,12 +57,12 @@ fn masked_call(call: Call, mask: Vec<u32>) -> Rhs {
 }
 
 impl FnLowering<'_> {
-    pub(super) fn ty(&self, expr: ExprId) -> Type {
+    pub(super) fn ty(&self, expr: ExprId) -> TypeId {
         self.ctx
             .types
             .exprs
             .get(expr)
-            .cloned()
+            .copied()
             .expect("every reached expression is typed")
     }
 
@@ -82,8 +82,8 @@ impl FnLowering<'_> {
     }
 
     /// 型 `ty` の値を束縛する `bind`。
-    fn bind_typed(&mut self, name: &str, ty: &Type, rhs: Rhs) -> Atom {
-        let repr = repr(ty, self.ctx.hir);
+    fn bind_typed(&mut self, name: &str, ty: TypeId, rhs: Rhs) -> Atom {
+        let repr = repr(self.ctx.store, ty, self.ctx.hir);
         self.bind(name, repr, rhs)
     }
 
@@ -93,7 +93,7 @@ impl FnLowering<'_> {
         let name = format!("{}$extern{number}", self.ctx.root_name);
         let at = self.loc(site);
         self.program
-            .extern_wrapper(self.ctx.hir, function, row, name, at)
+            .extern_wrapper(self.ctx.hir, self.ctx.store, function, row, name, at)
     }
 
     /// 呼ぶ相手の引数の個数と比べ、揃えば命令にし、足りなければ包む関数のクロージャにし、余れば命令の結果に残りを
@@ -103,9 +103,9 @@ impl FnLowering<'_> {
         &mut self,
         id: ExprId,
         callee: Callee,
-        callee_ty: &Type,
+        callee_ty: TypeId,
         mut args: Vec<Atom>,
-        ty: &Type,
+        ty: TypeId,
     ) -> Atom {
         let arity = self.callee_arity(callee);
         // 部分適用はクロージャを作るだけでエフェクトを起こさないので、`mask` を付けない
@@ -118,8 +118,8 @@ impl FnLowering<'_> {
         if rest.is_empty() {
             return self.bind_typed(name, ty, rhs);
         }
-        let (_, function_ty) = split_arrows(callee_ty, arity);
-        let function = self.bind_typed(name, &function_ty, rhs);
+        let (_, function_ty) = split_arrows(self.ctx.store, callee_ty, arity);
+        let function = self.bind_typed(name, function_ty, rhs);
         self.apply(id, callee_ty, function, arity, rest, ty)
     }
 
@@ -129,11 +129,11 @@ impl FnLowering<'_> {
     fn apply(
         &mut self,
         id: ExprId,
-        callee_ty: &Type,
+        callee_ty: TypeId,
         mut function: Atom,
         first: usize,
         args: Vec<Atom>,
-        ty: &Type,
+        ty: TypeId,
     ) -> Atom {
         let last = first + args.len();
         let masks: Vec<Vec<u32>> = (first..last).map(|arrow| self.mask(id, arrow)).collect();
@@ -143,12 +143,12 @@ impl FnLowering<'_> {
             end += run.len();
             let part = args.by_ref().take(run.len()).collect();
             let part_ty = if end == last {
-                ty.clone()
+                ty
             } else {
-                split_arrows(callee_ty, end).1
+                split_arrows(self.ctx.store, callee_ty, end).1
             };
             let rhs = masked_call(Call::Apply(function, part), run[0].clone());
-            function = self.bind_typed("t", &part_ty, rhs);
+            function = self.bind_typed("t", part_ty, rhs);
         }
         function
     }
@@ -196,8 +196,14 @@ impl FnLowering<'_> {
                 row,
                 callee,
             } => self.extern_wrapper(callee, function, row),
-            Callee::Operation(op) => self.program.operation_wrapper(self.ctx.hir, op),
-            Callee::Constructor(ctor) => self.program.constructor_wrapper(self.ctx.hir, ctor),
+            Callee::Operation(op) => {
+                self.program
+                    .operation_wrapper(self.ctx.hir, self.ctx.store, op)
+            }
+            Callee::Constructor(ctor) => {
+                self.program
+                    .constructor_wrapper(self.ctx.hir, self.ctx.store, ctor)
+            }
             // 引数の足りない `k` の呼び出しは `k` を関数の値として使うことになり、節を包む形にする (`continuation_forms`)
             Callee::Continuation { k: _, arity: _ } => {
                 unreachable!("a continuation in the direct form is always saturated")
@@ -239,8 +245,11 @@ impl FnLowering<'_> {
                         .instantiations
                         .get(callee)
                         .expect("the type checker records every reference to `==` and `!=`");
-                    let equality = eml_types::equality(self.ctx.hir, &instantiation.args[0])
-                        .expect("the type checker reports every `==` and `!=` it cannot decide");
+                    let equality =
+                        eml_types::equality(self.ctx.hir, self.ctx.store, instantiation.args[0])
+                            .expect(
+                                "the type checker reports every `==` and `!=` it cannot decide",
+                            );
                     equality_extern(equality, row == Extern::Ne)
                 } else {
                     row
@@ -260,7 +269,7 @@ impl FnLowering<'_> {
             Callee::Constructor(ctor) => (
                 "d",
                 Rhs::Con {
-                    ctor: self.program.ctor(self.ctx.hir, ctor),
+                    ctor: self.program.ctor(self.ctx.hir, self.ctx.store, ctor),
                     args,
                 },
             ),
@@ -269,7 +278,7 @@ impl FnLowering<'_> {
 
     /// `call_steps` の手順どおりに評価し、続けて並ぶ矢印を1回の呼び出しにする (docs/spec/expressions.md の「関数適用」)。
     /// 最初のまとまりは、呼ばれる式が既知なら呼ぶ相手の引数の数で場合分けし、それ以外は前の値への `Apply` にする。
-    fn call(&mut self, id: ExprId, callee: ExprId, ty: &Type) -> Atom {
+    fn call(&mut self, id: ExprId, callee: ExprId, ty: TypeId) -> Atom {
         let body = self.ctx.body;
         let ExprKind::Call { args, .. } = &body.exprs[id].kind else {
             unreachable!("call takes a call");
@@ -310,13 +319,13 @@ impl FnLowering<'_> {
                     let first = applied;
                     applied += group.len();
                     let group_ty = if applied == args.len() {
-                        ty.clone()
+                        ty
                     } else {
-                        split_arrows(&callee_ty, applied).1
+                        split_arrows(self.ctx.store, callee_ty, applied).1
                     };
                     let result = match function {
-                        None => self.call_head(id, callee, &callee_ty, group, &group_ty),
-                        Some(value) => self.apply(id, &callee_ty, value, first, group, &group_ty),
+                        None => self.call_head(id, callee, callee_ty, group, group_ty),
+                        Some(value) => self.apply(id, callee_ty, value, first, group, group_ty),
                     };
                     function = Some(result);
                 }
@@ -330,9 +339,9 @@ impl FnLowering<'_> {
         &mut self,
         id: ExprId,
         callee: ExprId,
-        callee_ty: &Type,
+        callee_ty: TypeId,
         args: Vec<Atom>,
-        ty: &Type,
+        ty: TypeId,
     ) -> Atom {
         let head = match &self.ctx.body.exprs[callee].kind {
             ExprKind::Path(Res::Item(ValueItem::Function(function))) => {
@@ -371,7 +380,7 @@ impl FnLowering<'_> {
         let ty = self.ty(id);
         let after = self
             .builder
-            .new_label(vec![var_info("t", &ty, self.ctx.hir)]);
+            .new_label(vec![var_info("t", self.ctx.store, ty, self.ctx.hir)]);
         self.tail_expr(id, Exit::Jump(after));
         let args = self
             .builder
@@ -407,13 +416,15 @@ impl FnLowering<'_> {
                 if self.program.arity(target) == 0 {
                     let name = self.ctx.hir[*function].name.clone();
                     let ty = self.ty(id);
-                    self.bind_typed(&name, &ty, plain_call(Call::Direct(target, Vec::new())))
+                    self.bind_typed(&name, ty, plain_call(Call::Direct(target, Vec::new())))
                 } else {
                     self.closure(target, Vec::new())
                 }
             }
             ExprKind::Path(Res::Item(ValueItem::Operation(op))) => {
-                let wrapper = self.program.operation_wrapper(self.ctx.hir, *op);
+                let wrapper = self
+                    .program
+                    .operation_wrapper(self.ctx.hir, self.ctx.store, *op);
                 self.closure(wrapper, Vec::new())
             }
             ExprKind::Path(Res::Item(ValueItem::Constructor(ctor))) => {
@@ -421,13 +432,15 @@ impl FnLowering<'_> {
                 if constructor.fields.is_empty() {
                     Atom::Tag(constructor.tag)
                 } else {
-                    let wrapper = self.program.constructor_wrapper(self.ctx.hir, *ctor);
+                    let wrapper =
+                        self.program
+                            .constructor_wrapper(self.ctx.hir, self.ctx.store, *ctor);
                     self.closure(wrapper, Vec::new())
                 }
             }
             ExprKind::Call { callee, .. } => {
                 let ty = self.ty(id);
-                self.call(id, *callee, &ty)
+                self.call(id, *callee, ty)
             }
             ExprKind::If { .. } | ExprKind::Match { .. } => self.through_continuation(id),
             // `let x = S; match x` は `S` を `match` の文脈で変換するので、`match` と同じく続きで値を受ける
@@ -462,7 +475,7 @@ impl FnLowering<'_> {
                     self.ctx.root_name, self.ctx.numbering.handlers[id]
                 );
                 let unit = [(None, Repr::Unit)];
-                let handled_ret = repr(&self.ty(handled.body), self.ctx.hir);
+                let handled_ret = repr(self.ctx.store, self.ty(handled.body), self.ctx.hir);
                 let handled_closure = self.lift(
                     prefix.clone(),
                     body.closure_captures(handled),
@@ -492,7 +505,7 @@ impl FnLowering<'_> {
                     clauses: closures,
                     ret,
                 };
-                self.bind_typed("t", &ty, plain_call(call))
+                self.bind_typed("t", ty, plain_call(call))
             }
             ExprKind::Tuple(elements) => {
                 // 要素を左から評価し、コンストラクタが1つの `data` と同じ値にする (docs/spec/core-ir.md)
@@ -502,7 +515,7 @@ impl FnLowering<'_> {
                     layout: self.program.tuple_layout(args.len()),
                     tag: TUPLE,
                 };
-                self.bind_typed("d", &ty, Rhs::Con { ctor, args })
+                self.bind_typed("d", ty, Rhs::Con { ctor, args })
             }
             ExprKind::Drop(value) => {
                 let value = self.atom(*value);
@@ -514,18 +527,18 @@ impl FnLowering<'_> {
                     body: lambda_body,
                 } = closure;
                 let lambda_ty = self.ty(id);
-                let (param_types, ret_ty) = split_arrows(&lambda_ty, params.len());
+                let (param_types, ret_ty) = split_arrows(self.ctx.store, lambda_ty, params.len());
                 let params: Vec<(Option<PatId>, Repr)> = params
                     .iter()
                     .zip(&param_types)
-                    .map(|(&pat, ty)| (Some(pat), repr(ty, self.ctx.hir)))
+                    .map(|(&pat, &ty)| (Some(pat), repr(self.ctx.store, ty, self.ctx.hir)))
                     .collect();
                 let name = format!(
                     "{}$lambda{}",
                     self.ctx.root_name, self.ctx.numbering.lambdas[id]
                 );
                 let captured = body.closure_captures(closure);
-                let ret = repr(&ret_ty, self.ctx.hir);
+                let ret = repr(self.ctx.store, ret_ty, self.ctx.hir);
                 self.lift(name, captured, &params, *lambda_body, ret)
             }
         }
@@ -537,13 +550,18 @@ impl FnLowering<'_> {
         let mut params: Vec<(Option<PatId>, Repr)> = closure
             .params
             .iter()
-            .map(|&pat| (Some(pat), repr(&self.pat_type(pat), self.ctx.hir)))
+            .map(|&pat| {
+                (
+                    Some(pat),
+                    repr(self.ctx.store, self.pat_type(pat), self.ctx.hir),
+                )
+            })
             .collect();
         if stateless {
             params.push((None, Repr::Unit));
         }
         let captured = self.ctx.body.closure_captures(closure);
-        let ret = repr(&self.ty(closure.body), self.ctx.hir);
+        let ret = repr(self.ctx.store, self.ty(closure.body), self.ctx.hir);
         self.lift(name, captured, &params, closure.body, ret)
     }
 }

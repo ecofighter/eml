@@ -5,7 +5,8 @@ use crate::codes;
 use crate::kind::{
     CallKind, CarriedInner, CarriedValue, InnerLabel, KindOrigin, KindReason, Span, UnusedPath,
 };
-use crate::table::{Row, Ty, UnifyError};
+use crate::store::TypeStore;
+use crate::table::{Exporter, Label as RowLabel, Row, Ty, UnifyError};
 
 use super::body::BodyCheck;
 
@@ -55,6 +56,18 @@ pub(super) enum AmbientSource {
 }
 
 impl BodyCheck<'_, '_> {
+    /// 診断の文言に書く型。推論の途中で書き出すので、その場で短命の `Exporter` を作る。診断にしか使わない型が表に
+    /// 残っても、後の段階は ID で引かないので害はない。
+    pub(super) fn show(&mut self, ty: Ty) -> String {
+        let id = Exporter::new(self.table, self.types).export(ty);
+        self.types.display(id, &self.program.names).to_string()
+    }
+
+    fn show_label(&mut self, label: &RowLabel) -> String {
+        let label = Exporter::new(self.table, self.types).label(label);
+        label.display(self.types, &self.program.names).to_string()
+    }
+
     /// 等式の引数が、シグネチャの矢印より多い。
     pub(super) fn signature_arity_error(&self, param: PatId, index: usize) -> Diagnostic {
         Diagnostic::error(
@@ -80,17 +93,13 @@ impl BodyCheck<'_, '_> {
 
     /// ラムダの引数が、期待する型の矢印より多い。
     pub(super) fn lambda_arity_error(
-        &self,
+        &mut self,
         expected: Ty,
         params: usize,
         param: PatId,
         index: usize,
     ) -> Diagnostic {
-        let expected = self
-            .table
-            .export(expected)
-            .display(&self.program.names)
-            .to_string();
+        let expected = self.show(expected);
         Diagnostic::error(
             codes::TYPE_MISMATCH,
             format!(
@@ -165,9 +174,8 @@ impl BodyCheck<'_, '_> {
             Err(UnifyError::EffectArgs { left, right }) => {
                 // 呼び出し先の row が左辺である (`Table::include_row`)
                 if report {
-                    let names = &self.program.names;
-                    let found = self.table.export_label(&left).display(names).to_string();
-                    let allowed = self.table.export_label(&right).display(names).to_string();
+                    let found = self.show_label(&left);
+                    let allowed = self.show_label(&right);
                     self.diagnostics.push(
                         Diagnostic::error(
                             codes::TYPE_MISMATCH,
@@ -320,16 +328,8 @@ impl BodyCheck<'_, '_> {
         arrow_linearity: bool,
     ) {
         let file = self.file();
-        let expected = self
-            .table
-            .export(expected)
-            .display(&self.program.names)
-            .to_string();
-        let found = self
-            .table
-            .export(found)
-            .display(&self.program.names)
-            .to_string();
+        let expected = self.show(expected);
+        let found = self.show(found);
         // 注記の Prelude の型も、同じ名前のユーザーの型と区別できるよう表示名で書く
         let names = &self.program.names;
         let unit = names.unit();
@@ -445,6 +445,7 @@ const LINEAR_NOTE: &str = "linear values, such as files, the continuation of a `
 pub(super) fn linear_misuse(
     program: &Program,
     files: &SourceFiles,
+    types: &TypeStore,
     origin: &KindOrigin,
 ) -> Diagnostic {
     let file = origin.span.file;
@@ -535,7 +536,10 @@ pub(super) fn linear_misuse(
             Label::new(
                 file,
                 range,
-                format!("this state has a linear type `{ty}`"),
+                format!(
+                    "this state has a linear type `{}`",
+                    types.display(*ty, &program.names)
+                ),
             ),
         )
         .with_note(LINEAR_NOTE)

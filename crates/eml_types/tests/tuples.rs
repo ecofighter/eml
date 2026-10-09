@@ -33,8 +33,9 @@ fn decided(text: &str, name: &str) -> Vec<(&'static str, Equality)> {
                 FunctionKind::Extern(Some(Extern::Ne)) => "!=",
                 _ => return None,
             };
-            let equality = eml_types::equality(program, &instantiation.args[0])
-                .expect("a body without errors decides every comparison");
+            let equality =
+                eml_types::equality(program, &checked.typed.types, instantiation.args[0])
+                    .expect("a body without errors decides every comparison");
             Some((
                 u32::from(body.exprs[expr].range.start()),
                 operator,

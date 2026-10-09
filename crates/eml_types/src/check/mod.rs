@@ -12,8 +12,8 @@ use crate::kind::problem::{KindProblem, KindScheme, OwnVars};
 use crate::kind::solve::solve_scc;
 use crate::kind::{Bound, KindOrigin, KindReason, KindVar, Provenance, Span};
 use crate::shape::{Own, Shape, constructor_shape, operation_shape, signature_shape};
-use crate::table::{Row, Table, TyShape};
-use crate::ty::{EffectLabel, Type};
+use crate::store::{EffectLabel, TypeKind, TypeStore};
+use crate::table::{Exporter, Row, Table, TyShape};
 use crate::{
     BodyTypes, DeclType, Instantiation, TypedProgram, carry, codes, exhaustive, scc, usage,
 };
@@ -57,10 +57,13 @@ pub(crate) fn check_module(
     let context = Context::new(program);
     let signatures = signatures(program, &context);
     let mut schemes = declaration_schemes(program, &context, &signatures);
+    // 宣言と本体の型を1つの表に登録する。表は追記だけするので、本体を独立に検査する順は結果の意味を変えない
+    // (docs/implementation/architecture.md の「`eml_types` の内部」)
+    let mut types = TypeStore::new(program);
     let mut diagnostics = Vec::new();
     let main = program.main();
     if let Some(id) = main {
-        check_main(program, &signatures, id, &mut diagnostics);
+        check_main(program, &signatures, id, &mut types, &mut diagnostics);
     }
     // 本体の検査は関数ごとに独立しているので、アリーナの順に回す。診断の順は表示する側が決める
     // (docs/spec/diagnostics.md の「診断の順」)
@@ -68,7 +71,7 @@ pub(crate) fn check_module(
     let mut bodies = ItemMap::default();
     let mut problems: ItemMap<Function, KindProblem> = ItemMap::default();
     for (id, _) in program.functions() {
-        if let Some((checked, found)) = check_body(program, &context, &signatures, id) {
+        if let Some((checked, found)) = check_body(program, &context, &signatures, id, &mut types) {
             diagnostics.extend(found);
             bodies.insert(id, checked.types);
             problems.insert(id, checked.problem);
@@ -94,8 +97,8 @@ pub(crate) fn check_module(
         }
         violated.extend(solution.violated);
     }
-    diagnostics.extend(report_violations(program, files, violated));
-    let typed = typed_program(&signatures, schemes, bodies);
+    diagnostics.extend(report_violations(program, files, &types, violated));
+    let typed = typed_program(&signatures, schemes, bodies, types);
     // 網羅性は型推論と使用回数のパスの後に、書き出した型の上で調べる (docs/spec/exhaustiveness.md の「検査パス」)
     diagnostics.extend(exhaustive::check(program, &typed));
     (typed, diagnostics)
@@ -135,6 +138,7 @@ pub(crate) fn check_body(
     context: &Context,
     signatures: &Signatures,
     id: FunctionId,
+    types: &mut TypeStore,
 ) -> Option<(Checked, Vec<Diagnostic>)> {
     let function = &program[id];
     let (Some(signature), Some(body), Some(shape)) = (
@@ -163,6 +167,7 @@ pub(crate) fn check_body(
         rigids: &own.rigids,
         signatures,
         table: &mut table,
+        types: &mut *types,
         diagnostics: &mut diagnostics,
         ambient: Row::pure(),
         ambient_source: AmbientSource::Signature,
@@ -174,33 +179,42 @@ pub(crate) fn check_body(
     let typing = checker.typing;
     let instances = checker.instances;
     let reliable = usage::reliable(body, diagnostics.is_empty());
-    usage::constrain(file, body, &typing, &mut table, reliable, &program.names);
+    usage::constrain(file, body, &typing, &mut table, types, reliable);
     carry::constrain(program, file, body, &typing, &mut table, reliable);
-    let mut types = BodyTypes::default();
+    // 式、局所変数、パターン、具体化の型は表の同じ節点を共有するので、1つの `Exporter` で書き出し、各節点を1回だけ
+    // 書き出す
+    let mut exporter = Exporter::new(&table, types);
+    let mut body_types = BodyTypes::default();
     for (expr, &ty) in typing.exprs.iter() {
-        types.exprs.insert(expr, table.export(ty));
+        body_types.exprs.insert(expr, exporter.export(ty));
     }
     for (local, &ty) in typing.locals.iter() {
-        types.locals.insert(local, table.export(ty));
+        body_types.locals.insert(local, exporter.export(ty));
     }
     for (pat, &ty) in typing.pats.iter() {
-        types.pats.insert(pat, table.export(ty));
+        body_types.pats.insert(pat, exporter.export(ty));
     }
     // 本体全体の検査が終わってから `exprs` と一緒に書き出す。後の文の単一化で決まった型引数を含めるためで、
     // carry が足すのは Kind の制約だけである
     for (expr, (decl, args)) in typing.instantiations.iter() {
-        let args = args.iter().map(|&arg| table.export(arg)).collect();
-        types
+        let args = args.iter().map(|&arg| exporter.export(arg)).collect();
+        body_types
             .instantiations
             .insert(expr, Instantiation { decl: *decl, args });
     }
-    types.masks = typing.masks;
+    body_types.masks = typing.masks;
     let own_vars = OwnVars {
         lin: own.lin,
         mult: own.mult,
     };
     let problem = table.into_problem(instances, own_vars);
-    Some((Checked { types, problem }, diagnostics))
+    Some((
+        Checked {
+            types: body_types,
+            problem,
+        },
+        diagnostics,
+    ))
 }
 
 /// 本体のない宣言の Kind のスキーム。宣言から出る制約だけを持つ問題を、1つの宣言だけの SCC として解く。
@@ -295,6 +309,7 @@ fn declaration_problem(
 fn report_violations(
     program: &Program,
     files: &SourceFiles,
+    types: &TypeStore,
     mut origins: Vec<KindOrigin>,
 ) -> Vec<Diagnostic> {
     origins.sort_by_cached_key(|origin| {
@@ -302,7 +317,7 @@ fn report_violations(
             origin.span.file,
             origin.span.range.start(),
             origin.span.range.end(),
-            origin.reason.order_key(),
+            origin.reason.order_key(types, &program.names),
         )
     });
     origins.dedup();
@@ -315,7 +330,7 @@ fn report_violations(
         {
             continue;
         }
-        out.push(report::linear_misuse(program, files, &origin));
+        out.push(report::linear_misuse(program, files, types, &origin));
     }
     out
 }
@@ -327,6 +342,7 @@ fn typed_program(
     signatures: &Signatures,
     mut schemes: HashMap<ValueItem, KindScheme>,
     bodies: ItemMap<Function, BodyTypes>,
+    mut types: TypeStore,
 ) -> TypedProgram {
     let shapes = signatures
         .functions
@@ -347,7 +363,7 @@ fn typed_program(
     let decls = shapes
         .map(|(decl, shape)| {
             let declared = DeclType {
-                ty: shape.export(),
+                ty: shape.export(&mut types),
                 shape: shape.clone(),
                 kinds: schemes
                     .remove(&decl)
@@ -356,13 +372,18 @@ fn typed_program(
             (decl, declared)
         })
         .collect();
-    TypedProgram { decls, bodies }
+    TypedProgram {
+        types,
+        decls,
+        bodies,
+    }
 }
 
 fn check_main(
     program: &Program,
     signatures: &Signatures,
     id: FunctionId,
+    types: &mut TypeStore,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     let function = &program[id];
@@ -374,27 +395,28 @@ fn check_main(
     if has_error(&signature.types, signature.ty) {
         return;
     }
-    let found = shape.export();
-    let expected = Type::Fn {
-        param: Box::new(Type::unit()),
+    let found = shape.export(types);
+    let expected = types.intern(TypeKind::Fn {
+        param: types.unit(),
         effects: vec![EffectLabel {
             id: program.io(),
             args: Vec::new(),
         }],
         tail: None,
-        ret: Box::new(Type::unit()),
-    };
-    if !found.contains_error() && found != expected {
+        ret: types.unit(),
+    });
+    // 同じ形の型は同じ ID なので、ID を比べれば型を比べたことになる
+    if !types.contains_error(found) && found != expected {
         diagnostics.push(Diagnostic::error(
             codes::INVALID_MAIN_TYPE,
             format!(
                 "`main` must have type `{}`",
-                expected.display(&program.names)
+                types.display(expected, &program.names)
             ),
             Label::new(
                 program.file(id.module),
                 signature.range,
-                format!("found `{}`", found.display(&program.names)),
+                format!("found `{}`", types.display(found, &program.names)),
             ),
         ));
     }
@@ -450,7 +472,13 @@ mod tests {
                 call: CallKind::Call,
             },
         };
-        let reported = report_violations(&program, &files, vec![origin(entry), origin(prelude)]);
+        let types = crate::TypeStore::new(&program);
+        let reported = report_violations(
+            &program,
+            &files,
+            &types,
+            vec![origin(entry), origin(prelude)],
+        );
         let files: Vec<_> = reported.iter().map(|d| d.primary.file).collect();
         assert_eq!(files, vec![prelude, entry]);
     }

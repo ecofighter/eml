@@ -7,7 +7,7 @@ use eml_hir::{
     ConstructorId, EffectDef, EffectId, EffectKind, FunctionId, FunctionKind, ModuleId,
     OpMultiplicity, OperationId, Program as HirProgram, TypeDefId, TypeDefKind, ValueItem,
 };
-use eml_types::{Type, TypedProgram};
+use eml_types::{TypeId, TypeStore, TypedProgram};
 
 use crate::{
     Atom, Call, CoreFn, Ctor, EffectInfo, FnIdx, Layout, LayoutCtor, LayoutId, Loc, OperationInfo,
@@ -46,7 +46,7 @@ enum LayoutKey {
 /// 変換の途中で、ラムダと包む関数などを足していく関数の表。番号を先に取り、中身は変換が終わってから入れる。
 pub(super) struct ProgramBuilder {
     /// extern の関数のスキームの型。extern の関数を包む関数の変数の Repr を決める。
-    extern_types: HashMap<FunctionId, Type>,
+    extern_types: HashMap<FunctionId, TypeId>,
     pub(super) functions: Vec<Option<CoreFn>>,
     arities: Vec<usize>,
     pub(super) strings: Interner,
@@ -56,10 +56,10 @@ pub(super) struct ProgramBuilder {
     pub(super) layouts: Vec<Layout>,
     layout_ids: HashMap<LayoutKey, LayoutId>,
     /// 操作のスキームの型。操作を包む関数の変数の Repr を決める。
-    operation_types: HashMap<OperationId, Type>,
+    operation_types: HashMap<OperationId, TypeId>,
     operation_wrappers: HashMap<OperationId, FnIdx>,
     /// コンストラクタのスキームの型。コンストラクタを包む関数の変数の Repr を決める。
-    constructor_types: HashMap<ConstructorId, Type>,
+    constructor_types: HashMap<ConstructorId, TypeId>,
     constructor_wrappers: HashMap<ConstructorId, FnIdx>,
     /// 状態のない handler 用の、継続を包む関数。
     stateless_continuation_wrapper: Option<FnIdx>,
@@ -73,9 +73,7 @@ impl ProgramBuilder {
             extern_types: hir
                 .functions()
                 .filter(|(_, function)| matches!(function.kind, FunctionKind::Extern(_)))
-                .filter_map(|(id, _)| {
-                    Some((id, typed.decls.get(&ValueItem::Function(id))?.ty.clone()))
-                })
+                .filter_map(|(id, _)| Some((id, typed.decls.get(&ValueItem::Function(id))?.ty)))
                 .collect(),
             functions: Vec::new(),
             arities: Vec::new(),
@@ -87,7 +85,7 @@ impl ProgramBuilder {
                 .decls
                 .iter()
                 .filter_map(|(decl, declared)| match decl {
-                    ValueItem::Operation(id) => Some((*id, declared.ty.clone())),
+                    ValueItem::Operation(id) => Some((*id, declared.ty)),
                     _ => None,
                 })
                 .collect(),
@@ -96,7 +94,7 @@ impl ProgramBuilder {
                 .decls
                 .iter()
                 .filter_map(|(decl, declared)| match decl {
-                    ValueItem::Constructor(id) => Some((*id, declared.ty.clone())),
+                    ValueItem::Constructor(id) => Some((*id, declared.ty)),
                     _ => None,
                 })
                 .collect(),
@@ -107,7 +105,12 @@ impl ProgramBuilder {
     }
 
     /// data の型の配置。フィールドの Repr は、コンストラクタのスキームの、宣言したフィールドの型から決める。
-    pub(super) fn data_layout(&mut self, hir: &HirProgram, ty: TypeDefId) -> LayoutId {
+    pub(super) fn data_layout(
+        &mut self,
+        hir: &HirProgram,
+        types: &TypeStore,
+        ty: TypeDefId,
+    ) -> LayoutId {
         if let Some(&id) = self.layout_ids.get(&LayoutKey::Data(ty)) {
             return id;
         }
@@ -119,10 +122,13 @@ impl ProgramBuilder {
             .map(|&ctor| {
                 let constructor = &hir[ctor];
                 let (fields, _) =
-                    split_arrows(self.constructor_type(ctor), constructor.fields.len());
+                    split_arrows(types, self.constructor_type(ctor), constructor.fields.len());
                 LayoutCtor {
                     name: constructor.name.clone(),
-                    fields: fields.iter().map(|field| repr(field, hir)).collect(),
+                    fields: fields
+                        .iter()
+                        .map(|&field| repr(types, field, hir))
+                        .collect(),
                 }
             })
             .collect();
@@ -157,9 +163,14 @@ impl ProgramBuilder {
         id
     }
 
-    pub(super) fn ctor(&mut self, hir: &HirProgram, ctor: ConstructorId) -> Ctor {
+    pub(super) fn ctor(
+        &mut self,
+        hir: &HirProgram,
+        types: &TypeStore,
+        ctor: ConstructorId,
+    ) -> Ctor {
         Ctor {
-            layout: self.data_layout(hir, hir[ctor].ty),
+            layout: self.data_layout(hir, types, hir[ctor].ty),
             tag: hir[ctor].tag,
         }
     }
@@ -251,19 +262,24 @@ impl ProgramBuilder {
     }
 
     /// 操作を値や部分適用で使うときの関数を作る。本体は `perform` の末尾呼び出しである。操作ごとに1つだけ作る。
-    pub(super) fn operation_wrapper(&mut self, hir: &HirProgram, op: OperationId) -> FnIdx {
+    pub(super) fn operation_wrapper(
+        &mut self,
+        hir: &HirProgram,
+        types: &TypeStore,
+        op: OperationId,
+    ) -> FnIdx {
         if let Some(&function) = self.operation_wrappers.get(&op) {
             return function;
         }
         let operation = &hir[op];
-        let ty = self
+        let ty = *self
             .operation_types
             .get(&op)
             .expect("every operation has a scheme");
-        let (param_types, result_type) = split_arrows(ty, operation.arity);
+        let (param_types, result_type) = split_arrows(types, ty, operation.arity);
         let params = param_types
             .iter()
-            .map(|ty| var_info("p", ty, hir))
+            .map(|&ty| var_info("p", types, ty, hir))
             .collect();
         let name = format!("op${}", core_name(hir, op.module, &operation.name));
         let function = self.simple(
@@ -274,26 +290,31 @@ impl ProgramBuilder {
                 mask: Vec::new(),
                 saved: Vec::new(),
             },
-            var_info("t", &result_type, hir),
+            var_info("t", types, result_type, hir),
         );
         self.operation_wrappers.insert(op, function);
         function
     }
 
     /// コンストラクタを値や部分適用で使うときに、値を作って返すだけの関数を作る。コンストラクタごとに1つだけ作る。
-    pub(super) fn constructor_wrapper(&mut self, hir: &HirProgram, ctor: ConstructorId) -> FnIdx {
+    pub(super) fn constructor_wrapper(
+        &mut self,
+        hir: &HirProgram,
+        types: &TypeStore,
+        ctor: ConstructorId,
+    ) -> FnIdx {
         if let Some(&function) = self.constructor_wrappers.get(&ctor) {
             return function;
         }
         let constructor = &hir[ctor];
         let ty = self.constructor_type(ctor);
-        let (param_types, result_type) = split_arrows(ty, constructor.fields.len());
+        let (param_types, result_type) = split_arrows(types, ty, constructor.fields.len());
         let params = param_types
             .iter()
-            .map(|ty| var_info("p", ty, hir))
+            .map(|&ty| var_info("p", types, ty, hir))
             .collect();
         let name = format!("con${}", core_name(hir, ctor.module, &constructor.name));
-        let ctor_id = self.ctor(hir, ctor);
+        let ctor_id = self.ctor(hir, types, ctor);
         let function = self.simple(
             name,
             params,
@@ -301,14 +322,15 @@ impl ProgramBuilder {
                 ctor: ctor_id,
                 args,
             },
-            var_info("d", &result_type, hir),
+            var_info("d", types, result_type, hir),
         );
         self.constructor_wrappers.insert(ctor, function);
         function
     }
 
-    fn constructor_type(&self, ctor: ConstructorId) -> &Type {
-        self.constructor_types
+    fn constructor_type(&self, ctor: ConstructorId) -> TypeId {
+        *self
+            .constructor_types
             .get(&ctor)
             .expect("every constructor has a scheme")
     }
@@ -319,6 +341,7 @@ impl ProgramBuilder {
     pub(super) fn extern_wrapper(
         &mut self,
         hir: &HirProgram,
+        types: &TypeStore,
         extern_fn: FunctionId,
         row: Extern,
         name: String,
@@ -330,14 +353,14 @@ impl ProgramBuilder {
             !row.row().by_type,
             "`==` and `!=` are always called with both operands"
         );
-        let ty = self
+        let ty = *self
             .extern_types
             .get(&extern_fn)
             .expect("every extern function has a signature");
-        let (param_types, result_type) = split_arrows(ty, row.row().params.len());
+        let (param_types, result_type) = split_arrows(types, ty, row.row().params.len());
         let params = param_types
             .iter()
-            .map(|ty| var_info("p", ty, hir))
+            .map(|&ty| var_info("p", types, ty, hir))
             .collect();
         self.simple(
             name,
@@ -347,7 +370,7 @@ impl ProgramBuilder {
                 args,
                 at: Some(at),
             },
-            var_info("t", &result_type, hir),
+            var_info("t", types, result_type, hir),
         )
     }
 
@@ -356,9 +379,10 @@ impl ProgramBuilder {
     pub(super) fn entry(
         &mut self,
         hir: &HirProgram,
+        types: &TypeStore,
         target: FnIdx,
         target_id: FunctionId,
-        target_type: &Type,
+        target_type: TypeId,
     ) -> FnIdx {
         let function = self.reserve(0);
         let name = format!(
@@ -366,11 +390,11 @@ impl ProgramBuilder {
             core_name(hir, target_id.module, &hir[target_id].name)
         );
         // どちらの形でも、入口の関数の型は `Unit -> ...` である
-        let (_, result_type) = split_arrows(target_type, 1);
+        let (_, result_type) = split_arrows(types, target_type, 1);
         let mut builder = FnBuilder::new();
         let unit = vec![Atom::Unit];
         let call = if self.arity(target) == 0 {
-            let value = builder.var(var_info("f", target_type, hir));
+            let value = builder.var(var_info("f", types, target_type, hir));
             builder.emit(Stmt::Let {
                 var: value,
                 rhs: plain_call(Call::Direct(target, Vec::new())),
@@ -379,14 +403,14 @@ impl ProgramBuilder {
         } else {
             Call::Direct(target, unit)
         };
-        let result = builder.var(var_info("t", &result_type, hir));
+        let result = builder.var(var_info("t", types, result_type, hir));
         builder.emit(Stmt::Let {
             var: result,
             rhs: plain_call(call),
         });
         builder.terminate(Term::Return(Atom::Var(result)));
         // 入口の関数は実行系が外から呼ぶので、内部の関数でない
-        let core = builder.finish(name, false, repr(&result_type, hir));
+        let core = builder.finish(name, false, repr(types, result_type, hir));
         self.finish(function, core);
         function
     }

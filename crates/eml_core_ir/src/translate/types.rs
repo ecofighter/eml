@@ -2,21 +2,21 @@
 
 use eml_extern::Extern;
 use eml_hir::{Program as HirProgram, TypeDefId, TypeDefKind};
-use eml_types::{Equality, Type};
+use eml_types::{Equality, TypeId, TypeKind, TypeStore};
 
 use crate::{Repr, VarInfo, data_repr};
 
 /// 型の Repr (docs/spec/core-ir.md の「値の表現」)。総称的な位置の束縛も具体化した型から決める。値を受ける位置の
 /// Repr と違えば、box の挿入が変換を入れる (docs/spec/core-ir.md の「位置の規則」)。関数の値と型変数の値は、即値
 /// (捕まえた変数のない関数、引数のないコンストラクタ) にもヒープの物体にもなるので `tobj` にする。
-pub fn repr(ty: &Type, hir: &HirProgram) -> Repr {
-    match ty {
-        Type::Con { id, args: _ } => type_def_repr(*id, hir),
-        Type::Fn { .. } | Type::Rigid(_) | Type::Flexible => Repr::TObj,
+pub fn repr(types: &TypeStore, ty: TypeId, hir: &HirProgram) -> Repr {
+    match types.kind(ty) {
+        TypeKind::Con { id, args: _ } => type_def_repr(*id, hir),
+        TypeKind::Fn { .. } | TypeKind::Rigid(_) | TypeKind::Flexible => Repr::TObj,
         // 空のレコードは `Unit` で、値は `()` である。要素のあるレコード (タプル) はヒープの物体にする
-        Type::Record(fields) if fields.is_empty() => Repr::Unit,
-        Type::Record(_) => Repr::Obj,
-        Type::Error => Repr::Unit,
+        TypeKind::Record(fields) if fields.is_empty() => Repr::Unit,
+        TypeKind::Record(_) => Repr::Obj,
+        TypeKind::Error => Repr::Unit,
     }
 }
 
@@ -36,8 +36,8 @@ pub(super) fn type_def_repr(id: TypeDefId, hir: &HirProgram) -> Repr {
     }
 }
 
-pub(super) fn var_info(name: &str, ty: &Type, hir: &HirProgram) -> VarInfo {
-    named(name, repr(ty, hir))
+pub(super) fn var_info(name: &str, types: &TypeStore, ty: TypeId, hir: &HirProgram) -> VarInfo {
+    named(name, repr(types, ty, hir))
 }
 
 pub(super) fn named(name: &str, repr: Repr) -> VarInfo {
@@ -48,17 +48,17 @@ pub(super) fn named(name: &str, repr: Repr) -> VarInfo {
 }
 
 /// 関数型の先頭の `count` 個の引数の型と、残りの型。
-pub(super) fn split_arrows(ty: &Type, count: usize) -> (Vec<Type>, Type) {
+pub(super) fn split_arrows(types: &TypeStore, ty: TypeId, count: usize) -> (Vec<TypeId>, TypeId) {
     let mut params = Vec::new();
     let mut ty = ty;
     for _ in 0..count {
-        let Type::Fn { param, ret, .. } = ty else {
+        let TypeKind::Fn { param, ret, .. } = types.kind(ty) else {
             unreachable!("the type checker matched parameters with arrows");
         };
-        params.push((**param).clone());
-        ty = ret;
+        params.push(*param);
+        ty = *ret;
     }
-    (params, ty.clone())
+    (params, ty)
 }
 
 /// `==` と `!=` の比べ方と否定の有無から、比べ方ごとの extern の行を選ぶ。比べ方は、型検査が参照ごとに記録した

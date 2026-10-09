@@ -16,7 +16,7 @@ use eml_hir::{
     Body, ExprId, ExprKind, Function, FunctionId, FunctionKind, ItemMap, LocalId, MatchArm, PatId,
     PatKind, Program as HirProgram, Res, Stmt as HirStmt, ValueItem,
 };
-use eml_types::{BodyTypes, Type, TypedProgram};
+use eml_types::{BodyTypes, TypeId, TypeStore, TypedProgram};
 use la_arena::ArenaMap;
 
 use crate::{
@@ -184,17 +184,17 @@ pub(crate) fn translate(
     }
     for (id, function) in defined() {
         let body = hir.body(id).expect("checked above");
-        let signature = &typed
+        let signature = typed
             .decls
             .get(&ValueItem::Function(id))
             .expect("every function has a signature")
             .ty;
-        let (param_types, ret) = split_arrows(signature, body.params.len());
+        let (param_types, ret) = split_arrows(&typed.types, signature, body.params.len());
         let params: Vec<(Option<PatId>, Repr)> = body
             .params
             .iter()
             .zip(&param_types)
-            .map(|(&pat, ty)| (Some(pat), repr(ty, hir)))
+            .map(|(&pat, &ty)| (Some(pat), repr(&typed.types, ty, hir)))
             .collect();
         let name = core_name(hir, id.module, &function.name);
         let forms = continuation_forms(body);
@@ -202,6 +202,7 @@ pub(crate) fn translate(
         let ctx = BodyCtx {
             hir,
             body,
+            store: &typed.types,
             types: typed.bodies.get(id).expect("every body is type-checked"),
             indices: &indices,
             root_name: &name,
@@ -218,16 +219,16 @@ pub(crate) fn translate(
             &[],
             &params,
             body.root,
-            repr(&ret, hir),
+            repr(&typed.types, ret, hir),
         );
         builder.finish(indices[id], core);
     }
-    let entry_type = &typed
+    let entry_type = typed
         .decls
         .get(&ValueItem::Function(entry))
         .expect("the entry function has a signature")
         .ty;
-    let entry_fn = builder.entry(hir, indices[entry], entry, entry_type);
+    let entry_fn = builder.entry(hir, &typed.types, indices[entry], entry, entry_type);
     Program {
         functions: builder
             .functions
@@ -281,6 +282,8 @@ struct Source<'a> {
 struct BodyCtx<'a> {
     hir: &'a HirProgram,
     body: &'a Body,
+    /// 型検査の型の表。Core IR は表を読むだけで、型を作らない。
+    store: &'a TypeStore,
     types: &'a BodyTypes,
     indices: &'a ItemMap<Function, FnIdx>,
     /// ラムダ、handle、extern を包む関数の名前に使う、トップレベルの関数の名前。
@@ -385,7 +388,7 @@ impl<'a> FnLowering<'a> {
                     .locals
                     .get(local)
                     .expect("every local is typed");
-                (local, repr(ty, self.ctx.hir))
+                (local, repr(self.ctx.store, *ty, self.ctx.hir))
             })
             .collect();
         let function = self.program.reserve(captured.len() + params.len());
@@ -408,12 +411,12 @@ impl<'a> FnLowering<'a> {
         self.bind("c", Repr::TObj, Rhs::MakeClosure(target, args))
     }
 
-    fn pat_type(&self, pat: PatId) -> Type {
+    fn pat_type(&self, pat: PatId) -> TypeId {
         self.ctx
             .types
             .pats
             .get(pat)
-            .cloned()
+            .copied()
             .expect("every pattern is typed")
     }
 
@@ -539,7 +542,7 @@ impl<'a> FnLowering<'a> {
         let ty = self.ty(condition);
         let unknown = self
             .builder
-            .new_label(vec![var_info("c", &ty, self.ctx.hir)]);
+            .new_label(vec![var_info("c", self.ctx.store, ty, self.ctx.hir)]);
         self.contexts.push(Ctx::Bool {
             on_true,
             on_false,
@@ -574,7 +577,7 @@ impl<'a> FnLowering<'a> {
         });
         let layout = self
             .program
-            .data_layout(self.ctx.hir, self.ctx.hir.lang.bool);
+            .data_layout(self.ctx.hir, self.ctx.store, self.ctx.hir.lang.bool);
         self.builder.terminate(Term::Switch {
             scrutinee,
             layout: Some(layout),

@@ -13,8 +13,9 @@ use la_arena::{Arena, ArenaMap};
 
 use crate::context::Context;
 use crate::kind::KindVar;
+use crate::store::{EffectLabel, RowTail, TypeId, TypeKind, TypeStore};
 use crate::table::{ArrowLin, Label, RigidVar, Row, RowVar, Table, Tail, Ty, TyShape};
-use crate::ty::{EffectLabel, Linearity, RowTail, Type};
+use crate::ty::Linearity;
 
 /// 関数ごとの、シグネチャの型変数と row 変数。本体の注釈も同じ変数を指す (docs/spec/types.md の「推論」)。
 pub(crate) struct Rigids {
@@ -587,32 +588,33 @@ impl Shape {
         build(table, &self.ty, &tys, &rows, &lin)
     }
 
-    /// 後の段階に渡す型。rigid な変数は名前で書く。
-    pub fn export(&self) -> Type {
-        self.export_ty(&self.ty)
+    /// 後の段階に渡す型。rigid な変数は名前で書く。シグネチャの型も本体の型と同じ表に登録する。
+    pub fn export(&self, types: &mut TypeStore) -> TypeId {
+        self.export_ty(&self.ty, types)
     }
 
-    fn export_ty(&self, ty: &ShapeTy) -> Type {
-        match ty {
-            ShapeTy::Con(id, args) => Type::Con {
+    fn export_ty(&self, ty: &ShapeTy, types: &mut TypeStore) -> TypeId {
+        let kind = match ty {
+            ShapeTy::Con(id, args) => TypeKind::Con {
                 id: *id,
-                args: args.iter().map(|arg| self.export_ty(arg)).collect(),
+                args: args.iter().map(|arg| self.export_ty(arg, types)).collect(),
             },
-            ShapeTy::Record(fields) => Type::Record(
+            ShapeTy::Record(fields) => TypeKind::Record(
                 fields
                     .iter()
-                    .map(|(label, field)| (label.clone(), self.export_ty(field)))
+                    .map(|(label, field)| (label.clone(), self.export_ty(field, types)))
                     .collect(),
             ),
             ShapeTy::Fn {
                 param, row, ret, ..
             } => {
+                let param = self.export_ty(param, types);
                 let effects = row
                     .labels
                     .iter()
                     .map(|(effect, args)| EffectLabel {
                         id: *effect,
-                        args: args.iter().map(|arg| self.export_ty(arg)).collect(),
+                        args: args.iter().map(|arg| self.export_ty(arg, types)).collect(),
                     })
                     .collect();
                 let tail = match row.tail {
@@ -620,33 +622,40 @@ impl Shape {
                     ShapeTail::Rigid(index) => Some(RowTail::Rigid(self.rows[index].0.clone())),
                     ShapeTail::Error => Some(RowTail::Error),
                 };
-                Type::Fn {
-                    param: Box::new(self.export_ty(param)),
+                let ret = self.export_ty(ret, types);
+                TypeKind::Fn {
+                    param,
                     effects,
                     tail,
-                    ret: Box::new(self.export_ty(ret)),
+                    ret,
                 }
             }
-            ShapeTy::Rigid(index) => Type::Rigid(self.rigids[*index].0.clone()),
-            ShapeTy::Error => Type::Error,
-        }
+            ShapeTy::Rigid(index) => TypeKind::Rigid(self.rigids[*index].0.clone()),
+            ShapeTy::Error => TypeKind::Error,
+        };
+        types.intern(kind)
     }
 
     /// 線形性の Kind 変数の表示名。rigid な型変数の `μ` はその型変数、矢印の `m` はその矢印の型で呼ぶ。外側から順に見て、
     /// 最初に現れた部分を使う。スキームに残った制約を表示するのに使う。
-    pub fn kind_names(&self) -> HashMap<KindVar, Type> {
+    pub fn kind_names(&self, types: &mut TypeStore) -> HashMap<KindVar, TypeId> {
         let mut names = HashMap::new();
-        self.collect_names(&self.ty, &mut names);
+        self.collect_names(&self.ty, types, &mut names);
         names
     }
 
-    fn collect_names(&self, ty: &ShapeTy, names: &mut HashMap<KindVar, Type>) {
+    fn collect_names(
+        &self,
+        ty: &ShapeTy,
+        types: &mut TypeStore,
+        names: &mut HashMap<KindVar, TypeId>,
+    ) {
         match ty {
             ShapeTy::Rigid(index) => {
                 let (name, mu) = &self.rigids[*index];
                 names
                     .entry(*mu)
-                    .or_insert_with(|| Type::Rigid(name.clone()));
+                    .or_insert_with(|| types.intern(TypeKind::Rigid(name.clone())));
             }
             ShapeTy::Fn {
                 param: _,
@@ -654,7 +663,7 @@ impl Shape {
                 row: _,
                 ret: _,
             } => {
-                names.entry(*v).or_insert_with(|| self.export_ty(ty));
+                names.entry(*v).or_insert_with(|| self.export_ty(ty, types));
             }
             ShapeTy::Fn {
                 param: _,
@@ -667,11 +676,11 @@ impl Shape {
             | ShapeTy::Error => {}
         }
         ty.for_each_child(|child| match child {
-            ShapeChild::Ty(child) => self.collect_names(child, names),
+            ShapeChild::Ty(child) => self.collect_names(child, types, names),
             ShapeChild::Row(row) => {
                 for (_, args) in &row.labels {
                     for arg in args {
-                        self.collect_names(arg, names);
+                        self.collect_names(arg, types, names);
                     }
                 }
             }
@@ -763,6 +772,12 @@ mod tests {
             .unwrap()
     }
 
+    fn exported(shape: &Shape, program: &Program) -> String {
+        let mut types = TypeStore::new(program);
+        let ty = shape.export(&mut types);
+        types.display(ty, &program.names).to_string()
+    }
+
     const TWICE: &str = "twice : (a -> <e> a) -> a -> <e> a\ntwice f x = f (f x)";
 
     #[test]
@@ -770,10 +785,7 @@ mod tests {
         let program = program(TWICE);
         let context = context(&program);
         let shape = signature_shape(&context, signature(&program));
-        assert_eq!(
-            shape.export().display(&program.names).to_string(),
-            "(a -> <e> a) -> a -> <e> a"
-        );
+        assert_eq!(exported(&shape, &program), "(a -> <e> a) -> a -> <e> a");
     }
 
     #[test]
@@ -785,10 +797,7 @@ mod tests {
         let mut table = Table::new(&context);
         let own = shape.instantiate_rigid(&mut table, &signature.generics);
         assert_eq!(table.kind_vars(own.ty), (own.lin.clone(), own.mult.clone()));
-        assert_eq!(
-            table.export(own.ty).display(&program.names).to_string(),
-            "(a -> <e> a) -> a -> <e> a"
-        );
+        assert_eq!(table.show(own.ty, &program), "(a -> <e> a) -> a -> <e> a");
     }
 
     #[test]
@@ -805,10 +814,7 @@ mod tests {
         let mut table = Table::new(&context);
         let int = table.int;
         let ty = shape.instantiate_with_effect_args(&mut table, &[int]);
-        assert_eq!(
-            table.export(ty).display(&program.names).to_string(),
-            "a -> Int -> <State Int> (a, Int)"
-        );
+        assert_eq!(table.show(ty, &program), "a -> Int -> <State Int> (a, Int)");
     }
 
     #[test]
@@ -819,10 +825,7 @@ mod tests {
         let mut table = Table::new(&context);
         let first = shape.instantiate(&mut table);
         let second = shape.instantiate(&mut table);
-        assert_eq!(
-            table.export(first.ty).display(&program.names).to_string(),
-            "_ -> <_> _"
-        );
+        assert_eq!(table.show(first.ty, &program), "_ -> <_> _");
         assert_ne!(first.lin, second.lin);
         assert_ne!(first.mult, second.mult);
     }
@@ -839,10 +842,7 @@ mod tests {
         assert_ne!(first.args, second.args);
         let int = table.int;
         assert!(table.unify(first.args[0], int).is_ok());
-        assert_eq!(
-            table.export(first.ty).display(&program.names).to_string(),
-            "Int -> _ -> Int"
-        );
+        assert_eq!(table.show(first.ty, &program), "Int -> _ -> Int");
     }
 
     #[test]
@@ -850,18 +850,9 @@ mod tests {
         let program = program("f : Int -> <Missing> Int\nf x = x");
         let context = context(&program);
         let shape = signature_shape(&context, signature(&program));
-        assert_eq!(
-            shape.export().display(&program.names).to_string(),
-            "Int -> <{error}> Int"
-        );
+        assert_eq!(exported(&shape, &program), "Int -> <{error}> Int");
         let mut table = Table::new(&context);
         let instance = shape.instantiate(&mut table);
-        assert_eq!(
-            table
-                .export(instance.ty)
-                .display(&program.names)
-                .to_string(),
-            "Int -> <{error}> Int"
-        );
+        assert_eq!(table.show(instance.ty, &program), "Int -> <{error}> Int");
     }
 }

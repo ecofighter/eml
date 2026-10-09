@@ -11,6 +11,7 @@ use crate::codes;
 use crate::kind::problem::Instance;
 use crate::kind::{KindOrigin, KindReason, Provenance, Span};
 use crate::shape::{Instantiated, Rigids, lower_type};
+use crate::store::TypeStore;
 use crate::table::{Row, Table, Tail, Ty, TyShape, UnifyError};
 
 use super::Signatures;
@@ -57,6 +58,8 @@ pub(super) struct BodyCheck<'a, 'c> {
     /// 全宣言の閉じた型の形。本体の検査が呼び出し先について見るのは、これだけである (docs/spec/types.md の「推論」)。
     pub(super) signatures: &'a Signatures,
     pub(super) table: &'a mut Table<'c>,
+    /// 書き出した型を登録する表。本体の検査が書き出すのは診断の文言に使う型だけである。
+    pub(super) types: &'a mut TypeStore,
     pub(super) diagnostics: &'a mut Vec<Diagnostic>,
     /// 本体が起こしてよいエフェクト。シグネチャで最後にたどった矢印の row か、本体を囲むラムダで最後にたどった
     /// 矢印の row である。

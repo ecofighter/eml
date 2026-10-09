@@ -228,7 +228,7 @@ impl FnLowering<'_> {
         passes_alias: Vec<bool>,
     ) -> Vec<Label> {
         let merged = match &scrutinee {
-            Scrutinee::Expr(expr) => repr(&self.ty(*expr), self.ctx.hir),
+            Scrutinee::Expr(expr) => repr(self.ctx.store, self.ty(*expr), self.ctx.hir),
             Scrutinee::Occ(_, repr) => *repr,
         };
         let arms: Vec<Label> = pats
@@ -353,7 +353,7 @@ impl FnLowering<'_> {
                 let (layout, repr) = match *value {
                     ConValue::Data(ctor) => {
                         let hir = self.ctx.hir;
-                        let layout = self.program.ctor(hir, ctor).layout;
+                        let layout = self.program.ctor(hir, self.ctx.store, ctor).layout;
                         (layout, type_def_repr(hir[ctor].ty, hir))
                     }
                     ConValue::Tuple => (self.program.tuple_layout(args.len()), Repr::Obj),
@@ -471,7 +471,7 @@ impl FnLowering<'_> {
                 Some(self.single(occs, &rows, column, ctor, value))
             }
             (Head::Con(ctor, _), Occ::Atom(value)) if single_constructor(hir, ctor) => {
-                let ctor = self.program.ctor(hir, ctor);
+                let ctor = self.program.ctor(hir, self.ctx.store, ctor);
                 Some(self.single(occs, &rows, column, ctor, value))
             }
             (Head::Con(ctor, _), Occ::Atom(value)) => {
@@ -538,7 +538,7 @@ impl FnLowering<'_> {
         let TypeDefKind::Data { constructors } = &hir[hir[ctor].ty].kind else {
             unreachable!("constructor patterns belong to data types")
         };
-        let layout = self.program.data_layout(hir, hir[ctor].ty);
+        let layout = self.program.data_layout(hir, self.ctx.store, hir[ctor].ty);
         let mentions = |ctor: ConstructorId, row: &Row| matches!(head(body, hir, row.cells[column]), Head::Con(other, _) if other == ctor);
         let mut cases = Vec::new();
         for &ctor in constructors {
@@ -712,7 +712,7 @@ impl FnLowering<'_> {
                         _ => None,
                     })
                     .unwrap_or("x");
-                let repr = repr(&self.pat_type(pat), hir);
+                let repr = repr(self.ctx.store, self.pat_type(pat), hir);
                 self.builder.var(named(name, repr))
             })
             .collect()
@@ -726,7 +726,12 @@ impl FnLowering<'_> {
             .locals
             .get(local)
             .expect("every local is typed");
-        var_info(&self.ctx.body.locals[local].name, ty, self.ctx.hir)
+        var_info(
+            &self.ctx.body.locals[local].name,
+            self.ctx.store,
+            *ty,
+            self.ctx.hir,
+        )
     }
 
     /// 式 `root` の中で局所変数 `local` を使うか。`let x = S; match x` の枝が `x` を使うかを決める。

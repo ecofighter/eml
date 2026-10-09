@@ -4,10 +4,7 @@ use crate::kind::solve::{residual_of, solve};
 
 /// Prelude だけのプログラムの表示名で型を書く。Prelude の名前は重ならないので、修飾しない。
 fn shown(table: &Table, ty: Ty) -> String {
-    table
-        .export(ty)
-        .display(&crate::test_program("").names)
-        .to_string()
+    table.show(ty, &crate::test_program(""))
 }
 
 fn effect_named(program: &eml_hir::Program, name: &str) -> EffectId {

@@ -5,8 +5,9 @@ use eml_diagnostics::{Diagnostic, Label};
 use eml_extern::{Extern, ExternType};
 use eml_hir::{ExprId, FunctionId, FunctionKind, ValueItem};
 
-use crate::table::TyShape;
-use crate::{Type, codes, equality};
+use crate::store::TypeId;
+use crate::table::{Exporter, TyShape};
+use crate::{codes, equality};
 
 use super::body::BodyCheck;
 
@@ -17,6 +18,9 @@ impl BodyCheck<'_, '_> {
     /// あれば本体に誤りがある。1つの比べ方の E2006 が別の比べ方の E2006 を抑えないよう、比べ方を見る前に1回だけ数える。
     pub(super) fn check_comparisons(&mut self) {
         let body_has_error = self.diagnostics.iter().any(Diagnostic::is_error);
+        // 比べる値の型は本体の型と節点を共有するので、1つの `Exporter` ですべて書き出す。診断の文言は書き出し終えて
+        // から作る
+        let mut exporter = Exporter::new(self.table, self.types);
         let mut found = Vec::new();
         for (callee, (decl, args)) in self.typing.instantiations.iter() {
             let ValueItem::Function(operator) = *decl else {
@@ -30,8 +34,8 @@ impl BodyCheck<'_, '_> {
             }
             // `==` と `!=` は `a -> a -> Bool` なので、最初の型引数が比べる値の型である
             let operand = args[0];
-            let exported = self.table.export(operand);
-            if equality(self.program, &exported).is_some() {
+            let exported = exporter.export(operand);
+            if equality(self.program, exporter.types(), exported).is_some() {
                 continue;
             }
             // 同じ本体に別の誤りがあるとき、決まらない型はその誤りの連鎖である。誤りを直せば型が決まるので、
@@ -40,19 +44,23 @@ impl BodyCheck<'_, '_> {
                 continue;
             }
             // 報告済みの誤りの跡には診断を重ねない (docs/spec/diagnostics.md の「連鎖する診断の抑止」)
-            if exported.contains_error() {
+            if exporter.types().contains_error(exported) {
                 continue;
             }
-            found.push(self.not_comparable(callee, operator, &exported));
+            found.push((callee, operator, exported));
         }
+        let found: Vec<Diagnostic> = found
+            .into_iter()
+            .map(|(callee, operator, operand)| self.not_comparable(callee, operator, operand))
+            .collect();
         self.diagnostics.extend(found);
     }
 
     /// 比べられない型の値を比べた (E2006)。演算子を指す。
-    fn not_comparable(&self, callee: ExprId, operator: FunctionId, operand: &Type) -> Diagnostic {
+    fn not_comparable(&self, callee: ExprId, operator: FunctionId, operand: TypeId) -> Diagnostic {
         let op = &self.program[operator].name;
         let names = &self.program.names;
-        let operand = operand.display(names);
+        let operand = self.types.display(operand, names);
         Diagnostic::error(
             codes::NOT_COMPARABLE,
             format!("values of type `{operand}` cannot be compared with `{op}`"),

@@ -5,13 +5,12 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use eml_diagnostics::{FileId, TextRange, TextSize};
-use eml_hir::{
-    Body, ClauseSource, Closure, DisplayNames, ExprId, ExprKind, LocalId, PatId, PatKind, Res, Stmt,
-};
+use eml_hir::{Body, ClauseSource, Closure, ExprId, ExprKind, LocalId, PatId, PatKind, Res, Stmt};
 
 use crate::check::BodyTyping;
 use crate::kind::{Bound, KindOrigin, KindReason, Provenance, Span, UnusedPath};
-use crate::table::Table;
+use crate::store::TypeStore;
+use crate::table::{Exporter, Table};
 use crate::ty::Linearity;
 
 /// 制御フローの経路ごとの変数の使い方。
@@ -76,8 +75,8 @@ pub(crate) fn constrain(
     body: &Body,
     typing: &BodyTyping,
     table: &mut Table,
+    types: &mut TypeStore,
     reliable: bool,
-    names: &DisplayNames,
 ) {
     let mut by_name: HashMap<&str, Vec<LocalId>> = HashMap::new();
     for (local, data) in body.locals.iter() {
@@ -92,8 +91,8 @@ pub(crate) fn constrain(
         body,
         typing,
         table,
+        types,
         reliable,
-        names,
         by_name,
         scopes: HashMap::new(),
         omitted_states: HashSet::new(),
@@ -111,7 +110,7 @@ struct Usage<'a, 'c> {
     table: &'a mut Table<'c>,
     reliable: bool,
     /// 合成した `return` の節が捨てる状態の型を、診断に書くため。
-    names: &'a DisplayNames,
+    types: &'a mut TypeStore,
     /// 名前ごとの局所変数を、束縛の位置の順に並べたもの。消費漏れの fix と診断が、同じ名前の後の束縛を探すのに使う。
     by_name: HashMap<&'a str, Vec<LocalId>>,
     /// 変数が見える範囲の式。同じ名前の後の束縛が、ある位置で前の変数を隠すかを決めるのに使う。変数を数え終える前に
@@ -321,8 +320,10 @@ impl<'a> Usage<'a, '_> {
                     // 合成した `_` の範囲は `from` の初期値の式なので、報告はそこを指す
                     // (docs/implementation/diagnostics.md の E3004)
                     let reason = if self.omitted_states.contains(&pat) {
+                        // 表示は破れた制約を報告するときだけにする。誤りのない経路で型を表示すると、型の木の大きさの
+                        // 時間がかかるため
                         KindReason::OmittedReturn {
-                            ty: self.table.export(ty).display(self.names).to_string(),
+                            ty: Exporter::new(self.table, self.types).export(ty),
                         }
                     } else {
                         KindReason::Discarded

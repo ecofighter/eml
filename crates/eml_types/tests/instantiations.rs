@@ -33,7 +33,7 @@ fn records(checked: &Checked, module: &str, name: &str) -> String {
             let args: Vec<String> = instantiation
                 .args
                 .iter()
-                .map(|arg| arg.display(&program.names).to_string())
+                .map(|&arg| checked.typed.types.display(arg, &program.names).to_string())
                 .collect();
             let at = checked.files().line_col(file, start);
             (start, format!("{at} {decl} [{}]\n", args.join(", ")))

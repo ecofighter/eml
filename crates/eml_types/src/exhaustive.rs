@@ -9,7 +9,7 @@ use eml_hir::{
     PatId, PatKind, Program, Stmt, TypeDefId, TypeDefKind,
 };
 
-use crate::{BodyTypes, TypedProgram, codes};
+use crate::{BodyTypes, TypeStore, TypedProgram, codes};
 
 /// note に並べる漏れの例の数。1つ多く集めて、ほかにもあるかを知る。
 const SHOWN: usize = 3;
@@ -27,6 +27,7 @@ pub(crate) fn check(program: &Program, typed: &TypedProgram) -> Vec<Diagnostic> 
             program,
             file: program.file(id.module),
             body,
+            store: &typed.types,
             types,
             diagnostics: Vec::new(),
         };
@@ -78,6 +79,7 @@ struct Exhaustive<'a> {
     /// 検査している本体のモジュールのファイル。診断が指す。
     file: FileId,
     body: &'a Body,
+    store: &'a TypeStore,
     types: &'a BodyTypes,
     diagnostics: Vec<Diagnostic>,
 }
@@ -255,7 +257,7 @@ impl<'a> Exhaustive<'a> {
             .types
             .exprs
             .get(scrutinee)
-            .is_some_and(|ty| ty.contains_error())
+            .is_some_and(|&ty| self.store.contains_error(ty))
         {
             return;
         }
@@ -338,7 +340,7 @@ impl<'a> Exhaustive<'a> {
             .types
             .pats
             .get(id)
-            .is_some_and(|ty| ty.contains_error())
+            .is_some_and(|&ty| self.store.contains_error(ty))
         {
             return None;
         }

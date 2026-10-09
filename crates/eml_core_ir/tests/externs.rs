@@ -6,7 +6,7 @@ use eml_core_ir::{FALSE, TRUE, TUPLE, type_repr};
 use eml_extern::{Extern, ExternType};
 use eml_hir::{Function, FunctionKind, ValueItem};
 use eml_test_support::Checked;
-use eml_types::Type;
+use eml_types::{TypeId, TypeKind, TypeStore};
 
 /// 型の行ごとに、その型の値をそのまま返す関数を置く。型検査がその型に与える型を、関数の引数の型から読む。
 const PROBES: &str = "\
@@ -49,52 +49,58 @@ fn checked() -> Checked {
 }
 
 /// `wanted` に合う関数の宣言の型。
-fn declared(checked: &Checked, wanted: impl Fn(&Function) -> bool) -> &Type {
+fn declared(checked: &Checked, wanted: impl Fn(&Function) -> bool) -> TypeId {
     let (id, _) = checked
         .program
         .functions()
         .find(|(_, function)| wanted(function))
         .expect("the function is declared");
-    &checked.typed.decls[&ValueItem::Function(id)].ty
+    checked.typed.decls[&ValueItem::Function(id)].ty
 }
 
-fn extern_type(checked: &Checked, e: Extern) -> &Type {
+fn extern_type(checked: &Checked, e: Extern) -> TypeId {
     declared(checked, |function| {
         function.kind == FunctionKind::Extern(Some(e))
     })
 }
 
-fn has_type_var(ty: &Type) -> bool {
-    match ty {
-        Type::Con { id: _, args } => args.iter().any(has_type_var),
-        Type::Record(fields) => fields.iter().any(|(_, ty)| has_type_var(ty)),
-        Type::Fn {
+fn has_type_var(types: &TypeStore, ty: TypeId) -> bool {
+    match types.kind(ty) {
+        TypeKind::Con { id: _, args } => args.iter().any(|&arg| has_type_var(types, arg)),
+        TypeKind::Record(fields) => fields.iter().any(|&(_, ty)| has_type_var(types, ty)),
+        TypeKind::Fn {
             param,
             effects: _,
             tail: _,
             ret,
-        } => has_type_var(param) || has_type_var(ret),
-        Type::Rigid(_) | Type::Flexible => true,
-        Type::Error => false,
+        } => has_type_var(types, *param) || has_type_var(types, *ret),
+        TypeKind::Rigid(_) | TypeKind::Flexible => true,
+        TypeKind::Error => false,
     }
 }
 
 #[test]
 fn every_extern_function_row_has_the_reprs_of_its_std_signature() {
     let checked = checked();
+    let types = &checked.typed.types;
     for &e in Extern::ALL {
         let row = e.row();
         let mut ty = extern_type(&checked, e);
         let mut params = Vec::new();
         for _ in row.params {
-            let Type::Fn { param, ret, .. } = ty else {
+            let TypeKind::Fn { param, ret, .. } = types.kind(ty) else {
                 panic!("`{}` has an arrow per parameter", row.name);
             };
-            params.push(type_repr(param, &checked.program));
-            ty = ret;
+            params.push(type_repr(types, *param, &checked.program));
+            ty = *ret;
         }
         assert_eq!(params, row.params, "{}", row.name);
-        assert_eq!(type_repr(ty, &checked.program), row.ret, "{}", row.name);
+        assert_eq!(
+            type_repr(types, ty, &checked.program),
+            row.ret,
+            "{}",
+            row.name
+        );
     }
 }
 
@@ -102,15 +108,21 @@ fn every_extern_function_row_has_the_reprs_of_its_std_signature() {
 fn every_extern_type_row_has_the_repr_of_its_type() {
     // 型検査は `Unit` を空のレコードにするので、`Prelude.Unit` の行は `types.rs` の空のレコードの規則と比べる
     let checked = checked();
+    let types = &checked.typed.types;
     for &ty in ExternType::ALL {
         let row = ty.row();
         let name = probe(ty);
         let defined =
             |function: &Function| function.kind == FunctionKind::Defined && function.name == name;
-        let Type::Fn { param, .. } = declared(&checked, defined) else {
+        let TypeKind::Fn { param, .. } = types.kind(declared(&checked, defined)) else {
             panic!("`{name}` is a function");
         };
-        assert_eq!(type_repr(param, &checked.program), row.repr, "{}", row.name);
+        assert_eq!(
+            type_repr(types, *param, &checked.program),
+            row.repr,
+            "{}",
+            row.name
+        );
     }
 }
 
@@ -124,7 +136,11 @@ fn extern_function_rows_not_chosen_by_type_are_monomorphic() {
         if row.by_type {
             continue;
         }
-        assert!(!has_type_var(extern_type(&checked, e)), "{}", row.name);
+        assert!(
+            !has_type_var(&checked.typed.types, extern_type(&checked, e)),
+            "{}",
+            row.name
+        );
     }
 }
 

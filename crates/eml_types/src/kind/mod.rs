@@ -3,8 +3,9 @@
 //! 段1が集める問題とスキームは `problem` に、段2が SCC ごとに解く処理は `solve` にある。
 
 use eml_diagnostics::{FileId, TextRange, TextSize};
-use eml_hir::OperationId;
+use eml_hir::{DisplayNames, OperationId};
 
+use crate::store::{TypeId, TypeStore};
 use crate::table::Row;
 use crate::ty::{Linearity, Multiplicity};
 
@@ -128,16 +129,17 @@ pub(crate) enum KindReason {
     /// 状態のある handler で、省いた `return` の節が状態を `_` で捨てた (docs/spec/expressions.md の「パラメータ付き
     /// handler」)。由来の範囲は `from` の初期値の式である。
     OmittedReturn {
-        /// 状態の型を表示した文字列。ラベルに出す。
-        ty: String,
+        /// 状態の型。ラベルに出す。表示するのは破れた制約を報告するときだけである。
+        ty: TypeId,
     },
 }
 
 impl KindReason {
     /// 同じ範囲の由来を並べる順。種類は宣言の順で、同じ種類は中身の名前と位置を順に比べる。中身の違う由来は鍵も違うので、
     /// 同じ値の持ち越しの違反から報告する1件を、制約が並んだ順に左右されずに選べる
-    /// (docs/implementation/diagnostics.md の E3006)。
-    pub fn order_key(&self) -> (u8, Vec<KeyPart>) {
+    /// (docs/implementation/diagnostics.md の E3006)。型は表示した文字列で比べる。ID は検査の順で決まるので、鍵に
+    /// すると並びが検査の順に左右される。
+    pub fn order_key(&self, types: &TypeStore, names: &DisplayNames) -> (u8, Vec<KeyPart>) {
         match self {
             KindReason::UsedMoreThanOnce {
                 name,
@@ -182,7 +184,10 @@ impl KindReason {
                 };
                 (9, [vec![text(name)], inner].concat())
             }
-            KindReason::OmittedReturn { ty } => (10, vec![text(ty)]),
+            KindReason::OmittedReturn { ty } => (
+                10,
+                vec![KeyPart::Text(types.display(*ty, names).to_string())],
+            ),
         }
     }
 }
@@ -359,32 +364,37 @@ pub(crate) struct Carry {
 
 #[cfg(test)]
 mod tests {
-    use eml_hir::ModuleId;
+    use eml_extern::ExternType;
+    use eml_hir::{ModuleId, Program};
     use la_arena::{Idx, RawIdx};
 
     use super::*;
+    use crate::store::TypeKind;
 
     #[test]
     fn reasons_have_a_fixed_order() {
+        let program = crate::test_program("");
+        let mut types = TypeStore::new(&program);
+        let reasons = distinct_reasons(&program, &mut types);
+        let key = |reason: &KindReason| reason.order_key(&types, &program.names);
         let used = KindReason::UsedMoreThanOnce {
             name: "f".to_string(),
             first: TextRange::new(1.into(), 2.into()),
             second: TextRange::new(3.into(), 4.into()),
         };
         let unified = KindReason::Unified;
-        assert!(used.order_key() < unified.order_key());
+        assert!(key(&used) < key(&unified));
         let a = KindReason::Passed("a".to_string());
         let b = KindReason::Passed("b".to_string());
-        assert!(a.order_key() < b.order_key());
+        assert!(key(&a) < key(&b));
 
-        let reasons = distinct_reasons();
         for (i, x) in reasons.iter().enumerate() {
             for y in &reasons[i + 1..] {
-                assert_ne!(x.order_key(), y.order_key(), "{x:?} and {y:?}");
+                assert_ne!(key(x), key(y), "{x:?} and {y:?}");
             }
         }
         let sorted = |mut list: Vec<KindReason>| {
-            list.sort_by_cached_key(KindReason::order_key);
+            list.sort_by_cached_key(key);
             list
         };
         let reversed = reasons.iter().rev().cloned().collect();
@@ -394,7 +404,11 @@ mod tests {
     }
 
     /// 中身が1か所だけ違う由来を、種類ごとに並べる。
-    fn distinct_reasons() -> Vec<KindReason> {
+    fn distinct_reasons(program: &Program, types: &mut TypeStore) -> Vec<KindReason> {
+        let file = types.intern(TypeKind::Con {
+            id: program.extern_type(ExternType::File),
+            args: Vec::new(),
+        });
         let range = |start: u32, end: u32| TextRange::new(start.into(), end.into());
         let op = |index: u32| {
             OperationId::new(
@@ -477,12 +491,8 @@ mod tests {
             through(Some(inner(a, 1, InnerLabel::Kept("x".to_string())))),
             through(Some(inner(a, 1, InnerLabel::Through("keep2".to_string())))),
             through(Some(inner(a, 5, InnerLabel::Value))),
-            KindReason::OmittedReturn {
-                ty: "File".to_string(),
-            },
-            KindReason::OmittedReturn {
-                ty: "String".to_string(),
-            },
+            KindReason::OmittedReturn { ty: file },
+            KindReason::OmittedReturn { ty: types.string() },
         ]
     }
 }
