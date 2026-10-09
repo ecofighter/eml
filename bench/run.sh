@@ -10,20 +10,21 @@ if [[ "$(uname -s)" != "Darwin" ]]; then
 fi
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# 中央値を1つの値に決めるため、奇数にする
 runs=3
 
 cargo build --release -p eml_cli --manifest-path "$root/Cargo.toml" >&2
 eml="$root/target/release/eml"
 
-# 3つの値の中央値
+# `runs` 個の値の中央値
 median() {
-  printf '%s\n' "$@" | sort -n | sed -n '2p'
+  printf '%s\n' "$@" | sort -n | sed -n "$(( (runs + 1) / 2 ))p"
 }
 
 echo "- 機種: $(sysctl -n hw.model) ($(sysctl -n machdep.cpu.brand_string))"
 echo "- OS: macOS $(sw_vers -productVersion) ($(sw_vers -buildVersion))"
 echo "- rustc: $(rustc -V)"
-echo "- コミット: $(git -C "$root" rev-parse --short HEAD)"
+echo "- コミット: $(git -C "$root" describe --always --dirty --abbrev=7)"
 echo
 echo "| プログラム | instructions retired | 実時間 (s) |"
 echo "|---|---:|---:|"
@@ -38,8 +39,16 @@ for file in "$root"/bench/*.em; do
       echo "$report" >&2
       exit 1
     fi
-    instructions+=("$(awk '/instructions retired/ { print $1 }' <<<"$report")")
-    seconds+=("$(awk '/ real / { print $1 }' <<<"$report")")
+    count="$(awk '/instructions retired/ { print $1 }' <<<"$report")"
+    elapsed="$(awk '/ real / { print $1 }' <<<"$report")"
+    # macOS の版や実行の環境によって `time -l` が数を出さないと、表に空の欄が混ざるので止める
+    if [[ ! "$count" =~ ^[0-9]+$ || ! "$elapsed" =~ ^[0-9]+\.[0-9]+$ ]]; then
+      echo "bench/run.sh: $name の /usr/bin/time -l の出力から命令の数か実時間を読めなかった" >&2
+      echo "$report" >&2
+      exit 1
+    fi
+    instructions+=("$count")
+    seconds+=("$elapsed")
   done
   echo "| \`$name\` | $(median "${instructions[@]}") | $(median "${seconds[@]}") |"
 done

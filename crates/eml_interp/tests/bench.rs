@@ -19,7 +19,8 @@ fn stats(name: &str, expected: &str) -> RunStats {
     let text = std::fs::read_to_string(&path)
         .unwrap_or_else(|error| panic!("{}: {error}", path.display()));
     let (out, result) = run_stats(&text);
-    assert_eq!(out, expected);
+    // 実行時エラーやリークで止まると出力も欠けるので、出力の差だけでなく止まった理由も見せる
+    assert_eq!(out, expected, "{result:?}");
     result.unwrap_or_else(|error| panic!("{error}"))
 }
 
@@ -38,6 +39,14 @@ fn every_program_in_bench_has_a_test() {
         .collect();
     names.sort();
     assert_eq!(names, PROGRAMS);
+    // 一覧に足しただけでテストの関数を書かないと、そのプログラムの回数が固定されないまま通る
+    let source = include_str!("bench.rs");
+    for name in PROGRAMS {
+        assert!(
+            source.contains(&format!("stats(\"{name}\"")),
+            "`{name}` has no test function"
+        );
+    }
 }
 
 #[test]

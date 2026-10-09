@@ -106,8 +106,9 @@ pub(crate) struct Runtime<'p> {
     arities: Vec<usize>,
     /// `find_handler` が調べたフレームの数 (`RunStats::handler_visits`)。
     pub(crate) handler_visits: u64,
-    /// 機械が実行した `box` と `unbox` の数 (`RunStats::boxes`、`RunStats::unboxes`)。
+    /// 機械が実行した `box` の数 (`RunStats::boxes`)。
     pub(crate) boxes: u64,
+    /// 機械が実行した `unbox` の数 (`RunStats::unboxes`)。
     pub(crate) unboxes: u64,
 }
 

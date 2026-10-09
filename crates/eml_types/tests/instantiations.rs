@@ -110,7 +110,7 @@ fn an_undecided_type_argument_is_flexible() {
 
 #[test]
 fn a_clause_variable_is_shown_like_the_function_variable_of_the_same_name() {
-    // 節の `x` の型は操作の型変数 `a` から作った rigid な変数で、関数の `a` と同じ名前で書き出す。区別は S4 で決める
+    // 節の `x` の型は操作の型変数 `a` から作った rigid な変数で、関数の `a` と同じ名前で書き出す。区別は S4b で決める
     // (docs/implementation/architecture.md の「`eml_types` の内部」)
     let text = format!(
         "{ID}effect Pick where\n  pick : a -> a\n\nrun : a -> a\nrun v =\n  handle id v with\n    | pick x k -> k (id x)"
