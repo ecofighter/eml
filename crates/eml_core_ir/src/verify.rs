@@ -1,9 +1,11 @@
 //! Core IR の不変条件の検査 (docs/spec/core-ir.md)。ブロックの列の形 (R1〜R4)、変数の定義と支配 (R5、R6)、
-//! `jump` と `unpack` と `return` の Repr、extern の引数と結果の Repr、`box` と `unbox` のオペランドと束縛の Repr
-//! (R8)、データの配置 (R9) と、引き継いだ検査 (`mask` の順、`handle` の節の数、再開できるかどうか、直接呼び出しと
-//! extern の引数の数、型で選ぶ extern、case の種類) を確かめる (`verify_scopes`)。Perceus の後は、RC の対象の所有の
-//! 多重集合と、呼び出しの後に見える変数 (R6、R7) も確かめる (`verify`)。`switch`、`unpack`、`unbox` は値を読むだけ
-//! である。`switch` と `unpack` のフィールドは値から借りて始まり、自分か持ち主が所有を持つ間だけ有効である。
+//! `unpack` の Repr、`jump` と `return` の Repr の互換、extern の引数と結果の Repr、`box` と `unbox` のオペランドと
+//! 束縛の Repr (R8)、データの配置 (R9) と、引き継いだ検査 (`mask` の順、`handle` の節の数、再開できるかどうか、
+//! 直接呼び出しと extern の引数の数、型で選ぶ extern、case の種類) を確かめる (`verify_scopes`)。translate の直後は、
+//! `box` と `unbox` を確かめる代わりに、`box`、`unbox`、`tail` がまだないことを確かめる (`verify_translated`)。
+//! Perceus の後は、RC の対象の所有の多重集合と、呼び出しの後に見える変数 (R6、R7) も確かめる (`verify`)。`switch`、
+//! `unpack`、`unbox` は値を読むだけである。`switch` と `unpack` のフィールドは値から借りて始まり、自分か持ち主が
+//! 所有を持つ間だけ有効である。
 //!
 //! R9 は、`con`、タグの `switch`、`unpack`、`release` を、その命令が指す配置と比べる。配置を持つ `switch` はタグの
 //! case を持つものだけで、リテラルの `switch` では scrutinee の Repr を比べる。値がどの配置で作られたかは
@@ -49,9 +51,18 @@ pub fn verify_scopes(program: &Program) -> Result<(), VerifyError> {
     verify_at(program, Level::Scopes)
 }
 
-/// 検査の段。Perceus より前の IR には、所有を確かめる材料 (`dup`、`decref`、`release`、`save`) がまだない。
+/// translate の直後の IR を確かめる。範囲の段と同じ形と範囲を確かめ、box の挿入と縮約が作るもの (`box`、`unbox`、
+/// `tail`) がまだないことを確かめる。box の挿入は、末尾呼び出しと変換のない入力を前提にするためである
+/// (docs/spec/core-ir.md の「パス」)。
+pub fn verify_translated(program: &Program) -> Result<(), VerifyError> {
+    verify_at(program, Level::Translated)
+}
+
+/// 検査の段。段はパスの順に直線に並ぶ。translate の直後の IR には、box の挿入と縮約が作るものがまだない。Perceus
+/// より前の IR には、所有を確かめる材料 (`dup`、`decref`、`release`、`save`) がまだない。
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Level {
+    Translated,
     Scopes,
     Ownership,
 }
@@ -319,6 +330,9 @@ struct Checker<'a> {
     /// (docs/spec/core-ir.md の「verifier」)。
     owners: Vec<Option<VarId>>,
     origins: Vec<Option<Origin>>,
+    /// 変数の番号ごとの、`never` の操作の `perform` の束縛かどうか。束縛の使いには制御が届かないので、互換の位置で
+    /// 位置と比べない。
+    never: Vec<bool>,
 }
 
 impl<'a> Checker<'a> {
@@ -347,6 +361,7 @@ impl<'a> Checker<'a> {
             closures: HashMap::new(),
             owners: vec![None; function.vars.len()],
             origins: vec![None; function.vars.len()],
+            never: vec![false; function.vars.len()],
         }
     }
 
@@ -433,10 +448,19 @@ impl<'a> Checker<'a> {
                 self.check_rhs(owned, *var, rhs)?;
                 match rhs {
                     Rhs::Call {
-                        call: _,
+                        call,
                         mask: _,
                         saved,
-                    } => self.after_call(owned, saved)?,
+                    } => {
+                        self.never[var.0 as usize] = matches!(
+                            call,
+                            Call::Perform {
+                                resumable: false,
+                                ..
+                            }
+                        );
+                        self.after_call(owned, saved)?;
+                    }
                     Rhs::MakeClosure(target, args) => {
                         self.closures.insert(*var, (*target, args.len()));
                     }
@@ -528,20 +552,19 @@ impl<'a> Checker<'a> {
         match term {
             Term::Return(atom) => {
                 self.consume(&mut owned, *atom)?;
-                if let Atom::Var(var) = *atom {
-                    let repr = self.function.repr(var);
-                    if repr != self.function.ret {
-                        return Err(format!(
-                            "`{}` ({}) is returned from a function that returns {}",
-                            self.name(var),
-                            repr.name(),
-                            self.function.ret.name()
-                        ));
-                    }
+                if !self.passes(*atom, self.function.ret) {
+                    return Err(format!(
+                        "{} is returned from a function that returns {}",
+                        self.typed_atom_text(*atom),
+                        self.function.ret.name()
+                    ));
                 }
                 self.nothing_owned(&owned)
             }
             Term::TailCall { call, mask } => {
+                if self.level == Level::Translated {
+                    return Err(format!("{} is formed before contract", tail_text(call)));
+                }
                 self.check_mask(call, mask)?;
                 self.check_call(&mut owned, call)?;
                 self.nothing_owned(&owned)
@@ -641,34 +664,29 @@ impl<'a> Checker<'a> {
         Ok(())
     }
 
-    /// `jump` の実引数が変数なら、行き先の引数と Repr が同じである。定数は、行き先の引数の Repr に収まる (R8)。
+    /// `jump` の実引数は、行き先の引数と互換である (R8)。
     fn check_passed(&self, target: BlockId, arg: Atom, param: VarId) -> Result<(), String> {
         let expected = self.function.repr(param);
-        if let Atom::Var(var) = arg {
-            let repr = self.function.repr(var);
-            if repr != expected {
-                return Err(format!(
-                    "a jump to b{} passes `{}` ({}) to `{}` ({})",
-                    target.0,
-                    self.name(var),
-                    repr.name(),
-                    self.name(param),
-                    expected.name()
-                ));
-            }
+        if self.passes(arg, expected) {
             return Ok(());
         }
-        if self.fits(arg, expected) {
-            Ok(())
-        } else {
-            Err(format!(
+        Err(match arg {
+            Atom::Var(var) => format!(
+                "a jump to b{} passes `{}` ({}) to `{}` ({})",
+                target.0,
+                self.name(var),
+                self.function.repr(var).name(),
+                self.name(param),
+                expected.name()
+            ),
+            _ => format!(
                 "a jump to b{} passes {} to `{}` ({})",
                 target.0,
                 self.atom_text(arg),
                 self.name(param),
                 expected.name()
-            ))
-        }
+            ),
+        })
     }
 
     /// 変数は Repr が同じとき、定数はその Repr の値になれるときに収まる (R8)。
@@ -680,6 +698,19 @@ impl<'a> Checker<'a> {
             // 引数のないコンストラクタは、`enum` のタグにも、`tobj` の即値にもなる
             Atom::Tag(_) => matches!(expected, Repr::Enum | Repr::TObj),
             Atom::Fn(_) => expected == Repr::TObj,
+        }
+    }
+
+    /// 互換の位置 (`jump`、`return`) に収まる値。変数は Repr が互換なときに収まる。`never` の操作の `perform` の束縛は
+    /// どの位置にも収まる。定数は `fits` に加えて、`()` が `tobj` にも収まる。`Int` の定数は `tobj` に収まらないので、
+    /// box の挿入が `box` する (docs/spec/core-ir.md の「値の表現」)。
+    fn passes(&self, atom: Atom, expected: Repr) -> bool {
+        match atom {
+            Atom::Var(var) => {
+                self.never[var.0 as usize] || self.function.repr(var).compatible(expected)
+            }
+            Atom::Unit => expected.compatible(Repr::Unit),
+            Atom::Int(_) | Atom::Tag(_) | Atom::Fn(_) => self.fits(atom, expected),
         }
     }
 
@@ -887,7 +918,7 @@ impl<'a> Checker<'a> {
     /// 呼び出しの後に見える変数は、退避した変数と結果だけである。退避する変数は呼び出しの前に見えていて、RC の対象の
     /// 部分は所有している多重集合とちょうど一致する。フレームがちょうど所有している参照だけを持つためである (R7)。
     fn after_call(&mut self, owned: &Owned, saved: &[VarId]) -> Result<(), String> {
-        if self.level == Level::Scopes {
+        if self.level != Level::Ownership {
             if saved.is_empty() {
                 return Ok(());
             }
@@ -990,7 +1021,7 @@ impl<'a> Checker<'a> {
     /// 書き換わらないので、そこからたどれる物体もすべて生きている (docs/spec/core-ir.md の「verifier」)。
     fn read(&self, owned: &Owned, var: VarId, what: &str) -> Result<(), String> {
         self.visible(var)?;
-        if self.level == Level::Scopes
+        if self.level != Level::Ownership
             || !self.function.repr(var).is_rc()
             || owned.contains_key(&var)
         {
@@ -1096,7 +1127,7 @@ impl<'a> Checker<'a> {
 
     /// RC の命令は Perceus だけが入れる。
     fn rc_allowed(&self, var: VarId, what: &str) -> Result<(), String> {
-        if self.level == Level::Scopes {
+        if self.level != Level::Ownership {
             return Err(format!("`{}` is {what} before Perceus", self.name(var)));
         }
         Ok(())
@@ -1114,7 +1145,7 @@ impl<'a> Checker<'a> {
             }
             Atom::Fn(_) | Atom::Int(_) | Atom::Unit | Atom::Tag(_) => return Ok(()),
         };
-        if self.level == Level::Scopes || !self.function.repr(var).is_rc() {
+        if self.level != Level::Ownership || !self.function.repr(var).is_rc() {
             return self.visible(var);
         }
         self.give_up(owned, var, "used")
@@ -1218,6 +1249,12 @@ impl<'a> Checker<'a> {
             // `unit` の値、`()`、`#N`、`&f`、参照は命令なしで `tobj` に収まるので、`box` しない。1つの値の書き方を1つに保つ
             // (docs/spec/core-ir.md の「値の表現」)
             Rhs::Box(atom) => {
+                if self.level == Level::Translated {
+                    return Err(format!(
+                        "{} is boxed before the boxing pass",
+                        self.atom_text(*atom)
+                    ));
+                }
                 let boxable = match *atom {
                     Atom::Var(operand) => self.function.repr(operand).needs_box(),
                     Atom::Int(_) => true,
@@ -1241,6 +1278,12 @@ impl<'a> Checker<'a> {
             }
             // `obj` はつねにヒープの物体を指すので、スカラーを入れた値にならない
             Rhs::Unbox(atom) => {
+                if self.level == Level::Translated {
+                    return Err(format!(
+                        "{} is unboxed before the boxing pass",
+                        self.atom_text(*atom)
+                    ));
+                }
                 let operand = match *atom {
                     Atom::Var(operand) if self.function.repr(operand) == Repr::TObj => operand,
                     _ => {
@@ -1526,6 +1569,17 @@ impl<'a> Checker<'a> {
             CasePattern::Int(n) => n.to_string(),
             CasePattern::String(index) => format!("{:?}", self.program.strings[index as usize]),
         }
+    }
+}
+
+/// 変換の段が拒む `tail` の言い方。handle の命令は、ほかの文言と同じく handler と呼ぶ。
+fn tail_text(call: &Call) -> &'static str {
+    match call {
+        Call::Direct(_, _) => "a tail call",
+        Call::Apply(_, _) => "a tail apply",
+        Call::Perform { .. } => "a tail perform",
+        Call::Resume { .. } => "a tail resume",
+        Call::Handle { .. } => "a tail handler",
     }
 }
 

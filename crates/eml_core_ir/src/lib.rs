@@ -4,6 +4,7 @@
 use eml_extern::Extern;
 pub use eml_extern::Repr;
 
+mod boxing;
 mod contract;
 pub mod liveness;
 mod perceus;
@@ -13,13 +14,14 @@ mod text;
 mod translate;
 mod verify;
 
+pub use boxing::boxing;
 pub use contract::contract;
 pub use perceus::perceus;
 pub use pipeline::{Pass, lower, lower_until};
 pub use pretty::{pretty, pretty_with_positions};
 pub use text::{ParseError, parse};
 pub use translate::type_repr;
-pub use verify::{VerifyError, verify, verify_scopes};
+pub use verify::{VerifyError, verify, verify_scopes, verify_translated};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Program {

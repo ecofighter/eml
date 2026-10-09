@@ -54,6 +54,17 @@ impl Repr {
         Repr::BOXED_SCALARS.contains(&self)
     }
 
+    /// 互換の位置で、命令なしで値を渡せる2つの Repr。同じ Repr、参照どうし、`unit` と `tobj` である。推移的でない
+    /// (`unit` と `obj` は互換でない) ので、どの検査も実際の2つの位置を比べる (docs/spec/core-ir.md の「値の表現」)。
+    pub fn compatible(self, other: Repr) -> bool {
+        self == other
+            || (self.is_rc() && other.is_rc())
+            || matches!(
+                (self, other),
+                (Repr::Unit, Repr::TObj) | (Repr::TObj, Repr::Unit)
+            )
+    }
+
     /// テキストの形での名前 (docs/implementation/testing.md の「Core IR のテキストの形」)。
     pub fn name(self) -> &'static str {
         match self {

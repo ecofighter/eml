@@ -170,33 +170,33 @@ fn by_call(x.0: int) -> int {
   let r.1: int = call by_call(x.0)
   return r.1
 }
-fn by_apply(f.0: tobj) -> int {
-  let r.1: int = mask [Ask] apply f.0(1)
+fn by_apply(f.0: tobj) -> tobj {
+  let r.1: tobj = mask [Ask] apply f.0(())
   return r.1
 }
-fn by_perform(s.0: obj) -> int {
-  let r.1: int = perform Ask.ask(s.0)
+fn by_perform(s.0: obj) -> tobj {
+  let r.1: tobj = perform Ask.ask(s.0)
   return r.1
 }
-fn by_handle() -> int {
-  let r.0: int = handle Ask((), &body) { ask: &clause } return &ret
+fn by_handle() -> tobj {
+  let r.0: tobj = handle Ask((), &body) { ask: &clause } return &ret
   return r.0
 }
-fn by_resume(k.0: tobj) -> int {
-  let r.1: int = resume k.0(1, ())
+fn by_resume(k.0: tobj) -> tobj {
+  let r.1: tobj = resume k.0((), ())
   return r.1
 }
 fn not_returned(x.0: int) -> int {
   let r.1: int = call by_call(x.0)
   return x.0
 }
-fn body(u.0: unit) -> int {
-  return 1
+fn body(u.0: unit) -> tobj {
+  return ()
 }
-fn clause(s.0: obj, k.1: tobj, t.2: unit) -> int {
-  return 2
+fn clause(s.0: obj, k.1: tobj, t.2: unit) -> tobj {
+  return ()
 }
-fn ret(v.0: int, t.1: unit) -> int {
+fn ret(v.0: tobj, t.1: unit) -> tobj {
   return v.0
 }
 ";
@@ -205,30 +205,64 @@ fn ret(v.0: int, t.1: unit) -> int {
     fn by_call(x.0: int) -> int {
       tail call by_call(x.0)
     }
-    fn by_apply(f.0: tobj) -> int {
-      tail mask [Ask] apply f.0(1)
+    fn by_apply(f.0: tobj) -> tobj {
+      tail mask [Ask] apply f.0(())
     }
-    fn by_perform(s.0: obj) -> int {
+    fn by_perform(s.0: obj) -> tobj {
       tail perform Ask.ask(s.0)
     }
-    fn by_handle() -> int {
+    fn by_handle() -> tobj {
       tail handle Ask((), &body) { ask: &clause } return &ret
     }
-    fn by_resume(k.0: tobj) -> int {
-      tail resume k.0(1, ())
+    fn by_resume(k.0: tobj) -> tobj {
+      tail resume k.0((), ())
     }
     fn not_returned(x.0: int) -> int {
       let r.1: int = call by_call(x.0)
       return x.0
     }
-    fn body(u.0: unit) -> int {
-      return 1
+    fn body(u.0: unit) -> tobj {
+      return ()
     }
-    fn clause(s.0: obj, k.1: tobj, t.2: unit) -> int {
-      return 2
+    fn clause(s.0: obj, k.1: tobj, t.2: unit) -> tobj {
+      return ()
     }
-    fn ret(v.0: int, t.1: unit) -> int {
+    fn ret(v.0: tobj, t.1: unit) -> tobj {
       return v.0
+    }
+    ");
+}
+
+#[test]
+fn a_call_whose_result_is_not_compatible_with_the_ret_is_not_a_tail_call() {
+    // `g` の `unit` は `r.0` の `tobj` と、`r.0` は `f` の `obj` と互換である。互換は推移的でないので、`unit` と `obj`
+    // を直接つなぐ末尾呼び出しにはしない
+    let text = "\
+fn f() -> obj {
+  let r.0: tobj = call g()
+  return r.0
+}
+fn g() -> unit {
+  return ()
+}
+";
+    assert_eq!(contract_text(text), text);
+}
+
+#[test]
+fn a_never_perform_returned_at_the_end_becomes_a_tail_call_in_any_function() {
+    // `never` の操作の `perform` は戻らないので、結果はどの `ret` とも互換である
+    let text = "\
+effect Fail { never fail/1 }
+fn f(s.0: obj) -> int {
+  let r.1: int = perform never Fail.fail(s.0)
+  return r.1
+}
+";
+    insta::assert_snapshot!(contract_text(text), @"
+    effect Fail { never fail/1 }
+    fn f(s.0: obj) -> int {
+      tail perform never Fail.fail(s.0)
     }
     ");
 }
@@ -254,10 +288,11 @@ fn a_returned_match_value_becomes_tail_calls_in_each_arm() {
     let text = "data Option a =\n  | None\n  | Some a\n\nf : Int -> Int\nf x = x + 1\n\ng : Int -> Int\ng x = x - 1\n\nh : Option Int -> Int\nh o =\n  let y = match o with\n    | Some v -> f v\n    | None -> g 0\n  let z = y\n  z\n\nmain : Unit -> <IO> Unit\nmain () = println (show_int (h None))";
     insta::assert_snapshot!(function(&core_text(text, Pass::Contract), "h"), @"
     fn h(o.0: tobj) -> int {
-      switch o.0 Option { #0 -> b1, #1(v.1: int) -> b2 }
+      switch o.0 Option { #0 -> b1, #1(v.5: tobj) -> b2 }
     b1:
       tail call g(0)
     b2:
+      let v.1: int = unbox v.5
       tail call f(v.1)
     }
     ");
@@ -270,7 +305,8 @@ fn returning_a_field_of_a_call_result_is_not_a_tail_call() {
     insta::assert_snapshot!(function(&core_text(text, Pass::Contract), "first"), @"
     fn first(x.0: int) -> int {
       let t.1: obj = call split(x.0)
-      unpack t.1 (,) #0(y.2: int, x.3: int)
+      unpack t.1 (,) #0(y.4: tobj, x.5: tobj)
+      let y.2: int = unbox y.4
       return y.2
     }
     ");
@@ -293,9 +329,10 @@ fn calls_in_tail_position_are_tail_calls() {
     }
     ");
     insta::assert_snapshot!(function(&shown, "call_twice"), @"
-    fn call_twice(f.0: tobj, x.1: int) -> int {
-      let t.2: int = apply f.0(x.1)
-      tail apply f.0(t.2)
+    fn call_twice(f.0: tobj, x.1: int) -> tobj {
+      let x.4: tobj = box x.1
+      let t.5: tobj = apply f.0(x.4)
+      tail apply f.0(t.5)
     }
     ");
 }

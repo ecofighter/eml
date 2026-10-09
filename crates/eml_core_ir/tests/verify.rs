@@ -1,7 +1,7 @@
 //! Core IR のテキストで書いた IR で、verifier が正しいものを受け入れ、壊れたものを拒むことを確かめる (docs/spec/core-ir.md)。
 //! 構造の規則 R1 から R9 と、前の形の IR から引き継いだ検査を1つずつ確かめる。
 
-use eml_core_ir::{Program, Stmt, Term, parse, verify, verify_scopes};
+use eml_core_ir::{Program, Stmt, Term, parse, verify, verify_scopes, verify_translated};
 
 /// 手で書く IR の配置の行。プログラムの先頭に置く。
 const BOOL: &str = "layout Prelude.Bool { False, True }\n";
@@ -19,6 +19,10 @@ fn check(text: &str) -> Result<(), String> {
 
 fn check_scopes(text: &str) -> Result<(), String> {
     verify_scopes(&read(text)).map_err(|error| error.to_string())
+}
+
+fn check_translated(text: &str) -> Result<(), String> {
+    verify_translated(&read(text)).map_err(|error| error.to_string())
 }
 
 /// spec の「テキストの形」の例。RC の対象の変数がないので、どちらの段でも通る。
@@ -680,6 +684,102 @@ fn a_returned_variable_has_the_repr_of_the_function() {
         check_scopes(text),
         Err("`s.0` (obj) is returned from a function that returns int in `f`".to_string())
     );
+}
+
+/// `obj` の値と `unit` の値と `()` を、`tobj` の引数に渡す。`decrefs` は、所有の段で受けた値を手放す文である。
+fn compatible_jump(decrefs: &str) -> String {
+    format!(
+        "fn f(s.0: obj, u.1: unit) -> tobj {{
+  jump b1(s.0, u.1, ())
+b1(a.2: tobj, b.3: tobj, c.4: tobj):
+{decrefs}  return a.2
+}}
+"
+    )
+}
+
+#[test]
+fn a_jump_passes_values_to_compatible_parameters() {
+    // `obj` と `tobj`、`unit` と `tobj` は互換で、命令なしで行き来する (docs/spec/core-ir.md の「値の表現」)
+    assert_eq!(check_translated(&compatible_jump("")), Ok(()));
+    assert_eq!(check_scopes(&compatible_jump("")), Ok(()));
+    assert_eq!(
+        check(&compatible_jump("  decref b.3\n  decref c.4\n")),
+        Ok(())
+    );
+}
+
+#[test]
+fn a_returned_value_is_compatible_with_the_function() {
+    let text = "\
+fn f() -> tobj {
+  return ()
+}
+fn g(s.0: obj) -> tobj {
+  return s.0
+}
+fn h(t.0: tobj) -> obj {
+  return t.0
+}
+fn i(u.0: unit) -> tobj {
+  return u.0
+}
+";
+    assert_eq!(check_translated(text), Ok(()));
+    assert_eq!(check_scopes(text), Ok(()));
+    assert_eq!(check(text), Ok(()));
+}
+
+#[test]
+fn a_returned_value_that_is_not_compatible_is_rejected() {
+    // `Int` の定数は `tobj` に収まらない。`unit` は `tobj` と互換でも、`obj` とは互換でない
+    for (text, message) in [
+        (
+            "fn f() -> tobj {\n  return 5\n}\n",
+            "5 is returned from a function that returns tobj in `f`",
+        ),
+        (
+            "fn f() -> obj {\n  return ()\n}\n",
+            "() is returned from a function that returns obj in `f`",
+        ),
+        (
+            "fn f(u.0: unit) -> obj {\n  return u.0\n}\n",
+            "`u.0` (unit) is returned from a function that returns obj in `f`",
+        ),
+    ] {
+        assert_eq!(check_translated(text), Err(message.to_string()));
+        assert_eq!(rejected_at_both_levels(text), message);
+    }
+}
+
+#[test]
+fn the_uses_of_a_never_perform_binder_are_not_compared() {
+    // `never` の操作の `perform` の束縛の使いには制御が届かないので、互換の位置 (`return` の値、`jump` の実引数、
+    // 呼び出しの引数) で位置と比べない。縮約は、`f` の形をそのまま `tail perform never` にする
+    let text = "\
+effect Fail { never fail/1 }
+fn f(s.0: obj) -> tobj {
+  let t.1: int = perform never Fail.fail(s.0)
+  return t.1
+}
+fn g(s.0: obj) -> tobj {
+  let t.1: int = perform never Fail.fail(s.0)
+  jump b1(t.1)
+b1(a.2: tobj):
+  return a.2
+}
+fn h(s.0: obj) -> tobj {
+  let t.1: int = perform never Fail.fail(s.0)
+  let r.2: tobj = call k(t.1)
+  return r.2
+}
+fn k(x.0: tobj) -> tobj {
+  return x.0
+}
+";
+    assert_eq!(check_translated(text), Ok(()));
+    assert_eq!(check_scopes(text), Ok(()));
+    assert_eq!(check(text), Ok(()));
 }
 
 #[test]
@@ -1964,6 +2064,85 @@ fn entry$main(c.0: tobj) -> unit {
 }
 ";
     assert_eq!(check(text), Ok(()));
+}
+
+// 変換の段
+
+#[test]
+fn the_translated_level_rejects_tail_calls() {
+    // 末尾呼び出しは縮約だけが作る。box の挿入は、末尾呼び出しのない入力の `let` と `return` から末尾の位置を見る
+    let handler = "\
+fn body(u.0: unit) -> tobj {
+  return ()
+}
+fn clause(s.0: obj, k.1: tobj, t.2: unit) -> tobj {
+  return ()
+}
+fn ret(v.0: tobj, t.1: unit) -> tobj {
+  return v.0
+}
+";
+    for (text, message) in [
+        (
+            "fn f(x.0: int) -> int {\n  tail call f(x.0)\n}\n".to_string(),
+            "a tail call is formed before contract in `f`",
+        ),
+        (
+            "fn f(c.0: tobj) -> tobj {\n  tail apply c.0(())\n}\n".to_string(),
+            "a tail apply is formed before contract in `f`",
+        ),
+        (
+            "effect Ask { ask/1 }\nfn f(s.0: obj) -> tobj {\n  tail perform Ask.ask(s.0)\n}\n"
+                .to_string(),
+            "a tail perform is formed before contract in `f`",
+        ),
+        (
+            "fn f(k.0: tobj) -> tobj {\n  tail resume k.0((), ())\n}\n".to_string(),
+            "a tail resume is formed before contract in `f`",
+        ),
+        (
+            format!(
+                "effect Ask {{ ask/1 }}\nfn f() -> tobj {{\n  tail handle Ask((), &body) {{ ask: &clause }} return &ret\n}}\n{handler}"
+            ),
+            "a tail handler is formed before contract in `f`",
+        ),
+    ] {
+        assert_eq!(check_translated(&text), Err(message.to_string()));
+        assert_eq!(check_scopes(&text), Ok(()));
+    }
+}
+
+#[test]
+fn the_translated_level_rejects_boxes_and_unboxes() {
+    // `box` と `unbox` は box の挿入だけが入れる
+    assert_eq!(
+        check_translated(&boxed_round_trip("")),
+        Err("`n.0` is boxed before the boxing pass in `f`".to_string())
+    );
+    assert_eq!(
+        check_translated("fn f() -> tobj {\n  let b.0: tobj = box 5\n  return b.0\n}\n"),
+        Err("5 is boxed before the boxing pass in `f`".to_string())
+    );
+    assert_eq!(
+        check_translated("fn f(b.0: tobj) -> int {\n  let n.1: int = unbox b.0\n  return n.1\n}\n"),
+        Err("`b.0` is unboxed before the boxing pass in `f`".to_string())
+    );
+}
+
+#[test]
+fn the_translated_level_rejects_what_perceus_inserts() {
+    let dup = "fn twice(s.0: obj) -> obj {\n  dup s.0\n  let t.1: obj = extern Prelude.++(s.0, s.0)\n  return t.1\n}\n";
+    assert_eq!(
+        check_translated(dup),
+        Err("`s.0` is duplicated before Perceus in `twice`".to_string())
+    );
+    let saved = format!(
+        "{IDENTITY}fn f(s.0: obj) -> obj {{\n  let t.1: obj = call g(s.0) save [s.0]\n  return t.1\n}}\n"
+    );
+    assert_eq!(
+        check_translated(&saved),
+        Err("a call saves [s.0] before Perceus in `f`".to_string())
+    );
 }
 
 // box と unbox

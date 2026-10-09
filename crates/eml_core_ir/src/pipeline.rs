@@ -5,12 +5,16 @@ use eml_diagnostics::SourceFiles;
 use eml_hir::{FunctionId, Program as HirProgram};
 use eml_types::TypedProgram;
 
-use crate::{Program, VerifyError, contract, perceus, translate, verify, verify_scopes};
+use crate::{
+    Program, VerifyError, boxing, contract, perceus, translate, verify, verify_scopes,
+    verify_translated,
+};
 
 /// `lower_until` で止める位置。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Pass {
     Translate,
+    Boxing,
     Contract,
     Perceus,
 }
@@ -19,6 +23,7 @@ impl Pass {
     fn name(self) -> &'static str {
         match self {
             Pass::Translate => "translate",
+            Pass::Boxing => "boxing",
             Pass::Contract => "contract",
             Pass::Perceus => "perceus",
         }
@@ -52,6 +57,11 @@ pub fn lower_until(
     if last == Pass::Translate {
         return program;
     }
+    boxing(&mut program);
+    check(&program, Pass::Boxing);
+    if last == Pass::Boxing {
+        return program;
+    }
     contract(&mut program);
     check(&program, Pass::Contract);
     if last == Pass::Contract {
@@ -68,7 +78,8 @@ fn check(program: &Program, pass: Pass) {
         return;
     }
     let result = match pass {
-        Pass::Translate | Pass::Contract => verify_scopes(program),
+        Pass::Translate => verify_translated(program),
+        Pass::Boxing | Pass::Contract => verify_scopes(program),
         Pass::Perceus => verify(program),
     };
     if let Err(error) = result {

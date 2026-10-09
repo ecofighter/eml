@@ -3,6 +3,7 @@
 
 mod common;
 
+mod boxing;
 mod contract;
 mod externs;
 mod perceus;

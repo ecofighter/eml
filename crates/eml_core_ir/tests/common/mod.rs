@@ -1,4 +1,6 @@
-use eml_core_ir::{Pass, Program, parse, pretty, pretty_with_positions, verify, verify_scopes};
+use eml_core_ir::{
+    Pass, Program, parse, pretty, pretty_with_positions, verify, verify_scopes, verify_translated,
+};
 
 /// 誤りのないプログラムを、`last` のパスの直後の Core IR にして表示する。
 pub fn core_text(text: &str, last: Pass) -> String {
@@ -25,7 +27,8 @@ fn read_back(shown: &str, last: Pass, show: fn(&Program) -> String) {
     let parsed = parse(shown).unwrap_or_else(|error| panic!("{error}\n{shown}"));
     assert_eq!(show(&parsed), shown, "the printed Core IR must read back");
     let verified = match last {
-        Pass::Translate | Pass::Contract => verify_scopes(&parsed),
+        Pass::Translate => verify_translated(&parsed),
+        Pass::Boxing | Pass::Contract => verify_scopes(&parsed),
         Pass::Perceus => verify(&parsed),
     };
     if let Err(error) = verified {

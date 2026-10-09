@@ -642,7 +642,7 @@ fn a_default_target_owns_the_scrutinee_without_a_dup() {
     let text = "data List a = | Nil | Cons a (List a)\n\nsize : List Int -> Int\nsize xs = 2\n\ndescribe : List Int -> Int\ndescribe xs = match xs with\n  | Cons _ Nil -> 1\n  | ys -> size ys\n\nmain : Unit -> <IO> Unit\nmain () = println (show_int (describe Nil))";
     insta::assert_snapshot!(function(&core_text(text, Pass::Perceus), "describe"), @"
     fn describe(xs.0: tobj) -> int {
-      switch xs.0 List { #1(x.1: int, x.2: tobj) -> b1, _ -> b2 }
+      switch xs.0 List { #1(x.5: tobj, x.2: tobj) -> b1, _ -> b2 }
     b1:
       dup x.2
       switch x.2 List { #0 -> b3, _ -> b4 }

@@ -1,16 +1,21 @@
-//! translate と Perceus の間の縮約のパス (docs/spec/core-ir.md の「パス」)。使われない純粋な `let` を消し、その後で
+//! box の挿入と Perceus の間の縮約のパス (docs/spec/core-ir.md の「パス」)。使われない純粋な `let` を消し、その後で
 //! すべてのブロックに末尾呼び出しの規則を当てる。末尾呼び出しを作るのはこのパスだけである。RC の命令がまだないので、
 //! 所有権を扱わずに書き換えられる。
 
 use eml_extern::Purity;
 
-use crate::{Atom, Block, CoreFn, Program, Rhs, Stmt, Term};
+use crate::{Atom, Block, Call, CoreFn, Program, Repr, Rhs, Stmt, Term};
 
 pub fn contract(program: &mut Program) {
+    let rets: Vec<Repr> = program
+        .functions
+        .iter()
+        .map(|function| function.ret)
+        .collect();
     for function in &mut program.functions {
         remove_dead_lets(function);
         for block in &mut function.blocks {
-            tail_call(block);
+            tail_call(block, function.ret, &rets);
         }
         // 1回のパスで不動点に達することを確かめる (docs/spec/core-ir.md の「縮約」)。確かめるパスも IR を書き換えうるので、
         // その副作用を `debug_assert!` の式に隠さない
@@ -25,16 +30,19 @@ pub fn contract(program: &mut Program) {
     }
 }
 
-/// `let x = <呼び出し>` の後の終端が `return x` なら、その2つを末尾呼び出しにする。`saved` は Perceus が決めるので、
-/// この時点では空である。`mask` は末尾かどうかと独立なので、そのまま運ぶ。
-fn tail_call(block: &mut Block) {
+/// `let x = <呼び出し>` の後の終端が `return x` で、呼び出しの結果が関数の `ret` と互換なら、その2つを末尾呼び出しに
+/// する。互換は推移的でないので、x を通してつながっていた2つの位置が、直接つないでも互換かを確かめる。結果は、直接の
+/// 呼び出しなら呼ばれる関数の `ret`、ほかは `tobj` である。`never` の操作の `perform` は戻らないので、どの `ret` とも
+/// 互換とする (docs/spec/core-ir.md の「値の表現」)。`saved` は Perceus が決めるので、この時点では空である。`mask` は
+/// 末尾かどうかと独立なので、そのまま運ぶ。
+fn tail_call(block: &mut Block, ret: Repr, rets: &[Repr]) {
     let Term::Return(Atom::Var(returned)) = block.term else {
         return;
     };
     let Some(Stmt::Let {
         var,
         rhs: Rhs::Call {
-            call: _,
+            call,
             mask: _,
             saved: _,
         },
@@ -43,6 +51,21 @@ fn tail_call(block: &mut Block) {
         return;
     };
     if *var != returned {
+        return;
+    }
+    let compatible = match call {
+        Call::Direct(target, _) => rets[target.0 as usize].compatible(ret),
+        Call::Perform {
+            effect: _,
+            op: _,
+            resumable: false,
+            args: _,
+        } => true,
+        Call::Apply(_, _) | Call::Perform { .. } | Call::Resume { .. } | Call::Handle { .. } => {
+            Repr::TObj.compatible(ret)
+        }
+    };
+    if !compatible {
         return;
     }
     let Some(Stmt::Let {
@@ -103,7 +126,7 @@ fn remove_dead_lets(function: &mut CoreFn) -> bool {
 /// 消してもよい右辺。値を作るだけで、エフェクトも実行時エラーも起こさない。extern は表の行が `Pure` のものだけである。
 /// `con` と `closure` が所有権を受け取る値は、消すと Perceus がその値の生存の終わりに `decref` を入れるので、解放が
 /// 早まるだけである。`box` を消すと確保が1つ減るだけで、`unbox` は値を読むだけなので、どちらも評価の順を変えない。
-fn pure(rhs: &Rhs) -> bool {
+pub(crate) fn pure(rhs: &Rhs) -> bool {
     match rhs {
         Rhs::ConstString(_)
         | Rhs::Con { ctor: _, args: _ }
