@@ -1,6 +1,6 @@
 //! 一様な位置のグラフ (docs/spec/core-ir.md の「一様な位置と制約付きの多相再帰」)。
 
-use eml_test_support::{check, short};
+use eml_test_support::check;
 use eml_types::InstanceNode;
 
 fn uniform_functions(text: &str) -> Vec<(String, usize)> {
@@ -54,13 +54,15 @@ fn growth_through_a_method_variable_is_found() {
 fn growth_through_a_constrained_call_is_found() {
     // `g` の制約 `Show2 (Box (Box a))` を解くと、instance の節点へ大きくなる辺が引かれ、instance のメソッドから `f` に
     // 戻る。単相化すると `f@[T]`、`g@[Box (Box T)]`、`Show2 Box.show2@[Box T]`、`f@[Box T]` と止まらない
+    // 大きくなる成分は instance の頭と `f` で制約を持つ。報告は成分ごとに1つで、プログラムの順で最初の位置を指す
     let text = "class Show2 a where\n  show2 : a -> Int\n\ndata Box a = | Box a\n\ninstance Show2 a => Show2 (Box a) where\n  show2 (Box x) = f x\n\nf : Show2 a => a -> Int\nf x = g (Box (Box x))\n\ng : Show2 a => a -> Int\ng x = show2 x";
     let checked = check(text);
-    let lines = short(checked.files(), &checked.diagnostics);
-    assert!(
-        lines.iter().any(|line| line.starts_with("E2012")),
-        "{lines:?}"
-    );
+    insta::assert_snapshot!(eml_test_support::full(checked.files(), &checked.diagnostics), @"
+    E2012 6:27 `Show2 (Box a)` would need an instance of `Show2` at infinitely many types
+      6:27 a constrained type variable grows on each recursive call
+      9:1 also grows here
+      note: instances are chosen at compile time, so a constraint cannot follow polymorphic recursion
+    ");
 }
 
 #[test]

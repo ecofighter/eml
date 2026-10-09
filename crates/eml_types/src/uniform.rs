@@ -4,10 +4,10 @@
 
 use std::collections::{HashMap, HashSet};
 
-use eml_diagnostics::{Diagnostic, FileId, Label, TextRange};
+use eml_diagnostics::{Diagnostic, FileId, Label, TextRange, TextSize};
 use eml_hir::{
     ClassId, Function, FunctionId, FunctionKind, InstanceId, InstanceOrigin, ItemMap, MethodId,
-    MethodImpl, Program, Signature, TypeDefKind, TypeVarId, ValueItem,
+    MethodImpl, ModuleId, Program, Signature, TypeDefKind, TypeVarId, ValueItem,
 };
 
 use crate::check::instance_head;
@@ -82,8 +82,8 @@ pub(crate) fn uniform(
         }
     }
     let mut uniform = Uniform::default();
-    let mut diagnostics = Vec::new();
-    let mut reported = HashSet::new();
+    // 大きくなる成分ごとの、与えられた制約を持つ位置。同じ位置 (instance の頭など) は1つにまとめる
+    let mut constrained: HashMap<usize, Vec<Constrained>> = HashMap::new();
     for (index, &node) in graph.nodes.iter().enumerate() {
         if !growing.contains(&component[index]) {
             continue;
@@ -97,11 +97,37 @@ pub(crate) fn uniform(
             }
             Node::Method(..) => {}
         }
-        if let Some(error) = graph.constrained(node, &component, index)
-            && reported.insert((error.file, error.range))
-        {
-            diagnostics.push(error.diagnostic(program));
+        if let Some(error) = graph.constrained(node, &component, index) {
+            let found = constrained.entry(component[index]).or_default();
+            if !found
+                .iter()
+                .any(|other| (other.file, other.range) == (error.file, error.range))
+            {
+                found.push(error);
+            }
         }
+    }
+    // 1つの成分の位置はどれも同じ循環で大きくなるので、位置ごとに報告すると同じ原因の誤りが重なる。成分ごとに1つに
+    // まとめ、プログラムの順 (モジュールの順、その中のソースの順) で最初の位置を主な位置にする。ほかの成分で報告した
+    // 位置 (同じ instance の頭など) は、重ねて示さない
+    let mut components: Vec<Vec<Constrained>> = constrained.into_values().collect();
+    for found in &mut components {
+        found.sort_by_key(Constrained::order);
+    }
+    components.sort_by_key(|found| found[0].order());
+    let mut reported = HashSet::new();
+    let mut diagnostics = Vec::new();
+    for found in components {
+        let mut found = found
+            .into_iter()
+            .filter(|error| reported.insert((error.file, error.range)));
+        let Some(first) = found.next() else {
+            continue;
+        };
+        let diagnostic = found.fold(first.diagnostic(program), |diagnostic, other| {
+            diagnostic.with_secondary(Label::new(other.file, other.range, "also grows here"))
+        });
+        diagnostics.push(diagnostic);
     }
     (uniform, diagnostics)
 }
@@ -483,7 +509,8 @@ impl<'a> Graph<'a> {
                 let function = &program[id];
                 let class = constraint_on(&function.signature.as_ref()?.constraints, position)?;
                 Some(match function.kind {
-                    FunctionKind::Defined | FunctionKind::Extern(_) => Constrained {
+                    FunctionKind::Defined => Constrained {
+                        module: id.module,
                         file: program.file(id.module),
                         range: function.signature_name_range.unwrap_or(function.name_range),
                         name: function.name.clone(),
@@ -491,6 +518,9 @@ impl<'a> Graph<'a> {
                     },
                     FunctionKind::InstanceMethod(instance, _) => {
                         Constrained::at_instance(program, instance, class)
+                    }
+                    FunctionKind::Extern(_) => {
+                        unreachable!("an extern function has no equations, so it has no nodes")
                     }
                     // 既定のメソッドは Prelude にあることが多く、そこを指しても直す場所が分からないので、この位置を
                     // 含む成分の中で既定のメソッドへの辺を引いた instance の頭を指す
@@ -501,6 +531,7 @@ impl<'a> Graph<'a> {
                             }
                             // タプルの節点からの辺は既定のメソッドに入るだけで、大きくなる成分に戻らない
                             Some(InstanceNode::Tuple(_)) | None => Constrained {
+                                module: method.module,
                                 file: program.file(method.module),
                                 range: program[method].name_range,
                                 name: program[method].name.clone(),
@@ -578,6 +609,7 @@ impl Wanted {
 
 /// E2012 の位置と文言の材料。
 struct Constrained {
+    module: ModuleId,
     file: FileId,
     range: TextRange,
     name: String,
@@ -595,11 +627,17 @@ impl Constrained {
             format!("({head})")
         };
         Constrained {
+            module: instance.module,
             file: program.file(instance.module),
             range: def.head_range,
             name: format!("{} {head}", program.names.class(def.class)),
             class,
         }
+    }
+
+    /// プログラムの順。モジュールの順、その中のソースの順である。
+    fn order(&self) -> (ModuleId, TextSize) {
+        (self.module, self.range.start())
     }
 
     fn diagnostic(&self, program: &Program) -> Diagnostic {
