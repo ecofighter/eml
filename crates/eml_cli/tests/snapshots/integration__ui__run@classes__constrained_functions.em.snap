@@ -1,0 +1,10 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{stderr}\")"
+input_file: tests/ui/run/classes/constrained_functions.em
+---
+--- stdout ---
+[red and red]
+[box of box of green and box of box of green]
+color green / green
+--- stderr ---

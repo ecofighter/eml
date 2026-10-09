@@ -5,6 +5,7 @@ use eml_hir::{ClassId, InstanceId, Program};
 use crate::store::{TypeId, TypeKind, TypeStore};
 
 /// `class` の制約を `ty` で解いた結果 (型の表の型)。translate と一様な位置のグラフが、型検査と同じ規則で instance を引く。
+#[derive(Debug)]
 pub enum Resolution {
     /// `C (H T1 … Tn)` を instance で解いた。`args` は頭の型引数 `T1 … Tn`。
     Instance {

@@ -2343,3 +2343,96 @@ fn a_boxed_wrapper_is_named_after_its_instance() {
         "no wrapper in\n{shown}"
     );
 }
+
+const SAME: &str = "class Same a where\n  same : a -> a -> Bool\n  differ : a -> a -> Bool\n  differ x y = not (same x y)\n\ndata Color =\n  | Red\n  | Green\n\ninstance Same Color where\n  same Red Red = True\n  same Green Green = True\n  same _ _ = False\n\n";
+
+#[test]
+fn a_method_call_resolves_to_the_instance_function() {
+    let text = format!(
+        "{SAME}main : Unit -> <IO> Unit\nmain () = if same Red Green then println \"y\" else println \"n\""
+    );
+    let shown = core_text(&text, Pass::Translate);
+    insta::assert_snapshot!(function(&shown, "main"), @r#"
+    fn main(p.0: unit) -> unit {
+      let t.1: enum = call "Same Color.same"(#0, #1)
+      switch t.1 Prelude.Bool { #0 -> b1, #1 -> b2 }
+    b1:
+      let s.4: obj = const "n"
+      let t.5: unit = extern Prelude.println(s.4)
+      return t.5
+    b2:
+      let s.2: obj = const "y"
+      let t.3: unit = extern Prelude.println(s.2)
+      return t.3
+    }
+    "#);
+    insta::assert_snapshot!(function(&shown, "Same Color.same"), @r#"
+    fn "Same Color.same"($0.0: enum, $1.1: enum) -> enum {
+      switch $0.0 Color { #0 -> b1, #1 -> b2 }
+    b1:
+      switch $1.1 Color { #0 -> b3, _ -> b4 }
+    b2:
+      switch $1.1 Color { #1 -> b5, _ -> b6 }
+    b3:
+      return #1
+    b4:
+      jump b7()
+    b5:
+      return #1
+    b6:
+      jump b7()
+    b7:
+      return #0
+    }
+    "#);
+}
+
+#[test]
+fn a_default_method_is_an_instance_at_the_head_type() {
+    let text = format!(
+        "{SAME}main : Unit -> <IO> Unit\nmain () = if differ Red Green then println \"y\" else println \"n\""
+    );
+    let shown = core_text(&text, Pass::Translate);
+    insta::assert_snapshot!(function(&shown, "differ@[Color]"), @r#"
+    fn "differ@[Color]"(x.0: enum, y.1: enum) -> enum {
+      let t.2: enum = call "Same Color.same"(x.0, y.1)
+      let t.3: enum = call Prelude.not(t.2)
+      return t.3
+    }
+    "#);
+}
+
+#[test]
+fn a_constraint_passes_through_two_generic_functions() {
+    let text = format!(
+        "{SAME}twice : Same a => a -> Bool\ntwice x = same x x\n\nouter : Same a => a -> Bool\nouter x = twice x\n\nmain : Unit -> <IO> Unit\nmain () = if outer Red then println \"y\" else println \"n\""
+    );
+    let shown = core_text(&text, Pass::Translate);
+    insta::assert_snapshot!(function(&shown, "outer@[Color]"), @r#"
+    fn "outer@[Color]"(x.0: enum) -> enum {
+      let t.1: enum = call "twice@[Color]"(x.0)
+      return t.1
+    }
+    "#);
+    insta::assert_snapshot!(function(&shown, "twice@[Color]"), @r#"
+    fn "twice@[Color]"(x.0: enum) -> enum {
+      let t.1: enum = call "Same Color.same"(x.0, x.0)
+      return t.1
+    }
+    "#);
+}
+
+#[test]
+fn an_instance_method_with_fewer_parameters_is_called_then_applied() {
+    let text = "class Combine a where\n  combine : a -> a -> Int\n\ninstance Combine Int where\n  combine = add\n\nadd : Int -> Int -> Int\nadd a b = a + b\n\nmain : Unit -> <IO> Unit\nmain () = println (show_int (combine 1 2))";
+    let shown = core_text(text, Pass::Translate);
+    insta::assert_snapshot!(function(&shown, "main"), @r#"
+    fn main(p.0: unit) -> unit {
+      let t.1: tobj = call "Combine Int.combine"()
+      let t.2: int = apply t.1(1, 2)
+      let t.3: obj = extern Prelude.show_int(t.2)
+      let t.4: unit = extern Prelude.println(t.3)
+      return t.4
+    }
+    "#);
+}

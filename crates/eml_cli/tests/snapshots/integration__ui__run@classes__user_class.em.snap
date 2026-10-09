@@ -1,0 +1,11 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{stderr}\")"
+input_file: tests/ui/run/classes/user_class.em
+---
+--- stdout ---
+red
+green!
+large
+SIZE
+--- stderr ---

@@ -21,10 +21,9 @@ pub(super) fn extern_row(hir: &HirProgram, function: FunctionId) -> Option<Exter
         FunctionKind::Extern(row) => {
             Some(row.expect("a program without errors has no user extern"))
         }
-        FunctionKind::Defined => None,
-        FunctionKind::DefaultMethod(_) | FunctionKind::InstanceMethod(..) => {
-            unreachable!("translate does not handle classes until S5 Task 7")
-        }
+        FunctionKind::Defined
+        | FunctionKind::DefaultMethod(_)
+        | FunctionKind::InstanceMethod(..) => None,
     }
 }
 
@@ -232,8 +231,13 @@ impl FnLowering<'_> {
         );
         match callee {
             // 前の矢印は部分適用でエフェクトを起こさないので、最後の矢印の `mask` だけを使う (docs/spec/core-ir.md)
+            // 引数を受けない関数 (等式が引数を持たない instance のメソッド) の呼び出しは、引数のないトップレベルの値を
+            // 参照するのと同じく `mask` を持たない
             Callee::Function(target) => {
-                let mask = self.mask(id, args.len() - 1);
+                let mask = match args.len() {
+                    0 => Vec::new(),
+                    n => self.mask(id, n - 1),
+                };
                 ("t", masked_call(Call::Direct(target, args), mask))
             }
             Callee::Extern {
@@ -357,6 +361,9 @@ impl FnLowering<'_> {
                     None => Callee::Function(self.ctx.target(callee)),
                 }
             }
+            ExprKind::Path(Res::Item(ValueItem::Method(_))) => {
+                Callee::Function(self.ctx.target(callee))
+            }
             ExprKind::Path(Res::Item(ValueItem::Operation(op))) => Callee::Operation(*op),
             ExprKind::Path(Res::Item(ValueItem::Constructor(ctor))) => Callee::Constructor(*ctor),
             ExprKind::Path(Res::Local(local)) => {
@@ -414,18 +421,12 @@ impl FnLowering<'_> {
                     let wrapper = self.extern_wrapper(id, *function, row);
                     return self.closure(wrapper, Vec::new());
                 }
-                // 引数のないトップレベルの値は、参照するたびに呼び出す (docs/spec/core-ir.md)
-                let target = self.ctx.target(id);
-                if self.program.arity(target) == 0 {
-                    let name = self.ctx.hir[*function].name.clone();
-                    let ty = self.ty(id);
-                    self.bind_typed(&name, ty, plain_call(Call::Direct(target, Vec::new())))
-                } else {
-                    self.closure(target, Vec::new())
-                }
+                let name = self.ctx.hir[*function].name.clone();
+                self.function_value(id, &name)
             }
-            ExprKind::Path(Res::Item(ValueItem::Method(_))) => {
-                unreachable!("translate does not handle classes until S5 Task 7")
+            ExprKind::Path(Res::Item(ValueItem::Method(method))) => {
+                let name = self.ctx.hir[*method].name.clone();
+                self.function_value(id, &name)
             }
             ExprKind::Path(Res::Item(ValueItem::Operation(op))) => {
                 let wrapper = self
@@ -547,6 +548,19 @@ impl FnLowering<'_> {
                 let ret = repr(self.ctx.store, ret_ty, self.ctx.hir);
                 self.lift(name, captured, &params, *lambda_body, ret)
             }
+        }
+    }
+
+    /// 定義された関数かメソッドへの参照 `id` の値。`name` は呼び出しの結果を束縛する変数の名前である。引数のない
+    /// トップレベルの値は、参照するたびに呼び出す (docs/spec/core-ir.md)。等式が引数を持たない instance のメソッドも
+    /// 同じである。
+    fn function_value(&mut self, id: ExprId, name: &str) -> Atom {
+        let target = self.ctx.target(id);
+        if self.program.arity(target) == 0 {
+            let ty = self.ty(id);
+            self.bind_typed(name, ty, plain_call(Call::Direct(target, Vec::new())))
+        } else {
+            self.closure(target, Vec::new())
         }
     }
 

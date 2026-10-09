@@ -13,6 +13,7 @@ mod types;
 use std::collections::{HashMap, HashSet};
 
 use eml_diagnostics::{FileId, SourceFiles};
+use eml_extern::Extern;
 use eml_hir::{
     Body, ExprId, ExprKind, FunctionId, LocalId, MatchArm, PatId, PatKind, Program as HirProgram,
     Res, Stmt as HirStmt, ValueItem,
@@ -26,7 +27,7 @@ use crate::{
 
 use builder::{FnBuilder, Label};
 use expr::extern_row;
-use instances::InstanceId;
+use instances::Target;
 use pattern::{Known, MatchCtx, Occ, Scrutinee, destructures};
 use program::{ProgramBuilder, effect_table};
 use types::{named, repr, split_arrows, var_info};
@@ -266,8 +267,8 @@ struct BodyCtx<'a> {
     /// 型の表。型検査の表に、単相化の代入の結果を足したもの。本体の変換は読むだけである。
     store: &'a TypeStore,
     types: &'a BodyTypes,
-    /// 本体の中の、定義された関数への参照の行き先の instance。
-    targets: &'a ArenaMap<ExprId, InstanceId>,
+    /// 本体の中の、定義された関数とメソッドへの参照の行き先。
+    targets: &'a ArenaMap<ExprId, Target>,
     /// instance の番号から関数の番号への表。
     indices: &'a [FnIdx],
     /// ラムダ、handle、extern を包む関数の名前に使う、トップレベルの関数の instance の名前。
@@ -279,13 +280,27 @@ struct BodyCtx<'a> {
 }
 
 impl BodyCtx<'_> {
-    /// 定義された関数への参照 `expr` の行き先の関数。
+    /// 定義された関数かメソッドへの参照 `expr` の行き先の関数。
     fn target(&self, expr: ExprId) -> FnIdx {
-        let instance = self
-            .targets
-            .get(expr)
-            .expect("every reference to a defined function has an instance");
-        self.indices[instance.0]
+        match self.targets.get(expr) {
+            Some(Target::Function(instance)) => self.indices[instance.0],
+            Some(Target::Extern(_)) => {
+                unreachable!("a method bound to an extern is called through `extern_target`")
+            }
+            None => unreachable!("every reference to a defined function or method has a target"),
+        }
+    }
+
+    /// `extern` で結んだメソッドへの参照 `expr` なら、その行。
+    #[expect(
+        dead_code,
+        reason = "S5 Task 8 で extern のメソッドの呼び出しと値に使う"
+    )]
+    fn extern_target(&self, expr: ExprId) -> Option<Extern> {
+        match self.targets.get(expr) {
+            Some(Target::Extern(row)) => Some(*row),
+            Some(Target::Function(_)) | None => None,
+        }
     }
 }
 
