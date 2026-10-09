@@ -1,5 +1,5 @@
 //! 基準のプログラム (`bench/`) の実行の仕事の回数を固定する。回数は決定的なので、段の前後の回数をこのスナップショットの
-//! 差分で残す (docs/superpowers/specs/2026-10-10-s4a-benchmarks-design.md)。
+//! 差分で残す (docs/implementation/benchmarks.md の「回数のテスト」)。
 
 use std::path::{Path, PathBuf};
 

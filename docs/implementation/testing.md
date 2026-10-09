@@ -171,7 +171,7 @@ b3(t.3: int):
 
 `crates/eml_interp/tests/scaling.rs` は、時間ではなく、インタプリタの仕事の回数と、同時に生きていたヒープの物体の数の最大 (`RunStats`) を上限と比べる。handler の下の非末尾の再帰 (handler が1つ、内側に別のエフェクトの handler が1つ、`mask` 付きのコールバックの中) は `handler_visits` を、リテラルから始めて `acc ++ "x"` を n 回つなぐ連結は `string_bytes_copied` を、n = 2000 で n の定数倍の上限と比べる。2乗の実装では上限を超える。64 バイトのリテラルを n 回評価するテストは、`string_bytes_copied` が 64 未満であること (1回でも写せば超える) を確かめる。リストをたどるテストは `rc_increments` を確かめる。一意なリストを長さ 1000 と 2000 でたどったときに数が同じであること (セルごとの `dup` がない) と、共有されたリストを長さ n でたどったときに数が n + 2 以下であること (セルごとの `dup` は1回まで) である。ループの形ごとに、`peak_objects` を n = 1000 と n = 2000 で比べるテストもある。`Int`、`Bool`、`Unit` を返す関数の値を通るループ、呼び出しと結果の間に使われない `let` があるループ、節が末尾で再開する操作のループ、直接の自己末尾呼び出しは、2つの n で同じであることを確かめる。末尾呼び出しを失うと、フレームが反復の数に比例して増えるためである。ラムダからラムダへの末尾の `apply` は、反復ごとにクロージャが1つ残るので、n = 2000 の値が n = 1000 の値 + 1000 以下であることを確かめる。このテストはクロージャの鎖を2回使い、戻る間も鎖を共有にしておく。一意なクロージャは `apply` で手放され、そのスロットを積んだフレームが使い回すので、末尾の `apply` を失っても `peak_objects` が増えないためである。ほかに、数え方そのものを確かめるテストがある (`perform` も文字列もなければ仕事の回数はすべて 0 で `peak_objects` は `Frame::Root` の 1、`perform` は少なくとも1つのフレームを調べる、`"ab" ++ "cd"` は少なくとも4バイトを書く、型変数のフィールドに `Int` を入れて取り出すと `boxes` と `unboxes` が1以上になり、スカラーの位置だけのプログラムでは 0 になる)。各テストはソースをテストの中で作り、`eml_test_support::run_stats` で実行する。回数は機械の速さに左右されないので、`#[ignore]` を付けず、ふだんの `cargo test` で流す。
 
-`crates/eml_interp/tests/bench.rs` は、基準のプログラム (リポジトリの `bench/`) を `debug_heap` 付きで走らせ、出力を確かめ、`RunStats` の全項目をインラインスナップショットで固定する。プログラムごとに1つのテストにして、並列に走らせる。`bench/` のファイルの一覧とテストのプログラムの一覧が一致することも確かめる。回数は決定的なので、段の前後の回数はこのスナップショットの差分で残る。回数を変える変更は、その段の spec に期待値の変更として書く。
+`crates/eml_interp/tests/bench.rs` は、基準のプログラム (リポジトリの `bench/`) を `debug_heap` 付きで走らせ、出力を確かめ、`RunStats` の全項目をインラインスナップショットで固定する。プログラムごとに1つのテストにして、並列に走らせる。`bench/` のファイルの一覧とテストのプログラムの一覧が一致することも確かめる。回数は決定的なので、段の前後の回数はこのスナップショットの差分で残る。回数を変える変更は、その段の spec に期待値の変更として書く。プログラムの中身と命令の数の測り方は [計測の基準](benchmarks.md) にある。
 
 `SourceFiles::line_col` の表のテスト (`eml_diagnostics` の `source.rs`)、verifier の大きな IR のテスト (`eml_core_ir` の `tests/verify.rs` の、長い `switch` の連鎖、借りたフィールドへの長い `switch` の連鎖、長い文の `if` の列、1つのブロックに深さの違う辺が多く合流する形)、T3 の時間のテスト (`eml_core_ir` の `tests/boxing.rs` の、N = 30,000 の関数の鎖を IR のテキストで作り、`boxing` の時間だけを測るテスト) は、数えられる仕事の回数がないので時間を測る。2乗の実装だけが超える緩い上限 (5 秒と 10 秒) を置き、`#[ignore]` を付けずに debug ビルドのふだんの `cargo test` で流す。
 
@@ -190,5 +190,7 @@ cargo clippy --all-targets && cargo fmt
 cargo test --release -p eml_types --test integration scaling:: -- --ignored   # 型検査の時間の伸び (性能のテスト)
 cargo test --release -p eml_hir --test integration scaling:: -- --ignored     # 名前の表を作る時間の伸び (性能のテスト)
 cargo test -p eml_interp --test integration scaling::                          # インタプリタの仕事の回数 (ふだんの cargo test にも入る)
+cargo test -p eml_interp --test integration bench::                            # 基準のプログラムの回数 (ふだんの cargo test にも入る)
+bench/run.sh                                                                   # 基準のプログラムの命令の数 (macOS、release)
 cargo clippy -p eml_cli --no-default-features --features types -- -D warnings    # 既定でない feature (なし、types、core。eml_test_support は hir も)
 ```
