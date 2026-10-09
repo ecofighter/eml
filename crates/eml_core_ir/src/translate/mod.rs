@@ -19,13 +19,15 @@ use eml_hir::{
 use eml_types::{BodyTypes, Type, TypedProgram};
 use la_arena::ArenaMap;
 
-use crate::{Atom, Case, CasePattern, CoreFn, FALSE, FnIdx, Loc, Program, Rhs, TRUE, Term, VarId};
+use crate::{
+    Atom, Case, CasePattern, CoreFn, FALSE, FnIdx, Loc, Program, Repr, Rhs, TRUE, Term, VarId,
+};
 
 use builder::{FnBuilder, Label};
 use expr::extern_row;
 use pattern::{Known, MatchCtx, Occ, Scrutinee, destructures};
 use program::{ProgramBuilder, core_name, effect_table};
-use types::{repr, split_arrows, var_info};
+use types::{named, repr, split_arrows, var_info};
 
 // extern の表の行と std の宣言を照らし合わせる結合テスト (tests/externs.rs) が、translate と同じ規則で型の Repr を決める
 pub use types::repr as type_repr;
@@ -188,11 +190,11 @@ pub(crate) fn translate(
             .expect("every function has a signature")
             .ty;
         let (param_types, ret) = split_arrows(signature, body.params.len());
-        let params: Vec<(Option<PatId>, Type)> = body
+        let params: Vec<(Option<PatId>, Repr)> = body
             .params
             .iter()
-            .map(|&pat| Some(pat))
-            .zip(param_types)
+            .zip(&param_types)
+            .map(|(&pat, ty)| (Some(pat), repr(ty, hir)))
             .collect();
         let name = core_name(hir, id.module, &function.name);
         let forms = continuation_forms(body);
@@ -210,8 +212,14 @@ pub(crate) fn translate(
                 file_id: hir.modules[id.module].file,
             },
         };
-        let core =
-            FnLowering::new(ctx, &mut builder).lower(&name, false, &[], &params, body.root, &ret);
+        let core = FnLowering::new(ctx, &mut builder).lower(
+            &name,
+            false,
+            &[],
+            &params,
+            body.root,
+            repr(&ret, hir),
+        );
         builder.finish(indices[id], core);
     }
     let entry_type = &typed
@@ -307,57 +315,55 @@ impl<'a> FnLowering<'a> {
 
     /// ラムダと handle の本体と節は、捕まえた変数を先頭の引数に持つ (docs/spec/core-ir.md)。トップレベルの関数では
     /// `captured` は空である。引数のパターンが `None` なら、名前のない引数 (handle の本体が受ける `()`) である。
-    /// `ret` は本体の値の型で、関数の `ret` の Repr を決める。`internal` は、持ち上げた関数なら真である。
+    /// 捕まえた変数と引数は、その値の Repr と組にして渡す。`ret` は本体の値の Repr で、関数の `ret` になる。
+    /// `internal` は、持ち上げた関数なら真である。
     fn lower(
         mut self,
         name: &str,
         internal: bool,
-        captured: &[(LocalId, Type)],
-        params: &[(Option<PatId>, Type)],
+        captured: &[(LocalId, Repr)],
+        params: &[(Option<PatId>, Repr)],
         root: ExprId,
-        ret: &Type,
+        ret: Repr,
     ) -> CoreFn {
         let body = self.ctx.body;
-        for (local, ty) in captured {
-            let var = self
-                .builder
-                .param(var_info(&body.locals[*local].name, ty, self.ctx.hir));
-            self.locals.insert(*local, Atom::Var(var));
+        for &(local, repr) in captured {
+            let var = self.builder.param(named(&body.locals[local].name, repr));
+            self.locals.insert(local, Atom::Var(var));
         }
         let mut wrapped = Vec::new();
         let mut destructured = Vec::new();
-        for (pat, ty) in params {
+        for &(pat, repr) in params {
             // 値を調べるか分解するパターンは名前のない引数で受け、本体の前で分解する
             let pattern = pat.filter(|&pat| destructures(body, self.ctx.hir, pat));
             let local = pat
                 .filter(|_| pattern.is_none())
                 .and_then(|pat| body.pat_bindings(pat).first().copied());
             let name = local.map_or("p", |local| body.locals[local].name.as_str());
-            let var = self.builder.param(var_info(name, ty, self.ctx.hir));
+            let var = self.builder.param(named(name, repr));
             if let Some(local) = local {
                 self.locals.insert(local, Atom::Var(var));
                 if self.ctx.continuation_forms.get(local) == Some(&ContinuationForm::Wrapped) {
-                    wrapped.push((local, var, ty.clone()));
+                    wrapped.push((local, var));
                 }
             }
             if let Some(pattern) = pattern {
-                destructured.push((pattern, var, ty.clone()));
+                destructured.push((pattern, var, repr));
             }
         }
         // 引数の変数をすべて作ってから包み、分解する。関数の引数の番号を、ほかの変数より前にそろえるため
-        for (local, var, ty) in wrapped {
+        for (local, var) in wrapped {
             let wrapper = self
                 .program
                 .continuation_wrapper(body.continuations[local] == 2);
-            let closure = self.closure(wrapper, vec![Atom::Var(var)], &ty);
+            let closure = self.closure(wrapper, vec![Atom::Var(var)]);
             self.locals.insert(local, closure);
         }
-        for (pat, var, ty) in destructured {
-            self.destructure(pat, Scrutinee::Occ(Occ::Atom(Atom::Var(var), ty)));
+        for (pat, var, repr) in destructured {
+            self.destructure(pat, Scrutinee::Occ(Occ::Atom(Atom::Var(var)), repr));
         }
         self.tail_expr(root, Exit::Return);
-        self.builder
-            .finish(name.to_string(), internal, repr(ret, self.ctx.hir))
+        self.builder.finish(name.to_string(), internal, ret)
     }
 
     /// `root` を、捕まえた変数を先頭の引数に持つ関数に持ち上げ、そのクロージャを作る (docs/spec/core-ir.md)。ラムダと、
@@ -366,12 +372,11 @@ impl<'a> FnLowering<'a> {
         &mut self,
         name: String,
         captured: Vec<LocalId>,
-        params: &[(Option<PatId>, Type)],
+        params: &[(Option<PatId>, Repr)],
         root: ExprId,
-        ret: &Type,
-        ty: &Type,
+        ret: Repr,
     ) -> Atom {
-        let captured: Vec<(LocalId, Type)> = captured
+        let captured: Vec<(LocalId, Repr)> = captured
             .into_iter()
             .map(|local| {
                 let ty = self
@@ -379,9 +384,8 @@ impl<'a> FnLowering<'a> {
                     .types
                     .locals
                     .get(local)
-                    .cloned()
                     .expect("every local is typed");
-                (local, ty)
+                (local, repr(ty, self.ctx.hir))
             })
             .collect();
         let function = self.program.reserve(captured.len() + params.len());
@@ -392,15 +396,16 @@ impl<'a> FnLowering<'a> {
             .iter()
             .map(|(local, _)| self.locals[*local])
             .collect();
-        self.closure(function, atoms, ty)
+        self.closure(function, atoms)
     }
 
-    /// 関数と渡した引数の値。引数がなければ関数の値にし、クロージャを確保しない (docs/spec/core-ir.md)。
-    fn closure(&mut self, target: FnIdx, args: Vec<Atom>, ty: &Type) -> Atom {
+    /// 関数と渡した引数の値。引数がなければ関数の値にし、クロージャを確保しない (docs/spec/core-ir.md)。関数の値は
+    /// 型によらず `tobj` である (`types.rs` の `repr`)。
+    fn closure(&mut self, target: FnIdx, args: Vec<Atom>) -> Atom {
         if args.is_empty() {
             return Atom::Fn(target);
         }
-        self.bind("c", ty, Rhs::MakeClosure(target, args))
+        self.bind("c", Repr::TObj, Rhs::MakeClosure(target, args))
     }
 
     fn pat_type(&self, pat: PatId) -> Type {
@@ -446,7 +451,7 @@ impl<'a> FnLowering<'a> {
                     self.stmts(stmts);
                     match tail {
                         Some(tail) => self.tail_expr(*tail, exit),
-                        None => self.deliver(exit, Occ::Atom(Atom::Unit, Type::unit())),
+                        None => self.deliver(exit, Occ::Atom(Atom::Unit)),
                     }
                 }
             },
@@ -508,8 +513,8 @@ impl<'a> FnLowering<'a> {
                 on_false,
                 unknown,
             } => match value {
-                Occ::Atom(Atom::Tag(TRUE), _) => self.builder.jump(on_true, Vec::new()),
-                Occ::Atom(Atom::Tag(FALSE), _) => self.builder.jump(on_false, Vec::new()),
+                Occ::Atom(Atom::Tag(TRUE)) => self.builder.jump(on_true, Vec::new()),
+                Occ::Atom(Atom::Tag(FALSE)) => self.builder.jump(on_false, Vec::new()),
                 value => {
                     let value = self.materialize(value);
                     self.builder.jump(unknown, vec![value]);
@@ -555,7 +560,7 @@ impl<'a> FnLowering<'a> {
             match else_branch {
                 Some(else_branch) => self.tail_expr(else_branch, exit),
                 // `else` のない `if` の値は `()` である
-                None => self.deliver(exit, Occ::Atom(Atom::Unit, Type::unit())),
+                None => self.deliver(exit, Occ::Atom(Atom::Unit)),
             }
         }
     }

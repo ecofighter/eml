@@ -711,6 +711,20 @@ fn a_leaf_builds_a_known_value_once_however_often_it_passes_it() {
 }
 
 #[test]
+fn a_leaf_builds_one_value_for_the_same_constructor_at_two_types() {
+    // `x` と `y` は型引数だけが違う値 `P 1` を受ける。コンストラクタとフィールドのアトムが同じなので作る `con` の
+    // 命令も同じになり、葉は `con` を1回だけ作る
+    let text = "data P a =\n  | P Int\n\npair : P Int -> P String -> Int\npair x y = 0\n\nf : Int -> Int\nf n = match (P 1, P 1) with\n  | (x, y) -> pair x y\n\nmain : Unit -> <IO> Unit\nmain () = println (show_int (f 1))";
+    insta::assert_snapshot!(function(&core_text(text, Pass::Translate), "f"), @"
+    fn f(n.0: int) -> int {
+      let d.1: obj = con P #0(1)
+      let t.2: int = call pair(d.1, d.1)
+      return t.2
+    }
+    ");
+}
+
+#[test]
 fn literal_equations_switch_once_with_a_default() {
     let text = "name : Int -> String\nname 0 = \"zero\"\nname 1 = \"one\"\nname _ = \"many\"\n\nmain : Unit -> <IO> Unit\nmain () = println (name 1)";
     insta::assert_snapshot!(function(&core_text(text, Pass::Translate), "name"), @r#"

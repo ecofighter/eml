@@ -9,26 +9,26 @@ use eml_hir::{
     Body, ConstructorId, ExprId, ExprKind, Literal, LocalId, MatchArm, PatId, PatKind,
     Program as HirProgram, Res, TypeDefKind, ValueItem,
 };
-use eml_types::Type;
 
 use crate::{
-    Atom, BlockId, Case, CasePattern, Ctor, LayoutId, Rhs, Stmt, TUPLE, Term, VarId, VarInfo,
+    Atom, BlockId, Case, CasePattern, Ctor, LayoutId, Repr, Rhs, Stmt, TUPLE, Term, VarId, VarInfo,
 };
 
 use super::builder::Label;
-use super::types::{split_arrows, var_info};
+use super::types::{named, repr, type_def_repr, var_info};
 use super::{Ctx, CtxId, Exit, FnLowering};
 
 /// 値の出現 (docs/spec/core-ir.md)。`Con` は頭のコンストラクタが分かっている値で、タプルはタグ 0 の
-/// コンストラクタである。値全体が要る葉でだけ値を作る。
+/// コンストラクタである。値全体が要る葉でだけ値を作る。出現は型を持たない。値を作るときの Repr は `ConValue` から
+/// 決まり、フィールドの変数の Repr はパターンの型から決まる (docs/implementation/architecture.md の
+/// 「translate の組み立て」)。
 #[derive(Clone, PartialEq)]
 pub(super) enum Occ {
-    Atom(Atom, Type),
+    Atom(Atom),
     Con {
         tag: u32,
         fields: Vec<Occ>,
         value: ConValue,
-        ty: Type,
     },
 }
 
@@ -41,20 +41,11 @@ pub(super) enum ConValue {
     Tuple,
 }
 
-impl Occ {
-    fn ty(&self) -> &Type {
-        match self {
-            Occ::Atom(_, ty) | Occ::Con { ty, .. } => ty,
-        }
-    }
-}
-
 /// 同じ関数の中で `con` で作った変数の中身。変数は1回だけ定義され、定義は使う位置を支配するので、変数を見れば
 /// いつでもこの値である (docs/spec/core-ir.md)。
 pub(super) struct Known {
     pub(super) tag: u32,
     pub(super) args: Vec<Atom>,
-    pub(super) ty: Type,
 }
 
 /// scrutinee を値をそのまま調べる文脈。枝ごとのラベルと、値の分からなかった出口を持つ。
@@ -69,10 +60,11 @@ pub(super) struct MatchCtx {
     unknown: Vec<(BlockId, Occ)>,
 }
 
-/// 調べる値の入り方。`match` と分解する `let` は式を、分解する引数は引数の変数を調べる。
+/// 調べる値の入り方。`match` と分解する `let` は式を、分解する引数は引数の変数を調べる。`Occ` の `Repr` は、
+/// 値の分からない出口をまとめるラベルの引数に使う。
 pub(super) enum Scrutinee {
     Expr(ExprId),
-    Occ(Occ),
+    Occ(Occ, Repr),
 }
 
 /// 決定木 (docs/spec/core-ir.md)。葉の `bound` は、パターンの変数とそれが受ける出現である。
@@ -235,9 +227,9 @@ impl FnLowering<'_> {
         alias: Option<LocalId>,
         passes_alias: Vec<bool>,
     ) -> Vec<Label> {
-        let ty = match &scrutinee {
-            Scrutinee::Expr(expr) => self.ty(*expr),
-            Scrutinee::Occ(occ) => occ.ty().clone(),
+        let merged = match &scrutinee {
+            Scrutinee::Expr(expr) => repr(&self.ty(*expr), self.ctx.hir),
+            Scrutinee::Occ(_, repr) => *repr,
         };
         let arms: Vec<Label> = pats
             .iter()
@@ -265,7 +257,7 @@ impl FnLowering<'_> {
         let ctx = CtxId(self.contexts.len() - 1);
         match scrutinee {
             Scrutinee::Expr(expr) => self.tail_expr(expr, Exit::Scrutinize(ctx)),
-            Scrutinee::Occ(occ) => self.select(ctx, occ),
+            Scrutinee::Occ(occ, _) => self.select(ctx, occ),
         }
         let mut unknown = mem::take(&mut self.match_ctx(ctx).unknown);
         let root = match unknown.len() {
@@ -277,9 +269,7 @@ impl FnLowering<'_> {
             }
             _ => {
                 let name = alias.map_or("c", |alias| self.ctx.body.locals[alias].name.as_str());
-                let merge = self
-                    .builder
-                    .new_label(vec![var_info(name, &ty, self.ctx.hir)]);
+                let merge = self.builder.new_label(vec![named(name, merged)]);
                 for (block, occ) in unknown {
                     self.builder.reopen(block);
                     let value = self.materialize(occ);
@@ -289,7 +279,7 @@ impl FnLowering<'_> {
                 let [value] = args[..] else {
                     unreachable!("the unknown label takes the value");
                 };
-                Some(Occ::Atom(value, ty))
+                Some(Occ::Atom(value))
             }
         };
         if let Some(root) = root {
@@ -341,20 +331,17 @@ impl FnLowering<'_> {
     }
 
     /// `built` は、同じ葉でもう作った出現とその値である。葉が同じ値を何度渡しても、`con` は1回だけ作る
-    /// (docs/spec/core-ir.md の「変換の規則」)。
+    /// (docs/spec/core-ir.md の「変換の規則」)。コンストラクタとフィールドのアトムが同じ出現は、作る `con` の命令も
+    /// 同じなので、型が違っても1つにまとめる。型引数が違う値や、引数のないコンストラクタを違う型でフィールドに持つ値も
+    /// ここで1つになる。
     fn materialize_once(&mut self, occ: &Occ, built: &mut Vec<(Occ, Atom)>) -> Atom {
         match occ {
-            Occ::Atom(atom, _) => *atom,
+            Occ::Atom(atom) => *atom,
             Occ::Con {
                 value: ConValue::Made(value),
                 ..
             } => *value,
-            Occ::Con {
-                tag,
-                fields,
-                value,
-                ty,
-            } => {
+            Occ::Con { tag, fields, value } => {
                 if let Some(&(_, atom)) = built.iter().find(|(done, _)| done == occ) {
                     return atom;
                 }
@@ -362,13 +349,18 @@ impl FnLowering<'_> {
                     .iter()
                     .map(|field| self.materialize_once(field, built))
                     .collect();
-                let layout = match *value {
-                    ConValue::Data(ctor) => self.program.ctor(self.ctx.hir, ctor).layout,
-                    ConValue::Tuple => self.program.tuple_layout(args.len()),
+                // 要素が2つ以上のタプルは、型の Repr がいつも `obj` である
+                let (layout, repr) = match *value {
+                    ConValue::Data(ctor) => {
+                        let hir = self.ctx.hir;
+                        let layout = self.program.ctor(hir, ctor).layout;
+                        (layout, type_def_repr(hir[ctor].ty, hir))
+                    }
+                    ConValue::Tuple => (self.program.tuple_layout(args.len()), Repr::Obj),
                     ConValue::Made(_) => unreachable!("a made value is returned above"),
                 };
                 let ctor = Ctor { layout, tag: *tag };
-                let atom = self.bind("d", ty, Rhs::Con { ctor, args });
+                let atom = self.bind("d", repr, Rhs::Con { ctor, args });
                 built.push((occ.clone(), atom));
                 atom
             }
@@ -396,7 +388,6 @@ impl FnLowering<'_> {
                 tag: self.ctx.hir[ctor].tag,
                 fields,
                 value: ConValue::Data(ctor),
-                ty: self.ty(id),
             };
         }
         match &body.exprs[id].kind {
@@ -410,13 +401,9 @@ impl FnLowering<'_> {
                     tag: TUPLE,
                     fields,
                     value: ConValue::Tuple,
-                    ty: self.ty(id),
                 }
             }
-            _ => {
-                let atom = self.atom(id);
-                Occ::Atom(atom, self.ty(id))
-            }
+            _ => Occ::Atom(self.atom(id)),
         }
     }
 
@@ -425,28 +412,18 @@ impl FnLowering<'_> {
     /// 長い `con` の連なりで再帰しないためである。
     fn expand(&self, occ: Occ) -> Occ {
         match occ {
-            Occ::Atom(Atom::Tag(tag), ty) => Occ::Con {
+            Occ::Atom(Atom::Tag(tag)) => Occ::Con {
                 tag,
                 fields: Vec::new(),
                 value: ConValue::Made(Atom::Tag(tag)),
-                ty,
             },
-            Occ::Atom(Atom::Var(var), ty) => match self.cons.get(&var) {
-                Some(known) => {
-                    let types = self.con_field_types(known.tag, &known.ty, known.args.len());
-                    Occ::Con {
-                        tag: known.tag,
-                        fields: known
-                            .args
-                            .iter()
-                            .zip(types)
-                            .map(|(&arg, ty)| Occ::Atom(arg, ty))
-                            .collect(),
-                        value: ConValue::Made(Atom::Var(var)),
-                        ty,
-                    }
-                }
-                None => Occ::Atom(Atom::Var(var), ty),
+            Occ::Atom(Atom::Var(var)) => match self.cons.get(&var) {
+                Some(known) => Occ::Con {
+                    tag: known.tag,
+                    fields: known.args.iter().map(|&arg| Occ::Atom(arg)).collect(),
+                    value: ConValue::Made(Atom::Var(var)),
+                },
+                None => Occ::Atom(Atom::Var(var)),
             },
             other => other,
         }
@@ -479,30 +456,28 @@ impl FnLowering<'_> {
                 let rows = specialize(body, hir, &rows, column, tag, fields.len());
                 self.decide(&splice(occs, column, fields), rows, statically)
             }
-            (Head::Literal(_), Occ::Atom(Atom::Int(n), _)) => {
+            (Head::Literal(_), Occ::Atom(Atom::Int(n))) => {
                 let literal = Literal::Int(n);
                 let rows = remove_column(body, hir, &rows, column, Some(&literal));
                 let remaining = splice(occs, column, []);
                 self.decide(&remaining, rows, statically)
             }
             _ if statically => None,
-            (Head::Tuple(elements), Occ::Atom(value, ty)) => {
-                let types = tuple_field_types(&ty, elements.len());
+            (Head::Tuple(elements), Occ::Atom(value)) => {
                 let ctor = Ctor {
                     layout: self.program.tuple_layout(elements.len()),
                     tag: TUPLE,
                 };
-                Some(self.single(occs, &rows, column, ctor, value, types))
+                Some(self.single(occs, &rows, column, ctor, value))
             }
-            (Head::Con(ctor, _), Occ::Atom(value, ty)) if single_constructor(hir, ctor) => {
-                let types = self.field_types(ctor, &ty);
+            (Head::Con(ctor, _), Occ::Atom(value)) if single_constructor(hir, ctor) => {
                 let ctor = self.program.ctor(hir, ctor);
-                Some(self.single(occs, &rows, column, ctor, value, types))
+                Some(self.single(occs, &rows, column, ctor, value))
             }
-            (Head::Con(ctor, _), Occ::Atom(value, ty)) => {
-                Some(self.switch_constructors(occs, &rows, column, ctor, value, &ty))
+            (Head::Con(ctor, _), Occ::Atom(value)) => {
+                Some(self.switch_constructors(occs, &rows, column, ctor, value))
             }
-            (Head::Literal(_), Occ::Atom(value, _)) => {
+            (Head::Literal(_), Occ::Atom(value)) => {
                 Some(self.compare_literals(occs, &rows, column, value))
             }
             (Head::Literal(_), Occ::Con { .. }) => {
@@ -520,9 +495,8 @@ impl FnLowering<'_> {
         column: usize,
         ctor: Ctor,
         value: Atom,
-        types: Vec<Type>,
     ) -> Decision {
-        let fields = self.field_vars(rows, column, ctor.tag, &types);
+        let fields = self.field_vars(rows, column, ctor.tag);
         let rows = specialize(
             self.ctx.body,
             self.ctx.hir,
@@ -531,10 +505,7 @@ impl FnLowering<'_> {
             ctor.tag,
             fields.len(),
         );
-        let field_occs = fields
-            .iter()
-            .zip(types)
-            .map(|(&field, ty)| Occ::Atom(Atom::Var(field), ty));
+        let field_occs = fields.iter().map(|&field| Occ::Atom(Atom::Var(field)));
         let next = self
             .decide(&splice(occs, column, field_occs), rows, false)
             .expect("a full decision tree always exists");
@@ -561,7 +532,6 @@ impl FnLowering<'_> {
         column: usize,
         ctor: ConstructorId,
         scrutinee: Atom,
-        ty: &Type,
     ) -> Decision {
         let body = self.ctx.body;
         let hir = self.ctx.hir;
@@ -576,13 +546,9 @@ impl FnLowering<'_> {
                 continue;
             }
             let tag = hir[ctor].tag;
-            let types = self.field_types(ctor, ty);
-            let fields = self.field_vars(rows, column, tag, &types);
+            let fields = self.field_vars(rows, column, tag);
             let specialized = specialize(body, hir, rows, column, tag, fields.len());
-            let field_occs = fields
-                .iter()
-                .zip(types)
-                .map(|(&field, ty)| Occ::Atom(Atom::Var(field), ty));
+            let field_occs = fields.iter().map(|&field| Occ::Atom(Atom::Var(field)));
             let next = self
                 .decide(&splice(occs, column, field_occs), specialized, false)
                 .expect("a full decision tree always exists");
@@ -721,25 +687,33 @@ impl FnLowering<'_> {
         }
     }
 
-    /// フィールドの変数。その位置を変数のパターンで受ける行があれば、その変数の名前にする。
-    fn field_vars(&mut self, rows: &[Row], column: usize, tag: u32, types: &[Type]) -> Vec<VarId> {
+    /// 欄 `column` のタグ `tag` のコンストラクタ (タプル) のフィールドの変数。その位置を変数のパターンで受ける行が
+    /// あれば、その変数の名前にする。Repr は、そのコンストラクタが最初に現れる行の引数のパターンの型から決める。
+    /// 型検査は入れ子のパターンにも受けた値の型を記録し、case はどれかの行に現れるコンストラクタにだけ作るので、
+    /// 引数のパターンはいつもある (docs/implementation/architecture.md の「translate の組み立て」)。
+    fn field_vars(&mut self, rows: &[Row], column: usize, tag: u32) -> Vec<VarId> {
         let body = self.ctx.body;
         let hir = self.ctx.hir;
-        types
+        let shapes: Vec<&[PatId]> = rows
+            .iter()
+            .filter_map(|row| shape_args(hir, head(body, hir, row.cells[column]), tag))
+            .collect();
+        let first = shapes
+            .first()
+            .expect("some row has the constructor of the case");
+        first
             .iter()
             .enumerate()
-            .map(|(index, ty)| {
-                let name = rows
+            .map(|(index, &pat)| {
+                let name = shapes
                     .iter()
-                    .find_map(|row| {
-                        let args = shape_args(hir, head(body, hir, row.cells[column]), tag)?;
-                        match head(body, hir, Cell::Pat(args[index])) {
-                            Head::Any(Some(local)) => Some(body.locals[local].name.as_str()),
-                            _ => None,
-                        }
+                    .find_map(|args| match head(body, hir, Cell::Pat(args[index])) {
+                        Head::Any(Some(local)) => Some(body.locals[local].name.as_str()),
+                        _ => None,
                     })
                     .unwrap_or("x");
-                self.builder.var(var_info(name, ty, hir))
+                let repr = repr(&self.pat_type(pat), hir);
+                self.builder.var(named(name, repr))
             })
             .collect()
     }
@@ -774,48 +748,6 @@ impl FnLowering<'_> {
             Literal::Int(n) => CasePattern::Int(*n),
             Literal::String(text) => CasePattern::String(self.program.strings.intern(text)),
             Literal::Unit => unreachable!("`()` is a wildcard pattern, not a literal pattern"),
-        }
-    }
-
-    /// `con` で作った値のフィールドの型。
-    fn con_field_types(&self, tag: u32, ty: &Type, arity: usize) -> Vec<Type> {
-        match ty {
-            Type::Con { id, .. } => match &self.ctx.hir[*id].kind {
-                TypeDefKind::Data { constructors } => {
-                    let ctor = constructors
-                        .iter()
-                        .copied()
-                        .find(|&ctor| self.ctx.hir[ctor].tag == tag)
-                        .expect("the tag names a constructor of the type");
-                    self.field_types(ctor, ty)
-                }
-                TypeDefKind::Extern(_) => unreachable!("an extern type has no constructors"),
-            },
-            _ => tuple_field_types(ty, arity),
-        }
-    }
-
-    /// コンストラクタのフィールドの型。スキームの型引数を、調べる値の型の引数で置き換える。値の型が型構成子の適用で
-    /// なければ置き換えず、型変数のままにする。型変数の値は `tobj` として扱うので、多めに RC の対象になるだけで正しく
-    /// 動く (docs/spec/core-ir.md)。
-    fn field_types(&self, ctor: ConstructorId, ty: &Type) -> Vec<Type> {
-        let constructor = &self.ctx.hir[ctor];
-        let (fields, _) = split_arrows(
-            self.program.constructor_type(ctor),
-            constructor.fields.len(),
-        );
-        let names: Vec<String> = self.ctx.hir[constructor.ty]
-            .generics
-            .type_vars
-            .iter()
-            .map(|(_, var)| var.name.clone())
-            .collect();
-        match ty {
-            Type::Con { args, .. } if args.len() == names.len() => fields
-                .iter()
-                .map(|field| substitute(field, &names, args))
-                .collect(),
-            _ => fields,
         }
     }
 }
@@ -870,40 +802,4 @@ fn remove_column(
         })
         .map(|row| row.replace(column, []))
         .collect()
-}
-
-/// タプルの要素の型。型検査はタプルを数字ラベルの閉じたレコードにし、ラベルの順に並べる (docs/spec/records.md)。
-/// レコードでなければ置き換えずに型変数として扱う。
-fn tuple_field_types(ty: &Type, arity: usize) -> Vec<Type> {
-    match ty {
-        Type::Record(fields) if fields.len() == arity => {
-            fields.iter().map(|(_, field)| field.clone()).collect()
-        }
-        _ => vec![Type::Flexible; arity],
-    }
-}
-
-/// スキームの型の中の型引数 (`names`) を `args` で置き換える。関数型と継続は中身によらず `tobj` で、パターンで
-/// 分解もしないので、中を置き換えなくてよい。
-fn substitute(ty: &Type, names: &[String], args: &[Type]) -> Type {
-    match ty {
-        Type::Rigid(name) => names
-            .iter()
-            .position(|candidate| candidate == name)
-            .map_or_else(|| ty.clone(), |index| args[index].clone()),
-        Type::Con { id, args: inner } => Type::Con {
-            id: *id,
-            args: inner
-                .iter()
-                .map(|arg| substitute(arg, names, args))
-                .collect(),
-        },
-        Type::Record(fields) => Type::Record(
-            fields
-                .iter()
-                .map(|(label, field)| (label.clone(), substitute(field, names, args)))
-                .collect(),
-        ),
-        Type::Fn { .. } | Type::Flexible | Type::Error => ty.clone(),
-    }
 }

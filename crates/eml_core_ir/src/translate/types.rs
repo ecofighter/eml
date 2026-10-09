@@ -1,7 +1,7 @@
 //! 型から決まる値の表現 (Repr) と、`==` と `!=` を比べ方ごとのどの extern にするか。
 
 use eml_extern::Extern;
-use eml_hir::{Program as HirProgram, TypeDefKind};
+use eml_hir::{Program as HirProgram, TypeDefId, TypeDefKind};
 use eml_types::{Equality, Type};
 
 use crate::{Repr, VarInfo, data_repr};
@@ -11,18 +11,7 @@ use crate::{Repr, VarInfo, data_repr};
 /// (捕まえた変数のない関数、引数のないコンストラクタ) にもヒープの物体にもなるので `tobj` にする。
 pub fn repr(ty: &Type, hir: &HirProgram) -> Repr {
     match ty {
-        Type::Con { id, args: _ } => match &hir[*id].kind {
-            TypeDefKind::Extern(row) => {
-                row.expect(
-                    "an extern type outside the standard library is E1033, and Core IR receives only programs without errors",
-                )
-                .row()
-                .repr
-            }
-            TypeDefKind::Data { constructors } => {
-                data_repr(constructors.iter().map(|&ctor| hir[ctor].fields.len()))
-            }
-        },
+        Type::Con { id, args: _ } => type_def_repr(*id, hir),
         Type::Fn { .. } | Type::Rigid(_) | Type::Flexible => Repr::TObj,
         // 空のレコードは `Unit` で、値は `()` である。要素のあるレコード (タプル) はヒープの物体にする
         Type::Record(fields) if fields.is_empty() => Repr::Unit,
@@ -31,10 +20,30 @@ pub fn repr(ty: &Type, hir: &HirProgram) -> Repr {
     }
 }
 
+/// 型構成子 `id` の値の Repr。型引数によらない。
+pub(super) fn type_def_repr(id: TypeDefId, hir: &HirProgram) -> Repr {
+    match &hir[id].kind {
+        TypeDefKind::Extern(row) => {
+            row.expect(
+                "an extern type outside the standard library is E1033, and Core IR receives only programs without errors",
+            )
+            .row()
+            .repr
+        }
+        TypeDefKind::Data { constructors } => {
+            data_repr(constructors.iter().map(|&ctor| hir[ctor].fields.len()))
+        }
+    }
+}
+
 pub(super) fn var_info(name: &str, ty: &Type, hir: &HirProgram) -> VarInfo {
+    named(name, repr(ty, hir))
+}
+
+pub(super) fn named(name: &str, repr: Repr) -> VarInfo {
     VarInfo {
         name: name.to_string(),
-        repr: repr(ty, hir),
+        repr,
     }
 }
 

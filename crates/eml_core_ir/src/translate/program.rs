@@ -307,7 +307,7 @@ impl ProgramBuilder {
         function
     }
 
-    pub(super) fn constructor_type(&self, ctor: ConstructorId) -> &Type {
+    fn constructor_type(&self, ctor: ConstructorId) -> &Type {
         self.constructor_types
             .get(&ctor)
             .expect("every constructor has a scheme")
