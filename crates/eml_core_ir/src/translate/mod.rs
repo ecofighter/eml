@@ -5,6 +5,7 @@
 
 mod builder;
 mod expr;
+mod instances;
 mod pattern;
 mod program;
 mod types;
@@ -13,8 +14,8 @@ use std::collections::{HashMap, HashSet};
 
 use eml_diagnostics::{FileId, SourceFiles};
 use eml_hir::{
-    Body, ExprId, ExprKind, Function, FunctionId, FunctionKind, ItemMap, LocalId, MatchArm, PatId,
-    PatKind, Program as HirProgram, Res, Stmt as HirStmt, ValueItem,
+    Body, ExprId, ExprKind, FunctionId, LocalId, MatchArm, PatId, PatKind, Program as HirProgram,
+    Res, Stmt as HirStmt, ValueItem,
 };
 use eml_types::{BodyTypes, TypeId, TypeStore, TypedProgram};
 use la_arena::ArenaMap;
@@ -25,33 +26,13 @@ use crate::{
 
 use builder::{FnBuilder, Label};
 use expr::extern_row;
+use instances::InstanceId;
 use pattern::{Known, MatchCtx, Occ, Scrutinee, destructures};
-use program::{ProgramBuilder, core_name, effect_table};
+use program::{ProgramBuilder, effect_table};
 use types::{named, repr, split_arrows, var_info};
 
 // extern の表の行と std の宣言を照らし合わせる結合テスト (tests/externs.rs) が、translate と同じ規則で型の Repr を決める
 pub use types::repr as type_repr;
-
-/// 入口の関数から届く関数。使わない Prelude の関数を Core IR に入れないため、関数の本体の参照をたどって集める
-/// (docs/spec/core-ir.md)。
-fn reachable(hir: &HirProgram, entry: FunctionId) -> HashSet<FunctionId> {
-    let mut seen = HashSet::new();
-    let mut work = vec![entry];
-    while let Some(id) = work.pop() {
-        if !seen.insert(id) {
-            continue;
-        }
-        let Some(body) = hir.body(id) else {
-            continue;
-        };
-        for (_, expr) in body.exprs.iter() {
-            if let ExprKind::Path(Res::Item(ValueItem::Function(callee))) = expr.kind {
-                work.push(callee);
-            }
-        }
-    }
-    seen
-}
 
 /// 節の `k` の変換の形 (docs/spec/core-ir.md)。
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -169,43 +150,41 @@ pub(crate) fn translate(
     files: &SourceFiles,
 ) -> Program {
     let mut builder = ProgramBuilder::new(hir, typed);
-    let mut indices = ItemMap::default();
-    let reached = reachable(hir, entry);
-    // extern の関数は本体を持たず、呼び出しの位置で `Rhs::Extern` にするか、包む関数を作る (`program.rs` の `extern_wrapper`)
-    let defined = || {
-        hir.functions()
-            .filter(|(id, function)| function.kind == FunctionKind::Defined && reached.contains(id))
-    };
-    for (id, _) in defined() {
-        let body = hir
-            .body(id)
-            .expect("a program without errors has an equation for every function");
-        indices.insert(id, builder.reserve(body.params.len()));
-    }
-    for (id, function) in defined() {
+    let instances = instances::collect(hir, typed, entry);
+    let store = &instances.store;
+    let indices: Vec<FnIdx> = instances
+        .list
+        .iter()
+        .map(|instance| {
+            let body = hir
+                .body(instance.function)
+                .expect("a program without errors has an equation for every function");
+            builder.reserve(body.params.len())
+        })
+        .collect();
+    for (instance, &index) in instances.list.iter().zip(&indices) {
+        let id = instance.function;
         let body = hir.body(id).expect("checked above");
-        let signature = typed
-            .decls
-            .get(&ValueItem::Function(id))
-            .expect("every function has a signature")
-            .ty;
-        let (param_types, ret) = split_arrows(&typed.types, signature, body.params.len());
+        let (param_types, ret) = split_arrows(store, instance.signature, body.params.len());
         let params: Vec<(Option<PatId>, Repr)> = body
             .params
             .iter()
             .zip(&param_types)
-            .map(|(&pat, &ty)| (Some(pat), repr(&typed.types, ty, hir)))
+            .map(|(&pat, &ty)| (Some(pat), repr(store, ty, hir)))
             .collect();
-        let name = core_name(hir, id.module, &function.name);
         let forms = continuation_forms(body);
         let numbers = numbering(hir, body);
         let ctx = BodyCtx {
             hir,
             body,
-            store: &typed.types,
-            types: typed.bodies.get(id).expect("every body is type-checked"),
+            store,
+            types: instance
+                .types
+                .as_ref()
+                .unwrap_or_else(|| typed.bodies.get(id).expect("every body is type-checked")),
+            targets: &instance.targets,
             indices: &indices,
-            root_name: &name,
+            root_name: &instance.name,
             numbering: &numbers,
             continuation_forms: &forms,
             source: Source {
@@ -214,21 +193,23 @@ pub(crate) fn translate(
             },
         };
         let core = FnLowering::new(ctx, &mut builder).lower(
-            &name,
+            &instance.name,
             false,
             &[],
             &params,
             body.root,
-            repr(&typed.types, ret, hir),
+            repr(store, ret, hir),
         );
-        builder.finish(indices[id], core);
+        builder.finish(index, core);
     }
-    let entry_type = typed
-        .decls
-        .get(&ValueItem::Function(entry))
-        .expect("the entry function has a signature")
-        .ty;
-    let entry_fn = builder.entry(hir, &typed.types, indices[entry], entry, entry_type);
+    let entry_instance = &instances.list[instances.entry.0];
+    let entry_fn = builder.entry(
+        hir,
+        store,
+        indices[instances.entry.0],
+        entry,
+        entry_instance.signature,
+    );
     Program {
         functions: builder
             .functions
@@ -282,16 +263,30 @@ struct Source<'a> {
 struct BodyCtx<'a> {
     hir: &'a HirProgram,
     body: &'a Body,
-    /// 型検査の型の表。Core IR は表を読むだけで、型を作らない。
+    /// 型の表。型検査の表に、単相化の代入の結果を足したもの。本体の変換は読むだけである。
     store: &'a TypeStore,
     types: &'a BodyTypes,
-    indices: &'a ItemMap<Function, FnIdx>,
+    /// 本体の中の、定義された関数への参照の行き先の instance。
+    targets: &'a ArenaMap<ExprId, InstanceId>,
+    /// instance の番号から関数の番号への表。
+    indices: &'a [FnIdx],
     /// ラムダ、handle、extern を包む関数の名前に使う、トップレベルの関数の名前。
     root_name: &'a str,
     numbering: &'a Numbering,
     /// 本体の中の節の `k` の変換の形。持ち上げた入れ子の関数も同じ表を見て、捕まえた `k` を同じ形で扱う。
     continuation_forms: &'a ArenaMap<LocalId, ContinuationForm>,
     source: Source<'a>,
+}
+
+impl BodyCtx<'_> {
+    /// 定義された関数への参照 `expr` の行き先の関数。
+    fn target(&self, expr: ExprId) -> FnIdx {
+        let instance = self
+            .targets
+            .get(expr)
+            .expect("every reference to a defined function has an instance");
+        self.indices[instance.0]
+    }
 }
 
 struct FnLowering<'a> {

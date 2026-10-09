@@ -351,7 +351,7 @@ impl FnLowering<'_> {
                         row,
                         callee,
                     },
-                    None => Callee::Function(self.ctx.indices[*function]),
+                    None => Callee::Function(self.ctx.target(callee)),
                 }
             }
             ExprKind::Path(Res::Item(ValueItem::Operation(op))) => Callee::Operation(*op),
@@ -412,7 +412,7 @@ impl FnLowering<'_> {
                     return self.closure(wrapper, Vec::new());
                 }
                 // 引数のないトップレベルの値は、参照するたびに呼び出す (docs/spec/core-ir.md)
-                let target = self.ctx.indices[*function];
+                let target = self.ctx.target(id);
                 if self.program.arity(target) == 0 {
                     let name = self.ctx.hir[*function].name.clone();
                     let ty = self.ty(id);
