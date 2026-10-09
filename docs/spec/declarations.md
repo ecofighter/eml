@@ -151,7 +151,7 @@ dir </> name = join_path dir name
 |---|---|
 | `+` `-` `*` `/` `%` | `Int -> Int -> Int`。`Int` は 64 ビットの符号付き整数で、オーバーフローとゼロ除算は実行時エラーにする。`/` と `%` は Rust と同じく、商を 0 の方向に切り捨てる (`%` の結果は被除数と同じ符号になる) |
 | 単項の `-` (`negate`) | `Int -> Int`。オーバーフローは実行時エラー |
-| `==` `!=` | `a -> a -> Bool`。`a` は `Int`、`String`、`Bool` のどれかでなければならない。型検査が引数の型から比べ方を決め、それ以外の型 (`data` の型、タプル、関数、シグネチャの型変数) は E2006 にする。S4 の組み込みのクラス `Eq` の `Int`、`String`、`Bool` のインスタンスにあたる ([ロードマップ](../future/roadmap.md) の「S4 スクリプトの MVP」) |
+| `==` `!=` | `a -> a -> Bool`。`a` は `Int`、`String`、`Bool` のどれかでなければならない。型検査が引数の型から比べ方を決め、それ以外の型 (`data` の型、タプル、関数、シグネチャの型変数) は E2006 にする。S5 の型クラス `Eq` の `Int`、`String`、`Bool` のインスタンスにあたる ([ロードマップ](../future/roadmap.md) の「S5 型クラス」) |
 | `<` `<=` `>` `>=` | `Int -> Int -> Bool` |
 | `++` | `String -> String -> String` |
 | `&&` `\|\|` | `Bool -> Bool -> Bool`。短絡評価する。HIR で `a && b` を `if a then b else False` に、`a \|\| b` を `if a then True else b` に脱糖する |
