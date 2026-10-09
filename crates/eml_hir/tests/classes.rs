@@ -308,6 +308,19 @@ fn deriving_makes_instances_with_a_context_per_parameter() {
 }
 
 #[test]
+fn every_deriving_clause_is_derived() {
+    // 2つ目の `deriving` の句はパーサが E0011 にするが、クラスは導出して、使う位置に E2006 を連鎖させない
+    let lowered = lower("data T =\n  | A\n  deriving Eq\n  deriving Show");
+    let program = &lowered.program;
+    let derived: Vec<&str> = program
+        .instances()
+        .filter(|(_, def)| program.names.ty(def.head) == "T")
+        .map(|(_, def)| program[def.class].name.as_str())
+        .collect();
+    assert_eq!(derived, ["Eq", "Show"]);
+}
+
+#[test]
 fn deriving_twice_or_with_a_written_instance_is_a_duplicate() {
     let text = "data Color =\n  | Red\n  | Green\n  deriving (Show, Show)\n\ndata Size = | Size Int deriving Eq\n\ninstance Eq Size where\n  _ == _ = True";
     let found = lines(text);

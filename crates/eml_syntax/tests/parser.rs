@@ -592,6 +592,33 @@ fn deriving_alone_is_not_a_constructor() {
 }
 
 #[test]
+fn a_data_declaration_has_one_deriving_clause() {
+    // 2つ目の句は E0011 にするが、クラスは読む。HIR はすべての句のクラスを導出する
+    for (text, expected) in [
+        (
+            "data T =\n  | A\n  deriving Eq\n  deriving Show",
+            "E0011 4:3",
+        ),
+        ("data T =\n  | A deriving Eq\n  deriving Show", "E0011 3:3"),
+        ("data T = | A deriving Eq deriving Show", "E0011 1:26"),
+    ] {
+        assert_eq!(
+            diagnostics(text),
+            [format!(
+                "{expected} a data declaration has one `deriving` clause"
+            )],
+            "{text}"
+        );
+        assert_eq!(item_kinds(text), ["DATA_ITEM"], "{text}");
+    }
+    // 選択肢のないブロックの誤りは、`deriving` がいくつあっても1件だけにする
+    assert_eq!(
+        diagnostics("data Never =\n  deriving Eq\n  deriving Show"),
+        ["E0011 2:3 expected a constructor starting with `|`"]
+    );
+}
+
+#[test]
 fn an_instance_cannot_be_public_or_have_signatures() {
     assert_eq!(
         diagnostics("pub instance Eq C"),

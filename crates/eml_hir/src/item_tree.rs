@@ -308,8 +308,7 @@ pub fn item_tree(file: FileId, parse: &Parse) -> (ItemTree, Vec<Diagnostic>) {
                     continue;
                 };
                 let deriving = item
-                    .deriving()
-                    .into_iter()
+                    .deriving_clauses()
                     .flat_map(|deriving| deriving.classes())
                     .map(|class| (AstPtr::new(&class), class.range()))
                     .collect();

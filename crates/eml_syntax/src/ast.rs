@@ -672,8 +672,9 @@ impl DropExpr {
 }
 
 impl DataItem {
-    pub fn deriving(&self) -> Option<Deriving> {
-        support::child(&self.syntax)
+    /// `deriving` の句。2つ目からはパーサが E0011 にするが、クラスはすべての句から読む。
+    pub fn deriving_clauses(&self) -> AstChildren<Deriving> {
+        support::children(&self.syntax)
     }
 
     pub fn extern_keyword(&self) -> Option<SyntaxToken> {

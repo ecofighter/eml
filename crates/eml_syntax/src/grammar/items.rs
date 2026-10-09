@@ -185,15 +185,16 @@ fn data_item(p: &mut Parser, m: Marker) {
     while p.at(LIDENT) {
         name(p);
     }
+    let mut clauses = 0;
     if p.eat(EQ) {
-        alts(p);
+        alts(p, &mut clauses);
     } else if p.at(PIPE) {
         // `=` の書き忘れ。選択肢は読み、コンストラクタを使う位置に誤りを連鎖させない
         expected(p, "`=`");
-        alts(p);
+        alts(p, &mut clauses);
     }
-    if p.at(DERIVING_KW) {
-        deriving(p);
+    while p.at(DERIVING_KW) {
+        data_deriving(p, &mut clauses);
     }
     m.complete(p, DATA_ITEM);
 }
@@ -230,18 +231,25 @@ fn reject_extern_tail(p: &mut Parser, keyword: &str) {
     }
 }
 
-fn alts(p: &mut Parser) {
+/// `clauses` は、この `data` でここまでに読んだ `deriving` の句の数。
+fn alts(p: &mut Parser, clauses: &mut usize) {
     if p.at(LAYOUT_OPEN) {
         // `deriving` は、ブロックの最後の項目にも、最後の選択肢の続きの行にも書ける (docs/spec/grammar.md の「文法上の補足」)
         let mut derived = false;
         let mut constructors = false;
         block_of(p, "a constructor starting with `|`", |p| {
             if p.at(DERIVING_KW) {
-                // `deriving` は選択肢に数えない。後ろに選択肢が続いても、ここで1件だけ報告する
-                if !constructors {
-                    expected(p, "a constructor starting with `|`");
+                // `deriving` は選択肢に数えない。選択肢がないことは、後ろに `deriving` や選択肢が続いても1件だけ
+                // 報告し、句の数の誤りを重ねない
+                if constructors {
+                    data_deriving(p, clauses);
+                } else {
+                    if *clauses == 0 {
+                        expected(p, "a constructor starting with `|`");
+                    }
+                    *clauses += 1;
+                    deriving(p);
                 }
-                deriving(p);
                 derived = constructors;
                 return true;
             }
@@ -257,7 +265,7 @@ fn alts(p: &mut Parser) {
             }
             constructors = true;
             if p.at(DERIVING_KW) {
-                deriving(p);
+                data_deriving(p, clauses);
                 derived = true;
             }
             true
@@ -675,6 +683,20 @@ fn deriving(p: &mut Parser) {
         expected(p, "a class name");
     }
     m.complete(p, DERIVING);
+}
+
+/// `data` の `deriving` の句。句は1つだけ書ける (docs/spec/grammar.md の「文法上の補足」)。2つ目からも E0011 を出したうえで
+/// クラスを読む。HIR はすべての句のクラスを導出するので、使う位置に E2006 を連鎖させない。
+fn data_deriving(p: &mut Parser, clauses: &mut usize) {
+    if *clauses > 0 {
+        p.error(
+            codes::SYNTAX_ERROR,
+            "a data declaration has one `deriving` clause",
+            "list every class in one `deriving (…)`",
+        );
+    }
+    *clauses += 1;
+    deriving(p);
 }
 
 fn reserved_item(p: &mut Parser, m: Marker) {

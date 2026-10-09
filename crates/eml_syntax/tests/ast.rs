@@ -520,7 +520,8 @@ fn deriving_lists_its_classes() {
             let Item::DataItem(data) = item else {
                 panic!("expected a data declaration");
             };
-            data.deriving()
+            data.deriving_clauses()
+                .next()
                 .expect("a deriving clause")
                 .classes()
                 .map(|path| path.segments().map(|segment| segment.text()).collect())
