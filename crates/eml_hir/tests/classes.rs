@@ -115,6 +115,25 @@ fn instance_declarations_are_checked() {
 }
 
 #[test]
+fn members_of_a_rejected_instance_are_still_resolved() {
+    // 置かなかった instance のメンバーも名前を解決し、最初の誤りを直す前に本体の誤りが見えるようにする
+    let class = "class Size a where\n  size : a -> Int\n\n";
+    insta::assert_snapshot!(lines(&format!("{COLOR}{class}instance Size Color where\n  size _ = 1\n\ninstance Size Color where\n  size _ = missing")).join("\n"), @"
+    E1035 11:15 `Color` already has an instance of `Size`
+    E1001 12:12 cannot find value `missing`
+    ");
+    // 頭の誤り、解決できないクラス、クラスにないメソッド。本体の注釈は頭の型変数を引ける
+    insta::assert_snapshot!(lines(&format!("{class}data Pair a b = | Pair a b\n\ninstance Size (Pair a a) where\n  size p = (gone : Pair a a)\n\ninstance Nope Int where\n  nope x = absent\n\ninstance Size Int where\n  size _ = 0\n  extra x = lost")).join("\n"), @"
+    E1039 6:23 an instance head must be a type constructor applied to distinct type variables
+    E1001 7:13 cannot find value `gone`
+    E1002 9:10 cannot find class `Nope`
+    E1001 10:12 cannot find value `absent`
+    E1037 14:3 `extra` is not a method of `Size`
+    E1001 14:13 cannot find value `lost`
+    ");
+}
+
+#[test]
 fn an_instance_must_be_in_the_module_of_its_class_or_type() {
     let class = "pub class Size a where\n  size : a -> Int\n";
     let ty = "pub data Color = | Red\n";
@@ -151,6 +170,37 @@ fn a_class_variable_only_in_an_effect_row_is_mentioned() {
     // エフェクトの型引数もメソッドの型に現れるものに数える (docs/spec/declarations.md の「宣言の検査」)
     let text = "effect Reader r where\n  ask : Unit -> r\n\nclass Source a where\n  load : Unit -> <Reader a> Int";
     assert_eq!(lines(text), Vec::<String>::new());
+}
+
+#[test]
+fn a_type_with_an_error_does_not_add_constraint_errors() {
+    // 型の誤りを報告済みなら、型変数がないことの E1040 を重ねない。row の誤りも型の誤りに数える
+    let text = "class Source a where\n  load : Unit -> <Missing a> Unit";
+    assert_eq!(lines(text), ["E1002 2:19 cannot find effect `Missing`"]);
+    let text = "class Size a where\n  size : a -> Int\n  pair : Size b => a -> <Missing b> Int";
+    assert_eq!(lines(text), ["E1002 3:26 cannot find effect `Missing`"]);
+    let text = "f : Eq a => => a -> Int\nf x = 1";
+    assert_eq!(lines(text), ["E0011 1:13 expected a type"]);
+    let text = "f : Eq a => Missing -> Int\nf x = 1";
+    assert_eq!(lines(text), ["E1002 1:13 cannot find type `Missing`"]);
+}
+
+#[test]
+fn superclasses_are_listed_breadth_first_in_declaration_order() {
+    let text = "class D a\nclass E a\nclass D a => B a\nclass E a => C a\nclass (B a, C a) => A a";
+    let lowered = lower(text);
+    assert!(lowered.diagnostics.is_empty(), "{:?}", lowered.diagnostics);
+    let program = &lowered.program;
+    let (a, _) = program
+        .classes()
+        .find(|(_, def)| def.name == "A")
+        .expect("the class");
+    let names: Vec<&str> = program
+        .superclasses(a)
+        .into_iter()
+        .map(|class| program[class].name.as_str())
+        .collect();
+    assert_eq!(names, ["B", "C", "D", "E"]);
 }
 
 #[test]

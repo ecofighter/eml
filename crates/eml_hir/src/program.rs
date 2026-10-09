@@ -2,7 +2,7 @@
 //! (docs/implementation/architecture.md の「`eml_hir` の内部」)。
 
 use std::cmp::Ordering;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::fmt;
 use std::hash::{Hash, Hasher};
 use std::ops::{Index, IndexMut};
@@ -332,17 +332,18 @@ impl Program {
         (core.0 == method.class).then_some(core.1)
     }
 
-    /// 上位クラスの推移的な閉包。自分は含まない。循環は HIR が E1042 で切ってあるが、作業の列は訪れた印で止める。
+    /// 上位クラスの推移的な閉包。自分は含まない。直接の上位クラスから、宣言の順に幅優先で並べる。循環は HIR が E1042 で
+    /// 切ってあるが、作業の列は訪れた印で止める。
     pub fn superclasses(&self, class: ClassId) -> Vec<ClassId> {
         let mut seen = vec![class];
-        let mut work = vec![class];
+        let mut work = VecDeque::from([class]);
         let mut out = Vec::new();
-        while let Some(next) = work.pop() {
+        while let Some(next) = work.pop_front() {
             for &superclass in &self[next].superclasses {
                 if !seen.contains(&superclass) {
                     seen.push(superclass);
                     out.push(superclass);
-                    work.push(superclass);
+                    work.push_back(superclass);
                 }
             }
         }

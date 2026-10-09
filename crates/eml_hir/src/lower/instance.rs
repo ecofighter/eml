@@ -10,7 +10,7 @@ use la_arena::{Arena, Idx, RawIdx};
 
 use super::class::ContextScope;
 use super::types::{arity_error, class_as_type, visit_type_vars};
-use super::{ItemLowering, NameKind, PendingBody, not_found, path_name, unresolved};
+use super::{BodyOwner, ItemLowering, NameKind, PendingBody, not_found, path_name, unresolved};
 use crate::codes;
 use crate::def_map::Resolved;
 use crate::hir::{
@@ -18,7 +18,7 @@ use crate::hir::{
     InstanceOrigin, ItemId, MethodId, MethodImpl, RowRef, Signature, TypeDefId, TypeDefKind,
     TypeRef, TypeRefId, TypeRefKind, TypeVarDecl, TypeVarId,
 };
-use crate::item_tree::{ItemTree, MemberItem};
+use crate::item_tree::{InstanceItem, ItemTree, MemberItem};
 use crate::program::{Module, TypeItem};
 
 /// 検査した instance の頭。
@@ -53,157 +53,179 @@ impl ItemLowering<'_> {
         pending: &mut Vec<PendingBody>,
     ) {
         for item in &tree.instances {
-            let node = item.ptr.to_node(self.root);
-            let class_path = node.class();
-            let class_written = class_path.as_ref().map(|path| {
-                path.segments()
-                    .map(|segment| segment.text())
-                    .collect::<Vec<_>>()
-                    .join(".")
-            });
-            let (Some(class), Some(class_written)) =
-                (self.resolve_class(class_path), class_written)
-            else {
-                continue;
-            };
-            // 頭の型がなければパーサが報告済み
-            let Some(head_ty) = node.head() else {
-                continue;
-            };
-            let head_range = head_ty.range();
-            let Some(head) = self.instance_head(head_ty) else {
-                continue;
-            };
-            let mut generics = Generics::default();
-            for var in &head.vars {
-                generics.type_vars.alloc(TypeVarDecl { name: var.clone() });
+            if !self.lower_instance(item, modules, index, pending) {
+                // 置かなかった instance のメンバーも名前を解決する。最初の誤りを直すまで本体の誤りが見えないことを
+                // 避けるためである。頭が誤っていることもあるので、注釈には頭に書いた型変数をすべて見せる
+                let vars = written_vars(item.ptr.to_node(self.root).head());
+                pending.extend(
+                    item.members
+                        .iter()
+                        .map(|member| discarded(member, vars.clone())),
+                );
             }
-            let context =
-                self.lower_context(node.context(), &generics, ContextScope::Instance, None);
-            let names = self.def_map.display_names();
-            let (class_name, ty_name) = (names.class(class), names.ty(head.ty));
-            if class.module != self.module && head.ty.module != self.module {
-                self.diagnostics.push(Diagnostic::error(
-                    codes::ORPHAN_INSTANCE,
-                    format!(
-                        "an instance of `{class_name}` for `{ty_name}` must be in the module of `{class_name}` or of `{ty_name}`"
-                    ),
-                    Label::new(self.file, head_range, "neither is defined in this module"),
-                ));
-                continue;
-            }
-            if self.duplicate(modules, index, class, head.ty, head_range) {
-                continue;
-            }
-            let class_def = &modules[class.module].items.classes[class.local];
-            let mut planned = Vec::new();
-            let mut defined = Vec::new();
-            for member in &item.members {
-                let found = class_def.methods.iter().copied().find(|method| {
-                    modules[method.module].items.methods[method.local].name == member.name
-                });
-                let Some(method) = found else {
-                    self.diagnostics.push(Diagnostic::error(
-                        codes::UNKNOWN_METHOD,
-                        format!("`{}` is not a method of `{class_name}`", member.name),
-                        Label::new(self.file, member.name_range, "not declared in the class"),
-                    ));
-                    continue;
-                };
-                // ユーザーのモジュールの `extern` は E1033 にして行を持たないが、定義したものに数えて E1036 を重ねない
-                defined.push(method);
-                if let Some(keyword) = member.extern_range {
-                    let name = format!("{class_written} {}.{}", head.written, member.name);
-                    if let Some(row) = self.extern_row(keyword, &name, Extern::from_name) {
-                        planned.push(Planned::Extern(method, row));
-                    }
-                    continue;
-                }
-                let signature = &modules[method.module].items.methods[method.local].signature;
-                planned.push(Planned::Function {
-                    method,
-                    name: format!("{class_name} {ty_name}.{}", member.name),
-                    signature: instance_signature(
-                        signature,
-                        head.ty,
-                        &head.vars,
-                        &context,
-                        member.name_range,
-                    ),
-                    member,
-                });
-            }
-            for &method in &class_def.methods {
-                let method_def = &modules[method.module].items.methods[method.local];
-                if method_def.default.is_none() && !defined.contains(&method) {
-                    let name = &method_def.name;
-                    self.diagnostics.push(
-                        Diagnostic::error(
-                            codes::MISSING_METHOD,
-                            format!(
-                                "the instance of `{class_name}` for `{ty_name}` does not define `{name}`"
-                            ),
-                            Label::new(self.file, head_range, format!("`{name}` has no default")),
-                        )
-                        .with_help(format!("add an equation for `{name}`")),
-                    );
-                }
-            }
-            let items = &mut modules[self.module].items;
-            let instance = ItemId::new(
-                self.module,
-                items.instances.alloc(InstanceDef {
-                    class,
-                    head: head.ty,
-                    head_range,
-                    generics,
-                    context: Vec::new(),
-                    methods: Vec::new(),
-                    origin: InstanceOrigin::Written,
-                }),
-            );
-            index.insert((class, head.ty), instance);
-            let mut methods = Vec::new();
-            for plan in planned {
-                match plan {
-                    Planned::Function {
-                        method,
-                        name,
-                        signature,
-                        member,
-                    } => {
-                        let function = ItemId::new(
-                            self.module,
-                            items.functions.alloc(Function {
-                                name,
-                                name_range: member
-                                    .equations
-                                    .first()
-                                    .map_or(member.name_range, |(_, range)| *range),
-                                signature_name_range: Some(member.name_range),
-                                equation_ranges: member
-                                    .equations
-                                    .iter()
-                                    .map(|(_, range)| *range)
-                                    .collect(),
-                                signature: Some(signature),
-                                kind: FunctionKind::InstanceMethod(instance, method),
-                            }),
-                        );
-                        pending.push(PendingBody {
-                            function,
-                            equations: member.equations.clone(),
-                            annotation_vars: Some(head.vars.len()),
-                        });
-                        methods.push((method, MethodImpl::Function(function)));
-                    }
-                    Planned::Extern(method, row) => methods.push((method, MethodImpl::Extern(row))),
-                }
-            }
-            let def = &mut items.instances[instance.local];
-            def.context = context;
-            def.methods = methods;
         }
+    }
+
+    /// instance を1つ置き、置けたかを返す。置けなければ、誤りを報告済みである。
+    fn lower_instance(
+        &mut self,
+        item: &InstanceItem,
+        modules: &mut Arena<Module>,
+        index: &mut HashMap<(ClassId, TypeDefId), InstanceId>,
+        pending: &mut Vec<PendingBody>,
+    ) -> bool {
+        let node = item.ptr.to_node(self.root);
+        let class_path = node.class();
+        let class_written = class_path.as_ref().map(|path| {
+            path.segments()
+                .map(|segment| segment.text())
+                .collect::<Vec<_>>()
+                .join(".")
+        });
+        let (Some(class), Some(class_written)) = (self.resolve_class(class_path), class_written)
+        else {
+            return false;
+        };
+        // 頭の型がなければパーサが報告済み
+        let Some(head_ty) = node.head() else {
+            return false;
+        };
+        let head_range = head_ty.range();
+        let Some(head) = self.instance_head(head_ty) else {
+            return false;
+        };
+        let mut generics = Generics::default();
+        for var in &head.vars {
+            generics.type_vars.alloc(TypeVarDecl { name: var.clone() });
+        }
+        let context = self.lower_context(node.context(), &generics, ContextScope::Instance, None);
+        let names = self.def_map.display_names();
+        let (class_name, ty_name) = (names.class(class), names.ty(head.ty));
+        if class.module != self.module && head.ty.module != self.module {
+            self.diagnostics.push(Diagnostic::error(
+                codes::ORPHAN_INSTANCE,
+                format!(
+                    "an instance of `{class_name}` for `{ty_name}` must be in the module of `{class_name}` or of `{ty_name}`"
+                ),
+                Label::new(self.file, head_range, "neither is defined in this module"),
+            ));
+            return false;
+        }
+        if self.duplicate(modules, index, class, head.ty, head_range) {
+            return false;
+        }
+        let class_def = &modules[class.module].items.classes[class.local];
+        let mut planned = Vec::new();
+        let mut defined = Vec::new();
+        for member in &item.members {
+            let found = class_def.methods.iter().copied().find(|method| {
+                modules[method.module].items.methods[method.local].name == member.name
+            });
+            let Some(method) = found else {
+                self.diagnostics.push(Diagnostic::error(
+                    codes::UNKNOWN_METHOD,
+                    format!("`{}` is not a method of `{class_name}`", member.name),
+                    Label::new(self.file, member.name_range, "not declared in the class"),
+                ));
+                pending.push(discarded(member, head.vars.clone()));
+                continue;
+            };
+            // ユーザーのモジュールの `extern` は E1033 にして行を持たないが、定義したものに数えて E1036 を重ねない
+            defined.push(method);
+            if let Some(keyword) = member.extern_range {
+                let name = format!("{class_written} {}.{}", head.written, member.name);
+                if let Some(row) = self.extern_row(keyword, &name, Extern::from_name) {
+                    planned.push(Planned::Extern(method, row));
+                }
+                continue;
+            }
+            let signature = &modules[method.module].items.methods[method.local].signature;
+            planned.push(Planned::Function {
+                method,
+                name: format!("{class_name} {ty_name}.{}", member.name),
+                signature: instance_signature(
+                    signature,
+                    head.ty,
+                    &head.vars,
+                    &context,
+                    member.name_range,
+                ),
+                member,
+            });
+        }
+        for &method in &class_def.methods {
+            let method_def = &modules[method.module].items.methods[method.local];
+            if method_def.default.is_none() && !defined.contains(&method) {
+                let name = &method_def.name;
+                self.diagnostics.push(
+                    Diagnostic::error(
+                        codes::MISSING_METHOD,
+                        format!(
+                            "the instance of `{class_name}` for `{ty_name}` does not define `{name}`"
+                        ),
+                        Label::new(self.file, head_range, format!("`{name}` has no default")),
+                    )
+                    .with_help(format!("add an equation for `{name}`")),
+                );
+            }
+        }
+        let items = &mut modules[self.module].items;
+        let instance = ItemId::new(
+            self.module,
+            items.instances.alloc(InstanceDef {
+                class,
+                head: head.ty,
+                head_range,
+                generics,
+                context: Vec::new(),
+                methods: Vec::new(),
+                origin: InstanceOrigin::Written,
+            }),
+        );
+        index.insert((class, head.ty), instance);
+        let mut methods = Vec::new();
+        for plan in planned {
+            match plan {
+                Planned::Function {
+                    method,
+                    name,
+                    signature,
+                    member,
+                } => {
+                    let function = ItemId::new(
+                        self.module,
+                        items.functions.alloc(Function {
+                            name,
+                            name_range: member
+                                .equations
+                                .first()
+                                .map_or(member.name_range, |(_, range)| *range),
+                            signature_name_range: Some(member.name_range),
+                            equation_ranges: member
+                                .equations
+                                .iter()
+                                .map(|(_, range)| *range)
+                                .collect(),
+                            signature: Some(signature),
+                            kind: FunctionKind::InstanceMethod(instance, method),
+                        }),
+                    );
+                    pending.push(PendingBody {
+                        owner: BodyOwner::Function {
+                            id: function,
+                            annotation_vars: Some(head.vars.len()),
+                        },
+                        equations: member.equations.clone(),
+                    });
+                    methods.push((method, MethodImpl::Function(function)));
+                }
+                Planned::Extern(method, row) => methods.push((method, MethodImpl::Extern(row))),
+            }
+        }
+        let def = &mut items.instances[instance.local];
+        def.context = context;
+        def.methods = methods;
+        true
     }
 
     /// このモジュールの `data` の `deriving` ごとに、導出した instance を置く
@@ -424,6 +446,39 @@ impl ItemLowering<'_> {
             Label::new(self.file, range, label),
         ));
     }
+}
+
+/// 置かない instance のメンバーの本体。
+fn discarded(member: &MemberItem, vars: Vec<String>) -> PendingBody {
+    PendingBody {
+        owner: BodyOwner::Discarded { vars },
+        equations: member.equations.clone(),
+    }
+}
+
+/// 頭に書いた型変数の名前。重なりは1つにまとめる。
+fn written_vars(head: Option<ast::Type>) -> Vec<String> {
+    let mut vars = Vec::new();
+    let mut work: Vec<ast::Type> = head.into_iter().collect();
+    while let Some(ty) = work.pop() {
+        match ty {
+            ast::Type::VarType(var) => {
+                if let Some(name) = var.name().map(|name| name.text().to_string())
+                    && !vars.contains(&name)
+                {
+                    vars.push(name);
+                }
+            }
+            ast::Type::AppType(app) => work.extend(app.args()),
+            ast::Type::ParenType(paren) => work.extend(paren.ty()),
+            ast::Type::TupleType(tuple) => work.extend(tuple.elements()),
+            ast::Type::FnType(function) => {
+                work.extend(function.param().into_iter().chain(function.ret()))
+            }
+            ast::Type::PathType(_) => {}
+        }
+    }
+    vars
 }
 
 /// メソッドのシグネチャのクラスの型変数を、instance の頭の型に置き換えたシグネチャ。型変数の並びは、頭の型変数、

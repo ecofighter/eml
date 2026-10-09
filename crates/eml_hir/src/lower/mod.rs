@@ -25,14 +25,24 @@ use class::ContextScope;
 use expr::BodyLowering;
 use types::{TypeLowering, Vars};
 
-/// 名前の表にない関数 (既定のメソッドと instance のメソッド) の、後で変換する本体。
+/// 名前の表にない本体 (既定のメソッドと instance のメソッド、置かなかった instance のメンバー) の、後で変換するもの。
 struct PendingBody {
-    function: FunctionId,
+    owner: BodyOwner,
     equations: Vec<(AstPtr<ast::Equation>, TextRange)>,
-    /// 本体の注釈で引ける、シグネチャの先頭の型変数の数。`None` はすべてである。instance のメソッドのシグネチャの
-    /// メソッド自身の型変数はクラスが決めるので、名前で書けない
-    /// (docs/spec/declarations.md の「`instance`」)。
-    annotation_vars: Option<usize>,
+}
+
+enum BodyOwner {
+    Function {
+        id: FunctionId,
+        /// 本体の注釈で引ける、シグネチャの先頭の型変数の数。`None` はすべてである。instance のメソッドの
+        /// シグネチャのメソッド自身の型変数はクラスが決めるので、名前で書けない
+        /// (docs/spec/declarations.md の「`instance`」)。
+        annotation_vars: Option<usize>,
+    },
+    /// 置かなかった instance のメンバー (E1034、E1035、E1037、E1039、解決できないクラス)。名前の誤りを報告する
+    /// ためだけに変換し、本体は捨てる。関数を置かないので、型検査や translate からは見えない。`vars` は本体の注釈で
+    /// 引ける型変数である。
+    Discarded { vars: Vec<String> },
 }
 
 /// 全モジュールの item と本体を変換する。名前は `def_map` で引き、item はその局所の番号の順にアリーナへ置く
@@ -217,7 +227,9 @@ impl<'a> ItemLowering<'a> {
                 // 現れるかを表で判定できる
                 let scope = match kind {
                     FunctionKind::Extern(_) => ContextScope::Forbidden("an extern declaration"),
-                    _ => ContextScope::Function,
+                    _ => ContextScope::Function {
+                        type_error: types::has_error(&types),
+                    },
                 };
                 let constraints = self.lower_context(node.context(), &generics, scope, public_item);
                 Signature {
@@ -280,6 +292,25 @@ fn lower_bodies(
     diagnostics: &mut Vec<Diagnostic>,
 ) -> ArenaMap<Idx<Function>, Body> {
     let mut bodies = ArenaMap::default();
+    let lower = |modules: &mut Arena<Module>,
+                 diagnostics: &mut Vec<Diagnostic>,
+                 generics: &mut Generics,
+                 equations: &[(AstPtr<ast::Equation>, TextRange)]| {
+        let equations: Vec<(ast::Equation, TextRange)> = equations
+            .iter()
+            .map(|(ptr, range)| (ptr.to_node(root), *range))
+            .collect();
+        BodyLowering::new(
+            tree.file,
+            def_map.resolver(module),
+            modules,
+            def_map.lang(),
+            def_map.externs().negate,
+            generics,
+            diagnostics,
+        )
+        .lower_equations(&equations)
+    };
     let functions = tree.functions.iter().enumerate().map(|(k, function)| {
         (
             def_map.function_id(module, k),
@@ -287,14 +318,14 @@ fn lower_bodies(
             None,
         )
     });
-    let pending = pending.iter().map(|body| {
-        (
-            body.function,
-            body.equations.as_slice(),
-            body.annotation_vars,
-        )
+    let pending_functions = pending.iter().filter_map(|body| match body.owner {
+        BodyOwner::Function {
+            id,
+            annotation_vars,
+        } => Some((id, body.equations.as_slice(), annotation_vars)),
+        BodyOwner::Discarded { .. } => None,
     });
-    for (id, equations, annotation_vars) in functions.chain(pending) {
+    for (id, equations, annotation_vars) in functions.chain(pending_functions) {
         if equations.is_empty()
             || !modules[module].items.functions[id.local]
                 .kind
@@ -318,24 +349,22 @@ fn lower_bodies(
             }
             std::mem::replace(&mut generics, visible)
         });
-        let equations: Vec<(ast::Equation, TextRange)> = equations
-            .iter()
-            .map(|(ptr, range)| (ptr.to_node(root), *range))
-            .collect();
-        let body = BodyLowering::new(
-            tree.file,
-            def_map.resolver(module),
-            modules,
-            def_map.lang(),
-            def_map.externs().negate,
-            &mut generics,
-            diagnostics,
-        )
-        .lower_equations(&equations);
+        let body = lower(modules, diagnostics, &mut generics, equations);
         if let Some(signature) = &mut modules[module].items.functions[id.local].signature {
             signature.generics = hidden.unwrap_or(generics);
         }
         bodies.insert(id.local, body);
+    }
+    for body in pending {
+        if let BodyOwner::Discarded { vars } = &body.owner
+            && !body.equations.is_empty()
+        {
+            let mut generics = Generics::default();
+            for name in vars {
+                generics.type_vars.alloc(TypeVarDecl { name: name.clone() });
+            }
+            lower(modules, diagnostics, &mut generics, &body.equations);
+        }
     }
     bodies
 }

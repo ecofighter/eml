@@ -1,5 +1,5 @@
 use crate::common::{diagnostics, lower_text};
-use eml_test_support::lower_clean;
+use eml_test_support::{lower_clean, short};
 
 #[test]
 fn effects_and_operations_are_items() {
@@ -420,7 +420,24 @@ fn a_qualified_extern_function_in_a_clause_cannot_be_handled() {
 
 #[test]
 fn a_pure_extern_function_in_a_clause_is_not_an_operation() {
-    // extern のエフェクトを起こさない extern の関数は E1009 の対象ではないので、見つからない操作の E1001 のままにする
+    // extern のエフェクトを起こさない extern の関数は E1009 の対象ではないので、見つからない操作の E1001 のままにする。
+    // Prelude の公開の extern の関数で名前が小文字のものは IO を起こすので、`negate` を公開した Prelude で確かめる
+    let prelude = eml_hir::PRELUDE_SOURCE.replace(
+        "\nextern negate : Int -> Int",
+        "\npub extern negate : Int -> Int",
+    );
+    assert_ne!(prelude, eml_hir::PRELUDE_SOURCE);
+    let text = "f : Unit -> Int\nf () = handle 1 with\n  | negate x k -> k 1";
+    let lowered =
+        eml_test_support::lower_with_std(&[("Prelude.em", &prelude), eml_hir::STD[1]], text);
+    assert_eq!(
+        short(lowered.files(), &lowered.diagnostics),
+        ["E1001 3:5 cannot find effect operation `negate`"]
+    );
+}
+
+#[test]
+fn a_method_in_a_clause_is_not_an_operation() {
     let text = "f : Unit -> Int\nf () = handle 1 with\n  | show x k -> k 1";
     assert_eq!(
         diagnostics(text),

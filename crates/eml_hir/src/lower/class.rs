@@ -7,13 +7,13 @@ use eml_diagnostics::{Diagnostic, FileId, Label, TextRange};
 use eml_syntax::{SyntaxToken, ast};
 use la_arena::Arena;
 
-use super::types::{TypeLowering, Vars, mentions, private_in_public};
-use super::{ItemLowering, NameKind, PendingBody, path_name, unresolved};
+use super::types::{TypeLowering, Vars, has_error, mentions, private_in_public};
+use super::{BodyOwner, ItemLowering, NameKind, PendingBody, path_name, unresolved};
 use crate::codes;
 use crate::def_map::{DefMap, Resolved};
 use crate::hir::{
     ClassDef, ClassId, Constraint, Function, FunctionKind, Generics, ItemId, Method, Signature,
-    TypeRefKind, TypeVarDecl, TypeVarId,
+    TypeVarDecl, TypeVarId,
 };
 use crate::item_tree::ClassItem;
 use crate::program::{Items, Module, TypeItem};
@@ -21,10 +21,11 @@ use crate::program::{Items, Module, TypeItem};
 /// 文脈を書いた位置。位置ごとに、制約に書ける型変数が違う
 /// (docs/spec/declarations.md の「宣言の検査」)。
 pub(super) enum ContextScope<'a> {
-    /// トップレベルの関数のシグネチャ。型に現れる型変数だけに書ける。
-    Function,
+    /// トップレベルの関数のシグネチャ。型に現れる型変数だけに書ける。`type_error` は型の変換が誤りを報告したか。
+    Function { type_error: bool },
     /// メソッドのシグネチャ。メソッド自身の型変数だけに書ける。
     Method {
+        type_error: bool,
         class_var: TypeVarId,
         class: &'a str,
         var: &'a str,
@@ -95,7 +96,15 @@ impl ItemLowering<'_> {
                 .find(|(_, decl)| decl.name == name)
                 .map(|(id, _)| id);
             let var = match (&scope, found) {
-                (ContextScope::Function | ContextScope::Method { .. }, None) => {
+                // 誤った型からは型変数が落ちているので、型に現れないとは言えない
+                (
+                    ContextScope::Function { type_error: true }
+                    | ContextScope::Method {
+                        type_error: true, ..
+                    },
+                    None,
+                ) => continue,
+                (ContextScope::Function { .. } | ContextScope::Method { .. }, None) => {
                     self.diagnostics.push(invalid_constraint(
                         self.file,
                         format!("the constraint on `{name}` is ambiguous"),
@@ -109,6 +118,7 @@ impl ItemLowering<'_> {
                         class_var,
                         class,
                         var,
+                        ..
                     },
                     Some(id),
                 ) if id == *class_var => {
@@ -234,10 +244,8 @@ impl ItemLowering<'_> {
                 }
                 .lower(decl.ty(), range);
                 // 型に誤りがあれば変換が報告済みなので、クラスの型変数がないことを重ねて報告しない
-                let has_error = types
-                    .iter()
-                    .any(|(_, ty)| matches!(ty.kind, TypeRefKind::Error));
-                if !has_error && !mentions(&types, ty, class_var) {
+                let type_error = has_error(&types);
+                if !type_error && !mentions(&types, ty, class_var) {
                     self.diagnostics.push(invalid_constraint(
                         self.file,
                         format!(
@@ -252,6 +260,7 @@ impl ItemLowering<'_> {
                     decl.context(),
                     &generics,
                     ContextScope::Method {
+                        type_error,
                         class_var,
                         class: &item.name,
                         var,
@@ -303,9 +312,11 @@ impl ItemLowering<'_> {
                     );
                     items.methods[method_id.local].default = Some(function);
                     pending.push(PendingBody {
-                        function,
+                        owner: BodyOwner::Function {
+                            id: function,
+                            annotation_vars: None,
+                        },
                         equations,
-                        annotation_vars: None,
                     });
                 }
                 items.classes[local].methods.push(method_id);

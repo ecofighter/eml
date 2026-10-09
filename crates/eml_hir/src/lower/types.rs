@@ -303,6 +303,21 @@ pub(super) fn visit_type_vars(
     }
 }
 
+/// 変換が誤りを報告した型か。誤りの跡 (`Error` の型と row) からは型変数が落ちているので、型変数が現れないことを
+/// 根拠にした診断を重ねない。
+pub(super) fn has_error(types: &Arena<TypeRef>) -> bool {
+    types.iter().any(|(_, ty)| {
+        matches!(
+            ty.kind,
+            TypeRefKind::Error
+                | TypeRefKind::Fn {
+                    row: RowRef::Error,
+                    ..
+                }
+        )
+    })
+}
+
 pub(super) fn mentions(types: &Arena<TypeRef>, id: TypeRefId, var: TypeVarId) -> bool {
     let mut found = false;
     visit_type_vars(types, id, &mut |other| found |= other == var);
