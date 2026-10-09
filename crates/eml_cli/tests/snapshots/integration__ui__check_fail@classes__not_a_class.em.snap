@@ -1,0 +1,12 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: rendered
+input_file: tests/ui/check-fail/classes/not_a_class.em
+---
+[E1041] Error: `Int` is not a class
+   ╭─[ check-fail/classes/not_a_class.em:2:9 ]
+   │
+ 2 │ twice : Int a => a -> a
+   │         ─┬─  
+   │          ╰─── a type, not a class
+───╯

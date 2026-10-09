@@ -1,0 +1,19 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: rendered
+input_file: tests/ui/check-fail/syntax/fat_arrow_is_reserved.em
+---
+[E0003] Error: expected an item
+   ╭─[ check-fail/syntax/fat_arrow_is_reserved.em:2:1 ]
+   │
+ 2 │ (=>) : Int -> Int -> Int
+   │ ┬  
+   │ ╰── not the start of an item
+───╯
+[E0003] Error: expected an item
+   ╭─[ check-fail/syntax/fat_arrow_is_reserved.em:3:1 ]
+   │
+ 3 │ a => b = a + b
+   │ ┬  
+   │ ╰── not the start of an item
+───╯

@@ -1,0 +1,14 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: rendered
+input_file: tests/ui/check-fail/classes/linear_instance_head.em
+---
+[E2010] Error: `Handle` is linear, so it cannot have an instance of `Size`
+   ╭─[ check-fail/classes/linear_instance_head.em:9:15 ]
+   │
+ 9 │ instance Size Handle
+   │               ───┬──  
+   │                  ╰──── a linear type
+   │ 
+   │ Note: the methods of a class may copy or drop their arguments, which a linear value forbids
+───╯

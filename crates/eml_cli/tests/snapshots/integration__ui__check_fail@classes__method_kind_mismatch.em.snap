@@ -1,0 +1,14 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: rendered
+input_file: tests/ui/check-fail/classes/method_kind_mismatch.em
+---
+[E2011] Error: `pair_with` in the instance for `Box` needs more than the signature of `pair_with` allows
+   ╭─[ check-fail/classes/method_kind_mismatch.em:9:3 ]
+   │
+ 9 │   pair_with _ x = (x, x)
+   │   ────┬────  
+   │       ╰────── this definition
+   │ 
+   │ Note: the signature of a method leaves its own type variables free to be linear, and this definition copies, drops or keeps a value of such a type
+───╯

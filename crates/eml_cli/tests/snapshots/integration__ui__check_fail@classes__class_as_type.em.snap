@@ -1,0 +1,12 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: rendered
+input_file: tests/ui/check-fail/classes/class_as_type.em
+---
+[E1043] Error: `Size` is a class, not a type
+   ╭─[ check-fail/classes/class_as_type.em:5:11 ]
+   │
+ 5 │ measure : Size -> Int
+   │           ──┬─  
+   │             ╰─── a class cannot be used as a type
+───╯

@@ -1,0 +1,30 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: rendered
+input_file: tests/ui/check-fail/classes/no_instance.em
+---
+[E2006] Error: no instance of `Eq` for `a`
+    ╭─[ check-fail/classes/no_instance.em:14:14 ]
+    │
+ 14 │ same x y = x == y
+    │              ─┬  
+    │               ╰── `==` requires `Eq a`
+    │ 
+    │ Help: add `Eq a =>` to the signature of `same`
+────╯
+[E2006] Error: no instance of `Show` for `Color`
+    ╭─[ check-fail/classes/no_instance.em:18:12 ]
+    │
+ 18 │   println (show Red)
+    │            ──┬─  
+    │              ╰─── `show` requires `Show Color`
+────╯
+[E2006] Error: no instance of `Show` for `Color`
+    ╭─[ check-fail/classes/no_instance.em:20:12 ]
+    │
+ 20 │   println (show (Some Red))
+    │            ──┬─  
+    │              ╰─── `show` requires `Show (Option Color)`
+    │ 
+    │ Note: needed for `Show (Option Color)`
+────╯

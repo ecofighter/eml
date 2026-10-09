@@ -1,0 +1,27 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: rendered
+input_file: tests/ui/check-fail/classes/duplicate_instance.em
+---
+[E1035] Error: `Color` already has an instance of `Eq`
+   ╭─[ check-fail/classes/duplicate_instance.em:8:17 ]
+   │
+ 8 │   deriving (Eq, Eq)
+   │             ─┬  ─┬  
+   │              ╰────── first defined here
+   │                  │  
+   │                  ╰── defined again here
+───╯
+[E1035] Error: `Color` already has an instance of `Size`
+    ╭─[ check-fail/classes/duplicate_instance.em:13:15 ]
+    │
+ 13 │ instance Size Color where
+    │               ──┬──  
+    │                 ╰──── defined again here
+    │
+    ├─[ check-fail/classes/duplicate_instance.em:13:15 ]
+    │
+ 10 │ instance Size Color where
+    │               ──┬──  
+    │                 ╰──── first defined here
+────╯

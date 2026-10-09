@@ -1,0 +1,14 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: rendered
+input_file: tests/ui/check-fail/classes/ambiguous_constraint.em
+---
+[E2009] Error: cannot decide which instance of `Show` `show` uses
+   ╭─[ check-fail/classes/ambiguous_constraint.em:4:16 ]
+   │
+ 4 │   let render = show
+   │                ──┬─  
+   │                  ╰─── the type here is never decided
+   │ 
+   │ Help: add a type annotation
+───╯
