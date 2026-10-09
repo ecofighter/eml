@@ -79,9 +79,9 @@ impl KindConstraint {
             KindConstraint::Carry {
                 value: KindTerm::Lin,
                 row,
-            } => format!("{row} <= Once"),
+            } => format!("carry(Lin, {row})"),
             KindConstraint::Carry { value, row } => {
-                format!("{} => {row} <= Once", value.show(types, names))
+                format!("carry({}, {row})", value.show(types, names))
             }
         }
     }
