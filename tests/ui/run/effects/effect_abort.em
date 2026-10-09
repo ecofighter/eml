@@ -14,7 +14,7 @@ describe : Int -> <Fail> String
 describe n =
   let label = "value: "
   let checked = check_positive n
-  label ++ show_int checked
+  label ++ show checked
 
 safe : Int -> String
 safe n =
@@ -36,7 +36,7 @@ ask_checked answer =
 
 bounded : Int -> String
 bounded answer =
-  handle show_int (ask_checked answer) with
+  handle show (ask_checked answer) with
     | fail message -> "aborted: " ++ message
 
 main : Unit -> <IO> Unit

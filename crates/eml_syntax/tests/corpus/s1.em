@@ -72,13 +72,13 @@ main () =
   if total > 100 then
     println "big"
   else
-    println (show_int (total : Int))
+    println (show (total : Int))
   each (Cons 1 Nil) (fn x ->
-    println (show_int (x <+> 1))) -- 行末のコメント
+    println (show (x <+> 1))) -- 行末のコメント
   let pair = (total, classify total)
   println pair.1
   let r = run_state 0 (fn () -> counter ())
-  println (show_int (r.0 + negate 1))
+  println (show (r.0 + negate 1))
   let inc = (+ 1)
   let half = (/ 2)
   let name_of = (.name)

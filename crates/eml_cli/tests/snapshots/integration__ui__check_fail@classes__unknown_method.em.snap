@@ -1,0 +1,12 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: rendered
+input_file: tests/ui/check-fail/classes/unknown_method.em
+---
+[E1037] Error: `weight` is not a method of `Size`
+    ╭─[ check-fail/classes/unknown_method.em:11:3 ]
+    │
+ 11 │   weight _ = 2
+    │   ───┬──  
+    │      ╰──── not declared in the class
+────╯

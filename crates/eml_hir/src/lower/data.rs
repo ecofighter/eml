@@ -7,8 +7,9 @@ use la_arena::Arena;
 use super::ItemLowering;
 use super::types::{TypeLowering, Vars};
 use crate::codes;
-use crate::hir::{Constructor, Generics, ItemId, TypeDef, TypeDefKind, TypeVarDecl};
-use crate::item_tree::DataItem;
+use crate::def_map::Resolved;
+use crate::hir::{Constructor, Generics, ItemId, TypeDef, TypeDefKind, TypeVarDecl, ValueItem};
+use crate::item_tree::{DataItem, Fixity};
 
 impl ItemLowering<'_> {
     /// 型の名前と型引数を置く。フィールドの型は `lower_constructors` が、すべての型を置いた後に変換する。
@@ -93,16 +94,23 @@ impl ItemLowering<'_> {
                 else {
                     unreachable!("`declare_data` makes data types")
                 };
-                let id = ItemId::new(
+                let id = self.def_map.constructor_id(self.module, k, j);
+                let fixity = constructor.infix.then(|| {
+                    self.resolver
+                        .fixity_of(&Resolved::Found(ValueItem::Constructor(id)))
+                        .unwrap_or(Fixity::DEFAULT)
+                });
+                let allocated = ItemId::new(
                     self.module,
                     constructors.alloc(Constructor {
                         name: constructor.name.clone(),
                         ty,
                         tag: declared.len() as u32,
                         fields,
+                        fixity,
                     }),
                 );
-                debug_assert_eq!(id, self.def_map.constructor_id(self.module, k, j));
+                debug_assert_eq!(allocated, id);
                 declared.push(id);
             }
         }

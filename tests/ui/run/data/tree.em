@@ -12,7 +12,7 @@ insert x t = match t with
 walk : Tree Int -> String
 walk t = match t with
   | Leaf -> ""
-  | Node l v r -> walk l ++ show_int v ++ ";" ++ walk r
+  | Node l v r -> walk l ++ show v ++ ";" ++ walk r
 
 size : Tree a -> Int
 size t = match t with
@@ -23,4 +23,4 @@ main : Unit -> <IO> Unit
 main () =
   let t = insert 5 (insert 2 (insert 8 (insert 1 (insert 9 Leaf))))
   println (walk t)
-  println (show_int (size (Node Leaf "only" Leaf)))
+  println (show (size (Node Leaf "only" Leaf)))

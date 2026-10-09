@@ -23,6 +23,8 @@ pub struct ItemTree {
     pub data: Vec<DataItem>,
     pub effects: Vec<EffectItem>,
     pub fixities: Vec<FixityItem>,
+    pub classes: Vec<ClassItem>,
+    pub instances: Vec<InstanceItem>,
 }
 
 /// 同じ名前のシグネチャと等式をまとめたもの。名前で対応づけてから並び方を検査する (docs/spec/declarations.md)。
@@ -57,6 +59,8 @@ pub struct DataItem {
     pub has_constructors: bool,
     /// 名前のある選択肢。ソースの順で、コンストラクタの局所の番号の順である。
     pub constructors: Vec<ConstructorItem>,
+    /// `deriving` に書いたクラス (名前、位置)。書いた順で、重複 (E1035) もそのまま持つ。
+    pub deriving: Vec<(AstPtr<ast::Path>, TextRange)>,
 }
 
 #[derive(Debug)]
@@ -64,6 +68,8 @@ pub struct ConstructorItem {
     pub name: String,
     pub name_range: TextRange,
     pub ptr: AstPtr<ast::Alt>,
+    /// 演算子の名前の中置のコンストラクタ (`Int :+ Chain`) か。
+    pub infix: bool,
 }
 
 #[derive(Debug)]
@@ -83,6 +89,35 @@ pub struct OperationItem {
     pub name: String,
     pub name_range: TextRange,
     pub ptr: AstPtr<ast::OpDecl>,
+}
+
+#[derive(Debug)]
+pub struct ClassItem {
+    pub name: String,
+    pub name_range: TextRange,
+    pub public: bool,
+    /// 型変数 (名前、位置)。
+    pub var: (String, TextRange),
+    pub ptr: AstPtr<ast::ClassItem>,
+    /// シグネチャを持つメソッド。シグネチャのない等式は `check_order` が E1004 にして捨てる。
+    pub methods: Vec<FunctionItem>,
+}
+
+#[derive(Debug)]
+pub struct InstanceItem {
+    pub ptr: AstPtr<ast::InstanceItem>,
+    pub keyword_range: TextRange,
+    /// 等式と `extern` の行を名前でまとめたもの。最初に現れた順である。
+    pub members: Vec<MemberItem>,
+}
+
+#[derive(Debug)]
+pub struct MemberItem {
+    pub name: String,
+    pub name_range: TextRange,
+    pub equations: Vec<(AstPtr<ast::Equation>, TextRange)>,
+    /// `extern` の行のキーワードの位置。
+    pub extern_range: Option<TextRange>,
 }
 
 #[derive(Debug)]
@@ -172,70 +207,126 @@ struct Definition {
     equations: Vec<(usize, AstPtr<ast::Equation>, TextRange)>,
 }
 
+/// シグネチャと等式を名前でまとめる (docs/spec/declarations.md の「シグネチャと等式」)。トップレベルとクラスの
+/// ブロックが同じ規則を使う。番号は並びの中の位置で、隣り合っているかの検査だけに使う。
+#[derive(Default)]
+struct Definitions {
+    list: Vec<Definition>,
+    by_name: HashMap<String, usize>,
+}
+
+impl Definitions {
+    fn signature(
+        &mut self,
+        index: usize,
+        signature: &ast::Signature,
+        public: bool,
+        file: FileId,
+        diagnostics: &mut Vec<Diagnostic>,
+    ) {
+        let Some(name) = value_name(signature.name()) else {
+            return;
+        };
+        let range = name.text_range();
+        let definition = self.slot(name.text(), range);
+        definition.public |= public;
+        match &definition.signature {
+            Some((_, first)) => {
+                diagnostics.push(duplicate(file, name.text(), first.name_range, range))
+            }
+            None => {
+                definition.signature = Some((
+                    index,
+                    SignatureItem {
+                        ptr: AstPtr::new(signature),
+                        name_range: range,
+                        extern_keyword: signature
+                            .extern_keyword()
+                            .map(|keyword| keyword.text_range()),
+                    },
+                ))
+            }
+        }
+    }
+
+    fn equation(&mut self, index: usize, equation: &ast::Equation) {
+        let Some(name) = value_name(equation.name()) else {
+            return;
+        };
+        let range = name.text_range();
+        self.slot(name.text(), range)
+            .equations
+            .push((index, AstPtr::new(equation), range));
+    }
+
+    fn finish(self, file: FileId, diagnostics: &mut Vec<Diagnostic>) -> Vec<FunctionItem> {
+        self.list
+            .into_iter()
+            .map(|definition| check_order(file, definition, diagnostics))
+            .collect()
+    }
+
+    fn slot(&mut self, name: &str, range: TextRange) -> &mut Definition {
+        let list = &mut self.list;
+        let slot = *self.by_name.entry(name.to_string()).or_insert_with(|| {
+            list.push(Definition {
+                name: name.to_string(),
+                first_range: range,
+                public: false,
+                signature: None,
+                equations: Vec::new(),
+            });
+            list.len() - 1
+        });
+        &mut self.list[slot]
+    }
+}
+
 /// トップレベルの宣言を集める。E1003 (シグネチャと型引数の重複)、E1004、E1018、E1019 と、`type` の E0004 を出す。
-/// E1005 は、関数の種類 (extern かどうか) を決める `lower` が一緒に出す。ポインタを解決する木と取り違えないよう、
-/// 構文木ではなく `Parse` を受け取る。
+/// クラスのブロックのメンバーにも同じ規則を当て、instance のブロックのメンバーには E1003 と E1018 を出す。E1005 は、
+/// 関数の種類 (extern かどうか) を決める `lower` が一緒に出す。ポインタを解決する木と取り違えないよう、構文木ではなく
+/// `Parse` を受け取る。
 pub fn item_tree(file: FileId, parse: &Parse) -> (ItemTree, Vec<Diagnostic>) {
     let mut diagnostics = Vec::new();
-    let mut definitions: Vec<Definition> = Vec::new();
-    let mut by_name: HashMap<String, usize> = HashMap::new();
+    let mut definitions = Definitions::default();
     let mut data = Vec::new();
     let mut effects = Vec::new();
     let mut fixities = Vec::new();
     let mut imports = Vec::new();
+    let mut classes = Vec::new();
+    let mut instances = Vec::new();
     for (index, item) in parse.tree().items().enumerate() {
         let public = item.pub_keyword().is_some();
         match item {
             ast::Item::Signature(signature) => {
-                let Some(name) = value_name(signature.name()) else {
-                    continue;
-                };
-                let range = name.text_range();
-                let slot = slot(&mut definitions, &mut by_name, name.text(), range);
-                let definition = &mut definitions[slot];
-                definition.public |= public;
-                match &definition.signature {
-                    Some((_, first)) => {
-                        diagnostics.push(duplicate(file, name.text(), first.name_range, range))
-                    }
-                    None => {
-                        definition.signature = Some((
-                            index,
-                            SignatureItem {
-                                ptr: AstPtr::new(&signature),
-                                name_range: range,
-                                extern_keyword: signature
-                                    .extern_keyword()
-                                    .map(|keyword| keyword.text_range()),
-                            },
-                        ))
-                    }
-                }
+                definitions.signature(index, &signature, public, file, &mut diagnostics)
             }
-            ast::Item::Equation(equation) => {
-                let Some(name) = value_name(equation.name()) else {
-                    continue;
-                };
-                let range = name.text_range();
-                let slot = slot(&mut definitions, &mut by_name, name.text(), range);
-                definitions[slot]
-                    .equations
-                    .push((index, AstPtr::new(&equation), range));
-            }
+            ast::Item::Equation(equation) => definitions.equation(index, &equation),
             ast::Item::DataItem(item) => {
                 // 名前がなければパーサが報告済み
                 let Some(name) = item.name().map(|name| name.token()) else {
                     continue;
                 };
+                let deriving = item
+                    .deriving()
+                    .into_iter()
+                    .flat_map(|deriving| deriving.classes())
+                    .map(|class| (AstPtr::new(&class), class.range()))
+                    .collect();
                 let constructors = item
                     .alts()
                     .filter_map(|alt| {
                         // 名前も演算子もなければパーサが報告済み
-                        let name = alt.name().or_else(|| alt.operator())?.token();
+                        let (name, infix) = match alt.name() {
+                            Some(name) => (name, false),
+                            None => (alt.operator()?, true),
+                        };
+                        let name = name.token();
                         Some(ConstructorItem {
                             name: name.text().to_string(),
                             name_range: name.text_range(),
                             ptr: AstPtr::new(&alt),
+                            infix,
                         })
                     })
                     .collect();
@@ -247,6 +338,7 @@ pub fn item_tree(file: FileId, parse: &Parse) -> (ItemTree, Vec<Diagnostic>) {
                     params: params(file, item.params(), &mut diagnostics),
                     has_constructors: item.has_constructors(),
                     constructors,
+                    deriving,
                 });
             }
             ast::Item::EffectItem(item) => {
@@ -297,12 +389,15 @@ pub fn item_tree(file: FileId, parse: &Parse) -> (ItemTree, Vec<Diagnostic>) {
                 ));
             }
             ast::Item::ImportItem(item) => imports.extend(import_of(&item)),
+            ast::Item::ClassItem(item) => {
+                classes.extend(class_of(file, &item, public, &mut diagnostics))
+            }
+            ast::Item::InstanceItem(item) => {
+                instances.push(instance_of(file, &item, &mut diagnostics))
+            }
         }
     }
-    let functions = definitions
-        .into_iter()
-        .map(|definition| check_order(file, definition, &mut diagnostics))
-        .collect();
+    let functions = definitions.finish(file, &mut diagnostics);
     (
         ItemTree {
             file,
@@ -311,9 +406,126 @@ pub fn item_tree(file: FileId, parse: &Parse) -> (ItemTree, Vec<Diagnostic>) {
             data,
             effects,
             fixities,
+            classes,
+            instances,
         },
         diagnostics,
     )
+}
+
+/// クラスの名前か型変数がなければ、パーサが報告済みなので集めない。`DefMap` と `lower` が同じ並びから番号を振るので、
+/// 置けないクラスをここで落とす。
+fn class_of(
+    file: FileId,
+    item: &ast::ClassItem,
+    public: bool,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Option<ClassItem> {
+    let name = item
+        .name()
+        .map(|name| name.token())
+        .filter(|token| token.kind() == SyntaxKind::UIDENT)?;
+    let var = item
+        .var()
+        .map(|var| var.token())
+        .filter(|token| token.kind() == SyntaxKind::LIDENT)?;
+    let mut definitions = Definitions::default();
+    for (index, member) in item.members().enumerate() {
+        match member {
+            ast::ClassMember::Signature(signature) => {
+                definitions.signature(index, &signature, false, file, diagnostics)
+            }
+            ast::ClassMember::Equation(equation) => definitions.equation(index, &equation),
+        }
+    }
+    let methods = definitions
+        .finish(file, diagnostics)
+        .into_iter()
+        .filter(|method| method.signature.is_some())
+        .collect();
+    Some(ClassItem {
+        name: name.text().to_string(),
+        name_range: name.text_range(),
+        public,
+        var: (var.text().to_string(), var.text_range()),
+        ptr: AstPtr::new(item),
+        methods,
+    })
+}
+
+/// instance のメンバーを名前でまとめる。等式は連続していなければ E1018 にする。同じメソッドを `extern` の行と
+/// 等式の両方で、または `extern` の行2つで定義したら、後の方を E1003 にして捨てる
+/// (docs/spec/declarations.md の「`instance`」)。シグネチャはパーサが E0011 にした。
+fn instance_of(
+    file: FileId,
+    item: &ast::InstanceItem,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> InstanceItem {
+    let mut members: Vec<MemberItem> = Vec::new();
+    // メンバーごとの (最後の等式の並びの中の番号, 最後に捨てた等式の番号)
+    let mut states: Vec<(Option<usize>, Option<usize>)> = Vec::new();
+    for (index, member) in item.members().enumerate() {
+        let (name, extern_keyword) = match &member {
+            ast::InstanceMember::Equation(equation) => (value_name(equation.name()), None),
+            ast::InstanceMember::ExternMethod(line) => {
+                (value_name(line.name()), Some(line.keyword_range()))
+            }
+            ast::InstanceMember::Signature(_) => continue,
+        };
+        let Some(name) = name else {
+            continue;
+        };
+        let (name, range) = (name.text(), name.text_range());
+        let slot = match members.iter().position(|member| member.name == name) {
+            Some(slot) => slot,
+            None => {
+                members.push(MemberItem {
+                    name: name.to_string(),
+                    name_range: range,
+                    equations: Vec::new(),
+                    extern_range: None,
+                });
+                states.push((None, None));
+                members.len() - 1
+            }
+        };
+        let member_item = &mut members[slot];
+        let (last_equation, last_dropped) = &mut states[slot];
+        let conflicts = match extern_keyword {
+            Some(_) => member_item.extern_range.is_some() || !member_item.equations.is_empty(),
+            None => member_item.extern_range.is_some(),
+        };
+        if conflicts {
+            // 続けて書いた等式は1つの定義なので、その先頭だけを報告する
+            let continues = extern_keyword.is_none() && *last_dropped == index.checked_sub(1);
+            if !continues {
+                diagnostics.push(duplicate(file, name, member_item.name_range, range));
+            }
+            if extern_keyword.is_none() {
+                *last_dropped = Some(index);
+            }
+            continue;
+        }
+        match (member, extern_keyword) {
+            (_, Some(keyword)) => member_item.extern_range = Some(keyword),
+            (ast::InstanceMember::Equation(equation), None) => {
+                if let (Some(previous), Some((_, previous_range))) =
+                    (*last_equation, member_item.equations.last())
+                    && previous + 1 != index
+                {
+                    diagnostics.push(not_consecutive(file, name, *previous_range, range, false));
+                }
+                *last_equation = Some(index);
+                member_item.equations.push((AstPtr::new(&equation), range));
+            }
+            _ => {}
+        }
+    }
+    InstanceItem {
+        ptr: AstPtr::new(item),
+        keyword_range: item.keyword_range(),
+        members,
+    }
 }
 
 /// 等式は連続し、シグネチャの直後に置く (docs/spec/declarations.md)。離れていても、網羅性の誤りを連鎖させないよう
@@ -339,21 +551,7 @@ fn check_order(
         let (previous_index, _, previous_range) = &pair[0];
         let (index, _, range) = &pair[1];
         if *index != previous_index + 1 {
-            diagnostics.push(
-                Diagnostic::error(
-                    codes::NON_CONSECUTIVE_EQUATIONS,
-                    format!("the equations of `{name}` are not consecutive"),
-                    Label::new(
-                        file,
-                        *range,
-                        "this equation is separated from the ones above",
-                    ),
-                )
-                .with_secondary(Label::new(file, *previous_range, "the previous equation"))
-                .with_help(format!(
-                    "put every equation of `{name}` together, right after its signature"
-                )),
-            );
+            diagnostics.push(not_consecutive(file, &name, *previous_range, *range, true));
         }
     }
     match (&signature, equations.first()) {
@@ -404,6 +602,32 @@ fn check_order(
     }
 }
 
+/// E1018。instance の等式にはシグネチャがないので (`signed` が偽)、help でシグネチャに触れない。
+fn not_consecutive(
+    file: FileId,
+    name: &str,
+    previous: TextRange,
+    again: TextRange,
+    signed: bool,
+) -> Diagnostic {
+    let help = if signed {
+        format!("put every equation of `{name}` together, right after its signature")
+    } else {
+        format!("put every equation of `{name}` together")
+    };
+    Diagnostic::error(
+        codes::NON_CONSECUTIVE_EQUATIONS,
+        format!("the equations of `{name}` are not consecutive"),
+        Label::new(
+            file,
+            again,
+            "this equation is separated from the ones above",
+        ),
+    )
+    .with_secondary(Label::new(file, previous, "the previous equation"))
+    .with_help(help)
+}
+
 /// `data` と `effect` の型引数。重複した名前は E1003 にして、最初の1つだけを残す。
 fn params(
     file: FileId,
@@ -436,24 +660,6 @@ pub(crate) fn duplicate(
         Label::new(file, again, "defined again here"),
     )
     .with_secondary(Label::new(file, first, "first defined here"))
-}
-
-fn slot(
-    definitions: &mut Vec<Definition>,
-    by_name: &mut HashMap<String, usize>,
-    name: &str,
-    range: TextRange,
-) -> usize {
-    *by_name.entry(name.to_string()).or_insert_with(|| {
-        definitions.push(Definition {
-            name: name.to_string(),
-            first_range: range,
-            public: false,
-            signature: None,
-            equations: Vec::new(),
-        });
-        definitions.len() - 1
-    })
 }
 
 /// パスが読めなかった import はパーサが報告済みなので、読み込みもスコープへの登録もしない。

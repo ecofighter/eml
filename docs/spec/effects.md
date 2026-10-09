@@ -59,7 +59,7 @@ effect Fail where
 - `IO` は、`Prelude` が `pub extern effect IO` と宣言する、操作を持たない extern のエフェクトである。ラベルだけで、handler が受け持つ操作はない ([宣言](declarations.md) の「`extern`」)。
 - `IO` を起こすのは、`IO` を row に持つ extern の関数 (`println` など) である。extern の関数は handler を通らず、その場で実行して値を返す。eml のコードを呼び返さず、継続も切り離さないので、中断は起こらない。
 - extern の関数の呼び出しは、操作の呼び出しと違って `perform` 命令にならない ([Core IR とインタプリタ](core-ir.md))。多重度は `once` として扱う。
-- handler の節の先頭に、`IO` を起こす extern の関数の名前を書いたらエラーにする (E1009)。節の先頭の名前は、まず操作として引き、見つからないときだけ extern の関数を引く。`IO` を起こす extern の関数が見つかれば E1009 で、それ以外 (純粋な extern の関数 `show_int` など) は E1001 である。ユーザーが定義した同名の関数は、`Prelude` の extern の関数を隠さない ([モジュールと名前解決](modules.md) の「名前の解決」)。
+- handler の節の先頭に、`IO` を起こす extern の関数の名前を書いたらエラーにする (E1009)。節の先頭の名前は、まず操作として引き、見つからないときだけ extern の関数を引く。`IO` を起こす extern の関数が見つかれば E1009 で、それ以外 (純粋な extern の関数) は E1001 である。ユーザーが定義した同名の関数は、`Prelude` の extern の関数を隠さない ([モジュールと名前解決](modules.md) の「名前の解決」)。
 
 `IO` を起こす extern の関数と、その型は次のとおりである。
 

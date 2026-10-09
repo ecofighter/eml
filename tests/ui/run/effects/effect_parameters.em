@@ -36,15 +36,15 @@ both_ways f = f (ask ()) (ask ())
 
 nested : Unit -> String
 nested () =
-  handle (handle greeting () with | ask () k -> k (show_int (ask ()))) with
+  handle (handle greeting () with | ask () k -> k (show (ask ()))) with
     | ask () k -> k 7
 
 main : Unit -> <IO> Unit
 main () =
-  println (show_int (run_counter 1))
+  println (show (run_counter 1))
   println (with_name "Ada")
   let ints =
-    handle both_ways (fn a b -> show_int (a + b)) with
+    handle both_ways (fn a b -> show (a + b)) with
       | ask () k -> k 21
   println ints
   let strings =

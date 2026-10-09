@@ -2,4 +2,4 @@
 main : Unit -> <IO> Unit
 main () =
   let n = 20
-  println (show_int (let x = n + 1 in x * 2))
+  println (show (let x = n + 1 in x * 2))

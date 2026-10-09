@@ -45,6 +45,9 @@ pub fn is_value(program: &Program, body: &Body, expr: ExprId) -> bool {
         ExprKind::Path(Res::Item(ValueItem::Function(function))) => {
             program.arity(*function).is_some_and(|arity| arity > 0)
         }
+        ExprKind::Path(Res::Item(ValueItem::Method(method))) => {
+            program[*method].signature.arity() > 0
+        }
         ExprKind::Annot { expr, .. } => is_value(program, body, *expr),
         _ => false,
     }
@@ -58,6 +61,11 @@ pub fn known_arity(program: &Program, body: &Body, callee: ExprId) -> Option<usi
     match &body.exprs[callee].kind {
         ExprKind::Path(Res::Item(ValueItem::Function(function))) => {
             program.arity(*function).filter(|&arity| arity > 0)
+        }
+        // どの instance を選んでも評価の順が同じになるよう、instance の等式の引数の数ではなく、メソッドの
+        // シグネチャの矢印の数で決める
+        ExprKind::Path(Res::Item(ValueItem::Method(method))) => {
+            Some(program[*method].signature.arity()).filter(|&arity| arity > 0)
         }
         ExprKind::Path(Res::Item(ValueItem::Operation(op))) => Some(program[*op].arity),
         ExprKind::Path(Res::Item(ValueItem::Constructor(ctor))) => {

@@ -1,0 +1,12 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: rendered
+input_file: tests/ui/check-fail/classes/orphan_instance/main.em
+---
+[E1034] Error: an instance of `Size` for `Color` must be in the module of `Size` or of `Color`
+   ╭─[ check-fail/classes/orphan_instance/main.em:6:15 ]
+   │
+ 6 │ instance Size Color where
+   │               ──┬──  
+   │                 ╰──── neither is defined in this module
+───╯

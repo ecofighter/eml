@@ -1,9 +1,9 @@
 //! Core IR の不変条件の検査 (docs/spec/core-ir.md)。ブロックの列の形 (R1〜R4)、変数の定義と支配 (R5、R6)、
 //! `unpack` の Repr、`jump` と `return` の Repr の互換、extern の引数と結果の Repr、`box` と `unbox` のオペランドと
 //! 束縛の Repr (R8)、データの配置 (R9) と、引き継いだ検査 (`mask` の順、`handle` の節の数、再開できるかどうか、
-//! 直接呼び出しと extern の引数の数、型で選ぶ extern、case の種類) を確かめる (`verify_scopes`)。R8 と R9 には境界の
-//! 検査も入る。呼び出しの引数と結果、`closure` の引数、関数の値の対象が一様であること、`tail` の結果、`tobj` の
-//! フィールドを比べる。translate の直後は、`box` と `unbox` と境界を確かめる代わりに、`box`、`unbox`、`tail` が
+//! 直接呼び出しと extern の引数の数、case の種類) を確かめる (`verify_scopes`)。R8 と R9 には境界の検査も入る。
+//! 呼び出しの引数と結果、`closure` の引数、関数の値の対象が一様であること、`tail` の結果、`tobj` のフィールドを
+//! 比べる。translate の直後は、`box` と `unbox` と境界を確かめる代わりに、`box`、`unbox`、`tail` が
 //! まだないことを確かめる (`verify_translated`)。
 //! Perceus の後は、RC の対象の所有の多重集合と、呼び出しの後に見える変数 (R6、R7) も確かめる (`verify`)。`switch`、
 //! `unpack`、`unbox` は値を読むだけである。`switch` と `unpack` のフィールドは値から借りて始まり、自分か持ち主が
@@ -1278,13 +1278,6 @@ impl<'a> Checker<'a> {
             }
             Rhs::Extern { ext, args, at: _ } => {
                 let row = ext.row();
-                // 型で選ぶ行は translate が比べ方ごとの行に置き換える
-                if row.by_type {
-                    return Err(format!(
-                        "`{}` is chosen by type and must not reach Core IR",
-                        row.name
-                    ));
-                }
                 if args.len() != row.params.len() {
                     return Err(format!(
                         "`{}` takes {} arguments but is given {}",

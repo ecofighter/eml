@@ -6,11 +6,12 @@ use eml_syntax::SyntaxKind;
 use la_arena::Arena;
 
 use super::ItemLowering;
-use super::types::{TypeLowering, Vars};
+use super::class::ContextScope;
+use super::types::{TypeLowering, Vars, mentions};
 use crate::codes;
 use crate::hir::{
     EffectDef, EffectId, EffectKind, Generics, ItemId, OpMultiplicity, Operation, RowRef,
-    Signature, TypeRef, TypeRefId, TypeRefKind, TypeVarDecl, TypeVarId,
+    Signature, TypeRefKind, TypeVarDecl,
 };
 use crate::item_tree::{EffectItem, OperationItem};
 use crate::program::Items;
@@ -108,11 +109,20 @@ impl ItemLowering<'_> {
             diagnostics: &mut *self.diagnostics,
         }
         .lower(decl.ty(), range);
+        // 操作に制約を書けると、handler の節が perform の位置で選んだ証拠を実行時に受け取る必要が生じる
+        // (docs/spec/declarations.md の「宣言の検査」)
+        let constraints = self.lower_context(
+            decl.context(),
+            &generics,
+            ContextScope::Forbidden("an effect operation"),
+            None,
+        );
         let signature = Signature {
             ty,
             range,
             types,
             generics,
+            constraints,
         };
         let arity = self.check_signature(&item.name, &signature, multiplicity, effect_params);
         Operation {
@@ -204,19 +214,5 @@ impl ItemLowering<'_> {
             }
         }
         params.len()
-    }
-}
-
-fn mentions(types: &Arena<TypeRef>, id: TypeRefId, var: TypeVarId) -> bool {
-    match &types[id].kind {
-        TypeRefKind::Var(other) => *other == var,
-        TypeRefKind::Fn { param, ret, .. } => {
-            mentions(types, *param, var) || mentions(types, *ret, var)
-        }
-        TypeRefKind::Con(_, args) => args.iter().any(|&arg| mentions(types, arg, var)),
-        TypeRefKind::Tuple(elements) => elements
-            .iter()
-            .any(|&element| mentions(types, element, var)),
-        TypeRefKind::Error => false,
     }
 }

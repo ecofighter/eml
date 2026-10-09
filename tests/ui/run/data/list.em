@@ -19,6 +19,6 @@ range lo hi = if lo > hi then Nil else Cons lo (range (lo + 1) hi)
 main : Unit -> <IO> Unit
 main () =
   let xs = range 1 10
-  println (show_int (length xs))
-  println (show_int (sum xs))
-  println (show_int (sum (range 1 1000)))
+  println (show (length xs))
+  println (show (sum xs))
+  println (show (sum (range 1 1000)))

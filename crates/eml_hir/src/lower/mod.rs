@@ -1,14 +1,18 @@
+mod class;
 mod data;
 mod effect;
 mod expr;
 mod handler;
+mod instance;
 mod ops;
 mod section;
 mod types;
 
+use std::collections::HashMap;
+
 use eml_diagnostics::{Diagnostic, ErrorCode, FileId, Label, TextRange};
 use eml_extern::Extern;
-use eml_syntax::{SyntaxNode, SyntaxToken, ast};
+use eml_syntax::{AstPtr, SyntaxNode, SyntaxToken, ast};
 use la_arena::{Arena, ArenaMap, Idx};
 
 use crate::codes;
@@ -17,8 +21,19 @@ use crate::hir::*;
 use crate::item_tree::{FunctionItem, ItemTree};
 use crate::load::LoadedModule;
 use crate::program::{ItemId, Items, Module, ModuleId, ModuleOrigin, Program};
+use class::ContextScope;
 use expr::BodyLowering;
 use types::{TypeLowering, Vars};
+
+/// 名前の表にない関数 (既定のメソッドと instance のメソッド) の、後で変換する本体。
+struct PendingBody {
+    function: FunctionId,
+    equations: Vec<(AstPtr<ast::Equation>, TextRange)>,
+    /// 本体の注釈で引ける、シグネチャの先頭の型変数の数。`None` はすべてである。instance のメソッドのシグネチャの
+    /// メソッド自身の型変数はクラスが決めるので、名前で書けない
+    /// (docs/spec/declarations.md の「`instance`」)。
+    annotation_vars: Option<usize>,
+}
 
 /// 全モジュールの item と本体を変換する。名前は `def_map` で引き、item はその局所の番号の順にアリーナへ置く
 /// (docs/implementation/architecture.md の「`eml_hir` の内部」)。
@@ -36,16 +51,44 @@ pub fn lower(def_map: &DefMap, modules: &[LoadedModule]) -> (Program, Vec<Diagno
     }
     // `ItemTree` のポインタは、モジュールごとに1回だけ作った根から解決する
     let roots: Vec<SyntaxNode> = modules.iter().map(|loaded| loaded.parse.syntax()).collect();
+    let mut pending: Vec<Vec<PendingBody>> = modules.iter().map(|_| Vec::new()).collect();
     for (index, loaded) in modules.iter().enumerate() {
         let module = module_id(index);
-        lower_items(
+        ItemLowering::new(
             def_map,
             module,
             &loaded.tree,
             &roots[index],
-            &mut arena[module].items,
             &mut diagnostics,
+        )
+        .lower_items(&loaded.tree, &mut arena[module].items, &mut pending[index]);
+    }
+    class::check_superclass_cycles(def_map, &mut arena, &mut diagnostics);
+    // クラスは別のモジュールにありうるので、すべてのモジュールの item を置いてから instance を変換する
+    let mut instance_index = HashMap::new();
+    for (index, loaded) in modules.iter().enumerate() {
+        let module = module_id(index);
+        ItemLowering::new(
+            def_map,
+            module,
+            &loaded.tree,
+            &roots[index],
+            &mut diagnostics,
+        )
+        .lower_instances(
+            &loaded.tree,
+            &mut arena,
+            &mut instance_index,
+            &mut pending[index],
         );
+        ItemLowering::new(
+            def_map,
+            module,
+            &loaded.tree,
+            &roots[index],
+            &mut diagnostics,
+        )
+        .derive_instances(&loaded.tree, &mut arena, &mut instance_index);
     }
     let lang = def_map.lang();
     for (index, loaded) in modules.iter().enumerate() {
@@ -55,6 +98,7 @@ pub fn lower(def_map: &DefMap, modules: &[LoadedModule]) -> (Program, Vec<Diagno
             module,
             &loaded.tree,
             &roots[index],
+            &pending[index],
             &mut arena,
             &mut diagnostics,
         );
@@ -68,33 +112,10 @@ pub fn lower(def_map: &DefMap, modules: &[LoadedModule]) -> (Program, Vec<Diagno
             lang,
             externs: def_map.externs().clone(),
             names: def_map.display_names().clone(),
+            instance_index,
         },
         diagnostics,
     )
-}
-
-/// item を `DefMap` と同じ局所の番号の順に置く。`ItemTree` の順である。
-fn lower_items(
-    def_map: &DefMap,
-    module: ModuleId,
-    tree: &ItemTree,
-    root: &SyntaxNode,
-    items: &mut Items,
-    diagnostics: &mut Vec<Diagnostic>,
-) {
-    let mut lowering = ItemLowering {
-        file: tree.file,
-        module,
-        root,
-        def_map,
-        resolver: def_map.resolver(module),
-        diagnostics,
-    };
-    lowering.declare_data(&tree.data, &mut items.types);
-    lowering.declare_effects(&tree.effects, &mut items.effects);
-    lowering.lower_operations(&tree.effects, items);
-    lowering.lower_constructors(&tree.data, &mut items.types, &mut items.constructors);
-    lowering.lower_functions(&tree.functions, &mut items.functions);
 }
 
 /// 1つのモジュールの item を変換する文脈。宣言の変換は、どれもこのモジュールのスコープで名前を引き、このファイルの
@@ -109,7 +130,35 @@ struct ItemLowering<'a> {
     diagnostics: &'a mut Vec<Diagnostic>,
 }
 
-impl ItemLowering<'_> {
+impl<'a> ItemLowering<'a> {
+    fn new(
+        def_map: &'a DefMap,
+        module: ModuleId,
+        tree: &ItemTree,
+        root: &'a SyntaxNode,
+        diagnostics: &'a mut Vec<Diagnostic>,
+    ) -> ItemLowering<'a> {
+        ItemLowering {
+            file: tree.file,
+            module,
+            root,
+            def_map,
+            resolver: def_map.resolver(module),
+            diagnostics,
+        }
+    }
+
+    /// item を `DefMap` と同じ局所の番号の順に置く。`ItemTree` の順である。既定のメソッドの関数は、`ItemTree` の
+    /// 関数の後ろに置く。
+    fn lower_items(&mut self, tree: &ItemTree, items: &mut Items, pending: &mut Vec<PendingBody>) {
+        self.declare_data(&tree.data, &mut items.types);
+        self.declare_effects(&tree.effects, &mut items.effects);
+        self.lower_operations(&tree.effects, items);
+        self.lower_constructors(&tree.data, &mut items.types, &mut items.constructors);
+        self.lower_functions(&tree.functions, &mut items.functions);
+        self.lower_classes(&tree.classes, items, pending);
+    }
+
     fn lower_functions(&mut self, items: &[FunctionItem], functions: &mut Arena<Function>) {
         for (k, function) in items.iter().enumerate() {
             let FunctionItem {
@@ -129,9 +178,10 @@ impl ItemLowering<'_> {
                 }
             };
             // extern のシグネチャに続く等式は読み捨てる。E1033 のほかに診断を重ねないため
-            let equations = match kind {
-                FunctionKind::Defined => equations.as_slice(),
-                FunctionKind::Extern(_) => &[],
+            let equations = if kind.has_equations() {
+                equations.as_slice()
+            } else {
+                &[]
             };
             if let (Some(signature), None, FunctionKind::Defined) =
                 (signature, equations.first(), kind)
@@ -152,21 +202,30 @@ impl ItemLowering<'_> {
                 let range = node.ty().map_or(node.range(), |ty| ty.range());
                 let mut types = Arena::new();
                 let mut generics = Generics::default();
+                let public_item = public.then_some(name.as_str());
                 let ty = TypeLowering {
                     file: self.file,
                     types: &mut types,
                     generics: &mut generics,
                     items: self.resolver,
                     vars: Vars::Define,
-                    public_item: public.then_some(name.as_str()),
+                    public_item,
                     diagnostics: &mut *self.diagnostics,
                 }
                 .lower(node.ty(), range);
+                // 型を先に変換する。`Vars::Define` は型に現れる型変数だけを表に入れるので、文脈の型変数が型に
+                // 現れるかを表で判定できる
+                let scope = match kind {
+                    FunctionKind::Extern(_) => ContextScope::Forbidden("an extern declaration"),
+                    _ => ContextScope::Function,
+                };
+                let constraints = self.lower_context(node.context(), &generics, scope, public_item);
                 Signature {
                     ty,
                     range,
                     types,
                     generics,
+                    constraints,
                 }
             });
             let id = ItemId::new(
@@ -210,20 +269,36 @@ impl ItemLowering<'_> {
 }
 
 /// 本体は、すべてのモジュールの item を置いてから変換する。後ろで定義した関数も、ほかのモジュールの item も引けるように
-/// するため。
+/// するため。`ItemTree` の関数の後に、クラスと instance の段が足した本体を変換する。
 fn lower_bodies(
     def_map: &DefMap,
     module: ModuleId,
     tree: &ItemTree,
     root: &SyntaxNode,
+    pending: &[PendingBody],
     modules: &mut Arena<Module>,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> ArenaMap<Idx<Function>, Body> {
     let mut bodies = ArenaMap::default();
-    for (k, function) in tree.functions.iter().enumerate() {
-        let id = def_map.function_id(module, k);
-        if function.equations.is_empty()
-            || modules[module].items.functions[id.local].kind != FunctionKind::Defined
+    let functions = tree.functions.iter().enumerate().map(|(k, function)| {
+        (
+            def_map.function_id(module, k),
+            function.equations.as_slice(),
+            None,
+        )
+    });
+    let pending = pending.iter().map(|body| {
+        (
+            body.function,
+            body.equations.as_slice(),
+            body.annotation_vars,
+        )
+    });
+    for (id, equations, annotation_vars) in functions.chain(pending) {
+        if equations.is_empty()
+            || !modules[module].items.functions[id.local]
+                .kind
+                .has_equations()
         {
             continue;
         }
@@ -235,8 +310,15 @@ fn lower_bodies(
             .as_mut()
             .map(|signature| std::mem::take(&mut signature.generics))
             .unwrap_or_default();
-        let equations: Vec<(ast::Equation, TextRange)> = function
-            .equations
+        // 先頭の n 個だけを見せる。番号は元の表と同じになる
+        let hidden = annotation_vars.map(|n| {
+            let mut visible = Generics::default();
+            for (_, var) in generics.type_vars.iter().take(n) {
+                visible.type_vars.alloc(var.clone());
+            }
+            std::mem::replace(&mut generics, visible)
+        });
+        let equations: Vec<(ast::Equation, TextRange)> = equations
             .iter()
             .map(|(ptr, range)| (ptr.to_node(root), *range))
             .collect();
@@ -251,7 +333,7 @@ fn lower_bodies(
         )
         .lower_equations(&equations);
         if let Some(signature) = &mut modules[module].items.functions[id.local].signature {
-            signature.generics = generics;
+            signature.generics = hidden.unwrap_or(generics);
         }
         bodies.insert(id.local, body);
     }
@@ -342,12 +424,13 @@ pub(super) enum NameKind {
     Operation,
     Type,
     Effect,
+    Class,
 }
 
 impl NameKind {
     fn code(self) -> ErrorCode {
         match self {
-            NameKind::Type | NameKind::Effect => codes::UNDEFINED_TYPE,
+            NameKind::Type | NameKind::Effect | NameKind::Class => codes::UNDEFINED_TYPE,
             NameKind::Value | NameKind::Constructor | NameKind::Operator | NameKind::Operation => {
                 codes::UNDEFINED_NAME
             }
@@ -362,6 +445,7 @@ impl NameKind {
             NameKind::Operation => "effect operation",
             NameKind::Type => "type",
             NameKind::Effect => "effect",
+            NameKind::Class => "class",
         }
     }
 
@@ -429,7 +513,7 @@ pub(super) fn not_found(
                 name,
                 &items.qualifier_modules(qualifier),
             );
-            let types = matches!(kind, NameKind::Type | NameKind::Effect);
+            let types = matches!(kind, NameKind::Type | NameKind::Effect | NameKind::Class);
             match items.hidden_std_module(qualifier, name, types) {
                 Some(short) => diagnostic.with_help(format!(
                     "the standard `{short}` is hidden by your module `{short}`; `import Std.{short} as {}` reaches it",

@@ -39,7 +39,7 @@ fn every_operation_visits_at_least_its_handler() {
         "main () =",
         "  let n = handle ask () + ask () + ask () with",
         "            | ask () k -> k 1",
-        "  println (show_int n)",
+        "  println (show n)",
     ]
     .join("\n");
     let stats = stats(&text, "3\n");
@@ -61,7 +61,7 @@ fn concatenation_writes_the_bytes_of_both_sides() {
 fn evaluating_a_literal_copies_nothing() {
     // 文字列のリテラルは不死の物体で、`Rhs::ConstString` は中身を写さずに参照を1つ作る (docs/spec/runtime.md)。
     // 64 バイトのリテラルを n 回評価して文字列の `Switch` で比べるので、1回でも写すと上限を超える。残る数は
-    // `show_int` の結果の分だけである
+    // `show` の結果の分だけである
     let literal = "x".repeat(64);
     let n = 2000;
     let source = format!(
@@ -70,7 +70,7 @@ fn evaluating_a_literal_copies_nothing() {
          count : Int -> Int -> Int\n\
          count n acc = if n == 0 then acc else count (n - 1) (acc + same \"{literal}\")\n\n\
          main : Unit -> <IO> Unit\n\
-         main () = println (show_int (count {n} 0))\n"
+         main () = println (show (count {n} 0))\n"
     );
     let (out, stats) = eml_test_support::run_stats(&source);
     assert_eq!(out, format!("{n}\n"));
@@ -131,7 +131,7 @@ fn a_perform_under_one_handler_visits_only_that_handler() {
 main () =
   let r = handle count {n} with
             | ask () k -> k 1
-  println (show_int r)
+  println (show r)
 "
     );
     let visits = handler_visits(n, &rest);
@@ -151,7 +151,7 @@ main () =
   let r = handle (handle count {n} with
                     | tell _ k -> k ()) with
             | ask () k -> k 1
-  println (show_int r)
+  println (show r)
 "
     );
     let visits = handler_visits(n, &rest);
@@ -176,7 +176,7 @@ main () =
   let r = handle (handle run go with
                     | ask () k -> k 2) with
             | ask () k -> k 1
-  println (show_int r)
+  println (show r)
 "
     );
     let visits = handler_visits(n, &rest);
@@ -224,7 +224,7 @@ fn traversing_a_unique_list_does_not_dup_per_cell() {
     // 一意なリストのセルは、`release` が箱だけを解放し、フィールドが箱の参照をそのまま受け取るので、セルごとの
     // `dup` は要らない。長さを2倍にしても `rc_increments` は変わらない。`release` の代わりにフィールドを `dup` して
     // 箱を `decref` する形に戻ると落ちる
-    let traverse = "  println (show_int (sum (range 1 {n})))";
+    let traverse = "  println (show (sum (range 1 {n})))";
     let n = 1000;
     let short = rc_increments(n, traverse, &format!("{}\n", n * (n + 1) / 2));
     let long = rc_increments(2 * n, traverse, &format!("{}\n", n * (2 * n + 1)));
@@ -237,7 +237,7 @@ fn traversing_a_shared_list_dups_each_cell_at_most_once() {
     // 1回、`sum` が各セルで残りのリストを1回 `dup` するので、数は n になる。上限は n に小さな余裕を足したもので、
     // セルを2回以上 `dup` する形になれば超える
     let traverse =
-        "  let xs = range 1 {n}\n  println (show_int (sum xs))\n  println (show_int (length xs))";
+        "  let xs = range 1 {n}\n  println (show (sum xs))\n  println (show (length xs))";
     let n = 1000;
     let increments = rc_increments(n, traverse, &format!("{}\n{n}\n", n * (n + 1) / 2));
     assert!(increments <= n + 2, "rc_increments = {increments}");
@@ -265,7 +265,7 @@ go : Int -> Int
 go n = loop go n
 
 main : Unit -> <IO> Unit
-main () = println (show_int (go {n}))
+main () = println (show (go {n}))
 "
             ),
             "0\n".to_string(),
@@ -331,7 +331,7 @@ go : Int -> Int
 go n = loop go n
 
 main : Unit -> <IO> Unit
-main () = println (show_int (go {n}))
+main () = println (show (go {n}))
 "
             ),
             "0\n".to_string(),
@@ -355,7 +355,7 @@ main : Unit -> <IO> Unit
 main () =
   let r = handle sum_asks {n} 0 with
             | ask () k -> k 2
-  println (show_int r)
+  println (show r)
 "
             ),
             format!("{}\n", 2 * n),
@@ -373,7 +373,7 @@ fn a_direct_self_tail_call_keeps_the_heap_flat() {
 loop n acc = if n == 0 then acc else loop (n - 1) (acc + 1)
 
 main : Unit -> <IO> Unit
-main () = println (show_int (loop {n} 0))
+main () = println (show (loop {n} 0))
 "
             ),
             format!("{n}\n"),
@@ -394,7 +394,7 @@ fn a_tail_apply_from_lambda_to_lambda_grows_the_heap_only_by_its_closures() {
 count_down n k = if n == 0 then k 0 + k 0 else count_down (n - 1) (fn m -> k (m + 1))
 
 main : Unit -> <IO> Unit
-main () = println (show_int (count_down {n} (fn m -> m)))
+main () = println (show (count_down {n} (fn m -> m)))
 "
             ),
             format!("{}\n", 2 * n),
@@ -416,7 +416,7 @@ fn an_int_in_a_type_variable_field_is_boxed_and_unboxed() {
         "  | Wrap x -> x",
         "",
         "main : Unit -> <IO> Unit",
-        "main () = println (show_int (unwrap (Wrap 1) + 1))",
+        "main () = println (show (unwrap (Wrap 1) + 1))",
     ]
     .join("\n");
     let stats = stats(&text, "2\n");
@@ -427,7 +427,7 @@ fn an_int_in_a_type_variable_field_is_boxed_and_unboxed() {
 #[test]
 fn a_program_with_only_scalar_positions_boxes_nothing() {
     let stats = stats(
-        "main : Unit -> <IO> Unit\nmain () = println (show_int (1 + 2))",
+        "main : Unit -> <IO> Unit\nmain () = println (show (1 + 2))",
         "3\n",
     );
     assert_eq!((stats.boxes, stats.unboxes), (0, 0), "{stats:?}");

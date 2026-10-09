@@ -15,7 +15,7 @@ describe () =
   let a = bit (choose ())
   let b = bit (choose ())
   let c = bit (choose ())
-  prefix ++ ":" ++ show_int (a * 4 + b * 2 + c)
+  prefix ++ ":" ++ show (a * 4 + b * 2 + c)
 
 labelled : Unit -> <Choice> String
 labelled () =
@@ -36,4 +36,4 @@ paths () =
 main : Unit -> <IO> Unit
 main () =
   println (every ())
-  println (show_int (paths ()))
+  println (show (paths ()))

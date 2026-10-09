@@ -1,0 +1,14 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: rendered
+input_file: tests/ui/check-fail/classes/nested_data_type_show.em
+---
+[E2012] Error: `Show (Nested a)` would need an instance of `Show` at infinitely many types
+   ╭─[ check-fail/classes/nested_data_type_show.em:6:12 ]
+   │
+ 6 │   deriving Show
+   │            ──┬─  
+   │              ╰─── a constrained type variable grows on each recursive call
+   │ 
+   │ Note: instances are chosen at compile time, so a constraint cannot follow polymorphic recursion
+───╯

@@ -24,7 +24,7 @@ fn a_chain_used_at_two_types_has_two_instances_per_function() {
         text.push_str(&format!("f{i} : a -> a\nf{i} x = f{} x\n\n", i + 1));
     }
     text.push_str(&format!("f{n} : a -> a\nf{n} x = x\n\n"));
-    text.push_str("main : Unit -> <IO> Unit\nmain () = println (show_int (f1 1) ++ f1 \"s\")");
+    text.push_str("main : Unit -> <IO> Unit\nmain () = println (show (f1 1) ++ f1 \"s\")");
     for i in 1..=n {
         assert_eq!(
             instances_of(&text, &format!("f{i}")),
@@ -50,13 +50,13 @@ fn one_function_used_at_k_types_has_k_instances() {
 
 #[test]
 fn polymorphic_recursion_is_uniform() {
-    let text = "depth : Int -> a -> Int\ndepth n x = if n == 0 then 0 else 1 + depth (n - 1) (x, x)\n\nmain : Unit -> <IO> Unit\nmain () = println (show_int (depth 3 1))";
+    let text = "depth : Int -> a -> Int\ndepth n x = if n == 0 then 0 else 1 + depth (n - 1) (x, x)\n\nmain : Unit -> <IO> Unit\nmain () = println (show (depth 3 1))";
     assert_eq!(instances_of(text, "depth"), ["depth@[_]"]);
 }
 
 #[test]
 fn mutual_polymorphic_recursion_is_uniform() {
-    let text = "f : Int -> a -> Int\nf n x = if n == 0 then 0 else g (n - 1) (x, x)\n\ng : Int -> b -> Int\ng n y = f n y\n\nmain : Unit -> <IO> Unit\nmain () = println (show_int (f 3 1))";
+    let text = "f : Int -> a -> Int\nf n x = if n == 0 then 0 else g (n - 1) (x, x)\n\ng : Int -> b -> Int\ng n y = f n y\n\nmain : Unit -> <IO> Unit\nmain () = println (show (f 3 1))";
     assert_eq!(instances_of(text, "f"), ["f@[_]"]);
     assert_eq!(instances_of(text, "g"), ["g@[_]"]);
 }
@@ -64,13 +64,13 @@ fn mutual_polymorphic_recursion_is_uniform() {
 #[test]
 fn recursion_through_a_function_value_is_found() {
     // 自分を値として渡して呼ぶ形も、値の参照が具体化の表に入るので、大きくなる辺になる
-    let text = "call : (Int -> b -> Int) -> Int -> b -> Int\ncall f n x = f n x\n\ndepth : Int -> a -> Int\ndepth n x = if n == 0 then 0 else call depth (n - 1) (x, x)\n\nmain : Unit -> <IO> Unit\nmain () = println (show_int (depth 3 1))";
+    let text = "call : (Int -> b -> Int) -> Int -> b -> Int\ncall f n x = f n x\n\ndepth : Int -> a -> Int\ndepth n x = if n == 0 then 0 else call depth (n - 1) (x, x)\n\nmain : Unit -> <IO> Unit\nmain () = println (show (depth 3 1))";
     assert_eq!(instances_of(text, "depth"), ["depth@[_]"]);
 }
 
 #[test]
 fn only_the_growing_position_is_uniform() {
-    let text = "walk : Int -> a -> b -> b\nwalk n x y = if n == 0 then y else walk (n - 1) (x, x) y\n\nmain : Unit -> <IO> Unit\nmain () = println (show_int (walk 3 1 5))";
+    let text = "walk : Int -> a -> b -> b\nwalk n x y = if n == 0 then y else walk (n - 1) (x, x) y\n\nmain : Unit -> <IO> Unit\nmain () = println (show (walk 3 1 5))";
     assert_eq!(instances_of(text, "walk"), ["walk@[_, Int]"]);
     let shown = core_text(text, Pass::Translate);
     let header = function(&shown, "walk@[_, Int]");
@@ -82,7 +82,7 @@ fn only_the_growing_position_is_uniform() {
 
 #[test]
 fn a_generic_call_in_a_clause_at_the_clause_variable_is_uniform() {
-    let text = "id : a -> a\nid x = x\n\neffect Pick where\n  pick : a -> a\n\nrun : Int -> Int\nrun v =\n  handle pick v with\n    | pick x k -> k (id x)\n\nmain : Unit -> <IO> Unit\nmain () = println (show_int (run 1))";
+    let text = "id : a -> a\nid x = x\n\neffect Pick where\n  pick : a -> a\n\nrun : Int -> Int\nrun v =\n  handle pick v with\n    | pick x k -> k (id x)\n\nmain : Unit -> <IO> Unit\nmain () = println (show (run 1))";
     assert_eq!(instances_of(text, "id"), ["id@[_]"]);
 }
 
@@ -137,7 +137,7 @@ fn a_long_shared_type_argument_gets_an_ordinal_name() {
         text.push_str(&format!("  let f{i} = f{} ident\n", i - 1));
     }
     text.push_str(&format!(
-        "  f{n} 5\n\nmain : Unit -> <IO> Unit\nmain () = println (show_int (run ()))"
+        "  f{n} 5\n\nmain : Unit -> <IO> Unit\nmain () = println (show (run ()))"
     ));
     let names = instances_of(&text, "ident");
     assert_eq!(names.len(), n + 1);
@@ -151,7 +151,7 @@ fn a_long_shared_type_argument_gets_an_ordinal_name() {
 
 #[test]
 fn monomorphic_programs_keep_their_function_order_and_names() {
-    let text = "double : Int -> Int\ndouble n = n + n\n\nmain : Unit -> <IO> Unit\nmain () = println (show_int (double 2))";
+    let text = "double : Int -> Int\ndouble n = n + n\n\nmain : Unit -> <IO> Unit\nmain () = println (show (double 2))";
     let program = eml_test_support::core_until(text, Pass::Translate);
     let names: Vec<&str> = program
         .functions
@@ -198,7 +198,7 @@ fn chain(n: usize) -> String {
         text.push_str(&format!("f{i} : a -> a\nf{i} x = f{} x\n\n", i + 1));
     }
     text.push_str(&format!("f{n} : a -> a\nf{n} x = x\n\n"));
-    text.push_str("main : Unit -> <IO> Unit\nmain () = println (show_int (f1 1) ++ f1 \"s\")");
+    text.push_str("main : Unit -> <IO> Unit\nmain () = println (show (f1 1) ++ f1 \"s\")");
     text
 }
 
@@ -211,7 +211,7 @@ fn shared_types(n: usize) -> String {
         text.push_str(&format!("  let f{i} = f{} ident\n", i - 1));
     }
     text.push_str(&format!(
-        "  f{n} x\n\nmain : Unit -> <IO> Unit\nmain () = println (show_int (run 5))"
+        "  f{n} x\n\nmain : Unit -> <IO> Unit\nmain () = println (show (run 5))"
     ));
     text
 }

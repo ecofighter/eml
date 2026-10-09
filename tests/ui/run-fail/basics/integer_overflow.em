@@ -2,4 +2,4 @@
 main : Unit -> <IO> Unit
 main () =
   println "before"
-  println (show_int (9223372036854775807 + 1))
+  println (show (9223372036854775807 + 1))

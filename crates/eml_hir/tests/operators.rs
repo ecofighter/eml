@@ -19,13 +19,13 @@ fn right_associativity() {
 #[test]
 fn prefix_minus_has_precedence_six() {
     let text = "n : Int\nn = - 2 * 3\nm : Int\nm = - 2 + 3\nk : Bool\nk = 1 == -2";
-    insta::assert_snapshot!(lower_text(text), @r"
+    insta::assert_snapshot!(lower_text(text), @"
     n : Int
     n = (negate (* 2 3))
     m : Int
     m = (+ (negate 2) 3)
     k : Bool
-    k = (== 1 (negate 2))
+    k = (@Prelude.== 1 (negate 2))
     ");
 }
 

@@ -9,6 +9,7 @@ use crate::store::{TypeId, TypeStore};
 use crate::table::Row;
 use crate::ty::{Linearity, Multiplicity};
 
+pub(crate) mod entail;
 pub(crate) mod problem;
 pub(crate) mod solve;
 
@@ -34,14 +35,17 @@ pub(crate) enum Bound<T> {
 /// Kind の束の値。線形性 (`Unr ≤ Lin`) と多重度 (`Never ≤ Once ≤ Multi`) の2つがある (docs/spec/types.md の「Kind」)。
 pub(crate) trait Level: Copy + Ord + std::hash::Hash + std::fmt::Debug {
     const BOTTOM: Self;
+    const TOP: Self;
 }
 
 impl Level for Linearity {
     const BOTTOM: Self = Linearity::Unr;
+    const TOP: Self = Linearity::Lin;
 }
 
 impl Level for Multiplicity {
     const BOTTOM: Self = Multiplicity::Never;
+    const TOP: Self = Multiplicity::Multi;
 }
 
 /// ファイルを持つ位置。由来は別のモジュールの中を指しうる
@@ -72,6 +76,11 @@ pub(crate) enum Provenance {
     /// 宣言の型と、SCC の中の参照の等式から作る制約。それだけでは破れない。具体化するときは参照した位置の由来を付けて
     /// 複写する。
     Declaration,
+    /// 本体の検査で、制約 `C a` と instance の頭の型変数が意味する `a ≤ Unr`
+    /// (docs/spec/types.md の「`Unr` のクラス」)。宣言から出るが、SCC の中の参照が
+    /// `a` を線形な型で具体化すると破れる。そのとき、参照が求める制約は解けないか (E2006)、線形な頭の instance で解けるか
+    /// (E2010)、型引数に `Unr` を求めて破れるので、誤りは報告済みである。そこで報告しない。
+    Given,
     /// 本体の検査の表の既定値で、由来を付け忘れた制約である。値は検査している関数の名前の位置。
     Unattributed(Span),
 }
@@ -80,7 +89,10 @@ impl Provenance {
     pub fn origin(&self) -> Option<&KindOrigin> {
         match self {
             Provenance::At(origin) => Some(origin),
-            Provenance::Suppressed | Provenance::Declaration | Provenance::Unattributed(_) => None,
+            Provenance::Suppressed
+            | Provenance::Declaration
+            | Provenance::Given
+            | Provenance::Unattributed(_) => None,
         }
     }
 }

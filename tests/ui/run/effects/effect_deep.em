@@ -34,18 +34,18 @@ main () =
       | tick () k ->
           println "tick"
           k 1
-  println (show_int total)
+  println (show total)
   let mixed =
     handle inner_and_outer () with
       | tick () k -> k 1
-  println (show_int mixed)
+  println (show mixed)
   let relayed =
     handle (handle tick () with | tick () k -> k (tick () + 10)) with
       | tick () k -> k 5
-  println (show_int relayed)
+  println (show relayed)
   let walked =
     handle (handle logged_tick () with | tick () k -> k 7) with
       | log message k ->
           println ("log: " ++ message)
           k ()
-  println (show_int walked)
+  println (show walked)

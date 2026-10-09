@@ -104,6 +104,18 @@ fn type_arguments_and_parameters_of_effects_are_checked() {
 }
 
 #[test]
+fn a_never_result_in_an_effect_row_of_a_parameter_is_not_free() {
+    // 引数の関数型の row に書いたエフェクトの型引数も、引数に現れるものに数える
+    let text = "effect Reader r where\n  ask : Unit -> r\n\neffect Fail where\n  never raise : (Unit -> <Reader a> Unit) -> a";
+    assert_eq!(
+        diagnostics(text),
+        [
+            "E1008 5:46 the result type of a `never` operation must be a type variable that does not appear in its parameters"
+        ]
+    );
+}
+
+#[test]
 fn type_arguments_of_effects_in_an_open_row_are_checked() {
     let text = "effect State s where\n  get : Unit -> s\n\nf : Unit -> <State | e> Int\nf () = 1";
     assert_eq!(
@@ -409,10 +421,10 @@ fn a_qualified_extern_function_in_a_clause_cannot_be_handled() {
 #[test]
 fn a_pure_extern_function_in_a_clause_is_not_an_operation() {
     // extern のエフェクトを起こさない extern の関数は E1009 の対象ではないので、見つからない操作の E1001 のままにする
-    let text = "f : Unit -> Int\nf () = handle 1 with\n  | show_int x k -> k 1";
+    let text = "f : Unit -> Int\nf () = handle 1 with\n  | show x k -> k 1";
     assert_eq!(
         diagnostics(text),
-        ["E1001 3:5 cannot find effect operation `show_int`"]
+        ["E1001 3:5 cannot find effect operation `show`"]
     );
 }
 

@@ -42,6 +42,11 @@ impl Rigids {
         rigids
     }
 
+    /// rigid な型変数の型。
+    pub fn ty(&self, var: TypeVarId) -> Ty {
+        self.tys[var]
+    }
+
     /// rigid な型変数。`Generics` の並びの順である。
     pub fn vars(&self) -> &[RigidVar] {
         &self.vars
@@ -67,7 +72,7 @@ impl Rigids {
 
 /// 型の注釈の矢印の線形性の決め方。
 #[derive(Clone, Copy)]
-enum Arrows {
+pub(crate) enum Arrows {
     /// Kind 変数にして推論する。
     Inferred,
     /// 一番外側の矢印だけを `Unr` にし、内側は推論する。トップレベルの関数のシグネチャに使う。
@@ -75,14 +80,28 @@ enum Arrows {
     /// すべて `Unr` にする。`data` のフィールドの型に使う。表面の構文で `m` を書けないので、操作の引数の型と同じく
     /// `Unr` に固定する (docs/spec/types.md の「Kind」)。
     Unr,
+    /// クラスのメソッドのシグネチャと、既定のメソッドと instance のメソッドの関数のシグネチャ。戻り値の側に並ぶ矢印
+    /// だけを推論し、ほかの位置の関数型の矢印は `Unr` に固定する。メソッドは本体を持たず、引数の矢印の線形性を推論
+    /// できないためである (操作の引数とフィールドの関数型と同じ規則。docs/spec/types.md の「Kind」)。`outermost` は
+    /// 一番外側の矢印か。
+    Method { outermost: bool },
 }
 
 impl Arrows {
-    /// 引数、戻り値、型引数の位置の決め方。
-    fn inner(self) -> Arrows {
+    /// 引数、型引数、row のラベルの型引数の位置の決め方。
+    fn param(self) -> Arrows {
+        match self {
+            Arrows::Unr | Arrows::Method { .. } => Arrows::Unr,
+            Arrows::Inferred | Arrows::OutermostUnr => Arrows::Inferred,
+        }
+    }
+
+    /// 戻り値の位置の決め方。
+    fn ret(self) -> Arrows {
         match self {
             Arrows::Unr => Arrows::Unr,
             Arrows::Inferred | Arrows::OutermostUnr => Arrows::Inferred,
+            Arrows::Method { .. } => Arrows::Method { outermost: false },
         }
     }
 }
@@ -127,37 +146,39 @@ fn lower(
         TypeRefKind::Con(id, args) => {
             let mut lowered = Vec::new();
             for &arg in args {
-                lowered.push(lower(table, types, rigids, arg, arrows.inner()));
+                lowered.push(lower(table, types, rigids, arg, arrows.param()));
             }
             table.alloc(TyShape::Con(*id, lowered))
         }
         TypeRefKind::Tuple(elements) => {
             let mut lowered = Vec::new();
             for &element in elements {
-                lowered.push(lower(table, types, rigids, element, arrows.inner()));
+                lowered.push(lower(table, types, rigids, element, arrows.param()));
             }
             table.tuple(lowered)
         }
         TypeRefKind::Var(var) => rigids.tys[*var],
         TypeRefKind::Fn { param, row, ret } => {
-            let param = lower(table, types, rigids, *param, arrows.inner());
-            let ret = lower(table, types, rigids, *ret, arrows.inner());
+            let param = lower(table, types, rigids, *param, arrows.param());
+            let ret = lower(table, types, rigids, *ret, arrows.ret());
             let row = match row {
                 // 省略した row は空の row である (docs/spec/types.md の「関数型」)
                 RowRef::Omitted => Row::pure(),
                 RowRef::Closed { effects, .. } => {
-                    Row::closed(lower_labels(table, types, rigids, effects, arrows.inner()))
+                    Row::closed(lower_labels(table, types, rigids, effects, arrows.param()))
                 }
                 RowRef::Open { effects, tail, .. } => Row {
-                    labels: lower_labels(table, types, rigids, effects, arrows.inner()),
+                    labels: lower_labels(table, types, rigids, effects, arrows.param()),
                     tail: Tail::Var(rigids.rows[*tail]),
                 },
                 // 未定義のエフェクトか、解決できない row 変数の跡。どのエフェクトも受け入れて、診断を連鎖させない
                 RowRef::Error => Row::error(),
             };
             let lin = match arrows {
-                Arrows::Inferred => table.fresh_arrow_lin(),
-                Arrows::OutermostUnr | Arrows::Unr => ArrowLin::Known(Linearity::Unr),
+                Arrows::Inferred | Arrows::Method { outermost: false } => table.fresh_arrow_lin(),
+                Arrows::OutermostUnr | Arrows::Unr | Arrows::Method { outermost: true } => {
+                    ArrowLin::Known(Linearity::Unr)
+                }
             };
             table.function_with(param, lin, row, ret)
         }
@@ -348,11 +369,12 @@ pub(crate) struct Own {
     pub mult: Vec<KindVar>,
 }
 
-/// 段0: 関数と組み込みのシグネチャの形。使い捨ての表に下ろしてから閉じる。下ろす処理を本体の注釈と共有するため。
-pub(crate) fn signature_shape(context: &Context, signature: &Signature) -> Shape {
+/// 段0: 関数、メソッド、組み込みのシグネチャの形。使い捨ての表に下ろしてから閉じる。下ろす処理を本体の注釈と共有する
+/// ため。矢印の線形性は `arrows` に従う。
+pub(crate) fn signature_shape(context: &Context, signature: &Signature, arrows: Arrows) -> Shape {
     let mut table = Table::new(context);
     let rigids = Rigids::new(&mut table, &signature.generics);
-    let ty = lower_signature(&mut table, signature, &rigids);
+    let ty = lower(&mut table, &signature.types, &rigids, signature.ty, arrows);
     close(&table, ty, &rigids)
 }
 
@@ -784,7 +806,7 @@ mod tests {
     fn a_shape_is_exported_like_its_signature() {
         let program = program(TWICE);
         let context = context(&program);
-        let shape = signature_shape(&context, signature(&program));
+        let shape = signature_shape(&context, signature(&program), Arrows::OutermostUnr);
         assert_eq!(exported(&shape, &program), "(a -> <e> a) -> a -> <e> a");
     }
 
@@ -793,7 +815,7 @@ mod tests {
         let program = program(TWICE);
         let context = context(&program);
         let signature = signature(&program);
-        let shape = signature_shape(&context, signature);
+        let shape = signature_shape(&context, signature, Arrows::OutermostUnr);
         let mut table = Table::new(&context);
         let own = shape.instantiate_rigid(&mut table, &signature.generics);
         assert_eq!(table.kind_vars(own.ty), (own.lin.clone(), own.mult.clone()));
@@ -821,7 +843,7 @@ mod tests {
     fn instantiation_replaces_rigid_variables_and_rows() {
         let program = program("f : a -> <e> a\nf x = x");
         let context = context(&program);
-        let shape = signature_shape(&context, signature(&program));
+        let shape = signature_shape(&context, signature(&program), Arrows::OutermostUnr);
         let mut table = Table::new(&context);
         let first = shape.instantiate(&mut table);
         let second = shape.instantiate(&mut table);
@@ -834,7 +856,7 @@ mod tests {
     fn instantiation_returns_the_type_arguments_in_the_order_of_the_rigids() {
         let program = program("f : a -> b -> a\nf x y = x");
         let context = context(&program);
-        let shape = signature_shape(&context, signature(&program));
+        let shape = signature_shape(&context, signature(&program), Arrows::OutermostUnr);
         let mut table = Table::new(&context);
         let first = shape.instantiate(&mut table);
         let second = shape.instantiate(&mut table);
@@ -849,7 +871,7 @@ mod tests {
     fn an_error_row_survives_closing_and_instantiation() {
         let program = program("f : Int -> <Missing> Int\nf x = x");
         let context = context(&program);
-        let shape = signature_shape(&context, signature(&program));
+        let shape = signature_shape(&context, signature(&program), Arrows::OutermostUnr);
         assert_eq!(exported(&shape, &program), "Int -> <{error}> Int");
         let mut table = Table::new(&context);
         let instance = shape.instantiate(&mut table);

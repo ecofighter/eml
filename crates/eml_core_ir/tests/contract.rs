@@ -66,8 +66,8 @@ fn unused_pure_extern_bindings_are_removed() {
     // 行が `Pure` の extern は止まらないので、使われなければ消す
     let text = "\
 fn f(x.0: int, s.1: obj) -> int {
-  let t.2: obj = extern Prelude.show_int(x.0)
-  let b.3: enum = extern Prelude.<(x.0, 0)
+  let t.2: obj = extern \"Prelude.Show Int.show\"(x.0)
+  let b.3: enum = extern \"Prelude.Ord Int.<\"(x.0, 0)
   let u.4: obj = extern Prelude.++(s.1, t.2)
   return 1
 }
@@ -105,7 +105,7 @@ layout Prelude.Bool { False, True }
 layout Pair { Pair(tobj, int) }
 layout Either { Left(tobj), Right(tobj) }
 fn f(x.0: int, c.1: enum) -> int {
-  let s.2: obj = extern Prelude.show_int(x.0)
+  let s.2: obj = extern \"Prelude.Show Int.show\"(x.0)
   let p.3: obj = con Pair #0(s.2, x.0)
   switch c.1 Prelude.Bool { #0 -> b1, #1 -> b2 }
 b1:
@@ -271,7 +271,7 @@ fn f(s.0: obj) -> int {
 fn a_returned_if_value_becomes_tail_calls_in_each_arm() {
     // `let y = if ..; y` の続きは `return` だけのブロックなので、translate が各枝の `jump` を `return` にしてブロックを
     // 消し、縮約が呼び出しの後の `return` を末尾呼び出しにする
-    let text = "f : Int -> Int\nf x = x + 1\n\ng : Int -> Int\ng x = x - 1\n\nh : Bool -> Int -> Int\nh c x =\n  let y = if c then f x else g x\n  y\n\nmain : Unit -> <IO> Unit\nmain () = println (show_int (h True 1))";
+    let text = "f : Int -> Int\nf x = x + 1\n\ng : Int -> Int\ng x = x - 1\n\nh : Bool -> Int -> Int\nh c x =\n  let y = if c then f x else g x\n  y\n\nmain : Unit -> <IO> Unit\nmain () = println (show (h True 1))";
     insta::assert_snapshot!(function(&core_text(text, Pass::Contract), "h"), @"
     fn h(c.0: enum, x.1: int) -> int {
       switch c.0 Prelude.Bool { #0 -> b1, #1 -> b2 }
@@ -285,7 +285,7 @@ fn a_returned_if_value_becomes_tail_calls_in_each_arm() {
 
 #[test]
 fn a_returned_match_value_becomes_tail_calls_in_each_arm() {
-    let text = "data Option a =\n  | None\n  | Some a\n\nf : Int -> Int\nf x = x + 1\n\ng : Int -> Int\ng x = x - 1\n\nh : Option Int -> Int\nh o =\n  let y = match o with\n    | Some v -> f v\n    | None -> g 0\n  let z = y\n  z\n\nmain : Unit -> <IO> Unit\nmain () = println (show_int (h None))";
+    let text = "data Option a =\n  | None\n  | Some a\n\nf : Int -> Int\nf x = x + 1\n\ng : Int -> Int\ng x = x - 1\n\nh : Option Int -> Int\nh o =\n  let y = match o with\n    | Some v -> f v\n    | None -> g 0\n  let z = y\n  z\n\nmain : Unit -> <IO> Unit\nmain () = println (show (h None))";
     insta::assert_snapshot!(function(&core_text(text, Pass::Contract), "h"), @"
     fn h(o.0: tobj) -> int {
       switch o.0 Option { #0 -> b1, #1(v.5: tobj) -> b2 }
@@ -301,7 +301,7 @@ fn a_returned_match_value_becomes_tail_calls_in_each_arm() {
 #[test]
 fn returning_a_field_of_a_call_result_is_not_a_tail_call() {
     // 返すのはタプル全体ではなくフィールドなので、呼び出しの後に `unpack` が残り、末尾呼び出しにならない
-    let text = "split : Int -> (Int, Int)\nsplit x = (x, x + 1)\n\nfirst : Int -> Int\nfirst x =\n  let (y, _) = split x\n  y\n\nmain : Unit -> <IO> Unit\nmain () = println (show_int (first 1))";
+    let text = "split : Int -> (Int, Int)\nsplit x = (x, x + 1)\n\nfirst : Int -> Int\nfirst x =\n  let (y, _) = split x\n  y\n\nmain : Unit -> <IO> Unit\nmain () = println (show (first 1))";
     insta::assert_snapshot!(function(&core_text(text, Pass::Contract), "first"), @"
     fn first(x.0: int) -> int {
       let t.1: obj = call split(x.0)
@@ -314,11 +314,11 @@ fn returning_a_field_of_a_call_result_is_not_a_tail_call() {
 
 #[test]
 fn calls_in_tail_position_are_tail_calls() {
-    let text = "loop : Int -> Int -> Int\nloop n acc = if n == 0 then acc else loop (n - 1) (acc + 1)\n\ncall_twice : (Int -> Int) -> Int -> Int\ncall_twice f x = f (f x)\n\nmain : Unit -> <IO> Unit\nmain () = println (show_int (loop 3 0 + call_twice (fn x -> x + 1) 1))";
+    let text = "loop : Int -> Int -> Int\nloop n acc = if n == 0 then acc else loop (n - 1) (acc + 1)\n\ncall_twice : (Int -> Int) -> Int -> Int\ncall_twice f x = f (f x)\n\nmain : Unit -> <IO> Unit\nmain () = println (show (loop 3 0 + call_twice (fn x -> x + 1) 1))";
     let shown = core_text(text, Pass::Contract);
     insta::assert_snapshot!(function(&shown, "loop"), @"
     fn loop(n.0: int, acc.1: int) -> int {
-      let t.2: enum = extern Prelude.int_eq(n.0, 0)
+      let t.2: enum = extern \"Prelude.Eq Int.==\"(n.0, 0)
       switch t.2 Prelude.Bool { #0 -> b1, #1 -> b2 }
     b1:
       let t.3: int = extern Prelude.-(n.0, 1)

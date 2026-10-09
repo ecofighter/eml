@@ -19,5 +19,5 @@ first_or_zero xs = match xs with
 
 main : Unit -> <IO> Unit
 main () =
-  println (show_int (total (build 100000 Nil)))
-  println (show_int (first_or_zero (build 100000 Nil)))
+  println (show (total (build 100000 Nil)))
+  println (show (first_or_zero (build 100000 Nil)))

@@ -11,12 +11,12 @@ apply_to f x = f x
 
 show_pair : Pair Int String -> String
 show_pair p = match p with
-  | Pair n s -> show_int n ++ " " ++ s
+  | Pair n s -> show n ++ " " ++ s
 
 show_option : Option Int -> String
 show_option o = match o with
   | None -> "none"
-  | Some n -> show_int n
+  | Some n -> show n
 
 main : Unit -> <IO> Unit
 main () =

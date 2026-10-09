@@ -575,5 +575,11 @@ impl Atom {
 pub const FALSE: u32 = 0;
 pub const TRUE: u32 = 1;
 
+/// `Ordering` のタグ。`compare` の extern が配置の表を見ずに作る
+/// (docs/spec/declarations.md の「Prelude のクラス」)。
+pub const LT: u32 = 0;
+pub const EQ: u32 = 1;
+pub const GT: u32 = 2;
+
 /// タプルの値のタグ。タプルは、コンストラクタが1つの `data` と同じオブジェクトで表す (docs/spec/core-ir.md)。
 pub const TUPLE: u32 = 0;

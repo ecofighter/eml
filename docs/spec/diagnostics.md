@@ -95,14 +95,28 @@ struct Fix {
 | E1030 | `RESERVED_MODULE` | 修飾子が `Prelude` になる import、`import Main`、入口のファイルを指す import、`import Std` (標準ライブラリの根) |
 | E1031 | `UNKNOWN_QUALIFIER` | 修飾子がどの import にも、標準ライブラリのモジュールにもない。2つ以上のセグメントの修飾子 (`Report.Csv.parse`) を含む |
 | E1032 | `PRIVATE_IN_PUBLIC` | `pub` の item の型に、同じモジュールの `pub` でない型かエフェクトが現れた ([モジュールと名前解決](modules.md) の「公開の範囲」) |
-| E1033 | `EXTERN_OUTSIDE_STD` | ユーザーのモジュールに `extern` を書いた。標準ライブラリ (`std/`) のモジュールだけが書ける ([宣言](declarations.md) の「`extern`」) |
+| E1033 | `EXTERN_OUTSIDE_STD` | ユーザーのモジュールに `extern` を書いた。instance の中の `extern` の行を含む。標準ライブラリ (`std/`) のモジュールだけが書ける ([宣言](declarations.md) の「`extern`」) |
+| E1034 | `ORPHAN_INSTANCE` | クラスも頭の型も定義していないモジュールの instance ([モジュールと名前解決](modules.md) の「instance の一貫性」) |
+| E1035 | `DUPLICATE_INSTANCE` | 同じ (クラス, 型) の2つ目の instance。`deriving` との重なりと、同じ `deriving` に2回書いたクラスを含む |
+| E1036 | `MISSING_METHOD` | 既定のないメソッドを、instance が定義していない |
+| E1037 | `UNKNOWN_METHOD` | クラスにないメソッドを、instance が定義した |
+| E1038 | `NOT_DERIVABLE` | `deriving` に、Prelude の `Eq`、`Ord`、`Show` 以外のクラスを書いた |
+| E1039 | `INVALID_INSTANCE_HEAD` | instance の頭が、`data` か extern の型のコンストラクタに互いに異なる型変数を適用した形でない |
+| E1040 | `INVALID_CONSTRAINT` | 制約を書けない位置の制約 (extern と操作のシグネチャ)、型に現れない型変数への制約、頭やクラスの型変数でない型変数への文脈、クラスの型変数への制約を持つメソッドのシグネチャ、クラスの型変数を含まないメソッドのシグネチャ、制約の形 (クラスと1つの型変数) でない文脈 ([宣言](declarations.md) の「宣言の検査」) |
+| E1041 | `NOT_A_CLASS` | クラスを書く位置 (制約、instance のクラス、`deriving`) の名前が、型かエフェクトを指す |
+| E1042 | `SUPERCLASS_CYCLE` | 上位クラスの関係の循環 |
+| E1043 | `CLASS_AS_TYPE` | 型を書く位置の名前が、クラスを指す |
 | E2001 | `TYPE_MISMATCH` | 型の不一致。呼び出しの row のエフェクトの型引数が今の row と一致しない場合を含む |
 | E2002 | `EFFECT_NOT_IN_ROW` | シグネチャの row に含まれないエフェクトを起こした。ラムダの本体の場合を含む |
 | E2003 | `MISSING_MAIN` | 入口のモジュールに `main` がない。import した `main` は数えない。`eml run` のときだけ出す |
 | E2004 | `INVALID_MAIN_TYPE` | `main` のシグネチャが `Unit -> <IO> Unit` でない |
 | E2005 | `INFINITE_TYPE` | 無限の型 (単一化の occurs check)。row のラベルの型引数を通して、型変数か row 変数が自分自身の中に現れる場合を含む |
-| E2006 | `NOT_COMPARABLE` | `==` か `!=` で、`Int`、`String`、`Bool` のどれでもない型の値を比べた |
+| E2006 | `NO_INSTANCE` | 制約 `C T` を満たす instance がない。上位クラスの instance がないこと、導出した instance のフィールドの型が instance を持たないことを含む ([型と Kind](types.md) の「制約の解決」) |
 | E2008 | `MASK_CONFLICT` | 呼び出し先が自分で起こすエフェクトを、同じ呼び出しで row 変数のために飛ばす必要がある |
+| E2009 | `AMBIGUOUS_CONSTRAINT` | 制約の型が最後まで決まらない |
+| E2010 | `LINEAR_INSTANCE_HEAD` | `Unr` のクラスの instance の頭が `Unr` でない ([型と Kind](types.md) の「`Unr` のクラス」) |
+| E2011 | `METHOD_KIND_MISMATCH` | instance のメソッドか既定のメソッドが、クラスのシグネチャから導けない Kind の制約 (線形性と多重度の境界、持ち越しの制約) を持つ ([型と Kind](types.md) の「instance と既定のメソッドの検査」) |
+| E2012 | `CONSTRAINED_POLYMORPHIC_RECURSION` | 一様な位置の型変数が制約を持つ ([Core IR とインタプリタ](core-ir.md) の「一様な位置と制約付きの多相再帰」) |
 | E3001 | `LINEAR_VALUE_MISUSED` | 線形な値の誤った使い方のうち、E3002〜E3005 に当たらないもの (関数への受け渡し、型の単一化、ラムダや節の捕獲) |
 | E3002 | `LINEAR_VALUE_USED_TWICE` | 線形な値を、ある経路で2回以上使った |
 | E3003 | `LINEAR_VALUE_NOT_CONSUMED` | 線形な値を、ある経路で使わなかった |
@@ -116,6 +130,8 @@ struct Fix {
 | E4005 | `UNREACHABLE_EQUATION` | 到達しない等式 (Warning) |
 
 E2007 は欠番である。もとは `resume` の状態の欄の食い違いに使っていた番号で、ほかの診断には使わない。
+
+E2006 は、もとは `NOT_COMPARABLE` (`==` か `!=` で、`Int`、`String`、`Bool` のどれでもない型の値を比べた) だった。型クラスを入れたときに、E2007 のように欠番にせず、名前と意味を改めて使い続けることにした。新しい意味 (instance がない) は、もとの意味を含む一般化だからである。`==` の位置に出る場合も、演算子でなくクラスの言葉で言う。
 
 E0004 (`NOT_YET_SUPPORTED`) は、まだ実装していない構文に使う。S6 とコマンドリテラルの段で入れる構文と、字句として予約した浮動小数と文字のリテラル (`Float`、`Char`、`Num` の段) である。どの段階でも「後で実装する」という同じ意味なので、番号を分けない。HIR 以降の段階は、対応していない構文を、診断を出さずに無視することはしない。見つけた段階で E0004 を出して回復する。
 

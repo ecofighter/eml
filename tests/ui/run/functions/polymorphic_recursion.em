@@ -8,5 +8,5 @@ walk n x y = if n == 0 then y else walk (n - 1) (x, x) y
 
 main : Unit -> <IO> Unit
 main () =
-  println (show_int (depth 10 1))
-  println (show_int (walk 10 "x" 42))
+  println (show (depth 10 1))
+  println (show (walk 10 "x" 42))

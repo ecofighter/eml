@@ -64,7 +64,7 @@ pub(crate) fn solve_scc(
 fn reportable(provenance: &Provenance) -> Option<KindOrigin> {
     match provenance {
         Provenance::At(origin) => Some(origin.clone()),
-        Provenance::Suppressed => None,
+        Provenance::Suppressed | Provenance::Given => None,
         Provenance::Declaration => {
             unreachable!("a constraint from a declaration alone is never violated")
         }

@@ -54,6 +54,7 @@ pub enum SyntaxKind {
     FORALL_KW,
     CLASS_KW,
     INSTANCE_KW,
+    DERIVING_KW,
 
     L_PAREN,
     R_PAREN,
@@ -71,6 +72,8 @@ pub enum SyntaxKind {
     THIN_ARROW,
     LEFT_ARROW,
     DOT2,
+    /// 制約の文脈の終わり。予約の記号で、ユーザーは演算子として定義できない (docs/spec/lexical.md の「演算子」)。
+    FAT_ARROW,
 
     OP,
     CONOP,
@@ -113,6 +116,14 @@ pub enum SyntaxKind {
     IMPORT_ITEM,
     IMPORT_LIST,
     IMPORT_NAME,
+    CLASS_ITEM,
+    INSTANCE_ITEM,
+    /// `Eq a =>` と `(Eq a, Show b) =>`。制約の形 (クラスと1つの型変数) は HIR が検査する。
+    CONTEXT,
+    CONSTRAINT,
+    DERIVING,
+    /// instance の中の `extern (==)`。std だけが書ける (HIR の E1033)。
+    EXTERN_METHOD,
 
     BLOCK,
     LET_STMT,

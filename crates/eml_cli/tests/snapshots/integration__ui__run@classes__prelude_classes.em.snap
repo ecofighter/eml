@@ -1,0 +1,14 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{stderr}\")"
+input_file: tests/ui/run/classes/prelude_classes.em
+---
+--- stdout ---
+True True False
+True
+less greater equal
+7 pear
+"say \"hi\"\n"
+(-5) -5 42
+LT True
+--- stderr ---

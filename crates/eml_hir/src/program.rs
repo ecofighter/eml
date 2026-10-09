@@ -2,6 +2,7 @@
 //! (docs/implementation/architecture.md の「`eml_hir` の内部」)。
 
 use std::cmp::Ordering;
+use std::collections::HashMap;
 use std::fmt;
 use std::hash::{Hash, Hasher};
 use std::ops::{Index, IndexMut};
@@ -12,8 +13,8 @@ use la_arena::{Arena, ArenaMap, Idx, RawIdx};
 use eml_extern::ExternType;
 
 use crate::hir::{
-    Body, Constructor, EffectDef, ExternIndex, Function, FunctionKind, LangItems, Operation,
-    Signature, TypeDef,
+    Body, ClassDef, Constructor, EffectDef, ExternIndex, Function, FunctionKind, InstanceDef,
+    LangItems, Method, Operation, Signature, TypeDef,
 };
 use crate::names::DisplayNames;
 
@@ -92,6 +93,9 @@ pub type TypeDefId = ItemId<TypeDef>;
 pub type ConstructorId = ItemId<Constructor>;
 pub type EffectId = ItemId<EffectDef>;
 pub type OperationId = ItemId<Operation>;
+pub type ClassId = ItemId<ClassDef>;
+pub type MethodId = ItemId<Method>;
+pub type InstanceId = ItemId<InstanceDef>;
 
 /// 値の名前空間の item (docs/spec/modules.md の「名前空間」)。名前解決の結果、HIR の参照 (`Res::Item`)、型検査の
 /// 宣言ごとの表のキーが、同じ型を使う。
@@ -100,6 +104,7 @@ pub enum ValueItem {
     Function(FunctionId),
     Operation(OperationId),
     Constructor(ConstructorId),
+    Method(MethodId),
 }
 
 impl ValueItem {
@@ -108,6 +113,7 @@ impl ValueItem {
             ValueItem::Function(id) => id.module,
             ValueItem::Operation(id) => id.module,
             ValueItem::Constructor(id) => id.module,
+            ValueItem::Method(id) => id.module,
         }
     }
 }
@@ -117,6 +123,7 @@ impl ValueItem {
 pub enum TypeItem {
     Type(TypeDefId),
     Effect(EffectId),
+    Class(ClassId),
 }
 
 /// item の ID から値を引く表。モジュールごとに `ArenaMap` を持つ。`ArenaMap` と同じ使い方にして、下流の表の
@@ -209,8 +216,11 @@ pub struct Program {
     pub entry: ModuleId,
     pub lang: LangItems,
     pub externs: ExternIndex,
-    /// 型、エフェクト、コンストラクタの表示名。診断、`dump`、`pretty` が引く。
+    /// 型、エフェクト、コンストラクタ、クラスの表示名。診断、`dump`、`pretty` が引く。
     pub names: DisplayNames,
+    /// (クラス, 頭の型) から instance への索引。一貫性があるので、1つの組に instance は高々1つである
+    /// (docs/spec/modules.md の「instance の一貫性」)。
+    pub instance_index: HashMap<(ClassId, TypeDefId), InstanceId>,
 }
 
 /// HIR のノードは `SyntaxNodePtr` ではなく範囲を持つ。演算子の列を組み直した部分式のように、対応する構文ノードの
@@ -251,6 +261,10 @@ pub struct Items {
     pub effects: Arena<EffectDef>,
     /// エフェクトの操作。値の名前空間に置くトップレベルの値である (docs/spec/modules.md の「名前空間」)。
     pub operations: Arena<Operation>,
+    pub classes: Arena<ClassDef>,
+    /// クラスのメソッド。値の名前空間に置くトップレベルの値である。
+    pub methods: Arena<Method>,
+    pub instances: Arena<InstanceDef>,
 }
 
 impl Program {
@@ -286,12 +300,62 @@ impl Program {
         self.items(|items| &items.operations)
     }
 
+    pub fn classes(&self) -> impl Iterator<Item = (ClassId, &ClassDef)> {
+        self.items(|items| &items.classes)
+    }
+
+    pub fn methods(&self) -> impl Iterator<Item = (MethodId, &Method)> {
+        self.items(|items| &items.methods)
+    }
+
+    pub fn instances(&self) -> impl Iterator<Item = (InstanceId, &InstanceDef)> {
+        self.items(|items| &items.instances)
+    }
+
+    pub fn instance(&self, class: ClassId, head: TypeDefId) -> Option<InstanceId> {
+        self.instance_index.get(&(class, head)).copied()
+    }
+
+    /// 導出した instance とタプルの instance で、処理系が本体を生成するメソッドなら、その種類。ほかのメソッドは
+    /// クラスの既定のメソッドを通る
+    /// (docs/spec/core-ir.md の「導出とタプルの生成器」)。
+    pub fn core_method(&self, method: MethodId) -> Option<CoreMethod> {
+        let lang = &self.lang;
+        let method = &self[method];
+        let core = match method.name.as_str() {
+            "==" => (lang.eq, CoreMethod::Eq),
+            "compare" => (lang.ord, CoreMethod::Compare),
+            "show_prec" => (lang.show, CoreMethod::ShowPrec),
+            "show" => (lang.show, CoreMethod::Show),
+            _ => return None,
+        };
+        (core.0 == method.class).then_some(core.1)
+    }
+
+    /// 上位クラスの推移的な閉包。自分は含まない。循環は HIR が E1042 で切ってあるが、作業の列は訪れた印で止める。
+    pub fn superclasses(&self, class: ClassId) -> Vec<ClassId> {
+        let mut seen = vec![class];
+        let mut work = vec![class];
+        let mut out = Vec::new();
+        while let Some(next) = work.pop() {
+            for &superclass in &self[next].superclasses {
+                if !seen.contains(&superclass) {
+                    seen.push(superclass);
+                    out.push(superclass);
+                    work.push(superclass);
+                }
+            }
+        }
+        out
+    }
+
     /// 値の item の名前。
     pub fn value_name(&self, item: ValueItem) -> &str {
         match item {
             ValueItem::Function(id) => &self[id].name,
             ValueItem::Operation(id) => &self[id].name,
             ValueItem::Constructor(id) => &self[id].name,
+            ValueItem::Method(id) => &self[id].name,
         }
     }
 
@@ -305,7 +369,9 @@ impl Program {
         let function = &self[id];
         match function.kind {
             FunctionKind::Extern(_) => function.signature.as_ref().map(Signature::arity),
-            FunctionKind::Defined => self.body(id).map(|body| body.params.len()),
+            FunctionKind::Defined
+            | FunctionKind::DefaultMethod(_)
+            | FunctionKind::InstanceMethod(..) => self.body(id).map(|body| body.params.len()),
         }
     }
 
@@ -362,4 +428,20 @@ program_index! {
     Constructor => constructors,
     EffectDef => effects,
     Operation => operations,
+    ClassDef => classes,
+    Method => methods,
+    InstanceDef => instances,
+}
+
+/// 処理系が本体を生成する、Prelude の `Eq`、`Ord`、`Show` の中心のメソッド。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum CoreMethod {
+    /// `Eq` の `==`
+    Eq,
+    /// `Ord` の `compare`
+    Compare,
+    /// `Show` の `show_prec`
+    ShowPrec,
+    /// `Show` の `show`
+    Show,
 }

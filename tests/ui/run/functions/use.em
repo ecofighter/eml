@@ -19,4 +19,4 @@ main () =
   use with_log
   log "start"
   use n <- twice
-  println (show_int n)
+  println (show n)

@@ -9,7 +9,7 @@ count n = if n == 0 then 0 else 1 + count (n - 1)
 label : Bool -> Int -> String -> String
 label b n s =
   let t = if b then twice s else s
-  t ++ show_int (n + count 3)
+  t ++ show (n + count 3)
 
 main : Unit -> <IO> Unit
 main () =
@@ -18,6 +18,6 @@ main () =
   println (t ++ s)
   let n = 40
   let m = count 2
-  println (show_int (n + m))
+  println (show (n + m))
   println (label True 1 "x")
   println (label False 2 "y")

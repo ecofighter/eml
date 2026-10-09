@@ -6,9 +6,17 @@ impl Table<'_> {
     /// (docs/spec/types.md)。データ型では、Kind に効く位置の型引数の境界を並べる。`File` を含むデータ型は定数の `Lin` である。
     /// 境界は最初に現れた順に重複なく並べる。表は部分を共有するので、重複を残すと境界の数が型の深さの指数になる。
     pub fn kind_bounds(&self, ty: Ty) -> Vec<Bound<Linearity>> {
+        self.joint_kind_bounds(&[ty])
+    }
+
+    /// `tys` のどれかの Kind の上界の候補。1回のたどりで集めるので、互いに部分を共有する型を並べても、たどる量は
+    /// 共有した部分を1回数えた大きさで済む。
+    fn joint_kind_bounds(&self, tys: &[Ty]) -> Vec<Bound<Linearity>> {
         let _walk = self.start_walk();
         let mut bounds = Bounded::default();
-        self.push_kind_bounds(ty, &mut bounds);
+        for &ty in tys {
+            self.push_kind_bounds(ty, &mut bounds);
+        }
         bounds.list
     }
 
@@ -50,7 +58,12 @@ impl Table<'_> {
 
     /// `ty` の Kind が `upper` 以下であること。
     pub fn kind_at_most(&mut self, ty: Ty, upper: Bound<Linearity>) {
-        for bound in self.kind_bounds(ty) {
+        self.kinds_at_most(&[ty], upper);
+    }
+
+    /// `tys` のどの Kind も `upper` 以下であること。
+    pub fn kinds_at_most(&mut self, tys: &[Ty], upper: Bound<Linearity>) {
+        for bound in self.joint_kind_bounds(tys) {
             self.require_lin(bound, upper);
         }
     }

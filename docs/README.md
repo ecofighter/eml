@@ -11,15 +11,15 @@ eml を実装するエージェントとプログラマのための文書群で�
 | [spec/lexical.md](spec/lexical.md) | 規範 | 字句 (識別子、キーワード、演算子、リテラル、文字列、コマンドリテラル) |
 | [spec/layout.md](spec/layout.md) | 規範 | レイアウト規則 (仮想トークン `OPEN` / `SEP` / `CLOSE`) |
 | [spec/grammar.md](spec/grammar.md) | 規範 | 文法と文法上の補足 |
-| [spec/declarations.md](spec/declarations.md) | 規範 | シグネチャと等式、`data` と `type`、`effect`、`extern`、fixity と標準の演算子表、`pub` |
+| [spec/declarations.md](spec/declarations.md) | 規範 | シグネチャと等式、`data` と `type`、`effect`、`extern`、fixity と標準の演算子表、クラスと instance と `deriving`、Prelude のクラス、`pub` |
 | [spec/expressions.md](spec/expressions.md) | 規範 | 式と脱糖 (`let`、ラムダ、`if`、`match`、演算子の列、セクション、`use`、handler の構文) |
 | [spec/records.md](spec/records.md) | 規範 | 直積型とレコード (タプルと Unit を含む) |
-| [spec/modules.md](spec/modules.md) | 規範 | モジュール、import、標準ライブラリ、名前の解決、名前空間、公開の範囲 |
-| [spec/types.md](spec/types.md) | 規範 | Kind、関数型、型推論 |
+| [spec/modules.md](spec/modules.md) | 規範 | モジュール、import、標準ライブラリ、名前の解決、名前空間、instance の一貫性、公開の範囲 |
+| [spec/types.md](spec/types.md) | 規範 | Kind、関数型、型推論、型クラスの制約 |
 | [spec/linearity.md](spec/linearity.md) | 規範 | 線形性と `drop`、線形性の検査パス |
 | [spec/effects.md](spec/effects.md) | 規範 | 操作の多重度、持ち越し規則、handler の意味、extern のエフェクトの `IO`、標準ライブラリの `File` |
 | [spec/exhaustiveness.md](spec/exhaustiveness.md) | 規範 | 網羅性の検査 |
-| [spec/core-ir.md](spec/core-ir.md) | 規範 | Core IR の構成 (基本ブロックの列と構造の規則、値の表現、データの配置、位置の規則)、評価と所有権の意味、パス (box の挿入、縮約、Perceus) とその境界の不変条件、verifier、実行時エラー |
+| [spec/core-ir.md](spec/core-ir.md) | 規範 | Core IR の構成 (基本ブロックの列と構造の規則、値の表現、データの配置、位置の規則)、変換の規則 (単相化、メソッドの解決、導出の生成器)、評価と所有権の意味、パス (box の挿入、縮約、Perceus) とその境界の不変条件、verifier、実行時エラー |
 | [spec/runtime.md](spec/runtime.md) | 規範 | ヒープと参照カウント、オブジェクトのヘッダ、不死の物体、`eml_runtime` の API、handler の連鎖、文字列の連結、`debug_heap`、実行の API |
 | [spec/diagnostics.md](spec/diagnostics.md) | 規範 | 診断のデータ構造、診断の順、番号の範囲と各番号の意味、連鎖する診断の抑止 |
 | [spec/examples.md](spec/examples.md) | 説明 | まだ動かない、本番の構文で書いたプログラム例 |
@@ -30,7 +30,7 @@ eml を実装するエージェントとプログラマのための文書群で�
 | [implementation/benchmarks.md](implementation/benchmarks.md) | 手引き | 基準のプログラム、回数のテスト、命令の数の測り方、段ごとの記録 |
 | [implementation/diagnostics.md](implementation/diagnostics.md) | 手引き | 番号ごとの診断が指す場所、help と fix の文言と付ける条件、型エラー・線形性・網羅性の診断の表示 |
 | **future/** | 将来の設計 | まだ実装しない方針 |
-| [future/roadmap.md](future/roadmap.md) | 将来の設計 | 再設計の段 (S5〜S13)、その後の言語の項目と処理系の項目 |
+| [future/roadmap.md](future/roadmap.md) | 将来の設計 | 再設計の段 (S6〜S13)、その後の言語の項目と処理系の項目 |
 | [future/multicore.md](future/multicore.md) | 将来の設計 | マルチコア対応の設計 (共有の印方式の RC、`par`、並行処理、継続の移動) |
 | [future/stdlib.md](future/stdlib.md) | 将来の設計 | 標準ライブラリ spec への申し送り |
 | [future/evidence-passing.md](future/evidence-passing.md) | 将来の設計 | ネイティブ化でのエフェクトの実装 (generalized evidence passing、すぐに再開する節、多重度ごとの実装) |

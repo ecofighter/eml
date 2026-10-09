@@ -176,7 +176,7 @@ impl Printer<'_> {
         }
         .unwrap();
         let Some(body) = body else {
-            if function.kind == FunctionKind::Defined {
+            if function.kind.has_equations() {
                 writeln!(out, "{} = <no equation>", function.name).unwrap();
             }
             return;
@@ -321,10 +321,11 @@ impl Printer<'_> {
                 let function = &self.program[id];
                 match function.kind {
                     FunctionKind::Extern(_) => function.name.clone(),
-                    FunctionKind::Defined => {
-                        format!("@{}", self.qualified(id.module, &function.name))
-                    }
+                    _ => format!("@{}", self.qualified(id.module, &function.name)),
                 }
+            }
+            Res::Item(ValueItem::Method(id)) => {
+                format!("@{}", self.qualified(id.module, &self.program[id].name))
             }
             Res::Item(ValueItem::Operation(id)) => {
                 let operation = &self.program[id];

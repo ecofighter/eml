@@ -27,7 +27,7 @@ fn live_in_holds_every_variable_used_later() {
 layout Prelude.Bool { False, True }
 layout Option { None, Some(tobj) }
 fn f(x.0: int, o.1: tobj) -> int {
-  let c.2: enum = extern Prelude.<(x.0, 10)
+  let c.2: enum = extern \"Prelude.Ord Int.<\"(x.0, 10)
   switch c.2 Prelude.Bool { #0 -> b1, #1 -> b2 }
 b1:
   jump b4(x.0)
@@ -434,7 +434,7 @@ fn an_unboxed_value_used_later_is_neither_dupped_nor_released() {
     let text = "\
 fn f(b.0: tobj) -> tobj {
   let n.1: int = unbox b.0
-  let s.2: obj = extern Prelude.show_int(n.1)
+  let s.2: obj = extern \"Prelude.Show Int.show\"(n.1)
   let u.3: unit = extern Prelude.println(s.2)
   return b.0
 }
@@ -562,11 +562,11 @@ fn a_non_tail_if_keeps_strings_used_later() {
 
 #[test]
 fn calls_save_the_variables_used_after_them() {
-    let text = "around : Int -> String -> String\naround n s =\n  let m = n + 1\n  let t = if n > 0 then twice s else s\n  t ++ show_int m\n\ntwice : String -> String\ntwice s = s ++ s\n\nmain : Unit -> <IO> Unit\nmain () = println (around 1 \"s\")";
+    let text = "around : Int -> String -> String\naround n s =\n  let m = n + 1\n  let t = if n > 0 then twice s else s\n  t ++ show m\n\ntwice : String -> String\ntwice s = s ++ s\n\nmain : Unit -> <IO> Unit\nmain () = println (around 1 \"s\")";
     insta::assert_snapshot!(function(&core_text(text, Pass::Perceus), "around"), @"
     fn around(n.0: int, s.1: obj) -> obj {
       let t.2: int = extern Prelude.+(n.0, 1)
-      let t.3: enum = extern Prelude.>(n.0, 0)
+      let t.3: enum = extern \"Prelude.Ord Int.>\"(n.0, 0)
       switch t.3 Prelude.Bool { #0 -> b1, #1 -> b2 }
     b1:
       jump b3(s.1)
@@ -574,7 +574,7 @@ fn calls_save_the_variables_used_after_them() {
       let t.4: obj = call twice(s.1) save [t.2]
       jump b3(t.4)
     b3(t.5: obj):
-      let t.6: obj = extern Prelude.show_int(t.2)
+      let t.6: obj = extern \"Prelude.Show Int.show\"(t.2)
       let t.7: obj = extern Prelude.++(t.5, t.6)
       return t.7
     }
@@ -621,7 +621,7 @@ fn a_known_value_that_skips_its_field_releases_it() {
 #[test]
 fn a_dead_scrutinee_whose_fields_are_unused_is_decreffed() {
     // どの行き先も `o` を所有して始まる。フィールドを使わないので、`release` ではなく `decref` で手放す
-    let text = "data Option a = | None | Some a\n\nflag : Option String -> Int\nflag o = match o with\n  | Some _ -> 0\n  | None -> 1\n\nmain : Unit -> <IO> Unit\nmain () = println (show_int (flag None))";
+    let text = "data Option a = | None | Some a\n\nflag : Option String -> Int\nflag o = match o with\n  | Some _ -> 0\n  | None -> 1\n\nmain : Unit -> <IO> Unit\nmain () = println (show (flag None))";
     insta::assert_snapshot!(function(&core_text(text, Pass::Perceus), "flag"), @"
     fn flag(o.0: tobj) -> int {
       switch o.0 Option { #0 -> b1, #1(x.1: obj) -> b2 }
@@ -639,7 +639,7 @@ fn a_dead_scrutinee_whose_fields_are_unused_is_decreffed() {
 fn a_default_target_owns_the_scrutinee_without_a_dup() {
     // `ys` が受ける `xs` は `switch` の前で複製しない。入れ子のパターンでは、外側の `xs` が生きているので、内側の
     // scrutinee の `x.2` を複製してから読む
-    let text = "data List a = | Nil | Cons a (List a)\n\nsize : List Int -> Int\nsize xs = 2\n\ndescribe : List Int -> Int\ndescribe xs = match xs with\n  | Cons _ Nil -> 1\n  | ys -> size ys\n\nmain : Unit -> <IO> Unit\nmain () = println (show_int (describe Nil))";
+    let text = "data List a = | Nil | Cons a (List a)\n\nsize : List Int -> Int\nsize xs = 2\n\ndescribe : List Int -> Int\ndescribe xs = match xs with\n  | Cons _ Nil -> 1\n  | ys -> size ys\n\nmain : Unit -> <IO> Unit\nmain () = println (show (describe Nil))";
     insta::assert_snapshot!(function(&core_text(text, Pass::Perceus), "describe"), @"
     fn describe(xs.0: tobj) -> int {
       switch xs.0 List { #1(x.5: tobj, x.2: tobj) -> b1, _ -> b2 }
@@ -687,7 +687,7 @@ fn a_string_switch_leaves_the_scrutinee_to_its_targets() {
 fn a_nested_pattern_gives_up_the_parent_before_the_release() {
     // 内側の `x.1` を読むとき、外側の `w` はまだ生きているので、`x.1` を複製する。`Cons (Cons a _) _` の行き先では、
     // 先に `w` を手放してから `x.1` を `release` する。`x.1` の参照が1つに戻り、`release` が一意の側を通る
-    let text = "data List a =\n  | Nil\n  | Cons a (List a)\n\nlength : List a -> Int\nlength xs = match xs with\n  | Nil -> 0\n  | Cons _ rest -> 1 + length rest\n\ndescribe : List (List String) -> String\ndescribe w = match w with\n  | Cons (Cons a _) _ -> a\n  | Cons Nil _ -> show_int (length w)\n  | Nil -> \"empty\"\n\nmain : Unit -> <IO> Unit\nmain () = println (describe Nil)";
+    let text = "data List a =\n  | Nil\n  | Cons a (List a)\n\nlength : List a -> Int\nlength xs = match xs with\n  | Nil -> 0\n  | Cons _ rest -> 1 + length rest\n\ndescribe : List (List String) -> String\ndescribe w = match w with\n  | Cons (Cons a _) _ -> a\n  | Cons Nil _ -> show (length w)\n  | Nil -> \"empty\"\n\nmain : Unit -> <IO> Unit\nmain () = println (describe Nil)";
     insta::assert_snapshot!(function(&core_text(text, Pass::Perceus), "describe"), @r#"
     fn describe(w.0: tobj) -> obj {
       switch w.0 List { #0 -> b1, #1(x.1: tobj, x.2: tobj) -> b2 }
@@ -701,7 +701,7 @@ fn a_nested_pattern_gives_up_the_parent_before_the_release() {
     b3:
       decref x.1
       let t.5: int = call "length@[List String]"(w.0)
-      let t.6: obj = extern Prelude.show_int(t.5)
+      let t.6: obj = extern "Prelude.Show Int.show"(t.5)
       return t.6
     b4:
       decref w.0
@@ -795,7 +795,7 @@ fn a_discarded_call_result_is_released() {
 #[test]
 fn equations_allocate_no_tuple_for_their_arguments() {
     // 等式の脱糖が作る引数のタプルは、translate が決定木の列にするので作らない
-    let text = "f : Int -> Int -> Int\nf 0 y = y\nf x y = x + y\n\nmain : Unit -> <IO> Unit\nmain () = println (show_int (f 1 2))";
+    let text = "f : Int -> Int -> Int\nf 0 y = y\nf x y = x + y\n\nmain : Unit -> <IO> Unit\nmain () = println (show (f 1 2))";
     let f = function(&core_text(text, Pass::Perceus), "f");
     assert!(!f.contains("con #"), "{f}");
 }
@@ -803,7 +803,7 @@ fn equations_allocate_no_tuple_for_their_arguments() {
 #[test]
 fn a_masked_call_keeps_its_mask_through_the_passes() {
     // 末尾呼び出しは `mask` を保つ (docs/spec/core-ir.md)
-    let text = "effect State s where\n  get : Unit -> s\n  put : s -> Unit\n\nrun : (Unit -> <e> a) -> <State Int | e> a\nrun cb =\n  let n = get ()\n  cb ()\n\nmain : Unit -> <IO> Unit\nmain () =\n  let n =\n    handle run (fn () -> 1) from 0 with\n      | get () k st -> k st st\n      | put s k _ -> k () s\n      | return x _ -> x\n  println (show_int n)\n";
+    let text = "effect State s where\n  get : Unit -> s\n  put : s -> Unit\n\nrun : (Unit -> <e> a) -> <State Int | e> a\nrun cb =\n  let n = get ()\n  cb ()\n\nmain : Unit -> <IO> Unit\nmain () =\n  let n =\n    handle run (fn () -> 1) from 0 with\n      | get () k st -> k st st\n      | put s k _ -> k () s\n      | return x _ -> x\n  println (show n)\n";
     let core = core_text(text, Pass::Perceus);
     assert!(core.contains("tail mask [State] apply cb.0(())"), "{core}");
 }

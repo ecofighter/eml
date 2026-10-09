@@ -1,9 +1,9 @@
-//! 型、エフェクト、コンストラクタの表示名。表示はモジュールの文脈によらないので、HIR の診断、型検査の診断、`dump`、
+//! 型、エフェクト、コンストラクタ、クラスの表示名。表示はモジュールの文脈によらないので、HIR の診断、型検査の診断、`dump`、
 //! `pretty` が、プログラム全体で1つの表を引く。
 
 use std::collections::{HashMap, HashSet};
 
-use crate::program::{ConstructorId, EffectId, TypeDefId};
+use crate::program::{ClassId, ConstructorId, EffectId, TypeDefId};
 
 /// ID から表示名を引く表。2つ以上のモジュールが定義する名前だけを、`Prelude.Bool` のようにモジュール名で修飾する。
 /// 標準ライブラリのモジュールの名前は正式な名前 (`Std.Fs`) なので、短い名前の修飾子とは違う `Std.Fs.File` になる。
@@ -13,6 +13,7 @@ pub struct DisplayNames {
     types: HashMap<TypeDefId, String>,
     effects: HashMap<EffectId, String>,
     constructors: HashMap<ConstructorId, String>,
+    classes: HashMap<ClassId, String>,
     /// 空のレコードの表示。Prelude の `Unit` の表示名である。
     unit: String,
 }
@@ -23,17 +24,20 @@ impl DisplayNames {
         types: impl IntoIterator<Item = (TypeDefId, &'a str, &'a str)>,
         effects: impl IntoIterator<Item = (EffectId, &'a str, &'a str)>,
         constructors: impl IntoIterator<Item = (ConstructorId, &'a str, &'a str)>,
+        classes: impl IntoIterator<Item = (ClassId, &'a str, &'a str)>,
         unit: TypeDefId,
     ) -> DisplayNames {
         let types: Vec<(TypeDefId, &str, &str)> = types.into_iter().collect();
         let effects: Vec<(EffectId, &str, &str)> = effects.into_iter().collect();
         let constructors: Vec<(ConstructorId, &str, &str)> = constructors.into_iter().collect();
-        // 型とエフェクトは同じ名前空間にあるので合わせて数える (docs/spec/modules.md の「名前空間」)
+        let classes: Vec<(ClassId, &str, &str)> = classes.into_iter().collect();
+        // 型、エフェクト、クラスは同じ名前空間にあるので合わせて数える (docs/spec/modules.md の「名前空間」)
         let type_definers = definers(
             types
                 .iter()
                 .map(|&(_, module, name)| (module, name))
-                .chain(effects.iter().map(|&(_, module, name)| (module, name))),
+                .chain(effects.iter().map(|&(_, module, name)| (module, name)))
+                .chain(classes.iter().map(|&(_, module, name)| (module, name))),
         );
         let constructor_definers =
             definers(constructors.iter().map(|&(_, module, name)| (module, name)));
@@ -51,6 +55,10 @@ impl DisplayNames {
                 .iter()
                 .map(|&(id, module, name)| (id, shown(&constructor_definers, module, name)))
                 .collect(),
+            classes: classes
+                .iter()
+                .map(|&(id, module, name)| (id, shown(&type_definers, module, name)))
+                .collect(),
             types,
             unit,
         }
@@ -66,6 +74,10 @@ impl DisplayNames {
 
     pub fn constructor(&self, id: ConstructorId) -> &str {
         self.constructors[&id].as_str()
+    }
+
+    pub fn class(&self, id: ClassId) -> &str {
+        self.classes[&id].as_str()
     }
 
     /// 空のレコードの表示 (Prelude の `Unit` の表示名)。

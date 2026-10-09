@@ -3,21 +3,10 @@ source: crates/eml_cli/tests/ui.rs
 expression: rendered
 input_file: tests/ui/check-fail/types/not_comparable.em
 ---
-[E2006] Error: values of type `Color` cannot be compared with `==`
+[E2006] Error: no instance of `Eq` for `Color`
    ╭─[ check-fail/types/not_comparable.em:7:14 ]
    │
  7 │ same a b = a == b
    │              ─┬  
-   │               ╰── `==` cannot compare `Color`
-   │ 
-   │ Note: `==` and `!=` compare only values of type `Int`, `String` and `Bool`
+   │               ╰── `==` requires `Eq Color`
 ───╯
-[E2006] Error: values of type `(Int, Int)` cannot be compared with `!=`
-    ╭─[ check-fail/types/not_comparable.em:10:12 ]
-    │
- 10 │ pair p = p != (1, 2)
-    │            ─┬  
-    │             ╰── `!=` cannot compare `(Int, Int)`
-    │ 
-    │ Note: `==` and `!=` compare only values of type `Int`, `String` and `Bool`
-────╯

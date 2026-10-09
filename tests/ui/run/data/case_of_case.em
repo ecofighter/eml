@@ -29,7 +29,7 @@ main : Unit -> <IO> Unit
 main () =
   println (describe (Some "v"))
   println (describe None)
-  println (show_int (color_code 0 + color_code 1 + color_code 2))
+  println (show (color_code 0 + color_code 1 + color_code 2))
   println (pick True True "s")
   println (pick False True "s")
   println (pick False False "s")

@@ -203,7 +203,7 @@ work () = println \"x\"
 main : Unit -> <IO> Unit
 main () =
   let n = try (fn () -> work ())
-  println (show_int n)
+  println (show n)
 ";
     let checked = check(text);
     assert_eq!(short_text(checked.files(), &checked.diagnostics), "");

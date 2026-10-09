@@ -1,0 +1,14 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: rendered
+input_file: tests/ui/check-fail/classes/constrained_polymorphic_recursion.em
+---
+[E2012] Error: `nest` would need an instance of `Show` at infinitely many types
+   ╭─[ check-fail/classes/constrained_polymorphic_recursion.em:3:1 ]
+   │
+ 3 │ nest : Show a => Int -> a -> String
+   │ ──┬─  
+   │   ╰─── a constrained type variable grows on each recursive call
+   │ 
+   │ Note: instances are chosen at compile time, so a constraint cannot follow polymorphic recursion
+───╯

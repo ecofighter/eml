@@ -19,23 +19,30 @@ file        ::= (item (SEP item)*)?
 item        ::= 'pub'? ('extern' extern_decl | decl)
               | equation
               | import_item
-decl        ::= signature | data_item | type_item | effect_item | fixity_item
+              | instance_item
+decl        ::= signature | data_item | type_item | effect_item | fixity_item | class_item
 
 extern_decl ::= signature | 'data' UIDENT | 'effect' UIDENT
-signature   ::= var ':' type
+signature   ::= var ':' context? type
 var         ::= LIDENT | '(' OP ')'
 equation    ::= LIDENT apat* '=' body
               | apat OP apat '=' body                    -- 演算子の定義
 body        ::= block(stmt) | expr
+context     ::= (btype | '(' btype (',' btype)* ')') '=>'
 
-data_item   ::= 'data' UIDENT LIDENT* ('=' alts)?
+data_item   ::= 'data' UIDENT LIDENT* ('=' alts)? deriving?
 alts        ::= block(alt) | alt+
 alt         ::= '|' UIDENT type_atom*
               | '|' btype CONOP btype                     -- 中置のコンストラクタ
+deriving    ::= 'deriving' (qcon | '(' qcon (',' qcon)* ')')
 type_item   ::= 'type' UIDENT LIDENT* '=' type
 effect_item ::= 'effect' UIDENT LIDENT* 'where' block(op_decl)
-op_decl     ::= ('never' | 'once' | 'multi')? LIDENT ':' type
+op_decl     ::= ('never' | 'once' | 'multi')? LIDENT ':' context? type
 fixity_item ::= ('infixl' | 'infixr' | 'infix') INT OP (',' OP)*
+class_item  ::= 'class' context? UIDENT LIDENT ('where' block(class_member))?
+class_member ::= signature | equation
+instance_item ::= 'instance' context? qcon type_atom ('where' block(inst_member))?
+inst_member ::= equation | 'extern' var
 import_item ::= 'import' modpath ('as' UIDENT)? ('(' list(import_name) ')')?
 modpath     ::= UIDENT ('.' UIDENT)*
 import_name ::= LIDENT | '(' OP ')' | UIDENT ('(' '..' ')')?
@@ -100,6 +107,21 @@ command     ::= CMD_START (CMD_TEXT | ESCAPE | '\{' '..'? expr '}')* CMD_END
 
 - `import_item` は、ファイルの先頭で宣言より前に書く。宣言の後の `import_item` は E0011 にする。`import_name` の `'(' OP ')'` は `:` で始まらない演算子なので、`((:+))` も E0011 にする。CST はどちらも組む ([モジュールと名前解決](modules.md) の「import」)
 - `extern` は宣言の修飾子で、`pub` の後に書く。後ろに続けられるのは、等式のないシグネチャ、`=` のない型引数なしの `data`、`where` のない型引数なしの `effect` だけである。ほかの形 (`extern type`、`extern infixl`、`extern data T = …`、`extern effect E where …`、型引数のある `data` と `effect`、`extern pub`) は E0011 にする。`extern` を書けるのは標準ライブラリのモジュールだけで、ユーザーのモジュールに書くと HIR で E1033 になる ([宣言](declarations.md) の「`extern`」)
+- 文脈 `context` は、型として読める形 (`Eq a`、`(Eq a, Show b)`) の後に `=>` を書いたものである。parser は、`signature` と `op_decl` の `:` の後と、`class` と `instance` のキーワードの後で、括弧の入れ子の外の `=>` が型の終わりより前にあるかを先読みし、あれば文脈として読む。括弧の外の `->`、`=`、`where` とブロックの始まりは文脈の後ろにしか現れないので、そこで先読みをやめる (中置のコンストラクタの `alt` の先読みと同じ形)。CST は `CONTEXT` の節点の下に、制約ごとの `CONSTRAINT` を置く。制約の形 (クラスの名前と1つの型変数) は HIR で検査する (E1040)
+- 文脈の構文があるのは、`signature` (トップレベルの関数、extern の関数、クラスのメソッド)、`op_decl`、`class` と `instance` の頭である。extern のシグネチャと操作のシグネチャの文脈は、構文として読んだうえで HIR が E1040 にする ([宣言](declarations.md) の「宣言の検査」)。本体の型の明示 `(e : T)`、ラムダの引数の型、`data` のフィールドの型には文脈の構文がなく、そこに書いた `=>` は E0011 になる
+- `pub` は `class` に付けられる。`pub instance` は E0011 にする。instance は名前を持たず、いつもプログラム全体で見えるためである ([モジュールと名前解決](modules.md) の「instance の一貫性」)。`class` と `instance` のブロックの中の `pub` も E0011 にする。メソッドはクラスと一緒に公開するためである
+- `class` の `where` のブロックには、メソッドのシグネチャと既定のメソッドの等式を並べる。`instance` の `where` のブロックには、メソッドの等式と `extern` の行だけを書ける。メソッドの型はクラスが決めるので、`instance` のブロックのシグネチャは E0011 にする (Haskell 98 と同じ)。CST には組んで回復する。`where` のない `class` と `instance` も書ける
+- instance の頭は `type_atom` として読む。頭の形 (型コンストラクタに互いに異なる型変数を適用したもの) は HIR で検査する。そのため `instance Eq a`、`instance Eq (Int, Int)`、`instance Eq (Option Int)` は、構文の誤りでなく E1039 になる
+- `deriving` は、`data` の最後の選択肢の後に置く。最後の選択肢と同じ行、選択肢のブロックの項目 (`|` と同じ列)、最後の選択肢の続きの行 (`|` より深い字下げ)、ブロックを閉じた後の続きの行 (`data` より深く `|` より浅い字下げ) のどれに書いてもよい。parser は、最後の選択肢の型を読む途中でも、ブロックの項目の始まりでも、ブロックを閉じた後でも `deriving` を受け付ける。`deriving` の後に選択肢が続いたら E0011 にする
+
+  ```haskell
+  data Color = | Red | Green deriving (Eq, Show)
+
+  data Option a =
+    | None
+    | Some a
+    deriving (Eq, Ord, Show)
+  ```
 - 型の位置では、`<` で始まる演算子のトークン (`<>` など) と `>` で始まる演算子のトークン (`>->` など) を、parser が分割して読む (Rust が `>>` を分割するのと同じ)。`->` の直後に row を空白なしで書いた `-><` も、`->` と `<` に分割して読む (`Int -><IO> Int`)
 - 型の位置での `<` は row の開始だけを意味する
 - `postfix` の `.INT` で、lexer が `t.0.1` の `0.1` を浮動小数のトークンにした場合、parser がフィールドアクセスの位置で分割する (Rust と同じ)

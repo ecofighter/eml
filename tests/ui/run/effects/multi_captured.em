@@ -14,10 +14,10 @@ main () =
   let captured =
     handle plus_one () with
       | ask () k -> twice (fn n -> k n)
-  println (show_int captured)
+  println (show captured)
   let passed =
     handle plus_one () with
       | ask () k ->
           let go = fn cont value -> cont value
           go k 1 * go k 2
-  println (show_int passed)
+  println (show passed)

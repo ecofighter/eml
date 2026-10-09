@@ -10,4 +10,4 @@ total s = match s with
   | x :> rest -> x + total rest
 
 main : Unit -> <IO> Unit
-main () = println (show_int (total (1 :> (2 :> (3 :> Done)))))
+main () = println (show (total (1 :> (2 :> (3 :> Done)))))

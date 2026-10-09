@@ -95,6 +95,19 @@ fn unified_chains(n: usize) -> String {
     text
 }
 
+/// 前の値を2つ並べた `Pair` の `let` の列。型は推論の表で部分を共有し、木として書き下すと `let` の数の指数の大きさに
+/// なる。`last` は本体の最後の式である。
+fn doubling_pairs(n: usize, last: &str) -> String {
+    let mut text = String::from(
+        "class Same a where\n  same : a -> a -> Bool\n\ndata Pair a b = | Pair a b\n\ninstance (Same a, Same b) => Same (Pair a b) where\n  same _ _ = True\n\ninstance Same Int where\n  same _ _ = True\n\ndbl : a -> Pair a a\ndbl x = Pair x x\n\nrun : Unit -> Bool\nrun () =\n  let v0 = 1\n",
+    );
+    for i in 1..=n {
+        text.push_str(&format!("  let v{i} = dbl v{}\n", i - 1));
+    }
+    text.push_str(&format!("  {last}\n"));
+    text
+}
+
 /// `let {name}0 = ident` から `let {name}{n} = {name}{n-1} ident` までの列。
 fn push_chain(text: &mut String, name: &str, n: usize) {
     text.push_str(&format!("  let {name}0 = ident\n"));
@@ -192,4 +205,30 @@ fn a_chain_of_lets_sharing_types() {
 #[ignore = "release ビルドで時間を測る"]
 fn two_chains_of_lets_unified() {
     assert_linear_deep(unified_chains);
+}
+
+/// 部分を共有する型の制約を解く時間が、制約のない同じ本体を検査する時間を大きく超えないことを確かめる。制約の解決は、
+/// 同じクラスと同じ型の組を1回だけ解かなければならない。`let` の列は、値を使うたびに Kind の検査と occurs の検査が型を
+/// たどるので、それだけで列の長さの2乗の時間がかかる (docs/implementation/status.md の「深さと性能」)。そのため、
+/// 大きさを4倍にした比ではなく、同じ大きさで制約の有無を比べる。
+#[test]
+#[ignore = "release ビルドで時間を測る"]
+fn a_constraint_on_a_type_doubling_in_each_let() {
+    let measured = std::thread::Builder::new()
+        .stack_size(DEEP_STACK)
+        .spawn(|| {
+            let n = SMALL;
+            let without = check_time(&doubling_pairs(n, "True"));
+            let with = check_time(&doubling_pairs(n, &format!("same v{n} v{n}")));
+            let ratio = with.as_secs_f64() / without.as_secs_f64();
+            assert!(
+                ratio <= MAX_RATIO,
+                "without the constraint {without:?}, with it {with:?} (ratio {ratio:.1})"
+            );
+        })
+        .unwrap()
+        .join();
+    if let Err(panic) = measured {
+        std::panic::resume_unwind(panic);
+    }
 }

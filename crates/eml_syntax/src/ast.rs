@@ -100,6 +100,12 @@ ast_node! {
     ImportItem => IMPORT_ITEM,
     ImportList => IMPORT_LIST,
     ImportName => IMPORT_NAME,
+    ClassItem => CLASS_ITEM,
+    InstanceItem => INSTANCE_ITEM,
+    Context => CONTEXT,
+    Constraint => CONSTRAINT,
+    Deriving => DERIVING,
+    ExternMethod => EXTERN_METHOD,
     Block => BLOCK,
     LetStmt => LET_STMT,
     UseStmt => USE_STMT,
@@ -146,7 +152,15 @@ ast_node! {
 }
 
 ast_enum! {
-    Item { Signature, Equation, DataItem, TypeItem, EffectItem, FixityItem, ImportItem }
+    Item { Signature, Equation, DataItem, TypeItem, EffectItem, FixityItem, ImportItem, ClassItem, InstanceItem }
+}
+
+ast_enum! {
+    ClassMember { Signature, Equation }
+}
+
+ast_enum! {
+    InstanceMember { Equation, ExternMethod, Signature }
 }
 
 ast_enum! {
@@ -263,6 +277,10 @@ impl Signature {
     }
 
     pub fn name(&self) -> Option<Name> {
+        support::child(&self.syntax)
+    }
+
+    pub fn context(&self) -> Option<Context> {
         support::child(&self.syntax)
     }
 
@@ -565,6 +583,10 @@ impl EffectItem {
 }
 
 impl OpDecl {
+    pub fn context(&self) -> Option<Context> {
+        support::child(&self.syntax)
+    }
+
     /// `never` / `once` / `multi`。省略したら `None` で、`once` として扱う (docs/spec/declarations.md)。
     pub fn multiplicity(&self) -> Option<SyntaxToken> {
         self.syntax
@@ -650,6 +672,10 @@ impl DropExpr {
 }
 
 impl DataItem {
+    pub fn deriving(&self) -> Option<Deriving> {
+        support::child(&self.syntax)
+    }
+
     pub fn extern_keyword(&self) -> Option<SyntaxToken> {
         support::token(&self.syntax, SyntaxKind::EXTERN_KW)
     }
@@ -974,4 +1000,79 @@ impl RightSection {
 fn keyword_range(node: &SyntaxNode) -> TextRange {
     node.first_token()
         .map_or(node.text_range(), |token| token.text_range())
+}
+
+impl ClassItem {
+    pub fn keyword(&self) -> Option<SyntaxToken> {
+        support::token(&self.syntax, SyntaxKind::CLASS_KW)
+    }
+
+    pub fn context(&self) -> Option<Context> {
+        support::child(&self.syntax)
+    }
+
+    /// クラスの名前。`NAME` の1つ目である。
+    pub fn name(&self) -> Option<Name> {
+        support::children::<Name>(&self.syntax).next()
+    }
+
+    /// クラスの型変数。`NAME` の2つ目である。
+    pub fn var(&self) -> Option<Name> {
+        support::children::<Name>(&self.syntax).nth(1)
+    }
+
+    pub fn members(&self) -> AstChildren<ClassMember> {
+        support::children(&self.syntax)
+    }
+}
+
+impl InstanceItem {
+    pub fn keyword(&self) -> Option<SyntaxToken> {
+        support::token(&self.syntax, SyntaxKind::INSTANCE_KW)
+    }
+
+    pub fn context(&self) -> Option<Context> {
+        support::child(&self.syntax)
+    }
+
+    /// クラスの名前。頭の型の中の `PATH` は型の節点の子なので、直接の子の `PATH` だけを見る。
+    pub fn class(&self) -> Option<Path> {
+        support::child(&self.syntax)
+    }
+
+    pub fn head(&self) -> Option<Type> {
+        support::child(&self.syntax)
+    }
+
+    pub fn members(&self) -> AstChildren<InstanceMember> {
+        support::children(&self.syntax)
+    }
+}
+
+impl Context {
+    pub fn constraints(&self) -> AstChildren<Constraint> {
+        support::children(&self.syntax)
+    }
+}
+
+impl Constraint {
+    pub fn ty(&self) -> Option<Type> {
+        support::child(&self.syntax)
+    }
+}
+
+impl Deriving {
+    pub fn keyword(&self) -> Option<SyntaxToken> {
+        support::token(&self.syntax, SyntaxKind::DERIVING_KW)
+    }
+
+    pub fn classes(&self) -> AstChildren<Path> {
+        support::children(&self.syntax)
+    }
+}
+
+impl ExternMethod {
+    pub fn name(&self) -> Option<Name> {
+        support::child(&self.syntax)
+    }
 }

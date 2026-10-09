@@ -4,5 +4,5 @@ import Ops ((<+>), (<**>))
 
 main : Unit -> <IO> Unit
 main () =
-  println (show_int (1 <+> 2 <**> 3))
-  println (show_int (2 <**> 3 <+> 4))
+  println (show (1 <+> 2 <**> 3))
+  println (show (2 <**> 3 <+> 4))

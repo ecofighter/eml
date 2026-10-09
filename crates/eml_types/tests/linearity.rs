@@ -711,35 +711,25 @@ fn polymorphic(rest: &str) -> String {
     carried(&format!("{POLY}{rest}"))
 }
 
-/// 関数のスキームに残った Kind の制約の行。なければ空にする。
 fn kinds(rest: &str, function: &str) -> String {
-    let checked = check(&format!("{CARRY}{POLY}{rest}"));
-    let dump = eml_types::dump(&checked.program, &checked.typed);
-    let head = format!("{function} : ");
-    let mut lines = dump.lines().skip_while(|line| !line.starts_with(&head));
-    lines.next();
-    lines
-        .next()
-        .filter(|line| line.starts_with("  kinds: "))
-        .unwrap_or("")
-        .to_string()
+    crate::common::kinds(&format!("{CARRY}{POLY}{rest}"), function)
 }
 
 #[test]
 fn a_scheme_keeps_the_carry_over_of_a_polymorphic_value() {
-    assert_eq!(kinds("", "keep"), "  kinds: a => <e> <= Once");
+    assert_eq!(kinds("", "keep"), "  kinds: carry(a, <e>)");
 }
 
 #[test]
 fn a_scheme_keeps_the_carry_over_of_a_file() {
     let rest = "with_file : (Unit -> <e> Unit) -> <IO | e> Unit\nwith_file action =\n  let f = Fs.open \"a.txt\"\n  action ()\n  Fs.close f";
-    assert_eq!(kinds(rest, "with_file"), "  kinds: <e> <= Once");
+    assert_eq!(kinds(rest, "with_file"), "  kinds: carry(Lin, <e>)");
 }
 
 #[test]
 fn a_scheme_keeps_the_carry_over_across_a_multi_operation() {
     let rest = "keep_choose : a -> <Choice> a\nkeep_choose x =\n  let b = choose ()\n  x";
-    assert_eq!(kinds(rest, "keep_choose"), "  kinds: a => Multi <= Once");
+    assert_eq!(kinds(rest, "keep_choose"), "  kinds: carry(a, Multi)");
 }
 
 #[test]
@@ -902,7 +892,7 @@ fn a_value_used_only_by_the_handled_body_is_carried_across_the_initial_state() {
 /// (docs/spec/linearity.md)。
 #[test]
 fn a_linear_state_does_not_cross_the_multi_operation_the_handler_handles() {
-    let rest = "main : Unit -> <IO> Unit\nmain () =\n  let n =\n    handle (if choose () then 1 else 2) from Fs.open \"a.txt\" with\n      | choose () k f -> k True f\n      | return x f ->\n          Fs.close f\n          x\n  println (show_int n)";
+    let rest = "main : Unit -> <IO> Unit\nmain () =\n  let n =\n    handle (if choose () then 1 else 2) from Fs.open \"a.txt\" with\n      | choose () k f -> k True f\n      | return x f ->\n          Fs.close f\n          x\n  println (show n)";
     let text = format!("effect Choose where\n  multi choose : Unit -> Bool\n\n{HEADER}{rest}");
     let checked = check(&text);
     insta::assert_snapshot!(full(checked.files(), &checked.diagnostics), @"");

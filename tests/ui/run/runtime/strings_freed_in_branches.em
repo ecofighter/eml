@@ -20,7 +20,7 @@ main () =
   let s = s ++ "y"
   let _ = "z"
   println (twice s)
-  println (show_int (ignore "w"))
+  println (show (ignore "w"))
   println (pick True "a")
   println (pick False "b")
   let name = "eml"

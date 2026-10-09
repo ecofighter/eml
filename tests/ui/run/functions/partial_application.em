@@ -19,6 +19,6 @@ main () =
   println (hi "bob")
   println (hello "carol")
   let unused = greet "never called"
-  println (show_int (adder 3 4))
+  println (show (adder 3 4))
   let add_ten = add 10
-  println (show_int (add_ten 5))
+  println (show (add_ten 5))

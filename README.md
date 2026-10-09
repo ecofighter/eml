@@ -29,7 +29,7 @@ main () =
   let total =
     handle add_two () with
       | ask () k -> k 21
-  println (show_int total)
+  println (show total)
 ```
 
 ```sh

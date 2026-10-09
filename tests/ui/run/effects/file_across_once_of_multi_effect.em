@@ -16,4 +16,4 @@ main () =
     handle counted (Fs.open "../files/input.txt") with
       | single () k -> k 1
       | many () k -> k 10 + k 20
-  println (show_int total)
+  println (show total)

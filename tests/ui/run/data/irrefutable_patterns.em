@@ -8,7 +8,7 @@ unbox (Box s) = s
 main : Unit -> <IO> Unit
 main () =
   let Box n = Box 41
-  println (show_int (n + 1))
+  println (show (n + 1))
   let bang = fn (Box s) -> s ++ "!"
   println (bang (Box "lambda"))
   println (unbox (Box "equation"))

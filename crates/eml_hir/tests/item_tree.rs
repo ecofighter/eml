@@ -151,3 +151,12 @@ fn import_names(text: &str, import: &ImportItem) -> Vec<String> {
         })
         .collect()
 }
+
+#[test]
+fn type_class_syntax_is_lowered() {
+    // 仮の E0004 はなく、導出できないクラスの E1038 だけが残る
+    let lowered = eml_test_support::lower(
+        "class C a where\n  m : a -> Int\n\ninstance C Int where\n  m x = x\n\nf : C a => a -> Int\nf x = 1\n\ndata D = | D deriving C",
+    );
+    insta::assert_snapshot!(eml_test_support::short_text(lowered.files(), &lowered.diagnostics), @"E1038 10:23 `C` cannot be derived");
+}

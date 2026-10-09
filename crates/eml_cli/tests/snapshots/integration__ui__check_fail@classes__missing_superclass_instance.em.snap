@@ -1,0 +1,12 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: rendered
+input_file: tests/ui/check-fail/classes/missing_superclass_instance.em
+---
+[E2006] Error: no instance of `Eq` for `Color`
+   ╭─[ check-fail/classes/missing_superclass_instance.em:6:14 ]
+   │
+ 6 │ instance Ord Color where
+   │              ──┬──  
+   │                ╰──── `Ord` requires `Eq`, its superclass
+───╯

@@ -1,0 +1,10 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{stderr}\")"
+input_file: tests/ui/run/classes/infix_constructor.em
+---
+--- stdout ---
+1 :+ (2 :+ End)
+Wrap (1 :+ End)
+-1 :+ End
+--- stderr ---

@@ -12,7 +12,7 @@ use crate::{Atom, Call, Ctor, FnIdx, Repr, Rhs, Stmt, TUPLE};
 
 use super::pattern::Known;
 use super::program::{effect_index, perform_call, plain_call};
-use super::types::{equality_extern, named, repr, split_arrows, var_info};
+use super::types::{named, repr, split_arrows, var_info};
 use super::{ContinuationForm, Exit, FnLowering};
 
 /// extern の関数なら、その表の行。誤りのないプログラムの extern は、どれも標準ライブラリの宣言で行を持つ。
@@ -21,7 +21,9 @@ pub(super) fn extern_row(hir: &HirProgram, function: FunctionId) -> Option<Exter
         FunctionKind::Extern(row) => {
             Some(row.expect("a program without errors has no user extern"))
         }
-        FunctionKind::Defined => None,
+        FunctionKind::Defined
+        | FunctionKind::DefaultMethod(_)
+        | FunctionKind::InstanceMethod(..) => None,
     }
 }
 
@@ -31,10 +33,8 @@ pub(super) fn extern_row(hir: &HirProgram, function: FunctionId) -> Option<Exter
 enum Callee {
     /// 本体のある関数。足りないときの包む関数は、その関数自身である。
     Function(FnIdx),
-    /// extern の関数。`callee` は呼ばれる式で、型で選ぶ行 (`==` と `!=`) の比べる値の型を
-    /// `BodyTypes::instantiations` から引くのと、呼び出しの位置に使う。
+    /// extern の関数か、extern で結んだメソッド。`callee` は呼ばれる式で、包む関数の型と呼び出しの位置に使う。
     Extern {
-        function: FunctionId,
         row: Extern,
         callee: ExprId,
     },
@@ -87,13 +87,15 @@ impl FnLowering<'_> {
         self.bind(name, repr, rhs)
     }
 
-    /// 値として使う extern の参照 `site` ごとの包む関数 (docs/spec/core-ir.md)。
-    fn extern_wrapper(&mut self, site: ExprId, function: FunctionId, row: Extern) -> FnIdx {
+    /// 値として使う extern の参照 `site` ごとの包む関数 (docs/spec/core-ir.md)。型は参照の式の型から取る。extern の
+    /// 関数の宣言の型とは開いた row の末尾だけが違い、Repr は同じである。
+    fn extern_wrapper(&mut self, site: ExprId, row: Extern) -> FnIdx {
         let number = self.ctx.numbering.externs[site];
         let name = format!("{}$extern{number}", self.ctx.root_name);
         let at = self.loc(site);
+        let ty = self.ty(site);
         self.program
-            .extern_wrapper(self.ctx.hir, self.ctx.store, function, row, name, at)
+            .extern_wrapper(self.ctx.hir, self.ctx.store, ty, row, name, at)
     }
 
     /// 呼ぶ相手の引数の個数と比べ、揃えば命令にし、足りなければ包む関数のクロージャにし、余れば命令の結果に残りを
@@ -176,11 +178,7 @@ impl FnLowering<'_> {
     fn callee_arity(&self, callee: Callee) -> usize {
         match callee {
             Callee::Function(target) => self.program.arity(target),
-            Callee::Extern {
-                function: _,
-                row,
-                callee: _,
-            } => row.row().params.len(),
+            Callee::Extern { row, callee: _ } => row.row().params.len(),
             Callee::Operation(op) => self.ctx.hir[op].arity,
             Callee::Constructor(ctor) => self.ctx.hir[ctor].fields.len(),
             Callee::Continuation { k: _, arity } => arity,
@@ -191,11 +189,7 @@ impl FnLowering<'_> {
     fn callee_wrapper(&mut self, callee: Callee) -> FnIdx {
         match callee {
             Callee::Function(target) => target,
-            Callee::Extern {
-                function,
-                row,
-                callee,
-            } => self.extern_wrapper(callee, function, row),
+            Callee::Extern { row, callee } => self.extern_wrapper(callee, row),
             Callee::Operation(op) => {
                 self.program
                     .operation_wrapper(self.ctx.hir, self.ctx.store, op)
@@ -229,33 +223,18 @@ impl FnLowering<'_> {
         );
         match callee {
             // 前の矢印は部分適用でエフェクトを起こさないので、最後の矢印の `mask` だけを使う (docs/spec/core-ir.md)
+            // 引数を受けない関数 (等式が引数を持たない instance のメソッド) の呼び出しは、引数のないトップレベルの値を
+            // 参照するのと同じく `mask` を持たない
             Callee::Function(target) => {
-                let mask = self.mask(id, args.len() - 1);
+                let mask = match args.len() {
+                    0 => Vec::new(),
+                    n => self.mask(id, n - 1),
+                };
                 ("t", masked_call(Call::Direct(target, args), mask))
             }
-            Callee::Extern {
-                function: _,
-                row,
-                callee,
-            } => {
-                let ext = if row.row().by_type {
-                    let instantiation = self
-                        .ctx
-                        .types
-                        .instantiations
-                        .get(callee)
-                        .expect("the type checker records every reference to `==` and `!=`");
-                    let equality =
-                        eml_types::equality(self.ctx.hir, self.ctx.store, instantiation.args[0])
-                            .expect(
-                                "the type checker reports every `==` and `!=` it cannot decide",
-                            );
-                    equality_extern(equality, row == Extern::Ne)
-                } else {
-                    row
-                };
+            Callee::Extern { row, callee } => {
                 let at = Some(self.loc(callee));
-                ("t", Rhs::Extern { ext, args, at })
+                ("t", Rhs::Extern { ext: row, args, at })
             }
             Callee::Operation(op) => ("t", plain_call(perform_call(self.ctx.hir, op, args))),
             // 状態ありの最初の矢印は row が空の部分適用なので、関数と同じく最後の矢印の `mask` を使う
@@ -346,14 +325,15 @@ impl FnLowering<'_> {
         let head = match &self.ctx.body.exprs[callee].kind {
             ExprKind::Path(Res::Item(ValueItem::Function(function))) => {
                 match extern_row(self.ctx.hir, *function) {
-                    Some(row) => Callee::Extern {
-                        function: *function,
-                        row,
-                        callee,
-                    },
+                    Some(row) => Callee::Extern { row, callee },
                     None => Callee::Function(self.ctx.target(callee)),
                 }
             }
+            ExprKind::Path(Res::Item(ValueItem::Method(_))) => match self.ctx.extern_target(callee)
+            {
+                Some(row) => Callee::Extern { row, callee },
+                None => Callee::Function(self.ctx.target(callee)),
+            },
             ExprKind::Path(Res::Item(ValueItem::Operation(op))) => Callee::Operation(*op),
             ExprKind::Path(Res::Item(ValueItem::Constructor(ctor))) => Callee::Constructor(*ctor),
             ExprKind::Path(Res::Local(local)) => {
@@ -408,18 +388,19 @@ impl FnLowering<'_> {
             ExprKind::Path(Res::Local(local)) => self.locals[*local],
             ExprKind::Path(Res::Item(ValueItem::Function(function))) => {
                 if let Some(row) = extern_row(self.ctx.hir, *function) {
-                    let wrapper = self.extern_wrapper(id, *function, row);
+                    let wrapper = self.extern_wrapper(id, row);
                     return self.closure(wrapper, Vec::new());
                 }
-                // 引数のないトップレベルの値は、参照するたびに呼び出す (docs/spec/core-ir.md)
-                let target = self.ctx.target(id);
-                if self.program.arity(target) == 0 {
-                    let name = self.ctx.hir[*function].name.clone();
-                    let ty = self.ty(id);
-                    self.bind_typed(&name, ty, plain_call(Call::Direct(target, Vec::new())))
-                } else {
-                    self.closure(target, Vec::new())
+                let name = self.ctx.hir[*function].name.clone();
+                self.function_value(id, &name)
+            }
+            ExprKind::Path(Res::Item(ValueItem::Method(method))) => {
+                if let Some(row) = self.ctx.extern_target(id) {
+                    let wrapper = self.extern_wrapper(id, row);
+                    return self.closure(wrapper, Vec::new());
                 }
+                let name = self.ctx.hir[*method].name.clone();
+                self.function_value(id, &name)
             }
             ExprKind::Path(Res::Item(ValueItem::Operation(op))) => {
                 let wrapper = self
@@ -541,6 +522,19 @@ impl FnLowering<'_> {
                 let ret = repr(self.ctx.store, ret_ty, self.ctx.hir);
                 self.lift(name, captured, &params, *lambda_body, ret)
             }
+        }
+    }
+
+    /// 定義された関数かメソッドへの参照 `id` の値。`name` は呼び出しの結果を束縛する変数の名前である。引数のない
+    /// トップレベルの値は、参照するたびに呼び出す (docs/spec/core-ir.md)。等式が引数を持たない instance のメソッドも
+    /// 同じである。
+    fn function_value(&mut self, id: ExprId, name: &str) -> Atom {
+        let target = self.ctx.target(id);
+        if self.program.arity(target) == 0 {
+            let ty = self.ty(id);
+            self.bind_typed(name, ty, plain_call(Call::Direct(target, Vec::new())))
+        } else {
+            self.closure(target, Vec::new())
         }
     }
 

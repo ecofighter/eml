@@ -4,9 +4,9 @@
 
 use eml_core_ir::{FALSE, TRUE, TUPLE, type_repr};
 use eml_extern::{Extern, ExternType};
-use eml_hir::{Function, FunctionKind, ValueItem};
+use eml_hir::{Function, FunctionKind, MethodImpl, TypeDefId, ValueItem};
 use eml_test_support::Checked;
-use eml_types::{TypeId, TypeKind, TypeStore};
+use eml_types::{Substitution, TypeId, TypeKind, TypeStore};
 
 /// 型の行ごとに、その型の値をそのまま返す関数を置く。型検査がその型に与える型を、関数の引数の型から読む。
 const PROBES: &str = "\
@@ -58,10 +58,51 @@ fn declared(checked: &Checked, wanted: impl Fn(&Function) -> bool) -> TypeId {
     checked.typed.decls[&ValueItem::Function(id)].ty
 }
 
-fn extern_type(checked: &Checked, e: Extern) -> TypeId {
-    declared(checked, |function| {
-        function.kind == FunctionKind::Extern(Some(e))
-    })
+/// 行 `e` の std のシグネチャの型。extern の関数なら宣言の型で、instance の `extern` で結んだメソッドなら、クラスの
+/// メソッドの宣言の型のクラスの型変数を instance の頭の型に置き換えた型である
+/// (docs/spec/declarations.md の「`extern`」)。置き換えた型は
+/// `types` に足す。
+fn row_type(checked: &Checked, types: &mut TypeStore, e: Extern) -> TypeId {
+    let program = &checked.program;
+    if let Some((id, _)) = program
+        .functions()
+        .find(|(_, function)| function.kind == FunctionKind::Extern(Some(e)))
+    {
+        return checked.typed.decls[&ValueItem::Function(id)].ty;
+    }
+    let (instance, method) = program
+        .instances()
+        .find_map(|(_, instance)| {
+            let (method, _) = instance
+                .methods
+                .iter()
+                .find(|&&(_, implementation)| implementation == MethodImpl::Extern(e))?;
+            Some((instance, *method))
+        })
+        .unwrap_or_else(|| panic!("`{}` is bound in std", e.row().name));
+    let head = head_type(checked, instance.head);
+    let var = program[instance.class].var.clone();
+    let declared = checked.typed.decls[&ValueItem::Method(method)].ty;
+    types.substitute(declared, &mut Substitution::new([(var, head)]))
+}
+
+/// 型引数のない型 `head` を指す、型の表の型。テストは型の表に型を作れないので、宣言の型の中から探す。
+fn head_type(checked: &Checked, head: TypeDefId) -> TypeId {
+    let types = &checked.typed.types;
+    let mut pending: Vec<TypeId> = checked.typed.decls.values().map(|decl| decl.ty).collect();
+    while let Some(ty) = pending.pop() {
+        match types.kind(ty) {
+            TypeKind::Con { id, args } if *id == head && args.is_empty() => return ty,
+            TypeKind::Con { id: _, args } => pending.extend(args),
+            TypeKind::Fn { param, ret, .. } => pending.extend([*param, *ret]),
+            TypeKind::Record(fields) => pending.extend(fields.iter().map(|&(_, ty)| ty)),
+            TypeKind::Rigid(_) | TypeKind::OpVar(_) | TypeKind::Flexible | TypeKind::Error => {}
+        }
+    }
+    panic!(
+        "`{}` appears in a declared type",
+        checked.program[head].name
+    )
 }
 
 fn has_type_var(types: &TypeStore, ty: TypeId) -> bool {
@@ -81,11 +122,15 @@ fn has_type_var(types: &TypeStore, ty: TypeId) -> bool {
 
 #[test]
 fn every_extern_function_row_has_the_reprs_of_its_std_signature() {
+    // 行の Repr は型変数の位置を `tobj` として比べる。多相な extern は S12 で入り、そこで比べ方を決め直す
+    // (docs/future/roadmap.md)
     let checked = checked();
-    let types = &checked.typed.types;
+    let mut store = checked.typed.types.clone();
     for &e in Extern::ALL {
         let row = e.row();
-        let mut ty = extern_type(&checked, e);
+        let mut ty = row_type(&checked, &mut store, e);
+        let types = &store;
+        assert!(!has_type_var(types, ty), "{}", row.name);
         let mut params = Vec::new();
         for _ in row.params {
             let TypeKind::Fn { param, ret, .. } = types.kind(ty) else {
@@ -126,24 +171,6 @@ fn every_extern_type_row_has_the_repr_of_its_type() {
     }
 }
 
-#[test]
-fn extern_function_rows_not_chosen_by_type_are_monomorphic() {
-    // 行の Repr は型変数の位置を `tobj` として比べる。多相な extern は S12 で入り、そこで比べ方を決め直す
-    // (docs/future/roadmap.md)
-    let checked = checked();
-    for &e in Extern::ALL {
-        let row = e.row();
-        if row.by_type {
-            continue;
-        }
-        assert!(
-            !has_type_var(&checked.typed.types, extern_type(&checked, e)),
-            "{}",
-            row.name
-        );
-    }
-}
-
 /// 機械の extern は、`Bool` と組の値を配置の表を見ずに `FALSE`、`TRUE`、`TUPLE` のタグで作る。そのタグが、translate
 /// が std の宣言から作る配置の添字と合うことを確かめる。
 #[test]
@@ -172,4 +199,28 @@ fn the_tags_externs_build_name_the_constructors_of_their_layouts() {
     // `Fs.read_all` の結果は、要素が2つの組の配置の唯一のコンストラクタである
     assert_eq!(constructors("(,)"), ["(,)"]);
     assert_eq!(TUPLE, 0);
+}
+
+/// `compare` の extern は、配置の表を見ずに `LT`、`EQ`、`GT` のタグで値を作る。そのタグが Prelude の `Ordering` の
+/// 宣言の順と一致することを確かめる。
+#[test]
+fn the_ordering_tags_match_the_prelude_declaration() {
+    let lowered = eml_test_support::lower("");
+    let program = &lowered.program;
+    let ordering = program.lang.ordering;
+    let eml_hir::TypeDefKind::Data { constructors } = &program[ordering].kind else {
+        panic!("`Ordering` is a data type");
+    };
+    let names: Vec<(&str, u32)> = constructors
+        .iter()
+        .map(|&c| (program[c].name.as_str(), program[c].tag))
+        .collect();
+    assert_eq!(
+        names,
+        [
+            ("LT", eml_core_ir::LT),
+            ("EQ", eml_core_ir::EQ),
+            ("GT", eml_core_ir::GT)
+        ]
+    );
 }

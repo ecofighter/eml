@@ -1,0 +1,14 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: rendered
+input_file: tests/ui/check-fail/classes/extern_in_instance.em
+---
+[E1033] Error: `extern` is only allowed in the standard library
+    ╭─[ check-fail/classes/extern_in_instance.em:11:3 ]
+    │
+ 11 │   extern size
+    │   ───┬──  
+    │      ╰──── user modules cannot declare externs
+    │ 
+    │ Help: remove `extern` and define the declaration in eml
+────╯

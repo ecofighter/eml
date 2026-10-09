@@ -49,6 +49,7 @@ pub(crate) fn operator_kind(op: &str) -> SyntaxKind {
         "->" => THIN_ARROW,
         "<-" => LEFT_ARROW,
         ".." => DOT2,
+        "=>" => FAT_ARROW,
         "-" => MINUS,
         _ if op.starts_with(':') => CONOP,
         _ => OP,
@@ -333,6 +334,7 @@ fn keyword(ident: &str) -> Option<SyntaxKind> {
         "forall" => FORALL_KW,
         "class" => CLASS_KW,
         "instance" => INSTANCE_KW,
+        "deriving" => DERIVING_KW,
         _ => return None,
     })
 }

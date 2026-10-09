@@ -19,4 +19,4 @@ foldl f acc xs = match xs with
 main : Unit -> <IO> Unit
 main () =
   let doubled = map (fn x -> x * 2) (range 1 100000)
-  println (show_int (foldl (fn acc x -> acc + x) 0 doubled))
+  println (show (foldl (fn acc x -> acc + x) 0 doubled))

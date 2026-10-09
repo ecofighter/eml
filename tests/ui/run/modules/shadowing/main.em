@@ -13,7 +13,7 @@ show_bool b = if b then "True" else "False"
 
 main : Unit -> <IO> Unit
 main () =
-  println (show_int (twice 5))
-  println (show_int (Util.twice 5))
+  println (show (twice 5))
+  println (show (Util.twice 5))
   println (show_bool (not True))
   println (show_bool (Prelude.not True))

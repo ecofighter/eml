@@ -5,7 +5,7 @@ effect Ask where
 
 sum_asks : Int -> Int -> String -> <Ask> String
 sum_asks n acc prefix =
-  if n == 0 then prefix ++ show_int acc
+  if n == 0 then prefix ++ show acc
   else
     let bonus = if n % 2 == 0 then 1 else 0
     let x = ask ()

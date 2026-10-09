@@ -1,7 +1,9 @@
 //! extern の宣言と、`eml_extern` の表と標準ライブラリの照らし合わせ。
 
 use eml_extern::{Extern, ExternEffect, ExternType, Purity};
-use eml_hir::{EffectKind, FunctionKind, Program, RowRef, Signature, TypeDefKind, TypeRefKind};
+use eml_hir::{
+    EffectKind, FunctionKind, MethodImpl, Program, RowRef, Signature, TypeDefKind, TypeRefKind,
+};
 
 use crate::common::{diagnostics, lower_text};
 
@@ -21,6 +23,30 @@ fn std_program() -> Program {
 
 fn canonical(program: &Program, module: eml_hir::ModuleId, name: &str) -> String {
     format!("{}.{name}", program.modules[module].name)
+}
+
+/// instance の `extern` で結んだメソッドの行と、行の名前 (`Prelude.Eq Int.==`) とシグネチャ。シグネチャはクラスの
+/// メソッドのもので、矢印の数と row は instance の頭によらない
+/// (docs/spec/declarations.md の「`extern`」)。
+fn instance_externs(program: &Program) -> Vec<(eml_extern::Extern, String, &Signature)> {
+    let mut found = Vec::new();
+    for (id, instance) in program.instances() {
+        for &(method, implementation) in &instance.methods {
+            let MethodImpl::Extern(e) = implementation else {
+                continue;
+            };
+            let name = format!(
+                "{} {}.{}",
+                program[instance.class].name, program[instance.head].name, program[method].name
+            );
+            found.push((
+                e,
+                canonical(program, id.module, &name),
+                &program[method].signature,
+            ));
+        }
+    }
+    found
 }
 
 #[test]
@@ -44,21 +70,38 @@ fn every_extern_type_is_declared_once_in_std() {
 
 #[test]
 fn every_extern_function_is_declared_once_in_std() {
+    // どの行も、std の extern の関数か instance の `extern` のちょうど1つから指される
+    // (docs/spec/declarations.md の「`extern`」)
     let program = std_program();
+    let instance_externs = instance_externs(&program);
     for &e in Extern::ALL {
         let row = e.row();
-        let found: Vec<_> = program
+        let functions: Vec<_> = program
             .functions()
-            .filter(|(id, function)| canonical(&program, id.module, &function.name) == row.name)
+            .filter(|(_, function)| function.kind == FunctionKind::Extern(Some(e)))
             .collect();
-        assert_eq!(found.len(), 1, "{}", row.name);
-        let (id, function) = found[0];
-        assert_eq!(function.kind, FunctionKind::Extern(Some(e)), "{}", row.name);
-        assert!(function.equation_ranges.is_empty(), "{}", row.name);
-        assert!(program.body(id).is_none(), "{}", row.name);
-        let signature = function.signature.as_ref().expect("a signature");
+        let methods: Vec<_> = instance_externs
+            .iter()
+            .filter(|(bound, _, _)| *bound == e)
+            .collect();
+        assert_eq!(functions.len() + methods.len(), 1, "{}", row.name);
+        let signature = if let [(id, function)] = functions[..] {
+            assert_eq!(
+                canonical(&program, id.module, &function.name),
+                row.name,
+                "{}",
+                row.name
+            );
+            assert!(function.equation_ranges.is_empty(), "{}", row.name);
+            assert!(program.body(id).is_none(), "{}", row.name);
+            assert_eq!(program.arity(id), Some(row.params.len()), "{}", row.name);
+            function.signature.as_ref().expect("a signature")
+        } else {
+            let (_, name, signature) = methods[0];
+            assert_eq!(name, row.name);
+            signature
+        };
         assert_eq!(signature.arity(), row.params.len(), "{}", row.name);
-        assert_eq!(program.arity(id), Some(row.params.len()), "{}", row.name);
         // `Effectful` の行だけが、最後の外側の矢印に extern のエフェクトを書く。ほかの矢印の row はどれも空である
         let last = last_outer_arrow(signature);
         for (id, ty) in signature.types.iter() {
@@ -141,6 +184,9 @@ fn every_extern_declaration_in_std_names_a_row() {
             let e = e.unwrap_or_else(|| panic!("`{}` has no row", def.name));
             assert_eq!(e.row().name, canonical(&program, id.module, &def.name));
         }
+    }
+    for (e, name, _) in instance_externs(&program) {
+        assert_eq!(e.row().name, name);
     }
     assert_eq!(program[program.negate()].name, "negate");
 }

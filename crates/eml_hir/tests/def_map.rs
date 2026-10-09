@@ -18,6 +18,7 @@ fn found_in(map: &DefMap, resolved: Resolved<ValueItem>) -> Option<&str> {
         ValueItem::Function(id) => id.module,
         ValueItem::Operation(id) => id.module,
         ValueItem::Constructor(id) => id.module,
+        ValueItem::Method(id) => id.module,
     };
     Some(map.module_name(module))
 }
@@ -178,14 +179,14 @@ fn types_and_effects_share_the_type_namespace() {
 fn plain_names_resolve_own_then_imported_then_prelude() {
     let modules = [(
         "A.em",
-        "pub x : Int\nx = 1\n\npub show_int : Int -> String\nshow_int n = \"a\"\n\npub y : Int\ny = 2",
+        "pub x : Int\nx = 1\n\npub show : Int -> String\nshow n = \"a\"\n\npub y : Int\ny = 2",
     )];
-    let (map, diagnostics) = def_map_files("import A (x, show_int, y)\n\ny : Int\ny = 3", &modules);
+    let (map, diagnostics) = def_map_files("import A (x, show, y)\n\ny : Int\ny = 3", &modules);
     assert!(diagnostics.is_empty(), "{diagnostics:?}");
     let resolver = map.resolver(map.entry());
     assert_eq!(found_in(&map, resolver.value(Plain("x"))), Some("A"));
     // 並びの名前は Prelude の名前を、自分の定義は並びの名前を、どちらも診断なしで隠す
-    assert_eq!(found_in(&map, resolver.value(Plain("show_int"))), Some("A"));
+    assert_eq!(found_in(&map, resolver.value(Plain("show"))), Some("A"));
     assert_eq!(found_in(&map, resolver.value(Plain("y"))), Some("Main"));
     assert_eq!(
         found_in(&map, resolver.value(Plain("not"))),
@@ -375,13 +376,13 @@ fn import_lists_report_missing_and_private_names_once() {
 fn broken_imports_answer_unknown_without_diagnostics() {
     let modules = [("A.em", "pub x : Int\nx = 1")];
     let (map, _) = def_map_files(
-        "import Missing (show_int)\nimport Missing as M\nimport A as M\n\nf : Int\nf = 1",
+        "import Missing (show)\nimport Missing as M\nimport A as M\n\nf : Int\nf = 1",
         &modules,
     );
     let resolver = map.resolver(map.entry());
     // 壊れた import の並びの名前も、Prelude の名前を隠す
     assert_eq!(
-        resolver.value(Plain("show_int")),
+        resolver.value(Plain("show")),
         Resolved::Silent(Silence::Broken)
     );
     // 合流した修飾子は、壊れていないモジュールの定義がちょうど1つ見つかれば、それを使う

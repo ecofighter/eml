@@ -29,6 +29,6 @@ loud () =
 main : Unit -> <IO> Unit
 main () =
   println ("a" <+> "b" <+> "c")
-  println (show_int (10 <-> 3 <-> 2))
-  println (show_int (total (1 :+ 2 :+ 3 :+ E)))
+  println (show (10 <-> 3 <-> 2))
+  println (show (total (1 :+ 2 :+ 3 :+ E)))
   if False && loud () then println "yes" else println "no"

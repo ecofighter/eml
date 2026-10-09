@@ -88,4 +88,4 @@ main () =
   let g39 = g38 ident
   let g40 = g39 ident
   let h = if True then f0 else g0
-  println (show_int (f40 5))
+  println (show (f40 5))

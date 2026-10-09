@@ -1,0 +1,26 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: rendered
+input_file: tests/ui/check-fail/classes/invalid_instance_head.em
+---
+[E1039] Error: an instance head must be a type constructor applied to distinct type variables
+    ╭─[ check-fail/classes/invalid_instance_head.em:10:15 ]
+    │
+ 10 │ instance Size a where
+    │               ┬  
+    │               ╰── a type variable
+────╯
+[E1039] Error: an instance head must be a type constructor applied to distinct type variables
+    ╭─[ check-fail/classes/invalid_instance_head.em:13:15 ]
+    │
+ 13 │ instance Size (Int, Int) where
+    │               ─────┬────  
+    │                    ╰────── tuples have only built-in instances
+────╯
+[E1039] Error: an instance head must be a type constructor applied to distinct type variables
+    ╭─[ check-fail/classes/invalid_instance_head.em:16:23 ]
+    │
+ 16 │ instance Size (Option Int) where
+    │                       ─┬─  
+    │                        ╰─── not a type variable
+────╯

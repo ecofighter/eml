@@ -1,6 +1,6 @@
 use std::io::Read;
 
-use eml_core_ir::{FALSE, TRUE, TUPLE};
+use eml_core_ir::{EQ, FALSE, GT, LT, TRUE, TUPLE};
 use eml_extern::Extern;
 use eml_runtime::{FileHandle, ObjRef, Payload, Value};
 
@@ -18,6 +18,13 @@ impl Runtime<'_> {
         };
         let overflow = || Fault::IntegerOverflow;
         let tag = |b: bool| Value::Tag(if b { TRUE } else { FALSE });
+        let ordering = |order: std::cmp::Ordering| {
+            Value::Tag(match order {
+                std::cmp::Ordering::Less => LT,
+                std::cmp::Ordering::Equal => EQ,
+                std::cmp::Ordering::Greater => GT,
+            })
+        };
         Ok(match e {
             Extern::Println => {
                 let (obj, text) = self.string(args[0])?;
@@ -82,7 +89,8 @@ impl Runtime<'_> {
             Extern::IntLe => tag(int(0)? <= int(1)?),
             Extern::IntGt => tag(int(0)? > int(1)?),
             Extern::IntGe => tag(int(0)? >= int(1)?),
-            Extern::ShowInt => {
+            Extern::IntCompare => ordering(int(0)?.cmp(&int(1)?)),
+            Extern::IntShow => {
                 let text = int(0)?.to_string();
                 Value::Obj(self.heap.alloc(Payload::Str(text)))
             }
@@ -96,6 +104,22 @@ impl Runtime<'_> {
                 self.heap.decref(right).map_err(Fault::Heap)?;
                 tag(equal == (e == Extern::StrEq))
             }
+            Extern::StrCompare => {
+                let (left, head) = self.string(args[0])?;
+                let (right, tail) = self.string(args[1])?;
+                // 妥当な UTF-8 ではバイト順がコードポイント順と一致する
+                // (docs/spec/declarations.md の「Prelude のクラス」)
+                let order = head.as_bytes().cmp(tail.as_bytes());
+                self.heap.decref(left).map_err(Fault::Heap)?;
+                self.heap.decref(right).map_err(Fault::Heap)?;
+                ordering(order)
+            }
+            Extern::StrShow => {
+                let (obj, text) = self.string(args[0])?;
+                let shown = show_string(text);
+                self.heap.decref(obj).map_err(Fault::Heap)?;
+                Value::Obj(self.heap.alloc(Payload::Str(shown)))
+            }
             Extern::BoolEq | Extern::BoolNe => {
                 let (Value::Tag(left), Value::Tag(right)) = (args[0], args[1]) else {
                     return Err(Fault::Internal(
@@ -103,12 +127,6 @@ impl Runtime<'_> {
                     ));
                 };
                 tag((left == right) == (e == Extern::BoolEq))
-            }
-            // 型で選ぶ行は translate が比べ方ごとの行に置き換え、verifier が Core IR に残らないことを確かめる
-            Extern::Eq | Extern::Ne => {
-                return Err(Fault::Internal(
-                    "an extern chosen by type reached the interpreter",
-                ));
             }
         })
     }
@@ -176,5 +194,51 @@ impl Runtime<'_> {
             Payload::Str(text) => Ok((obj, text)),
             _ => Err(not_a_string),
         }
+    }
+}
+
+/// `Show String` の `show`。文字列を `"` で囲み、読み返せる形にエスケープする
+/// (docs/spec/declarations.md の「Prelude のクラス」)。
+fn show_string(text: &str) -> String {
+    let mut shown = String::with_capacity(text.len() + 2);
+    shown.push('"');
+    for c in text.chars() {
+        match c {
+            '"' => shown.push_str("\\\""),
+            '\\' => shown.push_str("\\\\"),
+            '\n' => shown.push_str("\\n"),
+            '\t' => shown.push_str("\\t"),
+            '\r' => shown.push_str("\\r"),
+            '\0' => shown.push_str("\\0"),
+            '\u{1}'..='\u{1f}' | '\u{7f}' => {
+                shown.push_str(&format!("\\u{{{:x}}}", u32::from(c)));
+            }
+            c => shown.push(c),
+        }
+    }
+    shown.push('"');
+    shown
+}
+
+#[cfg(test)]
+mod tests {
+    use super::show_string;
+
+    #[test]
+    fn show_string_escapes_quotes_backslashes_and_named_controls() {
+        assert_eq!(show_string(r#"say "hi"\"#), r#""say \"hi\"\\""#);
+        assert_eq!(show_string("a\nb\tc\rd\0e"), r#""a\nb\tc\rd\0e""#);
+    }
+
+    #[test]
+    fn show_string_writes_other_controls_as_short_lowercase_hex() {
+        assert_eq!(show_string("a\u{1}b"), r#""a\u{1}b""#);
+        assert_eq!(show_string("\u{1b}[0m\u{7f}"), r#""\u{1b}[0m\u{7f}""#);
+    }
+
+    #[test]
+    fn show_string_keeps_other_characters() {
+        assert_eq!(show_string("é ü {} 日本"), r#""é ü {} 日本""#);
+        assert_eq!(show_string(""), r#""""#);
     }
 }

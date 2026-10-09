@@ -29,19 +29,27 @@ pub fn dump(program: &Program, typed: &TypedProgram) -> String {
         if modules.len() > 1 {
             writeln!(out, "-- {}", program.modules[module].name).unwrap();
         }
-        for (id, operation) in program.operations().filter(|(id, _)| id.module == module) {
-            if let Some(declared) = typed.decls.get(&ValueItem::Operation(id)) {
-                let ty = types.display(declared.ty, names).to_string();
-                writeln!(out, "{} : {ty}", operation.name).unwrap();
-                write_kinds(&mut out, &mut types, names, declared);
-            }
+        let declarations = program
+            .operations()
+            .filter(|(id, _)| id.module == module)
+            .map(|(id, _)| ValueItem::Operation(id))
+            .chain(
+                program
+                    .methods()
+                    .filter(|(id, _)| id.module == module)
+                    .map(|(id, _)| ValueItem::Method(id)),
+            );
+        for decl in declarations {
+            write_decl(&mut out, &mut types, program, decl, typed);
         }
-        for (id, function) in program.functions().filter(|(id, _)| id.module == module) {
-            if let Some(declared) = typed.decls.get(&ValueItem::Function(id)) {
-                let ty = types.display(declared.ty, names).to_string();
-                writeln!(out, "{} : {ty}", function.name).unwrap();
-                write_kinds(&mut out, &mut types, names, declared);
-            }
+        for (id, _) in program.functions().filter(|(id, _)| id.module == module) {
+            write_decl(
+                &mut out,
+                &mut types,
+                program,
+                ValueItem::Function(id),
+                typed,
+            );
             let (Some(body), Some(body_types)) = (program.body(id), typed.bodies.get(id)) else {
                 continue;
             };
@@ -60,6 +68,23 @@ pub fn dump(program: &Program, typed: &TypedProgram) -> String {
         }
     }
     out
+}
+
+/// 宣言の型と、Kind の制約があればその行を書く。型のない宣言は書かない。
+fn write_decl(
+    out: &mut String,
+    types: &mut TypeStore,
+    program: &Program,
+    decl: ValueItem,
+    typed: &TypedProgram,
+) {
+    let Some(declared) = typed.decls.get(&decl) else {
+        return;
+    };
+    let names = &program.names;
+    let ty = types.display(declared.ty, names).to_string();
+    writeln!(out, "{} : {ty}", program.value_name(decl)).unwrap();
+    write_kinds(out, types, names, declared);
 }
 
 fn write_kinds(out: &mut String, types: &mut TypeStore, names: &DisplayNames, declared: &DeclType) {

@@ -19,4 +19,4 @@ answer () =
 
 main : Unit -> <IO> Unit
 main () =
-  println (show_int (answer ()))
+  println (show (answer ()))

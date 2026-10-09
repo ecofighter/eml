@@ -1,0 +1,14 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: rendered
+input_file: tests/ui/check-fail/classes/missing_method.em
+---
+[E1036] Error: the instance of `Size` for `Color` does not define `size`
+    ╭─[ check-fail/classes/missing_method.em:11:15 ]
+    │
+ 11 │ instance Size Color
+    │               ──┬──  
+    │                 ╰──── `size` has no default
+    │ 
+    │ Help: add an equation for `size`
+────╯

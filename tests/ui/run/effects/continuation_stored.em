@@ -26,5 +26,5 @@ main () =
   match start () with
     | Done _ -> println "not paused"
     | Paused resume_with ->
-        println (show_int (value_of (resume_with True)))
-        println (show_int (value_of (resume_with False)))
+        println (show (value_of (resume_with True)))
+        println (show (value_of (resume_with False)))

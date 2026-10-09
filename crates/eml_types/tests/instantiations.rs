@@ -216,6 +216,7 @@ fn every_reference_to_an_item_with_a_signature_is_recorded() {
                     .len(),
                 ValueItem::Operation(id) => program[id].signature.generics.type_vars.len(),
                 ValueItem::Constructor(id) => program[program[id].ty].generics.type_vars.len(),
+                ValueItem::Method(id) => program[id].signature.generics.type_vars.len(),
             };
             assert_eq!(instantiation.args.len(), rigids, "{decl:?}");
         }
@@ -260,9 +261,9 @@ fn a_reference_without_a_signature_is_not_recorded() {
 }
 
 #[test]
-fn a_comparison_reported_as_not_comparable_is_still_recorded() {
+fn an_equality_without_an_instance_is_still_recorded() {
     let text = "poly : a -> a -> Bool\npoly x y = x == y";
     let checked = check(text);
-    insta::assert_snapshot!(short_text(checked.files(), &checked.diagnostics), @"E2006 2:14 values of type `a` cannot be compared with `==`");
+    insta::assert_snapshot!(short_text(checked.files(), &checked.diagnostics), @"E2006 2:14 no instance of `Eq` for `a`");
     insta::assert_snapshot!(records(&checked, "Main", "poly"), @"2:14 == [a]");
 }

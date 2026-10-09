@@ -10,4 +10,4 @@ main () =
   let r =
     handle ask () + 1 with
       | ask () k -> apply_to k 41
-  println (show_int r)
+  println (show r)

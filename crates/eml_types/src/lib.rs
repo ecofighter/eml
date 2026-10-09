@@ -7,17 +7,18 @@ mod data;
 mod dump;
 mod exhaustive;
 mod kind;
+mod resolve;
 mod scc;
 mod shape;
 mod store;
 mod table;
 mod ty;
+mod uniform;
 mod usage;
 
 use std::collections::HashMap;
 
 use eml_diagnostics::{Diagnostic, FileId, Label, SourceFiles, TextRange};
-use eml_extern::ExternType;
 use eml_hir::{EffectId, ExprId, Function, ItemMap, LocalId, PatId, Program, ValueItem};
 use la_arena::ArenaMap;
 
@@ -25,8 +26,10 @@ use crate::kind::problem::KindScheme;
 use crate::shape::Shape;
 
 pub use dump::dump;
+pub use resolve::{Resolution, resolve};
 pub use store::{EffectLabel, RowTail, Substitution, TypeId, TypeKind, TypeStore};
 pub use ty::{Linearity, Multiplicity};
+pub use uniform::{InstanceNode, Uniform};
 
 pub mod codes {
     use eml_diagnostics::ErrorCode;
@@ -42,8 +45,12 @@ pub mod codes {
     pub const MISSING_MAIN: ErrorCode = ErrorCode(2003);
     pub const INVALID_MAIN_TYPE: ErrorCode = ErrorCode(2004);
     pub const INFINITE_TYPE: ErrorCode = ErrorCode(2005);
-    pub const NOT_COMPARABLE: ErrorCode = ErrorCode(2006);
+    pub const NO_INSTANCE: ErrorCode = ErrorCode(2006);
     pub const MASK_CONFLICT: ErrorCode = ErrorCode(2008);
+    pub const AMBIGUOUS_CONSTRAINT: ErrorCode = ErrorCode(2009);
+    pub const LINEAR_INSTANCE_HEAD: ErrorCode = ErrorCode(2010);
+    pub const METHOD_KIND_MISMATCH: ErrorCode = ErrorCode(2011);
+    pub const CONSTRAINED_POLYMORPHIC_RECURSION: ErrorCode = ErrorCode(2012);
     pub const NON_EXHAUSTIVE_MATCH: ErrorCode = ErrorCode(4001);
     pub const NON_EXHAUSTIVE_EQUATION: ErrorCode = ErrorCode(4002);
     pub const REFUTABLE_PATTERN: ErrorCode = ErrorCode(4003);
@@ -60,10 +67,12 @@ pub mod codes {
 pub struct TypedProgram {
     /// 宣言と本体の型がすべて指す、プログラムに1つの型の表。
     pub types: TypeStore,
-    /// シグネチャのある関数、操作、コンストラクタの型。
+    /// シグネチャのある関数、クラスのメソッド、操作、コンストラクタの型。
     pub decls: HashMap<ValueItem, DeclType>,
     /// シグネチャと等式の両方がある関数だけを含む。
     pub bodies: ItemMap<Function, BodyTypes>,
+    /// 単相化で一様にする型変数の位置。
+    pub uniform: Uniform,
 }
 
 /// 1つの宣言の型検査の結果。
@@ -74,31 +83,6 @@ pub struct DeclType {
     /// 後の段階は Kind を読まない (docs/implementation/architecture.md の「`eml_types` の内部」) ので、外からは読めなくする。
     pub(crate) shape: Shape,
     pub(crate) kinds: KindScheme,
-}
-
-/// `==` と `!=` の比べ方。型クラスがないので、比べられる型を限る (docs/spec/declarations.md の標準の演算子の表)。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Equality {
-    Int,
-    String,
-    Bool,
-}
-
-/// `==` と `!=` の比べ方。比べられない型なら `None`。型検査の E2006 と Core IR の命令の選択が、同じ判定を使うため
-/// にここに置く。`Int` と `String` は extern の型なので索引から、`Bool` は lang item から引く。
-pub fn equality(program: &Program, types: &TypeStore, ty: TypeId) -> Option<Equality> {
-    let TypeKind::Con { id, .. } = types.kind(ty) else {
-        return None;
-    };
-    if *id == program.extern_type(ExternType::Int) {
-        Some(Equality::Int)
-    } else if *id == program.extern_type(ExternType::String) {
-        Some(Equality::String)
-    } else if *id == program.lang.bool {
-        Some(Equality::Bool)
-    } else {
-        None
-    }
 }
 
 #[derive(Debug, Default)]

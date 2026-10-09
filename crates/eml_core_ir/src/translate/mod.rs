@@ -1,9 +1,10 @@
 //! 型付き HIR から、前向きの辺だけを持つブロックの列への変換 (docs/spec/core-ir.md)。式の値の渡し先 (出口) と、
 //! 条件の分かれ方という制御の骨組みをここに置く。ブロックの組み立ては `builder.rs`、式ごとの変換は `expr.rs`、
 //! パターンの決定木と case-of-case は `pattern.rs`、関数の表と包む関数は `program.rs`、型から決まる Repr は
-//! `types.rs` にある。
+//! `types.rs`、導出した instance とタプルの instance の生成器は `derive.rs` にある。
 
 mod builder;
+mod derive;
 mod expr;
 mod instances;
 mod pattern;
@@ -13,6 +14,7 @@ mod types;
 use std::collections::{HashMap, HashSet};
 
 use eml_diagnostics::{FileId, SourceFiles};
+use eml_extern::Extern;
 use eml_hir::{
     Body, ExprId, ExprKind, FunctionId, LocalId, MatchArm, PatId, PatKind, Program as HirProgram,
     Res, Stmt as HirStmt, ValueItem,
@@ -26,7 +28,7 @@ use crate::{
 
 use builder::{FnBuilder, Label};
 use expr::extern_row;
-use instances::InstanceId;
+use instances::{InstanceKind, Target};
 use pattern::{Known, MatchCtx, Occ, Scrutinee, destructures};
 use program::{ProgramBuilder, effect_table};
 use types::{named, repr, split_arrows, var_info};
@@ -92,28 +94,34 @@ fn continuation_forms(body: &Body) -> ArenaMap<LocalId, ContinuationForm> {
         .collect()
 }
 
-/// 本体の中で関数を作る式の番号。`$lambdaN`、`$handleN`、`$externN` の N である。変換の順に依らず、同じ本体なら
-/// 同じ名前になるように、本体を変換する前に式の ID の順で振る (docs/spec/core-ir.md)。
+/// 本体の中で関数を作る式の番号。`$lambdaN`、`$handleN`、`$externN` の N である。変換の順に依らず、同じ instance
+/// なら同じ名前になるように、本体を変換する前に式の ID の順で振る (docs/spec/core-ir.md)。extern で結んだメソッドの
+/// 参照は行き先が instance ごとに違うので、`$externN` の番号は同じ本体でも instance ごとに変わりうる。
 struct Numbering {
     lambdas: ArenaMap<ExprId, u32>,
     handlers: ArenaMap<ExprId, u32>,
-    /// 値として使う extern の参照 (引数をそろえて呼ぶ位置にない参照と、部分適用の呼ばれる式)。
+    /// 値として使う extern の参照 (引数をそろえて呼ぶ位置にない参照と、部分適用の呼ばれる式)。extern で結んだ
+    /// メソッドの参照を含む。
     externs: ArenaMap<ExprId, u32>,
 }
 
-fn numbering(hir: &HirProgram, body: &Body) -> Numbering {
+/// `targets` は、この instance の本体の中の参照の行き先である。
+fn numbering(hir: &HirProgram, body: &Body, targets: &ArenaMap<ExprId, Target>) -> Numbering {
+    let extern_of = |expr: ExprId| match body.exprs[expr].kind {
+        ExprKind::Path(Res::Item(ValueItem::Function(function))) => extern_row(hir, function),
+        ExprKind::Path(Res::Item(ValueItem::Method(_))) => match targets.get(expr) {
+            Some(Target::Extern(row)) => Some(*row),
+            Some(Target::Function(_)) | None => None,
+        },
+        _ => None,
+    };
     // 引数をそろえて呼ぶ extern の参照は `Rhs::Extern` になり、包む関数を作らない
     let saturated: HashSet<ExprId> = body
         .exprs
         .iter()
         .filter_map(|(_, expr)| match &expr.kind {
             ExprKind::Call { callee, args } => {
-                let ExprKind::Path(Res::Item(ValueItem::Function(function))) =
-                    body.exprs[*callee].kind
-                else {
-                    return None;
-                };
-                let row = extern_row(hir, function)?;
+                let row = extern_of(*callee)?;
                 (args.len() >= row.row().params.len()).then_some(*callee)
             }
             _ => None,
@@ -126,9 +134,7 @@ fn numbering(hir: &HirProgram, body: &Body) -> Numbering {
         match &expr.kind {
             ExprKind::Lambda(_) => lambdas.push(id),
             ExprKind::Handle { .. } => handlers.push(id),
-            ExprKind::Path(Res::Item(ValueItem::Function(function)))
-                if extern_row(hir, *function).is_some() && !saturated.contains(&id) =>
-            {
+            ExprKind::Path(Res::Item(_)) if extern_of(id).is_some() && !saturated.contains(&id) => {
                 externs.push(id)
             }
             _ => {}
@@ -149,23 +155,43 @@ pub(crate) fn translate(
     entry: FunctionId,
     files: &SourceFiles,
 ) -> Program {
-    let mut builder = ProgramBuilder::new(hir, typed);
+    let mut builder = ProgramBuilder::new(typed);
     let instances = instances::collect(hir, typed, entry);
     let store = &instances.store;
     let indices: Vec<FnIdx> = instances
         .list
         .iter()
-        .map(|instance| {
-            let body = hir
-                .body(instance.function)
-                .expect("a program without errors has an equation for every function");
-            builder.reserve(body.params.len())
+        .map(|instance| match &instance.kind {
+            InstanceKind::Function(function) => {
+                let body = hir
+                    .body(function.function)
+                    .expect("a program without errors has an equation for every function");
+                builder.reserve(body.params.len())
+            }
+            InstanceKind::Generated(generated) => {
+                builder.reserve(generated.generated.method.arity())
+            }
         })
         .collect();
     for (instance, &index) in instances.list.iter().zip(&indices) {
-        let id = instance.function;
+        let function = match &instance.kind {
+            InstanceKind::Function(function) => function,
+            InstanceKind::Generated(generated) => {
+                let core = derive::generate(
+                    hir,
+                    store,
+                    &mut builder,
+                    &indices,
+                    &instance.name,
+                    generated,
+                );
+                builder.finish(index, core);
+                continue;
+            }
+        };
+        let id = function.function;
         let body = hir.body(id).expect("checked above");
-        let (param_types, ret) = split_arrows(store, instance.signature, body.params.len());
+        let (param_types, ret) = split_arrows(store, function.signature, body.params.len());
         let params: Vec<(Option<PatId>, Repr)> = body
             .params
             .iter()
@@ -173,16 +199,16 @@ pub(crate) fn translate(
             .map(|(&pat, &ty)| (Some(pat), repr(store, ty, hir)))
             .collect();
         let forms = continuation_forms(body);
-        let numbers = numbering(hir, body);
+        let numbers = numbering(hir, body, &function.targets);
         let ctx = BodyCtx {
             hir,
             body,
             store,
-            types: instance
+            types: function
                 .types
                 .as_ref()
                 .unwrap_or_else(|| typed.bodies.get(id).expect("every body is type-checked")),
-            targets: &instance.targets,
+            targets: &function.targets,
             indices: &indices,
             root_name: &instance.name,
             numbering: &numbers,
@@ -202,7 +228,9 @@ pub(crate) fn translate(
         );
         builder.finish(index, core);
     }
-    let entry_instance = &instances.list[instances.entry.0];
+    let InstanceKind::Function(entry_instance) = &instances.list[instances.entry.0].kind else {
+        unreachable!("the entry is a function of the program")
+    };
     let entry_fn = builder.entry(
         hir,
         store,
@@ -266,8 +294,8 @@ struct BodyCtx<'a> {
     /// 型の表。型検査の表に、単相化の代入の結果を足したもの。本体の変換は読むだけである。
     store: &'a TypeStore,
     types: &'a BodyTypes,
-    /// 本体の中の、定義された関数への参照の行き先の instance。
-    targets: &'a ArenaMap<ExprId, InstanceId>,
+    /// 本体の中の、定義された関数とメソッドへの参照の行き先。
+    targets: &'a ArenaMap<ExprId, Target>,
     /// instance の番号から関数の番号への表。
     indices: &'a [FnIdx],
     /// ラムダ、handle、extern を包む関数の名前に使う、トップレベルの関数の instance の名前。
@@ -279,13 +307,23 @@ struct BodyCtx<'a> {
 }
 
 impl BodyCtx<'_> {
-    /// 定義された関数への参照 `expr` の行き先の関数。
+    /// 定義された関数かメソッドへの参照 `expr` の行き先の関数。
     fn target(&self, expr: ExprId) -> FnIdx {
-        let instance = self
-            .targets
-            .get(expr)
-            .expect("every reference to a defined function has an instance");
-        self.indices[instance.0]
+        match self.targets.get(expr) {
+            Some(Target::Function(instance)) => self.indices[instance.0],
+            Some(Target::Extern(_)) => {
+                unreachable!("a method bound to an extern is called through `extern_target`")
+            }
+            None => unreachable!("every reference to a defined function or method has a target"),
+        }
+    }
+
+    /// `extern` で結んだメソッドへの参照 `expr` なら、その行。
+    fn extern_target(&self, expr: ExprId) -> Option<Extern> {
+        match self.targets.get(expr) {
+            Some(Target::Extern(row)) => Some(*row),
+            Some(Target::Function(_)) | None => None,
+        }
     }
 }
 

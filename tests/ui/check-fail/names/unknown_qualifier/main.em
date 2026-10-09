@@ -4,5 +4,5 @@ import Report.Csv
 
 main : Unit -> <IO> Unit
 main () =
-  println (show_int (Report.Csv.parse "a"))
-  println (show_int (Json.parse "b"))
+  println (show (Report.Csv.parse "a"))
+  println (show (Json.parse "b"))

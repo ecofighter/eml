@@ -4,8 +4,11 @@ use eml_diagnostics::{TextRange, TextSize};
 use eml_extern::{Extern, ExternEffect, ExternType};
 use la_arena::{Arena, ArenaMap, Idx};
 
+use crate::item_tree::Fixity;
+
 pub use crate::program::{
-    ConstructorId, EffectId, FunctionId, ItemId, ModuleId, OperationId, TypeDefId, ValueItem,
+    ClassId, ConstructorId, EffectId, FunctionId, InstanceId, ItemId, MethodId, ModuleId,
+    OperationId, TypeDefId, ValueItem,
 };
 
 pub type ExprId = Idx<Expr>;
@@ -41,6 +44,10 @@ pub struct Constructor {
     pub tag: u32,
     /// フィールドの型。属する `TypeDef` の `types` と `generics` で解決する。
     pub fields: Vec<TypeRefId>,
+    /// 中置のコンストラクタの fixity。宣言がなければ `Fixity::DEFAULT` で、前置のコンストラクタは `None` である。
+    /// 導出した `Show` が括弧の位置を決めるのに使う
+    /// (docs/spec/declarations.md の「`deriving`」)。
+    pub fixity: Option<Fixity>,
 }
 
 #[derive(Debug)]
@@ -97,6 +104,13 @@ pub struct LangItems {
     /// ユーザーが同じ演算子を定義すれば、それに解決して普通の呼び出しになる。
     pub and: FunctionId,
     pub or: FunctionId,
+    /// 処理系が役割で知る Prelude のクラス。`deriving` で導出できるのはこの3つである
+    /// (docs/spec/declarations.md の「`deriving`」)。
+    pub eq: ClassId,
+    pub ord: ClassId,
+    pub show: ClassId,
+    /// `compare` の結果の型。extern の行と導出した `compare` は、宣言の順のタグで値を作る。
+    pub ordering: TypeDefId,
 }
 
 /// extern の表の行から、標準ライブラリの宣言を引く索引。使い手のある行 (extern の型、`IO`、`negate`) だけを持つ。
@@ -123,6 +137,89 @@ pub enum FunctionKind {
     /// `extern` のシグネチャ。本体を持たず、実装は extern の表の行が指す。ユーザーのモジュールの extern (E1033) は
     /// 行を持たない。
     Extern(Option<Extern>),
+    /// クラスの既定のメソッド。等式で定義し、名前の表には入らない。
+    DefaultMethod(MethodId),
+    /// instance のメソッド。等式で定義し、名前の表には入らない。
+    InstanceMethod(InstanceId, MethodId),
+}
+
+impl FunctionKind {
+    /// 等式で本体を定義する関数か。
+    pub fn has_equations(self) -> bool {
+        !matches!(self, FunctionKind::Extern(_))
+    }
+}
+
+/// クラスの宣言 (docs/spec/declarations.md の「`class`」)。
+#[derive(Debug)]
+pub struct ClassDef {
+    pub name: String,
+    pub name_range: TextRange,
+    /// クラスの型変数の名前。メソッドのシグネチャの型変数の先頭に写す。
+    pub var: String,
+    /// 解決できた直接の上位クラス。循環 (E1042) を閉じたクラスは空にする。
+    pub superclasses: Vec<ClassId>,
+    /// 宣言の順のメソッド。
+    pub methods: Vec<MethodId>,
+}
+
+/// クラスのメソッド。値の名前空間に置くトップレベルの値である。
+#[derive(Debug)]
+pub struct Method {
+    pub name: String,
+    pub name_range: TextRange,
+    pub class: ClassId,
+    /// 型変数の先頭 (`TypeVarId` の番号 0) はクラスの型変数である。`constraints` はメソッド自身の型変数への制約だけを
+    /// 持つ。クラスの制約 `C a` は、メソッドの参照ごとに型検査が足す。
+    pub signature: Signature,
+    pub default: Option<FunctionId>,
+}
+
+/// instance がメソッドに与える定義。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MethodImpl {
+    Function(FunctionId),
+    /// `extern (==)`。std だけが書ける (E1033)。
+    Extern(Extern),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InstanceOrigin {
+    Written,
+    /// `deriving` のクラスの名前の位置。
+    Derived(TextRange),
+}
+
+#[derive(Debug)]
+pub struct InstanceDef {
+    pub class: ClassId,
+    pub head: TypeDefId,
+    /// 頭の型の範囲。instance についての診断が指す。
+    pub head_range: TextRange,
+    /// 頭の型変数。`data` の宣言の型引数の順である。
+    pub generics: Generics,
+    /// 文脈。型変数は `generics` を指す。
+    pub context: Vec<Constraint>,
+    /// instance が定義したメソッド。書いた順で、省いたメソッドは入らない。
+    pub methods: Vec<(MethodId, MethodImpl)>,
+    pub origin: InstanceOrigin,
+}
+
+impl InstanceDef {
+    pub fn method(&self, method: MethodId) -> Option<MethodImpl> {
+        self.methods
+            .iter()
+            .find(|(m, _)| *m == method)
+            .map(|(_, implementation)| *implementation)
+    }
+}
+
+/// 制約 `C a`。`var` は、制約を持つ宣言の `Generics` の型変数である。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Constraint {
+    pub class: ClassId,
+    pub var: TypeVarId,
+    pub range: TextRange,
 }
 
 #[derive(Debug)]
@@ -155,7 +252,7 @@ pub struct RowVarDecl {
     pub name: String,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Signature {
     pub ty: TypeRefId,
     /// シグネチャの型の範囲。
@@ -163,6 +260,8 @@ pub struct Signature {
     /// シグネチャの型の注釈。
     pub types: Arena<TypeRef>,
     pub generics: Generics,
+    /// 文脈の制約。型変数は `generics` を指す。
+    pub constraints: Vec<Constraint>,
 }
 
 impl Signature {
@@ -179,7 +278,7 @@ impl Signature {
 }
 
 /// 型変数と row 変数の表。関数と操作のシグネチャ、エフェクトと `data` の宣言が持つ。
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct Generics {
     pub type_vars: Arena<TypeVarDecl>,
     pub row_vars: Arena<RowVarDecl>,

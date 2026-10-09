@@ -15,4 +15,4 @@ main () =
       | get () k st -> k st st
       | put n k _ -> k () n
       | return x st -> (x, st)
-  println (show_int final)
+  println (show final)

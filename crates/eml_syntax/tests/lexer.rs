@@ -70,7 +70,7 @@ fn resume_is_an_ordinary_name() {
 fn all_keywords() {
     let text = "data type effect where pub extern import as infixl infixr infix \
                 let in if then else match with handle from drop return \
-                never once multi use fn forall class instance";
+                never once multi use fn forall class instance deriving";
     assert_eq!(
         kinds(text),
         [
@@ -104,6 +104,7 @@ fn all_keywords() {
             "FORALL_KW",
             "CLASS_KW",
             "INSTANCE_KW",
+            "DERIVING_KW",
         ]
     );
 }
@@ -144,7 +145,7 @@ fn operators_and_reserved_symbols() {
             "OP",
             "OP",
             "OP",
-            "OP",
+            "FAT_ARROW",
             "OP",
             "OP",
         ]

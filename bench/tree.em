@@ -30,4 +30,4 @@ fold f acc t = match t with
 main : Unit -> <IO> Unit
 main () =
   let t = build 15000 42 Leaf
-  println (show_int (size t) ++ " " ++ show_int (fold (fn acc x -> acc + x) 0 t))
+  println (show (size t) ++ " " ++ show (fold (fn acc x -> acc + x) 0 t))

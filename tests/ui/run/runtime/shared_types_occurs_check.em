@@ -51,4 +51,4 @@ main () =
   let f39 = f38 ident
   let f40 = f39 ident
   let g = fn () -> put f0
-  println (show_int (f40 5))
+  println (show (f40 5))

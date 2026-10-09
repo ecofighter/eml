@@ -20,4 +20,4 @@ main : Unit -> <IO> Unit
 main () =
   let (text, count) = collect ()
   println text
-  println (show_int count)
+  println (show count)

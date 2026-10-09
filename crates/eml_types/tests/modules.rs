@@ -96,7 +96,7 @@ fn check_modules(entry: &str, modules: &[(&str, &str)]) -> String {
 #[test]
 fn the_dump_shows_every_module_but_the_prelude() {
     let entry = "import Report\n\nmain : Unit -> <IO> Unit\nmain () = println (Report.render (Report.parse \"x\"))";
-    let report = "pub data Row = | Row Int\n\npub parse : String -> Row\nparse s = Row 1\n\npub render : Row -> String\nrender r = match r with\n  | Row n -> show_int n";
+    let report = "pub data Row = | Row Int\n\npub parse : String -> Row\nparse s = Row 1\n\npub render : Row -> String\nrender r = match r with\n  | Row n -> show n";
     insta::assert_snapshot!(check_modules(entry, &[("Report.em", report)]), @r"
     -- Main
     main : Unit -> <IO> Unit
@@ -151,15 +151,14 @@ fn notes_name_builtin_types_by_their_display_names() {
     // Prelude のほうは `Prelude.Bool` と `Prelude.Unit` になる
     let text = "data Bool = | Yes | No\n\ndata Unit = | U\n\nmain : Unit -> <IO> Prelude.Unit\nmain u = ()\n\ncondition : Bool -> Int\ncondition b = if b then 1 else 0\n\ncompare : Bool -> Prelude.Bool\ncompare b = b == b\n\nwithout_else : Prelude.Bool -> Prelude.Unit\nwithout_else b = if b then 1\n\nstatement : Int -> Int\nstatement n =\n  n\n  n\n\nunit_pattern : Int -> Int\nunit_pattern () = 1";
     let checked = eml_test_support::check(text);
-    insta::assert_snapshot!(eml_test_support::full(checked.files(), &checked.diagnostics), @r"
+    insta::assert_snapshot!(eml_test_support::full(checked.files(), &checked.diagnostics), @"
     E2004 5:8 `main` must have type `Prelude.Unit -> <IO> Prelude.Unit`
       5:8 found `Main.Unit -> <IO> Prelude.Unit`
     E2001 9:18 mismatched types
       9:18 expected `Prelude.Bool`, found `Main.Bool`
       note: the condition of `if` must have type `Prelude.Bool`
-    E2006 12:15 values of type `Main.Bool` cannot be compared with `==`
-      12:15 `==` cannot compare `Main.Bool`
-      note: `==` and `!=` compare only values of type `Int`, `String` and `Prelude.Bool`
+    E2006 12:15 no instance of `Eq` for `Main.Bool`
+      12:15 `==` requires `Eq Main.Bool`
     E2001 15:28 mismatched types
       15:28 expected `Prelude.Unit`, found `Int`
       note: an `if` without `else` must have type `Prelude.Unit`

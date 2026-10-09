@@ -4,7 +4,7 @@ data Pair a b =
 
 adder : Pair Int String -> (Int -> String)
 adder p = match p with
-  | Pair n label -> fn m -> label ++ " " ++ show_int (n + m)
+  | Pair n label -> fn m -> label ++ " " ++ show (n + m)
 
 main : Unit -> <IO> Unit
 main () =

@@ -1,0 +1,21 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: rendered
+input_file: tests/ui/check-fail/classes/not_derivable.em
+---
+[E1038] Error: `Size` cannot be derived
+   ╭─[ check-fail/classes/not_derivable.em:6:31 ]
+   │
+ 6 │ data Box = | Box Int deriving Size
+   │                               ──┬─  
+   │                                 ╰─── only `Eq`, `Ord` and `Show` can be derived
+───╯
+[E2006] Error: no instance of `Show` for `Int -> Int`
+   ╭─[ check-fail/classes/not_derivable.em:8:38 ]
+   │
+ 8 │ data Fn = | Fn (Int -> Int) deriving Show
+   │                                      ──┬─  
+   │                                        ╰─── `deriving Show` needs it for a field of `Fn`
+   │ 
+   │ Note: the field of type `Int -> Int` needs `Show (Int -> Int)`
+───╯

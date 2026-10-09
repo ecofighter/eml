@@ -5,4 +5,4 @@ main : Unit -> <IO> Unit
 main () =
   let Some n = Some 1
   let f = fn (Some m) -> m
-  println (show_int (n + f (Some 2)))
+  println (show (n + f (Some 2)))

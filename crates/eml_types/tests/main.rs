@@ -4,6 +4,7 @@
 mod common;
 
 mod check;
+mod classes;
 mod data;
 mod effects;
 mod exhaustive;
@@ -14,3 +15,4 @@ mod modules;
 mod rows;
 mod scaling;
 mod tuples;
+mod uniform;
