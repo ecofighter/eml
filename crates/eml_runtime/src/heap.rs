@@ -211,6 +211,13 @@ impl Heap {
         self.rc_decrements
     }
 
+    /// 同時に生きていた物体の数の最大。フレームと不死のリテラルも数える。`insert` は空いたスロットを先に使い、
+    /// 空きがないときだけスロットを足すので、スロットの数がそのまま最大になる。インタプリタはこれを `RunStats` の
+    /// `peak_objects` として返す。
+    pub fn peak_objects(&self) -> u64 {
+        self.slots.len() as u64
+    }
+
     pub fn alloc(&mut self, payload: Payload) -> ObjRef {
         if let Payload::Str(text) = &payload {
             self.string_bytes_written += text.len() as u64;

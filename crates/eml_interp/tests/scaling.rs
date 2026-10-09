@@ -1,5 +1,5 @@
-//! 実行の仕事の回数 (`RunStats`) を比べるテスト。時間ではなく回数を比べるので、`#[ignore]` を付けずにふだんの
-//! `cargo test` で流す。ソースはテストの中で作る。
+//! 実行の仕事の回数と、同時に生きていたヒープの物体の数の最大 (`RunStats`) を比べるテスト。
+//! 時間ではなく数を比べるので、`#[ignore]` を付けずにふだんの `cargo test` で流す。ソースはテストの中で作る。
 
 use eml_interp::RunStats;
 use eml_test_support::run_stats;
@@ -14,7 +14,18 @@ fn stats(text: &str, expected: &str) -> RunStats {
 #[test]
 fn a_program_without_operations_or_strings_does_no_counted_work() {
     let stats = stats("main : Unit -> <IO> Unit\nmain () = ()", "");
-    assert_eq!(stats, RunStats::default());
+    assert_eq!(
+        (
+            stats.handler_visits,
+            stats.string_bytes_copied,
+            stats.rc_increments,
+            stats.rc_decrements
+        ),
+        (0, 0, 0, 0),
+        "{stats:?}"
+    );
+    // `peak_objects` は仕事の回数でなく物体の数の最大なので、`Frame::Root` のフレームの分だけ 0 にならない
+    assert_eq!(stats.peak_objects, 1, "{stats:?}");
 }
 
 /// どの `perform` も、少なくとも見つけた handler のフレームを調べる。
@@ -230,4 +241,164 @@ fn traversing_a_shared_list_dups_each_cell_at_most_once() {
     let n = 1000;
     let increments = rc_increments(n, traverse, &format!("{}\n{n}\n", n * (n + 1) / 2));
     assert!(increments <= n + 2, "rc_increments = {increments}");
+}
+
+/// n = 1000 と n = 2000 で `program` を実行し、`peak_objects` の組を返す。`program` は n からソースと期待する出力を
+/// 作る。末尾呼び出しを失った形では、反復の数に比例してフレームが残るので、n を2倍にすると数も増える。
+fn peaks(program: impl Fn(u64) -> (String, String)) -> (u64, u64) {
+    let peak = |n| {
+        let (source, expected) = program(n);
+        stats(&source, &expected).peak_objects
+    };
+    (peak(1000), peak(2000))
+}
+
+#[test]
+fn a_loop_through_a_function_value_that_returns_int_keeps_the_heap_flat() {
+    let (short, long) = peaks(|n| {
+        (
+            format!(
+                "loop : (Int -> Int) -> Int -> Int
+loop f n = if n == 0 then 0 else f (n - 1)
+
+go : Int -> Int
+go n = loop go n
+
+main : Unit -> <IO> Unit
+main () = println (show_int (go {n}))
+"
+            ),
+            "0\n".to_string(),
+        )
+    });
+    assert_eq!(short, long);
+}
+
+#[test]
+fn a_loop_through_a_function_value_that_returns_bool_keeps_the_heap_flat() {
+    // n が偶数なので、`is_odd n` は偽になる
+    let (short, long) = peaks(|n| {
+        (
+            format!(
+                "is_even : (Int -> Bool) -> Int -> Bool
+is_even odd n = if n == 0 then True else odd (n - 1)
+
+is_odd : Int -> Bool
+is_odd n = if n == 0 then False else is_even is_odd (n - 1)
+
+main : Unit -> <IO> Unit
+main () = if is_odd {n} then println \"odd\" else println \"even\"
+"
+            ),
+            "even\n".to_string(),
+        )
+    });
+    assert_eq!(short, long);
+}
+
+#[test]
+fn a_loop_through_a_function_value_that_returns_unit_keeps_the_heap_flat() {
+    let (short, long) = peaks(|n| {
+        (
+            format!(
+                "tick : (Int -> <IO> Unit) -> Int -> <IO> Unit
+tick f n = if n == 0 then println \"done\" else f (n - 1)
+
+run : Int -> <IO> Unit
+run n = tick run n
+
+main : Unit -> <IO> Unit
+main () = run {n}
+"
+            ),
+            "done\n".to_string(),
+        )
+    });
+    assert_eq!(short, long);
+}
+
+#[test]
+fn a_loop_with_an_unused_let_between_the_call_and_its_result_keeps_the_heap_flat() {
+    // translate は `let s` を呼び出しと `return r` の間に置く。使われない `let` を飛ばして末尾の位置を見なければ、
+    // 反復ごとにフレームが残る
+    let (short, long) = peaks(|n| {
+        (
+            format!(
+                "loop : (Int -> Int) -> Int -> Int
+loop f n = if n == 0 then 0 else let r = f (n - 1) in let s = \"unused\" in r
+
+go : Int -> Int
+go n = loop go n
+
+main : Unit -> <IO> Unit
+main () = println (show_int (go {n}))
+"
+            ),
+            "0\n".to_string(),
+        )
+    });
+    assert_eq!(short, long);
+}
+
+#[test]
+fn a_loop_whose_clause_resumes_in_tail_position_keeps_the_heap_flat() {
+    let (short, long) = peaks(|n| {
+        (
+            format!(
+                "effect Ask where
+  ask : Unit -> Int
+
+sum_asks : Int -> Int -> <Ask> Int
+sum_asks n acc = if n == 0 then acc else sum_asks (n - 1) (acc + ask ())
+
+main : Unit -> <IO> Unit
+main () =
+  let r = handle sum_asks {n} 0 with
+            | ask () k -> k 2
+  println (show_int r)
+"
+            ),
+            format!("{}\n", 2 * n),
+        )
+    });
+    assert_eq!(short, long);
+}
+
+#[test]
+fn a_direct_self_tail_call_keeps_the_heap_flat() {
+    let (short, long) = peaks(|n| {
+        (
+            format!(
+                "loop : Int -> Int -> Int
+loop n acc = if n == 0 then acc else loop (n - 1) (acc + 1)
+
+main : Unit -> <IO> Unit
+main () = println (show_int (loop {n} 0))
+"
+            ),
+            format!("{n}\n"),
+        )
+    });
+    assert_eq!(short, long);
+}
+
+#[test]
+fn a_tail_apply_from_lambda_to_lambda_grows_the_heap_only_by_its_closures() {
+    // 反復ごとにクロージャが1つ生き残るので、数は n に比例して増える。`k` を2回使うのは、戻る間も鎖を共有にして
+    // おくためである。一意なクロージャは `apply` で解放され、空いたスロットを末尾でない呼び出しのフレームが使うので、
+    // 末尾の `apply` を失っても数が増えない。共有なら、失ったときに反復ごとにフレームが1つ増えて上限を超える
+    let (short, long) = peaks(|n| {
+        (
+            format!(
+                "count_down : Int -> (Int -> Int) -> Int
+count_down n k = if n == 0 then k 0 + k 0 else count_down (n - 1) (fn m -> k (m + 1))
+
+main : Unit -> <IO> Unit
+main () = println (show_int (count_down {n} (fn m -> m)))
+"
+            ),
+            format!("{}\n", 2 * n),
+        )
+    });
+    assert!(long <= short + 1000, "peak_objects: {short} -> {long}");
 }

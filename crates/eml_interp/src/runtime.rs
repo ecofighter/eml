@@ -423,6 +423,7 @@ impl<'p> Runtime<'p> {
             string_bytes_copied: self.heap.string_bytes_written(),
             rc_increments: self.heap.rc_increments(),
             rc_decrements: self.heap.rc_decrements(),
+            peak_objects: self.heap.peak_objects(),
         }
     }
 
