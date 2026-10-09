@@ -1,4 +1,4 @@
-//! translate と縮約の間の box の挿入のパス (docs/spec/core-ir.md の「パス」)。プログラム全体を1回で扱い、関数の
+//! translate と縮約の間の box の挿入のパス (docs/spec/core-ir.md の「box の挿入」)。プログラム全体を1回で扱い、関数の
 //! ABI を決めてから、Repr の違う位置の間に `box` と `unbox` を入れる。手順は、分類、T3 (`ret` を上げる)、一様化と
 //! `f$boxed`、変換の順である。型は読まず、呼ばれる関数のシグネチャ、内部の印、配置の表、`perform` の `resumable`
 //! だけを読む。入力に `tail`、`box`、`unbox`、RC の命令はない (`verify_translated` が確かめる)。
@@ -70,7 +70,7 @@ fn classify(program: &Program) -> (Vec<bool>, Vec<bool>) {
 /// T3。`ret` が箱を要するスカラーで、末尾の位置の呼び出しのどれかの結果が `ret` と互換でない関数の `ret` を `tobj` に
 /// する。そうしないと結果を `unbox` するために呼び出しが末尾呼び出しでなくなり、関数の値を通るループがフレームを積む。
 /// 上げた関数を末尾の位置で直接呼ぶ関数も、同じ規則で上げる。`ret` はスカラーから `tobj` へ1回だけ動くので、
-/// 各関数は多くとも1回作業の列に積まれ、各辺は1回だけ見る (docs/spec/core-ir.md の「変換の規則」)。
+/// 各関数は多くとも1回作業の列に積まれ、各辺は1回だけ見る (docs/spec/core-ir.md の「位置の規則」と「box の挿入」)。
 fn raise_tail_returns(functions: &mut [CoreFn]) {
     let mut callers: Vec<Vec<usize>> = vec![Vec::new(); functions.len()];
     let mut raised = Vec::new();
@@ -161,7 +161,7 @@ fn uniform_repr(repr: Repr) -> Repr {
 /// 値として参照され、T3 の後でも一様でない関数を一様にする。直接は呼ばれない内部の関数はその場で一様にし、ほかの
 /// 関数 (直接も呼ばれる内部の関数と、トップレベルの関数) には一様な `f$boxed` を足して、値の参照をすべてそちらへ
 /// 向ける。トップレベルの関数の ABI を、ほかの定義が後から値として参照するかどうかで変えないためである
-/// (docs/spec/core-ir.md の「値の表現」)。
+/// (docs/spec/core-ir.md の「位置の規則」)。
 fn uniformize(program: &mut Program, values: &[bool], direct: &[bool]) {
     let count = values.len();
     let mut redirect: Vec<Option<FnIdx>> = vec![None; count];

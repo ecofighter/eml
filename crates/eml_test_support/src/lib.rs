@@ -261,7 +261,7 @@ pub fn run_files(entry: &str, modules: &[(&str, &str)]) -> (String, Result<(), R
     without_stats(run_program(&core_files(entry, modules), true))
 }
 
-/// 実行の仕事の回数も返す。回数を比べるテスト (`eml_interp` の `scaling.rs`) のため。
+/// `RunStats` (仕事の回数とヒープの物体の数の最大) も返す。数を比べるテスト (`eml_interp` の `scaling.rs`) のため。
 #[cfg(feature = "run")]
 pub fn run_stats(text: &str) -> (String, Result<RunStats, RuntimeError>) {
     run_program(&core(text), true)

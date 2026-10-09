@@ -16,7 +16,7 @@
 | 種類 | 命令 |
 |---|---|
 | 文 | `let x = 右辺`、`unpack v L #t(f1, .., fn)`、`dup x`、`decref x`、`release x L #t(p1, .., pn)` |
-| 右辺 | 呼び出し (`call`、`apply`、`perform`、`resume`、`handle`)、`closure`、`con`、`const`、`extern`、`drop` |
+| 右辺 | 呼び出し (`call`、`apply`、`perform`、`resume`、`handle`)、`closure`、`con`、`const`、`extern`、`drop`、`box`、`unbox` |
 | 終端 | `return a`、`tail <呼び出し>`、`jump bN(a1, .., an)`、`switch a L { #0 -> bN, #1(y1, .., yn) -> bN, _ -> bN }`、`switch a { 1 -> bN, _ -> bN }` |
 | RC (RC の対象の変数のみ) | `dup x`、`decref x`、`release x L #t(p1, .., pn)` |
 | 線形値 | `drop x` (宣言された破棄処理を呼ぶ) |
@@ -24,7 +24,7 @@
 
 ### ブロックの列
 
-- 関数は、名前、変数の表、`ret`、ブロックの列を持つ。変数の表は、変数の番号ごとに名前と Repr (下の「値の表現」) を持つ
+- 関数は、名前、内部の関数かどうかの印 (下の「位置の規則」)、変数の表、`ret`、ブロックの列を持つ。変数の表は、変数の番号ごとに名前と Repr (下の「値の表現」) を持つ
 - `blocks[0]` が入口で、その引数が関数の引数である。ほかのブロックは番号 `bN` で指す
 - `ret` は、直接の呼び出しの結果の Repr である
 - 文は、変数を定義する `let` と `unpack` と、RC の命令 `dup`、`decref`、`release` である。ブロックの最後に終端が1つある
@@ -43,8 +43,11 @@
   - 所有の上では、x の参照が1つ減り、名前を書いた変数の参照がそれぞれ1つ増える
   - 名前は1つ以上書く。1つも残さないときは `decref x` を使う
   - Perceus だけが出す RC の命令である。`Stmt::defs` は空で、`dup` や `decref` と同じく値の使いとは数えない
-- 値 (アトム) の使い方は「消費」と「読む」に分かれる。`switch` の scrutinee と `unpack` の値だけが「読む」で、参照を受け取らない。ほかの使い方 (呼び出し、`apply`、呼ばれる側、extern、`con`、`closure`、`perform`、`resume`、`handle` の引数、`drop`、`return`、`tail`、`jump` の実引数) はすべて「消費」で、参照を1つ受け取る
-- `tail <呼び出し>` (`TailCall`) は、translate が出す末尾呼び出しの要求である。呼び出し元のフレームを積まずに呼ぶ。所有の都合で `let r = <呼び出し>` と `return r` に戻す降格は、借用パラメータを入れるときに Perceus が行ってよい ([ロードマップ](../future/roadmap.md) の「処理系」)
+- `let b = box a` は、箱を要するスカラー (下の「値の表現」) の値 a を `tobj` の値にする。`let v = unbox w` は、`tobj` の値 w から箱を要するスカラーを取り出す。スカラーの種類は、`box` ではオペランドの Repr から、`unbox` では束縛の Repr から決まる。オペランドと束縛の規則は「値の表現」にある
+  - `box` はオペランドを消費し、所有した `tobj` を定義する。オペランドはスカラーか定数なので、RC の対象ではない
+  - `unbox` はオペランドを読むだけで、所有権を受け取らない。借りたフィールドも読める
+- 値 (アトム) の使い方は「消費」と「読む」に分かれる。`switch` の scrutinee、`unpack` の値、`unbox` のオペランドだけが「読む」で、参照を受け取らない。ほかの使い方 (呼び出し、`apply`、呼ばれる側、extern、`con`、`closure`、`perform`、`resume`、`handle` の引数、`drop`、`box`、`return`、`tail`、`jump` の実引数) はすべて「消費」で、参照を1つ受け取る
+- `tail <呼び出し>` (`TailCall`) は、縮約が作る末尾呼び出しの要求である。呼び出し元のフレームを積まずに呼ぶ。呼び出しの結果は、呼び出し元の `ret` と互換である (下の「縮約」)。所有の都合で `let r = <呼び出し>` と `return r` に戻す降格は、借用パラメータを入れるときに、末尾の位置の呼び出しの輪の上にない末尾呼び出しにだけ足す (下の「変換の規則」の末尾呼び出しの保証、[ロードマップ](../future/roadmap.md) の「処理系」)
 
 ### 構造の規則
 
@@ -57,7 +60,7 @@
 - R5: 変数は、関数の中で多くとも1回定義される。パスが消した変数のように、変数の表には定義のない番号が残ってよい。定義する位置は、ブロックの引数、`let`、`unpack` のフィールド、case のフィールドである
 - R6: 変数が見えるのは、その定義の位置が使う位置を支配するときだけである (同じブロックなら前の文)。所有の検査の段では、合流するブロックに入るすべての `jump` で所有の多重集合が一致しなければならず、その集合が入口の所有になる
 - R7: 所有の検査の段では、`let x = <呼び出し> save S` の後に見える変数は S と x だけである。S は呼び出しの前に見えていなければならず、S のうち RC の対象の部分は、所有の多重集合と一致する。呼び出しの後に定義した変数は、次の呼び出しまで見える。合流するブロックでは、入るすべての辺で見えている変数だけが見える
-- R8: `jump` の実引数が変数なら、行き先の引数と Repr が同じである。定数は、行き先の引数の Repr に収まる (`Int` の定数は `int`、`()` は `unit`、タグは `enum` か `tobj`、関数の値は `tobj`)。`unpack` の値は Repr が `obj` の変数である。`return` の値が変数なら、Repr は `ret` と同じである。`extern` 命令の引数と、その結果を束縛する変数は、`eml_extern` の表の行の `params` と `ret` と Repr が同じである。定数の引数は、`jump` と同じく行の Repr に収まる。直接の呼び出し、`apply`、`perform`、`resume`、`handle` の引数と結果の Repr、`tail` の結果、`return` の定数は比べない。多相な位置の Repr の規則を決める S3b-2c-2 で比べる
+- R8: `extern` 命令の引数と、その結果を束縛する変数は、`eml_extern` の表の行の `params` と `ret` と Repr が同じである。定数の引数は、正確な位置の当てはめで行の Repr に収まる。`unpack` の値は Repr が `obj` の変数である。`jump` の実引数と行き先の引数、`return` の値と `ret`、直接の呼び出しと `apply`、`perform`、`resume`、`handle` の引数と結果、`closure` の引数、`tail` の結果は、互換の関係で比べ、定数は互換の位置の当てはめで比べる (下の「値の表現」と「位置の規則」)。`never` の操作の `perform` の結果と、その束縛の使いは比べない。関数の値として使う関数は一様である。`box` と `unbox` は「値の表現」の規則に従う
 - R9: 配置を指す命令は、その配置と合う (下の「データの配置」)
   - 命令が指す配置は表にあり、タグはその配置のコンストラクタの数より小さい
   - `switch` が配置を持つのは、タグの case を持つときだけである
@@ -66,7 +69,8 @@
   - リテラルの `switch` の scrutinee は、`Int` のリテラルなら `int` に、`String` のリテラルなら `obj` に収まる
   - `unpack` の配置は、コンストラクタが1つで、Repr が `obj` である
   - `con` で束縛する変数の Repr は、配置の Repr と同じである
-  - 宣言した Repr が `tobj` でないフィールドでは、`con` の引数と、case と `unpack` のフィールドの Repr が、その Repr と同じである。定数の引数は、R8 と同じくその Repr に収まる
+  - 宣言した Repr が `tobj` でないフィールドでは、`con` の引数と、case と `unpack` のフィールドの Repr が、その Repr と同じである。定数の引数は、正確な位置の当てはめでその Repr に収まる
+  - 宣言した Repr が `tobj` のフィールドでは、`con` の引数と、case と `unpack` のフィールドの Repr が `tobj` と互換である。定数の引数は、互換の位置の当てはめで `tobj` に収まる
   - R9 は、それぞれの命令を、その命令が指す配置と比べるだけである。値がどの配置で作られたかは追わない。それを保証するのは translate の型である。そのため、配置の違う値を読む IR も R9 を通りうる。タグかフィールドの数が違えば、インタプリタが内部の誤りとして止める。形が同じなら気付かない (下の「インタプリタ (CEK 機械)」)
 
 R1 と R2 から、ブロックの番号の順は辺の向きに沿った順 (トポロジカル順) になり、ループはない。R3 から、`switch` の行き先の入口の状態は、その `switch` のブロックだけで決まる。
@@ -85,7 +89,34 @@ R1 と R2 から、ブロックの番号の順は辺の向きに沿った順 (�
   | 関数 (関数の値 `&f` は即値)、型変数 | `tobj` |
 
 - `obj` はつねにヒープの物体を指す。`tobj` は、即値 (タグか関数の値) かヒープの物体を指す。RC の対象は `obj` と `tobj` の変数で、Perceus はこの変数にだけ RC の命令を付ける
-- 多相な位置 (総称的なフィールド、`apply`、`perform`、`resume`、`handle` の結果) の束縛は、具体化した型から Repr を決める。その位置の規則は S3b-2c-2 で決める。`Float` の Repr は、`Float` の型とリテラルと一緒に入れる ([ロードマップ](../future/roadmap.md) の「`Float`、`Char`、`Num`」)
+- 多相な位置 (総称的なフィールド、`apply`、`perform`、`resume`、`handle` の結果) の束縛も、具体化した型から Repr を決める。値を受ける位置の Repr は下の「位置の規則」が決め、変数の Repr と互換でなければ、box の挿入 (下の「box の挿入」) が変換を入れる。`Float` の Repr は、`Float` の型とリテラルと一緒に入れる ([ロードマップ](../future/roadmap.md) の「`Float`、`Char`、`Num`」)
+- 局所の変数はスカラーのまま持ち、呼ぶ側か呼ばれる側が具体的な型を知らない位置 (一様な位置) だけを参照にする。一様な位置の Repr は `tobj` である。Lean の IR と同じ方式である。`int`、`enum`、`unit` の変数は、VM ではタグのないスロットに、ネイティブではレジスタに置ける
+- `tobj` の位置との間で `box` と `unbox` を要するスカラーの Repr を、箱を要するスカラーと呼ぶ。今は `int` と `enum` で、後の `Float` の Repr もここに入る。規則と verifier の文言は、この集合の1つの定義 (`Repr::BOXED_SCALARS`) から作る。`Float` を足すときに、規則を1つずつ探して直さずに済むためである。命令なしで `tobj` と行き来するスカラーは `unit` だけである。`obj` と `tobj` の間は、命令なしで渡せる
+- 2つの Repr a と b は、次のどれかのとき互換 (`Repr::compatible`) である
+  - a と b が同じ
+  - a と b がどちらも参照 (`obj` か `tobj`)
+  - 片方が `unit` で、もう片方が `tobj`
+- 互換の関係は推移的でない (`unit` と `obj` は互換でない)。どの検査も実際の2つの位置を比べるだけなので、推移律は使わない。2つの位置を1つにつなぐ変形は、つないだ後の2つの位置が互換なときだけ行う。縮約の末尾呼び出しの規則がこれに当たる (下の「縮約」)
+- 正確な位置では Repr が同じでなければならない。`extern` の引数と結果、宣言した Repr が `tobj` でないフィールド、タグの `switch` の scrutinee と配置、`unpack` の値、`con` の束縛と配置、`box` と `unbox` のオペランドと束縛である。正確な位置では、`unit` と `tobj` も行き来しない。Repr が表で決まり、translate の出力も表に合わせて作るためである
+- 互換の位置では、互換であればよい。`jump` の実引数と行き先の引数、`return` の値と `ret`、直接の呼び出しの引数と結果、`closure` の引数、`apply`、`perform`、`resume`、`handle` のオペランドと結果 (相手は `tobj`)、宣言した Repr が `tobj` のフィールド、`tail` の結果と呼び出し元の `ret`、関数の値として使う関数の引数と `ret` (相手は `tobj`) である
+  - `jump` と `return` を正確にしても、バックエンドが得るものはない。互換な2つの Repr は、機械の形が同じだからである。正確にすると、後のインライン化と contification が作る形を書けない。たとえば `tobj` を返す `id` を `let t: obj = call id(x)` の所でインライン化すると、`id` の `return x` は、`tobj` の x を `obj` の引数へ渡す `jump` になる
+- 定数の当てはめも、位置の種類に従う
+  - 正確な位置では、`Int` の定数は `int`、`()` は `unit`、タグ `#N` は `enum` か `tobj`、関数の値 `&f` は `tobj` に収まる
+  - 互換の位置では、これに加えて `()` が `tobj` にも収まる。`Int` の定数は `tobj` に収まらないので、`let b = box 5` を置いて b を渡す
+  - 範囲の段と所有の段の verifier では、`&f` は f が一様なときだけ収まる (下の「位置の規則」)。変換の段では一様かを見ない。translate は、一様でない関数の `&f` を `jump` の実引数に出しうるからである (`let h = if c then double else inc` の `jump b3(&double)`)
+  - `#N` が `tobj` に収まるのに `enum` の変数が収まらないのは、定数ならコンパイルの時点で `tobj` の形に書けるからである。`Int` の定数を同じ扱いにしないのは、`box` が確保しうる (ネイティブの 64 ビットの `Int`、後の `Float`) からである
+- `box a` の a は、箱を要するスカラーの変数か、`Int` の定数である。束縛の Repr は `tobj` である。`unit` の変数、`()`、`#N`、`&f`、参照の変数は拒む。どれも命令なしで `tobj` に収まるので、1つの値の書き方を1つに保つ
+- `unbox a` の a は、`tobj` の変数である。束縛の Repr は箱を要するスカラーである。`obj` の変数は拒む。`obj` はつねにヒープの物体を指し、スカラーを入れた値にならない。定数と、`unit` の束縛も拒む
+- `int` と `enum` を明示する理由
+  - `box` は確保しうる (ネイティブの 64 ビットの `Int`、後の `Float`)。所有している `tobj` を `unbox` した後には `decref` が要る。どちらも Perceus と所有の検査に見えなければならない
+  - `Int` を命令なしで通すと、「小さい `Int` は `tobj` の即値」を今決めることになる。`Int` の幅はネイティブ化で決める ([ロードマップ](../future/roadmap.md) の「処理系」)
+  - `enum` を明示するのは、タグを `tobj` の中でどう表すかを、バックエンドに任せるためである
+- `unit` を命令なしにするのは、値が `()` の1つだけで、変換がデータも確保も RC も持たないためである
+- バックエンドは次を守る
+  - `unit` の値の機械の形は、`tobj` の即値 `()` と同じにする。`unit` を返す関数の戻り値も、この形で返す。呼び出しの結果、`jump`、`return`、`tail` が、`unit` と `tobj` の間を命令なしでつなぐためである
+  - `obj` の値は、そのまま `tobj` の値でもある
+  - `tobj` の位置に置いた定数 `#N` は、値が N の `enum` を `box` した値と同じである。`unbox` が、どちらの値も同じに読むためである
+- 後のバイトコード VM とネイティブ化は、変数の Repr と `box` と `unbox` から、スロットかレジスタの種類、確保、RC の操作をすべて IR から読める
 - `Lin` の値は2回以上消費されない。`Lin` の値はちょうど1回使われる ([線形性](linearity.md)) ので、消費のための `dup` は要らない。ただし、後の行のパターンが分解した値そのものかその祖先を束縛するとき (`| other -> ..`、`| W h _ -> ..`) は、分解した `Lin` の値が分解の後も生きていることがある。このとき Perceus は、ほかの値と同じフィールドの規則で、生きているフィールドを `Lin` のものも含めて `dup` する。内側の `release` や `decref` も共有の側を通ることがある。`Lin` のフィールドを消費する腕は、祖先も使うと同じ値を2回使うことになるので、祖先を使わない。そのため、その腕の入口では祖先が死んでいる。入口の順 (フィールドの `dup`、死んだ所有の `decref`、`release`) で祖先を先に手放すので、`Lin` のフィールドは消費するときには参照が1つに戻っている。`Lin` のフィールドは必ず使われるので、`release` は生きているすべての `Lin` のフィールドを名前で書く。IR は Kind を持たないので、これは決まりとして書き、verifier では確かめない
 
 ### データの配置
@@ -99,9 +130,67 @@ R1 と R2 から、ブロックの番号の順は辺の向きに沿った順 (�
 - translate は、命令を出すそれぞれの所で、コンストラクタか型から配置を決める。値の型からは決めない。配置は最初に使った順に表に入れる。後のパスは表を変えないので、使われなくなった配置が残ることがある。番号をたどり方によらない正規の順にするのは、定義ごとに Core IR を保存する REPL の段である ([ロードマップ](../future/roadmap.md) の「REPL」)
 - extern が作るデータは、比べる extern の `Bool` と、`Fs.read_all` の組である。`Bool` は機械の定数 `FALSE` と `TRUE` で作り、そのタグが `Prelude.Bool` の配置と合うことをテストが確かめる。組の配置は大きさだけで決まる。そのため、extern の行は配置を持たない。std の extern が名前的なデータ (`List`、`Option`、`Result`) を作るようになったら、行がその型の正規の名前を持ち、translate がその配置を表に入れる ([ロードマップ](../future/roadmap.md) の「S4 スクリプトの MVP」)
 - 名前付きのレコードは、S4 で同じ表に、コンストラクタが1つの配置として入る
-- 宣言した Repr が `tobj` のフィールドの Repr は、S3b-2c-2 で `box` と `unbox` と一緒に確かめる。`obj` の値は変換なしで `tobj` のフィールドに置け、`tobj` のフィールドは `obj` の変数に束縛できる。`box` と `unbox` が要るのは、スカラーと参照の間だけである
+- 宣言した Repr が `tobj` のフィールドは、互換の位置である (上の「値の表現」)。`obj` の値は変換なしで `tobj` のフィールドに置け、`tobj` のフィールドは `obj` の変数に束縛できる。`box` と `unbox` が要るのは、スカラーと参照の間だけである。ただし `unit` は、命令なしで `tobj` のフィールドと行き来する
 - verifier の R9 は、命令をその命令が指す配置と比べるだけで、値を作った配置を追わない。それを保証するのは translate の型である (上の「構造の規則」の R9)
 - 後のバイトコード VM はジャンプ表の大きさとポインタのフィールドを、ネイティブ化は物体の記述子を、reuse は同じ配置かどうかを、この表から知る ([ランタイム](runtime.md) の「オブジェクトのヘッダ」)
+
+### 位置の規則
+
+位置ごとに、そこへ渡す値に期待する Repr は次のとおりである。正確に合わせるか互換でよいかは、上の「値の表現」の互換の関係で決まる。
+
+| 位置 | 期待する Repr |
+|---|---|
+| 局所の変数、ブロックの引数 | 具体化した型の Repr |
+| データのフィールド (`con` の引数、case と `unpack` の束縛) | 配置の表の、宣言したフィールドの Repr。型変数と組のフィールドは `tobj` |
+| 直接の呼び出し `call g(..)` の引数と結果 | `g` の引数の Repr と `ret` |
+| `extern` の引数と結果 | 表の行の `params` と `ret` |
+| `apply`、`perform`、`resume`、`handle` のオペランドと結果 | `tobj`。ただし `never` の操作の `perform` の結果は値を持たない (下の「`never` の操作」) |
+| `closure g(..)` の引数 (捕獲と部分適用) | `g` の引数の Repr。`g` は下の規則で一様なので、一様になる |
+| 関数の値として使う関数 (`&g`、`closure g`) の引数と `ret` | `tobj` と互換 (下の「一様な関数」) |
+| `return a` | 関数の `ret` |
+| `jump bN(..)` | 行き先の引数の Repr |
+
+- translate が決める関数のシグネチャは、具体化した型の Repr である。トップレベルの関数と `op$`、`con$`、`$externN` はスキームから、ラムダ、節、handle の本体は使う所の型から決める。`cont$` と `cont$state` はすべて `tobj` である
+- 一様でない関数を一様にし、`ret` を上げ (下の「T3」)、位置に合わない値を変換するのは、box の挿入 (下の「box の挿入」) である
+
+#### 一様な関数
+
+- 関数の値として参照される関数は一様でなければならない。関数の値として参照されるとは、IR のどこかに `&f` があるか、`closure f(..)` の対象であることである。一様とは、引数と `ret` の Repr がすべて `tobj` と互換 (`obj`、`tobj`、`unit`) であることである。`apply` と handler は、関数ごとの Repr を知らずにその関数を呼ぶためである
+- 関数 (`CoreFn`) は、内部の関数かどうかの印 (`internal`) を持つ。内部の関数は、translate が定義の中から作る関数と、translate が作る補助の関数である。ラムダ、節、handle の本体、`op$`、`con$`、`$externN`、`cont$`、`cont$state` が当たり、S4 のローカルの関数もここに入る。トップレベルの関数 (標準ライブラリを含む) と入口の関数は内部の関数でない。内部の関数を直接呼ぶのは、それを作った定義の中だけである
+  - translate が印を付ける。テキストの形では、内部の関数を `internal fn main$lambda3(..)` と書く ([テスト戦略](../implementation/testing.md) の「Core IR のテキストの形」)
+- どの関数を一様にするかは、IR の参照と内部の印だけで決まり、型は読まない
+  - 値としてだけ参照され、直接は呼ばれない内部の関数は、その場で一様にする。箱を要するスカラーの引数を、同じ名前の新しい `tobj` の引数に替え、入口のブロックの先頭で、引数の順に `let p = unbox p'` を置く。箱を要するスカラーの `ret` は `tobj` にする。`obj` と `unit` の引数と `ret` は変えない
+  - そのほかの、値として参照され一様でない関数 (直接も呼ばれる内部の関数と、トップレベルの関数) は、形を変えずに残し、一様な関数 `f$boxed` を足す。値の参照 (`&f` と `closure f`) は、すべて `f$boxed` へ向ける
+- `f$boxed` の引数と `ret` は、`f` の箱を要するスカラーを `tobj` にし、`obj` と `unit` はそのままにする。本体は変換の前の形 `let t: <f の ret> = call f(p0, ..)` と `return t` で作り、変換はほかの関数と同じく box の挿入が入れる。`f$boxed` の印は `f` と同じにする。`f` の `ret` が一様なら、縮約がこの呼び出しを `tail` にする
+- トップレベルの関数をその場で一様にしないのは、トップレベルの関数の ABI を、その関数の定義と、それが末尾の位置で呼ぶ関数だけで決めるためである (下の「T3」)。その場で一様にすると、ほかの定義が後から値として参照するかどうかで ABI が変わる。定義ごとに Core IR を保存する REPL では古い定義を書き換えることになり、ネイティブ化では標準ライブラリを一度だけ翻訳して使い回せなくなる。内部の関数は、直接の呼び出しがすべて同じ定義の中にあるので、その場で一様にしても困らない。LLVM が引数の形を変えてよい関数を、内部の linkage の関数に限るのと同じ考え方である
+- 捕獲も一様にする。`closure f(..)` の引数は `f` の引数の Repr に変換し、`f` は一様なので、捕まえた `int` と `enum` は `box` される。捕獲を具体的な Repr のまま持つには、クロージャごとのペイロードの記述子と、関数ごとの一様な入口が要る。その入口は `f$boxed` と同じものなので、2つの仕組みが重なる
+- クロージャの呼び出しの規約は変えない。共有されたクロージャへの `apply` は、中身を写す (Lean の `pap` と同じ)
+
+#### エフェクトの位置
+
+- エフェクトの位置は一様にする。`perform` の引数と結果、`resume` の継続と値と状態と結果、`handle` の初期の状態と本体と節と `return` の節と結果は、どれも `tobj` である。節と本体の関数は値として参照されるので一様になる
+- 操作の宣言した Repr を使う形 (`perform` の引数と結果、操作の節の引数、`resume` の値を、操作のスキームの Repr にする) は、evidence passing と一緒に決める ([ロードマップ](../future/roadmap.md) の「処理系」)
+
+#### `never` の操作
+
+- `never` の操作の `perform` は値を返さない。節が継続をその場で捨てるので、`perform` の後へ制御が戻らない。そのため、その結果は位置でなく、束縛の Repr は translate が決めたまま (具体化した型の Repr) にする
+  - box の挿入は、`never` の `perform` の束縛を受け直さず、その束縛を使う所にも変換を入れない。束縛の使いには制御が届かないからである
+  - T3 は `never` の `perform` を見ない。縮約は、末尾の位置の `perform never` を、どの `ret` とも互換として扱う
+  - verifier は、`never` の `perform` の結果を束縛と比べず、末尾の `perform never` の結果を呼び出し元の `ret` と比べない。互換の位置では、`never` の `perform` の束縛の使い (`return` の値、呼び出しの引数など) も位置と比べない。正確な位置の使いは、ほかの変数と同じく比べる
+  - 縮約の前の `let t = perform never ..` と `return t` の形は、t の Repr が `ret` と互換でなくても、そのまま `tail perform never` になる
+- 結果を `tobj` とすると、T3 が「確かめて失敗する」形の関数の `ret` を上げる。`tail perform never Fail.fail(..)` だけのために `ret` が `tobj` になり、成功する経路で `box` が、呼び出し元で `unbox` と `decref` が要る。ネイティブの 64 ビットの `Int` では、成功する呼び出しのたびに箱を確保しうる。`never` の `perform` は戻らないので、フレームを積まず、末尾呼び出しの保証にも関わらない
+- 操作の引数は、ほかの操作と同じく一様な位置である
+
+#### T3
+
+- 末尾の位置の `apply`、`perform`、`resume`、`handle` の結果は `tobj` である。`ret` が箱を要するスカラーの関数では、その結果を `unbox` するので、呼び出しは末尾呼び出しでなくなる。そのままでは、関数の値を通るループ (`loop f n = if n == 0 then 0 else f (n - 1)` と `go n = loop go n`) がフレームを積む。インタプリタはフレームをヒープに置くのでメモリが O(n) になるだけだが、ネイティブではスタックがあふれる
+- T3 の規則: 関数の `ret` が箱を要するスカラーで、その関数の末尾の位置の呼び出し (下の「変換の規則」) のどれかの結果が `ret` と互換でなければ、`ret` を `tobj` にする
+  - 呼び出しの結果は、直接の呼び出しなら呼ばれる関数の `ret`、ほかは `tobj` である。`never` の操作の `perform` は見ない
+  - 上げた関数を末尾の位置で直接呼ぶ関数も、同じ規則で上げる。不動点まで伝える
+  - `unit` の `ret` は上げない。`unit` の関数の末尾の位置の呼び出しの結果は、型から `unit` か `tobj` に決まり、どちらも互換だからである
+  - 上げた関数の直接の呼び出し元は、結果を `unbox` で受ける。Perceus がその後に `decref` を置く
+- T3 が作る末尾呼び出しの保証は、下の「変換の規則」にある
+- 呼ばれる側の `ret` は上げない。保証には要らず、呼ばれる側のほかの呼び出し元すべての ABI を変えるためである。Lean の `InferBorrow.ownParamsUsingArgs` が、末尾呼び出しを保つために ABI を変えるのと同じ考え方である
 
 ### 変換の規則
 
@@ -125,7 +214,12 @@ R1 と R2 から、ブロックの番号の順は辺の向きに沿った順 (�
 - `let`、ラムダの引数、等式の引数のパターンも、同じ決定木で分解する。葉が1つなら今のブロックに `unpack` を並べ、続きもそのブロックで変換する。葉が複数なら、葉から続きのブロックへ `jump` し、束縛した変数をその引数にする。
 - 頭のコンストラクタかリテラルが変換の時点で分かっている値 (コンストラクタの適用、タプルのリテラル、タグと `Int` の定数、同じ関数の中で `let x = con ..` で束縛した変数) を調べるときは、`switch` を出さずにその場で case を選ぶ。
 - `match`、分解する `let`、条件の scrutinee が分岐 (`if`、`match`、それで終わるブロック) なら、分岐の各出口の値を `match` に直接渡す (case-of-case)。`let x = <分岐>` の直後の本体が `match x` である形も含める。出口の値で1つの枝に決まれば、コンストラクタを作らずにその枝へ `jump` し、決まらない出口の値だけを合流させて `switch` する。束縛と `match` の間に文がある形と、呼び出しの結果は扱わない。
-- 関数の末尾の呼び出しは末尾呼び出し (`tail`) にし、呼び出し元のフレームを積まない。末尾呼び出しは translate が IR の形から作る。`let x = <呼び出し>` の直後の終端が `return x` なら、2つを `tail` にする。値を返すだけの合流のブロック (文がなく、`return p` だけを持ち、引数が `p` だけ) へ向かう `jump` は、`return` に置き換える。対象は、直接の呼び出し、`mask` で分けた `apply` の最後の部分、余った引数を渡す呼び出し、`handle`、`perform`、`resume`、引数のないトップレベルの値である。
+- 関数の末尾の呼び出しは末尾呼び出し (`tail`) にし、呼び出し元のフレームを積まない。末尾呼び出しは、縮約だけが IR の形から作る (下の「縮約」)。translate は、値を返すだけの合流のブロック (文がなく、`return p` だけを持ち、引数が `p` だけ) へ向かう `jump` を `return` に置き換え、`let x = <呼び出し>` と `return x` を残す。translate の出力では `jump` の実引数と行き先の引数の Repr が同じなので、この転送は Repr に関わらない。対象の呼び出しは、直接の呼び出し、`mask` で分けた `apply` の最後の部分、余った引数を渡す呼び出し、`handle`、`perform`、`resume`、引数のないトップレベルの値である。
+  - 末尾の位置の呼び出しは、IR の形で決まる。1つのブロックの終端が `return x` で、同じブロックに x を定義する `let x = <呼び出し>` があり、その後の文がすべて純粋な `let` (縮約が消すもの) であるとき、その呼び出しを末尾の位置の呼び出しという。後ろの純粋な `let` の変数は `return` が使わないので、縮約がすべて消し、そこで `tail` を作る。T3 (上の「位置の規則」) は、translate の出力でこれを見る
+  - 保証: 末尾の位置の呼び出しをたどって元の関数に戻る輪の上にある末尾の位置の呼び出しは、どれも `tail` になる。輪の辺は、直接の呼び出しなら呼ばれる関数へ向き、`apply`、`perform`、`resume`、`handle` ならどの関数へも向きうるとみなす。結果に変換の要る末尾の位置の呼び出しは、普通の呼び出しになる
+  - 保証の理由: T3 の後に結果が互換でない末尾の位置の呼び出しは (`never` の `perform` を除く)、`ret` が `tobj` の関数から、`ret` が箱を要するスカラーの関数への直接の呼び出しだけである。呼び出し元の `ret` がスカラーなら T3 が上げており、`obj` なら呼ばれる側の `ret` は `obj` か `tobj` になるからである。そのような呼ばれる側 g が輪の上にあり、`ret` がスカラー s だとする。g の末尾の位置の呼び出しは互換なので、`ret` が s の関数への直接の呼び出しである。輪をたどると、輪の上の関数の `ret` はすべて s になり、輪の上に `ret` が `tobj` の呼び出し元があることと矛盾する。`f$boxed` は直接呼ばれず、`ret` が一様なので、`f$boxed` を足した後の IR でも同じ議論が成り立つ
+  - 保証は IR の形についての文である。呼び出しの値が、文を持つ合流のブロックを通って `return` に届く形 (`let r = if n == 0 then 0 else f (n - 1) in let s = "unused" in r`) は、末尾の位置の呼び出しでなく、保証の外にある ([実装の現在地](../implementation/status.md) の「深さと性能」)
+  - 後のパスもこの保証を保つ。所有の都合の降格は、輪の上の `tail` に当てない (上の「ブロックの列」の `tail`)
 - 変換は、入口の関数から届く関数だけを Core IR にする。届くかどうかは、HIR の本体に現れる関数の参照 (`Res::Item` の関数) をたどって決める。標準ライブラリのうち使わない関数は Core IR に入らない。
 - テキストの形 ([テスト戦略](../implementation/testing.md) の「Core IR のテキストの形」) は関数とエフェクトを名前で引くので、モジュールをまたいで名前が重なってはいけない。入口以外のモジュールでは、関数、操作を包む関数、コンストラクタを包む関数、エフェクトの表の名前に `モジュール名.` を付ける (`Report.Csv.parse`、`con$Report.Csv.Row`)。標準ライブラリのモジュールもこの規則に含め、正式な名前を使う (`Prelude.not`、ラムダは `Prelude.>>$lambda0`)。入口のモジュールの名前には付けない (`parse`、`op$get`)。extern の呼び出し (`extern <正式な名前>(…)`) は、正式な名前をそのまま使う (`extern Std.Fs.open`)。
 - 持ち上げた関数の番号 (`$lambdaN`、`$handleN`、`$externN` の N) は、外側の関数の本体の中で、HIR の式の ID の順に振る。変換の順に依らないようにするためである。
@@ -137,7 +231,7 @@ R1 と R2 から、ブロックの番号の順は辺の向きに沿った順 (�
   - 余った引数を `Call::Apply` で渡すときは、矢印ごとの `mask` が変わる境目で `apply` を分ける。`mask` は1つの Core IR の呼び出し全体に効くので、違う `mask` の矢印を1つの `apply` にまとめると、片方の矢印に余計な `mask` が効くためである。
   - `mask` が効くのは呼び出しそのものだけで、引数の評価には効かない。Core IR の呼び出しの引数は値 (アトム) なので、引数は呼び出しより前の文で評価し終えている。そのため、これは形から決まる。
 - `mask` は、末尾かどうかと独立である。`mask` 付きの呼び出しも、末尾の位置では末尾呼び出しにし、`mask` を保ったまま `tail` にする。`mask` は値を持たないので、生存解析、Perceus、`saved` の規則は変わらない。
-- verifier は、範囲の段でも所有の段でも、`mask` のエフェクトの番号がエフェクトの表にあること、昇順に並んでいること、`mask` が `handle` と `perform` に付いていないことを確かめる。
+- verifier は、どの段でも、`mask` のエフェクトの番号がエフェクトの表にあること、昇順に並んでいること、`mask` が `handle` と `perform` に付いていないことを確かめる。
 - extern のエフェクト (`IO`) は、Core IR のエフェクトの表に入れない。`handle`、`perform`、`mask` は extern のエフェクトを指さないためである。エフェクトの番号は、extern のエフェクトを飛ばして数える。また verifier は、`extern` 命令の引数の数と、引数と結果の Repr を表の行と比べ、`Prelude.==` と `Prelude.!=` の行を誤りにする。
 - handle の本体、操作の節、`return` の節は、ラムダと同じく、捕まえた変数を先頭の引数に持つ関数に持ち上げ、そのクロージャか関数の値を `handle` に渡す。本体の関数は `()` を受ける。節はエフェクトの操作の順に並べる。操作を値として使うときは、`perform` を呼ぶだけの関数 (`op$…`) で包む。
 - 変換は、節ごとに `k` の使い方を HIR で調べ、次の2つの形のどちらかにする。
@@ -161,20 +255,49 @@ R1 と R2 から、ブロックの番号の順は辺の向きに沿った順 (�
 
 | パス | 受け取る IR | 渡す IR |
 |---|---|---|
-| 変換 (`translate`) | 誤りのない型付き HIR | ブロックの列。末尾呼び出しは `tail`。RC の命令と `saved` はない |
-| 縮約 (`contract`) | RC の命令のない IR | 使われない純粋な `let` を消した IR |
+| 変換 (`translate`) | 誤りのない型付き HIR | ブロックの列。末尾呼び出し、`box` と `unbox`、RC の命令、`saved` はない |
+| box の挿入 (`boxing`) | 末尾呼び出し、`box` と `unbox`、RC の命令のない IR | 位置の規則を満たす IR。一様にした関数と `f$boxed` を含む |
+| 縮約 (`contract`) | RC の命令のない IR | 使われない純粋な `let` を消し、末尾呼び出しを作った IR |
 | Perceus | RC の命令のない IR | `dup` / `decref` / `release` と `saved` が入った IR |
 
-- パイプラインは、変換、verifier (範囲の段)、縮約、verifier (範囲の段)、Perceus、verifier (所有の段) の順に流す。verifier はデバッグビルドだけでかけ、誤りはパスの名前を付けて報告する
+- パイプラインは、変換、verifier (変換の段)、box の挿入、verifier (範囲の段)、縮約、verifier (範囲の段)、Perceus、verifier (所有の段) の順に流す。verifier はデバッグビルドだけでかけ、誤りはパスの名前を付けて報告する
+- `Pass` は `Translate`、`Boxing`、`Contract`、`Perceus` の4つである。`lower_until` は指定したパスの直後で止まるので、テストは各パスの直後の IR を見られる
 - どのパスの後でも、ブロックの列は上の「構造の規則」を満たす。パスの間で古くなる索引やキャッシュは IR に持たせない
-- 今あるパスは、縮約と、Perceus の `dup` / `decref` / `release` の挿入である。reuse analysis と借用パラメータの最適化は後で追加する ([ロードマップ](../future/roadmap.md))
+- 今あるパスは、box の挿入、縮約、Perceus の `dup` / `decref` / `release` の挿入である。reuse analysis と借用パラメータの最適化は後で追加する ([ロードマップ](../future/roadmap.md))
 - 再帰の深さ: パス、verifier、テキストの表示と読み込み、インタプリタ、`Drop`、`Clone`、`Debug` のどれも、プログラムの大きさに比例して Rust のスタックを使わない。残るのは、変換が HIR の式の入れ子をたどる分 (E0013 が抑える) と、決定木のパターンの大きさの分 ([実装の現在地](../implementation/status.md) の「深さと性能」) だけである
+
+### box の挿入
+
+- box の挿入 (`boxing`) は、プログラム全体を1回で扱う。関数の ABI (T3、一様化、`f$boxed`) を決めてから、位置の規則 (上の「位置の規則」) に合わない値に `box` と `unbox` を入れる
+- 型は読まない。読むのは、呼ばれる関数のシグネチャ、内部の印、配置の表、extern の行、`perform` の `resumable` だけである
+- translate が変換を入れる形にしないのは、translate が関数ごとに働くためである。値の参照で決まる一様化と T3 のような、プログラム全体で決まる ABI を、translate は決められない
+- 縮約の前に置くので、パスは変換を位置ごとに素朴に入れればよい。使われなくなった `box` と `unbox` は、縮約がほかの使われない純粋な `let` と一緒に消す
+- 手順は次の順である
+  1. 分類: 各関数について、値として参照されるか (どこかの `&f`、`closure f` の対象) と、直接呼ばれるか (`call f`) を記録する。入力に `tail`、`box`、`unbox`、RC の命令はない (変換の段の verifier が拒む)
+  2. T3: 関数の数と末尾の辺の数に比例する時間で、`ret` を上げる。各関数の末尾の位置の呼び出しを集め、直接の呼び出し f → g は、g の逆の表に f を入れる。`never` の `perform` は集めない。`ret` が箱を要するスカラーで、結果が互換でない末尾の位置の呼び出しを持つ関数を上げ、作業の列に積む。列から g を取り出し、逆の表の各 f について、f の `ret` が箱を要するスカラーなら上げて積む。`ret` はスカラーから `tobj` へ1回だけ動くので、各関数は多くとも1回積まれ、各辺は1回だけ見る
+  3. 一様化: 値として参照され、T3 の後でも一様でない関数のうち、直接呼ばれない内部の関数はその場で一様にし、ほかの関数には `f$boxed` を足す (上の「位置の規則」)。`f$boxed` は、関数の表の末尾に、元の関数の番号の順に足す。名前は元の関数の名前 (修飾を含む) に `$boxed` を付けたものである。その後、すべての関数の `&f` と `closure f` を `f$boxed` に向け直す
+  4. 変換: 関数ごとに、ブロックを番号の順に、文を前から見て、各アトムを位置の Repr にする。extern の引数と結果は正確な位置で、translate の出力ですでに合うので、何も入れない。`jump` と `return` も translate の出力では Repr が同じなので、変換が要るのは `ret` を変えた関数の `return` だけである
+     - 互換でないアトムは、箱を要するスカラーから `tobj` へは `let b = box a` を、`tobj` から箱を要するスカラーへは `let v = unbox a` を、使う文の前に置いて渡す。下の覗き穴を先に試す
+     - 束縛の位置 (直接の呼び出し、`apply`、`perform`、`resume`、`handle` の結果、`unpack` と case のフィールド) で、受け取る Repr と変数の Repr が互換でなければ、受け取る Repr の新しい変数で受ける。元の変数は、その直後で `unbox` か `box` で定義する。case のフィールドなら、その定義を行き先のブロックの先頭に置く。R3 から行き先へ入る辺はその `switch` の1本だけなので、定義は使いをすべて支配する。`never` の `perform` の束縛は受け直さず、その束縛を使う所にも変換を入れない (上の「`never` の操作」)
+     - 使う所の変数は書き換えないので、R5 と R6 はそのまま成り立つ
+     - 新しい変数は、元の変数の名前に、変数の表の末尾の番号を付けたものにする (`x.5: tobj`)。`Int` の定数を `box` した変数は `b`、`f$boxed` の結果の変数は `t` とする。その場で一様にした関数の新しい引数と `f$boxed` の引数も、元の引数の名前を使う
+  5. 型から起きない変換に当たったら、パスはパニックする。箱を要するスカラーと `obj` の間 (どちら向きも)、違う Repr のスカラーどうし、`unit` と箱を要するスカラーの間である。translate の出力では起きないので、内部の誤りである
+- 覗き穴: 変換を作る代わりに、定義をさかのぼって元の値を渡す
+  - 箱を要するスカラーの変数 v を `tobj` の位置へ渡すとき、v が `let v = unbox w` で定義されていれば、`box` を作らずに w を渡す
+  - `tobj` の変数 v を Repr が s のスカラーの位置へ渡すとき、v が `let v = box w` で定義され、w の Repr が s なら、`unbox` を作らずに w を渡す
+  - 表は、パスが作る定義 (受け直しの `unbox` と `box`、その場で一様にした関数の入口の `unbox`) からだけ作る。w は v の定義より前で定義されるので、v の使いをすべて支配し、R6 を保つ。使う所で作った変換は、使う所がほかの使いを支配しないので、同じ変数のほかの使いで使い回さない
+  - 覗き穴がないと、恒等に近い一様な関数 (`main$lambda3(m) = m`、handler の `return` の節、`cont$` の転送) が値を往復させ、末尾呼び出しも失う。覗き穴があれば `return r'` になり、縮約が使われない `unbox` を消して `tail` を作る。Perceus から見ると、w の寿命が延びるだけである
+- translate の転送が box の挿入より前にあるので、`return` だけの合流のブロックへ入る枝は、それぞれの `return` で `box` する
+- パスはブロックと文のループだけで、IR の大きさに比例して再帰しない
+- 後のパスの置き場所: 呼び出しを作るか行き先を変えるパス (インライン化、evidence passing など) は、translate と box の挿入の間に置き、`tail` も `box` も `unbox` も出さない。box の挿入がプログラム全体の ABI と変換を1か所で決め、縮約が末尾呼び出しを作るためである。box の挿入より後に置くパスは、位置の規則を保たなければならない
 
 ### 縮約
 
-- 使われない純粋な `let` を消す。純粋なのは `const`、`con`、`closure` と、表の行が `Pure` の `extern` である。呼び出し、`MayFail` と `Effectful` の `extern`、`drop` は、使われなくても消さない
+- 使われない純粋な `let` を消す。純粋なのは `const`、`con`、`closure`、`box`、`unbox` と、表の行が `Pure` の `extern` である。呼び出し、`MayFail` と `Effectful` の `extern`、`drop` は、使われなくても消さない。使われない `box` を消しても確保が1つ減るだけで、`unbox` は読むだけなので、どちらも評価の順を変えない
 - ブロックを後ろから、文を後ろから見る1回のパスで、関数全体の使用の数を使う。定義は使う位置を支配し、辺は番号の大きいブロックへ向かうので、`let` を見る時点でその変数の使用はすべて見終わっている。消した `let` だけが使っていた束縛も同じパスで消えるので、1回で不動点に達する。デバッグビルドでは、2回目のパスが何も変えないことを確かめる
-- 文を消したブロックの末尾にだけ、末尾呼び出しの規則 (`let x = <呼び出し>` と `return x`) をもう一度当てる
+- 末尾呼び出しを作るのは縮約だけである。使われない `let` を消した後で、すべてのブロックに末尾呼び出しの規則を当てる。`let x = <呼び出し>` の直後の終端が `return x` で、呼び出しの結果と関数の `ret` が互換なら、2つを `tail` にする。結果は、直接の呼び出しなら呼ばれる関数の `ret`、ほかは `tobj` で、`never` の操作の `perform` はどの `ret` とも互換とする。文を消したかに関わらずすべてのブロックを1回見るので、時間はブロックの数に比例する
+  - 互換の条件は、互換が推移的でないために要る。x を通すと `unit` から `tobj`、`tobj` から `obj` とつながる IR でも、`tail` にすると `unit` と `obj` を直接比べることになる。translate と box の挿入の出力では、この条件はいつも成り立つ。T3 と box の挿入が、互換でない末尾の位置の呼び出しの後に変換を入れているためである
+  - 末尾呼び出しを変換を入れた後に作るので、Repr のための降格は要らない
 - 縮約は、評価の順も短絡評価も変えない。消すのは実行時に何も起こさない右辺だけである
 
 ### 生存解析
@@ -197,14 +320,21 @@ R1 と R2 から、ブロックの番号の順は辺の向きに沿った順 (�
 - タグの case を持つのに配置のない `switch` を見たら、Perceus はパニックする。verifier が拒む形なので、黙って飛ばさない
 - 行き先の入口での順は、フィールドの `dup`、死んだ所有の `decref` (変数の番号の順)、`release` である。親を先に手放すと入れ子の値の参照が1つになり、`release` が一意の側を通れるためである。変数の番号の順が親から子の順になるのは、translate が束縛の順に番号を振るからである。`unpack` の直後では、`dup`、`release`、`decref x` のどれかをその文のすぐ後に置く
 - ブロックの先頭で、所有していて死んでいる変数を `decref` する。各文の後で、その文が定義した RC の対象の変数のうち死んでいるものを `decref` する。そのため、`jump` で渡さない所有は `jump` の前に残らない
-- 変数を消費することは所有権の移動である。`dup` が要るかは消費の数だけで決め、後でも使う変数は、消費する前に `dup` する。読む使い (`switch` の scrutinee と `unpack` の値) は所有権を動かさないので、`dup` を要さない
+- 変数を消費することは所有権の移動である。`dup` が要るかは消費の数だけで決め、後でも使う変数は、消費する前に `dup` する。読む使い (`switch` の scrutinee、`unpack` の値、`unbox` のオペランド) は所有権を動かさないので、`dup` を要さない
+- `let x = unbox w` の後で、w がこの時点で所有している RC の対象で、この文の後で死んでいれば、文の直後に `decref w` を置く。`unpack` の直後の規則の、読む使いの版である。w がこの後も生きていれば何も置かない
+  - 生きている RC の対象は、フィールドも含めてこの時点で所有になっている (フィールドは case の行き先の入口か `unpack` の直後で所有になる)。そのため、この `decref` は所有を手放すだけである。借用パラメータを入れたら、借りている w には置かない
 - `saved` は、呼び出しの後で生きている変数から、結果の変数を除いたものである。フィールドは呼び出しより前にすべて所有になるので、借りた変数が `saved` に入ることも、そのために末尾呼び出しを降格することもない
 - 入れ子のパターンでは、フィールドを `dup` してから読むだけの所が残る。借りた変数への `switch` を使い、フィールドを死ぬ所で手放す形 (遅らせる形) にすれば取り戻せる ([ロードマップ](../future/roadmap.md) の「処理系」)
-- 終端を、文と新しい終端に置き換える編集をその場でできる形にしておく。借用パラメータを入れるときに `TailCall` を降格するためである
+- 終端を、文と新しい終端に置き換える編集をその場でできる形にしておく。借用パラメータを入れるときに、末尾の位置の呼び出しの輪の上にない `TailCall` を降格するためである (上の「変換の規則」)
 
 ### verifier
 
-- verifier は2つの段を持つ。範囲の段 (`verify_scopes`) は変換と縮約の後にかけ、構造の規則のうち所有に関わらないもの (R1〜R5、R6 の支配、R8、R9) と下の引き継ぐ検査を確かめ、`dup`、`decref`、`release`、空でない `saved` がないことを確かめる。所有の段 (`verify`) は Perceus の後にかけ、さらに RC の対象の所有の多重集合 (R6、R7) と、呼び出しの後に見える変数 (R7) を確かめる
+- verifier は3つの段を持つ。段はパスの順に直線に並ぶので、境界の検査だけを切り替える別の旗は持たない
+  - 変換の段 (`verify_translated`) は translate の後にかける。構造の規則のうち所有に関わらないもの (R1〜R5、R6 の支配、R8 と R9 のうち境界の検査を除くもの) と下の引き継ぐ検査を確かめ、`tail`、`box`、`unbox`、`dup`、`decref`、`release`、空でない `saved` がないことを確かめる。box の挿入は末尾呼び出しと変換のない入力を前提にし、T3 は `let` と `return` の形から末尾の位置を見るためである。Perceus より前に `release` を拒むのと同じく、パスの入力の約束を verifier が確かめる
+  - 範囲の段 (`verify_scopes`) は box の挿入と縮約の後にかける。変換の段から `tail`、`box`、`unbox` の拒否を除き、`box` と `unbox` の規則 (上の「値の表現」) と境界の検査を足す
+  - 所有の段 (`verify`) は Perceus の後にかけ、範囲の段に加えて、RC の対象の所有の多重集合 (R6、R7) と、呼び出しの後に見える変数 (R7) を確かめる
+- 境界の検査は、R8 と R9 の検査のうち、`jump`、`return`、`box`、`unbox` を除くものである。直接の呼び出しの引数と結果、`closure` の引数、関数の値の対象が一様であること、`apply`、`perform`、`resume`、`handle` のオペランドと結果、`tail` の結果、宣言した Repr が `tobj` のフィールドである。translate の出力は、box の挿入より前には境界に合わないので、変換の段は境界を見ない
+- 関数の値の対象が一様かは、verifier を始めるときに関数ごとに1回求めて表にし、`&g` と `closure g` では表を引くだけにする。参照ごとに引数をたどると、時間が参照の数と引数の数の積になるためである
 - 所有は、どの経路でも、関数の入口と束縛で得た参照と、`dup` と `release` で増やした参照が、消費と `decref` と `release` でちょうど使い切られることを確かめる。経路ごとに持つのは、RC の対象の変数ごとの所有の数だけである。呼び出しでは、退避する RC の対象の変数が、その時点で所有している変数とちょうど一致する (同じ変数を2回退避しない)。`return` と `tail` の時点では、所有が残らない
 - RC の対象のフィールドには、定義のとき (R5 で1回だけ) 持ち主と出どころを記録する
   - 持ち主: 分解した値 s が、束縛の時点で所有の数を1つ以上持っていれば s、そうでなければ s の持ち主
@@ -212,19 +342,19 @@ R1 と R2 から、ブロックの番号の順は辺の向きに沿った順 (�
 - 変数 v が有効なのは、v の所有の数が1つ以上か、v の持ち主の所有の数が1つ以上のときである。1回の参照で決まるので、verifier は線形のままである。所有の数が正なら、その経路は実際の参照を持ち、物体は生きている。データは変更されないので、その下の物体もすべて生きている
 - 所有の段では、次の規則を確かめる
   - 分解 (case のフィールド、`unpack`): 値は見えて有効な RC の対象の変数である。RC の対象のフィールドは所有の数0で始まる。借りた変数への `switch` と `unpack` も受け入れる
-  - 読む (`switch` の scrutinee、`unpack` の値、`dup` の対象): 見えて有効である。`dup v` は v の所有の数を1つ増やす
+  - 読む (`switch` の scrutinee、`unpack` の値、`unbox` のオペランド、`dup` の対象): 見えて有効である。`dup v` は v の所有の数を1つ増やす
   - 消費と `decref v`: 見えて、v の所有の数が1つ以上である。1つ減らす。1つの命令の中では左から順に当てる
   - `release x L #t(p1, .., pn)`: 名前が1つ以上ある。x の所有の数が1つ以上である。名前を書いた各 pi は見えて、Repr が RC の対象で、出どころが `(x, L #t, i)` である。その後、x を1つ減らし、各 pi を1つ増やす。1つの位置には1つの名前しか書けないので、同じフィールドを2つの変数が引き継ぐことはない
   - 借りた変数 (所有の数0) は消費できず、`save` の所有の多重集合とも合わないので、呼び出しをまたいで保存されることも、`jump` で渡されることもない。定義が支配する合流のブロックでは見えたままで、持ち主がどの辺でも所有されていれば有効である
   - 持ち主を手放した後は、間の変数を後で `dup` していても、借りた変数を拒む。保守的だが健全で、Perceus はその形を出さない。親をたどる規則に緩めることは、IR を変えずに後でできる
-- `verify_scopes` は `release` を拒む (`` `d.0` is released with its fields before Perceus ``)。引数のない `con` は、どちらの段でも拒む (`` a constructor value without fields is written as a tag `#N`, not `con` ``)
+- 変換の段と範囲の段は `release` を拒む (`` `d.0` is released with its fields before Perceus ``)。引数のない `con` は、どの段でも拒む (`` a constructor value without fields is written as a tag `#N`, not `con` ``)
 - 所有の段の誤りの文言は次のとおりである
   - `` `x.1` is {used|released} but is only borrowed from `d.0` ``: 持ち主が所有されている間に、所有の数0の変数を消費したか、`decref` か `release` で手放した
-  - `` `x.1` is {duplicated|switched on|unpacked} after its owner `d.0` was given up ``: 無効な変数を読んだ
+  - `` `x.1` is {duplicated|switched on|unpacked|unboxed} after its owner `d.0` was given up ``: 無効な変数を読んだ
   - `` `x.1` is not field 0 of `d.0` as `Option` #1 ``: `release` の名前の出どころが違う
   - `` a release of `d.0` keeps no field `` と `` `x.1` is kept but is not reference counted ``: `release` の名前の誤り
-  - 持ち主のない変数を読むか消費するか手放したときと、持ち主も手放した変数を消費するか手放したときは、今までと同じく `` `x.1` is {used|released|duplicated|switched on|unpacked} after it was moved `` で報告する
-- R8 の extern の検査と R9 は、どちらの段でも走り、同じ文言で報告する (`release` は所有の段にだけ現れる)。それぞれの命令で、今ある形の検査を先に、R8 の extern の検査と R9 をその次に、範囲と所有の検査 (R5、R6) を最後に行う。今ある文言は変えない。どの文言の後にも、ほかの誤りと同じく `` in `f` `` が付く
+  - 持ち主のない変数を読むか消費するか手放したときと、持ち主も手放した変数を消費するか手放したときは、今までと同じく `` `x.1` is {used|released|duplicated|switched on|unpacked|unboxed} after it was moved `` で報告する
+- R8 と R9 のうち境界の検査でないものは、3つの段のどれでも走り、どの段でも次の文言で報告する (`release` は所有の段にだけ現れる)。境界の検査と、`box` と `unbox` の規則は、範囲の段と所有の段で走る。どの文言の後にも、ほかの誤りと同じく `` in `f` `` が付く
   - R8 の extern: ``argument 0 of `Prelude.+` is `s.0` (obj), but the extern takes int``、``argument 1 of `Prelude.+` is (), but the extern takes int``、`` `t.1` (obj) is bound to `Prelude.<`, which returns enum ``。引数の数を確かめた後で、引数を左から、最後に束縛する変数を比べる
   - 表にない配置: ``a con refers to the unknown layout #3`` (`a switch`、`an unpack`、`a release` も同じ形)
   - `switch` の配置の有無: `a switch with tag cases has no layout`、``a switch without tag cases has the layout `Prelude.Bool` ``
@@ -236,6 +366,30 @@ R1 と R2 から、ブロックの番号の順は辺の向きに沿った順 (�
   - `unpack` の配置: `` `p.0` (obj) is unpacked as `U`, which is enum ``、``an unpack of `s.0` names `Shape`, which has 2 constructors``
   - `con` の束縛: `` `d.1` (obj) is bound to a con of `Option`, which is tobj ``
   - `tobj` でないフィールド: ``field 1 of `Pair` #0 is `n.2` (obj), but the layout has int`` (case と `unpack` のフィールド)、``argument 1 of a con of `Pair` #0 is (), but the layout has int``
+- 検査の順
+  - それぞれの命令で、今ある形の検査を先に、R8 と R9 (境界の検査を含む) をその次に、範囲と所有の検査 (R5、R6、R7) を最後に行う。`return` だけは、値の範囲と所有を確かめてから `ret` と比べる
+  - 1つの呼び出しの中では、引数の数、引数の Repr (左から)、結果を束縛する変数の Repr の順に比べ、その後で範囲と所有を確かめる。`tail` では、引数の Repr の後で結果と呼び出し元の `ret` を比べる
+  - `closure g(..)` では、引数の数の後で g が一様かを確かめ、その後で引数の Repr を比べる。そのため、`closure` の対象が一様でない誤りは、その引数の範囲の誤りより先に出る
+  - `&g` は、互換の位置では、定数の当てはめの中で `tobj` に収まるかを確かめた後に g が一様かを確かめる。`extern` の引数では当てはめが通った後に、`drop &g` と case のない `switch` の scrutinee ではその命令の検査の中で確かめる。IR のどこにある `&g` も関数の値だからである
+- 3つの段すべての `jump` と `return` の文言は、互換で比べるほかは今のままである。定数では ``5 is returned from a function that returns tobj``、``() is returned from a function that returns obj`` になる。変数の `` `x.1` (int) is returned from a function that returns obj `` と同じ形である
+- 範囲の段と所有の段の境界の検査の文言は次のとおりである。`handle` の命令は、今の文言に合わせて handler と呼ぶ
+  - 直接の呼び出しの引数: ``argument 0 of `g` is `x.1` (int), but the function takes tobj``、``argument 1 of `g` is 5, but the function takes tobj``
+  - 直接の呼び出しの結果: `` `t.0` (obj) is bound to `k`, which returns int ``
+  - `closure` の引数: ``argument 0 of a closure of `g` is `n.1` (int), but the function takes tobj``
+  - 関数の値の対象: `` `g` is used as a function value, but its parameter 0 is int ``、`` `g` is used as a function value, but it returns int ``
+  - `apply` のオペランド: ``the callee of an apply is `n.1` (int), but an apply takes tobj``、``argument 0 of an apply is `n.1` (int), but an apply takes tobj``
+  - `perform` のオペランド: ``argument 0 of a perform of `Ask.ask` is 1, but a perform takes tobj``
+  - `resume` のオペランド: ``the continuation of a resume is `n.1` (int), but a resume takes tobj``、``the value of a resume is 1, but a resume takes tobj``、``the state of a resume is `s.2` (int), but a resume takes tobj``
+  - `handle` のオペランド: ``the initial state of a handler of `State` is 0, but a handler takes tobj``、``the body of a handler of `Ask` is `b.1` (int), but a handler takes tobj``、``the clause for `ask` of a handler of `Ask` is `c.2` (int), but a handler takes tobj``、``the `return` clause of a handler of `Ask` is `r.3` (int), but a handler takes tobj``
+  - 一様な結果: `` `t.0` (int) is bound to an apply, which returns tobj ``。ほかは ``a perform of `Ask.ask` ``、``a resume``、``a handler of `Ask` `` を同じ形で使う
+  - `tail` の結果: ``a tail call to `g` returns int, but this function returns tobj``、``a tail apply returns tobj, but this function returns int``。ほかは ``a tail perform of `Ask.ask` ``、``a tail resume``、``a tail handler of `Ask` `` を同じ形で使う。呼び出し元を "this function" と書き、呼ばれる側を指す "the function" と分ける
+  - `tobj` のフィールド: R9 の文言を `tobj` に広げる。``field 0 of `Option` #1 is `x.3` (int), but the layout has tobj``、``argument 0 of a con of `Option` #1 is 5, but the layout has tobj``
+- 範囲の段と所有の段の `box` と `unbox` の文言は次のとおりである。`int and enum` と `int or enum` の部分は、箱を要するスカラーの定義から作る
+  - `box` のオペランド: `` `u.1` (unit) is boxed, but only int and enum values and Int constants can be ``、``() is boxed, but only int and enum values and Int constants can be`` (`#1`、`&g` も同じ形)
+  - `box` の束縛: `` `b.2` (int) is bound to a box, which is tobj ``
+  - `unbox` のオペランド: `` `p.0` (obj) is unboxed, but only tobj can be ``、``5 is unboxed, but only tobj can be``
+  - `unbox` の束縛: `` `n.2` (tobj) is bound to an unbox, which gives int or enum ``
+- 変換の段だけの文言は次のとおりである。`tail` は ``a tail call is formed before contract`` で、`call` のほかは ``a tail apply``、``a tail perform``、``a tail resume``、``a tail handler`` を同じ形で使う。`box` と `unbox` は `` `n.1` is boxed before the boxing pass ``、``5 is boxed before the boxing pass``、`` `b.2` is unboxed before the boxing pass `` である
 - 引き継ぐ検査は次のとおりである。`mask` の順と番号、直接呼び出しとクロージャの引数の数、文字列定数と関数の番号が表にあること、`extern` 命令の引数の数、`Prelude.==` と `Prelude.!=` の行を残さないこと、case の種類 (1つの `switch` の case が同じ種類であること、リテラルの case がフィールドを持たないこと)、`switch` が行き先を1つ以上持つこと、フィールドを束縛する case を持つ `switch` の scrutinee が RC の対象 (`obj` か `tobj`) の変数であること、リテラルの `switch` の `default`、`perform` の `resumable` がエフェクトの表と一致すること、`handle` の節の数。`handle` の節と `return` の節の関数が分かるとき (関数の値か、同じ関数の中で `closure` で作った値のとき) は、節が捕獲の後にちょうど「操作の引数 + `k` (再開する操作) + 状態」個の引数を持つこと、`return` の節が捕獲の後にちょうど2つ (値と状態) の引数を持つことも確かめる。操作の引数の数は、エフェクトの表の操作が持つ
 - verifier は生存解析を使わない。ブロックを番号の順にたどるだけで、反復しない。辺は前向きなので、ブロックに着いたときには入る辺がすべて出そろっている
   - 支配木は Cooper-Harvey-Kennedy の方法で求める。番号の順が辺の向きに沿っているので、1回たどれば決まる。2つのブロックの共通の支配者は、支配木の skew-binary の飛び先 (Myers) を使って、深さの対数の歩みで求める。1段ずつ登ると、深さの違う辺が多く1つのブロックに合流したとき (`a || b || ...` の真の行き先など)、時間はブロックの数と深さの積になる
@@ -255,10 +409,12 @@ R1 と R2 から、ブロックの番号の順は辺の向きに沿った順 (�
 - `drop k` と `never` の操作による中断は、継続が捕まえていた値を1回ずつ解放する。`Lin` の値の破棄処理はオブジェクトの解放そのものなので、捕まっていた `File` は、この解放で読み出し口が捨てられて閉じる ([ランタイム](runtime.md))。
 - `extern` 命令は、handler を探さず、引数を受け取ってその場で実行し、値を返す。継続の最下部には、プログラムの終わりを表すフレームがあるだけで、`IO` の handler はない。操作の handler を探してこの最下部に届いたら、内部の誤りである。
 - `println` の標準出力は、`run` に渡された `OutputSink` に書く。テストで出力を捕まえるためである ([ランタイム](runtime.md))。`open` は `File` のオブジェクトを確保し、`read_all` は受け取った `File` の参照を、読んだ文字列との組に移して返す。`close` は `File` を解放する ([エフェクトと handler](effects.md) の「組み込みの `IO`」)。
-- 変数の消費は所有権の移動 (move) とし、値を複製するのは `dup` 命令だけにする。`switch` の scrutinee と `unpack` の値は読むだけで、所有権を動かさない。Perceus の所有権の規則とインタプリタの動作を1対1に対応させるためである。呼び出しのフレームには、呼び出しの後で使う変数だけを退避する。Core IR の呼び出しは、その変数の並び (`saved`) を持つ。そのため、フレームはちょうど所有している参照だけを持ち、フレームを解放するときは退避した値を1回ずつ decref すればよい。
+- 変数の消費は所有権の移動 (move) とし、値を複製するのは `dup` 命令だけにする。`switch` の scrutinee、`unpack` の値、`unbox` のオペランドは読むだけで、所有権を動かさない。Perceus の所有権の規則とインタプリタの動作を1対1に対応させるためである。呼び出しのフレームには、呼び出しの後で使う変数だけを退避する。Core IR の呼び出しは、その変数の並び (`saved`) を持つ。そのため、フレームはちょうど所有している参照だけを持ち、フレームを解放するときは退避した値を1回ずつ decref すればよい。
 - `switch` は scrutinee を読むだけで、参照の数を変えない。case を選び、フィールドの値をフィールドの変数に書いてから、行き先の先頭へ進む。ヒープからは何も取り出さず、複製もしない。行き先は `switch` の前の所有をそのまま持って始まり、scrutinee を手放す `decref` か `release` と、フィールドの `dup` は、Perceus が行き先の入口に置く。実行時は、scrutinee が即値のタグならその case に入る。オブジェクトなら、そのタグの case に入り、合う case がなければ `default` に進む。`Int` と `String` は case の値と比べる。`String` の scrutinee も `switch` では手放さず、行き先が手放す。
 - `unpack` は、1つの case の `switch` と同じく値を読むだけで、フィールドの値をフィールドの変数に書く。値のタグが `unpack` のタグと違うとき、フィールドの数が違うときは、内部の誤りである。
 - `release` は、ヒープの `release_fields` で値を手放し、名前を書いた位置のフィールドの参照を残す ([ランタイム](runtime.md) の「ランタイムの API」)。値がオブジェクトでないとき、データでないとき、タグかフィールドの数が違うときは、内部の誤りである。
+- `box` と `unbox` は値をそのまま渡す。`Value` が自分の種類を持つためである。どちらも、値がヒープの物体 (`Value::Obj`) なら、内部の誤り (`internal error: a box of a heap object`、`internal error: an unbox of a heap object`) で止める。R9 は値を作った配置を追わないので、verifier を通った IR でも、`tobj` に入ったヒープの物体を `unbox` しうる。インタプリタは Repr を読まずに、この誤りを見つけられる
+  - 本当の箱は確保しない。box の変数の RC の釣り合いは、所有の検査がすでに静的に確かめている。そのため、`box` と `unbox` は `RunStats` の回数を変えない
 - 機械は配置の表を読まず、`Ctor` のタグだけを使う。`Payload::Data` は配置の ID を持たない。`unpack` のタグと数の検査、case のフィールドの数の検査、`release` の `WrongLayout` は、内部の誤りの見張りとして残す。R9 は値を作った配置を追わないので、verifier を通った IR でもこれらの誤りは起きうる (上の「構造の規則」の R9)
 - 再帰の深さは Rust のスタックで制限されない。継続をヒープ上のフレームで表すためである ([コンパイラの構成](../implementation/architecture.md) の「継続のフレーム」)。
 - 名前付きのレコードの実行時の表し方は、S4 で決める。タプルはコンストラクタが1つの `data` と同じオブジェクトで、位置で分解する ([直積型とレコード](records.md))。
@@ -271,7 +427,7 @@ R1 と R2 から、ブロックの番号の順は辺の向きに沿った順 (�
 - 解放済みのオブジェクトへのアクセスと、`debug_heap` が有効なときのリーク ([ランタイム](runtime.md))
 - `Fs.open` が開けないとき (``cannot open `<path>`: <reason>``)、`Fs.read_all` が読めないとき (``cannot read `<path>`: <reason>``)、読んだ内容が UTF-8 でないとき (``` `<path>` is not valid UTF-8 ```)。`reason` は `not found`、`permission denied`、`I/O error` のどれかである
 
-実行時エラーは、誤りの種類 (`fault`)、そのとき実行していた Core IR の関数の名前 (`function`)、省略できる位置 (`at`) を持つ。位置を持つ `extern` 命令の実行が起こした誤り (その中のヒープの誤りを含む) にだけ、その命令の位置を付ける。引数の読み出し、`dup`、`decref`、`release`、`switch`、`unpack` の誤りと、位置を持たない `extern` 命令の誤りには付けない。
+実行時エラーは、誤りの種類 (`fault`)、そのとき実行していた Core IR の関数の名前 (`function`)、省略できる位置 (`at`) を持つ。位置を持つ `extern` 命令の実行が起こした誤り (その中のヒープの誤りを含む) にだけ、その命令の位置を付ける。引数の読み出し、`dup`、`decref`、`release`、`switch`、`unpack`、`box`、`unbox` の誤りと、位置を持たない `extern` 命令の誤りには付けない。
 
 位置があるときは、次のように表示する。`path` は `Program.files` の表示用のパスである。
 

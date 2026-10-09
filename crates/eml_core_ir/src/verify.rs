@@ -106,7 +106,7 @@ enum NonUniform {
 }
 
 /// 一様な関数は、引数と `ret` がすべて `tobj` と互換である。`apply` と handler が、関数ごとの Repr を知らずに呼ぶため
-/// である (docs/spec/core-ir.md の「値の表現」)。
+/// である (docs/spec/core-ir.md の「位置の規則」)。
 fn non_uniform(function: &CoreFn) -> Option<NonUniform> {
     function
         .params()
@@ -763,7 +763,7 @@ impl<'a> Checker<'a> {
     }
 
     /// 範囲の段と所有の段で、`&g` の g が一様かを確かめる。IR のどこにある `&g` も関数の値なので
-    /// (docs/spec/core-ir.md の「値の表現」)、互換の位置のほかに、extern の引数、`drop`、case のない `switch` の
+    /// (docs/spec/core-ir.md の「位置の規則」)、互換の位置のほかに、extern の引数、`drop`、case のない `switch` の
     /// scrutinee でも呼ぶ。
     fn fn_atom(&self, atom: Atom) -> Result<(), String> {
         match atom {
@@ -777,7 +777,7 @@ impl<'a> Checker<'a> {
         self.level != Level::Translated
     }
 
-    /// 関数の値として使う関数 (`&g`、`closure g`) は一様である (docs/spec/core-ir.md の「値の表現」)。番号が表にない
+    /// 関数の値として使う関数 (`&g`、`closure g`) は一様である (docs/spec/core-ir.md の「位置の規則」)。番号が表にない
     /// 関数は、`consume` と `function_at` が断る。
     fn function_value(&self, target: FnIdx) -> Result<(), String> {
         let Some(&Some(reason)) = self.tables.non_uniform.get(target.0 as usize) else {
@@ -1515,7 +1515,8 @@ impl<'a> Checker<'a> {
                         info.name, operation.name
                     ));
                 }
-                // `never` の操作の `perform` は値を返さないので、結果は位置でない (docs/spec/core-ir.md の「値の表現」)
+                // `never` の操作の `perform` は値を返さないので、結果は位置でない
+                // (docs/spec/core-ir.md の「位置の規則」)
                 resumable.then_some(Repr::TObj)
             }
             Call::Apply(_, _)

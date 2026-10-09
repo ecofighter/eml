@@ -64,7 +64,7 @@ eml/
 eml_cli          check / run コマンド。パイプラインを組む唯一の場所 (Session)。テストから呼べる lib API を公開する
 eml_interp       Core IR を CEK 機械で実行する
 eml_runtime      オブジェクトのモデル、ヒープ、参照カウント、debug_heap の検査、OutputSink
-eml_core_ir      型付き HIR → Core IR (基本ブロックの列)。縮約と dup/decref/release の挿入のパス
+eml_core_ir      型付き HIR → Core IR (基本ブロックの列)。box/unbox の挿入、縮約、dup/decref/release の挿入のパス
 eml_types        Kind・型・row の推論、線形性・多重度の検査、match の網羅性検査
 eml_hir          モジュールの読み込み、CST → HIR の変換、名前解決、脱糖
 eml_syntax       SyntaxKind、lexer、レイアウト段、イベント方式のパーサ、rowan、型付き AST ラッパ
@@ -203,24 +203,26 @@ HIR への変換では、名前解決に加えて、名前の重複と未定義�
 
 - Core IR の構成、評価と所有権の意味、パスの境界の不変条件は [Core IR とインタプリタ](../spec/core-ir.md) が、ヒープと RC は [ランタイム](../spec/runtime.md) が定める。translate の組み立てと継続のフレームは、下の「translate の組み立て」と「継続のフレーム」に書く。値とフレームに `Rc` と `RefCell` を使わない規約は、core-ir.md の「実行時の規約」にある
 - Core IR の関数は、前向きの辺だけを持つ基本ブロックの列 (`CoreFn.blocks`) である。命令の位置はブロックの番号 (`BlockId`) と文の番号で表せるので、式のアリーナ、式ごとの ID、join point の索引は持たない。パスの間で古くなる情報 (生存集合など) も IR に書かず、要るパスがその場で求める
-- パスの順番は `pipeline.rs` だけが持つ。verifier はデバッグビルドだけでかけ、translate と縮約の後は範囲の段 (`verify_scopes`)、Perceus の後は所有の段 (`verify`) を通す
+- パスの順番は `pipeline.rs` だけが持つ。translate、box の挿入、縮約、Perceus の順である (`Pass::{Translate, Boxing, Contract, Perceus}`)。verifier はデバッグビルドだけでかけ、translate の後は変換の段 (`verify_translated`)、box の挿入と縮約の後は範囲の段 (`verify_scopes`)、Perceus の後は所有の段 (`verify`) を通す。境界の検査は範囲の段から走る。関数の値の対象が一様かは、`verify_at` が関数ごとに1回求めた表 (`Tables::non_uniform`) を引く
+- box の挿入 (`boxing.rs`) は、分類、T3、一様化と `f$boxed`、変換を、プログラム全体に1回ずつ行う ([Core IR とインタプリタ](../spec/core-ir.md) の「box の挿入」)。T3 は逆の表と作業の列を使い、関数の数と末尾の辺の数に比例する時間で済ませる。変換 (`Converter`) は関数ごとにブロックを番号の順に見て、case のフィールドの受け直しを行き先のブロックの先頭に置く。覗き穴の表 (`unboxed_from`、`boxed_from`) は、パスが作った定義からだけ作る。`never` の `perform` の束縛は、`Converter` と verifier が関数ごとに変数の番号の表で覚え、その使いを変換せず、互換の位置で比べない。箱を要するスカラーは `Repr::needs_box` (`Repr::BOXED_SCALARS`)、互換は `Repr::compatible` の1か所で決め、box の挿入、縮約、verifier が同じ関数を使う
 - 変換 (`translate/`) は入口の関数から届く関数だけを変換する。`mod.rs` は式の値の渡し先 (出口) と条件の分かれ方、`builder.rs` はブロックの組み立て、`expr.rs` は式ごとの変換、`pattern.rs` は決定木と case-of-case、`program.rs` は関数の表と包む関数とデータの配置の表、`types.rs` は型から決まる Repr と、`==` と `!=` から比べ方ごとの extern の行を選ぶ関数を持つ。handler の節の `k` は、節ごとに HIR で使い方を調べ、2つの形のどちらかに変換する。使用がすべて引数をそろえた直接の呼び出しか `drop k` なら、クロージャを作らず、呼び出しを生の継続への `Call::Resume` にする (直接の形)。`k` を関数の値として使うなら、節の入口で生の継続を `cont$` か `cont$state` のクロージャに包んで `k` とし、呼び出しを `Call::Apply` にする (包む形)。`cont$` と `cont$state` は、使うときだけ1つずつ作る ([Core IR とインタプリタ](../spec/core-ir.md))
 - 既知の呼ばれる式への呼び出しは、種類 (`Callee`) ごとに、引数の数、足りないときの包む関数、ちょうどのときの命令だけを決める。足りない・ちょうど・余るの場合分けは `saturate` の1か所で行う
 - 変数の Repr は、型から `types.rs` の `repr` の1か所で決める。extern の型の Repr は、`eml_extern` の型の行の `repr` を読む。`repr` は `eml_core_ir::type_repr` として公開し、extern の表との結び付けのテストが使う ([テスト戦略](testing.md))。`Repr` は extern の行も持つので、依存のない `eml_extern` に置き、`eml_core_ir` が再公開する。RC の対象 (`Repr::is_rc`) は `obj` と `tobj` である。extern の名前と実装の対応を置くのは `eml_extern` の表だけである。表の行がすべて `std/` にちょうど1回宣言されていることは、`eml_hir` の結合テストが確かめる。本体のある標準ライブラリの関数は表に持たず、普通の関数として変換する。extern の呼び出しは `Rhs::Extern` になり、引数の数は表の行の `params` の長さである
 - データの配置の表 (`Program.layouts`) は、`program.rs` の `ProgramBuilder` が組む。`con`、タグの `switch`、`unpack`、`release` を出す所で、コンストラクタか型から `data_layout` (data の型ごと) か `tuple_layout` (タプルの大きさごと) を引き、最初に引いたときに表に入れる。値の型からは引かない。フィールドの Repr はコンストラクタのスキームのフィールドの型から決め、配置の Repr は型の Repr と同じ `data_repr` で決める ([Core IR とインタプリタ](../spec/core-ir.md) の「データの配置」)
 - 変換は、渡された入口の関数を `()` で呼ぶ関数 `entry$<名前>` を足す。入口の関数を引数で受け取るのは、REPL で `main` の代わりにその回の式から作った関数を渡せるようにするためである
+- translate は、持ち上げた関数 (ラムダ、handle の本体と節) と補助の関数 (`op$`、`con$`、`$externN`、`cont$`、`cont$state`) に内部の印 (`CoreFn::internal`) を付ける。トップレベルの関数と入口の関数には付けない。box の挿入は、この印でその場で一様にするか `f$boxed` を足すかを決める ([Core IR とインタプリタ](../spec/core-ir.md) の「位置の規則」)
 - 持ち上げた関数の名前は、ラムダが `外側の名前$lambdaN`、handle の本体と節が `外側の名前$handleN` (と `$操作名`、`$return`)、値として使う extern を包む関数が `外側の名前$externN`、コンストラクタと操作を包む関数が `con$` と `op$`、継続を包む関数が `cont$` (状態のない handler 用) と `cont$state` (状態のある handler 用) である。入口以外のモジュールの関数、`con$` と `op$` の後ろの名前、エフェクトの表の名前には、`モジュール名.` を付ける (`Report.Csv.parse`、`con$Report.Csv.Row`)。ラムダ、handle、extern を包む関数は外側の名前を前に付けるので、同じく修飾される ([Core IR とインタプリタ](../spec/core-ir.md))。N は、本体を変換する前に HIR を1回たどって、式の ID の順に振る (`numbering`)。変換の順で番号が変わらないようにするためである。Core IR のエフェクトの番号は `eml_hir::Program::effects` の順から、extern のエフェクトを飛ばして数える。この数え方は `effect_index` と `effect_table` が同じ補助関数を使う。`IO` は Prelude の最初のエフェクトなので、表からだけ外すと、ユーザーのエフェクトの番号がすべて1つずれるためである
 - extern を値として使うときは、参照する場所ごとに包む関数を作り、その `extern` 命令に参照した場所の位置を持たせる。extern ごとに1つの共有の包みにすると、実行時エラーが包む関数の中を指し、どこで使った extern かが分からなくなるためである
 - `lower` は `SourceFiles` を受け取り、extern の呼び出しの位置 (`Loc`) を `SourceFiles::line_col` で行と列にする。`Program.files` には、位置に使った表示用のパスを使った順に入れる。`eml_core_ir` が `eml_diagnostics` に依存するのはこのためで、診断は出さない。`line_col` は、`SourceFiles::add` が作った行の先頭の表を二分探索し、その行の中だけ文字を数える
 - 文と終端の値と行き先をたどる処理 (生存解析、Perceus、verifier、縮約、`pretty`、インタプリタ) は、`Stmt::for_each_atom`、`Term::successors` などの visitor を通すか、`..` を使わずに欄をすべて名前で受ける `match` で分解する。欄を IR に足したときに、たどる処理のすべてがコンパイルエラーになるようにするため
-- アトムの使い方は「消費」と「読む」に分かれる ([Core IR とインタプリタ](../spec/core-ir.md))。`for_each_atom` は両方を返し、`Stmt::for_each_consumed` と `Term::for_each_consumed` は消費だけを返す (`unpack` の値と `switch` の scrutinee を除く)。生存解析は前者を使い、Perceus は後者で `dup` の数を決める。verifier は、読む使いを `Unpack`、`Dup`、`Switch` の腕で直接確かめる
+- アトムの使い方は「消費」と「読む」に分かれる ([Core IR とインタプリタ](../spec/core-ir.md))。`for_each_atom` は両方を返し、`Rhs::for_each_consumed`、`Stmt::for_each_consumed`、`Term::for_each_consumed` は消費だけを返す (`unpack` の値、`switch` の scrutinee、`unbox` のオペランドを除く)。生存解析と縮約は前者を使い、Perceus は後者で `dup` の数を決める。verifier は、読む使いを `Unpack`、`Dup`、`Switch`、`Unbox` の腕で直接確かめる
 - パス、verifier、`pretty`、`parse`、インタプリタは、ブロックと文の並びをループでたどり、IR の大きさに比例して再帰しない。生存解析は、ブロックを後ろからたどる1回のループで、ブロックごとの入口の生存集合を側の表 (`liveness::live_in`) に返す。辺がすべて前向きなので、不動点の計算は要らない
-- 縮約 (`contract.rs`) は、使われない純粋な `let` を消し、消したブロックの末尾にだけ末尾呼び出しの規則をもう一度当てるパスである。S3b-1 までの `simplify` の書き換え (合流の畳み込み、値が分かっているコンストラクタへの `switch`、case-of-case、末尾呼び出し) は、translate が組み立てるときに行う。`simplify` は書き換えのたびに枝の部分木を置き換えたので、長い `else if` の連鎖で2乗の時間がかかり、続きを `switch` の枝の中へ移して入れ子を深くした
+- 縮約 (`contract.rs`) は、使われない純粋な `let` を消し、その後ですべてのブロックに末尾呼び出しの規則を当てるパスである。末尾呼び出しを作るのは縮約だけで、呼び出しの結果が関数の `ret` と互換なときだけ `tail` にする。S3b-1 までの `simplify` の書き換え (合流の畳み込み、値が分かっているコンストラクタへの `switch`、case-of-case、末尾呼び出し) は、translate が組み立てるときに行う。`simplify` は書き換えのたびに枝の部分木を置き換えたので、長い `else if` の連鎖で2乗の時間がかかり、続きを `switch` の枝の中へ移して入れ子を深くした
 - インタプリタの環境 (`Env`) のスロットは値だけを持ち、読み出しはスロットを書き換えない。参照の所有は Core IR の命令が表し、verifier が釣り合いを確かめる。`Payload` は `Clone` を導出しないので、`ObjRef` を `dup` せずに複製できない
 - `eml_interp` は関心ごとにファイル (`machine.rs`、`runtime.rs`、`effects.rs`、`externs.rs`、`error.rs`) を分ける。`machine.rs` は IR の形に依る部分 (制御 (関数、ブロック、文の番号)、`jump`、`switch`、`unpack`、`release`、関数への入り方、再開の番地の作り方と読み方) だけを持つ。IR の形に依らない部分 (ヒープ、継続、handler の連鎖、不死のリテラル、関数値の適用、戻り、extern、エフェクト) は `runtime.rs` の `Runtime` が持ち、呼び出しと戻りの行き先を `Transfer` で機械に返す。将来のバイトコード VM が `Runtime` を使い回せるようにするためである。`externs.rs` の `call_extern` が `Extern` のすべての行を、既定の腕のない `match` で実行する (行を足して実装を忘れるとコンパイルが通らない)
 - 戻りのフレーム (`Frame::Return`) は、関数の番号、再開の番地 (`resume: u64`)、退避した値 (`saved`)、次のフレームを持つ。再開の番地と `saved` の鍵 (スロットの番号) の意味は実行する側が決め、`eml_runtime` は中身を解釈しない。インタプリタは、呼び出しの文のブロックの番号を上位の32ビットに、文の番号を下位の32ビットに入れる。戻ったら、その文が `Rhs::Call` の `let` であることを確かめ、その変数に結果を入れて次の文から続ける。番地を `u64` にしたのは、将来のバイトコード VM が自分の `pc` をそのまま入れられるようにするためである
 - 機械は、位置を持つ `Rhs::Extern` の `call_extern` が返した誤りにだけ、`Program.files` のパスと行と列 (`SourceLocation`) を付ける ([Core IR とインタプリタ](../spec/core-ir.md) の「実行時エラー」)
-- `RunStats` の `handler_visits` は `find_handler` が数え、ほかの3つはヒープが数える (`Heap::string_bytes_written`、`Heap::rc_increments`、`Heap::rc_decrements`)。文字列の物体の中身を書くのは、ヒープの確保と `append_str` だけで、ヒープはそこで書いた長さを足す。`alloc_immortal` が作る不死のリテラルは数えない。参照の数を書き換えるのは `dup`、`decref`、`acquire_immortal`、`release_fields` だけで、ヒープはそこで数える
+- `RunStats` の `handler_visits` は `find_handler` が数え、ほかの4つはヒープが数える (`Heap::string_bytes_written`、`Heap::rc_increments`、`Heap::rc_decrements`、`Heap::peak_objects`)。文字列の物体の中身を書くのは、ヒープの確保と `append_str` だけで、ヒープはそこで書いた長さを足す。`alloc_immortal` が作る不死のリテラルは数えない。参照の数を書き換えるのは `dup`、`decref`、`acquire_immortal`、`release_fields` だけで、ヒープはそこで数える。`peak_objects` はスロットの数である。`insert` は空いたスロットを先に使うので、スロットの数が同時に生きていた物体の数の最大になる。インタプリタの `box` と `unbox` は値をそのまま渡すので、どの回数も変えない
 
 ### translate の組み立て
 
@@ -230,7 +232,7 @@ HIR への変換では、名前解決に加えて、名前の重複と未定義�
 - 値は出現 (`Occ`) で表す。出現は、値のアトムか、タグと出現のフィールドを持つ既知のコンストラクタである。タプルはタグ 0 のコンストラクタである。`let x = con ..` で束縛した変数は、`FnLowering.cons` が変数から引数への対応を覚える。変数は1回だけ定義され、定義は使う位置を支配するので、この対応はどこから引いても正しい。決定木で頭が既知の出現に当たれば、その場で case を選ぶ。値全体を束縛する枝では、その葉でだけ `con` を作る。使われない `con` は縮約が消す
 - `match`、分解する `let`、分解する引数は、`decide` が決定木 (`Switch`、`Unpack`、`Leaf`) を作り、それを出してから、枝を枝の順に変換する。`Unpack` は値が `obj` の変数のときだけ使う。R8 がほかの Repr の `unpack` を拒み、R9 が、コンストラクタが1つで Repr が `obj` の配置にだけ `unpack` を許すためである。フィールドを持つコンストラクタが1つの型の値は、いつも `obj` の変数である
 - case-of-case: 出口の値で、決定木が未知の値を調べずに1つの枝に行き着けば、その枝のラベルへフィールドのアトムを引数にして `jump` し、コンストラクタを作らない。行き着かない出口は集めておき、scrutinee を変換し終えてから決める。0 個なら `switch` を出さない。1 個ならそのブロックで決定木を出す (タプルのリテラルも作らない)。2 個以上なら、各出口で値を作って1つの合流のブロックへ `jump` し、そこで決定木を出す。枝の本体は文脈の出口で変換するので、入れ子の case-of-case もそのまま組み合わさる。呼び出しの結果と translate の後に現れる case-of-case は扱わない ([ロードマップ](../future/roadmap.md) の「処理系」の jump threading)
-- 末尾呼び出しは、`finish` の最後にブロックの形から作り、構文の規則には頼らない。文がなく、`return p` だけを持ち、引数が `p` だけのブロックがあれば、そこへの `jump b(a)` をすべて `return a` にしてそのブロックを消す。番号の大きいブロックから処理するので、連鎖も1回でたたまれる。そのうえで、`let x = <呼び出し>` と `return x` を `tail` にする。この規則 (`tail_call`) は縮約と共有する
+- `finish` は、最後にブロックの形から `return` への転送を行い、構文の規則には頼らない。文がなく、`return p` だけを持ち、引数が `p` だけのブロックがあれば、そこへの `jump b(a)` をすべて `return a` にしてそのブロックを消す。番号の大きいブロックから処理するので、連鎖も1回でたたまれる。`finish` は末尾呼び出しを作らず、`let x = <呼び出し>` と `return x` を残す。末尾呼び出しは、box の挿入の後に縮約が作る
 
 ### 継続のフレーム
 
@@ -271,7 +273,7 @@ HIR への変換では、名前解決に加えて、名前の重複と未定義�
 - `Session::def_map() -> DefMapped`、`Session::lower() -> Lowered`、`Session::check() -> Checked` (feature `types`)。結果は段階の出力 (`DefMap`、HIR の `Program`、`TypedProgram`) と診断を持つ。診断は読み込みの段からその段階までのすべてで、`sort_diagnostics` で並べて返す。各段階は診断の順を約束しない。`eml check` は `check().diagnostics` を表示する
 - `Session::compile() -> Compiled` (feature `core`)。`Compiled` は、検査で出た診断 (警告を含む) と、エラーがなければ Core IR の `Program` (`Option<Program>`) を持つ。`main` がないこと (E2003) は `compile` だけが検査する ([型と Kind](../spec/types.md) の「推論」)
 - テストのための口が2つある。`Session::load_with_std(std, entry_path, entry_text, source)` は標準ライブラリを `(ファイル名, 本文)` の並びに差し替えて読み、`Session::compile_until(last: Pass) -> Compiled` は Core IR を `last` のパスの直後で止める。`eml_hir` の `load` / `load_with_std` と、`eml_core_ir` の `lower` / `lower_until` の組に合わせて置く
-- `execute(&Program, &RunConfig, stdout: OutputSink) -> Result<RunStats, RuntimeError>` (feature `run`)。`RunStats` は実行の仕事の回数で、CLI は使わない。テストが2乗の時間にならないことを確かめるのに使う
+- `execute(&Program, &RunConfig, stdout: OutputSink) -> Result<RunStats, RuntimeError>` (feature `run`)。`RunStats` は実行の仕事の回数と、同時に生きていたヒープの物体の数の最大で、CLI は使わない。テストが2乗の時間にならないことと、ループがフレームを積まないことを確かめるのに使う
 
 検査と実行を別の関数に分けるのは、呼び出し側が実行の前に診断を表示できるようにするためである。CLI と UI テストは、`compile` の診断を表示してから `execute` を呼ぶ。
 

@@ -1,5 +1,6 @@
-//! box の挿入のパス (docs/spec/core-ir.md の「パス」)。ほとんどのテストはソースから `Pass::Boxing` までを通し、縮約の
-//! 前の IR を見る。末尾呼び出しを確かめるテストは `Pass::Contract` まで通す。T3 の時間は IR のテキストで確かめる。
+//! box の挿入のパス (docs/spec/core-ir.md の「box の挿入」)。ほとんどのテストはソースから `Pass::Boxing` までを
+//! 通し、縮約の前の IR を見る。末尾呼び出しを確かめるテストは `Pass::Contract` まで通す。T3 の時間は IR のテキストで
+//! 確かめる。
 
 use crate::common::{core_text, function};
 use eml_core_ir::{Pass, Repr, boxing, parse, pretty, verify_scopes, verify_translated};

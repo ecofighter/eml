@@ -106,7 +106,7 @@ crate の並びと「各段階は純粋な関数」という規律は変えな�
 | `eml_syntax` | `extern`、名前的なレコード、`deriving`、`=>` の制約、ローカルの再帰関数、リストのリテラル、補間、複数行と raw の文字列の文法を足す。`resume` を削除する |
 | `eml_hir` | `ItemTree` を `Send` にする。表示用のフィールドを除く。名前解決の重複した enum をまとめ、`Reporter` を入れる。`std/` ツリーを読む複数の根のローダーにする。`extern` の項目を足す |
 | `eml_types` | 暗黙の `mask` の side table、`IO` の重なりをまとめる規則、普通の関数としての `k`、`Eq` / `Ord` / `Show` の制約の検査と証拠の解決を入れる。段2の Kind 推論は残し、実装を整理する |
-| `eml_core_ir` | translate を、型に依存する唯一の段にする (特殊化、Repr、`mask` の挿入、レコードの配置、末尾呼び出し)。Core IR v2 → 縮約パス → Perceus → verifier の順に流す。テキスト形式をテスト用に作り直す |
+| `eml_core_ir` | translate を、型に依存する唯一の段にする (特殊化、Repr、`mask` の挿入、レコードの配置)。translate、box の挿入、縮約パス (末尾呼び出しを作る)、Perceus の順に流し、各パスの後に verifier をかける。テキスト形式をテスト用に作り直す |
 | `eml_runtime` | 安全なアリーナを、インタプリタ用の検査付きヒープとして残す。形だけのマルチコア対策を削除する。不死のオブジェクトと handler の連鎖を足す |
 | `eml_interp` | Core IR v2 を実行するシングルスレッドの CEK にする。extern の表の Rust の実装を持つ |
 | `eml_cli` | パイプラインの駆動を1本にし、`eml_test_support` からも使う。`eml file.em args...` で直接起動できるようにする |
@@ -130,7 +130,7 @@ crate の並びと「各段階は純粋な関数」という規律は変えな�
 | S2a 継続を関数にする | 普通の関数としての `k`、`resume` キーワードの廃止 | S1 | `Cont`、状態の欄、E2007、E1011、持ち越し規則の `resume` の特別扱いが消える。UI テストは `resume` を `k` の呼び出しに書き換えたうえで出力が変わらない |
 | S2b 組み込みを extern にする | `extern`、ラベルだけの `IO`、extern の表、`std/` ツリーのローダー | S1 | `Rhs::Io`、`IoOp`、`INTRINSICS` が消え、E1009 は extern のエフェクトを handle したときの診断に変わる。UI テストの出力が変わらない |
 | S3a フロントエンドの土台 | `Send` な `ItemTree`、HIR の表示用フィールドの除去、名前解決の整理と `Reporter`、パイプラインの駆動の1本化 | S2a、S2b | `assert_send::<Session>()` が通る。UI テストの出力が変わらない |
-| S3b バックエンドの土台 | Core IR v2 (前向きの辺だけの基本ブロックの列、Repr と box/unbox、消費しない `Switch`、extern の表、位置情報、translate で作る末尾呼び出し)、simplify を縮約パスに置き換える、テキスト形式の作り直し、handler の連鎖、一意な文字列のその場の連結、不死のリテラル、ランタイムの形だけの対策の削除、runtime.md と multicore.md の整理 | S2a、S2b | UI テストの出力が変わらない (実行時エラーに位置が付く run-fail のスナップショットは除く)。エフェクトを使う再帰と文字列の連結が2乗の時間にならないことをテストで確かめる |
+| S3b バックエンドの土台 | Core IR v2 (前向きの辺だけの基本ブロックの列、Repr と box/unbox、消費しない `Switch`、extern の表、位置情報、縮約で作る末尾呼び出し)、simplify を縮約パスに置き換える、テキスト形式の作り直し、handler の連鎖、一意な文字列のその場の連結、不死のリテラル、ランタイムの形だけの対策の削除、runtime.md と multicore.md の整理 | S2a、S2b | UI テストの出力が変わらない (実行時エラーに位置が付く run-fail のスナップショットは除く)。エフェクトを使う再帰と文字列の連結が2乗の時間にならないことをテストで確かめる |
 | S4 スクリプトの MVP | リスト、`Option`、`Result`、補間と文字列の形、名前的なレコード、`Eq` / `Ord` / `Show` と `deriving` と特殊化、ローカルの再帰関数、`try_io` と `exit`、extern の標準ライブラリ (`String`、`Env`、`Stdin`、`Fs`、`Proc.run`、`eprintln`)、`eml file.em args...` | S3a、S3b | wc、grep、ログの集計、CSV の変換、デプロイ手順の5本のスクリプトが UI テストとして動く |
 | S5 実例による判断 | 上の「S5 に回すもの」 | S4 | 各項目を採るか採らないか決め、採ったものを実装する |
 

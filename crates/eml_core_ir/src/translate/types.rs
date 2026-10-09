@@ -6,9 +6,9 @@ use eml_types::{Equality, Type};
 
 use crate::{Repr, VarInfo, data_repr};
 
-/// 型の Repr (docs/spec/core-ir.md)。総称的な位置の束縛も、S3b-2c-2 でその規則を決めるまでは具体化した型から
-/// 決める。関数の値と型変数の値は、即値 (捕まえた変数のない関数、引数のないコンストラクタ) にもヒープの物体にも
-/// なるので `tobj` にする。
+/// 型の Repr (docs/spec/core-ir.md の「値の表現」)。総称的な位置の束縛も具体化した型から決める。値を受ける位置の
+/// Repr と違えば、box の挿入が変換を入れる (docs/spec/core-ir.md の「位置の規則」)。関数の値と型変数の値は、即値
+/// (捕まえた変数のない関数、引数のないコンストラクタ) にもヒープの物体にもなるので `tobj` にする。
 pub fn repr(ty: &Type, hir: &HirProgram) -> Repr {
     match ty {
         Type::Con { id, args: _ } => match &hir[*id].kind {
