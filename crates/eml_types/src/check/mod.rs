@@ -217,7 +217,16 @@ fn check_instances(
                             names.class(superclass)
                         ),
                     )
-                    .with_help(format!("add `{wanted}` to the context of this instance")),
+                    // 導出した instance の文脈は `deriving` が決めるので、書き足す場所がない
+                    // (docs/spec/declarations.md の「`deriving`」)
+                    .with_help(match instance.origin {
+                        InstanceOrigin::Written => {
+                            format!("add `{wanted}` to the context of this instance")
+                        }
+                        InstanceOrigin::Derived(_) => format!(
+                            "a derived instance cannot have `{wanted}` in its context; write the instance by hand"
+                        ),
+                    }),
                 );
             }
         }
@@ -412,7 +421,11 @@ pub(crate) fn check_body(
     checker.solve_constraints();
     let typing = checker.typing;
     let instances = checker.instances;
-    let reliable = usage::reliable(body, diagnostics.is_empty());
+    // 頭が線形な instance (E2010) のメソッドは、頭の値を `Unr` とみなして書いた本体なので、線形性の診断を重ねない
+    // (docs/spec/types.md の「`Unr` のクラス」)
+    let linear_head = matches!(function.kind, FunctionKind::InstanceMethod(instance, _)
+        if context.data_kinds[program[instance].head].lin);
+    let reliable = usage::reliable(body, diagnostics.is_empty()) && !linear_head;
     usage::constrain(file, body, &typing, &mut table, types, reliable);
     carry::constrain(program, file, body, &typing, &mut table, reliable);
     // 式、局所変数、パターン、具体化の型は表の同じ節点を共有するので、1つの `Exporter` で書き出し、各節点を1回だけ

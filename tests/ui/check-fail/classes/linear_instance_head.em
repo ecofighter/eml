@@ -1,12 +1,13 @@
--- E2010: a hand-written instance for a type with a linear field. The method has a default, so the
--- instance has no body that would misuse the field.
+-- E2010: a hand-written instance for a type with a linear field. Only E2010 is reported: the body
+-- of `size` drops the linear value, but the bodies of such an instance are not checked for
+-- linearity.
 class Size a where
   size : a -> Int
-  size _ = 1
 
 data Handle = | Handle Fs.File
 
-instance Size Handle
+instance Size Handle where
+  size _ = 0
 
 main : Unit -> <IO> Unit
 main () = ()

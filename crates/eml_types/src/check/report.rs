@@ -1,5 +1,5 @@
 use eml_diagnostics::{Diagnostic, FileId, Label, SourceFiles, TextEdit, TextRange, TextSize};
-use eml_hir::{Body, ExprId, ExprKind, OperationId, PatId, Program, Res};
+use eml_hir::{Body, ExprId, ExprKind, FunctionKind, OperationId, PatId, Program, Res};
 
 use crate::codes;
 use crate::kind::{
@@ -249,19 +249,34 @@ impl BodyCheck<'_, '_> {
         let diagnostic = match &self.ambient_source {
             AmbientSource::Signature => {
                 let function = &self.function.name;
-                // 引数のない関数は矢印を持たず、row を足す先がない。`()` を取る関数にする規則を案内する (docs/spec/declarations.md)
-                let help = if self.body.params.is_empty() {
-                    format!(
+                let method = match self.function.kind {
+                    FunctionKind::InstanceMethod(_, method)
+                    | FunctionKind::DefaultMethod(method) => Some(&self.program[method]),
+                    FunctionKind::Defined | FunctionKind::Extern(_) => None,
+                };
+                let help = match method {
+                    // メソッドのシグネチャはクラスが決めるので、`()` を取る関数に変えられない。引数を書けば、本体の
+                    // row がシグネチャの矢印の row になる。引数のないメソッドは、どう定義してもエフェクトを起こせない
+                    Some(method) if self.body.params.is_empty() => {
+                        (method.signature.arity() > 0).then(|| {
+                            format!(
+                                "define `{}` with its parameters, so that it performs {quoted} when it is called",
+                                method.name
+                            )
+                        })
+                    }
+                    // 引数のない関数は矢印を持たず、row を足す先がない。`()` を取る関数にする規則を案内する
+                    // (docs/spec/declarations.md)
+                    None if self.body.params.is_empty() => Some(format!(
                         "`{function}` takes no parameters, so it cannot perform {quoted}; make it a function taking `()`, as in `{function} : Unit -> <{}> ...` with `{function} () = ...`",
                         missing.join(", ")
-                    )
-                } else {
-                    format!(
+                    )),
+                    _ => Some(format!(
                         "add {quoted} to the row of the signature of `{function}`, as in `-> <{}> ...`",
                         missing.join(", ")
-                    )
+                    )),
                 };
-                Diagnostic::error(
+                let diagnostic = Diagnostic::error(
                     codes::EFFECT_NOT_IN_ROW,
                     format!(
                         "{name} performs {quoted}, which the signature of `{function}` does not allow"
@@ -272,8 +287,11 @@ impl BodyCheck<'_, '_> {
                     self.file(),
                     self.body_arrow_range(),
                     "the row of this signature does not include it",
-                ))
-                .with_help(help)
+                ));
+                match help {
+                    Some(help) => diagnostic.with_help(help),
+                    None => diagnostic,
+                }
             }
             AmbientSource::Lambda(origin) => {
                 let diagnostic = Diagnostic::error(

@@ -132,6 +132,48 @@ fn a_superclass_instance_context_must_follow_from_the_instance_context() {
 }
 
 #[test]
+fn a_derived_instance_cannot_take_the_superclass_context() {
+    // 導出した instance は文脈を書けないので、文脈に足す help ではなく、手で書く help を出す
+    let text =
+        "data P a = | P Int deriving Ord\n\ninstance Eq a => Eq (P a) where\n  _ == _ = True";
+    let checked = check(text);
+    insta::assert_snapshot!(eml_test_support::full(checked.files(), &checked.diagnostics), @"
+    E2006 1:29 no instance of `Eq` for `a`
+      1:29 the instance of `Eq` for `P a` requires `Eq a`
+      help: a derived instance cannot have `Eq a` in its context; write the instance by hand
+    ");
+}
+
+#[test]
+fn a_method_without_parameters_is_not_told_to_change_its_signature() {
+    // メソッドのシグネチャはクラスが決めるので、`()` を取る関数に変える help は出せない。引数を書いて定義する help にする
+    let text = "class Combine a where\n  combine : a -> a -> <IO> a\n\ninstance Combine Int where\n  combine =\n    println \"x\"\n    fn x y -> x + y";
+    let lines: Vec<String> = check(text)
+        .diagnostics
+        .into_iter()
+        .flat_map(|diagnostic| diagnostic.help)
+        .collect();
+    assert_eq!(
+        lines,
+        ["define `combine` with its parameters, so that it performs `IO` when it is called"]
+    );
+    // 引数を取らないメソッドは、どの定義でもエフェクトを起こせないので help を出さない
+    let text = "class Zero a where\n  zero : a\n\ninstance Zero Int where\n  zero =\n    println \"x\"\n    1";
+    let checked = check(text);
+    let codes: Vec<String> = checked
+        .diagnostics
+        .iter()
+        .map(|diagnostic| diagnostic.code.to_string())
+        .collect();
+    assert_eq!(codes, ["E2002"]);
+    assert!(
+        checked.diagnostics[0].help.is_empty(),
+        "{:?}",
+        checked.diagnostics
+    );
+}
+
+#[test]
 fn instance_and_default_bodies_are_checked_at_their_types() {
     let text = format!(
         "class Size a where\n  size : a -> Int\n  twice : a -> Int\n  twice x = size x ++ \"\"\n\n{COLOR}instance Size Color where\n  size _ = \"one\""
@@ -211,17 +253,9 @@ fn a_linear_head_cannot_have_an_instance() {
     E2010 6:15 `H` is linear, so it cannot have an instance of `Size`
       6:15 a linear type
       note: the methods of a class may copy or drop their arguments, which a linear value forbids
-    E3004 7:8 a linear value cannot be discarded with `_`
-      7:8 this pattern discards it
-      note: linear values, such as files, the continuation of a `once` operation and closures that capture one, must be used exactly once
-      help: bind it to a name and pass the name to `drop`
     E2010 9:15 `File` is linear, so it cannot have an instance of `Size`
       9:15 a linear type
       note: the methods of a class may copy or drop their arguments, which a linear value forbids
-    E3004 10:8 a linear value cannot be discarded with `_`
-      10:8 this pattern discards it
-      note: linear values, such as files, the continuation of a `once` operation and closures that capture one, must be used exactly once
-      help: bind it to a name and pass the name to `drop`
     ");
 }
 

@@ -6,7 +6,7 @@ input_file: tests/ui/check-fail/classes/linear_instance_head.em
 [E2010] Error: `Handle` is linear, so it cannot have an instance of `Size`
    ╭─[ check-fail/classes/linear_instance_head.em:9:15 ]
    │
- 9 │ instance Size Handle
+ 9 │ instance Size Handle where
    │               ───┬──  
    │                  ╰──── a linear type
    │ 
