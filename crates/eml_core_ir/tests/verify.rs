@@ -761,8 +761,10 @@ fn a_returned_value_that_is_not_compatible_is_rejected() {
 #[test]
 fn the_uses_of_a_never_perform_binder_are_not_compared() {
     // `never` の操作の `perform` の束縛の使いには制御が届かないので、互換の位置 (`return` の値、`jump` の実引数、
-    // 呼び出しの引数) で位置と比べない。縮約は、`f` の形をそのまま `tail perform never` にする
+    // 直接の呼び出しの引数、`closure` の引数、`apply` のオペランド、`tobj` のフィールド) で位置と比べない。縮約は、
+    // `f` の形をそのまま `tail perform never` にする
     let text = "\
+layout Option { None, Some(tobj) }
 effect Fail { never fail/1 }
 fn f(s.0: obj) -> tobj {
   let t.1: int = perform never Fail.fail(s.0)
@@ -781,6 +783,24 @@ fn h(s.0: obj) -> tobj {
 }
 fn k(x.0: tobj) -> tobj {
   return x.0
+}
+fn m(s.0: obj) -> tobj {
+  let t.1: int = perform never Fail.fail(s.0)
+  let c.2: tobj = closure n(t.1)
+  return c.2
+}
+fn n(a.0: tobj, b.1: unit) -> tobj {
+  return a.0
+}
+fn p(s.0: obj) -> tobj {
+  let t.1: int = perform never Fail.fail(s.0)
+  let r.2: tobj = apply &k(t.1)
+  return r.2
+}
+fn q(s.0: obj) -> tobj {
+  let t.1: int = perform never Fail.fail(s.0)
+  let d.2: tobj = con Option #1(t.1)
+  return d.2
 }
 ";
     assert_eq!(check_translated(text), Ok(()));
@@ -959,6 +979,24 @@ fn f() -> tobj {{
         rejected_at_both_levels(&value("&h")),
         "`h` is used as a function value, but it returns int in `f`"
     );
+    // 位置に収まるかを先に、一様かを後で確かめる。`&k` は `int` の位置に収まらない
+    assert_eq!(
+        rejected_at_both_levels(&format!("fn f() -> int {{\n  return &k\n}}\n{K}")),
+        "&k is returned from a function that returns int in `f`"
+    );
+    for body in [
+        "  let d.0: tobj = con Option #1(&k)\n  return d.0\n",
+        "  let c.0: tobj = closure g(&k)\n  return c.0\n",
+        "  let c.0: tobj = closure g(())\n  let t.1: tobj = apply c.0(&k)\n  return t.1\n",
+    ] {
+        let text = format!(
+            "{OPTION}fn f() -> tobj {{\n{body}}}\nfn g(a.0: tobj, b.1: unit) -> tobj {{\n  return a.0\n}}\n{K}"
+        );
+        assert_eq!(
+            rejected_at_both_levels(&text),
+            "`k` is used as a function value, but its parameter 0 is int in `f`"
+        );
+    }
 }
 
 #[test]

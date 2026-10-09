@@ -368,7 +368,7 @@ impl Converter<'_> {
                     });
                     return Atom::Var(unboxed);
                 }
-                self.impossible(var, expected)
+                self.impossible(atom, expected)
             }
             Atom::Int(_) if expected == Repr::TObj => {
                 let boxed = self.fresh("b".to_string(), Repr::TObj);
@@ -378,7 +378,8 @@ impl Converter<'_> {
                 });
                 Atom::Var(boxed)
             }
-            Atom::Int(_) | Atom::Unit | Atom::Tag(_) | Atom::Fn(_) => atom,
+            _ if atom.fits_compatible(self.function, expected) => atom,
+            _ => self.impossible(atom, expected),
         }
     }
 
@@ -394,7 +395,7 @@ impl Converter<'_> {
         } else if repr == Repr::TObj && given.needs_box() {
             Rhs::Box
         } else {
-            self.impossible(var, given)
+            self.impossible(Atom::Var(var), given)
         };
         let fresh = self.fresh(self.name(var), given);
         let table = if given == Repr::TObj {
@@ -410,14 +411,25 @@ impl Converter<'_> {
         fresh
     }
 
-    /// 型から起きない変換 (箱を要するスカラーと `obj` の間、違うスカラーどうし、`unit` と箱を要するスカラーの間)。
-    /// translate の出力では起きないので、内部の誤りである。
-    fn impossible(&self, var: VarId, expected: Repr) -> ! {
+    /// 型から起きない変換 (箱を要するスカラーと `obj` の間、違うスカラーどうし、`unit` と箱を要するスカラーの間、
+    /// 位置に収まらない定数)。translate の出力では起きないので、内部の誤りである。
+    fn impossible(&self, atom: Atom, expected: Repr) -> ! {
+        let what = match atom {
+            Atom::Var(var) => format!(
+                "`{}.{}` ({})",
+                self.function.vars[var.0 as usize].name,
+                var.0,
+                self.function.repr(var).name()
+            ),
+            Atom::Int(n) => n.to_string(),
+            Atom::Unit => "()".to_string(),
+            Atom::Tag(tag) => format!("#{tag}"),
+            // 変換の間は関数の並びを可変で借りているので、ほかの関数の名前を引けない。verifier が名前のない関数に使う
+            // 番号の形で書く
+            Atom::Fn(target) => format!("&#{}", target.0),
+        };
         panic!(
-            "internal error: the boxing pass cannot pass `{}.{}` ({}) to {} in `{}`",
-            self.function.vars[var.0 as usize].name,
-            var.0,
-            self.function.repr(var).name(),
+            "internal error: the boxing pass cannot pass {what} to {} in `{}`",
             expected.name(),
             self.function.name
         );

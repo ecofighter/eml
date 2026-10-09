@@ -731,30 +731,13 @@ impl<'a> Checker<'a> {
         })
     }
 
-    /// 変数は Repr が同じとき、定数はその Repr の値になれるときに収まる (R8)。
-    fn fits(&self, atom: Atom, expected: Repr) -> bool {
-        match atom {
-            Atom::Var(var) => self.function.repr(var) == expected,
-            Atom::Int(_) => expected == Repr::Int,
-            Atom::Unit => expected == Repr::Unit,
-            // 引数のないコンストラクタは、`enum` のタグにも、`tobj` の即値にもなる
-            Atom::Tag(_) => matches!(expected, Repr::Enum | Repr::TObj),
-            Atom::Fn(_) => expected == Repr::TObj,
-        }
-    }
-
-    /// 互換の位置 (`jump`、`return`、呼び出しのオペランド、`closure` の引数、`tobj` のフィールド) に収まる値。変数は
-    /// Repr が互換なときに収まる。`never` の操作の `perform` の束縛は、どの位置にも収まる。定数は `fits` に加えて、
-    /// `()` が `tobj` にも収まる。`Int` の定数は `tobj` に収まらないので、box の挿入が `box` する
-    /// (docs/spec/core-ir.md の「値の表現」)。範囲の段と所有の段では、収まった `&g` の g が一様でなければ誤りにする。
+    /// 互換の位置に収まる値。規則は box の挿入と同じ `Atom::fits_compatible` で、`never` の操作の `perform` の束縛は
+    /// それに加えて、どの位置にも収まる。範囲の段と所有の段では、収まった `&g` の g が一様でなければ誤りにする。
     /// 変換の段では見ない。translate は、一様でない g の `&g` を `jump` に渡しうるからである。
     fn passes(&self, atom: Atom, expected: Repr) -> Result<bool, String> {
         let passes = match atom {
-            Atom::Var(var) => {
-                self.never[var.0 as usize] || self.function.repr(var).compatible(expected)
-            }
-            Atom::Unit => expected.compatible(Repr::Unit),
-            Atom::Int(_) | Atom::Tag(_) | Atom::Fn(_) => self.fits(atom, expected),
+            Atom::Var(var) if self.never[var.0 as usize] => true,
+            _ => atom.fits_compatible(self.function, expected),
         };
         if passes {
             self.fn_atom(atom)?;
@@ -934,7 +917,7 @@ impl<'a> Checker<'a> {
     }
 
     fn literal_scrutinee(&self, scrutinee: Atom, repr: Repr, kind: &str) -> Result<(), String> {
-        if self.fits(scrutinee, repr) {
+        if scrutinee.fits(self.function, repr) {
             return Ok(());
         }
         Err(format!(
@@ -1103,9 +1086,9 @@ impl<'a> Checker<'a> {
         Ok(owned.get_mut(&var).expect("checked above"))
     }
 
-    /// 値を読む (`switch` の scrutinee、`unpack` と `unbox` の値、`dup`)。所有の検査の段では、RC の対象の変数は有効でなければ
-    /// ならない。つまり、自分か持ち主が所有を持つ。所有を持つ経路は実際の参照を持つので物体は生きていて、data は
-    /// 書き換わらないので、そこからたどれる物体もすべて生きている (docs/spec/core-ir.md の「verifier」)。
+    /// 値を読む (`switch` の scrutinee、`unpack` と `unbox` の値、`dup`)。所有の検査の段では、RC の対象の変数は
+    /// 有効でなければならない。つまり、自分か持ち主が所有を持つ。所有を持つ経路は実際の参照を持つので物体は生きていて、
+    /// data は書き換わらないので、そこからたどれる物体もすべて生きている (docs/spec/core-ir.md の「verifier」)。
     fn read(&self, owned: &Owned, var: VarId, what: &str) -> Result<(), String> {
         self.visible(var)?;
         if self.level != Level::Ownership
@@ -1311,7 +1294,7 @@ impl<'a> Checker<'a> {
                     ));
                 }
                 for (index, (&arg, &expected)) in args.iter().zip(row.params).enumerate() {
-                    if !self.fits(arg, expected) {
+                    if !arg.fits(self.function, expected) {
                         return Err(format!(
                             "argument {index} of `{}` is {}, but the extern takes {}",
                             row.name,
@@ -1434,7 +1417,7 @@ impl<'a> Checker<'a> {
             let fits = if declared == Repr::TObj {
                 !self.checks_boundaries() || self.passes(arg, declared)?
             } else {
-                self.fits(arg, declared)
+                arg.fits(self.function, declared)
             };
             if !fits {
                 return Err(format!(
@@ -1538,23 +1521,19 @@ impl<'a> Checker<'a> {
     /// 呼び出しのオペランドを左から比べる (R8)。直接の呼び出しは、呼ばれる関数の引数と比べる。ほかの呼び出しの
     /// オペランドは一様な位置なので、`tobj` と比べる。呼び出しの形は確かめてある。
     fn check_operands(&self, call: &Call) -> Result<(), String> {
-        let uniform = |role: &dyn Fn() -> String, atom: Atom| {
-            if self.passes(atom, Repr::TObj)? {
-                return Ok(());
+        // 誤りの文で呼び出しを指す句 (`an apply`) は呼び出しの形で決まるので、比べる処理を形ごとに作る
+        let operands = |taker: &'static str| {
+            move |role: &dyn Fn() -> String, atom: Atom| -> Result<(), String> {
+                if self.passes(atom, Repr::TObj)? {
+                    return Ok(());
+                }
+                Err(format!(
+                    "{} of {} is {}, but {taker} takes tobj",
+                    role(),
+                    self.call_text(call, false),
+                    self.typed_atom_text(atom)
+                ))
             }
-            let taker = match call {
-                Call::Direct(_, _) => unreachable!("a direct call takes the Reprs of its callee"),
-                Call::Apply(_, _) => "an apply",
-                Call::Perform { .. } => "a perform",
-                Call::Resume { .. } => "a resume",
-                Call::Handle { .. } => "a handler",
-            };
-            Err(format!(
-                "{} of {} is {}, but {taker} takes tobj",
-                role(),
-                self.call_text(call, false),
-                self.typed_atom_text(atom)
-            ))
         };
         match call {
             Call::Direct(target, args) => {
@@ -1572,6 +1551,7 @@ impl<'a> Checker<'a> {
                 }
             }
             Call::Apply(callee, args) => {
+                let uniform = operands("an apply");
                 uniform(&|| "the callee".to_string(), *callee)?;
                 for (index, &arg) in args.iter().enumerate() {
                     uniform(&|| format!("argument {index}"), arg)?;
@@ -1583,11 +1563,13 @@ impl<'a> Checker<'a> {
                 resumable: _,
                 args,
             } => {
+                let uniform = operands("a perform");
                 for (index, &arg) in args.iter().enumerate() {
                     uniform(&|| format!("argument {index}"), arg)?;
                 }
             }
             Call::Resume { k, arg, state } => {
+                let uniform = operands("a resume");
                 uniform(&|| "the continuation".to_string(), *k)?;
                 uniform(&|| "the value".to_string(), *arg)?;
                 uniform(&|| "the state".to_string(), *state)?;
@@ -1600,6 +1582,7 @@ impl<'a> Checker<'a> {
                 ret,
             } => {
                 let operations = &self.program.effects[*effect as usize].operations;
+                let uniform = operands("a handler");
                 uniform(&|| "the initial state".to_string(), *init)?;
                 uniform(&|| "the body".to_string(), *body)?;
                 for (operation, &clause) in operations.iter().zip(clauses) {

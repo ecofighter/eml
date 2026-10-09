@@ -545,6 +545,32 @@ pub enum Atom {
     Fn(FnIdx),
 }
 
+impl Atom {
+    /// 変数は Repr が同じとき、定数はその Repr の値になれるときに、`function` の中で `expected` の位置に収まる (R8)。
+    pub(crate) fn fits(self, function: &CoreFn, expected: Repr) -> bool {
+        match self {
+            Atom::Var(var) => function.repr(var) == expected,
+            Atom::Int(_) => expected == Repr::Int,
+            Atom::Unit => expected == Repr::Unit,
+            // 引数のないコンストラクタは、`enum` のタグにも、`tobj` の即値にもなる
+            Atom::Tag(_) => matches!(expected, Repr::Enum | Repr::TObj),
+            Atom::Fn(_) => expected == Repr::TObj,
+        }
+    }
+
+    /// 互換の位置 (`jump`、`return`、呼び出しのオペランド、`closure` の引数、`tobj` のフィールド) に、命令なしで
+    /// 収まる値。変数は Repr が互換なときに収まる。定数は `fits` に加えて、`()` が `tobj` にも収まる。`Int` の定数は
+    /// `tobj` に収まらないので、box の挿入が `box` する (docs/spec/core-ir.md の「値の表現」)。box の挿入と verifier が
+    /// 同じ規則で位置を比べるように、ここで1回だけ定義する。
+    pub(crate) fn fits_compatible(self, function: &CoreFn, expected: Repr) -> bool {
+        match self {
+            Atom::Var(var) => function.repr(var).compatible(expected),
+            Atom::Unit => expected.compatible(Repr::Unit),
+            Atom::Int(_) | Atom::Tag(_) | Atom::Fn(_) => self.fits(function, expected),
+        }
+    }
+}
+
 /// `Bool` のタグ (docs/spec/core-ir.md)。
 pub const FALSE: u32 = 0;
 pub const TRUE: u32 = 1;
