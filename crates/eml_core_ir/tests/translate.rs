@@ -208,13 +208,13 @@ fn each_reference_to_an_extern_as_a_value_gets_its_own_wrapper() {
     // 包む関数は参照の場所ごとに作り、その場所の位置を持つ。実行時エラーが参照した場所を指すようにするためである
     let text = "apply : (a -> <e> b) -> a -> <e> b\napply f x = f x\n\nmain : Unit -> <IO> Unit\nmain () =\n  apply println \"a\"\n  let say = println\n  say \"b\"";
     insta::assert_snapshot!(core_text_with_positions(text), @r#"
-    fn apply(f.0: tobj, x.1: tobj) -> tobj {
-      let t.2: tobj = apply f.0(x.1)
+    fn "apply@[String, Unit]"(f.0: tobj, x.1: obj) -> unit {
+      let t.2: unit = apply f.0(x.1)
       return t.2
     }
     fn main(p.0: unit) -> unit {
       let s.1: obj = const "a"
-      let t.2: unit = call apply(&main$extern0, s.1)
+      let t.2: unit = call "apply@[String, Unit]"(&main$extern0, s.1)
       let s.3: obj = const "b"
       let t.4: unit = apply &main$extern1(s.3)
       return t.4
@@ -926,18 +926,18 @@ fn names_outside_the_entry_are_qualified_with_their_module() {
     // (docs/spec/core-ir.md)。入れ子のモジュールのエフェクトの `perform` と `handle` も読み戻せることを確かめる
     let csv = "pub data Row = | Row Int\n\npub effect Parse where\n  next : Unit -> Int\n\npub parse : Unit -> <Parse> Row\nparse () =\n  let get = next\n  let make = Row\n  make (get ())";
     let main = "import Report.Csv\n\napply : (a -> <e> b) -> a -> <e> b\napply f x = f x\n\nmain : Unit -> <IO> Unit\nmain () =\n  let r =\n    handle Csv.parse () with\n      | Csv.next () k -> k 1\n      | return r -> r\n  let Csv.Row n = r\n  apply println (show_int n)";
-    insta::assert_snapshot!(core_text_files(main, &[("Report/Csv.em", csv)], Pass::Translate), @"
+    insta::assert_snapshot!(core_text_files(main, &[("Report/Csv.em", csv)], Pass::Translate), @r#"
     layout Report.Csv.Row { Row(int) }
     effect Report.Csv.Parse { next/1 }
-    fn apply(f.0: tobj, x.1: tobj) -> tobj {
-      let t.2: tobj = apply f.0(x.1)
+    fn "apply@[String, Unit]"(f.0: tobj, x.1: obj) -> unit {
+      let t.2: unit = apply f.0(x.1)
       return t.2
     }
     fn main(p.0: unit) -> unit {
       let t.1: obj = handle Report.Csv.Parse((), &main$handle0) { next: &main$handle0$next } return &main$handle0$return
       unpack t.1 Report.Csv.Row #0(n.2: int)
       let t.3: obj = extern Prelude.show_int(n.2)
-      let t.4: unit = call apply(&main$extern0, t.3)
+      let t.4: unit = call "apply@[String, Unit]"(&main$extern0, t.3)
       return t.4
     }
     fn Report.Csv.parse(p.0: unit) -> obj {
@@ -972,7 +972,7 @@ fn names_outside_the_entry_are_qualified_with_their_module() {
       let t.0: unit = call main(())
       return t.0
     }
-    ");
+    "#);
 }
 
 #[test]
@@ -1069,7 +1069,7 @@ fn partial_and_extra_arguments_use_closures() {
 #[test]
 fn builtins_used_as_values_are_wrapped() {
     let text = "apply : (a -> <e> b) -> a -> <e> b\napply f x = f x\n\nmain : Unit -> <IO> Unit\nmain () =\n  let g = not >> not\n  apply println (show_int 1)";
-    insta::assert_snapshot!(core_text(text, Pass::Translate), @"
+    insta::assert_snapshot!(core_text(text, Pass::Translate), @r#"
     layout Prelude.Bool { False, True }
     fn Prelude.not($0.0: enum) -> enum {
       switch $0.0 Prelude.Bool { #0 -> b1, #1 -> b2 }
@@ -1078,23 +1078,23 @@ fn builtins_used_as_values_are_wrapped() {
     b2:
       return #0
     }
-    fn Prelude.>>(f.0: tobj, g.1: tobj) -> tobj {
-      let c.2: tobj = closure Prelude.>>$lambda0(f.0, g.1)
+    fn "Prelude.>>@[Bool, Bool, Bool]"(f.0: tobj, g.1: tobj) -> tobj {
+      let c.2: tobj = closure "Prelude.>>@[Bool, Bool, Bool]$lambda0"(f.0, g.1)
       return c.2
     }
-    fn apply(f.0: tobj, x.1: tobj) -> tobj {
-      let t.2: tobj = apply f.0(x.1)
+    fn "apply@[String, Unit]"(f.0: tobj, x.1: obj) -> unit {
+      let t.2: unit = apply f.0(x.1)
       return t.2
     }
     fn main(p.0: unit) -> unit {
-      let t.1: tobj = call Prelude.>>(&Prelude.not, &Prelude.not)
+      let t.1: tobj = call "Prelude.>>@[Bool, Bool, Bool]"(&Prelude.not, &Prelude.not)
       let t.2: obj = extern Prelude.show_int(1)
-      let t.3: unit = call apply(&main$extern0, t.2)
+      let t.3: unit = call "apply@[String, Unit]"(&main$extern0, t.2)
       return t.3
     }
-    internal fn Prelude.>>$lambda0(f.0: tobj, g.1: tobj, x.2: tobj) -> tobj {
-      let t.3: tobj = apply f.0(x.2)
-      let t.4: tobj = apply g.1(t.3)
+    internal fn "Prelude.>>@[Bool, Bool, Bool]$lambda0"(f.0: tobj, g.1: tobj, x.2: enum) -> enum {
+      let t.3: enum = apply f.0(x.2)
+      let t.4: enum = apply g.1(t.3)
       return t.4
     }
     internal fn main$extern0(p.0: obj) -> unit {
@@ -1105,22 +1105,22 @@ fn builtins_used_as_values_are_wrapped() {
       let t.0: unit = call main(())
       return t.0
     }
-    ");
+    "#);
 }
 
 #[test]
 fn lambdas_are_lifted_with_their_captures_first() {
     let text = "apply : (a -> <e> b) -> a -> <e> b\napply f x = f x\n\nmain : Unit -> <IO> Unit\nmain () =\n  let s = \"!\"\n  let shout = fn t -> t ++ s\n  println (apply shout \"hi\")\n  println s";
     insta::assert_snapshot!(core_text(text, Pass::Translate), @r#"
-    fn apply(f.0: tobj, x.1: tobj) -> tobj {
-      let t.2: tobj = apply f.0(x.1)
+    fn "apply@[String, String]"(f.0: tobj, x.1: obj) -> obj {
+      let t.2: obj = apply f.0(x.1)
       return t.2
     }
     fn main(p.0: unit) -> unit {
       let s.1: obj = const "!"
       let c.2: tobj = closure main$lambda0(s.1)
       let s.3: obj = const "hi"
-      let t.4: obj = call apply(c.2, s.3)
+      let t.4: obj = call "apply@[String, String]"(c.2, s.3)
       let t.5: unit = extern Prelude.println(t.4)
       let t.6: unit = extern Prelude.println(s.1)
       return t.6
@@ -1803,13 +1803,13 @@ fn a_masked_callback_call() {
         "{STATE}run : (Unit -> <e> a) -> <State Int | e> a\nrun cb =\n  let n = get ()\n  cb ()\n\n{}",
         state_main("run (fn () -> 1)")
     );
-    insta::assert_snapshot!(function(&core_text(&text, Pass::Translate), "run"), @"
-    fn run(cb.0: tobj) -> tobj {
+    insta::assert_snapshot!(function(&core_text(&text, Pass::Translate), "run@[Int]"), @r#"
+    fn "run@[Int]"(cb.0: tobj) -> int {
       let t.1: int = perform State.get(())
-      let t.2: tobj = mask [State] apply cb.0(())
+      let t.2: int = mask [State] apply cb.0(())
       return t.2
     }
-    ");
+    "#);
 }
 
 /// 引数がそろう既知の関数の呼び出しは、最後の矢印の `mask` を使う。前の矢印は部分適用で、エフェクトを起こさない。
@@ -1819,12 +1819,12 @@ fn a_saturated_known_call_takes_the_mask_of_its_last_arrow() {
         "{STATE}twice : Int -> (Unit -> <e> a) -> <e> a\ntwice _ cb =\n  let _ = cb ()\n  cb ()\n\nrun : (Unit -> <e> a) -> <State Int | e> a\nrun cb = twice 1 cb\n\n{}",
         state_main("run (fn () -> 1)")
     );
-    insta::assert_snapshot!(function(&core_text(&text, Pass::Translate), "run"), @"
-    fn run(cb.0: tobj) -> tobj {
-      let t.1: tobj = mask [State] call twice(1, cb.0)
+    insta::assert_snapshot!(function(&core_text(&text, Pass::Translate), "run@[Int]"), @r#"
+    fn "run@[Int]"(cb.0: tobj) -> int {
+      let t.1: int = mask [State] call "twice@[Int]"(1, cb.0)
       return t.1
     }
-    ");
+    "#);
 }
 
 /// 矢印ごとの `mask` が変わる境目で `apply` を分ける。
@@ -1849,12 +1849,12 @@ fn a_continuation_call_in_its_clause_has_no_mask() {
     let text = format!(
         "{STATE}run : (Unit -> <State Int | e> a) -> <e> a\nrun action =\n  handle action () from 0 with\n    | get () k st -> k st st\n    | put n k _ -> k () n\n    | return x _ -> x\n\nmain : Unit -> <IO> Unit\nmain () = println (show_int (run (fn () -> get ())))\n"
     );
-    insta::assert_snapshot!(function(&core_text(&text, Pass::Translate), "run$handle0$get"), @"
-    internal fn run$handle0$get(p.0: unit, k.1: tobj, st.2: int) -> tobj {
-      let t.3: tobj = resume k.1(st.2, st.2)
+    insta::assert_snapshot!(function(&core_text(&text, Pass::Translate), "run@[Int]$handle0$get"), @r#"
+    internal fn "run@[Int]$handle0$get"(p.0: unit, k.1: tobj, st.2: int) -> int {
+      let t.3: int = resume k.1(st.2, st.2)
       return t.3
     }
-    ");
+    "#);
 }
 
 /// 節の中の handle の本体にある継続の呼び出しは、その handle が足したラベルを飛ばす。型検査が継続の呼び出しの矢印 0 に
@@ -1907,13 +1907,13 @@ fn extra_arguments_of_a_known_call_take_the_mask_of_their_arrow() {
         "{STATE}pick : Int -> (Unit -> <e> a) -> <e> a\npick _ = fn cb -> cb ()\n\nrun : (Unit -> <e> a) -> <State Int | e> a\nrun cb = pick 1 cb\n\n{}",
         state_main("run (fn () -> 1)")
     );
-    insta::assert_snapshot!(function(&core_text(&text, Pass::Translate), "run"), @"
-    fn run(cb.0: tobj) -> tobj {
-      let t.1: tobj = call pick(1)
-      let t.2: tobj = mask [State] apply t.1(cb.0)
+    insta::assert_snapshot!(function(&core_text(&text, Pass::Translate), "run@[Int]"), @r#"
+    fn "run@[Int]"(cb.0: tobj) -> int {
+      let t.1: tobj = call "pick@[Int]"(1)
+      let t.2: int = mask [State] apply t.1(cb.0)
       return t.2
     }
-    ");
+    "#);
 }
 
 const ASK: &str = "effect Ask where\n  ask : Unit -> Int\n\n";
@@ -2100,7 +2100,7 @@ fn externs_are_called_by_their_canonical_name() {
         "extern Prelude.string_eq(",
         "extern Prelude.bool_ne(#1, #0)",
         "extern Prelude.int_eq(",
-        "call apply(&main$extern0, 3)",
+        "call \"apply@[Int, String]\"(&main$extern0, 3)",
         "fn main$extern0(p.0: int) -> obj {\n  let t.1: obj = extern Prelude.show_int(p.0)\n  return t.1\n}",
     ] {
         assert!(shown.contains(expected), "{expected}\n{shown}");

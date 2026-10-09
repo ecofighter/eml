@@ -6,6 +6,7 @@ mod common;
 mod boxing;
 mod contract;
 mod externs;
+mod instances;
 mod perceus;
 mod text;
 mod translate;

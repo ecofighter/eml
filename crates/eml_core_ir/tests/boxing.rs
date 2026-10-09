@@ -139,16 +139,18 @@ fn fields_are_rebound_at_the_head_of_the_case_target_and_after_an_unpack() {
 
 #[test]
 fn int_constants_are_boxed_and_other_constants_pass_as_they_are() {
-    let text = "keep : a -> b -> c -> d -> Int\nkeep _ _ _ _ = 0\n\nid : a -> a\nid x = x\n\nmain : Unit -> <IO> Unit\nmain () = println (show_int (keep 5 () True id))";
-    insta::assert_snapshot!(function(&core_text(text, Pass::Boxing), "main"), @"
+    // 型変数のフィールドは `tobj` なので、`int` の定数は `box` を通り、`unit`、タグ、関数の値はそのまま入る
+    let text = "data Four a b c d =\n  | Four a b c d\n\ncount : Four a b c d -> Int\ncount _ = 0\n\nid : a -> a\nid x = x\n\nmain : Unit -> <IO> Unit\nmain () = println (show_int (count (Four 5 () True id)))";
+    insta::assert_snapshot!(function(&core_text(text, Pass::Boxing), "main"), @r#"
     fn main(p.0: unit) -> unit {
-      let b.4: tobj = box 5
-      let t.1: int = call keep(b.4, (), #1, &id)
-      let t.2: obj = extern Prelude.show_int(t.1)
-      let t.3: unit = extern Prelude.println(t.2)
-      return t.3
+      let b.5: tobj = box 5
+      let d.1: obj = con Four #0(b.5, (), #1, &"id@[_]")
+      let t.2: int = call "count@[Int, Unit, Bool, _ -> <_> _]"(d.1)
+      let t.3: obj = extern Prelude.show_int(t.2)
+      let t.4: unit = extern Prelude.println(t.3)
+      return t.4
     }
-    ");
+    "#);
 }
 
 #[test]
@@ -207,11 +209,11 @@ fn f() -> int {
 
 #[test]
 fn a_unit_value_passes_to_tobj_without_an_instruction() {
-    let text = "id : a -> a\nid x = x\n\nsame : Unit -> Unit\nsame u = id u\n\nmain : Unit -> <IO> Unit\nmain () =\n  same ()\n  println \"done\"";
-    insta::assert_snapshot!(function(&core_text(text, Pass::Boxing), "same"), @"
-    fn same(u.0: unit) -> unit {
-      let t.1: unit = call id(u.0)
-      return t.1
+    let text = "data Box a =\n  | Box a\n\nwrap : Unit -> Box Unit\nwrap u = Box u\n\nmain : Unit -> <IO> Unit\nmain () =\n  let _ = wrap ()\n  println \"done\"";
+    insta::assert_snapshot!(function(&core_text(text, Pass::Boxing), "wrap"), @"
+    fn wrap(u.0: unit) -> obj {
+      let d.1: obj = con Box #0(u.0)
+      return d.1
     }
     ");
 }

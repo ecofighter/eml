@@ -87,8 +87,8 @@ fn list() {
         string_bytes_copied: 11,
         rc_increments: 0,
         rc_decrements: 200001,
-        boxes: 300001,
-        unboxes: 300001,
+        boxes: 400000,
+        unboxes: 400000,
         peak_objects: 100002,
     }
     ");
@@ -132,8 +132,8 @@ fn tree() {
         string_bytes_copied: 37,
         rc_increments: 14899,
         rc_decrements: 266465,
-        boxes: 29797,
-        unboxes: 266462,
+        boxes: 44694,
+        unboxes: 281359,
         peak_objects: 14935,
     }
     ");
