@@ -576,7 +576,7 @@ impl Shape {
         for (index, (name, mu)) in self.rigids.iter().enumerate() {
             let ty = match effect_args.get(index) {
                 Some(&arg) => arg,
-                None => table.fresh_rigid_with(name, lin[mu.index()]).0,
+                None => table.fresh_operation_rigid(name, lin[mu.index()]),
             };
             tys.push(ty);
         }

@@ -12,7 +12,9 @@ use crate::{Repr, VarInfo, data_repr};
 pub fn repr(types: &TypeStore, ty: TypeId, hir: &HirProgram) -> Repr {
     match types.kind(ty) {
         TypeKind::Con { id, args: _ } => type_def_repr(*id, hir),
-        TypeKind::Fn { .. } | TypeKind::Rigid(_) | TypeKind::Flexible => Repr::TObj,
+        TypeKind::Fn { .. } | TypeKind::Rigid(_) | TypeKind::OpVar(_) | TypeKind::Flexible => {
+            Repr::TObj
+        }
         // 空のレコードは `Unit` で、値は `()` である。要素のあるレコード (タプル) はヒープの物体にする
         TypeKind::Record(fields) if fields.is_empty() => Repr::Unit,
         TypeKind::Record(_) => Repr::Obj,

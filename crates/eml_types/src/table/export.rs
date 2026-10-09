@@ -83,7 +83,14 @@ impl<'t, 'c, 's> Exporter<'t, 'c, 's> {
                 }
             }
             TyShape::Var(_) => return self.types.flexible(),
-            TyShape::Rigid(rigid) => TypeKind::Rigid(table.rigids[rigid.0 as usize].name.clone()),
+            TyShape::Rigid(rigid) => {
+                let info = &table.rigids[rigid.0 as usize];
+                if info.per_operation {
+                    TypeKind::OpVar(info.name.clone())
+                } else {
+                    TypeKind::Rigid(info.name.clone())
+                }
+            }
             TyShape::Error => return self.types.error(),
         };
         self.types.intern(kind)

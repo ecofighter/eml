@@ -25,7 +25,7 @@ use crate::kind::problem::KindScheme;
 use crate::shape::Shape;
 
 pub use dump::dump;
-pub use store::{EffectLabel, RowTail, TypeId, TypeKind, TypeStore};
+pub use store::{EffectLabel, RowTail, Substitution, TypeId, TypeKind, TypeStore};
 pub use ty::{Linearity, Multiplicity};
 
 pub mod codes {

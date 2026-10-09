@@ -74,7 +74,7 @@ fn has_type_var(types: &TypeStore, ty: TypeId) -> bool {
             tail: _,
             ret,
         } => has_type_var(types, *param) || has_type_var(types, *ret),
-        TypeKind::Rigid(_) | TypeKind::Flexible => true,
+        TypeKind::Rigid(_) | TypeKind::OpVar(_) | TypeKind::Flexible => true,
         TypeKind::Error => false,
     }
 }

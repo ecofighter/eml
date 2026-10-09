@@ -183,6 +183,8 @@ struct RigidInfo {
     name: String,
     /// 型変数の Kind `Type<μ>` の `μ`。
     linearity: KindVar,
+    /// handler の節で、操作ごとに量化した型変数を具体化した変数か。書き出しで `OpVar` にする。
+    per_operation: bool,
 }
 
 /// 表をたどる処理が訪れた代表の印。呼び出しごとに表の大きさの配列を作ると、呼び出しが多いときに2乗の時間になる。
@@ -391,9 +393,21 @@ impl<'c> Table<'c> {
         self.rigids.push(RigidInfo {
             name: name.to_string(),
             linearity,
+            per_operation: false,
         });
         let rigid = RigidVar(self.rigids.len() as u32 - 1);
         (self.alloc(TyShape::Rigid(rigid)), rigid)
+    }
+
+    /// 節のための具体化で、操作ごとに量化した型変数を作る。推論では `fresh_rigid_with` の変数と同じに扱う。
+    pub fn fresh_operation_rigid(&mut self, name: &str, linearity: KindVar) -> Ty {
+        self.rigids.push(RigidInfo {
+            name: name.to_string(),
+            linearity,
+            per_operation: true,
+        });
+        let rigid = RigidVar(self.rigids.len() as u32 - 1);
+        self.alloc(TyShape::Rigid(rigid))
     }
 
     pub fn rigid_name(&self, rigid: RigidVar) -> &str {

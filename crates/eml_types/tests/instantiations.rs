@@ -3,6 +3,7 @@
 
 use eml_hir::{ExprKind, Res, ValueItem};
 use eml_test_support::{Checked, check, check_files, short_text};
+use eml_types::TypeKind;
 
 /// モジュール `module` の関数 `name` の本体の記録を、式の位置の順に1行ずつ `<行:列> <宣言の名前> [<型引数>]` の形で
 /// 出す。位置はその関数のモジュールのファイルで数える。誤りのないプログラムだけを受け取る。
@@ -110,7 +111,7 @@ fn an_undecided_type_argument_is_flexible() {
 
 #[test]
 fn a_clause_variable_is_shown_like_the_function_variable_of_the_same_name() {
-    // 節の `x` の型は操作の型変数 `a` から作った rigid な変数で、関数の `a` と同じ名前で書き出す。区別は S4b で決める
+    // 節の `x` の型は操作ごとの型変数 `a` で、関数の `a` と別の型 (`OpVar`) だが、同じ名前で表示する
     // (docs/implementation/architecture.md の「`eml_types` の内部」)
     let text = format!(
         "{ID}effect Pick where\n  pick : a -> a\n\nrun : a -> a\nrun v =\n  handle id v with\n    | pick x k -> k (id x)"
@@ -119,6 +120,33 @@ fn a_clause_variable_is_shown_like_the_function_variable_of_the_same_name() {
     9:10 id [a]
     10:22 id [a]
     ");
+}
+
+#[test]
+fn a_clause_variable_is_a_different_type_from_the_function_variable_of_the_same_name() {
+    // 単相化は関数の型変数にだけ代入するので、節の操作ごとの型変数は別の種類で書き出す
+    // (docs/implementation/architecture.md の「`eml_types` の内部」)
+    let text = format!(
+        "{ID}effect Pick where\n  pick : a -> a\n\nrun : a -> a\nrun v =\n  handle id v with\n    | pick x k -> k (id x)"
+    );
+    let checked = check(&text);
+    let program = &checked.program;
+    let (id, _) = program
+        .functions()
+        .find(|(_, function)| function.name == "run")
+        .unwrap();
+    let args: Vec<TypeKind> = checked.typed.bodies[id]
+        .instantiations
+        .iter()
+        .map(|(_, instantiation)| checked.typed.types.kind(instantiation.args[0]).clone())
+        .collect();
+    assert_eq!(
+        args,
+        [
+            TypeKind::Rigid("a".to_string()),
+            TypeKind::OpVar("a".to_string())
+        ]
+    );
 }
 
 #[test]
