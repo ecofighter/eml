@@ -80,4 +80,4 @@ valgrind が arm64 の macOS で動かないので、callgrind は使わない�
 
 S4b で `list` と `tree` の `box` と `unbox` の回数は増えた。`list` は `boxes` と `unboxes` が 300001 から 400000 に、`tree` は `boxes` が 29797 から 44694 に、`unboxes` が 266462 から 281359 に増えた。`empty`、`fib`、`loop`、`state` は変わらない。単相化の後は `foldl@[Int, Int]` と `fold@[Int, Int]` のアキュムレータが `int` になり、一様なコールバックを `apply` するたびに、呼ぶ前に `box` し、返った後に `unbox` するためである。要素のフィールドは、データの配置が一様なので `tobj` のままである。この回数は、コミット c30ab6c での `bench.rs` のスナップショットの差分である。
 
-命令の数は、S4a と比べて `list` で約1.4%増え、`tree` で約0.5%減った。ほかは0.5%以内の差である。
+命令の数は、S4a と比べて `list` で約1.4%増え、`tree` で約0.5%減った。ほかは0.6%以内の差である。
