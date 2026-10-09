@@ -38,11 +38,20 @@ pub enum Repr {
 }
 
 impl Repr {
+    /// 箱を要するスカラー。`tobj` の位置との間で `box` と `unbox` を要する。`unit` は命令なしで `tobj` と行き来する
+    /// ので入らない。規則と verifier の文言はこの1つの定義から作るので、後の `Float` の Repr もここに足す
+    /// (docs/spec/core-ir.md の「値の表現」)。
+    pub const BOXED_SCALARS: [Repr; 2] = [Repr::Int, Repr::Enum];
+
     pub fn is_rc(self) -> bool {
         match self {
             Repr::Obj | Repr::TObj => true,
             Repr::Int | Repr::Enum | Repr::Unit => false,
         }
+    }
+
+    pub fn needs_box(self) -> bool {
+        Repr::BOXED_SCALARS.contains(&self)
     }
 
     /// テキストの形での名前 (docs/implementation/testing.md の「Core IR のテキストの形」)。

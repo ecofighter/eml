@@ -80,6 +80,23 @@ fn f(x.0: int, s.1: obj) -> int {
 }
 
 #[test]
+fn unused_boxes_and_unboxes_are_removed() {
+    // `box` を消すと確保が1つ減るだけで、`unbox` は読むだけなので、どちらも純粋である
+    let text = "\
+fn f(n.0: int, b.1: tobj) -> int {
+  let c.2: tobj = box n.0
+  let m.3: int = unbox b.1
+  return n.0
+}
+";
+    insta::assert_snapshot!(contract_text(text), @"
+    fn f(n.0: int, b.1: tobj) -> int {
+      return n.0
+    }
+    ");
+}
+
+#[test]
 fn bindings_used_only_by_removed_bindings_go_in_the_same_pass() {
     // `q.4` を消すと `p.3` が、`p.3` を消すと `s.2` が使われなくなる。後ろから1回たどるだけで、ブロックをまたいで
     // すべて消える

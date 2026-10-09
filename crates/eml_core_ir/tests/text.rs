@@ -521,6 +521,71 @@ fn f(s.0: obj) -> unit {
 }
 
 #[test]
+fn a_box_and_an_unbox_round_trip() {
+    let program = round_trip(
+        "\
+fn f(n.0: int) -> int {
+  let b.1: tobj = box n.0
+  let c.2: tobj = box 5
+  let m.3: int = unbox b.1
+  return m.3
+}
+",
+    );
+    let stmts = &program.functions[0].blocks[0].stmts;
+    assert_eq!(
+        stmts[..],
+        [
+            Stmt::Let {
+                var: VarId(1),
+                rhs: Rhs::Box(v(0)),
+            },
+            Stmt::Let {
+                var: VarId(2),
+                rhs: Rhs::Box(Atom::Int(5)),
+            },
+            Stmt::Let {
+                var: VarId(3),
+                rhs: Rhs::Unbox(v(1)),
+            },
+        ]
+    );
+    // `unbox` は値を読むだけなので、使いには数えるが消費には数えない
+    let mut atoms = Vec::new();
+    stmts[2].for_each_atom(|atom| atoms.push(atom));
+    assert_eq!(atoms, [v(1)]);
+    let mut consumed = Vec::new();
+    stmts[2].for_each_consumed(|atom| consumed.push(atom));
+    assert_eq!(consumed, []);
+    let mut consumed = Vec::new();
+    stmts[0].for_each_consumed(|atom| consumed.push(atom));
+    assert_eq!(consumed, [v(0)]);
+}
+
+#[test]
+fn an_internal_function_round_trips() {
+    let program = round_trip(
+        "\
+fn f() -> tobj {
+  return &f$lambda0
+}
+internal fn f$lambda0(x.0: tobj) -> tobj {
+  return x.0
+}
+",
+    );
+    let internal: Vec<bool> = program
+        .functions
+        .iter()
+        .map(|function| function.internal)
+        .collect();
+    assert_eq!(internal, [false, true]);
+    let error = parse_error("internal f() -> int {\n  return 1\n}\n");
+    assert_eq!(error.line, 1);
+    assert_eq!(error.message, "expected `fn`, found `f`");
+}
+
+#[test]
 fn a_direct_call_round_trips() {
     let program = round_trip(
         "\

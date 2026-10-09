@@ -128,6 +128,8 @@ impl<'p> Machine<'p> {
                 self.rt.decref(self.env.atom(atom)?)?;
                 Value::Unit
             }
+            Rhs::Box(atom) => scalar(self.env.atom(atom)?, "a box of a heap object")?,
+            Rhs::Unbox(atom) => scalar(self.env.atom(atom)?, "an unbox of a heap object")?,
         };
         self.env.write(var, value);
         self.stmt += 1;
@@ -313,4 +315,14 @@ fn resume_point(address: u64) -> (BlockId, usize) {
     let block = (address >> 32) as u32;
     let stmt = address as u32;
     (BlockId(block), stmt as usize)
+}
+
+/// `box` と `unbox` の値。`Value` は自分の種類を持つので、スカラーのまま渡す。ヒープの物体はスカラーを入れた値に
+/// ならない。R9 は値を作った配置を追わないので、verifier を通った IR でも `tobj` に入ったヒープの物体を `unbox`
+/// しうる。機械は Repr を読まずにそれを見つける (docs/spec/core-ir.md の「インタプリタ (CEK 機械)」)。
+fn scalar(value: Value, what: &'static str) -> Result<Value, Fault> {
+    match value {
+        Value::Obj(_) => Err(Fault::Internal(what)),
+        Value::Int(_) | Value::Unit | Value::Tag(_) | Value::Fn(_) => Ok(value),
+    }
 }

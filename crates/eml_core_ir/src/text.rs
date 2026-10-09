@@ -429,8 +429,12 @@ impl<'t> Parser<'t> {
         Ok(())
     }
 
-    /// `fn name(params) -> repr {` に、入口のブロックとラベルの付いたブロックの列が続く。
+    /// `[internal] fn name(params) -> repr {` に、入口のブロックとラベルの付いたブロックの列が続く。
     fn function(&mut self) -> Result<CoreFn, ParseError> {
+        let internal = self.at_word("internal");
+        if internal {
+            self.pos += 1;
+        }
         self.expect_word("fn")?;
         let name = self.word()?;
         let mut state = FnState::default();
@@ -472,6 +476,7 @@ impl<'t> Parser<'t> {
             .collect();
         Ok(CoreFn {
             name,
+            internal,
             vars,
             ret,
             blocks,
@@ -714,6 +719,9 @@ impl<'t> Parser<'t> {
                 }
             }
             "drop" => Rhs::Drop(self.atom(state)?),
+            // オペランドがスカラーか参照かは verifier が報告する。誤りを含む IR も読み戻して verifier に渡すためである
+            "box" => Rhs::Box(self.atom(state)?),
+            "unbox" => Rhs::Unbox(self.atom(state)?),
             other => {
                 return Err(error(
                     line,

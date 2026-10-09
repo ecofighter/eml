@@ -1,7 +1,8 @@
 //! Perceus の `dup` / `decref` / `release` の挿入と、呼び出しの `saved` (docs/spec/core-ir.md の「パス」)。値を消費する
-//! 使いを所有権の移動として扱い、後でも使う変数を複製し、使わなくなった変数をできるだけ早く捨てる。`switch` と
-//! `unpack` は値を読むだけで、フィールドは値から借りて始まる。行き先の入口と `unpack` の直後で、生きているフィールドを
-//! 所有にする。対象は RC の対象 (`Repr::is_rc`) の変数だけである。ブロックを前からたどり、その場で書き換える。
+//! 使いを所有権の移動として扱い、後でも使う変数を複製し、使わなくなった変数をできるだけ早く捨てる。`switch`、
+//! `unpack`、`unbox` は値を読むだけである。フィールドは値から借りて始まり、行き先の入口と `unpack` の直後で、生きて
+//! いるフィールドを所有にする。対象は RC の対象 (`Repr::is_rc`) の変数だけである。ブロックを前からたどり、その場で
+//! 書き換える。
 
 use std::collections::{BTreeSet, HashMap};
 
@@ -127,7 +128,8 @@ fn rewrite(
         {
             *saved = live.iter().copied().filter(|v| v != var).collect();
         }
-        // 文の直後に足す文。`unpack` の後では借りたフィールドを所有にし、ほかの文では定義して使わない変数を捨てる
+        // 文の直後に足す文。`unpack` の後では借りたフィールドを所有にし、`unbox` の後では読んだ値が死んでいれば捨て、
+        // ほかの文では定義して使わない変数を捨てる
         let after: Vec<Stmt> = match stmt {
             Stmt::Unpack {
                 value,
@@ -138,6 +140,18 @@ fn rewrite(
                 Owning::Release(release) => vec![release],
                 Owning::Decref => vec![Stmt::Decref(*value)],
             },
+            // 生きている RC の対象は、フィールドも含めてここでは所有になっている (フィールドは行き先の入口か `unpack`
+            // の直後で所有になる) ので、この `decref` は所有を手放すだけである。束縛はスカラーなので捨てない
+            Stmt::Let {
+                var: _,
+                rhs: Rhs::Unbox(Atom::Var(value)),
+            } => {
+                if rc[value.0 as usize] && !live.contains(value) {
+                    vec![Stmt::Decref(*value)]
+                } else {
+                    Vec::new()
+                }
+            }
             _ => stmt
                 .defs()
                 .iter()

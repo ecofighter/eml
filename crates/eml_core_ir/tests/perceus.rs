@@ -409,6 +409,69 @@ fn join(a.0: obj, b.1: obj) -> obj {
     ");
 }
 
+#[test]
+fn an_unboxed_value_that_dies_is_released_after_the_unbox() {
+    // `unbox` は値を読むだけなので、最後の使いなら読んだ直後に手放す
+    let text = "\
+fn f(b.0: tobj) -> int {
+  let n.1: int = unbox b.0
+  let m.2: int = extern Prelude.+(n.1, 1)
+  return m.2
+}
+";
+    insta::assert_snapshot!(perceus_text(text), @"
+    fn f(b.0: tobj) -> int {
+      let n.1: int = unbox b.0
+      decref b.0
+      let m.2: int = extern Prelude.+(n.1, 1)
+      return m.2
+    }
+    ");
+}
+
+#[test]
+fn an_unboxed_value_used_later_is_neither_dupped_nor_released() {
+    let text = "\
+fn f(b.0: tobj) -> tobj {
+  let n.1: int = unbox b.0
+  let s.2: obj = extern Prelude.show_int(n.1)
+  let u.3: unit = extern Prelude.println(s.2)
+  return b.0
+}
+";
+    assert_eq!(perceus_text(text), text);
+}
+
+#[test]
+fn an_unboxed_field_is_owned_at_the_target_and_released_after_the_unbox() {
+    // 行き先の入口でフィールドを所有にするので、`unbox` の後の `decref` は所有を手放すだけである
+    let text = "\
+layout Option { None, Some(tobj) }
+fn f(o.0: tobj) -> int {
+  switch o.0 Option { #0 -> b1, #1(x.1: tobj) -> b2 }
+b1:
+  return 0
+b2:
+  let n.2: int = unbox x.1
+  return n.2
+}
+";
+    insta::assert_snapshot!(perceus_text(text), @"
+    layout Option { None, Some(tobj) }
+    fn f(o.0: tobj) -> int {
+      switch o.0 Option { #0 -> b1, #1(x.1: tobj) -> b2 }
+    b1:
+      decref o.0
+      return 0
+    b2:
+      release o.0 Option #1(x.1)
+      let n.2: int = unbox x.1
+      decref x.1
+      return n.2
+    }
+    ");
+}
+
 /// 生存解析、Perceus、verifier、テキストの表示と読み込みは、プログラムの大きさに比例して Rust のスタックを使わない
 /// (docs/spec/core-ir.md の「パス」)。2万の条件の列を debug ビルドで処理し、どの条件の枝でも使わない文字列を1つずつ
 /// 捨てることを確かめる。translate から通す長い列は tests/verify.rs が確かめる。

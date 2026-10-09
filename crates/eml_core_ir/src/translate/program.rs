@@ -178,8 +178,7 @@ impl ProgramBuilder {
         self.functions[function.0 as usize] = Some(core);
     }
 
-    /// 引数を受け、`rhs` の値を返すだけの関数を作る。包む関数と入口の関数に使う。呼び出しの右辺は縮約が末尾呼び出しに
-    /// する。
+    /// 引数を受け、`rhs` の値を返すだけの内部の関数を作る。包む関数に使う。呼び出しの右辺は縮約が末尾呼び出しにする。
     fn simple(
         &mut self,
         name: String,
@@ -200,7 +199,7 @@ impl ProgramBuilder {
             rhs: rhs(args),
         });
         builder.terminate(Term::Return(Atom::Var(var)));
-        let core = builder.finish(name, ret);
+        let core = builder.finish(name, true, ret);
         self.finish(function, core);
         function
     }
@@ -386,7 +385,8 @@ impl ProgramBuilder {
             rhs: plain_call(call),
         });
         builder.terminate(Term::Return(Atom::Var(result)));
-        let core = builder.finish(name, repr(&result_type, hir));
+        // 入口の関数は実行系が外から呼ぶので、内部の関数でない
+        let core = builder.finish(name, false, repr(&result_type, hir));
         self.finish(function, core);
         function
     }

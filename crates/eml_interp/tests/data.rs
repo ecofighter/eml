@@ -1,5 +1,5 @@
-//! Core IR のテキストで、`data` の値の確保、`switch` と `unpack` による分解、`release` を確かめる (docs/spec/core-ir.md)。
-//! 共有された値の分解や、`tobj` の変数に入った引数のないコンストラクタは、ソースの `match`
+//! Core IR のテキストで、`data` の値の確保、`switch` と `unpack` による分解、`release`、`box` と `unbox` を確かめる
+//! (docs/spec/core-ir.md)。共有された値の分解や、`tobj` の変数に入った引数のないコンストラクタは、ソースの `match`
 //! からは狙って作りにくいので、ここで書く。
 
 use eml_interp::{Fault, RuntimeError};
@@ -382,6 +382,77 @@ fn main() -> unit {
         run_core_unverified(text).1,
         Err(RuntimeError::Fault {
             fault: Fault::Internal("a release of a value that is not an object"),
+            function: "main".to_string(),
+            at: None,
+        })
+    );
+}
+
+// box と unbox
+
+#[test]
+fn a_box_and_an_unbox_pass_the_value_through() {
+    let text = "\
+layout Prelude.Bool { False, True }
+fn main() -> unit {
+  let b.0: tobj = box 41
+  let n.1: int = unbox b.0
+  decref b.0
+  let c.2: enum = extern Prelude.<(n.1, 50)
+  let e.3: tobj = box c.2
+  let d.4: enum = unbox e.3
+  decref e.3
+  switch d.4 Prelude.Bool { #0 -> b1, #1 -> b2 }
+b1:
+  return ()
+b2:
+  let s.5: obj = extern Prelude.show_int(n.1)
+  let o.6: unit = extern Prelude.println(s.5)
+  return o.6
+}
+";
+    assert_eq!(run_core(text), ("41\n".to_string(), Ok(())));
+}
+
+#[test]
+fn an_unbox_of_a_heap_object_passes_the_verifier_and_faults() {
+    // verifier は `tobj` の値がスカラーを入れたものかヒープの物体かを追わない (docs/spec/core-ir.md の「データの
+    // 配置」)。`tobj` のフィールドに入れた文字列を `unbox` する IR は verifier を通り、機械の見張りで止まる
+    let text = "\
+layout Box { Box(tobj) }
+fn main() -> unit {
+  let s.0: obj = const \"a\"
+  let d.1: obj = con Box #0(s.0)
+  unpack d.1 Box #0(x.2: tobj)
+  let n.3: int = unbox x.2
+  decref d.1
+  return ()
+}
+";
+    assert_eq!(
+        run_core(text).1,
+        Err(RuntimeError::Fault {
+            fault: Fault::Internal("an unbox of a heap object"),
+            function: "main".to_string(),
+            at: None,
+        })
+    );
+}
+
+#[test]
+fn a_box_of_a_heap_object_is_an_internal_error() {
+    // verifier は `obj` の変数の `box` を拒むので、通さずに実行する
+    let text = "\
+fn main() -> unit {
+  let s.0: obj = const \"a\"
+  let b.1: tobj = box s.0
+  return ()
+}
+";
+    assert_eq!(
+        run_core_unverified(text).1,
+        Err(RuntimeError::Fault {
+            fault: Fault::Internal("a box of a heap object"),
             function: "main".to_string(),
             at: None,
         })

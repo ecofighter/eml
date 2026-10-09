@@ -93,7 +93,8 @@ impl Printer<'_> {
     fn function(&self, function: &CoreFn, out: &mut String) {
         writeln!(
             out,
-            "fn {}({}) -> {} {{",
+            "{}fn {}({}) -> {} {{",
+            if function.internal { "internal " } else { "" },
             function.name,
             binders(function, function.params()),
             function.ret.name()
@@ -233,6 +234,8 @@ impl Printer<'_> {
                 format!("con {}({})", self.ctor(*ctor), self.atoms(function, args))
             }
             Rhs::Drop(a) => format!("drop {}", self.atom(function, a)),
+            Rhs::Box(a) => format!("box {}", self.atom(function, a)),
+            Rhs::Unbox(a) => format!("unbox {}", self.atom(function, a)),
         }
     }
 

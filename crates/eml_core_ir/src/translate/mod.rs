@@ -210,7 +210,8 @@ pub(crate) fn translate(
                 file_id: hir.modules[id.module].file,
             },
         };
-        let core = FnLowering::new(ctx, &mut builder).lower(&name, &[], &params, body.root, &ret);
+        let core =
+            FnLowering::new(ctx, &mut builder).lower(&name, false, &[], &params, body.root, &ret);
         builder.finish(indices[id], core);
     }
     let entry_type = &typed
@@ -306,10 +307,11 @@ impl<'a> FnLowering<'a> {
 
     /// ラムダと handle の本体と節は、捕まえた変数を先頭の引数に持つ (docs/spec/core-ir.md)。トップレベルの関数では
     /// `captured` は空である。引数のパターンが `None` なら、名前のない引数 (handle の本体が受ける `()`) である。
-    /// `ret` は本体の値の型で、関数の `ret` の Repr を決める。
+    /// `ret` は本体の値の型で、関数の `ret` の Repr を決める。`internal` は、持ち上げた関数なら真である。
     fn lower(
         mut self,
         name: &str,
+        internal: bool,
         captured: &[(LocalId, Type)],
         params: &[(Option<PatId>, Type)],
         root: ExprId,
@@ -355,7 +357,7 @@ impl<'a> FnLowering<'a> {
         }
         self.tail_expr(root, Exit::Return);
         self.builder
-            .finish(name.to_string(), repr(ret, self.ctx.hir))
+            .finish(name.to_string(), internal, repr(ret, self.ctx.hir))
     }
 
     /// `root` を、捕まえた変数を先頭の引数に持つ関数に持ち上げ、そのクロージャを作る (docs/spec/core-ir.md)。ラムダと、
@@ -384,7 +386,7 @@ impl<'a> FnLowering<'a> {
             .collect();
         let function = self.program.reserve(captured.len() + params.len());
         let core = FnLowering::new(self.ctx, &mut *self.program)
-            .lower(&name, &captured, params, root, ret);
+            .lower(&name, true, &captured, params, root, ret);
         self.program.finish(function, core);
         let atoms = captured
             .iter()

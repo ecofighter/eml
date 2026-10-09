@@ -1,9 +1,9 @@
 //! Core IR の不変条件の検査 (docs/spec/core-ir.md)。ブロックの列の形 (R1〜R4)、変数の定義と支配 (R5、R6)、
-//! `jump` と `unpack` と `return` の Repr と extern の引数と結果の Repr (R8)、データの配置 (R9) と、引き継いだ検査
-//! (`mask` の順、`handle` の節の数、再開できるかどうか、直接呼び出しと extern の引数の数、型で選ぶ extern、case の
-//! 種類) を確かめる (`verify_scopes`)。Perceus の後は、RC の対象の所有の多重集合と、呼び出しの後に見える変数
-//! (R6、R7) も確かめる (`verify`)。`switch` と `unpack` のフィールドは値から借りて始まり、自分か持ち主が所有を持つ
-//! 間だけ有効である。
+//! `jump` と `unpack` と `return` の Repr、extern の引数と結果の Repr、`box` と `unbox` のオペランドと束縛の Repr
+//! (R8)、データの配置 (R9) と、引き継いだ検査 (`mask` の順、`handle` の節の数、再開できるかどうか、直接呼び出しと
+//! extern の引数の数、型で選ぶ extern、case の種類) を確かめる (`verify_scopes`)。Perceus の後は、RC の対象の所有の
+//! 多重集合と、呼び出しの後に見える変数 (R6、R7) も確かめる (`verify`)。`switch`、`unpack`、`unbox` は値を読むだけ
+//! である。`switch` と `unpack` のフィールドは値から借りて始まり、自分か持ち主が所有を持つ間だけ有効である。
 //!
 //! R9 は、`con`、タグの `switch`、`unpack`、`release` を、その命令が指す配置と比べる。配置を持つ `switch` はタグの
 //! case を持つものだけで、リテラルの `switch` では scrutinee の Repr を比べる。値がどの配置で作られたかは
@@ -447,7 +447,9 @@ impl<'a> Checker<'a> {
                     }
                     | Rhs::ConstString(_)
                     | Rhs::Con { ctor: _, args: _ }
-                    | Rhs::Drop(_) => {}
+                    | Rhs::Drop(_)
+                    | Rhs::Box(_)
+                    | Rhs::Unbox(_) => {}
                 }
                 self.define(owned, *var, self.at)
             }
@@ -983,7 +985,7 @@ impl<'a> Checker<'a> {
         Ok(owned.get_mut(&var).expect("checked above"))
     }
 
-    /// 値を読む (`switch` の scrutinee、`unpack` の値、`dup`)。所有の検査の段では、RC の対象の変数は有効でなければ
+    /// 値を読む (`switch` の scrutinee、`unpack` と `unbox` の値、`dup`)。所有の検査の段では、RC の対象の変数は有効でなければ
     /// ならない。つまり、自分か持ち主が所有を持つ。所有を持つ経路は実際の参照を持つので物体は生きていて、data は
     /// 書き換わらないので、そこからたどれる物体もすべて生きている (docs/spec/core-ir.md の「verifier」)。
     fn read(&self, owned: &Owned, var: VarId, what: &str) -> Result<(), String> {
@@ -1213,8 +1215,54 @@ impl<'a> Checker<'a> {
             }
             Rhs::Con { ctor, args } => self.check_con(var, *ctor, args)?,
             Rhs::Drop(_) => {}
+            // `unit` の値、`()`、`#N`、`&f`、参照は命令なしで `tobj` に収まるので、`box` しない。1つの値の書き方を1つに保つ
+            // (docs/spec/core-ir.md の「値の表現」)
+            Rhs::Box(atom) => {
+                let boxable = match *atom {
+                    Atom::Var(operand) => self.function.repr(operand).needs_box(),
+                    Atom::Int(_) => true,
+                    Atom::Unit | Atom::Tag(_) | Atom::Fn(_) => false,
+                };
+                if !boxable {
+                    return Err(format!(
+                        "{} is boxed, but only {} values and Int constants can be",
+                        self.typed_atom_text(*atom),
+                        boxed_scalars("and")
+                    ));
+                }
+                let repr = self.function.repr(var);
+                if repr != Repr::TObj {
+                    return Err(format!(
+                        "`{}` ({}) is bound to a box, which is tobj",
+                        self.name(var),
+                        repr.name()
+                    ));
+                }
+            }
+            // `obj` はつねにヒープの物体を指すので、スカラーを入れた値にならない
+            Rhs::Unbox(atom) => {
+                let operand = match *atom {
+                    Atom::Var(operand) if self.function.repr(operand) == Repr::TObj => operand,
+                    _ => {
+                        return Err(format!(
+                            "{} is unboxed, but only tobj can be",
+                            self.typed_atom_text(*atom)
+                        ));
+                    }
+                };
+                let repr = self.function.repr(var);
+                if !repr.needs_box() {
+                    return Err(format!(
+                        "`{}` ({}) is bound to an unbox, which gives {}",
+                        self.name(var),
+                        repr.name(),
+                        boxed_scalars("or")
+                    ));
+                }
+                return self.read(owned, operand, "unboxed");
+            }
         }
-        self.consume_all(owned, |f| rhs.for_each_atom(f))
+        self.consume_all(owned, |f| rhs.for_each_consumed(f))
     }
 
     /// `con` のフィールドの数は、コンストラクタと同じである。束縛する変数の Repr は配置の Repr と同じで、宣言した
@@ -1478,6 +1526,17 @@ impl<'a> Checker<'a> {
             CasePattern::Int(n) => n.to_string(),
             CasePattern::String(index) => format!("{:?}", self.program.strings[index as usize]),
         }
+    }
+}
+
+/// 箱を要するスカラーの Repr の名前を、文言に並べる形 (`int and enum`) にする。
+fn boxed_scalars(conjunction: &str) -> String {
+    let names: Vec<&str> = Repr::BOXED_SCALARS.iter().map(|repr| repr.name()).collect();
+    let (last, rest) = names.split_last().expect("some scalars need a box");
+    if rest.is_empty() {
+        last.to_string()
+    } else {
+        format!("{} {conjunction} {last}", rest.join(", "))
     }
 }
 

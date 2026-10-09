@@ -102,10 +102,14 @@ fn remove_dead_lets(function: &mut CoreFn) -> bool {
 
 /// 消してもよい右辺。値を作るだけで、エフェクトも実行時エラーも起こさない。extern は表の行が `Pure` のものだけである。
 /// `con` と `closure` が所有権を受け取る値は、消すと Perceus がその値の生存の終わりに `decref` を入れるので、解放が
-/// 早まるだけである。
+/// 早まるだけである。`box` を消すと確保が1つ減るだけで、`unbox` は値を読むだけなので、どちらも評価の順を変えない。
 fn pure(rhs: &Rhs) -> bool {
     match rhs {
-        Rhs::ConstString(_) | Rhs::Con { ctor: _, args: _ } | Rhs::MakeClosure(_, _) => true,
+        Rhs::ConstString(_)
+        | Rhs::Con { ctor: _, args: _ }
+        | Rhs::MakeClosure(_, _)
+        | Rhs::Box(_)
+        | Rhs::Unbox(_) => true,
         Rhs::Extern {
             ext,
             args: _,

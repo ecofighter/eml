@@ -219,11 +219,11 @@ fn each_reference_to_an_extern_as_a_value_gets_its_own_wrapper() {
       let t.4: unit = apply &main$extern1(s.3)
       return t.4
     }
-    fn main$extern0(p.0: obj) -> unit {
+    internal fn main$extern0(p.0: obj) -> unit {
       let t.1: unit = extern Prelude.println(p.0) @"test.em":6:9
       return t.1
     }
-    fn main$extern1(p.0: obj) -> unit {
+    internal fn main$extern1(p.0: obj) -> unit {
       let t.1: unit = extern Prelude.println(p.0) @"test.em":7:13
       return t.1
     }
@@ -255,7 +255,11 @@ fn lambdas_and_handlers_are_numbered_in_expression_order() {
     let shown = core_text(text, Pass::Translate);
     let names: Vec<&str> = shown
         .lines()
-        .filter_map(|line| line.strip_prefix("fn "))
+        .filter_map(|line| {
+            line.strip_prefix("internal ")
+                .unwrap_or(line)
+                .strip_prefix("fn ")
+        })
         .map(|line| &line[..line.find('(').expect("a parameter list")])
         .collect();
     insta::assert_snapshot!(names.join("\n"), @"
@@ -271,7 +275,7 @@ fn lambdas_and_handlers_are_numbered_in_expression_order() {
     entry$main
     ");
     insta::assert_snapshot!(function(&shown, "main$lambda1"), @"
-    fn main$lambda1(x.0: int) -> tobj {
+    internal fn main$lambda1(x.0: int) -> tobj {
       let c.1: tobj = closure main$lambda0(x.0)
       return c.1
     }
@@ -302,7 +306,7 @@ fn the_entry_applies_a_point_free_main_to_unit() {
     fn main() -> tobj {
       return &main$lambda0
     }
-    fn main$lambda0(p.0: unit) -> unit {
+    internal fn main$lambda0(p.0: unit) -> unit {
       let s.1: obj = const "point-free"
       let t.2: unit = extern Prelude.println(s.1)
       return t.2
@@ -328,16 +332,16 @@ fn handlers_are_lifted_with_their_return_reprs() {
       let t.5: unit = extern Prelude.println(t.4)
       return t.5
     }
-    fn main$handle0(p.0: unit) -> int {
+    internal fn main$handle0(p.0: unit) -> int {
       let s.1: obj = const "x"
       let t.2: int = perform Ask.ask(s.1)
       return t.2
     }
-    fn main$handle0$ask(key.0: obj, k.1: tobj, p.2: unit) -> int {
+    internal fn main$handle0$ask(key.0: obj, k.1: tobj, p.2: unit) -> int {
       let t.3: int = resume k.1(1, ())
       return t.3
     }
-    fn main$handle0$return(x.0: int, p.1: unit) -> int {
+    internal fn main$handle0$return(x.0: int, p.1: unit) -> int {
       let t.2: int = extern Prelude.+(x.0, 1)
       return t.2
     }
@@ -353,14 +357,14 @@ fn a_continuation_passed_to_a_function_is_wrapped() {
     let text = "effect Ask where\n  ask : Unit -> Int\n\ntwice : (Int -> <e> Int) -> <e> Int\ntwice f = f 1\n\nmain : Unit -> <IO> Unit\nmain () =\n  let n =\n    handle ask () with\n      | ask () k -> twice k\n  println (show_int n)";
     let shown = core_text(text, Pass::Translate);
     insta::assert_snapshot!(function(&shown, "main$handle0$ask"), @"
-    fn main$handle0$ask(p.0: unit, k.1: tobj, p.2: unit) -> int {
+    internal fn main$handle0$ask(p.0: unit, k.1: tobj, p.2: unit) -> int {
       let c.3: tobj = closure cont$(k.1)
       let t.4: int = call twice(c.3)
       return t.4
     }
     ");
     insta::assert_snapshot!(function(&shown, "cont$"), @"
-    fn cont$(k.0: tobj, v.1: tobj) -> tobj {
+    internal fn cont$(k.0: tobj, v.1: tobj) -> tobj {
       let t.2: tobj = resume k.0(v.1, ())
       return t.2
     }
@@ -809,7 +813,7 @@ fn an_extern_function_with_an_effect_used_as_a_value_is_wrapped_with_its_extern_
     let text = "each : (String -> <IO> Unit) -> <IO> Unit\neach f = f \"x\"\n\nmain : Unit -> <IO> Unit\nmain () = each println";
     let shown = core_text(text, Pass::Translate);
     insta::assert_snapshot!(function(&shown, "main$extern0"), @"
-    fn main$extern0(p.0: obj) -> unit {
+    internal fn main$extern0(p.0: obj) -> unit {
       let t.1: unit = extern Prelude.println(p.0)
       return t.1
     }
@@ -841,26 +845,26 @@ fn effect_numbers_skip_the_extern_effects() {
       let t.3: unit = extern Prelude.println(t.2)
       return t.3
     }
-    fn main$handle1(p.0: unit) -> int {
+    internal fn main$handle1(p.0: unit) -> int {
       let t.1: int = handle A((), &main$handle0) { ask: &main$handle0$ask } return &main$handle0$return
       return t.1
     }
-    fn main$handle0(p.0: unit) -> int {
+    internal fn main$handle0(p.0: unit) -> int {
       let t.1: int = call needs_a(&told)
       return t.1
     }
-    fn main$handle0$ask(p.0: unit, k.1: tobj, p.2: unit) -> int {
+    internal fn main$handle0$ask(p.0: unit, k.1: tobj, p.2: unit) -> int {
       let t.3: int = resume k.1(1, ())
       return t.3
     }
-    fn main$handle0$return($r.0: int, p.1: unit) -> int {
+    internal fn main$handle0$return($r.0: int, p.1: unit) -> int {
       return $r.0
     }
-    fn main$handle1$tell(m.0: int, k.1: tobj, p.2: unit) -> int {
+    internal fn main$handle1$tell(m.0: int, k.1: tobj, p.2: unit) -> int {
       let t.3: int = resume k.1((), ())
       return t.3
     }
-    fn main$handle1$return($r.0: int, p.1: unit) -> int {
+    internal fn main$handle1$return($r.0: int, p.1: unit) -> int {
       return $r.0
     }
     fn entry$main() -> unit {
@@ -927,26 +931,26 @@ fn names_outside_the_entry_are_qualified_with_their_module() {
       let t.2: obj = apply &con$Report.Csv.Row(t.1)
       return t.2
     }
-    fn main$handle0(p.0: unit) -> obj {
+    internal fn main$handle0(p.0: unit) -> obj {
       let t.1: obj = call Report.Csv.parse(())
       return t.1
     }
-    fn main$handle0$next(p.0: unit, k.1: tobj, p.2: unit) -> obj {
+    internal fn main$handle0$next(p.0: unit, k.1: tobj, p.2: unit) -> obj {
       let t.3: obj = resume k.1(1, ())
       return t.3
     }
-    fn main$handle0$return(r.0: obj, p.1: unit) -> obj {
+    internal fn main$handle0$return(r.0: obj, p.1: unit) -> obj {
       return r.0
     }
-    fn main$extern0(p.0: obj) -> unit {
+    internal fn main$extern0(p.0: obj) -> unit {
       let t.1: unit = extern Prelude.println(p.0)
       return t.1
     }
-    fn op$Report.Csv.next(p.0: unit) -> int {
+    internal fn op$Report.Csv.next(p.0: unit) -> int {
       let t.1: int = perform Report.Csv.Parse.next(p.0)
       return t.1
     }
-    fn con$Report.Csv.Row(p.0: int) -> obj {
+    internal fn con$Report.Csv.Row(p.0: int) -> obj {
       let d.1: obj = con Report.Csv.Row #0(p.0)
       return d.1
     }
@@ -964,13 +968,13 @@ fn an_entry_operation_does_not_collide_with_a_prelude_operation() {
     let text = "effect Log where\n  println : String -> Unit\n\neach : (String -> <e> Unit) -> <e> Unit\neach f = f \"x\"\n\nlogged : Unit -> <Log> Unit\nlogged () = each println\n\nmain : Unit -> <IO> Unit\nmain () =\n  handle logged () with\n    | println s k -> k ()\n  each Prelude.println";
     let shown = core_text(text, Pass::Translate);
     insta::assert_snapshot!(function(&shown, "op$println"), @"
-    fn op$println(p.0: obj) -> unit {
+    internal fn op$println(p.0: obj) -> unit {
       let t.1: unit = perform Log.println(p.0)
       return t.1
     }
     ");
     insta::assert_snapshot!(function(&shown, "main$extern0"), @"
-    fn main$extern0(p.0: obj) -> unit {
+    internal fn main$extern0(p.0: obj) -> unit {
       let t.1: unit = extern Prelude.println(p.0)
       return t.1
     }
@@ -1074,12 +1078,12 @@ fn builtins_used_as_values_are_wrapped() {
       let t.3: unit = call apply(&main$extern0, t.2)
       return t.3
     }
-    fn Prelude.>>$lambda0(f.0: tobj, g.1: tobj, x.2: tobj) -> tobj {
+    internal fn Prelude.>>$lambda0(f.0: tobj, g.1: tobj, x.2: tobj) -> tobj {
       let t.3: tobj = apply f.0(x.2)
       let t.4: tobj = apply g.1(t.3)
       return t.4
     }
-    fn main$extern0(p.0: obj) -> unit {
+    internal fn main$extern0(p.0: obj) -> unit {
       let t.1: unit = extern Prelude.println(p.0)
       return t.1
     }
@@ -1107,7 +1111,7 @@ fn lambdas_are_lifted_with_their_captures_first() {
       let t.6: unit = extern Prelude.println(s.1)
       return t.6
     }
-    fn main$lambda0(s.0: obj, t.1: obj) -> obj {
+    internal fn main$lambda0(s.0: obj, t.1: obj) -> obj {
       let t.2: obj = extern Prelude.++(t.1, s.0)
       return t.2
     }
@@ -1206,16 +1210,16 @@ fn handlers_are_lifted_to_closures() {
       let t.5: unit = extern Prelude.println(t.4)
       return t.5
     }
-    fn main$handle0(p.0: unit) -> int {
+    internal fn main$handle0(p.0: unit) -> int {
       let s.1: obj = const "x"
       let t.2: int = perform Ask.ask(s.1)
       return t.2
     }
-    fn main$handle0$ask(key.0: obj, k.1: tobj, p.2: unit) -> int {
+    internal fn main$handle0$ask(key.0: obj, k.1: tobj, p.2: unit) -> int {
       let t.3: int = resume k.1(1, ())
       return t.3
     }
-    fn main$handle0$return(x.0: int, p.1: unit) -> int {
+    internal fn main$handle0$return(x.0: int, p.1: unit) -> int {
       let t.2: int = extern Prelude.+(x.0, 1)
       return t.2
     }
@@ -1240,7 +1244,7 @@ fn operations_as_values_and_drop() {
     }
     "#);
     insta::assert_snapshot!(function(&shown, "op$log"), @"
-    fn op$log(p.0: obj, p.1: obj) -> unit {
+    internal fn op$log(p.0: obj, p.1: obj) -> unit {
       let t.2: unit = perform Log.log(p.0, p.1)
       return t.2
     }
@@ -1284,7 +1288,7 @@ fn a_constructor_used_as_a_function_value_is_wrapped() {
     }
     ");
     insta::assert_snapshot!(function(&shown, "con$Pair"), @"
-    fn con$Pair(p.0: tobj, p.1: tobj) -> obj {
+    internal fn con$Pair(p.0: tobj, p.1: tobj) -> obj {
       let d.2: obj = con Pair #0(p.0, p.1)
       return d.2
     }
@@ -1366,7 +1370,7 @@ fn constructor_patterns_in_let_lambda_and_equation_parameters() {
     }
     ");
     insta::assert_snapshot!(function(&shown, "by_lambda$lambda0"), @"
-    fn by_lambda$lambda0(p.0: obj) -> int {
+    internal fn by_lambda$lambda0(p.0: obj) -> int {
       unpack p.0 Box #0(k.1: int)
       return k.1
     }
@@ -1402,14 +1406,14 @@ fn constructor_patterns_in_handler_clause_parameters() {
     let text = "data Box a = | Box a\n\neffect Give where\n  give : Box Int -> Int\n\nrun : Unit -> Int\nrun () =\n  handle Box (give (Box 1)) with\n    | give (Box n) k -> k n\n    | return (Box r) -> r\n\nmain : Unit -> <IO> Unit\nmain () = println (show_int (run ()))";
     let shown = core_text(text, Pass::Translate);
     insta::assert_snapshot!(function(&shown, "run$handle0$give"), @"
-    fn run$handle0$give(p.0: obj, k.1: tobj, p.2: unit) -> int {
+    internal fn run$handle0$give(p.0: obj, k.1: tobj, p.2: unit) -> int {
       unpack p.0 Box #0(n.3: int)
       let t.4: int = resume k.1(n.3, ())
       return t.4
     }
     ");
     insta::assert_snapshot!(function(&shown, "run$handle0$return"), @"
-    fn run$handle0$return(p.0: obj, p.1: unit) -> int {
+    internal fn run$handle0$return(p.0: obj, p.1: unit) -> int {
       unpack p.0 Box #0(r.2: int)
       return r.2
     }
@@ -1579,18 +1583,18 @@ fn a_handler_with_a_state_passes_its_initial_value_and_takes_the_state_from_its_
       let t.3: unit = extern Prelude.println(t.2)
       return t.3
     }
-    fn main$handle0(p.0: unit) -> int {
+    internal fn main$handle0(p.0: unit) -> int {
       let t.1: int = perform Ask.ask(())
       let t.2: int = perform Ask.ask(())
       let t.3: int = extern Prelude.+(t.1, t.2)
       return t.3
     }
-    fn main$handle0$ask(p.0: unit, k.1: tobj, st.2: int) -> int {
+    internal fn main$handle0$ask(p.0: unit, k.1: tobj, st.2: int) -> int {
       let t.3: int = extern Prelude.+(st.2, 1)
       let t.4: int = resume k.1(st.2, t.3)
       return t.4
     }
-    fn main$handle0$return(x.0: int, st.1: int) -> int {
+    internal fn main$handle0$return(x.0: int, st.1: int) -> int {
       let t.2: int = extern Prelude.*(x.0, st.1)
       return t.2
     }
@@ -1615,26 +1619,26 @@ fn effects_are_numbered_in_declaration_order() {
       let t.5: unit = extern Prelude.println(t.4)
       return t.5
     }
-    fn main$handle0(p.0: unit) -> int {
+    internal fn main$handle0(p.0: unit) -> int {
       let t.1: int = perform A.a(())
       return t.1
     }
-    fn main$handle0$a(p.0: unit, k.1: tobj, p.2: unit) -> int {
+    internal fn main$handle0$a(p.0: unit, k.1: tobj, p.2: unit) -> int {
       let t.3: int = resume k.1(1, ())
       return t.3
     }
-    fn main$handle0$return($r.0: int, p.1: unit) -> int {
+    internal fn main$handle0$return($r.0: int, p.1: unit) -> int {
       return $r.0
     }
-    fn main$handle1(p.0: unit) -> int {
+    internal fn main$handle1(p.0: unit) -> int {
       let t.1: int = perform B.b(())
       return t.1
     }
-    fn main$handle1$b(p.0: unit, k.1: tobj, p.2: unit) -> int {
+    internal fn main$handle1$b(p.0: unit, k.1: tobj, p.2: unit) -> int {
       let t.3: int = resume k.1(2, ())
       return t.3
     }
-    fn main$handle1$return($r.0: int, p.1: unit) -> int {
+    internal fn main$handle1$return($r.0: int, p.1: unit) -> int {
       return $r.0
     }
     fn entry$main() -> unit {
@@ -1832,7 +1836,7 @@ fn a_continuation_call_in_its_clause_has_no_mask() {
         "{STATE}run : (Unit -> <State Int | e> a) -> <e> a\nrun action =\n  handle action () from 0 with\n    | get () k st -> k st st\n    | put n k _ -> k () n\n    | return x _ -> x\n\nmain : Unit -> <IO> Unit\nmain () = println (show_int (run (fn () -> get ())))\n"
     );
     insta::assert_snapshot!(function(&core_text(&text, Pass::Translate), "run$handle0$get"), @"
-    fn run$handle0$get(p.0: unit, k.1: tobj, st.2: int) -> tobj {
+    internal fn run$handle0$get(p.0: unit, k.1: tobj, st.2: int) -> tobj {
       let t.3: tobj = resume k.1(st.2, st.2)
       return t.3
     }
@@ -1874,7 +1878,7 @@ main () =
 ";
     // handle の番号は HIR の式の ID の順なので、内側の handle が `f$handle0` になる
     insta::assert_snapshot!(function(&core_text(text, Pass::Translate), "f$handle0"), @"
-    fn f$handle0(k.0: tobj, p.1: unit) -> int {
+    internal fn f$handle0(k.0: tobj, p.1: unit) -> int {
       let t.2: int = mask [Log] resume k.0(1, ())
       return t.2
     }
@@ -2002,7 +2006,7 @@ fn a_partial_continuation_is_wrapped_with_the_state_wrapper() {
     );
     assert!(shown.contains("closure cont$state(k"), "{shown}");
     insta::assert_snapshot!(function(&shown, "cont$state"), @"
-    fn cont$state(k.0: tobj, v.1: tobj, s.2: tobj) -> tobj {
+    internal fn cont$state(k.0: tobj, v.1: tobj, s.2: tobj) -> tobj {
       let t.3: tobj = resume k.0(v.1, s.2)
       return t.3
     }

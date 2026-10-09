@@ -165,7 +165,8 @@ impl FnBuilder {
     /// 縮約が作る (docs/spec/core-ir.md)。
     /// 文がなく `return p` だけのブロック `b(p)` へのすべての `jump b(a)` を `return a` にして `b` を消す。番号の
     /// 大きいブロックから見るので、`return` に変わったブロックが次に消せる形になっても、同じ1回のループで消える。
-    pub(super) fn finish(self, name: String, ret: Repr) -> CoreFn {
+    /// `internal` は内部の関数の印 (`CoreFn::internal`) である。
+    pub(super) fn finish(self, name: String, internal: bool, ret: Repr) -> CoreFn {
         debug_assert!(
             self.labels.iter().all(|label| label.pending.is_empty()),
             "every label is resolved"
@@ -220,6 +221,7 @@ impl FnBuilder {
             .collect();
         CoreFn {
             name,
+            internal,
             vars: self.vars,
             ret,
             blocks,

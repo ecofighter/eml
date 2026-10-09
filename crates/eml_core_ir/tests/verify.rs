@@ -1966,6 +1966,136 @@ fn entry$main(c.0: tobj) -> unit {
     assert_eq!(check(text), Ok(()));
 }
 
+// box と unbox
+
+/// `n` と `c` と定数を `box` し、`unbox` で戻す。`decrefs` は、所有の段で `box` の変数を手放す文である。
+fn boxed_round_trip(decrefs: &str) -> String {
+    format!(
+        "fn f(n.0: int, c.1: enum) -> int {{
+  let b.2: tobj = box n.0
+  let e.3: tobj = box c.1
+  let k.4: tobj = box 5
+  let m.5: int = unbox b.2
+  let d.6: enum = unbox e.3
+  let o.7: int = unbox k.4
+{decrefs}  return m.5
+}}
+"
+    )
+}
+
+#[test]
+fn int_and_enum_values_and_int_constants_are_boxed_and_unboxed() {
+    assert_eq!(check_scopes(&boxed_round_trip("")), Ok(()));
+    assert_eq!(
+        check(&boxed_round_trip(
+            "  decref b.2\n  decref e.3\n  decref k.4\n"
+        )),
+        Ok(())
+    );
+    // `box` は所有した `tobj` を作る
+    assert_eq!(
+        check(&boxed_round_trip("")),
+        Err("`b.2` is still owned at the end of the function in `f`".to_string())
+    );
+}
+
+#[test]
+fn only_int_and_enum_values_and_int_constants_are_boxed() {
+    for (operand, shown) in [
+        ("u.0", "`u.0` (unit)"),
+        ("p.1", "`p.1` (obj)"),
+        ("t.2", "`t.2` (tobj)"),
+        ("()", "()"),
+        ("#1", "#1"),
+        ("&f", "&f"),
+    ] {
+        let text = format!(
+            "fn f(u.0: unit, p.1: obj, t.2: tobj) -> tobj {{\n  let b.3: tobj = box {operand}\n  return b.3\n}}\n"
+        );
+        let expected = Err(format!(
+            "{shown} is boxed, but only int and enum values and Int constants can be in `f`"
+        ));
+        assert_eq!(check_scopes(&text), expected, "{operand}");
+        assert_eq!(check(&text), expected, "{operand}");
+    }
+}
+
+#[test]
+fn a_box_is_bound_to_tobj() {
+    for repr in ["int", "obj", "unit"] {
+        let text =
+            format!("fn f(n.0: int) -> {repr} {{\n  let b.1: {repr} = box n.0\n  return b.1\n}}\n");
+        assert_eq!(
+            check_scopes(&text),
+            Err(format!(
+                "`b.1` ({repr}) is bound to a box, which is tobj in `f`"
+            )),
+            "{repr}"
+        );
+    }
+}
+
+#[test]
+fn only_tobj_values_are_unboxed() {
+    // `obj` はつねにヒープの物体を指すので、スカラーを入れた値にならない
+    for (operand, shown) in [
+        ("p.1", "`p.1` (obj)"),
+        ("n.0", "`n.0` (int)"),
+        ("5", "5"),
+        ("()", "()"),
+    ] {
+        let text = format!(
+            "fn f(n.0: int, p.1: obj) -> int {{\n  let m.2: int = unbox {operand}\n  return m.2\n}}\n"
+        );
+        let expected = Err(format!("{shown} is unboxed, but only tobj can be in `f`"));
+        assert_eq!(check_scopes(&text), expected, "{operand}");
+        assert_eq!(check(&text), expected, "{operand}");
+    }
+}
+
+#[test]
+fn an_unbox_gives_an_int_or_an_enum() {
+    for repr in ["unit", "tobj", "obj"] {
+        let text =
+            format!("fn f(t.0: tobj) -> unit {{\n  let m.1: {repr} = unbox t.0\n  return ()\n}}\n");
+        assert_eq!(
+            check_scopes(&text),
+            Err(format!(
+                "`m.1` ({repr}) is bound to an unbox, which gives int or enum in `f`"
+            )),
+            "{repr}"
+        );
+    }
+}
+
+#[test]
+fn an_unbox_reads_its_value() {
+    // 読むだけなので、`unbox` の後も値を所有している。借りたフィールドも、持ち主が所有している間は読める
+    assert_eq!(
+        check(
+            "fn f(t.0: tobj) -> int {\n  let n.1: int = unbox t.0\n  decref t.0\n  return n.1\n}\n"
+        ),
+        Ok(())
+    );
+    assert_eq!(
+        check(&unpacking("  let n.3: int = unbox b.2\n  return p.0\n")),
+        Ok(())
+    );
+    assert_eq!(
+        check(
+            "fn f(t.0: tobj) -> int {\n  decref t.0\n  let n.1: int = unbox t.0\n  return n.1\n}\n"
+        ),
+        Err("`t.0` is unboxed after it was moved in `f`".to_string())
+    );
+    assert_eq!(
+        check(&unpacking(
+            "  decref p.0\n  let n.3: int = unbox b.2\n  let e.4: obj = const \"e\"\n  return e.4\n"
+        )),
+        Err("`b.2` is unboxed after its owner `p.0` was given up in `f`".to_string())
+    );
+}
+
 // 大きさ
 
 /// `n` 個の `switch` が続き、片方の枝が呼び出しをして合流する関数。所有の検査の段では、合流のブロックの数だけ、

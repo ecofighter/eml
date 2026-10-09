@@ -124,6 +124,10 @@ pub struct VarId(pub u32);
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CoreFn {
     pub name: String,
+    /// translate が定義の中から作る関数 (ラムダ、節、handle の本体) と、translate が作る補助の関数 (`op$`、`con$`、
+    /// `$externN`、`cont$`、`cont$state`)。直接呼ぶのは、それを作った定義の中だけである。トップレベルの関数と入口の
+    /// 関数は内部の関数でない。テキストの形では `internal fn` と書く (docs/spec/core-ir.md)。
+    pub internal: bool,
     pub vars: Vec<VarInfo>,
     /// 直接の呼び出しの結果の Repr。
     pub ret: Repr,
@@ -218,10 +222,11 @@ impl Stmt {
         }
     }
 
-    /// 値の使いのうち、参照を1つ受け取る「消費」。`unpack` の値は読むだけなので数えない (docs/spec/core-ir.md)。
+    /// 値の使いのうち、参照を1つ受け取る「消費」。`unpack` と `unbox` の値は読むだけなので数えない
+    /// (docs/spec/core-ir.md)。
     pub fn for_each_consumed(&self, f: impl FnMut(Atom)) {
         match self {
-            Stmt::Let { var: _, rhs } => rhs.for_each_atom(f),
+            Stmt::Let { var: _, rhs } => rhs.for_each_consumed(f),
             Stmt::Unpack { .. } | Stmt::Dup(_) | Stmt::Decref(_) | Stmt::Release { .. } => {}
         }
     }
@@ -366,6 +371,12 @@ pub enum Rhs {
     Con { ctor: Ctor, args: Vec<Atom> },
     /// 値の所有権を受け取って捨てる。値は `()` である。
     Drop(Atom),
+    /// 箱を要するスカラー (`Repr::BOXED_SCALARS`) の値か `Int` の定数を、`tobj` の値にする。オペランドを消費し、所有
+    /// した `tobj` を作る。スカラーの種類はオペランドの Repr で決まる (docs/spec/core-ir.md の「値の表現」)。
+    Box(Atom),
+    /// `tobj` の値から、箱を要するスカラーを取り出す。`switch` の scrutinee と同じく値を読むだけで、所有権を受け取ら
+    /// ない。スカラーの種類は束縛する変数の Repr で決まる。
+    Unbox(Atom),
 }
 
 impl Rhs {
@@ -384,8 +395,15 @@ impl Rhs {
                 at: _,
             }
             | Rhs::Con { ctor: _, args } => args.iter().for_each(|&atom| f(atom)),
-            Rhs::Drop(atom) => f(*atom),
+            Rhs::Drop(atom) | Rhs::Box(atom) | Rhs::Unbox(atom) => f(*atom),
             Rhs::ConstString(_) => {}
+        }
+    }
+
+    /// 値の使いのうち、参照を1つ受け取る「消費」。`unbox` の値は読むだけなので数えない (docs/spec/core-ir.md)。
+    pub fn for_each_consumed(&self, f: impl FnMut(Atom)) {
+        if !matches!(self, Rhs::Unbox(_)) {
+            self.for_each_atom(f);
         }
     }
 
@@ -403,7 +421,7 @@ impl Rhs {
                 at: _,
             }
             | Rhs::Con { ctor: _, args } => args.iter_mut().for_each(f),
-            Rhs::Drop(atom) => f(atom),
+            Rhs::Drop(atom) | Rhs::Box(atom) | Rhs::Unbox(atom) => f(atom),
             Rhs::ConstString(_) => {}
         }
     }
