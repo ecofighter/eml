@@ -78,9 +78,9 @@
 ### `never` の操作
 
 - `never` の操作の `perform` は値を返さない。節が継続をその場で捨てるので、`perform` の後へ制御が戻らない。そのため、その結果は位置でなく、束縛の Repr は translate が決めたまま (具体化した型の Repr) にする
-  - box の挿入は、`never` の `perform` の束縛を受け直さず、その後に変換を入れない
+  - box の挿入は、`never` の `perform` の束縛を受け直さず、その束縛を使う所にも変換を入れない。束縛の使いには制御が届かないからである
   - T3 は `never` の `perform` を見ない。末尾の位置の `perform never` は、どの `ret` とも互換として扱う
-  - verifier は、`never` の `perform` の結果を束縛と比べず、末尾の `perform never` の結果を呼び出し元の `ret` と比べない
+  - verifier は、`never` の `perform` の結果を束縛と比べず、末尾の `perform never` の結果を呼び出し元の `ret` と比べない。互換の位置では、`never` の `perform` の束縛の使い (`return` の値、呼び出しの引数など) も位置と比べない。縮約の前の `let t = perform never ..` と `return t` の形も、そのまま `tail perform never` になる
 - 理由: 結果を `tobj` とすると、T3 が「確かめて失敗する」形の関数の `ret` を上げる。試作では、`effect_abort.em` の `check_positive` と `checked` が `tail perform never Fail.fail(..)` だけのために `ret` を `tobj` にした。成功する経路で `box n.0` をし、呼び出し元はみな `unbox` と `decref` をした。ネイティブの 64 ビットの `Int` では、成功する呼び出しのたびに箱を確保しうる。`never` の `perform` は戻らないので、フレームを積まず、末尾呼び出しの保証にも関わらない
 - 操作の引数は、今までどおり一様な位置である。エフェクトの位置を一様にする決定は変えない
 - 戻らない extern (S4 の `exit`) の結果の扱いは、S4 で同じ考え方で決める。ロードマップの S4 の `exit` の項目に書く
@@ -292,7 +292,7 @@
 - 段は直線に並ぶので、境界の検査だけを切り替える別の旗は持たない。`Level` は `Translated`、`Scopes`、`Ownership` の3つである
 - `eml_core_ir` は `verify_translated` と `boxing` を公開する。`boxing` を公開するのは、`contract` と `perceus` と同じく、IR のテキストからのテスト (T3 の時間) のためである。テストの補助に、`contract_text` と並べて `boxing_text` を足す
 - 変換の段が `tail`、`box`、`unbox` を拒む理由: box の挿入は末尾呼び出しと変換のない入力を前提にし、T3 は `let` と `return` の形から末尾の位置を見る。覗き穴の表も、パスが自分で作った定義からだけ作る。Perceus より前に `release` を拒むのと同じく、パスの入力の約束を verifier が確かめる
-- spec の R8 は次のように書き直す。`extern` の引数と結果は表の行と同じである。`unpack` の値は `obj` の変数である。`jump` の実引数と行き先の引数、`return` の値と `ret`、直接の呼び出しと `apply`、`perform`、`resume`、`handle` の引数と結果、`closure` の引数、`tail` の結果は、1節の互換の関係で比べ、定数は互換の位置の当てはめで比べる。`never` の操作の `perform` の結果は比べない。関数の値として使う関数は一様である。`box` と `unbox` は2節の規則に従う
+- spec の R8 は次のように書き直す。`extern` の引数と結果は表の行と同じである。`unpack` の値は `obj` の変数である。`jump` の実引数と行き先の引数、`return` の値と `ret`、直接の呼び出しと `apply`、`perform`、`resume`、`handle` の引数と結果、`closure` の引数、`tail` の結果は、1節の互換の関係で比べ、定数は互換の位置の当てはめで比べる。`never` の操作の `perform` の結果と、その束縛の使いは比べない。関数の値として使う関数は一様である。`box` と `unbox` は2節の規則に従う
 - spec の R9 には、宣言した Repr が `tobj` のフィールドでは、`con` の引数と case と `unpack` の束縛が `tobj` と互換であることを足す
 
 ### 検査の順
@@ -358,7 +358,7 @@
   | 呼び出しと結果の間に使われない `let` があるループ | `loop f n = if n == 0 then 0 else let r = f (n - 1) in let s = "unused" in r`、`go n = loop go n` | 2つの n で同じ |
   | 節が末尾で再開する操作のループ | `sum_asks n acc = if n == 0 then acc else sum_asks (n - 1) (acc + ask ())` を `\| ask () k -> k 2` の handler で包む | 2つの n で同じ |
   | 直接の自己末尾呼び出し | `loop n acc = if n == 0 then acc else loop (n - 1) (acc + 1)` | 2つの n で同じ |
-  | ラムダからラムダへの末尾の `apply` | `count_down n k = if n == 0 then k 0 else count_down (n - 1) (fn m -> k (m + 1))` | n = 2000 の値が n = 1000 の値 + 1000 以下 (反復ごとにクロージャが1つで、フレームは積まない) |
+  | ラムダからラムダへの末尾の `apply` | `count_down n k = if n == 0 then k 0 + k 0 else count_down (n - 1) (fn m -> k (m + 1))` | n = 2000 の値が n = 1000 の値 + 1000 以下 (反復ごとにクロージャが1つで、フレームは積まない)。クロージャの鎖を2回使うのは、戻る間も鎖を共有にしておくためである。一意なクロージャは `apply` で手放されるので、そのスロットを積んだフレームが使い回し、末尾の `apply` を失っても `peak_objects` が増えない |
 
 - T3 の時間: `eml_core_ir/tests/boxing.rs` で、N = 30,000 の関数の鎖を IR のテキストで作り、`boxing_text` で公開した `boxing` を当てる。`f_i` は `f_{i+1}` を末尾の位置で呼び、最後の関数は `&k` への `apply` を末尾の位置で呼ぶ。呼ばれる側の番号を大きくして、全体を繰り返す不動点が2乗の時間になる並びにする。`boxing` の時間だけを測り、debug ビルドで 5 秒未満であることと、鎖のすべての `ret` が `tobj` になることを確かめる。試作の2乗の形では N = 6,000 で 1.05 秒だったので、N = 30,000 では約 26 秒になる。verifier の大きな IR のテストと同じく、`#[ignore]` を付けずにふだんの `cargo test` で流す
 
