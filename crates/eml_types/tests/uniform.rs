@@ -1,4 +1,4 @@
-//! 一様な位置のグラフ (docs/superpowers/specs/2026-10-10-s5-type-classes-design.md の「一様な位置と制約付きの多相再帰」)。
+//! 一様な位置のグラフ (docs/spec/core-ir.md の「一様な位置と制約付きの多相再帰」)。
 
 use eml_test_support::{check, short};
 use eml_types::InstanceNode;

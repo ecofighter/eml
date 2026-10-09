@@ -65,7 +65,7 @@ pub(super) struct GeneratedInstance {
     pub(super) fields: Vec<Vec<TypeId>>,
 }
 
-/// 生成する関数 (docs/superpowers/specs/2026-10-10-s5-type-classes-design.md の「導出とタプルの生成器」)。
+/// 生成する関数 (docs/spec/core-ir.md の「導出とタプルの生成器」)。
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub(super) struct Generated {
     pub(super) node: InstanceNode,
@@ -229,7 +229,7 @@ impl Collector<'_> {
         })
     }
 
-    /// メソッドの参照の行き先 (docs/superpowers/specs/2026-10-10-s5-type-classes-design.md の「メソッドへの参照の解決」)。
+    /// メソッドの参照の行き先 (docs/spec/core-ir.md の「メソッドの解決」)。
     /// `args` は代入をかけた後の型引数で、先頭がクラスの型変数の型である。型検査が制約をすべて具体的な型で解いて
     /// いるので、ここで `Given` と `Missing` に出会うことはない。導出した instance とタプルの instance の中心の
     /// メソッドは生成する関数へ、ほかのメソッドはクラスの既定のメソッドへ向かう。
@@ -469,7 +469,7 @@ impl Collector<'_> {
 
 pub(super) fn collect(hir: &HirProgram, typed: &TypedProgram, entry: FunctionId) -> Instances {
     // 制約を持つ関数の証拠は呼び出し側の型で決まるので、入口にはできない。入口を選ぶのは translate の呼び出し側で
-    // ある (docs/superpowers/specs/2026-10-10-s5-type-classes-design.md の「一様な位置と制約付きの多相再帰」)
+    // ある (docs/spec/core-ir.md の「メソッドの解決」)
     assert!(
         hir[entry]
             .signature
@@ -547,7 +547,7 @@ fn instance_name(
     name
 }
 
-/// 生成する関数の、鍵を付ける前の名前 (docs/superpowers/specs/2026-10-10-s5-type-classes-design.md の「名前」)。
+/// 生成する関数の、鍵を付ける前の名前 (docs/spec/core-ir.md の「メソッドの解決」)。
 /// 手で書いた instance のメソッドと同じ形で、導出した instance は型を定義したモジュールで、タプルと `Unit` は
 /// Prelude で修飾する。補助の `tag$` は `con$` と同じ修飾の規則に従う。
 fn generated_base(hir: &HirProgram, generated: &Generated) -> String {

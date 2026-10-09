@@ -1,5 +1,5 @@
 //! タプル、リテラルのパターン、`==` で比べる値の型検査 (docs/spec/records.md、
-//! docs/superpowers/specs/2026-10-10-s5-type-classes-design.md の「制約を解く」)。
+//! docs/spec/types.md の「制約の解決」)。
 
 use crate::common::check_text;
 

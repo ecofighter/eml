@@ -77,7 +77,7 @@ pub(crate) enum Provenance {
     /// 複写する。
     Declaration,
     /// 本体の検査で、制約 `C a` と instance の頭の型変数が意味する `a ≤ Unr`
-    /// (docs/superpowers/specs/2026-10-10-s5-type-classes-design.md の「クラスの性質」)。宣言から出るが、SCC の中の参照が
+    /// (docs/spec/types.md の「`Unr` のクラス」)。宣言から出るが、SCC の中の参照が
     /// `a` を線形な型で具体化すると破れる。そのとき、参照が求める制約は解けないか (E2006)、線形な頭の instance で解けるか
     /// (E2010)、型引数に `Unr` を求めて破れるので、誤りは報告済みである。そこで報告しない。
     Given,

@@ -1,4 +1,4 @@
-//! 型の表の型で instance を引く (docs/superpowers/specs/2026-10-10-s5-type-classes-design.md の「制約を解く」)。
+//! 型の表の型で instance を引く (docs/spec/types.md の「制約の解決」)。
 
 use eml_hir::{ClassId, InstanceId, Program};
 

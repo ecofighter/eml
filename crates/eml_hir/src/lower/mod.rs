@@ -31,7 +31,7 @@ struct PendingBody {
     equations: Vec<(AstPtr<ast::Equation>, TextRange)>,
     /// 本体の注釈で引ける、シグネチャの先頭の型変数の数。`None` はすべてである。instance のメソッドのシグネチャの
     /// メソッド自身の型変数はクラスが決めるので、名前で書けない
-    /// (docs/superpowers/specs/2026-10-10-s5-type-classes-design.md の「HIR の形」)。
+    /// (docs/spec/declarations.md の「`instance`」)。
     annotation_vars: Option<usize>,
 }
 

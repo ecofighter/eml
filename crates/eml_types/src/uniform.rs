@@ -1,5 +1,5 @@
 //! 一様な位置のグラフと制約付きの多相再帰 (E2012)
-//! (docs/superpowers/specs/2026-10-10-s5-type-classes-design.md の「一様な位置と制約付きの多相再帰」)。
+//! (docs/spec/core-ir.md の「一様な位置と制約付きの多相再帰」)。
 //! 型検査の後に、書き出した本体の表から計算する。translate は結果を読むだけである。
 
 use std::collections::{HashMap, HashSet};

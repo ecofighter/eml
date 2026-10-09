@@ -27,7 +27,7 @@ fn canonical(program: &Program, module: eml_hir::ModuleId, name: &str) -> String
 
 /// instance の `extern` で結んだメソッドの行と、行の名前 (`Prelude.Eq Int.==`) とシグネチャ。シグネチャはクラスの
 /// メソッドのもので、矢印の数と row は instance の頭によらない
-/// (docs/superpowers/specs/2026-10-10-s5-type-classes-design.md の「Prelude と extern の表」)。
+/// (docs/spec/declarations.md の「`extern`」)。
 fn instance_externs(program: &Program) -> Vec<(eml_extern::Extern, String, &Signature)> {
     let mut found = Vec::new();
     for (id, instance) in program.instances() {
@@ -71,7 +71,7 @@ fn every_extern_type_is_declared_once_in_std() {
 #[test]
 fn every_extern_function_is_declared_once_in_std() {
     // どの行も、std の extern の関数か instance の `extern` のちょうど1つから指される
-    // (docs/superpowers/specs/2026-10-10-s5-type-classes-design.md の「Prelude と extern の表」)
+    // (docs/spec/declarations.md の「`extern`」)
     let program = std_program();
     let instance_externs = instance_externs(&program);
     for &e in Extern::ALL {

@@ -481,7 +481,7 @@ fn f(s.0: obj) -> unit {
 #[test]
 fn an_extern_with_a_quoted_name_round_trips() {
     // instance の extern の行の名前は空白を含むので、関数の名前と同じく引用符で囲んで書く
-    // (docs/superpowers/specs/2026-10-10-s5-type-classes-design.md の「名前」)
+    // (docs/spec/core-ir.md の「メソッドの解決」)
     let program = round_trip(
         "\
 fn f(a.0: int, b.1: int) -> enum {

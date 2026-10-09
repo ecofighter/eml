@@ -60,7 +60,7 @@ fn declared(checked: &Checked, wanted: impl Fn(&Function) -> bool) -> TypeId {
 
 /// 行 `e` の std のシグネチャの型。extern の関数なら宣言の型で、instance の `extern` で結んだメソッドなら、クラスの
 /// メソッドの宣言の型のクラスの型変数を instance の頭の型に置き換えた型である
-/// (docs/superpowers/specs/2026-10-10-s5-type-classes-design.md の「Prelude と extern の表」)。置き換えた型は
+/// (docs/spec/declarations.md の「`extern`」)。置き換えた型は
 /// `types` に足す。
 fn row_type(checked: &Checked, types: &mut TypeStore, e: Extern) -> TypeId {
     let program = &checked.program;

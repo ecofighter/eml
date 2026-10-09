@@ -478,7 +478,7 @@ impl ModuleScope {
             }
         }
         // `pub class` はメソッドもまとめて公開する
-        // (docs/superpowers/specs/2026-10-10-s5-type-classes-design.md の「名前空間と公開」)
+        // (docs/spec/declarations.md の「`pub`」)
         for (k, class) in tree.classes.iter().enumerate() {
             let usable = !duplicates.contains(&TypeItem::Class(self.class_ids[k]));
             for (j, method) in class.methods.iter().enumerate() {

@@ -455,7 +455,7 @@ fn class_of(
 
 /// instance のメンバーを名前でまとめる。等式は連続していなければ E1018 にする。同じメソッドを `extern` の行と
 /// 等式の両方で、または `extern` の行2つで定義したら、後の方を E1003 にして捨てる
-/// (docs/superpowers/specs/2026-10-10-s5-type-classes-design.md の「文法」)。シグネチャはパーサが E0011 にした。
+/// (docs/spec/declarations.md の「`instance`」)。シグネチャはパーサが E0011 にした。
 fn instance_of(
     file: FileId,
     item: &ast::InstanceItem,

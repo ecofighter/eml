@@ -36,7 +36,7 @@
       lines (read_text "data.txt")
         |> map parse_int
         |> sum
-    println (show_int total)
+    println (show total)
   ```
 
 - 開始トークンが行の途中にある場合は、ブロックを開かない。`let x = 1` や `if c then a else b` は1行の式になる

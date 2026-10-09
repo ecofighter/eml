@@ -1,5 +1,5 @@
 //! 導出した instance とタプルの instance の中心のメソッドを、Core IR の関数として組む
-//! (docs/superpowers/specs/2026-10-10-s5-type-classes-design.md の「導出とタプルの生成器」)。フィールドは `switch` の
+//! (docs/spec/core-ir.md の「導出とタプルの生成器」)。フィールドは `switch` の
 //! case か `unpack` で受け、フィールドの型のメソッドは `instances.rs` が解いた行き先 (`calls`) を順に呼ぶ。型が
 //! すべて `Unr` なので、写しと解放は Perceus に任せる。
 

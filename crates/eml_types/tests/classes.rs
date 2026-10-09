@@ -1,4 +1,4 @@
-//! 型クラスの制約の解決 (docs/superpowers/specs/2026-10-10-s5-type-classes-design.md の「型検査」)。
+//! 型クラスの制約の解決 (docs/spec/types.md の「制約」)。
 
 use crate::common::check_text;
 use eml_test_support::{check, short};

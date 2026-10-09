@@ -276,7 +276,7 @@ impl TypeLowering<'_> {
 /// 公開の範囲の誤り (E1032)。非公開の型を返す公開の関数を許すと、`pub data` の形で入れる予定の抽象型より先に、
 /// 裏口の抽象型ができてしまう。非公開のエフェクトは、import する側が名前を書けず handle できない
 /// (docs/spec/modules.md の「公開の範囲」)。非公開のクラスの制約を持つ公開の関数は、import する側が instance を
-/// 書けない (docs/superpowers/specs/2026-10-10-s5-type-classes-design.md の「名前空間と公開」)。
+/// 書けない (docs/spec/modules.md の「公開の範囲」)。
 pub(super) fn private_in_public(
     items: &Resolver<'_>,
     file: FileId,
@@ -329,7 +329,7 @@ pub(super) fn arity_error(
 }
 
 /// E1043。クラスは型の名前空間にあるが、型ではない
-/// (docs/superpowers/specs/2026-10-10-s5-type-classes-design.md の「名前空間と公開」)。
+/// (docs/spec/modules.md の「名前空間」)。
 pub(super) fn class_as_type(file: FileId, name: &str, range: TextRange) -> Diagnostic {
     Diagnostic::error(
         codes::CLASS_AS_TYPE,

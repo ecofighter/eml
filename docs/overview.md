@@ -37,7 +37,7 @@ eml の目的、言語の性格、確定した設計判断の一覧、文書全�
 | 型付け | Bidirectional Typing + 単一化。トップレベルの関数は引数と戻り値の型注釈が必須。トップレベルの関数の row はシグネチャで決まり、省略した row は `<>` (純粋) である。Kind は推論する | [型と Kind](spec/types.md) |
 | 直積型 | レコードは名前的で、コンストラクタが1つの `data` にフィールドの名前を付けて宣言する (`data Person = Person { name : String, age : Int }`)。タプルは構造的なままで、`t.0` で射影する。Unit は 0 要素のタプル `()` である。Kind はフィールドの Kind の join で推論する (S6 で入れる) | [直積型とレコード](spec/records.md) |
 | 単相化 | 関数のコードは (関数, 型引数) の instance ごとに単相化し、データの配置は一様のままにする。多相再帰で大きくなる型変数の位置と handler の節の型変数は、一様な位置 (`tobj`) として扱う | [Core IR とインタプリタ](spec/core-ir.md) の「変換の規則」 |
-| 等価、比較、表示 | 型クラス `Eq`、`Ord`、`Show` を Prelude に置く。`class` と `instance` の宣言、シグネチャの制約 `Eq a =>`、`deriving` を持つ。証拠は Core IR への変換の単相化で決め、実行時の辞書は持たない (S5 で入れる) | [ロードマップ](future/roadmap.md) |
+| 等価、比較、表示 | 型クラス `Eq`、`Ord`、`Show` を Prelude に置く。`class` と `instance` の宣言、シグネチャの制約 `Eq a =>`、`deriving` を持つ。証拠は Core IR への変換の単相化で決め、実行時の辞書は持たない | [宣言](spec/declarations.md) の「クラスと instance」、[型と Kind](spec/types.md) の「制約」 |
 
 ### 構文
 

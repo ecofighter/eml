@@ -219,7 +219,7 @@ pub struct Program {
     /// 型、エフェクト、コンストラクタ、クラスの表示名。診断、`dump`、`pretty` が引く。
     pub names: DisplayNames,
     /// (クラス, 頭の型) から instance への索引。一貫性があるので、1つの組に instance は高々1つである
-    /// (docs/superpowers/specs/2026-10-10-s5-type-classes-design.md の「宣言の検査」)。
+    /// (docs/spec/modules.md の「instance の一貫性」)。
     pub instance_index: HashMap<(ClassId, TypeDefId), InstanceId>,
 }
 
@@ -318,7 +318,7 @@ impl Program {
 
     /// 導出した instance とタプルの instance で、処理系が本体を生成するメソッドなら、その種類。ほかのメソッドは
     /// クラスの既定のメソッドを通る
-    /// (docs/superpowers/specs/2026-10-10-s5-type-classes-design.md の「導出とタプルの生成器」)。
+    /// (docs/spec/core-ir.md の「導出とタプルの生成器」)。
     pub fn core_method(&self, method: MethodId) -> Option<CoreMethod> {
         let lang = &self.lang;
         let method = &self[method];

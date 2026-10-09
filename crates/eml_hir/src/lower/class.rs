@@ -1,4 +1,4 @@
-//! クラス、メソッド、文脈の変換 (docs/superpowers/specs/2026-10-10-s5-type-classes-design.md の「名前解決と HIR」)。
+//! クラス、メソッド、文脈の変換 (docs/spec/declarations.md の「クラスと instance」)。
 //! クラスは型の名前空間に、メソッドは値の名前空間に置く。
 
 use std::collections::HashSet;
@@ -20,7 +20,7 @@ use crate::item_tree::ClassItem;
 use crate::program::{Items, Module, TypeItem};
 
 /// 文脈を書いた位置。位置ごとに、制約に書ける型変数が違う
-/// (docs/superpowers/specs/2026-10-10-s5-type-classes-design.md の「宣言の検査」)。
+/// (docs/spec/declarations.md の「宣言の検査」)。
 pub(super) enum ContextScope<'a> {
     /// トップレベルの関数のシグネチャ。型に現れる型変数だけに書ける。
     Function,
@@ -153,7 +153,7 @@ impl ItemLowering<'_> {
     }
 
     /// クラスを書く位置の名前を引く。型かエフェクトに当たったら E1041 にする
-    /// (docs/superpowers/specs/2026-10-10-s5-type-classes-design.md の「名前空間と公開」)。
+    /// (docs/spec/modules.md の「名前空間」)。
     pub(super) fn resolve_class(&mut self, path: Option<ast::Path>) -> Option<ClassId> {
         let range = path.as_ref()?.range();
         let name = path_name(path);

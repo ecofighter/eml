@@ -1,4 +1,4 @@
-//! instance の変換 (docs/superpowers/specs/2026-10-10-s5-type-classes-design.md の「宣言の検査」と「HIR の形」)。
+//! instance の変換 (docs/spec/declarations.md の「`instance`」と「宣言の検査」)。
 //! instance は名前を持たず、(クラス, 頭の型) の索引で引く。
 
 use std::collections::HashMap;
@@ -207,7 +207,7 @@ impl ItemLowering<'_> {
     }
 
     /// このモジュールの `data` の `deriving` ごとに、導出した instance を置く
-    /// (docs/superpowers/specs/2026-10-10-s5-type-classes-design.md の「導出した instance」)。重複 (E1035) を手で書いた
+    /// (docs/spec/declarations.md の「`deriving`」)。重複 (E1035) を手で書いた
     /// instance と同じ索引で判定するので、このモジュールの `lower_instances` の後に呼ぶ。導出できるのは Prelude の
     /// `Eq`、`Ord`、`Show` だけで、名前でなく解決したクラスで判定する (E1038)。
     pub(super) fn derive_instances(

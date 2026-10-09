@@ -110,7 +110,7 @@ impl ItemLowering<'_> {
         }
         .lower(decl.ty(), range);
         // 操作に制約を書けると、handler の節が perform の位置で選んだ証拠を実行時に受け取る必要が生じる
-        // (docs/superpowers/specs/2026-10-10-s5-type-classes-design.md の「文法」)
+        // (docs/spec/declarations.md の「宣言の検査」)
         let constraints = self.lower_context(
             decl.context(),
             &generics,

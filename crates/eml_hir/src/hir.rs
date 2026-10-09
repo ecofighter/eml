@@ -46,7 +46,7 @@ pub struct Constructor {
     pub fields: Vec<TypeRefId>,
     /// 中置のコンストラクタの fixity。宣言がなければ `Fixity::DEFAULT` で、前置のコンストラクタは `None` である。
     /// 導出した `Show` が括弧の位置を決めるのに使う
-    /// (docs/superpowers/specs/2026-10-10-s5-type-classes-design.md の「HIR の形」)。
+    /// (docs/spec/declarations.md の「`deriving`」)。
     pub fixity: Option<Fixity>,
 }
 
@@ -105,7 +105,7 @@ pub struct LangItems {
     pub and: FunctionId,
     pub or: FunctionId,
     /// 処理系が役割で知る Prelude のクラス。`deriving` で導出できるのはこの3つである
-    /// (docs/superpowers/specs/2026-10-10-s5-type-classes-design.md の「導出した instance」)。
+    /// (docs/spec/declarations.md の「`deriving`」)。
     pub eq: ClassId,
     pub ord: ClassId,
     pub show: ClassId,
@@ -150,7 +150,7 @@ impl FunctionKind {
     }
 }
 
-/// クラスの宣言 (docs/superpowers/specs/2026-10-10-s5-type-classes-design.md の「HIR の形」)。
+/// クラスの宣言 (docs/spec/declarations.md の「`class`」)。
 #[derive(Debug)]
 pub struct ClassDef {
     pub name: String,

@@ -1,4 +1,4 @@
-//! クラス、メソッド、instance の HIR (docs/superpowers/specs/2026-10-10-s5-type-classes-design.md の「名前解決と HIR」)。
+//! クラス、メソッド、instance の HIR (docs/spec/declarations.md の「クラスと instance」)。
 
 use eml_hir::{FunctionKind, InstanceOrigin, MethodImpl};
 use eml_test_support::{lower, lower_files, short};

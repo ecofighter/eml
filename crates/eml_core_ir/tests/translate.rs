@@ -2419,7 +2419,7 @@ fn an_instance_method_with_fewer_parameters_is_called_then_applied() {
 #[test]
 fn extern_methods_are_called_with_the_instruction_of_their_instance() {
     // extern で結んだメソッドは、instance の行の extern 命令を直接出す
-    // (docs/superpowers/specs/2026-10-10-s5-type-classes-design.md の「メソッドへの参照の解決」)
+    // (docs/spec/core-ir.md の「メソッドの解決」)
     let text = "same : String -> Bool -> Bool\nsame s b = \"a\" == s && b != True\n\norder : Int -> Ordering\norder n = compare n 0\n\nmain : Unit -> <IO> Unit\nmain () =\n  let _ = same \"b\" False\n  let _ = order 1\n  ()";
     let shown = core_text(text, Pass::Translate);
     insta::assert_snapshot!(function(&shown, "same"), @r#"
@@ -2483,7 +2483,7 @@ fn extern_methods_used_as_values_are_wrapped_per_instance() {
 #[test]
 fn derived_instances_generate_their_methods() {
     // 導出した instance の中心のメソッドは、translate が Core IR として作る
-    // (docs/superpowers/specs/2026-10-10-s5-type-classes-design.md の「導出とタプルの生成器」)
+    // (docs/spec/core-ir.md の「導出とタプルの生成器」)
     let text = "data Color =\n  | Red\n  | Green\n  deriving (Eq, Ord, Show)\n\ndata Option a =\n  | None\n  | Some a\n  deriving (Eq, Ord, Show)\n\nmain : Unit -> <IO> Unit\nmain () =\n  println (show (Red == Green) ++ show (Some 1 < None))\n  println (show (Some 1))";
     let shown = core_text(text, Pass::Translate);
     insta::assert_snapshot!(function(&shown, "Eq Color.=="), @r#"

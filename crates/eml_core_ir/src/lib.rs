@@ -576,7 +576,7 @@ pub const FALSE: u32 = 0;
 pub const TRUE: u32 = 1;
 
 /// `Ordering` のタグ。`compare` の extern が配置の表を見ずに作る
-/// (docs/superpowers/specs/2026-10-10-s5-type-classes-design.md の「Prelude と extern の表」)。
+/// (docs/spec/declarations.md の「Prelude のクラス」)。
 pub const LT: u32 = 0;
 pub const EQ: u32 = 1;
 pub const GT: u32 = 2;

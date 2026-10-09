@@ -132,8 +132,8 @@ pub(crate) fn check_module(
 
 /// instance ごとに、頭が `Unr` であることと、クラスの直接の上位クラスの instance が頭の型にあり、その文脈が
 /// この instance の文脈から導けることを確かめる。導出した instance は、フィールドの制約が解けることも確かめる
-/// (docs/superpowers/specs/2026-10-10-s5-type-classes-design.md の「クラスの性質」、「instance と既定のメソッドの検査」
-/// と「導出した instance」)。上位クラスの instance の頭の型変数は、同じ `data` の型引数なので、番号でこの instance の
+/// (docs/spec/types.md の「`Unr` のクラス」、「instance と既定のメソッドの検査」と
+/// 「導出した instance の検査」)。上位クラスの instance の頭の型変数は、同じ `data` の型引数なので、番号でこの instance の
 /// 型変数に対応する。
 fn check_instances(
     program: &Program,
@@ -301,7 +301,7 @@ fn check_derived_fields(
 
 /// メソッドと、それを定義する関数の矢印の決め方。本体の検査の `instantiate_rigid` は形から作るので、既定のメソッドと
 /// instance のメソッドの本体も同じ矢印で検査する
-/// (docs/superpowers/specs/2026-10-10-s5-type-classes-design.md の「クラスの性質」)。
+/// (docs/spec/types.md の「`Unr` のクラス」)。
 const METHOD_ARROWS: Arrows = Arrows::Method { outermost: true };
 
 /// instance の頭の型の表示 (`Box a`)。
@@ -454,7 +454,7 @@ pub(crate) fn check_body(
 
 /// `Unr` とみなすシグネチャの型変数。制約 `C a` は `a ≤ Unr` を意味し、instance の本体は頭の型変数を、既定のメソッドは
 /// クラスの型変数を `Unr` とみなして検査する
-/// (docs/superpowers/specs/2026-10-10-s5-type-classes-design.md の「クラスの性質」)。既定のメソッドのクラスの型変数は
+/// (docs/spec/types.md の「`Unr` のクラス」)。既定のメソッドのクラスの型変数は
 /// 制約 `C a` にも現れるが、instance のメソッドの頭の型変数とそろえて並べる。
 fn unrestricted_vars(
     program: &Program,
@@ -506,7 +506,7 @@ fn declaration_schemes(
         problems.push((ValueItem::Function(id), problem));
     }
     // メソッドも本体を持たないので、extern の関数と同じく宣言だけから作る
-    // (docs/superpowers/specs/2026-10-10-s5-type-classes-design.md の「instance と既定のメソッドの検査」)
+    // (docs/spec/types.md の「instance と既定のメソッドの検査」)
     for (id, method) in program.methods() {
         let shape = &signatures.methods[id];
         let generics = &method.signature.generics;
@@ -587,7 +587,7 @@ fn declaration_problem(
 }
 
 /// instance のメソッドと既定のメソッドの Kind のスキームが、クラスの側のスキームから導けることを確かめる (E2011。
-/// docs/superpowers/specs/2026-10-10-s5-type-classes-design.md の「instance と既定のメソッドの検査」)。クラスの側の
+/// docs/spec/types.md の「instance と既定のメソッドの検査」)。クラスの側の
 /// スキームは、関数の形に宣言から出る制約だけを足して作る。関数の形はクラスの型変数を頭の型に置き換えたメソッドの
 /// シグネチャなので、前提の「頭の型に置き換えたこと」は形が受け持つ。関数のスキームと同じ形から作るので、2つの
 /// スキームは同じ Kind 変数の番号を使う。

@@ -108,7 +108,7 @@ impl Runtime<'_> {
                 let (left, head) = self.string(args[0])?;
                 let (right, tail) = self.string(args[1])?;
                 // 妥当な UTF-8 ではバイト順がコードポイント順と一致する
-                // (docs/superpowers/specs/2026-10-10-s5-type-classes-design.md の「Prelude と extern の表」)
+                // (docs/spec/declarations.md の「Prelude のクラス」)
                 let order = head.as_bytes().cmp(tail.as_bytes());
                 self.heap.decref(left).map_err(Fault::Heap)?;
                 self.heap.decref(right).map_err(Fault::Heap)?;
@@ -198,7 +198,7 @@ impl Runtime<'_> {
 }
 
 /// `Show String` の `show`。文字列を `"` で囲み、読み返せる形にエスケープする
-/// (docs/superpowers/specs/2026-10-10-s5-type-classes-design.md の「Prelude と extern の表」)。
+/// (docs/spec/declarations.md の「Prelude のクラス」)。
 fn show_string(text: &str) -> String {
     let mut shown = String::with_capacity(text.len() + 2);
     shown.push('"');

@@ -1,4 +1,4 @@
-//! 制約の解決 (docs/superpowers/specs/2026-10-10-s5-type-classes-design.md の「制約を解く」)。参照ごとに具体化した
+//! 制約の解決 (docs/spec/types.md の「制約の解決」)。参照ごとに具体化した
 //! 制約を、本体の単一化が終わってから解く。証拠は記録しない。translate と一様な位置の計算が、参照ごとの型引数から
 //! instance を引き直す。
 
@@ -209,7 +209,7 @@ fn index(var: TypeVarId) -> usize {
 /// 返す型引数には、呼び出し側が `Unr` を求める。instance の本体は頭の型変数を `Unr` とみなして検査するためである。
 /// タプルの要素にも同じく求める。シグネチャの制約の型変数を `Unr` とみなして本体を検査できるのは、制約をどの解き方で
 /// 解いても、解いた先の型にこの `Unr` を求めるからである
-/// (docs/superpowers/specs/2026-10-10-s5-type-classes-design.md の「クラスの性質」)。
+/// (docs/spec/types.md の「`Unr` のクラス」)。
 ///
 /// 列には、同じクラスと同じ代表の組を1回だけ足す。推論の表は部分を共有するので、型を木としてたどると型の深さの
 /// 指数の時間がかかるためである (docs/implementation/architecture.md の「`eml_types` の内部」)。代表で比べるのは、
