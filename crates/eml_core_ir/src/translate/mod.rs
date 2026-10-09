@@ -270,7 +270,7 @@ struct BodyCtx<'a> {
     targets: &'a ArenaMap<ExprId, InstanceId>,
     /// instance の番号から関数の番号への表。
     indices: &'a [FnIdx],
-    /// ラムダ、handle、extern を包む関数の名前に使う、トップレベルの関数の名前。
+    /// ラムダ、handle、extern を包む関数の名前に使う、トップレベルの関数の instance の名前。
     root_name: &'a str,
     numbering: &'a Numbering,
     /// 本体の中の節の `k` の変換の形。持ち上げた入れ子の関数も同じ表を見て、捕まえた `k` を同じ形で扱う。
