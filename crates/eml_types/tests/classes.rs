@@ -74,7 +74,7 @@ fn an_instance_context_is_needed_where_the_instance_is_used() {
     insta::assert_snapshot!(eml_test_support::full(checked.files(), &checked.diagnostics), @"
     E2006 12:5 no instance of `Same` for `Int -> <_> Int`
       12:5 `same` requires `Same (Box (Int -> <_> Int))`
-      note: needed for `Same (Box (Int -> <_> Int))`
+      note: `Same (Box (Int -> <_> Int))` needs `Same (Int -> <_> Int)`
     ");
 }
 
@@ -90,6 +90,18 @@ fn an_undecided_type_is_ambiguous_unless_the_body_has_another_error() {
     assert!(
         found.iter().all(|line| !line.starts_with("E2009")),
         "{found:?}"
+    );
+}
+
+#[test]
+fn a_missing_instance_wins_over_an_undecided_type_in_one_reference() {
+    // `Same (Pair ?y (Int -> Int))` は先に `Same ?y` を解くが、決まった誤りの E2006 を報告する
+    let text = format!(
+        "{SAME}data Pair a b = | Pair a b\n\ninstance (Same a, Same b) => Same (Pair a b) where\n  same _ _ = True\n\nf : Int -> Int\nf x =\n  let g = fn y -> same (Pair y (fn z -> z + 1)) (Pair y (fn z -> z))\n  x"
+    );
+    assert_eq!(
+        lines(&text),
+        ["E2006 13:19 no instance of `Same` for `Int -> <_> Int`"]
     );
 }
 

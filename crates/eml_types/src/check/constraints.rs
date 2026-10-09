@@ -47,12 +47,16 @@ impl BodyCheck<'_, '_> {
         for (expr, decl, wanted) in references {
             let mut resolved = Vec::new();
             let mut failed = None;
+            // 決まらない型より、instance がないという決まった誤りを報告する (`solve` と同じ)
             for wanted in wanted {
                 match solve(self.program, self.table, wanted, &givens, body_has_error) {
                     Ok(args) => resolved.extend(args),
-                    Err(failure) => {
+                    Err(failure @ Failure::NoInstance { .. }) => {
                         failed = Some(failure);
                         break;
+                    }
+                    Err(failure @ Failure::Ambiguous { .. }) => {
+                        failed.get_or_insert(failure);
                     }
                 }
             }
@@ -145,8 +149,10 @@ impl BodyCheck<'_, '_> {
                         format!("`{name}` requires `{root_shown}`"),
                     ),
                 );
+                // ラベルは根を書くので、note は根から葉への道を足す
                 if root_shown != leaf_shown {
-                    diagnostic = diagnostic.with_note(format!("needed for `{root_shown}`"));
+                    diagnostic =
+                        diagnostic.with_note(format!("`{root_shown}` needs `{leaf_shown}`"));
                 }
                 // 操作ごとの型変数 (`OpVar`) はシグネチャに書けないので、help を出さない
                 if matches!(self.types.kind(leaf_ty), TypeKind::Rigid(_))
@@ -204,7 +210,9 @@ fn index(var: TypeVarId) -> usize {
 
 /// 制約 `wanted` を、与えられた制約 `givens` のもとで作業の列で解く。instance の文脈は頭の型引数へ写し、タプルは要素へ
 /// 進むので、列に足す型は元の型の部分になり、列はいつか尽きる。解ければ instance とタプルで解いた節点の型引数を、
-/// 解けなければ最初の失敗を返す。本体の参照と導出した instance のフィールドが、同じ規則で解く。
+/// 解けなければ最初の失敗を返す。ただし、決まらない型 (E2009) に会っても列を解き続け、instance がない制約
+/// (E2006) があればそちらを返す。決まらない型は注釈で直せるが、instance がないことは注釈では直らないためである。
+/// 本体の参照と導出した instance のフィールドが、同じ規則で解く。
 ///
 /// 返す型引数には、呼び出し側が `Unr` を求める。instance の本体は頭の型変数を `Unr` とみなして検査するためである。
 /// タプルの要素にも同じく求める。シグネチャの制約の型変数を `Unr` とみなして本体を検査できるのは、制約をどの解き方で
@@ -227,6 +235,7 @@ pub(super) fn solve(
     let mut work = vec![root];
     let mut next = 0;
     let mut resolved = Vec::new();
+    let mut ambiguous = None;
     let no_instance = |leaf| Failure::NoInstance { root, leaf };
     while let Some(&(class, ty)) = work.get(next) {
         next += 1;
@@ -261,13 +270,18 @@ pub(super) fn solve(
             // 同じ本体に別の誤りがあるとき、決まらない型はその誤りの連鎖である。誤りを直せば型が決まるので、
             // E2009 を重ねない
             TyShape::Var(_) if body_has_error => {}
-            TyShape::Var(_) => return Err(Failure::Ambiguous { root, class }),
+            TyShape::Var(_) => {
+                ambiguous.get_or_insert(Failure::Ambiguous { root, class });
+            }
             TyShape::Record(_) | TyShape::Fn { .. } => return Err(no_instance((class, ty))),
             // 報告済みの誤りの跡には診断を重ねない
             TyShape::Error => {}
         }
     }
-    Ok(resolved)
+    match ambiguous {
+        Some(failure) => Err(failure),
+        None => Ok(resolved),
+    }
 }
 
 /// タプルと `Unit` が構造的な instance を持つクラス (Prelude の `Eq`、`Ord`、`Show`)。
