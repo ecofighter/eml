@@ -426,6 +426,30 @@ fn g(x.0: int, y.1: int) -> int {
 }
 
 #[test]
+fn quoted_function_names_round_trip() {
+    // 単相化の instance の名前は空白と括弧を含むので、引用符で囲んで書く (docs/implementation/testing.md の
+    // 「Core IR のテキストの形」)
+    let program = round_trip(
+        "\
+fn \"id@[Int, String]\"(x.0: int) -> int {
+  let c.1: tobj = closure \"id@[Int, String]\"(x.0)
+  let r.2: tobj = apply c.1(&\"id@[Int, String]\")
+  let y.3: int = call \"id@[Int, String]\"(x.0)
+  tail call \"id@[Int, String]\"(y.3)
+}
+",
+    );
+    assert_eq!(program.functions[0].name, "id@[Int, String]");
+    assert_eq!(
+        program.functions[0].blocks[0].stmts[0],
+        Stmt::Let {
+            var: VarId(1),
+            rhs: Rhs::MakeClosure(FnIdx(0), vec![v(0)]),
+        }
+    );
+}
+
+#[test]
 fn an_extern_round_trips() {
     let program = round_trip(
         "\

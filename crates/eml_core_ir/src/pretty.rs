@@ -95,7 +95,7 @@ impl Printer<'_> {
             out,
             "{}fn {}({}) -> {} {{",
             if function.internal { "internal " } else { "" },
-            function.name,
+            function_name(&function.name),
             binders(function, function.params()),
             function.ret.name()
         )
@@ -214,7 +214,7 @@ impl Printer<'_> {
             }
             Rhs::MakeClosure(target, args) => format!(
                 "closure {}({})",
-                self.program.function(*target).name,
+                function_name(&self.program.function(*target).name),
                 self.atoms(function, args)
             ),
             Rhs::Extern { ext, args, at } => {
@@ -244,7 +244,7 @@ impl Printer<'_> {
         match call {
             Call::Direct(callee, args) => format!(
                 "call {}({})",
-                self.program.function(*callee).name,
+                function_name(&self.program.function(*callee).name),
                 self.atoms(function, args)
             ),
             Call::Apply(callee, args) => format!(
@@ -358,7 +358,7 @@ impl Printer<'_> {
             Atom::Int(n) => n.to_string(),
             Atom::Unit => "()".to_string(),
             Atom::Tag(tag) => format!("#{tag}"),
-            Atom::Fn(target) => format!("&{}", self.program.function(*target).name),
+            Atom::Fn(target) => format!("&{}", function_name(&self.program.function(*target).name)),
         }
     }
 }
@@ -384,4 +384,15 @@ fn operation(info: &EffectInfo, op: u32) -> String {
     info.operations
         .get(op as usize)
         .map_or_else(|| format!("#{op}"), |info| info.name.clone())
+}
+
+/// 関数の名前。単相化の instance の名前 (`id@[Int, String]`) は、テキストの形の字句の区切りを含むので、文字列と同じ
+/// 逃がし方で引用符で囲む (docs/implementation/testing.md の「Core IR のテキストの形」)。
+fn function_name(name: &str) -> std::borrow::Cow<'_, str> {
+    let separates = |c: char| c.is_whitespace() || "(){}[],\"".contains(c);
+    if name.is_empty() || name.contains(separates) {
+        format!("{name:?}").into()
+    } else {
+        name.into()
+    }
 }

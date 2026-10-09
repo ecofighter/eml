@@ -409,7 +409,7 @@ impl<'t> Parser<'t> {
                 Tok::Punct('}') => depth = depth.saturating_sub(1),
                 Tok::Word(word) if depth == 0 && word == "fn" => {
                     if let Some(Token {
-                        tok: Tok::Word(name),
+                        tok: Tok::Word(name) | Tok::Str(name),
                         line,
                     }) = self.tokens.get(index + 1)
                     {
@@ -436,7 +436,7 @@ impl<'t> Parser<'t> {
             self.pos += 1;
         }
         self.expect_word("fn")?;
-        let name = self.word()?;
+        let name = self.name()?;
         let mut state = FnState::default();
         let params = self.list('(', ')', |p| p.binder(&mut state))?;
         self.expect_word("->")?;
@@ -950,7 +950,7 @@ impl<'t> Parser<'t> {
 
     fn function_name(&mut self) -> Result<FnIdx, ParseError> {
         let line = self.line();
-        let name = self.word()?;
+        let name = self.name()?;
         self.resolve_function(&name, line)
     }
 
@@ -979,6 +979,13 @@ impl<'t> Parser<'t> {
         }
         let line = self.line();
         let word = self.word()?;
+        if word == "&"
+            && let Some(Tok::Str(name)) = self.peek()
+        {
+            let name = name.clone();
+            self.pos += 1;
+            return Ok(Atom::Fn(self.resolve_function(&name, line)?));
+        }
         if let Some(name) = word.strip_prefix('&') {
             return Ok(Atom::Fn(self.resolve_function(name, line)?));
         }
@@ -1178,6 +1185,16 @@ impl<'t> Parser<'t> {
         } else {
             Err(self.error_here(format!("expected `{word}`")))
         }
+    }
+
+    /// 関数の名前。引用符で囲んだ名前 (`pretty` の `function_name`) も受け付ける。
+    fn name(&mut self) -> Result<String, ParseError> {
+        if let Some(Tok::Str(value)) = self.peek() {
+            let value = value.clone();
+            self.pos += 1;
+            return Ok(value);
+        }
+        self.word()
     }
 
     fn word(&mut self) -> Result<String, ParseError> {
