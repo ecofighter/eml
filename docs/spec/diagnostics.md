@@ -103,7 +103,7 @@ struct Fix {
 | E1038 | `NOT_DERIVABLE` | `deriving` に、Prelude の `Eq`、`Ord`、`Show` 以外のクラスを書いた |
 | E1039 | `INVALID_INSTANCE_HEAD` | instance の頭が、`data` か extern の型のコンストラクタに互いに異なる型変数を適用した形でない |
 | E1040 | `INVALID_CONSTRAINT` | 制約を書けない位置の制約 (extern と操作のシグネチャ)、型に現れない型変数への制約、頭やクラスの型変数でない型変数への文脈、クラスの型変数への制約を持つメソッドのシグネチャ、クラスの型変数を含まないメソッドのシグネチャ、制約の形 (クラスと1つの型変数) でない文脈 ([宣言](declarations.md) の「宣言の検査」) |
-| E1041 | `NOT_A_CLASS` | クラスを書く位置 (制約、instance の頭、`deriving`) の名前が、型かエフェクトを指す |
+| E1041 | `NOT_A_CLASS` | クラスを書く位置 (制約、instance のクラス、`deriving`) の名前が、型かエフェクトを指す |
 | E1042 | `SUPERCLASS_CYCLE` | 上位クラスの関係の循環 |
 | E1043 | `CLASS_AS_TYPE` | 型を書く位置の名前が、クラスを指す |
 | E2001 | `TYPE_MISMATCH` | 型の不一致。呼び出しの row のエフェクトの型引数が今の row と一致しない場合を含む |
