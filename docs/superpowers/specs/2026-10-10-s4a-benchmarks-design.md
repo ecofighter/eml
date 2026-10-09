@@ -89,7 +89,13 @@ CEK では `box` と `unbox` は値をそのまま渡すだけで、今の実行
 - ロードマップの外にある S4 への参照も直す
   - `docs/overview.md` の段の一覧の「S4 単相化と計測の基準」を、「S4a 計測の基準、S4b 単相化」にする
   - `docs/implementation/architecture.md` の「S4 の単相化」と「S4 で単相化のときに」を S4b にする
-  - 同じ文書の「S4 の組み込みのクラス」と「S4 の補間の穴」は、引き直す前のロードマップの S4 を指したまま残っている。今の段に合わせて、それぞれ S5 の型クラスと S6 の補間に直す
+  - 同じ文書の「S4 の組み込みのクラス」、「S4 の補間の穴」、「extern に変換するメソッドを S4 で値として使えるようにする」は、引き直す前のロードマップの S4 を指したまま残っている。今の段に合わせて、それぞれ S5 の型クラス、S6 の補間、S5 に直す
+- `RunStats` の項目を足すので、その定めと説明を直す
+  - `docs/spec/runtime.md` の「実行の API」の回数の列 (今は5つで、はじめの4つが仕事の回数) に、`boxes` と `unboxes` を足す
+  - `docs/spec/core-ir.md` の「`box` と `unbox` は `RunStats` の回数を変えない」を、参照の数の回数は変えず、`boxes` と `unboxes` だけを数える形にする
+  - `docs/implementation/architecture.md` の「`handler_visits` は `find_handler` が数え、ほかの4つはヒープが数える」に、`boxes` と `unboxes` を数える場所を足す
+  - `docs/implementation/testing.md` の「性能のテスト」に `bench.rs` を、「よく使うコマンド」に `bench/run.sh` と回数のテストを足す
+- 段を終えたら、`docs/README.md` の表のロードマップの「再設計の段 (S4〜S13)」を S4b〜S13 にする。ロードマップの段の列からも S4a の行を消し、S4b の前提を「なし」にする。終えた段を段の列から消す、という進め方の決まりのためである
 - CLAUDE.md の `RunStats` の説明 (four work counts and `peak_objects`) を、`boxes` と `unboxes` を足した形に直し、`bench/` の説明を1行足す
 - `docs/implementation/status.md` と、`docs/implementation/architecture.md` の上に挙げた箇所以外は、書き換える箇所があるときだけ直す
 
