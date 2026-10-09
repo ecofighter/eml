@@ -128,7 +128,7 @@ fn every_extern_type_row_has_the_repr_of_its_type() {
 
 #[test]
 fn extern_function_rows_not_chosen_by_type_are_monomorphic() {
-    // 行の Repr は型変数の位置を `tobj` として比べる。多相な extern は S4 で入り、そこで比べ方を決め直す
+    // 行の Repr は型変数の位置を `tobj` として比べる。多相な extern は S12 で入り、そこで比べ方を決め直す
     // (docs/future/roadmap.md)
     let checked = checked();
     for &e in Extern::ALL {

@@ -35,8 +35,8 @@ eml の目的、言語の性格、確定した設計判断の一覧、文書全�
 | `IO` | 操作を持たない、ラベルだけの組み込みのエフェクトである。`println` などは `<IO>` を持つ `extern` の関数で、`extern` のエフェクトは handle できない | [エフェクトと handler](spec/effects.md) |
 | 暗黙の後始末 | 通常の制御フローでは一切行わない。中断時 (`drop k` や `never` 操作) だけ、捕まっていた `Lin` 値を、その型に宣言された破棄処理で drop する | [線形性](spec/linearity.md)、[エフェクトと handler](spec/effects.md) |
 | 型付け | Bidirectional Typing + 単一化。トップレベルの関数は引数と戻り値の型注釈が必須。トップレベルの関数の row はシグネチャで決まり、省略した row は `<>` (純粋) である。Kind は推論する | [型と Kind](spec/types.md) |
-| 直積型 | レコードは名前的で、コンストラクタが1つの `data` にフィールドの名前を付けて宣言する (`data Person = Person { name : String, age : Int }`)。タプルは構造的なままで、`t.0` で射影する。Unit は 0 要素のタプル `()` である。Kind はフィールドの Kind の join で推論する (S4 で入れる) | [直積型とレコード](spec/records.md) |
-| 等価、比較、表示 | 組み込みのクラス `Eq`、`Ord`、`Show` の閉じた集合で作る。シグネチャの制約 `Eq a =>` と `deriving` を持ち、証拠は Core IR への変換で特殊化して決める。実行時の辞書は持たない。`class` と `instance` の宣言は型クラスの段で足す (S4 で入れる) | [ロードマップ](future/roadmap.md) |
+| 直積型 | レコードは名前的で、コンストラクタが1つの `data` にフィールドの名前を付けて宣言する (`data Person = Person { name : String, age : Int }`)。タプルは構造的なままで、`t.0` で射影する。Unit は 0 要素のタプル `()` である。Kind はフィールドの Kind の join で推論する (S6 で入れる) | [直積型とレコード](spec/records.md) |
+| 等価、比較、表示 | 型クラス `Eq`、`Ord`、`Show` を Prelude に置く。`class` と `instance` の宣言、シグネチャの制約 `Eq a =>`、`deriving` を持つ。証拠は Core IR への変換の単相化で決め、実行時の辞書は持たない (S5 で入れる) | [ロードマップ](future/roadmap.md) |
 
 ### 構文
 
@@ -58,7 +58,7 @@ eml の目的、言語の性格、確定した設計判断の一覧、文書全�
 | エフェクトの宣言 | `effect Name a where` の後に操作を並べる。操作のカリー化を許す | [宣言](spec/declarations.md) |
 | `use` | ブロックの残りを、最後の引数のラムダとして渡す糖衣構文 | [式](spec/expressions.md) |
 | パラメータ付き handler | `handle e from init with`。状態を handler が持ち、節の最後の引数で受ける。状態のある handler では `k v st` で次の状態を渡す。状態があるかどうかは `from` の有無で決まる | [式](spec/expressions.md) |
-| 線形値の受け渡し | 糖衣構文は今は入れない。入れるかどうかは S5 で決める。再束縛、`use`、パラメータ付き handler で吸収する | [式](spec/expressions.md) |
+| 線形値の受け渡し | 糖衣構文は今は入れない。入れるかどうかは S13 で決める。再束縛、`use`、パラメータ付き handler で吸収する | [式](spec/expressions.md) |
 | 文字列 | 補間は `"\{x}"`。複数行の `"""`、raw の `r"..."` | [字句](spec/lexical.md) |
 | コマンドリテラル | バッククォート。シェルを介さず、引数のリストを組む (Julia 方式) | [字句](spec/lexical.md) |
 | fixity | ユーザーが宣言する。優先順位は整数 0〜9。CST では演算子の列を平たいまま持ち、HIR で組み直す | [宣言](spec/declarations.md)、[式](spec/expressions.md) |
@@ -88,5 +88,5 @@ eml の目的、言語の性格、確定した設計判断の一覧、文書全�
 | Perceus | 参照カウントの `dup` / `decref` / `release` を静的に挿入する方式。reuse analysis と借用の最適化は後で入れる |
 | Core IR | 型付き HIR から変換する、前向きの辺だけを持つ基本ブロックの列の IR。すべての中間値に名前を付け、RC とエフェクトの命令を明示する |
 | M1、M2 | 完了したマイルストーンである。M1 は言語の全体を一通り通した最初の vertical slice、M2 はモジュールと参照ごとの具体化の表である。今の範囲は [実装の現在地](implementation/status.md) にある |
-| S0〜S5 | 再設計のサブプロジェクトである。S0 運用と文書、S1 row の健全性、S2a 継続を関数にする、S2b 組み込みを extern にする、S3a フロントエンドの土台、S3b-1 ランタイムとインタプリタの土台、S3b-2a Core IR v2 の構造、S3b-2b Core IR v2 の所有、S3b-2c-1 Core IR v2 の表、S3b-2c-2 Core IR v2 の境界、S4 スクリプトの MVP、S5 実例による判断がある。その後の言語の項目と処理系の項目は [ロードマップ](future/roadmap.md) の「段の列」にある。パイプラインの「段階」とは別の呼び方である |
+| S0〜S13 | 再設計のサブプロジェクトである。S0 運用と文書、S1 row の健全性、S2a 継続を関数にする、S2b 組み込みを extern にする、S3a フロントエンドの土台、S3b-1 ランタイムとインタプリタの土台、S3b-2a Core IR v2 の構造、S3b-2b Core IR v2 の所有、S3b-2c-1 Core IR v2 の表、S3b-2c-2 Core IR v2 の境界、S4 単相化と計測の基準、S5 型クラス、S6 リスト、文字列、レコード、S7 evidence passing、S8 LIR、S9 共通ランタイム、S10 VM と切り替え、S11 REPL、S12 スクリプトの MVP、S13 実例による判断がある。その後の言語の項目と処理系の項目は [ロードマップ](future/roadmap.md) の「段の列」にある。パイプラインの「段階」とは別の呼び方である |
 | a1 / a2-wait / a2-cancel | 並列 API `par` を段階的に広げる計画の各段階。[マルチコア対応の設計](future/multicore.md) にある |

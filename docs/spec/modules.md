@@ -11,7 +11,7 @@
 - モジュール名は根からのパスで決まり、大文字小文字まで完全に一致させる。`import Report.Csv` は `<根>/Report/Csv.em` を読む
 - 入口のモジュールの名前は、ファイル名によらず `Main` である。入口のモジュールは、どの名前でも import できない
 - `Prelude`、`Main`、`Std` は予約したモジュール名である。根に `Prelude.em`、`Main.em`、`Std.em` があっても import できない
-- `Prelude` (`Bool`、`println` など。`Option`、`Result`、`List` は S4 で入る) を暗黙に取り込む (下の「Prelude」)
+- `Prelude` (`Bool`、`println` など。`Option`、`Result`、`List` は S6 で入る) を暗黙に取り込む (下の「Prelude」)
 - エントリポイントは、入口のモジュールの `main : Unit -> <IO> Unit` とする。終了コードは標準ライブラリの `exit` で扱う ([標準ライブラリへの申し送り](../future/stdlib.md))
 - 公開するものには `pub` を付ける ([宣言](declarations.md) の「`pub`」と、下の「公開の範囲」)
 
@@ -45,7 +45,7 @@ app/
 
 ### import の循環
 
-import の循環は E1027 にする。型検査は item と SCC の単位で動くので、循環を許しても実装の負担はほぼない。それでも禁じるのは、モジュールの依存をいつも DAG にしておけば、インクリメンタル化、REPL の `:load`、型クラスの段の orphan 規則をモジュールの順で考えられるためである。後で許すように緩めても、通っていたプログラムは通り続ける。
+import の循環は E1027 にする。型検査は item と SCC の単位で動くので、循環を許しても実装の負担はほぼない。それでも禁じるのは、モジュールの依存をいつも DAG にしておけば、インクリメンタル化、REPL の `:load`、S5 (型クラス) の orphan 規則をモジュールの順で考えられるためである。後で許すように緩めても、通っていたプログラムは通り続ける。
 
 ### Prelude
 

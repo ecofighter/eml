@@ -1,4 +1,4 @@
-//! 文字列、複数行の文字列、raw 文字列、コマンドリテラルの字句。補間、複数行の文字列、raw 文字列は S4、コマンド
+//! 文字列、複数行の文字列、raw 文字列、コマンドリテラルの字句。補間、複数行の文字列、raw 文字列は S6、コマンド
 //! リテラルはコマンドリテラルの段で実装する。今は閉じまでを1つのトークンにして、診断を1件だけ出す。
 
 use super::Lexer;
@@ -82,7 +82,7 @@ impl Lexer<'_> {
         end
     }
 
-    /// 補間は S4 で実装する。今は対応する `}` まで読み飛ばして E0004 を出す。穴の中の文字列も読み飛ばすのは、
+    /// 補間は S6 で実装する。今は対応する `}` まで読み飛ばして E0004 を出す。穴の中の文字列も読み飛ばすのは、
     /// `"\{f "x"}"` の内側の `"` で外側の文字列を終わらせないため。
     pub(super) fn interpolation(&mut self, i: usize) -> usize {
         let text = self.text;
@@ -116,7 +116,7 @@ impl Lexer<'_> {
         j
     }
 
-    /// S4 で実装する。今は閉じの `"""` までを1つのトークンにして、HIR が E0004 を1件だけ出せるようにする
+    /// S6 で実装する。今は閉じの `"""` までを1つのトークンにして、HIR が E0004 を1件だけ出せるようにする
     /// (docs/implementation/status.md の「未対応の構文と E0004」)。
     pub(super) fn multiline_string(&mut self) {
         let text = self.text;
@@ -137,7 +137,7 @@ impl Lexer<'_> {
         self.push(MULTILINE_STRING, end);
     }
 
-    /// S4 で実装する。今は閉じまでを1つのトークンにして、HIR が E0004 を1件だけ出せるようにする
+    /// S6 で実装する。今は閉じまでを1つのトークンにして、HIR が E0004 を1件だけ出せるようにする
     /// (docs/implementation/status.md の「未対応の構文と E0004」)。
     pub(super) fn raw_string(&mut self, hashes: usize) {
         let text = self.text;

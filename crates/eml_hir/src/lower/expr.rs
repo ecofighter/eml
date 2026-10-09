@@ -717,7 +717,7 @@ impl<'a> BodyLowering<'a> {
     fn constructor_pat(&mut self, at: &NameUse<'_>, args: Vec<PatId>, range: TextRange) -> PatKind {
         let ctor = match self.items.constructor(at.name) {
             Resolved::Found(ctor) => ctor,
-            // `::` は S4 のリストのコンストラクタである。ユーザーが同じ名前のコンストラクタを定義していれば、上で引ける
+            // `::` は S6 のリストのコンストラクタである。ユーザーが同じ名前のコンストラクタを定義していれば、上で引ける
             Resolved::NotFound if matches!(at.name, NameRef::Plain("::")) => {
                 return self.unsupported_pat(at.range, "lists are not supported yet");
             }
@@ -805,7 +805,7 @@ fn arguments(n: usize) -> String {
     }
 }
 
-/// S4 (複数行の文字列、raw 文字列) と `Float`、`Char`、`Num` の段 (浮動小数、文字) で実装するリテラル。
+/// S6 (複数行の文字列、raw 文字列) と `Float`、`Char`、`Num` の段 (浮動小数、文字) で実装するリテラル。
 /// パーサは CST を組み、HIR が E0004 を出す (docs/implementation/status.md の「未対応の構文と E0004」)。
 fn unsupported_literal(kind: SyntaxKind) -> Option<&'static str> {
     Some(match kind {
