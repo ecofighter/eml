@@ -33,7 +33,6 @@ struct Shape {
     /// コンストラクタの配置。`Unit` は配置を持たない。
     layout: Option<LayoutId>,
     constructors: Vec<Constructor>,
-    tuple: bool,
 }
 
 /// `instance` の関数を組む。`indices` は instance の番号から関数の番号への表で、`calls` の行き先を引く。
@@ -51,9 +50,11 @@ pub(super) fn generate(
         store,
         program,
         indices,
+        node: instance.generated.node,
         builder: FnBuilder::new(),
         calls: &instance.calls,
         next: 0,
+        tag: instance.tag,
     };
     let ret = match instance.generated.method {
         GeneratedMethod::Eq => generator.eq(&shape),
@@ -84,7 +85,6 @@ fn shape(
             repr: Repr::Unit,
             layout: None,
             constructors: Vec::new(),
-            tuple: true,
         },
         InstanceNode::Tuple(count) => Shape {
             repr: Repr::Obj,
@@ -95,7 +95,6 @@ fn shape(
                 infix: None,
                 fields: reprs(&instance.fields[0]),
             }],
-            tuple: true,
         },
         InstanceNode::Declared(id) => {
             let ty = hir[id].head;
@@ -116,7 +115,6 @@ fn shape(
                 repr: type_def_repr(ty, hir),
                 layout: Some(program.data_layout(hir, store, ty)),
                 constructors,
-                tuple: false,
             }
         }
     }
@@ -127,10 +125,12 @@ struct Generator<'a> {
     store: &'a TypeStore,
     program: &'a mut ProgramBuilder,
     indices: &'a [FnIdx],
+    node: InstanceNode,
     builder: FnBuilder,
     calls: &'a [Target],
     /// 次に使う `calls` の位置。行き先はコンストラクタの順、フィールドの順に並ぶので、同じ順に組んで使う。
     next: usize,
+    tag: Option<Target>,
 }
 
 impl Generator<'_> {
@@ -171,21 +171,14 @@ impl Generator<'_> {
     fn compare(&mut self, shape: &Shape) -> Repr {
         let x = self.builder.param(named("x", shape.repr));
         let y = self.builder.param(named("y", shape.repr));
-        // `tag$` の行き先は、フィールドの行き先の後ろに1つだけある
-        let tag = match self.calls.split_last() {
-            Some((&last, rest)) if shape.constructors.len() > 1 => {
-                self.calls = rest;
-                Some(last)
-            }
-            _ => None,
-        };
+        let tag = self.tag;
         self.pairwise(
             shape,
             x,
             y,
             |this, a, b| this.compare_fields(a, b),
             |this, x, y| {
-                let tag = tag.expect("a type with two constructors has a `tag$`");
+                let tag = tag.expect("`compare` of a type with two constructors has a `tag$`");
                 let left = this.call_target(tag, vec![Atom::Var(x)], Repr::Int);
                 let right = this.call_target(tag, vec![Atom::Var(y)], Repr::Int);
                 let result = this.bind(
@@ -245,14 +238,15 @@ impl Generator<'_> {
             return Repr::Obj;
         };
         match shape.constructors.as_slice() {
-            // コンストラクタのない型の値はないので、ここには来ない
+            // コンストラクタのない型 (`data T =` のブロックに `deriving` だけを書いたもの) には値がないので、この
+            // 関数は呼ばれない。参照が届けば関数は組むので、空の文字列を返す本体にする
             [] => {
                 let empty = self.string("");
                 self.builder.terminate(Term::Return(empty));
             }
             [only] => {
                 let fields = self.unpack(x, layout, only, "a");
-                if shape.tuple {
+                if matches!(self.node, InstanceNode::Tuple(_)) {
                     self.show_tuple(&fields);
                 } else {
                     self.show_constructor(d, only, &fields);

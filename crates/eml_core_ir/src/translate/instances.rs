@@ -9,7 +9,7 @@ use eml_hir::{
     Program as HirProgram, TypeDefKind, ValueItem,
 };
 use eml_types::{
-    BodyTypes, InstanceNode, Instantiation, Resolution, Substitution, TypeId, TypeStore,
+    BodyTypes, InstanceNode, Instantiation, Resolution, Substitution, TypeId, TypeKind, TypeStore,
     TypedProgram,
 };
 use la_arena::ArenaMap;
@@ -53,7 +53,8 @@ pub(super) struct FunctionInstance {
     pub(super) signature: TypeId,
     /// 本体の型に代入をかけた表。`None` なら型検査の表をそのまま使う。
     pub(super) types: Option<BodyTypes>,
-    /// 本体の中の、定義された関数とメソッドへの参照の行き先。extern の関数への参照は入らない。
+    /// 本体の中の、定義された関数とメソッドへの参照の行き先。`extern` で結んだ instance のメソッドへの参照は
+    /// `Target::Extern` で入る。extern の関数への参照は入らない。
     pub(super) targets: ArenaMap<ExprId, Target>,
 }
 
@@ -61,6 +62,9 @@ pub(super) struct GeneratedInstance {
     pub(super) generated: Generated,
     /// 生成する関数が呼ぶ行き先。コンストラクタの順、フィールドの順に並ぶ (`Collector::generated_calls`)。
     pub(super) calls: Vec<Target>,
+    /// `compare` が違うコンストラクタの組のタグを比べるために呼ぶ `tag$`。コンストラクタが2つ以上ある型の `compare`
+    /// だけが持つ。
+    pub(super) tag: Option<Target>,
     /// コンストラクタごとのフィールドの型。タプルは要素の型を持つ1つのコンストラクタで、`Unit` は空である。
     pub(super) fields: Vec<Vec<TypeId>>,
 }
@@ -117,6 +121,7 @@ enum Found {
     Generated {
         generated: Generated,
         calls: Vec<FoundTarget>,
+        tag: Option<FoundTarget>,
         fields: Vec<Vec<TypeId>>,
     },
 }
@@ -222,6 +227,7 @@ impl Collector<'_> {
             found.push(Found::Generated {
                 generated: key,
                 calls: Vec::new(),
+                tag: None,
                 fields: Vec::new(),
             });
             queue.push_back(found.len() - 1);
@@ -237,6 +243,13 @@ impl Collector<'_> {
         let hir = self.hir;
         let class = hir[method].class;
         let core = hir.core_method(method);
+        // 解決に `Flexible` が要る参照は、型検査が E2006、E2009、E2012 で止めている
+        // (docs/spec/core-ir.md の「メソッドの解決」)。`resolve` は `Flexible` を `Missing` と答えるので、先に分けて止める
+        assert!(
+            !matches!(self.store.kind(args[0]), TypeKind::Flexible),
+            "internal error: the reference to `{}` resolves a constraint at a uniform (`Flexible`) type, which the type checker rejects",
+            hir[method].name
+        );
         match eml_types::resolve(hir, &self.store, class, args[0]) {
             Resolution::Instance {
                 instance,
@@ -372,8 +385,8 @@ impl Collector<'_> {
     }
 
     /// 生成する関数のフィールドの型と、それが呼ぶ行き先を、コンストラクタの順、フィールドの順に解く
-    /// (`Eq` は各フィールドの型の `==`、`Compare` は `compare` と最後に `Tag`、`ShowPrec` は `show_prec`、`Show` は
-    /// 同じ型の `ShowPrec`)。
+    /// (`Eq` は各フィールドの型の `==`、`Compare` は `compare`、`ShowPrec` は `show_prec`、`Show` は同じ型の
+    /// `ShowPrec`)。コンストラクタが2つ以上ある型の `Compare` は、`Tag` も別に解く。
     fn generated_calls(&mut self, index: usize) {
         let hir = self.hir;
         let Found::Generated { generated, .. } = &self.found[index] else {
@@ -401,17 +414,17 @@ impl Collector<'_> {
                 .map(|&field| collector.method_target(method, &[field]))
                 .collect()
         };
+        let mut tag = None;
         let calls = match generated.method {
             GeneratedMethod::Eq => each_field(self, core(CoreMethod::Eq)),
             GeneratedMethod::Compare => {
-                let mut calls = each_field(self, core(CoreMethod::Compare));
+                let calls = each_field(self, core(CoreMethod::Compare));
                 if fields.len() > 1 {
-                    let tag = self.add_generated(Generated {
+                    tag = Some(FoundTarget::Function(self.add_generated(Generated {
                         node: generated.node,
                         method: GeneratedMethod::Tag,
                         args: Vec::new(),
-                    });
-                    calls.push(FoundTarget::Function(tag));
+                    })));
                 }
                 calls
             }
@@ -427,6 +440,7 @@ impl Collector<'_> {
         };
         let Found::Generated {
             calls: slot,
+            tag: tag_slot,
             fields: field_slot,
             ..
         } = &mut self.found[index]
@@ -434,6 +448,7 @@ impl Collector<'_> {
             unreachable!("checked above")
         };
         *slot = calls;
+        *tag_slot = tag;
         *field_slot = fields;
     }
 
@@ -630,6 +645,7 @@ fn order(hir: &HirProgram, found: Vec<Found>, entry: usize, store: TypeStore) ->
                 Found::Generated {
                     generated,
                     calls,
+                    tag,
                     fields,
                 } => {
                     let base = generated_base(hir, &generated);
@@ -650,6 +666,7 @@ fn order(hir: &HirProgram, found: Vec<Found>, entry: usize, store: TypeStore) ->
                                 .iter()
                                 .map(|target| target.renumber(&renumbered))
                                 .collect(),
+                            tag: tag.map(|target| target.renumber(&renumbered)),
                             fields,
                         }),
                     }
