@@ -172,6 +172,11 @@ struct Definition {
     equations: Vec<(usize, AstPtr<ast::Equation>, TextRange)>,
 }
 
+/// 型クラスを入れる S5 の途中の仮の診断。HIR が文脈を読めるようになったら外す。
+fn constraints_not_supported(file: FileId, context: &ast::Context) -> Diagnostic {
+    Diagnostic::not_yet_supported(file, context.range(), "constraints are not supported yet")
+}
+
 /// トップレベルの宣言を集める。E1003 (シグネチャと型引数の重複)、E1004、E1018、E1019 と、`type` の E0004 を出す。
 /// E1005 は、関数の種類 (extern かどうか) を決める `lower` が一緒に出す。ポインタを解決する木と取り違えないよう、
 /// 構文木ではなく `Parse` を受け取る。
@@ -191,6 +196,9 @@ pub fn item_tree(file: FileId, parse: &Parse) -> (ItemTree, Vec<Diagnostic>) {
                     continue;
                 };
                 let range = name.text_range();
+                if let Some(context) = signature.context() {
+                    diagnostics.push(constraints_not_supported(file, &context));
+                }
                 let slot = slot(&mut definitions, &mut by_name, name.text(), range);
                 let definition = &mut definitions[slot];
                 definition.public |= public;
@@ -227,6 +235,15 @@ pub fn item_tree(file: FileId, parse: &Parse) -> (ItemTree, Vec<Diagnostic>) {
                 let Some(name) = item.name().map(|name| name.token()) else {
                     continue;
                 };
+                if let Some(deriving) = item.deriving() {
+                    diagnostics.push(Diagnostic::not_yet_supported(
+                        file,
+                        deriving
+                            .keyword()
+                            .map_or(deriving.range(), |keyword| keyword.text_range()),
+                        "`deriving` is not supported yet",
+                    ));
+                }
                 let constructors = item
                     .alts()
                     .filter_map(|alt| {
@@ -257,6 +274,9 @@ pub fn item_tree(file: FileId, parse: &Parse) -> (ItemTree, Vec<Diagnostic>) {
                 let operations = item
                     .operations()
                     .filter_map(|decl| {
+                        if let Some(context) = decl.context() {
+                            diagnostics.push(constraints_not_supported(file, &context));
+                        }
                         // 名前がなければパーサが報告済み
                         let name = decl.name()?.token();
                         Some(OperationItem {
@@ -297,6 +317,18 @@ pub fn item_tree(file: FileId, parse: &Parse) -> (ItemTree, Vec<Diagnostic>) {
                 ));
             }
             ast::Item::ImportItem(item) => imports.extend(import_of(&item)),
+            ast::Item::ClassItem(item) => diagnostics.push(Diagnostic::not_yet_supported(
+                file,
+                item.keyword()
+                    .map_or(item.range(), |keyword| keyword.text_range()),
+                "type classes are not supported yet",
+            )),
+            ast::Item::InstanceItem(item) => diagnostics.push(Diagnostic::not_yet_supported(
+                file,
+                item.keyword()
+                    .map_or(item.range(), |keyword| keyword.text_range()),
+                "type classes are not supported yet",
+            )),
         }
     }
     let functions = definitions

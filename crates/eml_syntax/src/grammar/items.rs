@@ -9,6 +9,8 @@ enum ItemKind {
     Effect,
     Fixity,
     Import,
+    Class,
+    Instance,
     /// 将来の予約語。項目としてエラーにし、次の項目から回復する。
     Reserved,
     Signature,
@@ -25,7 +27,9 @@ fn item_kind(p: &Parser) -> Option<ItemKind> {
         EFFECT_KW => ItemKind::Effect,
         INFIXL_KW | INFIXR_KW | INFIX_KW => ItemKind::Fixity,
         IMPORT_KW => ItemKind::Import,
-        FORALL_KW | CLASS_KW | INSTANCE_KW => ItemKind::Reserved,
+        CLASS_KW => ItemKind::Class,
+        INSTANCE_KW => ItemKind::Instance,
+        FORALL_KW => ItemKind::Reserved,
         LIDENT if p.nth(1) == COLON => ItemKind::Signature,
         _ if at_operator_signature(p) => ItemKind::Signature,
         _ if at_equation(p) => ItemKind::Equation,
@@ -84,6 +88,11 @@ pub(super) fn item(p: &mut Parser, declared: bool) -> bool {
                 "`pub` cannot be written on an import",
                 "only declarations can be public",
             ),
+            Some(ItemKind::Instance) => p.error_at_previous(
+                codes::SYNTAX_ERROR,
+                "`pub` cannot be written on an instance",
+                "an instance is visible everywhere",
+            ),
             _ => {}
         }
     }
@@ -112,6 +121,8 @@ pub(super) fn item(p: &mut Parser, declared: bool) -> bool {
         Some(ItemKind::Effect) => effect_item(p, m),
         Some(ItemKind::Fixity) => fixity_item(p, m),
         Some(ItemKind::Import) => import_item(p, m, declared),
+        Some(ItemKind::Class) => class_item(p, m),
+        Some(ItemKind::Instance) => instance_item(p, m),
         Some(ItemKind::Reserved) => reserved_item(p, m),
         Some(ItemKind::Signature) => signature(p, m),
         Some(ItemKind::Equation) => equation(p, m),
@@ -143,6 +154,9 @@ fn signature(p: &mut Parser, m: Marker) {
         n.complete(p, NAME);
     }
     if expect(p, COLON) {
+        if has_context_ahead(p) {
+            context(p);
+        }
         types::type_(p);
     }
     m.complete(p, SIGNATURE);
@@ -163,6 +177,9 @@ fn data_item(p: &mut Parser, m: Marker) {
         // `=` の書き忘れ。選択肢は読み、コンストラクタを使う位置に誤りを連鎖させない
         expected(p, "`=`");
         alts(p);
+    }
+    if p.at(DERIVING_KW) {
+        deriving(p);
     }
     m.complete(p, DATA_ITEM);
 }
@@ -201,7 +218,30 @@ fn reject_extern_tail(p: &mut Parser, keyword: &str) {
 
 fn alts(p: &mut Parser) {
     if p.at(LAYOUT_OPEN) {
-        block_of(p, "a constructor starting with `|`", alt);
+        // `deriving` は、ブロックの最後の項目にも、最後の選択肢の続きの行にも書ける (spec の「文法」)
+        let mut derived = false;
+        block_of(p, "a constructor starting with `|`", |p| {
+            if p.at(DERIVING_KW) {
+                deriving(p);
+                derived = true;
+                return true;
+            }
+            if derived && p.at(PIPE) {
+                p.error(
+                    codes::SYNTAX_ERROR,
+                    "a constructor cannot follow `deriving`",
+                    "move `deriving` after the last constructor",
+                );
+            }
+            if !alt(p) {
+                return false;
+            }
+            if p.at(DERIVING_KW) {
+                deriving(p);
+                derived = true;
+            }
+            true
+        });
         return;
     }
     let mut first = true;
@@ -311,6 +351,9 @@ fn op_decl(p: &mut Parser) -> bool {
     }
     expect_name(p, LIDENT);
     if expect(p, COLON) {
+        if has_context_ahead(p) {
+            context(p);
+        }
         types::type_(p);
     }
     m.complete(p, OP_DECL);
@@ -426,6 +469,181 @@ fn import_name(p: &mut Parser) -> bool {
     }
     m.complete(p, IMPORT_NAME);
     true
+}
+
+/// class_item ::= 'class' context? UIDENT LIDENT ('where' block(class_member))?
+fn class_item(p: &mut Parser, m: Marker) {
+    p.bump(CLASS_KW);
+    if has_context_ahead(p) {
+        context(p);
+    }
+    expect_name(p, UIDENT);
+    expect_name(p, LIDENT);
+    if p.eat(WHERE_KW) {
+        if p.at(LAYOUT_OPEN) {
+            block_of(p, "a method signature or a default equation", class_member);
+        } else {
+            expected(p, "the methods on indented lines after `where`");
+        }
+    }
+    m.complete(p, CLASS_ITEM);
+}
+
+/// class_member ::= signature | equation。メソッドはクラスと一緒に公開するので、`pub` は書けない。
+fn class_member(p: &mut Parser) -> bool {
+    let m = p.start();
+    if p.at(PUB_KW) {
+        p.error(
+            codes::SYNTAX_ERROR,
+            "`pub` cannot be written on a class member",
+            "the methods are public when the class is",
+        );
+        p.bump(PUB_KW);
+    }
+    match item_kind(p) {
+        Some(ItemKind::Signature) => signature(p, m),
+        Some(ItemKind::Equation) => equation(p, m),
+        Some(ItemKind::OperatorEquation) => operator_equation(p, m),
+        _ => {
+            m.abandon(p);
+            return false;
+        }
+    }
+    true
+}
+
+/// instance_item ::= 'instance' context? qUIDENT atype ('where' block(inst_member))?
+/// 頭の形 (型コンストラクタに互いに異なる型変数を適用したもの) は HIR が検査する (E1039)。
+fn instance_item(p: &mut Parser, m: Marker) {
+    p.bump(INSTANCE_KW);
+    if has_context_ahead(p) {
+        context(p);
+    }
+    if p.at(UIDENT) {
+        qcon(p);
+    } else {
+        expected(p, "a class name");
+    }
+    if !types::type_atom(p) {
+        expected(p, "a type");
+    }
+    if p.eat(WHERE_KW) {
+        if p.at(LAYOUT_OPEN) {
+            block_of(p, "a method equation", instance_member);
+        } else {
+            expected(p, "the methods on indented lines after `where`");
+        }
+    }
+    m.complete(p, INSTANCE_ITEM);
+}
+
+/// inst_member ::= equation | 'extern' var。シグネチャはクラスが決めるので書けないが、CST には組んで回復する。
+fn instance_member(p: &mut Parser) -> bool {
+    let m = p.start();
+    if p.eat(EXTERN_KW) {
+        if p.at(LIDENT) {
+            name(p);
+        } else if at_operator_signature(p) {
+            let n = p.start();
+            p.bump(L_PAREN);
+            p.bump_any();
+            p.bump(R_PAREN);
+            n.complete(p, NAME);
+        } else {
+            expected(p, "a method name");
+        }
+        m.complete(p, EXTERN_METHOD);
+        return true;
+    }
+    match item_kind(p) {
+        Some(ItemKind::Signature) => {
+            p.error(
+                codes::SYNTAX_ERROR,
+                "an instance cannot have signatures",
+                "the type of a method comes from its class",
+            );
+            signature(p, m);
+        }
+        Some(ItemKind::Equation) => equation(p, m),
+        Some(ItemKind::OperatorEquation) => operator_equation(p, m),
+        _ => {
+            m.abandon(p);
+            return false;
+        }
+    }
+    true
+}
+
+/// context ::= btype '=>'。`(Eq a, Show b)` は括弧の中を制約の並びとして読む。
+fn context(p: &mut Parser) {
+    let m = p.start();
+    if p.at(L_PAREN) {
+        p.bump(L_PAREN);
+        constraint(p);
+        while p.eat(COMMA) {
+            constraint(p);
+        }
+        close_bracket(p, R_PAREN);
+    } else {
+        constraint(p);
+    }
+    expect(p, FAT_ARROW);
+    m.complete(p, CONTEXT);
+}
+
+fn constraint(p: &mut Parser) {
+    let m = p.start();
+    if !types::btype(p) {
+        expected(p, "a constraint");
+    }
+    m.complete(p, CONSTRAINT);
+}
+
+/// 文脈は型と同じ形で始まるので、括弧の外の `=>` が型の終わりより前にあるかを先読みする (中置のコンストラクタの
+/// `has_conop_ahead` と同じ形)。括弧の外の `->` と `=` と `where` は、文脈の後ろにしか現れない。
+fn has_context_ahead(p: &Parser) -> bool {
+    let mut nesting = Nesting::default();
+    let mut n = 0;
+    loop {
+        let kind = p.peek(n);
+        if nesting.ends(kind) {
+            return false;
+        }
+        if nesting.at_top() {
+            match kind {
+                FAT_ARROW => return true,
+                THIN_ARROW | EQ | WHERE_KW | LAYOUT_OPEN | SEMICOLON => return false,
+                _ => {}
+            }
+        }
+        nesting.step(kind);
+        n += 1;
+    }
+}
+
+/// deriving ::= 'deriving' (qUIDENT | '(' qUIDENT (',' qUIDENT)* ')')
+fn deriving(p: &mut Parser) {
+    let m = p.start();
+    p.bump(DERIVING_KW);
+    if p.at(L_PAREN) {
+        p.bump(L_PAREN);
+        loop {
+            if !p.at(UIDENT) {
+                expected(p, "a class name");
+                break;
+            }
+            qcon(p);
+            if !p.eat(COMMA) {
+                break;
+            }
+        }
+        close_bracket(p, R_PAREN);
+    } else if p.at(UIDENT) {
+        qcon(p);
+    } else {
+        expected(p, "a class name");
+    }
+    m.complete(p, DERIVING);
 }
 
 fn reserved_item(p: &mut Parser, m: Marker) {
