@@ -2,7 +2,7 @@
 
 位置づけ: 将来の設計。
 
-ネイティブ化 ([ロードマップ](roadmap.md) の「処理系」) で、エフェクトの操作と handler をどう実装するかの方針をまとめる。まだ実装しない。今の実装に入れた予防的な決定は、パラメータ付き handler の状態を handler フレームに持たせることだけである ([エフェクトと handler](../spec/effects.md) の「パラメータ付き handler」)。
+S7 ([ロードマップ](roadmap.md) の「S7 evidence passing」) で、エフェクトの操作と handler をどう実装するかの方針をまとめる。まだ実装しない。今の実装に入れた予防的な決定は、パラメータ付き handler の状態を handler フレームに持たせることだけである ([エフェクトと handler](../spec/effects.md) の「パラメータ付き handler」)。
 
 ## 目的と範囲
 
@@ -15,7 +15,7 @@
 
 ### 対象外
 
-- レコードの evidence passing (row 多相なレコードで、フィールドの位置を証拠として渡すこと)。同じ row 多相の問題だが、論点が別なので [ロードマップ](roadmap.md) の「処理系」にある「レコードのネイティブな表現」で扱う
+- レコードの evidence passing (row 多相なレコードで、フィールドの位置を証拠として渡すこと)。row 多相なレコードは採らない ([ロードマップ](roadmap.md) の「S6 リスト、文字列、レコード」) ので扱わない
 
 ## 方式の選択
 
@@ -38,6 +38,15 @@ B は `multi` にスタックのコピーが要り、LLVM の側にスタック�
 
 - Xie と Leijen の generalized evidence passing (EPS。Microsoft Research の技術報告 MSR-TR-2021-5) を基にする。Koka の C バックエンドが使っている方式である
 - 先行の evidence passing translation (EPT。ICFP 2020 の "Effect Handlers, Evidently") は、継続を捕まえたときと同じ handler の文脈でしか再開できない (scoped resumption)。EPS はこの制限を外しており、eml の第一級の `k` をそのまま扱える
+
+## 変換の位置と出力
+
+- Core IR から Core IR への変換で、translate と box の挿入の間に置く
+- 出力は Core IR の下位言語で、`handle`、`perform`、`resume`、`mask` を含まない
+- evidence と yield の基本操作は、extern の行と同じく Repr の決まった表の形で持つ。box の挿入と Perceus に特別な規則を足さないためである
+- 出力は、既存の命令の種類と上の基本操作だけにする
+- Core IR の verifier に、この下位言語を確かめる段を足す
+- 下位言語は、S8 で LIR に写す ([ロードマップ](roadmap.md) の「S8 LIR」)。LIR はエフェクトの命令を持たず、VM とネイティブの共通の入力になる
 
 ## 方式 A の概要
 
@@ -64,6 +73,7 @@ B は `multi` にスタックのコピーが要り、LLVM の側にスタック�
 
 - すぐに再開しない操作は、目印まで yield する。yield は、呼び出しから返るたびに「yield 中か」の印を確かめ、各フレームが自分の続きを継続に足しながら1フレームずつ戻る
 - 続きは、その時点の引数を持つ合流のブロックと生きている変数を持つクロージャになる。継続はこのクロージャの列である (論文の short-cut resumption)
+- 末尾の位置は縮約の定義 ([Core IR とインタプリタ](../spec/core-ir.md) の「縮約」) に合わせ、末尾の位置の呼び出しの後には「yield 中か」の確認を入れない。呼び出された側の yield はそのまま呼び出し元へ返るので確認は要らず、確認を入れると末尾呼び出しの保証が崩れるためである
 - yield しない経路では、クロージャを作らない。bind を展開し、続きを引数を持つ合流のブロックとして共有する (論文の bind-inlining と join-point sharing)。Core IR にはすでに引数を持つ合流のブロックがあるので、これを使う
 
 ## 多重度ごとの実装
@@ -82,7 +92,8 @@ B は `multi` にスタックのコピーが要り、LLVM の側にスタック�
 
 ## Perceus と線形性との関係
 
-- 変換は、HIR から Core IR への変換の後、Perceus の `dup` / `decref` / `release` の挿入の前に置く。変換がクロージャと引数を持つ合流のブロックを新しく作るので、それらにも RC の操作を付ける必要があるためである。Perceus はすでに変換の後の独立したパスなので、その前に新しいパスを挟むだけで済む
+- 変換は、box の挿入と Perceus の `dup` / `decref` / `release` の挿入の前に置く。変換がクロージャと引数を持つ合流のブロックを新しく作るので、それらにも box の変換と RC の操作を付ける必要があるためである。S8 からは、box の挿入と Perceus は LIR の上のパスである
+- T3 と `never` の操作の規則 ([Core IR とインタプリタ](../spec/core-ir.md) の「位置の規則」) は、EP の出力 (`perform` と `resume` が `apply` になった形) に合わせて書き直す
 - 継続のクロージャに入った `Lin` の値は、`drop k` と `never` の中断のときに、記述子から破棄処理を引いて解放する。インタプリタが継続の区間を解放するときに、捕まっていた値を解放する (`File` はその解放で閉じる) のと同じ考え方である
 - パラメータ付き handler の状態は evidence の handler の欄に置く。`perform` で節に渡し、`k v st` の再開で戻す動きは、インタプリタの handler フレームと同じである ([コンパイラの構成](../implementation/architecture.md) の「継続のフレーム」)
 
@@ -97,11 +108,12 @@ B は `multi` にスタックのコピーが要り、LLVM の側にスタック�
 - **Core IR の row**: Core IR に row の情報を持たせる。関数の本体の row、`perform`、閉じた row を開く箇所に要る。今の Core IR は row を持たないので、evidence passing を入れるときに HIR から Core IR への変換で足し、translate と Perceus の間のパスがそれを保つようにする
 - **ラベルの順序**: エフェクトのラベルの順序を決める。プログラム全体を1回でコンパイルするあいだは、そのコンパイルの中で決まった順序でよい。分割コンパイルをするなら、モジュールをまたいでも変わらない修飾名の順にする
 - **handler の状態**: パラメータ付き handler の状態を handler フレームに持たせていること (実装済み)
-- **差分テスト**: 変換後の IR をインタプリタで実行し、UI テストの出力が変換の有無で一致することを確かめる
+- **差分テスト**: 開発中は、CEK のインタプリタに EP の基本操作を一時的に足し、UI テストの出力が変換の有無で一致することを確かめる。RC の回数は変換で変わるので比べない
+- **エフェクトを直接扱う部分の削除**: S7 の終わりに EP を常に通すようにし、CEK の handler の連鎖と継続の区間、box の挿入、Perceus、verifier の `perform`、`handle`、`resume` の規則を消す。CEK そのものは、S10 で VM に置き換えて消す ([ロードマップ](roadmap.md) の「S10 VM と切り替え」)
 
 ## 未決の論点
 
 - 「yield 中か」の確認の費用。bind の展開と続きの共有を、translate が作る引数を持つ合流のブロックとどう組み合わせるか
-- インタプリタの既定の実行を、変換後の IR に切り替えるか
 - 開いた row で evidence を探すときのキャッシュ
+- `RunStats` の新しい指標 (evidence を引いた回数、yield が越えたフレームの数など)。今の `handler_visits` は CEK のフレームをたどる回数なので、EP の後は意味を持たない
 - `never` の中断で、途中のフレームの `Lin` の値をどう drop するか。yield の経路に drop の命令を生成するか、継続を組み立ててから解放するか
