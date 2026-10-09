@@ -1,0 +1,14 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: rendered
+input_file: tests/ui/check-fail/classes/superclass_context_not_entailed.em
+---
+[E2006] Error: no instance of `Eq` for `a`
+   ╭─[ check-fail/classes/superclass_context_not_entailed.em:9:14 ]
+   │
+ 9 │ instance Ord (Box a) where
+   │              ───┬───  
+   │                 ╰───── the instance of `Eq` for `Box a` requires `Eq a`
+   │ 
+   │ Help: add `Eq a` to the context of this instance
+───╯

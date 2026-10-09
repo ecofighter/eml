@@ -3,7 +3,7 @@ source: crates/eml_cli/tests/ui.rs
 expression: rendered
 input_file: tests/ui/check-fail/types/ambiguous_equality_section.em
 ---
-[E2009] Error: cannot decide which instance of `Eq` `==` uses
+[E2009] Error: cannot decide which instance of `Eq` to use for `==`
    ╭─[ check-fail/types/ambiguous_equality_section.em:4:13 ]
    │
  4 │   let eq = (==)

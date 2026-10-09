@@ -587,6 +587,13 @@ fn an_instance_cannot_be_public_or_have_signatures() {
         diagnostics("class Eq a where\n  pub (==) : a -> a -> Bool"),
         ["E0011 2:3 `pub` cannot be written on a class member"]
     );
+    assert_eq!(
+        diagnostics("instance Eq C where\n  pub a == b = True\n  pub extern show"),
+        [
+            "E0011 2:3 `pub` cannot be written on an instance member",
+            "E0011 3:3 `pub` cannot be written on an instance member",
+        ]
+    );
 }
 
 #[test]

@@ -540,6 +540,15 @@ fn instance_item(p: &mut Parser, m: Marker) {
 /// inst_member ::= equation | 'extern' var。シグネチャはクラスが決めるので書けないが、CST には組んで回復する。
 fn instance_member(p: &mut Parser) -> bool {
     let m = p.start();
+    // `pub` を読み飛ばしてメンバーを読み続ける。メンバーを落とすと、メソッドの等式がないことの E1036 が連鎖するため
+    if p.at(PUB_KW) {
+        p.error(
+            codes::SYNTAX_ERROR,
+            "`pub` cannot be written on an instance member",
+            "an instance is visible everywhere",
+        );
+        p.bump(PUB_KW);
+    }
     if p.eat(EXTERN_KW) {
         if p.at(LIDENT) {
             name(p);

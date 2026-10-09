@@ -30,7 +30,7 @@ pub(super) enum Failure {
 
 impl BodyCheck<'_, '_> {
     /// 本体の検査が終わってから、`usage::reliable` より前に呼ぶ。制約の型は後の文の単一化で決まることがあるためと、
-    /// E2006 と E2009 を本体の誤りに数え、線形性の診断を連鎖させないためである (今の E2006 の扱いと同じ)。
+    /// E2006 と E2009 を本体の誤りに数え、線形性の診断を連鎖させないためである。
     ///
     /// instance とタプルで解いた節点の型引数には、参照を由来に `Unr` を求める (`solve`)。誤りになった参照には求めない。
     /// 誤りは報告済みで、線形性の診断を重ねないため。
@@ -168,7 +168,7 @@ impl BodyCheck<'_, '_> {
                     Diagnostic::error(
                         codes::AMBIGUOUS_CONSTRAINT,
                         format!(
-                            "cannot decide which instance of `{}` `{name}` uses",
+                            "cannot decide which instance of `{}` to use for `{name}`",
                             self.program.names.class(class)
                         ),
                         Label::new(self.file(), range, "the type here is never decided"),

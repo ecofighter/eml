@@ -1,0 +1,14 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: rendered
+input_file: tests/ui/check-fail/classes/method_variable_growth.em
+---
+[E2012] Error: `Measure Int` would need an instance of `Show` at infinitely many types
+   ╭─[ check-fail/classes/method_variable_growth.em:6:18 ]
+   │
+ 6 │ instance Measure Int where
+   │                  ─┬─  
+   │                   ╰─── a constrained type variable grows on each recursive call
+   │ 
+   │ Note: instances are chosen at compile time, so a constraint cannot follow polymorphic recursion
+───╯

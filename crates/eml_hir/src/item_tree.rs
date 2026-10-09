@@ -513,7 +513,7 @@ fn instance_of(
                     (*last_equation, member_item.equations.last())
                     && previous + 1 != index
                 {
-                    diagnostics.push(not_consecutive(file, name, *previous_range, range));
+                    diagnostics.push(not_consecutive(file, name, *previous_range, range, false));
                 }
                 *last_equation = Some(index);
                 member_item.equations.push((AstPtr::new(&equation), range));
@@ -551,7 +551,7 @@ fn check_order(
         let (previous_index, _, previous_range) = &pair[0];
         let (index, _, range) = &pair[1];
         if *index != previous_index + 1 {
-            diagnostics.push(not_consecutive(file, &name, *previous_range, *range));
+            diagnostics.push(not_consecutive(file, &name, *previous_range, *range, true));
         }
     }
     match (&signature, equations.first()) {
@@ -602,8 +602,19 @@ fn check_order(
     }
 }
 
-/// E1018。instance の等式にはシグネチャがないが、文言はトップレベルの関数と同じにする。
-fn not_consecutive(file: FileId, name: &str, previous: TextRange, again: TextRange) -> Diagnostic {
+/// E1018。instance の等式にはシグネチャがないので (`signed` が偽)、help でシグネチャに触れない。
+fn not_consecutive(
+    file: FileId,
+    name: &str,
+    previous: TextRange,
+    again: TextRange,
+    signed: bool,
+) -> Diagnostic {
+    let help = if signed {
+        format!("put every equation of `{name}` together, right after its signature")
+    } else {
+        format!("put every equation of `{name}` together")
+    };
     Diagnostic::error(
         codes::NON_CONSECUTIVE_EQUATIONS,
         format!("the equations of `{name}` are not consecutive"),
@@ -614,9 +625,7 @@ fn not_consecutive(file: FileId, name: &str, previous: TextRange, again: TextRan
         ),
     )
     .with_secondary(Label::new(file, previous, "the previous equation"))
-    .with_help(format!(
-        "put every equation of `{name}` together, right after its signature"
-    ))
+    .with_help(help)
 }
 
 /// `data` と `effect` の型引数。重複した名前は E1003 にして、最初の1つだけを残す。

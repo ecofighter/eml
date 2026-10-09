@@ -1,7 +1,7 @@
 //! クラス、メソッド、instance の HIR (docs/spec/declarations.md の「クラスと instance」)。
 
 use eml_hir::{FunctionKind, InstanceOrigin, MethodImpl};
-use eml_test_support::{lower, lower_files, short};
+use eml_test_support::{full, lower, lower_files, short};
 
 const COLOR: &str = "data Color =\n  | Red\n  | Green\n\n";
 
@@ -147,6 +147,23 @@ fn constraints_are_checked() {
 }
 
 #[test]
+fn a_class_variable_only_in_an_effect_row_is_mentioned() {
+    // エフェクトの型引数もメソッドの型に現れるものに数える (docs/spec/declarations.md の「宣言の検査」)
+    let text = "effect Reader r where\n  ask : Unit -> r\n\nclass Source a where\n  load : Unit -> <Reader a> Int";
+    assert_eq!(lines(text), Vec::<String>::new());
+}
+
+#[test]
+fn a_public_instance_member_is_still_a_method_equation() {
+    // パーサは `pub` を報告してメンバーを残すので、`==` の等式がないことの E1036 を重ねない
+    let text = format!("{COLOR}instance Eq Color where\n  pub a == b = True");
+    assert_eq!(
+        lines(&text),
+        ["E0011 6:3 `pub` cannot be written on an instance member"]
+    );
+}
+
+#[test]
 fn a_method_variable_named_like_a_head_variable_is_renamed() {
     // 型の表と単相化の代入は型変数を名前で引くので、instance の頭の `b` とメソッドの `b` を別の名前にする
     let text = "data Box a = | Box a\n\nclass Fold f where\n  fold : f -> b -> (b -> Int -> b) -> b\n\ninstance Fold (Box b) where\n  fold (Box _) acc _ = acc";
@@ -199,6 +216,17 @@ fn instance_members_are_grouped_by_name() {
             "E1003 14:10 `big` is defined more than once",
         ]
     );
+    // instance の等式にはシグネチャがないので、help はシグネチャに触れない
+    let text = format!(
+        "{COLOR}class Size a where\n  size : a -> Int\n  big : a -> Bool\n\ninstance Size Color where\n  size Red = 1\n  big _ = True\n  size Green = 2"
+    );
+    let lowered = lower(&text);
+    insta::assert_snapshot!(full(lowered.files(), &lowered.diagnostics), @"
+    E1018 12:3 the equations of `size` are not consecutive
+      12:3 this equation is separated from the ones above
+      10:3 the previous equation
+      help: put every equation of `size` together
+    ");
 }
 
 #[test]

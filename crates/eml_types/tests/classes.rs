@@ -83,7 +83,7 @@ fn an_undecided_type_is_ambiguous_unless_the_body_has_another_error() {
     let text = format!("{SAME}f : Int -> Int\nf x =\n  let s = same\n  x");
     assert_eq!(
         lines(&text),
-        ["E2009 8:11 cannot decide which instance of `Same` `same` uses"]
+        ["E2009 8:11 cannot decide which instance of `Same` to use for `same`"]
     );
     let text = format!("{SAME}f : Int -> Int\nf x =\n  let s = same\n  x + \"1\"");
     let found = lines(&text);
@@ -102,6 +102,20 @@ fn a_missing_superclass_instance_is_reported_at_the_instance() {
     insta::assert_snapshot!(eml_test_support::full(checked.files(), &checked.diagnostics), @"
     E2006 13:16 no instance of `Same` for `Color`
       13:16 `Order` requires `Same`, its superclass
+    ");
+}
+
+#[test]
+fn a_superclass_instance_context_must_follow_from_the_instance_context() {
+    // `Same (Box a)` の instance は `Same a` を求めるので、文脈のない `Order (Box a)` は上位クラスの instance を使えない
+    let text = format!(
+        "{SAME}class Same a => Order a where\n  less : a -> a -> Bool\n\ndata Box a = | Box a\n\ninstance Same a => Same (Box a) where\n  same (Box x) (Box y) = same x y\n\ninstance Order (Box a) where\n  less _ _ = False"
+    );
+    let checked = check(&text);
+    insta::assert_snapshot!(eml_test_support::full(checked.files(), &checked.diagnostics), @"
+    E2006 14:16 no instance of `Same` for `a`
+      14:16 the instance of `Same` for `Box a` requires `Same a`
+      help: add `Same a` to the context of this instance
     ");
 }
 

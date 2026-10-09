@@ -1,4 +1,4 @@
-//! タプル、リテラルのパターン、`==` で比べる値の型検査 (docs/spec/records.md、
+//! タプル、リテラルのパターン、`==` と `!=` が求める `Eq` の制約の型検査 (docs/spec/records.md、
 //! docs/spec/types.md の「制約の解決」)。
 
 use crate::common::check_text;
@@ -51,7 +51,7 @@ fn a_literal_pattern_of_another_type_is_a_mismatch() {
 }
 
 #[test]
-fn only_int_string_and_bool_can_be_compared() {
+fn equality_needs_an_eq_instance_of_the_operand_type() {
     let text = "data Color =\n  | Red\n  | Green\n\ncolors : Color -> Color -> Bool\ncolors a b = a == b\n\npairs : (Int, Int) -> Bool\npairs p = p != (1, 2)\n\nfuns : (Int -> Int) -> Bool\nfuns f = f == (fn n -> n)\n\npoly : a -> a -> Bool\npoly x y = x == y";
     insta::assert_snapshot!(check_text(text), @"
     colors : Color -> Color -> Bool
@@ -80,7 +80,7 @@ fn only_int_string_and_bool_can_be_compared() {
 
 #[test]
 fn undecided_operands_are_reported_and_errors_are_not() {
-    // `same` の引数の型はどこでも決まらない。`missing` の型は報告済みの誤りの跡 (`Error`) なので、E2006 を重ねない
+    // `same` の引数の型はどこでも決まらない。`missing` の型は報告済みの誤りの跡 (`Error`) なので、E2009 を重ねない
     let text = "undecided : Unit -> Bool\nundecided () =\n  let same = fn x -> fn y -> x == y\n  True\n\nbroken : Int -> Bool\nbroken n = missing == n";
     insta::assert_snapshot!(check_text(text), @"
     undecided : Unit -> Bool
@@ -90,7 +90,7 @@ fn undecided_operands_are_reported_and_errors_are_not() {
     broken : Int -> Bool
       n#0 : Int
     ---
-    E2009 3:32 cannot decide which instance of `Eq` `==` uses
+    E2009 3:32 cannot decide which instance of `Eq` to use for `==`
       3:32 the type here is never decided
       help: add a type annotation
     E1001 7:12 cannot find value `missing`
@@ -100,7 +100,7 @@ fn undecided_operands_are_reported_and_errors_are_not() {
 
 #[test]
 fn an_undecided_operand_is_not_reported_when_the_body_has_another_error() {
-    // `g` の引数の型は `1 + g` の誤りが直れば決まる。E2006 は連鎖なので出さない
+    // `g` の引数の型は `1 + g` の誤りが直れば決まる。E2009 は連鎖なので出さない
     let text = "broken : Unit -> Int\nbroken () =\n  let g = fn x -> x == x\n  1 + g";
     insta::assert_snapshot!(check_text(text), @"
     broken : Unit -> Int
@@ -114,8 +114,8 @@ fn an_undecided_operand_is_not_reported_when_the_body_has_another_error() {
 }
 
 #[test]
-fn two_undecided_comparisons_in_one_body_are_both_reported() {
-    // 本体に別の誤りがあるかは比べ方を決める前に1回だけ決めるので、先の E2006 が後の E2006 を抑えない
+fn two_undecided_equalities_in_one_body_are_both_reported() {
+    // 本体に別の誤りがあるかは制約を解く前に1回だけ決めるので、先の E2009 が後の E2009 を抑えない
     let text = "both : Unit -> Bool\nboth () =\n  let same = fn x -> fn y -> x == y\n  let differ = fn x -> fn y -> x != y\n  True";
     insta::assert_snapshot!(check_text(text), @"
     both : Unit -> Bool
@@ -126,18 +126,18 @@ fn two_undecided_comparisons_in_one_body_are_both_reported() {
       y#4 : _
       differ#5 : _ -> <_> _ -> <_> Bool
     ---
-    E2009 3:32 cannot decide which instance of `Eq` `==` uses
+    E2009 3:32 cannot decide which instance of `Eq` to use for `==`
       3:32 the type here is never decided
       help: add a type annotation
-    E2009 4:34 cannot decide which instance of `Eq` `!=` uses
+    E2009 4:34 cannot decide which instance of `Eq` to use for `!=`
       4:34 the type here is never decided
       help: add a type annotation
     ");
 }
 
 #[test]
-fn an_undecided_comparison_suppresses_the_linearity_diagnostics() {
-    // E2006 は線形性の検査より前に決まり、本体の誤りに数えるので、`f` を使わないことの E3003 を出さない
+fn an_undecided_instance_suppresses_the_linearity_diagnostics() {
+    // E2009 は線形性の検査より前に決まり、本体の誤りに数えるので、`f` を使わないことの E3003 を出さない
     // (docs/spec/diagnostics.md の「連鎖する診断の抑止」)
     let text = "leak : Fs.File -> Bool\nleak f =\n  let same = fn x -> fn y -> x == y\n  True";
     insta::assert_snapshot!(check_text(text), @"
@@ -147,7 +147,7 @@ fn an_undecided_comparison_suppresses_the_linearity_diagnostics() {
       y#2 : _
       same#3 : _ -> <_> _ -> <_> Bool
     ---
-    E2009 3:32 cannot decide which instance of `Eq` `==` uses
+    E2009 3:32 cannot decide which instance of `Eq` to use for `==`
       3:32 the type here is never decided
       help: add a type annotation
     ");
