@@ -1,5 +1,7 @@
 use eml_diagnostics::{Diagnostic, FileId, Label, SourceFiles, TextEdit, TextRange, TextSize};
-use eml_hir::{Body, ExprId, ExprKind, FunctionKind, OperationId, PatId, Program, Res};
+use eml_hir::{
+    Body, ExprId, ExprKind, FunctionKind, ModuleOrigin, OperationId, PatId, Program, Res,
+};
 
 use crate::codes;
 use crate::kind::{
@@ -265,13 +267,23 @@ impl BodyCheck<'_, '_> {
                             )
                         })
                     }
+                    // 引数を書いたメソッドの row もクラスのシグネチャが決める。標準ライブラリのクラスは書き換えられない
+                    Some(method) => (self.program.origin(method.class.module) == ModuleOrigin::User)
+                        .then(|| {
+                            format!(
+                                "the signature of `{}` comes from the class `{}`; add {quoted} to its row there, as in `-> <{}> ...`",
+                                method.name,
+                                self.program.names.class(method.class),
+                                missing.join(", ")
+                            )
+                        }),
                     // 引数のない関数は矢印を持たず、row を足す先がない。`()` を取る関数にする規則を案内する
                     // (docs/spec/declarations.md)
                     None if self.body.params.is_empty() => Some(format!(
                         "`{function}` takes no parameters, so it cannot perform {quoted}; make it a function taking `()`, as in `{function} : Unit -> <{}> ...` with `{function} () = ...`",
                         missing.join(", ")
                     )),
-                    _ => Some(format!(
+                    None => Some(format!(
                         "add {quoted} to the row of the signature of `{function}`, as in `-> <{}> ...`",
                         missing.join(", ")
                     )),

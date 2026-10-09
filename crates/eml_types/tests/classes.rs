@@ -174,6 +174,35 @@ fn a_method_without_parameters_is_not_told_to_change_its_signature() {
 }
 
 #[test]
+fn a_method_with_parameters_is_told_to_change_the_class() {
+    // instance のメソッドと既定のメソッドの型はクラスが決めるので、row を足す先はクラスのシグネチャである
+    let helps = |text: &str| -> Vec<String> {
+        check(text)
+            .diagnostics
+            .into_iter()
+            .flat_map(|diagnostic| diagnostic.help)
+            .collect()
+    };
+    let text = "class Combine a where\n  combine : a -> a -> a\n  twice : a -> a\n  twice x =\n    println \"x\"\n    combine x x\n\ninstance Combine Int where\n  combine x y =\n    println \"x\"\n    x + y";
+    assert_eq!(
+        helps(text),
+        [
+            "the signature of `twice` comes from the class `Combine`; add `IO` to its row there, as in `-> <IO> ...`",
+            "the signature of `combine` comes from the class `Combine`; add `IO` to its row there, as in `-> <IO> ...`",
+        ]
+    );
+    // 標準ライブラリのクラスは書き換えられないので、help を出さない
+    let text = "data C = | C\n\ninstance Show C where\n  show _ =\n    println \"x\"\n    \"C\"";
+    let checked = check(text);
+    let found: Vec<(String, usize)> = checked
+        .diagnostics
+        .iter()
+        .map(|diagnostic| (diagnostic.code.to_string(), diagnostic.help.len()))
+        .collect();
+    assert_eq!(found, [("E2002".to_string(), 0)]);
+}
+
+#[test]
 fn instance_and_default_bodies_are_checked_at_their_types() {
     let text = format!(
         "class Size a where\n  size : a -> Int\n  twice : a -> Int\n  twice x = size x ++ \"\"\n\n{COLOR}instance Size Color where\n  size _ = \"one\""
