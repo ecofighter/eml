@@ -1,6 +1,6 @@
-//! シグネチャの閉じた型の形と、型の注釈を型の表に下ろす処理 (docs/spec/types.md の「推論」)。閉じた形は型の表を指さず、
-//! 変数をすべてスキームの中の番号で持つ。シグネチャが必須なので、宣言の型の形はシグネチャだけで決まり、本体の検査は
-//! 呼び出し先の形だけを見ればよい。
+//! シグネチャの閉じた型の形と、型の注釈を推論の表に下ろす処理 (docs/spec/types.md の「推論」)。閉じた形は推論の表を
+//! 指さず、変数をすべてスキームの中の番号で持つ。シグネチャが必須なので、宣言の型の形はシグネチャだけで決まり、
+//! 本体の検査は呼び出し先の形だけを見ればよい。
 
 use std::collections::HashMap;
 
@@ -87,7 +87,7 @@ impl Arrows {
     }
 }
 
-/// シグネチャを型の表に変換する。一番外側の矢印はトップレベルの関数そのもので、何度でも呼べるので `Unr` である
+/// シグネチャを推論の表に変換する。一番外側の矢印はトップレベルの関数そのもので、何度でも呼べるので `Unr` である
 /// (docs/spec/types.md の「関数型」)。
 pub(crate) fn lower_signature(table: &mut Table, signature: &Signature, rigids: &Rigids) -> Ty {
     lower(
@@ -99,7 +99,7 @@ pub(crate) fn lower_signature(table: &mut Table, signature: &Signature, rigids: 
     )
 }
 
-/// 本体の注釈を型の表に変換する。
+/// 本体の注釈を推論の表に変換する。
 pub(crate) fn lower_type(
     table: &mut Table,
     types: &Arena<TypeRef>,

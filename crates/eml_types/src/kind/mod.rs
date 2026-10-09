@@ -113,7 +113,7 @@ pub(crate) enum KindReason {
     /// 型の単一化で出た制約。
     Unified,
     /// 呼び出しをまたいで持っている値。由来の範囲は呼び出しの範囲である (docs/spec/effects.md の「継続の多重度と持ち越し規則」)。
-    /// `multi` は報告が指す `multi` の操作で、持ち越しのパスが決める。row を持たないのは、由来を型の表から切り離し、
+    /// `multi` は報告が指す `multi` の操作で、持ち越しのパスが決める。row を持たないのは、由来を推論の表から切り離し、
     /// スキームに残せるようにするため。
     CarriedAcross {
         value: CarriedValue,

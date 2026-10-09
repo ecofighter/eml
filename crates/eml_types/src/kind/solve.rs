@@ -1,5 +1,5 @@
 //! 段2: SCC ごとに Kind の問題をまとめて解き、違反を集め、各宣言のスキームに残す制約を求める
-//! (docs/spec/types.md の「推論」)。型の表は使わず、番号の上の束だけを扱う。
+//! (docs/spec/types.md の「推論」)。推論の表は使わず、番号の上の束だけを扱う。
 
 use std::collections::{HashMap, HashSet};
 
