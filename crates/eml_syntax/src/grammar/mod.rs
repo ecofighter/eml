@@ -83,7 +83,7 @@ fn too_deep(p: &mut Parser) {
     }
     let m = p.start();
     skip_to_closing(p);
-    m.complete(p, ERROR);
+    m.complete(p, TOO_DEEP);
 }
 
 /// 診断はトークンごとではなく1件だけ出す。`ERROR_TOKEN` は字句解析で報告済みなので、それ以外のトークンの位置に出す。

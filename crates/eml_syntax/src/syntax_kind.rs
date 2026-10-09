@@ -92,6 +92,9 @@ pub enum SyntaxKind {
 
     SOURCE_FILE,
     ERROR,
+    /// 入れ子の上限 (E0013) で読み飛ばした部分。`ERROR` と分けるのは、これを含む等式の本体を HIR が誤りの式に
+    /// して、その項目の中の連鎖する診断を後の段階でも出さないため (docs/spec/grammar.md)。
+    TOO_DEEP,
     /// 定義する名前。`(+)` の形では括弧ごと包む。
     NAME,
     /// 参照する名前の1つのセグメント。

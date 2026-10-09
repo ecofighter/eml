@@ -88,7 +88,7 @@ impl<'a> BodyLowering<'a> {
             [(equation, _)] => {
                 let range = equation.range();
                 let params = self.lower_param_group(equation.params(), range);
-                let root = self.lower_expr(equation.body(), range);
+                let root = self.lower_body(equation, range);
                 (params, root)
             }
             _ => self.lower_equation_match(equations),
@@ -131,7 +131,7 @@ impl<'a> BodyLowering<'a> {
         for (equation, name_range) in equations {
             let mark = self.scope.len();
             let pats = self.lower_param_group(equation.params(), equation.range());
-            let body = self.lower_expr(equation.body(), equation.range());
+            let body = self.lower_body(equation, equation.range());
             self.scope.truncate(mark);
             if pats.len() != arity {
                 self.diagnostics.push(
@@ -179,6 +179,15 @@ impl<'a> BodyLowering<'a> {
             whole,
         );
         (params, root)
+    }
+
+    /// E0013 で一部を読み飛ばした等式の本体は、変換せずに誤りの式にする。読み残した形を組み上げると、構文の誤りに
+    /// 名前や型の誤りが連鎖するためである (docs/spec/grammar.md)。
+    fn lower_body(&mut self, equation: &ast::Equation, range: TextRange) -> ExprId {
+        if equation.is_too_deep() {
+            return self.alloc(ExprKind::Missing, range);
+        }
+        self.lower_expr(equation.body(), range)
     }
 
     /// 引数の並びを1つの組として変換する。組の中で同じ名前を2回束縛したら E1017 にする。
@@ -380,6 +389,11 @@ impl<'a> BodyLowering<'a> {
 
     fn lower_block(&mut self, block: &ast::Block, range: TextRange) -> ExprId {
         let all: Vec<ast::Stmt> = block.stmts().collect();
+        // 文のないブロックは、構文の誤りの回復 (字下げの足りない行の E0009 や、文のない行の E0011) でだけ作られる。
+        // `Unit` の値と読むと、型の誤りが構文の誤りに連鎖する
+        if all.is_empty() {
+            return self.alloc(ExprKind::Missing, range);
+        }
         self.lower_stmts(&all, range)
     }
 

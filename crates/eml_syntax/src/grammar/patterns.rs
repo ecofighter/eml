@@ -53,15 +53,30 @@ pub(super) fn pattern(p: &mut Parser) -> bool {
 }
 
 fn pattern_inner(p: &mut Parser) -> bool {
+    infix_con_pat(p, 0)
+}
+
+/// 中置のコンストラクタの列は右へ再帰して読むが、HIR は fixity で組み直すので、先に読んだ `cpat` が後の段の下に
+/// 来うる。そこで右の段は、それまでの `cpat` の高さの最大 (`tallest`) を下に確保して数える。数えないと、括弧に
+/// 入れた列を左に重ねたパターンを後の段階が再帰してスタックを溢れさせる (docs/spec/grammar.md)。
+fn infix_con_pat(p: &mut Parser, tallest: u32) -> bool {
     let m = p.start();
-    if !cpat(p) {
+    let (parsed, height) = p.measure(cpat);
+    if !parsed {
         m.abandon(p);
         return false;
     }
     if p.at(CONOP) {
         p.bump(CONOP);
-        if !pattern(p) {
-            expected(p, "a pattern");
+        let tallest = tallest.max(height);
+        if !p.enter_reserving(tallest) {
+            too_deep(p);
+        } else {
+            let parsed = infix_con_pat(p, tallest);
+            p.leave();
+            if !parsed {
+                expected(p, "a pattern");
+            }
         }
         m.complete(p, INFIX_CON_PAT);
     } else {

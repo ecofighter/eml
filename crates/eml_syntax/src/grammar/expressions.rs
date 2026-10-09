@@ -27,7 +27,16 @@ const EXPR_FORMS: TokenSet = TokenSet::new(&[IF_KW, MATCH_KW, HANDLE_KW, FN_KW, 
 pub(super) fn body(p: &mut Parser) {
     if p.at(LAYOUT_OPEN) {
         let m = p.start();
-        block_of(p, "a statement", stmt);
+        // HIR は `use` の後の残りの文をラムダで包むので、`use` ごとに、残りの文を1段深く数える
+        // (docs/spec/expressions.md の「`use`」)
+        let mut entered = 0;
+        block_of(p, "a statement", |p| {
+            let is_use = p.at(USE_KW);
+            stmt(p) && (!is_use || enter_link(p, 0, &mut entered))
+        });
+        for _ in 0..entered {
+            p.leave();
+        }
         m.complete(p, BLOCK);
         return;
     }
@@ -123,22 +132,52 @@ fn op_expr(p: &mut Parser, section: bool) -> OpExpr {
     nested(p, OpExpr::Expr, |p| op_expr_inner(p, section))
 }
 
+/// 列は再帰せずに読むが、HIR は演算子1つにつき1段深い木に組み直すので、前置の `-` も含めて演算子ごとに
+/// 入れ子の深さを数える。組み直した木では、読み終えた被演算子が後の演算子の段の下に来うるので、演算子の段は
+/// それまでの被演算子の高さの最大を下に確保して数える。数えないと、長い列の木や、括弧に入れた列を左に重ねた木を
+/// 後の段階が再帰してスタックを溢れさせる (docs/spec/grammar.md)。
 fn op_expr_inner(p: &mut Parser, section: bool) -> OpExpr {
+    let mut entered = 0;
+    let result = op_seq(p, section, &mut entered);
+    for _ in 0..entered {
+        p.leave();
+    }
+    result
+}
+
+/// 再帰せずに読む連鎖 (演算子の列、フィールドの参照) の1段を、下に `reserved` 段の高さを確保して入れ子の1段に
+/// 数える。上限に達したら、`too_deep` が今の括弧かブロックの中身を読み飛ばすので、連鎖はそこで終わる。
+fn enter_link(p: &mut Parser, reserved: u32, entered: &mut u32) -> bool {
+    if !p.enter_reserving(reserved) {
+        too_deep(p);
+        return false;
+    }
+    *entered += 1;
+    true
+}
+
+fn op_seq(p: &mut Parser, section: bool, entered: &mut u32) -> OpExpr {
     let m = p.start();
     let mut operands = 0;
     let mut has_operator = false;
-    loop {
+    let mut tallest = 0;
+    'seq: loop {
         while p.at(MINUS) {
+            if !enter_link(p, tallest, entered) {
+                break 'seq;
+            }
             p.bump(MINUS);
             has_operator = true;
         }
-        if !operand(p) {
+        let (parsed, height) = p.measure(operand);
+        if !parsed {
             if has_operator {
                 expected(p, "an expression");
             }
             break;
         }
         operands += 1;
+        tallest = tallest.max(height);
         if !p.at_ts(OPERATORS) {
             break;
         }
@@ -152,6 +191,9 @@ fn op_expr_inner(p: &mut Parser, section: bool) -> OpExpr {
             }
             p.bump_any();
             return OpExpr::LeftSection;
+        }
+        if !enter_link(p, tallest, entered) {
+            break;
         }
         p.bump_any();
         has_operator = true;
@@ -216,19 +258,17 @@ fn app(p: &mut Parser) {
     }
 }
 
-/// 連鎖は再帰せずに深い木を作るので、各段を入れ子の深さに数える。数えないと、長い連鎖の木の解放がスタックを
-/// 溢れさせる (docs/implementation/status.md)。
+/// 連鎖は再帰せずに深い木を作るので、各段を入れ子の深さに数える。先頭の atom は連鎖の段の数だけ深くなるので、
+/// 各段はその高さを下に確保して数える。数えないと、長い連鎖の木の解放がスタックを溢れさせる (docs/spec/grammar.md)。
 fn postfix(p: &mut Parser) -> bool {
-    let Some(mut lhs) = atom(p) else {
+    let (Some(mut lhs), height) = p.measure(atom) else {
         return false;
     };
     let mut entered = 0;
     while p.at(DOT) && matches!(p.nth(1), LIDENT | INT) {
-        if !p.enter() {
-            too_deep(p);
+        if !enter_link(p, height, &mut entered) {
             break;
         }
-        entered += 1;
         let m = lhs.precede(p);
         dot(p);
         p.bump_any();

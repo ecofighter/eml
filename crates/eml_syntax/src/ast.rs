@@ -285,6 +285,13 @@ impl Equation {
     pub fn body(&self) -> Option<Expr> {
         support::child(&self.syntax)
     }
+
+    /// 入れ子の上限 (E0013) で一部を読み飛ばしたときに真を返す。
+    pub fn is_too_deep(&self) -> bool {
+        self.syntax
+            .descendants()
+            .any(|node| node.kind() == SyntaxKind::TOO_DEEP)
+    }
 }
 
 impl Block {

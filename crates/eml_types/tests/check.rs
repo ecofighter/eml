@@ -497,3 +497,81 @@ fn a_user_extern_adds_no_type_error() {
         .collect();
     assert_eq!(codes, ["E1033", "E1033", "E1033"]);
 }
+
+fn codes(text: &str) -> Vec<String> {
+    let checked = eml_test_support::check(text);
+    checked
+        .diagnostics
+        .iter()
+        .map(|d| d.code.to_string())
+        .collect()
+}
+
+#[test]
+fn a_missing_else_branch_reports_only_the_syntax_error() {
+    let text = "f : Int -> Int\nf x = if x == 0 then 1 else\n\ng : Int -> Int\ng x = x";
+    assert_eq!(codes(text), ["E0009"]);
+}
+
+#[test]
+fn a_long_else_if_chain_reports_only_the_nesting_limit() {
+    // 上限で読み飛ばした `else` の枝を、`else` のない `if` と読んで型の誤りを重ねない (docs/spec/grammar.md)
+    let mut text = String::from("f : Int -> Int\nf x =\n  if x == 0 then 0\n");
+    for i in 1..300 {
+        text.push_str(&format!("  else if x == {i} then {i}\n"));
+    }
+    text.push_str("  else 7\n");
+    assert_eq!(codes(&text), ["E0013"]);
+}
+
+#[test]
+fn a_long_operator_chain_reports_the_nesting_limit_without_overflowing() {
+    let chain = vec!["x == 0"; 30_000].join(" || ");
+    assert_eq!(codes(&format!("f : Int -> Bool\nf x = {chain}")), ["E0013"]);
+}
+
+#[test]
+fn stacked_parenthesized_chains_report_the_nesting_limit_without_overflowing() {
+    let mut expr = String::from("x");
+    for _ in 0..8 {
+        expr = format!("({expr}){}", " + x".repeat(245));
+    }
+    assert_eq!(codes(&format!("f : Int -> Int\nf x = {expr}")), ["E0013"]);
+}
+
+#[test]
+fn a_long_run_of_use_statements_reports_the_nesting_limit_without_overflowing() {
+    let mut text =
+        String::from("pass : (Int -> Int) -> Int\npass k = k 1\n\nf : Int -> Int\nf x =\n");
+    for i in 0..1_000 {
+        text.push_str(&format!("  use n{i} <- pass\n"));
+    }
+    text.push_str("  x");
+    assert_eq!(codes(&text), ["E0013"]);
+}
+
+#[test]
+fn a_too_deep_pattern_reports_only_the_nesting_limit() {
+    let pat = format!("{}y{}", "(".repeat(300), ")".repeat(300));
+    let text = format!("f : Int -> Int\nf x =\n  let {pat} = x\n  y");
+    assert_eq!(codes(&text), ["E0013"]);
+}
+
+#[test]
+fn an_unsupported_list_keeps_the_other_diagnostics_of_its_expression() {
+    // E0004 の atom は読み飛ばしではないので、同じ式の名前の誤りも報告する
+    let text = "f : Int -> Int\nf x = if nosuch then 1 else g [1]";
+    assert_eq!(codes(text), ["E1001", "E1001", "E0004"]);
+}
+
+#[test]
+fn stacked_constructor_patterns_report_the_nesting_limit_without_overflowing() {
+    let mut pat = String::from("Leaf");
+    for _ in 0..20 {
+        pat = format!("({pat}){}", " :+ 1".repeat(200));
+    }
+    let text = format!(
+        "data T =\n  | Leaf\n  | T :+ Int\n\nf : T -> Int\nf t = match t with\n  | {pat} -> 1\n  | _ -> 0"
+    );
+    assert_eq!(codes(&text), ["E0013"]);
+}

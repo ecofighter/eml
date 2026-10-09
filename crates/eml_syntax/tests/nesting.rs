@@ -95,3 +95,81 @@ fn long_field_access_chain_reports_one_error() {
 fn moderate_field_access_chain_is_fine() {
     assert!(diagnostics(&format!("x = a{}", ".b".repeat(200))).is_empty());
 }
+
+#[test]
+fn long_operator_chain_reports_one_error() {
+    assert_one_nesting_error(&format!("x = a{}", " || a".repeat(30_000)));
+}
+
+#[test]
+fn long_run_of_prefix_minus_reports_one_error() {
+    assert_one_nesting_error(&format!("x = {}1", "- ".repeat(30_000)));
+}
+
+#[test]
+fn moderate_operator_chain_is_fine() {
+    assert!(diagnostics(&format!("x = a{}", " + a".repeat(200))).is_empty());
+}
+
+/// 括弧に入れた列を左に重ねると、組み直した木の深さは各段の演算子の数の和になる。
+fn stacked_chains(levels: usize, operators: usize) -> String {
+    let mut expr = String::from("x");
+    for _ in 0..levels {
+        expr = format!("({expr}){}", " + x".repeat(operators));
+    }
+    expr
+}
+
+#[test]
+fn stacked_parenthesized_chains_report_one_error() {
+    assert_one_nesting_error(&format!("y = {}", stacked_chains(8, 245)));
+}
+
+#[test]
+fn moderate_stacked_chains_are_fine() {
+    assert!(diagnostics(&format!("y = {}", stacked_chains(4, 50))).is_empty());
+}
+
+#[test]
+fn long_run_of_use_statements_reports_one_error() {
+    let mut text = String::from("f x =\n");
+    for i in 0..1_000 {
+        text.push_str(&format!("  use n{i} <- pass\n"));
+    }
+    text.push_str("  x");
+    assert_one_nesting_error_anywhere(&text);
+}
+
+#[test]
+fn two_tall_operands_are_not_counted_on_top_of_each_other() {
+    let sum = vec!["x"; 130].join(" + ");
+    assert!(diagnostics(&format!("y = ({sum}) * ({sum})")).is_empty());
+}
+
+/// 括弧に入れたコンストラクタの列を左に重ねたパターン。HIR が左結合に組み直すと、深さは各段の数の和になる。
+fn stacked_con_pats(levels: usize, constructors: usize) -> String {
+    let mut pat = String::from("Leaf");
+    for _ in 0..levels {
+        pat = format!("({pat}){}", " :+ 1".repeat(constructors));
+    }
+    pat
+}
+
+#[test]
+fn stacked_parenthesized_constructor_patterns_report_one_error() {
+    assert_one_nesting_error_anywhere(&format!(
+        "f t = match t with\n  | {} -> 1",
+        stacked_con_pats(20, 200)
+    ));
+}
+
+#[test]
+fn moderate_stacked_constructor_patterns_are_fine() {
+    assert!(
+        diagnostics(&format!(
+            "f t = match t with\n  | {} -> 1",
+            stacked_con_pats(4, 50)
+        ))
+        .is_empty()
+    );
+}

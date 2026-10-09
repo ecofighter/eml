@@ -45,6 +45,8 @@ pub(crate) struct Parser<'t> {
     diagnostics: Vec<Diagnostic>,
     steps: Cell<u32>,
     depth: u32,
+    /// `measure` の中で深さが届いた最大。
+    peak: u32,
     too_deep: bool,
 }
 
@@ -59,17 +61,34 @@ impl<'t> Parser<'t> {
             diagnostics: Vec::new(),
             steps: Cell::new(0),
             depth: 0,
+            peak: 0,
             too_deep: false,
         }
     }
 
     /// 入れ子を1段深くする。上限に達していたら何もせずに偽を返す。
     pub(crate) fn enter(&mut self) -> bool {
-        if self.depth == NESTING_LIMIT {
+        self.enter_reserving(0)
+    }
+
+    /// `enter` と同じだが、この段の下にもう `reserved` 段の高さがあるものとして上限と比べる。連鎖を組み直した木では、
+    /// 先に読み終えた部分 (演算子の列の被演算子など) がこの段より下に来うるため。
+    pub(crate) fn enter_reserving(&mut self, reserved: u32) -> bool {
+        if self.depth + reserved >= NESTING_LIMIT {
             return false;
         }
         self.depth += 1;
+        self.peak = self.peak.max(self.depth + reserved);
         true
+    }
+
+    /// `parse` が読んだ部分の高さ (今の深さから届いた深さの最大までの段数) を返す。
+    pub(crate) fn measure<T>(&mut self, parse: impl FnOnce(&mut Self) -> T) -> (T, u32) {
+        let outer = std::mem::replace(&mut self.peak, self.depth);
+        let result = parse(self);
+        let height = self.peak - self.depth;
+        self.peak = self.peak.max(outer);
+        (result, height)
     }
 
     pub(crate) fn leave(&mut self) {
