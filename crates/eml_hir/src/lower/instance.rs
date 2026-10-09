@@ -9,7 +9,7 @@ use eml_syntax::ast;
 use la_arena::{Arena, Idx, RawIdx};
 
 use super::class::ContextScope;
-use super::types::{arity_error, class_as_type};
+use super::types::{arity_error, class_as_type, visit_type_vars};
 use super::{ItemLowering, NameKind, PendingBody, not_found, path_name, unresolved};
 use crate::codes;
 use crate::def_map::Resolved;
@@ -247,7 +247,9 @@ impl ItemLowering<'_> {
                 if let TypeDefKind::Data { constructors } = &def.kind {
                     for constructor in constructors {
                         for &field in &items.constructors[constructor.local].fields {
-                            mark_vars(&def.types, field, &mut occurs);
+                            visit_type_vars(&def.types, field, &mut |var| {
+                                occurs[u32::from(var.into_raw()) as usize] = true;
+                            });
                         }
                     }
                 }
@@ -421,31 +423,6 @@ impl ItemLowering<'_> {
             "an instance head must be a type constructor applied to distinct type variables",
             Label::new(self.file, range, label),
         ));
-    }
-}
-
-/// 型の注釈 `id` に現れる型変数の印を `occurs` に付ける。関数型の引数、結果、row のエフェクトの型引数の中も見る。
-/// 木の深さは E0013 で抑えられているので再帰でたどる。
-fn mark_vars(types: &Arena<TypeRef>, id: TypeRefId, occurs: &mut [bool]) {
-    match &types[id].kind {
-        TypeRefKind::Error => {}
-        TypeRefKind::Var(var) => occurs[u32::from(var.into_raw()) as usize] = true,
-        TypeRefKind::Con(_, args) | TypeRefKind::Tuple(args) => {
-            for &arg in args {
-                mark_vars(types, arg, occurs);
-            }
-        }
-        TypeRefKind::Fn { param, row, ret } => {
-            mark_vars(types, *param, occurs);
-            if let RowRef::Closed { effects, .. } | RowRef::Open { effects, .. } = row {
-                for effect in effects {
-                    for &arg in &effect.args {
-                        mark_vars(types, arg, occurs);
-                    }
-                }
-            }
-            mark_vars(types, *ret, occurs);
-        }
     }
 }
 

@@ -6,7 +6,8 @@ use super::{NameKind, NameUse, not_found, path_name, unresolved};
 use crate::codes;
 use crate::def_map::{Resolved, Resolver};
 use crate::hir::{
-    EffectRef, Generics, RowRef, RowVarDecl, RowVarId, TypeRef, TypeRefId, TypeRefKind, TypeVarDecl,
+    EffectRef, Generics, RowRef, RowVarDecl, RowVarId, TypeRef, TypeRefId, TypeRefKind,
+    TypeVarDecl, TypeVarId,
 };
 use crate::program::TypeItem;
 
@@ -271,6 +272,41 @@ impl TypeLowering<'_> {
     fn alloc(&mut self, kind: TypeRefKind, range: TextRange) -> TypeRefId {
         self.types.alloc(TypeRef { kind, range })
     }
+}
+
+/// 型に現れる型変数を、現れるたびに `visit` に渡す。関数型の row に書いたエフェクトの型引数も、型に現れるものに
+/// 数える (docs/spec/declarations.md の「宣言の検査」)。木の深さは E0013 で抑えられているので再帰でたどる。
+pub(super) fn visit_type_vars(
+    types: &Arena<TypeRef>,
+    id: TypeRefId,
+    visit: &mut impl FnMut(TypeVarId),
+) {
+    match &types[id].kind {
+        TypeRefKind::Error => {}
+        TypeRefKind::Var(var) => visit(*var),
+        TypeRefKind::Con(_, args) | TypeRefKind::Tuple(args) => {
+            for &arg in args {
+                visit_type_vars(types, arg, visit);
+            }
+        }
+        TypeRefKind::Fn { param, row, ret } => {
+            visit_type_vars(types, *param, visit);
+            if let RowRef::Closed { effects, .. } | RowRef::Open { effects, .. } = row {
+                for effect in effects {
+                    for &arg in &effect.args {
+                        visit_type_vars(types, arg, visit);
+                    }
+                }
+            }
+            visit_type_vars(types, *ret, visit);
+        }
+    }
+}
+
+pub(super) fn mentions(types: &Arena<TypeRef>, id: TypeRefId, var: TypeVarId) -> bool {
+    let mut found = false;
+    visit_type_vars(types, id, &mut |other| found |= other == var);
+    found
 }
 
 /// 公開の範囲の誤り (E1032)。非公開の型を返す公開の関数を許すと、`pub data` の形で入れる予定の抽象型より先に、

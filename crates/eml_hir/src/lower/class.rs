@@ -7,8 +7,7 @@ use eml_diagnostics::{Diagnostic, FileId, Label, TextRange};
 use eml_syntax::{SyntaxToken, ast};
 use la_arena::Arena;
 
-use super::effect::mentions;
-use super::types::{TypeLowering, Vars, private_in_public};
+use super::types::{TypeLowering, Vars, mentions, private_in_public};
 use super::{ItemLowering, NameKind, PendingBody, path_name, unresolved};
 use crate::codes;
 use crate::def_map::{DefMap, Resolved};
