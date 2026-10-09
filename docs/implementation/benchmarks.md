@@ -38,7 +38,7 @@ bench/run.sh
 
 `bench/run.sh` は、release ビルドの `eml run` で各プログラムを3回走らせ、`instructions retired` と実時間の中央値を Markdown の表で出す。表の前に、測定の環境 (機種と CPU、macOS の版、`rustc -V`、コミット) を出す。コミットしていない変更があれば、コミットの後に `-dirty` が付く。プログラムが実行時エラーで止まったときと、`time -l` の出力から命令の数か実時間を読めなかったときは、その出力を見せて止まる。macOS でだけ動く。
 
-valgrind が arm64 の macOS で動かないので、callgrind は使わない。`instructions retired` は callgrind ほど決定的ではないが、S4a の設計のときに release ビルドの `fib 30` を3回測った揺れは約0.1%だった。arm64 の命令の数なので、調査レポート (`docs/reports/eml/`) の callgrind (x86_64) の値とは直接比べない。
+valgrind が arm64 の macOS で動かないので、callgrind は使わない。`instructions retired` は callgrind ほど決定的ではないが、S4a の設計のときに release ビルドの `fib 30` を3回測った揺れは約0.1%だった。arm64 の命令の数なので、過去の調査で x86_64 の callgrind を使って測った値とは直接比べない。
 
 `empty.em` の命令の数は、起動と標準ライブラリのコンパイルの分である。ほかのプログラムの値からこれを引くと、実行の分の目安になる。実時間は 0.01 秒単位なので、命令の数を主に見る。
 

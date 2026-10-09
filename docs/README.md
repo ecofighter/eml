@@ -35,7 +35,7 @@ eml を実装するエージェントとプログラマのための文書群で�
 | [future/stdlib.md](future/stdlib.md) | 将来の設計 | 標準ライブラリ spec への申し送り |
 | [future/evidence-passing.md](future/evidence-passing.md) | 将来の設計 | ネイティブ化でのエフェクトの実装 (generalized evidence passing、すぐに再開する節、多重度ごとの実装) |
 | **reports/** | 調査 | 実装の方針を決めるための調査レポート。書いた時点のコミットに基づき、後から更新しない |
-| [reports/eml/](reports/eml/) | 調査 | VM とネイティブコード生成 (2026-10-09)、REPL 向けのランタイム (2026-10-09) |
+| [reports/eml/](reports/eml/) | 調査 | VM のマルチコア対応 (2026-10-10) |
 
 ## 読む順
 
