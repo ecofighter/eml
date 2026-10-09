@@ -574,6 +574,24 @@ fn a_constructor_after_deriving_is_an_error() {
 }
 
 #[test]
+fn deriving_alone_is_not_a_constructor() {
+    // `=` の後には選択肢が1つ以上要る。ブロックの `deriving` は選択肢に数えない
+    assert_eq!(
+        diagnostics("data Never =\n  deriving Show"),
+        ["E0011 2:3 expected a constructor starting with `|`"]
+    );
+    assert_eq!(
+        item_kinds("data Never =\n  deriving Show\nf = 1"),
+        ["DATA_ITEM", "EQUATION"]
+    );
+    // 後ろの選択肢に「`deriving` の後」の誤りを重ねない
+    assert_eq!(
+        diagnostics("data Never =\n  deriving Show\n  | A"),
+        ["E0011 2:3 expected a constructor starting with `|`"]
+    );
+}
+
+#[test]
 fn an_instance_cannot_be_public_or_have_signatures() {
     assert_eq!(
         diagnostics("pub instance Eq C"),

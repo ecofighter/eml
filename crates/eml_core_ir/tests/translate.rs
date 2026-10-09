@@ -2481,19 +2481,6 @@ fn extern_methods_used_as_values_are_wrapped_per_instance() {
 }
 
 #[test]
-fn a_derived_show_of_a_type_without_constructors_returns_an_empty_string() {
-    // 選択肢のブロックに `deriving` だけを書くと、コンストラクタのない型になる。値はないが、参照が届けば生成する
-    let text = "data Never =\n  deriving Show\n\ndescribe : Never -> String\ndescribe n = show n\n\nmain : Unit -> <IO> Unit\nmain () =\n  let f = describe\n  println \"x\"";
-    let shown = core_text(text, Pass::Translate);
-    insta::assert_snapshot!(function(&shown, "Show Never.show_prec"), @r#"
-    fn "Show Never.show_prec"(d.0: int, x.1: enum) -> obj {
-      let s.2: obj = const ""
-      return s.2
-    }
-    "#);
-}
-
-#[test]
 fn derived_instances_generate_their_methods() {
     // 導出した instance の中心のメソッドは、translate が Core IR として作る
     // (docs/spec/core-ir.md の「導出とタプルの生成器」)

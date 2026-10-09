@@ -1,0 +1,12 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: rendered
+input_file: tests/ui/check-fail/syntax/deriving_without_constructors.em
+---
+[E0011] Error: expected a constructor starting with `|`
+   ╭─[ check-fail/syntax/deriving_without_constructors.em:4:3 ]
+   │
+ 4 │   deriving Show
+   │   ────┬───  
+   │       ╰───── found `deriving`
+───╯

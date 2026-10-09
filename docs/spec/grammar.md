@@ -112,7 +112,7 @@ command     ::= CMD_START (CMD_TEXT | ESCAPE | '\{' '..'? expr '}')* CMD_END
 - `pub` は `class` に付けられる。`pub instance` は E0011 にする。instance は名前を持たず、いつもプログラム全体で見えるためである ([モジュールと名前解決](modules.md) の「instance の一貫性」)。`class` と `instance` のブロックの中の `pub` も E0011 にする。メソッドはクラスと一緒に公開するためである
 - `class` の `where` のブロックには、メソッドのシグネチャと既定のメソッドの等式を並べる。`instance` の `where` のブロックには、メソッドの等式と `extern` の行だけを書ける。メソッドの型はクラスが決めるので、`instance` のブロックのシグネチャは E0011 にする (Haskell 98 と同じ)。CST には組んで回復する。`where` のない `class` と `instance` も書ける
 - instance の頭は `type_atom` として読む。頭の形 (型コンストラクタに互いに異なる型変数を適用したもの) は HIR で検査する。そのため `instance Eq a`、`instance Eq (Int, Int)`、`instance Eq (Option Int)` は、構文の誤りでなく E1039 になる
-- `deriving` は、`data` の最後の選択肢の後に置く。最後の選択肢と同じ行、選択肢のブロックの項目 (`|` と同じ列)、最後の選択肢の続きの行 (`|` より深い字下げ)、ブロックを閉じた後の続きの行 (`data` より深く `|` より浅い字下げ) のどれに書いてもよい。parser は、最後の選択肢の型を読む途中でも、ブロックの項目の始まりでも、ブロックを閉じた後でも `deriving` を受け付ける。`deriving` の後に選択肢が続いたら E0011 にする
+- `deriving` は、`data` の最後の選択肢の後に置く。最後の選択肢と同じ行、選択肢のブロックの項目 (`|` と同じ列)、最後の選択肢の続きの行 (`|` より深い字下げ)、ブロックを閉じた後の続きの行 (`data` より深く `|` より浅い字下げ) のどれに書いてもよい。parser は、最後の選択肢の型を読む途中でも、ブロックの項目の始まりでも、ブロックを閉じた後でも `deriving` を受け付ける。`deriving` の後に選択肢が続いたら E0011 にする。選択肢のブロックの `deriving` は選択肢に数えないので、`=` の後のブロックに `deriving` しかなければ、`=` の後に選択肢がない誤り (E0011) にする
 
   ```haskell
   data Color = | Red | Green deriving (Eq, Show)

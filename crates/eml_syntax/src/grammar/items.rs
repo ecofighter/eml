@@ -234,10 +234,15 @@ fn alts(p: &mut Parser) {
     if p.at(LAYOUT_OPEN) {
         // `deriving` は、ブロックの最後の項目にも、最後の選択肢の続きの行にも書ける (docs/spec/grammar.md の「文法上の補足」)
         let mut derived = false;
+        let mut constructors = false;
         block_of(p, "a constructor starting with `|`", |p| {
             if p.at(DERIVING_KW) {
+                // `deriving` は選択肢に数えない。後ろに選択肢が続いても、ここで1件だけ報告する
+                if !constructors {
+                    expected(p, "a constructor starting with `|`");
+                }
                 deriving(p);
-                derived = true;
+                derived = constructors;
                 return true;
             }
             if derived && p.at(PIPE) {
@@ -250,6 +255,7 @@ fn alts(p: &mut Parser) {
             if !alt(p) {
                 return false;
             }
+            constructors = true;
             if p.at(DERIVING_KW) {
                 deriving(p);
                 derived = true;

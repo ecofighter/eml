@@ -238,12 +238,9 @@ impl Generator<'_> {
             return Repr::Obj;
         };
         match shape.constructors.as_slice() {
-            // コンストラクタのない型 (`data T =` のブロックに `deriving` だけを書いたもの) には値がないので、この
-            // 関数は呼ばれない。参照が届けば関数は組むので、空の文字列を返す本体にする
-            [] => {
-                let empty = self.string("");
-                self.builder.terminate(Term::Return(empty));
-            }
+            // `=` のない `data` は E1025 に、選択肢のない `=` は構文エラー (E0011) になるので、検査を通った
+            // プログラムの `data` にはコンストラクタがある
+            [] => unreachable!("a checked data type has a constructor"),
             [only] => {
                 let fields = self.unpack(x, layout, only, "a");
                 if matches!(self.node, InstanceNode::Tuple(_)) {
