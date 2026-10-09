@@ -446,7 +446,8 @@ impl<'c> Table<'c> {
         self.row_vars[var.0 as usize].multiplicity
     }
 
-    fn resolve(&self, mut ty: Ty) -> Ty {
+    /// 型変数の束縛をたどった代表。同じ代表の型は同じ型である。
+    pub fn resolve(&self, mut ty: Ty) -> Ty {
         while let TyShape::Var(var) = &self.shapes[ty.0 as usize] {
             match self.ty_vars[var.0 as usize].binding {
                 Some(bound) => ty = bound,

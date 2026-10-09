@@ -2,6 +2,8 @@
 //! 制約を、本体の単一化が終わってから解く。証拠は記録しない。translate と一様な位置の計算が、参照ごとの型引数から
 //! instance を引き直す。
 
+use std::collections::HashSet;
+
 use eml_diagnostics::{Diagnostic, Label};
 use eml_hir::{ClassId, ExprId, FunctionKind, TypeVarId, ValueItem};
 
@@ -81,6 +83,10 @@ impl BodyCheck<'_, '_> {
 
     /// 作業の列で解く。instance の文脈は頭の型引数へ写すので、列に足す型は元の型の部分になり、列はいつか尽きる。
     /// 解けなければ最初の失敗を返す。
+    ///
+    /// 列には、同じクラスと同じ代表の組を1回だけ足す。推論の表は部分を共有するので、型を木としてたどると型の深さの
+    /// 指数の時間がかかるためである (docs/implementation/architecture.md の「`eml_types` の内部」)。代表で比べるのは、
+    /// `Pair a a` の2つの引数のように、別の変数が後で同じ節点に束縛されることがあるためである。
     fn solve(
         &self,
         class: ClassId,
@@ -89,6 +95,7 @@ impl BodyCheck<'_, '_> {
         body_has_error: bool,
     ) -> Option<Failure> {
         let root = (class, ty);
+        let mut seen = HashSet::from([(class, self.table.resolve(ty))]);
         let mut work = vec![root];
         let mut next = 0;
         while let Some(&(class, ty)) = work.get(next) {
@@ -102,7 +109,10 @@ impl BodyCheck<'_, '_> {
                         });
                     };
                     for constraint in &self.program[instance].context {
-                        work.push((constraint.class, args[index(constraint.var)]));
+                        let arg = args[index(constraint.var)];
+                        if seen.insert((constraint.class, self.table.resolve(arg))) {
+                            work.push((constraint.class, arg));
+                        }
                     }
                 }
                 TyShape::Rigid(var) => {
