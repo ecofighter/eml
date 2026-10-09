@@ -444,5 +444,17 @@ mod tests {
         assert!(!types.contains_error(clean));
         assert!(types.contains_error(nested));
         assert!(types.contains_error(tail));
+        let labelled = types.intern(TypeKind::Fn {
+            param: int,
+            effects: vec![EffectLabel {
+                id: effect(&program, "State"),
+                args: vec![error],
+            }],
+            tail: None,
+            ret: int,
+        });
+        let field = types.intern(TypeKind::Record(vec![("x".to_string(), error)]));
+        assert!(types.contains_error(labelled));
+        assert!(types.contains_error(field));
     }
 }

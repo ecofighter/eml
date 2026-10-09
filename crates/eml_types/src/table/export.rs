@@ -37,7 +37,9 @@ impl<'t, 'c, 's> Exporter<'t, 'c, 's> {
                 id
             }
         };
-        self.done.insert(ty, id);
+        if ty != rep {
+            self.done.insert(ty, id);
+        }
         id
     }
 

@@ -692,6 +692,38 @@ fn unifying_two_equal_shared_types_visits_each_pair_once() {
 }
 
 #[test]
+fn unifying_equal_shared_records_visits_each_pair_once() {
+    let context = test_context();
+    let mut table = Table::new(&context);
+    let int = table.int;
+    let build = |table: &mut Table, bottom: Ty| {
+        let mut ty = bottom;
+        for _ in 0..SHARED_DEPTH {
+            ty = table.tuple(vec![ty, ty]);
+        }
+        ty
+    };
+    let x = table.fresh_var();
+    let a = build(&mut table, x);
+    let b = build(&mut table, int);
+    assert_eq!(table.unify(a, b), Ok(()));
+    assert_eq!(shown(&table, x), "Int");
+}
+
+#[test]
+fn the_walk_generation_restarts_after_wraparound() {
+    let context = test_context();
+    let mut table = Table::new(&context);
+    table.marks.borrow_mut().generation = u32::MAX;
+    let v = table.fresh_var();
+    let f = table.function(v, Row::pure(), table.int);
+    assert_eq!(table.unify(v, f), Err(UnifyError::Occurs));
+    assert_eq!(table.marks.borrow().generation, 1);
+    let w = table.fresh_var();
+    assert_eq!(table.unify(w, table.int), Ok(()));
+}
+
+#[test]
 fn unifying_label_arguments_remembers_the_unified_pairs() {
     let context = test_context();
     let mut table = Table::new(&context);

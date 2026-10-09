@@ -462,6 +462,7 @@ impl<'c> Table<'c> {
     /// 代表 `ty` をこの処理で初めて訪れたなら、印を付けて真を返す。子をたどる間は借りない。
     fn first_visit(&self, ty: Ty) -> bool {
         let mut marks = self.marks.borrow_mut();
+        debug_assert!(marks.walking, "first_visit outside a walk");
         let generation = marks.generation;
         let stamp = &mut marks.stamp[ty.0 as usize];
         let first = *stamp != generation;

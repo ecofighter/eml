@@ -349,13 +349,13 @@ impl FnLowering<'_> {
                     .iter()
                     .map(|field| self.materialize_once(field, built))
                     .collect();
-                // 要素が2つ以上のタプルは、型の Repr がいつも `obj` である
                 let (layout, repr) = match *value {
                     ConValue::Data(ctor) => {
                         let hir = self.ctx.hir;
                         let layout = self.program.ctor(hir, self.ctx.store, ctor).layout;
                         (layout, type_def_repr(hir[ctor].ty, hir))
                     }
+                    // 要素が2つ以上のタプルは、型の Repr がいつも `obj` である
                     ConValue::Tuple => (self.program.tuple_layout(args.len()), Repr::Obj),
                     ConValue::Made(_) => unreachable!("a made value is returned above"),
                 };
