@@ -5,5 +5,5 @@ ident x = x
 
 main : Unit -> <IO> Unit
 main () =
-  let g = ident ident ident ident ident ident ident ident ident ident ident ident ident ident ident ident ident ident ident ident ident ident ident ident ident ident ident ident ident ident ident ident ident ident ident ident ident
+  let g = ident ident ident ident ident ident ident ident ident ident ident ident ident ident ident ident ident ident ident ident ident ident ident ident ident ident ident ident ident ident ident ident ident ident ident ident ident ident ident ident
   println (show_int (g 5))
