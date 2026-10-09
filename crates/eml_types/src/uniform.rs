@@ -2,7 +2,7 @@
 //! (docs/spec/core-ir.md の「一様な位置と制約付きの多相再帰」)。
 //! 型検査の後に、書き出した本体の表から計算する。translate は結果を読むだけである。
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use eml_diagnostics::{Diagnostic, FileId, Label, TextRange, TextSize};
 use eml_hir::{
@@ -82,8 +82,9 @@ pub(crate) fn uniform(
         }
     }
     let mut uniform = Uniform::default();
-    // 大きくなる成分ごとの、与えられた制約を持つ位置。同じ位置 (instance の頭など) は1つにまとめる
-    let mut constrained: HashMap<usize, Vec<Constrained>> = HashMap::new();
+    // 大きくなる成分ごとの、与えられた制約を持つ位置。同じ位置 (instance の頭など) は1つにまとめる。成分の番号は
+    // グラフから決まるので、`BTreeMap` で順を固定する
+    let mut constrained: BTreeMap<usize, Vec<Constrained>> = BTreeMap::new();
     for (index, &node) in graph.nodes.iter().enumerate() {
         if !growing.contains(&component[index]) {
             continue;
@@ -108,8 +109,9 @@ pub(crate) fn uniform(
         }
     }
     // 1つの成分の位置はどれも同じ循環で大きくなるので、位置ごとに報告すると同じ原因の誤りが重なる。成分ごとに1つに
-    // まとめ、プログラムの順 (モジュールの順、その中のソースの順) で最初の位置を主な位置にする。ほかの成分で報告した
-    // 位置 (同じ instance の頭など) は、重ねて示さない
+    // まとめ、プログラムの順 (モジュールの順、その中のソースの順) で最初の位置を主な位置にする。成分の順は最初の
+    // 位置の順で、同じ位置なら成分の番号の順である。ほかの成分で同じクラスについて示した位置は、重ねて示さない。
+    // 同じ instance の頭でも、別の型変数が別のクラスの制約を持って大きくなるなら、それぞれを報告する
     let mut components: Vec<Vec<Constrained>> = constrained.into_values().collect();
     for found in &mut components {
         found.sort_by_key(Constrained::order);
@@ -120,7 +122,7 @@ pub(crate) fn uniform(
     for found in components {
         let mut found = found
             .into_iter()
-            .filter(|error| reported.insert((error.file, error.range)));
+            .filter(|error| reported.insert((error.file, error.range, error.class)));
         let Some(first) = found.next() else {
             continue;
         };

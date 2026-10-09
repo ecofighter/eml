@@ -66,6 +66,29 @@ fn growth_through_a_constrained_call_is_found() {
 }
 
 #[test]
+fn growing_components_at_one_instance_head_are_reported_in_a_fixed_order() {
+    // `a` と `b` は別の成分で大きくなり、どちらも instance の頭を指す。制約のクラスが違うので両方を報告し、
+    // 何度検査しても同じ順にする
+    let text = "class Sh a where\n  sh : a -> Int\n\ndata Box a = | Box a\n\ninstance Sh a => Sh (Box a) where\n  sh (Box x) = sh x\n\ninstance Eq b => Eq (Box b) where\n  (Box x) == (Box y) = x == y\n\ndata N a b =\n  | F a b\n  | NA (N (Box a) b)\n  | NB (N a (Box b))\n\ninstance (Sh a, Eq b) => Sh (N a b) where\n  sh n = match n with\n    | F _ _ -> 0\n    | NA m -> sh m\n    | NB m -> sh m";
+    let render = || {
+        let checked = check(text);
+        eml_test_support::full(checked.files(), &checked.diagnostics)
+    };
+    let first = render();
+    for _ in 0..20 {
+        assert_eq!(render(), first);
+    }
+    insta::assert_snapshot!(first, @"
+    E2012 17:29 `Sh (N a b)` would need an instance of `Sh` at infinitely many types
+      17:29 a constrained type variable grows on each recursive call
+      note: instances are chosen at compile time, so a constraint cannot follow polymorphic recursion
+    E2012 17:29 `Sh (N a b)` would need an instance of `Eq` at infinitely many types
+      17:29 a constrained type variable grows on each recursive call
+      note: instances are chosen at compile time, so a constraint cannot follow polymorphic recursion
+    ");
+}
+
+#[test]
 fn a_default_method_reaches_the_instance_it_was_resolved_from() {
     // 既定のメソッドの `differ` は、与えられた `Same a` の証拠として同じ instance の `same` を呼ぶ。単相化すると
     // `Same Box.same@[T]`、`differ@[Box (Box T)]`、`Same Box.same@[Box T]` と止まらない
