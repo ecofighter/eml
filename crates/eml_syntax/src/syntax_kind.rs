@@ -72,7 +72,7 @@ pub enum SyntaxKind {
     THIN_ARROW,
     LEFT_ARROW,
     DOT2,
-    /// 制約の文脈の終わり。予約の記号で、ユーザーは演算子として定義できない (spec の「構文」)。
+    /// 制約の文脈の終わり。予約の記号で、ユーザーは演算子として定義できない (docs/spec/lexical.md の「演算子」)。
     FAT_ARROW,
 
     OP,

@@ -15,7 +15,7 @@ use crate::resolve::{Resolution, resolve};
 use crate::store::{TypeId, TypeKind, TypeStore};
 use crate::{BodyTypes, DeclType, codes};
 
-/// 多相再帰で大きくなる型変数の位置 (spec の「一様な位置と制約付きの多相再帰」)。
+/// 多相再帰で大きくなる型変数の位置 (docs/spec/core-ir.md の「一様な位置と制約付きの多相再帰」)。
 #[derive(Debug, Default)]
 pub struct Uniform {
     functions: HashSet<(FunctionId, usize)>,
@@ -407,8 +407,8 @@ impl<'a> Graph<'a> {
             self.flow(flow, arg, Node::Function(default, l + 1));
         }
         // 既定のメソッドはクラスの型変数への制約 `C a` を与えられた制約として持ち、同じ instance のほかのメソッドと
-        // 上位クラスの instance をその証拠として呼ぶ。spec の 3. のとおり、既定のメソッドの本体はその参照に辺を
-        // 引かないので、証拠の辺は呼び出し側が根ごと 4. で引く
+        // 上位クラスの instance をその証拠として呼ぶ。既定のメソッドの本体はその参照に辺を引かないので
+        // (docs/spec/core-ir.md の「一様な位置と制約付きの多相再帰」の辺の 3.)、証拠の辺は呼び出し側が根ごと 4. で引く
         wanted.push(method.class, root);
     }
 
@@ -475,7 +475,7 @@ impl<'a> Graph<'a> {
             .map(|&(_, instance, _)| instance)
     }
 
-    /// 一様な位置 `node` が与えられた制約を持てば、その E2012 (spec の「一様な位置と E2012」)。
+    /// 一様な位置 `node` が与えられた制約を持てば、その E2012 (docs/spec/core-ir.md の「一様な位置と制約付きの多相再帰」)。
     fn constrained(&self, node: Node, component: &[usize], index: usize) -> Option<Constrained> {
         let program = self.program;
         match node {

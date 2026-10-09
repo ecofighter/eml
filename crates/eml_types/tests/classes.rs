@@ -153,7 +153,7 @@ fn a_constrained_variable_is_unrestricted() {
 #[test]
 fn resolving_an_instance_requires_unrestricted_arguments() {
     // `G b` は `b` によらず `Unr` だが、instance の本体は頭の型変数を `Unr` として検査するので、解くたびに型引数に
-    // `Unr` を求める (spec の「クラスの性質」)
+    // `Unr` を求める (docs/spec/types.md の「`Unr` のクラス」)
     let text = "class Size a where\n  size : a -> Int\n\ndata G b = | G (Unit -> <IO> b)\n\ninstance Size (G b) where\n  size _ = 0\n\nf : Unit -> <IO> Int\nf () = size (G (fn () -> Fs.open \"x\"))";
     let found = lines(text);
     assert!(

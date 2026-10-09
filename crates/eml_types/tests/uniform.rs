@@ -37,7 +37,8 @@ fn polymorphic_recursion_without_constraints_is_uniform() {
 
 #[test]
 fn another_method_of_the_same_instance_at_a_larger_type_is_not_a_cycle() {
-    // メソッドの参照は解決先の関数にだけ辺を引くので、`!=` から `==` への参照は循環にならない (spec の辺の 2.)
+    // メソッドの参照は解決先の関数にだけ辺を引くので、`!=` から `==` への参照は循環にならない
+    // (docs/spec/core-ir.md の「一様な位置と制約付きの多相再帰」の辺の 2.)
     let text = "class Same a where\n  same : a -> a -> Bool\n  differ : a -> a -> Bool\n\ndata Box a = | Box a\n\ninstance Same a => Same (Box a) where\n  same (Box x) (Box y) = same x y\n  differ p q = not (same (Box p) (Box q))";
     assert_eq!(uniform_functions(text), Vec::<(String, usize)>::new());
 }
@@ -77,8 +78,9 @@ fn a_default_method_reaches_the_instance_it_was_resolved_from() {
 
 #[test]
 fn a_derived_nested_type_is_a_growing_instance_node() {
-    // フィールド `Nested (a, a)` の制約を解くと、導出した instance の節点から自分へ大きくなる辺が引かれる (spec の辺の
-    // 5.)。文脈 `Show a` を持つ位置なので E2012 になり、`deriving` のクラス名を指す
+    // フィールド `Nested (a, a)` の制約を解くと、導出した instance の節点から自分へ大きくなる辺が引かれる
+    // (docs/spec/core-ir.md の「一様な位置と制約付きの多相再帰」の辺の 5.)。文脈 `Show a` を持つ位置なので E2012 に
+    // なり、`deriving` のクラス名を指す
     let text = "data Nested a =\n  | Flat a\n  | Nest (Nested (a, a))\n  deriving Show";
     let checked = check(text);
     let program = &checked.program;

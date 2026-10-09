@@ -218,7 +218,7 @@ fn reject_extern_tail(p: &mut Parser, keyword: &str) {
 
 fn alts(p: &mut Parser) {
     if p.at(LAYOUT_OPEN) {
-        // `deriving` は、ブロックの最後の項目にも、最後の選択肢の続きの行にも書ける (spec の「文法」)
+        // `deriving` は、ブロックの最後の項目にも、最後の選択肢の続きの行にも書ける (docs/spec/grammar.md の「文法上の補足」)
         let mut derived = false;
         block_of(p, "a constructor starting with `|`", |p| {
             if p.at(DERIVING_KW) {
