@@ -12,3 +12,6 @@
 # insta が失敗したテストの出力を一時的に置くファイル
 *.pending-snap
 *.snap.new
+
+# 調査レポートに添付された、調査時のコードの写し
+docs/reports/**/*.tar.gz

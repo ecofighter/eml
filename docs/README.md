@@ -33,6 +33,8 @@ eml を実装するエージェントとプログラマのための文書群で�
 | [future/multicore.md](future/multicore.md) | 将来の設計 | マルチコア対応の設計 (共有の印方式の RC、`par`、並行処理、継続の移動) |
 | [future/stdlib.md](future/stdlib.md) | 将来の設計 | 標準ライブラリ spec への申し送り |
 | [future/evidence-passing.md](future/evidence-passing.md) | 将来の設計 | ネイティブ化でのエフェクトの実装 (generalized evidence passing、すぐに再開する節、多重度ごとの実装) |
+| **reports/** | 調査 | 実装の方針を決めるための調査レポート。書いた時点のコミットに基づき、後から更新しない |
+| [reports/eml/](reports/eml/) | 調査 | VM とネイティブコード生成 (2026-10-09)、REPL 向けのランタイム (2026-10-09) |
 
 ## 読む順
 

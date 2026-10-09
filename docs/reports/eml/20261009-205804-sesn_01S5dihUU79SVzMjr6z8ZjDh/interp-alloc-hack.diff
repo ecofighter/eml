@@ -1,0 +1,54 @@
+diff -ru /tmp/eml_interp_orig/src/machine.rs crates/eml_interp/src/machine.rs
+--- /tmp/eml_interp_orig/src/machine.rs	2026-10-09 11:44:34.198759046 +0000
++++ crates/eml_interp/src/machine.rs	2026-10-09 11:44:51.841977189 +0000
+@@ -111,9 +111,12 @@
+             }
+             // 位置を持つ呼び出しが起こした誤りにだけ位置を付ける。引数の読み出しの誤りは extern の誤りではない
+             Rhs::Extern { ext, args, at } => {
+-                let args = self.env.atoms(args)?;
++                let mut buf = [Value::Unit; 4];
++                for (slot, atom) in buf.iter_mut().zip(args.iter()) {
++                    *slot = self.env.atom(atom)?;
++                }
+                 self.rt
+-                    .call_extern(*ext, &args)
++                    .call_extern(*ext, &buf[..args.len()])
+                     .map_err(|fault| Failure { fault, at: *at })?
+             }
+             Rhs::ConstString(index) => self.rt.const_string(*index)?,
+@@ -256,7 +259,7 @@
+         match transfer {
+             Transfer::Enter(callee, args) => {
+                 let target = self.program.function(callee);
+-                self.env = Env::new(target.vars.len());
++                self.env.reset(target.vars.len());
+                 for (&param, value) in target.params().iter().zip(args) {
+                     self.env.write(param, value);
+                 }
+@@ -290,7 +293,10 @@
+                         return Err(Fault::Internal("a return frame does not resume at a call"));
+                     }
+                 };
+-                self.env = Env::restore(caller.vars.len(), saved);
++                self.env.reset(caller.vars.len());
++                for (v, value) in saved {
++                    self.env.write(VarId(v), value);
++                }
+                 self.env.write(var, value);
+                 self.function = function;
+                 self.block = block;
+diff -ru /tmp/eml_interp_orig/src/runtime.rs crates/eml_interp/src/runtime.rs
+--- /tmp/eml_interp_orig/src/runtime.rs	2026-10-09 11:44:34.198935155 +0000
++++ crates/eml_interp/src/runtime.rs	2026-10-09 11:44:51.841073342 +0000
+@@ -55,6 +55,11 @@
+         env
+     }
+ 
++    pub(crate) fn reset(&mut self, len: usize) {
++        self.0.clear();
++        self.0.resize(len, None);
++    }
++
+     pub(crate) fn write(&mut self, var: VarId, value: Value) {
+         self.0[var.0 as usize] = Some(value);
+     }
