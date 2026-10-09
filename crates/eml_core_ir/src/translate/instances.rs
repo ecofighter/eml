@@ -82,6 +82,11 @@ pub(super) fn collect(hir: &HirProgram, typed: &TypedProgram, entry: FunctionId)
             .get(function)
             .expect("every reached body is type-checked");
         let names = type_vars(hir, function);
+        debug_assert_eq!(
+            names.len(),
+            found[index].args.len(),
+            "an instance key must supply one type argument per type variable of the signature"
+        );
         let mut subst =
             Substitution::new(names.iter().cloned().zip(found[index].args.iter().copied()));
         let decl = typed.decls[&ValueItem::Function(function)].ty;
@@ -243,7 +248,7 @@ fn type_vars(hir: &HirProgram, function: FunctionId) -> Vec<String> {
 }
 
 /// `ty` に現れる `names` の型変数 (番号ごとの真偽)。`substitute` がたどる位置 (型構成子の引数、関数型の引数と結果と
-/// エフェクトの型引数、タプルの要素) を見る。結果を `memo` に覚え、共有された型は1回だけたどる。
+/// エフェクトの型引数、レコードとタプルの要素) を見る。結果を `memo` に覚え、共有された型は1回だけたどる。
 fn vars_in(
     types: &TypeStore,
     ty: TypeId,

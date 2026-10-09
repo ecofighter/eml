@@ -200,6 +200,7 @@ impl TypeStore {
         self.errors[id.index()]
     }
 
+    /// 型と子に `Rigid` か `OpVar` があるかを返す。行の末尾 (`RowTail::Rigid`) は型でないので数えない。`substitute` も行の末尾を変えない。
     pub fn contains_type_vars(&self, id: TypeId) -> bool {
         self.vars[id.index()]
     }
