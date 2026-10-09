@@ -12,7 +12,7 @@ length xs = match xs with
 describe : List (List String) -> String
 describe w = match w with
   | Cons (Cons a _) _ -> a
-  | Cons Nil _ -> show_int (length w)
+  | Cons Nil _ -> show (length w)
   | Nil -> "empty"
 
 main : Unit -> <IO> Unit

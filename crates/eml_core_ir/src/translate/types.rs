@@ -1,8 +1,7 @@
-//! 型から決まる値の表現 (Repr) と、`==` と `!=` を比べ方ごとのどの extern にするか。
+//! 型から決まる値の表現 (Repr)。
 
-use eml_extern::Extern;
 use eml_hir::{Program as HirProgram, TypeDefId, TypeDefKind};
-use eml_types::{Equality, TypeId, TypeKind, TypeStore};
+use eml_types::{TypeId, TypeKind, TypeStore};
 
 use crate::{Repr, VarInfo, data_repr};
 
@@ -61,17 +60,4 @@ pub(super) fn split_arrows(types: &TypeStore, ty: TypeId, count: usize) -> (Vec<
         ty = *ret;
     }
     (params, ty)
-}
-
-/// `==` と `!=` の比べ方と否定の有無から、比べ方ごとの extern の行を選ぶ。比べ方は、型検査が参照ごとに記録した
-/// 型引数から `eml_types::equality` が決める (docs/spec/declarations.md の標準の演算子の表)。
-pub(super) fn equality_extern(equality: Equality, negated: bool) -> Extern {
-    match (equality, negated) {
-        (Equality::Int, false) => Extern::IntEq,
-        (Equality::Int, true) => Extern::IntNe,
-        (Equality::String, false) => Extern::StrEq,
-        (Equality::String, true) => Extern::StrNe,
-        (Equality::Bool, false) => Extern::BoolEq,
-        (Equality::Bool, true) => Extern::BoolNe,
-    }
 }

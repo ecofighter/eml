@@ -1,4 +1,4 @@
--- E2006: `==` and `!=` compare only `Int`, `String` and `Bool`.
+-- E2006: a type without an instance of Eq cannot be compared.
 data Color =
   | Red
   | Green

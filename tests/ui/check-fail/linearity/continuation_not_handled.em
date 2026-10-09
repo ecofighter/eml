@@ -7,4 +7,4 @@ main () =
   let n =
     handle ask () with
       | ask () k -> 0
-  println (show_int n)
+  println (show n)

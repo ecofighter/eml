@@ -697,7 +697,7 @@ impl<'t> Parser<'t> {
             // 比べる
             "extern" => {
                 let line = self.line();
-                let name = self.word()?;
+                let name = self.name()?;
                 let ext = Extern::from_name(&name)
                     .ok_or_else(|| error(line, format!("unknown extern `{name}`")))?;
                 let args = self.list('(', ')', |p| p.atom(state))?;
@@ -1187,7 +1187,7 @@ impl<'t> Parser<'t> {
         }
     }
 
-    /// 関数の名前。引用符で囲んだ名前 (`pretty` の `function_name`) も受け付ける。
+    /// 関数と extern の行の名前。引用符で囲んだ名前 (`pretty` の `function_name`) も受け付ける。
     fn name(&mut self) -> Result<String, ParseError> {
         if let Some(Tok::Str(value)) = self.peek() {
             let value = value.clone();

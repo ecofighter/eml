@@ -5,4 +5,4 @@ total : Shape -> Shape -> Int
 total a b = area a + area b
 
 main : Unit -> <IO> Unit
-main () = println (show_int (total (Shapes.Square 3) (Shapes.Rect 2 5)))
+main () = println (show (total (Shapes.Square 3) (Shapes.Rect 2 5)))

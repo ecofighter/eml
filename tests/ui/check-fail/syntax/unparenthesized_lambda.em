@@ -14,7 +14,7 @@ effect Ask where
 main : Unit -> <IO> Unit
 main () =
   each 3 fn n ->
-    println (show_int n)
+    println (show n)
   let v = handle ask () + 1 with
     | ask () k -> after drop k
-  println (show_int v)
+  println (show v)

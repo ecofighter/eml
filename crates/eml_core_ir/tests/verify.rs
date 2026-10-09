@@ -29,7 +29,7 @@ fn check_translated(text: &str) -> Result<(), String> {
 const SPEC_EXAMPLE: &str = "\
 layout Prelude.Bool { False, True }
 fn f(x.0: int) -> int {
-  let c.1: enum = extern Prelude.<(x.0, 10)
+  let c.1: enum = extern \"Prelude.Ord Int.<\"(x.0, 10)
   switch c.1 Prelude.Bool { #0 -> b1, #1 -> b2 }
 b1:
   jump b3(x.0)
@@ -846,19 +846,17 @@ fn an_extern_argument_constant_that_does_not_fit_is_rejected() {
 
 #[test]
 fn an_extern_result_bound_to_another_repr_is_rejected() {
-    let text =
-        "fn f(n.0: int) -> obj {\n  let t.1: obj = extern Prelude.<(n.0, 1)\n  return t.1\n}\n";
+    let text = "fn f(n.0: int) -> obj {\n  let t.1: obj = extern \"Prelude.Ord Int.<\"(n.0, 1)\n  return t.1\n}\n";
     assert_eq!(
         rejected_at_both_levels(text),
-        "`t.1` (obj) is bound to `Prelude.<`, which returns enum in `f`"
+        "`t.1` (obj) is bound to `Prelude.Ord Int.<`, which returns enum in `f`"
     );
 }
 
 #[test]
 fn an_extern_takes_constants_that_fit_its_row() {
     // 引数のないコンストラクタは `enum` の引数に収まる
-    let text =
-        "fn f() -> enum {\n  let c.0: enum = extern Prelude.bool_eq(#1, #0)\n  return c.0\n}\n";
+    let text = "fn f() -> enum {\n  let c.0: enum = extern \"Prelude.Eq Bool.==\"(#1, #0)\n  return c.0\n}\n";
     assert_eq!(check_scopes(text), Ok(()));
     assert_eq!(check(text), Ok(()));
 }
@@ -1846,7 +1844,7 @@ size xs = match xs with
 main : Unit -> <IO> Unit
 main () =
   println (label (Some \"a\"))
-  println (show_int (size (rest (Cons 1 Nil))))
+  println (Prelude.show (size (rest (Cons 1 Nil))))
 ";
     assert_eq!(verify(&eml_test_support::core(text)), Ok(()));
 }
@@ -2249,21 +2247,6 @@ fn an_extern_with_the_wrong_number_of_arguments_is_rejected() {
     assert_eq!(
         check(text),
         Err("`Prelude.+` takes 2 arguments but is given 1 in `f`".to_string())
-    );
-}
-
-#[test]
-fn an_extern_chosen_by_type_is_rejected() {
-    // `==` と `!=` は translate が比べ方ごとの行に置き換えるので、Core IR に届かない
-    let text = "\
-fn f(a.0: int, b.1: int) -> enum {
-  let t.2: enum = extern Prelude.==(a.0, b.1)
-  return t.2
-}
-";
-    assert_eq!(
-        check(text),
-        Err("`Prelude.==` is chosen by type and must not reach Core IR in `f`".to_string())
     );
 }
 

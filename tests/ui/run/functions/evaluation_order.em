@@ -17,10 +17,10 @@ w = fn a ->
 
 main : Unit -> <IO> Unit
 main () =
-  println (show_int ((f 1) (g ())))
-  println (show_int (f 1 (g ())))
-  println (show_int (w 1 (g ())))
+  println (show ((f 1) (g ())))
+  println (show (f 1 (g ())))
+  println (show (w 1 (g ())))
   let k = f
-  println (show_int (k 1 (g ())))
-  println (show_int ((fn a -> f a) 1 (g ())))
-  println (show_int (g () |> k 1))
+  println (show (k 1 (g ())))
+  println (show ((fn a -> f a) 1 (g ())))
+  println (show (g () |> k 1))

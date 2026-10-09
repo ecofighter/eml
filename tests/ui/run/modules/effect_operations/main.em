@@ -16,11 +16,11 @@ main () =
   let n =
     handle count () with
       | tick () k -> k 10
-  println (show_int n)
+  println (show n)
   let (m, final) =
     handle bump () from 41 with
       | State.get () k st -> k st st
       | State.put v k _ -> k () v
       | return x st -> (x, st)
-  println (show_int m)
-  println (show_int final)
+  println (show m)
+  println (show final)

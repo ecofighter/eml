@@ -5,4 +5,4 @@ first : List Int -> Int
 first (Cons x _) = x
 
 main : Unit -> <IO> Unit
-main () = println (show_int (first (Cons 1 Nil)))
+main () = println (show (first (Cons 1 Nil)))

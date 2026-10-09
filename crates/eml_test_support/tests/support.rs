@@ -104,7 +104,7 @@ fn core_rejects_programs_with_errors() {
 #[test]
 fn core_until_stops_after_the_named_pass() {
     // contract は、使われない純粋な `let` を消す
-    let unused = "f : Int -> Int\nf x =\n  let s = \"unused\"\n  x\n\nmain : Unit -> <IO> Unit\nmain () = println (show_int (f 1))";
+    let unused = "f : Int -> Int\nf x =\n  let s = \"unused\"\n  x\n\nmain : Unit -> <IO> Unit\nmain () = println (show (f 1))";
     assert!(pretty(&core_until(unused, Pass::Translate)).contains("const \"unused\""));
     assert!(!pretty(&core_until(unused, Pass::Contract)).contains("\"unused\""));
     // `s` を2回使うので、Perceus の後にだけ `dup` が入る

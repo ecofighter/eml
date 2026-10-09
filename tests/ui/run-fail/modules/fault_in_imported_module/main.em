@@ -2,4 +2,4 @@
 import Ratio
 
 main : Unit -> <IO> Unit
-main () = println (show_int (Ratio.ratio 1 0))
+main () = println (show (Ratio.ratio 1 0))

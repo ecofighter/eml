@@ -25,4 +25,4 @@ main () =
             | log m k ->
                 println ("outer " ++ m)
                 k ()
-  println (show_int r)
+  println (show r)

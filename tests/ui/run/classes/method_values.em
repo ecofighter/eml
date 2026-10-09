@@ -13,7 +13,7 @@ apply_twice f x = f (f x)
 
 main : Unit -> <IO> Unit
 main () =
-  println (show_int (apply_twice (<+> 10) 1))
-  println (show_int (apply_twice ((<+>) 5) 0))
+  println (show (apply_twice (<+> 10) 1))
+  println (show (apply_twice ((<+>) 5) 0))
   let join = (<+>)
-  println (show_int (join 2 3 <+> 4))
+  println (show (join 2 3 <+> 4))

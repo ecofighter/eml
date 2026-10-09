@@ -126,7 +126,7 @@ fn a_lambda_captures_what_its_nested_lambdas_capture() {
 #[test]
 fn prelude_extern_signatures_are_extern_functions() {
     let module = module("f : Int\nf = 1");
-    for name in ["show_int", "negate", "+", "=="] {
+    for name in ["negate", "+"] {
         let function = function(&module, name);
         assert!(
             matches!(function.kind, FunctionKind::Extern(Some(_))),
@@ -165,8 +165,8 @@ fn prelude_functions_with_equations_are_not_extern() {
     assert_eq!(program[twice].kind, FunctionKind::Defined);
     assert!(program.body(twice).is_some());
     assert_eq!(
-        program[function_id(&program, "show_int")].kind,
-        FunctionKind::Extern(Some(eml_extern::Extern::ShowInt))
+        program[function_id(&program, "negate")].kind,
+        FunctionKind::Extern(Some(eml_extern::Extern::IntNeg))
     );
 }
 

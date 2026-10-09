@@ -52,4 +52,4 @@ main () =
   let n =
     handle ask () * 2 from f0 with
       | ask () k s -> k (f40 21) s
-  println (show_int n)
+  println (show n)

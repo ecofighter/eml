@@ -1,54 +1,7 @@
-//! タプル、リテラルのパターン、`==` の比べ方の型検査 (docs/spec/records.md、docs/spec/declarations.md の標準の
-//! 演算子の表)。
+//! タプル、リテラルのパターン、`==` で比べる値の型検査 (docs/spec/records.md、
+//! docs/superpowers/specs/2026-10-10-s5-type-classes-design.md の「制約を解く」)。
 
 use crate::common::check_text;
-use eml_extern::Extern;
-use eml_hir::{FunctionKind, ValueItem};
-use eml_types::Equality;
-
-/// 関数 `name` の本体で決まった `==` / `!=` の比べ方を、ソースの順に並べる。
-fn decided(text: &str, name: &str) -> Vec<(&'static str, Equality)> {
-    let checked = eml_test_support::check(text);
-    assert!(
-        checked.diagnostics.is_empty(),
-        "{}",
-        eml_test_support::short_text(checked.files(), &checked.diagnostics)
-    );
-    let (id, _) = checked
-        .program
-        .functions()
-        .find(|(_, function)| function.name == name)
-        .unwrap();
-    let body = checked.program.body(id).unwrap();
-    let program = &checked.program;
-    let mut found: Vec<(u32, &'static str, Equality)> = checked.typed.bodies[id]
-        .instantiations
-        .iter()
-        .filter_map(|(expr, instantiation)| {
-            let ValueItem::Function(function) = instantiation.decl else {
-                return None;
-            };
-            let operator = match program[function].kind {
-                FunctionKind::Extern(Some(Extern::Eq)) => "==",
-                FunctionKind::Extern(Some(Extern::Ne)) => "!=",
-                _ => return None,
-            };
-            let equality =
-                eml_types::equality(program, &checked.typed.types, instantiation.args[0])
-                    .expect("a body without errors decides every comparison");
-            Some((
-                u32::from(body.exprs[expr].range.start()),
-                operator,
-                equality,
-            ))
-        })
-        .collect();
-    found.sort_by_key(|&(start, _, _)| start);
-    found
-        .into_iter()
-        .map(|(_, name, equality)| (name, equality))
-        .collect()
-}
 
 #[test]
 fn tuples_are_closed_records_shown_with_parentheses() {
@@ -98,55 +51,32 @@ fn a_literal_pattern_of_another_type_is_a_mismatch() {
 }
 
 #[test]
-fn the_operand_type_decides_how_equality_compares() {
-    let text =
-        "same : Int -> String -> Bool -> Bool\nsame n s b = n == 1 && s != \"x\" && b == True";
-    assert_eq!(
-        decided(text, "same"),
-        [
-            ("==", Equality::Int),
-            ("!=", Equality::String),
-            ("==", Equality::Bool),
-        ]
-    );
-}
-
-#[test]
-fn an_operand_type_decided_after_the_operator_is_used() {
-    // ラムダの引数の型は、`eq` を呼んだ後で `String` に決まる。比べ方は本体の検査が終わってから決める
-    let text =
-        "later : Unit -> Bool\nlater () =\n  let eq = fn x -> fn y -> x == y\n  eq \"a\" \"b\"";
-    assert_eq!(decided(text, "later"), [("==", Equality::String)]);
-}
-
-#[test]
 fn only_int_string_and_bool_can_be_compared() {
     let text = "data Color =\n  | Red\n  | Green\n\ncolors : Color -> Color -> Bool\ncolors a b = a == b\n\npairs : (Int, Int) -> Bool\npairs p = p != (1, 2)\n\nfuns : (Int -> Int) -> Bool\nfuns f = f == (fn n -> n)\n\npoly : a -> a -> Bool\npoly x y = x == y";
-    insta::assert_snapshot!(check_text(text), @r"
+    insta::assert_snapshot!(check_text(text), @"
     colors : Color -> Color -> Bool
       a#0 : Color
       b#1 : Color
     pairs : (Int, Int) -> Bool
       p#0 : (Int, Int)
     funs : (Int -> Int) -> Bool
+      kinds: (Int -> Int) <= Unr
       f#0 : Int -> Int
       n#1 : Int
     poly : a -> a -> Bool
+      kinds: a <= Unr
       x#0 : a
       y#1 : a
     ---
-    E2006 6:16 values of type `Color` cannot be compared with `==`
-      6:16 `==` cannot compare `Color`
-      note: `==` and `!=` compare only values of type `Int`, `String` and `Bool`
-    E2006 9:13 values of type `(Int, Int)` cannot be compared with `!=`
-      9:13 `!=` cannot compare `(Int, Int)`
-      note: `==` and `!=` compare only values of type `Int`, `String` and `Bool`
-    E2006 12:12 values of type `Int -> Int` cannot be compared with `==`
-      12:12 `==` cannot compare `Int -> Int`
-      note: `==` and `!=` compare only values of type `Int`, `String` and `Bool`
-    E2006 15:14 values of type `a` cannot be compared with `==`
-      15:14 `==` cannot compare `a`
-      note: `==` and `!=` compare only values of type `Int`, `String` and `Bool`
+    E2006 6:16 no instance of `Eq` for `Color`
+      6:16 `==` requires `Eq Color`
+    E2006 9:13 no instance of `Eq` for `(Int, Int)`
+      9:13 `!=` requires `Eq (Int, Int)`
+    E2006 12:12 no instance of `Eq` for `Int -> Int`
+      12:12 `==` requires `Eq (Int -> Int)`
+    E2006 15:14 no instance of `Eq` for `a`
+      15:14 `==` requires `Eq a`
+      help: add `Eq a =>` to the signature of `poly`
     ");
 }
 
@@ -154,7 +84,7 @@ fn only_int_string_and_bool_can_be_compared() {
 fn undecided_operands_are_reported_and_errors_are_not() {
     // `same` の引数の型はどこでも決まらない。`missing` の型は報告済みの誤りの跡 (`Error`) なので、E2006 を重ねない
     let text = "undecided : Unit -> Bool\nundecided () =\n  let same = fn x -> fn y -> x == y\n  True\n\nbroken : Int -> Bool\nbroken n = missing == n";
-    insta::assert_snapshot!(check_text(text), @r"
+    insta::assert_snapshot!(check_text(text), @"
     undecided : Unit -> Bool
       x#0 : _
       y#1 : _
@@ -162,9 +92,9 @@ fn undecided_operands_are_reported_and_errors_are_not() {
     broken : Int -> Bool
       n#0 : Int
     ---
-    E2006 3:32 values of type `_` cannot be compared with `==`
-      3:32 `==` cannot compare `_`
-      note: `==` and `!=` compare only values of type `Int`, `String` and `Bool`
+    E2009 3:32 cannot decide which instance of `Eq` `==` uses
+      3:32 the type here is never decided
+      help: add a type annotation
     E1001 7:12 cannot find value `missing`
       7:12 not found in this scope
     ");
@@ -198,12 +128,12 @@ fn two_undecided_comparisons_in_one_body_are_both_reported() {
       y#4 : _
       differ#5 : _ -> <_> _ -> <_> Bool
     ---
-    E2006 3:32 values of type `_` cannot be compared with `==`
-      3:32 `==` cannot compare `_`
-      note: `==` and `!=` compare only values of type `Int`, `String` and `Bool`
-    E2006 4:34 values of type `_` cannot be compared with `!=`
-      4:34 `!=` cannot compare `_`
-      note: `==` and `!=` compare only values of type `Int`, `String` and `Bool`
+    E2009 3:32 cannot decide which instance of `Eq` `==` uses
+      3:32 the type here is never decided
+      help: add a type annotation
+    E2009 4:34 cannot decide which instance of `Eq` `!=` uses
+      4:34 the type here is never decided
+      help: add a type annotation
     ");
 }
 
@@ -219,8 +149,8 @@ fn an_undecided_comparison_suppresses_the_linearity_diagnostics() {
       y#2 : _
       same#3 : _ -> <_> _ -> <_> Bool
     ---
-    E2006 3:32 values of type `_` cannot be compared with `==`
-      3:32 `==` cannot compare `_`
-      note: `==` and `!=` compare only values of type `Int`, `String` and `Bool`
+    E2009 3:32 cannot decide which instance of `Eq` `==` uses
+      3:32 the type here is never decided
+      help: add a type annotation
     ");
 }

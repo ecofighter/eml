@@ -9,8 +9,8 @@ data List a =
 
 first_two : List (Option Int) -> String
 first_two xs = match xs with
-  | Cons (Some a) (Cons (Some b) _) -> "both " ++ show_int (a + b)
-  | Cons None (Cons (Some b) _) -> "second " ++ show_int b
+  | Cons (Some a) (Cons (Some b) _) -> "both " ++ show (a + b)
+  | Cons None (Cons (Some b) _) -> "second " ++ show b
   | Cons _ _ -> "other"
   | Nil -> "empty"
 

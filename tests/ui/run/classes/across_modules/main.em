@@ -4,4 +4,4 @@ import Shapes (Area(..))
 import Squares (Square(..))
 
 main : Unit -> <IO> Unit
-main () = println (show_int (Square 2 <+> Square 3 + 1))
+main () = println (show (Square 2 <+> Square 3 + 1))

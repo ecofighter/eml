@@ -14,13 +14,13 @@ fn operations_have_the_row_of_their_effect() {
 
 #[test]
 fn an_unhandled_operation_is_not_in_the_row() {
-    let text = "effect Ask where\n  ask : Unit -> Int\n\nmain : Unit -> <IO> Unit\nmain () = println (show_int (ask ()))";
-    insta::assert_snapshot!(check_text(text), @r"
+    let text = "effect Ask where\n  ask : Unit -> Int\n\nmain : Unit -> <IO> Unit\nmain () = println (show (ask ()))";
+    insta::assert_snapshot!(check_text(text), @"
     ask : Unit -> <Ask> Int
     main : Unit -> <IO> Unit
     ---
-    E2002 5:30 `ask` performs `Ask`, which the signature of `main` does not allow
-      5:30 this call performs `Ask`
+    E2002 5:26 `ask` performs `Ask`, which the signature of `main` does not allow
+      5:26 this call performs `Ask`
       4:8 the row of this signature does not include it
       help: add `Ask` to the row of the signature of `main`, as in `-> <Ask> ...`
     ");
@@ -40,7 +40,7 @@ fn operations_are_values_and_can_be_partially_applied() {
 
 #[test]
 fn a_handler_removes_its_effect_and_types_the_continuation() {
-    let text = "effect Ask where\n  ask : String -> Int\n\nrun : Unit -> <Ask, IO> Int\nrun () =\n  let n = ask \"n\"\n  println \"asked\"\n  n + 1\n\nmain : Unit -> <IO> Unit\nmain () =\n  let total =\n    handle run () with\n      | ask key k -> k 41\n      | return x -> show_int x\n  println total";
+    let text = "effect Ask where\n  ask : String -> Int\n\nrun : Unit -> <Ask, IO> Int\nrun () =\n  let n = ask \"n\"\n  println \"asked\"\n  n + 1\n\nmain : Unit -> <IO> Unit\nmain () =\n  let total =\n    handle run () with\n      | ask key k -> k 41\n      | return x -> show x\n  println total";
     insta::assert_snapshot!(check_text(text), @"
     ask : String -> <Ask> Int
     run : Unit -> <Ask, IO> Int
@@ -56,7 +56,7 @@ fn a_handler_removes_its_effect_and_types_the_continuation() {
 /// 節の `k` は普通の関数型である。状態のある handler では2引数で、row は最後の矢印に付く (docs/spec/effects.md)。
 #[test]
 fn a_continuation_is_a_function() {
-    let stateless = "effect Ask where\n  ask : Unit -> Int\n\nrun : Unit -> <IO> String\nrun () =\n  handle ask () with\n    | ask () k -> k 1\n    | return x -> show_int x";
+    let stateless = "effect Ask where\n  ask : Unit -> Int\n\nrun : Unit -> <IO> String\nrun () =\n  handle ask () with\n    | ask () k -> k 1\n    | return x -> show x";
     let stateful = "effect Tick where\n  tick : Unit -> Int\n\nrun : Unit -> Int\nrun () =\n  handle tick () from \"s\" with\n    | tick () k st -> k 1 st\n    | return x _ -> x";
     insta::assert_snapshot!(check_text(stateless), @"
     ask : Unit -> <Ask> Int

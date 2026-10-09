@@ -98,7 +98,7 @@ fn main() -> unit {
   let s.2: obj = const \"b\"
   let n.3: int = call pick(s.2) save [n.1]
   let t.4: int = extern Prelude.+(n.1, n.3)
-  let t.5: obj = extern Prelude.show_int(t.4)
+  let t.5: obj = extern \"Prelude.Show Int.show\"(t.4)
   let o.6: unit = extern Prelude.println(t.5)
   return o.6
 }
@@ -257,7 +257,7 @@ fn an_unpack_of_an_object_that_is_not_data_is_an_internal_error() {
     let text = "\
 layout Box { Box(tobj) }
 fn main() -> unit {
-  let s.0: obj = extern Prelude.show_int(1)
+  let s.0: obj = extern \"Prelude.Show Int.show\"(1)
   unpack s.0 Box #0(a.1: obj)
   return ()
 }
@@ -275,7 +275,7 @@ fn main() -> unit {
 // release
 
 /// `switch` で `d.1` を分解し、行き先が `release` で箱を手放して、フィールドの `x.2` が参照を受け取る。文字列の
-/// リテラルは不死なので、`show_int` で作った文字列をフィールドに入れ、解放の誤りが `debug_heap` に見えるようにする。
+/// リテラルは不死なので、`show` で作った文字列をフィールドに入れ、解放の誤りが `debug_heap` に見えるようにする。
 /// `shared` が真なら `switch` の前に箱を複製し、`release` は共有の側を通る。
 fn release_one_field(shared: bool) -> String {
     let (dup, decref) = if shared {
@@ -287,7 +287,7 @@ fn release_one_field(shared: bool) -> String {
         "\
 layout Option {{ None, Some(tobj) }}
 fn main() -> unit {{
-  let s.0: obj = extern Prelude.show_int(7)
+  let s.0: obj = extern \"Prelude.Show Int.show\"(7)
   let d.1: tobj = con Option #1(s.0)
 {dup}  switch d.1 Option {{ #0 -> b1, #1(x.2: obj) -> b2 }}
 b1:
@@ -323,7 +323,7 @@ fn a_release_keeps_one_value_in_two_fields_twice() {
     let text = "\
 layout (,) { (,)(tobj, tobj) }
 fn main() -> unit {
-  let s.0: obj = extern Prelude.show_int(7)
+  let s.0: obj = extern \"Prelude.Show Int.show\"(7)
   dup s.0
   let d.1: obj = con (,) #0(s.0, s.0)
   unpack d.1 (,) #0(x.2: obj, y.3: obj)
@@ -343,7 +343,7 @@ fn release_of_tag_one(release: &str) -> Result<(), RuntimeError> {
         "\
 layout Option {{ None, Some(tobj) }}
 fn main() -> unit {{
-  let s.0: obj = extern Prelude.show_int(7)
+  let s.0: obj = extern \"Prelude.Show Int.show\"(7)
   let p.1: obj = con Option #1(s.0)
   {release}
   return ()
@@ -398,7 +398,7 @@ fn main() -> unit {
   let b.0: tobj = box 41
   let n.1: int = unbox b.0
   decref b.0
-  let c.2: enum = extern Prelude.<(n.1, 50)
+  let c.2: enum = extern \"Prelude.Ord Int.<\"(n.1, 50)
   let e.3: tobj = box c.2
   let d.4: enum = unbox e.3
   decref e.3
@@ -406,7 +406,7 @@ fn main() -> unit {
 b1:
   return ()
 b2:
-  let s.5: obj = extern Prelude.show_int(n.1)
+  let s.5: obj = extern \"Prelude.Show Int.show\"(n.1)
   let o.6: unit = extern Prelude.println(s.5)
   return o.6
 }

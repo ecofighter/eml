@@ -27,7 +27,7 @@ fn v(n: u32) -> Atom {
 const SPEC_EXAMPLE: &str = "\
 layout Prelude.Bool { False, True }
 fn f(x.0: int) -> int {
-  let c.1: enum = extern Prelude.<(x.0, 10)
+  let c.1: enum = extern \"Prelude.Ord Int.<\"(x.0, 10)
   switch c.1 Prelude.Bool { #0 -> b1, #1 -> b2 }
 b1:
   jump b3(x.0)
@@ -475,6 +475,31 @@ fn f(s.0: obj) -> unit {
         pretty_with_positions(&program),
         pretty(&program),
         "an extern without a position"
+    );
+}
+
+#[test]
+fn an_extern_with_a_quoted_name_round_trips() {
+    // instance の extern の行の名前は空白を含むので、関数の名前と同じく引用符で囲んで書く
+    // (docs/superpowers/specs/2026-10-10-s5-type-classes-design.md の「名前」)
+    let program = round_trip(
+        "\
+fn f(a.0: int, b.1: int) -> enum {
+  let t.2: enum = extern \"Prelude.Eq Int.==\"(a.0, b.1)
+  return t.2
+}
+",
+    );
+    assert_eq!(
+        program.functions[0].blocks[0].stmts[0],
+        Stmt::Let {
+            var: VarId(2),
+            rhs: Rhs::Extern {
+                ext: eml_extern::Extern::IntEq,
+                args: vec![v(0), v(1)],
+                at: None,
+            },
+        }
     );
 }
 

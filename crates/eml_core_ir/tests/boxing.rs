@@ -24,7 +24,7 @@ const APPLY_TO: &str = "apply_to : (Int -> Int) -> Int -> Int\napply_to f x = f 
 #[test]
 fn a_lambda_used_only_as_a_value_is_made_uniform_in_place() {
     let text = format!(
-        "{APPLY_TO}main : Unit -> <IO> Unit\nmain () = println (show_int (apply_to (fn n -> n + 1) 2))"
+        "{APPLY_TO}main : Unit -> <IO> Unit\nmain () = println (show (apply_to (fn n -> n + 1) 2))"
     );
     let shown = core_text(&text, Pass::Boxing);
     insta::assert_snapshot!(function(&shown, "main$lambda0"), @"
@@ -40,7 +40,7 @@ fn a_lambda_used_only_as_a_value_is_made_uniform_in_place() {
 #[test]
 fn a_top_level_function_used_only_as_a_value_gets_a_boxed_wrapper() {
     let text = format!(
-        "inc : Int -> Int\ninc n = n + 1\n\n{APPLY_TO}main : Unit -> <IO> Unit\nmain () = println (show_int (apply_to inc 2))"
+        "inc : Int -> Int\ninc n = n + 1\n\n{APPLY_TO}main : Unit -> <IO> Unit\nmain () = println (show (apply_to inc 2))"
     );
     let shown = core_text(&text, Pass::Boxing);
     insta::assert_snapshot!(function(&shown, "inc"), @"
@@ -61,7 +61,7 @@ fn a_top_level_function_used_only_as_a_value_gets_a_boxed_wrapper() {
     fn main(p.0: unit) -> unit {
       let t.4: tobj = call apply_to(&inc$boxed, 2)
       let t.1: int = unbox t.4
-      let t.2: obj = extern Prelude.show_int(t.1)
+      let t.2: obj = extern \"Prelude.Show Int.show\"(t.1)
       let t.3: unit = extern Prelude.println(t.2)
       return t.3
     }
@@ -70,7 +70,7 @@ fn a_top_level_function_used_only_as_a_value_gets_a_boxed_wrapper() {
 
 #[test]
 fn a_function_also_called_directly_gets_a_boxed_wrapper() {
-    let text = "label : Int -> String\nlabel n = show_int n\n\nshow_with : (Int -> String) -> Int -> String\nshow_with f n = f n\n\nmain : Unit -> <IO> Unit\nmain () =\n  println (label 1)\n  println (show_with label 2)";
+    let text = "label : Int -> String\nlabel n = show n\n\nshow_with : (Int -> String) -> Int -> String\nshow_with f n = f n\n\nmain : Unit -> <IO> Unit\nmain () =\n  println (label 1)\n  println (show_with label 2)";
     let shown = core_text(text, Pass::Boxing);
     insta::assert_snapshot!(function(&shown, "main"), @"
     fn main(p.0: unit) -> unit {
@@ -99,7 +99,7 @@ fn a_function_also_called_directly_gets_a_boxed_wrapper() {
 
 #[test]
 fn a_function_made_uniform_by_t3_gets_no_boxed_wrapper() {
-    let text = "call_with : (Unit -> Int) -> Int\ncall_with f = f ()\n\nmain : Unit -> <IO> Unit\nmain () =\n  let g = call_with\n  println (show_int (g (fn () -> 1)))";
+    let text = "call_with : (Unit -> Int) -> Int\ncall_with f = f ()\n\nmain : Unit -> <IO> Unit\nmain () =\n  let g = call_with\n  println (show (g (fn () -> 1)))";
     let shown = core_text(text, Pass::Boxing);
     assert!(!shown.contains("call_with$boxed"), "{shown}");
     insta::assert_snapshot!(function(&shown, "call_with"), @"
@@ -113,7 +113,7 @@ fn a_function_made_uniform_by_t3_gets_no_boxed_wrapper() {
 
 #[test]
 fn fields_are_rebound_at_the_head_of_the_case_target_and_after_an_unpack() {
-    let text = "data Option a =\n  | None\n  | Some a\n\nget : Option Int -> Int\nget o = match o with\n  | Some v -> v + 1\n  | None -> 0\n\nsum : (Int, Int) -> Int\nsum p =\n  let (a, b) = p\n  a + b\n\nmain : Unit -> <IO> Unit\nmain () = println (show_int (get (Some 1) + sum (1, 2)))";
+    let text = "data Option a =\n  | None\n  | Some a\n\nget : Option Int -> Int\nget o = match o with\n  | Some v -> v + 1\n  | None -> 0\n\nsum : (Int, Int) -> Int\nsum p =\n  let (a, b) = p\n  a + b\n\nmain : Unit -> <IO> Unit\nmain () = println (show (get (Some 1) + sum (1, 2)))";
     let shown = core_text(text, Pass::Boxing);
     insta::assert_snapshot!(function(&shown, "get"), @"
     fn get(o.0: tobj) -> int {
@@ -140,13 +140,13 @@ fn fields_are_rebound_at_the_head_of_the_case_target_and_after_an_unpack() {
 #[test]
 fn int_constants_are_boxed_and_other_constants_pass_as_they_are() {
     // 型変数のフィールドは `tobj` なので、`int` の定数は `box` を通り、`unit`、タグ、関数の値はそのまま入る
-    let text = "data Four a b c d =\n  | Four a b c d\n\ncount : Four a b c d -> Int\ncount _ = 0\n\nid : a -> a\nid x = x\n\nmain : Unit -> <IO> Unit\nmain () = println (show_int (count (Four 5 () True id)))";
+    let text = "data Four a b c d =\n  | Four a b c d\n\ncount : Four a b c d -> Int\ncount _ = 0\n\nid : a -> a\nid x = x\n\nmain : Unit -> <IO> Unit\nmain () = println (show (count (Four 5 () True id)))";
     insta::assert_snapshot!(function(&core_text(text, Pass::Boxing), "main"), @r#"
     fn main(p.0: unit) -> unit {
       let b.5: tobj = box 5
       let d.1: obj = con Four #0(b.5, (), #1, &"id@[_]")
       let t.2: int = call "count@[Int, Unit, Bool, _ -> <_> _]"(d.1)
-      let t.3: obj = extern Prelude.show_int(t.2)
+      let t.3: obj = extern "Prelude.Show Int.show"(t.2)
       let t.4: unit = extern Prelude.println(t.3)
       return t.4
     }
@@ -157,7 +157,7 @@ fn int_constants_are_boxed_and_other_constants_pass_as_they_are() {
 fn a_value_unboxed_by_the_pass_is_passed_on_without_a_new_box() {
     // 恒等のラムダは、入口で `unbox` した値の代わりに、受けた `tobj` をそのまま返す
     let text = format!(
-        "{APPLY_TO}main : Unit -> <IO> Unit\nmain () = println (show_int (apply_to (fn m -> m) 3))"
+        "{APPLY_TO}main : Unit -> <IO> Unit\nmain () = println (show (apply_to (fn m -> m) 3))"
     );
     insta::assert_snapshot!(function(&core_text(&text, Pass::Boxing), "main$lambda0"), @"
     internal fn main$lambda0(m.1: tobj) -> tobj {
@@ -166,7 +166,7 @@ fn a_value_unboxed_by_the_pass_is_passed_on_without_a_new_box() {
     }
     ");
     // 受け直した `apply` の結果をもう一度 `apply` に渡すときも、受けた `tobj` を渡す
-    let text = "twice_plus : (Int -> Int) -> Int -> Int\ntwice_plus f x = f (f x) + 1\n\nmain : Unit -> <IO> Unit\nmain () = println (show_int (twice_plus (fn n -> n) 1))";
+    let text = "twice_plus : (Int -> Int) -> Int -> Int\ntwice_plus f x = f (f x) + 1\n\nmain : Unit -> <IO> Unit\nmain () = println (show (twice_plus (fn n -> n) 1))";
     insta::assert_snapshot!(function(&core_text(text, Pass::Boxing), "twice_plus"), @"
     fn twice_plus(f.0: tobj, x.1: int) -> int {
       let x.5: tobj = box x.1
@@ -220,10 +220,10 @@ fn a_unit_value_passes_to_tobj_without_an_instruction() {
 
 #[test]
 fn a_monomorphic_int_loop_has_no_box() {
-    let text = "loop : Int -> Int -> Int\nloop n acc = if n == 0 then acc else loop (n - 1) (acc + 1)\n\nmain : Unit -> <IO> Unit\nmain () = println (show_int (loop 3 0))";
+    let text = "loop : Int -> Int -> Int\nloop n acc = if n == 0 then acc else loop (n - 1) (acc + 1)\n\nmain : Unit -> <IO> Unit\nmain () = println (show (loop 3 0))";
     insta::assert_snapshot!(function(&core_text(text, Pass::Boxing), "loop"), @"
     fn loop(n.0: int, acc.1: int) -> int {
-      let t.2: enum = extern Prelude.int_eq(n.0, 0)
+      let t.2: enum = extern \"Prelude.Eq Int.==\"(n.0, 0)
       switch t.2 Prelude.Bool { #0 -> b1, #1 -> b2 }
     b1:
       let t.3: int = extern Prelude.-(n.0, 1)
@@ -239,10 +239,10 @@ fn a_monomorphic_int_loop_has_no_box() {
 #[test]
 fn a_function_that_fails_with_a_never_operation_keeps_its_scalar_ret() {
     // `never` の操作の `perform` は戻らないので、T3 は見ない。結果も受け直さない
-    let text = "effect Fail where\n  never fail : String -> a\n\ncheck_positive : Int -> <Fail> Int\ncheck_positive n =\n  if n > 0 then n else fail \"not positive\"\n\nmain : Unit -> <IO> Unit\nmain () =\n  let r = handle check_positive 1 with\n    | fail message -> 0\n  println (show_int r)";
+    let text = "effect Fail where\n  never fail : String -> a\n\ncheck_positive : Int -> <Fail> Int\ncheck_positive n =\n  if n > 0 then n else fail \"not positive\"\n\nmain : Unit -> <IO> Unit\nmain () =\n  let r = handle check_positive 1 with\n    | fail message -> 0\n  println (show r)";
     insta::assert_snapshot!(function(&core_text(text, Pass::Boxing), "check_positive"), @r#"
     fn check_positive(n.0: int) -> int {
-      let t.1: enum = extern Prelude.>(n.0, 0)
+      let t.1: enum = extern "Prelude.Ord Int.>"(n.0, 0)
       switch t.1 Prelude.Bool { #0 -> b1, #1 -> b2 }
     b1:
       let s.2: obj = const "not positive"
@@ -255,7 +255,7 @@ fn a_function_that_fails_with_a_never_operation_keeps_its_scalar_ret() {
     // 縮約は、`never` の操作の `perform` をどの `ret` の関数でも末尾呼び出しにする
     insta::assert_snapshot!(function(&core_text(text, Pass::Contract), "check_positive"), @r#"
     fn check_positive(n.0: int) -> int {
-      let t.1: enum = extern Prelude.>(n.0, 0)
+      let t.1: enum = extern "Prelude.Ord Int.>"(n.0, 0)
       switch t.1 Prelude.Bool { #0 -> b1, #1 -> b2 }
     b1:
       let s.2: obj = const "not positive"
@@ -270,11 +270,11 @@ fn a_function_that_fails_with_a_never_operation_keeps_its_scalar_ret() {
 fn a_value_lambda_that_fails_ends_in_a_tail_never_perform() {
     // その場で一様にしたラムダでも、`never` の操作の `perform` の束縛は `tobj` に変換せずに返す。束縛の使いには制御が
     // 届かないからである。縮約は、その `return` を末尾呼び出しにする
-    let text = "effect Fail where\n  never fail : String -> a\n\napply_to : (Int -> <e> Int) -> Int -> <e> Int\napply_to f x = f x\n\nmain : Unit -> <IO> Unit\nmain () =\n  let r = handle apply_to (fn n -> if n > 0 then n else fail \"neg\") 1 with\n    | fail message -> 0\n  println (show_int r)";
+    let text = "effect Fail where\n  never fail : String -> a\n\napply_to : (Int -> <e> Int) -> Int -> <e> Int\napply_to f x = f x\n\nmain : Unit -> <IO> Unit\nmain () =\n  let r = handle apply_to (fn n -> if n > 0 then n else fail \"neg\") 1 with\n    | fail message -> 0\n  println (show r)";
     insta::assert_snapshot!(function(&core_text(text, Pass::Boxing), "main$lambda0"), @r#"
     internal fn main$lambda0(n.4: tobj) -> tobj {
       let n.0: int = unbox n.4
-      let t.1: enum = extern Prelude.>(n.0, 0)
+      let t.1: enum = extern "Prelude.Ord Int.>"(n.0, 0)
       switch t.1 Prelude.Bool { #0 -> b1, #1 -> b2 }
     b1:
       let s.2: obj = const "neg"
@@ -287,7 +287,7 @@ fn a_value_lambda_that_fails_ends_in_a_tail_never_perform() {
     insta::assert_snapshot!(function(&core_text(text, Pass::Contract), "main$lambda0"), @r#"
     internal fn main$lambda0(n.4: tobj) -> tobj {
       let n.0: int = unbox n.4
-      let t.1: enum = extern Prelude.>(n.0, 0)
+      let t.1: enum = extern "Prelude.Ord Int.>"(n.0, 0)
       switch t.1 Prelude.Bool { #0 -> b1, #1 -> b2 }
     b1:
       let s.2: obj = const "neg"
@@ -303,7 +303,7 @@ fn t3_raises_the_ret_along_a_chain_of_tail_calls() {
     // `apply_to` は末尾の位置で `apply` するので `ret` が `tobj` になり、それを末尾の位置で呼ぶ `via` も上がる。
     // `through` は、呼び出しと `return` の間に使われない純粋な `let` があっても上がる
     let text = format!(
-        "{APPLY_TO}via : Int -> Int\nvia x = apply_to (fn n -> n) x\n\nthrough : (Int -> Int) -> Int -> Int\nthrough f x =\n  let r = f x\n  let s = \"unused\"\n  r\n\nmain : Unit -> <IO> Unit\nmain () = println (show_int (via 1 + through (fn n -> n) 2))"
+        "{APPLY_TO}via : Int -> Int\nvia x = apply_to (fn n -> n) x\n\nthrough : (Int -> Int) -> Int -> Int\nthrough f x =\n  let r = f x\n  let s = \"unused\"\n  r\n\nmain : Unit -> <IO> Unit\nmain () = println (show (via 1 + through (fn n -> n) 2))"
     );
     let shown = core_text(&text, Pass::Contract);
     insta::assert_snapshot!(function(&shown, "apply_to"), @"
@@ -330,7 +330,7 @@ fn t3_raises_the_ret_along_a_chain_of_tail_calls() {
       let t.7: tobj = call through(&main$lambda0, 2)
       let t.2: int = unbox t.7
       let t.3: int = extern Prelude.+(t.1, t.2)
-      let t.4: obj = extern Prelude.show_int(t.3)
+      let t.4: obj = extern \"Prelude.Show Int.show\"(t.3)
       let t.5: unit = extern Prelude.println(t.4)
       return t.5
     }
@@ -341,7 +341,7 @@ fn t3_raises_the_ret_along_a_chain_of_tail_calls() {
 fn a_tail_call_off_any_loop_may_stay_an_ordinary_call() {
     // handle の本体は `tobj` を返す一様な関数になり、`Int` を返す `answer` の結果を `box` してから返す。この呼び出しは
     // 末尾呼び出しにならないが、関数の値を通るループの上にないので、積むフレームは有界である
-    let text = "effect Ask where\n  ask : Unit -> Int\n\nanswer : Unit -> <Ask> Int\nanswer () = ask () + 1\n\nmain : Unit -> <IO> Unit\nmain () =\n  let r = handle answer () with\n    | ask () k -> k 1\n  println (show_int r)";
+    let text = "effect Ask where\n  ask : Unit -> Int\n\nanswer : Unit -> <Ask> Int\nanswer () = ask () + 1\n\nmain : Unit -> <IO> Unit\nmain () =\n  let r = handle answer () with\n    | ask () k -> k 1\n  println (show r)";
     insta::assert_snapshot!(function(&core_text(text, Pass::Contract), "main$handle0"), @"
     internal fn main$handle0(p.0: unit) -> tobj {
       let t.1: int = call answer(())

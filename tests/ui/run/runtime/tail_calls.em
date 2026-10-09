@@ -14,5 +14,5 @@ sum a b = adder a b
 
 main : Unit -> <IO> Unit
 main () =
-  println (show_int (loop 10000 0))
-  println (show_int (sum 3 4))
+  println (show (loop 10000 0))
+  println (show (sum 3 4))

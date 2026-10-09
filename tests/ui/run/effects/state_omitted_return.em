@@ -7,4 +7,4 @@ main () =
   let n =
     handle ask () * 2 from "unused" with
       | ask () k s -> k 21 s
-  println (show_int n)
+  println (show n)

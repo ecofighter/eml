@@ -14,5 +14,5 @@ main () =
   let r =
     handle body () from 10 with
       | ask () k st -> k st (st + 1)
-      | return x st -> show_int x ++ "/" ++ show_int st
+      | return x st -> show x ++ "/" ++ show st
   println r

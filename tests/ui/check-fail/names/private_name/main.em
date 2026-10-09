@@ -4,5 +4,5 @@ import Lib (hidden)
 
 main : Unit -> <IO> Unit
 main () =
-  println (show_int (Lib.hidden 1))
-  println (show_int (hidden 2))
+  println (show (Lib.hidden 1))
+  println (show (hidden 2))

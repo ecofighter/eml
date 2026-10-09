@@ -867,12 +867,17 @@ pub(crate) fn private_name(
 /// Prelude から、処理系が役割で引く item を名前で引く。`pub` によらない。Prelude は処理系と一緒に配るソースなので、
 /// 見つからなければ panic する。
 fn lang_items(prelude: &ModuleScope) -> LangItems {
-    let ty = |name: &str| match prelude.types.get(name).and_then(|names| names.first()) {
-        Some(Definition {
-            item: TypeItem::Type(id),
-            ..
-        }) => *id,
-        _ => unreachable!("the Prelude declares the type `{name}`"),
+    let type_item = |name: &str| match prelude.types.get(name).and_then(|names| names.first()) {
+        Some(definition) => definition.item,
+        None => unreachable!("the Prelude declares `{name}`"),
+    };
+    let ty = |name: &str| match type_item(name) {
+        TypeItem::Type(id) => id,
+        _ => unreachable!("`{name}` is a type of the Prelude"),
+    };
+    let class = |name: &str| match type_item(name) {
+        TypeItem::Class(id) => id,
+        _ => unreachable!("`{name}` is a class of the Prelude"),
     };
     let value = |name: &str| match prelude.values.get(name).and_then(|names| names.first()) {
         Some(definition) => definition.item,
@@ -892,6 +897,10 @@ fn lang_items(prelude: &ModuleScope) -> LangItems {
         false_ctor: constructor("False"),
         and: function("&&"),
         or: function("||"),
+        eq: class("Eq"),
+        ord: class("Ord"),
+        show: class("Show"),
+        ordering: ty("Ordering"),
     }
 }
 

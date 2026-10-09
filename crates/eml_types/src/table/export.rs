@@ -43,11 +43,6 @@ impl<'t, 'c, 's> Exporter<'t, 'c, 's> {
         id
     }
 
-    /// 書き出し先の表。書き出しの途中で、書き出した型を読むのに使う。
-    pub fn types(&self) -> &TypeStore {
-        self.types
-    }
-
     pub fn label(&mut self, label: &Label) -> EffectLabel {
         EffectLabel {
             id: label.effect,

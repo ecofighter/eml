@@ -3,4 +3,4 @@ import Left (pick)
 import Right (pick)
 
 main : Unit -> <IO> Unit
-main () = println (show_int (pick 1))
+main () = println (show (pick 1))

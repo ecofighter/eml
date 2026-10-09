@@ -13,4 +13,4 @@ main () =
   let n =
     handle use_file f with
       | ask () k -> k 41
-  println (show_int (n + 1))
+  println (show (n + 1))

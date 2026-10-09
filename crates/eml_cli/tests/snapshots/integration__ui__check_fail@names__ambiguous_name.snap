@@ -4,13 +4,13 @@ expression: rendered
 input_file: tests/ui/check-fail/names/ambiguous_name/main.em
 ---
 [E1028] Error: `pick` is ambiguous
-   ╭─[ check-fail/names/ambiguous_name/main.em:6:30 ]
+   ╭─[ check-fail/names/ambiguous_name/main.em:6:26 ]
    │
- 6 │ main () = println (show_int (pick 1))
-   │                              ──┬─  
-   │                                ╰─── this name refers to more than one definition
+ 6 │ main () = println (show (pick 1))
+   │                          ──┬─  
+   │                            ╰─── this name refers to more than one definition
    │
-   ├─[ check-fail/names/ambiguous_name/main.em:6:30 ]
+   ├─[ check-fail/names/ambiguous_name/main.em:6:26 ]
    │
  2 │ import Left (pick)
    │ ─────────┬────────  

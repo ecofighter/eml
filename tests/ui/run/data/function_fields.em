@@ -13,5 +13,5 @@ main : Unit -> <IO> Unit
 main () =
   let offset = 10
   let add = Binary (fn a -> fn b -> a + b + offset)
-  println (show_int (run (Unary (fn n -> n * 2)) 21))
-  println (show_int (run (add 5) 1))
+  println (show (run (Unary (fn n -> n * 2)) 21))
+  println (show (run (add 5) 1))

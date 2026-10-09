@@ -26,4 +26,4 @@ main () =
                  | put v k _ -> k () v
                  | return x _ -> x
   println s
-  println (show_int n)
+  println (show n)

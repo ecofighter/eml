@@ -98,6 +98,13 @@ pub struct LangItems {
     /// ユーザーが同じ演算子を定義すれば、それに解決して普通の呼び出しになる。
     pub and: FunctionId,
     pub or: FunctionId,
+    /// 処理系が役割で知る Prelude のクラス。`deriving` で導出できるのはこの3つである
+    /// (docs/superpowers/specs/2026-10-10-s5-type-classes-design.md の「導出した instance」)。
+    pub eq: ClassId,
+    pub ord: ClassId,
+    pub show: ClassId,
+    /// `compare` の結果の型。extern の行と導出した `compare` は、宣言の順のタグで値を作る。
+    pub ordering: TypeDefId,
 }
 
 /// extern の表の行から、標準ライブラリの宣言を引く索引。使い手のある行 (extern の型、`IO`、`negate`) だけを持つ。

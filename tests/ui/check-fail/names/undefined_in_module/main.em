@@ -5,4 +5,4 @@ two : Lib.Count
 two = Lib.one + Lib.uno
 
 main : Unit -> <IO> Unit
-main () = println (show_int two)
+main () = println (show two)

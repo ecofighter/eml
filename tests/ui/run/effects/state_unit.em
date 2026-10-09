@@ -8,4 +8,4 @@ main () =
     handle ask () + ask () from () with
       | ask () k s -> k 20 s
       | return x s -> x + 1
-  println (show_int n)
+  println (show n)

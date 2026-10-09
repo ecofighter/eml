@@ -3,7 +3,7 @@ use eml_hir::ValueItem;
 
 #[test]
 fn signatures_and_local_types() {
-    let text = "add : Int -> Int -> Int\nadd a b =\n  let sum = a + b\n  sum\n\nmain : Unit -> <IO> Unit\nmain () =\n  let message = \"sum: \" ++ show_int (add 1 2)\n  println message";
+    let text = "add : Int -> Int -> Int\nadd a b =\n  let sum = a + b\n  sum\n\nmain : Unit -> <IO> Unit\nmain () =\n  let message = \"sum: \" ++ show (add 1 2)\n  println message";
     insta::assert_snapshot!(check_text(text), @r"
     add : Int -> Int -> Int
       a#0 : Int
@@ -197,7 +197,7 @@ fn equations_may_return_functions_and_calls_may_pass_more_arguments() {
 
 #[test]
 fn lambdas_are_checked_against_the_expected_type_or_inferred() {
-    let text = "apply : (Int -> Int) -> Int\napply f = f 1\n\nmain : Unit -> <IO> Unit\nmain () =\n  let n = apply (fn x -> x + 1)\n  let id = fn y -> y\n  let s = id \"s\"\n  let k = fn (z : Int) _ -> z\n  println (show_int (k n s))";
+    let text = "apply : (Int -> Int) -> Int\napply f = f 1\n\nmain : Unit -> <IO> Unit\nmain () =\n  let n = apply (fn x -> x + 1)\n  let id = fn y -> y\n  let s = id \"s\"\n  let k = fn (z : Int) _ -> z\n  println (show (k n s))";
     insta::assert_snapshot!(check_text(text), @r"
     apply : (Int -> Int) -> Int
       f#0 : Int -> Int
@@ -455,12 +455,12 @@ fn an_equality_section_compares_by_the_type_it_is_used_at() {
 }
 
 #[test]
-fn an_equality_reference_with_an_unknown_type_is_not_comparable() {
+fn an_equality_reference_with_an_unknown_type_is_ambiguous() {
     let text = "f : Int -> Int\nf x =\n  let eq = (==)\n  x";
     let checked = eml_test_support::check(text);
     let lines = eml_test_support::short(checked.files(), &checked.diagnostics);
     assert!(
-        lines.iter().any(|line| line.starts_with("E2006 3:13")),
+        lines.iter().any(|line| line.starts_with("E2009 3:13")),
         "{lines:?}"
     );
 }

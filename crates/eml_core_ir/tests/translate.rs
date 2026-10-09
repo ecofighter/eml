@@ -21,10 +21,11 @@ fn hello_world() {
 #[test]
 fn a_value_if_with_one_exit_continues_in_the_same_block() {
     // 条件が定数なので続きへ向かうのは then の枝だけで、続きのブロックを作らずに同じブロックで続ける
-    let text = "main : Unit -> <IO> Unit\nmain () =\n  let n = if True then 1 else 2\n  println (show_int n)";
+    let text =
+        "main : Unit -> <IO> Unit\nmain () =\n  let n = if True then 1 else 2\n  println (show n)";
     insta::assert_snapshot!(function(&core_text(text, Pass::Translate), "main"), @"
     fn main(p.0: unit) -> unit {
-      let t.1: obj = extern Prelude.show_int(1)
+      let t.1: obj = extern \"Prelude.Show Int.show\"(1)
       let t.2: unit = extern Prelude.println(t.1)
       return t.2
     }
@@ -33,7 +34,7 @@ fn a_value_if_with_one_exit_continues_in_the_same_block() {
 
 #[test]
 fn a_continuation_entered_by_two_jumps_is_a_merge_block() {
-    let text = "pick : Bool -> Int\npick b =\n  let n = if b then 1 else 2\n  n + 1\n\nmain : Unit -> <IO> Unit\nmain () = println (show_int (pick True))";
+    let text = "pick : Bool -> Int\npick b =\n  let n = if b then 1 else 2\n  n + 1\n\nmain : Unit -> <IO> Unit\nmain () = println (show (pick True))";
     insta::assert_snapshot!(function(&core_text(text, Pass::Translate), "pick"), @"
     fn pick(b.0: enum) -> int {
       switch b.0 Prelude.Bool { #0 -> b1, #1 -> b2 }
@@ -55,12 +56,12 @@ fn and_branches_without_building_a_bool() {
     let text = "inside : Int -> Int -> String\ninside a b = if a < b && b < 10 then \"in\" else \"out\"\n\nmain : Unit -> <IO> Unit\nmain () = println (inside 1 2)";
     insta::assert_snapshot!(function(&core_text(text, Pass::Translate), "inside"), @r#"
     fn inside(a.0: int, b.1: int) -> obj {
-      let t.2: enum = extern Prelude.<(a.0, b.1)
+      let t.2: enum = extern "Prelude.Ord Int.<"(a.0, b.1)
       switch t.2 Prelude.Bool { #0 -> b1, #1 -> b2 }
     b1:
       jump b5()
     b2:
-      let t.3: enum = extern Prelude.<(b.1, 10)
+      let t.3: enum = extern "Prelude.Ord Int.<"(b.1, 10)
       switch t.3 Prelude.Bool { #0 -> b3, #1 -> b4 }
     b3:
       jump b5()
@@ -79,10 +80,10 @@ fn or_branches_without_building_a_bool() {
     let text = "outside : Int -> Int -> String\noutside a b = if a < 0 || b < 0 then \"out\" else \"in\"\n\nmain : Unit -> <IO> Unit\nmain () = println (outside 1 2)";
     insta::assert_snapshot!(function(&core_text(text, Pass::Translate), "outside"), @r#"
     fn outside(a.0: int, b.1: int) -> obj {
-      let t.2: enum = extern Prelude.<(a.0, 0)
+      let t.2: enum = extern "Prelude.Ord Int.<"(a.0, 0)
       switch t.2 Prelude.Bool { #0 -> b1, #1 -> b2 }
     b1:
-      let t.3: enum = extern Prelude.<(b.1, 0)
+      let t.3: enum = extern "Prelude.Ord Int.<"(b.1, 0)
       switch t.3 Prelude.Bool { #0 -> b3, #1 -> b4 }
     b2:
       jump b5()
@@ -169,7 +170,7 @@ fn an_if_statement_continues_after_a_merge_of_unit() {
 fn a_chain_of_returned_continuations_folds_in_one_pass() {
     // 内側の続き `z` は外側の続き `y` へ jump するだけで、外側の続きは `return y` だけである。番号の大きい外側を先に
     // たたむと、内側も `return` だけのブロックになり、同じループでたたまれる
-    let text = "f : Int -> Int\nf x = x + 1\n\ng : Int -> Int\ng x = x - 1\n\nh : Bool -> Bool -> Int -> Int\nh a b x =\n  let y =\n    if a then\n      let z = if b then f x else g x\n      z\n    else f (x + 2)\n  y\n\nmain : Unit -> <IO> Unit\nmain () = println (show_int (h True False 1))";
+    let text = "f : Int -> Int\nf x = x + 1\n\ng : Int -> Int\ng x = x - 1\n\nh : Bool -> Bool -> Int -> Int\nh a b x =\n  let y =\n    if a then\n      let z = if b then f x else g x\n      z\n    else f (x + 2)\n  y\n\nmain : Unit -> <IO> Unit\nmain () = println (show (h True False 1))";
     insta::assert_snapshot!(function(&core_text(text, Pass::Translate), "h"), @"
     fn h(a.0: enum, b.1: enum, x.2: int) -> int {
       switch a.0 Prelude.Bool { #0 -> b1, #1 -> b2 }
@@ -192,11 +193,11 @@ fn a_chain_of_returned_continuations_folds_in_one_pass() {
 #[test]
 fn every_extern_call_carries_the_position_of_its_callee() {
     // 演算子の呼び出しは演算子のトークンの位置を、名前で呼ぶ extern は名前の位置を持つ
-    let text = "main : Unit -> <IO> Unit\nmain () =\n  let n = 10 / 2\n  println (show_int n)";
+    let text = "main : Unit -> <IO> Unit\nmain () =\n  let n = 10 / 2\n  println (show n)";
     insta::assert_snapshot!(function(&core_text_with_positions(text), "main"), @r#"
     fn main(p.0: unit) -> unit {
       let t.1: int = extern Prelude./(10, 2) @"test.em":3:14
-      let t.2: obj = extern Prelude.show_int(t.1) @"test.em":4:12
+      let t.2: obj = extern "Prelude.Show Int.show"(t.1) @"test.em":4:12
       let t.3: unit = extern Prelude.println(t.2) @"test.em":4:3
       return t.3
     }
@@ -251,7 +252,7 @@ fn the_file_table_holds_only_the_paths_that_positions_use() {
 fn lambdas_and_handlers_are_numbered_in_expression_order() {
     // HIR は子の式を親より先に作るので、内側のラムダと内側の handle の番号が小さい。変換は外側から持ち上げるが、
     // 番号は変換の順に依らない
-    let text = "effect A where\n  ask : Unit -> Int\n\neffect B where\n  tell : Int -> Unit\n\nmain : Unit -> <IO> Unit\nmain () =\n  let add = fn x -> fn y -> x + y\n  let n =\n    handle (handle ask () + add 1 2 with | ask () k -> k 1) with\n      | tell m k -> k ()\n  println (show_int n)";
+    let text = "effect A where\n  ask : Unit -> Int\n\neffect B where\n  tell : Int -> Unit\n\nmain : Unit -> <IO> Unit\nmain () =\n  let add = fn x -> fn y -> x + y\n  let n =\n    handle (handle ask () + add 1 2 with | ask () k -> k 1) with\n      | tell m k -> k ()\n  println (show n)";
     let shown = core_text(text, Pass::Translate);
     let names: Vec<&str> = shown
         .lines()
@@ -321,13 +322,13 @@ fn the_entry_applies_a_point_free_main_to_unit() {
 
 #[test]
 fn handlers_are_lifted_with_their_return_reprs() {
-    let text = "effect Ask where\n  ask : String -> Int\n\nmain : Unit -> <IO> Unit\nmain () =\n  let prefix = \"n = \"\n  let n =\n    handle ask \"x\" with\n      | ask key k -> k 1\n      | return x -> x + 1\n  println (prefix ++ show_int n)";
+    let text = "effect Ask where\n  ask : String -> Int\n\nmain : Unit -> <IO> Unit\nmain () =\n  let prefix = \"n = \"\n  let n =\n    handle ask \"x\" with\n      | ask key k -> k 1\n      | return x -> x + 1\n  println (prefix ++ show n)";
     insta::assert_snapshot!(core_text(text, Pass::Translate), @r#"
     effect Ask { ask/1 }
     fn main(p.0: unit) -> unit {
       let s.1: obj = const "n = "
       let t.2: int = handle Ask((), &main$handle0) { ask: &main$handle0$ask } return &main$handle0$return
-      let t.3: obj = extern Prelude.show_int(t.2)
+      let t.3: obj = extern "Prelude.Show Int.show"(t.2)
       let t.4: obj = extern Prelude.++(s.1, t.3)
       let t.5: unit = extern Prelude.println(t.4)
       return t.5
@@ -354,7 +355,7 @@ fn handlers_are_lifted_with_their_return_reprs() {
 
 #[test]
 fn a_continuation_passed_to_a_function_is_wrapped() {
-    let text = "effect Ask where\n  ask : Unit -> Int\n\ntwice : (Int -> <e> Int) -> <e> Int\ntwice f = f 1\n\nmain : Unit -> <IO> Unit\nmain () =\n  let n =\n    handle ask () with\n      | ask () k -> twice k\n  println (show_int n)";
+    let text = "effect Ask where\n  ask : Unit -> Int\n\ntwice : (Int -> <e> Int) -> <e> Int\ntwice f = f 1\n\nmain : Unit -> <IO> Unit\nmain () =\n  let n =\n    handle ask () with\n      | ask () k -> twice k\n  println (show n)";
     let shown = core_text(text, Pass::Translate);
     insta::assert_snapshot!(function(&shown, "main$handle0$ask"), @"
     internal fn main$handle0$ask(p.0: unit, k.1: tobj, p.2: unit) -> int {
@@ -374,14 +375,14 @@ fn a_continuation_passed_to_a_function_is_wrapped() {
 #[test]
 fn lower_until_stops_after_the_named_pass() {
     // contract は使われない純粋な `let` を消し、Perceus は RC の命令と `save` を足す
-    let text = "f : Int -> Int\nf x = x + 1\n\nmain : Unit -> <IO> Unit\nmain () =\n  let unused = \"unused\"\n  let s = \"used\"\n  let n = f 1\n  println s\n  println (s ++ show_int n)";
+    let text = "f : Int -> Int\nf x = x + 1\n\nmain : Unit -> <IO> Unit\nmain () =\n  let unused = \"unused\"\n  let s = \"used\"\n  let n = f 1\n  println s\n  println (s ++ show n)";
     insta::assert_snapshot!(function(&core_text(text, Pass::Translate), "main"), @r#"
     fn main(p.0: unit) -> unit {
       let s.1: obj = const "unused"
       let s.2: obj = const "used"
       let t.3: int = call f(1)
       let t.4: unit = extern Prelude.println(s.2)
-      let t.5: obj = extern Prelude.show_int(t.3)
+      let t.5: obj = extern "Prelude.Show Int.show"(t.3)
       let t.6: obj = extern Prelude.++(s.2, t.5)
       let t.7: unit = extern Prelude.println(t.6)
       return t.7
@@ -392,7 +393,7 @@ fn lower_until_stops_after_the_named_pass() {
       let s.2: obj = const "used"
       let t.3: int = call f(1)
       let t.4: unit = extern Prelude.println(s.2)
-      let t.5: obj = extern Prelude.show_int(t.3)
+      let t.5: obj = extern "Prelude.Show Int.show"(t.3)
       let t.6: obj = extern Prelude.++(s.2, t.5)
       let t.7: unit = extern Prelude.println(t.6)
       return t.7
@@ -404,7 +405,7 @@ fn lower_until_stops_after_the_named_pass() {
       let t.3: int = call f(1) save [s.2]
       dup s.2
       let t.4: unit = extern Prelude.println(s.2)
-      let t.5: obj = extern Prelude.show_int(t.3)
+      let t.5: obj = extern "Prelude.Show Int.show"(t.3)
       let t.6: obj = extern Prelude.++(s.2, t.5)
       let t.7: unit = extern Prelude.println(t.6)
       return t.7
@@ -441,7 +442,7 @@ const OPTION: &str = "data Option a =\n  | None\n  | Some a\n\n";
 #[test]
 fn a_destructuring_let_of_an_if_builds_no_tuple() {
     // 両方の枝の値がタプルのリテラルなので、どちらも要素を続きのブロックの引数にして jump し、タプルを作らない
-    let text = "order : Bool -> Int -> Int -> Int\norder c a b =\n  let (lo, hi) = if c then (a, b) else (b, a)\n  hi - lo\n\nmain : Unit -> <IO> Unit\nmain () = println (show_int (order True 1 2))";
+    let text = "order : Bool -> Int -> Int -> Int\norder c a b =\n  let (lo, hi) = if c then (a, b) else (b, a)\n  hi - lo\n\nmain : Unit -> <IO> Unit\nmain () = println (show (order True 1 2))";
     insta::assert_snapshot!(function(&core_text(text, Pass::Translate), "order"), @"
     fn order(c.0: enum, a.1: int, b.2: int) -> int {
       switch c.0 Prelude.Bool { #0 -> b1, #1 -> b2 }
@@ -460,17 +461,17 @@ fn a_destructuring_let_of_an_if_builds_no_tuple() {
 fn a_value_matched_right_after_its_let_goes_straight_to_its_arm() {
     // `let found = S; match found` は `S` を `match` の文脈で変換する。どちらの枝も値が分かるので、`Some` も作らない
     let text = format!(
-        "{OPTION}describe : Int -> String\ndescribe n =\n  let found = if n > 0 then Some n else None\n  match found with\n    | Some v -> show_int v\n    | None -> \"none\"\n\nmain : Unit -> <IO> Unit\nmain () = println (describe 1)"
+        "{OPTION}describe : Int -> String\ndescribe n =\n  let found = if n > 0 then Some n else None\n  match found with\n    | Some v -> show v\n    | None -> \"none\"\n\nmain : Unit -> <IO> Unit\nmain () = println (describe 1)"
     );
     insta::assert_snapshot!(function(&core_text(&text, Pass::Translate), "describe"), @r#"
     fn describe(n.0: int) -> obj {
-      let t.1: enum = extern Prelude.>(n.0, 0)
+      let t.1: enum = extern "Prelude.Ord Int.>"(n.0, 0)
       switch t.1 Prelude.Bool { #0 -> b1, #1 -> b2 }
     b1:
       let s.3: obj = const "none"
       return s.3
     b2:
-      let t.2: obj = extern Prelude.show_int(n.0)
+      let t.2: obj = extern "Prelude.Show Int.show"(n.0)
       return t.2
     }
     "#);
@@ -480,7 +481,7 @@ fn a_value_matched_right_after_its_let_goes_straight_to_its_arm() {
 fn an_arm_that_uses_the_matched_variable_receives_it() {
     // 枝が `found` を使うので、枝のラベルは値全体も引数に取る。分かっている値は、その葉でだけ `con` を作って渡す
     let text = format!(
-        "{OPTION}size : Option Int -> Int\nsize o = 1\n\nlookup : Int -> Option Int\nlookup n = Some n\n\npick : Bool -> Int -> Int\npick c k =\n  let found = if c then Some 1 else lookup k\n  match found with\n    | None -> 0\n    | Some _ -> size found\n\nmain : Unit -> <IO> Unit\nmain () = println (show_int (pick True 2))"
+        "{OPTION}size : Option Int -> Int\nsize o = 1\n\nlookup : Int -> Option Int\nlookup n = Some n\n\npick : Bool -> Int -> Int\npick c k =\n  let found = if c then Some 1 else lookup k\n  match found with\n    | None -> 0\n    | Some _ -> size found\n\nmain : Unit -> <IO> Unit\nmain () = println (show (pick True 2))"
     );
     insta::assert_snapshot!(function(&core_text(&text, Pass::Translate), "pick"), @"
     fn pick(c.0: enum, k.1: int) -> int {
@@ -504,13 +505,13 @@ fn an_arm_that_uses_the_matched_variable_receives_it() {
 
 #[test]
 fn a_match_on_an_if_takes_each_known_arm() {
-    let text = "data Result e a =\n  | Err e\n  | Ok a\n\ncheck : Int -> String\ncheck n = match (if n < 0 then Err \"negative\" else Ok n) with\n  | Err message -> message\n  | Ok v -> show_int v\n\nmain : Unit -> <IO> Unit\nmain () = println (check 1)";
+    let text = "data Result e a =\n  | Err e\n  | Ok a\n\ncheck : Int -> String\ncheck n = match (if n < 0 then Err \"negative\" else Ok n) with\n  | Err message -> message\n  | Ok v -> show v\n\nmain : Unit -> <IO> Unit\nmain () = println (check 1)";
     insta::assert_snapshot!(function(&core_text(text, Pass::Translate), "check"), @r#"
     fn check(n.0: int) -> obj {
-      let t.1: enum = extern Prelude.<(n.0, 0)
+      let t.1: enum = extern "Prelude.Ord Int.<"(n.0, 0)
       switch t.1 Prelude.Bool { #0 -> b1, #1 -> b2 }
     b1:
-      let t.3: obj = extern Prelude.show_int(n.0)
+      let t.3: obj = extern "Prelude.Show Int.show"(n.0)
       return t.3
     b2:
       let s.2: obj = const "negative"
@@ -524,7 +525,7 @@ fn two_unknown_values_meet_at_one_switch() {
     // どちらの枝も呼び出しの結果を渡すので、値は分からない。2本が入る未知の値のラベルを置き、そこで1回だけ
     // `switch` する。ラベルの引数の名前は `let` の変数の名前である
     let text = format!(
-        "{OPTION}lookup : Int -> Option Int\nlookup n = Some n\n\npick : Bool -> Int\npick c =\n  let found = if c then lookup 1 else lookup 2\n  match found with\n    | Some v -> v\n    | None -> 0\n\nmain : Unit -> <IO> Unit\nmain () = println (show_int (pick True))"
+        "{OPTION}lookup : Int -> Option Int\nlookup n = Some n\n\npick : Bool -> Int\npick c =\n  let found = if c then lookup 1 else lookup 2\n  match found with\n    | Some v -> v\n    | None -> 0\n\nmain : Unit -> <IO> Unit\nmain () = println (show (pick True))"
     );
     insta::assert_snapshot!(function(&core_text(&text, Pass::Translate), "pick"), @"
     fn pick(c.0: enum) -> int {
@@ -550,7 +551,7 @@ fn an_arm_that_binds_the_whole_value_builds_it_only_at_its_leaf() {
     // 分かっている `Some 1` は `x` の枝へ直接向かい、その葉でだけ `con` を作る。分からない値は `switch` の `default`
     // からその値のまま同じ枝へ向かうので、枝は2本が入るブロックになる
     let text = format!(
-        "{OPTION}size : Option Int -> Int\nsize o = 1\n\nlookup : Int -> Option Int\nlookup n = Some n\n\npick : Bool -> Int -> Int\npick c k = match (if c then Some 1 else lookup k) with\n  | None -> 0\n  | x -> size x\n\nmain : Unit -> <IO> Unit\nmain () = println (show_int (pick True 2))"
+        "{OPTION}size : Option Int -> Int\nsize o = 1\n\nlookup : Int -> Option Int\nlookup n = Some n\n\npick : Bool -> Int -> Int\npick c k = match (if c then Some 1 else lookup k) with\n  | None -> 0\n  | x -> size x\n\nmain : Unit -> <IO> Unit\nmain () = println (show (pick True 2))"
     );
     insta::assert_snapshot!(function(&core_text(&text, Pass::Translate), "pick"), @"
     fn pick(c.0: enum, k.1: int) -> int {
@@ -575,7 +576,7 @@ fn an_arm_that_binds_the_whole_value_builds_it_only_at_its_leaf() {
 #[test]
 fn nested_case_of_case_goes_straight_to_the_outer_arm() {
     // 内側の `match` の枝は外側の文脈に値を渡すので、`Bool` の値も `Color` の値も作らずに外側の枝へ向かう
-    let text = "data Color =\n  | Red\n  | Green\n  | Blue\n\ncode : Bool -> Bool -> Int\ncode a b = match (match (if a then Red else if b then Green else Blue) with | Red -> True | _ -> False) with\n  | True -> 1\n  | False -> 0\n\nmain : Unit -> <IO> Unit\nmain () = println (show_int (code True False))";
+    let text = "data Color =\n  | Red\n  | Green\n  | Blue\n\ncode : Bool -> Bool -> Int\ncode a b = match (match (if a then Red else if b then Green else Blue) with | Red -> True | _ -> False) with\n  | True -> 1\n  | False -> 0\n\nmain : Unit -> <IO> Unit\nmain () = println (show (code True False))";
     insta::assert_snapshot!(function(&core_text(text, Pass::Translate), "code"), @"
     fn code(a.0: enum, b.1: enum) -> int {
       switch a.0 Prelude.Bool { #0 -> b1, #1 -> b2 }
@@ -616,7 +617,7 @@ fn a_constructor_bound_by_let_is_known_later() {
     // `o` は同じ関数で作った `Some x` なので、`match` は `switch` を出さずに枝を選び、フィールドを直接使う。使われなく
     // なった `con` は contract が消す
     let text = format!(
-        "{OPTION}unwrap : Int -> <IO> Int\nunwrap x =\n  let o = Some x\n  println \"built\"\n  match o with\n    | Some y -> y + 1\n    | None -> 0\n\nmain : Unit -> <IO> Unit\nmain () = println (show_int (unwrap 1))"
+        "{OPTION}unwrap : Int -> <IO> Int\nunwrap x =\n  let o = Some x\n  println \"built\"\n  match o with\n    | Some y -> y + 1\n    | None -> 0\n\nmain : Unit -> <IO> Unit\nmain () = println (show (unwrap 1))"
     );
     insta::assert_snapshot!(function(&core_text(&text, Pass::Translate), "unwrap"), @r#"
     fn unwrap(x.0: int) -> int {
@@ -639,7 +640,7 @@ fn a_constructor_bound_by_let_is_known_later() {
 
 #[test]
 fn a_tuple_literal_is_taken_apart_without_building_it() {
-    let text = "shift : Int -> Int -> Int\nshift x y =\n  let (a, b) = (y, x + 1)\n  a - b\n\nmain : Unit -> <IO> Unit\nmain () = println (show_int (shift 1 2))";
+    let text = "shift : Int -> Int -> Int\nshift x y =\n  let (a, b) = (y, x + 1)\n  a - b\n\nmain : Unit -> <IO> Unit\nmain () = println (show (shift 1 2))";
     insta::assert_snapshot!(function(&core_text(text, Pass::Translate), "shift"), @"
     fn shift(x.0: int, y.1: int) -> int {
       let t.2: int = extern Prelude.+(x.0, 1)
@@ -654,7 +655,7 @@ fn equations_take_their_parameters_as_columns() {
     // 複数の等式は引数のタプルへの `match` になる。タプルのリテラルの要素を決定木の列にするので、タプルを作らない。
     // 2つ目の等式には2つの葉が向かうので、引数のないブロックに置く
     let text = format!(
-        "{OPTION}both : Option Int -> Option Int -> Int\nboth (Some a) (Some b) = a + b\nboth _ _ = 0\n\nmain : Unit -> <IO> Unit\nmain () = println (show_int (both None None))"
+        "{OPTION}both : Option Int -> Option Int -> Int\nboth (Some a) (Some b) = a + b\nboth _ _ = 0\n\nmain : Unit -> <IO> Unit\nmain () = println (show (both None None))"
     );
     insta::assert_snapshot!(function(&core_text(&text, Pass::Translate), "both"), @"
     fn both($0.0: tobj, $1.1: tobj) -> int {
@@ -676,7 +677,7 @@ fn equations_take_their_parameters_as_columns() {
 
 #[test]
 fn a_row_that_binds_the_whole_tuple_builds_it_at_its_leaf() {
-    let text = "first : (Int, Int) -> Int\nfirst p =\n  let (a, _) = p\n  a\n\nclassify : Int -> Int -> Int\nclassify a b = match (a, b) with\n  | (0, _) -> 0\n  | pair -> first pair\n\nmain : Unit -> <IO> Unit\nmain () = println (show_int (classify 1 2))";
+    let text = "first : (Int, Int) -> Int\nfirst p =\n  let (a, _) = p\n  a\n\nclassify : Int -> Int -> Int\nclassify a b = match (a, b) with\n  | (0, _) -> 0\n  | pair -> first pair\n\nmain : Unit -> <IO> Unit\nmain () = println (show (classify 1 2))";
     let shown = core_text(text, Pass::Translate);
     insta::assert_snapshot!(function(&shown, "classify"), @"
     fn classify(a.0: int, b.1: int) -> int {
@@ -700,7 +701,7 @@ fn a_row_that_binds_the_whole_tuple_builds_it_at_its_leaf() {
 #[test]
 fn a_leaf_builds_a_known_value_once_however_often_it_passes_it() {
     // `q` は値全体を束縛し、`let p` と `match p` の融合で `p` も同じ値を枝へ渡す。葉は同じ `con` を1回だけ作る
-    let text = "pair : Int -> (Int, Int) -> (Int, Int) -> Int\npair a b c = a\n\nf : Int -> Int\nf n =\n  let p = (n, n)\n  match p with\n    | q -> pair n q p\n\nmain : Unit -> <IO> Unit\nmain () = println (show_int (f 1))";
+    let text = "pair : Int -> (Int, Int) -> (Int, Int) -> Int\npair a b c = a\n\nf : Int -> Int\nf n =\n  let p = (n, n)\n  match p with\n    | q -> pair n q p\n\nmain : Unit -> <IO> Unit\nmain () = println (show (f 1))";
     insta::assert_snapshot!(function(&core_text(text, Pass::Translate), "f"), @"
     fn f(n.0: int) -> int {
       let d.1: obj = con (,) #0(n.0, n.0)
@@ -714,7 +715,7 @@ fn a_leaf_builds_a_known_value_once_however_often_it_passes_it() {
 fn a_leaf_builds_one_value_for_the_same_constructor_at_two_types() {
     // `x` と `y` は型引数だけが違う値 `P 1` を受ける。コンストラクタとフィールドのアトムが同じなので作る `con` の
     // 命令も同じになり、葉は `con` を1回だけ作る
-    let text = "data P a =\n  | P Int\n\npair : P Int -> P String -> Int\npair x y = 0\n\nf : Int -> Int\nf n = match (P 1, P 1) with\n  | (x, y) -> pair x y\n\nmain : Unit -> <IO> Unit\nmain () = println (show_int (f 1))";
+    let text = "data P a =\n  | P Int\n\npair : P Int -> P String -> Int\npair x y = 0\n\nf : Int -> Int\nf n = match (P 1, P 1) with\n  | (x, y) -> pair x y\n\nmain : Unit -> <IO> Unit\nmain () = println (show (f 1))";
     insta::assert_snapshot!(function(&core_text(text, Pass::Translate), "f"), @"
     fn f(n.0: int) -> int {
       let d.1: obj = con P #0(1)
@@ -745,7 +746,7 @@ fn literal_equations_switch_once_with_a_default() {
 
 #[test]
 fn an_arm_reached_from_two_leaves_is_placed_after_the_tree() {
-    let text = "data Color =\n  | Red\n  | Green\n  | Blue\n\nsame : Color -> Color -> Int\nsame a b = match (a, b) with\n  | (Red, Red) -> 1\n  | (Green, Green) -> 2\n  | _ -> 0\n\nmain : Unit -> <IO> Unit\nmain () = println (show_int (same Red Blue))";
+    let text = "data Color =\n  | Red\n  | Green\n  | Blue\n\nsame : Color -> Color -> Int\nsame a b = match (a, b) with\n  | (Red, Red) -> 1\n  | (Green, Green) -> 2\n  | _ -> 0\n\nmain : Unit -> <IO> Unit\nmain () = println (show (same Red Blue))";
     insta::assert_snapshot!(function(&core_text(text, Pass::Translate), "same"), @"
     fn same(a.0: enum, b.1: enum) -> int {
       switch a.0 Color { #0 -> b1, #1 -> b2, _ -> b3 }
@@ -783,7 +784,7 @@ fn a_lone_constructor_with_fields_is_unpacked_without_a_switch() {
 #[test]
 fn a_lone_constructor_without_fields_is_a_wildcard() {
     // `Token` は値が1つしかないので、引数、`let`、`match` の枝のどこでも、`unpack` も `switch` も出さない
-    let text = "data Token =\n  | Token\n\nspend : Token -> Int -> Int\nspend Token n =\n  let Token = Token\n  match Token with\n    | Token -> n + 1\n\nmain : Unit -> <IO> Unit\nmain () = println (show_int (spend Token 1))";
+    let text = "data Token =\n  | Token\n\nspend : Token -> Int -> Int\nspend Token n =\n  let Token = Token\n  match Token with\n    | Token -> n + 1\n\nmain : Unit -> <IO> Unit\nmain () = println (show (spend Token 1))";
     insta::assert_snapshot!(function(&core_text(text, Pass::Translate), "spend"), @"
     fn spend(p.0: enum, n.1: int) -> int {
       let t.2: int = extern Prelude.+(n.1, 1)
@@ -803,9 +804,7 @@ fn a_thousand_shared_arms_are_translated_without_deep_recursion() {
     for i in 1..=COUNT {
         text.push_str(&format!("  | (_, {i}) -> {i}\n"));
     }
-    text.push_str(
-        "  | _ -> 0\n\nmain : Unit -> <IO> Unit\nmain () = println (show_int (pick A 7))",
-    );
+    text.push_str("  | _ -> 0\n\nmain : Unit -> <IO> Unit\nmain () = println (show (pick A 7))");
     let program = eml_test_support::core_until(&text, Pass::Perceus);
     let pick = program
         .functions
@@ -839,7 +838,7 @@ fn an_extern_function_with_an_effect_used_as_a_value_is_wrapped_with_its_extern_
 /// 飛ばさないと、`mask`、`handle`、`perform` がユーザーのエフェクトを1つずれて指す。
 #[test]
 fn effect_numbers_skip_the_extern_effects() {
-    let text = "effect A where\n  ask : Unit -> Int\n\neffect B where\n  tell : Int -> Unit\n\nneeds_a : (Unit -> <e> Int) -> <A | e> Int\nneeds_a f = ask () + f ()\n\ntold : Unit -> <B> Int\ntold () =\n  tell 1\n  2\n\nmain : Unit -> <IO> Unit\nmain () =\n  let n =\n    handle (handle needs_a told with | ask () k -> k 1) with\n      | tell m k -> k ()\n  println (show_int n)";
+    let text = "effect A where\n  ask : Unit -> Int\n\neffect B where\n  tell : Int -> Unit\n\nneeds_a : (Unit -> <e> Int) -> <A | e> Int\nneeds_a f = ask () + f ()\n\ntold : Unit -> <B> Int\ntold () =\n  tell 1\n  2\n\nmain : Unit -> <IO> Unit\nmain () =\n  let n =\n    handle (handle needs_a told with | ask () k -> k 1) with\n      | tell m k -> k ()\n  println (show n)";
     insta::assert_snapshot!(core_text(text, Pass::Translate), @"
     effect A { ask/1 }
     effect B { tell/1 }
@@ -855,7 +854,7 @@ fn effect_numbers_skip_the_extern_effects() {
     }
     fn main(p.0: unit) -> unit {
       let t.1: int = handle B((), &main$handle1) { tell: &main$handle1$tell } return &main$handle1$return
-      let t.2: obj = extern Prelude.show_int(t.1)
+      let t.2: obj = extern \"Prelude.Show Int.show\"(t.1)
       let t.3: unit = extern Prelude.println(t.2)
       return t.3
     }
@@ -925,7 +924,7 @@ fn names_outside_the_entry_are_qualified_with_their_module() {
     // テキストの形は関数とエフェクトを名前で引くので、入口以外のモジュールの名前には `モジュール名.` を付ける
     // (docs/spec/core-ir.md)。入れ子のモジュールのエフェクトの `perform` と `handle` も読み戻せることを確かめる
     let csv = "pub data Row = | Row Int\n\npub effect Parse where\n  next : Unit -> Int\n\npub parse : Unit -> <Parse> Row\nparse () =\n  let get = next\n  let make = Row\n  make (get ())";
-    let main = "import Report.Csv\n\napply : (a -> <e> b) -> a -> <e> b\napply f x = f x\n\nmain : Unit -> <IO> Unit\nmain () =\n  let r =\n    handle Csv.parse () with\n      | Csv.next () k -> k 1\n      | return r -> r\n  let Csv.Row n = r\n  apply println (show_int n)";
+    let main = "import Report.Csv\n\napply : (a -> <e> b) -> a -> <e> b\napply f x = f x\n\nmain : Unit -> <IO> Unit\nmain () =\n  let r =\n    handle Csv.parse () with\n      | Csv.next () k -> k 1\n      | return r -> r\n  let Csv.Row n = r\n  apply println (show n)";
     insta::assert_snapshot!(core_text_files(main, &[("Report/Csv.em", csv)], Pass::Translate), @r#"
     layout Report.Csv.Row { Row(int) }
     effect Report.Csv.Parse { next/1 }
@@ -936,7 +935,7 @@ fn names_outside_the_entry_are_qualified_with_their_module() {
     fn main(p.0: unit) -> unit {
       let t.1: obj = handle Report.Csv.Parse((), &main$handle0) { next: &main$handle0$next } return &main$handle0$return
       unpack t.1 Report.Csv.Row #0(n.2: int)
-      let t.3: obj = extern Prelude.show_int(n.2)
+      let t.3: obj = extern "Prelude.Show Int.show"(n.2)
       let t.4: unit = call "apply@[String, Unit]"(&main$extern0, t.3)
       return t.4
     }
@@ -998,7 +997,7 @@ fn an_entry_operation_does_not_collide_with_a_prelude_operation() {
 #[test]
 fn only_functions_reachable_from_the_entry_are_lowered() {
     // 使わない Prelude の関数を Core IR に入れないため、入口から届く関数だけを変換する (docs/spec/core-ir.md)
-    let text = "used : Int -> Int\nused x = x\n\nunused : Int -> Int\nunused x = x\n\nmain : Unit -> <IO> Unit\nmain () = println (show_int (used 1))";
+    let text = "used : Int -> Int\nused x = x\n\nunused : Int -> Int\nunused x = x\n\nmain : Unit -> <IO> Unit\nmain () = println (show (used 1))";
     let shown = core_text(text, Pass::Translate);
     assert!(shown.contains("fn used("), "{shown}");
     assert!(shown.contains("fn main("), "{shown}");
@@ -1007,14 +1006,14 @@ fn only_functions_reachable_from_the_entry_are_lowered() {
 
 #[test]
 fn recursion_and_top_level_values() {
-    let text = "answer : Int\nanswer = 42\n\ncount : Int -> Int\ncount n = if n == 0 then answer else count (n - 1)\n\nmain : Unit -> <IO> Unit\nmain () = println (show_int (count 3))";
+    let text = "answer : Int\nanswer = 42\n\ncount : Int -> Int\ncount n = if n == 0 then answer else count (n - 1)\n\nmain : Unit -> <IO> Unit\nmain () = println (show (count 3))";
     insta::assert_snapshot!(core_text(text, Pass::Translate), @"
     layout Prelude.Bool { False, True }
     fn answer() -> int {
       return 42
     }
     fn count(n.0: int) -> int {
-      let t.1: enum = extern Prelude.int_eq(n.0, 0)
+      let t.1: enum = extern \"Prelude.Eq Int.==\"(n.0, 0)
       switch t.1 Prelude.Bool { #0 -> b1, #1 -> b2 }
     b1:
       let t.3: int = extern Prelude.-(n.0, 1)
@@ -1026,7 +1025,7 @@ fn recursion_and_top_level_values() {
     }
     fn main(p.0: unit) -> unit {
       let t.1: int = call count(3)
-      let t.2: obj = extern Prelude.show_int(t.1)
+      let t.2: obj = extern \"Prelude.Show Int.show\"(t.1)
       let t.3: unit = extern Prelude.println(t.2)
       return t.3
     }
@@ -1039,7 +1038,7 @@ fn recursion_and_top_level_values() {
 
 #[test]
 fn partial_and_extra_arguments_use_closures() {
-    let text = "add : Int -> Int -> Int\nadd a b = a + b\n\nadder : Int -> Int -> Int\nadder x = add x\n\nmain : Unit -> <IO> Unit\nmain () =\n  let f = add 1\n  let n = f 2 + adder 3 4\n  println (show_int n)";
+    let text = "add : Int -> Int -> Int\nadd a b = a + b\n\nadder : Int -> Int -> Int\nadder x = add x\n\nmain : Unit -> <IO> Unit\nmain () =\n  let f = add 1\n  let n = f 2 + adder 3 4\n  println (show n)";
     insta::assert_snapshot!(core_text(text, Pass::Translate), @"
     fn add(a.0: int, b.1: int) -> int {
       let t.2: int = extern Prelude.+(a.0, b.1)
@@ -1055,7 +1054,7 @@ fn partial_and_extra_arguments_use_closures() {
       let t.3: tobj = call adder(3)
       let t.4: int = apply t.3(4)
       let t.5: int = extern Prelude.+(t.2, t.4)
-      let t.6: obj = extern Prelude.show_int(t.5)
+      let t.6: obj = extern \"Prelude.Show Int.show\"(t.5)
       let t.7: unit = extern Prelude.println(t.6)
       return t.7
     }
@@ -1068,7 +1067,7 @@ fn partial_and_extra_arguments_use_closures() {
 
 #[test]
 fn builtins_used_as_values_are_wrapped() {
-    let text = "apply : (a -> <e> b) -> a -> <e> b\napply f x = f x\n\nmain : Unit -> <IO> Unit\nmain () =\n  let g = not >> not\n  apply println (show_int 1)";
+    let text = "apply : (a -> <e> b) -> a -> <e> b\napply f x = f x\n\nmain : Unit -> <IO> Unit\nmain () =\n  let g = not >> not\n  apply println (show 1)";
     insta::assert_snapshot!(core_text(text, Pass::Translate), @r#"
     layout Prelude.Bool { False, True }
     fn Prelude.not($0.0: enum) -> enum {
@@ -1088,7 +1087,7 @@ fn builtins_used_as_values_are_wrapped() {
     }
     fn main(p.0: unit) -> unit {
       let t.1: tobj = call "Prelude.>>@[Bool, Bool, Bool]"(&Prelude.not, &Prelude.not)
-      let t.2: obj = extern Prelude.show_int(1)
+      let t.2: obj = extern "Prelude.Show Int.show"(1)
       let t.3: unit = call "apply@[String, Unit]"(&main$extern0, t.2)
       return t.3
     }
@@ -1138,7 +1137,7 @@ fn lambdas_are_lifted_with_their_captures_first() {
 
 #[test]
 fn a_zero_arity_callee_is_evaluated_before_its_arguments() {
-    let text = "k : Int -> Int -> Int\nk a b = a\n\nfive : Int -> Int\nfive = k 5\n\nmain : Unit -> <IO> Unit\nmain () = println (show_int (five (1 + 2)))";
+    let text = "k : Int -> Int -> Int\nk a b = a\n\nfive : Int -> Int\nfive = k 5\n\nmain : Unit -> <IO> Unit\nmain () = println (show (five (1 + 2)))";
     insta::assert_snapshot!(core_text(text, Pass::Translate), @"
     fn k(a.0: int, b.1: int) -> int {
       return a.0
@@ -1151,7 +1150,7 @@ fn a_zero_arity_callee_is_evaluated_before_its_arguments() {
       let five.1: tobj = call five()
       let t.2: int = extern Prelude.+(1, 2)
       let t.3: int = apply five.1(t.2)
-      let t.4: obj = extern Prelude.show_int(t.3)
+      let t.4: obj = extern \"Prelude.Show Int.show\"(t.3)
       let t.5: unit = extern Prelude.println(t.4)
       return t.5
     }
@@ -1168,7 +1167,7 @@ fn a_tail_if_returns_from_each_arm() {
     let shown = core_text(text, Pass::Translate);
     insta::assert_snapshot!(function(&shown, "sign"), @r#"
     fn sign(n.0: int) -> obj {
-      let t.1: enum = extern Prelude.<(n.0, 0)
+      let t.1: enum = extern "Prelude.Ord Int.<"(n.0, 0)
       switch t.1 Prelude.Bool { #0 -> b1, #1 -> b2 }
     b1:
       let s.3: obj = const "non-negative"
@@ -1213,13 +1212,13 @@ fn nested_value_ifs_meet_in_their_own_merge_blocks() {
 
 #[test]
 fn handlers_are_lifted_to_closures() {
-    let text = "effect Ask where\n  ask : String -> Int\n\nmain : Unit -> <IO> Unit\nmain () =\n  let prefix = \"n = \"\n  let n =\n    handle ask \"x\" with\n      | ask key k -> k 1\n      | return x -> x + 1\n  println (prefix ++ show_int n)";
+    let text = "effect Ask where\n  ask : String -> Int\n\nmain : Unit -> <IO> Unit\nmain () =\n  let prefix = \"n = \"\n  let n =\n    handle ask \"x\" with\n      | ask key k -> k 1\n      | return x -> x + 1\n  println (prefix ++ show n)";
     insta::assert_snapshot!(core_text(text, Pass::Translate), @r#"
     effect Ask { ask/1 }
     fn main(p.0: unit) -> unit {
       let s.1: obj = const "n = "
       let t.2: int = handle Ask((), &main$handle0) { ask: &main$handle0$ask } return &main$handle0$return
-      let t.3: obj = extern Prelude.show_int(t.2)
+      let t.3: obj = extern "Prelude.Show Int.show"(t.2)
       let t.4: obj = extern Prelude.++(s.1, t.3)
       let t.5: unit = extern Prelude.println(t.4)
       return t.5
@@ -1312,7 +1311,7 @@ fn a_constructor_used_as_a_function_value_is_wrapped() {
 #[test]
 fn a_match_compiles_to_a_decision_tree() {
     // 選んだ欄に現れないコンストラクタ (`None`) は `default` に進む。2つの葉から入る `_` の枝は、木の後のブロックになる
-    let text = "data Option a = | None | Some a\n\nf : Option (Option Int) -> Int\nf o = match o with\n  | Some (Some n) -> n\n  | _ -> 0\n\nmain : Unit -> <IO> Unit\nmain () = println (show_int (f None))";
+    let text = "data Option a = | None | Some a\n\nf : Option (Option Int) -> Int\nf o = match o with\n  | Some (Some n) -> n\n  | _ -> 0\n\nmain : Unit -> <IO> Unit\nmain () = println (show (f None))";
     let shown = core_text(text, Pass::Translate);
     insta::assert_snapshot!(function(&shown, "f"), @"
     fn f(o.0: tobj) -> int {
@@ -1334,7 +1333,7 @@ fn a_match_compiles_to_a_decision_tree() {
 #[test]
 fn tail_and_non_tail_matches() {
     // 末尾にない `match` は、`if` と同じく枝から続きのブロックへ値を渡して jump する
-    let text = "data Option a = | None | Some a\n\ng : Option Int -> Int\ng o =\n  let n = match o with\n    | Some m -> m\n    | None -> 0\n  n + 1\n\nh : Option Int -> Int\nh o = match o with | Some m -> m | None -> 0\n\nmain : Unit -> <IO> Unit\nmain () = println (show_int (g None + h None))";
+    let text = "data Option a = | None | Some a\n\ng : Option Int -> Int\ng o =\n  let n = match o with\n    | Some m -> m\n    | None -> 0\n  n + 1\n\nh : Option Int -> Int\nh o = match o with | Some m -> m | None -> 0\n\nmain : Unit -> <IO> Unit\nmain () = println (show (g None + h None))";
     let shown = core_text(text, Pass::Translate);
     insta::assert_snapshot!(function(&shown, "g"), @"
     fn g(o.0: tobj) -> int {
@@ -1362,7 +1361,7 @@ fn tail_and_non_tail_matches() {
 #[test]
 fn constructor_patterns_in_let_lambda_and_equation_parameters() {
     // コンストラクタが1つの型のパターンは、`switch` を出さずに `unpack` で分解し、続きを同じブロックで変換する
-    let text = "data Box a = | Box a\n\nby_equation : Box Int -> Int\nby_equation (Box n) = n\n\nby_let : Box Int -> Int\nby_let b =\n  let Box m = b\n  m + 1\n\nby_lambda : Box Int -> Int\nby_lambda b = (fn (Box k) -> k) b\n\nmain : Unit -> <IO> Unit\nmain () = println (show_int (by_equation (Box 1) + by_let (Box 2) + by_lambda (Box 3)))";
+    let text = "data Box a = | Box a\n\nby_equation : Box Int -> Int\nby_equation (Box n) = n\n\nby_let : Box Int -> Int\nby_let b =\n  let Box m = b\n  m + 1\n\nby_lambda : Box Int -> Int\nby_lambda b = (fn (Box k) -> k) b\n\nmain : Unit -> <IO> Unit\nmain () = println (show (by_equation (Box 1) + by_let (Box 2) + by_lambda (Box 3)))";
     let shown = core_text(text, Pass::Translate);
     insta::assert_snapshot!(function(&shown, "by_equation"), @"
     fn by_equation(p.0: obj) -> int {
@@ -1394,7 +1393,7 @@ fn constructor_patterns_in_let_lambda_and_equation_parameters() {
 #[test]
 fn a_variable_pattern_after_a_switch_binds_the_scrutinee() {
     // `ys` は `xs` の `switch` の後で、`xs` そのものを受ける。`ys` の枝には、2つの葉が `xs` を引数で渡す
-    let text = "data List a = | Nil | Cons a (List a)\n\nsize : List Int -> Int\nsize xs = 2\n\ndescribe : List Int -> Int\ndescribe xs = match xs with\n  | Cons _ Nil -> 1\n  | ys -> size ys\n\nmain : Unit -> <IO> Unit\nmain () = println (show_int (describe Nil))";
+    let text = "data List a = | Nil | Cons a (List a)\n\nsize : List Int -> Int\nsize xs = 2\n\ndescribe : List Int -> Int\ndescribe xs = match xs with\n  | Cons _ Nil -> 1\n  | ys -> size ys\n\nmain : Unit -> <IO> Unit\nmain () = println (show (describe Nil))";
     let shown = core_text(text, Pass::Translate);
     insta::assert_snapshot!(function(&shown, "describe"), @"
     fn describe(xs.0: tobj) -> int {
@@ -1417,7 +1416,7 @@ fn a_variable_pattern_after_a_switch_binds_the_scrutinee() {
 #[test]
 fn constructor_patterns_in_handler_clause_parameters() {
     // 操作の節と `return` の節はラムダと同じく関数に持ち上げるので、引数のコンストラクタのパターンも同じ経路で分解する
-    let text = "data Box a = | Box a\n\neffect Give where\n  give : Box Int -> Int\n\nrun : Unit -> Int\nrun () =\n  handle Box (give (Box 1)) with\n    | give (Box n) k -> k n\n    | return (Box r) -> r\n\nmain : Unit -> <IO> Unit\nmain () = println (show_int (run ()))";
+    let text = "data Box a = | Box a\n\neffect Give where\n  give : Box Int -> Int\n\nrun : Unit -> Int\nrun () =\n  handle Box (give (Box 1)) with\n    | give (Box n) k -> k n\n    | return (Box r) -> r\n\nmain : Unit -> <IO> Unit\nmain () = println (show (run ()))";
     let shown = core_text(text, Pass::Translate);
     insta::assert_snapshot!(function(&shown, "run$handle0$give"), @"
     internal fn run$handle0$give(p.0: obj, k.1: tobj, p.2: unit) -> int {
@@ -1435,29 +1434,9 @@ fn constructor_patterns_in_handler_clause_parameters() {
 }
 
 #[test]
-fn equality_picks_the_comparison_of_the_operand_type() {
-    // 比べ方ごとの extern は、型の名前を前に付けた名前 (`Prelude.int_eq`、`Prelude.string_eq`、`Prelude.bool_ne`) で表示する
-    let text = "same : String -> Bool\nsame s = \"a\" == s\n\nflip : Bool -> Bool\nflip b = b != True\n\nmain : Unit -> <IO> Unit\nmain () =\n  let _ = same \"b\"\n  let _ = flip False\n  ()";
-    let shown = core_text(text, Pass::Translate);
-    insta::assert_snapshot!(function(&shown, "same"), @r#"
-    fn same(s.0: obj) -> enum {
-      let s.1: obj = const "a"
-      let t.2: enum = extern Prelude.string_eq(s.1, s.0)
-      return t.2
-    }
-    "#);
-    insta::assert_snapshot!(function(&shown, "flip"), @"
-    fn flip(b.0: enum) -> enum {
-      let t.1: enum = extern Prelude.bool_ne(b.0, #1)
-      return t.1
-    }
-    ");
-}
-
-#[test]
 fn tuples_are_built_and_taken_apart_by_parameters_and_let() {
     // タプルの値はタグ 0 のコンストラクタの値で、タプルのパターンは `unpack` で分解する
-    let text = "swap : (Int, String) -> (String, Int)\nswap (n, s) = (s, n)\n\nfirst : (Int, Int) -> Int\nfirst p =\n  let (a, _) = p\n  a\n\nmain : Unit -> <IO> Unit\nmain () =\n  let _ = swap (1, \"a\")\n  println (show_int (first (2, 3)))";
+    let text = "swap : (Int, String) -> (String, Int)\nswap (n, s) = (s, n)\n\nfirst : (Int, Int) -> Int\nfirst p =\n  let (a, _) = p\n  a\n\nmain : Unit -> <IO> Unit\nmain () =\n  let _ = swap (1, \"a\")\n  println (show (first (2, 3)))";
     let shown = core_text(text, Pass::Translate);
     insta::assert_snapshot!(function(&shown, "swap"), @"
     fn swap(p.0: obj) -> obj {
@@ -1477,7 +1456,7 @@ fn tuples_are_built_and_taken_apart_by_parameters_and_let() {
 #[test]
 fn a_tuple_column_is_a_single_constructor() {
     // タプルの欄を `unpack` で分解してから、その中の `Option` の欄で `switch` する
-    let text = "data Option a = | None | Some a\n\npick : (Option Int, Int) -> Int\npick p = match p with\n  | (Some n, _) -> n\n  | (None, k) -> k\n\nmain : Unit -> <IO> Unit\nmain () = println (show_int (pick (None, 1)))";
+    let text = "data Option a = | None | Some a\n\npick : (Option Int, Int) -> Int\npick p = match p with\n  | (Some n, _) -> n\n  | (None, k) -> k\n\nmain : Unit -> <IO> Unit\nmain () = println (show (pick (None, 1)))";
     let shown = core_text(text, Pass::Translate);
     insta::assert_snapshot!(function(&shown, "pick"), @"
     fn pick(p.0: obj) -> int {
@@ -1539,7 +1518,7 @@ fn string_literals_are_cases_of_one_switch() {
 fn a_literal_column_inside_a_tuple() {
     // タプルを分解した後、最初の行でいちばん左の調べる欄 (リテラル) を選ぶ。`(_, False)` の枝には、リテラルが等しい
     // 枝と等しくない枝の2つの葉から入るので、木の後のブロックになる
-    let text = "classify : (Int, Bool) -> Int\nclassify p = match p with\n  | (0, True) -> 1\n  | (_, False) -> 2\n  | (n, _) -> n\n\nmain : Unit -> <IO> Unit\nmain () = println (show_int (classify (0, True)))";
+    let text = "classify : (Int, Bool) -> Int\nclassify p = match p with\n  | (0, True) -> 1\n  | (_, False) -> 2\n  | (n, _) -> n\n\nmain : Unit -> <IO> Unit\nmain () = println (show (classify (0, True)))";
     let shown = core_text(text, Pass::Translate);
     insta::assert_snapshot!(function(&shown, "classify"), @"
     fn classify(p.0: obj) -> int {
@@ -1578,7 +1557,7 @@ fn file_operations_are_extern_calls() {
 
 #[test]
 fn functions_without_captures_are_values() {
-    let text = "twice : (Int -> Int) -> Int -> Int\ntwice f x = f (f x)\n\nmain : Unit -> <IO> Unit\nmain () =\n  let n = 3\n  println (show_int (twice (fn x -> x + 1) 1 + twice (fn x -> x + n) 1))";
+    let text = "twice : (Int -> Int) -> Int -> Int\ntwice f x = f (f x)\n\nmain : Unit -> <IO> Unit\nmain () =\n  let n = 3\n  println (show (twice (fn x -> x + 1) 1 + twice (fn x -> x + n) 1))";
     let ir = core_text(text, Pass::Translate);
     // 捕獲のないラムダは関数の値で、捕獲のあるラムダはクロージャである
     assert!(ir.contains("&main$lambda0"), "{ir}");
@@ -1588,12 +1567,12 @@ fn functions_without_captures_are_values() {
 
 #[test]
 fn a_handler_with_a_state_passes_its_initial_value_and_takes_the_state_from_its_clauses() {
-    let text = "effect Ask where\n  ask : Unit -> Int\n\nmain : Unit -> <IO> Unit\nmain () =\n  let n =\n    handle ask () + ask () from 10 with\n      | ask () k st -> k st (st + 1)\n      | return x st -> x * st\n  println (show_int n)";
+    let text = "effect Ask where\n  ask : Unit -> Int\n\nmain : Unit -> <IO> Unit\nmain () =\n  let n =\n    handle ask () + ask () from 10 with\n      | ask () k st -> k st (st + 1)\n      | return x st -> x * st\n  println (show n)";
     insta::assert_snapshot!(core_text(text, Pass::Translate), @"
     effect Ask { ask/1 }
     fn main(p.0: unit) -> unit {
       let t.1: int = handle Ask(10, &main$handle0) { ask: &main$handle0$ask } return &main$handle0$return
-      let t.2: obj = extern Prelude.show_int(t.1)
+      let t.2: obj = extern \"Prelude.Show Int.show\"(t.1)
       let t.3: unit = extern Prelude.println(t.2)
       return t.3
     }
@@ -1621,7 +1600,7 @@ fn a_handler_with_a_state_passes_its_initial_value_and_takes_the_state_from_its_
 
 #[test]
 fn effects_are_numbered_in_declaration_order() {
-    let text = "effect A where\n  a : Unit -> Int\neffect B where\n  b : Unit -> Int\nmain : Unit -> <IO> Unit\nmain () =\n  let x = handle a () with\n    | a () k -> k 1\n  let y = handle b () with\n    | b () k -> k 2\n  println (show_int (x + y))";
+    let text = "effect A where\n  a : Unit -> Int\neffect B where\n  b : Unit -> Int\nmain : Unit -> <IO> Unit\nmain () =\n  let x = handle a () with\n    | a () k -> k 1\n  let y = handle b () with\n    | b () k -> k 2\n  println (show (x + y))";
     insta::assert_snapshot!(core_text(text, Pass::Translate), @"
     effect A { a/1 }
     effect B { b/1 }
@@ -1629,7 +1608,7 @@ fn effects_are_numbered_in_declaration_order() {
       let t.1: int = handle A((), &main$handle0) { a: &main$handle0$a } return &main$handle0$return
       let t.2: int = handle B((), &main$handle1) { b: &main$handle1$b } return &main$handle1$return
       let t.3: int = extern Prelude.+(t.1, t.2)
-      let t.4: obj = extern Prelude.show_int(t.3)
+      let t.4: obj = extern \"Prelude.Show Int.show\"(t.3)
       let t.5: unit = extern Prelude.println(t.4)
       return t.5
     }
@@ -1693,7 +1672,7 @@ fn the_prelude_bool_tags_match_the_core_ir_constants() {
 fn an_arm_reached_by_one_leaf_sits_at_the_leaf() {
     // 1つの葉からだけ届く枝の本体は、その葉のブロックで変換し、複数の葉から届く枝だけを木の後のブロックにする
     // (docs/spec/core-ir.md)。`pick` の `(n, _)` は、`0` の case の `default` と、外側の `default` の2つの葉から届く
-    let text = "data Shape = | Dot | Box Int Int\n\narea : Shape -> Int\narea s =\n  match s with\n    | Box w h -> w * h\n    | Dot -> 0\n\npick : Int -> Int -> Int\npick a b =\n  match (a, b) with\n    | (0, 1) -> 0\n    | (n, _) -> n * 2\n\nmain : Unit -> <IO> Unit\nmain () = println (show_int (area (Box 2 3) + pick 0 1))";
+    let text = "data Shape = | Dot | Box Int Int\n\narea : Shape -> Int\narea s =\n  match s with\n    | Box w h -> w * h\n    | Dot -> 0\n\npick : Int -> Int -> Int\npick a b =\n  match (a, b) with\n    | (0, 1) -> 0\n    | (n, _) -> n * 2\n\nmain : Unit -> <IO> Unit\nmain () = println (show (area (Box 2 3) + pick 0 1))";
     insta::assert_snapshot!(core_text(text, Pass::Translate), @"
     layout Shape { Dot, Box(int, int) }
     fn area(s.0: tobj) -> int {
@@ -1723,7 +1702,7 @@ fn an_arm_reached_by_one_leaf_sits_at_the_leaf() {
       let t.2: int = call area(d.1)
       let t.3: int = call pick(0, 1)
       let t.4: int = extern Prelude.+(t.2, t.3)
-      let t.5: obj = extern Prelude.show_int(t.4)
+      let t.5: obj = extern \"Prelude.Show Int.show\"(t.4)
       let t.6: unit = extern Prelude.println(t.5)
       return t.6
     }
@@ -1738,7 +1717,7 @@ fn an_arm_reached_by_one_leaf_sits_at_the_leaf() {
 fn effects_of_the_same_name_in_two_modules_stay_apart() {
     // エフェクトの表は名前で引くので、入口の `Log` と `Audit.Log` は別の名前になる (docs/spec/core-ir.md)
     let audit = "pub effect Log where\n  emit : Int -> Unit\n\npub audited : Unit -> <Log> Unit\naudited () = emit 1";
-    let main = "import Audit\n\neffect Log where\n  emit : Int -> Unit\n\nlocal : Unit -> <Log> Unit\nlocal () = emit 2\n\nmain : Unit -> <IO> Unit\nmain () =\n  handle Audit.audited () with\n    | Audit.emit n k -> k (println (show_int n))\n  handle local () with\n    | emit n k -> k (println (show_int n))";
+    let main = "import Audit\n\neffect Log where\n  emit : Int -> Unit\n\nlocal : Unit -> <Log> Unit\nlocal () = emit 2\n\nmain : Unit -> <IO> Unit\nmain () =\n  handle Audit.audited () with\n    | Audit.emit n k -> k (println (show n))\n  handle local () with\n    | emit n k -> k (println (show n))";
     let shown = core_text_files(main, &[("Audit.em", audit)], Pass::Translate);
     for expected in [
         "effect Log { emit/1 }",
@@ -1759,14 +1738,14 @@ fn each_comparison_picks_the_instruction_of_its_operand_type() {
     insta::assert_snapshot!(core_text(text, Pass::Translate), @r#"
     layout (,,,,,) { (,,,,,)(tobj, tobj, tobj, tobj, tobj, tobj) }
     fn compare(n.0: int, s.1: obj, b.2: enum) -> obj {
-      let t.3: enum = extern Prelude.int_eq(n.0, 1)
-      let t.4: enum = extern Prelude.int_ne(n.0, 2)
+      let t.3: enum = extern "Prelude.Eq Int.=="(n.0, 1)
+      let t.4: enum = extern "Prelude.Eq Int.!="(n.0, 2)
       let s.5: obj = const "a"
-      let t.6: enum = extern Prelude.string_eq(s.1, s.5)
+      let t.6: enum = extern "Prelude.Eq String.=="(s.1, s.5)
       let s.7: obj = const "b"
-      let t.8: enum = extern Prelude.string_ne(s.1, s.7)
-      let t.9: enum = extern Prelude.bool_eq(b.2, #1)
-      let t.10: enum = extern Prelude.bool_ne(b.2, #0)
+      let t.8: enum = extern "Prelude.Eq String.!="(s.1, s.7)
+      let t.9: enum = extern "Prelude.Eq Bool.=="(b.2, #1)
+      let t.10: enum = extern "Prelude.Eq Bool.!="(b.2, #0)
       let d.11: obj = con (,,,,,) #0(t.3, t.4, t.6, t.8, t.9, t.10)
       return d.11
     }
@@ -1792,7 +1771,7 @@ effect State s where
 /// `body` を `State Int` の handler の中で動かす `main`。変換は入口から届く関数だけを作るので、確かめる関数をここから呼ぶ。
 fn state_main(body: &str) -> String {
     format!(
-        "main : Unit -> <IO> Unit\nmain () =\n  let n =\n    handle {body} from 0 with\n      | get () k st -> k st st\n      | put s k _ -> k () s\n      | return x _ -> x\n  println (show_int n)\n"
+        "main : Unit -> <IO> Unit\nmain () =\n  let n =\n    handle {body} from 0 with\n      | get () k st -> k st st\n      | put s k _ -> k () s\n      | return x _ -> x\n  println (show n)\n"
     )
 }
 
@@ -1847,7 +1826,7 @@ fn arrows_with_different_masks_are_applied_apart() {
 #[test]
 fn a_continuation_call_in_its_clause_has_no_mask() {
     let text = format!(
-        "{STATE}run : (Unit -> <State Int | e> a) -> <e> a\nrun action =\n  handle action () from 0 with\n    | get () k st -> k st st\n    | put n k _ -> k () n\n    | return x _ -> x\n\nmain : Unit -> <IO> Unit\nmain () = println (show_int (run (fn () -> get ())))\n"
+        "{STATE}run : (Unit -> <State Int | e> a) -> <e> a\nrun action =\n  handle action () from 0 with\n    | get () k st -> k st st\n    | put n k _ -> k () n\n    | return x _ -> x\n\nmain : Unit -> <IO> Unit\nmain () = println (show (run (fn () -> get ())))\n"
     );
     insta::assert_snapshot!(function(&core_text(&text, Pass::Translate), "run@[Int]$handle0$get"), @r#"
     internal fn "run@[Int]$handle0$get"(p.0: unit, k.1: tobj, st.2: int) -> int {
@@ -1888,7 +1867,7 @@ main () =
             | log m k ->
                 println (\"outer \" ++ m)
                 k ()
-  println (show_int r)
+  println (show r)
 ";
     // handle の番号は HIR の式の ID の順なので、内側の handle が `f$handle0` になる
     insta::assert_snapshot!(function(&core_text(text, Pass::Translate), "f$handle0"), @"
@@ -1922,7 +1901,7 @@ const ASK: &str = "effect Ask where\n  ask : Unit -> Int\n\n";
 fn handled(extra: &str, handle: &str) -> String {
     core_text(
         &format!(
-            "{ASK}{extra}main : Unit -> <IO> Unit\nmain () =\n  let n =\n{handle}\n  println (show_int n)"
+            "{ASK}{extra}main : Unit -> <IO> Unit\nmain () =\n  let n =\n{handle}\n  println (show n)"
         ),
         Pass::Translate,
     )
@@ -2005,7 +1984,7 @@ main () =
             | log m k ->
                 println (\"outer \" ++ m)
                 k ()
-  println (show_int r)
+  println (show r)
 ";
     let shown = core_text(text, Pass::Translate);
     assert!(shown.contains("mask [Log] resume k"), "{shown}");
@@ -2042,7 +2021,7 @@ fn a_dropped_continuation_is_not_wrapped() {
 #[test]
 fn a_continuation_applied_to_extra_arguments_is_resumed_then_applied() {
     let text = format!(
-        "{ASK}main : Unit -> <IO> Unit\nmain () =\n  let h = handle ask () with\n    | ask () k ->\n        let r = k 1 2\n        fn y -> r + y\n    | return x -> fn y -> x + y\n  println (show_int (h 5))"
+        "{ASK}main : Unit -> <IO> Unit\nmain () =\n  let h = handle ask () with\n    | ask () k ->\n        let r = k 1 2\n        fn y -> r + y\n    | return x -> fn y -> x + y\n  println (show (h 5))"
     );
     let shown = core_text(&text, Pass::Translate);
     assert!(
@@ -2084,7 +2063,7 @@ main () =
             | log m k ->
                 println (\"outer \" ++ m)
                 k ()
-  println (show_int r)
+  println (show r)
 ";
     let shown = core_text(text, Pass::Translate);
     assert!(shown.contains("mask [Log] apply"), "{shown}");
@@ -2093,15 +2072,15 @@ main () =
 #[test]
 fn externs_are_called_by_their_canonical_name() {
     // `==` と `!=` は、型検査が記録した型引数から比べ方の行を選ぶ。`(==)` は HIR がラムダに脱糖するので、包む関数を作らない
-    let text = "apply : (a -> <e> b) -> a -> <e> b\napply f x = f x\n\neq : Int -> Int -> Bool\neq = (==)\n\nmain : Unit -> <IO> Unit\nmain () =\n  let _ = (1 + 2, \"a\" == \"b\", True != False, eq 1 2)\n  println (apply show_int 3)";
+    let text = "apply : (a -> <e> b) -> a -> <e> b\napply f x = f x\n\neq : Int -> Int -> Bool\neq = (==)\n\nmain : Unit -> <IO> Unit\nmain () =\n  let _ = (1 + 2, \"a\" == \"b\", True != False, eq 1 2)\n  println (apply show 3)";
     let shown = core_text(text, Pass::Translate);
     for expected in [
         "extern Prelude.+(1, 2)",
-        "extern Prelude.string_eq(",
-        "extern Prelude.bool_ne(#1, #0)",
-        "extern Prelude.int_eq(",
+        "extern \"Prelude.Eq String.==\"(",
+        "extern \"Prelude.Eq Bool.!=\"(#1, #0)",
+        "extern \"Prelude.Eq Int.==\"(",
         "call \"apply@[Int, String]\"(&main$extern0, 3)",
-        "fn main$extern0(p.0: int) -> obj {\n  let t.1: obj = extern Prelude.show_int(p.0)\n  return t.1\n}",
+        "fn main$extern0(p.0: int) -> obj {\n  let t.1: obj = extern \"Prelude.Show Int.show\"(p.0)\n  return t.1\n}",
     ] {
         assert!(shown.contains(expected), "{expected}\n{shown}");
     }
@@ -2136,7 +2115,7 @@ fn a_condition_true_on_every_path_meets_at_one_block() {
 fn a_match_on_a_constructed_value_takes_its_arm() {
     // scrutinee がコンストラクタの適用なので、値を作らずに枝を選び、フィールドを直接使う
     let text = format!(
-        "{OPTION}unwrap : Int -> Int\nunwrap x = match Some x with\n  | Some y -> y\n  | None -> 0\n\nmain : Unit -> <IO> Unit\nmain () = println (show_int (unwrap 1))"
+        "{OPTION}unwrap : Int -> Int\nunwrap x = match Some x with\n  | Some y -> y\n  | None -> 0\n\nmain : Unit -> <IO> Unit\nmain () = println (show (unwrap 1))"
     );
     insta::assert_snapshot!(function(&core_text(&text, Pass::Translate), "unwrap"), @"
     fn unwrap(x.0: int) -> int {
@@ -2149,7 +2128,7 @@ fn a_match_on_a_constructed_value_takes_its_arm() {
 fn a_wildcard_arm_does_not_block_the_known_tags() {
     // 決定木は行列に現れないコンストラクタを `default` にまとめる。ワイルドカードの枝があっても、分かっているタグは
     // その場で枝を選び、`if` の結果で分岐し直さない
-    let text = "data Color = | Red | Green | Blue\n\npick : Bool -> Int\npick b =\n  let n = match (if b then Red else Green) with\n    | Red -> 1\n    | _ -> 2\n  n + 1\n\nmain : Unit -> <IO> Unit\nmain () = println (show_int (pick True))";
+    let text = "data Color = | Red | Green | Blue\n\npick : Bool -> Int\npick b =\n  let n = match (if b then Red else Green) with\n    | Red -> 1\n    | _ -> 2\n  n + 1\n\nmain : Unit -> <IO> Unit\nmain () = println (show (pick True))";
     insta::assert_snapshot!(function(&core_text(text, Pass::Translate), "pick"), @"
     fn pick(b.0: enum) -> int {
       switch b.0 Prelude.Bool { #0 -> b1, #1 -> b2 }
@@ -2168,7 +2147,7 @@ fn a_wildcard_arm_does_not_block_the_known_tags() {
 fn known_values_take_their_arms_through_a_literal_column() {
     // `Yes 0` はフィールドのリテラルまで分かるので、`switch` を出さずに `Yes 0` の枝を選ぶ。`_` の枝には `No` と、
     // 中身が 0 でない `Yes` の2つの葉が向かうが、分かっている値はその場で選ぶ
-    let text = "data Opt = | No | Yes Int\n\npick : Bool -> Int\npick b =\n  match (if b then Yes 0 else No) with\n    | Yes 0 -> 1\n    | _ -> 2\n\nmain : Unit -> <IO> Unit\nmain () = println (show_int (pick True))";
+    let text = "data Opt = | No | Yes Int\n\npick : Bool -> Int\npick b =\n  match (if b then Yes 0 else No) with\n    | Yes 0 -> 1\n    | _ -> 2\n\nmain : Unit -> <IO> Unit\nmain () = println (show (pick True))";
     insta::assert_snapshot!(function(&core_text(text, Pass::Translate), "pick"), @"
     fn pick(b.0: enum) -> int {
       switch b.0 Prelude.Bool { #0 -> b1, #1 -> b2 }
@@ -2185,7 +2164,7 @@ fn a_known_and_an_unknown_value_share_an_arm() {
     // 分かっている `Some 1` はフィールドを引数に `Some v` の枝へ直接向かう。分からない呼び出しの結果は `switch` の
     // case から同じ枝へ向かうので、枝は2本が入るブロックになる
     let text = format!(
-        "{OPTION}lookup : Int -> Option Int\nlookup n = Some n\n\npick : Bool -> Int\npick c =\n  let n = match (if c then Some 1 else lookup 2) with\n    | Some v -> v\n    | None -> 0\n  n + 1\n\nmain : Unit -> <IO> Unit\nmain () = println (show_int (pick True))"
+        "{OPTION}lookup : Int -> Option Int\nlookup n = Some n\n\npick : Bool -> Int\npick c =\n  let n = match (if c then Some 1 else lookup 2) with\n    | Some v -> v\n    | None -> 0\n  n + 1\n\nmain : Unit -> <IO> Unit\nmain () = println (show (pick True))"
     );
     insta::assert_snapshot!(function(&core_text(&text, Pass::Translate), "pick"), @"
     fn pick(c.0: enum) -> int {
@@ -2212,7 +2191,7 @@ fn a_known_and_an_unknown_value_share_an_arm() {
 fn a_known_tag_reaching_a_default_that_uses_the_scrutinee_passes_the_value() {
     // `Green` は `default` の枝 `x` に進み、その枝は値全体を使うので、タグの定数 `#1` をそのまま渡す。`Red` は枝の
     // 値を続きへ渡し、`if` の結果で分岐し直さない
-    let text = "data Color = | Red | Green | Blue\n\ncode : Color -> Int\ncode c = 7\n\npick : Bool -> Int\npick b =\n  let n = match (if b then Red else Green) with\n    | Red -> 1\n    | x -> code x\n  n + 1\n\nmain : Unit -> <IO> Unit\nmain () = println (show_int (pick True))";
+    let text = "data Color = | Red | Green | Blue\n\ncode : Color -> Int\ncode c = 7\n\npick : Bool -> Int\npick b =\n  let n = match (if b then Red else Green) with\n    | Red -> 1\n    | x -> code x\n  n + 1\n\nmain : Unit -> <IO> Unit\nmain () = println (show (pick True))";
     insta::assert_snapshot!(function(&core_text(text, Pass::Translate), "pick"), @"
     fn pick(b.0: enum) -> int {
       switch b.0 Prelude.Bool { #0 -> b1, #1 -> b2 }
@@ -2231,10 +2210,10 @@ fn a_known_tag_reaching_a_default_that_uses_the_scrutinee_passes_the_value() {
 #[test]
 fn a_known_tag_without_a_case_takes_the_default() {
     // `c` は `let` で束縛したタグなので、`switch` を出さずに `default` の枝を選ぶ
-    let text = "data Color = | Red | Green | Blue\n\nmain : Unit -> <IO> Unit\nmain () =\n  let c = Green\n  let n = match c with\n    | Red -> 1\n    | _ -> 2\n  println (show_int n)";
+    let text = "data Color = | Red | Green | Blue\n\nmain : Unit -> <IO> Unit\nmain () =\n  let c = Green\n  let n = match c with\n    | Red -> 1\n    | _ -> 2\n  println (show n)";
     insta::assert_snapshot!(function(&core_text(text, Pass::Translate), "main"), @"
     fn main(p.0: unit) -> unit {
-      let t.1: obj = extern Prelude.show_int(2)
+      let t.1: obj = extern \"Prelude.Show Int.show\"(2)
       let t.2: unit = extern Prelude.println(t.1)
       return t.2
     }
@@ -2244,7 +2223,7 @@ fn a_known_tag_without_a_case_takes_the_default() {
 #[test]
 fn known_tags_that_take_the_default_jump_straight_to_it() {
     // `Green` と `Blue` はどちらも `default` に進むので、`if` の結果で分岐し直さずに `_` の枝へ直接向かう
-    let text = "data Color = | Red | Green | Blue\n\npick : Bool -> Int\npick b =\n  match (if b then Green else Blue) with\n    | Red -> 1\n    | _ -> 2\n\nmain : Unit -> <IO> Unit\nmain () = println (show_int (pick True))";
+    let text = "data Color = | Red | Green | Blue\n\npick : Bool -> Int\npick b =\n  match (if b then Green else Blue) with\n    | Red -> 1\n    | _ -> 2\n\nmain : Unit -> <IO> Unit\nmain () = println (show (pick True))";
     insta::assert_snapshot!(function(&core_text(text, Pass::Translate), "pick"), @"
     fn pick(b.0: enum) -> int {
       switch b.0 Prelude.Bool { #0 -> b1, #1 -> b2 }
@@ -2271,7 +2250,7 @@ fn layouts(shown: &str) -> String {
 fn layouts_hold_the_declared_field_reprs_in_order_of_first_use() {
     // `Pair a Int` のフィールドは宣言の型で決まる。`Option` は2つの具体化で1つの配置を使う。使わない `Unused` は
     // 配置を持たない。タプルは要素の数ごとに1つの配置で、フィールドはどれも `tobj` である
-    let text = "data Pair a =\n  | Pair a Int\n\ndata Unused =\n  | Unused Int\n\ndata Option a =\n  | None\n  | Some a\n\nfirst : Pair a -> a\nfirst (Pair x _) = x\n\npick : Option Int -> Option String -> Int\npick a b = match (a, b) with\n  | (Some n, _) -> n\n  | (None, Some _) -> 1\n  | (None, None) -> 0\n\nmain : Unit -> <IO> Unit\nmain () =\n  let t = ((1, 2), 3, 4)\n  drop t\n  println (show_int (first (Pair (pick (Some 1) None) 2)))";
+    let text = "data Pair a =\n  | Pair a Int\n\ndata Unused =\n  | Unused Int\n\ndata Option a =\n  | None\n  | Some a\n\nfirst : Pair a -> a\nfirst (Pair x _) = x\n\npick : Option Int -> Option String -> Int\npick a b = match (a, b) with\n  | (Some n, _) -> n\n  | (None, Some _) -> 1\n  | (None, None) -> 0\n\nmain : Unit -> <IO> Unit\nmain () =\n  let t = ((1, 2), 3, 4)\n  drop t\n  println (show (first (Pair (pick (Some 1) None) 2)))";
     insta::assert_snapshot!(layouts(&core_text(text, Pass::Translate)), @"
     layout Pair { Pair(tobj, int) }
     layout Option { None, Some(tobj) }
@@ -2283,13 +2262,13 @@ fn layouts_hold_the_declared_field_reprs_in_order_of_first_use() {
 #[test]
 fn a_tuple_taken_apart_without_being_built_adds_no_layout() {
     // `match (a, b)` のタプルは決定木が分解するだけで作らないので、タプルの配置は表に入らない
-    let text = "pick : Int -> Int -> Int\npick a b = match (a, b) with\n  | (0, _) -> 1\n  | (_, 0) -> 2\n  | _ -> 3\n\nmain : Unit -> <IO> Unit\nmain () = println (show_int (pick 1 2))";
+    let text = "pick : Int -> Int -> Int\npick a b = match (a, b) with\n  | (0, _) -> 1\n  | (_, 0) -> 2\n  | _ -> 3\n\nmain : Unit -> <IO> Unit\nmain () = println (show (pick 1 2))";
     insta::assert_snapshot!(layouts(&core_text(text, Pass::Translate)), @"");
 }
 
 #[test]
 fn an_if_names_the_bool_of_the_prelude() {
-    let text = "f : Bool -> Int\nf b = if b then 1 else 0\n\nmain : Unit -> <IO> Unit\nmain () = println (show_int (f True))";
+    let text = "f : Bool -> Int\nf b = if b then 1 else 0\n\nmain : Unit -> <IO> Unit\nmain () = println (show (f True))";
     insta::assert_snapshot!(layouts(&core_text(text, Pass::Translate)), @"layout Prelude.Bool { False, True }");
 }
 
@@ -2298,7 +2277,7 @@ fn a_type_named_like_a_type_of_another_module_gets_its_own_layout() {
     // 配置は型の定義ごとに1つで、名前はモジュールで修飾するので、短い名前が同じ2つの型は別の配置になる
     // (docs/spec/core-ir.md の「データの配置」)
     let csv = "pub data Row = | Row Int\n\npub row : Int -> Row\nrow n = Row n";
-    let main = "import Report.Csv\n\ndata Row =\n  | Row String\n\nrow : String -> Row\nrow s = Row s\n\nmain : Unit -> <IO> Unit\nmain () =\n  let Row s = row \"a\"\n  let Csv.Row n = Csv.row 1\n  println s\n  println (show_int n)";
+    let main = "import Report.Csv\n\ndata Row =\n  | Row String\n\nrow : String -> Row\nrow s = Row s\n\nmain : Unit -> <IO> Unit\nmain () =\n  let Row s = row \"a\"\n  let Csv.Row n = Csv.row 1\n  println s\n  println (show n)";
     insta::assert_snapshot!(layouts(&core_text_files(main, &[("Report/Csv.em", csv)], Pass::Translate)), @"
     layout Row { Row(obj) }
     layout Report.Csv.Row { Row(int) }
@@ -2324,7 +2303,7 @@ fn instances_of_one_function_get_their_own_reprs() {
 
 #[test]
 fn lifted_functions_are_named_after_their_instance() {
-    let text = "effect Ask where\n  ask : Unit -> Int\n\ntwice : a -> (a -> a) -> a\ntwice x f =\n  let g = fn y -> f (f y)\n  handle g x with\n    | ask () k -> k 1\n\nmain : Unit -> <IO> Unit\nmain () = println (show_int (twice 1 (fn n -> n + 1)))";
+    let text = "effect Ask where\n  ask : Unit -> Int\n\ntwice : a -> (a -> a) -> a\ntwice x f =\n  let g = fn y -> f (f y)\n  handle g x with\n    | ask () k -> k 1\n\nmain : Unit -> <IO> Unit\nmain () = println (show (twice 1 (fn n -> n + 1)))";
     let shown = core_text(text, Pass::Translate);
     for name in ["twice@[Int]$lambda0", "twice@[Int]$handle0"] {
         assert!(
@@ -2336,7 +2315,7 @@ fn lifted_functions_are_named_after_their_instance() {
 
 #[test]
 fn a_boxed_wrapper_is_named_after_its_instance() {
-    let text = "inc : a -> Int -> Int\ninc _ n = n + 1\n\napply_to : (Int -> Int) -> Int -> Int\napply_to f x = f x\n\nmain : Unit -> <IO> Unit\nmain () = println (show_int (apply_to (inc ()) 1))";
+    let text = "inc : a -> Int -> Int\ninc _ n = n + 1\n\napply_to : (Int -> Int) -> Int -> Int\napply_to f x = f x\n\nmain : Unit -> <IO> Unit\nmain () = println (show (apply_to (inc ()) 1))";
     let shown = core_text(text, Pass::Boxing);
     assert!(
         shown.contains("\"inc@[Unit]$boxed\""),
@@ -2424,15 +2403,79 @@ fn a_constraint_passes_through_two_generic_functions() {
 
 #[test]
 fn an_instance_method_with_fewer_parameters_is_called_then_applied() {
-    let text = "class Combine a where\n  combine : a -> a -> Int\n\ninstance Combine Int where\n  combine = add\n\nadd : Int -> Int -> Int\nadd a b = a + b\n\nmain : Unit -> <IO> Unit\nmain () = println (show_int (combine 1 2))";
+    let text = "class Combine a where\n  combine : a -> a -> Int\n\ninstance Combine Int where\n  combine = add\n\nadd : Int -> Int -> Int\nadd a b = a + b\n\nmain : Unit -> <IO> Unit\nmain () = println (show (combine 1 2))";
     let shown = core_text(text, Pass::Translate);
     insta::assert_snapshot!(function(&shown, "main"), @r#"
     fn main(p.0: unit) -> unit {
       let t.1: tobj = call "Combine Int.combine"()
       let t.2: int = apply t.1(1, 2)
-      let t.3: obj = extern Prelude.show_int(t.2)
+      let t.3: obj = extern "Prelude.Show Int.show"(t.2)
       let t.4: unit = extern Prelude.println(t.3)
       return t.4
     }
     "#);
+}
+
+#[test]
+fn extern_methods_are_called_with_the_instruction_of_their_instance() {
+    // extern で結んだメソッドは、instance の行の extern 命令を直接出す
+    // (docs/superpowers/specs/2026-10-10-s5-type-classes-design.md の「メソッドへの参照の解決」)
+    let text = "same : String -> Bool -> Bool\nsame s b = \"a\" == s && b != True\n\norder : Int -> Ordering\norder n = compare n 0\n\nmain : Unit -> <IO> Unit\nmain () =\n  let _ = same \"b\" False\n  let _ = order 1\n  ()";
+    let shown = core_text(text, Pass::Translate);
+    insta::assert_snapshot!(function(&shown, "same"), @r#"
+    fn same(s.0: obj, b.1: enum) -> enum {
+      let s.2: obj = const "a"
+      let t.3: enum = extern "Prelude.Eq String.=="(s.2, s.0)
+      switch t.3 Prelude.Bool { #0 -> b1, #1 -> b2 }
+    b1:
+      return #0
+    b2:
+      let t.4: enum = extern "Prelude.Eq Bool.!="(b.1, #1)
+      return t.4
+    }
+    "#);
+    insta::assert_snapshot!(function(&shown, "order"), @r#"
+    fn order(n.0: int) -> enum {
+      let t.1: enum = extern "Prelude.Ord Int.compare"(n.0, 0)
+      return t.1
+    }
+    "#);
+}
+
+#[test]
+fn extern_methods_used_as_values_are_wrapped_per_instance() {
+    // `$externN` の番号は instance ごとに振る。`shown@[Bool]` の `show` は関数の行き先なので、包む関数を作らない
+    let text = "apply : (a -> <e> b) -> a -> <e> b\napply f x = f x\n\nshown : Show a => a -> String\nshown x = apply show x\n\nmain : Unit -> <IO> Unit\nmain () =\n  let first = compare 1\n  println (shown 1 ++ shown \"a\" ++ shown True)\n  println (show (first 2))";
+    let shown = core_text(text, Pass::Translate);
+    insta::assert_snapshot!(function(&shown, "shown@[Int]"), @r#"
+    fn "shown@[Int]"(x.0: int) -> obj {
+      let t.1: obj = call "apply@[Int, String]"(&"shown@[Int]$extern0", x.0)
+      return t.1
+    }
+    "#);
+    insta::assert_snapshot!(function(&shown, "shown@[Int]$extern0"), @r#"
+    internal fn "shown@[Int]$extern0"(p.0: int) -> obj {
+      let t.1: obj = extern "Prelude.Show Int.show"(p.0)
+      return t.1
+    }
+    "#);
+    insta::assert_snapshot!(function(&shown, "shown@[String]$extern0"), @r#"
+    internal fn "shown@[String]$extern0"(p.0: obj) -> obj {
+      let t.1: obj = extern "Prelude.Show String.show"(p.0)
+      return t.1
+    }
+    "#);
+    insta::assert_snapshot!(function(&shown, "shown@[Bool]"), @r#"
+    fn "shown@[Bool]"(x.0: enum) -> obj {
+      let t.1: obj = call "apply@[Bool, String]"(&"Prelude.Show Bool.show", x.0)
+      return t.1
+    }
+    "#);
+    insta::assert_snapshot!(function(&shown, "main$extern0"), @r#"
+    internal fn main$extern0(p.0: int, p.1: int) -> enum {
+      let t.2: enum = extern "Prelude.Ord Int.compare"(p.0, p.1)
+      return t.2
+    }
+    "#);
+    assert!(!shown.contains("shown@[Bool]$extern"), "{shown}");
 }

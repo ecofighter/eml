@@ -22,4 +22,4 @@ main : Unit -> <IO> Unit
 main () =
   let r = handle go (Cons 1 (Cons 2 (Cons 3 Nil))) with
     | choose () k -> k True + k False
-  println (show_int r)
+  println (show r)

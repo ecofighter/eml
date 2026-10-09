@@ -13,4 +13,4 @@ first xs = match xs with
   | _ -> 0
 
 main : Unit -> <IO> Unit
-main () = println (show_int (first Nil))
+main () = println (show (first Nil))

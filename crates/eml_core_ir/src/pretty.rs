@@ -218,7 +218,11 @@ impl Printer<'_> {
                 self.atoms(function, args)
             ),
             Rhs::Extern { ext, args, at } => {
-                let text = format!("extern {}({})", ext.row().name, self.atoms(function, args));
+                let text = format!(
+                    "extern {}({})",
+                    function_name(ext.row().name),
+                    self.atoms(function, args)
+                );
                 match at {
                     Some(at) if self.positions => format!(
                         "{text} @{:?}:{}:{}",
@@ -386,8 +390,9 @@ fn operation(info: &EffectInfo, op: u32) -> String {
         .map_or_else(|| format!("#{op}"), |info| info.name.clone())
 }
 
-/// 関数の名前。単相化の instance の名前 (`id@[Int, String]`) は、テキストの形の字句の区切りを含むので、文字列と同じ
-/// 逃がし方で引用符で囲む (docs/implementation/testing.md の「Core IR のテキストの形」)。
+/// 関数と extern の行の名前。単相化の instance の名前 (`id@[Int, String]`) と instance の extern の行の名前
+/// (`Prelude.Eq Int.==`) は、テキストの形の字句の区切りを含むので、文字列と同じ逃がし方で引用符で囲む
+/// (docs/implementation/testing.md の「Core IR のテキストの形」)。
 fn function_name(name: &str) -> std::borrow::Cow<'_, str> {
     let separates = |c: char| c.is_whitespace() || "(){}[],\"".contains(c);
     if name.is_empty() || name.contains(separates) {

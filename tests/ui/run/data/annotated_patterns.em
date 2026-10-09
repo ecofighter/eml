@@ -13,5 +13,5 @@ main () =
   let label = match Some "done" with
     | Some (s : String) -> s
     | None -> "none"
-  println (show_int (x + 1))
+  println (show (x + 1))
   println label

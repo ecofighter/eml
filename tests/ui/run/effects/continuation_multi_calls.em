@@ -8,7 +8,7 @@ pick : Unit -> <Choice> String
 pick () =
   let prefix = "picked "
   let n = if choose () then 1 else 2
-  prefix ++ show_int n
+  prefix ++ show n
 
 both : Unit -> String
 both () =

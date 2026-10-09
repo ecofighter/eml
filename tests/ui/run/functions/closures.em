@@ -16,6 +16,6 @@ main () =
   println (shout "hey")
   println (shout "you")
   each 3 (fn n ->
-    println ("n = " ++ show_int n))
+    println ("n = " ++ show n))
   let unused = fn x -> x
-  println (show_int (count_down 100000 (fn m -> m)))
+  println (show (count_down 100000 (fn m -> m)))

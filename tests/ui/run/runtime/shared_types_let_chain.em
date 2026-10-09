@@ -46,4 +46,4 @@ main () =
   let f38 = f37 ident
   let f39 = f38 ident
   let f40 = f39 ident
-  println (show_int (f40 5))
+  println (show (f40 5))

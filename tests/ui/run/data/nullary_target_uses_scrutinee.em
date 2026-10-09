@@ -14,4 +14,4 @@ weight o = match o with
   | Some n -> n + 1
 
 main : Unit -> <IO> Unit
-main () = println (show_int (describe None + describe (Some 3)))
+main () = println (show (describe None + describe (Some 3)))

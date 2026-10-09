@@ -13,5 +13,5 @@ main () =
   if noisy "e" True && noisy "f" True then println "both: yes" else println "both: no"
   if noisy "k" True && noisy "l" False && noisy "m" True then println "three: yes" else println "three: no"
   let n = if noisy "g" False || noisy "h" True then 1 else 2
-  println (show_int n)
+  println (show n)
   println kept

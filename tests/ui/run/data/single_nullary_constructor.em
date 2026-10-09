@@ -12,4 +12,4 @@ main () =
   let t = Token
   let n = match t with
     | Token -> spend t 41
-  println (show_int n)
+  println (show n)

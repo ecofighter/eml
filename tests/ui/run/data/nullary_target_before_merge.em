@@ -16,4 +16,4 @@ f o =
   k + size o
 
 main : Unit -> <IO> Unit
-main () = println (show_int (f None + f (Some "a")))
+main () = println (show (f None + f (Some "a")))

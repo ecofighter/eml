@@ -19,8 +19,8 @@ zip_sum _ _ = 0
 main : Unit -> <IO> Unit
 main () =
   let xs = Cons 1 (Cons 2 (Cons 3 Nil))
-  println (show_int (len xs))
+  println (show (len xs))
   println (describe 0)
   println (describe 1)
   println (describe 5)
-  println (show_int (zip_sum (Cons 1 (Cons 2 Nil)) (Cons 10 (Cons 20 (Cons 30 Nil)))))
+  println (show (zip_sum (Cons 1 (Cons 2 Nil)) (Cons 10 (Cons 20 (Cons 30 Nil)))))

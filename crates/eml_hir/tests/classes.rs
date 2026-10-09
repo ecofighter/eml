@@ -18,7 +18,10 @@ fn a_class_its_methods_and_an_instance_are_lowered() {
     let lowered = lower(&text);
     assert!(lowered.diagnostics.is_empty(), "{:?}", lowered.diagnostics);
     let program = &lowered.program;
-    let (class, def) = program.classes().next().expect("one class");
+    let (class, def) = program
+        .classes()
+        .find(|(_, def)| def.name == "Same")
+        .expect("the class");
     assert_eq!((def.name.as_str(), def.var.as_str()), ("Same", "a"));
     let names: Vec<&str> = def
         .methods
@@ -29,7 +32,10 @@ fn a_class_its_methods_and_an_instance_are_lowered() {
     let differ = def.methods[1];
     let default = program[differ].default.expect("`differ` has a default");
     assert_eq!(program[default].kind, FunctionKind::DefaultMethod(differ));
-    let (instance, inst) = program.instances().next().expect("one instance");
+    let (instance, inst) = program
+        .instances()
+        .find(|(_, inst)| inst.class == class)
+        .expect("one instance");
     assert_eq!(inst.class, class);
     assert_eq!(program.instance(class, inst.head), Some(instance));
     let [(method, MethodImpl::Function(function))] = inst.methods.as_slice() else {
@@ -149,8 +155,9 @@ fn a_method_variable_named_like_a_head_variable_is_renamed() {
     let program = &lowered.program;
     let (_, function) = program
         .functions()
-        .find(|(_, f)| matches!(f.kind, FunctionKind::InstanceMethod(..)))
+        .find(|(_, f)| f.name == "Fold Box.fold")
         .unwrap();
+    assert!(matches!(function.kind, FunctionKind::InstanceMethod(..)));
     let names: Vec<&str> = function
         .signature
         .as_ref()

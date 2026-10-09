@@ -4,7 +4,7 @@ class Describe a where
   describe : a -> String
 
 instance Describe Int where
-  describe n = show_int n
+  describe n = show n
 
 data Box a = | Box a
 
@@ -18,5 +18,5 @@ instance Fold (Box b) where
 
 main : Unit -> <IO> Unit
 main () =
-  println (show_int (fold (Box "x") 41 (fn acc n -> acc + n)))
+  println (show (fold (Box "x") 41 (fn acc n -> acc + n)))
   println (tagged (Box True) 7)

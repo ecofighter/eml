@@ -409,10 +409,10 @@ fn a_qualified_extern_function_in_a_clause_cannot_be_handled() {
 #[test]
 fn a_pure_extern_function_in_a_clause_is_not_an_operation() {
     // extern のエフェクトを起こさない extern の関数は E1009 の対象ではないので、見つからない操作の E1001 のままにする
-    let text = "f : Unit -> Int\nf () = handle 1 with\n  | show_int x k -> k 1";
+    let text = "f : Unit -> Int\nf () = handle 1 with\n  | show x k -> k 1";
     assert_eq!(
         diagnostics(text),
-        ["E1001 3:5 cannot find effect operation `show_int`"]
+        ["E1001 3:5 cannot find effect operation `show`"]
     );
 }
 

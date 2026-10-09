@@ -264,6 +264,6 @@ fn a_reference_without_a_signature_is_not_recorded() {
 fn a_comparison_reported_as_not_comparable_is_still_recorded() {
     let text = "poly : a -> a -> Bool\npoly x y = x == y";
     let checked = check(text);
-    insta::assert_snapshot!(short_text(checked.files(), &checked.diagnostics), @"E2006 2:14 values of type `a` cannot be compared with `==`");
+    insta::assert_snapshot!(short_text(checked.files(), &checked.diagnostics), @"E2006 2:14 no instance of `Eq` for `a`");
     insta::assert_snapshot!(records(&checked, "Main", "poly"), @"2:14 == [a]");
 }

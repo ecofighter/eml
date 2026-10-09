@@ -2,9 +2,9 @@ use crate::common::{diagnostics, lower_files_text, lower_text, module_codes, mod
 
 #[test]
 fn a_signature_and_an_equation_become_a_function() {
-    insta::assert_snapshot!(lower_text("f : Int -> <IO> Unit\nf x = println (show_int x)"), @"
+    insta::assert_snapshot!(lower_text("f : Int -> <IO> Unit\nf x = println (show x)"), @"
     f : Int -> <IO> Unit
-    f x#0 = (println (show_int x#0))
+    f x#0 = (println (@Prelude.show x#0))
     ");
 }
 
@@ -379,7 +379,7 @@ fn a_user_defined_cons_constructor_is_matched() {
 #[test]
 fn modules_other_than_the_prelude_are_printed_in_order() {
     let entry = "import Report.Csv\n\nf : Bool -> Bool\nf b = not b";
-    let csv = "import Report.Format\n\npub data Row =\n  | Row Int\n\npub effect Parse where\n  next : Unit -> Int\n\npub parse : Unit -> <Parse> Row\nparse () = Row (next ())\n\npub first : Row -> String\nfirst r = match r with\n  | Row n -> show_int n\n\npub run : Unit -> Row\nrun () = handle parse () with\n  | next () k -> k 1";
+    let csv = "import Report.Format\n\npub data Row =\n  | Row Int\n\npub effect Parse where\n  next : Unit -> Int\n\npub parse : Unit -> <Parse> Row\nparse () = Row (next ())\n\npub first : Row -> String\nfirst r = match r with\n  | Row n -> show n\n\npub run : Unit -> Row\nrun () = handle parse () with\n  | next () k -> k 1";
     let format = "pub width : Int\nwidth = 8";
     insta::assert_snapshot!(
         lower_files_text(entry, &[("Report/Csv.em", csv), ("Report/Format.em", format)]),
@@ -395,7 +395,7 @@ fn modules_other_than_the_prelude_are_printed_in_order() {
     parse : Unit -> <Parse> Row
     parse () = (Report.Csv.Row (@Report.Csv.Parse.next ()))
     first : Row -> String
-    first r#0 = (match r#0 with | Report.Csv.Row n#1 -> (show_int n#1))
+    first r#0 = (match r#0 with | Report.Csv.Row n#1 -> (@Prelude.show n#1))
     run : Unit -> Row
     run () = (handle (@Report.Csv.parse ()) with | Report.Csv.next () k#0 -> (k#0 1) | return $r#1 -> $r#1)
     -- Report.Format
@@ -463,10 +463,10 @@ fn an_ambiguous_name_is_reported_where_it_is_used() {
 
 #[test]
 fn a_name_from_a_broken_import_is_a_silent_error() {
-    // `import Missing (show_int)` は Prelude の `show_int` を隠し、使った位置は診断を出さずに誤りの式になる
+    // `import Missing (show)` は Prelude の `show` を隠し、使った位置は診断を出さずに誤りの式になる
     assert_eq!(
         module_codes(
-            "import Missing (show_int)\n\nf : Int -> String\nf n = show_int n",
+            "import Missing (show)\n\nf : Int -> String\nf n = show n",
             &[]
         ),
         ["E1026 test.em 1:8"]

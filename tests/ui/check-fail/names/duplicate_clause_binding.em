@@ -9,4 +9,4 @@ main : Unit -> <IO> Unit
 main () =
   let r = handle run () with
     | ask n n -> n 1
-  println (show_int r)
+  println (show r)

@@ -3,4 +3,4 @@ add : Int -> Int -> Int
 add x x = x
 
 main : Unit -> <IO> Unit
-main () = println (show_int (add 1 2))
+main () = println (show (add 1 2))

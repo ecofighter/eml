@@ -11,4 +11,4 @@ main () =
   let total =
     handle loop 10000 0 with
       | choose () k -> k False + k True
-  println (show_int total)
+  println (show total)

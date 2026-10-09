@@ -3,12 +3,12 @@ source: crates/eml_cli/tests/ui.rs
 expression: rendered
 input_file: tests/ui/check-fail/types/ambiguous_equality_section.em
 ---
-[E2006] Error: values of type `_` cannot be compared with `==`
+[E2009] Error: cannot decide which instance of `Eq` `==` uses
    ╭─[ check-fail/types/ambiguous_equality_section.em:4:13 ]
    │
  4 │   let eq = (==)
    │             ─┬  
-   │              ╰── `==` cannot compare `_`
+   │              ╰── the type here is never decided
    │ 
-   │ Note: `==` and `!=` compare only values of type `Int`, `String` and `Bool`
+   │ Help: add a type annotation
 ───╯

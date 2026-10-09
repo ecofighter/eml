@@ -6,7 +6,7 @@ data Option a =
 describe : Option Int -> String
 describe o = match o with
   | None -> "none"
-  | Some n -> "some " ++ show_int n
+  | Some n -> "some " ++ show n
 
 safe_div : Int -> Int -> Option Int
 safe_div a b = if b == 0 then None else Some (a / b)

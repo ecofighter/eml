@@ -7,4 +7,4 @@ input_file: tests/ui/run-fail/basics/integer_overflow.em
 before
 --- runtime error ---
 integer overflow
-  at run-fail/basics/integer_overflow.em:5:42
+  at run-fail/basics/integer_overflow.em:5:38

@@ -1,6 +1,6 @@
 //! 演算子の参照とセクションを、ラムダに脱糖する (docs/spec/expressions.md の「セクション」)。本体の二項演算は、演算子の
 //! 列の組み直しと同じ `binary` で作るので、`&&` の短絡、中置のコンストラクタ、ユーザーの演算子がそのまま効く。`==` の
-//! 比べ方は、ラムダの本体の呼び出しについて型検査が決める。
+//! instance は、ラムダの本体の参照について型検査が解く。
 
 use eml_diagnostics::{Diagnostic, Label, TextRange};
 use eml_syntax::SyntaxToken;

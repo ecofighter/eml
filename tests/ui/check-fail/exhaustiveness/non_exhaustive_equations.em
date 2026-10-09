@@ -8,4 +8,4 @@ first (Some x) _ = x
 first None (Some y) = y
 
 main : Unit -> <IO> Unit
-main () = println (show_int (first None (Some 1)))
+main () = println (show (first None (Some 1)))

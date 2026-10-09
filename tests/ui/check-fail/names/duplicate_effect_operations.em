@@ -9,4 +9,4 @@ main : Unit -> <IO> Unit
 main () =
   let n = handle tell () with
     | tell () k -> k 2
-  println (show_int n)
+  println (show n)

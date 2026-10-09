@@ -8,6 +8,6 @@ both f = f True ++ "," ++ f False
 main : Unit -> <IO> Unit
 main () =
   let r =
-    handle show_int (if choose () then 10 else 20) with
+    handle show (if choose () then 10 else 20) with
       | choose () k -> both k
   println r

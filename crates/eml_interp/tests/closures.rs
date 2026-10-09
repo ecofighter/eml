@@ -30,7 +30,7 @@ fn main() -> unit {{
   let q.3: tobj = apply d.1(b.2)
   let r.4: int = unbox q.3
   decref q.3
-  let s.5: obj = extern Prelude.show_int(r.4)
+  let s.5: obj = extern \"Prelude.Show Int.show\"(r.4)
   let t.6: unit = extern Prelude.println(s.5)
   return t.6
 }}
@@ -50,7 +50,7 @@ fn main() -> unit {
   let q.4: tobj = apply r.2(c.3)
   let s.5: int = unbox q.4
   decref q.4
-  let t.6: obj = extern Prelude.show_int(s.5)
+  let t.6: obj = extern \"Prelude.Show Int.show\"(s.5)
   let u.7: unit = extern Prelude.println(t.6)
   return u.7
 }
@@ -77,7 +77,7 @@ fn main() -> unit {{
   let q.2: tobj = apply &make(a.0, b.1)
   let r.3: int = unbox q.2
   decref q.2
-  let s.4: obj = extern Prelude.show_int(r.3)
+  let s.4: obj = extern \"Prelude.Show Int.show\"(r.3)
   let t.5: unit = extern Prelude.println(s.4)
   return t.5
 }}
@@ -124,14 +124,14 @@ fn each(f.0: tobj, m.1: tobj) -> unit {{
   let q.5: tobj = apply d.3(b.4) save [m.1]
   let r.6: int = unbox q.5
   decref q.5
-  let s.7: obj = extern Prelude.show_int(r.6)
+  let s.7: obj = extern \"Prelude.Show Int.show\"(r.6)
   let t.8: unit = extern Prelude.println(s.7)
   let c.9: tobj = box 5
   let e.10: tobj = box 6
   let p.11: tobj = apply m.1(c.9, e.10)
   let r.12: int = unbox p.11
   decref p.11
-  let s.13: obj = extern Prelude.show_int(r.12)
+  let s.13: obj = extern \"Prelude.Show Int.show\"(r.12)
   let t.14: unit = extern Prelude.println(s.13)
   return t.14
 }}
@@ -171,7 +171,7 @@ fn main() -> unit {
   let r.0: tobj = handle Choose((), &outer_body) { choose: &choose } return &outer_ret
   let t.1: int = unbox r.0
   decref r.0
-  let s.2: obj = extern Prelude.show_int(t.1)
+  let s.2: obj = extern \"Prelude.Show Int.show\"(t.1)
   let u.3: unit = extern Prelude.println(s.2)
   return u.3
 }

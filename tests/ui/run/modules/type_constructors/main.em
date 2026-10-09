@@ -8,5 +8,5 @@ area s = match s with
 
 main : Unit -> <IO> Unit
 main () =
-  println (show_int (area (Square 4)))
-  println (show_int (area (Rect 2 3)))
+  println (show (area (Square 4)))
+  println (show (area (Rect 2 3)))

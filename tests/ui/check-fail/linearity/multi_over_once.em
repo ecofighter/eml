@@ -18,4 +18,4 @@ main () =
   let total =
     handle inner () with
       | choose () c -> c True + c False
-  println (show_int total)
+  println (show total)

@@ -17,11 +17,11 @@ id x = x
 
 main : Unit -> <IO> Unit
 main () =
-  println (show_int (apply inc 1))
-  println (show_int (twice inc 5))
+  println (show (apply inc 1))
+  println (show (twice inc 5))
   apply println "through a row variable"
-  println (show_int ((inc >> inc << inc) 0))
-  println (show_int ((inc >> double) 1))
-  println (show_int ((inc << double) 1))
-  println (show_int (id 3))
+  println (show ((inc >> inc << inc) 0))
+  println (show ((inc >> double) 1))
+  println (show ((inc << double) 1))
+  println (show (id 3))
   println (id "s")

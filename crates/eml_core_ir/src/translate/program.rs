@@ -4,8 +4,8 @@ use std::collections::HashMap;
 
 use eml_extern::Extern;
 use eml_hir::{
-    ConstructorId, EffectDef, EffectId, EffectKind, FunctionId, FunctionKind, ModuleId,
-    OpMultiplicity, OperationId, Program as HirProgram, TypeDefId, TypeDefKind, ValueItem,
+    ConstructorId, EffectDef, EffectId, EffectKind, FunctionId, ModuleId, OpMultiplicity,
+    OperationId, Program as HirProgram, TypeDefId, TypeDefKind, ValueItem,
 };
 use eml_types::{TypeId, TypeStore, TypedProgram};
 
@@ -45,8 +45,6 @@ enum LayoutKey {
 
 /// 変換の途中で、ラムダと包む関数などを足していく関数の表。番号を先に取り、中身は変換が終わってから入れる。
 pub(super) struct ProgramBuilder {
-    /// extern の関数のスキームの型。extern の関数を包む関数の変数の Repr を決める。
-    extern_types: HashMap<FunctionId, TypeId>,
     pub(super) functions: Vec<Option<CoreFn>>,
     arities: Vec<usize>,
     pub(super) strings: Interner,
@@ -68,13 +66,8 @@ pub(super) struct ProgramBuilder {
 }
 
 impl ProgramBuilder {
-    pub(super) fn new(hir: &HirProgram, typed: &TypedProgram) -> ProgramBuilder {
+    pub(super) fn new(typed: &TypedProgram) -> ProgramBuilder {
         ProgramBuilder {
-            extern_types: hir
-                .functions()
-                .filter(|(_, function)| matches!(function.kind, FunctionKind::Extern(_)))
-                .filter_map(|(id, _)| Some((id, typed.decls.get(&ValueItem::Function(id))?.ty)))
-                .collect(),
             functions: Vec::new(),
             arities: Vec::new(),
             strings: Interner::default(),
@@ -335,28 +328,18 @@ impl ProgramBuilder {
             .expect("every constructor has a scheme")
     }
 
-    /// extern の関数を値や部分適用で使う場所ごとに、それを呼ぶだけの関数を作る。名前は `<外側>$externN` で、extern
-    /// の呼び出しにその場所の位置を持たせる。実行時エラーが、包む関数ではなく参照した場所を指すようにするためである
-    /// (docs/spec/core-ir.md)。
+    /// extern の関数か、extern で結んだメソッドを値や部分適用で使う場所ごとに、それを呼ぶだけの関数を作る。名前は
+    /// `<外側>$externN` で、extern の呼び出しにその場所の位置を持たせる。実行時エラーが、包む関数ではなく参照した場所を
+    /// 指すようにするためである (docs/spec/core-ir.md)。`ty` は参照の式の型で、包む関数の変数の Repr を決める。
     pub(super) fn extern_wrapper(
         &mut self,
         hir: &HirProgram,
         types: &TypeStore,
-        extern_fn: FunctionId,
+        ty: TypeId,
         row: Extern,
         name: String,
         at: Loc,
     ) -> FnIdx {
-        // `==` と `!=` は演算子の構文からしか書けず、2つの引数がそろって呼ばれる。演算子の参照 `(==)` とセクションは
-        // HIR がラムダに脱糖するので (docs/spec/expressions.md)、型で選ぶ行を包む関数は作らない
-        assert!(
-            !row.row().by_type,
-            "`==` and `!=` are always called with both operands"
-        );
-        let ty = *self
-            .extern_types
-            .get(&extern_fn)
-            .expect("every extern function has a signature");
         let (param_types, result_type) = split_arrows(types, ty, row.row().params.len());
         let params = param_types
             .iter()

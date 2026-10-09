@@ -14,5 +14,5 @@ main () =
     | (x, y) -> keep x y
   match r with
     | P (a, b) ->
-      println (show_int a)
-      println (show_int b)
+      println (show a)
+      println (show b)

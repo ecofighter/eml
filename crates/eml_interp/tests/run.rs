@@ -61,7 +61,7 @@ fn a_call_resumes_at_the_next_statement_of_its_block() {
     let text = "\
 fn main() -> unit {
   let r.0: int = call pick(1)
-  let s.1: obj = extern Prelude.show_int(r.0)
+  let s.1: obj = extern \"Prelude.Show Int.show\"(r.0)
   let t.2: unit = extern Prelude.println(s.1)
   return t.2
 }
@@ -95,9 +95,9 @@ fn main() -> unit {
 fn swap(x.0: int, y.1: int) -> unit {
   jump b1(y.1, x.0)
 b1(x.0: int, y.1: int):
-  let s.2: obj = extern Prelude.show_int(x.0)
+  let s.2: obj = extern \"Prelude.Show Int.show\"(x.0)
   let t.3: unit = extern Prelude.println(s.2)
-  let s.4: obj = extern Prelude.show_int(y.1)
+  let s.4: obj = extern \"Prelude.Show Int.show\"(y.1)
   let t.5: unit = extern Prelude.println(s.4)
   return t.5
 }
@@ -189,7 +189,7 @@ fn a_heap_fault_inside_an_extern_with_a_position_carries_it() {
     // 位置は extern の呼び出しが起こした誤りすべてに付き、ヒープの誤りも含む (docs/spec/core-ir.md の「実行時エラー」)
     let text = "\
 fn main() -> unit {
-  let s.0: obj = extern Prelude.show_int(1)
+  let s.0: obj = extern \"Prelude.Show Int.show\"(1)
   decref s.0
   let t.1: unit = extern Prelude.println(s.0) @\"main.em\":2:3
   return t.1
@@ -273,7 +273,7 @@ fn a_match_with_a_thousand_literals_runs_in_a_debug_build() {
         writeln!(text, "    | {i} -> {}", i + 1).unwrap();
     }
     text.push_str(
-        "    | _ -> 0\n\nmain : Unit -> <IO> Unit\nmain () = println (show_int (pick 999))\n",
+        "    | _ -> 0\n\nmain : Unit -> <IO> Unit\nmain () = println (show (pick 999))\n",
     );
     let (out, result) = run(&text);
     assert!(result.is_ok(), "{result:?}");
@@ -292,7 +292,7 @@ fn a_match_with_a_thousand_shared_arms_runs_in_a_debug_build() {
         writeln!(text, "  | (_, {i}) -> {i}").unwrap();
     }
     text.push_str(
-        "  | _ -> 0\n\nmain : Unit -> <IO> Unit\nmain () = println (show_int (pick B 999))\n",
+        "  | _ -> 0\n\nmain : Unit -> <IO> Unit\nmain () = println (show (pick B 999))\n",
     );
     let (out, result) = run(&text);
     assert!(result.is_ok(), "{result:?}");

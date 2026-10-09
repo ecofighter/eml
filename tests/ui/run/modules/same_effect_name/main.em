@@ -11,6 +11,6 @@ local () = emit 2
 main : Unit -> <IO> Unit
 main () =
   handle Audit.audited () with
-    | Audit.emit n k -> k (println ("audit " ++ show_int n))
+    | Audit.emit n k -> k (println ("audit " ++ show n))
   handle local () with
-    | emit n k -> k (println ("local " ++ show_int n))
+    | emit n k -> k (println ("local " ++ show n))

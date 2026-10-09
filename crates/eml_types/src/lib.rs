@@ -19,7 +19,6 @@ mod usage;
 use std::collections::HashMap;
 
 use eml_diagnostics::{Diagnostic, FileId, Label, SourceFiles, TextRange};
-use eml_extern::ExternType;
 use eml_hir::{EffectId, ExprId, Function, ItemMap, LocalId, PatId, Program, ValueItem};
 use la_arena::ArenaMap;
 
@@ -84,31 +83,6 @@ pub struct DeclType {
     /// 後の段階は Kind を読まない (docs/implementation/architecture.md の「`eml_types` の内部」) ので、外からは読めなくする。
     pub(crate) shape: Shape,
     pub(crate) kinds: KindScheme,
-}
-
-/// `==` と `!=` の比べ方。型クラスがないので、比べられる型を限る (docs/spec/declarations.md の標準の演算子の表)。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Equality {
-    Int,
-    String,
-    Bool,
-}
-
-/// `==` と `!=` の比べ方。比べられない型なら `None`。型検査の E2006 と Core IR の命令の選択が、同じ判定を使うため
-/// にここに置く。`Int` と `String` は extern の型なので索引から、`Bool` は lang item から引く。
-pub fn equality(program: &Program, types: &TypeStore, ty: TypeId) -> Option<Equality> {
-    let TypeKind::Con { id, .. } = types.kind(ty) else {
-        return None;
-    };
-    if *id == program.extern_type(ExternType::Int) {
-        Some(Equality::Int)
-    } else if *id == program.extern_type(ExternType::String) {
-        Some(Equality::String)
-    } else if *id == program.lang.bool {
-        Some(Equality::Bool)
-    } else {
-        None
-    }
 }
 
 #[derive(Debug, Default)]

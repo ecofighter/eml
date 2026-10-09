@@ -10,4 +10,4 @@ main () =
   let n =
     handle use_it () with
       | ask () k -> k (fn x -> x + 1)
-  println (show_int n)
+  println (show n)

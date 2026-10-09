@@ -24,7 +24,6 @@ use crate::{
 
 mod body;
 mod constraints;
-mod equality;
 mod handle;
 mod report;
 
@@ -323,7 +322,6 @@ pub(crate) fn check_body(
         instances: Vec::new(),
     };
     checker.check_function(own.ty);
-    checker.check_comparisons();
     checker.solve_constraints();
     let typing = checker.typing;
     let instances = checker.instances;

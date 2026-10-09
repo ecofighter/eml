@@ -10,4 +10,4 @@ add a b = a + b
 main : Unit -> <IO> Unit
 main () =
   let n = say "left" |> add (say "right")
-  println (show_int n)
+  println (show n)

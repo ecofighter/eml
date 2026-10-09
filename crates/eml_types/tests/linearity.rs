@@ -892,7 +892,7 @@ fn a_value_used_only_by_the_handled_body_is_carried_across_the_initial_state() {
 /// (docs/spec/linearity.md)。
 #[test]
 fn a_linear_state_does_not_cross_the_multi_operation_the_handler_handles() {
-    let rest = "main : Unit -> <IO> Unit\nmain () =\n  let n =\n    handle (if choose () then 1 else 2) from Fs.open \"a.txt\" with\n      | choose () k f -> k True f\n      | return x f ->\n          Fs.close f\n          x\n  println (show_int n)";
+    let rest = "main : Unit -> <IO> Unit\nmain () =\n  let n =\n    handle (if choose () then 1 else 2) from Fs.open \"a.txt\" with\n      | choose () k f -> k True f\n      | return x f ->\n          Fs.close f\n          x\n  println (show n)";
     let text = format!("effect Choose where\n  multi choose : Unit -> Bool\n\n{HEADER}{rest}");
     let checked = check(&text);
     insta::assert_snapshot!(full(checked.files(), &checked.diagnostics), @"");

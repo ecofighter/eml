@@ -93,28 +93,34 @@ fn continuation_forms(body: &Body) -> ArenaMap<LocalId, ContinuationForm> {
         .collect()
 }
 
-/// 本体の中で関数を作る式の番号。`$lambdaN`、`$handleN`、`$externN` の N である。変換の順に依らず、同じ本体なら
-/// 同じ名前になるように、本体を変換する前に式の ID の順で振る (docs/spec/core-ir.md)。
+/// 本体の中で関数を作る式の番号。`$lambdaN`、`$handleN`、`$externN` の N である。変換の順に依らず、同じ instance
+/// なら同じ名前になるように、本体を変換する前に式の ID の順で振る (docs/spec/core-ir.md)。extern で結んだメソッドの
+/// 参照は行き先が instance ごとに違うので、`$externN` の番号は同じ本体でも instance ごとに変わりうる。
 struct Numbering {
     lambdas: ArenaMap<ExprId, u32>,
     handlers: ArenaMap<ExprId, u32>,
-    /// 値として使う extern の参照 (引数をそろえて呼ぶ位置にない参照と、部分適用の呼ばれる式)。
+    /// 値として使う extern の参照 (引数をそろえて呼ぶ位置にない参照と、部分適用の呼ばれる式)。extern で結んだ
+    /// メソッドの参照を含む。
     externs: ArenaMap<ExprId, u32>,
 }
 
-fn numbering(hir: &HirProgram, body: &Body) -> Numbering {
+/// `targets` は、この instance の本体の中の参照の行き先である。
+fn numbering(hir: &HirProgram, body: &Body, targets: &ArenaMap<ExprId, Target>) -> Numbering {
+    let extern_of = |expr: ExprId| match body.exprs[expr].kind {
+        ExprKind::Path(Res::Item(ValueItem::Function(function))) => extern_row(hir, function),
+        ExprKind::Path(Res::Item(ValueItem::Method(_))) => match targets.get(expr) {
+            Some(Target::Extern(row)) => Some(*row),
+            Some(Target::Function(_)) | None => None,
+        },
+        _ => None,
+    };
     // 引数をそろえて呼ぶ extern の参照は `Rhs::Extern` になり、包む関数を作らない
     let saturated: HashSet<ExprId> = body
         .exprs
         .iter()
         .filter_map(|(_, expr)| match &expr.kind {
             ExprKind::Call { callee, args } => {
-                let ExprKind::Path(Res::Item(ValueItem::Function(function))) =
-                    body.exprs[*callee].kind
-                else {
-                    return None;
-                };
-                let row = extern_row(hir, function)?;
+                let row = extern_of(*callee)?;
                 (args.len() >= row.row().params.len()).then_some(*callee)
             }
             _ => None,
@@ -127,9 +133,7 @@ fn numbering(hir: &HirProgram, body: &Body) -> Numbering {
         match &expr.kind {
             ExprKind::Lambda(_) => lambdas.push(id),
             ExprKind::Handle { .. } => handlers.push(id),
-            ExprKind::Path(Res::Item(ValueItem::Function(function)))
-                if extern_row(hir, *function).is_some() && !saturated.contains(&id) =>
-            {
+            ExprKind::Path(Res::Item(_)) if extern_of(id).is_some() && !saturated.contains(&id) => {
                 externs.push(id)
             }
             _ => {}
@@ -150,7 +154,7 @@ pub(crate) fn translate(
     entry: FunctionId,
     files: &SourceFiles,
 ) -> Program {
-    let mut builder = ProgramBuilder::new(hir, typed);
+    let mut builder = ProgramBuilder::new(typed);
     let instances = instances::collect(hir, typed, entry);
     let store = &instances.store;
     let indices: Vec<FnIdx> = instances
@@ -174,7 +178,7 @@ pub(crate) fn translate(
             .map(|(&pat, &ty)| (Some(pat), repr(store, ty, hir)))
             .collect();
         let forms = continuation_forms(body);
-        let numbers = numbering(hir, body);
+        let numbers = numbering(hir, body, &instance.targets);
         let ctx = BodyCtx {
             hir,
             body,
@@ -292,10 +296,6 @@ impl BodyCtx<'_> {
     }
 
     /// `extern` で結んだメソッドへの参照 `expr` なら、その行。
-    #[expect(
-        dead_code,
-        reason = "S5 Task 8 で extern のメソッドの呼び出しと値に使う"
-    )]
     fn extern_target(&self, expr: ExprId) -> Option<Extern> {
         match self.targets.get(expr) {
             Some(Target::Extern(row)) => Some(*row),

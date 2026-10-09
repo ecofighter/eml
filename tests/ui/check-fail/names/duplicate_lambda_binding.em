@@ -2,4 +2,4 @@
 main : Unit -> <IO> Unit
 main () =
   let f = fn x x -> x
-  println (show_int (f 1 2))
+  println (show (f 1 2))

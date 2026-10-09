@@ -1,6 +1,7 @@
 -- 組み込みの型と、関数と演算子のシグネチャ。型は docs/spec/declarations.md の標準の演算子の表と、
 -- docs/spec/effects.md の組み込みの IO に従う。`pub` がユーザーからの見え方を決める。`extern` の宣言は、
--- `Prelude.<名前>` の正式な名前で crates/eml_extern の表の行を指し、実装は処理系が持つ。
+-- `Prelude.<名前>` の正式な名前で crates/eml_extern の表の行を指し、実装は処理系が持つ。instance の `extern` は
+-- `Prelude.<クラス> <型>.<メソッド>` の名前で行を指す。
 -- 標準の演算子の fixity (docs/spec/declarations.md の表)。
 pub infixr 0 <|
 pub infixl 1 |>
@@ -21,12 +22,17 @@ pub data Bool =
   | False
   | True
 
+-- 比較の結果。`compare` の extern の行は、この宣言の順のタグ (`LT` が 0) を返す (eml_core_ir のテストが確かめる)
+pub data Ordering =
+  | LT
+  | EQ
+  | GT
+
 -- 組み込みの `IO`。操作のないラベルで、下の extern の関数がこのエフェクトを起こす。extern の関数は handler を
 -- 通らずにその場で実行するので、ユーザーは handle できない (docs/spec/effects.md の「組み込みの `IO`」)
 pub extern effect IO
 pub extern println : String -> <IO> Unit
 
-pub extern show_int : Int -> String
 pub not : Bool -> Bool
 not True = False
 not False = True
@@ -37,20 +43,96 @@ pub extern (-) : Int -> Int -> Int
 pub extern (*) : Int -> Int -> Int
 pub extern (/) : Int -> Int -> Int
 pub extern (%) : Int -> Int -> Int
--- `==` と `!=` で比べられるのは `Int`、`String`、`Bool` である。translate が、型検査の記録した参照ごとの型引数から
--- `eml_types::equality` で比べ方を決め、下の比べ方ごとの extern の呼び出しにする
-pub extern (==) : a -> a -> Bool
-pub extern (!=) : a -> a -> Bool
-extern int_eq : Int -> Int -> Bool
-extern int_ne : Int -> Int -> Bool
-extern string_eq : String -> String -> Bool
-extern string_ne : String -> String -> Bool
-extern bool_eq : Bool -> Bool -> Bool
-extern bool_ne : Bool -> Bool -> Bool
-pub extern (<) : Int -> Int -> Bool
-pub extern (<=) : Int -> Int -> Bool
-pub extern (>) : Int -> Int -> Bool
-pub extern (>=) : Int -> Int -> Bool
+
+pub class Eq a where
+  (==) : a -> a -> Bool
+  (!=) : a -> a -> Bool
+  x != y = not (x == y)
+
+pub class Eq a => Ord a where
+  compare : a -> a -> Ordering
+  (<) : a -> a -> Bool
+  x < y = match compare x y with
+    | LT -> True
+    | _ -> False
+  (<=) : a -> a -> Bool
+  x <= y = match compare x y with
+    | GT -> False
+    | _ -> True
+  (>) : a -> a -> Bool
+  x > y = match compare x y with
+    | GT -> True
+    | _ -> False
+  (>=) : a -> a -> Bool
+  x >= y = match compare x y with
+    | LT -> False
+    | _ -> True
+
+-- `show` を必須にするのは、`show_prec` と互いの既定にすると、どちらも書かない instance が止まらなくなるため
+pub class Show a where
+  show : a -> String
+  show_prec : Int -> a -> String
+  show_prec _ x = show x
+
+instance Eq Int where
+  extern (==)
+  extern (!=)
+
+instance Ord Int where
+  extern compare
+  extern (<)
+  extern (<=)
+  extern (>)
+  extern (>=)
+
+-- 負の数は、関数適用の引数の位置 (優先度 7 より強い) で括弧に入れる (Haskell の `showsPrec` と同じ)
+instance Show Int where
+  extern show
+  show_prec d n = if d > 6 && n < 0 then "(" ++ show n ++ ")" else show n
+
+instance Eq String where
+  extern (==)
+  extern (!=)
+
+instance Ord String where
+  extern compare
+
+instance Show String where
+  extern show
+
+instance Eq Bool where
+  extern (==)
+  extern (!=)
+
+-- Task 9 で `deriving` に置き換える
+instance Ord Bool where
+  compare False True = LT
+  compare True False = GT
+  compare _ _ = EQ
+
+instance Show Bool where
+  show False = "False"
+  show True = "True"
+
+instance Eq Ordering where
+  LT == LT = True
+  EQ == EQ = True
+  GT == GT = True
+  _ == _ = False
+
+instance Ord Ordering where
+  compare a b = compare (ordinal a) (ordinal b)
+
+instance Show Ordering where
+  show LT = "LT"
+  show EQ = "EQ"
+  show GT = "GT"
+
+ordinal : Ordering -> Int
+ordinal LT = 0
+ordinal EQ = 1
+ordinal GT = 2
+
 pub extern (++) : String -> String -> String
 pub (>>) : (a -> <e> b) -> (b -> <e> c) -> a -> <e> c
 f >> g = fn x -> g (f x)
