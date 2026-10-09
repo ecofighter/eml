@@ -402,3 +402,33 @@ main () = println (show_int (count_down {n} (fn m -> m)))
     });
     assert!(long <= short + 1000, "peak_objects: {short} -> {long}");
 }
+
+/// 型変数のフィールドは `tobj` なので、`Int` を入れると `box`、取り出して `Int` として使うと `unbox` を通る
+/// (docs/spec/core-ir.md の「位置の規則」)。データの配置は単相化の後も一様なので、この形の変換は残る。
+#[test]
+fn an_int_in_a_type_variable_field_is_boxed_and_unboxed() {
+    let text = [
+        "data Wrap a =",
+        "  | Wrap a",
+        "",
+        "unwrap : Wrap a -> a",
+        "unwrap w = match w with",
+        "  | Wrap x -> x",
+        "",
+        "main : Unit -> <IO> Unit",
+        "main () = println (show_int (unwrap (Wrap 1) + 1))",
+    ]
+    .join("\n");
+    let stats = stats(&text, "2\n");
+    assert!(stats.boxes >= 1, "{stats:?}");
+    assert!(stats.unboxes >= 1, "{stats:?}");
+}
+
+#[test]
+fn a_program_with_only_scalar_positions_boxes_nothing() {
+    let stats = stats(
+        "main : Unit -> <IO> Unit\nmain () = println (show_int (1 + 2))",
+        "3\n",
+    );
+    assert_eq!((stats.boxes, stats.unboxes), (0, 0), "{stats:?}");
+}

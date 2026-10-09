@@ -106,6 +106,9 @@ pub(crate) struct Runtime<'p> {
     arities: Vec<usize>,
     /// `find_handler` が調べたフレームの数 (`RunStats::handler_visits`)。
     pub(crate) handler_visits: u64,
+    /// 機械が実行した `box` と `unbox` の数 (`RunStats::boxes`、`RunStats::unboxes`)。
+    pub(crate) boxes: u64,
+    pub(crate) unboxes: u64,
 }
 
 impl<'p> Runtime<'p> {
@@ -131,6 +134,8 @@ impl<'p> Runtime<'p> {
             strings,
             arities,
             handler_visits: 0,
+            boxes: 0,
+            unboxes: 0,
         }
     }
 
@@ -423,6 +428,8 @@ impl<'p> Runtime<'p> {
             string_bytes_copied: self.heap.string_bytes_written(),
             rc_increments: self.heap.rc_increments(),
             rc_decrements: self.heap.rc_decrements(),
+            boxes: self.boxes,
+            unboxes: self.unboxes,
             peak_objects: self.heap.peak_objects(),
         }
     }

@@ -128,8 +128,14 @@ impl<'p> Machine<'p> {
                 self.rt.decref(self.env.atom(atom)?)?;
                 Value::Unit
             }
-            Rhs::Box(atom) => scalar(self.env.atom(atom)?, "a box of a heap object")?,
-            Rhs::Unbox(atom) => scalar(self.env.atom(atom)?, "an unbox of a heap object")?,
+            Rhs::Box(atom) => {
+                self.rt.boxes += 1;
+                scalar(self.env.atom(atom)?, "a box of a heap object")?
+            }
+            Rhs::Unbox(atom) => {
+                self.rt.unboxes += 1;
+                scalar(self.env.atom(atom)?, "an unbox of a heap object")?
+            }
         };
         self.env.write(var, value);
         self.stmt += 1;
