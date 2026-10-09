@@ -8,10 +8,15 @@ use eml_diagnostics::{Diagnostic, Label};
 use eml_hir::{ClassId, ExprId, FunctionKind, TypeVarId, ValueItem};
 
 use crate::codes;
+use crate::kind::{Bound, KindReason};
 use crate::store::{TypeId, TypeKind};
 use crate::table::{Exporter, RigidVar, Ty, TyShape};
+use crate::ty::Linearity;
 
 use super::body::BodyCheck;
+
+/// 求める制約 `C T`。
+type Wanted = (ClassId, Ty);
 
 /// 解けなかった制約。`root` は参照が求めた制約で、`leaf` は解いた先で解けなかった制約である。
 enum Failure {
@@ -26,16 +31,43 @@ enum Failure {
 impl BodyCheck<'_, '_> {
     /// 本体の検査が終わってから、`usage::reliable` より前に呼ぶ。制約の型は後の文の単一化で決まることがあるためと、
     /// E2006 と E2009 を本体の誤りに数え、線形性の診断を連鎖させないためである (今の E2006 の扱いと同じ)。
+    ///
+    /// instance で解いた節点の型引数には、参照を由来に `Unr` を求める。instance の本体は頭の型変数を `Unr` とみなして
+    /// 検査したためである (docs/superpowers/specs/2026-10-10-s5-type-classes-design.md の「クラスの性質」)。誤りに
+    /// なった参照には求めない。誤りは報告済みで、線形性の診断を重ねないため。
     pub(super) fn solve_constraints(&mut self) {
         let body_has_error = self.diagnostics.iter().any(Diagnostic::is_error);
         let givens = self.givens();
+        let references: Vec<(ExprId, ValueItem, Vec<Wanted>)> = self
+            .typing
+            .instantiations
+            .iter()
+            .map(|(expr, (decl, args))| (expr, *decl, self.wanted(*decl, args)))
+            .collect();
         let mut found = Vec::new();
-        for (expr, (decl, args)) in self.typing.instantiations.iter() {
-            for (class, ty) in self.wanted(*decl, args) {
-                if let Some(failure) = self.solve(class, ty, &givens, body_has_error) {
-                    found.push((expr, *decl, failure));
-                    // 1つの参照から出た誤りは1つにまとめる
-                    break;
+        for (expr, decl, wanted) in references {
+            let mut resolved = Vec::new();
+            let mut failed = None;
+            for (class, ty) in wanted {
+                match self.solve(class, ty, &givens, body_has_error) {
+                    Ok(args) => resolved.extend(args),
+                    Err(failure) => {
+                        failed = Some(failure);
+                        break;
+                    }
+                }
+            }
+            match failed {
+                // 1つの参照から出た誤りは1つにまとめる
+                Some(failure) => found.push((expr, decl, failure)),
+                None if resolved.is_empty() => {}
+                None => {
+                    let range = self.body.exprs[expr].range;
+                    let name = self.program.value_name(decl).to_string();
+                    self.with_kind_origin(range, KindReason::Passed(name), |this| {
+                        this.table
+                            .kinds_at_most(&resolved, Bound::Const(Linearity::Unr));
+                    });
                 }
             }
         }
@@ -65,7 +97,7 @@ impl BodyCheck<'_, '_> {
 
     /// 参照が求める制約。関数はシグネチャの制約、メソッドはクラスの制約 `C T` (T は最初の型引数) とメソッド自身の制約
     /// である。具体化の型引数は `Generics` の順に並ぶので、制約の型変数の番号で引ける。
-    fn wanted(&self, decl: ValueItem, args: &[Ty]) -> Vec<(ClassId, Ty)> {
+    fn wanted(&self, decl: ValueItem, args: &[Ty]) -> Vec<Wanted> {
         let (own, signature) = match decl {
             ValueItem::Function(id) => (None, self.program[id].signature.as_ref()),
             ValueItem::Method(id) => {
@@ -82,7 +114,7 @@ impl BodyCheck<'_, '_> {
     }
 
     /// 作業の列で解く。instance の文脈は頭の型引数へ写すので、列に足す型は元の型の部分になり、列はいつか尽きる。
-    /// 解けなければ最初の失敗を返す。
+    /// 解ければ instance で解いた節点の型引数を、解けなければ最初の失敗を返す。
     ///
     /// 列には、同じクラスと同じ代表の組を1回だけ足す。推論の表は部分を共有するので、型を木としてたどると型の深さの
     /// 指数の時間がかかるためである (docs/implementation/architecture.md の「`eml_types` の内部」)。代表で比べるのは、
@@ -93,21 +125,23 @@ impl BodyCheck<'_, '_> {
         ty: Ty,
         givens: &[(ClassId, RigidVar)],
         body_has_error: bool,
-    ) -> Option<Failure> {
+    ) -> Result<Vec<Ty>, Failure> {
         let root = (class, ty);
         let mut seen = HashSet::from([(class, self.table.resolve(ty))]);
         let mut work = vec![root];
         let mut next = 0;
+        let mut resolved = Vec::new();
         while let Some(&(class, ty)) = work.get(next) {
             next += 1;
             match self.table.shape(ty) {
                 TyShape::Con(id, args) => {
                     let Some(instance) = self.program.instance(class, *id) else {
-                        return Some(Failure::NoInstance {
+                        return Err(Failure::NoInstance {
                             root,
                             leaf: (class, ty),
                         });
                     };
+                    resolved.extend(args.iter().copied());
                     for constraint in &self.program[instance].context {
                         let arg = args[index(constraint.var)];
                         if seen.insert((constraint.class, self.table.resolve(arg))) {
@@ -118,7 +152,7 @@ impl BodyCheck<'_, '_> {
                 TyShape::Rigid(var) => {
                     // 操作ごとの型変数は与えられた制約に入らないので、ここで E2006 になる
                     if !givens.contains(&(class, *var)) {
-                        return Some(Failure::NoInstance {
+                        return Err(Failure::NoInstance {
                             root,
                             leaf: (class, ty),
                         });
@@ -127,10 +161,10 @@ impl BodyCheck<'_, '_> {
                 // 同じ本体に別の誤りがあるとき、決まらない型はその誤りの連鎖である。誤りを直せば型が決まるので、
                 // E2009 を重ねない
                 TyShape::Var(_) if body_has_error => {}
-                TyShape::Var(_) => return Some(Failure::Ambiguous { root, class }),
+                TyShape::Var(_) => return Err(Failure::Ambiguous { root, class }),
                 // タプルの instance は Task 9 で足す
                 TyShape::Record(_) | TyShape::Fn { .. } => {
-                    return Some(Failure::NoInstance {
+                    return Err(Failure::NoInstance {
                         root,
                         leaf: (class, ty),
                     });
@@ -139,7 +173,7 @@ impl BodyCheck<'_, '_> {
                 TyShape::Error => {}
             }
         }
-        None
+        Ok(resolved)
     }
 
     /// 解けなかった制約の診断。型が `Error` を含めば、報告済みの誤りの連鎖なので `None` を返す。

@@ -2,18 +2,21 @@ use std::collections::{HashMap, HashSet};
 
 use eml_diagnostics::{Diagnostic, Label, SourceFiles};
 use eml_hir::{
-    ClassId, Constructor, Function, FunctionId, FunctionKind, Generics, InstanceOrigin, ItemMap,
-    Method, Operation, Program, RowRef, TypeRef, TypeRefId, TypeRefKind, TypeVarId, ValueItem,
+    ClassId, Constructor, Function, FunctionId, FunctionKind, Generics, InstanceId, InstanceOrigin,
+    ItemMap, Method, Operation, Program, RowRef, Signature, TypeRef, TypeRefId, TypeRefKind,
+    TypeVarId, ValueItem,
 };
 use la_arena::Arena;
 
 use crate::context::Context;
+use crate::kind::entail::unentailed;
 use crate::kind::problem::{KindProblem, KindScheme, OwnVars};
 use crate::kind::solve::solve_scc;
 use crate::kind::{Bound, KindOrigin, KindReason, KindVar, Provenance, Span};
-use crate::shape::{Own, Shape, constructor_shape, operation_shape, signature_shape};
+use crate::shape::{Arrows, Own, Shape, constructor_shape, operation_shape, signature_shape};
 use crate::store::{EffectLabel, TypeKind, TypeStore};
 use crate::table::{Exporter, Row, Table, TyShape};
+use crate::ty::Linearity;
 use crate::{
     BodyTypes, DeclType, Instantiation, TypedProgram, carry, codes, exhaustive, scc, usage,
 };
@@ -51,6 +54,8 @@ impl Signatures {
 pub(crate) struct Checked {
     pub types: BodyTypes,
     pub problem: KindProblem,
+    /// 使った回数を正しく数えられる本体か (`usage::reliable`)。
+    pub reliable: bool,
 }
 
 pub(crate) fn check_module(
@@ -58,8 +63,8 @@ pub(crate) fn check_module(
     files: &SourceFiles,
 ) -> (TypedProgram, Vec<Diagnostic>) {
     let mut diagnostics = Vec::new();
-    check_instances(program, &mut diagnostics);
     let context = Context::new(program);
+    check_instances(program, &context, &mut diagnostics);
     let signatures = signatures(program, &context);
     let mut schemes = declaration_schemes(program, &context, &signatures);
     // 宣言と本体の型を1つの表に登録する。表は追記だけするので、本体を独立に検査する順は結果の意味を変えない
@@ -74,11 +79,15 @@ pub(crate) fn check_module(
     let components = scc::components(program);
     let mut bodies = ItemMap::default();
     let mut problems: ItemMap<Function, KindProblem> = ItemMap::default();
+    let mut unreliable = HashSet::new();
     for (id, _) in program.functions() {
         if let Some((checked, found)) = check_body(program, &context, &signatures, id, &mut types) {
             diagnostics.extend(found);
             bodies.insert(id, checked.types);
             problems.insert(id, checked.problem);
+            if !checked.reliable {
+                unreliable.insert(id);
+            }
         }
     }
     // 等式のない関数も参照されうるので、制約のないスキームを持たせる。extern の関数のスキームは宣言から作ってあるので
@@ -101,6 +110,14 @@ pub(crate) fn check_module(
         }
         violated.extend(solution.violated);
     }
+    diagnostics.extend(check_method_kinds(
+        program,
+        &context,
+        &signatures,
+        &problems,
+        &unreliable,
+        &schemes,
+    ));
     diagnostics.extend(report_violations(program, files, &types, violated));
     let typed = typed_program(&signatures, schemes, bodies, types);
     // 網羅性は型推論と使用回数のパスの後に、書き出した型の上で調べる (docs/spec/exhaustiveness.md の「検査パス」)
@@ -108,10 +125,11 @@ pub(crate) fn check_module(
     (typed, diagnostics)
 }
 
-/// 手で書いた instance ごとに、クラスの直接の上位クラスの instance が頭の型にあり、その文脈がこの instance の文脈から
-/// 導けるかを確かめる (docs/superpowers/specs/2026-10-10-s5-type-classes-design.md の「instance と既定のメソッドの検査」)。
+/// 手で書いた instance ごとに、頭が `Unr` であることと、クラスの直接の上位クラスの instance が頭の型にあり、その文脈が
+/// この instance の文脈から導けることを確かめる
+/// (docs/superpowers/specs/2026-10-10-s5-type-classes-design.md の「クラスの性質」と「instance と既定のメソッドの検査」)。
 /// 上位クラスの instance の頭の型変数は、同じ `data` の型引数なので、番号でこの instance の型変数に対応する。
-fn check_instances(program: &Program, diagnostics: &mut Vec<Diagnostic>) {
+fn check_instances(program: &Program, context: &Context, diagnostics: &mut Vec<Diagnostic>) {
     let names = &program.names;
     for (id, instance) in program.instances() {
         if instance.origin != InstanceOrigin::Written {
@@ -124,10 +142,23 @@ fn check_instances(program: &Program, diagnostics: &mut Vec<Diagnostic>) {
             .values()
             .map(|var| var.name.as_str())
             .collect();
-        let head = std::iter::once(names.ty(instance.head))
-            .chain(vars.iter().copied())
-            .collect::<Vec<_>>()
-            .join(" ");
+        let head = instance_head(program, id);
+        // 頭の型変数を `Unr` とすれば、頭が `Lin` になるのは定数の `Lin` を含むときだけである
+        if context.data_kinds[instance.head].lin {
+            diagnostics.push(
+                Diagnostic::error(
+                    codes::LINEAR_INSTANCE_HEAD,
+                    format!(
+                        "`{head}` is linear, so it cannot have an instance of `{}`",
+                        names.class(class)
+                    ),
+                    Label::new(program.file(id.module), instance.head_range, "a linear type"),
+                )
+                .with_note(
+                    "the methods of a class may copy or drop their arguments, which a linear value forbids",
+                ),
+            );
+        }
         let given: Vec<(ClassId, TypeVarId)> = instance
             .context
             .iter()
@@ -178,13 +209,37 @@ fn check_instances(program: &Program, diagnostics: &mut Vec<Diagnostic>) {
     }
 }
 
+/// メソッドと、それを定義する関数の矢印の決め方。本体の検査の `instantiate_rigid` は形から作るので、既定のメソッドと
+/// instance のメソッドの本体も同じ矢印で検査する
+/// (docs/superpowers/specs/2026-10-10-s5-type-classes-design.md の「クラスの性質」)。
+const METHOD_ARROWS: Arrows = Arrows::Method { outermost: true };
+
+/// instance の頭の型の表示 (`Box a`)。
+fn instance_head(program: &Program, id: InstanceId) -> String {
+    let instance = &program[id];
+    std::iter::once(program.names.ty(instance.head))
+        .chain(
+            instance
+                .generics
+                .type_vars
+                .values()
+                .map(|var| var.name.as_str()),
+        )
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 /// 段0: すべての宣言のシグネチャを閉じた形にする。宣言ごとに独立している。
 pub(crate) fn signatures(program: &Program, context: &Context) -> Signatures {
     let functions = program
         .functions()
         .filter_map(|(id, function)| {
             let signature = function.signature.as_ref()?;
-            Some((id, signature_shape(context, signature)))
+            let arrows = match function.kind {
+                FunctionKind::DefaultMethod(_) | FunctionKind::InstanceMethod(..) => METHOD_ARROWS,
+                FunctionKind::Defined | FunctionKind::Extern(_) => Arrows::OutermostUnr,
+            };
+            Some((id, signature_shape(context, signature, arrows)))
         })
         .collect();
     let operations = program
@@ -200,7 +255,12 @@ pub(crate) fn signatures(program: &Program, context: &Context) -> Signatures {
         .collect();
     let methods = program
         .methods()
-        .map(|(id, method)| (id, signature_shape(context, &method.signature)))
+        .map(|(id, method)| {
+            (
+                id,
+                signature_shape(context, &method.signature, METHOD_ARROWS),
+            )
+        })
         .collect();
     Signatures {
         functions,
@@ -231,6 +291,11 @@ pub(crate) fn check_body(
     let own = shape.instantiate_rigid(&mut table, &signature.generics);
     // 部分適用のクロージャは、それまでの引数を捕まえる (docs/spec/types.md の「関数型」)
     table.closure_kinds(own.ty, body.params.len(), &[]);
+    let previous = table.set_kind_origin(Provenance::Given);
+    for var in unrestricted_vars(program, function, signature) {
+        table.kind_at_most(own.rigids.ty(var), Bound::Const(Linearity::Unr));
+    }
+    table.set_kind_origin(previous);
     let file = program.file(id.module);
     // ここから後の制約は、由来を付け忘れたら Unattributed になり、違反すれば段2が見つける
     table.set_kind_origin(Provenance::Unattributed(Span {
@@ -292,9 +357,40 @@ pub(crate) fn check_body(
         Checked {
             types: body_types,
             problem,
+            reliable,
         },
         diagnostics,
     ))
+}
+
+/// `Unr` とみなすシグネチャの型変数。制約 `C a` は `a ≤ Unr` を意味し、instance の本体は頭の型変数を、既定のメソッドは
+/// クラスの型変数を `Unr` とみなして検査する
+/// (docs/superpowers/specs/2026-10-10-s5-type-classes-design.md の「クラスの性質」)。既定のメソッドのクラスの型変数は
+/// 制約 `C a` にも現れるが、instance のメソッドの頭の型変数とそろえて並べる。
+fn unrestricted_vars(
+    program: &Program,
+    function: &Function,
+    signature: &Signature,
+) -> Vec<TypeVarId> {
+    let class_side = match function.kind {
+        FunctionKind::InstanceMethod(instance, _) => program[instance].generics.type_vars.len(),
+        FunctionKind::DefaultMethod(_) => 1,
+        FunctionKind::Defined | FunctionKind::Extern(_) => 0,
+    };
+    let mut vars: Vec<TypeVarId> = signature
+        .generics
+        .type_vars
+        .iter()
+        .take(class_side)
+        .map(|(var, _)| var)
+        .collect();
+    vars.extend(
+        signature
+            .constraints
+            .iter()
+            .map(|constraint| constraint.var),
+    );
+    vars
 }
 
 /// 本体のない宣言の Kind のスキーム。宣言から出る制約だけを持つ問題を、1つの宣言だけの SCC として解く。
@@ -328,6 +424,12 @@ fn declaration_schemes(
         let arity = method.signature.arity();
         let problem = declaration_problem(context, shape, generics, |table, own| {
             table.closure_kinds(own.ty, arity, &[]);
+            // クラスの型変数 (番号 0) とメソッド自身の制約の型変数は、制約 `C a` があるので `Unr` である
+            let class_var = generics.type_vars.iter().map(|(var, _)| var).take(1);
+            let constrained = method.signature.constraints.iter().map(|c| c.var);
+            for var in class_var.chain(constrained) {
+                table.kind_at_most(own.rigids.ty(var), Bound::Const(Linearity::Unr));
+            }
         });
         problems.push((ValueItem::Method(id), problem));
     }
@@ -393,6 +495,83 @@ fn declaration_problem(
         mult: own.mult,
     };
     table.into_problem(Vec::new(), own_vars)
+}
+
+/// instance のメソッドと既定のメソッドの Kind のスキームが、クラスの側のスキームから導けることを確かめる (E2011。
+/// docs/superpowers/specs/2026-10-10-s5-type-classes-design.md の「instance と既定のメソッドの検査」)。クラスの側の
+/// スキームは、関数の形に宣言から出る制約だけを足して作る。関数の形はクラスの型変数を頭の型に置き換えたメソッドの
+/// シグネチャなので、前提の「頭の型に置き換えたこと」は形が受け持つ。関数のスキームと同じ形から作るので、2つの
+/// スキームは同じ Kind 変数の番号を使う。
+///
+/// 使った回数を数えられない本体 (`unreliable`) は確かめない。その本体のスキームには、由来を記録しない使用回数の制約が
+/// 残っていて、それをもとに E2011 を出すと誤りの連鎖になるためである (docs/spec/types.md の「エラーの扱い」)。
+fn check_method_kinds(
+    program: &Program,
+    context: &Context,
+    signatures: &Signatures,
+    problems: &ItemMap<Function, KindProblem>,
+    unreliable: &HashSet<FunctionId>,
+    schemes: &HashMap<ValueItem, KindScheme>,
+) -> Vec<Diagnostic> {
+    let mut diagnostics = Vec::new();
+    for (id, function) in program.functions() {
+        let (instance, method) = match function.kind {
+            FunctionKind::InstanceMethod(instance, method) => (Some(instance), method),
+            FunctionKind::DefaultMethod(method) => (None, method),
+            FunctionKind::Defined | FunctionKind::Extern(_) => continue,
+        };
+        if unreliable.contains(&id) {
+            continue;
+        }
+        let decl = ValueItem::Function(id);
+        let (Some(_), Some(shape), Some(signature), Some(scheme)) = (
+            problems.get(id),
+            signatures.functions.get(id),
+            &function.signature,
+            schemes.get(&decl),
+        ) else {
+            continue;
+        };
+        let arity = program[method].signature.arity();
+        let unrestricted = unrestricted_vars(program, function, signature);
+        let problem = declaration_problem(context, shape, &signature.generics, |table, own| {
+            table.closure_kinds(own.ty, arity, &[]);
+            for &var in &unrestricted {
+                table.kind_at_most(own.rigids.ty(var), Bound::Const(Linearity::Unr));
+            }
+        });
+        let solution = solve_scc(&[(decl, &problem)], schemes);
+        debug_assert!(solution.violated.is_empty());
+        let class_side = solution.schemes.into_iter().next().unwrap_or_default();
+        if unentailed(&class_side, scheme).is_empty() {
+            continue;
+        }
+        let name = &program[method].name;
+        let message = match instance {
+            Some(instance) => format!(
+                "`{name}` in the instance for `{}` needs more than the signature of `{name}` allows",
+                instance_head(program, instance)
+            ),
+            None => {
+                format!("the default `{name}` needs more than the signature of `{name}` allows")
+            }
+        };
+        diagnostics.push(
+            Diagnostic::error(
+                codes::METHOD_KIND_MISMATCH,
+                message,
+                Label::new(
+                    program.file(id.module),
+                    function.name_range,
+                    "this definition",
+                ),
+            )
+            .with_note(
+                "the signature of a method leaves its own type variables free to be linear, and this definition copies, drops or keeps a value of such a type",
+            ),
+        );
+    }
+    diagnostics
 }
 
 /// Kind の制約の違反は、線形な値の誤った使い方である (docs/spec/linearity.md)。ファイルと位置の順に並べ、同じ範囲の由来は `KindReason::order_key` の順に並べる。

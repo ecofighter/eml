@@ -18,7 +18,9 @@ fn methods_and_constrained_functions_check() {
     );
     insta::assert_snapshot!(check_text(&text), @"
     same : a -> a -> Bool
+      kinds: a <= Unr
     differ : a -> a -> Bool
+      kinds: a <= Unr
     both : a -> a -> a -> Bool
       kinds: a <= Unr
       x#0 : a
@@ -26,6 +28,7 @@ fn methods_and_constrained_functions_check() {
       z#2 : a
     main : Unit -> <IO> Unit
     differ : a -> a -> Bool
+      kinds: a <= Unr
       x#0 : a
       y#1 : a
     Same Color.same : Color -> Color -> Bool
@@ -137,4 +140,100 @@ fn a_clause_variable_has_no_instance() {
         "{SAME}effect Pick where\n  pick : a -> a\n\nrun : Int -> Int\nrun v =\n  handle pick v with\n    | pick x k -> if same x x then k x else k x"
     );
     assert!(lines(&text)[0].starts_with("E2006"), "{:?}", lines(&text));
+}
+
+#[test]
+fn a_constrained_variable_is_unrestricted() {
+    // `C a` は `a ≤ Unr` を意味するので、本体が `x` を2回使っても E3002 にならない
+    let text = format!("{SAME}twice : Same a => a -> Bool\ntwice x = same x x");
+    assert_eq!(lines(&text), Vec::<String>::new());
+    assert_eq!(crate::common::kinds(&text, "twice"), "  kinds: a <= Unr");
+}
+
+#[test]
+fn resolving_an_instance_requires_unrestricted_arguments() {
+    // `G b` は `b` によらず `Unr` だが、instance の本体は頭の型変数を `Unr` として検査するので、解くたびに型引数に
+    // `Unr` を求める (spec の「クラスの性質」)
+    let text = "class Size a where\n  size : a -> Int\n\ndata G b = | G (Unit -> <IO> b)\n\ninstance Size (G b) where\n  size _ = 0\n\nf : Unit -> <IO> Int\nf () = size (G (fn () -> Fs.open \"x\"))";
+    let found = lines(text);
+    assert!(
+        found.iter().any(|line| line.starts_with("E30")),
+        "{found:?}"
+    );
+}
+
+#[test]
+fn a_recursive_reference_at_a_linear_type_is_reported_at_the_reference() {
+    // 再帰した参照が `a` を線形な型で具体化すると、シグネチャの `a ≤ Unr` も破れる。その違反は報告せず、参照の誤りだけを出す
+    let text = "class Same a where\n  same : a -> a -> Bool\n\ndata Box a = | Box a\n\ninstance Same (Box a) where\n  same _ _ = True\n\nf : Same a => a -> <IO> Int\nf x = f (Box (Fs.open \"x\"))\n\ng : Same a => a -> <IO> Int\ng x = g (Fs.open \"x\")";
+    let found = lines(text);
+    assert!(
+        found.iter().any(|line| line.starts_with("E3001 10:7")),
+        "{found:?}"
+    );
+    assert!(
+        found.iter().any(|line| line.starts_with("E2006 13:7")),
+        "{found:?}"
+    );
+}
+
+#[test]
+fn a_linear_head_cannot_have_an_instance() {
+    let text = "class Size a where\n  size : a -> Int\n\ndata H = | H Fs.File\n\ninstance Size H where\n  size _ = 0\n\ninstance Size Fs.File where\n  size _ = 0";
+    let checked = check(text);
+    insta::assert_snapshot!(eml_test_support::full(checked.files(), &checked.diagnostics), @"
+    E2010 6:15 `H` is linear, so it cannot have an instance of `Size`
+      6:15 a linear type
+      note: the methods of a class may copy or drop their arguments, which a linear value forbids
+    E3004 7:8 a linear value cannot be discarded with `_`
+      7:8 this pattern discards it
+      note: linear values, such as files, the continuation of a `once` operation and closures that capture one, must be used exactly once
+      help: bind it to a name and pass the name to `drop`
+    E2010 9:15 `File` is linear, so it cannot have an instance of `Size`
+      9:15 a linear type
+      note: the methods of a class may copy or drop their arguments, which a linear value forbids
+    E3004 10:8 a linear value cannot be discarded with `_`
+      10:8 this pattern discards it
+      note: linear values, such as files, the continuation of a `once` operation and closures that capture one, must be used exactly once
+      help: bind it to a name and pass the name to `drop`
+    ");
+}
+
+#[test]
+fn an_instance_method_cannot_require_more_than_the_class() {
+    let text = "class Pairable a where\n  pair_with : a -> b -> (b, b)\n\ninstance Pairable Int where\n  pair_with _ y = (y, y)";
+    assert_eq!(
+        lines(text),
+        [
+            "E2011 5:3 `pair_with` in the instance for `Int` needs more than the signature of `pair_with` allows"
+        ]
+    );
+}
+
+#[test]
+fn a_default_or_a_carried_value_can_need_more_than_the_class() {
+    // 既定のメソッドも同じ規則で確かめる。メソッド自身の型変数の値を持ったまま row の呼び出しをまたぐと `carry(b, e)` が要る
+    let text = "class Pairable a where\n  pair_with : a -> b -> (b, b)\n  pair_with _ y = (y, y)\n\nclass Keep a where\n  keep : a -> b -> (Unit -> <e> Unit) -> <e> b\n\ninstance Keep Int where\n  keep _ x action =\n    action ()\n    x";
+    assert_eq!(
+        lines(text),
+        [
+            "E2011 3:3 the default `pair_with` needs more than the signature of `pair_with` allows",
+            "E2011 9:3 `keep` in the instance for `Int` needs more than the signature of `keep` allows",
+        ]
+    );
+}
+
+#[test]
+fn a_callback_parameter_of_a_method_is_unrestricted() {
+    // メソッドのシグネチャに書いた関数型の矢印は `Unr` に固定するので、instance がコールバックを2回呼んでも E2011 にならない
+    let text = "class Each a where\n  each : a -> (Int -> Unit) -> Unit\n\ninstance Each Int where\n  each n f =\n    f n\n    f n";
+    assert_eq!(lines(text), Vec::<String>::new());
+}
+
+#[test]
+fn ordinary_instances_and_defaults_have_no_kind_error() {
+    let text = format!(
+        "{SAME}data Proxy a = | Proxy\n\ninstance Same a => Same (Proxy a) where\n  same _ _ = True\n\ndata Box a = | Box a\n\ninstance Same a => Same (Box a) where\n  same = same_box\n\nsame_box : Same a => Box a -> Box a -> Bool\nsame_box (Box x) (Box y) = same x y"
+    );
+    assert_eq!(lines(&text), Vec::<String>::new());
 }

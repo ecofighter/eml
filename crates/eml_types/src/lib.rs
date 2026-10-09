@@ -45,6 +45,8 @@ pub mod codes {
     pub const NO_INSTANCE: ErrorCode = ErrorCode(2006);
     pub const MASK_CONFLICT: ErrorCode = ErrorCode(2008);
     pub const AMBIGUOUS_CONSTRAINT: ErrorCode = ErrorCode(2009);
+    pub const LINEAR_INSTANCE_HEAD: ErrorCode = ErrorCode(2010);
+    pub const METHOD_KIND_MISMATCH: ErrorCode = ErrorCode(2011);
     pub const NON_EXHAUSTIVE_MATCH: ErrorCode = ErrorCode(4001);
     pub const NON_EXHAUSTIVE_EQUATION: ErrorCode = ErrorCode(4002);
     pub const REFUTABLE_PATTERN: ErrorCode = ErrorCode(4003);

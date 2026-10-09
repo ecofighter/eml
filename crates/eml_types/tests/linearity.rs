@@ -711,18 +711,8 @@ fn polymorphic(rest: &str) -> String {
     carried(&format!("{POLY}{rest}"))
 }
 
-/// 関数のスキームに残った Kind の制約の行。なければ空にする。
 fn kinds(rest: &str, function: &str) -> String {
-    let checked = check(&format!("{CARRY}{POLY}{rest}"));
-    let dump = eml_types::dump(&checked.program, &checked.typed);
-    let head = format!("{function} : ");
-    let mut lines = dump.lines().skip_while(|line| !line.starts_with(&head));
-    lines.next();
-    lines
-        .next()
-        .filter(|line| line.starts_with("  kinds: "))
-        .unwrap_or("")
-        .to_string()
+    crate::common::kinds(&format!("{CARRY}{POLY}{rest}"), function)
 }
 
 #[test]
