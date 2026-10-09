@@ -76,6 +76,33 @@ fn shadowing_lets(n: usize) -> String {
     text
 }
 
+/// 1つの本体の `let` の列。局所の `let` は一般化しないので、`f0` の型は後の `let` の型を使って伸び、型の深さが
+/// `let` の数に比例する。推論の表は部分を共有するので、書き出しは表の大きさに比例しなければならない。
+fn let_chain(n: usize) -> String {
+    let mut text = String::from("ident : a -> a\nident x = x\n\nrun : Unit -> Int\nrun () =\n");
+    push_chain(&mut text, "f", n);
+    text.push_str(&format!("  f{n} 5\n"));
+    text
+}
+
+/// 2本の `let` の列を `if` で合わせる。2つの大きな型の単一化が、同じ節点の組を1回だけたどらなければならない。
+fn unified_chains(n: usize) -> String {
+    let mut text = String::from("ident : a -> a\nident x = x\n\nrun : Unit -> Int\nrun () =\n");
+    push_chain(&mut text, "f", n);
+    push_chain(&mut text, "g", n);
+    text.push_str("  let h = if True then f0 else g0\n");
+    text.push_str(&format!("  f{n} 5\n"));
+    text
+}
+
+/// `let {name}0 = ident` から `let {name}{n} = {name}{n-1} ident` までの列。
+fn push_chain(text: &mut String, name: &str, n: usize) {
+    text.push_str(&format!("  let {name}0 = ident\n"));
+    for i in 1..=n {
+        text.push_str(&format!("  let {name}{i} = {name}{} ident\n", i - 1));
+    }
+}
+
 /// 型検査だけの時間。3回測って最小を使い、ほかの処理の割り込みによるばらつきを除く。
 fn check_time(text: &str) -> Duration {
     let lowered = lower_clean(text);
@@ -100,6 +127,23 @@ fn assert_linear(generate: fn(usize) -> String) {
         "size {SMALL} took {small:?} and size {} took {large:?} (ratio {ratio:.1})",
         SMALL * 4
     );
+}
+
+/// 型の深さが大きさに比例する形を測るスレッドのスタック。書き出し、単一化、occurs の検査の再帰が型の深さまで進む
+/// ので、テストのスレッドの既定の 2 MiB では足りない。8000 の `let` の2本の列で、release は 4 MiB、debug は
+/// 32 MiB で足りたので、debug でも倍の余裕を持たせる。
+const DEEP_STACK: usize = 64 << 20;
+
+/// `assert_linear` を、大きなスタックのスレッドで測る。
+fn assert_linear_deep(generate: fn(usize) -> String) {
+    let measured = std::thread::Builder::new()
+        .stack_size(DEEP_STACK)
+        .spawn(move || assert_linear(generate))
+        .unwrap()
+        .join();
+    if let Err(panic) = measured {
+        std::panic::resume_unwind(panic);
+    }
 }
 
 #[test]
@@ -136,4 +180,16 @@ fn a_ring_of_functions() {
 #[ignore = "release ビルドで時間を測る"]
 fn a_chain_of_shadowing_lets() {
     assert_linear(shadowing_lets);
+}
+
+#[test]
+#[ignore = "release ビルドで時間を測る"]
+fn a_chain_of_lets_sharing_types() {
+    assert_linear_deep(let_chain);
+}
+
+#[test]
+#[ignore = "release ビルドで時間を測る"]
+fn two_chains_of_lets_unified() {
+    assert_linear_deep(unified_chains);
 }
