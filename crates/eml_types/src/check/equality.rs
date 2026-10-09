@@ -62,7 +62,7 @@ impl BodyCheck<'_, '_> {
         let names = &self.program.names;
         let operand = self.types.display(operand, names);
         Diagnostic::error(
-            codes::NOT_COMPARABLE,
+            codes::NO_INSTANCE,
             format!("values of type `{operand}` cannot be compared with `{op}`"),
             Label::new(
                 self.file(),

@@ -42,8 +42,9 @@ pub mod codes {
     pub const MISSING_MAIN: ErrorCode = ErrorCode(2003);
     pub const INVALID_MAIN_TYPE: ErrorCode = ErrorCode(2004);
     pub const INFINITE_TYPE: ErrorCode = ErrorCode(2005);
-    pub const NOT_COMPARABLE: ErrorCode = ErrorCode(2006);
+    pub const NO_INSTANCE: ErrorCode = ErrorCode(2006);
     pub const MASK_CONFLICT: ErrorCode = ErrorCode(2008);
+    pub const AMBIGUOUS_CONSTRAINT: ErrorCode = ErrorCode(2009);
     pub const NON_EXHAUSTIVE_MATCH: ErrorCode = ErrorCode(4001);
     pub const NON_EXHAUSTIVE_EQUATION: ErrorCode = ErrorCode(4002);
     pub const REFUTABLE_PATTERN: ErrorCode = ErrorCode(4003);
@@ -60,7 +61,7 @@ pub mod codes {
 pub struct TypedProgram {
     /// 宣言と本体の型がすべて指す、プログラムに1つの型の表。
     pub types: TypeStore,
-    /// シグネチャのある関数、操作、コンストラクタの型。
+    /// シグネチャのある関数、クラスのメソッド、操作、コンストラクタの型。
     pub decls: HashMap<ValueItem, DeclType>,
     /// シグネチャと等式の両方がある関数だけを含む。
     pub bodies: ItemMap<Function, BodyTypes>,

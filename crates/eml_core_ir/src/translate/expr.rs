@@ -23,7 +23,7 @@ pub(super) fn extern_row(hir: &HirProgram, function: FunctionId) -> Option<Exter
         }
         FunctionKind::Defined => None,
         FunctionKind::DefaultMethod(_) | FunctionKind::InstanceMethod(..) => {
-            unreachable!("the type checker rejects classes until S5 Task 4")
+            unreachable!("translate does not handle classes until S5 Task 7")
         }
     }
 }
@@ -425,7 +425,7 @@ impl FnLowering<'_> {
                 }
             }
             ExprKind::Path(Res::Item(ValueItem::Method(_))) => {
-                unreachable!("the type checker rejects classes until S5 Task 4")
+                unreachable!("translate does not handle classes until S5 Task 7")
             }
             ExprKind::Path(Res::Item(ValueItem::Operation(op))) => {
                 let wrapper = self

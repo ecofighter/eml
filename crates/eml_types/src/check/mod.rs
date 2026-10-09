@@ -2,8 +2,8 @@ use std::collections::{HashMap, HashSet};
 
 use eml_diagnostics::{Diagnostic, Label, SourceFiles};
 use eml_hir::{
-    Constructor, Function, FunctionId, FunctionKind, Generics, ItemMap, Operation, Program, RowRef,
-    TypeRef, TypeRefId, TypeRefKind, ValueItem,
+    ClassId, Constructor, Function, FunctionId, FunctionKind, Generics, InstanceOrigin, ItemMap,
+    Method, Operation, Program, RowRef, TypeRef, TypeRefId, TypeRefKind, TypeVarId, ValueItem,
 };
 use la_arena::Arena;
 
@@ -19,6 +19,7 @@ use crate::{
 };
 
 mod body;
+mod constraints;
 mod equality;
 mod handle;
 mod report;
@@ -32,6 +33,7 @@ pub(crate) struct Signatures {
     pub functions: ItemMap<Function, Shape>,
     pub operations: ItemMap<Operation, Shape>,
     pub constructors: ItemMap<Constructor, Shape>,
+    pub methods: ItemMap<Method, Shape>,
 }
 
 impl Signatures {
@@ -40,8 +42,7 @@ impl Signatures {
             ValueItem::Function(id) => self.functions.get(id),
             ValueItem::Operation(id) => self.operations.get(id),
             ValueItem::Constructor(id) => self.constructors.get(id),
-            // 型検査はまだクラスを扱えない。E0004 を報告済みなので、参照は誤りの型にして連鎖させない
-            ValueItem::Method(_) => None,
+            ValueItem::Method(id) => self.methods.get(id),
         }
     }
 }
@@ -56,7 +57,8 @@ pub(crate) fn check_module(
     program: &Program,
     files: &SourceFiles,
 ) -> (TypedProgram, Vec<Diagnostic>) {
-    let mut diagnostics = classes_not_supported(program);
+    let mut diagnostics = Vec::new();
+    check_instances(program, &mut diagnostics);
     let context = Context::new(program);
     let signatures = signatures(program, &context);
     let mut schemes = declaration_schemes(program, &context, &signatures);
@@ -106,33 +108,74 @@ pub(crate) fn check_module(
     (typed, diagnostics)
 }
 
-/// S5 の途中の仮の診断。型検査がクラスを扱えるようになったら外す。
-fn classes_not_supported(program: &Program) -> Vec<Diagnostic> {
-    let message = "type classes are not supported by the type checker yet";
-    let classes = program
-        .classes()
-        .map(|(id, class)| (id.module, class.name_range));
-    let instances = program
-        .instances()
-        .map(|(id, instance)| (id.module, instance.head_range));
-    // 既定のメソッドと instance のメソッドの関数の制約は、クラスと instance の位置で報告済み
-    let constraints = program
-        .functions()
-        .filter(|(_, function)| {
-            matches!(
-                function.kind,
-                FunctionKind::Defined | FunctionKind::Extern(_)
+/// 手で書いた instance ごとに、クラスの直接の上位クラスの instance が頭の型にあり、その文脈がこの instance の文脈から
+/// 導けるかを確かめる (docs/superpowers/specs/2026-10-10-s5-type-classes-design.md の「instance と既定のメソッドの検査」)。
+/// 上位クラスの instance の頭の型変数は、同じ `data` の型引数なので、番号でこの instance の型変数に対応する。
+fn check_instances(program: &Program, diagnostics: &mut Vec<Diagnostic>) {
+    let names = &program.names;
+    for (id, instance) in program.instances() {
+        if instance.origin != InstanceOrigin::Written {
+            continue;
+        }
+        let class = instance.class;
+        let vars: Vec<&str> = instance
+            .generics
+            .type_vars
+            .values()
+            .map(|var| var.name.as_str())
+            .collect();
+        let head = std::iter::once(names.ty(instance.head))
+            .chain(vars.iter().copied())
+            .collect::<Vec<_>>()
+            .join(" ");
+        let given: Vec<(ClassId, TypeVarId)> = instance
+            .context
+            .iter()
+            .flat_map(|constraint| {
+                std::iter::once(constraint.class)
+                    .chain(program.superclasses(constraint.class))
+                    .map(|class| (class, constraint.var))
+            })
+            .collect();
+        let at = |message: String, label: String| {
+            Diagnostic::error(
+                codes::NO_INSTANCE,
+                message,
+                Label::new(program.file(id.module), instance.head_range, label),
             )
-        })
-        .filter_map(|(id, function)| {
-            let constraint = function.signature.as_ref()?.constraints.first()?;
-            Some((id.module, constraint.range))
-        });
-    classes
-        .chain(instances)
-        .chain(constraints)
-        .map(|(module, range)| Diagnostic::not_yet_supported(program.file(module), range, message))
-        .collect()
+        };
+        for &superclass in &program[class].superclasses {
+            let Some(found) = program.instance(superclass, instance.head) else {
+                diagnostics.push(at(
+                    format!("no instance of `{}` for `{head}`", names.class(superclass)),
+                    format!(
+                        "`{}` requires `{}`, its superclass",
+                        names.class(class),
+                        names.class(superclass)
+                    ),
+                ));
+                continue;
+            };
+            for constraint in &program[found].context {
+                if given.contains(&(constraint.class, constraint.var)) {
+                    continue;
+                }
+                let needed = names.class(constraint.class);
+                let var = vars[u32::from(constraint.var.into_raw()) as usize];
+                let wanted = format!("{needed} {var}");
+                diagnostics.push(
+                    at(
+                        format!("no instance of `{needed}` for `{var}`"),
+                        format!(
+                            "the instance of `{}` for `{head}` requires `{wanted}`",
+                            names.class(superclass)
+                        ),
+                    )
+                    .with_help(format!("add `{wanted}` to the context of this instance")),
+                );
+            }
+        }
+    }
 }
 
 /// 段0: すべての宣言のシグネチャを閉じた形にする。宣言ごとに独立している。
@@ -155,10 +198,15 @@ pub(crate) fn signatures(program: &Program, context: &Context) -> Signatures {
             (id, constructor_shape(context, def, constructor))
         })
         .collect();
+    let methods = program
+        .methods()
+        .map(|(id, method)| (id, signature_shape(context, &method.signature)))
+        .collect();
     Signatures {
         functions,
         operations,
         constructors,
+        methods,
     }
 }
 
@@ -207,6 +255,7 @@ pub(crate) fn check_body(
     };
     checker.check_function(own.ty);
     checker.check_comparisons();
+    checker.solve_constraints();
     let typing = checker.typing;
     let instances = checker.instances;
     let reliable = usage::reliable(body, diagnostics.is_empty());
@@ -270,6 +319,17 @@ fn declaration_schemes(
             table.closure_kinds(own.ty, arity, &[]);
         });
         problems.push((ValueItem::Function(id), problem));
+    }
+    // メソッドも本体を持たないので、extern の関数と同じく宣言だけから作る
+    // (docs/superpowers/specs/2026-10-10-s5-type-classes-design.md の「instance と既定のメソッドの検査」)
+    for (id, method) in program.methods() {
+        let shape = &signatures.methods[id];
+        let generics = &method.signature.generics;
+        let arity = method.signature.arity();
+        let problem = declaration_problem(context, shape, generics, |table, own| {
+            table.closure_kinds(own.ty, arity, &[]);
+        });
+        problems.push((ValueItem::Method(id), problem));
     }
     for (id, operation) in program.operations() {
         let shape = &signatures.operations[id];
@@ -367,8 +427,8 @@ fn report_violations(
 }
 
 /// 段0の形と段2のスキームを、宣言ごとの結果にまとめる。この時点で、形を持つ宣言はすべてスキームを持つ。extern の
-/// 関数、操作、コンストラクタは `declaration_schemes` が、本体に問題のない関数は `check_module` が (制約がなければ空の
-/// スキームを)、解いた SCC の関数は SCC の解が入れるためである。
+/// 関数、メソッド、操作、コンストラクタは `declaration_schemes` が、本体に問題のない関数は `check_module` が
+/// (制約がなければ空のスキームを)、解いた SCC の関数は SCC の解が入れるためである。
 fn typed_program(
     signatures: &Signatures,
     mut schemes: HashMap<ValueItem, KindScheme>,
@@ -390,6 +450,12 @@ fn typed_program(
                 .constructors
                 .iter()
                 .map(|(id, shape)| (ValueItem::Constructor(id), shape)),
+        )
+        .chain(
+            signatures
+                .methods
+                .iter()
+                .map(|(id, shape)| (ValueItem::Method(id), shape)),
         );
     let decls = shapes
         .map(|(decl, shape)| {
