@@ -2304,3 +2304,42 @@ fn a_type_named_like_a_type_of_another_module_gets_its_own_layout() {
     layout Report.Csv.Row { Row(int) }
     ");
 }
+
+#[test]
+fn instances_of_one_function_get_their_own_reprs() {
+    // 型引数ごとの instance は、その型の Repr で別々に変換する (docs/spec/core-ir.md の「変換の規則」)
+    let text = "id : a -> a\nid x = x\n\nmain : Unit -> <IO> Unit\nmain () =\n  let n = id 1\n  println (id \"s\")";
+    let shown = core_text(text, Pass::Translate);
+    insta::assert_snapshot!(function(&shown, "id@[Int]"), @r#"
+    fn "id@[Int]"(x.0: int) -> int {
+      return x.0
+    }
+    "#);
+    insta::assert_snapshot!(function(&shown, "id@[String]"), @r#"
+    fn "id@[String]"(x.0: obj) -> obj {
+      return x.0
+    }
+    "#);
+}
+
+#[test]
+fn lifted_functions_are_named_after_their_instance() {
+    let text = "effect Ask where\n  ask : Unit -> Int\n\ntwice : a -> (a -> a) -> a\ntwice x f =\n  let g = fn y -> f (f y)\n  handle g x with\n    | ask () k -> k 1\n\nmain : Unit -> <IO> Unit\nmain () = println (show_int (twice 1 (fn n -> n + 1)))";
+    let shown = core_text(text, Pass::Translate);
+    for name in ["twice@[Int]$lambda0", "twice@[Int]$handle0"] {
+        assert!(
+            shown.contains(&format!("{name:?}")),
+            "no `{name}` in\n{shown}"
+        );
+    }
+}
+
+#[test]
+fn a_boxed_wrapper_is_named_after_its_instance() {
+    let text = "inc : a -> Int -> Int\ninc _ n = n + 1\n\napply_to : (Int -> Int) -> Int -> Int\napply_to f x = f x\n\nmain : Unit -> <IO> Unit\nmain () = println (show_int (apply_to (inc ()) 1))";
+    let shown = core_text(text, Pass::Boxing);
+    assert!(
+        shown.contains("\"inc@[Unit]$boxed\""),
+        "no wrapper in\n{shown}"
+    );
+}

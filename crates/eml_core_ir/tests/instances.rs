@@ -185,3 +185,91 @@ fn a_polymorphic_entry_is_uniform() {
         .collect();
     assert_eq!(names, ["first@[_]", "entry$first"]);
 }
+
+const SMALL: usize = 2000;
+const MAX_RATIO: f64 = 6.0;
+/// 型の深さが大きさに比例する形を測るスレッドのスタック (crates/eml_types/tests/scaling.rs の `DEEP_STACK` と同じ)。
+const DEEP_STACK: usize = 64 << 20;
+
+/// 多相な関数の鎖を `Int` と `String` で使う形。
+fn chain(n: usize) -> String {
+    let mut text = String::new();
+    for i in 1..n {
+        text.push_str(&format!("f{i} : a -> a\nf{i} x = f{} x\n\n", i + 1));
+    }
+    text.push_str(&format!("f{n} : a -> a\nf{n} x = x\n\n"));
+    text.push_str("main : Unit -> <IO> Unit\nmain () = println (show_int (f1 1) ++ f1 \"s\")");
+    text
+}
+
+/// 部分を共有する型を作る `let` の列を、総称な関数の本体に置く形。`ident` の型引数は列の長さの指数の大きさで表示され、
+/// `run` の型変数を含む。
+fn shared_types(n: usize) -> String {
+    let mut text =
+        String::from("ident : a -> a\nident x = x\n\nrun : a -> a\nrun x =\n  let f0 = ident\n");
+    for i in 1..=n {
+        text.push_str(&format!("  let f{i} = f{} ident\n", i - 1));
+    }
+    text.push_str(&format!(
+        "  f{n} x\n\nmain : Unit -> <IO> Unit\nmain () = println (show_int (run 5))"
+    ));
+    text
+}
+
+/// Core IR の段階 (`eml_core_ir::lower`) だけの時間。3回測って最小を使う。
+fn lower_time(text: &str) -> std::time::Duration {
+    let checked = eml_test_support::check(text);
+    assert!(
+        checked.diagnostics.is_empty(),
+        "the generated program has errors"
+    );
+    let (entry, _) = checked
+        .program
+        .functions()
+        .find(|(id, function)| {
+            checked.program.modules[id.module].name == "Main" && function.name == "main"
+        })
+        .unwrap();
+    (0..3)
+        .map(|_| {
+            let start = std::time::Instant::now();
+            let _ = eml_core_ir::lower(&checked.program, &checked.typed, entry, checked.files());
+            start.elapsed()
+        })
+        .min()
+        .unwrap()
+}
+
+fn assert_linear(generate: fn(usize) -> String) {
+    let small = lower_time(&generate(SMALL));
+    let large = lower_time(&generate(SMALL * 4));
+    let ratio = large.as_secs_f64() / small.as_secs_f64();
+    assert!(
+        ratio <= MAX_RATIO,
+        "size {SMALL} took {small:?} and size {} took {large:?} (ratio {ratio:.1})",
+        SMALL * 4
+    );
+}
+
+fn assert_linear_deep(generate: fn(usize) -> String) {
+    let measured = std::thread::Builder::new()
+        .stack_size(DEEP_STACK)
+        .spawn(move || assert_linear(generate))
+        .unwrap()
+        .join();
+    if let Err(panic) = measured {
+        std::panic::resume_unwind(panic);
+    }
+}
+
+#[test]
+#[ignore = "release ビルドで時間を測る"]
+fn lowering_a_chain_of_polymorphic_functions_is_linear() {
+    assert_linear(chain);
+}
+
+#[test]
+#[ignore = "release ビルドで時間を測る"]
+fn lowering_shared_type_arguments_is_linear() {
+    assert_linear_deep(shared_types);
+}
