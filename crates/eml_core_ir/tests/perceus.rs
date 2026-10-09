@@ -173,7 +173,7 @@ fn a_live_unpacked_value_dups_the_fields_used_later() {
     let text = "\
 layout (,) { (,)(tobj, tobj) }
 fn again(p.0: obj) -> obj {
-  unpack p.0 (,) #0(a.1: int, b.2: obj)
+  unpack p.0 (,) #0(a.1: tobj, b.2: obj)
   let r.3: obj = con (,) #0(p.0, b.2)
   return r.3
 }
@@ -181,7 +181,7 @@ fn again(p.0: obj) -> obj {
     insta::assert_snapshot!(perceus_text(text), @"
     layout (,) { (,)(tobj, tobj) }
     fn again(p.0: obj) -> obj {
-      unpack p.0 (,) #0(a.1: int, b.2: obj)
+      unpack p.0 (,) #0(a.1: tobj, b.2: obj)
       dup b.2
       let r.3: obj = con (,) #0(p.0, b.2)
       return r.3

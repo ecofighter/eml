@@ -117,22 +117,28 @@ b1:
 
 const ASK: &str = "effect Ask { ask/1 }\n";
 
-/// `handle ask 1 with | ask x k -> resume k x` を持ち上げた形。`effects` は先頭のエフェクトの行。
+/// `handle ask 1 with | ask x k -> resume k x` を持ち上げた形。`effects` は先頭のエフェクトの行。節と本体は値として
+/// 使うので一様で、捕まえる `Int` と handle の結果は `box` と `unbox` を通る。
 fn handler_program(effects: &str) -> String {
     format!(
         "{effects}fn main() -> int {{
-  let c.0: tobj = closure main$handle0(1)
-  let c.1: tobj = closure main$handle0$ask(2)
-  let t.2: int = handle Ask((), c.0) {{ ask: c.1 }} return &main$handle0$return
-  return t.2
+  let b.0: tobj = box 1
+  let c.1: tobj = closure main$handle0(b.0)
+  let b.2: tobj = box 2
+  let c.3: tobj = closure main$handle0$ask(b.2)
+  let r.4: tobj = handle Ask((), c.1) {{ ask: c.3 }} return &main$handle0$return
+  let t.5: int = unbox r.4
+  decref r.4
+  return t.5
 }}
-fn main$handle0(n.0: int, p.1: unit) -> int {{
+fn main$handle0(n.0: tobj, p.1: unit) -> tobj {{
   tail perform Ask.ask(n.0)
 }}
-fn main$handle0$ask(m.0: int, x.1: int, k.2: tobj, s.3: unit) -> int {{
+fn main$handle0$ask(m.0: tobj, x.1: tobj, k.2: tobj, s.3: unit) -> tobj {{
+  decref m.0
   tail resume k.2(x.1, s.3)
 }}
-fn main$handle0$return(x.0: int, s.1: unit) -> int {{
+fn main$handle0$return(x.0: tobj, s.1: unit) -> tobj {{
   return x.0
 }}
 "
@@ -783,10 +789,12 @@ fn k(x.0: tobj) -> tobj {
 }
 
 #[test]
-fn the_result_of_a_call_is_not_compared_with_the_callee() {
-    // 呼び出しの結果と呼ばれる関数の `ret` は、S3b-2c-2 まで比べない (docs/spec/core-ir.md の「構造の規則」)
+fn the_result_of_a_call_is_compared_with_the_callee() {
     let text = format!("{K}fn f() -> obj {{\n  let t.0: obj = call k(1)\n  return t.0\n}}\n");
-    assert_eq!(check_scopes(&text), Ok(()));
+    assert_eq!(
+        rejected_at_both_levels(&text),
+        "`t.0` (obj) is bound to `k`, which returns int in `f`"
+    );
 }
 
 /// 所有を見る前に断る IR の誤り。どちらの段でも同じ誤りになる。
@@ -833,6 +841,337 @@ fn an_extern_takes_constants_that_fit_its_row() {
         "fn f() -> enum {\n  let c.0: enum = extern Prelude.bool_eq(#1, #0)\n  return c.0\n}\n";
     assert_eq!(check_scopes(text), Ok(()));
     assert_eq!(check(text), Ok(()));
+}
+
+// 境界の検査
+
+/// 値として使う一様な関数。`i` は本体に、`two` は `return` の節と `get/0` の節に、`three` は `ask/1` の節に使える。
+const UNIFORM: &str = "\
+fn i(u.0: unit) -> unit {
+  return u.0
+}
+fn two(a.0: unit, b.1: unit) -> unit {
+  return a.0
+}
+fn three(a.0: unit, b.1: unit, c.2: unit) -> unit {
+  return a.0
+}
+";
+
+/// 引数が `params` で本体が `body` の `f` に、エフェクト `Ask`、`State`、`Fail` と一様な関数を添える。
+fn calling(params: &str, body: &str) -> String {
+    format!(
+        "{ASK}effect State {{ get/0 }}\neffect Fail {{ never fail/1 }}\nfn f({params}) -> tobj {{\n{body}}}\n{UNIFORM}"
+    )
+}
+
+/// `tobj` を2つ受けて手放す関数。
+const TAKES_TOBJ: &str =
+    "fn g(a.0: tobj, b.1: tobj) -> unit {\n  decref a.0\n  decref b.1\n  return ()\n}\n";
+
+#[test]
+fn the_arguments_of_a_direct_call_are_compatible_with_the_parameters() {
+    let call = |args: &str| {
+        format!(
+            "\
+fn f(s.0: obj, x.1: int, u.2: unit) -> unit {{
+  let t.3: unit = call g({args})
+  return t.3
+}}
+{TAKES_TOBJ}"
+        )
+    };
+    // `obj` の変数、`unit` の変数、`()` は、命令なしで `tobj` の引数に渡せる
+    assert_eq!(check(&call("s.0, u.2")), Ok(()));
+    assert_eq!(check(&call("s.0, ()")), Ok(()));
+    assert_eq!(
+        rejected_at_both_levels(&call("x.1, ()")),
+        "argument 0 of `g` is `x.1` (int), but the function takes tobj in `f`"
+    );
+    assert_eq!(
+        rejected_at_both_levels(&call("s.0, 5")),
+        "argument 1 of `g` is 5, but the function takes tobj in `f`"
+    );
+}
+
+#[test]
+fn the_result_of_a_call_is_bound_to_a_compatible_variable() {
+    // `tobj` を返す関数の結果は、`obj` の変数でも `unit` の変数でも受けられる
+    let text = "\
+fn f() -> unit {
+  let s.0: obj = call h()
+  let u.1: unit = call h() save [s.0]
+  decref s.0
+  return u.1
+}
+fn h() -> tobj {
+  return ()
+}
+";
+    assert_eq!(check(text), Ok(()));
+}
+
+#[test]
+fn the_arguments_of_a_closure_are_compatible_with_the_parameters() {
+    let closure = |arg: &str| {
+        format!(
+            "\
+fn f(s.0: obj, n.1: int) -> tobj {{
+  let c.2: tobj = closure g({arg})
+  return c.2
+}}
+fn g(a.0: tobj, b.1: tobj) -> tobj {{
+  decref b.1
+  return a.0
+}}
+"
+        )
+    };
+    assert_eq!(check(&closure("s.0")), Ok(()));
+    assert_eq!(
+        rejected_at_both_levels(&closure("n.1")),
+        "argument 0 of a closure of `g` is `n.1` (int), but the function takes tobj in `f`"
+    );
+}
+
+#[test]
+fn a_function_used_as_a_value_is_uniform() {
+    let value = |atom: &str| {
+        format!(
+            "\
+fn f() -> tobj {{
+  return {atom}
+}}
+{K}fn h(a.0: tobj) -> int {{
+  let n.1: int = unbox a.0
+  decref a.0
+  return n.1
+}}
+{UNIFORM}"
+        )
+    };
+    assert_eq!(check(&value("&i")), Ok(()));
+    assert_eq!(
+        rejected_at_both_levels(&value("&k")),
+        "`k` is used as a function value, but its parameter 0 is int in `f`"
+    );
+    assert_eq!(
+        rejected_at_both_levels(&value("&h")),
+        "`h` is used as a function value, but it returns int in `f`"
+    );
+}
+
+#[test]
+fn the_translated_level_allows_a_function_value_that_is_not_uniform() {
+    // translate は `if c then double else inc` を `jump b3(&double)` にする。一様にするのは box の挿入である
+    let text = format!("fn f() -> tobj {{\n  jump b1(&k)\nb1(h.0: tobj):\n  return h.0\n}}\n{K}");
+    assert_eq!(check_translated(&text), Ok(()));
+    assert_eq!(
+        rejected_at_both_levels(&text),
+        "`k` is used as a function value, but its parameter 0 is int in `f`"
+    );
+}
+
+#[test]
+fn a_function_value_that_is_dropped_or_switched_on_is_uniform() {
+    // 値を呼び出しに渡さない `drop` と case のない `switch` でも、`&k` は関数の値である
+    for body in [
+        "  let u.0: unit = drop &k\n  return u.0\n",
+        "  switch &k { _ -> b1 }\nb1:\n  return ()\n",
+    ] {
+        let text = format!("fn f() -> unit {{\n{body}}}\n{K}");
+        assert_eq!(check_translated(&text), Ok(()));
+        assert_eq!(
+            rejected_at_both_levels(&text),
+            "`k` is used as a function value, but its parameter 0 is int in `f`"
+        );
+    }
+}
+
+#[test]
+fn a_closure_of_a_function_that_is_not_uniform_is_rejected_before_its_arguments() {
+    // 引数の数の後で対象が一様かを確かめ、その後で引数の Repr と範囲を確かめる
+    let closure = |g: &str| {
+        format!(
+            "\
+fn f() -> tobj {{
+  let c.0: tobj = closure g(c.0)
+  return c.0
+}}
+fn g(a.0: {g}, b.1: {g}) -> {g} {{
+  return a.0
+}}
+"
+        )
+    };
+    assert_eq!(
+        rejected_at_both_levels(&closure("int")),
+        "`g` is used as a function value, but its parameter 0 is int in `f`"
+    );
+    assert_eq!(
+        rejected_at_both_levels(&closure("tobj")),
+        "`c.0` is used outside its scope in `f`"
+    );
+}
+
+#[test]
+fn the_operands_of_uniform_calls_are_compatible_with_tobj() {
+    for (params, body, message) in [
+        (
+            "c.0: tobj, n.1: int",
+            "  let t.2: tobj = apply n.1(())\n  return t.2\n",
+            "the callee of an apply is `n.1` (int), but an apply takes tobj",
+        ),
+        (
+            "c.0: tobj, n.1: int",
+            "  let t.2: tobj = apply c.0(n.1)\n  return t.2\n",
+            "argument 0 of an apply is `n.1` (int), but an apply takes tobj",
+        ),
+        (
+            "",
+            "  let t.0: tobj = perform Ask.ask(1)\n  return t.0\n",
+            "argument 0 of a perform of `Ask.ask` is 1, but a perform takes tobj",
+        ),
+        (
+            "k.0: tobj, n.1: int, s.2: int",
+            "  let t.3: tobj = resume n.1((), ())\n  return t.3\n",
+            "the continuation of a resume is `n.1` (int), but a resume takes tobj",
+        ),
+        (
+            "k.0: tobj, n.1: int, s.2: int",
+            "  let t.3: tobj = resume k.0(1, ())\n  return t.3\n",
+            "the value of a resume is 1, but a resume takes tobj",
+        ),
+        (
+            "k.0: tobj, n.1: int, s.2: int",
+            "  let t.3: tobj = resume k.0((), s.2)\n  return t.3\n",
+            "the state of a resume is `s.2` (int), but a resume takes tobj",
+        ),
+        (
+            "",
+            "  let t.0: tobj = handle State(0, &i) { get: &two } return &two\n  return t.0\n",
+            "the initial state of a handler of `State` is 0, but a handler takes tobj",
+        ),
+        (
+            "u.0: unit, b.1: int",
+            "  let t.2: tobj = handle Ask((), b.1) { ask: &three } return &two\n  return t.2\n",
+            "the body of a handler of `Ask` is `b.1` (int), but a handler takes tobj",
+        ),
+        (
+            "u.0: unit, b.1: tobj, c.2: int",
+            "  let t.3: tobj = handle Ask((), b.1) { ask: c.2 } return &two\n  return t.3\n",
+            "the clause for `ask` of a handler of `Ask` is `c.2` (int), but a handler takes tobj",
+        ),
+        (
+            "u.0: unit, b.1: tobj, c.2: tobj, r.3: int",
+            "  let t.4: tobj = handle Ask((), b.1) { ask: c.2 } return r.3\n  return t.4\n",
+            "the `return` clause of a handler of `Ask` is `r.3` (int), but a handler takes tobj",
+        ),
+        (
+            "",
+            "  let t.0: int = perform never Fail.fail(1)\n  return ()\n",
+            "argument 0 of a perform of `Fail.fail` is 1, but a perform takes tobj",
+        ),
+    ] {
+        assert_eq!(
+            rejected_at_both_levels(&calling(params, body)),
+            format!("{message} in `f`")
+        );
+    }
+}
+
+#[test]
+fn the_results_of_uniform_calls_are_bound_to_variables_compatible_with_tobj() {
+    for (params, body, message) in [
+        (
+            "",
+            "  let t.0: int = apply &i(())\n  return ()\n",
+            "`t.0` (int) is bound to an apply, which returns tobj",
+        ),
+        (
+            "",
+            "  let t.0: int = perform Ask.ask(())\n  return ()\n",
+            "`t.0` (int) is bound to a perform of `Ask.ask`, which returns tobj",
+        ),
+        (
+            "k.0: tobj",
+            "  let t.1: int = resume k.0((), ())\n  return ()\n",
+            "`t.1` (int) is bound to a resume, which returns tobj",
+        ),
+        (
+            "",
+            "  let t.0: int = handle Ask((), &i) { ask: &three } return &two\n  return ()\n",
+            "`t.0` (int) is bound to a handler of `Ask`, which returns tobj",
+        ),
+    ] {
+        assert_eq!(
+            rejected_at_both_levels(&calling(params, body)),
+            format!("{message} in `f`")
+        );
+    }
+}
+
+#[test]
+fn a_never_perform_has_no_result_to_compare() {
+    // `never` の操作の `perform` は値を返さないので、束縛はどの Repr でもよく、`tail` はどの `ret` の関数にも置ける
+    let text = "\
+effect Fail { never fail/1 }
+fn f() -> int {
+  let t.0: int = perform never Fail.fail(())
+  return t.0
+}
+fn g() -> int {
+  tail perform never Fail.fail(())
+}
+";
+    assert_eq!(check_scopes(text), Ok(()));
+    assert_eq!(check(text), Ok(()));
+}
+
+#[test]
+fn the_result_of_a_tail_call_is_compatible_with_the_function() {
+    let tail = |ret: &str, params: &str, call: &str| {
+        format!("{ASK}fn f({params}) -> {ret} {{\n  tail {call}\n}}\n{K}{UNIFORM}")
+    };
+    // `unit` を返す関数は、`tobj` を返す呼び出しで終われる
+    assert_eq!(check(&tail("unit", "c.0: tobj", "apply c.0(())")), Ok(()));
+    for (ret, params, call, message) in [
+        (
+            "tobj",
+            "",
+            "call k(1)",
+            "a tail call to `k` returns int, but this function returns tobj",
+        ),
+        (
+            "int",
+            "c.0: tobj",
+            "apply c.0(())",
+            "a tail apply returns tobj, but this function returns int",
+        ),
+        (
+            "int",
+            "",
+            "perform Ask.ask(())",
+            "a tail perform of `Ask.ask` returns tobj, but this function returns int",
+        ),
+        (
+            "int",
+            "k.0: tobj",
+            "resume k.0((), ())",
+            "a tail resume returns tobj, but this function returns int",
+        ),
+        (
+            "int",
+            "",
+            "handle Ask((), &i) { ask: &three } return &two",
+            "a tail handler of `Ask` returns tobj, but this function returns int",
+        ),
+    ] {
+        assert_eq!(
+            rejected_at_both_levels(&tail(ret, params, call)),
+            format!("{message} in `f`")
+        );
+    }
 }
 
 // R9: データの配置
@@ -1107,6 +1446,38 @@ fn f(s.0: obj) -> obj {
     assert_eq!(check(text), Ok(()));
 }
 
+#[test]
+fn a_tobj_field_takes_only_values_compatible_with_tobj() {
+    // `tobj` のフィールドは互換の位置なので、`int` の変数と `Int` の定数は `box` してから置く
+    let case = switching(
+        OPTION,
+        "d.0: tobj",
+        "switch d.0 Option { #0 -> b1, #1(x.1: int) -> b2 }",
+    );
+    assert_eq!(
+        layout_error(&case),
+        "field 0 of `Option` #1 is `x.1` (int), but the layout has tobj"
+    );
+    let unpack =
+        format!("{BOX}fn f(p.0: obj) -> int {{\n  unpack p.0 Box #0(n.1: int)\n  return n.1\n}}\n");
+    assert_eq!(
+        layout_error(&unpack),
+        "field 0 of `Box` #0 is `n.1` (int), but the layout has tobj"
+    );
+    let con = |arg: &str| {
+        format!(
+            "{OPTION}fn f() -> tobj {{\n  let o.0: tobj = con Option #1({arg})\n  return o.0\n}}\n"
+        )
+    };
+    assert_eq!(
+        layout_error(&con("5")),
+        "argument 0 of a con of `Option` #1 is 5, but the layout has tobj"
+    );
+    // `()` は互換の位置の `tobj` に収まる
+    assert_eq!(check_scopes(&con("()")), Ok(()));
+    assert_eq!(check(&con("()")), Ok(()));
+}
+
 // 借りたフィールド
 
 #[test]
@@ -1118,7 +1489,7 @@ fn a_borrowed_field_cannot_be_consumed() {
         "  let t.4: obj = con Box #0(x.2)\n  return t.4\n",
         "  let t.4: obj = extern Prelude.++(x.2, x.2)\n  return t.4\n",
         "  let t.4: obj = apply c.1(x.2)\n  return t.4\n",
-        "  let t.4: obj = apply x.2(1)\n  return t.4\n",
+        "  let t.4: obj = apply x.2(())\n  return t.4\n",
     ] {
         assert_eq!(
             check(&borrowing_arm(body)),
@@ -1573,10 +1944,10 @@ fn a_release_that_keeps_no_field_is_rejected() {
 #[test]
 fn a_release_that_keeps_a_field_that_is_not_rc_is_rejected() {
     let text = "\
-layout (,) { (,)(tobj, tobj) }
+layout P { P(int, tobj) }
 fn f(p.0: obj) -> int {
-  unpack p.0 (,) #0(n.1: int, s.2: obj)
-  release p.0 (,) #0(n.1, _)
+  unpack p.0 P #0(n.1: int, s.2: obj)
+  release p.0 P #0(n.1, _)
   return n.1
 }
 ";
@@ -1904,7 +2275,7 @@ fn ret(x.0: int, s.1: unit) -> int {
 fn a_clause_of_a_never_operation_receives_the_arguments_and_the_state() {
     let text = "\
 effect Fail { never fail/1 }
-fn f(n.0: int) -> int {
+fn f(n.0: tobj) -> int {
   let c.1: tobj = closure clause(n.0)
   let t.2: int = handle Fail((), &body) { fail: c.1 } return &ret
   return t.2
@@ -1912,7 +2283,7 @@ fn f(n.0: int) -> int {
 fn body(u.0: unit) -> int {
   return 1
 }
-fn clause(n.0: int, x.1: int, k.2: tobj, s.3: unit) -> int {
+fn clause(n.0: tobj, x.1: tobj, k.2: tobj, s.3: unit) -> tobj {
   return n.0
 }
 fn ret(x.0: int, s.1: unit) -> int {
@@ -1929,7 +2300,7 @@ fn ret(x.0: int, s.1: unit) -> int {
 fn a_return_clause_receives_the_value_and_the_state_after_its_captures() {
     let text = "\
 effect Ask { ask/1 }
-fn f(n.0: int) -> int {
+fn f(n.0: tobj) -> int {
   let c.1: tobj = closure ret(n.0)
   let t.2: int = handle Ask((), &body) { ask: &clause } return c.1
   return t.2
@@ -1940,7 +2311,7 @@ fn body(u.0: unit) -> int {
 fn clause(x.0: int, k.1: tobj, s.2: unit) -> int {
   tail resume k.1(x.0, s.2)
 }
-fn ret(n.0: int, x.1: int) -> int {
+fn ret(n.0: tobj, x.1: tobj) -> tobj {
   return x.1
 }
 ";
@@ -1959,7 +2330,7 @@ effect Ask { ask/1 }
 fn f(k.0: enum) -> int {
   switch k.0 Prelude.Bool { #0 -> b1, #1 -> b2 }
 b1:
-  let c.1: tobj = closure g(5)
+  let c.1: tobj = closure g(())
   jump b3()
 b2:
   jump b3()
@@ -1967,7 +2338,7 @@ b3:
   let t.2: int = handle Ask((), &body) { ask: c.1 } return &ret
   return t.2
 }
-fn g(y.0: int, x.1: int) -> int {
+fn g(y.0: unit, x.1: tobj) -> tobj {
   return x.1
 }
 fn body(u.0: unit) -> int {

@@ -160,18 +160,18 @@ b3:
     assert_eq!(run_core(text), ("two\n".to_string(), Ok(())));
 }
 
-/// 組を2回分解する。`unpack` は箱を読むだけなので、1回目の後も箱は残る。1回目はフィールドを複製し、2回目は
+/// `Pair` の箱を2回分解する。`unpack` は箱を読むだけなので、1回目の後も箱は残る。1回目はフィールドを複製し、2回目は
 /// `release` で箱を手放してフィールドを受け取る。
 const UNPACK_TWICE: &str = "\
-layout (,) { (,)(tobj, tobj) }
+layout Pair { Pair(tobj, int) }
 fn main() -> unit {
   let s.0: obj = const \"first\"
-  let p.1: obj = con (,) #0(s.0, 2)
-  unpack p.1 (,) #0(a.2: obj, n.3: int)
+  let p.1: obj = con Pair #0(s.0, 2)
+  unpack p.1 Pair #0(a.2: obj, n.3: int)
   dup a.2
   let o.4: unit = extern Prelude.println(a.2)
-  unpack p.1 (,) #0(b.5: obj, m.6: int)
-  release p.1 (,) #0(b.5, _)
+  unpack p.1 Pair #0(b.5: obj, m.6: int)
+  release p.1 Pair #0(b.5, _)
   let o.7: unit = extern Prelude.println(b.5)
   return o.7
 }

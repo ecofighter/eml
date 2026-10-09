@@ -1,8 +1,10 @@
 //! Core IR の不変条件の検査 (docs/spec/core-ir.md)。ブロックの列の形 (R1〜R4)、変数の定義と支配 (R5、R6)、
 //! `unpack` の Repr、`jump` と `return` の Repr の互換、extern の引数と結果の Repr、`box` と `unbox` のオペランドと
 //! 束縛の Repr (R8)、データの配置 (R9) と、引き継いだ検査 (`mask` の順、`handle` の節の数、再開できるかどうか、
-//! 直接呼び出しと extern の引数の数、型で選ぶ extern、case の種類) を確かめる (`verify_scopes`)。translate の直後は、
-//! `box` と `unbox` を確かめる代わりに、`box`、`unbox`、`tail` がまだないことを確かめる (`verify_translated`)。
+//! 直接呼び出しと extern の引数の数、型で選ぶ extern、case の種類) を確かめる (`verify_scopes`)。R8 と R9 には境界の
+//! 検査も入る。呼び出しの引数と結果、`closure` の引数、関数の値の対象が一様であること、`tail` の結果、`tobj` の
+//! フィールドを比べる。translate の直後は、`box` と `unbox` と境界を確かめる代わりに、`box`、`unbox`、`tail` が
+//! まだないことを確かめる (`verify_translated`)。
 //! Perceus の後は、RC の対象の所有の多重集合と、呼び出しの後に見える変数 (R6、R7) も確かめる (`verify`)。`switch`、
 //! `unpack`、`unbox` は値を読むだけである。`switch` と `unpack` のフィールドは値から借りて始まり、自分か持ち主が
 //! 所有を持つ間だけ有効である。
@@ -70,17 +72,58 @@ enum Level {
 fn verify_at(program: &Program, level: Level) -> Result<(), VerifyError> {
     // 配置の Repr はコンストラクタをすべてたどって決まるので、命令ごとでなく表ごとに1回だけ求める
     let layout_reprs: Vec<Repr> = program.layouts.iter().map(Layout::repr).collect();
+    // 一様かどうかも関数ごとに1回だけ求める。参照ごとに引数をたどると、参照の数と引数の数の積の時間になる
+    let non_uniform: Vec<Option<NonUniform>> = program.functions.iter().map(non_uniform).collect();
+    let tables = Tables {
+        layout_reprs: &layout_reprs,
+        non_uniform: &non_uniform,
+    };
     for function in &program.functions {
         shape(function)
-            .and_then(|dominators| {
-                Checker::new(program, &layout_reprs, function, level, dominators).run()
-            })
+            .and_then(|dominators| Checker::new(program, tables, function, level, dominators).run())
             .map_err(|message| VerifyError {
                 function: function.name.clone(),
                 message,
             })?;
     }
     Ok(())
+}
+
+/// verifier を始めるときに1回だけ求める、プログラム全体の表。
+#[derive(Clone, Copy)]
+struct Tables<'a> {
+    /// `program.layouts` と同じ順の、配置の Repr。
+    layout_reprs: &'a [Repr],
+    /// `program.functions` と同じ順の、関数の値として使えない理由。一様な関数は `None` である。
+    non_uniform: &'a [Option<NonUniform>],
+}
+
+/// 関数が一様でない理由。`tobj` と互換でない最初の引数か、`ret` である。
+#[derive(Clone, Copy)]
+enum NonUniform {
+    Param(usize, Repr),
+    Ret(Repr),
+}
+
+/// 一様な関数は、引数と `ret` がすべて `tobj` と互換である。`apply` と handler が、関数ごとの Repr を知らずに呼ぶため
+/// である (docs/spec/core-ir.md の「値の表現」)。
+fn non_uniform(function: &CoreFn) -> Option<NonUniform> {
+    function
+        .params()
+        .iter()
+        .enumerate()
+        .find_map(|(index, &param)| {
+            let repr = function.repr(param);
+            (!repr.compatible(Repr::TObj)).then_some(NonUniform::Param(index, repr))
+        })
+        .or_else(|| (!function.ret.compatible(Repr::TObj)).then_some(NonUniform::Ret(function.ret)))
+}
+
+/// 呼び出しの結果を受ける所。`let` の束縛か、`tail` の呼び出し元の `ret` である。
+#[derive(Clone, Copy)]
+enum Receiver {
+    Bound(VarId),
+    Tail,
 }
 
 /// 支配木の前順と後順の番号。`a` が `b` を支配するのは、`b` が `a` の部分木にあるときである。
@@ -311,8 +354,7 @@ struct Entry {
 /// 変数であるときだけである (R7)。Perceus より前は呼び出しで区切らないので、区間は 0 だけである。
 struct Checker<'a> {
     program: &'a Program,
-    /// `program.layouts` と同じ順の、配置の Repr。
-    layout_reprs: &'a [Repr],
+    tables: Tables<'a>,
     function: &'a CoreFn,
     level: Level,
     dominators: Dominators,
@@ -338,14 +380,14 @@ struct Checker<'a> {
 impl<'a> Checker<'a> {
     fn new(
         program: &'a Program,
-        layout_reprs: &'a [Repr],
+        tables: Tables<'a>,
         function: &'a CoreFn,
         level: Level,
         dominators: Dominators,
     ) -> Self {
         Checker {
             program,
-            layout_reprs,
+            tables,
             function,
             level,
             dominators,
@@ -552,7 +594,7 @@ impl<'a> Checker<'a> {
         match term {
             Term::Return(atom) => {
                 self.consume(&mut owned, *atom)?;
-                if !self.passes(*atom, self.function.ret) {
+                if !self.passes(*atom, self.function.ret)? {
                     return Err(format!(
                         "{} is returned from a function that returns {}",
                         self.typed_atom_text(*atom),
@@ -566,7 +608,7 @@ impl<'a> Checker<'a> {
                     return Err(format!("{} is formed before contract", tail_text(call)));
                 }
                 self.check_mask(call, mask)?;
-                self.check_call(&mut owned, call)?;
+                self.check_call(&mut owned, call, Receiver::Tail)?;
                 self.nothing_owned(&owned)
             }
             Term::Jump { target, args } => {
@@ -667,7 +709,7 @@ impl<'a> Checker<'a> {
     /// `jump` の実引数は、行き先の引数と互換である (R8)。
     fn check_passed(&self, target: BlockId, arg: Atom, param: VarId) -> Result<(), String> {
         let expected = self.function.repr(param);
-        if self.passes(arg, expected) {
+        if self.passes(arg, expected)? {
             return Ok(());
         }
         Err(match arg {
@@ -701,17 +743,57 @@ impl<'a> Checker<'a> {
         }
     }
 
-    /// 互換の位置 (`jump`、`return`) に収まる値。変数は Repr が互換なときに収まる。`never` の操作の `perform` の束縛は
-    /// どの位置にも収まる。定数は `fits` に加えて、`()` が `tobj` にも収まる。`Int` の定数は `tobj` に収まらないので、
-    /// box の挿入が `box` する (docs/spec/core-ir.md の「値の表現」)。
-    fn passes(&self, atom: Atom, expected: Repr) -> bool {
-        match atom {
+    /// 互換の位置 (`jump`、`return`、呼び出しのオペランド、`closure` の引数、`tobj` のフィールド) に収まる値。変数は
+    /// Repr が互換なときに収まる。`never` の操作の `perform` の束縛は、どの位置にも収まる。定数は `fits` に加えて、
+    /// `()` が `tobj` にも収まる。`Int` の定数は `tobj` に収まらないので、box の挿入が `box` する
+    /// (docs/spec/core-ir.md の「値の表現」)。範囲の段と所有の段では、収まった `&g` の g が一様でなければ誤りにする。
+    /// 変換の段では見ない。translate は、一様でない g の `&g` を `jump` に渡しうるからである。
+    fn passes(&self, atom: Atom, expected: Repr) -> Result<bool, String> {
+        let passes = match atom {
             Atom::Var(var) => {
                 self.never[var.0 as usize] || self.function.repr(var).compatible(expected)
             }
             Atom::Unit => expected.compatible(Repr::Unit),
             Atom::Int(_) | Atom::Tag(_) | Atom::Fn(_) => self.fits(atom, expected),
+        };
+        if passes {
+            self.fn_atom(atom)?;
         }
+        Ok(passes)
+    }
+
+    /// 範囲の段と所有の段で、`&g` の g が一様かを確かめる。IR のどこにある `&g` も関数の値なので
+    /// (docs/spec/core-ir.md の「値の表現」)、互換の位置のほかに、extern の引数、`drop`、case のない `switch` の
+    /// scrutinee でも呼ぶ。
+    fn fn_atom(&self, atom: Atom) -> Result<(), String> {
+        match atom {
+            Atom::Fn(target) if self.checks_boundaries() => self.function_value(target),
+            _ => Ok(()),
+        }
+    }
+
+    /// 境界の検査は、box の挿入の後の段 (範囲の段と所有の段) だけで行う。
+    fn checks_boundaries(&self) -> bool {
+        self.level != Level::Translated
+    }
+
+    /// 関数の値として使う関数 (`&g`、`closure g`) は一様である (docs/spec/core-ir.md の「値の表現」)。番号が表にない
+    /// 関数は、`consume` と `function_at` が断る。
+    fn function_value(&self, target: FnIdx) -> Result<(), String> {
+        let Some(&Some(reason)) = self.tables.non_uniform.get(target.0 as usize) else {
+            return Ok(());
+        };
+        let name = &self.program.functions[target.0 as usize].name;
+        Err(match reason {
+            NonUniform::Param(index, repr) => format!(
+                "`{name}` is used as a function value, but its parameter {index} is {}",
+                repr.name()
+            ),
+            NonUniform::Ret(repr) => format!(
+                "`{name}` is used as a function value, but it returns {}",
+                repr.name()
+            ),
+        })
     }
 
     /// 配置の番号を表で引く。`what` は誤りの文の主語 (`a con`) である。
@@ -720,7 +802,7 @@ impl<'a> Checker<'a> {
             .program
             .layout(id)
             .ok_or_else(|| format!("{what} refers to the unknown layout #{}", id.0))?;
-        Ok((layout, self.layout_reprs[id.0 as usize]))
+        Ok((layout, self.tables.layout_reprs[id.0 as usize]))
     }
 
     /// `con`、`unpack`、`release` のコンストラクタを配置の表で引く (R9)。
@@ -737,8 +819,8 @@ impl<'a> Checker<'a> {
         }
     }
 
-    /// case と `unpack` のフィールドは、宣言した Repr が `tobj` でなければ、その Repr の変数である (R9)。`tobj` の
-    /// フィールドには `obj` の変数も束縛できるので、S3b-2c-2 で `box` と `unbox` と一緒に確かめる。
+    /// case と `unpack` のフィールドは、宣言した Repr が `tobj` でなければ、その Repr の変数である。`tobj` の
+    /// フィールドは、範囲の段と所有の段で、`tobj` と互換な変数である (R9)。
     fn field_reprs(
         &self,
         layout: &Layout,
@@ -748,7 +830,12 @@ impl<'a> Checker<'a> {
     ) -> Result<(), String> {
         for (slot, (&field, &declared)) in fields.iter().zip(&constructor.fields).enumerate() {
             let repr = self.function.repr(field);
-            if declared != Repr::TObj && repr != declared {
+            let fits = if declared == Repr::TObj {
+                !self.checks_boundaries() || repr.compatible(declared)
+            } else {
+                repr == declared
+            };
+            if !fits {
                 return Err(format!(
                     "field {slot} of `{}` #{tag} is `{}` ({}), but the layout has {}",
                     layout.name,
@@ -790,7 +877,7 @@ impl<'a> Checker<'a> {
                 return self.literal_scrutinee(scrutinee, Repr::Obj, "String");
             }
             // case のない `switch` は `default` へ進むだけで、値を比べない
-            (None, None) => return Ok(()),
+            (None, None) => return self.fn_atom(scrutinee),
         };
         let Atom::Var(var) = scrutinee else {
             return Err(format!(
@@ -1173,10 +1260,10 @@ impl<'a> Checker<'a> {
                 saved: _,
             } => {
                 self.check_mask(call, mask)?;
-                return self.check_call(owned, call);
+                return self.check_call(owned, call, Receiver::Bound(var));
             }
-            Rhs::MakeClosure(target, args) => {
-                let target = self.function_at(*target)?;
+            Rhs::MakeClosure(index, args) => {
+                let target = self.function_at(*index)?;
                 if args.is_empty() {
                     return Err(format!(
                         "a closure of `{0}` has no arguments; use `&{0}`",
@@ -1190,6 +1277,20 @@ impl<'a> Checker<'a> {
                         target.name,
                         args.len()
                     ));
+                }
+                if self.checks_boundaries() {
+                    self.function_value(*index)?;
+                    for (index, (&arg, &param)) in args.iter().zip(target.params()).enumerate() {
+                        let expected = target.repr(param);
+                        if !self.passes(arg, expected)? {
+                            return Err(format!(
+                                "argument {index} of a closure of `{}` is {}, but the function takes {}",
+                                target.name,
+                                self.typed_atom_text(arg),
+                                expected.name()
+                            ));
+                        }
+                    }
                 }
             }
             Rhs::Extern { ext, args, at: _ } => {
@@ -1218,6 +1319,7 @@ impl<'a> Checker<'a> {
                             expected.name()
                         ));
                     }
+                    self.fn_atom(arg)?;
                 }
                 let repr = self.function.repr(var);
                 if repr != row.ret {
@@ -1245,7 +1347,7 @@ impl<'a> Checker<'a> {
                 );
             }
             Rhs::Con { ctor, args } => self.check_con(var, *ctor, args)?,
-            Rhs::Drop(_) => {}
+            Rhs::Drop(atom) => self.fn_atom(*atom)?,
             // `unit` の値、`()`、`#N`、`&f`、参照は命令なしで `tobj` に収まるので、`box` しない。1つの値の書き方を1つに保つ
             // (docs/spec/core-ir.md の「値の表現」)
             Rhs::Box(atom) => {
@@ -1309,7 +1411,8 @@ impl<'a> Checker<'a> {
     }
 
     /// `con` のフィールドの数は、コンストラクタと同じである。束縛する変数の Repr は配置の Repr と同じで、宣言した
-    /// Repr が `tobj` でないフィールドの値はその Repr に収まる (R9)。
+    /// Repr が `tobj` でないフィールドの値はその Repr に収まる。`tobj` のフィールドの値は、範囲の段と所有の段で、
+    /// 互換の位置として収まる (R9)。
     fn check_con(&self, var: VarId, ctor: Ctor, args: &[Atom]) -> Result<(), String> {
         let (layout, layout_repr, constructor) = self.ctor(ctor, "a con")?;
         field_count(
@@ -1328,7 +1431,12 @@ impl<'a> Checker<'a> {
             ));
         }
         for (index, (&arg, &declared)) in args.iter().zip(&constructor.fields).enumerate() {
-            if declared != Repr::TObj && !self.fits(arg, declared) {
+            let fits = if declared == Repr::TObj {
+                !self.checks_boundaries() || self.passes(arg, declared)?
+            } else {
+                self.fits(arg, declared)
+            };
+            if !fits {
                 return Err(format!(
                     "argument {index} of a con of `{}` #{} is {}, but the layout has {}",
                     layout.name,
@@ -1341,8 +1449,10 @@ impl<'a> Checker<'a> {
         Ok(())
     }
 
-    fn check_call(&self, owned: &mut Owned, call: &Call) -> Result<(), String> {
-        match call {
+    /// 呼び出しは、形を確かめた後に、オペランドの Repr を左から比べ、結果を `receiver` と比べてから、範囲と所有を
+    /// 確かめる (docs/spec/core-ir.md の「verifier」)。
+    fn check_call(&self, owned: &mut Owned, call: &Call, receiver: Receiver) -> Result<(), String> {
+        let result = match call {
             Call::Direct(target, args) => {
                 let target = self.function_at(*target)?;
                 let params = target.params().len();
@@ -1353,6 +1463,7 @@ impl<'a> Checker<'a> {
                         args.len()
                     ));
                 }
+                Some(target.ret)
             }
             Call::Handle {
                 effect,
@@ -1377,6 +1488,7 @@ impl<'a> Checker<'a> {
                     }
                 }
                 self.check_clause_arities(info, clauses, *ret)?;
+                Some(Repr::TObj)
             }
             Call::Perform {
                 effect,
@@ -1403,15 +1515,184 @@ impl<'a> Checker<'a> {
                         info.name, operation.name
                     ));
                 }
+                // `never` の操作の `perform` は値を返さないので、結果は位置でない (docs/spec/core-ir.md の「値の表現」)
+                resumable.then_some(Repr::TObj)
             }
             Call::Apply(_, _)
             | Call::Resume {
                 k: _,
                 arg: _,
                 state: _,
-            } => {}
+            } => Some(Repr::TObj),
+        };
+        if self.checks_boundaries() {
+            self.check_operands(call)?;
+            if let Some(result) = result {
+                self.check_result(call, result, receiver)?;
+            }
         }
         self.consume_all(owned, |f| call.for_each_atom(f))
+    }
+
+    /// 呼び出しのオペランドを左から比べる (R8)。直接の呼び出しは、呼ばれる関数の引数と比べる。ほかの呼び出しの
+    /// オペランドは一様な位置なので、`tobj` と比べる。呼び出しの形は確かめてある。
+    fn check_operands(&self, call: &Call) -> Result<(), String> {
+        let uniform = |role: &dyn Fn() -> String, atom: Atom| {
+            if self.passes(atom, Repr::TObj)? {
+                return Ok(());
+            }
+            let taker = match call {
+                Call::Direct(_, _) => unreachable!("a direct call takes the Reprs of its callee"),
+                Call::Apply(_, _) => "an apply",
+                Call::Perform { .. } => "a perform",
+                Call::Resume { .. } => "a resume",
+                Call::Handle { .. } => "a handler",
+            };
+            Err(format!(
+                "{} of {} is {}, but {taker} takes tobj",
+                role(),
+                self.call_text(call, false),
+                self.typed_atom_text(atom)
+            ))
+        };
+        match call {
+            Call::Direct(target, args) => {
+                let target = &self.program.functions[target.0 as usize];
+                for (index, (&arg, &param)) in args.iter().zip(target.params()).enumerate() {
+                    let expected = target.repr(param);
+                    if !self.passes(arg, expected)? {
+                        return Err(format!(
+                            "argument {index} of `{}` is {}, but the function takes {}",
+                            target.name,
+                            self.typed_atom_text(arg),
+                            expected.name()
+                        ));
+                    }
+                }
+            }
+            Call::Apply(callee, args) => {
+                uniform(&|| "the callee".to_string(), *callee)?;
+                for (index, &arg) in args.iter().enumerate() {
+                    uniform(&|| format!("argument {index}"), arg)?;
+                }
+            }
+            Call::Perform {
+                effect: _,
+                op: _,
+                resumable: _,
+                args,
+            } => {
+                for (index, &arg) in args.iter().enumerate() {
+                    uniform(&|| format!("argument {index}"), arg)?;
+                }
+            }
+            Call::Resume { k, arg, state } => {
+                uniform(&|| "the continuation".to_string(), *k)?;
+                uniform(&|| "the value".to_string(), *arg)?;
+                uniform(&|| "the state".to_string(), *state)?;
+            }
+            Call::Handle {
+                effect,
+                init,
+                body,
+                clauses,
+                ret,
+            } => {
+                let operations = &self.program.effects[*effect as usize].operations;
+                uniform(&|| "the initial state".to_string(), *init)?;
+                uniform(&|| "the body".to_string(), *body)?;
+                for (operation, &clause) in operations.iter().zip(clauses) {
+                    uniform(&|| format!("the clause for `{}`", operation.name), clause)?;
+                }
+                uniform(&|| "the `return` clause".to_string(), *ret)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// 呼び出しの結果 (直接の呼び出しなら呼ばれる関数の `ret`、ほかは `tobj`) は、束縛する変数か、`tail` なら
+    /// 呼び出し元の `ret` と互換である (R8)。
+    fn check_result(&self, call: &Call, result: Repr, receiver: Receiver) -> Result<(), String> {
+        match receiver {
+            Receiver::Bound(var) => {
+                let repr = self.function.repr(var);
+                if repr.compatible(result) {
+                    return Ok(());
+                }
+                Err(format!(
+                    "`{}` ({}) is bound to {}, which returns {}",
+                    self.name(var),
+                    repr.name(),
+                    self.call_text(call, false),
+                    result.name()
+                ))
+            }
+            Receiver::Tail => {
+                let ret = self.function.ret;
+                if result.compatible(ret) {
+                    return Ok(());
+                }
+                // 呼び出し元を "this function" と書き、呼ばれる側を指す "the function" と分ける
+                Err(format!(
+                    "{} returns {}, but this function returns {}",
+                    self.call_text(call, true),
+                    result.name(),
+                    ret.name()
+                ))
+            }
+        }
+    }
+
+    /// 境界の検査の文言で呼び出しを指す言い方。`let` では `` `g` ``、``a perform of `Ask.ask` `` の形、`tail` では
+    /// ``a tail call to `g` ``、``a tail perform of `Ask.ask` `` の形にする。呼び出しの形は確かめてある。
+    fn call_text(&self, call: &Call, tail: bool) -> String {
+        let (article, noun) = match call {
+            Call::Direct(target, _) => {
+                let name = &self.program.functions[target.0 as usize].name;
+                return if tail {
+                    format!("a tail call to `{name}`")
+                } else {
+                    format!("`{name}`")
+                };
+            }
+            Call::Apply(_, _) => ("an", "apply".to_string()),
+            Call::Perform {
+                effect,
+                op,
+                resumable: _,
+                args: _,
+            } => {
+                let info = &self.program.effects[*effect as usize];
+                let operation = &info.operations[*op as usize];
+                (
+                    "a",
+                    format!("perform of `{}.{}`", info.name, operation.name),
+                )
+            }
+            Call::Resume {
+                k: _,
+                arg: _,
+                state: _,
+            } => ("a", "resume".to_string()),
+            Call::Handle {
+                effect,
+                init: _,
+                body: _,
+                clauses: _,
+                ret: _,
+            } => (
+                "a",
+                format!(
+                    "handler of `{}`",
+                    self.program.effects[*effect as usize].name
+                ),
+            ),
+        };
+        if tail {
+            format!("a tail {noun}")
+        } else {
+            format!("{article} {noun}")
+        }
     }
 
     /// `mask` はエフェクトの表にある番号を昇順に並べた多重集合である。extern のエフェクトは表にないので、`mask` にも

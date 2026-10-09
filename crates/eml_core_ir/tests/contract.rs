@@ -21,23 +21,23 @@ fn contract_text(text: &str) -> String {
 #[test]
 fn unused_bindings_that_cannot_fail_are_removed() {
     let text = "\
-layout (,) { (,)(tobj, tobj) }
+layout Pair { Pair(int, int) }
 fn f(x.0: int) -> int {
-  let p.1: obj = con (,) #0(x.0, x.0)
+  let p.1: obj = con Pair #0(x.0, x.0)
   let s.2: obj = const \"unused\"
-  let c.3: tobj = closure g(x.0)
+  let c.3: tobj = closure g(())
   return 1
 }
-fn g(x.0: int, y.1: int) -> int {
+fn g(x.0: unit, y.1: tobj) -> tobj {
   return y.1
 }
 ";
     insta::assert_snapshot!(contract_text(text), @"
-    layout (,) { (,)(tobj, tobj) }
+    layout Pair { Pair(int, int) }
     fn f(x.0: int) -> int {
       return 1
     }
-    fn g(x.0: int, y.1: int) -> int {
+    fn g(x.0: unit, y.1: tobj) -> tobj {
       return y.1
     }
     ");
@@ -102,11 +102,11 @@ fn bindings_used_only_by_removed_bindings_go_in_the_same_pass() {
     // すべて消える
     let text = "\
 layout Prelude.Bool { False, True }
-layout (,) { (,)(tobj, tobj) }
+layout Pair { Pair(tobj, int) }
 layout Either { Left(tobj), Right(tobj) }
 fn f(x.0: int, c.1: enum) -> int {
   let s.2: obj = extern Prelude.show_int(x.0)
-  let p.3: obj = con (,) #0(s.2, x.0)
+  let p.3: obj = con Pair #0(s.2, x.0)
   switch c.1 Prelude.Bool { #0 -> b1, #1 -> b2 }
 b1:
   let q.4: obj = con Either #1(p.3)
@@ -117,7 +117,7 @@ b2:
 ";
     insta::assert_snapshot!(contract_text(text), @"
     layout Prelude.Bool { False, True }
-    layout (,) { (,)(tobj, tobj) }
+    layout Pair { Pair(tobj, int) }
     layout Either { Left(tobj), Right(tobj) }
     fn f(x.0: int, c.1: enum) -> int {
       switch c.1 Prelude.Bool { #0 -> b1, #1 -> b2 }
