@@ -1,5 +1,6 @@
-//! translate と Perceus の間の縮約のパス (docs/spec/core-ir.md の「パス」)。使われない純粋な `let` を消し、消した
-//! ブロックの末尾にだけ末尾呼び出しの規則をもう一度当てる。RC の命令がまだないので、所有権を扱わずに書き換えられる。
+//! translate と Perceus の間の縮約のパス (docs/spec/core-ir.md の「パス」)。使われない純粋な `let` を消し、その後で
+//! すべてのブロックに末尾呼び出しの規則を当てる。末尾呼び出しを作るのはこのパスだけである。RC の命令がまだないので、
+//! 所有権を扱わずに書き換えられる。
 
 use eml_extern::Purity;
 
@@ -7,15 +8,16 @@ use crate::{Atom, Block, CoreFn, Program, Rhs, Stmt, Term};
 
 pub fn contract(program: &mut Program) {
     for function in &mut program.functions {
-        for index in remove_dead_lets(function) {
-            tail_call(&mut function.blocks[index]);
+        remove_dead_lets(function);
+        for block in &mut function.blocks {
+            tail_call(block);
         }
         // 1回のパスで不動点に達することを確かめる (docs/spec/core-ir.md の「縮約」)。確かめるパスも IR を書き換えうるので、
         // その副作用を `debug_assert!` の式に隠さない
         if cfg!(debug_assertions) {
-            let left = remove_dead_lets(function);
+            let removed = remove_dead_lets(function);
             assert!(
-                left.is_empty(),
+                !removed,
                 "one backward pass removes every dead binding in `{}`",
                 function.name
             );
@@ -23,9 +25,9 @@ pub fn contract(program: &mut Program) {
     }
 }
 
-/// `let x = <呼び出し>` の後の終端が `return x` なら、その2つを末尾呼び出しにする。translate の `finish` と contract が
-/// 使う。`saved` は Perceus が決めるので、この時点では空である。`mask` は末尾かどうかと独立なので、そのまま運ぶ。
-pub fn tail_call(block: &mut Block) {
+/// `let x = <呼び出し>` の後の終端が `return x` なら、その2つを末尾呼び出しにする。`saved` は Perceus が決めるので、
+/// この時点では空である。`mask` は末尾かどうかと独立なので、そのまま運ぶ。
+fn tail_call(block: &mut Block) {
     let Term::Return(Atom::Var(returned)) = block.term else {
         return;
     };
@@ -57,10 +59,10 @@ pub fn tail_call(block: &mut Block) {
     block.term = Term::TailCall { call, mask };
 }
 
-/// 使われない純粋な `let` を消し、文を消したブロックの番号を返す。定義は使う位置を支配し、辺は番号の大きい
+/// 使われない純粋な `let` を消し、1つでも消したかを返す。定義は使う位置を支配し、辺は番号の大きい
 /// ブロックへ向かうので、ブロックを後ろから、文を後ろから見れば、`let` を見る時点でその変数の使用はすべて見終わって
 /// いる。関数全体の使用の数を消すたびに減らせば、1回のパスで、消した `let` だけが使っていた束縛も消える。
-fn remove_dead_lets(function: &mut CoreFn) -> Vec<usize> {
+fn remove_dead_lets(function: &mut CoreFn) -> bool {
     let mut uses = vec![0usize; function.vars.len()];
     let mut count = |atom: Atom| {
         if let Atom::Var(var) = atom {
@@ -73,8 +75,8 @@ fn remove_dead_lets(function: &mut CoreFn) -> Vec<usize> {
         }
         block.term.for_each_atom(&mut count);
     }
-    let mut changed = Vec::new();
-    for (index, block) in function.blocks.iter_mut().enumerate().rev() {
+    let mut removed = false;
+    for block in function.blocks.iter_mut().rev() {
         let mut keep = vec![true; block.stmts.len()];
         for (position, stmt) in block.stmts.iter().enumerate().rev() {
             if let Stmt::Let { var, rhs } = stmt
@@ -92,10 +94,10 @@ fn remove_dead_lets(function: &mut CoreFn) -> Vec<usize> {
         if keep.contains(&false) {
             let mut keep = keep.into_iter();
             block.stmts.retain(|_| keep.next() == Some(true));
-            changed.push(index);
+            removed = true;
         }
     }
-    changed
+    removed
 }
 
 /// 消してもよい右辺。値を作るだけで、エフェクトも実行時エラーも起こさない。extern は表の行が `Pure` のものだけである。

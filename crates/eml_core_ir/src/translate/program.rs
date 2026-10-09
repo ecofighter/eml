@@ -178,8 +178,8 @@ impl ProgramBuilder {
         self.functions[function.0 as usize] = Some(core);
     }
 
-    /// 引数を受け、`rhs` の値を返すだけの関数を作る。包む関数と入口の関数に使う。呼び出しの右辺は `finish` が末尾呼び出し
-    /// にする。
+    /// 引数を受け、`rhs` の値を返すだけの関数を作る。包む関数と入口の関数に使う。呼び出しの右辺は縮約が末尾呼び出しに
+    /// する。
     fn simple(
         &mut self,
         name: String,

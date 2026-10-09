@@ -159,7 +159,7 @@ fn numbering(hir: &HirProgram, body: &Body) -> Numbering {
     }
 }
 
-/// 誤りのない型付き HIR を、RC の命令のない Core IR にする。末尾呼び出しは各関数の `finish` が作る。
+/// 誤りのない型付き HIR を、RC の命令と末尾呼び出しのない Core IR にする。末尾呼び出しは縮約が作る。
 pub(crate) fn translate(
     hir: &HirProgram,
     typed: &TypedProgram,

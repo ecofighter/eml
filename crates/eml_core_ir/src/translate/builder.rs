@@ -4,7 +4,7 @@
 
 use std::mem;
 
-use crate::{Atom, Block, BlockId, CoreFn, Repr, Stmt, Term, VarId, VarInfo, tail_call};
+use crate::{Atom, Block, BlockId, CoreFn, Repr, Stmt, Term, VarId, VarInfo};
 
 /// 値の渡し先になる、まだブロックになっていない位置。そこへ向かう開いたままのブロックを集め、ラベルを持つ式を
 /// 変換し終えたら `resolve` で扱いを決める。
@@ -161,7 +161,8 @@ impl FnBuilder {
         atoms
     }
 
-    /// 末尾呼び出しを構造的に作り、消したブロックを詰めて番号を振り直す (docs/spec/core-ir.md)。
+    /// `return` だけのブロックへの `jump` を `return` に替え、消したブロックを詰めて番号を振り直す。末尾呼び出しは
+    /// 縮約が作る (docs/spec/core-ir.md)。
     /// 文がなく `return p` だけのブロック `b(p)` へのすべての `jump b(a)` を `return a` にして `b` を消す。番号の
     /// 大きいブロックから見るので、`return` に変わったブロックが次に消せる形になっても、同じ1回のループで消える。
     pub(super) fn finish(self, name: String, ret: Repr) -> CoreFn {
@@ -210,13 +211,11 @@ impl FnBuilder {
             .map(|(slot, _)| {
                 let mut term = slot.term.expect("every block is closed");
                 term.for_each_successor_mut(|target| *target = renumbered[target.0 as usize]);
-                let mut block = Block {
+                Block {
                     params: slot.params,
                     stmts: slot.stmts,
                     term,
-                };
-                tail_call(&mut block);
-                block
+                }
             })
             .collect();
         CoreFn {

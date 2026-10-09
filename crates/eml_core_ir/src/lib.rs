@@ -13,7 +13,7 @@ mod text;
 mod translate;
 mod verify;
 
-pub use contract::{contract, tail_call};
+pub use contract::contract;
 pub use perceus::perceus;
 pub use pipeline::{Pass, lower, lower_until};
 pub use pretty::{pretty, pretty_with_positions};
@@ -230,7 +230,7 @@ impl Stmt {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Term {
     Return(Atom),
-    /// translate が出す、末尾の呼び出しの要求。`mask` は `Rhs::Call` と同じである (docs/spec/core-ir.md)。
+    /// 縮約が作る、末尾の呼び出しの要求。`mask` は `Rhs::Call` と同じである (docs/spec/core-ir.md)。
     TailCall {
         call: Call,
         mask: Vec<u32>,

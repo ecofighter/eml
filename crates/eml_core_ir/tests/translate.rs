@@ -12,7 +12,8 @@ fn hello_world() {
       return t.2
     }
     fn entry$main() -> unit {
-      tail call main(())
+      let t.0: unit = call main(())
+      return t.0
     }
     "#);
 }
@@ -165,22 +166,6 @@ fn an_if_statement_continues_after_a_merge_of_unit() {
 }
 
 #[test]
-fn a_returned_if_value_becomes_tail_calls_in_each_arm() {
-    // `let y = if ..; y` の続きは `return` だけのブロックなので、各枝の `jump` を `return` にしてブロックを消し、
-    // 呼び出しの後の `return` を末尾呼び出しにする
-    let text = "f : Int -> Int\nf x = x + 1\n\ng : Int -> Int\ng x = x - 1\n\nh : Bool -> Int -> Int\nh c x =\n  let y = if c then f x else g x\n  y\n\nmain : Unit -> <IO> Unit\nmain () = println (show_int (h True 1))";
-    insta::assert_snapshot!(function(&core_text(text, Pass::Translate), "h"), @"
-    fn h(c.0: enum, x.1: int) -> int {
-      switch c.0 Prelude.Bool { #0 -> b1, #1 -> b2 }
-    b1:
-      tail call g(x.1)
-    b2:
-      tail call f(x.1)
-    }
-    ");
-}
-
-#[test]
 fn a_chain_of_returned_continuations_folds_in_one_pass() {
     // 内側の続き `z` は外側の続き `y` へ jump するだけで、外側の続きは `return y` だけである。番号の大きい外側を先に
     // たたむと、内側も `return` だけのブロックになり、同じループでたたまれる
@@ -190,13 +175,16 @@ fn a_chain_of_returned_continuations_folds_in_one_pass() {
       switch a.0 Prelude.Bool { #0 -> b1, #1 -> b2 }
     b1:
       let t.6: int = extern Prelude.+(x.2, 2)
-      tail call f(t.6)
+      let t.7: int = call f(t.6)
+      return t.7
     b2:
       switch b.1 Prelude.Bool { #0 -> b3, #1 -> b4 }
     b3:
-      tail call g(x.2)
+      let t.4: int = call g(x.2)
+      return t.4
     b4:
-      tail call f(x.2)
+      let t.3: int = call f(x.2)
+      return t.3
     }
     ");
 }
@@ -221,13 +209,15 @@ fn each_reference_to_an_extern_as_a_value_gets_its_own_wrapper() {
     let text = "apply : (a -> <e> b) -> a -> <e> b\napply f x = f x\n\nmain : Unit -> <IO> Unit\nmain () =\n  apply println \"a\"\n  let say = println\n  say \"b\"";
     insta::assert_snapshot!(core_text_with_positions(text), @r#"
     fn apply(f.0: tobj, x.1: tobj) -> tobj {
-      tail apply f.0(x.1)
+      let t.2: tobj = apply f.0(x.1)
+      return t.2
     }
     fn main(p.0: unit) -> unit {
       let s.1: obj = const "a"
       let t.2: unit = call apply(&main$extern0, s.1)
       let s.3: obj = const "b"
-      tail apply &main$extern1(s.3)
+      let t.4: unit = apply &main$extern1(s.3)
+      return t.4
     }
     fn main$extern0(p.0: obj) -> unit {
       let t.1: unit = extern Prelude.println(p.0) @"test.em":6:9
@@ -238,7 +228,8 @@ fn each_reference_to_an_extern_as_a_value_gets_its_own_wrapper() {
       return t.1
     }
     fn entry$main() -> unit {
-      tail call main(())
+      let t.0: unit = call main(())
+      return t.0
     }
     "#);
 }
@@ -318,7 +309,8 @@ fn the_entry_applies_a_point_free_main_to_unit() {
     }
     fn entry$main() -> unit {
       let f.0: tobj = call main()
-      tail apply f.0(())
+      let t.1: unit = apply f.0(())
+      return t.1
     }
     "#);
 }
@@ -338,17 +330,20 @@ fn handlers_are_lifted_with_their_return_reprs() {
     }
     fn main$handle0(p.0: unit) -> int {
       let s.1: obj = const "x"
-      tail perform Ask.ask(s.1)
+      let t.2: int = perform Ask.ask(s.1)
+      return t.2
     }
     fn main$handle0$ask(key.0: obj, k.1: tobj, p.2: unit) -> int {
-      tail resume k.1(1, ())
+      let t.3: int = resume k.1(1, ())
+      return t.3
     }
     fn main$handle0$return(x.0: int, p.1: unit) -> int {
       let t.2: int = extern Prelude.+(x.0, 1)
       return t.2
     }
     fn entry$main() -> unit {
-      tail call main(())
+      let t.0: unit = call main(())
+      return t.0
     }
     "#);
 }
@@ -360,12 +355,14 @@ fn a_continuation_passed_to_a_function_is_wrapped() {
     insta::assert_snapshot!(function(&shown, "main$handle0$ask"), @"
     fn main$handle0$ask(p.0: unit, k.1: tobj, p.2: unit) -> int {
       let c.3: tobj = closure cont$(k.1)
-      tail call twice(c.3)
+      let t.4: int = call twice(c.3)
+      return t.4
     }
     ");
     insta::assert_snapshot!(function(&shown, "cont$"), @"
     fn cont$(k.0: tobj, v.1: tobj) -> tobj {
-      tail resume k.0(v.1, ())
+      let t.2: tobj = resume k.0(v.1, ())
+      return t.2
     }
     ");
 }
@@ -495,7 +492,8 @@ fn an_arm_that_uses_the_matched_variable_receives_it() {
     b4:
       jump b5(t.3)
     b5(found.5: tobj):
-      tail call size(found.5)
+      let t.6: int = call size(found.5)
+      return t.6
     }
     ");
 }
@@ -564,7 +562,8 @@ fn an_arm_that_binds_the_whole_value_builds_it_only_at_its_leaf() {
     b4:
       jump b5(t.3)
     b5(x.4: tobj):
-      tail call size(x.4)
+      let t.5: int = call size(x.4)
+      return t.5
     }
     ");
 }
@@ -682,7 +681,8 @@ fn a_row_that_binds_the_whole_tuple_builds_it_at_its_leaf() {
       return 0
     b2:
       let d.2: obj = con (,) #0(a.0, b.1)
-      tail call first(d.2)
+      let t.3: int = call first(d.2)
+      return t.3
     }
     ");
     insta::assert_snapshot!(function(&shown, "first"), @"
@@ -700,7 +700,8 @@ fn a_leaf_builds_a_known_value_once_however_often_it_passes_it() {
     insta::assert_snapshot!(function(&core_text(text, Pass::Translate), "f"), @"
     fn f(n.0: int) -> int {
       let d.1: obj = con (,) #0(n.0, n.0)
-      tail call pair(n.0, d.1, d.1)
+      let t.2: int = call pair(n.0, d.1, d.1)
+      return t.2
     }
     ");
 }
@@ -774,35 +775,6 @@ fn a_lone_constructor_without_fields_is_a_wildcard() {
 }
 
 #[test]
-fn a_returned_match_value_becomes_tail_calls_in_each_arm() {
-    let text = format!(
-        "{OPTION}f : Int -> Int\nf x = x + 1\n\ng : Int -> Int\ng x = x - 1\n\nh : Option Int -> Int\nh o =\n  let y = match o with\n    | Some v -> f v\n    | None -> g 0\n  let z = y\n  z\n\nmain : Unit -> <IO> Unit\nmain () = println (show_int (h None))"
-    );
-    insta::assert_snapshot!(function(&core_text(&text, Pass::Translate), "h"), @"
-    fn h(o.0: tobj) -> int {
-      switch o.0 Option { #0 -> b1, #1(v.1: int) -> b2 }
-    b1:
-      tail call g(0)
-    b2:
-      tail call f(v.1)
-    }
-    ");
-}
-
-#[test]
-fn returning_a_field_of_a_call_result_is_not_a_tail_call() {
-    // 返すのはタプル全体ではなくフィールドなので、呼び出しの後に `unpack` が残り、末尾呼び出しにならない
-    let text = "split : Int -> (Int, Int)\nsplit x = (x, x + 1)\n\nfirst : Int -> Int\nfirst x =\n  let (y, _) = split x\n  y\n\nmain : Unit -> <IO> Unit\nmain () = println (show_int (first 1))";
-    insta::assert_snapshot!(function(&core_text(text, Pass::Translate), "first"), @"
-    fn first(x.0: int) -> int {
-      let t.1: obj = call split(x.0)
-      unpack t.1 (,) #0(y.2: int, x.3: int)
-      return y.2
-    }
-    ");
-}
-
-#[test]
 fn a_thousand_shared_arms_are_translated_without_deep_recursion() {
     // `(_, i)` の枝には、`A` の行き先と `default` の2つの葉が向かう。枝は枝の順に1つずつ変換するので、枝の数だけ
     // Rust のスタックを使わない (docs/spec/core-ir.md)
@@ -870,25 +842,30 @@ fn effect_numbers_skip_the_extern_effects() {
       return t.3
     }
     fn main$handle1(p.0: unit) -> int {
-      tail handle A((), &main$handle0) { ask: &main$handle0$ask } return &main$handle0$return
+      let t.1: int = handle A((), &main$handle0) { ask: &main$handle0$ask } return &main$handle0$return
+      return t.1
     }
     fn main$handle0(p.0: unit) -> int {
-      tail call needs_a(&told)
+      let t.1: int = call needs_a(&told)
+      return t.1
     }
     fn main$handle0$ask(p.0: unit, k.1: tobj, p.2: unit) -> int {
-      tail resume k.1(1, ())
+      let t.3: int = resume k.1(1, ())
+      return t.3
     }
     fn main$handle0$return($r.0: int, p.1: unit) -> int {
       return $r.0
     }
     fn main$handle1$tell(m.0: int, k.1: tobj, p.2: unit) -> int {
-      tail resume k.1((), ())
+      let t.3: int = resume k.1((), ())
+      return t.3
     }
     fn main$handle1$return($r.0: int, p.1: unit) -> int {
       return $r.0
     }
     fn entry$main() -> unit {
-      tail call main(())
+      let t.0: unit = call main(())
+      return t.0
     }
     ");
 }
@@ -919,7 +896,8 @@ fn the_entry_function_is_chosen_by_the_caller() {
       return t.2
     }
     fn entry$alt() -> unit {
-      tail call alt(())
+      let t.0: unit = call alt(())
+      return t.0
     }
     "#);
 }
@@ -934,23 +912,28 @@ fn names_outside_the_entry_are_qualified_with_their_module() {
     layout Report.Csv.Row { Row(int) }
     effect Report.Csv.Parse { next/1 }
     fn apply(f.0: tobj, x.1: tobj) -> tobj {
-      tail apply f.0(x.1)
+      let t.2: tobj = apply f.0(x.1)
+      return t.2
     }
     fn main(p.0: unit) -> unit {
       let t.1: obj = handle Report.Csv.Parse((), &main$handle0) { next: &main$handle0$next } return &main$handle0$return
       unpack t.1 Report.Csv.Row #0(n.2: int)
       let t.3: obj = extern Prelude.show_int(n.2)
-      tail call apply(&main$extern0, t.3)
+      let t.4: unit = call apply(&main$extern0, t.3)
+      return t.4
     }
     fn Report.Csv.parse(p.0: unit) -> obj {
       let t.1: int = apply &op$Report.Csv.next(())
-      tail apply &con$Report.Csv.Row(t.1)
+      let t.2: obj = apply &con$Report.Csv.Row(t.1)
+      return t.2
     }
     fn main$handle0(p.0: unit) -> obj {
-      tail call Report.Csv.parse(())
+      let t.1: obj = call Report.Csv.parse(())
+      return t.1
     }
     fn main$handle0$next(p.0: unit, k.1: tobj, p.2: unit) -> obj {
-      tail resume k.1(1, ())
+      let t.3: obj = resume k.1(1, ())
+      return t.3
     }
     fn main$handle0$return(r.0: obj, p.1: unit) -> obj {
       return r.0
@@ -960,14 +943,16 @@ fn names_outside_the_entry_are_qualified_with_their_module() {
       return t.1
     }
     fn op$Report.Csv.next(p.0: unit) -> int {
-      tail perform Report.Csv.Parse.next(p.0)
+      let t.1: int = perform Report.Csv.Parse.next(p.0)
+      return t.1
     }
     fn con$Report.Csv.Row(p.0: int) -> obj {
       let d.1: obj = con Report.Csv.Row #0(p.0)
       return d.1
     }
     fn entry$main() -> unit {
-      tail call main(())
+      let t.0: unit = call main(())
+      return t.0
     }
     ");
 }
@@ -980,7 +965,8 @@ fn an_entry_operation_does_not_collide_with_a_prelude_operation() {
     let shown = core_text(text, Pass::Translate);
     insta::assert_snapshot!(function(&shown, "op$println"), @"
     fn op$println(p.0: obj) -> unit {
-      tail perform Log.println(p.0)
+      let t.1: unit = perform Log.println(p.0)
+      return t.1
     }
     ");
     insta::assert_snapshot!(function(&shown, "main$extern0"), @"
@@ -1014,9 +1000,11 @@ fn recursion_and_top_level_values() {
       switch t.1 Prelude.Bool { #0 -> b1, #1 -> b2 }
     b1:
       let t.3: int = extern Prelude.-(n.0, 1)
-      tail call count(t.3)
+      let t.4: int = call count(t.3)
+      return t.4
     b2:
-      tail call answer()
+      let answer.2: int = call answer()
+      return answer.2
     }
     fn main(p.0: unit) -> unit {
       let t.1: int = call count(3)
@@ -1025,7 +1013,8 @@ fn recursion_and_top_level_values() {
       return t.3
     }
     fn entry$main() -> unit {
-      tail call main(())
+      let t.0: unit = call main(())
+      return t.0
     }
     ");
 }
@@ -1053,7 +1042,8 @@ fn partial_and_extra_arguments_use_closures() {
       return t.7
     }
     fn entry$main() -> unit {
-      tail call main(())
+      let t.0: unit = call main(())
+      return t.0
     }
     ");
 }
@@ -1075,23 +1065,27 @@ fn builtins_used_as_values_are_wrapped() {
       return c.2
     }
     fn apply(f.0: tobj, x.1: tobj) -> tobj {
-      tail apply f.0(x.1)
+      let t.2: tobj = apply f.0(x.1)
+      return t.2
     }
     fn main(p.0: unit) -> unit {
       let t.1: tobj = call Prelude.>>(&Prelude.not, &Prelude.not)
       let t.2: obj = extern Prelude.show_int(1)
-      tail call apply(&main$extern0, t.2)
+      let t.3: unit = call apply(&main$extern0, t.2)
+      return t.3
     }
     fn Prelude.>>$lambda0(f.0: tobj, g.1: tobj, x.2: tobj) -> tobj {
       let t.3: tobj = apply f.0(x.2)
-      tail apply g.1(t.3)
+      let t.4: tobj = apply g.1(t.3)
+      return t.4
     }
     fn main$extern0(p.0: obj) -> unit {
       let t.1: unit = extern Prelude.println(p.0)
       return t.1
     }
     fn entry$main() -> unit {
-      tail call main(())
+      let t.0: unit = call main(())
+      return t.0
     }
     ");
 }
@@ -1101,7 +1095,8 @@ fn lambdas_are_lifted_with_their_captures_first() {
     let text = "apply : (a -> <e> b) -> a -> <e> b\napply f x = f x\n\nmain : Unit -> <IO> Unit\nmain () =\n  let s = \"!\"\n  let shout = fn t -> t ++ s\n  println (apply shout \"hi\")\n  println s";
     insta::assert_snapshot!(core_text(text, Pass::Translate), @r#"
     fn apply(f.0: tobj, x.1: tobj) -> tobj {
-      tail apply f.0(x.1)
+      let t.2: tobj = apply f.0(x.1)
+      return t.2
     }
     fn main(p.0: unit) -> unit {
       let s.1: obj = const "!"
@@ -1117,7 +1112,8 @@ fn lambdas_are_lifted_with_their_captures_first() {
       return t.2
     }
     fn entry$main() -> unit {
-      tail call main(())
+      let t.0: unit = call main(())
+      return t.0
     }
     "#);
 }
@@ -1142,7 +1138,8 @@ fn a_zero_arity_callee_is_evaluated_before_its_arguments() {
       return t.5
     }
     fn entry$main() -> unit {
-      tail call main(())
+      let t.0: unit = call main(())
+      return t.0
     }
     ");
 }
@@ -1163,30 +1160,6 @@ fn a_tail_if_returns_from_each_arm() {
       return s.2
     }
     "#);
-}
-
-#[test]
-fn calls_in_tail_position_are_tail_calls() {
-    let text = "loop : Int -> Int -> Int\nloop n acc = if n == 0 then acc else loop (n - 1) (acc + 1)\n\ncall_twice : (Int -> Int) -> Int -> Int\ncall_twice f x = f (f x)\n\nmain : Unit -> <IO> Unit\nmain () = println (show_int (loop 3 0 + call_twice (fn x -> x + 1) 1))";
-    let shown = core_text(text, Pass::Translate);
-    insta::assert_snapshot!(function(&shown, "loop"), @"
-    fn loop(n.0: int, acc.1: int) -> int {
-      let t.2: enum = extern Prelude.int_eq(n.0, 0)
-      switch t.2 Prelude.Bool { #0 -> b1, #1 -> b2 }
-    b1:
-      let t.3: int = extern Prelude.-(n.0, 1)
-      let t.4: int = extern Prelude.+(acc.1, 1)
-      tail call loop(t.3, t.4)
-    b2:
-      return acc.1
-    }
-    ");
-    insta::assert_snapshot!(function(&shown, "call_twice"), @"
-    fn call_twice(f.0: tobj, x.1: int) -> int {
-      let t.2: int = apply f.0(x.1)
-      tail apply f.0(t.2)
-    }
-    ");
 }
 
 #[test]
@@ -1235,17 +1208,20 @@ fn handlers_are_lifted_to_closures() {
     }
     fn main$handle0(p.0: unit) -> int {
       let s.1: obj = const "x"
-      tail perform Ask.ask(s.1)
+      let t.2: int = perform Ask.ask(s.1)
+      return t.2
     }
     fn main$handle0$ask(key.0: obj, k.1: tobj, p.2: unit) -> int {
-      tail resume k.1(1, ())
+      let t.3: int = resume k.1(1, ())
+      return t.3
     }
     fn main$handle0$return(x.0: int, p.1: unit) -> int {
       let t.2: int = extern Prelude.+(x.0, 1)
       return t.2
     }
     fn entry$main() -> unit {
-      tail call main(())
+      let t.0: unit = call main(())
+      return t.0
     }
     "#);
 }
@@ -1259,12 +1235,14 @@ fn operations_as_values_and_drop() {
       let s.1: obj = const "info"
       let c.2: tobj = closure op$log(s.1)
       let s.3: obj = const "a"
-      tail apply c.2(s.3)
+      let t.4: unit = apply c.2(s.3)
+      return t.4
     }
     "#);
     insta::assert_snapshot!(function(&shown, "op$log"), @"
     fn op$log(p.0: obj, p.1: obj) -> unit {
-      tail perform Log.log(p.0, p.1)
+      let t.2: unit = perform Log.log(p.0, p.1)
+      return t.2
     }
     ");
     insta::assert_snapshot!(function(&shown, "discard"), @"
@@ -1301,7 +1279,8 @@ fn a_constructor_used_as_a_function_value_is_wrapped() {
     insta::assert_snapshot!(function(&shown, "pairs"), @"
     fn pairs(n.0: int) -> obj {
       let c.1: tobj = closure con$Pair(n.0)
-      tail apply c.1(2)
+      let t.2: obj = apply c.1(2)
+      return t.2
     }
     ");
     insta::assert_snapshot!(function(&shown, "con$Pair"), @"
@@ -1382,7 +1361,8 @@ fn constructor_patterns_in_let_lambda_and_equation_parameters() {
     ");
     insta::assert_snapshot!(function(&shown, "by_lambda"), @"
     fn by_lambda(b.0: obj) -> int {
-      tail apply &by_lambda$lambda0(b.0)
+      let t.1: int = apply &by_lambda$lambda0(b.0)
+      return t.1
     }
     ");
     insta::assert_snapshot!(function(&shown, "by_lambda$lambda0"), @"
@@ -1410,7 +1390,8 @@ fn a_variable_pattern_after_a_switch_binds_the_scrutinee() {
     b4:
       jump b5(xs.0)
     b5(ys.3: tobj):
-      tail call size(ys.3)
+      let t.4: int = call size(ys.3)
+      return t.4
     }
     ");
 }
@@ -1423,7 +1404,8 @@ fn constructor_patterns_in_handler_clause_parameters() {
     insta::assert_snapshot!(function(&shown, "run$handle0$give"), @"
     fn run$handle0$give(p.0: obj, k.1: tobj, p.2: unit) -> int {
       unpack p.0 Box #0(n.3: int)
-      tail resume k.1(n.3, ())
+      let t.4: int = resume k.1(n.3, ())
+      return t.4
     }
     ");
     insta::assert_snapshot!(function(&shown, "run$handle0$return"), @"
@@ -1605,14 +1587,16 @@ fn a_handler_with_a_state_passes_its_initial_value_and_takes_the_state_from_its_
     }
     fn main$handle0$ask(p.0: unit, k.1: tobj, st.2: int) -> int {
       let t.3: int = extern Prelude.+(st.2, 1)
-      tail resume k.1(st.2, t.3)
+      let t.4: int = resume k.1(st.2, t.3)
+      return t.4
     }
     fn main$handle0$return(x.0: int, st.1: int) -> int {
       let t.2: int = extern Prelude.*(x.0, st.1)
       return t.2
     }
     fn entry$main() -> unit {
-      tail call main(())
+      let t.0: unit = call main(())
+      return t.0
     }
     ");
 }
@@ -1632,25 +1616,30 @@ fn effects_are_numbered_in_declaration_order() {
       return t.5
     }
     fn main$handle0(p.0: unit) -> int {
-      tail perform A.a(())
+      let t.1: int = perform A.a(())
+      return t.1
     }
     fn main$handle0$a(p.0: unit, k.1: tobj, p.2: unit) -> int {
-      tail resume k.1(1, ())
+      let t.3: int = resume k.1(1, ())
+      return t.3
     }
     fn main$handle0$return($r.0: int, p.1: unit) -> int {
       return $r.0
     }
     fn main$handle1(p.0: unit) -> int {
-      tail perform B.b(())
+      let t.1: int = perform B.b(())
+      return t.1
     }
     fn main$handle1$b(p.0: unit, k.1: tobj, p.2: unit) -> int {
-      tail resume k.1(2, ())
+      let t.3: int = resume k.1(2, ())
+      return t.3
     }
     fn main$handle1$return($r.0: int, p.1: unit) -> int {
       return $r.0
     }
     fn entry$main() -> unit {
-      tail call main(())
+      let t.0: unit = call main(())
+      return t.0
     }
     ");
 }
@@ -1721,7 +1710,8 @@ fn an_arm_reached_by_one_leaf_sits_at_the_leaf() {
       return t.6
     }
     fn entry$main() -> unit {
-      tail call main(())
+      let t.0: unit = call main(())
+      return t.0
     }
     ");
 }
@@ -1768,7 +1758,8 @@ fn each_comparison_picks_the_instruction_of_its_operand_type() {
       return ()
     }
     fn entry$main() -> unit {
-      tail call main(())
+      let t.0: unit = call main(())
+      return t.0
     }
     "#);
 }
@@ -1797,7 +1788,8 @@ fn a_masked_callback_call() {
     insta::assert_snapshot!(function(&core_text(&text, Pass::Translate), "run"), @"
     fn run(cb.0: tobj) -> tobj {
       let t.1: int = perform State.get(())
-      tail mask [State] apply cb.0(())
+      let t.2: tobj = mask [State] apply cb.0(())
+      return t.2
     }
     ");
 }
@@ -1811,7 +1803,8 @@ fn a_saturated_known_call_takes_the_mask_of_its_last_arrow() {
     );
     insta::assert_snapshot!(function(&core_text(&text, Pass::Translate), "run"), @"
     fn run(cb.0: tobj) -> tobj {
-      tail mask [State] call twice(1, cb.0)
+      let t.1: tobj = mask [State] call twice(1, cb.0)
+      return t.1
     }
     ");
 }
@@ -1826,7 +1819,8 @@ fn arrows_with_different_masks_are_applied_apart() {
     insta::assert_snapshot!(function(&core_text(&text, Pass::Translate), "h"), @"
     fn h(f.0: tobj) -> int {
       let t.1: tobj = mask [State] apply f.0(1)
-      tail apply t.1(2)
+      let t.2: int = apply t.1(2)
+      return t.2
     }
     ");
 }
@@ -1839,7 +1833,8 @@ fn a_continuation_call_in_its_clause_has_no_mask() {
     );
     insta::assert_snapshot!(function(&core_text(&text, Pass::Translate), "run$handle0$get"), @"
     fn run$handle0$get(p.0: unit, k.1: tobj, st.2: int) -> tobj {
-      tail resume k.1(st.2, st.2)
+      let t.3: tobj = resume k.1(st.2, st.2)
+      return t.3
     }
     ");
 }
@@ -1880,7 +1875,8 @@ main () =
     // handle の番号は HIR の式の ID の順なので、内側の handle が `f$handle0` になる
     insta::assert_snapshot!(function(&core_text(text, Pass::Translate), "f$handle0"), @"
     fn f$handle0(k.0: tobj, p.1: unit) -> int {
-      tail mask [Log] resume k.0(1, ())
+      let t.2: int = mask [Log] resume k.0(1, ())
+      return t.2
     }
     ");
 }
@@ -1896,7 +1892,8 @@ fn extra_arguments_of_a_known_call_take_the_mask_of_their_arrow() {
     insta::assert_snapshot!(function(&core_text(&text, Pass::Translate), "run"), @"
     fn run(cb.0: tobj) -> tobj {
       let t.1: tobj = call pick(1)
-      tail mask [State] apply t.1(cb.0)
+      let t.2: tobj = mask [State] apply t.1(cb.0)
+      return t.2
     }
     ");
 }
@@ -2006,7 +2003,8 @@ fn a_partial_continuation_is_wrapped_with_the_state_wrapper() {
     assert!(shown.contains("closure cont$state(k"), "{shown}");
     insta::assert_snapshot!(function(&shown, "cont$state"), @"
     fn cont$state(k.0: tobj, v.1: tobj, s.2: tobj) -> tobj {
-      tail resume k.0(v.1, s.2)
+      let t.3: tobj = resume k.0(v.1, s.2)
+      return t.3
     }
     ");
 }
