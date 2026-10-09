@@ -3,6 +3,7 @@
 
 mod common;
 
+mod bench;
 mod closures;
 mod data;
 mod run;
