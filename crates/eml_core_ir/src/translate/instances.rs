@@ -173,7 +173,7 @@ fn uniform_positions(hir: &HirProgram, typed: &TypedProgram) -> HashSet<(Functio
     let mut nodes: Vec<(FunctionId, usize)> = Vec::new();
     let mut node_of: HashMap<(FunctionId, usize), usize> = HashMap::new();
     for (id, function) in hir.functions() {
-        if function.kind != FunctionKind::Defined {
+        if !function.kind.has_equations() {
             continue;
         }
         for position in 0..type_vars(hir, id).len() {
@@ -183,7 +183,7 @@ fn uniform_positions(hir: &HirProgram, typed: &TypedProgram) -> HashSet<(Functio
     }
     let mut edges: Vec<Vec<(usize, bool)>> = vec![Vec::new(); nodes.len()];
     for (f, function) in hir.functions() {
-        if function.kind != FunctionKind::Defined {
+        if !function.kind.has_equations() {
             continue;
         }
         let names = type_vars(hir, f);

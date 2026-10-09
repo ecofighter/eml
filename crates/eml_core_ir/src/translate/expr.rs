@@ -22,6 +22,9 @@ pub(super) fn extern_row(hir: &HirProgram, function: FunctionId) -> Option<Exter
             Some(row.expect("a program without errors has no user extern"))
         }
         FunctionKind::Defined => None,
+        FunctionKind::DefaultMethod(_) | FunctionKind::InstanceMethod(..) => {
+            unreachable!("the type checker rejects classes until S5 Task 4")
+        }
     }
 }
 
@@ -420,6 +423,9 @@ impl FnLowering<'_> {
                 } else {
                     self.closure(target, Vec::new())
                 }
+            }
+            ExprKind::Path(Res::Item(ValueItem::Method(_))) => {
+                unreachable!("the type checker rejects classes until S5 Task 4")
             }
             ExprKind::Path(Res::Item(ValueItem::Operation(op))) => {
                 let wrapper = self

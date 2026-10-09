@@ -112,6 +112,11 @@ impl TypeLowering<'_> {
                     .push(not_found(&self.items, self.file, NameKind::Type, at));
                 TypeRefKind::Error
             }
+            Resolved::Found(TypeItem::Class(_)) => {
+                self.diagnostics
+                    .push(class_as_type(self.file, &at.written(), range));
+                TypeRefKind::Error
+            }
             other => {
                 self.diagnostics.extend(unresolved(
                     &self.items,
@@ -125,50 +130,21 @@ impl TypeLowering<'_> {
         }
     }
 
-    /// 型とエフェクトの型引数の個数の誤り (E1015)。
     fn arity_error(&mut self, name: &str, expected: usize, given: usize, range: TextRange) {
-        let given = match given {
-            1 => "1 was given".to_string(),
-            n => format!("{n} were given"),
-        };
-        self.diagnostics.push(Diagnostic::error(
-            codes::TYPE_ARGUMENT_COUNT,
-            format!("`{name}` takes {}, but {given}", type_arguments(expected)),
-            Label::new(
-                self.file,
-                range,
-                format!("expected {}", type_arguments(expected)),
-            ),
-        ));
+        self.diagnostics
+            .push(arity_error(self.file, name, expected, given, range));
     }
 
-    /// 公開の範囲の誤り (E1032)。非公開の型を返す公開の関数を許すと、`pub data` の形で入れる予定の抽象型より先に、
-    /// 裏口の抽象型ができてしまう。非公開のエフェクトは、import する側が名前を書けず handle できない
-    /// (docs/spec/modules.md の「公開の範囲」)。
     fn check_exposed(&mut self, item: TypeItem, range: TextRange) {
-        let Some(owner) = self.public_item else {
-            return;
-        };
-        let Some((name, defined)) = self.items.private_type_item(item) else {
-            return;
-        };
-        let kind = match item {
-            TypeItem::Type(_) => "type",
-            TypeItem::Effect(_) => "effect",
-        };
-        self.diagnostics.push(
-            Diagnostic::error(
-                codes::PRIVATE_IN_PUBLIC,
-                format!("the public `{owner}` uses the private {kind} `{name}`"),
-                Label::new(self.file, range, format!("`{name}` is not `pub`")),
-            )
-            .with_secondary(Label::new(
+        if let Some(owner) = self.public_item {
+            self.diagnostics.extend(private_in_public(
+                &self.items,
                 self.file,
-                defined,
-                format!("`{name}` is defined here"),
-            ))
-            .with_help(format!("add `pub` to the declaration of `{name}`")),
-        );
+                owner,
+                item,
+                range,
+            ));
+        }
     }
 
     fn row(&mut self, row: &ast::EffectRow) -> RowRef {
@@ -206,8 +182,8 @@ impl TypeLowering<'_> {
                     self.check_exposed(TypeItem::Effect(id), path_range);
                     effects.push(EffectRef { effect: id, args });
                 }
-                // 型の名前は row に書けない
-                Resolved::Found(TypeItem::Type(_)) => {
+                // 型とクラスの名前は row に書けない
+                Resolved::Found(TypeItem::Type(_) | TypeItem::Class(_)) => {
                     self.diagnostics
                         .push(not_found(&self.items, self.file, NameKind::Effect, &at));
                     valid = false;
@@ -295,6 +271,71 @@ impl TypeLowering<'_> {
     fn alloc(&mut self, kind: TypeRefKind, range: TextRange) -> TypeRefId {
         self.types.alloc(TypeRef { kind, range })
     }
+}
+
+/// 公開の範囲の誤り (E1032)。非公開の型を返す公開の関数を許すと、`pub data` の形で入れる予定の抽象型より先に、
+/// 裏口の抽象型ができてしまう。非公開のエフェクトは、import する側が名前を書けず handle できない
+/// (docs/spec/modules.md の「公開の範囲」)。非公開のクラスの制約を持つ公開の関数は、import する側が instance を
+/// 書けない (docs/superpowers/specs/2026-10-10-s5-type-classes-design.md の「名前空間と公開」)。
+pub(super) fn private_in_public(
+    items: &Resolver<'_>,
+    file: FileId,
+    owner: &str,
+    item: TypeItem,
+    range: TextRange,
+) -> Option<Diagnostic> {
+    let (name, defined) = items.private_type_item(item)?;
+    let kind = match item {
+        TypeItem::Type(_) => "type",
+        TypeItem::Effect(_) => "effect",
+        TypeItem::Class(_) => "class",
+    };
+    Some(
+        Diagnostic::error(
+            codes::PRIVATE_IN_PUBLIC,
+            format!("the public `{owner}` uses the private {kind} `{name}`"),
+            Label::new(file, range, format!("`{name}` is not `pub`")),
+        )
+        .with_secondary(Label::new(
+            file,
+            defined,
+            format!("`{name}` is defined here"),
+        ))
+        .with_help(format!("add `pub` to the declaration of `{name}`")),
+    )
+}
+
+/// 型とエフェクトの型引数の個数の誤り (E1015)。instance の頭も同じ文言を使う。
+pub(super) fn arity_error(
+    file: FileId,
+    name: &str,
+    expected: usize,
+    given: usize,
+    range: TextRange,
+) -> Diagnostic {
+    let given = match given {
+        1 => "1 was given".to_string(),
+        n => format!("{n} were given"),
+    };
+    Diagnostic::error(
+        codes::TYPE_ARGUMENT_COUNT,
+        format!("`{name}` takes {}, but {given}", type_arguments(expected)),
+        Label::new(
+            file,
+            range,
+            format!("expected {}", type_arguments(expected)),
+        ),
+    )
+}
+
+/// E1043。クラスは型の名前空間にあるが、型ではない
+/// (docs/superpowers/specs/2026-10-10-s5-type-classes-design.md の「名前空間と公開」)。
+pub(super) fn class_as_type(file: FileId, name: &str, range: TextRange) -> Diagnostic {
+    Diagnostic::error(
+        codes::CLASS_AS_TYPE,
+        format!("`{name}` is a class, not a type"),
+        Label::new(file, range, "a class cannot be used as a type"),
+    )
 }
 
 fn type_arguments(n: usize) -> String {

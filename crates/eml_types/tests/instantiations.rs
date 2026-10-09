@@ -216,6 +216,7 @@ fn every_reference_to_an_item_with_a_signature_is_recorded() {
                     .len(),
                 ValueItem::Operation(id) => program[id].signature.generics.type_vars.len(),
                 ValueItem::Constructor(id) => program[program[id].ty].generics.type_vars.len(),
+                ValueItem::Method(id) => program[id].signature.generics.type_vars.len(),
             };
             assert_eq!(instantiation.args.len(), rigids, "{decl:?}");
         }

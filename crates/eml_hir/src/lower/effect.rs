@@ -6,6 +6,7 @@ use eml_syntax::SyntaxKind;
 use la_arena::Arena;
 
 use super::ItemLowering;
+use super::class::ContextScope;
 use super::types::{TypeLowering, Vars};
 use crate::codes;
 use crate::hir::{
@@ -108,11 +109,20 @@ impl ItemLowering<'_> {
             diagnostics: &mut *self.diagnostics,
         }
         .lower(decl.ty(), range);
+        // 操作に制約を書けると、handler の節が perform の位置で選んだ証拠を実行時に受け取る必要が生じる
+        // (docs/superpowers/specs/2026-10-10-s5-type-classes-design.md の「文法」)
+        let constraints = self.lower_context(
+            decl.context(),
+            &generics,
+            ContextScope::Forbidden("an effect operation"),
+            None,
+        );
         let signature = Signature {
             ty,
             range,
             types,
             generics,
+            constraints,
         };
         let arity = self.check_signature(&item.name, &signature, multiplicity, effect_params);
         Operation {
@@ -207,7 +217,7 @@ impl ItemLowering<'_> {
     }
 }
 
-fn mentions(types: &Arena<TypeRef>, id: TypeRefId, var: TypeVarId) -> bool {
+pub(super) fn mentions(types: &Arena<TypeRef>, id: TypeRefId, var: TypeVarId) -> bool {
     match &types[id].kind {
         TypeRefKind::Var(other) => *other == var,
         TypeRefKind::Fn { param, ret, .. } => {

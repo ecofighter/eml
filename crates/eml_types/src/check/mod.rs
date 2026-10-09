@@ -40,6 +40,8 @@ impl Signatures {
             ValueItem::Function(id) => self.functions.get(id),
             ValueItem::Operation(id) => self.operations.get(id),
             ValueItem::Constructor(id) => self.constructors.get(id),
+            // 型検査はまだクラスを扱えない。E0004 を報告済みなので、参照は誤りの型にして連鎖させない
+            ValueItem::Method(_) => None,
         }
     }
 }
@@ -54,13 +56,13 @@ pub(crate) fn check_module(
     program: &Program,
     files: &SourceFiles,
 ) -> (TypedProgram, Vec<Diagnostic>) {
+    let mut diagnostics = classes_not_supported(program);
     let context = Context::new(program);
     let signatures = signatures(program, &context);
     let mut schemes = declaration_schemes(program, &context, &signatures);
     // 宣言と本体の型を1つの表に登録する。表は追記だけするので、本体を独立に検査する順は結果の意味を変えない
     // (docs/implementation/architecture.md の「`eml_types` の内部」)
     let mut types = TypeStore::new(program);
-    let mut diagnostics = Vec::new();
     let main = program.main();
     if let Some(id) = main {
         check_main(program, &signatures, id, &mut types, &mut diagnostics);
@@ -102,6 +104,35 @@ pub(crate) fn check_module(
     // 網羅性は型推論と使用回数のパスの後に、書き出した型の上で調べる (docs/spec/exhaustiveness.md の「検査パス」)
     diagnostics.extend(exhaustive::check(program, &typed));
     (typed, diagnostics)
+}
+
+/// S5 の途中の仮の診断。型検査がクラスを扱えるようになったら外す。
+fn classes_not_supported(program: &Program) -> Vec<Diagnostic> {
+    let message = "type classes are not supported by the type checker yet";
+    let classes = program
+        .classes()
+        .map(|(id, class)| (id.module, class.name_range));
+    let instances = program
+        .instances()
+        .map(|(id, instance)| (id.module, instance.head_range));
+    // 既定のメソッドと instance のメソッドの関数の制約は、クラスと instance の位置で報告済み
+    let constraints = program
+        .functions()
+        .filter(|(_, function)| {
+            matches!(
+                function.kind,
+                FunctionKind::Defined | FunctionKind::Extern(_)
+            )
+        })
+        .filter_map(|(id, function)| {
+            let constraint = function.signature.as_ref()?.constraints.first()?;
+            Some((id.module, constraint.range))
+        });
+    classes
+        .chain(instances)
+        .chain(constraints)
+        .map(|(module, range)| Diagnostic::not_yet_supported(program.file(module), range, message))
+        .collect()
 }
 
 /// 段0: すべての宣言のシグネチャを閉じた形にする。宣言ごとに独立している。

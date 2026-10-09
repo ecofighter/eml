@@ -14,8 +14,8 @@ use crate::item_tree::{Fixity, ImportName, ItemTree, duplicate};
 use crate::load::{ImportTarget, LoadedModule, STD_ROOT};
 use crate::names::DisplayNames;
 use crate::program::{
-    ConstructorId, EffectId, FunctionId, ItemId, ModuleId, ModuleOrigin, OperationId, TypeDefId,
-    TypeItem, ValueItem,
+    ClassId, ConstructorId, EffectId, FunctionId, ItemId, MethodId, ModuleId, ModuleOrigin,
+    OperationId, TypeDefId, TypeItem, ValueItem,
 };
 
 /// 名前の参照。修飾子は1つのセグメントとは限らない (2つ以上は E1031)。
@@ -145,7 +145,10 @@ struct ModuleScope {
     constructors: Vec<Vec<ConstructorId>>,
     effects: Vec<EffectId>,
     operations: Vec<Vec<OperationId>>,
-    /// `T(..)` と `E(..)` が取り込む部品。型にはコンストラクタ、エフェクトには操作を、宣言の順に並べる。
+    class_ids: Vec<ClassId>,
+    method_ids: Vec<Vec<MethodId>>,
+    /// `T(..)`、`E(..)`、`C(..)` が取り込む部品。型にはコンストラクタ、エフェクトには操作、クラスにはメソッドを、
+    /// 宣言の順に並べる。
     parts: HashMap<TypeItem, Vec<(String, ValueItem)>>,
     imports: Imports,
 }
@@ -294,7 +297,7 @@ fn item_id<T>(module: ModuleId, local: usize) -> ItemId<T> {
 }
 
 impl ModuleScope {
-    /// 局所の番号は `ItemTree` の順に振る。コンストラクタと操作は、宣言の順に通し番号に
+    /// 局所の番号は `ItemTree` の順に振る。コンストラクタ、操作、メソッドは、宣言の順に通し番号に
     /// する。`lower` も同じ順にアリーナへ置く。
     fn new(module: ModuleId, loaded: &LoadedModule) -> ModuleScope {
         let tree = &loaded.tree;
@@ -334,6 +337,24 @@ impl ModuleScope {
                     .collect()
             })
             .collect();
+        let class_ids: Vec<ClassId> = (0..tree.classes.len())
+            .map(|k| item_id(module, k))
+            .collect();
+        let mut next = 0;
+        let method_ids = tree
+            .classes
+            .iter()
+            .map(|class| {
+                class
+                    .methods
+                    .iter()
+                    .map(|_| {
+                        next += 1;
+                        item_id(module, next - 1)
+                    })
+                    .collect()
+            })
+            .collect();
         let mut scope = ModuleScope {
             name: loaded.name.clone(),
             origin: loaded.origin,
@@ -349,6 +370,8 @@ impl ModuleScope {
             constructors,
             effects,
             operations,
+            class_ids,
+            method_ids,
             parts: HashMap::new(),
             imports: Imports::default(),
         };
@@ -380,6 +403,16 @@ impl ModuleScope {
                 true,
             );
             self.effect_params.insert(id, effect.params.len());
+        }
+        for (k, class) in tree.classes.iter().enumerate() {
+            push(
+                &mut self.types,
+                &class.name,
+                TypeItem::Class(self.class_ids[k]),
+                class.name_range,
+                class.public,
+                true,
+            );
         }
         for names in self.types.values_mut() {
             names.sort_by_key(|definition| definition.range.start());
@@ -442,6 +475,30 @@ impl ModuleScope {
                     .entry(TypeItem::Effect(self.effects[k]))
                     .or_default()
                     .push((operation.name.clone(), ValueItem::Operation(id)));
+            }
+        }
+        // `pub class` はメソッドもまとめて公開する
+        // (docs/superpowers/specs/2026-10-10-s5-type-classes-design.md の「名前空間と公開」)
+        for (k, class) in tree.classes.iter().enumerate() {
+            let usable = !duplicates.contains(&TypeItem::Class(self.class_ids[k]));
+            for (j, method) in class.methods.iter().enumerate() {
+                let id = self.method_ids[k][j];
+                let range = method
+                    .signature
+                    .as_ref()
+                    .map_or(method.first_range, |signature| signature.name_range);
+                push(
+                    &mut self.values,
+                    &method.name,
+                    ValueItem::Method(id),
+                    range,
+                    class.public,
+                    usable,
+                );
+                self.parts
+                    .entry(TypeItem::Class(self.class_ids[k]))
+                    .or_default()
+                    .push((method.name.clone(), ValueItem::Method(id)));
             }
         }
         for names in self.values.values_mut() {
@@ -575,7 +632,7 @@ impl ModuleScope {
         None
     }
 
-    /// import の並びの大文字の名前。型かエフェクトだけを見る (docs/spec/modules.md の「import」)。見つかれば、定義と
+    /// import の並びの大文字の名前。型の名前空間 (型、エフェクト、クラス) だけを見る (docs/spec/modules.md の「import」)。見つかれば、定義と
     /// `pub` かを返す。`pub` でなければ並びの位置で報告する。標準ライブラリの `pub` でない item は、定義がないものとして
     /// 扱う。
     fn export_type(
@@ -869,7 +926,7 @@ fn extern_index(scopes: &[ModuleScope]) -> ExternIndex {
                 |scope| &scope.types,
                 |item| match item {
                     TypeItem::Type(id) => Some(id),
-                    TypeItem::Effect(_) => None,
+                    TypeItem::Effect(_) | TypeItem::Class(_) => None,
                 },
             )
             .unwrap_or_else(|| {
@@ -885,7 +942,7 @@ fn extern_index(scopes: &[ModuleScope]) -> ExternIndex {
         |scope| &scope.types,
         |item| match item {
             TypeItem::Effect(id) => Some(id),
-            TypeItem::Type(_) => None,
+            TypeItem::Type(_) | TypeItem::Class(_) => None,
         },
     )
     .unwrap_or_else(|| panic!("the standard library does not declare the effect `{canonical}`"));
@@ -896,7 +953,7 @@ fn extern_index(scopes: &[ModuleScope]) -> ExternIndex {
         |scope| &scope.values,
         |item| match item {
             ValueItem::Function(id) => Some(id),
-            ValueItem::Operation(_) | ValueItem::Constructor(_) => None,
+            ValueItem::Operation(_) | ValueItem::Constructor(_) | ValueItem::Method(_) => None,
         },
     )
     .unwrap_or_else(|| panic!("the standard library does not declare the function `{canonical}`"));
@@ -909,6 +966,7 @@ fn display_names(scopes: &[ModuleScope], unit: TypeDefId) -> DisplayNames {
     let mut types = Vec::new();
     let mut effects = Vec::new();
     let mut constructors = Vec::new();
+    let mut classes = Vec::new();
     for scope in scopes {
         let module = scope.name.as_str();
         for (name, definitions) in &scope.types {
@@ -916,6 +974,7 @@ fn display_names(scopes: &[ModuleScope], unit: TypeDefId) -> DisplayNames {
                 match definition.item {
                     TypeItem::Type(id) => types.push((id, module, name.as_str())),
                     TypeItem::Effect(id) => effects.push((id, module, name.as_str())),
+                    TypeItem::Class(id) => classes.push((id, module, name.as_str())),
                 }
             }
         }
@@ -927,7 +986,7 @@ fn display_names(scopes: &[ModuleScope], unit: TypeDefId) -> DisplayNames {
             }
         }
     }
-    DisplayNames::new(types, effects, constructors, unit)
+    DisplayNames::new(types, effects, constructors, classes, unit)
 }
 
 impl DefMap {
@@ -986,6 +1045,14 @@ impl DefMap {
 
     pub fn operation_id(&self, module: ModuleId, effect: usize, k: usize) -> OperationId {
         self.scope(module).operations[effect][k]
+    }
+
+    pub fn class_id(&self, module: ModuleId, k: usize) -> ClassId {
+        self.scope(module).class_ids[k]
+    }
+
+    pub fn method_id(&self, module: ModuleId, class: usize, k: usize) -> MethodId {
+        self.scope(module).method_ids[class][k]
     }
 
     fn scope(&self, module: ModuleId) -> &ModuleScope {
@@ -1055,6 +1122,15 @@ impl<'a> Resolver<'a> {
 
     pub fn type_item(&self, name: NameRef<'_>) -> Resolved<TypeItem> {
         self.lookup(name, |item: TypeItem| Some(item))
+    }
+
+    /// 制約、instance の頭、`deriving` のクラスの名前。型の名前空間でクラスだけを引く。型かエフェクトに当たったら
+    /// 呼び出し側が E1041 にできるよう、`type_item` で引き直す。
+    pub fn class(&self, name: NameRef<'_>) -> Resolved<ClassId> {
+        self.lookup(name, |item: TypeItem| match item {
+            TypeItem::Class(id) => Some(id),
+            TypeItem::Type(_) | TypeItem::Effect(_) => None,
+        })
     }
 
     /// 自分のモジュールの `pub` でない型かエフェクトなら、その名前と定義の位置。公開の範囲の検査 (E1032) に使う

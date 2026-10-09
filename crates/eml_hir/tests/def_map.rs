@@ -18,6 +18,7 @@ fn found_in(map: &DefMap, resolved: Resolved<ValueItem>) -> Option<&str> {
         ValueItem::Function(id) => id.module,
         ValueItem::Operation(id) => id.module,
         ValueItem::Constructor(id) => id.module,
+        ValueItem::Method(id) => id.module,
     };
     Some(map.module_name(module))
 }

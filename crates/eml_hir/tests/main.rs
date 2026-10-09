@@ -3,6 +3,7 @@
 
 mod common;
 
+mod classes;
 mod data;
 mod def_map;
 mod effects;

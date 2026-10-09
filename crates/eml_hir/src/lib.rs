@@ -70,4 +70,14 @@ pub mod codes {
     pub const UNKNOWN_QUALIFIER: ErrorCode = ErrorCode(1031);
     pub const PRIVATE_IN_PUBLIC: ErrorCode = ErrorCode(1032);
     pub const EXTERN_OUTSIDE_STD: ErrorCode = ErrorCode(1033);
+    pub const ORPHAN_INSTANCE: ErrorCode = ErrorCode(1034);
+    pub const DUPLICATE_INSTANCE: ErrorCode = ErrorCode(1035);
+    pub const MISSING_METHOD: ErrorCode = ErrorCode(1036);
+    pub const UNKNOWN_METHOD: ErrorCode = ErrorCode(1037);
+    pub const NOT_DERIVABLE: ErrorCode = ErrorCode(1038);
+    pub const INVALID_INSTANCE_HEAD: ErrorCode = ErrorCode(1039);
+    pub const INVALID_CONSTRAINT: ErrorCode = ErrorCode(1040);
+    pub const NOT_A_CLASS: ErrorCode = ErrorCode(1041);
+    pub const SUPERCLASS_CYCLE: ErrorCode = ErrorCode(1042);
+    pub const CLASS_AS_TYPE: ErrorCode = ErrorCode(1043);
 }
