@@ -39,8 +39,9 @@ enum BodyOwner {
         /// (docs/spec/declarations.md の「`instance`」)。
         annotation_vars: Option<usize>,
     },
-    /// 置かなかった instance のメンバー (E1034、E1035、E1037、E1039、解決できないクラス)。名前の誤りを報告する
-    /// ためだけに変換し、本体は捨てる。関数を置かないので、型検査や translate からは見えない。`vars` は本体の注釈で
+    /// 置かなかった instance のメンバーと、クラスにないメソッド (E1037)。置かない instance は、クラスか頭の型を
+    /// 解決できないもの、頭がないか誤ったもの (E1039、E1015、E1043)、orphan (E1034)、重複 (E1035) である。名前の誤りを
+    /// 報告するためだけに変換し、本体は捨てる。関数を置かないので、型検査や translate からは見えない。`vars` は本体の注釈で
     /// 引ける型変数である。
     Discarded { vars: Vec<String> },
 }
