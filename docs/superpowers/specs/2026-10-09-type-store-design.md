@@ -1,6 +1,6 @@
 # 型の表 (設計)
 
-位置づけ: 作業の設計。[実装の状況](../../implementation/status.md) の「深さと性能」にある、多相な関数を自分自身に続けて適用する式が指数の時間とメモリを使う問題を直す。決まったことは作業の終わりに `docs/` の該当文書へ移し、この文書を削除する。
+位置づけ: 作業の設計。[実装の現在地](../../implementation/status.md) の「深さと性能」にある、多相な関数を自分自身に続けて適用する式が指数の時間とメモリを使う問題を直す。決まったことは作業の終わりに `docs/` の該当文書へ移し、この文書を削除する。
 
 ## 目的
 
@@ -47,7 +47,8 @@
   `EffectLabel` の型引数も `TypeId` で持つ。`RowTail` は変えない
 - `intern(kind) -> TypeId` は、同じ形の型がすでにあればその ID を返す (hash consing)。ID が同じことと型が同じことは一致する
 - 型が `Error` を含むかどうかは、登録するときに子のフラグと row の末尾から求めて持つ。登録で子をたどるのは `TypeKind::for_each_child` である
-- 読む側の API は `kind(id)`、`contains_error(id)`、`display(id, names)` である。表示の文字列は今の `Type::display` と同じである
+- 読む側の API は `kind(id)`、`contains_error(id)`、`display(id, names)` である。表示の文字列は今の `Type::display` と同じである。row のラベルは `EffectLabel::display(types, names)` で表示する
+- `intern` は crate の中だけに公開する (`pub(crate)`)。後の段階は型を作れないので、Core IR が表を読むだけであることを型で守れる
 - `TypeStore::new(program)` は、決まった型 (`Unit`、`Int`、`String`、`Bool`、`_`、`{error}`) を最初に登録し、`unit()`、`int()`、`string()`、`bool()`、`flexible()`、`error()` で返す
 - 表は、プログラム全体で追記だけする登録表である。`check_module` が作り、宣言の検査と本体ごとの検査に `&mut` で渡し、最後に `TypedProgram` に入れる。ID は検査の順に依存するが、後の段階は ID の値に意味を持たせない。salsa に移すときは salsa の interned に置き換える
 - `TypedProgram` から `Default` を外す。決まった型のない表を作れないようにするためである
@@ -56,24 +57,25 @@
 
 ### 書き出し
 
-- `Table::export` を `Exporter` に置き換える。`Exporter` は `&Table` と `&mut TypeStore` を借り、`Ty` の番号で引く `Vec<Option<TypeId>>` に結果を覚える。覚えるのは、渡された `Ty` とその代表 (束縛を辿った先) の両方である
+- `Table::export` を `Exporter` に置き換える。`Exporter` は `&Table` と `&mut TypeStore` を借り、`HashMap<Ty, TypeId>` に結果を覚える。覚えるのは、渡された `Ty` とその代表 (束縛を辿った先) の両方である。記録を表の大きさの配列にしないのは、診断のために短命の `Exporter` を何度も作っても、費用が書き出した節点の数に比例するようにするためである
 - `Exporter` が生きている間は表を変更できないので、覚えた結果が古くなることはない
 - 本体の検査の後に `BodyTypes` を作るときは、1つの `Exporter` で、式、局所変数、パターン、具体化の型引数をすべて書き出す。表の各節点を書き出すのは1回だけになる
 - `check_comparisons` も、本体の `==` と `!=` をすべて1つの `Exporter` で書き出す
 - 推論の途中で診断の文言のために書き出す箇所 (`check/report.rs`、`usage.rs`) は、その場で短命の `Exporter` を作り、同じ表に登録する。診断にしか使わない型が表に残っても害はない
 - シグネチャから作る型 (`Shape::export`) も同じ表に登録する
-- `KindReason::OmittedReturn` は状態の型を `TypeId` で持つ。表示するのは、破れた制約を報告するときだけである。`report_violations` は表を受け取り、`order_key` もそこで表示した文字列を鍵にする。`order_key` を使うのは破れた制約を並べるときだけなので、診断の文言と並びは今と同じである
+- `KindReason::OmittedReturn` は状態の型を `TypeId` で持つ。表示するのは、破れた制約を報告するときだけである。`report_violations` は表を受け取り、`order_key` もそこで表示した文字列を鍵にする。ID を鍵にしないのは、ID が検査の順で決まり、並びが検査の順に左右されるためである。`order_key` を使うのは破れた制約を並べるときだけなので、診断の文言と並びは今と同じである
 
 ### 推論の中のたどり方
 
 表の型をたどる処理は、どれも代表ごとに1回だけ訪れる。
 
 - `occurs`、`row_occurs`、`row_occurs_in`: 呼び出しごとに、訪れた代表に印を付ける。印は、表が持つ世代番号付きの配列 (`RefCell<Marks>`) に付ける。呼び出しごとに表の大きさの配列を作ると、呼び出しが多いときに2乗になるためである。世代は入口 (`occurs`、`row_occurs`) でだけ進め、`row_occurs` と `row_occurs_in` の間の再帰では進めない。配列は入口で表の大きさまで伸ばし、世代が一巡したら消す。`occurs` は `&self` で子をたどるので、印の配列は印を確かめて付ける間だけ借りる
+- 印を付ける処理 (`occurs`、`row_occurs`、`kind_bounds`、`kind_vars`) は、別の印を付ける処理の途中で始めない。途中で始めると世代が進み、外側の処理が訪れた代表をもう一度たどるので、結果は正しいまま指数の時間に戻り、気づけない。入口は処理の間だけ印の配列を「たどっている」状態にし、debug ビルドではたどっている間に入口を呼ぶと `debug_assert!` で止める
 - `unify`: 1回の呼び出しの中で、単一化を終えた代表の組を覚え、同じ組はすぐに `Ok` を返す。覚えるのは複合の型 (型構成子、レコード、関数型) の組だけで、記録は必要になったときに作る。`unify_row` のラベルの型引数の単一化にも同じ記録を渡す。同じ組をもう一度たどっても同じ Kind の制約を同じ由来でもう一度出すだけなので、飛ばしても結果は変わらない。表は occurs の検査で輪を持たないので、単一化の途中の組をもう一度訪れることはない。記録は呼び出しの中だけなので、同じ大きな型の組を何度も単一化すると、そのたびに表の大きさに比例する時間がかかる
 - `kind_bounds`: 訪れた代表を覚え、重複した境界を除く。並びは最初に現れた順のままである。Kind の解は残った制約を整列して重複を除くので、診断は変わらない
 - `kind_vars`: 訪れた代表を覚える
 - 対象外: `open_spine` は関数型の戻り値の側だけをたどる。`close` と具体化は、ソースに書いたシグネチャの `ShapeTy` をたどるので、大きさはソースの大きさで決まる
-- 再帰の深さは今と同じく型の深さに比例する。非常に深い型でスタックが尽きることは [実装の状況](../../implementation/status.md) に記録する
+- 再帰の深さは今と同じく型の深さに比例する。非常に深い型でスタックが尽きることは [実装の現在地](../../implementation/status.md) に記録する
 
 ### `eml_types` の中で型を読む側
 
@@ -85,19 +87,19 @@
 
 ### Core IR
 
-- `ty(expr)` は `TypeId` を返す。`Copy` なので、式ごとの `clone` はなくなる。`repr(types, ty, hir)` と `split_arrows(types, ty, count)` も ID で受ける。`ProgramBuilder` の extern、操作、コンストラクタの型の表も ID を持つ
-- Core IR は表を読むだけで、型を作らない。`substitute`、`field_types`、`con_field_types`、`tuple_field_types`、`lang_type` をなくす。決まった型は `TypeStore` の `unit()`、`flexible()`、`string()` などで引く
+- `ty(expr)` は `TypeId` を返す。`Copy` なので、式ごとの `clone` はなくなる。`repr(types, ty, hir)` と `split_arrows(types, ty, count)` も ID で受ける。`ProgramBuilder` の extern、操作、コンストラクタの型の表も ID を持つ。`ProgramBuilder` は表を持たず、型を読むメソッドが `hir` と並べて `&TypeStore` を受け取る
+- Core IR は表を読むだけで、型を作らない。`substitute`、`field_types`、`con_field_types`、`tuple_field_types`、`lang_type` をなくす。型を作っていた残りの箇所は、型を経ずに値の `Repr` を直接使う (`Type::unit()` は `Repr::Unit`、`String` の型は extern の型の行の `Repr`、クロージャの型の `Type::Flexible` は `tobj`)
 - 決定木の出現 (`Occ`) は、型も `Repr` も持たない
   - `Occ::Con` を値にするときの `Repr` は、`ConValue` から決める。`Data(ctor)` ならそのコンストラクタの型の `data_repr`、`Tuple` なら `obj` である。`Data` の `Occ::Con` はいつもフィールドを持ち、タプルは要素を2つ以上持つので、今の `repr(ty)` と同じ値になる
   - 調べる値をまとめるラベルの `Repr` は、呼び出し側が渡す。`Scrutinee::Expr` なら式の型から、`Scrutinee::Occ` なら変数の `Repr` から決める
   - `Known` は型を持たない
 - `unpack` と `switch` で作るフィールドの変数の `Repr` は、パターンの型 (`BodyTypes.pats`) から決める。各 case で、そのコンストラクタ (タプル) が最初に現れる行の引数のパターンを使う。今の `field_vars` が変数の名前を探すのと同じ取り方である。型検査は、入れ子を含むすべてのパターンに、そのパターンが受けた値の型を記録している (`bind_pat`)。`switch` の case はどれかの行に現れるコンストラクタだけなので、引数のパターンはいつもある
 - `con` で作った値 (`Known`) のフィールドは、`con` に渡したアトムをそのまま出現にする
-- 出現が型を持たないので、`materialize_once` が同じ値を1回だけ作る判定は、型引数の違いを区別しなくなる。1つの葉が、同じコンストラクタ、同じフィールドの値を、型引数だけ違えて2回渡すと、`con` が2回から1回になる (`data P a = P Int` の `P 1` を2つの型で渡す場合)。値は同じなので意味は変わらない
+- 出現が型を持たないので、`materialize_once` が同じ値を1回だけ作る判定は、型の違いを区別しなくなる。1つの葉が、同じコンストラクタと同じフィールドのアトムの出現を2回渡すと、型が違っても `con` が2回から1回になる (`data P a = P Int` の `P 1` を2つの型で渡す場合や、引数のないコンストラクタのタグを違う型のフィールドに持つ場合)。2つの `con` の命令はもともと同じだったので、意味は変わらない
 
 ## 対象外
 
-- 引数の多い1つの呼び出しで、持ち越しの制約を、生きている値と矢印の組ごとに作ること (`carry.rs` の `carry` と `row_multiplicities`)。`ident ident … ident 5` と部分適用は、直した後も長さの2乗の時間がかかる。[実装の状況](../../implementation/status.md) に記録する
+- 引数の多い1つの呼び出しで、持ち越しの制約を、生きている値と矢印の組ごとに作ること (`carry.rs` の `carry` と `row_multiplicities`)。`ident ident … ident 5` と部分適用は、直した後も長さの2乗の時間がかかる。[実装の現在地](../../implementation/status.md) に記録する
 - 値を使うたびに型をたどる Kind の検査 (`kind_at_most`)。`let p1 = (p0, p0)` の列は、直した後も長さの2乗の時間がかかる。同じく記録する
 - 同じ大きな型の組を何度も単一化すること (上の「推論の中のたどり方」)。同じく記録する
 - 再帰を作業の列に置き換えて、型の深さによらずスタックが尽きないようにすること
@@ -124,13 +126,15 @@ UI テストを `tests/ui/run/runtime/` に形ごとに1つのファイルで足
    println (show_int n)
    ```
 
-`crates/eml_types/tests/scaling.rs` に2つの形を足す。3 の `let` の列と、5 の2本の列の単一化である。大きさはほかの形と同じく 2000 と 8000 の `let` の数にし、時間の比が6以下なら通る。型の深さが大きさに比例し、書き出しと単一化の再帰がその深さまで進むので、この2つの形は大きなスタックのスレッドで測る。1、2、6 の形は、直した後も2乗の時間がかかる (「対象外」) ので、時間の比を測る形には使わない。
+`crates/eml_types/tests/scaling.rs` に2つの形を足す。3 の `let` の列と、5 の2本の列の単一化である。大きさはほかの形と同じく 2000 と 8000 にし (1本の列の長さ)、時間の比が6以下なら通る。型の深さが大きさに比例し、書き出し、単一化、occurs の検査の再帰がその深さまで進むので、この2つの形は大きなスタックのスレッドで測る。1、2、6 の形は、直した後も2乗の時間がかかる (「対象外」) ので、時間の比を測る形には使わない。
+
+Core IR の出現が型を持たないことによる変化 (「Core IR」の最後の項目) は、2つのテストで示す。`crates/eml_core_ir/tests/translate.rs` に、`P 1` を2つの型で1つの葉に渡すと `con` が1回になるテストを足す。`tests/ui/run/data/same_value_at_two_types.em` は、ヒープのフィールドを持つ同じ値を2つの型で渡して片方を返し、まとめた `con` の参照カウントが `debug_heap` の検査を通ることを確かめる。
 
 ### テストの変更
 
 - pass と fail が変わるテストはない
-- 機械的な追随 (kind 3): 型の API の変更に合わせた書き直しで、期待値は1バイトも変えない。`ty.rs` と `table/tests.rs` の単体テスト、`shape.rs` の単体テスト、`eml_types` の `tuples.rs`、`instantiations.rs`、`check.rs`、`eml_core_ir` の `type_repr` と `tests/externs.rs` が対象である
-- 期待値の変更 (kind 2) の範囲: Core IR のダンプのうち、1つの葉が型引数だけ違う同じ値を2回渡すために `con` が1回に減るもの (「Core IR」の最後の項目)。この理由で変わるダンプだけを書き直す。ほかの理由でダンプや診断が変わったら、期待値を直さずに原因を調べる
+- 機械的な追随 (kind 3): 型の API の変更に合わせた書き直しで、期待値は1バイトも変えない。`ty.rs` と `table/tests.rs` の単体テスト、`shape.rs` の単体テスト、`kind/mod.rs` と `check/mod.rs` の単体テスト、`eml_types` の `tuples.rs`、`instantiations.rs`、`check.rs`、`eml_core_ir` の `type_repr` と `tests/externs.rs` が対象である
+- 期待値の変更 (kind 2): なし。既存の Core IR のダンプのうち、「Core IR」の最後の項目で `con` が1回に減るものはない (試作で確かめた)。この変化は、足すテスト (translate のテストと UI テスト) で示す。既存のダンプや診断が変わったら、期待値を直さずに原因を調べる
 
 ## 確認の手順
 
@@ -145,7 +149,7 @@ nix build
 
 ## 更新する文書
 
-- [実装の状況](../../implementation/status.md) の「深さと性能」: 指数の項目を消す。「対象外」の2乗の3項目と、非常に深い型でスタックが尽きることを足す
+- [実装の現在地](../../implementation/status.md) の「深さと性能」: 指数の項目を消す。「対象外」の2乗の3項目と、非常に深い型でスタックが尽きることを足す
 - [コンパイラの構成](../../implementation/architecture.md)
   - 別テーブルの説明 (`ExprId → Type`) を `ExprId → TypeId` にする
   - 「`eml_types` の内部」: 本体を独立に検査する説明と、宣言ごとに結果を持つ説明に、型の表は追記だけする共有の登録表であることを足す。具体化の型引数は ID になる。rigid な変数を名前で登録するので同じ名前の変数が同じ ID になることを、節の型変数を区別できないという項目に書き足す。`Table::export` の項目を `Exporter` と型の表の説明にする
@@ -161,5 +165,5 @@ nix build
 - 「確認の手順」のコマンドがすべて通る
 - 足した7つの UI テストが、debug ビルドの `cargo test` で通る
 - `scaling.rs` の足した2つの形が、release ビルドで時間の比6以下になる
-- Core IR のダンプと診断の期待値は、「テストの変更」の kind 2 の範囲を除いて変わらない
+- 既存の Core IR のダンプと診断の期待値は変わらない
 - 「更新する文書」をすべて直し、この文書を削除する
