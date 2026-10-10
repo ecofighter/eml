@@ -956,3 +956,15 @@ fn a_closing_token_after_a_line_final_arrow_has_its_own_label() {
       1:11 nothing comes before the `,` on the next line
     ");
 }
+
+#[test]
+fn a_mid_line_comma_that_ends_a_block_points_at_the_comma() {
+    let parsed = parse(&lines(&["f = (fn x ->", "    a, b", "    c)"]));
+    insta::assert_snapshot!(full(&parsed.files, &parsed.diagnostics), @"
+    E0015 2:6 this `,` ends the block opened by `->`
+      2:6 the block ends here
+      1:11 the block starts here
+      3:5 this line is at the column of that block
+      help: to write a tuple inside the block, wrap it in parentheses
+    ");
+}

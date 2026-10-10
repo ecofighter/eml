@@ -1,0 +1,53 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: rendered
+input_file: tests/ui/check-fail/syntax/comma_ends_a_block.em
+---
+[E2001] Error: mismatched types
+    ╭─[ check-fail/syntax/comma_ends_a_block.em:7:3 ]
+    │
+  7 │ ╭─▶   handle (fn () ->
+    ┆ ┆   
+ 12 │ ├─▶     | return v -> v
+    │ │                         
+    │ ╰───────────────────────── expected `Unit`, found `(Unit -> <Ask | _> Unit, {error})`
+    │
+    ├─[ check-fail/syntax/comma_ends_a_block.em:7:3 ]
+    │
+  5 │ main : Unit -> <IO> Unit
+    │        ────────┬────────  
+    │                ╰────────── expected because of the signature of `main`
+────╯
+[E0015] Error: this `,` ends the block opened by `->`
+   ╭─[ check-fail/syntax/comma_ends_a_block.em:8:19 ]
+   │
+ 8 │     let x = ask (), 2
+   │                   ┬  
+   │                   ╰── the block ends here
+   │
+   ├─[ check-fail/syntax/comma_ends_a_block.em:8:19 ]
+   │
+ 7 │   handle (fn () ->
+   │                 ─┬  
+   │                  ╰── the block starts here
+   │ 
+ 9 │     println "a"
+   │     ───┬───  
+   │        ╰───── this line is at the column of that block
+   │ 
+   │ Help: to write a tuple inside the block, wrap it in parentheses
+───╯
+[E2001] Error: this expression is not a function
+   ╭─[ check-fail/syntax/comma_ends_a_block.em:9:5 ]
+   │
+ 9 │     println "a"
+   │     ───┬───  
+   │        ╰───── unexpected argument
+───╯
+[E1001] Error: cannot find value `x`
+    ╭─[ check-fail/syntax/comma_ends_a_block.em:10:19 ]
+    │
+ 10 │     println (show x)) with
+    │                   ┬  
+    │                   ╰── not found in this scope
+────╯

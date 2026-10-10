@@ -10,10 +10,7 @@ use crate::lexer::Token;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Context {
     /// `opener` はブロックを開いた規則 3 の開始トークン。ファイル全体のブロックには無い。
-    Block {
-        indent: u32,
-        opener: Option<SyntaxKind>,
-    },
+    Block { indent: u32, opener: Option<Token> },
     /// 括弧の種類は、規則 3 の例外 (`Brace`) と、row の閉じと打ち切り (`Row`) に使う (docs/spec/layout.md の規則 4)。
     Bracket(BracketKind),
     /// 補間の穴。`INTERP_END` だけが取り除く。穴の中の閉じ括弧で穴の外の括弧を閉じないため
@@ -41,6 +38,15 @@ struct Item {
     column: u32,
 }
 
+/// 行の途中の `,` が閉じたブロック。次の行の先頭で E0015 を判定するまで覚えておく (docs/spec/layout.md の規則 4)。
+struct CommaClosed {
+    comma: Token,
+    /// `,` の一番内側の括弧の、スタックの位置。
+    bracket: usize,
+    /// 閉じたブロックの基準列と開始トークン。
+    blocks: Vec<(u32, Token)>,
+}
+
 pub(crate) fn layout(file: FileId, text: &str, tokens: &[Token]) -> (Vec<Token>, Vec<Diagnostic>) {
     let mut diagnostics = Vec::new();
     let items = scan_lines(file, text, tokens, &mut diagnostics);
@@ -55,6 +61,7 @@ pub(crate) fn layout(file: FileId, text: &str, tokens: &[Token]) -> (Vec<Token>,
     let mut item_after_arrow_error = None;
     // 今の行の先頭の項目の番号。
     let mut line_first_item = 0;
+    let mut comma_closed: Option<CommaClosed> = None;
     for (i, item) in items.iter().enumerate() {
         let start = item.token.range.start();
         if item.line_start {
@@ -71,7 +78,7 @@ pub(crate) fn layout(file: FileId, text: &str, tokens: &[Token]) -> (Vec<Token>,
                     out.push(virtual_token(LAYOUT_OPEN, start));
                     stack.push(Context::Block {
                         indent: item.column,
-                        opener: Some(items[i - 1].token.kind),
+                        opener: Some(items[i - 1].token),
                     });
                     opened = true;
                 } else {
@@ -120,7 +127,23 @@ pub(crate) fn layout(file: FileId, text: &str, tokens: &[Token]) -> (Vec<Token>,
                         _ => break,
                     }
                 }
+                if let Some(closed) = &comma_closed
+                    && stack.len() == closed.bracket + 1
+                    && let Some(&(_, opener)) = closed
+                        .blocks
+                        .iter()
+                        .find(|(indent, _)| *indent == item.column)
+                {
+                    diagnostics.push(block_closed_by_comma(
+                        file,
+                        text,
+                        closed.comma,
+                        opener,
+                        item.token,
+                    ));
+                }
             }
+            comma_closed = None;
             line_first_item = i;
         }
         // 規則 4 の row。中身の文法は見ず、row に直接は現れないトークンで打ち切る。
@@ -152,9 +175,23 @@ pub(crate) fn layout(file: FileId, text: &str, tokens: &[Token]) -> (Vec<Token>,
                 // 一番内側の括弧が row なので、何も閉じない。
                 let floor = hole_floor(&stack);
                 if stack[floor..].iter().any(is_bracket) {
-                    while let Some(Context::Block { .. }) = stack.last() {
+                    let mut blocks = Vec::new();
+                    while let Some(&Context::Block { indent, opener }) = stack.last() {
                         out.push(virtual_token(LAYOUT_CLOSE, start));
                         stack.pop();
+                        // 括弧より上のブロックは、どれも規則 3 で開いたので開始トークンがある。
+                        if let Some(opener) = opener {
+                            blocks.push((indent, opener));
+                        }
+                    }
+                    // 行末の `,` の次の行をブロックの列から書くのは、次の要素の正しい書き方なので覚えない。
+                    let mid_line = items.get(i + 1).is_some_and(|next| !next.line_start);
+                    if mid_line && !blocks.is_empty() {
+                        comma_closed = Some(CommaClosed {
+                            comma: item.token,
+                            bracket: stack.len() - 1,
+                            blocks,
+                        });
                     }
                 }
                 out.push(item.token);
@@ -169,6 +206,13 @@ pub(crate) fn layout(file: FileId, text: &str, tokens: &[Token]) -> (Vec<Token>,
                         stack.pop();
                     }
                     stack.pop();
+                    // `,` の括弧を閉じたら、次の行はその `,` の要素の続きではない。
+                    if comma_closed
+                        .as_ref()
+                        .is_some_and(|closed| stack.len() <= closed.bracket)
+                    {
+                        comma_closed = None;
+                    }
                 }
                 out.push(item.token);
             }
@@ -386,6 +430,32 @@ fn missing_block(
     out.push(virtual_token(LAYOUT_CLOSE, end));
 }
 
+/// 行の途中の `,` がブロックを閉じた後、次の行がそのブロックの列にあれば、その行をブロックの文のつもりで書いたと
+/// みなす。仮想トークンは変えず、誤りだけを報告する (docs/spec/layout.md の規則 4)。
+fn block_closed_by_comma(
+    file: FileId,
+    text: &str,
+    comma: Token,
+    opener: Token,
+    line: Token,
+) -> Diagnostic {
+    Diagnostic::error(
+        codes::BLOCK_CLOSED_BY_COMMA,
+        format!(
+            "this `,` ends the block opened by `{}`",
+            &text[opener.range]
+        ),
+        Label::new(file, comma.range, "the block ends here"),
+    )
+    .with_secondary(Label::new(file, opener.range, "the block starts here"))
+    .with_secondary(Label::new(
+        file,
+        line.range,
+        "this line is at the column of that block",
+    ))
+    .with_help("to write a tuple inside the block, wrap it in parentheses")
+}
+
 /// 揃えた複数行のシグネチャ (`f : A ->` の次の行から `B ->`、`C ->` と同じ列に並ぶ) では、最初の `->` が
 /// 開いたブロックの中の行がどれも `->` で終わる。E0009 を1件にするため、前の行の `->` で E0009 を出していて、
 /// 今の行が `->` の開いたブロックにあるときは報告しない。ブロックを見ないと、トップレベルや `where` の中で
@@ -409,7 +479,7 @@ fn enclosing_block(stack: &[Context]) -> (u32, Option<SyntaxKind>) {
         .iter()
         .rev()
         .find_map(|context| match *context {
-            Context::Block { indent, opener } => Some((indent, opener)),
+            Context::Block { indent, opener } => Some((indent, opener.map(|token| token.kind))),
             Context::Bracket(_) | Context::Interp => None,
         })
         .unwrap_or((0, None))
@@ -971,6 +1041,49 @@ mod tests {
         assert_eq!(
             dump("f =\n  , 1"),
             ("f = <OPEN> , 1 <CLOSE>".to_string(), vec![])
+        );
+    }
+
+    #[test]
+    fn line_at_the_column_of_a_block_a_mid_line_comma_closed_is_e0015() {
+        assert_eq!(
+            dump("f = (fn x ->\n    a, b\n    c)"),
+            (
+                "f = ( fn x -> <OPEN> a <CLOSE> , b c )".to_string(),
+                vec!["E0015@18..19".to_string()]
+            )
+        );
+    }
+
+    #[test]
+    fn line_deeper_than_a_block_a_mid_line_comma_closed_continues() {
+        assert_eq!(
+            layout_of("f = (fn x ->\n    a, g\n      b)"),
+            "f = ( fn x -> <OPEN> a <CLOSE> , g b )"
+        );
+    }
+
+    #[test]
+    fn closing_token_after_a_mid_line_comma_is_not_e0015() {
+        assert_eq!(
+            layout_of("f = (fn x ->\n    a, b\n    )"),
+            "f = ( fn x -> <OPEN> a <CLOSE> , b )"
+        );
+    }
+
+    #[test]
+    fn block_opened_after_a_mid_line_comma_is_not_e0015() {
+        assert_eq!(
+            layout_of("f = [fn x ->\n    x + 1, fn y ->\n    y]"),
+            "f = [ fn x -> <OPEN> x + 1 <CLOSE> , fn y -> <OPEN> y <CLOSE> ]"
+        );
+    }
+
+    #[test]
+    fn bracket_closed_after_a_mid_line_comma_forgets_the_comma() {
+        assert_eq!(
+            layout_of("f = (fn x ->\n    a, b) (c\n    d)"),
+            "f = ( fn x -> <OPEN> a <CLOSE> , b ) ( c d )"
         );
     }
 }
