@@ -270,7 +270,11 @@ fn postfix(p: &mut Parser) -> bool {
         }
         let m = lhs.precede(p);
         dot(p);
-        p.bump_any();
+        if p.at(INT) {
+            field_index(p);
+        } else {
+            p.bump(LIDENT);
+        }
         lhs = m.complete(p, FIELD_EXPR);
     }
     for _ in 0..entered {
@@ -288,15 +292,17 @@ fn atom(p: &mut Parser) -> Option<CompletedMarker> {
         }
         STRING_START | CMD_START => string_lit(p, false),
         LIDENT | UIDENT => {
-            qname(p);
-            PATH_EXPR
+            if qname(p) == UIDENT && at_record_body(p) {
+                p.bump(L_BRACE);
+                field_list(p, false, field);
+                RECORD_EXPR
+            } else {
+                PATH_EXPR
+            }
         }
         L_PAREN => paren_expr(p),
         L_BRACK => list_expr(p),
-        L_BRACE => {
-            unsupported_group(p, "records are not supported yet");
-            ERROR
-        }
+        L_BRACE => update_expr(p),
         ERROR_TOKEN => {
             p.bump_any();
             ERROR
@@ -348,11 +354,7 @@ fn interp(p: &mut Parser, spread: bool) {
     if spread {
         p.eat(DOT2);
     }
-    let read = if p.at_ts(EXPR_FORMS) {
-        expr(p)
-    } else {
-        op_expr(p, false) != OpExpr::Nothing
-    };
+    let read = element(p);
     if !read {
         expected(p, "an expression");
     }
@@ -378,9 +380,71 @@ fn interp(p: &mut Parser, spread: bool) {
     m.complete(p, INTERP);
 }
 
-/// `qvar ::= (UIDENT '.')* LIDENT` と `qcon`。
-fn qname(p: &mut Parser) {
-    path(p, TokenSet::new(&[UIDENT, LIDENT]));
+/// `qvar ::= (UIDENT '.')* LIDENT` と `qcon`。最後のセグメントのトークンの種類を返す。
+fn qname(p: &mut Parser) -> SyntaxKind {
+    path(p, TokenSet::new(&[UIDENT, LIDENT]))
+}
+
+/// コンストラクタの後の `{` を作る式として読むのは、`{` の後が `}` か、`LIDENT` の後に `=`、`,`、`}` が続くときだけである。
+/// そのほかの `{` は引数としての更新の始まりなので、`Some { p | age = 1 }` を `Some` に更新を渡す式として読める
+/// (docs/superpowers/specs/2026-10-10-s6c-records-design.md の「式」)。
+fn at_record_body(p: &Parser) -> bool {
+    p.at(L_BRACE)
+        && (p.nth(1) == R_BRACE || p.nth(1) == LIDENT && matches!(p.nth(2), EQ | COMMA | R_BRACE))
+}
+
+/// `field ::= LIDENT ('=' expr)?`。値は括弧の中の要素と同じく読み、`{` を1段に数える。
+fn field(p: &mut Parser) {
+    let m = p.start();
+    name_ref(p);
+    if p.eat(EQ) && !element(p) {
+        expected(p, "an expression");
+    }
+    m.complete(p, FIELD);
+}
+
+/// 括弧の中の要素。括弧は1段に数えるので、`expr` の形で始まらない要素は `op_expr` で直接読み、`expr` の段を
+/// 重ねない (docs/spec/grammar.md の「文法上の補足」)。
+fn element(p: &mut Parser) -> bool {
+    if p.at_ts(EXPR_FORMS) {
+        expr(p)
+    } else {
+        op_expr(p, false) != OpExpr::Nothing
+    }
+}
+
+/// `'{' op_expr '|' field (',' field)* ','? '}'`。元の値を `op_expr` に限るのは、`match` の枝の `|` と更新の `|` を
+/// 取り違えないため。`|` がなければ無名のレコードなので、`}` まで読み飛ばして `ERROR` にする
+/// (docs/superpowers/specs/2026-10-10-s6c-records-design.md の「式」と「言語から外すもの」)。
+fn update_expr(p: &mut Parser) -> SyntaxKind {
+    p.bump(L_BRACE);
+    let read = if p.at_ts(EXPR_FORMS) {
+        misplaced(p);
+        true
+    } else {
+        op_expr(p, false) != OpExpr::Nothing
+    };
+    if !read {
+        expected(p, "an expression");
+    }
+    if !p.eat(PIPE) {
+        expected(p, token_name(PIPE));
+        skip_rest_of_group(p);
+        return ERROR;
+    }
+    field_list(p, true, field);
+    UPDATE_EXPR
+}
+
+/// 射影とセクションの番号は、先頭に 0 のない10進数で `u32` に収まるものに限る。トークンは誤りでも読んで先へ進む
+/// (docs/superpowers/specs/2026-10-10-s6c-records-design.md の「式」)。
+fn field_index(p: &mut Parser) {
+    let text = p.current_text();
+    let decimal = text == "0" || text.starts_with(|c: char| ('1'..='9').contains(&c));
+    if !(decimal && text.bytes().all(|b| b.is_ascii_digit()) && text.parse::<u32>().is_ok()) {
+        expected(p, "a field index");
+    }
+    p.bump(INT);
 }
 
 /// 節の先頭は操作の名前なので `qvar` に限る。`M.N` のような `qcon` は、ここでは読まずに誤りにする。
@@ -399,12 +463,7 @@ fn list_expr(p: &mut Parser) -> SyntaxKind {
     p.bump(L_BRACK);
     if !p.at(R_BRACK) {
         loop {
-            let read = if p.at_ts(EXPR_FORMS) {
-                expr(p)
-            } else {
-                op_expr(p, false) != OpExpr::Nothing
-            };
-            if !read {
+            if !element(p) {
                 expected(p, "an expression");
                 break;
             }
@@ -437,7 +496,7 @@ fn paren_expr(p: &mut Parser) -> SyntaxKind {
         close_bracket(p, R_PAREN);
         return RIGHT_SECTION;
     }
-    if p.at(DOT) && p.nth(1) == LIDENT {
+    if p.at(DOT) && matches!(p.nth(1), LIDENT | INT) {
         // `(.name)` では、`.` と名前の間だけに空白を禁じる。
         if !p.touches_next() {
             p.error(
@@ -447,7 +506,11 @@ fn paren_expr(p: &mut Parser) -> SyntaxKind {
             );
         }
         p.bump(DOT);
-        p.bump(LIDENT);
+        if p.at(INT) {
+            field_index(p);
+        } else {
+            p.bump(LIDENT);
+        }
         close_bracket(p, R_PAREN);
         return FIELD_SECTION;
     }

@@ -24,6 +24,10 @@ pub(super) fn apat_len(p: &Parser) -> Option<usize> {
             while p.nth(n) == DOT && p.nth(n + 1) == UIDENT {
                 n += 2;
             }
+            // `qcon '{' … '}'` は1つの apat である (docs/superpowers/specs/2026-10-10-s6c-records-design.md の「パターン」)
+            if p.nth(n) == L_BRACE {
+                return bracket_len(p, n).map(|len| n + len);
+            }
             Some(n)
         }
         STRING_START => {
@@ -45,25 +49,27 @@ pub(super) fn apat_len(p: &Parser) -> Option<usize> {
                 n += 1;
             }
         }
-        kind if kind.is_opening_bracket() => {
-            // 開き括弧の次から、対応する閉じ括弧を探す。範囲が先に終わったら (規則 2 で括弧が暗黙に閉じられた
-            // など)、パターンは閉じていない。
-            let mut nesting = Nesting::default();
-            nesting.step(kind);
-            let mut n = 1;
-            loop {
-                let kind = p.peek(n);
-                if nesting.ends(kind) {
-                    return None;
-                }
-                nesting.step(kind);
-                if nesting.at_top() {
-                    return Some(n + 1);
-                }
-                n += 1;
-            }
-        }
+        kind if kind.is_opening_bracket() => bracket_len(p, 0),
         _ => None,
+    }
+}
+
+/// `start` の開き括弧から、対応する閉じ括弧までのトークンの数。範囲が先に終わったら (規則 2 で括弧が暗黙に
+/// 閉じられたなど)、パターンは閉じていない。
+fn bracket_len(p: &Parser, start: usize) -> Option<usize> {
+    let mut nesting = Nesting::default();
+    nesting.step(p.peek(start));
+    let mut n = start + 1;
+    loop {
+        let kind = p.peek(n);
+        if nesting.ends(kind) {
+            return None;
+        }
+        nesting.step(kind);
+        if nesting.at_top() {
+            return Some(n + 1 - start);
+        }
+        n += 1;
     }
 }
 
@@ -104,17 +110,39 @@ fn infix_con_pat(p: &mut Parser, tallest: u32) -> bool {
     true
 }
 
+/// `UIDENT '{'` は `qcon apat*` より先に見る。`P { a }` の `{ a }` を引数のパターンとして読まないため
+/// (docs/superpowers/specs/2026-10-10-s6c-records-design.md の「パターン」)。
 fn cpat(p: &mut Parser) -> bool {
     if !p.at(UIDENT) {
         return apat(p);
     }
     let m = p.start();
     qcon(p);
+    if p.at(L_BRACE) {
+        record_pat(p);
+        m.complete(p, RECORD_PAT);
+        return true;
+    }
     while at_apat_start(p) {
         apat(p);
     }
     m.complete(p, CON_PAT);
     true
+}
+
+fn record_pat(p: &mut Parser) {
+    p.bump(L_BRACE);
+    field_list(p, false, field_pat);
+}
+
+/// `fpat ::= LIDENT ('=' pat)?`
+fn field_pat(p: &mut Parser) {
+    let m = p.start();
+    name_ref(p);
+    if p.eat(EQ) && !pattern(p) {
+        expected(p, "a pattern");
+    }
+    m.complete(p, FIELD_PAT);
 }
 
 /// `(pat : type)` の型の明示を含む (docs/spec/grammar.md の `apat`)。
@@ -131,7 +159,12 @@ pub(super) fn apat(p: &mut Parser) -> bool {
         }
         UIDENT => {
             qcon(p);
-            CON_PAT
+            if p.at(L_BRACE) {
+                record_pat(p);
+                RECORD_PAT
+            } else {
+                CON_PAT
+            }
         }
         INT | RAW_STRING | CHAR => {
             p.bump_any();
@@ -151,7 +184,7 @@ pub(super) fn apat(p: &mut Parser) -> bool {
         L_PAREN => paren_pat(p),
         L_BRACK => list_pat(p),
         L_BRACE => {
-            unsupported_group(p, "records are not supported yet");
+            skipped_group(p, "a pattern");
             ERROR
         }
         _ => {

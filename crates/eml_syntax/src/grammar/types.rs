@@ -111,7 +111,7 @@ pub(super) fn type_atom(p: &mut Parser) -> bool {
             if count == 1 { PAREN_TYPE } else { TUPLE_TYPE }
         }
         L_BRACE => {
-            unsupported_group(p, "records are not supported yet");
+            skipped_group(p, "a type");
             ERROR
         }
         _ => {

@@ -297,8 +297,12 @@ fn alt(p: &mut Parser) -> bool {
     }
     if p.at(UIDENT) && !has_conop_ahead(p) {
         name(p);
-        while types::at_type_atom_start(p) {
-            types::type_atom(p);
+        if p.at(L_BRACE) {
+            record_fields(p);
+        } else {
+            while types::at_type_atom_start(p) {
+                types::type_atom(p);
+            }
         }
     } else {
         if !types::btype(p) {
@@ -315,6 +319,25 @@ fn alt(p: &mut Parser) -> bool {
     }
     m.complete(p, ALT);
     true
+}
+
+/// `'{' list(ftype) '}'`。フィールドの後に型の atom は続けない
+/// (docs/superpowers/specs/2026-10-10-s6c-records-design.md の「宣言」)。
+fn record_fields(p: &mut Parser) {
+    let m = p.start();
+    p.bump(L_BRACE);
+    field_list(p, false, field_decl);
+    m.complete(p, RECORD_FIELDS);
+}
+
+/// `ftype ::= LIDENT ':' type`
+fn field_decl(p: &mut Parser) {
+    let m = p.start();
+    name(p);
+    if expect(p, COLON) {
+        types::type_(p);
+    }
+    m.complete(p, FIELD_DECL);
 }
 
 /// `| List a :: L a` のように左側が型の適用でも中置のコンストラクタとして読むため、選択肢の終わりまでに

@@ -42,21 +42,9 @@ fn s1_corpus_items() {
 }
 
 #[test]
-fn later_stage_corpus_reports_only_not_yet_supported() {
-    // まだ実装していない構文は E0004 だけを出し、ほかの診断を連鎖させない。パーサが E0004 を出すのは、レコードだけである
-    // (docs/implementation/status.md の「未対応の構文と E0004」)。
-    let found = diagnostics(LATER_STAGES);
-    assert!(!found.is_empty());
-    for line in &found {
-        assert!(line.starts_with("E0004 "), "unexpected diagnostic: {line}");
-    }
-    let mut messages: Vec<&str> = found
-        .iter()
-        .map(|line| line.splitn(3, ' ').nth(2).unwrap())
-        .collect();
-    messages.sort();
-    messages.dedup();
-    assert_eq!(messages, ["records are not supported yet"]);
+fn later_stage_corpus_has_no_syntax_diagnostics() {
+    // パーサが E0004 を出す構文はもうない (docs/implementation/status.md の「未対応の構文と E0004」)。
+    assert_eq!(diagnostics(LATER_STAGES), Vec::<String>::new());
 }
 
 /// 編集の途中のような、任意の位置で切れたソースでも、パニックせずに lossless な木を返す

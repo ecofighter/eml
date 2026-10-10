@@ -108,6 +108,25 @@ fn constructs_of_later_stages_are_not_yet_supported() {
 }
 
 #[test]
+fn record_construction_update_and_patterns_are_not_yet_supported() {
+    let text = "data P =\n  | P { a : Int }\nf : P -> P\nf p =\n  let P { a } = p\n  let q = { p | a = 1 }\n  P { a = a }";
+    insta::assert_snapshot!(lower_text(text), @"
+    data P
+      | P Int
+    f : P -> P
+    f p#0 = {
+      let <missing> = p#0
+      let q#1 = <missing>
+      <missing>
+    }
+    ---
+    E0004 5:7 records are not supported yet
+    E0004 6:11 records are not supported yet
+    E0004 7:3 records are not supported yet
+    ");
+}
+
+#[test]
 fn row_variables_type_variables_and_unknown_effects() {
     let text = "f : Int -> <e> Int\nf x = x\ng : a -> <State> Int\ng x = 1";
     insta::assert_snapshot!(lower_text(text), @r"

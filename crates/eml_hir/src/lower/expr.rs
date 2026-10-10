@@ -337,6 +337,11 @@ impl<'a> BodyLowering<'a> {
             ast::Expr::LeftSection(section) => self.lower_left_section(&section, range),
             ast::Expr::RightSection(section) => self.lower_right_section(&section, range),
             ast::Expr::FieldSection(_) => self.unsupported(range, "sections are not supported yet"),
+            // 作る式と更新の意味は、この後の段階で入れる
+            // (docs/superpowers/specs/2026-10-10-s6c-records-design.md の「HIR」)
+            ast::Expr::RecordExpr(_) | ast::Expr::UpdateExpr(_) => {
+                self.unsupported(range, "records are not supported yet")
+            }
         }
     }
 
@@ -610,6 +615,7 @@ impl<'a> BodyLowering<'a> {
                 let pat = self.lower_pat_in_group(annot.pat(), range);
                 PatKind::Annot { pat, ty }
             }
+            ast::Pat::RecordPat(_) => self.unsupported_pat(range, "records are not supported yet"),
         };
         self.pats.alloc(Pat { kind, range })
     }

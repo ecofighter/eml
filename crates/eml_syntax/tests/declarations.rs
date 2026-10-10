@@ -241,7 +241,7 @@ fn pub_and_type_are_parsed() {
 }
 
 #[test]
-fn import_is_parsed_and_records_are_skipped() {
+fn import_is_parsed_and_record_types_are_errors() {
     insta::assert_snapshot!(shape("import Report.Csv\nt : { name : String }"), @r#"
     SOURCE_FILE
       IMPORT_ITEM
@@ -263,7 +263,7 @@ fn import_is_parsed_and_records_are_skipped() {
           UIDENT "String"
           R_BRACE "}"
     ---
-    E0004 2:5 records are not supported yet
+    E0011 2:5 expected a type
     "#);
 }
 
