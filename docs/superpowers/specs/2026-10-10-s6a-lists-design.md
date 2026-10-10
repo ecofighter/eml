@@ -177,6 +177,7 @@ show_rest acc (x :: rest) = show_rest (acc ++ ", " ++ show x) rest
   | `eml_hir` | `operators::unknown_and_unsupported_operators_and_missing_operands` | `::` の E0004 がなくなる |
   | `eml_hir` | `data::infix_constructors_and_a_declared_cons`、`lower::a_reserved_cons_constructor_is_still_matched` | ユーザーのモジュールで `::` を宣言するので、E1044 が1件出る。どちらも E1044 のほかに診断を出さず、宣言した `::` で組み、照合することを確かめるテストとして残す (上の「`::` の予約」の、使用には誤りを重ねないこと) |
   | `eml_types` | `data.rs` の5件、`exhaustive.rs` の9件 | 名前の修飾 |
+  | `eml_hir`、`eml_types` | `lower::later_stage_literals_are_not_supported_yet`、`check::an_unsupported_literal_keeps_the_other_diagnostics_of_its_expression` (改名前は `check::an_unsupported_list_keeps_the_other_diagnostics_of_its_expression`) | リストが未対応の構文でなくなるので、未対応の例から `[1]` を外すか、浮動小数のリテラルに替える。どちらも、未対応の構文があってもほかの診断を出し続けることを確かめるテストとして残す |
 
 - 名前の修飾による差分は、上の「診断」の修飾に限る。テストのソースは、名前で関数を引く所だけを書き換える (`eml_core_ir` の `tests/translate.rs` の `"Ord Option.compare@[Int]"` と `"Show Option.show_prec@[Int]"` を、修飾した名前にする)。`def_map.rs` の `::` の fixity の断言とその注釈は、`infixr 5` に書き直す
 - リストの構文の E0004 を期待する `eml_syntax` のテストを、新しい CST と診断に書き直す。`tests/expressions.rs` と `tests/declarations.rs` のリストの例、`tests/corpus.rs` の E0004 の文言の一覧とコーパスのスナップショットである。閉じ括弧の回復を見る `mismatched_closing_bracket_ends_an_unsupported_list` と `implicitly_closed_bracket_in_an_unsupported_list_does_not_swallow_the_file` は、回復を見る目的を保つ。名前から `unsupported` を外し、期待値を E0004 のない形 (閉じ括弧の誤りの E0011 だけ) にする
