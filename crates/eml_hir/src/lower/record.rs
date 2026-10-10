@@ -1,4 +1,4 @@
-//! レコードの作る式、パターン、更新、射影の変換 (docs/superpowers/specs/2026-10-10-s6c-records-design.md の「HIR」)。
+//! レコードの作る式、パターン、更新、射影の変換 (docs/spec/expressions.md の「レコード」)。
 
 use eml_diagnostics::{Diagnostic, FileId, Label, TextRange};
 use eml_syntax::{SyntaxKind, SyntaxToken, ast};
@@ -117,7 +117,7 @@ impl BodyLowering<'_> {
     }
 
     /// 省略形 `{ name }` の値は、その位置で `name` を普通に名前解決した参照である
-    /// (docs/superpowers/specs/2026-10-10-s6c-records-design.md の「作る式」)。
+    /// (docs/spec/expressions.md の「レコード」)。
     fn field_value(&mut self, field: &ast::Field) -> ExprId {
         if let Some(expr) = field.expr() {
             let range = expr.range();
@@ -300,7 +300,7 @@ fn no_named_fields(
 
 /// 射影とセクションの `.` の後のトークン。番号は、パーサが受け付ける形 (先頭に 0 のない10進数で `u32` に収まるもの)
 /// だけを読む。そのほかの番号はパーサが E0011 を報告済みなので `None` を返す
-/// (docs/superpowers/specs/2026-10-10-s6c-records-design.md の「式」)。
+/// (docs/spec/grammar.md の「文法上の補足」)。
 pub(super) fn field_use(token: &SyntaxToken) -> Option<FieldUse> {
     let text = token.text();
     let field = match token.kind() {
@@ -320,7 +320,7 @@ pub(super) fn field_use(token: &SyntaxToken) -> Option<FieldUse> {
     })
 }
 
-/// パーサはフィールドを名前から始める (docs/superpowers/specs/2026-10-10-s6c-records-design.md の「CST」)。
+/// パーサはフィールドを名前から始める (docs/spec/grammar.md の「文法上の補足」)。
 fn field_name(name: Option<ast::NameRef>) -> (String, TextRange) {
     let token = name
         .expect("the parser starts every field at its name")

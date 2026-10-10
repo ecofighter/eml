@@ -1,4 +1,4 @@
-//! レコードの構文 (docs/superpowers/specs/2026-10-10-s6c-records-design.md の「構文」)。
+//! レコードの構文 (docs/spec/records.md の「構文」)。
 
 use crate::common::{diagnostics, lines, shape};
 

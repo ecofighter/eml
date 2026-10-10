@@ -24,7 +24,7 @@ pub(super) enum Origin {
         index: usize,
     },
     /// 作る式のフィールドの値。フィールドは宣言の中の番号である
-    /// (docs/superpowers/specs/2026-10-10-s6c-records-design.md の「フィールドの不一致の由来」)。
+    /// (docs/implementation/diagnostics.md の「番号ごとの出し方」)。
     Field {
         ctor: ConstructorId,
         field: u32,
@@ -523,7 +523,7 @@ const LINEAR_NOTE: &str = "linear values, such as files, the continuation of a `
 /// 線形な値の誤った使い方。破れた Kind の制約の由来から番号と指す場所を決める (docs/implementation/diagnostics.md の
 /// 「線形性の診断」)。表に当たらない由来 (受け渡し、単一化、捕獲) は E3001 にする。
 /// 捨てたフィールドの E3004。射影の help は分解のパターンを示すが、セクションの隠れた引数は分解を書けないので
-/// help を付けない (docs/superpowers/specs/2026-10-10-s6c-records-design.md の「射影 `e.f`」)。
+/// help を付けない (docs/spec/records.md の「線形性の規則」)。
 fn discarded_field(file: FileId, range: TextRange, name: &str, site: DiscardSite) -> Diagnostic {
     let (message, label, help) = match site {
         DiscardSite::Pattern => (

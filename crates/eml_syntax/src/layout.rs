@@ -114,7 +114,7 @@ pub(crate) fn layout(file: FileId, text: &str, tokens: &[Token]) -> (Vec<Token>,
             COMMA => {
                 // 規則 4。閉じ括弧と同じく、一番内側の括弧より上のブロックを閉じる。行末の `->` などで開いた
                 // ブロックを、次の要素の前で終えるため
-                // (docs/superpowers/specs/2026-10-10-s6c-records-design.md の「レイアウト」)。
+                // (docs/spec/layout.md の「文脈のスタック」)。
                 let floor = hole_floor(&stack);
                 if stack[floor..].iter().any(is_bracket) {
                     while let Some(Context::Block { .. }) = stack.last() {
@@ -194,7 +194,7 @@ fn hole_floor(stack: &[Context]) -> usize {
 }
 
 /// 規則 3 の例外。`{` の中の `=` はいつもフィールドの `=` なので、値を次の行に書けるようにする
-/// (docs/superpowers/specs/2026-10-10-s6c-records-design.md の「レイアウト」)。
+/// (docs/spec/layout.md の「文脈のスタック」)。
 fn is_field_eq(starter: SyntaxKind, stack: &[Context]) -> bool {
     starter == EQ && matches!(stack.last(), Some(Context::Bracket { brace: true }))
 }

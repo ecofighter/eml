@@ -49,7 +49,7 @@ pub struct Constructor {
     /// (docs/spec/declarations.md の「`deriving`」)。
     pub fixity: Option<Fixity>,
     /// 名前付きのフィールドの名前。宣言の順で、`fields` と同じ数である。位置のコンストラクタは `None`、`{}` で宣言した
-    /// コンストラクタは `Some([])` である (docs/superpowers/specs/2026-10-10-s6c-records-design.md の「HIR」)。
+    /// コンストラクタは `Some([])` である (docs/implementation/architecture.md の「`eml_hir` の内部」)。
     pub field_names: Option<Vec<FieldName>>,
 }
 
@@ -65,7 +65,7 @@ impl Constructor {
 }
 
 /// 宣言に書いたフィールドの名前と、その位置。フィールドの名前は値の名前空間に入れない
-/// (docs/superpowers/specs/2026-10-10-s6c-records-design.md の「フィールドの名前」)。
+/// (docs/spec/records.md の「構文」)。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FieldName {
     pub name: String,
@@ -347,11 +347,11 @@ pub struct Body {
     pub continuations: ArenaMap<LocalId, usize>,
     /// レコードのパターンに書かなかったフィールドを受ける `Wildcard` と、そのコンストラクタとフィールドの番号。線形性の
     /// 診断が、書き手の `_` と区別してフィールドの名前で報告するため
-    /// (docs/superpowers/specs/2026-10-10-s6c-records-design.md の「パターン」)。
+    /// (docs/implementation/architecture.md の「`eml_hir` の内部」)。
     pub omitted_fields: ArenaMap<PatId, (ConstructorId, u32)>,
     /// `use` が残りの文を包むために組んだラムダ。型検査は、呼び出しの引数のラムダを後に回すが、これは後に回さない。
     /// 後に回すと、`use` のブロックの型の誤りが、書いていないラムダの中の誤りとして報告されるため
-    /// (docs/superpowers/specs/2026-10-10-s6c-records-design.md の「`use` のラムダの印」)。
+    /// (docs/spec/types.md の「引数のラムダを後で検査する」)。
     pub use_lambdas: HashSet<ExprId>,
 }
 
@@ -585,14 +585,14 @@ pub enum ExprKind {
     List(Vec<ExprId>),
     /// フィールドが1つ以上のレコードを作る式。並びはソースの順で、`u32` は宣言の中のフィールドの番号である。ソースの順で
     /// 持つのは、フィールドの式を書いた順に評価するため。フィールドが0個の `A {}` は、コンストラクタの参照 `Path` にする
-    /// (docs/superpowers/specs/2026-10-10-s6c-records-design.md の「作る式」)。
+    /// (docs/spec/expressions.md の「レコード」)。
     Record {
         ctor: ConstructorId,
         fields: Vec<(u32, ExprId)>,
     },
     /// 更新 `{ e | f = v }`。並びはソースの順で、フィールドの式を書いた順に評価するためである。フィールドは名前のまま
     /// 持ち、型検査が `base` の型から引く。HIR が検査するのは重複 (E1045) だけである
-    /// (docs/superpowers/specs/2026-10-10-s6c-records-design.md の「更新と射影とセクション」)。
+    /// (docs/spec/expressions.md の「レコード」)。
     Update {
         base: ExprId,
         fields: Vec<(FieldName, ExprId)>,

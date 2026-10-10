@@ -1,5 +1,5 @@
 //! 射影と更新の検査。フィールドは、射影や更新の時点で分かっている値の型から引く
-//! (docs/superpowers/specs/2026-10-10-s6c-records-design.md の「型検査」)。
+//! (docs/spec/types.md の「フィールドの解決」)。
 
 use eml_diagnostics::{Diagnostic, Label};
 use eml_hir::{

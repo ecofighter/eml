@@ -62,7 +62,7 @@ impl BodyLowering<'_> {
     }
 
     /// `(.f)` を `fn $p -> $p.f` に組む。隠れた引数と射影の範囲は、どれもセクション全体である
-    /// (docs/superpowers/specs/2026-10-10-s6c-records-design.md の「更新と射影とセクション」)。
+    /// (docs/spec/expressions.md の「セクション」)。
     pub(super) fn lower_field_section(
         &mut self,
         section: &ast::FieldSection,

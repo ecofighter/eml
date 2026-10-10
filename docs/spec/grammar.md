@@ -33,7 +33,9 @@ context     ::= (btype | '(' btype (',' btype)* ')') '=>'
 data_item   ::= 'data' UIDENT LIDENT* ('=' alts)? deriving?
 alts        ::= block(alt) | alt+
 alt         ::= '|' UIDENT type_atom*
+              | '|' UIDENT '{' list(ftype) '}'            -- 名前付きのフィールド
               | '|' btype CONOP btype                     -- 中置のコンストラクタ
+ftype       ::= LIDENT ':' type
 deriving    ::= 'deriving' (qcon | '(' qcon (',' qcon)* ')')
 type_item   ::= 'type' UIDENT LIDENT* '=' type
 effect_item ::= 'effect' UIDENT LIDENT* 'where' block(op_decl)
@@ -73,10 +75,10 @@ atom        ::= INT | FLOAT | CHAR | string | RAW_STRING | command
               | '(' ')' | '(' expr ')' | '(' expr ':' type ')'
               | '(' expr (',' expr)+ ','? ')'
               | '[' list(expr) ']'
-              | '{' list(field) '}' | '{' expr 'with' list(field) '}'
-              | '{' list(field) '|' expr '}'              -- 拡張
+              | qcon '{' list(field) '}'                  -- 作る式
+              | '{' op_expr '|' field (',' field)* ','? '}'   -- 更新
               | '(' (OP | CONOP) ')' | '(' (OP | CONOP) op_expr ')' | '(' op_expr (OP | CONOP) ')'
-              | '(' '.' LIDENT ')'
+              | '(' '.' (LIDENT | INT) ')'
 qvar        ::= (UIDENT '.')* LIDENT
 qcon        ::= (UIDENT '.')* UIDENT
 field       ::= LIDENT ('=' expr)?
@@ -87,7 +89,7 @@ apat        ::= '_' | LIDENT | qcon | literal | '-' INT
               | '(' ')' | '(' pat ')' | '(' pat (',' pat)+ ','? ')'
               | '(' pat ':' type ')'
               | '[' list(pat) ']'
-              | '{' list(fpat) ('|' LIDENT)? '}'
+              | qcon '{' list(fpat) '}'
 fpat        ::= LIDENT ('=' pat)?
 literal     ::= INT | string | RAW_STRING | CHAR
 
@@ -95,8 +97,6 @@ type        ::= btype ('->' row? type)?
 btype       ::= qcon type_atom* | type_atom
 type_atom   ::= qcon | LIDENT
               | '(' type ')' | '(' type (',' type)+ ')'
-              | '{' list(ftype) ('|' LIDENT)? '}'
-ftype       ::= LIDENT ':' type
 row         ::= '<' '>' | '<' LIDENT '>' | '<' effect (',' effect)* ('|' LIDENT)? '>'
 effect      ::= qcon type_atom*
 
@@ -126,8 +126,23 @@ command     ::= CMD_START (CMD_TEXT | ESCAPE | '\{' '..'? expr INTERP_END)* CMD_
 - 型の位置では、`<` で始まる演算子のトークン (`<>` など) と `>` で始まる演算子のトークン (`>->` など) を、parser が分割して読む (Rust が `>>` を分割するのと同じ)。`->` の直後に row を空白なしで書いた `-><` も、`->` と `<` に分割して読む (`Int -><IO> Int`)
 - 型の位置での `<` は row の開始だけを意味する
 - リストの型の構文は `List a` だけで、`[a]` の形はない。型の位置の `[` は E0011 にする
-- `postfix` の `.INT` で、lexer が `t.0.1` の `0.1` を浮動小数のトークンにした場合、parser がフィールドアクセスの位置で分割する (Rust と同じ)
-- `qvar` / `qcon` の `.` と、`postfix` の `.` は、前後に空白を置かない (置くと E0010)。`Upper.lower` は修飾された名前、`lower.lower` はフィールドアクセスである
+- 式の `qcon '{'` は、`{` の後が `}` か、`LIDENT` の後に `=`、`,`、`}` が続くときだけ、作る式として1つの `atom` に読む。そのほかの `{` は、引数としての更新の始まりである。そのため `Some { p | age = 1 }` は、`Some` に更新を渡す式として読める。作る式は適用より強く結びつくので、`Some Person { … }` は `Some (Person { … })` と読む (Haskell と同じ)
+- 更新の元の値は `op_expr` として読む。`if`、`match`、`handle`、`fn`、`let ... in` の形は、演算の項と同じく括弧が要る (E0012)。`match` の枝の `|` と、更新の `|` を取り違えないためである。`{ p | }` のようにフィールドがなければ、フィールドを期待する E0011 にする
+- パターンでは、`qcon` の後の `{` をいつも分解のパターンとして読む。`cpat` は、`qcon '{'` を `qcon apat+` より先に見る。演算子の等式の先読み (`apat_len`) は、`qcon '{' … '}'` を1つの `apat` として数える。そのため `P { a } <+> q = …` は演算子の等式として読める。トップレベルの `P { a } = x` は、`(a, b) = …` と同じく、`=` を指すトップレベルのパターンによる束縛の E0011 になる
+- コンストラクタのない `{` は、型、パターン、式のどの位置でも E0011 にし、対応する `}` まで読み飛ばす。中のフィールドの名前から E1001 や型の誤りを連鎖させないためである。型の位置では型を、パターンの位置ではパターンを期待する誤りにする。式の位置の `{` は更新として読み始め、元の値の後に `|` がなければ `|` を期待する誤りにする。無名のレコード (`{ name = "a" }`)、レコードの型 (`{ name : String }`)、レコードの拡張は、どれもこの誤りになる。そのため、parser が E0004 を出す構文はない
+- レコードの CST は次の節点で組む。typed AST は、`ast::RecordExpr` と `ast::UpdateExpr` (`ast::Expr` の選択肢)、`ast::RecordPat` (`ast::Pat` の選択肢)、`ast::Field`、`ast::FieldPat`、`ast::RecordFields`、`ast::FieldDecl` である
+
+  | 節点 | 子 |
+  |---|---|
+  | `RECORD_EXPR` | `PATH`、`{`、`FIELD` と `,` の並び、`}` |
+  | `FIELD` | `NAME_REF`、省略しなければ `=` と式 |
+  | `UPDATE_EXPR` | `{`、式、`\|`、`FIELD` と `,` の並び、`}` |
+  | `RECORD_PAT` | `PATH`、`{`、`FIELD_PAT` と `,` の並び、`}` |
+  | `FIELD_PAT` | `NAME_REF`、省略しなければ `=` とパターン |
+  | `RECORD_FIELDS` (`ALT` の子) | `{`、`FIELD_DECL` と `,` の並び、`}` |
+  | `FIELD_DECL` | `NAME`、`:`、型 |
+- `postfix` とセクションの `.INT` の番号は、先頭に 0 のない10進数 (`0`、`1`、`12`) で、`u32` に収まるものに限る。`t.01`、`t.1_0`、`t.0x1` と範囲外の番号は、フィールドの番号を期待する E0011 にし、そのトークンを読んで先へ進む。`t.0.1` は2回の射影である。空白のない `.` の直後の `0.1` は、lexer が `INT` `.` `INT` に分ける ([字句](lexical.md) の「数値と文字」)
+- `qvar` / `qcon` の `.` と、`postfix` の `.` は、前後に空白を置かない (置くと E0010)。`Upper.lower` は修飾された名前、`lower.lower` は射影である
 - 式の形は `expr`、`operand`、`postfix` の3つの層に分かれる。上の層の形を下の層の位置に括弧なしで書くと E0012 にする
   - `if`、`match`、`handle`、`fn`、`let ... in` は `expr` の層の形で、末尾の本体が右へできるだけ伸びる。関数の引数や演算の項にするときは括弧で囲む。これにより、`match e with` の `e` は `with` の手前で終わる
   - `drop` の適用は `operand` の層の形で、引数が atom なので右へ伸びない。演算の項には書けるが、関数の引数にするときは括弧で囲む
@@ -142,4 +157,5 @@ command     ::= CMD_START (CMD_TEXT | ESCAPE | '\{' '..'? expr INTERP_END)* CMD_
 - 式・パターン・型の入れ子の深さは 256 までとする。深さは parser の再帰 (式、演算子の列、パターン、型) の段数で数える。連鎖 (演算子の列の演算子と前置の `-`、フィールドの参照 `.x`、中置のコンストラクタのパターン) も、1つごとに1段と数える。HIR がこれらを fixity に従って1つごとに1段深い木に組み直すためである。組み直した木では、先に読み終えた被演算子が後の段の下に来うるので、後の段は、それまでの被演算子の高さの最大を下に確保して数える。ブロックの `use` の文も、残りの文を1段深く数える。HIR が残りの文をラムダで包むためである ([式](expressions.md) の「`use`」)。超えたら E0013 を出し、今の括弧かブロックの中身を読み飛ばして、その項目の中では連鎖する診断を出さない。後の段階の再帰がスタックを溢れさせないよう、parser で止める
   - `[` は、括弧と同じく1段に数える。パターンのリストでは、k 番目 (1 始まり) の要素を、`[` の中の深さに k - 1 を足した深さで読む。HIR がパターンのリストを右に入れ子の `::` の木に組むためである ([式](expressions.md) の「リスト」)。組んだ木では前の要素がいつも浅い位置に来るので、中置のコンストラクタのパターンと違い、前の要素の高さを下に確保しない
   - 式のリストは、要素の数を深さに数えない。HIR が平らな節点で持ち、後の段階もループでたどるためである
+  - レコードの `{` (作る式、更新、分解のパターン、宣言のフィールド) は、括弧と同じく1段に数える。フィールドの数は深さに数えない
   - 補間の穴は、括弧と同じく1段に数える。1つの文字列の穴の数は、深さに数えない。HIR が穴を平らな列で持つためで、式のリストと同じ扱いである

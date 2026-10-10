@@ -387,7 +387,7 @@ fn qname(p: &mut Parser) -> SyntaxKind {
 
 /// コンストラクタの後の `{` を作る式として読むのは、`{` の後が `}` か、`LIDENT` の後に `=`、`,`、`}` が続くときだけである。
 /// そのほかの `{` は引数としての更新の始まりなので、`Some { p | age = 1 }` を `Some` に更新を渡す式として読める
-/// (docs/superpowers/specs/2026-10-10-s6c-records-design.md の「式」)。
+/// (docs/spec/grammar.md の「文法上の補足」)。
 fn at_record_body(p: &Parser) -> bool {
     p.at(L_BRACE)
         && (p.nth(1) == R_BRACE || p.nth(1) == LIDENT && matches!(p.nth(2), EQ | COMMA | R_BRACE))
@@ -415,7 +415,7 @@ fn element(p: &mut Parser) -> bool {
 
 /// `'{' op_expr '|' field (',' field)* ','? '}'`。元の値を `op_expr` に限るのは、`match` の枝の `|` と更新の `|` を
 /// 取り違えないため。`|` がなければ無名のレコードなので、`}` まで読み飛ばして `ERROR` にする
-/// (docs/superpowers/specs/2026-10-10-s6c-records-design.md の「式」と「言語から外すもの」)。
+/// (docs/spec/grammar.md の「文法上の補足」)。
 fn update_expr(p: &mut Parser) -> SyntaxKind {
     p.bump(L_BRACE);
     let read = if p.at_ts(EXPR_FORMS) {
@@ -437,7 +437,7 @@ fn update_expr(p: &mut Parser) -> SyntaxKind {
 }
 
 /// 射影とセクションの番号は、先頭に 0 のない10進数で `u32` に収まるものに限る。トークンは誤りでも読んで先へ進む
-/// (docs/superpowers/specs/2026-10-10-s6c-records-design.md の「式」)。
+/// (docs/spec/grammar.md の「文法上の補足」)。
 fn field_index(p: &mut Parser) {
     let text = p.current_text();
     let decimal = text == "0" || text.starts_with(|c: char| ('1'..='9').contains(&c));

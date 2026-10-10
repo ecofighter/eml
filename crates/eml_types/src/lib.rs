@@ -105,10 +105,10 @@ pub struct BodyTypes {
     /// Core IR が、その呼び出しで飛ばすエフェクトとして使う。
     pub masks: HashMap<(ExprId, usize), Vec<EffectId>>,
     /// 射影 (`ExprKind::Field`) が指すフィールド。型検査が射影の時点の型から引いた結果である
-    /// (docs/superpowers/specs/2026-10-10-s6c-records-design.md の「射影 `e.f`」)。
+    /// (docs/spec/types.md の「フィールドの解決」)。
     pub fields: ArenaMap<ExprId, FieldTarget>,
     /// 更新 (`ExprKind::Update`) のコンストラクタと、書いたフィールドの宣言の中の番号。番号はソースの順である
-    /// (docs/superpowers/specs/2026-10-10-s6c-records-design.md の「更新 `{ e | f = v }`」)。
+    /// (docs/spec/types.md の「フィールドの解決」)。
     pub updates: ArenaMap<ExprId, (ConstructorId, Vec<u32>)>,
     /// 射影と更新が捨てるフィールドの番号と型。射影は取り出さない残りのフィールド、更新は上書きされる古いフィールドで
     /// ある。線形性の検査は、これらを `_` で受けた値と同じに扱う。

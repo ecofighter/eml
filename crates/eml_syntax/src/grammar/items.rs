@@ -322,7 +322,7 @@ fn alt(p: &mut Parser) -> bool {
 }
 
 /// `'{' list(ftype) '}'`。フィールドの後に型の atom は続けない
-/// (docs/superpowers/specs/2026-10-10-s6c-records-design.md の「宣言」)。
+/// (docs/spec/declarations.md の「`data` と `type`」)。
 fn record_fields(p: &mut Parser) {
     let m = p.start();
     p.bump(L_BRACE);
@@ -363,7 +363,7 @@ fn has_conop_ahead(p: &Parser) -> bool {
     }
 }
 
-/// S6c で実装する。CST まで組み、E0004 は HIR が出す (docs/implementation/status.md の「未対応の構文と E0004」)。
+/// 型の別名はまだ実装していない。CST まで組み、E0004 は HIR が出す (docs/implementation/status.md の「未対応の構文と E0004」)。
 fn type_item(p: &mut Parser, m: Marker) {
     p.bump(TYPE_KW);
     expect_name(p, UIDENT);

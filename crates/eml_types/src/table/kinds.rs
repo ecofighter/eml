@@ -2,7 +2,7 @@ use super::*;
 use std::collections::HashSet;
 
 impl Table<'_> {
-    /// 型の Kind の上界の候補。レコードとデータ型の Kind はフィールドの join なので、フィールドごとの境界を並べる
+    /// 型の Kind の上界の候補。タプルとデータ型の Kind は要素とフィールドの join なので、要素とフィールドごとの境界を並べる
     /// (docs/spec/types.md)。データ型では、Kind に効く位置の型引数の境界を並べる。`File` を含むデータ型は定数の `Lin` である。
     /// 境界は最初に現れた順に重複なく並べる。表は部分を共有するので、重複を残すと境界の数が型の深さの指数になる。
     pub fn kind_bounds(&self, ty: Ty) -> Vec<Bound<Linearity>> {

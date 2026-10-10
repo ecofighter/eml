@@ -1,4 +1,4 @@
-//! レコードの作る式とパターンの型検査 (docs/superpowers/specs/2026-10-10-s6c-records-design.md の「型検査」)。
+//! レコードの作る式とパターンの型検査 (docs/spec/types.md の「フィールドの解決」)。
 
 use eml_test_support::{check, full};
 

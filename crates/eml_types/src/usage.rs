@@ -383,7 +383,7 @@ impl<'a> Usage<'a, '_> {
     }
 
     /// 射影と更新が捨てるフィールドは、`_` で受けた値と同じく `Unr` でなければならない
-    /// (docs/superpowers/specs/2026-10-10-s6c-records-design.md の「射影 `e.f`」と「更新 `{ e | f = v }`」)。
+    /// (docs/spec/records.md の「線形性の規則」)。
     fn discard_fields(&mut self, id: ExprId) {
         let Some(discarded) = self.typing.discarded.get(id) else {
             return;

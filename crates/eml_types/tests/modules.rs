@@ -127,7 +127,7 @@ fn types_of_the_same_name_are_qualified_with_their_module() {
 
 #[test]
 fn a_user_unit_is_told_apart_from_the_builtin_one() {
-    // 空のレコードは Prelude の `Unit` の表示名で書く。継続は普通の関数型で表示するので、ユーザーの `Cont` は修飾しない
+    // 要素のないタプルは Prelude の `Unit` の表示名で書く。継続は普通の関数型で表示するので、ユーザーの `Cont` は修飾しない
     let text = "data Unit = | U\n\ndata Cont = | C\n\neffect Ask where\n  ask : Int -> Int\n\nf : Cont -> Unit\nf c = ()\n\ng : Int -> Int\ng n =\n  handle ask n with\n    | ask x k -> k x";
     insta::assert_snapshot!(crate::common::check_text(text), @"
     ask : Int -> <Ask> Int

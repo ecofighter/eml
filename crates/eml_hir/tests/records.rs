@@ -1,4 +1,4 @@
-//! レコードの宣言、作る式、パターン、射影、更新、セクション (docs/superpowers/specs/2026-10-10-s6c-records-design.md の「HIR」)。
+//! レコードの宣言、作る式、パターン、射影、更新、セクション (docs/spec/expressions.md の「レコード」)。
 
 use eml_hir::{Body, ExprId, ExprKind, FieldKey, PatKind, Program};
 

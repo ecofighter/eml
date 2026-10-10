@@ -167,7 +167,7 @@ impl ItemLowering<'_> {
 }
 
 /// 同じフィールドの名前を2回書いた (E1045)。宣言、作る式、パターンで同じ文言にする
-/// (docs/superpowers/specs/2026-10-10-s6c-records-design.md の「診断」)。
+/// (docs/implementation/diagnostics.md の「番号ごとの出し方」)。
 pub(super) fn duplicate_field(
     file: FileId,
     name: &str,

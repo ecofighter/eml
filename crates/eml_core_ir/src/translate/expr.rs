@@ -557,7 +557,7 @@ impl FnLowering<'_> {
             }
             ExprKind::Record { ctor, fields } => {
                 // フィールドの式を書いた順に評価してから、宣言の順に並べて作る
-                // (docs/superpowers/specs/2026-10-10-s6c-records-design.md の「translate」)
+                // (docs/spec/core-ir.md の「変換の規則」)
                 let mut args = vec![Atom::Unit; fields.len()];
                 for &(field, value) in fields {
                     args[field as usize] = self.atom(value);
@@ -568,7 +568,7 @@ impl FnLowering<'_> {
             }
             ExprKind::Field { base, .. } => {
                 // `e` を評価して `unpack` で分解し、指したフィールドの変数を結果にする
-                // (docs/superpowers/specs/2026-10-10-s6c-records-design.md の「translate」)
+                // (docs/spec/core-ir.md の「変換の規則」)
                 let value = self.atom(*base);
                 let (ctor, index) = match self.ctx.types.fields[id] {
                     FieldTarget::Constructor { ctor, field } => {
@@ -590,7 +590,7 @@ impl FnLowering<'_> {
             ExprKind::Update { base, fields } => {
                 // `e`、フィールドの式の順に評価してから古いフィールドを取り出し、置き換える位置を新しい値にして作る。
                 // 意味は写しで、一意な値をその場で書き換えるのは Perceus の reuse に任せる
-                // (docs/superpowers/specs/2026-10-10-s6c-records-design.md の「translate」)
+                // (docs/spec/core-ir.md の「変換の規則」)
                 let value = self.atom(*base);
                 let values: Vec<Atom> = fields.iter().map(|&(_, value)| self.atom(value)).collect();
                 let (ctor, indices) = &self.ctx.types.updates[id];

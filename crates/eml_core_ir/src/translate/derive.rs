@@ -339,7 +339,7 @@ impl Generator<'_> {
 
     /// `Name { f1 = …, f2 = … }`。値は中括弧の中なので `show_prec 0` で書く。`Name { … }` は atom なので、`d` によらず
     /// 括弧を付けない。フィールドがなければ `Name {}` と書く
-    /// (docs/superpowers/specs/2026-10-10-s6c-records-design.md の「`deriving`」)。
+    /// (docs/spec/declarations.md の「`deriving`」)。
     fn show_record(&mut self, name: &str, names: &[String], fields: &[VarId]) {
         if fields.is_empty() {
             let shown = self.string(&format!("{name} {{}}"));

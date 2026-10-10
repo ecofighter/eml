@@ -146,7 +146,7 @@ pub(crate) enum KindReason {
     },
     /// レコードのパターンに書かなかったフィールドと、射影と更新が捨てるフィールド。由来の範囲は、パターン全体か、射影か
     /// 更新の式である。書き手の `_` と区別して、フィールドの名前で報告する
-    /// (docs/superpowers/specs/2026-10-10-s6c-records-design.md の「診断」)。
+    /// (docs/implementation/diagnostics.md の「線形性の診断」)。
     DiscardedField { name: String, site: DiscardSite },
 }
 

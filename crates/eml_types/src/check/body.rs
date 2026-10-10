@@ -294,7 +294,7 @@ impl BodyCheck<'_, '_> {
 
     /// 作る式。コンストラクタを参照と同じく具体化し、矢印を剥がしてフィールドの型を宣言の順に得る。フィールドの式は
     /// 書いた順に、そのフィールドの型に対して検査する。結果の型は位置のコンストラクタの呼び出しと同じである
-    /// (docs/superpowers/specs/2026-10-10-s6c-records-design.md の「作る式」)。
+    /// (docs/spec/types.md の「フィールドの解決」)。
     fn record(
         &mut self,
         id: ExprId,
@@ -622,8 +622,8 @@ impl BodyCheck<'_, '_> {
     /// ならない。矢印が余れば部分適用で、残りの関数型が値の型になる (docs/spec/expressions.md の「関数適用」)。
     ///
     /// 引数のラムダは、ほかの引数の後に検査する。`map (.name) people` で、ラムダの引数の型を `people` から決めるため
-    /// である。期待する型があれば、結果の型をその型と合わせる (docs/superpowers/specs/2026-10-10-s6c-records-design.md
-    /// の「ラムダを後で検査する」)。
+    /// である。期待する型があれば、結果の型をその型と合わせる (docs/spec/types.md
+    /// の「引数のラムダを後で検査する」)。
     fn call(
         &mut self,
         id: ExprId,
@@ -732,7 +732,7 @@ impl BodyCheck<'_, '_> {
     }
 
     /// 後に回す引数か。`use` が組んだラムダは後に回さない。`use` のブロックの型の誤りを、シグネチャを指す今の報告の
-    /// まま保つためである (docs/superpowers/specs/2026-10-10-s6c-records-design.md の「`use` のラムダの印」)。
+    /// まま保つためである (docs/spec/types.md の「引数のラムダを後で検査する」)。
     fn postponable(&self, arg: ExprId) -> bool {
         matches!(self.body.exprs[arg].kind, ExprKind::Lambda(_))
             && !self.body.use_lambdas.contains(&arg)

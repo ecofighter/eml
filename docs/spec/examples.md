@@ -6,7 +6,7 @@
 
 ## ログの集計 (全体)
 
-import、リストのパターン、補間、複数行の文字列と、まだ実装していない名前付きのレコード (S6c)、コマンドリテラル (コマンドリテラルの段) を含む。
+import、リストのパターン、補間、複数行の文字列、名前付きのレコードと、まだ実装していないコマンドリテラル (コマンドリテラルの段) を含む。
 
 ```haskell
 #!/usr/bin/env eml run
@@ -18,7 +18,8 @@ data Level =
   | Warn
   | Error
 
-type Entry = { level : Level, msg : String }
+data Entry =
+  | Entry { level : Level, msg : String }
 
 effect Fail where
   never fail : String -> a
@@ -26,9 +27,9 @@ effect Fail where
 parse_entry : String -> Option Entry
 parse_entry line =
   match String.split_once " " line with
-    | Some ("INFO", msg)  -> Some { level = Info, msg }
-    | Some ("WARN", msg)  -> Some { level = Warn, msg }
-    | Some ("ERROR", msg) -> Some { level = Error, msg }
+    | Some ("INFO", msg)  -> Some Entry { level = Info, msg }
+    | Some ("WARN", msg)  -> Some Entry { level = Warn, msg }
+    | Some ("ERROR", msg) -> Some Entry { level = Error, msg }
     | _ -> None
 
 is_error : Level -> Bool
@@ -135,14 +136,15 @@ main () =
 
 ## 子プロセスとパイプ (線形なハンドルの束)
 
-名前付きのレコード (S6c) とコマンドリテラル (コマンドリテラルの段) を含む。
+名前付きのレコードと、まだ実装していないコマンドリテラル (コマンドリテラルの段) を含む。
 
 ```haskell
-type Child = { proc : Process, stdin : Stdin, stdout : Stdout }
+data Child =
+  | Child { proc : Process, stdin : Stdin, stdout : Stdout }
 
 sort_lines : List String -> <IO> String
 sort_lines xs =
-  let { proc, stdin, stdout } = Proc.spawn `sort`
+  let Child { proc, stdin, stdout } = Proc.spawn `sort`
   let stdin = Proc.write stdin (String.join "\n" xs)
   Proc.close_stdin stdin
   let (stdout, out) = Proc.read_all stdout
@@ -151,17 +153,18 @@ sort_lines xs =
   out
 ```
 
-## データ変換 (構造的レコード)
+## データ変換 (名前付きのレコード)
 
-リストのパターン、補間と、まだ実装していない名前付きのレコード (S6c) を含む。
+リストのパターン、補間、名前付きのレコードを含む。
 
 ```haskell
-type Person = { name : String, age : Int, email : Option String }
+data Person =
+  | Person { name : String, age : Int, email : Option String }
 
 parse_row : List String -> Option Person
 parse_row cols =
   match cols with
-    | [name, age, email] -> Some { name, age = parse_int age, email = non_empty email }
+    | [name, age, email] -> Some Person { name, age = parse_int age, email = non_empty email }
     | _ -> None
 
 adults : List Person -> List String

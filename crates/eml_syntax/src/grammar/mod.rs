@@ -243,7 +243,7 @@ fn describe(p: &Parser) -> String {
 }
 
 /// 無名のレコードの形を、中身ごと読み飛ばす。中のフィールドの名前から E1001 や型の誤りを連鎖させないため
-/// (docs/superpowers/specs/2026-10-10-s6c-records-design.md の「言語から外すもの」)。ノードは作らないので、
+/// (docs/spec/grammar.md の「文法上の補足」)。ノードは作らないので、
 /// 呼び出し側が `ERROR` で包む。
 fn skipped_group(p: &mut Parser, what: &str) {
     expected(p, what);

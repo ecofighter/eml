@@ -24,7 +24,7 @@ pub(super) fn apat_len(p: &Parser) -> Option<usize> {
             while p.nth(n) == DOT && p.nth(n + 1) == UIDENT {
                 n += 2;
             }
-            // `qcon '{' … '}'` は1つの apat である (docs/superpowers/specs/2026-10-10-s6c-records-design.md の「パターン」)
+            // `qcon '{' … '}'` は1つの apat である (docs/spec/grammar.md の「文法上の補足」)
             if p.nth(n) == L_BRACE {
                 return bracket_len(p, n).map(|len| n + len);
             }
@@ -111,7 +111,7 @@ fn infix_con_pat(p: &mut Parser, tallest: u32) -> bool {
 }
 
 /// `UIDENT '{'` は `qcon apat*` より先に見る。`P { a }` の `{ a }` を引数のパターンとして読まないため
-/// (docs/superpowers/specs/2026-10-10-s6c-records-design.md の「パターン」)。
+/// (docs/spec/grammar.md の「文法上の補足」)。
 fn cpat(p: &mut Parser) -> bool {
     if !p.at(UIDENT) {
         return apat(p);
