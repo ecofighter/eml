@@ -7,7 +7,7 @@ pub(super) fn at_apat_start(p: &Parser) -> bool {
 /// `-` は、整数が続くときだけ負の数のリテラルとして apat を始める。
 pub(super) fn at_apat_start_at(p: &Parser, n: usize) -> bool {
     match p.nth(n) {
-        UNDERSCORE | LIDENT | UIDENT | INT | STRING_START | CHAR => true,
+        UNDERSCORE | LIDENT | UIDENT | INT | STRING_START | RAW_STRING | CHAR => true,
         kind if kind.is_opening_bracket() => true,
         MINUS => p.nth(n + 1) == INT,
         _ => false,
@@ -17,7 +17,7 @@ pub(super) fn at_apat_start_at(p: &Parser, n: usize) -> bool {
 /// 項目の種類を決める先読みに使うので、括弧は対応する閉じ括弧までを数える。
 pub(super) fn apat_len(p: &Parser) -> Option<usize> {
     match p.current() {
-        UNDERSCORE | LIDENT | INT | CHAR => Some(1),
+        UNDERSCORE | LIDENT | INT | RAW_STRING | CHAR => Some(1),
         MINUS if p.nth(1) == INT => Some(2),
         UIDENT => {
             let mut n = 1;
@@ -133,7 +133,7 @@ pub(super) fn apat(p: &mut Parser) -> bool {
             qcon(p);
             CON_PAT
         }
-        INT | CHAR => {
+        INT | RAW_STRING | CHAR => {
             p.bump_any();
             LITERAL_PAT
         }

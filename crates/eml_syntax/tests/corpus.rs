@@ -87,3 +87,18 @@ fn every_line_deletion_of_the_corpus_parses() {
         }
     }
 }
+
+const STRINGS: &str = include_str!("corpus/strings.em");
+
+#[test]
+fn strings_corpus_has_no_syntax_diagnostics() {
+    // コマンドリテラルの E0004 は HIR が出すので、`eml_syntax` の診断は空である
+    assert_eq!(diagnostics(STRINGS), Vec::<String>::new());
+}
+
+#[test]
+fn every_prefix_of_the_strings_corpus_parses() {
+    for (end, _) in STRINGS.char_indices() {
+        diagnostics(&STRINGS[..end]);
+    }
+}

@@ -5,7 +5,7 @@ use logos::Logos;
 
 use crate::SyntaxKind::{self, *};
 use crate::codes;
-use crate::literal::int_value;
+use crate::literal::{self, int_value};
 use string::raw_string_hashes;
 
 mod string;
@@ -107,7 +107,7 @@ enum Mode {
         hole: Option<usize>,
     },
     /// `reported` は、閉じていないことを報告済みか。穴の中の `"""` は開いた時点で E0014 を出すので、行の終わりで
-    /// 閉じるときに E0002 を重ねない (Task 3)。
+    /// 閉じるときに E0002 を重ねない (docs/superpowers/specs/2026-10-10-s6b-strings-design.md の「改行での回復」)。
     String {
         start: usize,
         multiline: bool,
@@ -155,7 +155,7 @@ impl Lexer<'_> {
         } else if rest.starts_with("{-") {
             self.block_comment(in_hole);
         } else if rest.starts_with("\"\"\"") {
-            self.multiline_string();
+            self.multiline_start(in_hole);
         } else if rest.starts_with('"') {
             let start = self.pos;
             self.push(STRING_START, start + 1);
@@ -165,7 +165,7 @@ impl Lexer<'_> {
                 reported: false,
             });
         } else if let Some(hashes) = raw_string_hashes(rest) {
-            self.raw_string(hashes);
+            self.raw_string(hashes, in_hole);
         } else if rest.starts_with('`') {
             let start = self.pos;
             self.push(CMD_START, start + 1);
@@ -222,6 +222,13 @@ impl Lexer<'_> {
                     multiline,
                     reported: already,
                 } => {
+                    if multiline {
+                        // 閉じていないので字下げは検査しないが、開きの行は閉じに関係なく決まる
+                        // (docs/superpowers/specs/2026-10-10-s6b-strings-design.md の「複数行の文字列」)
+                        let text = self.text;
+                        let error = literal::opening_line_error(&text[start + 3..]);
+                        self.report_layout(start, text.len(), error);
+                    }
                     if !reported && !already {
                         let (end, label, message) = if multiline {
                             (

@@ -879,14 +879,12 @@ fn arguments(n: usize) -> String {
     }
 }
 
-/// S6b (複数行の文字列、raw 文字列) と `Float`、`Char`、`Num` の段 (浮動小数、文字) で実装するリテラル。
+/// `Float`、`Char`、`Num` の段 (浮動小数、文字) で実装するリテラル。
 /// パーサは CST を組み、HIR が E0004 を出す (docs/implementation/status.md の「未対応の構文と E0004」)。
 fn unsupported_literal(kind: SyntaxKind) -> Option<&'static str> {
     Some(match kind {
         SyntaxKind::FLOAT => "floating-point literals are not supported yet",
         SyntaxKind::CHAR => "character literals are not supported yet",
-        SyntaxKind::MULTILINE_STRING => "multi-line strings are not supported yet",
-        SyntaxKind::RAW_STRING => "raw strings are not supported yet",
         _ => return None,
     })
 }

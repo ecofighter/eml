@@ -10,14 +10,13 @@ pub enum SyntaxKind {
     SHEBANG,
 
     INT,
-    // FLOAT、CHAR、MULTILINE_STRING、RAW_STRING は、使われた位置で E0004 を出せるように字句だけ先に用意している。
-    // MULTILINE_STRING は S6b の Task 3 で文字列のトークンに分ける。
+    // FLOAT と CHAR は、使われた位置で E0004 を出せるように字句だけ先に用意している。
     FLOAT,
     CHAR,
-    MULTILINE_STRING,
+    /// 中に構造がないので、1つのトークンにする。
     RAW_STRING,
-    /// 文字列は穴がなくても細かいトークンに分ける (docs/superpowers/specs/2026-10-10-s6b-strings-design.md の
-    /// 「トークン」)。
+    /// 文字列は、複数行の文字列も含めて、穴がなくても細かいトークンに分ける
+    /// (docs/superpowers/specs/2026-10-10-s6b-strings-design.md の「トークン」)。
     STRING_START,
     STRING_TEXT,
     ESCAPE,

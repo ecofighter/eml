@@ -319,17 +319,11 @@ fn unterminated_string_does_not_swallow_carriage_return() {
 }
 
 #[test]
-fn later_stage_literals_are_single_tokens() {
-    insta::assert_snapshot!(dump("\"\"\"\n  a\n  \"\"\" r\"x\" r#\"y\"z\"# `ls -l`"), @r##"
-    MULTILINE_STRING@0..13 "\"\"\"\n  a\n  \"\"\""
-    WHITESPACE@13..14 " "
-    RAW_STRING@14..18 "r\"x\""
-    WHITESPACE@18..19 " "
-    RAW_STRING@19..27 "r#\"y\"z\"#"
-    WHITESPACE@27..28 " "
-    CMD_START@28..29 "`"
-    CMD_TEXT@29..34 "ls -l"
-    CMD_END@34..35 "`"
+fn raw_strings_are_single_tokens() {
+    insta::assert_snapshot!(dump("r\"x\" r#\"y\"z\"#"), @r##"
+    RAW_STRING@0..4 "r\"x\""
+    WHITESPACE@4..5 " "
+    RAW_STRING@5..13 "r#\"y\"z\"#"
     "##);
 }
 
@@ -339,7 +333,10 @@ fn unterminated_later_stage_literals_are_errors() {
     assert_eq!(diags("r#\"abc"), ["E0002@0..3 unterminated raw string"]);
     assert_eq!(
         diags("\"\"\"abc"),
-        ["E0002@0..3 unterminated multi-line string"]
+        [
+            "E0002@0..3 unterminated multi-line string",
+            "E0014@3..6 unexpected text after the opening `\"\"\"`",
+        ]
     );
 }
 
@@ -636,4 +633,108 @@ fn multibyte_text_around_holes() {
         diags("\"é\\{x"),
         ["E0002@3..5 unterminated string interpolation"]
     );
+}
+
+#[test]
+fn a_multiline_string_is_split_into_tokens() {
+    let text = "\"\"\"\n  a\\{x}\n  \"\"\"";
+    assert_eq!(
+        kinds(text),
+        [
+            "STRING_START",
+            "STRING_TEXT",
+            "INTERP_START",
+            "LIDENT",
+            "INTERP_END",
+            "STRING_TEXT",
+            "STRING_END"
+        ]
+    );
+    assert_eq!(diags(text), Vec::<String>::new());
+}
+
+#[test]
+fn multiline_string_layout_errors_stay_inside_the_string() {
+    // 開きと閉じが同じ行
+    assert_eq!(
+        diags("x = (\"\"\"m\"\"\", 1)"),
+        ["E0014@5..12 a multi-line string must start on a new line after `\"\"\"`"]
+    );
+    // 開きの行の文字
+    assert_eq!(
+        diags("\"\"\" ab\n  \"\"\""),
+        ["E0014@4..6 unexpected text after the opening `\"\"\"`"]
+    );
+    // 閉じの前の文字。字下げの検査はしない
+    assert_eq!(
+        diags("\"\"\"\nx\n  ab\"\"\""),
+        ["E0014@8..10 unexpected text before the closing `\"\"\"`"]
+    );
+    // 字下げの足りない行ごとに1件
+    assert_eq!(
+        diags("\"\"\"\n a\nb\n    \"\"\""),
+        [
+            "E0014@4..6 line is indented less than the closing `\"\"\"`",
+            "E0014@7..8 line is indented less than the closing `\"\"\"`",
+        ]
+    );
+    // 閉じていなければ E0002 と開きの行の検査だけ
+    assert_eq!(
+        diags("\"\"\"abc"),
+        [
+            "E0002@0..3 unterminated multi-line string",
+            "E0014@3..6 unexpected text after the opening `\"\"\"`",
+        ]
+    );
+}
+
+#[test]
+fn short_indent_before_a_multibyte_character() {
+    assert_eq!(
+        diags("\"\"\"\n é\n  \"\"\""),
+        ["E0014@4..7 line is indented less than the closing `\"\"\"`"]
+    );
+}
+
+#[test]
+fn a_backslash_newline_in_a_multiline_string_is_an_invalid_escape() {
+    assert_eq!(
+        diags("\"\"\"\n  a\\\n  \"\"\""),
+        ["E0008@7..8 invalid escape `\\` at the end of a line"]
+    );
+}
+
+#[test]
+fn a_multiline_string_in_a_hole_is_reported_once() {
+    assert_eq!(
+        diags("\"\\{\"\"\"\nx"),
+        ["E0014@3..6 multi-line strings are not allowed inside an interpolation"]
+    );
+}
+
+#[test]
+fn a_raw_string_in_a_hole_stops_at_the_newline() {
+    assert_eq!(
+        diags("\"\\{r\"a\nb\"}\""),
+        ["E0002@3..5 unterminated raw string"]
+    );
+}
+
+#[test]
+fn a_unicode_escape_does_not_run_past_a_command_literal() {
+    // `}` を探す範囲は、閉じのバッククォートの手前までである
+    let text = "`a \\u{` b}";
+    assert_eq!(
+        kinds(text),
+        [
+            "CMD_START",
+            "CMD_TEXT",
+            "ESCAPE",
+            "CMD_TEXT",
+            "CMD_END",
+            "LIDENT",
+            "R_BRACE"
+        ]
+    );
+    assert_eq!(diags(text), ["E0008@3..5 invalid unicode escape `\\u`"]);
 }

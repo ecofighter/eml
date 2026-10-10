@@ -339,13 +339,11 @@ fn type_declarations_are_not_supported_yet() {
 #[test]
 fn later_stage_literals_are_not_supported_yet() {
     assert_eq!(
-        diagnostics("x : Int\nx = (1.5, 'c', r\"raw\", \"\"\"m\"\"\", `ls`)"),
+        diagnostics("x : Int\nx = (1.5, 'c', `ls`)"),
         [
             "E0004 2:6 floating-point literals are not supported yet",
             "E0004 2:11 character literals are not supported yet",
-            "E0004 2:16 raw strings are not supported yet",
-            "E0004 2:24 multi-line strings are not supported yet",
-            "E0004 2:33 command literals are not supported yet",
+            "E0004 2:16 command literals are not supported yet",
         ]
     );
 }

@@ -143,3 +143,34 @@ fn string_patterns_can_be_operator_equation_operands() {
         Vec::<String>::new()
     );
 }
+
+#[test]
+fn multiline_parts_strip_the_indentation_of_the_closing_line() {
+    let text = "\"\"\"   \n    Hello, \\{name}!\n      indented\n\n  \n    \"\"\"";
+    assert_eq!(
+        parts(text),
+        Some(vec![
+            r#"text "Hello, ""#.to_string(),
+            "hole name".to_string(),
+            r#"text "!\n  indented\n\n""#.to_string(),
+        ])
+    );
+}
+
+#[test]
+fn a_multiline_string_closed_on_the_next_line_is_empty() {
+    assert_eq!(parts("\"\"\"\n\"\"\""), Some(vec![]));
+}
+
+#[test]
+fn crlf_multiline_strings_have_lf_values() {
+    assert_eq!(
+        parts("\"\"\"\r\n  a\r\n  b\\{x}\r\n  \"\"\""),
+        Some(vec![r#"text "a\nb""#.to_string(), "hole x".to_string()])
+    );
+}
+
+#[test]
+fn a_multiline_string_with_a_layout_error_has_no_value() {
+    assert_eq!(parts("\"\"\"\nab\n  \"\"\""), None);
+}

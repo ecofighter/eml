@@ -8,7 +8,6 @@ const ATOM_START: TokenSet = TokenSet::new(&[
     INT,
     FLOAT,
     CHAR,
-    MULTILINE_STRING,
     RAW_STRING,
     STRING_START,
     CMD_START,
@@ -283,7 +282,7 @@ fn postfix(p: &mut Parser) -> bool {
 fn atom(p: &mut Parser) -> Option<CompletedMarker> {
     let m = p.start();
     let kind = match p.current() {
-        INT | FLOAT | CHAR | MULTILINE_STRING | RAW_STRING => {
+        INT | FLOAT | CHAR | RAW_STRING => {
             p.bump_any();
             LITERAL
         }

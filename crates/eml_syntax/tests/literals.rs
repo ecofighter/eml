@@ -108,3 +108,20 @@ fn unicode_escapes_the_lexer_rejects_have_no_value() {
         );
     }
 }
+
+#[test]
+fn raw_string_values() {
+    assert_eq!(
+        value(r#"r"a\nb""#),
+        Some(LiteralValue::String(r"a\nb".to_string()))
+    );
+    assert_eq!(
+        value(r##"r#"a"b"#"##),
+        Some(LiteralValue::String("a\"b".to_string()))
+    );
+    assert_eq!(
+        value("r\"a\r\nb\""),
+        Some(LiteralValue::String("a\nb".to_string()))
+    );
+    assert_eq!(value("r\"abc"), None);
+}

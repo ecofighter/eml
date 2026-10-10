@@ -417,7 +417,7 @@ mod tests {
     fn lines_inside_a_multi_line_string_are_not_line_starts() {
         assert_eq!(
             layout_of("s =\n  \"\"\"\nx\n  \"\"\"\nt = 1"),
-            "s = <OPEN> \"\"\"\nx\n  \"\"\" <CLOSE> <SEP> t = 1"
+            "s = <OPEN> \"\"\" \nx\n   \"\"\" <CLOSE> <SEP> t = 1"
         );
     }
 
