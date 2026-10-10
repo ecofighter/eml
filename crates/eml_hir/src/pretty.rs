@@ -181,7 +181,7 @@ impl Printer<'_> {
     }
 
     /// Prelude の `::` の鎖。`[]` で終わればリストの形、それ以外は右結合の `::` で書く。`::` は Prelude だけが
-    /// 定義できるので修飾しない (docs/superpowers/specs/2026-10-10-s6a-lists-design.md の「網羅性」)。
+    /// 定義できるので修飾しない (docs/spec/exhaustiveness.md の「検査パス」)。
     fn cons_pat(&self, body: &Body, args: &[PatId]) -> String {
         let lang = &self.program.lang;
         let mut heads = vec![args[0]];

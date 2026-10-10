@@ -609,7 +609,7 @@ impl<'a> BodyLowering<'a> {
     }
 
     /// `[p1, …, pn]` を `p1 :: (… (pn :: Nil))` に組む。コンストラクタは名前を引かずに Prelude のものを指す
-    /// (docs/superpowers/specs/2026-10-10-s6a-lists-design.md の「HIR」)。要素は外側のパターンと同じ組で、左から
+    /// (docs/spec/expressions.md の「リスト」)。要素は外側のパターンと同じ組で、左から
     /// 変換する。E1017 の組と局所変数の番号を、ソースの順にそろえるためである。範囲は、k 番目の `::` が k 番目の
     /// 要素の始まり (1つ目は `[`) から `]` まで、`Nil` が `]` である。
     fn lower_list_pat(&mut self, list: ast::ListPat, range: TextRange) -> PatId {
@@ -851,7 +851,7 @@ fn arguments(n: usize) -> String {
     }
 }
 
-/// S6 (複数行の文字列、raw 文字列) と `Float`、`Char`、`Num` の段 (浮動小数、文字) で実装するリテラル。
+/// S6b (複数行の文字列、raw 文字列) と `Float`、`Char`、`Num` の段 (浮動小数、文字) で実装するリテラル。
 /// パーサは CST を組み、HIR が E0004 を出す (docs/implementation/status.md の「未対応の構文と E0004」)。
 fn unsupported_literal(kind: SyntaxKind) -> Option<&'static str> {
     Some(match kind {

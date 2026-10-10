@@ -249,7 +249,7 @@ impl Carrying<'_, '_> {
 
     /// リストの要素も左から評価するが、評価済みの要素は最初の要素1つで代表させる。要素の型はどれも同じなので、
     /// 持ち越しの制約も同じになる。`parts` のように1つずつ持つと、生きている値の集合を要素ごとに写すので、要素の数の
-    /// 2乗の時間がかかる (docs/superpowers/specs/2026-10-10-s6a-lists-design.md の「型検査」)。
+    /// 2乗の時間がかかる (docs/implementation/architecture.md の「`eml_types` の内部」)。
     fn list(&mut self, elements: &[ExprId], after: &Live) -> Live {
         let Some((&first, rest)) = elements.split_first() else {
             return after.clone();

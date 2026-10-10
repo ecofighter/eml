@@ -500,7 +500,7 @@ impl FnLowering<'_> {
             }
             ExprKind::List(elements) => {
                 // 要素を左から評価してから、`Nil` から右の要素の順に `::` を積む。ループで組むので、要素が多くても
-                // スタックは深くならない (docs/superpowers/specs/2026-10-10-s6a-lists-design.md の「translate」)
+                // スタックは深くならない (docs/spec/core-ir.md の「変換の規則」)
                 let items: Vec<Atom> = elements.iter().map(|&element| self.atom(element)).collect();
                 let ty = self.ty(id);
                 let hir = self.ctx.hir;

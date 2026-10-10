@@ -38,7 +38,7 @@ deriving    ::= 'deriving' (qcon | '(' qcon (',' qcon)* ')')
 type_item   ::= 'type' UIDENT LIDENT* '=' type
 effect_item ::= 'effect' UIDENT LIDENT* 'where' block(op_decl)
 op_decl     ::= ('never' | 'once' | 'multi')? LIDENT ':' context? type
-fixity_item ::= ('infixl' | 'infixr' | 'infix') INT OP (',' OP)*
+fixity_item ::= ('infixl' | 'infixr' | 'infix') INT (OP | CONOP) (',' (OP | CONOP))*
 class_item  ::= 'class' context? UIDENT LIDENT ('where' block(class_member))?
 class_member ::= signature | equation
 instance_item ::= 'instance' context? qcon type_atom ('where' block(inst_member))?
@@ -63,7 +63,7 @@ clauses     ::= block(clause) | clause+
 clause      ::= '|' qvar apat* '->' body                  -- 操作の節 (引数、k、状態)
               | '|' 'return' apat+ '->' body              -- return x [状態]
 
-op_expr     ::= operand (OP operand)*                     -- CST では平たい列
+op_expr     ::= operand ((OP | CONOP) operand)*           -- CST では平たい列
 operand     ::= '-' operand | app
 app         ::= 'drop'? postfix+
 postfix     ::= atom ('.' (LIDENT | INT))*                -- '.' の前後に空白を置かない
@@ -75,7 +75,8 @@ atom        ::= INT | FLOAT | CHAR | string | RAW_STRING | command
               | '[' list(expr) ']'
               | '{' list(field) '}' | '{' expr 'with' list(field) '}'
               | '{' list(field) '|' expr '}'              -- 拡張
-              | '(' OP ')' | '(' OP op_expr ')' | '(' op_expr OP ')' | '(' '.' LIDENT ')'
+              | '(' (OP | CONOP) ')' | '(' (OP | CONOP) op_expr ')' | '(' op_expr (OP | CONOP) ')'
+              | '(' '.' LIDENT ')'
 qvar        ::= (UIDENT '.')* LIDENT
 qcon        ::= (UIDENT '.')* UIDENT
 field       ::= LIDENT ('=' expr)?
@@ -124,6 +125,7 @@ command     ::= CMD_START (CMD_TEXT | ESCAPE | '\{' '..'? expr '}')* CMD_END
   ```
 - 型の位置では、`<` で始まる演算子のトークン (`<>` など) と `>` で始まる演算子のトークン (`>->` など) を、parser が分割して読む (Rust が `>>` を分割するのと同じ)。`->` の直後に row を空白なしで書いた `-><` も、`->` と `<` に分割して読む (`Int -><IO> Int`)
 - 型の位置での `<` は row の開始だけを意味する
+- リストの型の構文は `List a` だけで、`[a]` の形はない。型の位置の `[` は E0011 にする
 - `postfix` の `.INT` で、lexer が `t.0.1` の `0.1` を浮動小数のトークンにした場合、parser がフィールドアクセスの位置で分割する (Rust と同じ)
 - `qvar` / `qcon` の `.` と、`postfix` の `.` は、前後に空白を置かない (置くと E0010)。`Upper.lower` は修飾された名前、`lower.lower` はフィールドアクセスである
 - 式の形は `expr`、`operand`、`postfix` の3つの層に分かれる。上の層の形を下の層の位置に括弧なしで書くと E0012 にする
@@ -135,3 +137,5 @@ command     ::= CMD_START (CMD_TEXT | ESCAPE | '\{' '..'? expr '}')* CMD_END
 - `handle` の節の引数の個数と `drop` の引数の個数は、文法では制限せず HIR で検査する ([式](expressions.md) の「handler」と「パラメータ付き handler」)
 - セクションの被演算子は演算子の列でもよい。優先順位による可否は HIR で検査する ([式](expressions.md) の「セクション」)
 - 式・パターン・型の入れ子の深さは 256 までとする。深さは parser の再帰 (式、演算子の列、パターン、型) の段数で数える。連鎖 (演算子の列の演算子と前置の `-`、フィールドの参照 `.x`、中置のコンストラクタのパターン) も、1つごとに1段と数える。HIR がこれらを fixity に従って1つごとに1段深い木に組み直すためである。組み直した木では、先に読み終えた被演算子が後の段の下に来うるので、後の段は、それまでの被演算子の高さの最大を下に確保して数える。ブロックの `use` の文も、残りの文を1段深く数える。HIR が残りの文をラムダで包むためである ([式](expressions.md) の「`use`」)。超えたら E0013 を出し、今の括弧かブロックの中身を読み飛ばして、その項目の中では連鎖する診断を出さない。後の段階の再帰がスタックを溢れさせないよう、parser で止める
+  - `[` は、括弧と同じく1段に数える。パターンのリストでは、k 番目 (1 始まり) の要素を、`[` の中の深さに k - 1 を足した深さで読む。HIR がパターンのリストを右に入れ子の `::` の木に組むためである ([式](expressions.md) の「リスト」)。組んだ木では前の要素がいつも浅い位置に来るので、中置のコンストラクタのパターンと違い、前の要素の高さを下に確保しない
+  - 式のリストは、要素の数を深さに数えない。HIR が平らな節点で持ち、後の段階もループでたどるためである

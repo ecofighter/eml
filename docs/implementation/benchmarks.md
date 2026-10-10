@@ -2,7 +2,7 @@
 
 位置づけ: 手引き。
 
-段の前後で実行の費用を比べるための、基準のプログラムと測り方をまとめる。S7 の evidence passing と S10 の VM は、ここの記録と比べる ([ロードマップ](../future/roadmap.md))。S4b の単相化の前後と、S5 の型クラスの前後は、下の「記録」にある。
+段の前後で実行の費用を比べるための、基準のプログラムと測り方をまとめる。S7 の evidence passing と S10 の VM は、ここの記録と比べる ([ロードマップ](../future/roadmap.md))。S4b の単相化、S5 の型クラス、S6a のリストのそれぞれの前後は、下の「記録」にある。
 
 費用は2つの数で見る。
 
@@ -22,7 +22,7 @@
 | `list.em` | プログラムの中で定義した `List a` を `range`、`map`、`foldl` で合計する | 型変数のフィールドの `Int`、高階関数 |
 | `tree.em` | 線形合同法で作った `Int` を二分探索木に入れ、総称な `size` と `fold` で畳む | 再帰的なデータ、`switch` と `unpack` |
 
-S6 まではリストのリテラルも標準ライブラリの `List` もないので、`list.em` と `tree.em` はデータ型を自分で定義する。`list.em` と `tree.em` の多相な関数 (`map`、`foldl`、`size`、`fold`) では、型変数の位置の `Int` が `box` と `unbox` を通る。単相化の前後でこの回数がどう変わったかは、下の「記録」の「S4b (単相化)」にある。
+`list.em` と `tree.em` はデータ型を自分で定義する。S6a で Prelude に `List` とリストのリテラルが入った後も、前の段の記録と比べられるように、自分のデータ型を使い続ける。`list.em` と `tree.em` の多相な関数 (`map`、`foldl`、`size`、`fold`) では、型変数の位置の `Int` が `box` と `unbox` を通る。単相化の前後でこの回数がどう変わったかは、下の「記録」の「S4b (単相化)」にある。
 
 ## 回数のテスト
 
@@ -101,3 +101,23 @@ S4b で `list` と `tree` の `box` と `unbox` の回数は増えた。`list` �
 S5 で `RunStats` は変わらない。`crates/eml_interp/tests/bench.rs` のスナップショットは S4b のままで、`bench/` の `show_int` を `show` に書き換えたときも差分は出なかった。`Int` の `==`、`<` と `show` は、instance の `extern` の行として、今までと同じく `extern` 命令を直接出すためである ([Core IR とインタプリタ](../spec/core-ir.md) の「メソッドの解決」)。
 
 命令の数は、`empty` が S4b より約341万 (約15%) 増えた。増えたのは起動と標準ライブラリのコンパイルの分である。同じビルドで `eml check bench/empty.em` を測ると約2556万で、`eml run` の約2575万とほとんど同じなので、この分はほぼすべてフロントエンド (読み込みと型検査) にある。Prelude は 69 行から 124 行になり、クラス `Eq`、`Ord`、`Show` と既定のメソッド、instance、導出した instance (`Bool` と `Ordering`) を毎回検査するようになった。`loop` と `state` の増分 (約369万と約370万) は `empty` の増分とほぼ同じである。`empty` の値を引いた実行の分は、`loop` で約0.019%、`state` で約0.028% 増え、`tree` で約0.09%、`fib` で約0.18%、`list` で約0.31% 減った。仕事の回数は同じである。雑音を超える差の原因は調べていない。
+
+### S6a (リスト)
+
+- 機種: Mac16,1 (Apple M4)
+- OS: macOS 26.6.2 (25G83)
+- rustc: rustc 1.95.0 (59807616e 2026-04-14) (built from a source tarball)
+- コミット: 63df43d
+
+| プログラム | instructions retired | 実時間 (s) |
+|---|---:|---:|
+| `empty` | 28382584 | 0.00 |
+| `fib` | 976572134 | 0.04 |
+| `list` | 1795904832 | 0.07 |
+| `loop` | 1512182955 | 0.05 |
+| `state` | 1049667540 | 0.04 |
+| `tree` | 1558890877 | 0.07 |
+
+S6a で `RunStats` は変わらない。`crates/eml_interp/tests/bench.rs` のスナップショットと `bench/` は S5 のままである。`list.em` の自分の `List` は、Prelude の `List` を隠す。
+
+命令の数は、`empty` が S5 より約245万 (約9.5%) 増えた。増えたのは、Prelude の構文解析と検査の分である。同じビルドで `eml check bench/empty.em` を測ると約2810万で、`eml run` の約2835万とほとんど同じなので、この分はほぼすべてフロントエンドにある。Prelude は 124 行から 150 行になり、`List`、`Option`、`Result` の宣言、手で書いた `Show (List a)`、導出した instance (`List` の `Eq` と `Ord`、`Option` と `Result` の `Eq`、`Ord`、`Show`) を毎回検査するようになった。`empty` の値を引いた実行の分は、`loop` で約0.017%、`list` で約0.24%、`state` で約0.30% 増え、`tree` で約0.08%、`fib` で約0.16% 減った。仕事の回数は同じである。雑音を超える差の原因は調べていない。

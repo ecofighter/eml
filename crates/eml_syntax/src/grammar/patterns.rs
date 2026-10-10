@@ -171,7 +171,7 @@ fn paren_pat(p: &mut Parser) -> SyntaxKind {
 
 /// HIR はパターンのリストを右に入れ子の `::` に組むので、k 番目の要素を k - 1 段深く読む。組んだ木では前の要素が
 /// いつも浅い位置に来るので、中置のコンストラクタのパターンのように前の高さを確保しなくてよい
-/// (docs/superpowers/specs/2026-10-10-s6a-lists-design.md の「深さ」)。
+/// (docs/spec/grammar.md の「文法上の補足」)。
 fn list_pat(p: &mut Parser) -> SyntaxKind {
     p.bump(L_BRACK);
     let mut entered = 0;

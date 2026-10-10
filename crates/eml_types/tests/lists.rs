@@ -1,4 +1,5 @@
-//! リストの式の型検査と持ち越し (docs/superpowers/specs/2026-10-10-s6a-lists-design.md の「型検査」)。
+//! リストの式の型検査と持ち越し (docs/spec/expressions.md の「リスト」、docs/implementation/architecture.md の
+//! 「`eml_types` の内部」)。
 
 use eml_test_support::{check, full};
 

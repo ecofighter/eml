@@ -180,7 +180,7 @@ fn list_pattern(n: usize) -> String {
 }
 
 /// HIR がパターンのリストを右に入れ子の `::` に組むので、k 番目の要素は k - 1 段深く読む
-/// (docs/superpowers/specs/2026-10-10-s6a-lists-design.md の「深さ」)。
+/// (docs/spec/grammar.md の「文法上の補足」)。
 #[test]
 fn a_list_pattern_counts_each_element_as_a_level() {
     const LIMIT: usize = 256;

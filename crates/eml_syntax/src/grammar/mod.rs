@@ -238,7 +238,7 @@ fn not_yet_supported(p: &mut Parser, message: &str) {
     p.error(NOT_YET_SUPPORTED, message, NOT_YET_SUPPORTED_LABEL);
 }
 
-/// 中身ごと読み飛ばすのは、S6 の構文の中で診断を連鎖させないため。ノードは作らないので、呼び出し側が `ERROR` で包む。
+/// 中身ごと読み飛ばすのは、S6c のレコードの構文の中で診断を連鎖させないため。ノードは作らないので、呼び出し側が `ERROR` で包む。
 /// 閉じ括弧の種類を見ないのは、レイアウト段と同じ解釈にするため (docs/spec/layout.md の規則 4)。
 fn unsupported_group(p: &mut Parser, message: &str) {
     not_yet_supported(p, message);

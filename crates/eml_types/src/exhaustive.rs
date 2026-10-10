@@ -562,8 +562,7 @@ impl<'a> Exhaustive<'a> {
     }
 
     /// Prelude の `::` の鎖。`[]` で終わればリストの形、それ以外は右結合の `::` で書く。`::` は Prelude だけが
-    /// 定義できるので、表示の表によらず修飾しない (docs/superpowers/specs/2026-10-10-s6a-lists-design.md の
-    /// 「網羅性」)。
+    /// 定義できるので、表示の表によらず修飾しない (docs/spec/exhaustiveness.md の「検査パス」)。
     fn show_cons(&self, args: &[Pat]) -> String {
         let mut heads = vec![&args[0]];
         let mut tail = &args[1];

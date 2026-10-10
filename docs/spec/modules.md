@@ -11,7 +11,7 @@
 - モジュール名は根からのパスで決まり、大文字小文字まで完全に一致させる。`import Report.Csv` は `<根>/Report/Csv.em` を読む
 - 入口のモジュールの名前は、ファイル名によらず `Main` である。入口のモジュールは、どの名前でも import できない
 - `Prelude`、`Main`、`Std` は予約したモジュール名である。根に `Prelude.em`、`Main.em`、`Std.em` があっても import できない
-- `Prelude` (`Bool`、`println` など。`Option`、`Result`、`List` は S6 で入る) を暗黙に取り込む (下の「Prelude」)
+- `Prelude` (`Bool`、`List`、`Option`、`Result`、`println` など) を暗黙に取り込む (下の「Prelude」)
 - エントリポイントは、入口のモジュールの `main : Unit -> <IO> Unit` とする。終了コードは標準ライブラリの `exit` で扱う ([標準ライブラリへの申し送り](../future/stdlib.md))
 - 公開するものには `pub` を付ける ([宣言](declarations.md) の「`pub`」と、下の「公開の範囲」)
 
@@ -52,6 +52,7 @@ import の循環は E1027 にする。型検査は item と SCC の単位で動�
 
 - Prelude は暗黙に取り込む。`Prelude` はどのモジュールでも修飾子として使え、自分の定義で隠した名前も `Prelude.not` のように引ける
 - Prelude の `pub class` のメソッド (`==`、`compare`、`show` など) も、ほかの Prelude の名前と同じく修飾なしで見える。自分のモジュールで `show` を定義すると Prelude の `show` を隠すので、そのモジュールでは `Prelude.show` と書いて引く
+- リストの構文 `[…]` は、名前を引かずに Prelude の `Nil` と `::` を指す。自分の `Nil` で Prelude の `Nil` を隠しても、`[]` は Prelude の空のリストである ([式](expressions.md) の「リスト」)
 - 修飾子が `Prelude` になる import は E1030 にする。`import Prelude`、最後のセグメントが `Prelude` のパス (`import Util.Prelude`)、別名の `as Prelude` である。暗黙の修飾子 `Prelude` が、ほかのモジュールと合流しないようにするためである。`import Main` と、入口のファイルを指す import も E1030 にする
 - Haskell の `import Prelude hiding (...)` にあたる構文はなく、Prelude の取り込み方を変える手段を設けない
 - Prelude は標準ライブラリのモジュールの1つで、置き場所は `std/Prelude.em` である (次の「標準ライブラリ」)

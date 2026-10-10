@@ -8,8 +8,8 @@
 
 ```haskell
 len : List a -> Int
-len Nil = 0
-len (Cons _ rest) = 1 + len rest
+len [] = 0
+len (_ :: rest) = 1 + len rest
 ```
 
 シグネチャは Haskell / Idris と同じく、等式とは別の行に書く。1つの関数を複数の等式で定義できる。
@@ -45,23 +45,30 @@ data Option a =
 
 data Color = | Red | Green | Blue
 
-data List a =
+-- Prelude の宣言。コンストラクタ `::` は Prelude だけが宣言できる
+pub infixr 5 ::
+
+pub data List a =
   | Nil
   | a :: List a
+  deriving (Eq, Ord)
 
 type Person = { name : String, age : Int }
 type Unit = {}
 ```
 
 - `data` は名前的な直和型である。各選択肢は `|` で始める。選択肢は字下げしたブロックにも、同じ行にも並べられる
-- 中置のコンストラクタは、`:` で始まる演算子で宣言できる。両側には型の適用を書ける (`| List a :: L a`)
+- 中置のコンストラクタは、`:` で始まる演算子で宣言できる。両側には型の適用を書ける (`| List a :+ L a`)
+- コンストラクタ `::` は、Prelude の `List` だけの名前である (Haskell の `:` と同じ)。Prelude 以外のモジュールでコンストラクタ `::` を宣言すると、宣言ごとに E1044 にする。そのコンストラクタは宣言したものとして置き、そのモジュールの `::` の使用には誤りを重ねない。予約により、`x :: xs` は式でもパターンでも、どのモジュールでも Prelude の `::` を指す。名前の引き方は変えない
+  - 予約する理由は2つある。1つ目に、自分の `::` を定義したモジュールでは、Prelude のリストを頭と残りに分解する書き方がなくなる。修飾した演算子の構文 (`Prelude.::`) はないためである。2つ目に、2つのモジュールが `::` を定義すると、表示の表が両方を `Prelude.::` と `Main.::` に修飾し、診断と網羅性の例に書けない形が出る
+  - `Nil` は予約しない。自分の `Nil` は Prelude の `Nil` を隠す。Prelude の空のリストは `[]` か `Prelude.Nil` で書ける
 - 型とコンストラクタは別の名前空間にあるので、同じ名前を付けられる ([モジュールと名前解決](modules.md))
 - `type` は型の別名で、構造的なレコードに名前を付けるのに使う。別名は展開して扱う
 - 直積型は `data` では宣言しない。直積型は構造的なレコードに統一している ([直積型とレコード](records.md))
 - `extern` でない `data` に `=` がないものは、値を作れない型になるので E1025 とする。どのモジュールでも同じである
-- `Int`、`String`、`Unit` は `Prelude` の、`File` は標準ライブラリのモジュール `Fs` の `extern data` で、`Bool` は `Prelude` の `data Bool = | False | True` である (下の「`extern`」)
+- `Int`、`String`、`Unit` は `Prelude` の、`File` は標準ライブラリのモジュール `Fs` の `extern data` で、`Bool` は `Prelude` の `data Bool = | False | True` である (下の「`extern`」)。`List`、`Option`、`Result` も `Prelude` の `data` である (下の「Prelude のクラス」)
 
-`type` と名前付きのレコードは S6 で実装する。
+`type` と名前付きのレコードは S6c で実装する。
 
 ## `effect`
 
@@ -147,13 +154,13 @@ dir </> name = join_path dir name
 | 2 | `\|\|` | 右 |
 | 3 | `&&` | 右 |
 | 4 | `==` `!=` `<` `<=` `>` `>=` | 結合しない |
-| 5 | `++` | 右 |
+| 5 | `++` `::` | 右 |
 | 6 | `+` `-` | 左 |
 | 7 | `*` `/` `%` | 左 |
 | 9 | `>>` `<<` (関数合成) | 右 |
 | (10) | 関数適用、フィールドアクセス | 左 |
 
-- `::` の fixity (`infixr 5`) は、S6 で `List` のコンストラクタと一緒に Prelude に宣言する。fixity は定義に付くので、定義のない今の `::` (E0004) には fixity の宣言がない
+- `::` の fixity (`infixr 5`) は、Prelude が `List` と一緒に宣言する
 - 合成演算子 `.` は採用しない (`.` はフィールドアクセスとモジュール修飾に使うため)
 - 単項の `!` はない。否定は関数 `not` で書く
 
@@ -169,9 +176,9 @@ dir </> name = join_path dir name
 | `&&` `\|\|` | `Bool -> Bool -> Bool`。短絡評価する。HIR で `a && b` を `if a then b else False` に、`a \|\| b` を `if a then True else b` に脱糖する |
 | `\|>` `<\|` | `x \|> f` は Prelude の関数 `x \|> f = f x` の呼び出しである。引数を左から評価するので、`x` を先に評価する。評価の順は [式](expressions.md) の「関数適用」に従う。`f <\| x` は Prelude の関数 `f <\| x = f x` の呼び出しである |
 | `>>` `<<` | 関数合成 |
-| `::` | リストのコンストラクタ (S6 で `Prelude` に入る) |
+| `::` | `a -> List a -> List a`。Prelude の `List` のコンストラクタ |
 
-`&&`、`||`、`|>`、`<|`、`>>`、`<<` と関数 `not` は、Prelude に eml で本体を書いた関数である。ただし `&&` と `||` は、上の表のとおり HIR が短絡評価の `if` に脱糖する。演算子の参照もラムダにしたうえで同じく脱糖するので、この2つの本体は呼ばれない。`::` はリストのコンストラクタで、S6 で Prelude に入る。比較の演算子は、クラスのメソッドとして instance の定義を呼ぶ。`Int`、`String`、`Bool` の instance は、メソッドを instance の中の `extern` で表の行に結ぶ (上の「`extern`」)。残りの演算子は、Prelude の `extern` の関数で、処理系が実装を持つ。
+`&&`、`||`、`|>`、`<|`、`>>`、`<<` と関数 `not` は、Prelude に eml で本体を書いた関数である。ただし `&&` と `||` は、上の表のとおり HIR が短絡評価の `if` に脱糖する。演算子の参照もラムダにしたうえで同じく脱糖するので、この2つの本体は呼ばれない。`::` は Prelude の `List` のコンストラクタである。比較の演算子は、クラスのメソッドとして instance の定義を呼ぶ。`Int`、`String`、`Bool` の instance は、メソッドを instance の中の `extern` で表の行に結ぶ (上の「`extern`」)。残りの演算子は、Prelude の `extern` の関数で、処理系が実装を持つ。
 
 ## クラスと instance
 
@@ -272,6 +279,33 @@ pub class Show a where
 - `Show` の `show` は既定を持たない。`show` と `show_prec` を互いの既定にすると、どちらも書かない instance が止まらなくなるためである
 - `show_prec d x` の `d` は、`x` を置く位置の優先度である。関数適用の引数の位置は 11 である。導出した `Show` は、これで入れ子の値と中置のコンストラクタに括弧を付ける (上の「`deriving`」)
 
+Prelude は、標準のデータ型 `List`、`Option`、`Result` も宣言する。
+
+```haskell
+pub infixr 5 ::
+
+pub data List a =
+  | Nil
+  | a :: List a
+  deriving (Eq, Ord)
+
+pub data Option a =
+  | None
+  | Some a
+  deriving (Eq, Ord, Show)
+
+pub data Result e a =
+  | Err e
+  | Ok a
+  deriving (Eq, Ord, Show)
+```
+
+- `::` の fixity は、`++` と同じく `infixr 5` で、Haskell の `:` と同じである
+- `Result` の型引数は `Result e a` の順で、Haskell の `Either e a` と同じである。`Err`、`Ok` の順に宣言するので、導出した `Ord` では `Err _ < Ok _` になる
+- `List` の導出した `Ord` は `Nil < _ :: _` と要素ごとの辞書順で、Haskell のリストの順と同じである
+- `List` の `Show` は手で書いた instance で、`[1, 2]` の形で表示する。空のリストは `[]` である。要素は `show` で表示し、`, ` で区切る。`show_prec` は既定のままにする。角括弧で閉じているので、引数の位置でも括弧が要らないためである。表示は左辺の文字列を一意なまま伸ばして作るので、リストの長さに比例する時間で済む ([ランタイム](runtime.md) の「文字列の連結」)。`Option` と `Result` の導出した `Show` は、`Some [1]`、`Some (-1)`、`Ok "a"` のように表示する
+- リストを扱う関数 (`map`、`length` など) は、まだ Prelude にない
+
 Prelude の instance は次のとおりである。
 
 | instance | 定義 |
@@ -285,10 +319,14 @@ Prelude の instance は次のとおりである。
 | `Eq Bool` | `extern (==)`、`extern (!=)` |
 | `Ord Bool`、`Show Bool` | `data Bool = \| False \| True deriving (Ord, Show)` |
 | `Eq Ordering`、`Ord Ordering`、`Show Ordering` | `deriving (Eq, Ord, Show)` |
+| `Eq (List a)`、`Ord (List a)` | `deriving (Eq, Ord)` |
+| `Show (List a)` | Prelude に eml で書いた instance (上の `List` の `Show`) |
+| `Eq (Option a)`、`Ord (Option a)`、`Show (Option a)` | `deriving (Eq, Ord, Show)` |
+| `Eq (Result e a)`、`Ord (Result e a)`、`Show (Result e a)` | `deriving (Eq, Ord, Show)` |
 | タプルと `Unit` の `Eq`、`Ord`、`Show` | 処理系の構造的な instance (上の「`deriving`」) |
 
 - `compare` の extern の行は、`Ordering` の宣言の順のタグ (`LT` が 0) を返す
-- `String` の `show` は、文字列を `"` で囲み、`"` を `\"`、`\` を `\\`、改行を `\n`、タブを `\t`、復帰を `\r`、NUL を `\0` と書く。ほかの U+0001〜U+001F と U+007F は `\u{…}` (16進の小文字で、先頭の 0 を省く) と書く。それ以外の文字はそのまま書く。どれも [字句](lexical.md) の「文字列」のエスケープとして読み戻せる。S6 で補間が入ったら `{` も `\{` にする
+- `String` の `show` は、文字列を `"` で囲み、`"` を `\"`、`\` を `\\`、改行を `\n`、タブを `\t`、復帰を `\r`、NUL を `\0` と書く。ほかの U+0001〜U+001F と U+007F は `\u{…}` (16進の小文字で、先頭の 0 を省く) と書く。それ以外の文字はそのまま書く。どれも [字句](lexical.md) の「文字列」のエスケープとして読み戻せる。S6b で補間が入ったら `{` も `\{` にする
 - `max` と `min` はまだない
 
 ## `pub`

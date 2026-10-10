@@ -1,4 +1,4 @@
-//! リストのリテラルとパターン (docs/superpowers/specs/2026-10-10-s6a-lists-design.md)。
+//! リストのリテラルとパターン (docs/spec/expressions.md の「リスト」)。
 
 use crate::common::{diagnostics, lower_files_text, lower_text};
 use eml_hir::PatKind;

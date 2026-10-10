@@ -446,7 +446,7 @@ fn list_program(n: u64, body: &str) -> String {
 }
 
 /// `show` は左辺を一意な文字列として伸ばすので、写すバイトの数はリストの長さに比例する
-/// (docs/superpowers/specs/2026-10-10-s6a-lists-design.md の「Prelude」)。出力は長いので確かめない。
+/// (docs/spec/declarations.md の「Prelude のクラス」)。出力は長いので確かめない。
 #[test]
 fn showing_a_list_copies_bytes_in_proportion_to_its_length() {
     let copied = |n: u64| {

@@ -12,9 +12,9 @@
 - `Task a` を `Lin` にする: `Async.start` が返すタスクを、必ず `await` するか `drop` (キャンセル) させる。構造化された並行処理にする
 - `exit`: `exit : Int -> <IO> a` の組み込みにする。`never` の操作の中断と同じく `Lin` の値を後始末してから終了し、`try_io` は捕まえない。終了コードはこれで扱う ([ロードマップ](roadmap.md) の「S12 スクリプトの MVP」)
 - 最初の標準ライブラリのモジュールは `Fs` で、`std/` ツリーに `File`、`open`、`read_all`、`close` がある ([モジュールと名前解決](../spec/modules.md) の「標準ライブラリ」)。ファイル全体の読み書きは、S12 でこのモジュールに足す
-- `Prelude` の範囲: `Option`、`Result`、`List`、`Bool`、`Ordering`、`println` / `eprintln`、`not`、`|>` などの標準の演算子と fixity ([宣言](../spec/declarations.md) の標準の演算子の表)、型クラス `Eq`、`Ord`、`Show` ([宣言](../spec/declarations.md) の「Prelude のクラス」)。`Float`、`Char`、`Num` の段で `Num` が入る
+- `Prelude` の範囲: 今は `Bool`、`Ordering`、`List`、`Option`、`Result`、`println`、`not`、`|>` などの標準の演算子と fixity ([宣言](../spec/declarations.md) の標準の演算子の表)、型クラス `Eq`、`Ord`、`Show` ([宣言](../spec/declarations.md) の「Prelude のクラス」) を持つ。`eprintln` はまだない。リストを扱う関数 (`map`、`filter`、`length` など) は、S12 の標準ライブラリの spec で、`List.map` の形のモジュールと一緒に決める。`Float`、`Char`、`Num` の段で `Num` が入る
 - モジュールの候補: `Fs`、`Path`、`Proc`、`Env`、`String`、`List`、`Map`、`Json`、`Csv`、`Toml`、`Regex`、`Http`、`Async`
-- 補間の穴は当面 `String` のみ: それまでは `show` で文字列にしてから入れる。穴の型は、S6 で `Show` に広げる
+- 補間の穴は当面 `String` のみ: それまでは `show` で文字列にしてから入れる。穴の型は、S6b で `Show` に広げる
 - `Bytes` と UTF-8: `String` は常に妥当な UTF-8 である。extern は、検証付きのデコード、エンコード、バイト長、バイト位置から `Char` と次の位置を読む操作、境界を検査する切り出しにとどめる。分割、検索、反復は、S12 では Rust の extern として入れる。eml で書き直すかは後で決める ([ロードマップ](roadmap.md) の「UTF-8 と標準ライブラリ」)
 
 ## マルチコア対応の設計からの申し送り

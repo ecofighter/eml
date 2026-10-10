@@ -70,8 +70,8 @@ impl ItemLowering<'_> {
             let ty = self.def_map.type_id(self.module, k);
             for (j, constructor) in item.constructors.iter().enumerate() {
                 // `::` は Prelude のリストだけの名前である。2つのモジュールが定義すると、修飾した演算子の構文が
-                // ないので、診断にも書けない形になる (docs/superpowers/specs/2026-10-10-s6a-lists-design.md の
-                // 「`::` の予約」)。宣言はそのまま置き、そのモジュールの使用には誤りを重ねない
+                // ないので、診断にも書けない形になる (docs/spec/declarations.md の
+                // 「`data` と `type`」)。宣言はそのまま置き、そのモジュールの使用には誤りを重ねない
                 if constructor.name == "::" && self.module != self.def_map.prelude() {
                     self.diagnostics.push(Diagnostic::error(
                         codes::RESERVED_CONSTRUCTOR,

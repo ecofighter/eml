@@ -35,7 +35,7 @@ eml の目的、言語の性格、確定した設計判断の一覧、文書全�
 | `IO` | 操作を持たない、ラベルだけの組み込みのエフェクトである。`println` などは `<IO>` を持つ `extern` の関数で、`extern` のエフェクトは handle できない | [エフェクトと handler](spec/effects.md) |
 | 暗黙の後始末 | 通常の制御フローでは一切行わない。中断時 (`drop k` や `never` 操作) だけ、捕まっていた `Lin` 値を、その型に宣言された破棄処理で drop する | [線形性](spec/linearity.md)、[エフェクトと handler](spec/effects.md) |
 | 型付け | Bidirectional Typing + 単一化。トップレベルの関数は引数と戻り値の型注釈が必須。トップレベルの関数の row はシグネチャで決まり、省略した row は `<>` (純粋) である。Kind は推論する | [型と Kind](spec/types.md) |
-| 直積型 | レコードは名前的で、コンストラクタが1つの `data` にフィールドの名前を付けて宣言する (`data Person = Person { name : String, age : Int }`)。タプルは構造的なままで、`t.0` で射影する。Unit は 0 要素のタプル `()` である。Kind はフィールドの Kind の join で推論する (S6 で入れる) | [直積型とレコード](spec/records.md) |
+| 直積型 | レコードは名前的で、コンストラクタが1つの `data` にフィールドの名前を付けて宣言する (`data Person = Person { name : String, age : Int }`)。タプルは構造的なままで、`t.0` で射影する。Unit は 0 要素のタプル `()` である。Kind はフィールドの Kind の join で推論する (S6c で入れる) | [直積型とレコード](spec/records.md) |
 | 単相化 | 関数のコードは (関数, 型引数) の instance ごとに単相化し、データの配置は一様のままにする。多相再帰で大きくなる型変数の位置と handler の節の型変数は、一様な位置 (`tobj`) として扱う | [Core IR とインタプリタ](spec/core-ir.md) の「変換の規則」 |
 | 等価、比較、表示 | 型クラス `Eq`、`Ord`、`Show` を Prelude に置く。`class` と `instance` の宣言、シグネチャの制約 `Eq a =>`、`deriving` を持つ。証拠は Core IR への変換の単相化で決め、実行時の辞書は持たない | [宣言](spec/declarations.md) の「クラスと instance」、[型と Kind](spec/types.md) の「制約」 |
 
@@ -89,5 +89,5 @@ eml の目的、言語の性格、確定した設計判断の一覧、文書全�
 | Perceus | 参照カウントの `dup` / `decref` / `release` を静的に挿入する方式。reuse analysis と借用の最適化は後で入れる |
 | Core IR | 型付き HIR から変換する、前向きの辺だけを持つ基本ブロックの列の IR。すべての中間値に名前を付け、RC とエフェクトの命令を明示する |
 | M1、M2 | 完了したマイルストーンである。M1 は言語の全体を一通り通した最初の vertical slice、M2 はモジュールと参照ごとの具体化の表である。今の範囲は [実装の現在地](implementation/status.md) にある |
-| S0〜S13 | 再設計のサブプロジェクトである。S0 運用と文書、S1 row の健全性、S2a 継続を関数にする、S2b 組み込みを extern にする、S3a フロントエンドの土台、S3b-1 ランタイムとインタプリタの土台、S3b-2a Core IR v2 の構造、S3b-2b Core IR v2 の所有、S3b-2c-1 Core IR v2 の表、S3b-2c-2 Core IR v2 の境界、S4a 計測の基準、S4b 単相化、S5 型クラス、S6 リスト、文字列、レコード、S7 evidence passing、S8 LIR、S9 共通ランタイム、S10 VM と切り替え、S11 REPL、S12 スクリプトの MVP、S13 実例による判断がある。その後の言語の項目と処理系の項目は [ロードマップ](future/roadmap.md) の「段の列」にある。パイプラインの「段階」とは別の呼び方である |
+| S0〜S13 | 再設計のサブプロジェクトである。S0 運用と文書、S1 row の健全性、S2a 継続を関数にする、S2b 組み込みを extern にする、S3a フロントエンドの土台、S3b-1 ランタイムとインタプリタの土台、S3b-2a Core IR v2 の構造、S3b-2b Core IR v2 の所有、S3b-2c-1 Core IR v2 の表、S3b-2c-2 Core IR v2 の境界、S4a 計測の基準、S4b 単相化、S5 型クラス、S6a リスト、S6b 文字列、S6c レコード、S7 evidence passing、S8 LIR、S9 共通ランタイム、S10 VM と切り替え、S11 REPL、S12 スクリプトの MVP、S13 実例による判断がある。その後の言語の項目と処理系の項目は [ロードマップ](future/roadmap.md) の「段の列」にある。パイプラインの「段階」とは別の呼び方である |
 | a1 / a2-wait / a2-cancel | 並列 API `par` を段階的に広げる計画の各段階。[マルチコア対応の設計](future/multicore.md) にある |

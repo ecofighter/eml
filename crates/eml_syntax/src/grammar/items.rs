@@ -340,7 +340,7 @@ fn has_conop_ahead(p: &Parser) -> bool {
     }
 }
 
-/// S6 で実装する。CST まで組み、E0004 は HIR が出す (docs/implementation/status.md の「未対応の構文と E0004」)。
+/// S6c で実装する。CST まで組み、E0004 は HIR が出す (docs/implementation/status.md の「未対応の構文と E0004」)。
 fn type_item(p: &mut Parser, m: Marker) {
     p.bump(TYPE_KW);
     expect_name(p, UIDENT);

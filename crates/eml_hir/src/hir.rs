@@ -112,7 +112,7 @@ pub struct LangItems {
     /// `compare` の結果の型。extern の行と導出した `compare` は、宣言の順のタグで値を作る。
     pub ordering: TypeDefId,
     /// リストの構文 (`[…]`) が名前を引かずに指す、Prelude の `List` とそのコンストラクタ
-    /// (docs/superpowers/specs/2026-10-10-s6a-lists-design.md の「HIR」)。
+    /// (docs/spec/expressions.md の「リスト」)。
     pub list: TypeDefId,
     pub nil: ConstructorId,
     pub cons: ConstructorId,
@@ -519,7 +519,7 @@ pub enum ExprKind {
     /// (docs/implementation/status.md の「タプルの扱い」)。
     Tuple(Vec<ExprId>),
     /// リストのリテラル。`[]` は要素のない `List` である。パターンと違い `::` に組まないのは、要素が多くても後の
-    /// 段階の再帰を深くしないため (docs/superpowers/specs/2026-10-10-s6a-lists-design.md の「深さ」)。
+    /// 段階の再帰を深くしないため (docs/spec/grammar.md の「文法上の補足」)。
     List(Vec<ExprId>),
     Drop(ExprId),
 }
