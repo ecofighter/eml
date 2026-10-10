@@ -201,7 +201,8 @@ pub enum SyntaxKind {
 }
 
 impl SyntaxKind {
-    /// 括弧の種類の判定はここだけに置く (docs/spec/layout.md の規則 4)。
+    /// 括弧の種類の判定はここだけに置く (docs/spec/layout.md の規則 4)。row の `<` `>` は演算子のトークンで、
+    /// row かどうかは前のトークンで決まるので、レイアウト段が判定する。
     pub fn is_opening_bracket(self) -> bool {
         matches!(
             self,

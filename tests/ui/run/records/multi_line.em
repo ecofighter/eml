@@ -1,5 +1,5 @@
 -- Records may be written over several lines: a field value may start on the next line, a lambda body ends at the
--- comma at the end of its last line, a trailing comma is allowed, and a record may be the body of a `match` arm.
+-- comma after it, a trailing comma is allowed, and a record may be the body of a `match` arm.
 data Person =
   | Person { name : String, age : Int }
   deriving (Show)

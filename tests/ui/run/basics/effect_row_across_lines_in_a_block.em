@@ -1,4 +1,4 @@
--- A comma that ends a line inside an effect row does not close the block opened by `->`, because the next line is deeper than the block.
+-- A comma that ends a line inside an effect row does not close the block opened by `->`, because the row is a bracket of its own.
 effect Log where
   log : String -> Unit
 

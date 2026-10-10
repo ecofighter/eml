@@ -1,0 +1,8 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{stderr}\")"
+input_file: tests/ui/run/basics/comma_after_a_lambda_body.em
+---
+--- stdout ---
+22
+--- stderr ---
