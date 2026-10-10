@@ -5,7 +5,7 @@
 use super::{Lexer, Mode, line_len};
 use crate::SyntaxKind::{self, *};
 use crate::codes;
-use crate::literal::{self, LayoutError};
+use crate::literal::{self, LayoutAt, LayoutError};
 
 impl Lexer<'_> {
     pub(super) fn string_body(&mut self, multiline: bool) {
@@ -65,40 +65,31 @@ impl Lexer<'_> {
         let close = self.pos;
         self.push(STRING_END, close + 3);
         let errors = literal::multiline_layout(&text[start + 3..close]).err();
-        self.report_layout(start, close + 3, errors.into_iter().flatten());
-    }
-
-    /// `start` は開きの `"""` の位置で、`end` は文字列の終わりである。範囲を文字列の中に収め、文字列の外のコードを
-    /// 含めない (docs/spec/lexical.md の「複数行の文字列」)。
-    pub(super) fn report_layout(
-        &mut self,
-        start: usize,
-        end: usize,
-        errors: impl IntoIterator<Item = LayoutError>,
-    ) {
-        let body = start + 3;
-        for error in errors {
+        for error in errors.into_iter().flatten() {
             match error {
                 LayoutError::SameLine => self.error(
                     codes::INVALID_MULTILINE_STRING,
                     "a multi-line string must start on a new line after `\"\"\"`",
                     start,
-                    end,
+                    close + 3,
                     "this multi-line string is on one line",
                 ),
-                LayoutError::At {
-                    range,
-                    message,
-                    label,
-                } => self.error(
-                    codes::INVALID_MULTILINE_STRING,
-                    message,
-                    body + range.start,
-                    body + range.end,
-                    label,
-                ),
+                LayoutError::At(at) => self.report_layout(start, at),
             }
         }
+    }
+
+    /// `start` は開きの `"""` の位置である。範囲は本文の中なので、文字列の外のコードを含めない
+    /// (docs/spec/lexical.md の「複数行の文字列」)。
+    pub(super) fn report_layout(&mut self, start: usize, at: LayoutAt) {
+        let body = start + 3;
+        self.error(
+            codes::INVALID_MULTILINE_STRING,
+            at.message,
+            body + at.range.start,
+            body + at.range.end,
+            at.label,
+        );
     }
 
     /// コマンドリテラルの中の `"` は本文である
@@ -162,13 +153,16 @@ impl Lexer<'_> {
             Some(c) if literal::simple_escape(c).is_some() => self.push(ESCAPE, i + 2),
             Some(c) => {
                 let end = i + 1 + c.len_utf8();
-                self.error(
-                    codes::INVALID_ESCAPE,
-                    format!("unknown escape sequence `\\{c}`"),
-                    i,
-                    end,
-                    "not a valid escape",
-                );
+                // 見えない文字 (単独の `\r` など) をそのまま埋めると、文言の中で何の文字か分からない
+                let message = if super::is_invisible(c) {
+                    format!(
+                        "unknown escape sequence `\\` followed by U+{:04X}",
+                        u32::from(c)
+                    )
+                } else {
+                    format!("unknown escape sequence `\\{c}`")
+                };
+                self.error(codes::INVALID_ESCAPE, message, i, end, "not a valid escape");
                 self.push(ESCAPE, end);
             }
         }

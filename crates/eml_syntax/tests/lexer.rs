@@ -655,6 +655,15 @@ fn a_unicode_escape_does_not_swallow_a_hole() {
     );
 }
 
+/// 単独の `\r` (改行の一部でない) は見えない文字なので、文言には符号位置で書く。
+#[test]
+fn a_backslash_before_a_lone_carriage_return_names_the_character() {
+    assert_eq!(
+        diags("\"a\\\rb\""),
+        ["E0008@2..4 unknown escape sequence `\\` followed by U+000D"]
+    );
+}
+
 #[test]
 fn a_backslash_at_the_end_of_a_line_or_file_is_a_one_byte_escape() {
     assert_eq!(kinds("\"abc\\"), ["STRING_START", "STRING_TEXT", "ESCAPE"]);

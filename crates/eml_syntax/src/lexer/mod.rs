@@ -232,8 +232,9 @@ impl Lexer<'_> {
                         // 閉じていないので字下げは検査しないが、開きの行は閉じに関係なく決まる
                         // (docs/spec/lexical.md の「複数行の文字列」)
                         let text = self.text;
-                        let error = literal::opening_line_error(&text[start + 3..]);
-                        self.report_layout(start, text.len(), error);
+                        if let Some(at) = literal::opening_line_error(&text[start + 3..]) {
+                            self.report_layout(start, at);
+                        }
                     }
                     if !reported && !already {
                         let (end, label, message) = if multiline {
