@@ -901,6 +901,9 @@ fn lang_items(prelude: &ModuleScope) -> LangItems {
         ord: class("Ord"),
         show: class("Show"),
         ordering: ty("Ordering"),
+        list: ty("List"),
+        nil: constructor("Nil"),
+        cons: constructor("::"),
     }
 }
 

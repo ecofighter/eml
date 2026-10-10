@@ -1,0 +1,12 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: rendered
+input_file: tests/ui/check-fail/names/reserved_cons.em
+---
+[E1044] Error: the constructor `::` is reserved for lists
+   ╭─[ check-fail/names/reserved_cons.em:4:7 ]
+   │
+ 4 │   | a :: Seq a
+   │       ─┬  
+   │        ╰── only the Prelude defines `::`
+───╯

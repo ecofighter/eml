@@ -719,10 +719,6 @@ impl<'a> BodyLowering<'a> {
     fn constructor_pat(&mut self, at: &NameUse<'_>, args: Vec<PatId>, range: TextRange) -> PatKind {
         let ctor = match self.items.constructor(at.name) {
             Resolved::Found(ctor) => ctor,
-            // `::` は S6 のリストのコンストラクタである。ユーザーが同じ名前のコンストラクタを定義していれば、上で引ける
-            Resolved::NotFound if matches!(at.name, NameRef::Plain("::")) => {
-                return self.unsupported_pat(at.range, "lists are not supported yet");
-            }
             other => {
                 self.diagnostics.extend(unresolved(
                     &self.items,

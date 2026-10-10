@@ -6,14 +6,14 @@ use eml_hir::{Body, ExprKind, Program, TypeDefKind};
 #[test]
 fn data_declarations_become_items() {
     let text = "data Option a =\n  | None\n  | Some a\n\ndata List a = | Nil | a :+ List a\n\nf : Option Int -> List (Option Int)\nf o = Some 1 :+ Nil";
-    insta::assert_snapshot!(lower_text(text), @r"
+    insta::assert_snapshot!(lower_text(text), @"
     data Option a
       | None
       | Some a
     data List a
       | Nil
-      | a :+ List a
-    f : Option Int -> List (Option Int)
+      | a :+ Main.List a
+    f : Main.Option Int -> Main.List (Main.Option Int)
     f o#0 = (:+ (Some 1) Nil)
     ");
 }
@@ -21,13 +21,13 @@ fn data_declarations_become_items() {
 #[test]
 fn match_arms_and_constructor_patterns() {
     let text = "data Option a = | None | Some a\n\nf : Option (Option Int) -> Int\nf o = match o with\n  | Some (Some n) -> n\n  | Some None -> 1\n  | None -> 0\n\ng : Option Int -> Int\ng (Some x) =\n  let Some y = Some x\n  (fn (Some z) -> z) (Some y)";
-    insta::assert_snapshot!(lower_text(text), @r"
+    insta::assert_snapshot!(lower_text(text), @"
     data Option a
       | None
       | Some a
-    f : Option (Option Int) -> Int
+    f : Main.Option (Main.Option Int) -> Int
     f o#0 = (match o#0 with | Some (Some n#1) -> n#1 | Some None -> 1 | None -> 0)
-    g : Option Int -> Int
+    g : Main.Option Int -> Int
     g (Some x#0) = {
       let Some y#1 = (Some x#0)
       ((fn (Some z#2) -> z#2) (Some y#1))
@@ -37,9 +37,9 @@ fn match_arms_and_constructor_patterns() {
 
 #[test]
 fn infix_constructors_and_a_declared_cons() {
-    // ユーザーの `::` は Prelude の `::` を隠すので、宣言がなければ `infixl 9` になる。右に組むには自分の fixity の宣言がいる (docs/spec/declarations.md の「fixity」)
+    // ユーザーの `::` は予約されていて E1044 になるが、宣言は自分の fixity のまま置くので、後の段階に誤りが連鎖しない (docs/superpowers/specs/2026-10-10-s6a-lists-design.md の「`::` の予約」)
     let text = "infixr 5 ::\ndata L = | E | Int :: L\n\nf : Int -> L\nf x = x :: x :: E\n\ng : L -> Int\ng l = match l with | h :: _ -> h | E -> 0";
-    insta::assert_snapshot!(lower_text(text), @r"
+    insta::assert_snapshot!(lower_text(text), @"
     data L
       | E
       | Int :: L
@@ -47,6 +47,8 @@ fn infix_constructors_and_a_declared_cons() {
     f x#0 = (:: x#0 (:: x#0 E))
     g : L -> Int
     g l#0 = (match l#0 with | h#1 :: _ -> h#1 | E -> 0)
+    ---
+    E1044 2:20 the constructor `::` is reserved for lists
     ");
 }
 
@@ -194,5 +196,13 @@ fn data_missing_its_equals_sign_is_not_reported_as_having_no_constructors() {
     assert_eq!(
         diagnostics("data T | A | B\nf : T\nf = A"),
         ["E0011 1:8 expected `=`"]
+    );
+}
+
+#[test]
+fn only_the_prelude_declares_the_cons_constructor() {
+    assert_eq!(
+        diagnostics("data Seq a =\n  | Empty\n  | a :: Seq a"),
+        ["E1044 3:7 the constructor `::` is reserved for lists"]
     );
 }

@@ -106,6 +106,32 @@ instance Eq Bool where
   extern (==)
   extern (!=)
 
+pub infixr 5 ::
+
+pub data List a =
+  | Nil
+  | a :: List a
+  deriving (Eq, Ord)
+
+pub data Option a =
+  | None
+  | Some a
+  deriving (Eq, Ord, Show)
+
+pub data Result e a =
+  | Err e
+  | Ok a
+  deriving (Eq, Ord, Show)
+
+instance Show a => Show (List a) where
+  show Nil = "[]"
+  show (x :: rest) = show_rest ("[" ++ show x) rest
+
+-- 左辺を一意な文字列として伸ばすので、長さに比例する時間で済む (docs/spec/runtime.md の「文字列の連結」)
+show_rest : Show a => String -> List a -> String
+show_rest acc Nil = acc ++ "]"
+show_rest acc (x :: rest) = show_rest (acc ++ ", " ++ show x) rest
+
 pub extern (++) : String -> String -> String
 pub (>>) : (a -> <e> b) -> (b -> <e> c) -> a -> <e> c
 f >> g = fn x -> g (f x)

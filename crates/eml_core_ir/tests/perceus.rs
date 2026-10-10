@@ -700,7 +700,7 @@ fn a_nested_pattern_gives_up_the_parent_before_the_release() {
       switch x.1 List { #0 -> b3, #1(a.3: obj, x.4: tobj) -> b4 }
     b3:
       decref x.1
-      let t.5: int = call "length@[List String]"(w.0)
+      let t.5: int = call "length@[Main.List String]"(w.0)
       let t.6: obj = extern "Prelude.Show Int.show"(t.5)
       return t.6
     b4:

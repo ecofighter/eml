@@ -362,18 +362,13 @@ fn character_patterns_are_not_supported_yet() {
 }
 
 #[test]
-fn cons_patterns_are_not_supported_yet() {
-    // 不具合3: `::` のパターンがコンストラクタとして引かれ、E1001 になっていた
-    assert_eq!(
-        diagnostics("f : Int -> Int\nf x = match x with\n  | y :: ys -> 1\n  | _ -> 0"),
-        ["E0004 3:7 lists are not supported yet"]
-    );
-}
-
-#[test]
-fn a_user_defined_cons_constructor_is_matched() {
+fn a_reserved_cons_constructor_is_still_matched() {
+    // `::` の宣言は E1044 になるが、constructor としては置くので、使う側に誤りを重ねない (docs/superpowers/specs/2026-10-10-s6a-lists-design.md の「`::` の予約」)
     let text = "data L = | Nil | Int :: L\nf : L -> Int\nf l = match l with\n  | y :: ys -> y\n  | Nil -> 0";
-    assert_eq!(diagnostics(text), Vec::<String>::new());
+    assert_eq!(
+        diagnostics(text),
+        ["E1044 1:22 the constructor `::` is reserved for lists"]
+    );
 }
 
 #[test]

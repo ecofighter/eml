@@ -111,6 +111,11 @@ pub struct LangItems {
     pub show: ClassId,
     /// `compare` の結果の型。extern の行と導出した `compare` は、宣言の順のタグで値を作る。
     pub ordering: TypeDefId,
+    /// リストの構文 (`[…]`) が名前を引かずに指す、Prelude の `List` とそのコンストラクタ
+    /// (docs/superpowers/specs/2026-10-10-s6a-lists-design.md の「HIR」)。
+    pub list: TypeDefId,
+    pub nil: ConstructorId,
+    pub cons: ConstructorId,
 }
 
 /// extern の表の行から、標準ライブラリの宣言を引く索引。使い手のある行 (extern の型、`IO`、`negate`) だけを持つ。

@@ -24,7 +24,7 @@ input_file: tests/ui/check-fail/classes/no_instance.em
     │
  20 │   println (show (Some Red))
     │            ──┬─  
-    │              ╰─── `show` requires `Show (Option Color)`
+    │              ╰─── `show` requires `Show (Main.Option Color)`
     │ 
-    │ Note: `Show (Option Color)` needs `Show Color`
+    │ Note: `Show (Main.Option Color)` needs `Show Color`
 ────╯

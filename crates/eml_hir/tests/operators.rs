@@ -75,16 +75,15 @@ fn prefix_minus_after_a_tighter_operator_needs_parentheses() {
 #[test]
 fn unknown_and_unsupported_operators_and_missing_operands() {
     let text = "x : Int\nx = 1 <+> 2\ny : Int\ny = 1 :: 2\nz : Int\nz = 1 +";
-    insta::assert_snapshot!(lower_text(text), @r"
+    insta::assert_snapshot!(lower_text(text), @"
     x : Int
     x = (<missing> 1 2)
     y : Int
-    y = (<missing> 1 2)
+    y = (Prelude.:: 1 2)
     z : Int
     z = (+ 1 <missing>)
     ---
     E1001 2:7 cannot find operator `<+>`
-    E0004 4:7 lists are not supported yet
     E0011 6:8 expected an expression
     ");
 }

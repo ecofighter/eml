@@ -144,8 +144,14 @@ fn prelude_fixities_follow_the_standard_table() {
             );
         }
     }
-    // `::` は S6 のリストのコンストラクタで、まだ Prelude に定義がないので fixity も持たない
-    assert_eq!(resolver.fixity(Plain("::")), Some(Fixity::DEFAULT));
+    // `::` は Prelude のリストのコンストラクタで、`infixr 5` である
+    assert_eq!(
+        resolver.fixity(Plain("::")),
+        Some(Fixity {
+            precedence: 5,
+            assoc: Assoc::Right
+        })
+    );
 }
 
 #[test]

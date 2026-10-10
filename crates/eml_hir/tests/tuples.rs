@@ -29,7 +29,7 @@ fn literal_patterns_include_negative_numbers_and_strings() {
     describe n#0 = (match n#0 with | 0 -> "zero" | -1 -> "minus one" | _ -> "other")
     greet : String -> Int
     greet s#0 = (match s#0 with | "hi" -> 1 | "" -> 0 | other#1 -> 2)
-    nested : Option Int -> Int
+    nested : Main.Option Int -> Int
     nested o#0 = (match o#0 with | Some -1 -> 1 | _ -> 0)
     "#);
 }

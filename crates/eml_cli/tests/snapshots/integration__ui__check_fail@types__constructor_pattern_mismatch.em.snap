@@ -8,7 +8,7 @@ input_file: tests/ui/check-fail/types/constructor_pattern_mismatch.em
     │
  12 │   | Some x -> x
     │     ───┬──  
-    │        ╰──── expected `List Int`, found `Option _`
+    │        ╰──── expected `Main.List Int`, found `Main.Option _`
     │ 
-    │ Note: `Some` is a constructor of `Option`
+    │ Note: `Main.Some` is a constructor of `Main.Option`
 ────╯

@@ -16,5 +16,5 @@ input_file: tests/ui/check-fail/exhaustiveness/non_exhaustive_equations.em
    │ ──┬──  
    │   ╰──── an equation of `first`
    │ 
-   │ Note: not covered: `first None None`
+   │ Note: not covered: `first Main.None Main.None`
 ───╯

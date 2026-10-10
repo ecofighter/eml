@@ -211,16 +211,6 @@ impl BodyLowering<'_> {
                 );
             }
             Resolved::Found(item) => Some(Res::Item(item)),
-            Resolved::NotFound if op == "::" => {
-                let callee = self.unsupported(op_range, "lists are not supported yet");
-                return self.alloc(
-                    ExprKind::Call {
-                        callee,
-                        args: vec![lhs, rhs],
-                    },
-                    range,
-                );
-            }
             other => {
                 self.diagnostics.extend(unresolved(
                     &self.items,

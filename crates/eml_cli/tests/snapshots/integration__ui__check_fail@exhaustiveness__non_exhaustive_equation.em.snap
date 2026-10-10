@@ -13,5 +13,5 @@ input_file: tests/ui/check-fail/exhaustiveness/non_exhaustive_equation.em
    │ ──┬──  
    │   ╰──── this equation does not match every argument
    │ 
-   │ Note: not covered: `first Nil`
+   │ Note: not covered: `first Main.Nil`
 ───╯

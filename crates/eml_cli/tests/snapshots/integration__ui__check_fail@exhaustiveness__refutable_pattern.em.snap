@@ -10,7 +10,7 @@ input_file: tests/ui/check-fail/exhaustiveness/refutable_pattern.em
    │       ───┬──  
    │          ╰──── `let` needs a pattern that matches every value
    │ 
-   │ Note: not covered: `None`
+   │ Note: not covered: `Main.None`
 ───╯
 [E4003] Error: this pattern does not match every value
    ╭─[ check-fail/exhaustiveness/refutable_pattern.em:7:15 ]
@@ -19,5 +19,5 @@ input_file: tests/ui/check-fail/exhaustiveness/refutable_pattern.em
    │               ───┬──  
    │                  ╰──── a parameter needs a pattern that matches every value
    │ 
-   │ Note: not covered: `None`
+   │ Note: not covered: `Main.None`
 ───╯

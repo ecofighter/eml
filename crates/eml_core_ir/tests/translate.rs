@@ -2503,8 +2503,8 @@ fn derived_instances_generate_their_methods() {
       return #0
     }
     "#);
-    insta::assert_snapshot!(function(&shown, "Ord Option.compare@[Int]"), @r#"
-    fn "Ord Option.compare@[Int]"(x.0: tobj, y.1: tobj) -> enum {
+    insta::assert_snapshot!(function(&shown, "Ord Main.Option.compare@[Int]"), @r#"
+    fn "Ord Main.Option.compare@[Int]"(x.0: tobj, y.1: tobj) -> enum {
       switch x.0 Option { #0 -> b1, #1(a.2: int) -> b2 }
     b1:
       switch y.1 Option { #0 -> b3, _ -> b4 }
@@ -2536,8 +2536,8 @@ fn derived_instances_generate_their_methods() {
       return 1
     }
     ");
-    insta::assert_snapshot!(function(&shown, "Show Option.show_prec@[Int]"), @r#"
-    fn "Show Option.show_prec@[Int]"(d.0: int, x.1: tobj) -> obj {
+    insta::assert_snapshot!(function(&shown, "Show Main.Option.show_prec@[Int]"), @r#"
+    fn "Show Main.Option.show_prec@[Int]"(d.0: int, x.1: tobj) -> obj {
       switch x.1 Option { #0 -> b1, #1(a.2: int) -> b2 }
     b1:
       let s.3: obj = const "None"

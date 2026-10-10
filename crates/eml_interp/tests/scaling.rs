@@ -432,3 +432,40 @@ fn a_program_with_only_scalar_positions_boxes_nothing() {
     );
     assert_eq!((stats.boxes, stats.unboxes), (0, 0), "{stats:?}");
 }
+
+/// `range n acc` は `0 :: 1 :: … :: acc` を作る。末尾の再帰で、後ろの要素から積む。
+fn list_program(n: u64, body: &str) -> String {
+    [
+        "range : Int -> List Int -> List Int",
+        "range n acc = if n == 0 then acc else range (n - 1) (n - 1 :: acc)",
+        "",
+        "main : Unit -> <IO> Unit",
+        &format!("main () =\n  let xs = range {n} Nil\n  {body}"),
+    ]
+    .join("\n")
+}
+
+/// `show` は左辺を一意な文字列として伸ばすので、写すバイトの数はリストの長さに比例する
+/// (docs/superpowers/specs/2026-10-10-s6a-lists-design.md の「Prelude」)。出力は長いので確かめない。
+#[test]
+fn showing_a_list_copies_bytes_in_proportion_to_its_length() {
+    let copied = |n: u64| {
+        let (_, result) = run_stats(&list_program(n, "println (show xs)"));
+        result
+            .unwrap_or_else(|error| panic!("{error}"))
+            .string_bytes_copied
+    };
+    let (small, large) = (copied(1000), copied(2000));
+    assert!(large as f64 <= small as f64 * 2.5, "{small} {large}");
+}
+
+/// 導出した `==` と `compare` は末尾呼び出しで進むので、長いリストでも生きている物体はリストの大きさの定数倍に収まる。
+#[test]
+fn derived_comparisons_walk_a_long_list_without_growing_the_heap() {
+    let text = list_program(
+        10000,
+        "println (show (xs == xs))\n  println (show (compare xs xs))",
+    );
+    let stats = stats(&text, "True\nEQ\n");
+    assert!(stats.peak_objects <= 3 * 10000, "{stats:?}");
+}

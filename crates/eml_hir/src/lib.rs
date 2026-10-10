@@ -80,4 +80,5 @@ pub mod codes {
     pub const NOT_A_CLASS: ErrorCode = ErrorCode(1041);
     pub const SUPERCLASS_CYCLE: ErrorCode = ErrorCode(1042);
     pub const CLASS_AS_TYPE: ErrorCode = ErrorCode(1043);
+    pub const RESERVED_CONSTRUCTOR: ErrorCode = ErrorCode(1044);
 }
