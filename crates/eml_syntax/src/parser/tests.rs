@@ -199,23 +199,6 @@ fn split_first_char_divides_an_operator_token() {
 }
 
 #[test]
-fn split_prefix_divides_an_arrow_and_a_row() {
-    let (tree, _) = run("-><", |p| {
-        let root = p.start();
-        p.split_prefix(THIN_ARROW, 2);
-        assert_eq!(p.current(), OP);
-        assert_eq!(p.current_text(), "<");
-        p.bump_remap(L_ANGLE);
-        root.complete(p, SOURCE_FILE);
-    });
-    insta::assert_snapshot!(tree, @r#"
-    SOURCE_FILE@0..3
-      THIN_ARROW@0..2 "->"
-      L_ANGLE@2..3 "<"
-    "#);
-}
-
-#[test]
 fn bump_remap_changes_the_tree_kind() {
     let (tree, _) = run("<", |p| {
         let root = p.start();

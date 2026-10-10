@@ -392,6 +392,14 @@ impl Lexer<'_> {
                 self.push(COMMENT, self.pos + line_len(rest));
                 return;
             }
+            Ok(Raw::Op) if slice.starts_with("-><") => {
+                // row の始まりを `->` の直後の `<` で見分けられるよう、`->` をいつも独立したトークンにする。
+                // そのため `-><` で始まる演算子は定義できない (docs/spec/lexical.md の「演算子」)。
+                self.push(THIN_ARROW, self.pos + 2);
+                let rest = &slice[2..];
+                self.push(operator_kind(rest), self.pos + rest.len());
+                return;
+            }
             Ok(Raw::Op) => operator_kind(slice),
             Ok(Raw::LParen) => L_PAREN,
             Ok(Raw::RParen) => R_PAREN,

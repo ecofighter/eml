@@ -153,6 +153,17 @@ fn operators_and_reserved_symbols() {
 }
 
 #[test]
+fn an_arrow_followed_by_an_angle_is_split() {
+    assert_eq!(
+        kinds("Int -><IO> Int"),
+        ["UIDENT", "THIN_ARROW", "OP", "UIDENT", "OP", "UIDENT"]
+    );
+    assert_eq!(kinds("-><>"), ["THIN_ARROW", "OP"]);
+    assert_eq!(kinds("-><-"), ["THIN_ARROW", "LEFT_ARROW"]);
+    assert_eq!(kinds("a --><  b"), ["LIDENT", "OP", "LIDENT"]);
+}
+
+#[test]
 fn literals_and_comments() {
     insta::assert_snapshot!(dump("42 \"a\\n\\\"b\" -- note\n-1"), @r#"
     INT@0..2 "42"
