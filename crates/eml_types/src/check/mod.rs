@@ -426,7 +426,7 @@ pub(crate) fn check_body(
     let linear_head = matches!(function.kind, FunctionKind::InstanceMethod(instance, _)
         if context.data_kinds[program[instance].head].lin);
     let reliable = usage::reliable(body, diagnostics.is_empty()) && !linear_head;
-    usage::constrain(file, body, &typing, &mut table, types, reliable);
+    usage::constrain(program, file, body, &typing, &mut table, types, reliable);
     carry::constrain(program, file, body, &typing, &mut table, reliable);
     // 式、局所変数、パターン、具体化の型は表の同じ節点を共有するので、1つの `Exporter` で書き出し、各節点を1回だけ
     // 書き出す

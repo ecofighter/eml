@@ -5,6 +5,7 @@ mod expr;
 mod handler;
 mod instance;
 mod ops;
+mod record;
 mod section;
 mod types;
 

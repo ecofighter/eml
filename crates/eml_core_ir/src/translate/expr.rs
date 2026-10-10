@@ -520,6 +520,17 @@ impl FnLowering<'_> {
                 }
                 list
             }
+            ExprKind::Record { ctor, fields } => {
+                // フィールドの式を書いた順に評価してから、宣言の順に並べて作る
+                // (docs/superpowers/specs/2026-10-10-s6c-records-design.md の「translate」)
+                let mut args = vec![Atom::Unit; fields.len()];
+                for &(field, value) in fields {
+                    args[field as usize] = self.atom(value);
+                }
+                let ty = self.ty(id);
+                let ctor = self.program.ctor(self.ctx.hir, self.ctx.store, *ctor);
+                self.bind_typed("d", ty, Rhs::Con { ctor, args })
+            }
             ExprKind::Interpolation(segments) => {
                 // 穴を評価するたびにつなぐので、穴の呼び出しをまたいで生きているのは組み立て中の文字列だけである。
                 // 連結は、導出した `Show` と同じく extern を直接呼び、ユーザーの `++` によらない

@@ -1,0 +1,30 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: rendered
+input_file: tests/ui/check-fail/names/record_fields.em
+---
+[E1045] Error: the field `name` appears more than once
+   ╭─[ check-fail/names/record_fields.em:2:31 ]
+   │
+ 2 │ data P = | P { name : String, name : Int }
+   │                ──┬─           ──┬─  
+   │                  ╰────────────────── first written here
+   │                                 │   
+   │                                 ╰─── written again here
+───╯
+[E1046] Error: `Q` has no field `z`
+   ╭─[ check-fail/names/record_fields.em:7:19 ]
+   │
+ 7 │ f () = Q { x = 1, z = 2 }
+   │                   ┬  
+   │                   ╰── unknown field
+   │ 
+   │ Help: the fields are `x` and `y`
+───╯
+[E1047] Error: missing field `x` in `Q`
+    ╭─[ check-fail/names/record_fields.em:10:8 ]
+    │
+ 10 │ g () = Q { y = 1 }
+    │        ─────┬─────  
+    │             ╰─────── every field must be given a value
+────╯

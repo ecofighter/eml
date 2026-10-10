@@ -24,6 +24,8 @@ struct Constructor {
     name: String,
     /// 中置のコンストラクタの優先度。
     infix: Option<u8>,
+    /// 名前付きのフィールドの名前。位置のコンストラクタとタプルは `None` である。
+    field_names: Option<Vec<String>>,
     fields: Vec<Repr>,
 }
 
@@ -93,6 +95,7 @@ fn shape(
                 tag: TUPLE,
                 name: String::new(),
                 infix: None,
+                field_names: None,
                 fields: reprs(&instance.fields[0]),
             }],
         },
@@ -108,6 +111,10 @@ fn shape(
                     tag: hir[ctor].tag,
                     name: hir[ctor].name.clone(),
                     infix: hir[ctor].fixity.map(|fixity| fixity.precedence),
+                    field_names: hir[ctor]
+                        .field_names
+                        .as_ref()
+                        .map(|names| names.iter().map(|field| field.name.clone()).collect()),
                     fields: reprs(fields),
                 })
                 .collect();
@@ -278,6 +285,9 @@ impl Generator<'_> {
 
     /// コンストラクタの名前は修飾しない。
     fn show_constructor(&mut self, d: VarId, constructor: &Constructor, fields: &[VarId]) {
+        if let Some(names) = &constructor.field_names {
+            return self.show_record(&constructor.name, names, fields);
+        }
         if fields.is_empty() {
             let name = self.string(&constructor.name);
             return self.builder.terminate(Term::Return(name));
@@ -323,6 +333,31 @@ impl Generator<'_> {
         let open = self.string("(");
         let shown = self.concat(open, shown);
         let close = self.string(")");
+        let shown = self.concat(shown, close);
+        self.builder.terminate(Term::Return(shown));
+    }
+
+    /// `Name { f1 = …, f2 = … }`。値は中括弧の中なので `show_prec 0` で書く。`Name { … }` は atom なので、`d` によらず
+    /// 括弧を付けない。フィールドがなければ `Name {}` と書く
+    /// (docs/superpowers/specs/2026-10-10-s6c-records-design.md の「`deriving`」)。
+    fn show_record(&mut self, name: &str, names: &[String], fields: &[VarId]) {
+        if fields.is_empty() {
+            let shown = self.string(&format!("{name} {{}}"));
+            return self.builder.terminate(Term::Return(shown));
+        }
+        let mut shown = self.string(&format!("{name} {{ "));
+        for (k, (field_name, &field)) in names.iter().zip(fields).enumerate() {
+            let separator = if k == 0 {
+                format!("{field_name} = ")
+            } else {
+                format!(", {field_name} = ")
+            };
+            let separator = self.string(&separator);
+            shown = self.concat(shown, separator);
+            let part = self.call(vec![Atom::Int(0), Atom::Var(field)], Repr::Obj);
+            shown = self.concat(shown, part);
+        }
+        let close = self.string(" }");
         let shown = self.concat(shown, close);
         self.builder.terminate(Term::Return(shown));
     }

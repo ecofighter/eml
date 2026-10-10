@@ -48,6 +48,28 @@ pub struct Constructor {
     /// 導出した `Show` が括弧の位置を決めるのに使う
     /// (docs/spec/declarations.md の「`deriving`」)。
     pub fixity: Option<Fixity>,
+    /// 名前付きのフィールドの名前。宣言の順で、`fields` と同じ数である。位置のコンストラクタは `None`、`{}` で宣言した
+    /// コンストラクタは `Some([])` である (docs/superpowers/specs/2026-10-10-s6c-records-design.md の「HIR」)。
+    pub field_names: Option<Vec<FieldName>>,
+}
+
+impl Constructor {
+    /// 名前 `name` のフィールドの、宣言の中の番号。
+    pub fn field_index(&self, name: &str) -> Option<u32> {
+        self.field_names
+            .as_ref()?
+            .iter()
+            .position(|field| field.name == name)
+            .map(|index| index as u32)
+    }
+}
+
+/// 宣言に書いたフィールドの名前と、その位置。フィールドの名前は値の名前空間に入れない
+/// (docs/superpowers/specs/2026-10-10-s6c-records-design.md の「フィールドの名前」)。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FieldName {
+    pub name: String,
+    pub range: TextRange,
 }
 
 #[derive(Debug)]
@@ -309,6 +331,10 @@ pub struct Body {
     /// handler の節の `k` を束縛した局所変数と、その継続の引数の数 (状態なしは1、状態ありは2)。評価の手順は節の `k` を
     /// 引数の数の分かる呼び出し先として扱い、`k v st` を1回の再開にする (docs/spec/effects.md)。
     pub continuations: ArenaMap<LocalId, usize>,
+    /// レコードのパターンに書かなかったフィールドを受ける `Wildcard` と、そのコンストラクタとフィールドの番号。線形性の
+    /// 診断が、書き手の `_` と区別してフィールドの名前で報告するため
+    /// (docs/superpowers/specs/2026-10-10-s6c-records-design.md の「パターン」)。
+    pub omitted_fields: ArenaMap<PatId, (ConstructorId, u32)>,
 }
 
 impl Body {
@@ -373,6 +399,11 @@ impl Body {
             ExprKind::Tuple(elements) | ExprKind::List(elements) => {
                 for &element in elements {
                     f(element);
+                }
+            }
+            ExprKind::Record { fields, .. } => {
+                for &(_, value) in fields {
+                    f(value);
                 }
             }
             ExprKind::Interpolation(segments) => {
@@ -527,6 +558,13 @@ pub enum ExprKind {
     /// リストのリテラル。`[]` は要素のない `List` である。パターンと違い `::` に組まないのは、要素が多くても後の
     /// 段階の再帰を深くしないため (docs/spec/grammar.md の「文法上の補足」)。
     List(Vec<ExprId>),
+    /// フィールドが1つ以上のレコードを作る式。並びはソースの順で、`u32` は宣言の中のフィールドの番号である。ソースの順で
+    /// 持つのは、フィールドの式を書いた順に評価するため。フィールドが0個の `A {}` は、コンストラクタの参照 `Path` にする
+    /// (docs/superpowers/specs/2026-10-10-s6c-records-design.md の「作る式」)。
+    Record {
+        ctor: ConstructorId,
+        fields: Vec<(u32, ExprId)>,
+    },
     /// 穴のある文字列。穴は1つ以上ある。`++` の呼び出しにまで脱糖しないのは、連結を translate がまとめて組むため
     /// (docs/spec/expressions.md の「補間」)。
     Interpolation(Vec<Segment>),

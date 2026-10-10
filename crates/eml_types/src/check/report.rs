@@ -1,7 +1,7 @@
 use eml_diagnostics::{Diagnostic, FileId, Label, SourceFiles, TextEdit, TextRange, TextSize};
 use eml_hir::{
-    Body, ExprId, ExprKind, FunctionKind, ModuleOrigin, OperationId, PatId, Program, Res, RowRef,
-    Signature, TypeRefKind,
+    Body, ConstructorId, ExprId, ExprKind, FunctionKind, ModuleOrigin, OperationId, PatId, Program,
+    Res, RowRef, Signature, TypeRefKind,
 };
 
 use crate::codes;
@@ -21,6 +21,12 @@ pub(super) enum Origin {
         /// 診断の文に埋める呼ばれる側の呼び方。`callee_subject` が作る。
         name: String,
         index: usize,
+    },
+    /// 作る式のフィールドの値。フィールドは宣言の中の番号である
+    /// (docs/superpowers/specs/2026-10-10-s6c-records-design.md の「フィールドの不一致の由来」)。
+    Field {
+        ctor: ConstructorId,
+        field: u32,
     },
     Return,
     Annotation(TextRange),
@@ -331,6 +337,14 @@ impl BodyCheck<'_, '_> {
                         *callee,
                         format!("argument {} of {callee_name} does not allow it", index + 1),
                     )),
+                    Origin::Field { ctor, field } => {
+                        let (file, range, text) = self.field_origin(*ctor, *field);
+                        diagnostic.with_secondary(Label::new(
+                            file,
+                            range,
+                            format!("{text} does not allow it"),
+                        ))
+                    }
                     Origin::Annotation(annotation) => diagnostic.with_secondary(Label::new(
                         file,
                         *annotation,
@@ -350,6 +364,23 @@ impl BodyCheck<'_, '_> {
         };
         self.diagnostics.push(diagnostic);
         false
+    }
+
+    /// フィールドの宣言の名前の位置と、「field `name` of `Person`」の言い方。期待する型は宣言に書いてあるので、別の
+    /// モジュールの宣言でもそこを指す。
+    fn field_origin(&self, ctor: ConstructorId, field: u32) -> (FileId, TextRange, String) {
+        let constructor = &self.program[ctor];
+        let declared = &constructor
+            .field_names
+            .as_ref()
+            .expect("a record has named fields")[field as usize];
+        let file = self.program.file(ctor.module);
+        let text = format!(
+            "field `{}` of `{}`",
+            declared.name,
+            self.program.names.constructor(ctor)
+        );
+        (file, declared.range, text)
     }
 
     pub(super) fn mismatch(&mut self, range: TextRange, expected: Ty, found: Ty, origin: &Origin) {
@@ -392,6 +423,10 @@ impl BodyCheck<'_, '_> {
                 *callee,
                 format!("argument {} of {name}", index + 1),
             )),
+            Origin::Field { ctor, field } => {
+                let (file, range, text) = self.field_origin(*ctor, *field);
+                diagnostic.with_secondary(Label::new(file, range, text))
+            }
             Origin::Return => diagnostic.with_secondary(Label::new(
                 file,
                 self.signature_range(),
@@ -573,6 +608,13 @@ pub(super) fn linear_misuse(
         )
         .with_note(LINEAR_NOTE)
         .with_help("bind it to a name and pass the name to `drop`"),
+        KindReason::DiscardedField { name } => Diagnostic::error(
+            codes::LINEAR_VALUE_DISCARDED,
+            format!("the field `{name}` is discarded, but it holds a linear value"),
+            Label::new(file, range, format!("this pattern leaves out `{name}`")),
+        )
+        .with_note(LINEAR_NOTE)
+        .with_help(format!("bind `{name}` in the pattern and pass it to `drop`")),
         // `return` の節の本体は作れないので、fix は付けない
         KindReason::OmittedReturn { ty } => Diagnostic::error(
             codes::LINEAR_VALUE_DISCARDED,

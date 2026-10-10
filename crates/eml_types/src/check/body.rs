@@ -269,6 +269,37 @@ impl BodyCheck<'_, '_> {
         list
     }
 
+    /// 作る式。コンストラクタを参照と同じく具体化し、矢印を剥がしてフィールドの型を宣言の順に得る。フィールドの式は
+    /// 書いた順に、そのフィールドの型に対して検査する。結果の型は位置のコンストラクタの呼び出しと同じである
+    /// (docs/superpowers/specs/2026-10-10-s6c-records-design.md の「作る式」)。
+    fn record(
+        &mut self,
+        id: ExprId,
+        ctor: ConstructorId,
+        fields: &[(u32, ExprId)],
+        range: TextRange,
+    ) -> Ty {
+        let mut ty = self.path(id, Res::Item(ValueItem::Constructor(ctor)), range, false);
+        let mut declared = Vec::new();
+        for _ in &self.program[ctor].fields {
+            match self.table.shape(ty).clone() {
+                TyShape::Fn { param, ret, .. } => {
+                    declared.push(param);
+                    ty = ret;
+                }
+                _ => declared.push(self.table.error),
+            }
+        }
+        for &(field, value) in fields {
+            self.check_expr(
+                value,
+                declared[field as usize],
+                Origin::Field { ctor, field },
+            );
+        }
+        ty
+    }
+
     pub(super) fn infer_expr(&mut self, id: ExprId) -> Ty {
         let body = self.body;
         let expr = &body.exprs[id];
@@ -325,6 +356,7 @@ impl BodyCheck<'_, '_> {
                 self.table.tuple(fields)
             }
             ExprKind::List(elements) => self.list(expr.range, elements),
+            ExprKind::Record { ctor, fields } => self.record(id, *ctor, fields, expr.range),
             // 各穴は `display e` の呼び出しで、`String` を返す。穴の式の型には、`display` の参照が `Show` の制約を付ける
             // (docs/spec/expressions.md の「補間」)
             ExprKind::Interpolation(segments) => {

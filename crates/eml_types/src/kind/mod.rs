@@ -144,6 +144,9 @@ pub(crate) enum KindReason {
         /// 状態の型。ラベルに出す。表示するのは破れた制約を報告するときだけである。
         ty: TypeId,
     },
+    /// レコードのパターンに書かなかったフィールド。由来の範囲はパターン全体である。書き手の `_` と区別して、フィールドの
+    /// 名前で報告する (docs/superpowers/specs/2026-10-10-s6c-records-design.md の「診断」)。
+    DiscardedField { name: String },
 }
 
 impl KindReason {
@@ -200,6 +203,7 @@ impl KindReason {
                 10,
                 vec![KeyPart::Text(types.display(*ty, names).to_string())],
             ),
+            KindReason::DiscardedField { name } => (11, vec![text(name)]),
         }
     }
 }
@@ -505,6 +509,12 @@ mod tests {
             through(Some(inner(a, 5, InnerLabel::Value))),
             KindReason::OmittedReturn { ty: file },
             KindReason::OmittedReturn { ty: types.string() },
+            KindReason::DiscardedField {
+                name: "log".to_string(),
+            },
+            KindReason::DiscardedField {
+                name: "name".to_string(),
+            },
         ]
     }
 }

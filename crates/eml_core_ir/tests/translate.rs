@@ -2621,3 +2621,15 @@ fn interpolation_uses_the_extern_concatenation_even_with_a_user_plus_plus() {
     let shown = function(&core_text(text, Pass::Translate), "f");
     assert!(shown.contains("extern Prelude.++"), "{shown}");
 }
+
+#[test]
+fn record_construction_evaluates_in_source_order_and_builds_in_declaration_order() {
+    let text = "data P = | P { a : Int, b : Int }\n\nf : Int -> P\nf x = P { b = x + 1, a = x }\n\nmain : Unit -> <IO> Unit\nmain () = drop (f 1)";
+    insta::assert_snapshot!(function(&core_text(text, Pass::Translate), "f"), @"
+    fn f(x.0: int) -> obj {
+      let t.1: int = extern Prelude.+(x.0, 1)
+      let d.2: obj = con P #0(x.0, t.1)
+      return d.2
+    }
+    ");
+}

@@ -1,6 +1,6 @@
 //! `data` の宣言の変換 (docs/spec/declarations.md の「`data` と `type`」)。名前の表と重複の判定は `DefMap` が持つ。
 
-use eml_diagnostics::{Diagnostic, Label};
+use eml_diagnostics::{Diagnostic, FileId, Label, TextRange};
 use eml_extern::ExternType;
 use la_arena::Arena;
 
@@ -8,7 +8,9 @@ use super::ItemLowering;
 use super::types::{TypeLowering, Vars};
 use crate::codes;
 use crate::def_map::Resolved;
-use crate::hir::{Constructor, Generics, ItemId, TypeDef, TypeDefKind, TypeVarDecl, ValueItem};
+use crate::hir::{
+    Constructor, FieldName, Generics, ItemId, TypeDef, TypeDefKind, TypeVarDecl, ValueItem,
+};
 use crate::item_tree::{DataItem, Fixity};
 
 impl ItemLowering<'_> {
@@ -93,15 +95,47 @@ impl ItemLowering<'_> {
                     public_item: item.public.then_some(constructor.name.as_str()),
                     diagnostics: &mut *self.diagnostics,
                 };
-                let fields = constructor
-                    .ptr
-                    .to_node(self.root)
-                    .fields()
-                    .map(|field| {
-                        let range = field.range();
-                        lowering.lower(Some(field), range)
-                    })
-                    .collect();
+                let alt = constructor.ptr.to_node(self.root);
+                let (fields, field_names) = match alt.record_fields() {
+                    // 型のないフィールドの宣言 (構文の誤り) も `Error` の型で置き、名前と型の番号をそろえる
+                    Some(record) => {
+                        let mut fields = Vec::new();
+                        let mut names: Vec<FieldName> = Vec::new();
+                        for decl in record.fields() {
+                            let range = decl.range();
+                            fields.push(lowering.lower(decl.ty(), range));
+                            let name = decl
+                                .name()
+                                .expect("the parser starts every field declaration at its name")
+                                .token();
+                            let field = FieldName {
+                                name: name.text().to_string(),
+                                range: name.text_range(),
+                            };
+                            if let Some(first) = names.iter().find(|first| first.name == field.name)
+                            {
+                                lowering.diagnostics.push(duplicate_field(
+                                    self.file,
+                                    &field.name,
+                                    first.range,
+                                    field.range,
+                                ));
+                            }
+                            names.push(field);
+                        }
+                        (fields, Some(names))
+                    }
+                    None => {
+                        let fields = alt
+                            .fields()
+                            .map(|field| {
+                                let range = field.range();
+                                lowering.lower(Some(field), range)
+                            })
+                            .collect();
+                        (fields, None)
+                    }
+                };
                 let TypeDefKind::Data {
                     constructors: declared,
                 } = &mut def.kind
@@ -122,6 +156,7 @@ impl ItemLowering<'_> {
                         tag: declared.len() as u32,
                         fields,
                         fixity,
+                        field_names,
                     }),
                 );
                 debug_assert_eq!(allocated, id);
@@ -129,4 +164,20 @@ impl ItemLowering<'_> {
             }
         }
     }
+}
+
+/// 同じフィールドの名前を2回書いた (E1045)。宣言、作る式、パターンで同じ文言にする
+/// (docs/superpowers/specs/2026-10-10-s6c-records-design.md の「診断」)。
+pub(super) fn duplicate_field(
+    file: FileId,
+    name: &str,
+    first: TextRange,
+    again: TextRange,
+) -> Diagnostic {
+    Diagnostic::error(
+        codes::DUPLICATE_FIELD,
+        format!("the field `{name}` appears more than once"),
+        Label::new(file, again, "written again here"),
+    )
+    .with_secondary(Label::new(file, first, "first written here"))
 }

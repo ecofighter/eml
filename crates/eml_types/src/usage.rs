@@ -6,7 +6,8 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 
 use eml_diagnostics::{FileId, TextRange, TextSize};
 use eml_hir::{
-    Body, ClauseSource, Closure, ExprId, ExprKind, LocalId, PatId, PatKind, Res, Segment, Stmt,
+    Body, ClauseSource, Closure, ExprId, ExprKind, LocalId, PatId, PatKind, Program, Res, Segment,
+    Stmt,
 };
 
 use crate::check::BodyTyping;
@@ -73,6 +74,7 @@ pub(crate) fn reliable(body: &Body, well_typed: bool) -> bool {
 }
 
 pub(crate) fn constrain(
+    program: &Program,
     file: FileId,
     body: &Body,
     typing: &BodyTyping,
@@ -89,6 +91,7 @@ pub(crate) fn constrain(
         locals.sort_by_key(|&local| body.locals[local].range.start());
     }
     let mut usage = Usage {
+        program,
         file,
         body,
         typing,
@@ -106,6 +109,8 @@ pub(crate) fn constrain(
 }
 
 struct Usage<'a, 'c> {
+    /// 書かなかったフィールドの名前を引く。
+    program: &'a Program,
     file: FileId,
     body: &'a Body,
     typing: &'a BodyTyping,
@@ -123,7 +128,7 @@ struct Usage<'a, 'c> {
 }
 
 impl<'a> Usage<'a, '_> {
-    /// 左から順に評価する部分 (タプルとリストの要素、補間の穴) の使用をつなぐ。
+    /// 左から順に評価する部分 (タプルとリストの要素、作る式のフィールド、補間の穴) の使用をつなぐ。
     fn in_order(&mut self, parts: impl Iterator<Item = ExprId>) -> Uses {
         let mut uses = Uses::new();
         for part in parts {
@@ -275,6 +280,9 @@ impl<'a> Usage<'a, '_> {
             ExprKind::Tuple(elements) | ExprKind::List(elements) => {
                 self.in_order(elements.iter().copied())
             }
+            ExprKind::Record { fields, .. } => {
+                self.in_order(fields.iter().map(|&(_, value)| value))
+            }
             ExprKind::Interpolation(segments) => {
                 self.in_order(segments.iter().filter_map(Segment::hole))
             }
@@ -334,6 +342,14 @@ impl<'a> Usage<'a, '_> {
                         // 時間がかかるため
                         KindReason::OmittedReturn {
                             ty: Exporter::new(self.table, self.types).export(ty),
+                        }
+                    } else if let Some(&(ctor, field)) = self.body.omitted_fields.get(pat) {
+                        let names = self.program[ctor]
+                            .field_names
+                            .as_ref()
+                            .expect("an omitted field belongs to a record");
+                        KindReason::DiscardedField {
+                            name: names[field as usize].name.clone(),
                         }
                     } else {
                         KindReason::Discarded
