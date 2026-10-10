@@ -112,13 +112,19 @@ pub(crate) fn layout(file: FileId, text: &str, tokens: &[Token]) -> (Vec<Token>,
                 });
             }
             COMMA => {
-                // 規則 4。行末の `,` は、閉じ括弧と同じく一番内側の括弧より上のブロックを閉じる。行末の `->` などで
-                // 開いたブロックを、次の行の要素の前で終えるため。行の途中の `,` は閉じない。ブロックの中の
-                // row や型の引数の `,` で、ブロックを閉じないためである (docs/spec/layout.md の「文脈のスタック」)
-                let line_final = items.get(i + 1).is_none_or(|next| next.line_start);
+                // 規則 4。行末の `,` は、一番内側の括弧より上のブロックのうち、次の行で規則 1 が閉じるものを
+                // `,` の前で閉じる。行末の `->` などで開いたブロックを、次の行の要素の前で終えるため。次の行が
+                // 一番内側のブロックより深い継続行なら閉じず、行の途中の `,` も閉じない。ブロックの中の row や
+                // 型の引数の `,` で、ブロックを閉じないためである (docs/spec/layout.md の「文脈のスタック」)
+                let closes = |indent: u32| match items.get(i + 1) {
+                    None => true,
+                    Some(next) => next.line_start && indent > next.column,
+                };
                 let floor = hole_floor(&stack);
-                if line_final && stack[floor..].iter().any(is_bracket) {
-                    while let Some(Context::Block { .. }) = stack.last() {
+                if stack[floor..].iter().any(is_bracket) {
+                    while let Some(&Context::Block { indent, .. }) = stack.last()
+                        && closes(indent)
+                    {
                         out.push(virtual_token(LAYOUT_CLOSE, start));
                         stack.pop();
                     }
@@ -680,6 +686,30 @@ mod tests {
             ),
             "main ( ) = apply ( fn ( ) -> <OPEN> let g : Unit -> < IO , Log > Unit = fn ( ) -> println \" hi \" <SEP> println \" ok \" <CLOSE> )"
         );
+    }
+
+    #[test]
+    fn comma_at_the_end_of_an_effect_row_line_does_not_close_the_lambda_body() {
+        assert_eq!(
+            layout_of(
+                "main () = apply (fn () ->\n  let g : Unit -> <IO,\n    Log> Unit = fn () -> println \"hi\"\n  println \"ok\")"
+            ),
+            "main ( ) = apply ( fn ( ) -> <OPEN> let g : Unit -> < IO , Log > Unit = fn ( ) -> println \" hi \" <SEP> println \" ok \" <CLOSE> )"
+        );
+    }
+
+    #[test]
+    fn line_final_comma_closes_only_blocks_deeper_than_the_next_line() {
+        assert_eq!(
+            layout_of("f = (fn x ->\n    let y =\n      1,\n    y)"),
+            "f = ( fn x -> <OPEN> let y = <OPEN> 1 <CLOSE> , <SEP> y <CLOSE> )"
+        );
+    }
+
+    #[test]
+    fn line_final_comma_at_the_end_of_the_file_closes_every_block_above_the_bracket() {
+        let (shown, _) = dump("f = (fn x ->\n    x,");
+        assert_eq!(shown, "f = ( fn x -> <OPEN> x <CLOSE> ,");
     }
 
     #[test]
