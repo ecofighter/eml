@@ -2,11 +2,14 @@
 effect Ask where
   ask : Unit -> Int
 
+run : (Unit -> <Ask, IO> Unit) -> <IO> Unit
+run body =
+  handle body () with
+    | ask () k -> k 1
+
 main : Unit -> <IO> Unit
 main () =
-  handle (fn () ->
+  run (fn () ->
     let x = ask (), 2
     println "a"
-    println (show x)) with
-    | ask () k -> k 1
-    | return v -> v
+    println (show x))

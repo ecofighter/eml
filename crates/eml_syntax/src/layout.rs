@@ -41,7 +41,8 @@ struct Item {
 /// 行の途中の `,` が閉じたブロック。次の行の先頭で E0015 を判定するまで覚えておく (docs/spec/layout.md の規則 4)。
 struct CommaClosed {
     comma: Token,
-    /// `,` の一番内側の括弧の、スタックの位置。
+    /// `,` の一番内側の括弧の、スタックの位置。閉じ括弧の分岐が、スタックがこの位置以下に下がったときに記録を
+    /// 忘れるので、次の行の先頭でスタックの深さがこの位置の1つ上なら、一番上の括弧は同じ括弧である。
     bracket: usize,
     /// 閉じたブロックの基準列と開始トークン。
     blocks: Vec<(u32, Token)>,
@@ -206,7 +207,8 @@ pub(crate) fn layout(file: FileId, text: &str, tokens: &[Token]) -> (Vec<Token>,
                         stack.pop();
                     }
                     stack.pop();
-                    // `,` の括弧を閉じたら、次の行はその `,` の要素の続きではない。
+                    // `,` の括弧を閉じたら、次の行はその `,` の要素の続きではない。`CommaClosed::bracket` の深さの比較は、
+                    // ここで忘れることを前提にしている。
                     if comma_closed
                         .as_ref()
                         .is_some_and(|closed| stack.len() <= closed.bracket)
