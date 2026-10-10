@@ -853,6 +853,12 @@ fn an_element_after_a_line_final_comma_may_start_at_the_column_of_the_block() {
 }
 
 #[test]
+fn a_trailing_comma_before_a_deeper_closing_bracket_closes_the_block() {
+    let text = lines(&["f =", "  [fn x ->", "      x + 1,", "        ]"]);
+    assert_eq!(diagnostics(&text), Vec::<String>::new());
+}
+
+#[test]
 fn list_patterns() {
     insta::assert_snapshot!(shape("f [a, _] [] = a"), @r#"
     SOURCE_FILE

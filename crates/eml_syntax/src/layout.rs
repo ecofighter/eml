@@ -116,10 +116,15 @@ pub(crate) fn layout(file: FileId, text: &str, tokens: &[Token]) -> (Vec<Token>,
                 // ものを `,` の前で閉じる。`,` の後には次の要素が続くので、行末の `->` などで開いたブロックを
                 // その前で終え、ブロックと同じ列の行もブロックの文にしないため。次の行が一番内側のブロックより
                 // 深い継続行なら閉じず、行の途中の `,` も閉じない。ブロックの中の row や型の引数の `,` で、
-                // ブロックを閉じないためである (docs/spec/layout.md の「文脈のスタック」)
+                // ブロックを閉じないためである。次の行が閉じ括弧なら、列によらずすべて閉じる。その閉じ括弧も
+                // 閉じるブロックなので、末尾の `,` をブロックの外に置くためである
+                // (docs/spec/layout.md の「文脈のスタック」)
                 let closes = |indent: u32| match items.get(i + 1) {
                     None => true,
-                    Some(next) => next.line_start && indent >= next.column,
+                    Some(next) => {
+                        next.line_start
+                            && (next.token.kind.is_closing_bracket() || indent >= next.column)
+                    }
                 };
                 let floor = hole_floor(&stack);
                 if stack[floor..].iter().any(is_bracket) {
@@ -712,6 +717,14 @@ mod tests {
         assert_eq!(
             layout_of("f = (fn x ->\n    let y =\n      1,\n     y)"),
             "f = ( fn x -> <OPEN> let y = <OPEN> 1 <CLOSE> , y <CLOSE> )"
+        );
+    }
+
+    #[test]
+    fn line_final_comma_before_a_closing_bracket_closes_every_block_above_the_bracket() {
+        assert_eq!(
+            layout_of("f = [fn x ->\n    x + 1,\n      ]"),
+            "f = [ fn x -> <OPEN> x + 1 <CLOSE> , ]"
         );
     }
 
