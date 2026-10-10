@@ -95,7 +95,7 @@ fn head_type(checked: &Checked, head: TypeDefId) -> TypeId {
             TypeKind::Con { id, args } if *id == head && args.is_empty() => return ty,
             TypeKind::Con { id: _, args } => pending.extend(args),
             TypeKind::Fn { param, ret, .. } => pending.extend([*param, *ret]),
-            TypeKind::Record(fields) => pending.extend(fields.iter().map(|&(_, ty)| ty)),
+            TypeKind::Tuple(elements) => pending.extend(elements),
             TypeKind::Rigid(_) | TypeKind::OpVar(_) | TypeKind::Flexible | TypeKind::Error => {}
         }
     }
@@ -108,7 +108,7 @@ fn head_type(checked: &Checked, head: TypeDefId) -> TypeId {
 fn has_type_var(types: &TypeStore, ty: TypeId) -> bool {
     match types.kind(ty) {
         TypeKind::Con { id: _, args } => args.iter().any(|&arg| has_type_var(types, arg)),
-        TypeKind::Record(fields) => fields.iter().any(|&(_, ty)| has_type_var(types, ty)),
+        TypeKind::Tuple(elements) => elements.iter().any(|&ty| has_type_var(types, ty)),
         TypeKind::Fn {
             param,
             effects: _,
@@ -151,7 +151,7 @@ fn every_extern_function_row_has_the_reprs_of_its_std_signature() {
 
 #[test]
 fn every_extern_type_row_has_the_repr_of_its_type() {
-    // 型検査は `Unit` を空のレコードにするので、`Prelude.Unit` の行は `types.rs` の空のレコードの規則と比べる
+    // 型検査は `Unit` を要素のないタプルにするので、`Prelude.Unit` の行は `types.rs` の要素のないタプルの規則と比べる
     let checked = checked();
     let types = &checked.typed.types;
     for &ty in ExternType::ALL {

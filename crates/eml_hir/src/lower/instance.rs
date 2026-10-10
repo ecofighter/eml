@@ -394,7 +394,7 @@ impl ItemLowering<'_> {
                 None
             }
         };
-        // `Unit` は型の表で空のレコードなので、処理系の構造的な instance だけを持つ
+        // `Unit` は型の表で要素のないタプルなので、処理系の構造的な instance だけを持つ
         if id == Some(self.def_map.externs().ty(ExternType::Unit)) {
             self.invalid_head(range, "`Unit` has only built-in instances");
             valid = false;

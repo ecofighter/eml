@@ -58,10 +58,10 @@ impl<'t, 'c, 's> Exporter<'t, 'c, 's> {
                 id: *id,
                 args: args.iter().map(|&arg| self.export(arg)).collect(),
             },
-            TyShape::Record(fields) => TypeKind::Record(
-                fields
+            TyShape::Tuple(elements) => TypeKind::Tuple(
+                elements
                     .iter()
-                    .map(|(label, field)| (label.clone(), self.export(*field)))
+                    .map(|&element| self.export(element))
                     .collect(),
             ),
             TyShape::Fn {

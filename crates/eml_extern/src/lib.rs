@@ -89,10 +89,10 @@ pub enum ExternType {
 pub struct TypeRow {
     pub name: &'static str,
     pub linearity: Linearity,
-    /// 値の Repr。translate は extern の型の Repr をここから読む。型検査は `Unit` を空のレコードにするので、translate は
-    /// `Unit` の行を読まない。この行が空のレコードの Repr と同じであることは、結合テストが確かめる。
+    /// 値の Repr。translate は extern の型の Repr をここから読む。型検査は `Unit` を要素のないタプルにするので、translate は
+    /// `Unit` の行を読まない。この行が要素のないタプルの Repr と同じであることは、結合テストが確かめる。
     pub repr: Repr,
-    /// 型検査は `Unit` を空のレコード `{}` として扱うので、この行は型の形と表示にだけ使う。
+    /// 型検査は `Unit` を要素のないタプルとして扱うので、この行は型の形と表示にだけ使う。
     pub empty_record: bool,
 }
 

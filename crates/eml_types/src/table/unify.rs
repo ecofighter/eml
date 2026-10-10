@@ -35,10 +35,8 @@ impl Table<'_> {
                 done.insert((a, b));
                 Ok(())
             }
-            (TyShape::Record(xs), TyShape::Record(ys))
-                if xs.len() == ys.len() && xs.iter().zip(&ys).all(|((l, _), (m, _))| l == m) =>
-            {
-                for ((_, x), (_, y)) in xs.iter().zip(&ys) {
+            (TyShape::Tuple(xs), TyShape::Tuple(ys)) if xs.len() == ys.len() => {
+                for (x, y) in xs.iter().zip(&ys) {
                     self.unify_in(*x, *y, done)?;
                 }
                 done.insert((a, b));

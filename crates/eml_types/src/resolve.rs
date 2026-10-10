@@ -31,10 +31,10 @@ pub fn resolve(program: &Program, types: &TypeStore, class: ClassId, ty: TypeId)
             None => Resolution::Missing,
         },
         TypeKind::Rigid(_) => Resolution::Given,
-        TypeKind::Record(fields) if structural(program, class) => {
-            Resolution::Tuple(fields.iter().map(|&(_, element)| element).collect())
+        TypeKind::Tuple(elements) if structural(program, class) => {
+            Resolution::Tuple(elements.clone())
         }
-        TypeKind::Record(_) => Resolution::Missing,
+        TypeKind::Tuple(_) => Resolution::Missing,
         TypeKind::OpVar(_) | TypeKind::Flexible | TypeKind::Fn { .. } | TypeKind::Error => {
             Resolution::Missing
         }

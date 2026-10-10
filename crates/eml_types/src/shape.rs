@@ -138,7 +138,7 @@ fn lower(
 ) -> Ty {
     match &types[id].kind {
         TypeRefKind::Error => table.error,
-        // `Unit` は空のレコードである (docs/spec/records.md)
+        // `Unit` は要素のないタプルである (docs/spec/records.md の「構成」)
         TypeRefKind::Con(id, _) if *id == table.extern_type(ExternType::Unit) => table.unit,
         TypeRefKind::Con(id, _) if *id == table.extern_type(ExternType::Int) => table.int,
         TypeRefKind::Con(id, _) if *id == table.extern_type(ExternType::String) => table.string,
@@ -290,7 +290,7 @@ pub(crate) struct Shape {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ShapeTy {
     Con(TypeDefId, Vec<ShapeTy>),
-    Record(Vec<(String, ShapeTy)>),
+    Tuple(Vec<ShapeTy>),
     Fn {
         param: Box<ShapeTy>,
         lin: ShapeLin,
@@ -314,9 +314,9 @@ impl ShapeTy {
     pub fn for_each_child<'a>(&'a self, mut f: impl FnMut(ShapeChild<'a>)) {
         match self {
             ShapeTy::Con(_, args) => args.iter().for_each(|arg| f(ShapeChild::Ty(arg))),
-            ShapeTy::Record(fields) => fields
+            ShapeTy::Tuple(elements) => elements
                 .iter()
-                .for_each(|(_, field)| f(ShapeChild::Ty(field))),
+                .for_each(|element| f(ShapeChild::Ty(element))),
             ShapeTy::Fn {
                 param,
                 lin: _,
@@ -469,10 +469,10 @@ impl Closer<'_, '_> {
             TyShape::Con(id, args) => {
                 ShapeTy::Con(id, args.into_iter().map(|arg| self.ty(arg)).collect())
             }
-            TyShape::Record(fields) => ShapeTy::Record(
-                fields
+            TyShape::Tuple(elements) => ShapeTy::Tuple(
+                elements
                     .into_iter()
-                    .map(|(label, field)| (label, self.ty(field)))
+                    .map(|element| self.ty(element))
                     .collect(),
             ),
             TyShape::Fn {
@@ -621,10 +621,10 @@ impl Shape {
                 id: *id,
                 args: args.iter().map(|arg| self.export_ty(arg, types)).collect(),
             },
-            ShapeTy::Record(fields) => TypeKind::Record(
-                fields
+            ShapeTy::Tuple(elements) => TypeKind::Tuple(
+                elements
                     .iter()
-                    .map(|(label, field)| (label.clone(), self.export_ty(field, types)))
+                    .map(|element| self.export_ty(element, types))
                     .collect(),
             ),
             ShapeTy::Fn {
@@ -694,7 +694,7 @@ impl Shape {
                 ret: _,
             }
             | ShapeTy::Con(_, _)
-            | ShapeTy::Record(_)
+            | ShapeTy::Tuple(_)
             | ShapeTy::Error => {}
         }
         ty.for_each_child(|child| match child {
@@ -728,13 +728,13 @@ fn build(table: &mut Table<'_>, ty: &ShapeTy, tys: &[Ty], rows: &[Tail], lin: &[
                 .collect();
             table.alloc(TyShape::Con(*id, args))
         }
-        ShapeTy::Record(fields) if fields.is_empty() => table.unit,
-        ShapeTy::Record(fields) => {
-            let fields = fields
+        ShapeTy::Tuple(elements) if elements.is_empty() => table.unit,
+        ShapeTy::Tuple(elements) => {
+            let elements = elements
                 .iter()
-                .map(|(label, field)| (label.clone(), build(table, field, tys, rows, lin)))
+                .map(|element| build(table, element, tys, rows, lin))
                 .collect();
-            table.alloc(TyShape::Record(fields))
+            table.alloc(TyShape::Tuple(elements))
         }
         ShapeTy::Fn {
             param,

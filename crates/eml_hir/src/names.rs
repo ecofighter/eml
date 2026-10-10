@@ -14,7 +14,7 @@ pub struct DisplayNames {
     effects: HashMap<EffectId, String>,
     constructors: HashMap<ConstructorId, String>,
     classes: HashMap<ClassId, String>,
-    /// 空のレコードの表示。Prelude の `Unit` の表示名である。
+    /// 要素のないタプルの表示。Prelude の `Unit` の表示名である。
     unit: String,
 }
 
@@ -80,7 +80,7 @@ impl DisplayNames {
         self.classes[&id].as_str()
     }
 
-    /// 空のレコードの表示 (Prelude の `Unit` の表示名)。
+    /// 要素のないタプルの表示 (Prelude の `Unit` の表示名)。
     pub fn unit(&self) -> &str {
         &self.unit
     }

@@ -4,7 +4,7 @@
 use crate::common::check_text;
 
 #[test]
-fn tuples_are_closed_records_shown_with_parentheses() {
+fn tuples_are_shown_with_parentheses() {
     // `both` は `x` を2回使うので、タプルの Kind (要素の Kind の join) を通して `a` に `Unr` の制約が付く
     let text = "swap : (Int, String) -> (String, Int)\nswap p = match p with\n  | (n, s) -> (s, n)\n\nnested : ((Int, Bool), String) -> Int\nnested t =\n  let ((n, _), _) = t\n  n\n\nboth : a -> (a, a)\nboth x = (x, x)";
     insta::assert_snapshot!(check_text(text), @r"

@@ -521,7 +521,7 @@ pub enum ExprKind {
         arms: Vec<MatchArm>,
         source: MatchSource,
     },
-    /// 要素は2つ以上である。数字ラベルのレコードへの変換は型検査で行う
+    /// 要素は2つ以上である。タプルの型への変換は型検査で行う
     /// (docs/implementation/status.md の「タプルの扱い」)。
     Tuple(Vec<ExprId>),
     /// リストのリテラル。`[]` は要素のない `List` である。パターンと違い `::` に組まないのは、要素が多くても後の
@@ -703,7 +703,7 @@ pub enum TypeRefKind {
         row: RowRef,
         ret: TypeRefId,
     },
-    /// 要素は2つ以上である。数字ラベルの閉じたレコードへの変換は型検査で行う
+    /// 要素は2つ以上である。タプルの型への変換は型検査で行う
     /// (docs/implementation/status.md の「タプルの扱い」)。
     Tuple(Vec<TypeRefId>),
 }

@@ -47,8 +47,8 @@ pub enum TypeKind {
         id: TypeDefId,
         args: Vec<TypeId>,
     },
-    /// 閉じたレコード。`Unit` は空のレコード、タプルは数字ラベルのレコードである (docs/spec/records.md)。
-    Record(Vec<(String, TypeId)>),
+    /// タプル。`Unit` は要素のないタプルである (docs/spec/records.md の「構成」)。
+    Tuple(Vec<TypeId>),
     /// 関数型。矢印の線形性は持たない。後の段階は線形性を読まず、線形性は Kind の解に依存するので、持たせると本体の型を
     /// Kind を解くまで確定できなくなる (docs/implementation/architecture.md の「`eml_types` の内部」)。
     Fn {
@@ -83,7 +83,7 @@ impl TypeKind {
     fn for_each_child(&self, mut f: impl FnMut(TypeId)) {
         match self {
             TypeKind::Con { id: _, args } => args.iter().copied().for_each(f),
-            TypeKind::Record(fields) => fields.iter().for_each(|&(_, field)| f(field)),
+            TypeKind::Tuple(elements) => elements.iter().copied().for_each(f),
             TypeKind::Fn {
                 param,
                 effects,
@@ -155,7 +155,7 @@ impl TypeStore {
             id,
             args: Vec::new(),
         };
-        store.unit = store.intern(TypeKind::Record(Vec::new()));
+        store.unit = store.intern(TypeKind::Tuple(Vec::new()));
         store.int = store.intern(con(program.extern_type(ExternType::Int)));
         store.string = store.intern(con(program.extern_type(ExternType::String)));
         store.bool = store.intern(con(program.lang.bool));
@@ -232,10 +232,10 @@ impl TypeStore {
                     .map(|arg| self.substitute(arg, subst))
                     .collect(),
             },
-            TypeKind::Record(fields) => TypeKind::Record(
-                fields
+            TypeKind::Tuple(elements) => TypeKind::Tuple(
+                elements
                     .into_iter()
-                    .map(|(label, field)| (label, self.substitute(field, subst)))
+                    .map(|element| self.substitute(element, subst))
                     .collect(),
             ),
             TypeKind::Fn {
@@ -351,27 +351,16 @@ impl fmt::Display for TypeDisplay<'_> {
                 }
                 Ok(())
             }
-            TypeKind::Record(fields) if fields.is_empty() => f.write_str(names.unit()),
-            // ラベルが 0 から連番の閉じたレコードは、タプルの書き方で表示する (docs/spec/records.md の「構成」)
-            TypeKind::Record(fields) if is_tuple(fields) => {
+            TypeKind::Tuple(elements) if elements.is_empty() => f.write_str(names.unit()),
+            TypeKind::Tuple(elements) => {
                 f.write_str("(")?;
-                for (index, &(_, ty)) in fields.iter().enumerate() {
+                for (index, &ty) in elements.iter().enumerate() {
                     if index > 0 {
                         f.write_str(", ")?;
                     }
                     write!(f, "{}", types.display(ty, names))?;
                 }
                 f.write_str(")")
-            }
-            TypeKind::Record(fields) => {
-                f.write_str("{ ")?;
-                for (index, (label, ty)) in fields.iter().enumerate() {
-                    if index > 0 {
-                        f.write_str(", ")?;
-                    }
-                    write!(f, "{label} : {}", types.display(*ty, names))?;
-                }
-                f.write_str(" }")
             }
             TypeKind::Fn {
                 param,
@@ -413,15 +402,6 @@ impl fmt::Display for TypeDisplay<'_> {
             TypeKind::Error => f.write_str("{error}"),
         }
     }
-}
-
-/// タプルとして書くレコード。タプルの構文は要素を2つ以上持つので、要素が1つのレコードは `{ 0 : A }` のまま書く。
-fn is_tuple(fields: &[(String, TypeId)]) -> bool {
-    fields.len() >= 2
-        && fields
-            .iter()
-            .enumerate()
-            .all(|(index, (label, _))| *label == index.to_string())
 }
 
 /// 型の適用の引数の位置に置く形。関数型と、引数を持つ型の適用は括弧で囲む。途中の文字列を作らずに書く。
@@ -547,14 +527,9 @@ mod tests {
         let program = program();
         let mut types = TypeStore::new(&program);
         let int = types.int();
-        let pair = |types: &mut TypeStore| {
-            types.intern(TypeKind::Record(vec![
-                ("0".to_string(), int),
-                ("1".to_string(), int),
-            ]))
-        };
+        let pair = |types: &mut TypeStore| types.intern(TypeKind::Tuple(vec![int, int]));
         assert_eq!(pair(&mut types), pair(&mut types));
-        assert_eq!(types.intern(TypeKind::Record(Vec::new())), types.unit());
+        assert_eq!(types.intern(TypeKind::Tuple(Vec::new())), types.unit());
     }
 
     #[test]
@@ -590,7 +565,7 @@ mod tests {
             tail: None,
             ret: int,
         });
-        let field = types.intern(TypeKind::Record(vec![("x".to_string(), error)]));
+        let field = types.intern(TypeKind::Tuple(vec![error]));
         assert!(types.contains_error(labelled));
         assert!(types.contains_error(field));
     }
@@ -616,10 +591,7 @@ mod tests {
         let (int, string) = (types.int(), types.string());
         let a = rigid(&mut types, "a");
         let b = rigid(&mut types, "b");
-        let pair = types.intern(TypeKind::Record(vec![
-            ("0".to_string(), a),
-            ("1".to_string(), b),
-        ]));
+        let pair = types.intern(TypeKind::Tuple(vec![a, b]));
         let ty = types.intern(TypeKind::Fn {
             param: pair,
             effects: vec![EffectLabel {
@@ -636,10 +608,7 @@ mod tests {
             "(Int, String) -> <State Int | e> Int"
         );
         // 同じ形の型は同じ ID になる
-        let expected_pair = types.intern(TypeKind::Record(vec![
-            ("0".to_string(), int),
-            ("1".to_string(), string),
-        ]));
+        let expected_pair = types.intern(TypeKind::Tuple(vec![int, string]));
         assert_eq!(types.substitute(pair, &mut subst), expected_pair);
     }
 

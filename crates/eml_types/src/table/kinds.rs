@@ -39,9 +39,9 @@ impl Table<'_> {
                     }
                 }
             }
-            TyShape::Record(fields) => {
-                for (_, field) in fields {
-                    self.push_kind_bounds(*field, bounds);
+            TyShape::Tuple(elements) => {
+                for element in elements {
+                    self.push_kind_bounds(*element, bounds);
                 }
             }
             TyShape::Fn { lin, .. } => bounds.push(match lin {
@@ -169,7 +169,7 @@ impl Table<'_> {
                         push_unique(&mut mult, self.row_multiplicity_var(tail));
                     }
                 }
-                TyShape::Con(_, _) | TyShape::Record(_) | TyShape::Var(_) | TyShape::Error => {}
+                TyShape::Con(_, _) | TyShape::Tuple(_) | TyShape::Var(_) | TyShape::Error => {}
             }
             // 子を前から作業の列に積み、積んだ範囲を裏返す。最初の子から取り出すので、Kind 変数は現れた順に並ぶ
             let first_child = work.len();

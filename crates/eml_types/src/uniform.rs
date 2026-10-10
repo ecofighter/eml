@@ -721,9 +721,9 @@ fn vars_in(
                 merge(vars_in(types, arg, names, memo));
             }
         }
-        TypeKind::Record(fields) => {
-            for &(_, field) in fields {
-                merge(vars_in(types, field, names, memo));
+        TypeKind::Tuple(elements) => {
+            for &element in elements {
+                merge(vars_in(types, element, names, memo));
             }
         }
         TypeKind::Fn {
