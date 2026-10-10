@@ -6,11 +6,13 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 
 use eml_diagnostics::{FileId, TextRange, TextSize};
 use eml_hir::{
-    Body, ClauseSource, Closure, ExprId, ExprKind, LocalId, PatId, PatKind, Res, Segment, Stmt,
+    Body, ClauseSource, Closure, ConstructorId, ExprId, ExprKind, LocalId, PatId, PatKind, Program,
+    Res, Segment, Stmt,
 };
 
+use crate::FieldTarget;
 use crate::check::BodyTyping;
-use crate::kind::{Bound, KindOrigin, KindReason, Provenance, Span, UnusedPath};
+use crate::kind::{Bound, DiscardSite, KindOrigin, KindReason, Provenance, Span, UnusedPath};
 use crate::store::TypeStore;
 use crate::table::{Exporter, Table};
 use crate::ty::Linearity;
@@ -73,6 +75,7 @@ pub(crate) fn reliable(body: &Body, well_typed: bool) -> bool {
 }
 
 pub(crate) fn constrain(
+    program: &Program,
     file: FileId,
     body: &Body,
     typing: &BodyTyping,
@@ -89,6 +92,7 @@ pub(crate) fn constrain(
         locals.sort_by_key(|&local| body.locals[local].range.start());
     }
     let mut usage = Usage {
+        program,
         file,
         body,
         typing,
@@ -106,6 +110,8 @@ pub(crate) fn constrain(
 }
 
 struct Usage<'a, 'c> {
+    /// パターンに書かなかったフィールドと、射影と更新が捨てるフィールドの名前を引く。
+    program: &'a Program,
     file: FileId,
     body: &'a Body,
     typing: &'a BodyTyping,
@@ -123,7 +129,7 @@ struct Usage<'a, 'c> {
 }
 
 impl<'a> Usage<'a, '_> {
-    /// 左から順に評価する部分 (タプルとリストの要素、補間の穴) の使用をつなぐ。
+    /// 左から順に評価する部分 (タプルとリストの要素、作る式と更新のフィールド、補間の穴) の使用をつなぐ。
     fn in_order(&mut self, parts: impl Iterator<Item = ExprId>) -> Uses {
         let mut uses = Uses::new();
         for part in parts {
@@ -275,6 +281,20 @@ impl<'a> Usage<'a, '_> {
             ExprKind::Tuple(elements) | ExprKind::List(elements) => {
                 self.in_order(elements.iter().copied())
             }
+            ExprKind::Record { fields, .. } => {
+                self.in_order(fields.iter().map(|&(_, value)| value))
+            }
+            ExprKind::Update { base, fields } => {
+                let uses = self
+                    .in_order(std::iter::once(*base).chain(fields.iter().map(|&(_, value)| value)));
+                self.discard_fields(id);
+                uses
+            }
+            ExprKind::Field { base, .. } => {
+                let uses = self.expr(*base);
+                self.discard_fields(id);
+                uses
+            }
             ExprKind::Interpolation(segments) => {
                 self.in_order(segments.iter().filter_map(Segment::hole))
             }
@@ -335,6 +355,15 @@ impl<'a> Usage<'a, '_> {
                         KindReason::OmittedReturn {
                             ty: Exporter::new(self.table, self.types).export(ty),
                         }
+                    } else if let Some(&(ctor, field)) = self.body.omitted_fields.get(pat) {
+                        let names = self.program[ctor]
+                            .field_names
+                            .as_ref()
+                            .expect("an omitted field belongs to a record");
+                        KindReason::DiscardedField {
+                            name: names[field as usize].name.clone(),
+                            site: DiscardSite::Pattern,
+                        }
                     } else {
                         KindReason::Discarded
                     };
@@ -351,6 +380,57 @@ impl<'a> Usage<'a, '_> {
             }
             PatKind::Unit | PatKind::Missing | PatKind::Literal(_) => {}
         }
+    }
+
+    /// 射影と更新が捨てるフィールドは、`_` で受けた値と同じく `Unr` でなければならない
+    /// (docs/spec/records.md の「線形性の規則」)。
+    fn discard_fields(&mut self, id: ExprId) {
+        let Some(discarded) = self.typing.discarded.get(id) else {
+            return;
+        };
+        let body = self.body;
+        let range = body.exprs[id].range;
+        for &(field, ty) in discarded {
+            let (name, site) = match &body.exprs[id].kind {
+                ExprKind::Field { base, .. } => {
+                    // セクション `(.f)` の引数は脱糖が作った隠れた変数である
+                    let section = matches!(&body.exprs[*base].kind,
+                        ExprKind::Path(Res::Local(local)) if body.locals[*local].is_hidden());
+                    match self.typing.fields.get(id) {
+                        Some(&FieldTarget::Constructor { ctor, .. }) => (
+                            self.field_name(ctor, field),
+                            DiscardSite::Projection {
+                                tuple: false,
+                                section,
+                            },
+                        ),
+                        _ => (
+                            field.to_string(),
+                            DiscardSite::Projection {
+                                tuple: true,
+                                section,
+                            },
+                        ),
+                    }
+                }
+                _ => {
+                    let ctor = self.typing.updates[id].ctor;
+                    (self.field_name(ctor, field), DiscardSite::Update)
+                }
+            };
+            self.with_origin(range, KindReason::DiscardedField { name, site }, |table| {
+                table.kind_at_most(ty, Bound::Const(Linearity::Unr))
+            });
+        }
+    }
+
+    fn field_name(&self, ctor: ConstructorId, field: u32) -> String {
+        self.program[ctor]
+            .field_names
+            .as_ref()
+            .expect("a resolved field belongs to a record")[field as usize]
+            .name
+            .clone()
     }
 
     /// 操作の節の `k`。ある経路で使わなければ、変数ではなく節を指す

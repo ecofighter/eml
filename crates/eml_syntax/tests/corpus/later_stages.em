@@ -7,7 +7,8 @@ data Level =
   | Warn
   | Error
 
-type Entry = { level : Level, msg : String }
+data Entry =
+  | Entry { level : Level, msg : String }
 
 effect Fail where
   never fail : String -> a
@@ -15,9 +16,9 @@ effect Fail where
 parse_entry : String -> Option Entry
 parse_entry line =
   match String.split_once " " line with
-    | Some ("INFO", msg)  -> Some { level = Info, msg }
-    | Some ("WARN", msg)  -> Some { level = Warn, msg }
-    | Some ("ERROR", msg) -> Some { level = Error, msg }
+    | Some ("INFO", msg)  -> Some Entry { level = Info, msg }
+    | Some ("WARN", msg)  -> Some Entry { level = Warn, msg }
+    | Some ("ERROR", msg) -> Some Entry { level = Error, msg }
     | _ -> None
 
 is_error : Level -> Bool

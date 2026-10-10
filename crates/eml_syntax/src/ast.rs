@@ -94,6 +94,8 @@ ast_node! {
     Equation => EQUATION,
     DataItem => DATA_ITEM,
     Alt => ALT,
+    RecordFields => RECORD_FIELDS,
+    FieldDecl => FIELD_DECL,
     TypeItem => TYPE_ITEM,
     EffectItem => EFFECT_ITEM,
     OpDecl => OP_DECL,
@@ -137,6 +139,9 @@ ast_node! {
     LeftSection => LEFT_SECTION,
     RightSection => RIGHT_SECTION,
     FieldSection => FIELD_SECTION,
+    RecordExpr => RECORD_EXPR,
+    Field => FIELD,
+    UpdateExpr => UPDATE_EXPR,
     WildcardPat => WILDCARD_PAT,
     BindPat => BIND_PAT,
     ConPat => CON_PAT,
@@ -147,6 +152,8 @@ ast_node! {
     ListPat => LIST_PAT,
     InfixConPat => INFIX_CON_PAT,
     AnnotPat => ANNOT_PAT,
+    RecordPat => RECORD_PAT,
+    FieldPat => FIELD_PAT,
     PathType => PATH_TYPE,
     VarType => VAR_TYPE,
     AppType => APP_TYPE,
@@ -178,14 +185,14 @@ ast_enum! {
     Expr {
         Block, IfExpr, MatchExpr, HandleExpr, LambdaExpr, LetExpr, OpSeq, AppExpr,
         DropExpr, FieldExpr, PathExpr, Literal, StringLit, CommandLit, UnitExpr, ParenExpr, TupleExpr, ListExpr, AnnotExpr, OpRef,
-        LeftSection, RightSection, FieldSection,
+        LeftSection, RightSection, FieldSection, RecordExpr, UpdateExpr,
     }
 }
 
 ast_enum! {
     Pat {
         WildcardPat, BindPat, ConPat, LiteralPat, UnitPat, ParenPat, TuplePat, ListPat, InfixConPat,
-        AnnotPat,
+        AnnotPat, RecordPat,
     }
 }
 
@@ -850,9 +857,121 @@ impl Alt {
         support::children::<Name>(&self.syntax).find(|name| name.token().kind() == kind)
     }
 
-    /// フィールドの型。中置のコンストラクタでは左右の2つである。
-    pub fn fields(&self) -> AstChildren<Type> {
+    /// フィールドの型。中置のコンストラクタでは左右の2つで、レコードの選択肢では宣言の順の `FieldDecl` の型である。
+    pub fn fields(&self) -> impl Iterator<Item = Type> {
+        let record = self
+            .record_fields()
+            .into_iter()
+            .flat_map(|record| record.fields().filter_map(|field| field.ty()));
+        support::children::<Type>(&self.syntax).chain(record)
+    }
+
+    pub fn record_fields(&self) -> Option<RecordFields> {
+        support::child(&self.syntax)
+    }
+}
+
+impl RecordFields {
+    pub fn fields(&self) -> AstChildren<FieldDecl> {
         support::children(&self.syntax)
+    }
+}
+
+impl FieldDecl {
+    pub fn name(&self) -> Option<Name> {
+        support::child(&self.syntax)
+    }
+
+    pub fn ty(&self) -> Option<Type> {
+        support::child(&self.syntax)
+    }
+}
+
+impl RecordExpr {
+    pub fn path(&self) -> Option<Path> {
+        support::child(&self.syntax)
+    }
+
+    pub fn fields(&self) -> AstChildren<Field> {
+        support::children(&self.syntax)
+    }
+
+    /// フィールドの並びに、パーサが読み飛ばした部分 (`ERROR`) があるか。
+    pub fn has_skipped_fields(&self) -> bool {
+        self.syntax
+            .children()
+            .any(|child| child.kind() == SyntaxKind::ERROR)
+    }
+}
+
+impl UpdateExpr {
+    pub fn base(&self) -> Option<Expr> {
+        support::child(&self.syntax)
+    }
+
+    pub fn fields(&self) -> AstChildren<Field> {
+        support::children(&self.syntax)
+    }
+}
+
+impl FieldExpr {
+    /// `e.f` の `e`。
+    pub fn base(&self) -> Option<Expr> {
+        support::child(&self.syntax)
+    }
+
+    /// `.` の後の名前 (`LIDENT`) か番号 (`INT`)。
+    pub fn field(&self) -> Option<SyntaxToken> {
+        field_token(&self.syntax)
+    }
+}
+
+impl FieldSection {
+    /// `(.f)` の名前 (`LIDENT`) か番号 (`INT`)。
+    pub fn field(&self) -> Option<SyntaxToken> {
+        field_token(&self.syntax)
+    }
+}
+
+impl Field {
+    pub fn name(&self) -> Option<NameRef> {
+        support::child(&self.syntax)
+    }
+
+    /// 省略形 `{ name }` では `None`。
+    pub fn expr(&self) -> Option<Expr> {
+        support::child(&self.syntax)
+    }
+
+    /// `=` を書いたか。`{ name = }` のように値が欠けても、省略形とは区別する。
+    pub fn has_eq(&self) -> bool {
+        support::token(&self.syntax, SyntaxKind::EQ).is_some()
+    }
+}
+
+impl RecordPat {
+    pub fn path(&self) -> Option<Path> {
+        support::child(&self.syntax)
+    }
+
+    pub fn fields(&self) -> AstChildren<FieldPat> {
+        support::children(&self.syntax)
+    }
+}
+
+impl FieldPat {
+    pub fn name(&self) -> Option<NameRef> {
+        support::child(&self.syntax)
+    }
+
+    /// 省略形 `{ name }` では `None`。
+    pub fn pat(&self) -> Option<Pat> {
+        support::child(&self.syntax)
+    }
+
+    /// `=` を書いたか。`{ name = }` のようにパターンが欠けても、省略形とは区別する。
+    pub fn has_eq(&self) -> bool {
+        support::token(&self.syntax, SyntaxKind::EQ).is_some()
     }
 }
 
@@ -1020,6 +1139,14 @@ fn child_between<N: AstNode<Language = EmlLanguage>>(
         }
     }
     None
+}
+
+/// ノードの直下にある、射影のフィールドの名前か番号のトークン。`e.f` の `e` の中のトークンは子のノードの中なので、
+/// ここには入らない。
+fn field_token(node: &SyntaxNode) -> Option<SyntaxToken> {
+    node.children_with_tokens()
+        .filter_map(NodeOrToken::into_token)
+        .find(|token| matches!(token.kind(), SyntaxKind::LIDENT | SyntaxKind::INT))
 }
 
 fn lowercase_names(node: &SyntaxNode) -> impl Iterator<Item = Name> {

@@ -14,7 +14,8 @@ enum Context {
         indent: u32,
         opener: Option<SyntaxKind>,
     },
-    Bracket,
+    /// `brace` は `{` で開いたこと。`{` の中の `=` はフィールドの `=` なので、規則 3 が変わる。
+    Bracket { brace: bool },
     /// 補間の穴。`INTERP_END` だけが取り除く。穴の中の閉じ括弧で穴の外の括弧を閉じないため
     /// (docs/spec/layout.md の規則 4)。
     Interp,
@@ -48,7 +49,10 @@ pub(crate) fn layout(file: FileId, text: &str, tokens: &[Token]) -> (Vec<Token>,
         let start = item.token.range.start();
         if item.line_start {
             let mut opened = false;
-            if i > 0 && BLOCK_STARTERS.contains(&items[i - 1].token.kind) {
+            if i > 0
+                && BLOCK_STARTERS.contains(&items[i - 1].token.kind)
+                && !is_field_eq(items[i - 1].token.kind, &stack)
+            {
                 // 規則 3。
                 if item.column > enclosing_indent(&stack) && !item.token.kind.is_closing_bracket() {
                     out.push(virtual_token(LAYOUT_OPEN, start));
@@ -88,7 +92,7 @@ pub(crate) fn layout(file: FileId, text: &str, tokens: &[Token]) -> (Vec<Token>,
                         }
                         // 閉じ忘れた括弧がファイルの残りを飲み込まないよう、ここで閉じる。閉じ括弧がないことは
                         // parser が報告する。
-                        Some(Context::Bracket)
+                        Some(Context::Bracket { .. })
                             if !item.token.kind.is_closing_bracket()
                                 && item.column <= enclosing_indent(&stack) =>
                         {
@@ -103,16 +107,41 @@ pub(crate) fn layout(file: FileId, text: &str, tokens: &[Token]) -> (Vec<Token>,
         match item.token.kind {
             kind if kind.is_opening_bracket() => {
                 out.push(item.token);
-                stack.push(Context::Bracket);
+                stack.push(Context::Bracket {
+                    brace: item.token.kind == L_BRACE,
+                });
+            }
+            COMMA => {
+                // 規則 4。行末の `,` は、一番内側の括弧より上のブロックのうち、基準列が次の行の先頭の列以上の
+                // ものを `,` の前で閉じる。`,` の後には次の要素が続くので、行末の `->` などで開いたブロックを
+                // その前で終え、ブロックと同じ列の行もブロックの文にしないため。次の行が一番内側のブロックより
+                // 深い継続行なら閉じず、行の途中の `,` も閉じない。ブロックの中の row や型の引数の `,` で、
+                // ブロックを閉じないためである。次の行が閉じ括弧なら、列によらずすべて閉じる。その閉じ括弧も
+                // 閉じるブロックなので、末尾の `,` をブロックの外に置くためである
+                // (docs/spec/layout.md の「文脈のスタック」)
+                let closes = |indent: u32| match items.get(i + 1) {
+                    None => true,
+                    Some(next) => {
+                        next.line_start
+                            && (next.token.kind.is_closing_bracket() || indent >= next.column)
+                    }
+                };
+                let floor = hole_floor(&stack);
+                if stack[floor..].iter().any(is_bracket) {
+                    while let Some(&Context::Block { indent, .. }) = stack.last()
+                        && closes(indent)
+                    {
+                        out.push(virtual_token(LAYOUT_CLOSE, start));
+                        stack.pop();
+                    }
+                }
+                out.push(item.token);
             }
             kind if kind.is_closing_bracket() => {
                 // 規則 4。種類は見ずに一番内側の括弧を閉じ、その上のブロックもすべて閉じる。種類の食い違いは parser が
                 // 報告する。対応する開き括弧がなければ何もしない。
-                let floor = stack
-                    .iter()
-                    .rposition(|c| *c == Context::Interp)
-                    .map_or(0, |i| i + 1);
-                if stack[floor..].contains(&Context::Bracket) {
+                let floor = hole_floor(&stack);
+                if stack[floor..].iter().any(is_bracket) {
                     while let Some(Context::Block { .. }) = stack.last() {
                         out.push(virtual_token(LAYOUT_CLOSE, start));
                         stack.pop();
@@ -147,6 +176,7 @@ pub(crate) fn layout(file: FileId, text: &str, tokens: &[Token]) -> (Vec<Token>,
     let eof = TextSize::of(text);
     if let Some(last) = items.last()
         && BLOCK_STARTERS.contains(&last.token.kind)
+        && !is_field_eq(last.token.kind, &stack)
     {
         let report = !continues_aligned_arrows(
             last.token.kind,
@@ -162,6 +192,24 @@ pub(crate) fn layout(file: FileId, text: &str, tokens: &[Token]) -> (Vec<Token>,
         }
     }
     (out, diagnostics)
+}
+
+fn is_bracket(context: &Context) -> bool {
+    matches!(context, Context::Bracket { .. })
+}
+
+/// 一番内側の補間の穴より外の文脈は、括弧や `,` から見えない。その穴の中の先頭の位置を返す。
+fn hole_floor(stack: &[Context]) -> usize {
+    stack
+        .iter()
+        .rposition(|c| *c == Context::Interp)
+        .map_or(0, |i| i + 1)
+}
+
+/// 規則 3 の例外。`{` の中の `=` はいつもフィールドの `=` なので、値を次の行に書けるようにする
+/// (docs/spec/layout.md の「文脈のスタック」)。
+fn is_field_eq(starter: SyntaxKind, stack: &[Context]) -> bool {
+    starter == EQ && matches!(stack.last(), Some(Context::Bracket { brace: true }))
 }
 
 /// インデントのタブも、列を求めるついでにここで報告する。
@@ -295,7 +343,7 @@ fn enclosing_block(stack: &[Context]) -> (u32, Option<SyntaxKind>) {
         .rev()
         .find_map(|context| match *context {
             Context::Block { indent, opener } => Some((indent, opener)),
-            Context::Bracket | Context::Interp => None,
+            Context::Bracket { .. } | Context::Interp => None,
         })
         .unwrap_or((0, None))
 }
@@ -588,6 +636,117 @@ mod tests {
         assert_eq!(
             dump("f : A ->\n  B ->\n  C ->\n  D").0,
             "f : A -> <OPEN> B -> <OPEN> <CLOSE> <SEP> C -> <OPEN> <CLOSE> <SEP> D <CLOSE>"
+        );
+    }
+
+    #[test]
+    fn field_equals_in_braces_does_not_open_a_block() {
+        assert_eq!(layout_of("x = f {\n  a =\n    1,\n}"), "x = f { a = 1 , }");
+    }
+
+    #[test]
+    fn equals_at_the_end_of_a_line_in_parentheses_still_opens_a_block() {
+        assert_eq!(
+            layout_of("x = f (\n  a =\n    1)"),
+            "x = f ( a = <OPEN> 1 <CLOSE> )"
+        );
+    }
+
+    #[test]
+    fn comma_closes_blocks_above_the_innermost_bracket() {
+        assert_eq!(
+            layout_of("f = (fn x ->\n    x,\n  y)"),
+            "f = ( fn x -> <OPEN> x <CLOSE> , y )"
+        );
+    }
+
+    #[test]
+    fn comma_does_not_close_brackets_outside_an_interpolation_hole() {
+        assert_eq!(
+            layout_of("f = (fn x ->\n    \"\\{a, b}\")"),
+            "f = ( fn x -> <OPEN> \" \\{ a , b } \" <CLOSE> )"
+        );
+    }
+
+    #[test]
+    fn comma_followed_by_a_comment_at_the_end_of_a_line_closes_blocks() {
+        assert_eq!(
+            layout_of("f = (fn x ->\n    x, -- first\n  y)"),
+            "f = ( fn x -> <OPEN> x <CLOSE> , y )"
+        );
+    }
+
+    #[test]
+    fn comma_in_the_middle_of_a_line_does_not_close_blocks() {
+        assert_eq!(
+            layout_of("f = (fn x ->\n    x + 1, n)"),
+            "f = ( fn x -> <OPEN> x + 1 , n <CLOSE> )"
+        );
+    }
+
+    #[test]
+    fn comma_in_an_effect_row_does_not_close_the_lambda_body() {
+        assert_eq!(
+            layout_of(
+                "main () = apply (fn () ->\n  let g : Unit -> <IO, Log> Unit = fn () -> println \"hi\"\n  println \"ok\")"
+            ),
+            "main ( ) = apply ( fn ( ) -> <OPEN> let g : Unit -> < IO , Log > Unit = fn ( ) -> println \" hi \" <SEP> println \" ok \" <CLOSE> )"
+        );
+    }
+
+    #[test]
+    fn comma_at_the_end_of_an_effect_row_line_does_not_close_the_lambda_body() {
+        assert_eq!(
+            layout_of(
+                "main () = apply (fn () ->\n  let g : Unit -> <IO,\n    Log> Unit = fn () -> println \"hi\"\n  println \"ok\")"
+            ),
+            "main ( ) = apply ( fn ( ) -> <OPEN> let g : Unit -> < IO , Log > Unit = fn ( ) -> println \" hi \" <SEP> println \" ok \" <CLOSE> )"
+        );
+    }
+
+    #[test]
+    fn line_final_comma_closes_blocks_at_the_column_of_the_next_line() {
+        assert_eq!(
+            layout_of("f = (fn x ->\n    a,\n    b)"),
+            "f = ( fn x -> <OPEN> a <CLOSE> , b )"
+        );
+    }
+
+    #[test]
+    fn line_final_comma_keeps_blocks_left_of_the_next_line() {
+        assert_eq!(
+            layout_of("f = (fn x ->\n    let y =\n      1,\n     y)"),
+            "f = ( fn x -> <OPEN> let y = <OPEN> 1 <CLOSE> , y <CLOSE> )"
+        );
+    }
+
+    #[test]
+    fn line_final_comma_before_a_closing_bracket_closes_every_block_above_the_bracket() {
+        assert_eq!(
+            layout_of("f = [fn x ->\n    x + 1,\n      ]"),
+            "f = [ fn x -> <OPEN> x + 1 <CLOSE> , ]"
+        );
+    }
+
+    #[test]
+    fn line_final_comma_at_the_end_of_the_file_closes_every_block_above_the_bracket() {
+        let (shown, _) = dump("f = (fn x ->\n    x,");
+        assert_eq!(shown, "f = ( fn x -> <OPEN> x <CLOSE> ,");
+    }
+
+    #[test]
+    fn equals_at_the_end_of_a_line_in_a_block_inside_braces_opens_a_block() {
+        assert_eq!(
+            layout_of("x = P { f = fn x ->\n    let y =\n      x\n    y }"),
+            "x = P { f = fn x -> <OPEN> let y = <OPEN> x <CLOSE> <SEP> y <CLOSE> }"
+        );
+    }
+
+    #[test]
+    fn comma_without_a_bracket_changes_nothing() {
+        assert_eq!(
+            layout_of("f =\n  a,\n  b"),
+            "f = <OPEN> a , <SEP> b <CLOSE>"
         );
     }
 }

@@ -255,8 +255,8 @@ pub(super) fn solve(
                 }
             }
             // タプルと `Unit` は、`Eq`、`Ord`、`Show` だけを要素ごとに構造的に持つ
-            TyShape::Record(fields) if structural(program, class) => {
-                for &(_, element) in fields {
+            TyShape::Tuple(elements) if structural(program, class) => {
+                for &element in elements {
                     resolved.push(element);
                     push(class, element);
                 }
@@ -273,7 +273,7 @@ pub(super) fn solve(
             TyShape::Var(_) => {
                 ambiguous.get_or_insert(Failure::Ambiguous { root, class });
             }
-            TyShape::Record(_) | TyShape::Fn { .. } => return Err(no_instance((class, ty))),
+            TyShape::Tuple(_) | TyShape::Fn { .. } => return Err(no_instance((class, ty))),
             // 報告済みの誤りの跡には診断を重ねない
             TyShape::Error => {}
         }

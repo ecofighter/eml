@@ -94,7 +94,7 @@ impl Row {
 #[derive(Debug, Clone)]
 pub(crate) enum TyShape {
     Con(TypeDefId, Vec<Ty>),
-    Record(Vec<(String, Ty)>),
+    Tuple(Vec<Ty>),
     Fn {
         param: Ty,
         lin: ArrowLin,
@@ -119,7 +119,7 @@ impl TyShape {
     pub fn for_each_child<'a>(&'a self, mut f: impl FnMut(Child<'a>)) {
         match self {
             TyShape::Con(_, args) => args.iter().for_each(|&arg| f(Child::Ty(arg))),
-            TyShape::Record(fields) => fields.iter().for_each(|(_, field)| f(Child::Ty(*field))),
+            TyShape::Tuple(elements) => elements.iter().for_each(|element| f(Child::Ty(*element))),
             TyShape::Fn {
                 param,
                 lin: _,
@@ -292,7 +292,7 @@ impl<'c> Table<'c> {
         table.int = table.alloc(TyShape::Con(externs.ty(ExternType::Int), Vec::new()));
         table.string = table.alloc(TyShape::Con(externs.ty(ExternType::String), Vec::new()));
         table.bool = table.alloc(TyShape::Con(lang.bool, Vec::new()));
-        table.unit = table.alloc(TyShape::Record(Vec::new()));
+        table.unit = table.alloc(TyShape::Tuple(Vec::new()));
         table.error = table.alloc(TyShape::Error);
         table
     }
@@ -323,15 +323,9 @@ impl<'c> Table<'c> {
         })
     }
 
-    /// タプルの型。0 から始まる数字ラベルの閉じたレコードである (docs/spec/records.md)。式、パターン、型の注釈の
-    /// どれも同じ形を作る。
+    /// タプルの型 (docs/spec/records.md)。式、パターン、型の注釈のどれも同じ形を作る。
     pub fn tuple(&mut self, elements: Vec<Ty>) -> Ty {
-        let fields = elements
-            .into_iter()
-            .enumerate()
-            .map(|(index, ty)| (index.to_string(), ty))
-            .collect();
-        self.alloc(TyShape::Record(fields))
+        self.alloc(TyShape::Tuple(elements))
     }
 
     pub fn fresh_var(&mut self) -> Ty {

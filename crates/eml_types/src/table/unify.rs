@@ -1,7 +1,7 @@
 use super::*;
 use std::collections::HashSet;
 
-/// 1回の単一化の中で、単一化を終えた複合の型 (型構成子、レコード、関数型) の代表の組。表は部分を共有するので、
+/// 1回の単一化の中で、単一化を終えた複合の型 (型構成子、タプル、関数型) の代表の組。表は部分を共有するので、
 /// 覚えないと同じ組を何度もたどり、型の深さの指数の時間がかかる。もう一度たどっても同じ Kind の制約を同じ由来で
 /// 出すだけなので、飛ばしても結果は変わらない。表は occurs の検査で輪を持たないので、単一化の途中の組をもう一度
 /// 訪れることはない。
@@ -35,10 +35,8 @@ impl Table<'_> {
                 done.insert((a, b));
                 Ok(())
             }
-            (TyShape::Record(xs), TyShape::Record(ys))
-                if xs.len() == ys.len() && xs.iter().zip(&ys).all(|((l, _), (m, _))| l == m) =>
-            {
-                for ((_, x), (_, y)) in xs.iter().zip(&ys) {
+            (TyShape::Tuple(xs), TyShape::Tuple(ys)) if xs.len() == ys.len() => {
+                for (x, y) in xs.iter().zip(&ys) {
                     self.unify_in(*x, *y, done)?;
                 }
                 done.insert((a, b));

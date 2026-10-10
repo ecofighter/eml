@@ -833,8 +833,8 @@ fn a_list_may_end_with_a_comma_and_span_lines() {
     "#);
 }
 
-// 括弧の中で `->` が開いたブロックは、閉じ括弧で初めて閉じる (docs/spec/layout.md の規則 4)。そのため、ブロックを
-// 開く要素は最後に置く。
+// 括弧の中で `->` が開いたブロックは、閉じ括弧で閉じる。その前に行末の `,` があれば、そこで閉じる
+// (docs/spec/layout.md の規則 4)。このテストは、最後の要素が開いたブロックを閉じ括弧で閉じる場合である。
 #[test]
 fn a_list_element_can_open_a_block() {
     let text = lines(&[
@@ -843,6 +843,18 @@ fn a_list_element_can_open_a_block() {
         "    x + 1]",
         "  fs",
     ]);
+    assert_eq!(diagnostics(&text), Vec::<String>::new());
+}
+
+#[test]
+fn an_element_after_a_line_final_comma_may_start_at_the_column_of_the_block() {
+    let text = lines(&["f a b =", "  g (fn x ->", "      a,", "      b)"]);
+    assert_eq!(diagnostics(&text), Vec::<String>::new());
+}
+
+#[test]
+fn a_trailing_comma_before_a_deeper_closing_bracket_closes_the_block() {
+    let text = lines(&["f =", "  [fn x ->", "      x + 1,", "        ]"]);
     assert_eq!(diagnostics(&text), Vec::<String>::new());
 }
 
@@ -884,4 +896,20 @@ fn unclosed_list_pattern_does_not_swallow_the_next_item() {
         diagnostics("f [a\ng = 1 +"),
         ["E0011 1:5 expected `]`", "E0011 2:8 expected an expression"]
     );
+}
+
+#[test]
+fn a_comma_closes_a_block_opened_inside_brackets() {
+    let text = lines(&[
+        "f n =",
+        "  g (fn x ->",
+        "      x + 1,",
+        "    n)",
+        "",
+        "h n =",
+        "  [fn x ->",
+        "    x,",
+        "   fn y -> y]",
+    ]);
+    assert_eq!(diagnostics(&text), Vec::<String>::new());
 }

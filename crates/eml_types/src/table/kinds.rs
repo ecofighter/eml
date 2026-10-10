@@ -2,7 +2,7 @@ use super::*;
 use std::collections::HashSet;
 
 impl Table<'_> {
-    /// 型の Kind の上界の候補。レコードとデータ型の Kind はフィールドの join なので、フィールドごとの境界を並べる
+    /// 型の Kind の上界の候補。タプルとデータ型の Kind は要素とフィールドの join なので、要素とフィールドごとの境界を並べる
     /// (docs/spec/types.md)。データ型では、Kind に効く位置の型引数の境界を並べる。`File` を含むデータ型は定数の `Lin` である。
     /// 境界は最初に現れた順に重複なく並べる。表は部分を共有するので、重複を残すと境界の数が型の深さの指数になる。
     pub fn kind_bounds(&self, ty: Ty) -> Vec<Bound<Linearity>> {
@@ -39,9 +39,9 @@ impl Table<'_> {
                     }
                 }
             }
-            TyShape::Record(fields) => {
-                for (_, field) in fields {
-                    self.push_kind_bounds(*field, bounds);
+            TyShape::Tuple(elements) => {
+                for element in elements {
+                    self.push_kind_bounds(*element, bounds);
                 }
             }
             TyShape::Fn { lin, .. } => bounds.push(match lin {
@@ -169,7 +169,7 @@ impl Table<'_> {
                         push_unique(&mut mult, self.row_multiplicity_var(tail));
                     }
                 }
-                TyShape::Con(_, _) | TyShape::Record(_) | TyShape::Var(_) | TyShape::Error => {}
+                TyShape::Con(_, _) | TyShape::Tuple(_) | TyShape::Var(_) | TyShape::Error => {}
             }
             // 子を前から作業の列に積み、積んだ範囲を裏返す。最初の子から取り出すので、Kind 変数は現れた順に並ぶ
             let first_child = work.len();

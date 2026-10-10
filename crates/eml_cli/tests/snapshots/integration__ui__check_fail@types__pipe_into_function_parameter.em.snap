@@ -3,12 +3,12 @@ source: crates/eml_cli/tests/ui.rs
 expression: rendered
 input_file: tests/ui/check-fail/types/pipe_into_function_parameter.em
 ---
-[E2001] Error: mismatched types
-   ╭─[ check-fail/types/pipe_into_function_parameter.em:6:34 ]
+[E2002] Error: `println` performs `IO`, which this lambda does not allow
+   ╭─[ check-fail/types/pipe_into_function_parameter.em:6:20 ]
    │
  6 │ main () = (fn s -> println s) |> each
-   │                               ─┬ ──┬─  
-   │                                ╰─────── argument 2 of `|>`
-   │                                    │   
-   │                                    ╰─── expected `(String -> <IO | _> Unit) -> <_> _`, found `(String -> Unit) -> <_> Unit`
+   │                    ────┬────  ─┬  
+   │                        ╰────────── this call performs `IO`
+   │                                │  
+   │                                ╰── argument 1 of `|>` does not allow it
 ───╯

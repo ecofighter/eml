@@ -14,6 +14,7 @@ mod lists;
 mod load;
 mod lower;
 mod operators;
+mod records;
 mod scaling;
 mod strings;
 mod structure;

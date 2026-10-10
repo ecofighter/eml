@@ -1,0 +1,16 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: rendered
+input_file: tests/ui/check-fail/linearity/projection_discards.em
+---
+[E3004] Error: the field `log` is discarded, but it holds a linear value
+   ╭─[ check-fail/linearity/projection_discards.em:7:11 ]
+   │
+ 7 │   println job.name
+   │           ────┬───  
+   │               ╰───── this projection leaves the field `log` behind
+   │ 
+   │ Help: take the value apart with a record pattern and pass `log` to `drop`
+   │ 
+   │ Note: linear values, such as files, the continuation of a `once` operation and closures that capture one, must be used exactly once
+───╯

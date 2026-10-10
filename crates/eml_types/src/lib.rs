@@ -19,7 +19,9 @@ mod usage;
 use std::collections::HashMap;
 
 use eml_diagnostics::{Diagnostic, FileId, Label, SourceFiles, TextRange};
-use eml_hir::{EffectId, ExprId, Function, ItemMap, LocalId, PatId, Program, ValueItem};
+use eml_hir::{
+    ConstructorId, EffectId, ExprId, Function, ItemMap, LocalId, PatId, Program, ValueItem,
+};
 use la_arena::ArenaMap;
 
 use crate::kind::problem::KindScheme;
@@ -51,6 +53,8 @@ pub mod codes {
     pub const LINEAR_INSTANCE_HEAD: ErrorCode = ErrorCode(2010);
     pub const METHOD_KIND_MISMATCH: ErrorCode = ErrorCode(2011);
     pub const CONSTRAINED_POLYMORPHIC_RECURSION: ErrorCode = ErrorCode(2012);
+    pub const FIELD_NEEDS_KNOWN_TYPE: ErrorCode = ErrorCode(2013);
+    pub const NO_SUCH_FIELD: ErrorCode = ErrorCode(2014);
     pub const NON_EXHAUSTIVE_MATCH: ErrorCode = ErrorCode(4001);
     pub const NON_EXHAUSTIVE_EQUATION: ErrorCode = ErrorCode(4002);
     pub const REFUTABLE_PATTERN: ErrorCode = ErrorCode(4003);
@@ -100,6 +104,35 @@ pub struct BodyTypes {
     /// 呼び出しの矢印ごとの `mask` (docs/spec/types.md の「推論」)。キーは呼び出しの式と矢印の番号である。
     /// Core IR が、その呼び出しで飛ばすエフェクトとして使う。
     pub masks: HashMap<(ExprId, usize), Vec<EffectId>>,
+    /// 射影 (`ExprKind::Field`) が指すフィールド。型検査が射影の時点の型から引いた結果である
+    /// (docs/spec/types.md の「フィールドの解決」)。
+    pub fields: ArenaMap<ExprId, FieldTarget>,
+    /// 更新 (`ExprKind::Update`) が作り直すコンストラクタとフィールド (docs/spec/types.md の「フィールドの解決」)。
+    pub updates: ArenaMap<ExprId, Update>,
+    /// 射影と更新が捨てるフィールドの番号と型。射影は取り出さない残りのフィールド、更新は上書きされる古いフィールドで
+    /// ある。線形性の検査は、これらを `_` で受けた値と同じに扱う。
+    pub discarded: ArenaMap<ExprId, Vec<(u32, TypeId)>>,
+}
+
+/// 更新が作り直すコンストラクタ。`T` は型検査の中では表の型で、書き出した後は `TypeId` である。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Update<T = TypeId> {
+    pub ctor: ConstructorId,
+    /// 書いたフィールドの宣言の中の番号。ソースの順に並ぶ。
+    pub written: Vec<u32>,
+    /// すべてのフィールドの、型引数で具体化した型。宣言の順に並ぶ。Core IR は、残すフィールドを受ける変数の Repr を
+    /// これで決める。配置の Repr で受けると、型変数のフィールドが `tobj` のまま後のパターンの変数に渡るためである
+    /// (docs/spec/core-ir.md の「変換の規則」)。
+    pub fields: Vec<T>,
+}
+
+/// 射影が指すフィールド。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FieldTarget {
+    /// コンストラクタが1つの `data` の、宣言の中の番号のフィールド。
+    Constructor { ctor: ConstructorId, field: u32 },
+    /// 要素が `arity` 個のタプルの、`index` 番目の要素。
+    Tuple { arity: u32, index: u32 },
 }
 
 /// 1つの参照の具体化。

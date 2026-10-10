@@ -15,7 +15,6 @@ use crate::SyntaxKind::{self, *};
 use crate::codes;
 use crate::parser::{Marker, NESTING_LIMIT, Parser};
 use crate::token_set::TokenSet;
-use eml_diagnostics::{NOT_YET_SUPPORTED, NOT_YET_SUPPORTED_LABEL};
 use scan::Nesting;
 
 pub(crate) fn source_file(p: &mut Parser) {
@@ -202,6 +201,7 @@ fn token_name(kind: SyntaxKind) -> &'static str {
         LEFT_ARROW => "`<-`",
         R_PAREN => "`)`",
         R_BRACK => "`]`",
+        R_BRACE => "`}`",
         INTERP_END => "`}`",
         WHERE_KW => "`where`",
         WITH_KW => "`with`",
@@ -242,19 +242,40 @@ fn describe(p: &Parser) -> String {
     }
 }
 
-fn not_yet_supported(p: &mut Parser, message: &str) {
-    p.error(NOT_YET_SUPPORTED, message, NOT_YET_SUPPORTED_LABEL);
+/// 無名のレコードの形を、中身ごと読み飛ばす。中のフィールドの名前から E1001 や型の誤りを連鎖させないため
+/// (docs/spec/grammar.md の「文法上の補足」)。ノードは作らないので、
+/// 呼び出し側が `ERROR` で包む。
+fn skipped_group(p: &mut Parser, what: &str) {
+    expected(p, what);
+    p.bump(L_BRACE);
+    skip_rest_of_group(p);
 }
 
-/// 中身ごと読み飛ばすのは、S6c のレコードの構文の中で診断を連鎖させないため。ノードは作らないので、呼び出し側が `ERROR` で包む。
 /// 閉じ括弧の種類を見ないのは、レイアウト段と同じ解釈にするため (docs/spec/layout.md の規則 4)。
-fn unsupported_group(p: &mut Parser, message: &str) {
-    not_yet_supported(p, message);
-    p.bump_any();
+fn skip_rest_of_group(p: &mut Parser) {
     skip_to_closing(p);
     if p.current().is_closing_bracket() {
         p.bump_any();
     }
+}
+
+/// `'{' list(item) '}'` の `{` の後から。要素はどれも小文字の名前で始まり、末尾のカンマを許す。`required` なら
+/// 要素が1つ以上要る (更新のフィールド)。
+fn field_list(p: &mut Parser, mut required: bool, item: fn(&mut Parser)) {
+    loop {
+        if !p.at(LIDENT) {
+            if required || !p.at(R_BRACE) {
+                expected(p, "a field");
+            }
+            break;
+        }
+        item(p);
+        required = false;
+        if !p.eat(COMMA) {
+            break;
+        }
+    }
+    close_bracket(p, R_BRACE);
 }
 
 /// 括弧の中身を、対応する閉じ括弧の手前まで読み飛ばす (閉じ括弧は読まない)。範囲の終わりは `Nesting::ends` が決める。
@@ -301,16 +322,18 @@ fn qcon(p: &mut Parser) {
     path(p, TokenSet::new(&[UIDENT]));
 }
 
-/// 修飾名を `PATH` にする。`last` は最後のセグメントになれるトークンで、`.` の後にそれが続く間だけ修飾として読む。
-/// 修飾のセグメントは大文字の名前だけである。
-fn path(p: &mut Parser, last: TokenSet) {
+/// 修飾名を `PATH` にし、最後のセグメントのトークンの種類を返す。`last` は最後のセグメントになれるトークンで、
+/// `.` の後にそれが続く間だけ修飾として読む。修飾のセグメントは大文字の名前だけである。
+fn path(p: &mut Parser, last: TokenSet) -> SyntaxKind {
     let m = p.start();
     while p.at(UIDENT) && p.nth(1) == DOT && last.contains(p.nth(2)) {
         name_ref(p);
         dot(p);
     }
+    let kind = p.current();
     name_ref(p);
     m.complete(p, PATH);
+    kind
 }
 
 /// 今のトークンを1つ読んで `NAME` にする。呼び出し側が名前のトークンにいることを確かめる。
@@ -337,7 +360,7 @@ fn name_ref(p: &mut Parser) {
     m.complete(p, NAME_REF);
 }
 
-/// `.` の前後の空白を禁じるのは、修飾・フィールドアクセスと区別できるようにするため (docs/spec/grammar.md)。
+/// `.` の前後の空白を禁じるのは、修飾・射影と区別できるようにするため (docs/spec/grammar.md)。
 fn dot(p: &mut Parser) {
     if !p.touches_prev() || !p.touches_next() {
         p.error(

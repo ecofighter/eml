@@ -118,6 +118,8 @@ pub enum SyntaxKind {
     EQUATION,
     DATA_ITEM,
     ALT,
+    RECORD_FIELDS,
+    FIELD_DECL,
     TYPE_ITEM,
     EFFECT_ITEM,
     OP_DECL,
@@ -167,6 +169,10 @@ pub enum SyntaxKind {
     LEFT_SECTION,
     RIGHT_SECTION,
     FIELD_SECTION,
+    RECORD_EXPR,
+    /// 作る式と更新のフィールド。省略形 `{ name }` では `=` と式がない。
+    FIELD,
+    UPDATE_EXPR,
 
     WILDCARD_PAT,
     BIND_PAT,
@@ -178,6 +184,8 @@ pub enum SyntaxKind {
     LIST_PAT,
     INFIX_CON_PAT,
     ANNOT_PAT,
+    RECORD_PAT,
+    FIELD_PAT,
 
     PATH_TYPE,
     VAR_TYPE,

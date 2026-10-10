@@ -126,6 +126,14 @@ impl Printer<'_> {
                 self.ty_operand(&def.types, ctor.fields[1])
             );
         }
+        if let Some(names) = &ctor.field_names {
+            let fields: Vec<String> = names
+                .iter()
+                .zip(&ctor.fields)
+                .map(|(name, &field)| format!("{} : {}", name.name, self.ty(&def.types, field)))
+                .collect();
+            return record(&ctor.name, fields);
+        }
         let mut text = ctor.name.clone();
         for &field in &ctor.fields {
             write!(text, " {}", self.ty_atom(&def.types, field)).unwrap();
@@ -162,7 +170,11 @@ impl Printer<'_> {
             {
                 text
             }
-            PatKind::Con { args, .. } if !args.is_empty() => format!("({text})"),
+            PatKind::Con { ctor, args }
+                if !args.is_empty() && self.program[*ctor].field_names.is_none() =>
+            {
+                format!("({text})")
+            }
             _ => text,
         }
     }
@@ -379,6 +391,41 @@ impl Printer<'_> {
                 }
                 s + "\""
             }
+            ExprKind::Record { ctor, fields } => {
+                let constructor = &self.program[*ctor];
+                let fields: Vec<String> = fields
+                    .iter()
+                    .map(|&(index, value)| {
+                        let name = &constructor
+                            .field_names
+                            .as_ref()
+                            .expect("a record constructor")[index as usize]
+                            .name;
+                        format!("{name} = {}", self.expr(body, value, indent))
+                    })
+                    .collect();
+                record(&self.qualified(ctor.module, &constructor.name), fields)
+            }
+            ExprKind::Update { base, fields } => {
+                let fields: Vec<String> = fields
+                    .iter()
+                    .map(|(name, value)| {
+                        format!("{} = {}", name.name, self.expr(body, *value, indent))
+                    })
+                    .collect();
+                format!(
+                    "{{ {} | {} }}",
+                    self.expr(body, *base, indent),
+                    fields.join(", ")
+                )
+            }
+            ExprKind::Field { base, field } => {
+                let base = self.expr(body, *base, indent);
+                match &field.field {
+                    FieldKey::Name(name) => format!("{base}.{name}"),
+                    FieldKey::Index(index) => format!("{base}.{index}"),
+                }
+            }
             ExprKind::Drop(value) => format!("(drop {})", self.expr(body, *value, indent)),
         }
     }
@@ -420,6 +467,19 @@ impl Printer<'_> {
             PatKind::Con { ctor, .. } if *ctor == self.program.lang.nil => "[]".to_string(),
             PatKind::Con { ctor, args } if *ctor == self.program.lang.cons => {
                 self.cons_pat(body, args)
+            }
+            PatKind::Con { ctor, args } if self.program[*ctor].field_names.is_some() => {
+                let constructor = &self.program[*ctor];
+                let names = constructor
+                    .field_names
+                    .as_ref()
+                    .expect("a record constructor");
+                let fields: Vec<String> = names
+                    .iter()
+                    .zip(args)
+                    .map(|(name, &arg)| format!("{} = {}", name.name, self.pat(body, arg)))
+                    .collect();
+                record(&self.qualified(ctor.module, &constructor.name), fields)
             }
             PatKind::Con { ctor, args } => {
                 let bare = &self.program[*ctor].name;
@@ -499,6 +559,15 @@ impl Printer<'_> {
                 format!("{param_text} -> {row}{}", self.ty(types, *ret))
             }
         }
+    }
+}
+
+/// 宣言、作る式、パターンに共通のレコードの形。フィールドがなければ `A {}` と書く。
+fn record(name: &str, fields: Vec<String>) -> String {
+    if fields.is_empty() {
+        format!("{name} {{}}")
+    } else {
+        format!("{name} {{ {} }}", fields.join(", "))
     }
 }
 

@@ -1,0 +1,11 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{stderr}\")"
+input_file: tests/ui/run/records/show.em
+---
+--- stdout ---
+P { name = "a", age = -1 }
+Some P { name = "b", age = 2 }
+A {}
+GT
+--- stderr ---

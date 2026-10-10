@@ -1,4 +1,4 @@
-//! 演算子の参照とセクションを、ラムダに脱糖する (docs/spec/expressions.md の「セクション」)。本体の二項演算は、演算子の
+//! 演算子の参照とセクション、フィールドのセクションを、ラムダに脱糖する (docs/spec/expressions.md の「セクション」)。本体の二項演算は、演算子の
 //! 列の組み直しと同じ `binary` で作るので、`&&` の短絡、中置のコンストラクタ、ユーザーの演算子がそのまま効く。`==` の
 //! instance は、ラムダの本体の参照について型検査が解く。
 
@@ -8,6 +8,7 @@ use eml_syntax::ast::{self, OpSeqElement};
 
 use super::expr::BodyLowering;
 use super::ops::NEGATE_PRECEDENCE;
+use super::record::field_use;
 use crate::codes;
 use crate::def_map::NameRef;
 use crate::hir::*;
@@ -58,6 +59,27 @@ impl BodyLowering<'_> {
             Some(op) => self.section(&op, section.operand(), Hole::Left, range),
             None => self.alloc(ExprKind::Missing, range),
         }
+    }
+
+    /// `(.f)` を `fn $p -> $p.f` に組む。隠れた引数と射影の範囲は、どれもセクション全体である
+    /// (docs/spec/expressions.md の「セクション」)。
+    pub(super) fn lower_field_section(
+        &mut self,
+        section: &ast::FieldSection,
+        range: TextRange,
+    ) -> ExprId {
+        let Some(field) = section.field().and_then(|token| field_use(&token)) else {
+            return self.alloc(ExprKind::Missing, range);
+        };
+        let (pat, base) = self.hidden_param("$p", range);
+        let body = self.alloc(ExprKind::Field { base, field }, range);
+        self.alloc(
+            ExprKind::Lambda(Closure {
+                params: vec![pat],
+                body,
+            }),
+            range,
+        )
     }
 
     /// 被演算子は、spec のとおりラムダを呼ぶたびに評価する。

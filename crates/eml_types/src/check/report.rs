@@ -1,12 +1,13 @@
 use eml_diagnostics::{Diagnostic, FileId, Label, SourceFiles, TextEdit, TextRange, TextSize};
 use eml_hir::{
-    Body, ExprId, ExprKind, FunctionKind, ModuleOrigin, OperationId, PatId, Program, Res, RowRef,
-    Signature, TypeRefKind,
+    Body, ConstructorId, ExprId, ExprKind, FunctionKind, ModuleOrigin, OperationId, PatId, Program,
+    Res, RowRef, Signature, TypeRefKind,
 };
 
 use crate::codes;
 use crate::kind::{
-    CallKind, CarriedInner, CarriedValue, InnerLabel, KindOrigin, KindReason, Span, UnusedPath,
+    CallKind, CarriedInner, CarriedValue, DiscardSite, InnerLabel, KindOrigin, KindReason, Span,
+    UnusedPath,
 };
 use crate::store::TypeStore;
 use crate::table::{Exporter, Label as RowLabel, Row, Ty, UnifyError};
@@ -21,6 +22,12 @@ pub(super) enum Origin {
         /// 診断の文に埋める呼ばれる側の呼び方。`callee_subject` が作る。
         name: String,
         index: usize,
+    },
+    /// 作る式のフィールドの値。フィールドは宣言の中の番号である
+    /// (docs/implementation/diagnostics.md の「番号ごとの出し方」)。
+    Field {
+        ctor: ConstructorId,
+        field: u32,
     },
     Return,
     Annotation(TextRange),
@@ -331,6 +338,14 @@ impl BodyCheck<'_, '_> {
                         *callee,
                         format!("argument {} of {callee_name} does not allow it", index + 1),
                     )),
+                    Origin::Field { ctor, field } => {
+                        let (file, range, text) = self.field_origin(*ctor, *field);
+                        diagnostic.with_secondary(Label::new(
+                            file,
+                            range,
+                            format!("{text} does not allow it"),
+                        ))
+                    }
                     Origin::Annotation(annotation) => diagnostic.with_secondary(Label::new(
                         file,
                         *annotation,
@@ -350,6 +365,23 @@ impl BodyCheck<'_, '_> {
         };
         self.diagnostics.push(diagnostic);
         false
+    }
+
+    /// フィールドの宣言の名前の位置と、「field `name` of `Person`」の言い方。期待する型は宣言に書いてあるので、別の
+    /// モジュールの宣言でもそこを指す。
+    fn field_origin(&self, ctor: ConstructorId, field: u32) -> (FileId, TextRange, String) {
+        let constructor = &self.program[ctor];
+        let declared = &constructor
+            .field_names
+            .as_ref()
+            .expect("a record has named fields")[field as usize];
+        let file = self.program.file(ctor.module);
+        let text = format!(
+            "field `{}` of `{}`",
+            declared.name,
+            self.program.names.constructor(ctor)
+        );
+        (file, declared.range, text)
     }
 
     pub(super) fn mismatch(&mut self, range: TextRange, expected: Ty, found: Ty, origin: &Origin) {
@@ -392,6 +424,10 @@ impl BodyCheck<'_, '_> {
                 *callee,
                 format!("argument {} of {name}", index + 1),
             )),
+            Origin::Field { ctor, field } => {
+                let (file, range, text) = self.field_origin(*ctor, *field);
+                diagnostic.with_secondary(Label::new(file, range, text))
+            }
             Origin::Return => diagnostic.with_secondary(Label::new(
                 file,
                 self.signature_range(),
@@ -484,6 +520,61 @@ pub(super) fn count(n: usize, word: &str) -> String {
 
 const LINEAR_NOTE: &str = "linear values, such as files, the continuation of a `once` operation and closures that capture one, must be used exactly once";
 
+/// 捨てたフィールドの E3004。射影の help は分解のパターンを示すが、セクションの隠れた引数は分解を書けないので
+/// help を付けない (docs/spec/records.md の「線形性の規則」)。
+fn discarded_field(file: FileId, range: TextRange, name: &str, site: DiscardSite) -> Diagnostic {
+    let (message, label, help) = match site {
+        DiscardSite::Pattern => (
+            format!("the field `{name}` is discarded, but it holds a linear value"),
+            format!("this pattern leaves out `{name}`"),
+            Some(format!(
+                "bind `{name}` in the pattern and pass it to `drop`"
+            )),
+        ),
+        DiscardSite::Projection { tuple, section } => {
+            let (field, help) = if tuple {
+                (
+                    format!("the element `{name}`"),
+                    format!(
+                        "take the tuple apart with a pattern and pass element `{name}` to `drop`"
+                    ),
+                )
+            } else {
+                (
+                    format!("the field `{name}`"),
+                    format!(
+                        "take the value apart with a record pattern and pass `{name}` to `drop`"
+                    ),
+                )
+            };
+            (
+                format!("{field} is discarded, but it holds a linear value"),
+                format!("this projection leaves {field} behind"),
+                (!section).then_some(help),
+            )
+        }
+        DiscardSite::Update => (
+            format!(
+                "the old value of the field `{name}` is discarded, but it holds a linear value"
+            ),
+            format!("this update overwrites `{name}`"),
+            Some(format!(
+                "take the old `{name}` out with a record pattern and pass it to `drop`"
+            )),
+        ),
+    };
+    let diagnostic = Diagnostic::error(
+        codes::LINEAR_VALUE_DISCARDED,
+        message,
+        Label::new(file, range, label),
+    )
+    .with_note(LINEAR_NOTE);
+    match help {
+        Some(help) => diagnostic.with_help(help),
+        None => diagnostic,
+    }
+}
+
 /// 線形な値の誤った使い方。破れた Kind の制約の由来から番号と指す場所を決める (docs/implementation/diagnostics.md の
 /// 「線形性の診断」)。表に当たらない由来 (受け渡し、単一化、捕獲) は E3001 にする。
 pub(super) fn linear_misuse(
@@ -573,6 +664,7 @@ pub(super) fn linear_misuse(
         )
         .with_note(LINEAR_NOTE)
         .with_help("bind it to a name and pass the name to `drop`"),
+        KindReason::DiscardedField { name, site } => discarded_field(file, range, name, *site),
         // `return` の節の本体は作れないので、fix は付けない
         KindReason::OmittedReturn { ty } => Diagnostic::error(
             codes::LINEAR_VALUE_DISCARDED,

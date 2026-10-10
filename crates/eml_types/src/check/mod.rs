@@ -18,13 +18,14 @@ use crate::store::{EffectLabel, TypeKind, TypeStore};
 use crate::table::{Exporter, RigidVar, Row, Table, TyShape};
 use crate::ty::Linearity;
 use crate::{
-    BodyTypes, DeclType, Instantiation, TypedProgram, Uniform, carry, codes, exhaustive, scc,
-    uniform, usage,
+    BodyTypes, DeclType, Instantiation, TypedProgram, Uniform, Update, carry, codes, exhaustive,
+    scc, uniform, usage,
 };
 use constraints::{Failure, show_constraint, solve};
 
 mod body;
 mod constraints;
+mod field;
 mod handle;
 mod report;
 
@@ -426,7 +427,7 @@ pub(crate) fn check_body(
     let linear_head = matches!(function.kind, FunctionKind::InstanceMethod(instance, _)
         if context.data_kinds[program[instance].head].lin);
     let reliable = usage::reliable(body, diagnostics.is_empty()) && !linear_head;
-    usage::constrain(file, body, &typing, &mut table, types, reliable);
+    usage::constrain(program, file, body, &typing, &mut table, types, reliable);
     carry::constrain(program, file, body, &typing, &mut table, reliable);
     // 式、局所変数、パターン、具体化の型は表の同じ節点を共有するので、1つの `Exporter` で書き出し、各節点を1回だけ
     // 書き出す
@@ -450,6 +451,26 @@ pub(crate) fn check_body(
             .insert(expr, Instantiation { decl: *decl, args });
     }
     body_types.masks = typing.masks;
+    body_types.fields = typing.fields;
+    for (expr, update) in typing.updates.iter() {
+        let update = Update {
+            ctor: update.ctor,
+            written: update.written.clone(),
+            fields: update
+                .fields
+                .iter()
+                .map(|&ty| exporter.export(ty))
+                .collect(),
+        };
+        body_types.updates.insert(expr, update);
+    }
+    for (expr, discarded) in typing.discarded.iter() {
+        let discarded = discarded
+            .iter()
+            .map(|&(field, ty)| (field, exporter.export(ty)))
+            .collect();
+        body_types.discarded.insert(expr, discarded);
+    }
     let own_vars = OwnVars {
         lin: own.lin,
         mult: own.mult,

@@ -14,9 +14,9 @@ pub fn repr(types: &TypeStore, ty: TypeId, hir: &HirProgram) -> Repr {
         TypeKind::Fn { .. } | TypeKind::Rigid(_) | TypeKind::OpVar(_) | TypeKind::Flexible => {
             Repr::TObj
         }
-        // 空のレコードは `Unit` で、値は `()` である。要素のあるレコード (タプル) はヒープの物体にする
-        TypeKind::Record(fields) if fields.is_empty() => Repr::Unit,
-        TypeKind::Record(_) => Repr::Obj,
+        // 要素のないタプルは `Unit` で、値は `()` である。要素のあるタプルはヒープの物体にする
+        TypeKind::Tuple(elements) if elements.is_empty() => Repr::Unit,
+        TypeKind::Tuple(_) => Repr::Obj,
         TypeKind::Error => Repr::Unit,
     }
 }

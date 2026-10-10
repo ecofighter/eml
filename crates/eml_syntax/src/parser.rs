@@ -366,7 +366,7 @@ pub(crate) struct CompletedMarker {
 }
 
 impl CompletedMarker {
-    /// 左辺を読んだ後で、それを子に持つノード (演算子の列、フィールドアクセスなど) を作るのに使う。
+    /// 左辺を読んだ後で、それを子に持つノード (演算子の列、射影など) を作るのに使う。
     pub(crate) fn precede(self, p: &mut Parser) -> Marker {
         let parent = p.start();
         match &mut p.events[self.pos as usize] {

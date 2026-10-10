@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use eml_diagnostics::{Diagnostic, FileId, Label, TextRange};
 use eml_syntax::{SyntaxKind, SyntaxToken, ast};
 use la_arena::{Arena, ArenaMap};
@@ -30,6 +32,8 @@ pub(super) struct BodyLowering<'a> {
     pub(super) pats: Arena<Pat>,
     locals: Arena<Local>,
     pub(super) continuations: ArenaMap<LocalId, usize>,
+    pub(super) omitted_fields: ArenaMap<PatId, (ConstructorId, u32)>,
+    use_lambdas: HashSet<ExprId>,
     /// 内側の束縛ほど後ろにある。後の `let` が前の同じ名前を隠す (docs/spec/expressions.md)。
     pub(super) scope: Vec<(String, LocalId)>,
     /// 今変換しているパターンの組が `scope` に積み始めた位置。組の中で同じ名前を2回束縛したら E1017 にする。
@@ -75,6 +79,8 @@ impl<'a> BodyLowering<'a> {
             pats: Arena::new(),
             locals: Arena::new(),
             continuations: ArenaMap::default(),
+            omitted_fields: ArenaMap::default(),
+            use_lambdas: HashSet::new(),
             scope: Vec::new(),
             group_start: 0,
         }
@@ -102,6 +108,8 @@ impl<'a> BodyLowering<'a> {
             types: self.types,
             has_errors: self.diagnostics.len() > reported,
             continuations: self.continuations,
+            omitted_fields: self.omitted_fields,
+            use_lambdas: self.use_lambdas,
         }
     }
 
@@ -312,7 +320,7 @@ impl<'a> BodyLowering<'a> {
                 )
             }
             ast::Expr::DropExpr(e) => self.lower_drop(&e, range),
-            ast::Expr::FieldExpr(_) => self.unsupported(range, "field access is not supported yet"),
+            ast::Expr::FieldExpr(field) => self.lower_field_expr(&field, range),
             ast::Expr::ListExpr(list) => {
                 let elements = list
                     .elements()
@@ -336,7 +344,9 @@ impl<'a> BodyLowering<'a> {
             ast::Expr::OpRef(op_ref) => self.lower_op_ref(&op_ref, range),
             ast::Expr::LeftSection(section) => self.lower_left_section(&section, range),
             ast::Expr::RightSection(section) => self.lower_right_section(&section, range),
-            ast::Expr::FieldSection(_) => self.unsupported(range, "sections are not supported yet"),
+            ast::Expr::FieldSection(section) => self.lower_field_section(&section, range),
+            ast::Expr::RecordExpr(record) => self.lower_record(&record, range),
+            ast::Expr::UpdateExpr(update) => self.lower_update(&update, range),
         }
     }
 
@@ -345,6 +355,24 @@ impl<'a> BodyLowering<'a> {
         let Some(at) = name.at(range) else {
             return self.alloc(ExprKind::Missing, range);
         };
+        let kind = if name
+            .token()
+            .is_some_and(|token| token.kind() == SyntaxKind::UIDENT)
+        {
+            NameKind::Constructor
+        } else {
+            NameKind::Value
+        };
+        self.lower_name(&at, kind, range)
+    }
+
+    /// 値の名前を引いた参照。`kind` は見つからないときの診断の言い方である。
+    pub(super) fn lower_name(
+        &mut self,
+        at: &NameUse<'_>,
+        kind: NameKind,
+        range: TextRange,
+    ) -> ExprId {
         // 局所の束縛は、修飾しない名前だけが引く (docs/spec/modules.md の「名前の解決」)
         let local = match at.name {
             NameRef::Plain(text) => self
@@ -360,16 +388,8 @@ impl<'a> BodyLowering<'a> {
             None => match self.items.value(at.name) {
                 Resolved::Found(item) => Res::Item(item),
                 other => {
-                    let kind = if name
-                        .token()
-                        .is_some_and(|token| token.kind() == SyntaxKind::UIDENT)
-                    {
-                        NameKind::Constructor
-                    } else {
-                        NameKind::Value
-                    };
                     self.diagnostics
-                        .extend(unresolved(&self.items, self.file, kind, &at, other));
+                        .extend(unresolved(&self.items, self.file, kind, at, other));
                     return self.alloc(ExprKind::Missing, range);
                 }
             },
@@ -500,6 +520,7 @@ impl<'a> BodyLowering<'a> {
             }),
             wrapped,
         );
+        self.use_lambdas.insert(lambda);
         self.call(callee, vec![lambda], wrapped)
     }
 
@@ -534,7 +555,11 @@ impl<'a> BodyLowering<'a> {
         id
     }
 
-    fn lower_pat_in_group(&mut self, pat: Option<ast::Pat>, fallback: TextRange) -> PatId {
+    pub(super) fn lower_pat_in_group(
+        &mut self,
+        pat: Option<ast::Pat>,
+        fallback: TextRange,
+    ) -> PatId {
         let Some(pat) = pat else {
             return self.pats.alloc(Pat {
                 kind: PatKind::Missing,
@@ -544,22 +569,7 @@ impl<'a> BodyLowering<'a> {
         let range = pat.range();
         let kind = match pat {
             ast::Pat::BindPat(bind) => match bind.name().map(|name| name.token()) {
-                Some(name) => {
-                    let name = name.text().to_string();
-                    if let Some(&(_, first)) = self.scope[self.group_start..]
-                        .iter()
-                        .find(|(bound, _)| *bound == name)
-                    {
-                        let first = self.locals[first].range;
-                        self.duplicate_binding(&name, first, range);
-                    }
-                    let local = self.locals.alloc(Local {
-                        name: name.clone(),
-                        range,
-                    });
-                    self.scope.push((name, local));
-                    PatKind::Bind(local)
-                }
+                Some(name) => self.bind(name.text().to_string(), range),
                 None => PatKind::Missing,
             },
             ast::Pat::WildcardPat(_) => PatKind::Wildcard,
@@ -610,8 +620,26 @@ impl<'a> BodyLowering<'a> {
                 let pat = self.lower_pat_in_group(annot.pat(), range);
                 PatKind::Annot { pat, ty }
             }
+            ast::Pat::RecordPat(record) => return self.lower_record_pat(&record, range),
         };
         self.pats.alloc(Pat { kind, range })
+    }
+
+    /// 変数を今の組に束縛する。組の中で同じ名前を2回束縛したら E1017 にする。
+    pub(super) fn bind(&mut self, name: String, range: TextRange) -> PatKind {
+        if let Some(&(_, first)) = self.scope[self.group_start..]
+            .iter()
+            .find(|(bound, _)| *bound == name)
+        {
+            let first = self.locals[first].range;
+            self.duplicate_binding(&name, first, range);
+        }
+        let local = self.locals.alloc(Local {
+            name: name.clone(),
+            range,
+        });
+        self.scope.push((name, local));
+        PatKind::Bind(local)
     }
 
     /// `[p1, …, pn]` を `p1 :: (… (pn :: Nil))` に組む。コンストラクタは名前を引かずに Prelude のものを指す

@@ -559,7 +559,7 @@ fn a_duplicate_in_one_module_counts_once() {
 }
 
 #[test]
-fn a_user_unit_qualifies_the_empty_record() {
+fn a_user_unit_qualifies_the_empty_tuple() {
     let lowered = eml_test_support::lower("data Unit = | U");
     assert_eq!(
         shown_names(&lowered),

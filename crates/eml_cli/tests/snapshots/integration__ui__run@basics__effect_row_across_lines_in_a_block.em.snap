@@ -1,0 +1,8 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{stderr}\")"
+input_file: tests/ui/run/basics/effect_row_across_lines_in_a_block.em
+---
+--- stdout ---
+ok
+--- stderr ---

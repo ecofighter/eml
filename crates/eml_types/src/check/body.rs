@@ -8,12 +8,12 @@ use eml_hir::{
 };
 use la_arena::ArenaMap;
 
-use crate::codes;
 use crate::kind::problem::Instance;
 use crate::kind::{KindOrigin, KindReason, Provenance, Span};
 use crate::shape::{Instantiated, Rigids, lower_type};
 use crate::store::TypeStore;
 use crate::table::{Row, Table, Tail, Ty, TyShape, UnifyError};
+use crate::{FieldTarget, Update, codes};
 
 use super::Signatures;
 use super::report::{AmbientSource, Origin, callee_subject};
@@ -47,6 +47,12 @@ pub(crate) struct BodyTyping {
     /// 呼び出しの矢印ごとの `mask`。キーは呼び出しの式と矢印の番号である。空の `mask` は入れない
     /// (docs/spec/types.md の「推論」)。
     pub masks: HashMap<(ExprId, usize), Vec<EffectId>>,
+    /// 射影が指すフィールド。
+    pub fields: ArenaMap<ExprId, FieldTarget>,
+    /// 更新が作り直すコンストラクタとフィールド。
+    pub updates: ArenaMap<ExprId, Update<Ty>>,
+    /// 射影と更新が捨てるフィールドの番号と型。使用回数のパスが `_` で受けた値と同じく `Unr` の制約を出す。
+    pub discarded: ArenaMap<ExprId, Vec<(u32, Ty)>>,
 }
 
 pub(super) struct BodyCheck<'a, 'c> {
@@ -75,6 +81,19 @@ pub(super) struct BodyCheck<'a, 'c> {
 pub(super) enum Expectation {
     Has(Ty, Origin),
     None,
+}
+
+/// 呼び出しで後に回したラムダの引数 (引数、矢印の引数の型、由来) と、後に回した矢印の row (引数の番号、row)。
+#[derive(Default)]
+struct Postponed {
+    lambdas: Vec<(ExprId, Ty, Origin)>,
+    rows: Vec<(usize, Row)>,
+}
+
+impl Postponed {
+    fn is_empty(&self) -> bool {
+        self.lambdas.is_empty() && self.rows.is_empty()
+    }
 }
 
 /// 関数型として見たときの最初の矢印。
@@ -213,6 +232,10 @@ impl BodyCheck<'_, '_> {
                     self.expect(expr.range, expected, found, &origin);
                 }
             },
+            ExprKind::Call { callee, args, .. } => {
+                let found = self.call(id, *callee, args, Expectation::Has(expected, origin));
+                self.typing.exprs.insert(id, found);
+            }
             ExprKind::Lambda(Closure {
                 params,
                 body: lambda_body,
@@ -269,6 +292,37 @@ impl BodyCheck<'_, '_> {
         list
     }
 
+    /// 作る式。コンストラクタを参照と同じく具体化し、矢印を剥がしてフィールドの型を宣言の順に得る。フィールドの式は
+    /// 書いた順に、そのフィールドの型に対して検査する。結果の型は位置のコンストラクタの呼び出しと同じである
+    /// (docs/spec/types.md の「フィールドの解決」)。
+    fn record(
+        &mut self,
+        id: ExprId,
+        ctor: ConstructorId,
+        fields: &[(u32, ExprId)],
+        range: TextRange,
+    ) -> Ty {
+        let mut ty = self.path(id, Res::Item(ValueItem::Constructor(ctor)), range, false);
+        let mut declared = Vec::new();
+        for _ in &self.program[ctor].fields {
+            match self.table.shape(ty).clone() {
+                TyShape::Fn { param, ret, .. } => {
+                    declared.push(param);
+                    ty = ret;
+                }
+                _ => declared.push(self.table.error),
+            }
+        }
+        for &(field, value) in fields {
+            self.check_expr(
+                value,
+                declared[field as usize],
+                Origin::Field { ctor, field },
+            );
+        }
+        ty
+    }
+
     pub(super) fn infer_expr(&mut self, id: ExprId) -> Ty {
         let body = self.body;
         let expr = &body.exprs[id];
@@ -286,7 +340,7 @@ impl BodyCheck<'_, '_> {
             ExprKind::Literal(Literal::String(_)) => self.table.string,
             ExprKind::Literal(Literal::Unit) => self.table.unit,
             ExprKind::Path(res) => self.path(id, *res, expr.range, true),
-            ExprKind::Call { callee, args, .. } => self.call(id, *callee, args),
+            ExprKind::Call { callee, args, .. } => self.call(id, *callee, args, Expectation::None),
             ExprKind::If {
                 condition,
                 then_branch,
@@ -325,6 +379,9 @@ impl BodyCheck<'_, '_> {
                 self.table.tuple(fields)
             }
             ExprKind::List(elements) => self.list(expr.range, elements),
+            ExprKind::Record { ctor, fields } => self.record(id, *ctor, fields, expr.range),
+            ExprKind::Update { base, fields } => self.update(id, *base, fields),
+            ExprKind::Field { base, field } => self.projection(id, *base, field),
             // 各穴は `display e` の呼び出しで、`String` を返す。穴の式の型には、`display` の参照が `Show` の制約を付ける
             // (docs/spec/expressions.md の「補間」)
             ExprKind::Interpolation(segments) => {
@@ -460,7 +517,7 @@ impl BodyCheck<'_, '_> {
 
     /// トップレベルの値を参照するたびに、宣言の型の形を具体化する。呼び出し先の Kind の制約は複写せず、Kind の具体化の
     /// 記録を残して段2で展開する (docs/spec/types.md の「推論」)。シグネチャがなければ `None` である。
-    fn instantiate(&mut self, decl: ValueItem) -> Option<(Ty, Vec<Ty>)> {
+    pub(super) fn instantiate(&mut self, decl: ValueItem) -> Option<(Ty, Vec<Ty>)> {
         let shape = self.signatures.get(decl)?;
         let Instantiated {
             ty,
@@ -563,7 +620,17 @@ impl BodyCheck<'_, '_> {
 
     /// 等式と同じく、引数を1つ受けるごとに型の矢印を1つたどる。たどった矢印の row はすべて今の row に含まれなければ
     /// ならない。矢印が余れば部分適用で、残りの関数型が値の型になる (docs/spec/expressions.md の「関数適用」)。
-    fn call(&mut self, id: ExprId, callee: ExprId, args: &[ExprId]) -> Ty {
+    ///
+    /// 引数のラムダは、ほかの引数の後に検査する。`map (.name) people` で、ラムダの引数の型を `people` から決めるため
+    /// である。期待する型があれば、結果の型をその型と合わせる (docs/spec/types.md
+    /// の「引数のラムダを後で検査する」)。
+    fn call(
+        &mut self,
+        id: ExprId,
+        callee: ExprId,
+        args: &[ExprId],
+        expectation: Expectation,
+    ) -> Ty {
         let body = self.body;
         let callee_expr = &body.exprs[callee];
         let name = callee_subject(self.program, body, callee);
@@ -585,47 +652,53 @@ impl BodyCheck<'_, '_> {
         };
         let mut arrows = Vec::new();
         let mut results = Vec::new();
+        let mut postponed = Postponed::default();
         // 1回の呼び出しの E2002 は、どの引数の矢印で起きても1つだけ報告する
         let mut reported = false;
+        let argument = |index| Origin::Argument {
+            callee: callee_expr.range,
+            name: name.clone(),
+            index,
+        };
         for (index, &arg) in args.iter().enumerate() {
+            let origin = argument(index);
+            // 呼ばれる側の型が変数なら、`next_arrow` がそれを新しい関数型に決める前に、後に回したラムダを検査する。
+            // その変数を決めるのはラムダかもしれないためである (`apply (fn x -> x) 1 2`)
+            if !postponed.is_empty() && matches!(self.table.shape(ty), TyShape::Var(_)) {
+                self.check_postponed(&mut postponed, id, &name, &mut reported);
+            }
             match self.next_arrow(ty) {
                 Arrow::Fn { param, row, ret } => {
                     arrows.push(row.clone());
                     results.push(ret);
-                    let origin = Origin::Argument {
-                        callee: callee_expr.range,
-                        name: name.clone(),
-                        index,
-                    };
-                    self.check_expr(arg, param, origin);
-                    let ok = self.include_call_row(
-                        row,
-                        (id, index),
-                        body.exprs[id].range,
-                        &name,
-                        !reported,
-                    );
-                    reported |= !ok;
+                    if self.postponable(arg) {
+                        postponed.lambdas.push((arg, param, origin));
+                        postponed.rows.push((index, row));
+                    } else {
+                        self.check_expr(arg, param, origin);
+                        // ラムダを後に回した後は、row を引数の順に入れるため、この row も後に回す
+                        if postponed.is_empty() {
+                            self.include_arg_row(row, id, index, &name, &mut reported);
+                        } else {
+                            postponed.rows.push((index, row));
+                        }
+                    }
                     ty = ret;
                 }
                 Arrow::Error => {
-                    self.infer_expr(arg);
+                    self.check_postponed(&mut postponed, id, &name, &mut reported);
+                    self.check_against_error(arg, origin);
                 }
                 Arrow::NotFunction => {
                     let diagnostic = self.call_arity_error(&name, index, args.len(), arg);
                     self.diagnostics.push(diagnostic);
-                    for &rest in &args[index..] {
-                        self.infer_expr(rest);
+                    self.check_postponed(&mut postponed, id, &name, &mut reported);
+                    for (rest_index, &rest) in args.iter().enumerate().skip(index) {
+                        self.check_against_error(rest, argument(rest_index));
                     }
-                    self.typing.calls.insert(
-                        id,
-                        CallRows::Call {
-                            arrows,
-                            results,
-                            performs,
-                        },
-                    );
-                    return self.table.error;
+                    // 期待する型を `Error` と合わせ、外側の呼び出しに誤りを連鎖させないため、下の共通の後始末を通る
+                    ty = self.table.error;
+                    break;
                 }
             }
         }
@@ -641,7 +714,71 @@ impl BodyCheck<'_, '_> {
         if opened_later {
             ty = self.table.open_spine(ty);
         }
+        let range = body.exprs[id].range;
+        let expectation = if postponed.is_empty() {
+            expectation
+        } else {
+            // `people |> map (.name)` では、期待する型が `map` の型変数を決めてから、ラムダを検査する
+            if let Expectation::Has(expected, origin) = expectation {
+                self.expect(range, expected, ty, &origin);
+            }
+            self.check_postponed(&mut postponed, id, &name, &mut reported);
+            Expectation::None
+        };
+        if let Expectation::Has(expected, origin) = expectation {
+            self.expect(range, expected, ty, &origin);
+        }
         ty
+    }
+
+    /// 後に回す引数か。`use` が組んだラムダは後に回さない。`use` のブロックの型の誤りを、シグネチャを指す今の報告の
+    /// まま保つためである (docs/spec/types.md の「引数のラムダを後で検査する」)。
+    fn postponable(&self, arg: ExprId) -> bool {
+        matches!(self.body.exprs[arg].kind, ExprKind::Lambda(_))
+            && !self.body.use_lambdas.contains(&arg)
+    }
+
+    /// 後に回したラムダを左から検査し、後に回した row を引数の順に今の row に入れる。ラムダの本体が row 変数を決めて
+    /// から row を入れるため、この順にする (`try (fn () -> deploy ())`)。ラムダは、後に回したときの矢印の引数の型に
+    /// 対して検査する。後の引数で呼び出しが誤りになっても同じである。ラムダの型は誤りより前の矢印で決まっているので、
+    /// ラムダの中の誤りを、ラムダを後に回さないときと同じく報告するためである。
+    fn check_postponed(
+        &mut self,
+        postponed: &mut Postponed,
+        call: ExprId,
+        name: &str,
+        reported: &mut bool,
+    ) {
+        for (arg, param, origin) in std::mem::take(&mut postponed.lambdas) {
+            self.check_expr(arg, param, origin);
+        }
+        for (index, row) in std::mem::take(&mut postponed.rows) {
+            self.include_arg_row(row, call, index, name, reported);
+        }
+    }
+
+    fn include_arg_row(
+        &mut self,
+        row: Row,
+        call: ExprId,
+        index: usize,
+        name: &str,
+        reported: &mut bool,
+    ) {
+        let range = self.body.exprs[call].range;
+        let ok = self.include_call_row(row, (call, index), range, name, !*reported);
+        *reported |= !ok;
+    }
+
+    /// 矢印に当たらない、型の壊れた呼び出しの引数。ラムダは `Error` の型に対して検査し、引数を `Error` で束縛する。
+    /// 推論すると引数に新しい変数が付き、射影の E2013 が連鎖するためである。
+    fn check_against_error(&mut self, arg: ExprId, origin: Origin) {
+        if matches!(self.body.exprs[arg].kind, ExprKind::Lambda(_)) {
+            let error = self.table.error;
+            self.check_expr(arg, error, origin);
+        } else {
+            self.infer_expr(arg);
+        }
     }
 
     /// `check` の間だけ今の row とその由来を替え、終わったら戻す。ラムダの本体は、外側の関数ではなく、ラムダで最後に

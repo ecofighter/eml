@@ -81,4 +81,7 @@ pub mod codes {
     pub const SUPERCLASS_CYCLE: ErrorCode = ErrorCode(1042);
     pub const CLASS_AS_TYPE: ErrorCode = ErrorCode(1043);
     pub const RESERVED_CONSTRUCTOR: ErrorCode = ErrorCode(1044);
+    pub const DUPLICATE_FIELD: ErrorCode = ErrorCode(1045);
+    pub const UNKNOWN_FIELD: ErrorCode = ErrorCode(1046);
+    pub const MISSING_FIELDS: ErrorCode = ErrorCode(1047);
 }

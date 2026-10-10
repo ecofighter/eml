@@ -144,6 +144,34 @@ pub(crate) enum KindReason {
         /// 状態の型。ラベルに出す。表示するのは破れた制約を報告するときだけである。
         ty: TypeId,
     },
+    /// レコードのパターンに書かなかったフィールドと、射影と更新が捨てるフィールド。由来の範囲は、パターン全体か、射影か
+    /// 更新の式である。書き手の `_` と区別して、フィールドの名前で報告する
+    /// (docs/implementation/diagnostics.md の「線形性の診断」)。
+    DiscardedField { name: String, site: DiscardSite },
+}
+
+/// フィールドを捨てた式の種類。E3004 の言い方と help を変える。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DiscardSite {
+    /// レコードのパターンに書かなかった。
+    Pattern,
+    /// 射影が取り出さなかった残り。タプルの要素なら `tuple` が真である。セクションから組んだラムダの中では、隠れた
+    /// 引数の分解を書けないので help を付けない (`section` が真)。
+    Projection { tuple: bool, section: bool },
+    /// 更新が上書きした古い値。
+    Update,
+}
+
+impl DiscardSite {
+    fn order_key(self) -> u32 {
+        match self {
+            DiscardSite::Pattern => 0,
+            DiscardSite::Projection { tuple, section } => {
+                1 + u32::from(tuple) * 2 + u32::from(section)
+            }
+            DiscardSite::Update => 5,
+        }
+    }
 }
 
 impl KindReason {
@@ -200,6 +228,9 @@ impl KindReason {
                 10,
                 vec![KeyPart::Text(types.display(*ty, names).to_string())],
             ),
+            KindReason::DiscardedField { name, site } => {
+                (11, vec![text(name), number(site.order_key())])
+            }
         }
     }
 }
@@ -505,6 +536,18 @@ mod tests {
             through(Some(inner(a, 5, InnerLabel::Value))),
             KindReason::OmittedReturn { ty: file },
             KindReason::OmittedReturn { ty: types.string() },
+            KindReason::DiscardedField {
+                name: "log".to_string(),
+                site: DiscardSite::Pattern,
+            },
+            KindReason::DiscardedField {
+                name: "log".to_string(),
+                site: DiscardSite::Update,
+            },
+            KindReason::DiscardedField {
+                name: "name".to_string(),
+                site: DiscardSite::Pattern,
+            },
         ]
     }
 }

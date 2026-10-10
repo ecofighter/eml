@@ -13,6 +13,7 @@ mod linearity;
 mod lists;
 mod masks;
 mod modules;
+mod records;
 mod rows;
 mod scaling;
 mod strings;

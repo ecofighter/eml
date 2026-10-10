@@ -687,7 +687,7 @@ fn type_vars(signature: Option<&Signature>) -> Vec<String> {
 }
 
 /// `ty` に現れる `names` の型変数 (番号ごとの真偽)。`substitute` がたどる位置 (型構成子の引数、関数型の引数と結果と
-/// エフェクトの型引数、レコードとタプルの要素) を見る。結果を `memo` に覚え、共有された型は1回だけたどる。
+/// エフェクトの型引数、タプルの要素) を見る。結果を `memo` に覚え、共有された型は1回だけたどる。
 fn vars_in(
     types: &TypeStore,
     ty: TypeId,
@@ -721,9 +721,9 @@ fn vars_in(
                 merge(vars_in(types, arg, names, memo));
             }
         }
-        TypeKind::Record(fields) => {
-            for &(_, field) in fields {
-                merge(vars_in(types, field, names, memo));
+        TypeKind::Tuple(elements) => {
+            for &element in elements {
+                merge(vars_in(types, element, names, memo));
             }
         }
         TypeKind::Fn {

@@ -1,0 +1,16 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: rendered
+input_file: tests/ui/check-fail/linearity/omitted_field.em
+---
+[E3004] Error: the field `log` is discarded, but it holds a linear value
+   ╭─[ check-fail/linearity/omitted_field.em:8:7 ]
+   │
+ 8 │     | Job { name } -> println name
+   │       ──────┬─────  
+   │             ╰─────── this pattern leaves out `log`
+   │ 
+   │ Help: bind `log` in the pattern and pass it to `drop`
+   │ 
+   │ Note: linear values, such as files, the continuation of a `once` operation and closures that capture one, must be used exactly once
+───╯
