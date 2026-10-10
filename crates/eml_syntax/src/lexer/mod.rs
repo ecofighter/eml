@@ -100,8 +100,8 @@ enum Raw {
 /// (docs/spec/lexical.md の「モードのスタック」)。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Mode {
-    /// `braces` は開いている `{` の数で、穴の閉じを見分けるために穴の中でだけ使う。`hole` は穴の `\{` の位置で、
-    /// 閉じていない穴の診断に使う。
+    /// `braces` は穴の中で開いている `{` の数で、穴を閉じる `}` を見分けるために数える。底では `}` がモードを変えない
+    /// ので数えず、いつも 0 である。`hole` は穴の `\{` の位置で、閉じていない穴の診断に使う。
     Code {
         braces: u32,
         hole: Option<usize>,
@@ -397,7 +397,11 @@ impl Lexer<'_> {
             Ok(Raw::LBrack) => L_BRACK,
             Ok(Raw::RBrack) => R_BRACK,
             Ok(Raw::LBrace) => {
-                if let Some(Mode::Code { braces, .. }) = self.modes.last_mut() {
+                if let Some(Mode::Code {
+                    braces,
+                    hole: Some(_),
+                }) = self.modes.last_mut()
+                {
                     *braces += 1;
                 }
                 L_BRACE
@@ -411,8 +415,11 @@ impl Lexer<'_> {
                     self.modes.pop();
                     return;
                 }
-                Some(Mode::Code { braces, .. }) => {
-                    *braces = braces.saturating_sub(1);
+                Some(Mode::Code {
+                    braces,
+                    hole: Some(_),
+                }) => {
+                    *braces -= 1;
                     R_BRACE
                 }
                 _ => R_BRACE,

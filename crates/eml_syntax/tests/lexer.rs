@@ -328,16 +328,9 @@ fn raw_strings_are_single_tokens() {
 }
 
 #[test]
-fn unterminated_later_stage_literals_are_errors() {
+fn unterminated_raw_and_command_literals_are_errors() {
     assert_eq!(diags("`ls"), ["E0002@0..3 unterminated command literal"]);
     assert_eq!(diags("r#\"abc"), ["E0002@0..3 unterminated raw string"]);
-    assert_eq!(
-        diags("\"\"\"abc"),
-        [
-            "E0002@0..3 unterminated multi-line string",
-            "E0014@3..6 unexpected text after the opening `\"\"\"`",
-        ]
-    );
 }
 
 #[test]

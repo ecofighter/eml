@@ -9,5 +9,7 @@ first
 
 tab	here """quoted"""
 
+Hello, eml!
+  indented line
 after
 --- stderr ---

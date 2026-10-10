@@ -126,12 +126,16 @@ pub(crate) fn layout(file: FileId, text: &str, tokens: &[Token]) -> (Vec<Token>,
                 stack.push(Context::Interp);
             }
             INTERP_END => {
-                // 穴の中で閉じ忘れた括弧とブロックも、ここで閉じる
-                while let Some(context) = stack.pop() {
-                    match context {
-                        Context::Block { .. } => out.push(virtual_token(LAYOUT_CLOSE, start)),
-                        Context::Bracket => {}
-                        Context::Interp => break,
+                // 穴の中で閉じ忘れた括弧とブロックも、ここで閉じる。lexer はどの `INTERP_END` にも対応する
+                // `INTERP_START` を出すので `Interp` は必ずあり、穴の外の文脈 (底のブロックを含む) は取り除かない
+                // (docs/spec/lexical.md の「モードのスタック」)
+                let hole = stack.iter().rposition(|c| *c == Context::Interp);
+                debug_assert!(hole.is_some(), "an INTERP_END without an open hole");
+                if let Some(hole) = hole {
+                    for context in stack.drain(hole..) {
+                        if let Context::Block { .. } = context {
+                            out.push(virtual_token(LAYOUT_CLOSE, start));
+                        }
                     }
                 }
                 out.push(item.token);
