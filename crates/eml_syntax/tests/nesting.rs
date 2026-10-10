@@ -198,3 +198,20 @@ fn a_list_expression_does_not_count_its_elements() {
     let text = format!("x = [{}]", items.join(", "));
     assert_eq!(diagnostics(&text), Vec::<String>::new());
 }
+
+fn nested(open: &str, close: &str, depth: usize) -> String {
+    format!("x = {}1{}", open.repeat(depth), close.repeat(depth))
+}
+
+/// `[` は括弧と同じく1段に数える (docs/spec/grammar.md の「文法上の補足」)。どちらも、`x = ` の式の1段と
+/// 中の `1` の演算子の列の1段を足して、上限の 256 に届く。
+#[test]
+fn a_nested_list_expression_counts_each_bracket_as_one_level() {
+    for (open, close) in [("(", ")"), ("[", "]")] {
+        assert_eq!(diagnostics(&nested(open, close, 254)), Vec::<String>::new());
+        assert_eq!(
+            diagnostics(&nested(open, close, 255)),
+            ["E0013 1:260 nesting is too deep"]
+        );
+    }
+}

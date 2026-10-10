@@ -330,12 +330,19 @@ fn at_qvar(p: &Parser) -> bool {
     p.peek(n) == LIDENT
 }
 
-/// 要素は `expr` で読むので、`if` や `fn` も括弧なしで書ける。`[` の1段は `expr` が数える。
+/// 要素は `expr` として読むので、`if` や `fn` も括弧なしで書ける。`[` は括弧と同じく1段に数える
+/// (docs/spec/grammar.md の「文法上の補足」)。そのため、`paren_expr` と同じく、`expr` の形で始まらない要素は
+/// `op_expr` で直接読み、`expr` の段を重ねない。
 fn list_expr(p: &mut Parser) -> SyntaxKind {
     p.bump(L_BRACK);
     if !p.at(R_BRACK) {
         loop {
-            if !expr(p) {
+            let read = if p.at_ts(EXPR_FORMS) {
+                expr(p)
+            } else {
+                op_expr(p, false) != OpExpr::Nothing
+            };
+            if !read {
                 expected(p, "an expression");
                 break;
             }
