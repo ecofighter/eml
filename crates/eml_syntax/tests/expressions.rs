@@ -833,8 +833,8 @@ fn a_list_may_end_with_a_comma_and_span_lines() {
     "#);
 }
 
-// 括弧の中で `->` が開いたブロックは、閉じ括弧で初めて閉じる (docs/spec/layout.md の規則 4)。そのため、ブロックを
-// 開く要素は最後に置く。
+// 括弧の中で `->` が開いたブロックは、閉じ括弧で閉じる。その前に行末の `,` があれば、そこで閉じる
+// (docs/spec/layout.md の規則 4)。このテストは、最後の要素が開いたブロックを閉じ括弧で閉じる場合である。
 #[test]
 fn a_list_element_can_open_a_block() {
     let text = lines(&[
