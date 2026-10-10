@@ -175,7 +175,7 @@ show_rest acc (x :: rest) = show_rest (acc ++ ", " ++ show x) rest
   | `eml_hir` | `def_map::prelude_fixities_follow_the_standard_table` | `::` の fixity が `infixr 5` になる |
   | `eml_hir` | `data::match_arms_and_constructor_patterns`、`data::data_declarations_become_items`、`tuples::literal_patterns_include_negative_numbers_and_strings` | 名前の修飾 |
   | `eml_hir` | `operators::unknown_and_unsupported_operators_and_missing_operands` | `::` の E0004 がなくなる |
-  | `eml_hir` | `data::infix_constructors_and_a_declared_cons`、`lower::a_user_defined_cons_constructor_is_matched` | ユーザーのモジュールで `::` を宣言するので、E1044 が1件出る。どちらも E1044 のほかに診断を出さず、宣言した `::` で組み、照合することを確かめるテストとして残す (上の「`::` の予約」の、使用には誤りを重ねないこと) |
+  | `eml_hir` | `data::infix_constructors_and_a_declared_cons`、`lower::a_reserved_cons_constructor_is_still_matched` | ユーザーのモジュールで `::` を宣言するので、E1044 が1件出る。どちらも E1044 のほかに診断を出さず、宣言した `::` で組み、照合することを確かめるテストとして残す (上の「`::` の予約」の、使用には誤りを重ねないこと) |
   | `eml_types` | `data.rs` の5件、`exhaustive.rs` の9件 | 名前の修飾 |
 
 - 名前の修飾による差分は、上の「診断」の修飾に限る。テストのソースは、名前で関数を引く所だけを書き換える (`eml_core_ir` の `tests/translate.rs` の `"Ord Option.compare@[Int]"` と `"Show Option.show_prec@[Int]"` を、修飾した名前にする)。`def_map.rs` の `::` の fixity の断言とその注釈は、`infixr 5` に書き直す
