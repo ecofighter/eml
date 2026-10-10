@@ -14,7 +14,8 @@ enum Context {
         indent: u32,
         opener: Option<SyntaxKind>,
     },
-    Bracket,
+    /// `brace` は `{` で開いたこと。`{` の中の `=` はフィールドの `=` なので、規則 3 が変わる。
+    Bracket { brace: bool },
     /// 補間の穴。`INTERP_END` だけが取り除く。穴の中の閉じ括弧で穴の外の括弧を閉じないため
     /// (docs/spec/layout.md の規則 4)。
     Interp,
@@ -48,7 +49,10 @@ pub(crate) fn layout(file: FileId, text: &str, tokens: &[Token]) -> (Vec<Token>,
         let start = item.token.range.start();
         if item.line_start {
             let mut opened = false;
-            if i > 0 && BLOCK_STARTERS.contains(&items[i - 1].token.kind) {
+            if i > 0
+                && BLOCK_STARTERS.contains(&items[i - 1].token.kind)
+                && !is_field_eq(items[i - 1].token.kind, &stack)
+            {
                 // 規則 3。
                 if item.column > enclosing_indent(&stack) && !item.token.kind.is_closing_bracket() {
                     out.push(virtual_token(LAYOUT_OPEN, start));
@@ -88,7 +92,7 @@ pub(crate) fn layout(file: FileId, text: &str, tokens: &[Token]) -> (Vec<Token>,
                         }
                         // 閉じ忘れた括弧がファイルの残りを飲み込まないよう、ここで閉じる。閉じ括弧がないことは
                         // parser が報告する。
-                        Some(Context::Bracket)
+                        Some(Context::Bracket { .. })
                             if !item.token.kind.is_closing_bracket()
                                 && item.column <= enclosing_indent(&stack) =>
                         {
@@ -103,16 +107,28 @@ pub(crate) fn layout(file: FileId, text: &str, tokens: &[Token]) -> (Vec<Token>,
         match item.token.kind {
             kind if kind.is_opening_bracket() => {
                 out.push(item.token);
-                stack.push(Context::Bracket);
+                stack.push(Context::Bracket {
+                    brace: item.token.kind == L_BRACE,
+                });
+            }
+            COMMA => {
+                // 規則 4。閉じ括弧と同じく、一番内側の括弧より上のブロックを閉じる。行末の `->` などで開いた
+                // ブロックを、次の要素の前で終えるため
+                // (docs/superpowers/specs/2026-10-10-s6c-records-design.md の「レイアウト」)。
+                let floor = hole_floor(&stack);
+                if stack[floor..].iter().any(is_bracket) {
+                    while let Some(Context::Block { .. }) = stack.last() {
+                        out.push(virtual_token(LAYOUT_CLOSE, start));
+                        stack.pop();
+                    }
+                }
+                out.push(item.token);
             }
             kind if kind.is_closing_bracket() => {
                 // 規則 4。種類は見ずに一番内側の括弧を閉じ、その上のブロックもすべて閉じる。種類の食い違いは parser が
                 // 報告する。対応する開き括弧がなければ何もしない。
-                let floor = stack
-                    .iter()
-                    .rposition(|c| *c == Context::Interp)
-                    .map_or(0, |i| i + 1);
-                if stack[floor..].contains(&Context::Bracket) {
+                let floor = hole_floor(&stack);
+                if stack[floor..].iter().any(is_bracket) {
                     while let Some(Context::Block { .. }) = stack.last() {
                         out.push(virtual_token(LAYOUT_CLOSE, start));
                         stack.pop();
@@ -147,6 +163,7 @@ pub(crate) fn layout(file: FileId, text: &str, tokens: &[Token]) -> (Vec<Token>,
     let eof = TextSize::of(text);
     if let Some(last) = items.last()
         && BLOCK_STARTERS.contains(&last.token.kind)
+        && !is_field_eq(last.token.kind, &stack)
     {
         let report = !continues_aligned_arrows(
             last.token.kind,
@@ -162,6 +179,24 @@ pub(crate) fn layout(file: FileId, text: &str, tokens: &[Token]) -> (Vec<Token>,
         }
     }
     (out, diagnostics)
+}
+
+fn is_bracket(context: &Context) -> bool {
+    matches!(context, Context::Bracket { .. })
+}
+
+/// 一番内側の補間の穴より外の文脈は、括弧や `,` から見えない。その穴の中の先頭の位置を返す。
+fn hole_floor(stack: &[Context]) -> usize {
+    stack
+        .iter()
+        .rposition(|c| *c == Context::Interp)
+        .map_or(0, |i| i + 1)
+}
+
+/// 規則 3 の例外。`{` の中の `=` はいつもフィールドの `=` なので、値を次の行に書けるようにする
+/// (docs/superpowers/specs/2026-10-10-s6c-records-design.md の「レイアウト」)。
+fn is_field_eq(starter: SyntaxKind, stack: &[Context]) -> bool {
+    starter == EQ && matches!(stack.last(), Some(Context::Bracket { brace: true }))
 }
 
 /// インデントのタブも、列を求めるついでにここで報告する。
@@ -295,7 +330,7 @@ fn enclosing_block(stack: &[Context]) -> (u32, Option<SyntaxKind>) {
         .rev()
         .find_map(|context| match *context {
             Context::Block { indent, opener } => Some((indent, opener)),
-            Context::Bracket | Context::Interp => None,
+            Context::Bracket { .. } | Context::Interp => None,
         })
         .unwrap_or((0, None))
 }
@@ -588,6 +623,43 @@ mod tests {
         assert_eq!(
             dump("f : A ->\n  B ->\n  C ->\n  D").0,
             "f : A -> <OPEN> B -> <OPEN> <CLOSE> <SEP> C -> <OPEN> <CLOSE> <SEP> D <CLOSE>"
+        );
+    }
+
+    #[test]
+    fn field_equals_in_braces_does_not_open_a_block() {
+        assert_eq!(layout_of("x = f {\n  a =\n    1,\n}"), "x = f { a = 1 , }");
+    }
+
+    #[test]
+    fn equals_at_the_end_of_a_line_in_parentheses_still_opens_a_block() {
+        assert_eq!(
+            layout_of("x = f (\n  a =\n    1)"),
+            "x = f ( a = <OPEN> 1 <CLOSE> )"
+        );
+    }
+
+    #[test]
+    fn comma_closes_blocks_above_the_innermost_bracket() {
+        assert_eq!(
+            layout_of("f = (fn x ->\n    x,\n  y)"),
+            "f = ( fn x -> <OPEN> x <CLOSE> , y )"
+        );
+    }
+
+    #[test]
+    fn comma_does_not_close_brackets_outside_an_interpolation_hole() {
+        assert_eq!(
+            layout_of("f = (fn x ->\n    \"\\{a, b}\")"),
+            "f = ( fn x -> <OPEN> \" \\{ a , b } \" <CLOSE> )"
+        );
+    }
+
+    #[test]
+    fn comma_without_a_bracket_changes_nothing() {
+        assert_eq!(
+            layout_of("f =\n  a,\n  b"),
+            "f = <OPEN> a , <SEP> b <CLOSE>"
         );
     }
 }

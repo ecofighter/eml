@@ -885,3 +885,19 @@ fn unclosed_list_pattern_does_not_swallow_the_next_item() {
         ["E0011 1:5 expected `]`", "E0011 2:8 expected an expression"]
     );
 }
+
+#[test]
+fn a_comma_closes_a_block_opened_inside_brackets() {
+    let text = lines(&[
+        "f n =",
+        "  g (fn x ->",
+        "      x + 1,",
+        "    n)",
+        "",
+        "h n =",
+        "  [fn x ->",
+        "    x,",
+        "   fn y -> y]",
+    ]);
+    assert_eq!(diagnostics(&text), Vec::<String>::new());
+}
