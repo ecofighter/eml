@@ -1,4 +1,4 @@
-use eml_diagnostics::{Diagnostic, FileId, Label, TextRange, TextSize};
+use eml_diagnostics::{Diagnostic, FileId, Label, TextRange};
 use eml_syntax::{SyntaxKind, SyntaxToken, ast};
 use la_arena::{Arena, ArenaMap};
 
@@ -610,8 +610,8 @@ impl<'a> BodyLowering<'a> {
 
     /// `[p1, …, pn]` を `p1 :: (… (pn :: Nil))` に組む。コンストラクタは名前を引かずに Prelude のものを指す
     /// (docs/spec/expressions.md の「リスト」)。要素は外側のパターンと同じ組で、左から
-    /// 変換する。E1017 の組と局所変数の番号を、ソースの順にそろえるためである。範囲は、k 番目の `::` が k 番目の
-    /// 要素の始まり (1つ目は `[`) から `]` まで、`Nil` が `]` である。
+    /// 変換する。E1017 の組と局所変数の番号を、ソースの順にそろえるためである。組んだ木の範囲は
+    /// docs/implementation/architecture.md のパターンのリストの範囲の項が定める。
     fn lower_list_pat(&mut self, list: ast::ListPat, range: TextRange) -> PatId {
         let elements: Vec<PatId> = list
             .elements()
@@ -621,8 +621,11 @@ impl<'a> BodyLowering<'a> {
             })
             .collect();
         let lang = self.lang;
-        let end = TextRange::new(range.end() - TextSize::from(1), range.end());
-        let nil_range = if elements.is_empty() { range } else { end };
+        // 閉じていない `[` の最後の文字は `]` と限らず、複数バイトのこともある。`]` の字句の範囲を使う
+        let close = list
+            .r_brack()
+            .map_or(TextRange::empty(range.end()), |token| token.text_range());
+        let nil_range = if elements.is_empty() { range } else { close };
         let mut tail = self.pats.alloc(Pat {
             kind: PatKind::Con {
                 ctor: lang.nil,

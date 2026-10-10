@@ -807,6 +807,10 @@ impl ListPat {
     pub fn elements(&self) -> AstChildren<Pat> {
         support::children(&self.syntax)
     }
+
+    pub fn r_brack(&self) -> Option<SyntaxToken> {
+        support::token(&self.syntax, SyntaxKind::R_BRACK)
+    }
 }
 
 impl TupleType {

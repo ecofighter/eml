@@ -456,18 +456,29 @@ fn showing_a_list_copies_bytes_in_proportion_to_its_length() {
             .string_bytes_copied
     };
     let (small, large) = (copied(1000), copied(2000));
+    assert!(small >= 1000, "{small}");
     assert!(large as f64 <= small as f64 * 2.5, "{small} {large}");
 }
 
-/// 導出した `==` と `compare` は末尾呼び出しで進むので、長いリストでも生きている物体はリストの大きさの定数倍に収まる。
+/// 導出した `==` と `compare` は末尾呼び出しで進むので、長いリストを比べても、生きている物体はリストを作って持つだけの
+/// プログラムより定数個しか増えない。
 #[test]
 fn derived_comparisons_walk_a_long_list_without_growing_the_heap() {
-    let text = list_program(
-        10000,
-        "println (show (xs == xs))\n  println (show (compare xs xs))",
+    let compared = stats(
+        &list_program(
+            10000,
+            "println (show (xs == xs))\n  println (show (compare xs xs))",
+        ),
+        "True\nEQ\n",
     );
-    let stats = stats(&text, "True\nEQ\n");
-    assert!(stats.peak_objects <= 3 * 10000, "{stats:?}");
+    let baseline = stats(
+        &list_program(10000, "println \"True\"\n  println \"EQ\"\n  drop xs"),
+        "True\nEQ\n",
+    );
+    assert!(
+        compared.peak_objects <= baseline.peak_objects + 16,
+        "{compared:?} {baseline:?}"
+    );
 }
 
 /// 式のリストは平らな節点なので、要素が多くてもどの段階のスタックも深くならない。

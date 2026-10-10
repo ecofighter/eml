@@ -89,3 +89,28 @@ fn list_expressions_stay_flat() {
     g () = []
     ");
 }
+
+/// `]` がないときは、`Nil` をノードの終わりの空の範囲にする。最後の文字が複数バイトでも、文字の途中で切らない。
+#[test]
+fn an_unclosed_list_pattern_ending_in_a_multibyte_character_keeps_its_ranges() {
+    let text = "f : List String -> Int\nf [\"é";
+    insta::assert_snapshot!(lower_text(text), @"
+    f : List String -> Int
+    f [<missing>] = <missing>
+    ---
+    E0002 2:4 unterminated string literal
+    E0011 2:6 expected `]`
+    ");
+    let lowered = eml_test_support::lower(text);
+    let program = &lowered.program;
+    let (id, _) = program.functions().find(|(_, f)| f.name == "f").unwrap();
+    let body = program.body(id).unwrap();
+    let source = lowered.files().text(lowered.file());
+    let ranges: Vec<(&str, bool)> = body
+        .pats
+        .iter()
+        .filter(|(_, pat)| matches!(pat.kind, PatKind::Con { .. }))
+        .map(|(_, pat)| (&source[pat.range], pat.range.is_empty()))
+        .collect();
+    assert_eq!(ranges, [("", true), ("[\"é", false)]);
+}

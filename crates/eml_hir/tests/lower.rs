@@ -362,7 +362,7 @@ fn character_patterns_are_not_supported_yet() {
 
 #[test]
 fn a_reserved_cons_constructor_is_still_matched() {
-    // `::` の宣言は E1044 になるが、constructor としては置くので、使う側に誤りを重ねない (docs/spec/declarations.md の「`data` と `type`」)
+    // `::` の宣言は E1044 になるが、コンストラクタとしては置くので、使う側に誤りを重ねない (docs/spec/declarations.md の「`data` と `type`」)
     let text = "data L = | Nil | Int :: L\nf : L -> Int\nf l = match l with\n  | y :: ys -> y\n  | Nil -> 0";
     assert_eq!(
         diagnostics(text),

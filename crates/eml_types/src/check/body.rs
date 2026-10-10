@@ -200,20 +200,18 @@ impl BodyCheck<'_, '_> {
                 self.block(expr.range, stmts, *tail, Expectation::Has(expected, origin));
                 self.typing.exprs.insert(id, expected);
             }
-            ExprKind::List(elements)
-                if matches!(
-                    self.table.shape(expected),
-                    TyShape::Con(list, args) if *list == self.program.lang.list && args.len() == 1
-                ) =>
-            {
-                let TyShape::Con(_, args) = self.table.shape(expected).clone() else {
-                    unreachable!("matched above")
-                };
-                for &element in elements {
-                    self.check_expr(element, args[0], origin.clone());
+            ExprKind::List(elements) => match self.list_element(expected) {
+                Some(element_ty) => {
+                    for &element in elements {
+                        self.check_expr(element, element_ty, origin.clone());
+                    }
+                    self.typing.exprs.insert(id, expected);
                 }
-                self.typing.exprs.insert(id, expected);
-            }
+                None => {
+                    let found = self.infer_expr(id);
+                    self.expect(expr.range, expected, found, &origin);
+                }
+            },
             ExprKind::Lambda(Closure {
                 params,
                 body: lambda_body,
@@ -235,8 +233,19 @@ impl BodyCheck<'_, '_> {
         }
     }
 
-    /// 期待する型のないリスト。最初の要素の型を推論し、残りをそれに合わせる。`List t` は `Nil` のスキームから作り、
-    /// Kind の扱いをほかのコンストラクタの参照とそろえる。
+    /// 型が `List t` の形に決まっていれば、要素の型 `t` を返す。
+    fn list_element(&self, ty: Ty) -> Option<Ty> {
+        match self.table.shape(ty) {
+            TyShape::Con(list, args) if *list == self.program.lang.list && args.len() == 1 => {
+                Some(args[0])
+            }
+            _ => None,
+        }
+    }
+
+    /// 期待する型のないリスト (docs/spec/expressions.md の「リスト」)。最初の要素の型を推論し、残りをそれに合わせる。
+    /// `List t` は、コンストラクタのパターンと同じく `Nil` のスキームを `KindReason::Unified` で具体化して作る。
+    /// Kind の誤りの由来を、コンストラクタで組む値とそろえるためである。
     fn list(&mut self, range: TextRange, elements: &[ExprId]) -> Ty {
         let nil = ValueItem::Constructor(self.program.lang.nil);
         let instantiated =

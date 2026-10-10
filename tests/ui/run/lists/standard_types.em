@@ -26,3 +26,4 @@ main () =
   println (show ((1 ::) Nil))
   println (show ((:: Nil) 1))
   println (show (-1 :: xs))
+  println (show (0 :: xs == [0, 1, 2, 3]))

@@ -158,9 +158,10 @@ mod tests {
         let mut files = SourceFiles::new();
         let file = files.add("a.em", "x");
         let range = TextRange::new(0.into(), 1.into());
-        let diagnostic = Diagnostic::not_yet_supported(file, range, "lists are not supported yet");
+        let diagnostic =
+            Diagnostic::not_yet_supported(file, range, "records are not supported yet");
         assert_eq!(diagnostic.code.to_string(), "E0004");
-        assert_eq!(diagnostic.message, "lists are not supported yet");
+        assert_eq!(diagnostic.message, "records are not supported yet");
         assert_eq!(diagnostic.primary.message, NOT_YET_SUPPORTED_LABEL);
         assert_eq!(
             NOT_YET_SUPPORTED_LABEL,

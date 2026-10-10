@@ -21,3 +21,39 @@ input_file: tests/ui/check-fail/exhaustiveness/list_patterns.em
    │ 
    │ Note: not covered: `(_ :: _) :: _`
 ───╯
+[E4001] Error: `match` does not cover every value
+    ╭─[ check-fail/exhaustiveness/list_patterns.em:12:8 ]
+    │
+ 12 │ f xs = match xs with
+    │        ──┬──  
+    │          ╰──── no arm matches some values
+    │ 
+    │ Note: not covered: `[[_]]`
+────╯
+[E4001] Error: `match` does not cover every value
+    ╭─[ check-fail/exhaustiveness/list_patterns.em:19:7 ]
+    │
+ 19 │ g o = match o with
+    │       ──┬──  
+    │         ╰──── no arm matches some values
+    │ 
+    │ Note: not covered: `Some [_]`
+────╯
+[E4001] Error: `match` does not cover every value
+    ╭─[ check-fail/exhaustiveness/list_patterns.em:25:7 ]
+    │
+ 25 │ h o = match o with
+    │       ──┬──  
+    │         ╰──── no arm matches some values
+    │ 
+    │ Note: not covered: `Some []`
+────╯
+[E4001] Error: `match` does not cover every value
+    ╭─[ check-fail/exhaustiveness/list_patterns.em:30:8 ]
+    │
+ 30 │ k xs = match xs with
+    │        ──┬──  
+    │          ╰──── no arm matches some values
+    │ 
+    │ Note: not covered: `(Some _) :: _`
+────╯

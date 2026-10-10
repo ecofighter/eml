@@ -564,6 +564,19 @@ impl<'a> Exhaustive<'a> {
     /// Prelude の `::` の鎖。`[]` で終わればリストの形、それ以外は右結合の `::` で書く。`::` は Prelude だけが
     /// 定義できるので、表示の表によらず修飾しない (docs/spec/exhaustiveness.md の「検査パス」)。
     fn show_cons(&self, args: &[Pat]) -> String {
+        let (heads, tail) = self.cons_chain(args);
+        if self.is_nil(tail) {
+            let items: Vec<String> = heads.iter().map(|head| self.show(head)).collect();
+            return format!("[{}]", items.join(", "));
+        }
+        let mut parts: Vec<String> = heads.iter().map(|head| self.atomic(head)).collect();
+        parts.push(self.show(tail));
+        parts.join(" :: ")
+    }
+
+    /// Prelude の `::` の鎖を、頭の並びと、`::` でない最後の残りに分ける。`args` は `::` の引数である。
+    /// HIR がコンストラクタの引数の個数を確かめ (E1016)、例はどれも引数をすべて持つので、`::` の引数はいつも2つある。
+    fn cons_chain<'p>(&self, args: &'p [Pat]) -> (Vec<&'p Pat>, &'p Pat) {
         let mut heads = vec![&args[0]];
         let mut tail = &args[1];
         while let Pat::Con(Ctor::Data(ctor), args) = tail {
@@ -573,13 +586,11 @@ impl<'a> Exhaustive<'a> {
             heads.push(&args[0]);
             tail = &args[1];
         }
-        if matches!(tail, Pat::Con(Ctor::Data(ctor), _) if *ctor == self.program.lang.nil) {
-            let items: Vec<String> = heads.iter().map(|head| self.show(head)).collect();
-            return format!("[{}]", items.join(", "));
-        }
-        let mut parts: Vec<String> = heads.iter().map(|head| self.atomic(head)).collect();
-        parts.push(self.show(tail));
-        parts.join(" :: ")
+        (heads, tail)
+    }
+
+    fn is_nil(&self, pat: &Pat) -> bool {
+        matches!(pat, Pat::Con(Ctor::Data(ctor), _) if *ctor == self.program.lang.nil)
     }
 
     /// 引数の位置に置く書き方。引数を持つコンストラクタは括弧で囲む。タプルは自分の括弧を持つ。
@@ -594,15 +605,12 @@ impl<'a> Exhaustive<'a> {
     }
 
     /// `[]` で終わる Prelude の `::` の鎖か。リストの形で書くので括弧が要らない。
-    fn is_list_literal(&self, mut pat: &Pat) -> bool {
-        loop {
-            match pat {
-                Pat::Con(Ctor::Data(ctor), _) if *ctor == self.program.lang.nil => return true,
-                Pat::Con(Ctor::Data(ctor), args) if *ctor == self.program.lang.cons => {
-                    pat = &args[1];
-                }
-                _ => return false,
+    fn is_list_literal(&self, pat: &Pat) -> bool {
+        match pat {
+            Pat::Con(Ctor::Data(ctor), args) if *ctor == self.program.lang.cons => {
+                self.is_nil(self.cons_chain(args).1)
             }
+            _ => self.is_nil(pat),
         }
     }
 }

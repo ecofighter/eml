@@ -37,7 +37,8 @@ fn match_arms_and_constructor_patterns() {
 
 #[test]
 fn infix_constructors_and_a_declared_cons() {
-    // ユーザーの `::` は予約されていて E1044 になるが、宣言は自分の fixity のまま置くので、後の段階に誤りが連鎖しない (docs/spec/declarations.md の「`data` と `type`」)
+    // ユーザーの `::` は予約されていて E1044 になるが、宣言したコンストラクタはそのまま置く。そのため、後の段階に誤りが連鎖しない。
+    // fixity は、宣言どおり `infixr 5` で組む (docs/spec/declarations.md の「`data` と `type`」)
     let text = "infixr 5 ::\ndata L = | E | Int :: L\n\nf : Int -> L\nf x = x :: x :: E\n\ng : L -> Int\ng l = match l with | h :: _ -> h | E -> 0";
     insta::assert_snapshot!(lower_text(text), @"
     data L

@@ -169,31 +169,33 @@ impl Printer<'_> {
 
     /// `::` の鎖の終わりが Prelude の `Nil` か。そうなら `[a, b]` の形で書ける。
     fn ends_in_nil(&self, body: &Body, args: &[PatId]) -> bool {
-        let lang = &self.program.lang;
-        let mut tail = args[1];
-        while let PatKind::Con { ctor, args } = &body.pats[tail].kind {
-            if *ctor != lang.cons {
-                break;
-            }
-            tail = args[1];
-        }
-        matches!(&body.pats[tail].kind, PatKind::Con { ctor, .. } if *ctor == lang.nil)
+        let (_, tail) = self.cons_chain(body, args);
+        self.is_nil(body, tail)
     }
 
-    /// Prelude の `::` の鎖。`[]` で終わればリストの形、それ以外は右結合の `::` で書く。`::` は Prelude だけが
-    /// 定義できるので修飾しない (docs/spec/exhaustiveness.md の「検査パス」)。
-    fn cons_pat(&self, body: &Body, args: &[PatId]) -> String {
-        let lang = &self.program.lang;
+    fn is_nil(&self, body: &Body, id: PatId) -> bool {
+        matches!(&body.pats[id].kind, PatKind::Con { ctor, .. } if *ctor == self.program.lang.nil)
+    }
+
+    /// Prelude の `::` の鎖を、頭の並びと、`::` でない最後の残りに分ける。`args` は `::` の2つの引数である。
+    fn cons_chain(&self, body: &Body, args: &[PatId]) -> (Vec<PatId>, PatId) {
         let mut heads = vec![args[0]];
         let mut tail = args[1];
         while let PatKind::Con { ctor, args } = &body.pats[tail].kind {
-            if *ctor != lang.cons {
+            if *ctor != self.program.lang.cons {
                 break;
             }
             heads.push(args[0]);
             tail = args[1];
         }
-        if matches!(&body.pats[tail].kind, PatKind::Con { ctor, .. } if *ctor == lang.nil) {
+        (heads, tail)
+    }
+
+    /// Prelude の `::` の鎖。`[]` で終わればリストの形、それ以外は右結合の `::` で書く。`::` は Prelude だけが
+    /// 定義できるので修飾しない (docs/spec/exhaustiveness.md の「検査パス」)。
+    fn cons_pat(&self, body: &Body, args: &[PatId]) -> String {
+        let (heads, tail) = self.cons_chain(body, args);
+        if self.is_nil(body, tail) {
             let items: Vec<String> = heads.iter().map(|&head| self.pat(body, head)).collect();
             return format!("[{}]", items.join(", "));
         }
@@ -201,7 +203,8 @@ impl Printer<'_> {
             .iter()
             .map(|&head| self.pat_atom(body, head))
             .collect();
-        parts.push(self.pat_atom(body, tail));
+        // `::` は右結合なので、鎖の残りには括弧を付けない
+        parts.push(self.pat(body, tail));
         parts.join(" :: ")
     }
 
