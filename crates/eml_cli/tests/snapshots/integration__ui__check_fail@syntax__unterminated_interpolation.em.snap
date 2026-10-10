@@ -1,0 +1,19 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: rendered
+input_file: tests/ui/check-fail/syntax/unterminated_interpolation.em
+---
+[E0002] Error: unterminated string literal
+   ╭─[ check-fail/syntax/unterminated_interpolation.em:4:23 ]
+   │
+ 4 │ broken n = "count: \{n"
+   │                       ┬  
+   │                       ╰── missing closing `"`
+───╯
+[E0004] Error: string interpolation is not supported yet
+   ╭─[ check-fail/syntax/unterminated_interpolation.em:7:18 ]
+   │
+ 7 │ fine n = "count: \{n}"
+   │                  ──┬─  
+   │                    ╰─── this is implemented in a later stage
+───╯

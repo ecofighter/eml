@@ -221,6 +221,8 @@ fn unexpected(p: &Parser) -> String {
         LAYOUT_SEP => "unexpected line break".to_string(),
         LAYOUT_OPEN => "unexpected indented block".to_string(),
         LAYOUT_CLOSE => "unexpected end of block".to_string(),
+        STRING_START => "unexpected string".to_string(),
+        CMD_START => "unexpected command literal".to_string(),
         _ => format!("unexpected `{}`", p.current_text()),
     }
 }
@@ -231,6 +233,8 @@ fn describe(p: &Parser) -> String {
         LAYOUT_SEP => "a new line".to_string(),
         LAYOUT_OPEN => "an indented block".to_string(),
         LAYOUT_CLOSE => "the end of the block".to_string(),
+        STRING_START => "a string".to_string(),
+        CMD_START => "a command literal".to_string(),
         _ => format!("`{}`", p.current_text()),
     }
 }

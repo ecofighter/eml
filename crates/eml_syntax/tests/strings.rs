@@ -174,3 +174,34 @@ fn crlf_multiline_strings_have_lf_values() {
 fn a_multiline_string_with_a_layout_error_has_no_value() {
     assert_eq!(parts("\"\"\"\nab\n  \"\"\""), None);
 }
+
+#[test]
+fn a_mismatched_bracket_in_a_hole_does_not_escape_it() {
+    // `(` の閉じがないまま穴が閉じる。穴の外の括弧とブロックは影響を受けない
+    assert_eq!(
+        diagnostics("f x =\n  g (\"\\{(x}\", 1)\n  h"),
+        ["E0011 2:11 expected `)`"]
+    );
+    // 穴の中の対応のない `)` は、穴の外の `(` を閉じない。閉じてしまうと、次の行の `)` がラムダの本体のブロックを
+    // 閉じられず、`y)` に誤りが重なる
+    assert_eq!(
+        diagnostics("f x =\n  g (\"\\{x)}\", fn y ->\n    y)\n  h"),
+        ["E0011 2:10 expected `}`"]
+    );
+}
+
+#[test]
+fn a_hole_inside_a_block_keeps_the_block_open() {
+    assert_eq!(
+        diagnostics("f : Int -> String\nf x =\n  let s = \"\\{x}\"\n  s"),
+        Vec::<String>::new()
+    );
+}
+
+#[test]
+fn an_unexpected_string_is_named_as_a_string() {
+    assert_eq!(
+        diagnostics("data T = | A \"x\""),
+        ["E0011 1:14 unexpected string"]
+    );
+}

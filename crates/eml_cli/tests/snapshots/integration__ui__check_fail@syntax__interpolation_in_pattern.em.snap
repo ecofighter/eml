@@ -1,0 +1,12 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: rendered
+input_file: tests/ui/check-fail/syntax/interpolation_in_pattern.em
+---
+[E0011] Error: string interpolation is not allowed in a pattern
+   ╭─[ check-fail/syntax/interpolation_in_pattern.em:4:12 ]
+   │
+ 4 │   | "hello \{s}" -> 1
+   │            ─┬  
+   │             ╰── a pattern matches a fixed string
+───╯
