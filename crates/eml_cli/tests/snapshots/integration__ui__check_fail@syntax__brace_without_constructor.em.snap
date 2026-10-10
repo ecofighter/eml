@@ -1,0 +1,19 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: rendered
+input_file: tests/ui/check-fail/syntax/brace_without_constructor.em
+---
+[E0011] Error: expected a pattern
+   ╭─[ check-fail/syntax/brace_without_constructor.em:6:5 ]
+   │
+ 6 │   | { a } -> 0
+   │     ┬  
+   │     ╰── found `{`
+───╯
+[E0011] Error: expected `|`
+    ╭─[ check-fail/syntax/brace_without_constructor.em:10:15 ]
+    │
+ 10 │   let q = { a = 1 }
+    │               ┬  
+    │               ╰── found `=`
+────╯

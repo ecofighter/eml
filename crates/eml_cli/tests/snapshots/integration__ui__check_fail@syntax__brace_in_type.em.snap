@@ -1,0 +1,12 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: rendered
+input_file: tests/ui/check-fail/syntax/brace_in_type.em
+---
+[E0011] Error: expected a type
+   ╭─[ check-fail/syntax/brace_in_type.em:2:11 ]
+   │
+ 2 │ name_of : { name : String } -> String
+   │           ┬  
+   │           ╰── found `{`
+───╯

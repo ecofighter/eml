@@ -1,0 +1,9 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{stderr}\")"
+input_file: tests/ui/run/records/multi_line.em
+---
+--- stdout ---
+Person { name = "ann", age = 31 }
+double 42
+--- stderr ---

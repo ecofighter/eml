@@ -1,0 +1,16 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: rendered
+input_file: tests/ui/check-fail/linearity/update_discards.em
+---
+[E3004] Error: the old value of the field `log` is discarded, but it holds a linear value
+   ╭─[ check-fail/linearity/update_discards.em:7:15 ]
+   │
+ 7 │   let moved = { job | log = Fs.open "b.txt" }
+   │               ───────────────┬───────────────  
+   │                              ╰───────────────── this update overwrites `log`
+   │ 
+   │ Help: take the old `log` out with a record pattern and pass it to `drop`
+   │ 
+   │ Note: linear values, such as files, the continuation of a `once` operation and closures that capture one, must be used exactly once
+───╯
