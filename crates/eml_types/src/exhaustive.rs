@@ -534,6 +534,9 @@ impl<'a> Exhaustive<'a> {
             Pat::Con(Ctor::Data(ctor), args) if *ctor == self.program.lang.cons => {
                 self.show_cons(args)
             }
+            Pat::Con(Ctor::Data(ctor), args) if self.program[*ctor].field_names.is_some() => {
+                self.show_record(*ctor, args)
+            }
             Pat::Con(Ctor::Data(ctor), args) => {
                 let name = self.program.names.constructor(*ctor);
                 // 中置のコンストラクタは `:` で始まる演算子である (docs/spec/declarations.md の「`data` と `type`」)。
@@ -558,6 +561,26 @@ impl<'a> Exhaustive<'a> {
             Pat::Con(Ctor::Literal(_), _) => {
                 unreachable!("a literal column is never complete, so examples hold `_` there")
             }
+        }
+    }
+
+    /// 名前付きのフィールドを持つコンストラクタは、レコードのパターンの形 `Rect { high = False }` で書く。パターンは
+    /// フィールドを省けるので、例が `_` のフィールドは書かない。すべて `_` なら `Circle {}` と書く
+    /// (docs/spec/exhaustiveness.md の「検査パス」)。
+    fn show_record(&self, ctor: ConstructorId, args: &[Pat]) -> String {
+        let name = self.program.names.constructor(ctor);
+        let fields: Vec<String> = self.program[ctor]
+            .field_names
+            .iter()
+            .flatten()
+            .zip(args)
+            .filter(|(_, arg)| !matches!(arg, Pat::Wild))
+            .map(|(field, arg)| format!("{} = {}", field.name, self.show(arg)))
+            .collect();
+        if fields.is_empty() {
+            format!("{name} {{}}")
+        } else {
+            format!("{name} {{ {} }}", fields.join(", "))
         }
     }
 
@@ -594,10 +617,14 @@ impl<'a> Exhaustive<'a> {
     }
 
     /// 引数の位置に置く書き方。引数を持つコンストラクタは括弧で囲む。タプルは自分の括弧を持つ。
-    /// リストの形は `[...]` で閉じているので囲まない。
+    /// リストの形は `[...]` で、レコードの形は `{...}` で閉じているので囲まない。
     fn atomic(&self, pat: &Pat) -> String {
         match pat {
-            Pat::Con(Ctor::Data(_), args) if !args.is_empty() && !self.is_list_literal(pat) => {
+            Pat::Con(Ctor::Data(ctor), args)
+                if !args.is_empty()
+                    && !self.is_list_literal(pat)
+                    && self.program[*ctor].field_names.is_none() =>
+            {
                 format!("({})", self.show(pat))
             }
             _ => self.show(pat),

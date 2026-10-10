@@ -92,8 +92,6 @@ pub struct TypeRow {
     /// 値の Repr。translate は extern の型の Repr をここから読む。型検査は `Unit` を要素のないタプルにするので、translate は
     /// `Unit` の行を読まない。この行が要素のないタプルの Repr と同じであることは、結合テストが確かめる。
     pub repr: Repr,
-    /// 型検査は `Unit` を要素のないタプルとして扱うので、この行は型の形と表示にだけ使う。
-    pub empty_record: bool,
 }
 
 impl ExternType {
@@ -105,17 +103,16 @@ impl ExternType {
     ];
 
     pub fn row(self) -> TypeRow {
-        let row = |name, linearity, repr, empty_record| TypeRow {
+        let row = |name, linearity, repr| TypeRow {
             name,
             linearity,
             repr,
-            empty_record,
         };
         match self {
-            ExternType::Int => row("Prelude.Int", Linearity::Unr, Repr::Int, false),
-            ExternType::String => row("Prelude.String", Linearity::Unr, Repr::Obj, false),
-            ExternType::Unit => row("Prelude.Unit", Linearity::Unr, Repr::Unit, true),
-            ExternType::File => row("Std.Fs.File", Linearity::Lin, Repr::Obj, false),
+            ExternType::Int => row("Prelude.Int", Linearity::Unr, Repr::Int),
+            ExternType::String => row("Prelude.String", Linearity::Unr, Repr::Obj),
+            ExternType::Unit => row("Prelude.Unit", Linearity::Unr, Repr::Unit),
+            ExternType::File => row("Std.Fs.File", Linearity::Lin, Repr::Obj),
         }
     }
 

@@ -276,3 +276,38 @@ fn use_blocks_keep_their_diagnostics() {
       4:5 expected because of the signature of `f`
     ");
 }
+
+#[test]
+fn a_type_without_constructors_adds_no_field_error() {
+    // `=` のない `data` は E1025 を報告済みなので、射影と更新に E2014 を重ねない
+    let text = "data V\n\nf : V -> Int\nf v = v.x\n\ng : V -> V\ng v = { v | x = 1 }";
+    insta::assert_snapshot!(diagnostics(text), @"
+    E1025 1:6 `V` has no constructors
+      1:6 add constructors after `=`, as in `= | A | B`
+    ");
+}
+
+#[test]
+fn an_update_of_a_type_without_fields_is_reported_once() {
+    let text = format!(
+        "{PERSON}data Shape = | Circle {{ r : Int }} | Square {{ r : Int }}\n\nf : (Int, Int) -> (Int, Int)\nf t = {{ t | x = 1, y = 2 }}\n\ng : Shape -> Shape\ng s = {{ s | r = 1, q = 2 }}\n\nh : Unit -> Unit\nh u = {{ u | a = 1, b = 2 }}\n\nk : Person -> Person\nk p = {{ p | nick = \"a\", age = 1, alias = \"b\" }}"
+    );
+    insta::assert_snapshot!(diagnostics(&text), @"
+    E2014 6:13 no field `x` on type `(Int, Int)`
+      6:13 unknown field
+      help: a tuple cannot be updated; build a new tuple instead
+    E2014 9:13 no field `r` on type `Shape`
+      9:13 unknown field
+      note: `Shape` has more than one constructor
+      help: take the value apart with `match`
+    E2014 12:13 no field `a` on type `Unit`
+      12:13 unknown field
+      help: `Unit` has no fields
+    E2014 15:13 no field `nick` on type `Person`
+      15:13 unknown field
+      help: the fields are `name` and `age`
+    E2014 15:34 no field `alias` on type `Person`
+      15:34 unknown field
+      help: the fields are `name` and `age`
+    ");
+}

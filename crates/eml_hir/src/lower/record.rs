@@ -26,6 +26,10 @@ impl BodyLowering<'_> {
         let Some(declared) = &constructor.field_names else {
             self.diagnostics
                 .push(no_named_fields(self.file, &written, constructor, range));
+            // パターンと同じく、値の中の名前は引いて誤りを報告する
+            for field in &fields {
+                self.field_value(field);
+            }
             return self.alloc(ExprKind::Missing, range);
         };
         // `A {}` はコンストラクタの参照と同じく値にする。`f a A {} b` と `f a A b` の評価のまとまりをそろえるため
@@ -48,16 +52,26 @@ impl BodyLowering<'_> {
                 None => erroneous = true,
             }
         }
-        if erroneous {
+        // フィールドの並びの構文の誤り (`P { , }` など) はパーサが報告済みで、書けなかったフィールドを足りないとは言わない
+        if erroneous || record.has_skipped_fields() {
             return self.alloc(ExprKind::Missing, range);
         }
-        let missing: Vec<&str> = declared
-            .iter()
-            .enumerate()
-            .filter(|&(index, _)| !seen.iter().any(|&(seen, _)| seen as usize == index))
-            .map(|(_, field)| field.name.as_str())
-            .collect();
-        if !missing.is_empty() {
+        if seen.len() < declared.len() {
+            // 足りないフィールドは名前で数える。宣言で重複した名前 (E1045) は、どれか1つに値を書けば足りる
+            let given: Vec<&str> = seen
+                .iter()
+                .map(|&(index, _)| declared[index as usize].name.as_str())
+                .collect();
+            let mut missing: Vec<&str> = Vec::new();
+            for field in declared {
+                let name = field.name.as_str();
+                if !given.contains(&name) && !missing.contains(&name) {
+                    missing.push(name);
+                }
+            }
+            if missing.is_empty() {
+                return self.alloc(ExprKind::Missing, range);
+            }
             let noun = if missing.len() == 1 {
                 "field"
             } else {
@@ -123,6 +137,10 @@ impl BodyLowering<'_> {
             let range = expr.range();
             return self.lower_expr(Some(expr), range);
         }
+        // `name =` の後の値の欠けはパーサが報告済みなので、省略形として名前を引かない
+        if field.has_eq() {
+            return self.alloc(ExprKind::Missing, field.range());
+        }
         let (name, range) = field_name(field.name());
         self.lower_name(&NameUse::plain(&name, range), NameKind::Value, range)
     }
@@ -130,7 +148,8 @@ impl BodyLowering<'_> {
     /// `Person { name, age = a }` を、宣言の順の引数を持つコンストラクタのパターンに組む。中のパターンはソースの順に
     /// 変換する。局所変数の番号と E1017 の順を、書いた順にそろえるため。書かないフィールドは、範囲がパターン全体の
     /// `_` にして `omitted_fields` に記録する。誤りがあっても中のパターンは変換して変数を束縛し、パターン全体を
-    /// `Missing` にする。2回目に書いたフィールドのパターンは変換せず、E1017 を重ねない。
+    /// `Missing` にする。2回目に書いた省略形のフィールドは変換せず、同じ名前の E1017 を重ねない。`= pat` で書いた
+    /// 2回目のフィールドは、枝の本体がその変数を使えるように変換する。
     pub(super) fn lower_record_pat(&mut self, record: &ast::RecordPat, range: TextRange) -> PatId {
         let fields: Vec<ast::FieldPat> = record.fields().collect();
         let resolved = self.record_constructor(record.path(), range);
@@ -174,8 +193,9 @@ impl BodyLowering<'_> {
                 }
                 None => {
                     erroneous = true;
-                    let duplicate = constructor.field_index(&name).is_some();
-                    if !duplicate {
+                    let duplicate_pun =
+                        constructor.field_index(&name).is_some() && field.pat().is_none();
+                    if !duplicate_pun {
                         self.field_pat(field);
                     }
                 }

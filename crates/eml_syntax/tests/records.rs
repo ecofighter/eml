@@ -304,3 +304,13 @@ fn trailing_commas_are_allowed_in_declarations_patterns_and_updates() {
     );
     assert_eq!(diagnostics("x = { p | a = 1, }"), Vec::<String>::new());
 }
+
+#[test]
+fn a_comma_or_an_equals_sign_after_the_brace_is_read_as_a_record() {
+    for text in ["x = C { , }", "x = P { = 1, a = 2 }"] {
+        assert_eq!(diagnostics(text), ["E0011 1:9 expected a field"], "{text}");
+        let tree = shape(text);
+        assert!(tree.contains("RECORD_EXPR"), "{tree}");
+        assert!(!tree.contains("UPDATE_EXPR"), "{tree}");
+    }
+}

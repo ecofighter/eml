@@ -1,7 +1,7 @@
 //! 射影と更新の検査。フィールドは、射影や更新の時点で分かっている値の型から引く
 //! (docs/spec/types.md の「フィールドの解決」)。
 
-use eml_diagnostics::{Diagnostic, Label};
+use eml_diagnostics::{Diagnostic, Label, TextRange};
 use eml_hir::{
     ConstructorId, ExprId, ExprKind, FieldKey, FieldName, FieldUse, LocalId, PatKind, Res,
     TypeDefKind, ValueItem,
@@ -56,53 +56,82 @@ impl BodyCheck<'_, '_> {
         fields: &[(FieldName, ExprId)],
     ) -> Ty {
         let base_ty = self.infer_expr(base);
-        if let TyShape::Var(_) = self.table.shape(base_ty) {
-            self.unknown_record(base, Site::Update, &fields[0].0.name);
-        }
-        let known = !matches!(self.table.shape(base_ty), TyShape::Var(_) | TyShape::Error);
-        let mut ctor = None;
-        let mut field_types = Vec::new();
-        let mut indices = Vec::new();
+        let target = self.update_target(id, base, base_ty, &fields[0].0);
+        let mut written = Vec::new();
         let mut discarded = Vec::new();
-        let mut resolved_all = known;
+        let mut resolved_all = target.is_some();
         for (name, value) in fields {
-            let field = FieldUse {
-                field: FieldKey::Name(name.name.clone()),
-                range: name.range,
-            };
-            let resolved = if known {
-                self.resolve_field(id, base_ty, &field, Site::Update)
-            } else {
-                None
+            let resolved = match &target {
+                Some((ctor, types)) => {
+                    let key = FieldKey::Name(name.name.clone());
+                    let index = self.program[*ctor].field_index(&name.name);
+                    if index.is_none() {
+                        self.unknown_constructor_field(base_ty, *ctor, &key, name.range);
+                    }
+                    index.map(|index| (*ctor, index, types[index as usize]))
+                }
+                None => None,
             };
             match resolved {
-                Some(ResolvedField {
-                    target: FieldTarget::Constructor { ctor: c, field },
-                    ty,
-                    rest,
-                }) => {
-                    self.check_expr(*value, ty, Origin::Field { ctor: c, field });
-                    ctor = Some(c);
-                    field_types = all_fields(field, ty, rest);
-                    indices.push(field);
+                Some((ctor, field, ty)) => {
+                    self.check_expr(*value, ty, Origin::Field { ctor, field });
+                    written.push(field);
                     discarded.push((field, ty));
                 }
-                _ => {
+                None => {
                     resolved_all = false;
                     self.infer_expr(*value);
                 }
             }
         }
-        if let (true, Some(ctor)) = (resolved_all, ctor) {
+        if let (true, Some((ctor, types))) = (resolved_all, target) {
             let update = Update {
                 ctor,
-                written: indices,
-                fields: field_types,
+                written,
+                fields: types,
             };
             self.typing.updates.insert(id, update);
             self.typing.discarded.insert(id, discarded);
         }
         base_ty
+    }
+
+    /// 更新が作り直すコンストラクタと、型引数で具体化したフィールドの型。元の値の型がコンストラクタが1つの `data` で
+    /// なければ、最初のフィールドについて1件だけ報告する。誤りは型のもので、フィールドごとに変わらないためである
+    /// (docs/implementation/diagnostics.md の E2014)。
+    fn update_target(
+        &mut self,
+        id: ExprId,
+        base: ExprId,
+        base_ty: Ty,
+        first: &FieldName,
+    ) -> Option<(ConstructorId, Vec<Ty>)> {
+        match self.table.shape(base_ty).clone() {
+            TyShape::Var(_) => {
+                self.unknown_record(base, Site::Update, &first.name);
+                return None;
+            }
+            TyShape::Con(def, _) => {
+                if let TypeDefKind::Data { constructors } = &self.program[def].kind
+                    && let [ctor] = constructors[..]
+                {
+                    let types = self.constructor_fields(id, base_ty, ctor)?;
+                    return Some((ctor, types));
+                }
+            }
+            _ => {}
+        }
+        // フィールドを名前で持たない型の E2014 は、射影と同じく `resolve_field` が型ごとの help を付けて出す
+        let field = FieldUse {
+            field: FieldKey::Name(first.name.clone()),
+            range: first.range,
+        };
+        let resolved = self.resolve_field(id, base_ty, &field, Site::Update);
+        debug_assert!(
+            resolved.is_none(),
+            "only a single-constructor data type has named fields"
+        );
+        None
     }
 
     /// 型の決まった `base_ty` から、フィールドを引く。タプルは番号で、コンストラクタが1つの `data` は名前で引く。
@@ -157,8 +186,11 @@ impl BodyCheck<'_, '_> {
                     self.no_such_field(base_ty, key, field, |diagnostic| diagnostic);
                     return None;
                 };
-                if let [ctor] = constructors[..] {
-                    return self.constructor_field(id, base_ty, ctor, key, field);
+                match constructors[..] {
+                    [ctor] => return self.constructor_field(id, base_ty, ctor, key, field),
+                    // `=` のない `data` は E1025 を報告済みなので、重ねない
+                    [] => return None,
+                    _ => {}
                 }
                 let note = format!(
                     "`{}` has more than one constructor",
@@ -178,8 +210,7 @@ impl BodyCheck<'_, '_> {
         }
     }
 
-    /// コンストラクタが1つの `data` の、名前で指したフィールド。コンストラクタをパターンと同じく具体化し、結果の型を
-    /// `base_ty` と単一化して、フィールドの型を型引数で具体化する。
+    /// コンストラクタが1つの `data` の、名前で指したフィールド。
     fn constructor_field(
         &mut self,
         id: ExprId,
@@ -188,34 +219,68 @@ impl BodyCheck<'_, '_> {
         key: &FieldKey,
         field: &FieldUse,
     ) -> Option<ResolvedField> {
-        let constructor = &self.program[ctor];
         let index = match key {
-            FieldKey::Name(name) => constructor.field_index(name),
+            FieldKey::Name(name) => self.program[ctor].field_index(name),
             FieldKey::Index(_) => None,
         };
         let Some(index) = index else {
-            let declared: Vec<&str> = constructor
-                .field_names
-                .iter()
-                .flatten()
-                .map(|field| field.name.as_str())
-                .collect();
-            let help = (!declared.is_empty()).then(|| {
-                let noun = if declared.len() == 1 {
-                    "field is"
-                } else {
-                    "fields are"
-                };
-                format!("the {noun} {}", listing(&declared))
-            });
-            self.no_such_field(base_ty, key, field, |diagnostic| match help {
-                Some(help) => diagnostic.with_help(help),
-                None => diagnostic,
-            });
+            self.unknown_constructor_field(base_ty, ctor, key, field.range);
             return None;
         };
+        let fields = self.constructor_fields(id, base_ty, ctor)?;
+        let rest = (0..fields.len() as u32)
+            .filter(|&other| other != index)
+            .map(|other| (other, fields[other as usize]))
+            .collect();
+        Some(ResolvedField {
+            target: FieldTarget::Constructor { ctor, field: index },
+            ty: fields[index as usize],
+            rest,
+        })
+    }
+
+    /// E2014。コンストラクタが1つの `data` に、そのフィールドがない。help で宣言したフィールドを並べる。
+    fn unknown_constructor_field(
+        &mut self,
+        base_ty: Ty,
+        ctor: ConstructorId,
+        key: &FieldKey,
+        range: TextRange,
+    ) {
+        let declared: Vec<&str> = self.program[ctor]
+            .field_names
+            .iter()
+            .flatten()
+            .map(|field| field.name.as_str())
+            .collect();
+        let help = (!declared.is_empty()).then(|| {
+            let noun = if declared.len() == 1 {
+                "field is"
+            } else {
+                "fields are"
+            };
+            format!("the {noun} {}", listing(&declared))
+        });
+        let field = FieldUse {
+            field: key.clone(),
+            range,
+        };
+        self.no_such_field(base_ty, key, &field, |diagnostic| match help {
+            Some(help) => diagnostic.with_help(help),
+            None => diagnostic,
+        });
+    }
+
+    /// コンストラクタが1つの `data` の、すべてのフィールドの型。コンストラクタをパターンと同じく具体化し、結果の型を
+    /// `base_ty` と単一化して、フィールドの型を型引数で具体化する。
+    fn constructor_fields(
+        &mut self,
+        id: ExprId,
+        base_ty: Ty,
+        ctor: ConstructorId,
+    ) -> Option<Vec<Ty>> {
         let range = self.body.exprs[id].range;
-        let fields = self.with_kind_origin(range, KindReason::Unified, |this| {
+        self.with_kind_origin(range, KindReason::Unified, |this| {
             let instantiated = this.instantiate_constructor(ctor)?;
             let mut ty = instantiated;
             let mut fields = Vec::new();
@@ -229,15 +294,6 @@ impl BodyCheck<'_, '_> {
             // `base_ty` は同じ `data` の型なので、新しい変数の型引数との単一化は失敗しない
             this.table.unify(ty, base_ty).ok()?;
             Some(fields)
-        })?;
-        let rest = (0..fields.len() as u32)
-            .filter(|&other| other != index)
-            .map(|other| (other, fields[other as usize]))
-            .collect();
-        Some(ResolvedField {
-            target: FieldTarget::Constructor { ctor, field: index },
-            ty: fields[index as usize],
-            rest,
         })
     }
 
@@ -311,14 +367,6 @@ impl BodyCheck<'_, '_> {
         self.instantiate(ValueItem::Constructor(ctor))
             .map(|(ty, _)| ty)
     }
-}
-
-/// 引いたフィールドと残りのフィールドを、宣言の順の型の並びに戻す。
-fn all_fields(field: u32, ty: Ty, rest: Vec<(u32, Ty)>) -> Vec<Ty> {
-    let mut all = rest;
-    all.push((field, ty));
-    all.sort_by_key(|&(index, _)| index);
-    all.into_iter().map(|(_, ty)| ty).collect()
 }
 
 fn key_text(key: &FieldKey) -> String {

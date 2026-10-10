@@ -895,6 +895,13 @@ impl RecordExpr {
     pub fn fields(&self) -> AstChildren<Field> {
         support::children(&self.syntax)
     }
+
+    /// フィールドの並びに、パーサが読み飛ばした部分 (`ERROR`) があるか。
+    pub fn has_skipped_fields(&self) -> bool {
+        self.syntax
+            .children()
+            .any(|child| child.kind() == SyntaxKind::ERROR)
+    }
 }
 
 impl UpdateExpr {
@@ -934,6 +941,11 @@ impl Field {
     /// 省略形 `{ name }` では `None`。
     pub fn expr(&self) -> Option<Expr> {
         support::child(&self.syntax)
+    }
+
+    /// `=` を書いたか。`{ name = }` のように値が欠けても、省略形とは区別する。
+    pub fn has_eq(&self) -> bool {
+        support::token(&self.syntax, SyntaxKind::EQ).is_some()
     }
 }
 

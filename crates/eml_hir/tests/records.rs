@@ -262,3 +262,60 @@ fn use_records_the_lambdas_it_builds() {
     let marked: Vec<String> = body.use_lambdas.iter().map(|&id| parameter(id)).collect();
     assert_eq!(marked, ["x"]);
 }
+
+#[test]
+fn a_duplicate_explicit_pattern_field_still_binds_its_variables() {
+    let text = format!(
+        "{PERSON}f : Person -> String\nf p = match p with\n  | Person {{ name = x, name = y }} -> y"
+    );
+    assert_eq!(
+        diagnostics(&text),
+        ["E1045 6:24 the field `name` appears more than once"]
+    );
+}
+
+#[test]
+fn a_field_with_an_equals_sign_and_no_value_is_not_a_pun() {
+    let text = format!(
+        "{PERSON}f : Person -> Person\nf p = {{ p | age = }}\n\ng : Unit -> Person\ng () = Person {{ name = , age = 1 }}"
+    );
+    assert_eq!(
+        diagnostics(&text),
+        [
+            "E0011 5:19 expected an expression",
+            "E0011 8:24 expected an expression",
+        ]
+    );
+}
+
+#[test]
+fn a_record_with_a_syntax_error_in_its_fields_reports_no_missing_fields() {
+    let text = format!(
+        "{PERSON}f : Unit -> Person\nf () = Person {{ , }}\n\ng : Unit -> Person\ng () = Person {{ = 1, age = 2 }}"
+    );
+    assert_eq!(
+        diagnostics(&text),
+        ["E0011 5:17 expected a field", "E0011 8:17 expected a field",]
+    );
+}
+
+#[test]
+fn a_duplicate_declared_field_is_satisfied_by_one_value() {
+    let text = "data Q = | Q { a : Int, a : String, b : Bool }\n\nf : Unit -> Q\nf () = Q { a = 1, b = True }";
+    assert_eq!(
+        diagnostics(text),
+        ["E1045 1:25 the field `a` appears more than once"]
+    );
+}
+
+#[test]
+fn braces_on_a_positional_constructor_still_resolve_the_values() {
+    let text = "data N = | N Int\n\nf : Unit -> N\nf () = N { x = undefined_name }";
+    assert_eq!(
+        diagnostics(text),
+        [
+            "E1046 4:8 `N` has no named fields",
+            "E1001 4:16 cannot find value `undefined_name`",
+        ]
+    );
+}

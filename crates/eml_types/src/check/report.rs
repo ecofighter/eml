@@ -520,8 +520,6 @@ pub(super) fn count(n: usize, word: &str) -> String {
 
 const LINEAR_NOTE: &str = "linear values, such as files, the continuation of a `once` operation and closures that capture one, must be used exactly once";
 
-/// 線形な値の誤った使い方。破れた Kind の制約の由来から番号と指す場所を決める (docs/implementation/diagnostics.md の
-/// 「線形性の診断」)。表に当たらない由来 (受け渡し、単一化、捕獲) は E3001 にする。
 /// 捨てたフィールドの E3004。射影の help は分解のパターンを示すが、セクションの隠れた引数は分解を書けないので
 /// help を付けない (docs/spec/records.md の「線形性の規則」)。
 fn discarded_field(file: FileId, range: TextRange, name: &str, site: DiscardSite) -> Diagnostic {
@@ -577,6 +575,8 @@ fn discarded_field(file: FileId, range: TextRange, name: &str, site: DiscardSite
     }
 }
 
+/// 線形な値の誤った使い方。破れた Kind の制約の由来から番号と指す場所を決める (docs/implementation/diagnostics.md の
+/// 「線形性の診断」)。表に当たらない由来 (受け渡し、単一化、捕獲) は E3001 にする。
 pub(super) fn linear_misuse(
     program: &Program,
     files: &SourceFiles,

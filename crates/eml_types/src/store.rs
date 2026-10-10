@@ -565,9 +565,9 @@ mod tests {
             tail: None,
             ret: int,
         });
-        let field = types.intern(TypeKind::Tuple(vec![error]));
+        let tuple = types.intern(TypeKind::Tuple(vec![error]));
         assert!(types.contains_error(labelled));
-        assert!(types.contains_error(field));
+        assert!(types.contains_error(tuple));
     }
 
     fn rigid(types: &mut TypeStore, name: &str) -> TypeId {

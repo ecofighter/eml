@@ -385,12 +385,14 @@ fn qname(p: &mut Parser) -> SyntaxKind {
     path(p, TokenSet::new(&[UIDENT, LIDENT]))
 }
 
-/// コンストラクタの後の `{` を作る式として読むのは、`{` の後が `}` か、`LIDENT` の後に `=`、`,`、`}` が続くときだけである。
-/// そのほかの `{` は引数としての更新の始まりなので、`Some { p | age = 1 }` を `Some` に更新を渡す式として読める
+/// コンストラクタの後の `{` を作る式として読むのは、`{` の後が `}`、`,`、`=` か、`LIDENT` の後に `=`、`,`、`}` が続く
+/// ときだけである。そのほかの `{` は引数としての更新の始まりなので、`Some { p | age = 1 }` を `Some` に更新を渡す式として
+/// 読める。更新の元の値は `,` や `=` で始まらないので、`C { , }` のような誤りはフィールドの並びの誤りとして報告する
 /// (docs/spec/grammar.md の「文法上の補足」)。
 fn at_record_body(p: &Parser) -> bool {
     p.at(L_BRACE)
-        && (p.nth(1) == R_BRACE || p.nth(1) == LIDENT && matches!(p.nth(2), EQ | COMMA | R_BRACE))
+        && (matches!(p.nth(1), R_BRACE | COMMA | EQ)
+            || p.nth(1) == LIDENT && matches!(p.nth(2), EQ | COMMA | R_BRACE))
 }
 
 /// `field ::= LIDENT ('=' expr)?`。値は括弧の中の要素と同じく読み、`{` を1段に数える。
@@ -441,7 +443,7 @@ fn update_expr(p: &mut Parser) -> SyntaxKind {
 fn field_index(p: &mut Parser) {
     let text = p.current_text();
     let decimal = text == "0" || text.starts_with(|c: char| ('1'..='9').contains(&c));
-    if !(decimal && text.bytes().all(|b| b.is_ascii_digit()) && text.parse::<u32>().is_ok()) {
+    if !(decimal && text.parse::<u32>().is_ok()) {
         expected(p, "a field index");
     }
     p.bump(INT);

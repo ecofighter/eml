@@ -388,3 +388,16 @@ fn a_user_cons_like_constructor_keeps_its_own_spelling() {
       note: not covered: `_ :+ _`
     ");
 }
+
+#[test]
+fn a_record_example_names_its_fields_and_leaves_out_wildcards() {
+    let text = "data Shape =\n  | Rect { width : Int, high : Bool }\n  | Circle { radius : Int }\n  | Dot {}\n\nf : Option Shape -> Int\nf s = match s with\n  | Some Rect { high = True } -> 0\n  | None -> 1\n\ng : Shape -> Int\ng s = match s with\n  | Rect { high = True } -> 0\n  | Circle {} -> 1\n  | Dot {} -> 2";
+    insta::assert_snapshot!(diagnostics(text), @"
+    E4001 7:7 `match` does not cover every value
+      7:7 no arm matches some values
+      note: not covered: `Some Circle {}`, `Some Dot {}`
+    E4001 12:7 `match` does not cover every value
+      12:7 no arm matches some values
+      note: not covered: `Rect { high = False }`
+    ");
+}
