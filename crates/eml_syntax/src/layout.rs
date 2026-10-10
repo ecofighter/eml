@@ -112,11 +112,12 @@ pub(crate) fn layout(file: FileId, text: &str, tokens: &[Token]) -> (Vec<Token>,
                 });
             }
             COMMA => {
-                // 規則 4。閉じ括弧と同じく、一番内側の括弧より上のブロックを閉じる。行末の `->` などで開いた
-                // ブロックを、次の要素の前で終えるため
-                // (docs/spec/layout.md の「文脈のスタック」)。
+                // 規則 4。行末の `,` は、閉じ括弧と同じく一番内側の括弧より上のブロックを閉じる。行末の `->` などで
+                // 開いたブロックを、次の行の要素の前で終えるため。行の途中の `,` は閉じない。ブロックの中の
+                // row や型の引数の `,` で、ブロックを閉じないためである (docs/spec/layout.md の「文脈のスタック」)
+                let line_final = items.get(i + 1).is_none_or(|next| next.line_start);
                 let floor = hole_floor(&stack);
-                if stack[floor..].iter().any(is_bracket) {
+                if line_final && stack[floor..].iter().any(is_bracket) {
                     while let Some(Context::Block { .. }) = stack.last() {
                         out.push(virtual_token(LAYOUT_CLOSE, start));
                         stack.pop();
@@ -652,6 +653,40 @@ mod tests {
         assert_eq!(
             layout_of("f = (fn x ->\n    \"\\{a, b}\")"),
             "f = ( fn x -> <OPEN> \" \\{ a , b } \" <CLOSE> )"
+        );
+    }
+
+    #[test]
+    fn comma_followed_by_a_comment_at_the_end_of_a_line_closes_blocks() {
+        assert_eq!(
+            layout_of("f = (fn x ->\n    x, -- first\n  y)"),
+            "f = ( fn x -> <OPEN> x <CLOSE> , y )"
+        );
+    }
+
+    #[test]
+    fn comma_in_the_middle_of_a_line_does_not_close_blocks() {
+        assert_eq!(
+            layout_of("f = (fn x ->\n    x + 1, n)"),
+            "f = ( fn x -> <OPEN> x + 1 , n <CLOSE> )"
+        );
+    }
+
+    #[test]
+    fn comma_in_an_effect_row_does_not_close_the_lambda_body() {
+        assert_eq!(
+            layout_of(
+                "main () = apply (fn () ->\n  let g : Unit -> <IO, Log> Unit = fn () -> println \"hi\"\n  println \"ok\")"
+            ),
+            "main ( ) = apply ( fn ( ) -> <OPEN> let g : Unit -> < IO , Log > Unit = fn ( ) -> println \" hi \" <SEP> println \" ok \" <CLOSE> )"
+        );
+    }
+
+    #[test]
+    fn equals_at_the_end_of_a_line_in_a_block_inside_braces_opens_a_block() {
+        assert_eq!(
+            layout_of("x = P { f = fn x ->\n    let y =\n      x\n    y }"),
+            "x = P { f = fn x -> <OPEN> let y = <OPEN> x <CLOSE> <SEP> y <CLOSE> }"
         );
     }
 
