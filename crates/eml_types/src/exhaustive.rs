@@ -530,6 +530,10 @@ impl<'a> Exhaustive<'a> {
     fn show(&self, pat: &Pat) -> String {
         match pat {
             Pat::Wild => "_".to_string(),
+            Pat::Con(Ctor::Data(ctor), _) if *ctor == self.program.lang.nil => "[]".to_string(),
+            Pat::Con(Ctor::Data(ctor), args) if *ctor == self.program.lang.cons => {
+                self.show_cons(args)
+            }
             Pat::Con(Ctor::Data(ctor), args) => {
                 let name = self.program.names.constructor(*ctor);
                 // 中置のコンストラクタは `:` で始まる演算子である (docs/spec/declarations.md の「`data` と `type`」)。
@@ -557,11 +561,49 @@ impl<'a> Exhaustive<'a> {
         }
     }
 
+    /// Prelude の `::` の鎖。`[]` で終わればリストの形、それ以外は右結合の `::` で書く。`::` は Prelude だけが
+    /// 定義できるので、表示の表によらず修飾しない (docs/superpowers/specs/2026-10-10-s6a-lists-design.md の
+    /// 「網羅性」)。
+    fn show_cons(&self, args: &[Pat]) -> String {
+        let mut heads = vec![&args[0]];
+        let mut tail = &args[1];
+        while let Pat::Con(Ctor::Data(ctor), args) = tail {
+            if *ctor != self.program.lang.cons {
+                break;
+            }
+            heads.push(&args[0]);
+            tail = &args[1];
+        }
+        if matches!(tail, Pat::Con(Ctor::Data(ctor), _) if *ctor == self.program.lang.nil) {
+            let items: Vec<String> = heads.iter().map(|head| self.show(head)).collect();
+            return format!("[{}]", items.join(", "));
+        }
+        let mut parts: Vec<String> = heads.iter().map(|head| self.atomic(head)).collect();
+        parts.push(self.show(tail));
+        parts.join(" :: ")
+    }
+
     /// 引数の位置に置く書き方。引数を持つコンストラクタは括弧で囲む。タプルは自分の括弧を持つ。
+    /// リストの形は `[...]` で閉じているので囲まない。
     fn atomic(&self, pat: &Pat) -> String {
         match pat {
-            Pat::Con(Ctor::Data(_), args) if !args.is_empty() => format!("({})", self.show(pat)),
+            Pat::Con(Ctor::Data(_), args) if !args.is_empty() && !self.is_list_literal(pat) => {
+                format!("({})", self.show(pat))
+            }
             _ => self.show(pat),
+        }
+    }
+
+    /// `[]` で終わる Prelude の `::` の鎖か。リストの形で書くので括弧が要らない。
+    fn is_list_literal(&self, mut pat: &Pat) -> bool {
+        loop {
+            match pat {
+                Pat::Con(Ctor::Data(ctor), _) if *ctor == self.program.lang.nil => return true,
+                Pat::Con(Ctor::Data(ctor), args) if *ctor == self.program.lang.cons => {
+                    pat = &args[1];
+                }
+                _ => return false,
+            }
         }
     }
 }

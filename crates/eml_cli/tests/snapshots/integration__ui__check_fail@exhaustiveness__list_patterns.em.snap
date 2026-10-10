@@ -1,0 +1,23 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: rendered
+input_file: tests/ui/check-fail/exhaustiveness/list_patterns.em
+---
+[E4001] Error: `match` does not cover every value
+   ╭─[ check-fail/exhaustiveness/list_patterns.em:3:12 ]
+   │
+ 3 │ first xs = match xs with
+   │            ──┬──  
+   │              ╰──── no arm matches some values
+   │ 
+   │ Note: not covered: `[]`
+───╯
+[E4001] Error: `match` does not cover every value
+   ╭─[ check-fail/exhaustiveness/list_patterns.em:7:13 ]
+   │
+ 7 │ second xs = match xs with
+   │             ──┬──  
+   │               ╰──── no arm matches some values
+   │ 
+   │ Note: not covered: `(_ :: _) :: _`
+───╯

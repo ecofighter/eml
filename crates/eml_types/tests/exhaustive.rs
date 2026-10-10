@@ -327,3 +327,64 @@ fn a_missing_constructor_of_the_same_name_is_qualified() {
       note: not covered: `Report.No`
     ");
 }
+
+#[test]
+fn missing_list_shapes_are_written_as_lists() {
+    let text = "f : List Int -> Int\nf xs = match xs with\n  | [a] -> a";
+    insta::assert_snapshot!(diagnostics(text), @"
+    E4001 2:8 `match` does not cover every value
+      2:8 no arm matches some values
+      note: not covered: `[]`
+    ");
+}
+
+#[test]
+fn a_missing_empty_list_is_written_as_brackets() {
+    let text = "f : List Int -> Int\nf xs = match xs with\n  | a :: rest -> a";
+    insta::assert_snapshot!(diagnostics(text), @"
+    E4001 2:8 `match` does not cover every value
+      2:8 no arm matches some values
+      note: not covered: `[]`
+    ");
+}
+
+#[test]
+fn an_open_list_is_written_with_right_associative_cons() {
+    let text =
+        "f : List Int -> Int\nf xs = match xs with\n  | [] -> 0\n  | [a] -> a\n  | [a, b] -> a";
+    insta::assert_snapshot!(diagnostics(text), @"
+    E4001 2:8 `match` does not cover every value
+      2:8 no arm matches some values
+      note: not covered: `_ :: _ :: _ :: _`
+    ");
+}
+
+#[test]
+fn lists_inside_other_patterns_need_no_parentheses() {
+    let text = "f : Option (List (List Int)) -> Int\nf o = match o with\n  | None -> 0\n  | Some [] -> 0\n  | Some ([] :: _) -> 0\n  | Some ([_ , _] :: _) -> 0\n  | Some ((_ :: _ :: _ :: _) :: _) -> 0";
+    insta::assert_snapshot!(diagnostics(text), @"
+    E4001 2:7 `match` does not cover every value
+      2:7 no arm matches some values
+      note: not covered: `Some ([_] :: _)`
+    ");
+}
+
+#[test]
+fn a_literal_element_leaves_a_wildcard_in_the_example() {
+    let text = "f : List Int -> Int\nf xs = match xs with\n  | [] -> 0\n  | [0] -> 0\n  | _ :: _ :: _ -> 0";
+    insta::assert_snapshot!(diagnostics(text), @"
+    E4001 2:8 `match` does not cover every value
+      2:8 no arm matches some values
+      note: not covered: `[_]`
+    ");
+}
+
+#[test]
+fn a_user_cons_like_constructor_keeps_its_own_spelling() {
+    let text = "data Seq a =\n  | Empty\n  | a :+ Seq a\n\nf : Seq Int -> Int\nf s = match s with\n  | Empty -> 0";
+    insta::assert_snapshot!(diagnostics(text), @"
+    E4001 6:7 `match` does not cover every value
+      6:7 no arm matches some values
+      note: not covered: `_ :+ _`
+    ");
+}
