@@ -47,6 +47,7 @@ E0xxx は `eml_syntax::codes` (E0004 だけは `eml_diagnostics`)、E1xxx は `e
 | E1041 | `NOT_A_CLASS` | 見出しは「`X` is not a class」で、名前を指してラベルを「a type, not a class」か「an effect, not a class」にする |
 | E1042 | `SUPERCLASS_CYCLE` | 見出しは「the superclasses of `C` make a cycle」で、循環を閉じる辺を持つクラスの名前を指してラベルを「this class closes the cycle」にする。note で循環の経路を示す (「the cycle is `Left` -> `Right` -> `Left`」) |
 | E1043 | `CLASS_AS_TYPE` | 見出しは「`C` is a class, not a type」で、名前を指してラベルを「a class cannot be used as a type」にする |
+| E1044 | `RESERVED_CONSTRUCTOR` | 見出しは「the constructor `::` is reserved for lists」で、コンストラクタの名前を指してラベルを「only the Prelude defines `::`」にする。`::` の宣言ごとに1つ出し、そのコンストラクタを使った位置には誤りを重ねない |
 | E2001 | `TYPE_MISMATCH` | 型の不一致。メッセージとラベルは制約の由来ごとに変える ([型と Kind](../spec/types.md))。呼び出しの row のエフェクトの型引数が今の row と一致しないときも E2001 にし、呼び出しを primary にする |
 | E2002 | `EFFECT_NOT_IN_ROW` | シグネチャの row に含まれないエフェクトを起こした。シグネチャの矢印を指し、row を足す help を付ける。引数のない関数には、`()` を取る関数にする help を付ける。instance のメソッドと既定のメソッドのシグネチャはクラスが決めるので、help を次のように変える。本体の引数より後ろの矢印に、row が足りないエフェクトをすべて許す矢印 (開いた row を含む) があれば、最初のその矢印までの引数の数 n で help「define `m` with n parameters, so that it performs `E` when it is called」を付ける。なければ、クラスのシグネチャの row を足す help「the signature of `m` comes from the class `C`; add `E` to its row there, as in `-> <E> ...`」を付ける。ただし、クラスが標準ライブラリにあれば書き換えられず、矢印のないメソッドには row がないので、どちらの場合も help を付けない。ラムダの本体の場合は、エフェクトを起こした場所を primary、ラムダの期待する型の由来 (シグネチャの引数の型や型の明示) を secondary にする |
 | E2005 | `INFINITE_TYPE` | 無限の型 (単一化の occurs check)。row のラベルの型引数を通して、型変数か row 変数が自分自身の中に現れる場合を含む。呼び出しの row で起きたときは、呼び出しを指す |
@@ -70,6 +71,8 @@ E0xxx は `eml_syntax::codes` (E0004 だけは `eml_diagnostics`)、E1xxx は `e
 制約の由来 (引数の位置、`if` の各枝、型注釈など) をもとに、「expected / found」と、その根拠になった場所を示すラベルを出す ([型と Kind](../spec/types.md))。
 
 単一化の失敗が矢印の線形性の食い違いだけによるときは、書き出す型に線形性が出ないので、expected と found が同じ表示になる。このときの E2001 には、どちらの関数型が1回しか呼べず、どちらが何度でも呼べるのかは言わずに、2つの関数型は呼べる回数が違う、という note を付ける。矢印の食い違いはどちら側が線形でも起こり、単一化は最初に失敗した子で止まるので、片方を名指しすると誤るため。
+
+リストのパターン `[p1, …, pn]` の型の誤りは、HIR が組んだ `::` と `Nil` のコンストラクタのパターンとして報告する。そのため、ほかのコンストラクタのパターンと同じく「`::` is a constructor of `List`」の note が付く。`::` はユーザーが書ける名前なので、リストのパターンだけの言い方を作らず、この note のままにする。
 
 ## 線形性の診断
 
