@@ -215,18 +215,13 @@ impl<'t> Parser<'t> {
     }
 
     /// 型の中で `<>` や `>->` を分けて読むのに使う (docs/spec/grammar.md の「文法上の補足」)。
+    /// トークンの先頭の1文字を `kind` として木に入れ、残りを今のトークンにする。
     pub(crate) fn split_first_char(&mut self, kind: SyntaxKind) {
-        self.split_prefix(kind, 1);
-    }
-
-    /// トークンの先頭の `len` バイトを `kind` として木に入れ、残りを今のトークンにする。型の中の `-><` を
-    /// `->` と `<` に分けるのにも使う (docs/spec/grammar.md の「文法上の補足」)。
-    pub(crate) fn split_prefix(&mut self, kind: SyntaxKind, len: u32) {
         let token = self.tokens[self.pos];
-        let len = TextSize::new(len);
+        let len = TextSize::new(1);
         assert!(
             token.range.len() > len,
-            "the prefix must be shorter than the token"
+            "the first character must be shorter than the token"
         );
         self.events.push(Event::TokenPrefix { kind, len });
         let rest = TextRange::new(token.range.start() + len, token.range.end());

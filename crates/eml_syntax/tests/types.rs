@@ -341,3 +341,9 @@ fn a_bracket_is_not_a_type() {
         ["E0011 1:5 expected a type"]
     );
 }
+
+#[test]
+fn a_row_in_a_multi_line_signature_may_use_leading_commas() {
+    let text = lines(&["f : A", "  -> <IO", "  , Log> B"]);
+    assert_eq!(diagnostics(&text), Vec::<String>::new());
+}

@@ -1,4 +1,5 @@
 use crate::common::{diagnostics, lines, shape};
+use eml_test_support::{full, parse};
 
 #[test]
 fn equation_with_a_constructor_pattern() {
@@ -833,7 +834,7 @@ fn a_list_may_end_with_a_comma_and_span_lines() {
     "#);
 }
 
-// 括弧の中で `->` が開いたブロックは、閉じ括弧で閉じる。その前に行末の `,` があれば、そこで閉じる
+// 括弧の中で `->` が開いたブロックは、閉じ括弧で閉じる。その前に `,` があれば、そこで閉じる
 // (docs/spec/layout.md の規則 4)。このテストは、最後の要素が開いたブロックを閉じ括弧で閉じる場合である。
 #[test]
 fn a_list_element_can_open_a_block() {
@@ -912,4 +913,58 @@ fn a_comma_closes_a_block_opened_inside_brackets() {
         "   fn y -> y]",
     ]);
     assert_eq!(diagnostics(&text), Vec::<String>::new());
+}
+
+#[test]
+fn a_list_may_be_written_with_leading_commas() {
+    let text = lines(&[
+        "xs =",
+        "  [ fn x ->",
+        "      x + 1",
+        "  , fn y -> y",
+        "  , match z with",
+        "      | A -> fn w -> w",
+        "      | B -> fn w -> w",
+        "  ]",
+    ]);
+    assert_eq!(diagnostics(&text), Vec::<String>::new());
+}
+
+#[test]
+fn a_tuple_may_be_written_with_leading_commas() {
+    let text = lines(&["t =", "  ( 1", "  , 2", "  )"]);
+    assert_eq!(diagnostics(&text), Vec::<String>::new());
+}
+
+#[test]
+fn a_next_element_may_be_deeper_than_the_block() {
+    let text = lines(&["fs = [ fn x ->", "  x + 1,", "       fn y -> y ]"]);
+    assert_eq!(diagnostics(&text), Vec::<String>::new());
+}
+
+#[test]
+fn an_unclosed_list_still_ends_at_the_next_statement() {
+    let text = lines(&["f =", "  let xs = [1, 2", "  g xs"]);
+    assert_eq!(diagnostics(&text), ["E0011 2:17 expected `]`"]);
+}
+
+#[test]
+fn a_closing_token_after_a_line_final_arrow_has_its_own_label() {
+    let parsed = parse(&lines(&["f = (fn x ->", "    , 2)"]));
+    insta::assert_snapshot!(full(&parsed.files, &parsed.diagnostics), @"
+    E0009 1:11 expected an indented block after `->`
+      1:11 nothing comes before the `,` on the next line
+    ");
+}
+
+#[test]
+fn a_mid_line_comma_that_ends_a_block_points_at_the_comma() {
+    let parsed = parse(&lines(&["f = (fn x ->", "    a, b", "    c)"]));
+    insta::assert_snapshot!(full(&parsed.files, &parsed.diagnostics), @"
+    E0015 2:6 this `,` ends the block opened by `->`
+      2:6 the block ends here
+      1:11 the block starts here
+      3:5 this line is at the column of that block
+      help: to write a tuple inside the block, wrap it in parentheses
+    ");
 }

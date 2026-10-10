@@ -157,7 +157,7 @@ debug_dump.rs  木のダンプ。構文のテストとデバッグに使う
 - `StringLit::parts()` は、`Text` (値に直した文字列) と `Hole` (穴の式) の列を返す。隣り合う本文とエスケープは1つの `Text` にまとめ、空の `Text` は返さない。閉じていない文字列、不正なエスケープを含む文字列、E0014 のある文字列には `None` を返す。どれも lexer が報告済みである。`LiteralPat::value()` は、穴のある文字列と、`parts()` が `None` の文字列には `None` を返す
 - レイアウト段は、幅 0 の仮想トークン `LAYOUT_OPEN` / `LAYOUT_SEP` / `LAYOUT_CLOSE` を挿入する。規則は [レイアウト規則](../spec/layout.md) が定める。パーサは仮想トークンを読んでも `Event::Token` を出さないので、仮想トークンは木に入らず、CST は lossless のまま
 - `grammar/` は [文法](../spec/grammar.md) に従う。演算子の列は `OP_SEQ` ノードに平たく並べ、木への組み直しは HIR で行う
-- 作る式の `qcon '{'` の先読みは `grammar/expressions.rs` の `at_record_body`、フィールドの並び (作る式、更新、パターン、宣言で共通) は `grammar/mod.rs` の `field_list` である。`field_list` は要素がどれも小文字の名前で始まることを使い、末尾のカンマを受け、更新ではフィールドを1つ以上求める。射影とセクションの番号の形は `field_index` が確かめる。レイアウト段の文脈 `Context::Bracket { brace }` は、`{` で積んだかを覚える。規則 3 の例外 (`{` の中の行末の `=`) を `is_field_eq` が判定するためである
+- 作る式の `qcon '{'` の先読みは `grammar/expressions.rs` の `at_record_body`、フィールドの並び (作る式、更新、パターン、宣言で共通) は `grammar/mod.rs` の `field_list` である。`field_list` は要素がどれも小文字の名前で始まることを使い、末尾のカンマを受け、更新ではフィールドを1つ以上求める。射影とセクションの番号の形は `field_index` が確かめる。レイアウト段の文脈 `Context::Bracket` は括弧の種類 (`BracketKind` の `Brace`、`Row`、`Other`) を持つ。`Brace` は規則 3 の例外 (`{` の中の行末の `=`) を `is_field_eq` が判定するため、`Row` は row の閉じと打ち切り (規則 4) のためである
 - トークンの種類 (`EOF` まで) は 128 未満に収める。`TokenSet` が `u128` のビット集合であるため
 - `eml_hir` は、型付き AST の API、識別子や演算子の `SyntaxToken`、`eml_syntax` が再公開する `AstPtr` だけを使う。CST の木の構造 (`.syntax()`) には、`AstPtr` を解決する根を作るときのほかは触れず、`rowan` に依存しない
 - E0004 (未対応) は HIR が出し、パーサは出さない。HIR が E0004 を出す構文は [実装の現在地](status.md) の「未対応の構文と E0004」にある。E0004 はどの段階でも同じ意味なので、番号とラベルは `eml_diagnostics` に置く

@@ -35,6 +35,7 @@ pub mod codes {
     pub const NEEDS_PARENS: ErrorCode = ErrorCode(12);
     pub const NESTING_TOO_DEEP: ErrorCode = ErrorCode(13);
     pub const INVALID_MULTILINE_STRING: ErrorCode = ErrorCode(14);
+    pub const BLOCK_CLOSED_BY_COMMA: ErrorCode = ErrorCode(15);
 }
 
 /// 壊れた入力でも必ず木を作る。エラーがあっても後の段階を止めないため。

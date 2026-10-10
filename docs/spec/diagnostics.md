@@ -64,6 +64,7 @@ struct Fix {
 | E0012 | `NEEDS_PARENS` | 括弧の要る形を括弧なしで書いた ([文法](grammar.md) の「文法上の補足」) |
 | E0013 | `NESTING_TOO_DEEP` | 式・パターン・型の入れ子が深すぎる (256 を超えた。[文法](grammar.md)) |
 | E0014 | `INVALID_MULTILINE_STRING` | 複数行の文字列の形の誤り (開きと閉じが同じ行にある、開きの行か閉じの前に文字がある、字下げが足りない) と、補間の穴の中の `"""` ([字句](lexical.md) の「複数行の文字列」) |
+| E0015 | `BLOCK_CLOSED_BY_COMMA` | 行の途中の `,` がブロックを閉じた後、次の行がそのブロックの列から始まる ([レイアウト規則](layout.md) の規則 4) |
 | E1001 | `UNDEFINED_NAME` | 未定義の値の名前 |
 | E1002 | `UNDEFINED_TYPE` | 未定義の型の名前、未定義のエフェクトの名前、本体の注釈に書いたシグネチャにない型変数と row 変数 |
 | E1003 | `DUPLICATE_DEFINITION` | 同じ名前空間でのトップレベルの定義の重複 |

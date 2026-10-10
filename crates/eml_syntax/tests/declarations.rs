@@ -208,6 +208,14 @@ fn fixity_declarations() {
 }
 
 #[test]
+fn an_operator_starting_with_an_arrow_and_an_angle_cannot_be_declared() {
+    assert_eq!(
+        diagnostics("infixl 5 -><")[0],
+        "E0011 1:10 expected an operator"
+    );
+}
+
+#[test]
 fn precedence_out_of_range_is_an_error() {
     assert_eq!(
         diagnostics("infixl 10 +"),
@@ -552,4 +560,18 @@ fn parameters_of_extern_data_are_still_names() {
 #[test]
 fn extern_equation_is_still_an_equation() {
     assert_eq!(item_kinds("extern f x = x"), ["EQUATION"]);
+}
+
+#[test]
+fn deriving_may_be_written_with_leading_commas() {
+    let text = lines(&[
+        "data Color =",
+        "  | Red",
+        "  | Green",
+        "  deriving",
+        "    ( Eq",
+        "    , Show",
+        "    )",
+    ]);
+    assert_eq!(diagnostics(&text), Vec::<String>::new());
 }

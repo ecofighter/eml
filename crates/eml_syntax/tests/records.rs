@@ -314,3 +314,28 @@ fn a_comma_or_an_equals_sign_after_the_brace_is_read_as_a_record() {
         assert!(!tree.contains("UPDATE_EXPR"), "{tree}");
     }
 }
+
+#[test]
+fn records_may_be_written_with_leading_commas() {
+    let text = lines(&[
+        "data P =",
+        "  | P",
+        "    { name : String",
+        "    , age : Int",
+        "    }",
+        "",
+        "p =",
+        "  P",
+        "    { name = \"a\"",
+        "    , age = 3",
+        "    }",
+        "",
+        "q =",
+        "  { p",
+        "    | name = fn x ->",
+        "        x",
+        "    , age = 4",
+        "    }",
+    ]);
+    assert_eq!(diagnostics(&text), Vec::<String>::new());
+}
