@@ -144,7 +144,7 @@ fn op_expr_inner(p: &mut Parser, section: bool) -> OpExpr {
     result
 }
 
-/// 再帰せずに読む連鎖 (演算子の列、フィールドの参照) の1段を、下に `reserved` 段の高さを確保して入れ子の1段に
+/// 再帰せずに読む連鎖 (演算子の列、射影) の1段を、下に `reserved` 段の高さを確保して入れ子の1段に
 /// 数える。上限に達したら、`too_deep` が今の括弧かブロックの中身を読み飛ばすので、連鎖はそこで終わる。
 fn enter_link(p: &mut Parser, reserved: u32, entered: &mut u32) -> bool {
     if !p.enter_reserving(reserved) {

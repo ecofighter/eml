@@ -360,7 +360,7 @@ fn name_ref(p: &mut Parser) {
     m.complete(p, NAME_REF);
 }
 
-/// `.` の前後の空白を禁じるのは、修飾・フィールドアクセスと区別できるようにするため (docs/spec/grammar.md)。
+/// `.` の前後の空白を禁じるのは、修飾・射影と区別できるようにするため (docs/spec/grammar.md)。
 fn dot(p: &mut Parser) {
     if !p.touches_prev() || !p.touches_next() {
         p.error(

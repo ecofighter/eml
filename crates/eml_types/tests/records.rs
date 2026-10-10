@@ -135,6 +135,23 @@ fn fields_that_the_type_does_not_have() {
 }
 
 #[test]
+fn unit_has_no_fields() {
+    // `Unit` は要素のないタプルなので、番号の範囲を示す help を作れない
+    let text = "f : Unit -> Int\nf u = u.0\n\ng : Unit -> Int\ng u = u.name\n\nh : Unit -> Unit\nh u = { u | x = 1 }";
+    insta::assert_snapshot!(diagnostics(text), @"
+    E2014 2:9 no field `0` on type `Unit`
+      2:9 unknown field
+      help: `Unit` has no fields
+    E2014 5:9 no field `name` on type `Unit`
+      5:9 unknown field
+      help: `Unit` has no fields
+    E2014 8:13 no field `x` on type `Unit`
+      8:13 unknown field
+      help: `Unit` has no fields
+    ");
+}
+
+#[test]
 fn update_errors() {
     let text = format!(
         "{PERSON}f : (Int, Int) -> (Int, Int)\nf t = {{ t | x = 1 }}\n\ng : Person -> Person\ng p = {{ p | nick = \"a\" }}\n\nh : Person -> Person\nh p = {{ p | age = \"old\" }}"

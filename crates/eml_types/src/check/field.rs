@@ -127,6 +127,10 @@ impl BodyCheck<'_, '_> {
                 }
                 _ => {
                     let help = match site {
+                        // `Unit` は要素のないタプルなので、示せる番号の範囲がなく、作り直すタプルもない
+                        _ if elements.is_empty() => {
+                            format!("`{}` has no fields", self.show(base_ty))
+                        }
                         Site::Projection => format!(
                             "the elements of this tuple are numbered from `0` to `{}`",
                             elements.len() - 1

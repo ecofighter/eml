@@ -10,7 +10,7 @@ M1 (言語の全体を一通り通す vertical slice と、本番の構文の最
 
 - 基本型: `Int`、`Bool`、`String`、`Unit`。`Bool` は Prelude の `data Bool = | False | True` で、キーワード `true` / `false` はない。単項の `!` はなく、関数 `not` を使う
 - タプルと射影 `t.0`、型引数を持つ代数的データ型 (`data`)、`match` と入れ子のパターン、`Int` と `String` のリテラルのパターン
-- 名前付きのレコード: `data` のコンストラクタの名前付きのフィールド、作る式 `Person { name = "a", age = 3 }` と省略形、射影 `p.name`、更新 `{ p | age = 31 }`、分解のパターン、フィールドのセクション `(.name)` と `(.0)`、導出した `Show` の `Person { … }` の表示 ([直積型とレコード](../spec/records.md))。呼び出しの引数のラムダは、ほかの引数の後に型を検査する ([型と Kind](../spec/types.md) の「フィールドの解決」)
+- 名前付きのレコード: `data` のコンストラクタの名前付きのフィールド、作る式 `Person { name = "a", age = 3 }` と省略形、射影 `p.name`、更新 `{ p | age = 31 }`、分解のパターン、フィールドのセクション `(.name)` と `(.0)`、導出した `Show` の `Person { … }` の表示 ([直積型とレコード](../spec/records.md))。呼び出しの引数のラムダは、ほかの引数の後に型を検査する ([型と Kind](../spec/types.md) の「引数のラムダを後で検査する」)
 - Prelude の `List`、`Option`、`Result` と、その `Eq`、`Ord`、`Show` の instance ([宣言](../spec/declarations.md) の「Prelude のクラス」)。リストのリテラル `[…]` とパターン、コンストラクタ `::` (`infixr 5`。Prelude だけが宣言できる、E1044) ([式](../spec/expressions.md) の「リスト」)。リストを扱う関数 (`map`、`length` など) はまだない
 - 文字列: エスケープ、補間 `\{式}`、複数行の文字列 `"""`、raw 文字列 `r"…"` / `r#"…"#` ([字句](../spec/lexical.md) の「文字列」)。補間の穴は、Prelude の `Show` のメソッド `display` で文字列にする ([式](../spec/expressions.md) の「補間」)。文字列を扱う関数 (`length`、`split` など) はまだなく、S12 の標準ライブラリの spec で決める
 - トップレベルの関数 (シグネチャが必須)、複数の等式による定義、ローカルの `let` と `let ... in`、`if` (then 節が `Unit` なら `else` を省略できる)、再帰、ラムダとクロージャ、部分適用、型の明示 `(e : T)`

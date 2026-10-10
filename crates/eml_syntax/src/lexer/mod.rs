@@ -432,7 +432,7 @@ impl Lexer<'_> {
         self.push(kind, self.pos + len);
     }
 
-    /// `t.0.1` の `0.1` はフィールドアクセスの並びなので、空白なしの `.` の直後の `数字.数字` を `INT` `DOT` `INT` に分ける。
+    /// `t.0.1` の `0.1` は射影の並びなので、空白なしの `.` の直後の `数字.数字` を `INT` `DOT` `INT` に分ける。
     fn split_field_index(&mut self, len: usize) -> bool {
         let text = self.text;
         let start = self.pos;
