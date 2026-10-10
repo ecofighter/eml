@@ -328,11 +328,9 @@ impl BodyCheck<'_, '_> {
             // 各穴は `display e` の呼び出しで、`String` を返す。穴の式の型には、`display` の参照が `Show` の制約を付ける
             // (docs/spec/expressions.md の「補間」)
             ExprKind::Interpolation(segments) => {
-                for segment in segments {
-                    if let Segment::Hole(hole) = segment {
-                        let string = self.table.string;
-                        self.check_expr(*hole, string, Origin::Inferred);
-                    }
+                for hole in segments.iter().filter_map(Segment::hole) {
+                    let string = self.table.string;
+                    self.check_expr(hole, string, Origin::Inferred);
                 }
                 self.table.string
             }

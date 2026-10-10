@@ -4,7 +4,12 @@
 
 use std::mem;
 
-use crate::{Atom, Block, BlockId, CoreFn, Repr, Stmt, Term, VarId, VarInfo};
+use eml_extern::{Extern, ExternType};
+
+use crate::{Atom, Block, BlockId, CoreFn, Repr, Rhs, Stmt, Term, VarId, VarInfo};
+
+use super::program::Interner;
+use super::types::named;
 
 /// 値の渡し先になる、まだブロックになっていない位置。そこへ向かう開いたままのブロックを集め、ラベルを持つ式を
 /// 変換し終えたら `resolve` で扱いを決める。
@@ -63,6 +68,28 @@ impl FnBuilder {
     pub(super) fn emit(&mut self, stmt: Stmt) {
         let block = self.current.expect("statements go into an open block");
         self.blocks[block.0 as usize].stmts.push(stmt);
+    }
+
+    /// 文字列の定数を新しい変数に束縛する。導出した `Show` と補間が、同じ形で文字列を組むためにここに置く。
+    pub(super) fn string(&mut self, strings: &mut Interner, text: &str) -> Atom {
+        let id = strings.intern(text);
+        self.bind_string(Rhs::ConstString(id))
+    }
+
+    /// extern の `++` (`StrConcat`) で2つの文字列をつなぐ。ユーザーが定義した `++` によらない
+    /// (docs/spec/core-ir.md の「変換の規則」)。
+    pub(super) fn concat(&mut self, left: Atom, right: Atom) -> Atom {
+        self.bind_string(Rhs::Extern {
+            ext: Extern::StrConcat,
+            args: vec![left, right],
+            at: None,
+        })
+    }
+
+    fn bind_string(&mut self, rhs: Rhs) -> Atom {
+        let var = self.var(named("s", ExternType::String.row().repr));
+        self.emit(Stmt::Let { var, rhs });
+        Atom::Var(var)
     }
 
     /// 今のブロックを終端で閉じる。

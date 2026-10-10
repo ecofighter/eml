@@ -270,10 +270,8 @@ impl Carrying<'_, '_> {
     /// 制約が増えないため (docs/implementation/architecture.md の「`eml_types` の内部」)。
     fn interpolation(&mut self, segments: &[Segment], after: &Live) -> Live {
         let mut live = after.clone();
-        for segment in segments.iter().rev() {
-            if let Segment::Hole(hole) = segment {
-                live = self.expr(*hole, &live);
-            }
+        for hole in segments.iter().rev().filter_map(Segment::hole) {
+            live = self.expr(hole, &live);
         }
         live
     }

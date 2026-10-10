@@ -4,9 +4,20 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use eml_cli::{FsProvider, OutputSink, RunConfig, RuntimeError, Session};
 use eml_diagnostics::{has_errors, render};
+
+/// insta の `glob!` は、失敗の数をすべてのスレッドで共有する1つのスタックの一番上に数え、終わりにも一番上を取り出す
+/// (insta 1.49 の `glob.rs` と `runtime.rs` の `GLOB_STACK`)。そのため、glob のテストが並んで走ると、ほかのテストの
+/// スナップショットの失敗を自分の失敗として報告する。glob のテストは、このロックを持って1つずつ走らせる。
+static GLOB: Mutex<()> = Mutex::new(());
+
+/// 前に失敗したテストが毒したロックも使う。そのテストの失敗は、そのテスト自身が報告している。
+fn glob_lock() -> MutexGuard<'static, ()> {
+    GLOB.lock().unwrap_or_else(PoisonError::into_inner)
+}
 
 fn ui_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -123,6 +134,7 @@ fn compile_and_execute(path: &Path, suffix: &str) -> (String, String, Result<(),
 
 #[test]
 fn run() {
+    let _glob = glob_lock();
     insta::glob!("../../../tests/ui", "run/**/*.em", |path| {
         let Entry::Test(suffix) = classify(path, "run") else {
             return;
@@ -137,6 +149,7 @@ fn run() {
 
 #[test]
 fn run_fail() {
+    let _glob = glob_lock();
     insta::glob!("../../../tests/ui", "run-fail/**/*.em", |path| {
         let Entry::Test(suffix) = classify(path, "run-fail") else {
             return;
@@ -155,6 +168,7 @@ fn run_fail() {
 
 #[test]
 fn check_fail() {
+    let _glob = glob_lock();
     insta::glob!("../../../tests/ui", "check-fail/**/*.em", |path| {
         let Entry::Test(suffix) = classify(path, "check-fail") else {
             return;

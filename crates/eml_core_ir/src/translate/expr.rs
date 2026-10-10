@@ -524,27 +524,15 @@ impl FnLowering<'_> {
                 // 穴を評価するたびにつなぐので、穴の呼び出しをまたいで生きているのは組み立て中の文字列だけである。
                 // 連結は、導出した `Show` と同じく extern を直接呼び、ユーザーの `++` によらない
                 // (docs/spec/core-ir.md の「変換の規則」)
-                let repr = ExternType::String.row().repr;
                 let mut acc: Option<Atom> = None;
                 for segment in segments {
                     let part = match segment {
-                        Segment::Text(text) => {
-                            let index = self.program.strings.intern(text);
-                            self.bind("s", repr, Rhs::ConstString(index))
-                        }
+                        Segment::Text(text) => self.builder.string(&mut self.program.strings, text),
                         Segment::Hole(hole) => self.atom(*hole),
                     };
                     acc = Some(match acc {
                         None => part,
-                        Some(left) => self.bind(
-                            "s",
-                            repr,
-                            Rhs::Extern {
-                                ext: Extern::StrConcat,
-                                args: vec![left, part],
-                                at: None,
-                            },
-                        ),
+                        Some(left) => self.builder.concat(left, part),
                     });
                 }
                 acc.expect("an interpolation has a hole")

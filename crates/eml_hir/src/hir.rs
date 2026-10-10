@@ -376,11 +376,7 @@ impl Body {
                 }
             }
             ExprKind::Interpolation(segments) => {
-                for segment in segments {
-                    if let Segment::Hole(hole) = segment {
-                        f(*hole);
-                    }
-                }
+                segments.iter().filter_map(Segment::hole).for_each(f);
             }
             ExprKind::Drop(value) => f(*value),
         }
@@ -543,6 +539,15 @@ pub enum ExprKind {
 pub enum Segment {
     Text(String),
     Hole(ExprId),
+}
+
+impl Segment {
+    pub fn hole(&self) -> Option<ExprId> {
+        match self {
+            Segment::Text(_) => None,
+            Segment::Hole(hole) => Some(*hole),
+        }
+    }
 }
 
 /// `match` の由来。等式から作った `match` は、網羅性の検査が `match` 式ではなく等式として報告する

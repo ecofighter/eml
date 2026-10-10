@@ -841,7 +841,15 @@ impl<'a> BodyLowering<'a> {
         let Some(parts) = string.parts() else {
             return self.alloc(ExprKind::Missing, range);
         };
-        let mut holes = string.holes();
+        let mut holes = string.holes().peekable();
+        if holes.peek().is_none() {
+            // 穴のない文字列の部分は、本文をまとめた1つの `Text` か、空である
+            let text = match parts.into_iter().next() {
+                Some(ast::StringPart::Text(text)) => text,
+                _ => String::new(),
+            };
+            return self.alloc(ExprKind::Literal(Literal::String(text)), range);
+        }
         let mut segments = Vec::new();
         for part in parts {
             match part {
@@ -864,19 +872,6 @@ impl<'a> BodyLowering<'a> {
                     segments.push(Segment::Hole(call));
                 }
             }
-        }
-        if !segments
-            .iter()
-            .any(|segment| matches!(segment, Segment::Hole(_)))
-        {
-            let text = segments
-                .into_iter()
-                .map(|segment| match segment {
-                    Segment::Text(text) => text,
-                    Segment::Hole(_) => unreachable!("checked above"),
-                })
-                .collect();
-            return self.alloc(ExprKind::Literal(Literal::String(text)), range);
         }
         self.alloc(ExprKind::Interpolation(segments), range)
     }

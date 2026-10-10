@@ -123,6 +123,16 @@ struct Usage<'a, 'c> {
 }
 
 impl<'a> Usage<'a, '_> {
+    /// 左から順に評価する部分 (タプルとリストの要素、補間の穴) の使用をつなぐ。
+    fn in_order(&mut self, parts: impl Iterator<Item = ExprId>) -> Uses {
+        let mut uses = Uses::new();
+        for part in parts {
+            let next = self.expr(part);
+            sequence(&mut uses, next);
+        }
+        uses
+    }
+
     fn expr(&mut self, id: ExprId) -> Uses {
         let body = self.body;
         let at = body.exprs[id].range;
@@ -263,22 +273,10 @@ impl<'a> Usage<'a, '_> {
                 uses
             }
             ExprKind::Tuple(elements) | ExprKind::List(elements) => {
-                let mut uses = Uses::new();
-                for &element in elements {
-                    let next = self.expr(element);
-                    sequence(&mut uses, next);
-                }
-                uses
+                self.in_order(elements.iter().copied())
             }
             ExprKind::Interpolation(segments) => {
-                let mut uses = Uses::new();
-                for segment in segments {
-                    if let Segment::Hole(hole) = segment {
-                        let next = self.expr(*hole);
-                        sequence(&mut uses, next);
-                    }
-                }
-                uses
+                self.in_order(segments.iter().filter_map(Segment::hole))
             }
             ExprKind::Drop(value) => self.expr(*value),
             ExprKind::Lambda(closure) => {
