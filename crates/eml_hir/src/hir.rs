@@ -349,6 +349,10 @@ pub struct Body {
     /// 診断が、書き手の `_` と区別してフィールドの名前で報告するため
     /// (docs/superpowers/specs/2026-10-10-s6c-records-design.md の「パターン」)。
     pub omitted_fields: ArenaMap<PatId, (ConstructorId, u32)>,
+    /// `use` が残りの文を包むために組んだラムダ。型検査は、呼び出しの引数のラムダを後に回すが、これは後に回さない。
+    /// 後に回すと、`use` のブロックの型の誤りが、書いていないラムダの中の誤りとして報告されるため
+    /// (docs/superpowers/specs/2026-10-10-s6c-records-design.md の「`use` のラムダの印」)。
+    pub use_lambdas: HashSet<ExprId>,
 }
 
 impl Body {

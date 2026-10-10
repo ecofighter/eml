@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use eml_diagnostics::{Diagnostic, FileId, Label, TextRange};
 use eml_syntax::{SyntaxKind, SyntaxToken, ast};
 use la_arena::{Arena, ArenaMap};
@@ -31,6 +33,7 @@ pub(super) struct BodyLowering<'a> {
     locals: Arena<Local>,
     pub(super) continuations: ArenaMap<LocalId, usize>,
     pub(super) omitted_fields: ArenaMap<PatId, (ConstructorId, u32)>,
+    use_lambdas: HashSet<ExprId>,
     /// 内側の束縛ほど後ろにある。後の `let` が前の同じ名前を隠す (docs/spec/expressions.md)。
     pub(super) scope: Vec<(String, LocalId)>,
     /// 今変換しているパターンの組が `scope` に積み始めた位置。組の中で同じ名前を2回束縛したら E1017 にする。
@@ -77,6 +80,7 @@ impl<'a> BodyLowering<'a> {
             locals: Arena::new(),
             continuations: ArenaMap::default(),
             omitted_fields: ArenaMap::default(),
+            use_lambdas: HashSet::new(),
             scope: Vec::new(),
             group_start: 0,
         }
@@ -105,6 +109,7 @@ impl<'a> BodyLowering<'a> {
             has_errors: self.diagnostics.len() > reported,
             continuations: self.continuations,
             omitted_fields: self.omitted_fields,
+            use_lambdas: self.use_lambdas,
         }
     }
 
@@ -515,6 +520,7 @@ impl<'a> BodyLowering<'a> {
             }),
             wrapped,
         );
+        self.use_lambdas.insert(lambda);
         self.call(callee, vec![lambda], wrapped)
     }
 

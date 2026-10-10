@@ -180,3 +180,61 @@ fn a_projection_uses_its_base_once() {
       help: take the value apart with a record pattern and pass `log` to `drop`
     ");
 }
+
+const PEOPLE: &str = "data Person = | Person { name : String, age : Int }\n\nmap : (a -> b) -> List a -> List b\nmap f xs = match xs with\n  | [] -> []\n  | x :: rest -> f x :: map f rest\n\n";
+
+#[test]
+fn lambda_arguments_are_checked_after_the_others() {
+    for body in [
+        "map (.name) people",
+        "map (fn p -> p.name) people",
+        "people |> map (.name)",
+        "map (fn p -> p.name ++ \"!\") people",
+    ] {
+        let text = format!("{PEOPLE}f : List Person -> List String\nf people = {body}");
+        assert_eq!(diagnostics(&text), "", "{body}");
+    }
+    let text = format!("{PEOPLE}f : List Int -> List Int\nf xs = map (+ 1) xs");
+    assert_eq!(diagnostics(&text), "");
+}
+
+#[test]
+fn diagnostics_without_record_lambdas_do_not_change() {
+    let konst = "konst : a -> b -> a\nkonst x _ = x\n\nf : Unit -> Int\nf () = konst 1 2 3";
+    assert!(
+        diagnostics(konst).contains("takes 2 arguments but 3 were given"),
+        "{}",
+        diagnostics(konst)
+    );
+    let apply = "apply : (a -> b) -> a -> b\napply f x = f x\n\nf : Unit -> Int\nf () = apply (fn x -> x) 1 2";
+    assert!(
+        diagnostics(apply).contains("takes 2 arguments but 3 were given"),
+        "{}",
+        diagnostics(apply)
+    );
+}
+
+#[test]
+fn a_typo_in_the_callee_does_not_cascade_into_the_lambda() {
+    let text =
+        format!("{PEOPLE}f : List Person -> List String\nf people = mapp (fn p -> p.name) people");
+    let shown = diagnostics(&text);
+    assert!(shown.starts_with("E1001"), "{shown}");
+    assert!(!shown.contains("E2013"), "{shown}");
+}
+
+#[test]
+fn use_blocks_keep_their_diagnostics() {
+    let text = "with_x : (Int -> String) -> String\nwith_x k = k 1\n\nf : Unit -> String\nf () =\n  use x <- with_x\n  x";
+    insta::assert_snapshot!(diagnostics(text), @"
+    E2001 7:3 mismatched types
+      7:3 expected `String`, found `Int`
+      note: the body of a lambda must have the return type the lambda is expected to have
+    ");
+    let generic = "with_x : (Int -> a) -> a\nwith_x k = k 1\n\nf : Unit -> String\nf () =\n  use x <- with_x\n  x";
+    insta::assert_snapshot!(diagnostics(generic), @"
+    E2001 6:3 mismatched types
+      6:3 expected `String`, found `Int`
+      4:5 expected because of the signature of `f`
+    ");
+}

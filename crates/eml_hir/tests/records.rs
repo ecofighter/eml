@@ -1,6 +1,6 @@
 //! レコードの宣言、作る式、パターン、射影、更新、セクション (docs/superpowers/specs/2026-10-10-s6c-records-design.md の「HIR」)。
 
-use eml_hir::{Body, ExprKind, FieldKey, PatKind, Program};
+use eml_hir::{Body, ExprId, ExprKind, FieldKey, PatKind, Program};
 
 use crate::common::{diagnostics, lower_files_text, lower_text};
 
@@ -237,4 +237,28 @@ fn projections_and_updates_are_not_values_for_grouping_arguments() {
         let body = body(&lowered.program, name);
         assert!(!eml_hir::is_value(&lowered.program, body, body.root));
     }
+}
+
+#[test]
+fn use_records_the_lambdas_it_builds() {
+    let text = "with_x : (Int -> Int) -> Int\nwith_x k = k 1\n\nf : Unit -> Int\nf () =\n  use x <- with_x\n  with_x (fn y -> x + y)";
+    let lowered = eml_test_support::lower(text);
+    let body = body(&lowered.program, "f");
+    let parameter = |id: ExprId| {
+        let ExprKind::Lambda(closure) = &body.exprs[id].kind else {
+            panic!("only lambdas are marked");
+        };
+        let PatKind::Bind(local) = body.pats[closure.params[0]].kind else {
+            panic!("the parameter is a variable");
+        };
+        body.locals[local].name.clone()
+    };
+    let lambdas = body
+        .exprs
+        .iter()
+        .filter(|(_, expr)| matches!(expr.kind, ExprKind::Lambda(_)))
+        .count();
+    assert_eq!(lambdas, 2);
+    let marked: Vec<String> = body.use_lambdas.iter().map(|&id| parameter(id)).collect();
+    assert_eq!(marked, ["x"]);
 }

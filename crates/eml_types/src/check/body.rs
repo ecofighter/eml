@@ -83,6 +83,19 @@ pub(super) enum Expectation {
     None,
 }
 
+/// 呼び出しで後に回したラムダの引数 (引数、矢印の引数の型、由来) と、後に回した矢印の row (引数の番号、row)。
+#[derive(Default)]
+struct Postponed {
+    lambdas: Vec<(ExprId, Ty, Origin)>,
+    rows: Vec<(usize, Row)>,
+}
+
+impl Postponed {
+    fn is_empty(&self) -> bool {
+        self.lambdas.is_empty() && self.rows.is_empty()
+    }
+}
+
 /// 関数型として見たときの最初の矢印。
 pub(super) enum Arrow {
     Fn { param: Ty, row: Row, ret: Ty },
@@ -219,6 +232,10 @@ impl BodyCheck<'_, '_> {
                     self.expect(expr.range, expected, found, &origin);
                 }
             },
+            ExprKind::Call { callee, args, .. } => {
+                let found = self.call(id, *callee, args, Expectation::Has(expected, origin));
+                self.typing.exprs.insert(id, found);
+            }
             ExprKind::Lambda(Closure {
                 params,
                 body: lambda_body,
@@ -323,7 +340,7 @@ impl BodyCheck<'_, '_> {
             ExprKind::Literal(Literal::String(_)) => self.table.string,
             ExprKind::Literal(Literal::Unit) => self.table.unit,
             ExprKind::Path(res) => self.path(id, *res, expr.range, true),
-            ExprKind::Call { callee, args, .. } => self.call(id, *callee, args),
+            ExprKind::Call { callee, args, .. } => self.call(id, *callee, args, Expectation::None),
             ExprKind::If {
                 condition,
                 then_branch,
@@ -603,7 +620,17 @@ impl BodyCheck<'_, '_> {
 
     /// 等式と同じく、引数を1つ受けるごとに型の矢印を1つたどる。たどった矢印の row はすべて今の row に含まれなければ
     /// ならない。矢印が余れば部分適用で、残りの関数型が値の型になる (docs/spec/expressions.md の「関数適用」)。
-    fn call(&mut self, id: ExprId, callee: ExprId, args: &[ExprId]) -> Ty {
+    ///
+    /// 引数のラムダは、ほかの引数の後に検査する。`map (.name) people` で、ラムダの引数の型を `people` から決めるため
+    /// である。期待する型があれば、結果の型をその型と合わせる (docs/superpowers/specs/2026-10-10-s6c-records-design.md
+    /// の「ラムダを後で検査する」)。
+    fn call(
+        &mut self,
+        id: ExprId,
+        callee: ExprId,
+        args: &[ExprId],
+        expectation: Expectation,
+    ) -> Ty {
         let body = self.body;
         let callee_expr = &body.exprs[callee];
         let name = callee_subject(self.program, body, callee);
@@ -625,37 +652,49 @@ impl BodyCheck<'_, '_> {
         };
         let mut arrows = Vec::new();
         let mut results = Vec::new();
+        let mut postponed = Postponed::default();
         // 1回の呼び出しの E2002 は、どの引数の矢印で起きても1つだけ報告する
         let mut reported = false;
+        let argument = |index| Origin::Argument {
+            callee: callee_expr.range,
+            name: name.clone(),
+            index,
+        };
         for (index, &arg) in args.iter().enumerate() {
+            let origin = argument(index);
+            // 呼ばれる側の型が変数なら、`next_arrow` がそれを新しい関数型に決める前に、後に回したラムダを検査する。
+            // その変数を決めるのはラムダかもしれないためである (`apply (fn x -> x) 1 2`)
+            if !postponed.is_empty() && matches!(self.table.shape(ty), TyShape::Var(_)) {
+                self.check_postponed(&mut postponed, id, &name, &mut reported, false);
+            }
             match self.next_arrow(ty) {
                 Arrow::Fn { param, row, ret } => {
                     arrows.push(row.clone());
                     results.push(ret);
-                    let origin = Origin::Argument {
-                        callee: callee_expr.range,
-                        name: name.clone(),
-                        index,
-                    };
-                    self.check_expr(arg, param, origin);
-                    let ok = self.include_call_row(
-                        row,
-                        (id, index),
-                        body.exprs[id].range,
-                        &name,
-                        !reported,
-                    );
-                    reported |= !ok;
+                    if self.postponable(arg) {
+                        postponed.lambdas.push((arg, param, origin));
+                        postponed.rows.push((index, row));
+                    } else {
+                        self.check_expr(arg, param, origin);
+                        // ラムダを後に回した後は、row を引数の順に入れるため、この row も後に回す
+                        if postponed.is_empty() {
+                            self.include_arg_row(row, id, index, &name, &mut reported);
+                        } else {
+                            postponed.rows.push((index, row));
+                        }
+                    }
                     ty = ret;
                 }
                 Arrow::Error => {
-                    self.infer_expr(arg);
+                    self.check_postponed(&mut postponed, id, &name, &mut reported, true);
+                    self.check_against_error(arg, origin);
                 }
                 Arrow::NotFunction => {
                     let diagnostic = self.call_arity_error(&name, index, args.len(), arg);
                     self.diagnostics.push(diagnostic);
-                    for &rest in &args[index..] {
-                        self.infer_expr(rest);
+                    self.check_postponed(&mut postponed, id, &name, &mut reported, true);
+                    for (rest_index, &rest) in args.iter().enumerate().skip(index) {
+                        self.check_against_error(rest, argument(rest_index));
                     }
                     self.typing.calls.insert(
                         id,
@@ -681,7 +720,72 @@ impl BodyCheck<'_, '_> {
         if opened_later {
             ty = self.table.open_spine(ty);
         }
+        let range = body.exprs[id].range;
+        let expectation = if postponed.is_empty() {
+            expectation
+        } else {
+            // `people |> map (.name)` では、期待する型が `map` の型変数を決めてから、ラムダを検査する
+            if let Expectation::Has(expected, origin) = expectation {
+                self.expect(range, expected, ty, &origin);
+            }
+            self.check_postponed(&mut postponed, id, &name, &mut reported, false);
+            Expectation::None
+        };
+        if let Expectation::Has(expected, origin) = expectation {
+            self.expect(range, expected, ty, &origin);
+        }
         ty
+    }
+
+    /// 後に回す引数か。`use` が組んだラムダは後に回さない。`use` のブロックの型の誤りを、シグネチャを指す今の報告の
+    /// まま保つためである (docs/superpowers/specs/2026-10-10-s6c-records-design.md の「`use` のラムダの印」)。
+    fn postponable(&self, arg: ExprId) -> bool {
+        matches!(self.body.exprs[arg].kind, ExprKind::Lambda(_))
+            && !self.body.use_lambdas.contains(&arg)
+    }
+
+    /// 後に回したラムダを左から検査し、後に回した row を引数の順に今の row に入れる。ラムダの本体が row 変数を決めて
+    /// から row を入れるため、この順にする (`try (fn () -> deploy ())`)。`error` なら、呼び出しの型が壊れているので、
+    /// ラムダを `Error` の型に対して検査する。
+    fn check_postponed(
+        &mut self,
+        postponed: &mut Postponed,
+        call: ExprId,
+        name: &str,
+        reported: &mut bool,
+        error: bool,
+    ) {
+        for (arg, param, origin) in std::mem::take(&mut postponed.lambdas) {
+            let param = if error { self.table.error } else { param };
+            self.check_expr(arg, param, origin);
+        }
+        for (index, row) in std::mem::take(&mut postponed.rows) {
+            self.include_arg_row(row, call, index, name, reported);
+        }
+    }
+
+    fn include_arg_row(
+        &mut self,
+        row: Row,
+        call: ExprId,
+        index: usize,
+        name: &str,
+        reported: &mut bool,
+    ) {
+        let range = self.body.exprs[call].range;
+        let ok = self.include_call_row(row, (call, index), range, name, !*reported);
+        *reported |= !ok;
+    }
+
+    /// 型の壊れた呼び出しの引数。ラムダは `Error` の型に対して検査し、引数を `Error` で束縛する。推論すると引数に
+    /// 新しい変数が付き、射影の E2013 が連鎖するためである。
+    fn check_against_error(&mut self, arg: ExprId, origin: Origin) {
+        if matches!(self.body.exprs[arg].kind, ExprKind::Lambda(_)) {
+            let error = self.table.error;
+            self.check_expr(arg, error, origin);
+        } else {
+            self.infer_expr(arg);
+        }
     }
 
     /// `check` の間だけ今の row とその由来を替え、終わったら戻す。ラムダの本体は、外側の関数ではなく、ラムダで最後に
