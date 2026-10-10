@@ -311,7 +311,7 @@ fn atom(p: &mut Parser) -> Option<CompletedMarker> {
 
 /// `string ::= STRING_START (STRING_TEXT | ESCAPE | interp)* STRING_END` と `command`。閉じていない文字列は lexer が
 /// 報告済みなので、`STRING_END` がなくても黙って終える。パターンの文字列 (`in_pattern`) も同じ形に組み、穴ごとに
-/// 誤りを出す (docs/superpowers/specs/2026-10-10-s6b-strings-design.md の「パターン」)。
+/// 誤りを出す (docs/spec/grammar.md の「文法上の補足」)。
 pub(super) fn string_lit(p: &mut Parser, in_pattern: bool) -> SyntaxKind {
     let (text, end, node) = if p.at(CMD_START) {
         (CMD_TEXT, CMD_END, COMMAND_LIT)
@@ -340,7 +340,7 @@ pub(super) fn string_lit(p: &mut Parser, in_pattern: bool) -> SyntaxKind {
 }
 
 /// 穴は括弧と同じく1段に数えるので、`paren_expr` と同じく、`expr` の形で始まらない式は `op_expr` で直接読む
-/// (docs/superpowers/specs/2026-10-10-s6b-strings-design.md の「深さ」)。lexer が `INTERP_END` を必ず出すので、
+/// (docs/spec/grammar.md の「文法上の補足」)。lexer が `INTERP_END` を必ず出すので、
 /// 穴はいつもそこで終わる。幅 0 の `INTERP_END` は閉じていない穴で、lexer が報告済みなので誤りを重ねない。
 fn interp(p: &mut Parser, spread: bool) {
     let m = p.start();

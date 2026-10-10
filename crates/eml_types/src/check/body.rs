@@ -326,7 +326,7 @@ impl BodyCheck<'_, '_> {
             }
             ExprKind::List(elements) => self.list(expr.range, elements),
             // 各穴は `display e` の呼び出しで、`String` を返す。穴の式の型には、`display` の参照が `Show` の制約を付ける
-            // (docs/superpowers/specs/2026-10-10-s6b-strings-design.md の「型検査」)
+            // (docs/spec/expressions.md の「補間」)
             ExprKind::Interpolation(segments) => {
                 for segment in segments {
                     if let Segment::Hole(hole) = segment {

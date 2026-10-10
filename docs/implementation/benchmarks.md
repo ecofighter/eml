@@ -2,7 +2,7 @@
 
 位置づけ: 手引き。
 
-段の前後で実行の費用を比べるための、基準のプログラムと測り方をまとめる。S7 の evidence passing と S10 の VM は、ここの記録と比べる ([ロードマップ](../future/roadmap.md))。S4b の単相化、S5 の型クラス、S6a のリストのそれぞれの前後は、下の「記録」にある。
+段の前後で実行の費用を比べるための、基準のプログラムと測り方をまとめる。S7 の evidence passing と S10 の VM は、ここの記録と比べる ([ロードマップ](../future/roadmap.md))。S4b の単相化、S5 の型クラス、S6a のリスト、S6b の文字列のそれぞれの前後は、下の「記録」にある。
 
 費用は2つの数で見る。
 
@@ -121,3 +121,23 @@ S5 で `RunStats` は変わらない。`crates/eml_interp/tests/bench.rs` のス
 S6a で `RunStats` は変わらない。`crates/eml_interp/tests/bench.rs` のスナップショットと `bench/` は S5 のままである。`list.em` の自分の `List` は、Prelude の `List` を隠す。
 
 命令の数は、`empty` が S5 より約245万 (約9.5%) 増えた。増えたのは、Prelude の構文解析と検査の分である。同じビルドで `eml check bench/empty.em` を測ると約2810万で、`eml run` の約2835万とほとんど同じなので、この分はほぼすべてフロントエンドにある。Prelude は 124 行から 150 行になり、`List`、`Option`、`Result` の宣言、手で書いた `Show (List a)`、導出した instance (`List` の `Eq` と `Ord`、`Option` と `Result` の `Eq`、`Ord`、`Show`) を毎回検査するようになった。`empty` の値を引いた実行の分は、`loop` で約0.017%、`list` で約0.24%、`state` で約0.30% 増え、`tree` で約0.08%、`fib` で約0.16% 減った。仕事の回数は同じである。雑音を超える差の原因は調べていない。
+
+### S6b (文字列)
+
+- 機種: Mac16,1 (Apple M4)
+- OS: macOS 26.6.2 (25G83)
+- rustc: rustc 1.95.0 (59807616e 2026-04-14) (built from a source tarball)
+- コミット: ac37a74
+
+| プログラム | instructions retired | 実時間 (s) |
+|---|---:|---:|
+| `empty` | 28688144 | 0.00 |
+| `fib` | 979667945 | 0.04 |
+| `list` | 1798409587 | 0.07 |
+| `loop` | 1512567428 | 0.06 |
+| `state` | 1051140152 | 0.04 |
+| `tree` | 1566116997 | 0.07 |
+
+S6b で `RunStats` は変わらない。`crates/eml_interp/tests/bench.rs` のスナップショットと `bench/` は S6a のままである。`bench/` のプログラムは補間を使わず、box の挿入、縮約、Perceus、インタプリタ、ランタイムも S6b では変えていない。
+
+命令の数は、`empty` が S6a より約31万 (約1.1%) 増えた。同じビルドで `eml check bench/empty.em` を測ると約2847万で、`eml run` の約2869万とほとんど同じなので、この分はほぼすべてフロントエンドにある。増えた理由は2つある。Prelude は 150 行から 154 行になり、`Show` の `display` とその既定、`String` の instance の `display` を毎回検査するようになった。また、lexer はトークンを切り出す前にモードのスタックを見るようになり、文字列をモードごとに細かいトークンに分けるようになった。2つの寄与は分けて測っていない。`empty` の値を引いた実行の分は、`loop` で約0.005%、`state` で約0.11%、`list` で約0.12%、`fib` で約0.29%、`tree` で約0.45% 増えた。仕事の回数は同じである。`tree` を5回測り直しても約15.66億から15.67億で、雑音の範囲を超える。原因は調べていない。

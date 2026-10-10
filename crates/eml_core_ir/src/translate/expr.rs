@@ -523,7 +523,7 @@ impl FnLowering<'_> {
             ExprKind::Interpolation(segments) => {
                 // 穴を評価するたびにつなぐので、穴の呼び出しをまたいで生きているのは組み立て中の文字列だけである。
                 // 連結は、導出した `Show` と同じく extern を直接呼び、ユーザーの `++` によらない
-                // (docs/superpowers/specs/2026-10-10-s6b-strings-design.md の「translate」)
+                // (docs/spec/core-ir.md の「変換の規則」)
                 let repr = ExternType::String.row().repr;
                 let mut acc: Option<Atom> = None;
                 for segment in segments {

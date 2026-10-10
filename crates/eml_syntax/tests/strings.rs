@@ -1,4 +1,4 @@
-//! 文字列、補間、コマンドリテラルの CST と値 (docs/superpowers/specs/2026-10-10-s6b-strings-design.md)。
+//! 文字列、補間、コマンドリテラルの CST と値 (docs/spec/lexical.md の「文字列」)。
 
 use crate::common::{diagnostics, shape};
 use eml_syntax::ast::{Expr, StringLit, StringPart};

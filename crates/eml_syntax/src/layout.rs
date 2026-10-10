@@ -16,7 +16,7 @@ enum Context {
     },
     Bracket,
     /// 補間の穴。`INTERP_END` だけが取り除く。穴の中の閉じ括弧で穴の外の括弧を閉じないため
-    /// (docs/superpowers/specs/2026-10-10-s6b-strings-design.md の「レイアウト」)。
+    /// (docs/spec/layout.md の規則 4)。
     Interp,
 }
 

@@ -820,7 +820,7 @@ fn a_tag_switch_without_a_layout_stops_perceus() {
 }
 
 /// 補間は穴を評価するたびにつなぐので、穴の呼び出しをまたいで退避するのは組み立て中の文字列だけである
-/// (docs/superpowers/specs/2026-10-10-s6b-strings-design.md の「translate」)。
+/// (docs/spec/core-ir.md の「変換の規則」)。
 #[test]
 fn interpolation_saves_only_the_accumulator_across_holes() {
     let text = "g : Int -> <IO> Int\ng n =\n  println \"g\"\n  n\n\nf : Int -> <IO> String\nf n = \"a\\{g n}b\\{g n}c\\{g n}\"\n\nmain : Unit -> <IO> Unit\nmain () = println (f 1)";

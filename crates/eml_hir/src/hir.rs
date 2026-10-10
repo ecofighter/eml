@@ -117,7 +117,7 @@ pub struct LangItems {
     pub nil: ConstructorId,
     pub cons: ConstructorId,
     /// 補間の穴が名前を引かずに呼ぶ `Show` のメソッド。ユーザーが同じ名前を定義しても、補間は Prelude のものを呼ぶ
-    /// (docs/superpowers/specs/2026-10-10-s6b-strings-design.md の「HIR」)。
+    /// (docs/spec/expressions.md の「補間」)。
     pub display: MethodId,
 }
 
@@ -532,13 +532,13 @@ pub enum ExprKind {
     /// 段階の再帰を深くしないため (docs/spec/grammar.md の「文法上の補足」)。
     List(Vec<ExprId>),
     /// 穴のある文字列。穴は1つ以上ある。`++` の呼び出しにまで脱糖しないのは、連結を translate がまとめて組むため
-    /// (docs/superpowers/specs/2026-10-10-s6b-strings-design.md の「HIR」)。
+    /// (docs/spec/expressions.md の「補間」)。
     Interpolation(Vec<Segment>),
     Drop(ExprId),
 }
 
 /// 補間の部分。`Hole` は HIR が組んだ `display e` の呼び出しである
-/// (docs/superpowers/specs/2026-10-10-s6b-strings-design.md の「HIR」)。
+/// (docs/spec/expressions.md の「補間」)。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Segment {
     Text(String),

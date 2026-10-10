@@ -97,7 +97,7 @@ enum Raw {
 }
 
 /// lexer のモード。底は `Code { hole: None }` で、穴の中は `Code { hole: Some(..) }` である
-/// (docs/superpowers/specs/2026-10-10-s6b-strings-design.md の「モードのスタック」)。
+/// (docs/spec/lexical.md の「モードのスタック」)。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Mode {
     /// `braces` は開いている `{` の数で、穴の閉じを見分けるために穴の中でだけ使う。`hole` は穴の `\{` の位置で、
@@ -107,7 +107,7 @@ enum Mode {
         hole: Option<usize>,
     },
     /// `reported` は、閉じていないことを報告済みか。穴の中の `"""` は開いた時点で E0014 を出すので、行の終わりで
-    /// 閉じるときに E0002 を重ねない (docs/superpowers/specs/2026-10-10-s6b-strings-design.md の「改行での回復」)。
+    /// 閉じるときに E0002 を重ねない (docs/spec/lexical.md の「改行での回復」)。
     String {
         start: usize,
         multiline: bool,
@@ -143,7 +143,7 @@ impl Lexer<'_> {
     }
 
     /// 穴の中では、トークンを改行の手前で切る。穴の中に改行は書けないので、改行に着いたら穴を閉じる
-    /// (docs/superpowers/specs/2026-10-10-s6b-strings-design.md の「穴の中の改行」)。
+    /// (docs/spec/lexical.md の「穴の中の改行」)。
     fn code(&mut self, in_hole: bool) {
         let text = self.text;
         let rest = &text[self.pos..];
@@ -188,7 +188,7 @@ impl Lexer<'_> {
 
     /// 改行かファイルの終わりで、閉じていない層を上から閉じる。止まるのは穴の外の複数行の文字列か底で、`at_eof` なら
     /// 複数行の文字列も閉じる。報告は一番内側の層の1件だけにする。1つの書き忘れに、層の数だけ誤りを並べないため
-    /// (docs/superpowers/specs/2026-10-10-s6b-strings-design.md の「改行での回復」)。
+    /// (docs/spec/lexical.md の「改行での回復」)。
     fn close_layers(&mut self, mut reported: bool, at_eof: bool) {
         loop {
             match *self.modes.last().expect("the base mode is never popped") {
@@ -224,7 +224,7 @@ impl Lexer<'_> {
                 } => {
                     if multiline {
                         // 閉じていないので字下げは検査しないが、開きの行は閉じに関係なく決まる
-                        // (docs/superpowers/specs/2026-10-10-s6b-strings-design.md の「複数行の文字列」)
+                        // (docs/spec/lexical.md の「複数行の文字列」)
                         let text = self.text;
                         let error = literal::opening_line_error(&text[start + 3..]);
                         self.report_layout(start, text.len(), error);
@@ -402,7 +402,7 @@ impl Lexer<'_> {
     }
 
     /// 穴の中では改行の手前で止める。閉じていなければ、E0005 を一番内側の層の報告にして、外側の層を黙って閉じる
-    /// (docs/superpowers/specs/2026-10-10-s6b-strings-design.md の「改行での回復」)。
+    /// (docs/spec/lexical.md の「改行での回復」)。
     fn block_comment(&mut self, in_hole: bool) {
         let text = self.text;
         let start = self.pos;

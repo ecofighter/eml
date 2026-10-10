@@ -1,4 +1,4 @@
-//! 補間の型検査と持ち越し (docs/superpowers/specs/2026-10-10-s6b-strings-design.md の「型検査」)。
+//! 補間の型検査と持ち越し (docs/spec/expressions.md の「補間」)。
 
 use eml_test_support::{check, full};
 

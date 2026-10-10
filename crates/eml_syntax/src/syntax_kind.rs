@@ -16,7 +16,7 @@ pub enum SyntaxKind {
     /// 中に構造がないので、1つのトークンにする。
     RAW_STRING,
     /// 文字列は、複数行の文字列も含めて、穴がなくても細かいトークンに分ける
-    /// (docs/superpowers/specs/2026-10-10-s6b-strings-design.md の「トークン」)。
+    /// (docs/spec/lexical.md の「文字列のトークン」)。
     STRING_START,
     STRING_TEXT,
     ESCAPE,

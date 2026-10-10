@@ -18,7 +18,7 @@ pub(crate) fn simple_escape(c: char) -> Option<char> {
 
 /// `\u` に続く `{...}` を読む。`rest` は `\u` の直後から始まる。`}` を探すのは、リテラルの外 (行末、最初の `"`
 /// とバッククォート) に出ず、次の `\` の手前までの範囲だけである。`"\u{4\{x}}"` の穴を不正なエスケープに飲み込まない
-/// ため (docs/superpowers/specs/2026-10-10-s6b-strings-design.md の「トークン」)。`"` もバッククォートも、正しい
+/// ため (docs/spec/lexical.md の「文字列」)。`"` もバッククォートも、正しい
 /// エスケープの中には現れない。そのため、どちらのリテラルでも両方で止めれば、lexer と値の取り出しが閉じの文字を
 /// 知らずに同じ結果になる。`}` があれば、`rest` の先頭から `}` の次までのバイト数と、正しいエスケープ (1〜6桁の
 /// 16進数で、Unicode のスカラー値) ならその文字を返す。
@@ -62,7 +62,7 @@ pub(crate) fn escape_value(text: &str) -> Option<char> {
 
 /// 複数行の文字列の本文 (開きの `"""` の後ろから閉じの `"""` の手前まで) の形。`content` は値にする範囲 (開きの
 /// 行の改行の後ろから、閉じの行の改行の手前まで) で、`indent` は閉じの `"""` の列である
-/// (docs/superpowers/specs/2026-10-10-s6b-strings-design.md の「複数行の文字列」)。
+/// (docs/spec/lexical.md の「複数行の文字列」)。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct MultilineLayout {
     pub(crate) content: std::ops::Range<usize>,
@@ -146,7 +146,7 @@ pub(crate) fn opening_line_error(body: &str) -> Option<LayoutError> {
 }
 
 /// `RAW_STRING` の値。閉じていなければ `None` で、lexer が報告済みである。改行は `\n` にそろえる
-/// (docs/superpowers/specs/2026-10-10-s6b-strings-design.md の「改行の正規化」)。
+/// (docs/spec/lexical.md の「改行の正規化」)。
 pub(crate) fn raw_value(text: &str) -> Option<String> {
     let after_r = text.strip_prefix('r')?;
     let hashes = after_r.bytes().take_while(|&b| b == b'#').count();

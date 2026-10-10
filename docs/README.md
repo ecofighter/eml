@@ -30,7 +30,7 @@ eml を実装するエージェントとプログラマのための文書群で�
 | [implementation/benchmarks.md](implementation/benchmarks.md) | 手引き | 基準のプログラム、回数のテスト、命令の数の測り方、段ごとの記録 |
 | [implementation/diagnostics.md](implementation/diagnostics.md) | 手引き | 番号ごとの診断が指す場所、help と fix の文言と付ける条件、型エラー・線形性・網羅性の診断の表示 |
 | **future/** | 将来の設計 | まだ実装しない方針 |
-| [future/roadmap.md](future/roadmap.md) | 将来の設計 | 再設計の段 (S6b〜S13)、その後の言語の項目と処理系の項目 |
+| [future/roadmap.md](future/roadmap.md) | 将来の設計 | 再設計の段 (S6c〜S13)、その後の言語の項目と処理系の項目 |
 | [future/multicore.md](future/multicore.md) | 将来の設計 | マルチコア対応の設計 (共有の印方式の RC、`par`、並行処理、継続の移動) |
 | [future/stdlib.md](future/stdlib.md) | 将来の設計 | 標準ライブラリ spec への申し送り |
 | [future/evidence-passing.md](future/evidence-passing.md) | 将来の設計 | ネイティブ化でのエフェクトの実装 (generalized evidence passing、すぐに再開する節、多重度ごとの実装) |

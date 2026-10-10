@@ -1,5 +1,5 @@
 //! 文字列、複数行の文字列、raw 文字列、コマンドリテラルの字句。raw 文字列のほかは、モードのスタックで細かい
-//! トークンに分ける (docs/superpowers/specs/2026-10-10-s6b-strings-design.md の「字句」)。raw 文字列は中に構造が
+//! トークンに分ける (docs/spec/lexical.md の「文字列」)。raw 文字列は中に構造が
 //! ないので、閉じまでを1つのトークンにする。
 
 use super::{Lexer, Mode, line_len};
@@ -18,7 +18,7 @@ impl Lexer<'_> {
 
     /// 穴の中には改行を書けないので、穴の中の `"""` は E0014 にして単一行の文字列として読む。報告済みにしておき、
     /// 開きの行の終わりで閉じるときに E0002 を重ねない
-    /// (docs/superpowers/specs/2026-10-10-s6b-strings-design.md の「改行での回復」)。
+    /// (docs/spec/lexical.md の「改行での回復」)。
     pub(super) fn multiline_start(&mut self, in_hole: bool) {
         let start = self.pos;
         if in_hole {
@@ -39,7 +39,7 @@ impl Lexer<'_> {
     }
 
     /// 本文は改行では止めず、`"""`、`\`、ファイルの終わりの手前で止める。`"` と `""` は本文である
-    /// (docs/superpowers/specs/2026-10-10-s6b-strings-design.md の「複数行の文字列」)。
+    /// (docs/spec/lexical.md の「複数行の文字列」)。
     fn multiline_body(&mut self) {
         let text = self.text;
         let rest = &text[self.pos..];
@@ -69,7 +69,7 @@ impl Lexer<'_> {
     }
 
     /// `start` は開きの `"""` の位置で、`end` は文字列の終わりである。範囲を文字列の中に収め、文字列の外のコードを
-    /// 含めない (docs/superpowers/specs/2026-10-10-s6b-strings-design.md の「複数行の文字列」)。
+    /// 含めない (docs/spec/lexical.md の「複数行の文字列」)。
     pub(super) fn report_layout(
         &mut self,
         start: usize,
@@ -102,7 +102,7 @@ impl Lexer<'_> {
     }
 
     /// コマンドリテラルの中の `"` は本文である
-    /// (docs/superpowers/specs/2026-10-10-s6b-strings-design.md の「トークン」)。
+    /// (docs/spec/lexical.md の「コマンドリテラル」)。
     pub(super) fn command_body(&mut self) {
         self.body(CMD_TEXT, '`', CMD_END);
     }
@@ -137,7 +137,7 @@ impl Lexer<'_> {
     /// `\` から始まるエスケープか補間の開き。行末とファイルの終わりの `\` は長さ 1 の `ESCAPE` にする。単一行の
     /// 文字列とコマンドリテラルでは E0008 を出さない。文字列は閉じていない扱いになり、E0002 だけが出る。複数行の
     /// 文字列は行末で閉じないので、行をつなぐ書き方と取り違えないように E0008 を出す
-    /// (docs/superpowers/specs/2026-10-10-s6b-strings-design.md の「トークン」)。
+    /// (docs/spec/lexical.md の「文字列のトークン」)。
     fn escape_or_hole(&mut self) {
         let text = self.text;
         let i = self.pos;
@@ -213,7 +213,7 @@ impl Lexer<'_> {
     }
 
     /// 改行を含められるが、穴の中では改行の手前で止める。閉じていなければ、E0002 を一番内側の層の報告にして、外側の
-    /// 層を黙って閉じる (docs/superpowers/specs/2026-10-10-s6b-strings-design.md の「改行での回復」)。
+    /// 層を黙って閉じる (docs/spec/lexical.md の「改行での回復」)。
     pub(super) fn raw_string(&mut self, hashes: usize, in_hole: bool) {
         let text = self.text;
         let start = self.pos;

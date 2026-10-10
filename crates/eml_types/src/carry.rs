@@ -267,7 +267,7 @@ impl Carrying<'_, '_> {
     }
 
     /// 補間の穴も左から評価するが、組み立て中の文字列は持っている値に足さない。`String` は `Unr` なので、持っていても
-    /// 制約が増えないため (docs/superpowers/specs/2026-10-10-s6b-strings-design.md の「型検査」)。
+    /// 制約が増えないため (docs/implementation/architecture.md の「`eml_types` の内部」)。
     fn interpolation(&mut self, segments: &[Segment], after: &Live) -> Live {
         let mut live = after.clone();
         for segment in segments.iter().rev() {

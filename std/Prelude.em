@@ -71,7 +71,7 @@ pub class Eq a => Ord a where
     | _ -> True
 
 -- `show` を必須にするのは、`show_prec` と互いの既定にすると、どちらも書かない instance が止まらなくなるため。
--- `display` は補間の穴が呼ぶ (docs/superpowers/specs/2026-10-10-s6b-strings-design.md の「Prelude」)
+-- `display` は補間の穴が呼ぶ (docs/spec/declarations.md の「Prelude のクラス」)
 pub class Show a where
   show : a -> String
   show_prec : Int -> a -> String

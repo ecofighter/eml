@@ -7,7 +7,7 @@ use crate::SyntaxKind::{self, *};
 /// 終わりとする。ファイルの残りを飲み込まないための同期点になる (docs/spec/layout.md の規則 2)。
 ///
 /// 補間の穴 (`INTERP_START` と `INTERP_END`) も入れ子の対として数える。穴の中の括弧の読み飛ばしを、穴の閉じで
-/// 止めるため (docs/superpowers/specs/2026-10-10-s6b-strings-design.md の「穴の読み方」)。
+/// 止めるため (docs/implementation/architecture.md の「構文解析の回復」)。
 #[derive(Debug, Default)]
 pub(super) struct Nesting {
     brackets: u32,

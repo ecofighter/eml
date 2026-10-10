@@ -274,10 +274,14 @@ pub class Show a where
   show : a -> String
   show_prec : Int -> a -> String
   show_prec _ x = show x
+  display : a -> String
+  display x = show x
 ```
 
 - `Show` の `show` は既定を持たない。`show` と `show_prec` を互いの既定にすると、どちらも書かない instance が止まらなくなるためである
 - `show_prec d x` の `d` は、`x` を置く位置の優先度である。関数適用の引数の位置は 11 である。導出した `Show` は、これで入れ子の値と中置のコンストラクタに括弧を付ける (上の「`deriving`」)
+- `show` は読み戻せる形、`display` は人が読む形を返す。補間の穴は `display` を呼ぶ ([式](expressions.md) の「補間」)。`display` の既定は `show` である。Prelude の instance では `String` だけが上書きし、文字列をそのまま返す。Haskell の `Show` が `String` の表示のために `showList` を持つのと同じく、クラスのメソッドで `String` だけを特別に扱う
+- `display` はクラスの普通のメソッドなので、ユーザーが呼ぶことも、instance で上書きすることもできる。導出した instance、タプルと `Unit` の instance、`List` の手書きの instance は既定の `display` を使う。そのため `display (Some "x")` は `Some "x"` で、引用符が付かないのは値そのものが `String` のときだけである
 
 Prelude は、標準のデータ型 `List`、`Option`、`Result` も宣言する。
 
@@ -315,7 +319,7 @@ Prelude の instance は次のとおりである。
 | `Show Int` | `extern show`。`show_prec` は Prelude に書き、`d > 6` で負の数なら括弧で囲む (`Some (-1)`) |
 | `Eq String` | `extern (==)`、`extern (!=)` |
 | `Ord String` | `extern compare`。順はバイト順で、妥当な UTF-8 ではコードポイントの順と一致する。`<` などは既定のメソッドを通る |
-| `Show String` | `extern show`。下のエスケープで表示する |
+| `Show String` | `extern show`。下のエスケープで表示する。`display s = s` で、文字列をそのまま返す。恒等関数で足りるので、extern にしない |
 | `Eq Bool` | `extern (==)`、`extern (!=)` |
 | `Ord Bool`、`Show Bool` | `data Bool = \| False \| True deriving (Ord, Show)` |
 | `Eq Ordering`、`Ord Ordering`、`Show Ordering` | `deriving (Eq, Ord, Show)` |
@@ -326,7 +330,7 @@ Prelude の instance は次のとおりである。
 | タプルと `Unit` の `Eq`、`Ord`、`Show` | 処理系の構造的な instance (上の「`deriving`」) |
 
 - `compare` の extern の行は、`Ordering` の宣言の順のタグ (`LT` が 0) を返す
-- `String` の `show` は、文字列を `"` で囲み、`"` を `\"`、`\` を `\\`、改行を `\n`、タブを `\t`、復帰を `\r`、NUL を `\0` と書く。ほかの U+0001〜U+001F と U+007F は `\u{…}` (16進の小文字で、先頭の 0 を省く) と書く。それ以外の文字はそのまま書く。どれも [字句](lexical.md) の「文字列」のエスケープとして読み戻せる。S6b で補間が入ったら `{` も `\{` にする
+- `String` の `show` は、文字列を `"` で囲み、`"` を `\"`、`\` を `\\`、改行を `\n`、タブを `\t`、復帰を `\r`、NUL を `\0` と書く。ほかの U+0001〜U+001F と U+007F は `\u{…}` (16進の小文字で、先頭の 0 を省く) と書く。それ以外の文字はそのまま書く。どれも [字句](lexical.md) の「文字列」のエスケープとして読み戻せる。`{` はそのまま書く。`\` は `\\` と書くので、`\` の後に `{` が来ても補間の開きにならず、読み戻せる。`{` を `\{` と書くと補間の開きになり、読み戻せない
 - `max` と `min` はまだない
 
 ## `pub`

@@ -1,4 +1,4 @@
-//! 文字列の補間 (docs/superpowers/specs/2026-10-10-s6b-strings-design.md の「HIR」)。
+//! 文字列の補間 (docs/spec/expressions.md の「補間」)。
 
 use crate::common::{diagnostics, lower_text};
 

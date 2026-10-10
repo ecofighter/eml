@@ -244,7 +244,7 @@ impl<'a> BodyLowering<'a> {
             }
             ast::Expr::StringLit(string) => self.lower_string(&string, range),
             // 穴の中の式は lower しない。誤りを E0004 の1件にするため
-            // (docs/superpowers/specs/2026-10-10-s6b-strings-design.md の「HIR」)
+            // (docs/implementation/architecture.md の「`eml_hir` の内部」)
             ast::Expr::CommandLit(_) => {
                 self.unsupported(range, "command literals are not supported yet")
             }
@@ -837,7 +837,7 @@ impl<'a> BodyLowering<'a> {
 
     fn lower_string(&mut self, string: &ast::StringLit, range: TextRange) -> ExprId {
         // 閉じていない文字列、不正なエスケープ、E0014 は字句解析が報告済み。誤りのある文字列の中の誤りを重ねて
-        // 報告しないよう、穴も lower しない (docs/superpowers/specs/2026-10-10-s6b-strings-design.md の「HIR」)
+        // 報告しないよう、穴も lower しない (docs/implementation/architecture.md の「`eml_hir` の内部」)
         let Some(parts) = string.parts() else {
             return self.alloc(ExprKind::Missing, range);
         };

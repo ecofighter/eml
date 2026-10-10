@@ -432,7 +432,7 @@ impl StringLit {
 
     /// `content` の外の本文 (開きの行と閉じの行) は値に入れない。行頭では `indent` 個までの空白を落とす。エスケープと
     /// 穴は行頭の空白でないので、そこで行頭の状態を終える
-    /// (docs/superpowers/specs/2026-10-10-s6b-strings-design.md の「複数行の文字列」「改行の正規化」)。
+    /// (docs/spec/lexical.md の「複数行の文字列」「改行の正規化」)。
     fn multiline_parts(
         &self,
         layout: MultilineLayout,
