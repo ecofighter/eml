@@ -665,7 +665,7 @@ impl BodyCheck<'_, '_> {
             // 呼ばれる側の型が変数なら、`next_arrow` がそれを新しい関数型に決める前に、後に回したラムダを検査する。
             // その変数を決めるのはラムダかもしれないためである (`apply (fn x -> x) 1 2`)
             if !postponed.is_empty() && matches!(self.table.shape(ty), TyShape::Var(_)) {
-                self.check_postponed(&mut postponed, id, &name, &mut reported, false);
+                self.check_postponed(&mut postponed, id, &name, &mut reported);
             }
             match self.next_arrow(ty) {
                 Arrow::Fn { param, row, ret } => {
@@ -686,25 +686,19 @@ impl BodyCheck<'_, '_> {
                     ty = ret;
                 }
                 Arrow::Error => {
-                    self.check_postponed(&mut postponed, id, &name, &mut reported, true);
+                    self.check_postponed(&mut postponed, id, &name, &mut reported);
                     self.check_against_error(arg, origin);
                 }
                 Arrow::NotFunction => {
                     let diagnostic = self.call_arity_error(&name, index, args.len(), arg);
                     self.diagnostics.push(diagnostic);
-                    self.check_postponed(&mut postponed, id, &name, &mut reported, true);
+                    self.check_postponed(&mut postponed, id, &name, &mut reported);
                     for (rest_index, &rest) in args.iter().enumerate().skip(index) {
                         self.check_against_error(rest, argument(rest_index));
                     }
-                    self.typing.calls.insert(
-                        id,
-                        CallRows::Call {
-                            arrows,
-                            results,
-                            performs,
-                        },
-                    );
-                    return self.table.error;
+                    // 期待する型を `Error` と合わせ、外側の呼び出しに誤りを連鎖させないため、下の共通の後始末を通る
+                    ty = self.table.error;
+                    break;
                 }
             }
         }
@@ -728,7 +722,7 @@ impl BodyCheck<'_, '_> {
             if let Expectation::Has(expected, origin) = expectation {
                 self.expect(range, expected, ty, &origin);
             }
-            self.check_postponed(&mut postponed, id, &name, &mut reported, false);
+            self.check_postponed(&mut postponed, id, &name, &mut reported);
             Expectation::None
         };
         if let Expectation::Has(expected, origin) = expectation {
@@ -745,18 +739,17 @@ impl BodyCheck<'_, '_> {
     }
 
     /// 後に回したラムダを左から検査し、後に回した row を引数の順に今の row に入れる。ラムダの本体が row 変数を決めて
-    /// から row を入れるため、この順にする (`try (fn () -> deploy ())`)。`error` なら、呼び出しの型が壊れているので、
-    /// ラムダを `Error` の型に対して検査する。
+    /// から row を入れるため、この順にする (`try (fn () -> deploy ())`)。ラムダは、後に回したときの矢印の引数の型に
+    /// 対して検査する。後の引数で呼び出しが誤りになっても同じである。ラムダの型は誤りより前の矢印で決まっているので、
+    /// ラムダの中の誤りを、ラムダを後に回さないときと同じく報告するためである。
     fn check_postponed(
         &mut self,
         postponed: &mut Postponed,
         call: ExprId,
         name: &str,
         reported: &mut bool,
-        error: bool,
     ) {
         for (arg, param, origin) in std::mem::take(&mut postponed.lambdas) {
-            let param = if error { self.table.error } else { param };
             self.check_expr(arg, param, origin);
         }
         for (index, row) in std::mem::take(&mut postponed.rows) {
@@ -777,8 +770,8 @@ impl BodyCheck<'_, '_> {
         *reported |= !ok;
     }
 
-    /// 型の壊れた呼び出しの引数。ラムダは `Error` の型に対して検査し、引数を `Error` で束縛する。推論すると引数に
-    /// 新しい変数が付き、射影の E2013 が連鎖するためである。
+    /// 矢印に当たらない、型の壊れた呼び出しの引数。ラムダは `Error` の型に対して検査し、引数を `Error` で束縛する。
+    /// 推論すると引数に新しい変数が付き、射影の E2013 が連鎖するためである。
     fn check_against_error(&mut self, arg: ExprId, origin: Origin) {
         if matches!(self.body.exprs[arg].kind, ExprKind::Lambda(_)) {
             let error = self.table.error;

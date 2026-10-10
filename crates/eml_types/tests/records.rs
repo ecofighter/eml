@@ -212,6 +212,27 @@ fn diagnostics_without_record_lambdas_do_not_change() {
         "{}",
         diagnostics(apply)
     );
+    let nested = "konst : a -> b -> a\nkonst x _ = x\n\nsame : a -> a -> a -> Int\nsame _ _ _ = 0\n\nf : Unit -> Int\nf () = same (konst 1 2 3) \"x\" 1";
+    insta::assert_snapshot!(diagnostics(nested), @"
+    E2001 8:24 `konst` takes 2 arguments but 3 were given
+      8:24 unexpected argument
+    ");
+}
+
+#[test]
+fn an_arity_error_keeps_the_errors_inside_a_postponed_lambda() {
+    let text =
+        "g : (Int -> Int) -> Int\ng h = h 1\n\nf : Unit -> Int\nf () = g (fn x -> x ++ \"\") 2";
+    insta::assert_snapshot!(diagnostics(text), @"
+    E2001 5:19 mismatched types
+      5:19 expected `String`, found `Int`
+      5:21 argument 1 of `++`
+    E2001 5:19 mismatched types
+      5:19 expected `Int`, found `String`
+      note: the body of a lambda must have the return type the lambda is expected to have
+    E2001 5:28 `g` takes 1 argument but 2 were given
+      5:28 unexpected argument
+    ");
 }
 
 #[test]
