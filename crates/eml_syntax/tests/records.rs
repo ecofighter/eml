@@ -272,3 +272,26 @@ fn a_brace_counts_as_one_nesting_level() {
         Vec::<String>::new()
     );
 }
+
+#[test]
+fn an_update_bar_at_the_statement_column_leaves_the_brace_unclosed() {
+    // 文と同じ列の行は括弧を閉じるので (docs/spec/layout.md の規則 2)、閉じ括弧のない `(` と同じ形の誤りになる
+    let text = lines(&["f =", "  let q = { p", "  | age = 1 }", "  q"]);
+    assert_eq!(
+        diagnostics(&text),
+        ["E0011 2:14 expected `|`", "E0011 3:3 expected a statement"]
+    );
+}
+
+#[test]
+fn trailing_commas_are_allowed_in_declarations_patterns_and_updates() {
+    assert_eq!(
+        diagnostics("data P =\n  | P { a : Int, }"),
+        Vec::<String>::new()
+    );
+    assert_eq!(
+        diagnostics("f p = match p with\n  | P { a, } -> a"),
+        Vec::<String>::new()
+    );
+    assert_eq!(diagnostics("x = { p | a = 1, }"), Vec::<String>::new());
+}
