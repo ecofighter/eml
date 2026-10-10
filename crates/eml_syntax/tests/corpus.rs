@@ -43,8 +43,8 @@ fn s1_corpus_items() {
 
 #[test]
 fn later_stage_corpus_reports_only_not_yet_supported() {
-    // まだ実装していない構文は E0004 だけを出し、ほかの診断を連鎖させない。パーサが E0004 を出すのは、補間、コマンドリテラル、
-    // レコード、リストだけである (docs/implementation/status.md の「未対応の構文と E0004」)。
+    // まだ実装していない構文は E0004 だけを出し、ほかの診断を連鎖させない。パーサが E0004 を出すのは、レコードだけである
+    // (docs/implementation/status.md の「未対応の構文と E0004」)。
     let found = diagnostics(LATER_STAGES);
     assert!(!found.is_empty());
     for line in &found {
@@ -56,14 +56,7 @@ fn later_stage_corpus_reports_only_not_yet_supported() {
         .collect();
     messages.sort();
     messages.dedup();
-    assert_eq!(
-        messages,
-        [
-            "command literals are not supported yet",
-            "records are not supported yet",
-            "string interpolation is not supported yet",
-        ]
-    );
+    assert_eq!(messages, ["records are not supported yet"]);
 }
 
 /// 編集の途中のような、任意の位置で切れたソースでも、パニックせずに lossless な木を返す
@@ -92,5 +85,20 @@ fn every_line_deletion_of_the_corpus_parses() {
                 .collect();
             diagnostics(&text.join("\n"));
         }
+    }
+}
+
+const STRINGS: &str = include_str!("corpus/strings.em");
+
+#[test]
+fn strings_corpus_has_no_syntax_diagnostics() {
+    // コマンドリテラルの E0004 は HIR が出すので、`eml_syntax` の診断は空である
+    assert_eq!(diagnostics(STRINGS), Vec::<String>::new());
+}
+
+#[test]
+fn every_prefix_of_the_strings_corpus_parses() {
+    for (end, _) in STRINGS.char_indices() {
+        diagnostics(&STRINGS[..end]);
     }
 }

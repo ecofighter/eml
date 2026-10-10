@@ -1,70 +1,194 @@
-//! 文字列、複数行の文字列、raw 文字列、コマンドリテラルの字句。補間、複数行の文字列、raw 文字列は S6b、コマンド
-//! リテラルはコマンドリテラルの段で実装する。今は閉じまでを1つのトークンにして、診断を1件だけ出す。
+//! 文字列、複数行の文字列、raw 文字列、コマンドリテラルの字句。raw 文字列のほかは、モードのスタックで細かい
+//! トークンに分ける (docs/spec/lexical.md の「文字列」)。raw 文字列は中に構造が
+//! ないので、閉じまでを1つのトークンにする。
 
-use super::Lexer;
-use crate::SyntaxKind::*;
+use super::{Lexer, Mode, line_len};
+use crate::SyntaxKind::{self, *};
 use crate::codes;
-use crate::literal;
-use eml_diagnostics::{NOT_YET_SUPPORTED, NOT_YET_SUPPORTED_LABEL};
+use crate::literal::{self, LayoutAt, LayoutError};
 
 impl Lexer<'_> {
-    /// 閉じていなければ行末までを `STRING` にする。後ろの行まで文字列として読み込まないため。
-    pub(super) fn string(&mut self) {
-        let text = self.text;
-        let start = self.pos;
-        let mut i = start + 1;
-        let mut terminated = false;
-        while let Some(c) = text[i..].chars().next() {
-            match c {
-                '"' => {
-                    i += 1;
-                    terminated = true;
-                    break;
-                }
-                '\n' => break,
-                '\r' if text[i + 1..].starts_with('\n') => break,
-                '\\' => i = self.escape(i),
-                _ => i += c.len_utf8(),
-            }
+    pub(super) fn string_body(&mut self, multiline: bool) {
+        if multiline {
+            self.multiline_body();
+        } else {
+            self.body(STRING_TEXT, '"', STRING_END);
         }
-        if !terminated {
+    }
+
+    /// 穴の中には改行を書けないので、穴の中の `"""` は E0014 にして単一行の文字列として読む。報告済みにしておき、
+    /// 開きの行の終わりで閉じるときに E0002 を重ねない
+    /// (docs/spec/lexical.md の「改行での回復」)。
+    pub(super) fn multiline_start(&mut self, in_hole: bool) {
+        let start = self.pos;
+        if in_hole {
             self.error(
-                codes::UNTERMINATED_STRING,
-                "unterminated string literal",
+                codes::INVALID_MULTILINE_STRING,
+                "multi-line strings are not allowed inside an interpolation",
                 start,
-                i,
-                "missing closing `\"`",
+                start + 3,
+                "use a single-line string here",
             );
         }
-        self.push(STRING, i);
+        self.push(STRING_START, start + 3);
+        self.modes.push(Mode::String {
+            start,
+            multiline: !in_hole,
+            reported: in_hole,
+        });
     }
 
-    pub(super) fn escape(&mut self, i: usize) -> usize {
+    /// 本文は改行では止めず、`"""`、`\`、ファイルの終わりの手前で止める。`"` と `""` は本文である
+    /// (docs/spec/lexical.md の「複数行の文字列」)。
+    fn multiline_body(&mut self) {
         let text = self.text;
-        let Some(c) = text[i + 1..].chars().next() else {
-            return i + 1;
+        let rest = &text[self.pos..];
+        let end = rest
+            .char_indices()
+            .find(|&(i, c)| c == '\\' || rest[i..].starts_with("\"\"\""))
+            .map_or(rest.len(), |(i, _)| i);
+        if end > 0 {
+            self.push(STRING_TEXT, self.pos + end);
+        } else if rest.starts_with('\\') {
+            self.escape_or_hole();
+        } else {
+            self.multiline_end();
+        }
+    }
+
+    /// 形の検査は、閉じの `"""` で本文が決まってからまとめて行う。
+    fn multiline_end(&mut self) {
+        let Some(Mode::String { start, .. }) = self.modes.pop() else {
+            unreachable!("a multi-line string body is read in its own mode");
         };
-        match c {
-            // 行末の `\` は文字列の外に出ない。文字列は閉じていない扱いになり、E0002 だけを出す。
-            '\n' | '\r' => i + 1,
-            'u' => self.unicode_escape(i),
-            '{' => self.interpolation(i),
-            c if literal::simple_escape(c).is_some() => i + 2,
-            _ => {
-                let end = i + 1 + c.len_utf8();
-                self.error(
-                    codes::INVALID_ESCAPE,
-                    format!("unknown escape sequence `\\{c}`"),
-                    i,
-                    end,
-                    "not a valid escape",
-                );
-                end
+        let text = self.text;
+        let close = self.pos;
+        self.push(STRING_END, close + 3);
+        let errors = literal::multiline_layout(&text[start + 3..close]).err();
+        for error in errors.into_iter().flatten() {
+            match error {
+                LayoutError::SameLine => self.error(
+                    codes::INVALID_MULTILINE_STRING,
+                    "a multi-line string must start on a new line after `\"\"\"`",
+                    start,
+                    close + 3,
+                    "this multi-line string is on one line",
+                ),
+                LayoutError::At(at) => self.report_layout(start, at),
             }
         }
     }
 
-    pub(super) fn unicode_escape(&mut self, i: usize) -> usize {
+    /// `start` は開きの `"""` の位置である。範囲は本文の中なので、文字列の外のコードを含めない
+    /// (docs/spec/lexical.md の「複数行の文字列」)。
+    pub(super) fn report_layout(&mut self, start: usize, at: LayoutAt) {
+        let body = start + 3;
+        self.error(
+            codes::INVALID_MULTILINE_STRING,
+            at.message,
+            body + at.range.start,
+            body + at.range.end,
+            at.label,
+        );
+    }
+
+    /// コマンドリテラルの中の `"` は本文である
+    /// (docs/spec/lexical.md の「コマンドリテラル」)。
+    pub(super) fn command_body(&mut self) {
+        self.body(CMD_TEXT, '`', CMD_END);
+    }
+
+    /// 本文は、閉じの文字、`\`、改行の手前で止める。`\r` は、後ろが `\n` のときだけ改行である。改行に着いたら、
+    /// 閉じていない層を閉じる。
+    fn body(&mut self, text_kind: SyntaxKind, close: char, end_kind: SyntaxKind) {
+        let text = self.text;
+        let rest = &text[self.pos..];
+        let end = rest
+            .char_indices()
+            .find(|&(i, c)| {
+                c == close
+                    || matches!(c, '\\' | '\n')
+                    || (c == '\r' && rest[i + 1..].starts_with('\n'))
+            })
+            .map_or(rest.len(), |(i, _)| i);
+        if end > 0 {
+            self.push(text_kind, self.pos + end);
+            return;
+        }
+        match rest.chars().next() {
+            Some(c) if c == close => {
+                self.push(end_kind, self.pos + 1);
+                self.modes.pop();
+            }
+            Some('\\') => self.escape_or_hole(),
+            _ => self.close_layers(false, false),
+        }
+    }
+
+    /// `\` から始まるエスケープか補間の開き。行末とファイルの終わりの `\` は長さ 1 の `ESCAPE` にする。単一行の
+    /// 文字列とコマンドリテラルでは E0008 を出さない。文字列は閉じていない扱いになり、E0002 だけが出る。複数行の
+    /// 文字列は行末で閉じないので、行をつなぐ書き方と取り違えないように E0008 を出す
+    /// (docs/spec/lexical.md の「文字列のトークン」)。
+    fn escape_or_hole(&mut self) {
+        let text = self.text;
+        let i = self.pos;
+        match text[i + 1..].chars().next() {
+            Some('{') => {
+                self.push(INTERP_START, i + 2);
+                self.modes.push(Mode::Code {
+                    braces: 0,
+                    hole: Some(i),
+                });
+            }
+            None => self.push(ESCAPE, i + 1),
+            Some('\n') => self.line_end_escape(),
+            Some('\r') if text[i + 2..].starts_with('\n') => self.line_end_escape(),
+            Some('u') => {
+                let end = self.unicode_escape(i);
+                self.push(ESCAPE, end);
+            }
+            Some('`') if matches!(self.modes.last(), Some(Mode::Command { .. })) => {
+                self.push(ESCAPE, i + 2);
+            }
+            Some(c) if literal::simple_escape(c).is_some() => self.push(ESCAPE, i + 2),
+            Some(c) => {
+                let end = i + 1 + c.len_utf8();
+                // 見えない文字 (単独の `\r` など) をそのまま埋めると、文言の中で何の文字か分からない
+                let message = if super::is_invisible(c) {
+                    format!(
+                        "unknown escape sequence `\\` followed by U+{:04X}",
+                        u32::from(c)
+                    )
+                } else {
+                    format!("unknown escape sequence `\\{c}`")
+                };
+                self.error(codes::INVALID_ESCAPE, message, i, end, "not a valid escape");
+                self.push(ESCAPE, end);
+            }
+        }
+    }
+
+    fn line_end_escape(&mut self) {
+        let i = self.pos;
+        if matches!(
+            self.modes.last(),
+            Some(Mode::String {
+                multiline: true,
+                ..
+            })
+        ) {
+            self.error(
+                codes::INVALID_ESCAPE,
+                "invalid escape `\\` at the end of a line",
+                i,
+                i + 1,
+                "not a valid escape",
+            );
+        }
+        self.push(ESCAPE, i + 1);
+    }
+
+    fn unicode_escape(&mut self, i: usize) -> usize {
         let text = self.text;
         let (end, valid) = match literal::unicode_escape(&text[i + 2..]) {
             Some((len, c)) => (i + 2 + len, c.is_some()),
@@ -82,69 +206,16 @@ impl Lexer<'_> {
         end
     }
 
-    /// 補間は S6b で実装する。今は対応する `}` まで読み飛ばして E0004 を出す。穴の中の文字列も読み飛ばすのは、
-    /// `"\{f "x"}"` の内側の `"` で外側の文字列を終わらせないため。
-    pub(super) fn interpolation(&mut self, i: usize) -> usize {
-        let text = self.text;
-        let mut j = i + 2;
-        let mut depth = 1;
-        while let Some(c) = text[j..].chars().next() {
-            match c {
-                '\n' => break,
-                '{' => {
-                    depth += 1;
-                    j += 1;
-                }
-                '}' => {
-                    depth -= 1;
-                    j += 1;
-                    if depth == 0 {
-                        break;
-                    }
-                }
-                '"' => j = skip_simple_string(text, j),
-                _ => j += c.len_utf8(),
-            }
-        }
-        self.error(
-            NOT_YET_SUPPORTED,
-            "string interpolation is not supported yet",
-            i,
-            j,
-            NOT_YET_SUPPORTED_LABEL,
-        );
-        j
-    }
-
-    /// S6b で実装する。今は閉じの `"""` までを1つのトークンにして、HIR が E0004 を1件だけ出せるようにする
-    /// (docs/implementation/status.md の「未対応の構文と E0004」)。
-    pub(super) fn multiline_string(&mut self) {
-        let text = self.text;
-        let start = self.pos;
-        let end = match text[start + 3..].find("\"\"\"") {
-            Some(offset) => start + 3 + offset + 3,
-            None => {
-                self.error(
-                    codes::UNTERMINATED_STRING,
-                    "unterminated multi-line string",
-                    start,
-                    start + 3,
-                    "missing closing `\"\"\"`",
-                );
-                text.len()
-            }
-        };
-        self.push(MULTILINE_STRING, end);
-    }
-
-    /// S6b で実装する。今は閉じまでを1つのトークンにして、HIR が E0004 を1件だけ出せるようにする
-    /// (docs/implementation/status.md の「未対応の構文と E0004」)。
-    pub(super) fn raw_string(&mut self, hashes: usize) {
+    /// 改行を含められるが、穴の中では改行の手前で止める。閉じていなければ、E0002 を一番内側の層の報告にして、外側の
+    /// 層を黙って閉じる (docs/spec/lexical.md の「改行での回復」)。
+    pub(super) fn raw_string(&mut self, hashes: usize, in_hole: bool) {
         let text = self.text;
         let start = self.pos;
         let open_len = 1 + hashes + 1;
         let close = format!("\"{}", "#".repeat(hashes));
-        let end = match text[start + open_len..].find(&close) {
+        let rest = &text[start + open_len..];
+        let limit = if in_hole { line_len(rest) } else { rest.len() };
+        let end = match rest[..limit].find(&close) {
             Some(offset) => start + open_len + offset + close.len(),
             None => {
                 self.error(
@@ -154,72 +225,20 @@ impl Lexer<'_> {
                     start + open_len,
                     format!("missing closing `{close}`"),
                 );
-                text.len()
+                let end = start + open_len + limit;
+                self.push(RAW_STRING, end);
+                if in_hole {
+                    self.close_layers(true, end == text.len());
+                }
+                return;
             }
         };
         self.push(RAW_STRING, end);
     }
-
-    /// コマンドリテラルの段で実装する。今は閉じのバッククォートまでを1つのトークンにして、
-    /// parser が E0004 を1件だけ出せるようにする。
-    pub(super) fn command(&mut self) {
-        let text = self.text;
-        let start = self.pos;
-        let mut i = start + 1;
-        let mut terminated = false;
-        while let Some(c) = text[i..].chars().next() {
-            match c {
-                '`' => {
-                    i += 1;
-                    terminated = true;
-                    break;
-                }
-                '\n' => break,
-                '\r' if text[i + 1..].starts_with('\n') => break,
-                '\\' => i = skip_escaped(text, i),
-                _ => i += c.len_utf8(),
-            }
-        }
-        if !terminated {
-            self.error(
-                codes::UNTERMINATED_STRING,
-                "unterminated command literal",
-                start,
-                i,
-                "missing closing backtick",
-            );
-        }
-        self.push(COMMAND, i);
-    }
-}
-
-/// `j` は開きの `"` の位置。閉じの `"` の次 (なければ行末) を返す。
-pub(super) fn skip_simple_string(text: &str, j: usize) -> usize {
-    let mut k = j + 1;
-    while let Some(c) = text[k..].chars().next() {
-        match c {
-            '"' => return k + 1,
-            '\n' => return k,
-            '\\' => k = skip_escaped(text, k),
-            _ => k += c.len_utf8(),
-        }
-    }
-    k
 }
 
 pub(super) fn raw_string_hashes(rest: &str) -> Option<usize> {
     let after_r = rest.strip_prefix('r')?;
     let hashes = after_r.bytes().take_while(|&b| b == b'#').count();
     after_r[hashes..].starts_with('"').then_some(hashes)
-}
-
-/// `\` の位置 `i` から、次の1文字までを読み飛ばした位置。改行は読み飛ばさない。文字列やコマンドリテラルを
-/// 行の外まで広げないため。
-fn skip_escaped(text: &str, i: usize) -> usize {
-    let i = i + 1;
-    text[i..]
-        .chars()
-        .next()
-        .filter(|&c| c != '\n')
-        .map_or(i, |c| i + c.len_utf8())
 }

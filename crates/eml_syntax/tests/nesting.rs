@@ -215,3 +215,15 @@ fn a_nested_list_expression_counts_each_bracket_as_one_level() {
         );
     }
 }
+
+#[test]
+fn deeply_nested_holes_stop_at_the_nesting_limit() {
+    let nested = |n: usize| format!("x = {}y{}", "\"\\{".repeat(n), "}\"".repeat(n));
+    assert_eq!(diagnostics(&nested(200)), Vec::<String>::new());
+    assert!(
+        diagnostics(&nested(300))
+            .iter()
+            .any(|d| d.starts_with("E0013")),
+        "a string nested 300 holes deep must hit the nesting limit"
+    );
+}

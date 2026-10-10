@@ -1,0 +1,26 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: rendered
+input_file: tests/ui/check-fail/syntax/multiline_string_indent.em
+---
+[E0014] Error: a multi-line string must start on a new line after `"""`
+   ╭─[ check-fail/syntax/multiline_string_indent.em:4:15 ]
+   │
+ 4 │ one_line () = """oops"""
+   │               ─────┬────  
+   │                    ╰────── this multi-line string is on one line
+───╯
+[E0014] Error: unexpected text after the opening `"""`
+   ╭─[ check-fail/syntax/multiline_string_indent.em:7:23 ]
+   │
+ 7 │ opening_text () = """ text
+   │                       ──┬─  
+   │                         ╰─── the content of a multi-line string starts on the next line
+───╯
+[E0014] Error: line is indented less than the closing `"""`
+    ╭─[ check-fail/syntax/multiline_string_indent.em:15:1 ]
+    │
+ 15 │   short
+    │ ─┬─  
+    │  ╰─── indent this line at least as deep as the closing `"""`
+────╯

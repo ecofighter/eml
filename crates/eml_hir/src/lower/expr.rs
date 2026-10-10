@@ -242,6 +242,12 @@ impl<'a> BodyLowering<'a> {
                 });
                 self.alloc(kind, range)
             }
+            ast::Expr::StringLit(string) => self.lower_string(&string, range),
+            // 穴の中の式は lower しない。誤りを E0004 の1件にするため
+            // (docs/implementation/architecture.md の「`eml_hir` の内部」)
+            ast::Expr::CommandLit(_) => {
+                self.unsupported(range, "command literals are not supported yet")
+            }
             ast::Expr::UnitExpr(_) => self.alloc(ExprKind::Literal(Literal::Unit), range),
             ast::Expr::PathExpr(path) => self.lower_path(&path, range),
             ast::Expr::ParenExpr(paren) => self.lower_expr(paren.expr(), range),
@@ -829,6 +835,47 @@ impl<'a> BodyLowering<'a> {
         .lower(ty, fallback)
     }
 
+    fn lower_string(&mut self, string: &ast::StringLit, range: TextRange) -> ExprId {
+        // 閉じていない文字列、不正なエスケープ、E0014 は字句解析が報告済み。誤りのある文字列の中の誤りを重ねて
+        // 報告しないよう、穴も lower しない (docs/implementation/architecture.md の「`eml_hir` の内部」)
+        let Some(parts) = string.parts() else {
+            return self.alloc(ExprKind::Missing, range);
+        };
+        let mut holes = string.holes().peekable();
+        if holes.peek().is_none() {
+            // 穴のない文字列の部分は、本文をまとめた1つの `Text` か、空である
+            let text = match parts.into_iter().next() {
+                Some(ast::StringPart::Text(text)) => text,
+                _ => String::new(),
+            };
+            return self.alloc(ExprKind::Literal(Literal::String(text)), range);
+        }
+        let mut segments = Vec::new();
+        for part in parts {
+            match part {
+                ast::StringPart::Text(text) => segments.push(Segment::Text(text)),
+                ast::StringPart::Hole(expr) => {
+                    let hole_range = holes.next().expect("every hole part has an interp").range();
+                    // 名前を引かずに Prelude の `display` を指す。ユーザーの `display` で補間の意味を変えないため
+                    let callee = self.alloc(
+                        ExprKind::Path(Res::Item(ValueItem::Method(self.lang.display))),
+                        hole_range,
+                    );
+                    let arg = self.lower_expr(expr, hole_range);
+                    let call = self.alloc(
+                        ExprKind::Call {
+                            callee,
+                            args: vec![arg],
+                        },
+                        hole_range,
+                    );
+                    segments.push(Segment::Hole(call));
+                }
+            }
+        }
+        self.alloc(ExprKind::Interpolation(segments), range)
+    }
+
     pub(super) fn unsupported(&mut self, range: TextRange, message: &str) -> ExprId {
         self.diagnostics
             .push(Diagnostic::not_yet_supported(self.file, range, message));
@@ -854,14 +901,12 @@ fn arguments(n: usize) -> String {
     }
 }
 
-/// S6b (複数行の文字列、raw 文字列) と `Float`、`Char`、`Num` の段 (浮動小数、文字) で実装するリテラル。
+/// `Float`、`Char`、`Num` の段 (浮動小数、文字) で実装するリテラル。
 /// パーサは CST を組み、HIR が E0004 を出す (docs/implementation/status.md の「未対応の構文と E0004」)。
 fn unsupported_literal(kind: SyntaxKind) -> Option<&'static str> {
     Some(match kind {
         SyntaxKind::FLOAT => "floating-point literals are not supported yet",
         SyntaxKind::CHAR => "character literals are not supported yet",
-        SyntaxKind::MULTILINE_STRING => "multi-line strings are not supported yet",
-        SyntaxKind::RAW_STRING => "raw strings are not supported yet",
         _ => return None,
     })
 }

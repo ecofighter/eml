@@ -202,6 +202,7 @@ fn token_name(kind: SyntaxKind) -> &'static str {
         LEFT_ARROW => "`<-`",
         R_PAREN => "`)`",
         R_BRACK => "`]`",
+        INTERP_END => "`}`",
         WHERE_KW => "`where`",
         WITH_KW => "`with`",
         THEN_KW => "`then`",
@@ -213,13 +214,17 @@ fn token_name(kind: SyntaxKind) -> &'static str {
     }
 }
 
-/// 仮想トークンと EOF にはテキストがないので、名詞句として読める言い方にする。
+/// 仮想トークン、EOF、閉じていない穴の幅 0 の `INTERP_END` にはテキストがないので、名詞句として読める言い方にする。
+/// 幅 0 の `INTERP_END` での誤りは `Parser::error` が抑えるので、その言い方は抑えを通らない呼び出しのための備えである。
 fn unexpected(p: &Parser) -> String {
     match p.current() {
         EOF => "unexpected end of file".to_string(),
         LAYOUT_SEP => "unexpected line break".to_string(),
         LAYOUT_OPEN => "unexpected indented block".to_string(),
         LAYOUT_CLOSE => "unexpected end of block".to_string(),
+        STRING_START => "unexpected string".to_string(),
+        CMD_START => "unexpected command literal".to_string(),
+        _ if p.at_unclosed_hole_end() => "unexpected end of line".to_string(),
         _ => format!("unexpected `{}`", p.current_text()),
     }
 }
@@ -230,6 +235,9 @@ fn describe(p: &Parser) -> String {
         LAYOUT_SEP => "a new line".to_string(),
         LAYOUT_OPEN => "an indented block".to_string(),
         LAYOUT_CLOSE => "the end of the block".to_string(),
+        STRING_START => "a string".to_string(),
+        CMD_START => "a command literal".to_string(),
+        _ if p.at_unclosed_hole_end() => "the end of the line".to_string(),
         _ => format!("`{}`", p.current_text()),
     }
 }

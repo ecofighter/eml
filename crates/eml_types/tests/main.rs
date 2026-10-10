@@ -15,5 +15,6 @@ mod masks;
 mod modules;
 mod rows;
 mod scaling;
+mod strings;
 mod tuples;
 mod uniform;

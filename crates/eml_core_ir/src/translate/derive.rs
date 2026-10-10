@@ -519,20 +519,11 @@ impl Generator<'_> {
     }
 
     fn string(&mut self, text: &str) -> Atom {
-        let id = self.program.strings.intern(text);
-        self.bind("s", Repr::Obj, Rhs::ConstString(id))
+        self.builder.string(&mut self.program.strings, text)
     }
 
     fn concat(&mut self, left: Atom, right: Atom) -> Atom {
-        self.bind(
-            "s",
-            Repr::Obj,
-            Rhs::Extern {
-                ext: Extern::StrConcat,
-                args: vec![left, right],
-                at: None,
-            },
-        )
+        self.builder.concat(left, right)
     }
 
     fn bind(&mut self, name: &str, repr: Repr, rhs: Rhs) -> Atom {

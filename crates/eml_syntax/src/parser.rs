@@ -152,6 +152,13 @@ impl<'t> Parser<'t> {
         )
     }
 
+    /// lexer が改行かファイルの終わりで閉じた穴の、幅 0 の `INTERP_END` にいるか。
+    pub(crate) fn at_unclosed_hole_end(&self) -> bool {
+        self.tokens
+            .get(self.pos)
+            .is_some_and(|token| token.kind == SyntaxKind::INTERP_END && token.range.is_empty())
+    }
+
     pub(crate) fn current_text(&self) -> &'t str {
         let text = self.text;
         self.tokens
@@ -241,8 +248,9 @@ impl<'t> Parser<'t> {
         Marker::new(pos)
     }
 
-    /// `ERROR_TOKEN` の位置には出さない。字句解析で報告済みのため。直前の診断と同じ位置にも出さない。
-    /// 1つの誤りから連鎖する診断を抑えるため。
+    /// `ERROR_TOKEN` と、閉じていない穴の幅 0 の `INTERP_END` の位置には出さない。どちらも字句解析で報告済みのため
+    /// (docs/spec/lexical.md の「改行での回復」)。直前の診断と同じ位置にも出さない。1つの誤りから連鎖する診断を
+    /// 抑えるため。
     pub(crate) fn error(
         &mut self,
         code: ErrorCode,
@@ -252,7 +260,7 @@ impl<'t> Parser<'t> {
         if self.too_deep {
             return;
         }
-        if self.at(SyntaxKind::ERROR_TOKEN) {
+        if self.at(SyntaxKind::ERROR_TOKEN) || self.at_unclosed_hole_end() {
             return;
         }
         let range = self.error_range();

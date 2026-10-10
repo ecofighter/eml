@@ -8,10 +8,9 @@ const ATOM_START: TokenSet = TokenSet::new(&[
     INT,
     FLOAT,
     CHAR,
-    STRING,
-    MULTILINE_STRING,
     RAW_STRING,
-    COMMAND,
+    STRING_START,
+    CMD_START,
     LIDENT,
     UIDENT,
     L_PAREN,
@@ -283,17 +282,11 @@ fn postfix(p: &mut Parser) -> bool {
 fn atom(p: &mut Parser) -> Option<CompletedMarker> {
     let m = p.start();
     let kind = match p.current() {
-        INT | STRING | FLOAT | CHAR | MULTILINE_STRING | RAW_STRING => {
+        INT | FLOAT | CHAR | RAW_STRING => {
             p.bump_any();
             LITERAL
         }
-        COMMAND => {
-            // コマンドリテラルは中身の穴をコマンドリテラルの段で lexer のモードと一緒に読むので、
-            // パーサが E0004 を出す例外である (docs/implementation/status.md の「未対応の構文と E0004」)
-            not_yet_supported(p, "command literals are not supported yet");
-            p.bump_any();
-            LITERAL
-        }
+        STRING_START | CMD_START => string_lit(p, false),
         LIDENT | UIDENT => {
             qname(p);
             PATH_EXPR
@@ -314,6 +307,75 @@ fn atom(p: &mut Parser) -> Option<CompletedMarker> {
         }
     };
     Some(m.complete(p, kind))
+}
+
+/// `string ::= STRING_START (STRING_TEXT | ESCAPE | interp)* STRING_END` と `command`。閉じていない文字列は lexer が
+/// 報告済みなので、`STRING_END` がなくても黙って終える。パターンの文字列 (`in_pattern`) も同じ形に組み、穴ごとに
+/// 誤りを出す (docs/spec/grammar.md の「文法上の補足」)。
+pub(super) fn string_lit(p: &mut Parser, in_pattern: bool) -> SyntaxKind {
+    let (text, end, node) = if p.at(CMD_START) {
+        (CMD_TEXT, CMD_END, COMMAND_LIT)
+    } else {
+        (STRING_TEXT, STRING_END, STRING_LIT)
+    };
+    p.bump_any();
+    loop {
+        match p.current() {
+            kind if kind == text || kind == ESCAPE => p.bump_any(),
+            INTERP_START => {
+                if in_pattern {
+                    p.error(
+                        codes::SYNTAX_ERROR,
+                        "string interpolation is not allowed in a pattern",
+                        "a pattern matches a fixed string",
+                    );
+                }
+                interp(p, node == COMMAND_LIT);
+            }
+            _ => break,
+        }
+    }
+    p.eat(end);
+    node
+}
+
+/// 穴は括弧と同じく1段に数えるので、`paren_expr` と同じく、`expr` の形で始まらない式は `op_expr` で直接読む
+/// (docs/spec/grammar.md の「文法上の補足」)。lexer が `INTERP_END` を必ず出すので、
+/// 穴はいつもそこで終わる。幅 0 の `INTERP_END` は閉じていない穴で、そこでの誤りは `Parser::error` が抑える。
+fn interp(p: &mut Parser, spread: bool) {
+    let m = p.start();
+    p.bump(INTERP_START);
+    if spread {
+        p.eat(DOT2);
+    }
+    let read = if p.at_ts(EXPR_FORMS) {
+        expr(p)
+    } else {
+        op_expr(p, false) != OpExpr::Nothing
+    };
+    if !read {
+        expected(p, "an expression");
+    }
+    if !p.at(INTERP_END) {
+        if read {
+            expected(p, token_name(INTERP_END));
+        }
+        // 括弧の対応は見ずに、この穴の `INTERP_END` まで読み飛ばす。lexer が穴を1行に区切り、閉じを必ず出すので、
+        // 文字列の外には出ない。穴の中の入れ子の文字列の穴は、対で数えて飛ばす
+        let skipped = p.start();
+        let mut holes = 0u32;
+        while !(p.at_eof() || holes == 0 && p.at(INTERP_END)) {
+            match p.current() {
+                INTERP_START => holes += 1,
+                INTERP_END => holes -= 1,
+                _ => {}
+            }
+            p.bump_any();
+        }
+        skipped.complete(p, ERROR);
+    }
+    p.eat(INTERP_END);
+    m.complete(p, INTERP);
 }
 
 /// `qvar ::= (UIDENT '.')* LIDENT` と `qcon`。

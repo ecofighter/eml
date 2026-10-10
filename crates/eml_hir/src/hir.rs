@@ -116,6 +116,9 @@ pub struct LangItems {
     pub list: TypeDefId,
     pub nil: ConstructorId,
     pub cons: ConstructorId,
+    /// 補間の穴が名前を引かずに呼ぶ `Show` のメソッド。ユーザーが同じ名前を定義しても、補間は Prelude のものを呼ぶ
+    /// (docs/spec/expressions.md の「補間」)。
+    pub display: MethodId,
 }
 
 /// extern の表の行から、標準ライブラリの宣言を引く索引。使い手のある行 (extern の型、`IO`、`negate`) だけを持つ。
@@ -372,6 +375,9 @@ impl Body {
                     f(element);
                 }
             }
+            ExprKind::Interpolation(segments) => {
+                segments.iter().filter_map(Segment::hole).for_each(f);
+            }
             ExprKind::Drop(value) => f(*value),
         }
     }
@@ -521,7 +527,27 @@ pub enum ExprKind {
     /// リストのリテラル。`[]` は要素のない `List` である。パターンと違い `::` に組まないのは、要素が多くても後の
     /// 段階の再帰を深くしないため (docs/spec/grammar.md の「文法上の補足」)。
     List(Vec<ExprId>),
+    /// 穴のある文字列。穴は1つ以上ある。`++` の呼び出しにまで脱糖しないのは、連結を translate がまとめて組むため
+    /// (docs/spec/expressions.md の「補間」)。
+    Interpolation(Vec<Segment>),
     Drop(ExprId),
+}
+
+/// 補間の部分。`Hole` は HIR が組んだ `display e` の呼び出しである
+/// (docs/spec/expressions.md の「補間」)。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Segment {
+    Text(String),
+    Hole(ExprId),
+}
+
+impl Segment {
+    pub fn hole(&self) -> Option<ExprId> {
+        match self {
+            Segment::Text(_) => None,
+            Segment::Hole(hole) => Some(*hole),
+        }
+    }
 }
 
 /// `match` の由来。等式から作った `match` は、網羅性の検査が `match` 式ではなく等式として報告する

@@ -10,15 +10,24 @@ pub enum SyntaxKind {
     SHEBANG,
 
     INT,
-    // FLOAT、CHAR、MULTILINE_STRING、RAW_STRING、COMMAND は後の段階で実装する構文。
-    // 使われた位置で E0004 を出せるように、字句だけ先に用意している。
+    // FLOAT と CHAR は、使われた位置で E0004 を出せるように字句だけ先に用意している。
     FLOAT,
     CHAR,
-    /// 補間を含んでいても1つのトークンにする。部品に分けるのは補間を実装する S6b から。
-    STRING,
-    MULTILINE_STRING,
+    /// 中に構造がないので、1つのトークンにする。
     RAW_STRING,
-    COMMAND,
+    /// 文字列は、複数行の文字列も含めて、穴がなくても細かいトークンに分ける
+    /// (docs/spec/lexical.md の「文字列のトークン」)。
+    STRING_START,
+    STRING_TEXT,
+    ESCAPE,
+    /// 補間の `\{` と、それを閉じる `}`。閉じを `R_BRACE` にしないのは、ほかの括弧と取り違えないため。閉じていない穴には
+    /// 幅 0 の `INTERP_END` がある。
+    INTERP_START,
+    INTERP_END,
+    STRING_END,
+    CMD_START,
+    CMD_TEXT,
+    CMD_END,
     LIDENT,
     UIDENT,
     UNDERSCORE,
@@ -146,6 +155,9 @@ pub enum SyntaxKind {
     FIELD_EXPR,
     PATH_EXPR,
     LITERAL,
+    STRING_LIT,
+    INTERP,
+    COMMAND_LIT,
     UNIT_EXPR,
     PAREN_EXPR,
     TUPLE_EXPR,
@@ -181,8 +193,7 @@ pub enum SyntaxKind {
 }
 
 impl SyntaxKind {
-    /// 括弧の種類の判定はここだけに置く。S6b で補間の `\{` と `}` を足すときも、ここに足す
-    /// (docs/spec/layout.md の規則 4)。
+    /// 括弧の種類の判定はここだけに置く (docs/spec/layout.md の規則 4)。
     pub fn is_opening_bracket(self) -> bool {
         matches!(
             self,

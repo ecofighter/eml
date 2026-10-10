@@ -486,7 +486,7 @@ fn tuple_and_literal_pattern_parts() {
         panic!("expected a tuple");
     };
     let elements: Vec<SyntaxKind> = scrutinee.elements().map(|e| e.syntax().kind()).collect();
-    assert_eq!(elements, [PATH_EXPR, LITERAL]);
+    assert_eq!(elements, [PATH_EXPR, STRING_LIT]);
     let Some(Pat::TuplePat(arm)) = expr.arms().next().and_then(|arm| arm.pat()) else {
         panic!("expected a tuple pattern in the first arm");
     };

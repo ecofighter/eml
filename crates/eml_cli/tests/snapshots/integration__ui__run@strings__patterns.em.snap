@@ -1,0 +1,10 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{stderr}\")"
+input_file: tests/ui/run/strings/patterns.em
+---
+--- stdout ---
+raw
+multi
+other
+--- stderr ---

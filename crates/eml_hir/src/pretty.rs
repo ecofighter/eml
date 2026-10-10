@@ -363,6 +363,22 @@ impl Printer<'_> {
                     .collect();
                 format!("[{}]", elements.join(", "))
             }
+            ExprKind::Interpolation(segments) => {
+                let mut s = String::from("\"");
+                for segment in segments {
+                    match segment {
+                        // 文字列のリテラルと同じ `{:?}` のエスケープで書き、引用符だけを外す
+                        Segment::Text(text) => {
+                            let quoted = format!("{text:?}");
+                            s.push_str(&quoted[1..quoted.len() - 1]);
+                        }
+                        Segment::Hole(hole) => {
+                            write!(s, "\\{{{}}}", self.expr(body, *hole, indent)).unwrap();
+                        }
+                    }
+                }
+                s + "\""
+            }
             ExprKind::Drop(value) => format!("(drop {})", self.expr(body, *value, indent)),
         }
     }

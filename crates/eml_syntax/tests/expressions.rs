@@ -57,7 +57,10 @@ fn parameter_patterns() {
           MINUS "-"
           INT "1"
         LITERAL_PAT
-          STRING "\"s\""
+          STRING_LIT
+            STRING_START "\""
+            STRING_TEXT "s"
+            STRING_END "\""
         UNIT_PAT
           L_PAREN "("
           R_PAREN ")"
@@ -139,8 +142,10 @@ fn application_field_access_and_qualified_names() {
               DOT "."
               NAME_REF
                 LIDENT "split_once"
-          LITERAL
-            STRING "\" \""
+          STRING_LIT
+            STRING_START "\""
+            STRING_TEXT " "
+            STRING_END "\""
           FIELD_EXPR
             PATH_EXPR
               PATH
@@ -308,11 +313,11 @@ fn top_level_pattern_bindings_are_errors() {
 
 #[test]
 fn later_stage_literals_are_parsed() {
-    // 浮動小数、文字、raw 文字列、複数行の文字列の E0004 は HIR が出す
+    // 浮動小数、文字、コマンドリテラルの E0004 は HIR が出す
     // (docs/implementation/status.md の「未対応の構文と E0004」)
     assert_eq!(
-        diagnostics("x = (1.5, 'c', [1], r\"raw\", \"\"\"m\"\"\", `ls`)"),
-        ["E0004 1:38 command literals are not supported yet"]
+        diagnostics("x = (1.5, 'c', [1], `ls`)"),
+        Vec::<String>::new()
     );
 }
 

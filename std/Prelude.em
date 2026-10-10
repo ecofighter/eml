@@ -70,11 +70,14 @@ pub class Eq a => Ord a where
     | LT -> False
     | _ -> True
 
--- `show` を必須にするのは、`show_prec` と互いの既定にすると、どちらも書かない instance が止まらなくなるため
+-- `show` を必須にするのは、`show_prec` と互いの既定にすると、どちらも書かない instance が止まらなくなるため。
+-- `display` は補間の穴が呼ぶ (docs/spec/declarations.md の「Prelude のクラス」)
 pub class Show a where
   show : a -> String
   show_prec : Int -> a -> String
   show_prec _ x = show x
+  display : a -> String
+  display x = show x
 
 instance Eq Int where
   extern (==)
@@ -101,6 +104,7 @@ instance Ord String where
 
 instance Show String where
   extern show
+  display s = s
 
 instance Eq Bool where
   extern (==)

@@ -7,7 +7,7 @@ pub(super) fn at_apat_start(p: &Parser) -> bool {
 /// `-` は、整数が続くときだけ負の数のリテラルとして apat を始める。
 pub(super) fn at_apat_start_at(p: &Parser, n: usize) -> bool {
     match p.nth(n) {
-        UNDERSCORE | LIDENT | UIDENT | INT | STRING | CHAR => true,
+        UNDERSCORE | LIDENT | UIDENT | INT | STRING_START | RAW_STRING | CHAR => true,
         kind if kind.is_opening_bracket() => true,
         MINUS => p.nth(n + 1) == INT,
         _ => false,
@@ -17,7 +17,7 @@ pub(super) fn at_apat_start_at(p: &Parser, n: usize) -> bool {
 /// 項目の種類を決める先読みに使うので、括弧は対応する閉じ括弧までを数える。
 pub(super) fn apat_len(p: &Parser) -> Option<usize> {
     match p.current() {
-        UNDERSCORE | LIDENT | INT | STRING | CHAR => Some(1),
+        UNDERSCORE | LIDENT | INT | RAW_STRING | CHAR => Some(1),
         MINUS if p.nth(1) == INT => Some(2),
         UIDENT => {
             let mut n = 1;
@@ -25,6 +25,25 @@ pub(super) fn apat_len(p: &Parser) -> Option<usize> {
                 n += 2;
             }
             Some(n)
+        }
+        STRING_START => {
+            // 同じ深さの `STRING_END` までを数える。穴の中の入れ子の文字列は、穴の対で深さを数えて飛ばす。
+            // `STRING_END` がなければ (閉じていない文字列)、文字列の最後のトークンまでを長さにする
+            let mut n = 1;
+            let mut holes = 0u32;
+            loop {
+                match p.peek(n) {
+                    INTERP_START => holes += 1,
+                    INTERP_END => holes = holes.saturating_sub(1),
+                    STRING_END if holes == 0 => return Some(n + 1),
+                    STRING_TEXT | ESCAPE | STRING_START | STRING_END => {}
+                    // lexer は穴の閉じを必ず出すので、ここには来ない。来ても先読みを止める
+                    EOF => return Some(n),
+                    _ if holes > 0 => {}
+                    _ => return Some(n),
+                }
+                n += 1;
+            }
         }
         kind if kind.is_opening_bracket() => {
             // 開き括弧の次から、対応する閉じ括弧を探す。範囲が先に終わったら (規則 2 で括弧が暗黙に閉じられた
@@ -114,8 +133,14 @@ pub(super) fn apat(p: &mut Parser) -> bool {
             qcon(p);
             CON_PAT
         }
-        INT | STRING | CHAR => {
+        INT | RAW_STRING | CHAR => {
             p.bump_any();
+            LITERAL_PAT
+        }
+        STRING_START => {
+            let string = p.start();
+            expressions::string_lit(p, true);
+            string.complete(p, STRING_LIT);
             LITERAL_PAT
         }
         MINUS if p.nth(1) == INT => {

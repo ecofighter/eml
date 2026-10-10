@@ -818,3 +818,28 @@ fn a_tag_switch_without_a_layout_stops_perceus() {
     .unwrap_or_else(|error| panic!("{error}"));
     perceus(&mut program);
 }
+
+/// 補間は穴を評価するたびにつなぐので、穴の呼び出しをまたいで退避するのは組み立て中の文字列だけである
+/// (docs/spec/core-ir.md の「変換の規則」)。`n` を最初の穴でだけ使い、ほかの穴の引数を定数にして、組み立て中の
+/// 文字列のほかに生きている変数をなくす。
+#[test]
+fn interpolation_saves_only_the_accumulator_across_holes() {
+    let text = "g : Int -> <IO> Int\ng n =\n  println \"g\"\n  n\n\nf : Int -> <IO> String\nf n = \"a\\{g n}b\\{g 2}c\\{g 3}\"\n\nmain : Unit -> <IO> Unit\nmain () = println (f 1)";
+    let shown = function(&core_text(text, Pass::Perceus), "f");
+    let lines: Vec<&str> = shown.lines().collect();
+    let mut saves = 0;
+    for (i, line) in lines.iter().enumerate() {
+        let Some((_, saved)) = line.split_once(" save [") else {
+            continue;
+        };
+        saves += 1;
+        // 退避した変数が、穴の値をつなぐ次の `++` の左の引数 (組み立て中の文字列) であることを確かめる
+        let accumulator = lines[i..]
+            .iter()
+            .find_map(|line| line.split_once("extern Prelude.++("))
+            .and_then(|(_, args)| args.split_once(", "))
+            .map(|(left, _)| left);
+        assert_eq!(Some(saved.trim_end_matches(']')), accumulator, "{shown}");
+    }
+    assert_eq!(saves, 6, "two calls per hole: {shown}");
+}

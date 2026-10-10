@@ -15,6 +15,9 @@ enum Context {
         opener: Option<SyntaxKind>,
     },
     Bracket,
+    /// 補間の穴。`INTERP_END` だけが取り除く。穴の中の閉じ括弧で穴の外の括弧を閉じないため
+    /// (docs/spec/layout.md の規則 4)。
+    Interp,
 }
 
 /// 規則 3 の開始トークン。
@@ -105,12 +108,35 @@ pub(crate) fn layout(file: FileId, text: &str, tokens: &[Token]) -> (Vec<Token>,
             kind if kind.is_closing_bracket() => {
                 // 規則 4。種類は見ずに一番内側の括弧を閉じ、その上のブロックもすべて閉じる。種類の食い違いは parser が
                 // 報告する。対応する開き括弧がなければ何もしない。
-                if stack.contains(&Context::Bracket) {
+                let floor = stack
+                    .iter()
+                    .rposition(|c| *c == Context::Interp)
+                    .map_or(0, |i| i + 1);
+                if stack[floor..].contains(&Context::Bracket) {
                     while let Some(Context::Block { .. }) = stack.last() {
                         out.push(virtual_token(LAYOUT_CLOSE, start));
                         stack.pop();
                     }
                     stack.pop();
+                }
+                out.push(item.token);
+            }
+            INTERP_START => {
+                out.push(item.token);
+                stack.push(Context::Interp);
+            }
+            INTERP_END => {
+                // 穴の中で閉じ忘れた括弧とブロックも、ここで閉じる。lexer はどの `INTERP_END` にも対応する
+                // `INTERP_START` を出すので `Interp` は必ずあり、穴の外の文脈 (底のブロックを含む) は取り除かない
+                // (docs/spec/lexical.md の「モードのスタック」)
+                let hole = stack.iter().rposition(|c| *c == Context::Interp);
+                debug_assert!(hole.is_some(), "an INTERP_END without an open hole");
+                if let Some(hole) = hole {
+                    for context in stack.drain(hole..) {
+                        if let Context::Block { .. } = context {
+                            out.push(virtual_token(LAYOUT_CLOSE, start));
+                        }
+                    }
                 }
                 out.push(item.token);
             }
@@ -269,7 +295,7 @@ fn enclosing_block(stack: &[Context]) -> (u32, Option<SyntaxKind>) {
         .rev()
         .find_map(|context| match *context {
             Context::Block { indent, opener } => Some((indent, opener)),
-            Context::Bracket => None,
+            Context::Bracket | Context::Interp => None,
         })
         .unwrap_or((0, None))
 }
@@ -417,7 +443,7 @@ mod tests {
     fn lines_inside_a_multi_line_string_are_not_line_starts() {
         assert_eq!(
             layout_of("s =\n  \"\"\"\nx\n  \"\"\"\nt = 1"),
-            "s = <OPEN> \"\"\"\nx\n  \"\"\" <CLOSE> <SEP> t = 1"
+            "s = <OPEN> \"\"\" \nx\n   \"\"\" <CLOSE> <SEP> t = 1"
         );
     }
 

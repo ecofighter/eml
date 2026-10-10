@@ -1,9 +1,10 @@
 //! アクセサは、HIR への変換で必要になったものから足していく。
 
-use eml_diagnostics::TextRange;
+use eml_diagnostics::{TextRange, TextSize};
 use rowan::NodeOrToken;
 use rowan::ast::{AstChildren, AstNode, support};
 
+use crate::literal::MultilineLayout;
 use crate::{EmlLanguage, SyntaxKind, SyntaxNode, SyntaxToken};
 
 macro_rules! ast_node {
@@ -124,6 +125,9 @@ ast_node! {
     FieldExpr => FIELD_EXPR,
     PathExpr => PATH_EXPR,
     Literal => LITERAL,
+    StringLit => STRING_LIT,
+    Interp => INTERP,
+    CommandLit => COMMAND_LIT,
     UnitExpr => UNIT_EXPR,
     ParenExpr => PAREN_EXPR,
     TupleExpr => TUPLE_EXPR,
@@ -173,7 +177,7 @@ ast_enum! {
     /// `body ::= block(stmt) | expr` を1つの型で受けられるように、字下げしたブロック (`Block`) も式に含める。
     Expr {
         Block, IfExpr, MatchExpr, HandleExpr, LambdaExpr, LetExpr, OpSeq, AppExpr,
-        DropExpr, FieldExpr, PathExpr, Literal, UnitExpr, ParenExpr, TupleExpr, ListExpr, AnnotExpr, OpRef,
+        DropExpr, FieldExpr, PathExpr, Literal, StringLit, CommandLit, UnitExpr, ParenExpr, TupleExpr, ListExpr, AnnotExpr, OpRef,
         LeftSection, RightSection, FieldSection,
     }
 }
@@ -359,18 +363,145 @@ impl Literal {
         self.syntax.first_token()
     }
 
-    /// 浮動小数、文字、複数行の文字列などの未対応のリテラルと、値が壊れているもの (範囲外の整数、不正なエスケープ、
-    /// 閉じていない文字列) は `None` を返す。未対応のリテラルは HIR が E0004 を出し、値の壊れたものは字句解析が
-    /// 報告済みである。
+    /// 浮動小数と文字の未対応のリテラル、範囲外の整数、閉じていない raw 文字列は `None` を返す。未対応の
+    /// リテラルは HIR が E0004 を出し、ほかは字句解析が報告済みである。raw 文字列のほかの文字列は `StringLit` で、
+    /// `Literal` ではない。
     pub fn value(&self) -> Option<LiteralValue> {
         let token = self.token()?;
         match token.kind() {
             SyntaxKind::INT => crate::literal::int_value(token.text()).map(LiteralValue::Int),
-            SyntaxKind::STRING => {
-                crate::literal::decode_string(token.text()).map(LiteralValue::String)
+            SyntaxKind::RAW_STRING => {
+                crate::literal::raw_value(token.text()).map(LiteralValue::String)
             }
             _ => None,
         }
+    }
+}
+
+/// 文字列の部分。`Text` は、エスケープ、複数行の字下げ、改行の正規化を済ませた後の文字列である。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StringPart {
+    Text(String),
+    Hole(Option<Expr>),
+}
+
+impl StringLit {
+    /// 閉じていない文字列、不正なエスケープを含む文字列、形の誤り (E0014) のある複数行の文字列は `None` を返す。
+    /// どれも lexer が報告済みである。隣り合う本文とエスケープは1つの `Text` にまとめ、空の `Text` は返さない。
+    pub fn parts(&self) -> Option<Vec<StringPart>> {
+        let end = support::token(&self.syntax, SyntaxKind::STRING_END)?;
+        let start = support::token(&self.syntax, SyntaxKind::STRING_START)?;
+        if start.text() == "\"\"\"" {
+            // 字下げは lexer の E0014 と同じ判定で決める。本文はトークンをまたぐので、節点のテキストから切り出す
+            let node_start = self.syntax.text_range().start();
+            let body_start = start.text_range().end();
+            let body = TextRange::new(
+                body_start - node_start,
+                end.text_range().start() - node_start,
+            );
+            let text = self.syntax.text().to_string();
+            let layout = crate::literal::multiline_layout(&text[body]).ok()?;
+            return self.multiline_parts(layout, body_start);
+        }
+        let mut parts = Vec::new();
+        let mut text = String::new();
+        for element in self.syntax.children_with_tokens() {
+            match element {
+                NodeOrToken::Token(token) if token.kind() == SyntaxKind::STRING_TEXT => {
+                    text.push_str(token.text());
+                }
+                NodeOrToken::Token(token) if token.kind() == SyntaxKind::ESCAPE => {
+                    text.push(crate::literal::escape_value(token.text())?);
+                }
+                NodeOrToken::Node(node) => {
+                    if let Some(interp) = Interp::cast(node) {
+                        if !text.is_empty() {
+                            parts.push(StringPart::Text(std::mem::take(&mut text)));
+                        }
+                        parts.push(StringPart::Hole(interp.expr()));
+                    }
+                }
+                NodeOrToken::Token(_) => {}
+            }
+        }
+        if !text.is_empty() {
+            parts.push(StringPart::Text(text));
+        }
+        Some(parts)
+    }
+
+    /// `content` の外の本文 (開きの行と閉じの行) は値に入れない。行頭では `indent` 個までの空白を落とす。エスケープと
+    /// 穴は行頭の空白でないので、そこで行頭の状態を終える
+    /// (docs/spec/lexical.md の「複数行の文字列」「改行の正規化」)。
+    fn multiline_parts(
+        &self,
+        layout: MultilineLayout,
+        body_start: TextSize,
+    ) -> Option<Vec<StringPart>> {
+        let content = TextRange::new(
+            body_start + TextSize::new(layout.content.start as u32),
+            body_start + TextSize::new(layout.content.end as u32),
+        );
+        let mut parts = Vec::new();
+        let mut text = String::new();
+        let (mut at_line_start, mut stripped) = (true, 0);
+        for element in self.syntax.children_with_tokens() {
+            // `intersect` は接するだけの範囲にも空の範囲を返すので、空のものを除く
+            let Some(range) = element
+                .text_range()
+                .intersect(content)
+                .filter(|range| !range.is_empty())
+            else {
+                continue;
+            };
+            match element {
+                NodeOrToken::Token(token) if token.kind() == SyntaxKind::STRING_TEXT => {
+                    let start = range.start() - token.text_range().start();
+                    let slice = &token.text()[TextRange::at(start, range.len())];
+                    let mut chars = slice.chars().peekable();
+                    while let Some(c) = chars.next() {
+                        if c == '\r' && chars.peek() == Some(&'\n') {
+                            continue;
+                        }
+                        if at_line_start && c == ' ' && stripped < layout.indent {
+                            stripped += 1;
+                            continue;
+                        }
+                        at_line_start = c == '\n';
+                        stripped = 0;
+                        text.push(c);
+                    }
+                }
+                NodeOrToken::Token(token) if token.kind() == SyntaxKind::ESCAPE => {
+                    at_line_start = false;
+                    text.push(crate::literal::escape_value(token.text())?);
+                }
+                NodeOrToken::Node(node) => {
+                    if let Some(interp) = Interp::cast(node) {
+                        at_line_start = false;
+                        if !text.is_empty() {
+                            parts.push(StringPart::Text(std::mem::take(&mut text)));
+                        }
+                        parts.push(StringPart::Hole(interp.expr()));
+                    }
+                }
+                NodeOrToken::Token(_) => {}
+            }
+        }
+        if !text.is_empty() {
+            parts.push(StringPart::Text(text));
+        }
+        Some(parts)
+    }
+
+    pub fn holes(&self) -> AstChildren<Interp> {
+        support::children(&self.syntax)
+    }
+}
+
+impl Interp {
+    pub fn expr(&self) -> Option<Expr> {
+        support::child(&self.syntax)
     }
 }
 
@@ -820,7 +951,8 @@ impl TupleType {
 }
 
 impl LiteralPat {
-    /// `INT`、`STRING`、`CHAR` のトークン。`-1` の `-` は含まない。
+    /// `INT`、`CHAR`、`RAW_STRING` のトークン。`-1` の `-` は含まない。raw 文字列のほかの文字列はトークンでなく、
+    /// `string` で取り出す。
     pub fn token(&self) -> Option<SyntaxToken> {
         self.syntax
             .children_with_tokens()
@@ -828,15 +960,30 @@ impl LiteralPat {
             .find(|token| {
                 matches!(
                     token.kind(),
-                    SyntaxKind::INT | SyntaxKind::STRING | SyntaxKind::CHAR
+                    SyntaxKind::INT | SyntaxKind::CHAR | SyntaxKind::RAW_STRING
                 )
             })
     }
 
+    pub fn string(&self) -> Option<StringLit> {
+        support::child(&self.syntax)
+    }
+
     /// `-1` の `-` は字句の一部ではなくパターンの一部なので (docs/spec/grammar.md の `apat`)、ここで符号を付ける。
-    /// 値の壊れたリテラルと未対応のリテラル (文字) は `None` を返す。未対応のリテラルは HIR が E0004 を出し、値の
-    /// 壊れたものは字句解析が報告済みである。
+    /// 値の壊れたリテラル、未対応のリテラル (文字)、穴のある文字列は `None` を返す。未対応のリテラルは HIR が
+    /// E0004 を出し、値の壊れたものは字句解析が、穴はパーサが報告済みである。
     pub fn value(&self) -> Option<LiteralValue> {
+        if let Some(string) = self.string() {
+            return string
+                .parts()?
+                .into_iter()
+                .map(|part| match part {
+                    StringPart::Text(text) => Some(text),
+                    StringPart::Hole(_) => None,
+                })
+                .collect::<Option<String>>()
+                .map(LiteralValue::String);
+        }
         let negative = support::token(&self.syntax, SyntaxKind::MINUS).is_some();
         let token = self.token()?;
         match token.kind() {
@@ -844,8 +991,8 @@ impl LiteralPat {
                 let n = crate::literal::int_value(token.text())?;
                 Some(LiteralValue::Int(if negative { -n } else { n }))
             }
-            SyntaxKind::STRING => {
-                crate::literal::decode_string(token.text()).map(LiteralValue::String)
+            SyntaxKind::RAW_STRING => {
+                crate::literal::raw_value(token.text()).map(LiteralValue::String)
             }
             _ => None,
         }
