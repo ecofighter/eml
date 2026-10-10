@@ -10,6 +10,7 @@ mod effects;
 mod eval;
 mod externs;
 mod item_tree;
+mod lists;
 mod load;
 mod lower;
 mod operators;

@@ -156,9 +156,53 @@ impl Printer<'_> {
     fn pat_atom(&self, body: &Body, id: PatId) -> String {
         let text = self.pat(body, id);
         match &body.pats[id].kind {
+            PatKind::Con { ctor, .. } if *ctor == self.program.lang.nil => text,
+            PatKind::Con { ctor, args }
+                if *ctor == self.program.lang.cons && self.ends_in_nil(body, args) =>
+            {
+                text
+            }
             PatKind::Con { args, .. } if !args.is_empty() => format!("({text})"),
             _ => text,
         }
+    }
+
+    /// `::` の鎖の終わりが Prelude の `Nil` か。そうなら `[a, b]` の形で書ける。
+    fn ends_in_nil(&self, body: &Body, args: &[PatId]) -> bool {
+        let lang = &self.program.lang;
+        let mut tail = args[1];
+        while let PatKind::Con { ctor, args } = &body.pats[tail].kind {
+            if *ctor != lang.cons {
+                break;
+            }
+            tail = args[1];
+        }
+        matches!(&body.pats[tail].kind, PatKind::Con { ctor, .. } if *ctor == lang.nil)
+    }
+
+    /// Prelude の `::` の鎖。`[]` で終わればリストの形、それ以外は右結合の `::` で書く。`::` は Prelude だけが
+    /// 定義できるので修飾しない (docs/superpowers/specs/2026-10-10-s6a-lists-design.md の「網羅性」)。
+    fn cons_pat(&self, body: &Body, args: &[PatId]) -> String {
+        let lang = &self.program.lang;
+        let mut heads = vec![args[0]];
+        let mut tail = args[1];
+        while let PatKind::Con { ctor, args } = &body.pats[tail].kind {
+            if *ctor != lang.cons {
+                break;
+            }
+            heads.push(args[0]);
+            tail = args[1];
+        }
+        if matches!(&body.pats[tail].kind, PatKind::Con { ctor, .. } if *ctor == lang.nil) {
+            let items: Vec<String> = heads.iter().map(|&head| self.pat(body, head)).collect();
+            return format!("[{}]", items.join(", "));
+        }
+        let mut parts: Vec<String> = heads
+            .iter()
+            .map(|&head| self.pat_atom(body, head))
+            .collect();
+        parts.push(self.pat_atom(body, tail));
+        parts.join(" :: ")
     }
 
     fn function(&self, function: &Function, body: Option<&Body>, out: &mut String) {
@@ -347,6 +391,10 @@ impl Printer<'_> {
             PatKind::Bind(local) => local_name(body, *local),
             PatKind::Wildcard => "_".to_string(),
             PatKind::Unit => "()".to_string(),
+            PatKind::Con { ctor, .. } if *ctor == self.program.lang.nil => "[]".to_string(),
+            PatKind::Con { ctor, args } if *ctor == self.program.lang.cons => {
+                self.cons_pat(body, args)
+            }
             PatKind::Con { ctor, args } => {
                 let bare = &self.program[*ctor].name;
                 let name = self.qualified(ctor.module, bare);

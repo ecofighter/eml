@@ -1,4 +1,4 @@
-use eml_diagnostics::{Diagnostic, FileId, Label, TextRange};
+use eml_diagnostics::{Diagnostic, FileId, Label, TextRange, TextSize};
 use eml_syntax::{SyntaxKind, SyntaxToken, ast};
 use la_arena::{Arena, ArenaMap};
 
@@ -577,8 +577,8 @@ impl<'a> BodyLowering<'a> {
                     None => PatKind::Missing,
                 },
             },
+            ast::Pat::ListPat(list) => return self.lower_list_pat(list, range),
             // 要素は外側のパターンと同じ組で変換する。`(x, x)` も1つのパターンの中の重複である (E1017)
-            ast::Pat::ListPat(_) => self.unsupported_pat(range, "lists are not supported yet"),
             ast::Pat::TuplePat(tuple) => {
                 let elements = tuple
                     .elements()
@@ -597,6 +597,45 @@ impl<'a> BodyLowering<'a> {
             }
         };
         self.pats.alloc(Pat { kind, range })
+    }
+
+    /// `[p1, …, pn]` を `p1 :: (… (pn :: Nil))` に組む。コンストラクタは名前を引かずに Prelude のものを指す
+    /// (docs/superpowers/specs/2026-10-10-s6a-lists-design.md の「HIR」)。要素は外側のパターンと同じ組で、左から
+    /// 変換する。E1017 の組と局所変数の番号を、ソースの順にそろえるためである。範囲は、k 番目の `::` が k 番目の
+    /// 要素の始まり (1つ目は `[`) から `]` まで、`Nil` が `]` である。
+    fn lower_list_pat(&mut self, list: ast::ListPat, range: TextRange) -> PatId {
+        let elements: Vec<PatId> = list
+            .elements()
+            .map(|element| {
+                let element_range = element.range();
+                self.lower_pat_in_group(Some(element), element_range)
+            })
+            .collect();
+        let lang = self.lang;
+        let end = TextRange::new(range.end() - TextSize::from(1), range.end());
+        let nil_range = if elements.is_empty() { range } else { end };
+        let mut tail = self.pats.alloc(Pat {
+            kind: PatKind::Con {
+                ctor: lang.nil,
+                args: Vec::new(),
+            },
+            range: nil_range,
+        });
+        for (k, &head) in elements.iter().enumerate().rev() {
+            let start = if k == 0 {
+                range.start()
+            } else {
+                self.pats[head].range.start()
+            };
+            tail = self.pats.alloc(Pat {
+                kind: PatKind::Con {
+                    ctor: lang.cons,
+                    args: vec![head, tail],
+                },
+                range: TextRange::new(start, range.end()),
+            });
+        }
+        tail
     }
 
     /// パーサは中置のコンストラクタのパターンを右に入れ子の木で作る (docs/spec/grammar.md の `pat`)。式の演算子の列と
