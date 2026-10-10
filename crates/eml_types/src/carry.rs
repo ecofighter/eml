@@ -231,6 +231,7 @@ impl Carrying<'_, '_> {
                 self.expr(*scrutinee, &branches)
             }
             ExprKind::Tuple(elements) => self.parts(elements, after),
+            ExprKind::List(elements) => self.list(elements, after),
             ExprKind::Drop(value) => self.expr(*value, after),
         }
     }
@@ -244,6 +245,24 @@ impl Carrying<'_, '_> {
             live = self.expr(part, &live);
         }
         live
+    }
+
+    /// リストの要素も左から評価するが、評価済みの要素は最初の要素1つで代表させる。要素の型はどれも同じなので、
+    /// 持ち越しの制約も同じになる。`parts` のように1つずつ持つと、生きている値の集合を要素ごとに写すので、要素の数の
+    /// 2乗の時間がかかる (docs/superpowers/specs/2026-10-10-s6a-lists-design.md の「型検査」)。
+    fn list(&mut self, elements: &[ExprId], after: &Live) -> Live {
+        let Some((&first, rest)) = elements.split_first() else {
+            return after.clone();
+        };
+        let mut live = after.clone();
+        if !rest.is_empty() {
+            live.insert(Held::Temporary(first));
+        }
+        for &element in rest.iter().rev() {
+            live = self.expr(element, &live);
+        }
+        live.remove(&Held::Temporary(first));
+        self.expr(first, &live)
     }
 
     fn unbind(&self, pat: PatId, live: &mut Live) {

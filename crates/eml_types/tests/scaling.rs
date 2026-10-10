@@ -232,3 +232,18 @@ fn a_constraint_on_a_type_doubling_in_each_let() {
         std::panic::resume_unwind(panic);
     }
 }
+
+/// 呼び出しを要素に持つリストのリテラル。持ち越しは評価済みの要素を1つで代表させるので、要素の数に比例する。
+fn list_of_calls(n: usize) -> String {
+    let items: Vec<String> = (0..n).map(|i| format!("id_ {i}")).collect();
+    format!(
+        "id_ : Int -> Int\nid_ x = x\n\nxs : List Int\nxs = [{}]\n",
+        items.join(", ")
+    )
+}
+
+#[test]
+#[ignore = "release ビルドで時間を測る"]
+fn a_list_literal_of_calls() {
+    assert_linear(list_of_calls);
+}

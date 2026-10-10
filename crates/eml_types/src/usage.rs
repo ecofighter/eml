@@ -260,7 +260,7 @@ impl<'a> Usage<'a, '_> {
                 sequence(&mut uses, join(branches));
                 uses
             }
-            ExprKind::Tuple(elements) => {
+            ExprKind::Tuple(elements) | ExprKind::List(elements) => {
                 let mut uses = Uses::new();
                 for &element in elements {
                     let next = self.expr(element);

@@ -469,3 +469,14 @@ fn derived_comparisons_walk_a_long_list_without_growing_the_heap() {
     let stats = stats(&text, "True\nEQ\n");
     assert!(stats.peak_objects <= 3 * 10000, "{stats:?}");
 }
+
+/// 式のリストは平らな節点なので、要素が多くてもどの段階のスタックも深くならない。
+#[test]
+fn a_long_list_literal_runs() {
+    let items: Vec<String> = (0..10000).map(|i| (i % 10).to_string()).collect();
+    let text = format!(
+        "sum : List Int -> Int -> Int\nsum xs acc = match xs with\n  | [] -> acc\n  | x :: rest -> sum rest (acc + x)\n\nmain : Unit -> <IO> Unit\nmain () = println (show (sum [{}] 0))",
+        items.join(", ")
+    );
+    stats(&text, "45000\n");
+}

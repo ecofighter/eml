@@ -2584,3 +2584,16 @@ fn tuple_instances_are_generated_per_size() {
     }
     "#);
 }
+
+#[test]
+fn a_list_literal_evaluates_left_to_right_and_builds_from_the_right() {
+    let text = "f : Int -> List Int\nf x = [x + 1, x]\n\nmain : Unit -> <IO> Unit\nmain () = println (show (f 1))";
+    insta::assert_snapshot!(function(&core_text(text, Pass::Translate), "f"), @"
+    fn f(x.0: int) -> tobj {
+      let t.1: int = extern Prelude.+(x.0, 1)
+      let d.2: tobj = con Prelude.List #1(x.0, #0)
+      let d.3: tobj = con Prelude.List #1(t.1, d.2)
+      return d.3
+    }
+    ");
+}

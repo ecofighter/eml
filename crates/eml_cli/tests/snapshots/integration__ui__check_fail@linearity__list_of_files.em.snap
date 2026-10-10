@@ -1,0 +1,19 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: rendered
+input_file: tests/ui/check-fail/linearity/list_of_files.em
+---
+[E3003] Error: `files` must be used exactly once, but it is not used
+   ╭─[ check-fail/linearity/list_of_files.em:4:7 ]
+   │
+ 4 │   let files = [Fs.open "a.txt", Fs.open "b.txt"]
+   │       ──┬──  
+   │         ╰──── `files` is bound here
+ 5 │   println "opened"
+   │                   │ 
+   │                   ╰─ `files` is not used before the end of this scope
+   │ 
+   │ Help: pass `files` to `drop`
+   │ 
+   │ Note: linear values, such as files, the continuation of a `once` operation and closures that capture one, must be used exactly once
+───╯

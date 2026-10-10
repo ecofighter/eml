@@ -307,7 +307,16 @@ impl<'a> BodyLowering<'a> {
             }
             ast::Expr::DropExpr(e) => self.lower_drop(&e, range),
             ast::Expr::FieldExpr(_) => self.unsupported(range, "field access is not supported yet"),
-            ast::Expr::ListExpr(_) => self.unsupported(range, "lists are not supported yet"),
+            ast::Expr::ListExpr(list) => {
+                let elements = list
+                    .elements()
+                    .map(|element| {
+                        let element_range = element.range();
+                        self.lower_expr(Some(element), element_range)
+                    })
+                    .collect();
+                self.alloc(ExprKind::List(elements), range)
+            }
             ast::Expr::TupleExpr(tuple) => {
                 let elements = tuple
                     .elements()

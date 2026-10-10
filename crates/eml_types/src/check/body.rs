@@ -200,6 +200,20 @@ impl BodyCheck<'_, '_> {
                 self.block(expr.range, stmts, *tail, Expectation::Has(expected, origin));
                 self.typing.exprs.insert(id, expected);
             }
+            ExprKind::List(elements)
+                if matches!(
+                    self.table.shape(expected),
+                    TyShape::Con(list, args) if *list == self.program.lang.list && args.len() == 1
+                ) =>
+            {
+                let TyShape::Con(_, args) = self.table.shape(expected).clone() else {
+                    unreachable!("matched above")
+                };
+                for &element in elements {
+                    self.check_expr(element, args[0], origin.clone());
+                }
+                self.typing.exprs.insert(id, expected);
+            }
             ExprKind::Lambda(Closure {
                 params,
                 body: lambda_body,
@@ -219,6 +233,30 @@ impl BodyCheck<'_, '_> {
                 self.expect(expr.range, expected, found, &origin);
             }
         }
+    }
+
+    /// 期待する型のないリスト。最初の要素の型を推論し、残りをそれに合わせる。`List t` は `Nil` のスキームから作り、
+    /// Kind の扱いをほかのコンストラクタの参照とそろえる。
+    fn list(&mut self, range: TextRange, elements: &[ExprId]) -> Ty {
+        let nil = ValueItem::Constructor(self.program.lang.nil);
+        let instantiated =
+            self.with_kind_origin(range, KindReason::Unified, |this| this.instantiate(nil));
+        let Some((list, _)) = instantiated else {
+            return self.table.error;
+        };
+        let TyShape::Con(_, args) = self.table.shape(list).clone() else {
+            unreachable!("`Nil` makes a `List`")
+        };
+        let element = args[0];
+        if let Some((&first, rest)) = elements.split_first() {
+            let found = self.infer_expr(first);
+            let first_range = self.body.exprs[first].range;
+            self.expect(first_range, element, found, &Origin::Inferred);
+            for &later in rest {
+                self.check_expr(later, element, Origin::ListElements(first_range));
+            }
+        }
+        list
     }
 
     pub(super) fn infer_expr(&mut self, id: ExprId) -> Ty {
@@ -276,6 +314,7 @@ impl BodyCheck<'_, '_> {
                     .collect();
                 self.table.tuple(fields)
             }
+            ExprKind::List(elements) => self.list(expr.range, elements),
             // `drop` はどんな値も受け取る。値を捨てることは使用の1回に数える (docs/spec/linearity.md)
             ExprKind::Drop(value) => {
                 self.infer_expr(*value);

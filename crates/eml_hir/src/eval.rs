@@ -48,6 +48,8 @@ pub fn is_value(program: &Program, body: &Body, expr: ExprId) -> bool {
         ExprKind::Path(Res::Item(ValueItem::Method(method))) => {
             program[*method].signature.arity() > 0
         }
+        // `[]` は `Nil` の参照と同じ値なので、`f a [] b` と `f a Nil b` の評価のまとまりをそろえる
+        ExprKind::List(elements) => elements.is_empty(),
         ExprKind::Annot { expr, .. } => is_value(program, body, *expr),
         _ => false,
     }

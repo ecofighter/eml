@@ -1,0 +1,14 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: rendered
+input_file: tests/ui/check-fail/classes/ambiguous_empty_list.em
+---
+[E2009] Error: cannot decide which instance of `Show` to use for `show`
+   ╭─[ check-fail/classes/ambiguous_empty_list.em:4:20 ]
+   │
+ 4 │ main () = println (show [])
+   │                    ──┬─  
+   │                      ╰─── the type here is never decided
+   │ 
+   │ Help: add a type annotation
+───╯

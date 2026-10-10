@@ -202,3 +202,23 @@ fn an_argument_beyond_the_continuation_arity_waits_for_the_call() {
         ["eval k", "eval 1", "arrow 0", "eval g ()", "arrow 1"]
     );
 }
+
+#[test]
+fn an_empty_list_is_a_value() {
+    assert_eq!(
+        steps(
+            "t : Unit -> Int\nt () = hl (g ()) []\n\nhl : Int -> (List Int -> Int)\nhl a = fn b -> a"
+        ),
+        ["eval hl", "eval g ()", "eval []", "arrow 0", "arrow 1"]
+    );
+}
+
+#[test]
+fn a_nonempty_list_is_not_a_value() {
+    assert_eq!(
+        steps(
+            "t : Unit -> Int\nt () = hl (g ()) [1]\n\nhl : Int -> (List Int -> Int)\nhl a = fn b -> a"
+        ),
+        ["eval hl", "eval g ()", "arrow 0", "eval [1]", "arrow 1"]
+    );
+}

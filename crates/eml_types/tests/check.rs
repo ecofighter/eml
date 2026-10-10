@@ -570,9 +570,9 @@ fn a_too_deep_pattern_reports_only_the_nesting_limit() {
 }
 
 #[test]
-fn an_unsupported_list_keeps_the_other_diagnostics_of_its_expression() {
+fn an_unsupported_literal_keeps_the_other_diagnostics_of_its_expression() {
     // E0004 の atom は読み飛ばしではないので、同じ式の名前の誤りも報告する
-    let text = "f : Int -> Int\nf x = if nosuch then 1 else g [1]";
+    let text = "f : Int -> Int\nf x = if nosuch then 1 else g 1.5";
     assert_eq!(codes(text), ["E1001", "E1001", "E0004"]);
 }
 

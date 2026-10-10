@@ -1,0 +1,27 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: rendered
+input_file: tests/ui/check-fail/types/list_element_mismatch.em
+---
+[E2001] Error: mismatched types
+   ╭─[ check-fail/types/list_element_mismatch.em:3:15 ]
+   │
+ 3 │ names = ["a", 1]
+   │               ┬  
+   │               ╰── expected `String`, found `Int`
+   │
+   ├─[ check-fail/types/list_element_mismatch.em:3:15 ]
+   │
+ 2 │ names : List String
+   │         ─────┬─────  
+   │              ╰─────── expected because of the signature of `names`
+───╯
+[E2001] Error: mismatched types
+   ╭─[ check-fail/types/list_element_mismatch.em:7:21 ]
+   │
+ 7 │   let mixed = ["a", 1]
+   │                ─┬─  ┬  
+   │                 ╰────── the first element has this type
+   │                     │  
+   │                     ╰── expected `String`, found `Int`
+───╯

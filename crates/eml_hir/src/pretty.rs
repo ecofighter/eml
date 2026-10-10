@@ -353,6 +353,13 @@ impl Printer<'_> {
                     .collect();
                 format!("({})", elements.join(", "))
             }
+            ExprKind::List(elements) => {
+                let elements: Vec<String> = elements
+                    .iter()
+                    .map(|&element| self.expr(body, element, indent))
+                    .collect();
+                format!("[{}]", elements.join(", "))
+            }
             ExprKind::Drop(value) => format!("(drop {})", self.expr(body, *value, indent)),
         }
     }

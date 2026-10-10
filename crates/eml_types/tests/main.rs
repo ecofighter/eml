@@ -10,6 +10,7 @@ mod effects;
 mod exhaustive;
 mod instantiations;
 mod linearity;
+mod lists;
 mod masks;
 mod modules;
 mod rows;

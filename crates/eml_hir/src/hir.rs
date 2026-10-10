@@ -367,7 +367,7 @@ impl Body {
                     f(arm.body);
                 }
             }
-            ExprKind::Tuple(elements) => {
+            ExprKind::Tuple(elements) | ExprKind::List(elements) => {
                 for &element in elements {
                     f(element);
                 }
@@ -518,6 +518,9 @@ pub enum ExprKind {
     /// 要素は2つ以上である。数字ラベルのレコードへの変換は型検査で行う
     /// (docs/implementation/status.md の「タプルの扱い」)。
     Tuple(Vec<ExprId>),
+    /// リストのリテラル。`[]` は要素のない `List` である。パターンと違い `::` に組まないのは、要素が多くても後の
+    /// 段階の再帰を深くしないため (docs/superpowers/specs/2026-10-10-s6a-lists-design.md の「深さ」)。
+    List(Vec<ExprId>),
     Drop(ExprId),
 }
 

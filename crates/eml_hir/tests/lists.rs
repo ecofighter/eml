@@ -78,3 +78,14 @@ fn list_syntax_means_the_prelude_list_even_with_an_imported_nil() {
       | Push Int Stack
     ");
 }
+
+#[test]
+fn list_expressions_stay_flat() {
+    let text = "f : Int -> List Int\nf x = [1, x, x + 1]\n\ng : Unit -> List Int\ng () = []";
+    insta::assert_snapshot!(lower_text(text), @"
+    f : Int -> List Int
+    f x#0 = [1, x#0, (+ x#0 1)]
+    g : Unit -> List Int
+    g () = []
+    ");
+}

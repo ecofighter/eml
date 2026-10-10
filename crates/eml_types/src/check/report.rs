@@ -29,6 +29,8 @@ pub(super) enum Origin {
     IfWithoutElse,
     /// `match` の2つ目以降の枝。最初の枝の本体の範囲を持つ。
     MatchArms(TextRange),
+    /// リストの2つ目以降の要素。最初の要素の範囲を持つ。
+    ListElements(TextRange),
     /// コンストラクタのパターン。コンストラクタと、それが作る型の名前を持つ。
     ConstructorPattern {
         constructor: String,
@@ -415,6 +417,11 @@ impl BodyCheck<'_, '_> {
                 file,
                 *first,
                 "the first arm has this type",
+            )),
+            Origin::ListElements(first) => diagnostic.with_secondary(Label::new(
+                file,
+                *first,
+                "the first element has this type",
             )),
             Origin::ConstructorPattern { constructor, ty } => {
                 diagnostic.with_note(format!("`{constructor}` is a constructor of `{ty}`"))
