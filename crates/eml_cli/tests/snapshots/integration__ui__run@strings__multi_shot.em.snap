@@ -1,0 +1,8 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{stderr}\")"
+input_file: tests/ui/run/strings/multi_shot.em
+---
+--- stdout ---
+x=1True,True | x=1True,False | x=1False,True | x=1False,False
+--- stderr ---

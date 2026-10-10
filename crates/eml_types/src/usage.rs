@@ -5,7 +5,9 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use eml_diagnostics::{FileId, TextRange, TextSize};
-use eml_hir::{Body, ClauseSource, Closure, ExprId, ExprKind, LocalId, PatId, PatKind, Res, Stmt};
+use eml_hir::{
+    Body, ClauseSource, Closure, ExprId, ExprKind, LocalId, PatId, PatKind, Res, Segment, Stmt,
+};
 
 use crate::check::BodyTyping;
 use crate::kind::{Bound, KindOrigin, KindReason, Provenance, Span, UnusedPath};
@@ -265,6 +267,16 @@ impl<'a> Usage<'a, '_> {
                 for &element in elements {
                     let next = self.expr(element);
                     sequence(&mut uses, next);
+                }
+                uses
+            }
+            ExprKind::Interpolation(segments) => {
+                let mut uses = Uses::new();
+                for segment in segments {
+                    if let Segment::Hole(hole) = segment {
+                        let next = self.expr(*hole);
+                        sequence(&mut uses, next);
+                    }
                 }
                 uses
             }

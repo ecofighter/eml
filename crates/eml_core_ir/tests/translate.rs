@@ -2597,3 +2597,27 @@ fn a_list_literal_evaluates_left_to_right_and_builds_from_the_right() {
     }
     ");
 }
+
+#[test]
+fn interpolation_concatenates_after_each_hole() {
+    let text = "f : Int -> String -> String\nf x y = \"a\\{x}b\\{y}\"\n\nmain : Unit -> <IO> Unit\nmain () = println (f 1 \"s\")";
+    insta::assert_snapshot!(function(&core_text(text, Pass::Translate), "f"), @r#"
+    fn f(x.0: int, y.1: obj) -> obj {
+      let s.2: obj = const "a"
+      let t.3: obj = call "Prelude.display@[Int]"(x.0)
+      let s.4: obj = extern Prelude.++(s.2, t.3)
+      let s.5: obj = const "b"
+      let s.6: obj = extern Prelude.++(s.4, s.5)
+      let t.7: obj = call "Prelude.Show String.display"(y.1)
+      let s.8: obj = extern Prelude.++(s.6, t.7)
+      return s.8
+    }
+    "#);
+}
+
+#[test]
+fn interpolation_uses_the_extern_concatenation_even_with_a_user_plus_plus() {
+    let text = "(++) : String -> String -> String\na ++ b = a\n\nf : Int -> String\nf x = \"a\\{x}\"\n\nmain : Unit -> <IO> Unit\nmain () = println (f 1)";
+    let shown = function(&core_text(text, Pass::Translate), "f");
+    assert!(shown.contains("extern Prelude.++"), "{shown}");
+}

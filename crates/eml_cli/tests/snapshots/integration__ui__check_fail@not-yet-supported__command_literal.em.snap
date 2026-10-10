@@ -1,0 +1,12 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: rendered
+input_file: tests/ui/check-fail/not-yet-supported/command_literal.em
+---
+[E0004] Error: command literals are not supported yet
+   ╭─[ check-fail/not-yet-supported/command_literal.em:5:11 ]
+   │
+ 5 │   let c = `ls -l \{undefined_name}`
+   │           ────────────┬────────────  
+   │                       ╰────────────── this is implemented in a later stage
+───╯

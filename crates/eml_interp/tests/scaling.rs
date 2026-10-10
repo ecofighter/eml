@@ -491,3 +491,15 @@ fn a_long_list_literal_runs() {
     );
     stats(&text, "45000\n");
 }
+
+#[test]
+fn interpolation_copies_bytes_in_proportion_to_its_length() {
+    let copied = |n: usize| {
+        let holes = "\\{x}-".repeat(n);
+        let program =
+            format!("main : Unit -> <IO> Unit\nmain () =\n  let x = 12345\n  println \"{holes}\"");
+        stats(&program, &format!("{}\n", "12345-".repeat(n))).string_bytes_copied
+    };
+    let (small, large) = (copied(500), copied(1000));
+    assert!(large as f64 <= small as f64 * 2.5, "{small} {large}");
+}

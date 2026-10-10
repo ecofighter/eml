@@ -835,23 +835,50 @@ impl<'a> BodyLowering<'a> {
         .lower(ty, fallback)
     }
 
-    /// 補間は S6b の Task 5 で実装する。それまでは最初の穴に E0004 を出す。
     fn lower_string(&mut self, string: &ast::StringLit, range: TextRange) -> ExprId {
-        // 閉じていない文字列と不正なエスケープは、字句解析が報告済み
+        // 閉じていない文字列、不正なエスケープ、E0014 は字句解析が報告済み。誤りのある文字列の中の誤りを重ねて
+        // 報告しないよう、穴も lower しない (docs/superpowers/specs/2026-10-10-s6b-strings-design.md の「HIR」)
         let Some(parts) = string.parts() else {
             return self.alloc(ExprKind::Missing, range);
         };
-        if let Some(hole) = string.holes().next() {
-            return self.unsupported(hole.range(), "string interpolation is not supported yet");
+        let mut holes = string.holes();
+        let mut segments = Vec::new();
+        for part in parts {
+            match part {
+                ast::StringPart::Text(text) => segments.push(Segment::Text(text)),
+                ast::StringPart::Hole(expr) => {
+                    let hole_range = holes.next().expect("every hole part has an interp").range();
+                    // 名前を引かずに Prelude の `display` を指す。ユーザーの `display` で補間の意味を変えないため
+                    let callee = self.alloc(
+                        ExprKind::Path(Res::Item(ValueItem::Method(self.lang.display))),
+                        hole_range,
+                    );
+                    let arg = self.lower_expr(expr, hole_range);
+                    let call = self.alloc(
+                        ExprKind::Call {
+                            callee,
+                            args: vec![arg],
+                        },
+                        hole_range,
+                    );
+                    segments.push(Segment::Hole(call));
+                }
+            }
         }
-        let text = parts
-            .into_iter()
-            .map(|part| match part {
-                ast::StringPart::Text(text) => text,
-                ast::StringPart::Hole(_) => unreachable!("a string without holes has only text"),
-            })
-            .collect();
-        self.alloc(ExprKind::Literal(Literal::String(text)), range)
+        if !segments
+            .iter()
+            .any(|segment| matches!(segment, Segment::Hole(_)))
+        {
+            let text = segments
+                .into_iter()
+                .map(|segment| match segment {
+                    Segment::Text(text) => text,
+                    Segment::Hole(_) => unreachable!("checked above"),
+                })
+                .collect();
+            return self.alloc(ExprKind::Literal(Literal::String(text)), range);
+        }
+        self.alloc(ExprKind::Interpolation(segments), range)
     }
 
     pub(super) fn unsupported(&mut self, range: TextRange, message: &str) -> ExprId {

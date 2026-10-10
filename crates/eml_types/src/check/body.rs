@@ -3,7 +3,8 @@ use std::collections::HashMap;
 use eml_diagnostics::{Diagnostic, FileId, Label, TextRange};
 use eml_hir::{
     Body, Closure, ConstructorId, EffectId, ExprId, ExprKind, Function, Literal, LocalId, MatchArm,
-    OperationId, PatId, PatKind, Program, Res, RowRef, Stmt, TypeRefId, TypeRefKind, ValueItem,
+    OperationId, PatId, PatKind, Program, Res, RowRef, Segment, Stmt, TypeRefId, TypeRefKind,
+    ValueItem,
 };
 use la_arena::ArenaMap;
 
@@ -324,6 +325,17 @@ impl BodyCheck<'_, '_> {
                 self.table.tuple(fields)
             }
             ExprKind::List(elements) => self.list(expr.range, elements),
+            // 各穴は `display e` の呼び出しで、`String` を返す。穴の式の型には、`display` の参照が `Show` の制約を付ける
+            // (docs/superpowers/specs/2026-10-10-s6b-strings-design.md の「型検査」)
+            ExprKind::Interpolation(segments) => {
+                for segment in segments {
+                    if let Segment::Hole(hole) = segment {
+                        let string = self.table.string;
+                        self.check_expr(*hole, string, Origin::Inferred);
+                    }
+                }
+                self.table.string
+            }
             // `drop` はどんな値も受け取る。値を捨てることは使用の1回に数える (docs/spec/linearity.md)
             ExprKind::Drop(value) => {
                 self.infer_expr(*value);

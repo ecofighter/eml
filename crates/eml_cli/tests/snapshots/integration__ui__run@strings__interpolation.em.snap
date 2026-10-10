@@ -1,0 +1,16 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{stderr}\")"
+input_file: tests/ui/run/strings/interpolation.em
+---
+--- stdout ---
+Hello, eml!
+n = 3, xs = [1, 2], o = Some "x", c = Red
+nested: [Some "x"] (1, "a")
+inner: <eml>
+eval 1
+eval 2
+order: 1 2
+literal \{name}
+-5 yes
+--- stderr ---

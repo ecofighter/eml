@@ -818,3 +818,28 @@ fn a_tag_switch_without_a_layout_stops_perceus() {
     .unwrap_or_else(|error| panic!("{error}"));
     perceus(&mut program);
 }
+
+/// 補間は穴を評価するたびにつなぐので、穴の呼び出しをまたいで退避するのは組み立て中の文字列だけである
+/// (docs/superpowers/specs/2026-10-10-s6b-strings-design.md の「translate」)。
+#[test]
+fn interpolation_saves_only_the_accumulator_across_holes() {
+    let text = "g : Int -> <IO> Int\ng n =\n  println \"g\"\n  n\n\nf : Int -> <IO> String\nf n = \"a\\{g n}b\\{g n}c\\{g n}\"\n\nmain : Unit -> <IO> Unit\nmain () = println (f 1)";
+    let shown = function(&core_text(text, Pass::Perceus), "f");
+    let saves: Vec<&str> = shown
+        .lines()
+        .filter_map(|line| line.split_once(" save ["))
+        .map(|(_, rest)| rest)
+        .collect();
+    assert!(!saves.is_empty(), "{shown}");
+    for save in saves {
+        let saved = save
+            .trim_end_matches(']')
+            .split(", ")
+            .filter(|v| !v.is_empty())
+            .count();
+        assert!(
+            saved <= 2,
+            "a hole call saves more than the accumulator and `n`: {shown}"
+        );
+    }
+}

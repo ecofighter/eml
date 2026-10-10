@@ -8,7 +8,7 @@ use std::collections::BTreeSet;
 use eml_diagnostics::FileId;
 use eml_hir::{
     Body, EvalStep, ExprId, ExprKind, LocalId, OpMultiplicity, OperationId, PatId, Program, Res,
-    Stmt,
+    Segment, Stmt,
 };
 
 use crate::check::{BodyTyping, CallRows};
@@ -232,6 +232,7 @@ impl Carrying<'_, '_> {
             }
             ExprKind::Tuple(elements) => self.parts(elements, after),
             ExprKind::List(elements) => self.list(elements, after),
+            ExprKind::Interpolation(segments) => self.interpolation(segments, after),
             ExprKind::Drop(value) => self.expr(*value, after),
         }
     }
@@ -263,6 +264,18 @@ impl Carrying<'_, '_> {
         }
         live.remove(&Held::Temporary(first));
         self.expr(first, &live)
+    }
+
+    /// 補間の穴も左から評価するが、組み立て中の文字列は持っている値に足さない。`String` は `Unr` なので、持っていても
+    /// 制約が増えないため (docs/superpowers/specs/2026-10-10-s6b-strings-design.md の「型検査」)。
+    fn interpolation(&mut self, segments: &[Segment], after: &Live) -> Live {
+        let mut live = after.clone();
+        for segment in segments.iter().rev() {
+            if let Segment::Hole(hole) = segment {
+                live = self.expr(*hole, &live);
+            }
+        }
+        live
     }
 
     fn unbind(&self, pat: PatId, live: &mut Live) {

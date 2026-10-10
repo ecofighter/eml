@@ -4,7 +4,7 @@ use eml_extern::{Extern, ExternType};
 use eml_hir::EvalStep;
 use eml_hir::{
     Closure, ConstructorId, ExprId, ExprKind, FunctionId, FunctionKind, Literal, OperationId,
-    PatId, Program as HirProgram, Res, ValueItem,
+    PatId, Program as HirProgram, Res, Segment, ValueItem,
 };
 use eml_types::TypeId;
 
@@ -519,6 +519,35 @@ impl FnLowering<'_> {
                     }
                 }
                 list
+            }
+            ExprKind::Interpolation(segments) => {
+                // 穴を評価するたびにつなぐので、穴の呼び出しをまたいで生きているのは組み立て中の文字列だけである。
+                // 連結は、導出した `Show` と同じく extern を直接呼び、ユーザーの `++` によらない
+                // (docs/superpowers/specs/2026-10-10-s6b-strings-design.md の「translate」)
+                let repr = ExternType::String.row().repr;
+                let mut acc: Option<Atom> = None;
+                for segment in segments {
+                    let part = match segment {
+                        Segment::Text(text) => {
+                            let index = self.program.strings.intern(text);
+                            self.bind("s", repr, Rhs::ConstString(index))
+                        }
+                        Segment::Hole(hole) => self.atom(*hole),
+                    };
+                    acc = Some(match acc {
+                        None => part,
+                        Some(left) => self.bind(
+                            "s",
+                            repr,
+                            Rhs::Extern {
+                                ext: Extern::StrConcat,
+                                args: vec![left, part],
+                                at: None,
+                            },
+                        ),
+                    });
+                }
+                acc.expect("an interpolation has a hole")
             }
             ExprKind::Drop(value) => {
                 let value = self.atom(*value);

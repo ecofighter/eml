@@ -10,10 +10,3 @@ input_file: tests/ui/check-fail/syntax/unterminated_interpolation.em
    │                    ─┬  
    │                     ╰── missing closing `}`
 ───╯
-[E0004] Error: string interpolation is not supported yet
-   ╭─[ check-fail/syntax/unterminated_interpolation.em:7:18 ]
-   │
- 7 │ fine n = "count: \{n}"
-   │                  ──┬─  
-   │                    ╰─── this is implemented in a later stage
-───╯

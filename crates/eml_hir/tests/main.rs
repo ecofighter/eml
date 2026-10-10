@@ -15,5 +15,6 @@ mod load;
 mod lower;
 mod operators;
 mod scaling;
+mod strings;
 mod structure;
 mod tuples;
