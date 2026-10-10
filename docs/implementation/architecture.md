@@ -111,8 +111,9 @@ eml_extern       extern の表 (型、エフェクト、関数)。依存を持�
 - 行末の `->` で E0009 を出した次の行もまた `->` で終わり、今のブロックが `->` で開いたものなら、その `->` の E0009 は出さない。揃えた複数行のシグネチャ (`f : A ->` の次の行から `B ->`、`C ->` と同じ列に並べたもの) の誤りを1件にするためである。ブロックを開いたトークンを見るのは、トップレベルや `where` の中で、続けて `->` で終わる別々の行の誤りの診断を抑えないためである
 - [レイアウト規則](../spec/layout.md) の規則 5 の `;` のエラーは1件だけ出し、parser は対応する閉じ括弧まで読み飛ばす
 - 範囲の終わりを決める `Nesting` (`grammar/scan.rs`) は、`INTERP_START` と `INTERP_END` を入れ子の対として数え、穴の外の `INTERP_END` で止まる。穴の中の括弧の読み飛ばしを、穴の閉じで止めるためである。`INTERP_START` と `INTERP_END` は、開き括弧と閉じ括弧 (`is_opening_bracket`、`is_closing_bracket`) に入れない。入れると、パターンの始まりの判定が `INTERP_START` を始まりとみなし、読まないまま回り続ける。`close_bracket` も `INTERP_END` を閉じ括弧として読まない。そのため `"\{(x}"` は `)` がない E0011 を1件出し、穴は `INTERP_END` で閉じる
+- 閉じていない穴の幅 0 の `INTERP_END` の位置では、parser は診断を出さない (`Parser::error`)。lexer が E0002 などを報告済みのためである。`"\{1 +` や `"\{(x` のように穴の中の式が途中で終わっても、診断は lexer の1件だけになる。`ERROR_TOKEN` の位置で出さないのと同じ扱いである
 - 演算子の等式の先読みが使う `apat_len` は、文字列のパターンを `STRING_START` から `STRING_END` まで (なければ文字列の最後のトークンまで) の長さで数える。穴の中の入れ子の文字列も、`INTERP_START` と `INTERP_END` の対で数えて飛ばす
-- 診断のトークンの名前 (`token_name` と `unexpected`) は、`STRING_START` を「a string」、`CMD_START` を「a command literal」と書く。文字列の最初のトークンを引用すると、`"` だけが出てしまうためである
+- 診断のトークンの名前 (`token_name` と `unexpected`) は、`STRING_START` を「a string」、`CMD_START` を「a command literal」と書く。文字列の最初のトークンを引用すると、`"` だけが出てしまうためである。幅 0 の `INTERP_END` はテキストを持たないので、「the end of the line」(`unexpected` では「unexpected end of line」) と書く
 
 ### 名前解決の回復
 

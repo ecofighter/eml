@@ -128,6 +128,24 @@ fn an_unclosed_hole_does_not_read_the_next_line() {
 }
 
 #[test]
+fn an_unclosed_hole_with_an_unfinished_expression_reports_only_the_hole() {
+    // 幅 0 の `INTERP_END` は lexer が報告済みなので、穴の中の入れ子の構文もそこで誤りを重ねない
+    let holes = ["1 +", "if x then", "[1,", "let y = 1 in", "(x"];
+    let found: Vec<_> = holes
+        .iter()
+        .map(|hole| (*hole, diagnostics(&format!("x = \"\\{{{hole}\nz = 1"))))
+        .collect();
+    let only_the_hole: Vec<_> = holes
+        .iter()
+        .map(|hole| {
+            let expected = vec!["E0002 1:6 unterminated string interpolation".to_string()];
+            (*hole, expected)
+        })
+        .collect();
+    assert_eq!(found, only_the_hole);
+}
+
+#[test]
 fn interpolation_in_a_pattern_is_an_error() {
     assert_eq!(
         diagnostics("f : String -> Int\nf \"a\\{x}\" = 1\nf _ = 0"),

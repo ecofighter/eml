@@ -197,13 +197,19 @@ impl Lexer<'_> {
                     hole: Some(start), ..
                 } => {
                     if !reported {
-                        self.error(
+                        let range = self.range(start, start + 2);
+                        let mut diagnostic = Diagnostic::error(
                             codes::UNTERMINATED_STRING,
                             "unterminated string interpolation",
-                            start,
-                            start + 2,
-                            "missing closing `}`",
+                            Label::new(self.file, range, "missing closing `}`"),
                         );
+                        // 改行で閉じた穴には、穴を1行に収める決まりを note で示す。ファイルの終わりで閉じた穴は行をまたいで
+                        // いないので、この決まりは関係しない (docs/spec/lexical.md の「穴の中の改行」)
+                        if !at_eof {
+                            diagnostic = diagnostic
+                                .with_note("an interpolation must be closed on the same line");
+                        }
+                        self.diagnostics.push(diagnostic);
                         reported = true;
                     }
                     // パーサとレイアウト段が穴の終わりを知るための、幅 0 の閉じ。`push` は `ERROR_TOKEN` をまとめるので
@@ -243,18 +249,19 @@ impl Lexer<'_> {
                                 "unterminated string literal",
                             )
                         };
-                        self.error(codes::UNTERMINATED_STRING, message, start, end, label);
+                        self.unclosed_literal(message, start, end, label, "a `\"`", "string");
                     }
                     reported = true;
                 }
                 Mode::Command { start } => {
                     if !reported {
-                        self.error(
-                            codes::UNTERMINATED_STRING,
+                        self.unclosed_literal(
                             "unterminated command literal",
                             start,
                             self.pos,
                             "missing closing backtick",
+                            "a backtick",
+                            "command literal",
                         );
                         reported = true;
                     }
@@ -262,6 +269,43 @@ impl Lexer<'_> {
             }
             self.modes.pop();
         }
+    }
+
+    /// 今のモードが閉じていない文字列かコマンドリテラルで、そのすぐ外が穴なら、穴の `\{` を secondary で示す。`}` を
+    /// 書き忘れて閉じの `"` を穴の中に書くと、報告は開いた覚えのない内側の文字列になるため
+    /// (docs/spec/lexical.md の「改行での回復」)。
+    fn unclosed_literal(
+        &mut self,
+        message: &str,
+        start: usize,
+        end: usize,
+        label: &str,
+        opener: &str,
+        literal: &str,
+    ) {
+        let range = self.range(start, end);
+        let mut diagnostic = Diagnostic::error(
+            codes::UNTERMINATED_STRING,
+            message,
+            Label::new(self.file, range, label),
+        );
+        if let [
+            ..,
+            Mode::Code {
+                hole: Some(hole), ..
+            },
+            _,
+        ] = self.modes[..]
+        {
+            diagnostic = diagnostic.with_secondary(Label::new(
+                self.file,
+                self.range(hole, hole + 2),
+                format!(
+                    "this interpolation is not closed; {opener} inside `\\{{…}}` starts a new {literal}"
+                ),
+            ));
+        }
+        self.diagnostics.push(diagnostic);
     }
 
     /// 連続する `ERROR_TOKEN` は1つにまとめる。認識できない文字の並びに、診断を1件だけ出すため。

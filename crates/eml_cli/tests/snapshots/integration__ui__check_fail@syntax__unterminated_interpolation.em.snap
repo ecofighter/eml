@@ -4,9 +4,20 @@ expression: rendered
 input_file: tests/ui/check-fail/syntax/unterminated_interpolation.em
 ---
 [E0002] Error: unterminated string interpolation
-   ╭─[ check-fail/syntax/unterminated_interpolation.em:4:20 ]
+   ╭─[ check-fail/syntax/unterminated_interpolation.em:5:20 ]
    │
- 4 │ broken n = "count: \{n
+ 5 │ broken n = "count: \{n
    │                    ─┬  
    │                     ╰── missing closing `}`
+   │ 
+   │ Note: an interpolation must be closed on the same line
+───╯
+[E0002] Error: unterminated string literal
+   ╭─[ check-fail/syntax/unterminated_interpolation.em:8:21 ]
+   │
+ 8 │ typo n = "count: \{n"
+   │                  ─┬ ┬  
+   │                   ╰──── this interpolation is not closed; a `"` inside `\{…}` starts a new string
+   │                     │  
+   │                     ╰── missing closing `"`
 ───╯

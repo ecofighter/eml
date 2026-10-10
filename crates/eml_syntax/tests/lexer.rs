@@ -537,6 +537,8 @@ fn an_unclosed_hole_ends_at_the_newline_with_an_empty_interp_end() {
      1 │ "a \{x
        │    ─┬  
        │     ╰── missing closing `}`
+       │ 
+       │ Note: an interpolation must be closed on the same line
     ───╯
     "#);
 }
@@ -551,6 +553,85 @@ fn only_the_innermost_unclosed_layer_is_reported() {
     assert_eq!(
         diags("\"a \\{f \"b\nc"),
         ["E0002@7..9 unterminated string literal"]
+    );
+}
+
+/// `diags` に、secondary のラベルと note を足したもの。
+fn details(text: &str) -> Vec<String> {
+    let (_, file) = source(text);
+    let (_, mut diagnostics) = lex(file, text);
+    eml_diagnostics::sort_diagnostics(&mut diagnostics);
+    diagnostics
+        .iter()
+        .map(|d| {
+            let mut line = format!("{}@{:?} {}", d.code, d.primary.range, d.message);
+            for label in &d.secondary {
+                line.push_str(&format!(" | {:?} {}", label.range, label.message));
+            }
+            for note in &d.notes {
+                line.push_str(&format!(" | note: {note}"));
+            }
+            line
+        })
+        .collect()
+}
+
+#[test]
+fn a_string_opened_in_a_hole_points_at_the_hole() {
+    // 穴の中の `"` は新しい文字列を開くので、`}` を書き忘れると内側の文字列が閉じていないことになる。報告は内側の
+    // 文字列の1件のままで、外側の穴の `\{` を secondary で示す
+    let hint = "this interpolation is not closed; a `\"` inside `\\{…}` starts a new string";
+    assert_eq!(
+        details("x = \"count: \\{n\"\ny = 1"),
+        [format!(
+            "E0002@15..16 unterminated string literal | 12..14 {hint}"
+        )]
+    );
+    assert_eq!(
+        details("\"a \\{f \"b"),
+        [format!(
+            "E0002@7..9 unterminated string literal | 3..5 {hint}"
+        )]
+    );
+    assert_eq!(
+        details("\"a \\{f `ls"),
+        [
+            "E0002@7..10 unterminated command literal | 3..5 this interpolation is not closed; a \
+          backtick inside `\\{…}` starts a new command literal"
+        ]
+    );
+    // 穴の外の文字列と、内側の穴が一番内側の層のときは、secondary を付けない
+    assert_eq!(
+        details("\"a \\{f \"b \\{x\n"),
+        [
+            "E0002@10..12 unterminated string interpolation | note: an interpolation must be closed \
+          on the same line"
+        ]
+    );
+    assert_eq!(details("\"ab"), ["E0002@0..3 unterminated string literal"]);
+}
+
+#[test]
+fn a_hole_closed_by_a_newline_has_a_note() {
+    assert_eq!(
+        details("\"a \\{x\ny"),
+        [
+            "E0002@3..5 unterminated string interpolation | note: an interpolation must be closed on \
+          the same line"
+        ]
+    );
+    // ファイルの終わりで閉じた穴には付けない。改行を足しても閉じないため
+    assert_eq!(
+        details("\"a \\{x"),
+        ["E0002@3..5 unterminated string interpolation"]
+    );
+    // 複数行の文字列の中の穴も、改行で閉じる
+    assert_eq!(
+        details("\"\"\"\n  a \\{x\n  \"\"\""),
+        [
+            "E0002@8..10 unterminated string interpolation | note: an interpolation must be closed \
+          on the same line"
+        ]
     );
 }
 
