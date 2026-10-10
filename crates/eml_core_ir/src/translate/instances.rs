@@ -10,7 +10,7 @@ use eml_hir::{
 };
 use eml_types::{
     BodyTypes, InstanceNode, Instantiation, Resolution, Substitution, TypeId, TypeKind, TypeStore,
-    TypedProgram,
+    TypedProgram, Update,
 };
 use la_arena::ArenaMap;
 
@@ -359,7 +359,18 @@ impl Collector<'_> {
                 instantiations,
                 masks: body.masks.clone(),
                 fields: body.fields.clone(),
-                updates: body.updates.clone(),
+                updates: body
+                    .updates
+                    .iter()
+                    .map(|(expr, update)| {
+                        let update = Update {
+                            ctor: update.ctor,
+                            written: update.written.clone(),
+                            fields: update.fields.iter().map(|&ty| each(ty)).collect(),
+                        };
+                        (expr, update)
+                    })
+                    .collect(),
                 discarded: body
                     .discarded
                     .iter()

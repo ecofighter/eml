@@ -18,8 +18,8 @@ use crate::store::{EffectLabel, TypeKind, TypeStore};
 use crate::table::{Exporter, RigidVar, Row, Table, TyShape};
 use crate::ty::Linearity;
 use crate::{
-    BodyTypes, DeclType, Instantiation, TypedProgram, Uniform, carry, codes, exhaustive, scc,
-    uniform, usage,
+    BodyTypes, DeclType, Instantiation, TypedProgram, Uniform, Update, carry, codes, exhaustive,
+    scc, uniform, usage,
 };
 use constraints::{Failure, show_constraint, solve};
 
@@ -452,7 +452,18 @@ pub(crate) fn check_body(
     }
     body_types.masks = typing.masks;
     body_types.fields = typing.fields;
-    body_types.updates = typing.updates;
+    for (expr, update) in typing.updates.iter() {
+        let update = Update {
+            ctor: update.ctor,
+            written: update.written.clone(),
+            fields: update
+                .fields
+                .iter()
+                .map(|&ty| exporter.export(ty))
+                .collect(),
+        };
+        body_types.updates.insert(expr, update);
+    }
     for (expr, discarded) in typing.discarded.iter() {
         let discarded = discarded
             .iter()

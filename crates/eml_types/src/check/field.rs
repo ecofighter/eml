@@ -7,10 +7,10 @@ use eml_hir::{
     TypeDefKind, ValueItem,
 };
 
-use crate::FieldTarget;
 use crate::codes;
 use crate::kind::KindReason;
 use crate::table::{Ty, TyShape};
+use crate::{FieldTarget, Update};
 
 use super::body::BodyCheck;
 use super::report::Origin;
@@ -61,6 +61,7 @@ impl BodyCheck<'_, '_> {
         }
         let known = !matches!(self.table.shape(base_ty), TyShape::Var(_) | TyShape::Error);
         let mut ctor = None;
+        let mut field_types = Vec::new();
         let mut indices = Vec::new();
         let mut discarded = Vec::new();
         let mut resolved_all = known;
@@ -78,10 +79,11 @@ impl BodyCheck<'_, '_> {
                 Some(ResolvedField {
                     target: FieldTarget::Constructor { ctor: c, field },
                     ty,
-                    ..
+                    rest,
                 }) => {
                     self.check_expr(*value, ty, Origin::Field { ctor: c, field });
                     ctor = Some(c);
+                    field_types = all_fields(field, ty, rest);
                     indices.push(field);
                     discarded.push((field, ty));
                 }
@@ -92,7 +94,12 @@ impl BodyCheck<'_, '_> {
             }
         }
         if let (true, Some(ctor)) = (resolved_all, ctor) {
-            self.typing.updates.insert(id, (ctor, indices));
+            let update = Update {
+                ctor,
+                written: indices,
+                fields: field_types,
+            };
+            self.typing.updates.insert(id, update);
             self.typing.discarded.insert(id, discarded);
         }
         base_ty
@@ -304,6 +311,14 @@ impl BodyCheck<'_, '_> {
         self.instantiate(ValueItem::Constructor(ctor))
             .map(|(ty, _)| ty)
     }
+}
+
+/// 引いたフィールドと残りのフィールドを、宣言の順の型の並びに戻す。
+fn all_fields(field: u32, ty: Ty, rest: Vec<(u32, Ty)>) -> Vec<Ty> {
+    let mut all = rest;
+    all.push((field, ty));
+    all.sort_by_key(|&(index, _)| index);
+    all.into_iter().map(|(_, ty)| ty).collect()
 }
 
 fn key_text(key: &FieldKey) -> String {

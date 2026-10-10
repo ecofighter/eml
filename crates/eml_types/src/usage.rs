@@ -414,7 +414,7 @@ impl<'a> Usage<'a, '_> {
                     }
                 }
                 _ => {
-                    let (ctor, _) = self.typing.updates[id];
+                    let ctor = self.typing.updates[id].ctor;
                     (self.field_name(ctor, field), DiscardSite::Update)
                 }
             };

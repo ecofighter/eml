@@ -13,7 +13,7 @@ use crate::kind::{KindOrigin, KindReason, Provenance, Span};
 use crate::shape::{Instantiated, Rigids, lower_type};
 use crate::store::TypeStore;
 use crate::table::{Row, Table, Tail, Ty, TyShape, UnifyError};
-use crate::{FieldTarget, codes};
+use crate::{FieldTarget, Update, codes};
 
 use super::Signatures;
 use super::report::{AmbientSource, Origin, callee_subject};
@@ -49,8 +49,8 @@ pub(crate) struct BodyTyping {
     pub masks: HashMap<(ExprId, usize), Vec<EffectId>>,
     /// 射影が指すフィールド。
     pub fields: ArenaMap<ExprId, FieldTarget>,
-    /// 更新のコンストラクタと、ソースの順のフィールドの番号。
-    pub updates: ArenaMap<ExprId, (ConstructorId, Vec<u32>)>,
+    /// 更新が作り直すコンストラクタとフィールド。
+    pub updates: ArenaMap<ExprId, Update<Ty>>,
     /// 射影と更新が捨てるフィールドの番号と型。使用回数のパスが `_` で受けた値と同じく `Unr` の制約を出す。
     pub discarded: ArenaMap<ExprId, Vec<(u32, Ty)>>,
 }

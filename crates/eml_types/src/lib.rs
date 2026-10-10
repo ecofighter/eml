@@ -107,12 +107,23 @@ pub struct BodyTypes {
     /// 射影 (`ExprKind::Field`) が指すフィールド。型検査が射影の時点の型から引いた結果である
     /// (docs/spec/types.md の「フィールドの解決」)。
     pub fields: ArenaMap<ExprId, FieldTarget>,
-    /// 更新 (`ExprKind::Update`) のコンストラクタと、書いたフィールドの宣言の中の番号。番号はソースの順である
-    /// (docs/spec/types.md の「フィールドの解決」)。
-    pub updates: ArenaMap<ExprId, (ConstructorId, Vec<u32>)>,
+    /// 更新 (`ExprKind::Update`) が作り直すコンストラクタとフィールド (docs/spec/types.md の「フィールドの解決」)。
+    pub updates: ArenaMap<ExprId, Update>,
     /// 射影と更新が捨てるフィールドの番号と型。射影は取り出さない残りのフィールド、更新は上書きされる古いフィールドで
     /// ある。線形性の検査は、これらを `_` で受けた値と同じに扱う。
     pub discarded: ArenaMap<ExprId, Vec<(u32, TypeId)>>,
+}
+
+/// 更新が作り直すコンストラクタ。`T` は型検査の中では表の型で、書き出した後は `TypeId` である。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Update<T = TypeId> {
+    pub ctor: ConstructorId,
+    /// 書いたフィールドの宣言の中の番号。ソースの順に並ぶ。
+    pub written: Vec<u32>,
+    /// すべてのフィールドの、型引数で具体化した型。宣言の順に並ぶ。Core IR は、残すフィールドを受ける変数の Repr を
+    /// これで決める。配置の Repr で受けると、型変数のフィールドが `tobj` のまま後のパターンの変数に渡るためである
+    /// (docs/spec/core-ir.md の「変換の規則」)。
+    pub fields: Vec<T>,
 }
 
 /// 射影が指すフィールド。

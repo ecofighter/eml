@@ -2677,3 +2677,19 @@ fn an_update_evaluates_its_fields_and_builds_a_new_value() {
     }
     ");
 }
+
+#[test]
+fn a_generic_update_keeps_the_fields_at_their_instantiated_types() {
+    let text = "data Box a = | Box { item : a, n : Int }\n\nmain : Unit -> <IO> Unit\nmain () =\n  let b = { Box { item = 41, n = 1 } | n = 2 }\n  match b with\n    | Box { item } -> println (show (item + 1))";
+    insta::assert_snapshot!(function(&core_text(text, Pass::Translate), "main"), @r#"
+    fn main(p.0: unit) -> unit {
+      let d.1: obj = con Box #0(41, 1)
+      unpack d.1 Box #0(f.2: int, f.3: int)
+      let d.4: obj = con Box #0(f.2, 2)
+      let t.5: int = extern Prelude.+(f.2, 1)
+      let t.6: obj = extern "Prelude.Show Int.show"(t.5)
+      let t.7: unit = extern Prelude.println(t.6)
+      return t.7
+    }
+    "#);
+}

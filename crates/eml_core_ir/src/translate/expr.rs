@@ -82,14 +82,9 @@ impl FnLowering<'_> {
     }
 
     /// `value` を `ctor` で分解する `unpack` を足し、フィールドの変数を返す。変数の Repr は配置のフィールドの Repr で、
-    /// `result` に挙げたフィールドだけは、その Repr にする。射影の結果を式の型の Repr で受け、配置との変換を
+    /// `overrides` に挙げたフィールドだけは、その Repr にする。使うフィールドを具体化した型の Repr で受け、配置との変換を
     /// パターンのフィールドと同じく boxing に任せるためである。
-    fn unpack_fields(
-        &mut self,
-        value: Atom,
-        ctor: Ctor,
-        result: Option<(u32, Repr)>,
-    ) -> Vec<VarId> {
+    fn unpack_fields(&mut self, value: Atom, ctor: Ctor, overrides: &[(u32, Repr)]) -> Vec<VarId> {
         // 射影と更新の値は、型検査がフィールドを持つ `data` かタプルに決めたので、定数ではなく変数である
         let Atom::Var(value) = value else {
             unreachable!("a value with fields is a variable")
@@ -101,10 +96,10 @@ impl FnLowering<'_> {
             .into_iter()
             .enumerate()
             .map(|(index, repr)| {
-                let repr = match result {
-                    Some((field, result)) if field as usize == index => result,
-                    _ => repr,
-                };
+                let repr = overrides
+                    .iter()
+                    .find(|&&(field, _)| field as usize == index)
+                    .map_or(repr, |&(_, repr)| repr);
                 self.builder.var(named("f", repr))
             })
             .collect();
@@ -584,23 +579,32 @@ impl FnLowering<'_> {
                 };
                 let ty = self.ty(id);
                 let result = repr(self.ctx.store, ty, self.ctx.hir);
-                let fields = self.unpack_fields(value, ctor, Some((index, result)));
+                let fields = self.unpack_fields(value, ctor, &[(index, result)]);
                 Atom::Var(fields[index as usize])
             }
             ExprKind::Update { base, fields } => {
                 // `e`、フィールドの式の順に評価してから古いフィールドを取り出し、置き換える位置を新しい値にして作る。
-                // 意味は写しで、一意な値をその場で書き換えるのは Perceus の reuse に任せる
-                // (docs/spec/core-ir.md の「変換の規則」)
+                // 意味は写しで、一意な値をその場で書き換えるのは Perceus の reuse に任せる。残すフィールドは
+                // 具体化した型の Repr で受ける。`con` の引数は後の決定木がパターンの変数に渡すので、作る式の
+                // 引数と同じ Repr にそろえる (docs/spec/core-ir.md の「変換の規則」)
                 let value = self.atom(*base);
                 let values: Vec<Atom> = fields.iter().map(|&(_, value)| self.atom(value)).collect();
-                let (ctor, indices) = &self.ctx.types.updates[id];
-                let ctor = self.program.ctor(self.ctx.hir, self.ctx.store, *ctor);
+                let update = &self.ctx.types.updates[id];
+                let ctor = self.program.ctor(self.ctx.hir, self.ctx.store, update.ctor);
+                let reprs: Vec<(u32, Repr)> = (0..update.fields.len() as u32)
+                    .filter(|index| !update.written.contains(index))
+                    .map(|index| {
+                        let ty = update.fields[index as usize];
+                        (index, repr(self.ctx.store, ty, self.ctx.hir))
+                    })
+                    .collect();
+                let written = update.written.clone();
                 let mut args: Vec<Atom> = self
-                    .unpack_fields(value, ctor, None)
+                    .unpack_fields(value, ctor, &reprs)
                     .into_iter()
                     .map(Atom::Var)
                     .collect();
-                for (&index, value) in indices.iter().zip(values) {
+                for (&index, value) in written.iter().zip(values) {
                     args[index as usize] = value;
                 }
                 let ty = self.ty(id);

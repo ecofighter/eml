@@ -1,0 +1,11 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{stderr}\")"
+input_file: tests/ui/run/records/generic_update_match.em
+---
+--- stdout ---
+43
+abc
+42
+1
+--- stderr ---
