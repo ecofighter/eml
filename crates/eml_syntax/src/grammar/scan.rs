@@ -5,18 +5,23 @@ use crate::SyntaxKind::{self, *};
 /// 括弧の深さとブロックの深さを別々に数える。規則 2 でレイアウト段が括弧を暗黙に閉じると、閉じ括弧のトークンが
 /// ないまま括弧の深さが戻らない。そのため、ブロックの外の `SEP` と `CLOSE` は、括弧の深さにかかわらず範囲の
 /// 終わりとする。ファイルの残りを飲み込まないための同期点になる (docs/spec/layout.md の規則 2)。
+///
+/// 補間の穴 (`INTERP_START` と `INTERP_END`) も入れ子の対として数える。穴の中の括弧の読み飛ばしを、穴の閉じで
+/// 止めるため (docs/superpowers/specs/2026-10-10-s6b-strings-design.md の「穴の読み方」)。
 #[derive(Debug, Default)]
 pub(super) struct Nesting {
     brackets: u32,
     blocks: u32,
+    interps: u32,
 }
 
 impl Nesting {
     /// `kind` が今の範囲を終わらせるか。対応する開き括弧のない閉じ括弧、ブロックの外の `CLOSE` と `SEP`、
-    /// ファイルの終わりである。
+    /// 対応する開きのない穴の閉じ、ファイルの終わりである。
     pub(super) fn ends(&self, kind: SyntaxKind) -> bool {
         match kind {
             EOF => true,
+            INTERP_END => self.interps == 0,
             LAYOUT_SEP | LAYOUT_CLOSE => self.blocks == 0,
             kind if kind.is_closing_bracket() => self.brackets == 0,
             _ => false,
@@ -28,6 +33,8 @@ impl Nesting {
         match kind {
             LAYOUT_OPEN => self.blocks += 1,
             LAYOUT_CLOSE => self.blocks = self.blocks.saturating_sub(1),
+            INTERP_START => self.interps += 1,
+            INTERP_END => self.interps = self.interps.saturating_sub(1),
             kind if kind.is_opening_bracket() => self.brackets += 1,
             kind if kind.is_closing_bracket() => self.brackets = self.brackets.saturating_sub(1),
             _ => {}
@@ -39,7 +46,7 @@ impl Nesting {
     }
 
     pub(super) fn at_top(&self) -> bool {
-        self.brackets == 0 && self.blocks == 0
+        self.brackets == 0 && self.blocks == 0 && self.interps == 0
     }
 }
 
@@ -78,6 +85,12 @@ mod tests {
         assert!(ends_after(&[], LAYOUT_CLOSE));
         assert!(!ends_after(&[LAYOUT_OPEN], LAYOUT_CLOSE));
         assert!(ends_after(&[L_PAREN, LAYOUT_OPEN], EOF));
+    }
+
+    #[test]
+    fn an_unmatched_interpolation_end_ends_the_range() {
+        assert!(ends_after(&[], INTERP_END));
+        assert!(!ends_after(&[INTERP_START], INTERP_END));
     }
 
     #[test]

@@ -242,6 +242,12 @@ impl<'a> BodyLowering<'a> {
                 });
                 self.alloc(kind, range)
             }
+            ast::Expr::StringLit(string) => self.lower_string(&string, range),
+            // 穴の中の式は lower しない。誤りを E0004 の1件にするため
+            // (docs/superpowers/specs/2026-10-10-s6b-strings-design.md の「HIR」)
+            ast::Expr::CommandLit(_) => {
+                self.unsupported(range, "command literals are not supported yet")
+            }
             ast::Expr::UnitExpr(_) => self.alloc(ExprKind::Literal(Literal::Unit), range),
             ast::Expr::PathExpr(path) => self.lower_path(&path, range),
             ast::Expr::ParenExpr(paren) => self.lower_expr(paren.expr(), range),
@@ -827,6 +833,25 @@ impl<'a> BodyLowering<'a> {
             diagnostics: &mut *self.diagnostics,
         }
         .lower(ty, fallback)
+    }
+
+    /// 補間は S6b の Task 5 で実装する。それまでは最初の穴に E0004 を出す。
+    fn lower_string(&mut self, string: &ast::StringLit, range: TextRange) -> ExprId {
+        // 閉じていない文字列と不正なエスケープは、字句解析が報告済み
+        let Some(parts) = string.parts() else {
+            return self.alloc(ExprKind::Missing, range);
+        };
+        if let Some(hole) = string.holes().next() {
+            return self.unsupported(hole.range(), "string interpolation is not supported yet");
+        }
+        let text = parts
+            .into_iter()
+            .map(|part| match part {
+                ast::StringPart::Text(text) => text,
+                ast::StringPart::Hole(_) => unreachable!("a string without holes has only text"),
+            })
+            .collect();
+        self.alloc(ExprKind::Literal(Literal::String(text)), range)
     }
 
     pub(super) fn unsupported(&mut self, range: TextRange, message: &str) -> ExprId {

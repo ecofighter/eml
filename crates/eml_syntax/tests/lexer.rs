@@ -157,7 +157,12 @@ fn literals_and_comments() {
     insta::assert_snapshot!(dump("42 \"a\\n\\\"b\" -- note\n-1"), @r#"
     INT@0..2 "42"
     WHITESPACE@2..3 " "
-    STRING@3..11 "\"a\\n\\\"b\""
+    STRING_START@3..4 "\""
+    STRING_TEXT@4..5 "a"
+    ESCAPE@5..7 "\\n"
+    ESCAPE@7..9 "\\\""
+    STRING_TEXT@9..10 "b"
+    STRING_END@10..11 "\""
     WHITESPACE@11..12 " "
     COMMENT@12..19 "-- note"
     WHITESPACE@19..20 "\n"
@@ -274,7 +279,8 @@ fn invalid_escapes_are_errors() {
 #[test]
 fn unterminated_string_becomes_string_with_error() {
     insta::assert_snapshot!(dump("\"abc\nx"), @r#"
-    STRING@0..4 "\"abc"
+    STRING_START@0..1 "\""
+    STRING_TEXT@1..4 "abc"
     WHITESPACE@4..5 "\n"
     LIDENT@5..6 "x"
     ---
@@ -294,7 +300,10 @@ fn backslash_at_end_of_line_gives_only_the_unterminated_error() {
         diags("\"abc\\\nx"),
         ["E0002@0..5 unterminated string literal"]
     );
-    assert_eq!(kinds("\"abc\\\nx"), ["STRING", "LIDENT"]);
+    assert_eq!(
+        kinds("\"abc\\\nx"),
+        ["STRING_START", "STRING_TEXT", "ESCAPE", "LIDENT"]
+    );
 }
 
 #[test]
@@ -303,17 +312,10 @@ fn unterminated_string_does_not_swallow_carriage_return() {
         diags("\"abc\r\nx"),
         ["E0002@0..4 unterminated string literal"]
     );
-    assert_eq!(kinds("\"abc\r\nx"), ["STRING", "LIDENT"]);
-}
-
-#[test]
-fn interpolation_is_skipped_with_not_yet_supported() {
-    let text = r#""a\{f "x"} b" c"#;
     assert_eq!(
-        diags(text),
-        ["E0004@2..10 string interpolation is not supported yet"]
+        kinds("\"abc\r\nx"),
+        ["STRING_START", "STRING_TEXT", "LIDENT"]
     );
-    assert_eq!(kinds(text), ["STRING", "LIDENT"]);
 }
 
 #[test]
@@ -325,7 +327,9 @@ fn later_stage_literals_are_single_tokens() {
     WHITESPACE@18..19 " "
     RAW_STRING@19..27 "r#\"y\"z\"#"
     WHITESPACE@27..28 " "
-    COMMAND@28..35 "`ls -l`"
+    CMD_START@28..29 "`"
+    CMD_TEXT@29..34 "ls -l"
+    CMD_END@34..35 "`"
     "##);
 }
 
@@ -422,6 +426,214 @@ fn unicode_escape_does_not_run_past_the_string() {
     assert_eq!(diags(text), ["E0008@1..3 invalid unicode escape `\\u`"]);
     assert_eq!(
         kinds(text),
-        ["STRING", "LIDENT", "L_BRACE", "LIDENT", "R_BRACE"]
+        [
+            "STRING_START",
+            "ESCAPE",
+            "STRING_TEXT",
+            "STRING_END",
+            "LIDENT",
+            "L_BRACE",
+            "LIDENT",
+            "R_BRACE"
+        ]
+    );
+}
+
+#[test]
+fn a_string_is_split_into_tokens() {
+    assert_eq!(
+        kinds(r#""a\{x}b""#),
+        [
+            "STRING_START",
+            "STRING_TEXT",
+            "INTERP_START",
+            "LIDENT",
+            "INTERP_END",
+            "STRING_TEXT",
+            "STRING_END"
+        ]
+    );
+    assert_eq!(kinds(r#""""#), ["STRING_START", "STRING_END"]);
+    assert_eq!(
+        kinds(r#""\n\u{41}\q""#),
+        ["STRING_START", "ESCAPE", "ESCAPE", "ESCAPE", "STRING_END"]
+    );
+    assert_eq!(
+        diags(r#""\n\u{41}\q""#),
+        ["E0008@9..11 unknown escape sequence `\\q`"]
+    );
+}
+
+#[test]
+fn holes_nest_strings_and_count_braces() {
+    assert_eq!(
+        kinds(r#""a \{f "b \{x}"} c""#),
+        [
+            "STRING_START",
+            "STRING_TEXT",
+            "INTERP_START",
+            "LIDENT",
+            "STRING_START",
+            "STRING_TEXT",
+            "INTERP_START",
+            "LIDENT",
+            "INTERP_END",
+            "STRING_END",
+            "INTERP_END",
+            "STRING_TEXT",
+            "STRING_END",
+        ]
+    );
+    assert_eq!(
+        kinds(r#""\{ {a} }""#),
+        [
+            "STRING_START",
+            "INTERP_START",
+            "L_BRACE",
+            "LIDENT",
+            "R_BRACE",
+            "INTERP_END",
+            "STRING_END"
+        ]
+    );
+    // 穴の外の `}` は、いつも普通の閉じ括弧である
+    assert_eq!(kinds("}"), ["R_BRACE"]);
+}
+
+#[test]
+fn braces_in_comments_and_strings_do_not_close_a_hole() {
+    assert_eq!(
+        kinds(r#""\{f "}" {- } -} x}""#),
+        [
+            "STRING_START",
+            "INTERP_START",
+            "LIDENT",
+            "STRING_START",
+            "STRING_TEXT",
+            "STRING_END",
+            "LIDENT",
+            "INTERP_END",
+            "STRING_END",
+        ]
+    );
+}
+
+#[test]
+fn an_unclosed_hole_ends_at_the_newline_with_an_empty_interp_end() {
+    let text = "\"a \\{x\ny";
+    assert_eq!(
+        diags(text),
+        ["E0002@3..5 unterminated string interpolation"]
+    );
+    insta::assert_snapshot!(dump(text), @r#"
+    STRING_START@0..1 "\""
+    STRING_TEXT@1..3 "a "
+    INTERP_START@3..5 "\\{"
+    LIDENT@5..6 "x"
+    INTERP_END@6..6 ""
+    WHITESPACE@6..7 "\n"
+    LIDENT@7..8 "y"
+    ---
+    [E0002] Error: unterminated string interpolation
+       ╭─[ test.em:1:4 ]
+       │
+     1 │ "a \{x
+       │    ─┬  
+       │     ╰── missing closing `}`
+    ───╯
+    "#);
+}
+
+#[test]
+fn only_the_innermost_unclosed_layer_is_reported() {
+    // 閉じていないのは内側の文字列、穴、外側の文字列の3層だが、報告は内側の文字列の1件だけである
+    assert_eq!(
+        diags("\"a \\{f \"b"),
+        ["E0002@7..9 unterminated string literal"]
+    );
+    assert_eq!(
+        diags("\"a \\{f \"b\nc"),
+        ["E0002@7..9 unterminated string literal"]
+    );
+}
+
+#[test]
+fn a_block_comment_in_a_hole_stops_at_the_newline() {
+    let found = diags("\"\\{x {- a\n-} }\"");
+    assert_eq!(found[0], "E0005@5..7 unterminated block comment");
+}
+
+#[test]
+fn a_unicode_escape_does_not_swallow_a_hole() {
+    assert_eq!(
+        kinds(r#""\u{4\{x}}""#),
+        [
+            "STRING_START",
+            "ESCAPE",
+            "STRING_TEXT",
+            "INTERP_START",
+            "LIDENT",
+            "INTERP_END",
+            "STRING_TEXT",
+            "STRING_END"
+        ]
+    );
+    assert_eq!(
+        diags(r#""\u{4\{x}}""#),
+        ["E0008@1..3 invalid unicode escape `\\u`"]
+    );
+}
+
+#[test]
+fn a_backslash_at_the_end_of_a_line_or_file_is_a_one_byte_escape() {
+    assert_eq!(kinds("\"abc\\"), ["STRING_START", "STRING_TEXT", "ESCAPE"]);
+    assert_eq!(diags("\"abc\\"), ["E0002@0..5 unterminated string literal"]);
+    assert_eq!(
+        kinds("\"abc\\\nx"),
+        ["STRING_START", "STRING_TEXT", "ESCAPE", "LIDENT"]
+    );
+}
+
+#[test]
+fn command_literals_are_split_into_tokens() {
+    assert_eq!(
+        kinds("`ls \\{..xs} -l`"),
+        [
+            "CMD_START",
+            "CMD_TEXT",
+            "INTERP_START",
+            "DOT2",
+            "LIDENT",
+            "INTERP_END",
+            "CMD_TEXT",
+            "CMD_END"
+        ]
+    );
+    // コマンドリテラルの中の `"` は本文である
+    assert_eq!(kinds("`a\"b`"), ["CMD_START", "CMD_TEXT", "CMD_END"]);
+    assert_eq!(
+        kinds("`a \\` b`"),
+        ["CMD_START", "CMD_TEXT", "ESCAPE", "CMD_TEXT", "CMD_END"]
+    );
+    assert_eq!(diags("`ls"), ["E0002@0..3 unterminated command literal"]);
+}
+
+#[test]
+fn multibyte_text_around_holes() {
+    assert_eq!(
+        kinds("\"é\\{x}ü\""),
+        [
+            "STRING_START",
+            "STRING_TEXT",
+            "INTERP_START",
+            "LIDENT",
+            "INTERP_END",
+            "STRING_TEXT",
+            "STRING_END"
+        ]
+    );
+    assert_eq!(
+        diags("\"é\\{x"),
+        ["E0002@3..5 unterminated string interpolation"]
     );
 }

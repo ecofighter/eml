@@ -43,8 +43,8 @@ fn s1_corpus_items() {
 
 #[test]
 fn later_stage_corpus_reports_only_not_yet_supported() {
-    // まだ実装していない構文は E0004 だけを出し、ほかの診断を連鎖させない。パーサが E0004 を出すのは、補間、コマンドリテラル、
-    // レコード、リストだけである (docs/implementation/status.md の「未対応の構文と E0004」)。
+    // まだ実装していない構文は E0004 だけを出し、ほかの診断を連鎖させない。パーサが E0004 を出すのは、レコードだけである
+    // (docs/implementation/status.md の「未対応の構文と E0004」)。
     let found = diagnostics(LATER_STAGES);
     assert!(!found.is_empty());
     for line in &found {
@@ -56,14 +56,7 @@ fn later_stage_corpus_reports_only_not_yet_supported() {
         .collect();
     messages.sort();
     messages.dedup();
-    assert_eq!(
-        messages,
-        [
-            "command literals are not supported yet",
-            "records are not supported yet",
-            "string interpolation is not supported yet",
-        ]
-    );
+    assert_eq!(messages, ["records are not supported yet"]);
 }
 
 /// 編集の途中のような、任意の位置で切れたソースでも、パニックせずに lossless な木を返す

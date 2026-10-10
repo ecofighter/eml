@@ -338,8 +338,6 @@ fn type_declarations_are_not_supported_yet() {
 
 #[test]
 fn later_stage_literals_are_not_supported_yet() {
-    // コマンドリテラルは、パーサが E0004 を出す例外である
-    // (docs/implementation/status.md の「未対応の構文と E0004」)
     assert_eq!(
         diagnostics("x : Int\nx = (1.5, 'c', r\"raw\", \"\"\"m\"\"\", `ls`)"),
         [

@@ -1,5 +1,5 @@
 use crate::common::diagnostics;
-use eml_syntax::ast::{Literal, LiteralValue};
+use eml_syntax::ast::{Literal, LiteralValue, StringLit, StringPart};
 use rowan::ast::AstNode;
 
 /// `x = <literal>` を構文解析し、右辺のリテラルの値を返す。
@@ -22,12 +22,25 @@ fn int_value(literal: &str) -> Option<i64> {
     }
 }
 
+/// `x = <literal>` を構文解析し、右辺の文字列の本文をつないだ値を返す。穴のある文字列は使わない。
 fn decode_string(literal: &str) -> Option<String> {
-    match value(literal) {
-        Some(LiteralValue::String(s)) => Some(s),
-        None => None,
-        other => panic!("not a string: {other:?}"),
-    }
+    let parsed = eml_test_support::parse(&format!("x = {literal}"));
+    let parts = parsed
+        .parse
+        .syntax()
+        .descendants()
+        .find_map(StringLit::cast)
+        .expect("a string")
+        .parts()?;
+    Some(
+        parts
+            .into_iter()
+            .map(|part| match part {
+                StringPart::Text(text) => text,
+                StringPart::Hole(_) => panic!("a string with a hole: {literal}"),
+            })
+            .collect(),
+    )
 }
 
 #[test]
@@ -62,7 +75,6 @@ fn string_values() {
 
 #[test]
 fn strings_reported_by_the_lexer_have_no_value() {
-    assert_eq!(decode_string(r#""\{x}""#), None);
     assert_eq!(decode_string(r#""\q""#), None);
     assert_eq!(decode_string(r#""abc"#), None);
     assert_eq!(decode_string(r#""abc\""#), None);
