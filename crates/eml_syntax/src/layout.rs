@@ -112,13 +112,14 @@ pub(crate) fn layout(file: FileId, text: &str, tokens: &[Token]) -> (Vec<Token>,
                 });
             }
             COMMA => {
-                // 規則 4。行末の `,` は、一番内側の括弧より上のブロックのうち、次の行で規則 1 が閉じるものを
-                // `,` の前で閉じる。行末の `->` などで開いたブロックを、次の行の要素の前で終えるため。次の行が
-                // 一番内側のブロックより深い継続行なら閉じず、行の途中の `,` も閉じない。ブロックの中の row や
-                // 型の引数の `,` で、ブロックを閉じないためである (docs/spec/layout.md の「文脈のスタック」)
+                // 規則 4。行末の `,` は、一番内側の括弧より上のブロックのうち、基準列が次の行の先頭の列以上の
+                // ものを `,` の前で閉じる。`,` の後には次の要素が続くので、行末の `->` などで開いたブロックを
+                // その前で終え、ブロックと同じ列の行もブロックの文にしないため。次の行が一番内側のブロックより
+                // 深い継続行なら閉じず、行の途中の `,` も閉じない。ブロックの中の row や型の引数の `,` で、
+                // ブロックを閉じないためである (docs/spec/layout.md の「文脈のスタック」)
                 let closes = |indent: u32| match items.get(i + 1) {
                     None => true,
-                    Some(next) => next.line_start && indent > next.column,
+                    Some(next) => next.line_start && indent >= next.column,
                 };
                 let floor = hole_floor(&stack);
                 if stack[floor..].iter().any(is_bracket) {
@@ -699,10 +700,18 @@ mod tests {
     }
 
     #[test]
-    fn line_final_comma_closes_only_blocks_deeper_than_the_next_line() {
+    fn line_final_comma_closes_blocks_at_the_column_of_the_next_line() {
         assert_eq!(
-            layout_of("f = (fn x ->\n    let y =\n      1,\n    y)"),
-            "f = ( fn x -> <OPEN> let y = <OPEN> 1 <CLOSE> , <SEP> y <CLOSE> )"
+            layout_of("f = (fn x ->\n    a,\n    b)"),
+            "f = ( fn x -> <OPEN> a <CLOSE> , b )"
+        );
+    }
+
+    #[test]
+    fn line_final_comma_keeps_blocks_left_of_the_next_line() {
+        assert_eq!(
+            layout_of("f = (fn x ->\n    let y =\n      1,\n     y)"),
+            "f = ( fn x -> <OPEN> let y = <OPEN> 1 <CLOSE> , y <CLOSE> )"
         );
     }
 
