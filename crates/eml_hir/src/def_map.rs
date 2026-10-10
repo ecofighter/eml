@@ -891,6 +891,10 @@ fn lang_items(prelude: &ModuleScope) -> LangItems {
         ValueItem::Function(id) => id,
         _ => unreachable!("`{name}` is a function of the Prelude"),
     };
+    let method = |name: &str| match value(name) {
+        ValueItem::Method(id) => id,
+        _ => unreachable!("`{name}` is a method of the Prelude"),
+    };
     LangItems {
         bool: ty("Bool"),
         true_ctor: constructor("True"),
@@ -904,6 +908,7 @@ fn lang_items(prelude: &ModuleScope) -> LangItems {
         list: ty("List"),
         nil: constructor("Nil"),
         cons: constructor("::"),
+        display: method("display"),
     }
 }
 

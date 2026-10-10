@@ -116,6 +116,9 @@ pub struct LangItems {
     pub list: TypeDefId,
     pub nil: ConstructorId,
     pub cons: ConstructorId,
+    /// 補間の穴が名前を引かずに呼ぶ `Show` のメソッド。ユーザーが同じ名前を定義しても、補間は Prelude のものを呼ぶ
+    /// (docs/superpowers/specs/2026-10-10-s6b-strings-design.md の「HIR」)。
+    pub display: MethodId,
 }
 
 /// extern の表の行から、標準ライブラリの宣言を引く索引。使い手のある行 (extern の型、`IO`、`negate`) だけを持つ。
