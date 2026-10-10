@@ -201,6 +201,7 @@ fn token_name(kind: SyntaxKind) -> &'static str {
         THIN_ARROW => "`->`",
         LEFT_ARROW => "`<-`",
         R_PAREN => "`)`",
+        R_BRACK => "`]`",
         WHERE_KW => "`where`",
         WITH_KW => "`with`",
         THEN_KW => "`then`",

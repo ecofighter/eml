@@ -173,3 +173,28 @@ fn moderate_stacked_constructor_patterns_are_fine() {
         .is_empty()
     );
 }
+
+fn list_pattern(n: usize) -> String {
+    let names: Vec<String> = (0..n).map(|i| format!("x{i}")).collect();
+    format!("f [{}] = 0", names.join(", "))
+}
+
+/// HIR がパターンのリストを右に入れ子の `::` に組むので、k 番目の要素は k - 1 段深く読む
+/// (docs/superpowers/specs/2026-10-10-s6a-lists-design.md の「深さ」)。
+#[test]
+fn a_list_pattern_counts_each_element_as_a_level() {
+    const LIMIT: usize = 256;
+    assert_eq!(diagnostics(&list_pattern(LIMIT)), Vec::<String>::new());
+    let codes: Vec<String> = diagnostics(&list_pattern(LIMIT + 1))
+        .into_iter()
+        .map(|d| d[..5].to_string())
+        .collect();
+    assert_eq!(codes, ["E0013"]);
+}
+
+#[test]
+fn a_list_expression_does_not_count_its_elements() {
+    let items: Vec<String> = (0..2000).map(|i| i.to_string()).collect();
+    let text = format!("x = [{}]", items.join(", "));
+    assert_eq!(diagnostics(&text), Vec::<String>::new());
+}

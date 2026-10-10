@@ -333,3 +333,11 @@ fn row_written_right_after_the_arrow() {
     "#);
     assert!(diagnostics("f : Int -><> Int").is_empty());
 }
+
+#[test]
+fn a_bracket_is_not_a_type() {
+    assert_eq!(
+        diagnostics("f : [Int] -> Int\nf xs = 0"),
+        ["E0011 1:5 expected a type"]
+    );
+}

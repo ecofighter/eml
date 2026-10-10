@@ -60,7 +60,6 @@ fn later_stage_corpus_reports_only_not_yet_supported() {
         messages,
         [
             "command literals are not supported yet",
-            "lists are not supported yet",
             "records are not supported yet",
             "string interpolation is not supported yet",
         ]

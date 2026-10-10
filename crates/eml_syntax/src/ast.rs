@@ -127,6 +127,7 @@ ast_node! {
     UnitExpr => UNIT_EXPR,
     ParenExpr => PAREN_EXPR,
     TupleExpr => TUPLE_EXPR,
+    ListExpr => LIST_EXPR,
     AnnotExpr => ANNOT_EXPR,
     OpRef => OP_REF,
     LeftSection => LEFT_SECTION,
@@ -139,6 +140,7 @@ ast_node! {
     UnitPat => UNIT_PAT,
     ParenPat => PAREN_PAT,
     TuplePat => TUPLE_PAT,
+    ListPat => LIST_PAT,
     InfixConPat => INFIX_CON_PAT,
     AnnotPat => ANNOT_PAT,
     PathType => PATH_TYPE,
@@ -171,14 +173,14 @@ ast_enum! {
     /// `body ::= block(stmt) | expr` を1つの型で受けられるように、字下げしたブロック (`Block`) も式に含める。
     Expr {
         Block, IfExpr, MatchExpr, HandleExpr, LambdaExpr, LetExpr, OpSeq, AppExpr,
-        DropExpr, FieldExpr, PathExpr, Literal, UnitExpr, ParenExpr, TupleExpr, AnnotExpr, OpRef,
+        DropExpr, FieldExpr, PathExpr, Literal, UnitExpr, ParenExpr, TupleExpr, ListExpr, AnnotExpr, OpRef,
         LeftSection, RightSection, FieldSection,
     }
 }
 
 ast_enum! {
     Pat {
-        WildcardPat, BindPat, ConPat, LiteralPat, UnitPat, ParenPat, TuplePat, InfixConPat,
+        WildcardPat, BindPat, ConPat, LiteralPat, UnitPat, ParenPat, TuplePat, ListPat, InfixConPat,
         AnnotPat,
     }
 }
@@ -790,6 +792,18 @@ impl TupleExpr {
 }
 
 impl TuplePat {
+    pub fn elements(&self) -> AstChildren<Pat> {
+        support::children(&self.syntax)
+    }
+}
+
+impl ListExpr {
+    pub fn elements(&self) -> AstChildren<Expr> {
+        support::children(&self.syntax)
+    }
+}
+
+impl ListPat {
     pub fn elements(&self) -> AstChildren<Pat> {
         support::children(&self.syntax)
     }

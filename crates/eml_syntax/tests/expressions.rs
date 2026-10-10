@@ -312,10 +312,7 @@ fn later_stage_literals_are_parsed() {
     // (docs/implementation/status.md の「未対応の構文と E0004」)
     assert_eq!(
         diagnostics("x = (1.5, 'c', [1], r\"raw\", \"\"\"m\"\"\", `ls`)"),
-        [
-            "E0004 1:16 lists are not supported yet",
-            "E0004 1:38 command literals are not supported yet",
-        ]
+        ["E0004 1:38 command literals are not supported yet"]
     );
 }
 
@@ -460,11 +457,8 @@ fn mismatched_closing_bracket_closes_the_innermost_bracket() {
 }
 
 #[test]
-fn mismatched_closing_bracket_ends_an_unsupported_list() {
-    assert_eq!(
-        diagnostics("x = [a)\ny = 1"),
-        ["E0004 1:5 lists are not supported yet"]
-    );
+fn mismatched_closing_bracket_ends_a_list() {
+    assert_eq!(diagnostics("x = [a)\ny = 1"), ["E0011 1:7 expected `]`"]);
 }
 
 #[test]
@@ -476,11 +470,11 @@ fn semicolon_inside_brackets_is_one_error() {
 }
 
 #[test]
-fn implicitly_closed_bracket_in_an_unsupported_list_does_not_swallow_the_file() {
+fn implicitly_closed_bracket_in_a_list_does_not_swallow_the_file() {
     assert_eq!(
         diagnostics("x = [a (b\ny = 1\nz = 2 +"),
         [
-            "E0004 1:5 lists are not supported yet",
+            "E0011 1:10 expected `)`",
             "E0011 3:8 expected an expression"
         ]
     );
@@ -757,5 +751,117 @@ fn use_statements() {
                 PATH
                   NAME_REF
                     LIDENT "tmp"
+    "#);
+}
+
+#[test]
+fn list_expressions() {
+    insta::assert_snapshot!(shape("x = [1, f y, []]"), @r#"
+    SOURCE_FILE
+      EQUATION
+        NAME
+          LIDENT "x"
+        EQ "="
+        LIST_EXPR
+          L_BRACK "["
+          LITERAL
+            INT "1"
+          COMMA ","
+          APP_EXPR
+            PATH_EXPR
+              PATH
+                NAME_REF
+                  LIDENT "f"
+            PATH_EXPR
+              PATH
+                NAME_REF
+                  LIDENT "y"
+          COMMA ","
+          LIST_EXPR
+            L_BRACK "["
+            R_BRACK "]"
+          R_BRACK "]"
+    "#);
+}
+
+#[test]
+fn a_list_may_end_with_a_comma_and_span_lines() {
+    let text = lines(&[
+        "main () =",
+        "  let xs = [",
+        "    1,",
+        "    2,",
+        "  ]",
+        "  xs",
+    ]);
+    assert_eq!(diagnostics(&text), Vec::<String>::new());
+    insta::assert_snapshot!(shape(&text), @r#"
+    SOURCE_FILE
+      EQUATION
+        NAME
+          LIDENT "main"
+        UNIT_PAT
+          L_PAREN "("
+          R_PAREN ")"
+        EQ "="
+        BLOCK
+          LET_STMT
+            LET_KW "let"
+            BIND_PAT
+              NAME
+                LIDENT "xs"
+            EQ "="
+            LIST_EXPR
+              L_BRACK "["
+              LITERAL
+                INT "1"
+              COMMA ","
+              LITERAL
+                INT "2"
+              COMMA ","
+              R_BRACK "]"
+          EXPR_STMT
+            PATH_EXPR
+              PATH
+                NAME_REF
+                  LIDENT "xs"
+    "#);
+}
+
+#[test]
+fn a_list_element_can_open_a_block() {
+    let text = lines(&[
+        "main () =",
+        "  let fs = [fn x -> x, fn x ->",
+        "    x + 1]",
+        "  fs",
+    ]);
+    assert_eq!(diagnostics(&text), Vec::<String>::new());
+}
+
+#[test]
+fn list_patterns() {
+    insta::assert_snapshot!(shape("f [a, _] [] = a"), @r#"
+    SOURCE_FILE
+      EQUATION
+        NAME
+          LIDENT "f"
+        LIST_PAT
+          L_BRACK "["
+          BIND_PAT
+            NAME
+              LIDENT "a"
+          COMMA ","
+          WILDCARD_PAT
+            UNDERSCORE "_"
+          R_BRACK "]"
+        LIST_PAT
+          L_BRACK "["
+          R_BRACK "]"
+        EQ "="
+        PATH_EXPR
+          PATH
+            NAME_REF
+              LIDENT "a"
     "#);
 }

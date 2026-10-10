@@ -299,10 +299,7 @@ fn atom(p: &mut Parser) -> Option<CompletedMarker> {
             PATH_EXPR
         }
         L_PAREN => paren_expr(p),
-        L_BRACK => {
-            unsupported_group(p, "lists are not supported yet");
-            ERROR
-        }
+        L_BRACK => list_expr(p),
         L_BRACE => {
             unsupported_group(p, "records are not supported yet");
             ERROR
@@ -331,6 +328,24 @@ fn at_qvar(p: &Parser) -> bool {
         n += 2;
     }
     p.peek(n) == LIDENT
+}
+
+/// 要素は `expr` で読むので、`if` や `fn` も括弧なしで書ける。`[` の1段は `expr` が数える。
+fn list_expr(p: &mut Parser) -> SyntaxKind {
+    p.bump(L_BRACK);
+    if !p.at(R_BRACK) {
+        loop {
+            if !expr(p) {
+                expected(p, "an expression");
+                break;
+            }
+            if !p.eat(COMMA) || p.at(R_BRACK) {
+                break;
+            }
+        }
+    }
+    close_bracket(p, R_BRACK);
+    LIST_EXPR
 }
 
 fn paren_expr(p: &mut Parser) -> SyntaxKind {

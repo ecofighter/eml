@@ -149,6 +149,7 @@ pub enum SyntaxKind {
     UNIT_EXPR,
     PAREN_EXPR,
     TUPLE_EXPR,
+    LIST_EXPR,
     ANNOT_EXPR,
     OP_REF,
     LEFT_SECTION,
@@ -162,6 +163,7 @@ pub enum SyntaxKind {
     UNIT_PAT,
     PAREN_PAT,
     TUPLE_PAT,
+    LIST_PAT,
     INFIX_CON_PAT,
     ANNOT_PAT,
 

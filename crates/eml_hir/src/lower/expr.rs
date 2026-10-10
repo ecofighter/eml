@@ -307,6 +307,7 @@ impl<'a> BodyLowering<'a> {
             }
             ast::Expr::DropExpr(e) => self.lower_drop(&e, range),
             ast::Expr::FieldExpr(_) => self.unsupported(range, "field access is not supported yet"),
+            ast::Expr::ListExpr(_) => self.unsupported(range, "lists are not supported yet"),
             ast::Expr::TupleExpr(tuple) => {
                 let elements = tuple
                     .elements()
@@ -577,6 +578,7 @@ impl<'a> BodyLowering<'a> {
                 },
             },
             // 要素は外側のパターンと同じ組で変換する。`(x, x)` も1つのパターンの中の重複である (E1017)
+            ast::Pat::ListPat(_) => self.unsupported_pat(range, "lists are not supported yet"),
             ast::Pat::TuplePat(tuple) => {
                 let elements = tuple
                     .elements()

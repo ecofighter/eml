@@ -124,10 +124,7 @@ pub(super) fn apat(p: &mut Parser) -> bool {
             LITERAL_PAT
         }
         L_PAREN => paren_pat(p),
-        L_BRACK => {
-            unsupported_group(p, "lists are not supported yet");
-            ERROR
-        }
+        L_BRACK => list_pat(p),
         L_BRACE => {
             unsupported_group(p, "records are not supported yet");
             ERROR
@@ -170,4 +167,33 @@ fn paren_pat(p: &mut Parser) -> SyntaxKind {
     };
     close_bracket(p, R_PAREN);
     kind
+}
+
+/// HIR はパターンのリストを右に入れ子の `::` に組むので、k 番目の要素を k - 1 段深く読む。組んだ木では前の要素が
+/// いつも浅い位置に来るので、中置のコンストラクタのパターンのように前の高さを確保しなくてよい
+/// (docs/superpowers/specs/2026-10-10-s6a-lists-design.md の「深さ」)。
+fn list_pat(p: &mut Parser) -> SyntaxKind {
+    p.bump(L_BRACK);
+    let mut entered = 0;
+    if !p.at(R_BRACK) {
+        loop {
+            if !pattern(p) {
+                expected(p, "a pattern");
+                break;
+            }
+            if !p.eat(COMMA) || p.at(R_BRACK) {
+                break;
+            }
+            if !p.enter() {
+                too_deep(p);
+                break;
+            }
+            entered += 1;
+        }
+    }
+    for _ in 0..entered {
+        p.leave();
+    }
+    close_bracket(p, R_BRACK);
+    LIST_PAT
 }
