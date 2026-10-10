@@ -311,3 +311,12 @@ fn an_update_of_a_type_without_fields_is_reported_once() {
       help: the fields are `name` and `age`
     ");
 }
+
+#[test]
+fn a_pattern_field_without_its_pattern_binds_nothing() {
+    let text = "data Job = | Job { name : String, log : Fs.File }\n\nf : Job -> String\nf j = match j with\n  | Job { log = , name } -> name";
+    insta::assert_snapshot!(diagnostics(text), @"
+    E0011 5:17 expected a pattern
+      5:17 found `,`
+    ");
+}

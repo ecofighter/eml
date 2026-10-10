@@ -319,3 +319,46 @@ fn braces_on_a_positional_constructor_still_resolve_the_values() {
         ]
     );
 }
+
+#[test]
+fn unknown_and_duplicate_fields_still_resolve_their_values() {
+    let text = "data P = | P { a : Int, b : Int }\n\nf : Unit -> P\nf () = P { a = 1, b = 2, z = undefined_one, a = undefined_two }";
+    assert_eq!(
+        diagnostics(text),
+        [
+            "E1046 4:26 `P` has no field `z`",
+            "E1001 4:30 cannot find value `undefined_one`",
+            "E1045 4:45 the field `a` appears more than once",
+            "E1001 4:49 cannot find value `undefined_two`",
+        ]
+    );
+}
+
+#[test]
+fn a_pattern_field_with_an_equals_sign_and_no_pattern_is_not_a_pun() {
+    let text = format!(
+        "{PERSON}f : Person -> Int\nf p = match p with\n  | Person {{ name = , age }} -> age"
+    );
+    assert_eq!(diagnostics(&text), ["E0011 6:21 expected a pattern"]);
+    insta::assert_snapshot!(lower_text(&text), @"
+    data Person
+      | Person { name : String, age : Int }
+    f : Person -> Int
+    f p#0 = (match p#0 with | Person { name = <missing>, age = age#1 } -> age#1)
+    ---
+    E0011 6:21 expected a pattern
+    ");
+}
+
+#[test]
+fn a_duplicate_update_field_still_resolves_its_value() {
+    let text =
+        format!("{PERSON}f : Person -> Person\nf p = {{ p | age = 1, age = undefined_name }}");
+    assert_eq!(
+        diagnostics(&text),
+        [
+            "E1045 5:22 the field `age` appears more than once",
+            "E1001 5:28 cannot find value `undefined_name`",
+        ]
+    );
+}

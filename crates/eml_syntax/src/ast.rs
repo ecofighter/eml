@@ -968,6 +968,11 @@ impl FieldPat {
     pub fn pat(&self) -> Option<Pat> {
         support::child(&self.syntax)
     }
+
+    /// `=` を書いたか。`{ name = }` のようにパターンが欠けても、省略形とは区別する。
+    pub fn has_eq(&self) -> bool {
+        support::token(&self.syntax, SyntaxKind::EQ).is_some()
+    }
 }
 
 impl MatchExpr {

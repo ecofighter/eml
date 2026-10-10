@@ -11,8 +11,8 @@ use crate::def_map::Resolved;
 use crate::hir::*;
 
 impl BodyLowering<'_> {
-    /// `Person { name = "a", age = 3 }`。誤りがあれば、正しく書いたフィールドの式だけを変換し、式全体を `Missing`
-    /// にする。足りないフィールドは、ほかに誤りがないときだけ報告する。
+    /// `Person { name = "a", age = 3 }`。誤りがあっても、どのフィールドの式も変換して中の名前の誤りを報告し、
+    /// 式全体を `Missing` にする。足りないフィールドは、ほかに誤りがないときだけ報告する。
     pub(super) fn lower_record(&mut self, record: &ast::RecordExpr, range: TextRange) -> ExprId {
         let fields: Vec<ast::Field> = record.fields().collect();
         let Some((ctor, written)) = self.record_constructor(record.path(), range) else {
@@ -49,7 +49,11 @@ impl BodyLowering<'_> {
                     seen.push((index, name_range));
                     values.push((index, self.field_value(field)));
                 }
-                None => erroneous = true,
+                None => {
+                    // 式全体は `Missing` にするが、値の中の名前は引いて誤りを報告する
+                    erroneous = true;
+                    self.field_value(field);
+                }
             }
         }
         // フィールドの並びの構文の誤り (`P { , }` など) はパーサが報告済みで、書けなかったフィールドを足りないとは言わない
@@ -94,7 +98,7 @@ impl BodyLowering<'_> {
     }
 
     /// `{ e | f = v }`。フィールドは名前のまま持ち、型検査が `e` の型から引くので、ここでは重複 (E1045) だけを検査する。
-    /// 2回目に書いたフィールドの式は変換しない。作る式の重複と同じ扱いにするためである。
+    /// 2回目に書いたフィールドの式も、作る式と同じく変換して中の名前の誤りを報告し、式全体を `Missing` にする。
     pub(super) fn lower_update(&mut self, update: &ast::UpdateExpr, range: TextRange) -> ExprId {
         let base = self.lower_expr(update.base(), range);
         let mut fields: Vec<(FieldName, ExprId)> = Vec::new();
@@ -105,6 +109,7 @@ impl BodyLowering<'_> {
                 self.diagnostics
                     .push(duplicate_field(self.file, &name, first.range, name_range));
                 erroneous = true;
+                self.field_value(&field);
                 continue;
             }
             let value = self.field_value(&field);
@@ -226,6 +231,13 @@ impl BodyLowering<'_> {
         if let Some(pat) = field.pat() {
             let range = pat.range();
             return self.lower_pat_in_group(Some(pat), range);
+        }
+        // `name =` の後のパターンの欠けはパーサが報告済みなので、省略形として名前を束縛しない
+        if field.has_eq() {
+            return self.pats.alloc(Pat {
+                kind: PatKind::Missing,
+                range: field.range(),
+            });
         }
         let (name, range) = field_name(field.name());
         let kind = self.bind(name, range);
