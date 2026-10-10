@@ -1,0 +1,14 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{stderr}\")"
+input_file: tests/ui/run/records/projection.em
+---
+--- stdout ---
+ann
+31
+1
+two
+3
+["ann", "bob"]
+[1, 2]
+--- stderr ---

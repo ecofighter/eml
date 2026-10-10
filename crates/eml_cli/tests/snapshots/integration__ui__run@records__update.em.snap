@@ -1,0 +1,13 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{stderr}\")"
+input_file: tests/ui/run/records/update.em
+---
+--- stdout ---
+Person { name = "ann", age = 31, city = "oslo" }
+Person { name = "ann", age = 30, city = "oslo" }
+city
+name
+Person { name = "anna", age = 30, city = "rome" }
+Person { name = "ann", age = 5, city = "oslo" }
+--- stderr ---

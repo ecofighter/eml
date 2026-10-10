@@ -25,6 +25,7 @@ use constraints::{Failure, show_constraint, solve};
 
 mod body;
 mod constraints;
+mod field;
 mod handle;
 mod report;
 
@@ -450,6 +451,15 @@ pub(crate) fn check_body(
             .insert(expr, Instantiation { decl: *decl, args });
     }
     body_types.masks = typing.masks;
+    body_types.fields = typing.fields;
+    body_types.updates = typing.updates;
+    for (expr, discarded) in typing.discarded.iter() {
+        let discarded = discarded
+            .iter()
+            .map(|&(field, ty)| (field, exporter.export(ty)))
+            .collect();
+        body_types.discarded.insert(expr, discarded);
+    }
     let own_vars = OwnVars {
         lin: own.lin,
         mult: own.mult,

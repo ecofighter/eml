@@ -358,6 +358,19 @@ impl Collector<'_> {
                 pats: body.pats.iter().map(|(pat, &ty)| (pat, each(ty))).collect(),
                 instantiations,
                 masks: body.masks.clone(),
+                fields: body.fields.clone(),
+                updates: body.updates.clone(),
+                discarded: body
+                    .discarded
+                    .iter()
+                    .map(|(expr, discarded)| {
+                        let discarded = discarded
+                            .iter()
+                            .map(|&(field, ty)| (field, each(ty)))
+                            .collect();
+                        (expr, discarded)
+                    })
+                    .collect(),
             };
             debug_assert!(
                 types

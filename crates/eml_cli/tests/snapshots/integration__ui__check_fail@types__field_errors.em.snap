@@ -1,0 +1,43 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: rendered
+input_file: tests/ui/check-fail/types/field_errors.em
+---
+[E2013] Error: the type of this value must be known to access its field `age`
+    ╭─[ check-fail/types/field_errors.em:11:24 ]
+    │
+ 11 │   let age_of = fn p -> p.age
+    │                        ┬  
+    │                        ╰── the type of this value is not known here
+    │ 
+    │ Help: annotate the type of the parameter, as in `fn (p : T) -> …`
+────╯
+[E2014] Error: no field `radius` on type `Shape`
+    ╭─[ check-fail/types/field_errors.em:15:14 ]
+    │
+ 15 │ radius s = s.radius
+    │              ───┬──  
+    │                 ╰──── unknown field
+    │ 
+    │ Help: take the value apart with `match`
+    │ 
+    │ Note: `Shape` has more than one constructor
+────╯
+[E2014] Error: no field `nick` on type `Person`
+    ╭─[ check-fail/types/field_errors.em:18:12 ]
+    │
+ 18 │ nick p = p.nick
+    │            ──┬─  
+    │              ╰─── unknown field
+    │ 
+    │ Help: the fields are `name` and `age`
+────╯
+[E2014] Error: no field `2` on type `(Int, Int)`
+    ╭─[ check-fail/types/field_errors.em:21:13 ]
+    │
+ 21 │ third t = t.2
+    │             ┬  
+    │             ╰── unknown field
+    │ 
+    │ Help: the elements of this tuple are numbered from `0` to `1`
+────╯

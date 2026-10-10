@@ -907,6 +907,25 @@ impl UpdateExpr {
     }
 }
 
+impl FieldExpr {
+    /// `e.f` の `e`。
+    pub fn base(&self) -> Option<Expr> {
+        support::child(&self.syntax)
+    }
+
+    /// `.` の後の名前 (`LIDENT`) か番号 (`INT`)。
+    pub fn field(&self) -> Option<SyntaxToken> {
+        field_token(&self.syntax)
+    }
+}
+
+impl FieldSection {
+    /// `(.f)` の名前 (`LIDENT`) か番号 (`INT`)。
+    pub fn field(&self) -> Option<SyntaxToken> {
+        field_token(&self.syntax)
+    }
+}
+
 impl Field {
     pub fn name(&self) -> Option<NameRef> {
         support::child(&self.syntax)
@@ -1103,6 +1122,14 @@ fn child_between<N: AstNode<Language = EmlLanguage>>(
         }
     }
     None
+}
+
+/// ノードの直下にある、射影のフィールドの名前か番号のトークン。`e.f` の `e` の中のトークンは子のノードの中なので、
+/// ここには入らない。
+fn field_token(node: &SyntaxNode) -> Option<SyntaxToken> {
+    node.children_with_tokens()
+        .filter_map(NodeOrToken::into_token)
+        .find(|token| matches!(token.kind(), SyntaxKind::LIDENT | SyntaxKind::INT))
 }
 
 fn lowercase_names(node: &SyntaxNode) -> impl Iterator<Item = Name> {

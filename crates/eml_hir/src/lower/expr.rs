@@ -315,7 +315,7 @@ impl<'a> BodyLowering<'a> {
                 )
             }
             ast::Expr::DropExpr(e) => self.lower_drop(&e, range),
-            ast::Expr::FieldExpr(_) => self.unsupported(range, "field access is not supported yet"),
+            ast::Expr::FieldExpr(field) => self.lower_field_expr(&field, range),
             ast::Expr::ListExpr(list) => {
                 let elements = list
                     .elements()
@@ -339,11 +339,9 @@ impl<'a> BodyLowering<'a> {
             ast::Expr::OpRef(op_ref) => self.lower_op_ref(&op_ref, range),
             ast::Expr::LeftSection(section) => self.lower_left_section(&section, range),
             ast::Expr::RightSection(section) => self.lower_right_section(&section, range),
-            ast::Expr::FieldSection(_) => self.unsupported(range, "sections are not supported yet"),
+            ast::Expr::FieldSection(section) => self.lower_field_section(&section, range),
             ast::Expr::RecordExpr(record) => self.lower_record(&record, range),
-            // 更新の意味は、この後の段階で入れる
-            // (docs/superpowers/specs/2026-10-10-s6c-records-design.md の「HIR」)
-            ast::Expr::UpdateExpr(_) => self.unsupported(range, "records are not supported yet"),
+            ast::Expr::UpdateExpr(update) => self.lower_update(&update, range),
         }
     }
 

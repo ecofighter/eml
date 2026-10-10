@@ -6,7 +6,8 @@ use eml_hir::{
 
 use crate::codes;
 use crate::kind::{
-    CallKind, CarriedInner, CarriedValue, InnerLabel, KindOrigin, KindReason, Span, UnusedPath,
+    CallKind, CarriedInner, CarriedValue, DiscardSite, InnerLabel, KindOrigin, KindReason, Span,
+    UnusedPath,
 };
 use crate::store::TypeStore;
 use crate::table::{Exporter, Label as RowLabel, Row, Ty, UnifyError};
@@ -521,6 +522,61 @@ const LINEAR_NOTE: &str = "linear values, such as files, the continuation of a `
 
 /// 線形な値の誤った使い方。破れた Kind の制約の由来から番号と指す場所を決める (docs/implementation/diagnostics.md の
 /// 「線形性の診断」)。表に当たらない由来 (受け渡し、単一化、捕獲) は E3001 にする。
+/// 捨てたフィールドの E3004。射影の help は分解のパターンを示すが、セクションの隠れた引数は分解を書けないので
+/// help を付けない (docs/superpowers/specs/2026-10-10-s6c-records-design.md の「射影 `e.f`」)。
+fn discarded_field(file: FileId, range: TextRange, name: &str, site: DiscardSite) -> Diagnostic {
+    let (message, label, help) = match site {
+        DiscardSite::Pattern => (
+            format!("the field `{name}` is discarded, but it holds a linear value"),
+            format!("this pattern leaves out `{name}`"),
+            Some(format!(
+                "bind `{name}` in the pattern and pass it to `drop`"
+            )),
+        ),
+        DiscardSite::Projection { tuple, section } => {
+            let (field, help) = if tuple {
+                (
+                    format!("the element `{name}`"),
+                    format!(
+                        "take the tuple apart with a pattern and pass element `{name}` to `drop`"
+                    ),
+                )
+            } else {
+                (
+                    format!("the field `{name}`"),
+                    format!(
+                        "take the value apart with a record pattern and pass `{name}` to `drop`"
+                    ),
+                )
+            };
+            (
+                format!("{field} is discarded, but it holds a linear value"),
+                format!("this projection leaves {field} behind"),
+                (!section).then_some(help),
+            )
+        }
+        DiscardSite::Update => (
+            format!(
+                "the old value of the field `{name}` is discarded, but it holds a linear value"
+            ),
+            format!("this update overwrites `{name}`"),
+            Some(format!(
+                "take the old `{name}` out with a record pattern and pass it to `drop`"
+            )),
+        ),
+    };
+    let diagnostic = Diagnostic::error(
+        codes::LINEAR_VALUE_DISCARDED,
+        message,
+        Label::new(file, range, label),
+    )
+    .with_note(LINEAR_NOTE);
+    match help {
+        Some(help) => diagnostic.with_help(help),
+        None => diagnostic,
+    }
+}
+
 pub(super) fn linear_misuse(
     program: &Program,
     files: &SourceFiles,
@@ -608,13 +664,7 @@ pub(super) fn linear_misuse(
         )
         .with_note(LINEAR_NOTE)
         .with_help("bind it to a name and pass the name to `drop`"),
-        KindReason::DiscardedField { name } => Diagnostic::error(
-            codes::LINEAR_VALUE_DISCARDED,
-            format!("the field `{name}` is discarded, but it holds a linear value"),
-            Label::new(file, range, format!("this pattern leaves out `{name}`")),
-        )
-        .with_note(LINEAR_NOTE)
-        .with_help(format!("bind `{name}` in the pattern and pass it to `drop`")),
+        KindReason::DiscardedField { name, site } => discarded_field(file, range, name, *site),
         // `return` の節の本体は作れないので、fix は付けない
         KindReason::OmittedReturn { ty } => Diagnostic::error(
             codes::LINEAR_VALUE_DISCARDED,

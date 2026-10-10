@@ -6,9 +6,9 @@ use eml_hir::{
     Closure, ConstructorId, ExprId, ExprKind, FunctionId, FunctionKind, Literal, OperationId,
     PatId, Program as HirProgram, Res, Segment, ValueItem,
 };
-use eml_types::TypeId;
+use eml_types::{FieldTarget, TypeId};
 
-use crate::{Atom, Call, Ctor, FnIdx, Repr, Rhs, Stmt, TUPLE};
+use crate::{Atom, Call, Ctor, FnIdx, Repr, Rhs, Stmt, TUPLE, VarId};
 
 use super::pattern::Known;
 use super::program::{effect_index, perform_call, plain_call};
@@ -79,6 +79,41 @@ impl FnLowering<'_> {
         }
         self.builder.emit(Stmt::Let { var, rhs });
         Atom::Var(var)
+    }
+
+    /// `value` を `ctor` で分解する `unpack` を足し、フィールドの変数を返す。変数の Repr は配置のフィールドの Repr で、
+    /// `result` に挙げたフィールドだけは、その Repr にする。射影の結果を式の型の Repr で受け、配置との変換を
+    /// パターンのフィールドと同じく boxing に任せるためである。
+    fn unpack_fields(
+        &mut self,
+        value: Atom,
+        ctor: Ctor,
+        result: Option<(u32, Repr)>,
+    ) -> Vec<VarId> {
+        // 射影と更新の値は、型検査がフィールドを持つ `data` かタプルに決めたので、定数ではなく変数である
+        let Atom::Var(value) = value else {
+            unreachable!("a value with fields is a variable")
+        };
+        let reprs = self.program.layouts[ctor.layout.0 as usize].constructors[ctor.tag as usize]
+            .fields
+            .clone();
+        let fields: Vec<VarId> = reprs
+            .into_iter()
+            .enumerate()
+            .map(|(index, repr)| {
+                let repr = match result {
+                    Some((field, result)) if field as usize == index => result,
+                    _ => repr,
+                };
+                self.builder.var(named("f", repr))
+            })
+            .collect();
+        self.builder.emit(Stmt::Unpack {
+            value,
+            ctor,
+            fields: fields.clone(),
+        });
+        fields
     }
 
     /// 型 `ty` の値を束縛する `bind`。
@@ -529,6 +564,46 @@ impl FnLowering<'_> {
                 }
                 let ty = self.ty(id);
                 let ctor = self.program.ctor(self.ctx.hir, self.ctx.store, *ctor);
+                self.bind_typed("d", ty, Rhs::Con { ctor, args })
+            }
+            ExprKind::Field { base, .. } => {
+                // `e` を評価して `unpack` で分解し、指したフィールドの変数を結果にする
+                // (docs/superpowers/specs/2026-10-10-s6c-records-design.md の「translate」)
+                let value = self.atom(*base);
+                let (ctor, index) = match self.ctx.types.fields[id] {
+                    FieldTarget::Constructor { ctor, field } => {
+                        (self.program.ctor(self.ctx.hir, self.ctx.store, ctor), field)
+                    }
+                    FieldTarget::Tuple { arity, index } => (
+                        Ctor {
+                            layout: self.program.tuple_layout(arity as usize),
+                            tag: TUPLE,
+                        },
+                        index,
+                    ),
+                };
+                let ty = self.ty(id);
+                let result = repr(self.ctx.store, ty, self.ctx.hir);
+                let fields = self.unpack_fields(value, ctor, Some((index, result)));
+                Atom::Var(fields[index as usize])
+            }
+            ExprKind::Update { base, fields } => {
+                // `e`、フィールドの式の順に評価してから古いフィールドを取り出し、置き換える位置を新しい値にして作る。
+                // 意味は写しで、一意な値をその場で書き換えるのは Perceus の reuse に任せる
+                // (docs/superpowers/specs/2026-10-10-s6c-records-design.md の「translate」)
+                let value = self.atom(*base);
+                let values: Vec<Atom> = fields.iter().map(|&(_, value)| self.atom(value)).collect();
+                let (ctor, indices) = &self.ctx.types.updates[id];
+                let ctor = self.program.ctor(self.ctx.hir, self.ctx.store, *ctor);
+                let mut args: Vec<Atom> = self
+                    .unpack_fields(value, ctor, None)
+                    .into_iter()
+                    .map(Atom::Var)
+                    .collect();
+                for (&index, value) in indices.iter().zip(values) {
+                    args[index as usize] = value;
+                }
+                let ty = self.ty(id);
                 self.bind_typed("d", ty, Rhs::Con { ctor, args })
             }
             ExprKind::Interpolation(segments) => {

@@ -8,12 +8,12 @@ use eml_hir::{
 };
 use la_arena::ArenaMap;
 
-use crate::codes;
 use crate::kind::problem::Instance;
 use crate::kind::{KindOrigin, KindReason, Provenance, Span};
 use crate::shape::{Instantiated, Rigids, lower_type};
 use crate::store::TypeStore;
 use crate::table::{Row, Table, Tail, Ty, TyShape, UnifyError};
+use crate::{FieldTarget, codes};
 
 use super::Signatures;
 use super::report::{AmbientSource, Origin, callee_subject};
@@ -47,6 +47,12 @@ pub(crate) struct BodyTyping {
     /// 呼び出しの矢印ごとの `mask`。キーは呼び出しの式と矢印の番号である。空の `mask` は入れない
     /// (docs/spec/types.md の「推論」)。
     pub masks: HashMap<(ExprId, usize), Vec<EffectId>>,
+    /// 射影が指すフィールド。
+    pub fields: ArenaMap<ExprId, FieldTarget>,
+    /// 更新のコンストラクタと、ソースの順のフィールドの番号。
+    pub updates: ArenaMap<ExprId, (ConstructorId, Vec<u32>)>,
+    /// 射影と更新が捨てるフィールドの番号と型。使用回数のパスが `_` で受けた値と同じく `Unr` の制約を出す。
+    pub discarded: ArenaMap<ExprId, Vec<(u32, Ty)>>,
 }
 
 pub(super) struct BodyCheck<'a, 'c> {
@@ -357,6 +363,8 @@ impl BodyCheck<'_, '_> {
             }
             ExprKind::List(elements) => self.list(expr.range, elements),
             ExprKind::Record { ctor, fields } => self.record(id, *ctor, fields, expr.range),
+            ExprKind::Update { base, fields } => self.update(id, *base, fields),
+            ExprKind::Field { base, field } => self.projection(id, *base, field),
             // 各穴は `display e` の呼び出しで、`String` を返す。穴の式の型には、`display` の参照が `Show` の制約を付ける
             // (docs/spec/expressions.md の「補間」)
             ExprKind::Interpolation(segments) => {
@@ -492,7 +500,7 @@ impl BodyCheck<'_, '_> {
 
     /// トップレベルの値を参照するたびに、宣言の型の形を具体化する。呼び出し先の Kind の制約は複写せず、Kind の具体化の
     /// 記録を残して段2で展開する (docs/spec/types.md の「推論」)。シグネチャがなければ `None` である。
-    fn instantiate(&mut self, decl: ValueItem) -> Option<(Ty, Vec<Ty>)> {
+    pub(super) fn instantiate(&mut self, decl: ValueItem) -> Option<(Ty, Vec<Ty>)> {
         let shape = self.signatures.get(decl)?;
         let Instantiated {
             ty,

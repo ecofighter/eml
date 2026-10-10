@@ -1,6 +1,6 @@
-//! レコードの宣言、作る式、パターン (docs/superpowers/specs/2026-10-10-s6c-records-design.md の「HIR」)。
+//! レコードの宣言、作る式、パターン、射影、更新、セクション (docs/superpowers/specs/2026-10-10-s6c-records-design.md の「HIR」)。
 
-use eml_hir::{Body, ExprKind, PatKind, Program};
+use eml_hir::{Body, ExprKind, FieldKey, PatKind, Program};
 
 use crate::common::{diagnostics, lower_files_text, lower_text};
 
@@ -179,4 +179,62 @@ fn a_record_is_not_a_value_for_grouping_arguments() {
         ExprKind::Record { .. }
     ));
     assert!(!eml_hir::is_value(&lowered.program, body, body.root));
+}
+
+#[test]
+fn projections_updates_and_field_sections() {
+    let text = format!(
+        "{PERSON}f : Person -> Person\nf p =\n  let n = p.name\n  let t = (1, (2, 3)).1.0\n  let age = 3\n  let g = (.name)\n  let h = (.0)\n  {{ p | name = n, age }}"
+    );
+    insta::assert_snapshot!(lower_text(&text), @"
+    data Person
+      | Person { name : String, age : Int }
+    f : Person -> Person
+    f p#0 = {
+      let n#1 = p#0.name
+      let t#2 = (1, (2, 3)).1.0
+      let age#3 = 3
+      let g#5 = (fn $p#4 -> $p#4.name)
+      let h#7 = (fn $p#6 -> $p#6.0)
+      { p#0 | name = n#1, age = age#3 }
+    }
+    ");
+}
+
+#[test]
+fn a_duplicate_update_field() {
+    let text = format!("{PERSON}f : Person -> Person\nf p = {{ p | age = 1, age = 2 }}");
+    insta::assert_snapshot!(diagnostics(&text).join("\n"), @"E1045 5:22 the field `age` appears more than once");
+}
+
+#[test]
+fn a_field_section_is_a_lambda_over_a_hidden_parameter() {
+    let text = format!("{PERSON}f : Person -> String\nf = (.name)");
+    let lowered = eml_test_support::lower(&text);
+    let body = body(&lowered.program, "f");
+    let ExprKind::Lambda(closure) = &body.exprs[body.root].kind else {
+        panic!("a section lowers to a lambda");
+    };
+    assert_eq!(closure.params.len(), 1);
+    let ExprKind::Field { base, field } = &body.exprs[closure.body].kind else {
+        panic!("the body is a projection");
+    };
+    assert!(matches!(body.exprs[*base].kind, ExprKind::Path(_)));
+    assert_eq!(field.field, FieldKey::Name("name".to_string()));
+    // 範囲はどれもセクション全体である
+    let whole = body.exprs[body.root].range;
+    assert_eq!(body.exprs[closure.body].range, whole);
+    assert_eq!(body.exprs[*base].range, whole);
+}
+
+#[test]
+fn projections_and_updates_are_not_values_for_grouping_arguments() {
+    let text = format!(
+        "{PERSON}f : Person -> String\nf p = p.name\n\ng : Person -> Person\ng p = {{ p | age = 1 }}"
+    );
+    let lowered = eml_test_support::lower(&text);
+    for name in ["f", "g"] {
+        let body = body(&lowered.program, name);
+        assert!(!eml_hir::is_value(&lowered.program, body, body.root));
+    }
 }

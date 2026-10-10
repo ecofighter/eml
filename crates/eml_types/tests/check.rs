@@ -431,19 +431,18 @@ fn operation_types_are_exported() {
 #[test]
 fn later_stage_constructs_add_no_type_errors() {
     // E0004 の跡 (`<missing>` の値) を型検査に通しても、誤りを重ねて出さない。
-    let text = "counter : Unit -> Int\ncounter () = 0\n\nf : Int -> Int\nf n =\n  let first = fn t -> t.0\n  let plus = (+)\n  0";
+    let text = "counter : Unit -> Int\ncounter () = 0\n\nf : Int -> Int\nf n =\n  let first = 1.5\n  let plus = (+)\n  0";
     insta::assert_snapshot!(check_text(text), @"
     counter : Unit -> Int
     f : Int -> Int
       n#0 : Int
-      t#1 : _
-      first#2 : _ -> <_> {error}
-      $a#3 : Int
-      $b#4 : Int
-      plus#5 : Int -> <_> Int -> <_> Int
+      first#1 : {error}
+      $a#2 : Int
+      $b#3 : Int
+      plus#4 : Int -> <_> Int -> <_> Int
     ---
-    E0004 6:23 field access is not supported yet
-      6:23 this is implemented in a later stage
+    E0004 6:15 floating-point literals are not supported yet
+      6:15 this is implemented in a later stage
     ");
 }
 

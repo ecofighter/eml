@@ -1,7 +1,7 @@
-//! レコードの作る式とパターンの変換 (docs/superpowers/specs/2026-10-10-s6c-records-design.md の「HIR」)。
+//! レコードの作る式、パターン、更新、射影の変換 (docs/superpowers/specs/2026-10-10-s6c-records-design.md の「HIR」)。
 
 use eml_diagnostics::{Diagnostic, FileId, Label, TextRange};
-use eml_syntax::ast;
+use eml_syntax::{SyntaxKind, SyntaxToken, ast};
 
 use super::data::duplicate_field;
 use super::expr::BodyLowering;
@@ -77,6 +77,43 @@ impl BodyLowering<'_> {
             },
             range,
         )
+    }
+
+    /// `{ e | f = v }`。フィールドは名前のまま持ち、型検査が `e` の型から引くので、ここでは重複 (E1045) だけを検査する。
+    /// 2回目に書いたフィールドの式は変換しない。作る式の重複と同じ扱いにするためである。
+    pub(super) fn lower_update(&mut self, update: &ast::UpdateExpr, range: TextRange) -> ExprId {
+        let base = self.lower_expr(update.base(), range);
+        let mut fields: Vec<(FieldName, ExprId)> = Vec::new();
+        let mut erroneous = false;
+        for field in update.fields() {
+            let (name, name_range) = field_name(field.name());
+            if let Some((first, _)) = fields.iter().find(|(seen, _)| seen.name == name) {
+                self.diagnostics
+                    .push(duplicate_field(self.file, &name, first.range, name_range));
+                erroneous = true;
+                continue;
+            }
+            let value = self.field_value(&field);
+            let name = FieldName {
+                name,
+                range: name_range,
+            };
+            fields.push((name, value));
+        }
+        // フィールドのない `{ p | }` はパーサが報告済みである
+        if erroneous || fields.is_empty() {
+            return self.alloc(ExprKind::Missing, range);
+        }
+        self.alloc(ExprKind::Update { base, fields }, range)
+    }
+
+    /// `e.name` と `e.0`。不正な番号はパーサが報告済みなので、式を `Missing` にする。
+    pub(super) fn lower_field_expr(&mut self, field: &ast::FieldExpr, range: TextRange) -> ExprId {
+        let base = self.lower_expr(field.base(), range);
+        match field.field().and_then(|token| field_use(&token)) {
+            Some(field) => self.alloc(ExprKind::Field { base, field }, range),
+            None => self.alloc(ExprKind::Missing, range),
+        }
     }
 
     /// 省略形 `{ name }` の値は、その位置で `name` を普通に名前解決した参照である
@@ -259,6 +296,28 @@ fn no_named_fields(
         Label::new(file, range, "written with braces here"),
     )
     .with_help(help)
+}
+
+/// 射影とセクションの `.` の後のトークン。番号は、パーサが受け付ける形 (先頭に 0 のない10進数で `u32` に収まるもの)
+/// だけを読む。そのほかの番号はパーサが E0011 を報告済みなので `None` を返す
+/// (docs/superpowers/specs/2026-10-10-s6c-records-design.md の「式」)。
+pub(super) fn field_use(token: &SyntaxToken) -> Option<FieldUse> {
+    let text = token.text();
+    let field = match token.kind() {
+        SyntaxKind::LIDENT => FieldKey::Name(text.to_string()),
+        SyntaxKind::INT => {
+            let index: u32 = text.parse().ok()?;
+            if index.to_string() != text {
+                return None;
+            }
+            FieldKey::Index(index)
+        }
+        _ => return None,
+    };
+    Some(FieldUse {
+        field,
+        range: token.text_range(),
+    })
 }
 
 /// パーサはフィールドを名前から始める (docs/superpowers/specs/2026-10-10-s6c-records-design.md の「CST」)。

@@ -1,0 +1,10 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{stderr}\")"
+input_file: tests/ui/run/records/generic.em
+---
+--- stdout ---
+Pair { first = 2, second = 1 }
+Pair { first = "b", second = "a" }
+2
+--- stderr ---

@@ -2633,3 +2633,47 @@ fn record_construction_evaluates_in_source_order_and_builds_in_declaration_order
     }
     ");
 }
+
+#[test]
+fn a_projection_unpacks_and_returns_the_field() {
+    let text = "data P = | P { a : String, b : Int }\n\nf : P -> Int\nf p = p.b\n\ng : (Int, String) -> String\ng t = t.1\n\nmain : Unit -> <IO> Unit\nmain () =\n  println (show (f (P { a = \"x\", b = 1 })))\n  println (g (1, \"y\"))";
+    let ir = core_text(text, Pass::Translate);
+    insta::assert_snapshot!(function(&ir, "f"), @"
+    fn f(p.0: obj) -> int {
+      unpack p.0 P #0(f.1: obj, f.2: int)
+      return f.2
+    }
+    ");
+    insta::assert_snapshot!(function(&ir, "g"), @"
+    fn g(t.0: obj) -> obj {
+      unpack t.0 (,) #0(f.1: tobj, f.2: obj)
+      return f.2
+    }
+    ");
+}
+
+#[test]
+fn a_projection_of_a_type_variable_field_is_unboxed() {
+    let text = "data Box a = | Box { x : a }\n\nf : Box Int -> Int\nf b = b.x + 1\n\nmain : Unit -> <IO> Unit\nmain () = println (show (f (Box { x = 1 })))";
+    insta::assert_snapshot!(function(&core_text(text, Pass::Boxing), "f"), @"
+    fn f(b.0: obj) -> int {
+      unpack b.0 Box #0(f.3: tobj)
+      let f.1: int = unbox f.3
+      let t.2: int = extern Prelude.+(f.1, 1)
+      return t.2
+    }
+    ");
+}
+
+#[test]
+fn an_update_evaluates_its_fields_and_builds_a_new_value() {
+    let text = "data P = | P { a : Int, b : Int, c : Int }\n\nf : P -> Int -> P\nf p n = { p | c = n + 1, a = n }\n\nmain : Unit -> <IO> Unit\nmain () = drop (f (P { a = 1, b = 2, c = 3 }) 4)";
+    insta::assert_snapshot!(function(&core_text(text, Pass::Translate), "f"), @"
+    fn f(p.0: obj, n.1: int) -> obj {
+      let t.2: int = extern Prelude.+(n.1, 1)
+      unpack p.0 P #0(f.3: int, f.4: int, f.5: int)
+      let d.6: obj = con P #0(n.1, f.4, t.2)
+      return d.6
+    }
+    ");
+}

@@ -406,6 +406,26 @@ impl Printer<'_> {
                     .collect();
                 record(&self.qualified(ctor.module, &constructor.name), fields)
             }
+            ExprKind::Update { base, fields } => {
+                let fields: Vec<String> = fields
+                    .iter()
+                    .map(|(name, value)| {
+                        format!("{} = {}", name.name, self.expr(body, *value, indent))
+                    })
+                    .collect();
+                format!(
+                    "{{ {} | {} }}",
+                    self.expr(body, *base, indent),
+                    fields.join(", ")
+                )
+            }
+            ExprKind::Field { base, field } => {
+                let base = self.expr(body, *base, indent);
+                match &field.field {
+                    FieldKey::Name(name) => format!("{base}.{name}"),
+                    FieldKey::Index(index) => format!("{base}.{index}"),
+                }
+            }
             ExprKind::Drop(value) => format!("(drop {})", self.expr(body, *value, indent)),
         }
     }

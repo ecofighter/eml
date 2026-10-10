@@ -90,25 +90,24 @@ fn signatures_and_equations_are_paired_by_name() {
 
 #[test]
 fn constructs_of_later_stages_are_not_yet_supported() {
-    let text =
-        "f : Int -> Int\nf x =\n  let first = fn t -> t.0\n  let plus = (+)\n  let y = x in y";
+    let text = "f : Int -> Int\nf x =\n  let first = 1.5\n  let plus = (+)\n  let y = x in y";
     insta::assert_snapshot!(lower_text(text), @"
     f : Int -> Int
     f x#0 = {
-      let first#2 = (fn t#1 -> <missing>)
-      let plus#5 = (fn $a#3 $b#4 -> (+ $a#3 $b#4))
+      let first#1 = <missing>
+      let plus#4 = (fn $a#2 $b#3 -> (+ $a#2 $b#3))
       {
-        let y#6 = x#0
-        y#6
+        let y#5 = x#0
+        y#5
       }
     }
     ---
-    E0004 3:23 field access is not supported yet
+    E0004 3:15 floating-point literals are not supported yet
     ");
 }
 
 #[test]
-fn record_update_is_not_yet_supported() {
+fn record_update_lowers_with_its_fields_by_name() {
     let text = "data P =\n  | P { a : Int }\nf : P -> P\nf p =\n  let P { a } = p\n  let q = { p | a = 1 }\n  P { a = a }";
     insta::assert_snapshot!(lower_text(text), @"
     data P
@@ -116,11 +115,9 @@ fn record_update_is_not_yet_supported() {
     f : P -> P
     f p#0 = {
       let P { a = a#1 } = p#0
-      let q#2 = <missing>
+      let q#2 = { p#0 | a = 1 }
       P { a = a#1 }
     }
-    ---
-    E0004 6:11 records are not supported yet
     ");
 }
 

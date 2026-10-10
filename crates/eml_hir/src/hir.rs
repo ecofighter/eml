@@ -72,6 +72,20 @@ pub struct FieldName {
     pub range: TextRange,
 }
 
+/// 射影が指すフィールドと、書いた名前か番号の位置。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FieldUse {
+    pub field: FieldKey,
+    pub range: TextRange,
+}
+
+/// 名前付きのフィールドは名前で、タプルの要素は番号で指す。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FieldKey {
+    Name(String),
+    Index(u32),
+}
+
 #[derive(Debug)]
 pub struct EffectDef {
     pub name: String,
@@ -406,6 +420,13 @@ impl Body {
                     f(value);
                 }
             }
+            ExprKind::Update { base, fields } => {
+                f(*base);
+                for &(_, value) in fields {
+                    f(value);
+                }
+            }
+            ExprKind::Field { base, .. } => f(*base),
             ExprKind::Interpolation(segments) => {
                 segments.iter().filter_map(Segment::hole).for_each(f);
             }
@@ -565,6 +586,19 @@ pub enum ExprKind {
         ctor: ConstructorId,
         fields: Vec<(u32, ExprId)>,
     },
+    /// 更新 `{ e | f = v }`。並びはソースの順で、フィールドの式を書いた順に評価するためである。フィールドは名前のまま
+    /// 持ち、型検査が `base` の型から引く。HIR が検査するのは重複 (E1045) だけである
+    /// (docs/superpowers/specs/2026-10-10-s6c-records-design.md の「更新と射影とセクション」)。
+    Update {
+        base: ExprId,
+        fields: Vec<(FieldName, ExprId)>,
+    },
+    /// 射影 `e.name` と `e.0`。フィールドは型検査が `base` の型から引く。セクション `(.f)` は、隠れた引数に対する
+    /// この射影を本体に持つラムダである。
+    Field {
+        base: ExprId,
+        field: FieldUse,
+    },
     /// 穴のある文字列。穴は1つ以上ある。`++` の呼び出しにまで脱糖しないのは、連結を translate がまとめて組むため
     /// (docs/spec/expressions.md の「補間」)。
     Interpolation(Vec<Segment>),
@@ -722,6 +756,13 @@ pub enum PatKind {
 pub struct Local {
     pub name: String,
     pub range: TextRange,
+}
+
+impl Local {
+    /// 脱糖が作った引数か。名前が `$` で始まり、ソースには現れない。
+    pub fn is_hidden(&self) -> bool {
+        self.name.starts_with('$')
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

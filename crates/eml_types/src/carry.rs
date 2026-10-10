@@ -235,6 +235,13 @@ impl Carrying<'_, '_> {
                 let values: Vec<ExprId> = fields.iter().map(|&(_, value)| value).collect();
                 self.parts(&values, after)
             }
+            ExprKind::Update { base, fields } => {
+                let parts: Vec<ExprId> = std::iter::once(*base)
+                    .chain(fields.iter().map(|&(_, value)| value))
+                    .collect();
+                self.parts(&parts, after)
+            }
+            ExprKind::Field { base, .. } => self.expr(*base, after),
             ExprKind::List(elements) => self.list(elements, after),
             ExprKind::Interpolation(segments) => self.interpolation(segments, after),
             ExprKind::Drop(value) => self.expr(*value, after),
