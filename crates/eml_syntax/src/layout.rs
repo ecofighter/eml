@@ -58,13 +58,16 @@ pub(crate) fn layout(file: FileId, text: &str, tokens: &[Token]) -> (Vec<Token>,
     for (i, item) in items.iter().enumerate() {
         let start = item.token.range.start();
         if item.line_start {
+            // 閉じる側のトークンは、規則 4 で自分の括弧より上のブロックを閉じる。文を始めることはないので、規則 1 から
+            // 規則 3 を当てない (docs/spec/layout.md の「文脈のスタック」)。
+            let closing = is_closing_side(item.token, text, &stack) && stack.iter().any(is_bracket);
             let mut opened = false;
             if i > 0
                 && BLOCK_STARTERS.contains(&items[i - 1].token.kind)
                 && !is_field_eq(items[i - 1].token.kind, &stack)
             {
                 // 規則 3。
-                if item.column > enclosing_indent(&stack) && !item.token.kind.is_closing_bracket() {
+                if item.column > enclosing_indent(&stack) && !closing {
                     out.push(virtual_token(LAYOUT_OPEN, start));
                     stack.push(Context::Block {
                         indent: item.column,
@@ -78,13 +81,22 @@ pub(crate) fn layout(file: FileId, text: &str, tokens: &[Token]) -> (Vec<Token>,
                         item_after_arrow_error == Some(line_first_item),
                         &stack,
                     );
-                    missing_block(file, text, starter, report, &mut out, &mut diagnostics);
+                    let next = closing.then_some(item.token);
+                    missing_block(
+                        file,
+                        text,
+                        starter,
+                        next,
+                        report,
+                        &mut out,
+                        &mut diagnostics,
+                    );
                     if starter.kind == THIN_ARROW {
                         item_after_arrow_error = Some(i);
                     }
                 }
             }
-            if !opened {
+            if !opened && !closing {
                 // 規則 1 と規則 2。括弧を閉じるとその外のブロックに規則 1 が当たるので、どちらも当てはまらなくなるまで繰り返す。
                 loop {
                     match stack.last() {
@@ -102,10 +114,7 @@ pub(crate) fn layout(file: FileId, text: &str, tokens: &[Token]) -> (Vec<Token>,
                         }
                         // 閉じ忘れた括弧がファイルの残りを飲み込まないよう、ここで閉じる。閉じ括弧がないことは
                         // parser が報告する。
-                        Some(Context::Bracket(_))
-                            if !item.token.kind.is_closing_bracket()
-                                && item.column <= enclosing_indent(&stack) =>
-                        {
+                        Some(Context::Bracket(_)) if item.column <= enclosing_indent(&stack) => {
                             stack.pop();
                         }
                         _ => break,
@@ -196,7 +205,15 @@ pub(crate) fn layout(file: FileId, text: &str, tokens: &[Token]) -> (Vec<Token>,
             item_after_arrow_error == Some(line_first_item),
             &stack,
         );
-        missing_block(file, text, last.token, report, &mut out, &mut diagnostics);
+        missing_block(
+            file,
+            text,
+            last.token,
+            None,
+            report,
+            &mut out,
+            &mut diagnostics,
+        );
     }
     // 規則 6。ファイル全体のブロックは閉じない。
     while stack.len() > 1 {
@@ -205,6 +222,14 @@ pub(crate) fn layout(file: FileId, text: &str, tokens: &[Token]) -> (Vec<Token>,
         }
     }
     (out, diagnostics)
+}
+
+/// 閉じる側のトークン (docs/spec/layout.md の「文脈のスタック」)。`>` は row を閉じるときだけである。
+fn is_closing_side(token: Token, text: &str, stack: &[Context]) -> bool {
+    token.kind.is_closing_bracket()
+        || token.kind == COMMA
+        || stack.last() == Some(&Context::Bracket(BracketKind::Row))
+            && is_op_starting_with(token, text, '>')
 }
 
 fn is_op_starting_with(token: Token, text: &str, c: char) -> bool {
@@ -308,43 +333,51 @@ fn report_tab(file: FileId, prefix: &str, line_begin: usize, diagnostics: &mut V
 }
 
 /// E0009 を出した後、開始トークンの直後に空のブロックを入れる。parser は空のブロックを黙って受け入れるので、
-/// 同じ問題を二重に報告せずに済む。`report` が偽なら、空のブロックだけを入れる。
+/// 同じ問題を二重に報告せずに済む。`report` が偽なら、空のブロックだけを入れる。`next` は、次の行の先頭が閉じる側の
+/// トークンのときのそのトークンである。
 fn missing_block(
     file: FileId,
     text: &str,
     starter: Token,
+    next: Option<Token>,
     report: bool,
     out: &mut Vec<Token>,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     if report {
+        let label = match next {
+            Some(next) => format!(
+                "nothing comes before the `{}` on the next line",
+                &text[next.range]
+            ),
+            None => "the next line must be indented more than the enclosing block".to_string(),
+        };
         let mut diagnostic = Diagnostic::error(
             codes::EXPECTED_INDENTED_BLOCK,
             format!(
                 "expected an indented block after `{}`",
                 &text[starter.range]
             ),
-            Label::new(
-                file,
-                starter.range,
-                "the next line must be indented more than the enclosing block",
-            ),
+            Label::new(file, starter.range, label),
         );
-        // よくある誤りなので、直し方を示す
-        // (docs/implementation/architecture.md の「構文解析の回復」、docs/spec/declarations.md の
-        // 「シグネチャと等式」)。
-        match starter.kind {
-            WITH_KW => {
-                diagnostic =
-                    diagnostic.with_help("indent the `|` arms more than the line with `with`");
+        // 次の行が閉じる側のトークンなら、深く字下げしても直らないので help を付けない。
+        if next.is_none() {
+            // よくある誤りなので、直し方を示す
+            // (docs/implementation/architecture.md の「構文解析の回復」、docs/spec/declarations.md の
+            // 「シグネチャと等式」)。
+            match starter.kind {
+                WITH_KW => {
+                    diagnostic =
+                        diagnostic.with_help("indent the `|` arms more than the line with `with`");
+                }
+                // 行末の `->` は関数型にも、ラムダや match の枝にもあるので、どちらにも当てはまる言い方にする。
+                THIN_ARROW => {
+                    diagnostic = diagnostic.with_help(
+                        "indent the next line more, or in a type that spans lines, put `->` at the start of the next line",
+                    );
+                }
+                _ => {}
             }
-            // 行末の `->` は関数型にも、ラムダや match の枝にもあるので、どちらにも当てはまる言い方にする。
-            THIN_ARROW => {
-                diagnostic = diagnostic.with_help(
-                    "indent the next line more, or in a type that spans lines, put `->` at the start of the next line",
-                );
-            }
-            _ => {}
         }
         diagnostics.push(diagnostic);
     }
@@ -861,6 +894,83 @@ mod tests {
         assert_eq!(
             layout_of("f = (fn x ->\n    \"\\{a -> <IO}\", 1)"),
             "f = ( fn x -> <OPEN> \" \\{ a -> < IO } \" <CLOSE> , 1 )"
+        );
+    }
+
+    #[test]
+    fn leading_comma_does_not_end_a_bracket_at_the_statement_column() {
+        assert_eq!(
+            layout_of("xs =\n  [ 1\n  , 2\n  ]"),
+            "xs = <OPEN> [ 1 , 2 ] <CLOSE>"
+        );
+    }
+
+    #[test]
+    fn leading_comma_closes_the_lambda_body() {
+        assert_eq!(
+            layout_of("xs =\n  [ fn x ->\n      x + 1\n  , fn y -> y\n  ]"),
+            "xs = <OPEN> [ fn x -> <OPEN> x + 1 <CLOSE> , fn y -> y ] <CLOSE>"
+        );
+    }
+
+    #[test]
+    fn leading_comma_in_a_row_does_not_close_the_block() {
+        assert_eq!(
+            layout_of(
+                "main () = apply (fn () ->\n  let g : Unit -> <IO\n    , Log> Unit = h\n  g ())"
+            ),
+            "main ( ) = apply ( fn ( ) -> <OPEN> let g : Unit -> < IO , Log > Unit = h <SEP> g ( ) <CLOSE> )"
+        );
+    }
+
+    #[test]
+    fn leading_comma_without_a_bracket_gets_a_separator() {
+        assert_eq!(
+            layout_of("f =\n  a\n  , b"),
+            "f = <OPEN> a <SEP> , b <CLOSE>"
+        );
+    }
+
+    #[test]
+    fn closing_bracket_at_the_start_of_a_line_gets_no_separator() {
+        assert_eq!(
+            layout_of("f = (fn x ->\n    x + 1\n    )"),
+            "f = ( fn x -> <OPEN> x + 1 <CLOSE> )"
+        );
+    }
+
+    #[test]
+    fn closing_angle_of_a_row_may_start_a_line_at_the_block_column() {
+        assert_eq!(
+            layout_of("f =\n  let g : Unit -> <IO,\n    Log\n  > Unit = h\n  g"),
+            "f = <OPEN> let g : Unit -> < IO , Log > Unit = h <SEP> g <CLOSE>"
+        );
+    }
+
+    #[test]
+    fn angle_at_the_start_of_a_line_outside_a_row_follows_rule_2() {
+        assert_eq!(
+            layout_of("f =\n  g (a\n  > b)"),
+            "f = <OPEN> g ( a <SEP> > b ) <CLOSE>"
+        );
+    }
+
+    #[test]
+    fn comma_on_the_line_after_an_arrow_inside_a_bracket_is_a_missing_block() {
+        assert_eq!(
+            dump("f = (fn x ->\n    , 2)"),
+            (
+                "f = ( fn x -> <OPEN> <CLOSE> , 2 )".to_string(),
+                vec!["E0009@10..12".to_string()]
+            )
+        );
+    }
+
+    #[test]
+    fn comma_on_the_line_after_an_equals_sign_outside_a_bracket_opens_a_block() {
+        assert_eq!(
+            dump("f =\n  , 1"),
+            ("f = <OPEN> , 1 <CLOSE>".to_string(), vec![])
         );
     }
 }

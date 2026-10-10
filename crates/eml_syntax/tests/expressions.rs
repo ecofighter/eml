@@ -1,4 +1,5 @@
 use crate::common::{diagnostics, lines, shape};
+use eml_test_support::{full, parse};
 
 #[test]
 fn equation_with_a_constructor_pattern() {
@@ -912,4 +913,46 @@ fn a_comma_closes_a_block_opened_inside_brackets() {
         "   fn y -> y]",
     ]);
     assert_eq!(diagnostics(&text), Vec::<String>::new());
+}
+
+#[test]
+fn a_list_may_be_written_with_leading_commas() {
+    let text = lines(&[
+        "xs =",
+        "  [ fn x ->",
+        "      x + 1",
+        "  , fn y -> y",
+        "  , match z with",
+        "      | A -> fn w -> w",
+        "      | B -> fn w -> w",
+        "  ]",
+    ]);
+    assert_eq!(diagnostics(&text), Vec::<String>::new());
+}
+
+#[test]
+fn a_tuple_may_be_written_with_leading_commas() {
+    let text = lines(&["t =", "  ( 1", "  , 2", "  )"]);
+    assert_eq!(diagnostics(&text), Vec::<String>::new());
+}
+
+#[test]
+fn a_next_element_may_be_deeper_than_the_block() {
+    let text = lines(&["fs = [ fn x ->", "  x + 1,", "       fn y -> y ]"]);
+    assert_eq!(diagnostics(&text), Vec::<String>::new());
+}
+
+#[test]
+fn an_unclosed_list_still_ends_at_the_next_statement() {
+    let text = lines(&["f =", "  let xs = [1, 2", "  g xs"]);
+    assert_eq!(diagnostics(&text), ["E0011 2:17 expected `]`"]);
+}
+
+#[test]
+fn a_closing_token_after_a_line_final_arrow_has_its_own_label() {
+    let parsed = parse(&lines(&["f = (fn x ->", "    , 2)"]));
+    insta::assert_snapshot!(full(&parsed.files, &parsed.diagnostics), @"
+    E0009 1:11 expected an indented block after `->`
+      1:11 nothing comes before the `,` on the next line
+    ");
 }
