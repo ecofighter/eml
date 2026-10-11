@@ -148,3 +148,29 @@ fn an_unresolved_row_variable_never_yields() {
     4:3#0 Never
     ");
 }
+
+#[test]
+fn the_first_arrow_of_the_declared_type_is_classified_without_parameters() {
+    // 等式に引数がなければ本体は純粋な値だが、最初の矢印の row は宣言の型のまま分類する
+    let text = "effect Ask where\n  ask : Unit -> Int\n\nact : Unit -> <Ask> Int\nact = fn () -> ask ()\n\ngo : Unit -> <e> Int\ngo = fn () -> 1\n\nn : Int\nn = 1";
+    let checked = check(text);
+    let first = |name: &str| {
+        let types = &checked.typed.bodies[entry(&checked, name)];
+        format!("{:?} {:?}", types.body_yield, types.first_arrow_yield)
+    };
+    assert_eq!(first("act"), "Never Always");
+    assert_eq!(first("go"), "Never Var(0)");
+    assert_eq!(first("n"), "Never Never");
+}
+
+#[test]
+fn the_second_row_variable_and_a_swapped_reference_keep_the_signature_order() {
+    // `second` の本体は2つ目の row 変数 f で動く。`user` は自分の row 変数 g、h を、`second` の e に h、f に g の
+    // 順で渡す。row 変数の並びを取り違えると、本体は `Var(0)` に、参照は `[Var(0), Var(1)]` になる
+    let text = "second : (Unit -> <e> Int) -> (Unit -> <f> Int) -> <f> Int\nsecond a b = b ()\n\nuser : (Unit -> <g> Int) -> (Unit -> <h> Int) -> <g> Int\nuser c d = second d c";
+    insta::assert_snapshot!(bodies(text, "second"), @"
+    body Var(1)
+    2:14#0 Var(1)
+    ");
+    insta::assert_snapshot!(rows(text, "user"), @"5:12 second [Var(1), Var(0)]");
+}

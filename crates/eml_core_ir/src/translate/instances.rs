@@ -326,6 +326,11 @@ impl Collector<'_> {
             found.args.len(),
             "an instance key must supply one type argument per type variable of the signature"
         );
+        debug_assert_eq!(
+            row_vars(hir, function).len(),
+            bits.len(),
+            "an instance key must supply one row bit per row variable of the signature"
+        );
         let mut subst = Substitution::new(names.iter().cloned().zip(found.args.iter().copied()));
         let decl = typed.decls[&ValueItem::Function(function)].ty;
         let signature = self.store.substitute(decl, &mut subst);
@@ -408,6 +413,7 @@ impl Collector<'_> {
                     })
                     .collect(),
                 body_yield: body.body_yield,
+                first_arrow_yield: body.first_arrow_yield,
                 lambda_yields: body.lambda_yields.clone(),
                 arrow_yields: body.arrow_yields.clone(),
             };

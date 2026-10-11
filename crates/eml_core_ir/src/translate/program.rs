@@ -7,7 +7,7 @@ use eml_hir::{
     ConstructorId, EffectDef, EffectId, EffectKind, FunctionId, ModuleId, OpMultiplicity,
     OperationId, Program as HirProgram, TypeDefId, TypeDefKind, ValueItem,
 };
-use eml_types::{RowTail, TypeId, TypeKind, TypeStore, TypedProgram};
+use eml_types::{TypeId, TypeStore, TypedProgram};
 
 use crate::{
     Atom, Call, CoreFn, Ctor, EffectInfo, FnIdx, Layout, LayoutCtor, LayoutId, Loc, OpRet,
@@ -392,8 +392,8 @@ impl ProgramBuilder {
     }
 
     /// 入口の関数を `()` で呼ぶ関数を作る。名前は `entry$` に入口の関数の名前を続ける。等式に引数のない
-    /// `main = fn () -> ...` は関数値を返すので、返った値に `()` を適用する (docs/spec/core-ir.md)。`yields` は入口の
-    /// instance の印である。
+    /// `main = fn () -> ...` は関数値を返すので、返った値に `()` を適用する (docs/spec/core-ir.md)。`yields` は、入口の
+    /// 関数の宣言の型の最初の矢印が yield しうるかで、作る関数とその `apply` の印にする。
     pub(super) fn entry(
         &mut self,
         hir: &HirProgram,
@@ -412,22 +412,19 @@ impl ProgramBuilder {
         let (_, result_type) = split_arrows(types, target_type, 1);
         let mut builder = FnBuilder::new();
         let unit = vec![Atom::Unit];
-        let (call, yields) = if self.arity(target) == 0 {
-            // 引数のない値の instance は印を持たないので、`()` を渡す矢印の row から決める
-            let yields = first_arrow_yields(hir, types, target_type);
+        let call = if self.arity(target) == 0 {
             let value = builder.var(var_info("f", types, target_type, hir));
             builder.emit(Stmt::Let {
                 var: value,
                 rhs: plain_call(Call::Direct(target, Vec::new())),
             });
-            let call = Call::Apply {
+            Call::Apply {
                 callee: Atom::Var(value),
                 args: unit,
                 yields,
-            };
-            (call, yields)
+            }
         } else {
-            (Call::Direct(target, unit), yields)
+            Call::Direct(target, unit)
         };
         let result = builder.var(var_info("t", types, result_type, hir));
         builder.emit(Stmt::Let {
@@ -439,22 +436,6 @@ impl ProgramBuilder {
         let core = builder.finish(name, false, yields, repr(types, result_type, hir));
         self.finish(function, core);
         function
-    }
-}
-
-/// 入口の関数の型の最初の矢印の row が yield しうるか。入口の instance の row のビットはすべて立つので、宣言の型の
-/// row 変数の末尾は立つ側に解く (docs/spec/core-ir.md の
-/// 「row のビットと instance の鍵」)。宣言の型の rigid な末尾は入口の関数自身の row 変数だけなので、名前で区別
-/// できなくても取り違えない。
-fn first_arrow_yields(hir: &HirProgram, types: &TypeStore, ty: TypeId) -> bool {
-    match types.kind(ty) {
-        TypeKind::Fn { effects, tail, .. } => {
-            effects
-                .iter()
-                .any(|label| hir[label.id].kind == EffectKind::Defined)
-                || matches!(tail, Some(RowTail::Rigid(_)))
-        }
-        _ => false,
     }
 }
 

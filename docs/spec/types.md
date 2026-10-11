@@ -88,7 +88,7 @@ Core IR の単相化は、row を「yield しうるか」だけで分ける ([Co
   - `Always`: handle できるラベル (extern のエフェクトでないラベル) を含む。または、末尾が参照を含む定義の row 変数でない rigid な row 変数である (操作のシグネチャの row 変数を、節の中で具体化したものなど)
   - `Never`: handle できるラベルを含まず、閉じているか、末尾が型検査で最後まで決まらなかった row 変数である。決まらなかった row 変数には、どのエフェクトも求められていないので、yield しうる値はそこを通らない (`fn h -> h 1 + 1` を使わずに置いた形)
   - `Var(i)`: handle できるラベルを含まず、末尾が参照を含む定義の i 番目の row 変数である。ラムダ、handle の本体、節の中の参照では、それらを含むトップレベルの定義 (instance のメソッドの関数と既定のメソッドを含む) の row 変数を指す
-- 関数の本体が動く row (関数の型の、引数の数番目の矢印の row。`BodyTypes::body_yield`)、ラムダの本体が動く row (ラムダで最後にたどった矢印の row。`BodyTypes::lambda_yields`)、呼び出しの矢印ごとの row (`BodyTypes::arrow_yields`。キーは `mask` の表と同じく、呼び出しの式と矢印の番号の組) も、同じ `RowYield` に分類して記録する
+- 関数の本体が動く row (関数の型の、引数の数番目の矢印の row。`BodyTypes::body_yield`)、ラムダの本体が動く row (ラムダで最後にたどった矢印の row。`BodyTypes::lambda_yields`)、呼び出しの矢印ごとの row (`BodyTypes::arrow_yields`。キーは `mask` の表と同じく、呼び出しの式と矢印の番号の組)、宣言の型の最初の矢印の row (`BodyTypes::first_arrow_yield`。関数型でなければ `Never`) も、同じ `RowYield` に分類して記録する。最初の矢印の分類は、入口を `()` で呼ぶ関数の印に使う ([Core IR とインタプリタ](core-ir.md) の「`yields` の印」)
 - 分類は、rigid な row 変数がどの定義のものかを型検査が知っている間に行う。書き出した型の rigid な末尾は名前でしか区別できず、操作の row 変数と定義の row 変数を取り違えるためである
 
 ## フィールドの解決

@@ -233,18 +233,20 @@ pub(crate) fn translate(
     let InstanceKind::Function(entry_instance) = &instances.list[instances.entry.0].kind else {
         unreachable!("the entry is a function of the program")
     };
-    let entry_yield = typed
+    // 入口の関数とその中の `()` の呼び出しの印は、宣言の型の最初の矢印から決める (docs/spec/core-ir.md の
+    // 「`yields` の印」)
+    let first_arrow = typed
         .bodies
         .get(entry)
         .expect("every body is type-checked")
-        .body_yield;
+        .first_arrow_yield;
     let entry_fn = builder.entry(
         hir,
         store,
         indices[instances.entry.0],
         entry,
         entry_instance.signature,
-        instances::resolve(entry_yield, &entry_instance.bits),
+        instances::resolve(first_arrow, &entry_instance.bits),
     );
     Program {
         functions: builder

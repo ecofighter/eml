@@ -114,6 +114,10 @@ pub struct BodyTypes {
     pub discarded: ArenaMap<ExprId, Vec<(u32, TypeId)>>,
     /// 本体が動く row (関数の型の、引数の数番目の矢印の row) の分類。引数のない値は `Never` である。
     pub body_yield: RowYield,
+    /// 宣言の型の最初の矢印の row の分類。関数型でなければ `Never` である。入口を `()` で呼ぶ関数 `entry$` の印に
+    /// 使う。等式に引数のない入口 (`main = fn () -> ..`) では `body_yield` が使えず、書き出した型の rigid な末尾は名前
+    /// でしか区別できないので、ここで分類しておく (docs/spec/core-ir.md の「`yields` の印」)。
+    pub first_arrow_yield: RowYield,
     /// ラムダの本体が動く row (ラムダで最後にたどった矢印の row) の分類。キーはラムダの式である。
     pub lambda_yields: ArenaMap<ExprId, RowYield>,
     /// 呼び出しの矢印の row の分類。キーは `masks` と同じく、呼び出しの式と矢印の番号である。

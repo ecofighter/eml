@@ -15,21 +15,19 @@ use crate::kind::solve::solve_scc;
 use crate::kind::{Bound, KindOrigin, KindReason, KindVar, Provenance, Span};
 use crate::shape::{Arrows, Own, Shape, constructor_shape, operation_shape, signature_shape};
 use crate::store::{EffectLabel, TypeKind, TypeStore};
-use crate::table::{Exporter, RigidVar, Row, Table, Tail, TyShape};
+use crate::table::{Exporter, RigidVar, Row, Table, TyShape};
 use crate::ty::Linearity;
 use crate::{
     BodyTypes, DeclType, Instantiation, RowYield, TypedProgram, Uniform, Update, carry, codes,
     exhaustive, scc, uniform, usage,
 };
 use constraints::{Failure, show_constraint, solve};
-use yields::row_yield;
 
 mod body;
 mod constraints;
 mod field;
 mod handle;
 mod report;
-mod yields;
 
 use body::BodyCheck;
 pub(crate) use body::{BodyTyping, CallRows};
@@ -448,19 +446,14 @@ pub(crate) fn check_body(
     // のは、表が生きている今だけである (docs/spec/types.md の
     // 「row の具体化の記録」)
     let own_rows = own.rigids.row_vars();
-    let classify = |row: &Row| row_yield(&table, row, &own_rows);
+    let classify = |row: &Row| table.row_yield(row, &own_rows);
     // 本体全体の検査が終わってから `exprs` と一緒に書き出す。後の文の単一化で決まった型引数を含めるためで、
     // carry が足すのは Kind の制約だけである
     for (expr, (decl, args, rows)) in typing.instantiations.iter() {
         let args = args.iter().map(|&arg| exporter.export(arg)).collect();
         let rows = rows
             .iter()
-            .map(|&var| {
-                classify(&Row {
-                    labels: Vec::new(),
-                    tail: Tail::Var(var),
-                })
-            })
+            .map(|&var| table.row_var_yield(var, &own_rows))
             .collect();
         body_types.instantiations.insert(
             expr,
@@ -472,6 +465,10 @@ pub(crate) fn check_body(
         );
     }
     body_types.body_yield = typing.ambient.as_ref().map_or(RowYield::Never, classify);
+    body_types.first_arrow_yield = match table.shape(own.ty) {
+        TyShape::Fn { row, .. } => classify(row),
+        _ => RowYield::Never,
+    };
     for (expr, row) in typing.lambdas.iter() {
         body_types.lambda_yields.insert(expr, classify(row));
     }
