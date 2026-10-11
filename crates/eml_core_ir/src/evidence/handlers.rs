@@ -91,7 +91,7 @@ pub(super) fn lower(
     for (index, block) in blocks.iter_mut().enumerate() {
         let id = BlockId(index as u32);
         debug_assert!(
-            !matches!(block.term, Term::TailCall { .. }),
+            !matches!(block.term, Term::TailCall(_)),
             "translate forms no tail calls"
         );
         let mut out = Out {
@@ -268,7 +268,7 @@ fn runs_in_place(program: &Program, clause: &CoreFn, operation: &OperationInfo) 
                 returns += 1;
             }
             Term::Jump { .. } | Term::Switch { .. } => {}
-            Term::TailCall { .. } => return false,
+            Term::TailCall(_) => return false,
         }
         let tail = tail.map(|(at, _)| at);
         for (at, stmt) in block.stmts.iter().enumerate() {

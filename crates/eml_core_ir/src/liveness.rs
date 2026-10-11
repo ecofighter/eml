@@ -39,7 +39,7 @@ pub(crate) fn live_after_term(
         );
     };
     match term {
-        Term::Return(_) | Term::TailCall { call: _, mask: _ } => {}
+        Term::Return(_) | Term::TailCall(_) => {}
         Term::Jump { target, args: _ } => add(*target, &function.block(*target).params),
         Term::Switch {
             scrutinee: _,

@@ -265,11 +265,9 @@ impl Stmt {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Term {
     Return(Atom),
-    /// 縮約が作る、末尾の呼び出しの要求。`mask` は `Rhs::Call` と同じである (docs/spec/core-ir.md)。
-    TailCall {
-        call: Call,
-        mask: Vec<u32>,
-    },
+    /// 縮約が作る、末尾の呼び出しの要求。縮約は EP の後に走り、EP は `mask` を `evv_mask` の包みに置き換えるので、
+    /// `mask` を持たない (docs/spec/core-ir.md の「`mask` の包み」)。
+    TailCall(Call),
     /// 並列な代入。実引数をすべて読んでから、行き先の引数に書く。
     Jump {
         target: BlockId,
@@ -296,7 +294,7 @@ impl Term {
                 cases,
                 default,
             } => (None, &cases[..], *default),
-            Term::Return(_) | Term::TailCall { call: _, mask: _ } => (None, &[][..], None),
+            Term::Return(_) | Term::TailCall(_) => (None, &[][..], None),
         };
         jump.into_iter()
             .chain(cases.iter().map(|case| case.target))
@@ -317,14 +315,14 @@ impl Term {
                     f(default);
                 }
             }
-            Term::Return(_) | Term::TailCall { call: _, mask: _ } => {}
+            Term::Return(_) | Term::TailCall(_) => {}
         }
     }
 
     pub fn for_each_atom(&self, mut f: impl FnMut(Atom)) {
         match self {
             Term::Return(atom) => f(*atom),
-            Term::TailCall { call, mask: _ } => call.for_each_atom(f),
+            Term::TailCall(call) => call.for_each_atom(f),
             Term::Jump { target: _, args } => args.iter().for_each(|&atom| f(atom)),
             Term::Switch {
                 scrutinee,
@@ -346,7 +344,7 @@ impl Term {
     pub fn for_each_atom_mut(&mut self, mut f: impl FnMut(&mut Atom)) {
         match self {
             Term::Return(atom) => f(atom),
-            Term::TailCall { call, mask: _ } => call.for_each_atom_mut(f),
+            Term::TailCall(call) => call.for_each_atom_mut(f),
             Term::Jump { target: _, args } => args.iter_mut().for_each(f),
             Term::Switch {
                 scrutinee,

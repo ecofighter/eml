@@ -662,7 +662,7 @@ impl Converter<'_> {
                 cases: _,
                 default: _,
             } => {}
-            Term::TailCall { call: _, mask: _ } => {
+            Term::TailCall(_) => {
                 unreachable!("contract forms tail calls after the boxing pass")
             }
         }

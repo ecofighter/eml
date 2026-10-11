@@ -260,23 +260,28 @@ fn g(x.0: int) -> int {
 fn a_tail_call_round_trips() {
     let program = round_trip(
         "\
-effect State { get(tobj) -> tobj, put(tobj) -> tobj }
 fn f(c.0: tobj) -> int {
-  tail mask [State] apply c.0(1)
+  tail apply c.0(1)
 }
 ",
     );
     assert_eq!(
         program.functions[0].blocks[0].term,
-        Term::TailCall {
-            call: Call::Apply {
-                callee: v(0),
-                args: vec![Atom::Int(1)],
-                yields: false,
-            },
-            mask: vec![0],
-        }
+        Term::TailCall(Call::Apply {
+            callee: v(0),
+            args: vec![Atom::Int(1)],
+            yields: false,
+        })
     );
+}
+
+/// 縮約は EP の後に走るので、末尾呼び出しは `mask` を持たない。
+#[test]
+fn a_tail_call_takes_no_mask() {
+    let error = parse_error(
+        "effect State { get(tobj) -> tobj }\nfn f(c.0: tobj) -> int {\n  tail mask [State] apply c.0(1)\n}\n",
+    );
+    assert_eq!(error.to_string(), "line 3: expected a call, found `mask`");
 }
 
 #[test]
@@ -650,10 +655,7 @@ fn f(x.0: int) -> int {
     );
     assert_eq!(
         program.functions[0].blocks[0].term,
-        Term::TailCall {
-            call: Call::Direct(FnIdx(0), vec![v(1)]),
-            mask: Vec::new(),
-        }
+        Term::TailCall(Call::Direct(FnIdx(0), vec![v(1)]))
     );
 }
 
@@ -685,14 +687,11 @@ fn f(c.0: tobj) -> int {
     );
     assert_eq!(
         f.blocks[0].term,
-        Term::TailCall {
-            call: Call::Apply {
-                callee: Atom::Unit,
-                args: vec![v(1)],
-                yields: false,
-            },
-            mask: Vec::new(),
-        }
+        Term::TailCall(Call::Apply {
+            callee: Atom::Unit,
+            args: vec![v(1)],
+            yields: false,
+        })
     );
 }
 
@@ -759,15 +758,12 @@ fn f(x.0: int) -> int {
     // `never` はテキストに書いたとおりに読む。エフェクトの表と合うかは verifier が確かめる
     assert_eq!(
         f.blocks[0].term,
-        Term::TailCall {
-            call: Call::Perform {
-                effect: 0,
-                op: 1,
-                resumable: false,
-                args: vec![v(1)],
-            },
-            mask: Vec::new(),
-        }
+        Term::TailCall(Call::Perform {
+            effect: 0,
+            op: 1,
+            resumable: false,
+            args: vec![v(1)],
+        })
     );
     round_trip(
         "effect Ask { ask(tobj) -> tobj }\nfn f() -> int {\n  tail perform never Ask.ask(1)\n}\n",
@@ -808,9 +804,10 @@ fn a_mask_reads_back() {
     round_trip(
         "\
 effect Main.State { get(tobj) -> tobj, put(tobj) -> tobj }
-fn entry$main(c.0: tobj) -> unit {
+fn entry$main(c.0: tobj) -> tobj {
   let t.1: tobj = mask [Main.State, Main.State] apply c.0(())
-  tail mask [Main.State] apply t.1(())
+  let t.2: tobj = mask [Main.State] apply t.1(())
+  return t.2
 }
 ",
     );
@@ -820,7 +817,8 @@ effect Main.State { get(tobj) -> tobj, put(tobj) -> tobj }
 fn f(c.0: tobj, k.1: tobj) -> int {
   let t.2: int = mask [#3] call f(c.0, k.1) save [c.0]
   let t.3: int = mask [Main.State] resume k.1(t.2, ())
-  tail mask [Main.State] call f(c.0, t.3)
+  let t.4: int = mask [Main.State] call f(c.0, t.3)
+  return t.4
 }
 ",
     );
@@ -1135,10 +1133,7 @@ fn f() -> int {
     let program = round_trip(text);
     assert_eq!(
         program.functions[2].blocks[0].term,
-        Term::TailCall {
-            call: Call::Direct(FnIdx(1), vec![v(0)]),
-            mask: Vec::new(),
-        }
+        Term::TailCall(Call::Direct(FnIdx(1), vec![v(0)]))
     );
 }
 
@@ -1203,7 +1198,7 @@ fn a_mask_on_handle_perform_or_a_non_call_is_an_error() {
     assert_eq!(error.message, "a mask is only on call, apply and resume");
 
     let error = parse_error(
-        "effect Ask { ask(tobj) -> tobj }\nfn f() -> int {\n  tail mask [Ask] perform Ask.ask(1)\n}\n",
+        "effect Ask { ask(tobj) -> tobj }\nfn f() -> int {\n  let t.0: int = mask [Ask] perform Ask.ask(1)\n  return t.0\n}\n",
     );
     assert_eq!(error.line, 3);
     assert_eq!(error.message, "a mask is only on call, apply and resume");
@@ -1218,7 +1213,9 @@ fn a_mask_on_handle_perform_or_a_non_call_is_an_error() {
 /// `pretty` は空の `mask` と `save` を書かないので、読み直した表示が元と変わる形は読まない。
 #[test]
 fn an_empty_mask_or_save_is_an_error() {
-    let error = parse_error("fn g(x.0: int) -> int {\n  tail mask [] call g(1)\n}\n");
+    let error = parse_error(
+        "fn g(x.0: int) -> int {\n  let y.1: int = mask [] call g(1)\n  return y.1\n}\n",
+    );
     assert_eq!(error.line, 2);
     assert_eq!(error.message, "an empty mask");
 
@@ -1681,7 +1678,7 @@ fn an_operation_of_an_unknown_effect_is_written_by_number() {
 fn a_clause_call_takes_no_mask() {
     assert_eq!(
         parse_error(
-            "effect State { get(unit) -> tobj }\nfn f(c.0: tobj, e.1: obj) -> tobj {\n  tail mask [State] clause State.get c.0(e.1, ())\n}\n"
+            "effect State { get(unit) -> tobj }\nfn f(c.0: tobj, e.1: obj) -> tobj {\n  let t.2: tobj = mask [State] clause State.get c.0(e.1, ())\n  return t.2\n}\n"
         )
         .to_string(),
         "line 3: a mask is only on call, apply and resume"

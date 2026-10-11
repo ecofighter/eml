@@ -4,7 +4,7 @@ use eml_core_ir::{BlockId, FnIdx, Loc, Program, Rhs, Stmt, Term, VarId};
 use eml_runtime::{Closure, HeapError, OutputSink, Payload, Value};
 
 use crate::error::{Fault, RuntimeError, SourceLocation};
-use crate::runtime::{Env, Runtime, Step, Transfer};
+use crate::runtime::{EFFECT_INSTRUCTION, Env, Runtime, Step, Transfer};
 
 /// 止まった理由と、それを起こした extern の呼び出しの位置。
 pub(crate) struct Failure {
@@ -104,10 +104,15 @@ impl<'p> Machine<'p> {
     fn bind(&mut self, var: VarId, rhs: &'p Rhs) -> Result<Step, Failure> {
         let value = match rhs {
             Rhs::Call { call, mask, saved } => {
+                // `mask` は EP が `evv_mask` の包みに置き換えるので、ここに届けば内部の誤りである
+                // (docs/spec/core-ir.md の「インタプリタ (CEK 機械)」)
+                if !mask.is_empty() {
+                    return Err(EFFECT_INSTRUCTION.into());
+                }
                 let saved = self.env.save(saved)?;
                 let resume = resume_address(self.block, self.stmt);
                 self.rt.push_return(self.function, resume, saved);
-                let transfer = self.rt.call(call, mask, &self.env)?;
+                let transfer = self.rt.call(call, &self.env)?;
                 return Ok(self.transfer(transfer)?);
             }
             Rhs::MakeClosure(function, args) => {
@@ -217,8 +222,8 @@ impl<'p> Machine<'p> {
             }
             // 呼び出し元のフレームを積まない。verifier が、この時点で所有している参照が残っていないことを保証するので、
             // 今の環境はそのまま捨ててよい (docs/spec/core-ir.md)
-            Term::TailCall { call, mask } => {
-                let transfer = self.rt.call(call, mask, &self.env)?;
+            Term::TailCall(call) => {
+                let transfer = self.rt.call(call, &self.env)?;
                 self.transfer(transfer)
             }
             // 並列な代入。実引数をすべて読んでから、行き先の引数に書く (docs/spec/core-ir.md)

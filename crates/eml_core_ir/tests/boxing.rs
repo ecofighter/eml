@@ -43,7 +43,7 @@ fn uses_evidence(program: &Program) -> bool {
                         rhs: Rhs::Call { call, .. },
                     } => evidence_call(call),
                     _ => false,
-                }) || matches!(&block.term, Term::TailCall { call, .. } if evidence_call(call))
+                }) || matches!(&block.term, Term::TailCall(call) if evidence_call(call))
             })
     })
 }

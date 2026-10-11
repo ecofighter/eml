@@ -36,7 +36,7 @@ pub fn contract(program: &mut Program) {
 /// する。互換は推移的でないので、x を通してつながっていた2つの位置が、直接つないでも互換かを確かめる。結果は、直接の
 /// 呼び出しなら呼ばれる関数の `ret`、節の呼び出しなら操作の `ret`、関数値の適用なら `tobj` である。`never` の操作の
 /// 節の呼び出しは戻らないので、どの `ret` とも互換とする (docs/spec/core-ir.md の「縮約」)。`saved` は Perceus が
-/// 決めるので、この時点では空である。`mask` は EP が `evv_mask` の包みに置き換えたので、空のまま運ぶ。
+/// 決めるので、この時点では空である。`mask` も、EP が `evv_mask` の包みに置き換えたので空である。
 fn tail_call(block: &mut Block, ret: Repr, rets: &[Repr], effects: &[EffectInfo]) {
     let Term::Return(Atom::Var(returned)) = block.term else {
         return;
@@ -45,7 +45,7 @@ fn tail_call(block: &mut Block, ret: Repr, rets: &[Repr], effects: &[EffectInfo]
         var,
         rhs: Rhs::Call {
             call,
-            mask: _,
+            mask,
             saved: _,
         },
     }) = block.stmts.last()
@@ -55,6 +55,7 @@ fn tail_call(block: &mut Block, ret: Repr, rets: &[Repr], effects: &[EffectInfo]
     if *var != returned {
         return;
     }
+    debug_assert!(mask.is_empty(), "a mask reaches contract");
     let compatible = match call {
         Call::Direct(target, _) => rets[target.0 as usize].compatible(ret),
         Call::Apply { .. } => Repr::TObj.compatible(ret),
@@ -78,14 +79,14 @@ fn tail_call(block: &mut Block, ret: Repr, rets: &[Repr], effects: &[EffectInfo]
         var: _,
         rhs: Rhs::Call {
             call,
-            mask,
+            mask: _,
             saved: _,
         },
     }) = block.stmts.pop()
     else {
         unreachable!("the last statement was checked above");
     };
-    block.term = Term::TailCall { call, mask };
+    block.term = Term::TailCall(call);
 }
 
 /// 使われない純粋な `let` を消し、1つでも消したかを返す。定義は使う位置を支配し、辺は番号の大きい

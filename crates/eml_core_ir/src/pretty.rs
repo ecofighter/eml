@@ -167,9 +167,7 @@ impl Printer<'_> {
         }
         let text = match &block.term {
             Term::Return(a) => format!("return {}", self.atom(function, a)),
-            Term::TailCall { call, mask } => {
-                format!("tail {}{}", self.mask(mask), self.call(function, call))
-            }
+            Term::TailCall(call) => format!("tail {}", self.call(function, call)),
             Term::Jump { target, args } => {
                 format!("jump b{}({})", target.0, self.atoms(function, args))
             }

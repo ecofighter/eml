@@ -586,14 +586,14 @@ impl<'t> Parser<'t> {
                 }
                 "return" => break Term::Return(self.atom(state)?),
                 "tail" => {
-                    let (mask, call) = self.masked_call(state)?;
+                    let call = self.call(state)?;
                     if self.at_word("save") {
                         return Err(error(
                             line,
                             "a tail call saves nothing; `save` is only on `let`",
                         ));
                     }
-                    break Term::TailCall { call, mask };
+                    break Term::TailCall(call);
                 }
                 "jump" => {
                     let target = self.target(state)?;

@@ -7,7 +7,8 @@ use eml_runtime::{Closure, Frame, Heap, HeapError, ObjRef, OutputSink, Payload, 
 use crate::RunStats;
 use crate::error::{Fault, RuntimeError};
 
-const EFFECT_INSTRUCTION: Fault = Fault::Internal("an effect instruction reaches the interpreter");
+pub(crate) const EFFECT_INSTRUCTION: Fault =
+    Fault::Internal("an effect instruction reaches the interpreter");
 
 /// 1つの命令を実行した後の状態。
 pub(crate) enum Step {
@@ -243,13 +244,9 @@ impl<'p> Runtime<'p> {
     }
 
     /// 呼び出す。末尾でない呼び出しでは、機械が先に戻りのフレームを積んでいる。引数はフレームを積んだ後に読む。
-    /// 環境の読み出しはスロットを書き換えないので、順序は結果に影響しない。エフェクトの命令と `mask` は EP が基本操作に
-    /// 置き換えるので、ここに届けば内部の誤りである
-    /// (docs/spec/core-ir.md の「インタプリタ (CEK 機械)」)。
-    pub(crate) fn call(&mut self, call: &Call, mask: &[u32], env: &Env) -> Result<Transfer, Fault> {
-        if !mask.is_empty() {
-            return Err(EFFECT_INSTRUCTION);
-        }
+    /// 環境の読み出しはスロットを書き換えないので、順序は結果に影響しない。エフェクトの命令は EP が基本操作に置き換える
+    /// ので、ここに届けば内部の誤りである (docs/spec/core-ir.md の「インタプリタ (CEK 機械)」)。
+    pub(crate) fn call(&mut self, call: &Call, env: &Env) -> Result<Transfer, Fault> {
         match call {
             Call::Direct(callee, args) => Ok(Transfer::Enter(*callee, env.atoms(args)?)),
             Call::Apply {

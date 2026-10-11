@@ -294,7 +294,7 @@ fn shape(function: &CoreFn) -> Result<Dominators, String> {
                     cases: _,
                     default: _,
                 } => switches_in[to as usize] += 1,
-                Term::Return(_) | Term::TailCall { call: _, mask: _ } => {
+                Term::Return(_) | Term::TailCall(_) => {
                     unreachable!("a return and a tail call have no successors")
                 }
             }
@@ -756,11 +756,10 @@ impl<'a> Checker<'a> {
                 }
                 self.nothing_owned(&owned)
             }
-            Term::TailCall { call, mask } => {
+            Term::TailCall(call) => {
                 if self.level < Level::Scopes {
                     return Err(format!("{} is formed before contract", tail_text(call)));
                 }
-                self.check_mask(call, mask)?;
                 self.check_call(&mut owned, call, Receiver::Tail)?;
                 self.nothing_owned(&owned)
             }
