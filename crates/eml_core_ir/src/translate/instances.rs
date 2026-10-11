@@ -1,5 +1,6 @@
-//! 単相化の instance の表 (docs/spec/core-ir.md の「変換の規則」)。本体を変換する前に、入口から届く (関数, 型引数)
-//! の組と生成する関数をすべて集め、番号の順を決める。変換はこの表を読むだけで、変換の途中で instance を足さない。
+//! 単相化の instance の表 (docs/spec/core-ir.md の「変換の規則」)。本体を変換する前に、入口から届く (関数, 型引数,
+//! row のビット) の組と生成する関数をすべて集め、番号の順を決める。変換はこの表を読むだけで、変換の途中で instance
+//! を足さない。
 
 use std::collections::{HashMap, HashSet, VecDeque};
 
@@ -9,8 +10,8 @@ use eml_hir::{
     Program as HirProgram, TypeDefKind, ValueItem,
 };
 use eml_types::{
-    BodyTypes, InstanceNode, Instantiation, Resolution, Substitution, TypeId, TypeKind, TypeStore,
-    TypedProgram, Update,
+    BodyTypes, InstanceNode, Instantiation, Resolution, RowYield, Substitution, TypeId, TypeKind,
+    TypeStore, TypedProgram, Update,
 };
 use la_arena::ArenaMap;
 
@@ -49,6 +50,8 @@ pub(super) struct FunctionInstance {
         reason = "名前は `Found` の型引数から作るので、今は読む所がない。証拠を決める段で読む"
     )]
     pub(super) args: Vec<TypeId>,
+    /// シグネチャの row 変数の順の、row が yield しうるかのビット。鍵の一部である。
+    pub(super) bits: Vec<bool>,
     /// 宣言の型に instance の代入をかけた型。引数と `ret` の Repr を決める。
     pub(super) signature: TypeId,
     /// 本体の型に代入をかけた表。`None` なら型検査の表をそのまま使う。
@@ -129,6 +132,7 @@ enum Found {
 struct FoundFunction {
     function: FunctionId,
     args: Vec<TypeId>,
+    bits: Vec<bool>,
     signature: TypeId,
     types: Option<Box<BodyTypes>>,
     targets: ArenaMap<ExprId, FoundTarget>,
@@ -156,15 +160,15 @@ struct Collector<'a> {
     typed: &'a TypedProgram,
     store: TypeStore,
     found: Vec<Found>,
-    keys: HashMap<(FunctionId, Vec<TypeId>), usize>,
+    keys: HashMap<(FunctionId, Vec<TypeId>, Vec<bool>), usize>,
     generated_keys: HashMap<Generated, usize>,
     queue: VecDeque<usize>,
 }
 
 impl Collector<'_> {
-    /// (関数, 鍵) の instance の位置。初めての組なら足して、本体をたどる列に入れる。`signature` は宣言の型のまま
-    /// 入れ、本体をたどるときに代入をかけた型に置き換える。
-    fn add(&mut self, function: FunctionId, args: Vec<TypeId>) -> usize {
+    /// (関数, 型引数, row のビット) の instance の位置。初めての組なら足して、本体をたどる列に入れる。`signature` は
+    /// 宣言の型のまま入れ、本体をたどるときに代入をかけた型に置き換える。
+    fn add(&mut self, function: FunctionId, args: Vec<TypeId>, bits: Vec<bool>) -> usize {
         let Collector {
             typed,
             found,
@@ -172,21 +176,26 @@ impl Collector<'_> {
             queue,
             ..
         } = self;
-        *keys.entry((function, args.clone())).or_insert_with(|| {
-            found.push(Found::Function(FoundFunction {
-                function,
-                args,
-                signature: typed.decls[&ValueItem::Function(function)].ty,
-                types: None,
-                targets: ArenaMap::default(),
-            }));
-            queue.push_back(found.len() - 1);
-            found.len() - 1
-        })
+        *keys
+            .entry((function, args.clone(), bits.clone()))
+            .or_insert_with(|| {
+                found.push(Found::Function(FoundFunction {
+                    function,
+                    args,
+                    bits,
+                    signature: typed.decls[&ValueItem::Function(function)].ty,
+                    types: None,
+                    targets: ArenaMap::default(),
+                }));
+                queue.push_back(found.len() - 1);
+                found.len() - 1
+            })
     }
 
-    /// 型引数 `args` の参照の行き先 `function` の instance。一様な位置の型引数は `Flexible` にする。
-    fn add_uniform(&mut self, function: FunctionId, args: &[TypeId]) -> usize {
+    /// 型引数 `args` と row のビット `bits` の参照の行き先 `function` の instance。一様な位置の型引数は `Flexible`
+    /// にする。row のビットには一様な位置を当てはめない (docs/superpowers/specs/2026-10-11-s7-evidence-passing-design.md
+    /// の「row のビットと instance の鍵」)。
+    fn add_uniform(&mut self, function: FunctionId, args: &[TypeId], bits: Vec<bool>) -> usize {
         let key = args
             .iter()
             .enumerate()
@@ -198,7 +207,7 @@ impl Collector<'_> {
                 }
             })
             .collect();
-        self.add(function, key)
+        self.add(function, key, bits)
     }
 
     /// 生成する関数の位置。鍵の型引数は、instance の節点の一様な位置で `Flexible` にする。初めての鍵なら足して、
@@ -238,8 +247,10 @@ impl Collector<'_> {
     /// メソッドの参照の行き先 (docs/spec/core-ir.md の「メソッドの解決」)。
     /// `args` は代入をかけた後の型引数で、先頭がクラスの型変数の型である。型検査が制約をすべて具体的な型で解いて
     /// いるので、ここで `Given` と `Missing` に出会うことはない。導出した instance とタプルの instance の中心の
-    /// メソッドは生成する関数へ、ほかのメソッドはクラスの既定のメソッドへ向かう。
-    fn method_target(&mut self, method: MethodId, args: &[TypeId]) -> FoundTarget {
+    /// メソッドは生成する関数へ、ほかのメソッドはクラスの既定のメソッドへ向かう。`bits` はメソッドのシグネチャの row
+    /// 変数の順のビットである。instance のメソッドの関数と既定のメソッドの関数は同じ順の row 変数を持つので、そのまま
+    /// 渡す。生成する関数は row 変数を持たない。
+    fn method_target(&mut self, method: MethodId, args: &[TypeId], bits: Vec<bool>) -> FoundTarget {
         let hir = self.hir;
         let class = hir[method].class;
         let core = hir.core_method(method);
@@ -265,10 +276,10 @@ impl Collector<'_> {
                 _ => match hir[instance].method(method) {
                     Some(MethodImpl::Function(function)) => {
                         let key: Vec<TypeId> = head.iter().chain(&args[1..]).copied().collect();
-                        FoundTarget::Function(self.add_uniform(function, &key))
+                        FoundTarget::Function(self.add_uniform(function, &key, bits))
                     }
                     Some(MethodImpl::Extern(row)) => FoundTarget::Extern(row),
-                    None => self.default_target(method, args),
+                    None => self.default_target(method, args, bits),
                 },
             },
             Resolution::Tuple(elements) => match core {
@@ -277,7 +288,7 @@ impl Collector<'_> {
                     method: core.into(),
                     args: elements,
                 })),
-                None => self.default_target(method, args),
+                None => self.default_target(method, args, bits),
             },
             other @ (Resolution::Given | Resolution::Missing) => unreachable!(
                 "the type checker resolves every method reference at a concrete type, found {other:?}"
@@ -285,11 +296,16 @@ impl Collector<'_> {
         }
     }
 
-    fn default_target(&mut self, method: MethodId, args: &[TypeId]) -> FoundTarget {
+    fn default_target(
+        &mut self,
+        method: MethodId,
+        args: &[TypeId],
+        bits: Vec<bool>,
+    ) -> FoundTarget {
         let default = self.hir[method]
             .default
             .expect("HIR reports a missing method without a default (E1036)");
-        FoundTarget::Function(self.add_uniform(default, args))
+        FoundTarget::Function(self.add_uniform(default, args, bits))
     }
 
     /// HIR の関数の instance の本体をたどり、代入をかけた型と参照の行き先を記録する。
@@ -299,6 +315,7 @@ impl Collector<'_> {
             unreachable!("called for a function instance")
         };
         let function = found.function;
+        let bits = found.bits.clone();
         let body = typed
             .bodies
             .get(function)
@@ -321,13 +338,20 @@ impl Collector<'_> {
                 .iter()
                 .map(|&arg| self.store.substitute(arg, &mut subst))
                 .collect();
+            let row_bits = || {
+                instantiation
+                    .rows
+                    .iter()
+                    .map(|&row| resolve(row, &bits))
+                    .collect()
+            };
             match instantiation.decl {
                 ValueItem::Function(callee) if hir[callee].kind == FunctionKind::Defined => {
-                    let target = self.add_uniform(callee, &args);
+                    let target = self.add_uniform(callee, &args, row_bits());
                     targets.insert(expr, FoundTarget::Function(target));
                 }
                 ValueItem::Method(method) => {
-                    targets.insert(expr, self.method_target(method, &args));
+                    targets.insert(expr, self.method_target(method, &args, row_bits()));
                 }
                 _ => {}
             }
@@ -439,7 +463,7 @@ impl Collector<'_> {
             fields
                 .iter()
                 .flatten()
-                .map(|&field| collector.method_target(method, &[field]))
+                .map(|&field| collector.method_target(method, &[field], Vec::new()))
                 .collect()
         };
         let mut tag = None;
@@ -531,7 +555,10 @@ pub(super) fn collect(hir: &HirProgram, typed: &TypedProgram, entry: FunctionId)
     };
     // 入口は呼び出し側が選ぶので、型変数を持つ関数なら、どの型でも動く一様な instance にする
     let entry_args = vec![collector.store.flexible(); type_vars(hir, entry).len()];
-    let entry_index = collector.add(entry, entry_args);
+    // row のビットも呼び出し側が決めるので、安全側に倒してすべて立てる
+    // (docs/superpowers/specs/2026-10-11-s7-evidence-passing-design.md の「row のビットと instance の鍵」)
+    let entry_bits = vec![true; row_vars(hir, entry).len()];
+    let entry_index = collector.add(entry, entry_args, entry_bits);
     // 先に見つけた instance から順にたどる。番号の順と名前が変換の順によらないようにするため
     while let Some(index) = collector.queue.pop_front() {
         match collector.found[index] {
@@ -558,16 +585,58 @@ fn type_vars(hir: &HirProgram, function: FunctionId) -> Vec<String> {
         .unwrap_or_default()
 }
 
+/// シグネチャの row 変数の名前。並びは具体化の表の `rows` と、instance の row のビットの順と同じである。
+fn row_vars(hir: &HirProgram, function: FunctionId) -> Vec<String> {
+    hir[function]
+        .signature
+        .as_ref()
+        .map(|signature| {
+            signature
+                .generics
+                .row_vars
+                .iter()
+                .map(|(_, var)| var.name.clone())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// 参照の row の分類を、参照を含む instance の row のビットで解く。立てば、その row で動く関数は yield しうる。
+pub(super) fn resolve(row: RowYield, bits: &[bool]) -> bool {
+    match row {
+        RowYield::Never => false,
+        RowYield::Always => true,
+        RowYield::Var(i) => bits[i as usize],
+    }
+}
+
+/// instance の名前の後ろに付ける、立ったビットの row 変数を `<e, f>` の形で並べた部分。ビットが立たなければ空である
+/// (docs/superpowers/specs/2026-10-11-s7-evidence-passing-design.md の「row のビットと instance の鍵」)。
+fn row_suffix(names: &[String], bits: &[bool]) -> String {
+    let set: Vec<&str> = names
+        .iter()
+        .zip(bits)
+        .filter(|&(_, &bit)| bit)
+        .map(|(name, _)| name.as_str())
+        .collect();
+    if set.is_empty() {
+        String::new()
+    } else {
+        format!("<{}>", set.join(", "))
+    }
+}
+
 /// `@[` と `]` の間の上限の文字数。部分を共有する型では表示が指数の長さになるので、超えたら順番の名前にする。
 const NAME_LIMIT: usize = 64;
 
 /// 型変数を持つ関数の instance の名前 (docs/spec/core-ir.md の「変換の規則」)。`ordinal` は、その関数の instance の
-/// 中の順番 (1 から数える) である。
+/// 中の順番 (1 から数える) である。`suffix` は row のビットの部分 (`row_suffix`) で、どちらの形の名前にも付ける。
 fn instance_name(
     store: &TypeStore,
     hir: &HirProgram,
     base: &str,
     args: &[TypeId],
+    suffix: &str,
     ordinal: usize,
     taken: &mut HashSet<String>,
 ) -> String {
@@ -579,13 +648,13 @@ fn instance_name(
         .map(|shown| shown.join(", "))
         .filter(|inner| inner.chars().count() <= NAME_LIMIT);
     if let Some(inner) = inner {
-        let name = format!("{base}@[{inner}]");
+        let name = format!("{base}@[{inner}]{suffix}");
         // 異なる型が同じ表示になる (row の末尾の表示など) ときは、後の instance を順番の名前にする
         if taken.insert(name.clone()) {
             return name;
         }
     }
-    let name = format!("{base}@{ordinal}");
+    let name = format!("{base}@{ordinal}{suffix}");
     taken.insert(name.clone());
     name
 }
@@ -650,16 +719,26 @@ fn order(hir: &HirProgram, found: Vec<Found>, entry: usize, store: TypeStore) ->
                     let base = core_name(hir, found.function.module, &hir[found.function].name);
                     let ordinal = ordinals.entry(found.function).or_default();
                     *ordinal += 1;
+                    let suffix = row_suffix(&row_vars(hir, found.function), &found.bits);
                     let name = if type_vars(hir, found.function).is_empty() {
-                        base
+                        format!("{base}{suffix}")
                     } else {
-                        instance_name(&store, hir, &base, &found.args, *ordinal, &mut taken)
+                        instance_name(
+                            &store,
+                            hir,
+                            &base,
+                            &found.args,
+                            &suffix,
+                            *ordinal,
+                            &mut taken,
+                        )
                     };
                     Instance {
                         name,
                         kind: InstanceKind::Function(FunctionInstance {
                             function: found.function,
                             args: found.args,
+                            bits: found.bits,
                             signature: found.signature,
                             types: found.types,
                             targets: found
@@ -684,7 +763,15 @@ fn order(hir: &HirProgram, found: Vec<Found>, entry: usize, store: TypeStore) ->
                     let name = if generated.args.is_empty() {
                         base
                     } else {
-                        instance_name(&store, hir, &base, &generated.args, *ordinal, &mut taken)
+                        instance_name(
+                            &store,
+                            hir,
+                            &base,
+                            &generated.args,
+                            "",
+                            *ordinal,
+                            &mut taken,
+                        )
                     };
                     Instance {
                         name,

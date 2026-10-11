@@ -192,7 +192,7 @@ impl FnBuilder {
     /// 大きいブロックから見るので、`return` に変わったブロックが次に消せる形になっても、同じ1回のループで消える。
     /// 消したブロックを詰めて、番号を振り直す。末尾呼び出しはここでは作らず、縮約に任せる (docs/spec/core-ir.md)。
     /// `internal` は内部の関数の印 (`CoreFn::internal`) である。
-    pub(super) fn finish(self, name: String, internal: bool, ret: Repr) -> CoreFn {
+    pub(super) fn finish(self, name: String, internal: bool, yields: bool, ret: Repr) -> CoreFn {
         debug_assert!(
             self.labels.iter().all(|label| label.pending.is_empty()),
             "every label is resolved"
@@ -248,7 +248,7 @@ impl FnBuilder {
         CoreFn {
             name,
             internal,
-            yields: false,
+            yields,
             vars: self.vars,
             ret,
             blocks,

@@ -7,7 +7,7 @@ use eml_hir::{
     ConstructorId, EffectDef, EffectId, EffectKind, FunctionId, ModuleId, OpMultiplicity,
     OperationId, Program as HirProgram, TypeDefId, TypeDefKind, ValueItem,
 };
-use eml_types::{TypeId, TypeStore, TypedProgram};
+use eml_types::{RowTail, TypeId, TypeKind, TypeStore, TypedProgram};
 
 use crate::{
     Atom, Call, CoreFn, Ctor, EffectInfo, FnIdx, Layout, LayoutCtor, LayoutId, Loc, OpRet,
@@ -183,9 +183,12 @@ impl ProgramBuilder {
     }
 
     /// 引数を受け、`rhs` の値を返すだけの内部の関数を作る。包む関数に使う。呼び出しの右辺は縮約が末尾呼び出しにする。
+    /// `yields` は作る関数の印である (docs/superpowers/specs/2026-10-11-s7-evidence-passing-design.md の
+    /// 「`yields` の印」)。
     fn simple(
         &mut self,
         name: String,
+        yields: bool,
         params: Vec<VarInfo>,
         rhs: impl FnOnce(Vec<Atom>) -> Rhs,
         result: VarInfo,
@@ -203,7 +206,7 @@ impl ProgramBuilder {
             rhs: rhs(args),
         });
         builder.terminate(Term::Return(Atom::Var(var)));
-        let core = builder.finish(name, true, ret);
+        let core = builder.finish(name, true, yields, ret);
         self.finish(function, core);
         function
     }
@@ -230,8 +233,10 @@ impl ProgramBuilder {
             params.push(param("s"));
         }
         let name = if stateful { "cont$state" } else { "cont$" };
+        // どの文脈からも呼ばれるので、yield しうるとみなす
         let function = self.simple(
             name.to_string(),
+            true,
             params,
             |args| {
                 let mut args = args.into_iter();
@@ -277,6 +282,7 @@ impl ProgramBuilder {
         let name = format!("op${}", core_name(hir, op.module, &operation.name));
         let function = self.simple(
             name,
+            true,
             params,
             |args| Rhs::Call {
                 call: perform_call(hir, op, args),
@@ -310,6 +316,7 @@ impl ProgramBuilder {
         let ctor_id = self.ctor(hir, types, ctor);
         let function = self.simple(
             name,
+            false,
             params,
             |args| Rhs::Con {
                 ctor: ctor_id,
@@ -347,6 +354,7 @@ impl ProgramBuilder {
             .collect();
         self.simple(
             name,
+            false,
             params,
             |args| Rhs::Extern {
                 ext: row,
@@ -358,7 +366,8 @@ impl ProgramBuilder {
     }
 
     /// 入口の関数を `()` で呼ぶ関数を作る。名前は `entry$` に入口の関数の名前を続ける。等式に引数のない
-    /// `main = fn () -> ...` は関数値を返すので、返った値に `()` を適用する (docs/spec/core-ir.md)。
+    /// `main = fn () -> ...` は関数値を返すので、返った値に `()` を適用する (docs/spec/core-ir.md)。`yields` は入口の
+    /// instance の印である。
     pub(super) fn entry(
         &mut self,
         hir: &HirProgram,
@@ -366,6 +375,7 @@ impl ProgramBuilder {
         target: FnIdx,
         target_id: FunctionId,
         target_type: TypeId,
+        yields: bool,
     ) -> FnIdx {
         let function = self.reserve(0);
         let name = format!(
@@ -376,19 +386,22 @@ impl ProgramBuilder {
         let (_, result_type) = split_arrows(types, target_type, 1);
         let mut builder = FnBuilder::new();
         let unit = vec![Atom::Unit];
-        let call = if self.arity(target) == 0 {
+        let (call, yields) = if self.arity(target) == 0 {
+            // 引数のない値の instance は印を持たないので、`()` を渡す矢印の row から決める
+            let yields = first_arrow_yields(hir, types, target_type);
             let value = builder.var(var_info("f", types, target_type, hir));
             builder.emit(Stmt::Let {
                 var: value,
                 rhs: plain_call(Call::Direct(target, Vec::new())),
             });
-            Call::Apply {
+            let call = Call::Apply {
                 callee: Atom::Var(value),
                 args: unit,
-                yields: false,
-            }
+                yields,
+            };
+            (call, yields)
         } else {
-            Call::Direct(target, unit)
+            (Call::Direct(target, unit), yields)
         };
         let result = builder.var(var_info("t", types, result_type, hir));
         builder.emit(Stmt::Let {
@@ -397,9 +410,25 @@ impl ProgramBuilder {
         });
         builder.terminate(Term::Return(Atom::Var(result)));
         // 入口の関数は実行系が外から呼ぶので、内部の関数でない
-        let core = builder.finish(name, false, repr(types, result_type, hir));
+        let core = builder.finish(name, false, yields, repr(types, result_type, hir));
         self.finish(function, core);
         function
+    }
+}
+
+/// 入口の関数の型の最初の矢印の row が yield しうるか。入口の instance の row のビットはすべて立つので、宣言の型の
+/// row 変数の末尾は立つ側に解く (docs/superpowers/specs/2026-10-11-s7-evidence-passing-design.md の
+/// 「row のビットと instance の鍵」)。宣言の型の rigid な末尾は入口の関数自身の row 変数だけなので、名前で区別
+/// できなくても取り違えない。
+fn first_arrow_yields(hir: &HirProgram, types: &TypeStore, ty: TypeId) -> bool {
+    match types.kind(ty) {
+        TypeKind::Fn { effects, tail, .. } => {
+            effects
+                .iter()
+                .any(|label| hir[label.id].kind == EffectKind::Defined)
+                || matches!(tail, Some(RowTail::Rigid(_)))
+        }
+        _ => false,
     }
 }
 

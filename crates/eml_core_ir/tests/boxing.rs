@@ -241,7 +241,7 @@ fn a_function_that_fails_with_a_never_operation_keeps_its_scalar_ret() {
     // `never` の操作の `perform` は戻らないので、T3 は見ない。結果も受け直さない
     let text = "effect Fail where\n  never fail : String -> a\n\ncheck_positive : Int -> <Fail> Int\ncheck_positive n =\n  if n > 0 then n else fail \"not positive\"\n\nmain : Unit -> <IO> Unit\nmain () =\n  let r = handle check_positive 1 with\n    | fail message -> 0\n  println (show r)";
     insta::assert_snapshot!(function(&core_text(text, Pass::Boxing), "check_positive"), @r#"
-    fn check_positive(n.0: int) -> int {
+    yields fn check_positive(n.0: int) -> int {
       let t.1: enum = extern "Prelude.Ord Int.>"(n.0, 0)
       switch t.1 Prelude.Bool { #0 -> b1, #1 -> b2 }
     b1:
@@ -254,7 +254,7 @@ fn a_function_that_fails_with_a_never_operation_keeps_its_scalar_ret() {
     "#);
     // 縮約は、`never` の操作の `perform` をどの `ret` の関数でも末尾呼び出しにする
     insta::assert_snapshot!(function(&core_text(text, Pass::Contract), "check_positive"), @r#"
-    fn check_positive(n.0: int) -> int {
+    yields fn check_positive(n.0: int) -> int {
       let t.1: enum = extern "Prelude.Ord Int.>"(n.0, 0)
       switch t.1 Prelude.Bool { #0 -> b1, #1 -> b2 }
     b1:
@@ -272,7 +272,7 @@ fn a_value_lambda_that_fails_ends_in_a_tail_never_perform() {
     // 届かないからである。縮約は、その `return` を末尾呼び出しにする
     let text = "effect Fail where\n  never fail : String -> a\n\napply_to : (Int -> <e> Int) -> Int -> <e> Int\napply_to f x = f x\n\nmain : Unit -> <IO> Unit\nmain () =\n  let r = handle apply_to (fn n -> if n > 0 then n else fail \"neg\") 1 with\n    | fail message -> 0\n  println (show r)";
     insta::assert_snapshot!(function(&core_text(text, Pass::Boxing), "main$lambda0"), @r#"
-    internal fn main$lambda0(n.4: tobj) -> tobj {
+    internal yields fn main$lambda0(n.4: tobj) -> tobj {
       let n.0: int = unbox n.4
       let t.1: enum = extern "Prelude.Ord Int.>"(n.0, 0)
       switch t.1 Prelude.Bool { #0 -> b1, #1 -> b2 }
@@ -285,7 +285,7 @@ fn a_value_lambda_that_fails_ends_in_a_tail_never_perform() {
     }
     "#);
     insta::assert_snapshot!(function(&core_text(text, Pass::Contract), "main$lambda0"), @r#"
-    internal fn main$lambda0(n.4: tobj) -> tobj {
+    internal yields fn main$lambda0(n.4: tobj) -> tobj {
       let n.0: int = unbox n.4
       let t.1: enum = extern "Prelude.Ord Int.>"(n.0, 0)
       switch t.1 Prelude.Bool { #0 -> b1, #1 -> b2 }
@@ -343,7 +343,7 @@ fn a_tail_call_off_any_loop_may_stay_an_ordinary_call() {
     // 末尾呼び出しにならないが、関数の値を通るループの上にないので、積むフレームは有界である
     let text = "effect Ask where\n  ask : Unit -> Int\n\nanswer : Unit -> <Ask> Int\nanswer () = ask () + 1\n\nmain : Unit -> <IO> Unit\nmain () =\n  let r = handle answer () with\n    | ask () k -> k 1\n  println (show r)";
     insta::assert_snapshot!(function(&core_text(text, Pass::Contract), "main$handle0"), @"
-    internal fn main$handle0(p.0: unit) -> tobj {
+    internal yields fn main$handle0(p.0: unit) -> tobj {
       let t.1: int = call answer(())
       let t.2: tobj = box t.1
       return t.2

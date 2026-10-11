@@ -150,6 +150,43 @@ fn a_long_shared_type_argument_gets_an_ordinal_name() {
 }
 
 #[test]
+fn a_row_polymorphic_function_has_an_instance_per_row_bit() {
+    let text = "effect Ask where\n  ask : Unit -> Int\n\ntwice : (Unit -> <e> Int) -> <e> Int\ntwice f = f () + f ()\n\nmain : Unit -> <IO> Unit\nmain () =\n  println (show (twice (fn () -> 1)))\n  println (show (handle twice ask with\n    | ask () k -> k 2))";
+    let shown = core_text(text, Pass::Translate);
+    // 純粋な instance は今の名前で印がなく、yield しうる instance は `<e>` を持つ
+    insta::assert_snapshot!(function(&shown, "twice"), @"
+    fn twice(f.0: tobj) -> int {
+      let t.1: int = apply f.0(())
+      let t.2: int = apply f.0(())
+      let t.3: int = extern Prelude.+(t.1, t.2)
+      return t.3
+    }
+    ");
+    insta::assert_snapshot!(function(&shown, "twice<e>"), @r#"
+    yields fn "twice<e>"(f.0: tobj) -> int {
+      let t.1: int = yields apply f.0(())
+      let t.2: int = yields apply f.0(())
+      let t.3: int = extern Prelude.+(t.1, t.2)
+      return t.3
+    }
+    "#);
+}
+
+#[test]
+fn an_apply_is_split_after_an_arrow_that_may_yield() {
+    let text = "effect Ask where\n  ask : Unit -> Int\n\nadder : Int -> <Ask> (Int -> Int)\nadder x =\n  let n = ask ()\n  fn y -> x + y + n\n\nrun : (Int -> <Ask> (Int -> Int)) -> <Ask> Int\nrun h = h 1 2\n\nmain : Unit -> <IO> Unit\nmain () =\n  let r =\n    handle run adder with\n      | ask () k -> k 10\n  println (show r)";
+    let shown = core_text(text, Pass::Translate);
+    // h 1 で yield しうるので、1つ目の apply の後で分け、1つ目に印を付ける
+    insta::assert_snapshot!(function(&shown, "run"), @"
+    yields fn run(h.0: tobj) -> int {
+      let t.1: tobj = yields apply h.0(1)
+      let t.2: int = apply t.1(2)
+      return t.2
+    }
+    ");
+}
+
+#[test]
 fn monomorphic_programs_keep_their_function_order_and_names() {
     let text = "double : Int -> Int\ndouble n = n + n\n\nmain : Unit -> <IO> Unit\nmain () = println (show (double 2))";
     let program = eml_test_support::core_until(text, Pass::Translate);
@@ -184,6 +221,52 @@ fn a_polymorphic_entry_is_uniform() {
         .map(|function| function.name.as_str())
         .collect();
     assert_eq!(names, ["first@[_]", "entry$first"]);
+}
+
+/// `name` の関数を入口にして、`Pass::Translate` までの Core IR を表示する。
+fn core_text_with_entry(text: &str, name: &str) -> String {
+    let checked = eml_test_support::check(text);
+    let (entry, _) = checked
+        .program
+        .functions()
+        .find(|(_, function)| function.name == name)
+        .unwrap();
+    eml_core_ir::pretty(&eml_core_ir::lower_until(
+        &checked.program,
+        &checked.typed,
+        entry,
+        checked.files(),
+        Pass::Translate,
+    ))
+}
+
+#[test]
+fn a_row_polymorphic_entry_may_yield() {
+    let text = "effect Ask where\n  ask : Unit -> Int\n\ngo : Unit -> <e> Int\ngo () = 1\n\nmain : Unit -> <IO> Unit\nmain () = ()";
+    // 入口の row のビットはすべて立つので、`go<e>` と入口の関数が yield しうる
+    insta::assert_snapshot!(core_text_with_entry(text, "go"), @r#"
+    effect Ask { ask(unit) -> int }
+    yields fn "go<e>"(p.0: unit) -> int {
+      return 1
+    }
+    yields fn entry$go() -> int {
+      let t.0: int = call "go<e>"(())
+      return t.0
+    }
+    "#);
+}
+
+#[test]
+fn a_point_free_entry_takes_its_mark_from_its_first_arrow() {
+    let text = "effect Ask where\n  ask : Unit -> Int\n\nact : Unit -> <Ask> Int\nact = fn () -> ask ()\n\nmain : Unit -> <IO> Unit\nmain () = ()";
+    // 引数のない値の instance は印を持たないが、入口の関数は `()` を渡す矢印の row で yield しうる
+    insta::assert_snapshot!(function(&core_text_with_entry(text, "act"), "entry$act"), @"
+    yields fn entry$act() -> int {
+      let f.0: tobj = call act()
+      let t.1: int = yields apply f.0(())
+      return t.1
+    }
+    ");
 }
 
 const SMALL: usize = 2000;

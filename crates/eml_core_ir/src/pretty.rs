@@ -404,9 +404,10 @@ fn operation(info: &EffectInfo, op: u32) -> String {
 
 /// 関数と extern の行の名前。単相化の instance の名前 (`id@[Int, String]`) と instance の extern の行の名前
 /// (`Prelude.Eq Int.==`) は、テキストの形の字句の区切りを含むので、文字列と同じ逃がし方で引用符で囲む
-/// (docs/implementation/testing.md の「Core IR のテキストの形」)。
+/// (docs/implementation/testing.md の「Core IR のテキストの形」)。row のビットを書いた名前 (`twice<e>`) も同じく
+/// 囲む (docs/superpowers/specs/2026-10-11-s7-evidence-passing-design.md の「row のビットと instance の鍵」)。
 fn function_name(name: &str) -> std::borrow::Cow<'_, str> {
-    let separates = |c: char| c.is_whitespace() || "(){}[],\"".contains(c);
+    let separates = |c: char| c.is_whitespace() || "(){}[],\"<>".contains(c);
     if name.is_empty() || name.contains(separates) {
         format!("{name:?}").into()
     } else {

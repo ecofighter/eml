@@ -67,7 +67,9 @@ pub(super) fn generate(
     };
     debug_assert_eq!(generator.next, generator.calls.len(), "every call is used");
     // 生成した関数は多くの関数から呼ばれるので、内部の関数にしない
-    generator.builder.finish(name.to_string(), false, ret)
+    generator
+        .builder
+        .finish(name.to_string(), false, false, ret)
 }
 
 fn shape(
