@@ -189,9 +189,9 @@ fn again(p.0: obj) -> obj {
 }
 
 #[test]
-fn a_target_releases_its_scrutinee_and_keeps_the_fields_it_uses() {
-    // どの行き先も scrutinee を所有して始まる。フィールドのない b1 は scrutinee をそのまま返し、b2 は使う `t` だけを
-    // 残して scrutinee を手放す
+fn a_dead_scrutinee_is_released_where_its_fields_are_needed() {
+    // どの行き先も scrutinee を所有して始まり、フィールドは借りて始まる。フィールドのない b1 は scrutinee をそのまま
+    // 返す。b2 は `t` を返す所で、死んだ scrutinee を `release` で解いて `t` だけを受け取る
     let text = "\
 layout List { Nil, Cons(tobj, tobj) }
 fn describe(xs.0: tobj) -> tobj {
@@ -248,7 +248,7 @@ b2:
 
 #[test]
 fn a_field_used_after_a_call_is_owned_before_the_call_saves_it() {
-    // 借りたフィールドは `save` に入れられないので、入口の `release` で所有にしてから退避する
+    // 借りたフィールドは `save` に入れられないので、呼び出しの前の `release` で所有にしてから退避する
     let text = "\
 layout Option { None, Some(tobj) }
 fn keep(o.0: tobj) -> obj {
@@ -337,7 +337,7 @@ fn echo(s.0: obj) -> obj {
 #[test]
 fn a_field_passed_to_an_arm_and_used_after_it_is_dupped_before_the_jump() {
     // case-of-case で枝のラベルへフィールドを渡し、枝の後でも使う形。`b3` は `v.2` を引数で渡し、`b5` でも使うので
-    // jump の前で複製する。`b4` は `v.2` を渡さないので、所有をそのまま `b5` へ持っていく
+    // jump の前で複製する。`b5` の入口で生きている `v.2` は、どちらの辺でも jump の前で `o` を解いて所有にする
     let text = "\
 layout Option { None, Some(tobj) }
 layout Prelude.Bool { False, True }
@@ -370,13 +370,14 @@ b5(x.5: obj):
       let e.3: obj = const "none"
       return e.3
     b2:
-      release o.0 Option #1(v.2)
       switch c.1 Prelude.Bool { #0 -> b3, #1 -> b4 }
     b3:
+      release o.0 Option #1(v.2)
       dup v.2
       jump b5(v.2)
     b4:
       let n.4: obj = const "n"
+      release o.0 Option #1(v.2)
       jump b5(n.4)
     b5(x.5: obj):
       let r.6: obj = con (,) #0(x.5, v.2)
@@ -442,8 +443,9 @@ fn f(b.0: tobj) -> tobj {
 }
 
 #[test]
-fn an_unboxed_field_is_owned_at_the_target_and_released_after_the_unbox() {
-    // 行き先の入口でフィールドを所有にするので、`unbox` の後の `decref` は所有を手放すだけである
+fn an_unboxed_field_stays_borrowed_and_its_owner_is_decrefed_after_it() {
+    // `unbox` は読むだけなので、フィールドは借りたまま読む。最後の属する変数 `x` が `unbox` で死ぬので、その直後に
+    // 持ち主の `o` を `decref` する
     let text = "\
 layout Option { None, Some(tobj) }
 fn f(o.0: tobj) -> int {
@@ -463,9 +465,8 @@ b2:
       decref o.0
       return 0
     b2:
-      release o.0 Option #1(x.1)
       let n.2: int = unbox x.1
-      decref x.1
+      decref o.0
       return n.2
     }
     ");
@@ -503,9 +504,9 @@ fn twenty_thousand_conditions_are_rewritten() {
 }
 
 #[test]
-fn a_target_dups_the_fields_of_a_live_scrutinee_before_it_decrefs_a_dead_value() {
-    // `o` がまだ生きているので、そのフィールドを複製する。順は入口の順で、死んだ `y` の `decref` より先になる
-    // (docs/spec/lir.md の「Perceus」)
+fn a_field_of_a_live_scrutinee_is_dupped_where_it_is_consumed() {
+    // 死んだ `y` は行き先の入口で捨てる。`s` は `con` が消費する所で所有を取り、持ち主の `o` もその `con` が使うので
+    // 複製する (docs/superpowers/specs/2026-10-11-s8b-ownership-design.md の「所有を取る時点」)
     let text = "\
 layout Option { None, Some(tobj) }
 layout (,) { (,)(tobj, tobj) }
@@ -527,8 +528,8 @@ b2:
       decref o.0
       return y.1
     b2:
-      dup s.2
       decref y.1
+      dup s.2
       let p.3: obj = con (,) #0(s.2, o.0)
       return p.3
     }
@@ -566,4 +567,378 @@ yields fn f(e.0: obj) -> int {
       return m.2
     }
     ");
+}
+
+#[test]
+fn a_field_is_released_from_a_dead_owner_without_a_dup() {
+    // `Lin` の形: 持ち主は分解の後に使われないので、フィールドを消費する所で持ち主を解き、`release` で受け取る
+    // (docs/superpowers/specs/2026-10-11-s8b-ownership-design.md の「`Lin` のフィールド」)
+    let shown = perceus_text(
+        "\
+layout W { W(obj, int) }
+fn f(w.0: obj) -> unit {
+  unpack w.0 W #0(h.1: obj, n.2: int)
+  let u.3: unit = extern Std.Fs.close(h.1)
+  return u.3
+}
+",
+    );
+    assert!(!shown.contains("dup h.1"), "{shown}");
+    insta::assert_snapshot!(shown, @"
+    layout W { W(obj, int) }
+    fn f(w.0: obj) -> unit {
+      unpack w.0 W #0(h.1: obj, n.2: int)
+      release w.0 W #0(h.1, _)
+      let u.3: unit = extern Std.Fs.close(h.1)
+      return u.3
+    }
+    ");
+}
+
+#[test]
+fn an_intermediate_target_leaves_the_fields_borrowed() {
+    // 決定木の途中の行き先 b2 では、後の行 (b3) が分解した値を使っても、フィールドに RC の命令を置かない
+    let shown = perceus_text(
+        "\
+layout Prelude.Bool { False, True }
+layout Option { None, Some(tobj) }
+fn f(o.0: tobj, c.1: enum) -> tobj {
+  switch o.0 Option { #0 -> b1, #1(x.2: tobj) -> b2 }
+b1:
+  return o.0
+b2:
+  switch c.1 Prelude.Bool { #0 -> b3, #1 -> b4 }
+b3:
+  return o.0
+b4:
+  return x.2
+}
+",
+    );
+    assert!(!shown.contains("dup x.2"), "{shown}");
+    insta::assert_snapshot!(shown, @"
+    layout Prelude.Bool { False, True }
+    layout Option { None, Some(tobj) }
+    fn f(o.0: tobj, c.1: enum) -> tobj {
+      switch o.0 Option { #0 -> b1, #1(x.2: tobj) -> b2 }
+    b1:
+      return o.0
+    b2:
+      switch c.1 Prelude.Bool { #0 -> b3, #1 -> b4 }
+    b3:
+      return o.0
+    b4:
+      release o.0 Option #1(x.2)
+      return x.2
+    }
+    ");
+}
+
+#[test]
+fn a_field_that_is_only_read_gets_no_rc_instruction() {
+    // `unbox` は読む使いなので、借りたフィールドのまま読む。最後の属する変数が死んだ所で持ち主を `decref` する
+    let shown = perceus_text(
+        "\
+layout Box { Box(tobj) }
+fn f(b.0: obj) -> int {
+  unpack b.0 Box #0(t.1: tobj)
+  let n.2: int = unbox t.1
+  return n.2
+}
+",
+    );
+    assert!(!shown.contains("release"), "{shown}");
+    assert!(!shown.contains("dup"), "{shown}");
+    insta::assert_snapshot!(shown, @"
+    layout Box { Box(tobj) }
+    fn f(b.0: obj) -> int {
+      unpack b.0 Box #0(t.1: tobj)
+      let n.2: int = unbox t.1
+      decref b.0
+      return n.2
+    }
+    ");
+}
+
+#[test]
+fn a_field_live_after_a_call_is_owned_before_it() {
+    // 持ち主が死んでいれば解き、生きていれば `dup` する。フレームは借りた値を持てない (R7)
+    let shown = perceus_text(
+        "\
+layout Pair { Pair(obj, obj) }
+fn g(s.0: obj) -> obj {
+  return s.0
+}
+fn dead_owner(p.0: obj) -> obj {
+  unpack p.0 Pair #0(a.1: obj, b.2: obj)
+  let r.3: obj = call g(a.1)
+  return b.2
+}
+fn live_owner(p.0: obj) -> obj {
+  unpack p.0 Pair #0(a.1: obj, b.2: obj)
+  let r.3: obj = call g(a.1)
+  let q.4: obj = con Pair #0(p.0, b.2)
+  return q.4
+}
+",
+    );
+    insta::assert_snapshot!(shown, @"
+    layout Pair { Pair(obj, obj) }
+    fn g(s.0: obj) -> obj {
+      return s.0
+    }
+    fn dead_owner(p.0: obj) -> obj {
+      unpack p.0 Pair #0(a.1: obj, b.2: obj)
+      release p.0 Pair #0(a.1, b.2)
+      let r.3: obj = call g(a.1) save [b.2]
+      decref r.3
+      return b.2
+    }
+    fn live_owner(p.0: obj) -> obj {
+      unpack p.0 Pair #0(a.1: obj, b.2: obj)
+      dup a.1
+      dup b.2
+      let r.3: obj = call g(a.1) save [p.0, b.2]
+      decref r.3
+      let q.4: obj = con Pair #0(p.0, b.2)
+      return q.4
+    }
+    ");
+}
+
+#[test]
+fn a_field_live_at_a_join_is_owned_before_the_jump() {
+    // 合流するブロックは所有だけで始まるので、行き先で生きている a.2 を、どちらの辺でも `jump` の前で所有にする
+    let shown = perceus_text(
+        "\
+layout Prelude.Bool { False, True }
+layout Pair { Pair(obj, obj) }
+fn f(p.0: obj, c.1: enum) -> obj {
+  unpack p.0 Pair #0(a.2: obj, b.3: obj)
+  switch c.1 Prelude.Bool { #0 -> b1, #1 -> b2 }
+b1:
+  jump b3(b.3)
+b2:
+  let s.4: obj = const \"x\"
+  jump b3(s.4)
+b3(r.5: obj):
+  let q.6: obj = con Pair #0(r.5, a.2)
+  return q.6
+}
+",
+    );
+    insta::assert_snapshot!(shown, @r#"
+    layout Prelude.Bool { False, True }
+    layout Pair { Pair(obj, obj) }
+    fn f(p.0: obj, c.1: enum) -> obj {
+      unpack p.0 Pair #0(a.2: obj, b.3: obj)
+      switch c.1 Prelude.Bool { #0 -> b1, #1 -> b2 }
+    b1:
+      release p.0 Pair #0(a.2, b.3)
+      jump b3(b.3)
+    b2:
+      let s.4: obj = const "x"
+      release p.0 Pair #0(a.2, _)
+      jump b3(s.4)
+    b3(r.5: obj):
+      let q.6: obj = con Pair #0(r.5, a.2)
+      return q.6
+    }
+    "#);
+}
+
+#[test]
+fn a_field_live_after_its_owner_is_consumed_is_dupped_before() {
+    // `| Box s -> (Some b, s)` の形。`con` が b の最後の参照を消費した後も s を使うので、その前に `dup` する
+    // (spec の「所有を取る時点」の 4.)
+    let shown = perceus_text(
+        "\
+layout Box { Box(obj) }
+layout Option { None, Some(tobj) }
+layout (,) { (,)(tobj, tobj) }
+fn g(b.0: obj) -> obj {
+  unpack b.0 Box #0(s.1: obj)
+  let d.2: tobj = con Option #1(b.0)
+  let d.3: obj = con (,) #0(d.2, s.1)
+  return d.3
+}
+",
+    );
+    assert!(
+        shown.find("dup s.1").unwrap() < shown.find("con Option").unwrap(),
+        "{shown}"
+    );
+    insta::assert_snapshot!(shown, @"
+    layout Box { Box(obj) }
+    layout Option { None, Some(tobj) }
+    layout (,) { (,)(tobj, tobj) }
+    fn g(b.0: obj) -> obj {
+      unpack b.0 Box #0(s.1: obj)
+      dup s.1
+      let d.2: tobj = con Option #1(b.0)
+      let d.3: obj = con (,) #0(d.2, s.1)
+      return d.3
+    }
+    ");
+}
+
+#[test]
+fn nested_values_are_released_from_the_parent_down() {
+    let shown = perceus_text(
+        "\
+layout Outer { Outer(obj) }
+layout Inner { Inner(obj, int) }
+fn f(o.0: obj) -> obj {
+  unpack o.0 Outer #0(c.1: obj)
+  unpack c.1 Inner #0(g.2: obj, n.3: int)
+  return g.2
+}
+",
+    );
+    assert!(!shown.contains("dup"), "{shown}");
+    assert!(
+        shown.find("release o.0").unwrap() < shown.find("release c.1").unwrap(),
+        "{shown}"
+    );
+    insta::assert_snapshot!(shown, @"
+    layout Outer { Outer(obj) }
+    layout Inner { Inner(obj, int) }
+    fn f(o.0: obj) -> obj {
+      unpack o.0 Outer #0(c.1: obj)
+      unpack c.1 Inner #0(g.2: obj, n.3: int)
+      release o.0 Outer #0(c.1)
+      release c.1 Inner #0(g.2, _)
+      return g.2
+    }
+    ");
+}
+
+#[test]
+fn a_descendant_under_a_needed_field_is_dupped_before_the_release() {
+    // c.1 と g.2 を同じ `con` が消費する。間の c.1 も必要なので、g.2 は `release` で受け取れず、o.0 がまだ所有されて
+    // いる間に `dup` する (spec の「持ち主を解く」の 3.)
+    let shown = perceus_text(
+        "\
+layout Outer { Outer(obj) }
+layout Inner { Inner(obj, int) }
+layout Pair { Pair(obj, obj) }
+fn f(o.0: obj) -> obj {
+  unpack o.0 Outer #0(c.1: obj)
+  unpack c.1 Inner #0(g.2: obj, n.3: int)
+  let p.4: obj = con Pair #0(c.1, g.2)
+  return p.4
+}
+",
+    );
+    assert!(
+        shown.find("dup g.2").unwrap() < shown.find("release o.0").unwrap(),
+        "{shown}"
+    );
+    insta::assert_snapshot!(shown, @"
+    layout Outer { Outer(obj) }
+    layout Inner { Inner(obj, int) }
+    layout Pair { Pair(obj, obj) }
+    fn f(o.0: obj) -> obj {
+      unpack o.0 Outer #0(c.1: obj)
+      unpack c.1 Inner #0(g.2: obj, n.3: int)
+      dup g.2
+      release o.0 Outer #0(c.1)
+      let p.4: obj = con Pair #0(c.1, g.2)
+      return p.4
+    }
+    ");
+}
+
+#[test]
+fn two_variables_of_one_slot_keep_one_name_in_the_release() {
+    // 同じ値を2回分解すると、2つの変数が同じスロットを束縛する。`release` が名前を書けるのは1つなので、番号の小さい
+    // a.1 を代表にし、b.3 は `dup` する (spec の「持ち主を解く」の 2.)
+    let shown = perceus_text(
+        "\
+layout P { P(obj, int) }
+fn f(p.0: obj) -> obj {
+  unpack p.0 P #0(a.1: obj, n.2: int)
+  unpack p.0 P #0(b.3: obj, m.4: int)
+  let r.5: obj = extern Prelude.++(a.1, b.3)
+  return r.5
+}
+",
+    );
+    assert!(shown.contains("dup b.3"), "{shown}");
+    assert!(shown.contains("release p.0 P #0(a.1, _)"), "{shown}");
+    insta::assert_snapshot!(shown, @"
+    layout P { P(obj, int) }
+    fn f(p.0: obj) -> obj {
+      unpack p.0 P #0(a.1: obj, n.2: int)
+      unpack p.0 P #0(b.3: obj, m.4: int)
+      dup b.3
+      release p.0 P #0(a.1, _)
+      let r.5: obj = extern Prelude.++(a.1, b.3)
+      return r.5
+    }
+    ");
+}
+
+#[test]
+fn the_owner_of_a_borrowed_scrutinee_is_kept_at_the_target() {
+    // b2 の scrutinee h.1 は借用なので、その持ち主 x.0 が、b2 で生きている v.2 のために保持される。b1 では何も
+    // 生きていないので、入口で x.0 を `decref` する
+    let shown = perceus_text(
+        "\
+layout Option { None, Some(tobj) }
+layout W { W(tobj) }
+fn f(x.0: obj) -> tobj {
+  unpack x.0 W #0(h.1: tobj)
+  switch h.1 Option { #0 -> b1, #1(v.2: tobj) -> b2 }
+b1:
+  return ()
+b2:
+  return v.2
+}
+",
+    );
+    insta::assert_snapshot!(shown, @"
+    layout Option { None, Some(tobj) }
+    layout W { W(tobj) }
+    fn f(x.0: obj) -> tobj {
+      unpack x.0 W #0(h.1: tobj)
+      switch h.1 Option { #0 -> b1, #1(v.2: tobj) -> b2 }
+    b1:
+      decref x.0
+      return ()
+    b2:
+      release x.0 W #0(h.1)
+      release h.1 Option #1(v.2)
+      return v.2
+    }
+    ");
+}
+
+#[test]
+fn a_long_chain_of_borrowed_switches_is_rewritten_in_linear_time() {
+    // 借りたフィールドへの `switch` が深く連なる形。状態は関数全体の表と所有の集合だけなので、時間は深さに比例する
+    // (spec の「時間」)
+    const DEPTH: usize = 20000;
+    let mut text = String::from("layout Option { None, Some(tobj) }\nfn f(v.0: tobj) -> tobj {\n");
+    // ブロック b(2k+1) は `None` の行き先で `()` を返し、b(2k+2) は次のフィールドへの `switch` を続ける
+    for k in 0..DEPTH {
+        if k > 0 {
+            text.push_str(&format!("b{}:\n", 2 * k));
+        }
+        text.push_str(&format!(
+            "  switch v.{k} Option {{ #0 -> b{}, #1(v.{}: tobj) -> b{} }}\nb{}:\n  return ()\n",
+            2 * k + 1,
+            k + 1,
+            2 * k + 2,
+            2 * k + 1
+        ));
+    }
+    text.push_str(&format!("b{}:\n  return v.{DEPTH}\n}}\n", 2 * DEPTH));
+    let start = std::time::Instant::now();
+    perceus_text(&text);
+    let elapsed = start.elapsed();
+    assert!(
+        elapsed < std::time::Duration::from_secs(10),
+        "took {elapsed:?}"
+    );
 }

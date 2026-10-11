@@ -138,23 +138,19 @@ fn a_dead_scrutinee_whose_fields_are_unused_is_decreffed() {
 
 #[test]
 fn a_default_target_owns_the_scrutinee_without_a_dup() {
-    // `ys` が受ける `xs` は `switch` の前で複製しない。入れ子のパターンでは、外側の `xs` が生きているので、内側の
-    // scrutinee の `x.2` を複製してから読む
+    // `ys` が受ける `xs` は `switch` の前で複製しない。入れ子のパターンの内側の scrutinee `x.2` は、借りたまま読む
     let text = "data List a = | Nil | Cons a (List a)\n\nsize : List Int -> Int\nsize xs = 2\n\ndescribe : List Int -> Int\ndescribe xs = match xs with\n  | Cons _ Nil -> 1\n  | ys -> size ys\n\nmain : Unit -> <IO> Unit\nmain () = println (show (describe Nil))";
     insta::assert_snapshot!(function(&lir_text(text, eml_lir::Pass::Perceus), "describe"), @"
     fn describe(xs.0: tobj) -> int {
       switch xs.0 List { #1(x.5: tobj, x.2: tobj) -> b1, _ -> b2 }
     b1:
-      dup x.2
       switch x.2 List { #0 -> b3, _ -> b4 }
     b2:
       jump b5(xs.0)
     b3:
       decref xs.0
-      decref x.2
       return 1
     b4:
-      decref x.2
       jump b5(xs.0)
     b5(ys.3: tobj):
       tail call size(ys.3)
@@ -185,9 +181,10 @@ fn a_string_switch_leaves_the_scrutinee_to_its_targets() {
 }
 
 #[test]
-fn a_nested_pattern_gives_up_the_parent_before_the_release() {
-    // 内側の `x.1` を読むとき、外側の `w` はまだ生きているので、`x.1` を複製する。`Cons (Cons a _) _` の行き先では、
-    // 先に `w` を手放してから `x.1` を `release` する。`x.1` の参照が1つに戻り、`release` が一意の側を通る
+fn a_nested_pattern_releases_from_the_parent_down() {
+    // 内側の `x.1` は借りたまま読むので、複製しない。`Cons (Cons a _) _` の行き先では、`a` を返す所で、先に `w` を
+    // `release` して `x.1` を受け取り、次に `x.1` を `release` する。上の物体を先に一意にするので、`x.1` の
+    // `release` も一意の側を通る
     let text = "data List a =\n  | Nil\n  | Cons a (List a)\n\nlength : List a -> Int\nlength xs = match xs with\n  | Nil -> 0\n  | Cons _ rest -> 1 + length rest\n\ndescribe : List (List String) -> String\ndescribe w = match w with\n  | Cons (Cons a _) _ -> a\n  | Cons Nil _ -> show (length w)\n  | Nil -> \"empty\"\n\nmain : Unit -> <IO> Unit\nmain () = println (describe Nil)";
     insta::assert_snapshot!(function(&lir_text(text, eml_lir::Pass::Perceus), "describe"), @r#"
     fn describe(w.0: tobj) -> obj {
@@ -197,15 +194,13 @@ fn a_nested_pattern_gives_up_the_parent_before_the_release() {
       let s.7: obj = const "empty"
       return s.7
     b2:
-      dup x.1
       switch x.1 List { #0 -> b3, #1(a.3: obj, x.4: tobj) -> b4 }
     b3:
-      decref x.1
       let t.5: int = call "length@[Main.List String]"(w.0)
       let t.6: obj = extern "Prelude.Show Int.show"(t.5)
       return t.6
     b4:
-      decref w.0
+      release w.0 List #1(x.1, _)
       release x.1 List #1(a.3, _)
       return a.3
     }
