@@ -843,3 +843,25 @@ fn interpolation_saves_only_the_accumulator_across_holes() {
     }
     assert_eq!(saves, 6, "two calls per hole: {shown}");
 }
+
+#[test]
+fn prims_consume_their_arguments() {
+    // 基本操作も節の呼び出しも引数を消費するので、`e.0` を2回使うと1回目の前に `dup e.0` が入る
+    let text = "\
+effect Counter { get(unit) -> int, put(int) -> unit }
+yields fn f(e.0: obj) -> int {
+  let c.1: tobj = prim ev_clause[Counter.get](e.0)
+  let m.2: int = clause Counter.get c.1(e.0, ())
+  return m.2
+}
+";
+    insta::assert_snapshot!(perceus_text(text), @"
+    effect Counter { get(unit) -> int, put(int) -> unit }
+    yields fn f(e.0: obj) -> int {
+      dup e.0
+      let c.1: tobj = prim ev_clause[Counter.get](e.0)
+      let m.2: int = clause Counter.get c.1(e.0, ())
+      return m.2
+    }
+    ");
+}

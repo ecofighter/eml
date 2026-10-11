@@ -4,7 +4,7 @@
 
 use eml_extern::Purity;
 
-use crate::{Atom, Block, Call, CoreFn, Program, Repr, Rhs, Stmt, Term};
+use crate::{Atom, Block, Call, CoreFn, EffectInfo, OpRet, Program, Repr, Rhs, Stmt, Term};
 
 pub fn contract(program: &mut Program) {
     let rets: Vec<Repr> = program
@@ -15,7 +15,7 @@ pub fn contract(program: &mut Program) {
     for function in &mut program.functions {
         remove_dead_lets(function);
         for block in &mut function.blocks {
-            tail_call(block, function.ret, &rets);
+            tail_call(block, function.ret, &rets, &program.effects);
         }
         // 1回のパスで不動点に達することを確かめる (docs/spec/core-ir.md の「縮約」)。確かめるパスも IR を書き換えうるので、
         // その副作用を `debug_assert!` の式に隠さない
@@ -32,10 +32,11 @@ pub fn contract(program: &mut Program) {
 
 /// `let x = <呼び出し>` の後の終端が `return x` で、呼び出しの結果が関数の `ret` と互換なら、その2つを末尾呼び出しに
 /// する。互換は推移的でないので、x を通してつながっていた2つの位置が、直接つないでも互換かを確かめる。結果は、直接の
-/// 呼び出しなら呼ばれる関数の `ret`、ほかは `tobj` である。`never` の操作の `perform` は戻らないので、どの `ret` とも
-/// 互換とする (docs/spec/core-ir.md の「縮約」)。`saved` は Perceus が決めるので、この時点では空である。`mask` は
-/// 末尾かどうかと独立なので、そのまま運ぶ。
-fn tail_call(block: &mut Block, ret: Repr, rets: &[Repr]) {
+/// 呼び出しなら呼ばれる関数の `ret`、節の呼び出しなら操作の `ret`、ほかは `tobj` である。`never` の操作を呼ぶ
+/// `perform` と節の呼び出しは戻らないので、どの `ret` とも互換とする (docs/spec/core-ir.md の「縮約」、
+/// docs/superpowers/specs/2026-10-11-s7-evidence-passing-design.md の「縮約」)。`saved` は Perceus が決めるので、
+/// この時点では空である。`mask` は末尾かどうかと独立なので、そのまま運ぶ。
+fn tail_call(block: &mut Block, ret: Repr, rets: &[Repr], effects: &[EffectInfo]) {
     let Term::Return(Atom::Var(returned)) = block.term else {
         return;
     };
@@ -64,9 +65,15 @@ fn tail_call(block: &mut Block, ret: Repr, rets: &[Repr]) {
         Call::Apply { .. } | Call::Perform { .. } | Call::Resume { .. } | Call::Handle { .. } => {
             Repr::TObj.compatible(ret)
         }
-        Call::Clause { .. } => {
-            unimplemented!("a clause call reaches contract before the evidence pass exists")
-        }
+        Call::Clause {
+            effect,
+            op,
+            callee: _,
+            args: _,
+        } => match effects[*effect as usize].operations[*op as usize].ret {
+            OpRet::Repr(repr) => repr.compatible(ret),
+            OpRet::Never => true,
+        },
     };
     if !compatible {
         return;

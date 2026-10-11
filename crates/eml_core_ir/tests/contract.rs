@@ -268,6 +268,52 @@ fn f(s.0: obj) -> int {
 }
 
 #[test]
+fn a_clause_call_returned_at_the_end_becomes_a_tail_call() {
+    // 節の呼び出しの結果は操作の `ret` である。`Counter.get` の `int` は `f` の `int` の `ret` と互換なので末尾呼び出し
+    // になる。`g` では `Counter.put` の `unit` が `u.3` の `tobj` を通して `obj` の `ret` につながるが、`unit` と `obj`
+    // は互換でないので末尾呼び出しにならない
+    let text = "\
+effect Counter { get(unit) -> int, put(int) -> unit }
+yields fn f(c.0: tobj, e.1: obj) -> int {
+  let m.2: int = clause Counter.get c.0(e.1, ())
+  return m.2
+}
+yields fn g(c.0: tobj, e.1: obj, n.2: int) -> obj {
+  let u.3: tobj = clause Counter.put c.0(e.1, n.2)
+  return u.3
+}
+";
+    insta::assert_snapshot!(contract_text(text), @"
+    effect Counter { get(unit) -> int, put(int) -> unit }
+    yields fn f(c.0: tobj, e.1: obj) -> int {
+      tail clause Counter.get c.0(e.1, ())
+    }
+    yields fn g(c.0: tobj, e.1: obj, n.2: int) -> obj {
+      let u.3: tobj = clause Counter.put c.0(e.1, n.2)
+      return u.3
+    }
+    ");
+}
+
+#[test]
+fn a_never_clause_returned_at_the_end_becomes_a_tail_call_in_any_function() {
+    // `never` の操作の節の呼び出しは戻らないので、結果はどの `ret` とも互換である
+    let text = "\
+effect Fail { never fail(tobj) -> never }
+yields fn f(c.0: tobj, e.1: obj, s.2: obj) -> int {
+  let r.3: int = clause Fail.fail c.0(e.1, s.2)
+  return r.3
+}
+";
+    insta::assert_snapshot!(contract_text(text), @"
+    effect Fail { never fail(tobj) -> never }
+    yields fn f(c.0: tobj, e.1: obj, s.2: obj) -> int {
+      tail clause Fail.fail c.0(e.1, s.2)
+    }
+    ");
+}
+
+#[test]
 fn a_returned_if_value_becomes_tail_calls_in_each_arm() {
     // `let y = if ..; y` の続きは `return` だけのブロックなので、translate が各枝の `jump` を `return` にしてブロックを
     // 消し、縮約が呼び出しの後の `return` を末尾呼び出しにする

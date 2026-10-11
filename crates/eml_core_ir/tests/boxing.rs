@@ -3,12 +3,21 @@
 //! 確かめる。
 
 use crate::common::{core_text, function};
-use eml_core_ir::{Pass, Repr, boxing, parse, pretty, verify_scopes, verify_translated};
+use eml_core_ir::{
+    Call, Pass, Program, Repr, Rhs, Stmt, Term, boxing, parse, pretty, verify_evidence,
+    verify_scopes, verify_translated,
+};
 
-/// 入力が変換の段の verifier を、出力が範囲の段の verifier を通ることも確かめる。
+/// 入力が変換の段の verifier を、出力が範囲の段の verifier を通ることも確かめる。基本操作や節の呼び出し、`clause` の
+/// 印がある入力は EP の出力の形なので、EP の段の verifier で確かめる。
 fn boxing_text(text: &str) -> String {
     let mut program = parse(text).unwrap_or_else(|error| panic!("{error}"));
-    if let Err(error) = verify_translated(&program) {
+    let verified = if uses_evidence(&program) {
+        verify_evidence(&program)
+    } else {
+        verify_translated(&program)
+    };
+    if let Err(error) = verified {
         panic!("the input must verify: {error}\n{text}");
     }
     boxing(&mut program);
@@ -17,6 +26,26 @@ fn boxing_text(text: &str) -> String {
         panic!("the output must verify: {error}\n{shown}");
     }
     shown
+}
+
+fn uses_evidence(program: &Program) -> bool {
+    let evidence_call = |call: &Call| matches!(call, Call::Clause { .. });
+    program.functions.iter().any(|function| {
+        function.clause.is_some()
+            || function.blocks.iter().any(|block| {
+                block.stmts.iter().any(|stmt| match stmt {
+                    Stmt::Let {
+                        var: _,
+                        rhs: Rhs::Prim(_, _),
+                    } => true,
+                    Stmt::Let {
+                        var: _,
+                        rhs: Rhs::Call { call, .. },
+                    } => evidence_call(call),
+                    _ => false,
+                }) || matches!(&block.term, Term::TailCall { call, .. } if evidence_call(call))
+            })
+    })
 }
 
 const APPLY_TO: &str = "apply_to : (Int -> Int) -> Int -> Int\napply_to f x = f x\n\n";
@@ -420,4 +449,138 @@ fn f() -> int {
 }
 ";
     boxing_text(text);
+}
+
+#[test]
+fn prim_operands_are_converted_like_call_arguments() {
+    // `ev_new` は状態を `tobj` で受けるので、`int` の状態は `box` して渡す
+    let text = "effect State { get(unit) -> tobj, put(tobj) -> unit }\nfn f(n.0: int) -> obj {\n  let w.1: tobj = prim evv_get()\n  let e.2: obj = prim ev_new[State](n.0, w.1)\n  return e.2\n}\n";
+    insta::assert_snapshot!(function(&boxing_text(text), "f"), @"
+    fn f(n.0: int) -> obj {
+      let w.1: tobj = prim evv_get()
+      let n.3: tobj = box n.0
+      let e.2: obj = prim ev_new[State](n.3, w.1)
+      return e.2
+    }
+    ");
+}
+
+#[test]
+fn a_prim_result_is_rebound_to_its_row_repr() {
+    // `yielding` の結果は `int` なので、`tobj` の変数で受けるなら `int` の新しい変数で受けて `box` する
+    let text = "fn f() -> tobj {\n  let y.0: tobj = prim yielding()\n  return y.0\n}\n";
+    insta::assert_snapshot!(function(&boxing_text(text), "f"), @"
+    fn f() -> tobj {
+      let y.1: int = prim yielding()
+      let y.0: tobj = box y.1
+      return y.0
+    }
+    ");
+}
+
+#[test]
+fn a_clause_call_uses_the_reprs_of_its_operation() {
+    // `put` の `int` の引数へ `tobj` の n.2 を `unbox` して渡し、`get` の `int` の結果を受け直して `box` する
+    let text = "effect Counter { get(unit) -> int, put(int) -> unit }\nyields fn f(c.0: tobj, e.1: obj, n.2: tobj) -> tobj {\n  let u.3: unit = clause Counter.put c.0(e.1, n.2)\n  let c.4: tobj = prim ev_clause[Counter.get](e.1)\n  let m.5: tobj = clause Counter.get c.4(e.1, ())\n  return m.5\n}\n";
+    insta::assert_snapshot!(function(&boxing_text(text), "f"), @"
+    yields fn f(c.0: tobj, e.1: obj, n.2: tobj) -> tobj {
+      let n.6: int = unbox n.2
+      let u.3: unit = clause Counter.put c.0(e.1, n.6)
+      let c.4: tobj = prim ev_clause[Counter.get](e.1)
+      let m.7: int = clause Counter.get c.4(e.1, ())
+      let m.5: tobj = box m.7
+      return m.5
+    }
+    ");
+}
+
+#[test]
+fn a_clause_function_takes_the_reprs_of_its_operation() {
+    // 引数 n は `put` の `int` になり、入口で元の `tobj` の変数を `box` で定義する。`ret` は `unit` になる
+    let text = "effect Counter { get(unit) -> int, put(int) -> unit }\ninternal yields clause Counter.put fn g(e.0: obj, n.1: tobj) -> tobj {\n  return ()\n}\nfn main() -> unit {\n  let w.0: tobj = prim evv_get()\n  let e.1: obj = prim ev_new[Counter](0, w.0)\n  let u.2: unit = prim ev_set_clause[Counter.put](e.1, &g)\n  return ()\n}\n";
+    let shown = boxing_text(text);
+    insta::assert_snapshot!(function(&shown, "g"), @"
+    internal yields clause Counter.put fn g(e.0: obj, n.2: int) -> unit {
+      let n.1: tobj = box n.2
+      return ()
+    }
+    ");
+    insta::assert_snapshot!(function(&shown, "main"), @"
+    fn main() -> unit {
+      let w.0: tobj = prim evv_get()
+      let b.3: tobj = box 0
+      let e.1: obj = prim ev_new[Counter](b.3, w.0)
+      let u.2: unit = prim ev_set_clause[Counter.put](e.1, &g)
+      return ()
+    }
+    ");
+}
+
+#[test]
+fn a_clause_function_keeps_its_captures_uniform() {
+    // `int` の捕獲は `tobj` で受けて入口で `unbox` し、`closure` は捕獲を `box` して渡す。evidence と `get` の引数と
+    // `ret` はすでに操作の表と合っている
+    let text = "effect Counter { get(unit) -> int, put(int) -> unit }\ninternal yields clause Counter.get fn g(k.0: int, e.1: obj, u.2: unit) -> int {\n  return k.0\n}\nfn main(k.0: int) -> unit {\n  let w.1: tobj = prim evv_get()\n  let e.2: obj = prim ev_new[Counter]((), w.1)\n  let g.3: tobj = closure g(k.0)\n  let u.4: unit = prim ev_set_clause[Counter.get](e.2, g.3)\n  return ()\n}\n";
+    let shown = boxing_text(text);
+    insta::assert_snapshot!(function(&shown, "g"), @"
+    internal yields clause Counter.get fn g(k.3: tobj, e.1: obj, u.2: unit) -> int {
+      let k.0: int = unbox k.3
+      return k.0
+    }
+    ");
+    insta::assert_snapshot!(function(&shown, "main"), @"
+    fn main(k.0: int) -> unit {
+      let w.1: tobj = prim evv_get()
+      let e.2: obj = prim ev_new[Counter]((), w.1)
+      let k.5: tobj = box k.0
+      let g.3: tobj = closure g(k.5)
+      let u.4: unit = prim ev_set_clause[Counter.get](e.2, g.3)
+      return ()
+    }
+    ");
+}
+
+#[test]
+fn a_never_clause_call_is_not_rebound() {
+    // `never` の操作の節の呼び出しは戻らないので、`int` の束縛を受け直さず、`return` にも変換を入れない。T3 も見ない
+    let text = "effect Fail { never fail(tobj) -> never }\nyields fn f(c.0: tobj, e.1: obj, s.2: obj) -> int {\n  let r.3: int = clause Fail.fail c.0(e.1, s.2)\n  return r.3\n}\n";
+    insta::assert_snapshot!(function(&boxing_text(text), "f"), @"
+    yields fn f(c.0: tobj, e.1: obj, s.2: obj) -> int {
+      let r.3: int = clause Fail.fail c.0(e.1, s.2)
+      return r.3
+    }
+    ");
+}
+
+#[test]
+fn a_never_clause_function_returns_obj() {
+    // `never` の操作の節の入口はダミーの物体を返すので、`ret` は `obj` になる
+    let text = "effect Fail { never fail(tobj) -> never }\ninternal yields clause Fail.fail fn g(e.0: obj, s.1: tobj) -> tobj {\n  let d.2: obj = prim dummy()\n  return d.2\n}\nfn main() -> unit {\n  let w.0: tobj = prim evv_get()\n  let e.1: obj = prim ev_new[Fail]((), w.0)\n  let u.2: unit = prim ev_set_clause[Fail.fail](e.1, &g)\n  return ()\n}\n";
+    insta::assert_snapshot!(function(&boxing_text(text), "g"), @"
+    internal yields clause Fail.fail fn g(e.0: obj, s.1: tobj) -> obj {
+      let d.2: obj = prim dummy()
+      return d.2
+    }
+    ");
+}
+
+#[test]
+fn t3_takes_the_result_of_a_tail_clause_from_its_operation() {
+    // `Counter.get` の `int` の結果は `int` の `ret` と互換なので上げない。`State.get` の `tobj` の結果は互換でないので、
+    // `ret` を `tobj` に上げる
+    let text = "effect Counter { get(unit) -> int, put(int) -> unit }\neffect State { get(unit) -> tobj, put(tobj) -> unit }\nyields fn f(c.0: tobj, e.1: obj) -> int {\n  let m.2: int = clause Counter.get c.0(e.1, ())\n  return m.2\n}\nyields fn g(c.0: tobj, e.1: obj) -> int {\n  let m.2: int = clause State.get c.0(e.1, ())\n  return m.2\n}\n";
+    let shown = boxing_text(text);
+    insta::assert_snapshot!(function(&shown, "f"), @"
+    yields fn f(c.0: tobj, e.1: obj) -> int {
+      let m.2: int = clause Counter.get c.0(e.1, ())
+      return m.2
+    }
+    ");
+    insta::assert_snapshot!(function(&shown, "g"), @"
+    yields fn g(c.0: tobj, e.1: obj) -> tobj {
+      let m.3: tobj = clause State.get c.0(e.1, ())
+      let m.2: int = unbox m.3
+      return m.3
+    }
+    ");
 }

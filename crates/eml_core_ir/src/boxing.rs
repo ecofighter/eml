@@ -1,7 +1,8 @@
 //! translate と縮約の間の box の挿入のパス (docs/spec/core-ir.md の「box の挿入」)。プログラム全体を1回で扱い、関数の
 //! ABI を決めてから、Repr の違う位置の間に `box` と `unbox` を入れる。手順は、分類、T3 (`ret` を上げる)、一様化と
-//! `f$boxed`、変換の順である。型は読まず、呼ばれる関数のシグネチャ、内部の印、配置の表、`perform` の `resumable`
-//! だけを読む。入力に `tail`、`box`、`unbox`、RC の命令はない (`verify_translated` が確かめる)。
+//! `f$boxed`、変換の順である。型は読まず、呼ばれる関数のシグネチャ、内部の印と `clause` の印、配置の表、操作の表、
+//! 基本操作の表、`perform` の `resumable` だけを読む。入力に `tail`、`box`、`unbox`、RC の命令はない
+//! (`verify_translated` か `verify_evidence` が確かめる)。
 //!
 //! 変数は具体化した型の Repr を持ち、値を受ける位置の Repr と互換でなければ変換する。変換は箱を要するスカラーと
 //! `tobj` の間だけで、`unit` と `obj` は命令なしで `tobj` と行き来する (docs/spec/core-ir.md の「値の表現」)。
@@ -11,28 +12,35 @@ use std::collections::HashMap;
 
 use crate::contract::pure;
 use crate::{
-    Atom, Block, BlockId, Call, CasePattern, CoreFn, FnIdx, Layout, Program, Repr, Rhs, Stmt, Term,
-    VarId, VarInfo,
+    Atom, Block, BlockId, Call, CasePattern, CoreFn, EffectInfo, FnIdx, OpRet, OperationInfo,
+    Program, Repr, Rhs, Stmt, Term, VarId, VarInfo,
 };
 
 pub fn boxing(program: &mut Program) {
     let (values, direct) = classify(program);
-    raise_tail_returns(&mut program.functions);
+    raise_tail_returns(&mut program.functions, &program.effects);
     uniformize(program, &values, &direct);
     let signatures: Vec<Signature> = program.functions.iter().map(Signature::of).collect();
-    let layouts = &program.layouts;
-    for function in &mut program.functions {
+    // 基本操作の行は名前を作るために `Program` を読む。関数の並びを外しておけば、残りを共有で借りたまま各関数を書き換え
+    // られる。変換はほかの関数を `signatures` でだけ見る
+    let mut functions = std::mem::take(&mut program.functions);
+    for function in &mut functions {
         let never = vec![false; function.vars.len()];
         Converter {
             function,
             signatures: &signatures,
-            layouts,
+            program,
             unboxed_from: HashMap::new(),
             boxed_from: HashMap::new(),
             never,
         }
         .run();
     }
+    program.functions = functions;
+}
+
+fn operation(effects: &[EffectInfo], effect: u32, op: u32) -> &OperationInfo {
+    &effects[effect as usize].operations[op as usize]
 }
 
 /// 関数ごとに、値として参照されるか (`&f`、`closure f` の対象) と、直接呼ばれるか (`call f`) を記録する。
@@ -71,17 +79,26 @@ fn classify(program: &Program) -> (Vec<bool>, Vec<bool>) {
 /// する。そうしないと結果を `unbox` するために呼び出しが末尾呼び出しでなくなり、関数の値を通るループがフレームを積む。
 /// 上げた関数を末尾の位置で直接呼ぶ関数も、同じ規則で上げる。`ret` はスカラーから `tobj` へ1回だけ動くので、
 /// 各関数は多くとも1回作業の列に積まれ、各辺は1回だけ見る (docs/spec/core-ir.md の「位置の規則」と「box の挿入」)。
-fn raise_tail_returns(functions: &mut [CoreFn]) {
+fn raise_tail_returns(functions: &mut [CoreFn], effects: &[EffectInfo]) {
     let mut callers: Vec<Vec<usize>> = vec![Vec::new(); functions.len()];
     let mut raised = Vec::new();
     for (index, function) in functions.iter().enumerate() {
         let mut raise = false;
         for block in &function.blocks {
-            let result = match tail_position_call(block) {
+            let result = match tail_position_call(block, effects) {
                 Some(Call::Direct(target, _)) => {
                     callers[target.0 as usize].push(index);
                     functions[target.0 as usize].ret
                 }
+                Some(Call::Clause {
+                    effect,
+                    op,
+                    callee: _,
+                    args: _,
+                }) => match operation(effects, *effect, *op).ret {
+                    OpRet::Repr(repr) => repr,
+                    OpRet::Never => unreachable!("a never clause is not a tail-position call"),
+                },
                 Some(_) => Repr::TObj,
                 None => continue,
             };
@@ -106,8 +123,9 @@ fn raise_tail_returns(functions: &mut [CoreFn]) {
 
 /// 末尾の位置の呼び出し。ブロックの終端が `return x` で、同じブロックに `let x = <呼び出し>` があり、その後の文が
 /// すべて純粋な `let` であるときの、その呼び出しである。後ろの純粋な `let` は `return` が使わないので縮約が消し、
-/// そこで末尾呼び出しになる。`never` の操作の `perform` は戻らないので、末尾の位置の呼び出しに数えない。
-fn tail_position_call(block: &Block) -> Option<&Call> {
+/// そこで末尾呼び出しになる。`never` の操作を呼ぶ `perform` と節の呼び出しは戻らないので、末尾の位置の呼び出しに
+/// 数えない。
+fn tail_position_call<'a>(block: &'a Block, effects: &[EffectInfo]) -> Option<&'a Call> {
     let Term::Return(Atom::Var(returned)) = block.term else {
         return None;
     };
@@ -128,6 +146,17 @@ fn tail_position_call(block: &Block) -> Option<&Call> {
                     mask: _,
                     saved: _,
                 } => None,
+                Rhs::Call {
+                    call:
+                        Call::Clause {
+                            effect,
+                            op,
+                            callee: _,
+                            args: _,
+                        },
+                    mask: _,
+                    saved: _,
+                } if operation(effects, *effect, *op).ret == OpRet::Never => None,
                 Rhs::Call {
                     call,
                     mask: _,
@@ -161,11 +190,19 @@ fn uniform_repr(repr: Repr) -> Repr {
 /// 値として参照され、T3 の後でも一様でない関数を一様にする。直接は呼ばれない内部の関数はその場で一様にし、ほかの
 /// 関数 (直接も呼ばれる内部の関数と、トップレベルの関数) には一様な `f$boxed` を足して、値の参照をすべてそちらへ
 /// 向ける。トップレベルの関数の ABI を、ほかの定義が後から値として参照するかどうかで変えないためである
-/// (docs/spec/core-ir.md の「位置の規則」)。
+/// (docs/spec/core-ir.md の「位置の規則」)。`clause` の印の関数は `apply` で呼ばれず、節の呼び出しが操作の ABI で
+/// 呼ぶので、一様にせずに操作の ABI に合わせる。
 fn uniformize(program: &mut Program, values: &[bool], direct: &[bool]) {
     let count = values.len();
     let mut redirect: Vec<Option<FnIdx>> = vec![None; count];
     for index in 0..count {
+        if let Some((effect, op)) = program.functions[index].clause {
+            conform_clause(
+                &mut program.functions[index],
+                operation(&program.effects, effect, op),
+            );
+            continue;
+        }
         let function = &program.functions[index];
         if !values[index] || uniform(function) {
             continue;
@@ -209,31 +246,72 @@ fn uniformize(program: &mut Program, values: &[bool], direct: &[bool]) {
     }
 }
 
-/// 箱を要するスカラーの引数を、同じ名前の新しい `tobj` の引数に替え、入口のブロックの先頭で、引数の順に
-/// `let p = unbox p'` を置く。`ret` も一様にし、`return` の変換は `Converter` に任せる。
+/// 箱を要するスカラーの引数を `tobj` で受け、`ret` も一様にする。
 fn uniformize_in_place(function: &mut CoreFn) {
-    let mut unboxes = Vec::new();
-    for position in 0..function.params().len() {
+    let expected: Vec<Repr> = function
+        .params()
+        .iter()
+        .map(|&param| uniform_repr(function.repr(param)))
+        .collect();
+    let ret = uniform_repr(function.ret);
+    conform(function, &expected, ret);
+}
+
+/// `clause` の印の関数を操作の ABI に合わせる。捕獲は一様な Repr、evidence は `obj`、残りの引数は操作の表の Repr で
+/// 受け、`ret` は操作の `ret` にする。`never` の操作の節の入口はダミーの物体を返すので `obj` である
+/// (docs/superpowers/specs/2026-10-11-s7-evidence-passing-design.md の「box の挿入」)。
+fn conform_clause(function: &mut CoreFn, operation: &OperationInfo) {
+    let params = function.params();
+    let captures = params.len() - 1 - operation.params.len();
+    let expected: Vec<Repr> = params[..captures]
+        .iter()
+        .map(|&param| uniform_repr(function.repr(param)))
+        .chain([Repr::Obj])
+        .chain(operation.params.iter().copied())
+        .collect();
+    let ret = match operation.ret {
+        OpRet::Repr(repr) => repr,
+        OpRet::Never => Repr::Obj,
+    };
+    conform(function, &expected, ret);
+}
+
+/// `expected` と互換でない引数を、同じ名前の新しい `expected` の Repr の引数に替え、入口のブロックの先頭で、引数の順に
+/// `let p = unbox p'` (または `box`) を置いて元の変数を定義する。`ret` を替えたときの `return` の変換は `Converter`
+/// に任せる。
+fn conform(function: &mut CoreFn, expected: &[Repr], ret: Repr) {
+    let mut conversions = Vec::new();
+    for (position, &wanted) in expected.iter().enumerate() {
         let param = function.params()[position];
-        if !function.repr(param).needs_box() {
+        let repr = function.repr(param);
+        if repr.compatible(wanted) {
             continue;
         }
+        let rhs = if wanted == Repr::TObj && repr.needs_box() {
+            Rhs::Unbox
+        } else if repr == Repr::TObj && wanted.needs_box() {
+            Rhs::Box
+        } else {
+            panic!(
+                "internal error: the boxing pass cannot take parameter {position} of `{}` ({}) as {}",
+                function.name,
+                repr.name(),
+                wanted.name()
+            )
+        };
         let name = function.vars[param.0 as usize].name.clone();
-        function.vars.push(VarInfo {
-            name,
-            repr: Repr::TObj,
-        });
+        function.vars.push(VarInfo { name, repr: wanted });
         let fresh = VarId(function.vars.len() as u32 - 1);
         function.blocks[BlockId::ENTRY.0 as usize].params[position] = fresh;
-        unboxes.push(Stmt::Let {
+        conversions.push(Stmt::Let {
             var: param,
-            rhs: Rhs::Unbox(Atom::Var(fresh)),
+            rhs: rhs(Atom::Var(fresh)),
         });
     }
     function.blocks[BlockId::ENTRY.0 as usize]
         .stmts
-        .splice(0..0, unboxes);
-    function.ret = uniform_repr(function.ret);
+        .splice(0..0, conversions);
+    function.ret = ret;
 }
 
 /// `f$boxed`。引数を一様な Repr で受けて `f` を直接呼び、結果を返す。本体は変換の前の形で作り、変換はほかの関数と
@@ -298,12 +376,14 @@ impl Signature {
 struct Converter<'a> {
     function: &'a mut CoreFn,
     signatures: &'a [Signature],
-    layouts: &'a [Layout],
+    /// 配置の表、操作の表、基本操作の行を引く。関数の並びは外してある。
+    program: &'a Program,
     /// `let v = unbox w` の v から w。v を `tobj` の位置へ渡すときは、`box` を作らずに w を渡す。
     unboxed_from: HashMap<VarId, VarId>,
     /// `let v = box w` の v から w。v を w と同じ Repr のスカラーの位置へ渡すときは、`unbox` を作らずに w を渡す。
     boxed_from: HashMap<VarId, VarId>,
-    /// 変数の番号ごとの、`never` の操作の `perform` の束縛かどうか。束縛の使いには制御が届かないので、変換しない。
+    /// 変数の番号ごとの、`never` の操作を呼ぶ `perform` か節の呼び出しの束縛かどうか。束縛の使いには制御が届かないので、
+    /// 変換しない。
     never: Vec<bool>,
 }
 
@@ -447,7 +527,7 @@ impl Converter<'_> {
                         saved: _,
                     } => {
                         let given = self.call(call, out);
-                        // 結果を受け直さない呼び出しは、`never` の操作の `perform` だけである
+                        // 結果を受け直さない呼び出しは、`never` の操作を呼ぶ `perform` と節の呼び出しだけである
                         self.never[var.0 as usize] = given.is_none();
                         given
                     }
@@ -463,14 +543,28 @@ impl Converter<'_> {
                         let layout = ctor.layout.0 as usize;
                         let tag = ctor.tag as usize;
                         for (index, arg) in args.iter_mut().enumerate() {
-                            let field = self.layouts[layout].constructors[tag].fields[index];
+                            let field =
+                                self.program.layouts[layout].constructors[tag].fields[index];
                             *arg = self.convert(*arg, field, out);
                         }
                         None
                     }
-                    // その場で一様にした関数の入口の `unbox` だけが、入力にある `unbox` である
+                    // 基本操作の引数と結果は、直接の呼び出しと同じく互換の位置である
+                    // (docs/superpowers/specs/2026-10-11-s7-evidence-passing-design.md の「基本操作」)
+                    Rhs::Prim(prim, args) => {
+                        let row = prim.row(self.program);
+                        for (arg, &param) in args.iter_mut().zip(&row.params) {
+                            *arg = self.convert(*arg, param, out);
+                        }
+                        Some(row.ret)
+                    }
+                    // 入力にある `unbox` と `box` は、その場で一様にした関数と `clause` の印の関数の入口のものだけである
                     Rhs::Unbox(Atom::Var(from)) => {
                         self.unboxed_from.insert(var, *from);
+                        None
+                    }
+                    Rhs::Box(Atom::Var(from)) => {
+                        self.boxed_from.insert(var, *from);
                         None
                     }
                     // extern の引数と結果は表の行と同じ Repr で、translate の出力ですでに合っている
@@ -483,11 +577,6 @@ impl Converter<'_> {
                     | Rhs::Drop(_)
                     | Rhs::Box(_)
                     | Rhs::Unbox(_) => None,
-                    Rhs::Prim(_, _) => {
-                        unimplemented!(
-                            "a prim reaches the boxing pass before the evidence pass exists"
-                        )
-                    }
                 };
                 let mut after = Vec::new();
                 let bound = match given {
@@ -504,7 +593,7 @@ impl Converter<'_> {
             } => {
                 let mut after = Vec::new();
                 for (index, field) in fields.iter_mut().enumerate() {
-                    let declared = self.layouts[ctor.layout.0 as usize].constructors
+                    let declared = self.program.layouts[ctor.layout.0 as usize].constructors
                         [ctor.tag as usize]
                         .fields[index];
                     *field = self.rebind(*field, declared, &mut after);
@@ -522,8 +611,9 @@ impl Converter<'_> {
         }
     }
 
-    /// 呼び出しのアトムを変換し、結果を受ける Repr を返す。直接の呼び出しは呼ばれる関数の引数と `ret` で、ほかは一様な
-    /// `tobj` である。`never` の操作の `perform` は戻らないので、結果を受け直さない (`None`)。
+    /// 呼び出しのアトムを変換し、結果を受ける Repr を返す。直接の呼び出しは呼ばれる関数の引数と `ret`、節の呼び出しは
+    /// 先頭の evidence が `obj` で、残りの引数と結果が操作の表の Repr である。ほかは一様な `tobj` である。`never` の
+    /// 操作を呼ぶ `perform` と節の呼び出しは戻らないので、結果を受け直さない (`None`)。
     fn call(&mut self, call: &mut Call, out: &mut Vec<Stmt>) -> Option<Repr> {
         match call {
             Call::Direct(target, args) => {
@@ -549,10 +639,22 @@ impl Converter<'_> {
                     _ => Some(Repr::TObj),
                 }
             }
-            Call::Clause { .. } => {
-                unimplemented!(
-                    "a clause call reaches the boxing pass before the evidence pass exists"
-                )
+            Call::Clause {
+                effect,
+                op,
+                callee,
+                args,
+            } => {
+                let operation = operation(&self.program.effects, *effect, *op);
+                *callee = self.convert(*callee, Repr::TObj, out);
+                let expected = std::iter::once(Repr::Obj).chain(operation.params.iter().copied());
+                for (arg, param) in args.iter_mut().zip(expected) {
+                    *arg = self.convert(*arg, param, out);
+                }
+                match operation.ret {
+                    OpRet::Repr(repr) => Some(repr),
+                    OpRet::Never => None,
+                }
             }
         }
     }
@@ -583,7 +685,7 @@ impl Converter<'_> {
                     let mut after = Vec::new();
                     for (index, field) in case.fields.iter_mut().enumerate() {
                         let declared =
-                            self.layouts[layout].constructors[tag as usize].fields[index];
+                            self.program.layouts[layout].constructors[tag as usize].fields[index];
                         *field = self.rebind(*field, declared, &mut after);
                     }
                     heads[case.target.0 as usize].extend(after);
