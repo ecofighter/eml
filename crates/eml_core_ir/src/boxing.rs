@@ -85,7 +85,7 @@ fn raise_tail_returns(functions: &mut [CoreFn], effects: &[EffectInfo]) {
     for (index, function) in functions.iter().enumerate() {
         let mut raise = false;
         for block in &function.blocks {
-            let result = match tail_position_call(block, effects) {
+            let result = match tail_position_call(block, effects).map(|(_, call)| call) {
                 Some(Call::Direct(target, _)) => {
                     callers[target.0 as usize].push(index);
                     functions[target.0 as usize].ret
@@ -121,15 +121,19 @@ fn raise_tail_returns(functions: &mut [CoreFn], effects: &[EffectInfo]) {
     }
 }
 
-/// 末尾の位置の呼び出し。ブロックの終端が `return x` で、同じブロックに `let x = <呼び出し>` があり、その後の文が
-/// すべて純粋な `let` であるときの、その呼び出しである。後ろの純粋な `let` は `return` が使わないので縮約が消し、
-/// そこで末尾呼び出しになる。`never` の操作を呼ぶ `perform` と節の呼び出しは戻らないので、末尾の位置の呼び出しに
-/// 数えない。
-fn tail_position_call<'a>(block: &'a Block, effects: &[EffectInfo]) -> Option<&'a Call> {
+/// 末尾の位置の呼び出しと、その文の位置。ブロックの終端が `return x` で、同じブロックに `let x = <呼び出し>` が
+/// あり、その後の文がすべて純粋な `let` であるときの、その呼び出しである。後ろの純粋な `let` は `return` が使わない
+/// ので縮約が消し、そこで末尾呼び出しになる。`never` の操作を呼ぶ `perform` と節の呼び出しは戻らないので、末尾の
+/// 位置の呼び出しに数えない。EP も、この呼び出しを yield の地点にしない
+/// (docs/superpowers/specs/2026-10-11-s7-evidence-passing-design.md の「yield の地点」)。
+pub(crate) fn tail_position_call<'a>(
+    block: &'a Block,
+    effects: &[EffectInfo],
+) -> Option<(usize, &'a Call)> {
     let Term::Return(Atom::Var(returned)) = block.term else {
         return None;
     };
-    for stmt in block.stmts.iter().rev() {
+    for (index, stmt) in block.stmts.iter().enumerate().rev() {
         let Stmt::Let { var, rhs } = stmt else {
             return None;
         };
@@ -161,7 +165,7 @@ fn tail_position_call<'a>(block: &'a Block, effects: &[EffectInfo]) -> Option<&'
                     call,
                     mask: _,
                     saved: _,
-                } => Some(call),
+                } => Some((index, call)),
                 _ => None,
             };
         }

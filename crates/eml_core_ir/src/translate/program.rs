@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 
-use eml_extern::Extern;
+use eml_extern::{Extern, ExternType};
 use eml_hir::{
     ConstructorId, EffectDef, EffectId, EffectKind, FunctionId, ModuleId, OpMultiplicity,
     OperationId, Program as HirProgram, TypeDefId, TypeDefKind, ValueItem,
@@ -14,8 +14,9 @@ use crate::{
     OperationInfo, Repr, Rhs, Stmt, Term, VarInfo,
 };
 
-use super::builder::FnBuilder;
-use super::types::{repr, split_arrows, var_info};
+use crate::builder::FnBuilder;
+
+use super::types::{named, repr, split_arrows, var_info};
 
 /// 文字列リテラルと表示用のパスの表。同じ文字列には同じ番号を返す。
 #[derive(Default)]
@@ -33,6 +34,31 @@ impl Interner {
         self.values.push(text.to_string());
         self.ids.insert(text.to_string(), id);
         id
+    }
+}
+
+/// 文字列を組む命令は translate だけが使うので、ブロックの組み立ての共有の部分には置かない。
+impl FnBuilder {
+    /// 文字列の定数を新しい変数に束縛する。導出した `Show` と補間が、同じ形で文字列を組むためにここに置く。
+    pub(super) fn string(&mut self, strings: &mut Interner, text: &str) -> Atom {
+        let id = strings.intern(text);
+        self.bind_string(Rhs::ConstString(id))
+    }
+
+    /// extern の `++` (`StrConcat`) で2つの文字列をつなぐ。ユーザーが定義した `++` によらない
+    /// (docs/spec/core-ir.md の「変換の規則」)。
+    pub(super) fn concat(&mut self, left: Atom, right: Atom) -> Atom {
+        self.bind_string(Rhs::Extern {
+            ext: Extern::StrConcat,
+            args: vec![left, right],
+            at: None,
+        })
+    }
+
+    fn bind_string(&mut self, rhs: Rhs) -> Atom {
+        let var = self.var(named("s", ExternType::String.row().repr));
+        self.emit(Stmt::Let { var, rhs });
+        Atom::Var(var)
     }
 }
 

@@ -12,10 +12,10 @@ use crate::{
     Stmt, TRUE, TUPLE, Term, VarId,
 };
 
-use super::builder::FnBuilder;
 use super::instances::{GeneratedInstance, GeneratedMethod, Target};
 use super::program::{ProgramBuilder, plain_call};
 use super::types::{named, repr, type_def_repr};
+use crate::builder::FnBuilder;
 
 /// 値のコンストラクタ1つ。タプルは、コンストラクタが1つの配置として同じ規則を通る。
 struct Constructor {

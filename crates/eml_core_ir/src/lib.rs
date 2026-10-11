@@ -5,7 +5,9 @@ use eml_extern::Extern;
 pub use eml_extern::Repr;
 
 mod boxing;
+mod builder;
 mod contract;
+mod evidence;
 pub mod liveness;
 mod perceus;
 mod pipeline;
@@ -17,6 +19,7 @@ mod verify;
 
 pub use boxing::boxing;
 pub use contract::contract;
+pub use evidence::evidence;
 pub use perceus::perceus;
 pub use pipeline::{Pass, lower, lower_until};
 pub use pretty::{pretty, pretty_with_positions};

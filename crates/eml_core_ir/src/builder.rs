@@ -4,17 +4,12 @@
 
 use std::mem;
 
-use eml_extern::{Extern, ExternType};
-
-use crate::{Atom, Block, BlockId, CoreFn, Repr, Rhs, Stmt, Term, VarId, VarInfo};
-
-use super::program::Interner;
-use super::types::named;
+use crate::{Atom, Block, BlockId, CoreFn, Repr, Stmt, Term, VarId, VarInfo};
 
 /// 値の渡し先になる、まだブロックになっていない位置。そこへ向かう開いたままのブロックを集め、ラベルを持つ式を
 /// 変換し終えたら `resolve` で扱いを決める。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) struct Label(usize);
+pub(crate) struct Label(usize);
 
 struct LabelState {
     /// ラベルをブロックとして置くときに作る引数。向かうブロックが1本なら作らない。
@@ -31,7 +26,7 @@ struct Slot {
     term: Option<Term>,
 }
 
-pub(super) struct FnBuilder {
+pub(crate) struct FnBuilder {
     vars: Vec<VarInfo>,
     blocks: Vec<Slot>,
     /// 文を足すブロック。終端を置くか、ラベルへ向かうと `None` になる。
@@ -41,7 +36,7 @@ pub(super) struct FnBuilder {
 
 impl FnBuilder {
     /// 入口のブロックを今のブロックにして始める。
-    pub(super) fn new() -> FnBuilder {
+    pub(crate) fn new() -> FnBuilder {
         let mut builder = FnBuilder {
             vars: Vec::new(),
             blocks: Vec::new(),
@@ -53,47 +48,25 @@ impl FnBuilder {
         builder
     }
 
-    pub(super) fn var(&mut self, info: VarInfo) -> VarId {
+    pub(crate) fn var(&mut self, info: VarInfo) -> VarId {
         self.vars.push(info);
         VarId(self.vars.len() as u32 - 1)
     }
 
     /// 関数の引数。入口のブロックの引数になる。
-    pub(super) fn param(&mut self, info: VarInfo) -> VarId {
+    pub(crate) fn param(&mut self, info: VarInfo) -> VarId {
         let var = self.var(info);
         self.blocks[BlockId::ENTRY.0 as usize].params.push(var);
         var
     }
 
-    pub(super) fn emit(&mut self, stmt: Stmt) {
+    pub(crate) fn emit(&mut self, stmt: Stmt) {
         let block = self.current.expect("statements go into an open block");
         self.blocks[block.0 as usize].stmts.push(stmt);
     }
 
-    /// 文字列の定数を新しい変数に束縛する。導出した `Show` と補間が、同じ形で文字列を組むためにここに置く。
-    pub(super) fn string(&mut self, strings: &mut Interner, text: &str) -> Atom {
-        let id = strings.intern(text);
-        self.bind_string(Rhs::ConstString(id))
-    }
-
-    /// extern の `++` (`StrConcat`) で2つの文字列をつなぐ。ユーザーが定義した `++` によらない
-    /// (docs/spec/core-ir.md の「変換の規則」)。
-    pub(super) fn concat(&mut self, left: Atom, right: Atom) -> Atom {
-        self.bind_string(Rhs::Extern {
-            ext: Extern::StrConcat,
-            args: vec![left, right],
-            at: None,
-        })
-    }
-
-    fn bind_string(&mut self, rhs: Rhs) -> Atom {
-        let var = self.var(named("s", ExternType::String.row().repr));
-        self.emit(Stmt::Let { var, rhs });
-        Atom::Var(var)
-    }
-
     /// 今のブロックを終端で閉じる。
-    pub(super) fn terminate(&mut self, term: Term) {
+    pub(crate) fn terminate(&mut self, term: Term) {
         let block = self
             .current
             .take()
@@ -102,7 +75,7 @@ impl FnBuilder {
     }
 
     /// 開いたままの新しいブロックを置く。今のブロックは変えない。`switch` の行き先に使う。
-    pub(super) fn new_block(&mut self) -> BlockId {
+    pub(crate) fn new_block(&mut self) -> BlockId {
         self.blocks.push(Slot {
             params: Vec::new(),
             stmts: Vec::new(),
@@ -112,7 +85,7 @@ impl FnBuilder {
     }
 
     /// 開いたままのブロックに戻り、今のブロックにする。
-    pub(super) fn reopen(&mut self, block: BlockId) {
+    pub(crate) fn reopen(&mut self, block: BlockId) {
         debug_assert!(
             self.current.is_none(),
             "the current block is closed or handed to a label first"
@@ -126,13 +99,13 @@ impl FnBuilder {
 
     /// 今のブロックを開いたまま手放す。後で `reopen` で戻る。値をそのまま調べる文脈が、値の分からないブロックを
     /// 集めるのに使う。
-    pub(super) fn suspend(&mut self) -> BlockId {
+    pub(crate) fn suspend(&mut self) -> BlockId {
         self.current
             .take()
             .expect("only an open block is suspended")
     }
 
-    pub(super) fn new_label(&mut self, params: Vec<VarInfo>) -> Label {
+    pub(crate) fn new_label(&mut self, params: Vec<VarInfo>) -> Label {
         self.labels.push(LabelState {
             params,
             pending: Vec::new(),
@@ -143,7 +116,7 @@ impl FnBuilder {
 
     /// 今のブロックを、`args` を渡して `label` へ向かうブロックにする。ブロックは開いたままで、`resolve` が扱いを
     /// 決めるまで終端を持たない。
-    pub(super) fn jump(&mut self, label: Label, args: Vec<Atom>) {
+    pub(crate) fn jump(&mut self, label: Label, args: Vec<Atom>) {
         let state = &mut self.labels[label.0];
         debug_assert!(!state.resolved, "no jump reaches a resolved label");
         debug_assert_eq!(
@@ -158,7 +131,7 @@ impl FnBuilder {
     /// ラベルへ向かうブロックの数で扱いを決め、ラベルの引数の値を返す (docs/spec/core-ir.md)。
     /// 0 本なら `None` で、今のブロックはない。1 本ならそのブロックに戻り、引数はそのブロックが渡す値になる。2 本以上
     /// なら各ブロックを `jump` で閉じ、ラベルを引数のあるブロックとして置いて今のブロックにする。
-    pub(super) fn resolve(&mut self, label: Label) -> Option<Vec<Atom>> {
+    pub(crate) fn resolve(&mut self, label: Label) -> Option<Vec<Atom>> {
         let state = &mut self.labels[label.0];
         state.resolved = true;
         let mut pending = mem::take(&mut state.pending);
@@ -192,7 +165,7 @@ impl FnBuilder {
     /// 大きいブロックから見るので、`return` に変わったブロックが次に消せる形になっても、同じ1回のループで消える。
     /// 消したブロックを詰めて、番号を振り直す。末尾呼び出しはここでは作らず、縮約に任せる (docs/spec/core-ir.md)。
     /// `internal` は内部の関数の印 (`CoreFn::internal`) である。
-    pub(super) fn finish(self, name: String, internal: bool, yields: bool, ret: Repr) -> CoreFn {
+    pub(crate) fn finish(self, name: String, internal: bool, yields: bool, ret: Repr) -> CoreFn {
         debug_assert!(
             self.labels.iter().all(|label| label.pending.is_empty()),
             "every label is resolved"
