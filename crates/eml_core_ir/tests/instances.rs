@@ -349,6 +349,19 @@ fn a_point_free_entry_takes_its_mark_from_its_first_arrow() {
     ");
 }
 
+#[test]
+fn a_point_free_entry_whose_first_arrow_has_its_own_row_variable_may_yield() {
+    let text = "effect Ask where\n  ask : Unit -> Int\n\ngo : Unit -> <e> Int\ngo = fn () -> 1\n\nmain : Unit -> <IO> Unit\nmain () = ()";
+    // 最初の矢印の row は入口自身の row 変数なので、その印は入口の row のビット (すべて立つ) から決まる
+    insta::assert_snapshot!(function(&core_text_with_entry(text, "go"), "entry$go"), @r#"
+    yields fn entry$go() -> int {
+      let f.0: tobj = call "go<e>"()
+      let t.1: int = yields apply f.0(())
+      return t.1
+    }
+    "#);
+}
+
 const SMALL: usize = 2000;
 const MAX_RATIO: f64 = 6.0;
 /// 型の深さが大きさに比例する形を測るスレッドのスタック (crates/eml_types/tests/scaling.rs の `DEEP_STACK` と同じ)。

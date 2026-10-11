@@ -1,6 +1,6 @@
-//! EP のパスのうち、yield の地点で関数を分ける部分 (docs/spec/core-ir.md
-//! の「yield の地点」「継続の関数」)。入力は手書きの translate の出力の形で、出力が EP の後の段の verifier を通ることも
-//! 確かめる。
+//! EP のパス (docs/spec/core-ir.md の「evidence passing」)。yield の地点で関数を分ける部分は、手書きの translate の
+//! 出力の形を入力にし、出力が EP の後の段の verifier を通ることも確かめる。handle、`perform`、`resume`、`mask` の変換は、
+//! ソースから EP の直後までを通した Core IR で確かめる。
 
 use crate::common::{core_text, function};
 use eml_core_ir::{Pass, evidence, parse, pretty, verify_evidence, verify_translated};
@@ -136,6 +136,63 @@ yields fn f(a.0: int) -> int {
     internal yields fn f$k1(a.0: int, y.2: int) -> int {
       let z.3: int = extern Prelude.+(y.2, a.0)
       return z.3
+    }
+    ");
+}
+
+#[test]
+fn a_continuation_copies_nested_switches_and_their_case_fields() {
+    // 地点の後の区間は、`switch` の行き先をたどって写す。b2 の `switch` は入れ子である。`Some` の場合が束ねる `v.3`
+    // は `f$k0` の中で定義されるので、`f$k0` の引数にならない。b4 の中の2つ目の地点は `f$k1` で続く
+    let text = "\
+layout Option { None, Some(int) }
+yields fn g(n.0: int) -> int {
+  return n.0
+}
+yields fn f(o.0: tobj, a.1: int) -> int {
+  let x.2: int = call g(a.1)
+  switch o.0 Option { #0 -> b1, #1(v.3: int) -> b2 }
+b1:
+  return x.2
+b2:
+  switch v.3 { 0 -> b3, _ -> b4 }
+b3:
+  return a.1
+b4:
+  let y.4: int = call g(v.3)
+  let z.5: int = extern \"Prelude.+\"(y.4, x.2)
+  return z.5
+}
+";
+    let shown = evidence_text(text);
+    insta::assert_snapshot!(function(&shown, "f$k0"), @"
+    internal yields fn f$k0(o.0: tobj, a.1: int, x.2: int) -> int {
+      switch o.0 Option { #0 -> b1, #1(v.3: int) -> b2 }
+    b1:
+      return x.2
+    b2:
+      switch v.3 { 0 -> b3, _ -> b4 }
+    b3:
+      return a.1
+    b4:
+      let y.4: int = call g(v.3)
+      let y.6: int = prim yielding()
+      switch y.6 { 0 -> b6, _ -> b5 }
+    b5:
+      let k.7: tobj = prim yield_cont_take()
+      let c.8: tobj = closure f$k1(x.2)
+      let k.9: tobj = closure compose$(k.7, c.8)
+      let u.10: unit = prim yield_cont_set(k.9)
+      return 0
+    b6:
+      let r.11: int = call f$k1(x.2, y.4)
+      return r.11
+    }
+    ");
+    insta::assert_snapshot!(function(&shown, "f$k1"), @"
+    internal yields fn f$k1(x.2: int, y.4: int) -> int {
+      let z.5: int = extern Prelude.+(y.4, x.2)
+      return z.5
     }
     ");
 }
@@ -595,18 +652,15 @@ fn a_perform_looks_up_evidence_and_calls_its_clause() {
     ");
 }
 
-#[test]
-fn a_masked_call_restores_the_evidence_list_and_wraps_the_continuation() {
-    // 遅い道は κ を `mask$[State]` で包んでから `run$k1` を `compose$` で足す。速い道の先頭で `evv_set(w0)` が
-    // `evv` を戻し、`run$k1` の引数に w0 はない
-    let text = "effect State s where\n  get : Unit -> s\n  put : s -> Unit\n\nrun : (Unit -> <e> String) -> <State Int | e> String\nrun cb =\n  let n = get ()\n  let s = cb ()\n  s ++ show n\n\ncb : Unit -> <State String> String\ncb () = get () ++ \"!\"\n\nmain : Unit -> <IO> Unit\nmain () =\n  let r = handle (handle run cb with\n                    | get () k -> k 42\n                    | put _ k -> k ()) with\n            | get () k -> k \"str\"\n            | put _ k -> k ()\n  println r";
-    let shown = core_text(text, Pass::Evidence);
-    let run = shown
+/// `name` の instance の関数の名前。row の変数を持つ instance は `"run<e>"` のように引用符付きで表示される。
+fn instance_name(shown: &str, name: &str) -> String {
+    let quoted = format!("\"{name}");
+    shown
         .lines()
         .find_map(|line| {
             line.split("fn ")
                 .nth(1)
-                .filter(|rest| rest.starts_with("\"run"))
+                .filter(|rest| rest.starts_with(&quoted))
         })
         .map(|rest| {
             rest.split('(')
@@ -615,7 +669,16 @@ fn a_masked_call_restores_the_evidence_list_and_wraps_the_continuation() {
                 .trim_matches('"')
                 .to_string()
         })
-        .unwrap_or_else(|| panic!("no `run` in\n{shown}"));
+        .unwrap_or_else(|| panic!("no `{name}` in\n{shown}"))
+}
+
+#[test]
+fn a_masked_call_restores_the_evidence_list_and_wraps_the_continuation() {
+    // 遅い道は κ を `mask$[State]` で包んでから `run$k1` を `compose$` で足す。速い道の先頭で `evv_set(w0)` が
+    // `evv` を戻し、`run$k1` の引数に w0 はない
+    let text = "effect State s where\n  get : Unit -> s\n  put : s -> Unit\n\nrun : (Unit -> <e> String) -> <State Int | e> String\nrun cb =\n  let n = get ()\n  let s = cb ()\n  s ++ show n\n\ncb : Unit -> <State String> String\ncb () = get () ++ \"!\"\n\nmain : Unit -> <IO> Unit\nmain () =\n  let r = handle (handle run cb with\n                    | get () k -> k 42\n                    | put _ k -> k ()) with\n            | get () k -> k \"str\"\n            | put _ k -> k ()\n  println r";
+    let shown = core_text(text, Pass::Evidence);
+    let run = instance_name(&shown, "run");
     insta::assert_snapshot!(function(&shown, &run), @r#"
     yields fn "run<e>"(cb.0: tobj) -> obj {
       let ev.5: obj = prim ev_lookup[State]()
@@ -659,6 +722,68 @@ fn a_masked_call_restores_the_evidence_list_and_wraps_the_continuation() {
       return t.4
     }
     "#);
+}
+
+#[test]
+fn a_masked_call_in_a_continuation_restores_the_evidence_list_before_it_continues() {
+    // 2つ目の `cb ()` は1つ目の地点の後の区間にあるので、`run$k0` の中の地点になる。`run$k0` の速い道は `run$k1` を
+    // 呼んで止まるが、その前に `evv_set(w0)` で `evv` を戻す。`run$k1` の本体には `evv_set` がない
+    let text = "effect State s where\n  get : Unit -> s\n  put : s -> Unit\n\nrun : (Unit -> <e> String) -> <State Int | e> String\nrun cb =\n  let a = cb ()\n  let b = cb ()\n  a ++ b\n\ncb : Unit -> <State String> String\ncb () = get ()\n\nmain : Unit -> <IO> Unit\nmain () =\n  let r = handle (handle run cb with\n                    | get () k -> k 42\n                    | put _ k -> k ()) with\n            | get () k -> k \"str\"\n            | put _ k -> k ()\n  println r";
+    let shown = core_text(text, Pass::Evidence);
+    let run = instance_name(&shown, "run");
+    insta::assert_snapshot!(function(&shown, &format!("{run}$k0")), @r#"
+    internal yields fn "run<e>$k0"(cb.0: tobj, t.1: obj) -> obj {
+      let w.8: tobj = prim evv_get()
+      let w.9: tobj = prim evv_mask[State](w.8)
+      let u.10: unit = prim evv_set(w.9)
+      let t.2: obj = yields apply cb.0(())
+      let y.12: int = prim yielding()
+      switch y.12 { 0 -> b2, _ -> b1 }
+    b1:
+      let k.13: tobj = prim yield_cont_take()
+      let k.14: tobj = closure "mask$[State]"(k.13)
+      let c.15: tobj = closure "run<e>$k1"(t.1)
+      let k.16: tobj = closure compose$(k.14, c.15)
+      let u.17: unit = prim yield_cont_set(k.16)
+      let d.18: obj = prim dummy()
+      return d.18
+    b2:
+      let u.11: unit = prim evv_set(w.8)
+      let r.19: obj = call "run<e>$k1"(t.1, t.2)
+      return r.19
+    }
+    "#);
+    insta::assert_snapshot!(function(&shown, &format!("{run}$k1")), @r#"
+    internal yields fn "run<e>$k1"(t.1: obj, t.2: obj) -> obj {
+      let t.3: obj = extern Prelude.++(t.1, t.2)
+      return t.3
+    }
+    "#);
+}
+
+#[test]
+fn a_resume_in_a_yielding_function_becomes_a_yielding_apply() {
+    // handle を含む `f` は `Log` を外へ通すので `yields` で、節の関数も `yields` になる。`resume k(v, s)` は
+    // `yields apply k(v, s)` になり、末尾でなければ yield の地点になる
+    let text = format!(
+        "{ASK}effect Log where\n  log : Int -> Unit\n\nf : Unit -> <Log> Int\nf () =\n  handle ask () + 1 with\n    | ask () k ->\n      let v = k 10\n      v * 2\n\nmain : Unit -> <IO> Unit\nmain () =\n  let r = handle f () with\n            | log _ k -> k ()\n  println (show r)"
+    );
+    let shown = core_text(&text, Pass::Evidence);
+    insta::assert_snapshot!(function(&shown, "f$handle0$ask"), @"
+    internal yields fn f$handle0$ask(p.0: unit, k.1: tobj, p.2: unit) -> int {
+      let t.3: int = yields apply k.1(10, ())
+      let y.5: int = prim yielding()
+      switch y.5 { 0 -> b2, _ -> b1 }
+    b1:
+      let k.6: tobj = prim yield_cont_take()
+      let k.7: tobj = closure compose$(k.6, &f$handle0$ask$k0)
+      let u.8: unit = prim yield_cont_set(k.7)
+      return 0
+    b2:
+      let t.4: int = extern Prelude.*(t.3, 2)
+      return t.4
+    }
+    ");
 }
 
 /// row のビットで純粋と決まった instance は `yields` でないので、EP は yield の確認を足さない
