@@ -6,7 +6,7 @@ use eml_hir::{
     Closure, ConstructorId, ExprId, ExprKind, FunctionId, FunctionKind, Literal, OperationId,
     PatId, Program as HirProgram, Res, Segment, ValueItem,
 };
-use eml_types::{FieldTarget, TypeId};
+use eml_types::{FieldTarget, Lin, TypeId, TypeKind};
 
 use crate::{Call, Rhs, Stmt};
 use eml_lir::{Atom, Ctor, FnIdx, Repr, TUPLE, VarId};
@@ -139,6 +139,15 @@ impl FnLowering<'_> {
         let arity = self.callee_arity(callee);
         // 部分適用はクロージャを作るだけでエフェクトを起こさないので、`mask` を付けない
         if args.len() < arity {
+            // 確かめるのは、知っている関数と構成子の部分適用だけである。extern と操作の包む関数の矢印は宣言から決まり、
+            // 継続の部分適用 `k v` は確かめない所に入る (docs/superpowers/specs/2026-10-12-s8c-kind-export-design.md の
+            // 「食い違いがないことの検査」)
+            if cfg!(debug_assertions)
+                && matches!(callee, Callee::Function(_) | Callee::Constructor(_))
+            {
+                let (captured, closure_ty) = split_arrows(self.ctx.store, callee_ty, args.len());
+                self.check_captures(closure_ty, &captured, "partial application");
+            }
             let wrapper = self.callee_wrapper(callee);
             return self.closure(wrapper, args);
         }
@@ -669,6 +678,13 @@ impl FnLowering<'_> {
                     self.ctx.root_name, self.ctx.numbering.lambdas[id]
                 );
                 let captured = body.closure_captures(closure);
+                if cfg!(debug_assertions) {
+                    let captured: Vec<TypeId> = captured
+                        .iter()
+                        .map(|&local| self.ctx.types.locals[local])
+                        .collect();
+                    self.check_captures(lambda_ty, &captured, "lambda");
+                }
                 let ret = repr(self.ctx.store, ret_ty, self.ctx.hir);
                 let yields = self.ctx.resolve(
                     *self
@@ -680,6 +696,27 @@ impl FnLowering<'_> {
                 );
                 self.lift(name, yields, captured, &params, *lambda_body, ret)
             }
+        }
+    }
+
+    /// 作るクロージャの矢印 `closure_ty` が `Unr` なら、捕まえる値の型 `captured` がすべて `Unr` であることを
+    /// 確かめる。参照の検査と操作の検査は両側を比べるので、両側が同じに誤った印 (`Lin` の値を持つ `unr` の
+    /// クロージャ) には気づけないためである (docs/superpowers/specs/2026-10-12-s8c-kind-export-design.md の
+    /// 「食い違いがないことの検査」)。
+    fn check_captures(&self, closure_ty: TypeId, captured: &[TypeId], what: &str) {
+        let store = self.ctx.store;
+        let TypeKind::Fn { lin: Lin::Unr, .. } = store.kind(closure_ty) else {
+            return;
+        };
+        for &ty in captured {
+            assert!(
+                store.linearity(ty) == Lin::Unr,
+                "internal error: in `{}`, an unr {what} of type `{}` captures a value of type `{}`, whose linearity is {:?}",
+                self.ctx.root_name,
+                store.display_linear(closure_ty, &self.ctx.hir.names),
+                store.display_linear(ty, &self.ctx.hir.names),
+                store.linearity(ty),
+            );
         }
     }
 

@@ -482,6 +482,22 @@ fn a_type_variable_above_a_poly_arrow_makes_the_recursive_call_poly() {
 }
 
 #[test]
+fn a_closure_with_a_file_passed_as_a_type_variable_lowers() {
+    // 上の `f` の例を LIR まで下ろす。debug ビルドでは、translate の参照、操作、捕獲の検査がこの途中で走るので、
+    // 検査がこのプログラムを拒まないことも確かめる。`k` は `File` を捕まえうるので `unr` にならない
+    // (docs/superpowers/specs/2026-10-12-s8c-kind-export-design.md の「食い違いがないことの検査」)
+    let text = "f : a -> (a -> <IO> Int) -> (Int -> <IO> Int) -> Int -> <IO> Int\nf x eat g n =\n  if n == 0 then g (eat x)\n  else\n    let k = fn y -> g (eat x + y)\n    f k (fn h -> h 1) (fn z -> z) (n - 1)\n\nshut_with : Fs.File -> Int -> <IO> Int\nshut_with file z =\n  Fs.close file\n  z\n\nmain : Unit -> <IO> Unit\nmain () =\n  let file = Fs.open \"a.txt\"\n  let n = f 1 (fn y -> y) (shut_with file) 3\n  println (show n)";
+    let program = eml_test_support::lir(text);
+    let names: Vec<&str> = program
+        .functions
+        .iter()
+        .filter(|function| !function.internal && function.name.starts_with("f@"))
+        .map(|function| function.name.as_str())
+        .collect();
+    assert_eq!(names, ["f@[Int]", "f@[Int %m -> <IO> Int]"]);
+}
+
+#[test]
 fn a_result_only_operation_variable_is_a_poly_key() {
     // `mk` の `a` は結果の型にだけ現れるので、節の中の `OpVar` の Kind は `Poly` で、`ids` の鍵はその `Flexible(Poly)`
     // になる。名前の `Flexible` は Kind によらず `_` と書く (docs/superpowers/specs/2026-10-12-s8c-kind-export-design.md

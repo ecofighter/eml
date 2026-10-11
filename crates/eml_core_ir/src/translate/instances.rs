@@ -6,7 +6,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 
 use eml_extern::Extern;
 use eml_hir::{
-    CoreMethod, ExprId, FunctionId, FunctionKind, InstanceOrigin, MethodId, MethodImpl,
+    CoreMethod, ExprId, ExprKind, FunctionId, FunctionKind, InstanceOrigin, MethodId, MethodImpl,
     Program as HirProgram, TypeDefKind, ValueItem,
 };
 use eml_types::{
@@ -558,6 +558,116 @@ impl Collector<'_> {
             })
             .collect()
     }
+
+    /// 関数の instance ごとに、参照の型と呼ばれる instance の型、`perform` の型と操作の宣言の型、節の型と操作の宣言の
+    /// 型を比べ、`unr` と `lin` が食い違わないことを確かめる。この食い違いを最初に拒むのは S8d の V2 なので、それより
+    /// 前に書き出しか評価が誤れば気づけない。そのため debug ビルドで確かめる
+    /// (docs/superpowers/specs/2026-10-12-s8c-kind-export-design.md の「食い違いがないことの検査」)。
+    fn check_linearity(&mut self) {
+        let Collector {
+            hir,
+            typed,
+            store,
+            found: list,
+            ..
+        } = self;
+        let (hir, typed) = (*hir, *typed);
+        for found in list.iter() {
+            let Found::Function(found) = found else {
+                continue;
+            };
+            let function = found.function;
+            let types = found.types.as_deref().unwrap_or_else(|| {
+                typed
+                    .bodies
+                    .get(function)
+                    .expect("every reached body is type-checked")
+            });
+            let instance = |store: &TypeStore| {
+                format!(
+                    "`{}` at `{}`",
+                    hir[function].name,
+                    store.display_linear(found.signature, &hir.names)
+                )
+            };
+            for (expr, &target) in found.targets.iter() {
+                // 生成器の instance と extern は比べる型を持たない。extern は S8d の Kind の列で確かめる
+                let FoundTarget::Function(index) = target else {
+                    continue;
+                };
+                let Found::Function(callee) = &list[index] else {
+                    continue;
+                };
+                assert!(
+                    store.lin_compatible(types.exprs[expr], callee.signature),
+                    "internal error: in {}, a reference of type `{}` meets unr with lin in its callee `{}` at `{}`",
+                    instance(store),
+                    store.display_linear(types.exprs[expr], &hir.names),
+                    hir[callee.function].name,
+                    store.display_linear(callee.signature, &hir.names),
+                );
+            }
+            for (expr, instantiation) in types.instantiations.iter() {
+                let ValueItem::Operation(op) = instantiation.decl else {
+                    continue;
+                };
+                let names = hir[op]
+                    .signature
+                    .generics
+                    .type_vars
+                    .iter()
+                    .map(|(_, var)| var.name.clone());
+                let kinds = typed.kind_values(instantiation.decl, &instantiation.args, store);
+                let mut subst =
+                    Substitution::new(names.zip(instantiation.args.iter().copied()), kinds);
+                let declared = store.substitute(typed.decls[&instantiation.decl].ty, &mut subst);
+                assert!(
+                    store.lin_compatible(types.exprs[expr], declared),
+                    "internal error: in {}, a reference of type `{}` meets unr with lin in operation `{}` at `{}`",
+                    instance(store),
+                    store.display_linear(types.exprs[expr], &hir.names),
+                    hir[op].name,
+                    store.display_linear(declared, &hir.names),
+                );
+            }
+            let body = hir
+                .body(function)
+                .expect("every reached function has a body");
+            for (_, expr) in body.exprs.iter() {
+                let ExprKind::Handle { clauses, .. } = &expr.kind else {
+                    continue;
+                };
+                for clause in clauses {
+                    // 節の具体化は記録されないので、宣言の型を代入せずに比べる。`Rigid` はどの型とも合い、`Var` は
+                    // `Poly` として比べる
+                    let declared = typed.decls[&ValueItem::Operation(clause.op)].ty;
+                    let (params, ret) = split_arrows(store, declared, clause.arity);
+                    let mut pairs: Vec<(TypeId, TypeId)> = clause
+                        .args()
+                        .iter()
+                        .map(|&pat| types.pats[pat])
+                        .zip(params)
+                        .collect();
+                    // `k` は操作の結果を最初の引数で受ける
+                    if let Some(k) = clause.k()
+                        && let TypeKind::Fn { param, .. } = store.kind(types.pats[k])
+                    {
+                        pairs.push((*param, ret));
+                    }
+                    for (clause_ty, declared_ty) in pairs {
+                        assert!(
+                            store.lin_compatible(clause_ty, declared_ty),
+                            "internal error: in {}, a clause of `{}` takes `{}`, which meets unr with lin in the declared `{}`",
+                            instance(store),
+                            hir[clause.op].name,
+                            store.display_linear(clause_ty, &hir.names),
+                            store.display_linear(declared_ty, &hir.names),
+                        );
+                    }
+                }
+            }
+        }
+    }
 }
 
 pub(super) fn collect(hir: &HirProgram, typed: &TypedProgram, entry: FunctionId) -> Instances {
@@ -596,6 +706,10 @@ pub(super) fn collect(hir: &HirProgram, typed: &TypedProgram, entry: FunctionId)
             Found::Function(_) => collector.function_body(index),
             Found::Generated { .. } => collector.generated_calls(index),
         }
+    }
+    // 呼ばれる instance の `signature` は、その本体をたどった後に代入をかけた型になるので、すべてたどり終えてから比べる
+    if cfg!(debug_assertions) {
+        collector.check_linearity();
     }
     order(hir, collector.found, entry_index, collector.store)
 }
