@@ -55,7 +55,7 @@ impl Signatures {
 }
 
 /// 段1を終えた本体。Kind を解いた後に型を書き出すので、推論用の表を SCC の解が出るまで持つ
-/// (docs/superpowers/specs/2026-10-12-s8c-kind-export-design.md の「型検査の順」)。
+/// (docs/implementation/architecture.md の「`eml_types` の内部」)。
 pub(crate) struct PendingBody<'c> {
     table: Table<'c>,
     typing: BodyTyping,
@@ -486,7 +486,7 @@ pub(crate) fn export_body(
     } = pending;
     // 式、局所変数、パターン、具体化の型は表の同じ節点を共有するので、1つの `Exporter` で書き出し、各節点を1回だけ
     // 書き出す。`joins` の番号は初めて現れた順に振るので、この書き出しの順 (式、局所変数、パターン、具体化、更新、
-    // 捨てたフィールド) が番号を決める (docs/superpowers/specs/2026-10-12-s8c-kind-export-design.md の
+    // 捨てたフィールド) が番号を決める (docs/spec/types.md の
     // 「宣言の Kind 変数の番号」)
     let mut exporter = Exporter::final_(&table, types, kinds);
     let mut body_types = BodyTypes::default();

@@ -454,7 +454,7 @@ fn lowering_shared_type_arguments_is_linear() {
 fn instances_that_differ_only_in_linearity_have_different_names() {
     // `k` は `File` を捕まえるので矢印が `Lin` になる。`inc` の宣言の一番外の矢印は `Unr` で、参照の row は開いて
     // いるので、`main` の中で呼ぶと `<IO>` になる。2つの型引数は線形性だけが違い、名前は矢印の線形性を `%1` で書くので、
-    // 番号付きの名前に落ちない (docs/superpowers/specs/2026-10-12-s8c-kind-export-design.md の「instance の名前」)
+    // 番号付きの名前に落ちない (docs/spec/core-ir.md の「変換の規則」)
     let text = "id : a -> a\nid x = x\n\ninc : Int -> Int\ninc x = x + 1\n\nmain : Unit -> <IO> Unit\nmain () =\n  let h = Fs.open \"a.txt\"\n  let k = fn n ->\n    Fs.close h\n    n\n  let one = id k\n  let a = one 1\n  let i = id inc\n  println (show (i a))";
     assert_eq!(
         instances_of(text, "id"),
@@ -465,7 +465,7 @@ fn instances_that_differ_only_in_linearity_have_different_names() {
 #[test]
 fn a_function_called_with_lin_and_unr_closures_has_one_instance() {
     // instance の鍵は型引数だけで、呼ばれる側の矢印の変数は鍵に入らない。`apply` の `f` の矢印は instance の中で
-    // `Poly` になる (docs/superpowers/specs/2026-10-12-s8c-kind-export-design.md の「instance での評価」)
+    // `Poly` になる (docs/spec/types.md の「instance での評価」)
     let text = "apply : (a -> <e> b) -> a -> <e> b\napply f x = f x\n\nmain : Unit -> <IO> Unit\nmain () =\n  let h = Fs.open \"a.txt\"\n  let a = apply (fn n ->\n    Fs.close h\n    n) 1\n  let b = apply (fn n -> n + 1) a\n  println (show b)";
     assert_eq!(instances_of(text, "apply"), ["apply@[Int, Int]"]);
 }
@@ -485,7 +485,7 @@ fn a_type_variable_above_a_poly_arrow_makes_the_recursive_call_poly() {
 fn a_closure_with_a_file_passed_as_a_type_variable_lowers() {
     // 上の `f` の例を LIR まで下ろす。debug ビルドでは、translate の参照、操作、捕獲の検査がこの途中で走るので、
     // 検査がこのプログラムを拒まないことも確かめる。`k` は `File` を捕まえうるので `unr` にならない
-    // (docs/superpowers/specs/2026-10-12-s8c-kind-export-design.md の「食い違いがないことの検査」)
+    // (docs/spec/core-ir.md の「食い違いがないことの検査」)
     let text = "f : a -> (a -> <IO> Int) -> (Int -> <IO> Int) -> Int -> <IO> Int\nf x eat g n =\n  if n == 0 then g (eat x)\n  else\n    let k = fn y -> g (eat x + y)\n    f k (fn h -> h 1) (fn z -> z) (n - 1)\n\nshut_with : Fs.File -> Int -> <IO> Int\nshut_with file z =\n  Fs.close file\n  z\n\nmain : Unit -> <IO> Unit\nmain () =\n  let file = Fs.open \"a.txt\"\n  let n = f 1 (fn y -> y) (shut_with file) 3\n  println (show n)";
     let program = eml_test_support::lir(text);
     let names: Vec<&str> = program
@@ -500,8 +500,8 @@ fn a_closure_with_a_file_passed_as_a_type_variable_lowers() {
 #[test]
 fn a_result_only_operation_variable_is_a_poly_key() {
     // `mk` の `a` は結果の型にだけ現れるので、節の中の `OpVar` の Kind は `Poly` で、`ids` の鍵はその `Flexible(Poly)`
-    // になる。名前の `Flexible` は Kind によらず `_` と書く (docs/superpowers/specs/2026-10-12-s8c-kind-export-design.md
-    // の「`Flexible` と `OpVar` の Kind」と「instance の名前」)。Kind そのものは eml_types の `kind_export` のテストが
+    // になる。名前の `Flexible` は Kind によらず `_` と書く (docs/spec/types.md
+    // の「`Flexible` と `OpVar` の Kind」と、docs/spec/core-ir.md の「変換の規則」)。Kind そのものは eml_types の `kind_export` のテストが
     // 確かめる
     let text = "ids : List a -> List a\nids xs = xs\n\neffect Make where\n  mk : Unit -> List a\n\nbody : Unit -> <Make> Int\nbody () =\n  let xs = (mk () : List Int)\n  0\n\nmain : Unit -> <IO> Unit\nmain () =\n  let n = handle body () with\n            | mk () k -> k (ids [])\n  println (show n)";
     assert_eq!(instances_of(text, "ids"), ["ids@[_]"]);

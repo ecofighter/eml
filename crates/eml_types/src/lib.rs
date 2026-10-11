@@ -84,20 +84,20 @@ pub struct TypedProgram {
 #[derive(Debug)]
 pub struct DeclType {
     /// 後の段階が読む型。検査の最後に1回だけ書き出しておく。矢印は線形性を持ち、スキームで定数に決まらない宣言自身の
-    /// 変数は `Var(i)` で残る (docs/superpowers/specs/2026-10-12-s8c-kind-export-design.md の「推論の途中で書き出す型」)。
+    /// 変数は `Var(i)` で残る (docs/implementation/architecture.md の「`eml_types` の内部」)。
     pub ty: TypeId,
     /// 後の段階は Kind を読まない (docs/implementation/architecture.md の「`eml_types` の内部」) ので、外からは読めなくする。
     pub(crate) shape: Shape,
     pub(crate) kinds: KindScheme,
     /// 本体の型の `Var(shape.lin_vars + k)` が表す、宣言自身の変数の集合 `joins[k]`。値はその変数の値の結びである
-    /// (docs/superpowers/specs/2026-10-12-s8c-kind-export-design.md の「宣言の Kind 変数の番号」)。
+    /// (docs/spec/types.md の「宣言の Kind 変数の番号」)。
     pub(crate) joins: Vec<Vec<u32>>,
 }
 
 impl TypedProgram {
     /// 宣言の `Var(i)` の、型引数 `args` (`Shape::rigids` の順) の instance での値。`i < lin_vars` は宣言自身の変数、
     /// それ以降は `joins` の結びである。値は `Unr`、`Lin`、`Poly` のどれかになる
-    /// (docs/superpowers/specs/2026-10-12-s8c-kind-export-design.md の「instance での評価」)。
+    /// (docs/spec/types.md の「instance での評価」)。
     pub fn kind_values(&self, decl: ValueItem, args: &[TypeId], store: &TypeStore) -> Vec<Lin> {
         let declared = &self.decls[&decl];
         let shape = &declared.shape;
@@ -124,7 +124,7 @@ impl TypedProgram {
 
     /// 関数の一様な位置 `position` の型変数の Kind。一様な位置の鍵は `Int` の呼び出し元にも `File` の呼び出し元にも
     /// 使われるので、スキームで `Unr` に固定されていなければ `Poly` にする
-    /// (docs/superpowers/specs/2026-10-12-s8c-kind-export-design.md の「`Flexible` と `OpVar` の Kind」)。
+    /// (docs/spec/types.md の「`Flexible` と `OpVar` の Kind」)。
     pub fn uniform_kind(&self, function: FunctionId, position: usize) -> Lin {
         let declared = &self.decls[&ValueItem::Function(function)];
         let mu = declared.shape.rigids[position].1.index();
@@ -138,7 +138,7 @@ impl TypedProgram {
 
     /// 単相化で宣言の本体の型を写す必要があるか。型変数を持つか、定数に畳まれない宣言自身の線形性の変数を持つときに
     /// 写す。`joins` の変数も宣言自身の変数なので、これで足りる
-    /// (docs/superpowers/specs/2026-10-12-s8c-kind-export-design.md の「代入と単相化」)。
+    /// (docs/spec/core-ir.md の「変換の規則」)。
     pub fn needs_substitution(&self, decl: ValueItem) -> bool {
         let declared = &self.decls[&decl];
         let shape = &declared.shape;
@@ -211,7 +211,7 @@ pub enum FieldTarget {
 pub struct Instantiation {
     pub decl: ValueItem,
     /// `Shape::rigids` の順 (関数はシグネチャに最初に現れた順、操作はエフェクトの型引数が先、コンストラクタは `data` の
-    /// 頭の型引数の順) に並べた型引数。row 変数と Kind 変数は持たない。
+    /// 頭の型引数の順) に並べた型引数。矢印は線形性を持つ。row 変数と宣言の Kind 変数そのものは持たない。
     pub args: Vec<TypeId>,
     /// 参照先のシグネチャの row 変数 (`generics.row_vars` の順) を具体化した row の分類。シグネチャが row 変数を
     /// 持たなければ空である。

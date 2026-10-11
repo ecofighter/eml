@@ -54,21 +54,22 @@ S13 の後は、言語の項目を次の順に並べる。
 
 前提: なし。
 
-S8 を、S8a、S8b、S8c の3つの作業に分けて順に進める。段の列では S8 の1行のままにする。初めは、完了の条件がダンプをバイト単位で一致させる部分と期待値を変える部分に分かれるので、S8a と S8b の2つに分けた。S8b の設計で、Kind の印には `eml_types` が解いた Kind を書き出す作業が要ると分かったので、Kind の印を S8c に分けた。
+S8 を、S8a から S8d の4つの作業に分けて順に進める。段の列では S8 の1行のままにする。初めは、完了の条件がダンプをバイト単位で一致させる部分と期待値を変える部分に分かれるので、S8a と S8b の2つに分けた。S8b の設計で、Kind の印には `eml_types` が解いた Kind を書き出す作業が要ると分かったので、それを S8c に分けた。S8c の設計で、Kind の書き出しだけで1つの作業になる大きさだと分かったので、印の作業を S8d にした。
 
 | 作業 | 中身 | 状態 |
 |---|---|---|
 | S8a | LIR の型、テキスト形式、パーサ、verifier、Core IR から LIR への変換。box の挿入、縮約、Perceus を LIR に移し、CEK が LIR を読む | 終えた。決めたことは [Core IR](../spec/core-ir.md) と [LIR とインタプリタ](../spec/lir.md) に移した。移す作業の前後で、EP、box の挿入、縮約、Perceus の後のダンプは、UI テストと `bench/` のすべてのプログラムでバイト単位で一致した |
 | S8b | Perceus の所有の形 (フィールドを借りたまま使い、所有が要る所でだけ所有を取る形)、基本操作の引数の借用、`File` の実行時の検査 | 終えた。決めたことは [LIR とインタプリタ](../spec/lir.md) の「値の表現」、「基本操作」、「Perceus」と、[ランタイム](../spec/runtime.md) の「`File` の参照の検査」に移した。`bench/` の仕事の回数で変わったのは `state` の RC の増減だけである ([計測の基準](../implementation/benchmarks.md) の「S8b (所有の形と基本操作の借用)」) |
-| S8c | `eml_types` の Kind の書き出し、translate と EP と box の挿入の Kind の印、extern の行の Kind の列、V1 と V2、テキストの形の印 | これから。期待値の変更 (印を含むダンプ) を伴う |
+| S8c | 書き出す型の線形性 (`Lin`、`Flexible(Lin)`、`OpVar(_, Lin)`)、SCC ごとに解いてから書き出す型検査の順、instance での Kind の評価 (`kind_values`)、型の線形性 (`linearity`)、instance の名前の `%1` / `%m`、debug ビルドの食い違いの検査 | 終えた。決めたことは [型と Kind](../spec/types.md) の「Kind の書き出し」、[Core IR](../spec/core-ir.md) の「変換の規則」と「食い違いがないことの検査」、[コンパイラの構成](../implementation/architecture.md) の「`eml_types` の内部」に移した。UI テストの出力、診断の文字列、`bench/` の仕事の回数は変わらない |
+| S8d | translate と EP と box の挿入の Kind の印、EP の明示の drop、extern の行の Kind の列、V1 と V2、テキストの形の印 | これから。期待値の変更 (印を含むダンプ) を伴う |
 
-Kind の印を S8c に分けた理由は次のとおりである。
+Kind の印を S8d に分け、書き出しを S8c にした理由は次のとおりである。
 
-- 書き出す型 (`TypeKind::Fn`) は矢印の線形性を持たず、`KindScheme` は `eml_types` の外から読めない ([コンパイラの構成](../implementation/architecture.md) の「`eml_types` の内部」)。型だけから印を決めると、関数型の変数がすべて `poly` になり、`twice f x = f (f x)` の `Unr` のクロージャ `f` の `dup` まで V1 が拒む
-- そのため S8c には、解いた Kind を後の段階へ書き出す作業が要る。「後の段階は線形性を読まない」という決まりを反転するので、それだけで1つの spec になる大きさである
-- 「`Lin` の物体の RC は 1」([LIR とインタプリタ](../spec/lir.md) の「値の表現」) のうち `File` の物体そのものは、V1 がなくても実行時に確かめられる ([ランタイム](../spec/runtime.md) の「`File` の参照の検査」)。`File` を含む `Lin` のデータとクロージャは、S8c の V1 で静的に覆う
+- 型だけから印を決める案は採れない。`tests/ui/run/files/file_in_return_clause_on_abort.em` では、使われない `return x ->` の `x` は型が `_` で、使用回数のパスが `x` の Kind を `Unr` に決めている。型だけから決めると `x` は `poly` になり、今ある `decref x` を V1 が拒む。解いた Kind を型に持たせて書き出す必要があり、これは `eml_types` の段の組み替えを伴う
+- S8c は S8d がなくても検査できる。書き出した型と評価の結果は `eml_types` の単体テストで、instance の分かれ方は `eml_core_ir` のテストで確かめる
+- 「`Lin` の物体の RC は 1」([LIR とインタプリタ](../spec/lir.md) の「値の表現」) のうち `File` の物体そのものは、V1 がなくても実行時に確かめられる ([ランタイム](../spec/runtime.md) の「`File` の参照の検査」)。`File` を含む `Lin` のデータとクロージャは、S8d の V1 で静的に覆う
 
-S8c の終わりに、`bench/run.sh` の命令の数を [計測の基準](../implementation/benchmarks.md) に記録する。
+S8d の終わりに、`bench/run.sh` の命令の数を [計測の基準](../implementation/benchmarks.md) に記録する。
 
 ### 決めたこと
 
@@ -76,6 +77,7 @@ S8c の終わりに、`bench/run.sh` の命令の数を [計測の基準](../imp
 
   | 項目 | 置き場所 |
   |---|---|
+  | 書き出す型の線形性 | `eml_types` が書き出し、`kind_values` と `linearity` で評価する ([型と Kind](../spec/types.md) の「Kind の書き出し」) |
   | 変数の Kind の印 | Core IR で決まり、LIR に写す (下の「Kind の印」) |
   | verifier の段 | Core IR (translate の後、EP の後) と LIR (入口、範囲、所有)。V1 と V2 は LIR の所有の段に足す |
 
@@ -90,13 +92,13 @@ S8c の終わりに、`bench/run.sh` の命令の数を [計測の基準](../imp
   | `poly` | 静的には分からない | 拒む | 拒む |
 
   - `poly` に `dup` を拒んでも困らない。ソースで2回使うか使わなければ型検査が `Unr` の制約を付けるので、制約のない Kind 変数の値はちょうど1回使われている。`decref` を拒むのは、`Lin` の物体の RC が 0 になると破棄処理が呼ばれ、暗黙の後始末になるためである
-- 印は Repr と同じく Core IR で決め、LIR に写す。Core IR の変数が印を持つので、「Kind は残さない」([Core IR](../spec/core-ir.md) の「型の Repr」と [LIR とインタプリタ](../spec/lir.md) の「値の表現」) を、S8c で改める
+- 印は Repr と同じく Core IR で決め、LIR に写す。Core IR の変数が印を持つので、「Kind は残さない」([Core IR](../spec/core-ir.md) の「型の Repr」と [LIR とインタプリタ](../spec/lir.md) の「値の表現」) を、S8d で改める
   - translate は、instance の代入をかけた型から印を決める。定数の `Lin` を含めば `lin`、すべて `Unr` なら `unr`、`Flexible` か解けない Kind 変数に依存すれば `poly` にする。スキームの制約で `Unr` に決まる Kind 変数は `unr` にする
   - EP が足す変数: evidence と `evv` のリストは `unr` である。これらは `evv` と局所変数から共有される入れ物で、`Lin` の状態は `ev_take_state` と `ev_set_state` で出し入れするので、「`Lin` の物体の RC は 1」の対象外である。操作の箇所の継続は、操作の宣言の多重度から、`once` なら `lin`、`multi` なら `unr` にする。多相な関数のフレームの続き (`f$kN` のクロージャ) は `poly` にする ([Core IR](../spec/core-ir.md) の「継続の組み立て」)
   - extern の行には、Repr の `params` と `ret` と並べて Kind の列を足す。`std/` のシグネチャとの結び付けは、Repr と同じテストで確かめる
 - verifier の所有の段 (R6、R7) に、次の2つを足す
   - V1: `unr` でない変数に `dup` と `decref` を置かない
-  - V2: 値の受け渡し (`jump` の実引数と行き先の引数、呼び出しの引数と仮引数、`return` と `ret`) で、受け手の印が送り手の印以上である。順序は `unr ≤ poly ≤ lin` である。Repr の互換を比べる所と同じ場所で比べる
+  - V2: 値の受け渡し (`jump` の実引数と行き先の引数、呼び出しの引数と仮引数、`return` と `ret`) で、送り手と受け手の印が互換である。互換の関係は Repr と同じ形で、`poly` は `unr` とも `lin` とも互換、`unr` と `lin` は互換でない。Repr の互換を比べる所と同じ場所で比べる。この関係のもとで、正しいプログラムに `unr` と `lin` の受け渡しが出ないことは、S8c の debug ビルドの検査が確かめている ([Core IR](../spec/core-ir.md) の「食い違いがないことの検査」)
   - `unpack` で得た変数の印は、配置の表からは確かめられない。配置は型ごとに1つで、フィールドの Kind を持たないためである。この印は translate を信用し、S9 のヘッダの `lin` ビットで実行時に覆う
   - V1 と V2 が成り立つと、`unr` でない変数に Perceus が出す命令は、分解のときの `release` だけになる
 - LIR のテキスト形式では、`unr` を既定にして書かず、`lin` と `poly` だけを書く (`x: tobj lin`)。期待値の変更の範囲は、`lin` か `poly` の変数を含むダンプである
@@ -104,16 +106,8 @@ S8c の終わりに、`bench/run.sh` の命令の数を [計測の基準](../imp
 ### 論点
 
 - LIR が配置を足せるか。S8a と S8b の LIR のパスは配置を足さないので、まだ決めていない
-- 関数型の変数の印には、`eml_types` が解いた Kind の書き出しが要る (上の S8c に分けた理由)。何をどの形で書き出すかを決める
 - box の挿入の印。足す変数はスカラーなので `unr` にし、`f$boxed` の引数は元の関数の印を写す、という案を確かめる
-- V2 で `poly` から `lin` へ渡す箇所が、正しいプログラムに出ないか。V2 の向きは、下の「S8a からの申し送り」を見る
-- EP の yield の地点の結果 x は、遅い道ではダミーで、Perceus がそこに `decref` を置く ([Core IR](../spec/core-ir.md) の「`never` の中断」)。x の型が `Lin` (`File` を返す呼び出し) なら、V1 (`unr` でない変数に `decref` を置かない) とぶつかる。この `decref` を V1 の例外にするか、EP が遅い道で x を別の形で捨てるかを決める。EP を変えて解くなら、S8c で実行の仕事の回数が変わりうる
-
-#### S8a からの申し送り
-
-- 上の V2 の記述は、向きが食い違っている。本文は「順序は `unr ≤ poly ≤ lin` で、受け手の印が送り手の印以上」とし、S8a の前の論点は「`lin` から `poly` への受け渡しは許され、逆は拒まれる」としていた。前者では、`lin` から `poly` への受け渡しが拒まれる
-- さらに、一様な位置の関数 (`depth@[_]` が型変数の値を返す形) を、その型変数が `File` か `Int` の instance の呼び出し元が受けると、`poly` から `lin`、`poly` から `unr` の受け渡しが、正しいプログラムに出る。呼び出し元の型は具体的で正しいためである
-- そのため S8c では、Repr の互換と同じ形の関係 (`poly` は `unr` とも `lin` とも互換で、`unr` と `lin` は互換でない) を第一の案として検討する
+- EP の yield の地点の結果 x は、遅い道ではダミーで、Perceus がそこに `decref` を置く ([Core IR](../spec/core-ir.md) の「`never` の中断」)。x の型が `Lin` (`File` を返す呼び出し) なら、V1 (`unr` でない変数に `decref` を置かない) とぶつかる。この `decref` を V1 の例外にするか、EP が遅い道で x を別の形で捨てるかを決める。EP を変えて解くなら、S8d で実行の仕事の回数が変わりうる
 
 ## S9 共通ランタイム `eml_rt`
 

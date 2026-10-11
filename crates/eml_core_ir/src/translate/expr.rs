@@ -140,7 +140,7 @@ impl FnLowering<'_> {
         // 部分適用はクロージャを作るだけでエフェクトを起こさないので、`mask` を付けない
         if args.len() < arity {
             // 確かめるのは、知っている関数と構成子の部分適用だけである。extern と操作の包む関数の矢印は宣言から決まり、
-            // 継続の部分適用 `k v` は確かめない所に入る (docs/superpowers/specs/2026-10-12-s8c-kind-export-design.md の
+            // 継続の部分適用 `k v` は確かめない所に入る (docs/spec/core-ir.md の
             // 「食い違いがないことの検査」)
             if cfg!(debug_assertions)
                 && matches!(callee, Callee::Function(_) | Callee::Constructor(_))
@@ -701,7 +701,7 @@ impl FnLowering<'_> {
 
     /// 作るクロージャの矢印 `closure_ty` が `Unr` なら、捕まえる値の型 `captured` がすべて `Unr` であることを
     /// 確かめる。参照の検査と操作の検査は両側を比べるので、両側が同じに誤った印 (`Lin` の値を持つ `unr` の
-    /// クロージャ) には気づけないためである (docs/superpowers/specs/2026-10-12-s8c-kind-export-design.md の
+    /// クロージャ) には気づけないためである (docs/spec/core-ir.md の
     /// 「食い違いがないことの検査」)。
     fn check_captures(&self, closure_ty: TypeId, captured: &[TypeId], what: &str) {
         let store = self.ctx.store;

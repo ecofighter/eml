@@ -20,7 +20,7 @@ pub(crate) struct Solution {
 }
 
 /// SCC の線形性の解のうち、本体の型の書き出しが読むもの
-/// (docs/superpowers/specs/2026-10-12-s8c-kind-export-design.md の「書き出すときの規則」)。
+/// (docs/spec/types.md の「書き出すときの規則」)。
 pub(crate) struct LinSolution {
     /// 合わせた制約のグラフ。成分と下向きの辺を、書き出す変数の要約に使う。
     pub(super) graph: Graph<Linearity>,

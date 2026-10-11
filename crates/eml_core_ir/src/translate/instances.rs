@@ -374,10 +374,10 @@ impl Collector<'_> {
         }
         // 型変数も Kind 変数も持たない関数の本体の型に現れる変数は、節の `OpVar` だけである。`OpVar` の Repr は
         // `tobj` で、その Kind は `linearity` が直接読めるので、表は写さずに型検査の表を使う
-        // (docs/superpowers/specs/2026-10-12-s8c-kind-export-design.md の「代入と単相化」)
+        // (docs/spec/core-ir.md の「変換の規則」)
         let copy = typed.needs_substitution(ValueItem::Function(function));
         // 写さずに使えるのは、型検査が宣言自身の変数を、宣言の型と同じく本体の型でも定数に畳むからである
-        // (docs/superpowers/specs/2026-10-12-s8c-kind-export-design.md の「書き出すときの規則」)
+        // (docs/spec/types.md の「書き出すときの規則」)
         debug_assert!(
             copy || !keeps_kind_vars(body, &self.store),
             "a body used without a copy keeps a Kind variable"
@@ -562,7 +562,7 @@ impl Collector<'_> {
     /// 関数の instance ごとに、参照の型と呼ばれる instance の型、`perform` の型と操作の宣言の型、節の型と操作の宣言の
     /// 型を比べ、`unr` と `lin` が食い違わないことを確かめる。この食い違いを最初に拒むのは S8d の V2 なので、それより
     /// 前に書き出しか評価が誤れば気づけない。そのため debug ビルドで確かめる
-    /// (docs/superpowers/specs/2026-10-12-s8c-kind-export-design.md の「食い違いがないことの検査」)。
+    /// (docs/spec/core-ir.md の「食い違いがないことの検査」)。
     fn check_linearity(&mut self) {
         let Collector {
             hir,

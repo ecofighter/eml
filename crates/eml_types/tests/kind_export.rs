@@ -1,4 +1,4 @@
-//! 書き出した型の線形性 (docs/superpowers/specs/2026-10-12-s8c-kind-export-design.md の「書き出す型の形」
+//! 書き出した型の線形性 (docs/spec/types.md の「書き出す型の形」
 //! 「宣言の Kind 変数の番号」「値の規則」「`Flexible` と `OpVar` の Kind」)。`dump_linear` は矢印の `Lin` を `%1`、
 //! `Poly` を `%m`、`Var(i)` を `%m{i}` と書き、`Unr` は書かない。`Flexible` と `OpVar` は名前の後に同じ印で Kind を書く。
 //! 番号は宣言の `Shape` の番号 (型変数の `μ` と矢印の `m` を外側から数えた順) で、トップレベルの関数のシグネチャの一番外の

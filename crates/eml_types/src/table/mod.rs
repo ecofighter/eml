@@ -187,7 +187,7 @@ struct RigidInfo {
     linearity: KindVar,
     /// handler の節で、操作ごとに量化した型変数を具体化した変数なら、書き出す `OpVar` の Kind。操作の引数の型に現れれば
     /// `Unr`、結果の型にだけ現れれば `Poly` である
-    /// (docs/superpowers/specs/2026-10-12-s8c-kind-export-design.md の「`Flexible` と `OpVar` の Kind」)。
+    /// (docs/spec/types.md の「`Flexible` と `OpVar` の Kind」)。
     operation: Option<Lin>,
 }
 

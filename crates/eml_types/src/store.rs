@@ -11,7 +11,7 @@ use eml_hir::{DisplayNames, EffectId, ItemMap, Program, TypeDef, TypeDefId};
 use crate::data::{DataKind, data_kinds};
 
 /// 書き出した型の矢印の線形性と、決まらなかった型変数の Kind
-/// (docs/superpowers/specs/2026-10-12-s8c-kind-export-design.md の「書き出す型の形」)。
+/// (docs/spec/types.md の「書き出す型の形」)。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Lin {
     Unr,
@@ -45,6 +45,8 @@ fn meets(a: Lin, b: Lin) -> bool {
 }
 
 /// 型の表の中の型。同じ表の中では、ID が同じことと型が同じことが一致する。
+/// 型の表の ID。同じ ID は同じ型を指す。宣言に対して相対的な型 (`Rigid` か `Var` を含む型) では、同じ宣言の中で比べたときに
+/// だけ成り立つ (docs/implementation/architecture.md の「`eml_types` の内部」)。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct TypeId(u32);
 
@@ -88,7 +90,7 @@ pub enum TypeKind {
     /// タプル。`Unit` は要素のないタプルである (docs/spec/records.md の「構成」)。
     Tuple(Vec<TypeId>),
     /// 関数型。書き出す矢印は線形性 `lin` を持つ。宣言の型の中では `Lin::Var` もありうる
-    /// (docs/superpowers/specs/2026-10-12-s8c-kind-export-design.md の「書き出す型の形」)。
+    /// (docs/spec/types.md の「書き出す型の形」)。
     Fn {
         param: TypeId,
         lin: Lin,
@@ -156,7 +158,7 @@ pub struct Substitution {
 
 impl Substitution {
     /// `kinds` は宣言のすべての `Var` の値を持つ。足りないときに黙って `Poly` にすると instance の写しの誤りが隠れるので、
-    /// 置き換えるところで止める (docs/superpowers/specs/2026-10-12-s8c-kind-export-design.md の「代入と単相化」)。
+    /// 置き換えるところで止める (docs/spec/core-ir.md の「変換の規則」)。
     pub fn new(vars: impl IntoIterator<Item = (String, TypeId)>, kinds: Vec<Lin>) -> Substitution {
         Substitution {
             vars: vars.into_iter().collect(),
@@ -340,7 +342,7 @@ impl TypeStore {
         self.vars[id.index()]
     }
 
-    /// 型の値の線形性 (docs/superpowers/specs/2026-10-12-s8c-kind-export-design.md の「型の線形性」)。宣言に対して相対的な
+    /// 型の値の線形性 (docs/spec/types.md の「型の線形性」)。宣言に対して相対的な
     /// 型 (`Rigid` か `Var` に値が依存する型) は意味のある値を持たないので、debug ビルドでは止める。
     pub fn linearity(&self, ty: TypeId) -> Lin {
         debug_assert!(
@@ -357,7 +359,7 @@ impl TypeStore {
 
     /// 2つの型の対応する線形性が、一方が `Unr`、他方が `Lin` になっていないか。`Poly` はどちらとも食い違わない。片方が
     /// `Flexible(k)` か `OpVar(_, k)` で他方が別の形なら、`k` と他方の値を比べる。`Rigid` はどの型とも合う。形が一致しない
-    /// 所 (誤りの跡) は比べない (docs/superpowers/specs/2026-10-12-s8c-kind-export-design.md の「食い違いがないことの検査」)。
+    /// 所 (誤りの跡) は比べない (docs/spec/core-ir.md の「食い違いがないことの検査」)。
     pub fn lin_compatible(&self, a: TypeId, b: TypeId) -> bool {
         let mut seen = HashSet::new();
         let mut stack = vec![(a, b)];
@@ -520,8 +522,8 @@ impl TypeStore {
     }
 
     /// `display_bounded` と同じ上限つきの表示で、矢印の線形性を `%1` と `%m` で書く。`Unr` は書かない。
-    /// instance の名前が、線形性だけが違う具体化を区別するために使う (docs/superpowers/specs/2026-10-12-s8c-kind-export-design.md
-    /// の「instance の名前」)。
+    /// instance の名前が、線形性だけが違う具体化を区別するために使う (docs/spec/core-ir.md
+    /// の「変換の規則」)。
     pub fn display_linear_bounded(
         &self,
         id: TypeId,

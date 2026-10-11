@@ -1,5 +1,5 @@
-//! 宣言の Kind 変数の instance での評価 (docs/superpowers/specs/2026-10-12-s8c-kind-export-design.md の
-//! 「instance での評価」「`Flexible` と `OpVar` の Kind」「代入と単相化」)。値はスキームだけから求めるので、書き出した
+//! 宣言の Kind 変数の instance での評価 (docs/spec/types.md の
+//! 「instance での評価」「`Flexible` と `OpVar` の Kind」と、docs/spec/core-ir.md の「変換の規則」)。値はスキームだけから求めるので、書き出した
 //! 型によらずに確かめられる。位置は宣言の `Shape` の番号 (型変数の `μ` と矢印の `m` を外側から数えた順) で数える。
 //! トップレベルの関数のシグネチャの一番外の矢印は `Unr` に固定されていて、番号を持たない。
 

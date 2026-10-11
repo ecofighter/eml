@@ -1,5 +1,5 @@
 //! 宣言の Kind のスキームの上の評価。定数に畳める変数と、instance での値 `val` を求める
-//! (docs/superpowers/specs/2026-10-12-s8c-kind-export-design.md の「instance での評価」と「書き出すときの規則」)。
+//! (docs/spec/types.md の「instance での評価」と「書き出すときの規則」)。
 //! スキームの変数は `Shape` の番号である。
 
 use super::Bound;

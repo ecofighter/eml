@@ -5,7 +5,7 @@ use crate::kind::summary::BodyKinds;
 
 /// 推論の表の型を型の表に書き出す。後の段階と診断の文言に渡す形で、解けていない型変数と row 変数は `_` として残す。
 ///
-/// 使い方は2つある (docs/superpowers/specs/2026-10-12-s8c-kind-export-design.md の「推論の途中で書き出す型」)。
+/// 使い方は2つある (docs/implementation/architecture.md の「`eml_types` の内部」)。
 /// Kind を解く前の診断のための書き出し (`diagnostic`) は、決まっていない矢印を `Poly` に、決まらなかった型変数を
 /// `Flexible(Poly)` にする。診断の表示は線形性を書かないので、文字列は変わらない。SCC を解いた後の書き出し (`final_`) は、
 /// Kind 変数の値を `BodyKinds` から引く。

@@ -719,7 +719,7 @@ impl Shape {
     /// 後の段階に渡す型。rigid な変数は名前で書く。シグネチャの型も本体の型と同じ表に登録する。`scheme` があれば、
     /// スキームで定数に決まる宣言自身の変数を定数に畳み、残りを `Var(i)` にする。`None` は Kind を解く前の `check_main`
     /// の使い方で、変数をすべて `Var(i)` にする
-    /// (docs/superpowers/specs/2026-10-12-s8c-kind-export-design.md の「推論の途中で書き出す型」)。
+    /// (docs/implementation/architecture.md の「`eml_types` の内部」)。
     pub fn export(&self, types: &mut TypeStore, scheme: Option<&KindScheme>) -> TypeId {
         let arrows = match scheme {
             Some(scheme) => ArrowKinds::Folded(scheme_facts(scheme, self.lin_vars)),

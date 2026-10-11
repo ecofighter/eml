@@ -1,5 +1,5 @@
 //! 本体の型を書き出すときの、本体の線形性の Kind 変数の値
-//! (docs/superpowers/specs/2026-10-12-s8c-kind-export-design.md の「書き出すときの規則」と「メモリと時間」)。
+//! (docs/spec/types.md の「書き出すときの規則」と docs/implementation/architecture.md の「`eml_types` の内部」)。
 //! 値は、SCC で合わせた制約のグラフの成分の上で、メンバーの宣言自身の変数で止まりながら下にたどって決める。
 
 use std::collections::HashMap;
