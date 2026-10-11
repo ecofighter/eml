@@ -127,12 +127,7 @@ fn yield_points(
         for (at, stmt) in block.stmts.iter().enumerate() {
             let Stmt::Let {
                 var,
-                rhs:
-                    Rhs::Call {
-                        call,
-                        mask: _,
-                        saved: _,
-                    },
+                rhs: Rhs::Call { call, mask: _ },
             } = stmt
             else {
                 continue;

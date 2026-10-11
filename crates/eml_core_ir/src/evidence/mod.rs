@@ -174,12 +174,11 @@ fn dummy(ret: Repr, bind: impl FnOnce(VarInfo, Rhs) -> VarId) -> Atom {
     }
 }
 
-/// `mask` のない呼び出し。`saved` は Perceus が埋める。
+/// `mask` のない呼び出し。
 fn call(call: Call) -> Rhs {
     Rhs::Call {
         call,
         mask: Vec::new(),
-        saved: Vec::new(),
     }
 }
 

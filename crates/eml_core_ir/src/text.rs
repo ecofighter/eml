@@ -70,7 +70,7 @@ impl Parser<'_> {
                 Some(word) => word,
                 _ => {
                     return Err(self.reader.error_here(
-                        "expected a statement; a block ends with return, tail, jump or switch",
+                        "expected a statement; a block ends with return, jump or switch",
                     ));
                 }
             };
@@ -92,39 +92,7 @@ impl Parser<'_> {
                         fields,
                     });
                 }
-                "dup" => stmts.push(Stmt::Dup(self.reader.var(state)?)),
-                "decref" => stmts.push(Stmt::Decref(self.reader.var(state)?)),
-                "release" => {
-                    let value = self.reader.var(state)?;
-                    let ctor = self.reader.ctor()?;
-                    let fields = self.reader.list('(', ')', |p| {
-                        if p.at_word("_") {
-                            p.bump();
-                            Ok(None)
-                        } else {
-                            p.var(state).map(Some)
-                        }
-                    })?;
-                    if fields.iter().all(Option::is_none) {
-                        return Err(error(line, "a release keeps no field; write `decref`"));
-                    }
-                    stmts.push(Stmt::Release {
-                        value,
-                        ctor,
-                        fields,
-                    });
-                }
                 "return" => break Term::Return(self.reader.atom(state)?),
-                "tail" => {
-                    let call = self.call(state)?;
-                    if self.reader.at_word("save") {
-                        return Err(error(
-                            line,
-                            "a tail call saves nothing; `save` is only on `let`",
-                        ));
-                    }
-                    break Term::TailCall(call);
-                }
                 "jump" => {
                     let target = self.reader.target(state)?;
                     let args = self.reader.list('(', ')', |p| p.atom(state))?;
@@ -171,8 +139,7 @@ impl Parser<'_> {
             "mask" | "call" | "yields" | "apply" | "handle" | "perform" | "resume" | "clause"
         ) {
             let (mask, call) = self.masked_call(state)?;
-            let saved = self.saved(state)?;
-            return Ok(Rhs::Call { call, mask, saved });
+            return Ok(Rhs::Call { call, mask });
         }
         self.reader.bump();
         let rhs = match keyword {
@@ -205,9 +172,6 @@ impl Parser<'_> {
                 }
             }
             "drop" => Rhs::Drop(self.reader.atom(state)?),
-            // オペランドがスカラーか参照かは verifier が報告する。誤りを含む IR も読み戻して verifier に渡すためである
-            "box" => Rhs::Box(self.reader.atom(state)?),
-            "unbox" => Rhs::Unbox(self.reader.atom(state)?),
             other => {
                 return Err(error(
                     line,
@@ -216,20 +180,6 @@ impl Parser<'_> {
             }
         };
         Ok(rhs)
-    }
-
-    /// `save [..]`。`pretty` は空の `save` を書かないので、`save []` は読まない。
-    fn saved(&mut self, state: &mut FnState) -> Result<Vec<VarId>, ParseError> {
-        if !self.reader.at_word("save") {
-            return Ok(Vec::new());
-        }
-        let line = self.reader.line();
-        self.reader.bump();
-        let saved = self.reader.list('[', ']', |p| p.var(state))?;
-        if saved.is_empty() {
-            return Err(error(line, "an empty save"));
-        }
-        Ok(saved)
     }
 
     /// `mask [E1, E2]` を読む。エフェクトはエフェクトの行の名前か `#N` で書く。`#N` は表にない番号を書いて、
@@ -266,7 +216,7 @@ impl Parser<'_> {
         Ok((mask, self.call(state)?))
     }
 
-    /// `let` の右辺と `tail` の後の呼び出し。どれもキーワードで始まるので、関数の名前とぶつからない。
+    /// `let` の右辺の呼び出し。どれもキーワードで始まるので、関数の名前とぶつからない。
     fn call(&mut self, state: &mut FnState) -> Result<Call, ParseError> {
         let line = self.reader.line();
         let word = self.reader.word()?;

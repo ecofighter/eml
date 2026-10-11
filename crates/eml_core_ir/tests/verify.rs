@@ -1,21 +1,11 @@
 //! Core IR のテキストで書いた IR で、verifier が正しいものを受け入れ、壊れたものを拒むことを確かめる (docs/spec/core-ir.md)。
 //! 構造の規則 R1 から R9 と、前の形の IR から引き継いだ検査を1つずつ確かめる。
 
-use eml_core_ir::{
-    Program, Rhs, Stmt, parse, verify, verify_evidence, verify_scopes, verify_translated,
-};
+use eml_core_ir::{Program, Rhs, Stmt, parse, verify_evidence, verify_translated};
 use eml_lir::Prim;
 
 fn read(text: &str) -> Program {
     parse(text).unwrap_or_else(|error| panic!("{error}"))
-}
-
-fn check(text: &str) -> Result<(), String> {
-    verify(&read(text)).map_err(|error| error.to_string())
-}
-
-fn check_scopes(text: &str) -> Result<(), String> {
-    verify_scopes(&read(text)).map_err(|error| error.to_string())
 }
 
 fn check_translated(text: &str) -> Result<(), String> {
@@ -25,9 +15,6 @@ fn check_translated(text: &str) -> Result<(), String> {
 fn check_evidence(text: &str) -> Result<(), String> {
     verify_evidence(&read(text)).map_err(|error| error.to_string())
 }
-
-/// `g s = s`。
-const IDENTITY: &str = "fn g(s.0: obj) -> obj {\n  return s.0\n}\n";
 
 /// `k n = n`。
 const K: &str = "fn k(a.0: int) -> int {\n  return a.0\n}\n";
@@ -180,13 +167,6 @@ b1(a.2: tobj):
 }
 ";
     assert_eq!(check_translated(translated), Ok(()));
-}
-
-/// 所有を見る前に断る IR の誤り。どちらの段でも同じ誤りになる。
-fn rejected_at_both_levels(text: &str) -> String {
-    let error = check_scopes(text).expect_err(text);
-    assert_eq!(check(text), Err(error.clone()));
-    error
 }
 
 // 境界の検査
@@ -517,108 +497,6 @@ fn entry$main(c.0: tobj) -> tobj {
     assert_eq!(check_translated(text), Ok(()));
 }
 
-// 変換の段
-
-#[test]
-fn the_translated_level_rejects_tail_calls() {
-    // 末尾呼び出しは縮約だけが作る。box の挿入は、末尾呼び出しのない入力の `let` と `return` から末尾の位置を見る
-    let handler = "\
-fn body(u.0: unit) -> tobj {
-  return ()
-}
-fn clause(s.0: obj, k.1: tobj, t.2: unit) -> tobj {
-  return ()
-}
-fn ret(v.0: tobj, t.1: unit) -> tobj {
-  return v.0
-}
-";
-    for (text, message) in [
-        (
-            "fn f(x.0: int) -> int {\n  tail call f(x.0)\n}\n".to_string(),
-            "a tail call is formed before contract in `f`",
-        ),
-        (
-            "fn f(c.0: tobj) -> tobj {\n  tail apply c.0(())\n}\n".to_string(),
-            "a tail apply is formed before contract in `f`",
-        ),
-    ] {
-        assert_eq!(check_translated(&text), Err(message.to_string()));
-        assert_eq!(check_scopes(&text), Ok(()));
-    }
-    // エフェクトの命令は範囲の段にもう現れないので、変換の段の拒否だけを確かめる
-    for (text, message) in [
-        (
-            "effect Ask { ask(tobj) -> tobj }\nfn f(s.0: obj) -> tobj {\n  tail perform Ask.ask(s.0)\n}\n"
-                .to_string(),
-            "a tail perform is formed before contract in `f`",
-        ),
-        (
-            "fn f(k.0: tobj) -> tobj {\n  tail resume k.0((), ())\n}\n".to_string(),
-            "a tail resume is formed before contract in `f`",
-        ),
-        (
-            format!(
-                "effect Ask {{ ask(tobj) -> tobj }}\nfn f() -> tobj {{\n  tail handle Ask((), &body) {{ ask: &clause }} return &ret\n}}\n{handler}"
-            ),
-            "a tail handler is formed before contract in `f`",
-        ),
-    ] {
-        assert_eq!(check_translated(&text), Err(message.to_string()));
-    }
-}
-
-#[test]
-fn the_translated_level_rejects_boxes_and_unboxes() {
-    // `box` と `unbox` は box の挿入だけが入れる
-    assert_eq!(
-        check_translated(&boxed_round_trip("")),
-        Err("`n.0` is boxed before the boxing pass in `f`".to_string())
-    );
-    assert_eq!(
-        check_translated("fn f() -> tobj {\n  let b.0: tobj = box 5\n  return b.0\n}\n"),
-        Err("5 is boxed before the boxing pass in `f`".to_string())
-    );
-    assert_eq!(
-        check_translated("fn f(b.0: tobj) -> int {\n  let n.1: int = unbox b.0\n  return n.1\n}\n"),
-        Err("`b.0` is unboxed before the boxing pass in `f`".to_string())
-    );
-}
-
-#[test]
-fn the_translated_level_rejects_what_perceus_inserts() {
-    let dup = "fn twice(s.0: obj) -> obj {\n  dup s.0\n  let t.1: obj = extern Prelude.++(s.0, s.0)\n  return t.1\n}\n";
-    assert_eq!(
-        check_translated(dup),
-        Err("`s.0` is duplicated before Perceus in `twice`".to_string())
-    );
-    let saved = format!(
-        "{IDENTITY}fn f(s.0: obj) -> obj {{\n  let t.1: obj = call g(s.0) save [s.0]\n  return t.1\n}}\n"
-    );
-    assert_eq!(
-        check_translated(&saved),
-        Err("a call saves [s.0] before Perceus in `f`".to_string())
-    );
-}
-
-// box と unbox
-
-/// `n` と `c` と定数を `box` し、`unbox` で戻す。`decrefs` は、所有の段で `box` の変数を手放す文である。
-fn boxed_round_trip(decrefs: &str) -> String {
-    format!(
-        "fn f(n.0: int, c.1: enum) -> int {{
-  let b.2: tobj = box n.0
-  let e.3: tobj = box c.1
-  let k.4: tobj = box 5
-  let m.5: int = unbox b.2
-  let d.6: enum = unbox e.3
-  let o.7: int = unbox k.4
-{decrefs}  return m.5
-}}
-"
-    )
-}
-
 // 大きさ
 
 #[test]
@@ -717,32 +595,6 @@ fn the_evidence_level_rejects_effect_instructions() {
     for (text, message) in effect_instructions() {
         assert_eq!(check_evidence(&text), Err(message.to_string()));
     }
-}
-
-#[test]
-fn the_scope_level_rejects_effect_instructions() {
-    // box の挿入より後のパスは EP の出力だけを受けるので、範囲の段と所有の段も同じ文言で拒む
-    for (text, message) in effect_instructions() {
-        assert_eq!(rejected_at_both_levels(&text), message);
-    }
-    // 縮約が作る形の `tail` でも同じである
-    let tail = format!("{ASK}fn f() -> tobj {{\n  tail perform Ask.ask(())\n}}\n");
-    assert_eq!(
-        rejected_at_both_levels(&tail),
-        "a perform remains after the evidence pass in `f`"
-    );
-}
-
-#[test]
-fn the_evidence_level_still_comes_before_boxing_and_contract() {
-    assert_eq!(
-        check_evidence("fn f(x.0: int) -> int {\n  tail call f(x.0)\n}\n"),
-        Err("a tail call is formed before contract in `f`".to_string())
-    );
-    assert_eq!(
-        check_evidence("fn f() -> tobj {\n  let b.0: tobj = box 1\n  return b.0\n}\n"),
-        Err("1 is boxed before the boxing pass in `f`".to_string())
-    );
 }
 
 #[test]

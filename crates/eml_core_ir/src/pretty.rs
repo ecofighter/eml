@@ -92,30 +92,11 @@ impl<'p> Printer<'p> {
                     w.ctor(*ctor),
                     w.binders(vars, fields)
                 ),
-                Stmt::Dup(v) => format!("dup {}", w.var(vars, *v)),
-                Stmt::Decref(v) => format!("decref {}", w.var(vars, *v)),
-                Stmt::Release {
-                    value,
-                    ctor,
-                    fields,
-                } => {
-                    let kept: Vec<String> = fields
-                        .iter()
-                        .map(|field| field.map_or_else(|| "_".to_string(), |v| w.var(vars, v)))
-                        .collect();
-                    format!(
-                        "release {} {}({})",
-                        w.var(vars, *value),
-                        w.ctor(*ctor),
-                        kept.join(", ")
-                    )
-                }
             };
             writeln!(out, "  {text}").unwrap();
         }
         let text = match &block.term {
             Term::Return(a) => format!("return {}", w.atom(vars, a)),
-            Term::TailCall(call) => format!("tail {}", self.call(function, call)),
             Term::Jump { target, args } => {
                 format!("jump b{}({})", target.0, w.atoms(vars, args))
             }
@@ -140,14 +121,8 @@ impl<'p> Printer<'p> {
         let w = &self.writer;
         let vars = &function.vars[..];
         match rhs {
-            Rhs::Call { call, mask, saved } => {
-                let text = format!("{}{}", self.mask(mask), self.call(function, call));
-                if saved.is_empty() {
-                    text
-                } else {
-                    let names: Vec<String> = saved.iter().map(|&v| w.var(vars, v)).collect();
-                    format!("{text} save [{}]", names.join(", "))
-                }
+            Rhs::Call { call, mask } => {
+                format!("{}{}", self.mask(mask), self.call(function, call))
             }
             Rhs::MakeClosure(target, args) => {
                 format!("closure {}({})", w.callee(*target), w.atoms(vars, args))
@@ -163,8 +138,6 @@ impl<'p> Printer<'p> {
                 format!("con {}({})", w.ctor(*ctor), w.atoms(vars, args))
             }
             Rhs::Drop(a) => format!("drop {}", w.atom(vars, a)),
-            Rhs::Box(a) => format!("box {}", w.atom(vars, a)),
-            Rhs::Unbox(a) => format!("unbox {}", w.atom(vars, a)),
             Rhs::Prim(prim, args) => format!(
                 "prim {}({})",
                 prim_text(&self.program.effects, prim),
@@ -173,7 +146,6 @@ impl<'p> Printer<'p> {
         }
     }
 
-    /// `let` の右辺と `tail` の後で同じ書き方をする。
     fn call(&self, function: &CoreFn, call: &Call) -> String {
         let w = &self.writer;
         let vars = &function.vars[..];

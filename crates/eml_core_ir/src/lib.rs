@@ -1,5 +1,6 @@
-//! Core IR (docs/spec/core-ir.md)。型付き HIR から変換する、前向きの辺だけを持つ基本ブロックの列で表す IR で、RC と
-//! エフェクトを明示する。
+//! Core IR (docs/spec/core-ir.md)。型付き HIR から変換する、前向きの辺だけを持つ基本ブロックの列で表す IR で、
+//! エフェクトを明示する。RC、box、末尾呼び出しは持たない。これらは EP の後に変換した LIR (`eml_lir`) の上で入れる
+//! (docs/superpowers/specs/2026-10-11-s8a-lir-design.md の「`eml_core_ir` に残すもの」)。
 
 use eml_extern::Extern;
 use eml_lir::{
@@ -23,7 +24,7 @@ pub use pipeline::{Pass, core_until, lower, lower_until};
 pub use pretty::{pretty, pretty_with_positions};
 pub use text::parse;
 pub use translate::type_repr;
-pub use verify::{verify, verify_evidence, verify_scopes, verify_translated};
+pub use verify::{verify_evidence, verify_translated};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Program {
@@ -33,8 +34,8 @@ pub struct Program {
     /// 文字列リテラルの定数表。`ConstString` と `CasePattern::String` が添字で引く。インタプリタは項目ごとに不死の
     /// 物体を1つ作り、`ConstString` はその物体の参照を1つ作る (docs/spec/runtime.md の「不死の物体」)。
     pub strings: Vec<String>,
-    /// データの配置の表。`con`、`switch`、`unpack`、`release` が `LayoutId` で引く。translate は最初に使った順に入れる
-    /// (docs/spec/core-ir.md の「データの配置」)。
+    /// データの配置の表。`con`、`switch`、`unpack` (LIR では `release` も) が `LayoutId` で引く。translate は最初に
+    /// 使った順に入れる (docs/spec/core-ir.md の「データの配置」)。
     pub layouts: Vec<Layout>,
     /// エフェクトの表。添字は `Call::Handle`、`Call::Perform`、`Call::Clause`、基本操作の即値のエフェクトの番号で、
     /// HIR の `EffectId` の添字と同じである。
@@ -110,16 +111,6 @@ pub enum Stmt {
         ctor: Ctor,
         fields: Vec<VarId>,
     },
-    Dup(VarId),
-    Decref(VarId),
-    /// `release x L #t(p1, .., pn)`。Perceus だけが入れる RC の命令である。分解した値 `x` の参照を1つ手放し、名前を
-    /// 書いた位置の変数が、そのフィールドの参照を1つずつ受け取る。`None` は残さない位置である
-    /// (docs/spec/core-ir.md)。
-    Release {
-        value: VarId,
-        ctor: Ctor,
-        fields: Vec<Option<VarId>>,
-    },
 }
 
 impl Stmt {
@@ -132,11 +123,10 @@ impl Stmt {
                 ctor: _,
                 fields,
             } => fields,
-            Stmt::Dup(_) | Stmt::Decref(_) | Stmt::Release { .. } => &[],
         }
     }
 
-    /// 文が値として使う変数と定数。`Dup`、`Decref`、`Release` は Perceus の命令なので、値の使用に数えない。
+    /// 文が値として使う変数と定数。
     pub fn for_each_atom(&self, mut f: impl FnMut(Atom)) {
         match self {
             Stmt::Let { var: _, rhs } => rhs.for_each_atom(f),
@@ -145,16 +135,14 @@ impl Stmt {
                 ctor: _,
                 fields: _,
             } => f(Atom::Var(*value)),
-            Stmt::Dup(_) | Stmt::Decref(_) | Stmt::Release { .. } => {}
         }
     }
 
-    /// 値の使いのうち、参照を1つ受け取る「消費」。`unpack` と `unbox` の値は読むだけなので数えない
-    /// (docs/spec/core-ir.md)。
+    /// 値の使いのうち、参照を1つ受け取る「消費」。`unpack` の値は読むだけなので数えない (docs/spec/core-ir.md)。
     pub fn for_each_consumed(&self, f: impl FnMut(Atom)) {
         match self {
             Stmt::Let { var: _, rhs } => rhs.for_each_consumed(f),
-            Stmt::Unpack { .. } | Stmt::Dup(_) | Stmt::Decref(_) | Stmt::Release { .. } => {}
+            Stmt::Unpack { .. } => {}
         }
     }
 }
@@ -162,9 +150,6 @@ impl Stmt {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Term {
     Return(Atom),
-    /// 縮約が作る、末尾の呼び出しの要求。縮約は EP の後に走り、EP は `mask` を `evv_mask` の包みに置き換えるので、
-    /// `mask` を持たない (docs/spec/core-ir.md の「`mask` の包み」)。
-    TailCall(Call),
     /// 並列な代入。実引数をすべて読んでから、行き先の引数に書く。
     Jump {
         target: BlockId,
@@ -191,7 +176,7 @@ impl Term {
                 cases,
                 default,
             } => (None, &cases[..], *default),
-            Term::Return(_) | Term::TailCall(_) => (None, &[][..], None),
+            Term::Return(_) => (None, &[][..], None),
         };
         jump.into_iter()
             .chain(cases.iter().map(|case| case.target))
@@ -212,14 +197,13 @@ impl Term {
                     f(default);
                 }
             }
-            Term::Return(_) | Term::TailCall(_) => {}
+            Term::Return(_) => {}
         }
     }
 
     pub fn for_each_atom(&self, mut f: impl FnMut(Atom)) {
         match self {
             Term::Return(atom) => f(*atom),
-            Term::TailCall(call) => call.for_each_atom(f),
             Term::Jump { target: _, args } => args.iter().for_each(|&atom| f(atom)),
             Term::Switch {
                 scrutinee,
@@ -241,7 +225,6 @@ impl Term {
     pub fn for_each_atom_mut(&mut self, mut f: impl FnMut(&mut Atom)) {
         match self {
             Term::Return(atom) => f(atom),
-            Term::TailCall(call) => call.for_each_atom_mut(f),
             Term::Jump { target: _, args } => args.iter_mut().for_each(f),
             Term::Switch {
                 scrutinee,
@@ -255,13 +238,8 @@ impl Term {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Rhs {
-    /// `saved` は、呼び出しの後で生きている変数から結果の変数を除いたもので、Perceus が埋める。`mask` は呼び出しの間に
-    /// 飛ばすエフェクトの多重集合で、番号の昇順に並ぶ (docs/spec/core-ir.md)。
-    Call {
-        call: Call,
-        mask: Vec<u32>,
-        saved: Vec<VarId>,
-    },
+    /// `mask` は呼び出しの間に飛ばすエフェクトの多重集合で、番号の昇順に並ぶ (docs/spec/core-ir.md)。
+    Call { call: Call, mask: Vec<u32> },
     /// 関数と先頭の引数の並びからクロージャを作る。ラムダの捕獲と部分適用は、どちらもこの形になる。
     MakeClosure(FnIdx, Vec<Atom>),
     /// extern の関数をその場で実行する。eml のコードを呼び返さず、継続のフレームも積まない。`at` を持つ呼び出しが
@@ -271,7 +249,7 @@ pub enum Rhs {
         args: Vec<Atom>,
         at: Option<Loc>,
     },
-    /// 文字列リテラルの参照を1つ作る。リテラルは不死の物体だが、`dup` と `decref` の釣り合いは保つ
+    /// 文字列リテラルの参照を1つ作る。リテラルは不死の物体だが、LIR の `dup` と `decref` は釣り合いを保つ
     /// (docs/spec/runtime.md)。
     ConstString(u32),
     /// 引数を持つコンストラクタの値を作る。`args` の所有権は値に移る。引数のないコンストラクタの値は `Atom::Tag` で
@@ -279,12 +257,6 @@ pub enum Rhs {
     Con { ctor: Ctor, args: Vec<Atom> },
     /// 値の所有権を受け取って捨てる。値は `()` である。
     Drop(Atom),
-    /// 箱を要するスカラー (`Repr::BOXED_SCALARS`) の値か `Int` の定数を、`tobj` の値にする。オペランドを消費し、所有
-    /// した `tobj` を作る。スカラーの種類はオペランドの Repr で決まる (docs/spec/core-ir.md の「値の表現」)。
-    Box(Atom),
-    /// `tobj` の値から、箱を要するスカラーを取り出す。`switch` の scrutinee と同じく値を読むだけで、所有権を受け取ら
-    /// ない。スカラーの種類は束縛する変数の Repr で決まる。
-    Unbox(Atom),
     /// evidence passing の基本操作。extern と同じく引数をすべて消費し、所有した結果を定義する
     /// (docs/spec/core-ir.md の「基本操作」)。
     Prim(Prim, Vec<Atom>),
@@ -294,11 +266,7 @@ impl Rhs {
     /// 右辺が使う値。関数、extern、基本操作、`perform` の引数は、どれも所有権を受け取る。
     pub fn for_each_atom(&self, mut f: impl FnMut(Atom)) {
         match self {
-            Rhs::Call {
-                call,
-                mask: _,
-                saved: _,
-            } => call.for_each_atom(f),
+            Rhs::Call { call, mask: _ } => call.for_each_atom(f),
             Rhs::MakeClosure(_, args)
             | Rhs::Extern {
                 ext: _,
@@ -307,25 +275,19 @@ impl Rhs {
             }
             | Rhs::Con { ctor: _, args }
             | Rhs::Prim(_, args) => args.iter().for_each(|&atom| f(atom)),
-            Rhs::Drop(atom) | Rhs::Box(atom) | Rhs::Unbox(atom) => f(*atom),
+            Rhs::Drop(atom) => f(*atom),
             Rhs::ConstString(_) => {}
         }
     }
 
-    /// 値の使いのうち、参照を1つ受け取る「消費」。`unbox` の値は読むだけなので数えない (docs/spec/core-ir.md)。
+    /// 値の使いのうち、参照を1つ受け取る「消費」。右辺の値の使いは、すべて消費である (docs/spec/core-ir.md)。
     pub fn for_each_consumed(&self, f: impl FnMut(Atom)) {
-        if !matches!(self, Rhs::Unbox(_)) {
-            self.for_each_atom(f);
-        }
+        self.for_each_atom(f);
     }
 
     pub fn for_each_atom_mut(&mut self, mut f: impl FnMut(&mut Atom)) {
         match self {
-            Rhs::Call {
-                call,
-                mask: _,
-                saved: _,
-            } => call.for_each_atom_mut(f),
+            Rhs::Call { call, mask: _ } => call.for_each_atom_mut(f),
             Rhs::MakeClosure(_, args)
             | Rhs::Extern {
                 ext: _,
@@ -334,7 +296,7 @@ impl Rhs {
             }
             | Rhs::Con { ctor: _, args }
             | Rhs::Prim(_, args) => args.iter_mut().for_each(f),
-            Rhs::Drop(atom) | Rhs::Box(atom) | Rhs::Unbox(atom) => f(atom),
+            Rhs::Drop(atom) => f(atom),
             Rhs::ConstString(_) => {}
         }
     }

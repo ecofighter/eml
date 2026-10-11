@@ -274,6 +274,15 @@ fn f(c.0: tobj) -> int {
     );
 }
 
+/// 縮約は EP の後に走るので、末尾呼び出しは `mask` を持たない。
+#[test]
+fn a_tail_call_takes_no_mask() {
+    let error = parse_error(
+        "effect State { get(tobj) -> tobj }\nfn f(c.0: tobj) -> int {\n  tail mask [State] apply c.0(1)\n}\n",
+    );
+    assert_eq!(error.to_string(), "line 3: expected a call, found `mask`");
+}
+
 #[test]
 fn a_jump_round_trips() {
     let program = round_trip(
@@ -861,6 +870,50 @@ fn a_tail_call_with_save_is_an_error() {
 }
 
 #[test]
+fn malformed_declarations_names_and_strings_are_errors_with_their_lines() {
+    let cases = [
+        (
+            "effect A { a(tobj) -> tobj }\neffect A { b(tobj) -> tobj }\nfn f() -> int {\n  return 1\n}\n",
+            2,
+            "effect `A` is declared twice",
+        ),
+        (
+            "effect A { a(tobj) -> tobj,\n  a(tobj, tobj) -> tobj }\nfn f() -> int {\n  return 1\n}\n",
+            2,
+            "operation `a` is declared twice",
+        ),
+        (
+            "fn f() -> int {\n  return 1\n}\nfn f() -> int {\n  return 2\n}\n",
+            4,
+            "function `f` is defined twice",
+        ),
+        (
+            "fn f() -> int {\n  let x.0: int = extern Prelude.nope(1)\n  return x.0\n}\n",
+            2,
+            "unknown extern `Prelude.nope`",
+        ),
+        (
+            "fn f() -> obj {\n  let s.0: obj = const \"abc\n  return s.0\n}\n",
+            2,
+            "a string is not closed",
+        ),
+        (
+            "fn f() -> obj {\n  let s.0: obj = const \"\\u{110000}\"\n  return s.0\n}\n",
+            2,
+            "a `\\u{…}` escape is not a character",
+        ),
+    ];
+    for (text, line, message) in cases {
+        let error = parse_error(text);
+        assert_eq!(
+            (error.line, error.message.as_str()),
+            (line, message),
+            "{text}"
+        );
+    }
+}
+
+#[test]
 fn the_entry_is_entry_main_wherever_it_is_written() {
     let program =
         parse("fn f() -> unit {\n  return ()\n}\nfn entry$main() -> unit {\n  tail call f()\n}\n")
@@ -940,6 +993,64 @@ fn a_block_without_a_terminator_is_an_error() {
     );
     assert_eq!(error.line, 5);
     assert_eq!(error.message, "expected a statement, found `b2:`");
+}
+
+/// `pretty` は空の `save` を書かないので、読み直した表示が元と変わる形は読まない。
+#[test]
+fn an_empty_save_is_an_error() {
+    let error = parse_error(
+        "fn g(x.0: int) -> int {\n  let y.1: int = call g(1) save []\n  return y.1\n}\n",
+    );
+    assert_eq!(error.line, 2);
+    assert_eq!(error.message, "an empty save");
+}
+
+#[test]
+fn lir_successors_and_atoms_come_in_a_fixed_order() {
+    let program = parse(
+        "\
+fn f(o.0: tobj, i.1: int, b.2: tobj, a.3: tobj, r.4: tobj) -> int {
+  let t.5: int = call g(i.1)
+  unpack o.0 #0 #0(x.6: int)
+  switch t.5 { 1 -> b2, 2 -> b1, _ -> b3 }
+b1:
+  jump b3(x.6, 7)
+b2:
+  tail apply b.2(x.6)
+b3:
+  return 0
+}
+fn g(i.0: int) -> int {
+  return i.0
+}
+",
+    )
+    .unwrap_or_else(|error| panic!("{error}"));
+    let f = &program.functions[0];
+
+    let successors: Vec<BlockId> = f.blocks[0].term.successors().collect();
+    assert_eq!(successors, [2, 1, 3].map(BlockId));
+    let successors: Vec<BlockId> = f.blocks[1].term.successors().collect();
+    assert_eq!(successors, [BlockId(3)]);
+    assert_eq!(f.blocks[2].term.successors().count(), 0);
+
+    let mut atoms = Vec::new();
+    f.blocks[0].stmts[1].for_each_atom(|atom| atoms.push(atom));
+    assert_eq!(atoms, [v(0)]);
+    let mut atoms = Vec::new();
+    f.blocks[1].term.for_each_atom(|atom| atoms.push(atom));
+    assert_eq!(atoms, [v(6), Atom::Int(7)]);
+    let mut atoms = Vec::new();
+    f.blocks[2].term.for_each_atom(|atom| atoms.push(atom));
+    assert_eq!(atoms, [v(2), v(6)]);
+
+    assert_eq!(f.blocks[0].stmts[0].defs(), [VarId(5)]);
+    assert_eq!(f.blocks[0].stmts[1].defs(), [VarId(6)]);
+
+    let mut term = f.blocks[0].term.clone();
+    term.for_each_successor_mut(|target| target.0 += 10);
+    let successors: Vec<BlockId> = term.successors().collect();
+    assert_eq!(successors, [12, 11, 13].map(BlockId));
 }
 
 /// 2万の条件を持つ IR を、debug ビルドで表示し、読み、表示し直す。どれもプログラムの大きさに比例して再帰しないこと

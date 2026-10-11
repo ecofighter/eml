@@ -146,7 +146,7 @@ fn numbering(hir: &HirProgram, body: &Body, targets: &ArenaMap<ExprId, Target>) 
     }
 }
 
-/// 誤りのない型付き HIR を、RC の命令と末尾呼び出しのない Core IR にする。末尾呼び出しは縮約が作る。
+/// 誤りのない型付き HIR を Core IR にする。RC の命令と末尾呼び出しは、LIR の Perceus と縮約が作る。
 pub(crate) fn translate(
     hir: &HirProgram,
     typed: &TypedProgram,

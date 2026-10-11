@@ -48,13 +48,9 @@ enum Callee {
     },
 }
 
-/// `mask` 付きの呼び出し。`saved` は Perceus が埋める。
+/// `mask` 付きの呼び出し。
 fn masked_call(call: Call, mask: Vec<u32>) -> Rhs {
-    Rhs::Call {
-        call,
-        mask,
-        saved: Vec::new(),
-    }
+    Rhs::Call { call, mask }
 }
 
 impl FnLowering<'_> {

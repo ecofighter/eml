@@ -93,10 +93,6 @@ pub(super) fn lower(
     let mut blocks = mem::take(&mut function.blocks);
     for (index, block) in blocks.iter_mut().enumerate() {
         let id = BlockId(index as u32);
-        debug_assert!(
-            !matches!(block.term, Term::TailCall(_)),
-            "translate forms no tail calls"
-        );
         let mut out = Out {
             vars: &mut function.vars,
             stmts: Vec::with_capacity(block.stmts.len()),
@@ -123,7 +119,6 @@ pub(super) fn lower(
                             ret,
                         },
                     mask: _,
-                    saved: _,
                 } => {
                     let prompt = prompt.expect("`prompt$` is made for a function with a handle");
                     let entries = clauses.iter().map(|&value| match value {
@@ -151,12 +146,10 @@ pub(super) fn lower(
                             args,
                         },
                     mask: _,
-                    saved: _,
                 } => out.perform(var, effect, op, args),
                 Rhs::Call {
                     call: Call::Resume { k, arg, state },
                     mask,
-                    saved: _,
                 } => {
                     // 再開した計算の yield は、`k` の外側の row、つまりこの関数の row を通る
                     let apply = Call::Apply {
@@ -166,11 +159,7 @@ pub(super) fn lower(
                     };
                     out.masked_call(&mut annotations, id, var, apply, mask);
                 }
-                Rhs::Call {
-                    call,
-                    mask,
-                    saved: _,
-                } if !mask.is_empty() => {
+                Rhs::Call { call, mask } if !mask.is_empty() => {
                     debug_assert!(yields, "a function with a mask yields");
                     out.masked_call(&mut annotations, id, var, call, mask);
                 }
@@ -193,17 +182,11 @@ fn lowered(stmt: &Stmt) -> bool {
                 Rhs::Call {
                     call: Call::Handle { .. } | Call::Perform { .. } | Call::Resume { .. },
                     mask: _,
-                    saved: _,
                 },
         } => true,
         Stmt::Let {
             var: _,
-            rhs:
-                Rhs::Call {
-                    call: _,
-                    mask,
-                    saved: _,
-                },
+            rhs: Rhs::Call { call: _, mask },
         } => !mask.is_empty(),
         _ => false,
     }
@@ -225,7 +208,6 @@ fn handled(stmt: &Stmt) -> Option<(u32, &Vec<Atom>)> {
                             ret: _,
                         },
                     mask: _,
-                    saved: _,
                 },
         } => Some((*effect, clauses)),
         _ => None,
@@ -281,18 +263,12 @@ fn runs_in_place(program: &Program, clause: &CoreFn, operation: &OperationInfo) 
                 returns += 1;
             }
             Term::Jump { .. } | Term::Switch { .. } => {}
-            Term::TailCall(_) => return false,
         }
         let tail = tail.map(|(at, _)| at);
         for (at, stmt) in block.stmts.iter().enumerate() {
             let Stmt::Let {
                 var: _,
-                rhs:
-                    Rhs::Call {
-                        call,
-                        mask,
-                        saved: _,
-                    },
+                rhs: Rhs::Call { call, mask },
             } = stmt
             else {
                 continue;
@@ -358,7 +334,6 @@ fn into_entry(program: &mut Program, clause: FnIdx, effect: u32, op: u32) {
                             state: resumed,
                         },
                     mask: _,
-                    saved: _,
                 },
         } = block.stmts[at]
         else {

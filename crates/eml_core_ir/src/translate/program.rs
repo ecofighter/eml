@@ -273,7 +273,6 @@ impl ProgramBuilder {
                 Rhs::Call {
                     call: Call::Resume { k, arg, state },
                     mask: Vec::new(),
-                    saved: Vec::new(),
                 }
             },
             param("t"),
@@ -314,7 +313,6 @@ impl ProgramBuilder {
             |args| Rhs::Call {
                 call: perform_call(hir, op, args),
                 mask: Vec::new(),
-                saved: Vec::new(),
             },
             var_info("t", types, result_type, hir),
         );
@@ -440,12 +438,11 @@ impl ProgramBuilder {
     }
 }
 
-/// `mask` のない呼び出し。`saved` は Perceus が埋める。
+/// `mask` のない呼び出し。
 pub(super) fn plain_call(call: Call) -> Rhs {
     Rhs::Call {
         call,
         mask: Vec::new(),
-        saved: Vec::new(),
     }
 }
 

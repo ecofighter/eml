@@ -71,24 +71,12 @@ fn stmt(stmt: Stmt) -> eml_lir::Stmt {
             ctor,
             fields,
         },
-        Stmt::Dup(var) => eml_lir::Stmt::Dup(var),
-        Stmt::Decref(var) => eml_lir::Stmt::Decref(var),
-        Stmt::Release {
-            value,
-            ctor,
-            fields,
-        } => eml_lir::Stmt::Release {
-            value,
-            ctor,
-            fields,
-        },
     }
 }
 
 fn terminator(term: Term) -> eml_lir::Term {
     match term {
         Term::Return(atom) => eml_lir::Term::Return(atom),
-        Term::TailCall(value) => eml_lir::Term::TailCall(call(value)),
         Term::Jump { target, args } => eml_lir::Term::Jump { target, args },
         Term::Switch {
             scrutinee,
@@ -106,18 +94,14 @@ fn terminator(term: Term) -> eml_lir::Term {
 
 fn rhs(rhs: Rhs) -> eml_lir::Rhs {
     match rhs {
-        Rhs::Call {
-            call: value,
-            mask,
-            saved,
-        } => {
+        Rhs::Call { call: value, mask } => {
             assert!(
                 mask.is_empty(),
                 "internal error: a mask reaches the lowering to LIR"
             );
             eml_lir::Rhs::Call {
                 call: call(value),
-                saved,
+                saved: Vec::new(),
             }
         }
         Rhs::MakeClosure(function, args) => eml_lir::Rhs::MakeClosure(function, args),
@@ -125,8 +109,6 @@ fn rhs(rhs: Rhs) -> eml_lir::Rhs {
         Rhs::ConstString(index) => eml_lir::Rhs::ConstString(index),
         Rhs::Con { ctor, args } => eml_lir::Rhs::Con { ctor, args },
         Rhs::Drop(atom) => eml_lir::Rhs::Drop(atom),
-        Rhs::Box(atom) => eml_lir::Rhs::Box(atom),
-        Rhs::Unbox(atom) => eml_lir::Rhs::Unbox(atom),
         Rhs::Prim(prim, args) => eml_lir::Rhs::Prim(prim, args),
     }
 }
