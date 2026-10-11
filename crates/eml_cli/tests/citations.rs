@@ -157,6 +157,44 @@ fn every_cited_heading_exists() {
     );
 }
 
+/// コード片とコードブロックを除いた本文。Core IR のテキスト (`prim ev_clause[State.get](e.2)`) のように、コードの中の
+/// `](` はリンクでないためである。コード片は同じ長さのバッククォートの並びで閉じる。
+///
+/// 閉じないコードブロックは残りをすべてコードとして読み、閉じないコード片は行の残りの読み方が決まらない。どちらも
+/// リンクを知らないうちに見落とすので、誤りにする。Markdown ではコード片が行をまたげるが、文書ではコード片を行の中で
+/// 閉じることにし、行をまたぐものも閉じないコード片として扱う。
+fn without_code(text: &str) -> Result<String, String> {
+    let mut prose = String::new();
+    let mut fenced = None;
+    for (number, line) in (1..).zip(text.lines()) {
+        if line.trim_start().starts_with("```") {
+            fenced = match fenced {
+                Some(_) => None,
+                None => Some(number),
+            };
+        } else if fenced.is_none() {
+            let mut rest = line;
+            while let Some(start) = rest.find('`') {
+                prose.push_str(&rest[..start]);
+                let run = rest[start..].chars().take_while(|&c| c == '`').count();
+                let (fence, after) = rest[start..].split_at(run);
+                let Some(end) = after.find(fence) else {
+                    return Err(format!(
+                        "line {number}: a code span is not closed on its line"
+                    ));
+                };
+                rest = &after[end + run..];
+            }
+            prose.push_str(rest);
+        }
+        prose.push('\n');
+    }
+    match fenced {
+        Some(number) => Err(format!("line {number}: a code block is not closed")),
+        None => Ok(prose),
+    }
+}
+
 /// 文書の中のリンク `](相対パス)` の行き先があることを確かめる。節を別のファイルへ移したとき、移した文の相対リンクの
 /// 深さが変わるため。
 #[test]
@@ -164,7 +202,13 @@ fn every_linked_document_exists() {
     let root = repo_root();
     let mut broken = Vec::new();
     for file in sources(&root).into_iter().filter(|file| is_markdown(file)) {
-        let text = fs::read_to_string(&file).unwrap();
+        let text = match without_code(&fs::read_to_string(&file).unwrap()) {
+            Ok(text) => text,
+            Err(error) => {
+                broken.push(format!("{}: {error}", relative(&root, &file)));
+                continue;
+            }
+        };
         for (at, _) in text.match_indices("](") {
             let rest = &text[at + 2..];
             let Some(end) = rest.find(')') else {
@@ -181,7 +225,23 @@ fn every_linked_document_exists() {
     }
     assert!(
         broken.is_empty(),
-        "行き先のないリンク:\n{}",
+        "行き先のないリンクと、閉じないコード:\n{}",
         broken.join("\n")
+    );
+}
+
+#[test]
+fn unclosed_code_is_an_error() {
+    assert_eq!(
+        without_code("a\n```\nb](c)\n"),
+        Err("line 2: a code block is not closed".to_string())
+    );
+    assert_eq!(
+        without_code("a `b\nc` [d](e)\n"),
+        Err("line 1: a code span is not closed on its line".to_string())
+    );
+    assert_eq!(
+        without_code("a ``b ` c`` [d](e)\n```\nf](g)\n```\n"),
+        Ok("a  [d](e)\n\n\n\n".to_string())
     );
 }

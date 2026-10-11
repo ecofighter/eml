@@ -8,9 +8,11 @@ use std::fmt;
 
 use eml_extern::Extern;
 
+use crate::prim::Immediates;
 use crate::{
     Atom, Block, BlockId, Call, Case, CasePattern, CoreFn, Ctor, EffectInfo, FnIdx, Layout,
-    LayoutCtor, LayoutId, Loc, OperationInfo, Program, Repr, Rhs, Stmt, Term, VarId, VarInfo,
+    LayoutCtor, LayoutId, Loc, OpRet, OperationInfo, Prim, Program, Repr, Rhs, Stmt, Term, VarId,
+    VarInfo,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -381,20 +383,32 @@ impl<'t> Parser<'t> {
         Ok(())
     }
 
-    /// `[never] operation/arity`。
+    /// `[never] operation(repr, ..) -> ret`。`ret` は repr か `never` で、`never` の印と一致しなければならない。
     fn operation_decl(&mut self) -> Result<OperationInfo, ParseError> {
         let never = self.eat_never();
         let line = self.line();
-        let word = self.word()?;
-        // 関数の名前と同じく操作の名前も `/` を含みうるので、最後の `/` で分ける
-        let (op, arity) = word
-            .rsplit_once('/')
-            .and_then(|(op, arity)| Some((op, number(arity)?)))
-            .filter(|(op, _)| !op.is_empty())
-            .ok_or_else(|| error(line, format!("expected `operation/arity`, found `{word}`")))?;
+        let name = self.word()?;
+        let params = self.list('(', ')', Self::repr)?;
+        self.expect_word("->")?;
+        let ret = if self.at_word("never") {
+            self.pos += 1;
+            OpRet::Never
+        } else {
+            OpRet::Repr(self.repr()?)
+        };
+        match (never, ret) {
+            (true, OpRet::Repr(_)) => {
+                return Err(error(line, "a `never` operation returns `never`"));
+            }
+            (false, OpRet::Never) => {
+                return Err(error(line, "only a `never` operation returns `never`"));
+            }
+            _ => {}
+        }
         Ok(OperationInfo {
-            name: op.to_string(),
-            arity: arity as usize,
+            name,
+            params,
+            ret,
             resumable: !never,
         })
     }
@@ -429,12 +443,23 @@ impl<'t> Parser<'t> {
         Ok(())
     }
 
-    /// `[internal] fn name(params) -> repr {` に、入口のブロックとラベルの付いたブロックの列が続く。
+    /// `[internal] [yields] [clause E.op] fn name(params) -> repr {` に、入口のブロックとラベルの付いたブロックの列が
+    /// 続く。
     fn function(&mut self) -> Result<CoreFn, ParseError> {
         let internal = self.at_word("internal");
         if internal {
             self.pos += 1;
         }
+        let yields = self.at_word("yields");
+        if yields {
+            self.pos += 1;
+        }
+        let clause = if self.at_word("clause") {
+            self.pos += 1;
+            Some(self.operation_ref()?)
+        } else {
+            None
+        };
         self.expect_word("fn")?;
         let name = self.name()?;
         let mut state = FnState::default();
@@ -477,6 +502,8 @@ impl<'t> Parser<'t> {
         Ok(CoreFn {
             name,
             internal,
+            yields,
+            clause,
             vars,
             ret,
             blocks,
@@ -559,14 +586,14 @@ impl<'t> Parser<'t> {
                 }
                 "return" => break Term::Return(self.atom(state)?),
                 "tail" => {
-                    let (mask, call) = self.masked_call(state)?;
+                    let call = self.call(state)?;
                     if self.at_word("save") {
                         return Err(error(
                             line,
                             "a tail call saves nothing; `save` is only on `let`",
                         ));
                     }
-                    break Term::TailCall { call, mask };
+                    break Term::TailCall(call);
                 }
                 "jump" => {
                     let target = self.target(state)?;
@@ -681,7 +708,7 @@ impl<'t> Parser<'t> {
         };
         if matches!(
             keyword.as_str(),
-            "mask" | "call" | "apply" | "handle" | "perform" | "resume"
+            "mask" | "call" | "yields" | "apply" | "handle" | "perform" | "resume" | "clause"
         ) {
             let (mask, call) = self.masked_call(state)?;
             let saved = self.saved(state)?;
@@ -703,6 +730,11 @@ impl<'t> Parser<'t> {
                 let args = self.list('(', ')', |p| p.atom(state))?;
                 let at = self.position()?;
                 Rhs::Extern { ext, args, at }
+            }
+            // 引数の数は extern と同じく verifier が確かめる
+            "prim" => {
+                let prim = self.prim()?;
+                Rhs::Prim(prim, self.list('(', ')', |p| p.atom(state))?)
             }
             "const" => {
                 let value = match self.next() {
@@ -790,10 +822,7 @@ impl<'t> Parser<'t> {
         let mask = self.list('[', ']', |p| {
             let line = p.line();
             let word = p.word()?;
-            match tag_number(&word) {
-                Some(index) => Ok(index),
-                None => p.effect_id(&word, line),
-            }
+            p.effect_ref(&word, line)
         })?;
         // `pretty` は空の `mask` を書かない。`mask []` を受け入れると、表示と同じ形に戻らないテキストが読めてしまう
         if mask.is_empty() {
@@ -806,7 +835,11 @@ impl<'t> Parser<'t> {
     fn masked_call(&mut self, state: &mut FnState) -> Result<(Vec<u32>, Call), ParseError> {
         let line = self.line();
         let mask = self.mask()?;
-        if !mask.is_empty() && !["call", "apply", "resume"].iter().any(|w| self.at_word(w)) {
+        if !mask.is_empty()
+            && !["call", "yields", "apply", "resume"]
+                .iter()
+                .any(|w| self.at_word(w))
+        {
             return Err(error(line, "a mask is only on call, apply and resume"));
         }
         Ok((mask, self.call(state)?))
@@ -822,11 +855,14 @@ impl<'t> Parser<'t> {
                 let args = self.list('(', ')', |p| p.atom(state))?;
                 Ok(Call::Direct(callee, args))
             }
-            "apply" => {
-                let callee = self.atom(state)?;
-                let args = self.list('(', ')', |p| p.atom(state))?;
-                Ok(Call::Apply(callee, args))
+            "yields" => {
+                if !self.at_word("apply") {
+                    return Err(self.error_here("expected `apply` after `yields`"));
+                }
+                self.pos += 1;
+                self.apply(state, true)
             }
+            "apply" => self.apply(state, false),
             "handle" => self.handle(state),
             "perform" => {
                 let never = self.eat_never();
@@ -859,8 +895,30 @@ impl<'t> Parser<'t> {
                     state: next,
                 })
             }
+            "clause" => {
+                let (effect, op) = self.operation_ref()?;
+                let callee = self.atom(state)?;
+                let args = self.list('(', ')', |p| p.atom(state))?;
+                Ok(Call::Clause {
+                    effect,
+                    op,
+                    callee,
+                    args,
+                })
+            }
             _ => Err(error(line, format!("expected a call, found `{word}`"))),
         }
+    }
+
+    /// `apply` の後の、呼ぶ値と引数。
+    fn apply(&mut self, state: &mut FnState, yields: bool) -> Result<Call, ParseError> {
+        let callee = self.atom(state)?;
+        let args = self.list('(', ')', |p| p.atom(state))?;
+        Ok(Call::Apply {
+            callee,
+            args,
+            yields,
+        })
     }
 
     /// 操作の前の `never`。後に語が続くときだけ読むので、`never` という名前の操作も書ける。
@@ -946,6 +1004,100 @@ impl<'t> Parser<'t> {
             .position(|other| other.name == op)
             .map(|index| index as u32)
             .ok_or_else(|| error(line, format!("`{}` has no operation `{op}`", info.name)))
+    }
+
+    /// エフェクトの名前か、表にない番号も書ける `#N`。
+    fn effect_ref(&self, word: &str, line: usize) -> Result<u32, ParseError> {
+        match tag_number(word) {
+            Some(index) => Ok(index),
+            None => self.effect_id(word, line),
+        }
+    }
+
+    /// `E.op`。表にないエフェクト `#N` の操作は、名前で引けないので `#N` で書く。
+    fn operation_ref(&mut self) -> Result<(u32, u32), ParseError> {
+        let line = self.line();
+        let word = self.word()?;
+        self.operation_word(&word, line)
+    }
+
+    fn operation_word(&self, word: &str, line: usize) -> Result<(u32, u32), ParseError> {
+        let (effect, op) = word
+            .rsplit_once('.')
+            .ok_or_else(|| error(line, format!("expected `Effect.operation`, found `{word}`")))?;
+        let effect = self.effect_ref(effect, line)?;
+        if effect as usize >= self.effects.len() {
+            let op = tag_number(op).ok_or_else(|| {
+                error(
+                    line,
+                    format!("an operation of the unknown effect #{effect} is written `#N`"),
+                )
+            })?;
+            return Ok((effect, op));
+        }
+        Ok((effect, self.operation(effect, op, line)?))
+    }
+
+    /// `prim` の後の、基本操作の名前と `[…]` の即値。即値の要る基本操作と要らない基本操作は名前で決まるので、
+    /// 名前に合わない即値は構文の誤りにする。
+    fn prim(&mut self) -> Result<Prim, ParseError> {
+        let line = self.line();
+        let name = self.word()?;
+        let immediates = if self.at_punct('[') {
+            Some(self.list('[', ']', |p| Ok((p.line(), p.word()?)))?)
+        } else {
+            None
+        };
+        let one = |immediates: Option<Vec<(usize, String)>>, needs: &str, takes: &str| {
+            let immediates = immediates
+                .ok_or_else(|| error(line, format!("`{name}` needs an immediate `[{needs}]`")))?;
+            match <[_; 1]>::try_from(immediates) {
+                Ok([immediate]) => Ok(immediate),
+                Err(_) => Err(error(line, format!("`{name}` takes one {takes}"))),
+            }
+        };
+        let kind = Prim::by_name(&name)
+            .ok_or_else(|| error(line, format!("unknown primitive `{name}`")))?;
+        match kind.immediates() {
+            Immediates::Effects(_) => {
+                let immediates = immediates.ok_or_else(|| {
+                    error(line, format!("`{name}` needs an immediate `[Effect, ..]`"))
+                })?;
+                // `mask` と同じく空の多重集合は読まない。並びの順と番号は verifier が確かめる
+                if immediates.is_empty() {
+                    return Err(error(line, format!("`{name}` masks no effect")));
+                }
+                let effects = immediates
+                    .iter()
+                    .map(|(line, word)| self.effect_ref(word, *line))
+                    .collect::<Result<_, _>>()?;
+                Ok(Prim::EvvMask(effects))
+            }
+            Immediates::Effect(_) => {
+                let (line, word) = one(immediates, "Effect", "effect")?;
+                let effect = self.effect_ref(&word, line)?;
+                Ok(if matches!(kind, Prim::EvNew(_)) {
+                    Prim::EvNew(effect)
+                } else {
+                    Prim::EvLookup(effect)
+                })
+            }
+            Immediates::Operation { .. } => {
+                let (line, word) = one(immediates, "Effect.operation", "operation")?;
+                let (effect, op) = self.operation_word(&word, line)?;
+                Ok(if matches!(kind, Prim::EvSetClause { .. }) {
+                    Prim::EvSetClause { effect, op }
+                } else {
+                    Prim::EvClause { effect, op }
+                })
+            }
+            Immediates::None => {
+                if immediates.is_some() {
+                    return Err(error(line, format!("`{name}` takes no immediate")));
+                }
+                Ok(kind)
+            }
+        }
     }
 
     fn function_name(&mut self) -> Result<FnIdx, ParseError> {

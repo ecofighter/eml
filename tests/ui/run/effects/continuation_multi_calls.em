@@ -1,6 +1,6 @@
 -- `multi` operations may be resumed any number of times. A call of `k` that is not the last use of the continuation
--- copies the captured frames, so each resumption runs the rest of the computation on its own. Dropping the
--- continuation or not using it releases the frames and the strings they saved.
+-- copies each shared closure of the continuation it enters, so each resumption runs the rest of the computation on its
+-- own. Dropping the continuation or not using it releases its closures and the strings they captured.
 effect Choice where
   multi choose : Unit -> Bool
 

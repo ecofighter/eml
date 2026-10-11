@@ -1,7 +1,7 @@
 //! Core IR のテキストの形 (docs/implementation/testing.md の「Core IR のテキストの形」)。`parse` が読んだものを
 //! `pretty` で表示すると元のテキストに戻ることと、構文の誤りの報告を確かめる。
 
-use eml_core_ir::{Atom, Call, CasePattern, Ctor, FnIdx, LayoutId, VarId};
+use eml_core_ir::{Atom, Call, CasePattern, Ctor, FnIdx, LayoutId, OpRet, Prim, VarId};
 use eml_core_ir::{
     BlockId, Loc, ParseError, Program, Repr, Rhs, Stmt, Term, parse, pretty, pretty_with_positions,
 };
@@ -260,19 +260,28 @@ fn g(x.0: int) -> int {
 fn a_tail_call_round_trips() {
     let program = round_trip(
         "\
-effect State { get/1, put/1 }
 fn f(c.0: tobj) -> int {
-  tail mask [State] apply c.0(1)
+  tail apply c.0(1)
 }
 ",
     );
     assert_eq!(
         program.functions[0].blocks[0].term,
-        Term::TailCall {
-            call: Call::Apply(v(0), vec![Atom::Int(1)]),
-            mask: vec![0],
-        }
+        Term::TailCall(Call::Apply {
+            callee: v(0),
+            args: vec![Atom::Int(1)],
+            yields: false,
+        })
     );
+}
+
+/// 縮約は EP の後に走るので、末尾呼び出しは `mask` を持たない。
+#[test]
+fn a_tail_call_takes_no_mask() {
+    let error = parse_error(
+        "effect State { get(tobj) -> tobj }\nfn f(c.0: tobj) -> int {\n  tail mask [State] apply c.0(1)\n}\n",
+    );
+    assert_eq!(error.to_string(), "line 3: expected a call, found `mask`");
 }
 
 #[test]
@@ -646,10 +655,7 @@ fn f(x.0: int) -> int {
     );
     assert_eq!(
         program.functions[0].blocks[0].term,
-        Term::TailCall {
-            call: Call::Direct(FnIdx(0), vec![v(1)]),
-            mask: Vec::new(),
-        }
+        Term::TailCall(Call::Direct(FnIdx(0), vec![v(1)]))
     );
 }
 
@@ -669,7 +675,11 @@ fn f(c.0: tobj) -> int {
         Stmt::Let {
             var: VarId(1),
             rhs: Rhs::Call {
-                call: Call::Apply(v(0), vec![Atom::Int(1), Atom::Int(2)]),
+                call: Call::Apply {
+                    callee: v(0),
+                    args: vec![Atom::Int(1), Atom::Int(2)],
+                    yields: false,
+                },
                 mask: Vec::new(),
                 saved: Vec::new(),
             },
@@ -677,10 +687,11 @@ fn f(c.0: tobj) -> int {
     );
     assert_eq!(
         f.blocks[0].term,
-        Term::TailCall {
-            call: Call::Apply(Atom::Unit, vec![v(1)]),
-            mask: Vec::new(),
-        }
+        Term::TailCall(Call::Apply {
+            callee: Atom::Unit,
+            args: vec![v(1)],
+            yields: false,
+        })
     );
 }
 
@@ -688,7 +699,7 @@ fn f(c.0: tobj) -> int {
 fn a_handle_round_trips() {
     let program = round_trip(
         "\
-effect Ask { ask/1, never stop/1 }
+effect Ask { ask(tobj) -> tobj, never stop(tobj) -> never }
 effect Done {}
 fn h(s.0: int, b.1: tobj, a.2: tobj, x.3: tobj, r.4: tobj) -> int {
   let t.5: int = handle Ask(s.0, b.1) { ask: a.2, stop: x.3 } return r.4
@@ -720,7 +731,7 @@ fn h(s.0: int, b.1: tobj, a.2: tobj, x.3: tobj, r.4: tobj) -> int {
 fn a_perform_round_trips() {
     let program = round_trip(
         "\
-effect Ask { ask/1, never stop/1 }
+effect Ask { ask(tobj) -> tobj, never stop(tobj) -> never }
 fn f(x.0: int) -> int {
   let t.1: int = perform Ask.ask(x.0)
   tail perform never Ask.stop(t.1)
@@ -747,24 +758,23 @@ fn f(x.0: int) -> int {
     // `never` はテキストに書いたとおりに読む。エフェクトの表と合うかは verifier が確かめる
     assert_eq!(
         f.blocks[0].term,
-        Term::TailCall {
-            call: Call::Perform {
-                effect: 0,
-                op: 1,
-                resumable: false,
-                args: vec![v(1)],
-            },
-            mask: Vec::new(),
-        }
+        Term::TailCall(Call::Perform {
+            effect: 0,
+            op: 1,
+            resumable: false,
+            args: vec![v(1)],
+        })
     );
-    round_trip("effect Ask { ask/1 }\nfn f() -> int {\n  tail perform never Ask.ask(1)\n}\n");
+    round_trip(
+        "effect Ask { ask(tobj) -> tobj }\nfn f() -> int {\n  tail perform never Ask.ask(1)\n}\n",
+    );
 }
 
 #[test]
 fn a_resume_round_trips() {
     let program = round_trip(
         "\
-effect State { get/1, put/1 }
+effect State { get(tobj) -> tobj, put(tobj) -> tobj }
 fn f(k.0: tobj, s.1: int) -> int {
   let t.2: int = mask [State] resume k.0(1, s.1)
   tail resume ()(t.2, ())
@@ -793,20 +803,22 @@ fn f(k.0: tobj, s.1: int) -> int {
 fn a_mask_reads_back() {
     round_trip(
         "\
-effect Main.State { get/1, put/1 }
-fn entry$main(c.0: tobj) -> unit {
+effect Main.State { get(tobj) -> tobj, put(tobj) -> tobj }
+fn entry$main(c.0: tobj) -> tobj {
   let t.1: tobj = mask [Main.State, Main.State] apply c.0(())
-  tail mask [Main.State] apply t.1(())
+  let t.2: tobj = mask [Main.State] apply t.1(())
+  return t.2
 }
 ",
     );
     round_trip(
         "\
-effect Main.State { get/1, put/1 }
+effect Main.State { get(tobj) -> tobj, put(tobj) -> tobj }
 fn f(c.0: tobj, k.1: tobj) -> int {
   let t.2: int = mask [#3] call f(c.0, k.1) save [c.0]
   let t.3: int = mask [Main.State] resume k.1(t.2, ())
-  tail mask [Main.State] call f(c.0, t.3)
+  let t.4: int = mask [Main.State] call f(c.0, t.3)
+  return t.4
 }
 ",
     );
@@ -877,7 +889,7 @@ fn a_binder_needs_a_repr() {
 fn an_effect_of_a_nested_module_round_trips() {
     round_trip(
         "\
-effect A.B.E { op/0 }
+effect A.B.E { op() -> tobj }
 fn f() -> int {
   let t.0: int = perform A.B.E.op()
   return t.0
@@ -906,7 +918,7 @@ fn string_escapes_round_trip() {
 fn the_return_after_the_return_clause_is_the_terminator() {
     round_trip(
         "\
-effect Ask { ask/1 }
+effect Ask { ask(tobj) -> tobj }
 fn h(b.0: tobj, a.1: tobj, r.2: tobj) -> int {
   let t.3: int = handle Ask((), b.0) { ask: a.1 } return r.2
   return t.3
@@ -918,7 +930,7 @@ fn h(b.0: tobj, a.1: tobj, r.2: tobj) -> int {
 #[test]
 fn a_handle_without_a_return_clause_is_an_error() {
     let error = parse_error(
-        "effect Ask { ask/1 }\nfn h(b.0: tobj, a.1: tobj) -> int {\n  let t.2: int = handle Ask((), b.0) { ask: a.1 }\n  return t.2\n}\n",
+        "effect Ask { ask(tobj) -> tobj }\nfn h(b.0: tobj, a.1: tobj) -> int {\n  let t.2: int = handle Ask((), b.0) { ask: a.1 }\n  return t.2\n}\n",
     );
     assert_eq!(error.line, 3);
     assert_eq!(
@@ -928,17 +940,29 @@ fn a_handle_without_a_return_clause_is_an_error() {
 }
 
 #[test]
-fn an_operation_needs_its_arity_after_the_last_slash() {
-    let program = parse("effect E { a/b/2 }\nfn f() -> int {\n  return 1\n}\n").unwrap();
-    assert_eq!(program.effects[0].operations[0].name, "a/b");
-    assert_eq!(program.effects[0].operations[0].arity, 2);
+fn an_operation_needs_its_reprs() {
+    let program =
+        parse("effect E { a/b(int, tobj) -> unit }\nfn f() -> int {\n  return 1\n}\n").unwrap();
+    let operation = &program.effects[0].operations[0];
+    assert_eq!(operation.name, "a/b");
+    assert_eq!(operation.params, [Repr::Int, Repr::TObj]);
+    assert_eq!(operation.ret, OpRet::Repr(Repr::Unit));
 
-    let error = parse_error("effect E { ask }\nfn f() -> int {\n  return 1\n}\n");
+    let error = parse_error("effect E { ask }\n");
     assert_eq!(error.line, 1);
-    assert_eq!(error.message, "expected `operation/arity`, found `ask`");
+    assert_eq!(error.message, "expected `(`, found `}`");
 
-    let error = parse_error("effect E { ask/x }\nfn f() -> int {\n  return 1\n}\n");
-    assert_eq!(error.message, "expected `operation/arity`, found `ask/x`");
+    let error = parse_error("effect E { ask -> tobj }\n");
+    assert_eq!(error.message, "expected `(`, found `->`");
+
+    let error = parse_error("effect E { ask(unit) }\n");
+    assert_eq!(error.message, "expected `->`, found `}`");
+
+    let error = parse_error("effect E { ask(x) -> tobj }\n");
+    assert_eq!(
+        error.message,
+        "expected a repr (obj, tobj, int, enum or unit), found `x`"
+    );
 }
 
 #[test]
@@ -1019,12 +1043,12 @@ fn a_tail_call_with_save_is_an_error() {
 fn malformed_declarations_names_and_strings_are_errors_with_their_lines() {
     let cases = [
         (
-            "effect A { a/1 }\neffect A { b/1 }\nfn f() -> int {\n  return 1\n}\n",
+            "effect A { a(tobj) -> tobj }\neffect A { b(tobj) -> tobj }\nfn f() -> int {\n  return 1\n}\n",
             2,
             "effect `A` is declared twice",
         ),
         (
-            "effect A { a/1,\n  a/2 }\nfn f() -> int {\n  return 1\n}\n",
+            "effect A { a(tobj) -> tobj,\n  a(tobj, tobj) -> tobj }\nfn f() -> int {\n  return 1\n}\n",
             2,
             "operation `a` is declared twice",
         ),
@@ -1054,7 +1078,7 @@ fn malformed_declarations_names_and_strings_are_errors_with_their_lines() {
             "a `\\u{…}` escape is not a character",
         ),
         (
-            "effect A { a/1, b/1 }\nfn f(x.0: tobj, y.1: tobj, r.2: tobj) -> int {\n  tail handle A((), x.0) { b: y.1, a: y.1 } return r.2\n}\n",
+            "effect A { a(tobj) -> tobj, b(tobj) -> tobj }\nfn f(x.0: tobj, y.1: tobj, r.2: tobj) -> int {\n  tail handle A((), x.0) { b: y.1, a: y.1 } return r.2\n}\n",
             3,
             "the clause for `b` is out of order; clauses follow the operations of `A`",
         ),
@@ -1081,7 +1105,7 @@ fn the_entry_is_entry_main_wherever_it_is_written() {
 fn an_operation_number_outside_the_effect_round_trips() {
     round_trip(
         "\
-effect Ask { ask/0 }
+effect Ask { ask() -> tobj }
 fn f(b.0: tobj, a.1: tobj, c.2: tobj, r.3: tobj) -> int {
   let t.4: int = perform never Ask.#3()
   let t.5: int = handle Ask((), b.0) { ask: a.1, #1: c.2 } return r.3
@@ -1109,10 +1133,7 @@ fn f() -> int {
     let program = round_trip(text);
     assert_eq!(
         program.functions[2].blocks[0].term,
-        Term::TailCall {
-            call: Call::Direct(FnIdx(1), vec![v(0)]),
-            mask: Vec::new(),
-        }
+        Term::TailCall(Call::Direct(FnIdx(1), vec![v(0)]))
     );
 }
 
@@ -1171,19 +1192,19 @@ fn a_block_without_a_terminator_is_an_error() {
 #[test]
 fn a_mask_on_handle_perform_or_a_non_call_is_an_error() {
     let error = parse_error(
-        "effect Ask { ask/1 }\nfn f(b.0: tobj, a.1: tobj, r.2: tobj) -> int {\n  let t.3: int = mask [Ask] handle Ask((), b.0) { ask: a.1 } return r.2\n  return t.3\n}\n",
+        "effect Ask { ask(tobj) -> tobj }\nfn f(b.0: tobj, a.1: tobj, r.2: tobj) -> int {\n  let t.3: int = mask [Ask] handle Ask((), b.0) { ask: a.1 } return r.2\n  return t.3\n}\n",
     );
     assert_eq!(error.line, 3);
     assert_eq!(error.message, "a mask is only on call, apply and resume");
 
     let error = parse_error(
-        "effect Ask { ask/1 }\nfn f() -> int {\n  tail mask [Ask] perform Ask.ask(1)\n}\n",
+        "effect Ask { ask(tobj) -> tobj }\nfn f() -> int {\n  let t.0: int = mask [Ask] perform Ask.ask(1)\n  return t.0\n}\n",
     );
     assert_eq!(error.line, 3);
     assert_eq!(error.message, "a mask is only on call, apply and resume");
 
     let error = parse_error(
-        "effect Ask { ask/1 }\nfn f() -> obj {\n  let s.0: obj = mask [Ask] const \"a\"\n  return s.0\n}\n",
+        "effect Ask { ask(tobj) -> tobj }\nfn f() -> obj {\n  let s.0: obj = mask [Ask] const \"a\"\n  return s.0\n}\n",
     );
     assert_eq!(error.line, 3);
     assert_eq!(error.message, "a mask is only on call, apply and resume");
@@ -1192,7 +1213,9 @@ fn a_mask_on_handle_perform_or_a_non_call_is_an_error() {
 /// `pretty` は空の `mask` と `save` を書かないので、読み直した表示が元と変わる形は読まない。
 #[test]
 fn an_empty_mask_or_save_is_an_error() {
-    let error = parse_error("fn g(x.0: int) -> int {\n  tail mask [] call g(1)\n}\n");
+    let error = parse_error(
+        "fn g(x.0: int) -> int {\n  let y.1: int = mask [] call g(1)\n  return y.1\n}\n",
+    );
     assert_eq!(error.line, 2);
     assert_eq!(error.message, "an empty mask");
 
@@ -1218,7 +1241,7 @@ fn tag_block_variable_and_operation_numbers_are_plain_digits() {
     assert_eq!(error.message, "expected a block `bN`, found `b+0`");
 
     let error = parse_error(
-        "effect Ask { ask/0 }\nfn f() -> int {\n  let t.0: int = perform Ask.#+0()\n  return t.0\n}\n",
+        "effect Ask { ask() -> tobj }\nfn f() -> int {\n  let t.0: int = perform Ask.#+0()\n  return t.0\n}\n",
     );
     assert_eq!(error.line, 3);
     assert_eq!(error.message, "`Ask` has no operation `#+0`");
@@ -1236,7 +1259,7 @@ fn tag_block_variable_and_operation_numbers_are_plain_digits() {
 fn successors_and_atoms_come_in_a_fixed_order() {
     let program = parse(
         "\
-effect Ask { ask/1 }
+effect Ask { ask(tobj) -> tobj }
 fn f(o.0: tobj, i.1: int, b.2: tobj, a.3: tobj, r.4: tobj) -> int {
   let t.5: int = handle Ask(i.1, b.2) { ask: a.3 } return r.4
   unpack o.0 #0 #0(x.6: int)
@@ -1320,7 +1343,7 @@ layout Pair { Pair(tobj, int) }
 layout (,) { (,)(tobj, tobj) }
 layout (,,) { (,,)(tobj, tobj, tobj) }
 layout Void {}
-effect Ask { ask/1 }
+effect Ask { ask(tobj) -> tobj }
 fn f(p.0: obj, t.1: obj, b.2: enum) -> int {
   unpack p.0 Pair #0(x.3: tobj, n.4: int)
   unpack t.1 (,,) #0(a.5: tobj, b.6: tobj, c.7: tobj)
@@ -1436,7 +1459,7 @@ fn malformed_layouts_are_errors_with_their_lines() {
 
     // 配置の行はエフェクトの行より前に書く
     let error = parse_error(
-        "effect Ask { ask/1 }\nlayout Option { None }\nfn f() -> unit {\n  return ()\n}\n",
+        "effect Ask { ask(tobj) -> tobj }\nlayout Option { None }\nfn f() -> unit {\n  return ()\n}\n",
     );
     assert_eq!(error.line, 2);
     assert_eq!(error.message, "expected `fn`, found `layout`");
@@ -1486,4 +1509,178 @@ fn an_instruction_names_a_layout() {
         parse_error("fn f(x.0: tobj) -> obj {\n  let d.1: obj = con #1(x.0)\n  return d.1\n}\n");
     assert_eq!(error.line, 2);
     assert_eq!(error.message, "expected a tag `#N`, found `(`");
+}
+
+#[test]
+fn yields_marks_round_trip() {
+    round_trip(
+        "yields fn f(c.0: tobj) -> tobj {\n  let t.1: tobj = yields apply c.0(())\n  return t.1\n}\n",
+    );
+    round_trip(
+        "effect Ask { ask(unit) -> tobj }\ninternal yields fn g(c.0: tobj) -> tobj {\n  let t.1: tobj = mask [Ask] yields apply c.0(())\n  return t.1\n}\n",
+    );
+}
+
+/// `yields` の印は `apply` にだけ付く。`mask` の後でも同じである。
+#[test]
+fn a_yields_mark_on_anything_but_apply_is_an_error() {
+    let error = parse_error("fn f() -> int {\n  let t.0: int = yields call f()\n  return t.0\n}\n");
+    assert_eq!(error.line, 2);
+    assert_eq!(
+        error.message,
+        "expected `apply` after `yields`, found `call`"
+    );
+
+    let error = parse_error(
+        "effect Ask { ask(unit) -> tobj }\nfn f(k.0: tobj) -> int {\n  let t.1: int = mask [Ask] yields resume k.0(1, ())\n  return t.1\n}\n",
+    );
+    assert_eq!(error.line, 3);
+    assert_eq!(
+        error.message,
+        "expected `apply` after `yields`, found `resume`"
+    );
+}
+
+#[test]
+fn operation_reprs_round_trip() {
+    round_trip(
+        "effect Counter { get(unit) -> int, put(int) -> unit }\neffect Fail { never fail(tobj) -> never }\neffect Done {}\nfn f() -> int {\n  return 1\n}\n",
+    );
+}
+
+#[test]
+fn a_never_operation_returns_never() {
+    assert_eq!(
+        parse_error("effect Fail { never fail(tobj) -> tobj }\n").to_string(),
+        "line 1: a `never` operation returns `never`"
+    );
+    assert_eq!(
+        parse_error("effect Ask { ask(unit) -> never }\n").to_string(),
+        "line 1: only a `never` operation returns `never`"
+    );
+}
+
+#[test]
+fn prims_and_clauses_round_trip() {
+    let program = round_trip(
+        "effect State { get(unit) -> tobj, put(tobj) -> unit }\nyields fn f(s.0: tobj) -> tobj {\n  let w.1: tobj = prim evv_get()\n  let e.2: obj = prim ev_new[State](s.0, w.1)\n  let u.3: unit = prim ev_set_clause[State.get](e.2, &g)\n  let m.4: tobj = prim evv_mask[State, State](w.1)\n  let c.5: tobj = prim ev_clause[State.get](e.2)\n  let r.6: tobj = clause State.get c.5(e.2, ())\n  return r.6\n}\ninternal yields clause State.get fn g(e.0: obj, u.1: unit) -> tobj {\n  let s.2: tobj = prim ev_take_state(e.0)\n  return s.2\n}\n",
+    );
+    let f = &program.functions[0];
+    assert_eq!(f.clause, None);
+    assert_eq!(
+        f.blocks[0].stmts[1],
+        Stmt::Let {
+            var: VarId(2),
+            rhs: Rhs::Prim(Prim::EvNew(0), vec![v(0), v(1)]),
+        }
+    );
+    assert_eq!(
+        f.blocks[0].stmts[2],
+        Stmt::Let {
+            var: VarId(3),
+            rhs: Rhs::Prim(
+                Prim::EvSetClause { effect: 0, op: 0 },
+                vec![v(2), Atom::Fn(FnIdx(1))]
+            ),
+        }
+    );
+    assert_eq!(
+        f.blocks[0].stmts[3],
+        Stmt::Let {
+            var: VarId(4),
+            rhs: Rhs::Prim(Prim::EvvMask(vec![0, 0]), vec![v(1)]),
+        }
+    );
+    assert_eq!(
+        f.blocks[0].stmts[5],
+        Stmt::Let {
+            var: VarId(6),
+            rhs: Rhs::Call {
+                call: Call::Clause {
+                    effect: 0,
+                    op: 0,
+                    callee: v(5),
+                    args: vec![v(2), Atom::Unit],
+                },
+                mask: vec![],
+                saved: vec![],
+            },
+        }
+    );
+    let g = &program.functions[1];
+    assert!(g.internal && g.yields);
+    assert_eq!(g.clause, Some((0, 0)));
+}
+
+#[test]
+fn every_prim_round_trips() {
+    round_trip(
+        "effect State { get(unit) -> tobj, put(tobj) -> unit }\nfn f(w.0: tobj, e.1: obj, s.2: tobj, c.3: tobj) -> unit {\n  let v.20: tobj = prim evv_get()\n  let x.21: tobj = prim evv_mask[State, #4](w.0)\n  let y.22: unit = prim ev_set_clause[State.get](e.1, c.3)\n  let z.23: tobj = prim ev_take_state(e.1)\n  let a.4: unit = prim evv_set(w.0)\n  let b.5: tobj = prim evv_push(w.0, e.1)\n  let d.6: obj = prim ev_renew(e.1, s.2)\n  let g.7: obj = prim ev_lookup[State]()\n  let h.8: tobj = prim ev_evv(e.1)\n  let i.9: unit = prim ev_set_state(e.1, s.2)\n  let j.10: int = prim yielding()\n  let k.11: int = prim yield_status(e.1)\n  let l.12: unit = prim yield_to(e.1, c.3, s.2)\n  let m.13: unit = prim yield_abort(e.1, c.3, s.2)\n  let n.14: tobj = prim yield_cont_take()\n  let o.15: unit = prim yield_cont_set(n.14)\n  let p.16: tobj = prim yield_finish()\n  let q.17: obj = prim dummy()\n  let r.18: tobj = prim ev_clause[State.#7](e.1)\n  let t.19: obj = prim ev_new[#3](s.2, w.0)\n  tail clause State.put c.3(e.1, s.2)\n}\n",
+    );
+}
+
+#[test]
+fn a_prim_has_the_immediates_of_its_kind() {
+    let prim = |rhs: &str| {
+        parse_error(&format!(
+            "effect State {{ get(unit) -> tobj }}\nfn f(w.0: tobj) -> tobj {{\n  let x.1: tobj = prim {rhs}\n  return x.1\n}}\n"
+        ))
+        .to_string()
+    };
+    assert_eq!(
+        prim("evv_get[State]()"),
+        "line 3: `evv_get` takes no immediate"
+    );
+    assert_eq!(
+        prim("ev_lookup()"),
+        "line 3: `ev_lookup` needs an immediate `[Effect]`"
+    );
+    assert_eq!(
+        prim("ev_lookup[State, State]()"),
+        "line 3: `ev_lookup` takes one effect"
+    );
+    assert_eq!(
+        prim("ev_clause[State](w.0)"),
+        "line 3: expected `Effect.operation`, found `State`"
+    );
+    assert_eq!(
+        prim("evv_mask(w.0)"),
+        "line 3: `evv_mask` needs an immediate `[Effect, ..]`"
+    );
+    assert_eq!(prim("ev_frob()"), "line 3: unknown primitive `ev_frob`");
+}
+
+/// `mask` と同じく、空の多重集合は表示と同じ形に戻らないので読まない。
+#[test]
+fn an_evv_mask_masks_some_effect() {
+    let error = parse_error(
+        "effect State { get(unit) -> tobj }\nfn f(w.0: tobj) -> tobj {\n  let x.1: tobj = prim evv_mask[](w.0)\n  return x.1\n}\n",
+    );
+    assert_eq!(error.to_string(), "line 3: `evv_mask` masks no effect");
+}
+
+/// 表にないエフェクトの操作は名前で引けないので、番号で書く。
+#[test]
+fn an_operation_of_an_unknown_effect_is_written_by_number() {
+    let error = parse_error(
+        "effect State { get(unit) -> tobj }\nfn f(e.0: obj) -> tobj {\n  let c.1: tobj = prim ev_clause[#3.get](e.0)\n  return c.1\n}\n",
+    );
+    assert_eq!(
+        error.to_string(),
+        "line 3: an operation of the unknown effect #3 is written `#N`"
+    );
+    round_trip(
+        "effect State { get(unit) -> tobj }\nfn f(e.0: obj) -> tobj {\n  let c.1: tobj = prim ev_clause[#3.#0](e.0)\n  return c.1\n}\n",
+    );
+}
+
+#[test]
+fn a_clause_call_takes_no_mask() {
+    assert_eq!(
+        parse_error(
+            "effect State { get(unit) -> tobj }\nfn f(c.0: tobj, e.1: obj) -> tobj {\n  let t.2: tobj = mask [State] clause State.get c.0(e.1, ())\n  return t.2\n}\n"
+        )
+        .to_string(),
+        "line 3: a mask is only on call, apply and resume"
+    );
 }

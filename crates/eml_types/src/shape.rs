@@ -357,6 +357,8 @@ pub(crate) struct Instantiated {
     pub ty: Ty,
     /// rigid な型変数を置き換えた新しい変数。`Shape::rigids` の順に並ぶ。
     pub args: Vec<Ty>,
+    /// rigid な row 変数を置き換えた新しい row 変数。`Shape::rows` の順に並ぶ。
+    pub rows: Vec<RowVar>,
     pub lin: Vec<KindVar>,
     pub mult: Vec<KindVar>,
 }
@@ -535,15 +537,17 @@ impl Shape {
             .iter()
             .map(|(_, mu)| table.fresh_var_with(lin[mu.index()]))
             .collect();
-        let rows: Vec<Tail> = self
+        let row_vars: Vec<RowVar> = self
             .rows
             .iter()
-            .map(|(_, sigma)| Tail::Var(table.fresh_row_var_with(mult[sigma.index()])))
+            .map(|(_, sigma)| table.fresh_row_var_with(mult[sigma.index()]))
             .collect();
+        let rows: Vec<Tail> = row_vars.iter().map(|&var| Tail::Var(var)).collect();
         let ty = build(table, &self.ty, &tys, &rows, &lin);
         Instantiated {
             ty,
             args: tys,
+            rows: row_vars,
             lin,
             mult,
         }

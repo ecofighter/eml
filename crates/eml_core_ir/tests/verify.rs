@@ -1,7 +1,10 @@
 //! Core IR のテキストで書いた IR で、verifier が正しいものを受け入れ、壊れたものを拒むことを確かめる (docs/spec/core-ir.md)。
 //! 構造の規則 R1 から R9 と、前の形の IR から引き継いだ検査を1つずつ確かめる。
 
-use eml_core_ir::{Program, Stmt, Term, parse, verify, verify_scopes, verify_translated};
+use eml_core_ir::{
+    Prim, Program, Rhs, Stmt, Term, parse, verify, verify_evidence, verify_scopes,
+    verify_translated,
+};
 
 /// 手で書く IR の配置の行。プログラムの先頭に置く。
 const BOOL: &str = "layout Prelude.Bool { False, True }\n";
@@ -23,6 +26,10 @@ fn check_scopes(text: &str) -> Result<(), String> {
 
 fn check_translated(text: &str) -> Result<(), String> {
     verify_translated(&read(text)).map_err(|error| error.to_string())
+}
+
+fn check_evidence(text: &str) -> Result<(), String> {
+    verify_evidence(&read(text)).map_err(|error| error.to_string())
 }
 
 /// spec の「テキストの形」の例。RC の対象の変数がないので、どちらの段でも通る。
@@ -115,28 +122,25 @@ b1:
     )
 }
 
-const ASK: &str = "effect Ask { ask/1 }\n";
+const ASK: &str = "effect Ask { ask(tobj) -> tobj }\n";
 
-/// `handle ask 1 with | ask x k -> resume k x` を持ち上げた形。`effects` は先頭のエフェクトの行。節と本体は値として
-/// 使うので一様で、捕まえる `Int` と handle の結果は `box` と `unbox` を通る。
+/// `handle ask 1 with | ask x k -> resume k x` を持ち上げた translate の出力の形。`effects` は先頭のエフェクトの行。
+/// box の挿入の前なので、捕まえる `Int` と handle の結果は `int` のままである。
 fn handler_program(effects: &str) -> String {
     format!(
         "{effects}fn main() -> int {{
-  let b.0: tobj = box 1
-  let c.1: tobj = closure main$handle0(b.0)
-  let b.2: tobj = box 2
-  let c.3: tobj = closure main$handle0$ask(b.2)
-  let r.4: tobj = handle Ask((), c.1) {{ ask: c.3 }} return &main$handle0$return
-  let t.5: int = unbox r.4
-  decref r.4
-  return t.5
+  let c.0: tobj = closure main$handle0(1)
+  let c.1: tobj = closure main$handle0$ask(2)
+  let r.2: int = handle Ask((), c.0) {{ ask: c.1 }} return &main$handle0$return
+  return r.2
 }}
-fn main$handle0(n.0: tobj, p.1: unit) -> tobj {{
-  tail perform Ask.ask(n.0)
+fn main$handle0(n.0: int, p.1: unit) -> tobj {{
+  let t.2: tobj = perform Ask.ask(n.0)
+  return t.2
 }}
-fn main$handle0$ask(m.0: tobj, x.1: tobj, k.2: tobj, s.3: unit) -> tobj {{
-  decref m.0
-  tail resume k.2(x.1, s.3)
+fn main$handle0$ask(m.0: int, x.1: tobj, k.2: tobj, s.3: unit) -> tobj {{
+  let t.4: tobj = resume k.2(x.1, s.3)
+  return t.4
 }}
 fn main$handle0$return(x.0: tobj, s.1: unit) -> tobj {{
   return x.0
@@ -759,13 +763,56 @@ fn a_returned_value_that_is_not_compatible_is_rejected() {
 }
 
 #[test]
-fn the_uses_of_a_never_perform_binder_are_not_compared() {
-    // `never` の操作の `perform` の束縛の使いには制御が届かないので、互換の位置 (`return` の値、`jump` の実引数、
+fn the_uses_of_a_never_binder_are_not_compared() {
+    // `never` の操作の `clause` の束縛の使いには制御が届かないので、互換の位置 (`return` の値、`jump` の実引数、
     // 直接の呼び出しの引数、`closure` の引数、`apply` のオペランド、`tobj` のフィールド) で位置と比べない。縮約は、
-    // `f` の形をそのまま `tail perform never` にする
+    // `f` の形をそのまま `tail clause` にする
     let text = "\
 layout Option { None, Some(tobj) }
-effect Fail { never fail/1 }
+effect Fail { never fail(tobj) -> never }
+fn f(c.0: tobj, e.1: obj) -> tobj {
+  let t.2: int = clause Fail.fail c.0(e.1, ())
+  return t.2
+}
+fn g(c.0: tobj, e.1: obj) -> tobj {
+  let t.2: int = clause Fail.fail c.0(e.1, ())
+  jump b1(t.2)
+b1(a.3: tobj):
+  return a.3
+}
+fn h(c.0: tobj, e.1: obj) -> tobj {
+  let t.2: int = clause Fail.fail c.0(e.1, ())
+  let r.3: tobj = call k(t.2)
+  return r.3
+}
+fn k(x.0: tobj) -> tobj {
+  return x.0
+}
+fn m(c.0: tobj, e.1: obj) -> tobj {
+  let t.2: int = clause Fail.fail c.0(e.1, ())
+  let c.3: tobj = closure n(t.2)
+  return c.3
+}
+fn n(a.0: tobj, b.1: unit) -> tobj {
+  return a.0
+}
+fn p(c.0: tobj, e.1: obj) -> tobj {
+  let t.2: int = clause Fail.fail c.0(e.1, ())
+  let r.3: tobj = apply &k(t.2)
+  return r.3
+}
+fn q(c.0: tobj, e.1: obj) -> tobj {
+  let t.2: int = clause Fail.fail c.0(e.1, ())
+  let d.3: tobj = con Option #1(t.2)
+  return d.3
+}
+";
+    assert_eq!(check_evidence(text), Ok(()));
+    assert_eq!(check_scopes(text), Ok(()));
+    assert_eq!(check(text), Ok(()));
+    // translate の出力の `never` の `perform` の束縛も、`return` と `jump` で位置と比べない
+    let translated = "\
+effect Fail { never fail(tobj) -> never }
 fn f(s.0: obj) -> tobj {
   let t.1: int = perform never Fail.fail(s.0)
   return t.1
@@ -776,36 +823,8 @@ fn g(s.0: obj) -> tobj {
 b1(a.2: tobj):
   return a.2
 }
-fn h(s.0: obj) -> tobj {
-  let t.1: int = perform never Fail.fail(s.0)
-  let r.2: tobj = call k(t.1)
-  return r.2
-}
-fn k(x.0: tobj) -> tobj {
-  return x.0
-}
-fn m(s.0: obj) -> tobj {
-  let t.1: int = perform never Fail.fail(s.0)
-  let c.2: tobj = closure n(t.1)
-  return c.2
-}
-fn n(a.0: tobj, b.1: unit) -> tobj {
-  return a.0
-}
-fn p(s.0: obj) -> tobj {
-  let t.1: int = perform never Fail.fail(s.0)
-  let r.2: tobj = apply &k(t.1)
-  return r.2
-}
-fn q(s.0: obj) -> tobj {
-  let t.1: int = perform never Fail.fail(s.0)
-  let d.2: tobj = con Option #1(t.1)
-  return d.2
-}
 ";
-    assert_eq!(check_translated(text), Ok(()));
-    assert_eq!(check_scopes(text), Ok(()));
-    assert_eq!(check(text), Ok(()));
+    assert_eq!(check_translated(translated), Ok(()));
 }
 
 #[test]
@@ -863,23 +882,17 @@ fn an_extern_takes_constants_that_fit_its_row() {
 
 // 境界の検査
 
-/// 値として使う一様な関数。`i` は本体に、`two` は `return` の節と `get/0` の節に、`three` は `ask/1` の節に使える。
+/// 値として使う一様な関数。
 const UNIFORM: &str = "\
 fn i(u.0: unit) -> unit {
   return u.0
 }
-fn two(a.0: unit, b.1: unit) -> unit {
-  return a.0
-}
-fn three(a.0: unit, b.1: unit, c.2: unit) -> unit {
-  return a.0
-}
 ";
 
-/// 引数が `params` で本体が `body` の `f` に、エフェクト `Ask`、`State`、`Fail` と一様な関数を添える。
+/// 引数が `params` で本体が `body` の `f` に、エフェクト `Ask` と `Fail` と一様な関数を添える。
 fn calling(params: &str, body: &str) -> String {
     format!(
-        "{ASK}effect State {{ get/0 }}\neffect Fail {{ never fail/1 }}\nfn f({params}) -> tobj {{\n{body}}}\n{UNIFORM}"
+        "{ASK}effect Fail {{ never fail(tobj) -> never }}\nfn f({params}) -> tobj {{\n{body}}}\n{UNIFORM}"
     )
 }
 
@@ -1064,49 +1077,24 @@ fn the_operands_of_uniform_calls_are_compatible_with_tobj() {
             "argument 0 of an apply is `n.1` (int), but an apply takes tobj",
         ),
         (
-            "",
-            "  let t.0: tobj = perform Ask.ask(1)\n  return t.0\n",
-            "argument 0 of a perform of `Ask.ask` is 1, but a perform takes tobj",
+            "c.0: int, e.1: obj",
+            "  let t.2: tobj = clause Ask.ask c.0(e.1, ())\n  return t.2\n",
+            "the callee of a clause of `Ask.ask` is `c.0` (int), but a clause takes tobj",
         ),
         (
-            "k.0: tobj, n.1: int, s.2: int",
-            "  let t.3: tobj = resume n.1((), ())\n  return t.3\n",
-            "the continuation of a resume is `n.1` (int), but a resume takes tobj",
+            "c.0: tobj, e.1: obj, n.2: int",
+            "  let t.3: tobj = clause Ask.ask c.0(e.1, n.2)\n  return t.3\n",
+            "argument 1 of a clause of `Ask.ask` is `n.2` (int), but the operation takes tobj",
         ),
         (
-            "k.0: tobj, n.1: int, s.2: int",
-            "  let t.3: tobj = resume k.0(1, ())\n  return t.3\n",
-            "the value of a resume is 1, but a resume takes tobj",
+            "c.0: tobj, e.1: obj",
+            "  let t.2: int = clause Fail.fail c.0(e.1, 1)\n  return ()\n",
+            "argument 1 of a clause of `Fail.fail` is 1, but the operation takes tobj",
         ),
         (
-            "k.0: tobj, n.1: int, s.2: int",
-            "  let t.3: tobj = resume k.0((), s.2)\n  return t.3\n",
-            "the state of a resume is `s.2` (int), but a resume takes tobj",
-        ),
-        (
-            "",
-            "  let t.0: tobj = handle State(0, &i) { get: &two } return &two\n  return t.0\n",
-            "the initial state of a handler of `State` is 0, but a handler takes tobj",
-        ),
-        (
-            "u.0: unit, b.1: int",
-            "  let t.2: tobj = handle Ask((), b.1) { ask: &three } return &two\n  return t.2\n",
-            "the body of a handler of `Ask` is `b.1` (int), but a handler takes tobj",
-        ),
-        (
-            "u.0: unit, b.1: tobj, c.2: int",
-            "  let t.3: tobj = handle Ask((), b.1) { ask: c.2 } return &two\n  return t.3\n",
-            "the clause for `ask` of a handler of `Ask` is `c.2` (int), but a handler takes tobj",
-        ),
-        (
-            "u.0: unit, b.1: tobj, c.2: tobj, r.3: int",
-            "  let t.4: tobj = handle Ask((), b.1) { ask: c.2 } return r.3\n  return t.4\n",
-            "the `return` clause of a handler of `Ask` is `r.3` (int), but a handler takes tobj",
-        ),
-        (
-            "",
-            "  let t.0: int = perform never Fail.fail(1)\n  return ()\n",
-            "argument 0 of a perform of `Fail.fail` is 1, but a perform takes tobj",
+            "n.0: int",
+            "  let u.1: unit = prim yield_cont_set(n.0)\n  return u.1\n",
+            "argument 0 of `prim yield_cont_set` is `n.0` (int), but the primitive takes tobj",
         ),
     ] {
         assert_eq!(
@@ -1125,19 +1113,14 @@ fn the_results_of_uniform_calls_are_bound_to_variables_compatible_with_tobj() {
             "`t.0` (int) is bound to an apply, which returns tobj",
         ),
         (
-            "",
-            "  let t.0: int = perform Ask.ask(())\n  return ()\n",
-            "`t.0` (int) is bound to a perform of `Ask.ask`, which returns tobj",
-        ),
-        (
-            "k.0: tobj",
-            "  let t.1: int = resume k.0((), ())\n  return ()\n",
-            "`t.1` (int) is bound to a resume, which returns tobj",
+            "c.0: tobj, e.1: obj",
+            "  let t.2: int = clause Ask.ask c.0(e.1, ())\n  return ()\n",
+            "`t.2` (int) is bound to a clause of `Ask.ask`, which returns tobj",
         ),
         (
             "",
-            "  let t.0: int = handle Ask((), &i) { ask: &three } return &two\n  return ()\n",
-            "`t.0` (int) is bound to a handler of `Ask`, which returns tobj",
+            "  let w.0: int = prim evv_get()\n  return ()\n",
+            "`w.0` (int) is bound to `prim evv_get`, which returns tobj",
         ),
     ] {
         assert_eq!(
@@ -1145,23 +1128,6 @@ fn the_results_of_uniform_calls_are_bound_to_variables_compatible_with_tobj() {
             format!("{message} in `f`")
         );
     }
-}
-
-#[test]
-fn a_never_perform_has_no_result_to_compare() {
-    // `never` の操作の `perform` は値を返さないので、束縛はどの Repr でもよく、`tail` はどの `ret` の関数にも置ける
-    let text = "\
-effect Fail { never fail/1 }
-fn f() -> int {
-  let t.0: int = perform never Fail.fail(())
-  return t.0
-}
-fn g() -> int {
-  tail perform never Fail.fail(())
-}
-";
-    assert_eq!(check_scopes(text), Ok(()));
-    assert_eq!(check(text), Ok(()));
 }
 
 #[test]
@@ -1186,21 +1152,9 @@ fn the_result_of_a_tail_call_is_compatible_with_the_function() {
         ),
         (
             "int",
-            "",
-            "perform Ask.ask(())",
-            "a tail perform of `Ask.ask` returns tobj, but this function returns int",
-        ),
-        (
-            "int",
-            "k.0: tobj",
-            "resume k.0((), ())",
-            "a tail resume returns tobj, but this function returns int",
-        ),
-        (
-            "int",
-            "",
-            "handle Ask((), &i) { ask: &three } return &two",
-            "a tail handler of `Ask` returns tobj, but this function returns int",
+            "c.0: tobj, e.1: obj",
+            "clause Ask.ask c.0(e.1, ())",
+            "a tail clause of `Ask.ask` returns tobj, but this function returns int",
         ),
     ] {
         assert_eq!(
@@ -2251,16 +2205,17 @@ fn an_extern_with_the_wrong_number_of_arguments_is_rejected() {
 }
 
 // エフェクト
-
-#[test]
-fn handlers_operations_and_resume_are_calls() {
-    assert_eq!(check(&handler_program(ASK)), Ok(()));
-}
+//
+// `handle`、`perform`、`resume`、`mask` は translate の出力にだけ現れる。EP がそれを消すので、この規則は変換の段で
+// 確かめる
 
 #[test]
 fn a_handler_has_a_clause_for_each_operation() {
+    assert_eq!(check_translated(&handler_program(ASK)), Ok(()));
     assert_eq!(
-        check(&handler_program("effect Ask { ask/1, tell/1 }\n")),
+        check_translated(&handler_program(
+            "effect Ask { ask(tobj) -> tobj, tell(tobj) -> tobj }\n"
+        )),
         Err(
             "a handler of `Ask` has clauses for 1 operations, but the effect has 2 in `main`"
                 .to_string()
@@ -2271,7 +2226,7 @@ fn a_handler_has_a_clause_for_each_operation() {
 #[test]
 fn a_clause_receives_the_arguments_k_and_the_state_after_its_captures() {
     let text = "\
-effect Ask { ask/1 }
+effect Ask { ask(tobj) -> tobj }
 fn f() -> int {
   let t.0: int = handle Ask((), &body) { ask: &clause } return &ret
   return t.0
@@ -2280,22 +2235,23 @@ fn body(u.0: unit) -> int {
   return 1
 }
 fn clause(x.0: int, k.1: tobj) -> int {
-  tail resume k.1(x.0, ())
+  let t.2: int = resume k.1(x.0, ())
+  return t.2
 }
 fn ret(x.0: int, s.1: unit) -> int {
   return x.0
 }
 ";
-    let expected = "the clause for `ask` needs 3 parameters after its captures (1 for the arguments, `k`, and the state), but it has 2 in `f`";
-    assert_eq!(check(text), Err(expected.to_string()));
-    // 節の引数の数は所有に関わらないので、Perceus より前の IR でも確かめる
-    assert_eq!(check_scopes(text), Err(expected.to_string()));
+    assert_eq!(
+        check_translated(text),
+        Err("the clause for `ask` needs 3 parameters after its captures (1 for the arguments, `k`, and the state), but it has 2 in `f`".to_string())
+    );
 }
 
 #[test]
 fn a_clause_of_a_never_operation_receives_the_arguments_and_the_state() {
     let text = "\
-effect Fail { never fail/1 }
+effect Fail { never fail(tobj) -> never }
 fn f(n.0: tobj) -> int {
   let c.1: tobj = closure clause(n.0)
   let t.2: int = handle Fail((), &body) { fail: c.1 } return &ret
@@ -2312,7 +2268,7 @@ fn ret(x.0: int, s.1: unit) -> int {
 }
 ";
     assert_eq!(
-        check(text),
+        check_translated(text),
         Err("the clause for `fail` needs 2 parameters after its captures (1 for the arguments and the state), but it has 3 in `f`".to_string())
     );
 }
@@ -2320,7 +2276,7 @@ fn ret(x.0: int, s.1: unit) -> int {
 #[test]
 fn a_return_clause_receives_the_value_and_the_state_after_its_captures() {
     let text = "\
-effect Ask { ask/1 }
+effect Ask { ask(tobj) -> tobj }
 fn f(n.0: tobj) -> int {
   let c.1: tobj = closure ret(n.0)
   let t.2: int = handle Ask((), &body) { ask: &clause } return c.1
@@ -2330,14 +2286,15 @@ fn body(u.0: unit) -> int {
   return 1
 }
 fn clause(x.0: int, k.1: tobj, s.2: unit) -> int {
-  tail resume k.1(x.0, s.2)
+  let t.3: int = resume k.1(x.0, s.2)
+  return t.3
 }
 fn ret(n.0: tobj, x.1: tobj) -> tobj {
   return x.1
 }
 ";
     assert_eq!(
-        check(text),
+        check_translated(text),
         Err("the `return` clause needs 2 parameters after its captures (the value and the state), but it has 1 in `f`".to_string())
     );
 }
@@ -2347,7 +2304,7 @@ fn a_clause_outside_its_scope_is_rejected_before_its_parameters_are_counted() {
     // `c.1` は b1 だけで定義され、`handle` のある b3 を支配しない。引数の数も合わないが、先に範囲の誤りを報告する
     let text = "\
 layout Prelude.Bool { False, True }
-effect Ask { ask/1 }
+effect Ask { ask(tobj) -> tobj }
 fn f(k.0: enum) -> int {
   switch k.0 Prelude.Bool { #0 -> b1, #1 -> b2 }
 b1:
@@ -2370,31 +2327,31 @@ fn ret(x.0: int, s.1: unit) -> int {
 }
 ";
     assert_eq!(
-        check_scopes(text),
+        check_translated(text),
         Err("`c.1` is used outside its scope in `f`".to_string())
     );
 }
 
 #[test]
 fn perform_names_an_operation_of_its_effect() {
-    let text = format!("{ASK}fn f() -> int {{\n  tail perform Ask.#1()\n}}\n");
+    let text =
+        format!("{ASK}fn f() -> tobj {{\n  let t.0: tobj = perform Ask.#1()\n  return t.0\n}}\n");
     assert_eq!(
-        check(&text),
+        check_translated(&text),
         Err("`perform` names operation 1 of `Ask`, which has 1 operations in `f`".to_string())
     );
 }
 
 #[test]
 fn a_perform_must_agree_with_the_effect_on_resuming() {
-    let resumes =
-        "effect Fail { never fail/1 }\nfn f() -> int {\n  tail perform Fail.fail(())\n}\n";
+    let resumes = "effect Fail { never fail(tobj) -> never }\nfn f() -> tobj {\n  let t.0: tobj = perform Fail.fail(())\n  return t.0\n}\n";
     assert_eq!(
-        check(resumes),
+        check_translated(resumes),
         Err("`Fail.fail` never resumes, but this perform resumes in `f`".to_string())
     );
-    let never = "effect Ask { ask/1 }\nfn f() -> int {\n  tail perform never Ask.ask(1)\n}\n";
+    let never = "effect Ask { ask(tobj) -> tobj }\nfn f() -> tobj {\n  let t.0: tobj = perform never Ask.ask(1)\n  return t.0\n}\n";
     assert_eq!(
-        check(never),
+        check_translated(never),
         Err("`Ask.ask` resumes, but this perform never resumes in `f`".to_string())
     );
 }
@@ -2403,44 +2360,75 @@ fn a_perform_must_agree_with_the_effect_on_resuming() {
 #[test]
 fn a_mask_on_handle_or_perform_is_rejected() {
     let texts = [
-        "effect Ask { ask/1 }\nfn f(b.0: tobj, c.1: tobj, r.2: tobj) -> int {\n  tail handle Ask((), b.0) { ask: c.1 } return r.2\n}\n",
-        "effect Ask { ask/1 }\nfn f() -> int {\n  tail perform Ask.ask(1)\n}\n",
+        "effect Ask { ask(tobj) -> tobj }\nfn f(b.0: tobj, c.1: tobj, r.2: tobj) -> tobj {\n  let t.3: tobj = handle Ask((), b.0) { ask: c.1 } return r.2\n  return t.3\n}\n",
+        "effect Ask { ask(tobj) -> tobj }\nfn f() -> tobj {\n  let t.0: tobj = perform Ask.ask(1)\n  return t.0\n}\n",
     ];
     let errors: Vec<String> = texts
         .into_iter()
         .map(|text| {
             let mut program = read(text);
-            let Term::TailCall { call: _, mask } = &mut program.functions[0].blocks[0].term else {
-                panic!("not a tail call");
+            let Stmt::Let {
+                var: _,
+                rhs: Rhs::Call { mask, .. },
+            } = &mut program.functions[0].blocks[0].stmts[0]
+            else {
+                panic!("not a call");
             };
             mask.push(0);
-            verify_scopes(&program).unwrap_err().message
+            verify_translated(&program).unwrap_err().message
         })
         .collect();
     assert_eq!(errors, ["a mask on handle", "a mask on perform"]);
 }
 
+/// テキストは `clause` の前の `mask` を読まないので、読んだ後で `mask` を付ける。`mask` の形は変換の段だけが確かめ、
+/// 後の段は `mask` が残ったこと自体を拒む。
+#[test]
+fn a_mask_on_a_clause_is_rejected() {
+    let mut program = read(&format!(
+        "{COUNTER}fn f(c.0: tobj, e.1: obj) -> int {{\n  let t.2: int = clause Counter.get c.0(e.1, ())\n  return t.2\n}}\n"
+    ));
+    let Stmt::Let {
+        var: _,
+        rhs: Rhs::Call { mask, .. },
+    } = &mut program.functions[0].blocks[0].stmts[0]
+    else {
+        panic!("not a call");
+    };
+    mask.push(0);
+    assert_eq!(
+        verify_translated(&program).unwrap_err().message,
+        "a mask on clause"
+    );
+    assert_eq!(
+        verify_scopes(&program).unwrap_err().message,
+        "a mask remains after the evidence pass"
+    );
+}
+
 #[test]
 fn a_mask_must_name_known_effects_in_order() {
     let unknown = "\
-effect Main.State { get/1, put/1 }
-fn entry$main(c.0: tobj) -> unit {
-  tail mask [#5] apply c.0(())
+effect Main.State { get(tobj) -> tobj, put(tobj) -> tobj }
+fn entry$main(c.0: tobj) -> tobj {
+  let t.1: tobj = mask [#5] apply c.0(())
+  return t.1
 }
 ";
     let unordered = "\
-effect Main.A { a/1 }
-effect Main.B { b/1 }
-fn entry$main(c.0: tobj) -> unit {
-  tail mask [Main.B, Main.A] apply c.0(())
+effect Main.A { a(tobj) -> tobj }
+effect Main.B { b(tobj) -> tobj }
+fn entry$main(c.0: tobj) -> tobj {
+  let t.1: tobj = mask [Main.B, Main.A] apply c.0(())
+  return t.1
 }
 ";
     assert_eq!(
-        check(unknown),
+        check_translated(unknown),
         Err("a mask names an unknown effect #5 in `entry$main`".to_string())
     );
     assert_eq!(
-        check(unordered),
+        check_translated(unordered),
         Err("a mask is not in ascending order in `entry$main`".to_string())
     );
 }
@@ -2448,14 +2436,15 @@ fn entry$main(c.0: tobj) -> unit {
 #[test]
 fn a_mask_may_name_one_effect_twice() {
     let text = "\
-effect Main.A { a/1 }
-effect Main.B { b/1 }
-fn entry$main(c.0: tobj) -> unit {
+effect Main.A { a(tobj) -> tobj }
+effect Main.B { b(tobj) -> tobj }
+fn entry$main(c.0: tobj) -> tobj {
   let t.1: tobj = mask [Main.A, Main.A, Main.B] apply c.0(())
-  tail mask [Main.B] apply t.1(())
+  let t.2: tobj = mask [Main.B] apply t.1(())
+  return t.2
 }
 ";
-    assert_eq!(check(text), Ok(()));
+    assert_eq!(check_translated(text), Ok(()));
 }
 
 // 変換の段
@@ -2483,8 +2472,14 @@ fn ret(v.0: tobj, t.1: unit) -> tobj {
             "fn f(c.0: tobj) -> tobj {\n  tail apply c.0(())\n}\n".to_string(),
             "a tail apply is formed before contract in `f`",
         ),
+    ] {
+        assert_eq!(check_translated(&text), Err(message.to_string()));
+        assert_eq!(check_scopes(&text), Ok(()));
+    }
+    // エフェクトの命令は範囲の段にもう現れないので、変換の段の拒否だけを確かめる
+    for (text, message) in [
         (
-            "effect Ask { ask/1 }\nfn f(s.0: obj) -> tobj {\n  tail perform Ask.ask(s.0)\n}\n"
+            "effect Ask { ask(tobj) -> tobj }\nfn f(s.0: obj) -> tobj {\n  tail perform Ask.ask(s.0)\n}\n"
                 .to_string(),
             "a tail perform is formed before contract in `f`",
         ),
@@ -2494,13 +2489,12 @@ fn ret(v.0: tobj, t.1: unit) -> tobj {
         ),
         (
             format!(
-                "effect Ask {{ ask/1 }}\nfn f() -> tobj {{\n  tail handle Ask((), &body) {{ ask: &clause }} return &ret\n}}\n{handler}"
+                "effect Ask {{ ask(tobj) -> tobj }}\nfn f() -> tobj {{\n  tail handle Ask((), &body) {{ ask: &clause }} return &ret\n}}\n{handler}"
             ),
             "a tail handler is formed before contract in `f`",
         ),
     ] {
         assert_eq!(check_translated(&text), Err(message.to_string()));
-        assert_eq!(check_scopes(&text), Ok(()));
     }
 }
 
@@ -2805,4 +2799,397 @@ fn a_long_run_of_if_statements_is_verified_in_linear_time() {
         .filter(|block| matches!(block.term, Term::Switch { .. }))
         .count();
     assert_eq!(switches, COUNT);
+}
+
+// evidence の段と、基本操作と節の呼び出し
+
+const STATE: &str = "effect State { get(unit) -> tobj, put(tobj) -> unit }\n";
+const COUNTER: &str = "effect Counter { get(unit) -> int, put(int) -> unit }\n";
+
+/// handle の場所で入口の表を作り、`State.get` を節の呼び出しで呼ぶ形。
+const EVIDENCE_EXAMPLE: &str = "\
+effect State { get(unit) -> tobj, put(tobj) -> unit }
+yields fn f(s.0: tobj) -> tobj {
+  let w.1: tobj = prim evv_get()
+  let e.2: obj = prim ev_new[State](s.0, w.1)
+  let u.3: unit = prim ev_set_clause[State.get](e.2, &g)
+  let m.4: tobj = prim evv_mask[State, State](w.1)
+  let c.5: tobj = prim ev_clause[State.get](e.2)
+  let r.6: tobj = clause State.get c.5(e.2, ())
+  return r.6
+}
+internal yields clause State.get fn g(e.0: obj, u.1: unit) -> tobj {
+  let s.2: tobj = prim ev_take_state(e.0)
+  return s.2
+}
+";
+
+/// `Counter.put` の印を持ち、捕獲を1つ持つ節の関数。
+const PUT_CLAUSE: &str =
+    "internal clause Counter.put fn g(m.0: tobj, e.1: obj, n.2: int) -> unit {\n  return ()\n}\n";
+
+#[test]
+fn prims_and_clauses_are_accepted_after_the_evidence_pass() {
+    assert_eq!(check_evidence(EVIDENCE_EXAMPLE), Ok(()));
+    assert_eq!(check_scopes(EVIDENCE_EXAMPLE), Ok(()));
+}
+
+/// EP の後の段が拒むエフェクトの命令と、その文言。
+fn effect_instructions() -> [(String, &'static str); 4] {
+    [
+        (
+            format!(
+                "{ASK}fn f() -> tobj {{\n  let t.0: tobj = perform Ask.ask(())\n  return t.0\n}}\n"
+            ),
+            "a perform remains after the evidence pass in `f`",
+        ),
+        (
+            format!(
+                "{ASK}fn f(b.0: tobj, c.1: tobj, r.2: tobj) -> tobj {{\n  let t.3: tobj = handle Ask((), b.0) {{ ask: c.1 }} return r.2\n  return t.3\n}}\n"
+            ),
+            "a handler remains after the evidence pass in `f`",
+        ),
+        (
+            "fn f(k.0: tobj) -> tobj {\n  let t.1: tobj = resume k.0((), ())\n  return t.1\n}\n"
+                .to_string(),
+            "a resume remains after the evidence pass in `f`",
+        ),
+        (
+            format!(
+                "{ASK}fn f(c.0: tobj) -> tobj {{\n  let t.1: tobj = mask [Ask] apply c.0(())\n  return t.1\n}}\n"
+            ),
+            "a mask remains after the evidence pass in `f`",
+        ),
+    ]
+}
+
+#[test]
+fn the_evidence_level_rejects_effect_instructions() {
+    for (text, message) in effect_instructions() {
+        assert_eq!(check_evidence(&text), Err(message.to_string()));
+    }
+}
+
+#[test]
+fn the_scope_level_rejects_effect_instructions() {
+    // box の挿入より後のパスは EP の出力だけを受けるので、範囲の段と所有の段も同じ文言で拒む
+    for (text, message) in effect_instructions() {
+        assert_eq!(rejected_at_both_levels(&text), message);
+    }
+    // 縮約が作る形の `tail` でも同じである
+    let tail = format!("{ASK}fn f() -> tobj {{\n  tail perform Ask.ask(())\n}}\n");
+    assert_eq!(
+        rejected_at_both_levels(&tail),
+        "a perform remains after the evidence pass in `f`"
+    );
+}
+
+#[test]
+fn the_evidence_level_still_comes_before_boxing_and_contract() {
+    assert_eq!(
+        check_evidence("fn f(x.0: int) -> int {\n  tail call f(x.0)\n}\n"),
+        Err("a tail call is formed before contract in `f`".to_string())
+    );
+    assert_eq!(
+        check_evidence("fn f() -> tobj {\n  let b.0: tobj = box 1\n  return b.0\n}\n"),
+        Err("1 is boxed before the boxing pass in `f`".to_string())
+    );
+}
+
+#[test]
+fn the_translated_level_rejects_prims_and_clauses() {
+    assert_eq!(
+        check_translated("fn f() -> tobj {\n  let w.0: tobj = prim evv_get()\n  return w.0\n}\n"),
+        Err("`prim evv_get` is used before the evidence pass in `f`".to_string())
+    );
+    assert_eq!(
+        check_translated(&format!(
+            "{COUNTER}fn f(c.0: tobj, e.1: obj) -> int {{\n  let t.2: int = clause Counter.get c.0(e.1, ())\n  return t.2\n}}\n"
+        )),
+        Err("a clause call is used before the evidence pass in `f`".to_string())
+    );
+    assert_eq!(
+        check_translated(&format!(
+            "{COUNTER}fn f() -> int {{\n  return 1\n}}\ninternal clause Counter.get fn g(e.0: obj, u.1: unit) -> int {{\n  return 1\n}}\n"
+        )),
+        Err("a clause of `Counter.get` is defined before the evidence pass in `g`".to_string())
+    );
+}
+
+#[test]
+fn a_prim_takes_its_arguments() {
+    assert_eq!(
+        check_evidence("fn f() -> unit {\n  let u.0: unit = prim evv_set()\n  return u.0\n}\n"),
+        Err("`prim evv_set` takes 1 arguments but is given 0 in `f`".to_string())
+    );
+}
+
+#[test]
+fn a_prim_names_known_effects_and_operations() {
+    assert_eq!(
+        check_evidence("fn f() -> obj {\n  let e.0: obj = prim ev_lookup[#2]()\n  return e.0\n}\n"),
+        Err(
+            "`prim ev_lookup[#2]` names effect 2, which is not in the effect table in `f`"
+                .to_string()
+        )
+    );
+    assert_eq!(
+        check_evidence(&format!(
+            "{STATE}fn f(e.0: obj) -> tobj {{\n  let c.1: tobj = prim ev_clause[State.#2](e.0)\n  return c.1\n}}\n"
+        )),
+        Err(
+            "`prim ev_clause[State.#2]` names operation 2 of `State`, which has 2 operations in `f`"
+                .to_string()
+        )
+    );
+}
+
+/// `evv_mask` の多重集合は、呼び出しの `mask` と同じく空でなく、表にあるエフェクトを昇順に並べる。テキストは空の
+/// 多重集合を読まないので、読んだ後で空にする。
+#[test]
+fn an_evv_mask_names_known_effects_in_order() {
+    let mask = |effects: &str| {
+        format!(
+            "{STATE}{COUNTER}fn f(w.0: tobj) -> tobj {{\n  let m.1: tobj = prim evv_mask[{effects}](w.0)\n  return m.1\n}}\n"
+        )
+    };
+    assert_eq!(check_evidence(&mask("State, State, Counter")), Ok(()));
+    assert_eq!(
+        check_evidence(&mask("Counter, State")),
+        Err(
+            "the effects of `prim evv_mask[Counter, State]` are not in ascending order in `f`"
+                .to_string()
+        )
+    );
+    assert_eq!(
+        check_evidence(&mask("State, #4")),
+        Err(
+            "`prim evv_mask[State, #4]` names effect 4, which is not in the effect table in `f`"
+                .to_string()
+        )
+    );
+    let mut program = read(&mask("State"));
+    let Stmt::Let {
+        var: _,
+        rhs: Rhs::Prim(Prim::EvvMask(effects), _),
+    } = &mut program.functions[0].blocks[0].stmts[0]
+    else {
+        panic!("not an evv_mask");
+    };
+    effects.clear();
+    assert_eq!(
+        verify_evidence(&program).unwrap_err().message,
+        "`prim evv_mask[]` masks no effect"
+    );
+}
+
+/// 表にないエフェクトの操作の印は、操作の番号より先にエフェクトを報告する。
+#[test]
+fn a_clause_function_names_a_known_effect() {
+    assert_eq!(
+        check_evidence(&format!(
+            "{COUNTER}fn f() -> int {{\n  return 1\n}}\ninternal clause #3.#0 fn g(e.0: obj) -> unit {{\n  return ()\n}}\n"
+        )),
+        Err("`g` is a clause of effect 3, which is not in the effect table in `g`".to_string())
+    );
+}
+
+#[test]
+fn a_clause_call_names_an_operation_and_takes_its_arguments() {
+    assert_eq!(
+        check_evidence(&format!(
+            "{COUNTER}fn f(c.0: tobj, e.1: obj) -> unit {{\n  let u.2: unit = clause Counter.#5 c.0(e.1, 1)\n  return u.2\n}}\n"
+        )),
+        Err("a clause names operation 5 of `Counter`, which has 2 operations in `f`".to_string())
+    );
+    assert_eq!(
+        check_evidence(&format!(
+            "{COUNTER}fn f(c.0: tobj, e.1: obj) -> unit {{\n  let u.2: unit = clause Counter.put c.0(e.1)\n  return u.2\n}}\n"
+        )),
+        Err("a clause of `Counter.put` is given 1 arguments, but it takes 2 (the evidence and 1 arguments of the operation) in `f`".to_string())
+    );
+}
+
+#[test]
+fn the_boundaries_of_prims_and_clauses_are_compatible() {
+    let errors: Vec<String> = [
+        format!(
+            "{STATE}fn f(n.0: int, w.1: tobj) -> obj {{\n  let e.2: obj = prim ev_new[State](n.0, w.1)\n  return e.2\n}}\n"
+        ),
+        "fn f() -> int {\n  let w.0: int = prim evv_get()\n  return w.0\n}\n".to_string(),
+        format!(
+            "{COUNTER}fn f(c.0: tobj, n.1: tobj, e.2: obj) -> unit {{\n  let u.3: unit = clause Counter.put c.0(e.2, n.1)\n  return u.3\n}}\n"
+        ),
+        format!(
+            "{COUNTER}fn f(c.0: int, e.1: obj) -> int {{\n  let t.2: int = clause Counter.get c.0(e.1, ())\n  return t.2\n}}\n"
+        ),
+        format!(
+            "{COUNTER}fn f(c.0: tobj, e.1: int) -> int {{\n  let t.2: int = clause Counter.get c.0(e.1, ())\n  return t.2\n}}\n"
+        ),
+        format!(
+            "{STATE}fn f(c.1: tobj, e.2: obj) -> int {{\n  let t.0: int = clause State.get c.1(e.2, ())\n  return t.0\n}}\n"
+        ),
+        format!(
+            "{COUNTER}fn f(c.0: tobj, e.1: obj) -> tobj {{\n  tail clause Counter.get c.0(e.1, ())\n}}\n"
+        ),
+    ]
+    .iter()
+    .map(|text| check_scopes(text).unwrap_err())
+    .collect();
+    assert_eq!(
+        errors,
+        [
+            "argument 0 of `prim ev_new[State]` is `n.0` (int), but the primitive takes tobj in `f`",
+            "`w.0` (int) is bound to `prim evv_get`, which returns tobj in `f`",
+            "argument 1 of a clause of `Counter.put` is `n.1` (tobj), but the operation takes int in `f`",
+            "the callee of a clause of `Counter.get` is `c.0` (int), but a clause takes tobj in `f`",
+            "argument 0 of a clause of `Counter.get` is `e.1` (int), but a clause takes obj in `f`",
+            "`t.0` (int) is bound to a clause of `State.get`, which returns tobj in `f`",
+            "a tail clause of `Counter.get` returns int, but this function returns tobj in `f`",
+        ]
+    );
+}
+
+#[test]
+fn the_evidence_level_does_not_compare_boundaries() {
+    // box の挿入の前なので、Repr の食い違いは box の挿入が変換で埋める
+    let text = format!(
+        "{COUNTER}fn f(c.0: tobj, n.1: tobj, e.2: obj) -> tobj {{\n  let u.3: unit = clause Counter.put c.0(e.2, n.1)\n  return u.3\n}}\n"
+    );
+    assert_eq!(check_evidence(&text), Ok(()));
+}
+
+#[test]
+fn a_never_clause_has_no_result_to_compare() {
+    let text = "\
+effect Fail { never fail(tobj) -> never }
+fn f(c.0: tobj, e.1: obj) -> tobj {
+  let t.2: int = clause Fail.fail c.0(e.1, ())
+  return t.2
+}
+fn g(c.0: tobj, e.1: obj) -> int {
+  tail clause Fail.fail c.0(e.1, ())
+}
+";
+    assert_eq!(check_scopes(text), Ok(()));
+    assert_eq!(check(text), Ok(()));
+}
+
+#[test]
+fn a_clause_function_has_the_reprs_of_its_operation() {
+    let clause = |head: &str, ret: &str| {
+        let body = match ret {
+            "obj" => "  let d.9: obj = prim dummy()\n  return d.9\n",
+            "int" => "  return 1\n",
+            _ => "  return ()\n",
+        };
+        check_scopes(&format!(
+            "{COUNTER}effect Fail {{ never fail(tobj) -> never }}\nfn f() -> int {{\n  return 1\n}}\ninternal clause {head} -> {ret} {{\n{body}}}\n"
+        ))
+    };
+    assert_eq!(
+        clause("Counter.put fn g(m.0: tobj, e.1: obj, n.2: int)", "unit"),
+        Ok(())
+    );
+    assert_eq!(clause("Fail.fail fn g(e.0: obj, x.1: tobj)", "obj"), Ok(()));
+    assert_eq!(
+        clause("Counter.put fn g(m.0: tobj, e.1: obj, n.2: tobj)", "unit"),
+        Err("`g` is a clause of `Counter.put`, but its parameter 2 is tobj in `g`".to_string())
+    );
+    assert_eq!(
+        clause("Counter.put fn g(m.0: int, e.1: obj, n.2: int)", "unit"),
+        Err("`g` is a clause of `Counter.put`, but its parameter 0 is int in `g`".to_string())
+    );
+    assert_eq!(
+        clause("Counter.put fn g(e.0: int, n.1: int)", "unit"),
+        Err("`g` is a clause of `Counter.put`, but its parameter 0 is int in `g`".to_string())
+    );
+    assert_eq!(
+        clause("Counter.get fn g(e.0: obj, u.1: unit)", "tobj"),
+        Err("`g` is a clause of `Counter.get`, but it returns tobj in `g`".to_string())
+    );
+    assert_eq!(
+        clause("Fail.fail fn g(e.0: obj, x.1: tobj)", "int"),
+        Err("`g` is a clause of `Fail.fail`, but it returns int in `g`".to_string())
+    );
+    // 引数の数は境界の検査でないので、evidence の段でも確かめる
+    assert_eq!(
+        check_evidence(&format!(
+            "{COUNTER}fn f() -> int {{\n  return 1\n}}\ninternal clause Counter.put fn g(n.0: int) -> unit {{\n  return ()\n}}\n"
+        )),
+        Err("`g` is a clause of `Counter.put`, so it takes the evidence and 1 arguments after its captures, but it has 1 parameters in `g`".to_string())
+    );
+    assert_eq!(
+        check_evidence(&format!(
+            "{COUNTER}fn f() -> int {{\n  return 1\n}}\ninternal clause Counter.#4 fn g(e.0: obj) -> unit {{\n  return ()\n}}\n"
+        )),
+        Err(
+            "`g` is a clause of operation 4 of `Counter`, which has 2 operations in `g`"
+                .to_string()
+        )
+    );
+}
+
+#[test]
+fn a_clause_function_is_only_put_into_a_handler_table() {
+    let used_as_value = Err(
+        "`g` is a clause of `Counter.put`, but it is used as a function value in `f`".to_string(),
+    );
+    assert_eq!(
+        check_evidence(&format!(
+            "{COUNTER}fn f(c.0: tobj) -> tobj {{\n  let t.1: tobj = apply c.0(&g)\n  return t.1\n}}\n{PUT_CLAUSE}"
+        )),
+        used_as_value
+    );
+    assert_eq!(
+        check_evidence(&format!(
+            "{COUNTER}fn f(m.0: tobj, c.1: tobj) -> tobj {{\n  let g.2: tobj = closure g(m.0)\n  let t.3: tobj = apply c.1(g.2)\n  return t.3\n}}\n{PUT_CLAUSE}"
+        )),
+        used_as_value
+    );
+    assert_eq!(
+        check_evidence(&format!(
+            "{COUNTER}fn f() -> tobj {{\n  return &g\n}}\n{PUT_CLAUSE}"
+        )),
+        used_as_value
+    );
+    assert_eq!(
+        check_evidence(&format!(
+            "{COUNTER}fn f(m.0: tobj, e.1: obj) -> unit {{\n  let u.2: unit = call g(m.0, e.1, 1)\n  return u.2\n}}\n{PUT_CLAUSE}"
+        )),
+        Err("`g` is a clause of `Counter.put`, but it is called directly in `f`".to_string())
+    );
+    // 捕獲のある節は、同じ関数の中の `closure` で入口の表に入れる
+    let put = format!(
+        "{COUNTER}fn f(m.0: tobj, w.1: tobj) -> unit {{\n  let e.2: obj = prim ev_new[Counter]((), w.1)\n  let g.3: tobj = closure g(m.0)\n  let u.4: unit = prim ev_set_clause[Counter.put](e.2, g.3)\n  return u.4\n}}\n{PUT_CLAUSE}"
+    );
+    assert_eq!(check_evidence(&put), Ok(()));
+    assert_eq!(check_scopes(&put), Ok(()));
+}
+
+#[test]
+fn ev_set_clause_names_the_clause_of_its_function() {
+    let set = |entry: &str, value: &str| {
+        check_evidence(&format!(
+            "{STATE}{COUNTER}fn f(s.0: tobj, w.1: tobj) -> unit {{\n  let e.2: obj = prim ev_new[State](s.0, w.1)\n  let u.3: unit = prim ev_set_clause[{entry}](e.2, {value})\n  return u.3\n}}\ninternal clause Counter.put fn g(e.0: obj, n.1: int) -> unit {{\n  return ()\n}}\nfn h(e.0: obj, u.1: unit) -> tobj {{\n  return ()\n}}\n"
+        ))
+    };
+    assert_eq!(
+        set("State.get", "&g"),
+        Err(
+            "`g` is a clause of `Counter.put`, but it is put into the `State.get` entry in `f`"
+                .to_string()
+        )
+    );
+    assert_eq!(
+        set("State.get", "&h"),
+        Err("`h` is not a clause, but it is put into the `State.get` entry in `f`".to_string())
+    );
+    assert_eq!(
+        set("Counter.put", "&g"),
+        Err(
+            "`prim ev_set_clause[Counter.put]` is given `e.2`, the evidence of `State` in `f`"
+                .to_string()
+        )
+    );
 }

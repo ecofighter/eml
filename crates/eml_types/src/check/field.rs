@@ -365,7 +365,7 @@ impl BodyCheck<'_, '_> {
     /// コンストラクタの型をパターンと同じく具体化する。シグネチャがなければ `None` である。
     fn instantiate_constructor(&mut self, ctor: ConstructorId) -> Option<Ty> {
         self.instantiate(ValueItem::Constructor(ctor))
-            .map(|(ty, _)| ty)
+            .map(|(ty, _, _)| ty)
     }
 }
 

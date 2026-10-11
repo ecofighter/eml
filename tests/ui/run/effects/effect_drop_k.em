@@ -1,5 +1,5 @@
--- `drop k` discards a continuation. The frames it holds are freed with the values they saved. `drop` also
--- discards other values.
+-- `drop k` discards a continuation. The closures it is made of are freed with the values they captured. `drop`
+-- also discards other values.
 effect Choose where
   choose : String -> Bool
 

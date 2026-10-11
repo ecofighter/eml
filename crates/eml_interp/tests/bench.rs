@@ -53,7 +53,9 @@ fn every_program_in_bench_has_a_test() {
 fn empty() {
     insta::assert_debug_snapshot!(stats("empty", ""), @"
     RunStats {
-        handler_visits: 0,
+        evidence_steps: 0,
+        yields: 0,
+        yield_frames: 0,
         string_bytes_copied: 0,
         rc_increments: 0,
         rc_decrements: 0,
@@ -68,7 +70,9 @@ fn empty() {
 fn fib() {
     insta::assert_debug_snapshot!(stats("fib", "75025\n"), @"
     RunStats {
-        handler_visits: 0,
+        evidence_steps: 0,
+        yields: 0,
+        yield_frames: 0,
         string_bytes_copied: 5,
         rc_increments: 0,
         rc_decrements: 1,
@@ -83,7 +87,9 @@ fn fib() {
 fn list() {
     insta::assert_debug_snapshot!(stats("list", "10000100000\n"), @"
     RunStats {
-        handler_visits: 0,
+        evidence_steps: 0,
+        yields: 0,
+        yield_frames: 0,
         string_bytes_copied: 11,
         rc_increments: 0,
         rc_decrements: 200001,
@@ -98,7 +104,9 @@ fn list() {
 fn loop_() {
     insta::assert_debug_snapshot!(stats("loop", "125000250000\n"), @"
     RunStats {
-        handler_visits: 0,
+        evidence_steps: 0,
+        yields: 0,
+        yield_frames: 0,
         string_bytes_copied: 12,
         rc_increments: 0,
         rc_decrements: 1,
@@ -113,13 +121,15 @@ fn loop_() {
 fn state() {
     insta::assert_debug_snapshot!(stats("state", "100000\n"), @"
     RunStats {
-        handler_visits: 200000,
+        evidence_steps: 200000,
+        yields: 0,
+        yield_frames: 0,
         string_bytes_copied: 6,
-        rc_increments: 0,
-        rc_decrements: 2,
+        rc_increments: 600005,
+        rc_decrements: 600010,
         boxes: 100002,
         unboxes: 100001,
-        peak_objects: 6,
+        peak_objects: 7,
     }
     ");
 }
@@ -128,7 +138,9 @@ fn state() {
 fn tree() {
     insta::assert_debug_snapshot!(stats("tree", "14898 7454478318\n"), @"
     RunStats {
-        handler_visits: 0,
+        evidence_steps: 0,
+        yields: 0,
+        yield_frames: 0,
         string_bytes_copied: 37,
         rc_increments: 14899,
         rc_decrements: 266465,

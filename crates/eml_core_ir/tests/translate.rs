@@ -257,7 +257,8 @@ fn lambdas_and_handlers_are_numbered_in_expression_order() {
     let names: Vec<&str> = shown
         .lines()
         .filter_map(|line| {
-            line.strip_prefix("internal ")
+            let line = line.strip_prefix("internal ").unwrap_or(line);
+            line.strip_prefix("yields ")
                 .unwrap_or(line)
                 .strip_prefix("fn ")
         })
@@ -276,7 +277,7 @@ fn lambdas_and_handlers_are_numbered_in_expression_order() {
     entry$main
     ");
     insta::assert_snapshot!(function(&shown, "main$lambda1"), @"
-    internal fn main$lambda1(x.0: int) -> tobj {
+    internal yields fn main$lambda1(x.0: int) -> tobj {
       let c.1: tobj = closure main$lambda0(x.0)
       return c.1
     }
@@ -324,7 +325,7 @@ fn the_entry_applies_a_point_free_main_to_unit() {
 fn handlers_are_lifted_with_their_return_reprs() {
     let text = "effect Ask where\n  ask : String -> Int\n\nmain : Unit -> <IO> Unit\nmain () =\n  let prefix = \"n = \"\n  let n =\n    handle ask \"x\" with\n      | ask key k -> k 1\n      | return x -> x + 1\n  println (prefix ++ show n)";
     insta::assert_snapshot!(core_text(text, Pass::Translate), @r#"
-    effect Ask { ask/1 }
+    effect Ask { ask(obj) -> int }
     fn main(p.0: unit) -> unit {
       let s.1: obj = const "n = "
       let t.2: int = handle Ask((), &main$handle0) { ask: &main$handle0$ask } return &main$handle0$return
@@ -333,7 +334,7 @@ fn handlers_are_lifted_with_their_return_reprs() {
       let t.5: unit = extern Prelude.println(t.4)
       return t.5
     }
-    internal fn main$handle0(p.0: unit) -> int {
+    internal yields fn main$handle0(p.0: unit) -> int {
       let s.1: obj = const "x"
       let t.2: int = perform Ask.ask(s.1)
       return t.2
@@ -365,7 +366,7 @@ fn a_continuation_passed_to_a_function_is_wrapped() {
     }
     ");
     insta::assert_snapshot!(function(&shown, "cont$"), @"
-    internal fn cont$(k.0: tobj, v.1: tobj) -> tobj {
+    internal yields fn cont$(k.0: tobj, v.1: tobj) -> tobj {
       let t.2: tobj = resume k.0(v.1, ())
       return t.2
     }
@@ -839,38 +840,38 @@ fn an_extern_function_with_an_effect_used_as_a_value_is_wrapped_with_its_extern_
 #[test]
 fn effect_numbers_skip_the_extern_effects() {
     let text = "effect A where\n  ask : Unit -> Int\n\neffect B where\n  tell : Int -> Unit\n\nneeds_a : (Unit -> <e> Int) -> <A | e> Int\nneeds_a f = ask () + f ()\n\ntold : Unit -> <B> Int\ntold () =\n  tell 1\n  2\n\nmain : Unit -> <IO> Unit\nmain () =\n  let n =\n    handle (handle needs_a told with | ask () k -> k 1) with\n      | tell m k -> k ()\n  println (show n)";
-    insta::assert_snapshot!(core_text(text, Pass::Translate), @"
-    effect A { ask/1 }
-    effect B { tell/1 }
-    fn needs_a(f.0: tobj) -> int {
+    insta::assert_snapshot!(core_text(text, Pass::Translate), @r#"
+    effect A { ask(unit) -> int }
+    effect B { tell(int) -> unit }
+    yields fn "needs_a<e>"(f.0: tobj) -> int {
       let t.1: int = perform A.ask(())
-      let t.2: int = mask [A] apply f.0(())
+      let t.2: int = mask [A] yields apply f.0(())
       let t.3: int = extern Prelude.+(t.1, t.2)
       return t.3
     }
-    fn told(p.0: unit) -> int {
+    yields fn told(p.0: unit) -> int {
       let t.1: unit = perform B.tell(1)
       return 2
     }
     fn main(p.0: unit) -> unit {
       let t.1: int = handle B((), &main$handle1) { tell: &main$handle1$tell } return &main$handle1$return
-      let t.2: obj = extern \"Prelude.Show Int.show\"(t.1)
+      let t.2: obj = extern "Prelude.Show Int.show"(t.1)
       let t.3: unit = extern Prelude.println(t.2)
       return t.3
     }
-    internal fn main$handle1(p.0: unit) -> int {
+    internal yields fn main$handle1(p.0: unit) -> int {
       let t.1: int = handle A((), &main$handle0) { ask: &main$handle0$ask } return &main$handle0$return
       return t.1
     }
-    internal fn main$handle0(p.0: unit) -> int {
-      let t.1: int = call needs_a(&told)
+    internal yields fn main$handle0(p.0: unit) -> int {
+      let t.1: int = call "needs_a<e>"(&told)
       return t.1
     }
-    internal fn main$handle0$ask(p.0: unit, k.1: tobj, p.2: unit) -> int {
+    internal yields fn main$handle0$ask(p.0: unit, k.1: tobj, p.2: unit) -> int {
       let t.3: int = resume k.1(1, ())
       return t.3
     }
-    internal fn main$handle0$return($r.0: int, p.1: unit) -> int {
+    internal yields fn main$handle0$return($r.0: int, p.1: unit) -> int {
       return $r.0
     }
     internal fn main$handle1$tell(m.0: int, k.1: tobj, p.2: unit) -> int {
@@ -884,7 +885,7 @@ fn effect_numbers_skip_the_extern_effects() {
       let t.0: unit = call main(())
       return t.0
     }
-    ");
+    "#);
 }
 
 #[test]
@@ -927,7 +928,7 @@ fn names_outside_the_entry_are_qualified_with_their_module() {
     let main = "import Report.Csv\n\napply : (a -> <e> b) -> a -> <e> b\napply f x = f x\n\nmain : Unit -> <IO> Unit\nmain () =\n  let r =\n    handle Csv.parse () with\n      | Csv.next () k -> k 1\n      | return r -> r\n  let Csv.Row n = r\n  apply println (show n)";
     insta::assert_snapshot!(core_text_files(main, &[("Report/Csv.em", csv)], Pass::Translate), @r#"
     layout Report.Csv.Row { Row(int) }
-    effect Report.Csv.Parse { next/1 }
+    effect Report.Csv.Parse { next(unit) -> int }
     fn "apply@[String, Unit]"(f.0: tobj, x.1: obj) -> unit {
       let t.2: unit = apply f.0(x.1)
       return t.2
@@ -939,12 +940,12 @@ fn names_outside_the_entry_are_qualified_with_their_module() {
       let t.4: unit = call "apply@[String, Unit]"(&main$extern0, t.3)
       return t.4
     }
-    fn Report.Csv.parse(p.0: unit) -> obj {
-      let t.1: int = apply &op$Report.Csv.next(())
-      let t.2: obj = apply &con$Report.Csv.Row(t.1)
+    yields fn Report.Csv.parse(p.0: unit) -> obj {
+      let t.1: int = yields apply &op$Report.Csv.next(())
+      let t.2: obj = yields apply &con$Report.Csv.Row(t.1)
       return t.2
     }
-    internal fn main$handle0(p.0: unit) -> obj {
+    internal yields fn main$handle0(p.0: unit) -> obj {
       let t.1: obj = call Report.Csv.parse(())
       return t.1
     }
@@ -959,7 +960,7 @@ fn names_outside_the_entry_are_qualified_with_their_module() {
       let t.1: unit = extern Prelude.println(p.0)
       return t.1
     }
-    internal fn op$Report.Csv.next(p.0: unit) -> int {
+    internal yields fn op$Report.Csv.next(p.0: unit) -> int {
       let t.1: int = perform Report.Csv.Parse.next(p.0)
       return t.1
     }
@@ -981,7 +982,7 @@ fn an_entry_operation_does_not_collide_with_a_prelude_operation() {
     let text = "effect Log where\n  println : String -> Unit\n\neach : (String -> <e> Unit) -> <e> Unit\neach f = f \"x\"\n\nlogged : Unit -> <Log> Unit\nlogged () = each println\n\nmain : Unit -> <IO> Unit\nmain () =\n  handle logged () with\n    | println s k -> k ()\n  each Prelude.println";
     let shown = core_text(text, Pass::Translate);
     insta::assert_snapshot!(function(&shown, "op$println"), @"
-    internal fn op$println(p.0: obj) -> unit {
+    internal yields fn op$println(p.0: obj) -> unit {
       let t.1: unit = perform Log.println(p.0)
       return t.1
     }
@@ -1214,7 +1215,7 @@ fn nested_value_ifs_meet_in_their_own_merge_blocks() {
 fn handlers_are_lifted_to_closures() {
     let text = "effect Ask where\n  ask : String -> Int\n\nmain : Unit -> <IO> Unit\nmain () =\n  let prefix = \"n = \"\n  let n =\n    handle ask \"x\" with\n      | ask key k -> k 1\n      | return x -> x + 1\n  println (prefix ++ show n)";
     insta::assert_snapshot!(core_text(text, Pass::Translate), @r#"
-    effect Ask { ask/1 }
+    effect Ask { ask(obj) -> int }
     fn main(p.0: unit) -> unit {
       let s.1: obj = const "n = "
       let t.2: int = handle Ask((), &main$handle0) { ask: &main$handle0$ask } return &main$handle0$return
@@ -1223,7 +1224,7 @@ fn handlers_are_lifted_to_closures() {
       let t.5: unit = extern Prelude.println(t.4)
       return t.5
     }
-    internal fn main$handle0(p.0: unit) -> int {
+    internal yields fn main$handle0(p.0: unit) -> int {
       let s.1: obj = const "x"
       let t.2: int = perform Ask.ask(s.1)
       return t.2
@@ -1248,16 +1249,16 @@ fn operations_as_values_and_drop() {
     let text = "effect Log where\n  log : String -> String -> Unit\n\nrun : Unit -> <Log> Unit\nrun () =\n  let info = log \"info\"\n  info \"a\"\n\ndiscard : String -> Unit\ndiscard s = drop s\n\nmain : Unit -> <IO> Unit\nmain () =\n  handle run () with\n    | log _ _ k -> k ()\n  discard \"x\"";
     let shown = core_text(text, Pass::Translate);
     insta::assert_snapshot!(function(&shown, "run"), @r#"
-    fn run(p.0: unit) -> unit {
+    yields fn run(p.0: unit) -> unit {
       let s.1: obj = const "info"
       let c.2: tobj = closure op$log(s.1)
       let s.3: obj = const "a"
-      let t.4: unit = apply c.2(s.3)
+      let t.4: unit = yields apply c.2(s.3)
       return t.4
     }
     "#);
     insta::assert_snapshot!(function(&shown, "op$log"), @"
-    internal fn op$log(p.0: obj, p.1: obj) -> unit {
+    internal yields fn op$log(p.0: obj, p.1: obj) -> unit {
       let t.2: unit = perform Log.log(p.0, p.1)
       return t.2
     }
@@ -1568,15 +1569,15 @@ fn functions_without_captures_are_values() {
 #[test]
 fn a_handler_with_a_state_passes_its_initial_value_and_takes_the_state_from_its_clauses() {
     let text = "effect Ask where\n  ask : Unit -> Int\n\nmain : Unit -> <IO> Unit\nmain () =\n  let n =\n    handle ask () + ask () from 10 with\n      | ask () k st -> k st (st + 1)\n      | return x st -> x * st\n  println (show n)";
-    insta::assert_snapshot!(core_text(text, Pass::Translate), @"
-    effect Ask { ask/1 }
+    insta::assert_snapshot!(core_text(text, Pass::Translate), @r#"
+    effect Ask { ask(unit) -> int }
     fn main(p.0: unit) -> unit {
       let t.1: int = handle Ask(10, &main$handle0) { ask: &main$handle0$ask } return &main$handle0$return
-      let t.2: obj = extern \"Prelude.Show Int.show\"(t.1)
+      let t.2: obj = extern "Prelude.Show Int.show"(t.1)
       let t.3: unit = extern Prelude.println(t.2)
       return t.3
     }
-    internal fn main$handle0(p.0: unit) -> int {
+    internal yields fn main$handle0(p.0: unit) -> int {
       let t.1: int = perform Ask.ask(())
       let t.2: int = perform Ask.ask(())
       let t.3: int = extern Prelude.+(t.1, t.2)
@@ -1595,24 +1596,40 @@ fn a_handler_with_a_state_passes_its_initial_value_and_takes_the_state_from_its_
       let t.0: unit = call main(())
       return t.0
     }
-    ");
+    "#);
+}
+
+#[test]
+fn a_polymorphic_never_operation_takes_tobj_and_never_returns() {
+    // 引数の型はエフェクトの型変数なので一様な位置の `tobj` になり、`never` の操作の戻り値は `OpRet::Never` である
+    let text = "effect Fail e where\n  never fail : e -> a\n\ncheck : Int -> <Fail String> Int\ncheck x = if x < 0 then fail \"negative\" else x\n\nmain : Unit -> <IO> Unit\nmain () =\n  let n = handle check 1 with\n    | fail message -> 0\n  println (show n)";
+    let ir = core_text(text, Pass::Translate);
+    let table: Vec<&str> = ir
+        .lines()
+        .filter(|line| line.starts_with("effect "))
+        .collect();
+    insta::assert_debug_snapshot!(table, @r#"
+    [
+        "effect Fail { never fail(tobj) -> never }",
+    ]
+    "#);
 }
 
 #[test]
 fn effects_are_numbered_in_declaration_order() {
     let text = "effect A where\n  a : Unit -> Int\neffect B where\n  b : Unit -> Int\nmain : Unit -> <IO> Unit\nmain () =\n  let x = handle a () with\n    | a () k -> k 1\n  let y = handle b () with\n    | b () k -> k 2\n  println (show (x + y))";
-    insta::assert_snapshot!(core_text(text, Pass::Translate), @"
-    effect A { a/1 }
-    effect B { b/1 }
+    insta::assert_snapshot!(core_text(text, Pass::Translate), @r#"
+    effect A { a(unit) -> int }
+    effect B { b(unit) -> int }
     fn main(p.0: unit) -> unit {
       let t.1: int = handle A((), &main$handle0) { a: &main$handle0$a } return &main$handle0$return
       let t.2: int = handle B((), &main$handle1) { b: &main$handle1$b } return &main$handle1$return
       let t.3: int = extern Prelude.+(t.1, t.2)
-      let t.4: obj = extern \"Prelude.Show Int.show\"(t.3)
+      let t.4: obj = extern "Prelude.Show Int.show"(t.3)
       let t.5: unit = extern Prelude.println(t.4)
       return t.5
     }
-    internal fn main$handle0(p.0: unit) -> int {
+    internal yields fn main$handle0(p.0: unit) -> int {
       let t.1: int = perform A.a(())
       return t.1
     }
@@ -1623,7 +1640,7 @@ fn effects_are_numbered_in_declaration_order() {
     internal fn main$handle0$return($r.0: int, p.1: unit) -> int {
       return $r.0
     }
-    internal fn main$handle1(p.0: unit) -> int {
+    internal yields fn main$handle1(p.0: unit) -> int {
       let t.1: int = perform B.b(())
       return t.1
     }
@@ -1638,7 +1655,7 @@ fn effects_are_numbered_in_declaration_order() {
       let t.0: unit = call main(())
       return t.0
     }
-    ");
+    "#);
 }
 
 #[test]
@@ -1720,8 +1737,8 @@ fn effects_of_the_same_name_in_two_modules_stay_apart() {
     let main = "import Audit\n\neffect Log where\n  emit : Int -> Unit\n\nlocal : Unit -> <Log> Unit\nlocal () = emit 2\n\nmain : Unit -> <IO> Unit\nmain () =\n  handle Audit.audited () with\n    | Audit.emit n k -> k (println (show n))\n  handle local () with\n    | emit n k -> k (println (show n))";
     let shown = core_text_files(main, &[("Audit.em", audit)], Pass::Translate);
     for expected in [
-        "effect Log { emit/1 }",
-        "effect Audit.Log { emit/1 }",
+        "effect Log { emit(int) -> unit }",
+        "effect Audit.Log { emit(int) -> unit }",
         "perform Log.emit(",
         "perform Audit.Log.emit(",
         "handle Log(",
@@ -1783,7 +1800,7 @@ fn a_masked_callback_call() {
         state_main("run (fn () -> 1)")
     );
     insta::assert_snapshot!(function(&core_text(&text, Pass::Translate), "run@[Int]"), @r#"
-    fn "run@[Int]"(cb.0: tobj) -> int {
+    yields fn "run@[Int]"(cb.0: tobj) -> int {
       let t.1: int = perform State.get(())
       let t.2: int = mask [State] apply cb.0(())
       return t.2
@@ -1799,7 +1816,7 @@ fn a_saturated_known_call_takes_the_mask_of_its_last_arrow() {
         state_main("run (fn () -> 1)")
     );
     insta::assert_snapshot!(function(&core_text(&text, Pass::Translate), "run@[Int]"), @r#"
-    fn "run@[Int]"(cb.0: tobj) -> int {
+    yields fn "run@[Int]"(cb.0: tobj) -> int {
       let t.1: int = mask [State] call "twice@[Int]"(1, cb.0)
       return t.1
     }
@@ -1814,9 +1831,9 @@ fn arrows_with_different_masks_are_applied_apart() {
         state_main("h (fn x y -> x + y)")
     );
     insta::assert_snapshot!(function(&core_text(&text, Pass::Translate), "h"), @"
-    fn h(f.0: tobj) -> int {
+    yields fn h(f.0: tobj) -> int {
       let t.1: tobj = mask [State] apply f.0(1)
-      let t.2: int = apply t.1(2)
+      let t.2: int = yields apply t.1(2)
       return t.2
     }
     ");
@@ -1869,13 +1886,13 @@ main () =
                 k ()
   println (show r)
 ";
-    // handle の番号は HIR の式の ID の順なので、内側の handle が `f$handle0` になる
-    insta::assert_snapshot!(function(&core_text(text, Pass::Translate), "f$handle0"), @"
-    internal fn f$handle0(k.0: tobj, p.1: unit) -> int {
+    // handle の番号は HIR の式の ID の順なので、内側の handle が `f<e>$handle0` になる
+    insta::assert_snapshot!(function(&core_text(text, Pass::Translate), "f<e>$handle0"), @r#"
+    internal yields fn "f<e>$handle0"(k.0: tobj, p.1: unit) -> int {
       let t.2: int = mask [Log] resume k.0(1, ())
       return t.2
     }
-    ");
+    "#);
 }
 
 /// 既知の関数に引数の数より多くの引数を渡す呼び出しは、引数の数までを `call` し、残りを `apply` する。`call` は関数を
@@ -1887,7 +1904,7 @@ fn extra_arguments_of_a_known_call_take_the_mask_of_their_arrow() {
         state_main("run (fn () -> 1)")
     );
     insta::assert_snapshot!(function(&core_text(&text, Pass::Translate), "run@[Int]"), @r#"
-    fn "run@[Int]"(cb.0: tobj) -> int {
+    yields fn "run@[Int]"(cb.0: tobj) -> int {
       let t.1: tobj = call "pick@[Int]"(1)
       let t.2: int = mask [State] apply t.1(cb.0)
       return t.2
@@ -1999,7 +2016,7 @@ fn a_partial_continuation_is_wrapped_with_the_state_wrapper() {
     );
     assert!(shown.contains("closure cont$state(k"), "{shown}");
     insta::assert_snapshot!(function(&shown, "cont$state"), @"
-    internal fn cont$state(k.0: tobj, v.1: tobj, s.2: tobj) -> tobj {
+    internal yields fn cont$state(k.0: tobj, v.1: tobj, s.2: tobj) -> tobj {
       let t.3: tobj = resume k.0(v.1, s.2)
       return t.3
     }
@@ -2066,7 +2083,7 @@ main () =
   println (show r)
 ";
     let shown = core_text(text, Pass::Translate);
-    assert!(shown.contains("mask [Log] apply"), "{shown}");
+    assert!(shown.contains("mask [Log] yields apply"), "{shown}");
 }
 
 #[test]

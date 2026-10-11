@@ -1,5 +1,5 @@
--- Each level resumes the continuation twice, so the first resumption copies the captured frames. Ten thousand
--- copies run and are released without leaks.
+-- Each level resumes the continuation twice, so the first resumption copies the shared closures of the continuation.
+-- Ten thousand copies run and are released without leaks.
 effect Choice where
   multi choose : Unit -> Bool
 

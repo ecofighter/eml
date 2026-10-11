@@ -6,5 +6,6 @@ mod common;
 mod bench;
 mod closures;
 mod data;
+mod evidence;
 mod run;
 mod scaling;

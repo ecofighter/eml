@@ -1,10 +1,13 @@
 //! Core IR の不変条件の検査 (docs/spec/core-ir.md)。ブロックの列の形 (R1〜R4)、変数の定義と支配 (R5、R6)、
 //! `unpack` の Repr、`jump` と `return` の Repr の互換、extern の引数と結果の Repr、`box` と `unbox` のオペランドと
-//! 束縛の Repr (R8)、データの配置 (R9) と、引き継いだ検査 (`mask` の順、`handle` の節の数、再開できるかどうか、
-//! 直接呼び出しと extern の引数の数、case の種類) を確かめる (`verify_scopes`)。R8 と R9 には境界の検査も入る。
-//! 呼び出しの引数と結果、`closure` の引数、関数の値の対象が一様であること、`tail` の結果、`tobj` のフィールドを
-//! 比べる。translate の直後は、`box` と `unbox` と境界を確かめる代わりに、`box`、`unbox`、`tail` が
-//! まだないことを確かめる (`verify_translated`)。
+//! 束縛の Repr (R8)、データの配置 (R9) と、引き継いだ検査 (直接呼び出しと extern の引数の数、case の種類) を
+//! 確かめる (`verify_scopes`)。R8 と R9 には境界の検査も入る。呼び出しの引数と結果、`closure` の引数、関数の値の
+//! 対象が一様であること、`tail` の結果、`tobj` のフィールドを比べる。translate の直後は、`box` と `unbox` と境界を
+//! 確かめる代わりに、`box`、`unbox`、`tail` と、EP が作る基本操作、節の呼び出し、`clause` の印がまだないことと、
+//! エフェクトの命令の形 (`mask` の順、`handle` の節の数、再開できるかどうか) を確かめる (`verify_translated`)。EP の
+//! 後は、境界を確かめずに、`handle`、`perform`、`resume`、`mask` が残っていないことと、基本操作と節の呼び出しの形を
+//! 確かめる (`verify_evidence`)。範囲の段と所有の段も、エフェクトの命令が残っていないことを確かめ、基本操作と節の
+//! 呼び出しの境界を比べる。
 //! Perceus の後は、RC の対象の所有の多重集合と、呼び出しの後に見える変数 (R6、R7) も確かめる (`verify`)。`switch`、
 //! `unpack`、`unbox` は値を読むだけである。`switch` と `unpack` のフィールドは値から借りて始まり、自分か持ち主が
 //! 所有を持つ間だけ有効である。
@@ -23,9 +26,11 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt;
 use std::mem::discriminant;
 
+use crate::pretty::{effect_text, operation_text, prim_text};
+use crate::prim::Immediates;
 use crate::{
     Atom, Block, BlockId, Call, Case, CasePattern, CoreFn, Ctor, EffectInfo, FnIdx, Layout,
-    LayoutCtor, LayoutId, Program, Repr, Rhs, Stmt, Term, VarId,
+    LayoutCtor, LayoutId, OpRet, Prim, Program, Repr, Rhs, Stmt, Term, VarId, operation,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -48,23 +53,33 @@ pub fn verify(program: &Program) -> Result<(), VerifyError> {
     verify_at(program, Level::Ownership)
 }
 
-/// Perceus より前の IR を確かめる。形と範囲を確かめ、RC の命令と `save` がまだないことを確かめる。
+/// Perceus より前の IR を確かめる。形と範囲を確かめ、RC の命令と `save` がまだないことと、エフェクトの命令がもう
+/// ないことを確かめる。
 pub fn verify_scopes(program: &Program) -> Result<(), VerifyError> {
     verify_at(program, Level::Scopes)
 }
 
+/// EP の後の IR を確かめる。変換の段の検査に加えて、`handle`、`perform`、`resume`、`mask` が残っていないことと、
+/// 基本操作と節の呼び出しの形を確かめる (docs/spec/core-ir.md の
+/// 「verifier」)。
+pub fn verify_evidence(program: &Program) -> Result<(), VerifyError> {
+    verify_at(program, Level::Evidence)
+}
+
 /// translate の直後の IR を確かめる。範囲の段と同じ形と範囲を確かめ、box の挿入と縮約が作るもの (`box`、`unbox`、
-/// `tail`) がまだないことを確かめる。box の挿入は、末尾呼び出しと変換のない入力を前提にするためである
-/// (docs/spec/core-ir.md の「パス」)。
+/// `tail`) と、EP が作るもの (基本操作、節の呼び出し、`clause` の印) がまだないことを確かめる。box の挿入は、末尾
+/// 呼び出しと変換のない入力を前提にするためである (docs/spec/core-ir.md の「パス」)。
 pub fn verify_translated(program: &Program) -> Result<(), VerifyError> {
     verify_at(program, Level::Translated)
 }
 
-/// 検査の段。段はパスの順に直線に並ぶ。translate の直後の IR には、box の挿入と縮約が作るものがまだない。Perceus
-/// より前の IR には、所有を確かめる材料 (`dup`、`decref`、`release`、`save`) がまだない。
-#[derive(Clone, Copy, PartialEq, Eq)]
+/// 検査の段。段はパスの順に直線に並ぶ。translate の直後の IR には、EP が作るものがまだない。EP の後の IR には、
+/// エフェクトの命令がもうなく、box の挿入と縮約が作るものがまだない。後の段にもエフェクトの命令は現れない。
+/// Perceus より前の IR には、所有を確かめる材料 (`dup`、`decref`、`release`、`save`) がまだない。
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum Level {
     Translated,
+    Evidence,
     Scopes,
     Ownership,
 }
@@ -78,6 +93,13 @@ fn verify_at(program: &Program, level: Level) -> Result<(), VerifyError> {
         layout_reprs: &layout_reprs,
         non_uniform: &non_uniform,
     };
+    // `clause` の印の関数の ABI は、参照ごとでなく関数ごとに1回だけ確かめる
+    for function in &program.functions {
+        clause_function(program, function, level).map_err(|message| VerifyError {
+            function: function.name.clone(),
+            message,
+        })?;
+    }
     for function in &program.functions {
         shape(function)
             .and_then(|dominators| Checker::new(program, tables, function, level, dominators).run())
@@ -105,9 +127,13 @@ enum NonUniform {
     Ret(Repr),
 }
 
-/// 一様な関数は、引数と `ret` がすべて `tobj` と互換である。`apply` と handler が、関数ごとの Repr を知らずに呼ぶため
-/// である (docs/spec/core-ir.md の「位置の規則」)。
+/// 一様な関数は、引数と `ret` がすべて `tobj` と互換である。関数の値を呼ぶ `apply` は、関数ごとの Repr を知らないため
+/// である (docs/spec/core-ir.md の「位置の規則」)。`clause` の印の関数は関数の値として呼ばれず、操作の ABI に
+/// 合わせるので、ここでは見ない (`clause_function`)。
 fn non_uniform(function: &CoreFn) -> Option<NonUniform> {
+    if function.clause.is_some() {
+        return None;
+    }
     function
         .params()
         .iter()
@@ -117,6 +143,69 @@ fn non_uniform(function: &CoreFn) -> Option<NonUniform> {
             (!repr.compatible(Repr::TObj)).then_some(NonUniform::Param(index, repr))
         })
         .or_else(|| (!function.ret.compatible(Repr::TObj)).then_some(NonUniform::Ret(function.ret)))
+}
+
+/// `clause` の印の関数は、捕獲の後に evidence と操作の引数を受け、操作の結果を返す。境界の段では、捕獲が `tobj`、
+/// evidence が `obj`、残りの引数と `ret` が操作の表の Repr (`never` の操作の `ret` は `obj`) と互換であることも
+/// 確かめる (docs/spec/core-ir.md の「box の挿入」と「verifier」)。
+fn clause_function(program: &Program, function: &CoreFn, level: Level) -> Result<(), String> {
+    let Some((effect, op)) = function.clause else {
+        return Ok(());
+    };
+    let name = &function.name;
+    let clause = operation_text(program, effect, op);
+    if level == Level::Translated {
+        return Err(format!(
+            "a clause of `{clause}` is defined before the evidence pass"
+        ));
+    }
+    let Some(info) = program.effects.get(effect as usize) else {
+        return Err(format!(
+            "`{name}` is a clause of effect {effect}, which is not in the effect table"
+        ));
+    };
+    let Some(operation) = info.operations.get(op as usize) else {
+        return Err(format!(
+            "`{name}` is a clause of operation {op} of `{}`, which has {} operations",
+            info.name,
+            info.operations.len()
+        ));
+    };
+    let params = function.params();
+    let Some(captures) = params.len().checked_sub(1 + operation.params.len()) else {
+        return Err(format!(
+            "`{name}` is a clause of `{clause}`, so it takes the evidence and {} arguments after its captures, but it has {} parameters",
+            operation.params.len(),
+            params.len()
+        ));
+    };
+    if level < Level::Scopes {
+        return Ok(());
+    }
+    let expected = std::iter::repeat_n(Repr::TObj, captures)
+        .chain([Repr::Obj])
+        .chain(operation.params.iter().copied());
+    for (index, (&param, expected)) in params.iter().zip(expected).enumerate() {
+        let repr = function.repr(param);
+        if !repr.compatible(expected) {
+            return Err(format!(
+                "`{name}` is a clause of `{clause}`, but its parameter {index} is {}",
+                repr.name()
+            ));
+        }
+    }
+    let ret = match operation.ret {
+        OpRet::Repr(repr) => repr,
+        // `never` の節の入口はダミーの物体を返す
+        OpRet::Never => Repr::Obj,
+    };
+    if !function.ret.compatible(ret) {
+        return Err(format!(
+            "`{name}` is a clause of `{clause}`, but it returns {}",
+            function.ret.name()
+        ));
+    }
+    Ok(())
 }
 
 /// 呼び出しの結果を受ける所。`let` の束縛か、`tail` の呼び出し元の `ret` である。
@@ -205,7 +294,7 @@ fn shape(function: &CoreFn) -> Result<Dominators, String> {
                     cases: _,
                     default: _,
                 } => switches_in[to as usize] += 1,
-                Term::Return(_) | Term::TailCall { call: _, mask: _ } => {
+                Term::Return(_) | Term::TailCall(_) => {
                     unreachable!("a return and a tail call have no successors")
                 }
             }
@@ -372,9 +461,12 @@ struct Checker<'a> {
     /// (docs/spec/core-ir.md の「verifier」)。
     owners: Vec<Option<VarId>>,
     origins: Vec<Option<Origin>>,
-    /// 変数の番号ごとの、`never` の操作の `perform` の束縛かどうか。束縛の使いには制御が届かないので、互換の位置で
-    /// 位置と比べない。
+    /// 変数の番号ごとの、`never` の操作の `perform` か `clause` の束縛かどうか。束縛の使いには制御が届かないので、
+    /// 互換の位置で位置と比べない。
     never: Vec<bool>,
+    /// `ev_new[E]` で束縛した変数の、エフェクトの番号。`ev_set_clause` の入口がその evidence のエフェクトの操作で
+    /// あることを確かめるのに使う。
+    evidences: HashMap<VarId, u32>,
 }
 
 impl<'a> Checker<'a> {
@@ -404,11 +496,13 @@ impl<'a> Checker<'a> {
             owners: vec![None; function.vars.len()],
             origins: vec![None; function.vars.len()],
             never: vec![false; function.vars.len()],
+            evidences: HashMap::new(),
         }
     }
 
     fn run(mut self) -> Result<(), String> {
         let function = self.function;
+        self.clause_values()?;
         for (index, block) in function.blocks.iter().enumerate() {
             let index = index as u32;
             let mut owned = if index == 0 {
@@ -426,6 +520,67 @@ impl<'a> Checker<'a> {
             self.check_block(index, block, owned)?;
         }
         Ok(())
+    }
+
+    /// `clause` の印の関数の値 (`&g` と `closure g(..)` の変数) は、`ev_set_clause` の2つ目の引数にだけ使える。入口の
+    /// 関数は操作の ABI で呼ばれ、`apply` の一様な規約に合わないためである
+    /// (docs/spec/core-ir.md の「入口の関数の印」)。変数は1回だけ
+    /// 定義されるので (R5)、先に `closure` をすべて集めてから使いを見る。
+    fn clause_values(&self) -> Result<(), String> {
+        let blocks = &self.function.blocks;
+        let closures: HashMap<VarId, FnIdx> = blocks
+            .iter()
+            .flat_map(|block| &block.stmts)
+            .filter_map(|stmt| match stmt {
+                Stmt::Let {
+                    var,
+                    rhs: Rhs::MakeClosure(target, _),
+                } if self.clause_of(*target).is_some() => Some((*var, *target)),
+                _ => None,
+            })
+            .collect();
+        let mut result = Ok(());
+        let mut check = |atom: Atom| {
+            let target = match atom {
+                Atom::Fn(target) => target,
+                Atom::Var(var) => match closures.get(&var) {
+                    Some(&target) => target,
+                    None => return,
+                },
+                Atom::Int(_) | Atom::Unit | Atom::Tag(_) => return,
+            };
+            if result.is_ok()
+                && let Some(clause) = self.clause_of(target)
+            {
+                result = Err(format!(
+                    "`{}` is a clause of `{clause}`, but it is used as a function value",
+                    self.program.functions[target.0 as usize].name
+                ));
+            }
+        };
+        for block in blocks {
+            for stmt in &block.stmts {
+                match stmt {
+                    Stmt::Let {
+                        var: _,
+                        rhs: Rhs::Prim(Prim::EvSetClause { .. }, args),
+                    } => args
+                        .iter()
+                        .enumerate()
+                        .filter(|&(index, _)| index != 1)
+                        .for_each(|(_, &atom)| check(atom)),
+                    _ => stmt.for_each_atom(&mut check),
+                }
+            }
+            block.term.for_each_atom(&mut check);
+        }
+        result
+    }
+
+    /// 関数が `clause` の印を持てば、その操作の `E.op`。表にない関数は `None` で、`consume` と `function_at` が断る。
+    fn clause_of(&self, target: FnIdx) -> Option<String> {
+        let (effect, op) = self.program.functions.get(target.0 as usize)?.clause?;
+        Some(operation_text(self.program, effect, op))
     }
 
     /// ブロックの入口の状態を取り出し、区間を決める。区間の違う辺が合流するなら、入るどの辺でも見える変数を入れ直した
@@ -494,19 +649,17 @@ impl<'a> Checker<'a> {
                         mask: _,
                         saved,
                     } => {
-                        self.never[var.0 as usize] = matches!(
-                            call,
-                            Call::Perform {
-                                resumable: false,
-                                ..
-                            }
-                        );
+                        self.never[var.0 as usize] = self.never_returns(call);
                         self.after_call(owned, saved)?;
                     }
                     Rhs::MakeClosure(target, args) => {
                         self.closures.insert(*var, (*target, args.len()));
                     }
-                    Rhs::Extern {
+                    Rhs::Prim(Prim::EvNew(effect), _) => {
+                        self.evidences.insert(*var, *effect);
+                    }
+                    Rhs::Prim(_, _)
+                    | Rhs::Extern {
                         ext: _,
                         args: _,
                         at: _,
@@ -603,11 +756,10 @@ impl<'a> Checker<'a> {
                 }
                 self.nothing_owned(&owned)
             }
-            Term::TailCall { call, mask } => {
-                if self.level == Level::Translated {
+            Term::TailCall(call) => {
+                if self.level < Level::Scopes {
                     return Err(format!("{} is formed before contract", tail_text(call)));
                 }
-                self.check_mask(call, mask)?;
                 self.check_call(&mut owned, call, Receiver::Tail)?;
                 self.nothing_owned(&owned)
             }
@@ -731,8 +883,8 @@ impl<'a> Checker<'a> {
         })
     }
 
-    /// 互換の位置に収まる値。規則は box の挿入と同じ `Atom::fits_compatible` で、`never` の操作の `perform` の束縛は
-    /// それに加えて、どの位置にも収まる。範囲の段と所有の段では、収まった `&g` の g が一様でなければ誤りにする。
+    /// 互換の位置に収まる値。規則は box の挿入と同じ `Atom::fits_compatible` で、`never` の操作の `perform` と
+    /// `clause` の束縛は、それに加えて、どの位置にも収まる。範囲の段と所有の段では、収まった `&g` の g が一様でなければ誤りにする。
     /// 変換の段では見ない。translate は、一様でない g の `&g` を `jump` に渡しうるからである。
     fn passes(&self, atom: Atom, expected: Repr) -> Result<bool, String> {
         let passes = match atom {
@@ -757,7 +909,7 @@ impl<'a> Checker<'a> {
 
     /// 境界の検査は、box の挿入の後の段 (範囲の段と所有の段) だけで行う。
     fn checks_boundaries(&self) -> bool {
-        self.level != Level::Translated
+        self.level >= Level::Scopes
     }
 
     /// 関数の値として使う関数 (`&g`、`closure g`) は一様である (docs/spec/core-ir.md の「位置の規則」)。番号が表にない
@@ -1308,6 +1460,7 @@ impl<'a> Checker<'a> {
                     ));
                 }
             }
+            Rhs::Prim(prim, args) => self.check_prim(var, prim, args)?,
             Rhs::ConstString(index) => {
                 if *index as usize >= self.program.strings.len() {
                     return Err(format!(
@@ -1327,7 +1480,7 @@ impl<'a> Checker<'a> {
             // `unit` の値、`()`、`#N`、`&f`、参照は命令なしで `tobj` に収まるので、`box` しない。1つの値の書き方を1つに保つ
             // (docs/spec/core-ir.md の「値の表現」)
             Rhs::Box(atom) => {
-                if self.level == Level::Translated {
+                if self.level < Level::Scopes {
                     return Err(format!(
                         "{} is boxed before the boxing pass",
                         self.atom_text(*atom)
@@ -1356,7 +1509,7 @@ impl<'a> Checker<'a> {
             }
             // `obj` はつねにヒープの物体を指すので、スカラーを入れた値にならない
             Rhs::Unbox(atom) => {
-                if self.level == Level::Translated {
+                if self.level < Level::Scopes {
                     return Err(format!(
                         "{} is unboxed before the boxing pass",
                         self.atom_text(*atom)
@@ -1384,6 +1537,131 @@ impl<'a> Checker<'a> {
             }
         }
         self.consume_all(owned, |f| rhs.for_each_consumed(f))
+    }
+
+    /// 基本操作は EP だけが作る。即値は表にあり、`evv_mask` の多重集合は呼び出しの `mask` と同じく空でなく昇順に
+    /// 並び、引数の数は表の行と同じである。範囲の段と所有の段では、引数と結果を直接の呼び出しと同じく互換の位置として
+    /// 比べる (docs/spec/core-ir.md の「基本操作」)。
+    fn check_prim(&self, var: VarId, prim: &Prim, args: &[Atom]) -> Result<(), String> {
+        let row = prim.row();
+        let name = &prim_text(self.program, prim);
+        if self.level == Level::Translated {
+            return Err(format!("`prim {name}` is used before the evidence pass"));
+        }
+        let immediates = prim.immediates();
+        let (effects, operation) = match &immediates {
+            Immediates::None => (&[][..], None),
+            Immediates::Effects(effects) => (*effects, None),
+            Immediates::Effect(effect) => (std::slice::from_ref(effect), None),
+            Immediates::Operation { effect, op } => (std::slice::from_ref(effect), Some(*op)),
+        };
+        for &effect in effects {
+            let Some(info) = self.program.effects.get(effect as usize) else {
+                return Err(format!(
+                    "`prim {name}` names effect {effect}, which is not in the effect table"
+                ));
+            };
+            if let Some(op) = operation
+                && op as usize >= info.operations.len()
+            {
+                return Err(format!(
+                    "`prim {name}` names operation {op} of `{}`, which has {} operations",
+                    info.name,
+                    info.operations.len()
+                ));
+            }
+        }
+        if let Immediates::Effects(effects) = immediates {
+            if effects.is_empty() {
+                return Err(format!("`prim {name}` masks no effect"));
+            }
+            if !effects.is_sorted() {
+                return Err(format!(
+                    "the effects of `prim {name}` are not in ascending order"
+                ));
+            }
+        }
+        if args.len() != row.params.len() {
+            return Err(format!(
+                "`prim {name}` takes {} arguments but is given {}",
+                row.params.len(),
+                args.len()
+            ));
+        }
+        if let Prim::EvSetClause { effect, op } = *prim {
+            self.check_set_clause(name, effect, op, args)?;
+        }
+        if !self.checks_boundaries() {
+            return Ok(());
+        }
+        for (index, (&arg, &expected)) in args.iter().zip(row.params).enumerate() {
+            if !self.passes(arg, expected)? {
+                return Err(format!(
+                    "argument {index} of `prim {name}` is {}, but the primitive takes {}",
+                    self.typed_atom_text(arg),
+                    expected.name()
+                ));
+            }
+        }
+        let repr = self.function.repr(var);
+        if !repr.compatible(row.ret) {
+            return Err(format!(
+                "`{}` ({}) is bound to `prim {name}`, which returns {}",
+                self.name(var),
+                repr.name(),
+                row.ret.name()
+            ));
+        }
+        Ok(())
+    }
+
+    /// `ev_set_clause[E.op](ev, c)` の c の関数が分かるとき (`&g` か、同じ関数の中の `closure g(..)`)、g は `E.op` の
+    /// `clause` の印を持つ。ev を同じ関数の中の `ev_new` で作ったなら、そのエフェクトは E である
+    /// (docs/spec/core-ir.md の「verifier」)。
+    fn check_set_clause(
+        &self,
+        name: &str,
+        effect: u32,
+        op: u32,
+        args: &[Atom],
+    ) -> Result<(), String> {
+        let entry = operation_text(self.program, effect, op);
+        let target = match args[1] {
+            Atom::Fn(target) => Some(target),
+            Atom::Var(var) => self.closures.get(&var).map(|&(target, _)| target),
+            Atom::Int(_) | Atom::Unit | Atom::Tag(_) => None,
+        };
+        if let Some(function) =
+            target.and_then(|target| self.program.functions.get(target.0 as usize))
+        {
+            match function.clause {
+                Some(mark) if mark == (effect, op) => {}
+                Some((marked_effect, marked_op)) => {
+                    return Err(format!(
+                        "`{}` is a clause of `{}`, but it is put into the `{entry}` entry",
+                        function.name,
+                        operation_text(self.program, marked_effect, marked_op)
+                    ));
+                }
+                None => {
+                    return Err(format!(
+                        "`{}` is not a clause, but it is put into the `{entry}` entry",
+                        function.name
+                    ));
+                }
+            }
+        }
+        if let Atom::Var(evidence) = args[0]
+            && let Some(&created) = self.evidences.get(&evidence)
+            && created != effect
+        {
+            return Err(format!(
+                "`prim {name}` is given `{}`, the evidence of `{}`",
+                self.name(evidence),
+                effect_text(self.program, created)
+            ));
+        }
+        Ok(())
     }
 
     /// `con` のフィールドの数は、コンストラクタと同じである。束縛する変数の Repr は配置の Repr と同じで、宣言した
@@ -1428,8 +1706,27 @@ impl<'a> Checker<'a> {
     /// 呼び出しは、形を確かめた後に、オペランドの Repr を左から比べ、結果を `receiver` と比べてから、範囲と所有を
     /// 確かめる (docs/spec/core-ir.md の「verifier」)。
     fn check_call(&self, owned: &mut Owned, call: &Call, receiver: Receiver) -> Result<(), String> {
+        // EP は `handle`、`perform`、`resume` を基本操作と節の呼び出しに置き換える
+        // (docs/spec/core-ir.md の「verifier」)
+        if self.level != Level::Translated {
+            let remains = match call {
+                Call::Handle { .. } => Some("a handler"),
+                Call::Perform { .. } => Some("a perform"),
+                Call::Resume { .. } => Some("a resume"),
+                Call::Direct(_, _) | Call::Apply { .. } | Call::Clause { .. } => None,
+            };
+            if let Some(remains) = remains {
+                return Err(format!("{remains} remains after the evidence pass"));
+            }
+        }
         let result = match call {
             Call::Direct(target, args) => {
+                if let Some(clause) = self.clause_of(*target) {
+                    return Err(format!(
+                        "`{}` is a clause of `{clause}`, but it is called directly",
+                        self.program.functions[target.0 as usize].name
+                    ));
+                }
                 let target = self.function_at(*target)?;
                 let params = target.params().len();
                 if args.len() != params {
@@ -1464,7 +1761,8 @@ impl<'a> Checker<'a> {
                     }
                 }
                 self.check_clause_arities(info, clauses, *ret)?;
-                Some(Repr::TObj)
+                // 境界は範囲の段から比べるが、そこではエフェクトの命令をもう拒んでいる
+                None
             }
             Call::Perform {
                 effect,
@@ -1491,16 +1789,46 @@ impl<'a> Checker<'a> {
                         info.name, operation.name
                     ));
                 }
-                // `never` の操作の `perform` は値を返さないので、結果は位置でない
-                // (docs/spec/core-ir.md の「位置の規則」)
-                resumable.then_some(Repr::TObj)
+                None
             }
-            Call::Apply(_, _)
-            | Call::Resume {
+            Call::Clause {
+                effect,
+                op,
+                callee: _,
+                args,
+            } => {
+                if self.level == Level::Translated {
+                    return Err("a clause call is used before the evidence pass".to_string());
+                }
+                let info = self.effect(*effect)?;
+                let Some(operation) = info.operations.get(*op as usize) else {
+                    return Err(format!(
+                        "a clause names operation {op} of `{}`, which has {} operations",
+                        info.name,
+                        info.operations.len()
+                    ));
+                };
+                let takes = 1 + operation.params.len();
+                if args.len() != takes {
+                    return Err(format!(
+                        "{} is given {} arguments, but it takes {takes} (the evidence and {} arguments of the operation)",
+                        self.call_text(call, false),
+                        args.len(),
+                        operation.params.len()
+                    ));
+                }
+                // `never` の操作の節は値を返さないので、結果は位置でない
+                match operation.ret {
+                    OpRet::Repr(repr) => Some(repr),
+                    OpRet::Never => None,
+                }
+            }
+            Call::Apply { .. } => Some(Repr::TObj),
+            Call::Resume {
                 k: _,
                 arg: _,
                 state: _,
-            } => Some(Repr::TObj),
+            } => None,
         };
         if self.checks_boundaries() {
             self.check_operands(call)?;
@@ -1511,7 +1839,7 @@ impl<'a> Checker<'a> {
         self.consume_all(owned, |f| call.for_each_atom(f))
     }
 
-    /// 呼び出しのオペランドを左から比べる (R8)。直接の呼び出しは、呼ばれる関数の引数と比べる。ほかの呼び出しの
+    /// 呼び出しのオペランドを左から比べる (R8)。直接の呼び出しは、呼ばれる関数の引数と比べる。関数値の適用の
     /// オペランドは一様な位置なので、`tobj` と比べる。呼び出しの形は確かめてある。
     fn check_operands(&self, call: &Call) -> Result<(), String> {
         // 誤りの文で呼び出しを指す句 (`an apply`) は呼び出しの形で決まるので、比べる処理を形ごとに作る
@@ -1543,52 +1871,69 @@ impl<'a> Checker<'a> {
                     }
                 }
             }
-            Call::Apply(callee, args) => {
+            Call::Apply {
+                callee,
+                args,
+                yields: _,
+            } => {
                 let uniform = operands("an apply");
                 uniform(&|| "the callee".to_string(), *callee)?;
                 for (index, &arg) in args.iter().enumerate() {
                     uniform(&|| format!("argument {index}"), arg)?;
                 }
             }
-            Call::Perform {
-                effect: _,
-                op: _,
-                resumable: _,
+            // 境界を比べる段では、`check_call` がエフェクトの命令を先に拒んでいる
+            Call::Handle { .. } | Call::Perform { .. } | Call::Resume { .. } => {}
+            // 節の呼び出しは操作の ABI で呼ぶので、先頭の evidence は `obj`、残りは操作の表の Repr と比べる
+            Call::Clause {
+                effect,
+                op,
+                callee,
                 args,
             } => {
-                let uniform = operands("a perform");
-                for (index, &arg) in args.iter().enumerate() {
-                    uniform(&|| format!("argument {index}"), arg)?;
+                let operation = operation(&self.program.effects, *effect, *op);
+                let what = self.call_text(call, false);
+                if !self.passes(*callee, Repr::TObj)? {
+                    return Err(format!(
+                        "the callee of {what} is {}, but a clause takes tobj",
+                        self.typed_atom_text(*callee)
+                    ));
                 }
-            }
-            Call::Resume { k, arg, state } => {
-                let uniform = operands("a resume");
-                uniform(&|| "the continuation".to_string(), *k)?;
-                uniform(&|| "the value".to_string(), *arg)?;
-                uniform(&|| "the state".to_string(), *state)?;
-            }
-            Call::Handle {
-                effect,
-                init,
-                body,
-                clauses,
-                ret,
-            } => {
-                let operations = &self.program.effects[*effect as usize].operations;
-                let uniform = operands("a handler");
-                uniform(&|| "the initial state".to_string(), *init)?;
-                uniform(&|| "the body".to_string(), *body)?;
-                for (operation, &clause) in operations.iter().zip(clauses) {
-                    uniform(&|| format!("the clause for `{}`", operation.name), clause)?;
+                let expected = std::iter::once(Repr::Obj).chain(operation.params.iter().copied());
+                for (index, (&arg, expected)) in args.iter().zip(expected).enumerate() {
+                    if !self.passes(arg, expected)? {
+                        let taker = if index == 0 {
+                            "a clause"
+                        } else {
+                            "the operation"
+                        };
+                        return Err(format!(
+                            "argument {index} of {what} is {}, but {taker} takes {}",
+                            self.typed_atom_text(arg),
+                            expected.name()
+                        ));
+                    }
                 }
-                uniform(&|| "the `return` clause".to_string(), *ret)?;
             }
         }
         Ok(())
     }
 
-    /// 呼び出しの結果 (直接の呼び出しなら呼ばれる関数の `ret`、ほかは `tobj`) は、束縛する変数か、`tail` なら
-    /// 呼び出し元の `ret` と互換である (R8)。
+    /// 結果を受けない呼び出し。`never` の操作の `perform` と `clause` は戻らない。
+    fn never_returns(&self, call: &Call) -> bool {
+        match call {
+            Call::Perform { resumable, .. } => !resumable,
+            Call::Clause { effect, op, .. } => {
+                operation(&self.program.effects, *effect, *op).ret == OpRet::Never
+            }
+            Call::Direct(_, _) | Call::Apply { .. } | Call::Handle { .. } | Call::Resume { .. } => {
+                false
+            }
+        }
+    }
+
+    /// 呼び出しの結果 (直接の呼び出しなら呼ばれる関数の `ret`、節の呼び出しなら操作の `ret`、`apply` なら `tobj`) は、
+    /// 束縛する変数か、`tail` なら呼び出し元の `ret` と互換である (R8)。
     fn check_result(&self, call: &Call, result: Repr, receiver: Receiver) -> Result<(), String> {
         match receiver {
             Receiver::Bound(var) => {
@@ -1620,8 +1965,8 @@ impl<'a> Checker<'a> {
         }
     }
 
-    /// 境界の検査の文言で呼び出しを指す言い方。`let` では `` `g` ``、``a perform of `Ask.ask` `` の形、`tail` では
-    /// ``a tail call to `g` ``、``a tail perform of `Ask.ask` `` の形にする。呼び出しの形は確かめてある。
+    /// 境界の検査の文言で呼び出しを指す言い方。`let` では `` `g` ``、``a clause of `Ask.ask` `` の形、`tail` では
+    /// ``a tail call to `g` ``、``a tail clause of `Ask.ask` `` の形にする。呼び出しの形は確かめてある。
     fn call_text(&self, call: &Call, tail: bool) -> String {
         let (article, noun) = match call {
             Call::Direct(target, _) => {
@@ -1632,38 +1977,20 @@ impl<'a> Checker<'a> {
                     format!("`{name}`")
                 };
             }
-            Call::Apply(_, _) => ("an", "apply".to_string()),
-            Call::Perform {
+            Call::Apply { .. } => ("an", "apply".to_string()),
+            Call::Clause {
                 effect,
                 op,
-                resumable: _,
+                callee: _,
                 args: _,
-            } => {
-                let info = &self.program.effects[*effect as usize];
-                let operation = &info.operations[*op as usize];
-                (
-                    "a",
-                    format!("perform of `{}.{}`", info.name, operation.name),
-                )
-            }
-            Call::Resume {
-                k: _,
-                arg: _,
-                state: _,
-            } => ("a", "resume".to_string()),
-            Call::Handle {
-                effect,
-                init: _,
-                body: _,
-                clauses: _,
-                ret: _,
             } => (
                 "a",
-                format!(
-                    "handler of `{}`",
-                    self.program.effects[*effect as usize].name
-                ),
+                format!("clause of `{}`", operation_text(self.program, *effect, *op)),
             ),
+            // `check_call` は、呼び出しを文言にする前にエフェクトの命令を拒む
+            Call::Handle { .. } | Call::Perform { .. } | Call::Resume { .. } => {
+                unreachable!("check_call rejects effect instructions before it describes a call")
+            }
         };
         if tail {
             format!("a tail {noun}")
@@ -1673,12 +2000,18 @@ impl<'a> Checker<'a> {
     }
 
     /// `mask` はエフェクトの表にある番号を昇順に並べた多重集合である。extern のエフェクトは表にないので、`mask` にも
-    /// 現れない。`handle` と `perform` は `mask` を持たない (docs/spec/core-ir.md)。
+    /// 現れない。`handle`、`perform`、`clause` は `mask` を持たない (docs/spec/core-ir.md)。
     fn check_mask(&self, call: &Call, mask: &[u32]) -> Result<(), String> {
         if mask.is_empty() {
             return Ok(());
         }
+        // EP は `mask` を `evv_mask` に置き換える (docs/spec/core-ir.md の
+        // 「`mask` の包み」)
+        if self.level != Level::Translated {
+            return Err("a mask remains after the evidence pass".to_string());
+        }
         match call {
+            Call::Clause { .. } => return Err("a mask on clause".to_string()),
             Call::Handle {
                 effect: _,
                 init: _,
@@ -1693,7 +2026,7 @@ impl<'a> Checker<'a> {
                 args: _,
             } => return Err("a mask on perform".to_string()),
             Call::Direct(_, _)
-            | Call::Apply(_, _)
+            | Call::Apply { .. }
             | Call::Resume {
                 k: _,
                 arg: _,
@@ -1724,7 +2057,7 @@ impl<'a> Checker<'a> {
             let Some(has) = self.parameters_left(clause) else {
                 continue;
             };
-            let needs = op.arity + usize::from(op.resumable) + 1;
+            let needs = op.params.len() + usize::from(op.resumable) + 1;
             if has != needs {
                 let receives = if op.resumable {
                     "for the arguments, `k`, and the state"
@@ -1733,7 +2066,8 @@ impl<'a> Checker<'a> {
                 };
                 return Err(format!(
                     "the clause for `{}` needs {needs} parameters after its captures ({} {receives}), but it has {has}",
-                    op.name, op.arity
+                    op.name,
+                    op.params.len()
                 ));
             }
         }
@@ -1834,10 +2168,11 @@ impl<'a> Checker<'a> {
 fn tail_text(call: &Call) -> &'static str {
     match call {
         Call::Direct(_, _) => "a tail call",
-        Call::Apply(_, _) => "a tail apply",
+        Call::Apply { .. } => "a tail apply",
         Call::Perform { .. } => "a tail perform",
         Call::Resume { .. } => "a tail resume",
         Call::Handle { .. } => "a tail handler",
+        Call::Clause { .. } => "a tail clause",
     }
 }
 

@@ -162,8 +162,8 @@ impl Carrying<'_, '_> {
                 effect: _,
             } => {
                 // handle の後で使う値は、本体の実行のうち外へ抜けるエフェクト (外側の row) をまたぐ。`return` の節の
-                // クロージャは handler フレームにあり、扱うエフェクトの `multi` の区間にも入るので、本体の row 全体を
-                // またぐ (docs/spec/effects.md の「handler の意味」)
+                // クロージャは handle の実行 (`prompt$` のフレーム) が持ち、扱うエフェクトの `multi` の区間にも入るので、
+                // 本体の row 全体をまたぐ (docs/spec/effects.md の「handler の意味」)
                 if let Some(CallRows::Handle {
                     body: body_row,
                     outer,
@@ -171,7 +171,7 @@ impl Carrying<'_, '_> {
                 {
                     let outer = Across::Row(outer.clone());
                     self.carry(id, after, &outer, &CallKind::Handle);
-                    // 状態は本体の実行中、handler フレームにある。扱うエフェクトの操作が起きると状態は節に渡り、捕まえた
+                    // 状態は本体の実行中、evidence にある。扱うエフェクトの操作が起きると状態は節に渡り、捕まえた
                     // 区間に入らないので、外側の row だけをまたぐ (docs/spec/effects.md の「パラメータ付き handler」)
                     if let Some(init) = init
                         && let Some(&ty) = typing.exprs.get(*init)

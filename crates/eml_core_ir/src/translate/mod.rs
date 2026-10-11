@@ -1,9 +1,8 @@
 //! 型付き HIR から、前向きの辺だけを持つブロックの列への変換 (docs/spec/core-ir.md)。式の値の渡し先 (出口) と、
-//! 条件の分かれ方という制御の骨組みをここに置く。ブロックの組み立ては `builder.rs`、式ごとの変換は `expr.rs`、
+//! 条件の分かれ方という制御の骨組みをここに置く。ブロックの組み立ては crate の `builder.rs`、式ごとの変換は `expr.rs`、
 //! パターンの決定木と case-of-case は `pattern.rs`、関数の表と包む関数は `program.rs`、型から決まる Repr は
 //! `types.rs`、導出した instance とタプルの instance の生成器は `derive.rs` にある。
 
-mod builder;
 mod derive;
 mod expr;
 mod instances;
@@ -19,14 +18,14 @@ use eml_hir::{
     Body, ExprId, ExprKind, FunctionId, LocalId, MatchArm, PatId, PatKind, Program as HirProgram,
     Res, Stmt as HirStmt, ValueItem,
 };
-use eml_types::{BodyTypes, TypeId, TypeStore, TypedProgram};
+use eml_types::{BodyTypes, RowYield, TypeId, TypeStore, TypedProgram};
 use la_arena::ArenaMap;
 
 use crate::{
     Atom, Case, CasePattern, CoreFn, FALSE, FnIdx, Loc, Program, Repr, Rhs, TRUE, Term, VarId,
 };
 
-use builder::{FnBuilder, Label};
+use crate::builder::{FnBuilder, Label};
 use expr::extern_row;
 use instances::{InstanceKind, Target};
 use pattern::{Known, MatchCtx, Occ, Scrutinee, destructures};
@@ -200,14 +199,16 @@ pub(crate) fn translate(
             .collect();
         let forms = continuation_forms(body);
         let numbers = numbering(hir, body, &function.targets);
+        let types = function
+            .types
+            .as_deref()
+            .unwrap_or_else(|| typed.bodies.get(id).expect("every body is type-checked"));
         let ctx = BodyCtx {
             hir,
             body,
             store,
-            types: function
-                .types
-                .as_ref()
-                .unwrap_or_else(|| typed.bodies.get(id).expect("every body is type-checked")),
+            types,
+            bits: &function.bits,
             targets: &function.targets,
             indices: &indices,
             root_name: &instance.name,
@@ -218,7 +219,8 @@ pub(crate) fn translate(
                 file_id: hir.modules[id.module].file,
             },
         };
-        let core = FnLowering::new(ctx, &mut builder).lower(
+        let yields = ctx.resolve(types.body_yield);
+        let core = FnLowering::new(ctx, &mut builder, yields).lower(
             &instance.name,
             false,
             &[],
@@ -231,12 +233,20 @@ pub(crate) fn translate(
     let InstanceKind::Function(entry_instance) = &instances.list[instances.entry.0].kind else {
         unreachable!("the entry is a function of the program")
     };
+    // 入口の関数とその中の `()` の呼び出しの印は、宣言の型の最初の矢印から決める (docs/spec/core-ir.md の
+    // 「`yields` の印」)
+    let first_arrow = typed
+        .bodies
+        .get(entry)
+        .expect("every body is type-checked")
+        .first_arrow_yield;
     let entry_fn = builder.entry(
         hir,
         store,
         indices[instances.entry.0],
         entry,
         entry_instance.signature,
+        instances::resolve(first_arrow, &entry_instance.bits),
     );
     Program {
         functions: builder
@@ -247,7 +257,7 @@ pub(crate) fn translate(
         entry: entry_fn,
         strings: builder.strings.values,
         layouts: builder.layouts,
-        effects: effect_table(hir),
+        effects: effect_table(hir, store, typed),
         files: builder.files.values,
     }
 }
@@ -294,6 +304,8 @@ struct BodyCtx<'a> {
     /// 型の表。型検査の表に、単相化の代入の結果を足したもの。本体の変換は読むだけである。
     store: &'a TypeStore,
     types: &'a BodyTypes,
+    /// トップレベルの関数の instance の row のビット。本体の中の `RowYield::Var` を解く。
+    bits: &'a [bool],
     /// 本体の中の、定義された関数とメソッドへの参照の行き先。
     targets: &'a ArenaMap<ExprId, Target>,
     /// instance の番号から関数の番号への表。
@@ -307,6 +319,11 @@ struct BodyCtx<'a> {
 }
 
 impl BodyCtx<'_> {
+    /// 本体の中で記録した row の分類を、この instance の row のビットで解く。
+    fn resolve(&self, row: RowYield) -> bool {
+        instances::resolve(row, self.bits)
+    }
+
     /// 定義された関数かメソッドへの参照 `expr` の行き先の関数。
     fn target(&self, expr: ExprId) -> FnIdx {
         match self.targets.get(expr) {
@@ -335,13 +352,17 @@ struct FnLowering<'a> {
     contexts: Vec<Ctx>,
     /// この関数で `con` で作った変数の中身。決定木が頭のコンストラクタを知るのに使う。
     cons: HashMap<VarId, Known>,
+    /// 作っている関数が yield しうるか (docs/spec/core-ir.md の
+    /// 「`yields` の印」)。この関数の中の handle の節も同じ印にする。
+    yields: bool,
 }
 
 impl<'a> FnLowering<'a> {
-    fn new(ctx: BodyCtx<'a>, program: &'a mut ProgramBuilder) -> Self {
+    fn new(ctx: BodyCtx<'a>, program: &'a mut ProgramBuilder, yields: bool) -> Self {
         FnLowering {
             ctx,
             program,
+            yields,
             builder: FnBuilder::new(),
             locals: ArenaMap::default(),
             contexts: Vec::new(),
@@ -399,14 +420,17 @@ impl<'a> FnLowering<'a> {
             self.destructure(pat, Scrutinee::Occ(Occ::Atom(Atom::Var(var)), repr));
         }
         self.tail_expr(root, Exit::Return);
-        self.builder.finish(name.to_string(), internal, ret)
+        self.builder
+            .finish(name.to_string(), internal, self.yields, ret)
     }
 
     /// `root` を、捕まえた変数を先頭の引数に持つ関数に持ち上げ、そのクロージャを作る (docs/spec/core-ir.md)。ラムダと、
     /// handle の本体と節に使う。関数の番号は持ち上げる前に取るので、入れ子の持ち上げは外側より後ろの番号になる。
+    /// `yields` は持ち上げた関数の印である。
     fn lift(
         &mut self,
         name: String,
+        yields: bool,
         captured: Vec<LocalId>,
         params: &[(Option<PatId>, Repr)],
         root: ExprId,
@@ -425,7 +449,7 @@ impl<'a> FnLowering<'a> {
             })
             .collect();
         let function = self.program.reserve(captured.len() + params.len());
-        let core = FnLowering::new(self.ctx, &mut *self.program)
+        let core = FnLowering::new(self.ctx, &mut *self.program, yields)
             .lower(&name, true, &captured, params, root, ret);
         self.program.finish(function, core);
         let atoms = captured

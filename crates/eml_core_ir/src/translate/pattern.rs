@@ -14,9 +14,9 @@ use crate::{
     Atom, BlockId, Case, CasePattern, Ctor, LayoutId, Repr, Rhs, Stmt, TUPLE, Term, VarId, VarInfo,
 };
 
-use super::builder::Label;
 use super::types::{named, repr, type_def_repr, var_info};
 use super::{Ctx, CtxId, Exit, FnLowering};
+use crate::builder::Label;
 
 /// 値の出現 (docs/spec/core-ir.md)。`Con` は頭のコンストラクタが分かっている値で、タプルはタグ 0 の
 /// コンストラクタである。値全体が要る葉でだけ値を作る。出現は型を持たない。値を作るときの Repr は `ConValue` から

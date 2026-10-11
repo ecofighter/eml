@@ -2,17 +2,31 @@ use std::cmp::Ordering;
 use std::path::Path;
 
 use eml_core_ir::{Atom, Call, CasePattern, FnIdx, VarId};
-use eml_runtime::{
-    Attachment, Closure, Frame, Heap, HeapError, ObjRef, OutputSink, Payload, Value,
-};
+use eml_runtime::{Closure, Frame, Heap, HeapError, ObjRef, OutputSink, Payload, Value};
 
 use crate::RunStats;
 use crate::error::{Fault, RuntimeError};
+
+pub(crate) const EFFECT_INSTRUCTION: Fault =
+    Fault::Internal("an effect instruction reaches the interpreter");
 
 /// 1つの命令を実行した後の状態。
 pub(crate) enum Step {
     Continue,
     Finished,
+}
+
+/// yield の状態 (docs/spec/core-ir.md の「実行の文脈」)。
+pub(crate) enum YieldState {
+    None,
+    /// yield 中か、`abort` なら中断中である。`target` (宛先の evidence)、`clause` (節の本体)、`cont`
+    /// (組み立て中の継続 κ) は参照を1つずつ所有する。`cont` は取り出している間 `Value::Unit` である。
+    Yielding {
+        target: ObjRef,
+        clause: Value,
+        cont: Value,
+        abort: bool,
+    },
 }
 
 /// 呼び出しと戻りの行き先。関数の入り方と、戻りのフレームの再開の番地の読み方は IR の形で決まるので、機械に任せる
@@ -87,25 +101,32 @@ impl Env {
     }
 }
 
-/// 機械の状態のうち、IR の形によらない部分。ヒープ、継続、handler の連鎖、入出力を持ち、呼び出し、戻り、エフェクト、
-/// extern を実行する。制御と環境は機械が持つ。
+/// 機械の状態のうち、IR の形によらない部分。ヒープ、継続、evidence のリスト、yield の状態、入出力を持ち、呼び出し、
+/// 戻り、基本操作、extern を実行する。制御と環境は機械が持つ。
 pub(crate) struct Runtime<'p> {
     pub(crate) out: &'p OutputSink,
     pub(crate) file_root: &'p Path,
     pub(crate) heap: Heap,
     /// 継続の先頭のフレーム。最下部には常に `Frame::Root` がある。
     pub(crate) cont: ObjRef,
-    /// handler の連鎖の先頭。`cont` から `next` でたどって最初に会う handler か `Mask` のフレームで、どちらもなければ
-    /// `Root` のフレームである。`perform` はここから `outer` だけをたどる (docs/implementation/architecture.md の
-    /// 「継続のフレーム」)。
-    pub(crate) handlers: ObjRef,
     /// `Program::strings` の項目ごとの不死の物体。`Rhs::ConstString` は写さずに参照を1つ作る (docs/spec/runtime.md)。
     literals: Vec<ObjRef>,
     strings: &'p [String],
     /// 関数ごとの引数の数。関数値の適用が、足りない・ちょうど・余るを決める。
     arities: Vec<usize>,
-    /// `find_handler` が調べたフレームの数 (`RunStats::handler_visits`)。
-    pub(crate) handler_visits: u64,
+    /// エフェクトごとの操作の数。`ev_new` が入口の表の欄をこの数だけ作る。
+    pub(crate) effect_sizes: Vec<usize>,
+    /// 今有効な evidence のリスト。空のリストは `Value::Unit` である。関数の引数でなく実行の文脈に持つので、yield
+    /// しうる関数とそうでない関数の呼び出しの規約は同じになる
+    /// (docs/spec/core-ir.md の「実行の文脈」)。
+    pub(crate) evv: Value,
+    pub(crate) yield_state: YieldState,
+    /// `ev_lookup` と `evv_mask` がたどった `evv` の節点の数。
+    pub(crate) evidence_steps: u64,
+    /// `yield_to` と `yield_abort` を実行した回数。
+    pub(crate) yields: u64,
+    /// `yield_cont_set` を実行した回数。継続 κ に足したフレームの数である。
+    pub(crate) yield_frames: u64,
     /// 機械が実行した `box` の数 (`RunStats::boxes`)。
     pub(crate) boxes: u64,
     /// 機械が実行した `unbox` の数 (`RunStats::unboxes`)。
@@ -118,6 +139,7 @@ impl<'p> Runtime<'p> {
         file_root: &'p Path,
         strings: &'p [String],
         arities: Vec<usize>,
+        effect_sizes: Vec<usize>,
     ) -> Self {
         let mut heap = Heap::new();
         let cont = heap.alloc(Payload::Frame(Frame::Root));
@@ -130,11 +152,15 @@ impl<'p> Runtime<'p> {
             file_root,
             heap,
             cont,
-            handlers: cont,
             literals,
             strings,
             arities,
-            handler_visits: 0,
+            effect_sizes,
+            evv: Value::Unit,
+            yield_state: YieldState::None,
+            evidence_steps: 0,
+            yields: 0,
+            yield_frames: 0,
             boxes: 0,
             unboxes: 0,
         }
@@ -218,75 +244,40 @@ impl<'p> Runtime<'p> {
     }
 
     /// 呼び出す。末尾でない呼び出しでは、機械が先に戻りのフレームを積んでいる。引数はフレームを積んだ後に読む。
-    /// 環境の読み出しはスロットを書き換えないので、順序は結果に影響しない。
-    pub(crate) fn call(&mut self, call: &Call, mask: &[u32], env: &Env) -> Result<Transfer, Fault> {
-        // 戻りのフレームの上に積むので、呼び出し先が値を返すと先に外れる。末尾呼び出しでは戻りのフレームの代わりになる。
-        // `resume` も、今の継続を読む前に積む (docs/implementation/architecture.md の「継続のフレーム」)
-        if !mask.is_empty() {
-            let frame = Frame::Mask {
-                effects: mask.to_vec(),
-                next: self.cont,
-                outer: self.handlers,
-            };
-            self.cont = self.heap.alloc(Payload::Frame(frame));
-            self.handlers = self.cont;
-        }
+    /// 環境の読み出しはスロットを書き換えないので、順序は結果に影響しない。エフェクトの命令は EP が基本操作に置き換える
+    /// ので、ここに届けば内部の誤りである (docs/spec/core-ir.md の「インタプリタ (CEK 機械)」)。
+    pub(crate) fn call(&mut self, call: &Call, env: &Env) -> Result<Transfer, Fault> {
         match call {
             Call::Direct(callee, args) => Ok(Transfer::Enter(*callee, env.atoms(args)?)),
-            Call::Apply(callee, args) => {
+            Call::Apply {
+                callee,
+                args,
+                yields: _,
+            } => {
                 let callee = env.atom(callee)?;
                 let args = env.atoms(args)?;
                 self.apply_and_continue(callee, args)
             }
-            Call::Handle {
-                effect,
-                init,
-                body,
-                clauses,
-                ret: on_return,
-            } => {
-                let init = env.atom(init)?;
-                let body = env.atom(body)?;
-                let clauses = env.atoms(clauses)?;
-                let on_return = env.atom(on_return)?;
-                let frame = Frame::Handler {
-                    effect: *effect,
-                    clauses,
-                    ret: on_return,
-                    link: Attachment::Attached {
-                        next: self.cont,
-                        state: init,
-                        outer: self.handlers,
-                    },
-                };
-                self.cont = self.heap.alloc(Payload::Frame(frame));
-                self.handlers = self.cont;
-                self.apply_and_continue(body, vec![Value::Unit])
+            Call::Handle { .. } | Call::Perform { .. } | Call::Resume { .. } => {
+                Err(EFFECT_INSTRUCTION)
             }
-            Call::Perform {
-                effect,
-                op,
-                resumable,
+            // 節の呼び出しは、インタプリタでは `apply` と同じである
+            // (docs/spec/core-ir.md の「節の呼び出し」)
+            Call::Clause {
+                effect: _,
+                op: _,
+                callee,
                 args,
             } => {
+                let callee = env.atom(callee)?;
                 let args = env.atoms(args)?;
-                self.perform(*effect, *op, *resumable, args)
-            }
-            Call::Resume { k, arg, state } => {
-                let k = env.atom(k)?;
-                let arg = env.atom(arg)?;
-                let state = env.atom(state)?;
-                self.resume(k, arg, state)
+                self.apply_and_continue(callee, args)
             }
         }
     }
 
     /// 関数値を適用する。関数に入らずに値ができたら (足りない引数のクロージャ)、その値を継続に返す。
-    pub(crate) fn apply_and_continue(
-        &mut self,
-        callee: Value,
-        args: Vec<Value>,
-    ) -> Result<Transfer, Fault> {
+    fn apply_and_continue(&mut self, callee: Value, args: Vec<Value>) -> Result<Transfer, Fault> {
         match self.apply(callee, args)? {
             Applied::Enter(function, args) => Ok(Transfer::Enter(function, args)),
             Applied::Value(value) => self.ret(value),
@@ -344,7 +335,8 @@ impl<'p> Runtime<'p> {
     pub(crate) fn ret(&mut self, mut value: Value) -> Result<Transfer, Fault> {
         loop {
             let top = self.cont;
-            // フレームはつねに一意である。共有されうるのは継続オブジェクトだけで、再開するときに区間を写す (docs/spec/runtime.md)
+            // フレームはつねに一意である。フレームを捕まえる命令はなく、再開する継続はクロージャで作る
+            // (docs/spec/core-ir.md の「継続の組み立て」)
             let Payload::Frame(frame) = self.heap.take(top).map_err(Fault::Heap)? else {
                 return Err(Fault::Internal("the continuation is not a frame"));
             };
@@ -372,37 +364,6 @@ impl<'p> Runtime<'p> {
                         value,
                     });
                 }
-                // 本体が値を返したので handler を外す。節のクロージャはもう呼ばない
-                Frame::Handler {
-                    effect: _,
-                    clauses,
-                    ret: on_return,
-                    link,
-                } => {
-                    for clause in clauses {
-                        self.decref(clause)?;
-                    }
-                    let Attachment::Attached { next, state, outer } = link else {
-                        return Err(Fault::Internal("a detached handler received a value"));
-                    };
-                    self.pop_chain(top, outer)?;
-                    self.cont = next;
-                    match self.apply(on_return, vec![value, state])? {
-                        Applied::Enter(function, args) => {
-                            return Ok(Transfer::Enter(function, args));
-                        }
-                        Applied::Value(result) => value = result,
-                    }
-                }
-                // 値はそのまま外側へ返す
-                Frame::Mask {
-                    effects: _,
-                    next,
-                    outer,
-                } => {
-                    self.pop_chain(top, outer)?;
-                    self.cont = next;
-                }
                 Frame::Root => {
                     self.decref(value)?;
                     return Ok(Transfer::Finished);
@@ -411,21 +372,11 @@ impl<'p> Runtime<'p> {
         }
     }
 
-    /// 外す handler か `Mask` のフレームを連鎖から外す。外すフレームは連鎖の先頭のはずなので、O(1) で確かめる
-    /// (docs/implementation/architecture.md の「継続のフレーム」)。
-    fn pop_chain(&mut self, frame: ObjRef, outer: ObjRef) -> Result<(), Fault> {
-        if frame != self.handlers {
-            return Err(Fault::Internal(
-                "a popped handler or mask is not the head of the handler chain",
-            ));
-        }
-        self.handlers = outer;
-        Ok(())
-    }
-
     pub(crate) fn stats(&self) -> RunStats {
         RunStats {
-            handler_visits: self.handler_visits,
+            evidence_steps: self.evidence_steps,
+            yields: self.yields,
+            yield_frames: self.yield_frames,
             string_bytes_copied: self.heap.string_bytes_written(),
             rc_increments: self.heap.rc_increments(),
             rc_decrements: self.heap.rc_decrements(),
@@ -433,6 +384,18 @@ impl<'p> Runtime<'p> {
             unboxes: self.unboxes,
             peak_objects: self.heap.peak_objects(),
         }
+    }
+
+    /// 正しく終わった実行は、evidence のリストを空に戻し、yield を終えている。残っていると、その中の物体が
+    /// リークに見えるので、リークの検査より先に確かめる。
+    pub(crate) fn check_context(&self) -> Result<(), Fault> {
+        if self.evv != Value::Unit {
+            return Err(Fault::Internal("the evidence list is not empty at the end"));
+        }
+        if !matches!(self.yield_state, YieldState::None) {
+            return Err(Fault::Internal("a yield is left at the end"));
+        }
+        Ok(())
     }
 
     pub(crate) fn check_leaks(&self) -> Result<(), RuntimeError> {

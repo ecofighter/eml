@@ -5,23 +5,28 @@ use eml_extern::Extern;
 pub use eml_extern::Repr;
 
 mod boxing;
+mod builder;
 mod contract;
+mod evidence;
 pub mod liveness;
 mod perceus;
 mod pipeline;
 mod pretty;
+mod prim;
 mod text;
 mod translate;
 mod verify;
 
 pub use boxing::boxing;
 pub use contract::contract;
+pub use evidence::evidence;
 pub use perceus::perceus;
 pub use pipeline::{Pass, lower, lower_until};
 pub use pretty::{pretty, pretty_with_positions};
+pub use prim::{Prim, PrimRow};
 pub use text::{ParseError, parse};
 pub use translate::type_repr;
-pub use verify::{VerifyError, verify, verify_scopes, verify_translated};
+pub use verify::{VerifyError, verify, verify_evidence, verify_scopes, verify_translated};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Program {
@@ -34,7 +39,8 @@ pub struct Program {
     /// データの配置の表。`con`、`switch`、`unpack`、`release` が `LayoutId` で引く。translate は最初に使った順に入れる
     /// (docs/spec/core-ir.md の「データの配置」)。
     pub layouts: Vec<Layout>,
-    /// エフェクトの表。添字は `Call::Handle` と `Call::Perform` のエフェクトの番号で、HIR の `EffectId` の添字と同じである。
+    /// エフェクトの表。添字は `Call::Handle`、`Call::Perform`、`Call::Clause`、基本操作の即値のエフェクトの番号で、
+    /// HIR の `EffectId` の添字と同じである。
     pub effects: Vec<EffectInfo>,
     /// 表示用のパスの表。`Loc.file` が添字で引く。
     pub files: Vec<String>,
@@ -111,10 +117,25 @@ pub struct EffectInfo {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OperationInfo {
     pub name: String,
-    /// 操作の引数の数。verifier が節の関数の引数の数を確かめるのに使う (docs/spec/core-ir.md)。
-    pub arity: usize,
+    /// 操作の引数の Repr。型変数は `tobj` にする (docs/spec/core-ir.md の
+    /// 「エフェクトの位置」)。verifier は長さで節の関数の引数の数を確かめる (docs/spec/core-ir.md)。
+    pub params: Vec<Repr>,
+    pub ret: OpRet,
     /// `never` の操作は再開しないので、継続を作らずに捨てる (docs/spec/effects.md)。
     pub resumable: bool,
+}
+
+/// エフェクトの表の操作。番号が表にあることを verifier が確かめた後のパスが使う。関数の並びを書き換えながら引けるように、
+/// `Program` でなく表だけを借りる。
+pub(crate) fn operation(effects: &[EffectInfo], effect: u32, op: u32) -> &OperationInfo {
+    &effects[effect as usize].operations[op as usize]
+}
+
+/// 操作の結果。`never` の操作は戻らないので、結果を呼び出した側の位置と比べない。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OpRet {
+    Repr(Repr),
+    Never,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -130,6 +151,13 @@ pub struct CoreFn {
     /// `$externN`、`cont$`、`cont$state`)。直接呼ぶのは、それを作った定義の中だけである。トップレベルの関数と入口の
     /// 関数は内部の関数でない。テキストの形では `internal fn` と書く (docs/spec/core-ir.md)。
     pub internal: bool,
+    /// 本体が yield しうる (docs/spec/core-ir.md の「`yields` の印」)。
+    /// テキストの形では `internal` の後に `yields fn` と書く。
+    pub yields: bool,
+    /// in-place の入口の関数が受け持つ (エフェクト, 操作)。捕獲の後に evidence と操作の引数を受け、操作の結果を
+    /// 返す。`ev_set_clause` に渡す値としてだけ参照される。テキストの形では `yields` の後に `clause E.op fn` と書く
+    /// (docs/spec/core-ir.md の「入口の関数の印」)。
+    pub clause: Option<(u32, u32)>,
     pub vars: Vec<VarInfo>,
     /// 直接の呼び出しの結果の Repr。
     pub ret: Repr,
@@ -237,11 +265,9 @@ impl Stmt {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Term {
     Return(Atom),
-    /// 縮約が作る、末尾の呼び出しの要求。`mask` は `Rhs::Call` と同じである (docs/spec/core-ir.md)。
-    TailCall {
-        call: Call,
-        mask: Vec<u32>,
-    },
+    /// 縮約が作る、末尾の呼び出しの要求。縮約は EP の後に走り、EP は `mask` を `evv_mask` の包みに置き換えるので、
+    /// `mask` を持たない (docs/spec/core-ir.md の「`mask` の包み」)。
+    TailCall(Call),
     /// 並列な代入。実引数をすべて読んでから、行き先の引数に書く。
     Jump {
         target: BlockId,
@@ -268,7 +294,7 @@ impl Term {
                 cases,
                 default,
             } => (None, &cases[..], *default),
-            Term::Return(_) | Term::TailCall { call: _, mask: _ } => (None, &[][..], None),
+            Term::Return(_) | Term::TailCall(_) => (None, &[][..], None),
         };
         jump.into_iter()
             .chain(cases.iter().map(|case| case.target))
@@ -289,14 +315,14 @@ impl Term {
                     f(default);
                 }
             }
-            Term::Return(_) | Term::TailCall { call: _, mask: _ } => {}
+            Term::Return(_) | Term::TailCall(_) => {}
         }
     }
 
     pub fn for_each_atom(&self, mut f: impl FnMut(Atom)) {
         match self {
             Term::Return(atom) => f(*atom),
-            Term::TailCall { call, mask: _ } => call.for_each_atom(f),
+            Term::TailCall(call) => call.for_each_atom(f),
             Term::Jump { target: _, args } => args.iter().for_each(|&atom| f(atom)),
             Term::Switch {
                 scrutinee,
@@ -318,7 +344,7 @@ impl Term {
     pub fn for_each_atom_mut(&mut self, mut f: impl FnMut(&mut Atom)) {
         match self {
             Term::Return(atom) => f(atom),
-            Term::TailCall { call, mask: _ } => call.for_each_atom_mut(f),
+            Term::TailCall(call) => call.for_each_atom_mut(f),
             Term::Jump { target: _, args } => args.iter_mut().for_each(f),
             Term::Switch {
                 scrutinee,
@@ -379,10 +405,13 @@ pub enum Rhs {
     /// `tobj` の値から、箱を要するスカラーを取り出す。`switch` の scrutinee と同じく値を読むだけで、所有権を受け取ら
     /// ない。スカラーの種類は束縛する変数の Repr で決まる。
     Unbox(Atom),
+    /// evidence passing の基本操作。extern と同じく引数をすべて消費し、所有した結果を定義する
+    /// (docs/spec/core-ir.md の「基本操作」)。
+    Prim(Prim, Vec<Atom>),
 }
 
 impl Rhs {
-    /// 右辺が使う値。関数、extern、`perform` の引数は、どれも所有権を受け取る。
+    /// 右辺が使う値。関数、extern、基本操作、`perform` の引数は、どれも所有権を受け取る。
     pub fn for_each_atom(&self, mut f: impl FnMut(Atom)) {
         match self {
             Rhs::Call {
@@ -396,7 +425,8 @@ impl Rhs {
                 args,
                 at: _,
             }
-            | Rhs::Con { ctor: _, args } => args.iter().for_each(|&atom| f(atom)),
+            | Rhs::Con { ctor: _, args }
+            | Rhs::Prim(_, args) => args.iter().for_each(|&atom| f(atom)),
             Rhs::Drop(atom) | Rhs::Box(atom) | Rhs::Unbox(atom) => f(*atom),
             Rhs::ConstString(_) => {}
         }
@@ -422,7 +452,8 @@ impl Rhs {
                 args,
                 at: _,
             }
-            | Rhs::Con { ctor: _, args } => args.iter_mut().for_each(f),
+            | Rhs::Con { ctor: _, args }
+            | Rhs::Prim(_, args) => args.iter_mut().for_each(f),
             Rhs::Drop(atom) | Rhs::Box(atom) | Rhs::Unbox(atom) => f(atom),
             Rhs::ConstString(_) => {}
         }
@@ -442,9 +473,16 @@ pub struct Loc {
 pub enum Call {
     /// 呼ぶ相手が分かっていて、引数の個数が揃っている呼び出し。
     Direct(FnIdx, Vec<Atom>),
-    /// 関数値の呼び出し。実行時に引数の個数を比べる (eval/apply)。
-    Apply(Atom, Vec<Atom>),
-    /// handler フレームを積み、本体の関数に `()` を適用する。本体と節と `return` の節は、捕まえた変数を先頭の
+    /// 関数値の呼び出し。実行時に引数の個数を比べる (eval/apply)。`yields` は、この `apply` が受け持つ矢印の
+    /// どれかが yield しうることである。translate は yield しうる矢印の後で `apply` を分けるので、それは最後の矢印
+    /// である (docs/spec/core-ir.md の「`apply` の印と分け方」)。
+    Apply {
+        callee: Atom,
+        args: Vec<Atom>,
+        yields: bool,
+    },
+    /// handler を設け、本体の関数に `()` を適用する。translate だけが出し、EP が基本操作と `prompt$` の呼び出しに
+    /// 置き換える (docs/spec/core-ir.md の「handle と `prompt$`」)。本体と節と `return` の節は、捕まえた変数を先頭の
     /// 引数に持つ関数の値である (docs/spec/core-ir.md)。節はエフェクトの操作の順に並ぶ。節は最後の引数で状態を、
     /// `ret` は本体の値と状態を受ける。状態のない handler では `init` が `()` である (docs/spec/core-ir.md)。
     Handle {
@@ -454,16 +492,27 @@ pub enum Call {
         clauses: Vec<Atom>,
         ret: Atom,
     },
-    /// ユーザーのエフェクトの操作。継続を遡って handler を探し、その節を呼ぶ。`resumable` は操作が `never` でない
-    /// ことで、インタプリタはエフェクトの表を引かずに、区間を継続にするか解放するかを決める (docs/spec/core-ir.md)。
+    /// ユーザーのエフェクトの操作。translate だけが出し、EP が evidence を探す基本操作と節の呼び出しに置き換える
+    /// (docs/spec/core-ir.md の「`perform` と節の3つの形」)。`resumable` は操作が `never` でないことで、変換の段の
+    /// verifier がエフェクトの表と比べる。
     Perform {
         effect: u32,
         op: u32,
         resumable: bool,
         args: Vec<Atom>,
     },
-    /// 継続を再開する。`state` を区間の handler フレームに戻してからつなぐ。値は handle 式の値である。
+    /// 継続を再開する。`state` は再開した handler の次の状態で、値は handle 式の値である。translate だけが出し、EP が
+    /// `apply` に置き換える (docs/spec/core-ir.md の「再開と状態」)。
     Resume { k: Atom, arg: Atom, state: Atom },
+    /// 操作の in-place の入口のクロージャ `callee` を呼ぶ。`args` の先頭は evidence (`obj`)、残りは操作の引数で、
+    /// 引数と結果の Repr は操作の表の `params` と `ret` から取る。`mask` は持たない
+    /// (docs/spec/core-ir.md の「節の呼び出し」)。
+    Clause {
+        effect: u32,
+        op: u32,
+        callee: Atom,
+        args: Vec<Atom>,
+    },
 }
 
 impl Call {
@@ -477,7 +526,17 @@ impl Call {
                 resumable: _,
                 args,
             } => args.iter().for_each(|&atom| f(atom)),
-            Call::Apply(callee, args) => {
+            Call::Apply {
+                callee,
+                args,
+                yields: _,
+            }
+            | Call::Clause {
+                effect: _,
+                op: _,
+                callee,
+                args,
+            } => {
                 f(*callee);
                 args.iter().for_each(|&atom| f(atom));
             }
@@ -510,7 +569,17 @@ impl Call {
                 resumable: _,
                 args,
             } => args.iter_mut().for_each(f),
-            Call::Apply(callee, args) => {
+            Call::Apply {
+                callee,
+                args,
+                yields: _,
+            }
+            | Call::Clause {
+                effect: _,
+                op: _,
+                callee,
+                args,
+            } => {
                 f(callee);
                 args.iter_mut().for_each(f);
             }

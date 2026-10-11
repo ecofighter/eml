@@ -1,0 +1,9 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{stderr}\")"
+input_file: tests/ui/run/effects/resume_under_another_handler.em
+---
+--- stdout ---
+saved
+3
+--- stderr ---

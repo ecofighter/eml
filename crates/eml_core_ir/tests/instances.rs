@@ -150,6 +150,123 @@ fn a_long_shared_type_argument_gets_an_ordinal_name() {
 }
 
 #[test]
+fn a_row_polymorphic_function_has_an_instance_per_row_bit() {
+    let text = "effect Ask where\n  ask : Unit -> Int\n\ntwice : (Unit -> <e> Int) -> <e> Int\ntwice f = f () + f ()\n\nmain : Unit -> <IO> Unit\nmain () =\n  println (show (twice (fn () -> 1)))\n  println (show (handle twice ask with\n    | ask () k -> k 2))";
+    let shown = core_text(text, Pass::Translate);
+    // 純粋な instance は今の名前で印がなく、yield しうる instance は `<e>` を持つ
+    insta::assert_snapshot!(function(&shown, "twice"), @"
+    fn twice(f.0: tobj) -> int {
+      let t.1: int = apply f.0(())
+      let t.2: int = apply f.0(())
+      let t.3: int = extern Prelude.+(t.1, t.2)
+      return t.3
+    }
+    ");
+    insta::assert_snapshot!(function(&shown, "twice<e>"), @r#"
+    yields fn "twice<e>"(f.0: tobj) -> int {
+      let t.1: int = yields apply f.0(())
+      let t.2: int = yields apply f.0(())
+      let t.3: int = extern Prelude.+(t.1, t.2)
+      return t.3
+    }
+    "#);
+}
+
+#[test]
+fn only_the_set_row_variables_are_named_in_signature_order() {
+    let text = "effect Ask where\n  ask : Unit -> Int\n\nboth : (Unit -> <e> Int) -> (Unit -> <f> Int) -> <f> Int\nboth a b = b ()\n\nrun : Unit -> <Ask> Int\nrun () = both (fn () -> 1) ask + both ask ask\n\nmain : Unit -> <IO> Unit\nmain () = println (show (handle run () with\n    | ask () k -> k 2))";
+    let program = eml_test_support::core_until(text, Pass::Translate);
+    let names: Vec<&str> = program
+        .functions
+        .iter()
+        .map(|function| function.name.as_str())
+        .filter(|name| name.starts_with("both"))
+        .collect();
+    // 1つ目の呼び出しは f のビットだけが立ち、2つ目は両方が立つ
+    assert_eq!(names, ["both<f>", "both<e, f>"]);
+}
+
+#[test]
+fn an_ordinal_name_keeps_its_row_bits() {
+    // `tap` の型引数 (f1 の型) は列の長さの指数の大きさで表示されるので、名前は順番の形になり、その後ろに立った
+    // ビットが付く
+    let n = 64;
+    let mut text = String::from(
+        "effect Ask where\n  ask : Unit -> Int\n\nident : a -> a\nident x = x\n\ntap : a -> (Unit -> <e> Int) -> <e> a\ntap x g =\n  let _ = g ()\n  x\n\nrun : Unit -> <Ask> Int\nrun () =\n  let f0 = ident\n",
+    );
+    for i in 1..=n {
+        text.push_str(&format!("  let f{i} = f{} ident\n", i - 1));
+    }
+    text.push_str(&format!(
+        "  let _ = tap f1 ask\n  f{n} 5\n\nmain : Unit -> <IO> Unit\nmain () = println (show (handle run () with\n    | ask () k -> k 2))"
+    ));
+    assert_eq!(instances_of(&text, "tap"), ["tap@1<e>"]);
+}
+
+#[test]
+fn a_method_reference_passes_its_row_bits_to_the_method_function() {
+    // instance のメソッドの関数と既定のメソッドの関数は、メソッドのシグネチャと同じ順の row 変数を持つ。main の中の
+    // 呼び出しは純粋な instance に、run の中の呼び出しは `<e>` の instance に向かう
+    let text = "effect Ask where\n  ask : Unit -> Int\n\nclass Runner a where\n  run_with : a -> (Unit -> <e> Int) -> <e> Int\n  run_default : a -> (Unit -> <e> Int) -> <e> Int\n  run_default x g = g ()\n\ninstance Runner Int where\n  run_with n g = g () + n\n\nrun : Unit -> <Ask> Int\nrun () = run_with 1 ask + run_default 1 ask\n\nmain : Unit -> <IO> Unit\nmain () =\n  println (show (run_with 2 (fn () -> 3) + run_default 2 (fn () -> 3)))\n  println (show (handle run () with\n    | ask () k -> k 2))";
+    let program = eml_test_support::core_until(text, Pass::Translate);
+    let mut names: Vec<(&str, bool)> = program
+        .functions
+        .iter()
+        .filter(|function| function.name.contains("run_"))
+        .map(|function| (function.name.as_str(), function.yields))
+        .collect();
+    names.sort();
+    insta::assert_debug_snapshot!(names, @r#"
+    [
+        (
+            "Runner Int.run_with",
+            false,
+        ),
+        (
+            "Runner Int.run_with<e>",
+            true,
+        ),
+        (
+            "run_default@[Int]",
+            false,
+        ),
+        (
+            "run_default@[Int]<e>",
+            true,
+        ),
+    ]
+    "#);
+}
+
+#[test]
+fn a_clause_lambda_over_an_operation_row_variable_may_yield() {
+    let text = "effect Run where\n  run : (Unit -> <e> Int) -> Int\n\nbody : Unit -> <Run> Int\nbody () = run (fn () -> 1)\n\nmain : Unit -> <IO> Unit\nmain () =\n  let r =\n    handle body () with\n      | run f k ->\n        let g = fn () -> f () + 1\n        k 7\n  println (show r)";
+    let shown = core_text(text, Pass::Translate);
+    // g の row は操作の row 変数で、main の row 変数ではないので、g は yield しうる
+    insta::assert_snapshot!(function(&shown, "main$lambda0"), @"
+    internal yields fn main$lambda0(f.0: tobj, p.1: unit) -> int {
+      let t.2: int = yields apply f.0(())
+      let t.3: int = extern Prelude.+(t.2, 1)
+      return t.3
+    }
+    ");
+}
+
+#[test]
+fn an_apply_is_split_after_an_arrow_that_may_yield() {
+    let text = "effect Ask where\n  ask : Unit -> Int\n\nadder : Int -> <Ask> (Int -> Int)\nadder x =\n  let n = ask ()\n  fn y -> x + y + n\n\nrun : (Int -> <Ask> (Int -> Int)) -> <Ask> Int\nrun h = h 1 2\n\nmain : Unit -> <IO> Unit\nmain () =\n  let r =\n    handle run adder with\n      | ask () k -> k 10\n  println (show r)";
+    let shown = core_text(text, Pass::Translate);
+    // h 1 で yield しうるので、1つ目の apply の後で分け、1つ目に印を付ける
+    insta::assert_snapshot!(function(&shown, "run"), @"
+    yields fn run(h.0: tobj) -> int {
+      let t.1: tobj = yields apply h.0(1)
+      let t.2: int = apply t.1(2)
+      return t.2
+    }
+    ");
+}
+
+#[test]
 fn monomorphic_programs_keep_their_function_order_and_names() {
     let text = "double : Int -> Int\ndouble n = n + n\n\nmain : Unit -> <IO> Unit\nmain () = println (show (double 2))";
     let program = eml_test_support::core_until(text, Pass::Translate);
@@ -184,6 +301,65 @@ fn a_polymorphic_entry_is_uniform() {
         .map(|function| function.name.as_str())
         .collect();
     assert_eq!(names, ["first@[_]", "entry$first"]);
+}
+
+/// `name` の関数を入口にして、`Pass::Translate` までの Core IR を表示する。
+fn core_text_with_entry(text: &str, name: &str) -> String {
+    let checked = eml_test_support::check(text);
+    let (entry, _) = checked
+        .program
+        .functions()
+        .find(|(_, function)| function.name == name)
+        .unwrap();
+    eml_core_ir::pretty(&eml_core_ir::lower_until(
+        &checked.program,
+        &checked.typed,
+        entry,
+        checked.files(),
+        Pass::Translate,
+    ))
+}
+
+#[test]
+fn a_row_polymorphic_entry_may_yield() {
+    let text = "effect Ask where\n  ask : Unit -> Int\n\ngo : Unit -> <e> Int\ngo () = 1\n\nmain : Unit -> <IO> Unit\nmain () = ()";
+    // 入口の row のビットはすべて立つので、`go<e>` と入口の関数が yield しうる
+    insta::assert_snapshot!(core_text_with_entry(text, "go"), @r#"
+    effect Ask { ask(unit) -> int }
+    yields fn "go<e>"(p.0: unit) -> int {
+      return 1
+    }
+    yields fn entry$go() -> int {
+      let t.0: int = call "go<e>"(())
+      return t.0
+    }
+    "#);
+}
+
+#[test]
+fn a_point_free_entry_takes_its_mark_from_its_first_arrow() {
+    let text = "effect Ask where\n  ask : Unit -> Int\n\nact : Unit -> <Ask> Int\nact = fn () -> ask ()\n\nmain : Unit -> <IO> Unit\nmain () = ()";
+    // 引数のない値の instance は印を持たないが、入口の関数は `()` を渡す矢印の row で yield しうる
+    insta::assert_snapshot!(function(&core_text_with_entry(text, "act"), "entry$act"), @"
+    yields fn entry$act() -> int {
+      let f.0: tobj = call act()
+      let t.1: int = yields apply f.0(())
+      return t.1
+    }
+    ");
+}
+
+#[test]
+fn a_point_free_entry_whose_first_arrow_has_its_own_row_variable_may_yield() {
+    let text = "effect Ask where\n  ask : Unit -> Int\n\ngo : Unit -> <e> Int\ngo = fn () -> 1\n\nmain : Unit -> <IO> Unit\nmain () = ()";
+    // 最初の矢印の row は入口自身の row 変数なので、その印は入口の row のビット (すべて立つ) から決まる
+    insta::assert_snapshot!(function(&core_text_with_entry(text, "go"), "entry$go"), @r#"
+    yields fn entry$go() -> int {
+      let f.0: tobj = call "go<e>"()
+      let t.1: int = yields apply f.0(())
+      return t.1
+    }
+    "#);
 }
 
 const SMALL: usize = 2000;

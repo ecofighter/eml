@@ -4,7 +4,9 @@
 
 use eml_extern::Purity;
 
-use crate::{Atom, Block, Call, CoreFn, Program, Repr, Rhs, Stmt, Term};
+use crate::{
+    Atom, Block, Call, CoreFn, EffectInfo, OpRet, Program, Repr, Rhs, Stmt, Term, operation,
+};
 
 pub fn contract(program: &mut Program) {
     let rets: Vec<Repr> = program
@@ -15,7 +17,7 @@ pub fn contract(program: &mut Program) {
     for function in &mut program.functions {
         remove_dead_lets(function);
         for block in &mut function.blocks {
-            tail_call(block, function.ret, &rets);
+            tail_call(block, function.ret, &rets, &program.effects);
         }
         // 1回のパスで不動点に達することを確かめる (docs/spec/core-ir.md の「縮約」)。確かめるパスも IR を書き換えうるので、
         // その副作用を `debug_assert!` の式に隠さない
@@ -32,10 +34,10 @@ pub fn contract(program: &mut Program) {
 
 /// `let x = <呼び出し>` の後の終端が `return x` で、呼び出しの結果が関数の `ret` と互換なら、その2つを末尾呼び出しに
 /// する。互換は推移的でないので、x を通してつながっていた2つの位置が、直接つないでも互換かを確かめる。結果は、直接の
-/// 呼び出しなら呼ばれる関数の `ret`、ほかは `tobj` である。`never` の操作の `perform` は戻らないので、どの `ret` とも
-/// 互換とする (docs/spec/core-ir.md の「縮約」)。`saved` は Perceus が決めるので、この時点では空である。`mask` は
-/// 末尾かどうかと独立なので、そのまま運ぶ。
-fn tail_call(block: &mut Block, ret: Repr, rets: &[Repr]) {
+/// 呼び出しなら呼ばれる関数の `ret`、節の呼び出しなら操作の `ret`、関数値の適用なら `tobj` である。`never` の操作の
+/// 節の呼び出しは戻らないので、どの `ret` とも互換とする (docs/spec/core-ir.md の「縮約」)。`saved` は Perceus が
+/// 決めるので、この時点では空である。`mask` も、EP が `evv_mask` の包みに置き換えたので空である。
+fn tail_call(block: &mut Block, ret: Repr, rets: &[Repr], effects: &[EffectInfo]) {
     let Term::Return(Atom::Var(returned)) = block.term else {
         return;
     };
@@ -43,7 +45,7 @@ fn tail_call(block: &mut Block, ret: Repr, rets: &[Repr]) {
         var,
         rhs: Rhs::Call {
             call,
-            mask: _,
+            mask,
             saved: _,
         },
     }) = block.stmts.last()
@@ -53,16 +55,21 @@ fn tail_call(block: &mut Block, ret: Repr, rets: &[Repr]) {
     if *var != returned {
         return;
     }
+    debug_assert!(mask.is_empty(), "a mask reaches contract");
     let compatible = match call {
         Call::Direct(target, _) => rets[target.0 as usize].compatible(ret),
-        Call::Perform {
-            effect: _,
-            op: _,
-            resumable: false,
+        Call::Apply { .. } => Repr::TObj.compatible(ret),
+        Call::Clause {
+            effect,
+            op,
+            callee: _,
             args: _,
-        } => true,
-        Call::Apply(_, _) | Call::Perform { .. } | Call::Resume { .. } | Call::Handle { .. } => {
-            Repr::TObj.compatible(ret)
+        } => match operation(effects, *effect, *op).ret {
+            OpRet::Repr(repr) => repr.compatible(ret),
+            OpRet::Never => true,
+        },
+        Call::Handle { .. } | Call::Perform { .. } | Call::Resume { .. } => {
+            unreachable!("an effect instruction reaches contract")
         }
     };
     if !compatible {
@@ -72,14 +79,14 @@ fn tail_call(block: &mut Block, ret: Repr, rets: &[Repr]) {
         var: _,
         rhs: Rhs::Call {
             call,
-            mask,
+            mask: _,
             saved: _,
         },
     }) = block.stmts.pop()
     else {
         unreachable!("the last statement was checked above");
     };
-    block.term = Term::TailCall { call, mask };
+    block.term = Term::TailCall(call);
 }
 
 /// 使われない純粋な `let` を消し、1つでも消したかを返す。定義は使う位置を支配し、辺は番号の大きい
@@ -138,6 +145,7 @@ pub(crate) fn pure(rhs: &Rhs) -> bool {
             args: _,
             at: _,
         } => ext.row().purity == Purity::Pure,
+        Rhs::Prim(prim, _) => prim.pure(),
         Rhs::Call {
             call: _,
             mask: _,

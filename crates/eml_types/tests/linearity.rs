@@ -684,7 +684,8 @@ fn a_file_kept_across_a_handle_whose_body_performs_a_multi_operation() {
     ");
 }
 
-/// 外側の `multi` の handler が内側の handler フレームを写すと、`return` の節のクロージャも写される (spec の「健全性の根拠」)。
+/// 外側の `multi` の操作の継続を写すと、内側の handle の実行が持つ `return` の節のクロージャも写される
+/// (docs/spec/effects.md の「handler の意味」)。
 #[test]
 fn a_return_clause_capture_under_an_outer_multi_operation() {
     let rest = "returned : Unit -> <Choice, IO> Unit\nreturned () =\n  let f = Fs.open \"a.txt\"\n  handle (if choose () then ask () else 0) with\n    | ask () k -> k 1\n    | return n -> Fs.close f";

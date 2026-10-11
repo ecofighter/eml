@@ -801,14 +801,6 @@ fn equations_allocate_no_tuple_for_their_arguments() {
 }
 
 #[test]
-fn a_masked_call_keeps_its_mask_through_the_passes() {
-    // 末尾呼び出しは `mask` を保つ (docs/spec/core-ir.md)
-    let text = "effect State s where\n  get : Unit -> s\n  put : s -> Unit\n\nrun : (Unit -> <e> a) -> <State Int | e> a\nrun cb =\n  let n = get ()\n  cb ()\n\nmain : Unit -> <IO> Unit\nmain () =\n  let n =\n    handle run (fn () -> 1) from 0 with\n      | get () k st -> k st st\n      | put s k _ -> k () s\n      | return x _ -> x\n  println (show n)\n";
-    let core = core_text(text, Pass::Perceus);
-    assert!(core.contains("tail mask [State] apply cb.0(())"), "{core}");
-}
-
-#[test]
 #[should_panic(expected = "a switch with tag cases has a layout")]
 fn a_tag_switch_without_a_layout_stops_perceus() {
     // `release` に写す `Ctor` が決まらない。黙って飛ばすと、フィールドを所有にする `release` が抜ける
@@ -842,4 +834,26 @@ fn interpolation_saves_only_the_accumulator_across_holes() {
         assert_eq!(Some(saved.trim_end_matches(']')), accumulator, "{shown}");
     }
     assert_eq!(saves, 6, "two calls per hole: {shown}");
+}
+
+#[test]
+fn prims_consume_their_arguments() {
+    // 基本操作も節の呼び出しも引数を消費するので、`e.0` を2回使うと1回目の前に `dup e.0` が入る
+    let text = "\
+effect Counter { get(unit) -> int, put(int) -> unit }
+yields fn f(e.0: obj) -> int {
+  let c.1: tobj = prim ev_clause[Counter.get](e.0)
+  let m.2: int = clause Counter.get c.1(e.0, ())
+  return m.2
+}
+";
+    insta::assert_snapshot!(perceus_text(text), @"
+    effect Counter { get(unit) -> int, put(int) -> unit }
+    yields fn f(e.0: obj) -> int {
+      dup e.0
+      let c.1: tobj = prim ev_clause[Counter.get](e.0)
+      let m.2: int = clause Counter.get c.1(e.0, ())
+      return m.2
+    }
+    ");
 }

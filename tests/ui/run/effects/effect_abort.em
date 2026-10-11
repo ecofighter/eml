@@ -1,4 +1,4 @@
--- `never` operations abort the handled body. The frames of the aborted part are freed with the values they saved,
+-- `never` operations abort the handled body. The aborted part returns to its handler, which frees the values it held,
 -- including a continuation that a clause saved before a `never` operation aborted it.
 effect Fail where
   never fail : String -> a

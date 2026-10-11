@@ -161,54 +161,28 @@ fn pair(f.0: tobj) -> unit {{
     assert_eq!(run_core(&text), ("ok\n".to_string(), Ok(())));
 }
 
+/// `ir/multi_resume.core` は、次のプログラムを Perceus まで通した IR である。`Choose` の節が `k` を2回再開し、
+/// 内側の `Ask` の handle の `prompt$` は、再開のたびに `return` の節を通って戻る。Core IR のテキストにはコメントを
+/// 書けないので、IR の説明はここに書く。
+///
+/// ```text
+/// effect Choose where
+///   multi choose : Unit -> Int
+///
+/// effect Ask where
+///   ask : Unit -> Int
+///
+/// main : Unit -> <IO> Unit
+/// main () =
+///   let r = handle (handle choose () with
+///                     | ask () k -> k 0
+///                     | return x -> x + 100) with
+///             | choose () k -> k 1 + k 2
+///   println (show r)
+/// ```
 #[test]
 fn an_inner_handle_returns_through_each_resumption_of_an_outer_multi_operation() {
-    // `Choose` の節が `k` を2回再開する。区間には内側の `Ask` の handler フレームが入り、写される
-    let text = "\
-effect Choose { choose/1 }
-effect Ask { ask/1 }
-fn main() -> unit {
-  let r.0: tobj = handle Choose((), &outer_body) { choose: &choose } return &outer_ret
-  let t.1: int = unbox r.0
-  decref r.0
-  let s.2: obj = extern \"Prelude.Show Int.show\"(t.1)
-  let u.3: unit = extern Prelude.println(s.2)
-  return u.3
-}
-fn outer_body(u.0: unit) -> tobj {
-  tail handle Ask((), &inner_body) { ask: &ask } return &inner_ret
-}
-fn inner_body(u.0: unit) -> tobj {
-  tail perform Choose.choose(())
-}
-fn inner_ret(x.0: tobj, s.1: unit) -> tobj {
-  let n.2: int = unbox x.0
-  decref x.0
-  let t.3: int = extern Prelude.+(n.2, 100)
-  let b.4: tobj = box t.3
-  return b.4
-}
-fn ask(u.0: unit, k.1: obj, s.2: unit) -> tobj {
-  let z.3: tobj = box 0
-  tail resume k.1(z.3, s.2)
-}
-fn choose(u.0: unit, k.1: obj, s.2: unit) -> tobj {
-  dup k.1
-  let o.3: tobj = box 1
-  let a.4: tobj = resume k.1(o.3, s.2) save [k.1]
-  let w.5: tobj = box 2
-  let b.6: tobj = resume k.1(w.5, ()) save [a.4]
-  let x.7: int = unbox a.4
-  decref a.4
-  let y.8: int = unbox b.6
-  decref b.6
-  let t.9: int = extern Prelude.+(x.7, y.8)
-  let r.10: tobj = box t.9
-  return r.10
-}
-fn outer_ret(x.0: tobj, s.1: unit) -> tobj {
-  return x.0
-}
-";
-    assert_eq!(run_core(text), ("203\n".to_string(), Ok(())));
+    let (stdout, result) = run_core(include_str!("ir/multi_resume.core"));
+    assert_eq!(result, Ok(()));
+    assert_eq!(stdout, "203\n");
 }

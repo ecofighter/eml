@@ -5,6 +5,7 @@ mod common;
 
 mod boxing;
 mod contract;
+mod evidence;
 mod externs;
 mod instances;
 mod perceus;

@@ -12,10 +12,10 @@ use crate::{
     Stmt, TRUE, TUPLE, Term, VarId,
 };
 
-use super::builder::FnBuilder;
 use super::instances::{GeneratedInstance, GeneratedMethod, Target};
 use super::program::{ProgramBuilder, plain_call};
 use super::types::{named, repr, type_def_repr};
+use crate::builder::FnBuilder;
 
 /// 値のコンストラクタ1つ。タプルは、コンストラクタが1つの配置として同じ規則を通る。
 struct Constructor {
@@ -67,7 +67,9 @@ pub(super) fn generate(
     };
     debug_assert_eq!(generator.next, generator.calls.len(), "every call is used");
     // 生成した関数は多くの関数から呼ばれるので、内部の関数にしない
-    generator.builder.finish(name.to_string(), false, ret)
+    generator
+        .builder
+        .finish(name.to_string(), false, false, ret)
 }
 
 fn shape(
@@ -548,7 +550,15 @@ impl Generator<'_> {
                     return self.bind("t", ret, plain_call(Call::Direct(function, args)));
                 }
                 let value = self.bind("t", Repr::TObj, plain_call(Call::Direct(function, args)));
-                self.bind("t", ret, plain_call(Call::Apply(value, rest)))
+                self.bind(
+                    "t",
+                    ret,
+                    plain_call(Call::Apply {
+                        callee: value,
+                        args: rest,
+                        yields: false,
+                    }),
+                )
             }
         }
     }

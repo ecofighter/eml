@@ -19,21 +19,20 @@ eml を実装するエージェントとプログラマのための文書群で�
 | [spec/linearity.md](spec/linearity.md) | 規範 | 線形性と `drop`、線形性の検査パス |
 | [spec/effects.md](spec/effects.md) | 規範 | 操作の多重度、持ち越し規則、handler の意味、extern のエフェクトの `IO`、標準ライブラリの `File` |
 | [spec/exhaustiveness.md](spec/exhaustiveness.md) | 規範 | 網羅性の検査 |
-| [spec/core-ir.md](spec/core-ir.md) | 規範 | Core IR の構成 (基本ブロックの列と構造の規則、値の表現、データの配置、位置の規則)、変換の規則 (単相化、メソッドの解決、導出の生成器)、評価と所有権の意味、パス (box の挿入、縮約、Perceus) とその境界の不変条件、verifier、実行時エラー |
-| [spec/runtime.md](spec/runtime.md) | 規範 | ヒープと参照カウント、オブジェクトのヘッダ、不死の物体、`eml_runtime` の API、handler の連鎖、文字列の連結、`debug_heap`、実行の API |
+| [spec/core-ir.md](spec/core-ir.md) | 規範 | Core IR の構成 (基本ブロックの列と構造の規則、値の表現、データの配置、位置の規則)、変換の規則 (単相化と row のビット、`yields` の印、メソッドの解決、導出の生成器)、評価と所有権の意味、パス (evidence passing、box の挿入、縮約、Perceus) とその境界の不変条件、verifier、実行時エラー |
+| [spec/runtime.md](spec/runtime.md) | 規範 | ヒープと参照カウント、オブジェクトのヘッダ、不死の物体、`eml_runtime` の API、evidence と `evv` の物体、文字列の連結、`debug_heap`、実行の API |
 | [spec/diagnostics.md](spec/diagnostics.md) | 規範 | 診断のデータ構造、診断の順、番号の範囲と各番号の意味、連鎖する診断の抑止 |
 | [spec/examples.md](spec/examples.md) | 説明 | まだ動かない、本番の構文で書いたプログラム例 |
 | **implementation/** | 手引き | どう作るか、今どこまでできているか |
-| [implementation/architecture.md](implementation/architecture.md) | 手引き | プログラム全体の構成と採らなかった形、crate の構成、各段階の規律、エラー回復、各 crate の内部、CLI と lib API、translate の組み立て、継続のフレーム、構文解析と名前解決の回復 |
+| [implementation/architecture.md](implementation/architecture.md) | 手引き | プログラム全体の構成と採らなかった形、crate の構成、各段階の規律、エラー回復、各 crate の内部、CLI と lib API、translate の組み立て、継続と evidence、構文解析と名前解決の回復 |
 | [implementation/testing.md](implementation/testing.md) | 手引き | テスト戦略、テストの変更の運用、テストの置き場所、UI テスト、Core IR のテキストの形、文書の引用の検査 |
 | [implementation/status.md](implementation/status.md) | 手引き | 今の言語の範囲、既知の制限 |
 | [implementation/benchmarks.md](implementation/benchmarks.md) | 手引き | 基準のプログラム、回数のテスト、命令の数の測り方、段ごとの記録 |
 | [implementation/diagnostics.md](implementation/diagnostics.md) | 手引き | 番号ごとの診断が指す場所、help と fix の文言と付ける条件、型エラー・線形性・網羅性の診断の表示 |
 | **future/** | 将来の設計 | まだ実装しない方針 |
-| [future/roadmap.md](future/roadmap.md) | 将来の設計 | 再設計の段 (S7〜S13)、その後の言語の項目と処理系の項目 |
+| [future/roadmap.md](future/roadmap.md) | 将来の設計 | 再設計の段 (S8〜S13)、その後の言語の項目と処理系の項目 |
 | [future/multicore.md](future/multicore.md) | 将来の設計 | マルチコア対応の設計 (共有の印方式の RC、`par`、並行処理、継続の移動) |
 | [future/stdlib.md](future/stdlib.md) | 将来の設計 | 標準ライブラリ spec への申し送り |
-| [future/evidence-passing.md](future/evidence-passing.md) | 将来の設計 | ネイティブ化でのエフェクトの実装 (generalized evidence passing、すぐに再開する節、多重度ごとの実装) |
 | **reports/** | 調査 | 実装の方針を決めるための調査レポート。書いた時点のコミットに基づき、後から更新しない |
 | [reports/eml/](reports/eml/) | 調査 | VM のマルチコア対応 (2026-10-10) |
 
@@ -56,6 +55,6 @@ eml を実装するエージェントとプログラマのための文書群で�
 - `spec/` が実装の規範である。仕様を変えるときは、まず `spec/` の該当文書を直す。
 - `implementation/status.md` は実装の現在地を書く。実装が進んだら更新する。
 - `future/` の内容はまだ実装しない。実装に進むときは、決まった部分を `spec/` に移す。今の実装に入れた予防的な決定 (row の Kind の束の `Never` など) は、すでに `spec/` の該当文書に反映してある。
-- 今後の段と将来の論点の一覧は [future/roadmap.md](future/roadmap.md) を正とする。マルチコア、標準ライブラリ、エフェクトのネイティブな実装の詳細は、それぞれ [future/multicore.md](future/multicore.md)、[future/stdlib.md](future/stdlib.md)、[future/evidence-passing.md](future/evidence-passing.md) にある。
+- 今後の段と将来の論点の一覧は [future/roadmap.md](future/roadmap.md) を正とする。マルチコアと標準ライブラリの詳細は、それぞれ [future/multicore.md](future/multicore.md) と [future/stdlib.md](future/stdlib.md) にある。
 - 構文で迷ったときは Haskell の慣習に寄せる。
 - 文書は日本語で書く。

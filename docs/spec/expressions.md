@@ -223,7 +223,7 @@ with_log path action =
      | return x -> fn f -> ...) (Fs.open path)
   ```
 
-  脱糖しないのは、状態を handler フレームに置くと、`| get () k st -> k st st` のような節がすぐに再開する形のまま残るためである。将来の evidence passing の最適化を、そのまま当てはめられる ([evidence passing の設計](../future/evidence-passing.md))
+  脱糖しないのは、状態を handler の実行ごとの evidence に置くと、`| get () k st -> k st st` のような節がすぐに再開する形のまま残るためである。evidence passing は、そうした節を継続を作らずにその場で実行する ([Core IR とインタプリタ](core-ir.md) の「`perform` と節の3つの形」)
 - `return` の節を省略したら、`| return x _ -> x` とみなす。状態を `_` で捨てるので、状態の型に `Unr` の制約が付く。`Lin` の状態で省くと E3004 になり、`from` の初期値を指す。`Lin` の状態では `return` の節を書く
 - 状態の線形性の規則は [線形性](linearity.md) の「パラメータ付き handler の状態」で定める
 - `k` の引数の個数の誤りは、普通の関数適用の誤り (E2001 など) として型検査が報告する。状態のない handler の `k` は1引数、状態のある handler の `k` は2引数の関数である ([エフェクトと handler](effects.md) の「パラメータ付き handler」)

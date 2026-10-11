@@ -157,7 +157,10 @@ impl FnLowering<'_> {
 
     /// `function` に、呼び出し `id` の矢印 `first` からの引数 `args` を渡す。`ty` は最後の `apply` の結果の型である。
     /// `mask` は1回の Core IR の呼び出し全体に効くので、矢印ごとの `mask` が変わる境目で `apply` を分ける。違う `mask`
-    /// の矢印を1つにまとめると、片方の矢印に余計な `mask` が効くためである (docs/spec/core-ir.md)。
+    /// の矢印を1つにまとめると、片方の矢印に余計な `mask` が効くためである (docs/spec/core-ir.md)。yield しうる矢印の
+    /// 後でも分ける。実行時の `apply` は引数を分けて順に呼ぶので、途中の矢印で yield すると、残りの引数を渡す処理が
+    /// 継続に入らないためである。`apply` の印は、受け持つ矢印のどれかが yield しうるときに立てる
+    /// (docs/spec/core-ir.md の「`apply` の印と分け方」)。
     fn apply(
         &mut self,
         id: ExprId,
@@ -168,10 +171,13 @@ impl FnLowering<'_> {
         ty: TypeId,
     ) -> Atom {
         let last = first + args.len();
-        let masks: Vec<Vec<u32>> = (first..last).map(|arrow| self.mask(id, arrow)).collect();
+        let arrows: Vec<(Vec<u32>, bool)> = (first..last)
+            .map(|arrow| (self.mask(id, arrow), self.arrow_yields(id, arrow)))
+            .collect();
         let mut args = args.into_iter();
         let mut end = first;
-        for run in masks.chunk_by(|a, b| a == b) {
+        for run in arrows.chunk_by(|a, b| a.0 == b.0 && !a.1) {
+            let yields = run.iter().any(|&(_, yields)| yields);
             end += run.len();
             let part = args.by_ref().take(run.len()).collect();
             let part_ty = if end == last {
@@ -179,10 +185,26 @@ impl FnLowering<'_> {
             } else {
                 split_arrows(self.ctx.store, callee_ty, end).1
             };
-            let rhs = masked_call(Call::Apply(function, part), run[0].clone());
+            let rhs = masked_call(
+                Call::Apply {
+                    callee: function,
+                    args: part,
+                    yields,
+                },
+                run[0].0.clone(),
+            );
             function = self.bind_typed("t", part_ty, rhs);
         }
         function
+    }
+
+    /// 呼び出し `call` の矢印 `arrow` の row が yield しうるか。表にない矢印は yield しない。
+    fn arrow_yields(&self, call: ExprId, arrow: usize) -> bool {
+        self.ctx
+            .types
+            .arrow_yields
+            .get(&(call, arrow))
+            .is_some_and(|&row| self.ctx.resolve(row))
     }
 
     /// 型検査が記録した、呼び出し `call` の矢印 `arrow` の `mask` を、エフェクトの番号の昇順で返す (docs/spec/core-ir.md)。
@@ -487,8 +509,10 @@ impl FnLowering<'_> {
                 );
                 let unit = [(None, Repr::Unit)];
                 let handled_ret = repr(self.ctx.store, self.ty(handled.body), self.ctx.hir);
+                // 本体の row は扱うエフェクトを含むので、本体はいつも yield しうる
                 let handled_closure = self.lift(
                     prefix.clone(),
+                    true,
                     body.closure_captures(handled),
                     &unit,
                     handled.body,
@@ -649,7 +673,15 @@ impl FnLowering<'_> {
                 );
                 let captured = body.closure_captures(closure);
                 let ret = repr(self.ctx.store, ret_ty, self.ctx.hir);
-                self.lift(name, captured, &params, *lambda_body, ret)
+                let yields = self.ctx.resolve(
+                    *self
+                        .ctx
+                        .types
+                        .lambda_yields
+                        .get(id)
+                        .expect("every lambda has its row classified"),
+                );
+                self.lift(name, yields, captured, &params, *lambda_body, ret)
             }
         }
     }
@@ -668,7 +700,8 @@ impl FnLowering<'_> {
     }
 
     /// handler の節か `return` の節を持ち上げる。状態のない handler の節は、最後の引数で状態の `()` を受ける
-    /// (docs/spec/core-ir.md)。
+    /// (docs/spec/core-ir.md)。節は handle の外側の row、つまり handle を含む関数の row で動くので、その関数と同じ印に
+    /// する (docs/spec/core-ir.md の「`yields` の印」)。
     fn lift_clause(&mut self, name: String, closure: &Closure, stateless: bool) -> Atom {
         let mut params: Vec<(Option<PatId>, Repr)> = closure
             .params
@@ -685,6 +718,6 @@ impl FnLowering<'_> {
         }
         let captured = self.ctx.body.closure_captures(closure);
         let ret = repr(self.ctx.store, self.ty(closure.body), self.ctx.hir);
-        self.lift(name, captured, &params, closure.body, ret)
+        self.lift(name, self.yields, captured, &params, closure.body, ret)
     }
 }

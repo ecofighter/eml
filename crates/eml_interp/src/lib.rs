@@ -3,16 +3,15 @@ use std::path::PathBuf;
 use eml_core_ir::Program;
 use eml_runtime::OutputSink;
 
-mod effects;
 mod error;
 mod externs;
 mod machine;
+mod prims;
 mod runtime;
 
 pub use error::{Fault, RuntimeError, SourceLocation};
 
 use machine::Machine;
-use runtime::Runtime;
 
 /// フィールドを足しても呼び出し側を壊さないように、`non_exhaustive` にして `RunConfig::default()` から作らせる。
 #[derive(Debug, Clone, Default)]
@@ -41,8 +40,13 @@ impl RunConfig {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct RunStats {
-    /// `perform` が handler を探すときに調べたフレームの数。
-    pub handler_visits: u64,
+    /// `ev_lookup` と `evv_mask` がたどった `evv` の節点の数。今有効な handler の数で決まり、呼び出しの深さには
+    /// よらない。
+    pub evidence_steps: u64,
+    /// `yield_to` と `yield_abort` を実行した回数。すぐに再開する操作は yield しないので数えない。
+    pub yields: u64,
+    /// `yield_cont_set` を実行した回数。yield が handler まで戻る間に、継続に足したフレームの数である。
+    pub yield_frames: u64,
     /// 文字列の物体の中身に書いたバイト数。`String` の容量の再確保と、出力への書き込みは数えない。
     pub string_bytes_copied: u64,
     /// ヒープの物体の参照の数を増やした回数。`dup` と、不死の物体の参照を作る回数を数える。
@@ -69,11 +73,15 @@ pub fn run(
 ) -> Result<RunStats, RuntimeError> {
     let mut machine = Machine::new(program, out, &config.file_root);
     machine.run()?;
-    finish(&machine.rt, config)
+    finish(&machine, config)
 }
 
 /// 正常に終わった実行の後始末。実行時エラーで止まった場合はリークを数えない。途中のフレームが残っているのは当然だから。
-fn finish(rt: &Runtime<'_>, config: &RunConfig) -> Result<RunStats, RuntimeError> {
+/// evidence のリストと yield の状態は、リークの検査の前提なので、`debug_heap` によらず先に確かめる。
+fn finish(machine: &Machine<'_>, config: &RunConfig) -> Result<RunStats, RuntimeError> {
+    let rt = &machine.rt;
+    rt.check_context()
+        .map_err(|fault| machine.error(fault.into()))?;
     if config.debug_heap {
         rt.check_leaks()?;
     }

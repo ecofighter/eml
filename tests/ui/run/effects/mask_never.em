@@ -1,4 +1,4 @@
--- `never` の操作が `Mask` フレームを越えて中断する。区間の `Mask` フレームも解放される (debug_heap)。
+-- `never` の操作が `mask` の包みを越えて中断する。継続に入った `mask$` のクロージャも解放される (debug_heap)。
 effect Fail where
   never fail : String -> a
 

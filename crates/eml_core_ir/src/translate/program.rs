@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 
-use eml_extern::Extern;
+use eml_extern::{Extern, ExternType};
 use eml_hir::{
     ConstructorId, EffectDef, EffectId, EffectKind, FunctionId, ModuleId, OpMultiplicity,
     OperationId, Program as HirProgram, TypeDefId, TypeDefKind, ValueItem,
@@ -10,12 +10,13 @@ use eml_hir::{
 use eml_types::{TypeId, TypeStore, TypedProgram};
 
 use crate::{
-    Atom, Call, CoreFn, Ctor, EffectInfo, FnIdx, Layout, LayoutCtor, LayoutId, Loc, OperationInfo,
-    Repr, Rhs, Stmt, Term, VarInfo,
+    Atom, Call, CoreFn, Ctor, EffectInfo, FnIdx, Layout, LayoutCtor, LayoutId, Loc, OpRet,
+    OperationInfo, Repr, Rhs, Stmt, Term, VarInfo,
 };
 
-use super::builder::FnBuilder;
-use super::types::{repr, split_arrows, var_info};
+use crate::builder::FnBuilder;
+
+use super::types::{named, repr, split_arrows, var_info};
 
 /// 文字列リテラルと表示用のパスの表。同じ文字列には同じ番号を返す。
 #[derive(Default)]
@@ -33,6 +34,31 @@ impl Interner {
         self.values.push(text.to_string());
         self.ids.insert(text.to_string(), id);
         id
+    }
+}
+
+/// 文字列を組む命令は translate だけが使うので、ブロックの組み立ての共有の部分には置かない。
+impl FnBuilder {
+    /// 文字列の定数を新しい変数に束縛する。導出した `Show` と補間が、同じ形で文字列を組むためにここに置く。
+    pub(super) fn string(&mut self, strings: &mut Interner, text: &str) -> Atom {
+        let id = strings.intern(text);
+        self.bind_string(Rhs::ConstString(id))
+    }
+
+    /// extern の `++` (`StrConcat`) で2つの文字列をつなぐ。ユーザーが定義した `++` によらない
+    /// (docs/spec/core-ir.md の「変換の規則」)。
+    pub(super) fn concat(&mut self, left: Atom, right: Atom) -> Atom {
+        self.bind_string(Rhs::Extern {
+            ext: Extern::StrConcat,
+            args: vec![left, right],
+            at: None,
+        })
+    }
+
+    fn bind_string(&mut self, rhs: Rhs) -> Atom {
+        let var = self.var(named("s", ExternType::String.row().repr));
+        self.emit(Stmt::Let { var, rhs });
+        Atom::Var(var)
     }
 }
 
@@ -183,9 +209,12 @@ impl ProgramBuilder {
     }
 
     /// 引数を受け、`rhs` の値を返すだけの内部の関数を作る。包む関数に使う。呼び出しの右辺は縮約が末尾呼び出しにする。
+    /// `yields` は作る関数の印である (docs/spec/core-ir.md の
+    /// 「`yields` の印」)。
     fn simple(
         &mut self,
         name: String,
+        yields: bool,
         params: Vec<VarInfo>,
         rhs: impl FnOnce(Vec<Atom>) -> Rhs,
         result: VarInfo,
@@ -203,7 +232,7 @@ impl ProgramBuilder {
             rhs: rhs(args),
         });
         builder.terminate(Term::Return(Atom::Var(var)));
-        let core = builder.finish(name, true, ret);
+        let core = builder.finish(name, true, yields, ret);
         self.finish(function, core);
         function
     }
@@ -230,8 +259,10 @@ impl ProgramBuilder {
             params.push(param("s"));
         }
         let name = if stateful { "cont$state" } else { "cont$" };
+        // どの文脈からも呼ばれるので、yield しうるとみなす
         let function = self.simple(
             name.to_string(),
+            true,
             params,
             |args| {
                 let mut args = args.into_iter();
@@ -277,6 +308,7 @@ impl ProgramBuilder {
         let name = format!("op${}", core_name(hir, op.module, &operation.name));
         let function = self.simple(
             name,
+            true,
             params,
             |args| Rhs::Call {
                 call: perform_call(hir, op, args),
@@ -310,6 +342,7 @@ impl ProgramBuilder {
         let ctor_id = self.ctor(hir, types, ctor);
         let function = self.simple(
             name,
+            false,
             params,
             |args| Rhs::Con {
                 ctor: ctor_id,
@@ -347,6 +380,7 @@ impl ProgramBuilder {
             .collect();
         self.simple(
             name,
+            false,
             params,
             |args| Rhs::Extern {
                 ext: row,
@@ -358,7 +392,8 @@ impl ProgramBuilder {
     }
 
     /// 入口の関数を `()` で呼ぶ関数を作る。名前は `entry$` に入口の関数の名前を続ける。等式に引数のない
-    /// `main = fn () -> ...` は関数値を返すので、返った値に `()` を適用する (docs/spec/core-ir.md)。
+    /// `main = fn () -> ...` は関数値を返すので、返った値に `()` を適用する (docs/spec/core-ir.md)。`yields` は、入口の
+    /// 関数の宣言の型の最初の矢印が yield しうるかで、作る関数とその `apply` の印にする。
     pub(super) fn entry(
         &mut self,
         hir: &HirProgram,
@@ -366,6 +401,7 @@ impl ProgramBuilder {
         target: FnIdx,
         target_id: FunctionId,
         target_type: TypeId,
+        yields: bool,
     ) -> FnIdx {
         let function = self.reserve(0);
         let name = format!(
@@ -382,7 +418,11 @@ impl ProgramBuilder {
                 var: value,
                 rhs: plain_call(Call::Direct(target, Vec::new())),
             });
-            Call::Apply(Atom::Var(value), unit)
+            Call::Apply {
+                callee: Atom::Var(value),
+                args: unit,
+                yields,
+            }
         } else {
             Call::Direct(target, unit)
         };
@@ -393,7 +433,7 @@ impl ProgramBuilder {
         });
         builder.terminate(Term::Return(Atom::Var(result)));
         // 入口の関数は実行系が外から呼ぶので、内部の関数でない
-        let core = builder.finish(name, false, repr(types, result_type, hir));
+        let core = builder.finish(name, false, yields, repr(types, result_type, hir));
         self.finish(function, core);
         function
     }
@@ -456,8 +496,13 @@ pub(super) fn perform_call(hir: &HirProgram, op: OperationId, args: Vec<Atom>) -
     }
 }
 
-/// エフェクトの表。`effect_index` と同じ順に並べる。
-pub(super) fn effect_table(hir: &HirProgram) -> Vec<EffectInfo> {
+/// エフェクトの表。`effect_index` と同じ順に並べる。操作の Repr は操作のスキームの型から決め、型変数は `repr` が
+/// `tobj` にする (docs/spec/core-ir.md の「エフェクトの位置」)。
+pub(super) fn effect_table(
+    hir: &HirProgram,
+    types: &TypeStore,
+    typed: &TypedProgram,
+) -> Vec<EffectInfo> {
     core_effects(hir)
         .map(|(id, effect)| EffectInfo {
             name: core_name(hir, id.module, &effect.name),
@@ -466,10 +511,18 @@ pub(super) fn effect_table(hir: &HirProgram) -> Vec<EffectInfo> {
                 .iter()
                 .map(|&op| {
                     let operation = &hir[op];
+                    let ty = typed.decls[&ValueItem::Operation(op)].ty;
+                    let (params, result) = split_arrows(types, ty, operation.arity);
+                    let resumable = operation.multiplicity != OpMultiplicity::Never;
                     OperationInfo {
                         name: operation.name.clone(),
-                        arity: operation.arity,
-                        resumable: operation.multiplicity != OpMultiplicity::Never,
+                        params: params.iter().map(|&ty| repr(types, ty, hir)).collect(),
+                        ret: if resumable {
+                            OpRet::Repr(repr(types, result, hir))
+                        } else {
+                            OpRet::Never
+                        },
+                        resumable,
                     }
                 })
                 .collect(),

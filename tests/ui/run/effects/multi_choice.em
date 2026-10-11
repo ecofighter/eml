@@ -1,5 +1,5 @@
--- Every combination of three choices runs. The copied part of the continuation holds a saved string and the
--- handler of another effect that is still attached to it, and each copy releases what it holds.
+-- Every combination of three choices runs. The copied closures of the continuation capture a string and the
+-- evidence of the `Name` handler installed inside the captured part, and each copy releases what it holds.
 effect Choice where
   multi choose : Unit -> Bool
 

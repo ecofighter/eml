@@ -18,8 +18,8 @@ use crate::store::{EffectLabel, TypeKind, TypeStore};
 use crate::table::{Exporter, RigidVar, Row, Table, TyShape};
 use crate::ty::Linearity;
 use crate::{
-    BodyTypes, DeclType, Instantiation, TypedProgram, Uniform, Update, carry, codes, exhaustive,
-    scc, uniform, usage,
+    BodyTypes, DeclType, Instantiation, RowYield, TypedProgram, Uniform, Update, carry, codes,
+    exhaustive, scc, uniform, usage,
 };
 use constraints::{Failure, show_constraint, solve};
 
@@ -442,14 +442,41 @@ pub(crate) fn check_body(
     for (pat, &ty) in typing.pats.iter() {
         body_types.pats.insert(pat, exporter.export(ty));
     }
+    // row は型引数と同じく本体全体の単一化が終わってから分類する。rigid な row 変数がこの定義のものかを見分けられる
+    // のは、表が生きている今だけである (docs/spec/types.md の
+    // 「row の具体化の記録」)
+    let own_rows = own.rigids.row_vars();
+    let classify = |row: &Row| table.row_yield(row, &own_rows);
     // 本体全体の検査が終わってから `exprs` と一緒に書き出す。後の文の単一化で決まった型引数を含めるためで、
     // carry が足すのは Kind の制約だけである
-    for (expr, (decl, args)) in typing.instantiations.iter() {
+    for (expr, (decl, args, rows)) in typing.instantiations.iter() {
         let args = args.iter().map(|&arg| exporter.export(arg)).collect();
-        body_types
-            .instantiations
-            .insert(expr, Instantiation { decl: *decl, args });
+        let rows = rows
+            .iter()
+            .map(|&var| table.row_var_yield(var, &own_rows))
+            .collect();
+        body_types.instantiations.insert(
+            expr,
+            Instantiation {
+                decl: *decl,
+                args,
+                rows,
+            },
+        );
     }
+    body_types.body_yield = typing.ambient.as_ref().map_or(RowYield::Never, classify);
+    body_types.first_arrow_yield = match table.shape(own.ty) {
+        TyShape::Fn { row, .. } => classify(row),
+        _ => RowYield::Never,
+    };
+    for (expr, row) in typing.lambdas.iter() {
+        body_types.lambda_yields.insert(expr, classify(row));
+    }
+    body_types.arrow_yields = typing
+        .arrows
+        .iter()
+        .map(|(&key, row)| (key, classify(row)))
+        .collect();
     body_types.masks = typing.masks;
     body_types.fields = typing.fields;
     for (expr, update) in typing.updates.iter() {
