@@ -916,8 +916,8 @@ b2:
 
 #[test]
 fn a_long_chain_of_borrowed_switches_is_rewritten_in_linear_time() {
-    // 借りたフィールドへの `switch` が深く連なる形。状態は関数全体の表と所有の集合だけなので、時間は深さに比例する
-    // (spec の「時間」)
+    // 借りたフィールドへの `switch` が深く連なる形。行き先に写す状態は、所有と持ち主ごとの生きている借りた変数
+    // だけなので、時間は深さに比例する (spec の「時間」)
     const DEPTH: usize = 20000;
     let mut text = String::from("layout Option { None, Some(tobj) }\nfn f(v.0: tobj) -> tobj {\n");
     // ブロック b(2k+1) は `None` の行き先で `()` を返し、b(2k+2) は次のフィールドへの `switch` を続ける
@@ -941,4 +941,104 @@ fn a_long_chain_of_borrowed_switches_is_rewritten_in_linear_time() {
         elapsed < std::time::Duration::from_secs(10),
         "took {elapsed:?}"
     );
+}
+
+/// 生きている変数が多い形の大きさ。大きいほうはこの2倍にする。debug ビルドでも数秒で終わる大きさにする。
+const SCALING_SMALL: usize = 2000;
+/// 2倍の大きさに対して許す時間の比。線形なら約2、生存集合の大きさの2乗なら約4になる。
+const SCALING_MAX_RATIO: f64 = 3.0;
+
+/// Perceus だけの時間。3回測って最小を使い、ほかの処理の割り込みによるばらつきを除く。
+fn perceus_time(text: &str) -> std::time::Duration {
+    let program = parse(text).unwrap_or_else(|error| panic!("{error}"));
+    (0..3)
+        .map(|_| {
+            let mut program = program.clone();
+            let start = std::time::Instant::now();
+            perceus(&mut program);
+            start.elapsed()
+        })
+        .min()
+        .unwrap()
+}
+
+/// 1つの命令の手間が生存集合の大きさに比例すると、時間は大きさの2乗で伸びる。それを、大きさを2倍にしたときの
+/// 時間の比で見つける (docs/superpowers/specs/2026-10-11-s8b-ownership-design.md の「時間」)。
+fn assert_linear_in_live_variables(generate: fn(usize) -> String) {
+    perceus_text(&generate(SCALING_SMALL));
+    let small = perceus_time(&generate(SCALING_SMALL));
+    let large = perceus_time(&generate(SCALING_SMALL * 2));
+    let ratio = large.as_secs_f64() / small.as_secs_f64();
+    assert!(
+        ratio <= SCALING_MAX_RATIO,
+        "size {SCALING_SMALL} took {small:?} and size {} took {large:?} (ratio {ratio:.1})",
+        SCALING_SMALL * 2
+    );
+}
+
+/// n 個の引数が使う所まで生き、各文が死ぬ累積を消費する。フィールドはない。
+fn many_live_parameters(n: usize) -> String {
+    let params: Vec<String> = (0..n).map(|i| format!("a.{i}: obj")).collect();
+    let mut text = format!("fn f({}) -> obj {{\n", params.join(", "));
+    let mut acc = "a.0".to_string();
+    for i in 1..n {
+        let var = format!("s.{}", n + i);
+        text.push_str(&format!(
+            "  let {var}: obj = extern Prelude.++({acc}, a.{i})\n"
+        ));
+        acc = var;
+    }
+    text.push_str(&format!("  return {acc}\n}}\n"));
+    text
+}
+
+/// 1つの持ち主から同じスロットを n 回借り、1つずつ `unbox` で読む。読むたびに、持ち主に属する変数が残るかを確かめる。
+fn many_reads_of_one_owner(n: usize) -> String {
+    let mut text = String::from("layout Box { Box(tobj) }\nfn f(b.0: obj) -> int {\n");
+    for i in 1..=n {
+        text.push_str(&format!("  unpack b.0 Box #0(t.{i}: tobj)\n"));
+    }
+    for i in 1..=n {
+        text.push_str(&format!("  let m.{}: int = unbox t.{i}\n", n + i));
+    }
+    text.push_str(&format!("  return m.{}\n}}\n", 2 * n));
+    text
+}
+
+/// n 個の持ち主がフィールドを1つずつ貸し、そのフィールドを1つずつ消費する。消費のたびに持ち主を1つ解く。
+fn many_owners_resolved_one_by_one(n: usize) -> String {
+    let params: Vec<String> = (0..n).map(|i| format!("p.{i}: obj")).collect();
+    let mut text = format!(
+        "layout Box {{ Box(obj) }}\nfn f({}) -> obj {{\n",
+        params.join(", ")
+    );
+    for i in 0..n {
+        text.push_str(&format!("  unpack p.{i} Box #0(x.{}: obj)\n", n + i));
+    }
+    let mut acc = format!("x.{n}");
+    for i in 1..n {
+        let var = format!("s.{}", 2 * n + i);
+        text.push_str(&format!(
+            "  let {var}: obj = extern Prelude.++({acc}, x.{})\n",
+            n + i
+        ));
+        acc = var;
+    }
+    text.push_str(&format!("  return {acc}\n}}\n"));
+    text
+}
+
+#[test]
+fn many_live_parameters_are_rewritten_in_linear_time() {
+    assert_linear_in_live_variables(many_live_parameters);
+}
+
+#[test]
+fn many_reads_of_one_owner_are_rewritten_in_linear_time() {
+    assert_linear_in_live_variables(many_reads_of_one_owner);
+}
+
+#[test]
+fn many_owners_resolved_one_by_one_are_rewritten_in_linear_time() {
+    assert_linear_in_live_variables(many_owners_resolved_one_by_one);
 }

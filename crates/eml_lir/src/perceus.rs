@@ -35,35 +35,46 @@ fn insert_rc(function: &mut LirFn, layouts: &[Layout]) {
     };
     // `switch` の行き先には、その `switch` の辺1本だけが入る (R3)。行き先は `switch` のブロックを前からたどり終えた
     // 所有を引き継ぐので、行き先に着くまでここに置く
-    let mut switch_entries: HashMap<BlockId, BTreeSet<VarId>> = HashMap::new();
+    let mut switch_entries: HashMap<BlockId, State> = HashMap::new();
     for index in 0..function.blocks.len() {
         let id = BlockId(index as u32);
         let after_term = live_after_term(function, &function.blocks[index].term, &live_in);
         let block = &mut function.blocks[index];
         // 入口と合流するブロックは、生きている変数と引数を1つずつ所有して始まり、借りた変数を持たない
-        let mut owned = switch_entries.remove(&id).unwrap_or_else(|| {
-            live_in[index]
+        let mut state = switch_entries.remove(&id).unwrap_or_else(|| State {
+            owned: live_in[index]
                 .iter()
                 .chain(&block.params)
                 .copied()
                 .filter(|&var| fields.rc(var))
-                .collect()
+                .collect(),
+            lent: HashMap::new(),
         });
         let deaths = deaths(block, &after_term, &live_in[index]);
         let mut live: BTreeSet<VarId> = live_in[index].iter().copied().collect();
         let mut stmts = Vec::with_capacity(block.stmts.len());
-        fields.enter(&mut owned, &live, &mut stmts);
+        fields.enter(&mut state, &live, &mut stmts);
         for (stmt, (died, born)) in std::mem::take(&mut block.stmts).into_iter().zip(deaths) {
             for var in died {
                 live.remove(&var);
             }
             live.extend(born);
-            fields.stmt(&mut owned, stmt, &live, &mut stmts);
+            fields.stmt(&mut state, stmt, &live, &mut stmts);
         }
-        fields.term(&mut owned, &block.term, &after_term, &mut stmts);
+        fields.term(&mut state, &block.term, &after_term, &mut stmts);
         block.stmts = stmts;
-        switch_entries.extend(fields.switch_entries(&owned, &block.term));
+        switch_entries.extend(fields.switch_entries(&state, &block.term, &live_in));
     }
+}
+
+/// 経路ごとの状態。借用は「持ち主を持ち、所有に入っていない」こと、保持は「所有で、生きていない」ことから決まる。
+#[derive(Clone)]
+struct State {
+    owned: BTreeSet<VarId>,
+    /// 持ち主ごとの、それに属する生きている変数。空になった持ち主は除く。属する変数を生存集合から探すと、命令ごとの
+    /// 手間が生存集合の大きさに比例し、全体で2乗になるので、持ち主から引けるようにする
+    /// (docs/superpowers/specs/2026-10-11-s8b-ownership-design.md の「時間」)。
+    lent: HashMap<VarId, BTreeSet<VarId>>,
 }
 
 /// 各文で死ぬ変数 (使って、その後で生きていない変数) と、定義して後で使う変数。前からたどるときに、これで生存集合を
@@ -107,8 +118,7 @@ struct Parent {
     slot: usize,
 }
 
-/// 関数全体の表。変数は関数の中で1回だけ定義される (R5) ので、束縛の位置で1回書けばよい。経路ごとの状態は所有の
-/// 集合だけで、借用は「持ち主を持ち、所有に入っていない」こと、保持は「所有で、生きていない」ことから決まる。
+/// 関数全体の表。変数は関数の中で1回だけ定義される (R5) ので、束縛の位置で1回書けばよい。
 struct Fields<'a> {
     layouts: &'a [Layout],
     rc: Vec<bool>,
@@ -127,10 +137,6 @@ struct Need<'n> {
 impl Need<'_> {
     fn contains(&self, var: VarId) -> bool {
         self.live.contains(&var) || self.used.contains(&var)
-    }
-
-    fn vars(&self) -> impl Iterator<Item = VarId> + '_ {
-        self.live.iter().chain(self.used).copied()
     }
 }
 
@@ -151,11 +157,6 @@ impl Fields<'_> {
         self.rc(var) && self.owner(var).is_some() && !owned.contains(&var)
     }
 
-    /// `var` が `owner` に属する。つまり、持ち主が `owner` で、今は借りている。
-    fn belongs(&self, owned: &BTreeSet<VarId>, var: VarId, owner: VarId) -> bool {
-        self.owner(var) == Some(owner) && self.borrowed(owned, var)
-    }
-
     fn bind(&mut self, owned: &BTreeSet<VarId>, value: VarId, ctor: Ctor, fields: &[VarId]) {
         let owner = if owned.contains(&value) {
             Some(value)
@@ -168,21 +169,45 @@ impl Fields<'_> {
         }
     }
 
+    /// 束縛したフィールドのうち、生きている RC の対象を、借りた変数として持ち主に属させる。
+    fn lend(&self, state: &mut State, fields: &[VarId], is_live: impl Fn(VarId) -> bool) {
+        for &field in fields {
+            if self.rc(field)
+                && is_live(field)
+                && let Some(owner) = self.owner(field)
+            {
+                state.lent.entry(owner).or_default().insert(field);
+            }
+        }
+    }
+
+    /// 借りた変数が死んだか所有になったので、持ち主に属する変数から除く。
+    fn unlend(&self, state: &mut State, var: VarId) {
+        if let Some(owner) = self.owner(var)
+            && let Some(vars) = state.lent.get_mut(&owner)
+        {
+            vars.remove(&var);
+            if vars.is_empty() {
+                state.lent.remove(&owner);
+            }
+        }
+    }
+
     /// ブロックの入口で、所有していて死んでいる変数 (使わない引数、ほかの行き先だけが使う変数、フィールドを使わない
     /// scrutinee) を番号の順に捨てる。生きている変数が属している変数は、保持して後で手放す。
-    fn enter(&self, owned: &mut BTreeSet<VarId>, live: &BTreeSet<VarId>, out: &mut Vec<Stmt>) {
-        let kept: HashSet<VarId> = live
-            .iter()
-            .filter(|&&var| self.borrowed(owned, var))
-            .filter_map(|&var| self.owner(var))
-            .collect();
-        let dead: Vec<VarId> = owned
+    fn enter(&self, state: &mut State, live: &BTreeSet<VarId>, out: &mut Vec<Stmt>) {
+        state.lent.retain(|_, vars| {
+            vars.retain(|var| live.contains(var));
+            !vars.is_empty()
+        });
+        let dead: Vec<VarId> = state
+            .owned
             .iter()
             .copied()
-            .filter(|var| !live.contains(var) && !kept.contains(var))
+            .filter(|var| !live.contains(var) && !state.lent.contains_key(var))
             .collect();
         for var in dead {
-            owned.remove(&var);
+            state.owned.remove(&var);
             out.push(Stmt::Decref(var));
         }
     }
@@ -191,7 +216,7 @@ impl Fields<'_> {
     /// 変数である。
     fn stmt(
         &mut self,
-        owned: &mut BTreeSet<VarId>,
+        state: &mut State,
         mut stmt: Stmt,
         live: &BTreeSet<VarId>,
         out: &mut Vec<Stmt>,
@@ -210,27 +235,29 @@ impl Fields<'_> {
                 ..
             }
         ) {
-            take.extend(live.iter().copied());
+            take.extend(
+                state
+                    .lent
+                    .values()
+                    .flatten()
+                    .filter(|var| live.contains(var)),
+            );
         } else {
-            let dying: Vec<VarId> = consumed
-                .iter()
-                .copied()
-                .filter(|var| owned.contains(var) && !live.contains(var))
-                .collect();
-            if !dying.is_empty() {
-                take.extend(
-                    live.iter()
-                        .copied()
-                        .filter(|&var| self.owner(var).is_some_and(|o| dying.contains(&o))),
-                );
+            for var in &consumed {
+                if state.owned.contains(var)
+                    && !live.contains(var)
+                    && let Some(vars) = state.lent.get(var)
+                {
+                    take.extend(vars.iter().filter(|var| live.contains(var)));
+                }
             }
         }
-        self.take(owned, take, &need, out);
+        self.take(state, take, &need, out);
         out.extend(dups(consumed.clone(), live).into_iter().map(Stmt::Dup));
-        debug_assert!(consumed.iter().all(|var| owned.contains(var)));
+        debug_assert!(consumed.iter().all(|var| state.owned.contains(var)));
         for var in &consumed {
             if !live.contains(var) {
-                owned.remove(var);
+                state.owned.remove(var);
             }
         }
         // 呼び出しは、その後で生きている変数のうち結果の変数以外を退避する。借りた変数は上で所有にしてある
@@ -241,33 +268,42 @@ impl Fields<'_> {
         {
             *saved = live.iter().copied().filter(|v| v != var).collect();
         }
+        // この文で死んだ変数のうち、借りていたものを持ち主から除く。その持ち主は、属する変数が残らなければ手放せる
+        let died: Vec<VarId> = used
+            .iter()
+            .copied()
+            .filter(|var| !live.contains(var))
+            .collect();
+        let mut candidates = died.clone();
+        for &var in &died {
+            if self.borrowed(&state.owned, var) {
+                self.unlend(state, var);
+                candidates.extend(self.owner(var));
+            }
+        }
         match &stmt {
             Stmt::Let { var, rhs: _ } if self.rc(*var) => {
-                owned.insert(*var);
+                state.owned.insert(*var);
             }
             Stmt::Unpack {
                 value,
                 ctor,
                 fields,
-            } => self.bind(owned, *value, *ctor, fields),
+            } => {
+                self.bind(&state.owned, *value, *ctor, fields);
+                self.lend(state, fields, |var| live.contains(&var));
+            }
             _ => {}
         }
-        // この文で死んだ所有と、この文で最後の属する変数が死んだ持ち主を確かめる。定義して使わない変数も入る
-        let mut candidates: Vec<VarId> = used
-            .iter()
-            .flat_map(|&var| [Some(var), self.owner(var)])
-            .flatten()
-            .chain(stmt.defs().iter().copied())
-            .collect();
+        // 定義して使わない変数も捨てる
+        candidates.extend(stmt.defs().iter().copied());
         out.push(stmt);
         candidates.sort_unstable();
         candidates.dedup();
         for var in candidates {
-            if owned.contains(&var)
-                && !live.contains(&var)
-                && !live.iter().any(|&other| self.belongs(owned, other, var))
+            if state.owned.contains(&var) && !live.contains(&var) && !state.lent.contains_key(&var)
             {
-                owned.remove(&var);
+                state.owned.remove(&var);
                 out.push(Stmt::Decref(var));
             }
         }
@@ -276,13 +312,7 @@ impl Fields<'_> {
     /// `return`、`tail`、`jump` の前に置く命令。実引数と、`jump` の行き先の入口で生きている借りた変数の所有を取り、
     /// 消費の数の `dup` を置き、保持している変数を手放す。合流するブロックは所有だけで始まるので、どの辺でも所有は
     /// 行き先の入口の生存集合と一致する。`switch` は scrutinee を読むだけなので、何も置かない。
-    fn term(
-        &self,
-        owned: &mut BTreeSet<VarId>,
-        term: &Term,
-        after: &BTreeSet<VarId>,
-        out: &mut Vec<Stmt>,
-    ) {
+    fn term(&self, state: &mut State, term: &Term, after: &BTreeSet<VarId>, out: &mut Vec<Stmt>) {
         if matches!(term, Term::Switch { .. }) {
             return;
         }
@@ -290,10 +320,16 @@ impl Fields<'_> {
         let consumed = self.consumed(|f| term.for_each_consumed(f));
         let mut take = consumed.clone();
         if matches!(term, Term::Jump { .. }) {
-            take.extend(after.iter().copied());
+            take.extend(
+                state
+                    .lent
+                    .values()
+                    .flatten()
+                    .filter(|var| after.contains(var)),
+            );
         }
         self.take(
-            owned,
+            state,
             take,
             &Need {
                 live: after,
@@ -302,6 +338,7 @@ impl Fields<'_> {
             out,
         );
         out.extend(dups(consumed.clone(), after).into_iter().map(Stmt::Dup));
+        let owned = &mut state.owned;
         for var in &consumed {
             if !after.contains(var) {
                 owned.remove(var);
@@ -322,12 +359,13 @@ impl Fields<'_> {
         );
     }
 
-    /// `switch` の行き先ごとの入口の所有。case のフィールドは借りた変数として加わる。
+    /// `switch` の行き先ごとの入口の状態。case のフィールドは借りた変数として加わる。
     fn switch_entries(
         &mut self,
-        owned: &BTreeSet<VarId>,
+        state: &State,
         term: &Term,
-    ) -> Vec<(BlockId, BTreeSet<VarId>)> {
+        live_in: &[Vec<VarId>],
+    ) -> Vec<(BlockId, State)> {
         let Term::Switch {
             scrutinee,
             layout,
@@ -339,54 +377,58 @@ impl Fields<'_> {
         };
         let mut entries = Vec::with_capacity(cases.len() + 1);
         for case in cases {
+            let mut entry = state.clone();
             if let CasePattern::Tag(tag) = case.pattern {
                 // タグの `switch` はいつも配置を持つ (docs/spec/lir.md の「データの配置」)。持たない IR を黙って
                 // 飛ばすと `release` が抜けるので、止める
                 let layout = layout.expect("a switch with tag cases has a layout");
                 if let Atom::Var(value) = *scrutinee {
-                    self.bind(owned, value, Ctor { layout, tag }, &case.fields);
+                    self.bind(&state.owned, value, Ctor { layout, tag }, &case.fields);
+                    let live = &live_in[case.target.0 as usize];
+                    self.lend(&mut entry, &case.fields, |var| {
+                        live.binary_search(&var).is_ok()
+                    });
                 }
             }
-            entries.push((case.target, owned.clone()));
+            entries.push((case.target, entry));
         }
-        entries.extend(default.map(|default| (default, owned.clone())));
+        entries.extend(default.map(|default| (default, state.clone())));
         entries
     }
 
     /// 借りた変数の所有を、番号の順に取る。持ち主がこの命令で要るなら `dup` し、要らないなら持ち主を解く。
-    fn take(
-        &self,
-        owned: &mut BTreeSet<VarId>,
-        mut vars: Vec<VarId>,
-        need: &Need,
-        out: &mut Vec<Stmt>,
-    ) {
-        vars.retain(|&var| self.borrowed(owned, var));
+    fn take(&self, state: &mut State, mut vars: Vec<VarId>, need: &Need, out: &mut Vec<Stmt>) {
+        vars.retain(|&var| self.borrowed(&state.owned, var));
         vars.sort_unstable();
         vars.dedup();
         for var in vars {
             // 先に解いた持ち主から受け取ったものは、もう所有している
-            if owned.contains(&var) {
+            if state.owned.contains(&var) {
                 continue;
             }
             let owner = self.owner(var).expect("a borrowed variable has an owner");
-            debug_assert!(owned.contains(&owner), "the owner of a live field is owned");
+            debug_assert!(
+                state.owned.contains(&owner),
+                "the owner of a live field is owned"
+            );
             if need.contains(owner) {
                 out.push(Stmt::Dup(var));
-                owned.insert(var);
+                state.owned.insert(var);
+                self.unlend(state, var);
             } else {
-                self.resolve(owned, owner, need, out);
+                self.resolve(state, owner, need, out);
             }
         }
     }
 
     /// 保持している `owner` を解き、それに属する必要な変数をすべて所有にする
     /// (docs/superpowers/specs/2026-10-11-s8b-ownership-design.md の「持ち主を解く」)。
-    fn resolve(&self, owned: &mut BTreeSet<VarId>, owner: VarId, need: &Need, out: &mut Vec<Stmt>) {
-        let needed: BTreeSet<VarId> = need
-            .vars()
-            .filter(|&var| self.belongs(owned, var, owner))
-            .collect();
+    fn resolve(&self, state: &mut State, owner: VarId, need: &Need, out: &mut Vec<Stmt>) {
+        // 命令の前で生きている、`owner` に属する変数は、どれもこの命令で必要である。命令の前の生存集合は、命令の後の
+        // 生存集合と命令が使う変数の和に含まれるためである
+        let needed = state.lent.remove(&owner).unwrap_or_default();
+        debug_assert!(needed.iter().all(|&var| need.contains(var)));
+        let owned = &mut state.owned;
         // 必要な変数から親をたどり、`owner` までの道にある変数を親ごとに集める。たどり済みの変数で止めるので、
         // 時間は道の変数の数に比例する
         let mut children: HashMap<VarId, Vec<VarId>> = HashMap::new();
