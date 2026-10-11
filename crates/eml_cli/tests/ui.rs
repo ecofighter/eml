@@ -19,7 +19,7 @@ fn glob_lock() -> MutexGuard<'static, ()> {
     GLOB.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
-pub(crate) fn ui_root() -> PathBuf {
+fn ui_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/ui")
         .canonicalize()
@@ -28,7 +28,7 @@ pub(crate) fn ui_root() -> PathBuf {
 
 /// スナップショットの中のパスを安定させるため、入口を `tests/ui` からの相対パスで渡す。モジュールの根は入口の
 /// ディレクトリである。
-pub(crate) fn load(path: &Path, suffix: &str) -> Session {
+fn load(path: &Path, suffix: &str) -> Session {
     let relative = path
         .strip_prefix(ui_root())
         .unwrap()
@@ -61,7 +61,7 @@ fn assert_single_file(session: &Session, suffix: &str) {
 
 /// glob に当たった `.em` の役割。
 #[derive(Debug, PartialEq)]
-pub(crate) enum Entry {
+enum Entry {
     /// テストの入口。スナップショットの名前の接尾辞を持つ。
     Test(String),
     /// ディレクトリのテストの `main.em` から読むモジュール。単独のテストにしない。
@@ -72,7 +72,7 @@ pub(crate) enum Entry {
 /// 接尾辞は最上位のディレクトリからの相対パス (`basics/hello.em`。ディレクトリのテストは `names/import_cycle`) にする。
 /// insta の既定はすべての一致に共通の接頭辞を除くので、分類が1つしかないディレクトリでは名前に分類が入らず、分類が
 /// 増えたときに名前が変わるため。
-pub(crate) fn classify(path: &Path, top: &str) -> Entry {
+fn classify(path: &Path, top: &str) -> Entry {
     let top_dir = ui_root().join(top);
     let relative = path.strip_prefix(&top_dir).unwrap();
     let parts: Vec<String> = relative

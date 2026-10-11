@@ -54,37 +54,13 @@ pub fn lower_until(
     files: &SourceFiles,
     last: Pass,
 ) -> Program {
-    passes(hir, typed, entry, files, last, true)
-}
-
-/// EP を飛ばして最後まで変換する、開発中だけの入口。EP の有無で UI テストの出力が一致することを確かめる差分テストが
-/// 使う (docs/superpowers/specs/2026-10-11-s7-evidence-passing-design.md の「差分テストと段の終わり」)。
-pub fn lower_without_evidence(
-    hir: &HirProgram,
-    typed: &TypedProgram,
-    entry: FunctionId,
-    files: &SourceFiles,
-) -> Program {
-    passes(hir, typed, entry, files, Pass::Perceus, false)
-}
-
-fn passes(
-    hir: &HirProgram,
-    typed: &TypedProgram,
-    entry: FunctionId,
-    files: &SourceFiles,
-    last: Pass,
-    with_evidence: bool,
-) -> Program {
     let mut program = translate::translate(hir, typed, entry, files);
     check(&program, Pass::Translate);
     if last == Pass::Translate {
         return program;
     }
-    if with_evidence {
-        evidence(&mut program);
-        check(&program, Pass::Evidence);
-    }
+    evidence(&mut program);
+    check(&program, Pass::Evidence);
     if last == Pass::Evidence {
         return program;
     }

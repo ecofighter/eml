@@ -1,0 +1,128 @@
+effect Choose { choose(unit) -> int }
+effect Ask { ask(unit) -> int }
+fn main(p.0: unit) -> unit {
+  let w.4: tobj = prim evv_get()
+  dup w.4
+  let ev.5: obj = prim ev_new[Choose]((), w.4)
+  dup ev.5
+  let u.6: unit = prim ev_set_clause[Choose.choose](ev.5, &main$handle1$choose$entry)
+  dup ev.5
+  let w.7: tobj = prim evv_push(w.4, ev.5)
+  let u.8: unit = prim evv_set(w.7)
+  let x.9: tobj = yields apply &main$handle1(()) save [ev.5]
+  let t.10: tobj = call prompt$(ev.5, &main$handle1$return, x.9)
+  let t.1: int = unbox t.10
+  decref t.10
+  let t.2: obj = extern "Prelude.Show Int.show"(t.1)
+  let t.3: unit = extern Prelude.println(t.2)
+  return t.3
+}
+internal yields fn main$handle1(p.0: unit) -> tobj {
+  let w.2: tobj = prim evv_get()
+  dup w.2
+  let ev.3: obj = prim ev_new[Ask]((), w.2)
+  dup ev.3
+  let u.4: unit = prim ev_set_clause[Ask.ask](ev.3, &main$handle0$ask$entry)
+  dup ev.3
+  let w.5: tobj = prim evv_push(w.2, ev.3)
+  let u.6: unit = prim evv_set(w.5)
+  let x.7: tobj = yields apply &main$handle0(()) save [ev.3]
+  tail call prompt$(ev.3, &main$handle0$return, x.7)
+}
+internal yields fn main$handle0(p.0: unit) -> tobj {
+  let ev.2: obj = prim ev_lookup[Choose]()
+  dup ev.2
+  let c.3: tobj = prim ev_clause[Choose.choose](ev.2)
+  let t.1: int = clause Choose.choose c.3(ev.2, ())
+  let t.4: tobj = box t.1
+  return t.4
+}
+internal yields clause Ask.ask fn main$handle0$ask$entry(e.4: obj, p.0: unit) -> int {
+  dup e.4
+  let p.2: unit = prim ev_take_state(e.4)
+  let u.5: unit = prim ev_set_state(e.4, ())
+  return 0
+}
+internal yields fn main$handle0$return(x.3: tobj, p.1: unit) -> tobj {
+  let x.0: int = unbox x.3
+  decref x.3
+  let t.2: int = extern Prelude.+(x.0, 100)
+  let t.4: tobj = box t.2
+  return t.4
+}
+internal fn main$handle1$choose(p.0: unit, k.1: tobj, p.2: unit) -> tobj {
+  let b.6: tobj = box 1
+  dup k.1
+  let t.7: tobj = apply k.1(b.6, ()) save [k.1]
+  let t.3: int = unbox t.7
+  decref t.7
+  let b.8: tobj = box 2
+  let t.9: tobj = apply k.1(b.8, ()) save [t.3]
+  let t.4: int = unbox t.9
+  decref t.9
+  let t.5: int = extern Prelude.+(t.3, t.4)
+  let t.10: tobj = box t.5
+  return t.10
+}
+internal fn main$handle1$return($r.2: tobj, p.1: unit) -> tobj {
+  return $r.2
+}
+fn entry$main() -> unit {
+  tail call main(())
+}
+yields fn id$(x.0: tobj) -> tobj {
+  return x.0
+}
+internal clause Choose.choose fn main$handle1$choose$entry(e.0: obj, p.1: unit) -> int {
+  let c.2: tobj = closure main$handle1$choose(p.1)
+  let u.3: unit = prim yield_to(e.0, c.2, &id$)
+  return 0
+}
+yields fn prompt$(ev.0: obj, ret.1: tobj, x.2: tobj) -> tobj {
+  dup ev.0
+  let w.3: tobj = prim ev_evv(ev.0)
+  let u.4: unit = prim evv_set(w.3)
+  dup ev.0
+  let s.5: int = prim yield_status(ev.0)
+  switch s.5 { 0 -> b1, 1 -> b2, 2 -> b3, _ -> b4 }
+b1:
+  let st.6: tobj = prim ev_take_state(ev.0)
+  tail yields apply ret.1(x.2, st.6)
+b2:
+  decref x.2
+  let k.8: tobj = prim yield_cont_take()
+  let c.9: tobj = prim yield_finish()
+  dup ev.0
+  let st.10: tobj = prim ev_take_state(ev.0)
+  let k.11: tobj = closure resume$(ev.0, ret.1, k.8)
+  tail yields apply c.9(k.11, st.10)
+b3:
+  decref ret.1
+  decref x.2
+  let k.13: tobj = prim yield_cont_take()
+  let u.14: unit = drop k.13
+  let c.15: tobj = prim yield_finish()
+  let st.16: tobj = prim ev_take_state(ev.0)
+  tail yields apply c.15(st.16)
+b4:
+  decref x.2
+  dup ev.0
+  let st.18: tobj = prim ev_take_state(ev.0)
+  let k.19: tobj = prim yield_cont_take()
+  let k.20: tobj = closure rewind$(ev.0, ret.1, st.18, k.19)
+  let u.21: unit = prim yield_cont_set(k.20)
+  let d.22: obj = prim dummy()
+  return d.22
+}
+yields fn resume$(ev.0: obj, ret.1: tobj, k.2: tobj, v.3: tobj, s.4: tobj) -> tobj {
+  let e.5: obj = prim ev_renew(ev.0, s.4)
+  let w.6: tobj = prim evv_get()
+  dup e.5
+  let w.7: tobj = prim evv_push(w.6, e.5)
+  let u.8: unit = prim evv_set(w.7)
+  let x.9: tobj = yields apply k.2(v.3) save [ret.1, e.5]
+  tail call prompt$(e.5, ret.1, x.9)
+}
+yields fn rewind$(ev.0: obj, ret.1: tobj, s.2: tobj, k.3: tobj, v.4: tobj) -> tobj {
+  tail call resume$(ev.0, ret.1, k.3, v.4, s.2)
+}

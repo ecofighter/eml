@@ -172,14 +172,6 @@ impl Session {
         })
     }
 
-    /// EP を飛ばして最後まで変換する、開発中だけの口。差分テスト (`tests/ui_evidence.rs`) が EP の有無で出力を
-    /// 比べるために使う。EP の前の仕組みを消すときに、差分テストと一緒に消す。
-    #[cfg(feature = "core")]
-    #[doc(hidden)]
-    pub fn compile_without_evidence(&self) -> Compiled {
-        self.compile_with(eml_core_ir::lower_without_evidence)
-    }
-
     /// パスの順番は `eml_core_ir` だけが知るので、Core IR を作る関数を受け取る。
     #[cfg(feature = "core")]
     fn compile_with(

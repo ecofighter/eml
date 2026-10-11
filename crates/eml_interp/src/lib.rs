@@ -3,7 +3,6 @@ use std::path::PathBuf;
 use eml_core_ir::Program;
 use eml_runtime::OutputSink;
 
-mod effects;
 mod error;
 mod externs;
 mod machine;

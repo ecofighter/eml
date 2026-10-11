@@ -21,7 +21,7 @@ pub use boxing::boxing;
 pub use contract::contract;
 pub use evidence::evidence;
 pub use perceus::perceus;
-pub use pipeline::{Pass, lower, lower_until, lower_without_evidence};
+pub use pipeline::{Pass, lower, lower_until};
 pub use pretty::{pretty, pretty_with_positions};
 pub use prim::{Prim, PrimRow};
 pub use text::{ParseError, parse};

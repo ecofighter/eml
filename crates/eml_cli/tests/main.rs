@@ -7,4 +7,3 @@ mod api;
 mod citations;
 mod cli;
 mod ui;
-mod ui_evidence;

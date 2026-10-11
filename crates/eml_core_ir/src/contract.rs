@@ -32,8 +32,8 @@ pub fn contract(program: &mut Program) {
 
 /// `let x = <呼び出し>` の後の終端が `return x` で、呼び出しの結果が関数の `ret` と互換なら、その2つを末尾呼び出しに
 /// する。互換は推移的でないので、x を通してつながっていた2つの位置が、直接つないでも互換かを確かめる。結果は、直接の
-/// 呼び出しなら呼ばれる関数の `ret`、節の呼び出しなら操作の `ret`、ほかは `tobj` である。`never` の操作を呼ぶ
-/// `perform` と節の呼び出しは戻らないので、どの `ret` とも互換とする (docs/spec/core-ir.md の「縮約」、
+/// 呼び出しなら呼ばれる関数の `ret`、節の呼び出しなら操作の `ret`、関数値の適用なら `tobj` である。`never` の操作の
+/// 節の呼び出しは戻らないので、どの `ret` とも互換とする (docs/spec/core-ir.md の「縮約」、
 /// docs/superpowers/specs/2026-10-11-s7-evidence-passing-design.md の「縮約」)。`saved` は Perceus が決めるので、
 /// この時点では空である。`mask` は末尾かどうかと独立なので、そのまま運ぶ。
 fn tail_call(block: &mut Block, ret: Repr, rets: &[Repr], effects: &[EffectInfo]) {
@@ -56,15 +56,7 @@ fn tail_call(block: &mut Block, ret: Repr, rets: &[Repr], effects: &[EffectInfo]
     }
     let compatible = match call {
         Call::Direct(target, _) => rets[target.0 as usize].compatible(ret),
-        Call::Perform {
-            effect: _,
-            op: _,
-            resumable: false,
-            args: _,
-        } => true,
-        Call::Apply { .. } | Call::Perform { .. } | Call::Resume { .. } | Call::Handle { .. } => {
-            Repr::TObj.compatible(ret)
-        }
+        Call::Apply { .. } => Repr::TObj.compatible(ret),
         Call::Clause {
             effect,
             op,
@@ -74,6 +66,9 @@ fn tail_call(block: &mut Block, ret: Repr, rets: &[Repr], effects: &[EffectInfo]
             OpRet::Repr(repr) => repr.compatible(ret),
             OpRet::Never => true,
         },
+        Call::Handle { .. } | Call::Perform { .. } | Call::Resume { .. } => {
+            unreachable!("an effect instruction reaches contract")
+        }
     };
     if !compatible {
         return;

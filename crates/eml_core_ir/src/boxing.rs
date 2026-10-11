@@ -1,8 +1,8 @@
 //! translate と縮約の間の box の挿入のパス (docs/spec/core-ir.md の「box の挿入」)。プログラム全体を1回で扱い、関数の
 //! ABI を決めてから、Repr の違う位置の間に `box` と `unbox` を入れる。手順は、分類、T3 (`ret` を上げる)、一様化と
 //! `f$boxed`、変換の順である。型は読まず、呼ばれる関数のシグネチャ、内部の印と `clause` の印、配置の表、操作の表、
-//! 基本操作の表、`perform` の `resumable` だけを読む。入力に `tail`、`box`、`unbox`、RC の命令はない
-//! (`verify_translated` か `verify_evidence` が確かめる)。
+//! 基本操作の表だけを読む。入力は EP の出力で、エフェクトの命令、`tail`、`box`、`unbox`、RC の命令はない
+//! (`verify_evidence` が確かめる)。
 //!
 //! 変数は具体化した型の Repr を持ち、値を受ける位置の Repr と互換でなければ変換する。変換は箱を要するスカラーと
 //! `tobj` の間だけで、`unit` と `obj` は命令なしで `tobj` と行き来する (docs/spec/core-ir.md の「値の表現」)。
@@ -100,12 +100,6 @@ fn raise_tail_returns(functions: &mut [CoreFn], effects: &[EffectInfo]) {
                     OpRet::Repr(repr) => repr,
                     OpRet::Never => continue,
                 },
-                Some(Call::Perform {
-                    effect: _,
-                    op: _,
-                    resumable: false,
-                    args: _,
-                }) => continue,
                 Some(_) => Repr::TObj,
                 None => continue,
             };
@@ -131,7 +125,7 @@ fn raise_tail_returns(functions: &mut [CoreFn], effects: &[EffectInfo]) {
 /// 末尾の位置の呼び出しと、その文の位置。ブロックの終端が `return x` で、同じブロックに `let x = <呼び出し>` が
 /// あり、その後の文がすべて純粋な `let` であるときの、その呼び出しである。後ろの純粋な `let` は `return` が使わない
 /// ので縮約が消し、そこで末尾呼び出しになる (docs/spec/core-ir.md の「変換の規則」)。形で決めるので、`never` の操作の
-/// 呼び出しも含む。EP は、この呼び出しを yield の地点にしない
+/// 節の呼び出しも含む。EP は、この呼び出しを yield の地点にしない
 /// (docs/superpowers/specs/2026-10-11-s7-evidence-passing-design.md の「yield の地点」)。
 pub(crate) fn tail_position_call(block: &Block) -> Option<(usize, &Call)> {
     let Term::Return(Atom::Var(returned)) = block.term else {
@@ -368,8 +362,7 @@ struct Converter<'a> {
     unboxed_from: HashMap<VarId, VarId>,
     /// `let v = box w` の v から w。v を w と同じ Repr のスカラーの位置へ渡すときは、`unbox` を作らずに w を渡す。
     boxed_from: HashMap<VarId, VarId>,
-    /// 変数の番号ごとの、`never` の操作を呼ぶ `perform` か節の呼び出しの束縛かどうか。束縛の使いには制御が届かないので、
-    /// 変換しない。
+    /// 変数の番号ごとの、`never` の操作の節の呼び出しの束縛かどうか。束縛の使いには制御が届かないので、変換しない。
     never: Vec<bool>,
 }
 
@@ -513,7 +506,7 @@ impl Converter<'_> {
                         saved: _,
                     } => {
                         let given = self.call(call, out);
-                        // 結果を受け直さない呼び出しは、`never` の操作を呼ぶ `perform` と節の呼び出しだけである
+                        // 結果を受け直さない呼び出しは、`never` の操作の節の呼び出しだけである
                         self.never[var.0 as usize] = given.is_none();
                         given
                     }
@@ -598,8 +591,9 @@ impl Converter<'_> {
     }
 
     /// 呼び出しのアトムを変換し、結果を受ける Repr を返す。直接の呼び出しは呼ばれる関数の引数と `ret`、節の呼び出しは
-    /// 先頭の evidence が `obj` で、残りの引数と結果が操作の表の Repr である。ほかは一様な `tobj` である。`never` の
-    /// 操作を呼ぶ `perform` と節の呼び出しは戻らないので、結果を受け直さない (`None`)。
+    /// 先頭の evidence が `obj` で、残りの引数と結果が操作の表の Repr である。関数値の適用は一様な `tobj` である。
+    /// `never` の操作の節の呼び出しは戻らないので、結果を受け直さない (`None`)。`handle`、`perform`、`resume` は EP が
+    /// 消すので、ここには届かない (docs/superpowers/specs/2026-10-11-s7-evidence-passing-design.md の「後段のパス」)。
     fn call(&mut self, call: &mut Call, out: &mut Vec<Stmt>) -> Option<Repr> {
         match call {
             Call::Direct(target, args) => {
@@ -610,21 +604,13 @@ impl Converter<'_> {
                 }
                 Some(self.signatures[target].ret)
             }
-            Call::Apply { .. }
-            | Call::Perform { .. }
-            | Call::Resume { .. }
-            | Call::Handle { .. } => {
+            Call::Apply { .. } => {
                 call.for_each_atom_mut(|atom| *atom = self.convert(*atom, Repr::TObj, out));
-                match call {
-                    Call::Perform {
-                        effect: _,
-                        op: _,
-                        resumable: false,
-                        args: _,
-                    } => None,
-                    _ => Some(Repr::TObj),
-                }
+                Some(Repr::TObj)
             }
+            Call::Handle { .. } => unreachable!("a handler reaches the boxing pass"),
+            Call::Perform { .. } => unreachable!("a perform reaches the boxing pass"),
+            Call::Resume { .. } => unreachable!("a resume reaches the boxing pass"),
             Call::Clause {
                 effect,
                 op,

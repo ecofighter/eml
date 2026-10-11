@@ -2,12 +2,12 @@ use std::cmp::Ordering;
 use std::path::Path;
 
 use eml_core_ir::{Atom, Call, CasePattern, FnIdx, VarId};
-use eml_runtime::{
-    Attachment, Closure, Frame, Heap, HeapError, ObjRef, OutputSink, Payload, Value,
-};
+use eml_runtime::{Closure, Frame, Heap, HeapError, ObjRef, OutputSink, Payload, Value};
 
 use crate::RunStats;
 use crate::error::{Fault, RuntimeError};
+
+const EFFECT_INSTRUCTION: Fault = Fault::Internal("an effect instruction reaches the interpreter");
 
 /// 1つの命令を実行した後の状態。
 pub(crate) enum Step {
@@ -100,18 +100,14 @@ impl Env {
     }
 }
 
-/// 機械の状態のうち、IR の形によらない部分。ヒープ、継続、handler の連鎖、入出力を持ち、呼び出し、戻り、エフェクト、
-/// extern を実行する。制御と環境は機械が持つ。
+/// 機械の状態のうち、IR の形によらない部分。ヒープ、継続、evidence のリスト、yield の状態、入出力を持ち、呼び出し、
+/// 戻り、基本操作、extern を実行する。制御と環境は機械が持つ。
 pub(crate) struct Runtime<'p> {
     pub(crate) out: &'p OutputSink,
     pub(crate) file_root: &'p Path,
     pub(crate) heap: Heap,
     /// 継続の先頭のフレーム。最下部には常に `Frame::Root` がある。
     pub(crate) cont: ObjRef,
-    /// handler の連鎖の先頭。`cont` から `next` でたどって最初に会う handler か `Mask` のフレームで、どちらもなければ
-    /// `Root` のフレームである。`perform` はここから `outer` だけをたどる (docs/implementation/architecture.md の
-    /// 「継続のフレーム」)。
-    pub(crate) handlers: ObjRef,
     /// `Program::strings` の項目ごとの不死の物体。`Rhs::ConstString` は写さずに参照を1つ作る (docs/spec/runtime.md)。
     literals: Vec<ObjRef>,
     strings: &'p [String],
@@ -155,7 +151,6 @@ impl<'p> Runtime<'p> {
             file_root,
             heap,
             cont,
-            handlers: cont,
             literals,
             strings,
             arities,
@@ -248,18 +243,12 @@ impl<'p> Runtime<'p> {
     }
 
     /// 呼び出す。末尾でない呼び出しでは、機械が先に戻りのフレームを積んでいる。引数はフレームを積んだ後に読む。
-    /// 環境の読み出しはスロットを書き換えないので、順序は結果に影響しない。
+    /// 環境の読み出しはスロットを書き換えないので、順序は結果に影響しない。エフェクトの命令と `mask` は EP が基本操作に
+    /// 置き換えるので、ここに届けば内部の誤りである
+    /// (docs/superpowers/specs/2026-10-11-s7-evidence-passing-design.md の「CEK とランタイム」)。
     pub(crate) fn call(&mut self, call: &Call, mask: &[u32], env: &Env) -> Result<Transfer, Fault> {
-        // 戻りのフレームの上に積むので、呼び出し先が値を返すと先に外れる。末尾呼び出しでは戻りのフレームの代わりになる。
-        // `resume` も、今の継続を読む前に積む (docs/implementation/architecture.md の「継続のフレーム」)
         if !mask.is_empty() {
-            let frame = Frame::Mask {
-                effects: mask.to_vec(),
-                next: self.cont,
-                outer: self.handlers,
-            };
-            self.cont = self.heap.alloc(Payload::Frame(frame));
-            self.handlers = self.cont;
+            return Err(EFFECT_INSTRUCTION);
         }
         match call {
             Call::Direct(callee, args) => Ok(Transfer::Enter(*callee, env.atoms(args)?)),
@@ -272,45 +261,8 @@ impl<'p> Runtime<'p> {
                 let args = env.atoms(args)?;
                 self.apply_and_continue(callee, args)
             }
-            Call::Handle {
-                effect,
-                init,
-                body,
-                clauses,
-                ret: on_return,
-            } => {
-                let init = env.atom(init)?;
-                let body = env.atom(body)?;
-                let clauses = env.atoms(clauses)?;
-                let on_return = env.atom(on_return)?;
-                let frame = Frame::Handler {
-                    effect: *effect,
-                    clauses,
-                    ret: on_return,
-                    link: Attachment::Attached {
-                        next: self.cont,
-                        state: init,
-                        outer: self.handlers,
-                    },
-                };
-                self.cont = self.heap.alloc(Payload::Frame(frame));
-                self.handlers = self.cont;
-                self.apply_and_continue(body, vec![Value::Unit])
-            }
-            Call::Perform {
-                effect,
-                op,
-                resumable,
-                args,
-            } => {
-                let args = env.atoms(args)?;
-                self.perform(*effect, *op, *resumable, args)
-            }
-            Call::Resume { k, arg, state } => {
-                let k = env.atom(k)?;
-                let arg = env.atom(arg)?;
-                let state = env.atom(state)?;
-                self.resume(k, arg, state)
+            Call::Handle { .. } | Call::Perform { .. } | Call::Resume { .. } => {
+                Err(EFFECT_INSTRUCTION)
             }
             // 節の呼び出しは、インタプリタでは `apply` と同じである
             // (docs/superpowers/specs/2026-10-11-s7-evidence-passing-design.md の「節の呼び出し」)
@@ -390,7 +342,8 @@ impl<'p> Runtime<'p> {
     pub(crate) fn ret(&mut self, mut value: Value) -> Result<Transfer, Fault> {
         loop {
             let top = self.cont;
-            // フレームはつねに一意である。共有されうるのは継続オブジェクトだけで、再開するときに区間を写す (docs/spec/runtime.md)
+            // フレームはつねに一意である。フレームを捕まえる命令はなく、再開する継続はクロージャで作る
+            // (docs/superpowers/specs/2026-10-11-s7-evidence-passing-design.md の「継続の組み立て」)
             let Payload::Frame(frame) = self.heap.take(top).map_err(Fault::Heap)? else {
                 return Err(Fault::Internal("the continuation is not a frame"));
             };
@@ -418,55 +371,12 @@ impl<'p> Runtime<'p> {
                         value,
                     });
                 }
-                // 本体が値を返したので handler を外す。節のクロージャはもう呼ばない
-                Frame::Handler {
-                    effect: _,
-                    clauses,
-                    ret: on_return,
-                    link,
-                } => {
-                    for clause in clauses {
-                        self.decref(clause)?;
-                    }
-                    let Attachment::Attached { next, state, outer } = link else {
-                        return Err(Fault::Internal("a detached handler received a value"));
-                    };
-                    self.pop_chain(top, outer)?;
-                    self.cont = next;
-                    match self.apply(on_return, vec![value, state])? {
-                        Applied::Enter(function, args) => {
-                            return Ok(Transfer::Enter(function, args));
-                        }
-                        Applied::Value(result) => value = result,
-                    }
-                }
-                // 値はそのまま外側へ返す
-                Frame::Mask {
-                    effects: _,
-                    next,
-                    outer,
-                } => {
-                    self.pop_chain(top, outer)?;
-                    self.cont = next;
-                }
                 Frame::Root => {
                     self.decref(value)?;
                     return Ok(Transfer::Finished);
                 }
             }
         }
-    }
-
-    /// 外す handler か `Mask` のフレームを連鎖から外す。外すフレームは連鎖の先頭のはずなので、O(1) で確かめる
-    /// (docs/implementation/architecture.md の「継続のフレーム」)。
-    fn pop_chain(&mut self, frame: ObjRef, outer: ObjRef) -> Result<(), Fault> {
-        if frame != self.handlers {
-            return Err(Fault::Internal(
-                "a popped handler or mask is not the head of the handler chain",
-            ));
-        }
-        self.handlers = outer;
-        Ok(())
     }
 
     pub(crate) fn stats(&self) -> RunStats {

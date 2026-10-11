@@ -162,8 +162,8 @@ fn h(x.0: int) -> int {
 
 #[test]
 fn every_kind_of_call_returned_at_the_end_becomes_a_tail_call() {
-    // 直接の呼び出し、関数値の適用、`perform`、`handle`、`resume` のどれも末尾呼び出しになり、`mask` はそのまま運ぶ
-    // (docs/spec/core-ir.md の「Core IR」)。結果を返さない呼び出しは残す
+    // 直接の呼び出し、関数値の適用、節の呼び出しのどれも末尾呼び出しになる (docs/spec/core-ir.md の「Core IR」)。
+    // 結果を返さない呼び出しは残す
     let text = "\
 effect Ask { ask(tobj) -> tobj }
 fn by_call(x.0: int) -> int {
@@ -171,33 +171,16 @@ fn by_call(x.0: int) -> int {
   return r.1
 }
 fn by_apply(f.0: tobj) -> tobj {
-  let r.1: tobj = mask [Ask] apply f.0(())
+  let r.1: tobj = apply f.0(())
   return r.1
 }
-fn by_perform(s.0: obj) -> tobj {
-  let r.1: tobj = perform Ask.ask(s.0)
-  return r.1
-}
-fn by_handle() -> tobj {
-  let r.0: tobj = handle Ask((), &body) { ask: &clause } return &ret
-  return r.0
-}
-fn by_resume(k.0: tobj) -> tobj {
-  let r.1: tobj = resume k.0((), ())
-  return r.1
+yields fn by_clause(c.0: tobj, e.1: obj, s.2: obj) -> tobj {
+  let r.3: tobj = clause Ask.ask c.0(e.1, s.2)
+  return r.3
 }
 fn not_returned(x.0: int) -> int {
   let r.1: int = call by_call(x.0)
   return x.0
-}
-fn body(u.0: unit) -> tobj {
-  return ()
-}
-fn clause(s.0: obj, k.1: tobj, t.2: unit) -> tobj {
-  return ()
-}
-fn ret(v.0: tobj, t.1: unit) -> tobj {
-  return v.0
 }
 ";
     insta::assert_snapshot!(contract_text(text), @"
@@ -206,29 +189,14 @@ fn ret(v.0: tobj, t.1: unit) -> tobj {
       tail call by_call(x.0)
     }
     fn by_apply(f.0: tobj) -> tobj {
-      tail mask [Ask] apply f.0(())
+      tail apply f.0(())
     }
-    fn by_perform(s.0: obj) -> tobj {
-      tail perform Ask.ask(s.0)
-    }
-    fn by_handle() -> tobj {
-      tail handle Ask((), &body) { ask: &clause } return &ret
-    }
-    fn by_resume(k.0: tobj) -> tobj {
-      tail resume k.0((), ())
+    yields fn by_clause(c.0: tobj, e.1: obj, s.2: obj) -> tobj {
+      tail clause Ask.ask c.0(e.1, s.2)
     }
     fn not_returned(x.0: int) -> int {
       let r.1: int = call by_call(x.0)
       return x.0
-    }
-    fn body(u.0: unit) -> tobj {
-      return ()
-    }
-    fn clause(s.0: obj, k.1: tobj, t.2: unit) -> tobj {
-      return ()
-    }
-    fn ret(v.0: tobj, t.1: unit) -> tobj {
-      return v.0
     }
     ");
 }
@@ -247,24 +215,6 @@ fn g() -> unit {
 }
 ";
     assert_eq!(contract_text(text), text);
-}
-
-#[test]
-fn a_never_perform_returned_at_the_end_becomes_a_tail_call_in_any_function() {
-    // `never` の操作の `perform` は戻らないので、結果はどの `ret` とも互換である
-    let text = "\
-effect Fail { never fail(tobj) -> never }
-fn f(s.0: obj) -> int {
-  let r.1: int = perform never Fail.fail(s.0)
-  return r.1
-}
-";
-    insta::assert_snapshot!(contract_text(text), @"
-    effect Fail { never fail(tobj) -> never }
-    fn f(s.0: obj) -> int {
-      tail perform never Fail.fail(s.0)
-    }
-    ");
 }
 
 #[test]
