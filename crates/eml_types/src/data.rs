@@ -69,7 +69,7 @@ pub(crate) fn data_kinds(program: &Program) -> ItemMap<TypeDef, DataKind> {
             (id, kind)
         })
         .collect();
-    // 再帰する宣言 (`List a`) と相互再帰する宣言があるので、印が増えなくなるまで繰り返す。印は増えるだけなので止まる
+    // 再帰する宣言 (`List a`) と相互再帰する宣言があるので、印と変位が増えなくなるまで繰り返す。どちらも増えるだけで、変位は join でしか変わらないので止まる
     loop {
         let mut changed = false;
         for (id, def) in program.types() {

@@ -713,13 +713,23 @@ pub(super) fn linear_misuse(
             ),
             format!("`{name}` is used here"),
         ),
-        KindReason::OperationType { name, side } => misused(
-            origin,
-            format!(
-                "a linear value is used where the type of `{name}` requires a value that may be used any number of times"
-            ),
-            format!("this clause handles `{name}`"),
-        )
+        KindReason::OperationType { name, side, lambda } => {
+            let diagnostic = misused(
+                origin,
+                format!(
+                    "a linear value is used where the type of `{name}` requires a value that may be used any number of times"
+                ),
+                format!("this clause handles `{name}`"),
+            );
+            match lambda {
+                Some(lambda) => diagnostic.with_secondary(Label::new(
+                    file,
+                    *lambda,
+                    "this lambda captures a linear value",
+                )),
+                None => diagnostic,
+            }
+        }
         .with_note(match side {
             OperationSide::Argument => format!(
                 "the arguments of `{name}` may be used any number of times, so the clause cannot treat them as linear values"

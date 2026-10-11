@@ -100,6 +100,7 @@ impl BodyCheck<'_, '_> {
         let reason = |side| KindReason::OperationType {
             name: operation.name.clone(),
             side,
+            lambda: None,
         };
         self.with_kind_origin(head, reason(OperationSide::Argument), |this| {
             this.table.fix_linearity(&kinds.params, &[]);

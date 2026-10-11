@@ -89,7 +89,7 @@ pub(crate) enum Arrows {
     /// 操作のシグネチャの、引数の個数の分の外側の矢印。引数の矢印は推論し、操作のスキームが `Unr` に固定する
     /// (`declaration_schemes`)。`remaining` はこの矢印を含めて残っている外側の矢印の数である。
     Operation { remaining: usize, outermost: bool },
-    /// 操作の結果の型。値は節から見た位置の向きである。操作を呼ぶ側から節へ渡る位置 (受け取る側と両方向) の矢印は、
+    /// 操作の結果の型。持つ変位は、節から見たこの位置の向きである。操作を呼ぶ側から節へ渡る位置 (受け取る側と両方向) の矢印は、
     /// 節が値をどう使うかを推論できないので、引数と同じく `Unr` に固定する。節が作って渡す位置の矢印は推論し、節の
     /// 中で `Unr` 以下にする (docs/spec/effects.md の「handler の意味」)。
     OperationResult(Variance),
@@ -826,8 +826,9 @@ impl Shape {
 pub(crate) struct ClauseKinds {
     /// 引数の型の Kind 変数。操作のスキームと同じく `Unr` 以下にする。
     pub params: Vec<KindVar>,
-    /// 結果の型で推論する矢印。どれも節が作って渡す位置にあり (`Arrows::OperationResult`)、呼ぶ側は何回でも呼べるので、
-    /// `Unr` 以下にする。
+    /// 結果の型で推論する矢印。節が作って渡す位置の矢印は、呼ぶ側が何回でも呼べるので `Unr` 以下にする。値の中に
+    /// 現れない位置 (使われない型引数の中) の矢印も推論するが、縛っても何も変わらないので一緒に入れる
+    /// (`Arrows::OperationResult`)。
     pub results: Vec<KindVar>,
     /// 引数の型に現れない操作ごとの型変数の `μ`。呼ぶ側が `Lin` の型で具体化できるので、`Lin` 以上にする。
     pub linear: Vec<KindVar>,

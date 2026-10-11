@@ -23,23 +23,24 @@ pub(crate) fn solve_scc(
     schemes: &HashMap<ValueItem, KindScheme>,
 ) -> Solution {
     let merged = merge(members, schemes);
-    let (lin, lin_violated) = solve(&merged.lin);
+    let (lin, lin_violated, lin_causes) = solve_with_causes(&merged.lin);
     let (mult, mult_violated) = solve(&merged.mult);
     let carry_violated = violated_carries(&merged.carries, &lin, &mult);
-    let violated = lin_violated
-        .iter()
-        .map(|&index| &merged.lin.origins[index])
+    let lin_reported = lin_violated.iter().filter_map(|&index| {
+        let origin = reportable(&merged.lin.origins[index])?;
+        Some(with_cause(origin, &merged.lin, index, &lin_causes))
+    });
+    let violated = lin_reported
         .chain(
             mult_violated
                 .iter()
-                .map(|&index| &merged.mult.origins[index]),
+                .filter_map(|&index| reportable(&merged.mult.origins[index])),
         )
         .chain(
             carry_violated
                 .iter()
-                .map(|&index| &merged.carries[index].origin),
+                .filter_map(|&index| reportable(&merged.carries[index].origin)),
         )
-        .filter_map(reportable)
         .collect();
     let lin_graph = Graph::new(
         &merged.lin,
@@ -73,6 +74,32 @@ fn reportable(provenance: &Provenance) -> Option<KindOrigin> {
             Some(unattributed_origin(*span))
         }
     }
+}
+
+/// 操作の型が節に求める制約の違反に、下限を作ったラムダの位置を足す。制約は操作の型から出るので、由来だけでは
+/// 線形な値がどこから来たかを指せないためである (docs/implementation/diagnostics.md の「線形性の診断」)。
+fn with_cause<T: Level>(
+    mut origin: KindOrigin,
+    bounds: &Bounds<T>,
+    violated: usize,
+    causes: &[Option<usize>],
+) -> KindOrigin {
+    let KindReason::OperationType { lambda, .. } = &mut origin.reason else {
+        return origin;
+    };
+    let (Bound::Var(lower), _) = bounds.constraints[violated] else {
+        return origin;
+    };
+    if let Some(cause) = causes[lower.index()]
+        && let Provenance::At(KindOrigin {
+            span,
+            reason: KindReason::CapturedByLambda,
+        }) = &bounds.origins[cause]
+        && span.file == origin.span.file
+    {
+        *lambda = Some(span.range);
+    }
+    origin
 }
 
 /// 由来を付け忘れた違反を、release ビルドで報告するときの由来。
@@ -250,14 +277,22 @@ fn shift<T>(bound: Bound<T>, offset: usize) -> Bound<T> {
 /// 最小解と、満たせなかった制約 (定数の上限を超えたもの) の番号。上がった変数をワークリストに入れ、上向きの辺に沿って
 /// 伝える。束の高さが小さいので、各変数が上がる回数は高々その高さで、時間は制約の数に比例する。
 pub(crate) fn solve<T: Level>(bounds: &Bounds<T>) -> (Vec<T>, Vec<usize>) {
+    let (values, violated, _) = solve_with_causes(bounds);
+    (values, violated)
+}
+
+/// `solve` に加えて、変数ごとに、その値を作った定数の下限の制約の番号を返す。
+fn solve_with_causes<T: Level>(bounds: &Bounds<T>) -> (Vec<T>, Vec<usize>, Vec<Option<usize>>) {
     let mut values = vec![T::BOTTOM; bounds.vars];
+    let mut causes = vec![None; bounds.vars];
     let mut upward: Vec<Vec<usize>> = vec![Vec::new(); bounds.vars];
     let mut work = Vec::new();
-    for &(lower, upper) in &bounds.constraints {
+    for (index, &(lower, upper)) in bounds.constraints.iter().enumerate() {
         match (lower, upper) {
             (Bound::Var(a), Bound::Var(b)) => upward[a.index()].push(b.index()),
             (Bound::Const(c), Bound::Var(b)) if c > values[b.index()] => {
                 values[b.index()] = c;
+                causes[b.index()] = Some(index);
                 work.push(b.index());
             }
             _ => {}
@@ -267,6 +302,7 @@ pub(crate) fn solve<T: Level>(bounds: &Bounds<T>) -> (Vec<T>, Vec<usize>) {
         for &w in &upward[v] {
             if values[v] > values[w] {
                 values[w] = values[v];
+                causes[w] = causes[v];
                 work.push(w);
             }
         }
@@ -282,7 +318,7 @@ pub(crate) fn solve<T: Level>(bounds: &Bounds<T>) -> (Vec<T>, Vec<usize>) {
         .filter(|(_, (lower, upper))| matches!(upper, Bound::Const(c) if value(*lower) > *c))
         .map(|(index, _)| index)
         .collect();
-    (values, violated)
+    (values, violated, causes)
 }
 
 /// 破れた持ち越しの制約の番号。持ち越しの制約はどちらの束の最小解も動かさないので、解いた後に確かめればよい。

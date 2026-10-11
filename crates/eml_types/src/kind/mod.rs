@@ -132,8 +132,13 @@ pub(crate) enum KindReason {
     /// トップレベルの関数、組み込み、操作のスキームから複写した制約。名前は参照した値の名前である。
     Passed(String),
     /// 操作の型が、その操作の節に求める制約。名前は操作の名前で、由来の範囲は節の頭 (操作の名前から最後の引数まで)
-    /// である (docs/spec/effects.md の「handler の意味」)。
-    OperationType { name: String, side: OperationSide },
+    /// である (docs/spec/effects.md の「handler の意味」)。`lambda` は、違反したときに線形の下限を作ったラムダの
+    /// 範囲で、段2が解いた後に入れる。
+    OperationType {
+        name: String,
+        side: OperationSide,
+        lambda: Option<TextRange>,
+    },
     /// 型の単一化で出た制約。
     Unified,
     /// 呼び出しをまたいで持っている値。由来の範囲は呼び出しの範囲である (docs/spec/effects.md の「継続の多重度と持ち越し規則」)。
@@ -243,8 +248,15 @@ impl KindReason {
             KindReason::DiscardedField { name, site } => {
                 (11, vec![text(name), number(site.order_key())])
             }
-            KindReason::OperationType { name, side } => {
-                (12, vec![text(name), number(*side as u32)])
+            KindReason::OperationType { name, side, lambda } => {
+                let lambda = match lambda {
+                    None => vec![number(0)],
+                    Some(range) => [vec![number(1)], span(*range)].concat(),
+                };
+                (
+                    12,
+                    [vec![text(name), number(*side as u32)], lambda].concat(),
+                )
             }
         }
     }
