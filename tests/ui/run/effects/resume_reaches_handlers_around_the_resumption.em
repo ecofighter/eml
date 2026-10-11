@@ -1,6 +1,7 @@
 -- A continuation captured under one `Log` handler is resumed after that handle returns, under another `Log` handler.
--- The resumed computation reinstalls the captured `Ask` handler on top and then performs `log`, which goes to the
--- `Log` handler around the resumption: the reinstalled handler sits on the handlers active when it is resumed.
+-- The `ask` clause logs too. Its first run logs to the handler around the capture. After the resumption it runs as the
+-- clause of the reinstalled `Ask` handler, outside that handler, so its `log` goes to the handler around the
+-- resumption, as does the `log` of the resumed computation itself.
 effect Ask where
   multi ask : Unit -> Int
 
@@ -19,7 +20,9 @@ between () =
 capture : Unit -> <Log> Saved
 capture () =
   handle Value (ask () + between ()) with
-    | ask () k -> Saved k
+    | ask () k ->
+      log "ask"
+      Saved k
 
 describe : Saved -> String
 describe s =

@@ -315,14 +315,18 @@ fn traversing_a_shared_list_dups_each_cell_at_most_once() {
     assert!(increments <= n + 2, "rc_increments = {increments}");
 }
 
-/// n = 1000 と n = 2000 で `program` を実行し、`peak_objects` の組を返す。`program` は n からソースと期待する出力を
-/// 作る。末尾呼び出しを失った形では、反復の数に比例してフレームが残るので、n を2倍にすると数も増える。
+/// `peaks` が実行する2つの n。上限を n の差で書くテストは `PEAK_LONG - PEAK_SHORT` を使う。
+const PEAK_SHORT: u64 = 1000;
+const PEAK_LONG: u64 = 2 * PEAK_SHORT;
+
+/// n = `PEAK_SHORT` と n = `PEAK_LONG` で `program` を実行し、`peak_objects` の組を返す。`program` は n からソースと
+/// 期待する出力を作る。末尾呼び出しを失った形では、反復の数に比例してフレームが残るので、n を2倍にすると数も増える。
 fn peaks(program: impl Fn(u64) -> (String, String)) -> (u64, u64) {
     let peak = |n| {
         let (source, expected) = program(n);
         stats(&source, &expected).peak_objects
     };
-    (peak(1000), peak(2000))
+    (peak(PEAK_SHORT), peak(PEAK_LONG))
 }
 
 #[test]
@@ -437,8 +441,8 @@ main () =
 }
 
 /// 深さ n の非末尾の再帰の各段で、すぐに再開する操作を行う。節はその場で走るので、残る物体は各段の戻りのフレーム
-/// だけである。n を 1000 から 2000 にすると、数は 1000 と定数の余裕しか増えない。節が yield すると、戻る途中の各段が
-/// 継続のクロージャを足すので、1段あたりの物体が増えてこの上限を超える (`k 1 + 0` で再開する節では 3000 増える)。
+/// だけである。n を増やすと、数は n の差と定数の余裕しか増えない。節が yield すると、戻る途中の各段が継続の
+/// クロージャを足すので、1段あたりの物体が増えてこの上限を超える (`k 1 + 0` で再開する節では n の差の3倍増える)。
 #[test]
 fn immediate_operations_under_deep_recursion_keep_the_peak_linear() {
     let (short, long) = peaks(|n| {
@@ -455,7 +459,10 @@ main () =
             format!("{n}\n"),
         )
     });
-    assert!(long <= short + 1000 + 16, "peak_objects: {short} -> {long}");
+    assert!(
+        long <= short + (PEAK_LONG - PEAK_SHORT) + 16,
+        "peak_objects: {short} -> {long}"
+    );
 }
 
 /// yield しうる関数の値を通るループ。関数の値への末尾の `apply` は yield の地点にならず、末尾呼び出しのまま残る
@@ -523,7 +530,10 @@ main () = println (show (count_down {n} (fn m -> m)))
             format!("{}\n", 2 * n),
         )
     });
-    assert!(long <= short + 1000, "peak_objects: {short} -> {long}");
+    assert!(
+        long <= short + (PEAK_LONG - PEAK_SHORT),
+        "peak_objects: {short} -> {long}"
+    );
 }
 
 /// 型変数のフィールドは `tobj` なので、`Int` を入れると `box`、取り出して `Int` として使うと `unbox` を通る

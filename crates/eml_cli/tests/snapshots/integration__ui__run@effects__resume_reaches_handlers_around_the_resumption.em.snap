@@ -4,7 +4,9 @@ expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{stderr}\")"
 input_file: tests/ui/run/effects/resume_reaches_handlers_around_the_resumption.em
 ---
 --- stdout ---
+outer: ask
 inner: between
+inner: ask
 saved
 3
 --- stderr ---
