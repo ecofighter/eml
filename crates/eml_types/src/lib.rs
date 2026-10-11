@@ -29,8 +29,7 @@ use crate::shape::Shape;
 
 pub use dump::dump;
 pub use resolve::{Resolution, resolve};
-pub use store::{EffectLabel, RowTail, Substitution, TypeId, TypeKind, TypeStore};
-pub use ty::{Linearity, Multiplicity};
+pub use store::{EffectLabel, Lin, RowTail, Substitution, TypeId, TypeKind, TypeStore};
 pub use uniform::{InstanceNode, Uniform};
 
 pub mod codes {

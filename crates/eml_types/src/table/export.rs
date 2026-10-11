@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use super::*;
 
 /// 推論の表の型を型の表に書き出す。後の段階と診断の文言に渡す形で、解けていない型変数と row 変数は `_` として残す。
-/// 矢印の線形性は持たないので、Kind の束を解かずにいつでも使える。
+/// 矢印の線形性は今はすべて `Unr` で書き出す (docs/superpowers/specs/2026-10-12-s8c-kind-export-design.md の「書き出す型の形」)。
 ///
 /// 推論の表は部分を共有するので、書き出した結果を `Ty` ごとに覚え、表の各節点を1回だけ書き出す。覚えるのは渡された
 /// `Ty` とその代表の両方である。表を借りている間は表を変更できないので、覚えた結果が古くなることはない
@@ -72,16 +72,17 @@ impl<'t, 'c, 's> Exporter<'t, 'c, 's> {
                 let ret = self.export(*ret);
                 TypeKind::Fn {
                     param,
+                    lin: Lin::Unr,
                     effects,
                     tail,
                     ret,
                 }
             }
-            TyShape::Var(_) => return self.types.flexible(),
+            TyShape::Var(_) => return self.types.flexible(Lin::Unr),
             TyShape::Rigid(rigid) => {
                 let info = &table.rigids[rigid.0 as usize];
                 if info.per_operation {
-                    TypeKind::OpVar(info.name.clone())
+                    TypeKind::OpVar(info.name.clone(), Lin::Unr)
                 } else {
                     TypeKind::Rigid(info.name.clone())
                 }

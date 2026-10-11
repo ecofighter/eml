@@ -10,8 +10,8 @@ use eml_hir::{
     Program as HirProgram, TypeDefKind, ValueItem,
 };
 use eml_types::{
-    BodyTypes, InstanceNode, Instantiation, Resolution, RowYield, Substitution, TypeId, TypeKind,
-    TypeStore, TypedProgram, Update,
+    BodyTypes, InstanceNode, Instantiation, Lin, Resolution, RowYield, Substitution, TypeId,
+    TypeKind, TypeStore, TypedProgram, Update,
 };
 use la_arena::ArenaMap;
 
@@ -201,7 +201,7 @@ impl Collector<'_> {
             .enumerate()
             .map(|(position, &arg)| {
                 if self.typed.uniform.function(function, position) {
-                    self.store.flexible()
+                    self.store.flexible(Lin::Unr)
                 } else {
                     arg
                 }
@@ -219,7 +219,7 @@ impl Collector<'_> {
             .enumerate()
             .map(|(position, &arg)| {
                 if self.typed.uniform.instance(node, position) {
-                    self.store.flexible()
+                    self.store.flexible(Lin::Unr)
                 } else {
                     arg
                 }
@@ -257,7 +257,7 @@ impl Collector<'_> {
         // 解決に `Flexible` が要る参照は、型検査が E2006、E2009、E2012 で止めている
         // (docs/spec/core-ir.md の「メソッドの解決」)。`resolve` は `Flexible` を `Missing` と答えるので、先に分けて止める
         assert!(
-            !matches!(self.store.kind(args[0]), TypeKind::Flexible),
+            !matches!(self.store.kind(args[0]), TypeKind::Flexible(_)),
             "internal error: the reference to `{}` resolves a constraint at a uniform (`Flexible`) type, which the type checker rejects",
             hir[method].name
         );
@@ -331,7 +331,10 @@ impl Collector<'_> {
             bits.len(),
             "an instance key must supply one row bit per row variable of the signature"
         );
-        let mut subst = Substitution::new(names.iter().cloned().zip(found.args.iter().copied()));
+        let mut subst = Substitution::new(
+            names.iter().cloned().zip(found.args.iter().copied()),
+            Vec::new(),
+        );
         let decl = typed.decls[&ValueItem::Function(function)].ty;
         let signature = self.store.substitute(decl, &mut subst);
         let mut targets = ArenaMap::default();
@@ -528,7 +531,7 @@ impl Collector<'_> {
             .type_vars
             .values()
             .map(|var| var.name.clone());
-        let mut subst = Substitution::new(names.zip(generated.args.iter().copied()));
+        let mut subst = Substitution::new(names.zip(generated.args.iter().copied()), Vec::new());
         constructors
             .iter()
             .map(|&constructor| {
@@ -560,7 +563,7 @@ pub(super) fn collect(hir: &HirProgram, typed: &TypedProgram, entry: FunctionId)
         queue: VecDeque::new(),
     };
     // 入口は呼び出し側が選ぶので、型変数を持つ関数なら、どの型でも動く一様な instance にする
-    let entry_args = vec![collector.store.flexible(); type_vars(hir, entry).len()];
+    let entry_args = vec![collector.store.flexible(Lin::Unr); type_vars(hir, entry).len()];
     // row のビットも呼び出し側が決めるので、安全側に倒してすべて立てる
     // (docs/spec/core-ir.md の「row のビットと instance の鍵」)
     let entry_bits = vec![true; row_vars(hir, entry).len()];

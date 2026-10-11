@@ -3,7 +3,7 @@
 
 use eml_hir::{ExprKind, Res, ValueItem};
 use eml_test_support::{Checked, check, check_files, short_text};
-use eml_types::TypeKind;
+use eml_types::{Lin, TypeKind};
 
 /// モジュール `module` の関数 `name` の本体の記録を、式の位置の順に1行ずつ `<行:列> <宣言の名前> [<型引数>]` の形で
 /// 出す。位置はその関数のモジュールのファイルで数える。誤りのないプログラムだけを受け取る。
@@ -144,7 +144,7 @@ fn a_clause_variable_is_a_different_type_from_the_function_variable_of_the_same_
         args,
         [
             TypeKind::Rigid("a".to_string()),
-            TypeKind::OpVar("a".to_string())
+            TypeKind::OpVar("a".to_string(), Lin::Unr)
         ]
     );
 }

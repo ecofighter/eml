@@ -5,14 +5,14 @@ use eml_hir::DisplayNames;
 use crate::store::{TypeId, TypeKind, TypeStore};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum Linearity {
+pub(crate) enum Linearity {
     Unr,
     Lin,
 }
 
 /// row に含まれてよい操作の上限。`Never` はマルチコア対応のために最初から持つ (docs/spec/types.md)。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum Multiplicity {
+pub(crate) enum Multiplicity {
     Never,
     Once,
     Multi,

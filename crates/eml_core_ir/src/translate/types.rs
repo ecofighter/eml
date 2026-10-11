@@ -11,9 +11,10 @@ use eml_lir::{Repr, VarInfo, data_repr};
 pub fn repr(types: &TypeStore, ty: TypeId, hir: &HirProgram) -> Repr {
     match types.kind(ty) {
         TypeKind::Con { id, args: _ } => type_def_repr(*id, hir),
-        TypeKind::Fn { .. } | TypeKind::Rigid(_) | TypeKind::OpVar(_) | TypeKind::Flexible => {
-            Repr::TObj
-        }
+        TypeKind::Fn { .. }
+        | TypeKind::Rigid(_)
+        | TypeKind::OpVar(_, _)
+        | TypeKind::Flexible(_) => Repr::TObj,
         // 要素のないタプルは `Unit` で、値は `()` である。要素のあるタプルはヒープの物体にする
         TypeKind::Tuple(elements) if elements.is_empty() => Repr::Unit,
         TypeKind::Tuple(_) => Repr::Obj,

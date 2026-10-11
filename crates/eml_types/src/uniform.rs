@@ -740,7 +740,7 @@ fn vars_in(
             }
             merge(vars_in(types, *ret, names, memo));
         }
-        TypeKind::OpVar(_) | TypeKind::Flexible | TypeKind::Error => {}
+        TypeKind::OpVar(_, _) | TypeKind::Flexible(_) | TypeKind::Error => {}
     }
     memo.insert(ty, found.clone());
     found

@@ -2,7 +2,7 @@ use crate::context::Context;
 use crate::data::DataKind;
 use crate::kind::problem::{Bounds, Instance, KindProblem, OwnVars};
 use crate::kind::{Bound, Carry, KindVar, Provenance};
-use crate::store::{EffectLabel, RowTail, TypeId, TypeKind, TypeStore};
+use crate::store::{EffectLabel, Lin, RowTail, TypeId, TypeKind, TypeStore};
 use crate::ty::{Linearity, Multiplicity};
 use eml_extern::ExternType;
 use eml_hir::{EffectId, ItemMap, LangItems, OperationId, TypeDef, TypeDefId};

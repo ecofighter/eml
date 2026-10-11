@@ -84,7 +84,7 @@ fn row_type(checked: &Checked, types: &mut TypeStore, e: Extern) -> TypeId {
     let head = head_type(checked, instance.head);
     let var = program[instance.class].var.clone();
     let declared = checked.typed.decls[&ValueItem::Method(method)].ty;
-    types.substitute(declared, &mut Substitution::new([(var, head)]))
+    types.substitute(declared, &mut Substitution::partial([(var, head)]))
 }
 
 /// 型引数のない型 `head` を指す、型の表の型。テストは型の表に型を作れないので、宣言の型の中から探す。
@@ -97,7 +97,10 @@ fn head_type(checked: &Checked, head: TypeDefId) -> TypeId {
             TypeKind::Con { id: _, args } => pending.extend(args),
             TypeKind::Fn { param, ret, .. } => pending.extend([*param, *ret]),
             TypeKind::Tuple(elements) => pending.extend(elements),
-            TypeKind::Rigid(_) | TypeKind::OpVar(_) | TypeKind::Flexible | TypeKind::Error => {}
+            TypeKind::Rigid(_)
+            | TypeKind::OpVar(_, _)
+            | TypeKind::Flexible(_)
+            | TypeKind::Error => {}
         }
     }
     panic!(
@@ -112,11 +115,12 @@ fn has_type_var(types: &TypeStore, ty: TypeId) -> bool {
         TypeKind::Tuple(elements) => elements.iter().any(|&ty| has_type_var(types, ty)),
         TypeKind::Fn {
             param,
+            lin: _,
             effects: _,
             tail: _,
             ret,
         } => has_type_var(types, *param) || has_type_var(types, *ret),
-        TypeKind::Rigid(_) | TypeKind::OpVar(_) | TypeKind::Flexible => true,
+        TypeKind::Rigid(_) | TypeKind::OpVar(_, _) | TypeKind::Flexible(_) => true,
         TypeKind::Error => false,
     }
 }

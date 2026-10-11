@@ -14,7 +14,7 @@ use crate::kind::problem::{KindProblem, KindScheme, OwnVars};
 use crate::kind::solve::solve_scc;
 use crate::kind::{Bound, KindOrigin, KindReason, KindVar, Provenance, Span};
 use crate::shape::{Arrows, Own, Shape, constructor_shape, operation_shape, signature_shape};
-use crate::store::{EffectLabel, TypeKind, TypeStore};
+use crate::store::{EffectLabel, Lin, TypeKind, TypeStore};
 use crate::table::{Exporter, RigidVar, Row, Table, TyShape};
 use crate::ty::Linearity;
 use crate::{
@@ -826,6 +826,7 @@ fn check_main(
     let found = shape.export(types);
     let expected = types.intern(TypeKind::Fn {
         param: types.unit(),
+        lin: Lin::Unr,
         effects: vec![EffectLabel {
             id: program.io(),
             args: Vec::new(),

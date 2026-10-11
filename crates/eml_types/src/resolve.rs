@@ -35,7 +35,7 @@ pub fn resolve(program: &Program, types: &TypeStore, class: ClassId, ty: TypeId)
             Resolution::Tuple(elements.clone())
         }
         TypeKind::Tuple(_) => Resolution::Missing,
-        TypeKind::OpVar(_) | TypeKind::Flexible | TypeKind::Fn { .. } | TypeKind::Error => {
+        TypeKind::OpVar(_, _) | TypeKind::Flexible(_) | TypeKind::Fn { .. } | TypeKind::Error => {
             Resolution::Missing
         }
     }

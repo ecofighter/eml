@@ -1,11 +1,48 @@
 //! 型検査が後の段階に渡す型の表。型は部分を共有するので、木ではなく同じ形を1つにまとめた表に置き、`TypeId` で指す
 //! (docs/implementation/architecture.md の「`eml_types` の内部」)。
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
+use std::sync::Arc;
 
 use eml_extern::ExternType;
-use eml_hir::{DisplayNames, EffectId, Program, TypeDefId};
+use eml_hir::{DisplayNames, EffectId, ItemMap, Program, TypeDef, TypeDefId};
+
+use crate::data::{DataKind, data_kinds};
+
+/// 書き出した型の矢印の線形性と、決まらなかった型変数の Kind
+/// (docs/superpowers/specs/2026-10-12-s8c-kind-export-design.md の「書き出す型の形」)。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Lin {
+    Unr,
+    Lin,
+    /// 呼び出し側が決める。instance の代入の後の型、推論の途中で書き出す型、結果の型だけに現れる `OpVar` (と、
+    /// 代入でそれから作る `Flexible`)、一様な位置、entry、導出とタプルの生成器の鍵の `Flexible` に現れる。
+    Poly,
+    /// 宣言の Kind 変数。番号は宣言の `Shape` の番号と同じである。
+    Var(u32),
+}
+
+impl Lin {
+    /// 結び。`Lin` > `Poly` > `Unr` の順で、`Var` は評価した後の値だけを結ぶので受けない。宣言の順と結びの順が違うので、
+    /// `Ord` は持たせない。
+    pub fn join(self, other: Lin) -> Lin {
+        match (self, other) {
+            (Lin::Var(_), _) | (_, Lin::Var(_)) => {
+                unreachable!("an unevaluated Kind variable is joined")
+            }
+            (Lin::Lin, _) | (_, Lin::Lin) => Lin::Lin,
+            (Lin::Poly, _) | (_, Lin::Poly) => Lin::Poly,
+            (Lin::Unr, Lin::Unr) => Lin::Unr,
+        }
+    }
+}
+
+/// 2つの線形性が食い違わないか。`Unr` と `Lin` の組だけが食い違う。`Var` は宣言の型と比べる操作の検査のために、
+/// `Poly` と同じに扱う。
+fn meets(a: Lin, b: Lin) -> bool {
+    !matches!((a, b), (Lin::Unr, Lin::Lin) | (Lin::Lin, Lin::Unr))
+}
 
 /// 型の表の中の型。同じ表の中では、ID が同じことと型が同じことが一致する。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -49,10 +86,11 @@ pub enum TypeKind {
     },
     /// タプル。`Unit` は要素のないタプルである (docs/spec/records.md の「構成」)。
     Tuple(Vec<TypeId>),
-    /// 関数型。矢印の線形性は持たない。後の段階は線形性を読まず、線形性は Kind の解に依存するので、持たせると本体の型を
-    /// Kind を解くまで確定できなくなる (docs/implementation/architecture.md の「`eml_types` の内部」)。
+    /// 関数型。書き出す矢印は線形性 `lin` を持つ。宣言の型の中では `Lin::Var` もありうる
+    /// (docs/superpowers/specs/2026-10-12-s8c-kind-export-design.md の「書き出す型の形」)。
     Fn {
         param: TypeId,
+        lin: Lin,
         effects: Vec<EffectLabel>,
         /// row の末尾。`None` なら閉じた row である。
         tail: Option<RowTail>,
@@ -62,9 +100,9 @@ pub enum TypeKind {
     Rigid(String),
     /// handler の節で、操作ごとに量化した型変数。節は操作がどの型で呼ばれても動くので、単相化でも一様に扱う。関数の
     /// 型変数と名前が同じでも別の型である (docs/implementation/architecture.md の「`eml_types` の内部」)。
-    OpVar(String),
+    OpVar(String, Lin),
     /// 推論で解けなかった変数。`_` と表示する。
-    Flexible,
+    Flexible(Lin),
     Error,
 }
 
@@ -86,6 +124,7 @@ impl TypeKind {
             TypeKind::Tuple(elements) => elements.iter().copied().for_each(f),
             TypeKind::Fn {
                 param,
+                lin: _,
                 effects,
                 tail: _,
                 ret,
@@ -96,24 +135,54 @@ impl TypeKind {
                 }
                 f(*ret);
             }
-            TypeKind::Rigid(_) | TypeKind::OpVar(_) | TypeKind::Flexible | TypeKind::Error => {}
+            TypeKind::Rigid(_)
+            | TypeKind::OpVar(_, _)
+            | TypeKind::Flexible(_)
+            | TypeKind::Error => {}
         }
     }
 }
 
 /// シグネチャの型変数への代入。代入した結果を型ごとに覚えるので、部分を共有する型を何度たどっても、1つの代入では
 /// 各節点を1回だけ書き換える (docs/implementation/architecture.md の「`eml_types` の内部」)。
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct Substitution {
     vars: HashMap<String, TypeId>,
+    /// 宣言の Kind 変数の値。`None` は `partial` で、`Var` をそのまま残す。
+    kinds: Option<Vec<Lin>>,
     done: HashMap<TypeId, TypeId>,
 }
 
 impl Substitution {
-    pub fn new(vars: impl IntoIterator<Item = (String, TypeId)>) -> Substitution {
+    /// `kinds` は宣言のすべての `Var` の値を持つ。足りないときに黙って `Poly` にすると instance の写しの誤りが隠れるので、
+    /// 置き換えるところで止める (docs/superpowers/specs/2026-10-12-s8c-kind-export-design.md の「代入と単相化」)。
+    pub fn new(vars: impl IntoIterator<Item = (String, TypeId)>, kinds: Vec<Lin>) -> Substitution {
         Substitution {
             vars: vars.into_iter().collect(),
+            kinds: Some(kinds),
             done: HashMap::new(),
+        }
+    }
+
+    /// 型引数だけを置き換え、Kind 変数は残す。宣言の型の一部の型引数だけを置き換えるテストのためにある。
+    pub fn partial(vars: impl IntoIterator<Item = (String, TypeId)>) -> Substitution {
+        Substitution {
+            vars: vars.into_iter().collect(),
+            kinds: None,
+            done: HashMap::new(),
+        }
+    }
+
+    fn evaluate(&self, lin: Lin) -> Lin {
+        match (lin, &self.kinds) {
+            (Lin::Var(index), Some(kinds)) => {
+                debug_assert!(
+                    (index as usize) < kinds.len(),
+                    "Kind variable {index} has no value"
+                );
+                kinds.get(index as usize).copied().unwrap_or(Lin::Poly)
+            }
+            _ => lin,
         }
     }
 }
@@ -127,12 +196,17 @@ pub struct TypeStore {
     errors: Vec<bool>,
     /// 型が型変数 (`Rigid` か `OpVar`) を含むか。代入が、型変数を含まない型をたどらずに返すために使う。
     vars: Vec<bool>,
+    /// 型が宣言の Kind 変数 (`Fn` の `Var` か `Flexible(Var(_))`) を含むか。
+    kind_vars: Vec<bool>,
+    /// 型の値が `Rigid` か `Var` に依存するか。依存する型は宣言に対して相対的で、意味のある線形性を持たない。
+    relative: Vec<bool>,
+    linearity: Vec<Lin>,
+    data_kinds: Arc<ItemMap<TypeDef, DataKind>>,
     ids: HashMap<TypeKind, TypeId>,
     unit: TypeId,
     int: TypeId,
     string: TypeId,
     bool: TypeId,
-    flexible: TypeId,
     error: TypeId,
 }
 
@@ -143,12 +217,15 @@ impl TypeStore {
             kinds: Vec::new(),
             errors: Vec::new(),
             vars: Vec::new(),
+            kind_vars: Vec::new(),
+            relative: Vec::new(),
+            linearity: Vec::new(),
+            data_kinds: Arc::new(data_kinds(program)),
             ids: HashMap::new(),
             unit: TypeId(0),
             int: TypeId(0),
             string: TypeId(0),
             bool: TypeId(0),
-            flexible: TypeId(0),
             error: TypeId(0),
         };
         let con = |id| TypeKind::Con {
@@ -159,7 +236,6 @@ impl TypeStore {
         store.int = store.intern(con(program.extern_type(ExternType::Int)));
         store.string = store.intern(con(program.extern_type(ExternType::String)));
         store.bool = store.intern(con(program.lang.bool));
-        store.flexible = store.intern(TypeKind::Flexible);
         store.error = store.intern(TypeKind::Error);
         store
     }
@@ -177,17 +253,75 @@ impl TypeStore {
                     ..
                 }
         );
-        let mut var = matches!(kind, TypeKind::Rigid(_) | TypeKind::OpVar(_));
+        let mut var = matches!(kind, TypeKind::Rigid(_) | TypeKind::OpVar(_, _));
+        let mut kind_vars = matches!(
+            kind,
+            TypeKind::Fn {
+                lin: Lin::Var(_),
+                ..
+            } | TypeKind::Flexible(Lin::Var(_))
+        );
         kind.for_each_child(|child| {
             error |= self.errors[child.index()];
             var |= self.vars[child.index()];
+            kind_vars |= self.kind_vars[child.index()];
         });
+        let (linearity, relative) = self.linearity_of(&kind);
         let id = TypeId(self.kinds.len() as u32);
         self.kinds.push(kind.clone());
         self.errors.push(error);
         self.vars.push(var);
+        self.kind_vars.push(kind_vars);
+        self.relative.push(relative);
+        self.linearity.push(linearity);
         self.ids.insert(kind, id);
         id
+    }
+
+    /// 型の値の線形性と、それが `Rigid` か `Var` に依存するか (依存するときの値は `Poly`)。`Fn` は自分の `lin` だけで
+    /// 決まるので子を見ない。`Con` と `Tuple` は効く型引数 (`DataKind::params`) だけを見る。
+    fn linearity_of(&self, kind: &TypeKind) -> (Lin, bool) {
+        let join_of = |children: &mut dyn Iterator<Item = TypeId>| {
+            let mut value = Lin::Unr;
+            let mut relative = false;
+            for child in children {
+                if self.relative[child.index()] {
+                    relative = true;
+                } else {
+                    value = value.join(self.linearity[child.index()]);
+                }
+            }
+            if relative {
+                (Lin::Poly, true)
+            } else {
+                (value, false)
+            }
+        };
+        match kind {
+            TypeKind::Con { id, args } => {
+                let data = &self.data_kinds[*id];
+                if data.lin {
+                    return (Lin::Lin, false);
+                }
+                join_of(
+                    &mut args
+                        .iter()
+                        .zip(&data.params)
+                        .filter(|&(_, &effective)| effective)
+                        .map(|(&arg, _)| arg),
+                )
+            }
+            TypeKind::Tuple(elements) => join_of(&mut elements.iter().copied()),
+            TypeKind::Fn {
+                lin: Lin::Var(_), ..
+            }
+            | TypeKind::Flexible(Lin::Var(_))
+            | TypeKind::Rigid(_) => (Lin::Poly, true),
+            TypeKind::Fn { lin, .. } | TypeKind::Flexible(lin) | TypeKind::OpVar(_, lin) => {
+                (*lin, false)
+            }
+            TypeKind::Error => (Lin::Unr, false),
+        }
     }
 
     pub fn kind(&self, id: TypeId) -> &TypeKind {
@@ -205,10 +339,107 @@ impl TypeStore {
         self.vars[id.index()]
     }
 
+    /// 型の値の線形性 (docs/superpowers/specs/2026-10-12-s8c-kind-export-design.md の「型の線形性」)。宣言に対して相対的な
+    /// 型 (`Rigid` か `Var` に値が依存する型) は意味のある値を持たないので、debug ビルドでは止める。
+    pub fn linearity(&self, ty: TypeId) -> Lin {
+        debug_assert!(
+            !self.relative[ty.index()],
+            "the linearity of a declaration-relative type is read"
+        );
+        self.linearity[ty.index()]
+    }
+
+    /// 型に宣言の Kind 変数 (`Var`) が残っているか。
+    pub fn contains_kind_vars(&self, ty: TypeId) -> bool {
+        self.kind_vars[ty.index()]
+    }
+
+    /// 2つの型の対応する線形性が、一方が `Unr`、他方が `Lin` になっていないか。`Poly` はどちらとも食い違わない。片方が
+    /// `Flexible(k)` か `OpVar(_, k)` で他方が別の形なら、`k` と他方の値を比べる。`Rigid` はどの型とも合う。形が一致しない
+    /// 所 (誤りの跡) は比べない (docs/superpowers/specs/2026-10-12-s8c-kind-export-design.md の「食い違いがないことの検査」)。
+    pub fn lin_compatible(&self, a: TypeId, b: TypeId) -> bool {
+        let mut seen = HashSet::new();
+        let mut stack = vec![(a, b)];
+        while let Some((a, b)) = stack.pop() {
+            if !seen.insert((a, b)) {
+                continue;
+            }
+            let pairs = match (self.kind(a), self.kind(b)) {
+                (TypeKind::Rigid(_), _) | (_, TypeKind::Rigid(_)) => continue,
+                (TypeKind::Flexible(k) | TypeKind::OpVar(_, k), _) => {
+                    if !meets(*k, self.linearity[b.index()]) {
+                        return false;
+                    }
+                    continue;
+                }
+                (_, TypeKind::Flexible(k) | TypeKind::OpVar(_, k)) => {
+                    if !meets(self.linearity[a.index()], *k) {
+                        return false;
+                    }
+                    continue;
+                }
+                (
+                    TypeKind::Con { id, args },
+                    TypeKind::Con {
+                        id: other,
+                        args: other_args,
+                    },
+                ) if id == other && args.len() == other_args.len() => args
+                    .iter()
+                    .copied()
+                    .zip(other_args.iter().copied())
+                    .collect(),
+                (TypeKind::Tuple(elements), TypeKind::Tuple(others))
+                    if elements.len() == others.len() =>
+                {
+                    elements
+                        .iter()
+                        .copied()
+                        .zip(others.iter().copied())
+                        .collect()
+                }
+                (
+                    TypeKind::Fn {
+                        param,
+                        lin,
+                        effects,
+                        ret,
+                        ..
+                    },
+                    TypeKind::Fn {
+                        param: other_param,
+                        lin: other_lin,
+                        effects: other_effects,
+                        ret: other_ret,
+                        ..
+                    },
+                ) => {
+                    if !meets(*lin, *other_lin) {
+                        return false;
+                    }
+                    let mut pairs = vec![(*param, *other_param), (*ret, *other_ret)];
+                    if effects.len() == other_effects.len() {
+                        for (label, other) in effects.iter().zip(other_effects) {
+                            if label.id == other.id && label.args.len() == other.args.len() {
+                                pairs.extend(
+                                    label.args.iter().copied().zip(other.args.iter().copied()),
+                                );
+                            }
+                        }
+                    }
+                    pairs
+                }
+                _ => continue,
+            };
+            stack.extend(pairs);
+        }
+        true
+    }
+
     /// `ty` の `Rigid` を `subst` の型に置き換え、`OpVar` を `Flexible` に置き換えた型。`subst` にない名前の `Rigid`
     /// は残す。row の末尾は変えない。単相化が instance の型を作るのに使う (docs/spec/core-ir.md の「変換の規則」)。
     pub fn substitute(&mut self, ty: TypeId, subst: &mut Substitution) -> TypeId {
-        if !self.vars[ty.index()] {
+        if !self.vars[ty.index()] && !self.kind_vars[ty.index()] {
             return ty;
         }
         if let Some(&done) = subst.done.get(&ty) {
@@ -221,9 +452,15 @@ impl TypeStore {
                 return replaced;
             }
             // 節は操作がどの型で呼ばれても動くので、関数の型引数と名前が同じでも置き換えず、一様にする
-            TypeKind::OpVar(_) => {
-                subst.done.insert(ty, self.flexible);
-                return self.flexible;
+            TypeKind::OpVar(_, lin) => {
+                let flexible = self.flexible(lin);
+                subst.done.insert(ty, flexible);
+                return flexible;
+            }
+            TypeKind::Flexible(lin) => {
+                let flexible = self.flexible(subst.evaluate(lin));
+                subst.done.insert(ty, flexible);
+                return flexible;
             }
             TypeKind::Con { id, args } => TypeKind::Con {
                 id,
@@ -240,11 +477,13 @@ impl TypeStore {
             ),
             TypeKind::Fn {
                 param,
+                lin,
                 effects,
                 tail,
                 ret,
             } => TypeKind::Fn {
                 param: self.substitute(param, subst),
+                lin: subst.evaluate(lin),
                 effects: effects
                     .into_iter()
                     .map(|label| EffectLabel {
@@ -259,7 +498,7 @@ impl TypeStore {
                 tail,
                 ret: self.substitute(ret, subst),
             },
-            TypeKind::Flexible | TypeKind::Error => {
+            TypeKind::Error => {
                 unreachable!("a type without variables is returned before the match")
             }
         };
@@ -309,8 +548,8 @@ impl TypeStore {
         self.bool
     }
 
-    pub fn flexible(&self) -> TypeId {
-        self.flexible
+    pub fn flexible(&mut self, kind: Lin) -> TypeId {
+        self.intern(TypeKind::Flexible(kind))
     }
 
     pub fn error(&self) -> TypeId {
@@ -364,6 +603,7 @@ impl fmt::Display for TypeDisplay<'_> {
             }
             TypeKind::Fn {
                 param,
+                lin: _,
                 effects,
                 tail,
                 ret,
@@ -397,8 +637,8 @@ impl fmt::Display for TypeDisplay<'_> {
                 }
                 write!(f, "{}", types.display(*ret, names))
             }
-            TypeKind::Rigid(name) | TypeKind::OpVar(name) => f.write_str(name),
-            TypeKind::Flexible => f.write_str("_"),
+            TypeKind::Rigid(name) | TypeKind::OpVar(name, _) => f.write_str(name),
+            TypeKind::Flexible(_) => f.write_str("_"),
             TypeKind::Error => f.write_str("{error}"),
         }
     }
@@ -468,12 +708,14 @@ mod tests {
         let (int, bool, unit) = (types.int(), types.bool(), types.unit());
         let pure = types.intern(TypeKind::Fn {
             param: int,
+            lin: Lin::Unr,
             effects: vec![],
             tail: None,
             ret: bool,
         });
         let io = types.intern(TypeKind::Fn {
             param: pure,
+            lin: Lin::Unr,
             effects: vec![EffectLabel {
                 id: program.io(),
                 args: vec![],
@@ -497,12 +739,14 @@ mod tests {
         let (int, unit) = (types.int(), types.unit());
         let function = types.intern(TypeKind::Fn {
             param: int,
+            lin: Lin::Unr,
             effects: vec![],
             tail: None,
             ret: int,
         });
         let ty = types.intern(TypeKind::Fn {
             param: unit,
+            lin: Lin::Unr,
             effects: vec![
                 EffectLabel {
                     id: state,
@@ -540,6 +784,7 @@ mod tests {
         let returning = |types: &mut TypeStore, ret| {
             types.intern(TypeKind::Fn {
                 param: int,
+                lin: Lin::Unr,
                 effects: vec![],
                 tail: None,
                 ret,
@@ -549,6 +794,7 @@ mod tests {
         let nested = returning(&mut types, error);
         let tail = types.intern(TypeKind::Fn {
             param: int,
+            lin: Lin::Unr,
             effects: vec![],
             tail: Some(RowTail::Error),
             ret: int,
@@ -558,6 +804,7 @@ mod tests {
         assert!(types.contains_error(tail));
         let labelled = types.intern(TypeKind::Fn {
             param: int,
+            lin: Lin::Unr,
             effects: vec![EffectLabel {
                 id: effect(&program, "State"),
                 args: vec![error],
@@ -577,6 +824,7 @@ mod tests {
     fn function(types: &mut TypeStore, param: TypeId, ret: TypeId) -> TypeId {
         types.intern(TypeKind::Fn {
             param,
+            lin: Lin::Unr,
             effects: vec![],
             tail: None,
             ret,
@@ -594,6 +842,7 @@ mod tests {
         let pair = types.intern(TypeKind::Tuple(vec![a, b]));
         let ty = types.intern(TypeKind::Fn {
             param: pair,
+            lin: Lin::Unr,
             effects: vec![EffectLabel {
                 id: state,
                 args: vec![a],
@@ -601,7 +850,10 @@ mod tests {
             tail: Some(RowTail::Rigid("e".to_string())),
             ret: a,
         });
-        let mut subst = Substitution::new([("a".to_string(), int), ("b".to_string(), string)]);
+        let mut subst = Substitution::new(
+            [("a".to_string(), int), ("b".to_string(), string)],
+            Vec::new(),
+        );
         let substituted = types.substitute(ty, &mut subst);
         assert_eq!(
             types.display(substituted, &program.names).to_string(),
@@ -617,12 +869,12 @@ mod tests {
         let program = program();
         let mut types = TypeStore::new(&program);
         let int = types.int();
-        let op = types.intern(TypeKind::OpVar("a".to_string()));
+        let op = types.intern(TypeKind::OpVar("a".to_string(), Lin::Poly));
         let c = rigid(&mut types, "c");
         let ty = function(&mut types, op, c);
-        let mut subst = Substitution::new([("a".to_string(), int)]);
+        let mut subst = Substitution::new([("a".to_string(), int)], Vec::new());
         let substituted = types.substitute(ty, &mut subst);
-        let flexible = types.flexible();
+        let flexible = types.flexible(Lin::Poly);
         let expected = function(&mut types, flexible, c);
         assert_eq!(substituted, expected);
     }
@@ -636,7 +888,7 @@ mod tests {
         let a = rigid(&mut types, "a");
         assert!(!types.contains_type_vars(ty));
         assert!(types.contains_type_vars(a));
-        let mut subst = Substitution::new([("a".to_string(), int)]);
+        let mut subst = Substitution::new([("a".to_string(), int)], Vec::new());
         assert_eq!(types.substitute(ty, &mut subst), ty);
     }
 
@@ -650,7 +902,7 @@ mod tests {
             ty = function(&mut types, ty, ty);
         }
         let int = types.int();
-        let mut subst = Substitution::new([("a".to_string(), int)]);
+        let mut subst = Substitution::new([("a".to_string(), int)], Vec::new());
         let substituted = types.substitute(ty, &mut subst);
         assert!(!types.contains_type_vars(substituted));
     }
@@ -672,5 +924,145 @@ mod tests {
             ty = function(&mut types, ty, ty);
         }
         assert_eq!(types.display_bounded(ty, &program.names, 64), None);
+    }
+
+    fn con(types: &mut TypeStore, id: TypeDefId, args: Vec<TypeId>) -> TypeId {
+        types.intern(TypeKind::Con { id, args })
+    }
+
+    fn arrow(types: &mut TypeStore, lin: Lin, param: TypeId, ret: TypeId) -> TypeId {
+        types.intern(TypeKind::Fn {
+            param,
+            lin,
+            effects: vec![],
+            tail: None,
+            ret,
+        })
+    }
+
+    #[test]
+    fn linearity_joins_the_effective_arguments_and_fields() {
+        let program = crate::test_program("");
+        let mut types = TypeStore::new(&program);
+        let file = con(&mut types, program.extern_type(ExternType::File), vec![]);
+        let (int, unit) = (types.int(), types.unit());
+        let list = program.lang.list;
+        let list_file = con(&mut types, list, vec![file]);
+        let list_int = con(&mut types, list, vec![int]);
+        let pair = types.intern(TypeKind::Tuple(vec![int, list_file]));
+        let unit_pair = types.intern(TypeKind::Tuple(vec![int, unit]));
+        let lin_fn = arrow(&mut types, Lin::Lin, int, int);
+        let poly_fn = arrow(&mut types, Lin::Poly, file, int);
+        let flexible_lin = types.flexible(Lin::Lin);
+        let op_poly = types.intern(TypeKind::OpVar("a".to_string(), Lin::Poly));
+        let table = [
+            (file, Lin::Lin),
+            (list_file, Lin::Lin),
+            (list_int, Lin::Unr),
+            (int, Lin::Unr),
+            (unit, Lin::Unr),
+            (pair, Lin::Lin),
+            (unit_pair, Lin::Unr),
+            (lin_fn, Lin::Lin),
+            (poly_fn, Lin::Poly),
+            (flexible_lin, Lin::Lin),
+            (op_poly, Lin::Poly),
+            (types.error(), Lin::Unr),
+        ];
+        for (ty, expected) in table {
+            assert_eq!(types.linearity(ty), expected, "{ty:?}");
+        }
+    }
+
+    #[test]
+    fn a_type_that_depends_on_a_rigid_or_a_kind_variable_is_relative() {
+        let program = crate::test_program("");
+        let mut types = TypeStore::new(&program);
+        let int = types.int();
+        let a = rigid(&mut types, "a");
+        let list_a = con(&mut types, program.lang.list, vec![a]);
+        let var_fn = arrow(&mut types, Lin::Var(0), int, int);
+        let var_flexible = types.flexible(Lin::Var(1));
+        let unr_fn_of_rigid = arrow(&mut types, Lin::Unr, a, int);
+        let op = types.intern(TypeKind::OpVar("a".to_string(), Lin::Unr));
+        let table = [
+            (a, true),
+            (list_a, true),
+            (var_fn, true),
+            (var_flexible, true),
+            (unr_fn_of_rigid, false),
+            (op, false),
+            (int, false),
+        ];
+        for (ty, expected) in table {
+            assert_eq!(types.relative[ty.index()], expected, "{ty:?}");
+        }
+        assert!(types.contains_kind_vars(var_fn));
+        assert!(types.contains_kind_vars(var_flexible));
+        assert!(!types.contains_kind_vars(a));
+    }
+
+    #[test]
+    fn substitution_evaluates_kind_variables() {
+        let program = crate::test_program("");
+        let mut types = TypeStore::new(&program);
+        let int = types.int();
+        let var_fn = arrow(&mut types, Lin::Var(0), int, int);
+        let var_flexible = types.flexible(Lin::Var(1));
+        let pair = types.intern(TypeKind::Tuple(vec![var_fn, var_flexible]));
+        let mut full = Substitution::new([], vec![Lin::Lin, Lin::Poly]);
+        let evaluated = types.substitute(pair, &mut full);
+        let lin_fn = arrow(&mut types, Lin::Lin, int, int);
+        let poly_flexible = types.flexible(Lin::Poly);
+        let expected = types.intern(TypeKind::Tuple(vec![lin_fn, poly_flexible]));
+        assert_eq!(evaluated, expected);
+        assert!(!types.contains_kind_vars(evaluated));
+        let mut partial = Substitution::partial([]);
+        assert_eq!(types.substitute(pair, &mut partial), pair);
+    }
+
+    #[test]
+    fn lin_compatible_rejects_only_unr_against_lin() {
+        let program = crate::test_program("");
+        let mut types = TypeStore::new(&program);
+        let file = con(&mut types, program.extern_type(ExternType::File), vec![]);
+        let int = types.int();
+        let a = rigid(&mut types, "a");
+        let unr = arrow(&mut types, Lin::Unr, int, int);
+        let lin = arrow(&mut types, Lin::Lin, int, int);
+        let poly = arrow(&mut types, Lin::Poly, int, int);
+        let var = arrow(&mut types, Lin::Var(0), int, int);
+        let takes_unr = arrow(&mut types, Lin::Unr, unr, int);
+        let takes_lin = arrow(&mut types, Lin::Unr, lin, int);
+        let takes_poly = arrow(&mut types, Lin::Unr, poly, int);
+        let unr_pair = types.intern(TypeKind::Tuple(vec![unr, int]));
+        let lin_pair = types.intern(TypeKind::Tuple(vec![lin, int]));
+        let flexible_unr = types.flexible(Lin::Unr);
+        let flexible_poly = types.flexible(Lin::Poly);
+        let op_unr = types.intern(TypeKind::OpVar("a".to_string(), Lin::Unr));
+        let table = [
+            (unr, lin, false),
+            (lin, unr, false),
+            (unr, unr, true),
+            (lin, lin, true),
+            (poly, unr, true),
+            (lin, poly, true),
+            (var, lin, true),
+            (takes_unr, takes_lin, false),
+            (takes_poly, takes_lin, true),
+            (unr_pair, lin_pair, false),
+            (unr_pair, unr_pair, true),
+            (flexible_unr, file, false),
+            (file, flexible_unr, false),
+            (flexible_poly, file, true),
+            (op_unr, int, true),
+            (flexible_unr, lin, false),
+            (a, file, true),
+            (unr, a, true),
+            (int, file, true),
+        ];
+        for (x, y, expected) in table {
+            assert_eq!(types.lin_compatible(x, y), expected, "{x:?} {y:?}");
+        }
     }
 }

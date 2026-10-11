@@ -14,7 +14,7 @@ use la_arena::{Arena, ArenaMap};
 use crate::context::Context;
 use crate::data::Variance;
 use crate::kind::KindVar;
-use crate::store::{EffectLabel, RowTail, TypeId, TypeKind, TypeStore};
+use crate::store::{EffectLabel, Lin, RowTail, TypeId, TypeKind, TypeStore};
 use crate::table::{ArrowLin, Label, RigidVar, Row, RowVar, Table, Tail, Ty, TyShape};
 use crate::ty::Linearity;
 
@@ -750,6 +750,7 @@ impl Shape {
                 let ret = self.export_ty(ret, types);
                 TypeKind::Fn {
                     param,
+                    lin: Lin::Unr,
                     effects,
                     tail,
                     ret,
