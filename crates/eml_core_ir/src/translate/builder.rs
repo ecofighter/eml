@@ -249,6 +249,7 @@ impl FnBuilder {
             name,
             internal,
             yields,
+            clause: None,
             vars: self.vars,
             ret,
             blocks,

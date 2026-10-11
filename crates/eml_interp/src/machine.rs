@@ -136,6 +136,9 @@ impl<'p> Machine<'p> {
                 self.rt.unboxes += 1;
                 scalar(self.env.atom(atom)?, "an unbox of a heap object")?
             }
+            Rhs::Prim(_, _) => {
+                unimplemented!("a prim reaches the interpreter before the evidence pass exists")
+            }
         };
         self.env.write(var, value);
         self.stmt += 1;

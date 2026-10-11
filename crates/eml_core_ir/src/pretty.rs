@@ -3,6 +3,7 @@
 
 use std::fmt::Write;
 
+use crate::prim::operation_text;
 use crate::{
     Atom, Block, BlockId, Call, CasePattern, CoreFn, Ctor, EffectInfo, LayoutId, OpRet, Program,
     Rhs, Stmt, Term, VarId,
@@ -97,9 +98,12 @@ impl Printer<'_> {
     }
 
     fn function(&self, function: &CoreFn, out: &mut String) {
+        let clause = function.clause.map_or_else(String::new, |(effect, op)| {
+            format!("clause {} ", operation_text(self.program, effect, op))
+        });
         writeln!(
             out,
-            "{}{}fn {}({}) -> {} {{",
+            "{}{}{clause}fn {}({}) -> {} {{",
             if function.internal { "internal " } else { "" },
             if function.yields { "yields " } else { "" },
             function_name(&function.name),
@@ -247,6 +251,11 @@ impl Printer<'_> {
             Rhs::Drop(a) => format!("drop {}", self.atom(function, a)),
             Rhs::Box(a) => format!("box {}", self.atom(function, a)),
             Rhs::Unbox(a) => format!("unbox {}", self.atom(function, a)),
+            Rhs::Prim(prim, args) => format!(
+                "prim {}({})",
+                prim.row(self.program).name,
+                self.atoms(function, args)
+            ),
         }
     }
 
@@ -321,6 +330,17 @@ impl Printer<'_> {
                 self.atom(function, k),
                 self.atom(function, arg),
                 self.atom(function, state)
+            ),
+            Call::Clause {
+                effect,
+                op,
+                callee,
+                args,
+            } => format!(
+                "clause {} {}({})",
+                operation_text(self.program, *effect, *op),
+                self.atom(function, callee),
+                self.atoms(function, args)
             ),
         }
     }

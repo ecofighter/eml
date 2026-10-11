@@ -10,7 +10,7 @@ use eml_extern::Extern;
 
 use crate::{
     Atom, Block, BlockId, Call, Case, CasePattern, CoreFn, Ctor, EffectInfo, FnIdx, Layout,
-    LayoutCtor, LayoutId, Loc, OpRet, OperationInfo, Program, Repr, Rhs, Stmt, Term, VarId,
+    LayoutCtor, LayoutId, Loc, OpRet, OperationInfo, Prim, Program, Repr, Rhs, Stmt, Term, VarId,
     VarInfo,
 };
 
@@ -442,7 +442,8 @@ impl<'t> Parser<'t> {
         Ok(())
     }
 
-    /// `[internal] [yields] fn name(params) -> repr {` に、入口のブロックとラベルの付いたブロックの列が続く。
+    /// `[internal] [yields] [clause E.op] fn name(params) -> repr {` に、入口のブロックとラベルの付いたブロックの列が
+    /// 続く。
     fn function(&mut self) -> Result<CoreFn, ParseError> {
         let internal = self.at_word("internal");
         if internal {
@@ -452,6 +453,12 @@ impl<'t> Parser<'t> {
         if yields {
             self.pos += 1;
         }
+        let clause = if self.at_word("clause") {
+            self.pos += 1;
+            Some(self.operation_ref()?)
+        } else {
+            None
+        };
         self.expect_word("fn")?;
         let name = self.name()?;
         let mut state = FnState::default();
@@ -495,6 +502,7 @@ impl<'t> Parser<'t> {
             name,
             internal,
             yields,
+            clause,
             vars,
             ret,
             blocks,
@@ -699,7 +707,7 @@ impl<'t> Parser<'t> {
         };
         if matches!(
             keyword.as_str(),
-            "mask" | "call" | "yields" | "apply" | "handle" | "perform" | "resume"
+            "mask" | "call" | "yields" | "apply" | "handle" | "perform" | "resume" | "clause"
         ) {
             let (mask, call) = self.masked_call(state)?;
             let saved = self.saved(state)?;
@@ -721,6 +729,11 @@ impl<'t> Parser<'t> {
                 let args = self.list('(', ')', |p| p.atom(state))?;
                 let at = self.position()?;
                 Rhs::Extern { ext, args, at }
+            }
+            // 引数の数は extern と同じく verifier が確かめる
+            "prim" => {
+                let prim = self.prim()?;
+                Rhs::Prim(prim, self.list('(', ')', |p| p.atom(state))?)
             }
             "const" => {
                 let value = match self.next() {
@@ -808,10 +821,7 @@ impl<'t> Parser<'t> {
         let mask = self.list('[', ']', |p| {
             let line = p.line();
             let word = p.word()?;
-            match tag_number(&word) {
-                Some(index) => Ok(index),
-                None => p.effect_id(&word, line),
-            }
+            p.effect_ref(&word, line)
         })?;
         // `pretty` は空の `mask` を書かない。`mask []` を受け入れると、表示と同じ形に戻らないテキストが読めてしまう
         if mask.is_empty() {
@@ -882,6 +892,17 @@ impl<'t> Parser<'t> {
                     k,
                     arg,
                     state: next,
+                })
+            }
+            "clause" => {
+                let (effect, op) = self.operation_ref()?;
+                let callee = self.atom(state)?;
+                let args = self.list('(', ')', |p| p.atom(state))?;
+                Ok(Call::Clause {
+                    effect,
+                    op,
+                    callee,
+                    args,
                 })
             }
             _ => Err(error(line, format!("expected a call, found `{word}`"))),
@@ -982,6 +1003,113 @@ impl<'t> Parser<'t> {
             .position(|other| other.name == op)
             .map(|index| index as u32)
             .ok_or_else(|| error(line, format!("`{}` has no operation `{op}`", info.name)))
+    }
+
+    /// エフェクトの名前か、表にない番号も書ける `#N`。
+    fn effect_ref(&self, word: &str, line: usize) -> Result<u32, ParseError> {
+        match tag_number(word) {
+            Some(index) => Ok(index),
+            None => self.effect_id(word, line),
+        }
+    }
+
+    /// `E.op`。表にないエフェクト `#N` の操作は、名前で引けないので `#N` で書く。
+    fn operation_ref(&mut self) -> Result<(u32, u32), ParseError> {
+        let line = self.line();
+        let word = self.word()?;
+        self.operation_word(&word, line)
+    }
+
+    fn operation_word(&self, word: &str, line: usize) -> Result<(u32, u32), ParseError> {
+        let (effect, op) = word
+            .rsplit_once('.')
+            .ok_or_else(|| error(line, format!("expected `Effect.operation`, found `{word}`")))?;
+        let effect = self.effect_ref(effect, line)?;
+        if effect as usize >= self.effects.len() {
+            let op = tag_number(op).ok_or_else(|| {
+                error(
+                    line,
+                    format!("an operation of the unknown effect #{effect} is written `#N`"),
+                )
+            })?;
+            return Ok((effect, op));
+        }
+        Ok((effect, self.operation(effect, op, line)?))
+    }
+
+    /// `prim` の後の、基本操作の名前と `[…]` の即値。即値の要る基本操作と要らない基本操作は名前で決まるので、
+    /// 名前に合わない即値は構文の誤りにする。
+    fn prim(&mut self) -> Result<Prim, ParseError> {
+        let line = self.line();
+        let name = self.word()?;
+        let immediates = if self.at_punct('[') {
+            Some(self.list('[', ']', |p| Ok((p.line(), p.word()?)))?)
+        } else {
+            None
+        };
+        let one = |immediates: Option<Vec<(usize, String)>>, needs: &str, takes: &str| {
+            let immediates = immediates
+                .ok_or_else(|| error(line, format!("`{name}` needs an immediate `[{needs}]`")))?;
+            match <[_; 1]>::try_from(immediates) {
+                Ok([immediate]) => Ok(immediate),
+                Err(_) => Err(error(line, format!("`{name}` takes one {takes}"))),
+            }
+        };
+        let plain = match name.as_str() {
+            "evv_get" => Some(Prim::EvvGet),
+            "evv_set" => Some(Prim::EvvSet),
+            "evv_push" => Some(Prim::EvvPush),
+            "ev_renew" => Some(Prim::EvRenew),
+            "ev_evv" => Some(Prim::EvEvv),
+            "ev_take_state" => Some(Prim::EvTakeState),
+            "ev_set_state" => Some(Prim::EvSetState),
+            "yielding" => Some(Prim::Yielding),
+            "yield_status" => Some(Prim::YieldStatus),
+            "yield_to" => Some(Prim::YieldTo),
+            "yield_abort" => Some(Prim::YieldAbort),
+            "yield_cont_take" => Some(Prim::YieldContTake),
+            "yield_cont_set" => Some(Prim::YieldContSet),
+            "yield_finish" => Some(Prim::YieldFinish),
+            "dummy" => Some(Prim::Dummy),
+            _ => None,
+        };
+        if let Some(prim) = plain {
+            if immediates.is_some() {
+                return Err(error(line, format!("`{name}` takes no immediate")));
+            }
+            return Ok(prim);
+        }
+        match name.as_str() {
+            "evv_mask" => {
+                let immediates = immediates.ok_or_else(|| {
+                    error(line, format!("`{name}` needs an immediate `[Effect, ..]`"))
+                })?;
+                let effects = immediates
+                    .iter()
+                    .map(|(line, word)| self.effect_ref(word, *line))
+                    .collect::<Result<_, _>>()?;
+                Ok(Prim::EvvMask(effects))
+            }
+            "ev_new" | "ev_lookup" => {
+                let (line, word) = one(immediates, "Effect", "effect")?;
+                let effect = self.effect_ref(&word, line)?;
+                Ok(if name == "ev_new" {
+                    Prim::EvNew(effect)
+                } else {
+                    Prim::EvLookup(effect)
+                })
+            }
+            "ev_set_clause" | "ev_clause" => {
+                let (line, word) = one(immediates, "Effect.operation", "operation")?;
+                let (effect, op) = self.operation_word(&word, line)?;
+                Ok(if name == "ev_set_clause" {
+                    Prim::EvSetClause { effect, op }
+                } else {
+                    Prim::EvClause { effect, op }
+                })
+            }
+            _ => Err(error(line, format!("unknown primitive `{name}`"))),
+        }
     }
 
     fn function_name(&mut self) -> Result<FnIdx, ParseError> {

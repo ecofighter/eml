@@ -1,7 +1,7 @@
 //! Core IR のテキストの形 (docs/implementation/testing.md の「Core IR のテキストの形」)。`parse` が読んだものを
 //! `pretty` で表示すると元のテキストに戻ることと、構文の誤りの報告を確かめる。
 
-use eml_core_ir::{Atom, Call, CasePattern, Ctor, FnIdx, LayoutId, OpRet, VarId};
+use eml_core_ir::{Atom, Call, CasePattern, Ctor, FnIdx, LayoutId, OpRet, Prim, VarId};
 use eml_core_ir::{
     BlockId, Loc, ParseError, Program, Repr, Rhs, Stmt, Term, parse, pretty, pretty_with_positions,
 };
@@ -1540,5 +1540,106 @@ fn a_never_operation_returns_never() {
     assert_eq!(
         parse_error("effect Ask { ask(unit) -> never }\n").to_string(),
         "line 1: only a `never` operation returns `never`"
+    );
+}
+
+#[test]
+fn prims_and_clauses_round_trip() {
+    let program = round_trip(
+        "effect State { get(unit) -> tobj, put(tobj) -> unit }\nyields fn f(s.0: tobj) -> tobj {\n  let w.1: tobj = prim evv_get()\n  let e.2: obj = prim ev_new[State](s.0, w.1)\n  let u.3: unit = prim ev_set_clause[State.get](e.2, &g)\n  let m.4: tobj = prim evv_mask[State, State](w.1)\n  let c.5: tobj = prim ev_clause[State.get](e.2)\n  let r.6: tobj = clause State.get c.5(e.2, ())\n  return r.6\n}\ninternal yields clause State.get fn g(e.0: obj, u.1: unit) -> tobj {\n  let s.2: tobj = prim ev_take_state(e.0)\n  return s.2\n}\n",
+    );
+    let f = &program.functions[0];
+    assert_eq!(f.clause, None);
+    assert_eq!(
+        f.blocks[0].stmts[1],
+        Stmt::Let {
+            var: VarId(2),
+            rhs: Rhs::Prim(Prim::EvNew(0), vec![v(0), v(1)]),
+        }
+    );
+    assert_eq!(
+        f.blocks[0].stmts[2],
+        Stmt::Let {
+            var: VarId(3),
+            rhs: Rhs::Prim(
+                Prim::EvSetClause { effect: 0, op: 0 },
+                vec![v(2), Atom::Fn(FnIdx(1))]
+            ),
+        }
+    );
+    assert_eq!(
+        f.blocks[0].stmts[3],
+        Stmt::Let {
+            var: VarId(4),
+            rhs: Rhs::Prim(Prim::EvvMask(vec![0, 0]), vec![v(1)]),
+        }
+    );
+    assert_eq!(
+        f.blocks[0].stmts[5],
+        Stmt::Let {
+            var: VarId(6),
+            rhs: Rhs::Call {
+                call: Call::Clause {
+                    effect: 0,
+                    op: 0,
+                    callee: v(5),
+                    args: vec![v(2), Atom::Unit],
+                },
+                mask: vec![],
+                saved: vec![],
+            },
+        }
+    );
+    let g = &program.functions[1];
+    assert!(g.internal && g.yields);
+    assert_eq!(g.clause, Some((0, 0)));
+}
+
+#[test]
+fn every_prim_round_trips() {
+    round_trip(
+        "effect State { get(unit) -> tobj, put(tobj) -> unit }\nfn f(w.0: tobj, e.1: obj, s.2: tobj, c.3: tobj) -> unit {\n  let a.4: unit = prim evv_set(w.0)\n  let b.5: tobj = prim evv_push(w.0, e.1)\n  let d.6: obj = prim ev_renew(e.1, s.2)\n  let g.7: obj = prim ev_lookup[State]()\n  let h.8: tobj = prim ev_evv(e.1)\n  let i.9: unit = prim ev_set_state(e.1, s.2)\n  let j.10: int = prim yielding()\n  let k.11: int = prim yield_status(e.1)\n  let l.12: unit = prim yield_to(e.1, c.3, s.2)\n  let m.13: unit = prim yield_abort(e.1, c.3, s.2)\n  let n.14: tobj = prim yield_cont_take()\n  let o.15: unit = prim yield_cont_set(n.14)\n  let p.16: tobj = prim yield_finish()\n  let q.17: obj = prim dummy()\n  let r.18: tobj = prim ev_clause[State.#7](e.1)\n  let t.19: obj = prim ev_new[#3](s.2, w.0)\n  tail clause State.put c.3(e.1, s.2)\n}\n",
+    );
+}
+
+#[test]
+fn a_prim_has_the_immediates_of_its_kind() {
+    let prim = |rhs: &str| {
+        parse_error(&format!(
+            "effect State {{ get(unit) -> tobj }}\nfn f(w.0: tobj) -> tobj {{\n  let x.1: tobj = prim {rhs}\n  return x.1\n}}\n"
+        ))
+        .to_string()
+    };
+    assert_eq!(
+        prim("evv_get[State]()"),
+        "line 3: `evv_get` takes no immediate"
+    );
+    assert_eq!(
+        prim("ev_lookup()"),
+        "line 3: `ev_lookup` needs an immediate `[Effect]`"
+    );
+    assert_eq!(
+        prim("ev_lookup[State, State]()"),
+        "line 3: `ev_lookup` takes one effect"
+    );
+    assert_eq!(
+        prim("ev_clause[State](w.0)"),
+        "line 3: expected `Effect.operation`, found `State`"
+    );
+    assert_eq!(
+        prim("evv_mask(w.0)"),
+        "line 3: `evv_mask` needs an immediate `[Effect, ..]`"
+    );
+    assert_eq!(prim("ev_frob()"), "line 3: unknown primitive `ev_frob`");
+}
+
+#[test]
+fn a_clause_call_takes_no_mask() {
+    assert_eq!(
+        parse_error(
+            "effect State { get(unit) -> tobj }\nfn f(c.0: tobj, e.1: obj) -> tobj {\n  tail mask [State] clause State.get c.0(e.1, ())\n}\n"
+        )
+        .to_string(),
+        "line 3: a mask is only on call, apply and resume"
     );
 }

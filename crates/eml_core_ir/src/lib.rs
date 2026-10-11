@@ -10,6 +10,7 @@ pub mod liveness;
 mod perceus;
 mod pipeline;
 mod pretty;
+mod prim;
 mod text;
 mod translate;
 mod verify;
@@ -19,9 +20,10 @@ pub use contract::contract;
 pub use perceus::perceus;
 pub use pipeline::{Pass, lower, lower_until};
 pub use pretty::{pretty, pretty_with_positions};
+pub use prim::{Prim, PrimRow};
 pub use text::{ParseError, parse};
 pub use translate::type_repr;
-pub use verify::{VerifyError, verify, verify_scopes, verify_translated};
+pub use verify::{VerifyError, verify, verify_evidence, verify_scopes, verify_translated};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Program {
@@ -34,7 +36,8 @@ pub struct Program {
     /// データの配置の表。`con`、`switch`、`unpack`、`release` が `LayoutId` で引く。translate は最初に使った順に入れる
     /// (docs/spec/core-ir.md の「データの配置」)。
     pub layouts: Vec<Layout>,
-    /// エフェクトの表。添字は `Call::Handle` と `Call::Perform` のエフェクトの番号で、HIR の `EffectId` の添字と同じである。
+    /// エフェクトの表。添字は `Call::Handle`、`Call::Perform`、`Call::Clause`、基本操作の即値のエフェクトの番号で、
+    /// HIR の `EffectId` の添字と同じである。
     pub effects: Vec<EffectInfo>,
     /// 表示用のパスの表。`Loc.file` が添字で引く。
     pub files: Vec<String>,
@@ -142,6 +145,10 @@ pub struct CoreFn {
     /// 本体が yield しうる (docs/superpowers/specs/2026-10-11-s7-evidence-passing-design.md の「`yields` の印」)。
     /// テキストの形では `internal` の後に `yields fn` と書く。
     pub yields: bool,
+    /// in-place の入口の関数が受け持つ (エフェクト, 操作)。捕獲の後に evidence と操作の引数を受け、操作の結果を
+    /// 返す。`ev_set_clause` に渡す値としてだけ参照される。テキストの形では `yields` の後に `clause E.op fn` と書く
+    /// (docs/superpowers/specs/2026-10-11-s7-evidence-passing-design.md の「入口の関数の印」)。
+    pub clause: Option<(u32, u32)>,
     pub vars: Vec<VarInfo>,
     /// 直接の呼び出しの結果の Repr。
     pub ret: Repr,
@@ -391,10 +398,13 @@ pub enum Rhs {
     /// `tobj` の値から、箱を要するスカラーを取り出す。`switch` の scrutinee と同じく値を読むだけで、所有権を受け取ら
     /// ない。スカラーの種類は束縛する変数の Repr で決まる。
     Unbox(Atom),
+    /// evidence passing の基本操作。extern と同じく引数をすべて消費し、所有した結果を定義する
+    /// (docs/superpowers/specs/2026-10-11-s7-evidence-passing-design.md の「基本操作」)。
+    Prim(Prim, Vec<Atom>),
 }
 
 impl Rhs {
-    /// 右辺が使う値。関数、extern、`perform` の引数は、どれも所有権を受け取る。
+    /// 右辺が使う値。関数、extern、基本操作、`perform` の引数は、どれも所有権を受け取る。
     pub fn for_each_atom(&self, mut f: impl FnMut(Atom)) {
         match self {
             Rhs::Call {
@@ -408,7 +418,8 @@ impl Rhs {
                 args,
                 at: _,
             }
-            | Rhs::Con { ctor: _, args } => args.iter().for_each(|&atom| f(atom)),
+            | Rhs::Con { ctor: _, args }
+            | Rhs::Prim(_, args) => args.iter().for_each(|&atom| f(atom)),
             Rhs::Drop(atom) | Rhs::Box(atom) | Rhs::Unbox(atom) => f(*atom),
             Rhs::ConstString(_) => {}
         }
@@ -434,7 +445,8 @@ impl Rhs {
                 args,
                 at: _,
             }
-            | Rhs::Con { ctor: _, args } => args.iter_mut().for_each(f),
+            | Rhs::Con { ctor: _, args }
+            | Rhs::Prim(_, args) => args.iter_mut().for_each(f),
             Rhs::Drop(atom) | Rhs::Box(atom) | Rhs::Unbox(atom) => f(atom),
             Rhs::ConstString(_) => {}
         }
@@ -482,6 +494,15 @@ pub enum Call {
     },
     /// 継続を再開する。`state` を区間の handler フレームに戻してからつなぐ。値は handle 式の値である。
     Resume { k: Atom, arg: Atom, state: Atom },
+    /// 操作の in-place の入口のクロージャ `callee` を呼ぶ。`args` の先頭は evidence (`obj`)、残りは操作の引数で、
+    /// 引数と結果の Repr は操作の表の `params` と `ret` から取る。`mask` は持たない
+    /// (docs/superpowers/specs/2026-10-11-s7-evidence-passing-design.md の「節の呼び出し」)。
+    Clause {
+        effect: u32,
+        op: u32,
+        callee: Atom,
+        args: Vec<Atom>,
+    },
 }
 
 impl Call {
@@ -499,6 +520,12 @@ impl Call {
                 callee,
                 args,
                 yields: _,
+            }
+            | Call::Clause {
+                effect: _,
+                op: _,
+                callee,
+                args,
             } => {
                 f(*callee);
                 args.iter().for_each(|&atom| f(atom));
@@ -536,6 +563,12 @@ impl Call {
                 callee,
                 args,
                 yields: _,
+            }
+            | Call::Clause {
+                effect: _,
+                op: _,
+                callee,
+                args,
             } => {
                 f(callee);
                 args.iter_mut().for_each(f);

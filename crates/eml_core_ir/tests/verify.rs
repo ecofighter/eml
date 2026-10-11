@@ -1,7 +1,9 @@
 //! Core IR のテキストで書いた IR で、verifier が正しいものを受け入れ、壊れたものを拒むことを確かめる (docs/spec/core-ir.md)。
 //! 構造の規則 R1 から R9 と、前の形の IR から引き継いだ検査を1つずつ確かめる。
 
-use eml_core_ir::{Program, Stmt, Term, parse, verify, verify_scopes, verify_translated};
+use eml_core_ir::{
+    Program, Stmt, Term, parse, verify, verify_evidence, verify_scopes, verify_translated,
+};
 
 /// 手で書く IR の配置の行。プログラムの先頭に置く。
 const BOOL: &str = "layout Prelude.Bool { False, True }\n";
@@ -23,6 +25,10 @@ fn check_scopes(text: &str) -> Result<(), String> {
 
 fn check_translated(text: &str) -> Result<(), String> {
     verify_translated(&read(text)).map_err(|error| error.to_string())
+}
+
+fn check_evidence(text: &str) -> Result<(), String> {
+    verify_evidence(&read(text)).map_err(|error| error.to_string())
 }
 
 /// spec の「テキストの形」の例。RC の対象の変数がないので、どちらの段でも通る。
@@ -2807,4 +2813,330 @@ fn a_long_run_of_if_statements_is_verified_in_linear_time() {
         .filter(|block| matches!(block.term, Term::Switch { .. }))
         .count();
     assert_eq!(switches, COUNT);
+}
+
+// evidence の段と、基本操作と節の呼び出し
+
+const STATE: &str = "effect State { get(unit) -> tobj, put(tobj) -> unit }\n";
+const COUNTER: &str = "effect Counter { get(unit) -> int, put(int) -> unit }\n";
+
+/// handle の場所で入口の表を作り、`State.get` を節の呼び出しで呼ぶ形。
+const EVIDENCE_EXAMPLE: &str = "\
+effect State { get(unit) -> tobj, put(tobj) -> unit }
+yields fn f(s.0: tobj) -> tobj {
+  let w.1: tobj = prim evv_get()
+  let e.2: obj = prim ev_new[State](s.0, w.1)
+  let u.3: unit = prim ev_set_clause[State.get](e.2, &g)
+  let m.4: tobj = prim evv_mask[State, State](w.1)
+  let c.5: tobj = prim ev_clause[State.get](e.2)
+  let r.6: tobj = clause State.get c.5(e.2, ())
+  return r.6
+}
+internal yields clause State.get fn g(e.0: obj, u.1: unit) -> tobj {
+  let s.2: tobj = prim ev_take_state(e.0)
+  return s.2
+}
+";
+
+/// `Counter.put` の印を持ち、捕獲を1つ持つ節の関数。
+const PUT_CLAUSE: &str =
+    "internal clause Counter.put fn g(m.0: tobj, e.1: obj, n.2: int) -> unit {\n  return ()\n}\n";
+
+#[test]
+fn prims_and_clauses_are_accepted_after_the_evidence_pass() {
+    assert_eq!(check_evidence(EVIDENCE_EXAMPLE), Ok(()));
+    assert_eq!(check_scopes(EVIDENCE_EXAMPLE), Ok(()));
+}
+
+#[test]
+fn the_evidence_level_rejects_effect_instructions() {
+    assert_eq!(
+        check_evidence(&format!(
+            "{ASK}fn f() -> tobj {{\n  let t.0: tobj = perform Ask.ask(())\n  return t.0\n}}\n"
+        )),
+        Err("a perform remains after the evidence pass in `f`".to_string())
+    );
+    assert_eq!(
+        check_evidence(&format!(
+            "{ASK}fn f(b.0: tobj, c.1: tobj, r.2: tobj) -> tobj {{\n  let t.3: tobj = handle Ask((), b.0) {{ ask: c.1 }} return r.2\n  return t.3\n}}\n"
+        )),
+        Err("a handler remains after the evidence pass in `f`".to_string())
+    );
+    assert_eq!(
+        check_evidence(
+            "fn f(k.0: tobj) -> tobj {\n  let t.1: tobj = resume k.0((), ())\n  return t.1\n}\n"
+        ),
+        Err("a resume remains after the evidence pass in `f`".to_string())
+    );
+    assert_eq!(
+        check_evidence(&format!(
+            "{ASK}fn f(c.0: tobj) -> tobj {{\n  let t.1: tobj = mask [Ask] apply c.0(())\n  return t.1\n}}\n"
+        )),
+        Err("a mask remains after the evidence pass in `f`".to_string())
+    );
+}
+
+#[test]
+fn the_evidence_level_still_comes_before_boxing_and_contract() {
+    assert_eq!(
+        check_evidence("fn f(x.0: int) -> int {\n  tail call f(x.0)\n}\n"),
+        Err("a tail call is formed before contract in `f`".to_string())
+    );
+    assert_eq!(
+        check_evidence("fn f() -> tobj {\n  let b.0: tobj = box 1\n  return b.0\n}\n"),
+        Err("1 is boxed before the boxing pass in `f`".to_string())
+    );
+}
+
+#[test]
+fn the_ownership_level_still_accepts_effect_instructions() {
+    assert_eq!(check(&handler_program(ASK)), Ok(()));
+}
+
+#[test]
+fn the_translated_level_rejects_prims_and_clauses() {
+    assert_eq!(
+        check_translated("fn f() -> tobj {\n  let w.0: tobj = prim evv_get()\n  return w.0\n}\n"),
+        Err("`prim evv_get` is used before the evidence pass in `f`".to_string())
+    );
+    assert_eq!(
+        check_translated(&format!(
+            "{COUNTER}fn f(c.0: tobj, e.1: obj) -> int {{\n  let t.2: int = clause Counter.get c.0(e.1, ())\n  return t.2\n}}\n"
+        )),
+        Err("a clause call is used before the evidence pass in `f`".to_string())
+    );
+    assert_eq!(
+        check_translated(&format!(
+            "{COUNTER}fn f() -> int {{\n  return 1\n}}\ninternal clause Counter.get fn g(e.0: obj, u.1: unit) -> int {{\n  return 1\n}}\n"
+        )),
+        Err("a clause of `Counter.get` is defined before the evidence pass in `g`".to_string())
+    );
+}
+
+#[test]
+fn a_prim_takes_its_arguments() {
+    assert_eq!(
+        check_evidence("fn f() -> unit {\n  let u.0: unit = prim evv_set()\n  return u.0\n}\n"),
+        Err("`prim evv_set` takes 1 arguments but is given 0 in `f`".to_string())
+    );
+}
+
+#[test]
+fn a_prim_names_known_effects_and_operations() {
+    assert_eq!(
+        check_evidence("fn f() -> obj {\n  let e.0: obj = prim ev_lookup[#2]()\n  return e.0\n}\n"),
+        Err(
+            "`prim ev_lookup[#2]` names effect 2, which is not in the effect table in `f`"
+                .to_string()
+        )
+    );
+    assert_eq!(
+        check_evidence(&format!(
+            "{STATE}fn f(e.0: obj) -> tobj {{\n  let c.1: tobj = prim ev_clause[State.#2](e.0)\n  return c.1\n}}\n"
+        )),
+        Err(
+            "`prim ev_clause[State.#2]` names operation 2 of `State`, which has 2 operations in `f`"
+                .to_string()
+        )
+    );
+}
+
+#[test]
+fn a_clause_call_names_an_operation_and_takes_its_arguments() {
+    assert_eq!(
+        check_evidence(&format!(
+            "{COUNTER}fn f(c.0: tobj, e.1: obj) -> unit {{\n  let u.2: unit = clause Counter.#5 c.0(e.1, 1)\n  return u.2\n}}\n"
+        )),
+        Err("a clause names operation 5 of `Counter`, which has 2 operations in `f`".to_string())
+    );
+    assert_eq!(
+        check_evidence(&format!(
+            "{COUNTER}fn f(c.0: tobj, e.1: obj) -> unit {{\n  let u.2: unit = clause Counter.put c.0(e.1)\n  return u.2\n}}\n"
+        )),
+        Err("a clause of `Counter.put` is given 1 arguments, but it takes 2 (the evidence and 1 arguments of the operation) in `f`".to_string())
+    );
+}
+
+#[test]
+fn the_boundaries_of_prims_and_clauses_are_compatible() {
+    let errors: Vec<String> = [
+        format!(
+            "{STATE}fn f(n.0: int, w.1: tobj) -> obj {{\n  let e.2: obj = prim ev_new[State](n.0, w.1)\n  return e.2\n}}\n"
+        ),
+        "fn f() -> int {\n  let w.0: int = prim evv_get()\n  return w.0\n}\n".to_string(),
+        format!(
+            "{COUNTER}fn f(c.0: tobj, n.1: tobj, e.2: obj) -> unit {{\n  let u.3: unit = clause Counter.put c.0(e.2, n.1)\n  return u.3\n}}\n"
+        ),
+        format!(
+            "{COUNTER}fn f(c.0: int, e.1: obj) -> int {{\n  let t.2: int = clause Counter.get c.0(e.1, ())\n  return t.2\n}}\n"
+        ),
+        format!(
+            "{COUNTER}fn f(c.0: tobj, e.1: int) -> int {{\n  let t.2: int = clause Counter.get c.0(e.1, ())\n  return t.2\n}}\n"
+        ),
+        format!(
+            "{STATE}fn f(c.1: tobj, e.2: obj) -> int {{\n  let t.0: int = clause State.get c.1(e.2, ())\n  return t.0\n}}\n"
+        ),
+        format!(
+            "{COUNTER}fn f(c.0: tobj, e.1: obj) -> tobj {{\n  tail clause Counter.get c.0(e.1, ())\n}}\n"
+        ),
+    ]
+    .iter()
+    .map(|text| check_scopes(text).unwrap_err())
+    .collect();
+    assert_eq!(
+        errors,
+        [
+            "argument 0 of `prim ev_new[State]` is `n.0` (int), but the primitive takes tobj in `f`",
+            "`w.0` (int) is bound to `prim evv_get`, which returns tobj in `f`",
+            "argument 1 of a clause of `Counter.put` is `n.1` (tobj), but the operation takes int in `f`",
+            "the callee of a clause of `Counter.get` is `c.0` (int), but a clause takes tobj in `f`",
+            "argument 0 of a clause of `Counter.get` is `e.1` (int), but a clause takes obj in `f`",
+            "`t.0` (int) is bound to a clause of `State.get`, which returns tobj in `f`",
+            "a tail clause of `Counter.get` returns int, but this function returns tobj in `f`",
+        ]
+    );
+}
+
+#[test]
+fn the_evidence_level_does_not_compare_boundaries() {
+    // box の挿入の前なので、Repr の食い違いは box の挿入が変換で埋める
+    let text = format!(
+        "{COUNTER}fn f(c.0: tobj, n.1: tobj, e.2: obj) -> tobj {{\n  let u.3: unit = clause Counter.put c.0(e.2, n.1)\n  return u.3\n}}\n"
+    );
+    assert_eq!(check_evidence(&text), Ok(()));
+}
+
+#[test]
+fn a_never_clause_has_no_result_to_compare() {
+    let text = "\
+effect Fail { never fail(tobj) -> never }
+fn f(c.0: tobj, e.1: obj) -> tobj {
+  let t.2: int = clause Fail.fail c.0(e.1, ())
+  return t.2
+}
+fn g(c.0: tobj, e.1: obj) -> int {
+  tail clause Fail.fail c.0(e.1, ())
+}
+";
+    assert_eq!(check_scopes(text), Ok(()));
+    assert_eq!(check(text), Ok(()));
+}
+
+#[test]
+fn a_clause_function_has_the_reprs_of_its_operation() {
+    let clause = |head: &str, ret: &str| {
+        let body = match ret {
+            "obj" => "  let d.9: obj = prim dummy()\n  return d.9\n",
+            "int" => "  return 1\n",
+            _ => "  return ()\n",
+        };
+        check_scopes(&format!(
+            "{COUNTER}effect Fail {{ never fail(tobj) -> never }}\nfn f() -> int {{\n  return 1\n}}\ninternal clause {head} -> {ret} {{\n{body}}}\n"
+        ))
+    };
+    assert_eq!(
+        clause("Counter.put fn g(m.0: tobj, e.1: obj, n.2: int)", "unit"),
+        Ok(())
+    );
+    assert_eq!(clause("Fail.fail fn g(e.0: obj, x.1: tobj)", "obj"), Ok(()));
+    assert_eq!(
+        clause("Counter.put fn g(m.0: tobj, e.1: obj, n.2: tobj)", "unit"),
+        Err("`g` is a clause of `Counter.put`, but its parameter 2 is tobj in `g`".to_string())
+    );
+    assert_eq!(
+        clause("Counter.put fn g(m.0: int, e.1: obj, n.2: int)", "unit"),
+        Err("`g` is a clause of `Counter.put`, but its parameter 0 is int in `g`".to_string())
+    );
+    assert_eq!(
+        clause("Counter.put fn g(e.0: int, n.1: int)", "unit"),
+        Err("`g` is a clause of `Counter.put`, but its parameter 0 is int in `g`".to_string())
+    );
+    assert_eq!(
+        clause("Counter.get fn g(e.0: obj, u.1: unit)", "tobj"),
+        Err("`g` is a clause of `Counter.get`, but it returns tobj in `g`".to_string())
+    );
+    assert_eq!(
+        clause("Fail.fail fn g(e.0: obj, x.1: tobj)", "int"),
+        Err("`g` is a clause of `Fail.fail`, but it returns int in `g`".to_string())
+    );
+    // 引数の数は境界の検査でないので、evidence の段でも確かめる
+    assert_eq!(
+        check_evidence(&format!(
+            "{COUNTER}fn f() -> int {{\n  return 1\n}}\ninternal clause Counter.put fn g(n.0: int) -> unit {{\n  return ()\n}}\n"
+        )),
+        Err("`g` is a clause of `Counter.put`, so it takes the evidence and 1 arguments after its captures, but it has 1 parameters in `g`".to_string())
+    );
+    assert_eq!(
+        check_evidence(&format!(
+            "{COUNTER}fn f() -> int {{\n  return 1\n}}\ninternal clause Counter.#4 fn g(e.0: obj) -> unit {{\n  return ()\n}}\n"
+        )),
+        Err(
+            "`g` is a clause of operation 4 of `Counter`, which has 2 operations in `g`"
+                .to_string()
+        )
+    );
+}
+
+#[test]
+fn a_clause_function_is_only_put_into_a_handler_table() {
+    let used_as_value = Err(
+        "`g` is a clause of `Counter.put`, but it is used as a function value in `f`".to_string(),
+    );
+    assert_eq!(
+        check_evidence(&format!(
+            "{COUNTER}fn f(c.0: tobj) -> tobj {{\n  let t.1: tobj = apply c.0(&g)\n  return t.1\n}}\n{PUT_CLAUSE}"
+        )),
+        used_as_value
+    );
+    assert_eq!(
+        check_evidence(&format!(
+            "{COUNTER}fn f(m.0: tobj, c.1: tobj) -> tobj {{\n  let g.2: tobj = closure g(m.0)\n  let t.3: tobj = apply c.1(g.2)\n  return t.3\n}}\n{PUT_CLAUSE}"
+        )),
+        used_as_value
+    );
+    assert_eq!(
+        check_evidence(&format!(
+            "{COUNTER}fn f() -> tobj {{\n  return &g\n}}\n{PUT_CLAUSE}"
+        )),
+        used_as_value
+    );
+    assert_eq!(
+        check_evidence(&format!(
+            "{COUNTER}fn f(m.0: tobj, e.1: obj) -> unit {{\n  let u.2: unit = call g(m.0, e.1, 1)\n  return u.2\n}}\n{PUT_CLAUSE}"
+        )),
+        Err("`g` is a clause of `Counter.put`, but it is called directly in `f`".to_string())
+    );
+    // 捕獲のある節は、同じ関数の中の `closure` で入口の表に入れる
+    let put = format!(
+        "{COUNTER}fn f(m.0: tobj, w.1: tobj) -> unit {{\n  let e.2: obj = prim ev_new[Counter]((), w.1)\n  let g.3: tobj = closure g(m.0)\n  let u.4: unit = prim ev_set_clause[Counter.put](e.2, g.3)\n  return u.4\n}}\n{PUT_CLAUSE}"
+    );
+    assert_eq!(check_evidence(&put), Ok(()));
+    assert_eq!(check_scopes(&put), Ok(()));
+}
+
+#[test]
+fn ev_set_clause_names_the_clause_of_its_function() {
+    let set = |entry: &str, value: &str| {
+        check_evidence(&format!(
+            "{STATE}{COUNTER}fn f(s.0: tobj, w.1: tobj) -> unit {{\n  let e.2: obj = prim ev_new[State](s.0, w.1)\n  let u.3: unit = prim ev_set_clause[{entry}](e.2, {value})\n  return u.3\n}}\ninternal clause Counter.put fn g(e.0: obj, n.1: int) -> unit {{\n  return ()\n}}\nfn h(e.0: obj, u.1: unit) -> tobj {{\n  return ()\n}}\n"
+        ))
+    };
+    assert_eq!(
+        set("State.get", "&g"),
+        Err(
+            "`g` is a clause of `Counter.put`, but it is put into the `State.get` entry in `f`"
+                .to_string()
+        )
+    );
+    assert_eq!(
+        set("State.get", "&h"),
+        Err("`h` is not a clause, but it is put into the `State.get` entry in `f`".to_string())
+    );
+    assert_eq!(
+        set("Counter.put", "&g"),
+        Err(
+            "`prim ev_set_clause[Counter.put]` is given `e.2`, the evidence of `State` in `f`"
+                .to_string()
+        )
+    );
 }

@@ -257,6 +257,7 @@ fn boxed(function: &CoreFn, target: FnIdx) -> CoreFn {
         name: format!("{}$boxed", function.name),
         internal: function.internal,
         yields: function.yields,
+        clause: None,
         vars,
         ret: uniform_repr(function.ret),
         blocks: vec![Block {
@@ -482,6 +483,11 @@ impl Converter<'_> {
                     | Rhs::Drop(_)
                     | Rhs::Box(_)
                     | Rhs::Unbox(_) => None,
+                    Rhs::Prim(_, _) => {
+                        unimplemented!(
+                            "a prim reaches the boxing pass before the evidence pass exists"
+                        )
+                    }
                 };
                 let mut after = Vec::new();
                 let bound = match given {
@@ -542,6 +548,11 @@ impl Converter<'_> {
                     } => None,
                     _ => Some(Repr::TObj),
                 }
+            }
+            Call::Clause { .. } => {
+                unimplemented!(
+                    "a clause call reaches the boxing pass before the evidence pass exists"
+                )
             }
         }
     }

@@ -64,6 +64,9 @@ fn tail_call(block: &mut Block, ret: Repr, rets: &[Repr]) {
         Call::Apply { .. } | Call::Perform { .. } | Call::Resume { .. } | Call::Handle { .. } => {
             Repr::TObj.compatible(ret)
         }
+        Call::Clause { .. } => {
+            unimplemented!("a clause call reaches contract before the evidence pass exists")
+        }
     };
     if !compatible {
         return;
@@ -138,6 +141,7 @@ pub(crate) fn pure(rhs: &Rhs) -> bool {
             args: _,
             at: _,
         } => ext.row().purity == Purity::Pure,
+        Rhs::Prim(prim, _) => prim.pure(),
         Rhs::Call {
             call: _,
             mask: _,

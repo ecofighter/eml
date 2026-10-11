@@ -282,6 +282,11 @@ impl<'p> Runtime<'p> {
                 let state = env.atom(state)?;
                 self.resume(k, arg, state)
             }
+            Call::Clause { .. } => {
+                unimplemented!(
+                    "a clause call reaches the interpreter before the evidence pass exists"
+                )
+            }
         }
     }
 
