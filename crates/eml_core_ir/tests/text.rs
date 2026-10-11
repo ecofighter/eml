@@ -450,6 +450,7 @@ yields fn f(s.0: tobj, o.1: tobj, c.2: tobj, k.3: tobj) -> tobj {
   let d.17: unit = drop x.16
   let z.18: obj = const \"z\"
   let l.19: unit = extern Prelude.println(z.18)
+  let c.23: tobj = call g(e.5, ())
   switch o.1 Option { #0 -> b1, #1(y.20: tobj) -> b2 }
 b1:
   jump b3(m.7)

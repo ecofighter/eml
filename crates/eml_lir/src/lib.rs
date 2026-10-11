@@ -164,8 +164,7 @@ impl Stmt {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Term {
     Return(Atom),
-    /// 縮約が作る、末尾の呼び出しの要求。LIR の呼び出しは `mask` を持たない
-    /// (docs/spec/core-ir.md の「`mask` の包み」)。
+    /// 縮約が作る、末尾の呼び出しの要求。
     TailCall(Call),
     /// 並列な代入。実引数をすべて読んでから、行き先の引数に書く。
     Jump {
@@ -330,7 +329,8 @@ impl Rhs {
     }
 }
 
-/// 呼び出し。クロージャと引数の所有権は呼び出しに移る。
+/// 呼び出し。クロージャと引数の所有権は呼び出しに移る。LIR の呼び出しは `mask` を持たない
+/// (docs/spec/core-ir.md の「`mask` の包み」)。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Call {
     /// 呼ぶ相手が分かっていて、引数の個数が揃っている呼び出し。

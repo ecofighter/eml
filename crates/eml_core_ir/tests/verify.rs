@@ -48,22 +48,20 @@ fn main$handle0$return(x.0: tobj, s.1: unit) -> tobj {{
 
 // R8
 
-/// `obj` の値と `unit` の値と `()` を、`tobj` の引数に渡す。`decrefs` は、所有の段で受けた値を手放す文である。
-fn compatible_jump(decrefs: &str) -> String {
-    format!(
-        "fn f(s.0: obj, u.1: unit) -> tobj {{
+/// `obj` の値と `unit` の値と `()` を、`tobj` の引数に渡す。
+fn compatible_jump() -> &'static str {
+    "fn f(s.0: obj, u.1: unit) -> tobj {
   jump b1(s.0, u.1, ())
 b1(a.2: tobj, b.3: tobj, c.4: tobj):
-{decrefs}  return a.2
-}}
+  return a.2
+}
 "
-    )
 }
 
 #[test]
 fn a_jump_passes_values_to_compatible_parameters() {
     // `obj` と `tobj`、`unit` と `tobj` は互換で、命令なしで行き来する (docs/spec/lir.md の「値の表現」)
-    assert_eq!(check_translated(&compatible_jump("")), Ok(()));
+    assert_eq!(check_translated(compatible_jump()), Ok(()));
 }
 
 #[test]

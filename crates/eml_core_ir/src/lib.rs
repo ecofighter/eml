@@ -48,11 +48,6 @@ impl Program {
     pub fn function(&self, idx: FnIdx) -> &CoreFn {
         &self.functions[idx.0 as usize]
     }
-
-    /// 表にない番号なら `None` である。誤りを含む IR を表示でき、verifier がその番号を誤りとして報告できるようにする。
-    pub fn layout(&self, id: LayoutId) -> Option<&Layout> {
-        self.layouts.get(id.0 as usize)
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -137,14 +132,6 @@ impl Stmt {
             } => f(Atom::Var(*value)),
         }
     }
-
-    /// 値の使いのうち、参照を1つ受け取る「消費」。`unpack` の値は読むだけなので数えない (docs/spec/core-ir.md)。
-    pub fn for_each_consumed(&self, f: impl FnMut(Atom)) {
-        match self {
-            Stmt::Let { var: _, rhs } => rhs.for_each_consumed(f),
-            Stmt::Unpack { .. } => {}
-        }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -213,27 +200,6 @@ impl Term {
             } => f(*scrutinee),
         }
     }
-
-    /// 値の使いのうち、参照を1つ受け取る「消費」。`switch` の scrutinee は読むだけなので数えない
-    /// (docs/spec/core-ir.md)。
-    pub fn for_each_consumed(&self, f: impl FnMut(Atom)) {
-        if !matches!(self, Term::Switch { .. }) {
-            self.for_each_atom(f);
-        }
-    }
-
-    pub fn for_each_atom_mut(&mut self, mut f: impl FnMut(&mut Atom)) {
-        match self {
-            Term::Return(atom) => f(atom),
-            Term::Jump { target: _, args } => args.iter_mut().for_each(f),
-            Term::Switch {
-                scrutinee,
-                layout: _,
-                cases: _,
-                default: _,
-            } => f(scrutinee),
-        }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -276,27 +242,6 @@ impl Rhs {
             | Rhs::Con { ctor: _, args }
             | Rhs::Prim(_, args) => args.iter().for_each(|&atom| f(atom)),
             Rhs::Drop(atom) => f(*atom),
-            Rhs::ConstString(_) => {}
-        }
-    }
-
-    /// 値の使いのうち、参照を1つ受け取る「消費」。右辺の値の使いは、すべて消費である (docs/spec/core-ir.md)。
-    pub fn for_each_consumed(&self, f: impl FnMut(Atom)) {
-        self.for_each_atom(f);
-    }
-
-    pub fn for_each_atom_mut(&mut self, mut f: impl FnMut(&mut Atom)) {
-        match self {
-            Rhs::Call { call, mask: _ } => call.for_each_atom_mut(f),
-            Rhs::MakeClosure(_, args)
-            | Rhs::Extern {
-                ext: _,
-                args,
-                at: _,
-            }
-            | Rhs::Con { ctor: _, args }
-            | Rhs::Prim(_, args) => args.iter_mut().for_each(f),
-            Rhs::Drop(atom) => f(atom),
             Rhs::ConstString(_) => {}
         }
     }
@@ -390,49 +335,6 @@ impl Call {
                 f(*k);
                 f(*arg);
                 f(*state);
-            }
-        }
-    }
-
-    pub fn for_each_atom_mut(&mut self, mut f: impl FnMut(&mut Atom)) {
-        match self {
-            Call::Direct(_, args)
-            | Call::Perform {
-                effect: _,
-                op: _,
-                resumable: _,
-                args,
-            } => args.iter_mut().for_each(f),
-            Call::Apply {
-                callee,
-                args,
-                yields: _,
-            }
-            | Call::Clause {
-                effect: _,
-                op: _,
-                callee,
-                args,
-            } => {
-                f(callee);
-                args.iter_mut().for_each(f);
-            }
-            Call::Handle {
-                effect: _,
-                init,
-                body,
-                clauses,
-                ret,
-            } => {
-                f(init);
-                f(body);
-                clauses.iter_mut().for_each(&mut f);
-                f(ret);
-            }
-            Call::Resume { k, arg, state } => {
-                f(k);
-                f(arg);
-                f(state);
             }
         }
     }

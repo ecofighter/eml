@@ -459,7 +459,7 @@ b_fast:
   - 変換の段 (`verify_translated`) は translate の後にかける。[LIR とインタプリタ](lir.md) の「構造の規則」の印のない部分と、引き継ぐ検査を確かめる。EP が作るもの (`prim`、`clause`、`clause` の印の関数) を拒む (`` `prim evv_get` is used before the evidence pass ``、`a clause call is used before the evidence pass`、``a clause of `Counter.get` is defined before the evidence pass``)
   - EP の段 (`verify_evidence`) は EP の後にかける。変換の段の検査から EP が作るものの拒否を除き、基本操作と `clause` の検査 ([LIR とインタプリタ](lir.md) の「verifier」) を足す。`handle`、`perform`、`resume` と、呼び出しの `mask` を拒む (``a perform remains after the evidence pass``。`a handler`、`a resume`、`a mask` も同じ形)
 - RC の命令、`box`、`unbox`、`tail`、`saved` は Core IR の型にないので、verifier は確かめない。境界の検査もしない。translate と EP の出力は、box の挿入より前には境界に合わないためである。関数の値の対象が一様かも見ない ([LIR とインタプリタ](lir.md) の「値の表現」の定数の当てはめ)
-- R8 と R9 の文言、`jump` と `return` の文言、引数のない `con` の文言、2つの IR に共通する引き継ぐ検査、検査の順、支配木の求め方は、LIR の verifier と同じである ([LIR とインタプリタ](lir.md) の「verifier」)。2つの verifier は、これらを `eml_lir::check` の部品で共有する
+- R8 と R9 の文言、`jump` と `return` の文言、引数のない `con` の文言、2つの IR に共通する引き継ぐ検査、検査の順、支配木の求め方は、LIR の verifier と同じである ([LIR とインタプリタ](lir.md) の「verifier」)。文言と支配木の求め方などの部品は、2つの verifier が `eml_lir::check` で共有する。検査の順は共有する部品ではなく、2つの verifier で同じに保つ約束である
 - Core IR だけの引き継ぐ検査は次のとおりである。どれも変換の段にだけ現れる。EP の段は、これらの命令そのものを拒むためである
   - 呼び出しの `mask` は、エフェクトの番号がエフェクトの表にあり、昇順に並び、`handle`、`perform`、`clause` に付かない (上の「変換の規則」)
   - `perform` の `resumable` が、エフェクトの表と一致する

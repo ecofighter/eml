@@ -25,7 +25,7 @@ pub enum Purity {
 }
 
 /// 値の表現。IR の変数と extern の行が持ち、RC の対象かどうかもここから決まる (docs/spec/lir.md)。
-/// extern の行が持つので、依存のないこの crate に置き、`eml_core_ir` が再公開する。
+/// extern の行が持つので、依存のないこの crate に置き、`eml_lir` が再公開する。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Repr {
     /// つねにヒープの物体を指す値。

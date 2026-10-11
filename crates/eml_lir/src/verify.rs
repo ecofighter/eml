@@ -356,14 +356,15 @@ impl<'a> Checker<'a> {
                 self.check_rhs(owned, *var, rhs)?;
                 match rhs {
                     Rhs::Call { call, saved } => {
-                        self.cx.never[var.0 as usize] = self.never_returns(call);
+                        let never = self.never_returns(call);
+                        self.cx.note_never(*var, never);
                         self.after_call(owned, saved)?;
                     }
-                    Rhs::MakeClosure(target, _) => {
-                        self.cx.closures.insert(*var, *target);
+                    Rhs::MakeClosure(target, args) => {
+                        self.cx.note_closure(*var, *target, args.len());
                     }
                     Rhs::Prim(Prim::EvNew(effect), _) => {
-                        self.cx.evidences.insert(*var, *effect);
+                        self.cx.note_evidence(*var, *effect);
                     }
                     Rhs::Prim(_, _)
                     | Rhs::Extern {
@@ -891,13 +892,6 @@ impl<'a> Checker<'a> {
                         "a constant refers to string {index}, which does not exist"
                     ));
                 }
-            }
-            // フィールドのないコンストラクタの値は、`#N` の1つの書き方にそろえる (docs/spec/lir.md)
-            Rhs::Con { ctor: _, args } if args.is_empty() => {
-                return Err(
-                    "a constructor value without fields is written as a tag `#N`, not `con`"
-                        .to_string(),
-                );
             }
             Rhs::Con { ctor, args } => self.cx.check_con(var, *ctor, args)?,
             Rhs::Drop(atom) => self.cx.fn_atom(*atom)?,

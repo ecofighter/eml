@@ -98,6 +98,14 @@ fn lir_rejects_programs_with_errors() {
     lir("f : Int -> Int\nf x = g x");
 }
 
+/// 使われない純粋な `let` を持つプログラム。
+#[cfg(feature = "core")]
+const UNUSED: &str = "f : Int -> Int\nf x =\n  let s = \"unused\"\n  x\n\nmain : Unit -> <IO> Unit\nmain () = println (show (f 1))";
+
+/// `s` を2回使うプログラム。
+#[cfg(feature = "core")]
+const TWICE: &str = "twice : String -> String\ntwice s = s ++ s\n\nmain : Unit -> <IO> Unit\nmain () = println (twice \"x\")";
+
 #[cfg(feature = "core")]
 #[test]
 fn core_until_stops_after_the_named_pass() {
@@ -106,14 +114,6 @@ fn core_until_stops_after_the_named_pass() {
     assert!(pretty(UNUSED, eml_core_ir::Pass::Translate).contains("const \"unused\""));
     assert!(!pretty(TWICE, eml_core_ir::Pass::Translate).contains("dup"));
 }
-
-/// 使われない純粋な `let` を持つプログラム。
-#[cfg(feature = "core")]
-const UNUSED: &str = "f : Int -> Int\nf x =\n  let s = \"unused\"\n  x\n\nmain : Unit -> <IO> Unit\nmain () = println (show (f 1))";
-
-/// `s` を2回使うプログラム。
-#[cfg(feature = "core")]
-const TWICE: &str = "twice : String -> String\ntwice s = s ++ s\n\nmain : Unit -> <IO> Unit\nmain () = println (twice \"x\")";
 
 #[cfg(feature = "core")]
 #[test]

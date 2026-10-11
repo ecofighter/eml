@@ -32,8 +32,8 @@ pub fn ui_programs() -> Vec<UiProgram> {
     for top in ["run", "run-fail"] {
         let top_dir = workspace().join("tests/ui").join(top);
         for category in sorted_entries(&top_dir) {
+            let category_name = file_name(&category);
             for entry in sorted_entries(&category) {
-                let category_name = file_name(&category);
                 if entry.is_dir() {
                     programs.push(directory_program(top, &category_name, &entry));
                 } else if entry.extension().is_some_and(|ext| ext == "em") {

@@ -22,8 +22,8 @@ pub fn effect_text(effects: &[EffectInfo], effect: u32) -> String {
 }
 
 /// エフェクトの多重集合 (`mask` と `evv_mask` の即値) を `, ` で区切って並べる。
-pub fn effects_text(effects: &[EffectInfo], effects_: &[u32]) -> String {
-    let names: Vec<String> = effects_
+pub fn effects_text(effects: &[EffectInfo], ids: &[u32]) -> String {
+    let names: Vec<String> = ids
         .iter()
         .map(|&effect| effect_text(effects, effect))
         .collect();

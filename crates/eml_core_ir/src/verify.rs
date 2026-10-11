@@ -149,8 +149,6 @@ struct Checker<'a> {
     cx: Context<'a>,
     defs: Vec<Option<Site>>,
     at: Site,
-    /// `closure` で束縛した変数の、すでに渡した引数の数。`handle` の節の引数の数を確かめるのに使う。
-    closure_args: HashMap<VarId, usize>,
 }
 
 impl<'a> Checker<'a> {
@@ -172,7 +170,6 @@ impl<'a> Checker<'a> {
                 block: 0,
                 index: -1,
             },
-            closure_args: HashMap::new(),
         }
     }
 
@@ -269,14 +266,14 @@ impl<'a> Checker<'a> {
                 self.check_rhs(*var, rhs)?;
                 match rhs {
                     Rhs::Call { call, mask: _ } => {
-                        self.cx.never[var.0 as usize] = self.never_returns(call);
+                        let never = self.never_returns(call);
+                        self.cx.note_never(*var, never);
                     }
                     Rhs::MakeClosure(target, args) => {
-                        self.cx.closures.insert(*var, *target);
-                        self.closure_args.insert(*var, args.len());
+                        self.cx.note_closure(*var, *target, args.len());
                     }
                     Rhs::Prim(Prim::EvNew(effect), _) => {
-                        self.cx.evidences.insert(*var, *effect);
+                        self.cx.note_evidence(*var, *effect);
                     }
                     Rhs::Prim(_, _)
                     | Rhs::Extern {
@@ -514,13 +511,6 @@ impl<'a> Checker<'a> {
                     ));
                 }
             }
-            // フィールドのないコンストラクタの値は、`#N` の1つの書き方にそろえる (docs/spec/core-ir.md)
-            Rhs::Con { ctor: _, args } if args.is_empty() => {
-                return Err(
-                    "a constructor value without fields is written as a tag `#N`, not `con`"
-                        .to_string(),
-                );
-            }
             Rhs::Con { ctor, args } => self.cx.check_con(var, *ctor, args)?,
             Rhs::Drop(_) => {}
         }
@@ -745,7 +735,7 @@ impl<'a> Checker<'a> {
     fn parameters_left(&self, atom: Atom) -> Option<usize> {
         let (function, passed) = match atom {
             Atom::Fn(function) => (function, 0),
-            Atom::Var(var) => (*self.cx.closures.get(&var)?, self.closure_args[&var]),
+            Atom::Var(var) => self.cx.closure(var)?,
             Atom::Int(_) | Atom::Unit | Atom::Tag(_) => return None,
         };
         let params = self

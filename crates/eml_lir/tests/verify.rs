@@ -2099,16 +2099,16 @@ fn the_lowered_level_rejects_tail_calls() {
     // 末尾呼び出しは縮約だけが作る。box の挿入は、末尾呼び出しのない入力の `let` と `return` から末尾の位置を見る
     for (text, message) in [
         (
-            "fn f(x.0: int) -> int {\n  tail call f(x.0)\n}\n".to_string(),
+            "fn f(x.0: int) -> int {\n  tail call f(x.0)\n}\n",
             "a tail call is formed before contract in `f`",
         ),
         (
-            "fn f(c.0: tobj) -> tobj {\n  tail apply c.0(())\n}\n".to_string(),
+            "fn f(c.0: tobj) -> tobj {\n  tail apply c.0(())\n}\n",
             "a tail apply is formed before contract in `f`",
         ),
     ] {
-        assert_eq!(check_lowered(&text), Err(message.to_string()));
-        assert_eq!(check_scopes(&text), Ok(()));
+        assert_eq!(check_lowered(text), Err(message.to_string()));
+        assert_eq!(check_scopes(text), Ok(()));
     }
 }
 

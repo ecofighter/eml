@@ -362,12 +362,12 @@ pub struct Context<'a> {
     pub boundaries: bool,
     /// 変数の番号ごとの、`never` の操作の `perform` か `clause` の束縛かどうか。束縛の使いには制御が届かないので、
     /// 互換の位置で位置と比べない。
-    pub never: Vec<bool>,
-    /// `closure` で束縛した変数の関数。`ev_set_clause` の入口の関数を確かめるのに使う。
-    pub closures: HashMap<VarId, FnIdx>,
+    never: Vec<bool>,
+    /// `closure` で束縛した変数の関数と、捕獲した値の数。`ev_set_clause` の入口の関数を確かめるのに使う。
+    closures: HashMap<VarId, (FnIdx, usize)>,
     /// `ev_new[E]` で束縛した変数の、エフェクトの番号。`ev_set_clause` の入口がその evidence のエフェクトの操作で
     /// あることを確かめるのに使う。
-    pub evidences: HashMap<VarId, u32>,
+    evidences: HashMap<VarId, u32>,
 }
 
 impl<'a> Context<'a> {
@@ -384,6 +384,24 @@ impl<'a> Context<'a> {
 
     fn repr(&self, var: VarId) -> Repr {
         self.vars[var.0 as usize].repr
+    }
+
+    pub fn note_never(&mut self, var: VarId, never: bool) {
+        self.never[var.0 as usize] = never;
+    }
+
+    /// `passed` は、`closure` が捕獲した値の数である。
+    pub fn note_closure(&mut self, var: VarId, target: FnIdx, passed: usize) {
+        self.closures.insert(var, (target, passed));
+    }
+
+    pub fn note_evidence(&mut self, var: VarId, effect: u32) {
+        self.evidences.insert(var, effect);
+    }
+
+    /// `closure` で束縛した変数の関数と、捕獲した値の数。
+    pub fn closure(&self, var: VarId) -> Option<(FnIdx, usize)> {
+        self.closures.get(&var).copied()
     }
 
     /// 関数が `clause` の印を持てば、その操作の `E.op`。表にない関数は `None` で、IR ごとの verifier が断る。
@@ -772,7 +790,7 @@ impl<'a> Context<'a> {
         let entry = operation_text(effects, effect, op);
         let target = match args[1] {
             Atom::Fn(target) => Some(target),
-            Atom::Var(var) => self.closures.get(&var).copied(),
+            Atom::Var(var) => self.closure(var).map(|(function, _)| function),
             Atom::Int(_) | Atom::Unit | Atom::Tag(_) => None,
         };
         if let Some(function) =
@@ -812,6 +830,13 @@ impl<'a> Context<'a> {
     /// Repr が `tobj` でないフィールドの値はその Repr に収まる。`tobj` のフィールドの値は、範囲の段と所有の段で、
     /// 互換の位置として収まる (R9)。
     pub fn check_con(&self, var: VarId, ctor: Ctor, args: &[Atom]) -> Result<(), String> {
+        // フィールドのないコンストラクタの値は、`#N` の1つの書き方にそろえる (docs/spec/lir.md の「値の表現」)
+        if args.is_empty() {
+            return Err(
+                "a constructor value without fields is written as a tag `#N`, not `con`"
+                    .to_string(),
+            );
+        }
         let (layout, layout_repr, constructor) = self.ctor(ctor, "a con")?;
         field_count(
             format!("a con of `{}` #{}", layout.name, ctor.tag),

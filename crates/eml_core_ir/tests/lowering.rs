@@ -81,3 +81,35 @@ internal yields clause State.get fn g(e.0: obj, u.1: unit) -> tobj {
     );
     assert_eq!(lir.functions[1].vars, core.functions[1].vars);
 }
+
+#[test]
+#[should_panic(expected = "internal error: an effect instruction reaches the lowering to LIR")]
+fn lowering_rejects_a_perform() {
+    let core = parse(
+        "\
+effect State { get(unit) -> tobj }
+fn f() -> tobj {
+  let p.0: tobj = perform State.get(())
+  return p.0
+}
+",
+    )
+    .unwrap();
+    to_lir(core);
+}
+
+#[test]
+#[should_panic(expected = "internal error: a mask reaches the lowering to LIR")]
+fn lowering_rejects_a_mask() {
+    let core = parse(
+        "\
+effect State { get(unit) -> tobj }
+fn f(c.0: tobj) -> tobj {
+  let t.1: tobj = mask [State] apply c.0(())
+  return t.1
+}
+",
+    )
+    .unwrap();
+    to_lir(core);
+}
