@@ -1,4 +1,4 @@
-//! 具体化した row が yield しうるかの分類 (docs/superpowers/specs/2026-10-11-s7-evidence-passing-design.md の
+//! 具体化した row が yield しうるかの分類 (docs/spec/types.md の
 //! 「row の具体化の記録」)。参照の `rows`、関数の本体、ラムダ、呼び出しの矢印の分類を確かめる。
 
 use eml_hir::FunctionId;

@@ -160,7 +160,7 @@ impl FnLowering<'_> {
     /// の矢印を1つにまとめると、片方の矢印に余計な `mask` が効くためである (docs/spec/core-ir.md)。yield しうる矢印の
     /// 後でも分ける。実行時の `apply` は引数を分けて順に呼ぶので、途中の矢印で yield すると、残りの引数を渡す処理が
     /// 継続に入らないためである。`apply` の印は、受け持つ矢印のどれかが yield しうるときに立てる
-    /// (docs/superpowers/specs/2026-10-11-s7-evidence-passing-design.md の「`apply` の印と分け方」)。
+    /// (docs/spec/core-ir.md の「`apply` の印と分け方」)。
     fn apply(
         &mut self,
         id: ExprId,
@@ -701,7 +701,7 @@ impl FnLowering<'_> {
 
     /// handler の節か `return` の節を持ち上げる。状態のない handler の節は、最後の引数で状態の `()` を受ける
     /// (docs/spec/core-ir.md)。節は handle の外側の row、つまり handle を含む関数の row で動くので、その関数と同じ印に
-    /// する (docs/superpowers/specs/2026-10-11-s7-evidence-passing-design.md の「`yields` の印」)。
+    /// する (docs/spec/core-ir.md の「`yields` の印」)。
     fn lift_clause(&mut self, name: String, closure: &Closure, stateless: bool) -> Atom {
         let mut params: Vec<(Option<PatId>, Repr)> = closure
             .params

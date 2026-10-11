@@ -339,7 +339,7 @@ fn resume_point(address: u64) -> (BlockId, usize) {
 /// ならない。R9 は値を作った配置を追わないので、verifier を通った IR でも `tobj` に入ったヒープの物体を `unbox`
 /// しうる。機械は Repr を読まずにそれを見つける (docs/spec/core-ir.md の「インタプリタ (CEK 機械)」)。yield 中に
 /// 返るダミーは、呼び出しの直後の変換に当たっても誤りにせず、そのまま通す。その値は捨てられる
-/// (docs/superpowers/specs/2026-10-11-s7-evidence-passing-design.md の「ダミーの値」)。
+/// (docs/spec/core-ir.md の「ダミーの値」)。
 fn scalar(value: Value, what: &'static str) -> Result<Value, Fault> {
     match value {
         Value::Obj(_) => Err(Fault::Internal(what)),

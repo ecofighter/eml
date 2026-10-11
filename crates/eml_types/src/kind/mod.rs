@@ -293,7 +293,7 @@ pub(crate) enum CarriedValue {
         binding: TextRange,
         clause: TextRange,
     },
-    /// handler の状態。本体の実行中は handler フレームにある (docs/spec/effects.md の「パラメータ付き handler」)。
+    /// handler の状態。本体の実行中は handler の実行の evidence にある (docs/spec/effects.md の「パラメータ付き handler」)。
     HandlerState {
         /// `from` の初期値の式の範囲。
         init: TextRange,

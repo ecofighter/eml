@@ -84,7 +84,7 @@ eml の目的、言語の性格、確定した設計判断の一覧、文書全�
 | 中断 | `drop k` や `never` 操作によって、継続が再開されずに捨てられること。暗黙の後始末は中断時にだけ起きる |
 | 破棄処理 | `Lin` 型に宣言された捨て方。標準ライブラリのリソース `Fs.File` では `Fs.close` |
 | deep handler | 再開した継続の中でも同じ handler が有効なままの handler |
-| パラメータ付き handler | `handle e from init with` の形で、状態を節の最後の引数として受け渡す handler。状態は handler フレームに置き、脱糖しない |
+| パラメータ付き handler | `handle e from init with` の形で、状態を節の最後の引数として受け渡す handler。状態は handler の実行ごとの evidence に置き、脱糖しない |
 | レイアウト段 | lexer と parser の間で、仮想トークン `OPEN` / `SEP` / `CLOSE` (コードでは `LAYOUT_OPEN` / `LAYOUT_SEP` / `LAYOUT_CLOSE`) を挿入する段 |
 | Perceus | 参照カウントの `dup` / `decref` / `release` を静的に挿入する方式。reuse analysis と借用の最適化は後で入れる |
 | Core IR | 型付き HIR から変換する、前向きの辺だけを持つ基本ブロックの列の IR。すべての中間値に名前を付け、RC とエフェクトの命令を明示する |

@@ -445,7 +445,7 @@ pub(crate) fn check_body(
         body_types.pats.insert(pat, exporter.export(ty));
     }
     // row は型引数と同じく本体全体の単一化が終わってから分類する。rigid な row 変数がこの定義のものかを見分けられる
-    // のは、表が生きている今だけである (docs/superpowers/specs/2026-10-11-s7-evidence-passing-design.md の
+    // のは、表が生きている今だけである (docs/spec/types.md の
     // 「row の具体化の記録」)
     let own_rows = own.rigids.row_vars();
     let classify = |row: &Row| row_yield(&table, row, &own_rows);

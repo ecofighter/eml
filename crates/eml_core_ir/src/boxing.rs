@@ -126,7 +126,7 @@ fn raise_tail_returns(functions: &mut [CoreFn], effects: &[EffectInfo]) {
 /// あり、その後の文がすべて純粋な `let` であるときの、その呼び出しである。後ろの純粋な `let` は `return` が使わない
 /// ので縮約が消し、そこで末尾呼び出しになる (docs/spec/core-ir.md の「変換の規則」)。形で決めるので、`never` の操作の
 /// 節の呼び出しも含む。EP は、この呼び出しを yield の地点にしない
-/// (docs/superpowers/specs/2026-10-11-s7-evidence-passing-design.md の「yield の地点」)。
+/// (docs/spec/core-ir.md の「yield の地点」)。
 pub(crate) fn tail_position_call(block: &Block) -> Option<(usize, &Call)> {
     let Term::Return(Atom::Var(returned)) = block.term else {
         return None;
@@ -152,8 +152,8 @@ pub(crate) fn tail_position_call(block: &Block) -> Option<(usize, &Call)> {
     None
 }
 
-/// 一様な関数は、引数と `ret` の Repr がすべて `tobj` と互換である。`apply` と handler は、関数ごとの Repr を知らずに
-/// 関数の値を呼ぶ。
+/// 一様な関数は、引数と `ret` の Repr がすべて `tobj` と互換である。`apply` は、関数ごとの Repr を知らずに関数の値を
+/// 呼ぶ。
 fn uniform(function: &CoreFn) -> bool {
     function.ret.compatible(Repr::TObj)
         && function
@@ -239,7 +239,7 @@ fn uniformize_in_place(function: &mut CoreFn) {
 
 /// `clause` の印の関数を操作の ABI に合わせる。捕獲は一様な Repr、evidence は `obj`、残りの引数は操作の表の Repr で
 /// 受け、`ret` は操作の `ret` にする。`never` の操作の節の入口はダミーの物体を返すので `obj` である
-/// (docs/superpowers/specs/2026-10-11-s7-evidence-passing-design.md の「box の挿入」)。
+/// (docs/spec/core-ir.md の「box の挿入」)。
 fn conform_clause(function: &mut CoreFn, operation: &OperationInfo) {
     let params = function.params();
     let captures = params.len() - 1 - operation.params.len();
@@ -529,7 +529,7 @@ impl Converter<'_> {
                         None
                     }
                     // 基本操作の引数と結果は、直接の呼び出しと同じく互換の位置である
-                    // (docs/superpowers/specs/2026-10-11-s7-evidence-passing-design.md の「基本操作」)
+                    // (docs/spec/core-ir.md の「基本操作」)
                     Rhs::Prim(prim, args) => {
                         let row = prim.row(self.program);
                         for (arg, &param) in args.iter_mut().zip(&row.params) {
@@ -593,7 +593,7 @@ impl Converter<'_> {
     /// 呼び出しのアトムを変換し、結果を受ける Repr を返す。直接の呼び出しは呼ばれる関数の引数と `ret`、節の呼び出しは
     /// 先頭の evidence が `obj` で、残りの引数と結果が操作の表の Repr である。関数値の適用は一様な `tobj` である。
     /// `never` の操作の節の呼び出しは戻らないので、結果を受け直さない (`None`)。`handle`、`perform`、`resume` は EP が
-    /// 消すので、ここには届かない (docs/superpowers/specs/2026-10-11-s7-evidence-passing-design.md の「後段のパス」)。
+    /// 消すので、ここには届かない (docs/spec/core-ir.md の「box の挿入」)。
     fn call(&mut self, call: &mut Call, out: &mut Vec<Stmt>) -> Option<Repr> {
         match call {
             Call::Direct(target, args) => {

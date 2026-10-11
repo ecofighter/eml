@@ -59,7 +59,7 @@ pub fn verify_scopes(program: &Program) -> Result<(), VerifyError> {
 }
 
 /// EP の後の IR を確かめる。変換の段の検査に加えて、`handle`、`perform`、`resume`、`mask` が残っていないことと、
-/// 基本操作と節の呼び出しの形を確かめる (docs/superpowers/specs/2026-10-11-s7-evidence-passing-design.md の
+/// 基本操作と節の呼び出しの形を確かめる (docs/spec/core-ir.md の
 /// 「verifier」)。
 pub fn verify_evidence(program: &Program) -> Result<(), VerifyError> {
     verify_at(program, Level::Evidence)
@@ -146,7 +146,7 @@ fn non_uniform(function: &CoreFn) -> Option<NonUniform> {
 
 /// `clause` の印の関数は、捕獲の後に evidence と操作の引数を受け、操作の結果を返す。境界の段では、捕獲が `tobj`、
 /// evidence が `obj`、残りの引数と `ret` が操作の表の Repr (`never` の操作の `ret` は `obj`) と互換であることも
-/// 確かめる (docs/superpowers/specs/2026-10-11-s7-evidence-passing-design.md の「box の挿入」と「verifier」)。
+/// 確かめる (docs/spec/core-ir.md の「box の挿入」と「verifier」)。
 fn clause_function(program: &Program, function: &CoreFn, level: Level) -> Result<(), String> {
     let Some((effect, op)) = function.clause else {
         return Ok(());
@@ -523,7 +523,7 @@ impl<'a> Checker<'a> {
 
     /// `clause` の印の関数の値 (`&g` と `closure g(..)` の変数) は、`ev_set_clause` の2つ目の引数にだけ使える。入口の
     /// 関数は操作の ABI で呼ばれ、`apply` の一様な規約に合わないためである
-    /// (docs/superpowers/specs/2026-10-11-s7-evidence-passing-design.md の「入口の関数の印」)。変数は1回だけ
+    /// (docs/spec/core-ir.md の「入口の関数の印」)。変数は1回だけ
     /// 定義されるので (R5)、先に `closure` をすべて集めてから使いを見る。
     fn clause_values(&self) -> Result<(), String> {
         let blocks = &self.function.blocks;
@@ -1540,7 +1540,7 @@ impl<'a> Checker<'a> {
     }
 
     /// 基本操作は EP だけが作る。即値は表にあり、引数の数は表の行と同じである。範囲の段と所有の段では、引数と結果を
-    /// 直接の呼び出しと同じく互換の位置として比べる (docs/superpowers/specs/2026-10-11-s7-evidence-passing-design.md の
+    /// 直接の呼び出しと同じく互換の位置として比べる (docs/spec/core-ir.md の
     /// 「基本操作」)。
     fn check_prim(&self, var: VarId, prim: &Prim, args: &[Atom]) -> Result<(), String> {
         let row = prim.row(self.program);
@@ -1622,7 +1622,7 @@ impl<'a> Checker<'a> {
 
     /// `ev_set_clause[E.op](ev, c)` の c の関数が分かるとき (`&g` か、同じ関数の中の `closure g(..)`)、g は `E.op` の
     /// `clause` の印を持つ。ev を同じ関数の中の `ev_new` で作ったなら、そのエフェクトは E である
-    /// (docs/superpowers/specs/2026-10-11-s7-evidence-passing-design.md の「verifier」)。
+    /// (docs/spec/core-ir.md の「verifier」)。
     fn check_set_clause(
         &self,
         name: &str,
@@ -1712,7 +1712,7 @@ impl<'a> Checker<'a> {
     /// 確かめる (docs/spec/core-ir.md の「verifier」)。
     fn check_call(&self, owned: &mut Owned, call: &Call, receiver: Receiver) -> Result<(), String> {
         // EP は `handle`、`perform`、`resume` を基本操作と節の呼び出しに置き換える
-        // (docs/superpowers/specs/2026-10-11-s7-evidence-passing-design.md の「verifier」)
+        // (docs/spec/core-ir.md の「verifier」)
         if self.level != Level::Translated {
             let remains = match call {
                 Call::Handle { .. } => Some("a handler"),
@@ -1937,8 +1937,8 @@ impl<'a> Checker<'a> {
         }
     }
 
-    /// 呼び出しの結果 (直接の呼び出しなら呼ばれる関数の `ret`、ほかは `tobj`) は、束縛する変数か、`tail` なら
-    /// 呼び出し元の `ret` と互換である (R8)。
+    /// 呼び出しの結果 (直接の呼び出しなら呼ばれる関数の `ret`、節の呼び出しなら操作の `ret`、`apply` なら `tobj`) は、
+    /// 束縛する変数か、`tail` なら呼び出し元の `ret` と互換である (R8)。
     fn check_result(&self, call: &Call, result: Repr, receiver: Receiver) -> Result<(), String> {
         match receiver {
             Receiver::Bound(var) => {
@@ -2010,8 +2010,8 @@ impl<'a> Checker<'a> {
         if mask.is_empty() {
             return Ok(());
         }
-        // EP は `mask` を `evv_mask` に置き換える (docs/superpowers/specs/2026-10-11-s7-evidence-passing-design.md の
-        // 「`mask`」)
+        // EP は `mask` を `evv_mask` に置き換える (docs/spec/core-ir.md の
+        // 「`mask` の包み」)
         if self.level != Level::Translated {
             return Err("a mask remains after the evidence pass".to_string());
         }

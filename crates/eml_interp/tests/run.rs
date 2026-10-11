@@ -12,7 +12,7 @@ use crate::common::{parse, run_core, run_core_unverified};
 /// `mask` 付きの呼び出しの中の操作は、呼び出しより外側の同じエフェクトの handler を、`mask` に並ぶ数だけ飛ばす。
 /// 呼び出しの中で設けた handler は飛ばさない (docs/spec/core-ir.md)。`ir/mask.core` は、次のプログラムを Perceus
 /// まで通した IR である。EP が `mask` を `evv_mask` と `mask$` の包みに置き換えている
-/// (docs/superpowers/specs/2026-10-11-s7-evidence-passing-design.md の「`mask`」)。
+/// (docs/spec/core-ir.md の「`mask` の包み」)。
 ///
 /// ```text
 /// effect Ask where

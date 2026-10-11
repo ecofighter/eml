@@ -157,6 +157,29 @@ fn every_cited_heading_exists() {
     );
 }
 
+/// コード片とコードブロックを除いた本文。Core IR のテキスト (`prim ev_clause[State.get](e.2)`) のように、コードの中の
+/// `](` はリンクでないためである。コード片は同じ長さのバッククォートの並びで閉じる。
+fn without_code(text: &str) -> String {
+    let mut prose = String::new();
+    let mut fenced = false;
+    for line in text.lines() {
+        if line.trim_start().starts_with("```") {
+            fenced = !fenced;
+        } else if !fenced {
+            let mut rest = line;
+            while let Some(start) = rest.find('`') {
+                prose.push_str(&rest[..start]);
+                let run = rest[start..].chars().take_while(|&c| c == '`').count();
+                let (fence, after) = rest[start..].split_at(run);
+                rest = after.find(fence).map_or(after, |end| &after[end + run..]);
+            }
+            prose.push_str(rest);
+        }
+        prose.push('\n');
+    }
+    prose
+}
+
 /// 文書の中のリンク `](相対パス)` の行き先があることを確かめる。節を別のファイルへ移したとき、移した文の相対リンクの
 /// 深さが変わるため。
 #[test]
@@ -164,7 +187,7 @@ fn every_linked_document_exists() {
     let root = repo_root();
     let mut broken = Vec::new();
     for file in sources(&root).into_iter().filter(|file| is_markdown(file)) {
-        let text = fs::read_to_string(&file).unwrap();
+        let text = without_code(&fs::read_to_string(&file).unwrap());
         for (at, _) in text.match_indices("](") {
             let rest = &text[at + 2..];
             let Some(end) = rest.find(')') else {

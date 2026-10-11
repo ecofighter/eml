@@ -15,7 +15,7 @@ pub(crate) enum Step {
     Finished,
 }
 
-/// yield の状態 (docs/superpowers/specs/2026-10-11-s7-evidence-passing-design.md の「実行の文脈」)。
+/// yield の状態 (docs/spec/core-ir.md の「実行の文脈」)。
 pub(crate) enum YieldState {
     None,
     /// yield 中か、`abort` なら中断中である。`target` (宛先の evidence)、`clause` (節の本体)、`cont`
@@ -117,7 +117,7 @@ pub(crate) struct Runtime<'p> {
     pub(crate) effect_sizes: Vec<usize>,
     /// 今有効な evidence のリスト。空のリストは `Value::Unit` である。関数の引数でなく実行の文脈に持つので、yield
     /// しうる関数とそうでない関数の呼び出しの規約は同じになる
-    /// (docs/superpowers/specs/2026-10-11-s7-evidence-passing-design.md の「実行の文脈」)。
+    /// (docs/spec/core-ir.md の「実行の文脈」)。
     pub(crate) evv: Value,
     pub(crate) yield_state: YieldState,
     /// `ev_lookup` と `evv_mask` がたどった `evv` の節点の数。
@@ -245,7 +245,7 @@ impl<'p> Runtime<'p> {
     /// 呼び出す。末尾でない呼び出しでは、機械が先に戻りのフレームを積んでいる。引数はフレームを積んだ後に読む。
     /// 環境の読み出しはスロットを書き換えないので、順序は結果に影響しない。エフェクトの命令と `mask` は EP が基本操作に
     /// 置き換えるので、ここに届けば内部の誤りである
-    /// (docs/superpowers/specs/2026-10-11-s7-evidence-passing-design.md の「CEK とランタイム」)。
+    /// (docs/spec/core-ir.md の「インタプリタ (CEK 機械)」)。
     pub(crate) fn call(&mut self, call: &Call, mask: &[u32], env: &Env) -> Result<Transfer, Fault> {
         if !mask.is_empty() {
             return Err(EFFECT_INSTRUCTION);
@@ -265,7 +265,7 @@ impl<'p> Runtime<'p> {
                 Err(EFFECT_INSTRUCTION)
             }
             // 節の呼び出しは、インタプリタでは `apply` と同じである
-            // (docs/superpowers/specs/2026-10-11-s7-evidence-passing-design.md の「節の呼び出し」)
+            // (docs/spec/core-ir.md の「節の呼び出し」)
             Call::Clause {
                 effect: _,
                 op: _,
@@ -343,7 +343,7 @@ impl<'p> Runtime<'p> {
         loop {
             let top = self.cont;
             // フレームはつねに一意である。フレームを捕まえる命令はなく、再開する継続はクロージャで作る
-            // (docs/superpowers/specs/2026-10-11-s7-evidence-passing-design.md の「継続の組み立て」)
+            // (docs/spec/core-ir.md の「継続の組み立て」)
             let Payload::Frame(frame) = self.heap.take(top).map_err(Fault::Heap)? else {
                 return Err(Fault::Internal("the continuation is not a frame"));
             };

@@ -1,4 +1,4 @@
-//! EP のパスのうち、yield の地点で関数を分ける部分 (docs/superpowers/specs/2026-10-11-s7-evidence-passing-design.md
+//! EP のパスのうち、yield の地点で関数を分ける部分 (docs/spec/core-ir.md
 //! の「yield の地点」「継続の関数」)。入力は手書きの translate の出力の形で、出力が EP の後の段の verifier を通ることも
 //! 確かめる。
 
@@ -456,7 +456,7 @@ yields fn h() -> int {
 
 const ASK: &str = "effect Ask where\n  ask : Unit -> Int\n\n";
 
-/// handle の場所の形 (docs/superpowers/specs/2026-10-11-s7-evidence-passing-design.md の「handle と `prompt$`」)。
+/// handle の場所の形 (docs/spec/core-ir.md の「handle と `prompt$`」)。
 /// in-place の入口を `ev_set_clause` で入れてから `evv` を替え、本体の結果を `prompt$` に渡す。
 #[test]
 fn a_handle_installs_evidence_and_calls_prompt() {
@@ -662,7 +662,7 @@ fn a_masked_call_restores_the_evidence_list_and_wraps_the_continuation() {
 }
 
 /// row のビットで純粋と決まった instance は `yields` でないので、EP は yield の確認を足さない
-/// (docs/superpowers/specs/2026-10-11-s7-evidence-passing-design.md の「row のビットと instance の鍵」)。
+/// (docs/spec/core-ir.md の「row のビットと instance の鍵」)。
 #[test]
 fn a_pure_instance_of_a_row_polymorphic_function_has_no_yield_check() {
     let text = format!(

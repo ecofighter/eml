@@ -209,7 +209,7 @@ impl ProgramBuilder {
     }
 
     /// 引数を受け、`rhs` の値を返すだけの内部の関数を作る。包む関数に使う。呼び出しの右辺は縮約が末尾呼び出しにする。
-    /// `yields` は作る関数の印である (docs/superpowers/specs/2026-10-11-s7-evidence-passing-design.md の
+    /// `yields` は作る関数の印である (docs/spec/core-ir.md の
     /// 「`yields` の印」)。
     fn simple(
         &mut self,
@@ -443,7 +443,7 @@ impl ProgramBuilder {
 }
 
 /// 入口の関数の型の最初の矢印の row が yield しうるか。入口の instance の row のビットはすべて立つので、宣言の型の
-/// row 変数の末尾は立つ側に解く (docs/superpowers/specs/2026-10-11-s7-evidence-passing-design.md の
+/// row 変数の末尾は立つ側に解く (docs/spec/core-ir.md の
 /// 「row のビットと instance の鍵」)。宣言の型の rigid な末尾は入口の関数自身の row 変数だけなので、名前で区別
 /// できなくても取り違えない。
 fn first_arrow_yields(hir: &HirProgram, types: &TypeStore, ty: TypeId) -> bool {
@@ -516,7 +516,7 @@ pub(super) fn perform_call(hir: &HirProgram, op: OperationId, args: Vec<Atom>) -
 }
 
 /// エフェクトの表。`effect_index` と同じ順に並べる。操作の Repr は操作のスキームの型から決め、型変数は `repr` が
-/// `tobj` にする (docs/superpowers/specs/2026-10-11-s7-evidence-passing-design.md の「操作の表の Repr」)。
+/// `tobj` にする (docs/spec/core-ir.md の「エフェクトの位置」)。
 pub(super) fn effect_table(
     hir: &HirProgram,
     types: &TypeStore,

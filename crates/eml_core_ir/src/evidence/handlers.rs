@@ -1,6 +1,6 @@
 //! handle、`perform`、`resume`、`mask` の変換と、節ごとの in-place の入口
-//! (docs/superpowers/specs/2026-10-11-s7-evidence-passing-design.md の「handle と `prompt$`」「再開と状態」
-//! 「`perform` と節の3つの形」「`mask`」)。入口を先にすべて決めてから、関数ごとに命令を置き換える。handle の場所は
+//! (docs/spec/core-ir.md の「handle と `prompt$`」「再開と状態」
+//! 「`perform` と節の3つの形」「`mask` の包み」)。入口を先にすべて決めてから、関数ごとに命令を置き換える。handle の場所は
 //! 入口の関数を `ev_set_clause` に入れるので、どの節がどの形になるかを先に知る必要があるためである。
 
 use std::collections::{HashMap, HashSet};
@@ -244,7 +244,7 @@ fn clause_target(function: &CoreFn, value: Atom) -> FnIdx {
     })
 }
 
-/// すぐに再開し、本体に yield の地点がない節か (docs/superpowers/specs/2026-10-11-s7-evidence-passing-design.md の
+/// すぐに再開し、本体に yield の地点がない節か (docs/spec/core-ir.md の
 /// 「`perform` と節の3つの形」)。EP の前の命令で、yield の地点になるものがないことを確かめる。`k` の使いが末尾の
 /// `resume` の呼ばれる値だけなら、どの道でも `k` を1回だけ、最後に再開する。
 fn runs_in_place(program: &Program, clause: &CoreFn, operation: &OperationInfo) -> bool {

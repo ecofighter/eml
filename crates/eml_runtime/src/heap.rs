@@ -23,7 +23,7 @@ pub enum Value {
     Fn(u32),
     Obj(ObjRef),
     /// yield 中の関数が返す、呼び出し元が捨てる値。ヒープに置かないので、`dup` と `decref` は何もせず、`box` と
-    /// `unbox` もそのまま通す (docs/superpowers/specs/2026-10-11-s7-evidence-passing-design.md の「ダミーの値」)。
+    /// `unbox` もそのまま通す (docs/spec/core-ir.md の「ダミーの値」)。
     Dummy,
 }
 
@@ -42,8 +42,8 @@ pub enum Payload {
     /// 組み込みの線形型 `File` の値。写さない (`take_or_copy` は `NotCopyable` を返す)。
     File(FileHandle),
     /// evidence の入口の表。`entries` は操作の順の入口のクロージャで、handle の場所で入れた後は変えない。再開で
-    /// 作り直した evidence もこの表を共有する (docs/superpowers/specs/2026-10-11-s7-evidence-passing-design.md の
-    /// 「evidence」)。
+    /// 作り直した evidence もこの表を共有する (docs/spec/runtime.md の
+    /// 「evidence と `evv` の物体」)。
     EvTable {
         effect: u32,
         entries: Vec<Value>,

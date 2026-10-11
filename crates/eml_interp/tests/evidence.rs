@@ -1,5 +1,5 @@
 //! evidence passing の基本操作と節の呼び出しを、EP の出力の形の手書きの Core IR で確かめる
-//! (docs/superpowers/specs/2026-10-11-s7-evidence-passing-design.md の「実行時のモデル」と「基本操作」)。
+//! (docs/spec/core-ir.md の「evidence passing」と「基本操作」)。
 
 use eml_interp::{Fault, RunConfig, RuntimeError};
 use eml_runtime::OutputSink;

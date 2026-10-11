@@ -117,8 +117,8 @@ pub struct EffectInfo {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OperationInfo {
     pub name: String,
-    /// 操作の引数の Repr。型変数は `tobj` にする (docs/superpowers/specs/2026-10-11-s7-evidence-passing-design.md の
-    /// 「操作の表の Repr」)。verifier は長さで節の関数の引数の数を確かめる (docs/spec/core-ir.md)。
+    /// 操作の引数の Repr。型変数は `tobj` にする (docs/spec/core-ir.md の
+    /// 「エフェクトの位置」)。verifier は長さで節の関数の引数の数を確かめる (docs/spec/core-ir.md)。
     pub params: Vec<Repr>,
     pub ret: OpRet,
     /// `never` の操作は再開しないので、継続を作らずに捨てる (docs/spec/effects.md)。
@@ -145,12 +145,12 @@ pub struct CoreFn {
     /// `$externN`、`cont$`、`cont$state`)。直接呼ぶのは、それを作った定義の中だけである。トップレベルの関数と入口の
     /// 関数は内部の関数でない。テキストの形では `internal fn` と書く (docs/spec/core-ir.md)。
     pub internal: bool,
-    /// 本体が yield しうる (docs/superpowers/specs/2026-10-11-s7-evidence-passing-design.md の「`yields` の印」)。
+    /// 本体が yield しうる (docs/spec/core-ir.md の「`yields` の印」)。
     /// テキストの形では `internal` の後に `yields fn` と書く。
     pub yields: bool,
     /// in-place の入口の関数が受け持つ (エフェクト, 操作)。捕獲の後に evidence と操作の引数を受け、操作の結果を
     /// 返す。`ev_set_clause` に渡す値としてだけ参照される。テキストの形では `yields` の後に `clause E.op fn` と書く
-    /// (docs/superpowers/specs/2026-10-11-s7-evidence-passing-design.md の「入口の関数の印」)。
+    /// (docs/spec/core-ir.md の「入口の関数の印」)。
     pub clause: Option<(u32, u32)>,
     pub vars: Vec<VarInfo>,
     /// 直接の呼び出しの結果の Repr。
@@ -402,7 +402,7 @@ pub enum Rhs {
     /// ない。スカラーの種類は束縛する変数の Repr で決まる。
     Unbox(Atom),
     /// evidence passing の基本操作。extern と同じく引数をすべて消費し、所有した結果を定義する
-    /// (docs/superpowers/specs/2026-10-11-s7-evidence-passing-design.md の「基本操作」)。
+    /// (docs/spec/core-ir.md の「基本操作」)。
     Prim(Prim, Vec<Atom>),
 }
 
@@ -471,13 +471,14 @@ pub enum Call {
     Direct(FnIdx, Vec<Atom>),
     /// 関数値の呼び出し。実行時に引数の個数を比べる (eval/apply)。`yields` は、この `apply` が受け持つ矢印の
     /// どれかが yield しうることである。translate は yield しうる矢印の後で `apply` を分けるので、それは最後の矢印
-    /// である (docs/superpowers/specs/2026-10-11-s7-evidence-passing-design.md の「`apply` の印と分け方」)。
+    /// である (docs/spec/core-ir.md の「`apply` の印と分け方」)。
     Apply {
         callee: Atom,
         args: Vec<Atom>,
         yields: bool,
     },
-    /// handler フレームを積み、本体の関数に `()` を適用する。本体と節と `return` の節は、捕まえた変数を先頭の
+    /// handler を設け、本体の関数に `()` を適用する。translate だけが出し、EP が基本操作と `prompt$` の呼び出しに
+    /// 置き換える (docs/spec/core-ir.md の「handle と `prompt$`」)。本体と節と `return` の節は、捕まえた変数を先頭の
     /// 引数に持つ関数の値である (docs/spec/core-ir.md)。節はエフェクトの操作の順に並ぶ。節は最後の引数で状態を、
     /// `ret` は本体の値と状態を受ける。状態のない handler では `init` が `()` である (docs/spec/core-ir.md)。
     Handle {
@@ -487,19 +488,21 @@ pub enum Call {
         clauses: Vec<Atom>,
         ret: Atom,
     },
-    /// ユーザーのエフェクトの操作。継続を遡って handler を探し、その節を呼ぶ。`resumable` は操作が `never` でない
-    /// ことで、インタプリタはエフェクトの表を引かずに、区間を継続にするか解放するかを決める (docs/spec/core-ir.md)。
+    /// ユーザーのエフェクトの操作。translate だけが出し、EP が evidence を探す基本操作と節の呼び出しに置き換える
+    /// (docs/spec/core-ir.md の「`perform` と節の3つの形」)。`resumable` は操作が `never` でないことで、変換の段の
+    /// verifier がエフェクトの表と比べる。
     Perform {
         effect: u32,
         op: u32,
         resumable: bool,
         args: Vec<Atom>,
     },
-    /// 継続を再開する。`state` を区間の handler フレームに戻してからつなぐ。値は handle 式の値である。
+    /// 継続を再開する。`state` は再開した handler の次の状態で、値は handle 式の値である。translate だけが出し、EP が
+    /// `apply` に置き換える (docs/spec/core-ir.md の「再開と状態」)。
     Resume { k: Atom, arg: Atom, state: Atom },
     /// 操作の in-place の入口のクロージャ `callee` を呼ぶ。`args` の先頭は evidence (`obj`)、残りは操作の引数で、
     /// 引数と結果の Repr は操作の表の `params` と `ret` から取る。`mask` は持たない
-    /// (docs/superpowers/specs/2026-10-11-s7-evidence-passing-design.md の「節の呼び出し」)。
+    /// (docs/spec/core-ir.md の「節の呼び出し」)。
     Clause {
         effect: u32,
         op: u32,

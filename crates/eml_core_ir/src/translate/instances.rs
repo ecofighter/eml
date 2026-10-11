@@ -193,7 +193,7 @@ impl Collector<'_> {
     }
 
     /// 型引数 `args` と row のビット `bits` の参照の行き先 `function` の instance。一様な位置の型引数は `Flexible`
-    /// にする。row のビットには一様な位置を当てはめない (docs/superpowers/specs/2026-10-11-s7-evidence-passing-design.md
+    /// にする。row のビットには一様な位置を当てはめない (docs/spec/core-ir.md
     /// の「row のビットと instance の鍵」)。
     fn add_uniform(&mut self, function: FunctionId, args: &[TypeId], bits: Vec<bool>) -> usize {
         let key = args
@@ -556,7 +556,7 @@ pub(super) fn collect(hir: &HirProgram, typed: &TypedProgram, entry: FunctionId)
     // 入口は呼び出し側が選ぶので、型変数を持つ関数なら、どの型でも動く一様な instance にする
     let entry_args = vec![collector.store.flexible(); type_vars(hir, entry).len()];
     // row のビットも呼び出し側が決めるので、安全側に倒してすべて立てる
-    // (docs/superpowers/specs/2026-10-11-s7-evidence-passing-design.md の「row のビットと instance の鍵」)
+    // (docs/spec/core-ir.md の「row のビットと instance の鍵」)
     let entry_bits = vec![true; row_vars(hir, entry).len()];
     let entry_index = collector.add(entry, entry_args, entry_bits);
     // 先に見つけた instance から順にたどる。番号の順と名前が変換の順によらないようにするため
@@ -611,7 +611,7 @@ pub(super) fn resolve(row: RowYield, bits: &[bool]) -> bool {
 }
 
 /// instance の名前の後ろに付ける、立ったビットの row 変数を `<e, f>` の形で並べた部分。ビットが立たなければ空である
-/// (docs/superpowers/specs/2026-10-11-s7-evidence-passing-design.md の「row のビットと instance の鍵」)。
+/// (docs/spec/core-ir.md の「row のビットと instance の鍵」)。
 fn row_suffix(names: &[String], bits: &[bool]) -> String {
     let set: Vec<&str> = names
         .iter()

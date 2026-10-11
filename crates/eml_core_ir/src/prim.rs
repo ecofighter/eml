@@ -1,4 +1,4 @@
-//! evidence passing の基本操作 (docs/superpowers/specs/2026-10-11-s7-evidence-passing-design.md の「基本操作」)。
+//! evidence passing の基本操作 (docs/spec/core-ir.md の「基本操作」)。
 //! 表は `eml_extern` に置かない。`eml_extern` の表は `std/` と1対1に結び付くが、基本操作はソースに現れないためである。
 
 use crate::{Program, Repr};

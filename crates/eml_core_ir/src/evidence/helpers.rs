@@ -1,7 +1,7 @@
-//! EP が作る補助の関数の中身 (docs/superpowers/specs/2026-10-11-s7-evidence-passing-design.md の「EP が作る補助の
-//! 関数」)。どれも `yields` の印を立て、`internal` にしない。多くの定義から直接呼ばれるためである。evidence を受ける
-//! 引数は `obj`、ほかの引数と `ret` は `tobj` で、どれも一様である。中の `apply` はどれも印を立てる。補助の関数は
-//! 作るときに最終の形にするので、yield の確認と遅い道もここで置き、後で分けない。
+//! EP が作る補助の関数の中身 (docs/spec/core-ir.md の「EP が作る補助の関数」)。どれも `yields` の印を立て、
+//! `internal` にしない。多くの定義から直接呼ばれるためである。evidence を受ける引数は `obj`、ほかの引数と `ret` は
+//! `tobj` で、どれも一様である。中の `apply` はどれも印を立てる。補助の関数は作るときに最終の形にするので、yield の
+//! 確認と遅い道もここで置き、後で分けない。
 
 use crate::builder::FnBuilder;
 use crate::prim::effect_text;
@@ -44,7 +44,7 @@ pub(super) fn compose(compose: FnIdx) -> CoreFn {
 }
 
 /// `prompt$(ev, ret, x)`。`evv` を `ev` の外側に戻し、`yield_status(ev)` で4つに分ける
-/// (docs/superpowers/specs/2026-10-11-s7-evidence-passing-design.md の「handle と `prompt$`」)。0 と 2 と 3 の道で
+/// (docs/spec/core-ir.md の「handle と `prompt$`」)。0 と 2 と 3 の道で
 /// `x` は使われず、Perceus が手放す。そのとき `x` はダミーなので、手放しても何も起こらない。
 pub(super) fn prompt(resume: FnIdx, rewind: FnIdx) -> CoreFn {
     let mut b = FnBuilder::new();
@@ -141,7 +141,7 @@ pub(super) fn prompt(resume: FnIdx, rewind: FnIdx) -> CoreFn {
 }
 
 /// `resume$(ev, ret, κ, v, s)`。状態 `s` の新しい evidence を今の `evv` の先頭に足してから κ を再開し、その結果を
-/// `prompt$` に渡す (docs/superpowers/specs/2026-10-11-s7-evidence-passing-design.md の「再開と状態」)。
+/// `prompt$` に渡す (docs/spec/core-ir.md の「再開と状態」)。
 pub(super) fn resume(prompt: FnIdx) -> CoreFn {
     let mut b = FnBuilder::new();
     let ev = b.param(named("ev", Repr::Obj));
@@ -217,7 +217,7 @@ pub(super) fn mask_name(program: &Program, effects: &[u32]) -> String {
 }
 
 /// `mask$[effects](κ, v)`。再開されたときに `evv` から `effects` を飛ばしてから κ を呼び、戻ったら `evv` を戻す。
-/// κ が yield したら、もう一度包む (docs/superpowers/specs/2026-10-11-s7-evidence-passing-design.md の「`mask`」)。
+/// κ が yield したら、もう一度包む (docs/spec/core-ir.md の「`mask` の包み」)。
 pub(super) fn mask(mask: FnIdx, name: String, effects: &[u32]) -> CoreFn {
     let mut b = FnBuilder::new();
     let k = b.param(named("k", Repr::TObj));

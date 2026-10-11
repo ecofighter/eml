@@ -2,7 +2,7 @@
 
 位置づけ: 手引き。
 
-段の前後で実行の費用を比べるための、基準のプログラムと測り方をまとめる。S7 の evidence passing と S10 の VM は、ここの記録と比べる ([ロードマップ](../future/roadmap.md))。S4b の単相化、S5 の型クラス、S6a のリスト、S6b の文字列、S6c のレコードのそれぞれの前後は、下の「記録」にある。
+段の前後で実行の費用を比べるための、基準のプログラムと測り方をまとめる。S10 の VM は、ここの記録と比べる ([ロードマップ](../future/roadmap.md))。S4b の単相化、S5 の型クラス、S6a のリスト、S6b の文字列、S6c のレコード、S7 の evidence passing のそれぞれの前後は、下の「記録」にある。
 
 費用は2つの数で見る。
 
@@ -18,7 +18,7 @@
 | `empty.em` | 何もしない `main` | 起動と標準ライブラリのコンパイルの分 |
 | `fib.em` | `fib 25` | 呼び出しと `Int` の算術 |
 | `loop.em` | 末尾再帰のループ | 末尾呼び出し |
-| `state.em` | `get` と `put` を持つ `Counter` の handler の下で数える再帰 | `perform` と `k` の呼び出し |
+| `state.em` | `get` と `put` を持つ `Counter` の handler の下で数える再帰 | すぐに再開する操作 |
 | `list.em` | プログラムの中で定義した `List a` を `range`、`map`、`foldl` で合計する | 型変数のフィールドの `Int`、高階関数 |
 | `tree.em` | 線形合同法で作った `Int` を二分探索木に入れ、総称な `size` と `fold` で畳む | 再帰的なデータ、`switch` と `unpack` |
 
@@ -161,3 +161,25 @@ S6b で `RunStats` は変わらない。`crates/eml_interp/tests/bench.rs` の�
 S6c の前後で `RunStats` は変わらない。`crates/eml_interp/tests/bench.rs` のスナップショットと `bench/` は S6b のままである。`bench/` のプログラムはレコードを使わない。インタプリタとランタイムは S6b の測定 (ac37a74) から変えておらず、Prelude もコメントの1行しか変えていない。
 
 命令の数は、`empty` が S6b より約6.6万 (約0.23%) 減った。同じビルドで `eml check bench/empty.em` を3回測ると約2841万から2845万で、`eml run` の約2862万とほとんど同じなので、この分はほぼすべてフロントエンドにある。Prelude は変わっていないので、変わったのは構文解析と型検査である。この段では、レイアウト段の `,` の規則とレコードの構文を足し、型検査の中のタプルからラベルの文字列をなくし、呼び出しの引数のラムダを後で検査するようにした。どの変更がどれだけ寄与したかは分けて測っていない。`empty` の値を引いた実行の分は、`loop` で約0.074% 増え、`fib` で約0.15%、`state` で約0.15%、`list` で約0.37%、`tree` で約0.45% 減った。仕事の回数は同じである。`tree` の減分は、`empty` の値を引いて約690万で、S6b で増えた約692万とほぼ同じ大きさである。実行の分は S6a の値 (約15.305億) とほぼ同じに戻った。`tree` を5回測り直すと約15.587億から15.593億で、ばらつきは約62万なので、この減分は雑音の範囲を超える。インタプリタとランタイムのコードは変えていない。原因は調べていない。
+
+### S7 (evidence passing)
+
+- 機種: Mac16,1 (Apple M4)
+- OS: macOS 26.6.2 (25G83)
+- rustc: rustc 1.95.0 (59807616e 2026-04-14) (built from a source tarball)
+- コミット: 4adc2d9
+
+| プログラム | instructions retired | 実時間 (s) |
+|---|---:|---:|
+| `empty` | 29020850 | 0.00 |
+| `fib` | 993372025 | 0.04 |
+| `list` | 1818693265 | 0.07 |
+| `loop` | 1554493574 | 0.06 |
+| `state` | 1767350521 | 0.07 |
+| `tree` | 1585181374 | 0.07 |
+
+S7 で `RunStats` の項目が変わった。CEK が handler を探すときに調べたフレームの数を消し、`evidence_steps`、`yields`、`yield_frames` を足した ([ランタイム](../spec/runtime.md) の「実行の API」)。`crates/eml_interp/tests/bench.rs` のスナップショットで回数が変わったのは `state` だけである。調べたフレームの数の 200000 は `evidence_steps` の 200000 になり、`yields` と `yield_frames` は 0 である。`get` と `put` はどちらもすぐに再開する節なので、その場で実行され、yield も継続の組み立てもない。`rc_increments` は 0 から 600005 に、`rc_decrements` は 2 から 600010 に、`peak_objects` は 6 から 7 に増えた。1回の操作で RC の増減が3回ずつ増えるのは、基本操作が引数をすべて消費するためである。`ev_lookup` が evidence の参照を1つ作り、それを消費する `ev_clause`、節の呼び出し、入口の `ev_take_state` と `ev_set_state` のために `dup` が2回要り、消費した基本操作の3回が `decref` になる。基本操作の引数を借用にすれば減らせる ([ロードマップ](../future/roadmap.md) の「S8 LIR」)。ほかのプログラムは handler を使わず、row のビットで純粋な instance には EP が何も足さないので、回数は変わらない。
+
+命令の数は、`state` で大きく増えた。`empty` の値を引いた実行の分は、S6c の約10.209億から約17.383億になり、約70% 増えた。`state` の `count` は末尾再帰なので、S6c の CEK でも handler は操作の1つ外側のフレームにあり、`perform` が調べるフレームは1つだった。evidence passing の利点は、すぐに再開する操作の費用が呼び出しの深さによらないことで、この利点は `crates/eml_interp/tests/scaling.rs` の `immediate_operations_cost_the_same_at_any_depth` で確かめている。深さが一定のこのプログラムでは、その利点は命令の数に現れない。逆に、1回の操作で実行する文が増えた。evidence を探す基本操作と入口を読む基本操作、入口の関数の呼び出し、入口の中の状態の出し入れの基本操作と `unbox` と `box`、呼び出しの後の yield の確認 (`yielding` と `switch`) である。インタプリタは基本操作の引数を毎回 `Vec` に組み立てて渡すので、文の1つ1つが重い。どの寄与がどれだけかは分けて測っていない。
+
+`empty` は S6c より約40万 (約1.4%) 増えた。同じビルドで `eml check bench/empty.em` を3回測ると約2868万から2941万で、ばらつきが大きいので、増分をフロントエンド (row の分類の記録) と Core IR の変換 (EP) に分けていない。`empty` の値を引いた実行の分は、`list` で約1.5%、`fib` で約1.6%、`tree` で約1.7%、`loop` で約2.7% 増えた。どれも handler を使わず、仕事の回数は同じである。インタプリタの値に `Value::Dummy` を足し、呼び出しの経路に `Call::Clause` と `mask` の検査を足したが、原因は調べていない。

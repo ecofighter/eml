@@ -1,4 +1,4 @@
-//! EP (evidence passing) のパス (docs/superpowers/specs/2026-10-11-s7-evidence-passing-design.md の「EP の変換」)。
+//! EP (evidence passing) のパス (docs/spec/core-ir.md の「evidence passing」)。
 //! 型は読まず、関数の `yields` と `clause` の印、`apply` の印、操作の表、Core IR の形と生存解析だけを読む。補助の
 //! 関数は `helpers.rs`、handle、`perform`、`resume`、`mask` の変換は `handlers.rs`、yield の地点での分け方は
 //! `split.rs` にある。
@@ -20,7 +20,7 @@ use split::split;
 
 /// 節ごとに in-place の入口を作り、handle、`perform`、`resume`、`mask` を基本操作と呼び出しに替えてから、`yields` の
 /// 関数のうち `clause` の印のないものを、yield の地点で継続の関数に分ける
-/// (docs/superpowers/specs/2026-10-11-s7-evidence-passing-design.md の「パスの位置と対象」)。
+/// (docs/spec/core-ir.md の「evidence passing」)。
 pub fn evidence(program: &mut Program) {
     // 作った関数を書き換えないように、作る前の関数の数で対象を限る。EP が作る関数は、作るときに最終の形にする
     let count = program.functions.len();
@@ -37,7 +37,7 @@ pub fn evidence(program: &mut Program) {
 }
 
 /// EP が作る補助の関数。使うときに1つずつ作り、プログラムの末尾に足す
-/// (docs/superpowers/specs/2026-10-11-s7-evidence-passing-design.md の「EP が作る補助の関数」)。
+/// (docs/spec/core-ir.md の「EP が作る補助の関数」)。
 #[derive(Default)]
 pub(crate) struct Helpers {
     id: Option<FnIdx>,
@@ -158,7 +158,7 @@ fn yield_switch(yielding: VarId, fast: BlockId, slow: BlockId) -> Term {
 }
 
 /// yield 中に返すダミーの値。呼び出し元は使わずに捨てる。`tobj` にも物体を使うのは、互換の位置を通って `obj` の
-/// 変数に入ることがあるためである (docs/superpowers/specs/2026-10-11-s7-evidence-passing-design.md の「ダミーの値」)。
+/// 変数に入ることがあるためである (docs/spec/core-ir.md の「ダミーの値」)。
 /// `bind` は物体を作る `let` を置き、その変数を返す。
 fn dummy(ret: Repr, bind: impl FnOnce(VarInfo, Rhs) -> VarId) -> Atom {
     match ret {

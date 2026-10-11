@@ -1,4 +1,4 @@
-//! evidence passing の基本操作 (docs/superpowers/specs/2026-10-11-s7-evidence-passing-design.md の「基本操作」)。
+//! evidence passing の基本操作 (docs/spec/core-ir.md の「基本操作」)。
 //! 引数はどれも所有した参照として受け取り、結果に残さないものは手放す。extern の行と同じ約束である。
 
 use eml_core_ir::Prim;
@@ -54,7 +54,7 @@ impl Runtime<'_> {
                 let table = self.evidence(evidence)?.table;
                 let entry = self.entry(table, *op)?;
                 // 入口の欄は handle の場所で一度だけ入れ、その後は変えない
-                // (docs/superpowers/specs/2026-10-11-s7-evidence-passing-design.md の「evidence」)
+                // (docs/spec/core-ir.md の「evidence」)
                 if *entry != Value::Unit {
                     return Err(Fault::Internal("a clause entry is set twice"));
                 }
@@ -175,7 +175,7 @@ impl Runtime<'_> {
     }
 
     /// 今の `evv` を先頭からたどり、エフェクトが `effect` の最初の evidence を返す。費用は今有効な handler の数に比例し、
-    /// 呼び出しの深さにはよらない (docs/superpowers/specs/2026-10-11-s7-evidence-passing-design.md の「探す」)。
+    /// 呼び出しの深さにはよらない (docs/spec/core-ir.md の「evidence を探す」)。
     fn lookup(&mut self, effect: u32) -> Result<Value, Fault> {
         let mut list = self.evv;
         while let Some((evidence, next)) = self.node(list)? {
@@ -192,7 +192,7 @@ impl Runtime<'_> {
 
     /// `effects` の多重集合の各エフェクトについて、`list` の先頭から合う evidence をその数だけ除いたリストを作る。
     /// 除いた最後の節点の前までは写し、その後ろは元のリストを共有する。evidence の物体は写さない
-    /// (docs/superpowers/specs/2026-10-11-s7-evidence-passing-design.md の「探す」)。リストに合う evidence が足りなければ、
+    /// (docs/spec/core-ir.md の「evidence を探す」)。リストに合う evidence が足りなければ、
     /// 見つかった分だけを除く。
     fn mask(&mut self, effects: &[u32], list: Value) -> Result<Value, Fault> {
         let mut remaining = effects.to_vec();

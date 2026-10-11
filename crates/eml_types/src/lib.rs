@@ -154,7 +154,7 @@ pub struct Instantiation {
 }
 
 /// 具体化した row が yield しうるか。`Var(i)` は、参照を含む定義の i 番目の row 変数 (`generics.row_vars` の順)
-/// に従う (docs/superpowers/specs/2026-10-11-s7-evidence-passing-design.md の「row の具体化の記録」)。
+/// に従う (docs/spec/types.md の「row の具体化の記録」)。
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
 pub enum RowYield {
     /// handle できるラベルを含まず、閉じているか、末尾が型検査で最後まで決まらなかった row 変数である。

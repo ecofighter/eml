@@ -1,4 +1,4 @@
-//! `yields` の関数を yield の地点で分ける (docs/superpowers/specs/2026-10-11-s7-evidence-passing-design.md の
+//! `yields` の関数を yield の地点で分ける (docs/spec/core-ir.md の
 //! 「yield の地点」「継続の関数」)。元の関数は速い道をそのまま続け、地点ごとに yield の確認と遅い道を足す。遅い道は
 //! 地点の後の続きを継続の関数 `f$kN` のクロージャにして κ に足す。`f$kN` の本体は地点の直後からの区間の写しで、
 //! 次の地点では `f$kq` を呼び、合流のブロック J への `jump` では合流のブロックの関数 `f$jJ` を呼んで止まる。
@@ -21,7 +21,7 @@ pub(crate) struct Annotations {
     /// handle の本体の `apply`。yield したかは `prompt$` が見る。
     pub(crate) not_yield_points: HashSet<(BlockId, usize)>,
     /// 直後に `evv_set(w0)` が続く `mask` の呼び出しと、その飛ばすエフェクト。遅い道は κ を `mask$` で包み、続きは
-    /// `evv_set(w0)` の後から始まる (docs/superpowers/specs/2026-10-11-s7-evidence-passing-design.md の「`mask`」)。
+    /// `evv_set(w0)` の後から始まる (docs/spec/core-ir.md の「`mask` の包み」)。
     pub(crate) masked: HashMap<(BlockId, usize), Vec<u32>>,
     /// `mask` の呼び出し。呼ぶ相手が `yields` でなくても地点にする。
     pub(crate) forced: HashSet<(BlockId, usize)>,
@@ -113,7 +113,7 @@ pub(crate) fn split(
     }
 }
 
-/// ブロックと文の順に、yield の地点を集める (docs/superpowers/specs/2026-10-11-s7-evidence-passing-design.md の
+/// ブロックと文の順に、yield の地点を集める (docs/spec/core-ir.md の
 /// 「yield の地点」)。末尾の位置の呼び出しは地点にしない。呼ばれた側の yield は、そのまま呼び出し元へ返るためである。
 fn yield_points(
     program: &Program,

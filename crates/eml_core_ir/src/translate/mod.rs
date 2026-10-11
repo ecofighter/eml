@@ -350,7 +350,7 @@ struct FnLowering<'a> {
     contexts: Vec<Ctx>,
     /// この関数で `con` で作った変数の中身。決定木が頭のコンストラクタを知るのに使う。
     cons: HashMap<VarId, Known>,
-    /// 作っている関数が yield しうるか (docs/superpowers/specs/2026-10-11-s7-evidence-passing-design.md の
+    /// 作っている関数が yield しうるか (docs/spec/core-ir.md の
     /// 「`yields` の印」)。この関数の中の handle の節も同じ印にする。
     yields: bool,
 }

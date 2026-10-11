@@ -185,7 +185,7 @@ main () =
 }
 
 /// すぐに再開する操作は、その場で節を呼ぶので、yield せず、継続も組み立てない。探す数は今有効な handler の数で
-/// 決まり、深さによらない (docs/superpowers/specs/2026-10-11-s7-evidence-passing-design.md の「`RunStats`」)。
+/// 決まり、深さによらない (docs/spec/runtime.md の「実行の API」)。
 #[test]
 fn immediate_operations_cost_the_same_at_any_depth() {
     let at = |depth: u64| {
@@ -225,7 +225,7 @@ main () =
 
 /// すぐに再開しない操作は handler まで yield し、戻る途中の各段が自分の続きを継続に足す。継続の大きさは間の
 /// フレームの数に比例する。これは方式の性質であり、上限ではない
-/// (docs/superpowers/specs/2026-10-11-s7-evidence-passing-design.md の「`RunStats`」)。
+/// (docs/spec/runtime.md の「実行の API」)。
 #[test]
 fn a_resuming_operation_builds_a_frame_per_level() {
     let at = |depth: u64| {
@@ -456,7 +456,7 @@ main () =
 }
 
 /// yield しうる関数の値を通るループ。関数の値への末尾の `apply` は yield の地点にならず、末尾呼び出しのまま残る
-/// (docs/superpowers/specs/2026-10-11-s7-evidence-passing-design.md の「不変条件と末尾呼び出しの保証」)。
+/// (docs/spec/core-ir.md の「yield の地点」)。
 #[test]
 fn a_function_value_loop_under_a_handler_keeps_the_heap_flat() {
     let (short, long) = peaks(|n| {
