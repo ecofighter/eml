@@ -599,7 +599,8 @@ fn declaration_schemes(
                     Bound::Const(_) => None,
                 })
                 .collect();
-            // 結果の型は縛らない。`never fail : String -> a` をどの型としても使えるようにするため
+            // 結果の型は縛らない。`never fail : String -> a` をどの型としても使えるようにするため。呼ぶ側から節へ渡る位置の
+            // 矢印は、形がすでに `Unr` に固定している (`Arrows::OperationResult`)
             let mut spine = own.ty;
             for _ in 0..operation.arity {
                 let TyShape::Fn { param, ret, .. } = table.shape(spine).clone() else {

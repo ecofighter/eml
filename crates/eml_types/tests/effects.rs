@@ -585,3 +585,141 @@ fn a_clause_may_copy_a_value_of_an_operation_variable_in_a_parameter() {
       $r#3 : Unit
     ");
 }
+
+// 操作の型の矢印は、呼ぶ側から節へ渡る位置 (引数と、結果の中で節が受け取る位置) では宣言で `Unr` に固定し、節が
+// 作って渡す位置では節の中で `Unr` にする。操作ごとの row 変数は、節の中では `multi` の操作を含みうる
+// (docs/spec/effects.md の「handler の意味」)
+const REF: &str = "data Ref a =\n  | Ref (a -> Unit) a\n\n";
+
+#[test]
+fn a_linear_closure_cannot_enter_a_contravariant_argument_of_data_in_the_result() {
+    let text = "data Sink a =\n  | Sink (a -> <IO> Unit)\n\neffect Mk where\n  mk : Unit -> Sink (Unit -> <IO> Unit)\n\nmain : Unit -> <IO> Unit\nmain () =\n  let h = Fs.open \"a\"\n  handle (match mk () with\n    | Sink put -> put (fn () -> Fs.close h)) with\n    | mk () k ->\n        k (Sink (fn f ->\n          f ()\n          f ()))";
+    insta::assert_snapshot!(check_text(text), @"
+    mk : Unit -> <Mk> Sink (Unit -> <IO> Unit)
+    main : Unit -> <IO> Unit
+      h#0 : File
+      put#1 : (Unit -> <IO> Unit) -> <IO> Unit
+      k#2 : Sink (Unit -> <IO> Unit) -> <IO> Unit
+      f#3 : Unit -> <IO> Unit
+      $r#4 : Unit
+    ---
+    E3001 11:24 a lambda that captures a linear value is used where it may be called any number of times
+      11:24 this lambda
+      note: linear values, such as files, the continuation of a `once` operation and closures that capture one, must be used exactly once
+    ");
+}
+
+#[test]
+fn a_clause_cannot_keep_a_file_across_a_function_with_an_operation_row_variable() {
+    let text = "effect Mk where\n  mk : Unit -> ((Unit -> <IO | e> Int) -> <IO | e> Int, Int)\n\nmain : Unit -> <IO> Unit\nmain () =\n  handle (match mk () with\n    | (run, _) -> println (show (run (fn () -> 1)))) with\n    | mk () k ->\n        k (fn g ->\n          let h = Fs.open \"a\"\n          let x = g ()\n          Fs.close h\n          x, 0)";
+    insta::assert_snapshot!(check_text(text), @"
+    mk : Unit -> <Mk> ((Unit -> <IO | e> Int) -> <IO | e> Int, Int)
+    main : Unit -> <IO> Unit
+      run#0 : (Unit -> <IO, Mk> Int) -> <IO, Mk> Int
+      k#1 : ((Unit -> <IO | e> Int) -> <IO | e> Int, Int) -> <IO> Unit
+      g#2 : Unit -> <IO | e> Int
+      h#3 : File
+      x#4 : Int
+      $r#5 : Unit
+    ---
+    E3006 11:19 `h` must be used exactly once, but it is kept alive across a call that may resume more than once
+      11:19 this call may perform `multi` operations
+      10:15 `h` is bound here
+      note: a continuation of a `multi` operation can be resumed more than once, and each resumption would use the value again
+      help: finish using `h` before this call
+    ");
+}
+
+#[test]
+fn a_clause_cannot_resume_with_a_linear_closure_where_the_result_has_an_arrow() {
+    let text = "effect Mk where\n  mk : Unit -> (Unit -> <IO> Unit, Int)\n\nmain : Unit -> <IO> Unit\nmain () =\n  handle (match mk () with\n    | (g, _) -> g ()) with\n    | mk () k ->\n        let h = Fs.open \"a\"\n        k (fn () -> Fs.close h, 1)";
+    insta::assert_snapshot!(check_text(text), @"
+    mk : Unit -> <Mk> (Unit -> <IO> Unit, Int)
+    main : Unit -> <IO> Unit
+      g#0 : Unit -> <IO> Unit
+      k#1 : (Unit -> <IO> Unit, Int) -> <IO> Unit
+      h#2 : File
+      $r#3 : Unit
+    ---
+    E3001 8:5 a linear value is used where the type of `mk` requires a value that may be used any number of times
+      8:5 this clause handles `mk`
+      note: linear values, such as files, the continuation of a `once` operation and closures that capture one, must be used exactly once
+      note: the code that performs `mk` may call the functions in its result any number of times
+    ");
+}
+
+#[test]
+fn a_clause_cannot_use_a_parameter_arrow_as_a_linear_one() {
+    let text = "effect Op where\n  op : (Unit -> <IO> Unit) -> Unit\n\nsame : a -> a -> (a, a)\nsame x y = (x, y)\n\nmain : Unit -> <IO> Unit\nmain () =\n  handle op (fn () -> ()) with\n    | op x k ->\n        let h = Fs.open \"a\"\n        let (p, q) = same x (fn () -> Fs.close h)\n        p ()\n        q ()\n        k ()";
+    insta::assert_snapshot!(check_text(text), @"
+    op : (Unit -> <IO> Unit) -> <Op> Unit
+      kinds: (Unit -> <IO> Unit) <= Unr
+    same : a -> a -> (a, a)
+      x#0 : a
+      y#1 : a
+    main : Unit -> <IO> Unit
+      x#0 : Unit -> <IO> Unit
+      k#1 : Unit -> <IO> Unit
+      h#2 : File
+      p#3 : Unit -> <IO> Unit
+      q#4 : Unit -> <IO> Unit
+      $r#5 : Unit
+    ---
+    E3001 10:5 a linear value is used where the type of `op` requires a value that may be used any number of times
+      10:5 this clause handles `op`
+      note: linear values, such as files, the continuation of a `once` operation and closures that capture one, must be used exactly once
+      note: the arguments of `op` may be used any number of times, so the clause cannot treat them as linear values
+    ");
+}
+
+#[test]
+fn a_clause_may_call_a_closure_it_receives_through_the_result_more_than_once() {
+    let text = "effect Mk where\n  mk : Unit -> ((Unit -> <IO> Unit) -> <IO> Unit, Int)\n\nmain : Unit -> <IO> Unit\nmain () =\n  handle (match mk () with\n    | (run, _) -> run (fn () -> ())) with\n    | mk () k ->\n        let run = fn g ->\n          g ()\n          g ()\n        k (run, 1)";
+    insta::assert_snapshot!(check_text(text), @"
+    mk : Unit -> <Mk> ((Unit -> <IO> Unit) -> <IO> Unit, Int)
+    main : Unit -> <IO> Unit
+      run#0 : (Unit -> <IO> Unit) -> <IO> Unit
+      k#1 : ((Unit -> <IO> Unit) -> <IO> Unit, Int) -> <IO> Unit
+      g#2 : Unit -> <IO> Unit
+      run#3 : (Unit -> <IO> Unit) -> <IO> Unit
+      $r#4 : Unit
+    ");
+}
+
+#[test]
+fn a_linear_closure_cannot_be_passed_to_a_function_from_the_result() {
+    let text = "effect Mk where\n  mk : Unit -> ((Unit -> <IO> Unit) -> <IO> Unit, Int)\n\nmain : Unit -> <IO> Unit\nmain () =\n  let h = Fs.open \"a\"\n  handle (match mk () with\n    | (run, _) -> run (fn () -> Fs.close h)) with\n    | mk () k -> k (fn g -> g (), 1)";
+    insta::assert_snapshot!(check_text(text), @"
+    mk : Unit -> <Mk> ((Unit -> <IO> Unit) -> <IO> Unit, Int)
+    main : Unit -> <IO> Unit
+      h#0 : File
+      run#1 : (Unit -> <IO> Unit) -> <IO> Unit
+      k#2 : ((Unit -> <IO> Unit) -> <IO> Unit, Int) -> <IO> Unit
+      g#3 : Unit -> <IO> Unit
+      $r#4 : Unit
+    ---
+    E3001 8:24 a lambda that captures a linear value is used where it may be called any number of times
+      8:24 this lambda
+      note: linear values, such as files, the continuation of a `once` operation and closures that capture one, must be used exactly once
+    ");
+}
+
+#[test]
+fn a_linear_closure_cannot_enter_an_arrow_in_both_directions_of_the_result() {
+    let text = format!(
+        "{REF}effect Mk where\n  mk : Unit -> Ref (Unit -> <IO> Unit)\n\nmain : Unit -> <IO> Unit\nmain () =\n  let h = Fs.open \"a\"\n  handle (match mk () with\n    | Ref put v ->\n        put (fn () -> Fs.close h)\n        v ()) with\n    | mk () k -> k (Ref (fn _ -> ()) (fn () -> ()))"
+    );
+    insta::assert_snapshot!(check_text(&text), @"
+    mk : Unit -> <Mk> Ref (Unit -> <IO> Unit)
+    main : Unit -> <IO> Unit
+      h#0 : File
+      put#1 : (Unit -> <IO> Unit) -> Unit
+      v#2 : Unit -> <IO> Unit
+      k#3 : Ref (Unit -> <IO> Unit) -> <IO> Unit
+      $r#4 : Unit
+    ---
+    E3001 12:14 a lambda that captures a linear value is used where it may be called any number of times
+      12:14 this lambda
+      note: linear values, such as files, the continuation of a `once` operation and closures that capture one, must be used exactly once
+    ");
+}

@@ -6,8 +6,8 @@ use eml_hir::{
 
 use crate::codes;
 use crate::kind::{
-    CallKind, CarriedInner, CarriedValue, DiscardSite, InnerLabel, KindOrigin, KindReason, Span,
-    UnusedPath,
+    CallKind, CarriedInner, CarriedValue, DiscardSite, InnerLabel, KindOrigin, KindReason,
+    OperationSide, Span, UnusedPath,
 };
 use crate::store::TypeStore;
 use crate::table::{Exporter, Label as RowLabel, Row, Ty, UnifyError};
@@ -576,7 +576,7 @@ fn discarded_field(file: FileId, range: TextRange, name: &str, site: DiscardSite
 }
 
 /// 線形な値の誤った使い方。破れた Kind の制約の由来から番号と指す場所を決める (docs/implementation/diagnostics.md の
-/// 「線形性の診断」)。表に当たらない由来 (受け渡し、単一化、捕獲) は E3001 にする。
+/// 「線形性の診断」)。表に当たらない由来 (受け渡し、単一化、捕獲、操作の型が節に求める制約) は E3001 にする。
 pub(super) fn linear_misuse(
     program: &Program,
     files: &SourceFiles,
@@ -713,6 +713,21 @@ pub(super) fn linear_misuse(
             ),
             format!("`{name}` is used here"),
         ),
+        KindReason::OperationType { name, side } => misused(
+            origin,
+            format!(
+                "a linear value is used where the type of `{name}` requires a value that may be used any number of times"
+            ),
+            format!("this clause handles `{name}`"),
+        )
+        .with_note(match side {
+            OperationSide::Argument => format!(
+                "the arguments of `{name}` may be used any number of times, so the clause cannot treat them as linear values"
+            ),
+            OperationSide::Result => format!(
+                "the code that performs `{name}` may call the functions in its result any number of times"
+            ),
+        }),
         KindReason::Unified => misused(
             origin,
             "a linear value is used where an unrestricted value is expected".to_string(),

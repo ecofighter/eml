@@ -1,0 +1,22 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: rendered
+input_file: tests/ui/check-fail/linearity/file_across_operation_row_variable.em
+---
+[E3006] Error: `h` must be used exactly once, but it is kept alive across a call that may resume more than once
+    ╭─[ check-fail/linearity/file_across_operation_row_variable.em:21:21 ]
+    │
+ 21 │             let x = g ()
+    │                     ──┬─  
+    │                       ╰─── this call may perform `multi` operations
+    │
+    ├─[ check-fail/linearity/file_across_operation_row_variable.em:21:21 ]
+    │
+ 20 │             let h = Fs.open "input.txt"
+    │                 ┬  
+    │                 ╰── `h` is bound here
+    │ 
+    │ Help: finish using `h` before this call
+    │ 
+    │ Note: a continuation of a `multi` operation can be resumed more than once, and each resumption would use the value again
+────╯

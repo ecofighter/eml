@@ -97,6 +97,15 @@ impl Provenance {
     }
 }
 
+/// 操作の型が節に求める制約の出どころ。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum OperationSide {
+    /// 引数の型。操作のスキームが `Unr` に固定している。
+    Argument,
+    /// 結果の型。節が作って渡す関数は、呼ぶ側が何回でも呼べる。
+    Result,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum KindReason {
     /// ある経路で2回以上使った変数。名前と、その経路で1回目と2回目に使った位置。
@@ -122,6 +131,9 @@ pub(crate) enum KindReason {
     CapturedByLambda,
     /// トップレベルの関数、組み込み、操作のスキームから複写した制約。名前は参照した値の名前である。
     Passed(String),
+    /// 操作の型が、その操作の節に求める制約。名前は操作の名前で、由来の範囲は節の頭 (操作の名前から最後の引数まで)
+    /// である (docs/spec/effects.md の「handler の意味」)。
+    OperationType { name: String, side: OperationSide },
     /// 型の単一化で出た制約。
     Unified,
     /// 呼び出しをまたいで持っている値。由来の範囲は呼び出しの範囲である (docs/spec/effects.md の「継続の多重度と持ち越し規則」)。
@@ -230,6 +242,9 @@ impl KindReason {
             ),
             KindReason::DiscardedField { name, site } => {
                 (11, vec![text(name), number(site.order_key())])
+            }
+            KindReason::OperationType { name, side } => {
+                (12, vec![text(name), number(*side as u32)])
             }
         }
     }

@@ -125,7 +125,7 @@ struct Fix {
 | E2012 | `CONSTRAINED_POLYMORPHIC_RECURSION` | 一様な位置の型変数が制約を持つ ([Core IR](core-ir.md) の「一様な位置と制約付きの多相再帰」) |
 | E2013 | `FIELD_NEEDS_KNOWN_TYPE` | 射影か更新の時点で、値の型が決まっていない ([型と Kind](types.md) の「フィールドの解決」) |
 | E2014 | `NO_SUCH_FIELD` | 射影か更新のフィールドが、その型にない。コンストラクタが2つ以上の型への射影と更新、タプルの更新を含む |
-| E3001 | `LINEAR_VALUE_MISUSED` | 線形な値の誤った使い方のうち、E3002〜E3005 に当たらないもの (関数への受け渡し、型の単一化、ラムダや節の捕獲) |
+| E3001 | `LINEAR_VALUE_MISUSED` | 線形な値の誤った使い方のうち、E3002〜E3005 に当たらないもの (関数への受け渡し、型の単一化、ラムダや節の捕獲、操作の型が節に求める制約) |
 | E3002 | `LINEAR_VALUE_USED_TWICE` | 線形な値を、ある経路で2回以上使った |
 | E3003 | `LINEAR_VALUE_NOT_CONSUMED` | 線形な値を、ある経路で使わなかった |
 | E3004 | `LINEAR_VALUE_DISCARDED` | 線形な値を `_` で受けた。状態のある handler で省いた `return` の節が `Lin` の状態を捨てた場合、分解のパターンに書かないフィールド、射影で取り出さない残りのフィールド、更新で上書きされる古い値が線形な場合を含む |

@@ -12,6 +12,7 @@ use eml_hir::{
 use la_arena::{Arena, ArenaMap};
 
 use crate::context::Context;
+use crate::data::Variance;
 use crate::kind::KindVar;
 use crate::store::{EffectLabel, RowTail, TypeId, TypeKind, TypeStore};
 use crate::table::{ArrowLin, Label, RigidVar, Row, RowVar, Table, Tail, Ty, TyShape};
@@ -85,14 +86,22 @@ pub(crate) enum Arrows {
     /// できないためである (操作の引数とフィールドの関数型と同じ規則。docs/spec/types.md の「Kind」)。`outermost` は
     /// 一番外側の矢印か。
     Method { outermost: bool },
+    /// 操作のシグネチャの、引数の個数の分の外側の矢印。引数の矢印は推論し、操作のスキームが `Unr` に固定する
+    /// (`declaration_schemes`)。`remaining` はこの矢印を含めて残っている外側の矢印の数である。
+    Operation { remaining: usize, outermost: bool },
+    /// 操作の結果の型。値は節から見た位置の向きである。操作を呼ぶ側から節へ渡る位置 (受け取る側と両方向) の矢印は、
+    /// 節が値をどう使うかを推論できないので、引数と同じく `Unr` に固定する。節が作って渡す位置の矢印は推論し、節の
+    /// 中で `Unr` 以下にする (docs/spec/effects.md の「handler の意味」)。
+    OperationResult(Variance),
 }
 
 impl Arrows {
-    /// 引数、型引数、row のラベルの型引数の位置の決め方。
+    /// 引数の位置の決め方。
     fn param(self) -> Arrows {
         match self {
             Arrows::Unr | Arrows::Method { .. } => Arrows::Unr,
-            Arrows::Inferred | Arrows::OutermostUnr => Arrows::Inferred,
+            Arrows::Inferred | Arrows::OutermostUnr | Arrows::Operation { .. } => Arrows::Inferred,
+            Arrows::OperationResult(at) => Arrows::OperationResult(at.then(Variance::Contra)),
         }
     }
 
@@ -102,20 +111,57 @@ impl Arrows {
             Arrows::Unr => Arrows::Unr,
             Arrows::Inferred | Arrows::OutermostUnr => Arrows::Inferred,
             Arrows::Method { .. } => Arrows::Method { outermost: false },
+            Arrows::Operation { remaining, .. } if remaining <= 1 => {
+                Arrows::OperationResult(Variance::Co)
+            }
+            Arrows::Operation { remaining, .. } => Arrows::Operation {
+                remaining: remaining - 1,
+                outermost: false,
+            },
+            Arrows::OperationResult(at) => Arrows::OperationResult(at),
         }
     }
-}
 
-/// シグネチャを推論の表に変換する。一番外側の矢印はトップレベルの関数そのもので、何度でも呼べるので `Unr` である
-/// (docs/spec/types.md の「関数型」)。
-pub(crate) fn lower_signature(table: &mut Table, signature: &Signature, rigids: &Rigids) -> Ty {
-    lower(
-        table,
-        &signature.types,
-        rigids,
-        signature.ty,
-        Arrows::OutermostUnr,
-    )
+    /// 変位が `variance` の型引数の位置の決め方。
+    fn arg(self, variance: Variance) -> Arrows {
+        match self {
+            Arrows::OperationResult(at) => Arrows::OperationResult(at.then(variance)),
+            _ => self.param(),
+        }
+    }
+
+    /// タプルの要素の位置の決め方。
+    fn element(self) -> Arrows {
+        match self {
+            Arrows::OperationResult(at) => Arrows::OperationResult(at),
+            _ => self.param(),
+        }
+    }
+
+    /// row のラベルの型引数の位置の決め方。
+    fn label(self) -> Arrows {
+        self.arg(Variance::Both)
+    }
+
+    fn lin(self, table: &mut Table) -> ArrowLin {
+        match self {
+            Arrows::Inferred
+            | Arrows::Method { outermost: false }
+            | Arrows::Operation {
+                outermost: false, ..
+            }
+            | Arrows::OperationResult(Variance::Co | Variance::Absent) => table.fresh_arrow_lin(),
+            Arrows::OutermostUnr
+            | Arrows::Unr
+            | Arrows::Method { outermost: true }
+            | Arrows::Operation {
+                outermost: true, ..
+            }
+            | Arrows::OperationResult(Variance::Contra | Variance::Both) => {
+                ArrowLin::Known(Linearity::Unr)
+            }
+        }
+    }
 }
 
 /// 本体の注釈を推論の表に変換する。
@@ -144,16 +190,17 @@ fn lower(
         TypeRefKind::Con(id, _) if *id == table.extern_type(ExternType::String) => table.string,
         TypeRefKind::Con(id, _) if *id == table.lang.bool => table.bool,
         TypeRefKind::Con(id, args) => {
+            let variance = &table.data_kinds()[*id].variance;
             let mut lowered = Vec::new();
-            for &arg in args {
-                lowered.push(lower(table, types, rigids, arg, arrows.param()));
+            for (&arg, &variance) in args.iter().zip(variance) {
+                lowered.push(lower(table, types, rigids, arg, arrows.arg(variance)));
             }
             table.alloc(TyShape::Con(*id, lowered))
         }
         TypeRefKind::Tuple(elements) => {
             let mut lowered = Vec::new();
             for &element in elements {
-                lowered.push(lower(table, types, rigids, element, arrows.param()));
+                lowered.push(lower(table, types, rigids, element, arrows.element()));
             }
             table.tuple(lowered)
         }
@@ -165,21 +212,16 @@ fn lower(
                 // 省略した row は空の row である (docs/spec/types.md の「関数型」)
                 RowRef::Omitted => Row::pure(),
                 RowRef::Closed { effects, .. } => {
-                    Row::closed(lower_labels(table, types, rigids, effects, arrows.param()))
+                    Row::closed(lower_labels(table, types, rigids, effects, arrows.label()))
                 }
                 RowRef::Open { effects, tail, .. } => Row {
-                    labels: lower_labels(table, types, rigids, effects, arrows.param()),
+                    labels: lower_labels(table, types, rigids, effects, arrows.label()),
                     tail: Tail::Var(rigids.rows[*tail]),
                 },
                 // 未定義のエフェクトか、解決できない row 変数の跡。どのエフェクトも受け入れて、診断を連鎖させない
                 RowRef::Error => Row::error(),
             };
-            let lin = match arrows {
-                Arrows::Inferred | Arrows::Method { outermost: false } => table.fresh_arrow_lin(),
-                Arrows::OutermostUnr | Arrows::Unr | Arrows::Method { outermost: true } => {
-                    ArrowLin::Known(Linearity::Unr)
-                }
-            };
+            let lin = arrows.lin(table);
             table.function_with(param, lin, row, ret)
         }
     }
@@ -239,7 +281,15 @@ pub(crate) fn lower_constructor(
 /// (docs/spec/effects.md)。操作のシグネチャの外側の矢印には row を書けないので (E1007)、ほかの外側の矢印の row は
 /// 空である。
 fn lower_operation(table: &mut Table, operation: &Operation, rigids: &Rigids) -> Ty {
-    let ty = lower_signature(table, &operation.signature, rigids);
+    let arrows = match operation.arity {
+        0 => Arrows::OperationResult(Variance::Co),
+        remaining => Arrows::Operation {
+            remaining,
+            outermost: true,
+        },
+    };
+    let signature = &operation.signature;
+    let ty = lower(table, &signature.types, rigids, signature.ty, arrows);
     let label = Label {
         effect: operation.effect,
         args: rigids.effect_args(operation),
@@ -591,28 +641,24 @@ impl Shape {
 
     /// handler の操作の節のための具体化。先頭の `effect_args.len()` 個の rigid な型変数をエフェクトの型引数 (handle の
     /// 型引数) にし、残りの型変数と row 変数を新しい rigid 変数にする。節は、操作がどの型で呼ばれても動かなければならない
-    /// ため (docs/spec/effects.md の「handler の意味」)。Kind 変数は新しい変数にする。操作ごとの型変数のうち、操作の
-    /// `arity` 個の引数の型に現れないものは、操作を呼ぶ側が `Lin` の型で具体化できるので、`μ` を `Lin` 以上にする。
+    /// ため。Kind 変数は新しい変数にし、操作を呼ぶ側がスキームの範囲でどう選んでも節が正しくなるように縛る制約を
+    /// `ClauseKinds` で返す。制約の由来は呼ぶ側が付ける (docs/spec/effects.md の「handler の意味」)。
     pub fn instantiate_with_effect_args(
         &self,
         table: &mut Table<'_>,
         effect_args: &[Ty],
         arity: usize,
-    ) -> Ty {
+    ) -> (Ty, ClauseKinds) {
         debug_assert!(effect_args.len() <= self.rigids.len());
         let lin: Vec<KindVar> = (0..self.lin_vars).map(|_| table.fresh_lin_var()).collect();
         let mult: Vec<KindVar> = (0..self.mult_vars)
             .map(|_| table.fresh_mult_var())
             .collect();
         let mut tys = Vec::new();
-        let mut operation_vars = Vec::new();
         for (index, (name, mu)) in self.rigids.iter().enumerate() {
             let ty = match effect_args.get(index) {
                 Some(&arg) => arg,
-                None => {
-                    operation_vars.push(lin[mu.index()]);
-                    table.fresh_operation_rigid(name, lin[mu.index()])
-                }
+                None => table.fresh_operation_rigid(name, lin[mu.index()]),
             };
             tys.push(ty);
         }
@@ -622,17 +668,49 @@ impl Shape {
             .map(|(name, sigma)| Tail::Var(table.fresh_rigid_row_with(name, mult[sigma.index()])))
             .collect();
         let ty = build(table, &self.ty, &tys, &rows, &lin);
-        let mut param_kinds = Vec::new();
-        let mut spine = ty;
+        let mut kinds = self.clause_kinds(arity, effect_args.len());
+        for var in kinds
+            .params
+            .iter_mut()
+            .chain(&mut kinds.results)
+            .chain(&mut kinds.linear)
+        {
+            *var = lin[var.index()];
+        }
+        kinds.rows = self
+            .rows
+            .iter()
+            .map(|(_, sigma)| mult[sigma.index()])
+            .collect();
+        (ty, kinds)
+    }
+
+    /// 節での線形性の Kind 変数の縛り方。番号は形の番号である。エフェクトの型引数 (先頭の `effect_params` 個の型変数)
+    /// は handle ごとに具体的な型で節を検査するので縛らない。
+    fn clause_kinds(&self, arity: usize, effect_params: usize) -> ClauseKinds {
+        let mut walk = ClauseWalk {
+            effect_params,
+            kinds: ClauseKinds::default(),
+            in_params: vec![false; self.rigids.len()],
+        };
+        let mut spine = &self.ty;
         for _ in 0..arity {
-            let TyShape::Fn { param, ret, .. } = table.shape(spine).clone() else {
+            let ShapeTy::Fn { param, ret, .. } = spine else {
                 break;
             };
-            param_kinds.extend(table.kind_vars(param).0);
+            walk.visit(param, true);
             spine = ret;
         }
-        table.operation_result_vars_linear(&operation_vars, &param_kinds);
-        ty
+        walk.visit(spine, false);
+        let mut kinds = walk.kinds;
+        for (index, (_, mu)) in self.rigids.iter().enumerate().skip(effect_params) {
+            if walk.in_params[index] {
+                kinds.params.push(*mu);
+            } else {
+                kinds.linear.push(*mu);
+            }
+        }
+        kinds
     }
 
     /// 後の段階に渡す型。rigid な変数は名前で書く。シグネチャの型も本体の型と同じ表に登録する。
@@ -740,6 +818,54 @@ impl Shape {
             .iter()
             .map(|(name, sigma)| (*sigma, name.clone()))
             .collect()
+    }
+}
+
+/// handler の節が操作の型の Kind 変数に付ける制約 (docs/spec/effects.md の「handler の意味」)。
+#[derive(Debug, Default)]
+pub(crate) struct ClauseKinds {
+    /// 引数の型の Kind 変数。操作のスキームと同じく `Unr` 以下にする。
+    pub params: Vec<KindVar>,
+    /// 結果の型で推論する矢印。どれも節が作って渡す位置にあり (`Arrows::OperationResult`)、呼ぶ側は何回でも呼べるので、
+    /// `Unr` 以下にする。
+    pub results: Vec<KindVar>,
+    /// 引数の型に現れない操作ごとの型変数の `μ`。呼ぶ側が `Lin` の型で具体化できるので、`Lin` 以上にする。
+    pub linear: Vec<KindVar>,
+    /// 操作ごとの row 変数の `σ`。呼ぶ側が `multi` の操作を含む row で具体化できるので、`Multi` 以上にする。
+    pub rows: Vec<KindVar>,
+}
+
+struct ClauseWalk {
+    effect_params: usize,
+    kinds: ClauseKinds,
+    /// 型変数ごとに、引数の型に現れたか。
+    in_params: Vec<bool>,
+}
+
+impl ClauseWalk {
+    fn visit(&mut self, ty: &ShapeTy, in_params: bool) {
+        match ty {
+            ShapeTy::Rigid(index) if in_params && *index >= self.effect_params => {
+                self.in_params[*index] = true;
+            }
+            ShapeTy::Fn {
+                lin: ShapeLin::Var(var),
+                ..
+            } if in_params => self.kinds.params.push(*var),
+            ShapeTy::Fn {
+                lin: ShapeLin::Var(var),
+                ..
+            } => self.kinds.results.push(*var),
+            _ => {}
+        }
+        ty.for_each_child(|child| match child {
+            ShapeChild::Ty(ty) => self.visit(ty, in_params),
+            ShapeChild::Row(row) => row
+                .labels
+                .iter()
+                .flat_map(|(_, args)| args)
+                .for_each(|arg| self.visit(arg, in_params)),
+        });
     }
 }
 
@@ -860,7 +986,7 @@ mod tests {
         let shape = operation_shape(&context, operation);
         let mut table = Table::new(&context);
         let int = table.int;
-        let ty = shape.instantiate_with_effect_args(&mut table, &[int], operation.arity);
+        let (ty, _) = shape.instantiate_with_effect_args(&mut table, &[int], operation.arity);
         assert_eq!(table.show(ty, &program), "a -> Int -> <State Int> (a, Int)");
     }
 

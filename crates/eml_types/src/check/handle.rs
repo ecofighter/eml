@@ -1,7 +1,9 @@
 //! handle の検査 (docs/spec/effects.md の「handler の意味」)。
 
+use eml_diagnostics::TextRange;
 use eml_hir::{Closure, EffectId, ExprId, OpClause, OpMultiplicity, PatId, ReturnClause};
 
+use crate::kind::{KindReason, OperationSide};
 use crate::table::{ArrowLin, Label, Row, Ty, TyShape};
 use crate::ty::Linearity;
 
@@ -85,11 +87,27 @@ impl BodyCheck<'_, '_> {
     ) {
         let operation = &self.program[clause.op];
         // 節の型は、操作の閉じた形にエフェクトの型引数を入れて作る。操作の型の作り方を1か所にするため
-        let mut ty = self.signatures.operations[clause.op].instantiate_with_effect_args(
+        let (mut ty, kinds) = self.signatures.operations[clause.op].instantiate_with_effect_args(
             self.table,
             effect_args,
             operation.arity,
         );
+        // 制約は節の中の値ではなく操作の型から出るので、節の頭を指す。値の位置は分からない
+        let head = match clause.closure.params.last() {
+            Some(&last) => TextRange::new(clause.range.start(), self.body.pats[last].range.end()),
+            None => clause.range,
+        };
+        let reason = |side| KindReason::OperationType {
+            name: operation.name.clone(),
+            side,
+        };
+        self.with_kind_origin(head, reason(OperationSide::Argument), |this| {
+            this.table.fix_linearity(&kinds.params, &[]);
+        });
+        self.with_kind_origin(head, reason(OperationSide::Result), |this| {
+            this.table.fix_linearity(&kinds.results, &kinds.linear);
+            this.table.multiplicity_at_least_multi(&kinds.rows);
+        });
         for &param in clause.args() {
             match self.table.shape(ty).clone() {
                 TyShape::Fn {

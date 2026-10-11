@@ -1,10 +1,11 @@
 use crate::context::Context;
+use crate::data::DataKind;
 use crate::kind::problem::{Bounds, Instance, KindProblem, OwnVars};
 use crate::kind::{Bound, Carry, KindVar, Provenance};
 use crate::store::{EffectLabel, RowTail, TypeId, TypeKind, TypeStore};
 use crate::ty::{Linearity, Multiplicity};
 use eml_extern::ExternType;
-use eml_hir::{EffectId, LangItems, OperationId, TypeDefId};
+use eml_hir::{EffectId, ItemMap, LangItems, OperationId, TypeDef, TypeDefId};
 use std::cell::RefCell;
 
 mod export;
@@ -267,6 +268,10 @@ impl<'c> Table<'c> {
     fn require_mult(&mut self, lower: Bound<Multiplicity>, upper: Bound<Multiplicity>) {
         self.multiplicity
             .require(lower, upper, self.kind_origin.clone());
+    }
+
+    pub fn data_kinds(&self) -> &'c ItemMap<TypeDef, DataKind> {
+        &self.context.data_kinds
     }
 
     pub fn new(context: &'c Context) -> Table<'c> {

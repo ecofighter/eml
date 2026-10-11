@@ -1,0 +1,16 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: rendered
+input_file: tests/ui/check-fail/linearity/operation_result_function_linear.em
+---
+[E3001] Error: a linear value is used where the type of `mk` requires a value that may be used any number of times
+    ╭─[ check-fail/linearity/operation_result_function_linear.em:15:5 ]
+    │
+ 15 │     | mk () k ->
+    │     ────┬────  
+    │         ╰────── this clause handles `mk`
+    │ 
+    │ Note 1: linear values, such as files, the continuation of a `once` operation and closures that capture one, must be used exactly once
+    │ 
+    │ Note 2: the code that performs `mk` may call the functions in its result any number of times
+────╯
