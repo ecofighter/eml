@@ -8,6 +8,7 @@ mod contract;
 mod evidence;
 mod externs;
 mod instances;
+mod lowering;
 mod perceus;
 mod s8a_baseline;
 mod text;
