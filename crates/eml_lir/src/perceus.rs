@@ -6,8 +6,7 @@
 
 use std::collections::{BTreeSet, HashMap};
 
-use crate::{Block, CoreFn, Program, Rhs, Stmt, Term};
-use eml_lir::{Atom, BlockId, CasePattern, Ctor, VarId};
+use crate::{Atom, Block, BlockId, CasePattern, Ctor, LirFn, Program, Rhs, Stmt, Term, VarId};
 
 use crate::liveness::{insert_var, live_after_term, live_in, step_back};
 
@@ -18,7 +17,7 @@ pub fn perceus(program: &mut Program) {
     }
 }
 
-fn insert_rc(function: &mut CoreFn) {
+fn insert_rc(function: &mut LirFn) {
     let live_in = live_in(function);
     let rc: Vec<bool> = function.vars.iter().map(|var| var.repr.is_rc()).collect();
     // `switch` の行き先には、その `switch` の辺1本だけが入る (R3)。入口の所有と、case が分解した値は `switch` の
@@ -119,12 +118,7 @@ fn rewrite(
         // `live` はこの文の後で生きている変数である。呼び出しは、そのうち結果の変数以外を退避する
         if let Stmt::Let {
             var,
-            rhs:
-                Rhs::Call {
-                    call: _,
-                    mask: _,
-                    saved,
-                },
+            rhs: Rhs::Call { call: _, saved },
         } = stmt
         {
             *saved = live.iter().copied().filter(|v| v != var).collect();

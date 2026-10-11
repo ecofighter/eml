@@ -1,7 +1,7 @@
-//! Core IR のテキストで、クロージャの eval/apply と、handler をまたぐ再開を確かめる (docs/spec/core-ir.md)。関数の
+//! LIR のテキストで、クロージャの eval/apply と、handler をまたぐ再開を確かめる (docs/spec/core-ir.md)。関数の
 //! 値として使う関数は一様なので、`Int` は `box` して渡し、結果は `unbox` して受ける。
 
-use crate::common::run_core;
+use crate::common::run_lir;
 
 /// `first` は2つの引数のうち最初のものを返す。
 const FIRST: &str = "\
@@ -36,7 +36,7 @@ fn main() -> unit {{
 }}
 {FIRST}"
     );
-    assert_eq!(run_core(&text), ("10\n".to_string(), Ok(())));
+    assert_eq!(run_lir(&text), ("10\n".to_string(), Ok(())));
 }
 
 #[test]
@@ -64,7 +64,7 @@ fn make(x.0: tobj) -> tobj {
   return c.1
 }
 ";
-    assert_eq!(run_core(text), ("5\n".to_string(), Ok(())));
+    assert_eq!(run_lir(text), ("5\n".to_string(), Ok(())));
 }
 
 #[test]
@@ -83,7 +83,7 @@ fn main() -> unit {{
 }}
 {FIRST}{MAKE}"
     );
-    assert_eq!(run_core(&text), ("5\n".to_string(), Ok(())));
+    assert_eq!(run_lir(&text), ("5\n".to_string(), Ok(())));
 }
 
 #[test]
@@ -106,7 +106,7 @@ fn first(a.0: obj, b.1: tobj) -> obj {
   return a.0
 }
 ";
-    assert_eq!(run_core(text), ("a\na\n".to_string(), Ok(())));
+    assert_eq!(run_lir(text), ("a\na\n".to_string(), Ok(())));
 }
 
 #[test]
@@ -137,7 +137,7 @@ fn each(f.0: tobj, m.1: tobj) -> unit {{
 }}
 {FIRST}{MAKE}"
     );
-    assert_eq!(run_core(&text), ("10\n5\n".to_string(), Ok(())));
+    assert_eq!(run_lir(&text), ("10\n5\n".to_string(), Ok(())));
 }
 
 #[test]
@@ -158,11 +158,11 @@ fn pair(f.0: tobj) -> unit {{
 }}
 {FIRST}"
     );
-    assert_eq!(run_core(&text), ("ok\n".to_string(), Ok(())));
+    assert_eq!(run_lir(&text), ("ok\n".to_string(), Ok(())));
 }
 
-/// `ir/multi_resume.core` は、次のプログラムを Perceus まで通した IR である。`Choose` の節が `k` を2回再開し、
-/// 内側の `Ask` の handle の `prompt$` は、再開のたびに `return` の節を通って戻る。Core IR のテキストにはコメントを
+/// `ir/multi_resume.lir` は、次のプログラムを Perceus まで通した IR である。`Choose` の節が `k` を2回再開し、
+/// 内側の `Ask` の handle の `prompt$` は、再開のたびに `return` の節を通って戻る。LIR のテキストにはコメントを
 /// 書けないので、IR の説明はここに書く。
 ///
 /// ```text
@@ -182,7 +182,7 @@ fn pair(f.0: tobj) -> unit {{
 /// ```
 #[test]
 fn an_inner_handle_returns_through_each_resumption_of_an_outer_multi_operation() {
-    let (stdout, result) = run_core(include_str!("ir/multi_resume.core"));
+    let (stdout, result) = run_lir(include_str!("ir/multi_resume.lir"));
     assert_eq!(result, Ok(()));
     assert_eq!(stdout, "203\n");
 }

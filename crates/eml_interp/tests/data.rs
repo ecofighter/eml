@@ -1,10 +1,10 @@
-//! Core IR のテキストで、`data` の値の確保、`switch` と `unpack` による分解、`release`、`box` と `unbox` を確かめる
+//! LIR のテキストで、`data` の値の確保、`switch` と `unpack` による分解、`release`、`box` と `unbox` を確かめる
 //! (docs/spec/core-ir.md)。共有された値の分解や、`tobj` の変数に入った引数のないコンストラクタは、ソースの `match`
 //! からは狙って作りにくいので、ここで書く。
 
 use eml_interp::{Fault, RuntimeError};
 
-use crate::common::{run_core, run_core_unverified};
+use crate::common::{run_lir, run_lir_unverified};
 
 #[test]
 fn a_tobj_variable_holding_a_tag_takes_its_case() {
@@ -26,7 +26,7 @@ b2:
   return ()
 }
 ";
-    assert_eq!(run_core(text), ("none\n".to_string(), Ok(())));
+    assert_eq!(run_lir(text), ("none\n".to_string(), Ok(())));
 }
 
 #[test]
@@ -45,7 +45,7 @@ b2:
 }
 ";
     assert_eq!(
-        run_core_unverified(text).1,
+        run_lir_unverified(text).1,
         Err(RuntimeError::Fault {
             fault: Fault::Internal(
                 "a switch case binds a different number of fields than the value has"
@@ -78,7 +78,7 @@ b2:
 }
 ";
     assert_eq!(
-        run_core(text).1,
+        run_lir(text).1,
         Err(RuntimeError::Fault {
             fault: Fault::Internal(
                 "a switch case binds a different number of fields than the value has"
@@ -115,7 +115,7 @@ b2:
 
 #[test]
 fn a_string_switch_leaves_the_string_to_its_targets() {
-    assert_eq!(run_core(STRING_SWITCH), ("3\n".to_string(), Ok(())));
+    assert_eq!(run_lir(STRING_SWITCH), ("3\n".to_string(), Ok(())));
 }
 
 #[test]
@@ -137,7 +137,7 @@ b2:
   return o.3
 }
 ";
-    assert_eq!(run_core(text), ("default\n".to_string(), Ok(())));
+    assert_eq!(run_lir(text), ("default\n".to_string(), Ok(())));
 }
 
 #[test]
@@ -157,7 +157,7 @@ b3:
   return ()
 }
 ";
-    assert_eq!(run_core(text), ("two\n".to_string(), Ok(())));
+    assert_eq!(run_lir(text), ("two\n".to_string(), Ok(())));
 }
 
 /// `Pair` の箱を2回分解する。`unpack` は箱を読むだけなので、1回目の後も箱は残る。1回目はフィールドを複製し、2回目は
@@ -180,7 +180,7 @@ fn main() -> unit {
 #[test]
 fn an_unpack_reads_the_fields_without_taking_the_box() {
     assert_eq!(
-        run_core(UNPACK_TWICE),
+        run_lir(UNPACK_TWICE),
         ("first\nfirst\n".to_string(), Ok(()))
     );
 }
@@ -201,7 +201,7 @@ fn main() -> unit {{
 }}
 "
     );
-    run_core_unverified(&text).1
+    run_lir_unverified(&text).1
 }
 
 #[test]
@@ -242,7 +242,7 @@ fn main() -> unit {
 }
 ";
     assert_eq!(
-        run_core_unverified(text).1,
+        run_lir_unverified(text).1,
         Err(RuntimeError::Fault {
             fault: Fault::Internal("an unpack of a value that is not an object"),
             function: "main".to_string(),
@@ -263,7 +263,7 @@ fn main() -> unit {
 }
 ";
     assert_eq!(
-        run_core_unverified(text).1,
+        run_lir_unverified(text).1,
         Err(RuntimeError::Fault {
             fault: Fault::Internal("an unpack of an object that is not data"),
             function: "main".to_string(),
@@ -305,7 +305,7 @@ b2:
 #[test]
 fn a_release_of_a_unique_box_hands_its_field_over() {
     assert_eq!(
-        run_core(&release_one_field(false)),
+        run_lir(&release_one_field(false)),
         ("7\n".to_string(), Ok(()))
     );
 }
@@ -313,7 +313,7 @@ fn a_release_of_a_unique_box_hands_its_field_over() {
 #[test]
 fn a_release_of_a_shared_box_dups_its_field() {
     assert_eq!(
-        run_core(&release_one_field(true)),
+        run_lir(&release_one_field(true)),
         ("7\n".to_string(), Ok(()))
     );
 }
@@ -333,7 +333,7 @@ fn main() -> unit {
   return o.5
 }
 ";
-    assert_eq!(run_core(text), ("77\n".to_string(), Ok(())));
+    assert_eq!(run_lir(text), ("77\n".to_string(), Ok(())));
 }
 
 /// `#1` の箱を `release` で手放す。タグとフィールドの数の違いは、`unpack` と同じく実行して初めて分かり、verifier
@@ -350,7 +350,7 @@ fn main() -> unit {{
 }}
 "
     );
-    run_core_unverified(&text).1
+    run_lir_unverified(&text).1
 }
 
 #[test]
@@ -379,7 +379,7 @@ fn main() -> unit {
 }
 ";
     assert_eq!(
-        run_core_unverified(text).1,
+        run_lir_unverified(text).1,
         Err(RuntimeError::Fault {
             fault: Fault::Internal("a release of a value that is not an object"),
             function: "main".to_string(),
@@ -411,7 +411,7 @@ b2:
   return o.6
 }
 ";
-    assert_eq!(run_core(text), ("41\n".to_string(), Ok(())));
+    assert_eq!(run_lir(text), ("41\n".to_string(), Ok(())));
 }
 
 #[test]
@@ -430,7 +430,7 @@ fn main() -> unit {
 }
 ";
     assert_eq!(
-        run_core(text).1,
+        run_lir(text).1,
         Err(RuntimeError::Fault {
             fault: Fault::Internal("an unbox of a heap object"),
             function: "main".to_string(),
@@ -450,7 +450,7 @@ fn main() -> unit {
 }
 ";
     assert_eq!(
-        run_core_unverified(text).1,
+        run_lir_unverified(text).1,
         Err(RuntimeError::Fault {
             fault: Fault::Internal("a box of a heap object"),
             function: "main".to_string(),

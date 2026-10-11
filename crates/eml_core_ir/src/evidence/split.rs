@@ -7,8 +7,8 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 use std::mem;
 use std::ops::Range;
 
-use crate::boxing::tail_position_call;
 use crate::liveness::{insert_var, live_after_term, live_in, step_back};
+use crate::tail::tail_position_call;
 use crate::{Block, Call, CoreFn, Program, Rhs, Stmt, Term};
 use eml_lir::{Atom, BlockId, FnIdx, Prim, Repr, VarId, VarInfo};
 

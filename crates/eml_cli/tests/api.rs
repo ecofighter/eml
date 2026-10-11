@@ -1,7 +1,6 @@
 use eml_cli::{
     FsProvider, ModulePath, ModuleSource, OutputSink, ReadError, RunConfig, Session, execute,
 };
-use eml_core_ir::{Pass, pretty};
 use eml_diagnostics::{Diagnostic, has_errors};
 use eml_test_support::MemorySource;
 
@@ -49,20 +48,28 @@ fn load_with_std_reads_the_given_standard_library() {
     assert!(session.check().diagnostics.is_empty());
 }
 
+/// 使われない `"unused"` を持ち、`s` を2回使うプログラム。
+const TWICE: &str = "twice : String -> String\ntwice s =\n  let _ = \"unused\"\n  s ++ s\n\nmain : Unit -> <IO> Unit\nmain () = println (twice \"x\")";
+
+#[test]
+fn compile_core_until_stops_after_the_named_pass() {
+    // translate の直後の Core IR には、contract が消す前の `"unused"` が残る
+    let session = single(TWICE);
+    let shown = |last| eml_core_ir::pretty(&session.compile_core_until(last).program.unwrap());
+    assert!(shown(eml_core_ir::Pass::Translate).contains("\"unused\""));
+}
+
 #[test]
 fn compile_until_stops_after_the_named_pass() {
     // contract が使われない `"unused"` を消す。`s` を2回使うので、Perceus の後にだけ `dup` が入る
-    let session = single(
-        "twice : String -> String\ntwice s =\n  let _ = \"unused\"\n  s ++ s\n\nmain : Unit -> <IO> Unit\nmain () = println (twice \"x\")",
-    );
-    let shown = |last| pretty(&session.compile_until(last).program.unwrap());
-    assert!(shown(Pass::Translate).contains("\"unused\""));
-    assert!(!shown(Pass::Contract).contains("\"unused\""));
-    assert!(!shown(Pass::Contract).contains("dup"));
-    assert!(shown(Pass::Perceus).contains("dup"));
+    let session = single(TWICE);
+    let shown = |last| eml_lir::pretty(&session.compile_until(last).program.unwrap());
+    assert!(!shown(eml_lir::Pass::Contract).contains("\"unused\""));
+    assert!(!shown(eml_lir::Pass::Contract).contains("dup"));
+    assert!(shown(eml_lir::Pass::Perceus).contains("dup"));
     assert_eq!(
-        shown(Pass::Perceus),
-        pretty(&session.compile().program.unwrap())
+        shown(eml_lir::Pass::Perceus),
+        eml_lir::pretty(&session.compile().program.unwrap())
     );
 }
 

@@ -176,7 +176,7 @@ fn every_extern_type_row_has_the_repr_of_its_type() {
 /// が std の宣言から作る配置の添字と合うことを確かめる。
 #[test]
 fn the_tags_externs_build_name_the_constructors_of_their_layouts() {
-    let program = eml_test_support::core(
+    let program = eml_test_support::lir(
         "main : Unit -> <IO> Unit\nmain () =\n  let f = Fs.open \"a.txt\"\n  let (f, text) = Fs.read_all f\n  Fs.close f\n  if text == \"\" then println \"empty\" else println text",
     );
     let constructors = |name: &str| -> Vec<&str> {

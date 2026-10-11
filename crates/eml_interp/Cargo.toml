@@ -11,7 +11,6 @@ doctest = false
 
 [dependencies]
 eml_extern.workspace = true
-eml_core_ir.workspace = true
 eml_lir.workspace = true
 eml_runtime.workspace = true
 

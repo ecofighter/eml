@@ -22,7 +22,7 @@ required-features = ["run"]
 [features]
 default = ["run"]
 types = ["dep:eml_types"]
-core = ["types", "dep:eml_core_ir"]
+core = ["types", "dep:eml_core_ir", "dep:eml_lir"]
 run = ["core", "dep:eml_interp", "dep:eml_runtime"]
 
 [dependencies]
@@ -31,6 +31,7 @@ eml_core_ir = { workspace = true, optional = true }
 eml_diagnostics.workspace = true
 eml_hir.workspace = true
 eml_interp = { workspace = true, optional = true }
+eml_lir = { workspace = true, optional = true }
 eml_runtime = { workspace = true, optional = true }
 eml_types = { workspace = true, optional = true }
 

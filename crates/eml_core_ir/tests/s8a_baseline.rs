@@ -8,20 +8,28 @@
 use std::fs;
 use std::path::PathBuf;
 
-use eml_core_ir::{Pass, pretty_with_positions};
-
 use crate::common::programs::ui_programs;
 
-const PASSES: [(Pass, &str); 4] = [
-    (Pass::Evidence, "evidence"),
-    (Pass::Boxing, "boxing"),
-    (Pass::Contract, "contract"),
-    (Pass::Perceus, "perceus"),
+/// `None` は EP の直後の Core IR である。
+const PASSES: [(&str, Option<eml_lir::Pass>); 4] = [
+    ("evidence", None),
+    ("boxing", Some(eml_lir::Pass::Boxing)),
+    ("contract", Some(eml_lir::Pass::Contract)),
+    ("perceus", Some(eml_lir::Pass::Perceus)),
 ];
 
 /// パスの直後の IR を、extern の位置付きで表示する。
-fn dump(entry: &str, modules: &[(&str, &str)], pass: Pass) -> String {
-    pretty_with_positions(&eml_test_support::core_until_files(entry, modules, pass))
+fn dump(entry: &str, modules: &[(&str, &str)], pass: Option<eml_lir::Pass>) -> String {
+    match pass {
+        None => eml_core_ir::pretty_with_positions(&eml_test_support::core_until_files(
+            entry,
+            modules,
+            eml_core_ir::Pass::Evidence,
+        )),
+        Some(pass) => {
+            eml_lir::pretty_with_positions(&eml_test_support::lir_until_files(entry, modules, pass))
+        }
+    }
 }
 
 #[test]
@@ -39,7 +47,7 @@ fn dumps_match_the_baseline() {
     let mut mismatches = Vec::new();
     for program in ui_programs() {
         let modules = program.module_refs();
-        for (pass, label) in PASSES {
+        for (label, pass) in PASSES {
             let shown = dump(&program.entry, &modules, pass);
             let file = dir.join(format!("{}.{label}", program.name.replace('/', "__")));
             if bless {

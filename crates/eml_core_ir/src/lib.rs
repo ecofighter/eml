@@ -6,25 +6,20 @@ use eml_lir::{
     Atom, BlockId, Case, Ctor, EffectInfo, FnIdx, Layout, LayoutId, Loc, Prim, Repr, VarId, VarInfo,
 };
 
-mod boxing;
 mod builder;
-mod contract;
 mod evidence;
-pub mod liveness;
+pub(crate) mod liveness;
 mod lowering;
-mod perceus;
 mod pipeline;
 mod pretty;
+mod tail;
 mod text;
 mod translate;
 mod verify;
 
-pub use boxing::boxing;
-pub use contract::contract;
 pub use evidence::evidence;
 pub use lowering::to_lir;
-pub use perceus::perceus;
-pub use pipeline::{Pass, lower, lower_until};
+pub use pipeline::{Pass, core_until, lower, lower_until};
 pub use pretty::{pretty, pretty_with_positions};
 pub use text::parse;
 pub use translate::type_repr;

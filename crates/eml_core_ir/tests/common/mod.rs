@@ -1,9 +1,6 @@
 pub mod programs;
 
-use eml_core_ir::{
-    Pass, Program, parse, pretty, pretty_with_positions, verify, verify_evidence, verify_scopes,
-    verify_translated,
-};
+use eml_core_ir::{Pass, Program, parse, pretty, pretty_with_positions};
 
 /// 誤りのないプログラムを、`last` のパスの直後の Core IR にして表示する。
 pub fn core_text(text: &str, last: Pass) -> String {
@@ -30,13 +27,40 @@ fn read_back(shown: &str, last: Pass, show: fn(&Program) -> String) {
     let parsed = parse(shown).unwrap_or_else(|error| panic!("{error}\n{shown}"));
     assert_eq!(show(&parsed), shown, "the printed Core IR must read back");
     let verified = match last {
-        Pass::Translate => verify_translated(&parsed),
-        Pass::Evidence => verify_evidence(&parsed),
-        Pass::Boxing | Pass::Contract => verify_scopes(&parsed),
-        Pass::Perceus => verify(&parsed),
+        Pass::Translate => eml_core_ir::verify_translated(&parsed),
+        Pass::Evidence => eml_core_ir::verify_evidence(&parsed),
     };
     if let Err(error) = verified {
         panic!("the Core IR read back must verify: {error}\n{shown}");
+    }
+}
+
+/// 誤りのないプログラムを、`last` のパスの直後の LIR にして表示する。
+pub fn lir_text(text: &str, last: eml_lir::Pass) -> String {
+    lir_text_files(text, &[], last)
+}
+
+/// `modules` は根からの相対パスと本文の組である (`eml_test_support::lir_until_files`)。
+pub fn lir_text_files(entry: &str, modules: &[(&str, &str)], last: eml_lir::Pass) -> String {
+    let shown = eml_lir::pretty(&eml_test_support::lir_until_files(entry, modules, last));
+    lir_read_back(&shown, last);
+    shown
+}
+
+/// `read_back` の LIR の側。
+fn lir_read_back(shown: &str, last: eml_lir::Pass) {
+    let parsed = eml_lir::parse(shown).unwrap_or_else(|error| panic!("{error}\n{shown}"));
+    assert_eq!(
+        eml_lir::pretty(&parsed),
+        shown,
+        "the printed LIR must read back"
+    );
+    let verified = match last {
+        eml_lir::Pass::Boxing | eml_lir::Pass::Contract => eml_lir::verify_scopes(&parsed),
+        eml_lir::Pass::Perceus => eml_lir::verify(&parsed),
+    };
+    if let Err(error) = verified {
+        panic!("the LIR read back must verify: {error}\n{shown}");
     }
 }
 

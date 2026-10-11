@@ -1,15 +1,11 @@
 use std::cmp::Ordering;
 use std::path::Path;
 
-use eml_core_ir::Call;
-use eml_lir::{Atom, CasePattern, FnIdx, VarId};
+use eml_lir::{Atom, Call, CasePattern, FnIdx, VarId};
 use eml_runtime::{Closure, Frame, Heap, HeapError, ObjRef, OutputSink, Payload, Value};
 
 use crate::RunStats;
 use crate::error::{Fault, RuntimeError};
-
-pub(crate) const EFFECT_INSTRUCTION: Fault =
-    Fault::Internal("an effect instruction reaches the interpreter");
 
 /// 1つの命令を実行した後の状態。
 pub(crate) enum Step {
@@ -258,9 +254,6 @@ impl<'p> Runtime<'p> {
                 let callee = env.atom(callee)?;
                 let args = env.atoms(args)?;
                 self.apply_and_continue(callee, args)
-            }
-            Call::Handle { .. } | Call::Perform { .. } | Call::Resume { .. } => {
-                Err(EFFECT_INSTRUCTION)
             }
             // 節の呼び出しは、インタプリタでは `apply` と同じである
             // (docs/spec/core-ir.md の「節の呼び出し」)

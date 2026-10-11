@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use eml_core_ir::Program;
+use eml_lir::Program;
 use eml_runtime::OutputSink;
 
 mod error;

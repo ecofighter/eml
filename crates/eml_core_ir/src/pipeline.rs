@@ -1,24 +1,18 @@
-//! Core IR のパスの順番 (docs/spec/core-ir.md の「パス」)。順番を知っているのはこのファイルだけにする。テストは
-//! `lower_until` で、確かめたいパスの直後の IR を見る。
+//! Core IR のパスの順番と、LIR へのつなぎ (docs/spec/core-ir.md の「パス」)。2つの層をつなぐ順番を知っているのは
+//! このファイルだけにする。
 
 use eml_diagnostics::SourceFiles;
 use eml_hir::{FunctionId, Program as HirProgram};
 use eml_types::TypedProgram;
 
-use crate::{
-    Program, boxing, contract, evidence, perceus, translate, verify, verify_evidence,
-    verify_scopes, verify_translated,
-};
+use crate::{Program, evidence, to_lir, translate, verify_evidence, verify_translated};
 use eml_lir::VerifyError;
 
-/// `lower_until` で止める位置。
+/// `core_until` で止める位置。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Pass {
     Translate,
     Evidence,
-    Boxing,
-    Contract,
-    Perceus,
 }
 
 impl Pass {
@@ -26,29 +20,18 @@ impl Pass {
         match self {
             Pass::Translate => "translate",
             Pass::Evidence => "evidence",
-            Pass::Boxing => "boxing",
-            Pass::Contract => "contract",
-            Pass::Perceus => "perceus",
         }
     }
 }
 
+/// `last` の直後の Core IR で止める。止めたパスまでの検査は、debug ビルドでかける。
+///
 /// 診断のエラーがないプログラムだけを受け取る。エラーがあれば `eml_cli` は Core IR を作らない
 /// (docs/implementation/architecture.md)。`files` は、extern の呼び出しの位置 (`Loc`) を行と列にするのに使う。
 ///
 /// `entry` は本体を持つ関数 (extern ではない) で、型が `Unit -> ...` か、引数がなく `Unit -> ...` の関数を返すものでなければならない。
 /// `main` は型検査器が E2004 で保証するが、ほかの呼び出し元 (将来の REPL など) は自分で保証する。
-pub fn lower(
-    hir: &HirProgram,
-    typed: &TypedProgram,
-    entry: FunctionId,
-    files: &SourceFiles,
-) -> Program {
-    lower_until(hir, typed, entry, files, Pass::Perceus)
-}
-
-/// `last` の直後で止める。止めたパスまでの検査は、debug ビルドでかける。
-pub fn lower_until(
+pub fn core_until(
     hir: &HirProgram,
     typed: &TypedProgram,
     entry: FunctionId,
@@ -62,21 +45,29 @@ pub fn lower_until(
     }
     evidence(&mut program);
     check(&program, Pass::Evidence);
-    if last == Pass::Evidence {
-        return program;
-    }
-    boxing(&mut program);
-    check(&program, Pass::Boxing);
-    if last == Pass::Boxing {
-        return program;
-    }
-    contract(&mut program);
-    check(&program, Pass::Contract);
-    if last == Pass::Contract {
-        return program;
-    }
-    perceus(&mut program);
-    check(&program, Pass::Perceus);
+    program
+}
+
+/// 入力の条件は `core_until` と同じである。
+pub fn lower(
+    hir: &HirProgram,
+    typed: &TypedProgram,
+    entry: FunctionId,
+    files: &SourceFiles,
+) -> eml_lir::Program {
+    lower_until(hir, typed, entry, files, eml_lir::Pass::Perceus)
+}
+
+/// EP の後の Core IR を LIR に写し、`last` までの LIR のパスをかける。入力の条件は `core_until` と同じである。
+pub fn lower_until(
+    hir: &HirProgram,
+    typed: &TypedProgram,
+    entry: FunctionId,
+    files: &SourceFiles,
+    last: eml_lir::Pass,
+) -> eml_lir::Program {
+    let mut program = to_lir(core_until(hir, typed, entry, files, Pass::Evidence));
+    eml_lir::passes_until(&mut program, last);
     program
 }
 
@@ -88,8 +79,6 @@ fn check(program: &Program, pass: Pass) {
     let result = match pass {
         Pass::Translate => verify_translated(program),
         Pass::Evidence => verify_evidence(program),
-        Pass::Boxing | Pass::Contract => verify_scopes(program),
-        Pass::Perceus => verify(program),
     };
     if let Err(error) = result {
         fail(pass, error);

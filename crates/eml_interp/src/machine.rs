@@ -1,11 +1,10 @@
 use std::path::Path;
 
-use eml_core_ir::{Program, Rhs, Stmt, Term};
-use eml_lir::{BlockId, FnIdx, Loc, VarId};
+use eml_lir::{BlockId, FnIdx, Loc, Program, Rhs, Stmt, Term, VarId};
 use eml_runtime::{Closure, HeapError, OutputSink, Payload, Value};
 
 use crate::error::{Fault, RuntimeError, SourceLocation};
-use crate::runtime::{EFFECT_INSTRUCTION, Env, Runtime, Step, Transfer};
+use crate::runtime::{Env, Runtime, Step, Transfer};
 
 /// 止まった理由と、それを起こした extern の呼び出しの位置。
 pub(crate) struct Failure {
@@ -104,12 +103,7 @@ impl<'p> Machine<'p> {
 
     fn bind(&mut self, var: VarId, rhs: &'p Rhs) -> Result<Step, Failure> {
         let value = match rhs {
-            Rhs::Call { call, mask, saved } => {
-                // `mask` は EP が `evv_mask` の包みに置き換えるので、ここに届けば内部の誤りである
-                // (docs/spec/core-ir.md の「インタプリタ (CEK 機械)」)
-                if !mask.is_empty() {
-                    return Err(EFFECT_INSTRUCTION.into());
-                }
+            Rhs::Call { call, saved } => {
                 let saved = self.env.save(saved)?;
                 let resume = resume_address(self.block, self.stmt);
                 self.rt.push_return(self.function, resume, saved);
@@ -303,12 +297,7 @@ impl<'p> Machine<'p> {
                 {
                     Some(Stmt::Let {
                         var,
-                        rhs:
-                            Rhs::Call {
-                                call: _,
-                                mask: _,
-                                saved: _,
-                            },
+                        rhs: Rhs::Call { call: _, saved: _ },
                     }) => *var,
                     _ => {
                         return Err(Fault::Internal("a return frame does not resume at a call"));

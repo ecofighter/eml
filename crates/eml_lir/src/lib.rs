@@ -6,14 +6,22 @@ use std::fmt;
 use eml_extern::Extern;
 pub use eml_extern::Repr;
 
+mod boxing;
 pub mod check;
+mod contract;
 pub mod liveness;
+mod perceus;
+mod pipeline;
 mod pretty;
 mod prim;
 pub mod syntax;
 mod text;
 mod verify;
 
+pub use boxing::boxing;
+pub use contract::contract;
+pub use perceus::perceus;
+pub use pipeline::{Pass, passes_until};
 pub use pretty::{pretty, pretty_with_positions};
 pub use prim::{Immediates, Prim, PrimRow};
 pub use text::parse;

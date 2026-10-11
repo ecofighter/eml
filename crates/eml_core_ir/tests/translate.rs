@@ -1,7 +1,8 @@
 //! 型付き HIR からブロックの列への変換 (docs/spec/core-ir.md)。translate の直後の形を見る。
 
-use crate::common::{core_text, core_text_files, core_text_with_positions, function};
-use eml_core_ir::{Pass, Term, parse, pretty_with_positions};
+use crate::common::{core_text, core_text_files, core_text_with_positions, function, lir_text};
+use eml_core_ir::{Pass, parse, pretty_with_positions};
+use eml_lir::Term;
 
 #[test]
 fn hello_world() {
@@ -389,7 +390,7 @@ fn lower_until_stops_after_the_named_pass() {
       return t.7
     }
     "#);
-    insta::assert_snapshot!(function(&core_text(text, Pass::Contract), "main"), @r#"
+    insta::assert_snapshot!(function(&lir_text(text, eml_lir::Pass::Contract), "main"), @r#"
     fn main(p.0: unit) -> unit {
       let s.2: obj = const "used"
       let t.3: int = call f(1)
@@ -400,7 +401,7 @@ fn lower_until_stops_after_the_named_pass() {
       return t.7
     }
     "#);
-    insta::assert_snapshot!(function(&core_text(text, Pass::Perceus), "main"), @r#"
+    insta::assert_snapshot!(function(&lir_text(text, eml_lir::Pass::Perceus), "main"), @r#"
     fn main(p.0: unit) -> unit {
       let s.2: obj = const "used"
       let t.3: int = call f(1) save [s.2]
@@ -424,7 +425,7 @@ fn a_long_run_of_if_statements_is_translated_without_deep_recursion() {
         text.push_str("  if b then println \"x\"\n");
     }
     text.push_str("  ()\n\nmain : Unit -> <IO> Unit\nmain () = step True");
-    let program = eml_test_support::core_until(&text, Pass::Perceus);
+    let program = eml_test_support::lir(&text);
     let step = program
         .functions
         .iter()
@@ -629,7 +630,7 @@ fn a_constructor_bound_by_let_is_known_later() {
       return t.4
     }
     "#);
-    insta::assert_snapshot!(function(&core_text(&text, Pass::Contract), "unwrap"), @r#"
+    insta::assert_snapshot!(function(&lir_text(&text, eml_lir::Pass::Contract), "unwrap"), @r#"
     fn unwrap(x.0: int) -> int {
       let s.2: obj = const "built"
       let t.3: unit = extern Prelude.println(s.2)
@@ -806,7 +807,7 @@ fn a_thousand_shared_arms_are_translated_without_deep_recursion() {
         text.push_str(&format!("  | (_, {i}) -> {i}\n"));
     }
     text.push_str("  | _ -> 0\n\nmain : Unit -> <IO> Unit\nmain () = println (show (pick A 7))");
-    let program = eml_test_support::core_until(&text, Pass::Perceus);
+    let program = eml_test_support::lir(&text);
     let pick = program
         .functions
         .iter()
@@ -900,7 +901,7 @@ fn the_entry_function_is_chosen_by_the_caller() {
         .find(|(_, function)| function.name == "alt")
         .map(|(id, _)| id)
         .expect("alt");
-    let program = eml_core_ir::lower_until(
+    let program = eml_core_ir::core_until(
         &checked.program,
         &checked.typed,
         alt,
@@ -2333,7 +2334,7 @@ fn lifted_functions_are_named_after_their_instance() {
 #[test]
 fn a_boxed_wrapper_is_named_after_its_instance() {
     let text = "inc : a -> Int -> Int\ninc _ n = n + 1\n\napply_to : (Int -> Int) -> Int -> Int\napply_to f x = f x\n\nmain : Unit -> <IO> Unit\nmain () = println (show (apply_to (inc ()) 1))";
-    let shown = core_text(text, Pass::Boxing);
+    let shown = lir_text(text, eml_lir::Pass::Boxing);
     assert!(
         shown.contains("\"inc@[Unit]$boxed\""),
         "no wrapper in\n{shown}"
@@ -2672,7 +2673,7 @@ fn a_projection_unpacks_and_returns_the_field() {
 #[test]
 fn a_projection_of_a_type_variable_field_is_unboxed() {
     let text = "data Box a = | Box { x : a }\n\nf : Box Int -> Int\nf b = b.x + 1\n\nmain : Unit -> <IO> Unit\nmain () = println (show (f (Box { x = 1 })))";
-    insta::assert_snapshot!(function(&core_text(text, Pass::Boxing), "f"), @"
+    insta::assert_snapshot!(function(&lir_text(text, eml_lir::Pass::Boxing), "f"), @"
     fn f(b.0: obj) -> int {
       unpack b.0 Box #0(f.3: tobj)
       let f.1: int = unbox f.3

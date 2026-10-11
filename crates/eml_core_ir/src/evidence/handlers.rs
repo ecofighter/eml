@@ -6,8 +6,8 @@
 use std::collections::{HashMap, HashSet};
 use std::mem;
 
-use crate::boxing::tail_position_call;
 use crate::builder::FnBuilder;
+use crate::tail::tail_position_call;
 use crate::{Call, CoreFn, Program, Rhs, Stmt, Term};
 use eml_lir::{Atom, BlockId, FnIdx, OpRet, OperationInfo, Prim, Repr, VarId, VarInfo, operation};
 

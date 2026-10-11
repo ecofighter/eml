@@ -1,12 +1,10 @@
-#[cfg(feature = "core")]
-use eml_core_ir::{Pass, pretty};
 use eml_diagnostics::{Diagnostic, ErrorCode, Label, TextRange};
 #[cfg(feature = "hir")]
 use eml_test_support::lower_clean;
 #[cfg(feature = "types")]
 use eml_test_support::{check, check_files, lower, lower_files, parse};
 #[cfg(feature = "core")]
-use eml_test_support::{core, core_until};
+use eml_test_support::{core_until, lir, lir_until};
 use eml_test_support::{full, parse_clean, short, short_text, source, with_diagnostics};
 #[cfg(feature = "run")]
 use eml_test_support::{run, run_files};
@@ -96,25 +94,39 @@ fn run_executes_with_the_heap_checks() {
 #[cfg(feature = "core")]
 #[test]
 #[should_panic]
-fn core_rejects_programs_with_errors() {
-    core("f : Int -> Int\nf x = g x");
+fn lir_rejects_programs_with_errors() {
+    lir("f : Int -> Int\nf x = g x");
 }
 
 #[cfg(feature = "core")]
 #[test]
 fn core_until_stops_after_the_named_pass() {
+    // translate の直後には、contract が消す前の使われない `let` が残り、Perceus の入れる `dup` はまだない
+    let pretty = |text, last| eml_core_ir::pretty(&core_until(text, last));
+    assert!(pretty(UNUSED, eml_core_ir::Pass::Translate).contains("const \"unused\""));
+    assert!(!pretty(TWICE, eml_core_ir::Pass::Translate).contains("dup"));
+}
+
+/// 使われない純粋な `let` を持つプログラム。
+#[cfg(feature = "core")]
+const UNUSED: &str = "f : Int -> Int\nf x =\n  let s = \"unused\"\n  x\n\nmain : Unit -> <IO> Unit\nmain () = println (show (f 1))";
+
+/// `s` を2回使うプログラム。
+#[cfg(feature = "core")]
+const TWICE: &str = "twice : String -> String\ntwice s = s ++ s\n\nmain : Unit -> <IO> Unit\nmain () = println (twice \"x\")";
+
+#[cfg(feature = "core")]
+#[test]
+fn lir_until_stops_after_the_named_pass() {
+    use eml_lir::{Pass, pretty};
     // contract は、使われない純粋な `let` を消す
-    let unused = "f : Int -> Int\nf x =\n  let s = \"unused\"\n  x\n\nmain : Unit -> <IO> Unit\nmain () = println (show (f 1))";
-    assert!(pretty(&core_until(unused, Pass::Translate)).contains("const \"unused\""));
-    assert!(!pretty(&core_until(unused, Pass::Contract)).contains("\"unused\""));
+    assert!(!pretty(&lir_until(UNUSED, Pass::Contract)).contains("\"unused\""));
     // `s` を2回使うので、Perceus の後にだけ `dup` が入る
-    let twice = "twice : String -> String\ntwice s = s ++ s\n\nmain : Unit -> <IO> Unit\nmain () = println (twice \"x\")";
-    assert!(!pretty(&core_until(twice, Pass::Translate)).contains("dup"));
-    assert!(!pretty(&core_until(twice, Pass::Contract)).contains("dup"));
-    assert!(pretty(&core_until(twice, Pass::Perceus)).contains("dup s.0"));
+    assert!(!pretty(&lir_until(TWICE, Pass::Contract)).contains("dup"));
+    assert!(pretty(&lir_until(TWICE, Pass::Perceus)).contains("dup s.0"));
     assert_eq!(
-        pretty(&core_until(twice, Pass::Perceus)),
-        pretty(&core(twice))
+        pretty(&lir_until(TWICE, Pass::Perceus)),
+        pretty(&lir(TWICE))
     );
 }
 

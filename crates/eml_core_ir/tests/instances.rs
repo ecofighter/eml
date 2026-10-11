@@ -288,7 +288,7 @@ fn a_polymorphic_entry_is_uniform() {
         .functions()
         .find(|(_, function)| function.name == "first")
         .unwrap();
-    let program = eml_core_ir::lower_until(
+    let program = eml_core_ir::core_until(
         &checked.program,
         &checked.typed,
         entry,
@@ -311,7 +311,7 @@ fn core_text_with_entry(text: &str, name: &str) -> String {
         .functions()
         .find(|(_, function)| function.name == name)
         .unwrap();
-    eml_core_ir::pretty(&eml_core_ir::lower_until(
+    eml_core_ir::pretty(&eml_core_ir::core_until(
         &checked.program,
         &checked.typed,
         entry,

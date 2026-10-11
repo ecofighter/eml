@@ -11,8 +11,6 @@ use std::fmt::Write;
 
 #[cfg(feature = "hir")]
 use eml_cli::Session;
-#[cfg(feature = "core")]
-use eml_core_ir::{Pass, Program};
 use eml_diagnostics::{Diagnostic, FileId, Label, LineCol, SourceFiles, sort_diagnostics};
 #[cfg(feature = "run")]
 use eml_interp::{RunConfig, RunStats, RuntimeError};
@@ -222,29 +220,48 @@ fn check_session(session: Session) -> Checked {
 }
 
 #[cfg(feature = "core")]
-pub fn core(text: &str) -> Program {
-    core_files(text, &[])
+pub fn lir(text: &str) -> eml_lir::Program {
+    lir_files(text, &[])
 }
 
 #[cfg(feature = "core")]
-pub fn core_files(entry: &str, modules: &[(&str, &str)]) -> Program {
+pub fn lir_files(entry: &str, modules: &[(&str, &str)]) -> eml_lir::Program {
     compiled(load(entry, modules).compile())
+}
+
+/// 確かめたいパスの直後の LIR を見るテストのため (docs/implementation/testing.md)。
+#[cfg(feature = "core")]
+pub fn lir_until(text: &str, last: eml_lir::Pass) -> eml_lir::Program {
+    lir_until_files(text, &[], last)
+}
+
+#[cfg(feature = "core")]
+pub fn lir_until_files(
+    entry: &str,
+    modules: &[(&str, &str)],
+    last: eml_lir::Pass,
+) -> eml_lir::Program {
+    compiled(load(entry, modules).compile_until(last))
 }
 
 /// 確かめたいパスの直後の Core IR を見るテストのため (docs/implementation/testing.md)。
 #[cfg(feature = "core")]
-pub fn core_until(text: &str, last: Pass) -> Program {
+pub fn core_until(text: &str, last: eml_core_ir::Pass) -> eml_core_ir::Program {
     core_until_files(text, &[], last)
 }
 
 #[cfg(feature = "core")]
-pub fn core_until_files(entry: &str, modules: &[(&str, &str)], last: Pass) -> Program {
-    compiled(load(entry, modules).compile_until(last))
+pub fn core_until_files(
+    entry: &str,
+    modules: &[(&str, &str)],
+    last: eml_core_ir::Pass,
+) -> eml_core_ir::Program {
+    compiled(load(entry, modules).compile_core_until(last))
 }
 
-/// `eml run` と同じく、エラーがあれば Core IR を作らない。`main` がないこともエラーである。
+/// `eml run` と同じく、エラーがあれば IR を作らない。`main` がないこともエラーである。
 #[cfg(feature = "core")]
-fn compiled(compiled: eml_cli::Compiled) -> Program {
+fn compiled<P>(compiled: eml_cli::Compiled<P>) -> P {
     compiled
         .program
         .unwrap_or_else(|| panic!("{:#?}", compiled.diagnostics))
@@ -258,24 +275,27 @@ pub fn run(text: &str) -> (String, Result<(), RuntimeError>) {
 
 #[cfg(feature = "run")]
 pub fn run_files(entry: &str, modules: &[(&str, &str)]) -> (String, Result<(), RuntimeError>) {
-    without_stats(run_program(&core_files(entry, modules), true))
+    without_stats(run_program(&lir_files(entry, modules), true))
 }
 
 /// `RunStats` (仕事の回数とヒープの物体の数の最大) も返す。数を比べるテスト (`eml_interp` の `scaling.rs`) のため。
 #[cfg(feature = "run")]
 pub fn run_stats(text: &str) -> (String, Result<RunStats, RuntimeError>) {
-    run_program(&core(text), true)
+    run_program(&lir(text), true)
 }
 
-/// 手で書いた Core IR を実行する。
+/// 手で書いた LIR を実行する。
 #[cfg(feature = "run")]
-pub fn execute(program: Program, debug_heap: bool) -> (String, Result<(), RuntimeError>) {
+pub fn execute(program: eml_lir::Program, debug_heap: bool) -> (String, Result<(), RuntimeError>) {
     without_stats(run_program(&program, debug_heap))
 }
 
 /// 実行の設定と出力の受け口は、ここだけで組み立てる。
 #[cfg(feature = "run")]
-fn run_program(program: &Program, debug_heap: bool) -> (String, Result<RunStats, RuntimeError>) {
+fn run_program(
+    program: &eml_lir::Program,
+    debug_heap: bool,
+) -> (String, Result<RunStats, RuntimeError>) {
     let (sink, captured) = OutputSink::capture();
     let config = RunConfig::default().with_debug_heap(debug_heap);
     let result = eml_cli::execute(program, &config, sink);

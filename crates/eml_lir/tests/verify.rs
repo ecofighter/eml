@@ -2708,3 +2708,14 @@ fn the_lowered_level_does_not_compare_boundaries() {
     );
     assert_eq!(check_lowered(&text), Ok(()));
 }
+
+#[test]
+#[should_panic(
+    expected = "internal error: invalid LIR before boxing: `s.0` is duplicated before Perceus in `twice`"
+)]
+fn passes_until_checks_its_input() {
+    let mut program = read(
+        "fn twice(s.0: obj) -> obj {\n  dup s.0\n  let t.1: obj = extern Prelude.++(s.0, s.0)\n  return t.1\n}\n",
+    );
+    eml_lir::passes_until(&mut program, eml_lir::Pass::Perceus);
+}

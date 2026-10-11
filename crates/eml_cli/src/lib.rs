@@ -7,8 +7,6 @@
 mod fs_provider;
 
 #[cfg(feature = "core")]
-use eml_core_ir::{Pass, Program};
-#[cfg(feature = "core")]
 use eml_diagnostics::has_errors;
 use eml_diagnostics::{Diagnostic, FileId, SourceFiles, sort_diagnostics};
 
@@ -40,11 +38,11 @@ pub struct Checked {
 /// 呼び出し側が実行の前に診断を表示できるように、検査と実行を別の関数にする (docs/implementation/architecture.md)。
 #[cfg(feature = "core")]
 #[derive(Debug)]
-pub struct Compiled {
+pub struct Compiled<P> {
     /// 警告を含む。
     pub diagnostics: Vec<Diagnostic>,
     /// エラーがあれば `None`。
-    pub program: Option<Program>,
+    pub program: Option<P>,
 }
 
 /// 1回の検査や実行で読むソースの集まり。読み込みの段が Prelude、入口、import でたどった依存先を登録する
@@ -159,30 +157,39 @@ impl Session {
     }
 
     #[cfg(feature = "core")]
-    pub fn compile(&self) -> Compiled {
+    pub fn compile(&self) -> Compiled<eml_lir::Program> {
         self.compile_with(eml_core_ir::lower)
     }
 
-    /// `last` のパスの直後で Core IR を止める。確かめたいパスの直後の IR を見るテストのための口である
+    /// `last` のパスの直後で LIR を止める。確かめたいパスの直後の IR を見るテストのための口である
     /// (`eml_core_ir::lower_until`)。
     #[cfg(feature = "core")]
-    pub fn compile_until(&self, last: Pass) -> Compiled {
+    pub fn compile_until(&self, last: eml_lir::Pass) -> Compiled<eml_lir::Program> {
         self.compile_with(|hir, typed, main, files| {
             eml_core_ir::lower_until(hir, typed, main, files, last)
         })
     }
 
-    /// パスの順番は `eml_core_ir` だけが知るので、Core IR を作る関数を受け取る。
+    /// `last` のパスの直後の Core IR で止める。確かめたいパスの直後の IR を見るテストのための口である
+    /// (`eml_core_ir::core_until`)。
     #[cfg(feature = "core")]
-    fn compile_with(
+    pub fn compile_core_until(&self, last: eml_core_ir::Pass) -> Compiled<eml_core_ir::Program> {
+        self.compile_with(|hir, typed, main, files| {
+            eml_core_ir::core_until(hir, typed, main, files, last)
+        })
+    }
+
+    /// パスの順番は `eml_core_ir` と `eml_lir` だけが知るので、IR を作る関数を受け取る。
+    #[cfg(feature = "core")]
+    fn compile_with<P>(
         &self,
         lower: impl FnOnce(
             &eml_hir::Program,
             &eml_types::TypedProgram,
             eml_hir::FunctionId,
             &SourceFiles,
-        ) -> Program,
-    ) -> Compiled {
+        ) -> P,
+    ) -> Compiled<P> {
         let Checked {
             program,
             typed,
@@ -211,7 +218,7 @@ impl Session {
 /// 仕事の回数 (`RunStats`) はテストが比べるためのもので、CLI は使わない。
 #[cfg(feature = "run")]
 pub fn execute(
-    program: &Program,
+    program: &eml_lir::Program,
     config: &RunConfig,
     stdout: OutputSink,
 ) -> Result<RunStats, RuntimeError> {

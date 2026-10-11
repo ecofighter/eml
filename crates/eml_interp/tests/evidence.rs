@@ -1,10 +1,10 @@
-//! evidence passing の基本操作と節の呼び出しを、EP の出力の形の手書きの Core IR で確かめる
+//! evidence passing の基本操作と節の呼び出しを、EP の出力の形の手書きの LIR で確かめる
 //! (docs/spec/core-ir.md の「evidence passing」と「基本操作」)。
 
 use eml_interp::{Fault, RunConfig, RuntimeError};
 use eml_runtime::OutputSink;
 
-use crate::common::{parse, run_core};
+use crate::common::{parse, run_lir};
 
 const COUNTER: &str = "effect Counter { get(unit) -> tobj, put(tobj) -> unit }\n";
 
@@ -58,7 +58,7 @@ internal yields clause Counter.put fn put(e.0: obj, n.1: tobj) -> unit {{
 }}
 "
     );
-    let (output, result) = run_core(&text);
+    let (output, result) = run_lir(&text);
     assert_eq!(result, Ok(()));
     assert_eq!(output, "5\n");
 }
@@ -118,7 +118,7 @@ fn show(n.0: int) -> unit {{
 }}
 {ID}"
     );
-    let (output, result) = run_core(&text);
+    let (output, result) = run_lir(&text);
     assert_eq!(result, Ok(()));
     assert_eq!(output, "0\n1\n1\n3\n0\n0\n2\nclause\n");
 }
@@ -165,7 +165,7 @@ fn main() -> unit {{
 }}
 "
     );
-    let (output, result) = run_core(&text);
+    let (output, result) = run_lir(&text);
     assert_eq!(result, Ok(()));
     assert_eq!(output, "2\n1\n");
 }
@@ -206,7 +206,7 @@ fn show(s.0: tobj) -> unit {{
 }}
 "
     );
-    assert_eq!(run_core(&text), ("1\n2\n".to_string(), Ok(())));
+    assert_eq!(run_lir(&text), ("1\n2\n".to_string(), Ok(())));
 }
 
 /// `make` が返すダミーを、`unbox` し、`box` し直し、`dup` と `decref` に通す。
@@ -229,7 +229,7 @@ fn make() -> tobj {
 
 #[test]
 fn a_dummy_passes_through_box_unbox_dup_and_decref() {
-    assert_eq!(run_core(DUMMY), (String::new(), Ok(())));
+    assert_eq!(run_lir(DUMMY), (String::new(), Ok(())));
 }
 
 /// ダミーはヒープに置かないので、ダミーの代わりに `box 0` を返すプログラムと、同時に生きていた物体の数が同じである。
@@ -238,7 +238,7 @@ fn a_dummy_passes_through_box_unbox_dup_and_decref() {
 fn a_dummy_is_not_a_heap_object() {
     let peak = |text: &str| {
         let program = parse(text);
-        eml_core_ir::verify(&program).unwrap_or_else(|error| panic!("{error}"));
+        eml_lir::verify(&program).unwrap_or_else(|error| panic!("{error}"));
         let (sink, _captured) = OutputSink::capture();
         let config = RunConfig::default().with_debug_heap(true);
         eml_interp::run(&program, &config, &sink)
@@ -272,7 +272,7 @@ fn main() -> unit {{
 }}
 "
     );
-    let (_, result) = run_core(&text);
+    let (_, result) = run_lir(&text);
     let error = result.unwrap_err();
     assert_eq!(
         error,
@@ -297,7 +297,7 @@ fn main() -> unit {{
 {ID}"
     );
     assert_eq!(
-        run_core(&text).1,
+        run_lir(&text).1,
         Err(internal_error("a yield is left at the end"))
     );
 }
@@ -318,7 +318,7 @@ fn main() -> unit {{
 {ID}"
     );
     assert_eq!(
-        run_core(&text).1,
+        run_lir(&text).1,
         Err(internal_error("a yield starts during another yield"))
     );
 }
@@ -336,7 +336,7 @@ fn main() -> unit {{
 "
     );
     assert_eq!(
-        run_core(&text).1,
+        run_lir(&text).1,
         Err(internal_error("an operation without evidence"))
     );
 }

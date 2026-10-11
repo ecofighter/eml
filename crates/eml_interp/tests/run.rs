@@ -1,5 +1,5 @@
-//! ソースから実行して確かめるテストは UI テスト (`tests/ui/run/`) に置く。ここには、Core IR のテキストや生成した
-//! ソースが要るものだけを置く (docs/implementation/testing.md)。Core IR のテキストでは、制御の移り方 (ブロック、文、
+//! ソースから実行して確かめるテストは UI テスト (`tests/ui/run/`) に置く。ここには、LIR のテキストや生成した
+//! ソースが要るものだけを置く (docs/implementation/testing.md)。LIR のテキストでは、制御の移り方 (ブロック、文、
 //! `jump`、呼び出しからの再開)、handler、実行時エラーの位置を確かめる (docs/spec/core-ir.md)。
 
 use std::fmt::Write;
@@ -7,10 +7,10 @@ use std::fmt::Write;
 use eml_interp::{Fault, RuntimeError, SourceLocation};
 use eml_test_support::{execute, run};
 
-use crate::common::{parse, run_core, run_core_unverified};
+use crate::common::{parse, run_lir, run_lir_unverified};
 
 /// `mask` 付きの呼び出しの中の操作は、呼び出しより外側の同じエフェクトの handler を、`mask` に並ぶ数だけ飛ばす。
-/// 呼び出しの中で設けた handler は飛ばさない (docs/spec/core-ir.md)。`ir/mask.core` は、次のプログラムを Perceus
+/// 呼び出しの中で設けた handler は飛ばさない (docs/spec/core-ir.md)。`ir/mask.lir` は、次のプログラムを Perceus
 /// まで通した IR である。EP が `mask` を `evv_mask` と `mask$` の包みに置き換えている
 /// (docs/spec/core-ir.md の「`mask` の包み」)。
 ///
@@ -69,10 +69,10 @@ use crate::common::{parse, run_core, run_core_unverified};
 /// 4. 再開から戻った節で `ask` する。節は handle の外側で動くので `inner` になる
 /// 5. 末尾の `mask` 付きの呼び出しで `ask` する (`outer`)
 ///
-/// Core IR のテキストにはコメントを書けないので、IR の説明はここに書く。
+/// LIR のテキストにはコメントを書けないので、IR の説明はここに書く。
 #[test]
 fn a_mask_skips_outer_handlers_only() {
-    let (stdout, result) = run_core(include_str!("ir/mask.core"));
+    let (stdout, result) = run_lir(include_str!("ir/mask.lir"));
     assert_eq!(result, Ok(()));
     insta::assert_snapshot!(stdout, @"
     outer
@@ -129,7 +129,7 @@ fn double(x.0: int) -> int {
   return y.1
 }
 ";
-    assert_eq!(run_core(text), ("5\n".to_string(), Ok(())));
+    assert_eq!(run_lir(text), ("5\n".to_string(), Ok(())));
 }
 
 #[test]
@@ -149,7 +149,7 @@ b1(x.0: int, y.1: int):
   return t.5
 }
 ";
-    assert_eq!(run_core_unverified(text), ("2\n1\n".to_string(), Ok(())));
+    assert_eq!(run_lir_unverified(text), ("2\n1\n".to_string(), Ok(())));
 }
 
 /// 0 で割る extern の呼び出しを、入口でないブロックに置く。`{position}` は extern の後ろに付ける位置である。
@@ -174,7 +174,7 @@ b2:
 
 #[test]
 fn an_extern_with_a_position_puts_it_on_its_runtime_error() {
-    let (_, result) = run_core(&divide_by_zero(" @\"src/main.em\":3:9"));
+    let (_, result) = run_lir(&divide_by_zero(" @\"src/main.em\":3:9"));
     let error = result.unwrap_err();
     assert_eq!(
         error,
@@ -193,7 +193,7 @@ fn an_extern_with_a_position_puts_it_on_its_runtime_error() {
 
 #[test]
 fn an_extern_without_a_position_names_the_function() {
-    let (_, result) = run_core(&divide_by_zero(""));
+    let (_, result) = run_lir(&divide_by_zero(""));
     let error = result.unwrap_err();
     assert_eq!(
         error,
@@ -220,7 +220,7 @@ fn main() -> unit {
   return ()
 }
 ";
-    let (_, result) = run_core_unverified(text);
+    let (_, result) = run_lir_unverified(text);
     assert_eq!(
         result,
         Err(RuntimeError::Fault {
@@ -242,7 +242,7 @@ fn main() -> unit {
   return t.1
 }
 ";
-    let (_, result) = run_core_unverified(text);
+    let (_, result) = run_lir_unverified(text);
     let error = result.unwrap_err();
     assert_eq!(
         error,
@@ -264,7 +264,7 @@ fn a_jump_with_a_different_number_of_arguments_is_an_internal_error() {
     // verifier は R4 でこの形を拒むので、通さずに実行する
     let text = "fn main() -> unit {\n  jump b1(1)\nb1:\n  return ()\n}\n";
     assert_eq!(
-        run_core_unverified(text).1,
+        run_lir_unverified(text).1,
         Err(RuntimeError::Fault {
             fault: Fault::Internal(
                 "a jump passes a different number of arguments than the block has parameters"
@@ -296,7 +296,7 @@ fn long_sequence_of_if_statements_does_not_overflow_the_stack() {
     let mut text = String::from("step : Bool -> <IO> Unit\nstep b =\n");
     text.push_str(&"  if b then println \"x\"\n".repeat(COUNT));
     text.push_str("  println \"done\"\n\nmain : Unit -> <IO> Unit\nmain () = step True");
-    let program = eml_test_support::core(&text);
+    let program = eml_test_support::lir(&text);
     let step = program
         .functions
         .iter()
@@ -305,7 +305,7 @@ fn long_sequence_of_if_statements_does_not_overflow_the_stack() {
     let switches = step
         .blocks
         .iter()
-        .filter(|block| matches!(block.term, eml_core_ir::Term::Switch { .. }))
+        .filter(|block| matches!(block.term, eml_lir::Term::Switch { .. }))
         .count();
     assert_eq!(switches, COUNT);
     let expected = format!("{}done\n", "x\n".repeat(COUNT));
