@@ -52,7 +52,7 @@ pub(super) struct FunctionInstance {
     /// 宣言の型に instance の代入をかけた型。引数と `ret` の Repr を決める。
     pub(super) signature: TypeId,
     /// 本体の型に代入をかけた表。`None` なら型検査の表をそのまま使う。
-    pub(super) types: Option<BodyTypes>,
+    pub(super) types: Option<Box<BodyTypes>>,
     /// 本体の中の、定義された関数とメソッドへの参照の行き先。`extern` で結んだ instance のメソッドへの参照は
     /// `Target::Extern` で入る。extern の関数への参照は入らない。
     pub(super) targets: ArenaMap<ExprId, Target>,
@@ -130,7 +130,7 @@ struct FoundFunction {
     function: FunctionId,
     args: Vec<TypeId>,
     signature: TypeId,
-    types: Option<BodyTypes>,
+    types: Option<Box<BodyTypes>>,
     targets: ArenaMap<ExprId, FoundTarget>,
 }
 
@@ -336,6 +336,7 @@ impl Collector<'_> {
                 Instantiation {
                     decl: instantiation.decl,
                     args,
+                    rows: instantiation.rows.clone(),
                 },
             );
         }
@@ -382,6 +383,9 @@ impl Collector<'_> {
                         (expr, discarded)
                     })
                     .collect(),
+                body_yield: body.body_yield,
+                lambda_yields: body.lambda_yields.clone(),
+                arrow_yields: body.arrow_yields.clone(),
             };
             debug_assert!(
                 types
@@ -398,7 +402,7 @@ impl Collector<'_> {
                     .all(|&ty| !self.store.contains_type_vars(ty)),
                 "an instance body keeps no type variable"
             );
-            types
+            Box::new(types)
         });
         let Found::Function(found) = &mut self.found[index] else {
             unreachable!("checked above")

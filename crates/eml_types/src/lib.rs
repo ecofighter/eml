@@ -112,6 +112,12 @@ pub struct BodyTypes {
     /// 射影と更新が捨てるフィールドの番号と型。射影は取り出さない残りのフィールド、更新は上書きされる古いフィールドで
     /// ある。線形性の検査は、これらを `_` で受けた値と同じに扱う。
     pub discarded: ArenaMap<ExprId, Vec<(u32, TypeId)>>,
+    /// 本体が動く row (関数の型の、引数の数番目の矢印の row) の分類。引数のない値は `Never` である。
+    pub body_yield: RowYield,
+    /// ラムダの本体が動く row (ラムダで最後にたどった矢印の row) の分類。キーはラムダの式である。
+    pub lambda_yields: ArenaMap<ExprId, RowYield>,
+    /// 呼び出しの矢印の row の分類。キーは `masks` と同じく、呼び出しの式と矢印の番号である。
+    pub arrow_yields: HashMap<(ExprId, usize), RowYield>,
 }
 
 /// 更新が作り直すコンストラクタ。`T` は型検査の中では表の型で、書き出した後は `TypeId` である。
@@ -142,6 +148,22 @@ pub struct Instantiation {
     /// `Shape::rigids` の順 (関数はシグネチャに最初に現れた順、操作はエフェクトの型引数が先、コンストラクタは `data` の
     /// 頭の型引数の順) に並べた型引数。row 変数と Kind 変数は持たない。
     pub args: Vec<TypeId>,
+    /// 参照先のシグネチャの row 変数 (`generics.row_vars` の順) を具体化した row の分類。シグネチャが row 変数を
+    /// 持たなければ空である。
+    pub rows: Vec<RowYield>,
+}
+
+/// 具体化した row が yield しうるか。`Var(i)` は、参照を含む定義の i 番目の row 変数 (`generics.row_vars` の順)
+/// に従う (docs/superpowers/specs/2026-10-11-s7-evidence-passing-design.md の「row の具体化の記録」)。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+pub enum RowYield {
+    /// handle できるラベルを含まず、閉じているか、末尾が型検査で最後まで決まらなかった row 変数である。
+    #[default]
+    Never,
+    /// handle できるラベルを含むか、末尾が参照を含む定義のものでない rigid な row 変数である。
+    Always,
+    /// handle できるラベルを含まず、末尾が参照を含む定義の i 番目の row 変数である。
+    Var(u32),
 }
 
 /// `files` は、E3003 の fix の字下げをソースから求めるのに使う (docs/implementation/diagnostics.md の「線形性の診断」)。

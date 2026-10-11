@@ -12,7 +12,7 @@ use crate::kind::problem::Instance;
 use crate::kind::{KindOrigin, KindReason, Provenance, Span};
 use crate::shape::{Instantiated, Rigids, lower_type};
 use crate::store::TypeStore;
-use crate::table::{Row, Table, Tail, Ty, TyShape, UnifyError};
+use crate::table::{Row, RowVar, Table, Tail, Ty, TyShape, UnifyError};
 use crate::{FieldTarget, Update, codes};
 
 use super::Signatures;
@@ -40,8 +40,14 @@ pub(crate) struct BodyTyping {
     pub locals: ArenaMap<LocalId, Ty>,
     /// パターンが受けた値の型。`_` で受けた値の Kind に制約を出すのに使う。
     pub pats: ArenaMap<PatId, Ty>,
-    /// 参照ごとの具体化。型引数は表の変数のままで、`check_body` が carry の後で書き出す。
-    pub instantiations: ArenaMap<ExprId, (ValueItem, Vec<Ty>)>,
+    /// 参照ごとの具体化。型引数と row 変数は表の変数のままで、`check_body` が carry の後で書き出し、分類する。
+    pub instantiations: ArenaMap<ExprId, (ValueItem, Vec<Ty>, Vec<RowVar>)>,
+    /// 本体が動く row。引数をたどり終えた後の今の row である。`check_body` が `RowYield` に分類する。
+    pub ambient: Option<Row>,
+    /// ラムダの本体が動く row。キーはラムダの式である。
+    pub lambdas: ArenaMap<ExprId, Row>,
+    /// 呼び出しの矢印の row。キーは `masks` と同じく、呼び出しの式と矢印の番号である。
+    pub arrows: HashMap<(ExprId, usize), Row>,
     /// 呼び出しの row。持ち越しのパスが読む。
     pub calls: ArenaMap<ExprId, CallRows>,
     /// 呼び出しの矢印ごとの `mask`。キーは呼び出しの式と矢印の番号である。空の `mask` は入れない
@@ -188,6 +194,7 @@ impl BodyCheck<'_, '_> {
                 }
             }
         }
+        self.typing.ambient = Some(self.ambient.clone());
         self.check_expr(body.root, expected, Origin::Return);
     }
 
@@ -274,7 +281,7 @@ impl BodyCheck<'_, '_> {
         let nil = ValueItem::Constructor(self.program.lang.nil);
         let instantiated =
             self.with_kind_origin(range, KindReason::Unified, |this| this.instantiate(nil));
-        let Some((list, _)) = instantiated else {
+        let Some((list, _, _)) = instantiated else {
             return self.table.error;
         };
         let TyShape::Con(_, args) = self.table.shape(list).clone() else {
@@ -517,11 +524,12 @@ impl BodyCheck<'_, '_> {
 
     /// トップレベルの値を参照するたびに、宣言の型の形を具体化する。呼び出し先の Kind の制約は複写せず、Kind の具体化の
     /// 記録を残して段2で展開する (docs/spec/types.md の「推論」)。シグネチャがなければ `None` である。
-    pub(super) fn instantiate(&mut self, decl: ValueItem) -> Option<(Ty, Vec<Ty>)> {
+    pub(super) fn instantiate(&mut self, decl: ValueItem) -> Option<(Ty, Vec<Ty>, Vec<RowVar>)> {
         let shape = self.signatures.get(decl)?;
         let Instantiated {
             ty,
             args,
+            rows,
             lin,
             mult,
         } = shape.instantiate(self.table);
@@ -531,7 +539,7 @@ impl BodyCheck<'_, '_> {
             mult,
             origin: self.table.kind_origin(),
         });
-        Some((ty, args))
+        Some((ty, args, rows))
     }
 
     /// `check` の間だけ、作る Kind の制約の由来を設定する。
@@ -578,10 +586,10 @@ impl BodyCheck<'_, '_> {
         let instantiated = self.with_kind_origin(range, KindReason::Passed(name), |this| {
             this.instantiate(item)
         });
-        let Some((ty, args)) = instantiated else {
+        let Some((ty, args, rows)) = instantiated else {
             return self.table.error;
         };
-        self.typing.instantiations.insert(id, (item, args));
+        self.typing.instantiations.insert(id, (item, args, rows));
         if open { self.table.open_spine(ty) } else { ty }
     }
 
@@ -670,6 +678,7 @@ impl BodyCheck<'_, '_> {
             match self.next_arrow(ty) {
                 Arrow::Fn { param, row, ret } => {
                     arrows.push(row.clone());
+                    self.typing.arrows.insert((id, index), row.clone());
                     results.push(ret);
                     if self.postponable(arg) {
                         postponed.lambdas.push((arg, param, origin));
@@ -841,6 +850,7 @@ impl BodyCheck<'_, '_> {
         }
         // 期待する型が壊れていれば、どのエフェクトも受け入れて診断を連鎖させない
         let row = row.unwrap_or_else(Row::error);
+        self.typing.lambdas.insert(id, row.clone());
         self.with_ambient(row, AmbientSource::Lambda(origin), |this| {
             this.check_expr(lambda_body, current, Origin::LambdaBody)
         });
@@ -912,7 +922,7 @@ impl BodyCheck<'_, '_> {
         let instantiated = self.with_kind_origin(range, KindReason::Unified, |this| {
             this.instantiate(ValueItem::Constructor(ctor))
         });
-        let mut ty = instantiated.map_or(self.table.error, |(ty, _)| ty);
+        let mut ty = instantiated.map_or(self.table.error, |(ty, _, _)| ty);
         let mut fields = Vec::new();
         for _ in args {
             match self.table.shape(ty).clone() {

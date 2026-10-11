@@ -15,19 +15,21 @@ use crate::kind::solve::solve_scc;
 use crate::kind::{Bound, KindOrigin, KindReason, KindVar, Provenance, Span};
 use crate::shape::{Arrows, Own, Shape, constructor_shape, operation_shape, signature_shape};
 use crate::store::{EffectLabel, TypeKind, TypeStore};
-use crate::table::{Exporter, RigidVar, Row, Table, TyShape};
+use crate::table::{Exporter, RigidVar, Row, Table, Tail, TyShape};
 use crate::ty::Linearity;
 use crate::{
-    BodyTypes, DeclType, Instantiation, TypedProgram, Uniform, Update, carry, codes, exhaustive,
-    scc, uniform, usage,
+    BodyTypes, DeclType, Instantiation, RowYield, TypedProgram, Uniform, Update, carry, codes,
+    exhaustive, scc, uniform, usage,
 };
 use constraints::{Failure, show_constraint, solve};
+use yields::row_yield;
 
 mod body;
 mod constraints;
 mod field;
 mod handle;
 mod report;
+mod yields;
 
 use body::BodyCheck;
 pub(crate) use body::{BodyTyping, CallRows};
@@ -442,14 +444,42 @@ pub(crate) fn check_body(
     for (pat, &ty) in typing.pats.iter() {
         body_types.pats.insert(pat, exporter.export(ty));
     }
+    // row は型引数と同じく本体全体の単一化が終わってから分類する。rigid な row 変数がこの定義のものかを見分けられる
+    // のは、表が生きている今だけである (docs/superpowers/specs/2026-10-11-s7-evidence-passing-design.md の
+    // 「row の具体化の記録」)
+    let own_rows = own.rigids.row_vars();
+    let classify = |row: &Row| row_yield(&table, row, &own_rows);
     // 本体全体の検査が終わってから `exprs` と一緒に書き出す。後の文の単一化で決まった型引数を含めるためで、
     // carry が足すのは Kind の制約だけである
-    for (expr, (decl, args)) in typing.instantiations.iter() {
+    for (expr, (decl, args, rows)) in typing.instantiations.iter() {
         let args = args.iter().map(|&arg| exporter.export(arg)).collect();
-        body_types
-            .instantiations
-            .insert(expr, Instantiation { decl: *decl, args });
+        let rows = rows
+            .iter()
+            .map(|&var| {
+                classify(&Row {
+                    labels: Vec::new(),
+                    tail: Tail::Var(var),
+                })
+            })
+            .collect();
+        body_types.instantiations.insert(
+            expr,
+            Instantiation {
+                decl: *decl,
+                args,
+                rows,
+            },
+        );
     }
+    body_types.body_yield = typing.ambient.as_ref().map_or(RowYield::Never, classify);
+    for (expr, row) in typing.lambdas.iter() {
+        body_types.lambda_yields.insert(expr, classify(row));
+    }
+    body_types.arrow_yields = typing
+        .arrows
+        .iter()
+        .map(|(&key, row)| (key, classify(row)))
+        .collect();
     body_types.masks = typing.masks;
     body_types.fields = typing.fields;
     for (expr, update) in typing.updates.iter() {

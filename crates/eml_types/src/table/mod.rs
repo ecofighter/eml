@@ -432,6 +432,10 @@ impl<'c> Table<'c> {
             .expect("only rigid row variables have names")
     }
 
+    pub fn is_extern_effect(&self, effect: EffectId) -> bool {
+        self.context.is_extern_effect(effect)
+    }
+
     pub fn is_rigid_row(&self, var: RowVar) -> bool {
         self.row_vars[var.0 as usize].rigid.is_some()
     }

@@ -41,7 +41,7 @@ impl BodyCheck<'_, '_> {
             .typing
             .instantiations
             .iter()
-            .map(|(expr, (decl, args))| (expr, *decl, self.wanted(*decl, args)))
+            .map(|(expr, (decl, args, _))| (expr, *decl, self.wanted(*decl, args)))
             .collect();
         let mut found = Vec::new();
         for (expr, decl, wanted) in references {

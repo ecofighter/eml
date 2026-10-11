@@ -206,7 +206,7 @@ pub(crate) fn translate(
             store,
             types: function
                 .types
-                .as_ref()
+                .as_deref()
                 .unwrap_or_else(|| typed.bodies.get(id).expect("every body is type-checked")),
             targets: &function.targets,
             indices: &indices,
