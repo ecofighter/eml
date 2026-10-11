@@ -1,6 +1,6 @@
 //! Kind の変数、`下限 ≤ 上限` の制約の両辺 (`Bound`)、束の値 (`Level`)、制約の由来、持ち越しの制約を置く
 //! (docs/spec/types.md の「推論」)。線形性 (`Unr ≤ Lin`) と多重度 (`Never ≤ Once ≤ Multi`) の両方に使う。
-//! 段1が集める問題とスキームは `problem` に、段2が SCC ごとに解く処理は `solve` にある。
+//! 段1が集める問題とスキームは `problem` に、段2が SCC ごとに解く処理は `solve` に、解いたスキームの上の評価は `eval` にある。
 
 use eml_diagnostics::{FileId, TextRange, TextSize};
 use eml_hir::{DisplayNames, OperationId};
@@ -10,6 +10,7 @@ use crate::table::Row;
 use crate::ty::{Linearity, Multiplicity};
 
 pub(crate) mod entail;
+pub(crate) mod eval;
 pub(crate) mod problem;
 pub(crate) mod solve;
 

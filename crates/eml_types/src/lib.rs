@@ -20,10 +20,12 @@ use std::collections::HashMap;
 
 use eml_diagnostics::{Diagnostic, FileId, Label, SourceFiles, TextRange};
 use eml_hir::{
-    ConstructorId, EffectId, ExprId, Function, ItemMap, LocalId, PatId, Program, ValueItem,
+    ConstructorId, EffectId, ExprId, Function, FunctionId, ItemMap, LocalId, PatId, Program,
+    ValueItem,
 };
 use la_arena::ArenaMap;
 
+use crate::kind::eval;
 use crate::kind::problem::KindScheme;
 use crate::shape::Shape;
 
@@ -86,6 +88,65 @@ pub struct DeclType {
     /// 後の段階は Kind を読まない (docs/implementation/architecture.md の「`eml_types` の内部」) ので、外からは読めなくする。
     pub(crate) shape: Shape,
     pub(crate) kinds: KindScheme,
+    /// 本体の型の `Var(shape.lin_vars + k)` が表す、宣言自身の変数の集合 `joins[k]`。値はその変数の値の結びである
+    /// (docs/superpowers/specs/2026-10-12-s8c-kind-export-design.md の「宣言の Kind 変数の番号」)。
+    pub(crate) joins: Vec<Vec<u32>>,
+}
+
+impl TypedProgram {
+    /// 宣言の `Var(i)` の、型引数 `args` (`Shape::rigids` の順) の instance での値。`i < lin_vars` は宣言自身の変数、
+    /// それ以降は `joins` の結びである。値は `Unr`、`Lin`、`Poly` のどれかになる
+    /// (docs/superpowers/specs/2026-10-12-s8c-kind-export-design.md の「instance での評価」)。
+    pub fn kind_values(&self, decl: ValueItem, args: &[TypeId], store: &TypeStore) -> Vec<Lin> {
+        let declared = &self.decls[&decl];
+        let shape = &declared.shape;
+        debug_assert_eq!(args.len(), shape.rigids.len(), "type arguments of {decl:?}");
+        // 矢印の値は呼び出し側が決めるので、型引数から決まらない変数の `base` は `Poly` である
+        let mut base = vec![Lin::Poly; shape.lin_vars];
+        for ((_, mu), &arg) in shape.rigids.iter().zip(args) {
+            base[mu.index()] = store.linearity(arg);
+        }
+        let facts = eval::scheme_facts(&declared.kinds, shape.lin_vars);
+        let mut values = eval::values(&declared.kinds, shape.lin_vars, |var| base[var], &facts);
+        let joins: Vec<Lin> = declared
+            .joins
+            .iter()
+            .map(|set| {
+                set.iter()
+                    .map(|&var| values[var as usize])
+                    .fold(Lin::Unr, Lin::join)
+            })
+            .collect();
+        values.extend(joins);
+        values
+    }
+
+    /// 関数の一様な位置 `position` の型変数の Kind。一様な位置の鍵は `Int` の呼び出し元にも `File` の呼び出し元にも
+    /// 使われるので、スキームで `Unr` に固定されていなければ `Poly` にする
+    /// (docs/superpowers/specs/2026-10-12-s8c-kind-export-design.md の「`Flexible` と `OpVar` の Kind」)。
+    pub fn uniform_kind(&self, function: FunctionId, position: usize) -> Lin {
+        let declared = &self.decls[&ValueItem::Function(function)];
+        let mu = declared.shape.rigids[position].1.index();
+        let facts = eval::scheme_facts(&declared.kinds, declared.shape.lin_vars);
+        if facts.fixed_unr[mu] {
+            Lin::Unr
+        } else {
+            Lin::Poly
+        }
+    }
+
+    /// 単相化で宣言の本体の型を写す必要があるか。型変数を持つか、定数に畳まれない宣言自身の線形性の変数を持つときに
+    /// 写す。`joins` の変数も宣言自身の変数なので、これで足りる
+    /// (docs/superpowers/specs/2026-10-12-s8c-kind-export-design.md の「代入と単相化」)。
+    pub fn needs_substitution(&self, decl: ValueItem) -> bool {
+        let declared = &self.decls[&decl];
+        let shape = &declared.shape;
+        if !shape.rigids.is_empty() {
+            return true;
+        }
+        let facts = eval::scheme_facts(&declared.kinds, shape.lin_vars);
+        (0..shape.lin_vars).any(|var| !facts.fixed_unr[var] && !facts.forced_lin[var])
+    }
 }
 
 #[derive(Debug, Default)]

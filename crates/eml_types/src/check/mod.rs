@@ -821,6 +821,7 @@ fn typed_program(
                 kinds: schemes
                     .remove(&decl)
                     .expect("every declaration has a Kind scheme"),
+                joins: Vec::new(),
             };
             (decl, declared)
         })
