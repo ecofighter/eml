@@ -441,8 +441,9 @@ impl Fields<'_> {
                 at = parent;
             }
         }
-        // スロットごとの代表は、番号のいちばん小さい変数である。親を別のコンストラクタで分解した変数 (到達しない
-        // 行き先にしか現れない) は、1つの `release` に書けないので代表にしない
+        // スロットごとの代表は、番号のいちばん小さい変数である。親の `release` のコンストラクタは、その親の子のうち
+        // 番号のいちばん小さい変数のものにする。親をこれと別のコンストラクタで分解した変数 (到達しない行き先にしか
+        // 現れない) は、1つの `release` に書けないので代表にしない
         let mut ctors: HashMap<VarId, Ctor> = HashMap::new();
         let mut reps: HashMap<(VarId, usize), VarId> = HashMap::new();
         for (&parent, kids) in &mut children {

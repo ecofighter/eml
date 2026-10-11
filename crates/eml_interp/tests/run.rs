@@ -260,6 +260,40 @@ fn main() -> unit {
 }
 
 #[test]
+fn a_dup_of_a_file_is_a_runtime_error() {
+    // LIR は Kind を持たないので、verifier は `File` の `dup` を拒まない。ヒープが実行時に止める
+    // (docs/spec/runtime.md の「`File` の参照の検査」)
+    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/Cargo.toml");
+    let text = format!(
+        "\
+fn main() -> unit {{
+  let p.0: obj = const \"{path}\"
+  let u.1: unit = call f(p.0)
+  return u.1
+}}
+fn f(p.0: obj) -> unit {{
+  let h.1: obj = extern Std.Fs.open(p.0)
+  dup h.1
+  let u.2: unit = extern Std.Fs.close(h.1)
+  let u.3: unit = extern Std.Fs.close(h.1)
+  return u.3
+}}
+"
+    );
+    let (_, result) = run_lir(&text);
+    let error = result.unwrap_err();
+    assert_eq!(
+        error,
+        RuntimeError::Fault {
+            fault: Fault::Heap(eml_runtime::HeapError::LinShared),
+            function: "f".to_string(),
+            at: None,
+        }
+    );
+    assert_eq!(error.to_string(), "a Lin object is shared in `f`");
+}
+
+#[test]
 fn a_jump_with_a_different_number_of_arguments_is_an_internal_error() {
     // verifier は R4 でこの形を拒むので、通さずに実行する
     let text = "fn main() -> unit {\n  jump b1(1)\nb1:\n  return ()\n}\n";

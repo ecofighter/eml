@@ -954,6 +954,94 @@ b2:
 }
 
 #[test]
+fn a_field_of_another_constructor_of_the_parent_is_dupped() {
+    // x.0 を b1 でもう一度分解し、b2 では E #0 の a.1 と E #1 の c.6 がどちらも生きている。b2 は到達しない行き先
+    // だが、Perceus はそれを知らずに x.0 を解く。1つの `release` に書けるのは1つのコンストラクタだけなので、番号の
+    // 小さい a.1 の E #0 で x.0 を解き、c.6 は `dup` する (spec の「持ち主を解く」の 2.)
+    let shown = perceus_text(
+        "\
+layout E { L(tobj), R(tobj, tobj) }
+layout P { P(tobj, tobj) }
+fn f(x.0: obj) -> obj {
+  switch x.0 E { #0(a.1: tobj) -> b1, #1(b.2: tobj, c.3: tobj) -> b3 }
+b1:
+  switch x.0 E { #0(a.4: tobj) -> b4, #1(b.5: tobj, c.6: tobj) -> b2 }
+b2:
+  let p.7: obj = con P #0(a.1, c.6)
+  return p.7
+b3:
+  return x.0
+b4:
+  return x.0
+}
+",
+    );
+    assert!(shown.contains("dup c.6"), "{shown}");
+    assert!(shown.contains("release x.0 E #0(a.1)"), "{shown}");
+    insta::assert_snapshot!(shown, @"
+    layout E { L(tobj), R(tobj, tobj) }
+    layout P { P(tobj, tobj) }
+    fn f(x.0: obj) -> obj {
+      switch x.0 E { #0(a.1: tobj) -> b1, #1(b.2: tobj, c.3: tobj) -> b3 }
+    b1:
+      switch x.0 E { #0(a.4: tobj) -> b4, #1(b.5: tobj, c.6: tobj) -> b2 }
+    b2:
+      dup c.6
+      release x.0 E #0(a.1)
+      let p.7: obj = con P #0(a.1, c.6)
+      return p.7
+    b3:
+      return x.0
+    b4:
+      return x.0
+    }
+    ");
+}
+
+#[test]
+fn a_descendant_under_an_owned_field_is_dupped_when_the_owner_is_resolved() {
+    // s.5 の `++` が c.2 を消費しても c.2 は後で生き、o.0 も生きているので、c.2 を `dup` で所有にする。その後 o.0 は
+    // 2回目の `unpack` で死ぬ。t.7 で o.0 を解くとき、g.3 と o.0 の間の c.2 はもう所有されているので、`release` で
+    // c.2 から g.3 を受け取らず、g.3 を `dup` する (spec の「持ち主を解く」の 3.)
+    let shown = perceus_text(
+        "\
+layout Outer { Outer(obj) }
+layout Inner { Inner(obj, int) }
+layout Pair { Pair(obj, obj) }
+fn f(o.0: obj, k.1: obj) -> obj {
+  unpack o.0 Outer #0(c.2: obj)
+  unpack c.2 Inner #0(g.3: obj, n.4: int)
+  let s.5: obj = extern Prelude.++(c.2, k.1)
+  unpack o.0 Outer #0(c.6: obj)
+  let t.7: obj = extern Prelude.++(s.5, g.3)
+  let q.8: obj = con Pair #0(t.7, c.2)
+  return q.8
+}
+",
+    );
+    assert!(shown.contains("dup g.3"), "{shown}");
+    assert!(!shown.contains("release"), "{shown}");
+    insta::assert_snapshot!(shown, @"
+    layout Outer { Outer(obj) }
+    layout Inner { Inner(obj, int) }
+    layout Pair { Pair(obj, obj) }
+    fn f(o.0: obj, k.1: obj) -> obj {
+      unpack o.0 Outer #0(c.2: obj)
+      unpack c.2 Inner #0(g.3: obj, n.4: int)
+      dup c.2
+      dup c.2
+      let s.5: obj = extern Prelude.++(c.2, k.1)
+      unpack o.0 Outer #0(c.6: obj)
+      dup g.3
+      decref o.0
+      let t.7: obj = extern Prelude.++(s.5, g.3)
+      let q.8: obj = con Pair #0(t.7, c.2)
+      return q.8
+    }
+    ");
+}
+
+#[test]
 fn a_long_chain_of_borrowed_switches_is_rewritten_in_linear_time() {
     // 借りたフィールドへの `switch` が深く連なる形。行き先に写す状態は、所有と持ち主ごとの生きている借りた変数
     // だけなので、時間は深さに比例する (spec の「時間」)
@@ -982,36 +1070,21 @@ fn a_long_chain_of_borrowed_switches_is_rewritten_in_linear_time() {
     );
 }
 
-/// 生きている変数が多い形の大きさ。大きいほうはこの2倍にする。debug ビルドでも数秒で終わる大きさにする。
-const SCALING_SMALL: usize = 2000;
-/// 2倍の大きさに対して許す時間の比。線形なら約2、生存集合の大きさの2乗なら約4になる。
-const SCALING_MAX_RATIO: f64 = 3.0;
+/// 生きている変数が多い形の大きさ。debug ビルドで、線形なら形ごとに0.6〜1.6秒で終わり、1つの命令の手間が
+/// 生存集合の大きさに比例すると数十秒かかる。
+const MANY: usize = 32000;
 
-/// Perceus だけの時間。3回測って最小を使い、ほかの処理の割り込みによるばらつきを除く。
-fn perceus_time(text: &str) -> std::time::Duration {
-    let program = parse(text).unwrap_or_else(|error| panic!("{error}"));
-    (0..3)
-        .map(|_| {
-            let mut program = program.clone();
-            let start = std::time::Instant::now();
-            perceus(&mut program);
-            start.elapsed()
-        })
-        .min()
-        .unwrap()
-}
-
-/// 1つの命令の手間が生存集合の大きさに比例すると、時間は大きさの2乗で伸びる。それを、大きさを2倍にしたときの
-/// 時間の比で見つける (docs/spec/lir.md の「Perceus の時間」)。
+/// 1つの命令の手間が生存集合の大きさに比例すると、時間は大きさの2乗で伸びる (docs/spec/lir.md の「Perceus の時間」)。
+/// 大きさを2倍にしたときの時間の比で見ると、並列に流れるほかのテストの負荷で比がぶれて誤って落ちる。そこで、鎖の
+/// テストと同じく、大きい1つの大きさに十分ゆるい上限を置く。
 fn assert_linear_in_live_variables(generate: fn(usize) -> String) {
-    perceus_text(&generate(SCALING_SMALL));
-    let small = perceus_time(&generate(SCALING_SMALL));
-    let large = perceus_time(&generate(SCALING_SMALL * 2));
-    let ratio = large.as_secs_f64() / small.as_secs_f64();
+    let text = generate(MANY);
+    let start = std::time::Instant::now();
+    perceus_text(&text);
+    let elapsed = start.elapsed();
     assert!(
-        ratio <= SCALING_MAX_RATIO,
-        "size {SCALING_SMALL} took {small:?} and size {} took {large:?} (ratio {ratio:.1})",
-        SCALING_SMALL * 2
+        elapsed < std::time::Duration::from_secs(10),
+        "size {MANY} took {elapsed:?}"
     );
 }
 

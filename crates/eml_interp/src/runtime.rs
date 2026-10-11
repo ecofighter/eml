@@ -191,8 +191,8 @@ impl<'p> Runtime<'p> {
     }
 
     /// `Switch` の scrutinee に合う case と、その case に入れるフィールド。scrutinee もフィールドも読むだけで、参照の
-    /// 数を変えない。フィールドは scrutinee から借り、所有にするのは行き先の `dup` か `release` である
-    /// (docs/spec/lir.md)。
+    /// 数を変えない。フィールドは scrutinee から借りる。所有にする `dup` や `release` は、Perceus が所有の要る所に
+    /// 置く (docs/spec/lir.md の「所有を取る時点」)。
     pub(crate) fn select_case<'s, 'c, C>(
         &'s self,
         value: Value,
