@@ -1,11 +1,11 @@
-//! translate と縮約の間の box の挿入のパス (docs/spec/core-ir.md の「box の挿入」)。プログラム全体を1回で扱い、関数の
+//! translate と縮約の間の box の挿入のパス (docs/spec/lir.md の「box の挿入」)。プログラム全体を1回で扱い、関数の
 //! ABI を決めてから、Repr の違う位置の間に `box` と `unbox` を入れる。手順は、分類、T3 (`ret` を上げる)、一様化と
 //! `f$boxed`、変換の順である。型は読まず、呼ばれる関数のシグネチャ、内部の印と `clause` の印、配置の表、操作の表、
 //! 基本操作の表だけを読む。入力は EP の出力を写した LIR で、`tail`、`box`、`unbox`、RC の命令はない
 //! (`passes_until` の入口で `verify_lowered` が確かめる)。
 //!
 //! 変数は具体化した型の Repr を持ち、値を受ける位置の Repr と互換でなければ変換する。変換は箱を要するスカラーと
-//! `tobj` の間だけで、`unit` と `obj` は命令なしで `tobj` と行き来する (docs/spec/core-ir.md の「値の表現」)。
+//! `tobj` の間だけで、`unit` と `obj` は命令なしで `tobj` と行き来する (docs/spec/lir.md の「値の表現」)。
 //! パスはブロックと文のループだけで、IR の大きさに比例して再帰しない。
 
 use std::collections::HashMap;
@@ -71,14 +71,14 @@ fn classify(program: &Program) -> (Vec<bool>, Vec<bool>) {
 /// T3。`ret` が箱を要するスカラーで、末尾の位置の呼び出しのどれかの結果が `ret` と互換でない関数の `ret` を `tobj` に
 /// する。そうしないと結果を `unbox` するために呼び出しが末尾呼び出しでなくなり、関数の値を通るループがフレームを積む。
 /// 上げた関数を末尾の位置で直接呼ぶ関数も、同じ規則で上げる。`ret` はスカラーから `tobj` へ1回だけ動くので、
-/// 各関数は多くとも1回作業の列に積まれ、各辺は1回だけ見る (docs/spec/core-ir.md の「位置の規則」と「box の挿入」)。
+/// 各関数は多くとも1回作業の列に積まれ、各辺は1回だけ見る (docs/spec/lir.md の「位置の規則」と「box の挿入」)。
 fn raise_tail_returns(functions: &mut [LirFn], effects: &[EffectInfo]) {
     let mut callers: Vec<Vec<usize>> = vec![Vec::new(); functions.len()];
     let mut raised = Vec::new();
     for (index, function) in functions.iter().enumerate() {
         let mut raise = false;
         for block in &function.blocks {
-            // `never` の操作の呼び出しは戻らないので、結果を `ret` と比べない (docs/spec/core-ir.md の「位置の規則」)
+            // `never` の操作の呼び出しは戻らないので、結果を `ret` と比べない (docs/spec/lir.md の「位置の規則」)
             let result = match tail_position_call(block).map(|(_, call)| call) {
                 Some(Call::Direct(target, _)) => {
                     callers[target.0 as usize].push(index);
@@ -117,7 +117,7 @@ fn raise_tail_returns(functions: &mut [LirFn], effects: &[EffectInfo]) {
 
 /// 末尾の位置の呼び出しと、その文の位置。ブロックの終端が `return x` で、同じブロックに `let x = <呼び出し>` が
 /// あり、その後の文がすべて純粋な `let` であるときの、その呼び出しである。後ろの純粋な `let` は `return` が使わない
-/// ので縮約が消し、そこで末尾呼び出しになる (docs/spec/core-ir.md の「変換の規則」)。形で決めるので、`never` の操作の
+/// ので縮約が消し、そこで末尾呼び出しになる (docs/spec/lir.md の「末尾の位置の呼び出し」)。形で決めるので、`never` の操作の
 /// 節の呼び出しも含む。EP は、Core IR の上の同じ判定 (`eml_core_ir` の tail.rs) で、この呼び出しを yield の地点に
 /// しない (docs/spec/core-ir.md の「yield の地点」)。
 fn tail_position_call(block: &Block) -> Option<(usize, &Call)> {
@@ -159,7 +159,7 @@ fn uniform_repr(repr: Repr) -> Repr {
 /// 値として参照され、T3 の後でも一様でない関数を一様にする。直接は呼ばれない内部の関数はその場で一様にし、ほかの
 /// 関数 (直接も呼ばれる内部の関数と、トップレベルの関数) には一様な `f$boxed` を足して、値の参照をすべてそちらへ
 /// 向ける。トップレベルの関数の ABI を、ほかの定義が後から値として参照するかどうかで変えないためである
-/// (docs/spec/core-ir.md の「位置の規則」)。`clause` の印の関数は `apply` で呼ばれず、節の呼び出しが操作の ABI で
+/// (docs/spec/lir.md の「位置の規則」)。`clause` の印の関数は `apply` で呼ばれず、節の呼び出しが操作の ABI で
 /// 呼ぶので、一様にせずに操作の ABI に合わせる。
 fn uniformize(program: &mut Program, values: &[bool], direct: &[bool]) {
     let count = values.len();
@@ -228,7 +228,7 @@ fn uniformize_in_place(function: &mut LirFn) {
 
 /// `clause` の印の関数を操作の ABI に合わせる。捕獲は一様な Repr、evidence は `obj`、残りの引数は操作の表の Repr で
 /// 受け、`ret` は操作の `ret` にする。`never` の操作の節の入口はダミーの物体を返すので `obj` である
-/// (docs/spec/core-ir.md の「box の挿入」)。
+/// (docs/spec/lir.md の「box の挿入」)。
 fn conform_clause(function: &mut LirFn, operation: &OperationInfo) {
     let params = function.params();
     let captures = params.len() - 1 - operation.params.len();
@@ -512,7 +512,7 @@ impl Converter<'_> {
                         None
                     }
                     // 基本操作の引数と結果は、直接の呼び出しと同じく互換の位置である
-                    // (docs/spec/core-ir.md の「基本操作」)
+                    // (docs/spec/lir.md の「基本操作」)
                     Rhs::Prim(prim, args) => {
                         let row = prim.row();
                         for (arg, &param) in args.iter_mut().zip(row.params) {
@@ -576,7 +576,7 @@ impl Converter<'_> {
     /// 呼び出しのアトムを変換し、結果を受ける Repr を返す。直接の呼び出しは呼ばれる関数の引数と `ret`、節の呼び出しは
     /// 先頭の evidence が `obj` で、残りの引数と結果が操作の表の Repr である。関数値の適用は一様な `tobj` である。
     /// `never` の操作の節の呼び出しは戻らないので、結果を受け直さず `None` を返す
-    /// (docs/spec/core-ir.md の「box の挿入」)。
+    /// (docs/spec/lir.md の「box の挿入」)。
     fn call(&mut self, call: &mut Call, out: &mut Vec<Stmt>) -> Option<Repr> {
         match call {
             Call::Direct(target, args) => {

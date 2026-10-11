@@ -62,7 +62,7 @@ b1(a.2: tobj, b.3: tobj, c.4: tobj):
 
 #[test]
 fn a_jump_passes_values_to_compatible_parameters() {
-    // `obj` と `tobj`、`unit` と `tobj` は互換で、命令なしで行き来する (docs/spec/core-ir.md の「値の表現」)
+    // `obj` と `tobj`、`unit` と `tobj` は互換で、命令なしで行き来する (docs/spec/lir.md の「値の表現」)
     assert_eq!(check_translated(&compatible_jump("")), Ok(()));
 }
 

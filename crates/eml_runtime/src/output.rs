@@ -3,7 +3,7 @@ use std::io::{self, Write};
 use std::rc::Rc;
 
 /// インタプリタはシングルスレッドで動くので、書き込み先を `Rc` と `RefCell` で共有する。出力先は値でもフレームでもないので、
-/// docs/spec/core-ir.md の「実行時の規約」の `Rc` と `RefCell` を使わない規則の外にある。
+/// docs/spec/lir.md の「実行時の規約」の `Rc` と `RefCell` を使わない規則の外にある。
 #[derive(Clone)]
 pub struct OutputSink(Rc<RefCell<dyn Write>>);
 

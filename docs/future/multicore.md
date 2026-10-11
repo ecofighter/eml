@@ -175,7 +175,7 @@ row の Kind: Row<s>,  s ∈ { Never ≤ Once ≤ Multi }
 
 ### 子タスクに `never` の操作だけを許す理由
 
-- 一般の handler は並列と組み合わせられない: `once` / `multi` の handler は、状態を handler の実行ごとの evidence に、計算の続きを継続のクロージャに持つ。例えば [エフェクトと handler](../spec/effects.md) の `run_state` の節 `| get () k st -> k st st` の状態は、操作が起きるたびに evidence から節に渡り、その場で evidence へ戻る ([Core IR とインタプリタ](../spec/core-ir.md) の「`perform` と節の3つの形」)。二つの子タスクがこうした操作を同時に perform すると、どちらの節の `k` に計算の続きを返すかが決まらない
+- 一般の handler は並列と組み合わせられない: `once` / `multi` の handler は、状態を handler の実行ごとの evidence に、計算の続きを継続のクロージャに持つ。例えば [エフェクトと handler](../spec/effects.md) の `run_state` の節 `| get () k st -> k st st` の状態は、操作が起きるたびに evidence から節に渡り、その場で evidence へ戻る ([Core IR](../spec/core-ir.md) の「`perform` と節の3つの形」)。二つの子タスクがこうした操作を同時に perform すると、どちらの節の `k` に計算の続きを返すかが決まらない
 - `never` の操作は再開しない: handler の節は、子をすべて片付けた後に、親のスレッドで1回だけ実行すればよい。節が並行に走ることがないので、ロックも、子のスレッドから親のフレームをたどる処理も要らない
 - データ並列にはこれで足りる: データ並列の処理は、もともと純粋な関数と、失敗の通知 (`Fail` のような `never` のエフェクト) で書ける
 
@@ -196,7 +196,7 @@ row の Kind: Row<s>,  s ∈ { Never ≤ Once ≤ Multi }
 - a2-wait では、左の子が例外を投げて右の子が停止しない場合、逐次実行なら例外で終わるはずのプログラムが止まらない。逐次実行と異なるのはこの点だけで、a2-cancel で解消する
 - 捨てる側の子の結果が `Lin` の場合、`par` は型について多相なので、実行時にオブジェクトの記述子から破棄処理を引いて drop する。`eml_rt` の記述子は、破棄処理を持たなければならない ([ロードマップ](roadmap.md) の「S9 共通ランタイム `eml_rt`」)。今のインタプリタでは、破棄処理はオブジェクトの解放そのものである ([ランタイム](../spec/runtime.md) の「オブジェクトのヘッダ」)
 - `never` の操作が `par` から抜けるのを perform が認識する必要がある。そのため、`par` 自体は実行系の核のプリミティブ (fork / join の節点) の上に作る。スケジューラはライブラリのままである
-- evidence passing の上では、`par` の子タスクの `evv` に、外側の handler の evidence の代わりに、fork の目印を指す evidence を置く。子の row は `Row<Never>` なので、子から外に出る操作は `never` の操作だけである。子の中の `never` の操作は fork の目印まで中断の yield をし、fork / join の節点がそれを親に渡す ([Core IR とインタプリタ](../spec/core-ir.md) の「`never` の中断」)
+- evidence passing の上では、`par` の子タスクの `evv` に、外側の handler の evidence の代わりに、fork の目印を指す evidence を置く。子の row は `Row<Never>` なので、子から外に出る操作は `never` の操作だけである。子の中の `never` の操作は fork の目印まで中断の yield をし、fork / join の節点がそれを親に渡す ([Core IR](../spec/core-ir.md) の「`never` の中断」)
 - 協調的な中断は、安全な地点 (perform、メモリの確保、ループの先頭など) で中断の印を確認して行う。中断した子が捕まえている `Lin` の値は、`drop k` と同じ後始末の情報で解放する
 
 ### データ並列での使い勝手
@@ -213,7 +213,7 @@ row の Kind: Row<s>,  s ∈ { Never ≤ Once ≤ Multi }
 
 ### すぐに再開する handler の最適化
 
-handler の節が `k v` を末尾で1回だけ呼ぶ場合、継続を取り出さない直接の呼び出しにコンパイルできる (Koka や evidence passing の主要な最適化)。これは並列とは関係なく、コンパイラが handler ごとに Core IR の形から判定する。エフェクトの宣言に操作の種類を追加する必要はない。S7 の evidence passing で実装した ([Core IR とインタプリタ](../spec/core-ir.md) の「`perform` と節の3つの形」)。
+handler の節が `k v` を末尾で1回だけ呼ぶ場合、継続を取り出さない直接の呼び出しにコンパイルできる (Koka や evidence passing の主要な最適化)。これは並列とは関係なく、コンパイラが handler ごとに Core IR の形から判定する。エフェクトの宣言に操作の種類を追加する必要はない。S7 の evidence passing で実装した ([Core IR](../spec/core-ir.md) の「`perform` と節の3つの形」)。
 
 ### 並行処理
 
@@ -240,7 +240,7 @@ run_scheduler : (Unit -> <Async, IO> a) -> <IO> a
 
 - 非同期のスケジューラでは、`await` したタスクの継続 `k` (`once`、`Lin`) を handler がキューに入れ、別の worker が `k` を呼んで再開する
 - `k` の続きに `Heap h` の操作があれば、`k v` の row (handle 式の外側の row) に `Heap h` が現れる。キューや `run_scheduler` の型は閉じた row なので、そのような `k` はキューに入れられない (型エラー)
-- 移動するときは、送り手が継続から到達できるオブジェクトに共有の印を付ける。evidence passing の継続はクロージャの列なので ([Core IR とインタプリタ](../spec/core-ir.md) の「継続の組み立て」)、継続のクロージャから届くオブジェクトをたどる。一度移動した継続のクロージャにはすでに印が付いているので、次に移動するときは、その後に足したクロージャだけをたどればよい
+- 移動するときは、送り手が継続から到達できるオブジェクトに共有の印を付ける。evidence passing の継続はクロージャの列なので ([Core IR](../spec/core-ir.md) の「継続の組み立て」)、継続のクロージャから届くオブジェクトをたどる。一度移動した継続のクロージャにはすでに印が付いているので、次に移動するときは、その後に足したクロージャだけをたどればよい
 - work stealing のキューは常に盗まれ得るので、キューに入れた時点で印を付ける。その代償として、移動しない継続も atomic な RC になる。印付けを実際に移動するものだけに限る private deque 方式 (Acar らの方式) は、将来の最適化とする
 
 ### `multi` の継続の並列な再開
@@ -270,7 +270,7 @@ run_scheduler : (Unit -> <Async, IO> a) -> <IO> a
 - **混在実行と両立しない**。`FnEntry` で VM とネイティブのコードを混ぜて動かすと、ネイティブの標準ライブラリの `par_map` が、ユーザーのバイトコードの閉包を worker のスレッドで呼ぶ。VM がスレッドをまたいで使える作りでなければ、混在させた `par` を順に実行するしかなくなる
 - **確かめる時期が遅い**。ネイティブ化は、S13 の後の言語の項目より後にある。共有の印付け、別のスレッドからの解放、上の「不変条件」は、それまで実装で確かめられない
 
-VM を並列にする費用は小さいと見積もっている。S7 の evidence passing で継続はヒープのクロージャになり、実行の文脈 (`evv` と yield の状態) は `Ctx` として worker ごとに1つ持てばよい ([Core IR とインタプリタ](../spec/core-ir.md) の「実行の文脈」)。RC の分岐は、不死の物体 (0) を区別する比較に負の側を足すだけで済む。`par` と `run_scheduler` は構造化された並行性なので、REPL の入力の境目では worker が1つも動いていない。
+VM を並列にする費用は小さいと見積もっている。S7 の evidence passing で継続はヒープのクロージャになり、実行の文脈 (`evv` と yield の状態) は `Ctx` として worker ごとに1つ持てばよい ([LIR とインタプリタ](../spec/lir.md) の「実行の文脈」)。RC の分岐は、不死の物体 (0) を区別する比較に負の側を足すだけで済む。`par` と `run_scheduler` は構造化された並行性なので、REPL の入力の境目では worker が1つも動いていない。
 
 ### VM の並列化の備え
 

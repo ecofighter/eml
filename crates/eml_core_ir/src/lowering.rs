@@ -1,4 +1,4 @@
-//! Core IR から LIR への変換 (docs/superpowers/specs/2026-10-11-s8a-lir-design.md の「Core IR から LIR への変換」)。
+//! Core IR から LIR への変換 (docs/spec/core-ir.md の「Core IR から LIR への変換」)。
 //! EP の後の Core IR を、番号と名前を変えずに LIR の型に写す。命令を足しも消しもしない。
 
 use crate::{Block, Call, CoreFn, Program, Rhs, Stmt, Term};

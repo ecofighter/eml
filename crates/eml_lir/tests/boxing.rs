@@ -1,4 +1,4 @@
-//! box の挿入のパス (docs/spec/core-ir.md の「box の挿入」)。手で書いた LIR を入力にする。T3 の時間は IR のテキストで
+//! box の挿入のパス (docs/spec/lir.md の「box の挿入」)。手で書いた LIR を入力にする。T3 の時間は IR のテキストで
 //! 確かめる。ソースからパイプラインを通すテストは `eml_core_ir` の tests/boxing.rs にある。
 
 use crate::common::function;
@@ -103,7 +103,7 @@ fn f(c.0: tobj, n.1: int) -> int {
 #[should_panic(expected = "internal error: the boxing pass cannot pass 5 to obj in `f`")]
 fn a_constant_that_cannot_go_to_its_position_is_an_internal_error() {
     // 変換の段は直接の呼び出しの引数を比べないので、`obj` の引数に渡す `Int` の定数は box の挿入まで届く。型からは
-    // 起きない変換なので、パスはパニックする (docs/spec/core-ir.md の「box の挿入」)
+    // 起きない変換なので、パスはパニックする (docs/spec/lir.md の「box の挿入」)
     let text = "\
 fn h(x.0: obj) -> int {
   return 1

@@ -892,7 +892,7 @@ fn effect_numbers_skip_the_extern_effects() {
 #[test]
 fn the_entry_function_is_chosen_by_the_caller() {
     // REPL は、`main` の代わりにその回の式から作った関数を入口にする
-    // (docs/implementation/architecture.md の「`eml_core_ir`、`eml_runtime`、`eml_interp` の内部」)
+    // (docs/implementation/architecture.md の「`eml_core_ir`、`eml_lir`、`eml_runtime`、`eml_interp` の内部」)
     let text = "main : Unit -> <IO> Unit\nmain () = println \"main\"\n\nalt : Unit -> <IO> Unit\nalt () = println \"alt\"";
     let checked = eml_test_support::check(text);
     let alt = checked
@@ -2293,7 +2293,7 @@ fn an_if_names_the_bool_of_the_prelude() {
 #[test]
 fn a_type_named_like_a_type_of_another_module_gets_its_own_layout() {
     // 配置は型の定義ごとに1つで、名前はモジュールで修飾するので、短い名前が同じ2つの型は別の配置になる
-    // (docs/spec/core-ir.md の「データの配置」)
+    // (docs/spec/core-ir.md の「translate の配置」)
     let csv = "pub data Row = | Row Int\n\npub row : Int -> Row\nrow n = Row n";
     let main = "import Report.Csv\n\ndata Row =\n  | Row String\n\nrow : String -> Row\nrow s = Row s\n\nmain : Unit -> <IO> Unit\nmain () =\n  let Row s = row \"a\"\n  let Csv.Row n = Csv.row 1\n  println s\n  println (show n)";
     insta::assert_snapshot!(layouts(&core_text_files(main, &[("Report/Csv.em", csv)], Pass::Translate)), @"

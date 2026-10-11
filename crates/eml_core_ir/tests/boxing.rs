@@ -1,4 +1,4 @@
-//! box の挿入のパス (docs/spec/core-ir.md の「box の挿入」)。ソースから `eml_lir::Pass::Boxing` までを通し、縮約の
+//! box の挿入のパス (docs/spec/lir.md の「box の挿入」)。ソースから `eml_lir::Pass::Boxing` までを通し、縮約の
 //! 前の LIR を見る。末尾呼び出しを確かめるテストは `eml_lir::Pass::Contract` まで通す。手で書いた LIR を入力にする
 //! テストは `eml_lir` の tests/boxing.rs にある。
 

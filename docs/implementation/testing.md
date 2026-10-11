@@ -2,7 +2,7 @@
 
 位置づけ: 手引き。
 
-テストの書き方、テストの変更の運用、テストの置き場所、層ごとの方法、Core IR のテキストの形、UI テストの仕組みを定める。
+テストの書き方、テストの変更の運用、テストの置き場所、層ごとの方法、LIR と Core IR のテキストの形、UI テストの仕組みを定める。
 
 ## 方針
 
@@ -33,8 +33,8 @@
 | # | 期待するもの | 置き場所 |
 |---|---|---|
 | 1 | 機能ごとの代表的なプログラムを `eml check` / `eml run` にかけたときにユーザーが見るもの。stdout、実行時エラー、プログラム全体が通るか落ちるか、代表的な診断の表示 | UI テスト (`tests/ui/`) |
-| 2 | 1つの段階の出力 (CST、HIR、推論したシグネチャ、Core IR) と、その段階の診断の細部 (位置、回復、端のケース) | その段階の crate の結合テスト (`crates/<段階>/tests/`)。ソースから `eml_test_support` で組み立てる |
-| 3 | フロントエンドからは作れない状態 (壊れた IR、`decref` の抜けた IR など) と、テストの中で生成した大きなソース | `eml_core_ir/tests/verify.rs` か `eml_interp/tests/`。Core IR は IR のテキストで書き、`eml_core_ir::parse` で読む |
+| 2 | 1つの段階の出力 (CST、HIR、推論したシグネチャ、Core IR、LIR) と、その段階の診断の細部 (位置、回復、端のケース) | その段階の crate の結合テスト (`crates/<段階>/tests/`)。ソースから `eml_test_support` で組み立てる |
+| 3 | フロントエンドからは作れない状態 (壊れた IR、`decref` の抜けた IR など) と、テストの中で生成した大きなソース | `eml_lir/tests/`、`eml_core_ir/tests/verify.rs`、`eml_interp/tests/`。LIR は IR のテキストで書いて `eml_lir::parse` で読み、Core IR は `eml_core_ir::parse` で読む |
 | 4 | 公開の API から届かないか、内部の状態を直接組まないと確かめにくい部品の振る舞い。レイアウト段、パーサのマーカー、単一化の表、Kind の制約の解消、ヒープなど | `src/` の単体テスト |
 | 5 | lib API の流れ、CLI の終了コード、テスト補助そのもの | `eml_cli/tests/api.rs`、`eml_cli/tests/cli.rs`、`eml_test_support/tests/` |
 
@@ -48,10 +48,10 @@
 - 結合テストは、crate ごとに1つのバイナリ (`integration`) にまとめる。`Cargo.toml` に `autotests = false` と `[[test]]` を書き、`tests/main.rs` で各ファイルを `mod` で宣言する。テストのバイナリが増えると、リンクと、macOS が新しい実行ファイルを最初に起動するときの検査に時間がかかるためである。`tests/main.rs` で宣言しないファイルはコンパイルされず、テストが流れない
 - lib には `doctest = false` を付ける。doc コメントは説明だけで、実行する例を書かない。単体テストのない lib (`eml_extern`、`eml_hir`、`eml_core_ir`、`eml_cli`、`eml_test_support`) と `eml_cli` の bin には `test = false` も付け、空のテストのバイナリを作らない。単体テストを足すときは `test = false` を外す
 - crate の結合テストが使う表示の関数は `tests/common/mod.rs` に置き、`tests/main.rs` で1回だけ宣言して、各ファイルから `crate::common` で使う。複数の crate で使う部品は `eml_test_support` に置く
-- Core IR の結合テストは、確かめるパスごとのファイル (`translate.rs`、`boxing.rs`、`contract.rs`、`perceus.rs`、`verify.rs`) に置く。translate のテストはソースから組み、ほとんどは `Pass::Translate` の直後の IR を見る。box の挿入のテストもソースから組み、ほとんどは `Pass::Boxing` の直後の IR を見る。縮約のテストと Perceus の前半のテストは、入力の IR をテキストで書き、そのパスだけをかけた出力を見る。そのパスだけをかける補助は、各ファイルの `boxing_text`、`contract_text`、`perceus_text` である。Perceus の後半のテスト、縮約の後半のテスト、translate の一部のテストは、ソースからパイプラインを通し、`core_until` で縮約や Perceus の直後の IR を見る。ソースから組むテストの表示は、`tests/common/mod.rs` の `read_back` が `parse` で読み戻し、パスに合う段の verifier にかける。`Pass::Translate` は変換の段 (`verify_translated`)、`Pass::Boxing` と `Pass::Contract` は範囲の段 (`verify_scopes`)、`Pass::Perceus` は所有の段 (`verify`) である。パスごとに見るのは、後のパスの書き換えや RC の命令を、確かめたいことと一緒に期待値に入れないためである。テキストの形の読み書きは `text.rs` で、extern の表との結び付けは `externs.rs` で確かめる。単相化の instance の数と名前は `instances.rs` で確かめる。一様な位置そのものは型検査が計算するので、位置の集合と E2012 は `eml_types` の `uniform.rs` で確かめる。メソッドの解決の行き先と生成した関数の Core IR は、`translate.rs` で確かめる。instance ごとに Repr が決まることと、持ち上げた関数と `f$boxed` の名前が instance の名前を根にすることは、`translate.rs` (`instances_of_one_function_get_their_own_reprs`、`lifted_functions_are_named_after_their_instance`、`a_boxed_wrapper_is_named_after_its_instance`) で確かめる
+- IR の結合テストは、確かめるパスごとのファイルに置く。LIR のパスと verifier のテストのうち、手で書いた LIR を入力にするものは `crates/eml_lir/tests` (`boxing.rs`、`contract.rs`、`perceus.rs`、`verify.rs`、`text.rs`) に置き、`boxing`、`contract`、`perceus` を直接呼ぶ。`eml_lir` の dev-dependency にフロントエンドを入れないためである。そのパスだけをかける補助は、各ファイルの `boxing_text`、`contract_text`、`perceus_text` で、入力を入口の段 (`verify_lowered`) で確かめる。生存解析のテストは `perceus.rs` に置く。ソースからパイプラインを通すテストは、パイプラインをつなぐ `eml_core_ir` の `crates/eml_core_ir/tests` (`translate.rs`、`evidence.rs`、`boxing.rs`、`contract.rs`、`perceus.rs`、`verify.rs`、`text.rs`) に置く。translate のテストはほとんどが `Pass::Translate` の直後の Core IR を、box の挿入のテストはほとんどが `eml_lir::Pass::Boxing` の直後の LIR を見る。`tests/common/mod.rs` の `core_text` は `core_until` で Core IR の段で止め、`lir_text` は `lir_until` で LIR の段で止める。どちらも表示を `parse` で読み戻し、止めたパスに合う段の verifier にかける。`Pass::Translate` は変換の段 (`verify_translated`)、`Pass::Evidence` は EP の段 (`verify_evidence`)、`eml_lir::Pass::Boxing` と `Contract` は範囲の段 (`verify_scopes`)、`Perceus` は所有の段 (`verify`) である。パスごとに見るのは、後のパスの書き換えや RC の命令を、確かめたいことと一緒に期待値に入れないためである。Core IR の verifier の段と、Core IR だけの命令 (`handle`、`perform`、`resume`、`mask`) のテストは `eml_core_ir` に、LIR の段と LIR だけの命令 (`tail`、`box`、`unbox`、RC の命令、`save`) のテストは `eml_lir` に置く。2つの IR に共通する文法だけのテキスト形式のテストは `eml_lir` に置く。EP の後の Core IR の表示と、それを `to_lir` で写した LIR の表示が同じ文字列であることは、UI テストのすべてのプログラムで `lowering.rs` が確かめる (UI テストのプログラムを集めるのは `tests/common/programs.rs`)。extern の表との結び付けは `externs.rs` で確かめる。単相化の instance の数と名前は `instances.rs` で確かめる。一様な位置そのものは型検査が計算するので、位置の集合と E2012 は `eml_types` の `uniform.rs` で確かめる。メソッドの解決の行き先と生成した関数の Core IR は、`translate.rs` で確かめる。instance ごとに Repr が決まることと、持ち上げた関数と `f$boxed` の名前が instance の名前を根にすることは、`translate.rs` (`instances_of_one_function_get_their_own_reprs`、`lifted_functions_are_named_after_their_instance`、`a_boxed_wrapper_is_named_after_its_instance`) で確かめる
 - 単体テストは、ファイルの末尾の `#[cfg(test)] mod tests` に置く。テストが300行を超え、ファイルの半分ほどを占めるようになったら、`eml_types/src/table/tests.rs` のように隣の `tests.rs` に分ける
-- `crates/eml_test_support/` は、結合テストのためにパイプラインを組む関数 (`parse`、`def_map`、`lower`、`check`、`core`、`core_until`、`run`、`run_stats`、`execute`) と、診断のないことを確かめて組む関数 (`parse_clean`、`lower_clean`)、診断を文字列にする関数 (`short`、`short_text`、`full`) と fix を文字列にする関数 (`fixes`)、段階の表示に診断を足す関数 (`with_diagnostics`) を持つ。開発専用の crate で、各 crate の `tests/` からだけ使う。`src/` の `#[cfg(test)]` から使うと、テストする crate が2つ別々にリンクされて型が合わなくなる。同じ理由で `eml_types` の単体テストは `eml_cli::Session` も使えないので、`src/lib.rs` の `#[cfg(test)]` の関数 `test_program_with_files` が、読み込み、def_map、lower の段を直接つなぐ
-- `parse` は構文の段 (`eml_syntax::parse`) だけを呼び、feature によらない。ほかの組む関数は、メモリ上の `(パス, 本文)` の並びを読む `MemorySource` から `eml_cli::Session` を作り、対応するメソッドを呼ぶ薄い包みである。CLI と同じ経路で段階をつなぎ、同じ診断を集めるためである。結果の診断は、読み込みの段からその段階までのすべての診断である。`def_map` と `def_map_files` は、`DefMap` と、読み込みの段と def_map の段の診断を返す。`Lowered` と `Checked` は HIR の `Program` と `Session` を持ち、ファイルを `files()` と `file()` で出す。`SourceFiles` は Clone できないためである。`core` と `core_until` は、診断にエラーがないことを確かめて `Program` を返す。`eml run` と同じく、`main` がないこともエラーである。`run` は `compile` の結果を `eml_cli::execute` に渡し、手で書いた Core IR を受け取る `execute` と、`run_stats` も同じ関数を通す。`run_stats` は、出力と、`eml_interp::RunStats` か実行時エラーを返す。`run`、`run_files`、`execute` は `RunStats` を捨てる。`RunConfig` と出力の受け口は、`eml_test_support` の1か所で組み立てる。複数のファイルのテストには `*_files` の関数 (`lower_files`、`def_map_files`、`check_files`、`core_files`、`core_until_files`、`run_files`) を使う。入口の本文と、根からの相対パス (`Report/Csv.em`) と本文の組の並びを受け取る。1つのテキストの関数は、並びが空の `*_files` と同じ経路を通る。入口の表示のパスは `ENTRY_PATH` (`test.em`) である。標準ライブラリを差し替えたプログラムは、`lower_with_std` と `check_with_std` で変換する。標準ライブラリの並び (`(パス, 本文)`) を `Session::load_with_std` に渡し、標準ライブラリの中の item の扱いを確かめるテスト (`eml_hir` の `structure.rs`、`eml_types` の `modules.rs`) が使う。並びは `Prelude.em` と本物の `Fs.em` (または同じ extern の宣言を持つもの) を含める。extern の索引が両方を引き、足りなければ panic するためである
+- `crates/eml_test_support/` は、結合テストのためにパイプラインを組む関数 (`parse`、`def_map`、`lower`、`check`、`core_until`、`lir`、`lir_until`、`run`、`run_stats`、`execute`) と、診断のないことを確かめて組む関数 (`parse_clean`、`lower_clean`)、診断を文字列にする関数 (`short`、`short_text`、`full`) と fix を文字列にする関数 (`fixes`)、段階の表示に診断を足す関数 (`with_diagnostics`) を持つ。開発専用の crate で、各 crate の `tests/` からだけ使う。`src/` の `#[cfg(test)]` から使うと、テストする crate が2つ別々にリンクされて型が合わなくなる。同じ理由で `eml_types` の単体テストは `eml_cli::Session` も使えないので、`src/lib.rs` の `#[cfg(test)]` の関数 `test_program_with_files` が、読み込み、def_map、lower の段を直接つなぐ
+- `parse` は構文の段 (`eml_syntax::parse`) だけを呼び、feature によらない。ほかの組む関数は、メモリ上の `(パス, 本文)` の並びを読む `MemorySource` から `eml_cli::Session` を作り、対応するメソッドを呼ぶ薄い包みである。CLI と同じ経路で段階をつなぎ、同じ診断を集めるためである。結果の診断は、読み込みの段からその段階までのすべての診断である。`def_map` と `def_map_files` は、`DefMap` と、読み込みの段と def_map の段の診断を返す。`Lowered` と `Checked` は HIR の `Program` と `Session` を持ち、ファイルを `files()` と `file()` で出す。`SourceFiles` は Clone できないためである。`core_until`、`lir`、`lir_until` は、診断にエラーがないことを確かめて IR を返す。`core_until(text, eml_core_ir::Pass)` は Core IR を、`lir` は最終の LIR を、`lir_until(text, eml_lir::Pass)` は途中の LIR を返す。`eml run` と同じく、`main` がないこともエラーである。`run` は `compile` の結果を `eml_cli::execute` に渡し、手で書いた LIR を受け取る `execute` と、`run_stats` も同じ関数を通す。`run_stats` は、出力と、`eml_interp::RunStats` か実行時エラーを返す。`run`、`run_files`、`execute` は `RunStats` を捨てる。`RunConfig` と出力の受け口は、`eml_test_support` の1か所で組み立てる。複数のファイルのテストには `*_files` の関数 (`lower_files`、`def_map_files`、`check_files`、`core_until_files`、`lir_files`、`lir_until_files`、`run_files`) を使う。入口の本文と、根からの相対パス (`Report/Csv.em`) と本文の組の並びを受け取る。1つのテキストの関数は、並びが空の `*_files` と同じ経路を通る。入口の表示のパスは `ENTRY_PATH` (`test.em`) である。標準ライブラリを差し替えたプログラムは、`lower_with_std` と `check_with_std` で変換する。標準ライブラリの並び (`(パス, 本文)`) を `Session::load_with_std` に渡し、標準ライブラリの中の item の扱いを確かめるテスト (`eml_hir` の `structure.rs`、`eml_types` の `modules.rs`) が使う。並びは `Prelude.em` と本物の `Fs.em` (または同じ extern の宣言を持つもの) を含める。extern の索引が両方を引き、足りなければ panic するためである
 - 段階は feature (`hir` < `types` < `core` < `run`) で選ぶ。各 feature は `eml_cli` の同じ段階までの feature を有効にし、各 crate は自分の段階までを有効にする。下流の crate がまだ組み立たなくても、上流の段階のテストを流せるようにするためである。段階の API そのものを確かめるテストは、`eml_test_support` を通さずに段階の関数を直接呼ぶ。`eml_hir` の `load.rs` と `def_map.rs` の読み込みのテスト、`item_tree.rs` の `item_tree` を直接呼ぶテスト、`eml_types` の `scaling.rs`、`eml_core_ir` の `translate.rs` と `instances.rs` の入口を選ぶテスト、`instances.rs` のコンパイル時間のテストである
 - HIR と型のダンプは、Prelude だけでなく標準ライブラリのモジュールをすべて飛ばす。標準ライブラリの本文はダンプに加わらない。`println` などの extern の関数への参照は、普通の関数として表示する。ユーザーのモジュールの extern の宣言は、型、エフェクト、関数のどれも `extern` を付けて表示する (`extern data T`、`extern effect E`、`extern f : Int -> Int`)
 - `eml_hir` の結合テストが、`eml_extern` の表と `std/` を照らし合わせる。表のどの行も、`std/` の種類の合う extern の宣言か、instance の中の `extern` の行の、ちょうど1つから指されること、`std/` の extern の宣言と instance の `extern` の行がどれも1つの行を指すこと、シグネチャの矢印の数が行の引数の数と等しいこと、`Effectful` の行だけが最後の矢印の row に extern のエフェクトを持つことを確かめる。instance の `extern` の行のシグネチャは、クラスのメソッドのシグネチャである。埋め込んだ `eml_hir::STD` が `std/` のファイルと一致することも、同じ場所で確かめる
@@ -65,7 +65,8 @@
 | パーサ | `insta` で CST をダンプしたスナップショット。壊れた入力から回復できるかのケースを多めに用意する |
 | 名前解決と脱糖 | HIR の pretty printer で変換結果 (演算子の組み直しと脱糖を含む) をダンプしたスナップショット |
 | 型推論 | 推論したシグネチャ (Kind と row を含む) のスナップショット |
-| Core IR | Core IR の pretty printer で、`dup` / `decref` / `release` の位置を含めてダンプしたスナップショット |
+| Core IR | Core IR の pretty printer で、translate と EP の後をダンプしたスナップショット |
+| LIR | LIR の pretty printer で、`box` と `unbox`、`tail`、`dup` / `decref` / `release` の位置を含めてダンプしたスナップショット |
 | ランタイム | ヒープの単体テスト (確保と解放、世代番号による解放済みアクセスの検出、リークの数え方、長い連鎖の解放、不死の物体の数え方と数が 0 のときの誤り、文字列のその場の連結、`release_fields` の一意と共有の側と形の誤り、参照の数の書き込みの数え方、`take_or_copy` がクロージャだけを扱うこと、evidence と `evv` の物体の解放と種類ごとの数え方、evidence をクロージャのように写さないこと) |
 | 診断 | 表示した診断テキストのスナップショット |
 | 線形性 | 線形な値 (`once` の操作の `k` など) を1回でなく使う不正なプログラム (E3001) と、正しく通るべきプログラムの対 |
@@ -73,9 +74,9 @@
 | CLI | `eml run` / `eml check` の終了コードと引数の誤りを数件確認する |
 | RC | すべての実行テストで `debug_heap` を有効にする。違反があればテストを失敗させる |
 
-## Core IR のテキストの形
+## LIR のテキストの形
 
-テストは、Core IR を `eml_core_ir::pretty` の表示で確かめる。`eml_core_ir::parse` はこの表示を読んで `Program` に戻し、読み直した IR を表示すると、下の往復の項の条件のもとで元の表示と同じになる。手で書く IR のテストもこの形で書く。`pretty` は extern の呼び出しの位置を出さず、`pretty_with_positions` が出す。
+テストは、LIR を `eml_lir::pretty` の表示で確かめる。`eml_lir::parse` はこの表示を読んで `Program` に戻し、読み直した IR を表示すると、下の往復の項の条件のもとで元の表示と同じになる。手で書く IR のテストもこの形で書く。`pretty` は extern の呼び出しの位置を出さず、`pretty_with_positions` が出す。
 
 ```
 layout Prelude.Bool { False, True }
@@ -96,32 +97,44 @@ b3(t.3: int):
   - 同じ名前の配置が2つある (``layout `Option` is declared twice``)、`#` で始まる名前 (``a layout name cannot be `#N` ``)、形の違う組の配置 (``the tuple layout `(,)` must have one constructor `(,)` with 2 tobj fields``) は、`parse` が誤りにする。組の配置は、コンストラクタが1つで、その名前が配置と同じで、フィールドがカンマの数より1多く、すべて `tobj` でなければならない
   - 配置の行は、エフェクトの行より前に書く。エフェクトの行の後の配置の行は、関数の位置の誤り (``expected `fn` ``) になる
 - 配置の行の後に、エフェクトを、エフェクトの表の順に1行ずつ書く (`effect Counter { get(unit) -> int, put(int) -> unit }`、`effect Fail { never fail(tobj) -> never }`)。操作は、関数の引数と `ret` に合わせて、名前の後に引数の repr の並びと `->` と結果の repr を書く。再開しない操作には `never` を付け、結果を `never` と書く。`never` の操作が `never` 以外を返す形 (``a `never` operation returns `never` ``) と、ほかの操作が `never` を返す形 (``only a `never` operation returns `never` ``) は、`parse` が誤りにする。操作のないエフェクトは `effect E {}` と書く。extern のエフェクト (`IO`) はエフェクトの表に入らないので書かない。`parse` は、エフェクトにこの行の順で番号を振り、操作の引数と結果の repr と、操作が再開するかどうかを戻す。
-- 関数は `fn 名前(引数) -> repr { … }` と書く。`fn` の前に、内部の関数 (`CoreFn::internal`) なら `internal` を、yield しうる関数 (`CoreFn::yields`) なら `yields` を、in-place の入口の関数 (`CoreFn::clause`) なら `clause <エフェクト>.<操作>` を、この順に書く (`internal fn main$lambda0(..)`、`internal yields clause State.get fn g$entry(..)`)。repr は `obj`、`tobj`、`int`、`enum`、`unit` のどれかで、`->` の後の repr が `ret` である。関数の番号は `fn` を書いた順で、呼び出しは関数を名前で引くので、後で定義する関数も書ける。入口は `entry$main` という名前の関数で、なければ最初の関数である。文字列定数の表と、位置のパスの表 (`Program.files`) は、現れた順に作る。
-- 関数の名前が空のとき、または空白、`(`、`)`、`{`、`}`、`[`、`]`、`,`、`"`、`<`、`>` のどれかを含むとき、`pretty` はその名前を文字列と同じ逃がし方 (Rust の `{:?}`) で引用符で囲んで書く (`fn "f@[Int]"(x.0: int) -> int {`、`call "f@[Int]"(n.1)`)。lexer がこれらの文字で語を切るためである。単相化の instance の名前 (`map@[Int, String]`、row のビットを書いた `twice<e>`) と、instance のメソッドの関数の名前 (`Show Color.show`) がこれに当たる。関数の値は `&` の後に文字列を続ける (`&"f@[Int]"`)。`parse` は、関数の名前が来るすべての位置 (`fn` の見出し、`call`、`tail`、`closure`、`&`) で、語の代わりに文字列も読む。`apply`、`handle`、節のオペランドの関数の値も `&` の規則に従う
+- 関数は `fn 名前(引数) -> repr { … }` と書く。`fn` の前に、内部の関数 (`internal`) なら `internal` を、yield しうる関数 (`yields`) なら `yields` を、in-place の入口の関数 (`clause`) なら `clause <エフェクト>.<操作>` を、この順に書く (`internal fn main$lambda0(..)`、`internal yields clause State.get fn g$entry(..)`)。repr は `obj`、`tobj`、`int`、`enum`、`unit` のどれかで、`->` の後の repr が `ret` である。関数の番号は `fn` を書いた順で、呼び出しは関数を名前で引くので、後で定義する関数も書ける。入口は `entry$main` という名前の関数で、なければ最初の関数である。文字列定数の表と、位置のパスの表 (`Program.files`) は、現れた順に作る。
+- 関数の名前が空のとき、または空白、`(`、`)`、`{`、`}`、`[`、`]`、`,`、`"`、`<`、`>` のどれかを含むとき、`pretty` はその名前を文字列と同じ逃がし方 (Rust の `{:?}`) で引用符で囲んで書く (`fn "f@[Int]"(x.0: int) -> int {`、`call "f@[Int]"(n.1)`)。lexer がこれらの文字で語を切るためである。単相化の instance の名前 (`map@[Int, String]`、row のビットを書いた `twice<e>`) と、instance のメソッドの関数の名前 (`Show Color.show`) がこれに当たる。関数の値は `&` の後に文字列を続ける (`&"f@[Int]"`)。`parse` は、関数の名前が来るすべての位置 (`fn` の見出し、`call`、`tail`、`closure`、`&`) で、語の代わりに文字列も読む。`apply` と節のオペランドの関数の値も `&` の規則に従う
 - 入口のブロックにはラベルを付けない。ほかのブロックは `bN:` か `bN(引数):` の行で始め、`N` は入口を除いて書いた順に 1 から数える。順が違えば `parse` が誤りにする。`parse` は終端の後をラベルとして読み、行の字下げは読まない。`pretty` はラベルを行頭に、文と終端を2字下げて書く。
 - 変数は名前と番号を `.` でつないで書く (`x.0`)。束縛する位置 (関数とブロックの引数、`let`、`unpack` と case のフィールド) では `x.0: int` のように repr を付け、使う位置 (値、`dup`、`decref`、`release` の値と残すフィールド、`save`) には付けない。`parse` は最後の `.` の後を番号とする。名前は数字で始まらず、英数字、`_`、`$`、`'` からなる。番号の先頭に 0 は書かない。表示に現れない番号は、名前が空で repr が `unit` の変数で埋める。束縛のない変数も読み、repr を `unit` にする。見えない変数の使用は verifier が報告する。同じ番号を違う repr で束縛すると、`parse` が誤りにする。
 - 値は、変数、整数、`()`、タグ `#N`、関数の値 (`&` に関数の名前を続ける。`&main$lambda0`) で書く。
 - 命令は配置を名前で指す。入口のモジュールの型は修飾せず (`Option`)、ほかのモジュールの型は修飾する (`Prelude.Bool`)。表にある配置も表にない配置も `#N` (配置の番号) で書ける。`pretty` は表にある配置を名前で、表にない配置を `#N` で書くので、表にある配置を `#N` で書いた IR は、読み直すと名前で表示される。表にない番号は、誤りを含む IR を verifier に渡すテストのためにある。表にない名前 (``unknown layout `Optoin` ``) と、配置を書くべき所に名前も `#N` もない形 (``expected a layout, found `(` ``) は、`parse` が誤りにする。配置のない古い形 `con #1(x.1)` は、`#1` を表にない配置と読んだ後、``expected a tag `#N`, found `(` `` で誤りになる
 - 文は `let x.N: r = <右辺>`、`unpack v.N L #t(f.N: r, ..)`、`dup v.N`、`decref v.N` と書く (`unpack p.0 (,) #0(a.1: obj, b.2: obj)`)。`unpack` は、フィールドがなくても括弧を書く (`unpack p.0 Box #0()`)。verifier のテストで、フィールドのない `unpack` を書くためである。
 - `release` は `release p.0 (,) #0(a.1, _)` と書く。`unpack` と同じくタグとフィールドごとの項目を書き、項目は参照を引き継ぐ変数 (repr を付けない) か `_` である。すべて `_` の `release` (`release p.0 Box #0()` を含む) と、変数でも `_` でもない項目は、`parse` が誤りにする。
-- 右辺は、`call f(..)`、`apply c(..)`、`yields apply c(..)`、`clause E.op c(..)`、`perform E.op(..)`、`perform never E.op(..)`、`resume k(v, s)`、`handle E(init, body) { 節 } return r`、`closure f(..)`、`con L #t(..)`、`const ".."`、`extern X.y(..)`、`prim name[..](..)`、`drop a`、`box a`、`unbox a` のどれかである。
-- 印の立った `apply` (`Call::Apply::yields`) は `yields apply c.0(x.1)` と書く。`mask` があれば `mask [State] yields apply …` の順にする。
-- 基本操作は `prim` の後に名前と即値と引数を書く (`prim evv_get()`、`prim ev_lookup[State]()`、`prim ev_clause[State.get](e.2)`、`prim evv_mask[State, State](w.1)`)。即値は、エフェクトを持つ基本操作 (`ev_new`、`ev_lookup`) ならエフェクトを1つ、操作を持つ基本操作 (`ev_set_clause`、`ev_clause`) なら `エフェクト.操作` を、`evv_mask` ならエフェクトを1つ以上、`[…]` に書く。ほかの基本操作は即値を書かない。即値の形の誤り (``line 3: `ev_lookup` needs an immediate `[Effect]` ``、``line 3: `evv_get` takes no immediate``) と、表にない名前 (``unknown primitive `ev_frob` ``) は `parse` が誤りにする。エフェクトの表にない番号は、`mask` と同じく `#N` で書ける (`ev_new[#3]`、`ev_clause[State.#7]`)。表にないエフェクトの操作は名前で引けないので、操作も `#N` で書く (`ev_clause[#3.#0]`)。`evv_mask` の多重集合の順と番号は、`mask` と同じく verifier が確かめる。
-- 節の呼び出しは `clause State.get c.3(e.2, ())` と書く。括弧の中の先頭が evidence である。`clause` の前の `mask` は、`handle` と `perform` と同じく `parse` が誤りにする (`a mask is only on call, apply and resume`)。
+- 右辺は、`call f(..)`、`apply c(..)`、`yields apply c(..)`、`clause E.op c(..)`、`closure f(..)`、`con L #t(..)`、`const ".."`、`extern X.y(..)`、`prim name[..](..)`、`drop a`、`box a`、`unbox a` のどれかである。
+- 印の立った `apply` (`Call::Apply::yields`) は `yields apply c.0(x.1)` と書く。
+- 基本操作は `prim` の後に名前と即値と引数を書く (`prim evv_get()`、`prim ev_lookup[State]()`、`prim ev_clause[State.get](e.2)`、`prim evv_mask[State, State](w.1)`)。即値は、エフェクトを持つ基本操作 (`ev_new`、`ev_lookup`) ならエフェクトを1つ、操作を持つ基本操作 (`ev_set_clause`、`ev_clause`) なら `エフェクト.操作` を、`evv_mask` ならエフェクトを1つ以上、`[…]` に書く。ほかの基本操作は即値を書かない。即値の形の誤り (``line 3: `ev_lookup` needs an immediate `[Effect]` ``、``line 3: `evv_get` takes no immediate``) と、表にない名前 (``unknown primitive `ev_frob` ``) は `parse` が誤りにする。エフェクトの表にない番号は、`mask` と同じく `#N` で書ける (`ev_new[#3]`、`ev_clause[State.#7]`)。表にないエフェクトの操作は名前で引けないので、操作も `#N` で書く (`ev_clause[#3.#0]`)。`evv_mask` の多重集合の順と番号は verifier が確かめる。
+- 節の呼び出しは `clause State.get c.3(e.2, ())` と書く。括弧の中の先頭が evidence である。
 - `box` と `unbox` は、`drop` と同じく1つの値を読む (`let b.3: tobj = box n.2`、`let b.4: tobj = box 5`、`let n.2: int = unbox b.3`)。スカラーの種類は、`box` ではオペランドの repr から、`unbox` では束縛の repr から決まるので書かない。repr の誤りは `parse` でなく verifier が報告する。誤りを含む IR も読み戻して verifier に渡すためである。
 - 終端は、`return a`、`tail <呼び出し>`、`jump bN(..)`、`switch a L { .. }` (タグの case を持つとき) か `switch a { .. }` のどれかである。`jump` は、引数がなくても括弧を書く (`jump b1()`)。
 - `switch` は `switch o.0 Option { #0 -> b1, #1(n.2: tobj) -> b2 }` や `switch n.0 { 1 -> b1, 2 -> b2, _ -> b3 }` と書き、`String` の case は `"a" -> b1` と書く。タグの case を持つ `switch` は、scrutinee と `{` の間に配置を書く。リテラルの `switch` と、case のない `switch` には書かない。フィールドのない case は `#0` と書く。`#0()` も読むが、表示は `#0` になる。case の書き方で、読み直して表示が変わる形はこれだけである。case のない `switch` は `switch a {}` と書く。行き先のない `switch` は verifier が誤りにする。
-- `apply ()(…)` と `resume ()(…)` は、呼ばれる値が `()` の `apply` と `resume` である。誤りを含む IR の表示も読み戻すためである。
+- `apply ()(…)` は、呼ばれる値が `()` の `apply` である。誤りを含む IR の表示も読み戻すためである。
 - extern の呼び出しは `extern <正式な名前>(…)` と書く (`let t.2: unit = extern Prelude.println(s.1)`、`extern Prelude.+(a.0, b.1)`、`extern Std.Fs.open(p.0)`)。空白などを含む正式な名前は、関数の名前と同じ規則で引用符で囲む (`extern "Prelude.Eq Int.=="(a.0, b.1)`)。instance の `extern` の行の名前がこれに当たる。`parse` は `extern` の後でも、語の代わりに文字列を読む。`parse` は正式な名前を `eml_extern` の表で引き、引数はいくつでも読む。引数の数と、引数と結果の repr が表と合うかは verifier が確かめる。誤りを含む IR も読み戻して verifier に報告させるためである。位置は、呼び出しの後に `@"パス":行:列` と書く。
 - 文字列は `"` で囲み、エスケープ `\"`、`\'`、`\\`、`\n`、`\r`、`\t`、`\0`、`\u{…}` を読む。
-- `perform` は `perform <エフェクト名>.<操作名>(…)` と書く。エフェクトの名前は `.` を含みうるが、操作の名前は含まないので、`parse` は最後の `.` でエフェクトの名前と操作の名前に分ける (`perform Report.Csv.Parse.next(t.1)`)。再開しない操作の `perform` には `never` を付ける。`parse` は `never` を書いたとおりに読み、エフェクトの表と合うかは verifier が確かめる。
-- `handle` は `handle Ask(s.0, b.1) { ask: c.2 } return r.3` と書く。括弧の中は、状態の初期値と本体の関数である。節は `操作の名前: 値` をエフェクトの操作の順に並べ、節がなければ `{}` と書く。`resume` は `resume k.1(v.2, s.3)` と書き、括弧の中は値と次の状態である。
-- 呼び出しの `mask` は、`let` の右辺の呼び出しの前に、`mask [...]` で書く (`let t.2: tobj = mask [State] yields apply c.0(())`、`let t.3: tobj = mask [State] resume k.1(t.2, ())`、`let t.4: int = mask [Report.Csv.Parse] call f(c.0)`)。末尾呼び出しは `mask` を持たないので、`tail` の後の `mask` は `parse` が誤りにする (``line 3: expected a call, found `mask` ``)。エフェクトは先頭のエフェクトの行の名前で書き、入口のモジュールのエフェクトは修飾せず (`State`)、ほかのモジュールのエフェクトは修飾する (`Report.Csv.Parse`)。番号の順に並べ、飛ばす数だけ同じ名前を繰り返す (`mask [State, State]`)。エフェクトの表にない番号は、操作と同じく `#N` で書き、`pretty` も `#N` で表示する。並びの順は `parse` ではなく verifier が確かめる。`mask` のない呼び出しには何も書かない。`handle`、`perform`、`clause` の前の `mask` は、`parse` が誤りにする。
+- 末尾呼び出しの後には何も書かない。`tail` の後の `mask` は、ほかの未知の語と同じく `parse` が誤りにする (``line 3: expected a call, found `mask` ``)
 - Perceus の後の呼び出しは、後ろに `save [..]` を付ける (`let t.2: int = call f(c.0) save [c.0]`)。`saved` が空なら何も書かない。
-- 操作は名前のほかに `#N` (操作の番号) でも書ける。エフェクトにない番号も書けるので、誤りを含む IR を verifier に渡すテストに使う。`pretty` も、エフェクトにない番号の操作を `#N` で表示する。`handle` の中で `#N` と書いた節は、`N` がその節の 0 から数えた位置と同じでなければならない。
-- `parse` は構文だけを検査する。後ろ向きの `jump`、引数の数の誤り、見えない変数の使用などの不正な IR を書け、verifier のテストに使う。空の `mask []`、`evv_mask[]`、`save []`、末尾のカンマ、0 で始まる番号と整数、`-0` は誤りにする。どれも、読み直して表示すると表示が変わる形だからである。`tail` の後の `save` も誤りにする。
+- 操作は名前のほかに `#N` (操作の番号) でも書ける。エフェクトにない番号も書けるので、誤りを含む IR を verifier に渡すテストに使う。`pretty` も、エフェクトにない番号の操作を `#N` で表示する。
+- `parse` は構文だけを検査する。後ろ向きの `jump`、引数の数の誤り、見えない変数の使用などの不正な IR を書け、verifier のテストに使う。空の `evv_mask[]`、`save []`、末尾のカンマ、0 で始まる番号と整数、`-0` は誤りにする。どれも、読み直して表示すると表示が変わる形だからである。`tail` の後の `save` も誤りにする。
 - 往復 (pretty → parse → pretty) は、配置の名前が重ならない Program で同じテキストに戻る。
 - `parse` と `pretty` は、ブロックと文の並びをループでたどり、プログラムの大きさに比例して再帰しない。
+
+## Core IR のテキストの形
+
+Core IR のテキストは `eml_core_ir::pretty` が書き、`eml_core_ir::parse` が読む。文法は上の「LIR のテキストの形」から LIR だけの命令を除き、エフェクトの命令と `mask` を足したものである。2つの IR に共通する命令は同じ表示になる。字句解析と、アトム、Repr、配置、エフェクトの宣言、関数の名前の読み書きは、`eml_lir::syntax` の部品を共有する。そのため、EP の後の Core IR の表示は、それを写した LIR の表示と同じ文字列になる ([Core IR](../spec/core-ir.md) の「Core IR から LIR への変換」)。上の項目のうち、ここに書かないものは Core IR でも同じである。
+
+- `dup`、`decref`、`release`、`box`、`unbox`、`tail`、`save [..]` はない。終端は `return`、`jump`、`switch` のどれかで、ブロックが終端なしに終わると、`parse` は ``expected a statement; a block ends with return, jump or switch`` で誤りにする。テキストが終わったときは、その後に ``, found the end of the text`` が続く
+- 右辺は、LIR の右辺から `box` と `unbox` を除き、`perform E.op(..)`、`perform never E.op(..)`、`resume k(v, s)`、`handle E(init, body) { 節 } return r` を足したものである
+- `perform` は `perform <エフェクト名>.<操作名>(…)` と書く。エフェクトの名前は `.` を含みうるが、操作の名前は含まないので、`parse` は最後の `.` でエフェクトの名前と操作の名前に分ける (`perform Report.Csv.Parse.next(t.1)`)。再開しない操作の `perform` には `never` を付ける。`parse` は `never` を書いたとおりに読み、エフェクトの表と合うかは verifier が確かめる。
+- `handle` は `handle Ask(s.0, b.1) { ask: c.2 } return r.3` と書く。括弧の中は、状態の初期値と本体の関数である。節は `操作の名前: 値` をエフェクトの操作の順に並べ、節がなければ `{}` と書く。`resume` は `resume k.1(v.2, s.3)` と書き、括弧の中は値と次の状態である。
+- 呼び出しの `mask` は、`let` の右辺の呼び出しの前に、`mask [...]` で書く (`let t.2: tobj = mask [State] yields apply c.0(())`、`let t.3: tobj = mask [State] resume k.1(t.2, ())`、`let t.4: int = mask [Report.Csv.Parse] call f(c.0)`)。エフェクトは先頭のエフェクトの行の名前で書き、入口のモジュールのエフェクトは修飾せず (`State`)、ほかのモジュールのエフェクトは修飾する (`Report.Csv.Parse`)。番号の順に並べ、飛ばす数だけ同じ名前を繰り返す (`mask [State, State]`)。エフェクトの表にない番号は、操作と同じく `#N` で書き、`pretty` も `#N` で表示する。並びの順は `parse` ではなく verifier が確かめる。`mask` のない呼び出しには何も書かない。`handle`、`perform`、`clause` の前の `mask` は、`parse` が誤りにする。
+- 印の立った `apply` に `mask` があれば、`mask [State] yields apply …` の順に書く。`handle`、`perform`、`clause` の前の `mask` の誤りの文言は `a mask is only on call, apply and resume` である
+- `resume ()(…)` は、呼ばれる値が `()` の `resume` である。`handle` と節のオペランドの関数の値も、`&` の規則に従う。`handle` の中で `#N` と書いた節は、`N` がその節の 0 から数えた位置と同じでなければならない
+- 空の `mask []` は誤りにする。読み直して表示すると表示が変わる形だからである
+- 相手の IR にしかない命令の語は、ほかの未知の語と同じ形の誤りになる。Core IR では ``expected a statement, found `tail` ``、``expected a right-hand side, found `box` ``、``expected a statement, found `save` `` など、LIR では ``expected a right-hand side, found `perform` ``、``expected a right-hand side, found `mask` `` などである
 
 ## UI テスト
 
@@ -159,7 +172,7 @@ b3(t.3: int):
 `crates/eml_cli/tests/citations.rs` は、コメントと文書の引用を2つ確かめる。走査するのは `crates`、`docs`、`tests`、`std` である。標準ライブラリの `.em` のコメントも、`docs/…` の見出しを引ける。
 
 - `docs/…/ファイル.md の「見出し」` の形の引用と、Markdown のリンクの直後に `の「見出し」` を続けた引用は、行き先のファイルにその見出しがある。照合では空白を無視するので、引用を折り返してもよい
-- 文書の Markdown のリンクの行き先がある。コード片とコードブロックの中は見ない。Core IR のテキストの `prim ev_clause[State.get](e.2)` のように、リンクと同じ `](` を含むためである。閉じないコードブロックと、行の中で閉じないコード片は誤りにする。どちらも後ろのリンクを知らないうちに見落とすためで、文書ではコード片を行をまたがずに書く
+- 文書の Markdown のリンクの行き先がある。コード片とコードブロックの中は見ない。IR のテキストの `prim ev_clause[State.get](e.2)` のように、リンクと同じ `](` を含むためである。閉じないコードブロックと、行の中で閉じないコード片は誤りにする。どちらも後ろのリンクを知らないうちに見落とすためで、文書ではコード片を行をまたがずに書く
 
 見出しのない引用 (`(docs/spec/core-ir.md)` など) は検査できない。節を移すときは、そのファイルを引くコメントを grep し、移した内容に頼っているものを直す。`docs/superpowers` は作業中の設計と計画なので、検査から外す。
 
@@ -179,7 +192,7 @@ b3(t.3: int):
 
 `crates/eml_interp/tests/bench.rs` は、基準のプログラム (リポジトリの `bench/`) を `debug_heap` 付きで走らせ、出力を確かめ、`RunStats` の全項目をインラインスナップショットで固定する。プログラムごとに1つのテストにして、並列に走らせる。`bench/` のファイルの一覧とテストのプログラムの一覧が一致することも確かめる。回数は決定的なので、段の前後の回数はこのスナップショットの差分で残る。回数を変える変更は、その段の spec に期待値の変更として書く。プログラムの中身と命令の数の測り方は [計測の基準](benchmarks.md) にある。
 
-`SourceFiles::line_col` の表のテスト (`eml_diagnostics` の `source.rs`)、verifier の大きな IR のテスト (`eml_core_ir` の `tests/verify.rs` の、長い `switch` の連鎖、借りたフィールドへの長い `switch` の連鎖、長い文の `if` の列、1つのブロックに深さの違う辺が多く合流する形)、T3 の時間のテスト (`eml_core_ir` の `tests/boxing.rs` の、N = 30,000 の関数の鎖を IR のテキストで作り、`boxing` の時間だけを測るテスト) は、数えられる仕事の回数がないので時間を測る。2乗の実装だけが超える緩い上限 (5 秒と 10 秒) を置き、`#[ignore]` を付けずに debug ビルドのふだんの `cargo test` で流す。
+`SourceFiles::line_col` の表のテスト (`eml_diagnostics` の `source.rs`)、verifier の大きな IR のテスト (`eml_lir` の `tests/verify.rs` の、長い `switch` の連鎖、借りたフィールドへの長い `switch` の連鎖、1つのブロックに深さの違う辺が多く合流する形と、`eml_core_ir` の `tests/verify.rs` の、長い文の `if` の列)、T3 の時間のテスト (`eml_lir` の `tests/boxing.rs` の、N = 30,000 の関数の鎖を IR のテキストで作り、`boxing` の時間だけを測るテスト) は、数えられる仕事の回数がないので時間を測る。2乗の実装だけが超える緩い上限 (5 秒と 10 秒) を置き、`#[ignore]` を付けずに debug ビルドのふだんの `cargo test` で流す。
 
 ## feature の組み合わせの確認
 

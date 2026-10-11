@@ -5,12 +5,12 @@
 //! 段は2つある。translate の直後は、EP が作る基本操作、節の呼び出し、`clause` の印がまだないことと、エフェクトの
 //! 命令の形 (`mask` の順、`handle` の節の数、再開できるかどうか) を確かめる (`verify_translated`)。EP の後は、
 //! `handle`、`perform`、`resume`、`mask` が残っていないことと、基本操作と節の呼び出しの形を確かめる
-//! (`verify_evidence`)。段の分け方は docs/superpowers/specs/2026-10-11-s8a-lir-design.md の「verifier の段」による。
+//! (`verify_evidence`)。段の分け方は docs/spec/core-ir.md の「verifier」による。
 //! LIR の verifier と共有する部品は `eml_lir::check` にある。
 //!
 //! R9 は、`con`、タグの `switch`、`unpack` を、その命令が指す配置と比べる。配置を持つ `switch` はタグの case を
 //! 持つものだけで、リテラルの `switch` では scrutinee の Repr を比べる。値がどの配置で作られたかは追わない。それを
-//! 保証するのは translate の型なので、配置の違う値を読む IR もこの検査を通りうる (docs/spec/core-ir.md の
+//! 保証するのは translate の型なので、配置の違う値を読む IR もこの検査を通りうる (docs/spec/lir.md の
 //! 「データの配置」)。
 //!
 //! 辺の検査、支配木、本体の検査は、それぞれブロックを番号の順に1回たどるだけで、反復も生存解析も使わない。辺は
@@ -195,7 +195,7 @@ impl<'a> Checker<'a> {
 
     /// `clause` の印の関数の値 (`&g` と `closure g(..)` の変数) は、`ev_set_clause` の2つ目の引数にだけ使える。入口の
     /// 関数は操作の ABI で呼ばれ、`apply` の一様な規約に合わないためである
-    /// (docs/spec/core-ir.md の「入口の関数の印」)。変数は1回だけ
+    /// (docs/spec/lir.md の「入口の関数の印」)。変数は1回だけ
     /// 定義されるので (R5)、先に `closure` をすべて集めてから使いを見る。
     fn clause_values(&self) -> Result<(), String> {
         let blocks = &self.function.blocks;
@@ -527,7 +527,7 @@ impl<'a> Checker<'a> {
         self.use_all(|f| rhs.for_each_atom(f))
     }
 
-    /// 呼び出しは、形を確かめた後に範囲を確かめる (docs/spec/core-ir.md の「verifier」)。
+    /// 呼び出しは、形を確かめた後に範囲を確かめる (docs/spec/lir.md の「verifier」)。
     fn check_call(&self, call: &Call) -> Result<(), String> {
         // EP は `handle`、`perform`、`resume` を基本操作と節の呼び出しに置き換える
         // (docs/spec/core-ir.md の「verifier」)

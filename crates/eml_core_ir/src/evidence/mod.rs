@@ -160,7 +160,7 @@ fn yield_switch(yielding: VarId, fast: BlockId, slow: BlockId) -> Term {
 }
 
 /// yield 中に返すダミーの値。呼び出し元は使わずに捨てる。`tobj` にも物体を使うのは、互換の位置を通って `obj` の
-/// 変数に入ることがあるためである (docs/spec/core-ir.md の「ダミーの値」)。
+/// 変数に入ることがあるためである (docs/spec/lir.md の「ダミーの値」)。
 /// `bind` は物体を作る `let` を置き、その変数を返す。
 fn dummy(ret: Repr, bind: impl FnOnce(VarInfo, Rhs) -> VarId) -> Atom {
     match ret {

@@ -1,5 +1,5 @@
 //! テストで LIR を確かめるための表示。`text.rs` の `parse` が同じ形を読む
-//! (docs/implementation/testing.md の「Core IR のテキストの形」)。ブロックの列も文の列も平らなので、ループだけで書く。
+//! (docs/implementation/testing.md の「LIR のテキストの形」)。ブロックの列も文の列も平らなので、ループだけで書く。
 //! 2つの IR に共通する形は `syntax` の部品で書き、ここは命令の列だけを書く。
 
 use std::fmt::Write;

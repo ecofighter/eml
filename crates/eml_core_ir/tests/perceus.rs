@@ -1,4 +1,4 @@
-//! Perceus の `dup` / `decref` / `release` の位置と、呼び出しの `saved` (docs/spec/core-ir.md の「パス」)。ソースから
+//! Perceus の `dup` / `decref` / `release` の位置と、呼び出しの `saved` (docs/spec/lir.md の「Perceus」)。ソースから
 //! パイプラインを通した結果を見る。手で書いた LIR を入力にするテストと生存解析のテストは、`eml_lir` の
 //! tests/perceus.rs にある。
 

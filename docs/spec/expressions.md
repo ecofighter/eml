@@ -138,7 +138,7 @@ main () =
 - 穴の式の型 `a` には、`display` の参照が `Show a` の制約を付ける。instance がなければ E2006、型が決まらなければ E2009 になる。どちらもほかのメソッドと同じ文言で、`display` の名前が出る (「`display` requires `Show Foo`」、「cannot decide which instance of `Show` to use for `display`」)。`display` は補間の意味としてこの文書に書くメソッドなので、補間のための文言は足さない
 - 多相の穴も instance で決まる。上の `wrap "hi"` は `<hi>` になる。穴の型を見て `show` を呼ぶかを決める方式では、同じ値でも書いた位置の型で表示が変わる。`display` を呼ぶ方式では、そうならない
 - 穴は左から評価する。関数適用の引数と同じ方針である (上の「関数適用」)。穴の値は `display` に渡して消費する。線形性と持ち越し規則の検査も、穴を左から順にたどる
-- HIR は各穴を `display e` の呼び出しにし、本文と穴の並びとして持つ。呼び出しの範囲は `\{…}` の全体である。`++` の呼び出しにまで脱糖しないのは、連結を Core IR への変換がまとめて組むためである ([Core IR とインタプリタ](core-ir.md) の「変換の規則」)
+- HIR は各穴を `display e` の呼び出しにし、本文と穴の並びとして持つ。呼び出しの範囲は `\{…}` の全体である。`++` の呼び出しにまで脱糖しないのは、連結を Core IR への変換がまとめて組むためである ([Core IR](core-ir.md) の「変換の規則」)
 
 ## 演算子の列と単項マイナス
 
@@ -223,7 +223,7 @@ with_log path action =
      | return x -> fn f -> ...) (Fs.open path)
   ```
 
-  脱糖しないのは、状態を handler の実行ごとの evidence に置くと、`| get () k st -> k st st` のような節がすぐに再開する形のまま残るためである。evidence passing は、そうした節を継続を作らずにその場で実行する ([Core IR とインタプリタ](core-ir.md) の「`perform` と節の3つの形」)
+  脱糖しないのは、状態を handler の実行ごとの evidence に置くと、`| get () k st -> k st st` のような節がすぐに再開する形のまま残るためである。evidence passing は、そうした節を継続を作らずにその場で実行する ([Core IR](core-ir.md) の「`perform` と節の3つの形」)
 - `return` の節を省略したら、`| return x _ -> x` とみなす。状態を `_` で捨てるので、状態の型に `Unr` の制約が付く。`Lin` の状態で省くと E3004 になり、`from` の初期値を指す。`Lin` の状態では `return` の節を書く
 - 状態の線形性の規則は [線形性](linearity.md) の「パラメータ付き handler の状態」で定める
 - `k` の引数の個数の誤りは、普通の関数適用の誤り (E2001 など) として型検査が報告する。状態のない handler の `k` は1引数、状態のある handler の `k` は2引数の関数である ([エフェクトと handler](effects.md) の「パラメータ付き handler」)

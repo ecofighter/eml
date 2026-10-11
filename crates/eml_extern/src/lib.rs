@@ -14,7 +14,7 @@ pub enum Linearity {
     Lin,
 }
 
-/// 関数を呼んだときに起こりうること。縮約のパスは `Pure` の呼び出しだけを、使われなければ消す (docs/spec/core-ir.md の「縮約」)。
+/// 関数を呼んだときに起こりうること。縮約のパスは `Pure` の呼び出しだけを、使われなければ消す (docs/spec/lir.md の「縮約」)。
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Purity {
     Pure,
@@ -24,7 +24,7 @@ pub enum Purity {
     Effectful,
 }
 
-/// 値の表現。Core IR の変数と extern の行が持ち、RC の対象かどうかもここから決まる (docs/spec/core-ir.md)。
+/// 値の表現。IR の変数と extern の行が持ち、RC の対象かどうかもここから決まる (docs/spec/lir.md)。
 /// extern の行が持つので、依存のないこの crate に置き、`eml_core_ir` が再公開する。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Repr {
@@ -41,7 +41,7 @@ pub enum Repr {
 impl Repr {
     /// 箱を要するスカラー。`tobj` の位置との間で `box` と `unbox` を要する。`unit` は命令なしで `tobj` と行き来する
     /// ので入らない。規則と verifier の文言はこの1つの定義から作るので、後の `Float` の Repr もここに足す
-    /// (docs/spec/core-ir.md の「値の表現」)。
+    /// (docs/spec/lir.md の「値の表現」)。
     pub const BOXED_SCALARS: [Repr; 2] = [Repr::Int, Repr::Enum];
 
     pub fn is_rc(self) -> bool {
@@ -56,7 +56,7 @@ impl Repr {
     }
 
     /// 互換の位置で、命令なしで値を渡せる2つの Repr。同じ Repr、参照どうし、`unit` と `tobj` である。推移的でない
-    /// (`unit` と `obj` は互換でない) ので、どの検査も実際の2つの位置を比べる (docs/spec/core-ir.md の「値の表現」)。
+    /// (`unit` と `obj` は互換でない) ので、どの検査も実際の2つの位置を比べる (docs/spec/lir.md の「値の表現」)。
     pub fn compatible(self, other: Repr) -> bool {
         self == other
             || (self.is_rc() && other.is_rc())
@@ -66,7 +66,7 @@ impl Repr {
             )
     }
 
-    /// テキストの形での名前 (docs/implementation/testing.md の「Core IR のテキストの形」)。
+    /// テキストの形での名前 (docs/implementation/testing.md の「LIR のテキストの形」)。
     pub fn name(self) -> &'static str {
         match self {
             Repr::Obj => "obj",
@@ -180,7 +180,7 @@ pub struct FunctionRow {
     pub params: &'static [Repr],
     /// 結果の Repr。データを返す行は、比べる extern の `Bool`、`compare` の `Ordering`、`Std.Fs.read_all` の組である。
     /// `Bool` と `Ordering` のタグは決まっていて、組の配置は大きさだけで決まるので、行は配置を持たない
-    /// (docs/spec/core-ir.md の「データの配置」)。
+    /// (docs/spec/core-ir.md の「translate の配置」)。
     pub ret: Repr,
     pub purity: Purity,
 }

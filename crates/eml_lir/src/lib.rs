@@ -1,4 +1,4 @@
-//! LIR (docs/spec/core-ir.md)。EP の後の Core IR から写す、エフェクトの命令を持たない層で、box、RC、末尾呼び出しを
+//! LIR (docs/spec/lir.md)。EP の後の Core IR から写す、エフェクトの命令を持たない層で、box、RC、末尾呼び出しを
 //! 明示する。VM とネイティブの共通の入力になる。
 
 use std::fmt;
@@ -36,7 +36,7 @@ pub struct Program {
     /// 物体を1つ作り、`ConstString` はその物体の参照を1つ作る (docs/spec/runtime.md の「不死の物体」)。
     pub strings: Vec<String>,
     /// データの配置の表。`con`、`switch`、`unpack`、`release` が `LayoutId` で引く。translate は最初に使った順に入れる
-    /// (docs/spec/core-ir.md の「データの配置」)。
+    /// (docs/spec/core-ir.md の「translate の配置」)。
     pub layouts: Vec<Layout>,
     /// エフェクトの表。添字は `Call::Clause` と基本操作の即値のエフェクトの番号で、HIR の `EffectId` の添字と同じで
     /// ある。
@@ -61,14 +61,14 @@ pub struct LirFn {
     pub name: String,
     /// translate が定義の中から作る関数 (ラムダ、節、handle の本体) と、translate が作る補助の関数 (`op$`、`con$`、
     /// `$externN`、`cont$`、`cont$state`)。直接呼ぶのは、それを作った定義の中だけである。トップレベルの関数と入口の
-    /// 関数は内部の関数でない。テキストの形では `internal fn` と書く (docs/spec/core-ir.md)。
+    /// 関数は内部の関数でない。テキストの形では `internal fn` と書く (docs/spec/lir.md)。
     pub internal: bool,
     /// 本体が yield しうる (docs/spec/core-ir.md の「`yields` の印」)。
     /// テキストの形では `internal` の後に `yields fn` と書く。
     pub yields: bool,
     /// in-place の入口の関数が受け持つ (エフェクト, 操作)。捕獲の後に evidence と操作の引数を受け、操作の結果を
     /// 返す。`ev_set_clause` に渡す値としてだけ参照される。テキストの形では `yields` の後に `clause E.op fn` と書く
-    /// (docs/spec/core-ir.md の「入口の関数の印」)。
+    /// (docs/spec/lir.md の「入口の関数の印」)。
     pub clause: Option<(u32, u32)>,
     pub vars: Vec<VarInfo>,
     /// 直接の呼び出しの結果の Repr。
@@ -106,7 +106,7 @@ pub enum Stmt {
     },
     /// コンストラクタが1つの型の値を分解する。行き先が「ブロックの残り」である1つの case の `switch` と同じ意味で、
     /// フィールドは `Case` のフィールドと同じ規則で束縛する。`ctor` の配置は、コンストラクタが1つで Repr が `obj`
-    /// である (docs/spec/core-ir.md の「構造の規則」の R9)。
+    /// である (docs/spec/lir.md の「構造の規則」の R9)。
     Unpack {
         value: VarId,
         ctor: Ctor,
@@ -116,7 +116,7 @@ pub enum Stmt {
     Decref(VarId),
     /// `release x L #t(p1, .., pn)`。Perceus だけが入れる RC の命令である。分解した値 `x` の参照を1つ手放し、名前を
     /// 書いた位置の変数が、そのフィールドの参照を1つずつ受け取る。`None` は残さない位置である
-    /// (docs/spec/core-ir.md)。
+    /// (docs/spec/lir.md)。
     Release {
         value: VarId,
         ctor: Ctor,
@@ -152,7 +152,7 @@ impl Stmt {
     }
 
     /// 値の使いのうち、参照を1つ受け取る「消費」。`unpack` と `unbox` の値は読むだけなので数えない
-    /// (docs/spec/core-ir.md)。
+    /// (docs/spec/lir.md)。
     pub fn for_each_consumed(&self, f: impl FnMut(Atom)) {
         match self {
             Stmt::Let { var: _, rhs } => rhs.for_each_consumed(f),
@@ -173,7 +173,7 @@ pub enum Term {
         args: Vec<Atom>,
     },
     /// 合う case がなければ `default` に進む。行き先は引数を持たない。`layout` は、タグの case を持つ `switch` だけが
-    /// 持つ (docs/spec/core-ir.md)。
+    /// 持つ (docs/spec/lir.md)。
     Switch {
         scrutinee: Atom,
         layout: Option<LayoutId>,
@@ -233,7 +233,7 @@ impl Term {
     }
 
     /// 値の使いのうち、参照を1つ受け取る「消費」。`switch` の scrutinee は読むだけなので数えない
-    /// (docs/spec/core-ir.md)。
+    /// (docs/spec/lir.md)。
     pub fn for_each_consumed(&self, f: impl FnMut(Atom)) {
         if !matches!(self, Term::Switch { .. }) {
             self.for_each_atom(f);
@@ -258,12 +258,12 @@ impl Term {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Rhs {
     /// `saved` は、呼び出しの後で生きている変数から結果の変数を除いたもので、Perceus が埋める
-    /// (docs/spec/core-ir.md)。
+    /// (docs/spec/lir.md)。
     Call { call: Call, saved: Vec<VarId> },
     /// 関数と先頭の引数の並びからクロージャを作る。ラムダの捕獲と部分適用は、どちらもこの形になる。
     MakeClosure(FnIdx, Vec<Atom>),
     /// extern の関数をその場で実行する。eml のコードを呼び返さず、継続のフレームも積まない。`at` を持つ呼び出しが
-    /// 起こした実行時エラーには、その位置を付ける (docs/spec/core-ir.md)。
+    /// 起こした実行時エラーには、その位置を付ける (docs/spec/lir.md)。
     Extern {
         ext: Extern,
         args: Vec<Atom>,
@@ -273,18 +273,18 @@ pub enum Rhs {
     /// (docs/spec/runtime.md)。
     ConstString(u32),
     /// 引数を持つコンストラクタの値を作る。`args` の所有権は値に移る。引数のないコンストラクタの値は `Atom::Tag` で
-    /// ある (docs/spec/core-ir.md)。
+    /// ある (docs/spec/lir.md)。
     Con { ctor: Ctor, args: Vec<Atom> },
     /// 値の所有権を受け取って捨てる。値は `()` である。
     Drop(Atom),
     /// 箱を要するスカラー (`Repr::BOXED_SCALARS`) の値か `Int` の定数を、`tobj` の値にする。オペランドを消費し、所有
-    /// した `tobj` を作る。スカラーの種類はオペランドの Repr で決まる (docs/spec/core-ir.md の「値の表現」)。
+    /// した `tobj` を作る。スカラーの種類はオペランドの Repr で決まる (docs/spec/lir.md の「値の表現」)。
     Box(Atom),
     /// `tobj` の値から、箱を要するスカラーを取り出す。`switch` の scrutinee と同じく値を読むだけで、所有権を受け取ら
     /// ない。スカラーの種類は束縛する変数の Repr で決まる。
     Unbox(Atom),
     /// evidence passing の基本操作。extern と同じく引数をすべて消費し、所有した結果を定義する
-    /// (docs/spec/core-ir.md の「基本操作」)。
+    /// (docs/spec/lir.md の「基本操作」)。
     Prim(Prim, Vec<Atom>),
 }
 
@@ -306,7 +306,7 @@ impl Rhs {
         }
     }
 
-    /// 値の使いのうち、参照を1つ受け取る「消費」。`unbox` の値は読むだけなので数えない (docs/spec/core-ir.md)。
+    /// 値の使いのうち、参照を1つ受け取る「消費」。`unbox` の値は読むだけなので数えない (docs/spec/lir.md)。
     pub fn for_each_consumed(&self, f: impl FnMut(Atom)) {
         if !matches!(self, Rhs::Unbox(_)) {
             self.for_each_atom(f);
@@ -345,7 +345,7 @@ pub enum Call {
     },
     /// 操作の in-place の入口のクロージャ `callee` を呼ぶ。`args` の先頭は evidence (`obj`)、残りは操作の引数で、
     /// 引数と結果の Repr は操作の表の `params` と `ret` から取る。`mask` は持たない
-    /// (docs/spec/core-ir.md の「節の呼び出し」)。
+    /// (docs/spec/lir.md の「節の呼び出し」)。
     Clause {
         effect: u32,
         op: u32,
@@ -407,7 +407,7 @@ pub struct Ctor {
     pub tag: u32,
 }
 
-/// data の型1つか、タプルの要素の数1つの配置 (docs/spec/core-ir.md の「データの配置」)。
+/// data の型1つか、タプルの要素の数1つの配置 (docs/spec/lir.md の「データの配置」)。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Layout {
     /// テキストの形で引く名前。関数と同じく、入口以外のモジュールの型は修飾する (`Prelude.Bool`)。タプルは `(,)`。
@@ -457,8 +457,8 @@ pub struct EffectInfo {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OperationInfo {
     pub name: String,
-    /// 操作の引数の Repr。型変数は `tobj` にする (docs/spec/core-ir.md の
-    /// 「エフェクトの位置」)。verifier は長さで節の関数の引数の数を確かめる (docs/spec/core-ir.md)。
+    /// 操作の引数の Repr。型変数は `tobj` にする (docs/spec/lir.md の
+    /// 「エフェクトの位置」)。verifier は長さで節の関数の引数の数を確かめる (docs/spec/lir.md)。
     pub params: Vec<Repr>,
     pub ret: OpRet,
     /// `never` の操作は再開しないので、継続を作らずに捨てる (docs/spec/effects.md)。
@@ -547,7 +547,7 @@ impl Atom {
 
     /// 互換の位置 (`jump`、`return`、呼び出しのオペランド、`closure` の引数、`tobj` のフィールド) に、命令なしで
     /// 収まる値。変数は Repr が互換なときに収まる。定数は `fits` に加えて、`()` が `tobj` にも収まる。`Int` の定数は
-    /// `tobj` に収まらないので、box の挿入が `box` する (docs/spec/core-ir.md の「値の表現」)。box の挿入と verifier が
+    /// `tobj` に収まらないので、box の挿入が `box` する (docs/spec/lir.md の「値の表現」)。box の挿入と verifier が
     /// 同じ規則で位置を比べるように、ここで1回だけ定義する。
     pub fn fits_compatible(self, vars: &[VarInfo], expected: Repr) -> bool {
         match self {

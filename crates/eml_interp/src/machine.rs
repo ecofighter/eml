@@ -155,9 +155,9 @@ impl<'p> Machine<'p> {
     }
 
     /// `switch` の1つの case と同じく、値を読むだけで分解する。参照の数は変えず、フィールドは値から借りて始まる
-    /// (docs/spec/core-ir.md)。機械は配置の表を読まず、タグだけを使う。タグと数の検査は内部の誤りの見張りで、
+    /// (docs/spec/lir.md)。機械は配置の表を読まず、タグだけを使う。タグと数の検査は内部の誤りの見張りで、
     /// verifier の R9 は値を作った配置を追わないので、verifier を通った IR でも起きうる。`switch` の case と
-    /// `release` の見張りも同じである (docs/spec/core-ir.md の「インタプリタ (CEK 機械)」)。
+    /// `release` の見張りも同じである (docs/spec/lir.md の「インタプリタ (CEK 機械)」)。
     fn unpack(&mut self, value: VarId, tag: u32, fields: &[VarId]) -> Result<(), Fault> {
         let Value::Obj(obj) = self.env.read(value)? else {
             return Err(Fault::Internal(
@@ -188,7 +188,7 @@ impl<'p> Machine<'p> {
     }
 
     /// 分解した値の参照を1つ手放し、名前を書いた位置のフィールドの参照を1つずつ受け取る。フィールドの値は変数に
-    /// 入っているので、ここでは参照の数だけを動かす (docs/spec/core-ir.md)。
+    /// 入っているので、ここでは参照の数だけを動かす (docs/spec/lir.md)。
     fn release(&mut self, value: VarId, tag: u32, fields: &[Option<VarId>]) -> Result<(), Fault> {
         let Value::Obj(obj) = self.env.read(value)? else {
             return Err(Fault::Internal(
@@ -216,12 +216,12 @@ impl<'p> Machine<'p> {
                 self.transfer(transfer)
             }
             // 呼び出し元のフレームを積まない。verifier が、この時点で所有している参照が残っていないことを保証するので、
-            // 今の環境はそのまま捨ててよい (docs/spec/core-ir.md)
+            // 今の環境はそのまま捨ててよい (docs/spec/lir.md)
             Term::TailCall(call) => {
                 let transfer = self.rt.call(call, &self.env)?;
                 self.transfer(transfer)
             }
-            // 並列な代入。実引数をすべて読んでから、行き先の引数に書く (docs/spec/core-ir.md)
+            // 並列な代入。実引数をすべて読んでから、行き先の引数に書く (docs/spec/lir.md)
             Term::Jump { target, args } => {
                 let values = self.env.atoms(args)?;
                 let params = &self.program.function(self.function).block(*target).params;
@@ -316,7 +316,7 @@ impl<'p> Machine<'p> {
 }
 
 /// 戻りのフレームの再開の番地。呼び出しの文のブロックを上位の32ビットに、文の番号を下位の32ビットに入れる。
-/// `eml_runtime` は番地の中身を解釈しない (docs/implementation/architecture.md の「`eml_core_ir`、`eml_runtime`、
+/// `eml_runtime` は番地の中身を解釈しない (docs/implementation/architecture.md の「`eml_core_ir`、`eml_lir`、`eml_runtime`、
 /// `eml_interp` の内部」)。
 fn resume_address(block: BlockId, stmt: usize) -> u64 {
     let stmt = u32::try_from(stmt).expect("a block has fewer than 2^32 statements");
@@ -332,9 +332,9 @@ fn resume_point(address: u64) -> (BlockId, usize) {
 
 /// `box` と `unbox` の値。`Value` は自分の種類を持つので、スカラーのまま渡す。ヒープの物体はスカラーを入れた値に
 /// ならない。R9 は値を作った配置を追わないので、verifier を通った IR でも `tobj` に入ったヒープの物体を `unbox`
-/// しうる。機械は Repr を読まずにそれを見つける (docs/spec/core-ir.md の「インタプリタ (CEK 機械)」)。yield 中に
+/// しうる。機械は Repr を読まずにそれを見つける (docs/spec/lir.md の「インタプリタ (CEK 機械)」)。yield 中に
 /// 返るダミーは、呼び出しの直後の変換に当たっても誤りにせず、そのまま通す。その値は捨てられる
-/// (docs/spec/core-ir.md の「ダミーの値」)。
+/// (docs/spec/lir.md の「ダミーの値」)。
 fn scalar(value: Value, what: &'static str) -> Result<Value, Fault> {
     match value {
         Value::Obj(_) => Err(Fault::Internal(what)),

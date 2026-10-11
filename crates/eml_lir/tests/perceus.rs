@@ -1,4 +1,4 @@
-//! 生存解析と Perceus の `dup` / `decref` / `release` の位置、呼び出しの `saved` (docs/spec/core-ir.md の「パス」)。
+//! 生存解析と Perceus の `dup` / `decref` / `release` の位置、呼び出しの `saved` (docs/spec/lir.md の「Perceus」)。
 //! IR のテキストを入力にするテストは、入力が scope の段の verifier を、出力が所有の段の verifier を通ることも
 //! 確かめる。ソースからパイプラインを通すテストは `eml_core_ir` の tests/perceus.rs にある。
 
@@ -505,7 +505,7 @@ fn twenty_thousand_conditions_are_rewritten() {
 #[test]
 fn a_target_dups_the_fields_of_a_live_scrutinee_before_it_decrefs_a_dead_value() {
     // `o` がまだ生きているので、そのフィールドを複製する。順は入口の順で、死んだ `y` の `decref` より先になる
-    // (docs/spec/core-ir.md の「Perceus」)
+    // (docs/spec/lir.md の「Perceus」)
     let text = "\
 layout Option { None, Some(tobj) }
 layout (,) { (,)(tobj, tobj) }

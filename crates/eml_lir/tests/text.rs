@@ -1,4 +1,4 @@
-//! LIR のテキストの形 (docs/implementation/testing.md の「Core IR のテキストの形」)。`parse` が読んだものを
+//! LIR のテキストの形 (docs/implementation/testing.md の「LIR のテキストの形」)。`parse` が読んだものを
 //! `pretty` で表示すると元のテキストに戻ることと、構文の誤りの報告を確かめる。
 
 use eml_lir::{Atom, CasePattern, Ctor, FnIdx, LayoutId, OpRet, Prim, VarId};
@@ -435,7 +435,7 @@ fn g(x.0: int, y.1: int) -> int {
 #[test]
 fn quoted_function_names_round_trip() {
     // 単相化の instance の名前は空白と括弧を含むので、引用符で囲んで書く (docs/implementation/testing.md の
-    // 「Core IR のテキストの形」)
+    // 「LIR のテキストの形」)
     let program = round_trip(
         "\
 fn \"id@[Int, String]\"(x.0: int) -> int {

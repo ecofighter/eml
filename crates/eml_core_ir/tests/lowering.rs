@@ -1,5 +1,5 @@
 //! Core IR から LIR への変換は、構造を写すだけである
-//! (docs/superpowers/specs/2026-10-11-s8a-lir-design.md の「Core IR から LIR への変換」)。2つの IR に共通する命令は
+//! (docs/spec/core-ir.md の「Core IR から LIR への変換」)。2つの IR に共通する命令は
 //! 同じ表示になるので、EP の後の Core IR と、それを変換した LIR の表示は同じ文字列になる。
 
 use eml_core_ir::{Pass, parse, pretty_with_positions, to_lir};

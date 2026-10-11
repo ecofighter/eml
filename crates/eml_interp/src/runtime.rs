@@ -13,7 +13,7 @@ pub(crate) enum Step {
     Finished,
 }
 
-/// yield の状態 (docs/spec/core-ir.md の「実行の文脈」)。
+/// yield の状態 (docs/spec/lir.md の「実行の文脈」)。
 pub(crate) enum YieldState {
     None,
     /// yield 中か、`abort` なら中断中である。`target` (宛先の evidence)、`clause` (節の本体)、`cont`
@@ -27,7 +27,7 @@ pub(crate) enum YieldState {
 }
 
 /// 呼び出しと戻りの行き先。関数の入り方と、戻りのフレームの再開の番地の読み方は IR の形で決まるので、機械に任せる
-/// (docs/spec/core-ir.md の「インタプリタ (CEK 機械)」)。
+/// (docs/spec/lir.md の「インタプリタ (CEK 機械)」)。
 pub(crate) enum Transfer {
     /// 関数に入る。引数は関数の引数の順に並ぶ。
     Enter(FnIdx, Vec<Value>),
@@ -48,8 +48,8 @@ enum Applied {
     Value(Value),
 }
 
-/// 実行中の関数の環境。スロットは変数の番号で引き、読み出しはスロットを書き換えない。参照の所有は Core IR の命令
-/// (消費、`dup`、`decref`、`release`) が表し、verifier がその釣り合いを確かめる (docs/spec/core-ir.md)。
+/// 実行中の関数の環境。スロットは変数の番号で引き、読み出しはスロットを書き換えない。参照の所有は LIR の命令
+/// (消費、`dup`、`decref`、`release`) が表し、verifier がその釣り合いを確かめる (docs/spec/lir.md)。
 pub(crate) struct Env(Vec<Option<Value>>);
 
 impl Env {
@@ -70,7 +70,7 @@ impl Env {
         self.0[var.0 as usize] = Some(value);
     }
 
-    /// ヒープの値の所有権を渡すかどうかは Core IR の命令が決める (docs/spec/core-ir.md)。
+    /// ヒープの値の所有権を渡すかどうかは LIR の命令が決める (docs/spec/lir.md)。
     pub(crate) fn read(&self, var: VarId) -> Result<Value, Fault> {
         self.0[var.0 as usize].ok_or(Fault::Internal("a variable read before it was bound"))
     }
@@ -90,7 +90,7 @@ impl Env {
     }
 
     /// 呼び出しの後で使う変数だけをフレームに退避する。フレームは、ちょうど所有している参照だけを持つ
-    /// (docs/spec/core-ir.md)。
+    /// (docs/spec/lir.md)。
     pub(crate) fn save(&self, vars: &[VarId]) -> Result<Vec<(u32, Value)>, Fault> {
         vars.iter()
             .map(|&var| Ok((var.0, self.read(var)?)))
@@ -115,7 +115,7 @@ pub(crate) struct Runtime<'p> {
     pub(crate) effect_sizes: Vec<usize>,
     /// 今有効な evidence のリスト。空のリストは `Value::Unit` である。関数の引数でなく実行の文脈に持つので、yield
     /// しうる関数とそうでない関数の呼び出しの規約は同じになる
-    /// (docs/spec/core-ir.md の「実行の文脈」)。
+    /// (docs/spec/lir.md の「実行の文脈」)。
     pub(crate) evv: Value,
     pub(crate) yield_state: YieldState,
     /// `ev_lookup` と `evv_mask` がたどった `evv` の節点の数。
@@ -182,7 +182,7 @@ impl<'p> Runtime<'p> {
     }
 
     /// 所有している参照を1つ手放す。継続も RC が1のオブジェクトなので、`drop k` もこれで解放される
-    /// (docs/spec/core-ir.md)。
+    /// (docs/spec/lir.md)。
     pub(crate) fn decref(&mut self, value: Value) -> Result<(), Fault> {
         if let Value::Obj(obj) = value {
             self.heap.decref(obj).map_err(Fault::Heap)?;
@@ -192,7 +192,7 @@ impl<'p> Runtime<'p> {
 
     /// `Switch` の scrutinee に合う case と、その case に入れるフィールド。scrutinee もフィールドも読むだけで、参照の
     /// 数を変えない。フィールドは scrutinee から借り、所有にするのは行き先の `dup` か `release` である
-    /// (docs/spec/core-ir.md)。
+    /// (docs/spec/lir.md)。
     pub(crate) fn select_case<'s, 'c, C>(
         &'s self,
         value: Value,
@@ -242,7 +242,7 @@ impl<'p> Runtime<'p> {
 
     /// 呼び出す。末尾でない呼び出しでは、機械が先に戻りのフレームを積んでいる。引数はフレームを積んだ後に読む。
     /// 環境の読み出しはスロットを書き換えないので、順序は結果に影響しない。エフェクトの命令は EP が基本操作に置き換える
-    /// ので、ここに届けば内部の誤りである (docs/spec/core-ir.md の「インタプリタ (CEK 機械)」)。
+    /// ので、ここに届けば内部の誤りである (docs/spec/lir.md の「インタプリタ (CEK 機械)」)。
     pub(crate) fn call(&mut self, call: &Call, env: &Env) -> Result<Transfer, Fault> {
         match call {
             Call::Direct(callee, args) => Ok(Transfer::Enter(*callee, env.atoms(args)?)),
@@ -256,7 +256,7 @@ impl<'p> Runtime<'p> {
                 self.apply_and_continue(callee, args)
             }
             // 節の呼び出しは、インタプリタでは `apply` と同じである
-            // (docs/spec/core-ir.md の「節の呼び出し」)
+            // (docs/spec/lir.md の「節の呼び出し」)
             Call::Clause {
                 effect: _,
                 op: _,

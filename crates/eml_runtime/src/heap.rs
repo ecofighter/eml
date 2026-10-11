@@ -12,7 +12,7 @@ pub struct ObjRef {
     generation: u32,
 }
 
-/// インタプリタの値。`Copy` で、`Rc` も `RefCell` も使わない (docs/spec/core-ir.md の「実行時の規約」)。
+/// インタプリタの値。`Copy` で、`Rc` も `RefCell` も使わない (docs/spec/lir.md の「実行時の規約」)。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Value {
     Int(i64),
@@ -23,7 +23,7 @@ pub enum Value {
     Fn(u32),
     Obj(ObjRef),
     /// yield 中の関数が返す、呼び出し元が捨てる値。ヒープに置かないので、`dup` と `decref` は何もせず、`box` と
-    /// `unbox` もそのまま通す (docs/spec/core-ir.md の「ダミーの値」)。
+    /// `unbox` もそのまま通す (docs/spec/lir.md の「ダミーの値」)。
     Dummy,
 }
 
@@ -90,7 +90,7 @@ pub struct Closure {
 #[derive(Debug, PartialEq)]
 pub enum Frame {
     /// 呼び出し元の関数に戻る。呼び出しの後で使う変数だけを退避し、それぞれ参照を1つ所有する
-    /// (docs/spec/core-ir.md)。`resume` は再開の番地、`saved` の鍵はスロットの番号で、どちらも実行する側が意味を
+    /// (docs/spec/lir.md)。`resume` は再開の番地、`saved` の鍵はスロットの番号で、どちらも実行する側が意味を
     /// 決める。ランタイムはその中身を解釈しない。番地を `u64` にしたのは、実行する側が自分の制御の位置 (将来の
     /// バイトコード VM なら `pc`) をそのまま入れられるようにするためである。
     Return {

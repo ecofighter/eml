@@ -1,5 +1,5 @@
 //! LIR のテキストで、`data` の値の確保、`switch` と `unpack` による分解、`release`、`box` と `unbox` を確かめる
-//! (docs/spec/core-ir.md)。共有された値の分解や、`tobj` の変数に入った引数のないコンストラクタは、ソースの `match`
+//! (docs/spec/lir.md)。共有された値の分解や、`tobj` の変数に入った引数のないコンストラクタは、ソースの `match`
 //! からは狙って作りにくいので、ここで書く。
 
 use eml_interp::{Fault, RuntimeError};
@@ -58,7 +58,7 @@ b2:
 
 #[test]
 fn a_value_read_with_another_layout_passes_the_verifier_and_faults() {
-    // verifier は命令をその命令が指す配置と比べるだけで、値を作った配置を追わない (docs/spec/core-ir.md の
+    // verifier は命令をその命令が指す配置と比べるだけで、値を作った配置を追わない (docs/spec/lir.md の
     // 「データの配置」)。`Option` で作った値を `List` として分解する IR は verifier を通り、機械の見張りで止まる
     let text = "\
 layout List { Nil, Cons(tobj, tobj) }
@@ -416,7 +416,7 @@ b2:
 
 #[test]
 fn an_unbox_of_a_heap_object_passes_the_verifier_and_faults() {
-    // verifier は `tobj` の値がスカラーを入れたものかヒープの物体かを追わない (docs/spec/core-ir.md の「データの
+    // verifier は `tobj` の値がスカラーを入れたものかヒープの物体かを追わない (docs/spec/lir.md の「データの
     // 配置」)。`tobj` のフィールドに入れた文字列を `unbox` する IR は verifier を通り、機械の見張りで止まる
     let text = "\
 layout Box { Box(tobj) }

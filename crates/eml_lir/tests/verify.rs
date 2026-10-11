@@ -1,4 +1,4 @@
-//! LIR のテキストで書いた LIR で、verifier が正しいものを受け入れ、壊れたものを拒むことを確かめる (docs/spec/core-ir.md)。
+//! LIR のテキストで書いた LIR で、verifier が正しいものを受け入れ、壊れたものを拒むことを確かめる (docs/spec/lir.md)。
 //! 構造の規則 R1 から R9 と、前の形の IR から引き継いだ検査を1つずつ確かめる。
 
 use eml_lir::{Prim, Program, Rhs, Stmt, parse, verify, verify_lowered, verify_scopes};
@@ -678,7 +678,7 @@ b1(a.2: tobj, b.3: tobj, c.4: tobj):
 
 #[test]
 fn a_jump_passes_values_to_compatible_parameters() {
-    // `obj` と `tobj`、`unit` と `tobj` は互換で、命令なしで行き来する (docs/spec/core-ir.md の「値の表現」)
+    // `obj` と `tobj`、`unit` と `tobj` は互換で、命令なしで行き来する (docs/spec/lir.md の「値の表現」)
     assert_eq!(check_scopes(&compatible_jump("")), Ok(()));
     assert_eq!(
         check(&compatible_jump("  decref b.3\n  decref c.4\n")),
@@ -1515,7 +1515,7 @@ fn a_field_cannot_be_read_after_its_owner_is_given_up() {
 #[test]
 fn a_field_consumed_after_its_owner_is_given_up_was_moved() {
     // 持ち主も手放した後に借りた変数を消費するか手放すと、移動の後の使用として報告する
-    // (docs/spec/core-ir.md の「verifier」)
+    // (docs/spec/lir.md の「verifier」)
     assert_eq!(
         check(&unpacking("  decref p.0\n  return a.1\n")),
         Err("`a.1` is used after it was moved in `f`".to_string())
@@ -2709,6 +2709,9 @@ fn the_lowered_level_does_not_compare_boundaries() {
     assert_eq!(check_lowered(&text), Ok(()));
 }
 
+// `passes_until` は入力の検査をデバッグビルドだけでかける (docs/spec/lir.md の「パスの順番」)。release で流す
+// テスト (`nix build`) では検査がないので、このテストも走らせない
+#[cfg(debug_assertions)]
 #[test]
 #[should_panic(
     expected = "internal error: invalid LIR before boxing: `s.0` is duplicated before Perceus in `twice`"

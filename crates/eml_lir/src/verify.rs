@@ -1,4 +1,4 @@
-//! LIR の不変条件の検査 (docs/spec/core-ir.md の「verifier」)。ブロックの列の形 (R1〜R4)、変数の定義と支配 (R5、R6)、
+//! LIR の不変条件の検査 (docs/spec/lir.md の「verifier」)。ブロックの列の形 (R1〜R4)、変数の定義と支配 (R5、R6)、
 //! `unpack` の Repr、`jump` と `return` の Repr の互換、extern の引数と結果の Repr、`box` と `unbox` のオペランドと
 //! 束縛の Repr (R8)、データの配置 (R9) と、引き継いだ検査 (直接呼び出しと extern の引数の数、case の種類)、基本操作と
 //! 節の呼び出しの形を確かめる (`verify_scopes`)。R8 と R9 には境界の検査も入る。呼び出しの引数と結果、`closure` の
@@ -6,18 +6,18 @@
 //! 境界を確かめずに、`box`、`unbox`、`tail` と、Perceus が入れるものがまだないことを確かめる (`verify_lowered`)。
 //! Perceus の後は、RC の対象の所有の多重集合と、呼び出しの後に見える変数 (R6、R7) も確かめる (`verify`)。`switch`、
 //! `unpack`、`unbox` は値を読むだけである。`switch` と `unpack` のフィールドは値から借りて始まり、自分か持ち主が
-//! 所有を持つ間だけ有効である。段の分け方は docs/superpowers/specs/2026-10-11-s8a-lir-design.md の「verifier の段」
+//! 所有を持つ間だけ有効である。段の分け方は docs/spec/lir.md の「verifier」
 //! による。Core IR の verifier と共有する部品は `check` にある。
 //!
 //! R9 は、`con`、タグの `switch`、`unpack`、`release` を、その命令が指す配置と比べる。配置を持つ `switch` はタグの
 //! case を持つものだけで、リテラルの `switch` では scrutinee の Repr を比べる。値がどの配置で作られたかは
 //! 追わない。それを保証するのは translate の型なので、配置の違う値を読む IR もこの検査を通りうる
-//! (docs/spec/core-ir.md の「データの配置」)。
+//! (docs/spec/lir.md の「データの配置」)。
 //!
 //! 辺の検査、支配木、本体の検査は、それぞれブロックを番号の順に1回たどるだけで、反復も生存解析も使わない。辺は
 //! 前向きなので、ブロックに着いたときには入る辺がすべて出そろっている。支配木は辺1本につき深さの対数の手間で
 //! 育つ。所有の多重集合は辺ごとに写して比べるので、その手間は辺の数と所有の大きさの積に比例する
-//! (docs/spec/core-ir.md の「verifier」)。
+//! (docs/spec/lir.md の「verifier」)。
 
 use std::collections::{BTreeMap, HashMap};
 
@@ -44,7 +44,7 @@ pub fn verify_scopes(program: &Program) -> Result<(), VerifyError> {
 
 /// box の挿入の前の LIR を確かめる。範囲の段と同じ形と範囲を確かめ、境界は比べない。box の挿入と縮約が作るもの
 /// (`box`、`unbox`、`tail`) と、Perceus が入れるもの (`dup`、`decref`、`release`、`save`) がまだないことを確かめる。
-/// box の挿入は、末尾呼び出しと変換のない入力を前提にするためである (docs/spec/core-ir.md の「パス」)。
+/// box の挿入は、末尾呼び出しと変換のない入力を前提にするためである (docs/spec/lir.md の「パスの順番」)。
 pub fn verify_lowered(program: &Program) -> Result<(), VerifyError> {
     verify_at(program, Level::Lowered)
 }
@@ -183,7 +183,7 @@ struct Checker<'a> {
     pending: HashMap<u32, Entry>,
     /// フィールドの持ち主と出どころ。持ち主は、分解した値が束縛の時点で所有を持っていればその値、なければその値の
     /// 持ち主である。変数は1回だけ定義されるので (R5)、経路ごとではなく関数に1つの表にする
-    /// (docs/spec/core-ir.md の「verifier」)。
+    /// (docs/spec/lir.md の「verifier」)。
     owners: Vec<Option<VarId>>,
     origins: Vec<Option<Origin>>,
 }
@@ -241,7 +241,7 @@ impl<'a> Checker<'a> {
 
     /// `clause` の印の関数の値 (`&g` と `closure g(..)` の変数) は、`ev_set_clause` の2つ目の引数にだけ使える。入口の
     /// 関数は操作の ABI で呼ばれ、`apply` の一様な規約に合わないためである
-    /// (docs/spec/core-ir.md の「入口の関数の印」)。変数は1回だけ
+    /// (docs/spec/lir.md の「入口の関数の印」)。変数は1回だけ
     /// 定義されるので (R5)、先に `closure` をすべて集めてから使いを見る。
     fn clause_values(&self) -> Result<(), String> {
         let blocks = &self.function.blocks;
@@ -697,7 +697,7 @@ impl<'a> Checker<'a> {
 
     /// 値を読む (`switch` の scrutinee、`unpack` と `unbox` の値、`dup`)。所有の検査の段では、RC の対象の変数は
     /// 有効でなければならない。つまり、自分か持ち主が所有を持つ。所有を持つ経路は実際の参照を持つので物体は生きていて、
-    /// data は書き換わらないので、そこからたどれる物体もすべて生きている (docs/spec/core-ir.md の「verifier」)。
+    /// data は書き換わらないので、そこからたどれる物体もすべて生きている (docs/spec/lir.md の「verifier」)。
     fn read(&self, owned: &Owned, var: VarId, what: &str) -> Result<(), String> {
         self.visible(var)?;
         if self.level != Level::Ownership
@@ -755,7 +755,7 @@ impl<'a> Checker<'a> {
     }
 
     /// `release x L #t(p1, .., pn)`。x の参照を1つ手放し、名前を書いた変数が参照を1つずつ受け取る。名前を書いた変数は、
-    /// x を同じ配置とタグで分解したときの、同じ位置のフィールドである (docs/spec/core-ir.md)。
+    /// x を同じ配置とタグで分解したときの、同じ位置のフィールドである (docs/spec/lir.md)。
     fn release(
         &self,
         owned: &mut Owned,
@@ -892,7 +892,7 @@ impl<'a> Checker<'a> {
                     ));
                 }
             }
-            // フィールドのないコンストラクタの値は、`#N` の1つの書き方にそろえる (docs/spec/core-ir.md)
+            // フィールドのないコンストラクタの値は、`#N` の1つの書き方にそろえる (docs/spec/lir.md)
             Rhs::Con { ctor: _, args } if args.is_empty() => {
                 return Err(
                     "a constructor value without fields is written as a tag `#N`, not `con`"
@@ -902,7 +902,7 @@ impl<'a> Checker<'a> {
             Rhs::Con { ctor, args } => self.cx.check_con(var, *ctor, args)?,
             Rhs::Drop(atom) => self.cx.fn_atom(*atom)?,
             // `unit` の値、`()`、`#N`、`&f`、参照は命令なしで `tobj` に収まるので、`box` しない。1つの値の書き方を1つに保つ
-            // (docs/spec/core-ir.md の「値の表現」)
+            // (docs/spec/lir.md の「値の表現」)
             Rhs::Box(atom) => {
                 if self.level < Level::Scopes {
                     return Err(format!(
@@ -964,7 +964,7 @@ impl<'a> Checker<'a> {
     }
 
     /// 呼び出しは、形を確かめた後に、オペランドの Repr を左から比べ、結果を `receiver` と比べてから、範囲と所有を
-    /// 確かめる (docs/spec/core-ir.md の「verifier」)。
+    /// 確かめる (docs/spec/lir.md の「verifier」)。
     fn check_call(&self, owned: &mut Owned, call: &Call, receiver: Receiver) -> Result<(), String> {
         let result = match call {
             Call::Direct(target, args) => {

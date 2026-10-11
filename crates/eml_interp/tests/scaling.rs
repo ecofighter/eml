@@ -107,7 +107,7 @@ fn appending_to_a_unique_string_copies_only_the_right_side() {
 
 /// handler の下の非末尾の再帰。深さごとに1回 `ask` するので、`count n` は n 回 `ask` する。evidence は `evv` の
 /// 先頭から探すので、1回の `ask` がたどる節点の数は今有効な handler の数で決まり、深さによらない
-/// (docs/spec/core-ir.md の「evidence を探す」)。
+/// (docs/spec/lir.md の「evidence を探す」)。
 const ASK_RECURSION: &str = "effect Ask where
   ask : Unit -> Int
 
@@ -537,7 +537,7 @@ main () = println (show (count_down {n} (fn m -> m)))
 }
 
 /// 型変数のフィールドは `tobj` なので、`Int` を入れると `box`、取り出して `Int` として使うと `unbox` を通る
-/// (docs/spec/core-ir.md の「位置の規則」)。データの配置は単相化の後も一様なので、この形の変換は残る。
+/// (docs/spec/lir.md の「位置の規則」)。データの配置は単相化の後も一様なので、この形の変換は残る。
 #[test]
 fn an_int_in_a_type_variable_field_is_boxed_and_unboxed() {
     let text = [

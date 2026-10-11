@@ -1,6 +1,6 @@
 //! Core IR (docs/spec/core-ir.md)。型付き HIR から変換する、前向きの辺だけを持つ基本ブロックの列で表す IR で、
 //! エフェクトを明示する。RC、box、末尾呼び出しは持たない。これらは EP の後に変換した LIR (`eml_lir`) の上で入れる
-//! (docs/superpowers/specs/2026-10-11-s8a-lir-design.md の「`eml_core_ir` に残すもの」)。
+//! (docs/spec/core-ir.md の「実行系の方針」)。
 
 use eml_extern::Extern;
 use eml_lir::{
@@ -35,7 +35,7 @@ pub struct Program {
     /// 物体を1つ作り、`ConstString` はその物体の参照を1つ作る (docs/spec/runtime.md の「不死の物体」)。
     pub strings: Vec<String>,
     /// データの配置の表。`con`、`switch`、`unpack` (LIR では `release` も) が `LayoutId` で引く。translate は最初に
-    /// 使った順に入れる (docs/spec/core-ir.md の「データの配置」)。
+    /// 使った順に入れる (docs/spec/core-ir.md の「translate の配置」)。
     pub layouts: Vec<Layout>,
     /// エフェクトの表。添字は `Call::Handle`、`Call::Perform`、`Call::Clause`、基本操作の即値のエフェクトの番号で、
     /// HIR の `EffectId` の添字と同じである。
@@ -67,7 +67,7 @@ pub struct CoreFn {
     pub yields: bool,
     /// in-place の入口の関数が受け持つ (エフェクト, 操作)。捕獲の後に evidence と操作の引数を受け、操作の結果を
     /// 返す。`ev_set_clause` に渡す値としてだけ参照される。テキストの形では `yields` の後に `clause E.op fn` と書く
-    /// (docs/spec/core-ir.md の「入口の関数の印」)。
+    /// (docs/spec/lir.md の「入口の関数の印」)。
     pub clause: Option<(u32, u32)>,
     pub vars: Vec<VarInfo>,
     /// 直接の呼び出しの結果の Repr。
@@ -105,7 +105,7 @@ pub enum Stmt {
     },
     /// コンストラクタが1つの型の値を分解する。行き先が「ブロックの残り」である1つの case の `switch` と同じ意味で、
     /// フィールドは `Case` のフィールドと同じ規則で束縛する。`ctor` の配置は、コンストラクタが1つで Repr が `obj`
-    /// である (docs/spec/core-ir.md の「構造の規則」の R9)。
+    /// である (docs/spec/lir.md の「構造の規則」の R9)。
     Unpack {
         value: VarId,
         ctor: Ctor,
@@ -258,7 +258,7 @@ pub enum Rhs {
     /// 値の所有権を受け取って捨てる。値は `()` である。
     Drop(Atom),
     /// evidence passing の基本操作。extern と同じく引数をすべて消費し、所有した結果を定義する
-    /// (docs/spec/core-ir.md の「基本操作」)。
+    /// (docs/spec/lir.md の「基本操作」)。
     Prim(Prim, Vec<Atom>),
 }
 
@@ -340,7 +340,7 @@ pub enum Call {
     Resume { k: Atom, arg: Atom, state: Atom },
     /// 操作の in-place の入口のクロージャ `callee` を呼ぶ。`args` の先頭は evidence (`obj`)、残りは操作の引数で、
     /// 引数と結果の Repr は操作の表の `params` と `ret` から取る。`mask` は持たない
-    /// (docs/spec/core-ir.md の「節の呼び出し」)。
+    /// (docs/spec/lir.md の「節の呼び出し」)。
     Clause {
         effect: u32,
         op: u32,

@@ -19,13 +19,14 @@ eml を実装するエージェントとプログラマのための文書群で�
 | [spec/linearity.md](spec/linearity.md) | 規範 | 線形性と `drop`、線形性の検査パス |
 | [spec/effects.md](spec/effects.md) | 規範 | 操作の多重度、持ち越し規則、handler の意味、extern のエフェクトの `IO`、標準ライブラリの `File` |
 | [spec/exhaustiveness.md](spec/exhaustiveness.md) | 規範 | 網羅性の検査 |
-| [spec/core-ir.md](spec/core-ir.md) | 規範 | Core IR の構成 (基本ブロックの列と構造の規則、値の表現、データの配置、位置の規則)、変換の規則 (単相化と row のビット、`yields` の印、メソッドの解決、導出の生成器)、評価と所有権の意味、パス (evidence passing、box の挿入、縮約、Perceus) とその境界の不変条件、verifier、実行時エラー |
+| [spec/core-ir.md](spec/core-ir.md) | 規範 | Core IR の命令、型の Repr、translate の配置、変換の規則 (単相化と row のビット、`yields` の印、メソッドの解決、導出の生成器)、パス (translate と evidence passing)、LIR への変換、Core IR の verifier |
+| [spec/lir.md](spec/lir.md) | 規範 | LIR の命令、2つの IR に共通する規則 (ブロックの列と構造の規則、値の表現、データの配置、位置の規則、末尾の位置の呼び出し)、基本操作と実行の文脈、LIR のパス (box の挿入、縮約、Perceus) とその境界の不変条件、LIR の verifier、インタプリタ、実行時エラー |
 | [spec/runtime.md](spec/runtime.md) | 規範 | ヒープと参照カウント、オブジェクトのヘッダ、不死の物体、`eml_runtime` の API、evidence と `evv` の物体、文字列の連結、`debug_heap`、実行の API |
 | [spec/diagnostics.md](spec/diagnostics.md) | 規範 | 診断のデータ構造、診断の順、番号の範囲と各番号の意味、連鎖する診断の抑止 |
 | [spec/examples.md](spec/examples.md) | 説明 | まだ動かない、本番の構文で書いたプログラム例 |
 | **implementation/** | 手引き | どう作るか、今どこまでできているか |
 | [implementation/architecture.md](implementation/architecture.md) | 手引き | プログラム全体の構成と採らなかった形、crate の構成、各段階の規律、エラー回復、各 crate の内部、CLI と lib API、translate の組み立て、継続と evidence、構文解析と名前解決の回復 |
-| [implementation/testing.md](implementation/testing.md) | 手引き | テスト戦略、テストの変更の運用、テストの置き場所、UI テスト、Core IR のテキストの形、文書の引用の検査 |
+| [implementation/testing.md](implementation/testing.md) | 手引き | テスト戦略、テストの変更の運用、テストの置き場所、UI テスト、LIR と Core IR のテキストの形、文書の引用の検査 |
 | [implementation/status.md](implementation/status.md) | 手引き | 今の言語の範囲、既知の制限 |
 | [implementation/benchmarks.md](implementation/benchmarks.md) | 手引き | 基準のプログラム、回数のテスト、命令の数の測り方、段ごとの記録 |
 | [implementation/diagnostics.md](implementation/diagnostics.md) | 手引き | 番号ごとの診断が指す場所、help と fix の文言と付ける条件、型エラー・線形性・網羅性の診断の表示 |
@@ -46,7 +47,8 @@ eml を実装するエージェントとプログラマのための文書群で�
 | `eml_syntax` | lexical、layout、grammar |
 | `eml_hir` | declarations、expressions、records、modules |
 | `eml_types` | types、linearity、effects、exhaustiveness、records |
-| `eml_core_ir` / `eml_interp` | core-ir、effects |
+| `eml_core_ir` | core-ir、lir、effects |
+| `eml_lir` / `eml_interp` | lir |
 | `eml_runtime` | runtime |
 | 診断を出すすべての段階 | diagnostics |
 

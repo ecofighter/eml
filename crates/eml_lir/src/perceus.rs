@@ -1,4 +1,4 @@
-//! Perceus の `dup` / `decref` / `release` の挿入と、呼び出しの `saved` (docs/spec/core-ir.md の「パス」)。値を消費する
+//! Perceus の `dup` / `decref` / `release` の挿入と、呼び出しの `saved` (docs/spec/lir.md の「Perceus」)。値を消費する
 //! 使いを所有権の移動として扱い、後でも使う変数を複製し、使わなくなった変数をできるだけ早く捨てる。`switch`、
 //! `unpack`、`unbox` は値を読むだけである。フィールドは値から借りて始まり、行き先の入口と `unpack` の直後で、生きて
 //! いるフィールドを所有にする。対象は RC の対象 (`Repr::is_rc`) の変数だけである。ブロックを前からたどり、その場で
@@ -60,7 +60,7 @@ fn insert_rc(function: &mut LirFn) {
                 let CasePattern::Tag(tag) = case.pattern else {
                     continue;
                 };
-                // タグの `switch` はいつも配置を持つ (docs/spec/core-ir.md の「データの配置」)。持たない IR を黙って飛ばすと
+                // タグの `switch` はいつも配置を持つ (docs/spec/lir.md の「データの配置」)。持たない IR を黙って飛ばすと
                 // `release` が抜けるので、止める
                 let layout = layout.expect("a switch with tag cases has a layout");
                 if let Some(value) = value
@@ -167,7 +167,7 @@ fn rewrite(
     let is_live = |var: VarId| live_in.binary_search(&var).is_ok();
     // 入口の順は、フィールドの複製、死んだ所有の `decref` (変数の番号の順)、`release` である。translate は束縛の順に
     // 番号を振るので、親が先に手放され、入れ子の値の参照が1つに戻って `release` が一意の側を通れる
-    // (docs/spec/core-ir.md の「Perceus」)
+    // (docs/spec/lir.md の「Perceus」)
     let mut release = None;
     if let Some(destructured) = destructured {
         match own(
@@ -232,7 +232,7 @@ struct Destructured {
     fields: Vec<VarId>,
 }
 
-/// 借りたフィールドのうち、生きているものを所有にする方法 (docs/spec/core-ir.md の「Perceus」)。
+/// 借りたフィールドのうち、生きているものを所有にする方法 (docs/spec/lir.md の「Perceus」)。
 enum Owning {
     /// 値が生きているので、生きているフィールドを複製する。
     Dups(Vec<VarId>),

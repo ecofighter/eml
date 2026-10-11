@@ -122,7 +122,7 @@ struct Fix {
 | E2009 | `AMBIGUOUS_CONSTRAINT` | 制約の型が最後まで決まらない |
 | E2010 | `LINEAR_INSTANCE_HEAD` | `Unr` のクラスの instance の頭が `Unr` でない ([型と Kind](types.md) の「`Unr` のクラス」) |
 | E2011 | `METHOD_KIND_MISMATCH` | instance のメソッドか既定のメソッドが、クラスのシグネチャから導けない Kind の制約 (線形性と多重度の境界、持ち越しの制約) を持つ ([型と Kind](types.md) の「instance と既定のメソッドの検査」) |
-| E2012 | `CONSTRAINED_POLYMORPHIC_RECURSION` | 一様な位置の型変数が制約を持つ ([Core IR とインタプリタ](core-ir.md) の「一様な位置と制約付きの多相再帰」) |
+| E2012 | `CONSTRAINED_POLYMORPHIC_RECURSION` | 一様な位置の型変数が制約を持つ ([Core IR](core-ir.md) の「一様な位置と制約付きの多相再帰」) |
 | E2013 | `FIELD_NEEDS_KNOWN_TYPE` | 射影か更新の時点で、値の型が決まっていない ([型と Kind](types.md) の「フィールドの解決」) |
 | E2014 | `NO_SUCH_FIELD` | 射影か更新のフィールドが、その型にない。コンストラクタが2つ以上の型への射影と更新、タプルの更新を含む |
 | E3001 | `LINEAR_VALUE_MISUSED` | 線形な値の誤った使い方のうち、E3002〜E3005 に当たらないもの (関数への受け渡し、型の単一化、ラムダや節の捕獲) |

@@ -1,6 +1,6 @@
 //! ソースから実行して確かめるテストは UI テスト (`tests/ui/run/`) に置く。ここには、LIR のテキストや生成した
 //! ソースが要るものだけを置く (docs/implementation/testing.md)。LIR のテキストでは、制御の移り方 (ブロック、文、
-//! `jump`、呼び出しからの再開)、handler、実行時エラーの位置を確かめる (docs/spec/core-ir.md)。
+//! `jump`、呼び出しからの再開)、handler、実行時エラーの位置を確かめる (docs/spec/lir.md)。
 
 use std::fmt::Write;
 
@@ -233,7 +233,7 @@ fn main() -> unit {
 
 #[test]
 fn a_heap_fault_inside_an_extern_with_a_position_carries_it() {
-    // 位置は extern の呼び出しが起こした誤りすべてに付き、ヒープの誤りも含む (docs/spec/core-ir.md の「実行時エラー」)
+    // 位置は extern の呼び出しが起こした誤りすべてに付き、ヒープの誤りも含む (docs/spec/lir.md の「実行時エラー」)
     let text = "\
 fn main() -> unit {
   let s.0: obj = extern \"Prelude.Show Int.show\"(1)

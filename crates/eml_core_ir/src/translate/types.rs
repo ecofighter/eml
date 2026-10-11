@@ -5,8 +5,8 @@ use eml_types::{TypeId, TypeKind, TypeStore};
 
 use eml_lir::{Repr, VarInfo, data_repr};
 
-/// 型の Repr (docs/spec/core-ir.md の「値の表現」)。総称的な位置の束縛も具体化した型から決める。値を受ける位置の
-/// Repr と違えば、box の挿入が変換を入れる (docs/spec/core-ir.md の「位置の規則」)。関数の値と型変数の値は、即値
+/// 型の Repr (docs/spec/core-ir.md の「型の Repr」)。総称的な位置の束縛も具体化した型から決める。値を受ける位置の
+/// Repr と違えば、box の挿入が変換を入れる (docs/spec/lir.md の「位置の規則」)。関数の値と型変数の値は、即値
 /// (捕まえた変数のない関数、引数のないコンストラクタ) にもヒープの物体にもなるので `tobj` にする。
 pub fn repr(types: &TypeStore, ty: TypeId, hir: &HirProgram) -> Repr {
     match types.kind(ty) {

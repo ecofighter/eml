@@ -1,4 +1,4 @@
-//! LIR のパスの順番 (docs/spec/core-ir.md の「パス」)。LIR の層の順番を知っているのはこのファイルだけにする。
+//! LIR のパスの順番 (docs/spec/lir.md の「パスの順番」)。LIR の層の順番を知っているのはこのファイルだけにする。
 //! Core IR から LIR への変換までの順番は `eml_core_ir` が知る。
 
 use crate::{
@@ -25,7 +25,7 @@ impl Pass {
 
 /// 変換の直後の LIR に、box の挿入から `last` までをかける。入力の約束 (`tail`、`box`、`unbox`、RC の命令、`saved`
 /// がないこと) を入口で確かめるので、手で書いた LIR を渡すテストもこの検査を通る
-/// (docs/superpowers/specs/2026-10-11-s8a-lir-design.md の「パスの順番」)。検査は debug ビルドでかける。
+/// (docs/spec/lir.md の「パスの順番」)。検査は debug ビルドでかける。
 pub fn passes_until(program: &mut Program, last: Pass) {
     if cfg!(debug_assertions)
         && let Err(error) = verify_lowered(program)

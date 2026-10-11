@@ -199,7 +199,7 @@ data Color =
   deriving (Eq, Ord, Show)
 ```
 
-型クラスは、Haskell 98 の形の単一引数のクラスである。等価、比較、表示は、Prelude のクラス `Eq`、`Ord`、`Show` で作る (下の「Prelude のクラス」)。高カインドのクラス、多引数のクラス、関連型、`Add<Rhs, Output>` 形の演算子のトレイトはない。制約の意味、解き方、Kind の規則は [型と Kind](types.md) の「制約」に、名前空間、import、instance の見え方は [モジュールと名前解決](modules.md) にある。証拠 (どの instance を使うか) は Core IR への変換の単相化で決め、実行時の辞書は持たない ([Core IR とインタプリタ](core-ir.md) の「メソッドの解決」)。
+型クラスは、Haskell 98 の形の単一引数のクラスである。等価、比較、表示は、Prelude のクラス `Eq`、`Ord`、`Show` で作る (下の「Prelude のクラス」)。高カインドのクラス、多引数のクラス、関連型、`Add<Rhs, Output>` 形の演算子のトレイトはない。制約の意味、解き方、Kind の規則は [型と Kind](types.md) の「制約」に、名前空間、import、instance の見え方は [モジュールと名前解決](modules.md) にある。証拠 (どの instance を使うか) は Core IR への変換の単相化で決め、実行時の辞書は持たない ([Core IR](core-ir.md) の「メソッドの解決」)。
 
 ### `class`
 

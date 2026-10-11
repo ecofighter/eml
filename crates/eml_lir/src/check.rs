@@ -1,4 +1,4 @@
-//! Core IR の verifier と LIR の verifier が共有する部品 (docs/spec/core-ir.md の「verifier」)。ブロックの列の形
+//! Core IR の verifier と LIR の verifier が共有する部品 (docs/spec/lir.md の「verifier」)。ブロックの列の形
 //! (R1〜R4) と支配木、R8 と R9 の検査、基本操作と `clause` の検査を、2つの IR が共有する型の上で書く。IR ごとに違う
 //! もの (ブロックの終端、関数の型) は、呼ぶ側が形を写して渡す。命令の列をたどる部分と所有の検査は、IR ごとの
 //! verifier が持つ。
@@ -22,7 +22,7 @@ pub enum NonUniform {
 }
 
 /// 一様な関数は、引数と `ret` がすべて `tobj` と互換である。関数の値を呼ぶ `apply` は、関数ごとの Repr を知らないため
-/// である (docs/spec/core-ir.md の「位置の規則」)。`clause` の印の関数は関数の値として呼ばれず、操作の ABI に
+/// である (docs/spec/lir.md の「位置の規則」)。`clause` の印の関数は関数の値として呼ばれず、操作の ABI に
 /// 合わせるので、ここでは見ない (`clause_function`)。
 pub fn non_uniform(
     clause: Option<(u32, u32)>,
@@ -42,7 +42,7 @@ pub fn non_uniform(
 
 /// `clause` の印の関数は、捕獲の後に evidence と操作の引数を受け、操作の結果を返す。境界の段では、捕獲が `tobj`、
 /// evidence が `obj`、残りの引数と `ret` が操作の表の Repr (`never` の操作の `ret` は `obj`) と互換であることも
-/// 確かめる (docs/spec/core-ir.md の「box の挿入」と「verifier」)。
+/// 確かめる (docs/spec/lir.md の「box の挿入」と「verifier」)。
 pub fn clause_function(
     effects: &[EffectInfo],
     name: &str,
@@ -407,7 +407,7 @@ impl<'a> Context<'a> {
     }
 
     /// 範囲の段と所有の段で、`&g` の g が一様かを確かめる。IR のどこにある `&g` も関数の値なので
-    /// (docs/spec/core-ir.md の「位置の規則」)、互換の位置のほかに、extern の引数、`drop`、case のない `switch` の
+    /// (docs/spec/lir.md の「位置の規則」)、互換の位置のほかに、extern の引数、`drop`、case のない `switch` の
     /// scrutinee でも呼ぶ。
     pub fn fn_atom(&self, atom: Atom) -> Result<(), String> {
         match atom {
@@ -416,7 +416,7 @@ impl<'a> Context<'a> {
         }
     }
 
-    /// 関数の値として使う関数 (`&g`、`closure g`) は一様である (docs/spec/core-ir.md の「位置の規則」)。番号が表にない
+    /// 関数の値として使う関数 (`&g`、`closure g`) は一様である (docs/spec/lir.md の「位置の規則」)。番号が表にない
     /// 関数は、IR ごとの verifier が断る。
     pub fn function_value(&self, target: FnIdx) -> Result<(), String> {
         let Some(FnSummary {
@@ -635,7 +635,7 @@ impl<'a> Context<'a> {
         Ok(())
     }
 
-    /// フィールドを持つ値は RC の対象の変数に入る。定数はフィールドを持たない (docs/spec/core-ir.md の「verifier」)。
+    /// フィールドを持つ値は RC の対象の変数に入る。定数はフィールドを持たない (docs/spec/lir.md の「verifier」)。
     pub fn fields_allowed(&self, scrutinee: Atom) -> Result<(), String> {
         match scrutinee {
             Atom::Var(var) if !self.repr(var).is_rc() => Err(format!(
@@ -687,7 +687,7 @@ impl<'a> Context<'a> {
 
     /// 基本操作は EP だけが作る。即値は表にあり、`evv_mask` の多重集合は呼び出しの `mask` と同じく空でなく昇順に
     /// 並び、引数の数は表の行と同じである。範囲の段と所有の段では、引数と結果を直接の呼び出しと同じく互換の位置として
-    /// 比べる (docs/spec/core-ir.md の「基本操作」)。
+    /// 比べる (docs/spec/lir.md の「基本操作」)。
     pub fn check_prim(&self, var: VarId, prim: &Prim, args: &[Atom]) -> Result<(), String> {
         let row = prim.row();
         let name = &prim_text(self.tables.effects, prim);
@@ -760,7 +760,7 @@ impl<'a> Context<'a> {
 
     /// `ev_set_clause[E.op](ev, c)` の c の関数が分かるとき (`&g` か、同じ関数の中の `closure g(..)`)、g は `E.op` の
     /// `clause` の印を持つ。ev を同じ関数の中の `ev_new` で作ったなら、そのエフェクトは E である
-    /// (docs/spec/core-ir.md の「verifier」)。
+    /// (docs/spec/lir.md の「verifier」)。
     pub fn check_set_clause(
         &self,
         name: &str,

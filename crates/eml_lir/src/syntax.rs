@@ -1,7 +1,8 @@
-//! Core IR と LIR のテキスト形式が共有する部品 (docs/implementation/testing.md の「Core IR のテキストの形」)。
+//! Core IR と LIR のテキスト形式が共有する部品 (docs/implementation/testing.md の「LIR のテキストの形」と
+//! 「Core IR のテキストの形」)。
 //! 2つの IR に共通する命令は同じ表示になるので、表示と読み込みの部品をここに1つずつ置く。
 //! 部品はどちらの IR の型も名前で使わない。命令の列を読んで書く所 (ブロックの文と終端、右辺、呼び出し) だけを、
-//! IR ごとに書く (docs/superpowers/specs/2026-10-11-s8a-lir-design.md の「テキスト形式」)。
+//! IR ごとに書く (docs/implementation/testing.md の「Core IR のテキストの形」)。
 
 use std::borrow::Cow;
 use std::collections::HashMap;
@@ -61,7 +62,7 @@ pub fn prim_text(effects: &[EffectInfo], prim: &Prim) -> String {
 
 /// 関数と extern の行の名前。単相化の instance の名前 (`id@[Int, String]`) と instance の extern の行の名前
 /// (`Prelude.Eq Int.==`) は、テキストの形の字句の区切りを含むので、文字列と同じ逃がし方で引用符で囲む
-/// (docs/implementation/testing.md の「Core IR のテキストの形」)。row のビットを書いた名前 (`twice<e>`) も同じく
+/// (docs/implementation/testing.md の「LIR のテキストの形」)。row のビットを書いた名前 (`twice<e>`) も同じく
 /// 囲む (docs/spec/core-ir.md の「row のビットと instance の鍵」)。
 pub fn function_name(name: &str) -> Cow<'_, str> {
     let separates = |c: char| c.is_whitespace() || "(){}[],\"<>".contains(c);
@@ -356,7 +357,7 @@ impl<'t> Reader<'t> {
             };
             Ok(LayoutCtor { name, fields })
         })?;
-        // 組の配置は要素の数だけで決まる (docs/spec/core-ir.md の「データの配置」)。名前と形が食い違う表を読まない
+        // 組の配置は要素の数だけで決まる (docs/spec/core-ir.md の「translate の配置」)。名前と形が食い違う表を読まない
         if name.starts_with('(') {
             let arity = name.len() - 1;
             let tuple = matches!(&constructors[..], [ctor] if ctor.name == name

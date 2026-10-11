@@ -1,4 +1,4 @@
-//! contract のパス (docs/spec/core-ir.md の「パス」)。使われない純粋な `let` を消すことと、すべてのブロックに
+//! contract のパス (docs/spec/lir.md の「縮約」)。使われない純粋な `let` を消すことと、すべてのブロックに
 //! 末尾呼び出しの規則を当てることを、IR のテキストで確かめる。ソースから縮約までを通すテストは `eml_core_ir` の
 //! tests/contract.rs にある。
 
@@ -162,7 +162,7 @@ fn h(x.0: int) -> int {
 
 #[test]
 fn every_kind_of_call_returned_at_the_end_becomes_a_tail_call() {
-    // 直接の呼び出し、関数値の適用、節の呼び出しのどれも末尾呼び出しになる (docs/spec/core-ir.md の「Core IR」)。
+    // 直接の呼び出し、関数値の適用、節の呼び出しのどれも末尾呼び出しになる (docs/spec/lir.md の「縮約」)。
     // 結果を返さない呼び出しは残す
     let text = "\
 effect Ask { ask(tobj) -> tobj }

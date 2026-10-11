@@ -1,4 +1,4 @@
-//! box の挿入と Perceus の間の縮約のパス (docs/spec/core-ir.md の「パス」)。使われない純粋な `let` を消し、その後で
+//! box の挿入と Perceus の間の縮約のパス (docs/spec/lir.md の「縮約」)。使われない純粋な `let` を消し、その後で
 //! すべてのブロックに末尾呼び出しの規則を当てる。末尾呼び出しを作るのはこのパスだけである。RC の命令がまだないので、
 //! 所有権を扱わずに書き換えられる。
 
@@ -19,7 +19,7 @@ pub fn contract(program: &mut Program) {
         for block in &mut function.blocks {
             tail_call(block, function.ret, &rets, &program.effects);
         }
-        // 1回のパスで不動点に達することを確かめる (docs/spec/core-ir.md の「縮約」)。確かめるパスも IR を書き換えうるので、
+        // 1回のパスで不動点に達することを確かめる (docs/spec/lir.md の「縮約」)。確かめるパスも IR を書き換えうるので、
         // その副作用を `debug_assert!` の式に隠さない
         if cfg!(debug_assertions) {
             let removed = remove_dead_lets(function);
@@ -35,7 +35,7 @@ pub fn contract(program: &mut Program) {
 /// `let x = <呼び出し>` の後の終端が `return x` で、呼び出しの結果が関数の `ret` と互換なら、その2つを末尾呼び出しに
 /// する。互換は推移的でないので、x を通してつながっていた2つの位置が、直接つないでも互換かを確かめる。結果は、直接の
 /// 呼び出しなら呼ばれる関数の `ret`、節の呼び出しなら操作の `ret`、関数値の適用なら `tobj` である。`never` の操作の
-/// 節の呼び出しは戻らないので、どの `ret` とも互換とする (docs/spec/core-ir.md の「縮約」)。`saved` は Perceus が
+/// 節の呼び出しは戻らないので、どの `ret` とも互換とする (docs/spec/lir.md の「縮約」)。`saved` は Perceus が
 /// 決めるので、この時点では空である。
 fn tail_call(block: &mut Block, ret: Repr, rets: &[Repr], effects: &[EffectInfo]) {
     let Term::Return(Atom::Var(returned)) = block.term else {

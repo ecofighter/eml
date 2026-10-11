@@ -1,7 +1,7 @@
-//! LIR のテキストを読む (docs/implementation/testing.md の「Core IR のテキストの形」)。`pretty` の表示をそのまま
+//! LIR のテキストを読む (docs/implementation/testing.md の「LIR のテキストの形」)。`pretty` の表示をそのまま
 //! 読むので、表示したものを読み直すと同じ表示に戻る。手で書く IR のテストもこの形で書く。
 //! 構文だけを検査する。後ろ向きの `jump`、引数の数の誤り、見えない変数の使用などは verifier に報告させるため読める。
-//! ブロックも文も平らに並ぶので、プログラムの大きさに比例して再帰しない (docs/spec/core-ir.md)。
+//! ブロックも文も平らに並ぶので、プログラムの大きさに比例して再帰しない (docs/spec/lir.md)。
 //! 字句解析と、2つの IR に共通する形の読み方は `syntax` の部品を使い、ここは命令の列だけを読む。
 
 use eml_extern::Extern;

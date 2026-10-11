@@ -1,4 +1,4 @@
-//! contract のパス (docs/spec/core-ir.md の「パス」)。ソースから縮約までを通した結果を見る。使われない純粋な `let` を
+//! contract のパス (docs/spec/lir.md の「縮約」)。ソースから縮約までを通した結果を見る。使われない純粋な `let` を
 //! 消すことと、すべてのブロックに末尾呼び出しの規則を当てることを手で書いた LIR で確かめるテストは、`eml_lir` の
 //! tests/contract.rs にある。
 

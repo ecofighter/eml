@@ -2,7 +2,7 @@ use std::fmt;
 
 use eml_runtime::HeapError;
 
-/// 実行時エラー (docs/spec/core-ir.md の「実行時エラー」)。表示は CLI と UI テストが使う文言である。
+/// 実行時エラー (docs/spec/lir.md の「実行時エラー」)。表示は CLI と UI テストが使う文言である。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RuntimeError {
     /// 実行中の関数で止まった。`at` は、位置を持つ extern の呼び出しが起こした誤りにだけ付く。
@@ -142,7 +142,7 @@ mod tests {
     #[test]
     fn a_runtime_error_with_a_location_names_the_place_instead_of_the_function() {
         // 位置があれば関数の名前を出さない。値として使う extern を包む関数の名前 (`main$extern0`) より、呼び出した場所の
-        // ほうが役に立つためである (docs/spec/core-ir.md の「実行時エラー」)
+        // ほうが役に立つためである (docs/spec/lir.md の「実行時エラー」)
         let error = RuntimeError::Fault {
             fault: Fault::DivisionByZero,
             function: "main$extern0".to_string(),

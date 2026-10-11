@@ -495,7 +495,7 @@ pub(super) fn perform_call(hir: &HirProgram, op: OperationId, args: Vec<Atom>) -
 }
 
 /// エフェクトの表。`effect_index` と同じ順に並べる。操作の Repr は操作のスキームの型から決め、型変数は `repr` が
-/// `tobj` にする (docs/spec/core-ir.md の「エフェクトの位置」)。
+/// `tobj` にする (docs/spec/lir.md の「エフェクトの位置」)。
 pub(super) fn effect_table(
     hir: &HirProgram,
     types: &TypeStore,

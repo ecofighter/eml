@@ -1,4 +1,4 @@
-//! evidence passing の基本操作 (docs/spec/core-ir.md の「基本操作」)。
+//! evidence passing の基本操作 (docs/spec/lir.md の「基本操作」)。
 //! 引数はどれも所有した参照として受け取り、結果に残さないものは手放す。extern の行と同じ約束である。
 
 use eml_lir::Prim;
@@ -54,7 +54,7 @@ impl Runtime<'_> {
                 let table = self.evidence(evidence)?.table;
                 let entry = self.entry(table, *op)?;
                 // 入口の欄は handle の場所で一度だけ入れ、その後は変えない
-                // (docs/spec/core-ir.md の「evidence」)
+                // (docs/spec/lir.md の「evidence」)
                 if *entry != Value::Unit {
                     return Err(Fault::Internal("a clause entry is set twice"));
                 }
@@ -175,7 +175,7 @@ impl Runtime<'_> {
     }
 
     /// 今の `evv` を先頭からたどり、エフェクトが `effect` の最初の evidence を返す。費用は今有効な handler の数に比例し、
-    /// 呼び出しの深さにはよらない (docs/spec/core-ir.md の「evidence を探す」)。
+    /// 呼び出しの深さにはよらない (docs/spec/lir.md の「evidence を探す」)。
     fn lookup(&mut self, effect: u32) -> Result<Value, Fault> {
         let mut list = self.evv;
         while let Some((evidence, next)) = self.node(list)? {
@@ -192,7 +192,7 @@ impl Runtime<'_> {
 
     /// `effects` の多重集合の各エフェクトについて、`list` の先頭から合う evidence をその数だけ除いたリストを作る。
     /// 除いた最後の節点の前までは写し、その後ろは元のリストを共有する。evidence の物体は写さない
-    /// (docs/spec/core-ir.md の「evidence を探す」)。型の付いたプログラムでは、合う evidence がいつも足りる
+    /// (docs/spec/lir.md の「evidence を探す」)。型の付いたプログラムでは、合う evidence がいつも足りる
     /// (docs/spec/effects.md の「健全性」)。`mask` は handle できるエフェクトだけを挙げるので、extern のエフェクトも来ない。
     /// `effects` は空でない (verifier が確かめる) ので、少なくとも1つの evidence を飛ばす。
     fn mask(&mut self, effects: &[u32], list: Value) -> Result<Value, Fault> {
