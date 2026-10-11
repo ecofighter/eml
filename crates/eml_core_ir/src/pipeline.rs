@@ -46,7 +46,8 @@ pub fn lower(
     lower_until(hir, typed, entry, files, Pass::Perceus)
 }
 
-/// `last` の直後で止める。止めたパスまでの検査は、debug ビルドでかける。
+/// `last` の直後で止める。止めたパスまでの検査は、debug ビルドでかける。EP は `last` が `Pass::Evidence` のときだけ
+/// 通す。既定の流れに EP を入れるまでの間、EP の直後の IR を見るテストのためである。
 pub fn lower_until(
     hir: &HirProgram,
     typed: &TypedProgram,
@@ -54,15 +55,38 @@ pub fn lower_until(
     files: &SourceFiles,
     last: Pass,
 ) -> Program {
+    passes(hir, typed, entry, files, last, last == Pass::Evidence)
+}
+
+/// EP を通して最後まで変換する、開発中だけの入口。EP の有無で UI テストの出力が一致することを確かめる差分テストが
+/// 使う (docs/superpowers/specs/2026-10-11-s7-evidence-passing-design.md の「差分テストと段の終わり」)。
+pub fn lower_with_evidence(
+    hir: &HirProgram,
+    typed: &TypedProgram,
+    entry: FunctionId,
+    files: &SourceFiles,
+) -> Program {
+    passes(hir, typed, entry, files, Pass::Perceus, true)
+}
+
+fn passes(
+    hir: &HirProgram,
+    typed: &TypedProgram,
+    entry: FunctionId,
+    files: &SourceFiles,
+    last: Pass,
+    with_evidence: bool,
+) -> Program {
     let mut program = translate::translate(hir, typed, entry, files);
     check(&program, Pass::Translate);
     if last == Pass::Translate {
         return program;
     }
-    // EP はまだ handle と perform を変換しないので、既定の流れには入れない。EP の直後で止めるときだけかける
-    if last == Pass::Evidence {
+    if with_evidence {
         evidence(&mut program);
         check(&program, Pass::Evidence);
+    }
+    if last == Pass::Evidence {
         return program;
     }
     boxing(&mut program);

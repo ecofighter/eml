@@ -10,7 +10,7 @@ use crate::{
     VarId,
 };
 
-use super::{dummy, named, yield_switch};
+use super::{call, direct, dummy, named, yield_switch};
 
 /// `x` をそのまま返す。yield を始めるときの κ である。
 pub(super) fn id() -> CoreFn {
@@ -264,24 +264,12 @@ fn prim(b: &mut FnBuilder, name: &str, repr: Repr, prim: Prim, args: Vec<Atom>) 
     bind(b, name, repr, Rhs::Prim(prim, args))
 }
 
-fn call(call: Call) -> Rhs {
-    Rhs::Call {
-        call,
-        mask: Vec::new(),
-        saved: Vec::new(),
-    }
-}
-
 fn apply(callee: VarId, args: Vec<Atom>) -> Rhs {
     call(Call::Apply {
         callee: Atom::Var(callee),
         args,
         yields: true,
     })
-}
-
-fn direct(target: FnIdx, args: Vec<Atom>) -> Rhs {
-    call(Call::Direct(target, args))
 }
 
 fn take(b: &mut FnBuilder) -> VarId {

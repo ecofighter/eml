@@ -13,7 +13,7 @@ use crate::{
     Atom, Block, BlockId, Call, CoreFn, FnIdx, Prim, Program, Repr, Rhs, Stmt, Term, VarId, VarInfo,
 };
 
-use super::{Helpers, dummy, named, reserve, yield_switch};
+use super::{Helpers, direct, dummy, named, reserve, yield_switch};
 
 /// 変換の後の関数で、yield の地点の扱いを変える所。handle と `mask` の変換が作る。位置はブロックと文の添字である。
 #[derive(Default)]
@@ -479,13 +479,5 @@ fn slow_path(
         params: Vec::new(),
         stmts,
         term: Term::Return(value),
-    }
-}
-
-fn direct(target: FnIdx, args: Vec<Atom>) -> Rhs {
-    Rhs::Call {
-        call: Call::Direct(target, args),
-        mask: Vec::new(),
-        saved: Vec::new(),
     }
 }

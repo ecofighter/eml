@@ -172,6 +172,14 @@ impl Session {
         })
     }
 
+    /// EP を通して最後まで変換する、開発中だけの口。EP を既定の流れに入れるまでの間、差分テスト
+    /// (`tests/ui_evidence.rs`) が EP の有無で出力を比べるために使う。
+    #[cfg(feature = "core")]
+    #[doc(hidden)]
+    pub fn compile_with_evidence(&self) -> Compiled {
+        self.compile_with(eml_core_ir::lower_with_evidence)
+    }
+
     /// パスの順番は `eml_core_ir` だけが知るので、Core IR を作る関数を受け取る。
     #[cfg(feature = "core")]
     fn compile_with(

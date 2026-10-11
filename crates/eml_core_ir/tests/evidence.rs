@@ -2,8 +2,8 @@
 //! の「yield の地点」「継続の関数」)。入力は手書きの translate の出力の形で、出力が EP の後の段の verifier を通ることも
 //! 確かめる。
 
-use crate::common::function;
-use eml_core_ir::{evidence, parse, pretty, verify_evidence, verify_translated};
+use crate::common::{core_text, function};
+use eml_core_ir::{Pass, evidence, parse, pretty, verify_evidence, verify_translated};
 
 fn evidence_text(text: &str) -> String {
     let mut program = parse(text).unwrap_or_else(|error| panic!("{error}"));
@@ -452,4 +452,211 @@ yields fn h() -> int {
       return t.9
     }
     ");
+}
+
+const ASK: &str = "effect Ask where\n  ask : Unit -> Int\n\n";
+
+/// handle の場所の形 (docs/superpowers/specs/2026-10-11-s7-evidence-passing-design.md の「handle と `prompt$`」)。
+/// in-place の入口を `ev_set_clause` で入れてから `evv` を替え、本体の結果を `prompt$` に渡す。
+#[test]
+fn a_handle_installs_evidence_and_calls_prompt() {
+    let text = format!(
+        "{ASK}main : Unit -> <IO> Unit\nmain () =\n  let r =\n    handle ask () + 1 with\n      | ask () k -> k 41\n  println (show r)"
+    );
+    let shown = core_text(&text, Pass::Evidence);
+    insta::assert_snapshot!(function(&shown, "main"), @r#"
+    fn main(p.0: unit) -> unit {
+      let w.4: tobj = prim evv_get()
+      let ev.5: obj = prim ev_new[Ask]((), w.4)
+      let u.6: unit = prim ev_set_clause[Ask.ask](ev.5, &main$handle0$ask$entry)
+      let w.7: tobj = prim evv_push(w.4, ev.5)
+      let u.8: unit = prim evv_set(w.7)
+      let x.9: tobj = yields apply &main$handle0(())
+      let t.1: int = call prompt$(ev.5, &main$handle0$return, x.9)
+      let t.2: obj = extern "Prelude.Show Int.show"(t.1)
+      let t.3: unit = extern Prelude.println(t.2)
+      return t.3
+    }
+    "#);
+}
+
+#[test]
+fn an_immediate_clause_becomes_its_entry() {
+    // 末尾で1回だけ再開する節は、`k` と状態の引数を除いた入口になり、状態を evidence の欄から出し入れする。
+    // resume は残らない
+    let text = format!(
+        "{ASK}main : Unit -> <IO> Unit\nmain () =\n  let r =\n    handle ask () + 1 with\n      | ask () k -> k 41\n  println (show r)"
+    );
+    let shown = core_text(&text, Pass::Evidence);
+    assert!(!shown.contains("fn main$handle0$ask("), "{shown}");
+    insta::assert_snapshot!(function(&shown, "main$handle0$ask$entry"), @"
+    internal clause Ask.ask fn main$handle0$ask$entry(e.4: obj, p.0: unit) -> int {
+      let p.2: unit = prim ev_take_state(e.4)
+      let u.5: unit = prim ev_set_state(e.4, ())
+      return 41
+    }
+    ");
+}
+
+#[test]
+fn a_clause_that_does_not_resume_at_once_yields_to_its_handler() {
+    // 入口は節のクロージャを作って `yield_to` を呼び、ダミーを返す。節の関数は `prompt$` が `apply c(k, st)` で呼ぶ
+    let text = format!(
+        "{ASK}main : Unit -> <IO> Unit\nmain () =\n  let r =\n    handle ask () + 1 with\n      | ask () k ->\n        let v = k 10\n        v * 2\n  println (show r)"
+    );
+    let shown = core_text(&text, Pass::Evidence);
+    insta::assert_snapshot!(function(&shown, "main$handle0$ask$entry"), @"
+    internal clause Ask.ask fn main$handle0$ask$entry(e.0: obj, p.1: unit) -> int {
+      let c.2: tobj = closure main$handle0$ask(p.1)
+      let u.3: unit = prim yield_to(e.0, c.2, &id$)
+      return 0
+    }
+    ");
+}
+
+#[test]
+fn a_resume_becomes_an_apply() {
+    // `resume k(v, s)` は、含む関数の `yields` の印を写した `apply k(v, s)` になる。handle を含む `main` が `yields` で
+    // ないので、節の関数も `apply` も印を持たない
+    let text = format!(
+        "{ASK}main : Unit -> <IO> Unit\nmain () =\n  let r =\n    handle ask () + 1 with\n      | ask () k ->\n        let v = k 10\n        v * 2\n  println (show r)"
+    );
+    let shown = core_text(&text, Pass::Evidence);
+    insta::assert_snapshot!(function(&shown, "main$handle0$ask"), @"
+    internal fn main$handle0$ask(p.0: unit, k.1: tobj, p.2: unit) -> int {
+      let t.3: int = apply k.1(10, ())
+      let t.4: int = extern Prelude.*(t.3, 2)
+      return t.4
+    }
+    ");
+}
+
+#[test]
+fn a_clause_that_performs_another_effect_is_not_run_in_place() {
+    // 節の本体が外の handler の操作を呼ぶ (yield の地点を持つ) と、すぐに再開する節でも `yield_to` の入口になる
+    let text = format!(
+        "{ASK}effect Log where\n  log : Int -> Unit\n\nmain : Unit -> <IO> Unit\nmain () =\n  let r =\n    handle (handle ask () + 1 with\n              | ask () k ->\n                log 1\n                k 41) with\n      | log n k -> k ()\n  println (show r)"
+    );
+    let shown = core_text(&text, Pass::Evidence);
+    insta::assert_snapshot!(function(&shown, "main$handle0$ask$entry"), @"
+    internal yields clause Ask.ask fn main$handle0$ask$entry(e.0: obj, p.1: unit) -> int {
+      let c.2: tobj = closure main$handle0$ask(p.1)
+      let u.3: unit = prim yield_to(e.0, c.2, &id$)
+      return 0
+    }
+    ");
+    insta::assert_snapshot!(function(&shown, "main$handle1$log$entry"), @"
+    internal clause Log.log fn main$handle1$log$entry(e.4: obj, n.0: int) -> unit {
+      let p.2: unit = prim ev_take_state(e.4)
+      let u.5: unit = prim ev_set_state(e.4, ())
+      return ()
+    }
+    ");
+}
+
+#[test]
+fn a_never_clause_aborts() {
+    // `never` の節の入口は `yield_abort` を呼ぶ。`ret` は `obj` で、ダミーの物体を返す
+    let text = "effect Fail where\n  never fail : String -> a\n\nmain : Unit -> <IO> Unit\nmain () =\n  let r =\n    handle fail \"x\" + 1 with\n      | fail _ -> 0\n  println (show r)";
+    let shown = core_text(text, Pass::Evidence);
+    insta::assert_snapshot!(function(&shown, "main$handle0$fail$entry"), @"
+    internal clause Fail.fail fn main$handle0$fail$entry(e.0: obj, p.1: obj) -> obj {
+      let c.2: tobj = closure main$handle0$fail(p.1)
+      let u.3: unit = prim yield_abort(e.0, c.2, &id$)
+      let d.4: obj = prim dummy()
+      return d.4
+    }
+    ");
+}
+
+#[test]
+fn a_perform_looks_up_evidence_and_calls_its_clause() {
+    // `perform` は evidence を探し、その入口の欄を読んで節の呼び出しにする。末尾でないので yield の地点になる
+    let text = format!(
+        "{ASK}main : Unit -> <IO> Unit\nmain () =\n  let r =\n    handle ask () + 1 with\n      | ask () k -> k 41\n  println (show r)"
+    );
+    let shown = core_text(&text, Pass::Evidence);
+    insta::assert_snapshot!(function(&shown, "main$handle0"), @"
+    internal yields fn main$handle0(p.0: unit) -> int {
+      let ev.3: obj = prim ev_lookup[Ask]()
+      let c.4: tobj = prim ev_clause[Ask.ask](ev.3)
+      let t.1: int = clause Ask.ask c.4(ev.3, ())
+      let y.5: int = prim yielding()
+      switch y.5 { 0 -> b2, _ -> b1 }
+    b1:
+      let k.6: tobj = prim yield_cont_take()
+      let k.7: tobj = closure compose$(k.6, &main$handle0$k0)
+      let u.8: unit = prim yield_cont_set(k.7)
+      return 0
+    b2:
+      let t.2: int = extern Prelude.+(t.1, 1)
+      return t.2
+    }
+    ");
+}
+
+#[test]
+fn a_masked_call_restores_the_evidence_list_and_wraps_the_continuation() {
+    // 遅い道は κ を `mask$[State]` で包んでから `run$k1` を `compose$` で足す。速い道の先頭で `evv_set(w0)` が
+    // `evv` を戻し、`run$k1` の引数に w0 はない
+    let text = "effect State s where\n  get : Unit -> s\n  put : s -> Unit\n\nrun : (Unit -> <e> String) -> <State Int | e> String\nrun cb =\n  let n = get ()\n  let s = cb ()\n  s ++ show n\n\ncb : Unit -> <State String> String\ncb () = get () ++ \"!\"\n\nmain : Unit -> <IO> Unit\nmain () =\n  let r = handle (handle run cb with\n                    | get () k -> k 42\n                    | put _ k -> k ()) with\n            | get () k -> k \"str\"\n            | put _ k -> k ()\n  println r";
+    let shown = core_text(text, Pass::Evidence);
+    let run = shown
+        .lines()
+        .find_map(|line| {
+            line.split("fn ")
+                .nth(1)
+                .filter(|rest| rest.starts_with("\"run"))
+        })
+        .map(|rest| {
+            rest.split('(')
+                .next()
+                .unwrap()
+                .trim_matches('"')
+                .to_string()
+        })
+        .unwrap_or_else(|| panic!("no `run` in\n{shown}"));
+    insta::assert_snapshot!(function(&shown, &run), @r#"
+    yields fn "run<e>"(cb.0: tobj) -> obj {
+      let ev.5: obj = prim ev_lookup[State]()
+      let c.6: tobj = prim ev_clause[State.get](ev.5)
+      let t.1: int = clause State.get c.6(ev.5, ())
+      let y.11: int = prim yielding()
+      switch y.11 { 0 -> b2, _ -> b1 }
+    b1:
+      let k.12: tobj = prim yield_cont_take()
+      let c.13: tobj = closure "run<e>$k0"(cb.0)
+      let k.14: tobj = closure compose$(k.12, c.13)
+      let u.15: unit = prim yield_cont_set(k.14)
+      let d.16: obj = prim dummy()
+      return d.16
+    b2:
+      let w.7: tobj = prim evv_get()
+      let w.8: tobj = prim evv_mask[State](w.7)
+      let u.9: unit = prim evv_set(w.8)
+      let t.2: obj = yields apply cb.0(())
+      let y.17: int = prim yielding()
+      switch y.17 { 0 -> b4, _ -> b3 }
+    b3:
+      let k.18: tobj = prim yield_cont_take()
+      let k.19: tobj = closure "mask$[State]"(k.18)
+      let c.20: tobj = closure "run<e>$k1"(t.1)
+      let k.21: tobj = closure compose$(k.19, c.20)
+      let u.22: unit = prim yield_cont_set(k.21)
+      let d.23: obj = prim dummy()
+      return d.23
+    b4:
+      let u.10: unit = prim evv_set(w.7)
+      let t.3: obj = extern "Prelude.Show Int.show"(t.1)
+      let t.4: obj = extern Prelude.++(t.2, t.3)
+      return t.4
+    }
+    "#);
+    insta::assert_snapshot!(function(&shown, &format!("{run}$k1")), @r#"
+    internal yields fn "run<e>$k1"(t.1: int, t.2: obj) -> obj {
+      let t.3: obj = extern "Prelude.Show Int.show"(t.1)
+      let t.4: obj = extern Prelude.++(t.2, t.3)
+      return t.4
+    }
+    "#);
 }
