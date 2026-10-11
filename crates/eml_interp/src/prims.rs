@@ -192,30 +192,27 @@ impl Runtime<'_> {
 
     /// `effects` の多重集合の各エフェクトについて、`list` の先頭から合う evidence をその数だけ除いたリストを作る。
     /// 除いた最後の節点の前までは写し、その後ろは元のリストを共有する。evidence の物体は写さない
-    /// (docs/spec/core-ir.md の「evidence を探す」)。リストに合う evidence が足りなければ、
-    /// 見つかった分だけを除く。
+    /// (docs/spec/core-ir.md の「evidence を探す」)。型の付いたプログラムでは、合う evidence がいつも足りる
+    /// (docs/spec/effects.md の「健全性」)。`mask` は handle できるエフェクトだけを挙げるので、extern のエフェクトも来ない。
     fn mask(&mut self, effects: &[u32], list: Value) -> Result<Value, Fault> {
         let mut remaining = effects.to_vec();
         let mut kept = Vec::new();
-        let mut skipped = false;
         let mut rest = list;
         while !remaining.is_empty() {
             let Some((evidence, next)) = self.node(rest)? else {
-                break;
+                return Err(Fault::Internal(
+                    "a mask skips more evidence than the list holds",
+                ));
             };
             self.evidence_steps += 1;
             let effect = self.effect_of(evidence)?;
             match remaining.iter().position(|&masked| masked == effect) {
                 Some(index) => {
                     remaining.swap_remove(index);
-                    skipped = true;
                 }
                 None => kept.push(evidence),
             }
             rest = next;
-        }
-        if !skipped {
-            return Ok(list);
         }
         // `list` を手放すと共有する後ろの部分も解放されうるので、先に参照を増やす
         self.dup(rest)?;
@@ -381,6 +378,23 @@ mod tests {
         assert_eq!(rt.evidence_steps, 4);
         rt.decref(masked).unwrap();
         clear(&mut rt);
+    }
+
+    /// 型の付いたプログラムでは、`mask` が名前を挙げた数だけ evidence がいつもリストにある (docs/spec/effects.md の
+    /// 「健全性」)。足りないのはコンパイラの誤りなので、見つかった分だけを除いて続けず、内部の誤りにする。
+    #[test]
+    fn a_mask_that_skips_more_evidence_than_the_list_holds_is_an_internal_fault() {
+        let (out, _captured) = OutputSink::capture();
+        let mut rt = runtime(&out);
+        push(&mut rt, 0);
+        push(&mut rt, 1);
+        let list = rt.prim(&Prim::EvvGet, Vec::new()).unwrap();
+        assert_eq!(
+            rt.prim(&Prim::EvvMask(vec![1, 1]), vec![list]),
+            Err(Fault::Internal(
+                "a mask skips more evidence than the list holds"
+            ))
+        );
     }
 
     #[test]
