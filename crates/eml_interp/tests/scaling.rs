@@ -105,8 +105,9 @@ fn appending_to_a_unique_string_copies_only_the_right_side() {
     assert!(stats.string_bytes_copied <= 4 * n as u64, "{stats:?}");
 }
 
-/// handler の下の非末尾の再帰。深さごとに1回 `ask` するので、`count n` は n 回 `ask` する。呼び出しの継続を
-/// たどって探すと、深さ d の `ask` は d に比例する数のフレームを調べ、合わせて n²/2 ほどになる。
+/// handler の下の非末尾の再帰。深さごとに1回 `ask` するので、`count n` は n 回 `ask` する。evidence は `evv` の
+/// 先頭から探すので、1回の `ask` がたどる節点の数は今有効な handler の数で決まり、深さによらない
+/// (docs/spec/core-ir.md の「evidence を探す」)。
 const ASK_RECURSION: &str = "effect Ask where
   ask : Unit -> Int
 
@@ -162,8 +163,9 @@ main () =
 #[test]
 fn a_perform_in_a_masked_callback_skips_the_inner_evidence_once() {
     // tests/ui/run/effects/mask_callback.em と同じ形。`run` は `cb` を `mask` 付きで呼ぶので、`count` の `ask` は
-    // 内側の `Ask` の evidence を飛ばして外側に届く (内側に届くと出力は 2n になる)。上限には、`mask` が `evv` を
-    // 写すときにたどる節点も含める
+    // 内側の `Ask` の evidence を飛ばして外側に届く (内側に届くと出力は 2n になる)。`mask` は内側を除いた `evv` を
+    // 1回だけ写し、各 `ask` はその先頭で外側の evidence を見つける。`ask` のたびに内側を飛ばす形なら 2n ほどになり、
+    // 上限を超える
     let n = 2000;
     let rest = format!(
         "run : (Unit -> <e> a) -> <Ask | e> a
@@ -181,7 +183,7 @@ main () =
 "
     );
     let steps = evidence_steps(n, &rest);
-    assert!(steps <= 4 * n, "evidence_steps = {steps}");
+    assert!(steps <= n + 8, "evidence_steps = {steps}");
 }
 
 /// すぐに再開する操作は、その場で節を呼ぶので、yield せず、継続も組み立てない。探す数は今有効な handler の数で
@@ -434,8 +436,9 @@ main () =
     assert_eq!(short, long);
 }
 
-/// 深さ n の非末尾の再帰の各段で、すぐに再開する操作を行う。フレームは深さに比例して残るが、操作が継続を組み立てると
-/// 各段で深さに比例する物体が増える。n を2倍にしても、数は2倍と定数の余裕を超えない。
+/// 深さ n の非末尾の再帰の各段で、すぐに再開する操作を行う。節はその場で走るので、残る物体は各段の戻りのフレーム
+/// だけである。n を 1000 から 2000 にすると、数は 1000 と定数の余裕しか増えない。節が yield すると、戻る途中の各段が
+/// 継続のクロージャを足すので、1段あたりの物体が増えてこの上限を超える (`k 1 + 0` で再開する節では 3000 増える)。
 #[test]
 fn immediate_operations_under_deep_recursion_keep_the_peak_linear() {
     let (short, long) = peaks(|n| {
@@ -452,7 +455,7 @@ main () =
             format!("{n}\n"),
         )
     });
-    assert!(long <= 2 * short + 16, "peak_objects: {short} -> {long}");
+    assert!(long <= short + 1000 + 16, "peak_objects: {short} -> {long}");
 }
 
 /// yield しうる関数の値を通るループ。関数の値への末尾の `apply` は yield の地点にならず、末尾呼び出しのまま残る
