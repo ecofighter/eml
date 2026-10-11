@@ -4,7 +4,8 @@
 
 use std::mem;
 
-use crate::{Atom, Block, BlockId, CoreFn, Repr, Stmt, Term, VarId, VarInfo};
+use crate::{Block, CoreFn, Stmt, Term};
+use eml_lir::{Atom, BlockId, Repr, VarId, VarInfo};
 
 /// 値の渡し先になる、まだブロックになっていない位置。そこへ向かう開いたままのブロックを集め、ラベルを持つ式を
 /// 変換し終えたら `resolve` で扱いを決める。

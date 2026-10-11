@@ -14,6 +14,7 @@ eml_extern = { path = "crates/eml_extern" }
 eml_hir = { path = "crates/eml_hir" }
 eml_types = { path = "crates/eml_types" }
 eml_core_ir = { path = "crates/eml_core_ir" }
+eml_lir = { path = "crates/eml_lir" }
 eml_runtime = { path = "crates/eml_runtime" }
 eml_interp = { path = "crates/eml_interp" }
 eml_cli = { path = "crates/eml_cli", default-features = false }

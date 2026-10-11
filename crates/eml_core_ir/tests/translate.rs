@@ -1681,8 +1681,8 @@ fn a_user_function_hides_the_prelude_function_of_the_same_name() {
 fn the_prelude_bool_tags_match_the_core_ir_constants() {
     // Core IR は `Bool` を定数のタグで表す。タグは Prelude の宣言の順で決まる (docs/spec/core-ir.md)
     let program = eml_test_support::lower_clean("").program;
-    assert_eq!(program[program.lang.false_ctor].tag, eml_core_ir::FALSE);
-    assert_eq!(program[program.lang.true_ctor].tag, eml_core_ir::TRUE);
+    assert_eq!(program[program.lang.false_ctor].tag, eml_lir::FALSE);
+    assert_eq!(program[program.lang.true_ctor].tag, eml_lir::TRUE);
 }
 
 #[test]

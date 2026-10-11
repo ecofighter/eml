@@ -45,7 +45,7 @@ pub struct PrimRow {
 
 /// 基本操作の即値。テキストの形は `[…]` に書き、verifier は番号が表にあるかを確かめる。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Immediates<'a> {
+pub enum Immediates<'a> {
     None,
     Effects(&'a [u32]),
     Effect(u32),
@@ -95,11 +95,11 @@ kinds! {
 
 impl Prim {
     /// 名前が `name` の種類の基本操作。即値は空か 0 で、読む側が埋める。
-    pub(crate) fn by_name(name: &str) -> Option<Prim> {
+    pub fn by_name(name: &str) -> Option<Prim> {
         KINDS.into_iter().find(|kind| kind.name() == name)
     }
 
-    pub(crate) fn immediates(&self) -> Immediates<'_> {
+    pub fn immediates(&self) -> Immediates<'_> {
         match self {
             Prim::EvvMask(effects) => Immediates::Effects(effects),
             Prim::EvNew(effect) | Prim::EvLookup(effect) => Immediates::Effect(*effect),

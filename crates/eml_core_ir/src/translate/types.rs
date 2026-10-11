@@ -3,7 +3,7 @@
 use eml_hir::{Program as HirProgram, TypeDefId, TypeDefKind};
 use eml_types::{TypeId, TypeKind, TypeStore};
 
-use crate::{Repr, VarInfo, data_repr};
+use eml_lir::{Repr, VarInfo, data_repr};
 
 /// 型の Repr (docs/spec/core-ir.md の「値の表現」)。総称的な位置の束縛も具体化した型から決める。値を受ける位置の
 /// Repr と違えば、box の挿入が変換を入れる (docs/spec/core-ir.md の「位置の規則」)。関数の値と型変数の値は、即値

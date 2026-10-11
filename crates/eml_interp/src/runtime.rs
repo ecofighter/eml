@@ -1,7 +1,8 @@
 use std::cmp::Ordering;
 use std::path::Path;
 
-use eml_core_ir::{Atom, Call, CasePattern, FnIdx, VarId};
+use eml_core_ir::Call;
+use eml_lir::{Atom, CasePattern, FnIdx, VarId};
 use eml_runtime::{Closure, Frame, Heap, HeapError, ObjRef, OutputSink, Payload, Value};
 
 use crate::RunStats;

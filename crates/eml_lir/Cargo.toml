@@ -1,0 +1,21 @@
+[package]
+name = "eml_lir"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+# 結合テストは1つのバイナリにまとめる (docs/implementation/testing.md の「crate の中の置き方」)
+autotests = false
+
+# `prim.rs` に単体テストがあるので、`test = false` にしない
+[lib]
+doctest = false
+
+[dependencies]
+eml_extern.workspace = true
+
+[dev-dependencies]
+insta.workspace = true
+
+[[test]]
+name = "integration"
+path = "tests/main.rs"

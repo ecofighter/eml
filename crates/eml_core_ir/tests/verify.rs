@@ -2,9 +2,9 @@
 //! 構造の規則 R1 から R9 と、前の形の IR から引き継いだ検査を1つずつ確かめる。
 
 use eml_core_ir::{
-    Prim, Program, Rhs, Stmt, Term, parse, verify, verify_evidence, verify_scopes,
-    verify_translated,
+    Program, Rhs, Stmt, Term, parse, verify, verify_evidence, verify_scopes, verify_translated,
 };
+use eml_lir::Prim;
 
 /// 手で書く IR の配置の行。プログラムの先頭に置く。
 const BOOL: &str = "layout Prelude.Bool { False, True }\n";

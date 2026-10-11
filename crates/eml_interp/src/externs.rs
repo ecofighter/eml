@@ -1,7 +1,7 @@
 use std::io::Read;
 
-use eml_core_ir::{EQ, FALSE, GT, LT, TRUE, TUPLE};
 use eml_extern::Extern;
+use eml_lir::{EQ, FALSE, GT, LT, TRUE, TUPLE};
 use eml_runtime::{FileHandle, ObjRef, Payload, Value};
 
 use crate::error::{Fault, io_reason};

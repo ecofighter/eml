@@ -4,7 +4,8 @@
 
 use crate::common::{core_text, function};
 use eml_core_ir::liveness::live_in;
-use eml_core_ir::{Pass, VarId, parse, perceus, pretty, verify, verify_scopes};
+use eml_core_ir::{Pass, parse, perceus, pretty, verify, verify_scopes};
+use eml_lir::VarId;
 
 fn perceus_text(text: &str) -> String {
     let mut program = parse(text).unwrap_or_else(|error| panic!("{error}"));

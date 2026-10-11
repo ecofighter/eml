@@ -8,10 +8,8 @@ use std::mem;
 
 use crate::boxing::tail_position_call;
 use crate::builder::FnBuilder;
-use crate::{
-    Atom, BlockId, Call, CoreFn, FnIdx, OpRet, OperationInfo, Prim, Program, Repr, Rhs, Stmt, Term,
-    VarId, VarInfo, operation,
-};
+use crate::{Call, CoreFn, Program, Rhs, Stmt, Term};
+use eml_lir::{Atom, BlockId, FnIdx, OpRet, OperationInfo, Prim, Repr, VarId, VarInfo, operation};
 
 use super::split::Annotations;
 use super::{Helpers, call, direct, dummy, named};

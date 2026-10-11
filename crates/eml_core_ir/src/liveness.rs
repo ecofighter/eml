@@ -4,7 +4,8 @@
 
 use std::collections::BTreeSet;
 
-use crate::{Atom, BlockId, CoreFn, Stmt, Term, VarId};
+use crate::{CoreFn, Stmt, Term};
+use eml_lir::{Atom, BlockId, VarId};
 
 /// ブロックごとの入口の生存集合。`BlockId` の番号で引き、各集合は昇順に並ぶ。入口は、ブロックの引数と case の
 /// フィールドを束縛した後の位置なので、使う引数とフィールドも集合に入る。RC の対象に限らず、すべての変数を持つ。

@@ -7,9 +7,9 @@ use eml_extern::Extern;
 use eml_hir::{Program as HirProgram, TypeDefKind};
 use eml_types::{InstanceNode, TypeId, TypeStore};
 
-use crate::{
-    Atom, BlockId, Call, Case, CasePattern, CoreFn, Ctor, EQ, FALSE, FnIdx, LayoutId, Repr, Rhs,
-    Stmt, TRUE, TUPLE, Term, VarId,
+use crate::{Call, CoreFn, Rhs, Stmt, Term};
+use eml_lir::{
+    Atom, BlockId, Case, CasePattern, Ctor, EQ, FALSE, FnIdx, LayoutId, Repr, TRUE, TUPLE, VarId,
 };
 
 use super::instances::{GeneratedInstance, GeneratedMethod, Target};

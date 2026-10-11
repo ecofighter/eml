@@ -10,9 +10,8 @@ use eml_hir::{
     Program as HirProgram, Res, TypeDefKind, ValueItem,
 };
 
-use crate::{
-    Atom, BlockId, Case, CasePattern, Ctor, LayoutId, Repr, Rhs, Stmt, TUPLE, Term, VarId, VarInfo,
-};
+use crate::{Rhs, Stmt, Term};
+use eml_lir::{Atom, BlockId, Case, CasePattern, Ctor, LayoutId, Repr, TUPLE, VarId, VarInfo};
 
 use super::types::{named, repr, type_def_repr, var_info};
 use super::{Ctx, CtxId, Exit, FnLowering};

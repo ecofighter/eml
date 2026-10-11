@@ -4,31 +4,14 @@
 //! ブロックも文も平らに並ぶので、プログラムの大きさに比例して再帰しない (docs/spec/core-ir.md)。
 
 use std::collections::HashMap;
-use std::fmt;
 
 use eml_extern::Extern;
 
-use crate::prim::Immediates;
-use crate::{
-    Atom, Block, BlockId, Call, Case, CasePattern, CoreFn, Ctor, EffectInfo, FnIdx, Layout,
-    LayoutCtor, LayoutId, Loc, OpRet, OperationInfo, Prim, Program, Repr, Rhs, Stmt, Term, VarId,
-    VarInfo,
+use crate::{Block, Call, CoreFn, Program, Rhs, Stmt, Term};
+use eml_lir::{
+    Atom, BlockId, Case, CasePattern, Ctor, EffectInfo, FnIdx, Immediates, Layout, LayoutCtor,
+    LayoutId, Loc, OpRet, OperationInfo, ParseError, Prim, Repr, VarId, VarInfo,
 };
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ParseError {
-    /// 1 から数える行の番号。
-    pub line: usize,
-    pub message: String,
-}
-
-impl fmt::Display for ParseError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "line {}: {}", self.line, self.message)
-    }
-}
-
-impl std::error::Error for ParseError {}
 
 /// `pretty` の表示を `Program` に戻す。入口は `entry$main` という名前の関数で、なければ最初の関数である。
 pub fn parse(text: &str) -> Result<Program, ParseError> {

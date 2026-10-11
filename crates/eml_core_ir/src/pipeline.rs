@@ -6,9 +6,10 @@ use eml_hir::{FunctionId, Program as HirProgram};
 use eml_types::TypedProgram;
 
 use crate::{
-    Program, VerifyError, boxing, contract, evidence, perceus, translate, verify, verify_evidence,
+    Program, boxing, contract, evidence, perceus, translate, verify, verify_evidence,
     verify_scopes, verify_translated,
 };
+use eml_lir::VerifyError;
 
 /// `lower_until` で止める位置。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

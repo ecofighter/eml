@@ -9,9 +9,8 @@ use std::ops::Range;
 
 use crate::boxing::tail_position_call;
 use crate::liveness::{insert_var, live_after_term, live_in, step_back};
-use crate::{
-    Atom, Block, BlockId, Call, CoreFn, FnIdx, Prim, Program, Repr, Rhs, Stmt, Term, VarId, VarInfo,
-};
+use crate::{Block, Call, CoreFn, Program, Rhs, Stmt, Term};
+use eml_lir::{Atom, BlockId, FnIdx, Prim, Repr, VarId, VarInfo};
 
 use super::{Helpers, direct, dummy, named, reserve, yield_switch};
 

@@ -178,6 +178,7 @@ dependencies = [
  "eml_diagnostics",
  "eml_extern",
  "eml_hir",
+ "eml_lir",
  "eml_test_support",
  "eml_types",
  "insta",
@@ -214,8 +215,17 @@ version = "0.1.0"
 dependencies = [
  "eml_core_ir",
  "eml_extern",
+ "eml_lir",
  "eml_runtime",
  "eml_test_support",
+ "insta",
+]
+
+[[package]]
+name = "eml_lir"
+version = "0.1.0"
+dependencies = [
+ "eml_extern",
  "insta",
 ]
 

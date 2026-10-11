@@ -21,9 +21,8 @@ use eml_hir::{
 use eml_types::{BodyTypes, RowYield, TypeId, TypeStore, TypedProgram};
 use la_arena::ArenaMap;
 
-use crate::{
-    Atom, Case, CasePattern, CoreFn, FALSE, FnIdx, Loc, Program, Repr, Rhs, TRUE, Term, VarId,
-};
+use crate::{CoreFn, Program, Rhs, Term};
+use eml_lir::{Atom, Case, CasePattern, FALSE, FnIdx, Loc, Repr, TRUE, VarId};
 
 use crate::builder::{FnBuilder, Label};
 use expr::extern_row;

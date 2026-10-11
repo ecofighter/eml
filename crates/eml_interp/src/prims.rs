@@ -1,7 +1,7 @@
 //! evidence passing の基本操作 (docs/spec/core-ir.md の「基本操作」)。
 //! 引数はどれも所有した参照として受け取り、結果に残さないものは手放す。extern の行と同じ約束である。
 
-use eml_core_ir::Prim;
+use eml_lir::Prim;
 use eml_runtime::{ObjRef, Payload, Value};
 
 use crate::error::Fault;

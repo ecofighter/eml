@@ -23,29 +23,14 @@
 //! (docs/spec/core-ir.md の「verifier」)。
 
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::fmt;
 use std::mem::discriminant;
 
-use crate::pretty::{effect_text, operation_text, prim_text};
-use crate::prim::Immediates;
-use crate::{
-    Atom, Block, BlockId, Call, Case, CasePattern, CoreFn, Ctor, EffectInfo, FnIdx, Layout,
-    LayoutCtor, LayoutId, OpRet, Prim, Program, Repr, Rhs, Stmt, Term, VarId, operation,
+use crate::{Block, Call, CoreFn, Program, Rhs, Stmt, Term};
+use eml_lir::syntax::{effect_text, operation_text, prim_text};
+use eml_lir::{
+    Atom, BlockId, Case, CasePattern, Ctor, EffectInfo, FnIdx, Immediates, Layout, LayoutCtor,
+    LayoutId, OpRet, Prim, Repr, VarId, VerifyError, operation,
 };
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct VerifyError {
-    pub function: String,
-    pub message: String,
-}
-
-impl fmt::Display for VerifyError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{} in `{}`", self.message, self.function)
-    }
-}
-
-impl std::error::Error for VerifyError {}
 
 /// Perceus の後の IR を確かめる。形と範囲に加えて、RC の対象の変数の所有が釣り合うことと、呼び出しの後に見える
 /// 変数が退避したものと結果だけであることを確かめる。
@@ -153,7 +138,7 @@ fn clause_function(program: &Program, function: &CoreFn, level: Level) -> Result
         return Ok(());
     };
     let name = &function.name;
-    let clause = operation_text(program, effect, op);
+    let clause = operation_text(&program.effects, effect, op);
     if level == Level::Translated {
         return Err(format!(
             "a clause of `{clause}` is defined before the evidence pass"
@@ -580,7 +565,7 @@ impl<'a> Checker<'a> {
     /// 関数が `clause` の印を持てば、その操作の `E.op`。表にない関数は `None` で、`consume` と `function_at` が断る。
     fn clause_of(&self, target: FnIdx) -> Option<String> {
         let (effect, op) = self.program.functions.get(target.0 as usize)?.clause?;
-        Some(operation_text(self.program, effect, op))
+        Some(operation_text(&self.program.effects, effect, op))
     }
 
     /// ブロックの入口の状態を取り出し、区間を決める。区間の違う辺が合流するなら、入るどの辺でも見える変数を入れ直した
@@ -889,7 +874,7 @@ impl<'a> Checker<'a> {
     fn passes(&self, atom: Atom, expected: Repr) -> Result<bool, String> {
         let passes = match atom {
             Atom::Var(var) if self.never[var.0 as usize] => true,
-            _ => atom.fits_compatible(self.function, expected),
+            _ => atom.fits_compatible(&self.function.vars, expected),
         };
         if passes {
             self.fn_atom(atom)?;
@@ -1069,7 +1054,7 @@ impl<'a> Checker<'a> {
     }
 
     fn literal_scrutinee(&self, scrutinee: Atom, repr: Repr, kind: &str) -> Result<(), String> {
-        if scrutinee.fits(self.function, repr) {
+        if scrutinee.fits(&self.function.vars, repr) {
             return Ok(());
         }
         Err(format!(
@@ -1439,7 +1424,7 @@ impl<'a> Checker<'a> {
                     ));
                 }
                 for (index, (&arg, &expected)) in args.iter().zip(row.params).enumerate() {
-                    if !arg.fits(self.function, expected) {
+                    if !arg.fits(&self.function.vars, expected) {
                         return Err(format!(
                             "argument {index} of `{}` is {}, but the extern takes {}",
                             row.name,
@@ -1544,7 +1529,7 @@ impl<'a> Checker<'a> {
     /// 比べる (docs/spec/core-ir.md の「基本操作」)。
     fn check_prim(&self, var: VarId, prim: &Prim, args: &[Atom]) -> Result<(), String> {
         let row = prim.row();
-        let name = &prim_text(self.program, prim);
+        let name = &prim_text(&self.program.effects, prim);
         if self.level == Level::Translated {
             return Err(format!("`prim {name}` is used before the evidence pass"));
         }
@@ -1625,7 +1610,7 @@ impl<'a> Checker<'a> {
         op: u32,
         args: &[Atom],
     ) -> Result<(), String> {
-        let entry = operation_text(self.program, effect, op);
+        let entry = operation_text(&self.program.effects, effect, op);
         let target = match args[1] {
             Atom::Fn(target) => Some(target),
             Atom::Var(var) => self.closures.get(&var).map(|&(target, _)| target),
@@ -1640,7 +1625,7 @@ impl<'a> Checker<'a> {
                     return Err(format!(
                         "`{}` is a clause of `{}`, but it is put into the `{entry}` entry",
                         function.name,
-                        operation_text(self.program, marked_effect, marked_op)
+                        operation_text(&self.program.effects, marked_effect, marked_op)
                     ));
                 }
                 None => {
@@ -1658,7 +1643,7 @@ impl<'a> Checker<'a> {
             return Err(format!(
                 "`prim {name}` is given `{}`, the evidence of `{}`",
                 self.name(evidence),
-                effect_text(self.program, created)
+                effect_text(&self.program.effects, created)
             ));
         }
         Ok(())
@@ -1688,7 +1673,7 @@ impl<'a> Checker<'a> {
             let fits = if declared == Repr::TObj {
                 !self.checks_boundaries() || self.passes(arg, declared)?
             } else {
-                arg.fits(self.function, declared)
+                arg.fits(&self.function.vars, declared)
             };
             if !fits {
                 return Err(format!(
@@ -1985,7 +1970,10 @@ impl<'a> Checker<'a> {
                 args: _,
             } => (
                 "a",
-                format!("clause of `{}`", operation_text(self.program, *effect, *op)),
+                format!(
+                    "clause of `{}`",
+                    operation_text(&self.program.effects, *effect, *op)
+                ),
             ),
             // `check_call` は、呼び出しを文言にする前にエフェクトの命令を拒む
             Call::Handle { .. } | Call::Perform { .. } | Call::Resume { .. } => {

@@ -4,9 +4,10 @@
 
 use crate::common::{core_text, function};
 use eml_core_ir::{
-    Call, Pass, Program, Repr, Rhs, Stmt, Term, boxing, parse, pretty, verify_evidence,
-    verify_scopes, verify_translated,
+    Call, Pass, Program, Rhs, Stmt, Term, boxing, parse, pretty, verify_evidence, verify_scopes,
+    verify_translated,
 };
+use eml_lir::Repr;
 
 /// 入力が変換の段の verifier を、出力が範囲の段の verifier を通ることも確かめる。基本操作や節の呼び出し、`clause` の
 /// 印がある入力は EP の出力の形なので、EP の段の verifier で確かめる。

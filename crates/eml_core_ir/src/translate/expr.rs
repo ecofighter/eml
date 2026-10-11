@@ -8,7 +8,8 @@ use eml_hir::{
 };
 use eml_types::{FieldTarget, TypeId};
 
-use crate::{Atom, Call, Ctor, FnIdx, Repr, Rhs, Stmt, TUPLE, VarId};
+use crate::{Call, Rhs, Stmt};
+use eml_lir::{Atom, Ctor, FnIdx, Repr, TUPLE, VarId};
 
 use super::pattern::Known;
 use super::program::{effect_index, perform_call, plain_call};

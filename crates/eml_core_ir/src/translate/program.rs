@@ -9,9 +9,10 @@ use eml_hir::{
 };
 use eml_types::{TypeId, TypeStore, TypedProgram};
 
-use crate::{
-    Atom, Call, CoreFn, Ctor, EffectInfo, FnIdx, Layout, LayoutCtor, LayoutId, Loc, OpRet,
-    OperationInfo, Repr, Rhs, Stmt, Term, VarInfo,
+use crate::{Call, CoreFn, Rhs, Stmt, Term};
+use eml_lir::{
+    Atom, Ctor, EffectInfo, FnIdx, Layout, LayoutCtor, LayoutId, Loc, OpRet, OperationInfo, Repr,
+    VarInfo,
 };
 
 use crate::builder::FnBuilder;

@@ -4,9 +4,8 @@
 
 use eml_extern::Purity;
 
-use crate::{
-    Atom, Block, Call, CoreFn, EffectInfo, OpRet, Program, Repr, Rhs, Stmt, Term, operation,
-};
+use crate::{Block, Call, CoreFn, Program, Rhs, Stmt, Term};
+use eml_lir::{Atom, EffectInfo, OpRet, Repr, operation};
 
 pub fn contract(program: &mut Program) {
     let rets: Vec<Repr> = program

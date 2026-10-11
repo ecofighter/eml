@@ -3,11 +3,11 @@
 
 use std::fmt::Write;
 
-use crate::prim::Immediates;
-use crate::{
-    Atom, Block, BlockId, Call, CasePattern, CoreFn, Ctor, LayoutId, OpRet, Prim, Program, Rhs,
-    Stmt, Term, VarId,
+use crate::{Block, Call, CoreFn, Program, Rhs, Stmt, Term};
+use eml_lir::syntax::{
+    effect_text, effects_text, function_name, operation_name, operation_text, prim_text,
 };
+use eml_lir::{Atom, BlockId, CasePattern, Ctor, LayoutId, OpRet, VarId};
 
 /// 位置を出さない表示。translate のテストの多くは位置を見ないので、既定では出さない。
 pub fn pretty(program: &Program) -> String {
@@ -99,7 +99,10 @@ impl Printer<'_> {
 
     fn function(&self, function: &CoreFn, out: &mut String) {
         let clause = function.clause.map_or_else(String::new, |(effect, op)| {
-            format!("clause {} ", operation_text(self.program, effect, op))
+            format!(
+                "clause {} ",
+                operation_text(&self.program.effects, effect, op)
+            )
         });
         writeln!(
             out,
@@ -251,7 +254,7 @@ impl Printer<'_> {
             Rhs::Unbox(a) => format!("unbox {}", self.atom(function, a)),
             Rhs::Prim(prim, args) => format!(
                 "prim {}({})",
-                prim_text(self.program, prim),
+                prim_text(&self.program.effects, prim),
                 self.atoms(function, args)
             ),
         }
@@ -288,7 +291,7 @@ impl Printer<'_> {
                     .map(|(op, clause)| {
                         format!(
                             "{}: {}",
-                            operation_name(self.program, *effect, op as u32),
+                            operation_name(&self.program.effects, *effect, op as u32),
                             self.atom(function, clause)
                         )
                     })
@@ -300,7 +303,7 @@ impl Printer<'_> {
                 };
                 format!(
                     "handle {}({}, {}) {clauses} return {}",
-                    effect_text(self.program, *effect),
+                    effect_text(&self.program.effects, *effect),
                     self.atom(function, init),
                     self.atom(function, body),
                     self.atom(function, ret)
@@ -316,7 +319,7 @@ impl Printer<'_> {
                 let never = if *resumable { "" } else { "never " };
                 format!(
                     "perform {never}{}({})",
-                    operation_text(self.program, *effect, *op),
+                    operation_text(&self.program.effects, *effect, *op),
                     self.atoms(function, args)
                 )
             }
@@ -333,7 +336,7 @@ impl Printer<'_> {
                 args,
             } => format!(
                 "clause {} {}({})",
-                operation_text(self.program, *effect, *op),
+                operation_text(&self.program.effects, *effect, *op),
                 self.atom(function, callee),
                 self.atoms(function, args)
             ),
@@ -345,7 +348,7 @@ impl Printer<'_> {
         if mask.is_empty() {
             return String::new();
         }
-        format!("mask [{}] ", effects_text(self.program, mask))
+        format!("mask [{}] ", effects_text(&self.program.effects, mask))
     }
 
     /// 配置の名前。表にない番号は、エフェクトと同じく `#N` で書く。
@@ -401,66 +404,4 @@ fn binders(function: &CoreFn, vars: &[VarId]) -> String {
         .map(|&v| binder(function, v))
         .collect::<Vec<_>>()
         .join(", ")
-}
-
-/// エフェクトの名前。表にない番号は `#N` で書く。誤りを含む IR も表示でき、`parse` が読み戻せて、verifier がその番号を
-/// 報告できるようにするためである。
-pub(crate) fn effect_text(program: &Program, effect: u32) -> String {
-    program
-        .effects
-        .get(effect as usize)
-        .map_or_else(|| format!("#{effect}"), |info| info.name.clone())
-}
-
-/// エフェクトの多重集合 (`mask` と `evv_mask` の即値) を `, ` で区切って並べる。
-pub(crate) fn effects_text(program: &Program, effects: &[u32]) -> String {
-    let names: Vec<String> = effects
-        .iter()
-        .map(|&effect| effect_text(program, effect))
-        .collect();
-    names.join(", ")
-}
-
-/// エフェクトで修飾しない操作の名前。表にない操作は `#N` で書く。
-fn operation_name(program: &Program, effect: u32, op: u32) -> String {
-    program
-        .effects
-        .get(effect as usize)
-        .and_then(|info| info.operations.get(op as usize))
-        .map_or_else(|| format!("#{op}"), |operation| operation.name.clone())
-}
-
-/// `E.op` の形。
-pub(crate) fn operation_text(program: &Program, effect: u32, op: u32) -> String {
-    format!(
-        "{}.{}",
-        effect_text(program, effect),
-        operation_name(program, effect, op)
-    )
-}
-
-/// 基本操作の名前と、`[…]` に書いた即値 (`ev_clause[State.get]`)。
-pub(crate) fn prim_text(program: &Program, prim: &Prim) -> String {
-    let name = prim.name();
-    match prim.immediates() {
-        Immediates::None => name.to_string(),
-        Immediates::Effects(effects) => format!("{name}[{}]", effects_text(program, effects)),
-        Immediates::Effect(effect) => format!("{name}[{}]", effect_text(program, effect)),
-        Immediates::Operation { effect, op } => {
-            format!("{name}[{}]", operation_text(program, effect, op))
-        }
-    }
-}
-
-/// 関数と extern の行の名前。単相化の instance の名前 (`id@[Int, String]`) と instance の extern の行の名前
-/// (`Prelude.Eq Int.==`) は、テキストの形の字句の区切りを含むので、文字列と同じ逃がし方で引用符で囲む
-/// (docs/implementation/testing.md の「Core IR のテキストの形」)。row のビットを書いた名前 (`twice<e>`) も同じく
-/// 囲む (docs/spec/core-ir.md の「row のビットと instance の鍵」)。
-fn function_name(name: &str) -> std::borrow::Cow<'_, str> {
-    let separates = |c: char| c.is_whitespace() || "(){}[],\"<>".contains(c);
-    if name.is_empty() || name.contains(separates) {
-        format!("{name:?}").into()
-    } else {
-        name.into()
-    }
 }

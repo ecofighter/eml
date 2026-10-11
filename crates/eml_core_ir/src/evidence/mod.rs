@@ -11,10 +11,8 @@ mod tests;
 
 use std::collections::HashMap;
 
-use crate::{
-    Atom, BlockId, Call, Case, CasePattern, CoreFn, FnIdx, Prim, Program, Repr, Rhs, Term, VarId,
-    VarInfo,
-};
+use crate::{Call, CoreFn, Program, Rhs, Term};
+use eml_lir::{Atom, BlockId, Case, CasePattern, FnIdx, Prim, Repr, VarId, VarInfo};
 
 use split::split;
 

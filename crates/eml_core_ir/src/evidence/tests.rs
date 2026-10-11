@@ -3,7 +3,8 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::{BlockId, FnIdx, Program, parse, pretty, verify_evidence};
+use crate::{Program, parse, pretty, verify_evidence};
+use eml_lir::{BlockId, FnIdx};
 
 use super::Helpers;
 use super::split::{Annotations, split};

@@ -1,6 +1,7 @@
 use std::path::Path;
 
-use eml_core_ir::{BlockId, FnIdx, Loc, Program, Rhs, Stmt, Term, VarId};
+use eml_core_ir::{Program, Rhs, Stmt, Term};
+use eml_lir::{BlockId, FnIdx, Loc, VarId};
 use eml_runtime::{Closure, HeapError, OutputSink, Payload, Value};
 
 use crate::error::{Fault, RuntimeError, SourceLocation};

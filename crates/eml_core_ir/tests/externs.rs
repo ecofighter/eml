@@ -2,9 +2,10 @@
 //! `eml_hir` の結合テストが照らし合わせる。型から Repr を決める規則は translate にあるので、ここで確かめる。
 //! extern が作る値のタグと、translate が作る配置も照らし合わせる。
 
-use eml_core_ir::{FALSE, TRUE, TUPLE, type_repr};
+use eml_core_ir::type_repr;
 use eml_extern::{Extern, ExternType};
 use eml_hir::{Function, FunctionKind, MethodImpl, TypeDefId, ValueItem};
+use eml_lir::{FALSE, TRUE, TUPLE};
 use eml_test_support::Checked;
 use eml_types::{Substitution, TypeId, TypeKind, TypeStore};
 
@@ -218,9 +219,9 @@ fn the_ordering_tags_match_the_prelude_declaration() {
     assert_eq!(
         names,
         [
-            ("LT", eml_core_ir::LT),
-            ("EQ", eml_core_ir::EQ),
-            ("GT", eml_core_ir::GT)
+            ("LT", eml_lir::LT),
+            ("EQ", eml_lir::EQ),
+            ("GT", eml_lir::GT)
         ]
     );
 }

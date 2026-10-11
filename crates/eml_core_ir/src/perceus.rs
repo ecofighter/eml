@@ -6,7 +6,8 @@
 
 use std::collections::{BTreeSet, HashMap};
 
-use crate::{Atom, Block, BlockId, CasePattern, CoreFn, Ctor, Program, Rhs, Stmt, Term, VarId};
+use crate::{Block, CoreFn, Program, Rhs, Stmt, Term};
+use eml_lir::{Atom, BlockId, CasePattern, Ctor, VarId};
 
 use crate::liveness::{insert_var, live_after_term, live_in, step_back};
 

@@ -11,9 +11,10 @@
 use std::collections::HashMap;
 
 use crate::contract::pure;
-use crate::{
-    Atom, Block, BlockId, Call, CasePattern, CoreFn, EffectInfo, FnIdx, Layout, OpRet,
-    OperationInfo, Program, Repr, Rhs, Stmt, Term, VarId, VarInfo, operation,
+use crate::{Block, Call, CoreFn, Program, Rhs, Stmt, Term};
+use eml_lir::{
+    Atom, BlockId, CasePattern, EffectInfo, FnIdx, Layout, OpRet, OperationInfo, Repr, VarId,
+    VarInfo, operation,
 };
 
 pub fn boxing(program: &mut Program) {
@@ -433,7 +434,7 @@ impl Converter<'_> {
                 });
                 Atom::Var(boxed)
             }
-            _ if atom.fits_compatible(self.function, expected) => atom,
+            _ if atom.fits_compatible(&self.function.vars, expected) => atom,
             _ => self.impossible(atom, expected),
         }
     }

@@ -4,11 +4,9 @@
 //! 確認と遅い道もここで置き、後で分けない。
 
 use crate::builder::FnBuilder;
-use crate::pretty::effects_text;
-use crate::{
-    Atom, BlockId, Call, Case, CasePattern, CoreFn, FnIdx, Prim, Program, Repr, Rhs, Stmt, Term,
-    VarId,
-};
+use crate::{Call, CoreFn, Program, Rhs, Stmt, Term};
+use eml_lir::syntax::effects_text;
+use eml_lir::{Atom, BlockId, Case, CasePattern, FnIdx, Prim, Repr, VarId};
 
 use super::{call, direct, dummy, named, yield_switch};
 
@@ -209,7 +207,7 @@ pub(super) fn rewind(resume: FnIdx) -> CoreFn {
 
 /// `mask$[effects]` の名前。多重集合をエフェクトの名前で書く。
 pub(super) fn mask_name(program: &Program, effects: &[u32]) -> String {
-    format!("mask$[{}]", effects_text(program, effects))
+    format!("mask$[{}]", effects_text(&program.effects, effects))
 }
 
 /// `mask$[effects](κ, v)`。再開されたときに `evv` から `effects` を飛ばしてから κ を呼び、戻ったら `evv` を戻す。
