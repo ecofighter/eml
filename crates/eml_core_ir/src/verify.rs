@@ -10,7 +10,7 @@
 //! 呼び出しの境界を比べる。
 //! Perceus の後は、RC の対象の所有の多重集合と、呼び出しの後に見える変数 (R6、R7) も確かめる (`verify`)。`switch`、
 //! `unpack`、`unbox` は値を読むだけである。`switch` と `unpack` のフィールドは値から借りて始まり、自分か持ち主が
-//! 所有を持つ間だけ有効である。
+//! 所有を持つ間だけ有効である。LIR の verifier と共有する部品は `eml_lir::check` にある。
 //!
 //! R9 は、`con`、タグの `switch`、`unpack`、`release` を、その命令が指す配置と比べる。配置を持つ `switch` はタグの
 //! case を持つものだけで、リテラルの `switch` では scrutinee の Repr を比べる。値がどの配置で作られたかは
@@ -22,14 +22,17 @@
 //! 育つ。所有の多重集合は辺ごとに写して比べるので、その手間は辺の数と所有の大きさの積に比例する
 //! (docs/spec/core-ir.md の「verifier」)。
 
-use std::collections::{BTreeMap, HashMap, HashSet};
-use std::mem::discriminant;
+use std::collections::{BTreeMap, HashMap};
 
 use crate::{Block, Call, CoreFn, Program, Rhs, Stmt, Term};
-use eml_lir::syntax::{effect_text, operation_text, prim_text};
+use eml_lir::check::{
+    BlockShape, Context, Dominators, FnSummary, Tables, TermShape, boxed_scalars, field_count,
+    shape,
+};
+use eml_lir::syntax::{operation_text, prim_text};
 use eml_lir::{
-    Atom, BlockId, Case, CasePattern, Ctor, EffectInfo, FnIdx, Immediates, Layout, LayoutCtor,
-    LayoutId, OpRet, Prim, Repr, VarId, VerifyError, operation,
+    Atom, BlockId, CasePattern, Ctor, EffectInfo, FnIdx, Layout, OpRet, Prim, Repr, VarId,
+    VerifyError, operation,
 };
 
 /// Perceus の後の IR を確かめる。形と範囲に加えて、RC の対象の変数の所有が釣り合うことと、呼び出しの後に見える
@@ -72,11 +75,24 @@ enum Level {
 fn verify_at(program: &Program, level: Level) -> Result<(), VerifyError> {
     // 配置の Repr はコンストラクタをすべてたどって決まるので、命令ごとでなく表ごとに1回だけ求める
     let layout_reprs: Vec<Repr> = program.layouts.iter().map(Layout::repr).collect();
-    // 一様かどうかも関数ごとに1回だけ求める。参照ごとに引数をたどると、参照の数と引数の数の積の時間になる
-    let non_uniform: Vec<Option<NonUniform>> = program.functions.iter().map(non_uniform).collect();
+    let functions: Vec<FnSummary> = program
+        .functions
+        .iter()
+        .map(|function| {
+            FnSummary::new(
+                &function.name,
+                function.clause,
+                param_reprs(function),
+                function.ret,
+            )
+        })
+        .collect();
     let tables = Tables {
+        layouts: &program.layouts,
         layout_reprs: &layout_reprs,
-        non_uniform: &non_uniform,
+        effects: &program.effects,
+        strings: &program.strings,
+        functions: &functions,
     };
     // `clause` の印の関数の ABI は、参照ごとでなく関数ごとに1回だけ確かめる
     for function in &program.functions {
@@ -86,7 +102,7 @@ fn verify_at(program: &Program, level: Level) -> Result<(), VerifyError> {
         })?;
     }
     for function in &program.functions {
-        shape(function)
+        shape(&block_shapes(function))
             .and_then(|dominators| Checker::new(program, tables, function, level, dominators).run())
             .map_err(|message| VerifyError {
                 function: function.name.clone(),
@@ -96,101 +112,49 @@ fn verify_at(program: &Program, level: Level) -> Result<(), VerifyError> {
     Ok(())
 }
 
-/// verifier を始めるときに1回だけ求める、プログラム全体の表。
-#[derive(Clone, Copy)]
-struct Tables<'a> {
-    /// `program.layouts` と同じ順の、配置の Repr。
-    layout_reprs: &'a [Repr],
-    /// `program.functions` と同じ順の、関数の値として使えない理由。一様な関数は `None` である。
-    non_uniform: &'a [Option<NonUniform>],
+fn param_reprs(function: &CoreFn) -> impl ExactSizeIterator<Item = Repr> + '_ {
+    function.params().iter().map(|&param| function.repr(param))
 }
 
-/// 関数が一様でない理由。`tobj` と互換でない最初の引数か、`ret` である。
-#[derive(Clone, Copy)]
-enum NonUniform {
-    Param(usize, Repr),
-    Ret(Repr),
-}
-
-/// 一様な関数は、引数と `ret` がすべて `tobj` と互換である。関数の値を呼ぶ `apply` は、関数ごとの Repr を知らないため
-/// である (docs/spec/core-ir.md の「位置の規則」)。`clause` の印の関数は関数の値として呼ばれず、操作の ABI に
-/// 合わせるので、ここでは見ない (`clause_function`)。
-fn non_uniform(function: &CoreFn) -> Option<NonUniform> {
-    if function.clause.is_some() {
-        return None;
-    }
-    function
-        .params()
-        .iter()
-        .enumerate()
-        .find_map(|(index, &param)| {
-            let repr = function.repr(param);
-            (!repr.compatible(Repr::TObj)).then_some(NonUniform::Param(index, repr))
-        })
-        .or_else(|| (!function.ret.compatible(Repr::TObj)).then_some(NonUniform::Ret(function.ret)))
-}
-
-/// `clause` の印の関数は、捕獲の後に evidence と操作の引数を受け、操作の結果を返す。境界の段では、捕獲が `tobj`、
-/// evidence が `obj`、残りの引数と `ret` が操作の表の Repr (`never` の操作の `ret` は `obj`) と互換であることも
-/// 確かめる (docs/spec/core-ir.md の「box の挿入」と「verifier」)。
+/// EP より前に `clause` の印はない。印の関数の ABI は `eml_lir::check::clause_function` が確かめる。
 fn clause_function(program: &Program, function: &CoreFn, level: Level) -> Result<(), String> {
-    let Some((effect, op)) = function.clause else {
-        return Ok(());
-    };
-    let name = &function.name;
-    let clause = operation_text(&program.effects, effect, op);
-    if level == Level::Translated {
+    if let Some((effect, op)) = function.clause
+        && level == Level::Translated
+    {
         return Err(format!(
-            "a clause of `{clause}` is defined before the evidence pass"
+            "a clause of `{}` is defined before the evidence pass",
+            operation_text(&program.effects, effect, op)
         ));
     }
-    let Some(info) = program.effects.get(effect as usize) else {
-        return Err(format!(
-            "`{name}` is a clause of effect {effect}, which is not in the effect table"
-        ));
-    };
-    let Some(operation) = info.operations.get(op as usize) else {
-        return Err(format!(
-            "`{name}` is a clause of operation {op} of `{}`, which has {} operations",
-            info.name,
-            info.operations.len()
-        ));
-    };
-    let params = function.params();
-    let Some(captures) = params.len().checked_sub(1 + operation.params.len()) else {
-        return Err(format!(
-            "`{name}` is a clause of `{clause}`, so it takes the evidence and {} arguments after its captures, but it has {} parameters",
-            operation.params.len(),
-            params.len()
-        ));
-    };
-    if level < Level::Scopes {
-        return Ok(());
-    }
-    let expected = std::iter::repeat_n(Repr::TObj, captures)
-        .chain([Repr::Obj])
-        .chain(operation.params.iter().copied());
-    for (index, (&param, expected)) in params.iter().zip(expected).enumerate() {
-        let repr = function.repr(param);
-        if !repr.compatible(expected) {
-            return Err(format!(
-                "`{name}` is a clause of `{clause}`, but its parameter {index} is {}",
-                repr.name()
-            ));
-        }
-    }
-    let ret = match operation.ret {
-        OpRet::Repr(repr) => repr,
-        // `never` の節の入口はダミーの物体を返す
-        OpRet::Never => Repr::Obj,
-    };
-    if !function.ret.compatible(ret) {
-        return Err(format!(
-            "`{name}` is a clause of `{clause}`, but it returns {}",
-            function.ret.name()
-        ));
-    }
-    Ok(())
+    eml_lir::check::clause_function(
+        &program.effects,
+        &function.name,
+        function.clause,
+        param_reprs(function),
+        function.ret,
+        level >= Level::Scopes,
+    )
+}
+
+/// 辺の規則の検査 (`shape`) に渡す、ブロックの形。
+fn block_shapes(function: &CoreFn) -> Vec<BlockShape> {
+    function
+        .blocks
+        .iter()
+        .map(|block| BlockShape {
+            params: block.params.len(),
+            term: match &block.term {
+                Term::Return(_) | Term::TailCall(_) => TermShape::Exit,
+                Term::Jump { target, args } => TermShape::Jump {
+                    target: *target,
+                    args: args.len(),
+                },
+                Term::Switch { .. } => TermShape::Switch {
+                    targets: block.term.successors().collect(),
+                },
+            },
+        })
+        .collect()
 }
 
 /// 呼び出しの結果を受ける所。`let` の束縛か、`tail` の呼び出し元の `ret` である。
@@ -198,203 +162,6 @@ fn clause_function(program: &Program, function: &CoreFn, level: Level) -> Result
 enum Receiver {
     Bound(VarId),
     Tail,
-}
-
-/// 支配木の前順と後順の番号。`a` が `b` を支配するのは、`b` が `a` の部分木にあるときである。
-struct Dominators {
-    pre: Vec<u32>,
-    post: Vec<u32>,
-}
-
-impl Dominators {
-    /// `idom[b]` は `b` の直接の支配者で、つねに `b` より番号が小さい。木は深くなりうるので、再帰せずにたどる。
-    fn new(idom: &[u32]) -> Self {
-        let mut children = vec![Vec::new(); idom.len()];
-        for (block, &parent) in idom.iter().enumerate().skip(1) {
-            children[parent as usize].push(block as u32);
-        }
-        let mut pre = vec![0; idom.len()];
-        let mut post = vec![0; idom.len()];
-        let mut clock = 1;
-        let mut stack = vec![(0u32, 0usize)];
-        while let Some((node, next)) = stack.last_mut() {
-            if let Some(&child) = children[*node as usize].get(*next) {
-                *next += 1;
-                pre[child as usize] = clock;
-                clock += 1;
-                stack.push((child, 0));
-            } else {
-                post[*node as usize] = clock;
-                clock += 1;
-                stack.pop();
-            }
-        }
-        Dominators { pre, post }
-    }
-
-    fn dominates(&self, a: u32, b: u32) -> bool {
-        let (a, b) = (a as usize, b as usize);
-        self.pre[a] <= self.pre[b] && self.post[b] <= self.post[a]
-    }
-}
-
-/// 辺の規則 (R1〜R4) を確かめ、支配木を作る。支配者は Cooper-Harvey-Kennedy の方法で求める。辺がすべて番号の
-/// 大きいブロックへ向かうので、番号の順が逆後順になり、反復せず1回で決まる。
-fn shape(function: &CoreFn) -> Result<Dominators, String> {
-    let count = function.blocks.len();
-    let mut tree = GrowingTree::new(count);
-    let mut jumps_in = vec![0u32; count];
-    let mut switches_in = vec![0u32; count];
-    for (from, block) in function.blocks.iter().enumerate() {
-        let from = from as u32;
-        // 入る辺はすべて番号の小さいブロックから来るので、ここで `from` の支配者は決まっている
-        tree.attach(from);
-        for target in block.term.successors() {
-            let to = target.0;
-            if to as usize >= count {
-                return Err(format!(
-                    "an edge from b{from} goes to b{to}, which does not exist"
-                ));
-            }
-            if target == BlockId::ENTRY {
-                return Err(format!("an edge from b{from} goes to the entry block"));
-            }
-            if to <= from {
-                return Err(format!("an edge from b{from} goes back to b{to}"));
-            }
-            match &block.term {
-                Term::Jump { target: _, args } => {
-                    jumps_in[to as usize] += 1;
-                    let params = function.block(target).params.len();
-                    if args.len() != params {
-                        return Err(format!(
-                            "a jump to b{to} passes {} values, but b{to} takes {params}",
-                            args.len()
-                        ));
-                    }
-                }
-                Term::Switch {
-                    scrutinee: _,
-                    layout: _,
-                    cases: _,
-                    default: _,
-                } => switches_in[to as usize] += 1,
-                Term::Return(_) | Term::TailCall(_) => {
-                    unreachable!("a return and a tail call have no successors")
-                }
-            }
-            tree.add_edge(from, to);
-        }
-    }
-    for (index, block) in function.blocks.iter().enumerate().skip(1) {
-        let (jumps, switches) = (jumps_in[index], switches_in[index]);
-        if switches > 0 {
-            if jumps > 0 {
-                return Err(format!(
-                    "b{index} is the target of both a switch and a jump"
-                ));
-            }
-            if switches > 1 {
-                return Err(format!("b{index} is the target of {switches} switch edges"));
-            }
-            if !block.params.is_empty() {
-                return Err(format!(
-                    "b{index} is the target of a switch but takes parameters"
-                ));
-            }
-        } else if jumps == 0 {
-            return Err(format!("b{index} has no edge into it"));
-        }
-    }
-    // R4 を満たせば、どのブロックにも番号の小さいブロックから辺が入るので、入口から届き、支配者が決まっている
-    let idom: Vec<u32> = tree
-        .idom
-        .into_iter()
-        .map(|parent| parent.expect("every block is reachable"))
-        .collect();
-    Ok(Dominators::new(&idom))
-}
-
-/// ブロックを番号の順に加えながら育てる支配木。`jump` は Myers の skew-binary の飛び先で、深さだけで決まる。
-/// 共通の支配者を探す歩みは、これを使うと深さの対数で済む。1段ずつ登ると、深さの違う辺が多く1つのブロックに
-/// 合流したとき (`a || b || ...` の真の行き先など)、深さの和だけ、つまり2乗の時間がかかる。
-struct GrowingTree {
-    idom: Vec<Option<u32>>,
-    depth: Vec<u32>,
-    jump: Vec<u32>,
-}
-
-impl GrowingTree {
-    fn new(count: usize) -> Self {
-        let mut idom = vec![None; count];
-        idom[0] = Some(0);
-        GrowingTree {
-            idom,
-            depth: vec![0; count],
-            jump: vec![0; count],
-        }
-    }
-
-    /// 支配者が決まった `block` を木に加える。入る辺のないブロックは加えない。そのブロックは R4 の検査で誤りになる。
-    fn attach(&mut self, block: u32) {
-        if block == 0 {
-            return;
-        }
-        let Some(parent) = self.idom[block as usize] else {
-            return;
-        };
-        let (b, p) = (block as usize, parent as usize);
-        let j = self.jump[p] as usize;
-        let jj = self.jump[j] as usize;
-        self.depth[b] = self.depth[p] + 1;
-        self.jump[b] = if self.depth[p] - self.depth[j] == self.depth[j] - self.depth[jj] {
-            jj as u32
-        } else {
-            parent
-        };
-    }
-
-    /// 辺 `from -> to` を `to` の支配者に織り込む。入る辺のないブロックからの辺は支配に数えない。
-    fn add_edge(&mut self, from: u32, to: u32) {
-        if self.idom[from as usize].is_none() {
-            return;
-        }
-        self.idom[to as usize] = Some(match self.idom[to as usize] {
-            None => from,
-            Some(other) => self.intersect(other, from),
-        });
-    }
-
-    fn parent(&self, block: u32) -> u32 {
-        self.idom[block as usize].expect("a block in the tree has its dominator")
-    }
-
-    /// 2つのブロックの共通の支配者のうち、最も近いもの。深い方を同じ深さまで上げてから、2つを一緒に上げる。
-    /// 同じ深さのブロックの飛び先は同じ深さにあるので、飛び先が違う間は飛んでも共通の支配者を越えない。
-    fn intersect(&self, a: u32, b: u32) -> u32 {
-        let depth = |block: u32| self.depth[block as usize];
-        let jump = |block: u32| self.jump[block as usize];
-        let lift = |mut block: u32, to: u32| {
-            while depth(block) > to {
-                block = if depth(jump(block)) >= to {
-                    jump(block)
-                } else {
-                    self.parent(block)
-                };
-            }
-            block
-        };
-        let to = depth(a).min(depth(b));
-        let (mut a, mut b) = (lift(a, to), lift(b, to));
-        while a != b {
-            if jump(a) != jump(b) {
-                (a, b) = (jump(a), jump(b));
-            } else {
-                (a, b) = (self.parent(a), self.parent(b));
-            }
-        }
-        a
-    }
 }
 
 /// フィールドの出どころ。分解した値、コンストラクタ、位置である。`release` が名前を書いた変数を確かめるのに使う。
@@ -428,10 +195,11 @@ struct Entry {
 /// 変数であるときだけである (R7)。Perceus より前は呼び出しで区切らないので、区間は 0 だけである。
 struct Checker<'a> {
     program: &'a Program,
-    tables: Tables<'a>,
     function: &'a CoreFn,
     level: Level,
     dominators: Dominators,
+    /// 所有にも命令の型にも関わらない検査の状態。
+    cx: Context<'a>,
     defs: Vec<Option<Site>>,
     def_epochs: Vec<u32>,
     /// 区間ごとの、入れ直した変数 (昇順)。呼び出しの区間は `save` の変数、合流の区間は入るどの辺でも見える変数である。
@@ -439,19 +207,13 @@ struct Checker<'a> {
     epoch: u32,
     at: Site,
     pending: HashMap<u32, Entry>,
-    /// `closure` で束縛した変数の、関数とすでに渡した引数の数。`handle` の節の引数の数を確かめるのに使う。
-    closures: HashMap<VarId, (FnIdx, usize)>,
+    /// `closure` で束縛した変数の、すでに渡した引数の数。`handle` の節の引数の数を確かめるのに使う。
+    closure_args: HashMap<VarId, usize>,
     /// フィールドの持ち主と出どころ。持ち主は、分解した値が束縛の時点で所有を持っていればその値、なければその値の
     /// 持ち主である。変数は1回だけ定義されるので (R5)、経路ごとではなく関数に1つの表にする
     /// (docs/spec/core-ir.md の「verifier」)。
     owners: Vec<Option<VarId>>,
     origins: Vec<Option<Origin>>,
-    /// 変数の番号ごとの、`never` の操作の `perform` か `clause` の束縛かどうか。束縛の使いには制御が届かないので、
-    /// 互換の位置で位置と比べない。
-    never: Vec<bool>,
-    /// `ev_new[E]` で束縛した変数の、エフェクトの番号。`ev_set_clause` の入口がその evidence のエフェクトの操作で
-    /// あることを確かめるのに使う。
-    evidences: HashMap<VarId, u32>,
 }
 
 impl<'a> Checker<'a> {
@@ -464,10 +226,11 @@ impl<'a> Checker<'a> {
     ) -> Self {
         Checker {
             program,
-            tables,
             function,
             level,
             dominators,
+            // 境界の検査は、box の挿入の後の段 (範囲の段と所有の段) だけで行う
+            cx: Context::new(tables, &function.vars, level >= Level::Scopes),
             defs: vec![None; function.vars.len()],
             def_epochs: vec![0; function.vars.len()],
             epochs: vec![Vec::new()],
@@ -477,11 +240,9 @@ impl<'a> Checker<'a> {
                 index: -1,
             },
             pending: HashMap::new(),
-            closures: HashMap::new(),
+            closure_args: HashMap::new(),
             owners: vec![None; function.vars.len()],
             origins: vec![None; function.vars.len()],
-            never: vec![false; function.vars.len()],
-            evidences: HashMap::new(),
         }
     }
 
@@ -520,7 +281,7 @@ impl<'a> Checker<'a> {
                 Stmt::Let {
                     var,
                     rhs: Rhs::MakeClosure(target, _),
-                } if self.clause_of(*target).is_some() => Some((*var, *target)),
+                } if self.cx.clause_of(*target).is_some() => Some((*var, *target)),
                 _ => None,
             })
             .collect();
@@ -535,7 +296,7 @@ impl<'a> Checker<'a> {
                 Atom::Int(_) | Atom::Unit | Atom::Tag(_) => return,
             };
             if result.is_ok()
-                && let Some(clause) = self.clause_of(target)
+                && let Some(clause) = self.cx.clause_of(target)
             {
                 result = Err(format!(
                     "`{}` is a clause of `{clause}`, but it is used as a function value",
@@ -560,12 +321,6 @@ impl<'a> Checker<'a> {
             block.term.for_each_atom(&mut check);
         }
         result
-    }
-
-    /// 関数が `clause` の印を持てば、その操作の `E.op`。表にない関数は `None` で、`consume` と `function_at` が断る。
-    fn clause_of(&self, target: FnIdx) -> Option<String> {
-        let (effect, op) = self.program.functions.get(target.0 as usize)?.clause?;
-        Some(operation_text(&self.program.effects, effect, op))
     }
 
     /// ブロックの入口の状態を取り出し、区間を決める。区間の違う辺が合流するなら、入るどの辺でも見える変数を入れ直した
@@ -634,14 +389,15 @@ impl<'a> Checker<'a> {
                         mask: _,
                         saved,
                     } => {
-                        self.never[var.0 as usize] = self.never_returns(call);
+                        self.cx.never[var.0 as usize] = self.never_returns(call);
                         self.after_call(owned, saved)?;
                     }
                     Rhs::MakeClosure(target, args) => {
-                        self.closures.insert(*var, (*target, args.len()));
+                        self.cx.closures.insert(*var, *target);
+                        self.closure_args.insert(*var, args.len());
                     }
                     Rhs::Prim(Prim::EvNew(effect), _) => {
-                        self.evidences.insert(*var, *effect);
+                        self.cx.evidences.insert(*var, *effect);
                     }
                     Rhs::Prim(_, _)
                     | Rhs::Extern {
@@ -666,15 +422,15 @@ impl<'a> Checker<'a> {
                 if repr != Repr::Obj {
                     return Err(format!(
                         "`{}` ({}) is unpacked, but only obj can be",
-                        self.name(*value),
+                        self.cx.name(*value),
                         repr.name()
                     ));
                 }
-                let (layout, layout_repr, constructor) = self.ctor(*ctor, "an unpack")?;
+                let (layout, layout_repr, constructor) = self.cx.ctor(*ctor, "an unpack")?;
                 if layout_repr != Repr::Obj {
                     return Err(format!(
                         "`{}` (obj) is unpacked as `{}`, which is {}",
-                        self.name(*value),
+                        self.cx.name(*value),
                         layout.name,
                         layout_repr.name()
                     ));
@@ -682,7 +438,7 @@ impl<'a> Checker<'a> {
                 if layout.constructors.len() != 1 {
                     return Err(format!(
                         "an unpack of `{}` names `{}`, which has {} constructors",
-                        self.name(*value),
+                        self.cx.name(*value),
                         layout.name,
                         layout.constructors.len()
                     ));
@@ -690,14 +446,14 @@ impl<'a> Checker<'a> {
                 field_count(
                     format!(
                         "an unpack of `{}` as `{}` #{}",
-                        self.name(*value),
+                        self.cx.name(*value),
                         layout.name,
                         ctor.tag
                     ),
                     fields.len(),
                     constructor,
                 )?;
-                self.field_reprs(layout, ctor.tag, constructor, fields)?;
+                self.cx.field_reprs(layout, ctor.tag, constructor, fields)?;
                 self.read(owned, *value, "unpacked")?;
                 self.bind_fields(owned, *value, *ctor, fields, self.at)
             }
@@ -707,7 +463,7 @@ impl<'a> Checker<'a> {
                 if !self.function.repr(*var).is_rc() {
                     return Err(format!(
                         "`{}` is duplicated but is not reference counted",
-                        self.name(*var)
+                        self.cx.name(*var)
                     ));
                 }
                 *owned.entry(*var).or_insert(0) += 1;
@@ -732,10 +488,10 @@ impl<'a> Checker<'a> {
         match term {
             Term::Return(atom) => {
                 self.consume(&mut owned, *atom)?;
-                if !self.passes(*atom, self.function.ret)? {
+                if !self.cx.passes(*atom, self.function.ret)? {
                     return Err(format!(
                         "{} is returned from a function that returns {}",
-                        self.typed_atom_text(*atom),
+                        self.cx.typed_atom_text(*atom),
                         self.function.ret.name()
                     ));
                 }
@@ -767,12 +523,13 @@ impl<'a> Checker<'a> {
                 if cases.is_empty() && default.is_none() {
                     return Err("a switch has no targets".to_string());
                 }
-                self.switch_cases(cases)?;
-                self.literal_default(cases, *default)?;
+                self.cx.switch_cases(cases)?;
+                self.cx.literal_default(cases, *default)?;
                 if cases.iter().any(|case| !case.fields.is_empty()) {
-                    self.fields_allowed(*scrutinee)?;
+                    self.cx.fields_allowed(*scrutinee)?;
                 }
-                self.switch_layout(*scrutinee, *layout, cases, *default)?;
+                self.cx
+                    .switch_layout(*scrutinee, *layout, cases, *default)?;
                 // `switch` は scrutinee を読むだけなので、どの行き先も scrutinee の所有を引き継ぐ
                 match *scrutinee {
                     Atom::Var(var) => self.read(&owned, var, "switched on")?,
@@ -846,280 +603,26 @@ impl<'a> Checker<'a> {
     /// `jump` の実引数は、行き先の引数と互換である (R8)。
     fn check_passed(&self, target: BlockId, arg: Atom, param: VarId) -> Result<(), String> {
         let expected = self.function.repr(param);
-        if self.passes(arg, expected)? {
+        if self.cx.passes(arg, expected)? {
             return Ok(());
         }
         Err(match arg {
             Atom::Var(var) => format!(
                 "a jump to b{} passes `{}` ({}) to `{}` ({})",
                 target.0,
-                self.name(var),
+                self.cx.name(var),
                 self.function.repr(var).name(),
-                self.name(param),
+                self.cx.name(param),
                 expected.name()
             ),
             _ => format!(
                 "a jump to b{} passes {} to `{}` ({})",
                 target.0,
-                self.atom_text(arg),
-                self.name(param),
+                self.cx.atom_text(arg),
+                self.cx.name(param),
                 expected.name()
             ),
         })
-    }
-
-    /// 互換の位置に収まる値。規則は box の挿入と同じ `Atom::fits_compatible` で、`never` の操作の `perform` と
-    /// `clause` の束縛は、それに加えて、どの位置にも収まる。範囲の段と所有の段では、収まった `&g` の g が一様でなければ誤りにする。
-    /// 変換の段では見ない。translate は、一様でない g の `&g` を `jump` に渡しうるからである。
-    fn passes(&self, atom: Atom, expected: Repr) -> Result<bool, String> {
-        let passes = match atom {
-            Atom::Var(var) if self.never[var.0 as usize] => true,
-            _ => atom.fits_compatible(&self.function.vars, expected),
-        };
-        if passes {
-            self.fn_atom(atom)?;
-        }
-        Ok(passes)
-    }
-
-    /// 範囲の段と所有の段で、`&g` の g が一様かを確かめる。IR のどこにある `&g` も関数の値なので
-    /// (docs/spec/core-ir.md の「位置の規則」)、互換の位置のほかに、extern の引数、`drop`、case のない `switch` の
-    /// scrutinee でも呼ぶ。
-    fn fn_atom(&self, atom: Atom) -> Result<(), String> {
-        match atom {
-            Atom::Fn(target) if self.checks_boundaries() => self.function_value(target),
-            _ => Ok(()),
-        }
-    }
-
-    /// 境界の検査は、box の挿入の後の段 (範囲の段と所有の段) だけで行う。
-    fn checks_boundaries(&self) -> bool {
-        self.level >= Level::Scopes
-    }
-
-    /// 関数の値として使う関数 (`&g`、`closure g`) は一様である (docs/spec/core-ir.md の「位置の規則」)。番号が表にない
-    /// 関数は、`consume` と `function_at` が断る。
-    fn function_value(&self, target: FnIdx) -> Result<(), String> {
-        let Some(&Some(reason)) = self.tables.non_uniform.get(target.0 as usize) else {
-            return Ok(());
-        };
-        let name = &self.program.functions[target.0 as usize].name;
-        Err(match reason {
-            NonUniform::Param(index, repr) => format!(
-                "`{name}` is used as a function value, but its parameter {index} is {}",
-                repr.name()
-            ),
-            NonUniform::Ret(repr) => format!(
-                "`{name}` is used as a function value, but it returns {}",
-                repr.name()
-            ),
-        })
-    }
-
-    /// 配置の番号を表で引く。`what` は誤りの文の主語 (`a con`) である。
-    fn layout(&self, id: LayoutId, what: &str) -> Result<(&'a Layout, Repr), String> {
-        let layout = self
-            .program
-            .layout(id)
-            .ok_or_else(|| format!("{what} refers to the unknown layout #{}", id.0))?;
-        Ok((layout, self.tables.layout_reprs[id.0 as usize]))
-    }
-
-    /// `con`、`unpack`、`release` のコンストラクタを配置の表で引く (R9)。
-    fn ctor(&self, ctor: Ctor, what: &str) -> Result<(&'a Layout, Repr, &'a LayoutCtor), String> {
-        let (layout, repr) = self.layout(ctor.layout, what)?;
-        match layout.constructors.get(ctor.tag as usize) {
-            Some(constructor) => Ok((layout, repr, constructor)),
-            None => Err(format!(
-                "{what} names #{}, but `{}` has {} constructors",
-                ctor.tag,
-                layout.name,
-                layout.constructors.len()
-            )),
-        }
-    }
-
-    /// case と `unpack` のフィールドは、宣言した Repr が `tobj` でなければ、その Repr の変数である。`tobj` の
-    /// フィールドは、範囲の段と所有の段で、`tobj` と互換な変数である (R9)。
-    fn field_reprs(
-        &self,
-        layout: &Layout,
-        tag: u32,
-        constructor: &LayoutCtor,
-        fields: &[VarId],
-    ) -> Result<(), String> {
-        for (slot, (&field, &declared)) in fields.iter().zip(&constructor.fields).enumerate() {
-            let repr = self.function.repr(field);
-            let fits = if declared == Repr::TObj {
-                !self.checks_boundaries() || repr.compatible(declared)
-            } else {
-                repr == declared
-            };
-            if !fits {
-                return Err(format!(
-                    "field {slot} of `{}` #{tag} is `{}` ({}), but the layout has {}",
-                    layout.name,
-                    self.name(field),
-                    repr.name(),
-                    declared.name()
-                ));
-            }
-        }
-        Ok(())
-    }
-
-    /// `switch` の配置と scrutinee (R9)。タグの case を持つ `switch` だけが配置を持ち、その scrutinee は、Repr が
-    /// 配置の Repr と同じ変数である。case はコンストラクタのフィールドをすべて束縛し、`default` がなければ、どの
-    /// コンストラクタにも case がある。リテラルの `switch` の scrutinee は、そのリテラルの型の Repr に収まる。
-    fn switch_layout(
-        &self,
-        scrutinee: Atom,
-        layout: Option<LayoutId>,
-        cases: &[Case],
-        default: Option<BlockId>,
-    ) -> Result<(), String> {
-        let first = cases.first().map(|case| case.pattern);
-        let (layout, layout_repr) = match (layout, first) {
-            (Some(id), Some(CasePattern::Tag(_))) => self.layout(id, "a switch")?,
-            (Some(id), _) => {
-                return Err(format!(
-                    "a switch without tag cases has the layout `{}`",
-                    self.layout(id, "a switch")?.0.name
-                ));
-            }
-            (None, Some(CasePattern::Tag(_))) => {
-                return Err("a switch with tag cases has no layout".to_string());
-            }
-            (None, Some(CasePattern::Int(_))) => {
-                return self.literal_scrutinee(scrutinee, Repr::Int, "Int");
-            }
-            (None, Some(CasePattern::String(_))) => {
-                return self.literal_scrutinee(scrutinee, Repr::Obj, "String");
-            }
-            // case のない `switch` は `default` へ進むだけで、値を比べない
-            (None, None) => return self.fn_atom(scrutinee),
-        };
-        let Atom::Var(var) = scrutinee else {
-            return Err(format!(
-                "a switch on `{}` has the constant {} as its scrutinee",
-                layout.name,
-                self.atom_text(scrutinee)
-            ));
-        };
-        let repr = self.function.repr(var);
-        if repr != layout_repr {
-            return Err(format!(
-                "`{}` ({}) is switched on as `{}`, which is {}",
-                self.name(var),
-                repr.name(),
-                layout.name,
-                layout_repr.name()
-            ));
-        }
-        for case in cases {
-            let CasePattern::Tag(tag) = case.pattern else {
-                unreachable!("`switch_cases` gives one switch one kind of cases")
-            };
-            let Some(constructor) = layout.constructors.get(tag as usize) else {
-                return Err(format!(
-                    "a case names #{tag}, but `{}` has {} constructors",
-                    layout.name,
-                    layout.constructors.len()
-                ));
-            };
-            field_count(
-                format!("a case of `{}` #{tag}", layout.name),
-                case.fields.len(),
-                constructor,
-            )?;
-            self.field_reprs(layout, tag, constructor, &case.fields)?;
-        }
-        // 網羅は `default` のないときだけ見る。通る IR ではそのとき case がコンストラクタの数だけあるので、表の大きさは
-        // case の数を超えない
-        if default.is_none() {
-            let mut covered = vec![false; layout.constructors.len()];
-            for case in cases {
-                if let CasePattern::Tag(tag) = case.pattern {
-                    covered[tag as usize] = true;
-                }
-            }
-            if let Some(missing) = covered.iter().position(|&covered| !covered) {
-                return Err(format!(
-                    "a switch on `{}` has no default and no case for #{missing}",
-                    layout.name
-                ));
-            }
-        }
-        Ok(())
-    }
-
-    fn literal_scrutinee(&self, scrutinee: Atom, repr: Repr, kind: &str) -> Result<(), String> {
-        if scrutinee.fits(&self.function.vars, repr) {
-            return Ok(());
-        }
-        Err(format!(
-            "{} is switched on {kind} literals",
-            self.typed_atom_text(scrutinee)
-        ))
-    }
-
-    /// 1つの `switch` の case の種類がそろい、同じ case が2回なく、リテラルの case はフィールドを持たず、文字列の case
-    /// は定数の表にあること。
-    fn switch_cases(&self, cases: &[Case]) -> Result<(), String> {
-        let kinds: HashSet<_> = cases
-            .iter()
-            .map(|case| discriminant(&case.pattern))
-            .collect();
-        if kinds.len() > 1 {
-            return Err("a switch mixes kinds of cases".to_string());
-        }
-        let mut seen = HashSet::new();
-        for case in cases {
-            let literal = !matches!(case.pattern, CasePattern::Tag(_));
-            if literal && !case.fields.is_empty() {
-                return Err("a literal case binds fields".to_string());
-            }
-            if let CasePattern::String(index) = case.pattern
-                && index as usize >= self.program.strings.len()
-            {
-                return Err(format!(
-                    "a case refers to string constant {index}, which does not exist"
-                ));
-            }
-            if !seen.insert(case.pattern) {
-                return Err(format!(
-                    "a switch has two cases for {}",
-                    self.pattern_text(case.pattern)
-                ));
-            }
-        }
-        Ok(())
-    }
-
-    /// リテラルは無限にあるので、`default` がないと合わない値が行き場を失う。
-    fn literal_default(&self, cases: &[Case], default: Option<BlockId>) -> Result<(), String> {
-        let literal = cases
-            .iter()
-            .any(|case| !matches!(case.pattern, CasePattern::Tag(_)));
-        if literal && default.is_none() {
-            return Err("a switch on literals has no default".to_string());
-        }
-        Ok(())
-    }
-
-    /// フィールドを持つ値は RC の対象の変数に入る。定数はフィールドを持たない (docs/spec/core-ir.md の「verifier」)。
-    fn fields_allowed(&self, scrutinee: Atom) -> Result<(), String> {
-        match scrutinee {
-            Atom::Var(var) if !self.function.repr(var).is_rc() => Err(format!(
-                "`{}` ({}) is not reference counted, but a switch binds its fields",
-                self.name(var),
-                self.function.repr(var).name()
-            )),
-            Atom::Var(_) => Ok(()),
-            Atom::Int(_) | Atom::Unit | Atom::Tag(_) | Atom::Fn(_) => {
-                Err("a switch on a constant binds fields".to_string())
-            }
-        }
     }
 
     /// 呼び出しの後に見える変数は、退避した変数と結果だけである。退避する変数は呼び出しの前に見えていて、RC の対象の
@@ -1129,7 +632,10 @@ impl<'a> Checker<'a> {
             if saved.is_empty() {
                 return Ok(());
             }
-            return Err(format!("a call saves {} before Perceus", self.names(saved)));
+            return Err(format!(
+                "a call saves {} before Perceus",
+                self.cx.names(saved)
+            ));
         }
         for &var in saved {
             self.visible(var)?;
@@ -1144,7 +650,7 @@ impl<'a> Checker<'a> {
         if flatten(owned) != saved_rc {
             return Err(format!(
                 "a call saves {} but owns {}",
-                self.names(&saved_rc),
+                self.cx.names(&saved_rc),
                 self.owned_names(owned)
             ));
         }
@@ -1160,7 +666,7 @@ impl<'a> Checker<'a> {
     fn define(&mut self, owned: &mut Owned, var: VarId, site: Site) -> Result<(), String> {
         let slot = &mut self.defs[var.0 as usize];
         if slot.is_some() {
-            return Err(format!("`{}` is defined twice", self.name(var)));
+            return Err(format!("`{}` is defined twice", self.cx.name(var)));
         }
         *slot = Some(site);
         self.def_epochs[var.0 as usize] = self.epoch;
@@ -1180,7 +686,7 @@ impl<'a> Checker<'a> {
             }
         });
         if !dominated {
-            return Err(format!("`{}` is used outside its scope", self.name(var)));
+            return Err(format!("`{}` is used outside its scope", self.cx.name(var)));
         }
         if self.def_epochs[var.0 as usize] != self.epoch
             && self.epochs[self.epoch as usize]
@@ -1189,7 +695,7 @@ impl<'a> Checker<'a> {
         {
             return Err(format!(
                 "`{}` is used after a call that does not save it",
-                self.name(var)
+                self.cx.name(var)
             ));
         }
         Ok(())
@@ -1207,17 +713,17 @@ impl<'a> Checker<'a> {
         if !self.function.repr(var).is_rc() {
             return Err(format!(
                 "`{}` is {what} but is not reference counted",
-                self.name(var)
+                self.cx.name(var)
             ));
         }
         if !owned.contains_key(&var) {
             return Err(match self.owners[var.0 as usize] {
                 Some(owner) if owned.contains_key(&owner) => format!(
                     "`{}` is {what} but is only borrowed from `{}`",
-                    self.name(var),
-                    self.name(owner)
+                    self.cx.name(var),
+                    self.cx.name(owner)
                 ),
-                _ => format!("`{}` is {what} after it was moved", self.name(var)),
+                _ => format!("`{}` is {what} after it was moved", self.cx.name(var)),
             });
         }
         Ok(owned.get_mut(&var).expect("checked above"))
@@ -1238,10 +744,13 @@ impl<'a> Checker<'a> {
             Some(owner) if owned.contains_key(&owner) => Ok(()),
             Some(owner) => Err(format!(
                 "`{}` is {what} after its owner `{}` was given up",
-                self.name(var),
-                self.name(owner)
+                self.cx.name(var),
+                self.cx.name(owner)
             )),
-            None => Err(format!("`{}` is {what} after it was moved", self.name(var))),
+            None => Err(format!(
+                "`{}` is {what} after it was moved",
+                self.cx.name(var)
+            )),
         }
     }
 
@@ -1291,15 +800,15 @@ impl<'a> Checker<'a> {
         if fields.iter().all(Option::is_none) {
             return Err(format!(
                 "a release of `{}` keeps no field",
-                self.name(value)
+                self.cx.name(value)
             ));
         }
         // 数を先に配置で確かめるので、出どころは数を比べない
-        let (layout, _, constructor) = self.ctor(ctor, "a release")?;
+        let (layout, _, constructor) = self.cx.ctor(ctor, "a release")?;
         field_count(
             format!(
                 "a release of `{}` as `{}` #{}",
-                self.name(value),
+                self.cx.name(value),
                 layout.name,
                 ctor.tag
             ),
@@ -1312,14 +821,14 @@ impl<'a> Checker<'a> {
             if !self.function.repr(field).is_rc() {
                 return Err(format!(
                     "`{}` is kept but is not reference counted",
-                    self.name(field)
+                    self.cx.name(field)
                 ));
             }
             if self.origins[field.0 as usize] != Some(Origin { value, ctor, slot }) {
                 return Err(format!(
                     "`{}` is not field {slot} of `{}` as `{}` #{}",
-                    self.name(field),
-                    self.name(value),
+                    self.cx.name(field),
+                    self.cx.name(value),
                     layout.name,
                     ctor.tag
                 ));
@@ -1335,7 +844,7 @@ impl<'a> Checker<'a> {
     /// RC の命令は Perceus だけが入れる。
     fn rc_allowed(&self, var: VarId, what: &str) -> Result<(), String> {
         if self.level != Level::Ownership {
-            return Err(format!("`{}` is {what} before Perceus", self.name(var)));
+            return Err(format!("`{}` is {what} before Perceus", self.cx.name(var)));
         }
         Ok(())
     }
@@ -1398,54 +907,31 @@ impl<'a> Checker<'a> {
                         args.len()
                     ));
                 }
-                if self.checks_boundaries() {
-                    self.function_value(*index)?;
+                if self.cx.boundaries {
+                    self.cx.function_value(*index)?;
                     for (index, (&arg, &param)) in args.iter().zip(target.params()).enumerate() {
                         let expected = target.repr(param);
-                        if !self.passes(arg, expected)? {
+                        if !self.cx.passes(arg, expected)? {
                             return Err(format!(
                                 "argument {index} of a closure of `{}` is {}, but the function takes {}",
                                 target.name,
-                                self.typed_atom_text(arg),
+                                self.cx.typed_atom_text(arg),
                                 expected.name()
                             ));
                         }
                     }
                 }
             }
-            Rhs::Extern { ext, args, at: _ } => {
-                let row = ext.row();
-                if args.len() != row.params.len() {
+            Rhs::Extern { ext, args, at: _ } => self.cx.check_extern(var, *ext, args)?,
+            Rhs::Prim(prim, args) => {
+                if self.level == Level::Translated {
                     return Err(format!(
-                        "`{}` takes {} arguments but is given {}",
-                        row.name,
-                        row.params.len(),
-                        args.len()
+                        "`prim {}` is used before the evidence pass",
+                        prim_text(&self.program.effects, prim)
                     ));
                 }
-                for (index, (&arg, &expected)) in args.iter().zip(row.params).enumerate() {
-                    if !arg.fits(&self.function.vars, expected) {
-                        return Err(format!(
-                            "argument {index} of `{}` is {}, but the extern takes {}",
-                            row.name,
-                            self.typed_atom_text(arg),
-                            expected.name()
-                        ));
-                    }
-                    self.fn_atom(arg)?;
-                }
-                let repr = self.function.repr(var);
-                if repr != row.ret {
-                    return Err(format!(
-                        "`{}` ({}) is bound to `{}`, which returns {}",
-                        self.name(var),
-                        repr.name(),
-                        row.name,
-                        row.ret.name()
-                    ));
-                }
+                self.cx.check_prim(var, prim, args)?
             }
-            Rhs::Prim(prim, args) => self.check_prim(var, prim, args)?,
             Rhs::ConstString(index) => {
                 if *index as usize >= self.program.strings.len() {
                     return Err(format!(
@@ -1460,15 +946,15 @@ impl<'a> Checker<'a> {
                         .to_string(),
                 );
             }
-            Rhs::Con { ctor, args } => self.check_con(var, *ctor, args)?,
-            Rhs::Drop(atom) => self.fn_atom(*atom)?,
+            Rhs::Con { ctor, args } => self.cx.check_con(var, *ctor, args)?,
+            Rhs::Drop(atom) => self.cx.fn_atom(*atom)?,
             // `unit` の値、`()`、`#N`、`&f`、参照は命令なしで `tobj` に収まるので、`box` しない。1つの値の書き方を1つに保つ
             // (docs/spec/core-ir.md の「値の表現」)
             Rhs::Box(atom) => {
                 if self.level < Level::Scopes {
                     return Err(format!(
                         "{} is boxed before the boxing pass",
-                        self.atom_text(*atom)
+                        self.cx.atom_text(*atom)
                     ));
                 }
                 let boxable = match *atom {
@@ -1479,7 +965,7 @@ impl<'a> Checker<'a> {
                 if !boxable {
                     return Err(format!(
                         "{} is boxed, but only {} values and Int constants can be",
-                        self.typed_atom_text(*atom),
+                        self.cx.typed_atom_text(*atom),
                         boxed_scalars("and")
                     ));
                 }
@@ -1487,7 +973,7 @@ impl<'a> Checker<'a> {
                 if repr != Repr::TObj {
                     return Err(format!(
                         "`{}` ({}) is bound to a box, which is tobj",
-                        self.name(var),
+                        self.cx.name(var),
                         repr.name()
                     ));
                 }
@@ -1497,7 +983,7 @@ impl<'a> Checker<'a> {
                 if self.level < Level::Scopes {
                     return Err(format!(
                         "{} is unboxed before the boxing pass",
-                        self.atom_text(*atom)
+                        self.cx.atom_text(*atom)
                     ));
                 }
                 let operand = match *atom {
@@ -1505,7 +991,7 @@ impl<'a> Checker<'a> {
                     _ => {
                         return Err(format!(
                             "{} is unboxed, but only tobj can be",
-                            self.typed_atom_text(*atom)
+                            self.cx.typed_atom_text(*atom)
                         ));
                     }
                 };
@@ -1513,7 +999,7 @@ impl<'a> Checker<'a> {
                 if !repr.needs_box() {
                     return Err(format!(
                         "`{}` ({}) is bound to an unbox, which gives {}",
-                        self.name(var),
+                        self.cx.name(var),
                         repr.name(),
                         boxed_scalars("or")
                     ));
@@ -1522,170 +1008,6 @@ impl<'a> Checker<'a> {
             }
         }
         self.consume_all(owned, |f| rhs.for_each_consumed(f))
-    }
-
-    /// 基本操作は EP だけが作る。即値は表にあり、`evv_mask` の多重集合は呼び出しの `mask` と同じく空でなく昇順に
-    /// 並び、引数の数は表の行と同じである。範囲の段と所有の段では、引数と結果を直接の呼び出しと同じく互換の位置として
-    /// 比べる (docs/spec/core-ir.md の「基本操作」)。
-    fn check_prim(&self, var: VarId, prim: &Prim, args: &[Atom]) -> Result<(), String> {
-        let row = prim.row();
-        let name = &prim_text(&self.program.effects, prim);
-        if self.level == Level::Translated {
-            return Err(format!("`prim {name}` is used before the evidence pass"));
-        }
-        let immediates = prim.immediates();
-        let (effects, operation) = match &immediates {
-            Immediates::None => (&[][..], None),
-            Immediates::Effects(effects) => (*effects, None),
-            Immediates::Effect(effect) => (std::slice::from_ref(effect), None),
-            Immediates::Operation { effect, op } => (std::slice::from_ref(effect), Some(*op)),
-        };
-        for &effect in effects {
-            let Some(info) = self.program.effects.get(effect as usize) else {
-                return Err(format!(
-                    "`prim {name}` names effect {effect}, which is not in the effect table"
-                ));
-            };
-            if let Some(op) = operation
-                && op as usize >= info.operations.len()
-            {
-                return Err(format!(
-                    "`prim {name}` names operation {op} of `{}`, which has {} operations",
-                    info.name,
-                    info.operations.len()
-                ));
-            }
-        }
-        if let Immediates::Effects(effects) = immediates {
-            if effects.is_empty() {
-                return Err(format!("`prim {name}` masks no effect"));
-            }
-            if !effects.is_sorted() {
-                return Err(format!(
-                    "the effects of `prim {name}` are not in ascending order"
-                ));
-            }
-        }
-        if args.len() != row.params.len() {
-            return Err(format!(
-                "`prim {name}` takes {} arguments but is given {}",
-                row.params.len(),
-                args.len()
-            ));
-        }
-        if let Prim::EvSetClause { effect, op } = *prim {
-            self.check_set_clause(name, effect, op, args)?;
-        }
-        if !self.checks_boundaries() {
-            return Ok(());
-        }
-        for (index, (&arg, &expected)) in args.iter().zip(row.params).enumerate() {
-            if !self.passes(arg, expected)? {
-                return Err(format!(
-                    "argument {index} of `prim {name}` is {}, but the primitive takes {}",
-                    self.typed_atom_text(arg),
-                    expected.name()
-                ));
-            }
-        }
-        let repr = self.function.repr(var);
-        if !repr.compatible(row.ret) {
-            return Err(format!(
-                "`{}` ({}) is bound to `prim {name}`, which returns {}",
-                self.name(var),
-                repr.name(),
-                row.ret.name()
-            ));
-        }
-        Ok(())
-    }
-
-    /// `ev_set_clause[E.op](ev, c)` の c の関数が分かるとき (`&g` か、同じ関数の中の `closure g(..)`)、g は `E.op` の
-    /// `clause` の印を持つ。ev を同じ関数の中の `ev_new` で作ったなら、そのエフェクトは E である
-    /// (docs/spec/core-ir.md の「verifier」)。
-    fn check_set_clause(
-        &self,
-        name: &str,
-        effect: u32,
-        op: u32,
-        args: &[Atom],
-    ) -> Result<(), String> {
-        let entry = operation_text(&self.program.effects, effect, op);
-        let target = match args[1] {
-            Atom::Fn(target) => Some(target),
-            Atom::Var(var) => self.closures.get(&var).map(|&(target, _)| target),
-            Atom::Int(_) | Atom::Unit | Atom::Tag(_) => None,
-        };
-        if let Some(function) =
-            target.and_then(|target| self.program.functions.get(target.0 as usize))
-        {
-            match function.clause {
-                Some(mark) if mark == (effect, op) => {}
-                Some((marked_effect, marked_op)) => {
-                    return Err(format!(
-                        "`{}` is a clause of `{}`, but it is put into the `{entry}` entry",
-                        function.name,
-                        operation_text(&self.program.effects, marked_effect, marked_op)
-                    ));
-                }
-                None => {
-                    return Err(format!(
-                        "`{}` is not a clause, but it is put into the `{entry}` entry",
-                        function.name
-                    ));
-                }
-            }
-        }
-        if let Atom::Var(evidence) = args[0]
-            && let Some(&created) = self.evidences.get(&evidence)
-            && created != effect
-        {
-            return Err(format!(
-                "`prim {name}` is given `{}`, the evidence of `{}`",
-                self.name(evidence),
-                effect_text(&self.program.effects, created)
-            ));
-        }
-        Ok(())
-    }
-
-    /// `con` のフィールドの数は、コンストラクタと同じである。束縛する変数の Repr は配置の Repr と同じで、宣言した
-    /// Repr が `tobj` でないフィールドの値はその Repr に収まる。`tobj` のフィールドの値は、範囲の段と所有の段で、
-    /// 互換の位置として収まる (R9)。
-    fn check_con(&self, var: VarId, ctor: Ctor, args: &[Atom]) -> Result<(), String> {
-        let (layout, layout_repr, constructor) = self.ctor(ctor, "a con")?;
-        field_count(
-            format!("a con of `{}` #{}", layout.name, ctor.tag),
-            args.len(),
-            constructor,
-        )?;
-        let repr = self.function.repr(var);
-        if repr != layout_repr {
-            return Err(format!(
-                "`{}` ({}) is bound to a con of `{}`, which is {}",
-                self.name(var),
-                repr.name(),
-                layout.name,
-                layout_repr.name()
-            ));
-        }
-        for (index, (&arg, &declared)) in args.iter().zip(&constructor.fields).enumerate() {
-            let fits = if declared == Repr::TObj {
-                !self.checks_boundaries() || self.passes(arg, declared)?
-            } else {
-                arg.fits(&self.function.vars, declared)
-            };
-            if !fits {
-                return Err(format!(
-                    "argument {index} of a con of `{}` #{} is {}, but the layout has {}",
-                    layout.name,
-                    ctor.tag,
-                    self.typed_atom_text(arg),
-                    declared.name()
-                ));
-            }
-        }
-        Ok(())
     }
 
     /// 呼び出しは、形を確かめた後に、オペランドの Repr を左から比べ、結果を `receiver` と比べてから、範囲と所有を
@@ -1706,7 +1028,7 @@ impl<'a> Checker<'a> {
         }
         let result = match call {
             Call::Direct(target, args) => {
-                if let Some(clause) = self.clause_of(*target) {
+                if let Some(clause) = self.cx.clause_of(*target) {
                     return Err(format!(
                         "`{}` is a clause of `{clause}`, but it is called directly",
                         self.program.functions[target.0 as usize].name
@@ -1730,7 +1052,7 @@ impl<'a> Checker<'a> {
                 clauses,
                 ret,
             } => {
-                let info = self.effect(*effect)?;
+                let info = self.cx.effect(*effect)?;
                 if clauses.len() != info.operations.len() {
                     return Err(format!(
                         "a handler of `{}` has clauses for {} operations, but the effect has {}",
@@ -1755,7 +1077,7 @@ impl<'a> Checker<'a> {
                 resumable,
                 args: _,
             } => {
-                let info = self.effect(*effect)?;
+                let info = self.cx.effect(*effect)?;
                 let Some(operation) = info.operations.get(*op as usize) else {
                     return Err(format!(
                         "`perform` names operation {op} of `{}`, which has {} operations",
@@ -1785,7 +1107,7 @@ impl<'a> Checker<'a> {
                 if self.level == Level::Translated {
                     return Err("a clause call is used before the evidence pass".to_string());
                 }
-                let info = self.effect(*effect)?;
+                let info = self.cx.effect(*effect)?;
                 let Some(operation) = info.operations.get(*op as usize) else {
                     return Err(format!(
                         "a clause names operation {op} of `{}`, which has {} operations",
@@ -1815,7 +1137,7 @@ impl<'a> Checker<'a> {
                 state: _,
             } => None,
         };
-        if self.checks_boundaries() {
+        if self.cx.boundaries {
             self.check_operands(call)?;
             if let Some(result) = result {
                 self.check_result(call, result, receiver)?;
@@ -1830,14 +1152,14 @@ impl<'a> Checker<'a> {
         // 誤りの文で呼び出しを指す句 (`an apply`) は呼び出しの形で決まるので、比べる処理を形ごとに作る
         let operands = |taker: &'static str| {
             move |role: &dyn Fn() -> String, atom: Atom| -> Result<(), String> {
-                if self.passes(atom, Repr::TObj)? {
+                if self.cx.passes(atom, Repr::TObj)? {
                     return Ok(());
                 }
                 Err(format!(
                     "{} of {} is {}, but {taker} takes tobj",
                     role(),
                     self.call_text(call, false),
-                    self.typed_atom_text(atom)
+                    self.cx.typed_atom_text(atom)
                 ))
             }
         };
@@ -1846,11 +1168,11 @@ impl<'a> Checker<'a> {
                 let target = &self.program.functions[target.0 as usize];
                 for (index, (&arg, &param)) in args.iter().zip(target.params()).enumerate() {
                     let expected = target.repr(param);
-                    if !self.passes(arg, expected)? {
+                    if !self.cx.passes(arg, expected)? {
                         return Err(format!(
                             "argument {index} of `{}` is {}, but the function takes {}",
                             target.name,
-                            self.typed_atom_text(arg),
+                            self.cx.typed_atom_text(arg),
                             expected.name()
                         ));
                     }
@@ -1878,15 +1200,15 @@ impl<'a> Checker<'a> {
             } => {
                 let operation = operation(&self.program.effects, *effect, *op);
                 let what = self.call_text(call, false);
-                if !self.passes(*callee, Repr::TObj)? {
+                if !self.cx.passes(*callee, Repr::TObj)? {
                     return Err(format!(
                         "the callee of {what} is {}, but a clause takes tobj",
-                        self.typed_atom_text(*callee)
+                        self.cx.typed_atom_text(*callee)
                     ));
                 }
                 let expected = std::iter::once(Repr::Obj).chain(operation.params.iter().copied());
                 for (index, (&arg, expected)) in args.iter().zip(expected).enumerate() {
-                    if !self.passes(arg, expected)? {
+                    if !self.cx.passes(arg, expected)? {
                         let taker = if index == 0 {
                             "a clause"
                         } else {
@@ -1894,7 +1216,7 @@ impl<'a> Checker<'a> {
                         };
                         return Err(format!(
                             "argument {index} of {what} is {}, but {taker} takes {}",
-                            self.typed_atom_text(arg),
+                            self.cx.typed_atom_text(arg),
                             expected.name()
                         ));
                     }
@@ -1928,7 +1250,7 @@ impl<'a> Checker<'a> {
                 }
                 Err(format!(
                     "`{}` ({}) is bound to {}, which returns {}",
-                    self.name(var),
+                    self.cx.name(var),
                     repr.name(),
                     self.call_text(call, false),
                     result.name()
@@ -2072,7 +1394,7 @@ impl<'a> Checker<'a> {
     fn parameters_left(&self, atom: Atom) -> Option<usize> {
         let (function, passed) = match atom {
             Atom::Fn(function) => (function, 0),
-            Atom::Var(var) => self.closures.get(&var).copied()?,
+            Atom::Var(var) => (*self.cx.closures.get(&var)?, self.closure_args[&var]),
             Atom::Int(_) | Atom::Unit | Atom::Tag(_) => return None,
         };
         let params = self
@@ -2082,13 +1404,6 @@ impl<'a> Checker<'a> {
             .params()
             .len();
         Some(params.saturating_sub(passed))
-    }
-
-    fn effect(&self, effect: u32) -> Result<&'a EffectInfo, String> {
-        self.program
-            .effects
-            .get(effect as usize)
-            .ok_or_else(|| format!("effect {effect} is not in the effect table"))
     }
 
     fn function_at(&self, target: FnIdx) -> Result<&'a CoreFn, String> {
@@ -2102,53 +1417,14 @@ impl<'a> Checker<'a> {
         match owned.keys().next() {
             Some(&var) => Err(format!(
                 "`{}` is still owned at the end of the function",
-                self.name(var)
+                self.cx.name(var)
             )),
             None => Ok(()),
         }
     }
 
-    /// テキストの形と同じ `名前.N`。
-    fn name(&self, var: VarId) -> String {
-        format!("{}.{}", self.function.vars[var.0 as usize].name, var.0)
-    }
-
-    fn names(&self, vars: &[VarId]) -> String {
-        let names: Vec<String> = vars.iter().map(|&var| self.name(var)).collect();
-        format!("[{}]", names.join(", "))
-    }
-
     fn owned_names(&self, owned: &Owned) -> String {
-        self.names(&flatten(owned))
-    }
-
-    fn atom_text(&self, atom: Atom) -> String {
-        match atom {
-            Atom::Var(var) => format!("`{}`", self.name(var)),
-            Atom::Int(n) => n.to_string(),
-            Atom::Unit => "()".to_string(),
-            Atom::Tag(tag) => format!("#{tag}"),
-            Atom::Fn(target) => match self.program.functions.get(target.0 as usize) {
-                Some(function) => format!("&{}", function.name),
-                None => format!("&#{}", target.0),
-            },
-        }
-    }
-
-    /// 変数には Repr を添える (`` `c.1` (int) ``)。定数は `atom_text` と同じである。
-    fn typed_atom_text(&self, atom: Atom) -> String {
-        match atom {
-            Atom::Var(var) => format!("`{}` ({})", self.name(var), self.function.repr(var).name()),
-            _ => self.atom_text(atom),
-        }
-    }
-
-    fn pattern_text(&self, pattern: CasePattern) -> String {
-        match pattern {
-            CasePattern::Tag(tag) => format!("#{tag}"),
-            CasePattern::Int(n) => n.to_string(),
-            CasePattern::String(index) => format!("{:?}", self.program.strings[index as usize]),
-        }
+        self.cx.names(&flatten(owned))
     }
 }
 
@@ -2164,32 +1440,10 @@ fn tail_text(call: &Call) -> &'static str {
     }
 }
 
-/// 箱を要するスカラーの Repr の名前を、文言に並べる形 (`int and enum`) にする。
-fn boxed_scalars(conjunction: &str) -> String {
-    let names: Vec<&str> = Repr::BOXED_SCALARS.iter().map(|repr| repr.name()).collect();
-    let (last, rest) = names.split_last().expect("some scalars need a box");
-    if rest.is_empty() {
-        last.to_string()
-    } else {
-        format!("{} {conjunction} {last}", rest.join(", "))
-    }
-}
-
 /// 所有の多重集合を、参照の数だけ変数を並べた昇順の列にする。
 fn flatten(owned: &Owned) -> Vec<VarId> {
     owned
         .iter()
         .flat_map(|(&var, &count)| std::iter::repeat_n(var, count as usize))
         .collect()
-}
-
-/// フィールドの数の食い違いを、命令の言い方 (``a con of `L` #t`` など) を主語にして報告する (R9)。
-fn field_count(subject: String, given: usize, constructor: &LayoutCtor) -> Result<(), String> {
-    if given == constructor.fields.len() {
-        return Ok(());
-    }
-    Err(format!(
-        "{subject} has {given} fields, but the constructor has {}",
-        constructor.fields.len()
-    ))
 }

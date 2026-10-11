@@ -6,14 +6,18 @@ use std::fmt;
 use eml_extern::Extern;
 pub use eml_extern::Repr;
 
+pub mod check;
+pub mod liveness;
 mod pretty;
 mod prim;
 pub mod syntax;
 mod text;
+mod verify;
 
 pub use pretty::{pretty, pretty_with_positions};
 pub use prim::{Immediates, Prim, PrimRow};
 pub use text::parse;
+pub use verify::{verify, verify_lowered, verify_scopes};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Program {
