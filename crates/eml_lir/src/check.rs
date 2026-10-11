@@ -363,7 +363,8 @@ pub struct Context<'a> {
     /// 変数の番号ごとの、`never` の操作の `perform` か `clause` の束縛かどうか。束縛の使いには制御が届かないので、
     /// 互換の位置で位置と比べない。
     never: Vec<bool>,
-    /// `closure` で束縛した変数の関数と、捕獲した値の数。`ev_set_clause` の入口の関数を確かめるのに使う。
+    /// `closure` で束縛した変数の関数と、捕獲した値の数。`ev_set_clause` の入口の関数と、Core IR の `handle` の節の
+    /// 引数の数を確かめるのに使う。
     closures: HashMap<VarId, (FnIdx, usize)>,
     /// `ev_new[E]` で束縛した変数の、エフェクトの番号。`ev_set_clause` の入口がその evidence のエフェクトの操作で
     /// あることを確かめるのに使う。
@@ -830,7 +831,7 @@ impl<'a> Context<'a> {
     /// Repr が `tobj` でないフィールドの値はその Repr に収まる。`tobj` のフィールドの値は、範囲の段と所有の段で、
     /// 互換の位置として収まる (R9)。
     pub fn check_con(&self, var: VarId, ctor: Ctor, args: &[Atom]) -> Result<(), String> {
-        // フィールドのないコンストラクタの値は、`#N` の1つの書き方にそろえる (docs/spec/lir.md の「値の表現」)
+        // フィールドのないコンストラクタの値は、`#N` の1つの書き方にそろえる (docs/spec/lir.md の「ブロックの列」)
         if args.is_empty() {
             return Err(
                 "a constructor value without fields is written as a tag `#N`, not `con`"
