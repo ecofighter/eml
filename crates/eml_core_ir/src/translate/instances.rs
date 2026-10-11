@@ -201,7 +201,8 @@ impl Collector<'_> {
             .enumerate()
             .map(|(position, &arg)| {
                 if self.typed.uniform.function(function, position) {
-                    self.store.flexible(Lin::Unr)
+                    let kind = self.typed.uniform_kind(function, position);
+                    self.store.flexible(kind)
                 } else {
                     arg
                 }
@@ -219,7 +220,7 @@ impl Collector<'_> {
             .enumerate()
             .map(|(position, &arg)| {
                 if self.typed.uniform.instance(node, position) {
-                    self.store.flexible(Lin::Unr)
+                    self.store.flexible(Lin::Poly)
                 } else {
                     arg
                 }
@@ -331,10 +332,9 @@ impl Collector<'_> {
             bits.len(),
             "an instance key must supply one row bit per row variable of the signature"
         );
-        let mut subst = Substitution::new(
-            names.iter().cloned().zip(found.args.iter().copied()),
-            Vec::new(),
-        );
+        let kinds = typed.kind_values(ValueItem::Function(function), &found.args, &self.store);
+        let mut subst =
+            Substitution::new(names.iter().cloned().zip(found.args.iter().copied()), kinds);
         let decl = typed.decls[&ValueItem::Function(function)].ty;
         let signature = self.store.substitute(decl, &mut subst);
         let mut targets = ArenaMap::default();
@@ -372,71 +372,75 @@ impl Collector<'_> {
                 },
             );
         }
-        // 型変数を持たない関数の本体の型に現れる型変数は、節の `OpVar` だけである。`OpVar` の Repr は `tobj` なので、
-        // 表は写さずに型検査の表を使う
-        let types = (!names.is_empty()).then(|| {
-            let store = &mut self.store;
-            let mut each = |ty: TypeId| store.substitute(ty, &mut subst);
-            let types = BodyTypes {
-                exprs: body
-                    .exprs
-                    .iter()
-                    .map(|(expr, &ty)| (expr, each(ty)))
-                    .collect(),
-                locals: body
-                    .locals
-                    .iter()
-                    .map(|(local, &ty)| (local, each(ty)))
-                    .collect(),
-                pats: body.pats.iter().map(|(pat, &ty)| (pat, each(ty))).collect(),
-                instantiations,
-                masks: body.masks.clone(),
-                fields: body.fields.clone(),
-                updates: body
-                    .updates
-                    .iter()
-                    .map(|(expr, update)| {
-                        let update = Update {
-                            ctor: update.ctor,
-                            written: update.written.clone(),
-                            fields: update.fields.iter().map(|&ty| each(ty)).collect(),
-                        };
-                        (expr, update)
-                    })
-                    .collect(),
-                discarded: body
-                    .discarded
-                    .iter()
-                    .map(|(expr, discarded)| {
-                        let discarded = discarded
-                            .iter()
-                            .map(|&(field, ty)| (field, each(ty)))
-                            .collect();
-                        (expr, discarded)
-                    })
-                    .collect(),
-                body_yield: body.body_yield,
-                first_arrow_yield: body.first_arrow_yield,
-                lambda_yields: body.lambda_yields.clone(),
-                arrow_yields: body.arrow_yields.clone(),
-            };
-            debug_assert!(
-                types
-                    .exprs
-                    .values()
-                    .chain(types.locals.values())
-                    .chain(types.pats.values())
-                    .chain(
-                        types
-                            .instantiations
-                            .values()
-                            .flat_map(|instantiation| &instantiation.args)
-                    )
-                    .all(|&ty| !self.store.contains_type_vars(ty)),
-                "an instance body keeps no type variable"
-            );
-            Box::new(types)
-        });
+        // 型変数も Kind 変数も持たない関数の本体の型に現れる変数は、節の `OpVar` だけである。`OpVar` の Repr は
+        // `tobj` で、その Kind は `linearity` が直接読めるので、表は写さずに型検査の表を使う
+        // (docs/superpowers/specs/2026-10-12-s8c-kind-export-design.md の「代入と単相化」)
+        let types = typed
+            .needs_substitution(ValueItem::Function(function))
+            .then(|| {
+                let store = &mut self.store;
+                let mut each = |ty: TypeId| store.substitute(ty, &mut subst);
+                let types = BodyTypes {
+                    exprs: body
+                        .exprs
+                        .iter()
+                        .map(|(expr, &ty)| (expr, each(ty)))
+                        .collect(),
+                    locals: body
+                        .locals
+                        .iter()
+                        .map(|(local, &ty)| (local, each(ty)))
+                        .collect(),
+                    pats: body.pats.iter().map(|(pat, &ty)| (pat, each(ty))).collect(),
+                    instantiations,
+                    masks: body.masks.clone(),
+                    fields: body.fields.clone(),
+                    updates: body
+                        .updates
+                        .iter()
+                        .map(|(expr, update)| {
+                            let update = Update {
+                                ctor: update.ctor,
+                                written: update.written.clone(),
+                                fields: update.fields.iter().map(|&ty| each(ty)).collect(),
+                            };
+                            (expr, update)
+                        })
+                        .collect(),
+                    discarded: body
+                        .discarded
+                        .iter()
+                        .map(|(expr, discarded)| {
+                            let discarded = discarded
+                                .iter()
+                                .map(|&(field, ty)| (field, each(ty)))
+                                .collect();
+                            (expr, discarded)
+                        })
+                        .collect(),
+                    body_yield: body.body_yield,
+                    first_arrow_yield: body.first_arrow_yield,
+                    lambda_yields: body.lambda_yields.clone(),
+                    arrow_yields: body.arrow_yields.clone(),
+                };
+                debug_assert!(
+                    types
+                        .exprs
+                        .values()
+                        .chain(types.locals.values())
+                        .chain(types.pats.values())
+                        .chain(
+                            types
+                                .instantiations
+                                .values()
+                                .flat_map(|instantiation| &instantiation.args)
+                        )
+                        .all(|&ty| !self.store.contains_type_vars(ty)
+                            && !self.store.contains_kind_vars(ty)),
+                    "an instance body keeps no type variable or Kind variable"
+                );
+                Box::new(types)
+            });
         let Found::Function(found) = &mut self.found[index] else {
             unreachable!("checked above")
         };
@@ -531,11 +535,19 @@ impl Collector<'_> {
             .type_vars
             .values()
             .map(|var| var.name.clone());
-        let mut subst = Substitution::new(names.zip(generated.args.iter().copied()), Vec::new());
+        let names: Vec<String> = names.collect();
+        // `Tag` は型引数を鍵に持たない。フィールドの型は Repr にしか使わないので、足りない分は一様な型で埋める
+        let mut args = generated.args.clone();
+        let uniform = self.store.flexible(Lin::Poly);
+        args.resize(names.len(), uniform);
         constructors
             .iter()
             .map(|&constructor| {
-                let declared = self.typed.decls[&ValueItem::Constructor(constructor)].ty;
+                let item = ValueItem::Constructor(constructor);
+                let kinds = self.typed.kind_values(item, &args, &self.store);
+                let mut subst =
+                    Substitution::new(names.iter().cloned().zip(args.iter().copied()), kinds);
+                let declared = self.typed.decls[&item].ty;
                 let ty = self.store.substitute(declared, &mut subst);
                 split_arrows(&self.store, ty, hir[constructor].fields.len()).0
             })
@@ -563,7 +575,12 @@ pub(super) fn collect(hir: &HirProgram, typed: &TypedProgram, entry: FunctionId)
         queue: VecDeque::new(),
     };
     // 入口は呼び出し側が選ぶので、型変数を持つ関数なら、どの型でも動く一様な instance にする
-    let entry_args = vec![collector.store.flexible(Lin::Unr); type_vars(hir, entry).len()];
+    let entry_args = (0..type_vars(hir, entry).len())
+        .map(|position| {
+            let kind = typed.uniform_kind(entry, position);
+            collector.store.flexible(kind)
+        })
+        .collect();
     // row のビットも呼び出し側が決めるので、安全側に倒してすべて立てる
     // (docs/spec/core-ir.md の「row のビットと instance の鍵」)
     let entry_bits = vec![true; row_vars(hir, entry).len()];
@@ -651,7 +668,7 @@ fn instance_name(
 ) -> String {
     let shown: Option<Vec<String>> = args
         .iter()
-        .map(|&arg| store.display_bounded(arg, &hir.names, NAME_LIMIT))
+        .map(|&arg| store.display_linear_bounded(arg, &hir.names, NAME_LIMIT))
         .collect();
     let inner = shown
         .map(|shown| shown.join(", "))

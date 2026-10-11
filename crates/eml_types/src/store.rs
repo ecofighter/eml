@@ -71,6 +71,7 @@ impl EffectLabel {
             label: self,
             types,
             names,
+            linear: false,
         }
     }
 }
@@ -515,12 +516,42 @@ impl TypeStore {
         names: &DisplayNames,
         limit: usize,
     ) -> Option<String> {
+        self.bounded(self.display(id, names), limit)
+    }
+
+    /// `display_bounded` と同じ上限つきの表示で、矢印の線形性を `%1` と `%m` で書く。`Unr` は書かない。
+    /// instance の名前が、線形性だけが違う具体化を区別するために使う (docs/superpowers/specs/2026-10-12-s8c-kind-export-design.md
+    /// の「instance の名前」)。
+    pub fn display_linear_bounded(
+        &self,
+        id: TypeId,
+        names: &DisplayNames,
+        limit: usize,
+    ) -> Option<String> {
+        self.bounded(self.display_linear(id, names), limit)
+    }
+
+    /// 診断の表示と違い、矢印の線形性を書く。
+    pub fn display_linear<'a>(
+        &'a self,
+        id: TypeId,
+        names: &'a DisplayNames,
+    ) -> impl fmt::Display + 'a {
+        TypeDisplay {
+            id,
+            types: self,
+            names,
+            linear: true,
+        }
+    }
+
+    fn bounded(&self, shown: impl fmt::Display, limit: usize) -> Option<String> {
         let mut out = Bounded {
             text: String::new(),
             chars: 0,
             limit,
         };
-        fmt::write(&mut out, format_args!("{}", self.display(id, names))).ok()?;
+        fmt::write(&mut out, format_args!("{shown}")).ok()?;
         Some(out.text)
     }
 
@@ -529,6 +560,7 @@ impl TypeStore {
             id,
             types: self,
             names,
+            linear: false,
         }
     }
 
@@ -561,13 +593,14 @@ struct LabelDisplay<'a> {
     label: &'a EffectLabel,
     types: &'a TypeStore,
     names: &'a DisplayNames,
+    linear: bool,
 }
 
 impl fmt::Display for LabelDisplay<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.names.effect(self.label.id))?;
         for &arg in &self.label.args {
-            write!(f, " {}", atomic(self.types, arg, self.names))?;
+            write!(f, " {}", atomic(self.types, arg, self.names, self.linear))?;
         }
         Ok(())
     }
@@ -577,16 +610,23 @@ struct TypeDisplay<'a> {
     id: TypeId,
     types: &'a TypeStore,
     names: &'a DisplayNames,
+    linear: bool,
+}
+
+impl TypeDisplay<'_> {
+    fn child(&self, id: TypeId) -> TypeDisplay<'_> {
+        TypeDisplay { id, ..*self }
+    }
 }
 
 impl fmt::Display for TypeDisplay<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let (types, names) = (self.types, self.names);
+        let (types, names, linear) = (self.types, self.names, self.linear);
         match types.kind(self.id) {
             TypeKind::Con { id, args } => {
                 f.write_str(names.ty(*id))?;
                 for &arg in args {
-                    write!(f, " {}", atomic(types, arg, names))?;
+                    write!(f, " {}", atomic(types, arg, names, linear))?;
                 }
                 Ok(())
             }
@@ -597,22 +637,31 @@ impl fmt::Display for TypeDisplay<'_> {
                     if index > 0 {
                         f.write_str(", ")?;
                     }
-                    write!(f, "{}", types.display(ty, names))?;
+                    write!(f, "{}", self.child(ty))?;
                 }
                 f.write_str(")")
             }
             TypeKind::Fn {
                 param,
-                lin: _,
+                lin,
                 effects,
                 tail,
                 ret,
             } => {
                 if matches!(types.kind(*param), TypeKind::Fn { .. }) {
-                    write!(f, "({}) -> ", types.display(*param, names))?;
+                    write!(f, "({})", self.child(*param))?;
                 } else {
-                    write!(f, "{} -> ", types.display(*param, names))?;
+                    write!(f, "{}", self.child(*param))?;
                 }
+                if linear {
+                    match lin {
+                        Lin::Unr => {}
+                        Lin::Lin => f.write_str(" %1")?,
+                        Lin::Poly => f.write_str(" %m")?,
+                        Lin::Var(index) => write!(f, " %m{index}")?,
+                    }
+                }
+                f.write_str(" -> ")?;
                 // 空の閉じた row は書かない。省略した row が `<>` だから (docs/spec/types.md)
                 let tail = match tail {
                     Some(RowTail::Rigid(name)) => Some(name.as_str()),
@@ -626,7 +675,16 @@ impl fmt::Display for TypeDisplay<'_> {
                         if index > 0 {
                             f.write_str(", ")?;
                         }
-                        write!(f, "{}", label.display(types, names))?;
+                        write!(
+                            f,
+                            "{}",
+                            LabelDisplay {
+                                label,
+                                types,
+                                names,
+                                linear
+                            }
+                        )?;
                     }
                     match tail {
                         Some(tail) if effects.is_empty() => f.write_str(tail)?,
@@ -635,7 +693,7 @@ impl fmt::Display for TypeDisplay<'_> {
                     }
                     f.write_str("> ")?;
                 }
-                write!(f, "{}", types.display(*ret, names))
+                write!(f, "{}", self.child(*ret))
             }
             TypeKind::Rigid(name) | TypeKind::OpVar(name, _) => f.write_str(name),
             TypeKind::Flexible(_) => f.write_str("_"),
@@ -649,11 +707,17 @@ struct Atomic<'a> {
     id: TypeId,
     types: &'a TypeStore,
     names: &'a DisplayNames,
+    linear: bool,
 }
 
 impl fmt::Display for Atomic<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let shown = self.types.display(self.id, self.names);
+        let shown = TypeDisplay {
+            id: self.id,
+            types: self.types,
+            names: self.names,
+            linear: self.linear,
+        };
         match self.types.kind(self.id) {
             TypeKind::Fn { .. } => write!(f, "({shown})"),
             TypeKind::Con { args, .. } if !args.is_empty() => write!(f, "({shown})"),
@@ -662,8 +726,18 @@ impl fmt::Display for Atomic<'_> {
     }
 }
 
-fn atomic<'a>(types: &'a TypeStore, id: TypeId, names: &'a DisplayNames) -> Atomic<'a> {
-    Atomic { id, types, names }
+fn atomic<'a>(
+    types: &'a TypeStore,
+    id: TypeId,
+    names: &'a DisplayNames,
+    linear: bool,
+) -> Atomic<'a> {
+    Atomic {
+        id,
+        types,
+        names,
+        linear,
+    }
 }
 
 /// `limit` 文字を超えると書き込みを断る書き込み先。断ると、表示は `?` で途中から戻る。
@@ -938,6 +1012,27 @@ mod tests {
             tail: None,
             ret,
         })
+    }
+
+    #[test]
+    fn the_linear_display_marks_lin_and_poly_arrows() {
+        let program = program();
+        let mut types = TypeStore::new(&program);
+        let int = types.int();
+        let names = &program.names;
+        let show = |types: &TypeStore, ty| types.display_linear_bounded(ty, names, 64).unwrap();
+        let unr = arrow(&mut types, Lin::Unr, int, int);
+        let lin = arrow(&mut types, Lin::Lin, int, int);
+        let poly = arrow(&mut types, Lin::Poly, int, int);
+        assert_eq!(show(&types, unr), "Int -> Int");
+        assert_eq!(show(&types, lin), "Int %1 -> Int");
+        assert_eq!(show(&types, poly), "Int %m -> Int");
+        let nested = arrow(&mut types, Lin::Unr, lin, int);
+        assert_eq!(show(&types, nested), "(Int %1 -> Int) -> Int");
+        let flexible = types.flexible(Lin::Lin);
+        assert_eq!(show(&types, flexible), "_");
+        // 診断の表示は線形性を書かない
+        assert_eq!(types.display(lin, names).to_string(), "Int -> Int");
     }
 
     #[test]
