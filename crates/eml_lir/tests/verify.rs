@@ -1,7 +1,7 @@
 //! LIR のテキストで書いた LIR で、verifier が正しいものを受け入れ、壊れたものを拒むことを確かめる (docs/spec/core-ir.md)。
 //! 構造の規則 R1 から R9 と、前の形の IR から引き継いだ検査を1つずつ確かめる。
 
-use eml_lir::{Program, Stmt, parse, verify, verify_lowered, verify_scopes};
+use eml_lir::{Prim, Program, Rhs, Stmt, parse, verify, verify_lowered, verify_scopes};
 
 /// 手で書く IR の配置の行。プログラムの先頭に置く。
 const BOOL: &str = "layout Prelude.Bool { False, True }\n";
@@ -772,6 +772,7 @@ fn q(c.0: tobj, e.1: obj) -> tobj {
   return d.3
 }
 ";
+    assert_eq!(check_lowered(text), Ok(()));
     assert_eq!(check_scopes(text), Ok(()));
     assert_eq!(check(text), Ok(()));
 }
@@ -2425,6 +2426,7 @@ const PUT_CLAUSE: &str =
 
 #[test]
 fn prims_and_clauses_are_accepted_after_the_evidence_pass() {
+    assert_eq!(check_lowered(EVIDENCE_EXAMPLE), Ok(()));
     assert_eq!(check_scopes(EVIDENCE_EXAMPLE), Ok(()));
 }
 
@@ -2530,13 +2532,179 @@ fn a_clause_function_has_the_reprs_of_its_operation() {
         clause("Fail.fail fn g(e.0: obj, x.1: tobj)", "int"),
         Err("`g` is a clause of `Fail.fail`, but it returns int in `g`".to_string())
     );
+    // 引数の数は境界の検査でないので、入口の段でも確かめる
+    assert_eq!(
+        check_lowered(&format!(
+            "{COUNTER}fn f() -> int {{\n  return 1\n}}\ninternal clause Counter.put fn g(n.0: int) -> unit {{\n  return ()\n}}\n"
+        )),
+        Err("`g` is a clause of `Counter.put`, so it takes the evidence and 1 arguments after its captures, but it has 1 parameters in `g`".to_string())
+    );
+    assert_eq!(
+        check_lowered(&format!(
+            "{COUNTER}fn f() -> int {{\n  return 1\n}}\ninternal clause Counter.#4 fn g(e.0: obj) -> unit {{\n  return ()\n}}\n"
+        )),
+        Err(
+            "`g` is a clause of operation 4 of `Counter`, which has 2 operations in `g`"
+                .to_string()
+        )
+    );
 }
 
 #[test]
 fn a_clause_function_is_only_put_into_a_handler_table() {
+    let used_as_value = Err(
+        "`g` is a clause of `Counter.put`, but it is used as a function value in `f`".to_string(),
+    );
+    assert_eq!(
+        check_lowered(&format!(
+            "{COUNTER}fn f(c.0: tobj) -> tobj {{\n  let t.1: tobj = apply c.0(&g)\n  return t.1\n}}\n{PUT_CLAUSE}"
+        )),
+        used_as_value
+    );
+    assert_eq!(
+        check_lowered(&format!(
+            "{COUNTER}fn f(m.0: tobj, c.1: tobj) -> tobj {{\n  let g.2: tobj = closure g(m.0)\n  let t.3: tobj = apply c.1(g.2)\n  return t.3\n}}\n{PUT_CLAUSE}"
+        )),
+        used_as_value
+    );
+    assert_eq!(
+        check_lowered(&format!(
+            "{COUNTER}fn f() -> tobj {{\n  return &g\n}}\n{PUT_CLAUSE}"
+        )),
+        used_as_value
+    );
+    assert_eq!(
+        check_lowered(&format!(
+            "{COUNTER}fn f(m.0: tobj, e.1: obj) -> unit {{\n  let u.2: unit = call g(m.0, e.1, 1)\n  return u.2\n}}\n{PUT_CLAUSE}"
+        )),
+        Err("`g` is a clause of `Counter.put`, but it is called directly in `f`".to_string())
+    );
     // 捕獲のある節は、同じ関数の中の `closure` で入口の表に入れる
     let put = format!(
         "{COUNTER}fn f(m.0: tobj, w.1: tobj) -> unit {{\n  let e.2: obj = prim ev_new[Counter]((), w.1)\n  let g.3: tobj = closure g(m.0)\n  let u.4: unit = prim ev_set_clause[Counter.put](e.2, g.3)\n  return u.4\n}}\n{PUT_CLAUSE}"
     );
+    assert_eq!(check_lowered(&put), Ok(()));
     assert_eq!(check_scopes(&put), Ok(()));
+}
+
+#[test]
+fn a_prim_names_known_effects_and_operations() {
+    assert_eq!(
+        check_lowered("fn f() -> obj {\n  let e.0: obj = prim ev_lookup[#2]()\n  return e.0\n}\n"),
+        Err(
+            "`prim ev_lookup[#2]` names effect 2, which is not in the effect table in `f`"
+                .to_string()
+        )
+    );
+    assert_eq!(
+        check_lowered(&format!(
+            "{STATE}fn f(e.0: obj) -> tobj {{\n  let c.1: tobj = prim ev_clause[State.#2](e.0)\n  return c.1\n}}\n"
+        )),
+        Err(
+            "`prim ev_clause[State.#2]` names operation 2 of `State`, which has 2 operations in `f`"
+                .to_string()
+        )
+    );
+}
+
+/// `evv_mask` の多重集合は、呼び出しの `mask` と同じく空でなく、表にあるエフェクトを昇順に並べる。テキストは空の
+/// 多重集合を読まないので、読んだ後で空にする。
+#[test]
+fn an_evv_mask_names_known_effects_in_order() {
+    let mask = |effects: &str| {
+        format!(
+            "{STATE}{COUNTER}fn f(w.0: tobj) -> tobj {{\n  let m.1: tobj = prim evv_mask[{effects}](w.0)\n  return m.1\n}}\n"
+        )
+    };
+    assert_eq!(check_lowered(&mask("State, State, Counter")), Ok(()));
+    assert_eq!(
+        check_lowered(&mask("Counter, State")),
+        Err(
+            "the effects of `prim evv_mask[Counter, State]` are not in ascending order in `f`"
+                .to_string()
+        )
+    );
+    assert_eq!(
+        check_lowered(&mask("State, #4")),
+        Err(
+            "`prim evv_mask[State, #4]` names effect 4, which is not in the effect table in `f`"
+                .to_string()
+        )
+    );
+    let mut program = read(&mask("State"));
+    let Stmt::Let {
+        var: _,
+        rhs: Rhs::Prim(Prim::EvvMask(effects), _),
+    } = &mut program.functions[0].blocks[0].stmts[0]
+    else {
+        panic!("not an evv_mask");
+    };
+    effects.clear();
+    assert_eq!(
+        verify_lowered(&program).unwrap_err().message,
+        "`prim evv_mask[]` masks no effect"
+    );
+}
+
+/// 表にないエフェクトの操作の印は、操作の番号より先にエフェクトを報告する。
+#[test]
+fn a_clause_function_names_a_known_effect() {
+    assert_eq!(
+        check_lowered(&format!(
+            "{COUNTER}fn f() -> int {{\n  return 1\n}}\ninternal clause #3.#0 fn g(e.0: obj) -> unit {{\n  return ()\n}}\n"
+        )),
+        Err("`g` is a clause of effect 3, which is not in the effect table in `g`".to_string())
+    );
+}
+
+#[test]
+fn a_clause_call_names_an_operation_and_takes_its_arguments() {
+    assert_eq!(
+        check_lowered(&format!(
+            "{COUNTER}fn f(c.0: tobj, e.1: obj) -> unit {{\n  let u.2: unit = clause Counter.#5 c.0(e.1, 1)\n  return u.2\n}}\n"
+        )),
+        Err("a clause names operation 5 of `Counter`, which has 2 operations in `f`".to_string())
+    );
+    assert_eq!(
+        check_lowered(&format!(
+            "{COUNTER}fn f(c.0: tobj, e.1: obj) -> unit {{\n  let u.2: unit = clause Counter.put c.0(e.1)\n  return u.2\n}}\n"
+        )),
+        Err("a clause of `Counter.put` is given 1 arguments, but it takes 2 (the evidence and 1 arguments of the operation) in `f`".to_string())
+    );
+}
+
+#[test]
+fn ev_set_clause_names_the_clause_of_its_function() {
+    let set = |entry: &str, value: &str| {
+        check_lowered(&format!(
+            "{STATE}{COUNTER}fn f(s.0: tobj, w.1: tobj) -> unit {{\n  let e.2: obj = prim ev_new[State](s.0, w.1)\n  let u.3: unit = prim ev_set_clause[{entry}](e.2, {value})\n  return u.3\n}}\ninternal clause Counter.put fn g(e.0: obj, n.1: int) -> unit {{\n  return ()\n}}\nfn h(e.0: obj, u.1: unit) -> tobj {{\n  return ()\n}}\n"
+        ))
+    };
+    assert_eq!(
+        set("State.get", "&g"),
+        Err(
+            "`g` is a clause of `Counter.put`, but it is put into the `State.get` entry in `f`"
+                .to_string()
+        )
+    );
+    assert_eq!(
+        set("State.get", "&h"),
+        Err("`h` is not a clause, but it is put into the `State.get` entry in `f`".to_string())
+    );
+    assert_eq!(
+        set("Counter.put", "&g"),
+        Err(
+            "`prim ev_set_clause[Counter.put]` is given `e.2`, the evidence of `State` in `f`"
+                .to_string()
+        )
+    );
+}
+
+#[test]
+fn the_lowered_level_does_not_compare_boundaries() {
+    // box の挿入の前なので、Repr の食い違いは box の挿入が変換で埋める
+    let text = format!(
+        "{COUNTER}fn f(c.0: tobj, n.1: tobj, e.2: obj) -> tobj {{\n  let u.3: unit = clause Counter.put c.0(e.2, n.1)\n  return u.3\n}}\n"
+    );
+    assert_eq!(check_lowered(&text), Ok(()));
 }
