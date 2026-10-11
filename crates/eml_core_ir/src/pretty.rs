@@ -1,96 +1,54 @@
 //! テストで Core IR を確かめるための表示。`text.rs` の `parse` が同じ形を読む
 //! (docs/implementation/testing.md の「Core IR のテキストの形」)。ブロックの列も文の列も平らなので、ループだけで書く。
+//! 2つの IR に共通する形は `eml_lir::syntax` の部品で書き、ここは命令の列だけを書く。
 
 use std::fmt::Write;
 
 use crate::{Block, Call, CoreFn, Program, Rhs, Stmt, Term};
+use eml_lir::BlockId;
 use eml_lir::syntax::{
-    effect_text, effects_text, function_name, operation_name, operation_text, prim_text,
+    FnHeader, Writer, effect_text, effects_text, function_name, operation_name, operation_text,
+    prim_text,
 };
-use eml_lir::{Atom, BlockId, CasePattern, Ctor, LayoutId, OpRet, VarId};
 
 /// 位置を出さない表示。translate のテストの多くは位置を見ないので、既定では出さない。
 pub fn pretty(program: &Program) -> String {
-    Printer {
-        program,
-        positions: false,
-    }
-    .program()
+    Printer::new(program, false).program()
 }
 
 /// extern の呼び出しに `@"path":line:column` を付ける表示。
 pub fn pretty_with_positions(program: &Program) -> String {
-    Printer {
-        program,
-        positions: true,
-    }
-    .program()
+    Printer::new(program, true).program()
 }
 
 struct Printer<'p> {
     program: &'p Program,
-    positions: bool,
+    writer: Writer<'p>,
 }
 
-impl Printer<'_> {
+impl<'p> Printer<'p> {
+    fn new(program: &'p Program, positions: bool) -> Printer<'p> {
+        let names = program
+            .functions
+            .iter()
+            .map(|function| function.name.as_str())
+            .collect();
+        Printer {
+            program,
+            writer: Writer::new(
+                &program.layouts,
+                &program.effects,
+                &program.strings,
+                &program.files,
+                names,
+                positions,
+            ),
+        }
+    }
+
     fn program(&self) -> String {
         let mut out = String::new();
-        for layout in &self.program.layouts {
-            let constructors: Vec<String> = layout
-                .constructors
-                .iter()
-                .map(|ctor| {
-                    if ctor.fields.is_empty() {
-                        ctor.name.clone()
-                    } else {
-                        let fields: Vec<&str> =
-                            ctor.fields.iter().map(|repr| repr.name()).collect();
-                        format!("{}({})", ctor.name, fields.join(", "))
-                    }
-                })
-                .collect();
-            if constructors.is_empty() {
-                writeln!(out, "layout {} {{}}", layout.name).unwrap();
-            } else {
-                writeln!(
-                    out,
-                    "layout {} {{ {} }}",
-                    layout.name,
-                    constructors.join(", ")
-                )
-                .unwrap();
-            }
-        }
-        for effect in &self.program.effects {
-            let operations: Vec<String> = effect
-                .operations
-                .iter()
-                .map(|op| {
-                    let params: Vec<&str> = op.params.iter().map(|repr| repr.name()).collect();
-                    format!(
-                        "{}{}({}) -> {}",
-                        if op.resumable { "" } else { "never " },
-                        op.name,
-                        params.join(", "),
-                        match op.ret {
-                            OpRet::Repr(repr) => repr.name(),
-                            OpRet::Never => "never",
-                        }
-                    )
-                })
-                .collect();
-            if operations.is_empty() {
-                writeln!(out, "effect {} {{}}", effect.name).unwrap();
-            } else {
-                writeln!(
-                    out,
-                    "effect {} {{ {} }}",
-                    effect.name,
-                    operations.join(", ")
-                )
-                .unwrap();
-            }
-        }
+        self.writer.declarations(&mut out);
         for function in &self.program.functions {
             self.function(function, &mut out);
         }
@@ -98,29 +56,18 @@ impl Printer<'_> {
     }
 
     fn function(&self, function: &CoreFn, out: &mut String) {
-        let clause = function.clause.map_or_else(String::new, |(effect, op)| {
-            format!(
-                "clause {} ",
-                operation_text(&self.program.effects, effect, op)
-            )
-        });
-        writeln!(
-            out,
-            "{}{}{clause}fn {}({}) -> {} {{",
-            if function.internal { "internal " } else { "" },
-            if function.yields { "yields " } else { "" },
-            function_name(&function.name),
-            binders(function, function.params()),
-            function.ret.name()
-        )
-        .unwrap();
+        let header = FnHeader {
+            name: function.name.clone(),
+            internal: function.internal,
+            yields: function.yields,
+            clause: function.clause,
+            params: function.params().to_vec(),
+            ret: function.ret,
+        };
+        self.writer.function_head(&header, &function.vars, out);
         for (index, block) in function.blocks.iter().enumerate() {
             if index != BlockId::ENTRY.0 as usize {
-                if block.params.is_empty() {
-                    writeln!(out, "b{index}:").unwrap();
-                } else {
-                    writeln!(out, "b{index}({}):", binders(function, &block.params)).unwrap();
-                }
+                self.writer.label(index, &block.params, &function.vars, out);
             }
             self.block(function, block, out);
         }
@@ -128,14 +75,12 @@ impl Printer<'_> {
     }
 
     fn block(&self, function: &CoreFn, block: &Block, out: &mut String) {
+        let w = &self.writer;
+        let vars = &function.vars[..];
         for stmt in &block.stmts {
             let text = match stmt {
                 Stmt::Let { var, rhs } => {
-                    format!(
-                        "let {} = {}",
-                        binder(function, *var),
-                        self.rhs(function, rhs)
-                    )
+                    format!("let {} = {}", w.binder(vars, *var), self.rhs(function, rhs))
                 }
                 Stmt::Unpack {
                     value,
@@ -143,12 +88,12 @@ impl Printer<'_> {
                     fields,
                 } => format!(
                     "unpack {} {}({})",
-                    var(function, *value),
-                    self.ctor(*ctor),
-                    binders(function, fields)
+                    w.var(vars, *value),
+                    w.ctor(*ctor),
+                    w.binders(vars, fields)
                 ),
-                Stmt::Dup(v) => format!("dup {}", var(function, *v)),
-                Stmt::Decref(v) => format!("decref {}", var(function, *v)),
+                Stmt::Dup(v) => format!("dup {}", w.var(vars, *v)),
+                Stmt::Decref(v) => format!("decref {}", w.var(vars, *v)),
                 Stmt::Release {
                     value,
                     ctor,
@@ -156,12 +101,12 @@ impl Printer<'_> {
                 } => {
                     let kept: Vec<String> = fields
                         .iter()
-                        .map(|field| field.map_or_else(|| "_".to_string(), |v| var(function, v)))
+                        .map(|field| field.map_or_else(|| "_".to_string(), |v| w.var(vars, v)))
                         .collect();
                     format!(
                         "release {} {}({})",
-                        var(function, *value),
-                        self.ctor(*ctor),
+                        w.var(vars, *value),
+                        w.ctor(*ctor),
                         kept.join(", ")
                     )
                 }
@@ -169,10 +114,10 @@ impl Printer<'_> {
             writeln!(out, "  {text}").unwrap();
         }
         let text = match &block.term {
-            Term::Return(a) => format!("return {}", self.atom(function, a)),
+            Term::Return(a) => format!("return {}", w.atom(vars, a)),
             Term::TailCall(call) => format!("tail {}", self.call(function, call)),
             Term::Jump { target, args } => {
-                format!("jump b{}({})", target.0, self.atoms(function, args))
+                format!("jump b{}({})", target.0, w.atoms(vars, args))
             }
             Term::Switch {
                 scrutinee,
@@ -180,94 +125,62 @@ impl Printer<'_> {
                 cases,
                 default,
             } => {
-                let mut arms: Vec<String> = cases
-                    .iter()
-                    .map(|case| {
-                        let head = self.case_pattern(case.pattern);
-                        if case.fields.is_empty() {
-                            format!("{head} -> b{}", case.target.0)
-                        } else {
-                            format!(
-                                "{head}({}) -> b{}",
-                                binders(function, &case.fields),
-                                case.target.0
-                            )
-                        }
-                    })
-                    .collect();
-                if let Some(default) = default {
-                    arms.push(format!("_ -> b{}", default.0));
-                }
-                let layout = layout.map_or_else(String::new, |id| format!(" {}", self.layout(id)));
-                if arms.is_empty() {
-                    format!("switch {}{layout} {{}}", self.atom(function, scrutinee))
-                } else {
-                    format!(
-                        "switch {}{layout} {{ {} }}",
-                        self.atom(function, scrutinee),
-                        arms.join(", ")
-                    )
-                }
+                let layout = layout.map_or_else(String::new, |id| format!(" {}", w.layout(id)));
+                format!(
+                    "switch {}{layout} {}",
+                    w.atom(vars, scrutinee),
+                    w.cases(vars, cases, *default)
+                )
             }
         };
         writeln!(out, "  {text}").unwrap();
     }
 
     fn rhs(&self, function: &CoreFn, rhs: &Rhs) -> String {
+        let w = &self.writer;
+        let vars = &function.vars[..];
         match rhs {
             Rhs::Call { call, mask, saved } => {
                 let text = format!("{}{}", self.mask(mask), self.call(function, call));
                 if saved.is_empty() {
                     text
                 } else {
-                    let names: Vec<String> = saved.iter().map(|&v| var(function, v)).collect();
+                    let names: Vec<String> = saved.iter().map(|&v| w.var(vars, v)).collect();
                     format!("{text} save [{}]", names.join(", "))
                 }
             }
-            Rhs::MakeClosure(target, args) => format!(
-                "closure {}({})",
-                function_name(&self.program.function(*target).name),
-                self.atoms(function, args)
+            Rhs::MakeClosure(target, args) => {
+                format!("closure {}({})", w.callee(*target), w.atoms(vars, args))
+            }
+            Rhs::Extern { ext, args, at } => format!(
+                "extern {}({}){}",
+                function_name(ext.row().name),
+                w.atoms(vars, args),
+                w.position(*at)
             ),
-            Rhs::Extern { ext, args, at } => {
-                let text = format!(
-                    "extern {}({})",
-                    function_name(ext.row().name),
-                    self.atoms(function, args)
-                );
-                match at {
-                    Some(at) if self.positions => format!(
-                        "{text} @{:?}:{}:{}",
-                        self.program.files[at.file as usize], at.line, at.column
-                    ),
-                    _ => text,
-                }
-            }
-            Rhs::ConstString(index) => {
-                format!("const {:?}", self.program.strings[*index as usize])
-            }
+            Rhs::ConstString(index) => format!("const {}", w.string(*index)),
             Rhs::Con { ctor, args } => {
-                format!("con {}({})", self.ctor(*ctor), self.atoms(function, args))
+                format!("con {}({})", w.ctor(*ctor), w.atoms(vars, args))
             }
-            Rhs::Drop(a) => format!("drop {}", self.atom(function, a)),
-            Rhs::Box(a) => format!("box {}", self.atom(function, a)),
-            Rhs::Unbox(a) => format!("unbox {}", self.atom(function, a)),
+            Rhs::Drop(a) => format!("drop {}", w.atom(vars, a)),
+            Rhs::Box(a) => format!("box {}", w.atom(vars, a)),
+            Rhs::Unbox(a) => format!("unbox {}", w.atom(vars, a)),
             Rhs::Prim(prim, args) => format!(
                 "prim {}({})",
                 prim_text(&self.program.effects, prim),
-                self.atoms(function, args)
+                w.atoms(vars, args)
             ),
         }
     }
 
     /// `let` の右辺と `tail` の後で同じ書き方をする。
     fn call(&self, function: &CoreFn, call: &Call) -> String {
+        let w = &self.writer;
+        let vars = &function.vars[..];
         match call {
-            Call::Direct(callee, args) => format!(
-                "call {}({})",
-                function_name(&self.program.function(*callee).name),
-                self.atoms(function, args)
-            ),
+            Call::Direct(callee, args) => {
+                format!("call {}({})", w.callee(*callee), w.atoms(vars, args))
+            }
             Call::Apply {
                 callee,
                 args,
@@ -275,8 +188,8 @@ impl Printer<'_> {
             } => format!(
                 "{}apply {}({})",
                 if *yields { "yields " } else { "" },
-                self.atom(function, callee),
-                self.atoms(function, args)
+                w.atom(vars, callee),
+                w.atoms(vars, args)
             ),
             Call::Handle {
                 effect,
@@ -292,7 +205,7 @@ impl Printer<'_> {
                         format!(
                             "{}: {}",
                             operation_name(&self.program.effects, *effect, op as u32),
-                            self.atom(function, clause)
+                            w.atom(vars, clause)
                         )
                     })
                     .collect();
@@ -304,9 +217,9 @@ impl Printer<'_> {
                 format!(
                     "handle {}({}, {}) {clauses} return {}",
                     effect_text(&self.program.effects, *effect),
-                    self.atom(function, init),
-                    self.atom(function, body),
-                    self.atom(function, ret)
+                    w.atom(vars, init),
+                    w.atom(vars, body),
+                    w.atom(vars, ret)
                 )
             }
             Call::Perform {
@@ -320,14 +233,14 @@ impl Printer<'_> {
                 format!(
                     "perform {never}{}({})",
                     operation_text(&self.program.effects, *effect, *op),
-                    self.atoms(function, args)
+                    w.atoms(vars, args)
                 )
             }
             Call::Resume { k, arg, state } => format!(
                 "resume {}({}, {})",
-                self.atom(function, k),
-                self.atom(function, arg),
-                self.atom(function, state)
+                w.atom(vars, k),
+                w.atom(vars, arg),
+                w.atom(vars, state)
             ),
             Call::Clause {
                 effect,
@@ -337,8 +250,8 @@ impl Printer<'_> {
             } => format!(
                 "clause {} {}({})",
                 operation_text(&self.program.effects, *effect, *op),
-                self.atom(function, callee),
-                self.atoms(function, args)
+                w.atom(vars, callee),
+                w.atoms(vars, args)
             ),
         }
     }
@@ -350,58 +263,4 @@ impl Printer<'_> {
         }
         format!("mask [{}] ", effects_text(&self.program.effects, mask))
     }
-
-    /// 配置の名前。表にない番号は、エフェクトと同じく `#N` で書く。
-    fn layout(&self, id: LayoutId) -> String {
-        self.program
-            .layout(id)
-            .map_or_else(|| format!("#{}", id.0), |layout| layout.name.clone())
-    }
-
-    fn ctor(&self, ctor: Ctor) -> String {
-        format!("{} #{}", self.layout(ctor.layout), ctor.tag)
-    }
-
-    /// 文字列の case は `const` と同じく文字列定数の表を引いて書く。
-    fn case_pattern(&self, pattern: CasePattern) -> String {
-        match pattern {
-            CasePattern::Tag(tag) => format!("#{tag}"),
-            CasePattern::Int(n) => n.to_string(),
-            CasePattern::String(index) => format!("{:?}", self.program.strings[index as usize]),
-        }
-    }
-
-    fn atoms(&self, function: &CoreFn, atoms: &[Atom]) -> String {
-        atoms
-            .iter()
-            .map(|a| self.atom(function, a))
-            .collect::<Vec<_>>()
-            .join(", ")
-    }
-
-    fn atom(&self, function: &CoreFn, atom: &Atom) -> String {
-        match atom {
-            Atom::Var(v) => var(function, *v),
-            Atom::Int(n) => n.to_string(),
-            Atom::Unit => "()".to_string(),
-            Atom::Tag(tag) => format!("#{tag}"),
-            Atom::Fn(target) => format!("&{}", function_name(&self.program.function(*target).name)),
-        }
-    }
-}
-
-fn var(function: &CoreFn, var: VarId) -> String {
-    format!("{}.{}", function.vars[var.0 as usize].name, var.0)
-}
-
-/// 束縛の位置では Repr を書く。使う位置には書かない。
-fn binder(function: &CoreFn, v: VarId) -> String {
-    format!("{}: {}", var(function, v), function.repr(v).name())
-}
-
-fn binders(function: &CoreFn, vars: &[VarId]) -> String {
-    vars.iter()
-        .map(|&v| binder(function, v))
-        .collect::<Vec<_>>()
-        .join(", ")
 }
