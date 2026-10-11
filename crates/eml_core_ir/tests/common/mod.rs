@@ -1,3 +1,5 @@
+pub mod programs;
+
 use eml_core_ir::{
     Pass, Program, parse, pretty, pretty_with_positions, verify, verify_evidence, verify_scopes,
     verify_translated,
