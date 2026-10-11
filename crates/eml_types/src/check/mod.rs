@@ -10,7 +10,7 @@ use la_arena::Arena;
 
 use crate::context::Context;
 use crate::kind::entail::unentailed;
-use crate::kind::problem::{KindProblem, KindScheme, OwnVars};
+use crate::kind::problem::{Instance, KindProblem, KindScheme, OwnVars};
 use crate::kind::solve::solve_scc;
 use crate::kind::{Bound, KindOrigin, KindReason, KindVar, Provenance, Span};
 use crate::shape::{Arrows, Own, Shape, constructor_shape, operation_shape, signature_shape};
@@ -53,12 +53,27 @@ impl Signatures {
     }
 }
 
-/// 段1の結果。
-pub(crate) struct Checked {
-    pub types: BodyTypes,
-    pub problem: KindProblem,
+/// 段1を終えた本体。Kind を解いた後に型を書き出すので、推論用の表を SCC の解が出るまで持つ
+/// (docs/superpowers/specs/2026-10-12-s8c-kind-export-design.md の「型検査の順」)。
+pub(crate) struct PendingBody<'c> {
+    table: Table<'c>,
+    typing: BodyTyping,
+    own: Own,
+    instances: Vec<Instance>,
     /// 使った回数を正しく数えられる本体か (`usage::reliable`)。
     pub reliable: bool,
+}
+
+impl PendingBody<'_> {
+    /// Kind の制約を取り出す。表の形は書き出しで使うので残す。
+    pub fn take_problem(&mut self) -> KindProblem {
+        let own = OwnVars {
+            lin: self.own.lin.clone(),
+            mult: self.own.mult.clone(),
+        };
+        self.table
+            .take_problem(std::mem::take(&mut self.instances), own)
+    }
 }
 
 pub(crate) fn check_module(
@@ -77,47 +92,54 @@ pub(crate) fn check_module(
     if let Some(id) = main {
         check_main(program, &signatures, id, &mut types, &mut diagnostics);
     }
-    // 本体の検査は関数ごとに独立しているので、アリーナの順に回す。診断の順は表示する側が決める
-    // (docs/spec/diagnostics.md の「診断の順」)
-    let components = scc::components(program);
-    let mut bodies = ItemMap::default();
-    let mut problems: ItemMap<Function, KindProblem> = ItemMap::default();
-    let mut unreliable = HashSet::new();
-    for (id, _) in program.functions() {
-        if let Some((checked, found)) = check_body(program, &context, &signatures, id, &mut types) {
-            diagnostics.extend(found);
-            bodies.insert(id, checked.types);
-            problems.insert(id, checked.problem);
-            if !checked.reliable {
-                unreliable.insert(id);
-            }
-        }
-    }
     // 等式のない関数も参照されうるので、制約のないスキームを持たせる。extern の関数のスキームは宣言から作ってあるので
     // 上書きしない
-    for (id, _) in signatures.functions.iter() {
-        if problems.get(id).is_none() {
+    for (id, function) in program.functions() {
+        if function.signature.is_some() && program.body(id).is_none() {
             schemes.entry(ValueItem::Function(id)).or_default();
         }
     }
-    // 呼ばれる側の SCC から順に解き、SCC ごとに Kind を多相化する (docs/spec/types.md の「推論」)
+    // 呼ばれる側の SCC から順に、検査、Kind の解決、型の書き出しをする。書き出す型に Kind の解を入れるため、
+    // 表は SCC の解が出るまで持つ。診断の順は表示する側が決める (docs/spec/diagnostics.md の「診断の順」)
+    let mut bodies = ItemMap::default();
+    let mut checked = HashSet::new();
+    let mut unreliable = HashSet::new();
     let mut violated = Vec::new();
-    for component in &components {
-        let members: Vec<(ValueItem, &KindProblem)> = component
+    for component in &scc::components(program) {
+        let mut pending: Vec<(FunctionId, PendingBody<'_>)> = Vec::new();
+        for &id in component {
+            if let Some((body, found)) = check_body(program, &context, &signatures, id, &mut types)
+            {
+                diagnostics.extend(found);
+                checked.insert(id);
+                if !body.reliable {
+                    unreliable.insert(id);
+                }
+                pending.push((id, body));
+            }
+        }
+        let problems: Vec<(ValueItem, KindProblem)> = pending
+            .iter_mut()
+            .map(|(id, body)| (ValueItem::Function(*id), body.take_problem()))
+            .collect();
+        let members: Vec<(ValueItem, &KindProblem)> = problems
             .iter()
-            .filter_map(|&id| Some((ValueItem::Function(id), problems.get(id)?)))
+            .map(|(decl, problem)| (*decl, problem))
             .collect();
         let solution = solve_scc(&members, &schemes);
         for (&(decl, _), scheme) in members.iter().zip(solution.schemes) {
             schemes.insert(decl, scheme);
         }
         violated.extend(solution.violated);
+        for (id, body) in pending {
+            bodies.insert(id, export_body(body, &mut types));
+        }
     }
     diagnostics.extend(check_method_kinds(
         program,
         &context,
         &signatures,
-        &problems,
+        &checked,
         &unreliable,
         &schemes,
     ));
@@ -372,13 +394,13 @@ pub(crate) fn signatures(program: &Program, context: &Context) -> Signatures {
 
 /// 段1: 1つの関数の本体を、全宣言の型の形だけを見て検査する。呼び出し先の本体の検査の結果は要らない
 /// (docs/spec/types.md の「推論」)。シグネチャと本体の両方がある関数だけを検査する。
-pub(crate) fn check_body(
+pub(crate) fn check_body<'c>(
     program: &Program,
-    context: &Context,
+    context: &'c Context,
     signatures: &Signatures,
     id: FunctionId,
     types: &mut TypeStore,
-) -> Option<(Checked, Vec<Diagnostic>)> {
+) -> Option<(PendingBody<'c>, Vec<Diagnostic>)> {
     let function = &program[id];
     let (Some(signature), Some(body), Some(shape)) = (
         &function.signature,
@@ -429,6 +451,23 @@ pub(crate) fn check_body(
     let reliable = usage::reliable(body, diagnostics.is_empty()) && !linear_head;
     usage::constrain(program, file, body, &typing, &mut table, types, reliable);
     carry::constrain(program, file, body, &typing, &mut table, reliable);
+    Some((
+        PendingBody {
+            table,
+            typing,
+            own,
+            instances,
+            reliable,
+        },
+        diagnostics,
+    ))
+}
+
+/// 段1の本体の型を、`TypeStore` に書き出す。row の分類は生きている表が要るので、ここでする。
+pub(crate) fn export_body(pending: PendingBody<'_>, types: &mut TypeStore) -> BodyTypes {
+    let PendingBody {
+        table, typing, own, ..
+    } = pending;
     // 式、局所変数、パターン、具体化の型は表の同じ節点を共有するので、1つの `Exporter` で書き出し、各節点を1回だけ
     // 書き出す
     let mut exporter = Exporter::new(&table, types);
@@ -498,19 +537,7 @@ pub(crate) fn check_body(
             .collect();
         body_types.discarded.insert(expr, discarded);
     }
-    let own_vars = OwnVars {
-        lin: own.lin,
-        mult: own.mult,
-    };
-    let problem = table.into_problem(instances, own_vars);
-    Some((
-        Checked {
-            types: body_types,
-            problem,
-            reliable,
-        },
-        diagnostics,
-    ))
+    body_types
 }
 
 /// `Unr` とみなすシグネチャの型変数。制約 `C a` は `a ≤ Unr` を意味し、instance の本体は頭の型変数を、既定のメソッドは
@@ -660,7 +687,7 @@ fn check_method_kinds(
     program: &Program,
     context: &Context,
     signatures: &Signatures,
-    problems: &ItemMap<Function, KindProblem>,
+    checked: &HashSet<FunctionId>,
     unreliable: &HashSet<FunctionId>,
     schemes: &HashMap<ValueItem, KindScheme>,
 ) -> Vec<Diagnostic> {
@@ -671,12 +698,11 @@ fn check_method_kinds(
             FunctionKind::DefaultMethod(method) => (None, method),
             FunctionKind::Defined | FunctionKind::Extern(_) => continue,
         };
-        if unreliable.contains(&id) {
+        if unreliable.contains(&id) || !checked.contains(&id) {
             continue;
         }
         let decl = ValueItem::Function(id);
-        let (Some(_), Some(shape), Some(signature), Some(scheme)) = (
-            problems.get(id),
+        let (Some(shape), Some(signature), Some(scheme)) = (
             signatures.functions.get(id),
             &function.signature,
             schemes.get(&decl),

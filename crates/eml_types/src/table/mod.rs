@@ -249,15 +249,20 @@ impl<'c> Table<'c> {
         self.kind_origin.clone()
     }
 
-    /// 段1の終わりに、集めた Kind の制約を取り出して表を捨てる。
-    pub fn into_problem(self, instances: Vec<Instance>, own: OwnVars) -> KindProblem {
+    /// 集めた Kind の制約を取り出す。型の書き出しは SCC の解が出た後なので、表の形は残す。
+    pub fn take_problem(&mut self, instances: Vec<Instance>, own: OwnVars) -> KindProblem {
         KindProblem {
-            lin: self.linearity,
-            mult: self.multiplicity,
-            carries: self.carries,
+            lin: std::mem::take(&mut self.linearity),
+            mult: std::mem::take(&mut self.multiplicity),
+            carries: std::mem::take(&mut self.carries),
             instances,
             own,
         }
+    }
+
+    /// 宣言の問題のように、表をそこで捨てるときの取り出し。
+    pub fn into_problem(mut self, instances: Vec<Instance>, own: OwnVars) -> KindProblem {
+        self.take_problem(instances, own)
     }
 
     fn require_lin(&mut self, lower: Bound<Linearity>, upper: Bound<Linearity>) {
