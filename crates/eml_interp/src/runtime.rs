@@ -277,11 +277,7 @@ impl<'p> Runtime<'p> {
     }
 
     /// 関数値を適用する。関数に入らずに値ができたら (足りない引数のクロージャ)、その値を継続に返す。
-    pub(crate) fn apply_and_continue(
-        &mut self,
-        callee: Value,
-        args: Vec<Value>,
-    ) -> Result<Transfer, Fault> {
+    fn apply_and_continue(&mut self, callee: Value, args: Vec<Value>) -> Result<Transfer, Fault> {
         match self.apply(callee, args)? {
             Applied::Enter(function, args) => Ok(Transfer::Enter(function, args)),
             Applied::Value(value) => self.ret(value),

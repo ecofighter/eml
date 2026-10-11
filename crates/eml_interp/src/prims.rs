@@ -90,7 +90,7 @@ impl Runtime<'_> {
             }
             Prim::EvEvv => {
                 let [evidence] = arguments(args)?;
-                let outer = *self.evidence(evidence)?.outer;
+                let outer = self.evidence(evidence)?.outer;
                 self.dup(outer)?;
                 self.decref(evidence)?;
                 Ok(outer)
@@ -194,6 +194,7 @@ impl Runtime<'_> {
     /// 除いた最後の節点の前までは写し、その後ろは元のリストを共有する。evidence の物体は写さない
     /// (docs/spec/core-ir.md の「evidence を探す」)。型の付いたプログラムでは、合う evidence がいつも足りる
     /// (docs/spec/effects.md の「健全性」)。`mask` は handle できるエフェクトだけを挙げるので、extern のエフェクトも来ない。
+    /// `effects` は空でない (verifier が確かめる) ので、少なくとも1つの evidence を飛ばす。
     fn mask(&mut self, effects: &[u32], list: Value) -> Result<Value, Fault> {
         let mut remaining = effects.to_vec();
         let mut kept = Vec::new();
@@ -276,7 +277,7 @@ impl Runtime<'_> {
             } => Ok(EvidenceFields {
                 table: *table,
                 state,
-                outer,
+                outer: *outer,
             }),
             _ => Err(not_an_evidence()),
         }
@@ -303,11 +304,12 @@ impl Runtime<'_> {
     }
 }
 
-/// evidence の物体の欄。入口の表は共有されるので参照だけを、状態と外側の `evv` は書き換えられるように借りて返す。
+/// evidence の物体の欄。書き換えるのは状態だけなので、状態は借りて返し、入口の表と外側の `evv` は写して返す
+/// (docs/spec/runtime.md の「evidence と `evv` の物体」)。写した参照は数えないので、残すなら呼ぶ側が `dup` する。
 struct EvidenceFields<'h> {
     table: ObjRef,
     state: &'h mut Value,
-    outer: &'h mut Value,
+    outer: Value,
 }
 
 /// 引数の数は verifier が基本操作の表で確かめる。ここでは見張りとして確かめる。
@@ -363,6 +365,16 @@ mod tests {
         rt.prim(&Prim::EvvSet, vec![Value::Unit]).unwrap();
     }
 
+    /// `list` の節点と、その evidence を先頭から並べる。
+    fn nodes(rt: &Runtime<'_>, mut list: Value) -> Vec<(Value, ObjRef)> {
+        let mut nodes = Vec::new();
+        while let Some((evidence, next)) = rt.node(list).unwrap() {
+            nodes.push((list, evidence));
+            list = next;
+        }
+        nodes
+    }
+
     #[test]
     fn lookups_and_masks_count_the_list_nodes_they_visit() {
         let (out, _captured) = OutputSink::capture();
@@ -378,6 +390,41 @@ mod tests {
         assert_eq!(rt.evidence_steps, 4);
         rt.decref(masked).unwrap();
         clear(&mut rt);
+    }
+
+    /// `evv` は先頭から 0、1、1、0 のエフェクトの evidence である。多重集合の各エフェクトについて、先頭から合う
+    /// evidence をその数だけ飛ばし、飛ばした最後の節点の前で残した節点だけを写す。
+    #[test]
+    fn a_mask_skips_the_first_matches_of_each_effect_in_its_multiset() {
+        let (out, _captured) = OutputSink::capture();
+        let mut rt = runtime(&out);
+        let baseline = rt.heap.live_objects();
+        for effect in [0, 1, 1, 0] {
+            push(&mut rt, effect);
+        }
+        let list = rt.prim(&Prim::EvvGet, Vec::new()).unwrap();
+        let original = nodes(&rt, list);
+        rt.dup(list).unwrap();
+        // 先頭の 0 と次の 1 を飛ばす。残した節点はないので、3つ目の節点をそのまま返す
+        let distinct = rt.prim(&Prim::EvvMask(vec![0, 1]), vec![list]).unwrap();
+        assert_eq!(distinct, original[2].0);
+        // 先頭の 0 を残して、続く2つの 1 を飛ばす。先頭だけを写し、4つ目の節点からは元のリストを共有する
+        let twice = rt.prim(&Prim::EvvMask(vec![1, 1]), vec![list]).unwrap();
+        let masked = nodes(&rt, twice);
+        assert_eq!(
+            masked
+                .iter()
+                .map(|&(_, evidence)| evidence)
+                .collect::<Vec<_>>(),
+            [original[0].1, original[3].1]
+        );
+        assert_ne!(masked[0].0, original[0].0);
+        assert_eq!(masked[1].0, original[3].0);
+        assert_eq!(rt.evidence_steps, 2 + 3);
+        rt.decref(distinct).unwrap();
+        rt.decref(twice).unwrap();
+        clear(&mut rt);
+        assert_eq!(rt.heap.live_objects(), baseline);
     }
 
     /// 型の付いたプログラムでは、`mask` が名前を挙げた数だけ evidence がいつもリストにある (docs/spec/effects.md の
@@ -404,7 +451,7 @@ mod tests {
         let evidence = rt
             .prim(&Prim::EvNew(0), vec![Value::Unit, Value::Unit])
             .unwrap();
-        rt.prim(&Prim::YieldTo, vec![evidence, Value::Unit, Value::Unit])
+        rt.prim(&Prim::YieldTo, vec![evidence, Value::Unit, Value::Fn(0)])
             .unwrap();
         for _ in 0..2 {
             let cont = rt.prim(&Prim::YieldContTake, Vec::new()).unwrap();

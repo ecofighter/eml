@@ -8,6 +8,10 @@ use crate::common::{parse, run_core};
 
 const COUNTER: &str = "effect Counter { get(unit) -> tobj, put(tobj) -> unit }\n";
 
+/// yield を始めるときの κ。EP の `id$` と同じ形で、`yield_to` と `yield_abort` の3つ目の引数に渡す。`()` を渡さない
+/// のは、継続の欄の `()` が「取り出した後」の印を兼ねるためである (docs/spec/core-ir.md の「EP が作る補助の関数」)。
+const ID: &str = "yields fn id(x.0: tobj) -> tobj {\n  return x.0\n}\n";
+
 /// すぐに再開する節を evidence から引いてその場で呼ぶ。状態は evidence の欄に残る。
 #[test]
 fn an_immediate_clause_reads_and_writes_the_state_of_its_evidence() {
@@ -77,8 +81,7 @@ fn main() -> unit {{
   dup e.1
   let a.3: int = prim yield_status(e.1)
   let c.4: obj = const \"clause\"
-  let k.5: obj = const \"k\"
-  let u.6: unit = prim yield_to(e.1, c.4, k.5)
+  let u.6: unit = prim yield_to(e.1, c.4, &id)
   let y.7: int = prim yielding()
   let b.8: int = prim yield_status(e.1)
   let d.9: int = prim yield_status(e.2)
@@ -89,7 +92,7 @@ fn main() -> unit {{
   let c.13: tobj = prim yield_finish()
   let f.14: int = prim yield_status(e.1)
   let z.15: int = prim yielding()
-  let u.16: unit = prim yield_abort(e.1, (), ())
+  let u.16: unit = prim yield_abort(e.1, (), &id)
   let g.17: int = prim yield_status(e.1)
   let k.18: tobj = prim yield_cont_take()
   decref k.18
@@ -113,7 +116,7 @@ fn show(n.0: int) -> unit {{
   let u.2: unit = extern Prelude.println(s.1)
   return u.2
 }}
-"
+{ID}"
     );
     let (output, result) = run_core(&text);
     assert_eq!(result, Ok(()));
@@ -167,6 +170,45 @@ fn main() -> unit {{
     assert_eq!(output, "2\n1\n");
 }
 
+/// handler の下で継続を再開するときの形。`ev_renew` は入口の表を共有し、状態を差し替え、今の `evv` を外側の `evv`
+/// にした evidence を作る (docs/spec/runtime.md の「evidence と `evv` の物体」)。元の evidence の外側の `evv` は空なので、
+/// `ev_evv` が元の外側を返せば `ev_lookup` は evidence を見つけられない。
+#[test]
+fn a_renewed_evidence_has_its_own_state_and_the_current_evv_outside() {
+    let text = format!(
+        "{COUNTER}\
+fn main() -> unit {{
+  let w.0: tobj = prim evv_get()
+  let s.1: tobj = box 1
+  let e.2: obj = prim ev_new[Counter](s.1, w.0)
+  dup e.2
+  let w.3: tobj = prim evv_get()
+  let w.4: tobj = prim evv_push(w.3, e.2)
+  let u.5: unit = prim evv_set(w.4)
+  let s.6: tobj = box 2
+  let r.7: obj = prim ev_renew(e.2, s.6)
+  dup r.7
+  let o.8: tobj = prim ev_evv(r.7)
+  let u.9: unit = prim evv_set(o.8)
+  let f.10: obj = prim ev_lookup[Counter]()
+  let a.11: tobj = prim ev_take_state(f.10)
+  let b.12: tobj = prim ev_take_state(r.7)
+  let u.13: unit = prim evv_set(())
+  let p.14: unit = call show(a.11) save [b.12]
+  tail call show(b.12)
+}}
+fn show(s.0: tobj) -> unit {{
+  let n.1: int = unbox s.0
+  decref s.0
+  let t.2: obj = extern \"Prelude.Show Int.show\"(n.1)
+  let u.3: unit = extern Prelude.println(t.2)
+  return u.3
+}}
+"
+    );
+    assert_eq!(run_core(&text), ("1\n2\n".to_string(), Ok(())));
+}
+
 /// `make` が返すダミーを、`unbox` し、`box` し直し、`dup` と `decref` に通す。
 const DUMMY: &str = "\
 fn main() -> unit {
@@ -190,18 +232,22 @@ fn a_dummy_passes_through_box_unbox_dup_and_decref() {
     assert_eq!(run_core(DUMMY), (String::new(), Ok(())));
 }
 
-/// ダミーはヒープに置かないので、同じ形で `()` を返すプログラムと、同時に生きていた物体の数が同じである。
+/// ダミーはヒープに置かないので、ダミーの代わりに `box 0` を返すプログラムと、同時に生きていた物体の数が同じである。
+/// `box 0` の整数もヒープに置かない。
 #[test]
 fn a_dummy_is_not_a_heap_object() {
     let peak = |text: &str| {
+        let program = parse(text);
+        eml_core_ir::verify(&program).unwrap_or_else(|error| panic!("{error}"));
         let (sink, _captured) = OutputSink::capture();
         let config = RunConfig::default().with_debug_heap(true);
-        eml_interp::run(&parse(text), &config, &sink)
+        eml_interp::run(&program, &config, &sink)
             .unwrap()
             .peak_objects
     };
-    let unit = DUMMY.replace("prim dummy()", "box 0");
-    assert_eq!(peak(DUMMY), peak(&unit));
+    let boxed = DUMMY.replace("let d.0: obj = prim dummy()", "let d.0: tobj = box 0");
+    assert_ne!(boxed, DUMMY);
+    assert_eq!(peak(DUMMY), peak(&boxed));
 }
 
 fn internal_error(what: &'static str) -> RuntimeError {
@@ -245,10 +291,10 @@ fn a_program_that_ends_during_a_yield_is_an_internal_error() {
 fn main() -> unit {{
   let w.0: tobj = prim evv_get()
   let e.1: obj = prim ev_new[Counter]((), w.0)
-  let u.2: unit = prim yield_to(e.1, (), ())
+  let u.2: unit = prim yield_to(e.1, (), &id)
   return u.2
 }}
-"
+{ID}"
     );
     assert_eq!(
         run_core(&text).1,
@@ -265,11 +311,11 @@ fn main() -> unit {{
   let w.0: tobj = prim evv_get()
   let e.1: obj = prim ev_new[Counter]((), w.0)
   dup e.1
-  let u.2: unit = prim yield_to(e.1, (), ())
-  let u.3: unit = prim yield_abort(e.1, (), ())
+  let u.2: unit = prim yield_to(e.1, (), &id)
+  let u.3: unit = prim yield_abort(e.1, (), &id)
   return u.3
 }}
-"
+{ID}"
     );
     assert_eq!(
         run_core(&text).1,
