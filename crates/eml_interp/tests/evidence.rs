@@ -23,19 +23,15 @@ fn main() -> unit {{
   dup w.0
   let s.1: tobj = box 3
   let e.2: obj = prim ev_new[Counter](s.1, w.0)
-  dup e.2
-  dup e.2
   let u.3: unit = prim ev_set_clause[Counter.get](e.2, &get)
   let u.4: unit = prim ev_set_clause[Counter.put](e.2, &put)
   let w.5: tobj = prim evv_push(w.0, e.2)
   let u.6: unit = prim evv_set(w.5)
   let e.7: obj = prim ev_lookup[Counter]()
-  dup e.7
   let c.8: tobj = prim ev_clause[Counter.put](e.7)
   let f.9: tobj = box 5
   let u.10: unit = clause Counter.put c.8(e.7, f.9) save [w.0]
   let e.11: obj = prim ev_lookup[Counter]()
-  dup e.11
   let c.12: tobj = prim ev_clause[Counter.get](e.11)
   let r.13: tobj = clause Counter.get c.12(e.11, ()) save [w.0]
   let u.14: unit = prim evv_set(w.0)
@@ -46,14 +42,15 @@ fn main() -> unit {{
   return v.17
 }}
 internal yields clause Counter.get fn get(e.0: obj, u.1: unit) -> tobj {{
-  dup e.0
   let s.2: tobj = prim ev_take_state(e.0)
   dup s.2
   let v.3: unit = prim ev_set_state(e.0, s.2)
+  decref e.0
   return s.2
 }}
 internal yields clause Counter.put fn put(e.0: obj, n.1: tobj) -> unit {{
   let u.2: unit = prim ev_set_state(e.0, n.1)
+  decref e.0
   return u.2
 }}
 "
@@ -76,15 +73,13 @@ fn main() -> unit {{
   let e.2: obj = prim ev_new[Counter]((), w.0)
   dup e.1
   dup e.1
-  dup e.1
-  dup e.1
-  dup e.1
   let a.3: int = prim yield_status(e.1)
   let c.4: obj = const \"clause\"
   let u.6: unit = prim yield_to(e.1, c.4, &id)
   let y.7: int = prim yielding()
   let b.8: int = prim yield_status(e.1)
   let d.9: int = prim yield_status(e.2)
+  decref e.2
   let k.10: tobj = prim yield_cont_take()
   let u.11: unit = prim yield_cont_set(k.10)
   let k.12: tobj = prim yield_cont_take()
@@ -94,6 +89,7 @@ fn main() -> unit {{
   let z.15: int = prim yielding()
   let u.16: unit = prim yield_abort(e.1, (), &id)
   let g.17: int = prim yield_status(e.1)
+  decref e.1
   let k.18: tobj = prim yield_cont_take()
   decref k.18
   let c.19: tobj = prim yield_finish()
@@ -148,10 +144,13 @@ fn main() -> unit {{
   let u.9: unit = prim evv_set(w.8)
   let e.10: obj = prim ev_lookup[Counter]()
   let s.11: tobj = prim ev_take_state(e.10)
+  decref e.10
   let m.12: tobj = prim evv_mask[Counter](w.8)
+  decref w.8
   let u.13: unit = prim evv_set(m.12)
   let e.14: obj = prim ev_lookup[Counter]()
   let s.15: tobj = prim ev_take_state(e.14)
+  decref e.14
   let u.16: unit = prim evv_set(w.0)
   let n.17: int = unbox s.11
   decref s.11
@@ -187,12 +186,14 @@ fn main() -> unit {{
   let u.5: unit = prim evv_set(w.4)
   let s.6: tobj = box 2
   let r.7: obj = prim ev_renew(e.2, s.6)
-  dup r.7
+  decref e.2
   let o.8: tobj = prim ev_evv(r.7)
   let u.9: unit = prim evv_set(o.8)
   let f.10: obj = prim ev_lookup[Counter]()
   let a.11: tobj = prim ev_take_state(f.10)
+  decref f.10
   let b.12: tobj = prim ev_take_state(r.7)
+  decref r.7
   let u.13: unit = prim evv_set(())
   let p.14: unit = call show(a.11) save [b.12]
   tail call show(b.12)

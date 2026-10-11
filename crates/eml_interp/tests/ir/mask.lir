@@ -2,7 +2,6 @@ effect Ask { ask(unit) -> obj }
 effect Yield { yield(unit) -> unit }
 yields fn asker(p.0: unit) -> unit {
   let ev.3: obj = prim ev_lookup[Ask]()
-  dup ev.3
   let c.4: tobj = prim ev_clause[Ask.ask](ev.3)
   let t.1: obj = clause Ask.ask c.4(ev.3, ())
   let y.5: int = prim yielding()
@@ -19,7 +18,6 @@ b2:
 }
 yields fn "masked@[Unit]<e>"(f.0: tobj) -> unit {
   let w.2: tobj = prim evv_get()
-  dup w.2
   let w.3: tobj = prim evv_mask[Ask](w.2)
   let u.4: unit = prim evv_set(w.3)
   let t.1: unit = yields apply f.0(()) save [w.2]
@@ -40,7 +38,6 @@ fn rehandle(p.0: unit) -> unit {
   let w.2: tobj = prim evv_get()
   dup w.2
   let ev.3: obj = prim ev_new[Ask]((), w.2)
-  dup ev.3
   let u.4: unit = prim ev_set_clause[Ask.ask](ev.3, &rehandle$handle0$ask$entry)
   dup ev.3
   let w.5: tobj = prim evv_push(w.2, ev.3)
@@ -54,7 +51,6 @@ yields fn "resumer<e>"(body.0: tobj, after.1: tobj) -> unit {
   let w.5: tobj = prim evv_get()
   dup w.5
   let ev.6: obj = prim ev_new[Yield]((), w.5)
-  dup ev.6
   let u.7: unit = prim ev_set_clause[Yield.yield](ev.6, c.3)
   dup ev.6
   let w.8: tobj = prim evv_push(w.5, ev.6)
@@ -64,7 +60,6 @@ yields fn "resumer<e>"(body.0: tobj, after.1: tobj) -> unit {
 }
 yields fn yielder(p.0: unit) -> unit {
   let ev.3: obj = prim ev_lookup[Yield]()
-  dup ev.3
   let c.4: tobj = prim ev_clause[Yield.yield](ev.3)
   let t.1: unit = clause Yield.yield c.4(ev.3, ())
   let y.5: int = prim yielding()
@@ -111,7 +106,6 @@ fn main(p.0: unit) -> unit {
   let w.2: tobj = prim evv_get()
   dup w.2
   let ev.3: obj = prim ev_new[Ask]((), w.2)
-  dup ev.3
   let u.4: unit = prim ev_set_clause[Ask.ask](ev.3, &main$handle1$ask$entry)
   dup ev.3
   let w.5: tobj = prim evv_push(w.2, ev.3)
@@ -123,10 +117,10 @@ internal yields fn rehandle$handle0(p.0: unit) -> unit {
   tail call asker(())
 }
 internal clause Ask.ask fn rehandle$handle0$ask$entry(e.5: obj, p.0: unit) -> obj {
-  dup e.5
   let p.2: unit = prim ev_take_state(e.5)
   let s.3: obj = const "new"
   let u.6: unit = prim ev_set_state(e.5, ())
+  decref e.5
   return s.3
 }
 internal fn rehandle$handle0$return($r.0: unit, p.1: unit) -> unit {
@@ -140,7 +134,6 @@ internal yields fn "resumer<e>$handle1$yield"(after.0: tobj, p.1: unit, k.2: tob
   let w.7: tobj = prim evv_get()
   dup w.7
   let ev.8: obj = prim ev_new[Ask]((), w.7)
-  dup ev.8
   let u.9: unit = prim ev_set_clause[Ask.ask](ev.8, &"resumer<e>$handle0$ask$entry")
   dup ev.8
   let w.10: tobj = prim evv_push(w.7, ev.8)
@@ -160,7 +153,6 @@ b2:
 }
 internal yields fn "resumer<e>$handle0"(k.0: tobj, p.1: unit) -> unit {
   let w.3: tobj = prim evv_get()
-  dup w.3
   let w.4: tobj = prim evv_mask[Ask](w.3)
   let u.5: unit = prim evv_set(w.4)
   let t.2: unit = yields apply k.0((), ()) save [w.3]
@@ -178,10 +170,10 @@ b2:
   return t.2
 }
 internal yields clause Ask.ask fn "resumer<e>$handle0$ask$entry"(e.5: obj, p.0: unit) -> obj {
-  dup e.5
   let p.2: unit = prim ev_take_state(e.5)
   let s.3: obj = const "clause"
   let u.6: unit = prim ev_set_state(e.5, ())
+  decref e.5
   return s.3
 }
 internal yields fn "resumer<e>$handle0$return"($r.0: unit, p.1: unit) -> unit {
@@ -194,7 +186,6 @@ internal yields fn main$handle1(p.0: unit) -> unit {
   let w.2: tobj = prim evv_get()
   dup w.2
   let ev.3: obj = prim ev_new[Ask]((), w.2)
-  dup ev.3
   let u.4: unit = prim ev_set_clause[Ask.ask](ev.3, &main$handle0$ask$entry)
   dup ev.3
   let w.5: tobj = prim evv_push(w.2, ev.3)
@@ -206,20 +197,20 @@ internal yields fn main$handle0(p.0: unit) -> unit {
   tail call body(())
 }
 internal yields clause Ask.ask fn main$handle0$ask$entry(e.5: obj, p.0: unit) -> obj {
-  dup e.5
   let p.2: unit = prim ev_take_state(e.5)
   let s.3: obj = const "inner"
   let u.6: unit = prim ev_set_state(e.5, ())
+  decref e.5
   return s.3
 }
 internal yields fn main$handle0$return($r.0: unit, p.1: unit) -> unit {
   return $r.0
 }
 internal clause Ask.ask fn main$handle1$ask$entry(e.5: obj, p.0: unit) -> obj {
-  dup e.5
   let p.2: unit = prim ev_take_state(e.5)
   let s.3: obj = const "outer"
   let u.6: unit = prim ev_set_state(e.5, ())
+  decref e.5
   return s.3
 }
 internal fn main$handle1$return($r.0: unit, p.1: unit) -> unit {
@@ -259,7 +250,6 @@ internal yields fn "masked@[Unit]<e>$k0"(t.1: unit) -> unit {
 }
 yields fn "mask$[Ask]"(k.0: tobj, v.1: tobj) -> tobj {
   let w.2: tobj = prim evv_get()
-  dup w.2
   let m.3: tobj = prim evv_mask[Ask](w.2)
   let u.4: unit = prim evv_set(m.3)
   let r.5: tobj = yields apply k.0(v.1) save [w.2]
@@ -278,20 +268,18 @@ b2:
   return r.5
 }
 yields fn prompt$(ev.0: obj, ret.1: tobj, x.2: tobj) -> tobj {
-  dup ev.0
   let w.3: tobj = prim ev_evv(ev.0)
   let u.4: unit = prim evv_set(w.3)
-  dup ev.0
   let s.5: int = prim yield_status(ev.0)
   switch s.5 { 0 -> b1, 1 -> b2, 2 -> b3, _ -> b4 }
 b1:
   let st.6: tobj = prim ev_take_state(ev.0)
+  decref ev.0
   tail yields apply ret.1(x.2, st.6)
 b2:
   decref x.2
   let k.8: tobj = prim yield_cont_take()
   let c.9: tobj = prim yield_finish()
-  dup ev.0
   let st.10: tobj = prim ev_take_state(ev.0)
   let k.11: tobj = closure resume$(ev.0, ret.1, k.8)
   tail yields apply c.9(k.11, st.10)
@@ -302,10 +290,10 @@ b3:
   let u.14: unit = drop k.13
   let c.15: tobj = prim yield_finish()
   let st.16: tobj = prim ev_take_state(ev.0)
+  decref ev.0
   tail yields apply c.15(st.16)
 b4:
   decref x.2
-  dup ev.0
   let st.18: tobj = prim ev_take_state(ev.0)
   let k.19: tobj = prim yield_cont_take()
   let k.20: tobj = closure rewind$(ev.0, ret.1, st.18, k.19)
@@ -315,6 +303,7 @@ b4:
 }
 yields fn resume$(ev.0: obj, ret.1: tobj, k.2: tobj, v.3: tobj, s.4: tobj) -> tobj {
   let e.5: obj = prim ev_renew(ev.0, s.4)
+  decref ev.0
   let w.6: tobj = prim evv_get()
   dup e.5
   let w.7: tobj = prim evv_push(w.6, e.5)

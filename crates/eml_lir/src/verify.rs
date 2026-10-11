@@ -25,7 +25,7 @@ use crate::check::{
     BlockShape, Context, Dominators, FnSummary, Tables, TermShape, boxed_scalars, clause_function,
     field_count, shape,
 };
-use crate::syntax::operation_text;
+use crate::syntax::{operation_text, prim_text};
 use crate::{
     Atom, Block, BlockId, Call, CasePattern, Ctor, FnIdx, Layout, LirFn, OpRet, Prim, Program,
     Repr, Rhs, Stmt, Term, VarId, VerifyError, operation,
@@ -885,7 +885,20 @@ impl<'a> Checker<'a> {
                 }
             }
             Rhs::Extern { ext, args, at: _ } => self.cx.check_extern(var, *ext, args)?,
-            Rhs::Prim(prim, args) => self.cx.check_prim(var, prim, args)?,
+            Rhs::Prim(prim, args) => {
+                self.cx.check_prim(var, prim, args)?;
+                // 借用の引数は `unbox` のオペランドと同じく読む使いで、所有の数を変えない
+                // (docs/superpowers/specs/2026-10-11-s8b-ownership-design.md の「基本操作の引数の借用」)
+                let lent = format!("lent to `prim {}`", prim_text(&self.program.effects, prim));
+                for (&arg, &borrowed) in args.iter().zip(prim.row().borrowed) {
+                    match arg {
+                        Atom::Var(arg) if borrowed => self.read(owned, arg, &lent)?,
+                        // 変数でない値は所有を持たないので、消費と同じ検査 (関数の番号) だけを通す
+                        _ if borrowed => self.consume(owned, arg)?,
+                        _ => {}
+                    }
+                }
+            }
             Rhs::ConstString(index) => {
                 if *index as usize >= self.program.strings.len() {
                     return Err(format!(

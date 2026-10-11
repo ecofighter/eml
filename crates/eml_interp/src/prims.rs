@@ -1,5 +1,7 @@
 //! evidence passing の基本操作 (docs/spec/lir.md の「基本操作」)。
-//! 引数はどれも所有した参照として受け取り、結果に残さないものは手放す。extern の行と同じ約束である。
+//! 借用の引数 (`PrimRow::borrowed`) は呼ぶ側が持ったままなので、手放さない。ほかの引数は extern の行と同じく所有した
+//! 参照として受け取り、結果に残さないものは手放す
+//! (docs/superpowers/specs/2026-10-11-s8b-ownership-design.md の「基本操作の引数の借用」)。
 
 use eml_lir::Prim;
 use eml_runtime::{ObjRef, Payload, Value};
@@ -59,7 +61,6 @@ impl Runtime<'_> {
                     return Err(Fault::Internal("a clause entry is set twice"));
                 }
                 *entry = clause;
-                self.decref(evidence)?;
                 Ok(Value::Unit)
             }
             Prim::EvRenew => {
@@ -73,7 +74,6 @@ impl Runtime<'_> {
                     state,
                     outer,
                 });
-                self.decref(evidence)?;
                 Ok(renewed)
             }
             Prim::EvLookup(effect) => {
@@ -85,27 +85,23 @@ impl Runtime<'_> {
                 let table = self.evidence(evidence)?.table;
                 let clause = *self.entry(table, *op)?;
                 self.dup(clause)?;
-                self.decref(evidence)?;
                 Ok(clause)
             }
             Prim::EvEvv => {
                 let [evidence] = arguments(args)?;
                 let outer = self.evidence(evidence)?.outer;
                 self.dup(outer)?;
-                self.decref(evidence)?;
                 Ok(outer)
             }
             Prim::EvTakeState => {
                 let [evidence] = arguments(args)?;
                 let state = std::mem::replace(self.evidence(evidence)?.state, Value::Unit);
-                self.decref(evidence)?;
                 Ok(state)
             }
             Prim::EvSetState => {
                 let [evidence, state] = arguments(args)?;
                 let old = std::mem::replace(self.evidence(evidence)?.state, state);
                 self.decref(old)?;
-                self.decref(evidence)?;
                 Ok(Value::Unit)
             }
             Prim::Yielding => {
@@ -127,7 +123,6 @@ impl Runtime<'_> {
                     }
                     YieldState::Yielding { .. } => 3,
                 };
-                self.decref(evidence)?;
                 Ok(Value::Int(status))
             }
             Prim::YieldTo => self.start_yield(args, false),
@@ -215,7 +210,7 @@ impl Runtime<'_> {
             }
             rest = next;
         }
-        // `list` を手放すと共有する後ろの部分も解放されうるので、先に参照を増やす
+        // `list` は借りただけなので、作るリストが共有する後ろの部分には自分の参照を持たせる
         self.dup(rest)?;
         let mut masked = rest;
         for &evidence in kept.iter().rev() {
@@ -225,7 +220,6 @@ impl Runtime<'_> {
                 next: masked,
             });
         }
-        self.decref(list)?;
         Ok(masked)
     }
 
@@ -389,6 +383,7 @@ mod tests {
         let masked = rt.prim(&Prim::EvvMask(vec![1]), vec![list]).unwrap();
         assert_eq!(rt.evidence_steps, 4);
         rt.decref(masked).unwrap();
+        rt.decref(list).unwrap();
         clear(&mut rt);
     }
 
@@ -402,9 +397,9 @@ mod tests {
         for effect in [0, 1, 1, 0] {
             push(&mut rt, effect);
         }
+        // `evv_mask` は `list` を借りるだけなので、2回渡しても `dup` は要らない。手放すのは呼ぶ側である
         let list = rt.prim(&Prim::EvvGet, Vec::new()).unwrap();
         let original = nodes(&rt, list);
-        rt.dup(list).unwrap();
         // 先頭の 0 と次の 1 を飛ばす。残した節点はないので、3つ目の節点をそのまま返す
         let distinct = rt.prim(&Prim::EvvMask(vec![0, 1]), vec![list]).unwrap();
         assert_eq!(distinct, original[2].0);
@@ -423,6 +418,7 @@ mod tests {
         assert_eq!(rt.evidence_steps, 2 + 3);
         rt.decref(distinct).unwrap();
         rt.decref(twice).unwrap();
+        rt.decref(list).unwrap();
         clear(&mut rt);
         assert_eq!(rt.heap.live_objects(), baseline);
     }

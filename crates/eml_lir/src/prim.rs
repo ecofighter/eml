@@ -40,6 +40,11 @@ pub enum Prim {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PrimRow {
     pub params: &'static [Repr],
+    /// 引数ごとの借用の印で、長さは `params` と同じである。借用の引数は読む使いで、所有を受け取らない。借用にするのは、
+    /// 基本操作がその引数そのものを物体にも実行の文脈にも入れない引数である。中身の一部を基本操作が自分で `dup` して
+    /// 共有する引数 (`evv_mask` のリストの残り、`ev_renew` の入口の表) も借用にする
+    /// (docs/superpowers/specs/2026-10-11-s8b-ownership-design.md の「基本操作の引数の借用」)。
+    pub borrowed: &'static [bool],
     pub ret: Repr,
 }
 
@@ -129,29 +134,34 @@ impl Prim {
 
     pub fn row(&self) -> PrimRow {
         use Repr::{Int, Obj, TObj, Unit};
-        let (params, ret): (&'static [Repr], Repr) = match self {
-            Prim::EvvGet => (&[], TObj),
-            Prim::EvvSet => (&[TObj], Unit),
-            Prim::EvvPush => (&[TObj, Obj], TObj),
-            Prim::EvvMask(_) => (&[TObj], TObj),
-            Prim::EvNew(_) => (&[TObj, TObj], Obj),
-            Prim::EvSetClause { .. } => (&[Obj, TObj], Unit),
-            Prim::EvRenew => (&[Obj, TObj], Obj),
-            Prim::EvLookup(_) => (&[], Obj),
-            Prim::EvClause { .. } => (&[Obj], TObj),
-            Prim::EvEvv => (&[Obj], TObj),
-            Prim::EvTakeState => (&[Obj], TObj),
-            Prim::EvSetState => (&[Obj, TObj], Unit),
-            Prim::Yielding => (&[], Int),
-            Prim::YieldStatus => (&[Obj], Int),
-            Prim::YieldTo => (&[Obj, TObj, TObj], Unit),
-            Prim::YieldAbort => (&[Obj, TObj, TObj], Unit),
-            Prim::YieldContTake => (&[], TObj),
-            Prim::YieldContSet => (&[TObj], Unit),
-            Prim::YieldFinish => (&[], TObj),
-            Prim::Dummy => (&[], Obj),
+        const NONE: &[bool] = &[];
+        let (params, borrowed, ret): (&'static [Repr], &'static [bool], Repr) = match self {
+            Prim::EvvGet => (&[], NONE, TObj),
+            Prim::EvvSet => (&[TObj], &[false], Unit),
+            Prim::EvvPush => (&[TObj, Obj], &[false, false], TObj),
+            Prim::EvvMask(_) => (&[TObj], &[true], TObj),
+            Prim::EvNew(_) => (&[TObj, TObj], &[false, false], Obj),
+            Prim::EvSetClause { .. } => (&[Obj, TObj], &[true, false], Unit),
+            Prim::EvRenew => (&[Obj, TObj], &[true, false], Obj),
+            Prim::EvLookup(_) => (&[], NONE, Obj),
+            Prim::EvClause { .. } => (&[Obj], &[true], TObj),
+            Prim::EvEvv => (&[Obj], &[true], TObj),
+            Prim::EvTakeState => (&[Obj], &[true], TObj),
+            Prim::EvSetState => (&[Obj, TObj], &[true, false], Unit),
+            Prim::Yielding => (&[], NONE, Int),
+            Prim::YieldStatus => (&[Obj], &[true], Int),
+            Prim::YieldTo => (&[Obj, TObj, TObj], &[false, false, false], Unit),
+            Prim::YieldAbort => (&[Obj, TObj, TObj], &[false, false, false], Unit),
+            Prim::YieldContTake => (&[], NONE, TObj),
+            Prim::YieldContSet => (&[TObj], &[false], Unit),
+            Prim::YieldFinish => (&[], NONE, TObj),
+            Prim::Dummy => (&[], NONE, Obj),
         };
-        PrimRow { params, ret }
+        PrimRow {
+            params,
+            borrowed,
+            ret,
+        }
     }
 
     /// 基本操作はどれも実行の文脈か evidence を読み書きするので、縮約は消さない。
@@ -164,12 +174,24 @@ impl Prim {
 mod tests {
     use super::*;
 
+    fn every_prim() -> impl Iterator<Item = Prim> {
+        KINDS.into_iter()
+    }
+
     /// 見本が自分の行の種類でなければ、ほかの種類の名前が2回現れる。
     #[test]
     fn every_kind_has_its_own_name() {
-        let mut names: Vec<&str> = KINDS.iter().map(Prim::name).collect();
+        let mut names: Vec<&str> = every_prim().map(|prim| prim.name()).collect();
         names.sort_unstable();
         names.dedup();
         assert_eq!(names.len(), KINDS.len());
+    }
+
+    #[test]
+    fn every_kind_marks_each_parameter() {
+        for prim in every_prim() {
+            let row = prim.row();
+            assert_eq!(row.borrowed.len(), row.params.len(), "{}", prim.name());
+        }
     }
 }

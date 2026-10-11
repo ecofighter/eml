@@ -282,13 +282,14 @@ pub enum Rhs {
     /// `tobj` の値から、箱を要するスカラーを取り出す。`switch` の scrutinee と同じく値を読むだけで、所有権を受け取ら
     /// ない。スカラーの種類は束縛する変数の Repr で決まる。
     Unbox(Atom),
-    /// evidence passing の基本操作。extern と同じく引数をすべて消費し、所有した結果を定義する
-    /// (docs/spec/lir.md の「基本操作」)。
+    /// evidence passing の基本操作。借用の印 (`PrimRow::borrowed`) が立つ引数は読むだけで、ほかの引数は extern と同じく
+    /// 消費する。結果は所有した値である (docs/spec/lir.md の「基本操作」、
+    /// docs/superpowers/specs/2026-10-11-s8b-ownership-design.md の「基本操作の引数の借用」)。
     Prim(Prim, Vec<Atom>),
 }
 
 impl Rhs {
-    /// 右辺が使う値。関数、extern、基本操作の引数は、どれも所有権を受け取る。
+    /// 右辺が使う値。消費する使いと読む使いの区別は `for_each_consumed` が決める。
     pub fn for_each_atom(&self, mut f: impl FnMut(Atom)) {
         match self {
             Rhs::Call { call, saved: _ } => call.for_each_atom(f),
@@ -305,10 +306,20 @@ impl Rhs {
         }
     }
 
-    /// 値の使いのうち、参照を1つ受け取る「消費」。`unbox` の値は読むだけなので数えない (docs/spec/lir.md)。
-    pub fn for_each_consumed(&self, f: impl FnMut(Atom)) {
-        if !matches!(self, Rhs::Unbox(_)) {
-            self.for_each_atom(f);
+    /// 値の使いのうち、参照を1つ受け取る「消費」。`unbox` の値と基本操作の借用の引数は読むだけなので数えない
+    /// (docs/spec/lir.md、docs/superpowers/specs/2026-10-11-s8b-ownership-design.md の「基本操作の引数の借用」)。
+    pub fn for_each_consumed(&self, mut f: impl FnMut(Atom)) {
+        match self {
+            Rhs::Unbox(_) => {}
+            Rhs::Prim(prim, args) => {
+                let borrowed = prim.row().borrowed;
+                for (&atom, &borrowed) in args.iter().zip(borrowed) {
+                    if !borrowed {
+                        f(atom);
+                    }
+                }
+            }
+            _ => self.for_each_atom(f),
         }
     }
 

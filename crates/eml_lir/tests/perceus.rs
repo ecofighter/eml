@@ -548,8 +548,9 @@ fn a_tag_switch_without_a_layout_stops_perceus() {
 }
 
 #[test]
-fn prims_consume_their_arguments() {
-    // 基本操作も節の呼び出しも引数を消費するので、`e.0` を2回使うと1回目の前に `dup e.0` が入る
+fn prims_read_borrowed_arguments_and_consume_the_rest() {
+    // `ev_clause` は evidence を借りるだけなので、`e.0` の所有は節の呼び出しまで残り、`dup e.0` は入らない。節の
+    // 呼び出しは引数を消費する (docs/superpowers/specs/2026-10-11-s8b-ownership-design.md の「基本操作の引数の借用」)
     let text = "\
 effect Counter { get(unit) -> int, put(int) -> unit }
 yields fn f(e.0: obj) -> int {
@@ -561,10 +562,48 @@ yields fn f(e.0: obj) -> int {
     insta::assert_snapshot!(perceus_text(text), @"
     effect Counter { get(unit) -> int, put(int) -> unit }
     yields fn f(e.0: obj) -> int {
-      dup e.0
       let c.1: tobj = prim ev_clause[Counter.get](e.0)
       let m.2: int = clause Counter.get c.1(e.0, ())
       return m.2
+    }
+    ");
+}
+
+#[test]
+fn a_borrowed_prim_argument_is_read() {
+    // `ev_take_state` と `ev_set_state` は evidence を借りるので、2回使っても `dup` しない。evidence は最後に使った
+    // 文の直後で `decref` する。借りたフィールドもそのまま渡す
+    let shown = perceus_text(
+        "\
+layout W { W(obj) }
+fn f(e.0: obj) -> unit {
+  let s.1: tobj = prim ev_take_state(e.0)
+  let u.2: unit = prim ev_set_state(e.0, s.1)
+  return u.2
+}
+fn g(w.0: obj) -> tobj {
+  unpack w.0 W #0(e.1: obj)
+  let v.2: tobj = prim ev_evv(e.1)
+  return v.2
+}
+",
+    );
+    assert!(!shown.contains("dup e.0"), "{shown}");
+    assert!(!shown.contains("dup e.1"), "{shown}");
+    assert!(!shown.contains("release"), "{shown}");
+    insta::assert_snapshot!(shown, @"
+    layout W { W(obj) }
+    fn f(e.0: obj) -> unit {
+      let s.1: tobj = prim ev_take_state(e.0)
+      let u.2: unit = prim ev_set_state(e.0, s.1)
+      decref e.0
+      return u.2
+    }
+    fn g(w.0: obj) -> tobj {
+      unpack w.0 W #0(e.1: obj)
+      let v.2: tobj = prim ev_evv(e.1)
+      decref w.0
+      return v.2
     }
     ");
 }

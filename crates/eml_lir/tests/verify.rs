@@ -2287,6 +2287,46 @@ fn an_unbox_reads_its_value() {
     );
 }
 
+#[test]
+fn a_borrowed_prim_argument_is_read_at_the_ownership_level() {
+    // 借りたフィールドを借用の引数に渡せ、所有の数を変えない
+    let lent = "\
+layout W { W(obj) }
+fn g(w.0: obj) -> tobj {
+  unpack w.0 W #0(e.1: obj)
+  let v.2: tobj = prim ev_evv(e.1)
+  decref w.0
+  return v.2
+}
+";
+    assert_eq!(check(lent), Ok(()));
+    // 持ち主を手放した後に借用の引数に渡すと拒む
+    let after_owner = "\
+layout W { W(obj) }
+fn g(w.0: obj) -> tobj {
+  unpack w.0 W #0(e.1: obj)
+  decref w.0
+  let v.2: tobj = prim ev_evv(e.1)
+  return v.2
+}
+";
+    assert_eq!(
+        check(after_owner),
+        Err("`e.1` is lent to `prim ev_evv` after its owner `w.0` was given up in `g`".to_string())
+    );
+    // 所有の変数を借用の引数に渡しても、所有は残る。手放さなければ漏れとして拒む
+    let kept = "\
+fn f(e.0: obj) -> tobj {
+  let v.1: tobj = prim ev_evv(e.0)
+  return v.1
+}
+";
+    assert_eq!(
+        check(kept),
+        Err("`e.0` is still owned at the end of the function in `f`".to_string())
+    );
+}
+
 // 大きさ
 
 /// `n` 個の `switch` が続き、片方の枝が呼び出しをして合流する関数。所有の検査の段では、合流のブロックの数だけ、
