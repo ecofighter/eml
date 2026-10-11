@@ -646,8 +646,8 @@ in-place の入口は、translate が作った節の関数 g から、EP が節�
   入口の関数 `g$entry` (`clause` の印) は g の写しである。引数は、捕獲、evidence `ev`、操作の引数の順にし、g の `k` と状態の引数を除く。状態は入口の先頭の `ev_take_state(ev)` で得る。末尾の `let r = resume k(v, s)` と `return r` を、`ev_set_state(ev, s)` と `return v` に替える。`yields` の印は g の印を写す。g は使われなくなるので消す
 
   本体は yield しないので、`evv` を替えずに `perform` の場所の `evv` のまま動かしてよい。g が `yields` でないときは、本体に `handle` や `mask` 付きの呼び出しが残りうるが、それらが呼ぶ関数は yield しない。健全性の不変条件 ([エフェクトと handler](effects.md) の「健全性」) から、その中の操作はその中で設けた handler に届くので、外側の `evv` の違いは見えない
-- **再開する節** (`once` と `multi` の操作のうち、上に当たらない節): 入口の関数は、捕獲、`ev`、操作の引数を受け、`c = closure g(捕獲, 操作の引数)` を作り、`yield_to(ev, c, &id$)` を呼んで、ダミーを返す。`prompt$` が後で `apply c(k, st)` を呼ぶ。外のエフェクトを呼ぶすぐに再開する節もここに入り、節の本体は handle の外側の `evv` で動く。節の実行中に `evv` を外側に替える包み (論文の under) は作らない。再開で evidence を作り直すと、包みと節の本体が古い evidence を持ち続けるので、探し直す仕組みも要るためである
-- **`never` の節**: 入口は同じ形で `yield_abort(ev, c, &id$)` を呼ぶ。`prompt$` が後で `apply c(st)` を呼ぶ。入口の `ret` は `obj` で、`prim dummy()` を返す。`never` の操作の `clause` の束縛は、`OpRet::Never` なので位置と比べない。その値はダミーで、上の「ダミーの値」の約束で安全である
+- **再開する節** (`once` と `multi` の操作のうち、上に当たらない節): 入口の関数は、捕獲、`ev`、操作の引数を受け、`c = closure g(捕獲, 操作の引数)` を作り、`yield_to(ev, c, &id$)` を呼んで、ダミーを返す。入口はいつも yield を始めるので、g の印によらず `yields` の印を立てる。`prompt$` が後で `apply c(k, st)` を呼ぶ。外のエフェクトを呼ぶすぐに再開する節もここに入り、節の本体は handle の外側の `evv` で動く。節の実行中に `evv` を外側に替える包み (論文の under) は作らない。再開で evidence を作り直すと、包みと節の本体が古い evidence を持ち続けるので、探し直す仕組みも要るためである
+- **`never` の節**: 入口は同じ形で `yield_abort(ev, c, &id$)` を呼び、`yields` の印を立てる。`prompt$` が後で `apply c(st)` を呼ぶ。入口の `ret` は `obj` で、`prim dummy()` を返す。`never` の操作の `clause` の束縛は、`OpRet::Never` なので位置と比べない。その値はダミーで、上の「ダミーの値」の約束で安全である
 - handle の場所では、節の値 c_i がどの関数のクロージャかを知る必要がある。translate は節を `&g` か、同じ関数の中の `closure g(..)` で渡すので、EP はそれを読む。そうでない形は内部の誤りとしてパニックする
 - `ev_set_clause` には、入口の関数のクロージャ (捕獲がなければ関数の値) を渡す。捕獲は節の捕獲をそのまま写す。再開する節と `never` の節の入口が作る c も、捕獲も操作の引数もなければ `&g` にする (`closure` は引数を1つ以上とる)
 

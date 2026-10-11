@@ -506,7 +506,7 @@ fn a_clause_that_does_not_resume_at_once_yields_to_its_handler() {
     );
     let shown = core_text(&text, Pass::Evidence);
     insta::assert_snapshot!(function(&shown, "main$handle0$ask$entry"), @"
-    internal clause Ask.ask fn main$handle0$ask$entry(e.0: obj, p.1: unit) -> int {
+    internal yields clause Ask.ask fn main$handle0$ask$entry(e.0: obj, p.1: unit) -> int {
       let c.2: tobj = closure main$handle0$ask(p.1)
       let u.3: unit = prim yield_to(e.0, c.2, &id$)
       return 0
@@ -560,7 +560,7 @@ fn a_never_clause_aborts() {
     let text = "effect Fail where\n  never fail : String -> a\n\nmain : Unit -> <IO> Unit\nmain () =\n  let r =\n    handle fail \"x\" + 1 with\n      | fail _ -> 0\n  println (show r)";
     let shown = core_text(text, Pass::Evidence);
     insta::assert_snapshot!(function(&shown, "main$handle0$fail$entry"), @"
-    internal clause Fail.fail fn main$handle0$fail$entry(e.0: obj, p.1: obj) -> obj {
+    internal yields clause Fail.fail fn main$handle0$fail$entry(e.0: obj, p.1: obj) -> obj {
       let c.2: tobj = closure main$handle0$fail(p.1)
       let u.3: unit = prim yield_abort(e.0, c.2, &id$)
       let d.4: obj = prim dummy()
