@@ -173,6 +173,86 @@ fn a_row_polymorphic_function_has_an_instance_per_row_bit() {
 }
 
 #[test]
+fn only_the_set_row_variables_are_named_in_signature_order() {
+    let text = "effect Ask where\n  ask : Unit -> Int\n\nboth : (Unit -> <e> Int) -> (Unit -> <f> Int) -> <f> Int\nboth a b = b ()\n\nrun : Unit -> <Ask> Int\nrun () = both (fn () -> 1) ask + both ask ask\n\nmain : Unit -> <IO> Unit\nmain () = println (show (handle run () with\n    | ask () k -> k 2))";
+    let program = eml_test_support::core_until(text, Pass::Translate);
+    let names: Vec<&str> = program
+        .functions
+        .iter()
+        .map(|function| function.name.as_str())
+        .filter(|name| name.starts_with("both"))
+        .collect();
+    // 1つ目の呼び出しは f のビットだけが立ち、2つ目は両方が立つ
+    assert_eq!(names, ["both<f>", "both<e, f>"]);
+}
+
+#[test]
+fn an_ordinal_name_keeps_its_row_bits() {
+    // `tap` の型引数 (f1 の型) は列の長さの指数の大きさで表示されるので、名前は順番の形になり、その後ろに立った
+    // ビットが付く
+    let n = 64;
+    let mut text = String::from(
+        "effect Ask where\n  ask : Unit -> Int\n\nident : a -> a\nident x = x\n\ntap : a -> (Unit -> <e> Int) -> <e> a\ntap x g =\n  let _ = g ()\n  x\n\nrun : Unit -> <Ask> Int\nrun () =\n  let f0 = ident\n",
+    );
+    for i in 1..=n {
+        text.push_str(&format!("  let f{i} = f{} ident\n", i - 1));
+    }
+    text.push_str(&format!(
+        "  let _ = tap f1 ask\n  f{n} 5\n\nmain : Unit -> <IO> Unit\nmain () = println (show (handle run () with\n    | ask () k -> k 2))"
+    ));
+    assert_eq!(instances_of(&text, "tap"), ["tap@1<e>"]);
+}
+
+#[test]
+fn a_method_reference_passes_its_row_bits_to_the_method_function() {
+    // instance のメソッドの関数と既定のメソッドの関数は、メソッドのシグネチャと同じ順の row 変数を持つ。main の中の
+    // 呼び出しは純粋な instance に、run の中の呼び出しは `<e>` の instance に向かう
+    let text = "effect Ask where\n  ask : Unit -> Int\n\nclass Runner a where\n  run_with : a -> (Unit -> <e> Int) -> <e> Int\n  run_default : a -> (Unit -> <e> Int) -> <e> Int\n  run_default x g = g ()\n\ninstance Runner Int where\n  run_with n g = g () + n\n\nrun : Unit -> <Ask> Int\nrun () = run_with 1 ask + run_default 1 ask\n\nmain : Unit -> <IO> Unit\nmain () =\n  println (show (run_with 2 (fn () -> 3) + run_default 2 (fn () -> 3)))\n  println (show (handle run () with\n    | ask () k -> k 2))";
+    let program = eml_test_support::core_until(text, Pass::Translate);
+    let mut names: Vec<(&str, bool)> = program
+        .functions
+        .iter()
+        .filter(|function| function.name.contains("run_"))
+        .map(|function| (function.name.as_str(), function.yields))
+        .collect();
+    names.sort();
+    insta::assert_debug_snapshot!(names, @r#"
+    [
+        (
+            "Runner Int.run_with",
+            false,
+        ),
+        (
+            "Runner Int.run_with<e>",
+            true,
+        ),
+        (
+            "run_default@[Int]",
+            false,
+        ),
+        (
+            "run_default@[Int]<e>",
+            true,
+        ),
+    ]
+    "#);
+}
+
+#[test]
+fn a_clause_lambda_over_an_operation_row_variable_may_yield() {
+    let text = "effect Run where\n  run : (Unit -> <e> Int) -> Int\n\nbody : Unit -> <Run> Int\nbody () = run (fn () -> 1)\n\nmain : Unit -> <IO> Unit\nmain () =\n  let r =\n    handle body () with\n      | run f k ->\n        let g = fn () -> f () + 1\n        k 7\n  println (show r)";
+    let shown = core_text(text, Pass::Translate);
+    // g の row は操作の row 変数で、main の row 変数ではないので、g は yield しうる
+    insta::assert_snapshot!(function(&shown, "main$lambda0"), @"
+    internal yields fn main$lambda0(f.0: tobj, p.1: unit) -> int {
+      let t.2: int = yields apply f.0(())
+      let t.3: int = extern Prelude.+(t.2, 1)
+      return t.3
+    }
+    ");
+}
+
+#[test]
 fn an_apply_is_split_after_an_arrow_that_may_yield() {
     let text = "effect Ask where\n  ask : Unit -> Int\n\nadder : Int -> <Ask> (Int -> Int)\nadder x =\n  let n = ask ()\n  fn y -> x + y + n\n\nrun : (Int -> <Ask> (Int -> Int)) -> <Ask> Int\nrun h = h 1 2\n\nmain : Unit -> <IO> Unit\nmain () =\n  let r =\n    handle run adder with\n      | ask () k -> k 10\n  println (show r)";
     let shown = core_text(text, Pass::Translate);

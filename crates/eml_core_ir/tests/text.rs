@@ -1524,6 +1524,26 @@ fn yields_marks_round_trip() {
     );
 }
 
+/// `yields` の印は `apply` にだけ付く。`mask` の後でも同じである。
+#[test]
+fn a_yields_mark_on_anything_but_apply_is_an_error() {
+    let error = parse_error("fn f() -> int {\n  let t.0: int = yields call f()\n  return t.0\n}\n");
+    assert_eq!(error.line, 2);
+    assert_eq!(
+        error.message,
+        "expected `apply` after `yields`, found `call`"
+    );
+
+    let error = parse_error(
+        "effect Ask { ask(unit) -> tobj }\nfn f(k.0: tobj) -> int {\n  let t.1: int = mask [Ask] yields resume k.0(1, ())\n  return t.1\n}\n",
+    );
+    assert_eq!(error.line, 3);
+    assert_eq!(
+        error.message,
+        "expected `apply` after `yields`, found `resume`"
+    );
+}
+
 #[test]
 fn operation_reprs_round_trip() {
     round_trip(

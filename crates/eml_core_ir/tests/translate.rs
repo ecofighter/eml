@@ -1600,6 +1600,22 @@ fn a_handler_with_a_state_passes_its_initial_value_and_takes_the_state_from_its_
 }
 
 #[test]
+fn a_polymorphic_never_operation_takes_tobj_and_never_returns() {
+    // 引数の型はエフェクトの型変数なので一様な位置の `tobj` になり、`never` の操作の戻り値は `OpRet::Never` である
+    let text = "effect Fail e where\n  never fail : e -> a\n\ncheck : Int -> <Fail String> Int\ncheck x = if x < 0 then fail \"negative\" else x\n\nmain : Unit -> <IO> Unit\nmain () =\n  let n = handle check 1 with\n    | fail message -> 0\n  println (show n)";
+    let ir = core_text(text, Pass::Translate);
+    let table: Vec<&str> = ir
+        .lines()
+        .filter(|line| line.starts_with("effect "))
+        .collect();
+    insta::assert_debug_snapshot!(table, @r#"
+    [
+        "effect Fail { never fail(tobj) -> never }",
+    ]
+    "#);
+}
+
+#[test]
 fn effects_are_numbered_in_declaration_order() {
     let text = "effect A where\n  a : Unit -> Int\neffect B where\n  b : Unit -> Int\nmain : Unit -> <IO> Unit\nmain () =\n  let x = handle a () with\n    | a () k -> k 1\n  let y = handle b () with\n    | b () k -> k 2\n  println (show (x + y))";
     insta::assert_snapshot!(core_text(text, Pass::Translate), @r#"
