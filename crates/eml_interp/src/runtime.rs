@@ -130,8 +130,6 @@ pub(crate) struct Runtime<'p> {
     pub(crate) yields: u64,
     /// `yield_cont_set` を実行した回数。継続 κ に足したフレームの数である。
     pub(crate) yield_frames: u64,
-    /// `find_handler` が調べたフレームの数 (`RunStats::handler_visits`)。
-    pub(crate) handler_visits: u64,
     /// 機械が実行した `box` の数 (`RunStats::boxes`)。
     pub(crate) boxes: u64,
     /// 機械が実行した `unbox` の数 (`RunStats::unboxes`)。
@@ -167,7 +165,6 @@ impl<'p> Runtime<'p> {
             evidence_steps: 0,
             yields: 0,
             yield_frames: 0,
-            handler_visits: 0,
             boxes: 0,
             unboxes: 0,
         }
@@ -474,7 +471,9 @@ impl<'p> Runtime<'p> {
 
     pub(crate) fn stats(&self) -> RunStats {
         RunStats {
-            handler_visits: self.handler_visits,
+            evidence_steps: self.evidence_steps,
+            yields: self.yields,
+            yield_frames: self.yield_frames,
             string_bytes_copied: self.heap.string_bytes_written(),
             rc_increments: self.heap.rc_increments(),
             rc_decrements: self.heap.rc_decrements(),

@@ -124,7 +124,7 @@ fn yield_points(
     let mut points = Vec::new();
     for (index, block) in function.blocks.iter().enumerate() {
         let id = BlockId(index as u32);
-        let tail = tail_position_call(block, &program.effects).map(|(at, _)| at);
+        let tail = tail_position_call(block).map(|(at, _)| at);
         for (at, stmt) in block.stmts.iter().enumerate() {
             let Stmt::Let {
                 var,

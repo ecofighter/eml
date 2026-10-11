@@ -85,7 +85,8 @@ fn raise_tail_returns(functions: &mut [CoreFn], effects: &[EffectInfo]) {
     for (index, function) in functions.iter().enumerate() {
         let mut raise = false;
         for block in &function.blocks {
-            let result = match tail_position_call(block, effects).map(|(_, call)| call) {
+            // `never` の操作の呼び出しは戻らないので、結果を `ret` と比べない (docs/spec/core-ir.md の「位置の規則」)
+            let result = match tail_position_call(block).map(|(_, call)| call) {
                 Some(Call::Direct(target, _)) => {
                     callers[target.0 as usize].push(index);
                     functions[target.0 as usize].ret
@@ -97,8 +98,14 @@ fn raise_tail_returns(functions: &mut [CoreFn], effects: &[EffectInfo]) {
                     args: _,
                 }) => match operation(effects, *effect, *op).ret {
                     OpRet::Repr(repr) => repr,
-                    OpRet::Never => unreachable!("a never clause is not a tail-position call"),
+                    OpRet::Never => continue,
                 },
+                Some(Call::Perform {
+                    effect: _,
+                    op: _,
+                    resumable: false,
+                    args: _,
+                }) => continue,
                 Some(_) => Repr::TObj,
                 None => continue,
             };
@@ -123,13 +130,10 @@ fn raise_tail_returns(functions: &mut [CoreFn], effects: &[EffectInfo]) {
 
 /// 末尾の位置の呼び出しと、その文の位置。ブロックの終端が `return x` で、同じブロックに `let x = <呼び出し>` が
 /// あり、その後の文がすべて純粋な `let` であるときの、その呼び出しである。後ろの純粋な `let` は `return` が使わない
-/// ので縮約が消し、そこで末尾呼び出しになる。`never` の操作を呼ぶ `perform` と節の呼び出しは戻らないので、末尾の
-/// 位置の呼び出しに数えない。EP も、この呼び出しを yield の地点にしない
+/// ので縮約が消し、そこで末尾呼び出しになる (docs/spec/core-ir.md の「変換の規則」)。形で決めるので、`never` の操作の
+/// 呼び出しも含む。EP は、この呼び出しを yield の地点にしない
 /// (docs/superpowers/specs/2026-10-11-s7-evidence-passing-design.md の「yield の地点」)。
-pub(crate) fn tail_position_call<'a>(
-    block: &'a Block,
-    effects: &[EffectInfo],
-) -> Option<(usize, &'a Call)> {
+pub(crate) fn tail_position_call(block: &Block) -> Option<(usize, &Call)> {
     let Term::Return(Atom::Var(returned)) = block.term else {
         return None;
     };
@@ -139,28 +143,6 @@ pub(crate) fn tail_position_call<'a>(
         };
         if *var == returned {
             return match rhs {
-                Rhs::Call {
-                    call:
-                        Call::Perform {
-                            effect: _,
-                            op: _,
-                            resumable: false,
-                            args: _,
-                        },
-                    mask: _,
-                    saved: _,
-                } => None,
-                Rhs::Call {
-                    call:
-                        Call::Clause {
-                            effect,
-                            op,
-                            callee: _,
-                            args: _,
-                        },
-                    mask: _,
-                    saved: _,
-                } if operation(effects, *effect, *op).ret == OpRet::Never => None,
                 Rhs::Call {
                     call,
                     mask: _,

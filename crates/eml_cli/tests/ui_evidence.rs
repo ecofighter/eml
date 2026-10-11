@@ -44,11 +44,14 @@ fn tests(top: &str) -> Vec<(PathBuf, String)> {
 #[test]
 fn every_run_test_has_the_same_output_with_evidence_passing() {
     for top in ["run", "run-fail"] {
-        for (path, suffix) in tests(top) {
+        let found = tests(top);
+        // テストを1つも見つけなければ、何も比べずに通ってしまう
+        assert!(!found.is_empty(), "no tests under {top}");
+        for (path, suffix) in found {
             let session = load(&path, &suffix);
             let dir = path.parent().expect("a test file has a directory");
-            let direct = outcome(session.compile(), dir);
-            let passed = outcome(session.compile_with_evidence(), dir);
+            let passed = outcome(session.compile(), dir);
+            let direct = outcome(session.compile_without_evidence(), dir);
             assert_eq!(passed, direct, "{top}/{suffix}");
         }
     }

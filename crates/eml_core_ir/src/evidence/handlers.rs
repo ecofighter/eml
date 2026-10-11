@@ -255,7 +255,7 @@ fn runs_in_place(program: &Program, clause: &CoreFn, operation: &OperationInfo) 
     let k = params[params.len() - 2];
     let mut returns = 0;
     for block in &clause.blocks {
-        let tail = tail_position_call(block, &program.effects);
+        let tail = tail_position_call(block);
         match block.term {
             Term::Return(_) => {
                 let resumed = matches!(
@@ -325,9 +325,7 @@ fn into_entry(program: &mut Program, clause: FnIdx, effect: u32, op: u32) {
         .blocks
         .iter()
         .enumerate()
-        .filter_map(|(index, block)| {
-            tail_position_call(block, &program.effects).map(|(at, _)| (index, at))
-        })
+        .filter_map(|(index, block)| tail_position_call(block).map(|(at, _)| (index, at)))
         .collect();
     let function = &mut program.functions[clause.0 as usize];
     let params = function.params().to_vec();

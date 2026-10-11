@@ -660,3 +660,47 @@ fn a_masked_call_restores_the_evidence_list_and_wraps_the_continuation() {
     }
     "#);
 }
+
+/// row のビットで純粋と決まった instance は `yields` でないので、EP は yield の確認を足さない
+/// (docs/superpowers/specs/2026-10-11-s7-evidence-passing-design.md の「row のビットと instance の鍵」)。
+#[test]
+fn a_pure_instance_of_a_row_polymorphic_function_has_no_yield_check() {
+    let text = format!(
+        "{ASK}twice : (Unit -> <e> Int) -> <e> Int\ntwice f = f () + f ()\n\nmain : Unit -> <IO> Unit\nmain () =\n  println (show (twice (fn () -> 1)))\n  println (show (handle twice ask with\n    | ask () k -> k 2))"
+    );
+    let shown = core_text(&text, Pass::Evidence);
+    insta::assert_snapshot!(function(&shown, "twice"), @"
+    fn twice(f.0: tobj) -> int {
+      let t.1: int = apply f.0(())
+      let t.2: int = apply f.0(())
+      let t.3: int = extern Prelude.+(t.1, t.2)
+      return t.3
+    }
+    ");
+    insta::assert_snapshot!(function(&shown, "twice<e>"), @r#"
+    yields fn "twice<e>"(f.0: tobj) -> int {
+      let t.1: int = yields apply f.0(())
+      let y.4: int = prim yielding()
+      switch y.4 { 0 -> b2, _ -> b1 }
+    b1:
+      let k.5: tobj = prim yield_cont_take()
+      let c.6: tobj = closure "twice<e>$k0"(f.0)
+      let k.7: tobj = closure compose$(k.5, c.6)
+      let u.8: unit = prim yield_cont_set(k.7)
+      return 0
+    b2:
+      let t.2: int = yields apply f.0(())
+      let y.9: int = prim yielding()
+      switch y.9 { 0 -> b4, _ -> b3 }
+    b3:
+      let k.10: tobj = prim yield_cont_take()
+      let c.11: tobj = closure "twice<e>$k1"(t.1)
+      let k.12: tobj = closure compose$(k.10, c.11)
+      let u.13: unit = prim yield_cont_set(k.12)
+      return 0
+    b4:
+      let t.3: int = extern Prelude.+(t.1, t.2)
+      return t.3
+    }
+    "#);
+}

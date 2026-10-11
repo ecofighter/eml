@@ -12,7 +12,6 @@ impl Runtime<'_> {
         let mut current = self.handlers;
         let mut skip = 0usize;
         loop {
-            self.handler_visits += 1;
             let Payload::Frame(frame) = self.heap.get(current).map_err(Fault::Heap)? else {
                 return Err(Fault::Internal("the handler chain is not a frame"));
             };

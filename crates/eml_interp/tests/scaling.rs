@@ -16,21 +16,23 @@ fn a_program_without_operations_or_strings_does_no_counted_work() {
     let stats = stats("main : Unit -> <IO> Unit\nmain () = ()", "");
     assert_eq!(
         (
-            stats.handler_visits,
+            stats.evidence_steps,
+            stats.yields,
+            stats.yield_frames,
             stats.string_bytes_copied,
             stats.rc_increments,
             stats.rc_decrements
         ),
-        (0, 0, 0, 0),
+        (0, 0, 0, 0, 0, 0),
         "{stats:?}"
     );
     // `peak_objects` は仕事の回数でなく物体の数の最大なので、`Frame::Root` のフレームの分だけ 0 にならない
     assert_eq!(stats.peak_objects, 1, "{stats:?}");
 }
 
-/// どの `perform` も、少なくとも見つけた handler のフレームを調べる。
+/// どの `perform` も、少なくとも見つけた evidence の節点を1つたどる。
 #[test]
-fn every_operation_visits_at_least_its_handler() {
+fn every_operation_looks_up_its_evidence() {
     let text = [
         "effect Ask where",
         "  ask : Unit -> Int",
@@ -43,7 +45,7 @@ fn every_operation_visits_at_least_its_handler() {
     ]
     .join("\n");
     let stats = stats(&text, "3\n");
-    assert!(stats.handler_visits >= 3, "{stats:?}");
+    assert!(stats.evidence_steps >= 3, "{stats:?}");
 }
 
 /// 連結の結果の文字列には、両辺の中身を書く。
@@ -54,7 +56,6 @@ fn concatenation_writes_the_bytes_of_both_sides() {
         "abcd\n",
     );
     assert!(stats.string_bytes_copied >= 4, "{stats:?}");
-    assert_eq!(stats.handler_visits, 0);
 }
 
 #[test]
@@ -104,8 +105,8 @@ fn appending_to_a_unique_string_copies_only_the_right_side() {
     assert!(stats.string_bytes_copied <= 4 * n as u64, "{stats:?}");
 }
 
-/// handler の下の非末尾の再帰。深さごとに1回 `ask` するので、`count n` は n 回 `ask` する。継続の全体をたどると、
-/// 深さ d の `ask` は d に比例する数のフレームを調べ、合わせて n²/2 ほどになる。
+/// handler の下の非末尾の再帰。深さごとに1回 `ask` するので、`count n` は n 回 `ask` する。呼び出しの継続を
+/// たどって探すと、深さ d の `ask` は d に比例する数のフレームを調べ、合わせて n²/2 ほどになる。
 const ASK_RECURSION: &str = "effect Ask where
   ask : Unit -> Int
 
@@ -113,18 +114,18 @@ count : Int -> <Ask> Int
 count n = if n == 0 then 0 else ask () + count (n - 1)
 ";
 
-/// `ASK_RECURSION` の後に `rest` (`main` とその前の宣言) を置いて実行し、`handler_visits` を返す。どの形でも
+/// `ASK_RECURSION` の後に `rest` (`main` とその前の宣言) を置いて実行し、`evidence_steps` を返す。どの形でも
 /// `ask` は 1 を返す handler に届くので、出力は n である。
-fn handler_visits(n: u64, rest: &str) -> u64 {
+fn evidence_steps(n: u64, rest: &str) -> u64 {
     let (out, result) = run_stats(&format!("{ASK_RECURSION}\n{rest}"));
     let stats = result.unwrap_or_else(|error| panic!("{error}"));
     assert_eq!(out, format!("{n}\n"));
-    stats.handler_visits
+    stats.evidence_steps
 }
 
 #[test]
-fn a_perform_under_one_handler_visits_only_that_handler() {
-    // 連鎖は `Ask` の handler だけなので、`ask` ごとに1つ調べる
+fn a_perform_under_one_handler_looks_at_one_evidence() {
+    // `evv` は `Ask` の evidence だけなので、`ask` ごとに1つたどる
     let n = 2000;
     let rest = format!(
         "main : Unit -> <IO> Unit
@@ -134,13 +135,13 @@ main () =
   println (show r)
 "
     );
-    let visits = handler_visits(n, &rest);
-    assert!(visits <= 2 * n, "handler_visits = {visits}");
+    let steps = evidence_steps(n, &rest);
+    assert!(steps <= n, "evidence_steps = {steps}");
 }
 
 #[test]
-fn a_perform_passes_an_inner_handler_of_another_effect_once() {
-    // 連鎖は `Tell` と `Ask` の handler なので、`ask` ごとに2つ調べる
+fn a_perform_passes_an_inner_evidence_of_another_effect_once() {
+    // `evv` は `Tell` と `Ask` の evidence なので、`ask` ごとに2つたどる
     let n = 2000;
     let rest = format!(
         "effect Tell where
@@ -154,15 +155,15 @@ main () =
   println (show r)
 "
     );
-    let visits = handler_visits(n, &rest);
-    assert!(visits <= 3 * n, "handler_visits = {visits}");
+    let steps = evidence_steps(n, &rest);
+    assert!(steps <= 2 * n, "evidence_steps = {steps}");
 }
 
 #[test]
-fn a_perform_in_a_masked_callback_skips_the_inner_handler_once() {
+fn a_perform_in_a_masked_callback_skips_the_inner_evidence_once() {
     // tests/ui/run/effects/mask_callback.em と同じ形。`run` は `cb` を `mask` 付きで呼ぶので、`count` の `ask` は
-    // 内側の `Ask` の handler を飛ばして外側に届く (内側に届くと出力は 2n になる)。連鎖は `Mask`、内側の handler、
-    // 外側の handler なので、`ask` ごとに3つ調べる
+    // 内側の `Ask` の evidence を飛ばして外側に届く (内側に届くと出力は 2n になる)。上限には、`mask` が `evv` を
+    // 写すときにたどる節点も含める
     let n = 2000;
     let rest = format!(
         "run : (Unit -> <e> a) -> <Ask | e> a
@@ -179,8 +180,77 @@ main () =
   println (show r)
 "
     );
-    let visits = handler_visits(n, &rest);
-    assert!(visits <= 4 * n, "handler_visits = {visits}");
+    let steps = evidence_steps(n, &rest);
+    assert!(steps <= 4 * n, "evidence_steps = {steps}");
+}
+
+/// すぐに再開する操作は、その場で節を呼ぶので、yield せず、継続も組み立てない。探す数は今有効な handler の数で
+/// 決まり、深さによらない (docs/superpowers/specs/2026-10-11-s7-evidence-passing-design.md の「`RunStats`」)。
+#[test]
+fn immediate_operations_cost_the_same_at_any_depth() {
+    let at = |depth: u64| {
+        let text = format!(
+            "effect Counter where
+  get : Unit -> Int
+  put : Int -> Unit
+
+down : Int -> <Counter> Int
+down n = if n == 0 then
+    put (get () + 1)
+    put (get () + 1)
+    get ()
+  else down (n - 1) + 0
+
+main : Unit -> <IO> Unit
+main () =
+  let (r, _) =
+    handle down {depth} from 0 with
+      | get () k st -> k st st
+      | put n k _ -> k () n
+      | return x st -> (x, st)
+  println (show r)
+"
+        );
+        stats(&text, "2\n")
+    };
+    let (shallow, deep) = (at(10), at(1000));
+    assert_eq!(shallow.evidence_steps, deep.evidence_steps);
+    assert_eq!(
+        (shallow.yields, shallow.yield_frames),
+        (0, 0),
+        "{shallow:?}"
+    );
+    assert_eq!((deep.yields, deep.yield_frames), (0, 0), "{deep:?}");
+}
+
+/// すぐに再開しない操作は handler まで yield し、戻る途中の各段が自分の続きを継続に足す。継続の大きさは間の
+/// フレームの数に比例する。これは方式の性質であり、上限ではない
+/// (docs/superpowers/specs/2026-10-11-s7-evidence-passing-design.md の「`RunStats`」)。
+#[test]
+fn a_resuming_operation_builds_a_frame_per_level() {
+    let at = |depth: u64| {
+        let text = format!(
+            "effect Ask where
+  ask : Unit -> Int
+
+down : Int -> <Ask> Int
+down n = if n == 0 then ask () else down (n - 1) + 0
+
+main : Unit -> <IO> Unit
+main () =
+  let r =
+    handle down {depth} with
+      | ask () k -> k 1 + 0
+  println (show r)
+"
+        );
+        stats(&text, "1\n")
+    };
+    let (shallow, deep) = (at(10), at(1000));
+    assert!(
+        deep.yield_frames >= shallow.yield_frames + 990,
+        "{shallow:?} {deep:?}"
+    );
 }
 
 /// リストの関数と、本体が `traverse` の `main` を並べたプログラム。`traverse` の中の `{n}` を n に置き換える。
@@ -359,6 +429,56 @@ main () =
 "
             ),
             format!("{}\n", 2 * n),
+        )
+    });
+    assert_eq!(short, long);
+}
+
+/// 深さ n の非末尾の再帰の各段で、すぐに再開する操作を行う。フレームは深さに比例して残るが、操作が継続を組み立てると
+/// 各段で深さに比例する物体が増える。n を2倍にしても、数は2倍と定数の余裕を超えない。
+#[test]
+fn immediate_operations_under_deep_recursion_keep_the_peak_linear() {
+    let (short, long) = peaks(|n| {
+        (
+            format!(
+                "{ASK_RECURSION}
+main : Unit -> <IO> Unit
+main () =
+  let r = handle count {n} with
+            | ask () k -> k 1
+  println (show r)
+"
+            ),
+            format!("{n}\n"),
+        )
+    });
+    assert!(long <= 2 * short + 16, "peak_objects: {short} -> {long}");
+}
+
+/// yield しうる関数の値を通るループ。関数の値への末尾の `apply` は yield の地点にならず、末尾呼び出しのまま残る
+/// (docs/superpowers/specs/2026-10-11-s7-evidence-passing-design.md の「不変条件と末尾呼び出しの保証」)。
+#[test]
+fn a_function_value_loop_under_a_handler_keeps_the_heap_flat() {
+    let (short, long) = peaks(|n| {
+        (
+            format!(
+                "effect Ask where
+  ask : Unit -> Int
+
+loop : (Int -> <Ask> Int) -> Int -> <Ask> Int
+loop f n = if n == 0 then ask () else f (n - 1)
+
+go : Int -> <Ask> Int
+go n = loop go n
+
+main : Unit -> <IO> Unit
+main () =
+  let r = handle go {n} with
+            | ask () k -> k 0
+  println (show r)
+"
+            ),
+            "0\n".to_string(),
         )
     });
     assert_eq!(short, long);

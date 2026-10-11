@@ -267,7 +267,7 @@ fn a_monomorphic_int_loop_has_no_box() {
 
 #[test]
 fn a_function_that_fails_with_a_never_operation_keeps_its_scalar_ret() {
-    // `never` の操作の `perform` は戻らないので、T3 は見ない。結果も受け直さない
+    // `never` の操作の `clause` は戻らないので、T3 は見ない。結果も受け直さない
     let text = "effect Fail where\n  never fail : String -> a\n\ncheck_positive : Int -> <Fail> Int\ncheck_positive n =\n  if n > 0 then n else fail \"not positive\"\n\nmain : Unit -> <IO> Unit\nmain () =\n  let r = handle check_positive 1 with\n    | fail message -> 0\n  println (show r)";
     insta::assert_snapshot!(function(&core_text(text, Pass::Boxing), "check_positive"), @r#"
     yields fn check_positive(n.0: int) -> int {
@@ -275,20 +275,24 @@ fn a_function_that_fails_with_a_never_operation_keeps_its_scalar_ret() {
       switch t.1 Prelude.Bool { #0 -> b1, #1 -> b2 }
     b1:
       let s.2: obj = const "not positive"
-      let t.3: int = perform never Fail.fail(s.2)
+      let ev.4: obj = prim ev_lookup[Fail]()
+      let c.5: tobj = prim ev_clause[Fail.fail](ev.4)
+      let t.3: int = clause Fail.fail c.5(ev.4, s.2)
       return t.3
     b2:
       return n.0
     }
     "#);
-    // 縮約は、`never` の操作の `perform` をどの `ret` の関数でも末尾呼び出しにする
+    // 縮約は、`never` の操作の `clause` をどの `ret` の関数でも末尾呼び出しにする
     insta::assert_snapshot!(function(&core_text(text, Pass::Contract), "check_positive"), @r#"
     yields fn check_positive(n.0: int) -> int {
       let t.1: enum = extern "Prelude.Ord Int.>"(n.0, 0)
       switch t.1 Prelude.Bool { #0 -> b1, #1 -> b2 }
     b1:
       let s.2: obj = const "not positive"
-      tail perform never Fail.fail(s.2)
+      let ev.4: obj = prim ev_lookup[Fail]()
+      let c.5: tobj = prim ev_clause[Fail.fail](ev.4)
+      tail clause Fail.fail c.5(ev.4, s.2)
     b2:
       return n.0
     }
@@ -297,32 +301,36 @@ fn a_function_that_fails_with_a_never_operation_keeps_its_scalar_ret() {
 
 #[test]
 fn a_value_lambda_that_fails_ends_in_a_tail_never_perform() {
-    // その場で一様にしたラムダでも、`never` の操作の `perform` の束縛は `tobj` に変換せずに返す。束縛の使いには制御が
+    // その場で一様にしたラムダでも、`never` の操作の `clause` の束縛は `tobj` に変換せずに返す。束縛の使いには制御が
     // 届かないからである。縮約は、その `return` を末尾呼び出しにする
     let text = "effect Fail where\n  never fail : String -> a\n\napply_to : (Int -> <e> Int) -> Int -> <e> Int\napply_to f x = f x\n\nmain : Unit -> <IO> Unit\nmain () =\n  let r = handle apply_to (fn n -> if n > 0 then n else fail \"neg\") 1 with\n    | fail message -> 0\n  println (show r)";
     insta::assert_snapshot!(function(&core_text(text, Pass::Boxing), "main$lambda0"), @r#"
-    internal yields fn main$lambda0(n.4: tobj) -> tobj {
-      let n.0: int = unbox n.4
+    internal yields fn main$lambda0(n.6: tobj) -> tobj {
+      let n.0: int = unbox n.6
       let t.1: enum = extern "Prelude.Ord Int.>"(n.0, 0)
       switch t.1 Prelude.Bool { #0 -> b1, #1 -> b2 }
     b1:
       let s.2: obj = const "neg"
-      let t.3: int = perform never Fail.fail(s.2)
+      let ev.4: obj = prim ev_lookup[Fail]()
+      let c.5: tobj = prim ev_clause[Fail.fail](ev.4)
+      let t.3: int = clause Fail.fail c.5(ev.4, s.2)
       return t.3
     b2:
-      return n.4
+      return n.6
     }
     "#);
     insta::assert_snapshot!(function(&core_text(text, Pass::Contract), "main$lambda0"), @r#"
-    internal yields fn main$lambda0(n.4: tobj) -> tobj {
-      let n.0: int = unbox n.4
+    internal yields fn main$lambda0(n.6: tobj) -> tobj {
+      let n.0: int = unbox n.6
       let t.1: enum = extern "Prelude.Ord Int.>"(n.0, 0)
       switch t.1 Prelude.Bool { #0 -> b1, #1 -> b2 }
     b1:
       let s.2: obj = const "neg"
-      tail perform never Fail.fail(s.2)
+      let ev.4: obj = prim ev_lookup[Fail]()
+      let c.5: tobj = prim ev_clause[Fail.fail](ev.4)
+      tail clause Fail.fail c.5(ev.4, s.2)
     b2:
-      return n.4
+      return n.6
     }
     "#);
 }
