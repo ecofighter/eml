@@ -52,58 +52,48 @@ pub(crate) enum Immediates<'a> {
     Operation { effect: u32, op: u32 },
 }
 
-/// どの種類の基本操作も1つずつ持つ並び。即値は空か 0 である。名前は `Prim::name` にだけ書き、テキストを読む側は
-/// この並びを名前で引く (`Prim::by_name`)。
-const KINDS: [Prim; 20] = [
-    Prim::EvvGet,
-    Prim::EvvSet,
-    Prim::EvvPush,
-    Prim::EvvMask(Vec::new()),
-    Prim::EvNew(0),
-    Prim::EvSetClause { effect: 0, op: 0 },
-    Prim::EvRenew,
-    Prim::EvLookup(0),
-    Prim::EvClause { effect: 0, op: 0 },
-    Prim::EvEvv,
-    Prim::EvTakeState,
-    Prim::EvSetState,
-    Prim::Yielding,
-    Prim::YieldStatus,
-    Prim::YieldTo,
-    Prim::YieldAbort,
-    Prim::YieldContTake,
-    Prim::YieldContSet,
-    Prim::YieldFinish,
-    Prim::Dummy,
-];
+/// 種類ごとの型、名前、見本 (即値を空か 0 にしたもの) の並びから、`KINDS` と `Prim::name` の網羅的な `match` を
+/// 作る。並びから漏れた種類は `match` が網羅的でなくなるので、`KINDS` に入れ忘れることがない。
+macro_rules! kinds {
+    ($($kind:pat => $name:literal, $sample:expr;)*) => {
+        /// どの種類の基本操作も1つずつ持つ並び。テキストを読む側は、この並びを名前で引く (`Prim::by_name`)。
+        const KINDS: [Prim; [$($name),*].len()] = [$($sample),*];
+
+        impl Prim {
+            /// テキストの形で、即値の前に書く名前。
+            pub fn name(&self) -> &'static str {
+                match self {
+                    $($kind => $name,)*
+                }
+            }
+        }
+    };
+}
+
+kinds! {
+    Prim::EvvGet => "evv_get", Prim::EvvGet;
+    Prim::EvvSet => "evv_set", Prim::EvvSet;
+    Prim::EvvPush => "evv_push", Prim::EvvPush;
+    Prim::EvvMask(_) => "evv_mask", Prim::EvvMask(Vec::new());
+    Prim::EvNew(_) => "ev_new", Prim::EvNew(0);
+    Prim::EvSetClause { .. } => "ev_set_clause", Prim::EvSetClause { effect: 0, op: 0 };
+    Prim::EvRenew => "ev_renew", Prim::EvRenew;
+    Prim::EvLookup(_) => "ev_lookup", Prim::EvLookup(0);
+    Prim::EvClause { .. } => "ev_clause", Prim::EvClause { effect: 0, op: 0 };
+    Prim::EvEvv => "ev_evv", Prim::EvEvv;
+    Prim::EvTakeState => "ev_take_state", Prim::EvTakeState;
+    Prim::EvSetState => "ev_set_state", Prim::EvSetState;
+    Prim::Yielding => "yielding", Prim::Yielding;
+    Prim::YieldStatus => "yield_status", Prim::YieldStatus;
+    Prim::YieldTo => "yield_to", Prim::YieldTo;
+    Prim::YieldAbort => "yield_abort", Prim::YieldAbort;
+    Prim::YieldContTake => "yield_cont_take", Prim::YieldContTake;
+    Prim::YieldContSet => "yield_cont_set", Prim::YieldContSet;
+    Prim::YieldFinish => "yield_finish", Prim::YieldFinish;
+    Prim::Dummy => "dummy", Prim::Dummy;
+}
 
 impl Prim {
-    /// テキストの形で、即値の前に書く名前。
-    pub fn name(&self) -> &'static str {
-        match self {
-            Prim::EvvGet => "evv_get",
-            Prim::EvvSet => "evv_set",
-            Prim::EvvPush => "evv_push",
-            Prim::EvvMask(_) => "evv_mask",
-            Prim::EvNew(_) => "ev_new",
-            Prim::EvSetClause { .. } => "ev_set_clause",
-            Prim::EvRenew => "ev_renew",
-            Prim::EvLookup(_) => "ev_lookup",
-            Prim::EvClause { .. } => "ev_clause",
-            Prim::EvEvv => "ev_evv",
-            Prim::EvTakeState => "ev_take_state",
-            Prim::EvSetState => "ev_set_state",
-            Prim::Yielding => "yielding",
-            Prim::YieldStatus => "yield_status",
-            Prim::YieldTo => "yield_to",
-            Prim::YieldAbort => "yield_abort",
-            Prim::YieldContTake => "yield_cont_take",
-            Prim::YieldContSet => "yield_cont_set",
-            Prim::YieldFinish => "yield_finish",
-            Prim::Dummy => "dummy",
-        }
-    }
-
     /// 名前が `name` の種類の基本操作。即値は空か 0 で、読む側が埋める。
     pub(crate) fn by_name(name: &str) -> Option<Prim> {
         KINDS.into_iter().find(|kind| kind.name() == name)
@@ -167,5 +157,19 @@ impl Prim {
     /// 基本操作はどれも実行の文脈か evidence を読み書きするので、縮約は消さない。
     pub fn pure(&self) -> bool {
         false
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 見本が自分の行の種類でなければ、ほかの種類の名前が2回現れる。
+    #[test]
+    fn every_kind_has_its_own_name() {
+        let mut names: Vec<&str> = KINDS.iter().map(Prim::name).collect();
+        names.sort_unstable();
+        names.dedup();
+        assert_eq!(names.len(), KINDS.len());
     }
 }

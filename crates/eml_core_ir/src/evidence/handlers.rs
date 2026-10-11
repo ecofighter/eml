@@ -35,6 +35,11 @@ pub(super) fn entries(
     }
     let mut entries = HashMap::new();
     for (clause, effect, op) in clauses {
+        // 同じ g を2回書き換えると、入口の引数と状態の取り出しが重なる。translate は節ごとに別の g を作る
+        debug_assert!(
+            !entries.contains_key(&clause),
+            "a clause function is handled once"
+        );
         let operation = operation(&program.effects, effect, op);
         let entry = if runs_in_place(program, program.function(clause), operation) {
             into_entry(program, clause, effect, op);
@@ -183,17 +188,27 @@ pub(super) fn lower(
 
 /// この変換が置き換える文。
 fn lowered(stmt: &Stmt) -> bool {
-    matches!(
-        stmt,
+    match stmt {
         Stmt::Let {
             var: _,
-            rhs: Rhs::Call {
-                call: Call::Handle { .. } | Call::Perform { .. } | Call::Resume { .. },
-                mask: _,
-                saved: _,
-            },
-        }
-    ) || matches!(stmt, Stmt::Let { var: _, rhs: Rhs::Call { call: _, mask, saved: _ } } if !mask.is_empty())
+            rhs:
+                Rhs::Call {
+                    call: Call::Handle { .. } | Call::Perform { .. } | Call::Resume { .. },
+                    mask: _,
+                    saved: _,
+                },
+        } => true,
+        Stmt::Let {
+            var: _,
+            rhs:
+                Rhs::Call {
+                    call: _,
+                    mask,
+                    saved: _,
+                },
+        } => !mask.is_empty(),
+        _ => false,
+    }
 }
 
 /// handle の文なら、そのエフェクトと節の値。
@@ -335,7 +350,7 @@ fn into_entry(program: &mut Program, clause: FnIdx, effect: u32, op: u32) {
         let unit = fresh(&mut function.vars, "u", Repr::Unit);
         let block = &mut function.blocks[index];
         let Stmt::Let {
-            var: _,
+            var: result,
             rhs:
                 Rhs::Call {
                     call:
@@ -351,6 +366,16 @@ fn into_entry(program: &mut Program, clause: FnIdx, effect: u32, op: u32) {
         else {
             unreachable!("every return of a clause run in place returns a tail resume");
         };
+        // 末尾の位置の呼び出しの後には、結果を読まない純粋な `let` だけが残りうる。結果の変数は下で消えるので、
+        // 後ろの文が読んでいれば変換の誤りである
+        debug_assert!(
+            block.stmts[at + 1..].iter().all(|stmt| {
+                let mut reads = false;
+                stmt.for_each_atom(|atom| reads |= atom == Atom::Var(result));
+                !reads
+            }),
+            "no statement after the tail resume reads its result"
+        );
         block.stmts[at] = Stmt::Let {
             var: unit,
             rhs: Rhs::Prim(Prim::EvSetState, vec![Atom::Var(evidence), resumed]),

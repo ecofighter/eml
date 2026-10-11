@@ -48,7 +48,6 @@ pub(crate) struct Helpers {
     masks: HashMap<Vec<u32>, FnIdx>,
 }
 
-// `prompt$`、`resume$`、`rewind$` は互いを参照するので、どれも番号を先に取って記録してから中身を作る
 impl Helpers {
     pub(crate) fn id(&mut self, program: &mut Program) -> FnIdx {
         if let Some(id) = self.id {
@@ -70,6 +69,7 @@ impl Helpers {
         compose
     }
 
+    // `prompt$`、`resume$`、`rewind$` は互いを参照するので、どれも番号を先に取って記録してから中身を作る
     pub(crate) fn prompt(&mut self, program: &mut Program) -> FnIdx {
         if let Some(prompt) = self.prompt {
             return prompt;
@@ -106,6 +106,10 @@ impl Helpers {
 
     /// `effects` は飛ばすエフェクトの多重集合で、番号の昇順に並ぶ。
     pub(crate) fn mask(&mut self, program: &mut Program, effects: &[u32]) -> FnIdx {
+        debug_assert!(
+            !effects.is_empty() && effects.is_sorted(),
+            "a mask names a nonempty sorted multiset"
+        );
         if let Some(&mask) = self.masks.get(effects) {
             return mask;
         }
