@@ -137,6 +137,24 @@ impl Table<'_> {
         }
     }
 
+    /// handler の節の操作ごとの型変数のうち、操作の引数の型に現れないものの `μ` を `Lin` 以上にする。操作の宣言は
+    /// 引数の型の Kind 変数だけを `Unr` に固定し、結果の型だけに現れる型変数は縛らないので、操作を呼ぶ側はそれを
+    /// `Lin` の型で具体化できる。節はどの具体化でも正しくなければならないので、その型の値を線形に扱う
+    /// (docs/spec/effects.md の「handler の意味」)。`param_kinds` は、`unrestricted` と同じく `kind_vars` で集めた
+    /// 引数の型の Kind 変数である。
+    pub fn operation_result_vars_linear(
+        &mut self,
+        operation_vars: &[KindVar],
+        param_kinds: &[KindVar],
+    ) {
+        for &var in operation_vars
+            .iter()
+            .filter(|var| !param_kinds.contains(var))
+        {
+            self.require_lin(Bound::Const(Linearity::Lin), Bound::Var(var));
+        }
+    }
+
     /// 型に現れる Kind 変数。線形性 (rigid 変数の `μ` と矢印の `m`) と多重度 (rigid な row 変数の `σ`) に分けて、
     /// 現れた順に重複なく返す。`unrestricted` が `Unr` に固定する変数を集めるのに使う。
     /// `Shape` の番号がこの順に従うことを確かめるテストも使う。

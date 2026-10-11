@@ -530,3 +530,58 @@ fn an_arrow_linearity_note_appears_when_the_difference_is_nested_in_a_tuple() {
       note: these function types differ in how many times the function may be called: one can be called only once, the other any number of times
     ");
 }
+
+// 操作の引数の型に現れない操作ごとの型変数は、操作を呼ぶ側が `Lin` の型で具体化できるので、節ではその型の値を線形に
+// 扱う (docs/spec/effects.md の「handler の意味」)
+const BOX: &str = "data Box a =\n  | Box (a -> (a, a))\n\ndata Sink a =\n  | Sink (a -> Unit)\n\n";
+
+#[test]
+fn a_clause_cannot_copy_a_value_of_a_result_only_operation_variable() {
+    let text = format!(
+        "{BOX}effect Mk where\n  mk : Unit -> Box a\n\nmain : Unit -> <IO> Unit\nmain () =\n  handle (match mk () with\n    | Box _ -> ()) with\n    | mk () k -> k (Box (fn x -> (x, x)))"
+    );
+    insta::assert_snapshot!(check_text(&text), @"
+    mk : Unit -> <Mk> Box a
+    main : Unit -> <IO> Unit
+      k#0 : Box a -> <IO> Unit
+      x#1 : a
+      $r#2 : Unit
+    ---
+    E3002 14:38 `x` must be used exactly once, but it is used more than once
+      14:38 used again here
+      14:35 first used here
+      note: linear values, such as files, the continuation of a `once` operation and closures that capture one, must be used exactly once
+    ");
+}
+
+#[test]
+fn a_clause_cannot_discard_a_value_of_a_result_only_operation_variable() {
+    let text = format!(
+        "{BOX}effect Mk where\n  sink : Unit -> Sink a\n\nmain : Unit -> <IO> Unit\nmain () =\n  handle (match sink () with\n    | Sink _ -> ()) with\n    | sink () k -> k (Sink (fn _ -> ()))"
+    );
+    insta::assert_snapshot!(check_text(&text), @"
+    sink : Unit -> <Mk> Sink a
+    main : Unit -> <IO> Unit
+      k#0 : Sink a -> <IO> Unit
+      $r#1 : Unit
+    ---
+    E3004 14:32 a linear value cannot be discarded with `_`
+      14:32 this pattern discards it
+      note: linear values, such as files, the continuation of a `once` operation and closures that capture one, must be used exactly once
+      help: bind it to a name and pass the name to `drop`
+    ");
+}
+
+#[test]
+fn a_clause_may_copy_a_value_of_an_operation_variable_in_a_parameter() {
+    let text = "effect Put where\n  put : a -> Unit\n\nmain : Unit -> <IO> Unit\nmain () =\n  handle put 1 with\n    | put x k ->\n        let p = (x, x)\n        k ()";
+    insta::assert_snapshot!(check_text(text), @"
+    put : a -> <Put> Unit
+      kinds: a <= Unr
+    main : Unit -> <IO> Unit
+      x#0 : a
+      k#1 : Unit -> <IO> Unit
+      p#2 : (a, a)
+      $r#3 : Unit
+    ");
+}

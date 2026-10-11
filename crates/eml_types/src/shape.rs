@@ -591,18 +591,28 @@ impl Shape {
 
     /// handler の操作の節のための具体化。先頭の `effect_args.len()` 個の rigid な型変数をエフェクトの型引数 (handle の
     /// 型引数) にし、残りの型変数と row 変数を新しい rigid 変数にする。節は、操作がどの型で呼ばれても動かなければならない
-    /// ため (docs/spec/effects.md の「handler の意味」)。Kind 変数は新しい変数にする。
-    pub fn instantiate_with_effect_args(&self, table: &mut Table<'_>, effect_args: &[Ty]) -> Ty {
+    /// ため (docs/spec/effects.md の「handler の意味」)。Kind 変数は新しい変数にする。操作ごとの型変数のうち、操作の
+    /// `arity` 個の引数の型に現れないものは、操作を呼ぶ側が `Lin` の型で具体化できるので、`μ` を `Lin` 以上にする。
+    pub fn instantiate_with_effect_args(
+        &self,
+        table: &mut Table<'_>,
+        effect_args: &[Ty],
+        arity: usize,
+    ) -> Ty {
         debug_assert!(effect_args.len() <= self.rigids.len());
         let lin: Vec<KindVar> = (0..self.lin_vars).map(|_| table.fresh_lin_var()).collect();
         let mult: Vec<KindVar> = (0..self.mult_vars)
             .map(|_| table.fresh_mult_var())
             .collect();
         let mut tys = Vec::new();
+        let mut operation_vars = Vec::new();
         for (index, (name, mu)) in self.rigids.iter().enumerate() {
             let ty = match effect_args.get(index) {
                 Some(&arg) => arg,
-                None => table.fresh_operation_rigid(name, lin[mu.index()]),
+                None => {
+                    operation_vars.push(lin[mu.index()]);
+                    table.fresh_operation_rigid(name, lin[mu.index()])
+                }
             };
             tys.push(ty);
         }
@@ -611,7 +621,18 @@ impl Shape {
             .iter()
             .map(|(name, sigma)| Tail::Var(table.fresh_rigid_row_with(name, mult[sigma.index()])))
             .collect();
-        build(table, &self.ty, &tys, &rows, &lin)
+        let ty = build(table, &self.ty, &tys, &rows, &lin);
+        let mut param_kinds = Vec::new();
+        let mut spine = ty;
+        for _ in 0..arity {
+            let TyShape::Fn { param, ret, .. } = table.shape(spine).clone() else {
+                break;
+            };
+            param_kinds.extend(table.kind_vars(param).0);
+            spine = ret;
+        }
+        table.operation_result_vars_linear(&operation_vars, &param_kinds);
+        ty
     }
 
     /// 後の段階に渡す型。rigid な変数は名前で書く。シグネチャの型も本体の型と同じ表に登録する。
@@ -839,7 +860,7 @@ mod tests {
         let shape = operation_shape(&context, operation);
         let mut table = Table::new(&context);
         let int = table.int;
-        let ty = shape.instantiate_with_effect_args(&mut table, &[int]);
+        let ty = shape.instantiate_with_effect_args(&mut table, &[int], operation.arity);
         assert_eq!(table.show(ty, &program), "a -> Int -> <State Int> (a, Int)");
     }
 
