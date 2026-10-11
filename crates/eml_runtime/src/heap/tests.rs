@@ -298,16 +298,15 @@ fn a_file_inside_data_is_released_with_it() {
 }
 
 #[test]
-fn a_shared_file_is_not_copied() {
+fn a_file_is_never_shared() {
+    // `Lin` の物体の RC は 1 である (docs/superpowers/specs/2026-10-11-s8b-ownership-design.md の「`File` の実行時の検査」)。
+    // 誤りにした `dup` は参照の数を変えない
     let mut heap = Heap::new();
     let dropped = Rc::new(Cell::new(false));
     let f = file(&mut heap, &dropped);
-    heap.dup(f).unwrap();
-    assert!(matches!(heap.take_or_copy(f), Err(HeapError::NotCopyable)));
-    assert!(!dropped.get());
-    // `File` は参照の数によらず写さない。断った `take_or_copy` は参照を手放さないので、数は 2 のままである。
-    // 2つの参照を手放して、漏れも二重の解放もないことを確かめる
-    heap.decref(f).unwrap();
+    assert_eq!(heap.dup(f), Err(HeapError::LinShared));
+    assert_eq!(rc(&heap, f), 1);
+    assert_eq!(heap.rc_increments(), 0);
     heap.decref(f).unwrap();
     assert!(dropped.get());
     assert!(heap.live_objects().is_empty());

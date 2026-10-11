@@ -115,6 +115,9 @@ pub enum HeapError {
     NotAString,
     /// `release_fields` に渡した物体が、名指したタグとフィールドの数の `data` でない。
     WrongLayout,
+    /// `Lin` の物体 (`File`) の参照を増やそうとした。`Lin` の物体の RC は 1 である
+    /// (docs/superpowers/specs/2026-10-11-s8b-ownership-design.md の「`File` の実行時の検査」)。
+    LinShared,
 }
 
 impl fmt::Display for HeapError {
@@ -127,6 +130,7 @@ impl fmt::Display for HeapError {
             HeapError::WrongLayout => {
                 f.write_str("an object does not have the tag and number of fields a release names")
             }
+            HeapError::LinShared => f.write_str("a Lin object is shared"),
         }
     }
 }
@@ -244,8 +248,14 @@ impl Heap {
         Ok(&mut self.object_mut(obj)?.payload)
     }
 
+    /// `File` は線形で、参照が2つになると閉じ忘れや二重の解放になる。コンパイラが `dup` を出す誤りを実行時に見つけるため、
+    /// 数を変えずに断る (docs/superpowers/specs/2026-10-11-s8b-ownership-design.md の「`File` の実行時の検査」)。
     pub fn dup(&mut self, obj: ObjRef) -> Result<(), HeapError> {
-        self.object_mut(obj)?.header.rc += 1;
+        let object = self.object_mut(obj)?;
+        if matches!(object.payload, Payload::File(_)) {
+            return Err(HeapError::LinShared);
+        }
+        object.header.rc += 1;
         self.rc_increments += 1;
         Ok(())
     }
