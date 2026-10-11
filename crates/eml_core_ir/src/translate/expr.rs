@@ -179,7 +179,14 @@ impl FnLowering<'_> {
             } else {
                 split_arrows(self.ctx.store, callee_ty, end).1
             };
-            let rhs = masked_call(Call::Apply(function, part), run[0].clone());
+            let rhs = masked_call(
+                Call::Apply {
+                    callee: function,
+                    args: part,
+                    yields: false,
+                },
+                run[0].clone(),
+            );
             function = self.bind_typed("t", part_ty, rhs);
         }
         function

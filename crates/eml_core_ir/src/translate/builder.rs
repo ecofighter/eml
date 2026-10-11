@@ -248,6 +248,7 @@ impl FnBuilder {
         CoreFn {
             name,
             internal,
+            yields: false,
             vars: self.vars,
             ret,
             blocks,

@@ -111,10 +111,19 @@ pub struct EffectInfo {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OperationInfo {
     pub name: String,
-    /// 操作の引数の数。verifier が節の関数の引数の数を確かめるのに使う (docs/spec/core-ir.md)。
-    pub arity: usize,
+    /// 操作の引数の Repr。型変数は `tobj` にする (docs/superpowers/specs/2026-10-11-s7-evidence-passing-design.md の
+    /// 「操作の表の Repr」)。verifier は長さで節の関数の引数の数を確かめる (docs/spec/core-ir.md)。
+    pub params: Vec<Repr>,
+    pub ret: OpRet,
     /// `never` の操作は再開しないので、継続を作らずに捨てる (docs/spec/effects.md)。
     pub resumable: bool,
+}
+
+/// 操作の結果。`never` の操作は戻らないので、結果を呼び出した側の位置と比べない。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OpRet {
+    Repr(Repr),
+    Never,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -130,6 +139,9 @@ pub struct CoreFn {
     /// `$externN`、`cont$`、`cont$state`)。直接呼ぶのは、それを作った定義の中だけである。トップレベルの関数と入口の
     /// 関数は内部の関数でない。テキストの形では `internal fn` と書く (docs/spec/core-ir.md)。
     pub internal: bool,
+    /// 本体が yield しうる (docs/superpowers/specs/2026-10-11-s7-evidence-passing-design.md の「`yields` の印」)。
+    /// テキストの形では `internal` の後に `yields fn` と書く。
+    pub yields: bool,
     pub vars: Vec<VarInfo>,
     /// 直接の呼び出しの結果の Repr。
     pub ret: Repr,
@@ -442,8 +454,14 @@ pub struct Loc {
 pub enum Call {
     /// 呼ぶ相手が分かっていて、引数の個数が揃っている呼び出し。
     Direct(FnIdx, Vec<Atom>),
-    /// 関数値の呼び出し。実行時に引数の個数を比べる (eval/apply)。
-    Apply(Atom, Vec<Atom>),
+    /// 関数値の呼び出し。実行時に引数の個数を比べる (eval/apply)。`yields` は、この `apply` が受け持つ矢印の
+    /// どれかが yield しうることである。translate は yield しうる矢印の後で `apply` を分けるので、それは最後の矢印
+    /// である (docs/superpowers/specs/2026-10-11-s7-evidence-passing-design.md の「`apply` の印と分け方」)。
+    Apply {
+        callee: Atom,
+        args: Vec<Atom>,
+        yields: bool,
+    },
     /// handler フレームを積み、本体の関数に `()` を適用する。本体と節と `return` の節は、捕まえた変数を先頭の
     /// 引数に持つ関数の値である (docs/spec/core-ir.md)。節はエフェクトの操作の順に並ぶ。節は最後の引数で状態を、
     /// `ret` は本体の値と状態を受ける。状態のない handler では `init` が `()` である (docs/spec/core-ir.md)。
@@ -477,7 +495,11 @@ impl Call {
                 resumable: _,
                 args,
             } => args.iter().for_each(|&atom| f(atom)),
-            Call::Apply(callee, args) => {
+            Call::Apply {
+                callee,
+                args,
+                yields: _,
+            } => {
                 f(*callee);
                 args.iter().for_each(|&atom| f(atom));
             }
@@ -510,7 +532,11 @@ impl Call {
                 resumable: _,
                 args,
             } => args.iter_mut().for_each(f),
-            Call::Apply(callee, args) => {
+            Call::Apply {
+                callee,
+                args,
+                yields: _,
+            } => {
                 f(callee);
                 args.iter_mut().for_each(f);
             }

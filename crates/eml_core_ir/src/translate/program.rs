@@ -10,8 +10,8 @@ use eml_hir::{
 use eml_types::{TypeId, TypeStore, TypedProgram};
 
 use crate::{
-    Atom, Call, CoreFn, Ctor, EffectInfo, FnIdx, Layout, LayoutCtor, LayoutId, Loc, OperationInfo,
-    Repr, Rhs, Stmt, Term, VarInfo,
+    Atom, Call, CoreFn, Ctor, EffectInfo, FnIdx, Layout, LayoutCtor, LayoutId, Loc, OpRet,
+    OperationInfo, Repr, Rhs, Stmt, Term, VarInfo,
 };
 
 use super::builder::FnBuilder;
@@ -382,7 +382,11 @@ impl ProgramBuilder {
                 var: value,
                 rhs: plain_call(Call::Direct(target, Vec::new())),
             });
-            Call::Apply(Atom::Var(value), unit)
+            Call::Apply {
+                callee: Atom::Var(value),
+                args: unit,
+                yields: false,
+            }
         } else {
             Call::Direct(target, unit)
         };
@@ -456,8 +460,13 @@ pub(super) fn perform_call(hir: &HirProgram, op: OperationId, args: Vec<Atom>) -
     }
 }
 
-/// エフェクトの表。`effect_index` と同じ順に並べる。
-pub(super) fn effect_table(hir: &HirProgram) -> Vec<EffectInfo> {
+/// エフェクトの表。`effect_index` と同じ順に並べる。操作の Repr は操作のスキームの型から決め、型変数は `repr` が
+/// `tobj` にする (docs/superpowers/specs/2026-10-11-s7-evidence-passing-design.md の「操作の表の Repr」)。
+pub(super) fn effect_table(
+    hir: &HirProgram,
+    types: &TypeStore,
+    typed: &TypedProgram,
+) -> Vec<EffectInfo> {
     core_effects(hir)
         .map(|(id, effect)| EffectInfo {
             name: core_name(hir, id.module, &effect.name),
@@ -466,10 +475,18 @@ pub(super) fn effect_table(hir: &HirProgram) -> Vec<EffectInfo> {
                 .iter()
                 .map(|&op| {
                     let operation = &hir[op];
+                    let ty = typed.decls[&ValueItem::Operation(op)].ty;
+                    let (params, result) = split_arrows(types, ty, operation.arity);
+                    let resumable = operation.multiplicity != OpMultiplicity::Never;
                     OperationInfo {
                         name: operation.name.clone(),
-                        arity: operation.arity,
-                        resumable: operation.multiplicity != OpMultiplicity::Never,
+                        params: params.iter().map(|&ty| repr(types, ty, hir)).collect(),
+                        ret: if resumable {
+                            OpRet::Repr(repr(types, result, hir))
+                        } else {
+                            OpRet::Never
+                        },
+                        resumable,
                     }
                 })
                 .collect(),

@@ -115,7 +115,7 @@ b1:
     )
 }
 
-const ASK: &str = "effect Ask { ask/1 }\n";
+const ASK: &str = "effect Ask { ask(tobj) -> tobj }\n";
 
 /// `handle ask 1 with | ask x k -> resume k x` を持ち上げた形。`effects` は先頭のエフェクトの行。節と本体は値として
 /// 使うので一様で、捕まえる `Int` と handle の結果は `box` と `unbox` を通る。
@@ -765,7 +765,7 @@ fn the_uses_of_a_never_perform_binder_are_not_compared() {
     // `f` の形をそのまま `tail perform never` にする
     let text = "\
 layout Option { None, Some(tobj) }
-effect Fail { never fail/1 }
+effect Fail { never fail(tobj) -> never }
 fn f(s.0: obj) -> tobj {
   let t.1: int = perform never Fail.fail(s.0)
   return t.1
@@ -879,7 +879,7 @@ fn three(a.0: unit, b.1: unit, c.2: unit) -> unit {
 /// 引数が `params` で本体が `body` の `f` に、エフェクト `Ask`、`State`、`Fail` と一様な関数を添える。
 fn calling(params: &str, body: &str) -> String {
     format!(
-        "{ASK}effect State {{ get/0 }}\neffect Fail {{ never fail/1 }}\nfn f({params}) -> tobj {{\n{body}}}\n{UNIFORM}"
+        "{ASK}effect State {{ get() -> tobj }}\neffect Fail {{ never fail(tobj) -> never }}\nfn f({params}) -> tobj {{\n{body}}}\n{UNIFORM}"
     )
 }
 
@@ -1151,7 +1151,7 @@ fn the_results_of_uniform_calls_are_bound_to_variables_compatible_with_tobj() {
 fn a_never_perform_has_no_result_to_compare() {
     // `never` の操作の `perform` は値を返さないので、束縛はどの Repr でもよく、`tail` はどの `ret` の関数にも置ける
     let text = "\
-effect Fail { never fail/1 }
+effect Fail { never fail(tobj) -> never }
 fn f() -> int {
   let t.0: int = perform never Fail.fail(())
   return t.0
@@ -2260,7 +2260,9 @@ fn handlers_operations_and_resume_are_calls() {
 #[test]
 fn a_handler_has_a_clause_for_each_operation() {
     assert_eq!(
-        check(&handler_program("effect Ask { ask/1, tell/1 }\n")),
+        check(&handler_program(
+            "effect Ask { ask(tobj) -> tobj, tell(tobj) -> tobj }\n"
+        )),
         Err(
             "a handler of `Ask` has clauses for 1 operations, but the effect has 2 in `main`"
                 .to_string()
@@ -2271,7 +2273,7 @@ fn a_handler_has_a_clause_for_each_operation() {
 #[test]
 fn a_clause_receives_the_arguments_k_and_the_state_after_its_captures() {
     let text = "\
-effect Ask { ask/1 }
+effect Ask { ask(tobj) -> tobj }
 fn f() -> int {
   let t.0: int = handle Ask((), &body) { ask: &clause } return &ret
   return t.0
@@ -2295,7 +2297,7 @@ fn ret(x.0: int, s.1: unit) -> int {
 #[test]
 fn a_clause_of_a_never_operation_receives_the_arguments_and_the_state() {
     let text = "\
-effect Fail { never fail/1 }
+effect Fail { never fail(tobj) -> never }
 fn f(n.0: tobj) -> int {
   let c.1: tobj = closure clause(n.0)
   let t.2: int = handle Fail((), &body) { fail: c.1 } return &ret
@@ -2320,7 +2322,7 @@ fn ret(x.0: int, s.1: unit) -> int {
 #[test]
 fn a_return_clause_receives_the_value_and_the_state_after_its_captures() {
     let text = "\
-effect Ask { ask/1 }
+effect Ask { ask(tobj) -> tobj }
 fn f(n.0: tobj) -> int {
   let c.1: tobj = closure ret(n.0)
   let t.2: int = handle Ask((), &body) { ask: &clause } return c.1
@@ -2347,7 +2349,7 @@ fn a_clause_outside_its_scope_is_rejected_before_its_parameters_are_counted() {
     // `c.1` は b1 だけで定義され、`handle` のある b3 を支配しない。引数の数も合わないが、先に範囲の誤りを報告する
     let text = "\
 layout Prelude.Bool { False, True }
-effect Ask { ask/1 }
+effect Ask { ask(tobj) -> tobj }
 fn f(k.0: enum) -> int {
   switch k.0 Prelude.Bool { #0 -> b1, #1 -> b2 }
 b1:
@@ -2386,13 +2388,13 @@ fn perform_names_an_operation_of_its_effect() {
 
 #[test]
 fn a_perform_must_agree_with_the_effect_on_resuming() {
-    let resumes =
-        "effect Fail { never fail/1 }\nfn f() -> int {\n  tail perform Fail.fail(())\n}\n";
+    let resumes = "effect Fail { never fail(tobj) -> never }\nfn f() -> int {\n  tail perform Fail.fail(())\n}\n";
     assert_eq!(
         check(resumes),
         Err("`Fail.fail` never resumes, but this perform resumes in `f`".to_string())
     );
-    let never = "effect Ask { ask/1 }\nfn f() -> int {\n  tail perform never Ask.ask(1)\n}\n";
+    let never =
+        "effect Ask { ask(tobj) -> tobj }\nfn f() -> int {\n  tail perform never Ask.ask(1)\n}\n";
     assert_eq!(
         check(never),
         Err("`Ask.ask` resumes, but this perform never resumes in `f`".to_string())
@@ -2403,8 +2405,8 @@ fn a_perform_must_agree_with_the_effect_on_resuming() {
 #[test]
 fn a_mask_on_handle_or_perform_is_rejected() {
     let texts = [
-        "effect Ask { ask/1 }\nfn f(b.0: tobj, c.1: tobj, r.2: tobj) -> int {\n  tail handle Ask((), b.0) { ask: c.1 } return r.2\n}\n",
-        "effect Ask { ask/1 }\nfn f() -> int {\n  tail perform Ask.ask(1)\n}\n",
+        "effect Ask { ask(tobj) -> tobj }\nfn f(b.0: tobj, c.1: tobj, r.2: tobj) -> int {\n  tail handle Ask((), b.0) { ask: c.1 } return r.2\n}\n",
+        "effect Ask { ask(tobj) -> tobj }\nfn f() -> int {\n  tail perform Ask.ask(1)\n}\n",
     ];
     let errors: Vec<String> = texts
         .into_iter()
@@ -2423,14 +2425,14 @@ fn a_mask_on_handle_or_perform_is_rejected() {
 #[test]
 fn a_mask_must_name_known_effects_in_order() {
     let unknown = "\
-effect Main.State { get/1, put/1 }
+effect Main.State { get(tobj) -> tobj, put(tobj) -> tobj }
 fn entry$main(c.0: tobj) -> unit {
   tail mask [#5] apply c.0(())
 }
 ";
     let unordered = "\
-effect Main.A { a/1 }
-effect Main.B { b/1 }
+effect Main.A { a(tobj) -> tobj }
+effect Main.B { b(tobj) -> tobj }
 fn entry$main(c.0: tobj) -> unit {
   tail mask [Main.B, Main.A] apply c.0(())
 }
@@ -2448,8 +2450,8 @@ fn entry$main(c.0: tobj) -> unit {
 #[test]
 fn a_mask_may_name_one_effect_twice() {
     let text = "\
-effect Main.A { a/1 }
-effect Main.B { b/1 }
+effect Main.A { a(tobj) -> tobj }
+effect Main.B { b(tobj) -> tobj }
 fn entry$main(c.0: tobj) -> unit {
   let t.1: tobj = mask [Main.A, Main.A, Main.B] apply c.0(())
   tail mask [Main.B] apply t.1(())
@@ -2484,7 +2486,7 @@ fn ret(v.0: tobj, t.1: unit) -> tobj {
             "a tail apply is formed before contract in `f`",
         ),
         (
-            "effect Ask { ask/1 }\nfn f(s.0: obj) -> tobj {\n  tail perform Ask.ask(s.0)\n}\n"
+            "effect Ask { ask(tobj) -> tobj }\nfn f(s.0: obj) -> tobj {\n  tail perform Ask.ask(s.0)\n}\n"
                 .to_string(),
             "a tail perform is formed before contract in `f`",
         ),
@@ -2494,7 +2496,7 @@ fn ret(v.0: tobj, t.1: unit) -> tobj {
         ),
         (
             format!(
-                "effect Ask {{ ask/1 }}\nfn f() -> tobj {{\n  tail handle Ask((), &body) {{ ask: &clause }} return &ret\n}}\n{handler}"
+                "effect Ask {{ ask(tobj) -> tobj }}\nfn f() -> tobj {{\n  tail handle Ask((), &body) {{ ask: &clause }} return &ret\n}}\n{handler}"
             ),
             "a tail handler is formed before contract in `f`",
         ),

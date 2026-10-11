@@ -10,7 +10,8 @@ use eml_extern::Extern;
 
 use crate::{
     Atom, Block, BlockId, Call, Case, CasePattern, CoreFn, Ctor, EffectInfo, FnIdx, Layout,
-    LayoutCtor, LayoutId, Loc, OperationInfo, Program, Repr, Rhs, Stmt, Term, VarId, VarInfo,
+    LayoutCtor, LayoutId, Loc, OpRet, OperationInfo, Program, Repr, Rhs, Stmt, Term, VarId,
+    VarInfo,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -381,20 +382,32 @@ impl<'t> Parser<'t> {
         Ok(())
     }
 
-    /// `[never] operation/arity`。
+    /// `[never] operation(repr, ..) -> ret`。`ret` は repr か `never` で、`never` の印と一致しなければならない。
     fn operation_decl(&mut self) -> Result<OperationInfo, ParseError> {
         let never = self.eat_never();
         let line = self.line();
-        let word = self.word()?;
-        // 関数の名前と同じく操作の名前も `/` を含みうるので、最後の `/` で分ける
-        let (op, arity) = word
-            .rsplit_once('/')
-            .and_then(|(op, arity)| Some((op, number(arity)?)))
-            .filter(|(op, _)| !op.is_empty())
-            .ok_or_else(|| error(line, format!("expected `operation/arity`, found `{word}`")))?;
+        let name = self.word()?;
+        let params = self.list('(', ')', Self::repr)?;
+        self.expect_word("->")?;
+        let ret = if self.at_word("never") {
+            self.pos += 1;
+            OpRet::Never
+        } else {
+            OpRet::Repr(self.repr()?)
+        };
+        match (never, ret) {
+            (true, OpRet::Repr(_)) => {
+                return Err(error(line, "a `never` operation returns `never`"));
+            }
+            (false, OpRet::Never) => {
+                return Err(error(line, "only a `never` operation returns `never`"));
+            }
+            _ => {}
+        }
         Ok(OperationInfo {
-            name: op.to_string(),
-            arity: arity as usize,
+            name,
+            params,
+            ret,
             resumable: !never,
         })
     }
@@ -429,10 +442,14 @@ impl<'t> Parser<'t> {
         Ok(())
     }
 
-    /// `[internal] fn name(params) -> repr {` に、入口のブロックとラベルの付いたブロックの列が続く。
+    /// `[internal] [yields] fn name(params) -> repr {` に、入口のブロックとラベルの付いたブロックの列が続く。
     fn function(&mut self) -> Result<CoreFn, ParseError> {
         let internal = self.at_word("internal");
         if internal {
+            self.pos += 1;
+        }
+        let yields = self.at_word("yields");
+        if yields {
             self.pos += 1;
         }
         self.expect_word("fn")?;
@@ -477,6 +494,7 @@ impl<'t> Parser<'t> {
         Ok(CoreFn {
             name,
             internal,
+            yields,
             vars,
             ret,
             blocks,
@@ -681,7 +699,7 @@ impl<'t> Parser<'t> {
         };
         if matches!(
             keyword.as_str(),
-            "mask" | "call" | "apply" | "handle" | "perform" | "resume"
+            "mask" | "call" | "yields" | "apply" | "handle" | "perform" | "resume"
         ) {
             let (mask, call) = self.masked_call(state)?;
             let saved = self.saved(state)?;
@@ -806,7 +824,11 @@ impl<'t> Parser<'t> {
     fn masked_call(&mut self, state: &mut FnState) -> Result<(Vec<u32>, Call), ParseError> {
         let line = self.line();
         let mask = self.mask()?;
-        if !mask.is_empty() && !["call", "apply", "resume"].iter().any(|w| self.at_word(w)) {
+        if !mask.is_empty()
+            && !["call", "yields", "apply", "resume"]
+                .iter()
+                .any(|w| self.at_word(w))
+        {
             return Err(error(line, "a mask is only on call, apply and resume"));
         }
         Ok((mask, self.call(state)?))
@@ -822,11 +844,14 @@ impl<'t> Parser<'t> {
                 let args = self.list('(', ')', |p| p.atom(state))?;
                 Ok(Call::Direct(callee, args))
             }
-            "apply" => {
-                let callee = self.atom(state)?;
-                let args = self.list('(', ')', |p| p.atom(state))?;
-                Ok(Call::Apply(callee, args))
+            "yields" => {
+                if !self.at_word("apply") {
+                    return Err(self.error_here("expected `apply` after `yields`"));
+                }
+                self.pos += 1;
+                self.apply(state, true)
             }
+            "apply" => self.apply(state, false),
             "handle" => self.handle(state),
             "perform" => {
                 let never = self.eat_never();
@@ -861,6 +886,17 @@ impl<'t> Parser<'t> {
             }
             _ => Err(error(line, format!("expected a call, found `{word}`"))),
         }
+    }
+
+    /// `apply` の後の、呼ぶ値と引数。
+    fn apply(&mut self, state: &mut FnState, yields: bool) -> Result<Call, ParseError> {
+        let callee = self.atom(state)?;
+        let args = self.list('(', ')', |p| p.atom(state))?;
+        Ok(Call::Apply {
+            callee,
+            args,
+            yields,
+        })
     }
 
     /// 操作の前の `never`。後に語が続くときだけ読むので、`never` という名前の操作も書ける。

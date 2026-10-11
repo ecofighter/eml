@@ -247,7 +247,7 @@ pub(crate) fn translate(
         entry: entry_fn,
         strings: builder.strings.values,
         layouts: builder.layouts,
-        effects: effect_table(hir),
+        effects: effect_table(hir, store, typed),
         files: builder.files.values,
     }
 }

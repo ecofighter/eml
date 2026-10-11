@@ -233,7 +233,11 @@ impl<'p> Runtime<'p> {
         }
         match call {
             Call::Direct(callee, args) => Ok(Transfer::Enter(*callee, env.atoms(args)?)),
-            Call::Apply(callee, args) => {
+            Call::Apply {
+                callee,
+                args,
+                yields: _,
+            } => {
                 let callee = env.atom(callee)?;
                 let args = env.atoms(args)?;
                 self.apply_and_continue(callee, args)

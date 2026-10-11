@@ -1495,7 +1495,7 @@ impl<'a> Checker<'a> {
                 // (docs/spec/core-ir.md の「位置の規則」)
                 resumable.then_some(Repr::TObj)
             }
-            Call::Apply(_, _)
+            Call::Apply { .. }
             | Call::Resume {
                 k: _,
                 arg: _,
@@ -1543,7 +1543,11 @@ impl<'a> Checker<'a> {
                     }
                 }
             }
-            Call::Apply(callee, args) => {
+            Call::Apply {
+                callee,
+                args,
+                yields: _,
+            } => {
                 let uniform = operands("an apply");
                 uniform(&|| "the callee".to_string(), *callee)?;
                 for (index, &arg) in args.iter().enumerate() {
@@ -1632,7 +1636,7 @@ impl<'a> Checker<'a> {
                     format!("`{name}`")
                 };
             }
-            Call::Apply(_, _) => ("an", "apply".to_string()),
+            Call::Apply { .. } => ("an", "apply".to_string()),
             Call::Perform {
                 effect,
                 op,
@@ -1693,7 +1697,7 @@ impl<'a> Checker<'a> {
                 args: _,
             } => return Err("a mask on perform".to_string()),
             Call::Direct(_, _)
-            | Call::Apply(_, _)
+            | Call::Apply { .. }
             | Call::Resume {
                 k: _,
                 arg: _,
@@ -1724,7 +1728,7 @@ impl<'a> Checker<'a> {
             let Some(has) = self.parameters_left(clause) else {
                 continue;
             };
-            let needs = op.arity + usize::from(op.resumable) + 1;
+            let needs = op.params.len() + usize::from(op.resumable) + 1;
             if has != needs {
                 let receives = if op.resumable {
                     "for the arguments, `k`, and the state"
@@ -1733,7 +1737,8 @@ impl<'a> Checker<'a> {
                 };
                 return Err(format!(
                     "the clause for `{}` needs {needs} parameters after its captures ({} {receives}), but it has {has}",
-                    op.name, op.arity
+                    op.name,
+                    op.params.len()
                 ));
             }
         }
@@ -1834,7 +1839,7 @@ impl<'a> Checker<'a> {
 fn tail_text(call: &Call) -> &'static str {
     match call {
         Call::Direct(_, _) => "a tail call",
-        Call::Apply(_, _) => "a tail apply",
+        Call::Apply { .. } => "a tail apply",
         Call::Perform { .. } => "a tail perform",
         Call::Resume { .. } => "a tail resume",
         Call::Handle { .. } => "a tail handler",

@@ -165,8 +165,8 @@ fn pair(f.0: tobj) -> unit {{
 fn an_inner_handle_returns_through_each_resumption_of_an_outer_multi_operation() {
     // `Choose` の節が `k` を2回再開する。区間には内側の `Ask` の handler フレームが入り、写される
     let text = "\
-effect Choose { choose/1 }
-effect Ask { ask/1 }
+effect Choose { choose(tobj) -> tobj }
+effect Ask { ask(tobj) -> tobj }
 fn main() -> unit {
   let r.0: tobj = handle Choose((), &outer_body) { choose: &choose } return &outer_ret
   let t.1: int = unbox r.0

@@ -165,7 +165,7 @@ fn every_kind_of_call_returned_at_the_end_becomes_a_tail_call() {
     // 直接の呼び出し、関数値の適用、`perform`、`handle`、`resume` のどれも末尾呼び出しになり、`mask` はそのまま運ぶ
     // (docs/spec/core-ir.md の「Core IR」)。結果を返さない呼び出しは残す
     let text = "\
-effect Ask { ask/1 }
+effect Ask { ask(tobj) -> tobj }
 fn by_call(x.0: int) -> int {
   let r.1: int = call by_call(x.0)
   return r.1
@@ -201,7 +201,7 @@ fn ret(v.0: tobj, t.1: unit) -> tobj {
 }
 ";
     insta::assert_snapshot!(contract_text(text), @"
-    effect Ask { ask/1 }
+    effect Ask { ask(tobj) -> tobj }
     fn by_call(x.0: int) -> int {
       tail call by_call(x.0)
     }
@@ -253,14 +253,14 @@ fn g() -> unit {
 fn a_never_perform_returned_at_the_end_becomes_a_tail_call_in_any_function() {
     // `never` の操作の `perform` は戻らないので、結果はどの `ret` とも互換である
     let text = "\
-effect Fail { never fail/1 }
+effect Fail { never fail(tobj) -> never }
 fn f(s.0: obj) -> int {
   let r.1: int = perform never Fail.fail(s.0)
   return r.1
 }
 ";
     insta::assert_snapshot!(contract_text(text), @"
-    effect Fail { never fail/1 }
+    effect Fail { never fail(tobj) -> never }
     fn f(s.0: obj) -> int {
       tail perform never Fail.fail(s.0)
     }

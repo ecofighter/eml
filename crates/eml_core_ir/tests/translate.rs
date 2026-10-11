@@ -324,7 +324,7 @@ fn the_entry_applies_a_point_free_main_to_unit() {
 fn handlers_are_lifted_with_their_return_reprs() {
     let text = "effect Ask where\n  ask : String -> Int\n\nmain : Unit -> <IO> Unit\nmain () =\n  let prefix = \"n = \"\n  let n =\n    handle ask \"x\" with\n      | ask key k -> k 1\n      | return x -> x + 1\n  println (prefix ++ show n)";
     insta::assert_snapshot!(core_text(text, Pass::Translate), @r#"
-    effect Ask { ask/1 }
+    effect Ask { ask(obj) -> int }
     fn main(p.0: unit) -> unit {
       let s.1: obj = const "n = "
       let t.2: int = handle Ask((), &main$handle0) { ask: &main$handle0$ask } return &main$handle0$return
@@ -839,9 +839,9 @@ fn an_extern_function_with_an_effect_used_as_a_value_is_wrapped_with_its_extern_
 #[test]
 fn effect_numbers_skip_the_extern_effects() {
     let text = "effect A where\n  ask : Unit -> Int\n\neffect B where\n  tell : Int -> Unit\n\nneeds_a : (Unit -> <e> Int) -> <A | e> Int\nneeds_a f = ask () + f ()\n\ntold : Unit -> <B> Int\ntold () =\n  tell 1\n  2\n\nmain : Unit -> <IO> Unit\nmain () =\n  let n =\n    handle (handle needs_a told with | ask () k -> k 1) with\n      | tell m k -> k ()\n  println (show n)";
-    insta::assert_snapshot!(core_text(text, Pass::Translate), @"
-    effect A { ask/1 }
-    effect B { tell/1 }
+    insta::assert_snapshot!(core_text(text, Pass::Translate), @r#"
+    effect A { ask(unit) -> int }
+    effect B { tell(int) -> unit }
     fn needs_a(f.0: tobj) -> int {
       let t.1: int = perform A.ask(())
       let t.2: int = mask [A] apply f.0(())
@@ -854,7 +854,7 @@ fn effect_numbers_skip_the_extern_effects() {
     }
     fn main(p.0: unit) -> unit {
       let t.1: int = handle B((), &main$handle1) { tell: &main$handle1$tell } return &main$handle1$return
-      let t.2: obj = extern \"Prelude.Show Int.show\"(t.1)
+      let t.2: obj = extern "Prelude.Show Int.show"(t.1)
       let t.3: unit = extern Prelude.println(t.2)
       return t.3
     }
@@ -884,7 +884,7 @@ fn effect_numbers_skip_the_extern_effects() {
       let t.0: unit = call main(())
       return t.0
     }
-    ");
+    "#);
 }
 
 #[test]
@@ -927,7 +927,7 @@ fn names_outside_the_entry_are_qualified_with_their_module() {
     let main = "import Report.Csv\n\napply : (a -> <e> b) -> a -> <e> b\napply f x = f x\n\nmain : Unit -> <IO> Unit\nmain () =\n  let r =\n    handle Csv.parse () with\n      | Csv.next () k -> k 1\n      | return r -> r\n  let Csv.Row n = r\n  apply println (show n)";
     insta::assert_snapshot!(core_text_files(main, &[("Report/Csv.em", csv)], Pass::Translate), @r#"
     layout Report.Csv.Row { Row(int) }
-    effect Report.Csv.Parse { next/1 }
+    effect Report.Csv.Parse { next(unit) -> int }
     fn "apply@[String, Unit]"(f.0: tobj, x.1: obj) -> unit {
       let t.2: unit = apply f.0(x.1)
       return t.2
@@ -1214,7 +1214,7 @@ fn nested_value_ifs_meet_in_their_own_merge_blocks() {
 fn handlers_are_lifted_to_closures() {
     let text = "effect Ask where\n  ask : String -> Int\n\nmain : Unit -> <IO> Unit\nmain () =\n  let prefix = \"n = \"\n  let n =\n    handle ask \"x\" with\n      | ask key k -> k 1\n      | return x -> x + 1\n  println (prefix ++ show n)";
     insta::assert_snapshot!(core_text(text, Pass::Translate), @r#"
-    effect Ask { ask/1 }
+    effect Ask { ask(obj) -> int }
     fn main(p.0: unit) -> unit {
       let s.1: obj = const "n = "
       let t.2: int = handle Ask((), &main$handle0) { ask: &main$handle0$ask } return &main$handle0$return
@@ -1568,11 +1568,11 @@ fn functions_without_captures_are_values() {
 #[test]
 fn a_handler_with_a_state_passes_its_initial_value_and_takes_the_state_from_its_clauses() {
     let text = "effect Ask where\n  ask : Unit -> Int\n\nmain : Unit -> <IO> Unit\nmain () =\n  let n =\n    handle ask () + ask () from 10 with\n      | ask () k st -> k st (st + 1)\n      | return x st -> x * st\n  println (show n)";
-    insta::assert_snapshot!(core_text(text, Pass::Translate), @"
-    effect Ask { ask/1 }
+    insta::assert_snapshot!(core_text(text, Pass::Translate), @r#"
+    effect Ask { ask(unit) -> int }
     fn main(p.0: unit) -> unit {
       let t.1: int = handle Ask(10, &main$handle0) { ask: &main$handle0$ask } return &main$handle0$return
-      let t.2: obj = extern \"Prelude.Show Int.show\"(t.1)
+      let t.2: obj = extern "Prelude.Show Int.show"(t.1)
       let t.3: unit = extern Prelude.println(t.2)
       return t.3
     }
@@ -1595,20 +1595,20 @@ fn a_handler_with_a_state_passes_its_initial_value_and_takes_the_state_from_its_
       let t.0: unit = call main(())
       return t.0
     }
-    ");
+    "#);
 }
 
 #[test]
 fn effects_are_numbered_in_declaration_order() {
     let text = "effect A where\n  a : Unit -> Int\neffect B where\n  b : Unit -> Int\nmain : Unit -> <IO> Unit\nmain () =\n  let x = handle a () with\n    | a () k -> k 1\n  let y = handle b () with\n    | b () k -> k 2\n  println (show (x + y))";
-    insta::assert_snapshot!(core_text(text, Pass::Translate), @"
-    effect A { a/1 }
-    effect B { b/1 }
+    insta::assert_snapshot!(core_text(text, Pass::Translate), @r#"
+    effect A { a(unit) -> int }
+    effect B { b(unit) -> int }
     fn main(p.0: unit) -> unit {
       let t.1: int = handle A((), &main$handle0) { a: &main$handle0$a } return &main$handle0$return
       let t.2: int = handle B((), &main$handle1) { b: &main$handle1$b } return &main$handle1$return
       let t.3: int = extern Prelude.+(t.1, t.2)
-      let t.4: obj = extern \"Prelude.Show Int.show\"(t.3)
+      let t.4: obj = extern "Prelude.Show Int.show"(t.3)
       let t.5: unit = extern Prelude.println(t.4)
       return t.5
     }
@@ -1638,7 +1638,7 @@ fn effects_are_numbered_in_declaration_order() {
       let t.0: unit = call main(())
       return t.0
     }
-    ");
+    "#);
 }
 
 #[test]
@@ -1720,8 +1720,8 @@ fn effects_of_the_same_name_in_two_modules_stay_apart() {
     let main = "import Audit\n\neffect Log where\n  emit : Int -> Unit\n\nlocal : Unit -> <Log> Unit\nlocal () = emit 2\n\nmain : Unit -> <IO> Unit\nmain () =\n  handle Audit.audited () with\n    | Audit.emit n k -> k (println (show n))\n  handle local () with\n    | emit n k -> k (println (show n))";
     let shown = core_text_files(main, &[("Audit.em", audit)], Pass::Translate);
     for expected in [
-        "effect Log { emit/1 }",
-        "effect Audit.Log { emit/1 }",
+        "effect Log { emit(int) -> unit }",
+        "effect Audit.Log { emit(int) -> unit }",
         "perform Log.emit(",
         "perform Audit.Log.emit(",
         "handle Log(",

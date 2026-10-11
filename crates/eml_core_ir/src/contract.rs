@@ -61,7 +61,7 @@ fn tail_call(block: &mut Block, ret: Repr, rets: &[Repr]) {
             resumable: false,
             args: _,
         } => true,
-        Call::Apply(_, _) | Call::Perform { .. } | Call::Resume { .. } | Call::Handle { .. } => {
+        Call::Apply { .. } | Call::Perform { .. } | Call::Resume { .. } | Call::Handle { .. } => {
             Repr::TObj.compatible(ret)
         }
     };

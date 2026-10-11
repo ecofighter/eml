@@ -1,5 +1,5 @@
-effect Main.Ask { ask/1 }
-effect Main.Yield { yield/1 }
+effect Main.Ask { ask(tobj) -> tobj }
+effect Main.Yield { yield(tobj) -> tobj }
 fn main() -> unit {
   let t.0: unit = handle Main.Ask((), &outer_body) { ask: &outer_ask } return &done
   return t.0

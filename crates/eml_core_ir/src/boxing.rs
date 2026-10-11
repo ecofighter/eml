@@ -256,6 +256,7 @@ fn boxed(function: &CoreFn, target: FnIdx) -> CoreFn {
     CoreFn {
         name: format!("{}$boxed", function.name),
         internal: function.internal,
+        yields: function.yields,
         vars,
         ret: uniform_repr(function.ret),
         blocks: vec![Block {
@@ -527,7 +528,7 @@ impl Converter<'_> {
                 }
                 Some(self.signatures[target].ret)
             }
-            Call::Apply(_, _)
+            Call::Apply { .. }
             | Call::Perform { .. }
             | Call::Resume { .. }
             | Call::Handle { .. } => {

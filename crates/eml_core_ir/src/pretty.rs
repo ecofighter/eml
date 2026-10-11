@@ -4,8 +4,8 @@
 use std::fmt::Write;
 
 use crate::{
-    Atom, Block, BlockId, Call, CasePattern, CoreFn, Ctor, EffectInfo, LayoutId, Program, Rhs,
-    Stmt, Term, VarId,
+    Atom, Block, BlockId, Call, CasePattern, CoreFn, Ctor, EffectInfo, LayoutId, OpRet, Program,
+    Rhs, Stmt, Term, VarId,
 };
 
 /// 位置を出さない表示。translate のテストの多くは位置を見ないので、既定では出さない。
@@ -65,11 +65,17 @@ impl Printer<'_> {
                 .operations
                 .iter()
                 .map(|op| {
-                    if op.resumable {
-                        format!("{}/{}", op.name, op.arity)
-                    } else {
-                        format!("never {}/{}", op.name, op.arity)
-                    }
+                    let params: Vec<&str> = op.params.iter().map(|repr| repr.name()).collect();
+                    format!(
+                        "{}{}({}) -> {}",
+                        if op.resumable { "" } else { "never " },
+                        op.name,
+                        params.join(", "),
+                        match op.ret {
+                            OpRet::Repr(repr) => repr.name(),
+                            OpRet::Never => "never",
+                        }
+                    )
                 })
                 .collect();
             if operations.is_empty() {
@@ -93,8 +99,9 @@ impl Printer<'_> {
     fn function(&self, function: &CoreFn, out: &mut String) {
         writeln!(
             out,
-            "{}fn {}({}) -> {} {{",
+            "{}{}fn {}({}) -> {} {{",
             if function.internal { "internal " } else { "" },
+            if function.yields { "yields " } else { "" },
             function_name(&function.name),
             binders(function, function.params()),
             function.ret.name()
@@ -251,8 +258,13 @@ impl Printer<'_> {
                 function_name(&self.program.function(*callee).name),
                 self.atoms(function, args)
             ),
-            Call::Apply(callee, args) => format!(
-                "apply {}({})",
+            Call::Apply {
+                callee,
+                args,
+                yields,
+            } => format!(
+                "{}apply {}({})",
+                if *yields { "yields " } else { "" },
                 self.atom(function, callee),
                 self.atoms(function, args)
             ),

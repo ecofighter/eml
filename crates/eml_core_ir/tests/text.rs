@@ -1,7 +1,7 @@
 //! Core IR のテキストの形 (docs/implementation/testing.md の「Core IR のテキストの形」)。`parse` が読んだものを
 //! `pretty` で表示すると元のテキストに戻ることと、構文の誤りの報告を確かめる。
 
-use eml_core_ir::{Atom, Call, CasePattern, Ctor, FnIdx, LayoutId, VarId};
+use eml_core_ir::{Atom, Call, CasePattern, Ctor, FnIdx, LayoutId, OpRet, VarId};
 use eml_core_ir::{
     BlockId, Loc, ParseError, Program, Repr, Rhs, Stmt, Term, parse, pretty, pretty_with_positions,
 };
@@ -260,7 +260,7 @@ fn g(x.0: int) -> int {
 fn a_tail_call_round_trips() {
     let program = round_trip(
         "\
-effect State { get/1, put/1 }
+effect State { get(tobj) -> tobj, put(tobj) -> tobj }
 fn f(c.0: tobj) -> int {
   tail mask [State] apply c.0(1)
 }
@@ -269,7 +269,11 @@ fn f(c.0: tobj) -> int {
     assert_eq!(
         program.functions[0].blocks[0].term,
         Term::TailCall {
-            call: Call::Apply(v(0), vec![Atom::Int(1)]),
+            call: Call::Apply {
+                callee: v(0),
+                args: vec![Atom::Int(1)],
+                yields: false,
+            },
             mask: vec![0],
         }
     );
@@ -669,7 +673,11 @@ fn f(c.0: tobj) -> int {
         Stmt::Let {
             var: VarId(1),
             rhs: Rhs::Call {
-                call: Call::Apply(v(0), vec![Atom::Int(1), Atom::Int(2)]),
+                call: Call::Apply {
+                    callee: v(0),
+                    args: vec![Atom::Int(1), Atom::Int(2)],
+                    yields: false,
+                },
                 mask: Vec::new(),
                 saved: Vec::new(),
             },
@@ -678,7 +686,11 @@ fn f(c.0: tobj) -> int {
     assert_eq!(
         f.blocks[0].term,
         Term::TailCall {
-            call: Call::Apply(Atom::Unit, vec![v(1)]),
+            call: Call::Apply {
+                callee: Atom::Unit,
+                args: vec![v(1)],
+                yields: false,
+            },
             mask: Vec::new(),
         }
     );
@@ -688,7 +700,7 @@ fn f(c.0: tobj) -> int {
 fn a_handle_round_trips() {
     let program = round_trip(
         "\
-effect Ask { ask/1, never stop/1 }
+effect Ask { ask(tobj) -> tobj, never stop(tobj) -> never }
 effect Done {}
 fn h(s.0: int, b.1: tobj, a.2: tobj, x.3: tobj, r.4: tobj) -> int {
   let t.5: int = handle Ask(s.0, b.1) { ask: a.2, stop: x.3 } return r.4
@@ -720,7 +732,7 @@ fn h(s.0: int, b.1: tobj, a.2: tobj, x.3: tobj, r.4: tobj) -> int {
 fn a_perform_round_trips() {
     let program = round_trip(
         "\
-effect Ask { ask/1, never stop/1 }
+effect Ask { ask(tobj) -> tobj, never stop(tobj) -> never }
 fn f(x.0: int) -> int {
   let t.1: int = perform Ask.ask(x.0)
   tail perform never Ask.stop(t.1)
@@ -757,14 +769,16 @@ fn f(x.0: int) -> int {
             mask: Vec::new(),
         }
     );
-    round_trip("effect Ask { ask/1 }\nfn f() -> int {\n  tail perform never Ask.ask(1)\n}\n");
+    round_trip(
+        "effect Ask { ask(tobj) -> tobj }\nfn f() -> int {\n  tail perform never Ask.ask(1)\n}\n",
+    );
 }
 
 #[test]
 fn a_resume_round_trips() {
     let program = round_trip(
         "\
-effect State { get/1, put/1 }
+effect State { get(tobj) -> tobj, put(tobj) -> tobj }
 fn f(k.0: tobj, s.1: int) -> int {
   let t.2: int = mask [State] resume k.0(1, s.1)
   tail resume ()(t.2, ())
@@ -793,7 +807,7 @@ fn f(k.0: tobj, s.1: int) -> int {
 fn a_mask_reads_back() {
     round_trip(
         "\
-effect Main.State { get/1, put/1 }
+effect Main.State { get(tobj) -> tobj, put(tobj) -> tobj }
 fn entry$main(c.0: tobj) -> unit {
   let t.1: tobj = mask [Main.State, Main.State] apply c.0(())
   tail mask [Main.State] apply t.1(())
@@ -802,7 +816,7 @@ fn entry$main(c.0: tobj) -> unit {
     );
     round_trip(
         "\
-effect Main.State { get/1, put/1 }
+effect Main.State { get(tobj) -> tobj, put(tobj) -> tobj }
 fn f(c.0: tobj, k.1: tobj) -> int {
   let t.2: int = mask [#3] call f(c.0, k.1) save [c.0]
   let t.3: int = mask [Main.State] resume k.1(t.2, ())
@@ -877,7 +891,7 @@ fn a_binder_needs_a_repr() {
 fn an_effect_of_a_nested_module_round_trips() {
     round_trip(
         "\
-effect A.B.E { op/0 }
+effect A.B.E { op() -> tobj }
 fn f() -> int {
   let t.0: int = perform A.B.E.op()
   return t.0
@@ -906,7 +920,7 @@ fn string_escapes_round_trip() {
 fn the_return_after_the_return_clause_is_the_terminator() {
     round_trip(
         "\
-effect Ask { ask/1 }
+effect Ask { ask(tobj) -> tobj }
 fn h(b.0: tobj, a.1: tobj, r.2: tobj) -> int {
   let t.3: int = handle Ask((), b.0) { ask: a.1 } return r.2
   return t.3
@@ -918,7 +932,7 @@ fn h(b.0: tobj, a.1: tobj, r.2: tobj) -> int {
 #[test]
 fn a_handle_without_a_return_clause_is_an_error() {
     let error = parse_error(
-        "effect Ask { ask/1 }\nfn h(b.0: tobj, a.1: tobj) -> int {\n  let t.2: int = handle Ask((), b.0) { ask: a.1 }\n  return t.2\n}\n",
+        "effect Ask { ask(tobj) -> tobj }\nfn h(b.0: tobj, a.1: tobj) -> int {\n  let t.2: int = handle Ask((), b.0) { ask: a.1 }\n  return t.2\n}\n",
     );
     assert_eq!(error.line, 3);
     assert_eq!(
@@ -928,17 +942,29 @@ fn a_handle_without_a_return_clause_is_an_error() {
 }
 
 #[test]
-fn an_operation_needs_its_arity_after_the_last_slash() {
-    let program = parse("effect E { a/b/2 }\nfn f() -> int {\n  return 1\n}\n").unwrap();
-    assert_eq!(program.effects[0].operations[0].name, "a/b");
-    assert_eq!(program.effects[0].operations[0].arity, 2);
+fn an_operation_needs_its_reprs() {
+    let program =
+        parse("effect E { a/b(int, tobj) -> unit }\nfn f() -> int {\n  return 1\n}\n").unwrap();
+    let operation = &program.effects[0].operations[0];
+    assert_eq!(operation.name, "a/b");
+    assert_eq!(operation.params, [Repr::Int, Repr::TObj]);
+    assert_eq!(operation.ret, OpRet::Repr(Repr::Unit));
 
-    let error = parse_error("effect E { ask }\nfn f() -> int {\n  return 1\n}\n");
+    let error = parse_error("effect E { ask }\n");
     assert_eq!(error.line, 1);
-    assert_eq!(error.message, "expected `operation/arity`, found `ask`");
+    assert_eq!(error.message, "expected `(`, found `}`");
 
-    let error = parse_error("effect E { ask/x }\nfn f() -> int {\n  return 1\n}\n");
-    assert_eq!(error.message, "expected `operation/arity`, found `ask/x`");
+    let error = parse_error("effect E { ask -> tobj }\n");
+    assert_eq!(error.message, "expected `(`, found `->`");
+
+    let error = parse_error("effect E { ask(unit) }\n");
+    assert_eq!(error.message, "expected `->`, found `}`");
+
+    let error = parse_error("effect E { ask(x) -> tobj }\n");
+    assert_eq!(
+        error.message,
+        "expected a repr (obj, tobj, int, enum or unit), found `x`"
+    );
 }
 
 #[test]
@@ -1019,12 +1045,12 @@ fn a_tail_call_with_save_is_an_error() {
 fn malformed_declarations_names_and_strings_are_errors_with_their_lines() {
     let cases = [
         (
-            "effect A { a/1 }\neffect A { b/1 }\nfn f() -> int {\n  return 1\n}\n",
+            "effect A { a(tobj) -> tobj }\neffect A { b(tobj) -> tobj }\nfn f() -> int {\n  return 1\n}\n",
             2,
             "effect `A` is declared twice",
         ),
         (
-            "effect A { a/1,\n  a/2 }\nfn f() -> int {\n  return 1\n}\n",
+            "effect A { a(tobj) -> tobj,\n  a(tobj, tobj) -> tobj }\nfn f() -> int {\n  return 1\n}\n",
             2,
             "operation `a` is declared twice",
         ),
@@ -1054,7 +1080,7 @@ fn malformed_declarations_names_and_strings_are_errors_with_their_lines() {
             "a `\\u{…}` escape is not a character",
         ),
         (
-            "effect A { a/1, b/1 }\nfn f(x.0: tobj, y.1: tobj, r.2: tobj) -> int {\n  tail handle A((), x.0) { b: y.1, a: y.1 } return r.2\n}\n",
+            "effect A { a(tobj) -> tobj, b(tobj) -> tobj }\nfn f(x.0: tobj, y.1: tobj, r.2: tobj) -> int {\n  tail handle A((), x.0) { b: y.1, a: y.1 } return r.2\n}\n",
             3,
             "the clause for `b` is out of order; clauses follow the operations of `A`",
         ),
@@ -1081,7 +1107,7 @@ fn the_entry_is_entry_main_wherever_it_is_written() {
 fn an_operation_number_outside_the_effect_round_trips() {
     round_trip(
         "\
-effect Ask { ask/0 }
+effect Ask { ask() -> tobj }
 fn f(b.0: tobj, a.1: tobj, c.2: tobj, r.3: tobj) -> int {
   let t.4: int = perform never Ask.#3()
   let t.5: int = handle Ask((), b.0) { ask: a.1, #1: c.2 } return r.3
@@ -1171,19 +1197,19 @@ fn a_block_without_a_terminator_is_an_error() {
 #[test]
 fn a_mask_on_handle_perform_or_a_non_call_is_an_error() {
     let error = parse_error(
-        "effect Ask { ask/1 }\nfn f(b.0: tobj, a.1: tobj, r.2: tobj) -> int {\n  let t.3: int = mask [Ask] handle Ask((), b.0) { ask: a.1 } return r.2\n  return t.3\n}\n",
+        "effect Ask { ask(tobj) -> tobj }\nfn f(b.0: tobj, a.1: tobj, r.2: tobj) -> int {\n  let t.3: int = mask [Ask] handle Ask((), b.0) { ask: a.1 } return r.2\n  return t.3\n}\n",
     );
     assert_eq!(error.line, 3);
     assert_eq!(error.message, "a mask is only on call, apply and resume");
 
     let error = parse_error(
-        "effect Ask { ask/1 }\nfn f() -> int {\n  tail mask [Ask] perform Ask.ask(1)\n}\n",
+        "effect Ask { ask(tobj) -> tobj }\nfn f() -> int {\n  tail mask [Ask] perform Ask.ask(1)\n}\n",
     );
     assert_eq!(error.line, 3);
     assert_eq!(error.message, "a mask is only on call, apply and resume");
 
     let error = parse_error(
-        "effect Ask { ask/1 }\nfn f() -> obj {\n  let s.0: obj = mask [Ask] const \"a\"\n  return s.0\n}\n",
+        "effect Ask { ask(tobj) -> tobj }\nfn f() -> obj {\n  let s.0: obj = mask [Ask] const \"a\"\n  return s.0\n}\n",
     );
     assert_eq!(error.line, 3);
     assert_eq!(error.message, "a mask is only on call, apply and resume");
@@ -1218,7 +1244,7 @@ fn tag_block_variable_and_operation_numbers_are_plain_digits() {
     assert_eq!(error.message, "expected a block `bN`, found `b+0`");
 
     let error = parse_error(
-        "effect Ask { ask/0 }\nfn f() -> int {\n  let t.0: int = perform Ask.#+0()\n  return t.0\n}\n",
+        "effect Ask { ask() -> tobj }\nfn f() -> int {\n  let t.0: int = perform Ask.#+0()\n  return t.0\n}\n",
     );
     assert_eq!(error.line, 3);
     assert_eq!(error.message, "`Ask` has no operation `#+0`");
@@ -1236,7 +1262,7 @@ fn tag_block_variable_and_operation_numbers_are_plain_digits() {
 fn successors_and_atoms_come_in_a_fixed_order() {
     let program = parse(
         "\
-effect Ask { ask/1 }
+effect Ask { ask(tobj) -> tobj }
 fn f(o.0: tobj, i.1: int, b.2: tobj, a.3: tobj, r.4: tobj) -> int {
   let t.5: int = handle Ask(i.1, b.2) { ask: a.3 } return r.4
   unpack o.0 #0 #0(x.6: int)
@@ -1320,7 +1346,7 @@ layout Pair { Pair(tobj, int) }
 layout (,) { (,)(tobj, tobj) }
 layout (,,) { (,,)(tobj, tobj, tobj) }
 layout Void {}
-effect Ask { ask/1 }
+effect Ask { ask(tobj) -> tobj }
 fn f(p.0: obj, t.1: obj, b.2: enum) -> int {
   unpack p.0 Pair #0(x.3: tobj, n.4: int)
   unpack t.1 (,,) #0(a.5: tobj, b.6: tobj, c.7: tobj)
@@ -1436,7 +1462,7 @@ fn malformed_layouts_are_errors_with_their_lines() {
 
     // 配置の行はエフェクトの行より前に書く
     let error = parse_error(
-        "effect Ask { ask/1 }\nlayout Option { None }\nfn f() -> unit {\n  return ()\n}\n",
+        "effect Ask { ask(tobj) -> tobj }\nlayout Option { None }\nfn f() -> unit {\n  return ()\n}\n",
     );
     assert_eq!(error.line, 2);
     assert_eq!(error.message, "expected `fn`, found `layout`");
@@ -1486,4 +1512,33 @@ fn an_instruction_names_a_layout() {
         parse_error("fn f(x.0: tobj) -> obj {\n  let d.1: obj = con #1(x.0)\n  return d.1\n}\n");
     assert_eq!(error.line, 2);
     assert_eq!(error.message, "expected a tag `#N`, found `(`");
+}
+
+#[test]
+fn yields_marks_round_trip() {
+    round_trip(
+        "yields fn f(c.0: tobj) -> tobj {\n  let t.1: tobj = yields apply c.0(())\n  return t.1\n}\n",
+    );
+    round_trip(
+        "effect Ask { ask(unit) -> tobj }\ninternal yields fn g(c.0: tobj) -> tobj {\n  let t.1: tobj = mask [Ask] yields apply c.0(())\n  return t.1\n}\n",
+    );
+}
+
+#[test]
+fn operation_reprs_round_trip() {
+    round_trip(
+        "effect Counter { get(unit) -> int, put(int) -> unit }\neffect Fail { never fail(tobj) -> never }\neffect Done {}\nfn f() -> int {\n  return 1\n}\n",
+    );
+}
+
+#[test]
+fn a_never_operation_returns_never() {
+    assert_eq!(
+        parse_error("effect Fail { never fail(tobj) -> tobj }\n").to_string(),
+        "line 1: a `never` operation returns `never`"
+    );
+    assert_eq!(
+        parse_error("effect Ask { ask(unit) -> never }\n").to_string(),
+        "line 1: only a `never` operation returns `never`"
+    );
 }

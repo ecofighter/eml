@@ -548,7 +548,15 @@ impl Generator<'_> {
                     return self.bind("t", ret, plain_call(Call::Direct(function, args)));
                 }
                 let value = self.bind("t", Repr::TObj, plain_call(Call::Direct(function, args)));
-                self.bind("t", ret, plain_call(Call::Apply(value, rest)))
+                self.bind(
+                    "t",
+                    ret,
+                    plain_call(Call::Apply {
+                        callee: value,
+                        args: rest,
+                        yields: false,
+                    }),
+                )
             }
         }
     }
