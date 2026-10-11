@@ -267,7 +267,12 @@ HIR への変換では、名前解決に加えて、名前の重複と未定義�
 - extern を値として使うときは、参照する場所ごとに包む関数を作り、その `extern` 命令に参照した場所の位置を持たせる。extern ごとに1つの共有の包みにすると、実行時エラーが包む関数の中を指し、どこで使った extern かが分からなくなるためである
 - `lower` と `core_until` は `SourceFiles` を受け取り、extern の呼び出しの位置 (`Loc`) を `SourceFiles::line_col` で行と列にする。`Program.files` には、位置に使った表示用のパスを使った順に入れる。`eml_core_ir` が `eml_diagnostics` に依存するのはこのためで、診断は出さない。`line_col` は、`SourceFiles::add` が作った行の先頭の表を二分探索し、その行の中だけ文字を数える
 - 文と終端の値と行き先をたどる処理 (生存解析、Perceus、verifier、縮約、`pretty`、LIR への変換、インタプリタ) は、`Stmt::for_each_atom`、`Term::successors` などの visitor を通すか、`..` を使わずに欄をすべて名前で受ける `match` で分解する。欄を IR に足したときに、たどる処理のすべてがコンパイルエラーになるようにするため
-- アトムの使い方は「消費」と「読む」に分かれる ([LIR とインタプリタ](../spec/lir.md) の「ブロックの列」)。`for_each_atom` は両方を返し、`Rhs::for_each_consumed`、`Stmt::for_each_consumed`、`Term::for_each_consumed` は消費だけを返す (`unpack` の値、`switch` の scrutinee、`unbox` のオペランドを除く)。生存解析と縮約は前者を使い、Perceus は後者で `dup` の数を決める。verifier は、読む使いを `Unpack`、`Dup`、`Switch`、`Unbox` の腕で直接確かめる
+- アトムの使い方は「消費」と「読む」に分かれる ([LIR とインタプリタ](../spec/lir.md) の「ブロックの列」)。`for_each_atom` は両方を返し、`Rhs::for_each_consumed`、`Stmt::for_each_consumed`、`Term::for_each_consumed` は消費だけを返す (`unpack` の値、`switch` の scrutinee、`unbox` のオペランド、`prim` の借用の引数を除く)。`prim` の引数が借用かは、基本操作の表の `PrimRow::borrowed` で決まる。生存解析と縮約は前者を使い、Perceus は後者で所有を取る変数と `dup` の数を決める。Perceus と verifier は、この分類を共有する。verifier は、読む使いを `Unpack`、`Dup`、`Switch`、`Unbox` の腕と、`Prim` の腕の借用の引数で直接確かめる
+- Perceus (`eml_lir` の `perceus.rs`) は、ブロックを番号の順に1回たどり、各ブロックで2つのループを回す ([LIR とインタプリタ](../spec/lir.md) の「Perceus」)。命令が前からの状態 (所有と保持) に依るので、後ろからたどるループで各文で死ぬ変数と定義して後で使う変数を記録し (`deaths`)、前からたどるループで状態を持って命令を足す。文ごとに生存集合を写さないのは、長いブロックで時間が文の数と生存集合の大きさの積になるためである
+  - 関数全体の表 (`Fields`) は、変数ごとの RC の対象かの印、親とスロット (`Parent`)、束縛の時点の持ち主を持つ。経路ごとの状態 (`State`) は、所有の集合と、持ち主ごとのそれに属する生きている変数 (`lent`) だけである。保持は「所有していて生きていないが、`lent` が空でない」ことから決まり、別には持たない
+  - `switch` の行き先の状態 (`switch_entries`) は、`switch` のブロックを前からたどり終えた後に、行き先ごとに状態を写し、case のフィールドを借りた変数として加えて作る。行き先に着いたときに取り出す
+  - 文の前の命令は `stmt` が、終端の前の命令は `term` が置く。どちらも、所有を取る変数を集めて `take` に渡し、その後に消費の数の `dup` を置く。`term` は、`return`、`tail`、`jump` の実引数と、`jump` の行き先で生きている借りた変数の所有を取り、保持している変数を手放す。`take` は、持ち主がその命令で必要なら `dup` し、そうでなければ `resolve` で持ち主を解く。`resolve` は、属する変数から親をたどって道と代表を決め、`release` を作業リストで親から子の順に置く。深い入れ子で Rust のスタックを使わないためである
+  - タグの case を持つのに配置のない `switch` を見たら、その `switch` の所でパニックする (`a_tag_switch_without_a_layout_stops_perceus` が確かめる)
 - パス、verifier、`pretty`、`parse`、インタプリタは、ブロックと文の並びをループでたどり、IR の大きさに比例して再帰しない。生存解析は、ブロックを後ろからたどる1回のループで、ブロックごとの入口の生存集合を側の表 (`liveness::live_in`) に返す。辺がすべて前向きなので、不動点の計算は要らない
 - 縮約 (`eml_lir` の `contract.rs`) は、使われない純粋な `let` を消し、その後ですべてのブロックに末尾呼び出しの規則を当てるパスである。末尾呼び出しを作るのは縮約だけで、呼び出しの結果が関数の `ret` と互換なときだけ `tail` にする。S3b-1 までの `simplify` の書き換え (合流の畳み込み、値が分かっているコンストラクタへの `switch`、case-of-case、末尾呼び出し) は、translate が組み立てるときに行う。`simplify` は書き換えのたびに枝の部分木を置き換えたので、長い `else if` の連鎖で2乗の時間がかかり、続きを `switch` の枝の中へ移して入れ子を深くした
 - インタプリタの環境 (`Env`) のスロットは値だけを持ち、読み出しはスロットを書き換えない。参照の所有は LIR の命令が表し、verifier が釣り合いを確かめる。`Payload` は `Clone` を導出しないので、`ObjRef` を `dup` せずに複製できない
@@ -299,7 +304,7 @@ HIR への変換では、名前解決に加えて、名前の重複と未定義�
 - 継続は、ヒープ上のフレームの連結リストで表す。フレームは、戻りのフレーム (`Frame::Return`)、余った引数を適用するフレーム (`Frame::Apply`)、最下部の `Frame::Root` の3種類である。フレームはつねに一意で、戻りで1回だけ取り出す。値が `Frame::Root` に届けば実行が終わる
 - エフェクトは EP が普通の呼び出しと基本操作に変えているので ([Core IR](../spec/core-ir.md) の「evidence passing」)、機械は handler を探さず、継続も切り出さない。エフェクトの継続 κ は EP が組み立てるクロージャで、`multi` の再開は共有されたクロージャへの `apply` として捕獲だけを写す。LIR は `handle`、`perform`、`resume`、`mask` を型に持たないので、機械に届くことはない
 - `Runtime` は、実行の文脈として `evv` (`Value`。空のリストは `Value::Unit`) と yield の状態 (`YieldState`) を持つ。`YieldState::Yielding` は宛先の evidence、節の本体、組み立て中の κ を所有し、中断かどうか (`abort`) を持つ。κ は `yield_cont_take` で取り出している間 `Value::Unit` である
-- 基本操作は `prims.rs` にまとめ、引数をすべて所有した参照として受け取り、結果に残さないものは手放す。evidence、入口の表、`evv` の節点は `eml_runtime` の `Payload::{EvTable, Evidence, Evv}` である ([ランタイム](../spec/runtime.md) の「evidence と `evv` の物体」)
+- 基本操作は `prims.rs` にまとめる。借用の引数 (`PrimRow::borrowed`) は手放さず、ほかの引数は所有した参照として受け取り、結果に残さないものは手放す ([LIR とインタプリタ](../spec/lir.md) の「基本操作」)。evidence、入口の表、`evv` の節点は `eml_runtime` の `Payload::{EvTable, Evidence, Evv}` である ([ランタイム](../spec/runtime.md) の「evidence と `evv` の物体」)
 - `Call::Clause` は `Call::Apply` と同じく `apply_and_continue` で関数値を適用する
 - `prim dummy()` は `Value::Dummy` を返す。ヒープの物体でないので、`dup` と `decref` は何もせず、機械の `box` と `unbox` もそのまま通す
 - 正しく終わった実行では、`finish` が `check_context` で `evv` が空で yield の状態がなしであることを確かめてから、`debug_heap` のリークを数える。残った evidence がリークに見えないように、この検査は `debug_heap` によらず行う

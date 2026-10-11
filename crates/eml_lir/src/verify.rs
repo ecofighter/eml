@@ -888,7 +888,7 @@ impl<'a> Checker<'a> {
             Rhs::Prim(prim, args) => {
                 self.cx.check_prim(var, prim, args)?;
                 // 借用の引数は `unbox` のオペランドと同じく読む使いで、所有の数を変えない
-                // (docs/superpowers/specs/2026-10-11-s8b-ownership-design.md の「基本操作の引数の借用」)
+                // (docs/spec/lir.md の「基本操作」)
                 let lent = format!("lent to `prim {}`", prim_text(&self.program.effects, prim));
                 for (&arg, &borrowed) in args.iter().zip(prim.row().borrowed) {
                     match arg {

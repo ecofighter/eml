@@ -223,13 +223,14 @@ pub enum Rhs {
     Con { ctor: Ctor, args: Vec<Atom> },
     /// 値の所有権を受け取って捨てる。値は `()` である。
     Drop(Atom),
-    /// evidence passing の基本操作。extern と同じく引数をすべて消費し、所有した結果を定義する
-    /// (docs/spec/lir.md の「基本操作」)。
+    /// evidence passing の基本操作。LIR と同じ操作で、結果は所有した値である。引数を消費するか借りるかは基本操作の表
+    /// (`PrimRow::borrowed`) が決め、所有を扱う Perceus から後でだけ意味を持つ (docs/spec/lir.md の「基本操作」)。
     Prim(Prim, Vec<Atom>),
 }
 
 impl Rhs {
-    /// 右辺が使う値。関数、extern、基本操作、`perform` の引数は、どれも所有権を受け取る。
+    /// 右辺が使う値。関数、extern、`perform` の引数は、どれも所有権を受け取る。基本操作の引数を消費するか借りるかは
+    /// 基本操作の表が決め、Perceus から後でだけ意味を持つ (docs/spec/lir.md の「基本操作」)。
     pub fn for_each_atom(&self, mut f: impl FnMut(Atom)) {
         match self {
             Rhs::Call { call, mask: _ } => call.for_each_atom(f),

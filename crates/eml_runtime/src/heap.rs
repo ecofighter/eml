@@ -116,7 +116,7 @@ pub enum HeapError {
     /// `release_fields` に渡した物体が、名指したタグとフィールドの数の `data` でない。
     WrongLayout,
     /// `Lin` の物体 (`File`) の参照を増やそうとした。`Lin` の物体の RC は 1 である
-    /// (docs/superpowers/specs/2026-10-11-s8b-ownership-design.md の「`File` の実行時の検査」)。
+    /// (docs/spec/runtime.md の「`File` の参照の検査」)。
     LinShared,
 }
 
@@ -249,7 +249,7 @@ impl Heap {
     }
 
     /// `File` は線形で、参照が2つになると閉じ忘れや二重の解放になる。コンパイラが `dup` を出す誤りを実行時に見つけるため、
-    /// 数を変えずに断る (docs/superpowers/specs/2026-10-11-s8b-ownership-design.md の「`File` の実行時の検査」)。
+    /// 数を変えずに断る (docs/spec/runtime.md の「`File` の参照の検査」)。
     pub fn dup(&mut self, obj: ObjRef) -> Result<(), HeapError> {
         let object = self.object_mut(obj)?;
         if matches!(object.payload, Payload::File(_)) {

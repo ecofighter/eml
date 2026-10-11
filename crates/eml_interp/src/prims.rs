@@ -1,7 +1,7 @@
 //! evidence passing の基本操作 (docs/spec/lir.md の「基本操作」)。
 //! 借用の引数 (`PrimRow::borrowed`) は呼ぶ側が持ったままなので、手放さない。ほかの引数は extern の行と同じく所有した
 //! 参照として受け取り、結果に残さないものは手放す
-//! (docs/superpowers/specs/2026-10-11-s8b-ownership-design.md の「基本操作の引数の借用」)。
+//! (docs/spec/lir.md の「基本操作」)。
 
 use eml_lir::Prim;
 use eml_runtime::{ObjRef, Payload, Value};

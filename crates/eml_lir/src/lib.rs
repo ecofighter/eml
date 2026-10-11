@@ -283,8 +283,7 @@ pub enum Rhs {
     /// ない。スカラーの種類は束縛する変数の Repr で決まる。
     Unbox(Atom),
     /// evidence passing の基本操作。借用の印 (`PrimRow::borrowed`) が立つ引数は読むだけで、ほかの引数は extern と同じく
-    /// 消費する。結果は所有した値である (docs/spec/lir.md の「基本操作」、
-    /// docs/superpowers/specs/2026-10-11-s8b-ownership-design.md の「基本操作の引数の借用」)。
+    /// 消費する。結果は所有した値である (docs/spec/lir.md の「基本操作」)。
     Prim(Prim, Vec<Atom>),
 }
 
@@ -307,7 +306,7 @@ impl Rhs {
     }
 
     /// 値の使いのうち、参照を1つ受け取る「消費」。`unbox` の値と基本操作の借用の引数は読むだけなので数えない
-    /// (docs/spec/lir.md、docs/superpowers/specs/2026-10-11-s8b-ownership-design.md の「基本操作の引数の借用」)。
+    /// (docs/spec/lir.md の「ブロックの列」と「基本操作」)。
     pub fn for_each_consumed(&self, mut f: impl FnMut(Atom)) {
         match self {
             Rhs::Unbox(_) => {}

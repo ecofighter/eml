@@ -299,7 +299,7 @@ fn a_file_inside_data_is_released_with_it() {
 
 #[test]
 fn a_file_is_never_shared() {
-    // `Lin` の物体の RC は 1 である (docs/superpowers/specs/2026-10-11-s8b-ownership-design.md の「`File` の実行時の検査」)。
+    // `Lin` の物体の RC は 1 である (docs/spec/runtime.md の「`File` の参照の検査」)。
     // 誤りにした `dup` は参照の数を変えない
     let mut heap = Heap::new();
     let dropped = Rc::new(Cell::new(false));

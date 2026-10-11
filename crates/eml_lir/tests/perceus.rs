@@ -506,7 +506,7 @@ fn twenty_thousand_conditions_are_rewritten() {
 #[test]
 fn a_field_of_a_live_scrutinee_is_dupped_where_it_is_consumed() {
     // 死んだ `y` は行き先の入口で捨てる。`s` は `con` が消費する所で所有を取り、持ち主の `o` もその `con` が使うので
-    // 複製する (docs/superpowers/specs/2026-10-11-s8b-ownership-design.md の「所有を取る時点」)
+    // 複製する (docs/spec/lir.md の「所有を取る時点」)
     let text = "\
 layout Option { None, Some(tobj) }
 layout (,) { (,)(tobj, tobj) }
@@ -550,7 +550,7 @@ fn a_tag_switch_without_a_layout_stops_perceus() {
 #[test]
 fn prims_read_borrowed_arguments_and_consume_the_rest() {
     // `ev_clause` は evidence を借りるだけなので、`e.0` の所有は節の呼び出しまで残り、`dup e.0` は入らない。節の
-    // 呼び出しは引数を消費する (docs/superpowers/specs/2026-10-11-s8b-ownership-design.md の「基本操作の引数の借用」)
+    // 呼び出しは引数を消費する (docs/spec/lir.md の「基本操作」)
     let text = "\
 effect Counter { get(unit) -> int, put(int) -> unit }
 yields fn f(e.0: obj) -> int {
@@ -611,7 +611,7 @@ fn g(w.0: obj) -> tobj {
 #[test]
 fn a_field_is_released_from_a_dead_owner_without_a_dup() {
     // `Lin` の形: 持ち主は分解の後に使われないので、フィールドを消費する所で持ち主を解き、`release` で受け取る
-    // (docs/superpowers/specs/2026-10-11-s8b-ownership-design.md の「`Lin` のフィールド」)
+    // (docs/spec/lir.md の「値の表現」)
     let shown = perceus_text(
         "\
 layout W { W(obj, int) }
@@ -1002,7 +1002,7 @@ fn perceus_time(text: &str) -> std::time::Duration {
 }
 
 /// 1つの命令の手間が生存集合の大きさに比例すると、時間は大きさの2乗で伸びる。それを、大きさを2倍にしたときの
-/// 時間の比で見つける (docs/superpowers/specs/2026-10-11-s8b-ownership-design.md の「時間」)。
+/// 時間の比で見つける (docs/spec/lir.md の「Perceus の時間」)。
 fn assert_linear_in_live_variables(generate: fn(usize) -> String) {
     perceus_text(&generate(SCALING_SMALL));
     let small = perceus_time(&generate(SCALING_SMALL));

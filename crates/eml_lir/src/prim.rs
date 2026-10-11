@@ -43,7 +43,7 @@ pub struct PrimRow {
     /// 引数ごとの借用の印で、長さは `params` と同じである。借用の引数は読む使いで、所有を受け取らない。借用にするのは、
     /// 基本操作がその引数そのものを物体にも実行の文脈にも入れない引数である。中身の一部を基本操作が自分で `dup` して
     /// 共有する引数 (`evv_mask` のリストの残り、`ev_renew` の入口の表) も借用にする
-    /// (docs/superpowers/specs/2026-10-11-s8b-ownership-design.md の「基本操作の引数の借用」)。
+    /// (docs/spec/lir.md の「基本操作」)。
     pub borrowed: &'static [bool],
     pub ret: Repr,
 }

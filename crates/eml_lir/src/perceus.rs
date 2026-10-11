@@ -5,7 +5,7 @@
 //! `switch` と `unpack` のフィールドは値から借りて始まり、読むだけなら借りたまま使う。所有を取るのは、消費するとき、
 //! 呼び出しの後や合流するブロックの入口で生きているとき、持ち主の最後の参照を消費した後も生きているときだけである。
 //! 持ち主がその命令で要るならフィールドを `dup` し、要らないなら持ち主を `release` で解いてフィールドを受け取る
-//! (docs/superpowers/specs/2026-10-11-s8b-ownership-design.md の「所有の形」)。こうすると、分解した後に使わない
+//! (docs/spec/lir.md の「Perceus」)。こうすると、分解した後に使わない
 //! 持ち主のフィールドは `dup` されず、`Lin` の物体の参照は1つのまま保たれる。
 //!
 //! ブロックを番号の順に1回たどる。各ブロックでは、後ろからたどって各文で死ぬ変数を求め、前から所有の集合を持って
@@ -73,7 +73,7 @@ struct State {
     owned: BTreeSet<VarId>,
     /// 持ち主ごとの、それに属する生きている変数。空になった持ち主は除く。属する変数を生存集合から探すと、命令ごとの
     /// 手間が生存集合の大きさに比例し、全体で2乗になるので、持ち主から引けるようにする
-    /// (docs/superpowers/specs/2026-10-11-s8b-ownership-design.md の「時間」)。
+    /// (docs/spec/lir.md の「Perceus の時間」)。
     lent: HashMap<VarId, BTreeSet<VarId>>,
 }
 
@@ -226,7 +226,7 @@ impl Fields<'_> {
         let need = Need { live, used: &used };
         // 消費する変数のほかに、所有を取るのは次の変数である。フレームは借りた値を持てない (R7) ので、呼び出しの後で
         // 生きている借りた変数。持ち主の最後の参照をこの文が消費した後も生きている、その持ち主に属する変数
-        // (docs/superpowers/specs/2026-10-11-s8b-ownership-design.md の「所有を取る時点」)
+        // (docs/spec/lir.md の「所有を取る時点」)
         let mut take = consumed.clone();
         if matches!(
             stmt,
@@ -422,7 +422,7 @@ impl Fields<'_> {
     }
 
     /// 保持している `owner` を解き、それに属する必要な変数をすべて所有にする
-    /// (docs/superpowers/specs/2026-10-11-s8b-ownership-design.md の「持ち主を解く」)。
+    /// (docs/spec/lir.md の「持ち主を解く」)。
     fn resolve(&self, state: &mut State, owner: VarId, need: &Need, out: &mut Vec<Stmt>) {
         // 命令の前で生きている、`owner` に属する変数は、どれもこの命令で必要である。命令の前の生存集合は、命令の後の
         // 生存集合と命令が使う変数の和に含まれるためである

@@ -1,5 +1,5 @@
 -- `File` を持つ `W` を、リテラルの列を持つ行と値全体を束縛する行で分けても、`File` の参照は増えない。
--- 分解した後も、フィールドは持ち主の `W` に借りたままになる (docs/superpowers/specs/2026-10-11-s8b-ownership-design.md の「`File` の実行時の検査」)。
+-- 分解した後も、フィールドは持ち主の `W` に借りたままになる (docs/spec/lir.md の「Perceus」)。
 data W =
   | W Fs.File Int
 
