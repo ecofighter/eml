@@ -1618,7 +1618,7 @@ fn prims_and_clauses_round_trip() {
 #[test]
 fn every_prim_round_trips() {
     round_trip(
-        "effect State { get(unit) -> tobj, put(tobj) -> unit }\nfn f(w.0: tobj, e.1: obj, s.2: tobj, c.3: tobj) -> unit {\n  let a.4: unit = prim evv_set(w.0)\n  let b.5: tobj = prim evv_push(w.0, e.1)\n  let d.6: obj = prim ev_renew(e.1, s.2)\n  let g.7: obj = prim ev_lookup[State]()\n  let h.8: tobj = prim ev_evv(e.1)\n  let i.9: unit = prim ev_set_state(e.1, s.2)\n  let j.10: int = prim yielding()\n  let k.11: int = prim yield_status(e.1)\n  let l.12: unit = prim yield_to(e.1, c.3, s.2)\n  let m.13: unit = prim yield_abort(e.1, c.3, s.2)\n  let n.14: tobj = prim yield_cont_take()\n  let o.15: unit = prim yield_cont_set(n.14)\n  let p.16: tobj = prim yield_finish()\n  let q.17: obj = prim dummy()\n  let r.18: tobj = prim ev_clause[State.#7](e.1)\n  let t.19: obj = prim ev_new[#3](s.2, w.0)\n  tail clause State.put c.3(e.1, s.2)\n}\n",
+        "effect State { get(unit) -> tobj, put(tobj) -> unit }\nfn f(w.0: tobj, e.1: obj, s.2: tobj, c.3: tobj) -> unit {\n  let v.20: tobj = prim evv_get()\n  let x.21: tobj = prim evv_mask[State, #4](w.0)\n  let y.22: unit = prim ev_set_clause[State.get](e.1, c.3)\n  let z.23: tobj = prim ev_take_state(e.1)\n  let a.4: unit = prim evv_set(w.0)\n  let b.5: tobj = prim evv_push(w.0, e.1)\n  let d.6: obj = prim ev_renew(e.1, s.2)\n  let g.7: obj = prim ev_lookup[State]()\n  let h.8: tobj = prim ev_evv(e.1)\n  let i.9: unit = prim ev_set_state(e.1, s.2)\n  let j.10: int = prim yielding()\n  let k.11: int = prim yield_status(e.1)\n  let l.12: unit = prim yield_to(e.1, c.3, s.2)\n  let m.13: unit = prim yield_abort(e.1, c.3, s.2)\n  let n.14: tobj = prim yield_cont_take()\n  let o.15: unit = prim yield_cont_set(n.14)\n  let p.16: tobj = prim yield_finish()\n  let q.17: obj = prim dummy()\n  let r.18: tobj = prim ev_clause[State.#7](e.1)\n  let t.19: obj = prim ev_new[#3](s.2, w.0)\n  tail clause State.put c.3(e.1, s.2)\n}\n",
     );
 }
 
@@ -1651,6 +1651,30 @@ fn a_prim_has_the_immediates_of_its_kind() {
         "line 3: `evv_mask` needs an immediate `[Effect, ..]`"
     );
     assert_eq!(prim("ev_frob()"), "line 3: unknown primitive `ev_frob`");
+}
+
+/// `mask` と同じく、空の多重集合は表示と同じ形に戻らないので読まない。
+#[test]
+fn an_evv_mask_masks_some_effect() {
+    let error = parse_error(
+        "effect State { get(unit) -> tobj }\nfn f(w.0: tobj) -> tobj {\n  let x.1: tobj = prim evv_mask[](w.0)\n  return x.1\n}\n",
+    );
+    assert_eq!(error.to_string(), "line 3: `evv_mask` masks no effect");
+}
+
+/// 表にないエフェクトの操作は名前で引けないので、番号で書く。
+#[test]
+fn an_operation_of_an_unknown_effect_is_written_by_number() {
+    let error = parse_error(
+        "effect State { get(unit) -> tobj }\nfn f(e.0: obj) -> tobj {\n  let c.1: tobj = prim ev_clause[#3.get](e.0)\n  return c.1\n}\n",
+    );
+    assert_eq!(
+        error.to_string(),
+        "line 3: an operation of the unknown effect #3 is written `#N`"
+    );
+    round_trip(
+        "effect State { get(unit) -> tobj }\nfn f(e.0: obj) -> tobj {\n  let c.1: tobj = prim ev_clause[#3.#0](e.0)\n  return c.1\n}\n",
+    );
 }
 
 #[test]

@@ -125,6 +125,12 @@ pub struct OperationInfo {
     pub resumable: bool,
 }
 
+/// エフェクトの表の操作。番号が表にあることを verifier が確かめた後のパスが使う。関数の並びを書き換えながら引けるように、
+/// `Program` でなく表だけを借りる。
+pub(crate) fn operation(effects: &[EffectInfo], effect: u32, op: u32) -> &OperationInfo {
+    &effects[effect as usize].operations[op as usize]
+}
+
 /// 操作の結果。`never` の操作は戻らないので、結果を呼び出した側の位置と比べない。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OpRet {

@@ -2,7 +2,8 @@
 //! 構造の規則 R1 から R9 と、前の形の IR から引き継いだ検査を1つずつ確かめる。
 
 use eml_core_ir::{
-    Program, Rhs, Stmt, Term, parse, verify, verify_evidence, verify_scopes, verify_translated,
+    Prim, Program, Rhs, Stmt, Term, parse, verify, verify_evidence, verify_scopes,
+    verify_translated,
 };
 
 /// 手で書く IR の配置の行。プログラムの先頭に置く。
@@ -762,7 +763,7 @@ fn a_returned_value_that_is_not_compatible_is_rejected() {
 }
 
 #[test]
-fn the_uses_of_a_never_perform_binder_are_not_compared() {
+fn the_uses_of_a_never_binder_are_not_compared() {
     // `never` の操作の `clause` の束縛の使いには制御が届かないので、互換の位置 (`return` の値、`jump` の実引数、
     // 直接の呼び出しの引数、`closure` の引数、`apply` のオペランド、`tobj` のフィールド) で位置と比べない。縮約は、
     // `f` の形をそのまま `tail clause` にする
@@ -2380,6 +2381,31 @@ fn a_mask_on_handle_or_perform_is_rejected() {
     assert_eq!(errors, ["a mask on handle", "a mask on perform"]);
 }
 
+/// テキストは `clause` の前の `mask` を読まないので、読んだ後で `mask` を付ける。`mask` の形は変換の段だけが確かめ、
+/// 後の段は `mask` が残ったこと自体を拒む。
+#[test]
+fn a_mask_on_a_clause_is_rejected() {
+    let mut program = read(&format!(
+        "{COUNTER}fn f(c.0: tobj, e.1: obj) -> int {{\n  let t.2: int = clause Counter.get c.0(e.1, ())\n  return t.2\n}}\n"
+    ));
+    let Stmt::Let {
+        var: _,
+        rhs: Rhs::Call { mask, .. },
+    } = &mut program.functions[0].blocks[0].stmts[0]
+    else {
+        panic!("not a call");
+    };
+    mask.push(0);
+    assert_eq!(
+        verify_translated(&program).unwrap_err().message,
+        "a mask on clause"
+    );
+    assert_eq!(
+        verify_scopes(&program).unwrap_err().message,
+        "a mask remains after the evidence pass"
+    );
+}
+
 #[test]
 fn a_mask_must_name_known_effects_in_order() {
     let unknown = "\
@@ -2915,6 +2941,56 @@ fn a_prim_names_known_effects_and_operations() {
             "`prim ev_clause[State.#2]` names operation 2 of `State`, which has 2 operations in `f`"
                 .to_string()
         )
+    );
+}
+
+/// `evv_mask` の多重集合は、呼び出しの `mask` と同じく空でなく、表にあるエフェクトを昇順に並べる。テキストは空の
+/// 多重集合を読まないので、読んだ後で空にする。
+#[test]
+fn an_evv_mask_names_known_effects_in_order() {
+    let mask = |effects: &str| {
+        format!(
+            "{STATE}{COUNTER}fn f(w.0: tobj) -> tobj {{\n  let m.1: tobj = prim evv_mask[{effects}](w.0)\n  return m.1\n}}\n"
+        )
+    };
+    assert_eq!(check_evidence(&mask("State, State, Counter")), Ok(()));
+    assert_eq!(
+        check_evidence(&mask("Counter, State")),
+        Err(
+            "the effects of `prim evv_mask[Counter, State]` are not in ascending order in `f`"
+                .to_string()
+        )
+    );
+    assert_eq!(
+        check_evidence(&mask("State, #4")),
+        Err(
+            "`prim evv_mask[State, #4]` names effect 4, which is not in the effect table in `f`"
+                .to_string()
+        )
+    );
+    let mut program = read(&mask("State"));
+    let Stmt::Let {
+        var: _,
+        rhs: Rhs::Prim(Prim::EvvMask(effects), _),
+    } = &mut program.functions[0].blocks[0].stmts[0]
+    else {
+        panic!("not an evv_mask");
+    };
+    effects.clear();
+    assert_eq!(
+        verify_evidence(&program).unwrap_err().message,
+        "`prim evv_mask[]` masks no effect"
+    );
+}
+
+/// 表にないエフェクトの操作の印は、操作の番号より先にエフェクトを報告する。
+#[test]
+fn a_clause_function_names_a_known_effect() {
+    assert_eq!(
+        check_evidence(&format!(
+            "{COUNTER}fn f() -> int {{\n  return 1\n}}\ninternal clause #3.#0 fn g(e.0: obj) -> unit {{\n  return ()\n}}\n"
+        )),
+        Err("`g` is a clause of effect 3, which is not in the effect table in `g`".to_string())
     );
 }
 

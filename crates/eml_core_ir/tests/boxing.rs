@@ -300,7 +300,7 @@ fn a_function_that_fails_with_a_never_operation_keeps_its_scalar_ret() {
 }
 
 #[test]
-fn a_value_lambda_that_fails_ends_in_a_tail_never_perform() {
+fn a_value_lambda_that_fails_ends_in_a_tail_never_clause() {
     // その場で一様にしたラムダでも、`never` の操作の `clause` の束縛は `tobj` に変換せずに返す。束縛の使いには制御が
     // 届かないからである。縮約は、その `return` を末尾呼び出しにする
     let text = "effect Fail where\n  never fail : String -> a\n\napply_to : (Int -> <e> Int) -> Int -> <e> Int\napply_to f x = f x\n\nmain : Unit -> <IO> Unit\nmain () =\n  let r = handle apply_to (fn n -> if n > 0 then n else fail \"neg\") 1 with\n    | fail message -> 0\n  println (show r)";
@@ -556,6 +556,40 @@ fn a_never_clause_call_is_not_rebound() {
     yields fn f(c.0: tobj, e.1: obj, s.2: obj) -> int {
       let r.3: int = clause Fail.fail c.0(e.1, s.2)
       return r.3
+    }
+    ");
+}
+
+#[test]
+fn the_uses_of_a_never_clause_binder_are_not_converted() {
+    // `int` の束縛を `tobj` の位置 (`apply` の引数と `tobj` の `ret` の `return`) へ渡しても `box` しない。使いには制御が
+    // 届かないからである
+    let text = "effect Fail { never fail(tobj) -> never }\nyields fn f(c.0: tobj, e.1: obj, s.2: obj, k.3: tobj) -> tobj {\n  let r.4: int = clause Fail.fail c.0(e.1, s.2)\n  let t.5: tobj = apply k.3(r.4)\n  return t.5\n}\nyields fn g(c.0: tobj, e.1: obj, s.2: obj) -> tobj {\n  let r.3: int = clause Fail.fail c.0(e.1, s.2)\n  return r.3\n}\n";
+    let shown = boxing_text(text);
+    insta::assert_snapshot!(function(&shown, "f"), @"
+    yields fn f(c.0: tobj, e.1: obj, s.2: obj, k.3: tobj) -> tobj {
+      let r.4: int = clause Fail.fail c.0(e.1, s.2)
+      let t.5: tobj = apply k.3(r.4)
+      return t.5
+    }
+    ");
+    insta::assert_snapshot!(function(&shown, "g"), @"
+    yields fn g(c.0: tobj, e.1: obj, s.2: obj) -> tobj {
+      let r.3: int = clause Fail.fail c.0(e.1, s.2)
+      return r.3
+    }
+    ");
+}
+
+#[test]
+fn a_clause_function_unboxes_its_return_to_a_scalar_operation_result() {
+    // `Counter.get` の結果は `int` なので、節の関数の `ret` を `int` にし、`tobj` の値を返す `return` の前で `unbox` する
+    let text = "effect Counter { get(unit) -> int, put(int) -> unit }\ninternal yields clause Counter.get fn g(e.0: obj, u.1: unit) -> tobj {\n  let s.2: tobj = prim ev_take_state(e.0)\n  return s.2\n}\nfn main() -> unit {\n  let w.0: tobj = prim evv_get()\n  let e.1: obj = prim ev_new[Counter]((), w.0)\n  let u.2: unit = prim ev_set_clause[Counter.get](e.1, &g)\n  return ()\n}\n";
+    insta::assert_snapshot!(function(&boxing_text(text), "g"), @"
+    internal yields clause Counter.get fn g(e.0: obj, u.1: unit) -> int {
+      let s.2: tobj = prim ev_take_state(e.0)
+      let s.3: int = unbox s.2
+      return s.3
     }
     ");
 }

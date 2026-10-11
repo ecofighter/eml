@@ -8,6 +8,7 @@ use std::fmt;
 
 use eml_extern::Extern;
 
+use crate::prim::Immediates;
 use crate::{
     Atom, Block, BlockId, Call, Case, CasePattern, CoreFn, Ctor, EffectInfo, FnIdx, Layout,
     LayoutCtor, LayoutId, Loc, OpRet, OperationInfo, Prim, Program, Repr, Rhs, Stmt, Term, VarId,
@@ -1055,60 +1056,47 @@ impl<'t> Parser<'t> {
                 Err(_) => Err(error(line, format!("`{name}` takes one {takes}"))),
             }
         };
-        let plain = match name.as_str() {
-            "evv_get" => Some(Prim::EvvGet),
-            "evv_set" => Some(Prim::EvvSet),
-            "evv_push" => Some(Prim::EvvPush),
-            "ev_renew" => Some(Prim::EvRenew),
-            "ev_evv" => Some(Prim::EvEvv),
-            "ev_take_state" => Some(Prim::EvTakeState),
-            "ev_set_state" => Some(Prim::EvSetState),
-            "yielding" => Some(Prim::Yielding),
-            "yield_status" => Some(Prim::YieldStatus),
-            "yield_to" => Some(Prim::YieldTo),
-            "yield_abort" => Some(Prim::YieldAbort),
-            "yield_cont_take" => Some(Prim::YieldContTake),
-            "yield_cont_set" => Some(Prim::YieldContSet),
-            "yield_finish" => Some(Prim::YieldFinish),
-            "dummy" => Some(Prim::Dummy),
-            _ => None,
-        };
-        if let Some(prim) = plain {
-            if immediates.is_some() {
-                return Err(error(line, format!("`{name}` takes no immediate")));
-            }
-            return Ok(prim);
-        }
-        match name.as_str() {
-            "evv_mask" => {
+        let kind = Prim::by_name(&name)
+            .ok_or_else(|| error(line, format!("unknown primitive `{name}`")))?;
+        match kind.immediates() {
+            Immediates::Effects(_) => {
                 let immediates = immediates.ok_or_else(|| {
                     error(line, format!("`{name}` needs an immediate `[Effect, ..]`"))
                 })?;
+                // `mask` と同じく空の多重集合は読まない。並びの順と番号は verifier が確かめる
+                if immediates.is_empty() {
+                    return Err(error(line, format!("`{name}` masks no effect")));
+                }
                 let effects = immediates
                     .iter()
                     .map(|(line, word)| self.effect_ref(word, *line))
                     .collect::<Result<_, _>>()?;
                 Ok(Prim::EvvMask(effects))
             }
-            "ev_new" | "ev_lookup" => {
+            Immediates::Effect(_) => {
                 let (line, word) = one(immediates, "Effect", "effect")?;
                 let effect = self.effect_ref(&word, line)?;
-                Ok(if name == "ev_new" {
+                Ok(if matches!(kind, Prim::EvNew(_)) {
                     Prim::EvNew(effect)
                 } else {
                     Prim::EvLookup(effect)
                 })
             }
-            "ev_set_clause" | "ev_clause" => {
+            Immediates::Operation { .. } => {
                 let (line, word) = one(immediates, "Effect.operation", "operation")?;
                 let (effect, op) = self.operation_word(&word, line)?;
-                Ok(if name == "ev_set_clause" {
+                Ok(if matches!(kind, Prim::EvSetClause { .. }) {
                     Prim::EvSetClause { effect, op }
                 } else {
                     Prim::EvClause { effect, op }
                 })
             }
-            _ => Err(error(line, format!("unknown primitive `{name}`"))),
+            Immediates::None => {
+                if immediates.is_some() {
+                    return Err(error(line, format!("`{name}` takes no immediate")));
+                }
+                Ok(kind)
+            }
         }
     }
 

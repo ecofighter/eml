@@ -26,10 +26,11 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt;
 use std::mem::discriminant;
 
-use crate::prim::{effect_text, operation_text};
+use crate::pretty::{effect_text, operation_text, prim_text};
+use crate::prim::Immediates;
 use crate::{
     Atom, Block, BlockId, Call, Case, CasePattern, CoreFn, Ctor, EffectInfo, FnIdx, Layout,
-    LayoutCtor, LayoutId, OpRet, Prim, Program, Repr, Rhs, Stmt, Term, VarId,
+    LayoutCtor, LayoutId, OpRet, Prim, Program, Repr, Rhs, Stmt, Term, VarId, operation,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1539,36 +1540,21 @@ impl<'a> Checker<'a> {
         self.consume_all(owned, |f| rhs.for_each_consumed(f))
     }
 
-    /// 基本操作は EP だけが作る。即値は表にあり、引数の数は表の行と同じである。範囲の段と所有の段では、引数と結果を
-    /// 直接の呼び出しと同じく互換の位置として比べる (docs/spec/core-ir.md の
-    /// 「基本操作」)。
+    /// 基本操作は EP だけが作る。即値は表にあり、`evv_mask` の多重集合は呼び出しの `mask` と同じく空でなく昇順に
+    /// 並び、引数の数は表の行と同じである。範囲の段と所有の段では、引数と結果を直接の呼び出しと同じく互換の位置として
+    /// 比べる (docs/spec/core-ir.md の「基本操作」)。
     fn check_prim(&self, var: VarId, prim: &Prim, args: &[Atom]) -> Result<(), String> {
-        let row = prim.row(self.program);
-        let name = &row.name;
+        let row = prim.row();
+        let name = &prim_text(self.program, prim);
         if self.level == Level::Translated {
             return Err(format!("`prim {name}` is used before the evidence pass"));
         }
-        let (effects, operation) = match prim {
-            Prim::EvvMask(effects) => (&effects[..], None),
-            Prim::EvNew(effect) | Prim::EvLookup(effect) => (std::slice::from_ref(effect), None),
-            Prim::EvSetClause { effect, op } | Prim::EvClause { effect, op } => {
-                (std::slice::from_ref(effect), Some(*op))
-            }
-            Prim::EvvGet
-            | Prim::EvvSet
-            | Prim::EvvPush
-            | Prim::EvRenew
-            | Prim::EvEvv
-            | Prim::EvTakeState
-            | Prim::EvSetState
-            | Prim::Yielding
-            | Prim::YieldStatus
-            | Prim::YieldTo
-            | Prim::YieldAbort
-            | Prim::YieldContTake
-            | Prim::YieldContSet
-            | Prim::YieldFinish
-            | Prim::Dummy => (&[][..], None),
+        let immediates = prim.immediates();
+        let (effects, operation) = match &immediates {
+            Immediates::None => (&[][..], None),
+            Immediates::Effects(effects) => (*effects, None),
+            Immediates::Effect(effect) => (std::slice::from_ref(effect), None),
+            Immediates::Operation { effect, op } => (std::slice::from_ref(effect), Some(*op)),
         };
         for &effect in effects {
             let Some(info) = self.program.effects.get(effect as usize) else {
@@ -1586,6 +1572,16 @@ impl<'a> Checker<'a> {
                 ));
             }
         }
+        if let Immediates::Effects(effects) = immediates {
+            if effects.is_empty() {
+                return Err(format!("`prim {name}` masks no effect"));
+            }
+            if !effects.is_sorted() {
+                return Err(format!(
+                    "the effects of `prim {name}` are not in ascending order"
+                ));
+            }
+        }
         if args.len() != row.params.len() {
             return Err(format!(
                 "`prim {name}` takes {} arguments but is given {}",
@@ -1599,7 +1595,7 @@ impl<'a> Checker<'a> {
         if !self.checks_boundaries() {
             return Ok(());
         }
-        for (index, (&arg, &expected)) in args.iter().zip(&row.params).enumerate() {
+        for (index, (&arg, &expected)) in args.iter().zip(row.params).enumerate() {
             if !self.passes(arg, expected)? {
                 return Err(format!(
                     "argument {index} of `prim {name}` is {}, but the primitive takes {}",
@@ -1896,7 +1892,7 @@ impl<'a> Checker<'a> {
                 callee,
                 args,
             } => {
-                let operation = &self.program.effects[*effect as usize].operations[*op as usize];
+                let operation = operation(&self.program.effects, *effect, *op);
                 let what = self.call_text(call, false);
                 if !self.passes(*callee, Repr::TObj)? {
                     return Err(format!(
@@ -1929,7 +1925,7 @@ impl<'a> Checker<'a> {
         match call {
             Call::Perform { resumable, .. } => !resumable,
             Call::Clause { effect, op, .. } => {
-                self.program.effects[*effect as usize].operations[*op as usize].ret == OpRet::Never
+                operation(&self.program.effects, *effect, *op).ret == OpRet::Never
             }
             Call::Direct(_, _) | Call::Apply { .. } | Call::Handle { .. } | Call::Resume { .. } => {
                 false
@@ -1992,9 +1988,9 @@ impl<'a> Checker<'a> {
                 "a",
                 format!("clause of `{}`", operation_text(self.program, *effect, *op)),
             ),
-            // 境界の文言を作る段では、`check_call` がエフェクトの命令を先に拒んでいる
+            // `check_call` は、呼び出しを文言にする前にエフェクトの命令を拒む
             Call::Handle { .. } | Call::Perform { .. } | Call::Resume { .. } => {
-                ("an", "effect instruction".to_string())
+                unreachable!("check_call rejects effect instructions before it describes a call")
             }
         };
         if tail {

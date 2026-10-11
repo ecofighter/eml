@@ -3,10 +3,10 @@
 
 use std::fmt::Write;
 
-use crate::prim::operation_text;
+use crate::prim::Immediates;
 use crate::{
-    Atom, Block, BlockId, Call, CasePattern, CoreFn, Ctor, EffectInfo, LayoutId, OpRet, Program,
-    Rhs, Stmt, Term, VarId,
+    Atom, Block, BlockId, Call, CasePattern, CoreFn, Ctor, LayoutId, OpRet, Prim, Program, Rhs,
+    Stmt, Term, VarId,
 };
 
 /// 位置を出さない表示。translate のテストの多くは位置を見ないので、既定では出さない。
@@ -253,7 +253,7 @@ impl Printer<'_> {
             Rhs::Unbox(a) => format!("unbox {}", self.atom(function, a)),
             Rhs::Prim(prim, args) => format!(
                 "prim {}({})",
-                prim.row(self.program).name,
+                prim_text(self.program, prim),
                 self.atoms(function, args)
             ),
         }
@@ -284,14 +284,13 @@ impl Printer<'_> {
                 clauses,
                 ret,
             } => {
-                let info = &self.program.effects[*effect as usize];
                 let clauses: Vec<String> = clauses
                     .iter()
                     .enumerate()
                     .map(|(op, clause)| {
                         format!(
                             "{}: {}",
-                            operation(info, op as u32),
+                            operation_name(self.program, *effect, op as u32),
                             self.atom(function, clause)
                         )
                     })
@@ -303,7 +302,7 @@ impl Printer<'_> {
                 };
                 format!(
                     "handle {}({}, {}) {clauses} return {}",
-                    info.name,
+                    effect_text(self.program, *effect),
                     self.atom(function, init),
                     self.atom(function, body),
                     self.atom(function, ret)
@@ -315,13 +314,11 @@ impl Printer<'_> {
                 resumable,
                 args,
             } => {
-                let info = &self.program.effects[*effect as usize];
                 // 再開するかどうかはテキストに書き、エフェクトの表と合うかは verifier が確かめる
                 let never = if *resumable { "" } else { "never " };
                 format!(
-                    "perform {never}{}.{}({})",
-                    info.name,
-                    operation(info, *op),
+                    "perform {never}{}({})",
+                    operation_text(self.program, *effect, *op),
                     self.atoms(function, args)
                 )
             }
@@ -345,19 +342,12 @@ impl Printer<'_> {
         }
     }
 
-    /// 空の `mask` は書かない。表にない番号は、操作の番号と同じく `#N` で書く。
+    /// 空の `mask` は書かない。
     fn mask(&self, mask: &[u32]) -> String {
         if mask.is_empty() {
             return String::new();
         }
-        let names: Vec<String> = mask
-            .iter()
-            .map(|&effect| match self.program.effects.get(effect as usize) {
-                Some(info) => info.name.clone(),
-                None => format!("#{effect}"),
-            })
-            .collect();
-        format!("mask [{}] ", names.join(", "))
+        format!("mask [{}] ", effects_text(self.program, mask))
     }
 
     /// 配置の名前。表にない番号は、エフェクトと同じく `#N` で書く。
@@ -415,11 +405,53 @@ fn binders(function: &CoreFn, vars: &[VarId]) -> String {
         .join(", ")
 }
 
-/// 表にない番号は `#N` で書く。誤りを含む IR も表示でき、`parse` が読み戻せるようにするためである。
-fn operation(info: &EffectInfo, op: u32) -> String {
-    info.operations
-        .get(op as usize)
-        .map_or_else(|| format!("#{op}"), |info| info.name.clone())
+/// エフェクトの名前。表にない番号は `#N` で書く。誤りを含む IR も表示でき、`parse` が読み戻せて、verifier がその番号を
+/// 報告できるようにするためである。
+pub(crate) fn effect_text(program: &Program, effect: u32) -> String {
+    program
+        .effects
+        .get(effect as usize)
+        .map_or_else(|| format!("#{effect}"), |info| info.name.clone())
+}
+
+/// エフェクトの多重集合 (`mask` と `evv_mask` の即値) を `, ` で区切って並べる。
+pub(crate) fn effects_text(program: &Program, effects: &[u32]) -> String {
+    let names: Vec<String> = effects
+        .iter()
+        .map(|&effect| effect_text(program, effect))
+        .collect();
+    names.join(", ")
+}
+
+/// エフェクトで修飾しない操作の名前。表にない操作は `#N` で書く。
+fn operation_name(program: &Program, effect: u32, op: u32) -> String {
+    program
+        .effects
+        .get(effect as usize)
+        .and_then(|info| info.operations.get(op as usize))
+        .map_or_else(|| format!("#{op}"), |operation| operation.name.clone())
+}
+
+/// `E.op` の形。
+pub(crate) fn operation_text(program: &Program, effect: u32, op: u32) -> String {
+    format!(
+        "{}.{}",
+        effect_text(program, effect),
+        operation_name(program, effect, op)
+    )
+}
+
+/// 基本操作の名前と、`[…]` に書いた即値 (`ev_clause[State.get]`)。
+pub(crate) fn prim_text(program: &Program, prim: &Prim) -> String {
+    let name = prim.name();
+    match prim.immediates() {
+        Immediates::None => name.to_string(),
+        Immediates::Effects(effects) => format!("{name}[{}]", effects_text(program, effects)),
+        Immediates::Effect(effect) => format!("{name}[{}]", effect_text(program, effect)),
+        Immediates::Operation { effect, op } => {
+            format!("{name}[{}]", operation_text(program, effect, op))
+        }
+    }
 }
 
 /// 関数と extern の行の名前。単相化の instance の名前 (`id@[Int, String]`) と instance の extern の行の名前

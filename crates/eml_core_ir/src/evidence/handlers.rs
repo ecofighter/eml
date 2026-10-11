@@ -10,7 +10,7 @@ use crate::boxing::tail_position_call;
 use crate::builder::FnBuilder;
 use crate::{
     Atom, BlockId, Call, CoreFn, FnIdx, OpRet, OperationInfo, Prim, Program, Repr, Rhs, Stmt, Term,
-    VarId, VarInfo,
+    VarId, VarInfo, operation,
 };
 
 use super::split::Annotations;
@@ -35,7 +35,7 @@ pub(super) fn entries(
     }
     let mut entries = HashMap::new();
     for (clause, effect, op) in clauses {
-        let operation = &program.effects[effect as usize].operations[op as usize];
+        let operation = operation(&program.effects, effect, op);
         let entry = if runs_in_place(program, program.function(clause), operation) {
             into_entry(program, clause, effect, op);
             clause
@@ -317,9 +317,7 @@ fn runs_in_place(program: &Program, clause: &CoreFn, operation: &OperationInfo) 
 /// すぐに再開する節の関数 g を、その場で入口にする。引数を「捕獲、evidence、操作の引数」にし、状態は入口の先頭で
 /// evidence の欄から取り出す。末尾の `resume k(v, s)` は、状態を欄に戻して v を返す形にする。
 fn into_entry(program: &mut Program, clause: FnIdx, effect: u32, op: u32) {
-    let operation_params = program.effects[effect as usize].operations[op as usize]
-        .params
-        .len();
+    let operation_params = operation(&program.effects, effect, op).params.len();
     let resumes: Vec<(usize, usize)> = program
         .function(clause)
         .blocks
@@ -396,7 +394,7 @@ fn yielding_entry(
     op: u32,
 ) -> CoreFn {
     let id = helpers.id(program);
-    let operation = program.effects[effect as usize].operations[op as usize].clone();
+    let operation = operation(&program.effects, effect, op).clone();
     let function = program.function(clause);
     // g は捕獲と操作の引数の後に、再開する節なら `k` と状態を、`never` の節なら状態だけを受ける
     let trailing = if operation.resumable { 2 } else { 1 };

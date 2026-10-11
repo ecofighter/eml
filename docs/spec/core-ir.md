@@ -820,7 +820,7 @@ b_fast:
 - 変換の段と EP の段だけの文言は次のとおりである。`tail` は ``a tail call is formed before contract`` で、`call` のほかは ``a tail apply``、``a tail clause``、``a tail perform``、``a tail resume``、``a tail handler`` を同じ形で使う。`box` と `unbox` は `` `n.1` is boxed before the boxing pass ``、``5 is boxed before the boxing pass``、`` `b.2` is unboxed before the boxing pass `` である
 - 引き継ぐ検査は次のとおりである。`mask` の順と番号、直接呼び出しとクロージャの引数の数、文字列定数と関数の番号が表にあること、`extern` 命令の引数の数、case の種類 (1つの `switch` の case が同じ種類であること、リテラルの case がフィールドを持たないこと)、`switch` が行き先を1つ以上持つこと、フィールドを束縛する case を持つ `switch` の scrutinee が RC の対象 (`obj` か `tobj`) の変数であること、リテラルの `switch` の `default`、`perform` の `resumable` がエフェクトの表と一致すること、`handle` の節の数。`handle` の節と `return` の節の関数が分かるとき (関数の値か、同じ関数の中で `closure` で作った値のとき) は、節が捕獲の後にちょうど「操作の引数 + `k` (再開する操作) + 状態」個の引数を持つこと、`return` の節が捕獲の後にちょうど2つ (値と状態) の引数を持つことも確かめる。操作の引数の数は、エフェクトの表の操作の `params` の長さである。`handle`、`perform`、`resume`、`mask` の検査は変換の段にだけ現れる
 - EP の段の検査は次のとおりである。範囲の段と所有の段も同じく確かめる
-  - `prim` の即値のエフェクトと操作がエフェクトの表にあり、引数の数が表の行と同じである
+  - `prim` の即値のエフェクトと操作がエフェクトの表にあり、引数の数が表の行と同じである。`evv_mask` の多重集合は、呼び出しの `mask` と同じく空でなく、番号の昇順に並ぶ (``the effects of `prim evv_mask[Counter, State]` are not in ascending order``、`` `prim evv_mask[]` masks no effect ``)
   - `clause` の操作がエフェクトの表にあり、引数の数が「1 + 操作の引数の数」である
   - `ev_set_clause[E.op]` に渡す値が `&g` か、同じ関数の中の `closure g(..)` なら、g の `clause` の印が op に合い、同じ関数の中で evidence を定義した `ev_new[E]` の E にも合う
   - `clause` の印の関数が、`ev_set_clause` の引数のほかで値として参照されず、直接も呼ばれない。印のエフェクトと操作が表にあり、捕獲の後に evidence と操作の引数を受ける

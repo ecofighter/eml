@@ -4,7 +4,9 @@
 
 use eml_extern::Purity;
 
-use crate::{Atom, Block, Call, CoreFn, EffectInfo, OpRet, Program, Repr, Rhs, Stmt, Term};
+use crate::{
+    Atom, Block, Call, CoreFn, EffectInfo, OpRet, Program, Repr, Rhs, Stmt, Term, operation,
+};
 
 pub fn contract(program: &mut Program) {
     let rets: Vec<Repr> = program
@@ -61,7 +63,7 @@ fn tail_call(block: &mut Block, ret: Repr, rets: &[Repr], effects: &[EffectInfo]
             op,
             callee: _,
             args: _,
-        } => match effects[*effect as usize].operations[*op as usize].ret {
+        } => match operation(effects, *effect, *op).ret {
             OpRet::Repr(repr) => repr.compatible(ret),
             OpRet::Never => true,
         },

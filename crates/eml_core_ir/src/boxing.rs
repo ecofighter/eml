@@ -12,35 +12,29 @@ use std::collections::HashMap;
 
 use crate::contract::pure;
 use crate::{
-    Atom, Block, BlockId, Call, CasePattern, CoreFn, EffectInfo, FnIdx, OpRet, OperationInfo,
-    Program, Repr, Rhs, Stmt, Term, VarId, VarInfo,
+    Atom, Block, BlockId, Call, CasePattern, CoreFn, EffectInfo, FnIdx, Layout, OpRet,
+    OperationInfo, Program, Repr, Rhs, Stmt, Term, VarId, VarInfo, operation,
 };
 
 pub fn boxing(program: &mut Program) {
     let (values, direct) = classify(program);
     raise_tail_returns(&mut program.functions, &program.effects);
     uniformize(program, &values, &direct);
+    // 変換はほかの関数を `signatures` でだけ見るので、関数を1つずつ書き換えながら表を共有で借りられる
     let signatures: Vec<Signature> = program.functions.iter().map(Signature::of).collect();
-    // 基本操作の行は名前を作るために `Program` を読む。関数の並びを外しておけば、残りを共有で借りたまま各関数を書き換え
-    // られる。変換はほかの関数を `signatures` でだけ見る
-    let mut functions = std::mem::take(&mut program.functions);
-    for function in &mut functions {
+    for function in &mut program.functions {
         let never = vec![false; function.vars.len()];
         Converter {
             function,
             signatures: &signatures,
-            program,
+            layouts: &program.layouts,
+            effects: &program.effects,
             unboxed_from: HashMap::new(),
             boxed_from: HashMap::new(),
             never,
         }
         .run();
     }
-    program.functions = functions;
-}
-
-fn operation(effects: &[EffectInfo], effect: u32, op: u32) -> &OperationInfo {
-    &effects[effect as usize].operations[op as usize]
 }
 
 /// 関数ごとに、値として参照されるか (`&f`、`closure f` の対象) と、直接呼ばれるか (`call f`) を記録する。
@@ -356,8 +350,8 @@ impl Signature {
 struct Converter<'a> {
     function: &'a mut CoreFn,
     signatures: &'a [Signature],
-    /// 配置の表、操作の表、基本操作の行を引く。関数の並びは外してある。
-    program: &'a Program,
+    layouts: &'a [Layout],
+    effects: &'a [EffectInfo],
     /// `let v = unbox w` の v から w。v を `tobj` の位置へ渡すときは、`box` を作らずに w を渡す。
     unboxed_from: HashMap<VarId, VarId>,
     /// `let v = box w` の v から w。v を w と同じ Repr のスカラーの位置へ渡すときは、`unbox` を作らずに w を渡す。
@@ -522,8 +516,7 @@ impl Converter<'_> {
                         let layout = ctor.layout.0 as usize;
                         let tag = ctor.tag as usize;
                         for (index, arg) in args.iter_mut().enumerate() {
-                            let field =
-                                self.program.layouts[layout].constructors[tag].fields[index];
+                            let field = self.layouts[layout].constructors[tag].fields[index];
                             *arg = self.convert(*arg, field, out);
                         }
                         None
@@ -531,8 +524,8 @@ impl Converter<'_> {
                     // 基本操作の引数と結果は、直接の呼び出しと同じく互換の位置である
                     // (docs/spec/core-ir.md の「基本操作」)
                     Rhs::Prim(prim, args) => {
-                        let row = prim.row(self.program);
-                        for (arg, &param) in args.iter_mut().zip(&row.params) {
+                        let row = prim.row();
+                        for (arg, &param) in args.iter_mut().zip(row.params) {
                             *arg = self.convert(*arg, param, out);
                         }
                         Some(row.ret)
@@ -572,7 +565,7 @@ impl Converter<'_> {
             } => {
                 let mut after = Vec::new();
                 for (index, field) in fields.iter_mut().enumerate() {
-                    let declared = self.program.layouts[ctor.layout.0 as usize].constructors
+                    let declared = self.layouts[ctor.layout.0 as usize].constructors
                         [ctor.tag as usize]
                         .fields[index];
                     *field = self.rebind(*field, declared, &mut after);
@@ -617,7 +610,7 @@ impl Converter<'_> {
                 callee,
                 args,
             } => {
-                let operation = operation(&self.program.effects, *effect, *op);
+                let operation = operation(self.effects, *effect, *op);
                 *callee = self.convert(*callee, Repr::TObj, out);
                 let expected = std::iter::once(Repr::Obj).chain(operation.params.iter().copied());
                 for (arg, param) in args.iter_mut().zip(expected) {
@@ -657,7 +650,7 @@ impl Converter<'_> {
                     let mut after = Vec::new();
                     for (index, field) in case.fields.iter_mut().enumerate() {
                         let declared =
-                            self.program.layouts[layout].constructors[tag as usize].fields[index];
+                            self.layouts[layout].constructors[tag as usize].fields[index];
                         *field = self.rebind(*field, declared, &mut after);
                     }
                     heads[case.target.0 as usize].extend(after);
