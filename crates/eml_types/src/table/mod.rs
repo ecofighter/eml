@@ -185,8 +185,10 @@ struct RigidInfo {
     name: String,
     /// 型変数の Kind `Type<μ>` の `μ`。
     linearity: KindVar,
-    /// handler の節で、操作ごとに量化した型変数を具体化した変数か。書き出しで `OpVar` にする。
-    per_operation: bool,
+    /// handler の節で、操作ごとに量化した型変数を具体化した変数なら、書き出す `OpVar` の Kind。操作の引数の型に現れれば
+    /// `Unr`、結果の型にだけ現れれば `Poly` である
+    /// (docs/superpowers/specs/2026-10-12-s8c-kind-export-design.md の「`Flexible` と `OpVar` の Kind」)。
+    operation: Option<Lin>,
 }
 
 /// 表をたどる処理が訪れた代表の印。呼び出しごとに表の大きさの配列を作ると、呼び出しが多いときに2乗の時間になる。
@@ -398,18 +400,19 @@ impl<'c> Table<'c> {
         self.rigids.push(RigidInfo {
             name: name.to_string(),
             linearity,
-            per_operation: false,
+            operation: None,
         });
         let rigid = RigidVar(self.rigids.len() as u32 - 1);
         (self.alloc(TyShape::Rigid(rigid)), rigid)
     }
 
-    /// 節のための具体化で、操作ごとに量化した型変数を作る。推論では `fresh_rigid_with` の変数と同じに扱う。
-    pub fn fresh_operation_rigid(&mut self, name: &str, linearity: KindVar) -> Ty {
+    /// 節のための具体化で、操作ごとに量化した型変数を作る。推論では `fresh_rigid_with` の変数と同じに扱う。`in_params`
+    /// は、操作の引数の型に現れるかである。
+    pub fn fresh_operation_rigid(&mut self, name: &str, linearity: KindVar, in_params: bool) -> Ty {
         self.rigids.push(RigidInfo {
             name: name.to_string(),
             linearity,
-            per_operation: true,
+            operation: Some(if in_params { Lin::Unr } else { Lin::Poly }),
         });
         let rigid = RigidVar(self.rigids.len() as u32 - 1);
         self.alloc(TyShape::Rigid(rigid))

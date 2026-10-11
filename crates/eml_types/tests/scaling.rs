@@ -66,6 +66,58 @@ fn ring(n: usize) -> String {
     text
 }
 
+/// 関数を引数に取る関数の輪。`g` の矢印はどのメンバーでも等しく、再帰の呼び出しの部分適用の矢印は次のメンバーの
+/// 自分の変数と等しい。本体の型を書き出すと、各メンバーの部分適用の矢印から下にたどって `g` の矢印で止まる。
+fn ring_of_higher_order_functions(n: usize) -> String {
+    let mut text = String::new();
+    for i in 0..n {
+        let j = (i + 1) % n;
+        text.push_str(&format!(
+            "f{i} : (Int -> Int) -> Int -> Int\nf{i} g n = if n == 0 then g n else f{j} g (n - 1)\n\n"
+        ));
+    }
+    text
+}
+
+/// 各メンバーが `x` を捕まえる局所のラムダを持つ関数の輪。すべてのメンバーの `μ_a` は1つの成分に入り、ラムダの矢印は
+/// その成分の上にある。本体の型を書き出すと、ラムダの矢印から下にたどって `μ_a` の成分で止まる。
+fn ring_with_local_lambdas(n: usize) -> String {
+    let mut text = String::new();
+    for i in 0..n {
+        let j = (i + 1) % n;
+        text.push_str(&format!(
+            "f{i} : a -> Int -> a\nf{i} x n =\n  if n == 0 then x\n  else\n    let h = fn u -> x\n    f{j} (h ()) (n - 1)\n\n"
+        ));
+    }
+    text
+}
+
+/// 宣言自身の変数を持たない多くのメンバーが、長い矢印の鎖の上を参照する SCC。`wrap` のスキームは引数の矢印を
+/// 戻り値の矢印の下に置くので、`q` の本体の `q{i}` の矢印は `q0 ≤ … ≤ q{n}` の鎖になり、`q` の戻り値の矢印はその上に
+/// ある。`q` が `f0` を呼び、`f{i}` が `q` を呼ぶので、`wrap` のほかは1つの SCC になる。`f{i}` は宣言自身の変数を
+/// 持たず、本体の `q ()` の矢印は鎖の一番上の `q` の変数と等しい。メンバーごとに鎖を下にたどると、メンバーの数と鎖の
+/// 長さの積の時間になる。
+///
+/// 鎖を別々のメンバー (`q{i} : Unit -> (Int -> Int)` の連なり) の戻り値で作ると、各メンバーの残す制約を求める
+/// `residual` が上にほかのメンバーの鎖をたどるので、書き出しの前から2乗の時間になる。1つ前のラムダを捕まえる
+/// ラムダの `let` の列も、書き出しの前の検査が2乗の時間になる。そこで鎖は `wrap` の呼び出しの列で1つの本体に作る。
+fn functions_over_an_arrow_chain(n: usize) -> String {
+    let mut text = String::from(
+        "wrap : (Int -> Int) -> (Int -> Int)\nwrap g = fn x -> g x\n\nq : Unit -> (Int -> Int)\nq () =\n  let q0 = fn x -> x\n",
+    );
+    for i in 1..=n {
+        text.push_str(&format!("  let q{i} = wrap q{}\n", i - 1));
+    }
+    text.push_str(&format!("  let k = f0 0\n  fn x -> q{n} x + k\n\n"));
+    for i in 0..n {
+        let j = (i + 1) % n;
+        text.push_str(&format!(
+            "f{i} : Int -> Int\nf{i} n = if n == 0 then (q ()) 0 else f{j} (n - 1)\n\n"
+        ));
+    }
+    text
+}
+
 /// 1つの本体で、同じ名前の `let` が続く連鎖。使わない変数ごとに、同じ名前の後の束縛を探す。
 fn shadowing_lets(n: usize) -> String {
     let mut text = String::from("f : Unit -> Int\nf () =\n");
@@ -187,6 +239,24 @@ fn a_chain_of_carry_overs() {
 #[ignore = "release ビルドで時間を測る"]
 fn a_ring_of_functions() {
     assert_linear(ring);
+}
+
+#[test]
+#[ignore = "release ビルドで時間を測る"]
+fn a_ring_of_higher_order_functions() {
+    assert_linear(ring_of_higher_order_functions);
+}
+
+#[test]
+#[ignore = "release ビルドで時間を測る"]
+fn a_ring_of_functions_with_local_lambdas() {
+    assert_linear(ring_with_local_lambdas);
+}
+
+#[test]
+#[ignore = "release ビルドで時間を測る"]
+fn many_functions_over_a_long_arrow_chain() {
+    assert_linear(functions_over_an_arrow_chain);
 }
 
 #[test]

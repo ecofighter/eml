@@ -1,26 +1,59 @@
 use std::collections::HashMap;
 
 use super::*;
+use crate::kind::summary::BodyKinds;
 
 /// 推論の表の型を型の表に書き出す。後の段階と診断の文言に渡す形で、解けていない型変数と row 変数は `_` として残す。
-/// 矢印の線形性は今はすべて `Unr` で書き出す (docs/superpowers/specs/2026-10-12-s8c-kind-export-design.md の「書き出す型の形」)。
+///
+/// 使い方は2つある (docs/superpowers/specs/2026-10-12-s8c-kind-export-design.md の「推論の途中で書き出す型」)。
+/// Kind を解く前の診断のための書き出し (`diagnostic`) は、決まっていない矢印を `Poly` に、決まらなかった型変数を
+/// `Flexible(Poly)` にする。診断の表示は線形性を書かないので、文字列は変わらない。SCC を解いた後の書き出し (`final_`) は、
+/// Kind 変数の値を `BodyKinds` から引く。
 ///
 /// 推論の表は部分を共有するので、書き出した結果を `Ty` ごとに覚え、表の各節点を1回だけ書き出す。覚えるのは渡された
 /// `Ty` とその代表の両方である。表を借りている間は表を変更できないので、覚えた結果が古くなることはない
 /// (docs/implementation/architecture.md の「`eml_types` の内部」)。記録を表の大きさの配列にしないのは、診断のために
 /// 短命の `Exporter` を何度も作っても、費用が書き出した節点の数に比例するようにするためである。
-pub(crate) struct Exporter<'t, 'c, 's> {
+pub(crate) struct Exporter<'t, 'c, 's, 'k> {
     table: &'t Table<'c>,
     types: &'s mut TypeStore,
     done: HashMap<Ty, TypeId>,
+    /// `None` は診断のための書き出しである。
+    kinds: Option<BodyKinds<'k>>,
 }
 
-impl<'t, 'c, 's> Exporter<'t, 'c, 's> {
-    pub fn new(table: &'t Table<'c>, types: &'s mut TypeStore) -> Exporter<'t, 'c, 's> {
+impl<'t, 'c, 's, 'k> Exporter<'t, 'c, 's, 'k> {
+    pub fn diagnostic(table: &'t Table<'c>, types: &'s mut TypeStore) -> Exporter<'t, 'c, 's, 'k> {
         Exporter {
             table,
             types,
             done: HashMap::new(),
+            kinds: None,
+        }
+    }
+
+    pub fn final_(
+        table: &'t Table<'c>,
+        types: &'s mut TypeStore,
+        kinds: BodyKinds<'k>,
+    ) -> Exporter<'t, 'c, 's, 'k> {
+        Exporter {
+            table,
+            types,
+            done: HashMap::new(),
+            kinds: Some(kinds),
+        }
+    }
+
+    /// 書き出した本体の型の `joins`。診断のための書き出しでは空である。
+    pub fn into_joins(self) -> Vec<Vec<u32>> {
+        self.kinds.map_or_else(Vec::new, BodyKinds::into_joins)
+    }
+
+    fn kind(&mut self, var: KindVar) -> Lin {
+        match &mut self.kinds {
+            Some(kinds) => kinds.lin(var),
+            None => Lin::Poly,
         }
     }
 
@@ -65,26 +98,36 @@ impl<'t, 'c, 's> Exporter<'t, 'c, 's> {
                     .collect(),
             ),
             TyShape::Fn {
-                param, row, ret, ..
+                param,
+                lin,
+                row,
+                ret,
             } => {
+                let lin = match *lin {
+                    ArrowLin::Known(Linearity::Unr) => Lin::Unr,
+                    ArrowLin::Known(Linearity::Lin) => Lin::Lin,
+                    ArrowLin::Var(var) => self.kind(var),
+                };
                 let param = self.export(*param);
                 let (effects, tail) = self.row(row);
                 let ret = self.export(*ret);
                 TypeKind::Fn {
                     param,
-                    lin: Lin::Unr,
+                    lin,
                     effects,
                     tail,
                     ret,
                 }
             }
-            TyShape::Var(_) => return self.types.flexible(Lin::Unr),
+            TyShape::Var(var) => {
+                let kind = self.kind(table.ty_vars[var.0 as usize].linearity);
+                return self.types.flexible(kind);
+            }
             TyShape::Rigid(rigid) => {
                 let info = &table.rigids[rigid.0 as usize];
-                if info.per_operation {
-                    TypeKind::OpVar(info.name.clone(), Lin::Unr)
-                } else {
-                    TypeKind::Rigid(info.name.clone())
+                match info.operation {
+                    Some(kind) => TypeKind::OpVar(info.name.clone(), kind),
+                    None => TypeKind::Rigid(info.name.clone()),
                 }
             }
             TyShape::Error => return self.types.error(),
@@ -112,7 +155,7 @@ impl Table<'_> {
     /// 単体テストが確かめる型の表示。テストごとに使い捨ての型の表に書き出す。
     pub fn show(&self, ty: Ty, program: &eml_hir::Program) -> String {
         let mut types = TypeStore::new(program);
-        let id = Exporter::new(self, &mut types).export(ty);
+        let id = Exporter::diagnostic(self, &mut types).export(ty);
         types.display(id, &program.names).to_string()
     }
 }

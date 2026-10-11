@@ -128,7 +128,7 @@ impl BodyCheck<'_, '_> {
         let range = self.body.exprs[expr].range;
         match failure {
             Failure::NoInstance { root, leaf } => {
-                let mut exporter = Exporter::new(self.table, self.types);
+                let mut exporter = Exporter::diagnostic(self.table, self.types);
                 let root_ty = exporter.export(root.1);
                 let leaf_ty = exporter.export(leaf.1);
                 if self.types.contains_error(root_ty) || self.types.contains_error(leaf_ty) {
@@ -166,7 +166,7 @@ impl BodyCheck<'_, '_> {
                 Some(diagnostic)
             }
             Failure::Ambiguous { root, class } => {
-                let root_ty = Exporter::new(self.table, self.types).export(root.1);
+                let root_ty = Exporter::diagnostic(self.table, self.types).export(root.1);
                 if self.types.contains_error(root_ty) {
                     return None;
                 }

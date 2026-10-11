@@ -353,7 +353,7 @@ impl<'a> Usage<'a, '_> {
                         // 表示は破れた制約を報告するときだけにする。誤りのない経路で型を表示すると、型の木の大きさの
                         // 時間がかかるため
                         KindReason::OmittedReturn {
-                            ty: Exporter::new(self.table, self.types).export(ty),
+                            ty: Exporter::diagnostic(self.table, self.types).export(ty),
                         }
                     } else if let Some(&(ctor, field)) = self.body.omitted_fields.get(pat) {
                         let names = self.program[ctor]

@@ -9,6 +9,7 @@ mod data;
 mod effects;
 mod exhaustive;
 mod instantiations;
+mod kind_export;
 mod kind_values;
 mod linearity;
 mod lists;

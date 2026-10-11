@@ -165,3 +165,30 @@ fn needs_substitution_follows_type_variables_and_unfixed_kind_variables() {
     assert!(!needs("make"));
     assert!(!needs("main"));
 }
+
+#[test]
+fn a_join_takes_the_join_of_its_variables() {
+    // 番号: 0 = `μ_a`、1 = `x` を受けた後の矢印、2 = `μ_b`、3 = `y` を受けた後の矢印。`h` の矢印は `x` と `y` を
+    // 捕まえて 0 と 2 の上にあり、自分の変数と同じ成分にないので `Var(4)` (`joins[0] = {0, 2}`) になる。その値は
+    // `val(0)` と `val(2)` の結びで、`File` を渡す instance では `Lin`、`Int` だけの instance では `Unr` になる
+    let text = "both : a -> b -> Int -> (a, b)\nboth x y n =\n  let h = fn u -> (x, y)\n  h n\n\nmain : Unit -> <IO> Unit\nmain () =\n  let (file, m) = both (Fs.open \"a.txt\") 1 0\n  Fs.close file\n  let p = both 1 2 0\n  ()";
+    let checked = checked_clean(text);
+    let both = ValueItem::Function(function(&checked.program, "both"));
+    let main = function(&checked.program, "main");
+    let args: Vec<_> = checked.typed.bodies[main]
+        .instantiations
+        .iter()
+        .map(|(_, instantiation)| instantiation)
+        .filter(|instantiation| instantiation.decl == both)
+        .map(|instantiation| instantiation.args.clone())
+        .collect();
+    let typed = &checked.typed;
+    assert_eq!(
+        typed.kind_values(both, &args[0], &typed.types),
+        [Lin::Lin, Lin::Lin, Lin::Unr, Lin::Lin, Lin::Lin]
+    );
+    assert_eq!(
+        typed.kind_values(both, &args[1], &typed.types),
+        [Lin::Unr, Lin::Poly, Lin::Unr, Lin::Poly, Lin::Unr]
+    );
+}

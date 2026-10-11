@@ -15,6 +15,19 @@ pub(crate) struct Solution {
     /// 違反のうち `reportable` が報告すると決めたものの由来。由来を付け忘れた違反は、release ビルドでは
     /// `unattributed_origin` の由来で入る。並べ替えと重複除去は、呼ぶ側がプログラム全体でまとめて行う。
     pub violated: Vec<KindOrigin>,
+    /// 本体の型を書き出すときに、本体の変数の値を求めるための線形性の解。
+    pub lin: LinSolution,
+}
+
+/// SCC の線形性の解のうち、本体の型の書き出しが読むもの
+/// (docs/superpowers/specs/2026-10-12-s8c-kind-export-design.md の「書き出すときの規則」)。
+pub(crate) struct LinSolution {
+    /// 合わせた制約のグラフ。成分と下向きの辺を、書き出す変数の要約に使う。
+    pub(super) graph: Graph<Linearity>,
+    /// 最小解。合わせた番号で引く。
+    pub(super) values: Vec<Linearity>,
+    /// メンバーごとの、表の Kind 変数の番号から合わせた番号へのずれ。
+    pub(super) offsets: Vec<usize>,
 }
 
 /// `members` は1つの SCC の宣言とその問題、`schemes` は前の SCC と本体のない宣言のスキームである。
@@ -57,7 +70,15 @@ pub(crate) fn solve_scc(
             carries: carry_residual(&merged.carries, &lin_graph, &mult_graph, member),
         })
         .collect();
-    Solution { schemes, violated }
+    Solution {
+        schemes,
+        violated,
+        lin: LinSolution {
+            graph: lin_graph,
+            values: lin,
+            offsets: merged.lin_offsets,
+        },
+    }
 }
 
 /// 違反した制約のうち報告するものの由来。由来を付け忘れた制約の違反は処理系の誤りである。debug ビルドでは止め、release
@@ -117,6 +138,8 @@ struct Merged {
     carries: Vec<Carry>,
     /// 各宣言の自分の Kind 変数。まとめた後の番号である。
     own: Vec<OwnVars>,
+    /// 各宣言の線形性の変数の番号のずれ。
+    lin_offsets: Vec<usize>,
 }
 
 fn merge(
@@ -154,6 +177,7 @@ fn merge(
         },
         carries: Vec::new(),
         own,
+        lin_offsets: offsets.iter().map(|&(l, _)| l).collect(),
     };
     for ((_, problem), &(l, m)) in members.iter().zip(&offsets) {
         merged.copy_own(problem, (l, m));
@@ -347,9 +371,9 @@ pub(crate) fn violated_carries(
 
 /// 変数どうしの制約のグラフを強連結成分に縮めたもの。残す制約は成分の DAG の上で求める。同じ循環に入った変数は等しいので、
 /// 関数ごとに循環を1周せずに済む。
-struct Graph<T> {
+pub(super) struct Graph<T> {
     /// 変数ごとの成分の番号。
-    component: Vec<usize>,
+    pub component: Vec<usize>,
     /// 成分の変数に付いた定数の上限の最小と、定数の下限の最大。
     upper: Vec<Option<T>>,
     lower: Vec<Option<T>>,
@@ -357,7 +381,7 @@ struct Graph<T> {
     own: Vec<Vec<KindVar>>,
     /// 上向き (下限から上限へ) と下向きの辺。
     upward: Edges,
-    downward: Edges,
+    pub downward: Edges,
 }
 
 /// 1つの向きの辺と、たどるときに入る意味のない隣を見分けるための情報。
@@ -367,16 +391,16 @@ struct Graph<T> {
 /// 何もない成分は、ある宣言の残す成分でなければ、その宣言の残す制約 (docs/spec/types.md の「推論」) に何も足さない。
 /// 環状の相互再帰では、すべての `μ` を含む成分から、各宣言の内側の矢印の Kind 変数の成分へ辺が出る。そのまま
 /// たどると宣言ごとに宣言の数だけ辺を見ることになるので、何もない成分への辺は、その成分が残す成分のときだけ見る。
-struct Edges {
+pub(super) struct Edges {
     /// 成分ごとの隣。番号の順に並べ、重複は除いてある。
-    all: Vec<Vec<usize>>,
+    pub all: Vec<Vec<usize>>,
     /// 成分ごとの、何もない成分かどうか。
-    inert: Vec<bool>,
+    pub inert: Vec<bool>,
     /// 成分ごとの、何もない成分ではない隣。
-    active: Vec<Vec<usize>>,
+    pub active: Vec<Vec<usize>>,
     /// 成分ごとの、何もない成分で、どこかの宣言の変数を含む隣。誰の変数も含まない何もない成分は、どの宣言にも
     /// 何も足さないので持たない。
-    owned_inert: Vec<Vec<usize>>,
+    pub owned_inert: Vec<Vec<usize>>,
 }
 
 impl Edges {
@@ -611,7 +635,7 @@ fn components(edges: &[Vec<usize>]) -> (Vec<usize>, usize) {
 }
 
 /// 宣言 `member` の自分の変数を含む成分と、その中の自分の変数の `Shape` の番号 (小さい順)。
-fn kept_components<T>(graph: &Graph<T>, member: usize) -> HashMap<usize, Vec<usize>> {
+pub(super) fn kept_components<T>(graph: &Graph<T>, member: usize) -> HashMap<usize, Vec<usize>> {
     let mut kept: HashMap<usize, Vec<usize>> = HashMap::new();
     for (index, var) in graph.own[member].iter().enumerate() {
         kept.entry(graph.component[var.index()])

@@ -29,7 +29,7 @@ use crate::kind::eval;
 use crate::kind::problem::KindScheme;
 use crate::shape::Shape;
 
-pub use dump::dump;
+pub use dump::{dump, dump_linear};
 pub use resolve::{Resolution, resolve};
 pub use store::{EffectLabel, Lin, RowTail, Substitution, TypeId, TypeKind, TypeStore};
 pub use uniform::{InstanceNode, Uniform};
@@ -83,7 +83,8 @@ pub struct TypedProgram {
 /// 1つの宣言の型検査の結果。
 #[derive(Debug)]
 pub struct DeclType {
-    /// 後の段階が読む、矢印の線形性のない型。検査の最後に1回だけ書き出しておく。
+    /// 後の段階が読む型。検査の最後に1回だけ書き出しておく。矢印は線形性を持ち、スキームで定数に決まらない宣言自身の
+    /// 変数は `Var(i)` で残る (docs/superpowers/specs/2026-10-12-s8c-kind-export-design.md の「推論の途中で書き出す型」)。
     pub ty: TypeId,
     /// 後の段階は Kind を読まない (docs/implementation/architecture.md の「`eml_types` の内部」) ので、外からは読めなくする。
     pub(crate) shape: Shape,

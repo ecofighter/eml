@@ -14,6 +14,8 @@ use la_arena::{Arena, ArenaMap};
 use crate::context::Context;
 use crate::data::Variance;
 use crate::kind::KindVar;
+use crate::kind::eval::{SchemeFacts, scheme_facts};
+use crate::kind::problem::KindScheme;
 use crate::store::{EffectLabel, Lin, RowTail, TypeId, TypeKind, TypeStore};
 use crate::table::{ArrowLin, Label, RigidVar, Row, RowVar, Table, Tail, Ty, TyShape};
 use crate::ty::Linearity;
@@ -654,11 +656,13 @@ impl Shape {
         let mult: Vec<KindVar> = (0..self.mult_vars)
             .map(|_| table.fresh_mult_var())
             .collect();
+        // 操作ごとの型変数の `OpVar` の Kind は、引数の型に現れるかで決まるので、rigid 変数を作る前に求める
+        let (mut kinds, in_params) = self.clause_kinds(arity, effect_args.len());
         let mut tys = Vec::new();
         for (index, (name, mu)) in self.rigids.iter().enumerate() {
             let ty = match effect_args.get(index) {
                 Some(&arg) => arg,
-                None => table.fresh_operation_rigid(name, lin[mu.index()]),
+                None => table.fresh_operation_rigid(name, lin[mu.index()], in_params[index]),
             };
             tys.push(ty);
         }
@@ -668,7 +672,6 @@ impl Shape {
             .map(|(name, sigma)| Tail::Var(table.fresh_rigid_row_with(name, mult[sigma.index()])))
             .collect();
         let ty = build(table, &self.ty, &tys, &rows, &lin);
-        let mut kinds = self.clause_kinds(arity, effect_args.len());
         for var in kinds
             .params
             .iter_mut()
@@ -685,9 +688,9 @@ impl Shape {
         (ty, kinds)
     }
 
-    /// 節での線形性の Kind 変数の縛り方。番号は形の番号である。エフェクトの型引数 (先頭の `effect_params` 個の型変数)
-    /// は handle ごとに具体的な型で節を検査するので縛らない。
-    fn clause_kinds(&self, arity: usize, effect_params: usize) -> ClauseKinds {
+    /// 節での線形性の Kind 変数の縛り方と、型変数ごとに操作の引数の型に現れるか。番号は形の番号である。エフェクトの
+    /// 型引数 (先頭の `effect_params` 個の型変数) は handle ごとに具体的な型で節を検査するので縛らない。
+    fn clause_kinds(&self, arity: usize, effect_params: usize) -> (ClauseKinds, Vec<bool>) {
         let mut walk = ClauseWalk {
             effect_params,
             kinds: ClauseKinds::default(),
@@ -710,36 +713,52 @@ impl Shape {
                 kinds.linear.push(*mu);
             }
         }
-        kinds
+        (kinds, walk.in_params)
     }
 
-    /// 後の段階に渡す型。rigid な変数は名前で書く。シグネチャの型も本体の型と同じ表に登録する。
-    pub fn export(&self, types: &mut TypeStore) -> TypeId {
-        self.export_ty(&self.ty, types)
+    /// 後の段階に渡す型。rigid な変数は名前で書く。シグネチャの型も本体の型と同じ表に登録する。`scheme` があれば、
+    /// スキームで定数に決まる宣言自身の変数を定数に畳み、残りを `Var(i)` にする。`None` は Kind を解く前の `check_main`
+    /// の使い方で、変数をすべて `Var(i)` にする
+    /// (docs/superpowers/specs/2026-10-12-s8c-kind-export-design.md の「推論の途中で書き出す型」)。
+    pub fn export(&self, types: &mut TypeStore, scheme: Option<&KindScheme>) -> TypeId {
+        let arrows = match scheme {
+            Some(scheme) => ArrowKinds::Folded(scheme_facts(scheme, self.lin_vars)),
+            None => ArrowKinds::Vars,
+        };
+        self.export_ty(&self.ty, types, &arrows)
     }
 
-    fn export_ty(&self, ty: &ShapeTy, types: &mut TypeStore) -> TypeId {
+    fn export_ty(&self, ty: &ShapeTy, types: &mut TypeStore, arrows: &ArrowKinds) -> TypeId {
         let kind = match ty {
             ShapeTy::Con(id, args) => TypeKind::Con {
                 id: *id,
-                args: args.iter().map(|arg| self.export_ty(arg, types)).collect(),
+                args: args
+                    .iter()
+                    .map(|arg| self.export_ty(arg, types, arrows))
+                    .collect(),
             },
             ShapeTy::Tuple(elements) => TypeKind::Tuple(
                 elements
                     .iter()
-                    .map(|element| self.export_ty(element, types))
+                    .map(|element| self.export_ty(element, types, arrows))
                     .collect(),
             ),
             ShapeTy::Fn {
-                param, row, ret, ..
+                param,
+                lin,
+                row,
+                ret,
             } => {
-                let param = self.export_ty(param, types);
+                let param = self.export_ty(param, types, arrows);
                 let effects = row
                     .labels
                     .iter()
                     .map(|(effect, args)| EffectLabel {
                         id: *effect,
-                        args: args.iter().map(|arg| self.export_ty(arg, types)).collect(),
+                        args: args
+                            .iter()
+                            .map(|arg| self.export_ty(arg, types, arrows))
+                            .collect(),
                     })
                     .collect();
                 let tail = match row.tail {
@@ -747,10 +766,10 @@ impl Shape {
                     ShapeTail::Rigid(index) => Some(RowTail::Rigid(self.rows[index].0.clone())),
                     ShapeTail::Error => Some(RowTail::Error),
                 };
-                let ret = self.export_ty(ret, types);
+                let ret = self.export_ty(ret, types, arrows);
                 TypeKind::Fn {
                     param,
-                    lin: Lin::Unr,
+                    lin: arrows.lin(*lin),
                     effects,
                     tail,
                     ret,
@@ -764,6 +783,7 @@ impl Shape {
 
     /// 線形性の Kind 変数の表示名。rigid な型変数の `μ` はその型変数、矢印の `m` はその矢印の型で呼ぶ。外側から順に見て、
     /// 最初に現れた部分を使う。スキームに残った制約を表示するのに使う。
+    /// 表示用の型は診断の表示と同じく線形性を書かないので、矢印を `Poly` で作る。
     pub fn kind_names(&self, types: &mut TypeStore) -> HashMap<KindVar, TypeId> {
         let mut names = HashMap::new();
         self.collect_names(&self.ty, types, &mut names);
@@ -789,7 +809,9 @@ impl Shape {
                 row: _,
                 ret: _,
             } => {
-                names.entry(*v).or_insert_with(|| self.export_ty(ty, types));
+                names
+                    .entry(*v)
+                    .or_insert_with(|| self.export_ty(ty, types, &ArrowKinds::Poly));
             }
             ShapeTy::Fn {
                 param: _,
@@ -819,6 +841,34 @@ impl Shape {
             .iter()
             .map(|(name, sigma)| (*sigma, name.clone()))
             .collect()
+    }
+}
+
+/// `Shape::export_ty` が矢印の線形性を書き出す方法。
+enum ArrowKinds {
+    /// スキームで定数に決まる変数を畳む。
+    Folded(SchemeFacts),
+    /// 変数をすべて `Var(i)` にする。
+    Vars,
+    /// 変数をすべて `Poly` にする。表示のためだけに作る型に使う。
+    Poly,
+}
+
+impl ArrowKinds {
+    fn lin(&self, lin: ShapeLin) -> Lin {
+        match lin {
+            ShapeLin::Known(Linearity::Unr) => Lin::Unr,
+            ShapeLin::Known(Linearity::Lin) => Lin::Lin,
+            ShapeLin::Var(var) => {
+                let index = var.index();
+                match self {
+                    ArrowKinds::Folded(facts) if facts.fixed_unr[index] => Lin::Unr,
+                    ArrowKinds::Folded(facts) if facts.forced_lin[index] => Lin::Lin,
+                    ArrowKinds::Folded(_) | ArrowKinds::Vars => Lin::Var(index as u32),
+                    ArrowKinds::Poly => Lin::Poly,
+                }
+            }
+        }
     }
 }
 
@@ -949,7 +999,7 @@ mod tests {
 
     fn exported(shape: &Shape, program: &Program) -> String {
         let mut types = TypeStore::new(program);
-        let ty = shape.export(&mut types);
+        let ty = shape.export(&mut types, None);
         types.display(ty, &program.names).to_string()
     }
 

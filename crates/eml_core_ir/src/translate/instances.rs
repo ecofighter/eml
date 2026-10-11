@@ -375,72 +375,77 @@ impl Collector<'_> {
         // 型変数も Kind 変数も持たない関数の本体の型に現れる変数は、節の `OpVar` だけである。`OpVar` の Repr は
         // `tobj` で、その Kind は `linearity` が直接読めるので、表は写さずに型検査の表を使う
         // (docs/superpowers/specs/2026-10-12-s8c-kind-export-design.md の「代入と単相化」)
-        let types = typed
-            .needs_substitution(ValueItem::Function(function))
-            .then(|| {
-                let store = &mut self.store;
-                let mut each = |ty: TypeId| store.substitute(ty, &mut subst);
-                let types = BodyTypes {
-                    exprs: body
-                        .exprs
-                        .iter()
-                        .map(|(expr, &ty)| (expr, each(ty)))
-                        .collect(),
-                    locals: body
-                        .locals
-                        .iter()
-                        .map(|(local, &ty)| (local, each(ty)))
-                        .collect(),
-                    pats: body.pats.iter().map(|(pat, &ty)| (pat, each(ty))).collect(),
-                    instantiations,
-                    masks: body.masks.clone(),
-                    fields: body.fields.clone(),
-                    updates: body
-                        .updates
-                        .iter()
-                        .map(|(expr, update)| {
-                            let update = Update {
-                                ctor: update.ctor,
-                                written: update.written.clone(),
-                                fields: update.fields.iter().map(|&ty| each(ty)).collect(),
-                            };
-                            (expr, update)
-                        })
-                        .collect(),
-                    discarded: body
-                        .discarded
-                        .iter()
-                        .map(|(expr, discarded)| {
-                            let discarded = discarded
-                                .iter()
-                                .map(|&(field, ty)| (field, each(ty)))
-                                .collect();
-                            (expr, discarded)
-                        })
-                        .collect(),
-                    body_yield: body.body_yield,
-                    first_arrow_yield: body.first_arrow_yield,
-                    lambda_yields: body.lambda_yields.clone(),
-                    arrow_yields: body.arrow_yields.clone(),
-                };
-                debug_assert!(
-                    types
-                        .exprs
-                        .values()
-                        .chain(types.locals.values())
-                        .chain(types.pats.values())
-                        .chain(
-                            types
-                                .instantiations
-                                .values()
-                                .flat_map(|instantiation| &instantiation.args)
-                        )
-                        .all(|&ty| !self.store.contains_type_vars(ty)
-                            && !self.store.contains_kind_vars(ty)),
-                    "an instance body keeps no type variable or Kind variable"
-                );
-                Box::new(types)
-            });
+        let copy = typed.needs_substitution(ValueItem::Function(function));
+        // 写さずに使えるのは、型検査が宣言自身の変数を、宣言の型と同じく本体の型でも定数に畳むからである
+        // (docs/superpowers/specs/2026-10-12-s8c-kind-export-design.md の「書き出すときの規則」)
+        debug_assert!(
+            copy || !keeps_kind_vars(body, &self.store),
+            "a body used without a copy keeps a Kind variable"
+        );
+        let types = copy.then(|| {
+            let store = &mut self.store;
+            let mut each = |ty: TypeId| store.substitute(ty, &mut subst);
+            let types = BodyTypes {
+                exprs: body
+                    .exprs
+                    .iter()
+                    .map(|(expr, &ty)| (expr, each(ty)))
+                    .collect(),
+                locals: body
+                    .locals
+                    .iter()
+                    .map(|(local, &ty)| (local, each(ty)))
+                    .collect(),
+                pats: body.pats.iter().map(|(pat, &ty)| (pat, each(ty))).collect(),
+                instantiations,
+                masks: body.masks.clone(),
+                fields: body.fields.clone(),
+                updates: body
+                    .updates
+                    .iter()
+                    .map(|(expr, update)| {
+                        let update = Update {
+                            ctor: update.ctor,
+                            written: update.written.clone(),
+                            fields: update.fields.iter().map(|&ty| each(ty)).collect(),
+                        };
+                        (expr, update)
+                    })
+                    .collect(),
+                discarded: body
+                    .discarded
+                    .iter()
+                    .map(|(expr, discarded)| {
+                        let discarded = discarded
+                            .iter()
+                            .map(|&(field, ty)| (field, each(ty)))
+                            .collect();
+                        (expr, discarded)
+                    })
+                    .collect(),
+                body_yield: body.body_yield,
+                first_arrow_yield: body.first_arrow_yield,
+                lambda_yields: body.lambda_yields.clone(),
+                arrow_yields: body.arrow_yields.clone(),
+            };
+            debug_assert!(
+                types
+                    .exprs
+                    .values()
+                    .chain(types.locals.values())
+                    .chain(types.pats.values())
+                    .chain(
+                        types
+                            .instantiations
+                            .values()
+                            .flat_map(|instantiation| &instantiation.args)
+                    )
+                    .all(|&ty| !self.store.contains_type_vars(ty)
+                        && !self.store.contains_kind_vars(ty)),
+                "an instance body keeps no type variable or Kind variable"
+            );
+            Box::new(types)
+        });
         let Found::Function(found) = &mut self.found[index] else {
             unreachable!("checked above")
         };
@@ -593,6 +598,26 @@ pub(super) fn collect(hir: &HirProgram, typed: &TypedProgram, entry: FunctionId)
         }
     }
     order(hir, collector.found, entry_index, collector.store)
+}
+
+/// 本体の型の表のどれかが Kind 変数 (`Var`) を含むか。
+fn keeps_kind_vars(body: &BodyTypes, store: &TypeStore) -> bool {
+    body.exprs
+        .values()
+        .chain(body.locals.values())
+        .chain(body.pats.values())
+        .chain(
+            body.instantiations
+                .values()
+                .flat_map(|instantiation| &instantiation.args),
+        )
+        .chain(body.updates.values().flat_map(|update| &update.fields))
+        .chain(
+            body.discarded
+                .values()
+                .flat_map(|discarded| discarded.iter().map(|(_, ty)| ty)),
+        )
+        .any(|&ty| store.contains_kind_vars(ty))
 }
 
 /// シグネチャの型変数の名前。並びは具体化の表の型引数の順と同じである。

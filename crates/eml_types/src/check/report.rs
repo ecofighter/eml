@@ -71,12 +71,12 @@ impl BodyCheck<'_, '_> {
     /// 診断の文言に書く型。推論の途中で書き出すので、その場で短命の `Exporter` を作る。診断にしか使わない型が表に
     /// 残っても、後の段階は ID で引かないので害はない。
     pub(super) fn show(&mut self, ty: Ty) -> String {
-        let id = Exporter::new(self.table, self.types).export(ty);
+        let id = Exporter::diagnostic(self.table, self.types).export(ty);
         self.types.display(id, &self.program.names).to_string()
     }
 
     fn show_label(&mut self, label: &RowLabel) -> String {
-        let label = Exporter::new(self.table, self.types).label(label);
+        let label = Exporter::diagnostic(self.table, self.types).label(label);
         label.display(self.types, &self.program.names).to_string()
     }
 

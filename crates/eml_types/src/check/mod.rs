@@ -11,7 +11,8 @@ use la_arena::Arena;
 use crate::context::Context;
 use crate::kind::entail::unentailed;
 use crate::kind::problem::{Instance, KindProblem, KindScheme, OwnVars};
-use crate::kind::solve::solve_scc;
+use crate::kind::solve::{Solution, solve_scc};
+use crate::kind::summary::BodyKinds;
 use crate::kind::{Bound, KindOrigin, KindReason, KindVar, Provenance, Span};
 use crate::shape::{Arrows, Own, Shape, constructor_shape, operation_shape, signature_shape};
 use crate::store::{EffectLabel, Lin, TypeKind, TypeStore};
@@ -102,6 +103,7 @@ pub(crate) fn check_module(
     // 呼ばれる側の SCC から順に、検査、Kind の解決、型の書き出しをする。書き出す型に Kind の解を入れるため、
     // 表は SCC の解が出るまで持つ。診断の順は表示する側が決める (docs/spec/diagnostics.md の「診断の順」)
     let mut bodies = ItemMap::default();
+    let mut joins = HashMap::new();
     let mut checked = HashSet::new();
     let mut unreliable = HashSet::new();
     let mut violated = Vec::new();
@@ -126,13 +128,22 @@ pub(crate) fn check_module(
             .iter()
             .map(|(decl, problem)| (*decl, problem))
             .collect();
-        let solution = solve_scc(&members, &schemes);
-        for (&(decl, _), scheme) in members.iter().zip(solution.schemes) {
+        let Solution {
+            schemes: solved,
+            violated: found,
+            lin,
+        } = solve_scc(&members, &schemes);
+        for (&(decl, _), scheme) in members.iter().zip(solved) {
             schemes.insert(decl, scheme);
         }
-        violated.extend(solution.violated);
-        for (id, body) in pending {
-            bodies.insert(id, export_body(body, &mut types));
+        violated.extend(found);
+        for (member, (id, body)) in pending.into_iter().enumerate() {
+            // 宣言自身の変数の畳み込みは、この SCC の解が残した新しいスキームで決める
+            let scheme = &schemes[&ValueItem::Function(id)];
+            let kinds = BodyKinds::new(&lin, member, scheme, signatures.functions[id].lin_vars);
+            let (body_types, body_joins) = export_body(body, kinds, &mut types);
+            bodies.insert(id, body_types);
+            joins.insert(id, body_joins);
         }
     }
     diagnostics.extend(check_method_kinds(
@@ -144,7 +155,7 @@ pub(crate) fn check_module(
         &schemes,
     ));
     diagnostics.extend(report_violations(program, files, &types, violated));
-    let mut typed = typed_program(&signatures, schemes, bodies, types);
+    let mut typed = typed_program(&signatures, schemes, joins, bodies, types);
     let (uniform, found) = uniform::uniform(program, &typed.types, &typed.decls, &typed.bodies);
     typed.uniform = uniform;
     diagnostics.extend(found);
@@ -296,7 +307,7 @@ fn check_derived_fields(
             else {
                 continue;
             };
-            let mut exporter = Exporter::new(&table, types);
+            let mut exporter = Exporter::diagnostic(&table, types);
             let (field, leaf_ty) = (exporter.export(root.1), exporter.export(leaf.1));
             if types.contains_error(field) {
                 continue;
@@ -463,14 +474,21 @@ pub(crate) fn check_body<'c>(
     ))
 }
 
-/// 段1の本体の型を、`TypeStore` に書き出す。row の分類は生きている表が要るので、ここでする。
-pub(crate) fn export_body(pending: PendingBody<'_>, types: &mut TypeStore) -> BodyTypes {
+/// 段1の本体の型を、SCC の解から求めた Kind 変数の値 `kinds` を使って `TypeStore` に書き出し、本体の `joins` も返す。
+/// row の分類は生きている表が要るので、ここでする。
+pub(crate) fn export_body(
+    pending: PendingBody<'_>,
+    kinds: BodyKinds<'_>,
+    types: &mut TypeStore,
+) -> (BodyTypes, Vec<Vec<u32>>) {
     let PendingBody {
         table, typing, own, ..
     } = pending;
     // 式、局所変数、パターン、具体化の型は表の同じ節点を共有するので、1つの `Exporter` で書き出し、各節点を1回だけ
-    // 書き出す
-    let mut exporter = Exporter::new(&table, types);
+    // 書き出す。`joins` の番号は初めて現れた順に振るので、この書き出しの順 (式、局所変数、パターン、具体化、更新、
+    // 捨てたフィールド) が番号を決める (docs/superpowers/specs/2026-10-12-s8c-kind-export-design.md の
+    // 「宣言の Kind 変数の番号」)
+    let mut exporter = Exporter::final_(&table, types, kinds);
     let mut body_types = BodyTypes::default();
     for (expr, &ty) in typing.exprs.iter() {
         body_types.exprs.insert(expr, exporter.export(ty));
@@ -537,7 +555,7 @@ pub(crate) fn export_body(pending: PendingBody<'_>, types: &mut TypeStore) -> Bo
             .collect();
         body_types.discarded.insert(expr, discarded);
     }
-    body_types
+    (body_types, exporter.into_joins())
 }
 
 /// `Unr` とみなすシグネチャの型変数。制約 `C a` は `a ≤ Unr` を意味し、instance の本体は頭の型変数を、既定のメソッドは
@@ -784,10 +802,12 @@ fn report_violations(
 
 /// 段0の形と段2のスキームを、宣言ごとの結果にまとめる。この時点で、形を持つ宣言はすべてスキームを持つ。extern の
 /// 関数、メソッド、操作、コンストラクタは `declaration_schemes` が、本体に問題のない関数は `check_module` が
-/// (制約がなければ空のスキームを)、解いた SCC の関数は SCC の解が入れるためである。
+/// (制約がなければ空のスキームを)、解いた SCC の関数は SCC の解が入れるためである。`joins` は本体を書き出した関数の
+/// ものである。
 fn typed_program(
     signatures: &Signatures,
     mut schemes: HashMap<ValueItem, KindScheme>,
+    mut joins: HashMap<FunctionId, Vec<Vec<u32>>>,
     bodies: ItemMap<Function, BodyTypes>,
     mut types: TypeStore,
 ) -> TypedProgram {
@@ -815,13 +835,20 @@ fn typed_program(
         );
     let decls = shapes
         .map(|(decl, shape)| {
+            let kinds = schemes
+                .remove(&decl)
+                .expect("every declaration has a Kind scheme");
+            let joins = match decl {
+                ValueItem::Function(id) => joins.remove(&id).unwrap_or_default(),
+                ValueItem::Operation(_) | ValueItem::Constructor(_) | ValueItem::Method(_) => {
+                    Vec::new()
+                }
+            };
             let declared = DeclType {
-                ty: shape.export(&mut types),
+                ty: shape.export(&mut types, Some(&kinds)),
                 shape: shape.clone(),
-                kinds: schemes
-                    .remove(&decl)
-                    .expect("every declaration has a Kind scheme"),
-                joins: Vec::new(),
+                kinds,
+                joins,
             };
             (decl, declared)
         })
@@ -850,7 +877,7 @@ fn check_main(
     if has_error(&signature.types, signature.ty) {
         return;
     }
-    let found = shape.export(types);
+    let found = shape.export(types, None);
     let expected = types.intern(TypeKind::Fn {
         param: types.unit(),
         lin: Lin::Unr,

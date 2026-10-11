@@ -1,6 +1,7 @@
 //! Kind の変数、`下限 ≤ 上限` の制約の両辺 (`Bound`)、束の値 (`Level`)、制約の由来、持ち越しの制約を置く
 //! (docs/spec/types.md の「推論」)。線形性 (`Unr ≤ Lin`) と多重度 (`Never ≤ Once ≤ Multi`) の両方に使う。
-//! 段1が集める問題とスキームは `problem` に、段2が SCC ごとに解く処理は `solve` に、解いたスキームの上の評価は `eval` にある。
+//! 段1が集める問題とスキームは `problem` に、段2が SCC ごとに解く処理は `solve` に、解いたスキームの上の評価は `eval` に、
+//! 本体の型を書き出すときの変数の値は `summary` にある。
 
 use eml_diagnostics::{FileId, TextRange, TextSize};
 use eml_hir::{DisplayNames, OperationId};
@@ -13,6 +14,7 @@ pub(crate) mod entail;
 pub(crate) mod eval;
 pub(crate) mod problem;
 pub(crate) mod solve;
+pub(crate) mod summary;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct KindVar(u32);
