@@ -7,12 +7,12 @@ mod effects;
 mod error;
 mod externs;
 mod machine;
+mod prims;
 mod runtime;
 
 pub use error::{Fault, RuntimeError, SourceLocation};
 
 use machine::Machine;
-use runtime::Runtime;
 
 /// フィールドを足しても呼び出し側を壊さないように、`non_exhaustive` にして `RunConfig::default()` から作らせる。
 #[derive(Debug, Clone, Default)]
@@ -69,11 +69,15 @@ pub fn run(
 ) -> Result<RunStats, RuntimeError> {
     let mut machine = Machine::new(program, out, &config.file_root);
     machine.run()?;
-    finish(&machine.rt, config)
+    finish(&machine, config)
 }
 
 /// 正常に終わった実行の後始末。実行時エラーで止まった場合はリークを数えない。途中のフレームが残っているのは当然だから。
-fn finish(rt: &Runtime<'_>, config: &RunConfig) -> Result<RunStats, RuntimeError> {
+/// evidence のリストと yield の状態は、リークの検査の前提なので、`debug_heap` によらず先に確かめる。
+fn finish(machine: &Machine<'_>, config: &RunConfig) -> Result<RunStats, RuntimeError> {
+    let rt = &machine.rt;
+    rt.check_context()
+        .map_err(|fault| machine.error(fault.into()))?;
     if config.debug_heap {
         rt.check_leaks()?;
     }

@@ -1223,3 +1223,77 @@ fn release_fields_on_a_freed_value_is_use_after_free() {
     );
     assert!(heap.live_objects().is_empty());
 }
+
+#[test]
+fn an_evidence_releases_its_table_state_and_outer_list() {
+    let mut heap = Heap::new();
+    let clause = string(&mut heap, "clause");
+    let table = heap.alloc(Payload::EvTable {
+        effect: 0,
+        entries: vec![Value::Obj(clause)],
+    });
+    let state = string(&mut heap, "state");
+    // 再開で作り直した evidence は、元の evidence と入口の表を共有する
+    heap.dup(table).unwrap();
+    let outer_evidence = heap.alloc(Payload::Evidence {
+        table,
+        state: Value::Unit,
+        outer: Value::Unit,
+    });
+    let outer = heap.alloc(Payload::Evv {
+        evidence: outer_evidence,
+        next: Value::Unit,
+    });
+    let evidence = heap.alloc(Payload::Evidence {
+        table,
+        state: Value::Obj(state),
+        outer: Value::Obj(outer),
+    });
+    heap.decref(evidence).unwrap();
+    assert!(heap.live_objects().is_empty());
+}
+
+#[test]
+fn evidence_objects_are_counted_by_their_kind() {
+    let mut heap = Heap::new();
+    let table = heap.alloc(Payload::EvTable {
+        effect: 0,
+        entries: vec![Value::Unit],
+    });
+    let evidence = heap.alloc(Payload::Evidence {
+        table,
+        state: Value::Unit,
+        outer: Value::Unit,
+    });
+    let list = heap.alloc(Payload::Evv {
+        evidence,
+        next: Value::Unit,
+    });
+    assert_eq!(
+        heap.live_objects(),
+        vec![
+            ("EvTable".to_string(), 1),
+            ("Evidence".to_string(), 1),
+            ("Evv".to_string(), 1)
+        ]
+    );
+    heap.decref(list).unwrap();
+    assert!(heap.live_objects().is_empty());
+}
+
+#[test]
+fn an_evidence_is_not_copied_like_a_closure() {
+    let mut heap = Heap::new();
+    let table = heap.alloc(Payload::EvTable {
+        effect: 0,
+        entries: Vec::new(),
+    });
+    let evidence = heap.alloc(Payload::Evidence {
+        table,
+        state: Value::Unit,
+        outer: Value::Unit,
+    });
+    assert_eq!(heap.take_or_copy(evidence), Err(HeapError::NotCopyable));
+    heap.decref(evidence).unwrap();
+    assert!(heap.live_objects().is_empty());
+}

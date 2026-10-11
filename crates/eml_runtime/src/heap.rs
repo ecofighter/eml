@@ -22,6 +22,9 @@ pub enum Value {
     /// 捕まえた値のない関数の値。ヒープに置かない。
     Fn(u32),
     Obj(ObjRef),
+    /// yield 中の関数が返す、呼び出し元が捨てる値。ヒープに置かないので、`dup` と `decref` は何もせず、`box` と
+    /// `unbox` もそのまま通す (docs/superpowers/specs/2026-10-11-s7-evidence-passing-design.md の「ダミーの値」)。
+    Dummy,
 }
 
 /// オブジェクトの中身。enum の形がレイアウトで、`Lin` の値の破棄処理はオブジェクトの解放で済む (docs/spec/runtime.md)。
@@ -46,6 +49,25 @@ pub enum Payload {
     },
     /// 組み込みの線形型 `File` の値。写さない (`take_or_copy` は `NotCopyable` を返す)。
     File(FileHandle),
+    /// evidence の入口の表。`entries` は操作の順の入口のクロージャで、handle の場所で入れた後は変えない。再開で
+    /// 作り直した evidence もこの表を共有する (docs/superpowers/specs/2026-10-11-s7-evidence-passing-design.md の
+    /// 「evidence」)。
+    EvTable {
+        effect: u32,
+        entries: Vec<Value>,
+    },
+    /// handler の1回の実行。`outer` は作ったときの `evv` で、この evidence 自身を含まない。書き換えるのは `state`
+    /// だけである。yield の宛先はこの物体の参照そのもので比べる。
+    Evidence {
+        table: ObjRef,
+        state: Value,
+        outer: Value,
+    },
+    /// `evv` のリストの節点。リストは書き換えない永続リストで、空のリストは `Value::Unit` である。
+    Evv {
+        evidence: ObjRef,
+        next: Value,
+    },
 }
 
 impl Payload {
@@ -59,6 +81,9 @@ impl Payload {
             Payload::Continuation { .. } => "Continuation",
             Payload::Data { .. } => "Data",
             Payload::File(_) => "File",
+            Payload::EvTable { .. } => "EvTable",
+            Payload::Evidence { .. } => "Evidence",
+            Payload::Evv { .. } => "Evv",
         }
     }
 }
@@ -593,7 +618,8 @@ impl Heap {
 
 /// クロージャとフレームの中身の写し。子の参照は数え直さないので、`take_or_copy` (クロージャ) と `copy_segment`
 /// (区間のフレーム) だけが使う。継続オブジェクトは区間ごと写し、データ、文字列、`File` は写さないので、ここでは
-/// 扱わない (docs/spec/runtime.md)。
+/// 扱わない (docs/spec/runtime.md)。evidence の物体も写さない。クロージャが捕まえた evidence は、クロージャを写すときに
+/// 参照を増やして共有する。
 fn copy(payload: &Payload) -> Payload {
     match payload {
         Payload::Closure(closure) => Payload::Closure(Closure {
@@ -639,7 +665,12 @@ fn copy(payload: &Payload) -> Payload {
         Payload::Continuation { .. } => {
             unreachable!("a shared continuation is copied with its segment by `copy_segment`")
         }
-        Payload::Str(_) | Payload::Data { .. } | Payload::File(_) => {
+        Payload::Str(_)
+        | Payload::Data { .. }
+        | Payload::File(_)
+        | Payload::EvTable { .. }
+        | Payload::Evidence { .. }
+        | Payload::Evv { .. } => {
             unreachable!("`take_or_copy` copies only closures and continuations")
         }
     }
@@ -747,6 +778,20 @@ fn children(payload: &Payload, work: &mut Vec<ObjRef>) {
         Payload::Continuation { top, .. } => work.push(*top),
         Payload::Closure(closure) => work.extend(closure.args.iter().filter_map(object)),
         Payload::Data { fields, .. } => work.extend(fields.iter().filter_map(object)),
+        Payload::EvTable { effect: _, entries } => work.extend(entries.iter().filter_map(object)),
+        Payload::Evidence {
+            table,
+            state,
+            outer,
+        } => {
+            work.push(*table);
+            work.extend(object(state));
+            work.extend(object(outer));
+        }
+        Payload::Evv { evidence, next } => {
+            work.push(*evidence);
+            work.extend(object(next));
+        }
         Payload::Frame(Frame::Root) | Payload::Str(_) | Payload::File(_) => {}
     }
 }

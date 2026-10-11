@@ -15,6 +15,19 @@ pub(crate) enum Step {
     Finished,
 }
 
+/// yield の状態 (docs/superpowers/specs/2026-10-11-s7-evidence-passing-design.md の「実行の文脈」)。
+pub(crate) enum YieldState {
+    None,
+    /// yield 中か、`abort` なら中断中である。`target` (宛先の evidence)、`clause` (節の本体)、`cont`
+    /// (組み立て中の継続 κ) は参照を1つずつ所有する。`cont` は取り出している間 `Value::Unit` である。
+    Yielding {
+        target: ObjRef,
+        clause: Value,
+        cont: Value,
+        abort: bool,
+    },
+}
+
 /// 呼び出しと戻りの行き先。関数の入り方と、戻りのフレームの再開の番地の読み方は IR の形で決まるので、機械に任せる
 /// (docs/spec/core-ir.md の「インタプリタ (CEK 機械)」)。
 pub(crate) enum Transfer {
@@ -104,6 +117,19 @@ pub(crate) struct Runtime<'p> {
     strings: &'p [String],
     /// 関数ごとの引数の数。関数値の適用が、足りない・ちょうど・余るを決める。
     arities: Vec<usize>,
+    /// エフェクトごとの操作の数。`ev_new` が入口の表の欄をこの数だけ作る。
+    pub(crate) effect_sizes: Vec<usize>,
+    /// 今有効な evidence のリスト。空のリストは `Value::Unit` である。関数の引数でなく実行の文脈に持つので、yield
+    /// しうる関数とそうでない関数の呼び出しの規約は同じになる
+    /// (docs/superpowers/specs/2026-10-11-s7-evidence-passing-design.md の「実行の文脈」)。
+    pub(crate) evv: Value,
+    pub(crate) yield_state: YieldState,
+    /// `ev_lookup` と `evv_mask` がたどった `evv` の節点の数。
+    pub(crate) evidence_steps: u64,
+    /// `yield_to` と `yield_abort` を実行した回数。
+    pub(crate) yields: u64,
+    /// `yield_cont_set` を実行した回数。継続 κ に足したフレームの数である。
+    pub(crate) yield_frames: u64,
     /// `find_handler` が調べたフレームの数 (`RunStats::handler_visits`)。
     pub(crate) handler_visits: u64,
     /// 機械が実行した `box` の数 (`RunStats::boxes`)。
@@ -118,6 +144,7 @@ impl<'p> Runtime<'p> {
         file_root: &'p Path,
         strings: &'p [String],
         arities: Vec<usize>,
+        effect_sizes: Vec<usize>,
     ) -> Self {
         let mut heap = Heap::new();
         let cont = heap.alloc(Payload::Frame(Frame::Root));
@@ -134,6 +161,12 @@ impl<'p> Runtime<'p> {
             literals,
             strings,
             arities,
+            effect_sizes,
+            evv: Value::Unit,
+            yield_state: YieldState::None,
+            evidence_steps: 0,
+            yields: 0,
+            yield_frames: 0,
             handler_visits: 0,
             boxes: 0,
             unboxes: 0,
@@ -282,10 +315,17 @@ impl<'p> Runtime<'p> {
                 let state = env.atom(state)?;
                 self.resume(k, arg, state)
             }
-            Call::Clause { .. } => {
-                unimplemented!(
-                    "a clause call reaches the interpreter before the evidence pass exists"
-                )
+            // 節の呼び出しは、インタプリタでは `apply` と同じである
+            // (docs/superpowers/specs/2026-10-11-s7-evidence-passing-design.md の「節の呼び出し」)
+            Call::Clause {
+                effect: _,
+                op: _,
+                callee,
+                args,
+            } => {
+                let callee = env.atom(callee)?;
+                let args = env.atoms(args)?;
+                self.apply_and_continue(callee, args)
             }
         }
     }
@@ -442,6 +482,18 @@ impl<'p> Runtime<'p> {
             unboxes: self.unboxes,
             peak_objects: self.heap.peak_objects(),
         }
+    }
+
+    /// 正しく終わった実行は、evidence のリストを空に戻し、yield を終えている。残っていると、その中の物体が
+    /// リークに見えるので、リークの検査より先に確かめる。
+    pub(crate) fn check_context(&self) -> Result<(), Fault> {
+        if self.evv != Value::Unit {
+            return Err(Fault::Internal("the evidence list is not empty at the end"));
+        }
+        if !matches!(self.yield_state, YieldState::None) {
+            return Err(Fault::Internal("a yield is left at the end"));
+        }
+        Ok(())
     }
 
     pub(crate) fn check_leaks(&self) -> Result<(), RuntimeError> {

@@ -7,7 +7,7 @@ use crate::error::{Fault, RuntimeError, SourceLocation};
 use crate::runtime::{Env, Runtime, Step, Transfer};
 
 /// 止まった理由と、それを起こした extern の呼び出しの位置。
-struct Failure {
+pub(crate) struct Failure {
     fault: Fault,
     at: Option<Loc>,
 }
@@ -34,10 +34,15 @@ pub(crate) struct Machine<'p> {
 impl<'p> Machine<'p> {
     pub(crate) fn new(program: &'p Program, out: &'p OutputSink, file_root: &'p Path) -> Self {
         let arities = program.functions.iter().map(|f| f.params().len()).collect();
+        let effect_sizes = program
+            .effects
+            .iter()
+            .map(|effect| effect.operations.len())
+            .collect();
         let entry = program.function(program.entry);
         Machine {
             program,
-            rt: Runtime::new(out, file_root, &program.strings, arities),
+            rt: Runtime::new(out, file_root, &program.strings, arities, effect_sizes),
             function: program.entry,
             block: BlockId::ENTRY,
             stmt: 0,
@@ -51,20 +56,23 @@ impl<'p> Machine<'p> {
             match self.step() {
                 Ok(Step::Finished) => return Ok(()),
                 Ok(Step::Continue) => {}
-                Err(Failure { fault, at }) => {
-                    let function = self.program.function(self.function).name.clone();
-                    let at = at.map(|loc| SourceLocation {
-                        path: self.program.files[loc.file as usize].clone(),
-                        line: loc.line,
-                        column: loc.column,
-                    });
-                    return Err(RuntimeError::Fault {
-                        fault,
-                        function,
-                        at,
-                    });
-                }
+                Err(failure) => return Err(self.error(failure)),
             }
+        }
+    }
+
+    /// 終わった後の検査の誤りも、実行中の誤りと同じく、最後に動いていた関数の名前を付けて報告する。
+    pub(crate) fn error(&self, Failure { fault, at }: Failure) -> RuntimeError {
+        let function = self.program.function(self.function).name.clone();
+        let at = at.map(|loc| SourceLocation {
+            path: self.program.files[loc.file as usize].clone(),
+            line: loc.line,
+            column: loc.column,
+        });
+        RuntimeError::Fault {
+            fault,
+            function,
+            at,
         }
     }
 
@@ -136,8 +144,9 @@ impl<'p> Machine<'p> {
                 self.rt.unboxes += 1;
                 scalar(self.env.atom(atom)?, "an unbox of a heap object")?
             }
-            Rhs::Prim(_, _) => {
-                unimplemented!("a prim reaches the interpreter before the evidence pass exists")
+            Rhs::Prim(prim, args) => {
+                let args = self.env.atoms(args)?;
+                self.rt.prim(prim, args)?
             }
         };
         self.env.write(var, value);
@@ -328,10 +337,12 @@ fn resume_point(address: u64) -> (BlockId, usize) {
 
 /// `box` と `unbox` の値。`Value` は自分の種類を持つので、スカラーのまま渡す。ヒープの物体はスカラーを入れた値に
 /// ならない。R9 は値を作った配置を追わないので、verifier を通った IR でも `tobj` に入ったヒープの物体を `unbox`
-/// しうる。機械は Repr を読まずにそれを見つける (docs/spec/core-ir.md の「インタプリタ (CEK 機械)」)。
+/// しうる。機械は Repr を読まずにそれを見つける (docs/spec/core-ir.md の「インタプリタ (CEK 機械)」)。yield 中に
+/// 返るダミーは、呼び出しの直後の変換に当たっても誤りにせず、そのまま通す。その値は捨てられる
+/// (docs/superpowers/specs/2026-10-11-s7-evidence-passing-design.md の「ダミーの値」)。
 fn scalar(value: Value, what: &'static str) -> Result<Value, Fault> {
     match value {
         Value::Obj(_) => Err(Fault::Internal(what)),
-        Value::Int(_) | Value::Unit | Value::Tag(_) | Value::Fn(_) => Ok(value),
+        Value::Int(_) | Value::Unit | Value::Tag(_) | Value::Fn(_) | Value::Dummy => Ok(value),
     }
 }
