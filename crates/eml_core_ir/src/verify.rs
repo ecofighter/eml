@@ -126,7 +126,7 @@ enum NonUniform {
     Ret(Repr),
 }
 
-/// 一様な関数は、引数と `ret` がすべて `tobj` と互換である。`apply` と handler が、関数ごとの Repr を知らずに呼ぶため
+/// 一様な関数は、引数と `ret` がすべて `tobj` と互換である。関数の値を呼ぶ `apply` は、関数ごとの Repr を知らないため
 /// である (docs/spec/core-ir.md の「位置の規則」)。`clause` の印の関数は関数の値として呼ばれず、操作の ABI に
 /// 合わせるので、ここでは見ない (`clause_function`)。
 fn non_uniform(function: &CoreFn) -> Option<NonUniform> {

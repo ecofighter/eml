@@ -1,5 +1,6 @@
--- A file captured by the `return` clause lives in the handler frame. Operation clauses can capture only unrestricted
--- values, so this is the only way a handler frame holds a file. Aborting the body releases the frame and the file.
+-- A file captured by the `return` clause lives in the clause's closure, which `prompt$` holds and `resume$` captures
+-- with the continuation. Operation clauses can capture only unrestricted values, so this is the only way a handler holds
+-- a file. Aborting the body drops the continuation and the closure, which releases the file.
 effect Fail where
   never fail : Unit -> a
 
