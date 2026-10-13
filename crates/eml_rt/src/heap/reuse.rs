@@ -7,7 +7,7 @@ use std::ptr::NonNull;
 use super::check::{self, State};
 use super::{Heap, object_words};
 use crate::error::HeapError;
-use crate::meta::{self, Header, Meta};
+use crate::meta::{self, Header, Kind, Meta};
 use crate::mode::Mode;
 use crate::sync::Ordering;
 use crate::word::Word;
@@ -87,14 +87,16 @@ impl<M: Mode> Heap<M> {
     /// token が空でなければ、その箱に `meta` を書いて返す。空なら確保する。箱を使ったかも返す。フィールドは呼ぶ側が書く。
     ///
     /// # Safety
-    /// `token` はこのヒープの token で、まだ使っていない。確保したときも箱を使ったときも、呼ぶ側は、ほかのヒープの
-    /// 操作の前に、`meta` に合うフィールドを書く。
+    /// `token` はこのヒープの token で、まだ使っていない。`meta` の種類は `Foreign` でも `Free` でもない。呼ぶ側は、
+    /// ほかのヒープの操作の前に、走査する語がみな `meta` に合う値を持つようにする。箱を使い回したときは、残した
+    /// フィールドを書き直さなくてよい。
     pub unsafe fn con_at(
         &mut self,
         token: Token,
         payload_words: usize,
         meta: Meta,
     ) -> Result<(Word, bool), HeapError> {
+        debug_assert!(!matches!(meta.kind(), Kind::Foreign | Kind::Free));
         let Some(h) = (unsafe { self.take_token(token)? }) else {
             return Ok((unsafe { self.alloc(payload_words, meta) }, false));
         };
