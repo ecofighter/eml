@@ -386,4 +386,21 @@ mod tests {
         assert!(!unsafe { pages.fits(a, 15) });
         assert!(!unsafe { pages.fits(a, 20) });
     }
+
+    // 前置きを足す和が桁あふれするのは、検査モードの `con_at` に巨大な語の数が来たときだけである。`con_at` は安全の条件で
+    // 級を約束させるので、ここでは `fits` を直に呼ぶ
+    #[test]
+    fn a_wrapping_size_panics_in_the_token_check() {
+        let mut pages = Pages::new(1);
+        let a = pages.alloc(2);
+        let payload = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
+            pages.fits(a, usize::MAX)
+        }))
+        .expect_err("a wrapping size must panic");
+        let message = payload
+            .downcast_ref::<&str>()
+            .copied()
+            .or_else(|| payload.downcast_ref::<String>().map(String::as_str));
+        assert_eq!(message, Some(TOO_LARGE));
+    }
 }
