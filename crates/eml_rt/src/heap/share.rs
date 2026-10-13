@@ -1,4 +1,4 @@
-//! `share` (docs/superpowers/specs/2026-10-13-s9a-eml-rt-core-design.md の「`share`」)。たどりは物体への読み書きを
+//! `share` (docs/spec/object-model.md の「`share`」)。たどりは物体への読み書きを
 //! `Graph` の裏に置いて書き、Verus がたどりを trait のメソッドの約束の上で証明する。証明するのは `crates/eml_rt/verus/share.rs`
 //! の写しで、写しが本体と同じことは `verus_copies.rs` のテストが確かめる。
 

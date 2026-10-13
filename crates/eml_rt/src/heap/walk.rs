@@ -1,5 +1,5 @@
 //! 生存の列挙、リーク、`Heap` を落とすときの後始末
-//! (docs/superpowers/specs/2026-10-13-s9a-eml-rt-core-design.md の「生存の列挙」)。
+//! (docs/spec/object-model.md の「生存の列挙」)。
 
 use std::collections::BTreeMap;
 use std::ptr::NonNull;
@@ -36,7 +36,7 @@ impl<M: Mode> Heap<M> {
 }
 
 impl Heap<Checked> {
-    /// 生存の列挙で見つかる不変条件の違反 (spec の「報告する誤り」)。共有の物体から届いてよいのは共有か不死の物体か
+    /// 生存の列挙で見つかる不変条件の違反 (docs/spec/object-model.md の「報告する誤り」)。共有の物体から届いてよいのは共有か不死の物体か
     /// `lin` ビットの立った局所の物体で、不死の物体から届いてよいのは不死の物体だけである。
     pub fn check_invariants(&self) -> Result<(), HeapError> {
         let mut result = Ok(());
@@ -72,7 +72,7 @@ impl Heap<Checked> {
         result
     }
 
-    /// 種類の名前ごとのリーク (spec の「報告する誤り」)。不死の物体は外に出ている参照の数を足し、token の箱は
+    /// 種類の名前ごとのリーク (docs/spec/object-model.md の「報告する誤り」)。不死の物体は外に出ている参照の数を足し、token の箱は
     /// `Token` で数える。
     pub fn leaks(&self) -> BTreeMap<&'static str, u64> {
         let mut leaks = BTreeMap::new();

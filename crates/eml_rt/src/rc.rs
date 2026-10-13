@@ -1,17 +1,17 @@
-//! RC の遷移 (docs/superpowers/specs/2026-10-13-s9a-eml-rt-core-design.md の「遷移の関数」)。rc の値だけを受けて次の
+//! RC の遷移 (docs/spec/object-model.md の「遷移の関数」)。rc の値だけを受けて次の
 //! 状態を返す純粋な関数にし、ヒープと単体テストが同じ関数を使い、Verus が写しで同じ関数を証明する。rc は 0 が不死、
 //! 正が局所、負が共有である。
 
 use std::sync::atomic::{AtomicI32, Ordering};
 
-/// 局所の数の上限。ここに達した数は動かさない (spec の「上限」)。
+/// 局所の数の上限。ここに達した数は動かさない (docs/spec/object-model.md の「上限」)。
 pub(crate) const LOCAL_MAX: i32 = i32::MAX;
 /// 共有の `dup` は、これより小さい数を動かさない。
 /// 値は MIN + (1 << 16) である。16 進で書くのは、Verus の写し (`verus/rc.rs`) がシフトを受け付けず、本体と同じ文字に
 /// そろえるためである。
 pub(crate) const DUP_LIMIT: i32 = i32::MIN + 0x1_0000;
 /// 共有の `decref` は、これより小さい数を動かさない。2つの境目の間の幅が、並行の加減算で数が戻ってくるのを防ぐ
-/// (spec の「上限」)。
+/// (docs/spec/object-model.md の「上限」)。
 /// 値は MIN + (1 << 17) である。`pub` と 16 進で書くのは、Verus の写し (`verus/rc.rs`) が `pub(crate)` の定数とシフトを受け付けず、
 /// 本体と同じ文字にそろえるためである。この crate の `rc` は private な module なので、外には見えない。
 pub const DROP_LIMIT: i32 = i32::MIN + 0x2_0000;

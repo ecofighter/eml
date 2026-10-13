@@ -113,7 +113,7 @@ fn a_token_cannot_be_used_twice_even_after_its_box_is_a_token_again() {
     unsafe {
         let first = heap.into_token(p).unwrap().into_word();
         let (q, _) = heap.con_at(Token::from_word(first), 2, CONS_META).unwrap();
-        // 同じ箱がまた token になっても、古い token は断る (spec の「検査モードの token」)
+        // 同じ箱がまた token になっても、古い token は断る (docs/spec/object-model.md の「検査モードの token」)
         let second = heap.into_token(q).unwrap();
         assert_eq!(
             heap.con_at(Token::from_word(first), 2, CONS_META),

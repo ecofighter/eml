@@ -161,7 +161,7 @@ fn releasing_a_shared_object_dups_the_kept_fields<M: Mode>() {
 
 fn the_expanded_release_matches_the_general_one<M: Mode>() {
     // 一意な場合と rc が 2 の場合のそれぞれで、一般の `release` と部品を並べた展開
-    // (spec の「核の操作」) を流し、手放した後に生きている箱の数を比べる
+    // (docs/spec/object-model.md の「核の操作」) を流し、手放した後に生きている箱の数を比べる
     for shared in [false, true] {
         let outcome = |expanded: bool| {
             let mut heap = Heap::<M>::new();

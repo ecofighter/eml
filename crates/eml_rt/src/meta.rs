@@ -1,4 +1,4 @@
-//! 物体のヘッダと種類 (docs/superpowers/specs/2026-10-13-s9a-eml-rt-core-design.md の「ヘッダ」と「種類」)。
+//! 物体のヘッダと種類 (docs/spec/object-model.md の「ヘッダ」と「種類」)。
 
 use std::fmt;
 use std::ptr::NonNull;

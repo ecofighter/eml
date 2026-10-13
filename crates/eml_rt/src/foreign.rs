@@ -1,4 +1,4 @@
-//! `Foreign` の物体 (docs/superpowers/specs/2026-10-13-s9a-eml-rt-core-design.md の「種類」)。ペイロードの先頭に破棄
+//! `Foreign` の物体 (docs/spec/object-model.md の「種類」)。ペイロードの先頭に破棄
 //! 処理の表への参照を置き、その後に Rust の値を置く。
 
 use std::any::TypeId;

@@ -1,4 +1,4 @@
-//! 検査モードの前置きと検査 (docs/superpowers/specs/2026-10-13-s9a-eml-rt-core-design.md の「前置き」と「報告する
+//! 検査モードの前置きと検査 (docs/spec/object-model.md の「前置き」と「報告する
 //! 誤り」)。前置きは検査モードのブロックにだけあるので、前置きを読む関数は `M::CHECKED` のときだけ働く。
 
 use std::ptr::NonNull;
@@ -11,7 +11,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 
 #[repr(C)]
 pub(crate) struct Prefix {
-    /// 普通の物体では所有者 ID、`alloc_immortal` の物体では外に出ている参照の数 (spec の「不死の物体の数え方」)。
+    /// 普通の物体では所有者 ID、`alloc_immortal` の物体では外に出ている参照の数 (docs/spec/object-model.md の「不死の物体の数え方」)。
     pub(crate) first: AtomicU32,
     /// 下位2ビットが状態、残りが世代の番号。
     state: AtomicU32,
@@ -109,7 +109,7 @@ impl<M: Mode> Heap<M> {
         }
     }
 
-    /// 正の rc の物体は、今の worker が持ち主でなければならない (spec の「論理的な worker ID」)。
+    /// 正の rc の物体は、今の worker が持ち主でなければならない (docs/spec/object-model.md の「論理的な worker ID」)。
     pub(super) unsafe fn check_owner(&self, h: NonNull<Header>, rc: i32) -> Result<(), HeapError> {
         if !M::CHECKED || rc <= 0 {
             return Ok(());
@@ -212,7 +212,7 @@ impl<M: Mode> Heap<M> {
     }
 }
 
-/// `reuse_in_place` の照らし合わせ (spec の「`lin` ビット」)。`lin` ビットは、箱が持ち新しい `meta` が持たないときだけ
+/// `reuse_in_place` の照らし合わせ (docs/spec/object-model.md の「`lin` ビット」)。`lin` ビットは、箱が持ち新しい `meta` が持たないときだけ
 /// 誤りにする。ビットが欠けるのは安全の側だからである。Verus が写しで同じ関数を証明する。
 pub(crate) fn reuse_in_place_check(boxed: Meta, new: Meta) -> Result<(), HeapError> {
     if !boxed.same_shape(new) {

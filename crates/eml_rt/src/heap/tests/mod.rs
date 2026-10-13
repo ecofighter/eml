@@ -1,4 +1,4 @@
-//! ヒープの単体テスト (docs/superpowers/specs/2026-10-13-s9a-eml-rt-core-design.md の「核の操作」)。モードを型の引数に
+//! ヒープの単体テスト (docs/spec/object-model.md の「核の操作」)。モードを型の引数に
 //! 取る関数を `both_modes!` で2つのモードのテストにし、同じ列を速いモードと検査モードで流す。
 
 use std::sync::Arc;

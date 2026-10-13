@@ -1,4 +1,4 @@
-//! 8 バイトの語 (docs/superpowers/specs/2026-10-13-s9a-eml-rt-core-design.md の「語」)。下位ビットが 1 なら即値、0 なら
+//! 8 バイトの語 (docs/spec/object-model.md の「語」)。下位ビットが 1 なら即値、0 なら
 //! ヘッダを指すポインタである。`u64` でなくポインタ型で持つのは、strict provenance の下でポインタの出所を失わないためである。
 
 use std::fmt;
@@ -74,7 +74,7 @@ impl Word {
 }
 
 // ビット列の計算は、ポインタ型を扱えない Verus の写し (`verus/word.rs`) で証明するため、整数の関数に分ける
-// (spec の「Verus」)。
+// (docs/implementation/testing.md の「Verus」)。
 
 /// 63 ビットに収まるか。
 pub(crate) const fn fits_imm(n: i64) -> bool {

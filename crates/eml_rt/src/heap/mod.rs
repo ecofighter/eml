@@ -1,6 +1,6 @@
 //! ヒープ: 確保、RC、解放の連鎖、フィールドの読み書き
-//! (docs/superpowers/specs/2026-10-13-s9a-eml-rt-core-design.md の「核の操作」)。語を受ける操作と、ペイロードを
-//! 呼ぶ側が書く `alloc` と `alloc_immortal` は `unsafe fn` で、安全の条件は spec の「核の操作」にある。その条件の
+//! (docs/spec/object-model.md の「核の操作」)。語を受ける操作と、ペイロードを
+//! 呼ぶ側が書く `alloc` と `alloc_immortal` は `unsafe fn` で、安全の条件は docs/spec/object-model.md の「核の操作」にある。その条件の
 //! 「生きている物体」は、`meta` に合うペイロード (走査する語、`scan` が 255 なら数の語、`BigInt` なら値) をすべて書いた
 //! 物体を指す。検査モードは、確かめられる違反を `Err` で返す。
 
@@ -31,7 +31,7 @@ pub use reuse::Token;
 
 use check::{PREFIX_WORDS, State};
 
-/// 検査モードだけで数える仕事の回数 (spec の「モードの選び方」)。ダミーの1つも数に入る。
+/// 検査モードだけで数える仕事の回数 (docs/spec/object-model.md の「モードの選び方」)。ダミーの1つも数に入る。
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct Stats {
@@ -61,7 +61,7 @@ pub struct Heap<M: Mode> {
     _mode: PhantomData<(M, Cell<()>)>,
 }
 
-// `Heap` は worker ごとに1つ持ち、worker のスレッドに移せる。`Sync` にはしない (spec の「語」)
+// `Heap` は worker ごとに1つ持ち、worker のスレッドに移せる。`Sync` にはしない (docs/spec/object-model.md の「語」)
 unsafe impl<M: Mode> Send for Heap<M> {}
 
 impl<M: Mode> Default for Heap<M> {
@@ -107,7 +107,7 @@ impl<M: Mode> Heap<M> {
             stats: Stats::default(),
             _mode: PhantomData,
         };
-        // ダミーは値 0 の BigInt の不死の物体で、検査モードでも数えない (spec の「ダミーの値」)
+        // ダミーは値 0 の BigInt の不死の物体で、検査モードでも数えない (docs/spec/object-model.md の「ダミーの値」)
         let h = heap.alloc_header(1, 0, Meta::new(0, 0, Kind::BigInt, false));
         unsafe { meta::slot(h, 0).cast::<i64>().write(0) };
         if M::CHECKED {
@@ -136,7 +136,7 @@ impl<M: Mode> Heap<M> {
         self.stats
     }
 
-    /// 使っているメモリのバイト数 (spec の「確保と解放」)。検査モードでは隔離したブロックを引く。
+    /// 使っているメモリのバイト数 (docs/spec/object-model.md の「確保と解放」)。検査モードでは隔離したブロックを引く。
     pub fn bytes_in_use(&self) -> usize {
         self.pages.bytes() - self.quarantined
     }
@@ -224,7 +224,7 @@ impl<M: Mode> Heap<M> {
         Word::from_header(h)
     }
 
-    /// 不死の物体の参照を1つ作る (spec の「不死の物体の数え方」)。速いモードでは何もしない。
+    /// 不死の物体の参照を1つ作る (docs/spec/object-model.md の「不死の物体の数え方」)。速いモードでは何もしない。
     ///
     /// # Safety
     /// `w` は即値か、このヒープの生きている物体を指す。
@@ -262,7 +262,7 @@ impl<M: Mode> Heap<M> {
         Ok(())
     }
 
-    /// 参照を1つ手放す。LIR の `decref` と `drop` は、どちらもこれで実行する (spec の「核の操作」)。
+    /// 参照を1つ手放す。LIR の `decref` と `drop` は、どちらもこれで実行する (docs/spec/object-model.md の「核の操作」)。
     ///
     /// # Safety
     /// `w` は即値か、このヒープの生きている物体を指し、呼ぶ側がその参照を1つ持っている。

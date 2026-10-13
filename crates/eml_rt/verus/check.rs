@@ -1,4 +1,4 @@
-//! `heap/check.rs` の `release` と reuse の判定の写しと証明 (spec の「Verus」)。
+//! `heap/check.rs` の `release` と reuse の判定の写しと証明 (docs/implementation/testing.md の「Verus」)。
 
 use vstd::prelude::*;
 

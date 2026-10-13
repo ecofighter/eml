@@ -1,4 +1,4 @@
-//! `word.rs` の即値のビット列の計算の写しと証明 (spec の「Verus」)。
+//! `word.rs` の即値のビット列の計算の写しと証明 (docs/implementation/testing.md の「Verus」)。
 
 use vstd::prelude::*;
 

@@ -1,4 +1,4 @@
-//! `share_walk` の写しと証明 (spec の「Verus」)。
+//! `share_walk` の写しと証明 (docs/implementation/testing.md の「Verus」)。
 
 use vstd::laws_eq::obeys_concrete_eq;
 use vstd::prelude::*;

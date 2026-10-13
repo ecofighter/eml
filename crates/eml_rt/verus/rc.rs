@@ -1,4 +1,4 @@
-//! `rc.rs` の定数と遷移の関数の写しと、RC のモデルとの対応の証明 (spec の「Verus」)。
+//! `rc.rs` の定数と遷移の関数の写しと、RC のモデルとの対応の証明 (docs/implementation/testing.md の「Verus」)。
 
 use vstd::prelude::*;
 
@@ -112,7 +112,7 @@ pub(crate) fn mark_step(rc: i32) -> (r: Option<i32>)
     })
 }
 
-// RC のモデル (spec の「Verus」)。物体の状態は、rc、本当の参照の数、張り付きの旗である
+// RC のモデル (docs/implementation/testing.md の「Verus」)。物体の状態は、rc、本当の参照の数、張り付きの旗である
 
 pub struct Obj {
     pub rc: i32,

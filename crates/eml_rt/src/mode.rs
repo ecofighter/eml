@@ -1,4 +1,4 @@
-//! 速いモードと検査モード (docs/superpowers/specs/2026-10-13-s9a-eml-rt-core-design.md の「モードの選び方」)。
+//! 速いモードと検査モード (docs/spec/object-model.md の「モードの選び方」)。
 //! 型の引数で選ぶので、速いモードでは検査の分岐が単相化で消える。
 
 mod sealed {

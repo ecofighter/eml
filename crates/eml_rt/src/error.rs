@@ -1,4 +1,4 @@
-//! 検査モードが報告する誤り (docs/superpowers/specs/2026-10-13-s9a-eml-rt-core-design.md の「報告する誤り」)。速いモードは
+//! 検査モードが報告する誤り (docs/spec/object-model.md の「報告する誤り」)。速いモードは
 //! どれも返さない。
 
 use std::fmt;

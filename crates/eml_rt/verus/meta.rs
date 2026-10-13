@@ -1,4 +1,4 @@
-//! `meta.rs` の `Kind` と `Meta` の写しと証明 (spec の「Verus」)。
+//! `meta.rs` の `Kind` と `Meta` の写しと証明 (docs/implementation/testing.md の「Verus」)。
 
 use vstd::prelude::*;
 
@@ -137,7 +137,7 @@ impl Meta {
     }
 }
 
-// 仕様。ビットの位置は、定数を使わずに spec の「ヘッダ」の並びのとおりに書く
+// 仕様。ビットの位置は、定数を使わずに docs/spec/object-model.md の「ヘッダ」の並びのとおりに書く
 
 impl Meta {
     pub closed spec fn tag_spec(self) -> u16 {

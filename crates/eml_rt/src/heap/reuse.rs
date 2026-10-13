@@ -1,4 +1,4 @@
-//! reuse の部品 (docs/superpowers/specs/2026-10-13-s9a-eml-rt-core-design.md の「reuse」と「検査モードの token」)。
+//! reuse の部品 (docs/spec/object-model.md の「reuse」と「検査モードの token」)。
 //! token の箱は中身を消さない。一意の道で、同じ位置の同じフィールドを書かずに済ませる特殊化が、古いフィールドに頼る
 //! ためである。
 
