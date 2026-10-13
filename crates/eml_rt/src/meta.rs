@@ -427,8 +427,6 @@ pub(crate) open spec fn slot_offset(i: int) -> int {
     8 * (HEADER_WORDS + i)
 }
 
-// ヒープを権限の上で書き直すまで、まだ使わない
-#[allow(dead_code)]
 #[inline]
 pub(crate) fn rc_ptr(h: *mut Header) -> (p: *mut i32)
     ensures

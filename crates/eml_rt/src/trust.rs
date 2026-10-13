@@ -97,13 +97,6 @@ const UNPROVED: &[&str] = &[
     "heap/check.rs: external_body checked_set_alive",
     "heap/reuse.rs: external_body checked_push_token",
     "heap/reuse.rs: external_body checked_take_token",
-    "heap/share.rs: external_body live",
-    "heap/share.rs: external_body rc",
-    "heap/share.rs: external_body set_rc",
-    "heap/share.rs: external_body lin",
-    "heap/share.rs: external_body set_owner",
-    "heap/share.rs: external_body push_children",
-    "heap/share.rs: external_body same",
 ];
 
 /// まだ `verus!` に入れていない `unsafe` を持つファイル。S9v の終わりに空にする。
@@ -113,7 +106,6 @@ const OUTSIDE: &[&str] = &[
     "word.rs",
     "heap/mod.rs",
     "heap/check.rs",
-    "heap/share.rs",
     "heap/walk.rs",
 ];
 
