@@ -2,8 +2,11 @@
 //! `WrongKind` と、空の token を受けた `reuse_in_place` の `StaleToken` だけである (docs/spec/object-model.md の「核の操作」)。
 
 use std::fmt;
+use vstd::prelude::*;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+verus! {
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HeapError {
     UseAfterFree,
     ImmortalOverRelease,
@@ -27,6 +30,7 @@ pub enum HeapError {
     ImmortalReachesMortal,
 }
 
+} // verus!
 impl fmt::Display for HeapError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {

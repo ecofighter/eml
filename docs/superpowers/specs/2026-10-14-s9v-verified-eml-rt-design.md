@@ -23,7 +23,7 @@ S9v では、次の3つを行う。
 - `eml_rt` の単体テストが、速いモードと検査モードの両方で通る。既存のテストと UI テストは、下の「テストの変更」に挙げたもののほかは、変えずに通る
 - Miri が、`trusted` の module のテストを、`-Zmiri-strict-provenance` の設定と、それに `-Zmiri-tree-borrows` を足した設定の両方で通す。かかった時間を記録する
 - `bench/rt.sh` の速いモードの命令の数が、S9v を始める前に 1.98.1 で取り直した基準 (下の「計測」) から、どの場合も 0.5% を超えて増えない。超えたら原因を調べ、直せないものは理由を spec に足して相談する
-- `cargo clippy --all-targets`、`cargo fmt --check`、`eml_rt` の `verusfmt --check` が通る
+- `cargo clippy --all-targets`、`cargo fmt --check`、`eml_rt` の `verusfmt --verus-only --check` が通る
 - `nix build` が通り、x86_64-linux の出力が評価できる。Linux の組み立ては、この環境に Linux の builder がないので確かめない
 
 ## 段の位置
@@ -36,7 +36,7 @@ S9v は S9a の後、S9b の前に置く。S9b の extern の語の ABI は、FF
 - `Cargo.lock` に vstd とその依存 (verus_builtin、verus_builtin_macros、verus_syn など) が入る。`eml_cli` は `eml_rt` に依存しないので `eml` バイナリには入らないが、`nix build` は lock の crate をすべて取る
 - `eml_rt` の `Cargo.toml` に `[package.metadata.verus] verify = true` を置く。`verus_keep_ghost` と `verus_only` の cfg は `unexpected_cfgs` の `check-cfg` に足す
 - `nix/verus.nix` は、`libvstd.rlib` と `vstd.vir` も残す。Verus の起動の部分が、部品がそろっているかを確かめるためである
-- rustfmt は `verus!` の中を整えないので、`eml_rt` のファイルは verusfmt で整える。ほかの crate は今までどおり rustfmt で整える
+- rustfmt は `verus!` の中を整えないので、`eml_rt` の `verus!` の中は `verusfmt --verus-only` で整え、外は今までどおり `cargo fmt` で整える。verusfmt は `verus!` の外を edition 2021 の書式で整え、edition 2024 の `cargo fmt` と import の並びが食い違うためである
 - clippy は `verus!` の展開の後のコードも見る。消した ghost のコードから出る警告 (spike では `if_same_then_else` と `redundant_static_lifetimes`) は、`eml_rt` の crate の頭で、理由を書いて `allow` する。どの警告を許すかは、段 1 で決めて一覧にする
 - rust-analyzer と verus-analyzer については何も求めない
 
@@ -112,11 +112,12 @@ S9a では文書にだけあった前提も `requires` に書く。例えば `ra
 
 内部の関数は、権限を引数で受け渡すか、`Heap` の ghost の欄から取り出して戻す。単体テストは、今と同じように公開の API と内部の関数を呼ぶ。ghost の引数を取る内部の関数は、テストでは `Tracked::assume_new()` を渡すか、公開の API を通して呼ぶ。
 
-公開の API で変わるのは次の3つである。
+公開の API で変わるのは次の4つである。
 
 - `Fast` と `Checked` が、空の enum から中身のない struct になる。Verus が空の enum を受け付けないためである
 - `Heap` を `Sync` にしない印が、`PhantomData<(M, Cell<()>)>` から `PhantomData<(M, *mut ())>` になる。Verus が `Cell` を受け付けないためである。`Send` は今と同じく `unsafe impl` で足す。`Heap` は `RefUnwindSafe` になる
 - モデルの述語の `pub closed spec fn` が増える
+- `HeapError` が `Copy` を導く。Verus は欄を持つ variant のある enum の導いた `Clone` に仕様を与えられず、`Copy` も導くとこれを扱えるためである。欄はどれも `u32` なので、`Copy` にできる
 
 ## 検査モードの約束
 
@@ -239,7 +240,7 @@ nix develop .#miri -c env MIRIFLAGS="-Zmiri-strict-provenance -Zmiri-tree-borrow
 
 ## 証明の進め方
 
-下から順に、段ごとにコミットする。どの段の終わりでも、`cargo test`、`cargo verus verify -p eml_rt`、clippy、`cargo fmt --check`、`verusfmt --check` が通る。`trusted` のテストができた段からは、Miri も流す。まだ証明していない関数は `external_body` にして信頼の一覧のテストの「未証明」の欄に載せ、まだ `verus!` に入れていないファイルは「`verus!` の外」の欄に載せる。
+下から順に、段ごとにコミットする。どの段の終わりでも、`cargo test`、`cargo verus verify -p eml_rt`、clippy、`cargo fmt --check`、`verusfmt --verus-only --check` が通る。`trusted` のテストができた段からは、Miri も流す。まだ証明していない関数は `external_body` にして信頼の一覧のテストの「未証明」の欄に載せ、まだ `verus!` に入れていないファイルは「`verus!` の外」の欄に載せる。
 
 0. 基準の取り直し (上の「計測」)
 1. crate の準備: vstd の依存と道具 (上の「依存と道具」)。写しの証明 (`meta`、`word` の整数の関数、`rc`、`share_walk`、`check` の判定) を本体に移す。`crates/eml_rt/verus/` と `verus_copies.rs` を消す。信頼の一覧のテストを置く。ほかのファイルは「`verus!` の外」の欄に載せる

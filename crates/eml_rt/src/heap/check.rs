@@ -5,9 +5,12 @@ use std::ptr::NonNull;
 
 use super::{Heap, scan_count};
 use crate::error::HeapError;
+#[cfg(verus_only)]
+use crate::meta::same_fields;
 use crate::meta::{self, HEADER_WORDS, Header, Kind, Meta};
 use crate::mode::Mode;
 use std::sync::atomic::{AtomicU32, Ordering};
+use vstd::prelude::*;
 
 #[repr(C)]
 pub(crate) struct Prefix {
@@ -182,13 +185,28 @@ impl<M: Mode> Heap<M> {
     }
 }
 
-/// `release` が名指す形の照らし合わせ。Verus が写しで同じ関数を証明する。
-pub(crate) fn layout_check(
-    meta: Meta,
-    scanned: usize,
-    tag: u16,
-    keep_len: usize,
-) -> Result<(), HeapError> {
+verus! {
+
+/// `release` が名指す形。データの物体で、tag と走査する語の数が名指しのとおりである
+pub open spec fn named_layout(meta: Meta, scanned: usize, tag: u16, keep_len: usize) -> bool {
+    meta.kind_spec() == Kind::Data && meta.tag_spec() == tag && scanned == keep_len
+}
+
+/// 箱が持つ `lin` ビットを、新しい `meta` が落とす
+pub open spec fn drops_lin(boxed: Meta, new: Meta) -> bool {
+    boxed.lin_spec() && !new.lin_spec()
+}
+
+/// `release` が名指す形の照らし合わせ。種類の比較に `==` でなく `matches!` を使うのは、Verus が導出した `PartialEq` に
+/// 仕様を与えないためである。
+pub(crate) fn layout_check(meta: Meta, scanned: usize, tag: u16, keep_len: usize) -> (r: Result<
+    (),
+    HeapError,
+>)
+    ensures
+        r is Ok <==> named_layout(meta, scanned, tag, keep_len),
+        r is Err ==> r == Err::<(), HeapError>(HeapError::WrongLayout),
+{
     if matches!(meta.kind(), Kind::Data) && meta.tag() == tag && scanned == keep_len {
         Ok(())
     } else {
@@ -196,6 +214,26 @@ pub(crate) fn layout_check(
     }
 }
 
+/// `reuse_in_place` の照らし合わせ (docs/spec/object-model.md の「`lin` ビット」)。`lin` ビットは、箱が持ち新しい `meta` が
+/// 持たないときだけ誤りにする。ビットが欠けるのは安全の側だからである。
+pub(crate) fn reuse_in_place_check(boxed: Meta, new: Meta) -> (r: Result<(), HeapError>)
+    ensures
+        !same_fields(boxed, new) ==> r == Err::<(), HeapError>(HeapError::WrongMeta),
+        same_fields(boxed, new) && drops_lin(boxed, new) ==> r == Err::<(), HeapError>(
+            HeapError::LinBitKept,
+        ),
+        same_fields(boxed, new) && !drops_lin(boxed, new) ==> r is Ok,
+{
+    if !boxed.same_shape(new) {
+        return Err(HeapError::WrongMeta);
+    }
+    if boxed.lin() && !new.lin() {
+        return Err(HeapError::LinBitKept);
+    }
+    Ok(())
+}
+
+} // verus!
 impl<M: Mode> Heap<M> {
     /// `release` と `release_reuse` の検査。
     pub(super) unsafe fn check_release(
@@ -216,16 +254,4 @@ impl<M: Mode> Heap<M> {
         }
         unsafe { self.check_owner(h, rc) }
     }
-}
-
-/// `reuse_in_place` の照らし合わせ (docs/spec/object-model.md の「`lin` ビット」)。`lin` ビットは、箱が持ち新しい `meta` が持たないときだけ
-/// 誤りにする。ビットが欠けるのは安全の側だからである。Verus が写しで同じ関数を証明する。
-pub(crate) fn reuse_in_place_check(boxed: Meta, new: Meta) -> Result<(), HeapError> {
-    if !boxed.same_shape(new) {
-        return Err(HeapError::WrongMeta);
-    }
-    if boxed.lin() && !new.lin() {
-        return Err(HeapError::LinBitKept);
-    }
-    Ok(())
 }

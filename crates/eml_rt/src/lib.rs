@@ -1,6 +1,10 @@
 //! VM とネイティブで共有するランタイムの核 (docs/spec/object-model.md)。語、ヘッダ、
 //! 確保器、RC、`share`、reuse の部品、検査モードを持つ。まだどの crate からも使わない。
 
+// Verus は crate の根に vstd の prelude を求める
+#[allow(unused_imports)]
+use vstd::prelude::*;
+
 mod alloc;
 mod error;
 mod foreign;
@@ -8,10 +12,9 @@ mod heap;
 mod meta;
 mod mode;
 mod rc;
-mod word;
-
 #[cfg(test)]
-mod verus_copies;
+mod trust;
+mod word;
 
 pub use error::HeapError;
 pub use heap::{Heap, Stats, Token};

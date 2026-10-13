@@ -105,6 +105,8 @@
 
 純粋な関数と `share` のたどりを、Verus で証明する。初めは Kani を試したが、CBMC は 3 個の節点のグラフでも `share_walk` の検査でメモリか時間が尽きた。Verus は、任意の大きさのグラフについての証明が約1秒で通る。
 
+S9v の作業中は、この節の写しの方式の記述を、書き換えるまで残す。今は写しを消し、本体を vstd に依存させて `verus!` の中に書き、`cargo verus verify -p eml_rt` で検証している ([S9v の設計](../superpowers/specs/2026-10-14-s9v-verified-eml-rt-design.md))。
+
 Verus が検証するのは `verus!` の中のコードだけである。本体を Verus に依存させないため、証明する関数の写しを `crates/eml_rt/verus/` (`meta.rs`、`word.rs`、`rc.rs`、`share.rs`、`check.rs`) に置く。写しは、本体と同じコードに仕様と証明を足したもので、Cargo のビルドには入らない。
 
 証明することは次の5つである。どれも、値の全域と任意の大きさのグラフについて成り立つ。
@@ -159,7 +161,7 @@ Verus が検証するのは `verus!` の中のコードだけである。本体�
 
 Verus (0.2026.10.04.426d8b0) は、ふだんの devShell が `verus` と `cargo-verus` を入れる。flake は、release の zip を系ごとの input (`verus-aarch64-darwin`、`verus-x86_64-linux`) にし、`nix/verus.nix` が要る部品だけを展開する。Verus の起動の部分は rustup で toolchain を探すが、devShell の `verus` は rustup を使わない (`VERUS_USE_RUSTUP=0`)。代わりに、Verus が求める版の fenix の `rustc` の `lib` を、rust_verify が読むライブラリの道 (macOS は `DYLD_FALLBACK_LIBRARY_PATH`、Linux は autoPatchelf と `LD_LIBRARY_PATH`) に足す。rust_verify は公式の版の librustc_driver に繋がるので、source から組む nixpkgs の rustc では動かないためである。Verus の版を上げるときは、2つの input の URL と、`flake.nix` の `stable` の版 (Verus の `rust-toolchain.toml`) を揃えて変える。
 
-`crates/eml_rt/verus/check.sh` は、devShell の `verus` で写しを検証する。今の結果は `67 verified, 0 errors` である。
+S9a の終わりの写しの結果は `67 verified, 0 errors` だった。
 
 並行の手順 (共有の側の2つの境目の並行の議論と、公開の順序) は、今は証明しない。VM の並列化のときに、手順を Verus で証明する。ただし vstd の atomic は SeqCst だけを扱うので、Relaxed と AcqRel の順序の正しさは、Verus では確かめられない。順序は、文書の議論 ([オブジェクトモデル](../spec/object-model.md) の「上限」と「共有の側」) と Miri に任せる。
 
@@ -303,7 +305,8 @@ cargo test -p eml_interp --test integration scaling::                          #
 cargo test -p eml_interp --test integration bench::                            # 基準のプログラムの回数 (ふだんの cargo test にも入る)
 bench/run.sh                                                                   # 基準のプログラムの命令の数 (macOS、release)
 nix develop .#miri -c env MIRIFLAGS="-Zmiri-strict-provenance" cargo miri test -p eml_rt   # Miri (Tree Borrows は -Zmiri-tree-borrows を足す)
-crates/eml_rt/verus/check.sh                                                                # Verus の証明
+cargo verus verify -p eml_rt                                                                # Verus の証明
+verusfmt --verus-only --check $(git ls-files 'crates/eml_rt/src/*.rs')                         # eml_rt の verus! の中の書式
 bench/rt.sh                                                                                 # eml_rt の速いモードの命令の数 (macOS、release)
 cargo clippy -p eml_cli --no-default-features --features types -- -D warnings    # 既定でない feature (なし、types、core。eml_test_support は hir も)
 ```

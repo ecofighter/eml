@@ -27,10 +27,10 @@
   - `cargo test` (ワークスペース全体)
   - `cargo verus verify -p eml_rt` が 0 errors。最後の行の `verification results:: N verified, 0 errors` と時間をコミットメッセージに書く
   - `cargo clippy --all-targets` が警告を出さない。`eml_rt` で許す警告は、Task 1 で `lib.rs` の頭に理由付きで置いた `allow` の一覧だけにする
-  - `cargo fmt --check`、`verusfmt --check crates/eml_rt/src/**/*.rs` (ファイルを並べて渡す)
+  - `cargo fmt --check`、`verusfmt --verus-only --check $(git ls-files 'crates/eml_rt/src/*.rs')`
   - Task 7 で `trusted` のテストを置いてからは、spec の「Miri」の2つの設定
 - 成否と期待値は、spec の「テストの変更」に挙げたテストと範囲の中だけで変える。期待値を変えない機械的な追随は許す
-- 公開の API は、spec の「API の約束」に挙げた3つのほかは変えない
+- 公開の API は、spec の「API の約束」に挙げた4つのほかは変えない
 - 検証が通っても `cargo build` が通るとは限らない (Verus は `const fn` の制約を見ない)。どのステップでも両方を流す
 - 権限の形は spec の「権限の形」のとおりにする。`&Header` を作らない。整数からポインタを作るのは `ptr::without_provenance_mut` だけで、番地を変えるのは `with_addr` だけにする
 - `unsafe` は、信頼の一覧の項目の中と、`verus!` の外の `unsafe impl Send` / `Sync` と T4 の `Drop` にだけ書く

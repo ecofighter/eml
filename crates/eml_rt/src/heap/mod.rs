@@ -50,9 +50,9 @@ pub struct Heap<M: Mode> {
     /// 解放の連鎖の作業リスト。使い回して、解放のたびに確保しない。
     work: Vec<Word>,
     /// `share` のたどりのスタック。使い回す。
-    share_stack: Vec<NonNull<Header>>,
+    share_stack: Vec<*mut Header>,
     /// 検査モードの `share` が訪れた `lin` の物体。
-    visited_lin: Vec<NonNull<Header>>,
+    visited_lin: Vec<*mut Header>,
     /// 検査モードの token の表。項目は箱と、`into_token` のときの世代の番号である。
     tokens: Vec<Option<(NonNull<Header>, u32)>>,
     dummy: Word,

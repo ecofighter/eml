@@ -31,7 +31,8 @@ cargo clippy -p eml_cli --no-default-features --features types   # non-default f
 cargo run -p eml_cli -- check <file.em>    # or: run [--debug-heap] <file.em>
 nix build                            # build the eml binary (eml_cli)
 nix develop .#miri -c env MIRIFLAGS="-Zmiri-strict-provenance" cargo miri test -p eml_rt   # Miri (add -Zmiri-tree-borrows for Tree Borrows)
-crates/eml_rt/verus/check.sh         # Verus proofs of eml_rt (see testing.md)
+cargo verus verify -p eml_rt         # Verus proofs of eml_rt (see testing.md)
+verusfmt --verus-only --check $(git ls-files 'crates/eml_rt/src/*.rs')   # format inside verus! (rustfmt does the rest)
 bench/rt.sh                          # eml_rt fast-mode instruction counts (macOS)
 ```
 
