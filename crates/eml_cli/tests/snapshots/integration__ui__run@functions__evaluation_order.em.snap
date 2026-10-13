@@ -4,20 +4,20 @@ expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{stderr}\")"
 input_file: tests/ui/run/functions/evaluation_order.em
 ---
 --- stdout ---
-f
 g
-2
 f
-g
 2
+g
+f
+2
+g
 w
-g
 2
-f
 g
+f
 2
-f
 g
+f
 2
 g
 f

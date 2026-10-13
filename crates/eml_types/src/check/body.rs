@@ -25,8 +25,6 @@ pub(crate) enum CallRows {
     /// 番号とその操作である。
     Call {
         arrows: Vec<Row>,
-        /// 矢印ごとの、適用した結果の型。持ち越しのパスが、後の引数を評価する間に持つ値の Kind を求める。
-        results: Vec<Ty>,
         performs: Option<(usize, OperationId)>,
     },
     /// handle。本体の row と、外側の row。
@@ -659,7 +657,6 @@ impl BodyCheck<'_, '_> {
             _ => None,
         };
         let mut arrows = Vec::new();
-        let mut results = Vec::new();
         let mut postponed = Postponed::default();
         // 1回の呼び出しの E2002 は、どの引数の矢印で起きても1つだけ報告する
         let mut reported = false;
@@ -679,7 +676,6 @@ impl BodyCheck<'_, '_> {
                 Arrow::Fn { param, row, ret } => {
                     arrows.push(row.clone());
                     self.typing.arrows.insert((id, index), row.clone());
-                    results.push(ret);
                     if self.postponable(arg) {
                         postponed.lambdas.push((arg, param, origin));
                         postponed.rows.push((index, row));
@@ -711,14 +707,9 @@ impl BodyCheck<'_, '_> {
                 }
             }
         }
-        self.typing.calls.insert(
-            id,
-            CallRows::Call {
-                arrows,
-                results,
-                performs,
-            },
-        );
+        self.typing
+            .calls
+            .insert(id, CallRows::Call { arrows, performs });
         // 部分適用の残りは、ほかの参照と同じく戻り値の側の row を開く
         if opened_later {
             ty = self.table.open_spine(ty);

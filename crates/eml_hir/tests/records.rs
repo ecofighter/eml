@@ -170,18 +170,6 @@ fn body<'m>(program: &'m Program, name: &str) -> &'m Body {
 }
 
 #[test]
-fn a_record_is_not_a_value_for_grouping_arguments() {
-    let text = format!("{PERSON}f : Int -> Person\nf n = Person {{ name = \"a\", age = n }}");
-    let lowered = eml_test_support::lower(&text);
-    let body = body(&lowered.program, "f");
-    assert!(matches!(
-        body.exprs[body.root].kind,
-        ExprKind::Record { .. }
-    ));
-    assert!(!eml_hir::is_value(&lowered.program, body, body.root));
-}
-
-#[test]
 fn projections_updates_and_field_sections() {
     let text = format!(
         "{PERSON}f : Person -> Person\nf p =\n  let n = p.name\n  let t = (1, (2, 3)).1.0\n  let age = 3\n  let g = (.name)\n  let h = (.0)\n  {{ p | name = n, age }}"
@@ -225,18 +213,6 @@ fn a_field_section_is_a_lambda_over_a_hidden_parameter() {
     let whole = body.exprs[body.root].range;
     assert_eq!(body.exprs[closure.body].range, whole);
     assert_eq!(body.exprs[*base].range, whole);
-}
-
-#[test]
-fn projections_and_updates_are_not_values_for_grouping_arguments() {
-    let text = format!(
-        "{PERSON}f : Person -> String\nf p = p.name\n\ng : Person -> Person\ng p = {{ p | age = 1 }}"
-    );
-    let lowered = eml_test_support::lower(&text);
-    for name in ["f", "g"] {
-        let body = body(&lowered.program, name);
-        assert!(!eml_hir::is_value(&lowered.program, body, body.root));
-    }
 }
 
 #[test]

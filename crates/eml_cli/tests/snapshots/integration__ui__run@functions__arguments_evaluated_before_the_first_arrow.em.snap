@@ -1,0 +1,10 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{stderr}\")"
+input_file: tests/ui/run/functions/arguments_evaluated_before_the_first_arrow.em
+---
+--- stdout ---
+second
+first
+3
+--- stderr ---

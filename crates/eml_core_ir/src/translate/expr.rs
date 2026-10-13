@@ -330,7 +330,7 @@ impl FnLowering<'_> {
             unreachable!("call takes a call");
         };
         let callee_ty = self.ty(callee);
-        let steps = eml_hir::call_steps(self.ctx.hir, body, id);
+        let steps = eml_hir::call_steps(body, id);
         let mut atoms: Vec<Option<Atom>> = vec![None; args.len()];
         // 前のまとまりの結果か、評価した呼ばれる式。既知の呼ばれる式は評価せず、最初のまとまりで直接呼ぶ
         let mut function: Option<Atom> = None;

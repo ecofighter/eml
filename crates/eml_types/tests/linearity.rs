@@ -434,12 +434,12 @@ fn a_file_kept_across_a_multi_operation() {
 fn an_evaluated_argument_is_kept_across_a_later_argument() {
     let rest = "temporary : Unit -> <Choice, IO> Unit\ntemporary () =\n  let f = Fs.open \"a.txt\"\n  consume f (choose ())";
     insta::assert_snapshot!(carried(rest), @"
-    E3006 23:14 a linear value must be used exactly once, but it is kept alive across a call that may resume more than once
+    E3006 23:14 `f` must be used exactly once, but it is kept alive across a call that may resume more than once
       23:14 this call may perform `choose`, a `multi` operation
-      23:11 this value is kept alive across the call
+      22:7 `f` is bound here
       2:9 `choose` is declared `multi` here
       note: a continuation of a `multi` operation can be resumed more than once, and each resumption would use the value again
-      help: finish using the value before this call
+      help: finish using `f` before this call
     ");
 }
 
@@ -527,12 +527,12 @@ fn a_once_continuation_kept_across_a_multi_operation_in_a_clause() {
 fn a_piped_value_is_kept_across_the_call() {
     let rest = "consume_after : Bool -> Fs.File -> <IO> Unit\nconsume_after b f = Fs.close f\n\npiped : Unit -> <Choice, IO> Unit\npiped () =\n  let f = Fs.open \"a.txt\"\n  f |> consume_after (choose ())";
     insta::assert_snapshot!(carried(rest), @"
-    E3006 26:23 a linear value must be used exactly once, but it is kept alive across a call that may resume more than once
+    E3006 26:23 `f` must be used exactly once, but it is kept alive across a call that may resume more than once
       26:23 this call may perform `choose`, a `multi` operation
-      26:3 this value is kept alive across the call
+      25:7 `f` is bound here
       2:9 `choose` is declared `multi` here
       note: a continuation of a `multi` operation can be resumed more than once, and each resumption would use the value again
-      help: finish using the value before this call
+      help: finish using `f` before this call
     ");
 }
 
@@ -540,34 +540,8 @@ fn a_piped_value_is_kept_across_the_call() {
 fn an_argument_for_a_later_arrow_is_kept_across_the_call() {
     let rest = "choose_then : Unit -> <Choice> (Fs.File -> <IO> Unit)\nchoose_then () =\n  let b = choose ()\n  fn f -> Fs.close f\n\napplied : Unit -> <Choice, IO> Unit\napplied () =\n  let f = Fs.open \"a.txt\"\n  choose_then () f";
     insta::assert_snapshot!(carried(rest), @"
-    E3006 28:3 a linear value must be used exactly once, but it is kept alive across a call that may resume more than once
+    E3006 28:3 `f` must be used exactly once, but it is kept alive across a call that may resume more than once
       28:3 this call may perform `choose`, a `multi` operation
-      28:18 this value is kept alive across the call
-      2:9 `choose` is declared `multi` here
-      note: a continuation of a `multi` operation can be resumed more than once, and each resumption would use the value again
-      help: finish using the value before this call
-    ");
-}
-
-#[test]
-fn an_applied_function_is_kept_across_a_later_argument() {
-    let rest = "make : Fs.File -> <IO> (Unit -> <IO> Unit)\nmake f = fn () -> Fs.close f\n\napplied : Unit -> <Choice, IO> Unit\napplied () =\n  let f = Fs.open \"a.txt\"\n  make f (if choose () then () else ())";
-    insta::assert_snapshot!(carried(rest), @"
-    E3006 26:14 a linear value must be used exactly once, but it is kept alive across a call that may resume more than once
-      26:14 this call may perform `choose`, a `multi` operation
-      26:3 this value is kept alive across the call
-      2:9 `choose` is declared `multi` here
-      note: a continuation of a `multi` operation can be resumed more than once, and each resumption would use the value again
-      help: finish using the value before this call
-    ");
-}
-
-#[test]
-fn a_local_is_kept_across_the_arrow_applied_before_a_later_argument() {
-    let rest = "choose_then : Int -> <Choice> (Unit -> <IO> Unit)\nchoose_then n =\n  let b = choose ()\n  fn u -> ()\n\napplied_first : Unit -> <Choice, IO> Unit\napplied_first () =\n  let f = Fs.open \"a.txt\"\n  let h = choose_then\n  h 1 (Fs.close f)";
-    insta::assert_snapshot!(carried(rest), @"
-    E3006 29:3 `f` must be used exactly once, but it is kept alive across a call that may resume more than once
-      29:3 this call may perform `choose`, a `multi` operation
       27:7 `f` is bound here
       2:9 `choose` is declared `multi` here
       note: a continuation of a `multi` operation can be resumed more than once, and each resumption would use the value again
@@ -575,18 +549,39 @@ fn a_local_is_kept_across_the_arrow_applied_before_a_later_argument() {
     ");
 }
 
+#[test]
+fn an_argument_beyond_the_arity_is_kept_while_a_later_argument_is_evaluated() {
+    let rest = "make : Fs.File -> <IO> (Unit -> <IO> Unit)\nmake f = fn () -> Fs.close f\n\napplied : Unit -> <Choice, IO> Unit\napplied () =\n  let f = Fs.open \"a.txt\"\n  make f (if choose () then () else ())";
+    insta::assert_snapshot!(carried(rest), @"
+    E3006 26:14 `f` must be used exactly once, but it is kept alive across a call that may resume more than once
+      26:14 this call may perform `choose`, a `multi` operation
+      25:7 `f` is bound here
+      2:9 `choose` is declared `multi` here
+      note: a continuation of a `multi` operation can be resumed more than once, and each resumption would use the value again
+      help: finish using `f` before this call
+    ");
+}
+
+/// 引数はすべて評価してから矢印を適用するので、`Fs.close f` は `h 1` が `choose` を起こす前に `f` を使い切る
+/// (docs/spec/expressions.md の「関数適用」)。
+#[test]
+fn an_argument_is_evaluated_before_the_first_arrow_performs() {
+    let rest = "choose_then : Int -> <Choice> (Unit -> <IO> Unit)\nchoose_then n =\n  let b = choose ()\n  fn u -> ()\n\napplied_first : Unit -> <Choice, IO> Unit\napplied_first () =\n  let f = Fs.open \"a.txt\"\n  let h = choose_then\n  h 1 (Fs.close f)";
+    assert_eq!(carried(rest), "");
+}
+
 /// パイプは Prelude の `|>` の呼び出しで、`multi` の操作を起こす呼び出しは2番目の引数 `k 1 (yes ())` である。そのため primary は
-/// 32:8 のこの呼び出しを指し、持ち越す値は 32:3 の `f` を指す。
+/// 32:8 のこの呼び出しを指し、評価済みの1番目の引数 `f` は局所変数なので、その束縛を指して名指しする。
 #[test]
 fn a_piped_value_is_kept_across_the_arrow_applied_before_a_later_argument() {
     let rest = "choose_then : Int -> <Choice> (Bool -> Fs.File -> <IO> Unit)\nchoose_then n =\n  let b = choose ()\n  fn c -> fn g -> Fs.close g\n\nyes : Unit -> Bool\nyes () = True\n\npiped_first : Unit -> <Choice, IO> Unit\npiped_first () =\n  let f = Fs.open \"a.txt\"\n  let k = choose_then\n  f |> k 1 (yes ())";
     insta::assert_snapshot!(carried(rest), @"
-    E3006 32:8 a linear value must be used exactly once, but it is kept alive across a call that may resume more than once
+    E3006 32:8 `f` must be used exactly once, but it is kept alive across a call that may resume more than once
       32:8 this call may perform `choose`, a `multi` operation
-      32:3 this value is kept alive across the call
+      30:7 `f` is bound here
       2:9 `choose` is declared `multi` here
       note: a continuation of a `multi` operation can be resumed more than once, and each resumption would use the value again
-      help: finish using the value before this call
+      help: finish using `f` before this call
     ");
 }
 

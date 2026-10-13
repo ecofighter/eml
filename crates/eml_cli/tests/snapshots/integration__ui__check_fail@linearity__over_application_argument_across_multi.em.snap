@@ -1,0 +1,24 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: rendered
+input_file: tests/ui/check-fail/linearity/over_application_argument_across_multi.em
+---
+[E3006] Error: a linear value must be used exactly once, but it is kept alive across a call that may resume more than once
+    ╭─[ check-fail/linearity/over_application_argument_across_multi.em:15:11 ]
+    │
+ 15 │ body () = pick 1 (Fs.open "input.txt")
+    │           ──────────────┬──┬──────────  
+    │                         ╰─────────────── this call may perform `choose`, a `multi` operation
+    │                            │            
+    │                            ╰──────────── this value is kept alive across the call
+    │
+    ├─[ check-fail/linearity/over_application_argument_across_multi.em:15:11 ]
+    │
+  4 │   multi choose : Unit -> Bool
+    │         ───┬──  
+    │            ╰──── `choose` is declared `multi` here
+    │ 
+    │ Help: finish using the value before this call
+    │ 
+    │ Note: a continuation of a `multi` operation can be resumed more than once, and each resumption would use the value again
+────╯

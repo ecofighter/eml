@@ -24,8 +24,6 @@ enum Held {
     Local(LocalId),
     /// 評価済みで消費前の部分式の値。
     Temporary(ExprId),
-    /// 呼び出し `ExprId` の矢印 `usize` を適用した結果。値でない後の引数を評価する間に持つ。
-    Applied(ExprId, usize),
 }
 
 type Live = BTreeSet<Held>;
@@ -64,6 +62,15 @@ impl Carrying<'_, '_> {
         self.expr(root, &Live::new());
     }
 
+    /// 評価済みの部分式の値。局所変数そのものなら、その局所変数として持つ。E3006 が無名の途中の値でなく変数を名指しし、
+    /// 束縛の位置を示すためである。
+    fn evaluated(&self, expr: ExprId) -> Held {
+        match self.body.exprs[expr].kind {
+            ExprKind::Path(Res::Local(local)) => Held::Local(local),
+            _ => Held::Temporary(expr),
+        }
+    }
+
     /// `after` は、`id` を評価している間と後に持っている値である。`id` の評価の前に持っている値を返す。
     fn expr(&mut self, id: ExprId, after: &Live) -> Live {
         // 参照を写しておき、表を読みながら `&mut self` のメソッドを呼べるようにする
@@ -85,15 +92,12 @@ impl Carrying<'_, '_> {
                     _ => None,
                 };
                 let mut live = after.clone();
-                // 評価の順は `eml_hir::call_steps` だけが持つ。後で使う値は後ろの手順から決まるので、その順を逆にたどる
-                for step in eml_hir::call_steps(self.program, body, id)
-                    .into_iter()
-                    .rev()
-                {
+                // 評価の順は `eml_hir::call_steps` だけが持つ。後で使う値は後ろの手順から決まるので、その順を逆にたどる。
+                // 引数はすべて評価してから矢印を順に適用するので、矢印 i の呼び出しの間は、後で使う値と、評価済みで
+                // 後の矢印に渡す引数を持つ (docs/spec/effects.md の「継続の多重度と持ち越し規則」)
+                for step in eml_hir::call_steps(body, id).into_iter().rev() {
                     match step {
                         EvalStep::Arrow(index) => {
-                            // 矢印の呼び出しの間は、その結果を除いて、後で使う値と評価済みでまだ渡していない引数を持つ
-                            live.remove(&Held::Applied(id, index));
                             if let Some((arrows, performs)) = rows
                                 && let Some(row) = arrows.get(index)
                             {
@@ -103,15 +107,13 @@ impl Carrying<'_, '_> {
                                 };
                                 self.carry(id, &live, &across, &CallKind::Call);
                             }
-                            let function = match index {
-                                0 => Held::Temporary(*callee),
-                                _ => Held::Applied(id, index - 1),
-                            };
-                            live.insert(function);
-                            live.insert(Held::Temporary(args[index]));
+                            if index == 0 {
+                                live.insert(self.evaluated(*callee));
+                            }
+                            live.insert(self.evaluated(args[index]));
                         }
                         EvalStep::Eval(expr) => {
-                            live.remove(&Held::Temporary(expr));
+                            live.remove(&self.evaluated(expr));
                             live = self.expr(expr, &live);
                         }
                     }
@@ -373,19 +375,6 @@ impl Carrying<'_, '_> {
             Held::Temporary(expr) => {
                 let ty = *self.typing.exprs.get(expr)?;
                 Some((ty, CarriedValue::Temporary(self.body.exprs[expr].range)))
-            }
-            Held::Applied(call, index) => {
-                let Some(CallRows::Call { results, .. }) = self.typing.calls.get(call) else {
-                    return None;
-                };
-                let ty = *results.get(index)?;
-                let ExprKind::Call { callee, args, .. } = &self.body.exprs[call].kind else {
-                    return None;
-                };
-                let range = self.body.exprs[*callee]
-                    .range
-                    .cover(self.body.exprs[args[index]].range);
-                Some((ty, CarriedValue::Temporary(range)))
             }
         }
     }
