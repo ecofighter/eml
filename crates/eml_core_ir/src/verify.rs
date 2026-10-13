@@ -6,6 +6,8 @@
 //! 命令の形 (`mask` の順、`handle` の節の数、再開できるかどうか) を確かめる (`verify_translated`)。EP の後は、
 //! `handle`、`perform`、`resume`、`mask` が残っていないことと、基本操作と節の呼び出しの形を確かめる
 //! (`verify_evidence`)。段の分け方は docs/spec/core-ir.md の「verifier」による。
+//! 印はどちらの段でも、`jump` と `return` だけで比べる (V2)。`con` と `closure` が束縛する変数の印が、引数の印の
+//! 結び以上であることも確かめる (docs/superpowers/specs/2026-10-13-s8d-kind-marks-design.md の「verifier」)。
 //! LIR の verifier と共有する部品は `eml_lir::check` にある。
 //!
 //! R9 は、`con`、タグの `switch`、`unpack` を、その命令が指す配置と比べる。配置を持つ `switch` はタグの case を
@@ -106,8 +108,12 @@ fn clause_function(program: &Program, function: &CoreFn, level: Level) -> Result
         &program.effects,
         &function.name,
         function.clause,
-        param_reprs(function),
+        function
+            .params()
+            .iter()
+            .map(|&param| &function.vars[param.0 as usize]),
         function.ret,
+        function.ret_mark,
         false,
     )
 }
@@ -345,6 +351,13 @@ impl<'a> Checker<'a> {
                         self.function.ret.name()
                     ));
                 }
+                if !self.cx.mark_passes(*atom, self.function.ret_mark) {
+                    return Err(format!(
+                        "{} is returned from a function that returns {}",
+                        self.cx.marked_atom_text(*atom),
+                        self.function.ret_mark.name()
+                    ));
+                }
                 Ok(())
             }
             Term::Jump { target, args } => {
@@ -392,11 +405,22 @@ impl<'a> Checker<'a> {
         }
     }
 
-    /// `jump` の実引数は、行き先の引数と互換である (R8)。
+    /// `jump` の実引数は、行き先の引数と Repr が互換で (R8)、印も互換である (V2)。Core IR の段では、印を比べるのは
+    /// `jump` と `return` だけである (docs/superpowers/specs/2026-10-13-s8d-kind-marks-design.md の「V2」)。
     fn check_passed(&self, target: BlockId, arg: Atom, param: VarId) -> Result<(), String> {
         let expected = self.function.repr(param);
         if self.cx.passes(arg, expected)? {
-            return Ok(());
+            let mark = self.function.mark(param);
+            if self.cx.mark_passes(arg, mark) {
+                return Ok(());
+            }
+            return Err(format!(
+                "a jump to b{} passes {} to `{}` ({})",
+                target.0,
+                self.cx.marked_atom_text(arg),
+                self.cx.name(param),
+                mark.name()
+            ));
         }
         Err(match arg {
             Atom::Var(var) => format!(
@@ -493,6 +517,12 @@ impl<'a> Checker<'a> {
                         args.len()
                     ));
                 }
+                self.cx.check_built(
+                    var,
+                    args,
+                    || format!("a closure of `{}`", target.name),
+                    "captures",
+                )?;
             }
             Rhs::Extern { ext, args, at: _ } => self.cx.check_extern(var, *ext, args)?,
             Rhs::Prim(prim, args) => {

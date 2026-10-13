@@ -1,7 +1,7 @@
 //! Core IR の verifier と LIR の verifier が共有する部品 (docs/spec/lir.md の「verifier」)。ブロックの列の形
-//! (R1〜R4) と支配木、R8 と R9 の検査、基本操作と `clause` の検査を、2つの IR が共有する型の上で書く。IR ごとに違う
-//! もの (ブロックの終端、関数の型) は、呼ぶ側が形を写して渡す。命令の列をたどる部分と所有の検査は、IR ごとの
-//! verifier が持つ。
+//! (R1〜R4) と支配木、R8 と R9 の検査、印の検査 (V2 と作る所の検査)、基本操作と `clause` の検査を、2つの IR が
+//! 共有する型の上で書く。IR ごとに違うもの (ブロックの終端、関数の型) は、呼ぶ側が形を写して渡す。命令の列を
+//! たどる部分と所有の検査は、IR ごとの verifier が持つ。
 
 use std::collections::{HashMap, HashSet};
 use std::mem::discriminant;
@@ -11,7 +11,7 @@ use eml_extern::Extern;
 use crate::syntax::{effect_text, operation_text, prim_text};
 use crate::{
     Atom, BlockId, Case, CasePattern, Ctor, EffectInfo, FnIdx, Immediates, Layout, LayoutCtor,
-    LayoutId, OpRet, Prim, Repr, VarId, VarInfo,
+    LayoutId, Mark, OpRet, Prim, Repr, VarId, VarInfo,
 };
 
 /// 関数が一様でない理由。`tobj` と互換でない最初の引数か、`ret` である。
@@ -42,13 +42,16 @@ pub fn non_uniform(
 
 /// `clause` の印の関数は、捕獲の後に evidence と操作の引数を受け、操作の結果を返す。境界の段では、捕獲が `tobj`、
 /// evidence が `obj`、残りの引数と `ret` が操作の表の Repr (`never` の操作の `ret` は `obj`) と互換であることも
-/// 確かめる (docs/spec/lir.md の「box の挿入」と「verifier」)。
-pub fn clause_function(
+/// 確かめる (docs/spec/lir.md の「box の挿入」と「verifier」)。印も同じ段で、evidence が `unr`、残りの引数と戻り値が
+/// 操作の表の印と互換であることを確かめる。捕獲の印は、`closure` を作る所で比べる
+/// (docs/superpowers/specs/2026-10-13-s8d-kind-marks-design.md の「V2」)。
+pub fn clause_function<'v>(
     effects: &[EffectInfo],
     name: &str,
     clause: Option<(u32, u32)>,
-    params: impl ExactSizeIterator<Item = Repr>,
+    params: impl ExactSizeIterator<Item = &'v VarInfo>,
     ret: Repr,
+    ret_mark: Mark,
     boundaries: bool,
 ) -> Result<(), String> {
     let Some((effect, op)) = clause else {
@@ -77,14 +80,15 @@ pub fn clause_function(
     if !boundaries {
         return Ok(());
     }
+    let params: Vec<&VarInfo> = params.collect();
     let expected = std::iter::repeat_n(Repr::TObj, captures)
         .chain([Repr::Obj])
         .chain(operation.params.iter().copied());
-    for (index, (repr, expected)) in params.zip(expected).enumerate() {
-        if !repr.compatible(expected) {
+    for (index, (param, expected)) in params.iter().zip(expected).enumerate() {
+        if !param.repr.compatible(expected) {
             return Err(format!(
                 "`{name}` is a clause of `{clause}`, but its parameter {index} is {}",
-                repr.name()
+                param.repr.name()
             ));
         }
     }
@@ -97,6 +101,22 @@ pub fn clause_function(
         return Err(format!(
             "`{name}` is a clause of `{clause}`, but it returns {}",
             ret.name()
+        ));
+    }
+    let expected = std::iter::once(Mark::Unr).chain(operation.param_marks.iter().copied());
+    for (index, (param, expected)) in params[captures..].iter().zip(expected).enumerate() {
+        let index = captures + index;
+        if !param.mark.compatible(expected) {
+            return Err(format!(
+                "`{name}` is a clause of `{clause}`, but its parameter {index} is {}",
+                param.mark.name()
+            ));
+        }
+    }
+    if !ret_mark.compatible(operation.ret_mark) {
+        return Err(format!(
+            "`{name}` is a clause of `{clause}`, but it returns {}",
+            ret_mark.name()
         ));
     }
     Ok(())
@@ -358,7 +378,7 @@ pub struct Context<'a> {
     /// 検査する関数の変数の表。
     pub vars: &'a [VarInfo],
     /// 境界 (呼び出しの引数と結果、`closure` の引数、関数の値の対象が一様であること、`tobj` のフィールド) を比べるか。
-    /// box の挿入の後の段だけで比べる。
+    /// box の挿入の後の段だけで比べる。extern、基本操作、`clause` の印も、この段だけで比べる。
     pub boundaries: bool,
     /// 変数の番号ごとの、`never` の操作の `perform` か `clause` の束縛かどうか。束縛の使いには制御が届かないので、
     /// 互換の位置で位置と比べない。
@@ -385,6 +405,10 @@ impl<'a> Context<'a> {
 
     fn repr(&self, var: VarId) -> Repr {
         self.vars[var.0 as usize].repr
+    }
+
+    pub fn mark(&self, var: VarId) -> Mark {
+        self.vars[var.0 as usize].mark
     }
 
     pub fn note_never(&mut self, var: VarId, never: bool) {
@@ -423,6 +447,44 @@ impl<'a> Context<'a> {
             self.fn_atom(atom)?;
         }
         Ok(passes)
+    }
+
+    /// 印が `expected` の受け手に渡せる値 (V2)。定数はどの印とも合う。`None` を `lin` の引数に渡すことがあるためである。
+    /// `never` の操作の `perform` と `clause` の束縛は、Repr と同じく、どの受け手にも渡せる
+    /// (docs/superpowers/specs/2026-10-13-s8d-kind-marks-design.md の「V2」)。
+    pub fn mark_passes(&self, atom: Atom, expected: Mark) -> bool {
+        match atom {
+            Atom::Var(var) => self.never[var.0 as usize] || self.mark(var).compatible(expected),
+            Atom::Int(_) | Atom::Unit | Atom::Tag(_) | Atom::Fn(_) => true,
+        }
+    }
+
+    /// `con` と `closure` が束縛する変数の印は、引数の印の結び以上である (作る所の検査)。V1 は `dup` と `decref` の
+    /// 対象の印しか見ないので、`File` を持つ値に誤って `unr` を付けると、その値の `dup` を見逃す。定数は `unr` として
+    /// 結び、`never` の束縛は `mark_passes` と同じく数えない
+    /// (docs/superpowers/specs/2026-10-13-s8d-kind-marks-design.md の「作る所の検査」)。
+    pub fn check_built(
+        &self,
+        var: VarId,
+        args: &[Atom],
+        what: impl FnOnce() -> String,
+        parts: &str,
+    ) -> Result<(), String> {
+        let joined = args.iter().fold(Mark::Unr, |joined, &arg| match arg {
+            Atom::Var(arg) if !self.never[arg.0 as usize] => joined.join(self.mark(arg)),
+            _ => joined,
+        });
+        let mark = self.mark(var);
+        if mark.at_least(joined) {
+            return Ok(());
+        }
+        Err(format!(
+            "`{}` ({}) is bound to {}, whose {parts} join to {}",
+            self.name(var),
+            mark.name(),
+            what(),
+            joined.name()
+        ))
     }
 
     /// 範囲の段と所有の段で、`&g` の g が一様かを確かめる。IR のどこにある `&g` も関数の値なので
@@ -701,7 +763,41 @@ impl<'a> Context<'a> {
                 row.ret.name()
             ));
         }
-        Ok(())
+        if !self.boundaries {
+            return Ok(());
+        }
+        for (index, (&arg, &kind)) in args.iter().zip(row.param_kinds).enumerate() {
+            let expected = Mark::from(kind);
+            if !self.mark_passes(arg, expected) {
+                return Err(format!(
+                    "argument {index} of `{}` is {}, but the extern takes {}",
+                    row.name,
+                    self.marked_atom_text(arg),
+                    expected.name()
+                ));
+            }
+        }
+        self.bound_mark(var, Mark::from(row.ret_kind), || format!("`{}`", row.name))
+    }
+
+    /// 呼び出しの結果の印 `result` は、束縛する変数の印と互換である (V2)。`callee` は誤りの文で呼ばれる側を指す句である。
+    pub fn bound_mark(
+        &self,
+        var: VarId,
+        result: Mark,
+        callee: impl FnOnce() -> String,
+    ) -> Result<(), String> {
+        let mark = self.mark(var);
+        if mark.compatible(result) {
+            return Ok(());
+        }
+        Err(format!(
+            "`{}` ({}) is bound to {}, which returns {}",
+            self.name(var),
+            mark.name(),
+            callee(),
+            result.name()
+        ))
     }
 
     /// 基本操作は EP だけが作る。即値は表にあり、`evv_mask` の多重集合は呼び出しの `mask` と同じく空でなく昇順に
@@ -774,7 +870,18 @@ impl<'a> Context<'a> {
                 row.ret.name()
             ));
         }
-        Ok(())
+        // 表の印の列は EP が自分の変数に付ける印と同じなので、ここで EP 自身を確かめる
+        // (docs/superpowers/specs/2026-10-13-s8d-kind-marks-design.md の「基本操作の表」)
+        for (index, (&arg, &expected)) in args.iter().zip(row.param_marks).enumerate() {
+            if !self.mark_passes(arg, expected) {
+                return Err(format!(
+                    "argument {index} of `prim {name}` is {}, but the primitive takes {}",
+                    self.marked_atom_text(arg),
+                    expected.name()
+                ));
+            }
+        }
+        self.bound_mark(var, row.ret_mark, || format!("`prim {name}`"))
     }
 
     /// `ev_set_clause[E.op](ev, c)` の c の関数が分かるとき (`&g` か、同じ関数の中の `closure g(..)`)、g は `E.op` の
@@ -870,7 +977,12 @@ impl<'a> Context<'a> {
                 ));
             }
         }
-        Ok(())
+        self.check_built(
+            var,
+            args,
+            || format!("a con of `{}` #{}", layout.name, ctor.tag),
+            "arguments",
+        )
     }
 
     pub fn effect(&self, effect: u32) -> Result<&'a EffectInfo, String> {
@@ -900,6 +1012,14 @@ impl<'a> Context<'a> {
                 Some(function) => format!("&{}", function.name),
                 None => format!("&#{}", target.0),
             },
+        }
+    }
+
+    /// 変数には印を添える (`` `h.1` (lin) ``)。定数は `atom_text` と同じである。
+    pub fn marked_atom_text(&self, atom: Atom) -> String {
+        match atom {
+            Atom::Var(var) => format!("`{}` ({})", self.name(var), self.mark(var).name()),
+            _ => self.atom_text(atom),
         }
     }
 

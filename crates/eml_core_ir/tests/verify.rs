@@ -800,3 +800,74 @@ fn ev_set_clause_names_the_clause_of_its_function() {
         )
     );
 }
+
+// 印 (docs/superpowers/specs/2026-10-13-s8d-kind-marks-design.md の「verifier」)
+
+#[test]
+fn v2_runs_only_on_jump_and_return_at_the_core_ir_levels() {
+    let both = |text: &str| {
+        let translated = check_translated(text);
+        assert_eq!(check_evidence(text), translated, "{text}");
+        translated
+    };
+    // 呼び出しの引数、extern の引数と結果は、box の挿入の後の LIR の段で比べる
+    let calls = "\
+fn f(s.0: obj) -> unit {
+  let h.1: obj = extern Std.Fs.open(s.0)
+  let u.2: unit = call g(h.1)
+  return u.2
+}
+fn g(h.0: obj lin) -> unit {
+  let u.1: unit = extern Std.Fs.close(h.0)
+  return u.1
+}
+";
+    assert_eq!(both(calls), Ok(()));
+    assert_eq!(
+        both("fn f(s.0: obj) -> obj lin {\n  jump b1(s.0)\nb1(t.1: obj lin):\n  return t.1\n}\n"),
+        Err("a jump to b1 passes `s.0` (unr) to `t.1` (lin) in `f`".to_string())
+    );
+    assert_eq!(
+        both("fn f(s.0: obj lin) -> obj {\n  return s.0\n}\n"),
+        Err("`s.0` (lin) is returned from a function that returns unr in `f`".to_string())
+    );
+    // `poly` はどちらとも、定数はどの印とも合う
+    assert_eq!(
+        both(
+            "fn f(s.0: obj lin) -> tobj lin {\n  jump b1(s.0, ())\nb1(t.1: tobj poly, u.2: unit lin):\n  return t.1\n}\n"
+        ),
+        Ok(())
+    );
+}
+
+#[test]
+fn the_build_check_runs_at_the_core_ir_levels() {
+    let text = "\
+layout (,) { (,)(tobj, tobj) }
+fn f(h.0: obj lin) -> obj {
+  let p.1: obj = con (,) #0(h.0, ())
+  return p.1
+}
+";
+    let message = Err(
+        "`p.1` (unr) is bound to a con of `(,)` #0, whose arguments join to lin in `f`".to_string(),
+    );
+    assert_eq!(check_translated(text), message);
+    assert_eq!(check_evidence(text), message);
+    let closure = "\
+fn f(h.0: obj lin) -> tobj {
+  let c.1: tobj = closure g(h.0)
+  return c.1
+}
+fn g(h.0: obj lin, u.1: unit) -> tobj lin {
+  return h.0
+}
+";
+    assert_eq!(
+        check_translated(closure),
+        Err(
+            "`c.1` (unr) is bound to a closure of `g`, whose captures join to lin in `f`"
+                .to_string()
+        )
+    );
+}

@@ -2762,3 +2762,232 @@ fn passes_until_checks_its_input() {
     );
     eml_lir::passes_until(&mut program, eml_lir::Pass::Perceus);
 }
+
+// 印: V1、V2、作る所の検査 (docs/superpowers/specs/2026-10-13-s8d-kind-marks-design.md の「verifier」)
+
+/// `File` を受けて閉じる関数と、`File` を返す関数。
+const TAKES_LIN: &str =
+    "fn g(h.0: obj lin) -> unit {\n  let u.1: unit = extern Std.Fs.close(h.0)\n  return u.1\n}\n";
+const GIVES_LIN: &str =
+    "fn h(s.0: obj) -> obj lin {\n  let f.1: obj lin = extern Std.Fs.open(s.0)\n  return f.1\n}\n";
+
+/// `File` を受けて返す操作と、`unr` の値を受けて返す操作。
+const LIN_OPS: &str = "effect L { take(tobj lin) -> tobj lin, ask(unit) -> tobj }\n";
+
+#[test]
+fn v1_rejects_a_dup_or_decref_of_a_lin_or_poly_variable() {
+    for mark in ["lin", "poly"] {
+        let dup = format!(
+            "fn f(s.0: obj {mark}) -> obj {mark} {{\n  dup s.0\n  decref s.0\n  return s.0\n}}\n"
+        );
+        assert_eq!(
+            check(&dup),
+            Err(format!(
+                "`s.0` ({mark}) is duplicated, but only unr can be in `f`"
+            ))
+        );
+        let decref = format!("fn f(s.0: obj {mark}) -> unit {{\n  decref s.0\n  return ()\n}}\n");
+        assert_eq!(
+            check(&decref),
+            Err(format!(
+                "`s.0` ({mark}) is released, but only unr can be in `f`"
+            ))
+        );
+    }
+    // `release` は分解した持ち主を手放す命令で、`lin` の値にも置く
+    let release = "\
+layout (,) { (,)(tobj, tobj) }
+fn f(p.0: obj lin) -> tobj lin {
+  unpack p.0 (,) #0(a.1: tobj lin, b.2: tobj)
+  release p.0 (,) #0(a.1, _)
+  return a.1
+}
+";
+    assert_eq!(check(release), Ok(()));
+}
+
+#[test]
+fn v2_rejects_passing_unr_to_lin_at_each_boundary() {
+    for (text, message) in [
+        (
+            "fn f(s.0: obj) -> obj lin {\n  jump b1(s.0)\nb1(t.1: obj lin):\n  return t.1\n}\n"
+                .to_string(),
+            "a jump to b1 passes `s.0` (unr) to `t.1` (lin)",
+        ),
+        (
+            "fn f(s.0: obj) -> obj lin {\n  return s.0\n}\n".to_string(),
+            "`s.0` (unr) is returned from a function that returns lin",
+        ),
+        (
+            format!("fn f(s.0: obj) -> unit {{\n  let u.1: unit = call g(s.0)\n  return u.1\n}}\n{TAKES_LIN}"),
+            "argument 0 of `g` is `s.0` (unr), but the function takes lin",
+        ),
+        (
+            format!("fn f(s.0: obj) -> obj {{\n  let t.1: obj = call h(s.0)\n  return t.1\n}}\n{GIVES_LIN}"),
+            "`t.1` (unr) is bound to `h`, which returns lin",
+        ),
+        (
+            format!("fn f(s.0: obj) -> obj {{\n  tail call h(s.0)\n}}\n{GIVES_LIN}"),
+            "a tail call to `h` returns lin, but this function returns unr",
+        ),
+        (
+            "fn f(s.0: obj) -> tobj lin {\n  let c.1: tobj lin = closure k(s.0)\n  return c.1\n}\nfn k(a.0: obj lin, b.1: tobj) -> tobj lin {\n  return a.0\n}\n"
+                .to_string(),
+            "argument 0 of a closure of `k` is `s.0` (unr), but the function takes lin",
+        ),
+        (
+            "fn f(s.0: obj) -> unit {\n  let u.1: unit = extern Std.Fs.close(s.0)\n  return u.1\n}\n"
+                .to_string(),
+            "argument 0 of `Std.Fs.close` is `s.0` (unr), but the extern takes lin",
+        ),
+        (
+            "fn f(s.0: obj) -> obj {\n  let h.1: obj = extern Std.Fs.open(s.0)\n  return h.1\n}\n"
+                .to_string(),
+            "`h.1` (unr) is bound to `Std.Fs.open`, which returns lin",
+        ),
+        // `lin` から `unr` への受け渡しも拒む。基本操作の位置は `unr` か `poly` だけである
+        (
+            "fn f(w.0: tobj lin) -> unit {\n  let u.1: unit = prim evv_set(w.0)\n  return u.1\n}\n"
+                .to_string(),
+            "argument 0 of `prim evv_set` is `w.0` (lin), but the primitive takes unr",
+        ),
+        (
+            "fn f() -> unit {\n  let w.0: tobj lin = prim evv_get()\n  return ()\n}\n".to_string(),
+            "`w.0` (lin) is bound to `prim evv_get`, which returns unr",
+        ),
+        (
+            format!("{LIN_OPS}fn f(c.0: tobj lin, e.1: obj) -> tobj {{\n  let t.2: tobj = clause L.ask c.0(e.1, ())\n  return t.2\n}}\n"),
+            "the callee of a clause of `L.ask` is `c.0` (lin), but a clause takes unr",
+        ),
+        (
+            format!("{LIN_OPS}fn f(c.0: tobj, e.1: obj lin) -> tobj {{\n  let t.2: tobj = clause L.ask c.0(e.1, ())\n  return t.2\n}}\n"),
+            "argument 0 of a clause of `L.ask` is `e.1` (lin), but a clause takes unr",
+        ),
+        (
+            format!("{LIN_OPS}fn f(c.0: tobj, e.1: obj, x.2: tobj) -> tobj lin {{\n  let t.3: tobj lin = clause L.take c.0(e.1, x.2)\n  return t.3\n}}\n"),
+            "argument 1 of a clause of `L.take` is `x.2` (unr), but the operation takes lin",
+        ),
+        (
+            format!("{LIN_OPS}fn f(c.0: tobj, e.1: obj, x.2: tobj lin) -> tobj {{\n  let t.3: tobj = clause L.take c.0(e.1, x.2)\n  return t.3\n}}\n"),
+            "`t.3` (unr) is bound to a clause of `L.take`, which returns lin",
+        ),
+        (
+            format!("{LIN_OPS}fn f(c.0: tobj, e.1: obj, x.2: tobj lin) -> tobj {{\n  tail clause L.take c.0(e.1, x.2)\n}}\n"),
+            "a tail clause of `L.take` returns lin, but this function returns unr",
+        ),
+    ] {
+        assert_eq!(rejected_at_both_levels(&text), format!("{message} in `f`"));
+    }
+    // `clause` の印の付いた関数は、操作の表の印で呼ばれる
+    for (head, ret, message) in [
+        (
+            "fn g(e.0: obj, x.1: tobj)",
+            "tobj lin",
+            "`g` is a clause of `L.take`, but its parameter 1 is unr",
+        ),
+        (
+            "fn g(e.0: obj lin, x.1: tobj lin)",
+            "tobj lin",
+            "`g` is a clause of `L.take`, but its parameter 0 is lin",
+        ),
+        (
+            "fn g(e.0: obj, x.1: tobj lin)",
+            "tobj",
+            "`g` is a clause of `L.take`, but it returns unr",
+        ),
+    ] {
+        let text =
+            format!("{LIN_OPS}internal clause L.take {head} -> {ret} {{\n  return x.1\n}}\n");
+        assert_eq!(rejected_at_both_levels(&text), format!("{message} in `g`"));
+    }
+}
+
+#[test]
+fn v2_lets_poly_meet_unr_and_lin_and_constants_meet_any_mark() {
+    let text = format!(
+        "\
+{OPTION}{LIN_OPS}effect Fail {{ never fail(tobj) -> never }}
+fn f(s.0: obj, h.1: obj lin, c.2: tobj, e.3: obj) -> tobj lin {{
+  jump b1(s.0, h.1)
+b1(p.4: obj poly, q.5: obj poly):
+  let u.6: unit = call g(q.5)
+  let m.8: tobj lin = clause L.take c.2(e.3, #0)
+  let v.9: tobj lin = clause L.take c.2(e.3, ())
+  let w.10: tobj lin = clause L.take c.2(e.3, &i)
+  let r.11: tobj poly = call k(p.4)
+  return r.11
+}}
+fn k(a.0: obj) -> tobj lin {{
+  let t.1: tobj = clause Fail.fail a.0(a.0, ())
+  return t.1
+}}
+{TAKES_LIN}{UNIFORM}"
+    );
+    assert_eq!(check_scopes(&text), Ok(()));
+    // 定数は `lin` の受け手に渡せる。`Option (List File)` の `None` を `lin` の引数に渡す形である
+    let constants = format!(
+        "{OPTION}fn f() -> tobj lin {{\n  jump b1(#0, 1, ())\nb1(a.0: tobj lin, b.1: int lin, c.2: unit lin):\n  return a.0\n}}\n"
+    );
+    assert_eq!(check(&constants), Ok(()));
+}
+
+#[test]
+fn the_build_check_rejects_a_con_or_closure_below_the_join_of_its_arguments() {
+    let con = |bound: &str| {
+        format!(
+            "{PAIR}fn f(h.0: obj lin, x.1: tobj poly) -> obj lin {{\n  let p.2: obj{bound} = con (,) #0(h.0, x.1)\n  return p.2\n}}\n"
+        )
+    };
+    assert_eq!(check_scopes(&con(" lin")), Ok(()));
+    for bound in ["", " poly"] {
+        let mark = bound.trim();
+        let mark = if mark.is_empty() { "unr" } else { mark };
+        assert_eq!(
+            check_lowered(&con(bound)),
+            Err(format!(
+                "`p.2` ({mark}) is bound to a con of `(,)` #0, whose arguments join to lin in `f`"
+            ))
+        );
+    }
+    // 定数は `unr` として結ぶ
+    let constants = format!(
+        "{OPTION}fn f() -> tobj {{\n  let o.0: tobj = con Option #1(#0)\n  return o.0\n}}\n"
+    );
+    assert_eq!(check(&constants), Ok(()));
+    let closure = |bound: &str| {
+        format!(
+            "fn f(x.0: tobj poly) -> tobj poly {{\n  let c.1: tobj{bound} = closure k(x.0)\n  return c.1\n}}\nfn k(a.0: tobj poly, b.1: tobj) -> tobj poly {{\n  return a.0\n}}\n"
+        )
+    };
+    assert_eq!(check_scopes(&closure(" poly")), Ok(()));
+    assert_eq!(check_scopes(&closure(" lin")), Ok(()));
+    assert_eq!(
+        check_lowered(&closure("")),
+        Err(
+            "`c.1` (unr) is bound to a closure of `k`, whose captures join to poly in `f`"
+                .to_string()
+        )
+    );
+}
+
+#[test]
+fn v2_runs_only_on_jump_and_return_at_the_lowered_level() {
+    // box の挿入の前は、境界の段と同じく呼び出しの引数を比べない
+    let call = format!(
+        "fn f(s.0: obj) -> unit {{\n  let u.1: unit = call g(s.0)\n  return u.1\n}}\n{TAKES_LIN}"
+    );
+    assert_eq!(check_lowered(&call), Ok(()));
+    let extern_arg =
+        "fn f(s.0: obj) -> unit {\n  let u.1: unit = extern Std.Fs.close(s.0)\n  return u.1\n}\n";
+    assert_eq!(check_lowered(extern_arg), Ok(()));
+    assert_eq!(
+        check_lowered(
+            "fn f(s.0: obj) -> obj lin {\n  jump b1(s.0)\nb1(t.1: obj lin):\n  return t.1\n}\n"
+        ),
+        Err("a jump to b1 passes `s.0` (unr) to `t.1` (lin) in `f`".to_string())
+    );
+    assert_eq!(
+        check_lowered("fn f(s.0: obj) -> obj lin {\n  return s.0\n}\n"),
+        Err("`s.0` (unr) is returned from a function that returns lin in `f`".to_string())
+    );
+}

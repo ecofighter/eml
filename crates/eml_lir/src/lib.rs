@@ -3,8 +3,8 @@
 
 use std::fmt;
 
-use eml_extern::Extern;
 pub use eml_extern::Repr;
+use eml_extern::{Extern, Linearity};
 
 mod boxing;
 pub mod check;
@@ -89,6 +89,10 @@ impl LirFn {
 
     pub fn repr(&self, var: VarId) -> Repr {
         self.vars[var.0 as usize].repr
+    }
+
+    pub fn mark(&self, var: VarId) -> Mark {
+        self.vars[var.0 as usize].mark
     }
 }
 
@@ -547,6 +551,16 @@ impl Mark {
             Mark::Unr => 0,
             Mark::Poly => 1,
             Mark::Lin => 2,
+        }
+    }
+}
+
+/// extern の行の Kind の列。extern は多相にならないので、`Poly` には写らない。
+impl From<Linearity> for Mark {
+    fn from(kind: Linearity) -> Mark {
+        match kind {
+            Linearity::Unr => Mark::Unr,
+            Linearity::Lin => Mark::Lin,
         }
     }
 }

@@ -85,6 +85,10 @@ impl CoreFn {
     pub fn repr(&self, var: VarId) -> Repr {
         self.vars[var.0 as usize].repr
     }
+
+    pub fn mark(&self, var: VarId) -> Mark {
+        self.vars[var.0 as usize].mark
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

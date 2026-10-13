@@ -5,19 +5,20 @@
 use eml_extern::Purity;
 
 use crate::{
-    Atom, Block, Call, EffectInfo, LirFn, OpRet, Program, Repr, Rhs, Stmt, Term, operation,
+    Atom, Block, Call, EffectInfo, LirFn, Mark, OpRet, Program, Repr, Rhs, Stmt, Term, operation,
 };
 
 pub fn contract(program: &mut Program) {
-    let rets: Vec<Repr> = program
+    let rets: Vec<(Repr, Mark)> = program
         .functions
         .iter()
-        .map(|function| function.ret)
+        .map(|function| (function.ret, function.ret_mark))
         .collect();
     for function in &mut program.functions {
         remove_dead_lets(function);
+        let ret = (function.ret, function.ret_mark);
         for block in &mut function.blocks {
-            tail_call(block, function.ret, &rets, &program.effects);
+            tail_call(block, ret, &rets, &program.effects);
         }
         // 1回のパスで不動点に達することを確かめる (docs/spec/lir.md の「縮約」)。確かめるパスも IR を書き換えうるので、
         // その副作用を `debug_assert!` の式に隠さない
@@ -35,9 +36,16 @@ pub fn contract(program: &mut Program) {
 /// `let x = <呼び出し>` の後の終端が `return x` で、呼び出しの結果が関数の `ret` と互換なら、その2つを末尾呼び出しに
 /// する。互換は推移的でないので、x を通してつながっていた2つの位置が、直接つないでも互換かを確かめる。結果は、直接の
 /// 呼び出しなら呼ばれる関数の `ret`、節の呼び出しなら操作の `ret`、関数値の適用なら `tobj` である。`never` の操作の
-/// 節の呼び出しは戻らないので、どの `ret` とも互換とする (docs/spec/lir.md の「縮約」)。`saved` は Perceus が
-/// 決めるので、この時点では空である。
-fn tail_call(block: &mut Block, ret: Repr, rets: &[Repr], effects: &[EffectInfo]) {
+/// 節の呼び出しは戻らないので、どの `ret` とも互換とする (docs/spec/lir.md の「縮約」)。印の互換も推移的でないので、
+/// 結果の印 (関数値の適用なら `poly`) と関数の戻り値の印も同じく比べる
+/// (docs/superpowers/specs/2026-10-13-s8d-kind-marks-design.md の「V2」)。`saved` は Perceus が決めるので、この時点
+/// では空である。
+fn tail_call(
+    block: &mut Block,
+    (ret, ret_mark): (Repr, Mark),
+    rets: &[(Repr, Mark)],
+    effects: &[EffectInfo],
+) {
     let Term::Return(Atom::Var(returned)) = block.term else {
         return;
     };
@@ -51,19 +59,24 @@ fn tail_call(block: &mut Block, ret: Repr, rets: &[Repr], effects: &[EffectInfo]
     if *var != returned {
         return;
     }
-    let compatible = match call {
-        Call::Direct(target, _) => rets[target.0 as usize].compatible(ret),
-        Call::Apply { .. } => Repr::TObj.compatible(ret),
+    let result = match call {
+        Call::Direct(target, _) => Some(rets[target.0 as usize]),
+        Call::Apply { .. } => Some((Repr::TObj, Mark::Poly)),
         Call::Clause {
             effect,
             op,
             callee: _,
             args: _,
-        } => match operation(effects, *effect, *op).ret {
-            OpRet::Repr(repr) => repr.compatible(ret),
-            OpRet::Never => true,
-        },
+        } => {
+            let operation = operation(effects, *effect, *op);
+            match operation.ret {
+                OpRet::Repr(repr) => Some((repr, operation.ret_mark)),
+                OpRet::Never => None,
+            }
+        }
     };
+    let compatible =
+        result.is_none_or(|(repr, mark)| repr.compatible(ret) && mark.compatible(ret_mark));
     if !compatible {
         return;
     }

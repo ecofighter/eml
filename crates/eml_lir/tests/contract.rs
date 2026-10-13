@@ -262,3 +262,47 @@ yields fn f(c.0: tobj, e.1: obj, s.2: obj) -> int {
     }
     ");
 }
+
+#[test]
+fn a_call_whose_result_mark_is_not_compatible_with_the_ret_mark_is_not_a_tail_call() {
+    // `h` の `lin` は `r` の `poly` と、`r` は `f` の `unr` と互換である。印の互換も推移的でないので、`lin` と `unr` を
+    // 直接つなぐ末尾呼び出しにはしない。`apply` の結果はいつも `poly` なので、どの戻り値の印とも互換である
+    // (docs/superpowers/specs/2026-10-13-s8d-kind-marks-design.md の「V2」)
+    let text = "\
+effect L { take(tobj lin) -> tobj lin }
+fn f(s.0: obj) -> obj {
+  let r.1: obj poly = call h(s.0)
+  return r.1
+}
+yields fn g(c.0: tobj, e.1: obj, x.2: tobj lin) -> tobj {
+  let r.3: tobj poly = clause L.take c.0(e.1, x.2)
+  return r.3
+}
+fn h(s.0: obj) -> obj lin {
+  let f.1: obj lin = extern Std.Fs.open(s.0)
+  return f.1
+}
+fn k(c.0: tobj) -> tobj lin {
+  let r.1: tobj poly = apply c.0(())
+  return r.1
+}
+";
+    insta::assert_snapshot!(contract_text(text), @"
+    effect L { take(tobj lin) -> tobj lin }
+    fn f(s.0: obj) -> obj {
+      let r.1: obj poly = call h(s.0)
+      return r.1
+    }
+    yields fn g(c.0: tobj, e.1: obj, x.2: tobj lin) -> tobj {
+      let r.3: tobj poly = clause L.take c.0(e.1, x.2)
+      return r.3
+    }
+    fn h(s.0: obj) -> obj lin {
+      let f.1: obj lin = extern Std.Fs.open(s.0)
+      return f.1
+    }
+    fn k(c.0: tobj) -> tobj lin {
+      tail apply c.0(())
+    }
+    ");
+}

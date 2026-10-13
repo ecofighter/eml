@@ -170,9 +170,11 @@ impl FnBuilder {
         atoms
     }
 
-    /// 文がなく `return p` だけのブロック `b(p)` へのすべての `jump b(a)` を `return a` にして `b` を消す。番号の
-    /// 大きいブロックから見るので、`return` に変わったブロックが次に消せる形になっても、同じ1回のループで消える。
-    /// 消したブロックを詰めて、番号を振り直す。末尾呼び出しはここでは作らず、縮約に任せる (docs/spec/core-ir.md)。
+    /// 文がなく `return p` だけのブロック `b(p)` への `jump b(a)` を `return a` にし、すべての `jump` が変わった `b` を
+    /// 消す。番号の大きいブロックから見るので、`return` に変わったブロックが次に消せる形になっても、同じ1回のループで
+    /// 消える。消したブロックを詰めて、番号を振り直す。末尾呼び出しはここでは作らず、縮約に任せる (docs/spec/core-ir.md)。
+    /// 印の互換は推移的でないので、`a` が定数か、`a` の印が `p` の印と同じときだけ変える
+    /// (docs/superpowers/specs/2026-10-13-s8d-kind-marks-design.md の「V2」)。
     /// `internal` は内部の関数の印 (`CoreFn::internal`) である。
     pub(crate) fn finish(
         self,
@@ -196,21 +198,34 @@ impl FnBuilder {
         let mut removed = vec![false; blocks.len()];
         for index in (1..blocks.len()).rev() {
             let slot = &blocks[index];
-            let forwards = slot.stmts.is_empty()
-                && matches!(slot.term, Some(Term::Return(Atom::Var(value))) if slot.params == [value]);
-            if !forwards {
-                continue;
-            }
-            removed[index] = true;
+            let param = match (&slot.term, &slot.params[..]) {
+                (Some(Term::Return(Atom::Var(value))), &[param])
+                    if slot.stmts.is_empty() && *value == param =>
+                {
+                    param
+                }
+                _ => continue,
+            };
+            let mark = self.vars[param.0 as usize].mark;
+            let mut kept = false;
             for &source in &jumps_into[index] {
-                let Some(Term::Jump { target: _, args }) = blocks[source].term.take() else {
+                let Some(Term::Jump { target: _, args }) = &blocks[source].term else {
                     unreachable!("the source jumps into the forwarded block");
                 };
                 let [value] = args[..] else {
                     unreachable!("a jump passes one value per parameter");
                 };
-                blocks[source].term = Some(Term::Return(value));
+                let forwards = match value {
+                    Atom::Var(var) => self.vars[var.0 as usize].mark == mark,
+                    Atom::Int(_) | Atom::Unit | Atom::Tag(_) | Atom::Fn(_) => true,
+                };
+                if forwards {
+                    blocks[source].term = Some(Term::Return(value));
+                } else {
+                    kept = true;
+                }
             }
+            removed[index] = !kept;
         }
         let mut renumbered = Vec::with_capacity(blocks.len());
         let mut next = 0;
@@ -244,5 +259,78 @@ impl FnBuilder {
             ret_mark,
             blocks,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use eml_lir::{Case, CasePattern};
+
+    fn info(name: &str, repr: Repr, mark: Mark) -> VarInfo {
+        VarInfo {
+            name: name.to_string(),
+            repr,
+            mark,
+        }
+    }
+
+    /// `return` だけのブロックへの `jump` を `return` にするのは、実引数が定数か、印が行き先の引数と同じときだけで
+    /// ある。印の互換は推移的でないので、`lin` から `poly` を通して `unr` へ返す形を直接つながない
+    /// (docs/superpowers/specs/2026-10-13-s8d-kind-marks-design.md の「V2」)。
+    #[test]
+    fn a_jump_is_forwarded_only_when_its_argument_has_the_mark_of_the_parameter() {
+        let mut builder = FnBuilder::new();
+        let n = builder.param(info("n", Repr::Int, Mark::Unr));
+        let same = builder.param(info("s", Repr::TObj, Mark::Poly));
+        let other = builder.param(info("h", Repr::TObj, Mark::Lin));
+        let label = builder.new_label(vec![info("p", Repr::TObj, Mark::Poly)]);
+        let (zero, one, rest) = (
+            builder.new_block(),
+            builder.new_block(),
+            builder.new_block(),
+        );
+        builder.terminate(Term::Switch {
+            scrutinee: Atom::Var(n),
+            layout: None,
+            cases: vec![
+                Case {
+                    pattern: CasePattern::Int(0),
+                    fields: Vec::new(),
+                    target: zero,
+                },
+                Case {
+                    pattern: CasePattern::Int(1),
+                    fields: Vec::new(),
+                    target: one,
+                },
+            ],
+            default: Some(rest),
+        });
+        for (block, arg) in [
+            (zero, Atom::Var(same)),
+            (one, Atom::Var(other)),
+            (rest, Atom::Unit),
+        ] {
+            builder.reopen(block);
+            builder.jump(label, vec![arg]);
+        }
+        let [param] = builder
+            .resolve(label)
+            .expect("three blocks jump to the label")[..]
+        else {
+            unreachable!("the label has one parameter");
+        };
+        builder.terminate(Term::Return(param));
+        let function = builder.finish("f".to_string(), false, false, Repr::TObj, Mark::Poly);
+        let terms: Vec<&Term> = function.blocks.iter().map(|block| &block.term).collect();
+        assert_eq!(terms[1], &Term::Return(Atom::Var(same)));
+        assert!(matches!(terms[2], Term::Jump { args, .. } if args == &[Atom::Var(other)]));
+        assert_eq!(terms[3], &Term::Return(Atom::Unit));
+        assert_eq!(
+            function.blocks.len(),
+            5,
+            "the parameter's block stays for `h`"
+        );
     }
 }

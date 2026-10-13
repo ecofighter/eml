@@ -18,6 +18,11 @@
 //! 前向きなので、ブロックに着いたときには入る辺がすべて出そろっている。支配木は辺1本につき深さの対数の手間で
 //! 育つ。所有の多重集合は辺ごとに写して比べるので、その手間は辺の数と所有の大きさの積に比例する
 //! (docs/spec/lir.md の「verifier」)。
+//!
+//! 印は Repr を比べる所と同じ所で比べる (V2)。入口の段では `jump` と `return` だけを、範囲の段と所有の段では境界の
+//! すべてを比べる。`con` と `closure` が束縛する変数の印が引数の印の結び以上であることはどの段でも確かめ (作る所の
+//! 検査)、`dup` と `decref` の対象が `unr` であることは所有の段で確かめる (V1)。段の分け方は
+//! docs/superpowers/specs/2026-10-13-s8d-kind-marks-design.md の「verifier」による。
 
 use std::collections::{BTreeMap, HashMap};
 
@@ -27,8 +32,8 @@ use crate::check::{
 };
 use crate::syntax::{operation_text, prim_text};
 use crate::{
-    Atom, Block, BlockId, Call, CasePattern, Ctor, FnIdx, Layout, LirFn, OpRet, Prim, Program,
-    Repr, Rhs, Stmt, Term, VarId, VerifyError, operation,
+    Atom, Block, BlockId, Call, CasePattern, Ctor, FnIdx, Layout, LirFn, Mark, OpRet, Prim,
+    Program, Repr, Rhs, Stmt, Term, VarId, VerifyError, operation,
 };
 
 /// Perceus の後の LIR を確かめる。形と範囲に加えて、RC の対象の変数の所有が釣り合うことと、呼び出しの後に見える
@@ -86,8 +91,12 @@ fn verify_at(program: &Program, level: Level) -> Result<(), VerifyError> {
             &program.effects,
             &function.name,
             function.clause,
-            param_reprs(function),
+            function
+                .params()
+                .iter()
+                .map(|&param| &function.vars[param.0 as usize]),
             function.ret,
+            function.ret_mark,
             level >= Level::Scopes,
         )
         .map_err(|message| VerifyError {
@@ -426,6 +435,7 @@ impl<'a> Checker<'a> {
             }
             Stmt::Dup(var) => {
                 self.rc_allowed(*var, "duplicated")?;
+                self.shareable(*var, "duplicated")?;
                 self.read(owned, *var, "duplicated")?;
                 if !self.function.repr(*var).is_rc() {
                     return Err(format!(
@@ -438,6 +448,7 @@ impl<'a> Checker<'a> {
             }
             Stmt::Decref(var) => {
                 self.rc_allowed(*var, "released")?;
+                self.shareable(*var, "released")?;
                 self.give_up(owned, *var, "released")
             }
             Stmt::Release {
@@ -460,6 +471,13 @@ impl<'a> Checker<'a> {
                         "{} is returned from a function that returns {}",
                         self.cx.typed_atom_text(*atom),
                         self.function.ret.name()
+                    ));
+                }
+                if !self.cx.mark_passes(*atom, self.function.ret_mark) {
+                    return Err(format!(
+                        "{} is returned from a function that returns {}",
+                        self.cx.marked_atom_text(*atom),
+                        self.function.ret_mark.name()
                     ));
                 }
                 self.nothing_owned(&owned)
@@ -567,11 +585,21 @@ impl<'a> Checker<'a> {
         Ok(())
     }
 
-    /// `jump` の実引数は、行き先の引数と互換である (R8)。
+    /// `jump` の実引数は、行き先の引数と Repr が互換で (R8)、印も互換である (V2)。
     fn check_passed(&self, target: BlockId, arg: Atom, param: VarId) -> Result<(), String> {
         let expected = self.function.repr(param);
         if self.cx.passes(arg, expected)? {
-            return Ok(());
+            let mark = self.function.mark(param);
+            if self.cx.mark_passes(arg, mark) {
+                return Ok(());
+            }
+            return Err(format!(
+                "a jump to b{} passes {} to `{}` ({})",
+                target.0,
+                self.cx.marked_atom_text(arg),
+                self.cx.name(param),
+                mark.name()
+            ));
         }
         Err(match arg {
             Atom::Var(var) => format!(
@@ -808,6 +836,20 @@ impl<'a> Checker<'a> {
         Ok(())
     }
 
+    /// `dup` と `decref` の対象は `unr` である (V1)。`lin` と `poly` の値は共有してはならず、ちょうど1回消費する
+    /// (docs/superpowers/specs/2026-10-13-s8d-kind-marks-design.md の「V1」)。
+    fn shareable(&self, var: VarId, what: &str) -> Result<(), String> {
+        let mark = self.function.mark(var);
+        if mark == Mark::Unr {
+            return Ok(());
+        }
+        Err(format!(
+            "`{}` ({}) is {what}, but only unr can be",
+            self.cx.name(var),
+            mark.name()
+        ))
+    }
+
     /// RC の命令は Perceus だけが入れる。
     fn rc_allowed(&self, var: VarId, what: &str) -> Result<(), String> {
         if self.level != Level::Ownership {
@@ -881,8 +923,23 @@ impl<'a> Checker<'a> {
                                 expected.name()
                             ));
                         }
+                        let mark = target.mark(param);
+                        if !self.cx.mark_passes(arg, mark) {
+                            return Err(format!(
+                                "argument {index} of a closure of `{}` is {}, but the function takes {}",
+                                target.name,
+                                self.cx.marked_atom_text(arg),
+                                mark.name()
+                            ));
+                        }
                     }
                 }
+                self.cx.check_built(
+                    var,
+                    args,
+                    || format!("a closure of `{}`", target.name),
+                    "captures",
+                )?;
             }
             Rhs::Extern { ext, args, at: _ } => self.cx.check_extern(var, *ext, args)?,
             Rhs::Prim(prim, args) => {
@@ -990,7 +1047,7 @@ impl<'a> Checker<'a> {
                         args.len()
                     ));
                 }
-                Some(target.ret)
+                Some((target.ret, target.ret_mark))
             }
             Call::Clause {
                 effect,
@@ -1017,11 +1074,12 @@ impl<'a> Checker<'a> {
                 }
                 // `never` の操作の節は値を返さないので、結果は位置でない
                 match operation.ret {
-                    OpRet::Repr(repr) => Some(repr),
+                    OpRet::Repr(repr) => Some((repr, operation.ret_mark)),
                     OpRet::Never => None,
                 }
             }
-            Call::Apply { .. } => Some(Repr::TObj),
+            // 関数の値は型変数の位置なので、結果の印はいつも `poly` で、どの受け手とも合う
+            Call::Apply { .. } => Some((Repr::TObj, Mark::Poly)),
         };
         if self.cx.boundaries {
             self.check_operands(call)?;
@@ -1033,7 +1091,8 @@ impl<'a> Checker<'a> {
     }
 
     /// 呼び出しのオペランドを左から比べる (R8)。直接の呼び出しは、呼ばれる関数の引数と比べる。関数値の適用の
-    /// オペランドは一様な位置なので、`tobj` と比べる。呼び出しの形は確かめてある。
+    /// オペランドは一様な位置なので、`tobj` と比べる。呼び出しの形は確かめてある。印も同じ所で比べる (V2)。関数値の
+    /// 適用の位置の印はいつも `poly` なので、印を比べない。
     fn check_operands(&self, call: &Call) -> Result<(), String> {
         // 誤りの文で呼び出しを指す句 (`an apply`) は呼び出しの形で決まるので、比べる処理を形ごとに作る
         let operands = |taker: &'static str| {
@@ -1060,6 +1119,15 @@ impl<'a> Checker<'a> {
                             target.name,
                             self.cx.typed_atom_text(arg),
                             expected.name()
+                        ));
+                    }
+                    let mark = target.mark(param);
+                    if !self.cx.mark_passes(arg, mark) {
+                        return Err(format!(
+                            "argument {index} of `{}` is {}, but the function takes {}",
+                            target.name,
+                            self.cx.marked_atom_text(arg),
+                            mark.name()
                         ));
                     }
                 }
@@ -1090,18 +1158,39 @@ impl<'a> Checker<'a> {
                         self.cx.typed_atom_text(*callee)
                     ));
                 }
-                let expected = std::iter::once(Repr::Obj).chain(operation.params.iter().copied());
-                for (index, (&arg, expected)) in args.iter().zip(expected).enumerate() {
-                    if !self.cx.passes(arg, expected)? {
-                        let taker = if index == 0 {
-                            "a clause"
-                        } else {
-                            "the operation"
-                        };
+                // 呼ばれる入口のクロージャは `ev_clause` が `dup` して返すので `unr` である
+                // (docs/superpowers/specs/2026-10-13-s8d-kind-marks-design.md の「V2」)
+                if !self.cx.mark_passes(*callee, Mark::Unr) {
+                    return Err(format!(
+                        "the callee of {what} is {}, but a clause takes unr",
+                        self.cx.marked_atom_text(*callee)
+                    ));
+                }
+                let expected = std::iter::once((Repr::Obj, Mark::Unr)).chain(
+                    operation
+                        .params
+                        .iter()
+                        .copied()
+                        .zip(operation.param_marks.iter().copied()),
+                );
+                for (index, (&arg, (repr, mark))) in args.iter().zip(expected).enumerate() {
+                    let taker = if index == 0 {
+                        "a clause"
+                    } else {
+                        "the operation"
+                    };
+                    if !self.cx.passes(arg, repr)? {
                         return Err(format!(
                             "argument {index} of {what} is {}, but {taker} takes {}",
                             self.cx.typed_atom_text(arg),
-                            expected.name()
+                            repr.name()
+                        ));
+                    }
+                    if !self.cx.mark_passes(arg, mark) {
+                        return Err(format!(
+                            "argument {index} of {what} is {}, but {taker} takes {}",
+                            self.cx.marked_atom_text(arg),
+                            mark.name()
                         ));
                     }
                 }
@@ -1121,33 +1210,48 @@ impl<'a> Checker<'a> {
     }
 
     /// 呼び出しの結果 (直接の呼び出しなら呼ばれる関数の `ret`、節の呼び出しなら操作の `ret`、`apply` なら `tobj`) は、
-    /// 束縛する変数か、`tail` なら呼び出し元の `ret` と互換である (R8)。
-    fn check_result(&self, call: &Call, result: Repr, receiver: Receiver) -> Result<(), String> {
+    /// 束縛する変数か、`tail` なら呼び出し元の `ret` と互換である (R8)。結果の印も同じく互換である (V2)。
+    fn check_result(
+        &self,
+        call: &Call,
+        (result, result_mark): (Repr, Mark),
+        receiver: Receiver,
+    ) -> Result<(), String> {
         match receiver {
             Receiver::Bound(var) => {
                 let repr = self.function.repr(var);
-                if repr.compatible(result) {
-                    return Ok(());
+                if !repr.compatible(result) {
+                    return Err(format!(
+                        "`{}` ({}) is bound to {}, which returns {}",
+                        self.cx.name(var),
+                        repr.name(),
+                        self.call_text(call, false),
+                        result.name()
+                    ));
                 }
-                Err(format!(
-                    "`{}` ({}) is bound to {}, which returns {}",
-                    self.cx.name(var),
-                    repr.name(),
-                    self.call_text(call, false),
-                    result.name()
-                ))
+                self.cx
+                    .bound_mark(var, result_mark, || self.call_text(call, false))
             }
             Receiver::Tail => {
+                // 呼び出し元を "this function" と書き、呼ばれる側を指す "the function" と分ける
                 let ret = self.function.ret;
-                if result.compatible(ret) {
+                if !result.compatible(ret) {
+                    return Err(format!(
+                        "{} returns {}, but this function returns {}",
+                        self.call_text(call, true),
+                        result.name(),
+                        ret.name()
+                    ));
+                }
+                let ret_mark = self.function.ret_mark;
+                if result_mark.compatible(ret_mark) {
                     return Ok(());
                 }
-                // 呼び出し元を "this function" と書き、呼ばれる側を指す "the function" と分ける
                 Err(format!(
                     "{} returns {}, but this function returns {}",
                     self.call_text(call, true),
-                    result.name(),
-                    ret.name()
+                    result_mark.name(),
+                    ret_mark.name()
                 ))
             }
         }

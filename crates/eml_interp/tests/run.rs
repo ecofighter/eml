@@ -261,8 +261,9 @@ fn main() -> unit {
 
 #[test]
 fn a_dup_of_a_file_is_a_runtime_error() {
-    // LIR は Kind を持たないので、verifier は `File` の `dup` を拒まない。ヒープが実行時に止める
-    // (docs/spec/runtime.md の「`File` の参照の検査」)
+    // verifier は `lin` の変数の `dup` を V1 で静的に拒む。印を誤った IR でも、ヒープが実行時に止めることを、
+    // verifier を通さずに確かめる (docs/spec/runtime.md の「`File` の参照の検査」と
+    // docs/superpowers/specs/2026-10-13-s8d-kind-marks-design.md の「V1」)
     let path = concat!(env!("CARGO_MANIFEST_DIR"), "/Cargo.toml");
     let text = format!(
         "\
@@ -272,7 +273,7 @@ fn main() -> unit {{
   return u.1
 }}
 fn f(p.0: obj) -> unit {{
-  let h.1: obj = extern Std.Fs.open(p.0)
+  let h.1: obj lin = extern Std.Fs.open(p.0)
   dup h.1
   let u.2: unit = extern Std.Fs.close(h.1)
   let u.3: unit = extern Std.Fs.close(h.1)
@@ -280,7 +281,11 @@ fn f(p.0: obj) -> unit {{
 }}
 "
     );
-    let (_, result) = run_lir(&text);
+    assert_eq!(
+        eml_lir::verify(&parse(&text)).map_err(|error| error.to_string()),
+        Err("`h.1` (lin) is duplicated, but only unr can be in `f`".to_string())
+    );
+    let (_, result) = run_lir_unverified(&text);
     let error = result.unwrap_err();
     assert_eq!(
         error,
