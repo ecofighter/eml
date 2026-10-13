@@ -304,18 +304,23 @@ impl<M: Mode> Heap<M> {
             return Ok(());
         }
         let h = w.header();
-        // `dup` と同じく、局所の数を減らすだけの道を呼ぶ側に展開する
+        // `dup` と同じく、局所の数を減らすだけの道を呼ぶ側に展開する。一意な物体を空けることは VM でよく起きるので、
+        // 遅い道に入れず、ここから解放の連鎖を直に呼ぶ (docs/implementation/benchmarks.md の「S9a (`eml_rt` の核)」)
         if !M::CHECKED {
             let rc = unsafe { meta::rc(h) };
-            if let DecrefStep::Store(n) = rc::decref_step(rc.load(Ordering::Relaxed)) {
-                rc.store(n, Ordering::Relaxed);
-                return Ok(());
+            match rc::decref_step(rc.load(Ordering::Relaxed)) {
+                DecrefStep::Store(n) => {
+                    rc.store(n, Ordering::Relaxed);
+                    return Ok(());
+                }
+                DecrefStep::Free => return unsafe { self.free_chain(h) },
+                DecrefStep::Shared | DecrefStep::Skip => {}
             }
         }
         unsafe { self.decref_slow(h) }
     }
 
-    /// `decref` の遅い道。解放の連鎖、共有、不死、張り付いた数と、検査モードの仕事を受け持つ。
+    /// `decref` の遅い道。共有、不死、張り付いた数と、検査モードの仕事 (検査モードの解放の連鎖を含む) を受け持つ。
     #[cold]
     #[inline(never)]
     unsafe fn decref_slow(&mut self, h: NonNull<Header>) -> Result<(), HeapError> {
@@ -344,6 +349,8 @@ impl<M: Mode> Heap<M> {
         Ok(last)
     }
 
+    // `decref` の速い道から呼ぶので、展開させずに速い道を小さく保つ
+    #[inline(never)]
     unsafe fn free_chain(&mut self, root: NonNull<Header>) -> Result<(), HeapError> {
         let mut work = mem::take(&mut self.work);
         work.push(Word::from_header(root));

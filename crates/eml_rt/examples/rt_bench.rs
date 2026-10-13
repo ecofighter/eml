@@ -12,12 +12,13 @@ const ROUNDS: usize = 10;
 fn main() {
     let case = std::env::args()
         .nth(1)
-        .expect("a case: empty, list, box-list, dup, map, map-reuse");
+        .expect("a case: empty, list, box-list, dup, free, map, map-reuse");
     match case.as_str() {
         "empty" => {}
         "list" => list(),
         "box-list" => box_list(),
         "dup" => dup(),
+        "free" => free(),
         "map" => map(false),
         "map-reuse" => map(true),
         _ => panic!("an unknown case {case}"),
@@ -85,6 +86,22 @@ fn dup() {
             heap.decref(black_box(x)).unwrap();
         }
         heap.decref(x).unwrap();
+    }
+}
+
+/// cons セルを1つ確保して2つの語を書き、`decref` で空けることの繰り返し。`list` の解放は解放の連鎖の中の `release_ref`
+/// を通るので、`decref` が一意な物体を空ける道はこの計測だけが測る。
+fn free() {
+    let mut heap = Heap::<Fast>::new();
+    for _ in 0..CELLS * ROUNDS {
+        // SAFETY: 確保した cell の2つの語を、ほかのヒープの操作の前に書く。cell はここで確保した生きた物体で、参照を1つ
+        // 持っている。
+        unsafe {
+            let cell = heap.alloc(2, CONS);
+            heap.set_field(cell, 0, Word::UNIT).unwrap();
+            heap.set_field(cell, 1, Word::UNIT).unwrap();
+            heap.decref(black_box(cell)).unwrap();
+        }
     }
 }
 
