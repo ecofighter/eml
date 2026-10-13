@@ -1,7 +1,7 @@
 //! evidence passing の基本操作 (docs/spec/lir.md の「基本操作」)。
 //! 表は `eml_extern` に置かない。`eml_extern` の表は `std/` と1対1に結び付くが、基本操作はソースに現れないためである。
 
-use crate::Repr;
+use crate::{Mark, Repr};
 
 /// 基本操作の種類と即値。エフェクトと操作は `Program.effects` の番号である。`EvSetClause` と `EvClause` は、
 /// テキストの形で操作の名前をエフェクトで修飾するために、操作だけでなくエフェクトも持つ。
@@ -46,6 +46,11 @@ pub struct PrimRow {
     /// (docs/spec/lir.md の「基本操作」)。
     pub borrowed: &'static [bool],
     pub ret: Repr,
+    /// 引数ごとの印で、長さは `params` と同じである。evidence と `evv` の位置は `unr`、状態、継続、節の本体の位置は
+    /// `poly` である。evidence passing が自分の変数に付ける印と同じなので、`prim` の検査が evidence passing 自身を確かめる
+    /// (docs/superpowers/specs/2026-10-13-s8d-kind-marks-design.md の「基本操作の表」)。
+    pub param_marks: &'static [Mark],
+    pub ret_mark: Mark,
 }
 
 /// 基本操作の即値。テキストの形は `[…]` に書き、verifier は番号が表にあるかを確かめる。
@@ -133,34 +138,56 @@ impl Prim {
     }
 
     pub fn row(&self) -> PrimRow {
+        use Mark::{Poly, Unr};
         use Repr::{Int, Obj, TObj, Unit};
         const NONE: &[bool] = &[];
-        let (params, borrowed, ret): (&'static [Repr], &'static [bool], Repr) = match self {
-            Prim::EvvGet => (&[], NONE, TObj),
-            Prim::EvvSet => (&[TObj], &[false], Unit),
-            Prim::EvvPush => (&[TObj, Obj], &[false, false], TObj),
-            Prim::EvvMask(_) => (&[TObj], &[true], TObj),
-            Prim::EvNew(_) => (&[TObj, TObj], &[false, false], Obj),
-            Prim::EvSetClause { .. } => (&[Obj, TObj], &[true, false], Unit),
-            Prim::EvRenew => (&[Obj, TObj], &[true, false], Obj),
-            Prim::EvLookup(_) => (&[], NONE, Obj),
-            Prim::EvClause { .. } => (&[Obj], &[true], TObj),
-            Prim::EvEvv => (&[Obj], &[true], TObj),
-            Prim::EvTakeState => (&[Obj], &[true], TObj),
-            Prim::EvSetState => (&[Obj, TObj], &[true, false], Unit),
-            Prim::Yielding => (&[], NONE, Int),
-            Prim::YieldStatus => (&[Obj], &[true], Int),
-            Prim::YieldTo => (&[Obj, TObj, TObj], &[false, false, false], Unit),
-            Prim::YieldAbort => (&[Obj, TObj, TObj], &[false, false, false], Unit),
-            Prim::YieldContTake => (&[], NONE, TObj),
-            Prim::YieldContSet => (&[TObj], &[false], Unit),
-            Prim::YieldFinish => (&[], NONE, TObj),
-            Prim::Dummy => (&[], NONE, Obj),
+        const NO_MARKS: &[Mark] = &[];
+        let (params, borrowed, ret, param_marks, ret_mark): (
+            &'static [Repr],
+            &'static [bool],
+            Repr,
+            &'static [Mark],
+            Mark,
+        ) = match self {
+            Prim::EvvGet => (&[], NONE, TObj, NO_MARKS, Unr),
+            Prim::EvvSet => (&[TObj], &[false], Unit, &[Unr], Unr),
+            Prim::EvvPush => (&[TObj, Obj], &[false, false], TObj, &[Unr, Unr], Unr),
+            Prim::EvvMask(_) => (&[TObj], &[true], TObj, &[Unr], Unr),
+            Prim::EvNew(_) => (&[TObj, TObj], &[false, false], Obj, &[Poly, Unr], Unr),
+            Prim::EvSetClause { .. } => (&[Obj, TObj], &[true, false], Unit, &[Unr, Unr], Unr),
+            Prim::EvRenew => (&[Obj, TObj], &[true, false], Obj, &[Unr, Poly], Unr),
+            Prim::EvLookup(_) => (&[], NONE, Obj, NO_MARKS, Unr),
+            Prim::EvClause { .. } => (&[Obj], &[true], TObj, &[Unr], Unr),
+            Prim::EvEvv => (&[Obj], &[true], TObj, &[Unr], Unr),
+            Prim::EvTakeState => (&[Obj], &[true], TObj, &[Unr], Poly),
+            Prim::EvSetState => (&[Obj, TObj], &[true, false], Unit, &[Unr, Poly], Unr),
+            Prim::Yielding => (&[], NONE, Int, NO_MARKS, Unr),
+            Prim::YieldStatus => (&[Obj], &[true], Int, &[Unr], Unr),
+            Prim::YieldTo => (
+                &[Obj, TObj, TObj],
+                &[false, false, false],
+                Unit,
+                &[Unr, Poly, Poly],
+                Unr,
+            ),
+            Prim::YieldAbort => (
+                &[Obj, TObj, TObj],
+                &[false, false, false],
+                Unit,
+                &[Unr, Poly, Poly],
+                Unr,
+            ),
+            Prim::YieldContTake => (&[], NONE, TObj, NO_MARKS, Poly),
+            Prim::YieldContSet => (&[TObj], &[false], Unit, &[Poly], Unr),
+            Prim::YieldFinish => (&[], NONE, TObj, NO_MARKS, Poly),
+            Prim::Dummy => (&[], NONE, Obj, NO_MARKS, Poly),
         };
         PrimRow {
             params,
             borrowed,
             ret,
+            param_marks,
+            ret_mark,
         }
     }
 
@@ -192,6 +219,49 @@ mod tests {
         for prim in every_prim() {
             let row = prim.row();
             assert_eq!(row.borrowed.len(), row.params.len(), "{}", prim.name());
+        }
+    }
+
+    #[test]
+    fn every_kind_marks_each_parameter_like_its_repr() {
+        for prim in every_prim() {
+            let row = prim.row();
+            assert_eq!(row.param_marks.len(), row.params.len(), "{}", prim.name());
+        }
+    }
+
+    /// 状態、κ、節の本体の位置だけが `poly` で、ほかは `unr` である
+    /// (docs/superpowers/specs/2026-10-13-s8d-kind-marks-design.md の「基本操作の表」)。
+    #[test]
+    fn the_marks_of_the_primitives_follow_the_spec_table() {
+        use Mark::{Poly, Unr};
+        let table: [(&str, &[Mark], Mark); 20] = [
+            ("evv_get", &[], Unr),
+            ("evv_set", &[Unr], Unr),
+            ("evv_push", &[Unr, Unr], Unr),
+            ("evv_mask", &[Unr], Unr),
+            ("ev_new", &[Poly, Unr], Unr),
+            ("ev_set_clause", &[Unr, Unr], Unr),
+            ("ev_renew", &[Unr, Poly], Unr),
+            ("ev_lookup", &[], Unr),
+            ("ev_clause", &[Unr], Unr),
+            ("ev_evv", &[Unr], Unr),
+            ("ev_take_state", &[Unr], Poly),
+            ("ev_set_state", &[Unr, Poly], Unr),
+            ("yielding", &[], Unr),
+            ("yield_status", &[Unr], Unr),
+            ("yield_to", &[Unr, Poly, Poly], Unr),
+            ("yield_abort", &[Unr, Poly, Poly], Unr),
+            ("yield_cont_take", &[], Poly),
+            ("yield_cont_set", &[Poly], Unr),
+            ("yield_finish", &[], Poly),
+            ("dummy", &[], Poly),
+        ];
+        assert_eq!(table.len(), KINDS.len());
+        for (name, params, ret) in table {
+            let row = Prim::by_name(name).expect("a primitive").row();
+            assert_eq!(row.param_marks, params, "{name}");
+            assert_eq!(row.ret_mark, ret, "{name}");
         }
     }
 }

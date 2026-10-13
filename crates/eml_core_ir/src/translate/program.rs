@@ -7,7 +7,7 @@ use eml_hir::{
     ConstructorId, EffectDef, EffectId, EffectKind, FunctionId, ModuleId, OpMultiplicity,
     OperationId, Program as HirProgram, TypeDefId, TypeDefKind, ValueItem,
 };
-use eml_types::{TypeId, TypeStore, TypedProgram};
+use eml_types::{Lin, TypeId, TypeStore, TypedProgram};
 
 use crate::{Call, CoreFn, Rhs, Stmt, Term};
 use eml_lir::{
@@ -513,9 +513,12 @@ pub(super) fn effect_table(
                     let ty = typed.decls[&ValueItem::Operation(op)].ty;
                     let (params, result) = split_arrows(types, ty, operation.arity);
                     let resumable = operation.multiplicity != OpMultiplicity::Never;
+                    let mark = |ty| mark_of(types.linearity_or_poly(ty));
                     OperationInfo {
                         name: operation.name.clone(),
                         params: params.iter().map(|&ty| repr(types, ty, hir)).collect(),
+                        param_marks: params.iter().map(|&ty| mark(ty)).collect(),
+                        ret_mark: if resumable { mark(result) } else { Mark::Poly },
                         ret: if resumable {
                             OpRet::Repr(repr(types, result, hir))
                         } else {
@@ -527,4 +530,13 @@ pub(super) fn effect_table(
                 .collect(),
         })
         .collect()
+}
+
+/// 型の線形性が決める印。決まらない型 (`Poly`) と Kind 変数は、呼び出し側が決めるので `poly` にする。
+fn mark_of(lin: Lin) -> Mark {
+    match lin {
+        Lin::Unr => Mark::Unr,
+        Lin::Lin => Mark::Lin,
+        Lin::Poly | Lin::Var(_) => Mark::Poly,
+    }
 }

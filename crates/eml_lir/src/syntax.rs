@@ -452,13 +452,15 @@ impl<'t> Reader<'t> {
         let never = self.eat_never();
         let line = self.line();
         let name = self.word()?;
-        let params = self.list('(', ')', Self::repr)?;
+        let marked = self.list('(', ')', |p| Ok((p.repr()?, p.mark()?)))?;
+        let (params, param_marks): (Vec<Repr>, Vec<Mark>) = marked.into_iter().unzip();
         self.expect_word("->")?;
-        let ret = if self.at_word("never") {
+        let (ret, ret_mark) = if self.at_word("never") {
             self.pos += 1;
-            OpRet::Never
+            (OpRet::Never, Mark::Poly)
         } else {
-            OpRet::Repr(self.repr()?)
+            let repr = self.repr()?;
+            (OpRet::Repr(repr), self.mark()?)
         };
         match (never, ret) {
             (true, OpRet::Repr(_)) => {
@@ -473,6 +475,8 @@ impl<'t> Reader<'t> {
             name,
             params,
             ret,
+            param_marks,
+            ret_mark,
             resumable: !never,
         })
     }
@@ -1225,15 +1229,21 @@ impl<'p> Writer<'p> {
                 .operations
                 .iter()
                 .map(|op| {
-                    let params: Vec<&str> = op.params.iter().map(|repr| repr.name()).collect();
+                    let params: Vec<String> = op
+                        .params
+                        .iter()
+                        .zip(&op.param_marks)
+                        .map(|(repr, &mark)| format!("{}{}", repr.name(), mark_suffix(mark)))
+                        .collect();
                     format!(
                         "{}{}({}) -> {}",
                         if op.resumable { "" } else { "never " },
                         op.name,
                         params.join(", "),
                         match op.ret {
-                            OpRet::Repr(repr) => repr.name(),
-                            OpRet::Never => "never",
+                            OpRet::Repr(repr) =>
+                                format!("{}{}", repr.name(), mark_suffix(op.ret_mark)),
+                            OpRet::Never => "never".to_string(),
                         }
                     )
                 })

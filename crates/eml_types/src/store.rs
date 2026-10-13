@@ -351,6 +351,12 @@ impl TypeStore {
         self.linearity[ty.index()]
     }
 
+    /// `linearity` と同じ値を、宣言に対して相対的な型でも止まらずに読む。相対的な型は `Poly` として入っているので、
+    /// 宣言の型をそのまま読む操作の表が使う (docs/superpowers/specs/2026-10-13-s8d-kind-marks-design.md の「操作の表」)。
+    pub fn linearity_or_poly(&self, ty: TypeId) -> Lin {
+        self.linearity[ty.index()]
+    }
+
     /// 型に宣言の Kind 変数 (`Var`) が残っているか。
     pub fn contains_kind_vars(&self, ty: TypeId) -> bool {
         self.kind_vars[ty.index()]
@@ -1103,6 +1109,31 @@ mod tests {
         ];
         for (ty, expected) in table {
             assert_eq!(types.linearity(ty), expected, "{ty:?}");
+        }
+    }
+
+    #[test]
+    fn linearity_or_poly_reads_a_relative_type_without_stopping() {
+        let program = crate::test_program("");
+        let mut types = TypeStore::new(&program);
+        let file = con(&mut types, program.extern_type(ExternType::File), vec![]);
+        let (int, unit) = (types.int(), types.unit());
+        let a = rigid(&mut types, "a");
+        let list_a = con(&mut types, program.lang.list, vec![a]);
+        let file_with_rigid = types.intern(TypeKind::Tuple(vec![a, file]));
+        let var_fn = arrow(&mut types, Lin::Var(0), int, int);
+        let pair = types.intern(TypeKind::Tuple(vec![int, unit]));
+        let table = [
+            (a, Lin::Poly),
+            (list_a, Lin::Poly),
+            (file_with_rigid, Lin::Poly),
+            (var_fn, Lin::Poly),
+            (file, Lin::Lin),
+            (pair, Lin::Unr),
+            (int, Lin::Unr),
+        ];
+        for (ty, expected) in table {
+            assert_eq!(types.linearity_or_poly(ty), expected, "{ty:?}");
         }
     }
 

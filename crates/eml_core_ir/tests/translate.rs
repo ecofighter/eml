@@ -1611,7 +1611,7 @@ fn a_polymorphic_never_operation_takes_tobj_and_never_returns() {
         .collect();
     insta::assert_debug_snapshot!(table, @r#"
     [
-        "effect Fail { never fail(tobj) -> never }",
+        "effect Fail { never fail(tobj poly) -> never }",
     ]
     "#);
 }

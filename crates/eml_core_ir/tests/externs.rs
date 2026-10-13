@@ -3,11 +3,11 @@
 //! extern が作る値のタグと、translate が作る配置も照らし合わせる。
 
 use eml_core_ir::type_repr;
-use eml_extern::{Extern, ExternType};
+use eml_extern::{Extern, ExternType, Linearity};
 use eml_hir::{Function, FunctionKind, MethodImpl, TypeDefId, ValueItem};
 use eml_lir::{FALSE, TRUE, TUPLE};
 use eml_test_support::Checked;
-use eml_types::{Substitution, TypeId, TypeKind, TypeStore};
+use eml_types::{Lin, Substitution, TypeId, TypeKind, TypeStore};
 
 /// 型の行ごとに、その型の値をそのまま返す関数を置く。型検査がその型に与える型を、関数の引数の型から読む。
 const PROBES: &str = "\
@@ -151,6 +151,60 @@ fn every_extern_function_row_has_the_reprs_of_its_std_signature() {
             "{}",
             row.name
         );
+    }
+}
+
+#[test]
+fn every_extern_function_row_has_the_kinds_of_its_std_signature() {
+    let checked = checked();
+    let mut store = checked.typed.types.clone();
+    for &e in Extern::ALL {
+        let row = e.row();
+        let mut ty = row_type(&checked, &mut store, e);
+        let types = &store;
+        assert_eq!(row.param_kinds.len(), row.params.len(), "{}", row.name);
+        let mut params = Vec::new();
+        for _ in row.params {
+            let TypeKind::Fn { param, ret, .. } = types.kind(ty) else {
+                panic!("`{}` has an arrow per parameter", row.name);
+            };
+            params.push(kind_of(types.linearity(*param)));
+            ty = *ret;
+        }
+        assert_eq!(params, row.param_kinds, "{}", row.name);
+        assert_eq!(kind_of(types.linearity(ty)), row.ret_kind, "{}", row.name);
+    }
+}
+
+fn kind_of(lin: Lin) -> Linearity {
+    match lin {
+        Lin::Unr => Linearity::Unr,
+        Lin::Lin => Linearity::Lin,
+        Lin::Poly | Lin::Var(_) => panic!("an extern row has no polymorphic kind"),
+    }
+}
+
+/// 表の値そのもの。`Fs` の3つ以外は、引数も結果も `Unr` である。
+#[test]
+fn only_the_file_functions_carry_a_lin() {
+    use Linearity::{Lin, Unr};
+    for &e in Extern::ALL {
+        let row = e.row();
+        let expected: (&[Linearity], Linearity) = match row.name {
+            "Std.Fs.open" => (&[Unr], Lin),
+            "Std.Fs.read_all" => (&[Lin], Lin),
+            "Std.Fs.close" => (&[Lin], Unr),
+            _ => {
+                assert!(
+                    row.param_kinds.iter().all(|&kind| kind == Unr),
+                    "{}",
+                    row.name
+                );
+                assert_eq!(row.ret_kind, Unr, "{}", row.name);
+                continue;
+            }
+        };
+        assert_eq!((row.param_kinds, row.ret_kind), expected, "{}", row.name);
     }
 }
 

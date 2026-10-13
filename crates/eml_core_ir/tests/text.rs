@@ -2,7 +2,7 @@
 //! `pretty` で表示すると元のテキストに戻ることと、構文の誤りの報告を確かめる。
 
 use eml_core_ir::{Call, Program, Rhs, Stmt, parse, pretty};
-use eml_lir::{Atom, BlockId, ParseError, VarId};
+use eml_lir::{Atom, BlockId, Mark, ParseError, VarId};
 
 /// 読んで表示し直すと元に戻ることを確かめ、読んだプログラムを返す。
 fn round_trip(text: &str) -> Program {
@@ -101,6 +101,39 @@ fn f(x.0: int) -> int {
     round_trip(
         "effect Ask { ask(tobj) -> tobj }\nfn f() -> int {\n  let t.0: int = perform never Ask.ask(1)\n  return t.0\n}\n",
     );
+}
+
+#[test]
+fn the_marks_of_an_operation_round_trip() {
+    let program = round_trip(
+        "\
+effect Ask { ask(unit) -> tobj poly, put(tobj poly) -> unit, never fail(tobj poly) -> never, open(unit) -> obj lin }
+fn f() -> int {
+  return 0
+}
+",
+    );
+    let operations = &program.effects[0].operations;
+    assert_eq!(operations[0].ret_mark, Mark::Poly);
+    assert_eq!(operations[1].param_marks, [Mark::Poly]);
+    assert_eq!(operations[3].ret_mark, Mark::Lin);
+}
+
+#[test]
+fn an_operation_mark_of_unr_is_an_error() {
+    let error = parse_error("effect Ask { ask(unit) -> tobj unr }\n");
+    assert!(error.message.contains("unr"), "{error}");
+}
+
+#[test]
+fn the_effect_table_of_a_translated_program_writes_the_marks() {
+    let text = pretty(&eml_test_support::core_until(
+        "import Std.Fs\n\neffect Ask a where\n  ask : Unit -> a\n  put : a -> Unit\n  open : Unit -> Fs.File\n\nmain : Unit -> <IO> Unit\nmain () = println \"x\"\n",
+        eml_core_ir::Pass::Translate,
+    ));
+    assert!(text.contains("ask(unit) -> tobj poly"), "{text}");
+    assert!(text.contains("put(tobj poly) -> unit"), "{text}");
+    assert!(text.contains("open(unit) -> obj lin"), "{text}");
 }
 
 #[test]

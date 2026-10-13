@@ -472,6 +472,11 @@ pub struct OperationInfo {
     /// 「エフェクトの位置」)。verifier は長さで節の関数の引数の数を確かめる (docs/spec/lir.md)。
     pub params: Vec<Repr>,
     pub ret: OpRet,
+    /// 引数と戻り値の印。宣言の型を、宣言に対して相対的な型も読める読み方で読んだ値である。`Rigid` に値が依存する
+    /// 位置は `poly` になる。`never` の操作の戻り値は戻らないので `poly` に決める
+    /// (docs/superpowers/specs/2026-10-13-s8d-kind-marks-design.md の「操作の表」)。
+    pub param_marks: Vec<Mark>,
+    pub ret_mark: Mark,
     /// `never` の操作は再開しないので、継続を作らずに捨てる (docs/spec/effects.md)。
     pub resumable: bool,
 }

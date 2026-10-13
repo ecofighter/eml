@@ -182,6 +182,10 @@ pub struct FunctionRow {
     /// `Bool` と `Ordering` のタグは決まっていて、組の配置は大きさだけで決まるので、行は配置を持たない
     /// (docs/spec/core-ir.md の「translate の配置」)。
     pub ret: Repr,
+    /// 引数ごとの Kind。長さは `params` と同じである。LIR の verifier が、呼び出しの引数と結果の印をこの列と比べる
+    /// (docs/superpowers/specs/2026-10-13-s8d-kind-marks-design.md の「extern の行」)。
+    pub param_kinds: &'static [Linearity],
+    pub ret_kind: Linearity,
     pub purity: Purity,
 }
 
@@ -215,18 +219,40 @@ impl Extern {
     ];
 
     pub fn row(self) -> FunctionRow {
+        use Linearity::{Lin, Unr};
         use Repr::{Enum, Int, Obj, Unit};
-        let row = |name, params, ret, purity| FunctionRow {
+        static UNR: [Linearity; 2] = [Unr; 2];
+        let row = |name, params: &'static [Repr], ret, purity| FunctionRow {
             name,
             params,
             ret,
+            param_kinds: &UNR[..params.len()],
+            ret_kind: Unr,
             purity,
+        };
+        // 標準ライブラリで線形な値を扱うのは `Fs` の3つだけなので、そこだけ列を上書きする
+        let file = |row: FunctionRow, param_kinds, ret_kind| FunctionRow {
+            param_kinds,
+            ret_kind,
+            ..row
         };
         match self {
             Extern::Println => row("Prelude.println", &[Obj], Unit, Purity::Effectful),
-            Extern::Open => row("Std.Fs.open", &[Obj], Obj, Purity::Effectful),
-            Extern::ReadAll => row("Std.Fs.read_all", &[Obj], Obj, Purity::Effectful),
-            Extern::Close => row("Std.Fs.close", &[Obj], Unit, Purity::Effectful),
+            Extern::Open => file(
+                row("Std.Fs.open", &[Obj], Obj, Purity::Effectful),
+                &[Unr],
+                Lin,
+            ),
+            Extern::ReadAll => file(
+                row("Std.Fs.read_all", &[Obj], Obj, Purity::Effectful),
+                &[Lin],
+                Lin,
+            ),
+            Extern::Close => file(
+                row("Std.Fs.close", &[Obj], Unit, Purity::Effectful),
+                &[Lin],
+                Unr,
+            ),
             Extern::IntShow => row("Prelude.Show Int.show", &[Int], Obj, Purity::Pure),
             Extern::IntNeg => row("Prelude.negate", &[Int], Int, Purity::MayFail),
             Extern::IntAdd => row("Prelude.+", &[Int, Int], Int, Purity::MayFail),
