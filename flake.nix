@@ -1,10 +1,20 @@
 {
   inputs = {
-    nixpkgs.url = "github:nixos/nixpkgs/nixos-26.05";
+    nixpkgs.url = "github:nixos/nixpkgs/nixos-unstable";
     flake-parts.url = "github:hercules-ci/flake-parts";
-    rust-overlay = {
-      url = "github:oxalica/rust-overlay";
+    fenix = {
+      url = "github:nix-community/fenix";
       inputs.nixpkgs.follows = "nixpkgs";
+    };
+    # Verus の release の zip。版を上げるときは、2つの URL と下の `stable` の版 (Verus の rust-toolchain.toml) を揃えて変える
+    # (docs/implementation/testing.md の「Verus」)
+    verus-aarch64-darwin = {
+      url = "https://github.com/verus-lang/verus/releases/download/release%2F0.2026.10.04.426d8b0/verus-0.2026.10.04.426d8b0-arm64-macos.zip";
+      flake = false;
+    };
+    verus-x86_64-linux = {
+      url = "https://github.com/verus-lang/verus/releases/download/release%2F0.2026.10.04.426d8b0/verus-0.2026.10.04.426d8b0-x86-linux.zip";
+      flake = false;
     };
   };
   outputs =
@@ -18,25 +28,46 @@
       perSystem =
         { pkgs, system, ... }:
         let
-          # Miri だけが nightly を要る。ふだんの devShell と nix build は nixpkgs の stable のままにする
-          # (docs/implementation/testing.md)
-          overlaid = import inputs.nixpkgs {
-            inherit system;
-            overlays = [ inputs.rust-overlay.overlays.default ];
+          fenix = inputs.fenix.packages.${system};
+          # Rust の部品は stable も nightly も fenix から取る。stable は Verus が求める版に揃え、ふだんの devShell、
+          # nix build、Verus が同じ toolchain を使う (docs/implementation/testing.md の「Verus」)
+          stable = fenix.toolchainOf {
+            channel = "1.98.1";
+            sha256 = "sha256-p8h3Sl/YRByZfZTAKXdsvF6xEenXKrXSVvpphmZENH4=";
           };
-          nightly = overlaid.rust-bin.selectLatestNightlyWith (
-            toolchain:
-            toolchain.minimal.override {
-              extensions = [
-                "miri"
-                "rust-src"
-              ];
-            }
-          );
+          devToolchain = stable.withComponents [
+            "cargo"
+            "rustc"
+            "rust-src"
+            "clippy"
+            "rustfmt"
+            "rust-analyzer"
+          ];
+          rustPlatform = pkgs.makeRustPlatform {
+            cargo = stable.cargo;
+            rustc = stable.rustc;
+          };
+          # Miri だけが nightly を要る (docs/implementation/testing.md の「Miri」)
+          nightly = fenix.complete.withComponents [
+            "cargo"
+            "rustc"
+            "miri"
+            "rust-src"
+          ];
+          verus = pkgs.callPackage ./nix/verus.nix {
+            toolchain = stable.rustc;
+            src = inputs."verus-${system}";
+          };
+          # cargo は外部サブコマンドを PATH より先に $CARGO_HOME/bin から探す。rustup が入っていると
+          # ~/.cargo/bin の cargo-clippy や cargo-miri (rustup のプロキシ) が fenix のものより先に当たるので、
+          # 2つの devShell は rustup のない CARGO_HOME を使う
+          shellHook = ''
+            export CARGO_HOME="''${XDG_CACHE_HOME:-$HOME/.cache}/eml-cargo-home"
+          '';
         in
         {
           packages = rec {
-            eml = pkgs.rustPlatform.buildRustPackage {
+            eml = rustPlatform.buildRustPackage {
               pname = "eml";
               version = "0.0.0";
               src = ./.;
@@ -49,32 +80,22 @@
               ];
               meta.license = pkgs.lib.licenses.mit;
             };
+            inherit verus;
             default = eml;
           };
 
           devShells = {
             default = pkgs.mkShell {
-              packages = with pkgs; [
-                rust-analyzer
-                clippy
-                rustfmt
-                cargo-insta
+              packages = [
+                devToolchain
+                pkgs.cargo-insta
+                verus
               ];
-              nativeBuildInputs = with pkgs; [
-                cargo
-                rustc
-              ];
-              buildInputs = [ ];
-              checkInputs = [ ];
-              doCheck = false;
+              inherit shellHook;
             };
             miri = pkgs.mkShell {
               packages = [ nightly ];
-              # cargo は外部サブコマンドを PATH より先に $CARGO_HOME/bin から探す。
-              # rustup が入っていると ~/.cargo/bin/cargo-miri (rustup のプロキシ) が nightly の cargo-miri より先に当たる
-              shellHook = ''
-                export CARGO_HOME="''${XDG_CACHE_HOME:-$HOME/.cache}/eml-miri-cargo-home"
-              '';
+              inherit shellHook;
             };
           };
         };

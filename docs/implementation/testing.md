@@ -97,8 +97,7 @@
 
 ### Miri
 
-- Miri は、nightly と `miri` と `rust-src` を持つ別の devShell `nix develop .#miri` で流す。flake は nightly の toolchain を rust-overlay から取る。ふだんの devShell と `nix build` は stable のままである
-- `nix develop .#miri` の shellHook は、`CARGO_HOME` を `${XDG_CACHE_HOME:-$HOME/.cache}/eml-miri-cargo-home` にする。cargo は外部のサブコマンドを PATH より先に `$CARGO_HOME/bin` から探すので、rustup が入っていると `~/.cargo/bin/cargo-miri` (rustup のプロキシ) が nightly の `cargo-miri` より先に当たるためである。そのため、この devShell は crate の取得の置き場所を別に持ち、最初の1回は crate を取り直す
+- Miri は、nightly と `miri` と `rust-src` を持つ別の devShell `nix develop .#miri` で流す。flake は nightly を fenix の `complete` (すべての部品がそろう最新の日の nightly) から取る ([アーキテクチャ](architecture.md) の toolchain の項)
 - `cargo miri test -p eml_rt` を、`MIRIFLAGS="-Zmiri-strict-provenance"` で1回、`MIRIFLAGS="-Zmiri-strict-provenance -Zmiri-tree-borrows"` でもう1回流す。Apple M4 では、121 個のテストに約18分と約23分かかった (コミット 5231a52 の時点)
 - ページの大きさは Miri でも変えない。ほかの crate は Miri で流さない
 
@@ -158,16 +157,9 @@ Verus が検証するのは `verus!` の中のコードだけである。本体�
 - 写しの照合の規則そのもの。規則は同じファイルの小さいテストで確かめるが、証明はしない
 - Verus と Z3 そのもの
 
-Verus は Nix の devShell に入れず、Nix の外の環境から流す。導入は次のとおりである。
+Verus (0.2026.10.04.426d8b0) は、ふだんの devShell が `verus` と `cargo-verus` を入れる。flake は、release の zip を系ごとの input (`verus-aarch64-darwin`、`verus-x86_64-linux`) にし、`nix/verus.nix` が要る部品だけを展開する。Verus の起動の部分は rustup で toolchain を探すが、devShell の `verus` は rustup を使わない (`VERUS_USE_RUSTUP=0`)。代わりに、Verus が求める版の fenix の `rustc` の `lib` を、rust_verify が読むライブラリの道 (macOS は `DYLD_FALLBACK_LIBRARY_PATH`、Linux は autoPatchelf と `LD_LIBRARY_PATH`) に足す。rust_verify は公式の版の librustc_driver に繋がるので、source から組む nixpkgs の rustc では動かないためである。Verus の版を上げるときは、2つの input の URL と、`flake.nix` の `stable` の版 (Verus の `rust-toolchain.toml`) を揃えて変える。
 
-```sh
-mkdir -p ~/.verus && cd ~/.verus
-gh release download release/0.2026.10.04.426d8b0 -R verus-lang/verus -p 'verus-0.2026.10.04.426d8b0-arm64-macos.zip'
-unzip -q verus-0.2026.10.04.426d8b0-arm64-macos.zip   # ~/.verus/verus-arm64-macos/verus ができる
-rustup install 1.98.1-aarch64-apple-darwin           # Verus が求める toolchain
-```
-
-`crates/eml_rt/verus/check.sh` は、`env -i` で `~/.cargo/bin` とシステムのディレクトリだけを PATH にして Verus を呼ぶ。Verus の版が 0.2026.10.04.426d8b0 でなければ止まる。Verus の場所は `VERUS` で変えられる (既定は `~/.verus/verus-arm64-macos/verus`)。今の結果は `67 verified, 0 errors` である。
+`crates/eml_rt/verus/check.sh` は、devShell の `verus` で写しを検証する。今の結果は `67 verified, 0 errors` である。
 
 並行の手順 (共有の側の2つの境目の並行の議論と、公開の順序) は、今は証明しない。VM の並列化のときに、手順を Verus で証明する。ただし vstd の atomic は SeqCst だけを扱うので、Relaxed と AcqRel の順序の正しさは、Verus では確かめられない。順序は、文書の議論 ([オブジェクトモデル](../spec/object-model.md) の「上限」と「共有の側」) と Miri に任せる。
 
@@ -311,7 +303,7 @@ cargo test -p eml_interp --test integration scaling::                          #
 cargo test -p eml_interp --test integration bench::                            # 基準のプログラムの回数 (ふだんの cargo test にも入る)
 bench/run.sh                                                                   # 基準のプログラムの命令の数 (macOS、release)
 nix develop .#miri -c env MIRIFLAGS="-Zmiri-strict-provenance" cargo miri test -p eml_rt   # Miri (Tree Borrows は -Zmiri-tree-borrows を足す)
-crates/eml_rt/verus/check.sh                                                                # Verus の証明 (Nix の外の toolchain を使う)
+crates/eml_rt/verus/check.sh                                                                # Verus の証明
 bench/rt.sh                                                                                 # eml_rt の速いモードの命令の数 (macOS、release)
 cargo clippy -p eml_cli --no-default-features --features types -- -D warnings    # 既定でない feature (なし、types、core。eml_test_support は hir も)
 ```

@@ -431,12 +431,11 @@ impl ItemLowering<'_> {
             }
             vars.push(name);
         }
-        Some(Head {
+        valid.then_some(Head {
             ty: id?,
             written,
             vars,
         })
-        .filter(|_| valid)
     }
 
     fn invalid_head(&mut self, range: TextRange, label: &str) {

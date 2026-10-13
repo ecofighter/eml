@@ -18,7 +18,7 @@ The documentation lives under `docs/`; start from `docs/README.md`. `docs/spec/`
 
 ## Commands
 
-The dev environment is a Nix flake (`direnv` with `use flake`). The devShell provides clippy, rustfmt, and cargo-insta.
+The dev environment is a Nix flake (`direnv` with `use flake`) on nixos-unstable. Every Rust toolchain comes from fenix: stable is pinned to the version Verus requires (1.98.1) and serves the devShell, `nix build` and Verus; the `.#miri` shell has a nightly with miri and rust-src. The devShell provides clippy, rustfmt, rust-analyzer, cargo-insta, and `verus` / `cargo-verus` (the release zips are flake inputs, unpacked by `nix/verus.nix`). Both shells set `CARGO_HOME` to `~/.cache/eml-cargo-home` so rustup's `~/.cargo/bin` proxies do not shadow fenix's `cargo-clippy` / `cargo-miri`.
 
 ```sh
 cargo build                          # all crates
@@ -31,7 +31,7 @@ cargo clippy -p eml_cli --no-default-features --features types   # non-default f
 cargo run -p eml_cli -- check <file.em>    # or: run [--debug-heap] <file.em>
 nix build                            # build the eml binary (eml_cli)
 nix develop .#miri -c env MIRIFLAGS="-Zmiri-strict-provenance" cargo miri test -p eml_rt   # Miri (add -Zmiri-tree-borrows for Tree Borrows)
-crates/eml_rt/verus/check.sh         # Verus proofs of eml_rt (runs outside Nix; see testing.md)
+crates/eml_rt/verus/check.sh         # Verus proofs of eml_rt (see testing.md)
 bench/rt.sh                          # eml_rt fast-mode instruction counts (macOS)
 ```
 
