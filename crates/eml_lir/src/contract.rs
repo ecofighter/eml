@@ -131,8 +131,11 @@ fn remove_dead_lets(function: &mut LirFn) -> bool {
 }
 
 /// 消してもよい右辺。値を作るだけで、エフェクトも実行時エラーも起こさない。extern は表の行が `Pure` のものだけである。
-/// `con` と `closure` が所有権を受け取る値は、消すと Perceus がその値の生存の終わりに `decref` を入れるので、解放が
-/// 早まるだけである。`box` を消すと確保が1つ減るだけで、`unbox` は値を読むだけなので、どちらも評価の順を変えない。
+/// `con` と `closure` が所有権を受け取る値が `unr` なら、消すと Perceus がその値の生存の終わりに `decref` を入れるので、
+/// 解放が早まるだけである。translate が開いた `unr` でない変数の `con` は、消さなければならない。その `lin` の引数は
+/// 葉も読むので、残すと Perceus が `lin` の `con` を `decref` し、V1 が拒む。縮約は使われない純粋な `let` をすべて消し、
+/// いつも Perceus より前に走るので、Perceus の入力にこの `con` は残らない (docs/spec/lir.md の「縮約」)。`box` を消すと
+/// 確保が1つ減るだけで、`unbox` は値を読むだけなので、どちらも評価の順を変えない。
 pub(crate) fn pure(rhs: &Rhs) -> bool {
     match rhs {
         Rhs::ConstString(_)
