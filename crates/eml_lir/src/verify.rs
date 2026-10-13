@@ -22,7 +22,7 @@
 //! 印は Repr を比べる所と同じ所で比べる (V2)。入口の段では `jump` と `return` だけを、範囲の段と所有の段では境界の
 //! すべてを比べる。`con` と `closure` が束縛する変数の印が引数の印の結び以上であることはどの段でも確かめ (作る所の
 //! 検査)、`dup` と `decref` の対象が `unr` であることは所有の段で確かめる (V1)。段の分け方は
-//! docs/superpowers/specs/2026-10-13-s8d-kind-marks-design.md の「verifier」による。
+//! docs/spec/lir.md の「Kind の印の検査」による。
 
 use std::collections::{BTreeMap, HashMap};
 
@@ -837,7 +837,7 @@ impl<'a> Checker<'a> {
     }
 
     /// `dup` と `decref` の対象は `unr` である (V1)。`lin` と `poly` の値は共有してはならず、ちょうど1回消費する
-    /// (docs/superpowers/specs/2026-10-13-s8d-kind-marks-design.md の「V1」)。
+    /// (docs/spec/lir.md の「Kind の印の検査」)。
     fn shareable(&self, var: VarId, what: &str) -> Result<(), String> {
         let mark = self.function.mark(var);
         if mark == Mark::Unr {
@@ -1159,7 +1159,7 @@ impl<'a> Checker<'a> {
                     ));
                 }
                 // 呼ばれる入口のクロージャは `ev_clause` が `dup` して返すので `unr` である
-                // (docs/superpowers/specs/2026-10-13-s8d-kind-marks-design.md の「V2」)
+                // (docs/spec/lir.md の「Kind の印の検査」)
                 if !self.cx.mark_passes(*callee, Mark::Unr) {
                     return Err(format!(
                         "the callee of {what} is {}, but a clause takes unr",

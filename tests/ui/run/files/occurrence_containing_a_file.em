@@ -1,5 +1,5 @@
 -- `(o, 0)` の葉は `h` を中に持つ `Some h` を受け取るので、`h` を drop しない
--- (docs/superpowers/specs/2026-10-13-s8d-kind-marks-design.md の「明示の drop」)。
+-- (docs/spec/core-ir.md の「決定木の葉の `drop`」)。
 close_opt : Option Fs.File -> <IO> Unit
 close_opt o =
   match o with

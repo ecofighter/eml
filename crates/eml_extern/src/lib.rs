@@ -183,7 +183,7 @@ pub struct FunctionRow {
     /// (docs/spec/core-ir.md の「translate の配置」)。
     pub ret: Repr,
     /// 引数ごとの Kind。長さは `params` と同じである。LIR の verifier が、呼び出しの引数と結果の印をこの列と比べる
-    /// (docs/superpowers/specs/2026-10-13-s8d-kind-marks-design.md の「extern の行」)。
+    /// (docs/spec/core-ir.md の「表の印の列」)。
     pub param_kinds: &'static [Linearity],
     pub ret_kind: Linearity,
     pub purity: Purity,

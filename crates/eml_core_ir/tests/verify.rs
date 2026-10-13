@@ -801,7 +801,7 @@ fn ev_set_clause_names_the_clause_of_its_function() {
     );
 }
 
-// 印 (docs/superpowers/specs/2026-10-13-s8d-kind-marks-design.md の「verifier」)
+// 印 (docs/spec/lir.md の「Kind の印の検査」)
 
 #[test]
 fn v2_runs_only_on_jump_and_return_at_the_core_ir_levels() {

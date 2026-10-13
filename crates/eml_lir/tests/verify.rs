@@ -2763,7 +2763,7 @@ fn passes_until_checks_its_input() {
     eml_lir::passes_until(&mut program, eml_lir::Pass::Perceus);
 }
 
-// 印: V1、V2、作る所の検査 (docs/superpowers/specs/2026-10-13-s8d-kind-marks-design.md の「verifier」)
+// 印: V1、V2、作る所の検査 (docs/spec/lir.md の「Kind の印の検査」)
 
 /// `File` を受けて閉じる関数と、`File` を返す関数。
 const TAKES_LIN: &str =

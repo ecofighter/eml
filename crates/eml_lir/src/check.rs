@@ -44,7 +44,7 @@ pub fn non_uniform(
 /// evidence が `obj`、残りの引数と `ret` が操作の表の Repr (`never` の操作の `ret` は `obj`) と互換であることも
 /// 確かめる (docs/spec/lir.md の「box の挿入」と「verifier」)。印も同じ段で、evidence が `unr`、残りの引数と戻り値が
 /// 操作の表の印と互換であることを確かめる。捕獲の印は、`closure` を作る所で比べる
-/// (docs/superpowers/specs/2026-10-13-s8d-kind-marks-design.md の「V2」)。
+/// (docs/spec/lir.md の「Kind の印の検査」)。
 pub fn clause_function<'v>(
     effects: &[EffectInfo],
     name: &str,
@@ -451,7 +451,7 @@ impl<'a> Context<'a> {
 
     /// 印が `expected` の受け手に渡せる値 (V2)。定数はどの印とも合う。`None` を `lin` の引数に渡すことがあるためである。
     /// `never` の操作の `perform` と `clause` の束縛は、Repr と同じく、どの受け手にも渡せる
-    /// (docs/superpowers/specs/2026-10-13-s8d-kind-marks-design.md の「V2」)。
+    /// (docs/spec/lir.md の「Kind の印の検査」)。
     pub fn mark_passes(&self, atom: Atom, expected: Mark) -> bool {
         match atom {
             Atom::Var(var) => self.never[var.0 as usize] || self.mark(var).compatible(expected),
@@ -462,7 +462,7 @@ impl<'a> Context<'a> {
     /// `con` と `closure` が束縛する変数の印は、引数の印の結び以上である (作る所の検査)。V1 は `dup` と `decref` の
     /// 対象の印しか見ないので、`File` を持つ値に誤って `unr` を付けると、その値の `dup` を見逃す。定数は `unr` として
     /// 結び、`never` の束縛は `mark_passes` と同じく数えない
-    /// (docs/superpowers/specs/2026-10-13-s8d-kind-marks-design.md の「作る所の検査」)。
+    /// (docs/spec/lir.md の「Kind の印の検査」)。
     pub fn check_built(
         &self,
         var: VarId,
@@ -871,7 +871,7 @@ impl<'a> Context<'a> {
             ));
         }
         // 表の印の列は EP が自分の変数に付ける印と同じなので、ここで EP 自身を確かめる
-        // (docs/superpowers/specs/2026-10-13-s8d-kind-marks-design.md の「基本操作の表」)
+        // (docs/spec/lir.md の「基本操作」)
         for (index, (&arg, &expected)) in args.iter().zip(row.param_marks).enumerate() {
             if !self.mark_passes(arg, expected) {
                 return Err(format!(

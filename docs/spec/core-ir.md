@@ -23,20 +23,20 @@
 | 文 | `let x = 右辺`、`unpack v L #t(f1, .., fn)` |
 | 右辺 | 呼び出し (`call`、`apply`、`clause`、`perform`、`resume`、`handle`)、`closure`、`con`、`const`、`extern`、`prim`、`drop` |
 | 終端 | `return a`、`jump bN(a1, .., an)`、`switch a L { #0 -> bN, #1(y1, .., yn) -> bN, _ -> bN }`、`switch a { 1 -> bN, _ -> bN }` |
-| 線形値 | `drop x` (宣言された破棄処理を呼ぶ) |
+| 手放す | `drop x` (参照を1つ手放す) |
 | エフェクト (translate の出力だけ) | `perform op args`、`handle E(init, body) { 節 } return r`、`resume k(v, s)` (内部の命令)、`drop k`、呼び出しの `mask` |
 | evidence passing の出力 | `prim` (基本操作)、`clause` (節の呼び出し) |
 
 - `perform`、`handle`、`resume`、呼び出しの `mask` は translate だけが出し、evidence passing (EP) が基本操作と節の呼び出しに置き換える (下の「evidence passing」)。`prim` と `clause` は EP だけが出す
 - LIR との違いは、RC の命令 (`dup`、`decref`、`release`)、`box` と `unbox`、末尾呼び出し `tail`、呼び出しの退避 (`saved`) を持たないことと、エフェクトの命令と `mask` を持つことである。RC の命令などは LIR のパスだけが入れる
-- 関数は、名前、内部の関数かどうかの印 (`internal`。[LIR とインタプリタ](lir.md) の「一様な関数」)、yield しうるかの印 (`yields`。下の「`yields` の印」)、入口の関数の印 (`clause`。[LIR とインタプリタ](lir.md) の「入口の関数の印」)、変数の表、`ret`、ブロックの列を持つ。プログラムは、関数、入口、文字列の表、配置の表、エフェクトの表、ファイルの表を持つ。どちらも LIR と同じ欄で、LIR への変換がそのまま写す (下の「Core IR から LIR への変換」)
+- 関数は、名前、内部の関数かどうかの印 (`internal`。[LIR とインタプリタ](lir.md) の「一様な関数」)、yield しうるかの印 (`yields`。下の「`yields` の印」)、入口の関数の印 (`clause`。[LIR とインタプリタ](lir.md) の「入口の関数の印」)、変数の表、`ret` と `ret_mark`、ブロックの列を持つ。プログラムは、関数、入口、文字列の表、配置の表、エフェクトの表、ファイルの表を持つ。どちらも LIR と同じ欄で、LIR への変換がそのまま写す (下の「Core IR から LIR への変換」)
 - ブロックの列の意味 (アトム、`con`、`jump`、`switch`、`unpack`、フィールドの束縛、消費と読む) は、LIR と同じである ([LIR とインタプリタ](lir.md) の「ブロックの列」)。RC の命令、`box`、`unbox`、`tail`、`saved` の項目は Core IR に当たらない。エフェクトの命令の引数は、ほかの呼び出しの引数と同じく消費である
 - Core IR は、[LIR とインタプリタ](lir.md) の「構造の規則」のうち印のない部分に従う。R1〜R5、R6 の支配の半分、R8 と R9 のうち境界の検査でない部分である。下の「verifier」の引き継ぐ検査も受ける。境界の検査に従わないのは、translate と EP の出力が、box の挿入より前には境界に合わないためである
 - 値の表現、データの配置、位置の規則、末尾の位置の呼び出しの定義は、LIR と同じである ([LIR とインタプリタ](lir.md))。この文書は、translate がそれをどう決めるかを書く (下の「型の Repr」と「translate の配置」)
 
 ### 型の Repr
 
-- 変数は、型から決まる値の表現 (Repr) を持つ。Kind (`Unr` / `Lin`) は残さない。型検査が書き出す型は矢印の線形性を持ち、translate はそれを instance の名前と debug ビルドの検査に使う (下の「変換の規則」と「食い違いがないことの検査」)。変数の Kind の印は S8d で入れる。translate は型から Repr を1つの関数 (`type_repr`) で決める。Repr と互換の関係は [LIR とインタプリタ](lir.md) の「値の表現」にある
+- 変数は、型から決まる値の表現 (Repr) と、Kind の印 (下の「Kind の印」) を持つ。型検査が書き出す型は矢印の線形性を持ち、translate はそれを instance の名前と印と debug ビルドの検査に使う (下の「変換の規則」と「食い違いがないことの検査」)。translate は型から Repr を1つの関数 (`type_repr`) で決める。Repr と互換の関係は [LIR とインタプリタ](lir.md) の「値の表現」にある
 
   | 型 | Repr |
   |---|---|
@@ -50,6 +50,93 @@
 - 多相な位置 (総称的なフィールド、`apply` の結果) の束縛も、具体化した型から Repr を決める。値を受ける位置の Repr は [LIR とインタプリタ](lir.md) の「位置の規則」が決め、変数の Repr と互換でなければ、box の挿入が変換を入れる。`Float` の Repr は、`Float` の型とリテラルと一緒に入れる ([ロードマップ](../future/roadmap.md) の「`Float`、`Char`、`Num`」)
 - 局所の変数とブロックの引数の Repr は、具体化した型の Repr である
 - translate が決める関数のシグネチャは、具体化した型の Repr である。トップレベルの関数は instance の代入をかけた宣言の型から (下の「変換の規則」)、`op$`、`con$`、`$externN` はスキームから、ラムダ、節、handle の本体は使う所の型から決める。`cont$` と `cont$state` はすべて `tobj` である。EP が作る関数のシグネチャは、下の「evidence passing」の各項目で決まる
+
+### Kind の印
+
+変数と関数の戻り値 (`ret_mark`) は、Repr と並べて Kind の印 `unr` / `lin` / `poly` を持つ。意味と、印を使う検査 (V1、V2、作る所の検査) は [LIR とインタプリタ](lir.md) の「Kind の印」と「Kind の印の検査」にある。印は Repr と同じく Core IR で決まり、後のパスは変えない。この節は、translate と EP と box の挿入が印をどう決めるかを書く。
+
+#### translate が決める印
+
+- 型のある所は `mark(ty) = TypeStore::linearity(ty)` で決める。型は instance の代入をかけた後の型なので、宣言に対して相対的な型 (`Rigid` か `Var` に値が依存する型) は現れない。`Flexible(k)` は `k` を返す。一様な位置と entry の鍵の `Flexible` は `uniform_kind`、生成器の鍵は `Poly`、推論が決めなかった型変数はその最小値である。写さない本体の `OpVar(_, k)` も `k` を返す
+- 型が式から直接は読めない所は、次の規則で決める
+
+  | 所 | 印 |
+  |---|---|
+  | handle の本体、操作の節、`return` の節のクロージャ | 捕まえた値の印の結び |
+  | 出現から作る `con` (`materialize_once`。決定木の葉、`return` と `jump` で抜ける出口、`Bool` の文脈、知らない出口の合流で使う) | 検査した式 (タプルの式と構成子の適用) の型の印 |
+  | 射影で取り出さない残りのフィールド | `BodyTypes::discarded` の型の印 |
+  | 更新のフィールド | `Update::fields` の型の印 |
+  | 分解した引数の合流のラベル | その引数の印 |
+  | 文字列の定数、`if` の条件、`drop` の結果 | `unr` |
+
+  - `con` を作る出現の印を、引数の印の結びにはしない。`Option (List File)` の `Some []` が `unr` になり、`lin` の受け手との受け渡しを V2 が拒むためである。出現が開いて作る `con` は、`Tag` なら `unr`、`con` で作った変数 (`Made`) ならその変数の印を運ぶ
+  - 操作の節の `k` の印は、`k` の型の矢印の線形性から決める。操作の箇所の継続の多重度ではない
+- 宣言の型を代入せずに読む所 (`op$`、`con$`、操作の表) は、相対的な型も読める読み方 (`TypeStore::linearity_or_poly`) で決め、`Rigid` と `Var` に依存する値を `poly` にする。保守的なので、`(a, File)` は `lin` でなく `poly` になる
+- 導出とタプルの生成器 (`==`、`compare`、`show_prec`、`show`、`tag$` など) の変数はすべて `unr` にする。`Unr` のクラスの規則 ([型と Kind](types.md) の「`Unr` のクラス」) で、instance の頭の型変数は `Unr` だからである。生成器の鍵の `Flexible(Poly)` から決めると、`tag$` の `decref x` を V1 が拒む
+- `materialize_once` は、同じ形の出現を1つの `con` にまとめるのを、`unr` の出現に限る。`unr` でない値を2か所で使うと、Perceus が `dup` するためである (`let (a, b) = (Some [], Some [])` を `Option (List File)` で書く形)。`unr` でない出現は、作った `con` の表に入れない。入れると、同じ形の `unr` の出現が `lin` の `con` を使い回し、その `con` に `dup` が要るためである
+- 決定木は、`con` で作った変数 `v` の引数を直接読むことがある。`v` の印が `unr` でないときは、次の2つがどちらも成り立つときにだけ開く。どちらかが成り立たなければ、`v` そのものを `switch` か `unpack` で分解する
+  - `v` を検査する式が、`v` の唯一の使用である。`v` を束縛した局所変数が、本体の中でちょうど1回だけ参照されている (`let o = Some xs; ..; match o with ..` の `o`)。局所変数に束縛しない `con` の変数は、作った式の位置でだけ使われるので、これを満たす。開くとは、その `con` がどこでも死ぬということで、ほかの制御の道が `v` を使うと、Perceus が `lin` の引数を `dup` し、`lin` の `con` を `decref` するためである。`let v = Some xs; if c then (match v with ..) else close_opt v` がこれに当たる
+  - 決定がすべて静的に決まるか (葉は1つで、その葉が `v` を受け取るか、部分を束縛して `v` が死ぬかのどちらかである)、どの枝も `v` か `v` を含む値を受け取らない。後者は、決定を作る前に、すべての枝のパターンを `v` の位置に照らして調べる。`v` の位置かその祖先の位置を変数のパターンで受ける枝と、`v` を含む別名を渡す枝があれば開かない。到達できるかは見ず、保守的に決める。部分行列でなくすべての枝を見るのは、`match (p, n) with | (x, 0) -> take x | ((a, []), _) -> ..` のように、`p` を開く部分行列に `p` を受け取る枝が入らないことがあるためである
+
+  この規則では、線形のレコードやリストをその場で作って分解する形 (`let j = Job { .. }; let Job { log = Log { file, .. } } = j`) は `con` を作らない。式の位置のタプルの式と構成子の適用 (まだ作っていない値) は、引数を直接読む。開かない変数は `v` そのものを分解するので、`con` と `unpack` と `release` が1組ずつ余分に要る
+
+#### 決定木の葉の `drop`
+
+`unr` でない値を分解し、そこから `unr` でない変数を何も束縛しない葉は、translate が `drop v` を出す。Perceus の `decref` は `unr` でない変数に置けないためである。
+
+- 根: 検査した式の出現から、決定が開いた頭を知っている値をたどってたどり着く変数を根と呼ぶ。開くのは、式の位置のタプルの式と構成子の適用、頭を知っている値で抜ける出口、決定が開いた `con` の変数、と、それらの入れ子である。決定が開かなかった `con` の変数は、その変数自体を根にする
+- 条件: 根 `v` ごとに、次のすべてが成り立つとき、決定木の葉で `drop v` を出す
+  - `v` の印が `unr` でなく、Repr が RC の対象である
+  - 枝が、`v` から取り出した変数 (`v` の分解で得たフィールドと、その分解で得たもの) のうち、印が `unr` でないものを1つも束縛しない
+  - 枝が束縛する出現と、渡す別名のどれも、`v` を含まない。`v` 自身も、`v` を中に持つ出現 (`match (Some h, n) with | (o, 0) -> ..` の `o` が受け取る `Some h`) も受け取らない
+- 正しい理由: 枝が束縛する `unr` でない変数はちょうど1回使われ、消費されれば Perceus が `v` を `release` し、さらに分解されればその変数に同じ規則が当たる。それ以外の枝は、`v` の下にあるものを `unr` の値としてしか使わないので、`v` を drop してよい。型検査は `match` を `v` の使用と数えているので、drop は正直である。`v` が借りたフィールドなら、消費によって Perceus は持ち主を `release` する
+- 枝が `v` から `unr` の RC の値 (`String` など) を束縛し、`drop v` の後で使うときは、Perceus はそのフィールドの所有を `dup` で取る (持ち主 `v` が `drop` に要るため)。`release` で取る形より RC の増減が1回ずつ増える。drop をフィールドの最後の使用の後に置けば増えないが、translate に生存の計算が要るので採らない
+
+#### EP が足す変数の印
+
+| 変数 | 印 | 理由 |
+|---|---|---|
+| evidence、`evv`、`ev_clause` が返す入口のクロージャ、`unit` と `int` の一時変数 | `unr` | Perceus か基本操作が `dup` する、実行系の中で共有する入れ物である。操作の節は `Unr` の値しか捕まえない ([エフェクトと handler](effects.md) の「handler の意味」) |
+| 状態 (`ev_take_state`)、κ、`closure resume$`・`closure rewind$`・`closure mask$[..]` で作る継続、handle の箇所の `x = apply body(())`、補助の関数 (`id$`、`compose$`、`prompt$`、`resume$`、`rewind$`、`mask$[..]`) の `ret`、`x`、`k`、`r`、`v` (値) と `resume$` の `s` (状態) と戻り値 | `poly` | `File` を持ちうる。`prompt$` の `s` (`yield_status` の `int`) は `unr` の行に入る。in-place の入口の状態は、translate がその状態の変数に付けた印を残す (`poly` より正確で、互換である) |
+| ダミー (`prim dummy()`) | `poly` | 戻り値の印が `lin` の関数からも返す。`unr` にすると `return d` が `unr` から `lin` への受け渡しになる |
+| EP が作るクロージャ (`f$kN`、作り直す `compose$`、`yielding_entry` の `g`) | 捕まえた値の印の結び | `File` を持つクロージャが `lin` になり、S9 のヘッダの `lin` ビットが正しく立つ |
+| `f$kN` と `f$jJ` の引数 | 元の関数の変数の表から写す | 同じ値である |
+| `f$kN` と `f$jJ` を呼んだ結果 | 元の関数の戻り値の印 | |
+| 同じ場で動く節の入口の戻り値 | 操作の表の戻り値の印 | Repr の規則と同じ形である |
+| `yielding_entry` の戻り値 | 操作の表の戻り値の印。`never` の操作は戻り値を持たないので `poly` | ダミーしか返さない |
+
+box の挿入が足す変数の印は、[LIR とインタプリタ](lir.md) の「box の挿入」にある。
+
+#### EP の明示の `drop`
+
+今の Perceus は、`unr` でない変数に `decref` を置く所がある。V1 とぶつかるので、EP が明示の `drop` を出し、値を普通の消費にする。`drop` は消費なので、Perceus はそこに何も足さない。
+
+| 所 | 実行時の値 | 出す `drop` |
+|---|---|---|
+| `prompt$` の yield と中断の経路 (状態 1、2、3) の `x` | いつもダミー | 各経路の先頭で `drop x` |
+| `prompt$` の中断の経路 (状態 2) の `ret` | `return` の節のクロージャ。捕まえた `File` を持ちうる | 中断の経路の先頭で `drop ret` |
+| `compose$` と `mask$[..]` の遅い道の `r` | いつもダミー | 遅い道の先頭で `drop r` |
+| ユーザーの関数の yield の地点の結果 (遅い道) | いつもダミー | 遅い道の先頭で `drop x` |
+
+- どれも、結果の Repr が RC の対象 (`obj` か `tobj`) で、印が `unr` でないときにだけ出す
+- 中断の経路の `drop ret` は、唯一の本当の後始末である。中断で `return` の節のクロージャを手放し、捕まえていた `File` を閉じる。中断のときの drop は [線形性](linearity.md) の「暗黙の後始末」が許している。中断の経路でも、関数のフレームは生きている値を drop しない。生きている値は κ の中にあり、`prompt$` が κ を drop する。新しく足す drop は、死んだ yield の結果と `ret` だけである
+- `drop` の意味は「参照を1つ手放す」である。`poly` の値は実は `Unr` で共有されていることがある (多重の継続を2回再開して写した `resume$` のクロージャが捕まえる `ret` など) ので、「すぐに破棄する」の意味にはしない。S9 の検査モードでは、ヘッダの `lin` ビットの立った物体だけが、共有の上の drop を誤りにする
+- translate が出す決定木の葉の `drop` (上の「決定木の葉の `drop`」) と合わせて、V1 の下で `unr` でない変数を手放す命令は、`drop` と分解のときの `release` だけになる
+
+#### 表の印の列
+
+- extern の行 (`eml_extern::FunctionRow`) は、`params` と `ret` と並べて `param_kinds: &'static [Linearity]` と `ret_kind: Linearity` を持つ。extern の関数は S12 まで多相にならないので、2値の `Linearity` で足りる
+
+  | 行 | 引数 | 結果 |
+  |---|---|---|
+  | `Std.Fs.open` | `Unr` | `Lin` (`File`) |
+  | `Std.Fs.read_all` | `Lin` | `Lin` (`(File, String)`) |
+  | `Std.Fs.close` | `Lin` | `Unr` |
+  | ほかのすべての行 | すべて `Unr` | `Unr` |
+
+  `std/` のシグネチャとの結び付けは、Repr と同じテスト (`crates/eml_core_ir/tests/externs.rs`) で、`TypeStore::linearity` を使って確かめる。行の型は型変数を含まないので、相対的な型は現れない
+- 基本操作の表の印の列は [LIR とインタプリタ](lir.md) の「基本操作」にある。EP が自分の変数に付ける印と同じなので、`prim` の V2 が EP 自身を確かめる
+- 操作の表 (`OperationInfo`) は、Repr の `params` と `ret` と並べて、引数と戻り値の印の列 (`param_marks`、`ret_mark`) を持つ。操作の宣言の型を、相対的な型も読める読み方で読み、`Rigid` と `Var` に依存する値を `poly` にする。呼ぶ側から節へ渡る位置の矢印は宣言で `Unr` に固定されている ([エフェクトと handler](effects.md) の「handler の意味」) ので `unr` になる。V2 は `clause` の呼び出しと、`clause` の印の付いた関数の引数と戻り値を、この列と比べる。テキストの形では、効果の宣言が列を書く ([テスト戦略](../implementation/testing.md) の「LIR のテキストの形」)
 
 ### translate の配置
 
@@ -88,9 +175,9 @@
 - scrutinee がタプルのリテラルなら、タプルを作らず、その要素を決定木の列にする。複数の等式を持つ関数で HIR が作るタプルも含む。値全体を束縛する行があれば、その葉でだけタプルを作る。
 - 決定木の葉が1つの枝にだけ届くとき、その枝の本体は葉のブロックに置き、パターンが束縛する変数を葉の値で置き換える (別名の `let` を作らない)。複数の葉から届く枝は、パターンが束縛する変数を引数に持つ合流のブロックにし、葉から `jump` する。どの葉にも届かない枝は出さない。
 - `let`、ラムダの引数、等式の引数のパターンも、同じ決定木で分解する。葉が1つなら今のブロックに `unpack` を並べ、続きもそのブロックで変換する。葉が複数なら、葉から続きのブロックへ `jump` し、束縛した変数をその引数にする。
-- 頭のコンストラクタかリテラルが変換の時点で分かっている値 (コンストラクタの適用、タプルのリテラル、タグと `Int` の定数、同じ関数の中で `let x = con ..` で束縛した変数) を調べるときは、`switch` を出さずにその場で case を選ぶ。
+- 頭のコンストラクタかリテラルが変換の時点で分かっている値 (コンストラクタの適用、タプルのリテラル、タグと `Int` の定数、同じ関数の中で `let x = con ..` で束縛した変数) を調べるときは、`switch` を出さずにその場で case を選ぶ。ただし印が `unr` でない `con` の変数は、上の「Kind の印」の開く条件に当たるときだけ開き、そうでなければ変数そのものを分解する。
 - `match`、分解する `let`、条件の scrutinee が分岐 (`if`、`match`、それで終わるブロック) なら、分岐の各出口の値を `match` に直接渡す (case-of-case)。`let x = <分岐>` の直後の本体が `match x` である形も含める。出口の値で1つの枝に決まれば、コンストラクタを作らずにその枝へ `jump` し、決まらない出口の値だけを合流させて `switch` する。束縛と `match` の間に文がある形と、呼び出しの結果は扱わない。
-- 関数の末尾の呼び出しは末尾呼び出しにし、呼び出し元のフレームを積まない。末尾の位置の呼び出しの定義と保証は [LIR とインタプリタ](lir.md) の「末尾の位置の呼び出し」にあり、末尾呼び出し (`tail`) は LIR の縮約だけが作る。translate は、値を返すだけの合流のブロック (文がなく、`return p` だけを持ち、引数が `p` だけ) へ向かう `jump` を `return` に置き換え、`let x = <呼び出し>` と `return x` を残す。translate の出力では `jump` の実引数と行き先の引数の Repr が同じなので、この転送は Repr に関わらない。対象の呼び出しは、直接の呼び出し、`mask` で分けた `apply` の最後の部分、余った引数を渡す呼び出し、`handle`、`perform`、`resume`、引数のないトップレベルの値である。EP の後は、`clause` も対象になる。
+- 関数の末尾の呼び出しは末尾呼び出しにし、呼び出し元のフレームを積まない。末尾の位置の呼び出しの定義と保証は [LIR とインタプリタ](lir.md) の「末尾の位置の呼び出し」にあり、末尾呼び出し (`tail`) は LIR の縮約だけが作る。translate は、値を返すだけの合流のブロック (文がなく、`return p` だけを持ち、引数が `p` だけ) へ向かう `jump` を `return` に置き換え、`let x = <呼び出し>` と `return x` を残す。translate の出力では `jump` の実引数と行き先の引数の Repr が同じなので、この転送は Repr に関わらない。印は互換が推移的でないので、実引数が定数か、実引数の印が行き先の引数の印と同じときだけ転送する。葉、出口、合流の両側の印は同じ型から決まるので、translate の出力では転送は変わらない。対象の呼び出しは、直接の呼び出し、`mask` で分けた `apply` の最後の部分、余った引数を渡す呼び出し、`handle`、`perform`、`resume`、引数のないトップレベルの値である。EP の後は、`clause` も対象になる。
 - 関数のコードは instance ごとに変換する (単相化)。instance は、定義された関数、型引数の列、row のビットの組で、この組を instance の鍵と呼ぶ。型引数は型の表の `TypeId` で、シグネチャの型変数の順 (`generics.type_vars` の順) に並ぶ。型変数を持たない関数の型引数は、空の列である。row のビットは、row 変数ごとに「yield しうる row が入ったか」を持つ (下の「row のビットと instance の鍵」)。変換は、入口から届く instance だけを Core IR にする。標準ライブラリのうち使わない関数は Core IR に入らない。
   - 鍵は型そのものである。`List Int` と `List String` のように Repr が同じ型引数も、関数型の row だけが違う型引数 (`Unit -> <e> Int` と `Unit -> <IO> Int`) も、別の instance になる。型クラスの証拠が型ごとに変わるためである。Repr が同じ instance をまとめるのは、後の最適化に回す ([ロードマップ](../future/roadmap.md) の「処理系」)
   - 本体の中の関数への参照 (呼び出しと、値としての参照の両方) は、型検査が参照ごとに記録した型引数を持つ。呼ぶ先の鍵は、この型引数に、参照を含む instance の代入をかけて作る。instance の代入は、その instance の関数自身のシグネチャの型変数を instance の型引数に置き換え、宣言の Kind 変数 `Var(i)` を `TypedProgram::kind_values` が求めた値 (`Unr`、`Lin`、`Poly`) に置き換え、handler の節の操作ごとの型変数 `OpVar(名前, k)` をいつも `Flexible(k)` に置き換える ([型と Kind](types.md) の「instance での評価」)。row の末尾は変えない。その後、呼ぶ先の一様な位置 (次の項目) の型引数を、参照の型引数によらず `Flexible` にする。この `Flexible` の Kind は、関数なら `TypedProgram::uniform_kind` が呼ぶ先のスキームから決める (`Unr` に固定されていれば `Unr`、そうでなければ `Poly`)。導出とタプルの生成器の鍵では `Poly` である。残った `Flexible` (節の型変数から来たもの、型検査で最後まで決まらなかったもの) は、Kind を持ったまま鍵に入る。`Flexible` の Repr は `tobj` である。extern の関数、操作、コンストラクタへの参照は instance を作らない
@@ -228,15 +315,15 @@ translate は、導出した instance とタプルと `Unit` の instance の中
 
 ### 食い違いがないことの検査
 
-S8d の V2 は、`unr` と `lin` の受け渡しを拒み、`poly` はどちらとも受け渡せる関係にする。それより前に、書き出した線形性か `kind_values` の評価が誤ると、S8d まで気づけない。そこで translate は、debug ビルドで次の3つを確かめ、破れていれば内部エラーで止まる。release ビルドでは確かめない。
+V2 は、`unr` と `lin` の受け渡しを拒み、`poly` はどちらとも受け渡せる関係にする。印は型から決まるので、書き出した線形性か `kind_values` の評価が誤ると、両側が同じに誤った印を付けた受け渡しは V2 で見つけられない。そこで translate は、debug ビルドで次の3つを確かめ、破れていれば内部エラーで止まる。release ビルドでは確かめない。
 
 2つの型の比べ方は `TypeStore::lin_compatible` である。2つの型を構造をそろえてたどり、対応する線形性 (矢印の `lin`、`Flexible` と `OpVar` の Kind) の一方が `Unr`、他方が `Lin` なら食い違いとする。`Poly` はどちらとも食い違わない。片方が `Flexible(k)` か `OpVar(_, k)` で他方が別の形の型 `T` なら、`k` と `linearity(T)` を比べる。`Rigid` はどの型とも合う。形が一致しない所 (誤りの跡) は比べない。
 
-- 参照の検査: instance を集めた後に、各関数の instance の中の参照 (関数を指す式) ごとに、代入した参照の型と、呼ばれる instance の型を比べる。飽和した呼び出しだけでなく、部分適用と値としての関数の参照も入る。導出とタプルの生成器の instance と extern の関数は、比べる型を持たないので比べない。extern は S8d の Kind の列で確かめる
+- 参照の検査: instance を集めた後に、各関数の instance の中の参照 (関数を指す式) ごとに、代入した参照の型と、呼ばれる instance の型を比べる。飽和した呼び出しだけでなく、部分適用と値としての関数の参照も入る。導出とタプルの生成器の instance と extern の関数は、比べる型を持たないので比べない。extern は行の Kind の列で確かめる (`FunctionRow::param_kinds` と `ret_kind`。`std/` のシグネチャとの結び付けは `crates/eml_core_ir/tests/externs.rs`)
 - 操作の検査: 各 `perform` の参照の型を、その参照の具体化の `kind_values` で評価した操作の宣言の型と比べる。handler の節の引数のパターンの型と `k` の型は、操作の宣言の型と、`Rigid` をどの型とも合う型、`Var` を `Poly` として比べる。節の具体化は記録されていないので、`kind_values` は求めない。この比べ方で確かめられるのは、引数の型の矢印と、結果の型の中で呼ぶ側から節へ渡る位置の矢印が、節の側でも宣言の `Unr` と食い違わないことである
 - 捕獲の検査: 両側が同じに誤った印 (`Lin` の値を持つ `unr` のクロージャ) は、比べ方では見つけられない。そこでクロージャを作る所で、矢印が `Unr` なら、捕まえた値の型の `linearity` がすべて `Unr` であることを確かめる
 
-捕獲の検査を行うのは、translate がクロージャを作る所のうち、ラムダと、知っている関数と構成子の部分適用 (`closure` を作る飽和しない呼び出し) である。次の所は確かめない。状態のある `k v` (クロージャでなく `apply` になる)、値として渡された関数の実行時の部分適用 (呼ばれる側が分からない)、操作の節のクロージャ、handle の本体のクロージャ、継続を包む関数である。これらの矢印の線形性は、操作と継続の宣言から決まり、S8d の印でまとめて扱う。
+捕獲の検査を行うのは、translate がクロージャを作る所のうち、ラムダと、知っている関数と構成子の部分適用 (`closure` を作る飽和しない呼び出し) である。次の所は確かめない。状態のある `k v` (クロージャでなく `apply` になる)、値として渡された関数の実行時の部分適用 (呼ばれる側が分からない)、操作の節のクロージャ、handle の本体のクロージャ、継続を包む関数である。これらの矢印の線形性は、操作と継続の宣言から決まり、印でまとめて扱う (上の「Kind の印」)。
 
 ### 位置
 
@@ -279,7 +366,7 @@ EP は、使うときだけ次の関数をプログラムに1つずつ足す。�
 | 関数 | 引数 | 本体 |
 |---|---|---|
 | `id$` | `x` | `return x` |
-| `compose$` | `κ`、`c`、`x` | `r = apply κ(x)`。yield 中なら、取り出した κ' と c で `compose$(κ', c)` を κ にしてダミーを返す。そうでなければ `apply c(r)` を末尾で呼ぶ |
+| `compose$` | `κ`、`c`、`x` | `r = apply κ(x)`。yield 中なら、`drop r` の後、取り出した κ' と c で `compose$(κ', c)` を κ にしてダミーを返す。そうでなければ `apply c(r)` を末尾で呼ぶ |
 | `prompt$` | `ev`、`ret`、`x` | 下の「handle と `prompt$`」 |
 | `resume$` | `ev`、`ret`、`κ`、`v`、`s` | 下の「再開と状態」 |
 | `rewind$` | `ev`、`ret`、`s`、`κ`、`v` | `resume$(ev, ret, κ, v, s)` を末尾で呼ぶ |
@@ -301,6 +388,7 @@ EP は、使うときだけ次の関数をプログラムに1つずつ足す。�
     let y: int = prim yielding()
     switch y { 0 -> b_fast, _ -> b_slow }
   b_slow:
+    let d: unit = drop x
     let k0: tobj = prim yield_cont_take()
     let c: tobj = closure f$k1(v1, .., vn)
     let k1: tobj = closure compose$(k0, c)
@@ -310,7 +398,7 @@ EP は、使うときだけ次の関数をプログラムに1つずつ足す。�
     (元のブロックの残り)
   ```
 
-  生きている変数がなければ、`c` は `&f$k1` である
+  生きている変数がなければ、`c` は `&f$k1` である。`drop x` は、x の Repr が RC の対象で、印が `unr` でないときにだけ置く。遅い道の x はいつもダミーで、`drop` は何も起こさない。Perceus に `decref` を置かせると、`lin` の x を V1 が拒むためである (上の「EP の明示の `drop`」)
 - ブロックを切ると番号が変わるので、EP は関数ごとにブロックを番号の順に作り直し、構造の規則 R1〜R6 を保つ
 - 「yield 中か」の確認は、呼び出しごとに文脈の旗を1回読む
 
@@ -361,9 +449,9 @@ translate の `let r = handle E(init, body) { c_0, .., c_n } return ret` を、�
 - `apply body(())` は yield の地点にしない。yield したかは `prompt$` が見る。`call prompt$` は、handle を含む関数が `yields` なら yield の地点である (その関数が `yields` でなければ、その row から外へ出る yield はない)
 - `prompt$(ev, ret, x)` は、最初に `evv` を `ev` の外側の `evv` に戻し、`yield_status(ev)` で4つに分ける
   - 0 (yield していない): `st = ev_take_state(ev)` で状態を取り出し、`apply ret(x, st)` を末尾で呼ぶ
-  - 1 (`ev` 宛ての yield): `κ = yield_cont_take()`、`c = yield_finish()`、`st = ev_take_state(ev)` を得て、`k = closure resume$(ev, ret, κ)` を作り、`apply c(k, st)` を末尾で呼ぶ
-  - 2 (`ev` 宛ての中断): κ を取り出して `drop κ` し、`c = yield_finish()` と状態を得て、`apply c(st)` を末尾で呼ぶ
-  - 3 (ほかの宛先): 状態を `ev_take_state(ev)` で取り出し、κ を `rewind$(ev, ret, st, κ)` のクロージャで作り直して、ダミーを返す
+  - 1 (`ev` 宛ての yield): `drop x` の後、`κ = yield_cont_take()`、`c = yield_finish()`、`st = ev_take_state(ev)` を得て、`k = closure resume$(ev, ret, κ)` を作り、`apply c(k, st)` を末尾で呼ぶ
+  - 2 (`ev` 宛ての中断): `drop ret` と `drop x` の後、κ を取り出して `drop κ` し、`c = yield_finish()` と状態を得て、`apply c(st)` を末尾で呼ぶ
+  - 3 (ほかの宛先): `drop x` の後、状態を `ev_take_state(ev)` で取り出し、κ を `rewind$(ev, ret, st, κ)` のクロージャで作り直して、ダミーを返す
 
 #### 再開と状態
 
@@ -431,8 +519,8 @@ in-place の入口は、translate が作った節の関数 g から、EP が節�
 #### `never` の中断
 
 - 中断の yield も、途中のフレームが普通の yield と同じく κ を組み立てる。`prompt$` が κ を `drop` すると、クロージャの解放の連鎖で、捕まっていた値が1回ずつ解放される。`File` はこの解放で閉じる
-- 途中のフレームは、生きている `Lin` の値に `decref` を置かない。生きている値は継続のクロージャに捕まるためである。遅い道で `decref` されるのは、yield の地点の結果 x (ダミー) だけである ([ロードマップ](../future/roadmap.md) の「S8 LIR」)
-- 中断の経路に `drop` の命令を生成する形は採らない。Core IR は Kind を持たないので、`Lin` の値を `decref` で解放することになり、S8 の V1 と合わないためである
+- 途中のフレームは、生きている `Lin` の値に `decref` も `drop` も置かない。生きている値は継続のクロージャに捕まるためである。遅い道で手放すのは、yield の地点の結果 x (ダミー) だけで、EP が `drop x` を出す
+- `prompt$` の中断の経路は、`return` の節のクロージャ `ret` を `drop` する。捕まえていた `File` はこの解放で閉じる (上の「EP の明示の `drop`」)
 
 #### `mask` の包み
 
@@ -454,7 +542,7 @@ b_fast:
 
 - 遅い道は、κ を `compose$(mask$[effects](κ), f$kN)` にする。`mask$` が内側のフレームの再開のときに `evv` を整え、`f$kN` が f の残りを続ける
 - `f$kN` の区間は、`evv_set(w0)` の後から始まる。`w0` は区間で生きていないので捕獲しない。再開した後の `evv` は、外側の包むフレームが作り直した `evv` で、`mask$` が戻るときにそれへ戻すので、f の残りはその `evv` で動く
-- `mask$[effects](κ, v)` は、再開されたとき、`w = evv_get()` を得て、`evv` を `evv_mask[effects](w)` にし、`r = apply κ(v)` を呼ぶ。yield していなければ `evv` を `w` に戻して r を返す。yield 中なら、もう一度 `mask$` で包んでダミーを返す
+- `mask$[effects](κ, v)` は、再開されたとき、`w = evv_get()` を得て、`evv` を `evv_mask[effects](w)` にし、`r = apply κ(v)` を呼ぶ。yield していなければ `evv` を `w` に戻して r を返す。yield 中なら、`drop r` の後、もう一度 `mask$` で包んでダミーを返す
 - `mask` のラベルは今の row の handle できるラベルなので、`mask` を持つ関数はいつも `yields` である
 - `mask` 付きの末尾の位置の呼び出しの後には `evv_set(w0)` が続くので、末尾呼び出しにならない
 
@@ -470,6 +558,7 @@ b_fast:
 - Core IR の verifier は2つの段を持つ。段はパスの順に並ぶ
   - 変換の段 (`verify_translated`) は translate の後にかける。[LIR とインタプリタ](lir.md) の「構造の規則」の印のない部分と、引き継ぐ検査を確かめる。EP が作るもの (`prim`、`clause`、`clause` の印の関数) を拒む (`` `prim evv_get` is used before the evidence pass ``、`a clause call is used before the evidence pass`、``a clause of `Counter.get` is defined before the evidence pass``)
   - EP の段 (`verify_evidence`) は EP の後にかける。変換の段の検査から EP が作るものの拒否を除き、基本操作と `clause` の検査 ([LIR とインタプリタ](lir.md) の「verifier」) を足す。`handle`、`perform`、`resume` と、呼び出しの `mask` を拒む (``a perform remains after the evidence pass``。`a handler`、`a resume`、`a mask` も同じ形)
+- 印の検査は、Core IR の2つの段で、`jump` と `return` の V2 と、作る所の検査を行う。それ以外の受け渡しは、境界に合うようになってから LIR の範囲の段で比べる。`perform`、`handle`、`resume` の受け渡しは比べず、EP がそれらを `clause` と基本操作に置き換えた後の段で比べる。V1 は `dup` と `decref` が Core IR にないので走らない ([LIR とインタプリタ](lir.md) の「Kind の印の検査」)
 - RC の命令、`box`、`unbox`、`tail`、`saved` は Core IR の型にないので、verifier は確かめない。境界の検査もしない。translate と EP の出力は、box の挿入より前には境界に合わないためである。関数の値の対象が一様かも見ない ([LIR とインタプリタ](lir.md) の「値の表現」の定数の当てはめ)
 - R8 と R9 の文言、`jump` と `return` の文言、引数のない `con` の文言、2つの IR に共通する引き継ぐ検査、検査の順、支配木の求め方は、LIR の verifier と同じである ([LIR とインタプリタ](lir.md) の「verifier」)。文言と支配木の求め方などの部品は、2つの verifier が `eml_lir::check` で共有する。検査の順は共有する部品ではなく、2つの verifier で同じに保つ約束である
 - Core IR だけの引き継ぐ検査は次のとおりである。どれも変換の段にだけ現れる。EP の段は、これらの命令そのものを拒むためである

@@ -287,7 +287,7 @@ fn t3_takes_the_result_of_a_tail_clause_from_its_operation() {
 #[test]
 fn a_boxed_wrapper_copies_the_marks_of_its_function() {
     // `f$boxed` の引数と戻り値は `f` と同じ値なので、`f` の印を写す。`box` と `unbox` で足す変数はスカラーなので
-    // `unr` である (docs/superpowers/specs/2026-10-13-s8d-kind-marks-design.md の「box の挿入が足す変数の印」)
+    // `unr` である (docs/spec/lir.md の「box の挿入」)
     let text = "\
 fn f(n.0: int, h.1: obj lin) -> obj lin {
   return h.1

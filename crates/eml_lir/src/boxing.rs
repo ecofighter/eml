@@ -384,7 +384,7 @@ impl Converter<'_> {
     }
 
     /// 足す変数は `int` と `enum` のスカラーか、それを包んだ箱で、どちらも `Unr` である
-    /// (docs/superpowers/specs/2026-10-13-s8d-kind-marks-design.md の「box の挿入が足す変数の印」)。
+    /// (docs/spec/lir.md の「box の挿入」)。
     fn fresh(&mut self, name: String, repr: Repr) -> VarId {
         self.function.vars.push(VarInfo {
             name,

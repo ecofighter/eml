@@ -174,7 +174,7 @@ impl FnBuilder {
     /// 消す。番号の大きいブロックから見るので、`return` に変わったブロックが次に消せる形になっても、同じ1回のループで
     /// 消える。消したブロックを詰めて、番号を振り直す。末尾呼び出しはここでは作らず、縮約に任せる (docs/spec/core-ir.md)。
     /// 印の互換は推移的でないので、`a` が定数か、`a` の印が `p` の印と同じときだけ変える
-    /// (docs/superpowers/specs/2026-10-13-s8d-kind-marks-design.md の「V2」)。
+    /// (docs/spec/lir.md の「Kind の印の検査」)。
     /// `internal` は内部の関数の印 (`CoreFn::internal`) である。
     pub(crate) fn finish(
         self,
@@ -277,7 +277,7 @@ mod tests {
 
     /// `return` だけのブロックへの `jump` を `return` にするのは、実引数が定数か、印が行き先の引数と同じときだけで
     /// ある。印の互換は推移的でないので、`lin` から `poly` を通して `unr` へ返す形を直接つながない
-    /// (docs/superpowers/specs/2026-10-13-s8d-kind-marks-design.md の「V2」)。
+    /// (docs/spec/lir.md の「Kind の印の検査」)。
     #[test]
     fn a_jump_is_forwarded_only_when_its_argument_has_the_mark_of_the_parameter() {
         let mut builder = FnBuilder::new();

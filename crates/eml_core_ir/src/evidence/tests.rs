@@ -314,7 +314,7 @@ fn drops(lines: &[&str]) -> Vec<String> {
 #[test]
 fn a_slow_path_drops_a_non_unr_yield_result() {
     // 遅い道の yield の結果はいつもダミーである。`unr` でない RC の結果は、EP が遅い道の先頭で drop する。Perceus に
-    // `decref` を置かせないためである (docs/superpowers/specs/2026-10-13-s8d-kind-marks-design.md の「明示の drop」)。
+    // `decref` を置かせないためである (docs/spec/core-ir.md の「EP の明示の `drop`」)。
     // `unr` の結果と RC でない結果には何も置かない
     let mut program = program(
         "\
@@ -350,7 +350,7 @@ yields fn f(s.0: tobj, a.1: tobj, g.2: tobj, e.3: obj) -> tobj lin {
 fn prompt_drops_x_on_its_yield_paths_and_ret_on_abort() {
     // 状態 1、2、3 の道の `x` はいつもダミーで、状態 2 (中断) の道では `return` の節のクロージャ `ret` も使われない。
     // どれも `poly` なので、Perceus の `decref` でなく EP の drop で道の先頭で手放す
-    // (docs/superpowers/specs/2026-10-13-s8d-kind-marks-design.md の「明示の drop」)
+    // (docs/spec/core-ir.md の「EP の明示の `drop`」)
     let mut program =
         program("effect State { get(unit) -> tobj }\nfn main() -> unit {\n  return ()\n}\n");
     Helpers::default().prompt(&mut program);

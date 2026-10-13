@@ -61,15 +61,13 @@ S8 を、S8a から S8d の4つの作業に分けて順に進める。段の列�
 | S8a | LIR の型、テキスト形式、パーサ、verifier、Core IR から LIR への変換。box の挿入、縮約、Perceus を LIR に移し、CEK が LIR を読む | 終えた。決めたことは [Core IR](../spec/core-ir.md) と [LIR とインタプリタ](../spec/lir.md) に移した。移す作業の前後で、EP、box の挿入、縮約、Perceus の後のダンプは、UI テストと `bench/` のすべてのプログラムでバイト単位で一致した |
 | S8b | Perceus の所有の形 (フィールドを借りたまま使い、所有が要る所でだけ所有を取る形)、基本操作の引数の借用、`File` の実行時の検査 | 終えた。決めたことは [LIR とインタプリタ](../spec/lir.md) の「値の表現」、「基本操作」、「Perceus」と、[ランタイム](../spec/runtime.md) の「`File` の参照の検査」に移した。`bench/` の仕事の回数で変わったのは `state` の RC の増減だけである ([計測の基準](../implementation/benchmarks.md) の「S8b (所有の形と基本操作の借用)」) |
 | S8c | 書き出す型の線形性 (`Lin`、`Flexible(Lin)`、`OpVar(_, Lin)`)、SCC ごとに解いてから書き出す型検査の順、instance での Kind の評価 (`kind_values`)、型の線形性 (`linearity`)、instance の名前の `%1` / `%m`、debug ビルドの食い違いの検査 | 終えた。決めたことは [型と Kind](../spec/types.md) の「Kind の書き出し」、[Core IR](../spec/core-ir.md) の「変換の規則」と「食い違いがないことの検査」、[コンパイラの構成](../implementation/architecture.md) の「`eml_types` の内部」に移した。UI テストの出力、診断の文字列、`bench/` の仕事の回数は変わらない |
-| S8d | translate と EP と box の挿入の Kind の印、EP の明示の drop、extern の行の Kind の列、V1 と V2、テキストの形の印 | これから。期待値の変更 (印を含むダンプ) を伴う |
+| S8d | translate と EP と box の挿入の Kind の印、EP の明示の drop、extern の行の Kind の列、V1 と V2、テキストの形の印 | 終えた。決めたことは [Core IR](../spec/core-ir.md) の「Kind の印」、[LIR とインタプリタ](../spec/lir.md) の「Kind の印」と「Kind の印の検査」、[ランタイム](../spec/runtime.md) の「`File` の参照の検査」に移した。UI テストの出力と `bench/` の仕事の回数は変わらない ([計測の基準](../implementation/benchmarks.md) の「S8d (Kind の印と明示の drop)」) |
 
 Kind の印を S8d に分け、書き出しを S8c にした理由は次のとおりである。
 
 - 型だけから印を決める案は採れない。`tests/ui/run/files/file_in_return_clause_on_abort.em` では、使われない `return x ->` の `x` は型が `_` で、使用回数のパスが `x` の Kind を `Unr` に決めている。型だけから決めると `x` は `poly` になり、今ある `decref x` を V1 が拒む。解いた Kind を型に持たせて書き出す必要があり、これは `eml_types` の段の組み替えを伴う
 - S8c は S8d がなくても検査できる。書き出した型と評価の結果は `eml_types` の単体テストで、instance の分かれ方は `eml_core_ir` のテストで確かめる
-- 「`Lin` の物体の RC は 1」([LIR とインタプリタ](../spec/lir.md) の「値の表現」) のうち `File` の物体そのものは、V1 がなくても実行時に確かめられる ([ランタイム](../spec/runtime.md) の「`File` の参照の検査」)。`File` を含む `Lin` のデータとクロージャは、S8d の V1 で静的に覆う
-
-S8d の終わりに、`bench/run.sh` の命令の数を [計測の基準](../implementation/benchmarks.md) に記録する。
+- 「`Lin` の物体の RC は 1」([LIR とインタプリタ](../spec/lir.md) の「値の表現」) のうち `File` の物体そのものは、V1 がなくても実行時に確かめられる ([ランタイム](../spec/runtime.md) の「`File` の参照の検査」)。`File` を含む `Lin` のデータとクロージャは、S8d の V1 で静的に覆った
 
 ### 決めたこと
 
@@ -78,36 +76,19 @@ S8d の終わりに、`bench/run.sh` の命令の数を [計測の基準](../imp
   | 項目 | 置き場所 |
   |---|---|
   | 書き出す型の線形性 | `eml_types` が書き出し、`kind_values` と `linearity` で評価する ([型と Kind](../spec/types.md) の「Kind の書き出し」) |
-  | 変数の Kind の印 | Core IR で決まり、LIR に写す (下の「Kind の印」) |
-  | verifier の段 | Core IR (translate の後、EP の後) と LIR (入口、範囲、所有)。V1 と V2 は LIR の所有の段に足す |
+  | 変数の Kind の印 | Core IR で決まり、LIR に写す ([Core IR](../spec/core-ir.md) の「Kind の印」) |
+  | verifier の段 | Core IR (translate の後、EP の後) と LIR (入口、範囲、所有)。V1 は LIR の所有の段、V2 と作る所の検査は Core IR と LIR の各段に足す |
 
 #### Kind の印
 
-- LIR の変数に、Kind の印を3値で持たせる。単相化の後でも、一様な位置の型変数 (`Flexible`)、instance の鍵に入らない矢印の線形性の Kind 変数、EP が多相な関数のフレームの続きとして作るクロージャは、Kind が決まらないためである
+決めたことは spec に移した。変数と関数の戻り値が持つ印の意味と、V1、V2、作る所の検査は [LIR とインタプリタ](../spec/lir.md) の「Kind の印」と「Kind の印の検査」に、translate と EP と box の挿入が印をどう決めるか、EP と決定木の明示の `drop` は [Core IR](../spec/core-ir.md) の「Kind の印」にある。
 
-  | 印 | 意味 | `dup` | `decref` |
-  |---|---|---|---|
-  | `unr` | 静的に `Unr` と示せる | 許す | 許す |
-  | `lin` | 静的に `Lin` と分かる | 拒む | 拒む |
-  | `poly` | 静的には分からない | 拒む | 拒む |
+S8d で閉じた論点は次のとおりである。
 
-  - `poly` に `dup` を拒んでも困らない。ソースで2回使うか使わなければ型検査が `Unr` の制約を付けるので、制約のない Kind 変数の値はちょうど1回使われている。`decref` を拒むのは、`Lin` の物体の RC が 0 になると破棄処理が呼ばれ、暗黙の後始末になるためである
-- 印は Repr と同じく Core IR で決め、LIR に写す。Core IR の変数が印を持つので、「Kind は残さない」([Core IR](../spec/core-ir.md) の「型の Repr」と [LIR とインタプリタ](../spec/lir.md) の「値の表現」) を、S8d で改める
-  - translate は、instance の代入をかけた型から印を決める。定数の `Lin` を含めば `lin`、すべて `Unr` なら `unr`、`Flexible` か解けない Kind 変数に依存すれば `poly` にする。スキームの制約で `Unr` に決まる Kind 変数は `unr` にする
-  - EP が足す変数: evidence と `evv` のリストは `unr` である。これらは `evv` と局所変数から共有される入れ物で、`Lin` の状態は `ev_take_state` と `ev_set_state` で出し入れするので、「`Lin` の物体の RC は 1」の対象外である。操作の箇所の継続は、操作の宣言の多重度から、`once` なら `lin`、`multi` なら `unr` にする。多相な関数のフレームの続き (`f$kN` のクロージャ) は `poly` にする ([Core IR](../spec/core-ir.md) の「継続の組み立て」)
-  - extern の行には、Repr の `params` と `ret` と並べて Kind の列を足す。`std/` のシグネチャとの結び付けは、Repr と同じテストで確かめる
-- verifier の所有の段 (R6、R7) に、次の2つを足す
-  - V1: `unr` でない変数に `dup` と `decref` を置かない
-  - V2: 値の受け渡し (`jump` の実引数と行き先の引数、呼び出しの引数と仮引数、`return` と `ret`) で、送り手と受け手の印が互換である。互換の関係は Repr と同じ形で、`poly` は `unr` とも `lin` とも互換、`unr` と `lin` は互換でない。Repr の互換を比べる所と同じ場所で比べる。この関係のもとで、正しいプログラムに `unr` と `lin` の受け渡しが出ないことは、S8c の debug ビルドの検査が確かめている ([Core IR](../spec/core-ir.md) の「食い違いがないことの検査」)
-  - `unpack` で得た変数の印は、配置の表からは確かめられない。配置は型ごとに1つで、フィールドの Kind を持たないためである。この印は translate を信用し、S9 のヘッダの `lin` ビットで実行時に覆う
-  - V1 と V2 が成り立つと、`unr` でない変数に Perceus が出す命令は、分解のときの `release` だけになる
-- LIR のテキスト形式では、`unr` を既定にして書かず、`lin` と `poly` だけを書く (`x: tobj lin`)。期待値の変更の範囲は、`lin` か `poly` の変数を含むダンプである
-
-### 論点
-
-- LIR が配置を足せるか。S8a と S8b の LIR のパスは配置を足さないので、まだ決めていない
-- box の挿入の印。足す変数はスカラーなので `unr` にし、`f$boxed` の引数は元の関数の印を写す、という案を確かめる
-- EP の yield の地点の結果 x は、遅い道ではダミーで、Perceus がそこに `decref` を置く ([Core IR](../spec/core-ir.md) の「`never` の中断」)。x の型が `Lin` (`File` を返す呼び出し) なら、V1 (`unr` でない変数に `decref` を置かない) とぶつかる。この `decref` を V1 の例外にするか、EP が遅い道で x を別の形で捨てるかを決める。EP を変えて解くなら、S8d で実行の仕事の回数が変わりうる
+- LIR のパスは配置を足さない。そのため、`unpack` と case で得たフィールドの印は、配置の表から確かめられず、translate を信用する。S9 のヘッダの `lin` ビットが実行時に覆う
+- box の挿入が足す変数の印は `unr` で、`f$boxed` の引数と戻り値は元の関数の印を写す
+- EP の yield の地点の結果 x は、遅い道で EP が `drop x` を出す。Perceus の `decref` を V1 の例外にはしない
+- 操作の箇所の継続の印は、操作の宣言の多重度から決めない。節の `k` の印は、translate が `k` の型の矢印の線形性から決める。EP が作る継続のクロージャの印は、捕まえた値の印の結びである
 
 ## S9 共通ランタイム `eml_rt`
 
@@ -125,12 +106,12 @@ S8d の終わりに、`bench/run.sh` の命令の数を [計測の基準](../imp
 - 共有の印の付いた物体 (RC が負) は、RC の値によらず reuse しない (Lean 4、Koka と同じ)
 - ヘッダの `lin` ビットは、検査モードに限らず常に持つ。`par` の fork で、印付けの代わりに所有者を移すのに使うためである
   - `File` などの extern の資源は、作るときにビットを立てる。`con` と `closure` は、S8 の静的な印が `lin` なら立て、`unr` と `poly` なら立てない
-  - 検査モードは、ビットの立った物体への `dup`、共有の側の `release` と `decref`、RC が 1 を超えることを誤りとして報告する。S8 の `unpack` の印は translate を信用しているので、それを実行時に覆う
+  - 検査モードは、ビットの立った物体への `dup`、共有の側の `release` と `decref` と `drop`、RC が 1 を超えることを誤りとして報告する。S8d の後、`unr` でない値は `decref` でなく `drop` で手放されるので、共有の上の `drop` もここで見つかる。S8 の `unpack` の印は translate を信用しているので、それを実行時に覆う
   - `poly` のコードで作った `Lin` の物体はビットを持たないので、fork で共有になり、その場の書き換えができなくなる。安全の側に倒れるだけである
 - 検査モードを持つ。解放した領域を再利用せず、ヘッダに印を付け、確保の台帳で生存を数える。生きているオブジェクトを列挙できるようにする。今の検査付きヒープの役を引き継ぐ。生存の列挙では「共有の物体から届くのは共有か不死の物体だけ」も確かめる
 - reuse を後から入れられるようにする。reuse に対応した確保の API (`alloc_at` と token)、検査モードでの再利用の扱い (token による再利用は所有の受け渡しで、解放の後の使用ではない)、ヘッダのタグを書き換える規約を入れる。共有の物体を reuse しないことも、ここで確かめる。ランタイムの単体テストで、手で組んだ「解放して、同じ箱でコンストラクタを作る」列を流し、生存の数と RC の釣り合いを確かめる
 - extern を語の ABI で1回だけ書く
-- EP のダミーの値の約束を守る。ダミーへの `dup` と `decref` は何もせず、`unbox` はダミーを受けても誤りにせず、`box` はダミーを受けたらダミーを返す ([LIR とインタプリタ](../spec/lir.md) の「ダミーの値」)
+- EP のダミーの値の約束を守る。ダミーへの `dup`、`decref`、`drop` は何もせず、`unbox` はダミーを受けても誤りにせず、`box` はダミーを受けたらダミーを返す ([LIR とインタプリタ](../spec/lir.md) の「ダミーの値」)
 - 実行文脈 `Ctx` を持つ。割り込みの旗、深さと確保量の上限、yield の状態と `evv` ([LIR とインタプリタ](../spec/lir.md) の「実行の文脈」)、セッションの根、出力先、論理的な worker ID を置く
   - 論理的な worker ID は、物理的な worker が1つでも所有者の検査を働かせるためにある。検査モードでは、確保した物体の所有者を今の ID にし、正の RC の物体への `dup`、`decref`、フィールドの書き込み、reuse のたびに、所有者が今の ID と一致するかを確かめる。所有者 ID は Relaxed の `AtomicU32` にする
   - `par` がまだないので、S9 では所有者の検査を `eml_rt` の単体テストで確かめる。UI テストで効き始めるのは、`par` を入れたときである

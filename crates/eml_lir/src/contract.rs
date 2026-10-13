@@ -38,7 +38,7 @@ pub fn contract(program: &mut Program) {
 /// 呼び出しなら呼ばれる関数の `ret`、節の呼び出しなら操作の `ret`、関数値の適用なら `tobj` である。`never` の操作の
 /// 節の呼び出しは戻らないので、どの `ret` とも互換とする (docs/spec/lir.md の「縮約」)。印の互換も推移的でないので、
 /// 結果の印 (関数値の適用なら `poly`) と関数の戻り値の印も同じく比べる
-/// (docs/superpowers/specs/2026-10-13-s8d-kind-marks-design.md の「V2」)。`saved` は Perceus が決めるので、この時点
+/// (docs/spec/lir.md の「Kind の印の検査」)。`saved` は Perceus が決めるので、この時点
 /// では空である。
 fn tail_call(
     block: &mut Block,

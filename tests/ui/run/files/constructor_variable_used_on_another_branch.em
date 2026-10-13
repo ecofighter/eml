@@ -1,5 +1,5 @@
 -- `v` を `if` の両方の枝で使うので、`match v` は `v` の唯一の使用でない。決定木は `v` を開かずに分解し、`xs` を2か所で
--- 使わない (docs/superpowers/specs/2026-10-13-s8d-kind-marks-design.md の「translate が決める印」)。
+-- 使わない (docs/spec/core-ir.md の「translate が決める印」)。
 close_all : List Fs.File -> <IO> Unit
 close_all [] = println "closed"
 close_all (f :: rest) =

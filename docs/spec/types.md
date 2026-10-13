@@ -95,7 +95,7 @@ Core IR の単相化は、row を「yield しうるか」だけで分ける ([Co
 
 ### Kind の書き出し
 
-`eml_types` が後の段階に書き出す型は、矢印の線形性と、決まらなかった型変数の Kind を持つ。S8d の Kind の印 (`unr` / `lin` / `poly`) は、この型から決める。
+`eml_types` が後の段階に書き出す型は、矢印の線形性と、決まらなかった型変数の Kind を持つ。Kind の印 (`unr` / `lin` / `poly`) は、この型から決める ([Core IR](core-ir.md) の「Kind の印」)。
 
 #### 書き出す時点
 

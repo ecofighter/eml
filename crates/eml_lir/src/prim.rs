@@ -48,7 +48,7 @@ pub struct PrimRow {
     pub ret: Repr,
     /// 引数ごとの印で、長さは `params` と同じである。evidence と `evv` の位置は `unr`、状態、継続、節の本体の位置は
     /// `poly` である。evidence passing が自分の変数に付ける印と同じなので、`prim` の検査が evidence passing 自身を確かめる
-    /// (docs/superpowers/specs/2026-10-13-s8d-kind-marks-design.md の「基本操作の表」)。
+    /// (docs/spec/lir.md の「基本操作」)。
     pub param_marks: &'static [Mark],
     pub ret_mark: Mark,
 }
@@ -231,7 +231,7 @@ mod tests {
     }
 
     /// 状態、κ、節の本体の位置だけが `poly` で、ほかは `unr` である
-    /// (docs/superpowers/specs/2026-10-13-s8d-kind-marks-design.md の「基本操作の表」)。
+    /// (docs/spec/lir.md の「基本操作」)。
     #[test]
     fn the_marks_of_the_primitives_follow_the_spec_table() {
         use Mark::{Poly, Unr};

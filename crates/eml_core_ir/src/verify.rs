@@ -7,7 +7,7 @@
 //! `handle`、`perform`、`resume`、`mask` が残っていないことと、基本操作と節の呼び出しの形を確かめる
 //! (`verify_evidence`)。段の分け方は docs/spec/core-ir.md の「verifier」による。
 //! 印はどちらの段でも、`jump` と `return` だけで比べる (V2)。`con` と `closure` が束縛する変数の印が、引数の印の
-//! 結び以上であることも確かめる (docs/superpowers/specs/2026-10-13-s8d-kind-marks-design.md の「verifier」)。
+//! 結び以上であることも確かめる (docs/spec/lir.md の「Kind の印の検査」)。
 //! LIR の verifier と共有する部品は `eml_lir::check` にある。
 //!
 //! R9 は、`con`、タグの `switch`、`unpack` を、その命令が指す配置と比べる。配置を持つ `switch` はタグの case を
@@ -406,7 +406,7 @@ impl<'a> Checker<'a> {
     }
 
     /// `jump` の実引数は、行き先の引数と Repr が互換で (R8)、印も互換である (V2)。Core IR の段では、印を比べるのは
-    /// `jump` と `return` だけである (docs/superpowers/specs/2026-10-13-s8d-kind-marks-design.md の「V2」)。
+    /// `jump` と `return` だけである (docs/spec/lir.md の「Kind の印の検査」)。
     fn check_passed(&self, target: BlockId, arg: Atom, param: VarId) -> Result<(), String> {
         let expected = self.function.repr(param);
         if self.cx.passes(arg, expected)? {

@@ -371,10 +371,10 @@ struct FnLowering<'a> {
     /// この関数で `con` で作った変数の中身。決定木が頭のコンストラクタを知るのに使う。
     cons: HashMap<VarId, Known>,
     /// 決定木が分解した値のフィールドの変数から、分解した値への表。決定木の葉の drop が、枝の束縛した変数をどの値から
-    /// 取り出したかをたどるのに使う (docs/superpowers/specs/2026-10-13-s8d-kind-marks-design.md の「明示の drop」)。
+    /// 取り出したかをたどるのに使う (docs/spec/core-ir.md の「決定木の葉の `drop`」)。
     parents: HashMap<VarId, VarId>,
     /// 参照が1つでない局所変数に束縛した `con` の変数。決定木はこれを開かない
-    /// (docs/superpowers/specs/2026-10-13-s8d-kind-marks-design.md の「translate が決める印」)。
+    /// (docs/spec/core-ir.md の「translate が決める印」)。
     shared: HashSet<VarId>,
     /// 作っている関数が yield しうるか (docs/spec/core-ir.md の
     /// 「`yields` の印」)。この関数の中の handle の節も同じ印にする。
@@ -457,7 +457,7 @@ impl<'a> FnLowering<'a> {
     /// `root` を、捕まえた変数を先頭の引数に持つ関数に持ち上げ、そのクロージャを作る (docs/spec/core-ir.md)。ラムダと、
     /// handle の本体と節に使う。関数の番号は持ち上げる前に取るので、入れ子の持ち上げは外側より後ろの番号になる。
     /// `yields` は持ち上げた関数の印である。クロージャの印は、型のあるラムダなら `typed` で、型のない handle の本体と
-    /// 節では捕まえた値の印の結びにする (docs/superpowers/specs/2026-10-13-s8d-kind-marks-design.md の
+    /// 節では捕まえた値の印の結びにする (docs/spec/core-ir.md の
     /// 「translate が決める印」)。
     #[expect(
         clippy::too_many_arguments,

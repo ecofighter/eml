@@ -1,5 +1,5 @@
 -- `p` を束縛した後で検査し、`other` の枝が `p` そのものを受け取る。決定木は `p` を開かずに分解するので、`xs` と
--- `ys` を2か所で使わない (docs/superpowers/specs/2026-10-13-s8d-kind-marks-design.md の「translate が決める印」)。
+-- `ys` を2か所で使わない (docs/spec/core-ir.md の「translate が決める印」)。
 close_all : List Fs.File -> <IO> Unit
 close_all [] = println "closed"
 close_all (f :: rest) =

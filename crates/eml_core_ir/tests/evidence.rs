@@ -852,7 +852,7 @@ fn closures_ep_builds_take_the_join_of_their_captures() {
     // yield をまたいで `File` が生きている `use_it` の続きのクロージャは `lin` で、それを足した κ も `lin` である。
     // `count` の続きは `Int` しか捕まえないので `unr` になる。すぐに再開しない節の入口が作る節のクロージャも、
     // 操作の引数の `File` を捕まえて `lin` になる
-    // (docs/superpowers/specs/2026-10-13-s8d-kind-marks-design.md の「EP が足す変数の印」)
+    // (docs/spec/core-ir.md の「EP が足す変数の印」)
     let text = "effect Ask where\n  ask : Unit -> Int\n\neffect Sink where\n  put : Fs.File -> Unit\n\nuse_it : Fs.File -> <Ask, IO> Unit\nuse_it f =\n  let n = ask ()\n  Fs.close f\n  println (show n)\n\ncount : Int -> <Ask> Int\ncount m =\n  let n = ask ()\n  n + m\n\nmain : Unit -> <IO> Unit\nmain () =\n  handle use_it (Fs.open \"input.txt\") with\n    | ask () k -> k 1\n  let r = handle count 1 with\n    | ask () k -> k 2\n  println (show r)\n  handle put (Fs.open \"input.txt\") with\n    | put f k ->\n      Fs.close f\n      let u = k ()\n      println \"resumed\"\n      u";
     let shown = core_text(text, Pass::Evidence);
     let use_it = function(&shown, "use_it");
@@ -879,7 +879,7 @@ fn evidence_and_evv_are_unr_and_state_is_poly() {
     // EP が基本操作の結果を束縛する変数は、基本操作の表の結果の印を持つ。evidence、`evv`、入口のクロージャは `unr`、
     // 状態、κ、節の本体、ダミーは `poly` である。ただし in-place の入口が取り出す状態は、translate が節の状態の引数に
     // 付けた印のままである。handle の本体の結果は `File` でありうるので `poly` である
-    // (docs/superpowers/specs/2026-10-13-s8d-kind-marks-design.md の「EP が足す変数の印」)
+    // (docs/spec/core-ir.md の「EP が足す変数の印」)
     let text = "effect State s where\n  get : Unit -> s\n  put : s -> Unit\n\neffect Ask where\n  ask : Unit -> Int\n\nrun : (Unit -> <e> String) -> <State Int | e> String\nrun cb =\n  let n = get ()\n  let s = cb ()\n  s ++ show n\n\ncb : Unit -> <State String> String\ncb () = get () ++ \"!\"\n\nmain : Unit -> <IO> Unit\nmain () =\n  let r = handle (handle run cb with\n                    | get () k -> k 42\n                    | put _ k -> k ()) with\n            | get () k -> k \"str\"\n            | put _ k -> k ()\n  println r\n  let a = handle ask () + 1 with\n    | ask () k ->\n      let v = k 10\n      v * 2\n  println (show a)";
     let program = eml_test_support::core_until(text, Pass::Evidence);
     let mut seen = std::collections::HashSet::new();

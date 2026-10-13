@@ -1,5 +1,5 @@
 -- `File` を持つ `data` の、フィールドのない case の葉は、調べた値を drop する
--- (docs/superpowers/specs/2026-10-13-s8d-kind-marks-design.md の「明示の drop」)。
+-- (docs/spec/core-ir.md の「決定木の葉の `drop`」)。
 data Res =
   | Empty
   | Has Fs.File

@@ -20,7 +20,7 @@ use crate::builder::FnBuilder;
 
 /// 生成器の変数。印はすべて `unr` にする。instance の頭の型変数は `Unr` だからである (docs/spec/types.md の
 /// 「`Unr` のクラス」)。生成器の鍵の `Flexible(Poly)` から決めると、`tag$` の `decref x` を V1 が拒む
-/// (docs/superpowers/specs/2026-10-13-s8d-kind-marks-design.md の「translate が決める印」)。
+/// (docs/spec/core-ir.md の「translate が決める印」)。
 fn named(name: &str, repr: Repr) -> VarInfo {
     super::types::named(name, repr, Mark::Unr)
 }

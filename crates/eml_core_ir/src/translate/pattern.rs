@@ -24,7 +24,7 @@ use crate::builder::Label;
 /// コンストラクタである。値全体が要る葉でだけ値を作る。出現は型を持たない。値を作るときの Repr は `ConValue` から
 /// 決まり、フィールドの変数の Repr はパターンの型から決まる (docs/implementation/architecture.md の
 /// 「translate の組み立て」)。`Con` の `mark` は値を作るときの印で、検査した式の型か、開いた変数から決まる
-/// (docs/superpowers/specs/2026-10-13-s8d-kind-marks-design.md の「translate が決める印」)。引数の印の結びにすると、
+/// (docs/spec/core-ir.md の「translate が決める印」)。引数の印の結びにすると、
 /// `Option (List File)` の `Some []` が `unr` になるためである。
 #[derive(Clone, PartialEq)]
 pub(super) enum Occ {
@@ -73,7 +73,7 @@ pub(super) enum Scrutinee {
 }
 
 /// 決定木を作る試み。`unr` でない `con` の変数を開くかどうかが、試みによって変わる
-/// (docs/superpowers/specs/2026-10-13-s8d-kind-marks-design.md の「translate が決める印」)。
+/// (docs/spec/core-ir.md の「translate が決める印」)。
 #[derive(Clone, Copy)]
 enum Attempt<'a> {
     /// 出口の値を調べずに1つの枝に行き着くかの試み (`select_arm`)。値を調べる必要が出たら諦める。行き着く葉は1つなので、
@@ -363,7 +363,7 @@ impl FnLowering<'_> {
     /// 同じなので、型が違っても1つにまとめる。型引数が違う値や、引数のないコンストラクタを違う型でフィールドに持つ値も
     /// ここで1つになる。まとめるのは印が `unr` の出現だけで、`unr` でない出現は `built` に入れない。`unr` でない値を
     /// 2か所で使うと Perceus が `dup` し、`built` に入れると同じ形の `unr` の出現がその `con` を使い回すためである
-    /// (docs/superpowers/specs/2026-10-13-s8d-kind-marks-design.md の「translate が決める印」)。
+    /// (docs/spec/core-ir.md の「translate が決める印」)。
     fn materialize_once(&mut self, occ: &Occ, built: &mut Vec<(Occ, Atom)>) -> Atom {
         match occ {
             Occ::Atom(atom) => *atom,
@@ -779,7 +779,7 @@ impl FnLowering<'_> {
     /// この検査が変数の唯一の使用で (`shared` に入っていない)、かつ葉が1つの静的な試みか、どの枝も受け取らないときだけ
     /// 開く。ある葉や別の制御の道が変数そのものを使い、ほかの葉が引数を読むと、`con` が生き残ったまま引数を2か所で使い、
     /// Perceus が `unr` でない値を `dup` するためである
-    /// (docs/superpowers/specs/2026-10-13-s8d-kind-marks-design.md の「translate が決める印」)。`con` の変数は、
+    /// (docs/spec/core-ir.md の「translate が決める印」)。`con` の変数は、
     /// 局所変数に束縛しなければ、それを作った式の位置でだけ使われる。
     fn opens(&self, var: VarId, attempt: Attempt) -> bool {
         self.builder.mark(var) == Mark::Unr
@@ -844,8 +844,8 @@ impl FnLowering<'_> {
         received
     }
 
-    /// 決定木の葉で、枝が使わない値を drop する (docs/superpowers/specs/2026-10-13-s8d-kind-marks-design.md の
-    /// 「明示の drop」の群 E)。根は、検査した値の出現から、決定が開いた頭の分かる値をたどって着く変数である。
+    /// 決定木の葉で、枝が使わない値を drop する (docs/spec/core-ir.md の
+    /// 「決定木の葉の `drop`」)。根は、検査した値の出現から、決定が開いた頭の分かる値をたどって着く変数である。
     /// 根 `v` を drop するのは、印が `unr` でなく Repr が RC の対象で、枝が `v` から取り出した `unr` でない変数を
     /// 束縛せず、`v` か `v` を中に持つ値も受け取らないときである。drop しないと、Perceus が `unr` でない値を
     /// `decref` する。枝が値全体を受け取るときは呼ばない。

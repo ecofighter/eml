@@ -352,7 +352,7 @@ impl TypeStore {
     }
 
     /// `linearity` と同じ値を、宣言に対して相対的な型でも止まらずに読む。相対的な型は `Poly` として入っているので、
-    /// 宣言の型をそのまま読む操作の表が使う (docs/superpowers/specs/2026-10-13-s8d-kind-marks-design.md の「操作の表」)。
+    /// 宣言の型をそのまま読む操作の表が使う (docs/spec/core-ir.md の「表の印の列」)。
     pub fn linearity_or_poly(&self, ty: TypeId) -> Lin {
         self.linearity[ty.index()]
     }

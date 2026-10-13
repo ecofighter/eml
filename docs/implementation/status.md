@@ -2,7 +2,7 @@
 
 位置づけ: 手引き。
 
-M1 (言語の全体を一通り通す vertical slice と、本番の構文の最初の部分) と M2 (モジュールと、参照ごとの具体化の表) は完了した。今は再設計 (S0〜S13) を進めていて、S8 の3つの作業のうち、S8a (LIR と、box の挿入、縮約、Perceus を LIR に移す作業) と S8b (Perceus の所有の形、基本操作の引数の借用、`File` の実行時の検査) を終えた ([ロードマップ](../future/roadmap.md) の「段の列」と「S8 LIR」)。Perceus は、`switch` と `unpack` のフィールドを借りたまま使い、所有が要る所でだけ所有を取る ([LIR とインタプリタ](../spec/lir.md) の「Perceus」)。この文書は、今の言語の範囲と既知の制限をまとめる。実装が進んだら更新する。
+M1 (言語の全体を一通り通す vertical slice と、本番の構文の最初の部分) と M2 (モジュールと、参照ごとの具体化の表) は完了した。今は再設計 (S0〜S13) を進めていて、S8 の4つの作業をすべて終えた。S8a は LIR と、box の挿入、縮約、Perceus を LIR に移す作業、S8b は Perceus の所有の形、基本操作の引数の借用、`File` の実行時の検査、S8c は書き出す型の線形性、S8d は Kind の印、EP の明示の `drop`、V1 と V2 である ([ロードマップ](../future/roadmap.md) の「段の列」と「S8 LIR」)。Perceus は、`switch` と `unpack` のフィールドを借りたまま使い、所有が要る所でだけ所有を取る ([LIR とインタプリタ](../spec/lir.md) の「Perceus」)。この文書は、今の言語の範囲と既知の制限をまとめる。実装が進んだら更新する。
 
 ## 今の言語の範囲
 
@@ -105,4 +105,4 @@ M1 (言語の全体を一通り通す vertical slice と、本番の構文の最
 ### verifier
 
 - R9 は、`con`、タグの `switch`、`unpack`、`release` を、それぞれが指す配置と比べるだけで、値がどの配置で作られたかを追わない。そのため、配置の違う値を読む IR も verifier を通る。タグかフィールドの数が違えば、実行したときにインタプリタが内部の誤りで止まり、形が同じなら気付かない。`tobj` に入ったヒープの物体を `unbox` する IR も verifier を通り、インタプリタが内部の誤りで止まる。translate の型が、この形を作らないことを保証する ([LIR とインタプリタ](../spec/lir.md) の「構造の規則」)
-- LIR は Kind を持たないので、verifier は `Lin` の値の `dup` を拒まない。`File` の物体の参照を増やす違反だけは、ヒープが実行時に `a Lin object is shared` で止める ([ランタイム](../spec/runtime.md) の「`File` の参照の検査」)。`File` を含む `Lin` のデータとクロージャの `dup` は、どちらでも見つからない。S8d の Kind の印と V1 で静的に覆う ([ロードマップ](../future/roadmap.md) の「S8 LIR」)
+- LIR の変数は Kind の印を持ち、verifier の V1 が `unr` でない変数の `dup` と `decref` を、V2 が `unr` と `lin` の受け渡しを、作る所の検査が `con` と `closure` の印を静的に拒む ([LIR とインタプリタ](../spec/lir.md) の「Kind の印の検査」)。`File` の物体の参照を増やす違反は、ヒープも実行時に `a Lin object is shared` で止める ([ランタイム](../spec/runtime.md) の「`File` の参照の検査」)。`unpack` と case で得たフィールドの印は、配置の表がフィールドの Kind を持たないので verifier が確かめず、translate を信用する。S9 のヘッダの `lin` ビットで実行時に覆う

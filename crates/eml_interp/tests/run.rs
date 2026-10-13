@@ -263,7 +263,7 @@ fn main() -> unit {
 fn a_dup_of_a_file_is_a_runtime_error() {
     // verifier は `lin` の変数の `dup` を V1 で静的に拒む。印を誤った IR でも、ヒープが実行時に止めることを、
     // verifier を通さずに確かめる (docs/spec/runtime.md の「`File` の参照の検査」と
-    // docs/superpowers/specs/2026-10-13-s8d-kind-marks-design.md の「V1」)
+    // docs/spec/lir.md の「Kind の印の検査」)
     let path = concat!(env!("CARGO_MANIFEST_DIR"), "/Cargo.toml");
     let text = format!(
         "\

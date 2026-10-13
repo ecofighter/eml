@@ -453,7 +453,7 @@ impl Out {
 /// 遅い道。取り出した κ に続きのクロージャを `compose$` で足して戻し、ダミーを返す。`mask` の地点では、先に κ を
 /// `mask$` で包む。内側のフレームの再開のときに `mask$` が `evv` を整えるためである。地点の結果はここではダミーで、
 /// `unr` でない RC の結果は先頭で drop する。V1 が `unr` でない変数への Perceus の `decref` を拒むためである
-/// (docs/superpowers/specs/2026-10-13-s8d-kind-marks-design.md の「明示の drop」)。
+/// (docs/spec/core-ir.md の「EP の明示の `drop`」)。
 fn slow_path(
     program: &mut Program,
     helpers: &mut Helpers,
