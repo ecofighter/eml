@@ -58,6 +58,10 @@ impl FnBuilder {
         self.vars[var.0 as usize].mark
     }
 
+    pub(crate) fn repr(&self, var: VarId) -> Repr {
+        self.vars[var.0 as usize].repr
+    }
+
     /// 関数の引数。入口のブロックの引数になる。
     pub(crate) fn param(&mut self, info: VarInfo) -> VarId {
         let var = self.var(info);

@@ -1,0 +1,9 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{stderr}\")"
+input_file: tests/ui/run/files/equal_occurrences_of_files.em
+---
+--- stdout ---
+empty
+empty
+--- stderr ---

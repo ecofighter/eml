@@ -354,6 +354,9 @@ struct FnLowering<'a> {
     contexts: Vec<Ctx>,
     /// この関数で `con` で作った変数の中身。決定木が頭のコンストラクタを知るのに使う。
     cons: HashMap<VarId, Known>,
+    /// 決定木が分解した値のフィールドの変数から、分解した値への表。決定木の葉の drop が、枝の束縛した変数をどの値から
+    /// 取り出したかをたどるのに使う (docs/superpowers/specs/2026-10-13-s8d-kind-marks-design.md の「明示の drop」)。
+    parents: HashMap<VarId, VarId>,
     /// 作っている関数が yield しうるか (docs/spec/core-ir.md の
     /// 「`yields` の印」)。この関数の中の handle の節も同じ印にする。
     yields: bool,
@@ -369,6 +372,7 @@ impl<'a> FnLowering<'a> {
             locals: ArenaMap::default(),
             contexts: Vec::new(),
             cons: HashMap::new(),
+            parents: HashMap::new(),
         }
     }
 

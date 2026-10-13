@@ -3,6 +3,7 @@
 //! 選ぶ。scrutinee は値をそのまま調べる文脈 (`Ctx::Match`) で変換する。出口の値が、値を調べずに1つの枝に行き着けば、
 //! その枝のラベルへ直接向かう (case-of-case)。行き着かない出口だけを集め、そこで決定木を出す。
 
+use std::collections::HashSet;
 use std::mem;
 
 use eml_hir::{
@@ -69,6 +70,17 @@ pub(super) struct MatchCtx {
 pub(super) enum Scrutinee {
     Expr(ExprId),
     Occ(Occ, Repr, Mark),
+}
+
+/// 決定木を作る試み。`unr` でない `con` の変数を開くかどうかが、試みによって変わる
+/// (docs/superpowers/specs/2026-10-13-s8d-kind-marks-design.md の「translate が決める印」)。
+#[derive(Clone, Copy)]
+enum Attempt<'a> {
+    /// 出口の値を調べずに1つの枝に行き着くかの試み (`select_arm`)。値を調べる必要が出たら諦める。行き着く葉は1つなので、
+    /// どの `con` の変数も開いてよい。
+    Static,
+    /// 値を調べる決定木。`received` は、ある枝が受け取るので開かない `con` の変数である。
+    Full { received: &'a HashSet<VarId> },
 }
 
 /// 決定木 (docs/spec/core-ir.md)。葉の `bound` は、パターンの変数とそれが受ける出現である。
@@ -295,11 +307,15 @@ impl FnLowering<'_> {
             }
         };
         if let Some(root) = root {
+            let received = self.received(&root, ctx);
+            let attempt = Attempt::Full {
+                received: &received,
+            };
             let rows = self.rows(ctx);
             let decision = self
-                .decide(std::slice::from_ref(&root), rows, false)
+                .decide(std::slice::from_ref(&root), rows, attempt)
                 .expect("a full decision tree always exists");
-            self.emit(decision, ctx, &root);
+            self.emit(decision, ctx, &root, attempt);
         }
         arms
     }
@@ -328,8 +344,8 @@ impl FnLowering<'_> {
     /// 作らない。行き着かなければ、今のブロックを開いたまま、値の分からない出口として残す。
     pub(super) fn select_arm(&mut self, ctx: CtxId, occ: Occ) {
         let rows = self.rows(ctx);
-        match self.decide(std::slice::from_ref(&occ), rows, true) {
-            Some(leaf) => self.emit(leaf, ctx, &occ),
+        match self.decide(std::slice::from_ref(&occ), rows, Attempt::Static) {
+            Some(leaf) => self.emit(leaf, ctx, &occ, Attempt::Static),
             None => {
                 let block = self.builder.suspend();
                 self.match_ctx(ctx).unknown.push((block, occ));
@@ -345,7 +361,9 @@ impl FnLowering<'_> {
     /// `built` は、同じ葉でもう作った出現とその値である。葉が同じ値を何度渡しても、`con` は1回だけ作る
     /// (docs/spec/core-ir.md の「変換の規則」)。コンストラクタとフィールドのアトムが同じ出現は、作る `con` の命令も
     /// 同じなので、型が違っても1つにまとめる。型引数が違う値や、引数のないコンストラクタを違う型でフィールドに持つ値も
-    /// ここで1つになる。
+    /// ここで1つになる。まとめるのは印が `unr` の出現だけで、`unr` でない出現は `built` に入れない。`unr` でない値を
+    /// 2か所で使うと Perceus が `dup` し、`built` に入れると同じ形の `unr` の出現がその `con` を使い回すためである
+    /// (docs/superpowers/specs/2026-10-13-s8d-kind-marks-design.md の「translate が決める印」)。
     fn materialize_once(&mut self, occ: &Occ, built: &mut Vec<(Occ, Atom)>) -> Atom {
         match occ {
             Occ::Atom(atom) => *atom,
@@ -359,7 +377,8 @@ impl FnLowering<'_> {
                 value,
                 mark,
             } => {
-                if let Some(&(_, atom)) = built.iter().find(|(done, _)| done == occ) {
+                let shared = *mark == Mark::Unr;
+                if shared && let Some(&(_, atom)) = built.iter().find(|(done, _)| done == occ) {
                     return atom;
                 }
                 let args: Vec<Atom> = fields
@@ -378,7 +397,9 @@ impl FnLowering<'_> {
                 };
                 let ctor = Ctor { layout, tag: *tag };
                 let atom = self.bind("d", repr, *mark, Rhs::Con { ctor, args });
-                built.push((occ.clone(), atom));
+                if shared {
+                    built.push((occ.clone(), atom));
+                }
                 atom
             }
         }
@@ -428,8 +449,8 @@ impl FnLowering<'_> {
 
     /// アトムの出現を、分かっている範囲で開く。引数のないコンストラクタのタグと、同じ関数で `con` で作った変数は、
     /// 頭のコンストラクタが分かる。フィールドは開かずにアトムのまま持ち、決定木がその欄を選んだときに開く。
-    /// 長い `con` の連なりで再帰しないためである。
-    fn expand(&self, occ: Occ) -> Occ {
+    /// 長い `con` の連なりで再帰しないためである。`con` で作った変数は `opens` が許すときだけ開く。
+    fn expand(&self, occ: Occ, attempt: Attempt) -> Occ {
         match occ {
             Occ::Atom(Atom::Tag(tag)) => Occ::Con {
                 tag,
@@ -438,22 +459,22 @@ impl FnLowering<'_> {
                 mark: Mark::Unr,
             },
             Occ::Atom(Atom::Var(var)) => match self.cons.get(&var) {
-                Some(known) => Occ::Con {
+                Some(known) if self.opens(var, attempt) => Occ::Con {
                     tag: known.tag,
                     fields: known.args.iter().map(|&arg| Occ::Atom(arg)).collect(),
                     value: ConValue::Made(Atom::Var(var)),
                     mark: self.builder.mark(var),
                 },
-                None => Occ::Atom(Atom::Var(var)),
+                _ => Occ::Atom(Atom::Var(var)),
             },
             other => other,
         }
     }
 
     /// 行列から決定木を作る。最初の行がすべてワイルドカードなら葉にする。そうでなければ、最初の行で値を調べる
-    /// いちばん左の欄を選ぶ。出現の頭が分かっていれば、その場で case を選んで続ける。`statically` なら、値を調べる
-    /// 必要が出たところで `None` を返し、変数を作らない。行列は網羅性の検査を通っているので、空にならない。
-    fn decide(&mut self, occs: &[Occ], mut rows: Vec<Row>, statically: bool) -> Option<Decision> {
+    /// いちばん左の欄を選ぶ。出現の頭が分かっていれば、その場で case を選んで続ける。`Attempt::Static` なら、値を
+    /// 調べる必要が出たところで `None` を返し、変数を作らない。行列は網羅性の検査を通っているので、空にならない。
+    fn decide(&mut self, occs: &[Occ], mut rows: Vec<Row>, attempt: Attempt) -> Option<Decision> {
         let body = self.ctx.body;
         let hir = self.ctx.hir;
         let first = rows.first().expect("type-checked patterns are exhaustive");
@@ -465,7 +486,7 @@ impl FnLowering<'_> {
             return Some(leaf(body, hir, occs, rows.swap_remove(0)));
         };
         let cell = first.cells[column];
-        let occ = self.expand(occs[column].clone());
+        let occ = self.expand(occs[column].clone(), attempt);
         // 変数のパターンはこの欄の出現を受け、以後はワイルドカードとして扱う
         for row in &mut rows {
             if let Head::Any(Some(local)) = head(body, hir, row.cells[column]) {
@@ -475,31 +496,31 @@ impl FnLowering<'_> {
         match (head(body, hir, cell), occ) {
             (Head::Con(..) | Head::Tuple(_), Occ::Con { tag, fields, .. }) => {
                 let rows = specialize(body, hir, &rows, column, tag, fields.len());
-                self.decide(&splice(occs, column, fields), rows, statically)
+                self.decide(&splice(occs, column, fields), rows, attempt)
             }
             (Head::Literal(_), Occ::Atom(Atom::Int(n))) => {
                 let literal = Literal::Int(n);
                 let rows = remove_column(body, hir, &rows, column, Some(&literal));
                 let remaining = splice(occs, column, []);
-                self.decide(&remaining, rows, statically)
+                self.decide(&remaining, rows, attempt)
             }
-            _ if statically => None,
+            _ if matches!(attempt, Attempt::Static) => None,
             (Head::Tuple(elements), Occ::Atom(value)) => {
                 let ctor = Ctor {
                     layout: self.program.tuple_layout(elements.len()),
                     tag: TUPLE,
                 };
-                Some(self.single(occs, &rows, column, ctor, value))
+                Some(self.single(occs, &rows, column, ctor, value, attempt))
             }
             (Head::Con(ctor, _), Occ::Atom(value)) if single_constructor(hir, ctor) => {
                 let ctor = self.program.ctor(hir, self.ctx.store, ctor);
-                Some(self.single(occs, &rows, column, ctor, value))
+                Some(self.single(occs, &rows, column, ctor, value, attempt))
             }
             (Head::Con(ctor, _), Occ::Atom(value)) => {
-                Some(self.switch_constructors(occs, &rows, column, ctor, value))
+                Some(self.switch_constructors(occs, &rows, column, ctor, value, attempt))
             }
             (Head::Literal(_), Occ::Atom(value)) => {
-                Some(self.compare_literals(occs, &rows, column, value))
+                Some(self.compare_literals(occs, &rows, column, value, attempt))
             }
             (Head::Literal(_), Occ::Con { .. }) => {
                 unreachable!("a literal pattern never meets a constructor")
@@ -516,8 +537,14 @@ impl FnLowering<'_> {
         column: usize,
         ctor: Ctor,
         value: Atom,
+        attempt: Attempt,
     ) -> Decision {
-        let fields = self.field_vars(rows, column, ctor.tag);
+        // フィールドを持つ値は定数にならない。パターンが型をその data かタプルに決めるので、値の Repr はつねに `obj`
+        // である。verifier は `obj` でない値の `unpack` を拒む (R8)
+        let Atom::Var(value) = value else {
+            unreachable!("a value with fields is a variable")
+        };
+        let fields = self.field_vars(rows, column, ctor.tag, value);
         let rows = specialize(
             self.ctx.body,
             self.ctx.hir,
@@ -528,13 +555,8 @@ impl FnLowering<'_> {
         );
         let field_occs = fields.iter().map(|&field| Occ::Atom(Atom::Var(field)));
         let next = self
-            .decide(&splice(occs, column, field_occs), rows, false)
+            .decide(&splice(occs, column, field_occs), rows, attempt)
             .expect("a full decision tree always exists");
-        // フィールドを持つ値は定数にならない。パターンが型をその data かタプルに決めるので、値の Repr はつねに `obj`
-        // である。verifier は `obj` でない値の `unpack` を拒む (R8)
-        let Atom::Var(value) = value else {
-            unreachable!("a value with fields is a variable")
-        };
         Decision::Unpack {
             value,
             ctor,
@@ -553,6 +575,7 @@ impl FnLowering<'_> {
         column: usize,
         ctor: ConstructorId,
         scrutinee: Atom,
+        attempt: Attempt,
     ) -> Decision {
         let body = self.ctx.body;
         let hir = self.ctx.hir;
@@ -561,24 +584,28 @@ impl FnLowering<'_> {
         };
         let layout = self.program.data_layout(hir, self.ctx.store, hir[ctor].ty);
         let mentions = |ctor: ConstructorId, row: &Row| matches!(head(body, hir, row.cells[column]), Head::Con(other, _) if other == ctor);
+        // タグの定数は `expand` が開くので、`switch` で調べる値は変数である
+        let Atom::Var(parent) = scrutinee else {
+            unreachable!("a switched constructor value is a variable")
+        };
         let mut cases = Vec::new();
         for &ctor in constructors {
             if !rows.iter().any(|row| mentions(ctor, row)) {
                 continue;
             }
             let tag = hir[ctor].tag;
-            let fields = self.field_vars(rows, column, tag);
+            let fields = self.field_vars(rows, column, tag, parent);
             let specialized = specialize(body, hir, rows, column, tag, fields.len());
             let field_occs = fields.iter().map(|&field| Occ::Atom(Atom::Var(field)));
             let next = self
-                .decide(&splice(occs, column, field_occs), specialized, false)
+                .decide(&splice(occs, column, field_occs), specialized, attempt)
                 .expect("a full decision tree always exists");
             cases.push((CasePattern::Tag(tag), fields, next));
         }
         let default = (cases.len() < constructors.len()).then(|| {
             let otherwise = remove_column(body, hir, rows, column, None);
             let next = self
-                .decide(&splice(occs, column, []), otherwise, false)
+                .decide(&splice(occs, column, []), otherwise, attempt)
                 .expect("a full decision tree always exists");
             Box::new(next)
         });
@@ -598,6 +625,7 @@ impl FnLowering<'_> {
         rows: &[Row],
         column: usize,
         scrutinee: Atom,
+        attempt: Attempt,
     ) -> Decision {
         let body = self.ctx.body;
         let hir = self.ctx.hir;
@@ -614,13 +642,13 @@ impl FnLowering<'_> {
         for literal in literals {
             let specialized = remove_column(body, hir, rows, column, Some(literal));
             let next = self
-                .decide(&remaining, specialized, false)
+                .decide(&remaining, specialized, attempt)
                 .expect("a full decision tree always exists");
             cases.push((self.literal_pattern(literal), Vec::new(), next));
         }
         let otherwise = remove_column(body, hir, rows, column, None);
         let default = self
-            .decide(&remaining, otherwise, false)
+            .decide(&remaining, otherwise, attempt)
             .expect("a full decision tree always exists");
         Decision::Switch {
             scrutinee,
@@ -631,8 +659,8 @@ impl FnLowering<'_> {
     }
 
     /// 決定木をブロックに出す。`switch` の行き先は case の順、`default` の順に作る。葉は、枝のパターンの変数と、
-    /// 枝が使えば値全体 (`root`) を作って、枝のラベルへ向かう。
-    fn emit(&mut self, decision: Decision, ctx: CtxId, root: &Occ) {
+    /// 枝が使えば値全体 (`root`) を作り、枝が使わない値を drop して、枝のラベルへ向かう。
+    fn emit(&mut self, decision: Decision, ctx: CtxId, root: &Occ, attempt: Attempt) {
         match decision {
             Decision::Switch {
                 scrutinee,
@@ -664,11 +692,11 @@ impl FnLowering<'_> {
                 });
                 for (next, target) in nexts.into_iter().zip(targets) {
                     self.builder.reopen(target);
-                    self.emit(next, ctx, root);
+                    self.emit(next, ctx, root, attempt);
                 }
                 if let (Some(next), Some(target)) = (default, default_target) {
                     self.builder.reopen(target);
-                    self.emit(*next, ctx, root);
+                    self.emit(*next, ctx, root, attempt);
                 }
             }
             Decision::Unpack {
@@ -682,7 +710,7 @@ impl FnLowering<'_> {
                     ctor,
                     fields,
                 });
-                self.emit(*next, ctx, root);
+                self.emit(*next, ctx, root, attempt);
             }
             Decision::Leaf { arm, bound } => {
                 let context = self.match_ctx(ctx);
@@ -702,6 +730,8 @@ impl FnLowering<'_> {
                 }
                 if passes {
                     args.push(self.materialize_once(root, &mut built));
+                } else {
+                    self.drop_matched_away(root, &bound, attempt);
                 }
                 self.builder.jump(label, args);
             }
@@ -711,8 +741,9 @@ impl FnLowering<'_> {
     /// 欄 `column` のタグ `tag` のコンストラクタ (タプル) のフィールドの変数。その位置を変数のパターンで受ける行が
     /// あれば、その変数の名前にする。Repr は、そのコンストラクタが最初に現れる行の引数のパターンの型から決める。
     /// 型検査は入れ子のパターンにも受けた値の型を記録し、case はどれかの行に現れるコンストラクタにだけ作るので、
-    /// 引数のパターンはいつもある (docs/implementation/architecture.md の「translate の組み立て」)。
-    fn field_vars(&mut self, rows: &[Row], column: usize, tag: u32) -> Vec<VarId> {
+    /// 引数のパターンはいつもある (docs/implementation/architecture.md の「translate の組み立て」)。変数は分解した値
+    /// `parent` と組にして親の表に入れる。
+    fn field_vars(&mut self, rows: &[Row], column: usize, tag: u32, parent: VarId) -> Vec<VarId> {
         let body = self.ctx.body;
         let hir = self.ctx.hir;
         let shapes: Vec<&[PatId]> = rows
@@ -735,10 +766,135 @@ impl FnLowering<'_> {
                     .unwrap_or("x");
                 let ty = self.pat_type(pat);
                 let repr = repr(self.ctx.store, ty, hir);
-                self.builder
-                    .var(named(name, repr, mark(self.ctx.store, ty)))
+                let field = self
+                    .builder
+                    .var(named(name, repr, mark(self.ctx.store, ty)));
+                self.parents.insert(field, parent);
+                field
             })
             .collect()
+    }
+
+    /// 決定木が `con` で作った変数 `var` を開いて、引数を直接読むか。`unr` の変数はいつも開く。`unr` でない変数は、
+    /// 葉が1つの静的な試みか、どの枝も受け取らないときだけ開く。ある葉が引数を読み、別の葉が変数そのものを受け取ると、
+    /// `con` が生き残ったまま引数を2か所で使い、Perceus が `unr` でない値を `dup` するためである
+    /// (docs/superpowers/specs/2026-10-13-s8d-kind-marks-design.md の「translate が決める印」)。
+    fn opens(&self, var: VarId, attempt: Attempt) -> bool {
+        self.builder.mark(var) == Mark::Unr
+            || match attempt {
+                Attempt::Static => true,
+                Attempt::Full { received } => !received.contains(&var),
+            }
+    }
+
+    /// 根の出現 `root` の中で、ある枝が受け取る `con` で作った変数。決定を作る前に、すべての枝のパターンを各位置に
+    /// 照らして調べる。変数の位置かその祖先の位置を変数のパターンで受ける枝か、値全体を別名で受ける枝があれば、
+    /// 変数は受け取られる。到達できるかは見ないので保守的である。部分行列でなくすべての枝を見るのは、変数を開く部分行列に
+    /// 変数を受け取る枝が入らないことがあるためである (`match (p, n) with | (x, 0) -> take x | ((a, []), _) -> ..`)。
+    /// 受け取られた変数は開かれないので、その下は調べない。パターンがもう届かない位置で、受け取られていない値の下も
+    /// 調べない。どちらも長い `con` の連なりをたどらないためである。
+    fn received(&self, root: &Occ, ctx: CtxId) -> HashSet<VarId> {
+        let Ctx::Match(context) = &self.contexts[ctx.0] else {
+            unreachable!("the context matches data");
+        };
+        let body = self.ctx.body;
+        let hir = self.ctx.hir;
+        let pats: Vec<Option<PatId>> = context.pats.iter().map(|&pat| Some(pat)).collect();
+        let aliased = context.passes_alias.iter().any(|&passes| passes);
+        let mut received = HashSet::new();
+        let mut work = vec![(root.clone(), pats, aliased)];
+        while let Some((occ, pats, above)) = work.pop() {
+            let here = above
+                || pats
+                    .iter()
+                    .flatten()
+                    .any(|&pat| matches!(head(body, hir, Cell::Pat(pat)), Head::Any(Some(_))));
+            let (tag, fields) = match occ {
+                Occ::Con { tag, fields, .. } => (tag, fields),
+                Occ::Atom(Atom::Var(var)) => match self.cons.get(&var) {
+                    Some(_) if here => {
+                        received.insert(var);
+                        continue;
+                    }
+                    Some(known) => (
+                        known.tag,
+                        known.args.iter().map(|&arg| Occ::Atom(arg)).collect(),
+                    ),
+                    None => continue,
+                },
+                Occ::Atom(_) => continue,
+            };
+            if !here && pats.iter().all(Option::is_none) {
+                continue;
+            }
+            for (index, field) in fields.into_iter().enumerate() {
+                let inner = pats
+                    .iter()
+                    .map(|pat| {
+                        pat.and_then(|pat| shape_args(hir, head(body, hir, Cell::Pat(pat)), tag))
+                            .map(|args| args[index])
+                    })
+                    .collect();
+                work.push((field, inner, here));
+            }
+        }
+        received
+    }
+
+    /// 決定木の葉で、枝が使わない値を drop する (docs/superpowers/specs/2026-10-13-s8d-kind-marks-design.md の
+    /// 「明示の drop」の群 E)。根は、検査した値の出現から、決定が開いた頭の分かる値をたどって着く変数である。
+    /// 根 `v` を drop するのは、印が `unr` でなく Repr が RC の対象で、枝が `v` から取り出した `unr` でない変数を
+    /// 束縛せず、`v` か `v` を中に持つ値も受け取らないときである。drop しないと、Perceus が `unr` でない値を
+    /// `decref` する。枝が値全体を受け取るときは呼ばない。
+    fn drop_matched_away(&mut self, root: &Occ, bound: &[(LocalId, Occ)], attempt: Attempt) {
+        let mut kept = HashSet::new();
+        let mut work: Vec<Occ> = bound.iter().map(|(_, occ)| occ.clone()).collect();
+        while let Some(occ) = work.pop() {
+            match occ {
+                Occ::Con { fields, value, .. } => {
+                    if let ConValue::Made(made) = value {
+                        work.push(Occ::Atom(made));
+                    }
+                    work.extend(fields);
+                }
+                // `unr` の変数は `unr` でない値を中に持たず、`unr` でない根を生かしておく理由にもならない
+                Occ::Atom(Atom::Var(var)) if self.builder.mark(var) != Mark::Unr => {
+                    kept.insert(var);
+                    let mut child = var;
+                    while let Some(&parent) = self.parents.get(&child) {
+                        kept.insert(parent);
+                        child = parent;
+                    }
+                    if let Some(known) = self.cons.get(&var)
+                        && self.opens(var, attempt)
+                    {
+                        work.extend(known.args.iter().map(|&arg| Occ::Atom(arg)));
+                    }
+                }
+                Occ::Atom(_) => {}
+            }
+        }
+        // 左のフィールドから drop するよう、積む順を逆にする
+        let mut work = vec![root.clone()];
+        while let Some(occ) = work.pop() {
+            match occ {
+                Occ::Con { fields, .. } => work.extend(fields.into_iter().rev()),
+                Occ::Atom(Atom::Var(var)) => match self.cons.get(&var) {
+                    Some(known) if self.opens(var, attempt) => {
+                        work.extend(known.args.iter().rev().map(|&arg| Occ::Atom(arg)));
+                    }
+                    _ => {
+                        if self.builder.mark(var) != Mark::Unr
+                            && self.builder.repr(var).is_rc()
+                            && !kept.contains(&var)
+                        {
+                            self.bind("u", Repr::Unit, Mark::Unr, Rhs::Drop(Atom::Var(var)));
+                        }
+                    }
+                },
+                Occ::Atom(_) => {}
+            }
+        }
     }
 
     /// 局所変数を受けるラベルの引数。

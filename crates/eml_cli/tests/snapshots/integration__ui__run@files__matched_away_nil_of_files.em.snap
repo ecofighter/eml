@@ -1,0 +1,11 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{stderr}\")"
+input_file: tests/ui/run/files/matched_away_nil_of_files.em
+---
+--- stdout ---
+closed
+empty
+empty
+none
+--- stderr ---

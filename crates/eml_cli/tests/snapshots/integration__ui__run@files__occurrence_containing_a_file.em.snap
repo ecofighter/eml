@@ -1,0 +1,9 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{stderr}\")"
+input_file: tests/ui/run/files/occurrence_containing_a_file.em
+---
+--- stdout ---
+closed in close_opt
+closed in go
+--- stderr ---

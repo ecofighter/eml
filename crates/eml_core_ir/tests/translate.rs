@@ -2837,3 +2837,176 @@ fn wrappers_read_declaration_types_conservatively() {
     }
     ");
 }
+
+const CLOSE_ALL: &str = "close_all : List Fs.File -> <IO> Unit\nclose_all [] = println \"closed\"\nclose_all (f :: rest) =\n  Fs.close f\n  close_all rest\n\n";
+
+const CLOSE_OPT: &str = "close_opt : Option (List Fs.File) -> <IO> Unit\nclose_opt o =\n  match o with\n    | None -> println \"none\"\n    | Some l -> close_all l\n\n";
+
+#[test]
+fn a_leaf_that_binds_nothing_non_unr_drops_the_matched_value() {
+    // `[]` の葉も `(n, [])` の葉も、`lin` の引数から `unr` でない変数を何も束縛しないので、引数を `drop` する
+    let text = format!(
+        "{CLOSE_ALL}go : (Int, List Fs.File) -> <IO> Int\ngo p =\n  match p with\n    | (n, []) -> n\n    | (n, f :: rest) ->\n        Fs.close f\n        close_all rest\n        n\n\nmain : Unit -> <IO> Unit\nmain () =\n  println (show (go (1, [Fs.open \"input.txt\"])))\n  println (show (go (2, [])))"
+    );
+    let ir = core_text(&text, Pass::Translate);
+    insta::assert_snapshot!(function(&ir, "close_all"), @r#"
+    fn close_all($0.0: tobj lin) -> unit {
+      switch $0.0 Prelude.List { #0 -> b1, #1(f.1: obj lin, rest.2: tobj lin) -> b2 }
+    b1:
+      let u.3: unit = drop $0.0
+      let s.4: obj = const "closed"
+      let t.5: unit = extern Prelude.println(s.4)
+      return t.5
+    b2:
+      let t.6: unit = extern Std.Fs.close(f.1)
+      let t.7: unit = call close_all(rest.2)
+      return t.7
+    }
+    "#);
+    insta::assert_snapshot!(function(&ir, "go"), @"
+    fn go(p.0: obj lin) -> int {
+      unpack p.0 (,) #0(n.1: int, x.2: tobj lin)
+      switch x.2 Prelude.List { #0 -> b1, #1(f.3: obj lin, rest.4: tobj lin) -> b2 }
+    b1:
+      let u.5: unit = drop p.0
+      return n.1
+    b2:
+      let t.6: unit = extern Std.Fs.close(f.3)
+      let t.7: unit = call close_all(rest.4)
+      return n.1
+    }
+    ");
+}
+
+#[test]
+fn a_leaf_that_receives_a_value_containing_v_does_not_drop_v() {
+    // `(o, 0)` の葉は `h` を中に持つ `Some h` を受け取るので、`h` を drop しない
+    let text = "close_opt : Option Fs.File -> <IO> Unit\nclose_opt o =\n  match o with\n    | None -> println \"none\"\n    | Some f -> Fs.close f\n\ngo : Fs.File -> Int -> <IO> Unit\ngo h n =\n  match (Some h, n) with\n    | (o, 0) -> close_opt o\n    | (Some h2, _) -> Fs.close h2\n    | (None, _) -> println \"never\"\n\nmain : Unit -> <IO> Unit\nmain () =\n  go (Fs.open \"input.txt\") 0\n  go (Fs.open \"input.txt\") 1";
+    insta::assert_snapshot!(function(&core_text(text, Pass::Translate), "go"), @"
+    fn go(h.0: obj lin, n.1: int) -> unit {
+      switch n.1 { 0 -> b1, _ -> b2 }
+    b1:
+      let d.2: tobj lin = con Prelude.Option #1(h.0)
+      let t.3: unit = call close_opt(d.2)
+      return t.3
+    b2:
+      let t.4: unit = extern Std.Fs.close(h.0)
+      return t.4
+    }
+    ");
+}
+
+#[test]
+fn equal_non_unr_occurrences_are_built_apart() {
+    // 同じ形の `lin` の出現を1つの `con` にまとめると、Perceus がそれを `dup` する。`unr` の出現は今のとおりまとめる
+    let text = format!(
+        "{CLOSE_ALL}{CLOSE_OPT}use_ints : Option (List Int) -> Int\nuse_ints o =\n  match o with\n    | None -> 0\n    | Some l -> 1\n\nmain : Unit -> <IO> Unit\nmain () =\n  let (a, b) = (Some [], Some [])\n  close_opt a\n  close_opt b\n  let (c, d, e) = (Some [], Some [], Some [])\n  close_opt c\n  println (show (use_ints d + use_ints e))"
+    );
+    insta::assert_snapshot!(function(&core_text(&text, Pass::Translate), "main"), @r#"
+    fn main(p.0: unit) -> unit {
+      let d.1: tobj lin = con Prelude.Option #1(#0)
+      let d.2: tobj lin = con Prelude.Option #1(#0)
+      let t.3: unit = call close_opt(d.1)
+      let t.4: unit = call close_opt(d.2)
+      let d.5: tobj lin = con Prelude.Option #1(#0)
+      let d.6: tobj = con Prelude.Option #1(#0)
+      let t.7: unit = call close_opt(d.5)
+      let t.8: int = call use_ints(d.6)
+      let t.9: int = call use_ints(d.6)
+      let t.10: int = extern Prelude.+(t.8, t.9)
+      let t.11: obj = extern "Prelude.Show Int.show"(t.10)
+      let t.12: unit = extern Prelude.println(t.11)
+      return t.12
+    }
+    "#);
+}
+
+#[test]
+fn a_linear_constructor_variable_is_opened_when_no_arm_receives_it() {
+    // どの枝も `j` と `o` そのものを受け取らないので、決定木は `con` の引数を直接読み、`con` は作らない
+    let text = format!(
+        "{CLOSE_ALL}data Log =\n  | Log {{ file : Fs.File, lines : Int }}\ndata Job =\n  | Job {{ name : String, log : Log }}\n\nfinish : Log -> String -> <IO> Int\nfinish l name =\n  let j = Job {{ name = name, log = l }}\n  println \"between\"\n  let Job {{ name = n, log = Log {{ file, lines }} }} = j\n  println n\n  Fs.close file\n  lines\n\ngo : List Fs.File -> <IO> Unit\ngo xs =\n  let o = Some xs\n  println \"between\"\n  match o with\n    | Some [] -> println \"empty\"\n    | Some l -> close_all l\n    | None -> println \"none\"\n\nmain : Unit -> <IO> Unit\nmain () =\n  println (show (finish (Log {{ file = Fs.open \"input.txt\", lines = 3 }}) \"job\"))\n  go []"
+    );
+    let ir = core_text(&text, Pass::Translate);
+    insta::assert_snapshot!(function(&ir, "finish"), @r#"
+    fn finish(l.0: obj lin, name.1: obj) -> int {
+      let d.2: obj lin = con Job #0(name.1, l.0)
+      let s.3: obj = const "between"
+      let t.4: unit = extern Prelude.println(s.3)
+      unpack l.0 Log #0(file.5: obj lin, lines.6: int)
+      let t.7: unit = extern Prelude.println(name.1)
+      let t.8: unit = extern Std.Fs.close(file.5)
+      return lines.6
+    }
+    "#);
+    insta::assert_snapshot!(function(&ir, "go"), @r#"
+    fn go(xs.0: tobj lin) -> unit {
+      let d.1: tobj lin = con Prelude.Option #1(xs.0)
+      let s.2: obj = const "between"
+      let t.3: unit = extern Prelude.println(s.2)
+      switch xs.0 Prelude.List { #0 -> b1, _ -> b2 }
+    b1:
+      let u.4: unit = drop xs.0
+      let s.5: obj = const "empty"
+      let t.6: unit = extern Prelude.println(s.5)
+      return t.6
+    b2:
+      let t.7: unit = call close_all(xs.0)
+      return t.7
+    }
+    "#);
+}
+
+#[test]
+fn a_linear_constructor_variable_received_by_an_arm_is_taken_apart() {
+    // `other` の枝が `p` そのものを受け取るので、`p` を開かずに分解する。開くと、`p` の `con` が生き残ったまま
+    // ほかの葉が引数を読み、Perceus が `xs` と `ys` を `dup` し、`p` を `decref` する
+    let text = format!(
+        "{CLOSE_ALL}take : (List Fs.File, List Fs.File) -> <IO> Unit\ntake p =\n  match p with\n    | (a, b) ->\n        close_all a\n        close_all b\n\ngo : List Fs.File -> List Fs.File -> <IO> Unit\ngo xs ys =\n  let p = (xs, ys)\n  println \"between\"\n  match p with\n    | ([], b) -> close_all b\n    | other -> take other\n\nmain : Unit -> <IO> Unit\nmain () =\n  go [] [Fs.open \"input.txt\"]\n  go [Fs.open \"input.txt\"] []"
+    );
+    insta::assert_snapshot!(function(&lir_text(&text, eml_lir::Pass::Perceus), "go"), @r#"
+    fn go(xs.0: tobj lin, ys.1: tobj lin) -> unit {
+      let d.2: obj lin = con (,) #0(xs.0, ys.1)
+      let s.3: obj = const "between"
+      let t.4: unit = extern Prelude.println(s.3)
+      unpack d.2 (,) #0(x.5: tobj lin, b.6: tobj lin)
+      switch x.5 Prelude.List { #0 -> b1, _ -> b2 }
+    b1:
+      release d.2 (,) #0(_, b.6)
+      tail call close_all(b.6)
+    b2:
+      tail call take(d.2)
+    }
+    "#);
+    // `q` は `o` の枝が受け取るので開かず、`q` を根にする。`(Some [], 0)` の葉は `q` から何も束縛しないので `q` を drop する
+    let text = format!(
+        "{CLOSE_ALL}{CLOSE_OPT}go : List Fs.File -> Int -> <IO> Unit\ngo xs n =\n  let q = Some xs\n  let p = (q, n)\n  println \"between\"\n  match p with\n    | (Some [], 0) -> println \"empty zero\"\n    | (o, _) -> close_opt o\n\nmain : Unit -> <IO> Unit\nmain () =\n  go [] 0\n  go [Fs.open \"input.txt\"] 1"
+    );
+    insta::assert_snapshot!(function(&core_text(&text, Pass::Translate), "go"), @r#"
+    fn go(xs.0: tobj lin, n.1: int) -> unit {
+      let d.2: tobj lin = con Prelude.Option #1(xs.0)
+      let d.3: obj lin = con (,) #0(d.2, n.1)
+      let s.4: obj = const "between"
+      let t.5: unit = extern Prelude.println(s.4)
+      switch d.2 Prelude.Option { #1(x.6: tobj lin) -> b1, _ -> b2 }
+    b1:
+      switch x.6 Prelude.List { #0 -> b3, _ -> b4 }
+    b2:
+      jump b7(d.2)
+    b3:
+      switch n.1 { 0 -> b5, _ -> b6 }
+    b4:
+      jump b7(d.2)
+    b5:
+      let u.7: unit = drop d.2
+      let s.8: obj = const "empty zero"
+      let t.9: unit = extern Prelude.println(s.8)
+      return t.9
+    b6:
+      jump b7(d.2)
+    b7(o.10: tobj lin):
+      let t.11: unit = call close_opt(o.10)
+      return t.11
+    }
+    "#);
+}
