@@ -138,6 +138,33 @@ impl Word {
         imm_value_bits(self.0.addr())
     }
 
+    /// 語のポインタ。provenance を含む。
+    pub(crate) closed spec fn ptr_spec(self) -> *mut () {
+        self.0
+    }
+
+    /// ヘッダを指す語。provenance を保つ。
+    #[inline]
+    pub(crate) fn from_ptr(h: *mut Header) -> (w: Word)
+        ensures
+            w.ptr_spec()@.addr == h@.addr,
+            w.ptr_spec()@.provenance == h@.provenance,
+            w.bits_spec() == h@.addr,
+    {
+        Word(h as *mut ())
+    }
+
+    /// 語の指すヘッダ。provenance を保つ。
+    #[inline]
+    pub(crate) fn as_ptr(self) -> (h: *mut Header)
+        ensures
+            h@.addr == self.ptr_spec()@.addr,
+            h@.provenance == self.ptr_spec()@.provenance,
+            h@.addr == self.bits_spec(),
+    {
+        self.0 as *mut Header
+    }
+
     /// 語のビット列。VM が生のスロットに置くときに使う。
     #[inline]
     pub fn bits(self) -> (r: usize)

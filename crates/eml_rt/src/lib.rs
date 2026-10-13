@@ -6,6 +6,9 @@
 use vstd::prelude::*;
 
 mod alloc;
+// ヒープを権限の上で書き直すまで、まだどこからも使わない
+#[allow(dead_code)]
+mod cell;
 mod error;
 mod foreign;
 mod heap;

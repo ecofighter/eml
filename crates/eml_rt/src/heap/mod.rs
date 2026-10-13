@@ -27,6 +27,7 @@ use crate::mode::Mode;
 use crate::rc::{self, DecrefStep, DupStep};
 use crate::word::Word;
 use std::sync::atomic::Ordering;
+use vstd::prelude::*;
 
 pub use reuse::Token;
 
@@ -156,7 +157,9 @@ impl<M: Mode> Heap<M> {
     #[inline]
     fn alloc_header(&mut self, payload_words: usize, rc: i32, meta: Meta) -> NonNull<Header> {
         debug_assert_ne!(meta.kind(), Kind::Free);
-        let h = self.pages.alloc(object_words(payload_words));
+        let (h, _) = self.pages.alloc(object_words(payload_words));
+        // 確保したブロックはページの中にあるので、null にならない
+        let h = unsafe { NonNull::new_unchecked(h) };
         unsafe { meta::init(h, rc, meta) };
         if M::CHECKED {
             unsafe { check::init_prefix(h, if rc == 0 { 0 } else { self.worker }) };
@@ -386,7 +389,7 @@ impl<M: Mode> Heap<M> {
             .then(|| unsafe { foreign::finalizer(h) });
         if M::CHECKED {
             unsafe { check::prefix(h) }.set_state(State::Freed, true);
-            self.quarantined += unsafe { self.pages.block_bytes(h) };
+            self.quarantined += self.pages.block_bytes(h.as_ptr());
             self.stats.live -= 1;
         } else if finalizer.is_some() {
             unsafe { meta::set_meta(h, Meta::new(0, 0, Kind::Free, false)) };
@@ -395,7 +398,7 @@ impl<M: Mode> Heap<M> {
             unsafe { finalizer.run() };
         }
         if !M::CHECKED {
-            unsafe { self.pages.free(h) };
+            self.pages.free(h.as_ptr(), Tracked::assume_new());
         }
     }
 

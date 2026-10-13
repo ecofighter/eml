@@ -107,7 +107,7 @@ impl<M: Mode> Heap<M> {
             return Ok((unsafe { self.alloc(payload_words, meta) }, false));
         };
         if M::CHECKED {
-            if !unsafe { self.pages.fits(h, object_words(payload_words)) } {
+            if !self.pages.fits(h.as_ptr(), object_words(payload_words)) {
                 return Err(HeapError::WrongClass);
             }
             unsafe { check::prefix(h) }.set_state(State::Alive, false);

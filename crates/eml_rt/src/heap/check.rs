@@ -142,7 +142,7 @@ impl<M: Mode> Heap<M> {
         if !M::CHECKED {
             return Ok(());
         }
-        let capacity = unsafe { self.pages.block_words(h) } - PREFIX_WORDS - HEADER_WORDS;
+        let capacity = self.pages.block_words(h.as_ptr()) - PREFIX_WORDS - HEADER_WORDS;
         if i < capacity {
             Ok(())
         } else {

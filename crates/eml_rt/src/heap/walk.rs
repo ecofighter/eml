@@ -14,10 +14,18 @@ use crate::word::Word;
 use std::sync::atomic::Ordering;
 
 impl<M: Mode> Heap<M> {
+    /// 切り出したすべてのブロックについて `f` を呼ぶ。
+    pub(super) fn each_block(&self, mut f: impl FnMut(NonNull<Header>)) {
+        for h in self.pages.blocks() {
+            // 切り出したブロックはページの中にあるので、null にならない
+            f(unsafe { NonNull::new_unchecked(h) })
+        }
+    }
+
     /// 生きている物体 (token の箱、不死の物体、ダミーを含む) を列挙する。S11 の根からの走査が使う。
     pub fn live_objects(&self) -> Vec<Word> {
         let mut live = Vec::new();
-        self.pages.for_each_block(|h| {
+        self.each_block(|h| {
             if unsafe { self.is_live_block(h) } {
                 live.push(Word::from_header(h));
             }
@@ -40,7 +48,7 @@ impl Heap<Checked> {
     /// `lin` ビットの立った局所の物体で、不死の物体から届いてよいのは不死の物体だけである。
     pub fn check_invariants(&self) -> Result<(), HeapError> {
         let mut result = Ok(());
-        self.pages.for_each_block(|h| {
+        self.each_block(|h| {
             if result.is_err() || unsafe { check::prefix(h) }.state() != State::Alive {
                 return;
             }
@@ -76,7 +84,7 @@ impl Heap<Checked> {
     /// `Token` で数える。
     pub fn leaks(&self) -> BTreeMap<&'static str, u64> {
         let mut leaks = BTreeMap::new();
-        self.pages.for_each_block(|h| {
+        self.each_block(|h| {
             let prefix = unsafe { check::prefix(h) };
             let (name, count) = match prefix.state() {
                 State::Freed => return,
@@ -105,7 +113,7 @@ impl<M: Mode> Drop for Heap<M> {
     /// Rust の値が持つメモリを漏らさないように、生きている `Foreign` の破棄処理を呼んでからページを返す。
     fn drop(&mut self) {
         let mut finalizable = Vec::new();
-        self.pages.for_each_block(|h| {
+        self.each_block(|h| {
             if unsafe { self.is_live_block(h) && meta::meta(h).kind() == Kind::Foreign } {
                 finalizable.push(h);
             }

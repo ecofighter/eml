@@ -6,6 +6,7 @@
 const FILES: &[(&str, &str)] = &[
     ("lib.rs", include_str!("lib.rs")),
     ("alloc.rs", include_str!("alloc.rs")),
+    ("cell.rs", include_str!("cell.rs")),
     ("error.rs", include_str!("error.rs")),
     ("foreign.rs", include_str!("foreign.rs")),
     ("meta.rs", include_str!("meta.rs")),
@@ -49,11 +50,35 @@ const TRUSTED: &[(&str, &str)] = &[
     ),
     ("word.rs: external_body not_an_immediate", "T5"),
     ("word.rs: global size_of usize == 8", "T6"),
+    ("meta.rs: global layout Word is size == 8, align == 8", "T6"),
+    (
+        "meta.rs: global layout Header is size == 8, align == 4",
+        "T6",
+    ),
+    ("meta.rs: global layout u32 is size == 4, align == 4", "T6"),
+    ("meta.rs: global layout i32 is size == 4, align == 4", "T6"),
+    (
+        "alloc.rs: global layout PageHeader is size == 32, align == 8",
+        "T6",
+    ),
+    ("alloc.rs: external_body alloc_page", "T1"),
+    ("alloc.rs: Tracked::assume_new alloc_page", "T1"),
+    ("alloc.rs: external_body dealloc_page", "T1"),
+    ("alloc.rs: external_body too_large", "T5"),
+    ("alloc.rs: external_body too_many_words", "T5"),
+    ("alloc.rs: external_body bad_page_layout", "T5"),
+    ("cell.rs: external_body rc_load", "T2"),
+    ("cell.rs: external_body rc_store", "T2"),
+    ("cell.rs: external_body rc_dup_shared", "T2"),
+    ("cell.rs: external_body rc_decref_shared", "T2"),
+    ("cell.rs: external_body rc_is_last", "T2"),
+    ("cell.rs: external_body u32_load", "T2"),
+    ("cell.rs: external_body u32_store", "T2"),
 ];
 
 /// まだ証明していないので一時に `external_body` にした項目。S9v の終わりに空にする。
 const UNPROVED: &[&str] = &[
-    "meta.rs: external_body Header",
+    "heap/mod.rs: Tracked::assume_new free_box",
     "heap/share.rs: external_body live",
     "heap/share.rs: external_body rc",
     "heap/share.rs: external_body set_rc",
@@ -65,7 +90,6 @@ const UNPROVED: &[&str] = &[
 
 /// まだ `verus!` に入れていない `unsafe` を持つファイル。S9v の終わりに空にする。
 const OUTSIDE: &[&str] = &[
-    "alloc.rs",
     "foreign.rs",
     "meta.rs",
     "word.rs",
@@ -344,7 +368,9 @@ fn the_trust_list_is_exactly_the_trusted_items() {
         .iter()
         .flat_map(|(file, text)| trusted_items(file, text))
         .collect();
+    // 1つの関数に同じ項目が2回現れても、一覧には1回だけ載せる
     found.sort();
+    found.dedup();
     let mut listed: Vec<String> = TRUSTED
         .iter()
         .map(|(item, _)| item.to_string())

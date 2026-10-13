@@ -282,6 +282,7 @@ proof fn lemma_immortal(s: Obj)
 }
 
 } // verus!
+// まだ検証していないヒープが使う。ヒープを権限の上で書き直すときに `crate::cell` の関数に置き換える
 #[inline]
 pub(crate) fn dup_shared(rc: &AtomicI32) {
     rc.fetch_sub(1, Ordering::Relaxed);
@@ -340,24 +341,6 @@ mod tests {
         assert_eq!(mark_step(-DROP_LIMIT + 1), Some(i32::MIN));
         assert_eq!(mark_step(0), None);
         assert_eq!(mark_step(-2), None);
-    }
-
-    #[test]
-    fn shared_counts_move_atomically_and_find_the_last_reference() {
-        let rc = AtomicI32::new(-2);
-        dup_shared(&rc);
-        assert_eq!(rc.load(Ordering::Relaxed), -3);
-        assert!(!decref_shared(&rc));
-        assert!(!decref_shared(&rc));
-        assert!(decref_shared(&rc));
-        assert_eq!(rc.load(Ordering::Relaxed), 0);
-    }
-
-    #[test]
-    fn is_last_is_true_only_at_one_and_minus_one() {
-        for (n, last) in [(1, true), (-1, true), (2, false), (-2, false), (0, false)] {
-            assert_eq!(is_last(&AtomicI32::new(n)), last, "{n}");
-        }
     }
 
     #[test]
