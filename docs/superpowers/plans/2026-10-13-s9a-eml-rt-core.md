@@ -2,27 +2,28 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** VM とネイティブで共有するランタイムの核 `crates/eml_rt` を作る。語、ヘッダ、ページの確保器、局所と共有の RC、`share`、`lin` ビット、reuse の部品、型の引数で選ぶ検査モードを持ち、Miri と Kani で確かめる。
+**Goal:** VM とネイティブで共有するランタイムの核 `crates/eml_rt` を作る。語、ヘッダ、ページの確保器、局所と共有の RC、`share`、`lin` ビット、reuse の部品、型の引数で選ぶ検査モードを持ち、Miri と Verus で確かめる。
 
-**Architecture:** 下から積む。語とヘッダの型 (Task 2)、RC の遷移の純粋な関数 (Task 3)、ページの確保器 (Task 4) を作り、その上に `Heap<M: Mode>` の確保、RC、解放の連鎖、検査モードを置く (Task 5)。共有の経路と `release` (Task 6)、reuse の token (Task 7) を足し、Kani (Task 8) と Miri (Task 9) で確かめ、計測して (Task 10)、文書に移す (Task 11)。`eml_rt` はどの crate からも使わないので、既存のテストは変わらない。
+**Architecture:** 下から積む。語とヘッダの型 (Task 2)、RC の遷移の純粋な関数 (Task 3)、ページの確保器 (Task 4) を作り、その上に `Heap<M: Mode>` の確保、RC、解放の連鎖、検査モードを置く (Task 5)。共有の経路と `release` (Task 6)、reuse の token (Task 7) を足し、Verus (Task 8、Task 9) と Miri (Task 10) で確かめ、計測して (Task 11)、文書に移す (Task 12)。`eml_rt` はどの crate からも使わないので、既存のテストは変わらない。
 
-**Tech Stack:** Rust (edition 2024)、Miri (nightly、rust-overlay の devShell)、Kani、loom (`cfg(loom)` のビルドの確かめだけ)、macOS の `/usr/bin/time -l`。
+**Tech Stack:** Rust (edition 2024)、Miri (nightly、rust-overlay の devShell)、Verus 0.2026.10.04.426d8b0 (Nix の外。rustup の Rust 1.98.1)、macOS の `/usr/bin/time -l`。
 
 **Spec:** `docs/superpowers/specs/2026-10-13-s9a-eml-rt-core-design.md`。実装する人は、各タスクの前に spec の該当する節を読む。spec が規範で、計画とずれたら spec に従い、ずれを報告する。
 
 | 見出し | 中身 |
 |---|---|
-| Task 1 | Miri の devShell と、Kani が動くかの試し |
-| Task 2 | crate、`sync`、`Mode`、`Word`、`Meta` と `Kind` とヘッダ |
+| Task 1 | Miri の devShell と、Kani が動くかの試し (Kani は後に Verus に置き換えた) |
+| Task 2 | crate、`sync` (Task 10 で消す)、`Mode`、`Word`、`Meta` と `Kind` とヘッダ |
 | Task 3 | RC の遷移 (`rc.rs`) |
 | Task 4 | ページの確保器 (`alloc.rs`) |
 | Task 5 | `Heap`: 確保、RC、解放の連鎖、フィールド、`Foreign`、検査モード、生存の列挙、リーク |
 | Task 6 | `share`、共有の側の RC、`is_last` と `release`、不変条件の検査 |
 | Task 7 | reuse の token |
-| Task 8 | Kani のハーネス |
-| Task 9 | Miri、loom のビルド、clippy |
-| Task 10 | 計測 (`examples/rt_bench.rs`、`bench/rt.sh`) |
-| Task 11 | 文書、spec と計画の削除 |
+| Task 8 | Verus の土台と `share` の証明、写しの照合のテスト |
+| Task 9 | Verus の証明 (ヘッダ、即値、RC の遷移、判定) |
+| Task 10 | Miri と、差し替えの層 (`sync`) を消すこと |
+| Task 11 | 計測 (`examples/rt_bench.rs`、`bench/rt.sh`) |
+| Task 12 | 文書、spec と計画の削除 |
 
 ## Global Constraints
 
@@ -32,8 +33,9 @@
   - `cargo clippy --all-targets` が `eml_rt` の外に警告を出さない。`eml_rt` では、Task 2 から Task 4 の間だけ、まだ使わない `pub(crate)` の項目への `dead_code` の警告を許す。Task 5 の終わりからは `cargo clippy -p eml_rt --all-targets -- -D warnings` が通る
   - `cargo test -p eml_cli --test integration citations`
 - 既存のテストの期待値と成否は、どのタスクでも変えない (spec の「テストの変更」は「なし」)
-- `eml_rt` は依存を持たない。Task 9 で `cfg(loom)` のときだけ `loom` に依存する
-- `unsafe` は spec の「`unsafe` と同期の層」の核に閉じる。`&Header` と `&mut Header` は作らない。`rc` は `&AtomicI32` で、`meta` は生のポインタで読み書きする。整数からポインタを作らない (`without_provenance_mut` と `map_addr` だけを使う)
+- `eml_rt` は依存を持たない。Verus の写し (`crates/eml_rt/verus/`) は Cargo のビルドに入れない
+- Verus は Nix の外で `crates/eml_rt/verus/check.sh` で流す (導入は Task 8)。Task 8 からは、各タスクの終わりに `check.sh` も通る
+- `unsafe` は spec の「`unsafe` の核」の核に閉じる。`&Header` と `&mut Header` は作らない。`rc` は `&AtomicI32` で、`meta` は生のポインタで読み書きする。整数からポインタを作らない (`without_provenance_mut` と `map_addr` だけを使う)
 - edition 2024 なので、`unsafe fn` の中でも `unsafe` の操作は `unsafe { }` で囲む
 - 名前 (各タスクで共通に使う)
   - `Word` (Task 2): `Word::imm(i64)`、`Word::int(i64) -> Option<Word>`、`Word::UNIT`、`Word::EMPTY`、`is_imm`、`is_ptr`、`is_empty`、`imm_value`、`bits`、`Word::MIN_INT` / `MAX_INT`、crate の中の `from_header(NonNull<Header>)` と `header() -> NonNull<Header>`
@@ -44,7 +46,7 @@
   - `Heap<M>` と `Stats` (Task 5)、`Token` (Task 7)、`HeapError` (Task 5)
   - 検査モードの前置き `heap::check::{Prefix, State, PREFIX_WORDS, UNCOUNTED, prefix}` (Task 5)
 - `Heap` の公開の操作の名前と引数は spec の「核の操作」の表のとおりにする。`alloc` と `con_at` はペイロードの語の数を受け取る
-- 日本語のコメントと文書は、書く前に `yomiyasu:yomiyasu` のスキルを呼び、その規則に従う。コメントは「なぜ」を書く。規則を指すときは、module の先頭のコメントでは `docs/superpowers/specs/2026-10-13-s9a-eml-rt-core-design.md の「見出し」` の形で、ほかのコメントでは `spec の「見出し」` の形で引く。引いてよい見出しは次のものだけである。Task 11 で `docs/spec/object-model.md` に同じ見出しで移し、どちらの形もそのパスに置き換えるためである: 語、ダミーの値、ヘッダ、ペイロード、種類、ページ、確保と解放、生存の列挙、符号、局所の速い道、上限、共有の側、遷移の関数、`share`、`lin` ビット、核の操作、reuse、モードの選び方、前置き、検査モードの token、不死の物体の数え方、報告する誤り、論理的な worker ID、`unsafe` と同期の層、受け入れる制約
+- 日本語のコメントと文書は、書く前に `yomiyasu:yomiyasu` のスキルを呼び、その規則に従う。コメントは「なぜ」を書く。規則を指すときは、module の先頭のコメントでは `docs/superpowers/specs/2026-10-13-s9a-eml-rt-core-design.md の「見出し」` の形で、ほかのコメントでは `spec の「見出し」` の形で引く。引いてよい見出しは次のものだけである。Task 12 で `docs/spec/object-model.md` に同じ見出しで移し、どちらの形もそのパスに置き換えるためである: 語、ダミーの値、ヘッダ、ペイロード、種類、ページ、確保と解放、生存の列挙、符号、局所の速い道、上限、共有の側、遷移の関数、`share`、`lin` ビット、核の操作、reuse、モードの選び方、前置き、検査モードの token、不死の物体の数え方、報告する誤り、論理的な worker ID、`unsafe` の核、受け入れる制約。検証の節の「Verus」も引いてよい。ただし「Verus」は module の先頭でも `spec の「Verus」` の形で引く。Task 12 でこれだけを `docs/implementation/testing.md` の同じ見出しに移すためである
 - コメントに計画のタスクの番号を書かない
 - コミットメッセージは英語で、既存の形 (命令形の1行目、本文に理由) に合わせる。各コミットの末尾に次の2行を付ける
 
@@ -76,7 +78,7 @@ spec から出てくるが、spec の文が直接は名指さない入力のう�
 
 **Interfaces:**
 - Consumes: なし
-- Produces: `nix develop .#miri` (nightly、`miri`、`rust-src`)。Kani を導入する方法の結論 (Task 8 と Task 11 が使う)
+- Produces: `nix develop .#miri` (nightly、`miri`、`rust-src`)。Kani を導入する方法の結論 (Kani は Verus に置き換えたので、後のタスクは使わない)
 
 - [ ] **Step 1: flake に rust-overlay と Miri の devShell を足す**
 
@@ -170,7 +172,7 @@ Expected: `VERIFICATION:- SUCCESSFUL` が出る。`cargo kani --version` が版�
 
 - [ ] **Step 4: 試しの結果で止まるか決める**
 
-Kani が動かない (setup が失敗する、ハーネスが走らない、rustc が 1.85 より古い) なら、ここで止め、出力を添えて報告する。代わりの確かめ方を相談で決めるまで Task 2 に進まない (spec の「目的」の完了の条件)。動いたら、導入の方法 (`cargo install --locked kani-verifier` と `cargo kani setup`、版、Nix の devShell の外で動かしたか) を書き留める。Task 11 で `docs/implementation/testing.md` に書く。
+Kani が動かない (setup が失敗する、ハーネスが走らない、rustc が 1.85 より古い) なら、ここで止め、出力を添えて報告する。代わりの確かめ方を相談で決めるまで Task 2 に進まない (spec の「目的」の完了の条件)。動いたら、導入の方法 (`cargo install --locked kani-verifier` と `cargo kani setup`、版、Nix の devShell の外で動かしたか) を書き留める。Task 12 で `docs/implementation/testing.md` に書く。
 
 - [ ] **Step 5: コミット**
 
@@ -3790,294 +3792,423 @@ Claude-Session: https://claude.ai/code/session_01YLHZowtbHVXEbsTMFYwSMN"
 
 ---
 
-### Task 8: Kani のハーネス
+### Task 8: Verus の土台と `share` の証明
 
 **Files:**
-- Create: `crates/eml_rt/src/proofs.rs`
-- Modify: `crates/eml_rt/src/lib.rs` (`#[cfg(kani)] mod proofs;`)
+- Delete: `crates/eml_rt/src/proofs.rs` (Kani のハーネス。まだコミットしていない)
+- Modify: `crates/eml_rt/src/lib.rs` (`#[cfg(kani)] mod proofs;` を消し、`#[cfg(test)] mod verus_copies;` を足す)
+- Modify: `crates/eml_rt/Cargo.toml` (`check-cfg` から `cfg(kani)` を消す)
+- Modify: `crates/eml_rt/src/heap/share.rs` (`share_walk` を Verus が扱える形にする、module のコメント)
+- Create: `crates/eml_rt/src/verus_copies.rs` (写しの照合のテスト)
+- Create: `crates/eml_rt/verus/lib.rs`、`crates/eml_rt/verus/rc.rs`、`crates/eml_rt/verus/share.rs`、`crates/eml_rt/verus/check.sh`
 
 **Interfaces:**
-- Consumes: `meta::{Kind, Meta}`、`word::Word`、`rc::*`、`heap::share::{Graph, share_walk}`、`heap::check::{layout_check, reuse_in_place_check}`
-- Produces: 8つの `#[kani::proof]`
+- Consumes: `heap::share::{Graph, ShareError, share_walk}` (Task 6)、`rc::{DROP_LIMIT, mark_step}` (Task 3)
+- Produces: `crates/eml_rt/verus/` の Verus の crate (`check.sh` で流す)、`verus_copies.rs` の `COPIES` の表 (Task 9 が行を足す)
 
-spec の「Kani」の4つのハーネスを、次の8つの証明に分ける。spec の4は、`release` と reuse の判定に使う純粋な関数 (`is_last`、`layout_check`、`reuse_in_place_check`) を Kani で確かめる。展開した `release` と reuse の列が一般の版と同じ結果になることは、ヒープの物体を扱うので、Task 6 の `the_expanded_release_matches_the_general_one` と Task 7 のテストで確かめる。この分け方は spec からのずれなので、Task 11 で `docs/spec/object-model.md` と `testing.md` に書く。
+spec の「Verus」の土台を作り、証明の4 (`share`) を通す。Verus の試作 (`share_walk` の写しと証明。dispatch でパスを渡す) が、任意のグラフについてすでに通っている。それを `crates/eml_rt/verus/share.rs` に移し、本体との照合のテストを足す。
 
-- [ ] **Step 1: ハーネスを書く**
+Verus は Nix の外で動かす。導入は次のとおりで、controller の環境ではもう入っている。
+
+```sh
+mkdir -p ~/.verus && cd ~/.verus
+gh release download release/0.2026.10.04.426d8b0 -R verus-lang/verus -p 'verus-0.2026.10.04.426d8b0-arm64-macos.zip'
+unzip -q verus-0.2026.10.04.426d8b0-arm64-macos.zip   # ~/.verus/verus-arm64-macos/verus ができる
+rustup install 1.98.1-aarch64-apple-darwin           # Verus が求める toolchain
+```
+
+- [ ] **Step 1: Kani のハーネスを消す**
+
+`crates/eml_rt/src/proofs.rs` を消し、`crates/eml_rt/src/lib.rs` の `#[cfg(kani)]` と `mod proofs;` の2行を消す。`crates/eml_rt/Cargo.toml` の `check-cfg` を `["cfg(loom)"]` にする (`cfg(loom)` は Task 10 で消す)。
+
+- [ ] **Step 2: 照合のテストを書く**
 
 `crates/eml_rt/src/lib.rs` の `mod word;` の後に足す:
 
 ```rust
-#[cfg(kani)]
-mod proofs;
+#[cfg(test)]
+mod verus_copies;
 ```
 
-`crates/eml_rt/src/proofs.rs`:
+`crates/eml_rt/src/verus_copies.rs`:
 
 ```rust
-//! Kani のハーネス。どれも逐次のハーネスで、`cargo kani -p eml_rt` で流す。共有の側の2つの境目の並行の議論
-//! (docs/superpowers/specs/2026-10-13-s9a-eml-rt-core-design.md の「上限」) は、Kani では確かめられない。
+//! Verus の写しが本体と同じコードであることを確かめる (spec の「Verus」)。両方からコメントと属性と空白を除き、写しから
+//! はさらに Verus だけの書き方を除いて比べる。
 
-use crate::heap::check::{layout_check, reuse_in_place_check};
-use crate::heap::share::{Graph, share_walk};
-use crate::meta::{Kind, Meta};
-use crate::rc::{self, DROP_LIMIT, DecrefStep, DupStep, LOCAL_MAX};
-use crate::sync::AtomicI32;
-use crate::word::Word;
+/// 比べる項目。名前は、ファイルの一番外の `fn`、`struct`、`enum`、`trait`、`const` か、`型::名前` で `impl 型` の中の
+/// `fn` か `const` を指す。表に載らない型は、写しの側で証明に要る部分だけを持てばよい。
+const COPIES: &[(&str, &str, &[&str])] = &[
+    (
+        include_str!("rc.rs"),
+        include_str!("../verus/rc.rs"),
+        &["DROP_LIMIT", "mark_step"],
+    ),
+    (
+        include_str!("heap/share.rs"),
+        include_str!("../verus/share.rs"),
+        &["Graph", "ShareError", "share_walk"],
+    ),
+];
 
-fn any_kind() -> Kind {
-    match kani::any::<u8>() % 4 {
-        0 => Kind::Data,
-        1 => Kind::BigInt,
-        2 => Kind::Foreign,
-        _ => Kind::Free,
+/// 仕様の節の始まりの語。節は、その後の深さ 0 の `{` か `;` の前で終わる。そのため写しの節には `{` を書かない。
+const CLAUSES: &[&str] = &[
+    "requires",
+    "ensures",
+    "recommends",
+    "invariant",
+    "invariant_except_break",
+    "decreases",
+    "returns",
+    "opens_invariants",
+];
+
+fn is_ident(c: char) -> bool {
+    c.is_alphanumeric() || c == '_'
+}
+
+/// `at` から始まる語が `word` で、前後が識別子の続きでないか。
+fn word_at(s: &[char], at: usize, word: &str) -> bool {
+    let w: Vec<char> = word.chars().collect();
+    s.len() >= at + w.len()
+        && s[at..at + w.len()] == w[..]
+        && (at == 0 || !is_ident(s[at - 1]))
+        && s.get(at + w.len()).is_none_or(|&c| !is_ident(c))
+}
+
+fn skip_space(s: &[char], mut at: usize) -> usize {
+    while at < s.len() && s[at].is_whitespace() {
+        at += 1;
     }
+    at
 }
 
-fn any_meta() -> Meta {
-    Meta::new(kani::any(), kani::any(), any_kind(), kani::any())
-}
-
-#[kani::proof]
-fn meta_round_trips() {
-    let (tag, scan, kind, lin) = (kani::any(), kani::any(), any_kind(), kani::any());
-    let m = Meta::new(tag, scan, kind, lin);
-    assert!(m.tag() == tag && m.scan() == scan && m.kind() == kind && m.lin() == lin);
-    let flipped = m.with_lin(!lin);
-    assert!(flipped.lin() != lin && flipped.same_shape(m));
-}
-
-#[kani::proof]
-fn immediates_round_trip() {
-    let n: i64 = kani::any();
-    match Word::int(n) {
-        Some(w) => assert!(w.is_imm() && !w.is_ptr() && w.imm_value() == n),
-        None => assert!(!(Word::MIN_INT..=Word::MAX_INT).contains(&n)),
-    }
-}
-
-/// 理想のモデル (参照の数と張り付きの旗) と比べる。張り付きの旗は、局所の rc が `LOCAL_MAX` になったとき、または
-/// 共有の rc が `DROP_LIMIT` より小さくなったときに立つ。共有の rc が `DUP_LIMIT` 以上 `DROP_LIMIT` 未満の間も `dup` は
-/// 数えるが `decref` は飛ばすので、そこはもう張り付いたものとして扱う。
-#[kani::proof]
-#[kani::unwind(6)]
-fn rc_transitions_follow_the_model() {
-    let start: i32 = kani::any();
-    kani::assume(start != 0);
-    let mut rc = start;
-    let mut count = u64::from(start.unsigned_abs());
-    let mut stuck = start == LOCAL_MAX || start < DROP_LIMIT;
-    for _ in 0..5 {
-        match kani::any::<u8>() % 3 {
-            0 => {
-                count += 1;
-                match rc::dup_step(rc) {
-                    DupStep::Store(n) => rc = n,
-                    DupStep::Shared => rc -= 1,
-                    DupStep::Skip => {}
+/// `s[open]` の括弧に対応する閉じ括弧の位置。3種類の括弧をまとめて数える。
+fn matching(s: &[char], open: usize) -> usize {
+    let mut depth = 0usize;
+    for (i, &c) in s.iter().enumerate().skip(open) {
+        match c {
+            '(' | '[' | '{' => depth += 1,
+            ')' | ']' | '}' => {
+                depth -= 1;
+                if depth == 0 {
+                    return i;
                 }
             }
-            1 if count > 0 => {
-                count -= 1;
-                let last = match rc::decref_step(rc) {
-                    DecrefStep::Store(n) => {
-                        rc = n;
-                        false
-                    }
-                    DecrefStep::Free => true,
-                    DecrefStep::Shared => {
-                        rc += 1;
-                        rc == 0
-                    }
-                    DecrefStep::Skip => false,
-                };
-                if last {
-                    // 解放するのは、張り付いていない物体の数が 0 になったときだけである
-                    assert!(!stuck && count == 0);
-                    return;
+            _ => {}
+        }
+    }
+    panic!("unbalanced brackets");
+}
+
+/// `from` から、深さ 0 の `stops` のどれかの位置 (なければ末尾)。
+fn find_at_depth_0(s: &[char], from: usize, stops: &[char]) -> usize {
+    let mut i = from;
+    while i < s.len() {
+        match s[i] {
+            c if stops.contains(&c) => return i,
+            '(' | '[' => i = matching(s, i) + 1,
+            _ => i += 1,
+        }
+    }
+    s.len()
+}
+
+/// 行のコメントと属性を除く。比べるコードは、文字列のリテラルの中に `//` も `#[` も書かない。
+fn strip_comments_and_attributes(text: &str) -> Vec<char> {
+    let mut s: Vec<char> = Vec::new();
+    for line in text.lines() {
+        let code = line.find("//").map_or(line, |i| &line[..i]);
+        s.extend(code.chars());
+        s.push('\n');
+    }
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < s.len() {
+        if s[i] == '#' {
+            let mut j = skip_space(&s, i + 1);
+            if s.get(j) == Some(&'!') {
+                j = skip_space(&s, j + 1);
+            }
+            if s.get(j) == Some(&'[') {
+                i = matching(&s, j) + 1;
+                continue;
+            }
+        }
+        out.push(s[i]);
+        i += 1;
+    }
+    out
+}
+
+/// 項目の終わり: 深さ 0 の `;` か、最初の深さ 0 の `{` に対応する `}`。
+fn item_end(s: &[char], from: usize) -> usize {
+    let stop = find_at_depth_0(s, from, &['{', ';']);
+    if s.get(stop) == Some(&'{') {
+        matching(s, stop) + 1
+    } else {
+        stop + 1
+    }
+}
+
+/// `s` の中で、`fn` などに続く名前 `name` の項目を、その行の始まりから取り出す。
+fn find_item(s: &[char], name: &str) -> Option<(usize, usize)> {
+    const KEYWORDS: &[&str] = &["fn", "struct", "enum", "trait", "const"];
+    let mut depth = 0usize;
+    for i in 0..s.len() {
+        match s[i] {
+            '{' => depth += 1,
+            '}' => depth = depth.saturating_sub(1),
+            _ => {}
+        }
+        if depth != 0 {
+            continue;
+        }
+        for keyword in KEYWORDS {
+            if word_at(s, i, keyword) {
+                let at = skip_space(s, i + keyword.len());
+                if word_at(s, at, name) {
+                    let start = s[..i].iter().rposition(|&c| c == '\n').map_or(0, |p| p + 1);
+                    return Some((start, item_end(s, i)));
                 }
             }
-            _ => {
-                if let Some(n) = rc::mark_step(rc) {
-                    rc = n;
-                }
-            }
-        }
-        if rc == LOCAL_MAX || rc < DROP_LIMIT {
-            stuck = true;
-        }
-        if !stuck {
-            assert!(u64::from(rc.unsigned_abs()) == count && count > 0);
         }
     }
+    None
 }
 
-#[kani::proof]
-fn immortal_counts_never_move() {
-    assert!(rc::dup_step(0) == DupStep::Skip);
-    assert!(rc::decref_step(0) == DecrefStep::Skip);
-    assert!(rc::mark_step(0).is_none());
-}
-
-const N: usize = 4;
-
-#[derive(Clone)]
-struct Model {
-    rc: [i32; N],
-    lin: [bool; N],
-    owner: [u32; N],
-    edges: [[bool; N]; N],
-}
-
-impl Graph for Model {
-    type Node = usize;
-
-    fn rc(&self, node: usize) -> i32 {
-        self.rc[node]
-    }
-
-    fn set_rc(&mut self, node: usize, rc: i32) {
-        self.rc[node] = rc;
-    }
-
-    fn lin(&self, node: usize) -> bool {
-        self.lin[node]
-    }
-
-    fn set_owner(&mut self, node: usize, owner: u32) {
-        self.owner[node] = owner;
-    }
-
-    fn push_children(&self, node: usize, out: &mut Vec<usize>) {
-        for child in 0..N {
-            if self.edges[node][child] {
-                out.push(child);
-            }
-        }
-    }
-}
-
-/// 物体が4つまでの、rc と辺の数が合うグラフで確かめる。`lin` の物体は rc が 1 で、参照は1つだけである。印を付ける前の
-/// グラフも、共有の物体から局所の `lin` でない物体へ、不死の物体から不死でない物体へ、辺を持たない。
-#[kani::proof]
-#[kani::unwind(18)]
-fn share_marks_exactly_what_it_reaches() {
-    let mut graph = Model {
-        rc: [0; N],
-        lin: [false; N],
-        owner: [0; N],
-        edges: kani::any(),
+/// 写しの項目は `verus! { }` の中にあるので、その中身を一番外として扱う。
+fn unwrap_verus(s: Vec<char>) -> Vec<char> {
+    let Some(at) = (0..s.len()).find(|&i| word_at(&s, i, "verus") && s.get(skip_space(&s, i + 5)) == Some(&'!'))
+    else {
+        return s;
     };
-    let root: usize = kani::any();
-    kani::assume(root < N);
-    for i in 0..N {
-        let references = (0..N).filter(|&j| graph.edges[j][i]).count() + usize::from(i == root);
-        let lin: bool = kani::any();
-        let rc: i32 = kani::any();
-        if lin {
-            kani::assume(rc == 1 && references <= 1);
-        } else {
-            kani::assume((-8..=8).contains(&rc));
-            kani::assume(rc == 0 || rc.unsigned_abs() as usize >= references);
-        }
-        graph.lin[i] = lin;
-        graph.rc[i] = rc;
-    }
-    for i in 0..N {
-        for j in 0..N {
-            if graph.edges[i][j] && !graph.lin[i] {
-                if graph.rc[i] < 0 {
-                    kani::assume(graph.rc[j] <= 0 || graph.lin[j]);
-                }
-                if graph.rc[i] == 0 {
-                    kani::assume(graph.rc[j] == 0 && !graph.lin[j]);
-                }
-            }
-        }
-    }
-    let before = graph.clone();
-    assert!(share_walk(&mut graph, root, 7, true, &mut Vec::new(), &mut Vec::new()).is_ok());
+    let open = find_at_depth_0(&s, at, &['{']);
+    s[open + 1..matching(&s, open)].to_vec()
+}
 
-    // 根から、lin か局所の物体を通ってたどれる物体
-    let mut reached = [false; N];
-    reached[root] = true;
-    for _ in 0..N {
-        for i in 0..N {
-            if reached[i] && (before.lin[i] || before.rc[i] > 0) {
-                for j in 0..N {
-                    if before.edges[i][j] {
-                        reached[j] = true;
+fn extract(text: &str, path: &str) -> Vec<char> {
+    let s = unwrap_verus(strip_comments_and_attributes(text));
+    let (scope, name) = match path.split_once("::") {
+        Some((ty, name)) => (Some(ty), name),
+        None => (None, path),
+    };
+    let body: &[char] = match scope {
+        None => &s,
+        Some(ty) => {
+            let open = (0..s.len())
+                .find(|&i| {
+                    word_at(&s, i, "impl") && {
+                        let at = skip_space(&s, i + 4);
+                        word_at(&s, at, ty) && s.get(skip_space(&s, at + ty.len())) == Some(&'{')
                     }
+                })
+                .unwrap_or_else(|| panic!("no `impl {ty}`"));
+            let open = find_at_depth_0(&s, open, &['{']);
+            &s[open + 1..matching(&s, open)]
+        }
+    };
+    let (start, end) = find_item(body, name).unwrap_or_else(|| panic!("no item `{path}`"));
+    body[start..end].to_vec()
+}
+
+/// 写しから、仕様の節、`proof` の塊、`let ghost` の文、`spec fn` の宣言、戻り値の名前を除く。
+fn strip_verus(s: &[char]) -> Vec<char> {
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < s.len() {
+        if word_at(s, i, "proof") && s.get(skip_space(s, i + 5)) == Some(&'{') {
+            i = matching(s, skip_space(s, i + 5)) + 1;
+            continue;
+        }
+        if word_at(s, i, "let") && word_at(s, skip_space(s, i + 3), "ghost") {
+            i = find_at_depth_0(s, i, &[';']) + 1;
+            continue;
+        }
+        if word_at(s, i, "spec") && word_at(s, skip_space(s, i + 4), "fn") {
+            // `pub open spec fn` の修飾も、行の始まりから除く
+            while out.last().is_some_and(|&c: &char| c != '\n') {
+                out.pop();
+            }
+            i = item_end(s, i);
+            continue;
+        }
+        if let Some(clause) = CLAUSES.iter().find(|clause| word_at(s, i, clause)) {
+            i = find_at_depth_0(s, i + clause.len(), &['{', ';']);
+            continue;
+        }
+        if s[i] == '-' && s.get(i + 1) == Some(&'>') {
+            let open = skip_space(s, i + 2);
+            if s.get(open) == Some(&'(') {
+                let mut j = skip_space(s, open + 1);
+                let ident = j;
+                while j < s.len() && is_ident(s[j]) {
+                    j += 1;
+                }
+                let colon = skip_space(s, j);
+                if j > ident && s.get(colon) == Some(&':') && s.get(colon + 1) != Some(&':') {
+                    let close = matching(s, open);
+                    out.extend(['-', '>', ' ']);
+                    out.extend(&s[colon + 1..close]);
+                    i = close + 1;
+                    continue;
                 }
             }
         }
+        out.push(s[i]);
+        i += 1;
     }
-    for i in 0..N {
-        if reached[i] && before.lin[i] {
-            assert!(graph.owner[i] == 7 && graph.rc[i] == 1);
-        } else if reached[i] && before.rc[i] > 0 {
-            assert!(graph.rc[i] == -before.rc[i]);
-        } else {
-            assert!(graph.rc[i] == before.rc[i] && graph.owner[i] == before.owner[i]);
+    out
+}
+
+fn squeeze(s: &[char]) -> String {
+    s.iter().filter(|c| !c.is_whitespace()).collect()
+}
+
+/// 写しの比べる形。証明だけを置いた `else` の枝は、証明を除くと空になるので、それも除く。
+fn normalize_copy(copy: &str, item: &str) -> String {
+    squeeze(&strip_verus(&extract(copy, item))).replace("else{}", "")
+}
+
+#[test]
+fn the_verus_copies_match_the_code() {
+    for (code, copy, items) in COPIES {
+        for item in *items {
+            let expected = squeeze(&extract(code, item));
+            let actual = normalize_copy(copy, item);
+            assert_eq!(actual, expected, "the Verus copy of `{item}` differs from the code");
         }
     }
-    for i in 0..N {
-        for j in 0..N {
-            if graph.edges[i][j] && graph.rc[i] < 0 && !graph.lin[i] {
-                assert!(graph.rc[j] <= 0 || graph.lin[j]);
-            }
-        }
-    }
 }
 
-/// `release` と reuse の列の判定。rc が 1 か −1 なら最後の参照で、一意 (rc が 1) なら必ず最後の参照である。
-#[kani::proof]
-fn is_last_is_exact_and_unique_implies_last() {
-    let n: i32 = kani::any();
-    let last = rc::is_last(&AtomicI32::new(n));
-    assert!(last == (n == 1 || n == -1));
-    if n == 1 {
-        assert!(last);
-    }
+#[test]
+fn verus_only_syntax_is_removed() {
+    let copy = "fn f(x: u8) -> (r: Result<(), E>)\n    requires\n        x > 0,\n    ensures\n        r is Ok,\n{\n    let ghost g = x;\n    proof {\n        assert(g == x);\n    }\n    loop\n        invariant\n            g == x,\n        decreases 0nat,\n    {\n        if x > 1 {\n            break;\n        } else {\n            proof {\n                assert(x == 1);\n            }\n        }\n    }\n    Ok(())\n}\n";
+    let code = "fn f(x: u8) -> Result<(), E> {\n    loop {\n        if x > 1 {\n            break;\n        }\n    }\n    Ok(())\n}\n";
+    assert_eq!(normalize_copy(copy, "f"), squeeze(&extract(code, "f")));
 }
 
-#[kani::proof]
-fn layout_check_accepts_only_the_named_data() {
-    let m = any_meta();
-    let (scanned, tag, keep_len): (usize, u16, usize) = (kani::any(), kani::any(), kani::any());
-    let ok = layout_check(m, scanned, tag, keep_len).is_ok();
-    assert!(ok == (m.kind() == Kind::Data && m.tag() == tag && scanned == keep_len));
+#[test]
+fn trait_specs_and_spec_fns_are_removed() {
+    let copy = "pub trait T: Sized {\n    type N: Copy;\n\n    spec fn view(&self) -> Seq<u8>;\n\n    fn get(&self, i: usize) -> (r: u8)\n        requires\n            i < self.view().len(),\n    ;\n}\n";
+    let code = "/// 説明\npub trait T: Sized {\n    type N: Copy;\n    fn get(&self, i: usize) -> u8;\n}\n";
+    assert_eq!(normalize_copy(copy, "T"), squeeze(&extract(code, "T")));
 }
 
-#[kani::proof]
-fn reuse_in_place_rejects_exactly_a_kept_lin_bit_or_another_shape() {
-    let (boxed, new) = (any_meta(), any_meta());
-    let same = boxed.tag() == new.tag() && boxed.scan() == new.scan() && boxed.kind() == new.kind();
-    let ok = reuse_in_place_check(boxed, new).is_ok();
-    assert!(ok == (same && !(boxed.lin() && !new.lin())));
+#[test]
+fn items_in_an_impl_are_found_by_type_and_name() {
+    let code = "#[derive(Clone)]\npub struct M(u32);\n\nimpl M {\n    const L: u32 = 1 << 31; // 説明\n    pub const fn new(x: u32) -> M {\n        M(x)\n    }\n}\n\nfn new() {}\n";
+    assert_eq!(squeeze(&extract(code, "M::L")), "constL:u32=1<<31;");
+    assert_eq!(squeeze(&extract(code, "M::new")), "pubconstfnnew(x:u32)->M{M(x)}");
+    assert_eq!(squeeze(&extract(code, "M")), "pubstructM(u32);");
+    assert_eq!(squeeze(&extract(code, "new")), "fnnew(){}");
+}
+
+#[test]
+#[should_panic(expected = "differs")]
+fn a_changed_body_is_reported() {
+    let copy = "fn f() -> (r: u8)\n    ensures\n        r == 1,\n{\n    1\n}\n";
+    let code = "fn f() -> u8 {\n    2\n}\n";
+    let expected = squeeze(&extract(code, "f"));
+    let actual = normalize_copy(copy, "f");
+    assert_eq!(actual, expected, "the Verus copy of `f` differs from the code");
 }
 ```
 
-`crate::heap::check` と `crate::heap::share` は Task 5 と Task 6 で `pub(crate) mod` にしてある。`layout_check` と `reuse_in_place_check` は `pub(crate)` である。
+Run: `cargo test -p eml_rt verus_copies`
+Expected: 組み立たない (`../verus/share.rs` がない)
 
-- [ ] **Step 2: Kani を流す**
+- [ ] **Step 3: 本体の `share_walk` を Verus が扱える形にする**
 
-Run: `cargo kani -p eml_rt`
-Expected: 8つのハーネスがどれも `VERIFICATION:- SUCCESSFUL` になる。`share_marks_exactly_what_it_reaches` が unwind の不足で失敗したら、`#[kani::unwind(…)]` を足りる値まで上げる。時間がかかりすぎる (1つで 10 分を超える) ときは、`N` を 3 にして報告する
+Verus の証明は、取り出す前の積み場に名前を付ける (`let ghost s = stack@;`)。`while let` ではそれができないので、本体も `loop` と `match` で書く。`crates/eml_rt/src/heap/share.rs` の `while let Some(node) = stack.pop() {` を次にする。ループの中身は変えない:
 
-- [ ] **Step 3: ふだんのビルドが変わらないことを確かめる**
+```rust
+    // Verus の写しと同じ形にする。写しは、取り出す前の積み場に名前を付けて証明する
+    #[allow(clippy::while_let_loop)]
+    loop {
+        let node = match stack.pop() {
+            Some(node) => node,
+            None => break,
+        };
+```
 
-Run: `cargo test -p eml_rt && cargo clippy -p eml_rt --all-targets -- -D warnings && cargo fmt --check`
-Expected: 通る。`cfg(kani)` の module は、ふだんのビルドに入らない
+module の先頭のコメントの2文目を「たどりは物体への読み書きを `Graph` の裏に置いて書き、Verus がたどりを trait のメソッドの約束の上で証明する。証明するのは `crates/eml_rt/verus/share.rs` の写しで、写しが本体と同じことは `verus_copies.rs` のテストが確かめる。」にする。
 
-- [ ] **Step 4: コミット**
+- [ ] **Step 4: 写しを置く**
+
+`crates/eml_rt/verus/lib.rs`:
+
+```rust
+//! `eml_rt` の純粋な関数と `share` のたどりの、Verus の写し (spec の「Verus」)。Cargo のビルドには入らず、`check.sh`
+//! で流す。写しの関数は本体と同じコードに仕様と証明を足したもので、
+//! 本体と同じことは `crates/eml_rt/src/verus_copies.rs` のテストが確かめる。
+
+mod rc;
+mod share;
+```
+
+`crates/eml_rt/verus/rc.rs` に、本体の `rc.rs` の `DROP_LIMIT` と `mark_step` を本体と同じ文字で写し、`verus!` の中に置く。`mark_step` には、試作と同じ `ensures` (rc が 0 以下なら `None`、正なら `Some(mark_spec(rc))`) を付ける。`mark_spec` は rc.rs の `spec fn` にする。`DROP_LIMIT` を `i32::MIN + (1 << 17)` のまま Verus が受け付けなければ、報告して、本体と写しの両方を Verus が受け付ける同じ式にする。
+
+`crates/eml_rt/verus/share.rs` は、試作を次のように直して置く。
+
+- 試作の `mark_step`、`mark_spec`、`DROP_LIMIT` は rc.rs に移したので消し、`use crate::rc::{self, mark_spec};` で使う。本体と同じく `rc::mark_step(rc)` と書く
+- `Graph`、`ShareError`、`share_walk` の可視性を本体と同じ `pub(crate)` にする。`trait Graph` に `Sized` を付けない
+- `ShareError` の変体の並びと名前、`share_walk` の引数の名前と並び、ループの中身を本体と同じにする。照合のテストが、コメント、属性、空白、Verus だけの書き方の違いだけを許す
+- 試作の日本語のコメントを、本体のコメントと同じ規則 (なぜを書く) で書き直す
+
+- [ ] **Step 5: Verus を流すスクリプトを書く**
+
+`crates/eml_rt/verus/check.sh` (実行の権限を付ける):
+
+```sh
+#!/bin/sh
+# eml_rt の Verus の写しを検証する (docs/implementation/testing.md の「Verus」)。Verus は rustup の toolchain を使うので、
+# Nix の devShell の外の環境で流す。
+set -eu
+VERUS="${VERUS:-$HOME/.verus/verus-arm64-macos/verus}"
+VERSION=0.2026.10.04.426d8b0
+cd "$(dirname "$0")"
+run() {
+    env -i HOME="$HOME" PATH="$HOME/.cargo/bin:/usr/bin:/bin:/usr/sbin:/sbin" "$VERUS" "$@"
+}
+run --version | grep -q "$VERSION" || {
+    echo "check.sh: Verus $VERSION is required (docs/implementation/testing.md)" >&2
+    exit 1
+}
+run --crate-type=lib lib.rs "$@"
+```
+
+Run: `crates/eml_rt/verus/check.sh`
+Expected: `verification results:: N verified, 0 errors` (N は 18 前後)
+
+- [ ] **Step 6: 照合と、証明が空でないことを確かめる**
+
+Run: `cargo test -p eml_rt verus_copies`
+Expected: 5つのテストが通る。`the_verus_copies_match_the_code` が落ちたら、写しを本体に合わせる (本体の動作は変えない)
+
+次の2つを一時的に試し、それぞれ失敗することを確かめてから元に戻す。報告に結果を書く。
+
+- 写しの `lin` の枝の `graph.push_children(node, stack);` を消す。`check.sh` が `invariant not satisfied` で落ち、`cargo test -p eml_rt verus_copies` も落ちる
+- 写しの `well_formed` の、`lin` の物体の参照がただ1つである条件を消す。`check.sh` が落ちる
+
+- [ ] **Step 7: 全体を確かめる**
+
+Run: `cargo test -p eml_rt && cargo clippy -p eml_rt --all-targets -- -D warnings && cargo fmt --check && cargo test -p eml_cli --test integration citations`
+Expected: 通る
+
+- [ ] **Step 8: コミット**
 
 ```bash
-git add crates/eml_rt
-git commit -m "Add Kani harnesses for the eml_rt core
+git add -A crates/eml_rt
+git commit -m "Prove share_walk in Verus against a checked copy
 
-The harnesses prove the header and immediate encodings, the RC transitions
-against an ideal count with sticky flags over all of i32, share on bounded
-graphs, and the pure decisions behind release and reuse.
+The walk is proved over the Graph trait's contract for graphs of any
+size: it terminates, returns Ok, moves reached lin objects to the
+receiver, marks reached local objects, leaves the rest alone, and keeps
+shared objects from pointing at local non-lin ones. The proof lives in a
+Verus copy outside the Cargo build; a unit test checks that the copy,
+with Verus-only syntax removed, is the code. The loop is written with
+loop/match so the copy can name the stack before each pop.
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01YLHZowtbHVXEbsTMFYwSMN"
@@ -4085,17 +4216,145 @@ Claude-Session: https://claude.ai/code/session_01YLHZowtbHVXEbsTMFYwSMN"
 
 ---
 
-### Task 9: Miri と loom のビルド
+### Task 9: Verus の証明 (ヘッダ、即値、RC の遷移、判定)
 
 **Files:**
-- Modify: `crates/eml_rt/Cargo.toml` (`cfg(loom)` の依存)
-- Modify: `crates/eml_rt/src/sync.rs` (loom の差し替え)
-- Modify: `Cargo.lock`
+- Modify: `crates/eml_rt/src/word.rs` (ビット列の計算を整数の純粋な関数に分ける)
+- Modify: `crates/eml_rt/src/meta.rs`、`crates/eml_rt/src/rc.rs`、`crates/eml_rt/src/heap/check.rs` (Verus が扱えない書き方を、意味を変えずに書き直す。Kani を指すコメント)
+- Create: `crates/eml_rt/verus/meta.rs`、`crates/eml_rt/verus/word.rs`、`crates/eml_rt/verus/check.rs`
+- Modify: `crates/eml_rt/verus/rc.rs`、`crates/eml_rt/verus/lib.rs`、`crates/eml_rt/src/verus_copies.rs` (`COPIES` の行)
+
+**Interfaces:**
+- Consumes: Task 8 の `crates/eml_rt/verus/`、`check.sh`、`COPIES`
+- Produces: spec の「Verus」の証明の1、2、3、5
+
+spec の「Verus」の証明の1、2、3、5を足す。証明の言い回しは spec のとおりにし、次に写しの形と、示すことを書く。写しの側に、本体にない `spec fn`、`proof fn`、証明のための exec の関数を置いてよい。表に載せない型 (`HeapError` など) は、写しの側で証明に要る部分だけを持てばよい。
+
+Verus が扱えない書き方 (`Range::contains`、`bool::then`、書式つきの `unreachable!` など) は、本体を意味を変えずに Verus が扱える書き方にし、写しも同じにする。どう書いても Verus が扱えない関数は、その関数を表から外し、何を外したかと理由を報告する。`#[inline]` などの属性は照合で除かれるので、本体に残す。
+
+- [ ] **Step 1: 即値を整数の関数に分ける**
+
+`Word` はポインタ型なので Verus で扱えない。`word.rs` に、ビット列の計算を受け持つ整数の関数を置き、`Word` のメソッドはそれを呼ぶ形にする。名前と形は次のとおりにする。
+
+```rust
+/// 63 ビットに収まるか。
+pub(crate) const fn fits_imm(n: i64) -> bool {
+    Word::MIN_INT <= n && n <= Word::MAX_INT
+}
+
+/// 即値のビット列 `(n << 1) | 1`。
+pub(crate) const fn imm_bits(n: i64) -> usize {
+    ((n << 1) | 1) as usize
+}
+
+pub(crate) const fn is_imm_bits(bits: usize) -> bool {
+    bits & 1 == 1
+}
+
+/// ポインタの語のビット列か。空の語 (0) はポインタでない。
+pub(crate) const fn is_ptr_bits(bits: usize) -> bool {
+    bits & 1 == 0 && bits != 0
+}
+
+/// 即値の値。算術右シフトで1ビットずらす。
+pub(crate) const fn imm_value_bits(bits: usize) -> i64 {
+    (bits as i64) >> 1
+}
+```
+
+`Word::imm` は `assert!(fits_imm(n))` の後に `imm_bits(n)` を使い、`Word::int` は `fits_imm` を、`is_imm`、`is_ptr`、`imm_value` はそれぞれの関数を `self.0.addr()` に使う。`is_ptr` の `!self.0.is_null()` は `addr() != 0` と同じである。`MIN_INT` と `MAX_INT` は `impl Word` に残す。写しの側では、`impl Word` に2つの定数だけを持つ `Word` を置く。
+
+Run: `cargo test -p eml_rt word`
+Expected: 通る (動作は変わらない)
+
+- [ ] **Step 2: 写しと証明を書く**
+
+`crates/eml_rt/verus/lib.rs` に `mod check; mod meta; mod word;` を足し、`crates/eml_rt/src/verus_copies.rs` の `COPIES` に次の行を足す。名前は照合のテストの書き方 (`型::名前` は `impl 型` の中の項目) に従う。
+
+| 本体 | 写し | 項目 |
+|---|---|---|
+| `meta.rs` | `../verus/meta.rs` | `Kind`、`Kind::from_bits`、`Meta`、`Meta::LIN`、`Meta::KIND_SHIFT`、`Meta::KIND_MASK`、`Meta::new`、`Meta::tag`、`Meta::scan`、`Meta::kind`、`Meta::lin`、`Meta::with_lin`、`Meta::same_shape` |
+| `word.rs` | `../verus/word.rs` | `Word::MIN_INT`、`Word::MAX_INT`、`fits_imm`、`imm_bits`、`is_imm_bits`、`is_ptr_bits`、`imm_value_bits` |
+| `rc.rs` | `../verus/rc.rs` | Task 8 の行に `LOCAL_MAX`、`DUP_LIMIT`、`DupStep`、`DecrefStep`、`dup_step`、`decref_step` を足す |
+| `heap/check.rs` | `../verus/check.rs` | `layout_check`、`reuse_in_place_check` |
+
+示すことは次のとおりである。
+
+1. ヘッダの詰め方
+   - 種類のビット (`(m >> KIND_SHIFT) & KIND_MASK`) が 0、1、2、15 のどれかであることを、`Meta` の正しさ (`spec fn`) にする。`new` と `with_lin` の結果は正しく、`kind` は正しい `Meta` を要る。`Kind::from_bits` の `unreachable!` の枝に届かないことは、この要件から出る
+   - 任意の `tag`、`scan`、`kind`、`lin` で、`Meta::new(tag, scan, kind, lin)` の `tag()`、`scan()`、`kind()`、`lin()` が元の値に戻る
+   - `m.with_lin(b)` は、`lin()` が `b` で、`tag()`、`scan()`、`kind()` が `m` と同じである
+   - `a.same_shape(b)` は、`a` と `b` の `tag()`、`scan()`、`kind()` が同じときだけ真である
+2. 即値
+   - `fits_imm(n)` は、n が `MIN_INT` 以上 `MAX_INT` 以下のときだけ真である
+   - `fits_imm(n)` なら、`imm_bits(n)` は `is_imm_bits` が真、`is_ptr_bits` が偽で、`imm_value_bits(imm_bits(n)) == n` である
+   - `is_imm_bits` と `is_ptr_bits` が同時に真になるビット列はなく、0 はどちらでもない
+3. RC の遷移。spec の「Verus」の3の対応を `spec fn` で書き、1回の遷移が対応を保つことを `proof fn` で示す。対応の状態は、rc、数 (`nat`)、張り付きの旗である。遷移は、Kani のハーネスと同じく次の3つである
+   - `dup`: 数を1増やす。`dup_step` が `Store(n)` なら rc を n に、`Shared` なら rc を1減らし、`Skip` なら変えない
+   - `decref` (数が正のときだけ): 数を1減らす。`Store(n)` なら rc を n に、`Free` なら解放、`Shared` なら rc を1増やして 0 になれば解放、`Skip` なら変えない
+   - 印付け: `mark_step` が `Some(n)` なら rc を n にする
+   - 遷移の後、rc が `LOCAL_MAX` か `DROP_LIMIT` より小さければ旗を立てる。示すことは、張り付いていなければ遷移の後も符号を除いた rc が数に一致して数が正であること、解放するのは張り付いていない物体の数が 0 になったときだけであること、rc が 0 なら3つの遷移のどれも rc を変えず解放もしないことである。始めの状態は、rc が 0 でなく、数が符号を除いた rc で、旗は rc が `LOCAL_MAX` か `DROP_LIMIT` より小さいときに立つ
+   - `rc - 1` と `rc + 1` が桁あふれしないことも示す (`Shared` の枝は `DUP_LIMIT` 以上か `DROP_LIMIT` 以上で、負である)
+4. 判定 (spec の5)
+   - `layout_check(m, scanned, tag, keep_len)` が `Ok` になるのは、`m.kind()` が `Data`、`m.tag() == tag`、`scanned == keep_len` のときだけである
+   - `reuse_in_place_check(boxed, new)` が `Ok` になるのは、`boxed.same_shape(new)` で、`boxed.lin() && !new.lin()` でないときだけである。`Err` の値は、形の違いなら `WrongMeta`、`lin` ビットを落とすなら `LinBitKept` である
+
+Run: `crates/eml_rt/verus/check.sh`
+Expected: `0 errors`
+
+Run: `cargo test -p eml_rt verus_copies`
+Expected: 通る
+
+- [ ] **Step 3: 証明が空でないことを確かめる**
+
+次の3つを一時的に試し、`check.sh` が落ちることを確かめてから元に戻す。報告に結果を書く。
+
+- `Meta::new` の `KIND_SHIFT` を 23 にする
+- `imm_value_bits` の算術右シフトを、`u64` の論理右シフトにする (`((bits as u64) >> 1) as i64`)
+- `decref_step` の `rc == 1` の枝を `rc == 2` にする
+
+- [ ] **Step 4: Kani を指すコメントを直す**
+
+`rc.rs` の module のコメントの「ヒープ、単体テスト、Kani が同じ関数を使う」を「ヒープと単体テストが同じ関数を使い、Verus が写しで同じ関数を証明する」にする。`heap/check.rs` の「Kani が同じ関数を確かめる」の2か所を「Verus が写しで同じ関数を証明する」にする。
+
+Run: `grep -rn 'Kani\|kani' crates/eml_rt`
+Expected: 何も出ない
+
+- [ ] **Step 5: 全体を確かめる**
+
+Run: `cargo test -p eml_rt && cargo clippy -p eml_rt --all-targets -- -D warnings && cargo fmt --check && cargo test -p eml_cli --test integration citations && crates/eml_rt/verus/check.sh`
+Expected: 通る
+
+- [ ] **Step 6: コミット**
+
+```bash
+git add -A crates/eml_rt
+git commit -m "Prove the header, immediates, RC transitions, and reuse checks in Verus
+
+The proofs cover every value: Meta packing round-trips, immediates hold
+exactly the 63-bit integers, each RC transition keeps the count model
+(so any sequence does), and the release and reuse checks accept exactly
+the named shapes. Word's bit arithmetic moves into integer functions so
+the copies can state it without pointers.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01YLHZowtbHVXEbsTMFYwSMN"
+```
+
+---
+
+### Task 10: Miri と、差し替えの層を消す
+
+**Files:**
+- Delete: `crates/eml_rt/src/sync.rs`
+- Modify: `crates/eml_rt/src/lib.rs` (`mod sync;` を消す)
+- Modify: `crates/eml_rt/src/{alloc,meta,rc}.rs`、`crates/eml_rt/src/heap/{mod,check,reuse,share,walk}.rs`、`crates/eml_rt/src/heap/tests/share.rs` (`crate::sync` を `std` に)
+- Modify: `crates/eml_rt/Cargo.toml` (`[lints.rust]` の `check-cfg` を消す)
 - Modify: Miri が誤りを見つけたら、その原因のファイル
 
 **Interfaces:**
-- Consumes: Task 2 から Task 8 のすべて
-- Produces: Miri の2つの設定で通る単体テスト、`--cfg loom` で組み立つ crate
+- Consumes: Task 2 から Task 9 のすべて
+- Produces: Miri の2つの設定で通る単体テスト。`sync` の module はなくなる
 
 - [ ] **Step 1: Miri を strict provenance で流す**
 
@@ -4107,55 +4366,29 @@ Expected: すべてのテストが通る。Miri が UB を報告したら、報�
 Run: `nix develop .#miri -c env MIRIFLAGS="-Zmiri-strict-provenance -Zmiri-tree-borrows" cargo miri test -p eml_rt`
 Expected: すべてのテストが通る。誤りの扱いは Step 1 と同じ
 
-- [ ] **Step 3: loom への差し替えを書く**
+- [ ] **Step 3: 差し替えの層を消す**
 
-`crates/eml_rt/Cargo.toml` の `[dependencies]` の後に足す:
+spec の「`unsafe` の核」のとおり、atomic と確保の関数は std のものを直接使う。`crates/eml_rt/src/sync.rs` を消し、`lib.rs` の `mod sync;` を消す。`use crate::sync::…` を、同じ名前の `std::alloc::…` か `std::sync::atomic::…` に置き換える (`heap/tests/share.rs` の `Ordering as AtomicOrdering` の別名は残す)。`Cargo.toml` の `[lints.rust]` の節を消す (`cfg(loom)` も `cfg(kani)` も使わない)。
 
-```toml
-[target.'cfg(loom)'.dependencies]
-loom = "0.7"
-```
+`meta.rs` の `HEADER_WORDS` のコメントを「ヘッダの語の数。8 と書かずに大きさから出し、ヘッダの形を変えたときに数え直す所を1か所にする。」にする。
 
-`crates/eml_rt/src/sync.rs` を次にする:
+Run: `grep -rn 'sync::\|loom\|同期の層' crates/eml_rt`
+Expected: `std::sync::atomic` の行のほかは何も出ない
 
-```rust
-//! atomic とページの確保の層 (docs/superpowers/specs/2026-10-13-s9a-eml-rt-core-design.md の「`unsafe` と同期の層」)。
-//! `cfg(loom)` のときは loom の型に差し替える。loom の試験そのものは VM の並列化のときに書き、今は loom のビルドで
-//! ヒープのコードが組み立つことまでを確かめる。
+- [ ] **Step 4: 全体を確かめる**
 
-#[cfg(not(loom))]
-pub(crate) use std::alloc::{Layout, alloc, dealloc};
-pub(crate) use std::alloc::handle_alloc_error;
-#[cfg(not(loom))]
-pub(crate) use std::sync::atomic::{AtomicI32, AtomicU32, Ordering};
+Run: `cargo test && cargo clippy --all-targets -- -D warnings && cargo fmt --check && cargo test -p eml_cli --test integration citations && nix build && crates/eml_rt/verus/check.sh`
+Expected: どれも通る。`verus_copies` のテストは、写しの関数の本体が `sync` を名指さないので変わらない
 
-#[cfg(loom)]
-pub(crate) use loom::alloc::{Layout, alloc, dealloc};
-#[cfg(loom)]
-pub(crate) use loom::sync::atomic::{AtomicI32, AtomicU32, Ordering};
-```
-
-loom 0.7 の `loom::alloc` に `Layout` がなければ、loom の側でも `std::alloc::Layout` を使う (`loom::alloc::alloc` は `std::alloc::Layout` を受け取る)。
-
-- [ ] **Step 4: loom のビルドを確かめる**
-
-Run: `RUSTFLAGS="--cfg loom" cargo check -p eml_rt --target-dir target/loom`
-Expected: 組み立つ。`Header` の大きさを数字の 8 で書いた所があって組み立たないときは、`size_of::<Header>()` か `HEADER_WORDS` に直す。`--target-dir` を分けるのは、ふだんのビルドの成果物を作り直させないためである
-
-- [ ] **Step 5: 全体を確かめる**
-
-Run: `cargo test && cargo clippy --all-targets -- -D warnings && cargo fmt --check && cargo test -p eml_cli --test integration citations && nix build`
-Expected: どれも通る。`nix build` は `Cargo.lock` に足した loom の crate を取り込んでも組み立つ
-
-- [ ] **Step 6: コミット**
+- [ ] **Step 5: コミット**
 
 ```bash
-git add crates/eml_rt Cargo.lock
-git commit -m "Check eml_rt under Miri and build it against loom
+git add -A crates/eml_rt
+git commit -m "Check eml_rt under Miri and drop the sync layer
 
 The unit tests pass under Miri with strict provenance and with Tree
-Borrows; the sync layer swaps in loom's atomics and allocator under
-cfg(loom), and the crate builds that way.
+Borrows. The sync module existed to swap in loom's types; Verus checks
+copies instead, so the core uses std's atomics and allocator directly.
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01YLHZowtbHVXEbsTMFYwSMN"
@@ -4165,7 +4398,7 @@ Miri の誤りを直したときは、このコミットとは別に、直した
 
 ---
 
-### Task 10: 計測
+### Task 11: 計測
 
 **Files:**
 - Create: `crates/eml_rt/examples/rt_bench.rs`
@@ -4173,7 +4406,7 @@ Miri の誤りを直したときは、このコミットとは別に、直した
 
 **Interfaces:**
 - Consumes: `eml_rt` の公開の API (`Heap<Fast>`、`Meta`、`Kind`、`Word`、`Token`)
-- Produces: `bench/rt.sh` の出力 (Task 11 で `benchmarks.md` に記録する)
+- Produces: `bench/rt.sh` の出力 (Task 12 で `benchmarks.md` に記録する)
 
 - [ ] **Step 1: 計測用のプログラムを書く**
 
@@ -4353,7 +4586,7 @@ done
 - [ ] **Step 3: 流す**
 
 Run: `bench/rt.sh`
-Expected: 6行の表が出る。`list` が `box-list` より命令の数が少ない (自前の確保器が malloc より速い) こと、`map-reuse` が `map` より少ないことを見る。逆になったら、数を添えて報告する (計測の結果で設計を見直すかを相談する)。出力は Task 11 で使うので、そのまま書き留める
+Expected: 6行の表が出る。`list` が `box-list` より命令の数が少ない (自前の確保器が malloc より速い) こと、`map-reuse` が `map` より少ないことを見る。逆になったら、数を添えて報告する (計測の結果で設計を見直すかを相談する)。出力は Task 12 で使うので、そのまま書き留める
 
 - [ ] **Step 4: clippy とコミット**
 
@@ -4373,7 +4606,7 @@ Claude-Session: https://claude.ai/code/session_01YLHZowtbHVXEbsTMFYwSMN"
 
 ---
 
-### Task 11: 文書
+### Task 12: 文書
 
 **Files:**
 - Create: `docs/spec/object-model.md`
@@ -4388,7 +4621,7 @@ Claude-Session: https://claude.ai/code/session_01YLHZowtbHVXEbsTMFYwSMN"
 - Delete: `docs/superpowers/plans/2026-10-13-s9a-eml-rt-core.md`
 
 **Interfaces:**
-- Consumes: Task 1 の Kani の導入の結論、Task 8 の spec からのずれ、Task 10 の計測の表
+- Consumes: Task 8 の Verus の導入と `check.sh`、Task 8 と Task 9 の報告 (写しにした関数、外した関数、spec からのずれ)、Task 11 の計測の表
 - Produces: S9a の決めたことの規範の文書
 
 文書を書く前に `yomiyasu:yomiyasu` のスキルを呼ぶ。
@@ -4426,7 +4659,7 @@ Claude-Session: https://claude.ai/code/session_01YLHZowtbHVXEbsTMFYwSMN"
 ### 不死の物体の数え方
 ### 報告する誤り
 ### 論理的な worker ID
-## `unsafe` と同期の層
+## `unsafe` の核
 ## 受け入れる制約
 ```
 
@@ -4435,11 +4668,12 @@ spec からずれた所は、実装に合わせて書く。
 - 「核の操作」の `alloc` と `con_at` はペイロードの語の数を受け取る (spec にすでにある)
 - `Kind` の欄は型ごとの表でなく `match` で決める
 - 検査モードの token の表は添字を使い回さない
-- Kani の4つ目のハーネスは、`release` と reuse の判定の純粋な関数を確かめる。展開した列が一般の版と同じ結果になることは、単体テストで確かめる (Task 8 の注)
+- 検証の節 (単体テスト、Miri、Verus、計測) は移さない。`testing.md` と `benchmarks.md` に書く (Step 4)
 
 - [ ] **Step 2: コメントの引用を移す**
 
 Run: `grep -rl 'docs/superpowers/specs/2026-10-13-s9a-eml-rt-core-design.md' crates/eml_rt | xargs sed -i '' 's#docs/superpowers/specs/2026-10-13-s9a-eml-rt-core-design.md#docs/spec/object-model.md#g'`
+Run: `grep -rl 'spec の「Verus」' crates/eml_rt | xargs sed -i '' 's#spec の「Verus」#docs/implementation/testing.md の「Verus」#g'`
 Run: `grep -rl 'spec の「' crates/eml_rt | xargs sed -i '' 's#spec の「#docs/spec/object-model.md の「#g'`
 Run: `grep -rn 'spec の「\|s9a-eml-rt-core' crates/eml_rt`
 Expected: 何も出ない (`docs/spec/object-model.md の「` は `spec の「` を含まない)
@@ -4450,31 +4684,31 @@ Expected: 通る。見出しのない引用と言われたら、Step 1 の見出
 
 `docs/future/roadmap.md` の「S9 共通ランタイム `eml_rt`」の節:
 
-- 「前提: S8。」の後に、S8 の節と同じ形の作業の表を足す。S9a の行は「語、ヘッダ、ページの確保器、局所と共有の RC、`share`、`lin` ビット、reuse の部品、検査モード、Miri と Kani」で、状態は「終えた。決めたことは [オブジェクトモデル](../spec/object-model.md) に移した。`eml_rt` はまだパイプラインから使わないので、UI テストの出力と `bench/` の仕事の回数は変わらない ([計測の基準](../implementation/benchmarks.md) の「S9a (`eml_rt` の核)」)」。S9b の行は「物体の種類ごとの中身 (データの物理的な形と、その規則を出す関数の置き場所、文字列、クロージャと `copy`、evidence の物体、`File`)、`Ctx`、`FnEntry`、`CodeBase`、語の ABI の extern と差分テスト」で、状態は「これから」
+- 「前提: S8。」の後に、S8 の節と同じ形の作業の表を足す。S9a の行は「語、ヘッダ、ページの確保器、局所と共有の RC、`share`、`lin` ビット、reuse の部品、検査モード、Miri と Verus」で、状態は「終えた。決めたことは [オブジェクトモデル](../spec/object-model.md) に移した。`eml_rt` はまだパイプラインから使わないので、UI テストの出力と `bench/` の仕事の回数は変わらない ([計測の基準](../implementation/benchmarks.md) の「S9a (`eml_rt` の核)」)」。S9b の行は「物体の種類ごとの中身 (データの物理的な形と、その規則を出す関数の置き場所、文字列、クロージャと `copy`、evidence の物体、`File`)、`Ctx`、`FnEntry`、`CodeBase`、語の ABI の extern と差分テスト」で、状態は「これから」
 - 「決めたこと」の項目のうち S9a で移したもの (語、`tobj` の `Int`、ヘッダ、記述子、RC の符号、共有の経路、reuse しないこと、`lin` ビット、検査モード、reuse の備え、ダミー、`unsafe` の核) は、項目を1行にまとめて [オブジェクトモデル](../spec/object-model.md) の該当の節を指す
 - 「共有の物体から届くのは共有か不死の物体だけ」を「共有の物体から届くのは、共有か不死の物体か、`lin` ビットの立った局所の物体だけ」に改め、理由 (`poly` の親の中の `lin` の子) を [オブジェクトモデル](../spec/object-model.md) の「`share`」で指す
-- 「論点」の確保器の選定、`tobj` の中の `enum` のタグの表し方、検証の道具の採否を消し、作業の表の後に「S9a で閉じた論点」として、決めたこと (自前のページの確保器、即値、Miri の2つの設定と Kani と loom のビルド) を書く
+- 「論点」の確保器の選定、`tobj` の中の `enum` のタグの表し方、検証の道具の採否を消し、作業の表の後に「S9a で閉じた論点」として、決めたこと (自前のページの確保器、即値、Miri の2つの設定と Verus) を書く
+- S9 の節の Kani の項目と、`cfg(loom)` の差し替えの層の項目を、spec の「Verus」と「`unsafe` の核」に合わせて改める。Kani の代わりに Verus で、値の全域と任意のグラフについて証明する。差し替えの層は置かない
 
-`docs/future/multicore.md` の「`par` の印付け」と「テスト」で、共有の物体から届く物体を述べる文があれば、同じ形に改める。「確定した設計判断」の 7 の「ヒープの実装方式」は、[オブジェクトモデル](../spec/object-model.md) の「確保器」を指す。
+`docs/future/multicore.md` の「`par` の印付け」と「テスト」で、共有の物体から届く物体を述べる文があれば、同じ形に改める。検証の節の Kani と loom の項目は、Verus に改める。並行の手順は VM の並列化のときに Verus で証明し、vstd の atomic は SeqCst だけを扱うので、atomic の順序は文書の議論と Miri に任せる (spec の「Verus」)。「確定した設計判断」の 7 の「ヒープの実装方式」は、[オブジェクトモデル](../spec/object-model.md) の「確保器」を指す。
 
 - [ ] **Step 4: testing.md、benchmarks.md、README、CLAUDE.md を直す**
 
 `docs/implementation/testing.md`:
 
-- 「層ごとの方法」か新しい節「`eml_rt` の検証」に、単体テストの形 (`both_modes!` でモードを型の引数に取る関数を2つのテストにする、検査モードだけのテストは誤りごとに最小の列を1つ置く、`cfg!(miri)` で大きさを小さくする)、Miri の2つの設定、Kani のハーネスと導入の方法 (Task 1 の結論)、loom のビルドの確かめを書く
+- 「層ごとの方法」か新しい節「`eml_rt` の検証」に、単体テストの形 (`both_modes!` でモードを型の引数に取る関数を2つのテストにする、検査モードだけのテストは誤りごとに最小の列を1つ置く、`cfg!(miri)` で大きさを小さくする)、Miri の2つの設定を書く。その下に見出し「Verus」の小節を置き、spec の「Verus」の中身 (写しの置き場所、5つの証明、単体テストに任せるもの、写しの照合のテストの規則、信頼する部分、Task 8 の導入の手順と `check.sh`、並行の手順と atomic の順序の扱い) と、Task 8 と Task 9 の報告の写しにした関数と外した関数を書く
 - 「よく使うコマンド」に次を足す
 
   ```sh
   nix develop .#miri -c env MIRIFLAGS="-Zmiri-strict-provenance" cargo miri test -p eml_rt   # Miri (Tree Borrows は -Zmiri-tree-borrows を足す)
-  cargo kani -p eml_rt                                                                        # Kani のハーネス
-  RUSTFLAGS="--cfg loom" cargo check -p eml_rt --target-dir target/loom                       # loom のビルド
+  crates/eml_rt/verus/check.sh                                                                # Verus の証明 (Nix の外の toolchain を使う)
   bench/rt.sh                                                                                 # eml_rt の速いモードの命令の数 (macOS、release)
   ```
 
 `docs/implementation/benchmarks.md`:
 
 - 「命令の数の測り方」に、`bench/rt.sh` が `crates/eml_rt/examples/rt_bench.rs` の6つの計測 (`empty`、`list`、`box-list`、`dup`、`map`、`map-reuse`) を測ることを足す
-- 「記録」に「S9a (`eml_rt` の核)」を足し、Task 10 の出力の環境と表を写す。`list` と `box-list`、`map` と `map-reuse` の差を数で書く。`bench/run.sh` の表は、`eml run` を変えていないので測らないと書く
+- 「記録」に「S9a (`eml_rt` の核)」を足し、Task 11 の出力の環境と表を写す。`list` と `box-list`、`map` と `map-reuse` の差を数で書く。`bench/run.sh` の表は、`eml run` を変えていないので測らないと書く
 
 `docs/README.md` の文書の地図の `spec/runtime.md` の行の後に足す:
 
@@ -4486,7 +4720,7 @@ Expected: 通る。見出しのない引用と言われたら、Step 1 の見出
 
 ```sh
 nix develop .#miri -c env MIRIFLAGS="-Zmiri-strict-provenance" cargo miri test -p eml_rt   # Miri (add -Zmiri-tree-borrows for Tree Borrows)
-cargo kani -p eml_rt                 # Kani harnesses
+crates/eml_rt/verus/check.sh         # Verus proofs of eml_rt (runs outside Nix; see testing.md)
 bench/rt.sh                          # eml_rt fast-mode instruction counts (macOS)
 ```
 
@@ -4514,7 +4748,7 @@ git commit -m "Document the eml_rt core and delete the S9a design and plan
 The decisions of S9a move to docs/spec/object-model.md; the roadmap gets
 the S9a/S9b table and the closed points, the shared reachability rule now
 allows local lin-bit children, and testing.md and benchmarks.md describe
-Miri, Kani, the loom build, and bench/rt.sh.
+Miri, Verus, and bench/rt.sh.
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01YLHZowtbHVXEbsTMFYwSMN"
