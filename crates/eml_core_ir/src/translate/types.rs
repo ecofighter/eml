@@ -38,8 +38,7 @@ pub(super) fn type_def_repr(id: TypeDefId, hir: &HirProgram) -> Repr {
     }
 }
 
-/// instance の代入をかけた型の印 (docs/spec/core-ir.md の
-/// 「translate が決める印」)。宣言に対して相対的な型は現れないので、`TypeStore::linearity` で読む。
+/// instance の代入をかけた型の印 (docs/spec/core-ir.md の「translate が決める印」)。宣言に対して相対的な型は現れないので、`TypeStore::linearity` で読む。
 pub(super) fn mark(types: &TypeStore, ty: TypeId) -> Mark {
     mark_of(types.linearity(ty))
 }

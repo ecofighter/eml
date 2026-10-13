@@ -457,8 +457,8 @@ impl<'a> FnLowering<'a> {
     /// `root` を、捕まえた変数を先頭の引数に持つ関数に持ち上げ、そのクロージャを作る (docs/spec/core-ir.md)。ラムダと、
     /// handle の本体と節に使う。関数の番号は持ち上げる前に取るので、入れ子の持ち上げは外側より後ろの番号になる。
     /// `yields` は持ち上げた関数の印である。クロージャの印は、型のあるラムダなら `typed` で、型のない handle の本体と
-    /// 節では捕まえた値の印の結びにする (docs/spec/core-ir.md の
-    /// 「translate が決める印」)。
+    /// 節では捕まえた値の印の結びにする
+    /// (docs/spec/core-ir.md の「translate が決める印」)。
     #[expect(
         clippy::too_many_arguments,
         reason = "the parts of one lifted function"

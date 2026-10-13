@@ -22,7 +22,7 @@ EP の後の Core IR から写す LIR と、それを実行する CEK 風のイ�
 - LIR は、EP の後の Core IR を写したものである ([Core IR](core-ir.md) の「Core IR から LIR への変換」)。Core IR との違いは次の2つである
   - エフェクトの命令 (`perform`、`handle`、`resume`) と、呼び出しの `mask` を持たない。LIR の型にないので、EP の後に残っていないことを verifier でなく型で保証する
   - RC の命令 (`dup`、`decref`、`release`)、`box` と `unbox`、末尾呼び出し `tail`、呼び出しの退避 (`saved`) を持つ。どれも LIR のパス (box の挿入、縮約、Perceus) だけが入れる。変換の直後の LIR はこれらを持たず、`passes_until` の入口の verifier がそれを確かめる (下の「パスの順番」)
-- 関数は、名前、内部の関数かどうかの印 (`internal`)、yield しうるかの印 (`yields`)、入口の関数の印 (`clause`)、変数の表、`ret`、ブロックの列を持つ。印は Core IR と同じ意味である ([Core IR](core-ir.md) の「`yields` の印」、下の「一様な関数」と「入口の関数の印」)。box の挿入が `internal` と `clause` を読み、`f$boxed` が `yields` を写し、S10 の VM も読む
+- 関数は、名前、内部の関数かどうかの印 (`internal`)、yield しうるかの印 (`yields`)、入口の関数の印 (`clause`)、変数の表、`ret` と `ret_mark`、ブロックの列を持つ。印は Core IR と同じ意味である ([Core IR](core-ir.md) の「`yields` の印」、下の「一様な関数」と「入口の関数の印」)。box の挿入が `internal` と `clause` を読み、`f$boxed` が `yields` を写し、S10 の VM も読む
 - プログラムは、関数、入口、文字列の表、配置の表、エフェクトの表、ファイルの表を持つ。Core IR のプログラムと同じ欄である。エフェクトの表は、`clause` の ABI (操作の Repr) と、基本操作の即値のために持つ
 - 呼び出しの退避 (`saved`) は、CEK だけが使う (下の「インタプリタ (CEK 機械)」)。S10 で CEK を消すまで LIR に残す
 - 2つの IR は別の型を持つ。型を読むだけでどちらの IR か分かり、LIR にエフェクトの命令がないことと、Core IR に RC と box がないことを、verifier でなく型で保証できるためである。重なる部品 (共有する型、テキスト形式の字句解析と共通の命令の読み書き、verifier の支配木と R8 と R9 の検査、基本操作と `clause` の検査) は `eml_lir` に置き、`eml_core_ir` が借りる
@@ -578,17 +578,17 @@ Perceus は、`switch` と `unpack` のフィールドを借りたまま使い�
 
 ### Kind の印の検査
 
-印は Core IR で決まり、後のパスは変えない (box の挿入は `unr` のスカラーを足すだけである)。そのため、誤った印を付けたパスの直後の段で見つかる。
+印は Core IR で決まり、後のパスは変えない (box の挿入は `unr` のスカラーを足し、ほかの変数には元の印を写すだけである)。そのため、誤った印を付けたパスの直後の段で見つかる。
 
 - V2: 値の受け渡しで、送り手と受け手の印が互換である。各段で Repr を比べる所と同じ所で走らせる
   - Core IR の2つの段と LIR の入口の段: `jump` の実引数と行き先の引数、`return` の値と関数の `ret_mark`
-  - LIR の範囲の段と所有の段: 上に加えて、直接の呼び出しの引数と仮引数、結果と戻り値の印、`closure` の引数と、クロージャにする関数の捕まえる引数、`apply` の位置 (いつも `poly` なので、実際には何も拒まない)、`extern`、`prim`、`clause` の引数と結果とそれぞれの表の列 (extern の行、基本操作の表、操作の表)、`clause` の印の付いた関数の引数と戻り値と操作の表の列
+  - LIR の範囲の段と所有の段: 上に加えて、直接の呼び出しの引数と仮引数、結果と戻り値の印、`closure` の引数と、クロージャにする関数の捕まえる引数、`tail` の結果と呼び出し元の `ret_mark`、`apply` の位置 (いつも `poly` なので、実際には何も拒まない)、`extern`、`prim`、`clause` の引数と結果とそれぞれの表の列 (extern の行、基本操作の表、操作の表)、`clause` の印の付いた関数の引数と戻り値と操作の表の列
   - `perform`、`handle`、`resume` (EP の前の Core IR にだけある) の受け渡しは比べない。EP がそれらを `clause` と基本操作に置き換えた後の段で比べる
-  - `clause` の呼ばれる側 (`ev_clause` が返す入口のクロージャ) の引数 0 の evidence と、`clause` の印の付いた関数の evidence の引数は、`unr` として比べる
+  - `clause` の呼ばれる側 (`ev_clause` が返す入口のクロージャ) は `unr` でなければならない。`clause` の呼び出しの引数 0 の evidence と、`clause` の印の付いた関数の evidence の引数も、`unr` として比べる
   - `never` の操作の `clause` の結果を束縛する変数は、Repr と同じく、どの使いでも V2 と作る所の検査の対象にしない。使いには制御が届かないためである (上の「`never` の操作」)
   - 定数はどの印とも合う
 - V1: `unr` でない変数に `dup` と `decref` を置かない。`dup` と `decref` は Perceus の後にしかないので、所有の段だけで走らせる。`unr` でない値を手放す命令は `drop` と `release` である
-- 作る所の検査: `con` と `closure` が束縛する変数の印は、引数の印の結び以上でなければならない (順序は `unr` < `poly` < `lin`)。V1 だけでは、誤って `unr` を付けた `List File` や `File` を捕まえたクロージャが `dup` されても気づけないので、作る所で塞ぐ。Core IR の2つの段と LIR のすべての段で走らせる。定数は `unr` として結び、`never` の束縛は数えない
+- 作る所の検査: `con` と `closure` が束縛する変数の印は、引数の印の結び以上でなければならない (順序は `unr` < `poly` < `lin`)。V1 だけでは、誤って `unr` を付けた `List File` や `File` を捕まえたクロージャが `dup` されても気づけないので、作る所で拒む。Core IR の2つの段と LIR のすべての段で走らせる。定数は `unr` として結び、`never` の束縛は数えない
 - 誤りの文言は次のとおりである
   - V1: `` `x.1` (lin) is duplicated, but only unr can be ``、`` `x.1` (poly) is released, but only unr can be ``
   - `jump` と `return`: ``a jump to b2 passes `x.1` (lin) to `p.3` (unr) ``、`` `x.1` (lin) is returned from a function that returns unr ``
