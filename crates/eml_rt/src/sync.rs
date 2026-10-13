@@ -2,4 +2,4 @@
 //! 後で `cfg(loom)` のときに loom の型へ差し替えるので、核はこの module から atomic と確保の関数を使う。
 
 pub(crate) use std::alloc::{Layout, alloc, dealloc, handle_alloc_error};
-pub(crate) use std::sync::atomic::{AtomicI32, Ordering};
+pub(crate) use std::sync::atomic::{AtomicI32, AtomicU32, Ordering};

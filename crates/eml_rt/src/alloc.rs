@@ -230,6 +230,7 @@ impl Pages {
     ///
     /// # Safety
     /// `h` はこの `Pages` が確保したブロックのヘッダを指す。
+    #[allow(dead_code)]
     pub(crate) unsafe fn fits(&self, h: NonNull<Header>, words: usize) -> bool {
         let block_words = words + self.prefix_words;
         let want = class_of(block_words).map_or(block_words, |class| CLASS_WORDS[class]);

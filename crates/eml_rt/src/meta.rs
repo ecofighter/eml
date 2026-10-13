@@ -47,6 +47,7 @@ impl Kind {
         }
     }
 
+    #[allow(dead_code)]
     pub(crate) fn tokenable(self) -> bool {
         matches!(self, Kind::Data)
     }

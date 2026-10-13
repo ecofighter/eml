@@ -58,6 +58,7 @@ pub(crate) fn decref_step(rc: i32) -> DecrefStep {
 
 /// `share` の1物体分の印付け。局所の数 n を −n にし、`DROP_LIMIT` より小さくなるなら `MIN` に張り付ける。局所でない数は
 /// たどりを止めるので `None` を返す。
+#[allow(dead_code)]
 pub(crate) fn mark_step(rc: i32) -> Option<i32> {
     if rc <= 0 {
         return None;

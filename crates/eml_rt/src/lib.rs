@@ -2,15 +2,32 @@
 //! 確保器、RC、`share`、reuse の部品、検査モードを持つ。まだどの crate からも使わない。
 
 mod alloc;
+mod error;
+mod foreign;
+mod heap;
 mod meta;
 mod mode;
 mod rc;
 mod sync;
 mod word;
 
+pub use error::HeapError;
+pub use heap::{Heap, Stats};
 pub use meta::{Kind, Meta};
 pub use mode::{Checked, Fast, Mode};
 pub use word::Word;
+
+/// `Heap` が `Sync` でないことをコンパイルの時点で確かめる。`Sync` なら下の2つの実装のどちらを選ぶかが決まらず、
+/// コンパイルが止まる (static_assertions の `assert_not_impl_any!` と同じ方法)。
+const _: fn() = || {
+    trait AmbiguousIfSync<A> {
+        fn some_item() {}
+    }
+    impl<T: ?Sized> AmbiguousIfSync<()> for T {}
+    impl<T: ?Sized + Sync> AmbiguousIfSync<u8> for T {}
+    let _ = <Heap<Fast> as AmbiguousIfSync<_>>::some_item;
+    let _ = <Heap<Checked> as AmbiguousIfSync<_>>::some_item;
+};
 
 #[cfg(test)]
 mod tests {
@@ -18,8 +35,12 @@ mod tests {
 
     fn send_and_sync<T: Send + Sync>() {}
 
+    fn send<T: Send>() {}
+
     #[test]
-    fn words_cross_threads() {
+    fn words_cross_threads_and_heaps_move_to_one() {
         send_and_sync::<Word>();
+        send::<Heap<Fast>>();
+        send::<Heap<Checked>>();
     }
 }
