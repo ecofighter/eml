@@ -12,7 +12,7 @@ mod sync;
 mod word;
 
 pub use error::HeapError;
-pub use heap::{Heap, Stats};
+pub use heap::{Heap, Stats, Token};
 pub use meta::{Kind, Meta};
 pub use mode::{Checked, Fast, Mode};
 pub use word::Word;

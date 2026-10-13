@@ -6,6 +6,7 @@
 
 pub(crate) mod check;
 mod release;
+mod reuse;
 pub(crate) mod share;
 mod walk;
 
@@ -25,6 +26,8 @@ use crate::mode::Mode;
 use crate::rc::{self, DecrefStep, DupStep};
 use crate::sync::Ordering;
 use crate::word::Word;
+
+pub use reuse::Token;
 
 use check::{PREFIX_WORDS, State};
 
@@ -49,6 +52,8 @@ pub struct Heap<M: Mode> {
     share_stack: Vec<NonNull<Header>>,
     /// 検査モードの `share` が訪れた `lin` の物体。
     visited_lin: Vec<NonNull<Header>>,
+    /// 検査モードの token の表。項目は箱と、`into_token` のときの世代の番号である。
+    tokens: Vec<Option<(NonNull<Header>, u32)>>,
     dummy: Word,
     /// 検査モードで隔離した (使い回さない) ブロックのバイト数。
     quarantined: usize,
@@ -96,6 +101,7 @@ impl<M: Mode> Heap<M> {
             work: Vec::new(),
             share_stack: Vec::new(),
             visited_lin: Vec::new(),
+            tokens: Vec::new(),
             dummy: Word::EMPTY,
             quarantined: 0,
             stats: Stats::default(),

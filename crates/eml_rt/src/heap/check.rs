@@ -211,3 +211,15 @@ impl<M: Mode> Heap<M> {
         unsafe { self.check_owner(h, rc) }
     }
 }
+
+/// `reuse_in_place` の照らし合わせ (spec の「`lin` ビット」)。`lin` ビットは、箱が持ち新しい `meta` が持たないときだけ
+/// 誤りにする。ビットが欠けるのは安全の側だからである。Kani が同じ関数を確かめる。
+pub(crate) fn reuse_in_place_check(boxed: Meta, new: Meta) -> Result<(), HeapError> {
+    if !boxed.same_shape(new) {
+        return Err(HeapError::WrongMeta);
+    }
+    if boxed.lin() && !new.lin() {
+        return Err(HeapError::LinBitKept);
+    }
+    Ok(())
+}

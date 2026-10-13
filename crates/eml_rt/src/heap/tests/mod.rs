@@ -20,6 +20,7 @@ macro_rules! both_modes {
 
 mod basics;
 mod checked;
+mod reuse;
 mod share;
 
 /// Miri で遅くなりすぎない長さ。
