@@ -224,7 +224,7 @@ pub(crate) open spec fn mark_next(s: Obj) -> Next {
 }
 
 // 定理。1回の遷移ごとに対応が保たれるので、任意の i32 から始めた任意の長さの列でも保たれる
-proof fn lemma_start(rc: i32)
+pub(crate) proof fn lemma_start(rc: i32)
     requires
         rc != 0,
     ensures
@@ -233,14 +233,14 @@ proof fn lemma_start(rc: i32)
 }
 
 /// 共有の数を動かす枝は負の数の上でだけ選ばれるので、`rc - 1` と `rc + 1` は i32 の範囲に収まる
-proof fn lemma_shared_steps_stay_in_range(rc: i32)
+pub(crate) proof fn lemma_shared_steps_stay_in_range(rc: i32)
     ensures
         dup_spec(rc) is Shared ==> DUP_LIMIT <= rc < 0 && i32::MIN <= rc - 1,
         decref_spec(rc) is Shared ==> DROP_LIMIT <= rc < 0 && rc + 1 <= 0,
 {
 }
 
-proof fn lemma_dup(s: Obj)
+pub(crate) proof fn lemma_dup(s: Obj)
     requires
         corresponds(s),
     ensures
@@ -249,7 +249,7 @@ proof fn lemma_dup(s: Obj)
 {
 }
 
-proof fn lemma_decref(s: Obj)
+pub(crate) proof fn lemma_decref(s: Obj)
     requires
         corresponds(s),
         s.count > 0,
@@ -261,7 +261,7 @@ proof fn lemma_decref(s: Obj)
 {
 }
 
-proof fn lemma_mark(s: Obj)
+pub(crate) proof fn lemma_mark(s: Obj)
     requires
         corresponds(s),
     ensures
@@ -271,7 +271,7 @@ proof fn lemma_mark(s: Obj)
 }
 
 /// 不死の数 0 は、どの遷移でも動かず、解放もされない
-proof fn lemma_immortal(s: Obj)
+pub(crate) proof fn lemma_immortal(s: Obj)
     requires
         s.rc == 0,
     ensures
@@ -283,16 +283,6 @@ proof fn lemma_immortal(s: Obj)
 
 } // verus!
 // まだ検証していないヒープが使う。ヒープを権限の上で書き直すときに `crate::cell` の関数に置き換える
-#[inline]
-pub(crate) fn dup_shared(rc: &AtomicI32) {
-    rc.fetch_sub(1, Ordering::Relaxed);
-}
-
-/// 共有の数を1つ減らし、最後の参照なら真を返す。`fence(Acquire)` を使わず、AcqRel の加算で最後の解放を順序付ける。
-#[inline]
-pub(crate) fn decref_shared(rc: &AtomicI32) -> bool {
-    rc.fetch_add(1, Ordering::AcqRel) == -1
-}
 
 /// 手放そうとしている参照が最後のものか。rc は Relaxed で読み、-1 のときだけ Acquire で読み直す。ふだんの rc が 1 の
 /// 道に Acquire の読み込みの費用を足さず、-1 のときは最後の AcqRel の `decref` と同期するためである。

@@ -95,8 +95,29 @@ fn a_heap_dropped_with_an_outstanding_token_and_large_objects_is_clean<M: Mode>(
     assert_eq!(drops.load(Ordering::Relaxed), 1);
 }
 
+fn kept_fields_return_to_edges_after_con_at<M: Mode>() {
+    let mut heap = Heap::<M>::new();
+    let a = list(&mut heap, 1);
+    let b = list(&mut heap, 2);
+    let p = cons(&mut heap, a, b);
+    unsafe {
+        // 残した2つのフィールドは書き直さない。箱の語のまま、新しい物体の辺に戻る
+        let token = heap.release_reuse(p, CONS, &[true, true]).unwrap();
+        let (q, reused) = heap.con_at(token, 2, PAIR_META).unwrap();
+        assert!(reused);
+        assert_eq!((heap.field(q, 0), heap.field(q, 1)), (Ok(a), Ok(b)));
+        heap.dup(a).unwrap();
+        heap.decref(a).unwrap();
+        assert_eq!(mortal(&heap), 4);
+        // 子の参照は q の辺だけなので、q を手放すと子もみな空く
+        heap.decref(q).unwrap();
+    }
+    assert_eq!(mortal(&heap), 0);
+}
+
 both_modes!(
     a_unique_cell_is_reused_in_place_without_writing_fields,
+    kept_fields_return_to_edges_after_con_at,
     a_box_moves_to_another_type_of_the_same_size,
     a_shared_object_is_never_a_token,
     a_shared_marked_object_is_never_a_token,

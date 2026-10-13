@@ -149,7 +149,7 @@ S9a では文書にだけあった前提も `requires` に書く。例えば `ra
 | `alloc` / `alloc_immortal` / `con_at` | `meta` の種類は `Foreign` でも `Free` でもない。`scan` は 255 でなく、走査する語はペイロードに収まる | | |
 | `field` / `set_field` | `set_field` の物体は、ほかのスレッドが読めない (局所か、構築中) | `set_field` が書く語は、呼ぶ側が数えた参照を持つ | i 語目は走査する語である (`OutOfBounds`) |
 | `scanned` | | | i は `scanned_len` より小さい (`OutOfBounds`) |
-| `raw` / `set_raw` | `raw` で読む語は先に書いてある。`set_raw` の物体は、ほかのスレッドが読めない | | 物体はデータである (`WrongKind`)。i 語目は、走査する語の後のブロックの中の語である (`OutOfBounds`) |
+| `raw` / `set_raw` | `raw` で読む語は先に書いてある。`set_raw` の物体は、ほかのスレッドが読めない | | 物体は `Foreign` でない (`WrongKind`。`alloc_immortal` で作る `BigInt` の値の語も `set_raw` で書く)。i 語目は、走査する語の後のブロックの中の語である (`OutOfBounds`) |
 | `unbox_int` | | | 物体は `BigInt` である (`WrongKind`) |
 | `dup` | | 呼ぶ側が参照を持つか、借りている | 物体は `lin` ビットを持たない (`LinDup`) |
 | `decref` / `release` / `release_reuse` | | 呼ぶ側が参照を1つ持つ。残さない子は呼ぶ側の参照と数える | 不死の物体の参照は `acquire_immortal` か `dup` で作った (`ImmortalOverRelease`)。共有の物体は `lin` ビットを持たない (`LinShared`)。`release` と `release_reuse` の物体はデータで、tag と走査する語の数が名指したものである (`WrongLayout`) |

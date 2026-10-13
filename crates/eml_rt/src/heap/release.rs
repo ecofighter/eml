@@ -11,6 +11,7 @@ use crate::meta::{self, Header};
 use crate::mode::Mode;
 use crate::rc;
 use crate::word::Word;
+use vstd::prelude::Ghost;
 
 impl<M: Mode> Heap<M> {
     /// `keep` は走査する語ごとに、その子の参照を呼ぶ側に残すかを持つ。
@@ -28,7 +29,7 @@ impl<M: Mode> Heap<M> {
             if M::CHECKED {
                 self.stats.rc_decrements += 1;
             }
-            unsafe { self.free_box(h) };
+            self.free_box(h.as_ptr());
             Ok(())
         } else {
             for (i, &kept) in keep.iter().enumerate() {
@@ -64,10 +65,10 @@ impl<M: Mode> Heap<M> {
                 continue;
             }
             let child = unsafe { scan_slot(h, i).read() };
-            if child.is_ptr() && unsafe { self.release_ref(child.header())? } {
+            if child.is_ptr() && self.release_ref(child.as_ptr(), Ghost::assume_new())? {
                 work.push(child);
             }
         }
-        unsafe { self.drain(work) }
+        self.drain(work)
     }
 }

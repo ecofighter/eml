@@ -4,13 +4,17 @@
 use std::ptr::NonNull;
 
 use super::{Heap, scan_count};
+use crate::cell::{u32_load, u32_store};
 use crate::error::HeapError;
 #[cfg(verus_only)]
+use crate::meta::field_ptr;
+#[cfg(verus_only)]
 use crate::meta::same_fields;
-use crate::meta::{self, HEADER_WORDS, Header, Kind, Meta};
+use crate::meta::{self, Header, Kind, Meta, PrefixPerm, prefix_first_ptr, prefix_state_ptr};
 use crate::mode::Mode;
 use std::sync::atomic::{AtomicU32, Ordering};
 use vstd::prelude::*;
+use vstd::raw_ptr::ptr_mut_write;
 
 #[repr(C)]
 pub(crate) struct Prefix {
@@ -20,9 +24,109 @@ pub(crate) struct Prefix {
     state: AtomicU32,
 }
 
-pub(crate) const PREFIX_WORDS: usize = size_of::<Prefix>().div_ceil(8);
+verus! {
+
+/// 前置きの語の数。
+pub(crate) const PREFIX_WORDS: usize = 1;
+
 /// `first` のこの値の不死の物体 (ダミー) は、数を変えも確かめもしない。
-pub(crate) const UNCOUNTED: u32 = u32::MAX;
+pub(crate) const UNCOUNTED: u32 = 0xFFFF_FFFF;
+
+/// 前置きの状態の欄の値。下位2ビットが状態、残りが世代の番号である。今確保したブロックは、世代 0 の生存にする。
+pub(crate) const ALIVE_STATE: u32 = 1;
+
+/// 今確保したブロックの前置きを書く。
+#[inline]
+pub(crate) fn init_prefix(h: *mut Header, first: u32, Tracked(perm): Tracked<&mut PrefixPerm>)
+    requires
+        h@.addr >= 8,
+        old(perm).first.ptr() == field_ptr::<u32>(h, -8),
+        old(perm).state.ptr() == field_ptr::<u32>(h, -4),
+    ensures
+        final(perm).first.ptr() == old(perm).first.ptr(),
+        final(perm).state.ptr() == old(perm).state.ptr(),
+        final(perm).first.is_init() && final(perm).first.value() == first,
+        final(perm).state.is_init() && final(perm).state.value() == ALIVE_STATE,
+{
+    ptr_mut_write(prefix_first_ptr(h), Tracked(&mut perm.first), first);
+    ptr_mut_write(prefix_state_ptr(h), Tracked(&mut perm.state), ALIVE_STATE);
+}
+
+/// 前置きの状態の「解放」の値。
+pub(crate) const FREED_STATE: u32 = 3;
+
+/// 前置きの状態を「解放」にし、世代の番号を1つ進める。
+#[inline]
+pub(crate) fn mark_freed(h: *mut Header, Tracked(perm): Tracked<&mut PrefixPerm>)
+    requires
+        h@.addr >= 8,
+        old(perm).state.ptr() == field_ptr::<u32>(h, -4),
+        old(perm).state.is_init(),
+    ensures
+        final(perm).first == old(perm).first,
+        final(perm).state.ptr() == old(perm).state.ptr(),
+        final(perm).state.is_init(),
+{
+    let p = prefix_state_ptr(h);
+    let bits = u32_load(p, Tracked(&perm.state));
+    let generation = (bits >> 2u32).wrapping_add(1);
+    u32_store(p, Tracked(&mut perm.state), (generation << 2u32) | FREED_STATE);
+}
+
+// 検査モードの検査。まだ証明していない (信頼の一覧のテストの「未証明」)。速いモードでは何も確かめない
+impl<M: Mode> Heap<M> {
+    #[verifier::external_body]
+    #[inline]
+    pub(super) fn checked_live(&self, h: *mut Header) -> (r: Result<(), HeapError>)
+        ensures
+            !M::CHECKED ==> r is Ok,
+    {
+        unsafe { self.check_live(NonNull::new_unchecked(h)) }
+    }
+
+    #[verifier::external_body]
+    #[inline]
+    pub(super) fn checked_owner(&self, h: *mut Header, rc: i32) -> (r: Result<(), HeapError>)
+        ensures
+            !M::CHECKED ==> r is Ok,
+    {
+        unsafe { self.check_owner(NonNull::new_unchecked(h), rc) }
+    }
+
+    #[verifier::external_body]
+    #[inline]
+    pub(super) fn checked_dup(&self, h: *mut Header) -> (r: Result<bool, HeapError>)
+        ensures
+            !M::CHECKED ==> r == Ok::<bool, HeapError>(false),
+    {
+        unsafe { self.check_dup(NonNull::new_unchecked(h)) }
+    }
+
+    #[verifier::external_body]
+    #[inline]
+    pub(super) fn checked_count_immortal(&self, h: *mut Header) -> (r: Result<bool, HeapError>)
+        ensures
+            !M::CHECKED ==> r == Ok::<bool, HeapError>(false),
+    {
+        unsafe { count_immortal(NonNull::new_unchecked(h), true) }
+    }
+
+    #[verifier::external_body]
+    #[inline]
+    pub(super) fn checked_decref(&self, h: *mut Header) -> (r: Result<bool, HeapError>)
+        ensures
+            !M::CHECKED ==> r == Ok::<bool, HeapError>(false),
+    {
+        unsafe { self.check_decref(NonNull::new_unchecked(h)) }
+    }
+}
+
+} // verus!
+
+const _: () = assert!(FREED_STATE == State::Freed as u32);
+const _: () = assert!(PREFIX_WORDS == size_of::<Prefix>().div_ceil(8));
+const _: () = assert!(UNCOUNTED == u32::MAX);
+const _: () = assert!(ALIVE_STATE == State::Alive as u32);
 
 #[repr(u32)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -62,22 +166,6 @@ pub(crate) unsafe fn prefix<'a>(h: NonNull<Header>) -> &'a Prefix {
             .cast::<u8>()
             .sub(PREFIX_WORDS * 8)
             .cast::<Prefix>()
-    }
-}
-
-/// # Safety
-/// `h` は検査モードのヒープが今確保したブロックのヘッダを指す。
-pub(crate) unsafe fn init_prefix(h: NonNull<Header>, first: u32) {
-    let prefix = Prefix {
-        first: AtomicU32::new(first),
-        state: AtomicU32::new(State::Alive as u32),
-    };
-    unsafe {
-        h.as_ptr()
-            .cast::<u8>()
-            .sub(PREFIX_WORDS * 8)
-            .cast::<Prefix>()
-            .write(prefix)
     }
 }
 
@@ -131,22 +219,6 @@ impl<M: Mode> Heap<M> {
                 owner,
                 worker: self.worker,
             })
-        }
-    }
-
-    pub(super) unsafe fn check_bounds(
-        &self,
-        h: NonNull<Header>,
-        i: usize,
-    ) -> Result<(), HeapError> {
-        if !M::CHECKED {
-            return Ok(());
-        }
-        let capacity = self.pages.block_words(h.as_ptr()) - PREFIX_WORDS - HEADER_WORDS;
-        if i < capacity {
-            Ok(())
-        } else {
-            Err(HeapError::OutOfBounds)
         }
     }
 

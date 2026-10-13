@@ -6,6 +6,7 @@ use std::marker::PhantomData;
 use std::ptr::NonNull;
 
 use crate::meta::{self, Header};
+use vstd::prelude::*;
 
 pub(crate) struct VTable {
     /// 型の照らし合わせに使う。表の番地は型ごとに1つと限らないので、番地では比べない。
@@ -70,3 +71,27 @@ pub(crate) unsafe fn finalizer(h: NonNull<Header>) -> Finalizer {
         }
     }
 }
+
+verus! {
+
+/// 破棄処理を呼ぶための値。関数のポインタを持つので、Verus には中身を見せない (信頼の一覧のテストの「未証明」)。
+#[verifier::external_body]
+pub(crate) struct FinalizerV {
+    inner: Finalizer,
+}
+
+/// `Foreign` の物体の破棄処理と値の位置を、物体の状態を替える前に読み出しておく。
+#[verifier::external_body]
+#[inline]
+pub(crate) fn finalizer_of(h: *mut Header) -> FinalizerV {
+    FinalizerV { inner: unsafe { finalizer(std::ptr::NonNull::new_unchecked(h)) } }
+}
+
+/// 破棄処理を呼ぶ。
+#[verifier::external_body]
+#[inline]
+pub(crate) fn run_finalizer(f: FinalizerV) {
+    unsafe { f.inner.run() }
+}
+
+} // verus!

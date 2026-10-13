@@ -1,13 +1,14 @@
 //! VM とネイティブで共有するランタイムの核 (docs/spec/object-model.md)。語、ヘッダ、
 //! 確保器、RC、`share`、reuse の部品、検査モードを持つ。まだどの crate からも使わない。
 
+// Verus の `while let` では条件で取り出す前の値を ghost の値に取れないので、`loop` と `match` で書くループがある
+#![allow(clippy::while_let_loop)]
+
 // Verus は crate の根に vstd の prelude を求める
 #[allow(unused_imports)]
 use vstd::prelude::*;
 
 mod alloc;
-// ヒープを権限の上で書き直すまで、まだどこからも使わない
-#[allow(dead_code)]
 mod cell;
 mod error;
 mod foreign;

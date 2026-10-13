@@ -138,6 +138,16 @@ impl Word {
         imm_value_bits(self.0.addr())
     }
 
+    /// 整数のビット列を入れた語。数の語、`BigInt` の値、生の語をペイロードに書くときに使う。provenance は持たない。
+    #[inline]
+    pub(crate) const fn from_bits(bits: usize) -> (w: Word)
+        ensures
+            w.bits_spec() == bits,
+            w.ptr_spec()@.provenance == vstd::raw_ptr::Provenance::null(),
+    {
+        Word(ptr::without_provenance_mut(bits))
+    }
+
     /// 語のポインタ。provenance を含む。
     pub(crate) closed spec fn ptr_spec(self) -> *mut () {
         self.0
@@ -269,6 +279,30 @@ pub proof fn lemma_imm_round_trip(n: i64)
         requires
             bits == ((n << 1) | 1) as usize,
             -0x4000_0000_0000_0000i64 <= n <= 0x3FFF_FFFF_FFFF_FFFFi64,
+    ;
+}
+
+/// `()` の語の値 1 は即値で、ポインタではない
+pub proof fn lemma_unit_bits()
+    ensures
+        is_imm_spec(1),
+        !is_ptr_spec(1),
+{
+    assert(1usize & 1 == 1) by (bit_vector);
+}
+
+/// 語に揃った 0 でない番地は、ポインタの語であり、即値ではない
+pub proof fn lemma_aligned_is_ptr(bits: usize)
+    requires
+        bits % 8 == 0,
+        bits != 0,
+    ensures
+        is_ptr_spec(bits),
+        !is_imm_spec(bits),
+{
+    assert(bits & 1 == 0) by (bit_vector)
+        requires
+            bits % 8 == 0,
     ;
 }
 

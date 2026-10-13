@@ -63,7 +63,7 @@ impl<M: Mode> Heap<M> {
         let prefix = unsafe { check::prefix(h) };
         prefix.set_state(State::Token, true);
         // 添字は使い回さない。使った項目を空のまま残して、古い token を確実に断るためである
-        self.tokens.push(Some((h, prefix.generation())));
+        self.tokens.push(Some((h.as_ptr(), prefix.generation())));
         Ok(Token(Word::imm((self.tokens.len() - 1) as i64)))
     }
 
@@ -81,6 +81,8 @@ impl<M: Mode> Heap<M> {
             .get_mut(index)
             .and_then(Option::take)
             .ok_or(HeapError::StaleToken)?;
+        // 表に入れたのは確保したブロックなので、null にならない
+        let h = unsafe { NonNull::new_unchecked(h) };
         let prefix = unsafe { check::prefix(h) };
         if prefix.state() != State::Token || prefix.generation() != generation {
             return Err(HeapError::StaleToken);
@@ -107,7 +109,11 @@ impl<M: Mode> Heap<M> {
             return Ok((unsafe { self.alloc(payload_words, meta) }, false));
         };
         if M::CHECKED {
-            if !self.pages.fits(h.as_ptr(), object_words(payload_words)) {
+            if !self
+                .core
+                .pages
+                .fits(h.as_ptr(), object_words(payload_words))
+            {
                 return Err(HeapError::WrongClass);
             }
             unsafe { check::prefix(h) }.set_state(State::Alive, false);
@@ -138,7 +144,7 @@ impl<M: Mode> Heap<M> {
     /// `token` はこのヒープの token で、まだ使っていない。
     pub unsafe fn drop_token(&mut self, token: Token) -> Result<(), HeapError> {
         if let Some(h) = unsafe { self.take_token(token)? } {
-            unsafe { self.free_box(h) };
+            self.free_box(h.as_ptr());
         }
         Ok(())
     }

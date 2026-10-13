@@ -16,7 +16,7 @@ use std::sync::atomic::Ordering;
 impl<M: Mode> Heap<M> {
     /// 切り出したすべてのブロックについて `f` を呼ぶ。
     pub(super) fn each_block(&self, mut f: impl FnMut(NonNull<Header>)) {
-        for h in self.pages.blocks() {
+        for h in self.core.pages.blocks() {
             // 切り出したブロックはページの中にあるので、null にならない
             f(unsafe { NonNull::new_unchecked(h) })
         }

@@ -214,7 +214,15 @@ impl Meta {
     pub(crate) const fn bits(self) -> (r: u32)
         ensures
             r == self.bits_spec(),
+            bits_wf(r),
+            bits_kind(r) == self.kind_spec(),
+            bits_scan(r) == self.scan_spec(),
+            bits_tag(r) == self.tag_spec(),
+            bits_lin(r) == self.lin_spec(),
     {
+        proof {
+            use_type_invariant(self);
+        }
         self.0
     }
 
@@ -265,6 +273,43 @@ impl Meta {
     #[verifier::type_invariant]
     closed spec fn wf(self) -> bool {
         known_kind(self.kind_bits()) && self.0 & 0x7000_0000 == 0
+    }
+}
+
+/// ヘッダの `meta` の欄の値 (整数) の仕様。ヒープの不変条件は、メモリの値をこの言葉で書く。
+pub(crate) open spec fn bits_wf(bits: u32) -> bool {
+    known_kind((bits >> 24) & 0xF) && bits & 0x7000_0000 == 0
+}
+
+pub(crate) open spec fn bits_kind(bits: u32) -> Kind {
+    kind_of((bits >> 24) & 0xF)
+}
+
+pub(crate) open spec fn bits_scan(bits: u32) -> u8 {
+    (bits >> 16) as u8
+}
+
+pub(crate) open spec fn bits_tag(bits: u32) -> u16 {
+    bits as u16
+}
+
+pub(crate) open spec fn bits_lin(bits: u32) -> bool {
+    bits & 0x8000_0000 != 0
+}
+
+impl Meta {
+    /// ヘッダから読んだ値を `Meta` に戻す。値が正しい形であることは、ヒープの不変条件が持つ。
+    #[inline]
+    pub(crate) fn from_bits(bits: u32) -> (r: Meta)
+        requires
+            bits_wf(bits),
+        ensures
+            r.bits_spec() == bits,
+            r.kind_spec() == bits_kind(bits),
+            r.scan_spec() == bits_scan(bits),
+            r.lin_spec() == bits_lin(bits),
+    {
+        Meta(bits)
     }
 }
 
@@ -365,7 +410,7 @@ global layout i32 is size == 4, align == 4;
 
 global layout Word is size == 8, align == 8;
 
-broadcast use vstd::layout::layout_of_primitives, vstd::raw_ptr::group_raw_ptr_axioms;
+broadcast use {vstd::layout::layout_of_primitives, vstd::raw_ptr::group_raw_ptr_axioms};
 
 /// ヘッダの語の数。
 pub(crate) const HEADER_WORDS: usize = 1;
@@ -414,8 +459,6 @@ pub(crate) fn slot_ptr(h: *mut Header, i: usize) -> (p: *mut Word)
 }
 
 /// 検査モードの前置きの2つの欄 (所有者 ID か不死の物体の数、状態と世代の番号) の位置。ヘッダの直前の1語にある。
-// ヒープを権限の上で書き直すまで、まだ使わない
-#[allow(dead_code)]
 #[inline]
 pub(crate) fn prefix_first_ptr(h: *mut Header) -> (p: *mut u32)
     requires
@@ -426,8 +469,6 @@ pub(crate) fn prefix_first_ptr(h: *mut Header) -> (p: *mut u32)
     (h as *mut u32).with_addr(h.addr() - 8)
 }
 
-// ヒープを権限の上で書き直すまで、まだ使わない
-#[allow(dead_code)]
 #[inline]
 pub(crate) fn prefix_state_ptr(h: *mut Header) -> (p: *mut u32)
     requires
@@ -691,13 +732,6 @@ impl BlockPerm {
 const _: () = assert!(HEADER_WORDS * 8 == size_of::<Header>());
 
 // まだ検証していないヒープのコードが使う生のポインタの関数。ヘッダとペイロードの権限の上で書き直すまで、`verus!` の外に置く
-
-/// # Safety
-/// `h` は確保したブロックのヘッダの位置を指す。
-#[inline]
-pub(crate) unsafe fn init(h: NonNull<Header>, rc: i32, meta: Meta) {
-    unsafe { h.as_ptr().write(Header { rc, meta: meta.0 }) }
-}
 
 /// # Safety
 /// `h` は初期化したヘッダを指す。

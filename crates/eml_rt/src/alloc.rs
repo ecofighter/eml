@@ -12,9 +12,7 @@ use vstd::prelude::*;
 use vstd::raw_ptr::{Dealloc, PointsTo, PointsToRaw, ptr_mut_write, ptr_ref};
 
 use crate::heap::TOO_LARGE;
-#[cfg(verus_only)]
-use crate::meta::HEADER_WORDS;
-use crate::meta::{BlockPerm, Header, meta_ptr, slot_ptr};
+use crate::meta::{BlockPerm, HEADER_WORDS, Header, meta_ptr, slot_ptr};
 use crate::word::Word;
 
 verus! {
@@ -102,7 +100,7 @@ const LARGE: u32 = 0xFFFF_FFFF;
 const MAX_PAGE_BYTES: usize = 0x7FFF_FFFF_FFFF_0000;
 
 /// 空いたブロックの `meta` (種類 `Free` の印。docs/spec/object-model.md の「生存の列挙」)。
-const FREE_META: u32 = 0x0F00_0000;
+pub(crate) const FREE_META: u32 = 0x0F00_0000;
 
 #[inline]
 fn class_of(block_words: usize) -> (r: Option<usize>)
@@ -461,7 +459,7 @@ impl Pages {
     }
 
     /// `alloc` の後の状態。`h` は新しく渡したブロックで、ほかの渡したブロックの形は変わらない。
-    pub(crate) closed spec fn alloc_post(
+    pub(crate) open spec fn alloc_post(
         &self,
         old: Pages,
         words: usize,
@@ -472,7 +470,7 @@ impl Pages {
         &&& perm.wf(h, self.cap(h@.addr), self.prefixed())
     }
 
-    closed spec fn alloc_shape(&self, old: Pages, words: usize, h: *mut Header) -> bool {
+    pub(crate) open spec fn alloc_shape(&self, old: Pages, words: usize, h: *mut Header) -> bool {
         &&& self.wf()
         &&& self.prefixed() == old.prefixed()
         &&& !old.in_use().contains(h@.addr)
@@ -484,15 +482,38 @@ impl Pages {
     }
 
     /// ブロック `b` の形 (ポインタ、語の数、大きい物体か) が `old` と同じで、まだ切り出したブロックである。
-    pub(crate) closed spec fn same_block(&self, old: Pages, b: usize) -> bool {
+    pub(crate) open spec fn same_block(&self, old: Pages, b: usize) -> bool {
         &&& self.block_ptr(b) == old.block_ptr(b)
         &&& self.block_words_spec(b) == old.block_words_spec(b)
+        &&& self.cap(b) == old.cap(b)
         &&& self.large(b) == old.large(b)
         &&& self.block_bytes_spec(b) == old.block_bytes_spec(b)
         &&& self.carved_block(b)
     }
 
     // 補題
+    /// 切り出したブロックは、語に揃い、前置きとペイロードの全体がアドレス空間に収まる。
+    pub(crate) proof fn lemma_block_bounds(&self, h: usize)
+        requires
+            self.wf(),
+            self.carved_block(h),
+        ensures
+            h % 8 == 0,
+            h >= 8,
+            h + 8 * (HEADER_WORDS + self.cap(h)) <= usize::MAX,
+            self.cap(h) >= 1,
+            self.block_ptr(h)@.addr == h,
+    {
+        self.lemma_block(h);
+        vstd::raw_ptr::axiom_ptr_mut_from_data(
+            vstd::raw_ptr::PtrData::<Header> {
+                addr: h,
+                provenance: self.page_provenance(page_base(h)),
+                metadata: (),
+            },
+        );
+    }
+
     /// ブロック `h` はページの中にある。
     proof fn lemma_block(&self, h: usize)
         requires
@@ -745,6 +766,22 @@ impl Pages {
             r == self.block_words_spec(h@.addr),
     {
         self.block_header(h).block_words as usize
+    }
+
+    /// ブロックのペイロードの語の数。
+    #[inline]
+    pub(crate) fn cap_of(&self, h: *mut Header) -> (r: usize)
+        requires
+            self.wf(),
+            self.carved_block(h@.addr),
+            h == self.block_ptr(h@.addr),
+        ensures
+            r == self.cap(h@.addr),
+    {
+        proof {
+            self.lemma_block(h@.addr);
+        }
+        self.block_words(h) - self.prefix_words - HEADER_WORDS
     }
 
     /// ブロックが使うバイト数。大きい物体ではページ全体である。検査モードの隔離の数え方に使う。
@@ -2590,11 +2627,8 @@ mod tests {
 
     fn init(h: *mut Header) {
         unsafe {
-            meta::init(
-                NonNull::new(h).unwrap(),
-                1,
-                Meta::new(0, 0, Kind::Data, false),
-            )
+            meta::rc_ptr(h).write(1);
+            meta::meta_ptr(h).write(Meta::new(0, 0, Kind::Data, false).bits());
         }
     }
 

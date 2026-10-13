@@ -444,7 +444,7 @@ Expected: FAIL (今は `decref` が `Ok` を返し、破棄処理が2回呼ば�
 
 
 
-`check_bounds` を `check_scanned(h, i)` (i は走査する語) と `check_raw(h, i)` (種類が `Data` で、i は走査する語の後でブロックの中) の2つにし、`field` / `set_field` と `raw` / `set_raw` で使い分ける。
+`check_bounds` を `check_scanned(h, i)` (i は走査する語) と `check_raw(h, i)` (種類が `Foreign` でなく、i は走査する語の後でブロックの中) の2つにし、`field` / `set_field` と `raw` / `set_raw` で使い分ける。
 
 Run: `cargo test -p eml_rt checked::`
 Expected: PASS。ほかのテストも通る。

@@ -148,6 +148,28 @@ fn a_field_index_past_the_block_is_an_error() {
 }
 
 #[test]
+fn raw_and_scanned_words_are_not_mixed_up() {
+    let mut heap = H::new();
+    let x = heap.alloc_data(0, 1, 1, false);
+    let f = heap.alloc_foreign(5u64, false);
+    unsafe {
+        assert_eq!(heap.set_raw(x, 0, 7), Err(HeapError::OutOfBounds));
+        assert_eq!(heap.raw(x, 0), Err(HeapError::OutOfBounds));
+        assert_eq!(
+            heap.set_field(x, 1, Word::UNIT),
+            Err(HeapError::OutOfBounds)
+        );
+        assert_eq!(heap.set_raw(f, 0, 7), Err(HeapError::WrongKind));
+        assert_eq!(
+            heap.set_field(f, 0, Word::UNIT),
+            Err(HeapError::OutOfBounds)
+        );
+        heap.decref(x).unwrap();
+        heap.decref(f).unwrap();
+    }
+}
+
+#[test]
 fn free_block_refuses_a_finalizer_and_a_shared_count() {
     let mut heap = H::new();
     let (value, _) = probe();
