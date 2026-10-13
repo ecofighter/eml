@@ -5,6 +5,8 @@
 //! 物体を指す。検査モードは、確かめられる違反を `Err` で返す。
 
 pub(crate) mod check;
+mod release;
+pub(crate) mod share;
 mod walk;
 
 #[cfg(test)]
@@ -43,6 +45,10 @@ pub struct Heap<M: Mode> {
     worker: u32,
     /// 解放の連鎖の作業リスト。使い回して、解放のたびに確保しない。
     work: Vec<Word>,
+    /// `share` のたどりのスタック。使い回す。
+    share_stack: Vec<NonNull<Header>>,
+    /// 検査モードの `share` が訪れた `lin` の物体。
+    visited_lin: Vec<NonNull<Header>>,
     dummy: Word,
     /// 検査モードで隔離した (使い回さない) ブロックのバイト数。
     quarantined: usize,
@@ -88,6 +94,8 @@ impl<M: Mode> Heap<M> {
             pages: Pages::new(if M::CHECKED { PREFIX_WORDS } else { 0 }),
             worker: 0,
             work: Vec::new(),
+            share_stack: Vec::new(),
+            visited_lin: Vec::new(),
             dummy: Word::EMPTY,
             quarantined: 0,
             stats: Stats::default(),

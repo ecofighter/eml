@@ -20,6 +20,7 @@ macro_rules! both_modes {
 
 mod basics;
 mod checked;
+mod share;
 
 /// Miri で遅くなりすぎない長さ。
 pub(super) const LONG: usize = if cfg!(miri) { 300 } else { 100_000 };

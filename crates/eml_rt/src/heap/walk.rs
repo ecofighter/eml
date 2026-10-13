@@ -4,8 +4,9 @@
 use std::collections::BTreeMap;
 use std::ptr::NonNull;
 
-use super::Heap;
 use super::check::{self, State};
+use super::{Heap, scan_count, scan_slot};
+use crate::error::HeapError;
 use crate::foreign;
 use crate::meta::{self, Header, Kind};
 use crate::mode::{Checked, Mode};
@@ -35,6 +36,42 @@ impl<M: Mode> Heap<M> {
 }
 
 impl Heap<Checked> {
+    /// 生存の列挙で見つかる不変条件の違反 (spec の「報告する誤り」)。共有の物体から届いてよいのは共有か不死の物体か
+    /// `lin` ビットの立った局所の物体で、不死の物体から届いてよいのは不死の物体だけである。
+    pub fn check_invariants(&self) -> Result<(), HeapError> {
+        let mut result = Ok(());
+        self.pages.for_each_block(|h| {
+            if result.is_err() || unsafe { check::prefix(h) }.state() != State::Alive {
+                return;
+            }
+            let rc = unsafe { meta::rc(h) }.load(Ordering::Relaxed);
+            if rc > 0 {
+                return;
+            }
+            for i in 0..unsafe { scan_count(h) } {
+                let child = unsafe { scan_slot(h, i).read() };
+                if !child.is_ptr() {
+                    continue;
+                }
+                let c = child.header();
+                if unsafe { check::prefix(c) }.state() != State::Alive {
+                    result = Err(HeapError::UseAfterFree);
+                    return;
+                }
+                let child_rc = unsafe { meta::rc(c) }.load(Ordering::Relaxed);
+                if rc == 0 && child_rc != 0 {
+                    result = Err(HeapError::ImmortalReachesMortal);
+                    return;
+                }
+                if rc < 0 && child_rc > 0 && !unsafe { meta::meta(c) }.lin() {
+                    result = Err(HeapError::SharedReachesLocal);
+                    return;
+                }
+            }
+        });
+        result
+    }
+
     /// 種類の名前ごとのリーク (spec の「報告する誤り」)。不死の物体は外に出ている参照の数を足し、token の箱は
     /// `Token` で数える。
     pub fn leaks(&self) -> BTreeMap<&'static str, u64> {

@@ -3,9 +3,9 @@
 
 use std::ptr::NonNull;
 
-use super::Heap;
+use super::{Heap, scan_count};
 use crate::error::HeapError;
-use crate::meta::{self, HEADER_WORDS, Header};
+use crate::meta::{self, HEADER_WORDS, Header, Kind, Meta};
 use crate::mode::Mode;
 use crate::sync::{AtomicU32, Ordering};
 
@@ -173,5 +173,41 @@ impl<M: Mode> Heap<M> {
         }
         unsafe { self.check_owner(h, rc)? };
         Ok(true)
+    }
+}
+
+/// `release` が名指す形の照らし合わせ。Kani が同じ関数を確かめる。
+pub(crate) fn layout_check(
+    meta: Meta,
+    scanned: usize,
+    tag: u16,
+    keep_len: usize,
+) -> Result<(), HeapError> {
+    if meta.kind() == Kind::Data && meta.tag() == tag && scanned == keep_len {
+        Ok(())
+    } else {
+        Err(HeapError::WrongLayout)
+    }
+}
+
+impl<M: Mode> Heap<M> {
+    /// `release` と `release_reuse` の検査。
+    pub(super) unsafe fn check_release(
+        &self,
+        h: NonNull<Header>,
+        tag: u16,
+        keep_len: usize,
+    ) -> Result<(), HeapError> {
+        if !M::CHECKED {
+            return Ok(());
+        }
+        unsafe { self.check_live(h)? };
+        let m = unsafe { meta::meta(h) };
+        layout_check(m, unsafe { scan_count(h) }, tag, keep_len)?;
+        let rc = unsafe { meta::rc(h) }.load(Ordering::Relaxed);
+        if rc < 0 && m.lin() {
+            return Err(HeapError::LinShared);
+        }
+        unsafe { self.check_owner(h, rc) }
     }
 }
