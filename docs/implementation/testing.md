@@ -99,7 +99,7 @@
 
 - Miri は、nightly と `miri` と `rust-src` を持つ別の devShell `nix develop .#miri` で流す。flake は nightly の toolchain を rust-overlay から取る。ふだんの devShell と `nix build` は stable のままである
 - `nix develop .#miri` の shellHook は、`CARGO_HOME` を `${XDG_CACHE_HOME:-$HOME/.cache}/eml-miri-cargo-home` にする。cargo は外部のサブコマンドを PATH より先に `$CARGO_HOME/bin` から探すので、rustup が入っていると `~/.cargo/bin/cargo-miri` (rustup のプロキシ) が nightly の `cargo-miri` より先に当たるためである。そのため、この devShell は crate の取得の置き場所を別に持ち、最初の1回は crate を取り直す
-- `cargo miri test -p eml_rt` を、`MIRIFLAGS="-Zmiri-strict-provenance"` で1回、`MIRIFLAGS="-Zmiri-strict-provenance -Zmiri-tree-borrows"` でもう1回流す。Apple M4 では、121 個のテストに約18分と約23分かかる
+- `cargo miri test -p eml_rt` を、`MIRIFLAGS="-Zmiri-strict-provenance"` で1回、`MIRIFLAGS="-Zmiri-strict-provenance -Zmiri-tree-borrows"` でもう1回流す。Apple M4 では、121 個のテストに約18分と約23分かかった (コミット 5231a52 の時点)
 - ページの大きさは Miri でも変えない。ほかの crate は Miri で流さない
 
 ### Verus

@@ -337,14 +337,19 @@ fn a_changed_body_is_reported() {
 
 /// `word` を名前とする呼び出し (`word` の後に、空白を挟んでもよい `(` が続く) があるか。
 fn calls(s: &[char], word: &str) -> bool {
-    (0..s.len()).any(|i| word_at(s, i, word) && s.get(skip_space(s, i + word.len())) == Some(&'('))
+    starts(s, word).any(|i| s.get(skip_space(s, i + word.len())) == Some(&'('))
+}
+
+/// 語 `word` が始まる位置。`word_at` は呼ぶたびに確保するので、先頭の文字で先に絞る。Miri で遅くなりすぎないためである。
+fn starts<'a>(s: &'a [char], word: &'a str) -> impl Iterator<Item = usize> + 'a {
+    let first = word.chars().next();
+    (0..s.len()).filter(move |&i| Some(s[i]) == first && word_at(s, i, word))
 }
 
 /// `assume_specification` の宣言のそれぞれについて、`(` の前までを空白を除いて返す。
 fn assume_specifications(source: &str) -> Vec<String> {
     let s: Vec<char> = source.chars().collect();
-    (0..s.len())
-        .filter(|&i| word_at(&s, i, "assume_specification"))
+    starts(&s, "assume_specification")
         .map(|i| squeeze(&s[i..find_at_depth_0(&s, i, &['('])]))
         .collect()
 }
