@@ -518,3 +518,23 @@ b1(j.3: tobj poly):
     assert_eq!(f.vars[0].mark, eml_lir::Mark::Lin);
     assert!(parse("fn f(x.0: tobj unr) -> tobj {\n  return x.0\n}\n").is_err());
 }
+
+#[test]
+fn field_marks_round_trip_through_the_text_form() {
+    let program = round_trip(
+        "\
+layout Option { None, Some(tobj) }
+fn f(o.0: tobj lin) -> tobj poly {
+  switch o.0 Option { #0 -> b1, #1(y.1: tobj lin) -> b2 }
+b1:
+  return ()
+b2:
+  unpack y.1 Option #1(i.2: tobj poly)
+  return i.2
+}
+",
+    );
+    let f = &program.functions[0];
+    assert_eq!(f.vars[1].mark, eml_lir::Mark::Lin);
+    assert_eq!(f.vars[2].mark, eml_lir::Mark::Poly);
+}

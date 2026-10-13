@@ -94,7 +94,7 @@ fn verify_at(program: &Program, level: Level) -> Result<(), VerifyError> {
             function
                 .params()
                 .iter()
-                .map(|&param| &function.vars[param.0 as usize]),
+                .map(|&param| (param, &function.vars[param.0 as usize])),
             function.ret,
             function.ret_mark,
             level >= Level::Scopes,

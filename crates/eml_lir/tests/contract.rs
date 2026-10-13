@@ -267,7 +267,7 @@ yields fn f(c.0: tobj, e.1: obj, s.2: obj) -> int {
 fn a_call_whose_result_mark_is_not_compatible_with_the_ret_mark_is_not_a_tail_call() {
     // `h` の `lin` は `r` の `poly` と、`r` は `f` の `unr` と互換である。印の互換も推移的でないので、`lin` と `unr` を
     // 直接つなぐ末尾呼び出しにはしない。`apply` の結果はいつも `poly` なので、どの戻り値の印とも互換である
-    // (docs/spec/lir.md の「Kind の印の検査」)
+    // (docs/spec/lir.md の「縮約」と「Kind の印」)
     let text = "\
 effect L { take(tobj lin) -> tobj lin }
 fn f(s.0: obj) -> obj {

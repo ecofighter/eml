@@ -38,7 +38,8 @@ pub(super) fn type_def_repr(id: TypeDefId, hir: &HirProgram) -> Repr {
     }
 }
 
-/// instance の代入をかけた型の印 (docs/spec/core-ir.md の「translate が決める印」)。宣言に対して相対的な型は現れないので、`TypeStore::linearity` で読む。
+/// instance の代入をかけた型の印 (docs/spec/core-ir.md の「translate が決める印」)。宣言に対して相対的な型は
+/// 現れないので、`TypeStore::linearity` で読む。
 pub(super) fn mark(types: &TypeStore, ty: TypeId) -> Mark {
     mark_of(types.linearity(ty))
 }
@@ -49,12 +50,15 @@ pub(super) fn declared_mark(types: &TypeStore, ty: TypeId) -> Mark {
     mark_of(types.linearity_or_poly(ty))
 }
 
-/// 型の線形性が決める印。決まらない型 (`Poly`) と Kind 変数は、呼び出し側が決めるので `poly` にする。
+/// 型の線形性が決める印。決まらない型 (`Poly`) は、呼び出し側が決めるので `poly` にする。`TypeStore` は `Var` に
+/// 依存する型の値を `Poly` として持つので、2つの読み方のどちらも `Var` を返さない (docs/spec/types.md の
+/// 「型の線形性」)。
 fn mark_of(lin: Lin) -> Mark {
     match lin {
         Lin::Unr => Mark::Unr,
         Lin::Lin => Mark::Lin,
-        Lin::Poly | Lin::Var(_) => Mark::Poly,
+        Lin::Poly => Mark::Poly,
+        Lin::Var(_) => unreachable!("the store gives a Kind variable's type the value `Poly`"),
     }
 }
 

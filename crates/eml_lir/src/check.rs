@@ -49,7 +49,7 @@ pub fn clause_function<'v>(
     effects: &[EffectInfo],
     name: &str,
     clause: Option<(u32, u32)>,
-    params: impl ExactSizeIterator<Item = &'v VarInfo>,
+    params: impl ExactSizeIterator<Item = (VarId, &'v VarInfo)>,
     ret: Repr,
     ret_mark: Mark,
     boundaries: bool,
@@ -80,11 +80,11 @@ pub fn clause_function<'v>(
     if !boundaries {
         return Ok(());
     }
-    let params: Vec<&VarInfo> = params.collect();
+    let params: Vec<(VarId, &VarInfo)> = params.collect();
     let expected = std::iter::repeat_n(Repr::TObj, captures)
         .chain([Repr::Obj])
         .chain(operation.params.iter().copied());
-    for (index, (param, expected)) in params.iter().zip(expected).enumerate() {
+    for (index, ((_, param), expected)) in params.iter().zip(expected).enumerate() {
         if !param.repr.compatible(expected) {
             return Err(format!(
                 "`{name}` is a clause of `{clause}`, but its parameter {index} is {}",
@@ -104,19 +104,29 @@ pub fn clause_function<'v>(
         ));
     }
     let expected = std::iter::once(Mark::Unr).chain(operation.param_marks.iter().copied());
-    for (index, (param, expected)) in params[captures..].iter().zip(expected).enumerate() {
-        let index = captures + index;
+    for (index, (&(var, param), expected)) in params[captures..].iter().zip(expected).enumerate() {
         if !param.mark.compatible(expected) {
+            // evidence の引数は、操作の表でなく `clause` の規則で `unr` と決まる (docs/spec/lir.md の「Kind の印の検査」)
+            let taker = if index == 0 {
+                "a clause"
+            } else {
+                "the operation"
+            };
             return Err(format!(
-                "`{name}` is a clause of `{clause}`, but its parameter {index} is {}",
-                param.mark.name()
+                "parameter {} of `{name}`, a clause of `{clause}`, is `{}.{}` ({}), but {taker} takes {}",
+                captures + index,
+                param.name,
+                var.0,
+                param.mark.name(),
+                expected.name()
             ));
         }
     }
     if !ret_mark.compatible(operation.ret_mark) {
         return Err(format!(
-            "`{name}` is a clause of `{clause}`, but it returns {}",
-            ret_mark.name()
+            "`{name}`, a clause of `{clause}`, returns {}, but the operation returns {}",
+            ret_mark.name(),
+            operation.ret_mark.name()
         ));
     }
     Ok(())

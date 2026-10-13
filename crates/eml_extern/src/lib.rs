@@ -221,38 +221,45 @@ impl Extern {
     pub fn row(self) -> FunctionRow {
         use Linearity::{Lin, Unr};
         use Repr::{Enum, Int, Obj, Unit};
-        static UNR: [Linearity; 2] = [Unr; 2];
-        let row = |name, params: &'static [Repr], ret, purity| FunctionRow {
-            name,
-            params,
-            ret,
-            param_kinds: &UNR[..params.len()],
-            ret_kind: Unr,
-            purity,
-        };
-        // 標準ライブラリで線形な値を扱うのは `Fs` の3つだけなので、そこだけ列を上書きする
-        let file = |row: FunctionRow, param_kinds, ret_kind| FunctionRow {
-            param_kinds,
-            ret_kind,
-            ..row
-        };
+        // 引数の Repr と Kind を同じ長さの配列で受け、`params` と `param_kinds` の長さを型で揃える
+        fn kinded<const N: usize>(
+            name: &'static str,
+            params: &'static [Repr; N],
+            param_kinds: &'static [Linearity; N],
+            ret: Repr,
+            ret_kind: Linearity,
+            purity: Purity,
+        ) -> FunctionRow {
+            FunctionRow {
+                name,
+                params,
+                ret,
+                param_kinds,
+                ret_kind,
+                purity,
+            }
+        }
+        // 標準ライブラリで線形な値を扱うのは `Fs` の3つだけなので、ほかの行はすべて `Unr` にする
+        fn row<const N: usize>(
+            name: &'static str,
+            params: &'static [Repr; N],
+            ret: Repr,
+            purity: Purity,
+        ) -> FunctionRow {
+            kinded(name, params, const { &[Unr; N] }, ret, Unr, purity)
+        }
         match self {
             Extern::Println => row("Prelude.println", &[Obj], Unit, Purity::Effectful),
-            Extern::Open => file(
-                row("Std.Fs.open", &[Obj], Obj, Purity::Effectful),
-                &[Unr],
-                Lin,
-            ),
-            Extern::ReadAll => file(
-                row("Std.Fs.read_all", &[Obj], Obj, Purity::Effectful),
+            Extern::Open => kinded("Std.Fs.open", &[Obj], &[Unr], Obj, Lin, Purity::Effectful),
+            Extern::ReadAll => kinded(
+                "Std.Fs.read_all",
+                &[Obj],
                 &[Lin],
+                Obj,
                 Lin,
+                Purity::Effectful,
             ),
-            Extern::Close => file(
-                row("Std.Fs.close", &[Obj], Unit, Purity::Effectful),
-                &[Lin],
-                Unr,
-            ),
+            Extern::Close => kinded("Std.Fs.close", &[Obj], &[Lin], Unit, Unr, Purity::Effectful),
             Extern::IntShow => row("Prelude.Show Int.show", &[Int], Obj, Purity::Pure),
             Extern::IntNeg => row("Prelude.negate", &[Int], Int, Purity::MayFail),
             Extern::IntAdd => row("Prelude.+", &[Int, Int], Int, Purity::MayFail),

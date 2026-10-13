@@ -367,7 +367,8 @@ fn into_entry(program: &mut Program, clause: FnIdx, effect: u32, op: u32) {
     }
     // 返す値の Repr は操作の結果の型から決まる。定数より変数の Repr を選ぶのは、`#N` が `enum` にも `tobj` にも
     // 収まるためである。操作の ABI に合わせるのは box の挿入である。印は Repr と違って操作の表から直接写す。取り出す
-    // 状態の変数は、translate が節の状態の引数に付けた印のままにする
+    // 状態の変数は、translate が節の状態の引数に付けた印のままにする。その印は `poly` より正確で、`poly` と互換なので、
+    // ほかの状態の変数と同じ `poly` に揃えなくても V2 を通る (docs/spec/core-ir.md の「EP が足す変数の印」)
     let ret = values
         .iter()
         .find_map(|value| match value {

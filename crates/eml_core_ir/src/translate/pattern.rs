@@ -813,7 +813,17 @@ impl FnLowering<'_> {
                     .flatten()
                     .any(|&pat| matches!(head(body, hir, Cell::Pat(pat)), Head::Any(Some(_))));
             let (tag, fields) = match occ {
-                Occ::Con { tag, fields, .. } => (tag, fields),
+                Occ::Con {
+                    tag, fields, value, ..
+                } => {
+                    // 根は `occurrence` が作る式の出現か合流の変数で、`con` で作った変数の中身はアトムのまま積むので、
+                    // `expand` が作る `Made` の出現はここに来ない。来れば、その変数を受け取るかを調べずに下へ進んでしまう
+                    debug_assert!(
+                        !matches!(value, ConValue::Made(_)),
+                        "the root and the known arguments are not expanded"
+                    );
+                    (tag, fields)
+                }
                 Occ::Atom(Atom::Var(var)) => match self.cons.get(&var) {
                     Some(_) if here => {
                         received.insert(var);

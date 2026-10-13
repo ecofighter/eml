@@ -3071,3 +3071,34 @@ fn a_linear_constructor_variable_used_on_another_path_is_not_opened() {
     }
     "#);
 }
+
+#[test]
+fn a_linear_constructor_variable_destructured_in_both_branches_is_taken_apart_in_each() {
+    // `p` を参照する所が2つあるので、検査は `p` の唯一の使用でない。2つの参照が別の枝にあっても `p` は開かず、
+    // 各枝が `p` そのものを `unpack` で分解する。参照は構文で数えるので、安全な側に保守的である
+    // (docs/spec/core-ir.md の「translate が決める印」)
+    let text = format!(
+        "{CLOSE_ALL}go : Bool -> List Fs.File -> <IO> Unit\ngo c xs =\n  let p = (xs, 1)\n  println \"between\"\n  if c then\n    let (a, n) = p\n    println (show n)\n    close_all a\n  else\n    let (b, m) = p\n    println (show (m + 1))\n    close_all b\n\nmain : Unit -> <IO> Unit\nmain () =\n  go True [Fs.open \"input.txt\"]\n  go False [Fs.open \"input.txt\"]"
+    );
+    insta::assert_snapshot!(function(&core_text(&text, Pass::Translate), "go"), @r#"
+    fn go(c.0: enum, xs.1: tobj lin) -> unit {
+      let d.2: obj lin = con (,) #0(xs.1, 1)
+      let s.3: obj = const "between"
+      let t.4: unit = extern Prelude.println(s.3)
+      switch c.0 Prelude.Bool { #0 -> b1, #1 -> b2 }
+    b1:
+      unpack d.2 (,) #0(b.10: tobj lin, m.11: int)
+      let t.12: int = extern Prelude.+(m.11, 1)
+      let t.13: obj = extern "Prelude.Show Int.show"(t.12)
+      let t.14: unit = extern Prelude.println(t.13)
+      let t.15: unit = call close_all(b.10)
+      return t.15
+    b2:
+      unpack d.2 (,) #0(a.5: tobj lin, n.6: int)
+      let t.7: obj = extern "Prelude.Show Int.show"(n.6)
+      let t.8: unit = extern Prelude.println(t.7)
+      let t.9: unit = call close_all(a.5)
+      return t.9
+    }
+    "#);
+}

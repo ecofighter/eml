@@ -95,6 +95,7 @@ impl FnLowering<'_> {
         let reprs = self.program.layouts[ctor.layout.0 as usize].constructors[ctor.tag as usize]
             .fields
             .clone();
+        debug_assert_eq!(marks.len(), reprs.len(), "one mark per field");
         let fields: Vec<VarId> = reprs
             .into_iter()
             .enumerate()
@@ -623,13 +624,18 @@ impl FnLowering<'_> {
                 };
                 let ty = self.ty(id);
                 let result = repr(self.ctx.store, ty, self.ctx.hir);
-                // 取り出さない残りのフィールドの型は `discarded` にある
+                // 取り出さない残りのフィールドの型は `discarded` にある。`discarded` が狙い以外のフィールドを
+                // すべて並べることに頼るので、埋まらない位置を `Unr` で済ませない
                 let rest = &self.ctx.types.discarded[id];
-                let mut marks = vec![Mark::Unr; rest.len() + 1];
-                marks[index as usize] = mark(self.ctx.store, ty);
+                let mut marks = vec![None; rest.len() + 1];
+                marks[index as usize] = Some(mark(self.ctx.store, ty));
                 for &(field, field_ty) in rest {
-                    marks[field as usize] = mark(self.ctx.store, field_ty);
+                    marks[field as usize] = Some(mark(self.ctx.store, field_ty));
                 }
+                let marks: Vec<Mark> = marks
+                    .into_iter()
+                    .map(|mark| mark.expect("`discarded` lists every field but the target"))
+                    .collect();
                 let fields = self.unpack_fields(value, ctor, &[(index, result)], &marks);
                 Atom::Var(fields[index as usize])
             }

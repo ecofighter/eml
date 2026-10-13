@@ -185,7 +185,7 @@ R1 と R2 から、ブロックの番号の順は辺の向きに沿った順 (�
   - 値としてだけ参照され、直接は呼ばれない内部の関数は、その場で一様にする。箱を要するスカラーの引数を、同じ名前の新しい `tobj` の引数に替え、入口のブロックの先頭で、引数の順に `let p = unbox p'` を置く。箱を要するスカラーの `ret` は `tobj` にする。`obj` と `unit` の引数と `ret` は変えない
   - そのほかの、値として参照され一様でない関数 (直接も呼ばれる内部の関数と、トップレベルの関数) は、形を変えずに残し、一様な関数 `f$boxed` を足す。値の参照 (`&f` と `closure f`) は、すべて `f$boxed` へ向ける
 - 入口の関数の印 (`clause`) を持つ関数は、一様化の対象から外し、操作の ABI に合わせる (下の「box の挿入」)。`ev_set_clause` の引数として値で参照されるが、`apply` では呼ばれないためである
-- `f$boxed` の引数と `ret` は、`f` の箱を要するスカラーを `tobj` にし、`obj` と `unit` はそのままにする。本体は変換の前の形 `let t: <f の ret> = call f(p0, ..)` と `return t` で作り、変換はほかの関数と同じく box の挿入が入れる。`f$boxed` の内部の印と `yields` の印は `f` と同じにする。`yields` の印は S10 の VM が読む。`f` の `ret` が一様なら、縮約がこの呼び出しを `tail` にする
+- `f$boxed` の引数と `ret` は、`f` の箱を要するスカラーを `tobj` にし、`obj` と `unit` はそのままにする。本体は変換の前の形 `let t: <f の ret> = call f(p0, ..)` と `return t` で作り、変換はほかの関数と同じく box の挿入が入れる。`f$boxed` の `internal` と `yields` の指定は `f` と同じにする。`yields` の指定は S10 の VM が読む。`f` の `ret` が一様なら、縮約がこの呼び出しを `tail` にする
 - トップレベルの関数をその場で一様にしないのは、トップレベルの関数の ABI を、その関数の定義 (と instance の型引数) と、それが末尾の位置で呼ぶ関数だけで決めるためである (下の「T3」)。その場で一様にすると、ほかの定義が後から値として参照するかどうかで ABI が変わる。定義ごとに IR を保存する REPL では、古い定義を書き換えることになる。ネイティブ化では、翻訳した関数を使い回せなくなる。総称な関数は単相化でプログラムごとに変換するので ([Core IR](core-ir.md) の「変換の規則」)、使い回せるのは型変数を持たない関数と、同じ鍵の instance である。内部の関数は、直接の呼び出しがすべて同じ定義の中にあるので、その場で一様にしても困らない。LLVM が引数の形を変えてよい関数を、内部の linkage の関数に限るのと同じ考え方である
 - 捕獲も一様にする。`closure f(..)` の引数は `f` の引数の Repr に変換し、`f` は一様なので、捕まえた `int` と `enum` は `box` される。捕獲を具体的な Repr のまま持つには、クロージャごとのペイロードの記述子と、関数ごとの一様な入口が要る。その入口は `f$boxed` と同じものなので、2つの仕組みが重なる
 - クロージャの呼び出しの規約は変えない。共有されたクロージャへの `apply` は、中身を写す (Lean の `pap` と同じ)
@@ -585,7 +585,7 @@ Perceus は、`switch` と `unpack` のフィールドを借りたまま使い�
   - LIR の範囲の段と所有の段: 上に加えて、直接の呼び出しの引数と仮引数、結果と戻り値の印、`closure` の引数と、クロージャにする関数の捕まえる引数、`tail` の結果と呼び出し元の `ret_mark`、`apply` の位置 (いつも `poly` なので、実際には何も拒まない)、`extern`、`prim`、`clause` の引数と結果とそれぞれの表の列 (extern の行、基本操作の表、操作の表)、`clause` の印の付いた関数の引数と戻り値と操作の表の列
   - `perform`、`handle`、`resume` (EP の前の Core IR にだけある) の受け渡しは比べない。EP がそれらを `clause` と基本操作に置き換えた後の段で比べる
   - `clause` の呼ばれる側 (`ev_clause` が返す入口のクロージャ) は `unr` でなければならない。`clause` の呼び出しの引数 0 の evidence と、`clause` の印の付いた関数の evidence の引数も、`unr` として比べる
-  - `never` の操作の `clause` の結果を束縛する変数は、Repr と同じく、どの使いでも V2 と作る所の検査の対象にしない。使いには制御が届かないためである (上の「`never` の操作」)
+  - `never` の操作の `clause` の結果を束縛する変数は、Repr と同じく、どの使いでも V2 と作る所の検査の対象にしない。使いには制御が届かないためである (上の「`never` の操作」)。Core IR の変換の段では、`never` の操作の `perform` の結果を束縛する変数も同じ理由で対象にしない
   - 定数はどの印とも合う
 - V1: `unr` でない変数に `dup` と `decref` を置かない。`dup` と `decref` は Perceus の後にしかないので、所有の段だけで走らせる。`unr` でない値を手放す命令は `drop` と `release` である
 - 作る所の検査: `con` と `closure` が束縛する変数の印は、引数の印の結び以上でなければならない (順序は `unr` < `poly` < `lin`)。V1 だけでは、誤って `unr` を付けた `List File` や `File` を捕まえたクロージャが `dup` されても気づけないので、作る所で拒む。Core IR の2つの段と LIR のすべての段で走らせる。定数は `unr` として結び、`never` の束縛は数えない
@@ -595,7 +595,7 @@ Perceus は、`switch` と `unpack` のフィールドを借りたまま使い�
   - 直接の呼び出しの引数: ``argument 0 of `g` is `x.1` (lin), but the function takes unr``。`closure` の引数も同じ形である (``argument 0 of a closure of `g` ``)
   - `extern`、`prim`、`clause` の引数: ``argument 0 of `Std.Fs.close` is `x.1` (unr), but the extern takes lin``、``argument 1 of a clause of `Counter.put` is `x.1` (lin), but the operation takes unr``、``the callee of a clause of `Counter.get` is `c.0` (lin), but a clause takes unr``
   - 結果: `` `t.0` (unr) is bound to `Std.Fs.open`, which returns lin ``。`prim`、`clause`、呼び出しも同じ形である
-  - `clause` の印の関数: `` `g$entry` is a clause of `Counter.put`, but its parameter 2 is lin ``、`` `g$entry` is a clause of `Counter.get`, but it returns lin ``
+  - `clause` の印の関数: ``parameter 2 of `g$entry`, a clause of `Counter.put`, is `x.2` (lin), but the operation takes unr``、``parameter 1 of `g$entry`, a clause of `Counter.put`, is `e.1` (lin), but a clause takes unr``、`` `g$entry`, a clause of `Counter.get`, returns lin, but the operation returns unr ``
   - 作る所: `` `p.2` (unr) is bound to a con of `(,)` #0, whose arguments join to lin ``、`` `c.1` (unr) is bound to a closure of `k`, whose captures join to poly ``
 
 ## インタプリタ (CEK 機械)

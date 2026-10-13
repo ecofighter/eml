@@ -111,7 +111,7 @@ fn clause_function(program: &Program, function: &CoreFn, level: Level) -> Result
         function
             .params()
             .iter()
-            .map(|&param| &function.vars[param.0 as usize]),
+            .map(|&param| (param, &function.vars[param.0 as usize])),
         function.ret,
         function.ret_mark,
         false,

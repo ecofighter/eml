@@ -2883,17 +2883,17 @@ fn v2_rejects_passing_unr_to_lin_at_each_boundary() {
         (
             "fn g(e.0: obj, x.1: tobj)",
             "tobj lin",
-            "`g` is a clause of `L.take`, but its parameter 1 is unr",
+            "parameter 1 of `g`, a clause of `L.take`, is `x.1` (unr), but the operation takes lin",
         ),
         (
             "fn g(e.0: obj lin, x.1: tobj lin)",
             "tobj lin",
-            "`g` is a clause of `L.take`, but its parameter 0 is lin",
+            "parameter 0 of `g`, a clause of `L.take`, is `e.0` (lin), but a clause takes unr",
         ),
         (
             "fn g(e.0: obj, x.1: tobj lin)",
             "tobj",
-            "`g` is a clause of `L.take`, but it returns unr",
+            "`g`, a clause of `L.take`, returns unr, but the operation returns lin",
         ),
     ] {
         let text =

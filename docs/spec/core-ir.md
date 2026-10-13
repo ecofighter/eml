@@ -72,6 +72,7 @@
   - `con` を作る出現の印を、引数の印の結びにはしない。`Option (List File)` の `Some []` が `unr` になり、`lin` の受け手との受け渡しを V2 が拒むためである。出現が開いて作る `con` は、`Tag` なら `unr`、`con` で作った変数 (`Made`) ならその変数の印を運ぶ
   - 操作の節の `k` の印は、`k` の型の矢印の線形性から決める。操作の箇所の継続の多重度ではない
 - 宣言の型を代入せずに読む所 (`op$`、`con$`、操作の表) は、相対的な型も読める読み方 (`TypeStore::linearity_or_poly`) で決め、`Rigid` と `Var` に依存する値を `poly` にする。保守的なので、`(a, File)` は `lin` でなく `poly` になる
+- `k` を関数の値として包む `cont$` と `cont$state` は、引数 `k`、`v`、`s` と結果 `t` をすべて `poly` にする。すべての handler がこの2つの関数を共有するので、再開に渡す値と状態の型も、生の継続の線形性 (`once` の操作なら `Lin`、`multi` なら `Unr`) も決まらないためである
 - 導出とタプルの生成器 (`==`、`compare`、`show_prec`、`show`、`tag$` など) の変数はすべて `unr` にする。`Unr` のクラスの規則 ([型と Kind](types.md) の「`Unr` のクラス」) で、instance の頭の型変数は `Unr` だからである。生成器の鍵の `Flexible(Poly)` から決めると、`tag$` の `decref x` を V1 が拒む
 - `materialize_once` は、同じ形の出現を1つの `con` にまとめるのを、`unr` の出現に限る。`unr` でない値を2か所で使うと、Perceus が `dup` するためである (`let (a, b) = (Some [], Some [])` を `Option (List File)` で書く形)。`unr` でない出現は、作った `con` の表に入れない。入れると、同じ形の `unr` の出現が `lin` の `con` を使い回し、その `con` に `dup` が要るためである
 - 決定木は、`con` で作った変数 `v` の引数を直接読むことがある。`v` の印が `unr` でないときは、次の2つがどちらも成り立つときにだけ開く。どちらかが成り立たなければ、`v` そのものを `switch` か `unpack` で分解する
@@ -558,7 +559,7 @@ b_fast:
 - Core IR の verifier は2つの段を持つ。段はパスの順に並ぶ
   - 変換の段 (`verify_translated`) は translate の後にかける。[LIR とインタプリタ](lir.md) の「構造の規則」の印のない部分と、引き継ぐ検査を確かめる。EP が作るもの (`prim`、`clause`、`clause` の印の関数) を拒む (`` `prim evv_get` is used before the evidence pass ``、`a clause call is used before the evidence pass`、``a clause of `Counter.get` is defined before the evidence pass``)
   - EP の段 (`verify_evidence`) は EP の後にかける。変換の段の検査から EP が作るものの拒否を除き、基本操作と `clause` の検査 ([LIR とインタプリタ](lir.md) の「verifier」) を足す。`handle`、`perform`、`resume` と、呼び出しの `mask` を拒む (``a perform remains after the evidence pass``。`a handler`、`a resume`、`a mask` も同じ形)
-- 印の検査は、Core IR の2つの段で、`jump` と `return` の V2 と、作る所の検査を行う。それ以外の受け渡しは、境界に合うようになってから LIR の範囲の段で比べる。`perform`、`handle`、`resume` の受け渡しは比べず、EP がそれらを `clause` と基本操作に置き換えた後の段で比べる。V1 は `dup` と `decref` が Core IR にないので走らない ([LIR とインタプリタ](lir.md) の「Kind の印の検査」)
+- 印の検査は、Core IR の2つの段で、`jump` と `return` の V2 と、作る所の検査を行う。それ以外の受け渡しは、境界に合うようになってから LIR の範囲の段で比べる。`perform`、`handle`、`resume` の受け渡しは比べず、EP がそれらを `clause` と基本操作に置き換えた後の段で比べる。`never` の操作の `perform` (変換の段) と `clause` (EP の段) の結果を束縛する変数は、使いに制御が届かないので、V2 と作る所の検査の対象にしない。V1 は `dup` と `decref` が Core IR にないので走らない ([LIR とインタプリタ](lir.md) の「Kind の印の検査」)
 - RC の命令、`box`、`unbox`、`tail`、`saved` は Core IR の型にないので、verifier は確かめない。境界の検査もしない。translate と EP の出力は、box の挿入より前には境界に合わないためである。関数の値の対象が一様かも見ない ([LIR とインタプリタ](lir.md) の「値の表現」の定数の当てはめ)
 - R8 と R9 の文言、`jump` と `return` の文言、引数のない `con` の文言、2つの IR に共通する引き継ぐ検査、検査の順、支配木の求め方は、LIR の verifier と同じである ([LIR とインタプリタ](lir.md) の「verifier」)。文言と支配木の求め方などの部品は、2つの verifier が `eml_lir::check` で共有する。検査の順は共有する部品ではなく、2つの verifier で同じに保つ約束である
 - Core IR だけの引き継ぐ検査は次のとおりである。どれも変換の段にだけ現れる。EP の段は、これらの命令そのものを拒むためである

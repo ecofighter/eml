@@ -962,6 +962,14 @@ fn one_variable_bound_with_two_reprs_is_an_error() {
 }
 
 #[test]
+fn one_variable_bound_with_two_marks_is_an_error() {
+    let error =
+        parse_error("fn f(x.0: obj lin) -> obj {\n  let x.0: obj = const \"a\"\n  return x.0\n}\n");
+    assert_eq!(error.line, 2);
+    assert_eq!(error.message, "`x.0` is bound with two different marks");
+}
+
+#[test]
 fn variable_numbers_that_do_not_appear_are_filled() {
     let program = round_trip("fn f(x.0: int, y.3: obj) -> int {\n  return x.0\n}\n");
     let vars = &program.functions[0].vars;

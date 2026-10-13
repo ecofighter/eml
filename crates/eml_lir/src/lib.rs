@@ -541,7 +541,7 @@ impl Mark {
         )
     }
 
-    /// 順序は `Unr` < `Poly` < `Lin`。
+    /// `self` が `other` 以上か (`self >= other`)。順序は `Unr` < `Poly` < `Lin`。
     pub fn at_least(self, other: Mark) -> bool {
         self.rank() >= other.rank()
     }
