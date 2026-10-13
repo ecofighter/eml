@@ -3,7 +3,7 @@
 use eml_hir::{Program as HirProgram, TypeDefId, TypeDefKind};
 use eml_types::{TypeId, TypeKind, TypeStore};
 
-use eml_lir::{Repr, VarInfo, data_repr};
+use eml_lir::{Mark, Repr, VarInfo, data_repr};
 
 /// 型の Repr (docs/spec/core-ir.md の「型の Repr」)。総称的な位置の束縛も具体化した型から決める。値を受ける位置の
 /// Repr と違えば、box の挿入が変換を入れる (docs/spec/lir.md の「位置の規則」)。関数の値と型変数の値は、即値
@@ -46,6 +46,7 @@ pub(super) fn named(name: &str, repr: Repr) -> VarInfo {
     VarInfo {
         name: name.to_string(),
         repr,
+        mark: Mark::Unr,
     }
 }
 

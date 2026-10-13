@@ -2,7 +2,7 @@
 //! `pretty` で表示すると元のテキストに戻ることと、構文の誤りの報告を確かめる。
 
 use eml_lir::{Atom, CasePattern, Ctor, FnIdx, LayoutId, OpRet, Prim, VarId};
-use eml_lir::{BlockId, Loc, ParseError, Repr};
+use eml_lir::{BlockId, Loc, Mark, ParseError, Repr, verify};
 use eml_lir::{Call, Program, Rhs, Stmt, Term, parse, pretty, pretty_with_positions};
 
 /// 読んで表示し直すと元に戻ることを確かめ、読んだプログラムを返す。
@@ -1423,4 +1423,74 @@ fn effect_instructions_are_not_lir() {
             "{text}"
         );
     }
+}
+
+const MARKED: &str = "\
+layout (,) { (,)(tobj, tobj) }
+layout O { A, B(tobj) }
+fn f(x.0: obj lin, p.1: obj, y.2: tobj poly) -> tobj poly {
+  let a.3: tobj lin = apply y.2(x.0)
+  unpack p.1 (,) #0(l.4: tobj lin, r.5: tobj poly)
+  switch p.1 O { #0 -> b1, #1(f.6: tobj lin) -> b2 }
+b1:
+  jump b3(a.3)
+b2:
+  jump b3(f.6)
+b3(j.7: tobj poly):
+  return j.7
+}
+";
+
+#[test]
+fn marks_round_trip_through_the_text_form() {
+    let program = round_trip(MARKED);
+    let f = &program.functions[0];
+    assert_eq!(f.ret_mark, Mark::Poly);
+    let marks: Vec<Mark> = f.vars.iter().map(|var| var.mark).collect();
+    assert_eq!(
+        marks,
+        [
+            Mark::Lin,
+            Mark::Unr,
+            Mark::Poly,
+            Mark::Lin,
+            Mark::Lin,
+            Mark::Poly,
+            Mark::Lin,
+            Mark::Poly
+        ]
+    );
+}
+
+#[test]
+fn a_written_unr_mark_is_an_error() {
+    let error = parse_error("fn f(x.0: tobj unr) -> tobj {\n  return x.0\n}\n");
+    assert!(error.message.contains("unr"), "{error}");
+    let error = parse_error("fn f(x.0: tobj) -> tobj unr {\n  return x.0\n}\n");
+    assert!(error.message.contains("unr"), "{error}");
+}
+
+#[test]
+fn marks_default_to_unr_when_omitted() {
+    let program = round_trip(SPEC_EXAMPLE.replace(" @\"main.em\":2:20", "").as_str());
+    assert!(program.functions.iter().all(|f| f.ret_mark == Mark::Unr));
+    assert!(
+        program
+            .functions
+            .iter()
+            .flat_map(|f| &f.vars)
+            .all(|var| var.mark == Mark::Unr)
+    );
+    verify(&program).unwrap_or_else(|error| panic!("{error}"));
+}
+
+#[test]
+fn marks_have_a_join_a_compatibility_and_an_order() {
+    use Mark::{Lin, Poly, Unr};
+    assert_eq!(Unr.join(Poly), Poly);
+    assert_eq!(Poly.join(Lin), Lin);
+    assert_eq!(Unr.join(Unr), Unr);
+    assert!(!Unr.compatible(Lin) && !Lin.compatible(Unr));
+    assert!(Poly.compatible(Lin) && Poly.compatible(Unr) && Lin.compatible(Lin));
+    assert!(Lin.at_least(Poly) && Poly.at_least(Unr) && !Unr.at_least(Poly));
 }

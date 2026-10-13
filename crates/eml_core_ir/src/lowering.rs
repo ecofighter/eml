@@ -30,6 +30,7 @@ fn function(function: CoreFn) -> eml_lir::LirFn {
         clause,
         vars,
         ret,
+        ret_mark,
         blocks,
     } = function;
     eml_lir::LirFn {
@@ -39,6 +40,7 @@ fn function(function: CoreFn) -> eml_lir::LirFn {
         clause,
         vars,
         ret,
+        ret_mark,
         blocks: blocks.into_iter().map(block).collect(),
     }
 }

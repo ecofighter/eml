@@ -63,6 +63,7 @@ impl<'p> Printer<'p> {
             clause: function.clause,
             params: function.params().to_vec(),
             ret: function.ret,
+            ret_mark: function.ret_mark,
         };
         self.writer.function_head(&header, &function.vars, out);
         for (index, block) in function.blocks.iter().enumerate() {

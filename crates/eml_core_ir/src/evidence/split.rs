@@ -290,6 +290,7 @@ impl Splitter<'_> {
             clause: None,
             vars: body.vars,
             ret: self.source.ret,
+            ret_mark: self.source.ret_mark,
             blocks: body.blocks,
         }
     }

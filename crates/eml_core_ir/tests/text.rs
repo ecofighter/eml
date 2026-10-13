@@ -467,3 +467,21 @@ internal yields clause State.get fn g(e.0: obj, u.1: unit) -> tobj {
 ",
     );
 }
+
+#[test]
+fn marks_round_trip_through_the_text_form() {
+    let program = round_trip(
+        "\
+fn f(x.0: tobj lin, y.1: tobj poly) -> tobj poly {
+  let a.2: tobj lin = apply y.1(x.0)
+  jump b1(a.2)
+b1(j.3: tobj poly):
+  return j.3
+}
+",
+    );
+    let f = &program.functions[0];
+    assert_eq!(f.ret_mark, eml_lir::Mark::Poly);
+    assert_eq!(f.vars[0].mark, eml_lir::Mark::Lin);
+    assert!(parse("fn f(x.0: tobj unr) -> tobj {\n  return x.0\n}\n").is_err());
+}

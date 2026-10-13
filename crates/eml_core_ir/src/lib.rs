@@ -4,7 +4,8 @@
 
 use eml_extern::Extern;
 use eml_lir::{
-    Atom, BlockId, Case, Ctor, EffectInfo, FnIdx, Layout, LayoutId, Loc, Prim, Repr, VarId, VarInfo,
+    Atom, BlockId, Case, Ctor, EffectInfo, FnIdx, Layout, LayoutId, Loc, Mark, Prim, Repr, VarId,
+    VarInfo,
 };
 
 mod builder;
@@ -67,6 +68,7 @@ pub struct CoreFn {
     pub vars: Vec<VarInfo>,
     /// 直接の呼び出しの結果の Repr。
     pub ret: Repr,
+    pub ret_mark: Mark,
     /// `blocks[0]` が入口で、その引数が関数の引数である。辺はすべて番号の大きいブロックへ向かう。
     pub blocks: Vec<Block>,
 }

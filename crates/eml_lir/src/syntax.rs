@@ -10,7 +10,7 @@ use std::fmt::Write as _;
 
 use crate::{
     Atom, BlockId, Case, CasePattern, Ctor, EffectInfo, FnIdx, Immediates, Layout, LayoutCtor,
-    LayoutId, Loc, OpRet, OperationInfo, ParseError, Prim, Repr, VarId, VarInfo,
+    LayoutId, Loc, Mark, OpRet, OperationInfo, ParseError, Prim, Repr, VarId, VarInfo,
 };
 
 /// エフェクトの名前。表にない番号は `#N` で書く。誤りを含む IR も表示でき、`parse` が読み戻せて、verifier がその番号を
@@ -239,6 +239,7 @@ struct VarSlot {
     name: String,
     /// 束縛の位置で読むまでは分からない。使用の位置には Repr を書かない。
     repr: Option<Repr>,
+    mark: Mark,
 }
 
 /// 読んでいる関数。行き先のブロックは後に書いてよいので、関数を読み終えてから確かめる。
@@ -256,6 +257,7 @@ pub struct FnHeader {
     pub clause: Option<(u32, u32)>,
     pub params: Vec<VarId>,
     pub ret: Repr,
+    pub ret_mark: Mark,
 }
 
 /// 関数の並びのほかに、読み終えたプログラムが持つ表。
@@ -527,6 +529,7 @@ impl<'t> Reader<'t> {
         let params = self.list('(', ')', |p| p.binder(state))?;
         self.expect_word("->")?;
         let ret = self.repr()?;
+        let ret_mark = self.mark()?;
         self.expect_punct('{')?;
         Ok(FnHeader {
             name,
@@ -535,6 +538,7 @@ impl<'t> Reader<'t> {
             clause,
             params,
             ret,
+            ret_mark,
         })
     }
 
@@ -561,10 +565,12 @@ impl<'t> Reader<'t> {
                     VarInfo {
                         name: String::new(),
                         repr: Repr::Unit,
+                        mark: Mark::Unr,
                     },
                     |slot| VarInfo {
                         name: slot.name,
                         repr: slot.repr.unwrap_or(Repr::Unit),
+                        mark: slot.mark,
                     },
                 )
             })
@@ -899,7 +905,26 @@ impl<'t> Reader<'t> {
             .strip_suffix(':')
             .ok_or_else(|| error(line, format!("expected `name.N:`, found `{word}`")))?;
         let repr = self.repr()?;
-        self.var_named(state, name, Some(repr), line)
+        let mark = self.mark()?;
+        self.var_named(state, name, Some((repr, mark)), line)
+    }
+
+    /// Repr の後の省略できる `lin` / `poly`。`unr` は書かない (書き方を1つにするため)。
+    fn mark(&mut self) -> Result<Mark, ParseError> {
+        let line = self.line();
+        if self.at_word("unr") {
+            return Err(error(
+                line,
+                "`unr` is the default mark and is not written".to_string(),
+            ));
+        }
+        for mark in [Mark::Lin, Mark::Poly] {
+            if self.at_word(mark.name()) {
+                self.pos += 1;
+                return Ok(mark);
+            }
+        }
+        Ok(Mark::Unr)
     }
 
     pub fn repr(&mut self) -> Result<Repr, ParseError> {
@@ -920,7 +945,7 @@ impl<'t> Reader<'t> {
         &self,
         state: &mut FnState,
         word: &str,
-        repr: Option<Repr>,
+        repr: Option<(Repr, Mark)>,
         line: usize,
     ) -> Result<VarId, ParseError> {
         let (name, digits) = split_var(word).ok_or_else(|| {
@@ -945,6 +970,7 @@ impl<'t> Reader<'t> {
         let slot = state.vars[index].get_or_insert_with(|| VarSlot {
             name: name.to_string(),
             repr: None,
+            mark: Mark::Unr,
         });
         if slot.name != name {
             return Err(error(
@@ -955,7 +981,14 @@ impl<'t> Reader<'t> {
                 ),
             ));
         }
-        if let Some(repr) = repr {
+        if let Some((repr, mark)) = repr {
+            if slot.repr.is_some() && slot.mark != mark {
+                return Err(error(
+                    line,
+                    format!("`{word}` is bound with two different marks"),
+                ));
+            }
+            slot.mark = mark;
             if let Some(known) = slot.repr.filter(|&known| known != repr) {
                 return Err(error(
                     line,
@@ -1226,12 +1259,13 @@ impl<'p> Writer<'p> {
         });
         writeln!(
             out,
-            "{}{}{clause}fn {}({}) -> {} {{",
+            "{}{}{clause}fn {}({}) -> {}{} {{",
             if header.internal { "internal " } else { "" },
             if header.yields { "yields " } else { "" },
             function_name(&header.name),
             self.binders(vars, &header.params),
-            header.ret.name()
+            header.ret.name(),
+            mark_suffix(header.ret_mark)
         )
         .unwrap();
     }
@@ -1337,7 +1371,13 @@ impl<'p> Writer<'p> {
 
     /// 束縛の位置では Repr を書く。使う位置には書かない。
     pub fn binder(&self, vars: &[VarInfo], v: VarId) -> String {
-        format!("{}: {}", self.var(vars, v), vars[v.0 as usize].repr.name())
+        let info = &vars[v.0 as usize];
+        format!(
+            "{}: {}{}",
+            self.var(vars, v),
+            info.repr.name(),
+            mark_suffix(info.mark)
+        )
     }
 
     pub fn binders(&self, vars: &[VarInfo], params: &[VarId]) -> String {
@@ -1346,5 +1386,12 @@ impl<'p> Writer<'p> {
             .map(|&v| self.binder(vars, v))
             .collect::<Vec<_>>()
             .join(", ")
+    }
+}
+
+fn mark_suffix(mark: Mark) -> String {
+    match mark {
+        Mark::Unr => String::new(),
+        mark => format!(" {}", mark.name()),
     }
 }

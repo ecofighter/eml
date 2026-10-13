@@ -12,7 +12,7 @@ use std::collections::HashMap;
 
 use crate::contract::pure;
 use crate::{
-    Atom, Block, BlockId, Call, CasePattern, EffectInfo, FnIdx, Layout, LirFn, OpRet,
+    Atom, Block, BlockId, Call, CasePattern, EffectInfo, FnIdx, Layout, LirFn, Mark, OpRet,
     OperationInfo, Program, Repr, Rhs, Stmt, Term, VarId, VarInfo, operation,
 };
 
@@ -269,7 +269,11 @@ fn conform(function: &mut LirFn, expected: &[Repr], ret: Repr) {
             )
         };
         let name = function.vars[param.0 as usize].name.clone();
-        function.vars.push(VarInfo { name, repr: wanted });
+        function.vars.push(VarInfo {
+            name,
+            repr: wanted,
+            mark: Mark::Unr,
+        });
         let fresh = VarId(function.vars.len() as u32 - 1);
         function.blocks[BlockId::ENTRY.0 as usize].params[position] = fresh;
         conversions.push(Stmt::Let {
@@ -292,12 +296,14 @@ fn boxed(function: &LirFn, target: FnIdx) -> LirFn {
         .map(|&param| VarInfo {
             name: function.vars[param.0 as usize].name.clone(),
             repr: uniform_repr(function.repr(param)),
+            mark: Mark::Unr,
         })
         .collect();
     let params: Vec<VarId> = (0..vars.len() as u32).map(VarId).collect();
     vars.push(VarInfo {
         name: "t".to_string(),
         repr: function.ret,
+        mark: Mark::Unr,
     });
     let result = VarId(vars.len() as u32 - 1);
     LirFn {
@@ -307,6 +313,7 @@ fn boxed(function: &LirFn, target: FnIdx) -> LirFn {
         clause: None,
         vars,
         ret: uniform_repr(function.ret),
+        ret_mark: Mark::Unr,
         blocks: vec![Block {
             params: params.clone(),
             stmts: vec![Stmt::Let {
@@ -376,7 +383,11 @@ impl Converter<'_> {
     }
 
     fn fresh(&mut self, name: String, repr: Repr) -> VarId {
-        self.function.vars.push(VarInfo { name, repr });
+        self.function.vars.push(VarInfo {
+            name,
+            repr,
+            mark: Mark::Unr,
+        });
         VarId(self.function.vars.len() as u32 - 1)
     }
 

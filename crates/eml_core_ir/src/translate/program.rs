@@ -11,8 +11,8 @@ use eml_types::{TypeId, TypeStore, TypedProgram};
 
 use crate::{Call, CoreFn, Rhs, Stmt, Term};
 use eml_lir::{
-    Atom, Ctor, EffectInfo, FnIdx, Layout, LayoutCtor, LayoutId, Loc, OpRet, OperationInfo, Repr,
-    VarInfo,
+    Atom, Ctor, EffectInfo, FnIdx, Layout, LayoutCtor, LayoutId, Loc, Mark, OpRet, OperationInfo,
+    Repr, VarInfo,
 };
 
 use crate::builder::FnBuilder;
@@ -254,6 +254,7 @@ impl ProgramBuilder {
         let param = |name: &str| VarInfo {
             name: name.to_string(),
             repr: Repr::TObj,
+            mark: Mark::Unr,
         };
         let mut params = vec![param("k"), param("v")];
         if stateful {

@@ -73,6 +73,7 @@ pub struct LirFn {
     pub vars: Vec<VarInfo>,
     /// 直接の呼び出しの結果の Repr。
     pub ret: Repr,
+    pub ret_mark: Mark,
     /// `blocks[0]` が入口で、その引数が関数の引数である。辺はすべて番号の大きいブロックへ向かう。
     pub blocks: Vec<Block>,
 }
@@ -494,10 +495,62 @@ pub struct FnIdx(pub u32);
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct VarId(pub u32);
 
+/// 値が `Lin` を含みうるかを表す印 (docs/superpowers/specs/2026-10-13-s8d-kind-marks-design.md の「印」)。
+/// 順序を持つ型にしないのは、結びの順 (`Lin` > `Poly` > `Unr`) と宣言の順を取り違えないため。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Mark {
+    /// 共有してよい。
+    Unr,
+    /// 共有してはならず、ちょうど1回消費する。
+    Lin,
+    /// 型変数の位置で、`Lin` かもしれない。
+    Poly,
+}
+
+impl Mark {
+    pub fn name(self) -> &'static str {
+        match self {
+            Mark::Unr => "unr",
+            Mark::Lin => "lin",
+            Mark::Poly => "poly",
+        }
+    }
+
+    pub fn join(self, other: Mark) -> Mark {
+        match (self, other) {
+            (Mark::Lin, _) | (_, Mark::Lin) => Mark::Lin,
+            (Mark::Poly, _) | (_, Mark::Poly) => Mark::Poly,
+            _ => Mark::Unr,
+        }
+    }
+
+    /// `Unr` と `Lin` の組だけが受け渡せない。`Poly` はどちらとも受け渡せる。
+    pub fn compatible(self, other: Mark) -> bool {
+        !matches!(
+            (self, other),
+            (Mark::Unr, Mark::Lin) | (Mark::Lin, Mark::Unr)
+        )
+    }
+
+    /// 順序は `Unr` < `Poly` < `Lin`。
+    pub fn at_least(self, other: Mark) -> bool {
+        self.rank() >= other.rank()
+    }
+
+    fn rank(self) -> u8 {
+        match self {
+            Mark::Unr => 0,
+            Mark::Poly => 1,
+            Mark::Lin => 2,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VarInfo {
     pub name: String,
     pub repr: Repr,
+    pub mark: Mark,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]

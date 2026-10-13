@@ -12,7 +12,7 @@ mod tests;
 use std::collections::HashMap;
 
 use crate::{Call, CoreFn, Program, Rhs, Term};
-use eml_lir::{Atom, BlockId, Case, CasePattern, FnIdx, Prim, Repr, VarId, VarInfo};
+use eml_lir::{Atom, BlockId, Case, CasePattern, FnIdx, Mark, Prim, Repr, VarId, VarInfo};
 
 use split::split;
 
@@ -129,6 +129,7 @@ fn reserve(program: &mut Program, name: &str) -> FnIdx {
         clause: None,
         vars: Vec::new(),
         ret: Repr::TObj,
+        ret_mark: Mark::Unr,
         blocks: Vec::new(),
     });
     FnIdx(program.functions.len() as u32 - 1)
@@ -142,6 +143,7 @@ fn named(name: &str, repr: Repr) -> VarInfo {
     VarInfo {
         name: name.to_string(),
         repr,
+        mark: Mark::Unr,
     }
 }
 
