@@ -10,4 +10,4 @@ doctest = false
 [dependencies]
 
 [lints.rust]
-unexpected_cfgs = { level = "warn", check-cfg = ["cfg(loom)", "cfg(kani)"] }
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(loom)"] }

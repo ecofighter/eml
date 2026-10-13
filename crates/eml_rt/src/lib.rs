@@ -11,6 +11,9 @@ mod rc;
 mod sync;
 mod word;
 
+#[cfg(test)]
+mod verus_copies;
+
 pub use error::HeapError;
 pub use heap::{Heap, Stats, Token};
 pub use meta::{Kind, Meta};

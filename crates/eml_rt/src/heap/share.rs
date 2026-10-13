@@ -1,5 +1,6 @@
 //! `share` (docs/superpowers/specs/2026-10-13-s9a-eml-rt-core-design.md の「`share`」)。たどりは物体への読み書きを
-//! `Graph` の裏に置いて書き、ヒープの物体と Kani の有界なグラフのモデルで同じコードを動かす。
+//! `Graph` の裏に置いて書き、Verus がたどりを trait のメソッドの約束の上で証明する。証明するのは `crates/eml_rt/verus/share.rs`
+//! の写しで、写しが本体と同じことは `verus_copies.rs` のテストが確かめる。
 
 use std::marker::PhantomData;
 use std::mem;
@@ -52,7 +53,13 @@ pub(crate) fn share_walk<G: Graph>(
     stack.clear();
     visited_lin.clear();
     stack.push(root);
-    while let Some(node) = stack.pop() {
+    // Verus の写しと同じ形にする。写しは、取り出す前の積み場に名前を付けて証明する
+    #[allow(clippy::while_let_loop)]
+    loop {
+        let node = match stack.pop() {
+            Some(node) => node,
+            None => break,
+        };
         if !graph.live(node) {
             return Err(ShareError::Dead);
         }

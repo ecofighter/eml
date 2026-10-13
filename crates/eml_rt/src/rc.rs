@@ -9,7 +9,9 @@ pub(crate) const LOCAL_MAX: i32 = i32::MAX;
 pub(crate) const DUP_LIMIT: i32 = i32::MIN + (1 << 16);
 /// 共有の `decref` は、これより小さい数を動かさない。2つの境目の間の幅が、並行の加減算で数が戻ってくるのを防ぐ
 /// (spec の「上限」)。
-pub(crate) const DROP_LIMIT: i32 = i32::MIN + (1 << 17);
+/// 値は 1 << 17 である。`pub` と 16 進で書くのは、Verus の写し (`verus/rc.rs`) が `pub(crate)` の定数とシフトを受け付けず、
+/// 本体と同じ文字にそろえるためである。この crate の `rc` は private な module なので、外には見えない。
+pub const DROP_LIMIT: i32 = i32::MIN + 0x2_0000;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum DupStep {
