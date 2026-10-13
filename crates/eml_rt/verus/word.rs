@@ -1,5 +1,6 @@
 //! `word.rs` の即値のビット列の計算の写しと証明 (docs/implementation/testing.md の「Verus」)。
 
+use vstd::arithmetic::power2::{lemma2_to64_rest, pow2};
 use vstd::prelude::*;
 
 verus! {
@@ -68,6 +69,16 @@ pub(crate) const fn imm_value_bits(bits: usize) -> (r: i64)
 }
 
 // 補題
+
+/// 2つの定数が 63 ビットの符号付き整数の範囲 (-2^62 から 2^62 - 1) の両端であることを示す。16 進で書いた値の
+/// 書き誤りを、ここで見つけるためである
+proof fn lemma_int_bounds()
+    ensures
+        Word::MIN_INT == -pow2(62),
+        Word::MAX_INT == pow2(62) - 1,
+{
+    lemma2_to64_rest();
+}
 
 /// 63 ビットに収まる整数は、即値のビット列にして取り出すと元に戻り、ポインタの語と見分けられる
 proof fn lemma_imm_round_trip(n: i64)

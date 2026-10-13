@@ -107,8 +107,19 @@ pub(crate) enum ShareError {
 
 // 仕様
 
+/// たどりが展開するのは局所の物体だけである。不死の物体と共有の物体では、`lin` ビットによらず止まる
 pub open spec fn expands<N>(g: GView<N>, n: N) -> bool {
-    g.lin[n] || g.rc[n] > 0
+    g.rc[n] > 0
+}
+
+/// 取り出しても展開せず、誤りにもしない物体。`check_lin` なら、共有の `lin` の物体は `LinShared` になるので入らない
+pub open spec fn stops<N>(g: GView<N>, check_lin: bool, n: N) -> bool {
+    g.rc[n] <= 0 && !(check_lin && g.lin[n] && g.rc[n] < 0)
+}
+
+/// 根から、すでに共有の側にある `lin` の物体に届く。`check_lin` のたどりは、このときちょうど `LinShared` を返す
+pub open spec fn reaches_shared_lin<N>(g: GView<N>, root: N) -> bool {
+    exists|n: N| #[trigger] reached(g, root, n) && g.lin[n] && g.rc[n] < 0
 }
 
 pub open spec fn well_formed<N>(g: GView<N>, root: N) -> bool {
@@ -123,15 +134,17 @@ pub open spec fn well_formed<N>(g: GView<N>, root: N) -> bool {
         g.nodes.contains(p) && 0 <= k < g.children[p].len() ==> g.nodes.contains(
             #[trigger] g.children[p][k],
         )
-    &&& forall|n: N| g.nodes.contains(n) && #[trigger] g.lin[n] ==> g.rc[n] == 1
-    // lin の物体は根かただ1つの辺から1回だけ届く。2回届く入力は LinReachedTwice になるので、この証明の対象に入れない
+    // 不死の lin の物体 (rc 0) と共有の lin の物体 (rc が負) には、この前提を課さない。たどりはそこで止まるか LinShared を返す
+    &&& forall|n: N| g.nodes.contains(n) && #[trigger] g.lin[n] && g.rc[n] > 0 ==> g.rc[n] == 1
+    // 局所の lin の物体は根かただ1つの辺から1回だけ届く。2回届く入力は LinReachedTwice になるので、この証明の対象に入れない
     &&& forall|p: N, k: int|
         g.nodes.contains(p) && 0 <= k < g.children[p].len() && g.lin[#[trigger] g.children[p][k]]
-            ==> g.children[p][k] != root
+            && g.rc[g.children[p][k]] > 0 ==> g.children[p][k] != root
     &&& forall|p1: N, k1: int, p2: N, k2: int|
         g.nodes.contains(p1) && 0 <= k1 < g.children[p1].len() && g.nodes.contains(p2) && 0 <= k2
-            < g.children[p2].len() && g.lin[#[trigger] g.children[p1][k1]] && g.children[p1][k1]
-            == #[trigger] g.children[p2][k2] ==> p1 == p2 && k1 == k2
+            < g.children[p2].len() && g.lin[#[trigger] g.children[p1][k1]] && g.rc[
+            g.children[p1][k1]] > 0 && g.children[p1][k1] == #[trigger] g.children[p2][k2] ==> p1
+            == p2 && k1 == k2
     // たどりは共有の物体で止まるので、その先に印の付かない局所の物体が残らないようにする前提である
     &&& forall|p: N, k: int|
         g.nodes.contains(p) && 0 <= k < g.children[p].len() && !g.lin[p] && g.rc[p] < 0 ==> (g.rc[
@@ -142,7 +155,7 @@ pub open spec fn edge<N>(g: GView<N>, p: N, n: N) -> bool {
     exists|k: int| 0 <= k < g.children[p].len() && #[trigger] g.children[p][k] == n
 }
 
-/// 展開する物体だけを通る経路。不死の物体と共有の `lin` でない物体の先へは進まないので、届く物体はこの経路で定める
+/// 展開する物体だけを通る経路。不死の物体と共有の物体の先へは進まないので、届く物体はこの経路で定める
 pub open spec fn is_path<N>(g: GView<N>, root: N, path: Seq<N>) -> bool {
     &&& path.len() > 0
     &&& path[0] == root
@@ -162,7 +175,7 @@ pub open spec fn shared_points_to_no_local<N>(g: GView<N>) -> bool {
 }
 
 pub open spec fn node_post<N>(g0: GView<N>, g: GView<N>, root: N, receiver: u32, n: N) -> bool {
-    if reached(g0, root, n) && g0.lin[n] {
+    if reached(g0, root, n) && g0.lin[n] && g0.rc[n] > 0 {
         g.owner[n] == receiver && g.rc[n] == g0.rc[n]
     } else if reached(g0, root, n) && g0.rc[n] > 0 {
         g.rc[n] == mark_spec(g0.rc[n]) && g.owner[n] == g0.owner[n]
@@ -239,11 +252,12 @@ pub open spec fn inv<N>(
         0 <= i < stack.len() ==> g0.nodes.contains(#[trigger] stack[i]) && reached(g0, root, stack[i])
     &&& forall|n: N| #[trigger] e.contains(n) ==> reached(g0, root, n) && expands(g0, n)
     &&& forall|n: N|
-        #[trigger] pushed(g0, root, e, n) ==> (e.contains(n) || !expands(g0, n) || stack.contains(n))
+        #[trigger] pushed(g0, root, e, n) ==> (e.contains(n) || stops(g0, check_lin, n)
+            || stack.contains(n))
     &&& forall|n: N|
-        g0.nodes.contains(n) && #[trigger] g0.lin[n] ==> count(stack, n) + b2n(e.contains(n)) == b2n(
-            pushed(g0, root, e, n),
-        )
+        g0.nodes.contains(n) && #[trigger] g0.lin[n] && g0.rc[n] > 0 ==> count(stack, n) + b2n(
+            e.contains(n),
+        ) == b2n(pushed(g0, root, e, n))
     &&& check_lin ==> forall|n: N| #[trigger] visited.contains(n) ==> e.contains(n) && g0.lin[n]
 }
 
@@ -411,8 +425,8 @@ proof fn lemma_skip<N>(
     requires
         inv(g0, g, root, receiver, check_lin, s, visited, e),
         s.len() > 0,
-        !g0.lin[s.last()],
-        e.contains(s.last()) || !expands(g0, s.last()),
+        !(g0.lin[s.last()] && g0.rc[s.last()] > 0),
+        e.contains(s.last()) || stops(g0, check_lin, s.last()),
     ensures
         inv(g0, g, root, receiver, check_lin, s.drop_last(), visited, e),
 {
@@ -426,8 +440,11 @@ proof fn lemma_skip<N>(
     ) by {
         assert(t[i] == s[i]);
     }
-    assert forall|m: N| #[trigger] pushed(g0, root, e, m) implies (e.contains(m) || !expands(g0, m)
-        || t.contains(m)) by {
+    assert forall|m: N| #[trigger] pushed(g0, root, e, m) implies (e.contains(m) || stops(
+        g0,
+        check_lin,
+        m,
+    ) || t.contains(m)) by {
         if m != node && s.contains(m) {
             lemma_contains_drop_last(s, m);
         }
@@ -505,8 +522,11 @@ proof fn lemma_expand<N>(
             lemma_reach_child(g0, root, node, i - t.len());
         }
     }
-    assert forall|m: N| #[trigger] pushed(g0, root, e2, m) implies (e2.contains(m) || !expands(g0, m)
-        || s2.contains(m)) by {
+    assert forall|m: N| #[trigger] pushed(g0, root, e2, m) implies (e2.contains(m) || stops(
+        g0,
+        check_lin,
+        m,
+    ) || s2.contains(m)) by {
         if m != root {
             let (p, k) = choose|p: N, k: int|
                 #![trigger e2.contains(p), g0.children[p][k]]
@@ -530,11 +550,12 @@ proof fn lemma_expand<N>(
             }
         }
     }
-    assert forall|m: N| g0.nodes.contains(m) && #[trigger] g0.lin[m] implies count(s2, m) + b2n(
-        e2.contains(m),
-    ) == b2n(pushed(g0, root, e2, m)) by {
+    assert forall|m: N| g0.nodes.contains(m) && #[trigger] g0.lin[m] && g0.rc[m] > 0 implies count(
+        s2,
+        m,
+    ) + b2n(e2.contains(m)) == b2n(pushed(g0, root, e2, m)) by {
         lemma_count_append(t, ch, m);
-        assert(g0.lin[m] ==> count(s, m) + b2n(e.contains(m)) == b2n(pushed(g0, root, e, m)));
+        assert(count(s, m) + b2n(e.contains(m)) == b2n(pushed(g0, root, e, m)));
         if pushed(g0, root, e, m) {
             if m != root {
                 let (p, k) = choose|p: N, k: int|
@@ -615,9 +636,23 @@ proof fn lemma_finish<N>(
     ensures
         forall|n: N| g0.nodes.contains(n) ==> #[trigger] node_post(g0, g, root, receiver, n),
         shared_points_to_no_local(g),
+        check_lin ==> !reaches_shared_lin(g0, root),
 {
-    assert forall|m: N| #[trigger] pushed(g0, root, e, m) implies (e.contains(m) || !expands(g0, m)) by {
+    assert forall|m: N| #[trigger] pushed(g0, root, e, m) implies (e.contains(m) || stops(
+        g0,
+        check_lin,
+        m,
+    )) by {
         assert(!s.contains(m));
+    }
+    assert forall|m: N| #[trigger] pushed(g0, root, e, m) implies (e.contains(m) || !expands(g0, m)) by {
+        assert(e.contains(m) || stops(g0, check_lin, m));
+    }
+    if check_lin {
+        assert forall|n: N| #[trigger] reached(g0, root, n) implies !(g0.lin[n] && g0.rc[n] < 0) by {
+            lemma_reached_pushed(g0, root, e, n);
+            assert(e.contains(n) || stops(g0, check_lin, n));
+        }
     }
     assert forall|n: N| g0.nodes.contains(n) implies #[trigger] node_post(g0, g, root, receiver, n) by {
         assert(node_inv(g0, g, receiver, e, n));
@@ -641,6 +676,37 @@ proof fn lemma_finish<N>(
     }
 }
 
+/// 前提が満たせることの確かめ。満たすグラフがなければ、`share_walk` の結論は何も言わない。根 0 が局所の
+/// `lin` の子 1 を指すグラフで示す
+proof fn lemma_well_formed_is_satisfiable() {
+    let g = GView::<int> {
+        nodes: set![0int, 1int],
+        live: map![0int => true, 1int => true],
+        rc: map![0int => 1i32, 1int => 1i32],
+        lin: map![0int => false, 1int => true],
+        owner: map![0int => 0u32, 1int => 0u32],
+        children: map![0int => seq![1int], 1int => Seq::<int>::empty()],
+    };
+    assert(g.live.dom() =~= g.nodes);
+    assert(g.rc.dom() =~= g.nodes);
+    assert(g.lin.dom() =~= g.nodes);
+    assert(g.owner.dom() =~= g.nodes);
+    assert(g.children.dom() =~= g.nodes);
+    assert(g.children[0int][0] == 1int);
+    assert forall|n: int| #[trigger] reached(g, 0int, n) implies g.live[n] by {
+        let path = choose|path: Seq<int>| #[trigger] is_path(g, 0int, path) && path.last() == n;
+        if path.len() > 1 {
+            let i = path.len() - 2;
+            assert(g.nodes.contains(path[i]) && edge(g, path[i], path[i + 1]));
+            let k = choose|k: int|
+                0 <= k < g.children[path[i]].len() && #[trigger] g.children[path[i]][k] == path[i + 1];
+            assert(path[i] == 0int);
+            assert(path[i + 1] == 1int);
+        }
+    }
+    assert(well_formed(g, 0int));
+}
+
 // たどり
 
 pub(crate) fn share_walk<G: Graph>(
@@ -655,9 +721,10 @@ pub(crate) fn share_walk<G: Graph>(
         well_formed(old(graph).gv(), root),
         obeys_concrete_eq::<G::Node>(),
     ensures
-        r == Ok::<(), ShareError>(()),
         same_shape(old(graph).gv(), final(graph).gv()),
-        forall|n: G::Node|
+        r is Ok <==> !(check_lin && reaches_shared_lin(old(graph).gv(), root)),
+        r is Err ==> r == Err::<(), ShareError>(ShareError::LinShared),
+        r is Ok ==> forall|n: G::Node|
             old(graph).gv().nodes.contains(n) ==> #[trigger] node_post(
                 old(graph).gv(),
                 final(graph).gv(),
@@ -665,7 +732,7 @@ pub(crate) fn share_walk<G: Graph>(
                 receiver,
                 n,
             ),
-        shared_points_to_no_local(final(graph).gv()),
+        r is Ok ==> shared_points_to_no_local(final(graph).gv()),
 {
     let ghost g0 = graph.gv();
     let ghost mut e: Set<G::Node> = Set::empty();
@@ -688,6 +755,7 @@ pub(crate) fn share_walk<G: Graph>(
     loop
         invariant
             inv(g0, graph.gv(), root, receiver, check_lin, stack@, visited_lin@, e),
+            g0 == old(graph).gv(),
             obeys_concrete_eq::<G::Node>(),
         ensures
             inv(g0, graph.gv(), root, receiver, check_lin, stack@, visited_lin@, e),
@@ -720,7 +788,13 @@ pub(crate) fn share_walk<G: Graph>(
         if graph.lin(node) {
             if rc < 0 {
                 if check_lin {
+                    proof {
+                        assert(reached(g0, root, node) && g0.lin[node] && g0.rc[node] < 0);
+                    }
                     return Err(ShareError::LinShared);
+                }
+                proof {
+                    lemma_skip(g0, graph.gv(), root, receiver, check_lin, s, visited_lin@, e);
                 }
                 continue;
             }

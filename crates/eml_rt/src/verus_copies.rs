@@ -335,6 +335,33 @@ fn a_changed_body_is_reported() {
     );
 }
 
+/// `word` を名前とする呼び出し (`word` の後に、空白を挟んでもよい `(` が続く) があるか。
+fn calls(s: &[char], word: &str) -> bool {
+    (0..s.len()).any(|i| word_at(s, i, word) && s.get(skip_space(s, i + word.len())) == Some(&'('))
+}
+
+/// `assume_specification` の宣言のそれぞれについて、`(` の前までを空白を除いて返す。
+fn assume_specifications(source: &str) -> Vec<String> {
+    let s: Vec<char> = source.chars().collect();
+    (0..s.len())
+        .filter(|&i| word_at(&s, i, "assume_specification"))
+        .map(|i| squeeze(&s[i..find_at_depth_0(&s, i, &['('])]))
+        .collect()
+}
+
+#[test]
+fn calls_are_found_with_or_without_a_space() {
+    let s: Vec<char> = "assume (x); admit(); assume_specification<T>[ f ](x)"
+        .chars()
+        .collect();
+    assert!(calls(&s, "assume"));
+    assert!(calls(&s, "admit"));
+    let s: Vec<char> = "assume_specification<T>[ f ](x); let assumed = (1);"
+        .chars()
+        .collect();
+    assert!(!calls(&s, "assume"));
+}
+
 /// 属性は比べる前に除かれるので、証明を空にする属性や `assume` が混ざっても、上のテストは通ってしまう。
 /// 信頼してよいのは `<[T]>::contains` の約束の1つだけである。
 #[test]
@@ -342,23 +369,27 @@ fn the_copies_trust_nothing_but_the_contains_spec() {
     const FORBIDDEN: &[&str] = &[
         "external_body",
         "verifier::external",
-        "assume(",
-        "admit(",
         "exec_allows_no_decreases_clause",
     ];
+    const FORBIDDEN_CALLS: &[&str] = &["assume", "admit"];
     let sources = COPIES
         .iter()
         .map(|(_, copy, _)| *copy)
         .chain([include_str!("../verus/lib.rs")]);
-    let mut assume_specifications = 0;
+    let mut trusted = Vec::new();
     for source in sources {
         for word in FORBIDDEN {
             assert!(!source.contains(word), "a Verus copy contains `{word}`");
         }
-        assume_specifications += source.matches("assume_specification").count();
+        let chars: Vec<char> = source.chars().collect();
+        for word in FORBIDDEN_CALLS {
+            assert!(!calls(&chars, word), "a Verus copy calls `{word}`");
+        }
+        trusted.extend(assume_specifications(source));
     }
     assert_eq!(
-        assume_specifications, 1,
+        trusted,
+        ["assume_specification<T:PartialEq>[<[T]>::contains]"],
         "only `<[T]>::contains` may be trusted"
     );
 }

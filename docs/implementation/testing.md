@@ -111,9 +111,9 @@ Verus が検証するのは `verus!` の中のコードだけである。本体�
 証明することは次の5つである。どれも、値の全域と任意の大きさのグラフについて成り立つ。
 
 1. ヘッダの詰め方: `Meta` が正しい形であることを、種類のビットが既知の値 (0、1、2、15) で、`info` の予約の3ビットが 0 であることと決める。`Meta::new` は正しい形の `Meta` を作り、tag、scan、種類、`lin` ビットのどれも取り出すと元に戻る。`with_lin` は `lin` ビットだけを変え、正しい形を保つ。`same_shape` は、正しい形の2つの `Meta` で、tag と scan と種類が等しいときにちょうど真になる。正しい形なら、`Kind::from_bits` の `unreachable!` の枝には届かない
-2. 即値: `fits_imm` は `Word::MIN_INT` 以上 `Word::MAX_INT` 以下でちょうど真になる。その範囲の整数は、即値にすると即値と判定され、ポインタとは判定されず、値を取り出すと元に戻る。即値とポインタの両方に判定される語はなく、語の値 0 はどちらでもない。`Word` はポインタ型なので、ビット列の計算を整数の純粋な関数 (`fits_imm`、`imm_bits`、`is_imm_bits`、`is_ptr_bits`、`imm_value_bits`) に分け、`Word` のメソッドはそれを呼ぶ。写すのは、その純粋な関数である。写しは 64 ビットの環境を仮定する (`global size_of usize == 8`)。[オブジェクトモデル](../spec/object-model.md) の「受け入れる制約」も、64 ビットの環境だけを対象にしている
+2. 即値: `fits_imm` は `Word::MIN_INT` 以上 `Word::MAX_INT` 以下でちょうど真になる。その範囲の整数は、即値にすると即値と判定され、ポインタとは判定されず、値を取り出すと元に戻る。即値とポインタの両方に判定される語はなく、語の値 0 はどちらでもない。`Word` はポインタ型なので、ビット列の計算を整数の純粋な関数 (`fits_imm`、`imm_bits`、`is_imm_bits`、`is_ptr_bits`、`imm_value_bits`) に分け、`Word` のメソッドはそれを呼ぶ。写すのは、その純粋な関数である。`Word::MIN_INT` と `Word::MAX_INT` は、-2^62 と 2^62 - 1 に等しい。写しは 64 ビットの環境を仮定する (`global size_of usize == 8`)。[オブジェクトモデル](../spec/object-model.md) の「受け入れる制約」も、64 ビットの環境だけを対象にしている。本体は `word.rs` の `const` の assert (`usize::BITS == 64`) で、ほかの環境ではビルドを止める
 3. RC の遷移: `dup_step` と `decref_step` が、範囲で書いた仕様と同じ値を返す (符号なしの比較1回が範囲の判定になることを含む)。その上で、`dup_step`、`decref_step`、`mark_step` が、理想のモデル (rc、本当の参照の数、張り付きの旗) との対応を保つ。対応は次のとおりである。張り付いていない間は、rc が張り付きの範囲になく、符号を除いた rc が数に一致し、数は正である。張り付いた物体の rc は、張り付きの範囲 (局所の `MAX` か、`DROP_LIMIT` より小さい共有の数) にとどまる。`dup` は対応を保ち、解放しない。`decref` は数を1つ減らし、解放するのは張り付いていない物体の数が 0 になったときだけで、そのときは必ず解放する。解放しなければ対応を保つ。印付けは対応を保つ。不死の数 0 は、どの遷移でも動かない。1回の遷移ごとに対応が保たれることを示すので、0 でない任意の i32 から始めた任意の長さの列について成り立つ。逐次の列では、共有の rc が `DUP_LIMIT` 以上 `DROP_LIMIT` 未満の間も `dup` は数えるが `decref` は飛ばすので、そこはもう張り付いたものとして扱う
-4. `share`: `share_walk` を、`Graph` trait の各メソッドの約束の上で、任意の大きさのグラフについて証明する。前提は次の3つである。届く物体はどれも生きている。`lin` の物体は rc が 1 で、根か、ただ1つの辺から1回だけ参照される。共有の `lin` でない物体は、局所の `lin` でない物体を指さない。結論は次の4つである。たどりは止まり、`Ok` を返す。根から、`lin` か局所の物体だけを通って届く物体のうち、`lin` の物体は所有者が受け手に移って rc が変わらない。届く局所の `lin` でない物体は、rc に `mark_step` の印が付く。ほかの物体は、rc も所有者も変わらない。たどりの後も、共有の `lin` でない物体は局所の `lin` でない物体を指さない
+4. `share`: `share_walk` を、`Graph` trait の各メソッドの約束の上で、任意の大きさのグラフについて証明する。前提は次の3つである。届く物体はどれも生きている。局所の `lin` の物体は rc が 1 で、根か、ただ1つの辺から1回だけ参照される。共有の `lin` でない物体は、局所の `lin` でない物体を指さない。不死の `lin` の物体 (rc 0) と共有の `lin` の物体 (rc が負) には、前提を課さない。結論は次のとおりである。たどりは止まる。`check_lin` が真で、根から共有の `lin` の物体に届くときにちょうど `LinShared` を返し、それ以外は `Ok` を返す。`Ok` のときは、さらに次の3つが成り立つ。根から局所の物体だけを通って届く物体のうち、`lin` の物体は所有者が受け手に移って rc が変わらず、`lin` でない物体は rc に `mark_step` の印が付く。ほかの物体 (届かない物体と、`lin` ビットによらず不死の物体と共有の物体) は、rc も所有者も変わらない。たどりの後も、共有の `lin` でない物体は局所の `lin` でない物体を指さない。前提が空でないことも、前提を満たす小さいグラフ (局所の根が局所の `lin` の子を1つ指す) を補題で作って確かめる。たどりから `return Err(LinShared)` を消した変異と、rc 0 の `lin` の物体を `lin` の枝に入れた変異は、どちらも証明が通らない
 5. `release` と reuse の判定: `layout_check` は、名指しのデータの形 (種類が `Data`、tag が同じ、走査する語の数が `keep` の長さと同じ) だけを受け入れる。`reuse_in_place_check` は、形の違う `meta` (`WrongMeta`) と、残す `lin` ビットを落とす `meta` (`LinBitKept`) だけを拒む
 
 写すのは、次の関数と型である。表は `crates/eml_rt/src/verus_copies.rs` の `COPIES` にある。
@@ -136,7 +136,7 @@ Verus が検証するのは `verus!` の中のコードだけである。本体�
 
 - `the_verus_copies_match_the_code` は、表に載せた項目を本体と写しの両方から取り出す。名前は、ファイルの一番外の `fn`、`struct`、`enum`、`trait`、`const` か、`impl 型` の中の `fn` か `const` を指す `型::名前` である。両方から、コメント、属性、空白を除く。写しからはさらに、仕様の節 (`requires`、`ensures`、`recommends`、`invariant`、`invariant_except_break`、`decreases`、`returns`、`opens_invariants`)、`proof` の塊、`let ghost` の文、`spec fn` の宣言、戻り値の名前、空の `else {}` を除く。その上で、両方が同じ文字列になることを確かめる
 - 仕様の節の終わりは、節の後の深さ 0 の `{` か `;` で見分ける。そのため、写しの仕様の節には `{` を書かない。込み入った条件は `spec fn` に出す
-- `the_copies_trust_nothing_but_the_contains_spec` は、写しと `verus/lib.rs` に `external_body`、`verifier::external`、`assume(`、`admit(`、`exec_allows_no_decreases_clause` がないことと、`assume_specification` がちょうど1つであることを確かめる。属性は照合の前に除かれるので、証明を空にする属性が混ざっても、上のテストは通ってしまうためである
+- `the_copies_trust_nothing_but_the_contains_spec` は、写しと `verus/lib.rs` に `external_body`、`verifier::external`、`exec_allows_no_decreases_clause` がなく、`assume` と `admit` の呼び出し (名前と `(` の間の空白も許して探す) がないことを確かめる。`assume_specification` は1つだけで、それが `<[T]>::contains` のものであることも確かめる。属性は照合の前に除かれるので、証明を空にする属性が混ざっても、上のテストは通ってしまうためである
 - 照合の規則そのものは、同じファイルの小さいテスト (`verus_only_syntax_is_removed` など) で確かめる
 
 本体は、Verus が扱える書き方にする。次の書き換えは、動作を変えずに Verus に合わせたものである。
@@ -148,11 +148,14 @@ Verus が検証するのは `verus!` の中のコードだけである。本体�
 - 定数は 16 進で書く (`Word::MIN_INT`、`Word::MAX_INT`、`DUP_LIMIT`、`DROP_LIMIT`)。Verus は定数の式のシフトを、溢れうるとして受け付けないためである。`DROP_LIMIT` は `pub const` にする。写しの `pub open spec fn` (`mark_spec`) がこの定数を使うので、Verus が定数にも `pub` を求めるためである。`rc` は private な module なので、crate の外には見えない
 - `layout_check` は、種類の比較に `==` でなく `matches!` を使う。Verus は導出した `PartialEq` に仕様を与えないためである
 
-信頼して証明しない部分は、次の4つである。
+信頼して証明しない部分は、次の7つである。
 
 - `Graph` を実装するヒープの物体の読み書き。生のポインタを使うので写しにしない
 - `<[T]>::contains` の仕様。vstd にないので、写しの側で `assume_specification` で仮定する
 - `obeys_concrete_eq::<G::Node>()`。節点の型の `==` が値の等しさであるという前提である
+- 64 ビットの環境 (`global size_of usize == 8`)。本体の `const` の assert が、ほかの環境のビルドを止める
+- メモリから読んだ `Meta` が正しい形であること (種類のビットが既知の値で、予約のビットが 0)。証明が示すのは、本体が作る `Meta` (`Meta::new` と `with_lin` の結果) が正しい形であることまでである。ヘッダにはその値だけを書くが、読み出した値が正しい形かは証明しない
+- 写しの照合の規則そのもの。規則は同じファイルの小さいテストで確かめるが、証明はしない
 - Verus と Z3 そのもの
 
 Verus は Nix の devShell に入れず、Nix の外の環境から流す。導入は次のとおりである。
@@ -164,7 +167,7 @@ unzip -q verus-0.2026.10.04.426d8b0-arm64-macos.zip   # ~/.verus/verus-arm64-mac
 rustup install 1.98.1-aarch64-apple-darwin           # Verus が求める toolchain
 ```
 
-`crates/eml_rt/verus/check.sh` は、`env -i` で `~/.cargo/bin` とシステムのディレクトリだけを PATH にして Verus を呼ぶ。Verus の版が 0.2026.10.04.426d8b0 でなければ止まる。Verus の場所は `VERUS` で変えられる (既定は `~/.verus/verus-arm64-macos/verus`)。今の結果は `65 verified, 0 errors` である。
+`crates/eml_rt/verus/check.sh` は、`env -i` で `~/.cargo/bin` とシステムのディレクトリだけを PATH にして Verus を呼ぶ。Verus の版が 0.2026.10.04.426d8b0 でなければ止まる。Verus の場所は `VERUS` で変えられる (既定は `~/.verus/verus-arm64-macos/verus`)。今の結果は `67 verified, 0 errors` である。
 
 並行の手順 (共有の側の2つの境目の並行の議論と、公開の順序) は、今は証明しない。VM の並列化のときに、手順を Verus で証明する。ただし vstd の atomic は SeqCst だけを扱うので、Relaxed と AcqRel の順序の正しさは、Verus では確かめられない。順序は、文書の議論 ([オブジェクトモデル](../spec/object-model.md) の「上限」と「共有の側」) と Miri に任せる。
 
