@@ -14,7 +14,7 @@ use eml_lir::{
 };
 
 use super::split::Annotations;
-use super::{Helpers, call, direct, dummy, named};
+use super::{Helpers, call, captured_mark, direct, dummy, named};
 
 /// translate の節の関数 g ごとの in-place の入口。すぐに再開する節では g 自身を書き換えて入口にし、ほかの節では
 /// yield を始める入口 `g$entry` を足す。返す表は g から入口への対応である。
@@ -308,7 +308,9 @@ fn runs_in_place(program: &Program, clause: &CoreFn, operation: &OperationInfo) 
 /// すぐに再開する節の関数 g を、その場で入口にする。引数を「捕獲、evidence、操作の引数」にし、状態は入口の先頭で
 /// evidence の欄から取り出す。末尾の `resume k(v, s)` は、状態を欄に戻して v を返す形にする。
 fn into_entry(program: &mut Program, clause: FnIdx, effect: u32, op: u32) {
-    let operation_params = operation(&program.effects, effect, op).params.len();
+    let operation = operation(&program.effects, effect, op);
+    let operation_params = operation.params.len();
+    let ret_mark = operation.ret_mark;
     let resumes: Vec<(usize, usize)> = program
         .function(clause)
         .blocks
@@ -320,10 +322,15 @@ fn into_entry(program: &mut Program, clause: FnIdx, effect: u32, op: u32) {
     let params = function.params().to_vec();
     let captures = params.len() - operation_params - 2;
     let state = params[params.len() - 1];
-    let evidence = fresh(&mut function.vars, "e", Repr::Obj);
+    let evidence = fresh(&mut function.vars, "e", Repr::Obj, Mark::Unr);
     let mut values = Vec::new();
     for (index, at) in resumes {
-        let unit = fresh(&mut function.vars, "u", Repr::Unit);
+        let unit = fresh(
+            &mut function.vars,
+            "u",
+            Repr::Unit,
+            Prim::EvSetState.row().ret_mark,
+        );
         let block = &mut function.blocks[index];
         let Stmt::Let {
             var: result,
@@ -359,7 +366,8 @@ fn into_entry(program: &mut Program, clause: FnIdx, effect: u32, op: u32) {
         values.push(arg);
     }
     // 返す値の Repr は操作の結果の型から決まる。定数より変数の Repr を選ぶのは、`#N` が `enum` にも `tobj` にも
-    // 収まるためである。操作の ABI に合わせるのは box の挿入である
+    // 収まるためである。操作の ABI に合わせるのは box の挿入である。印は Repr と違って操作の表から直接写す。取り出す
+    // 状態の変数は、translate が節の状態の引数に付けた印のままにする
     let ret = values
         .iter()
         .find_map(|value| match value {
@@ -380,6 +388,7 @@ fn into_entry(program: &mut Program, clause: FnIdx, effect: u32, op: u32) {
         },
     );
     function.ret = ret;
+    function.ret_mark = ret_mark;
     function.name.push_str("$entry");
     function.clause = Some((effect, op));
 }
@@ -405,18 +414,19 @@ fn yielding_entry(
     for &param in &params[..captures] {
         args.push(Atom::Var(b.param(function.vars[param.0 as usize].clone())));
     }
-    let evidence = b.param(named("e", Repr::Obj));
+    let evidence = b.param(named("e", Repr::Obj, Mark::Unr));
     for (&param, &repr) in params[captures..].iter().zip(&operation.params) {
-        let name = &function.vars[param.0 as usize].name;
-        args.push(Atom::Var(b.param(named(name, repr))));
+        let VarInfo { name, mark, .. } = &function.vars[param.0 as usize];
+        args.push(Atom::Var(b.param(named(name, repr, *mark))));
     }
     // `closure` は引数を1つ以上とるので、捕獲も操作の引数もなければ関数の値にする
     let body = if args.is_empty() {
         Atom::Fn(clause)
     } else {
+        let mark = captured_mark(|var| b.mark(var), &args);
         Atom::Var(builder_bind(
             &mut b,
-            named("c", Repr::TObj),
+            named("c", Repr::TObj, mark),
             Rhs::MakeClosure(clause, args),
         ))
     };
@@ -427,7 +437,7 @@ fn yielding_entry(
     };
     builder_bind(
         &mut b,
-        named("u", Repr::Unit),
+        named("u", Repr::Unit, start.row().ret_mark),
         Rhs::Prim(start, vec![Atom::Var(evidence), body, Atom::Fn(id)]),
     );
     let ret = match operation.ret {
@@ -436,13 +446,14 @@ fn yielding_entry(
     };
     let value = dummy(ret, |info, rhs| builder_bind(&mut b, info, rhs));
     b.terminate(Term::Return(value));
-    // 入口はいつも yield か中断を始めるので、g の印によらず `yields` を立てる (docs/spec/core-ir.md の「`perform` と節の3つの形」)
+    // 入口はいつも yield か中断を始めるので、g の印によらず `yields` を立てる (docs/spec/core-ir.md の「`perform` と節の3つの形」)。
+    // 戻り値の印は操作の表から写す。`never` の操作の表の印は `poly` である
     let mut entry = b.finish(
         format!("{}$entry", function.name),
         true,
         true,
         ret,
-        Mark::Unr,
+        operation.ret_mark,
     );
     entry.clause = Some((effect, op));
     entry
@@ -454,8 +465,8 @@ fn builder_bind(b: &mut FnBuilder, info: VarInfo, rhs: Rhs) -> VarId {
     var
 }
 
-fn fresh(vars: &mut Vec<VarInfo>, name: &str, repr: Repr) -> VarId {
-    vars.push(named(name, repr));
+fn fresh(vars: &mut Vec<VarInfo>, name: &str, repr: Repr, mark: Mark) -> VarId {
+    vars.push(named(name, repr, mark));
     VarId(vars.len() as u32 - 1)
 }
 
@@ -476,14 +487,16 @@ struct Out<'a> {
 }
 
 impl Out<'_> {
-    fn bind(&mut self, name: &str, repr: Repr, rhs: Rhs) -> VarId {
-        let var = fresh(self.vars, name, repr);
+    fn bind(&mut self, name: &str, repr: Repr, mark: Mark, rhs: Rhs) -> VarId {
+        let var = fresh(self.vars, name, repr, mark);
         self.stmts.push(Stmt::Let { var, rhs });
         var
     }
 
+    /// 結果の印は基本操作の表の印である。evidence、`evv`、入口のクロージャは `unr` になる。
     fn prim(&mut self, name: &str, repr: Repr, prim: Prim, args: Vec<Atom>) -> VarId {
-        self.bind(name, repr, Rhs::Prim(prim, args))
+        let mark = prim.row().ret_mark;
+        self.bind(name, repr, mark, Rhs::Prim(prim, args))
     }
 
     /// 新しい evidence に入口を入れて `evv` の先頭に足し、本体を呼んで、その結果を `prompt$` に渡す。本体の
@@ -529,9 +542,11 @@ impl Out<'_> {
         annotations
             .not_yield_points
             .insert((block, self.stmts.len()));
+        // 本体の結果は `File` でありうる
         let value = self.bind(
             "x",
             Repr::TObj,
+            Mark::Poly,
             call(Call::Apply {
                 callee: body,
                 args: vec![Atom::Unit],

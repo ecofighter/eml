@@ -283,3 +283,26 @@ fn t3_takes_the_result_of_a_tail_clause_from_its_operation() {
     }
     ");
 }
+
+#[test]
+fn a_boxed_wrapper_copies_the_marks_of_its_function() {
+    // `f$boxed` の引数と戻り値は `f` と同じ値なので、`f` の印を写す。`box` と `unbox` で足す変数はスカラーなので
+    // `unr` である (docs/superpowers/specs/2026-10-13-s8d-kind-marks-design.md の「box の挿入が足す変数の印」)
+    let text = "\
+fn f(n.0: int, h.1: obj lin) -> obj lin {
+  return h.1
+}
+fn main(h.0: obj lin) -> obj lin {
+  let g.1: tobj = closure f(1)
+  let r.2: tobj poly = apply g.1(h.0)
+  return r.2
+}
+";
+    insta::assert_snapshot!(function(&boxing_text(text), "f$boxed"), @"
+    fn f$boxed(n.0: tobj, h.1: obj lin) -> obj lin {
+      let n.3: int = unbox n.0
+      let t.2: obj lin = call f(n.3, h.1)
+      return t.2
+    }
+    ");
+}

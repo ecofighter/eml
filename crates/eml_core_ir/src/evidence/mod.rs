@@ -119,8 +119,9 @@ impl Helpers {
     }
 }
 
-/// 中身を作る前に番号を取る。中身を作る間に、この関数を参照する関数を作ることがあるためである。仮の中身は印だけを
-/// 最終の形と同じにする。yield の地点を集めるときに、呼ばれる関数の `yields` を読むためである。
+/// 中身を作る前に番号を取る。中身を作る間に、この関数を参照する関数を作ることがあるためである。仮の中身は `yields` の
+/// 印だけを最終の形と同じにする。yield の地点を集めるときに、呼ばれる関数の `yields` を読むためである。戻り値の Repr
+/// と Kind の印は補助の関数と同じにしておくが、仮の中身から読む所はない。
 fn reserve(program: &mut Program, name: &str) -> FnIdx {
     program.functions.push(CoreFn {
         name: name.to_string(),
@@ -129,7 +130,7 @@ fn reserve(program: &mut Program, name: &str) -> FnIdx {
         clause: None,
         vars: Vec::new(),
         ret: Repr::TObj,
-        ret_mark: Mark::Unr,
+        ret_mark: Mark::Poly,
         blocks: Vec::new(),
     });
     FnIdx(program.functions.len() as u32 - 1)
@@ -139,12 +140,25 @@ fn fill(program: &mut Program, idx: FnIdx, function: CoreFn) {
     program.functions[idx.0 as usize] = function;
 }
 
-fn named(name: &str, repr: Repr) -> VarInfo {
+fn named(name: &str, repr: Repr, mark: Mark) -> VarInfo {
     VarInfo {
         name: name.to_string(),
         repr,
-        mark: Mark::Unr,
+        mark,
     }
+}
+
+/// EP が作るクロージャの印。捕まえた値の印の結びで、定数は `unr` である。`File` を捕まえた続きが `lin` になるので、
+/// 決め打ちの `poly` より正確である (docs/superpowers/specs/2026-10-13-s8d-kind-marks-design.md の
+/// 「EP が足す変数の印」)。
+fn captured_mark(mark: impl Fn(VarId) -> Mark, captures: &[Atom]) -> Mark {
+    captures
+        .iter()
+        .filter_map(|capture| match capture {
+            Atom::Var(var) => Some(mark(*var)),
+            _ => None,
+        })
+        .fold(Mark::Unr, Mark::join)
 }
 
 /// `yielding` の結果で分ける。0 (yield していない) なら速い道へ、ほかは遅い道へ進む。
@@ -162,12 +176,13 @@ fn yield_switch(yielding: VarId, fast: BlockId, slow: BlockId) -> Term {
 }
 
 /// yield 中に返すダミーの値。呼び出し元は使わずに捨てる。`tobj` にも物体を使うのは、互換の位置を通って `obj` の
-/// 変数に入ることがあるためである (docs/spec/lir.md の「ダミーの値」)。
+/// 変数に入ることがあるためである (docs/spec/lir.md の「ダミーの値」)。印が `poly` なのは、戻り値の印が `lin` の
+/// 関数からも返すためである。
 /// `bind` は物体を作る `let` を置き、その変数を返す。
 fn dummy(ret: Repr, bind: impl FnOnce(VarInfo, Rhs) -> VarId) -> Atom {
     match ret {
         Repr::Obj | Repr::TObj => Atom::Var(bind(
-            named("d", Repr::Obj),
+            named("d", Repr::Obj, Prim::Dummy.row().ret_mark),
             Rhs::Prim(Prim::Dummy, Vec::new()),
         )),
         Repr::Int => Atom::Int(0),

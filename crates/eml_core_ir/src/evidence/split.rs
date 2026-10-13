@@ -10,9 +10,9 @@ use std::ops::Range;
 use crate::liveness::{insert_var, live_after_term, live_in, step_back};
 use crate::tail::tail_position_call;
 use crate::{Block, Call, CoreFn, Program, Rhs, Stmt, Term};
-use eml_lir::{Atom, BlockId, FnIdx, Prim, Repr, VarId, VarInfo};
+use eml_lir::{Atom, BlockId, FnIdx, Mark, Prim, Repr, VarId, VarInfo};
 
-use super::{Helpers, direct, dummy, named, reserve, yield_switch};
+use super::{Helpers, captured_mark, direct, dummy, named, reserve, yield_switch};
 
 /// 変換の後の関数で、yield の地点の扱いを変える所。handle と `mask` の変換が作る。位置はブロックと文の添字である。
 #[derive(Default)]
@@ -339,18 +339,14 @@ impl Splitter<'_> {
         let source = self.source;
         let block = source.block(segment.block);
         let ret = source.ret;
+        let ret_mark = source.ret_mark;
         let mut stmts = Vec::new();
         let mut next = segment.start;
         for index in segment.points.clone() {
             let point = &self.points[index];
             let continuation = self.continuations[index];
             stmts.extend_from_slice(&block.stmts[next..=point.call]);
-            let yielding = out.bind(
-                &mut stmts,
-                "y",
-                Repr::Int,
-                Rhs::Prim(Prim::Yielding, Vec::new()),
-            );
+            let yielding = out.prim(&mut stmts, "y", Repr::Int, Prim::Yielding, Vec::new());
             let here = out.blocks.len() as u32;
             out.blocks.push(Block {
                 params: mem::take(&mut params),
@@ -365,7 +361,7 @@ impl Splitter<'_> {
                 stmts.extend_from_slice(&block.stmts[next..point.resume]);
                 let mut args: Vec<Atom> = point.live.iter().copied().map(Atom::Var).collect();
                 args.push(Atom::Var(point.result));
-                let r = out.bind(&mut stmts, "r", ret, direct(continuation, args));
+                let r = out.bind(&mut stmts, "r", ret, ret_mark, direct(continuation, args));
                 out.blocks.push(Block {
                     params: Vec::new(),
                     stmts,
@@ -381,7 +377,7 @@ impl Splitter<'_> {
                 let mut call_args: Vec<Atom> =
                     self.join_live(*target).into_iter().map(Atom::Var).collect();
                 call_args.extend_from_slice(args);
-                let r = out.bind(&mut stmts, "r", ret, direct(join, call_args));
+                let r = out.bind(&mut stmts, "r", ret, ret_mark, direct(join, call_args));
                 Term::Return(Atom::Var(r))
             }
             term => {
@@ -408,16 +404,56 @@ struct Out {
 }
 
 impl Out {
-    fn bind(&mut self, stmts: &mut Vec<Stmt>, name: &str, repr: Repr, rhs: Rhs) -> VarId {
-        self.vars.push(named(name, repr));
+    fn bind(
+        &mut self,
+        stmts: &mut Vec<Stmt>,
+        name: &str,
+        repr: Repr,
+        mark: Mark,
+        rhs: Rhs,
+    ) -> VarId {
+        self.vars.push(named(name, repr, mark));
         let var = VarId(self.vars.len() as u32 - 1);
         stmts.push(Stmt::Let { var, rhs });
         var
     }
+
+    /// 結果の印は基本操作の表の印である。
+    fn prim(
+        &mut self,
+        stmts: &mut Vec<Stmt>,
+        name: &str,
+        repr: Repr,
+        prim: Prim,
+        args: Vec<Atom>,
+    ) -> VarId {
+        let mark = prim.row().ret_mark;
+        self.bind(stmts, name, repr, mark, Rhs::Prim(prim, args))
+    }
+
+    /// 印は捕まえた値の印の結びである。
+    fn closure(
+        &mut self,
+        stmts: &mut Vec<Stmt>,
+        name: &str,
+        target: FnIdx,
+        captures: Vec<Atom>,
+    ) -> VarId {
+        let mark = captured_mark(|var| self.vars[var.0 as usize].mark, &captures);
+        self.bind(
+            stmts,
+            name,
+            Repr::TObj,
+            mark,
+            Rhs::MakeClosure(target, captures),
+        )
+    }
 }
 
 /// 遅い道。取り出した κ に続きのクロージャを `compose$` で足して戻し、ダミーを返す。`mask` の地点では、先に κ を
-/// `mask$` で包む。内側のフレームの再開のときに `mask$` が `evv` を整えるためである。
+/// `mask$` で包む。内側のフレームの再開のときに `mask$` が `evv` を整えるためである。地点の結果はここではダミーで、
+/// `unr` でない RC の結果は先頭で drop する。V1 が `unr` でない変数への Perceus の `decref` を拒むためである
+/// (docs/superpowers/specs/2026-10-13-s8d-kind-marks-design.md の「明示の drop」)。
 fn slow_path(
     program: &mut Program,
     helpers: &mut Helpers,
@@ -427,48 +463,39 @@ fn slow_path(
     ret: Repr,
 ) -> Block {
     let mut stmts = Vec::new();
-    let mut k = out.bind(
-        &mut stmts,
-        "k",
-        Repr::TObj,
-        Rhs::Prim(Prim::YieldContTake, Vec::new()),
-    );
+    let result = &out.vars[point.result.0 as usize];
+    if result.repr.is_rc() && result.mark != Mark::Unr {
+        out.bind(
+            &mut stmts,
+            "u",
+            Repr::Unit,
+            Mark::Unr,
+            Rhs::Drop(Atom::Var(point.result)),
+        );
+    }
+    let mut k = out.prim(&mut stmts, "k", Repr::TObj, Prim::YieldContTake, Vec::new());
     if let Some(effects) = &point.mask {
         let mask = helpers.mask(program, effects);
-        k = out.bind(
-            &mut stmts,
-            "k",
-            Repr::TObj,
-            Rhs::MakeClosure(mask, vec![Atom::Var(k)]),
-        );
+        k = out.closure(&mut stmts, "k", mask, vec![Atom::Var(k)]);
     }
     // `closure` は引数を1つ以上とるので、捕まえる変数がなければ関数の値にする
     let rest = if point.live.is_empty() {
         Atom::Fn(continuation)
     } else {
         let captured = point.live.iter().copied().map(Atom::Var).collect();
-        Atom::Var(out.bind(
-            &mut stmts,
-            "c",
-            Repr::TObj,
-            Rhs::MakeClosure(continuation, captured),
-        ))
+        Atom::Var(out.closure(&mut stmts, "c", continuation, captured))
     };
     let compose = helpers.compose(program);
-    let composed = out.bind(
-        &mut stmts,
-        "k",
-        Repr::TObj,
-        Rhs::MakeClosure(compose, vec![Atom::Var(k), rest]),
-    );
-    out.bind(
+    let composed = out.closure(&mut stmts, "k", compose, vec![Atom::Var(k), rest]);
+    out.prim(
         &mut stmts,
         "u",
         Repr::Unit,
-        Rhs::Prim(Prim::YieldContSet, vec![Atom::Var(composed)]),
+        Prim::YieldContSet,
+        vec![Atom::Var(composed)],
     );
     let value = dummy(ret, |info, rhs| {
-        out.bind(&mut stmts, &info.name, info.repr, rhs)
+        out.bind(&mut stmts, &info.name, info.repr, info.mark, rhs)
     });
     Block {
         params: Vec::new(),

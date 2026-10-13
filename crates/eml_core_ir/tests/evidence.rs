@@ -34,9 +34,9 @@ fn a_yield_point_continues_in_a_continuation_function() {
       let y.3: int = prim yielding()
       switch y.3 { 0 -> b2, _ -> b1 }
     b1:
-      let k.4: tobj = prim yield_cont_take()
+      let k.4: tobj poly = prim yield_cont_take()
       let c.5: tobj = closure f$k0(a.0)
-      let k.6: tobj = closure compose$(k.4, c.5)
+      let k.6: tobj poly = closure compose$(k.4, c.5)
       let u.7: unit = prim yield_cont_set(k.6)
       return 0
     b2:
@@ -96,9 +96,9 @@ yields fn f(a.0: int) -> int {
       let y.4: int = prim yielding()
       switch y.4 { 0 -> b2, _ -> b1 }
     b1:
-      let k.5: tobj = prim yield_cont_take()
+      let k.5: tobj poly = prim yield_cont_take()
       let c.6: tobj = closure f$k0(a.0)
-      let k.7: tobj = closure compose$(k.5, c.6)
+      let k.7: tobj poly = closure compose$(k.5, c.6)
       let u.8: unit = prim yield_cont_set(k.7)
       return 0
     b2:
@@ -106,9 +106,9 @@ yields fn f(a.0: int) -> int {
       let y.9: int = prim yielding()
       switch y.9 { 0 -> b4, _ -> b3 }
     b3:
-      let k.10: tobj = prim yield_cont_take()
+      let k.10: tobj poly = prim yield_cont_take()
       let c.11: tobj = closure f$k1(a.0)
-      let k.12: tobj = closure compose$(k.10, c.11)
+      let k.12: tobj poly = closure compose$(k.10, c.11)
       let u.13: unit = prim yield_cont_set(k.12)
       return 0
     b4:
@@ -122,9 +122,9 @@ yields fn f(a.0: int) -> int {
       let y.4: int = prim yielding()
       switch y.4 { 0 -> b2, _ -> b1 }
     b1:
-      let k.5: tobj = prim yield_cont_take()
+      let k.5: tobj poly = prim yield_cont_take()
       let c.6: tobj = closure f$k1(a.0)
-      let k.7: tobj = closure compose$(k.5, c.6)
+      let k.7: tobj poly = closure compose$(k.5, c.6)
       let u.8: unit = prim yield_cont_set(k.7)
       return 0
     b2:
@@ -179,9 +179,9 @@ b4:
       let y.6: int = prim yielding()
       switch y.6 { 0 -> b6, _ -> b5 }
     b5:
-      let k.7: tobj = prim yield_cont_take()
+      let k.7: tobj poly = prim yield_cont_take()
       let c.8: tobj = closure f$k1(x.2)
-      let k.9: tobj = closure compose$(k.7, c.8)
+      let k.9: tobj poly = closure compose$(k.7, c.8)
       let u.10: unit = prim yield_cont_set(k.9)
       return 0
     b6:
@@ -225,9 +225,9 @@ b3(v.3: int):
       let y.5: int = prim yielding()
       switch y.5 { 0 -> b2, _ -> b1 }
     b1:
-      let k.6: tobj = prim yield_cont_take()
+      let k.6: tobj poly = prim yield_cont_take()
       let c.7: tobj = closure f$k0(a.0)
-      let k.8: tobj = closure compose$(k.6, c.7)
+      let k.8: tobj poly = closure compose$(k.6, c.7)
       let u.9: unit = prim yield_cont_set(k.8)
       return 0
     b2:
@@ -300,9 +300,9 @@ b3(v.2: int):
       let y.5: int = prim yielding()
       switch y.5 { 0 -> b2, _ -> b1 }
     b1:
-      let k.6: tobj = prim yield_cont_take()
+      let k.6: tobj poly = prim yield_cont_take()
       let c.7: tobj = closure f$k1(x.1)
-      let k.8: tobj = closure compose$(k.6, c.7)
+      let k.8: tobj poly = closure compose$(k.6, c.7)
       let u.9: unit = prim yield_cont_set(k.8)
       return 0
     b2:
@@ -337,11 +337,11 @@ yields fn f(h.0: tobj, a.1: tobj) -> tobj {
       let y.5: int = prim yielding()
       switch y.5 { 0 -> b2, _ -> b1 }
     b1:
-      let k.6: tobj = prim yield_cont_take()
+      let k.6: tobj poly = prim yield_cont_take()
       let c.7: tobj = closure f$k0(h.0, x.2)
-      let k.8: tobj = closure compose$(k.6, c.7)
+      let k.8: tobj poly = closure compose$(k.6, c.7)
       let u.9: unit = prim yield_cont_set(k.8)
-      let d.10: obj = prim dummy()
+      let d.10: obj poly = prim dummy()
       return d.10
     b2:
       let z.4: tobj = apply h.0(y.3)
@@ -392,11 +392,11 @@ yields fn n() -> unit {
       let y.2: int = prim yielding()
       switch y.2 { 0 -> b2, _ -> b1 }
     b1:
-      let k.3: tobj = prim yield_cont_take()
+      let k.3: tobj poly = prim yield_cont_take()
       let c.4: tobj = closure o$k0(s.0)
-      let k.5: tobj = closure compose$(k.3, c.4)
+      let k.5: tobj poly = closure compose$(k.3, c.4)
       let u.6: unit = prim yield_cont_set(k.5)
-      let d.7: obj = prim dummy()
+      let d.7: obj poly = prim dummy()
       return d.7
     b2:
       return s.0
@@ -408,11 +408,11 @@ yields fn n() -> unit {
       let y.2: int = prim yielding()
       switch y.2 { 0 -> b2, _ -> b1 }
     b1:
-      let k.3: tobj = prim yield_cont_take()
+      let k.3: tobj poly = prim yield_cont_take()
       let c.4: tobj = closure t$k0(s.0)
-      let k.5: tobj = closure compose$(k.3, c.4)
+      let k.5: tobj poly = closure compose$(k.3, c.4)
       let u.6: unit = prim yield_cont_set(k.5)
-      let d.7: obj = prim dummy()
+      let d.7: obj poly = prim dummy()
       return d.7
     b2:
       return s.0
@@ -424,8 +424,8 @@ yields fn n() -> unit {
       let y.1: int = prim yielding()
       switch y.1 { 0 -> b2, _ -> b1 }
     b1:
-      let k.2: tobj = prim yield_cont_take()
-      let k.3: tobj = closure compose$(k.2, &i$k0)
+      let k.2: tobj poly = prim yield_cont_take()
+      let k.3: tobj poly = closure compose$(k.2, &i$k0)
       let u.4: unit = prim yield_cont_set(k.3)
       return 0
     b2:
@@ -438,8 +438,8 @@ yields fn n() -> unit {
       let y.1: int = prim yielding()
       switch y.1 { 0 -> b2, _ -> b1 }
     b1:
-      let k.2: tobj = prim yield_cont_take()
-      let k.3: tobj = closure compose$(k.2, &e$k0)
+      let k.2: tobj poly = prim yield_cont_take()
+      let k.3: tobj poly = closure compose$(k.2, &e$k0)
       let u.4: unit = prim yield_cont_set(k.3)
       return #0
     b2:
@@ -452,8 +452,8 @@ yields fn n() -> unit {
       let y.2: int = prim yielding()
       switch y.2 { 0 -> b2, _ -> b1 }
     b1:
-      let k.3: tobj = prim yield_cont_take()
-      let k.4: tobj = closure compose$(k.3, &n$k0)
+      let k.3: tobj poly = prim yield_cont_take()
+      let k.4: tobj poly = closure compose$(k.3, &n$k0)
       let u.5: unit = prim yield_cont_set(k.4)
       return ()
     b2:
@@ -461,8 +461,8 @@ yields fn n() -> unit {
       let y.6: int = prim yielding()
       switch y.6 { 0 -> b4, _ -> b3 }
     b3:
-      let k.7: tobj = prim yield_cont_take()
-      let k.8: tobj = closure compose$(k.7, &n$k1)
+      let k.7: tobj poly = prim yield_cont_take()
+      let k.8: tobj poly = closure compose$(k.7, &n$k1)
       let u.9: unit = prim yield_cont_set(k.8)
       return ()
     b4:
@@ -494,19 +494,20 @@ yields fn h() -> int {
     assert_eq!(shown.matches("fn compose$(").count(), 1, "{shown}");
     assert!(!shown.contains("fn id$("), "{shown}");
     insta::assert_snapshot!(function(&shown, "compose$"), @"
-    yields fn compose$(k.0: tobj, c.1: tobj, x.2: tobj) -> tobj {
-      let r.3: tobj = yields apply k.0(x.2)
+    yields fn compose$(k.0: tobj poly, c.1: tobj poly, x.2: tobj poly) -> tobj poly {
+      let r.3: tobj poly = yields apply k.0(x.2)
       let y.4: int = prim yielding()
       switch y.4 { 0 -> b2, _ -> b1 }
     b1:
-      let k.5: tobj = prim yield_cont_take()
-      let k.6: tobj = closure compose$(k.5, c.1)
-      let u.7: unit = prim yield_cont_set(k.6)
-      let d.8: obj = prim dummy()
-      return d.8
+      let u.5: unit = drop r.3
+      let k.6: tobj poly = prim yield_cont_take()
+      let k.7: tobj poly = closure compose$(k.6, c.1)
+      let u.8: unit = prim yield_cont_set(k.7)
+      let d.9: obj poly = prim dummy()
+      return d.9
     b2:
-      let t.9: tobj = yields apply c.1(r.3)
-      return t.9
+      let t.10: tobj poly = yields apply c.1(r.3)
+      return t.10
     }
     ");
 }
@@ -528,7 +529,7 @@ fn a_handle_installs_evidence_and_calls_prompt() {
       let u.6: unit = prim ev_set_clause[Ask.ask](ev.5, &main$handle0$ask$entry)
       let w.7: tobj = prim evv_push(w.4, ev.5)
       let u.8: unit = prim evv_set(w.7)
-      let x.9: tobj = yields apply &main$handle0(())
+      let x.9: tobj poly = yields apply &main$handle0(())
       let t.1: int = call prompt$(ev.5, &main$handle0$return, x.9)
       let t.2: obj = extern "Prelude.Show Int.show"(t.1)
       let t.3: unit = extern Prelude.println(t.2)
@@ -617,10 +618,10 @@ fn a_never_clause_aborts() {
     let text = "effect Fail where\n  never fail : String -> a\n\nmain : Unit -> <IO> Unit\nmain () =\n  let r =\n    handle fail \"x\" + 1 with\n      | fail _ -> 0\n  println (show r)";
     let shown = core_text(text, Pass::Evidence);
     insta::assert_snapshot!(function(&shown, "main$handle0$fail$entry"), @"
-    internal yields clause Fail.fail fn main$handle0$fail$entry(e.0: obj, p.1: obj) -> obj {
+    internal yields clause Fail.fail fn main$handle0$fail$entry(e.0: obj, p.1: obj) -> obj poly {
       let c.2: tobj = closure main$handle0$fail(p.1)
       let u.3: unit = prim yield_abort(e.0, c.2, &id$)
-      let d.4: obj = prim dummy()
+      let d.4: obj poly = prim dummy()
       return d.4
     }
     ");
@@ -641,8 +642,8 @@ fn a_perform_looks_up_evidence_and_calls_its_clause() {
       let y.5: int = prim yielding()
       switch y.5 { 0 -> b2, _ -> b1 }
     b1:
-      let k.6: tobj = prim yield_cont_take()
-      let k.7: tobj = closure compose$(k.6, &main$handle0$k0)
+      let k.6: tobj poly = prim yield_cont_take()
+      let k.7: tobj poly = closure compose$(k.6, &main$handle0$k0)
       let u.8: unit = prim yield_cont_set(k.7)
       return 0
     b2:
@@ -687,11 +688,11 @@ fn a_masked_call_restores_the_evidence_list_and_wraps_the_continuation() {
       let y.11: int = prim yielding()
       switch y.11 { 0 -> b2, _ -> b1 }
     b1:
-      let k.12: tobj = prim yield_cont_take()
-      let c.13: tobj = closure "run<e>$k0"(cb.0)
-      let k.14: tobj = closure compose$(k.12, c.13)
+      let k.12: tobj poly = prim yield_cont_take()
+      let c.13: tobj poly = closure "run<e>$k0"(cb.0)
+      let k.14: tobj poly = closure compose$(k.12, c.13)
       let u.15: unit = prim yield_cont_set(k.14)
-      let d.16: obj = prim dummy()
+      let d.16: obj poly = prim dummy()
       return d.16
     b2:
       let w.7: tobj = prim evv_get()
@@ -701,12 +702,12 @@ fn a_masked_call_restores_the_evidence_list_and_wraps_the_continuation() {
       let y.17: int = prim yielding()
       switch y.17 { 0 -> b4, _ -> b3 }
     b3:
-      let k.18: tobj = prim yield_cont_take()
-      let k.19: tobj = closure "mask$[State]"(k.18)
+      let k.18: tobj poly = prim yield_cont_take()
+      let k.19: tobj poly = closure "mask$[State]"(k.18)
       let c.20: tobj = closure "run<e>$k1"(t.1)
-      let k.21: tobj = closure compose$(k.19, c.20)
+      let k.21: tobj poly = closure compose$(k.19, c.20)
       let u.22: unit = prim yield_cont_set(k.21)
-      let d.23: obj = prim dummy()
+      let d.23: obj poly = prim dummy()
       return d.23
     b4:
       let u.10: unit = prim evv_set(w.7)
@@ -740,12 +741,12 @@ fn a_masked_call_in_a_continuation_restores_the_evidence_list_before_it_continue
       let y.12: int = prim yielding()
       switch y.12 { 0 -> b2, _ -> b1 }
     b1:
-      let k.13: tobj = prim yield_cont_take()
-      let k.14: tobj = closure "mask$[State]"(k.13)
+      let k.13: tobj poly = prim yield_cont_take()
+      let k.14: tobj poly = closure "mask$[State]"(k.13)
       let c.15: tobj = closure "run<e>$k1"(t.1)
-      let k.16: tobj = closure compose$(k.14, c.15)
+      let k.16: tobj poly = closure compose$(k.14, c.15)
       let u.17: unit = prim yield_cont_set(k.16)
-      let d.18: obj = prim dummy()
+      let d.18: obj poly = prim dummy()
       return d.18
     b2:
       let u.11: unit = prim evv_set(w.8)
@@ -775,8 +776,8 @@ fn a_resume_in_a_yielding_function_becomes_a_yielding_apply() {
       let y.5: int = prim yielding()
       switch y.5 { 0 -> b2, _ -> b1 }
     b1:
-      let k.6: tobj = prim yield_cont_take()
-      let k.7: tobj = closure compose$(k.6, &f$handle0$ask$k0)
+      let k.6: tobj poly = prim yield_cont_take()
+      let k.7: tobj poly = closure compose$(k.6, &f$handle0$ask$k0)
       let u.8: unit = prim yield_cont_set(k.7)
       return 0
     b2:
@@ -808,9 +809,9 @@ fn a_pure_instance_of_a_row_polymorphic_function_has_no_yield_check() {
       let y.4: int = prim yielding()
       switch y.4 { 0 -> b2, _ -> b1 }
     b1:
-      let k.5: tobj = prim yield_cont_take()
+      let k.5: tobj poly = prim yield_cont_take()
       let c.6: tobj = closure "twice<e>$k0"(f.0)
-      let k.7: tobj = closure compose$(k.5, c.6)
+      let k.7: tobj poly = closure compose$(k.5, c.6)
       let u.8: unit = prim yield_cont_set(k.7)
       return 0
     b2:
@@ -818,9 +819,9 @@ fn a_pure_instance_of_a_row_polymorphic_function_has_no_yield_check() {
       let y.9: int = prim yielding()
       switch y.9 { 0 -> b4, _ -> b3 }
     b3:
-      let k.10: tobj = prim yield_cont_take()
+      let k.10: tobj poly = prim yield_cont_take()
       let c.11: tobj = closure "twice<e>$k1"(t.1)
-      let k.12: tobj = closure compose$(k.10, c.11)
+      let k.12: tobj poly = closure compose$(k.10, c.11)
       let u.13: unit = prim yield_cont_set(k.12)
       return 0
     b4:
@@ -828,4 +829,104 @@ fn a_pure_instance_of_a_row_polymorphic_function_has_no_yield_check() {
       return t.3
     }
     "#);
+}
+
+/// `shown` のうち、`rhs` を右辺に持つ `let` の行。1つだけあることも確かめる。
+fn let_line<'a>(shown: &'a str, rhs: &str) -> &'a str {
+    let lines: Vec<&str> = shown
+        .lines()
+        .filter(|line| line.trim_start().starts_with("let ") && line.contains(rhs))
+        .collect();
+    assert_eq!(lines.len(), 1, "one `let` of `{rhs}` in\n{shown}");
+    lines[0]
+}
+
+/// 束縛する変数の Repr と印 (`tobj lin` など)。
+fn binding(line: &str) -> &str {
+    let (_, rest) = line.split_once(": ").expect("a `let` names its Repr");
+    rest.split(" = ").next().unwrap()
+}
+
+#[test]
+fn closures_ep_builds_take_the_join_of_their_captures() {
+    // yield をまたいで `File` が生きている `use_it` の続きのクロージャは `lin` で、それを足した κ も `lin` である。
+    // `count` の続きは `Int` しか捕まえないので `unr` になる。すぐに再開しない節の入口が作る節のクロージャも、
+    // 操作の引数の `File` を捕まえて `lin` になる
+    // (docs/superpowers/specs/2026-10-13-s8d-kind-marks-design.md の「EP が足す変数の印」)
+    let text = "effect Ask where\n  ask : Unit -> Int\n\neffect Sink where\n  put : Fs.File -> Unit\n\nuse_it : Fs.File -> <Ask, IO> Unit\nuse_it f =\n  let n = ask ()\n  Fs.close f\n  println (show n)\n\ncount : Int -> <Ask> Int\ncount m =\n  let n = ask ()\n  n + m\n\nmain : Unit -> <IO> Unit\nmain () =\n  handle use_it (Fs.open \"input.txt\") with\n    | ask () k -> k 1\n  let r = handle count 1 with\n    | ask () k -> k 2\n  println (show r)\n  handle put (Fs.open \"input.txt\") with\n    | put f k ->\n      Fs.close f\n      let u = k ()\n      println \"resumed\"\n      u";
+    let shown = core_text(text, Pass::Evidence);
+    let use_it = function(&shown, "use_it");
+    let rest = let_line(&use_it, "closure use_it$k0(");
+    assert_eq!(binding(rest), "tobj lin", "{use_it}");
+    let composed = let_line(&use_it, "closure compose$(");
+    assert_eq!(binding(composed), "tobj lin", "{use_it}");
+    let count = function(&shown, "count");
+    assert_eq!(
+        binding(let_line(&count, "closure count$k0(")),
+        "tobj",
+        "{count}"
+    );
+    let entry = function(&shown, "main$handle2$put$entry");
+    assert_eq!(
+        binding(let_line(&entry, "closure main$handle2$put(")),
+        "tobj lin",
+        "{entry}"
+    );
+}
+
+#[test]
+fn evidence_and_evv_are_unr_and_state_is_poly() {
+    // EP が基本操作の結果を束縛する変数は、基本操作の表の結果の印を持つ。evidence、`evv`、入口のクロージャは `unr`、
+    // 状態、κ、節の本体、ダミーは `poly` である。ただし in-place の入口が取り出す状態は、translate が節の状態の引数に
+    // 付けた印のままである。handle の本体の結果は `File` でありうるので `poly` である
+    // (docs/superpowers/specs/2026-10-13-s8d-kind-marks-design.md の「EP が足す変数の印」)
+    let text = "effect State s where\n  get : Unit -> s\n  put : s -> Unit\n\neffect Ask where\n  ask : Unit -> Int\n\nrun : (Unit -> <e> String) -> <State Int | e> String\nrun cb =\n  let n = get ()\n  let s = cb ()\n  s ++ show n\n\ncb : Unit -> <State String> String\ncb () = get () ++ \"!\"\n\nmain : Unit -> <IO> Unit\nmain () =\n  let r = handle (handle run cb with\n                    | get () k -> k 42\n                    | put _ k -> k ()) with\n            | get () k -> k \"str\"\n            | put _ k -> k ()\n  println r\n  let a = handle ask () + 1 with\n    | ask () k ->\n      let v = k 10\n      v * 2\n  println (show a)";
+    let program = eml_test_support::core_until(text, Pass::Evidence);
+    let mut seen = std::collections::HashSet::new();
+    for function in &program.functions {
+        for stmt in function.blocks.iter().flat_map(|block| &block.stmts) {
+            let eml_core_ir::Stmt::Let { var, rhs } = stmt else {
+                continue;
+            };
+            let info = &function.vars[var.0 as usize];
+            match rhs {
+                eml_core_ir::Rhs::Prim(prim, _) => {
+                    seen.insert(prim.name());
+                    if function.clause.is_some() && *prim == eml_lir::Prim::EvTakeState {
+                        continue;
+                    }
+                    assert_eq!(
+                        info.mark,
+                        prim.row().ret_mark,
+                        "`{}` in `{}`",
+                        info.name,
+                        function.name
+                    );
+                }
+                eml_core_ir::Rhs::Call {
+                    call: eml_core_ir::Call::Apply { .. },
+                    mask: _,
+                } if function.name == "main" => {
+                    assert_eq!(info.mark, eml_lir::Mark::Poly, "`{}`", info.name);
+                }
+                _ => {}
+            }
+        }
+    }
+    for prim in [
+        "evv_get",
+        "ev_new",
+        "evv_push",
+        "ev_lookup",
+        "ev_clause",
+        "ev_evv",
+        "ev_renew",
+        "evv_mask",
+        "ev_take_state",
+        "yield_cont_take",
+        "yield_finish",
+        "dummy",
+    ] {
+        assert!(seen.contains(prim), "no `{prim}`");
+    }
 }

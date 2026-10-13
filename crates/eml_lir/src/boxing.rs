@@ -246,8 +246,8 @@ fn conform_clause(function: &mut LirFn, operation: &OperationInfo) {
 }
 
 /// `expected` と互換でない引数を、同じ名前の新しい `expected` の Repr の引数に替え、入口のブロックの先頭で、引数の順に
-/// `let p = unbox p'` (または `box`) を置いて元の変数を定義する。`ret` を替えたときの `return` の変換は `Converter`
-/// に任せる。
+/// `let p = unbox p'` (または `box`) を置いて元の変数を定義する。p' は p と同じ値なので、p の印を写す。`ret` を替えた
+/// ときの `return` の変換は `Converter` に任せる。
 fn conform(function: &mut LirFn, expected: &[Repr], ret: Repr) {
     let mut conversions = Vec::new();
     for (position, &wanted) in expected.iter().enumerate() {
@@ -268,11 +268,11 @@ fn conform(function: &mut LirFn, expected: &[Repr], ret: Repr) {
                 wanted.name()
             )
         };
-        let name = function.vars[param.0 as usize].name.clone();
+        let VarInfo { name, mark, .. } = function.vars[param.0 as usize].clone();
         function.vars.push(VarInfo {
             name,
             repr: wanted,
-            mark: Mark::Unr,
+            mark,
         });
         let fresh = VarId(function.vars.len() as u32 - 1);
         function.blocks[BlockId::ENTRY.0 as usize].params[position] = fresh;
@@ -288,7 +288,8 @@ fn conform(function: &mut LirFn, expected: &[Repr], ret: Repr) {
 }
 
 /// `f$boxed`。引数を一様な Repr で受けて `f` を直接呼び、結果を返す。本体は変換の前の形で作り、変換はほかの関数と
-/// 同じく `Converter` が入れる。`f` の `ret` が一様なら、縮約がこの呼び出しを末尾呼び出しにする。
+/// 同じく `Converter` が入れる。`f` の `ret` が一様なら、縮約がこの呼び出しを末尾呼び出しにする。引数と戻り値は `f` と
+/// 同じ値なので、`f` の印を写す。
 fn boxed(function: &LirFn, target: FnIdx) -> LirFn {
     let mut vars: Vec<VarInfo> = function
         .params()
@@ -296,14 +297,14 @@ fn boxed(function: &LirFn, target: FnIdx) -> LirFn {
         .map(|&param| VarInfo {
             name: function.vars[param.0 as usize].name.clone(),
             repr: uniform_repr(function.repr(param)),
-            mark: Mark::Unr,
+            mark: function.vars[param.0 as usize].mark,
         })
         .collect();
     let params: Vec<VarId> = (0..vars.len() as u32).map(VarId).collect();
     vars.push(VarInfo {
         name: "t".to_string(),
         repr: function.ret,
-        mark: Mark::Unr,
+        mark: function.ret_mark,
     });
     let result = VarId(vars.len() as u32 - 1);
     LirFn {
@@ -313,7 +314,7 @@ fn boxed(function: &LirFn, target: FnIdx) -> LirFn {
         clause: None,
         vars,
         ret: uniform_repr(function.ret),
-        ret_mark: Mark::Unr,
+        ret_mark: function.ret_mark,
         blocks: vec![Block {
             params: params.clone(),
             stmts: vec![Stmt::Let {
@@ -382,6 +383,8 @@ impl Converter<'_> {
         }
     }
 
+    /// 足す変数は `int` と `enum` のスカラーか、それを包んだ箱で、どちらも `Unr` である
+    /// (docs/superpowers/specs/2026-10-13-s8d-kind-marks-design.md の「box の挿入が足す変数の印」)。
     fn fresh(&mut self, name: String, repr: Repr) -> VarId {
         self.function.vars.push(VarInfo {
             name,
