@@ -3,6 +3,7 @@
 
 mod meta;
 mod mode;
+mod rc;
 mod sync;
 mod word;
 

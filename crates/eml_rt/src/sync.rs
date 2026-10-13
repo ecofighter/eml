@@ -1,4 +1,4 @@
 //! atomic とページの確保の層 (docs/superpowers/specs/2026-10-13-s9a-eml-rt-core-design.md の「`unsafe` と同期の層」)。
 //! 後で `cfg(loom)` のときに loom の型へ差し替えるので、核はこの module から atomic を使う。
 
-pub(crate) use std::sync::atomic::AtomicI32;
+pub(crate) use std::sync::atomic::{AtomicI32, Ordering};
