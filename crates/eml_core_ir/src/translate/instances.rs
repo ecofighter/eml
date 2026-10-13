@@ -523,7 +523,8 @@ impl Collector<'_> {
     }
 
     /// コンストラクタごとのフィールドの型。コンストラクタの宣言の型に、`data` の型引数の名前から `args` への代入を
-    /// かけて、矢印の引数として取り出す。型引数を持たない `Tag` は宣言の型のままで、Repr が配置と同じになる。
+    /// かけて、矢印の引数として取り出す。型引数を鍵に持たない `Tag` は、足りない型引数を一様な型 (`Flexible(Poly)`) で埋める。
+    /// フィールドの型は Repr にしか使わないためである。
     fn field_types(&mut self, generated: &Generated) -> Vec<Vec<TypeId>> {
         let hir = self.hir;
         let instance = match generated.node {

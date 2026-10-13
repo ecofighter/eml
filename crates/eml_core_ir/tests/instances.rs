@@ -470,11 +470,14 @@ fn a_function_called_with_lin_and_unr_closures_has_one_instance() {
     assert_eq!(instances_of(text, "apply"), ["apply@[Int, Int]"]);
 }
 
+/// spec の「instance での評価」の `f` の例。
+const F_EXAMPLE: &str = "f : a -> (a -> <IO> Int) -> (Int -> <IO> Int) -> Int -> <IO> Int\nf x eat g n =\n  if n == 0 then g (eat x)\n  else\n    let k = fn y -> g (eat x + y)\n    f k (fn h -> h 1) (fn z -> z) (n - 1)\n\nshut_with : Fs.File -> Int -> <IO> Int\nshut_with file z =\n  Fs.close file\n  z\n\nmain : Unit -> <IO> Unit\nmain () =\n  let file = Fs.open \"a.txt\"\n  let n = f 1 (fn y -> y) (shut_with file) 3\n  println (show n)";
+
 #[test]
 fn a_type_variable_above_a_poly_arrow_makes_the_recursive_call_poly() {
     // spec の「instance での評価」の `f` の例。`k` の矢印は `μ_a` と同じ成分にあり、`f@[Int]` で `g` の矢印の
     // `Poly` が `μ_a` に伝わるので、再帰の呼び出しの型引数は `Int %m -> <IO> Int` になる
-    let text = "f : a -> (a -> <IO> Int) -> (Int -> <IO> Int) -> Int -> <IO> Int\nf x eat g n =\n  if n == 0 then g (eat x)\n  else\n    let k = fn y -> g (eat x + y)\n    f k (fn h -> h 1) (fn z -> z) (n - 1)\n\nshut_with : Fs.File -> Int -> <IO> Int\nshut_with file z =\n  Fs.close file\n  z\n\nmain : Unit -> <IO> Unit\nmain () =\n  let file = Fs.open \"a.txt\"\n  let n = f 1 (fn y -> y) (shut_with file) 3\n  println (show n)";
+    let text = F_EXAMPLE;
     assert_eq!(
         instances_of(text, "f"),
         ["f@[Int]", "f@[Int %m -> <IO> Int]"]
@@ -486,7 +489,7 @@ fn a_closure_with_a_file_passed_as_a_type_variable_lowers() {
     // 上の `f` の例を LIR まで下ろす。debug ビルドでは、translate の参照、操作、捕獲の検査がこの途中で走るので、
     // 検査がこのプログラムを拒まないことも確かめる。`k` は `File` を捕まえうるので `unr` にならない
     // (docs/spec/core-ir.md の「食い違いがないことの検査」)
-    let text = "f : a -> (a -> <IO> Int) -> (Int -> <IO> Int) -> Int -> <IO> Int\nf x eat g n =\n  if n == 0 then g (eat x)\n  else\n    let k = fn y -> g (eat x + y)\n    f k (fn h -> h 1) (fn z -> z) (n - 1)\n\nshut_with : Fs.File -> Int -> <IO> Int\nshut_with file z =\n  Fs.close file\n  z\n\nmain : Unit -> <IO> Unit\nmain () =\n  let file = Fs.open \"a.txt\"\n  let n = f 1 (fn y -> y) (shut_with file) 3\n  println (show n)";
+    let text = F_EXAMPLE;
     let program = eml_test_support::lir(text);
     let names: Vec<&str> = program
         .functions
@@ -498,11 +501,10 @@ fn a_closure_with_a_file_passed_as_a_type_variable_lowers() {
 }
 
 #[test]
-fn a_result_only_operation_variable_is_a_poly_key() {
-    // `mk` の `a` は結果の型にだけ現れるので、節の中の `OpVar` の Kind は `Poly` で、`ids` の鍵はその `Flexible(Poly)`
-    // になる。名前の `Flexible` は Kind によらず `_` と書く (docs/spec/types.md
-    // の「`Flexible` と `OpVar` の Kind」と、docs/spec/core-ir.md の「変換の規則」)。Kind そのものは eml_types の `kind_export` のテストが
-    // 確かめる
+fn a_result_only_operation_variable_gives_one_uniform_key() {
+    // `mk` の `a` は結果の型にだけ現れるので、`ids` の鍵は一様な位置の `_` が1つになる。名前の `Flexible` は Kind によらず
+    // `_` と書く (docs/spec/types.md の「`Flexible` と `OpVar` の Kind」と、docs/spec/core-ir.md の「変換の規則」)。
+    // `OpVar` が `Poly` の Kind を持つことは、eml_types の `kind_export::a_clause_in_main_keeps_its_operation_variable_kinds` が確かめる
     let text = "ids : List a -> List a\nids xs = xs\n\neffect Make where\n  mk : Unit -> List a\n\nbody : Unit -> <Make> Int\nbody () =\n  let xs = (mk () : List Int)\n  0\n\nmain : Unit -> <IO> Unit\nmain () =\n  let n = handle body () with\n            | mk () k -> k (ids [])\n  println (show n)";
     assert_eq!(instances_of(text, "ids"), ["ids@[_]"]);
 }

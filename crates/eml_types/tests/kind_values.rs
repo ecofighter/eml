@@ -5,7 +5,7 @@
 
 use eml_hir::{FunctionId, Program, ValueItem};
 use eml_test_support::{Checked, check, short_text};
-use eml_types::Lin;
+use eml_types::{Lin, TypeId};
 
 fn checked_clean(text: &str) -> Checked {
     let checked = check(text);
@@ -26,20 +26,29 @@ fn function(program: &Program, name: &str) -> FunctionId {
         .unwrap_or_else(|| panic!("no function `{name}`"))
 }
 
+/// `caller` の本体にある `callee` への参照ごとの具体化の型引数を、現れた順に返す。
+fn instantiation_args(checked: &Checked, callee: &str, caller: &str) -> Vec<Vec<TypeId>> {
+    let decl = ValueItem::Function(function(&checked.program, callee));
+    let caller = function(&checked.program, caller);
+    let args: Vec<_> = checked.typed.bodies[caller]
+        .instantiations
+        .iter()
+        .map(|(_, instantiation)| instantiation)
+        .filter(|instantiation| instantiation.decl == decl)
+        .map(|instantiation| instantiation.args.clone())
+        .collect();
+    assert!(!args.is_empty(), "`{callee}` is not referenced");
+    args
+}
+
 /// `caller` の本体で最初に `callee` を参照した具体化の型引数で、`callee` の `kind_values` を求める。
 fn values_at(text: &str, callee: &str, caller: &str) -> Vec<Lin> {
     let checked = checked_clean(text);
     let decl = ValueItem::Function(function(&checked.program, callee));
-    let caller = function(&checked.program, caller);
-    let instantiation = checked.typed.bodies[caller]
-        .instantiations
-        .iter()
-        .map(|(_, instantiation)| instantiation)
-        .find(|instantiation| instantiation.decl == decl)
-        .unwrap_or_else(|| panic!("`{callee}` is not referenced"));
+    let args = instantiation_args(&checked, callee, caller);
     checked
         .typed
-        .kind_values(decl, &instantiation.args, &checked.typed.types)
+        .kind_values(decl, &args[0], &checked.typed.types)
 }
 
 #[test]
@@ -68,14 +77,7 @@ fn a_type_variable_takes_the_linearity_of_its_argument() {
     let text = "keep : a -> (Unit -> a)\nkeep x = fn () -> x\n\nmain : Unit -> <IO> Unit\nmain () =\n  let file = keep (Fs.open \"a.txt\") ()\n  Fs.close file\n  let n = keep 1 ()\n  ()";
     let checked = checked_clean(text);
     let keep = ValueItem::Function(function(&checked.program, "keep"));
-    let main = function(&checked.program, "main");
-    let args: Vec<_> = checked.typed.bodies[main]
-        .instantiations
-        .iter()
-        .map(|(_, instantiation)| instantiation)
-        .filter(|instantiation| instantiation.decl == keep)
-        .map(|instantiation| instantiation.args.clone())
-        .collect();
+    let args = instantiation_args(&checked, "keep", "main");
     let typed = &checked.typed;
     assert_eq!(
         typed.kind_values(keep, &args[0], &typed.types),
@@ -174,14 +176,7 @@ fn a_join_takes_the_join_of_its_variables() {
     let text = "both : a -> b -> Int -> (a, b)\nboth x y n =\n  let h = fn u -> (x, y)\n  h n\n\nmain : Unit -> <IO> Unit\nmain () =\n  let (file, m) = both (Fs.open \"a.txt\") 1 0\n  Fs.close file\n  let p = both 1 2 0\n  ()";
     let checked = checked_clean(text);
     let both = ValueItem::Function(function(&checked.program, "both"));
-    let main = function(&checked.program, "main");
-    let args: Vec<_> = checked.typed.bodies[main]
-        .instantiations
-        .iter()
-        .map(|(_, instantiation)| instantiation)
-        .filter(|instantiation| instantiation.decl == both)
-        .map(|instantiation| instantiation.args.clone())
-        .collect();
+    let args = instantiation_args(&checked, "both", "main");
     let typed = &checked.typed;
     assert_eq!(
         typed.kind_values(both, &args[0], &typed.types),

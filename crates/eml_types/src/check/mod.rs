@@ -10,6 +10,7 @@ use la_arena::Arena;
 
 use crate::context::Context;
 use crate::kind::entail::unentailed;
+use crate::kind::eval::scheme_facts;
 use crate::kind::problem::{Instance, KindProblem, KindScheme, OwnVars};
 use crate::kind::solve::{Solution, solve_scc};
 use crate::kind::summary::BodyKinds;
@@ -488,7 +489,7 @@ pub(crate) fn export_body(
     // 書き出す。`joins` の番号は初めて現れた順に振るので、この書き出しの順 (式、局所変数、パターン、具体化、更新、
     // 捨てたフィールド) が番号を決める (docs/spec/types.md の
     // 「宣言の Kind 変数の番号」)
-    let mut exporter = Exporter::final_(&table, types, kinds);
+    let mut exporter = Exporter::solved(&table, types, kinds);
     let mut body_types = BodyTypes::default();
     for (expr, &ty) in typing.exprs.iter() {
         body_types.exprs.insert(expr, exporter.export(ty));
@@ -844,10 +845,12 @@ fn typed_program(
                     Vec::new()
                 }
             };
+            let facts = scheme_facts(&kinds, shape.lin_vars);
             let declared = DeclType {
-                ty: shape.export(&mut types, Some(&kinds)),
+                ty: shape.export(&mut types, Some(&facts)),
                 shape: shape.clone(),
                 kinds,
+                facts,
                 joins,
             };
             (decl, declared)

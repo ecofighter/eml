@@ -14,8 +14,7 @@ use la_arena::{Arena, ArenaMap};
 use crate::context::Context;
 use crate::data::Variance;
 use crate::kind::KindVar;
-use crate::kind::eval::{SchemeFacts, scheme_facts};
-use crate::kind::problem::KindScheme;
+use crate::kind::eval::SchemeFacts;
 use crate::store::{EffectLabel, Lin, RowTail, TypeId, TypeKind, TypeStore};
 use crate::table::{ArrowLin, Label, RigidVar, Row, RowVar, Table, Tail, Ty, TyShape};
 use crate::ty::Linearity;
@@ -720,15 +719,15 @@ impl Shape {
     /// スキームで定数に決まる宣言自身の変数を定数に畳み、残りを `Var(i)` にする。`None` は Kind を解く前の `check_main`
     /// の使い方で、変数をすべて `Var(i)` にする
     /// (docs/implementation/architecture.md の「`eml_types` の内部」)。
-    pub fn export(&self, types: &mut TypeStore, scheme: Option<&KindScheme>) -> TypeId {
-        let arrows = match scheme {
-            Some(scheme) => ArrowKinds::Folded(scheme_facts(scheme, self.lin_vars)),
+    pub fn export(&self, types: &mut TypeStore, facts: Option<&SchemeFacts>) -> TypeId {
+        let arrows = match facts {
+            Some(facts) => ArrowKinds::Folded(facts),
             None => ArrowKinds::Vars,
         };
         self.export_ty(&self.ty, types, &arrows)
     }
 
-    fn export_ty(&self, ty: &ShapeTy, types: &mut TypeStore, arrows: &ArrowKinds) -> TypeId {
+    fn export_ty(&self, ty: &ShapeTy, types: &mut TypeStore, arrows: &ArrowKinds<'_>) -> TypeId {
         let kind = match ty {
             ShapeTy::Con(id, args) => TypeKind::Con {
                 id: *id,
@@ -845,16 +844,16 @@ impl Shape {
 }
 
 /// `Shape::export_ty` が矢印の線形性を書き出す方法。
-enum ArrowKinds {
+enum ArrowKinds<'a> {
     /// スキームで定数に決まる変数を畳む。
-    Folded(SchemeFacts),
+    Folded(&'a SchemeFacts),
     /// 変数をすべて `Var(i)` にする。
     Vars,
     /// 変数をすべて `Poly` にする。表示のためだけに作る型に使う。
     Poly,
 }
 
-impl ArrowKinds {
+impl ArrowKinds<'_> {
     fn lin(&self, lin: ShapeLin) -> Lin {
         match lin {
             ShapeLin::Known(Linearity::Unr) => Lin::Unr,

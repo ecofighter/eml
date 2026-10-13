@@ -709,13 +709,14 @@ impl FnLowering<'_> {
             return;
         };
         for &ty in captured {
+            let linearity = store.linearity(ty);
             assert!(
-                store.linearity(ty) == Lin::Unr,
+                linearity == Lin::Unr,
                 "internal error: in `{}`, an unr {what} of type `{}` captures a value of type `{}`, whose linearity is {:?}",
                 self.ctx.root_name,
                 store.display_linear(closure_ty, &self.ctx.hir.names),
                 store.display_linear(ty, &self.ctx.hir.names),
-                store.linearity(ty),
+                linearity,
             );
         }
     }

@@ -89,6 +89,8 @@ pub struct DeclType {
     /// 後の段階は Kind を読まない (docs/implementation/architecture.md の「`eml_types` の内部」) ので、外からは読めなくする。
     pub(crate) shape: Shape,
     pub(crate) kinds: KindScheme,
+    /// `kinds` だけから決まる事実。`kind_values` などが問い合わせのたびに求め直さないよう、1回だけ求めて持つ。
+    pub(crate) facts: eval::SchemeFacts,
     /// 本体の型の `Var(shape.lin_vars + k)` が表す、宣言自身の変数の集合 `joins[k]`。値はその変数の値の結びである
     /// (docs/spec/types.md の「宣言の Kind 変数の番号」)。
     pub(crate) joins: Vec<Vec<u32>>,
@@ -97,7 +99,8 @@ pub struct DeclType {
 impl TypedProgram {
     /// 宣言の `Var(i)` の、型引数 `args` (`Shape::rigids` の順) の instance での値。`i < lin_vars` は宣言自身の変数、
     /// それ以降は `joins` の結びである。値は `Unr`、`Lin`、`Poly` のどれかになる
-    /// (docs/spec/types.md の「instance での評価」)。
+    /// (docs/spec/types.md の「instance での評価」)。`args` は閉じた型でなければならない (`TypeStore::linearity` を読むので、
+    /// 宣言に対して相対的な型は渡せない)。
     pub fn kind_values(&self, decl: ValueItem, args: &[TypeId], store: &TypeStore) -> Vec<Lin> {
         let declared = &self.decls[&decl];
         let shape = &declared.shape;
@@ -107,8 +110,7 @@ impl TypedProgram {
         for ((_, mu), &arg) in shape.rigids.iter().zip(args) {
             base[mu.index()] = store.linearity(arg);
         }
-        let facts = eval::scheme_facts(&declared.kinds, shape.lin_vars);
-        let mut values = eval::values(&declared.kinds, shape.lin_vars, |var| base[var], &facts);
+        let mut values = eval::values(shape.lin_vars, |var| base[var], &declared.facts);
         let joins: Vec<Lin> = declared
             .joins
             .iter()
@@ -128,8 +130,7 @@ impl TypedProgram {
     pub fn uniform_kind(&self, function: FunctionId, position: usize) -> Lin {
         let declared = &self.decls[&ValueItem::Function(function)];
         let mu = declared.shape.rigids[position].1.index();
-        let facts = eval::scheme_facts(&declared.kinds, declared.shape.lin_vars);
-        if facts.fixed_unr[mu] {
+        if declared.facts.fixed_unr[mu] {
             Lin::Unr
         } else {
             Lin::Poly
@@ -145,7 +146,7 @@ impl TypedProgram {
         if !shape.rigids.is_empty() {
             return true;
         }
-        let facts = eval::scheme_facts(&declared.kinds, shape.lin_vars);
+        let facts = &declared.facts;
         (0..shape.lin_vars).any(|var| !facts.fixed_unr[var] && !facts.forced_lin[var])
     }
 }

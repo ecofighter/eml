@@ -44,9 +44,8 @@ fn meets(a: Lin, b: Lin) -> bool {
     !matches!((a, b), (Lin::Unr, Lin::Lin) | (Lin::Lin, Lin::Unr))
 }
 
-/// 型の表の中の型。同じ表の中では、ID が同じことと型が同じことが一致する。
-/// 型の表の ID。同じ ID は同じ型を指す。宣言に対して相対的な型 (`Rigid` か `Var` を含む型) では、同じ宣言の中で比べたときに
-/// だけ成り立つ (docs/implementation/architecture.md の「`eml_types` の内部」)。
+/// 型の表の ID。同じ ID は同じ型を指す。宣言に対して相対的な型 (値が `Rigid` か `Var` に依存する型) では、
+/// 同じ宣言の中で比べたときにだけ成り立つ (docs/implementation/architecture.md の「`eml_types` の内部」)。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct TypeId(u32);
 
@@ -1068,7 +1067,7 @@ mod tests {
 
     #[test]
     fn linearity_joins_the_effective_arguments_and_fields() {
-        let program = crate::test_program("");
+        let program = crate::test_program("data Phantom a = Phantom Int");
         let mut types = TypeStore::new(&program);
         let file = con(&mut types, program.extern_type(ExternType::File), vec![]);
         let (int, unit) = (types.int(), types.unit());
@@ -1081,8 +1080,15 @@ mod tests {
         let poly_fn = arrow(&mut types, Lin::Poly, file, int);
         let flexible_lin = types.flexible(Lin::Lin);
         let op_poly = types.intern(TypeKind::OpVar("a".to_string(), Lin::Poly));
+        let phantom = program
+            .types()
+            .find(|(_, def)| def.name == "Phantom")
+            .map(|(id, _)| id)
+            .unwrap();
+        let phantom_file = con(&mut types, phantom, vec![file]);
         let table = [
             (file, Lin::Lin),
+            (phantom_file, Lin::Unr),
             (list_file, Lin::Lin),
             (list_int, Lin::Unr),
             (int, Lin::Unr),
@@ -1098,6 +1104,16 @@ mod tests {
         for (ty, expected) in table {
             assert_eq!(types.linearity(ty), expected, "{ty:?}");
         }
+    }
+
+    #[test]
+    #[cfg(debug_assertions)]
+    #[should_panic(expected = "declaration-relative")]
+    fn reading_the_linearity_of_a_declaration_relative_type_panics() {
+        let program = crate::test_program("");
+        let mut types = TypeStore::new(&program);
+        let a = rigid(&mut types, "a");
+        types.linearity(a);
     }
 
     #[test]

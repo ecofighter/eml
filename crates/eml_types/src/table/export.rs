@@ -7,7 +7,7 @@ use crate::kind::summary::BodyKinds;
 ///
 /// 使い方は2つある (docs/implementation/architecture.md の「`eml_types` の内部」)。
 /// Kind を解く前の診断のための書き出し (`diagnostic`) は、決まっていない矢印を `Poly` に、決まらなかった型変数を
-/// `Flexible(Poly)` にする。診断の表示は線形性を書かないので、文字列は変わらない。SCC を解いた後の書き出し (`final_`) は、
+/// `Flexible(Poly)` にする。診断の表示は線形性を書かないので、文字列は変わらない。SCC を解いた後の書き出し (`solved`) は、
 /// Kind 変数の値を `BodyKinds` から引く。
 ///
 /// 推論の表は部分を共有するので、書き出した結果を `Ty` ごとに覚え、表の各節点を1回だけ書き出す。覚えるのは渡された
@@ -32,7 +32,7 @@ impl<'t, 'c, 's, 'k> Exporter<'t, 'c, 's, 'k> {
         }
     }
 
-    pub fn final_(
+    pub fn solved(
         table: &'t Table<'c>,
         types: &'s mut TypeStore,
         kinds: BodyKinds<'k>,
