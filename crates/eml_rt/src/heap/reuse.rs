@@ -224,13 +224,17 @@ impl<M: Mode> Heap<M> {
             s0.lemma_last_ref(a);
             assert(s0.model@.edges.restrict(ps) == s0.out_edges(a));
         }
-        self.core.begin_free(Ghost(a), Ghost(ps));
+        self.core.begin_free(h, Ghost(ps), M::CHECKED);
         proof {
             self.core.lemma_begin_evolved(s0, a, ps);
             vstd::set_lib::lemma_int_range(first, first + n);
         }
         let ghost s1 = self.core;
-        self.core.finish_token(Ghost(a), Ghost(vstd::set_lib::set_int_range(first, first + n)));
+        self.core.finish_token(
+            h,
+            Ghost(vstd::set_lib::set_int_range(first, first + n)),
+            M::CHECKED,
+        );
         proof {
             self.core.lemma_after_token(s0, s1, a);
             self.core.lemma_by_trans(s1, s0, handover(s0.out_edges(a), a), 0);
@@ -301,7 +305,7 @@ impl<M: Mode> Heap<M> {
         Ok(Some(h))
     }
 
-    /// 検査モードで箱を token にする。前置きの状態を token にして世代を進め、token の表に積む。まだ証明していない
+    /// 検査モードで token の箱を token の表に積む。前置きは `finish_token` がもう token にしてある。まだ証明していない
     /// (信頼の一覧のテストの「未証明」)。
     #[verifier::external_body]
     fn checked_push_token(&mut self, h: *mut Header) -> (t: Token)
@@ -312,7 +316,6 @@ impl<M: Mode> Heap<M> {
             final(self).token_box(t) == Some(h@.addr),
     {
         let prefix = unsafe { check::prefix(NonNull::new_unchecked(h)) };
-        prefix.set_state(State::Token, true);
         // 添字は使い回さない。使った項目を空のまま残して、古い token を確実に断るためである
         self.tokens.push(Some((h, prefix.generation())));
         Token(Word::imm((self.tokens.len() - 1) as i64))
@@ -367,9 +370,8 @@ impl<M: Mode> Heap<M> {
             if !self.core.pages.fits(h, object_words(payload_words)) {
                 return Err(HeapError::WrongClass);
             }
-            self.checked_set_alive(h);
         }
-        self.core.token_build(h, Some(meta), Ghost(self.worker));
+        self.core.token_build(h, Some(meta), self.worker, M::CHECKED);
         let w = Word::from_ptr(h);
         proof {
             self.lemma_rebuilt(s0, h, w, Some(meta));
@@ -413,9 +415,8 @@ impl<M: Mode> Heap<M> {
         };
         if M::CHECKED {
             reuse_in_place_check(self.core.meta_get(h), meta)?;
-            self.checked_set_alive(h);
         }
-        self.core.token_build(h, None, Ghost(self.worker));
+        self.core.token_build(h, None, self.worker, M::CHECKED);
         let w = Word::from_ptr(h);
         proof {
             self.lemma_rebuilt(s0, h, w, None);
@@ -498,7 +499,7 @@ impl<M: Mode> Heap<M> {
         let ghost mid = *self;
         if let Some(h) = self.take_token(token)? {
             let ghost s1 = self.core;
-            self.core.token_free(Ghost(h@.addr));
+            self.core.token_free(h, M::CHECKED);
             let ghost s2 = self.core;
             self.free_box(h);
             proof {

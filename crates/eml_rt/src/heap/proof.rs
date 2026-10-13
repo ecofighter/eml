@@ -5,7 +5,7 @@ use vstd::prelude::*;
 
 use super::Core;
 #[cfg(verus_only)]
-use super::inv::{p_init, p_scanned, p_word};
+use super::inv::{p_code, p_init, p_owner, p_scanned, p_word, prefix_kept};
 use super::model::BlockState;
 #[cfg(verus_only)]
 use super::model::{
@@ -415,7 +415,7 @@ impl Core {
             old(self).model@.building is None,
             h == old(self).block(h@.addr),
             old(self).pages.carved_block(h@.addr),
-            old(self).perm_wf(perm, h@.addr, st, Set::empty()),
+            old(self).perm_wf(perm, h@.addr, st, Set::empty(), owner),
             st == BlockState::Live || st == BlockState::Building,
             perm.rc.value() == 0 || perm.rc.value() == 1,
         ensures
@@ -477,7 +477,7 @@ impl Core {
             self.pages == s0.pages,
             self.checked == s0.checked,
             self.perms@ == s0.perms@.insert(h, self.perm(h)),
-            s0.perm_wf(self.perm(h), h, self.state(h), Set::empty()),
+            s0.perm_wf(self.perm(h), h, self.state(h), Set::empty(), self.model@.owner[h]),
             self.state(h) == BlockState::Live || self.state(h) == BlockState::Building,
             self.rc_of(h) == 0 || self.rc_of(h) == 1,
             self.model@.state == s0.model@.state.insert(h, self.state(h)),
@@ -569,7 +569,13 @@ impl Core {
             forall|b: usize| b != h ==> #[trigger] self.perms@[b] == s0.perms@[b],
             self.perm(h).meta == s0.perm(h).meta,
             self.perm(h).slots == s0.perm(h).slots,
-            self.perm(h).prefix == s0.perm(h).prefix,
+            prefix_kept(self.perm(h), s0.perm(h)),
+            self.perm(h).prefix is Some ==> p_code(self.perm(h)) == if dying {
+                0u32
+            } else {
+                1u32
+            },
+            self.perm(h).prefix is Some && !dying && self.rc_of(h) > 0 ==> s0.rc_of(h) > 0,
             self.perm(h).rc.ptr() == s0.perm(h).rc.ptr(),
             self.perm(h).rc.is_init(),
             self.model@.state == s0.model@.state.insert(
@@ -806,6 +812,7 @@ impl Core {
             forall|b: usize| b != h ==> #[trigger] self.perms@[b] == s0.perms@[b],
             self.perm(h).wf(self.block(h), self.cap(h), self.checked@),
             self.perm(h).prefix matches Some(q) ==> q.first.is_init() && q.state.is_init(),
+            self.perm(h).prefix is Some ==> p_code(self.perm(h)) == 3,
             self.perm(h).rc.is_init(),
             self.perm(h).meta == s0.perm(h).meta,
             self.model@ == (Model {

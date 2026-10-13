@@ -4,13 +4,17 @@
 use std::ptr::NonNull;
 
 use super::Heap;
+#[cfg(verus_only)]
+use super::inv::{p_owner, prefix_recounted};
+#[cfg(verus_only)]
+use super::model::BlockState;
 use crate::cell::{u32_load, u32_store};
 use crate::error::HeapError;
 #[cfg(verus_only)]
 use crate::meta::field_ptr;
 #[cfg(verus_only)]
 use crate::meta::same_fields;
-use crate::meta::{self, Header, Kind, Meta, PrefixPerm, prefix_first_ptr, prefix_state_ptr};
+use crate::meta::{Header, Kind, Meta, PrefixPerm, prefix_first_ptr, prefix_state_ptr};
 use crate::mode::Mode;
 use std::sync::atomic::{AtomicU32, Ordering};
 use vstd::prelude::*;
@@ -66,67 +70,273 @@ pub(crate) fn mark_freed(h: *mut Header, Tracked(perm): Tracked<&mut PrefixPerm>
         final(perm).first == old(perm).first,
         final(perm).state.ptr() == old(perm).state.ptr(),
         final(perm).state.is_init(),
+        final(perm).state.value() & 3 == FREED_STATE,
 {
     let p = prefix_state_ptr(h);
     let bits = u32_load(p, Tracked(&perm.state));
     let generation = (bits >> 2u32).wrapping_add(1);
-    u32_store(p, Tracked(&mut perm.state), (generation << 2u32) | FREED_STATE);
+    let v = (generation << 2u32) | FREED_STATE;
+    proof {
+        lemma_code(generation, FREED_STATE);
+    }
+    u32_store(p, Tracked(&mut perm.state), v);
 }
 
-// 検査モードの検査。まだ証明していない (信頼の一覧のテストの「未証明」)。速いモードでは何も確かめない
+/// 今確保したブロックの前置きの状態は、生存である。
+pub(crate) proof fn lemma_alive_code()
+    ensures
+        ALIVE_STATE & 3 == 1,
+{
+    assert(1u32 & 3u32 == 1u32) by (bit_vector);
+}
+
+/// 状態の欄の世代の番号を保ったまま、状態の2ビットを `code` に替える。
+pub(crate) proof fn lemma_set_code(v: u32, code: u32)
+    requires
+        code < 4,
+    ensures
+        ((v & !3u32) | code) & 3 == code,
+        ((v & !3u32) | code) >> 2u32 == v >> 2u32,
+        (v & !3u32) & 3 == 0,
+{
+    assert((v & !3u32) & 3 == 0) by (bit_vector);
+    assert(((v & !3u32) | code) & 3 == code) by (bit_vector)
+        requires
+            code < 4,
+    ;
+    assert(((v & !3u32) | code) >> 2u32 == v >> 2u32) by (bit_vector)
+        requires
+            code < 4,
+    ;
+}
+
+/// 世代の番号と状態の2ビットを並べた値の、下位2ビットは状態である。
+pub(crate) proof fn lemma_code(generation: u32, code: u32)
+    requires
+        code < 4,
+    ensures
+        ((generation << 2u32) | code) & 3 == code,
+        ((generation << 2u32) | code) >> 2u32 == generation % 0x4000_0000,
+{
+    assert(((generation << 2u32) | code) & 3 == code) by (bit_vector)
+        requires
+            code < 4,
+    ;
+    assert(((generation << 2u32) | code) >> 2u32 == generation % 0x4000_0000) by (bit_vector)
+        requires
+            code < 4,
+    ;
+}
+
+// 検査モードの検査。速いモードでは何も確かめない
 impl<M: Mode> Heap<M> {
-    #[verifier::external_body]
+    /// 前置きの状態が生存かを確かめる。解放した共有の物体は rc が 0 になっていて不死の物体と区別できないので、rc を
+    /// 見る前に呼ぶ。
     #[inline]
     pub(super) fn checked_live(&self, h: *mut Header) -> (r: Result<(), HeapError>)
+        requires
+            self.core.wf(),
+            self.core.checked@ == M::CHECKED,
+            self.core.dom().contains(h@.addr),
+            h == self.core.block(h@.addr),
         ensures
             !M::CHECKED ==> r is Ok,
+            M::CHECKED ==> (r is Ok <==> (self.core.state(h@.addr) == BlockState::Live
+                || self.core.state(h@.addr) == BlockState::Building)),
+            r is Err ==> r == Err::<(), HeapError>(HeapError::UseAfterFree),
     {
-        unsafe { self.check_live(NonNull::new_unchecked(h)) }
+        if !M::CHECKED {
+            return Ok(());
+        }
+        let bits = self.core.prefix_state_get(h);
+        proof {
+            self.core.lemma_code_state(h@.addr);
+        }
+        if bits & 3 == ALIVE_STATE {
+            Ok(())
+        } else {
+            Err(HeapError::UseAfterFree)
+        }
     }
 
-    #[verifier::external_body]
+    /// 正の rc の物体は、今の worker が持ち主でなければならない (docs/spec/object-model.md の「論理的な worker ID」)。
     #[inline]
     pub(super) fn checked_owner(&self, h: *mut Header, rc: i32) -> (r: Result<(), HeapError>)
+        requires
+            self.core.wf(),
+            self.core.checked@ == M::CHECKED,
+            self.core.dom().contains(h@.addr),
+            h == self.core.block(h@.addr),
         ensures
             !M::CHECKED ==> r is Ok,
+            M::CHECKED ==> (r is Ok <==> (rc <= 0 || p_owner(self.core.perm(h@.addr))
+                == self.worker)),
     {
-        unsafe { self.check_owner(NonNull::new_unchecked(h), rc) }
+        if !M::CHECKED || rc <= 0 {
+            return Ok(());
+        }
+        let owner = self.core.prefix_first_get(h);
+        if owner == self.worker {
+            Ok(())
+        } else {
+            Err(HeapError::WrongOwner { owner, worker: self.worker })
+        }
     }
 
-    #[verifier::external_body]
+    /// 生きている不死の物体の参照を数えるか。数えるなら、あと1つ数えられることも確かめる。
+    #[inline]
+    pub(super) fn immortal_counted(&self, h: *mut Header) -> (r: bool)
+        requires
+            self.core.wf(),
+            self.core.checked@,
+            self.core.dom().contains(h@.addr),
+            h == self.core.block(h@.addr),
+        ensures
+            self.core.perm(h@.addr).prefix is Some,
+            r == (p_owner(self.core.perm(h@.addr)) != UNCOUNTED),
+            r ==> p_owner(self.core.perm(h@.addr)) < UNCOUNTED - 1,
+    {
+        let n = self.core.prefix_first_get(h);
+        if n == UNCOUNTED {
+            return false;
+        }
+        if n == UNCOUNTED - 1 {
+            too_many_acquires();
+        }
+        true
+    }
+
+    /// 不死の物体の外に出ている参照の数を1つ増やすか減らす。どちらの向きも、確かめるのは先に済ませてある。
+    #[inline]
+    pub(super) fn count_immortal(&mut self, h: *mut Header, up: bool)
+        requires
+            old(self).core.wf(),
+            old(self).core.checked@,
+            old(self).core.dom().contains(h@.addr),
+            h == old(self).core.block(h@.addr),
+            old(self).core.rc_of(h@.addr) == 0,
+            old(self).core.perm(h@.addr).prefix is Some,
+            p_owner(old(self).core.perm(h@.addr)) != UNCOUNTED,
+            up ==> p_owner(old(self).core.perm(h@.addr)) < UNCOUNTED - 1,
+            !up ==> p_owner(old(self).core.perm(h@.addr)) != 0,
+        ensures
+            final(self).core.wf(),
+            final(self).core.recounted(old(self).core),
+            forall|b: usize|
+                b != h@.addr ==> #[trigger] final(self).core.perms@[b] == old(self).core.perms@[b],
+            final(self).dummy == old(self).dummy,
+            final(self).worker == old(self).worker,
+            final(self).stats == old(self).stats,
+    {
+        let ghost s0 = self.core;
+        let n = self.core.prefix_first_get(h);
+        proof {
+            s0.lemma_at(h@.addr);
+        }
+        let m = if up {
+            n + 1
+        } else {
+            n - 1
+        };
+        self.core.prefix_first_put(h, m);
+        proof {
+            let c = self.core;
+            assert forall|b: usize| #[trigger] s0.dom().contains(b) implies {
+                &&& c.perm(b).rc == s0.perm(b).rc
+                &&& c.perm(b).meta == s0.perm(b).meta
+                &&& c.perm(b).slots == s0.perm(b).slots
+                &&& prefix_recounted(c.perm(b), s0.perm(b), s0.rc_of(b) == 0)
+            } by {
+                if b != h@.addr {
+                    assert(c.perms@[b] == s0.perms@[b]);
+                    s0.lemma_at(b);
+                }
+            }
+            c.lemma_recounted(s0);
+        }
+    }
+
+    /// `dup` の検査。数える参照なら真を返す。不死の物体の数は、呼ぶ側が rc を見た後で `count_immortal` で増やす。
     #[inline]
     pub(super) fn checked_dup(&self, h: *mut Header) -> (r: Result<bool, HeapError>)
+        requires
+            self.core.wf(),
+            self.core.checked@ == M::CHECKED,
+            self.core.dom().contains(h@.addr),
+            h == self.core.block(h@.addr),
         ensures
             !M::CHECKED ==> r == Ok::<bool, HeapError>(false),
+            M::CHECKED && r is Ok ==> self.core.perm(h@.addr).prefix is Some,
+            r matches Ok(c) ==> (M::CHECKED && self.core.rc_of(h@.addr) != 0 ==> c),
+            r matches Ok(c) ==> (M::CHECKED && self.core.rc_of(h@.addr) == 0 ==> {
+                &&& c == (p_owner(self.core.perm(h@.addr)) != UNCOUNTED)
+                &&& c ==> p_owner(self.core.perm(h@.addr)) < UNCOUNTED - 1
+            }),
     {
-        unsafe { self.check_dup(NonNull::new_unchecked(h)) }
+        if !M::CHECKED {
+            return Ok(false);
+        }
+        proof {
+            self.core.lemma_code_state(h@.addr);
+        }
+        self.checked_live(h)?;
+        if self.core.meta_get(h).lin() {
+            return Err(HeapError::LinDup);
+        }
+        let rc = self.core.rc_get(h);
+        if rc == 0 {
+            return Ok(self.immortal_counted(h));
+        }
+        self.checked_owner(h, rc)?;
+        Ok(true)
     }
 
-    /// 検査モードで、使い回す箱の前置きを「生存」に戻す。
-    #[verifier::external_body]
-    #[inline]
-    pub(super) fn checked_set_alive(&self, h: *mut Header) {
-        let p = unsafe { prefix(NonNull::new_unchecked(h)) };
-        p.set_state(State::Alive, false)
-    }
-
-    #[verifier::external_body]
-    #[inline]
-    pub(super) fn checked_count_immortal(&self, h: *mut Header) -> (r: Result<bool, HeapError>)
-        ensures
-            !M::CHECKED ==> r == Ok::<bool, HeapError>(false),
-    {
-        unsafe { count_immortal(NonNull::new_unchecked(h), true) }
-    }
-
-    #[verifier::external_body]
+    /// `decref` の検査。数える参照なら真を返す。不死の物体の数は、呼ぶ側が rc を見た後で `count_immortal` で減らす。
     #[inline]
     pub(super) fn checked_decref(&self, h: *mut Header) -> (r: Result<bool, HeapError>)
+        requires
+            self.core.wf(),
+            self.core.checked@ == M::CHECKED,
+            self.core.dom().contains(h@.addr),
+            h == self.core.block(h@.addr),
         ensures
             !M::CHECKED ==> r == Ok::<bool, HeapError>(false),
+            M::CHECKED && r is Ok ==> self.core.perm(h@.addr).prefix is Some,
+            r matches Ok(c) ==> (M::CHECKED && self.core.rc_of(h@.addr) != 0 ==> c),
+            r matches Ok(c) ==> (M::CHECKED && self.core.rc_of(h@.addr) == 0 ==> {
+                &&& c == (p_owner(self.core.perm(h@.addr)) != UNCOUNTED)
+                &&& p_owner(self.core.perm(h@.addr)) != 0
+            }),
     {
-        unsafe { self.check_decref(NonNull::new_unchecked(h)) }
+        if !M::CHECKED {
+            return Ok(false);
+        }
+        proof {
+            self.core.lemma_code_state(h@.addr);
+        }
+        self.checked_live(h)?;
+        let rc = self.core.rc_get(h);
+        if rc == 0 {
+            let n = self.core.prefix_first_get(h);
+            if n == 0 {
+                return Err(HeapError::ImmortalOverRelease);
+            }
+            return Ok(n != UNCOUNTED);
+        }
+        if rc < 0 && self.core.meta_get(h).lin() {
+            return Err(HeapError::LinShared);
+        }
+        self.checked_owner(h, rc)?;
+        Ok(true)
     }
+}
+
+// 数が UNCOUNTED に届くと、その物体はダミーと同じく数えないものに変わってしまう。2^32 - 1 回の取得は正しいプログラムでは
+// 起きないので、新しい誤りの種類を足さずに止める (信頼の一覧の T5)。状態を変える前に呼ぶ (T7)
+#[verifier::external_body]
+#[cold]
+fn too_many_acquires() -> ! {
+    panic!("an immortal object is acquired 2^32 - 1 times")
 }
 
 } // verus!
@@ -139,30 +349,32 @@ const _: () = assert!(ALIVE_STATE == State::Alive as u32);
 #[repr(u32)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum State {
+    /// 最後の参照を手放すと決めて、まだ空けていない。生存の列挙とリークでは生存と同じに扱う。
+    Dying = 0,
     Alive = 1,
     Token = 2,
     Freed = 3,
 }
 
+impl State {
+    /// 生存と空ける途中の物体は、生存の列挙、不変条件の検査、リークで生きている物体に数える。
+    pub(crate) fn is_live(self) -> bool {
+        matches!(self, State::Alive | State::Dying)
+    }
+}
+
 impl Prefix {
     pub(crate) fn state(&self) -> State {
         match self.state.load(Ordering::Relaxed) & 3 {
+            0 => State::Dying,
             1 => State::Alive,
             2 => State::Token,
-            3 => State::Freed,
-            bits => unreachable!("an unknown block state {bits}"),
+            _ => State::Freed,
         }
     }
 
     pub(crate) fn generation(&self) -> u32 {
         self.state.load(Ordering::Relaxed) >> 2
-    }
-
-    /// 状態を替える。`advance` なら世代の番号を1つ進める (`into_token` と解放)。
-    pub(crate) fn set_state(&self, state: State, advance: bool) {
-        let generation = self.generation().wrapping_add(u32::from(advance));
-        self.state
-            .store((generation << 2) | state as u32, Ordering::Relaxed);
     }
 }
 
@@ -174,94 +386,6 @@ pub(crate) unsafe fn prefix<'a>(h: NonNull<Header>) -> &'a Prefix {
             .cast::<u8>()
             .sub(PREFIX_WORDS * 8)
             .cast::<Prefix>()
-    }
-}
-
-/// 不死の物体の外に出ている参照の数を1つ増やすか減らす。数えた参照なら真を返す。
-///
-/// # Safety
-/// `h` は検査モードの生きている不死の物体を指す。
-pub(crate) unsafe fn count_immortal(h: NonNull<Header>, up: bool) -> Result<bool, HeapError> {
-    let first = &unsafe { prefix(h) }.first;
-    let n = first.load(Ordering::Relaxed);
-    if n == UNCOUNTED {
-        return Ok(false);
-    }
-    if up {
-        // 数が UNCOUNTED に届くと、その物体はダミーと同じく数えないものに変わってしまう。2^32 - 1 回の取得は正しい
-        // プログラムでは起きないので、新しい誤りの種類を足さずに panic にする
-        let up = n
-            .checked_add(1)
-            .filter(|&m| m != UNCOUNTED)
-            .expect("an immortal object is acquired 2^32 - 1 times");
-        first.store(up, Ordering::Relaxed);
-    } else if n == 0 {
-        return Err(HeapError::ImmortalOverRelease);
-    } else {
-        first.store(n - 1, Ordering::Relaxed);
-    }
-    Ok(true)
-}
-
-impl<M: Mode> Heap<M> {
-    /// 前置きの状態が生存かを確かめる。解放した共有の物体は rc が 0 になっていて不死の物体と区別できないので、rc を
-    /// 見る前に呼ぶ。
-    pub(super) unsafe fn check_live(&self, h: NonNull<Header>) -> Result<(), HeapError> {
-        if !M::CHECKED || unsafe { prefix(h) }.state() == State::Alive {
-            Ok(())
-        } else {
-            Err(HeapError::UseAfterFree)
-        }
-    }
-
-    /// 正の rc の物体は、今の worker が持ち主でなければならない (docs/spec/object-model.md の「論理的な worker ID」)。
-    pub(super) unsafe fn check_owner(&self, h: NonNull<Header>, rc: i32) -> Result<(), HeapError> {
-        if !M::CHECKED || rc <= 0 {
-            return Ok(());
-        }
-        let owner = unsafe { prefix(h) }.first.load(Ordering::Relaxed);
-        if owner == self.worker {
-            Ok(())
-        } else {
-            Err(HeapError::WrongOwner {
-                owner,
-                worker: self.worker,
-            })
-        }
-    }
-
-    /// `dup` の検査。数える参照なら真を返す。
-    pub(super) unsafe fn check_dup(&self, h: NonNull<Header>) -> Result<bool, HeapError> {
-        if !M::CHECKED {
-            return Ok(false);
-        }
-        unsafe { self.check_live(h)? };
-        if unsafe { meta::meta(h) }.lin() {
-            return Err(HeapError::LinDup);
-        }
-        let rc = unsafe { meta::rc(h) }.load(Ordering::Relaxed);
-        if rc == 0 {
-            return unsafe { count_immortal(h, true) };
-        }
-        unsafe { self.check_owner(h, rc)? };
-        Ok(true)
-    }
-
-    /// `decref` の検査。数える参照なら真を返す。
-    pub(super) unsafe fn check_decref(&self, h: NonNull<Header>) -> Result<bool, HeapError> {
-        if !M::CHECKED {
-            return Ok(false);
-        }
-        unsafe { self.check_live(h)? };
-        let rc = unsafe { meta::rc(h) }.load(Ordering::Relaxed);
-        if rc == 0 {
-            return unsafe { count_immortal(h, false) };
-        }
-        if rc < 0 && unsafe { meta::meta(h) }.lin() {
-            return Err(HeapError::LinShared);
-        }
-        unsafe { self.check_owner(h, rc)? };
-        Ok(true)
     }
 }
 

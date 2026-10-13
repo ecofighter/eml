@@ -48,6 +48,8 @@ use crate::foreign::{finalizer_of, run_finalizer};
 use crate::word::lemma_aligned_is_ptr;
 #[cfg(verus_only)]
 use chain::listed;
+#[cfg(verus_only)]
+use check::ALIVE_STATE;
 use check::{PREFIX_WORDS, UNCOUNTED, init_prefix, mark_freed};
 #[cfg(verus_only)]
 use field::field_edges;
@@ -190,9 +192,11 @@ impl<M: Mode> Heap<M> {
         self.dummy
     }
 
-    /// 物体とその数は変わらない。
+    /// 物体とその数は変わらない。変わってよいのは、不死の物体の外に出ている参照の数 (docs/spec/object-model.md の
+    /// 「不死の物体の数え方」) だけである。
     pub closed spec fn same_objects(&self, old: Heap<M>) -> bool {
-        self.core == old.core && self.dummy == old.dummy
+        &&& self.core.recounted(old.core)
+        &&& self.dummy == old.dummy
     }
 
     pub closed spec fn readable(&self, w: Word) -> bool {
@@ -315,6 +319,9 @@ impl<M: Mode> Heap<M> {
                 perm.prefix = Some(pre);
             }
         }
+        proof {
+            check::lemma_alive_code();
+        }
         heap.core.publish(Ghost(h), Tracked(perm), Ghost(BlockState::Live), Ghost(0));
         heap.dummy = Word::from_ptr(h);
         proof {
@@ -345,6 +352,9 @@ impl<M: Mode> Heap<M> {
             final(self).same_objects(*old(self)),
     {
         self.worker = worker;
+        proof {
+            self.core.lemma_recounted_refl();
+        }
     }
 
     pub fn stats(&self) -> Stats {
@@ -417,7 +427,8 @@ impl<M: Mode> Heap<M> {
             bits_kind(meta.bits_spec()) == meta.kind_spec(),
             bits_scan(meta.bits_spec()) == meta.scan_spec(),
             M::CHECKED ==> r.1@.prefix is Some && r.1@.prefix->0.first.is_init()
-                && r.1@.prefix->0.state.is_init(),
+                && r.1@.prefix->0.state.is_init() && r.1@.prefix->0.state.value() == ALIVE_STATE
+                && (rc != 0 ==> r.1@.prefix->0.first.value() == old(self).worker),
             r.0@.addr % 8 == 0,
             r.0@.addr >= 8,
             r.0@.addr + 8 * (HEADER_WORDS + final(self).core.cap(r.0@.addr)) <= usize::MAX,
@@ -513,6 +524,9 @@ impl<M: Mode> Heap<M> {
         let ghost s1 = *self;
         let (h, Tracked(perm)) = self.alloc_header(payload_words, rc, meta);
         let ghost mid = self.core;
+        proof {
+            check::lemma_alive_code();
+        }
         self.core.publish(Ghost(h), Tracked(perm), Ghost(BlockState::Building), Ghost(self.worker));
         let w = Word::from_ptr(h);
         proof {
@@ -667,8 +681,10 @@ impl<M: Mode> Heap<M> {
             self.core.pending(h@.addr),
             h == self.core.block(h@.addr),
             perm.wf(h, self.core.cap(h@.addr), self.core.checked@),
-            perm.prefix matches Some(q) ==> q.first.is_init() && q.state.is_init(),
+            perm.prefix matches Some(q) ==> q.first.is_init() && q.state.is_init()
+                && q.state.value() == ALIVE_STATE && q.first.value() == self.worker,
             perm.rc.is_init(),
+            perm.rc.value() == 1,
             perm.meta.is_init() && perm.meta.value() == meta.bits_spec(),
             meta.kind_spec() == Kind::Data,
             bits_wf(meta.bits_spec()),
@@ -689,10 +705,11 @@ impl<M: Mode> Heap<M> {
             extended ==> p_init(perm, 0) && p_word(perm, 0).bits_spec() == scanned,
             unit_filled(perm, first as int, first + scanned),
         ensures
-            self.core.perm_wf(perm, h@.addr, BlockState::Live, Set::empty()),
+            self.core.perm_wf(perm, h@.addr, BlockState::Live, Set::empty(), self.worker),
             p_count(perm) == scanned,
     {
         let bits = meta.bits_spec();
+        check::lemma_alive_code();
         assert(bits_kind(bits) == Kind::Data);
         assert(bits_scan(bits) == meta.scan_spec());
         assert(p_count(perm) == scanned);
@@ -741,6 +758,9 @@ impl<M: Mode> Heap<M> {
                     perm.slots.tracked_insert(0, slot);
                 }
                 let ghost mid = self.core;
+                proof {
+                    check::lemma_alive_code();
+                }
                 self.core.publish(
                     Ghost(h),
                     Tracked(perm),
@@ -969,6 +989,45 @@ impl<M: Mode> Heap<M> {
         self.lemma_dummy_evolved(old, h, delta);
     }
 
+    /// 不死の物体の数を替えても、ヒープの不変条件は保たれる。
+    proof fn lemma_recounted_heap(&self, old: Heap<M>)
+        requires
+            old.wf(),
+            self.core.recounted(old.core),
+            self.dummy == old.dummy,
+        ensures
+            self.wf(),
+    {
+        self.core.lemma_recounted(old.core);
+        assert(old.core.dom().contains(self.dummy.bits_spec()));
+    }
+
+    /// `dup` の後に不死の物体 `w` の数を増やしても、`dup` の後の状態のままである。
+    proof fn lemma_recounted_dup(&self, mid: Heap<M>, old: Heap<M>, w: Word)
+        requires
+            mid.wf(),
+            mid.evolved(old, w, 1),
+            mid.bumped(old, w),
+            old.core.model@.building is None,
+            old.core.dom().contains(w.bits_spec()),
+            old.core.rc_of(w.bits_spec()) == 0,
+            w.is_ptr_spec(),
+            self.core.recounted(mid.core),
+            forall|b: usize|
+                b != w.bits_spec() ==> #[trigger] self.core.perms@[b] == mid.core.perms@[b],
+            self.dummy == mid.dummy,
+            self.worker == mid.worker,
+        ensures
+            self.wf(),
+            self.evolved(old, w, 1),
+            self.bumped(old, w),
+    {
+        let h = w.bits_spec();
+        self.lemma_recounted_heap(mid);
+        self.core.lemma_recounted_evolved(mid.core, old.core.settled_view(), h, 1);
+        assert(mid.core.dom().contains(h));
+    }
+
     /// 最後の参照を手放して解放の連鎖を走らせた後。`s1` は `h` を空ける途中にした状態である。
     proof fn lemma_after_chain(&self, old: Heap<M>, s0: Core, s1: Core, h: usize, w: Word)
         requires
@@ -1045,6 +1104,9 @@ impl<M: Mode> Heap<M> {
             let n = self.core.rc_get(h);
             if let DupStep::Store(m) = rc::dup_step(n) {
                 let ghost s0 = self.core;
+                proof {
+                    s0.lemma_at(h@.addr);
+                }
                 self.core.rc_put(h, m);
                 self.core.count_ghost(Ghost(s0), Ghost(h@.addr), Ghost(true), Ghost(None));
                 proof {
@@ -1098,6 +1160,13 @@ impl<M: Mode> Heap<M> {
         proof {
             self.lemma_after_step(*old(self), s0, h@.addr, w, 1);
         }
+        if M::CHECKED && n == 0 && counted {
+            let ghost mid = *self;
+            self.count_immortal(h, true);
+            proof {
+                self.lemma_recounted_dup(mid, *old(self), w);
+            }
+        }
         Ok(())
     }
 
@@ -1133,6 +1202,9 @@ impl<M: Mode> Heap<M> {
             match rc::decref_step(n) {
                 DecrefStep::Store(m) => {
                     let ghost s0 = self.core;
+                    proof {
+                        s0.lemma_at(h@.addr);
+                    }
                     self.core.rc_put(h, m);
                     self.core.count_ghost(Ghost(s0), Ghost(h@.addr), Ghost(false), Ghost(None));
                     proof {
@@ -1235,6 +1307,11 @@ impl<M: Mode> Heap<M> {
         proof {
             s0.lemma_at(h@.addr);
         }
+        let state = if M::CHECKED {
+            self.core.prefix_state_get(h)
+        } else {
+            0
+        };
         let n = self.core.rc_get(h);
         let last = match rc::decref_step(n) {
             DecrefStep::Store(m) => {
@@ -1245,14 +1322,29 @@ impl<M: Mode> Heap<M> {
             DecrefStep::Shared => self.core.rc_down_shared(h),
             DecrefStep::Skip => false,
         };
-        self.core.count_ghost(Ghost(s0), Ghost(h@.addr), Ghost(false), Ghost(edge));
-        if counted {
-            self.stats.rc_decrements = self.stats.rc_decrements.wrapping_add(1);
-        }
         proof {
             let rc = s0.rc_of(h@.addr);
             let o = Obj { rc, count: s0.model@.refs[h@.addr], stuck: s0.model@.stuck[h@.addr] };
             assert(last == (rc != 0 && decref_next(o).freed));
+        }
+        // 最後の参照と決めた物体は、検査モードでは前置きも「空ける途中」にする。同じ物体にもう一度届いたときに、
+        // 生きていない物体として断るためである (docs/spec/object-model.md の「報告する誤り」)
+        if M::CHECKED && last {
+            proof {
+                check::lemma_set_code(state, 0);
+            }
+            self.core.prefix_state_put(h, state & !3u32);
+        }
+        self.core.count_ghost(Ghost(s0), Ghost(h@.addr), Ghost(false), Ghost(edge));
+        if M::CHECKED && n == 0 && counted {
+            let ghost mid = self.core;
+            self.count_immortal(h, false);
+            proof {
+                self.core.lemma_recounted_released(mid, s0, h@.addr, edge);
+            }
+        }
+        if counted {
+            self.stats.rc_decrements = self.stats.rc_decrements.wrapping_add(1);
         }
         Ok(last)
     }
@@ -1587,13 +1679,21 @@ impl<M: Mode> Heap<M> {
             final(self).same_objects(*old(self)),
             r is Ok ==> final(self).wf(),
     {
+        proof {
+            self.core.lemma_recounted_refl();
+        }
         if M::CHECKED && w.is_ptr() {
             let h = self.header_of(w);
             self.checked_live(h)?;
             if self.core.rc_get(h) != 0 {
                 return Err(HeapError::NotImmortal);
             }
-            if self.checked_count_immortal(h)? {
+            if self.immortal_counted(h) {
+                let ghost s0 = *self;
+                self.count_immortal(h, true);
+                proof {
+                    self.lemma_recounted_heap(s0);
+                }
                 self.stats.rc_increments = self.stats.rc_increments.wrapping_add(1);
             }
         }
@@ -1958,7 +2058,7 @@ impl<M: Mode> Heap<M> {
     /// `w` はこのヒープの生きている物体を指す。
     pub unsafe fn foreign<T: 'static>(&self, w: Word) -> Result<*mut T, HeapError> {
         let h = w.header();
-        unsafe { self.check_live(h)? };
+        self.checked_live(h.as_ptr())?;
         if unsafe { meta::meta(h) }.kind() != Kind::Foreign {
             return Err(HeapError::WrongKind);
         }

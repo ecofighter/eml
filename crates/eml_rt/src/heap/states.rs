@@ -6,7 +6,9 @@ use vstd::raw_ptr::ptr_mut_write;
 
 use super::Core;
 #[cfg(verus_only)]
-use super::inv::{p_count, p_first, p_init, p_kind, p_scanned};
+use super::check::{lemma_code, lemma_set_code};
+#[cfg(verus_only)]
+use super::inv::{p_code, p_count, p_first, p_init, p_kind, p_owner, p_scanned};
 use super::model::Pos;
 #[cfg(verus_only)]
 use super::model::{BlockState, Model, indeg, lemma_indeg_union, lemma_indeg_zero};
@@ -35,23 +37,26 @@ pub(crate) proof fn lemma_pos_set(h: usize, s: Set<int>)
 
 impl Core {
     /// 最後の参照を手放すと決めた生きている物体 `h` を空ける途中にし、`ps` の位置の辺を外す。外した辺の数え分は、
-    /// 行き先の外の参照に移る (残すフィールドを呼ぶ側が受け取る)。
+    /// 行き先の外の参照に移る (残すフィールドを呼ぶ側が受け取る)。検査モードでは前置きも「空ける途中」にする。同じ物体に
+    /// 2回届いたときに、2回目を生きていない物体として断るためである (docs/spec/object-model.md の「報告する誤り」)。
     #[inline(always)]
-    pub(crate) fn begin_free(&mut self, Ghost(h): Ghost<usize>, Ghost(ps): Ghost<Set<Pos>>)
+    pub(crate) fn begin_free(&mut self, h: *mut Header, Ghost(ps): Ghost<Set<Pos>>, checked: bool)
         requires
             old(self).wf(),
-            old(self).dom().contains(h),
-            old(self).state(h) == BlockState::Live,
-            old(self).indeg(h) == 0,
+            checked == old(self).checked@,
+            old(self).dom().contains(h@.addr),
+            h == old(self).block(h@.addr),
+            old(self).state(h@.addr) == BlockState::Live,
+            old(self).indeg(h@.addr) == 0,
             old(self).model@.building is None,
-            forall|e: Pos| #[trigger] ps.contains(e) ==> e.0 == h,
+            forall|e: Pos| #[trigger] ps.contains(e) ==> e.0 == h@.addr,
         ensures
             final(self).wf(),
             final(self).pages == old(self).pages,
-            final(self).perms == old(self).perms,
+            final(self).prefix_moved(*old(self), h@.addr),
             final(self).checked == old(self).checked,
             final(self).model@ == (Model {
-                state: old(self).model@.state.insert(h, BlockState::Dying),
+                state: old(self).model@.state.insert(h@.addr, BlockState::Dying),
                 edges: old(self).model@.edges.remove_keys(ps),
                 ..old(self).model@
             }),
@@ -60,16 +65,28 @@ impl Core {
                     self,
                 ).indeg(t),
     {
+        let ghost s0 = *self;
         proof {
-            let s0 = *self;
+            self.lemma_at(h@.addr);
+        }
+        if checked {
+            let v = self.prefix_state_get(h);
+            proof {
+                lemma_set_code(v, 0);
+            }
+            self.prefix_state_put(h, v & !3u32);
+        }
+        proof {
+            let a = h@.addr;
             self.model = Ghost(
                 Model {
-                    state: s0.model@.state.insert(h, BlockState::Dying),
+                    state: s0.model@.state.insert(a, BlockState::Dying),
                     edges: s0.model@.edges.remove_keys(ps),
                     ..s0.model@
                 },
             );
-            self.lemma_begin_free(s0, h, ps);
+            assert(self.perms@.dom() =~= s0.perms@.dom());
+            self.lemma_begin_free(s0, a, ps);
         }
     }
 
@@ -82,7 +99,8 @@ impl Core {
             s0.model@.building is None,
             forall|e: Pos| #[trigger] ps.contains(e) ==> e.0 == h,
             self.pages == s0.pages,
-            self.perms == s0.perms,
+            self.prefix_moved(s0, h),
+            self.perm(h).prefix is Some ==> p_code(self.perm(h)) == 0,
             self.checked == s0.checked,
             self.model@ == (Model {
                 state: s0.model@.state.insert(h, BlockState::Dying),
@@ -110,8 +128,10 @@ impl Core {
             assert(s0.block_wf(b));
             let p = self.perm(b);
             if b == h {
+                let q = s0.perm(h);
                 assert forall|i: int| #[trigger] p_scanned(p, i) implies p_init(p, i) by {
-                    assert(s0.slot_word(p, h, i));
+                    assert(p_scanned(q, i));
+                    assert(s0.slot_word(q, h, i));
                 }
             } else {
                 if s0.state(b) == BlockState::Live {
@@ -144,32 +164,47 @@ impl Core {
 
     /// 子を手放し終えた空ける途中の物体 `h` を token の箱にする。`ks` の語は「残した」語になる。
     #[inline(always)]
-    pub(crate) fn finish_token(&mut self, Ghost(h): Ghost<usize>, Ghost(ks): Ghost<Set<int>>)
+    pub(crate) fn finish_token(&mut self, h: *mut Header, Ghost(ks): Ghost<Set<int>>, checked: bool)
         requires
             old(self).wf(),
-            old(self).dom().contains(h),
-            old(self).state(h) == BlockState::Dying,
-            forall|j: int| !(#[trigger] old(self).model@.edges.dom().contains((h, j))),
-            old(self).kind(h) == Kind::Data,
-            old(self).rc_of(h) == 1,
-            forall|j: int| #[trigger] ks.contains(j) ==> old(self).scanned(h, j),
+            checked == old(self).checked@,
+            h == old(self).block(h@.addr),
+            old(self).dom().contains(h@.addr),
+            old(self).state(h@.addr) == BlockState::Dying,
+            forall|j: int| !(#[trigger] old(self).model@.edges.dom().contains((h@.addr, j))),
+            old(self).kind(h@.addr) == Kind::Data,
+            old(self).rc_of(h@.addr) == 1,
+            forall|j: int| #[trigger] ks.contains(j) ==> old(self).scanned(h@.addr, j),
         ensures
             final(self).wf(),
             final(self).pages == old(self).pages,
-            final(self).perms == old(self).perms,
+            final(self).prefix_moved(*old(self), h@.addr),
             final(self).checked == old(self).checked,
             final(self).model@ == (Model {
-                state: old(self).model@.state.insert(h, BlockState::Token),
-                kept: old(self).model@.kept + pos_set(h, ks),
+                state: old(self).model@.state.insert(h@.addr, BlockState::Token),
+                kept: old(self).model@.kept + pos_set(h@.addr, ks),
                 ..old(self).model@
             }),
     {
+        let ghost s0 = *self;
         proof {
-            let s0 = *self;
+            self.lemma_at(h@.addr);
+        }
+        // 世代の番号を進める。使い終えた token の表の項目を、箱がまた token になった後も断るためである
+        if checked {
+            let v = self.prefix_state_get(h);
+            let g = (v >> 2u32).wrapping_add(1);
+            proof {
+                lemma_code(g, 2);
+            }
+            self.prefix_state_put(h, (g << 2u32) | 2);
+        }
+        proof {
+            assert(self.perms@.dom() =~= s0.perms@.dom());
             self.model = Ghost(
                 Model {
-                    state: s0.model@.state.insert(h, BlockState::Token),
-                    kept: s0.model@.kept + pos_set(h, ks),
+                    state: s0.model@.state.insert(h@.addr, BlockState::Token),
+                    kept: s0.model@.kept + pos_set(h@.addr, ks),
                     ..s0.model@
                 },
             );
@@ -177,12 +212,12 @@ impl Core {
             reveal(Core::edges_wf);
             reveal(Core::refs_wf);
             reveal(Core::building_wf);
-            lemma_pos_set(h, ks);
+            lemma_pos_set(h@.addr, ks);
             assert(self.model@.state.dom() =~= self.dom());
             assert forall|b: usize| #[trigger] self.dom().contains(b) implies self.block_wf(b) by {
                 assert(s0.block_wf(b));
                 let p = self.perm(b);
-                if b != h {
+                if b != h@.addr {
                     if s0.state(b) == BlockState::Live {
                         assert forall|i: int| #[trigger] p_scanned(p, i) implies self.slot_word(
                             p,
@@ -199,6 +234,11 @@ impl Core {
                             assert(s0.slot_word(p, b, i));
                         }
                     }
+                } else {
+                    let q = s0.perm(h@.addr);
+                    assert forall|i: int| #[trigger] p_scanned(p, i) implies p_init(p, i) by {
+                        assert(p_scanned(q, i));
+                    }
                 }
             }
             assert forall|e: Pos| #[trigger] self.model@.kept.contains(e) implies self.kept_wf(
@@ -206,8 +246,12 @@ impl Core {
             ) by {
                 if s0.model@.kept.contains(e) {
                     assert(s0.kept_wf(e));
+                    if e.0 == h@.addr {
+                        assert(s0.state(h@.addr) == BlockState::Dying);
+                    }
                 } else {
-                    assert(s0.block_wf(h));
+                    assert(s0.block_wf(h@.addr));
+                    assert(p_scanned(s0.perm(h@.addr), e.1));
                 }
             }
             assert forall|e: Pos| #[trigger]
@@ -224,31 +268,44 @@ impl Core {
 
     /// 使わなかった token の箱 `h` を、空ける途中の物体にする。「残した」語は、もう呼ぶ側のものである。
     #[inline(always)]
-    pub(crate) fn token_free(&mut self, Ghost(h): Ghost<usize>)
+    pub(crate) fn token_free(&mut self, h: *mut Header, checked: bool)
         requires
             old(self).wf(),
-            old(self).dom().contains(h),
-            old(self).state(h) == BlockState::Token,
+            checked == old(self).checked@,
+            h == old(self).block(h@.addr),
+            old(self).dom().contains(h@.addr),
+            old(self).state(h@.addr) == BlockState::Token,
         ensures
             final(self).wf(),
             final(self).pages == old(self).pages,
-            final(self).perms == old(self).perms,
+            final(self).prefix_moved(*old(self), h@.addr),
             final(self).checked == old(self).checked,
-            final(self).state(h) == BlockState::Dying,
-            forall|b: usize| b != h ==> #[trigger] final(self).state(b) == old(self).state(b),
+            final(self).state(h@.addr) == BlockState::Dying,
+            forall|b: usize| b != h@.addr ==> #[trigger] final(self).state(b) == old(self).state(b),
             final(self).dom() == old(self).dom(),
             final(self).model@.edges == old(self).model@.edges,
             final(self).model@.building == old(self).model@.building,
             final(self).model@.refs == old(self).model@.refs,
             final(self).model@.owner == old(self).model@.owner,
-            forall|j: int| !(#[trigger] final(self).model@.edges.dom().contains((h, j))),
+            forall|j: int| !(#[trigger] final(self).model@.edges.dom().contains((h@.addr, j))),
     {
+        let ghost s0 = *self;
         proof {
-            let s0 = *self;
+            self.lemma_at(h@.addr);
+        }
+        if checked {
+            let v = self.prefix_state_get(h);
+            proof {
+                lemma_set_code(v, 0);
+            }
+            self.prefix_state_put(h, v & !3u32);
+        }
+        proof {
+            assert(self.perms@.dom() =~= s0.perms@.dom());
             self.model = Ghost(
                 Model {
-                    state: s0.model@.state.insert(h, BlockState::Dying),
-                    kept: s0.model@.kept.filter(|e: Pos| e.0 != h),
+                    state: s0.model@.state.insert(h@.addr, BlockState::Dying),
+                    kept: s0.model@.kept.filter(|e: Pos| e.0 != h@.addr),
                     ..s0.model@
                 },
             );
@@ -260,7 +317,7 @@ impl Core {
             assert forall|b: usize| #[trigger] self.dom().contains(b) implies self.block_wf(b) by {
                 assert(s0.block_wf(b));
                 let p = self.perm(b);
-                if b != h {
+                if b != h@.addr {
                     if s0.state(b) == BlockState::Live {
                         assert forall|i: int| #[trigger] p_scanned(p, i) implies self.slot_word(
                             p,
@@ -277,15 +334,23 @@ impl Core {
                             assert(s0.slot_word(p, b, i));
                         }
                     }
+                } else {
+                    let q = s0.perm(h@.addr);
+                    assert forall|i: int| #[trigger] p_scanned(p, i) implies p_init(p, i) by {
+                        assert(p_scanned(q, i));
+                    }
                 }
             }
             assert forall|e: Pos| #[trigger] self.model@.kept.contains(e) implies self.kept_wf(
                 e,
             ) by {
                 assert(s0.kept_wf(e));
+                if e.0 != h@.addr {
+                    assert(self.perms@[e.0] == s0.perms@[e.0]);
+                }
             }
             assert forall|e: Pos| #[trigger]
-                self.model@.edges.dom().contains(e) implies self.edge_wf(e) && e.0 != h by {
+                self.model@.edges.dom().contains(e) implies self.edge_wf(e) && e.0 != h@.addr by {
                 assert(s0.edge_wf(e));
             }
             assert forall|b: usize| #[trigger] self.dom().contains(b) implies self.counted_wf(
@@ -303,10 +368,12 @@ impl Core {
         &mut self,
         h: *mut Header,
         meta: Option<Meta>,
-        Ghost(owner): Ghost<u32>,
+        owner: u32,
+        checked: bool,
     )
         requires
             old(self).wf(),
+            checked == old(self).checked@,
             old(self).dom().contains(h@.addr),
             h == old(self).block(h@.addr),
             old(self).state(h@.addr) == BlockState::Token,
@@ -349,6 +416,11 @@ impl Core {
         proof {
             self.lemma_at(h@.addr);
         }
+        let v = if checked {
+            self.prefix_state_get(h)
+        } else {
+            0
+        };
         if let Some(m) = meta {
             let bits = m.bits();
             let tracked mut p = self.perms.borrow_mut().tracked_remove(h@.addr);
@@ -357,6 +429,15 @@ impl Core {
                 self.perms.borrow_mut().tracked_insert(h@.addr, p);
                 assert(self.perms@.dom() =~= s0.perms@.dom());
             }
+        }
+        // 使い回した箱は、今の worker の新しい物体である
+
+        if checked {
+            proof {
+                lemma_set_code(v, 1);
+            }
+            self.prefix_state_put(h, (v & !3u32) | 1);
+            self.prefix_first_put(h, owner);
         }
         proof {
             let s1 = *self;
@@ -390,7 +471,7 @@ impl Core {
             s1.model@.building is None,
             forall|b: usize| b != a ==> #[trigger] s1.state(b) == s0.state(b),
             s1.dom() == s0.dom(),
-            self.perms == s1.perms,
+            self.prefix_moved(s1, a),
             self.pages == s1.pages,
             self.checked == s1.checked,
             self.model@.state == s1.model@.state.insert(a, BlockState::Token),
@@ -421,7 +502,7 @@ impl Core {
             s2.state(a) == BlockState::Dying,
             forall|b: usize| b != a ==> #[trigger] s2.state(b) == s1.state(b),
             s2.dom() == s1.dom(),
-            s2.perms == s1.perms,
+            s2.prefix_moved(s1, a),
             s2.pages == s1.pages,
             s2.checked == s1.checked,
             s2.model@.edges == s1.model@.edges,
@@ -456,7 +537,15 @@ impl Core {
             forall|b: usize| b != a ==> #[trigger] self.perms@[b] == s0.perms@[b],
             self.perm(a).rc == s0.perm(a).rc,
             self.perm(a).slots == s0.perm(a).slots,
-            self.perm(a).prefix == s0.perm(a).prefix,
+            (self.perm(a).prefix is Some) == (s0.perm(a).prefix is Some),
+            self.perm(a).prefix matches Some(q) ==> {
+                &&& q.first.ptr() == s0.perm(a).prefix->0.first.ptr()
+                &&& q.state.ptr() == s0.perm(a).prefix->0.state.ptr()
+                &&& q.first.is_init()
+                &&& q.state.is_init()
+                &&& p_code(self.perm(a)) == 1
+                &&& p_owner(self.perm(a)) == self.model@.owner[a]
+            },
             self.perm(a).meta.ptr() == s0.perm(a).meta.ptr(),
             self.perm(a).meta.is_init(),
             match meta {

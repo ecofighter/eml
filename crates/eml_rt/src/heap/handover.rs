@@ -7,7 +7,7 @@ use super::Core;
 #[cfg(verus_only)]
 use super::chain::listed;
 #[cfg(verus_only)]
-use super::inv::{p_count, p_first, p_word};
+use super::inv::{p_count, p_first, p_word, prefix_recounted};
 #[cfg(verus_only)]
 use super::model::{BlockState, Model, Pos, indeg, lemma_indeg_insert};
 #[cfg(verus_only)]
@@ -93,7 +93,7 @@ impl Core {
         &&& old.dom().contains(h) ==> {
             &&& self.perm(h).meta == old.perm(h).meta
             &&& self.perm(h).slots == old.perm(h).slots
-            &&& self.perm(h).prefix == old.perm(h).prefix
+            &&& prefix_recounted(self.perm(h), old.perm(h), old.rc_of(h) == 0)
             &&& (old.rc_of(h) == 0) == (self.rc_of(h) == 0)
             &&& (old.rc_of(h) > 0) == (self.rc_of(h) > 0)
             &&& self.model@.refs[h] == old.model@.refs[h] + if old.rc_of(h) != 0 {
@@ -121,7 +121,7 @@ impl Core {
             old.dom().contains(b) ==> {
                 &&& self.perm(b).meta == old.perm(b).meta
                 &&& self.perm(b).slots == old.perm(b).slots
-                &&& self.perm(b).prefix == old.perm(b).prefix
+                &&& prefix_recounted(self.perm(b), old.perm(b), old.rc_of(b) == 0)
                 &&& (old.rc_of(b) == 0) == (self.rc_of(b) == 0)
                 &&& (old.rc_of(b) > 0) == (self.rc_of(b) > 0)
                 &&& self.model@.refs[b] == old.model@.refs[b] + if old.rc_of(b) != 0 {
@@ -186,7 +186,7 @@ impl Core {
             s0.indeg(h) == 0,
             s0.rc_of(h) != 0,
             s0.model@.refs[h] == 1,
-            self.perms == s0.perms,
+            self.prefix_moved(s0, h),
             self.pages == s0.pages,
             self.checked == s0.checked,
             self.model@ == (Model {
@@ -332,9 +332,18 @@ impl Core {
 
     /// `dup` の列の始まり。
     pub(crate) proof fn lemma_dupped_start(&self)
+        requires
+            self.wf(),
         ensures
             self.dupped(*self, Map::<Pos, usize>::empty()),
     {
+        assert forall|b: usize| #[trigger] self.dom().contains(b) implies prefix_recounted(
+            self.perm(b),
+            self.perm(b),
+            self.rc_of(b) == 0,
+        ) by {
+            self.lemma_at(b);
+        }
         assert forall|b: usize| #[trigger] indeg(Map::<Pos, usize>::empty(), b) == 0 by {
             assert(super::model::targets(Map::<Pos, usize>::empty(), b) =~= Set::empty());
         }
@@ -410,7 +419,7 @@ impl Core {
             s0.dom().contains(h@.addr),
             h == s0.block(h@.addr),
             s0.state(h@.addr) == BlockState::Live,
-            self.perms == s0.perms,
+            self.prefix_moved(s0, h@.addr),
             self.pages == s0.pages,
             self.model@ == (Model {
                 state: s0.model@.state.insert(h@.addr, BlockState::Dying),
@@ -470,7 +479,7 @@ impl Core {
         requires
             pre.draining(h, first, 0, skip, work),
             pre.model@.building is None,
-            self.perms == pre.perms,
+            self.prefix_moved(pre, h@.addr),
             self.pages == pre.pages,
             self.checked == pre.checked,
             self.model@.state == pre.model@.state.insert(h@.addr, BlockState::Token),

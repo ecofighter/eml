@@ -27,6 +27,55 @@ pub(crate) open spec fn p_extended(p: BlockPerm) -> bool {
     bits_scan(p.meta.value()) == 255
 }
 
+/// 検査モードの前置きの状態の欄の、状態の2ビット。
+pub(crate) open spec fn p_code(p: BlockPerm) -> u32 {
+    p.prefix->0.state.value() & 3
+}
+
+/// 検査モードの前置きの状態の欄の、世代の番号。
+pub(crate) open spec fn p_gen(p: BlockPerm) -> u32 {
+    p.prefix->0.state.value() >> 2
+}
+
+/// 検査モードの前置きの `first` の欄 (所有者 ID か不死の物体の数)。
+pub(crate) open spec fn p_owner(p: BlockPerm) -> u32 {
+    p.prefix->0.first.value()
+}
+
+/// 前置きは、不死の物体 (`immortal`) の `first` の欄 (外に出ている参照の数) のほかは変わらない。
+pub(crate) open spec fn prefix_recounted(x: BlockPerm, y: BlockPerm, immortal: bool) -> bool {
+    if immortal {
+        &&& (x.prefix is Some) == (y.prefix is Some)
+        &&& x.prefix matches Some(q) ==> {
+            &&& q.state == y.prefix->0.state
+            &&& q.first.ptr() == y.prefix->0.first.ptr()
+            &&& q.first.is_init()
+        }
+    } else {
+        x.prefix == y.prefix
+    }
+}
+
+/// 前置きの欄の位置と所有者の値は同じで、状態の欄は書いてある。状態の欄の値は変わってよい。
+pub(crate) open spec fn prefix_kept(x: BlockPerm, y: BlockPerm) -> bool {
+    &&& (x.prefix is Some) == (y.prefix is Some)
+    &&& x.prefix matches Some(q) ==> {
+        &&& q.first == y.prefix->0.first
+        &&& q.state.ptr() == y.prefix->0.state.ptr()
+        &&& q.state.is_init()
+    }
+}
+
+/// ブロックの状態を表す前置きの状態の2ビット (docs/spec/object-model.md の「前置き」)。
+pub(crate) open spec fn state_code(st: BlockState) -> u32 {
+    match st {
+        BlockState::Building | BlockState::Live => 1,
+        BlockState::Token => 2,
+        BlockState::Dying => 0,
+        BlockState::Freed => 3,
+    }
+}
+
 /// i 語目は書いてある。
 pub(crate) open spec fn p_init(p: BlockPerm, i: int) -> bool {
     p.slots.contains_key(i) && p.slots[i].is_init()
@@ -171,6 +220,16 @@ impl Core {
         }
     }
 
+    /// `old` から、ブロック `h` の検査モードの前置きの状態の欄の値だけが変わった。
+    pub(crate) open spec fn prefix_moved(&self, old: Core, h: usize) -> bool {
+        &&& self.perms@.dom() == old.perms@.dom()
+        &&& forall|b: usize| b != h ==> #[trigger] self.perms@[b] == old.perms@[b]
+        &&& self.perm(h).rc == old.perm(h).rc
+        &&& self.perm(h).meta == old.perm(h).meta
+        &&& self.perm(h).slots == old.perm(h).slots
+        &&& prefix_kept(self.perm(h), old.perm(h))
+    }
+
     // 不変条件
     /// 不変条件。
     pub(crate) open spec fn wf(&self) -> bool {
@@ -207,7 +266,13 @@ impl Core {
 
     pub(crate) open spec fn block_wf(&self, h: usize) -> bool {
         &&& self.pages.carved_block(h)
-        &&& self.perm_wf(self.perm(h), h, self.state(h), self.model@.written[h])
+        &&& self.perm_wf(
+            self.perm(h),
+            h,
+            self.state(h),
+            self.model@.written[h],
+            self.model@.owner[h],
+        )
     }
 
     /// 「残した」語の位置は、token の箱か構築中の物体の、書いてある走査する語である。
@@ -218,16 +283,21 @@ impl Core {
         &&& p_init(self.perm(e.0), e.1)
     }
 
-    /// ブロック `h` の権限 `p` が、状態 `st` の物体として正しい。`written` は構築中の物体の書いた語である。
+    /// ブロック `h` の権限 `p` が、状態 `st` の物体として正しい。`written` は構築中の物体の書いた語で、`owner` は持ち主
+    /// である。検査モードの前置きの状態は物体の状態を表し、rc が正の物体の前置きは持ち主を持つ。
     pub(crate) open spec fn perm_wf(
         &self,
         p: BlockPerm,
         h: usize,
         st: BlockState,
         written: Set<int>,
+        owner: u32,
     ) -> bool {
         &&& p.wf(self.block(h), self.cap(h), self.checked@)
         &&& p.prefix matches Some(q) ==> q.first.is_init() && q.state.is_init()
+        &&& p.prefix is Some ==> p_code(p) == state_code(st)
+        &&& p.prefix is Some && (st == BlockState::Live || st == BlockState::Building)
+            && p.rc.value() > 0 ==> p_owner(p) == owner
         &&& p.rc.is_init()
         &&& p.meta.is_init()
         &&& bits_wf(p_meta(p))

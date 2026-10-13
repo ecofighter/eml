@@ -19,6 +19,36 @@ fn using_a_freed_object_is_an_error() {
 }
 
 #[test]
+fn a_freed_word_is_reported_by_every_operation() {
+    let mut heap = H::new();
+    let x = heap.alloc_data(0, 1, 0, false);
+    unsafe {
+        heap.decref(x).unwrap();
+        assert_eq!(heap.field(x, 0), Err(HeapError::UseAfterFree));
+        assert_eq!(heap.dup(x), Err(HeapError::UseAfterFree));
+        assert_eq!(heap.decref(x), Err(HeapError::UseAfterFree));
+        assert_eq!(heap.share(x, 1), Err(HeapError::UseAfterFree));
+    }
+    drop(heap);
+}
+
+#[test]
+fn a_child_reached_twice_is_freed_once() {
+    // 呼ぶ側が dup せずに同じ語を2つのフィールドに書いた親。2回目に届いた子は UseAfterFree になる
+    let (value, drops) = probe();
+    let mut heap = H::new();
+    let f = heap.alloc_foreign(value, false);
+    let p = heap.alloc_data(0, 2, 0, false);
+    unsafe {
+        heap.set_field(p, 0, f).unwrap();
+        heap.set_field(p, 1, f).unwrap();
+        assert_eq!(heap.decref(p), Err(HeapError::UseAfterFree));
+    }
+    drop(heap);
+    assert_eq!(drops.load(std::sync::atomic::Ordering::Relaxed), 1);
+}
+
+#[test]
 fn the_checked_heap_never_reuses_a_freed_block() {
     let mut heap = H::new();
     let a = heap.alloc_data(0, 0, 1, false);

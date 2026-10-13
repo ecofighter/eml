@@ -79,6 +79,7 @@ impl<M: Mode> Heap<M> {
     >)
         requires
             self.core.wf(),
+            self.core.checked@ == M::CHECKED,
             self.core.dom().contains(h@.addr),
             h == self.core.block(h@.addr),
             self.core.state(h@.addr) == BlockState::Live,
@@ -289,7 +290,7 @@ impl<M: Mode> Heap<M> {
         let ghost a = h@.addr;
         let (first, _) = self.core.scan_get(h);
         let ghost skip = kept_set(first as int, keep@, keep@.len() as int);
-        self.core.begin_free(Ghost(a), Ghost(pos_set(a, skip)));
+        self.core.begin_free(h, Ghost(pos_set(a, skip)), M::CHECKED);
         let ghost s1 = self.core;
         proof {
             lemma_pos_set(a, skip);
@@ -415,7 +416,7 @@ impl<M: Mode> Heap<M> {
         }
         let ghost pre = self.core;
         if to_token {
-            self.core.finish_token(Ghost(h@.addr), Ghost(skip));
+            self.core.finish_token(h, Ghost(skip), M::CHECKED);
             proof {
                 self.core.lemma_tokened(pre, h, first as int, skip, work@);
                 self.core.lemma_evolved_trans(pre, s1, 0, 0, 0);
@@ -481,7 +482,7 @@ impl<M: Mode> Heap<M> {
             s0.lemma_release_unrolled(a, p_count(s0.perm(a)));
             assert(s0.model@.edges.restrict(ps) == s0.out_edges(a));
         }
-        self.core.begin_free(Ghost(a), Ghost(ps));
+        self.core.begin_free(h, Ghost(ps), M::CHECKED);
         let ghost s1 = self.core;
         proof {
             self.core.lemma_begin_evolved(s0, a, ps);

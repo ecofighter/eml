@@ -5,12 +5,19 @@ use vstd::raw_ptr::{ptr_mut_write, ptr_ref};
 
 use super::Core;
 #[cfg(verus_only)]
-use super::inv::{p_count, p_first, p_init, p_scanned, p_word};
+use super::inv::{
+    p_code, p_count, p_first, p_init, p_owner, p_scanned, p_word, prefix_kept, prefix_recounted,
+    state_code,
+};
 use super::model::Pos;
 #[cfg(verus_only)]
 use super::model::{BlockState, Model, lemma_indeg_pos};
-use crate::cell::{rc_decref_shared, rc_dup_shared, rc_is_last, rc_load, rc_store};
-use crate::meta::{Header, Meta, meta_ptr, rc_ptr, slot_ptr};
+use crate::cell::{
+    rc_decref_shared, rc_dup_shared, rc_is_last, rc_load, rc_store, u32_load, u32_store,
+};
+#[cfg(verus_only)]
+use crate::meta::field_ptr;
+use crate::meta::{Header, Meta, meta_ptr, prefix_first_ptr, prefix_state_ptr, rc_ptr, slot_ptr};
 #[cfg(verus_only)]
 use crate::meta::{bits_kind, bits_scan, bits_tag};
 #[cfg(verus_only)]
@@ -179,6 +186,301 @@ impl Core {
         }
     }
 
+    /// 検査モードの前置きの状態の欄を読む。
+    #[inline]
+    pub(crate) fn prefix_state_get(&self, h: *mut Header) -> (r: u32)
+        requires
+            self.wf(),
+            self.dom().contains(h@.addr),
+            h == self.block(h@.addr),
+            self.checked@,
+        ensures
+            self.perm(h@.addr).prefix is Some,
+            r == self.perm(h@.addr).prefix->0.state.value(),
+    {
+        proof {
+            self.lemma_at(h@.addr);
+        }
+        let tracked p = self.perms.borrow().tracked_borrow(h@.addr);
+        let tracked q = p.prefix.tracked_borrow();
+        u32_load(prefix_state_ptr(h), Tracked(&q.state))
+    }
+
+    /// 検査モードの前置きの `first` の欄 (所有者 ID か不死の物体の数) を読む。
+    #[inline]
+    pub(crate) fn prefix_first_get(&self, h: *mut Header) -> (r: u32)
+        requires
+            self.wf(),
+            self.dom().contains(h@.addr),
+            h == self.block(h@.addr),
+            self.checked@,
+        ensures
+            self.perm(h@.addr).prefix is Some,
+            r == p_owner(self.perm(h@.addr)),
+    {
+        proof {
+            self.lemma_at(h@.addr);
+        }
+        let tracked p = self.perms.borrow().tracked_borrow(h@.addr);
+        let tracked q = p.prefix.tracked_borrow();
+        u32_load(prefix_first_ptr(h), Tracked(&q.first))
+    }
+
+    /// 検査モードの前置きの状態は、ブロックの状態を表す。
+    pub(crate) proof fn lemma_code_state(&self, h: usize)
+        requires
+            self.wf(),
+            self.dom().contains(h),
+            self.checked@,
+        ensures
+            self.perm(h).prefix is Some,
+            p_code(self.perm(h)) == state_code(self.state(h)),
+            (self.state(h) == BlockState::Live || self.state(h) == BlockState::Building)
+                && self.rc_of(h) > 0 ==> p_owner(self.perm(h)) == self.model@.owner[h],
+    {
+        self.lemma_at(h);
+    }
+
+    /// 不死の物体の外に出ている参照の数 (前置きの `first` の欄) のほかは変わらない。
+    pub(crate) open spec fn recounted(&self, old: Core) -> bool {
+        &&& self.pages == old.pages
+        &&& self.checked == old.checked
+        &&& self.model == old.model
+        &&& self.perms@.dom() == old.perms@.dom()
+        &&& forall|b: usize| #[trigger]
+            old.dom().contains(b) ==> {
+                &&& self.perm(b).rc == old.perm(b).rc
+                &&& self.perm(b).meta == old.perm(b).meta
+                &&& self.perm(b).slots == old.perm(b).slots
+                &&& prefix_recounted(self.perm(b), old.perm(b), old.rc_of(b) == 0)
+            }
+    }
+
+    /// 不死の物体の数を替えても、不変条件は保たれる。数は rc が 0 の物体の前置きにしかなく、ほかの不変条件は読まない。
+    pub(crate) proof fn lemma_recounted(&self, s0: Core)
+        requires
+            s0.wf(),
+            self.recounted(s0),
+        ensures
+            self.wf(),
+            forall|w: Word| #[trigger] self.word_ok(w) == s0.word_ok(w),
+            forall|b: usize|
+                #![trigger s0.dom().contains(b)]
+                s0.dom().contains(b) ==> s0.rc_of(b) != 0 ==> self.perm(b) == s0.perm(b),
+    {
+        reveal(Core::blocks_wf);
+        reveal(Core::edges_wf);
+        reveal(Core::refs_wf);
+        reveal(Core::building_wf);
+        assert forall|b: usize| #[trigger] self.dom().contains(b) implies self.block_wf(b) by {
+            assert(s0.block_wf(b));
+            let p = self.perm(b);
+            let q = s0.perm(b);
+            if s0.rc_of(b) != 0 {
+                assert(p == q);
+            }
+            if s0.state(b) == BlockState::Live {
+                assert forall|i: int| #[trigger] p_scanned(p, i) implies self.slot_word(
+                    p,
+                    b,
+                    i,
+                ) by {
+                    assert(p_scanned(q, i));
+                    assert(s0.slot_word(q, b, i));
+                }
+            }
+            if s0.state(b) == BlockState::Building {
+                assert forall|i: int| #[trigger]
+                    self.model@.written[b].contains(i) implies p_scanned(p, i) && self.slot_word(
+                    p,
+                    b,
+                    i,
+                ) && !self.model@.kept.contains((b, i)) by {
+                    assert(s0.slot_word(q, b, i));
+                }
+            }
+            if s0.state(b) == BlockState::Dying || s0.state(b) == BlockState::Token {
+                assert forall|i: int| #[trigger] p_scanned(p, i) implies p_init(p, i) by {
+                    assert(p_scanned(q, i));
+                }
+            }
+        }
+        assert forall|e: Pos| #[trigger] self.model@.kept.contains(e) implies self.kept_wf(e) by {
+            assert(s0.kept_wf(e));
+        }
+        assert forall|e: Pos| #[trigger] self.model@.edges.dom().contains(e) implies self.edge_wf(
+            e,
+        ) by {
+            assert(s0.edge_wf(e));
+        }
+        assert forall|b: usize| #[trigger] self.dom().contains(b) implies self.counted_wf(b) by {
+            assert(s0.counted_wf(b));
+        }
+        assert forall|b: usize|
+            #![trigger s0.dom().contains(b)]
+            s0.dom().contains(b) && s0.rc_of(b) != 0 implies self.perm(b) == s0.perm(b) by {
+            assert(self.perm(b) == s0.perm(b));
+        }
+    }
+
+    pub(crate) proof fn lemma_recounted_refl(&self)
+        requires
+            self.wf(),
+        ensures
+            self.recounted(*self),
+    {
+        assert forall|b: usize| #[trigger] self.dom().contains(b) implies prefix_recounted(
+            self.perm(b),
+            self.perm(b),
+            self.rc_of(b) == 0,
+        ) by {
+            self.lemma_at(b);
+        }
+    }
+
+    /// 不死の物体の数を替えても、`evolved` は変わらない。
+    pub(crate) proof fn lemma_recounted_evolved(&self, mid: Core, old: Core, w: usize, delta: int)
+        requires
+            mid.evolved(old, w, delta),
+            self.recounted(mid),
+        ensures
+            self.evolved(old, w, delta),
+    {
+        assert forall|b: usize|
+            #![trigger old.dom().contains(b)]
+            old.dom().contains(b) && old.settled_state(b) == BlockState::Live && (old.rc_of(b) == 0
+                || old.ext(b) + (if b == w {
+                delta
+            } else {
+                0
+            }) >= 1) implies {
+            &&& self.dom().contains(b)
+            &&& self.state(b) == BlockState::Live
+            &&& self.perm(b).meta == old.perm(b).meta
+            &&& self.perm(b).slots == old.perm(b).slots
+            &&& self.block(b) == old.block(b)
+            &&& self.cap(b) == old.cap(b)
+            &&& (old.rc_of(b) == 0) == (self.rc_of(b) == 0)
+            &&& old.rc_of(b) != 0 ==> self.ext(b) == old.ext(b) + if b == w {
+                delta
+            } else {
+                0
+            }
+            &&& self.model@.owner[b] == old.model@.owner[b]
+        } by {
+            assert(mid.dom().contains(b));
+        }
+    }
+
+    /// 参照を手放した後に不死の物体の数を減らしても、`released` は変わらない。
+    pub(crate) proof fn lemma_recounted_released(
+        &self,
+        mid: Core,
+        old: Core,
+        h: usize,
+        edge: Option<Pos>,
+    )
+        requires
+            mid.wf(),
+            mid.released(old, h, edge, false),
+            mid.dom().contains(h),
+            self.recounted(mid),
+            forall|b: usize| b != h ==> #[trigger] self.perms@[b] == mid.perms@[b],
+        ensures
+            self.wf(),
+            self.released(old, h, edge, false),
+    {
+        self.lemma_recounted(mid);
+        assert(mid.dom().contains(h));
+        assert forall|b: usize| b != h implies #[trigger] self.state(b) == old.state(b) by {
+            assert(mid.state(b) == old.state(b));
+        }
+        self.lemma_recounted_evolved(
+            mid,
+            old,
+            h,
+            if edge is None {
+                -1
+            } else {
+                0
+            },
+        );
+    }
+
+    /// 検査モードの前置きの状態の欄を書く。モデルはまだ替えない。
+    #[inline]
+    pub(crate) fn prefix_state_put(&mut self, h: *mut Header, v: u32)
+        requires
+            old(self).perms@.dom().contains(h@.addr),
+            old(self).perm(h@.addr).prefix is Some,
+            old(self).perm(h@.addr).prefix->0.state.ptr() == field_ptr::<u32>(h, -4),
+            h@.addr >= 8,
+        ensures
+            final(self).pages == old(self).pages,
+            final(self).checked == old(self).checked,
+            final(self).model == old(self).model,
+            final(self).perms@.dom() == old(self).perms@.dom(),
+            forall|b: usize|
+                b != h@.addr ==> #[trigger] final(self).perms@[b] == old(self).perms@[b],
+            final(self).perm(h@.addr).rc == old(self).perm(h@.addr).rc,
+            final(self).perm(h@.addr).meta == old(self).perm(h@.addr).meta,
+            final(self).perm(h@.addr).slots == old(self).perm(h@.addr).slots,
+            final(self).perm(h@.addr).prefix is Some,
+            final(self).perm(h@.addr).prefix->0.first == old(self).perm(h@.addr).prefix->0.first,
+            final(self).perm(h@.addr).prefix->0.state.ptr() == old(self).perm(
+                h@.addr,
+            ).prefix->0.state.ptr(),
+            final(self).perm(h@.addr).prefix->0.state.is_init(),
+            final(self).perm(h@.addr).prefix->0.state.value() == v,
+    {
+        let ghost s0 = *self;
+        let tracked mut p = self.perms.borrow_mut().tracked_remove(h@.addr);
+        let tracked mut q = p.prefix.tracked_unwrap();
+        u32_store(prefix_state_ptr(h), Tracked(&mut q.state), v);
+        proof {
+            p.prefix = Some(q);
+            self.perms.borrow_mut().tracked_insert(h@.addr, p);
+            assert(self.perms@.dom() =~= s0.perms@.dom());
+        }
+    }
+
+    /// 検査モードの前置きの `first` の欄を書く。モデルはまだ替えない。
+    #[inline]
+    pub(crate) fn prefix_first_put(&mut self, h: *mut Header, v: u32)
+        requires
+            old(self).perms@.dom().contains(h@.addr),
+            old(self).perm(h@.addr).prefix is Some,
+            old(self).perm(h@.addr).prefix->0.first.ptr() == field_ptr::<u32>(h, -8),
+            h@.addr >= 8,
+        ensures
+            final(self).pages == old(self).pages,
+            final(self).checked == old(self).checked,
+            final(self).model == old(self).model,
+            final(self).perms@.dom() == old(self).perms@.dom(),
+            forall|b: usize|
+                b != h@.addr ==> #[trigger] final(self).perms@[b] == old(self).perms@[b],
+            final(self).perm(h@.addr).rc == old(self).perm(h@.addr).rc,
+            final(self).perm(h@.addr).meta == old(self).perm(h@.addr).meta,
+            final(self).perm(h@.addr).slots == old(self).perm(h@.addr).slots,
+            final(self).perm(h@.addr).prefix is Some,
+            final(self).perm(h@.addr).prefix->0.state == old(self).perm(h@.addr).prefix->0.state,
+            final(self).perm(h@.addr).prefix->0.first.ptr() == old(self).perm(
+                h@.addr,
+            ).prefix->0.first.ptr(),
+            final(self).perm(h@.addr).prefix->0.first.is_init(),
+            final(self).perm(h@.addr).prefix->0.first.value() == v,
+    {
+        let ghost s0 = *self;
+        let tracked mut p = self.perms.borrow_mut().tracked_remove(h@.addr);
+        let tracked mut q = p.prefix.tracked_unwrap();
+        u32_store(prefix_first_ptr(h), Tracked(&mut q.first), v);
+        proof {
+            p.prefix = Some(q);
+            self.perms.borrow_mut().tracked_insert(h@.addr, p);
+            assert(self.perms@.dom() =~= s0.perms@.dom());
+        }
+    }
+
     /// rc を書く。モデルはまだ替えない。
     #[inline]
     pub(crate) fn rc_put(&mut self, h: *mut Header, v: i32)
@@ -188,6 +490,7 @@ impl Core {
             h == old(self).block(h@.addr),
         ensures
             final(self).rc_changed(*old(self), h@.addr),
+            final(self).perm(h@.addr).prefix == old(self).perm(h@.addr).prefix,
             final(self).rc_of(h@.addr) == v,
     {
         proof {
@@ -210,6 +513,7 @@ impl Core {
             old(self).rc_of(h@.addr) > i32::MIN,
         ensures
             final(self).rc_changed(*old(self), h@.addr),
+            final(self).perm(h@.addr).prefix == old(self).perm(h@.addr).prefix,
             final(self).rc_of(h@.addr) == old(self).rc_of(h@.addr) - 1,
     {
         proof {
@@ -232,6 +536,7 @@ impl Core {
             old(self).rc_of(h@.addr) < 0,
         ensures
             final(self).rc_changed(*old(self), h@.addr),
+            final(self).perm(h@.addr).prefix == old(self).perm(h@.addr).prefix,
             final(self).rc_of(h@.addr) == old(self).rc_of(h@.addr) + 1,
             r == (old(self).rc_of(h@.addr) == -1),
     {
@@ -255,7 +560,7 @@ impl Core {
         &&& forall|b: usize| b != h ==> #[trigger] self.perms@[b] == old.perms@[b]
         &&& self.perm(h).meta == old.perm(h).meta
         &&& self.perm(h).slots == old.perm(h).slots
-        &&& self.perm(h).prefix == old.perm(h).prefix
+        &&& prefix_kept(self.perm(h), old.perm(h))
         &&& self.perm(h).rc.ptr() == old.perm(h).rc.ptr()
         &&& self.perm(h).rc.is_init()
     }
@@ -290,6 +595,15 @@ impl Core {
                 &&& !up ==> old(self).rc_of(h) == decref_next(s).obj.rc
             },
             s0.rc_of(h) == 0 ==> old(self).rc_of(h) == 0,
+            up ==> old(self).perm(h).prefix == s0.perm(h).prefix,
+            old(self).perm(h).prefix is Some ==> p_code(old(self).perm(h)) == if !up && s0.rc_of(h)
+                != 0 && decref_next(
+                Obj { rc: s0.rc_of(h), count: s0.model@.refs[h], stuck: s0.model@.stuck[h] },
+            ).freed {
+                0u32
+            } else {
+                1u32
+            },
         ensures
             final(self).wf(),
             final(self).pages == s0.pages,
@@ -333,6 +647,9 @@ impl Core {
     {
         self.count_model(Ghost(s0), Ghost(h), Ghost(up), Ghost(edge));
         proof {
+            if up {
+                s0.lemma_at(h);
+            }
             self.lemma_count_extra(s0, h, up, edge);
             if up && s0.rc_of(h) != 0 {
                 let s = Obj {
@@ -518,6 +835,14 @@ impl Core {
                 &&& !up ==> old(self).rc_of(h) == decref_next(s).obj.rc
             },
             s0.rc_of(h) == 0 ==> old(self).rc_of(h) == 0,
+            old(self).perm(h).prefix is Some ==> p_code(old(self).perm(h)) == if !up && s0.rc_of(h)
+                != 0 && decref_next(
+                Obj { rc: s0.rc_of(h), count: s0.model@.refs[h], stuck: s0.model@.stuck[h] },
+            ).freed {
+                0u32
+            } else {
+                1u32
+            },
         ensures
             final(self).wf(),
             final(self).pages == s0.pages,
@@ -612,6 +937,11 @@ impl Core {
             assert(self.model@.stuck.dom() =~= s1.model@.stuck.dom());
             if up {
                 assert(self.model@.state =~= s0.model@.state);
+            }
+            // 正の rc は、正の rc から動いたものだけである
+
+            if self.rc_of(h) > 0 {
+                assert(rc > 0);
             }
             self.lemma_count_step(s1, h, dying);
         }

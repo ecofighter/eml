@@ -49,7 +49,7 @@ impl Heap<Checked> {
     pub fn check_invariants(&self) -> Result<(), HeapError> {
         let mut result = Ok(());
         self.each_block(|h| {
-            if result.is_err() || unsafe { check::prefix(h) }.state() != State::Alive {
+            if result.is_err() || !unsafe { check::prefix(h) }.state().is_live() {
                 return;
             }
             let rc = unsafe { meta::rc(h) }.load(Ordering::Relaxed);
@@ -62,7 +62,7 @@ impl Heap<Checked> {
                     continue;
                 }
                 let c = child.header();
-                if unsafe { check::prefix(c) }.state() != State::Alive {
+                if !unsafe { check::prefix(c) }.state().is_live() {
                     result = Err(HeapError::UseAfterFree);
                     return;
                 }
@@ -89,7 +89,7 @@ impl Heap<Checked> {
             let (name, count) = match prefix.state() {
                 State::Freed => return,
                 State::Token => ("Token", 1),
-                State::Alive => {
+                State::Alive | State::Dying => {
                     let count = if unsafe { meta::rc(h) }.load(Ordering::Relaxed) == 0 {
                         match prefix.first.load(Ordering::Relaxed) {
                             check::UNCOUNTED => 0,

@@ -9,7 +9,9 @@ use vstd::raw_ptr::ptr_ref;
 
 use super::check::ALIVE_STATE;
 #[cfg(verus_only)]
-use super::inv::{p_count, p_extended, p_first, p_init, p_meta, p_scanned, p_word};
+use super::inv::{
+    p_code, p_count, p_extended, p_first, p_init, p_meta, p_owner, p_scanned, p_word,
+};
 #[cfg(verus_only)]
 use super::model::{BlockState, Model, Pos};
 use super::{Core, Heap};
@@ -1418,6 +1420,18 @@ pub(crate) proof fn lemma_ptr_of(w: Word, h: *mut Header)
     vstd::raw_ptr::ptrs_mut_eq_sized(ptr_of(w));
 }
 
+/// 検査モードの前置きの所有者は、たどりの前に rc が正だった節点で、持ち主に等しい。
+pub(crate) open spec fn owners_ok(
+    base: Core,
+    perms: Map<usize, BlockPerm>,
+    owner: Map<usize, u32>,
+    checked: bool,
+) -> bool {
+    forall|a: usize| #[trigger]
+        node_ok(base, perms, checked, a) && base.rc_of(a) > 0 && perms[a].prefix is Some
+            ==> p_owner(perms[a]) == owner[a]
+}
+
 /// 2つの権限の写像で、たどりが変えない部分 (rc の値と、節点の前置きの所有者の値を除くすべて) が同じである。
 pub(crate) open spec fn same_frame(
     base: Core,
@@ -1539,6 +1553,12 @@ impl<M: Mode> Graph for Objects<M> {
         &&& forall|a: usize|
             #![trigger self.owner@[a]]
             !node_ok(self.base@, old.perms@, M::CHECKED, a) ==> self.owner@[a] == old.owner@[a]
+        &&& owners_ok(self.base@, old.perms@, old.owner@, M::CHECKED) ==> owners_ok(
+            self.base@,
+            self.perms@,
+            self.owner@,
+            M::CHECKED,
+        )
     }
 
     proof fn lemma_kept_refl(&self) {
@@ -1551,6 +1571,14 @@ impl<M: Mode> Graph for Objects<M> {
             old.perms@,
             mid.owner@,
             old.owner@,
+            M::CHECKED,
+        );
+        lemma_same_frame_graph(
+            self.base@,
+            self.perms@,
+            mid.perms@,
+            self.owner@,
+            mid.owner@,
             M::CHECKED,
         );
     }
@@ -1605,6 +1633,14 @@ impl<M: Mode> Graph for Objects<M> {
             }
             assert(self.gv().rc =~= old_self.gv().with_rc(h, rc).rc);
             assert(self.gv().owner =~= old_self.gv().owner);
+            if owners_ok(self.base@, old_self.perms@, old_self.owner@, M::CHECKED) {
+                assert forall|a: usize| #[trigger]
+                    node_ok(self.base@, self.perms@, M::CHECKED, a) && self.base@.rc_of(a) > 0
+                        && self.perms@[a].prefix is Some implies p_owner(self.perms@[a])
+                    == self.owner@[a] by {
+                    assert(node_ok(self.base@, old_self.perms@, M::CHECKED, a));
+                }
+            }
         }
     }
 
@@ -1653,6 +1689,14 @@ impl<M: Mode> Graph for Objects<M> {
             }
             assert(self.gv().owner =~= old_self.gv().with_owner(h, owner).owner);
             assert(self.gv().rc =~= old_self.gv().rc);
+            if owners_ok(self.base@, old_self.perms@, old_self.owner@, M::CHECKED) {
+                assert forall|a: usize| #[trigger]
+                    node_ok(self.base@, self.perms@, M::CHECKED, a) && self.base@.rc_of(a) > 0
+                        && self.perms@[a].prefix is Some implies p_owner(self.perms@[a])
+                    == self.owner@[a] by {
+                    assert(node_ok(self.base@, old_self.perms@, M::CHECKED, a));
+                }
+            }
         }
     }
 
@@ -1826,6 +1870,10 @@ pub(crate) proof fn lemma_shared_wf(s0: Core, c1: Core, receiver: u32)
             receiver,
         ),
         c1.model@.owner.dom() == s0.model@.owner.dom(),
+        owners_ok(s0, c1.perms@, c1.model@.owner, s0.checked@),
+        forall|a: usize|
+            #![trigger c1.model@.owner[a]]
+            !node_ok(s0, s0.perms@, s0.checked@, a) ==> c1.model@.owner[a] == s0.model@.owner[a],
         c1.model@.stuck.dom() == s0.dom(),
         forall|b: usize|
             #![trigger c1.model@.stuck[b]]
@@ -1869,7 +1917,20 @@ pub(crate) proof fn lemma_shared_wf(s0: Core, c1: Core, receiver: u32)
             if x.rc.value() != rc0 {
                 let o = Obj { rc: rc0, count: s0.model@.refs[b], stuck: s0.model@.stuck[b] };
                 lemma_mark(o);
+                lemma_mark_negative(rc0);
             }
+            assert(node_ok(s0, c1.perms@, checked, b));
+            if x.prefix is Some {
+                assert(p_code(x) == p_code(y));
+                if x.rc.value() > 0 {
+                    assert(x.rc.value() == rc0);
+                    assert(s0.rc_of(b) > 0);
+                    assert(p_owner(x) == c1.model@.owner[b]);
+                }
+            }
+            assert(c1.perm_wf(x, b, c1.state(b), c1.model@.written[b], c1.model@.owner[b]));
+            assert(c1.block_wf(b));
+            assert(c1.counted_wf(b));
         } else {
             assert(x == y);
             if s0.state(b) == BlockState::Live {
@@ -1877,6 +1938,8 @@ pub(crate) proof fn lemma_shared_wf(s0: Core, c1: Core, receiver: u32)
                     assert(s0.slot_word(y, b, i));
                 }
             }
+            assert(c1.block_wf(b));
+            assert(c1.counted_wf(b));
         }
     }
     assert forall|e: Pos| #[trigger] c1.model@.kept.contains(e) implies c1.kept_wf(e) by {
@@ -2023,6 +2086,14 @@ impl<M: Mode> Heap<M> {
         reveal(Core::blocks_wf);
         lemma_shaped(s0, h@.addr);
         lemma_same_frame_graph(s0, o1.perms@, s0.perms@, o1.owner@, s0.model@.owner, checked);
+        assert(owners_ok(s0, s0.perms@, s0.model@.owner, checked)) by {
+            assert forall|a: usize| #[trigger]
+                node_ok(s0, s0.perms@, checked, a) && s0.rc_of(a) > 0
+                    && s0.perms@[a].prefix is Some implies p_owner(s0.perms@[a])
+                == s0.model@.owner[a] by {
+                assert(s0.block_wf(a));
+            }
+        }
         assert(self.core.model@.owner.dom() =~= s0.model@.owner.dom()) by {
             assert forall|a: usize| #[trigger]
                 self.core.model@.owner.dom().contains(a) implies s0.model@.owner.dom().contains(
