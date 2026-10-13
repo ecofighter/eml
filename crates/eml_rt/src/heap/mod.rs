@@ -1,6 +1,8 @@
 //! ヒープ: 確保、RC、解放の連鎖、フィールドの読み書き
-//! (docs/superpowers/specs/2026-10-13-s9a-eml-rt-core-design.md の「核の操作」)。語を受ける操作は `unsafe fn` で、
-//! 安全の条件は spec の「核の操作」にある。検査モードは、確かめられる違反を `Err` で返す。
+//! (docs/superpowers/specs/2026-10-13-s9a-eml-rt-core-design.md の「核の操作」)。語を受ける操作と、ペイロードを
+//! 呼ぶ側が書く `alloc` と `alloc_immortal` は `unsafe fn` で、安全の条件は spec の「核の操作」にある。その条件の
+//! 「生きている物体」は、`meta` に合うペイロード (走査する語、`scan` が 255 なら数の語、`BigInt` なら値) をすべて書いた
+//! 物体を指す。検査モードは、確かめられる違反を `Err` で返す。
 
 pub(crate) mod check;
 mod walk;
@@ -140,12 +142,21 @@ impl<M: Mode> Heap<M> {
     }
 
     /// 物体を確保する。ペイロードは呼ぶ側が書く。
-    pub fn alloc(&mut self, payload_words: usize, meta: Meta) -> Word {
+    ///
+    /// # Safety
+    /// `meta` の種類は `Foreign` でも `Free` でもなく、呼ぶ側は、ほかのヒープの操作の前に、`meta` に合うペイロード
+    /// (走査する語、`scan` が 255 なら数の語、`BigInt` なら値) を書く。
+    pub unsafe fn alloc(&mut self, payload_words: usize, meta: Meta) -> Word {
+        debug_assert_ne!(meta.kind(), Kind::Foreign);
         Word::from_header(self.alloc_header(payload_words, 1, meta))
     }
 
     /// 不死の物体を確保する。検査モードでは、外に出ている参照の数を 0 にして作る。
-    pub fn alloc_immortal(&mut self, payload_words: usize, meta: Meta) -> Word {
+    ///
+    /// # Safety
+    /// `alloc` と同じ。
+    pub unsafe fn alloc_immortal(&mut self, payload_words: usize, meta: Meta) -> Word {
+        debug_assert_ne!(meta.kind(), Kind::Foreign);
         Word::from_header(self.alloc_header(payload_words, 0, meta))
     }
 
@@ -295,16 +306,24 @@ impl<M: Mode> Heap<M> {
         Ok(())
     }
 
-    /// 箱を空ける。`Foreign` なら先に破棄処理を呼ぶ。検査モードは箱を使い回さず、前置きを「解放」にして隔離する。
+    /// 箱を空ける。`Foreign` なら破棄処理を呼ぶ。破棄処理が panic しても同じ値を二度破棄しないように、箱を先に
+    /// 死んだことにしてから呼ぶ (箱は漏れてよい)。検査モードは箱を使い回さず、前置きを「解放」にして隔離する。
     unsafe fn free_box(&mut self, h: NonNull<Header>) {
-        if unsafe { meta::meta(h) }.kind().has_finalizer() {
-            unsafe { foreign::finalize(h) };
-        }
+        let finalizer = unsafe { meta::meta(h) }
+            .kind()
+            .has_finalizer()
+            .then(|| unsafe { foreign::finalizer(h) });
         if M::CHECKED {
             unsafe { check::prefix(h) }.set_state(State::Freed, true);
             self.quarantined += unsafe { self.pages.block_bytes(h) };
             self.stats.live -= 1;
-        } else {
+        } else if finalizer.is_some() {
+            unsafe { meta::set_meta(h, Meta::new(0, 0, Kind::Free, false)) };
+        }
+        if let Some(finalizer) = finalizer {
+            unsafe { finalizer.run() };
+        }
+        if !M::CHECKED {
             unsafe { self.pages.free(h) };
         }
     }

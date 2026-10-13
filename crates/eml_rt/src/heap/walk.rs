@@ -74,7 +74,7 @@ impl<M: Mode> Drop for Heap<M> {
             }
         });
         for h in finalizable {
-            unsafe { foreign::finalize(h) };
+            unsafe { foreign::finalizer(h).run() };
         }
     }
 }

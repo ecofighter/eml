@@ -1,4 +1,6 @@
-use std::sync::atomic::Ordering;
+use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use super::{LONG, cons, list, mortal, probe};
 use crate::{Fast, Heap, HeapError, Kind, Meta, Mode, Word};
@@ -127,6 +129,23 @@ fn dropping_the_heap_finalizes_live_foreign_values<M: Mode>() {
     assert_eq!(drops.load(Ordering::Relaxed), 1);
 }
 
+fn a_panicking_finalizer_runs_once<M: Mode>() {
+    struct Panicker(Arc<AtomicUsize>);
+    impl Drop for Panicker {
+        fn drop(&mut self) {
+            self.0.fetch_add(1, Ordering::Relaxed);
+            panic!("the finalizer panics");
+        }
+    }
+    let mut heap = Heap::<M>::new();
+    let drops = Arc::new(AtomicUsize::new(0));
+    let f = heap.alloc_foreign(Panicker(drops.clone()), false);
+    let result = catch_unwind(AssertUnwindSafe(|| unsafe { heap.decref(f) }));
+    assert!(result.is_err());
+    drop(heap);
+    assert_eq!(drops.load(Ordering::Relaxed), 1);
+}
+
 fn a_zero_sized_foreign_value_fits<M: Mode>() {
     struct Nothing;
     let mut heap = Heap::<M>::new();
@@ -163,7 +182,7 @@ fn bytes_in_use_come_back_after_a_large_object_dies<M: Mode>() {
 
 fn immortal_objects_are_never_freed<M: Mode>() {
     let mut heap = Heap::<M>::new();
-    let x = heap.alloc_immortal(1, Meta::new(0, 0, Kind::Data, false));
+    let x = unsafe { heap.alloc_immortal(1, Meta::new(0, 0, Kind::Data, false)) };
     unsafe {
         heap.acquire_immortal(x).unwrap();
         heap.dup(x).unwrap();
@@ -238,6 +257,7 @@ both_modes!(
     an_extended_scan_object_frees_all_its_children,
     a_foreign_value_is_finalized_exactly_once,
     dropping_the_heap_finalizes_live_foreign_values,
+    a_panicking_finalizer_runs_once,
     a_zero_sized_foreign_value_fits,
     is_last_and_free_block_free_a_known_shape,
     bytes_in_use_come_back_after_a_large_object_dies,

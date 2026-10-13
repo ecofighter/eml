@@ -45,11 +45,28 @@ pub(crate) unsafe fn value<T: 'static>(h: NonNull<Header>) -> Option<*mut T> {
     ((table.type_id)() == TypeId::of::<T>()).then(|| unsafe { meta::slot(h, 1) }.cast())
 }
 
+/// 破棄処理と値の位置。物体の状態を替えたあとで呼べるように、先に読み出しておく。
+pub(crate) struct Finalizer {
+    finalize: unsafe fn(*mut u8),
+    value: *mut u8,
+}
+
+impl Finalizer {
+    /// # Safety
+    /// 値はまだ破棄していず、位置のメモリは生きている。
+    pub(crate) unsafe fn run(self) {
+        unsafe { (self.finalize)(self.value) }
+    }
+}
+
 /// # Safety
 /// `h` は生きている `Foreign` の物体を指し、破棄処理をまだ呼んでいない。
-pub(crate) unsafe fn finalize(h: NonNull<Header>) {
+pub(crate) unsafe fn finalizer(h: NonNull<Header>) -> Finalizer {
     unsafe {
         let table = meta::slot(h, 0).cast::<&'static VTable>().read();
-        (table.finalize)(meta::slot(h, 1).cast());
+        Finalizer {
+            finalize: table.finalize,
+            value: meta::slot(h, 1).cast(),
+        }
     }
 }

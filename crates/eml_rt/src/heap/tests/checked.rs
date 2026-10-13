@@ -57,7 +57,7 @@ fn another_worker_cannot_touch_a_local_object() {
 #[test]
 fn an_immortal_object_counts_its_outside_references() {
     let mut heap = H::new();
-    let x = heap.alloc_immortal(1, Meta::new(0, 1, Kind::Data, false));
+    let x = unsafe { heap.alloc_immortal(1, Meta::new(0, 1, Kind::Data, false)) };
     unsafe {
         // 作るときのフィールドの書き込みは数を見ない
         heap.set_field(x, 0, Word::UNIT).unwrap();
@@ -72,8 +72,8 @@ fn an_immortal_object_counts_its_outside_references() {
 #[test]
 fn a_borrowed_child_of_an_immortal_object_can_be_dupped() {
     let mut heap = H::new();
-    let child = heap.alloc_immortal(1, Meta::new(0, 0, Kind::Data, false));
-    let parent = heap.alloc_immortal(1, Meta::new(0, 1, Kind::Data, false));
+    let child = unsafe { heap.alloc_immortal(1, Meta::new(0, 0, Kind::Data, false)) };
+    let parent = unsafe { heap.alloc_immortal(1, Meta::new(0, 1, Kind::Data, false)) };
     unsafe {
         heap.set_field(parent, 0, child).unwrap();
         let borrowed = heap.field(parent, 0).unwrap();
