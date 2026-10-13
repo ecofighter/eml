@@ -2,7 +2,6 @@
 //! 状態を返す純粋な関数にし、ヒープと単体テストが同じ関数を使い、Verus が同じ関数を証明する。rc は 0 が不死、
 //! 正が局所、負が共有である。
 
-use std::sync::atomic::{AtomicI32, Ordering};
 use vstd::prelude::*;
 
 verus! {
@@ -282,19 +281,6 @@ pub(crate) proof fn lemma_immortal(s: Obj)
 }
 
 } // verus!
-// まだ検証していないヒープが使う。ヒープを権限の上で書き直すときに `crate::cell` の関数に置き換える
-
-/// 手放そうとしている参照が最後のものか。rc は Relaxed で読み、-1 のときだけ Acquire で読み直す。ふだんの rc が 1 の
-/// 道に Acquire の読み込みの費用を足さず、-1 のときは最後の AcqRel の `decref` と同期するためである。
-#[inline]
-pub(crate) fn is_last(rc: &AtomicI32) -> bool {
-    match rc.load(Ordering::Relaxed) {
-        1 => true,
-        -1 => rc.load(Ordering::Acquire) == -1,
-        _ => false,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

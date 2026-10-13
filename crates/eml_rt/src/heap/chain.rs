@@ -54,12 +54,13 @@ impl Core {
         self.work_wf(work, None)
     }
 
-    /// 解放の連鎖が `h` の子を `first + i` 語目より下だけ手放し残している。
+    /// 解放の連鎖が `h` の子を `first + i` 語目より下だけ手放し残している。`skip` の語は残すフィールドで、辺はもうない。
     pub(crate) open spec fn draining(
         &self,
         h: *mut Header,
         first: int,
         i: int,
+        skip: Set<int>,
         work: Seq<Word>,
     ) -> bool {
         let a = h@.addr;
@@ -70,10 +71,10 @@ impl Core {
         &&& 0 <= i <= p_count(self.perm(a))
         &&& forall|j: int|
             #![trigger self.model@.edges.dom().contains((a, j))]
-            self.model@.edges.dom().contains((a, j)) ==> first <= j < first + i
+            self.model@.edges.dom().contains((a, j)) ==> first <= j < first + i && !skip.contains(j)
         &&& forall|j: int|
             #![trigger p_word(self.perm(a), j)]
-            first <= j < first + i && p_word(self.perm(a), j).is_ptr_spec()
+            first <= j < first + i && !skip.contains(j) && p_word(self.perm(a), j).is_ptr_spec()
                 ==> self.model@.edges.dom().contains((a, j))
         &&& self.work_wf(work, Some(a))
     }
@@ -165,36 +166,38 @@ impl Core {
             self.evolved(mid, w, delta),
             mid.frame(s0),
         ensures
-            self.evolved(s0, w, delta),
+            self.evolved(s0.settled_view(), w, delta),
     {
+        let v = s0.settled_view();
         assert forall|b: usize|
-            #![trigger s0.dom().contains(b)]
-            s0.dom().contains(b) && s0.settled_state(b) == BlockState::Live && (s0.rc_of(b) == 0
-                || s0.ext(b) + (if b == w {
+            #![trigger v.dom().contains(b)]
+            v.dom().contains(b) && v.settled_state(b) == BlockState::Live && (v.rc_of(b) == 0
+                || v.ext(b) + (if b == w {
                 delta
             } else {
                 0
             }) >= 1) implies {
             &&& self.dom().contains(b)
             &&& self.state(b) == BlockState::Live
-            &&& self.perm(b).meta == s0.perm(b).meta
-            &&& self.perm(b).slots == s0.perm(b).slots
-            &&& self.block(b) == s0.block(b)
-            &&& self.cap(b) == s0.cap(b)
-            &&& (s0.rc_of(b) == 0) == (self.rc_of(b) == 0)
-            &&& s0.rc_of(b) != 0 ==> self.ext(b) == s0.ext(b) + if b == w {
+            &&& self.perm(b).meta == v.perm(b).meta
+            &&& self.perm(b).slots == v.perm(b).slots
+            &&& self.block(b) == v.block(b)
+            &&& self.cap(b) == v.cap(b)
+            &&& (v.rc_of(b) == 0) == (self.rc_of(b) == 0)
+            &&& v.rc_of(b) != 0 ==> self.ext(b) == v.ext(b) + if b == w {
                 delta
             } else {
                 0
             }
-            &&& self.model@.owner[b] == s0.model@.owner[b]
+            &&& self.model@.owner[b] == v.model@.owner[b]
         } by {
+            assert(s0.dom().contains(b));
             assert(mid.dom().contains(b));
-            assert(mid.perm(b) == s0.perm(b));
-            assert(mid.rc_of(b) == s0.rc_of(b));
+            assert(mid.perm(b) == v.perm(b));
+            assert(mid.rc_of(b) == v.rc_of(b));
             assert(mid.state(b) == BlockState::Live);
             assert(mid.settled_state(b) == BlockState::Live);
-            assert(mid.ext(b) == s0.ext(b));
+            assert(mid.ext(b) == v.ext(b));
         }
     }
 
@@ -319,18 +322,20 @@ impl Core {
             first == p_first(self.perm(h@.addr)),
             n == p_count(self.perm(h@.addr)),
         ensures
-            self.draining(h, first, n, work),
+            self.draining(h, first, n, Set::empty(), work),
     {
         reveal(Core::edges_wf);
         let a = h@.addr;
         assert forall|j: int|
             #![trigger self.model@.edges.dom().contains((a, j))]
-            self.model@.edges.dom().contains((a, j)) implies first <= j < first + n by {
+            self.model@.edges.dom().contains((a, j)) implies first <= j < first + n && !Set::<
+            int,
+        >::empty().contains(j) by {
             assert(self.edge_wf((a, j)));
         }
         assert forall|j: int|
             #![trigger p_word(self.perm(a), j)]
-            first <= j < first + n && p_word(
+            first <= j < first + n && !Set::<int>::empty().contains(j) && p_word(
                 self.perm(a),
                 j,
             ).is_ptr_spec() implies self.model@.edges.dom().contains((a, j)) by {
@@ -344,12 +349,14 @@ impl Core {
         h: *mut Header,
         first: int,
         i: int,
+        skip: Set<int>,
         work: Seq<Word>,
     )
         requires
             self.wf(),
-            self.draining(h, first, i + 1, work),
+            self.draining(h, first, i + 1, skip, work),
             0 <= i,
+            !skip.contains(first + i),
             self.model@.building is None,
         ensures
             super::inv::p_init(self.perm(h@.addr), first + i),
@@ -380,21 +387,23 @@ impl Core {
         h: *mut Header,
         first: int,
         i: int,
+        skip: Set<int>,
         work: Seq<Word>,
     )
         requires
             self.wf(),
-            self.draining(h, first, i + 1, work),
+            self.draining(h, first, i + 1, skip, work),
             0 <= i,
-            !p_word(self.perm(h@.addr), first + i).is_ptr_spec(),
+            !p_word(self.perm(h@.addr), first + i).is_ptr_spec() || skip.contains(first + i),
         ensures
-            self.draining(h, first, i, work),
+            self.draining(h, first, i, skip, work),
     {
         reveal(Core::edges_wf);
         let a = h@.addr;
         assert forall|j: int|
             #![trigger self.model@.edges.dom().contains((a, j))]
-            self.model@.edges.dom().contains((a, j)) implies first <= j < first + i by {
+            self.model@.edges.dom().contains((a, j)) implies first <= j < first + i
+            && !skip.contains(j) by {
             assert(self.edge_wf((a, j)));
         }
     }
@@ -407,14 +416,16 @@ impl Core {
         h: *mut Header,
         first: int,
         i: int,
+        skip: Set<int>,
         child: Word,
         last: bool,
         before: Seq<Word>,
         work: Seq<Word>,
     )
         requires
-            s3.draining(h, first, i + 1, before),
+            s3.draining(h, first, i + 1, skip, before),
             0 <= i,
+            !skip.contains(first + i),
             s3.model@.edges.dom().contains((h@.addr, first + i)),
             s3.model@.edges[(h@.addr, first + i)] == child.bits_spec(),
             s3.state(child.bits_spec()) == BlockState::Live,
@@ -429,7 +440,7 @@ impl Core {
             },
             s3.evolved(s0, 0, 0),
         ensures
-            self.draining(h, first, i, work),
+            self.draining(h, first, i, skip, work),
             self.active() == s3.active(),
             self.evolved(s0, 0, 0),
     {
@@ -439,12 +450,13 @@ impl Core {
         assert(self.perms@[a] == s3.perms@[a]);
         assert forall|j: int|
             #![trigger self.model@.edges.dom().contains((a, j))]
-            self.model@.edges.dom().contains((a, j)) implies first <= j < first + i by {
+            self.model@.edges.dom().contains((a, j)) implies first <= j < first + i
+            && !skip.contains(j) by {
             assert(s3.model@.edges.dom().contains((a, j)));
         }
         assert forall|j: int|
             #![trigger p_word(self.perm(a), j)]
-            first <= j < first + i && p_word(
+            first <= j < first + i && !skip.contains(j) && p_word(
                 self.perm(a),
                 j,
             ).is_ptr_spec() implies self.model@.edges.dom().contains((a, j)) by {
@@ -512,10 +524,11 @@ impl Core {
         s0: Core,
         h: *mut Header,
         first: int,
+        skip: Set<int>,
         work: Seq<Word>,
     )
         requires
-            pre.draining(h, first, 0, work),
+            pre.draining(h, first, 0, skip, work),
             pre.model@.building is None,
             self.boxed_off(pre, h@.addr),
             pre.evolved(s0, 0, 0),

@@ -136,14 +136,37 @@ impl Core {
         &&& w.is_ptr_spec() && self.rc_of(w.bits_spec()) != 0 ==> self.ext(w.bits_spec()) >= 1
     }
 
-    /// 構築中の物体はないか、書き終えている。
+    /// 構築中の物体 `b` の「残した」語のうち、物体を指すもの。構築中の物体を生きている物体にするときに辺になる。
+    pub(crate) open spec fn kept_edges(&self, b: usize) -> Map<Pos, usize> {
+        let p = self.perm(b);
+        Map::new(
+            self.model@.kept.filter(|e: Pos| e.0 == b && p_word(p, e.1).is_ptr_spec()),
+            |e: Pos| p_word(p, e.1).bits_spec(),
+        )
+    }
+
+    /// 構築中の物体 `b` の「残した」語 `w` は、即値か、生きている物体か `b` 自身を指す。
+    pub(crate) open spec fn kept_ok(&self, b: usize, w: Word) -> bool {
+        &&& self.word_ok(w)
+        &&& w.is_ptr_spec() ==> self.state(w.bits_spec()) == BlockState::Live || w.bits_spec() == b
+    }
+
+    /// 構築中の物体はないか、書き終えている。書き終えたとは、走査する語がどれも「書いた」か「残した」で、`BigInt`
+    /// なら値の語が書いてあることである。「残した」語の参照は呼ぶ側が持つ。
     pub(crate) open spec fn settleable(&self) -> bool {
         match self.model@.building {
             None => true,
             Some(b) => {
                 &&& forall|i: int| #[trigger]
                     self.scanned(b, i) ==> self.model@.written[b].contains(i)
+                        || self.model@.kept.contains((b, i))
                 &&& self.kind(b) == Kind::BigInt ==> p_init(self.perm(b), 0)
+                &&& forall|i: int| #[trigger]
+                    self.model@.kept.contains((b, i)) ==> self.kept_ok(b, p_word(self.perm(b), i))
+                &&& forall|t: usize|
+                    #![trigger indeg(self.kept_edges(b), t)]
+                    indeg(self.kept_edges(b), t) > 0 && self.rc_of(t) != 0 ==> self.model@.refs[t]
+                        >= self.indeg(t) + indeg(self.kept_edges(b), t)
             },
         }
     }
@@ -179,11 +202,20 @@ impl Core {
         &&& self.model@.owner.dom() == self.dom()
         &&& self.model@.written.dom() == self.dom()
         &&& forall|h: usize| #[trigger] self.dom().contains(h) ==> self.block_wf(h)
+        &&& forall|e: Pos| #[trigger] self.model@.kept.contains(e) ==> self.kept_wf(e)
     }
 
     pub(crate) open spec fn block_wf(&self, h: usize) -> bool {
         &&& self.pages.carved_block(h)
         &&& self.perm_wf(self.perm(h), h, self.state(h), self.model@.written[h])
+    }
+
+    /// 「残した」語の位置は、token の箱か構築中の物体の、書いてある走査する語である。
+    pub(crate) open spec fn kept_wf(&self, e: Pos) -> bool {
+        &&& self.dom().contains(e.0)
+        &&& self.state(e.0) == BlockState::Building || self.state(e.0) == BlockState::Token
+        &&& self.scanned(e.0, e.1)
+        &&& p_init(self.perm(e.0), e.1)
     }
 
     /// ブロック `h` の権限 `p` が、状態 `st` の物体として正しい。`written` は構築中の物体の書いた語である。
@@ -200,19 +232,20 @@ impl Core {
         &&& p.meta.is_init()
         &&& bits_wf(p_meta(p))
         &&& p_kind(p) != Kind::Free
-        &&& st == BlockState::Building || st == BlockState::Live || st == BlockState::Dying || st
-            == BlockState::Freed
-        &&& st == BlockState::Live || st == BlockState::Dying ==> {
+        &&& st != BlockState::Freed ==> {
             &&& p_extended(p) ==> self.cap(h) >= 1 && p_init(p, 0)
-            &&& p_kind(p) == Kind::BigInt ==> self.cap(h) >= 1 && p_init(p, 0)
+            &&& p_first(p) + p_count(p) <= self.cap(h)
         }
-        &&& st == BlockState::Building ==> !p_extended(p)
-        &&& st != BlockState::Freed ==> p_first(p) + p_count(p) <= self.cap(h)
+        &&& st == BlockState::Live || st == BlockState::Dying ==> (p_kind(p) == Kind::BigInt
+            ==> self.cap(h) >= 1 && p_init(p, 0))
         &&& st == BlockState::Live ==> forall|i: int| #[trigger]
             p_scanned(p, i) ==> self.slot_word(p, h, i)
         &&& st == BlockState::Dying ==> forall|i: int| #[trigger] p_scanned(p, i) ==> p_init(p, i)
         &&& st == BlockState::Building ==> forall|i: int| #[trigger]
             written.contains(i) ==> p_scanned(p, i) && self.slot_word(p, h, i)
+                && !self.model@.kept.contains((h, i))
+        &&& st == BlockState::Token ==> p_kind(p) == Kind::Data && p.rc.value() == 1
+        &&& st == BlockState::Token ==> forall|i: int| #[trigger] p_scanned(p, i) ==> p_init(p, i)
     }
 
     /// i 語目は書いてあり、値は即値か、このヒープのブロックを指す。ポインタなら辺である。
@@ -227,11 +260,14 @@ impl Core {
         forall|e: Pos| #[trigger] self.model@.edges.dom().contains(e) ==> self.edge_wf(e)
     }
 
+    /// 辺は、生きている物体、構築中の物体の書いた語、空ける途中の物体のまだ手放していない語から出る。
     pub(crate) open spec fn edge_wf(&self, e: Pos) -> bool {
         let (h, i) = e;
         let t = self.model@.edges[e];
         &&& self.dom().contains(h)
-        &&& self.state(h) != BlockState::Freed
+        &&& self.state(h) == BlockState::Live || self.state(h) == BlockState::Building
+            || self.state(h) == BlockState::Dying
+        &&& self.state(h) == BlockState::Building ==> self.model@.written[h].contains(i)
         &&& self.scanned(h, i)
         &&& p_init(self.perm(h), i)
         &&& p_word(self.perm(h), i).is_ptr_spec()
@@ -249,7 +285,9 @@ impl Core {
     /// rc とモデルの参照の数が対応する (`rc.rs` の理想のモデルとの対応と同じ形)。
     pub(crate) open spec fn counted_wf(&self, h: usize) -> bool {
         let rc = self.rc_of(h);
-        &&& self.state(h) == BlockState::Dying ==> self.indeg(h) == 0
+        &&& self.state(h) == BlockState::Dying || self.state(h) == BlockState::Token ==> self.indeg(
+            h,
+        ) == 0
         &&& (self.state(h) == BlockState::Live || self.state(h) == BlockState::Building) && rc != 0
             ==> {
             &&& self.model@.refs[h] >= self.indeg(h)

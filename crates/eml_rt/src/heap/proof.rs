@@ -8,7 +8,10 @@ use super::Core;
 use super::inv::{p_init, p_scanned, p_word};
 use super::model::BlockState;
 #[cfg(verus_only)]
-use super::model::{Model, lemma_indeg_remove, lemma_indeg_zero};
+use super::model::{
+    Model, Pos, indeg, lemma_indeg_pos, lemma_indeg_remove, lemma_indeg_union, lemma_indeg_witness,
+    lemma_indeg_zero,
+};
 #[cfg(verus_only)]
 use crate::meta::HEADER_WORDS;
 use crate::meta::{BlockPerm, Header};
@@ -67,20 +70,41 @@ impl Core {
         }
     }
 
-    /// `old` のブロックは、どれも同じ権限と形と数を持ち続ける。構築中の物体は、生きている物体になってよい。
+    /// 構築中の物体を生きている物体にした見方。権限は同じで、構築中の物体の「残した」語のうち物体を指すものが辺になる。
+    pub(crate) open spec fn settled_view(&self) -> Core {
+        match self.model@.building {
+            Some(b) => Core {
+                model: Ghost(
+                    Model {
+                        state: self.model@.state.insert(b, BlockState::Live),
+                        edges: self.model@.edges.union_prefer_right(self.kept_edges(b)),
+                        kept: self.model@.kept.filter(|e: Pos| e.0 != b),
+                        building: None,
+                        ..self.model@
+                    },
+                ),
+                ..*self
+            },
+            None => *self,
+        }
+    }
+
+    /// `old` を生きている物体にした見方のブロックは、どれも同じ権限と形と数を持ち続ける。
     pub(crate) open spec fn frame(&self, old: Core) -> bool {
+        let v = old.settled_view();
         &&& forall|b: usize| #[trigger]
             old.dom().contains(b) ==> {
                 &&& self.dom().contains(b)
                 &&& self.perm(b) == old.perm(b)
-                &&& self.state(b) == old.settled_state(b)
+                &&& self.state(b) == v.state(b)
                 &&& self.block(b) == old.block(b)
                 &&& self.cap(b) == old.cap(b)
                 &&& self.model@.refs[b] == old.model@.refs[b]
                 &&& self.model@.stuck[b] == old.model@.stuck[b]
                 &&& self.model@.owner[b] == old.model@.owner[b]
             }
-        &&& self.model@.edges == old.model@.edges
+        &&& self.model@.edges == v.model@.edges
+        &&& self.model@.kept == v.model@.kept
         &&& self.checked == old.checked
     }
 
@@ -171,6 +195,7 @@ impl Core {
             self.model@.stuck == Map::<usize, bool>::empty(),
             self.model@.owner == Map::<usize, u32>::empty(),
             self.model@.written == Map::<usize, Set<int>>::empty(),
+            self.model@.kept == Set::<Pos>::empty(),
             self.model@.building is None,
         ensures
             self.wf(),
@@ -219,6 +244,8 @@ impl Core {
             final(self).wf(),
             final(self).model@.building is None,
             final(self).frame(*old(self)),
+            final(self).model == old(self).settled_view().model,
+            *final(self) == old(self).settled_view(),
             final(self).dom() == old(self).dom(),
             final(self).pages == old(self).pages,
             forall|w: Word| #[trigger] final(self).word_ok(w) == old(self).word_ok(w),
@@ -226,18 +253,47 @@ impl Core {
         proof {
             let s0 = *self;
             if let Some(b) = self.model@.building {
-                self.model = Ghost(
-                    Model {
-                        state: self.model@.state.insert(b, BlockState::Live),
-                        building: None,
-                        ..self.model@
-                    },
-                );
+                self.model = Ghost(s0.settled_view().model@);
                 self.lemma_settle(s0, b);
             }
         }
     }
 
+    /// 見方の辺は、構築中の物体の「残した」語の辺を足したものなので、行き先ごとの数は減らない。
+    pub(crate) proof fn lemma_view_indeg(&self)
+        requires
+            self.wf(),
+        ensures
+            forall|t: usize| #[trigger] self.settled_view().indeg(t) >= self.indeg(t),
+            self.model@.building matches Some(b) ==> forall|t: usize| #[trigger]
+                self.settled_view().indeg(t) == self.indeg(t) + indeg(self.kept_edges(b), t),
+            self.model@.building matches Some(b) ==> self.model@.edges.dom().disjoint(
+                self.kept_edges(b).dom(),
+            ),
+    {
+        if let Some(b) = self.model@.building {
+            reveal(Core::blocks_wf);
+            reveal(Core::edges_wf);
+            reveal(Core::building_wf);
+            let k = self.kept_edges(b);
+            // 構築中の物体の辺は書いた語だけから出るので、「残した」語の位置には辺がない
+            assert(self.model@.edges.dom().disjoint(k.dom())) by {
+                assert forall|e: Pos| #[trigger]
+                    k.dom().contains(e) implies !self.model@.edges.dom().contains(e) by {
+                    if self.model@.edges.dom().contains(e) {
+                        assert(self.edge_wf(e));
+                        assert(self.block_wf(b));
+                    }
+                }
+            }
+            assert forall|t: usize| #[trigger]
+                self.settled_view().indeg(t) == self.indeg(t) + indeg(k, t) by {
+                lemma_indeg_union(self.model@.edges, k, t);
+            }
+        }
+    }
+
+    /// 書き終えた構築中の物体 `b` を生きている物体にした見方も、不変条件を満たす。
     pub(crate) proof fn lemma_settle(&self, s0: Core, b: usize)
         requires
             s0.wf(),
@@ -246,41 +302,102 @@ impl Core {
             self.perms == s0.perms,
             self.pages == s0.pages,
             self.checked == s0.checked,
-            self.model@ == (Model {
-                state: s0.model@.state.insert(b, BlockState::Live),
-                building: None,
-                ..s0.model@
-            }),
+            self.model == s0.settled_view().model,
         ensures
             self.wf(),
             self.frame(s0),
+            forall|t: usize| #[trigger] self.indeg(t) == s0.indeg(t) + indeg(s0.kept_edges(b), t),
     {
         reveal(Core::blocks_wf);
         reveal(Core::edges_wf);
         reveal(Core::refs_wf);
         reveal(Core::building_wf);
+        let k = s0.kept_edges(b);
+        let p = s0.perm(b);
         assert(s0.state(b) == BlockState::Building);
+        assert(s0.block_wf(b));
+        s0.lemma_view_indeg();
+        assert forall|t: usize| #[trigger] self.indeg(t) == s0.indeg(t) + indeg(k, t) by {
+            assert(self.indeg(t) == s0.settled_view().indeg(t));
+        }
+        // 「残した」語の行き先は、生きている物体か b 自身である
+        assert forall|t: usize| #[trigger] indeg(k, t) > 0 implies s0.state(t) == BlockState::Live
+            || t == b by {
+            let e = lemma_indeg_witness(k, t);
+            assert(s0.kept_ok(b, p_word(p, e.1)));
+        }
         assert(self.model@.state.dom() =~= self.dom());
         assert forall|h: usize| #[trigger] self.dom().contains(h) implies self.block_wf(h) by {
             assert(s0.block_wf(h));
+            let q = self.perm(h);
             if h == b {
-                let p = self.perm(b);
-                assert forall|i: int| #[trigger] p_scanned(p, i) implies self.slot_word(
-                    p,
+                assert forall|i: int| #[trigger] p_scanned(q, i) implies self.slot_word(
+                    q,
                     b,
                     i,
                 ) by {
                     assert(s0.scanned(b, i));
-                    assert(s0.model@.written[b].contains(i));
+                    if s0.model@.written[b].contains(i) {
+                        assert(s0.slot_word(q, b, i));
+                    } else {
+                        assert(s0.model@.kept.contains((b, i)));
+                        assert(s0.kept_wf((b, i)));
+                        assert(s0.kept_ok(b, p_word(q, i)));
+                        if p_word(q, i).is_ptr_spec() {
+                            assert(k.dom().contains((b, i)));
+                        }
+                    }
+                }
+            } else {
+                if s0.state(h) == BlockState::Live {
+                    assert forall|i: int| #[trigger] p_scanned(q, i) implies self.slot_word(
+                        q,
+                        h,
+                        i,
+                    ) by {
+                        assert(s0.slot_word(q, h, i));
+                    }
+                }
+                if s0.state(h) == BlockState::Building {
+                    assert(s0.model@.building == Some(h));
                 }
             }
         }
-        assert forall|e: (usize, int)| #[trigger]
-            self.model@.edges.dom().contains(e) implies self.edge_wf(e) by {
-            assert(s0.edge_wf(e));
+        assert forall|e: Pos| #[trigger] self.model@.kept.contains(e) implies self.kept_wf(e) by {
+            assert(s0.model@.kept.contains(e));
+            assert(s0.kept_wf(e));
+            if s0.state(e.0) == BlockState::Building {
+                assert(s0.model@.building == Some(e.0));
+            }
         }
-        assert forall|h: usize| #[trigger] self.dom().contains(h) implies self.counted_wf(h) by {
-            assert(s0.counted_wf(h));
+        assert forall|e: Pos| #[trigger] self.model@.edges.dom().contains(e) implies self.edge_wf(
+            e,
+        ) by {
+            if s0.model@.edges.dom().contains(e) {
+                assert(s0.edge_wf(e));
+                let t = s0.model@.edges[e];
+                if s0.state(t) == BlockState::Building {
+                    assert(s0.model@.building == Some(t));
+                }
+                if s0.state(e.0) == BlockState::Building {
+                    assert(s0.model@.building == Some(e.0));
+                }
+            } else {
+                assert(k.dom().contains(e));
+                assert(e.0 == b);
+                assert(s0.model@.kept.contains(e));
+                assert(s0.kept_wf(e));
+                assert(s0.kept_ok(b, p_word(p, e.1)));
+                lemma_indeg_pos(k, e);
+            }
+        }
+        assert forall|t: usize| #[trigger] self.dom().contains(t) implies self.counted_wf(t) by {
+            assert(s0.counted_wf(t));
+            if indeg(k, t) > 0 {
+                if s0.state(t) == BlockState::Building {
+                    assert(s0.model@.building == Some(t));
+                }
+            }
         }
     }
 
@@ -377,6 +494,7 @@ impl Core {
             forall|b: usize| b != h ==> #[trigger] self.model@.owner[b] == s0.model@.owner[b],
             self.model@.written == s0.model@.written.insert(h, Set::empty()),
             self.model@.edges == s0.model@.edges,
+            self.model@.kept == s0.model@.kept,
             self.model@.building == if self.state(h) == BlockState::Building {
                 Some(h)
             } else {
@@ -405,6 +523,12 @@ impl Core {
         assert(self.model@.owner.dom() =~= self.dom());
         assert(self.model@.written.dom() =~= self.dom());
         assert forall|w: Word| s0.word_ok(w) implies #[trigger] self.word_ok(w) by {}
+        // 新しいブロックの語は「残した」語でない
+        assert forall|e: Pos| #[trigger] self.model@.kept.contains(e) implies self.kept_wf(e) && e.0
+            != h by {
+            assert(s0.kept_wf(e));
+            assert(self.perms@[e.0] == s0.perms@[e.0]);
+        }
         assert forall|b: usize| #[trigger] self.dom().contains(b) implies self.block_wf(b) by {
             let p = self.perm(b);
             if b == h {
@@ -463,6 +587,7 @@ impl Core {
             self.model@.edges == s0.model@.edges,
             self.model@.owner == s0.model@.owner,
             self.model@.written == s0.model@.written,
+            self.model@.kept == s0.model@.kept,
             self.model@.building == s0.model@.building,
             dying ==> s0.indeg(h) == 0,
             !dying && self.rc_of(h) != 0 ==> {
@@ -482,6 +607,9 @@ impl Core {
         reveal(Core::refs_wf);
         reveal(Core::building_wf);
         assert(self.model@.state.dom() =~= self.dom());
+        assert forall|e: Pos| #[trigger] self.model@.kept.contains(e) implies self.kept_wf(e) by {
+            assert(s0.kept_wf(e));
+        }
         assert forall|b: usize| #[trigger] self.dom().contains(b) implies self.block_wf(b) by {
             assert(s0.block_wf(b));
             let p = self.perm(b);

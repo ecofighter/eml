@@ -12,6 +12,7 @@ pub(crate) ghost enum BlockState {
     /// `alloc`、`alloc_immortal`、`con_at`、`reuse_in_place` が作り、呼ぶ側がペイロードを書いている途中の物体。
     Building,
     Live,
+    /// `release_reuse` と `into_token` が作る token の箱。
     Token,
     /// 最後の参照を手放すと決め、解放の連鎖がまだ空けていない物体。
     Dying,
@@ -35,6 +36,8 @@ pub(crate) ghost struct Model {
     pub(crate) owner: Map<usize, u32>,
     /// 構築中の物体の、確保の後に書いた語。
     pub(crate) written: Map<usize, Set<int>>,
+    /// token の箱と、それを使い回した構築中の物体の「残した」語。呼ぶ側がその参照を持つので、辺に数えない。
+    pub(crate) kept: Set<Pos>,
     pub(crate) building: Option<usize>,
 }
 
@@ -93,6 +96,31 @@ pub(crate) proof fn lemma_indeg_zero(edges: Map<Pos, usize>, o: usize, p: Pos)
         assert(targets(edges, o).contains(p));
         vstd::set_lib::lemma_set_empty_equivalency_len(targets(edges, o));
     }
+}
+
+/// 位置の重ならない辺を足すと、行き先ごとの数は和になる。
+pub(crate) proof fn lemma_indeg_union(e1: Map<Pos, usize>, e2: Map<Pos, usize>, o: usize)
+    requires
+        e1.dom().disjoint(e2.dom()),
+    ensures
+        indeg(e1.union_prefer_right(e2), o) == indeg(e1, o) + indeg(e2, o),
+{
+    let u = e1.union_prefer_right(e2);
+    assert(targets(u, o) =~= targets(e1, o) + targets(e2, o));
+    vstd::set_lib::lemma_set_disjoint_lens(targets(e1, o), targets(e2, o));
+}
+
+/// 辺の数が正なら、その物体を指す辺がある。
+pub(crate) proof fn lemma_indeg_witness(edges: Map<Pos, usize>, o: usize) -> (p: Pos)
+    requires
+        indeg(edges, o) > 0,
+    ensures
+        edges.dom().contains(p),
+        edges[p] == o,
+{
+    let s = targets(edges, o);
+    vstd::set_lib::lemma_set_empty_equivalency_len(s);
+    s.choose()
 }
 
 /// 物体を指す辺があれば、辺の数は正である。

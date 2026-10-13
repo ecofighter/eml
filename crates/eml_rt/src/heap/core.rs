@@ -12,7 +12,7 @@ use super::model::{BlockState, Model, lemma_indeg_pos};
 use crate::cell::{rc_decref_shared, rc_dup_shared, rc_is_last, rc_load, rc_store};
 use crate::meta::{Header, Meta, meta_ptr, rc_ptr, slot_ptr};
 #[cfg(verus_only)]
-use crate::meta::{bits_kind, bits_scan};
+use crate::meta::{bits_kind, bits_scan, bits_tag};
 #[cfg(verus_only)]
 use crate::rc::{Obj, decref_next, dup_next, lemma_decref, lemma_dup};
 use crate::word::Word;
@@ -65,6 +65,7 @@ impl Core {
             r.kind_spec() == self.kind(h@.addr),
             r.scan_spec() == bits_scan(self.meta_bits(h@.addr)),
             r.lin_spec() == self.lin(h@.addr),
+            r.tag_spec() == bits_tag(self.meta_bits(h@.addr)),
     {
         proof {
             self.lemma_at(h@.addr);
@@ -328,10 +329,21 @@ impl Core {
                     0int
                 },
             ),
+            up ==> final(self).bumped(s0, h),
     {
         self.count_model(Ghost(s0), Ghost(h), Ghost(up), Ghost(edge));
         proof {
             self.lemma_count_extra(s0, h, up, edge);
+            if up && s0.rc_of(h) != 0 {
+                let s = Obj {
+                    rc: s0.rc_of(h),
+                    count: s0.model@.refs[h],
+                    stuck: s0.model@.stuck[h],
+                };
+                reveal(Core::refs_wf);
+                assert(s0.counted_wf(h));
+                lemma_dup(s);
+            }
         }
     }
 
@@ -539,6 +551,15 @@ impl Core {
                 b != h && (edge matches Some(e) ==> b != s0.model@.edges[e])
                     ==> #[trigger] final(self).indeg(b) == s0.indeg(b),
             forall|b: usize| b != h ==> #[trigger] final(self).ext(b) == s0.ext(b),
+            final(self).model@.written == s0.model@.written,
+            final(self).model@.kept == s0.model@.kept,
+            final(self).model@.refs.dom() == s0.model@.refs.dom(),
+            up ==> final(self).model@.refs[h] == s0.model@.refs[h] + if s0.rc_of(h) != 0 {
+                1nat
+            } else {
+                0nat
+            },
+            up ==> final(self).model@.state == s0.model@.state,
             final(self).model@.owner == s0.model@.owner,
             final(self).model@.building == s0.model@.building,
             final(self).checked == s0.checked,
@@ -589,6 +610,9 @@ impl Core {
             );
             assert(self.model@.refs.dom() =~= s1.model@.refs.dom());
             assert(self.model@.stuck.dom() =~= s1.model@.stuck.dom());
+            if up {
+                assert(self.model@.state =~= s0.model@.state);
+            }
             self.lemma_count_step(s1, h, dying);
         }
     }

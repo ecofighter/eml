@@ -3,7 +3,7 @@
 
 use std::ptr::NonNull;
 
-use super::{Heap, scan_count};
+use super::Heap;
 use crate::cell::{u32_load, u32_store};
 use crate::error::HeapError;
 #[cfg(verus_only)]
@@ -100,6 +100,14 @@ impl<M: Mode> Heap<M> {
             !M::CHECKED ==> r == Ok::<bool, HeapError>(false),
     {
         unsafe { self.check_dup(NonNull::new_unchecked(h)) }
+    }
+
+    /// 検査モードで、使い回す箱の前置きを「生存」に戻す。
+    #[verifier::external_body]
+    #[inline]
+    pub(super) fn checked_set_alive(&self, h: *mut Header) {
+        let p = unsafe { prefix(NonNull::new_unchecked(h)) };
+        p.set_state(State::Alive, false)
     }
 
     #[verifier::external_body]
@@ -306,24 +314,3 @@ pub(crate) fn reuse_in_place_check(boxed: Meta, new: Meta) -> (r: Result<(), Hea
 }
 
 } // verus!
-impl<M: Mode> Heap<M> {
-    /// `release` と `release_reuse` の検査。
-    pub(super) unsafe fn check_release(
-        &self,
-        h: NonNull<Header>,
-        tag: u16,
-        keep_len: usize,
-    ) -> Result<(), HeapError> {
-        if !M::CHECKED {
-            return Ok(());
-        }
-        unsafe { self.check_live(h)? };
-        let m = unsafe { meta::meta(h) };
-        layout_check(m, unsafe { scan_count(h) }, tag, keep_len)?;
-        let rc = unsafe { meta::rc(h) }.load(Ordering::Relaxed);
-        if rc < 0 && m.lin() {
-            return Err(HeapError::LinShared);
-        }
-        unsafe { self.check_owner(h, rc) }
-    }
-}

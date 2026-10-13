@@ -278,9 +278,9 @@ fn a_lin_object_on_the_shared_side_is_an_error() {
         heap.share(x, 0).unwrap();
         // share は lin の物体に印を付けないので、この形は印付けの誤りでしか起きない
         let m = meta::meta(x.header());
-        meta::set_meta(x.header(), m.with_lin(true));
+        meta::meta_ptr(x.as_ptr()).write(m.with_lin(true).bits());
         assert_eq!(heap.decref(x), Err(HeapError::LinShared));
-        meta::set_meta(x.header(), m);
+        meta::meta_ptr(x.as_ptr()).write(m.bits());
         heap.decref(x).unwrap();
     }
 }
@@ -355,11 +355,11 @@ fn a_shared_lin_object_reached_by_share_is_an_error() {
         heap.share(x, 0).unwrap();
         // share は lin の物体に印を付けないので、この形は印付けの誤りでしか起きない
         let m = meta::meta(x.header());
-        meta::set_meta(x.header(), m.with_lin(true));
+        meta::meta_ptr(x.as_ptr()).write(m.with_lin(true).bits());
         heap.set_field(parent, 0, x).unwrap();
         assert_eq!(heap.share(parent, 0), Err(HeapError::LinShared));
         heap.set_field(parent, 0, Word::UNIT).unwrap();
-        meta::set_meta(x.header(), m);
+        meta::meta_ptr(x.as_ptr()).write(m.bits());
         heap.decref(x).unwrap();
         heap.decref(parent).unwrap();
     }

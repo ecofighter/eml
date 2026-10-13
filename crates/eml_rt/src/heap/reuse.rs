@@ -3,14 +3,30 @@
 //! ためである。
 
 use std::ptr::NonNull;
+use vstd::prelude::*;
 
-use super::check::{self, State};
+#[cfg(verus_only)]
+use super::Core;
+use super::check::{self, State, reuse_in_place_check};
+#[cfg(verus_only)]
+use super::handover::{handover, kept_set};
+#[cfg(verus_only)]
+use super::inv::{p_count, p_first};
+#[cfg(verus_only)]
+use super::model::{BlockState, Pos};
+#[cfg(verus_only)]
+use super::states::pos_set;
 use super::{Heap, object_words};
 use crate::error::HeapError;
-use crate::meta::{self, Header, Kind, Meta};
+use crate::meta::{Header, Meta};
+#[cfg(verus_only)]
+use crate::meta::{Kind, bits_kind, bits_scan};
 use crate::mode::Mode;
 use crate::word::Word;
-use std::sync::atomic::Ordering;
+#[cfg(verus_only)]
+use crate::word::imm_value_spec;
+
+verus! {
 
 /// reuse の token。どちらのモードでも1語で、VM のレジスタと後のネイティブの値の大きさをモードで変えない。速いモードでは
 /// 箱を指す語、検査モードでは token の表の添字の即値、空の token は `Word::EMPTY` である。
@@ -19,75 +35,287 @@ use std::sync::atomic::Ordering;
 pub struct Token(Word);
 
 impl Token {
-    pub const EMPTY: Token = Token(Word::EMPTY);
+    pub exec const EMPTY: Token
+        ensures
+            Self::EMPTY.word_spec().bits_spec() == 0,
+    {
+        Token(Word::EMPTY)
+    }
+
+    pub closed spec fn word_spec(&self) -> Word {
+        self.0
+    }
 
     #[inline]
-    pub fn is_empty(&self) -> bool {
+    pub fn is_empty(&self) -> (r: bool)
+        ensures
+            r == (self.word_spec().bits_spec() == 0),
+    {
         self.0.is_empty()
     }
 
     /// VM のレジスタに置くための語。
     #[inline]
-    pub fn into_word(self) -> Word {
+    pub fn into_word(self) -> (w: Word)
+        ensures
+            w == self.word_spec(),
+    {
         self.0
     }
 
     /// # Safety
     /// `w` は同じヒープの `into_word` が返した語である。
     #[inline]
-    pub unsafe fn from_word(w: Word) -> Token {
+    pub unsafe fn from_word(w: Word) -> (t: Token)
+        ensures
+            t.word_spec() == w,
+    {
         Token(w)
     }
 }
 
 impl<M: Mode> Heap<M> {
+    /// token が指す箱の番地。空の token なら `None`。検査モードでは token の表から引く。
+    pub closed spec fn token_box(&self, t: Token) -> Option<usize> {
+        let bits = t.word_spec().bits_spec();
+        if bits == 0 {
+            None
+        } else if M::CHECKED {
+            let i = imm_value_spec(bits) as int;
+            if 0 <= i < self.tokens@.len() && self.tokens@[i] is Some {
+                Some((self.tokens@[i]->0).0@.addr)
+            } else {
+                None
+            }
+        } else {
+            Some(bits)
+        }
+    }
+
+    /// token は空か、まだ使っていない token の箱を指す。
+    pub closed spec fn token_ok(&self, t: Token) -> bool {
+        match self.token_box(t) {
+            None => t.word_spec().bits_spec() == 0,
+            Some(b) => {
+                &&& self.core.dom().contains(b)
+                &&& self.core.state(b) == BlockState::Token
+                &&& !M::CHECKED ==> t.word_spec().is_ptr_spec() && self.core.word_ok(t.word_spec())
+            },
+        }
+    }
+
+    /// token が空でなければ、その箱は `payload_words` 語のペイロードを持てる。
+    pub closed spec fn token_fits(&self, t: Token, payload_words: usize) -> bool {
+        self.token_box(t) matches Some(b) ==> self.core.cap(b) >= payload_words
+    }
+
+    /// `w` の箱は token の箱である。
+    pub closed spec fn is_token_box(&self, w: Word) -> bool {
+        self.core.dom().contains(w.bits_spec()) && self.core.state(w.bits_spec())
+            == BlockState::Token
+    }
+
+    /// 構築中の物体を生きている物体にしても、token は使える。
+    proof fn lemma_token_settled(&self, old: Heap<M>, t: Token)
+        requires
+            old.core.wf(),
+            old.token_ok(t),
+            self.core == old.core.settled_view(),
+            self.tokens == old.tokens,
+        ensures
+            self.token_ok(t),
+    {
+        reveal(Core::building_wf);
+    }
+
+    /// 生きている物体はどれも、同じ中身と数で生きている。
+    pub closed spec fn kept_live(&self, old: Heap<M>) -> bool {
+        &&& self.dummy == old.dummy
+        &&& self.worker == old.worker
+        &&& self.core.evolved(old.core.settled_view(), 0, 0)
+    }
+
+    /// `w` の物体を token の箱 `t` にした後の状態。子の参照は、残すフィールドとしてみな呼ぶ側に渡る。
+    pub closed spec fn tokened(&self, old: Heap<M>, w: Word, t: Token) -> bool {
+        let v = old.core.settled_view();
+        let h = w.bits_spec();
+        &&& self.dummy == old.dummy
+        &&& self.worker == old.worker
+        &&& self.token_box(t) == Some(h)
+        &&& self.core.state(h) == BlockState::Token
+        &&& self.core.evolved_by(v, handover(v.out_edges(h), h))
+    }
+
+    /// token の箱 `h` を構築中の物体 `w` にした後の状態。`meta` があればヘッダに書いた。前の物体の「残した」語のうち、
+    /// 新しい `meta` の走査する語の位置にあるものは「残した」のまま残る。
+    pub closed spec fn rebuilt(&self, old: Heap<M>, w: Word, meta: Option<Meta>) -> bool {
+        let v = old.core.settled_view();
+        let h = w.bits_spec();
+        &&& self.wf()
+        &&& self.dummy == old.dummy
+        &&& self.worker == old.worker
+        &&& w.is_ptr_spec()
+        &&& self.core.word_ok(w)
+        &&& v.dom().contains(h)
+        &&& v.state(h) == BlockState::Token
+        &&& self.core.dom() == v.dom()
+        &&& self.core.state(h) == BlockState::Building
+        &&& self.core.model@.building == Some(h)
+        &&& self.core.model@.written[h] == Set::<int>::empty()
+        &&& self.core.meta_bits(h) == match meta {
+            Some(m) => m.bits_spec(),
+            None => v.meta_bits(h),
+        }
+        &&& self.core.rc_of(h) == 1
+        &&& self.core.ext(h) == 1
+        &&& self.core.perm(h).slots == v.perm(h).slots
+        &&& self.core.model@.kept == v.model@.kept.filter(
+            |e: Pos| e.0 != h || self.core.scanned(h, e.1),
+        )
+        &&& self.core.model@.edges == v.model@.edges
+        &&& forall|b: usize| #[trigger]
+            v.dom().contains(b) && b != h ==> {
+                &&& self.core.perm(b) == v.perm(b)
+                &&& self.core.state(b) == v.state(b)
+                &&& self.core.block(b) == v.block(b)
+                &&& self.core.cap(b) == v.cap(b)
+                &&& self.core.model@.refs[b] == v.model@.refs[b]
+                &&& self.core.model@.owner[b] == v.model@.owner[b]
+            }
+    }
+
     /// 一意な物体の箱を、フィールドに触れずに token にする。
     ///
     /// # Safety
     /// `w` はこのヒープの生きている物体を指し、呼ぶ側がその唯一の参照を持ち (rc が 1)、子の参照はもう処理してある。
     /// 種類は token にできる (`Data`)。持ち主は今の worker である。
-    pub unsafe fn into_token(&mut self, w: Word) -> Result<Token, HeapError> {
-        if !M::CHECKED {
-            return Ok(Token(w));
+    pub unsafe fn into_token(&mut self, w: Word) -> (r: Result<Token, HeapError>)
+        requires
+            old(self).wf(),
+            old(self).settleable(),
+            w.is_ptr_spec(),
+            old(self).holds(w),
+            !M::CHECKED ==> old(self).kind_of(w) == Kind::Data && old(self).rc_value(w) == 1 && old(
+                self,
+            ).owned(w),
+        ensures
+            !M::CHECKED ==> r is Ok,
+            r matches Ok(t) ==> final(self).wf() && final(self).tokened(*old(self), w, t),
+    {
+        self.settle();
+        let h = self.header_of(w);
+        if M::CHECKED {
+            self.checked_live(h)?;
+            let rc = self.core.rc_get(h);
+            self.checked_owner(h, rc)?;
+            if !self.core.meta_get(h).kind().tokenable() {
+                return Err(HeapError::NotTokenable);
+            }
+            if rc != 1 {
+                return Err(HeapError::NotUnique);
+            }
         }
-        let h = w.header();
-        unsafe { self.check_live(h)? };
-        let rc = unsafe { meta::rc(h) }.load(Ordering::Relaxed);
-        unsafe { self.check_owner(h, rc)? };
-        if !unsafe { meta::meta(h) }.kind().tokenable() {
-            return Err(HeapError::NotTokenable);
+        let ghost s0 = self.core;
+        let ghost a = h@.addr;
+        let ghost first = p_first(s0.perm(a));
+        let ghost n = p_count(s0.perm(a));
+        let ghost ps = s0.model@.edges.dom().filter(|e: Pos| e.0 == a);
+        proof {
+            s0.lemma_last_ref(a);
+            assert(s0.model@.edges.restrict(ps) == s0.out_edges(a));
         }
-        if rc != 1 {
-            return Err(HeapError::NotUnique);
+        self.core.begin_free(Ghost(a), Ghost(ps));
+        proof {
+            self.core.lemma_begin_evolved(s0, a, ps);
+            vstd::set_lib::lemma_int_range(first, first + n);
         }
-        let prefix = unsafe { check::prefix(h) };
-        prefix.set_state(State::Token, true);
-        // 添字は使い回さない。使った項目を空のまま残して、古い token を確実に断るためである
-        self.tokens.push(Some((h.as_ptr(), prefix.generation())));
-        Ok(Token(Word::imm((self.tokens.len() - 1) as i64)))
+        let ghost s1 = self.core;
+        self.core.finish_token(Ghost(a), Ghost(vstd::set_lib::set_int_range(first, first + n)));
+        proof {
+            self.core.lemma_after_token(s0, s1, a);
+            self.core.lemma_by_trans(s1, s0, handover(s0.out_edges(a), a), 0);
+            self.lemma_dummy_by(*old(self), handover(s0.out_edges(a), a));
+        }
+        if M::CHECKED {
+            return Ok(self.checked_push_token(h));
+        }
+        Ok(Token(w))
     }
 
     /// token の箱を取り出す。検査モードでは、表の項目、箱の状態、世代の番号を確かめ、項目を空ける。
-    unsafe fn take_token(&mut self, token: Token) -> Result<Option<NonNull<Header>>, HeapError> {
+    fn take_token(&mut self, token: Token) -> (r: Result<Option<*mut Header>, HeapError>)
+        requires
+            old(self).core.wf(),
+            !M::CHECKED ==> old(self).token_ok(token),
+        ensures
+            final(self).core == old(self).core,
+            final(self).dummy == old(self).dummy,
+            final(self).worker == old(self).worker,
+            !M::CHECKED ==> r is Ok,
+            token.word_spec().bits_spec() == 0 ==> r == Ok::<Option<*mut Header>, HeapError>(None),
+            !M::CHECKED && token.word_spec().bits_spec() != 0 ==> r matches Ok(Some(_)),
+            r matches Ok(Some(h)) ==> {
+                &&& final(self).core.dom().contains(h@.addr)
+                &&& h == final(self).core.block(h@.addr)
+                &&& final(self).core.state(h@.addr) == BlockState::Token
+                &&& !M::CHECKED ==> old(self).token_box(token) == Some(h@.addr)
+            },
+    {
         if token.is_empty() {
             return Ok(None);
         }
         if !M::CHECKED {
-            return Ok(Some(token.0.header()));
+            let h = self.header_of(token.0);
+            return Ok(Some(h));
+        }
+        self.checked_take_token(token)
+    }
+
+    /// 検査モードの token の取り出し。token の表と前置きの世代の番号を確かめる。まだ証明していない (信頼の一覧のテストの
+    /// 「未証明」)。
+    #[verifier::external_body]
+    fn checked_take_token(&mut self, token: Token) -> (r: Result<Option<*mut Header>, HeapError>)
+        ensures
+            final(self).core == old(self).core,
+            final(self).dummy == old(self).dummy,
+            final(self).worker == old(self).worker,
+            r matches Ok(Some(h)) ==> {
+                &&& final(self).core.dom().contains(h@.addr)
+                &&& h == final(self).core.block(h@.addr)
+                &&& final(self).core.state(h@.addr) == BlockState::Token
+            },
+    {
+        // 即値でない語は表の添字でないので、`imm_value` の前に断る
+        if !token.0.is_imm() {
+            return Err(HeapError::StaleToken);
         }
         let index = usize::try_from(token.0.imm_value()).map_err(|_| HeapError::StaleToken)?;
-        let (h, generation) = self
-            .tokens
-            .get_mut(index)
-            .and_then(Option::take)
-            .ok_or(HeapError::StaleToken)?;
+        let (h, generation) = self.tokens.get_mut(index).and_then(Option::take).ok_or(
+            HeapError::StaleToken,
+        )?;
         // 表に入れたのは確保したブロックなので、null にならない
-        let h = unsafe { NonNull::new_unchecked(h) };
-        let prefix = unsafe { check::prefix(h) };
+        let prefix = unsafe { check::prefix(NonNull::new_unchecked(h)) };
         if prefix.state() != State::Token || prefix.generation() != generation {
             return Err(HeapError::StaleToken);
         }
         Ok(Some(h))
+    }
+
+    /// 検査モードで箱を token にする。前置きの状態を token にして世代を進め、token の表に積む。まだ証明していない
+    /// (信頼の一覧のテストの「未証明」)。
+    #[verifier::external_body]
+    fn checked_push_token(&mut self, h: *mut Header) -> (t: Token)
+        ensures
+            final(self).core == old(self).core,
+            final(self).dummy == old(self).dummy,
+            final(self).worker == old(self).worker,
+            final(self).token_box(t) == Some(h@.addr),
+    {
+        let prefix = unsafe { check::prefix(NonNull::new_unchecked(h)) };
+        prefix.set_state(State::Token, true);
+        // 添字は使い回さない。使った項目を空のまま残して、古い token を確実に断るためである
+        self.tokens.push(Some((h, prefix.generation())));
+        Token(Word::imm((self.tokens.len() - 1) as i64))
     }
 
     /// token が空でなければ、その箱に `meta` を書いて返す。空なら確保する。箱を使ったかも返す。フィールドは呼ぶ側が書く。
@@ -98,28 +326,55 @@ impl<M: Mode> Heap<M> {
     /// でも `Free` でもない。呼ぶ側は、ほかのヒープの操作の前に、走査する語がみな `meta` に合う値を持つようにする。
     /// 箱を使い回したときは、残したフィールドを書き直さなくてよい。
     #[inline]
-    pub unsafe fn con_at(
-        &mut self,
-        token: Token,
-        payload_words: usize,
-        meta: Meta,
-    ) -> Result<(Word, bool), HeapError> {
-        debug_assert!(!matches!(meta.kind(), Kind::Foreign | Kind::Free));
-        let Some(h) = (unsafe { self.take_token(token)? }) else {
-            return Ok((unsafe { self.alloc(payload_words, meta) }, false));
+    pub unsafe fn con_at(&mut self, token: Token, payload_words: usize, meta: Meta) -> (r: Result<
+        (Word, bool),
+        HeapError,
+    >)
+        requires
+            old(self).wf(),
+            old(self).settleable(),
+            !M::CHECKED ==> old(self).token_ok(token),
+            meta.kind_spec() != Kind::Foreign && meta.kind_spec() != Kind::Free,
+            meta.scan_spec() != 255,
+            meta.scan_spec() <= payload_words,
+            !M::CHECKED ==> old(self).token_fits(token, payload_words),
+        ensures
+            !M::CHECKED ==> r is Ok,
+            r matches Ok((w, reused)) ==> {
+                &&& reused ==> final(self).rebuilt(*old(self), w, Some(meta))
+                &&& !reused ==> final(self).built(*old(self), w, meta, 1, payload_words)
+            },
+    {
+        let ghost h0 = *self;
+        self.settle();
+        proof {
+            if !M::CHECKED {
+                self.lemma_token_settled(h0, token);
+            }
+        }
+        let ghost s0 = *self;
+        let h = match self.take_token(token)? {
+            None => {
+                let w = unsafe { self.alloc(payload_words, meta) };
+                return Ok((w, false));
+            },
+            Some(h) => h,
         };
         if M::CHECKED {
-            if !self
-                .core
-                .pages
-                .fits(h.as_ptr(), object_words(payload_words))
-            {
+            proof {
+                self.core.lemma_at(h@.addr);
+            }
+            if !self.core.pages.fits(h, object_words(payload_words)) {
                 return Err(HeapError::WrongClass);
             }
-            unsafe { check::prefix(h) }.set_state(State::Alive, false);
+            self.checked_set_alive(h);
         }
-        unsafe { meta::set_meta(h, meta) };
-        Ok((Word::from_header(h), true))
+        self.core.token_build(h, Some(meta), Ghost(self.worker));
+        let w = Word::from_ptr(h);
+        proof {
+            self.lemma_rebuilt(s0, h, w, Some(meta));
+        }
+        Ok((w, true))
     }
 
     /// 同じコンストラクタの reuse。ヘッダに何も書かずに箱を返す。`meta` は検査モードが照らすためだけに渡す。
@@ -129,22 +384,134 @@ impl<M: Mode> Heap<M> {
     /// # Safety
     /// `token` はこのヒープの空でない token で、まだ使っていない。`meta` の tag、scan、種類は箱と同じで、箱が `lin`
     /// ビットを持つなら `meta` も持つ。
-    pub unsafe fn reuse_in_place(&mut self, token: Token, meta: Meta) -> Result<Word, HeapError> {
-        let h = unsafe { self.take_token(token)? }.ok_or(HeapError::StaleToken)?;
-        if M::CHECKED {
-            check::reuse_in_place_check(unsafe { meta::meta(h) }, meta)?;
-            unsafe { check::prefix(h) }.set_state(State::Alive, false);
+    pub unsafe fn reuse_in_place(&mut self, token: Token, meta: Meta) -> (r: Result<
+        Word,
+        HeapError,
+    >)
+        requires
+            old(self).wf(),
+            old(self).settleable(),
+            !M::CHECKED ==> old(self).token_ok(token),
+        ensures
+            token.word_spec().bits_spec() == 0 ==> r == Err::<Word, HeapError>(
+                HeapError::StaleToken,
+            ),
+            !M::CHECKED && token.word_spec().bits_spec() != 0 ==> r is Ok,
+            r matches Ok(w) ==> final(self).rebuilt(*old(self), w, None),
+    {
+        let ghost h0 = *self;
+        self.settle();
+        proof {
+            if !M::CHECKED {
+                self.lemma_token_settled(h0, token);
+            }
         }
-        Ok(Word::from_header(h))
+        let ghost s0 = *self;
+        let h = match self.take_token(token)? {
+            None => return Err(HeapError::StaleToken),
+            Some(h) => h,
+        };
+        if M::CHECKED {
+            reuse_in_place_check(self.core.meta_get(h), meta)?;
+            self.checked_set_alive(h);
+        }
+        self.core.token_build(h, None, Ghost(self.worker));
+        let w = Word::from_ptr(h);
+        proof {
+            self.lemma_rebuilt(s0, h, w, None);
+        }
+        Ok(w)
+    }
+
+    /// `con_at` と `reuse_in_place` の後の状態。
+    proof fn lemma_rebuilt(&self, s0: Heap<M>, h: *mut Header, w: Word, meta: Option<Meta>)
+        requires
+            s0.wf(),
+            s0.core.model@.building is None,
+            s0.core.dom().contains(h@.addr),
+            h == s0.core.block(h@.addr),
+            s0.core.state(h@.addr) == BlockState::Token,
+            self.dummy == s0.dummy,
+            self.worker == s0.worker,
+            self.core.wf(),
+            self.core.checked == s0.core.checked,
+            self.core.pages == s0.core.pages,
+            self.core.dom() == s0.core.dom(),
+            forall|b: usize| b != h@.addr ==> #[trigger] self.core.perms@[b] == s0.core.perms@[b],
+            self.core.perm(h@.addr).rc == s0.core.perm(h@.addr).rc,
+            self.core.perm(h@.addr).slots == s0.core.perm(h@.addr).slots,
+            self.core.meta_bits(h@.addr) == match meta {
+                Some(m) => m.bits_spec(),
+                None => s0.core.meta_bits(h@.addr),
+            },
+            self.core.state(h@.addr) == BlockState::Building,
+            forall|b: usize| b != h@.addr ==> #[trigger] self.core.state(b) == s0.core.state(b),
+            self.core.model@.building == Some(h@.addr),
+            self.core.model@.written[h@.addr] == Set::<int>::empty(),
+            self.core.model@.edges == s0.core.model@.edges,
+            self.core.model@.kept == s0.core.model@.kept.filter(
+                |e: Pos| e.0 != h@.addr || self.core.scanned(h@.addr, e.1),
+            ),
+            self.core.model@.refs == s0.core.model@.refs.insert(h@.addr, 1),
+            forall|b: usize|
+                b != h@.addr ==> #[trigger] self.core.model@.owner[b] == s0.core.model@.owner[b],
+            self.core.rc_of(h@.addr) == 1,
+            self.core.indeg(h@.addr) == 0,
+            w.bits_spec() == h@.addr,
+            w.ptr_spec()@.provenance == h@.provenance,
+            w.ptr_spec()@.addr == h@.addr,
+        ensures
+            self.rebuilt(s0, w, meta),
+    {
+        reveal(Core::building_wf);
+        self.core.lemma_at(h@.addr);
+        crate::word::lemma_aligned_is_ptr(h@.addr);
+        // 構築中の物体のほかに空ける途中の物体はなく、ダミーの物体は変わらない
+        assert(s0.dummy.bits_spec() != h@.addr);
+        assert forall|b: usize| #[trigger] self.core.dom().contains(b) implies self.core.state(b)
+            != BlockState::Dying by {
+            assert(s0.core.dom().contains(b));
+        }
+        assert(self.core.perms@[s0.dummy.bits_spec()] == s0.core.perms@[s0.dummy.bits_spec()]);
     }
 
     /// 使わなかった token の箱を空ける。
     ///
     /// # Safety
     /// `token` はこのヒープの token で、まだ使っていない。
-    pub unsafe fn drop_token(&mut self, token: Token) -> Result<(), HeapError> {
-        if let Some(h) = unsafe { self.take_token(token)? } {
-            self.free_box(h.as_ptr());
+    pub unsafe fn drop_token(&mut self, token: Token) -> (r: Result<(), HeapError>)
+        requires
+            old(self).wf(),
+            old(self).settleable(),
+            !M::CHECKED ==> old(self).token_ok(token),
+        ensures
+            !M::CHECKED ==> r is Ok,
+            r is Ok ==> final(self).wf() && final(self).kept_live(*old(self)),
+    {
+        let ghost h0 = *self;
+        self.settle();
+        proof {
+            if !M::CHECKED {
+                self.lemma_token_settled(h0, token);
+            }
+        }
+        let ghost mid = *self;
+        if let Some(h) = self.take_token(token)? {
+            let ghost s1 = self.core;
+            self.core.token_free(Ghost(h@.addr));
+            let ghost s2 = self.core;
+            self.free_box(h);
+            proof {
+                self.core.lemma_token_dropped(s1, s2, h@.addr);
+            }
+        } else {
+            proof {
+                self.core.lemma_evolved_self(0);
+            }
+        }
+        proof {
+            self.core.lemma_frame_evolved(mid.core, old(self).core, 0, 0);
+            self.lemma_dummy_evolved(*old(self), 0, 0);
         }
         Ok(())
     }
@@ -154,22 +521,55 @@ impl<M: Mode> Heap<M> {
     /// # Safety
     /// `release` と同じ。
     #[inline]
-    pub unsafe fn release_reuse(
-        &mut self,
-        w: Word,
-        tag: u16,
-        keep: &[bool],
-    ) -> Result<Token, HeapError> {
-        if unsafe { self.is_unique(w)? } {
-            let h = w.header();
-            unsafe {
-                self.check_release(h, tag, keep.len())?;
-                self.release_children(h, keep)?;
-                self.into_token(w)
+    pub unsafe fn release_reuse(&mut self, w: Word, tag: u16, keep: &[bool]) -> (r: Result<
+        Token,
+        HeapError,
+    >)
+        requires
+            old(self).wf(),
+            old(self).settleable(),
+            w.is_ptr_spec(),
+            old(self).holds(w),
+            !M::CHECKED ==> old(self).layout_of(w, tag, keep@.len() as int),
+            !M::CHECKED ==> (old(self).rc_value(w) < 0 ==> !old(self).lin_of(w)),
+            !M::CHECKED ==> old(self).owned(w),
+            !M::CHECKED ==> forall|i: int|
+                #![trigger keep@[i]]
+                0 <= i < keep@.len() && keep@[i] ==> {
+                    let c = old(self).scanned_word(w, i);
+                    &&& c.is_ptr_spec() ==> !old(self).lin_of(c)
+                    &&& old(self).owned(c)
+                },
+        ensures
+            !M::CHECKED ==> r is Ok,
+            r matches Ok(t) ==> {
+                &&& final(self).wf()
+                &&& final(self).handed_over(*old(self), w, keep@)
+                &&& t.word_spec().bits_spec() != 0 ==> final(self).token_box(t) == Some(
+                    w.bits_spec(),
+                ) && final(self).is_token_box(w)
+            },
+    {
+        let unique = unsafe { self.is_unique(w) };
+        if unique? {
+            self.settle();
+            let h = self.header_of(w);
+            self.release_check(h, tag, keep.len())?;
+            proof {
+                self.core.lemma_last_ref(h@.addr);
+                assert(self.core.perm(h@.addr) == old(self).core.perm(h@.addr));
+                assert(self.core.count(h@.addr) == old(self).core.count(h@.addr));
             }
-        } else {
-            unsafe { self.release(w, tag, keep)? };
-            Ok(Token::EMPTY)
+            self.release_children(h, keep, true)?;
+            if M::CHECKED {
+                return Ok(self.checked_push_token(h));
+            }
+            return Ok(Token(w));
         }
+        let r = unsafe { self.release(w, tag, keep) };
+        r?;
+        Ok(Token::EMPTY)
     }
 }
+
+} // verus!

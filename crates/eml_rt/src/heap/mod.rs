@@ -9,12 +9,14 @@ mod chain;
 pub(crate) mod check;
 mod core;
 mod field;
+mod handover;
 mod inv;
 mod model;
 mod proof;
 mod release;
 mod reuse;
 pub(crate) mod share;
+mod states;
 mod walk;
 
 #[cfg(test)]
@@ -30,13 +32,12 @@ use crate::error::HeapError;
 use crate::foreign;
 use crate::meta::{self, BlockPerm, HEADER_WORDS, Header, Kind, Meta, meta_ptr, rc_ptr, slot_ptr};
 #[cfg(verus_only)]
-use crate::meta::{bits_kind, bits_scan, bits_wf};
+use crate::meta::{bits_kind, bits_scan, bits_tag, bits_wf};
 use crate::mode::Mode;
 use crate::rc::{self, DecrefStep, DupStep};
 #[cfg(verus_only)]
 use crate::rc::{Obj, decref_next};
 use crate::word::Word;
-use std::sync::atomic::Ordering;
 use vstd::prelude::*;
 use vstd::raw_ptr::ptr_mut_write;
 
@@ -50,6 +51,8 @@ use chain::listed;
 use check::{PREFIX_WORDS, UNCOUNTED, init_prefix, mark_freed};
 #[cfg(verus_only)]
 use field::field_edges;
+#[cfg(verus_only)]
+use handover::handover;
 #[cfg(verus_only)]
 use inv::{p_count, p_first, p_init, p_scanned, p_word};
 #[cfg(verus_only)]
@@ -196,8 +199,9 @@ impl<M: Mode> Heap<M> {
         self.core.readable(w)
     }
 
+    /// 構築中の物体の「残した」語を辺に数えた見方で、呼ぶ側が数えた参照を持つ。
     pub closed spec fn holds(&self, w: Word) -> bool {
-        self.core.holds(w)
+        self.core.settled_view().holds(w)
     }
 
     pub closed spec fn settleable(&self) -> bool {
@@ -271,6 +275,7 @@ impl<M: Mode> Heap<M> {
                         stuck: Map::empty(),
                         owner: Map::empty(),
                         written: Map::empty(),
+                        kept: Set::empty(),
                         building: None,
                     },
                 ),
@@ -356,6 +361,8 @@ impl<M: Mode> Heap<M> {
             final(self).wf(),
             final(self).core.model@.building is None,
             final(self).core.frame(old(self).core),
+            final(self).core == old(self).core.settled_view(),
+            final(self).tokens == old(self).tokens,
             final(self).core.dom() == old(self).core.dom(),
             final(self).core.pages == old(self).core.pages,
             final(self).dummy == old(self).dummy,
@@ -833,7 +840,7 @@ impl<M: Mode> Heap<M> {
         &&& self.dummy == old.dummy
         &&& self.worker == old.worker
         &&& self.core.evolved(
-            old.core,
+            old.core.settled_view(),
             w.bits_spec(),
             if w.is_ptr_spec() {
                 delta
@@ -843,16 +850,64 @@ impl<M: Mode> Heap<M> {
         )
     }
 
+    /// `w` の物体はデータで、tag が `tag`、走査する語の数が `n` である。
+    pub closed spec fn layout_of(&self, w: Word, tag: u16, n: int) -> bool {
+        let h = w.bits_spec();
+        &&& self.core.kind(h) == Kind::Data
+        &&& bits_tag(self.core.meta_bits(h)) == tag
+        &&& self.core.count(h) == n
+    }
+
+    /// `w` の参照を手放し、残すフィールドの参照を1つずつ呼ぶ側に渡した後の状態。
+    pub closed spec fn handed_over(&self, old: Heap<M>, w: Word, keep: Seq<bool>) -> bool {
+        let v = old.core.settled_view();
+        &&& self.dummy == old.dummy
+        &&& self.worker == old.worker
+        &&& self.core.evolved_by(v, handover(v.kept_out(w.bits_spec(), keep), w.bits_spec()))
+    }
+
+    /// `dup` の後の状態。`w` の物体の rc と数だけが動く。
+    pub closed spec fn bumped(&self, old: Heap<M>, w: Word) -> bool {
+        &&& self.dummy == old.dummy
+        &&& self.worker == old.worker
+        &&& self.core.bumped(old.core.settled_view(), w.bits_spec())
+    }
+
     /// ダミーの物体は不死なので、`evolved` の後も同じ形で生きている。
     proof fn lemma_dummy_evolved(&self, old: Heap<M>, w: usize, delta: int)
         requires
             old.dummy_wf(),
             self.dummy == old.dummy,
-            self.core.evolved(old.core, w, delta),
+            self.core.evolved(old.core.settled_view(), w, delta),
         ensures
             self.dummy_wf(),
     {
-        assert(old.core.dom().contains(old.dummy.bits_spec()));
+        reveal(Core::building_wf);
+        let v = old.core.settled_view();
+        let d = old.dummy.bits_spec();
+        assert(old.core.dom().contains(d));
+        assert(v.dom().contains(d));
+        assert(v.state(d) == BlockState::Live);
+        assert(v.rc_of(d) == 0);
+    }
+
+    /// ダミーの物体は不死なので、`evolved_by` の後も同じ形で生きている。
+    proof fn lemma_dummy_by(&self, old: Heap<M>, d: spec_fn(usize) -> int)
+        requires
+            old.dummy_wf(),
+            self.dummy == old.dummy,
+            self.core.evolved_by(old.core.settled_view(), d),
+        ensures
+            self.dummy_wf(),
+    {
+        reveal(Core::building_wf);
+        let v = old.core.settled_view();
+        let dd = old.dummy.bits_spec();
+        assert(old.core.dom().contains(dd));
+        assert(v.dom().contains(dd));
+        assert(v.state(dd) == BlockState::Live);
+        assert(v.settled_state(dd) == BlockState::Live);
+        assert(v.rc_of(dd) == 0);
     }
 
     /// 構築中の物体を生きている物体にしただけなら、`evolved` を満たす。
@@ -874,6 +929,7 @@ impl<M: Mode> Heap<M> {
     proof fn lemma_evolved_settled(&self, old: Heap<M>, mid: Heap<M>, w: Word, delta: int)
         requires
             mid.core.frame(old.core),
+            mid.core.model@.building is None,
             mid.dummy == old.dummy,
             mid.worker == old.worker,
             self.evolved(mid, w, delta),
@@ -969,11 +1025,16 @@ impl<M: Mode> Heap<M> {
         ensures
             !M::CHECKED ==> r is Ok,
             r is Ok ==> final(self).wf() && final(self).evolved(*old(self), w, 1),
+            r is Ok ==> final(self).bumped(*old(self), w),
     {
         self.settle();
         if !w.is_ptr() {
             proof {
                 self.lemma_evolved_refl(*old(self), w, 1);
+                if self.core.dom().contains(w.bits_spec()) {
+                    self.core.lemma_at(w.bits_spec());
+                    crate::word::lemma_aligned_is_ptr(w.bits_spec());
+                }
             }
             return Ok(());
         }
@@ -1016,6 +1077,7 @@ impl<M: Mode> Heap<M> {
         ensures
             !M::CHECKED ==> r is Ok,
             r is Ok ==> final(self).wf() && final(self).evolved(*old(self), w, 1),
+            r is Ok ==> final(self).bumped(*old(self), w),
     {
         let counted = self.checked_dup(h)?;
         let ghost s0 = self.core;
@@ -1257,6 +1319,7 @@ impl<M: Mode> Heap<M> {
             final(self).core.wf(),
             final(self).core.checked@ == M::CHECKED,
             r is Ok ==> final(self).core.quiet() && final(self).core.evolved(old(self).core, 0, 0),
+            final(self).core.tokens_kept(old(self).core),
             final(self).dummy == old(self).dummy,
             final(self).worker == old(self).worker,
     {
@@ -1271,6 +1334,8 @@ impl<M: Mode> Heap<M> {
                 self.core.checked@ == M::CHECKED,
                 self.core.work_ok(work@),
                 self.core.evolved(s0, 0, 0),
+                self.core.tokens_kept(s0),
+                s0 == old(self).core,
                 self.core.model@.building is None,
                 self.dummy == old(self).dummy,
                 self.worker == old(self).worker,
@@ -1297,10 +1362,12 @@ impl<M: Mode> Heap<M> {
                 invariant
                     self.core.wf(),
                     self.core.checked@ == M::CHECKED,
-                    self.core.draining(h, first as int, i as int, work@),
+                    self.core.draining(h, first as int, i as int, Set::empty(), work@),
                     first + n <= self.core.cap(h@.addr),
                     i <= n,
                     self.core.evolved(s0, 0, 0),
+                    self.core.tokens_kept(s0),
+                    s0 == old(self).core,
                     self.core.model@.building is None,
                     self.core.active() == s1.active(),
                     self.dummy == old(self).dummy,
@@ -1309,7 +1376,7 @@ impl<M: Mode> Heap<M> {
             {
                 i -= 1;
                 proof {
-                    self.core.lemma_draining_slot(h, first as int, i as int, work@);
+                    self.core.lemma_draining_slot(h, first as int, i as int, Set::empty(), work@);
                 }
                 let child = self.core.slot_get(h, first + i);
                 if child.is_ptr() {
@@ -1327,6 +1394,7 @@ impl<M: Mode> Heap<M> {
                             h,
                             first as int,
                             i as int,
+                            Set::empty(),
                             child,
                             last,
                             wb,
@@ -1335,14 +1403,20 @@ impl<M: Mode> Heap<M> {
                     }
                 } else {
                     proof {
-                        self.core.lemma_draining_skip(h, first as int, i as int, work@);
+                        self.core.lemma_draining_skip(
+                            h,
+                            first as int,
+                            i as int,
+                            Set::empty(),
+                            work@,
+                        );
                     }
                 }
             }
             let ghost pre = self.core;
             self.free_box(h);
             proof {
-                self.core.lemma_drained_one(pre, s0, h, first as int, work@);
+                self.core.lemma_drained_one(pre, s0, h, first as int, Set::empty(), work@);
             }
         }
         proof {
@@ -1705,6 +1779,7 @@ impl<M: Mode> Heap<M> {
         let ghost s0 = self.core;
         proof {
             s0.lemma_at(h@.addr);
+            s0.lemma_view_indeg();
         }
         self.core.slot_put(h, i, v);
         proof {
@@ -1719,6 +1794,7 @@ impl<M: Mode> Heap<M> {
                     } else {
                         s0.model@.written
                     },
+                    kept: s0.model@.kept.remove((h@.addr, i as int)),
                     ..s0.model@
                 },
             );
@@ -1875,29 +1951,6 @@ impl<M: Mode> Heap<M> {
 } // verus!
 
 impl<M: Mode> Heap<M> {
-    /// `is_last` が真で、子をすでに処理した物体の箱を空ける。ヘッダの `scan` を読まない。
-    ///
-    /// # Safety
-    /// `w` はこのヒープの生きている物体を指し、呼ぶ側が最後の参照を持ち (rc が 1 か -1)、子の参照はもう処理してある。
-    /// 種類は破棄処理を持たない (`Foreign` でない)。rc が正なら、持ち主は今の worker である。
-    pub unsafe fn free_block(&mut self, w: Word) -> Result<(), HeapError> {
-        let h = w.header();
-        if M::CHECKED {
-            unsafe { self.check_live(h)? };
-            if unsafe { meta::meta(h) }.kind().has_finalizer() {
-                return Err(HeapError::FinalizerSkipped);
-            }
-            let rc = unsafe { meta::rc(h) };
-            if !rc::is_last(rc) {
-                return Err(HeapError::NotLast);
-            }
-            unsafe { self.check_owner(h, rc.load(Ordering::Relaxed))? };
-            self.stats.rc_decrements += 1;
-        }
-        self.free_box(h.as_ptr());
-        Ok(())
-    }
-
     /// `Foreign` の物体の Rust の値の位置。物体が `Foreign` でないか、値が `T` でなければ `WrongKind` を返す。この照らし
     /// 合わせは、速いモードでも行う (docs/spec/object-model.md の「核の操作」)。
     ///

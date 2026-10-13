@@ -209,7 +209,6 @@ impl Meta {
 
     /// ヘッダに書く値。
     // ヒープを権限の上で書き直すまで、まだ使わない
-    #[allow(dead_code)]
     #[inline]
     pub(crate) const fn bits(self) -> (r: u32)
         ensures
@@ -308,6 +307,7 @@ impl Meta {
             r.kind_spec() == bits_kind(bits),
             r.scan_spec() == bits_scan(bits),
             r.lin_spec() == bits_lin(bits),
+            r.tag_spec() == bits_tag(bits),
     {
         Meta(bits)
     }
@@ -745,13 +745,6 @@ pub(crate) unsafe fn rc<'a>(h: NonNull<Header>) -> &'a AtomicI32 {
 #[inline]
 pub(crate) unsafe fn meta(h: NonNull<Header>) -> Meta {
     unsafe { Meta((&raw const (*h.as_ptr()).meta).read()) }
-}
-
-/// # Safety
-/// `h` は初期化したヘッダを指し、ほかのスレッドはその物体を読めない。
-#[inline]
-pub(crate) unsafe fn set_meta(h: NonNull<Header>, meta: Meta) {
-    unsafe { (&raw mut (*h.as_ptr()).meta).write(meta.0) }
 }
 
 /// ペイロードの物理的な i 語目の位置。

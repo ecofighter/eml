@@ -28,23 +28,6 @@ pub(crate) open spec fn field_edges(edges: Map<Pos, usize>, h: usize, i: int, v:
 }
 
 impl Core {
-    /// 構築中の物体を生きている物体にした見方。権限は同じである。
-    pub(crate) open spec fn settled_view(&self) -> Core {
-        match self.model@.building {
-            Some(b) => Core {
-                model: Ghost(
-                    Model {
-                        state: self.model@.state.insert(b, BlockState::Live),
-                        building: None,
-                        ..self.model@
-                    },
-                ),
-                ..*self
-            },
-            None => *self,
-        }
-    }
-
     /// `old` から、ブロック `h` の i 語目の値だけが変わった。
     pub(crate) open spec fn slot_changed(&self, old: Core, h: usize, i: int) -> bool {
         &&& self.pages == old.pages
@@ -71,6 +54,7 @@ impl Core {
             } else {
                 old.model@.written
             },
+            kept: old.model@.kept.remove((h, i)),
             ..old.model@
         }
     }
@@ -84,7 +68,7 @@ impl Core {
             self.settled_view().wf(),
             self.settled_view().perms == self.perms,
             self.settled_view().pages == self.pages,
-            self.settled_view().model@.edges == self.model@.edges,
+            self.settled_view().checked == self.checked,
             self.settled_view().model@.building is None,
             forall|b: usize| #[trigger] self.settled_view().state(b) == self.settled_state(b),
     {
