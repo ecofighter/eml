@@ -1,4 +1,4 @@
-//! `share_walk` の写しと証明 (docs/superpowers/specs/2026-10-13-s9a-eml-rt-core-design.md の「Verus」)。
+//! `share_walk` の写しと証明 (spec の「Verus」)。
 
 use vstd::laws_eq::obeys_concrete_eq;
 use vstd::prelude::*;
@@ -91,7 +91,8 @@ pub(crate) trait Graph {
     ;
 }
 
-/// vstd が `<[T]>::contains` の約束を持たないので、ここで信頼する。`T` の等しさが具象の等しさと一致するときだけ、列の所属と一致する
+/// vstd が `<[T]>::contains` の約束を持たないので、ここで信頼する。`T` の等しさが具象の等しさと一致するときだけ、列の所属と一致する。
+/// `share_walk` の前提 `obeys_concrete_eq::<G::Node>()` も同じ理由で信頼する。これは節点の型の `==` についての前提で、証明の対象ではない
 pub assume_specification<T: PartialEq>[ <[T]>::contains ](s: &[T], x: &T) -> (r: bool)
     ensures
         obeys_concrete_eq::<T>() ==> r == s@.contains(*x),
@@ -104,7 +105,7 @@ pub(crate) enum ShareError {
     LinShared,
 }
 
-// ---- spec ----
+// 仕様
 
 pub open spec fn expands<N>(g: GView<N>, n: N) -> bool {
     g.lin[n] || g.rc[n] > 0
@@ -117,7 +118,7 @@ pub open spec fn well_formed<N>(g: GView<N>, root: N) -> bool {
     &&& g.lin.dom() == g.nodes
     &&& g.owner.dom() == g.nodes
     &&& g.children.dom() == g.nodes
-    &&& forall|n: N| g.nodes.contains(n) ==> #[trigger] g.live[n]
+    &&& forall|n: N| #[trigger] reached(g, root, n) ==> g.live[n]
     &&& forall|p: N, k: int|
         g.nodes.contains(p) && 0 <= k < g.children[p].len() ==> g.nodes.contains(
             #[trigger] g.children[p][k],
@@ -179,7 +180,7 @@ pub open spec fn same_shape<N>(g0: GView<N>, g: GView<N>) -> bool {
     &&& g.owner.dom() == g0.owner.dom()
 }
 
-// ---- loop invariant pieces ----
+// ループの不変条件の部品
 
 pub open spec fn count<N>(s: Seq<N>, x: N) -> nat
     decreases s.len(),
@@ -246,7 +247,7 @@ pub open spec fn inv<N>(
     &&& check_lin ==> forall|n: N| #[trigger] visited.contains(n) ==> e.contains(n) && g0.lin[n]
 }
 
-// ---- lemmas ----
+// 補題
 
 proof fn lemma_count_append<N>(a: Seq<N>, b: Seq<N>, x: N)
     ensures
@@ -378,7 +379,6 @@ proof fn lemma_reached_pushed<N>(g0: GView<N>, root: N, e: Set<N>, n: N)
     let path = choose|path: Seq<N>| #[trigger] is_path(g0, root, path) && path.last() == n;
     lemma_path_pushed(g0, root, e, path, path.len() - 1);
 }
-
 
 proof fn lemma_mark_negative(rc: i32)
     requires
@@ -641,7 +641,7 @@ proof fn lemma_finish<N>(
     }
 }
 
-// ---- the walk ----
+// たどり
 
 pub(crate) fn share_walk<G: Graph>(
     graph: &mut G,

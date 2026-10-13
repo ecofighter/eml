@@ -1,4 +1,4 @@
-//! `rc.rs` の `DROP_LIMIT` と `mark_step` の写し (docs/superpowers/specs/2026-10-13-s9a-eml-rt-core-design.md の「Verus」)。
+//! `rc.rs` の `DROP_LIMIT` と `mark_step` の写し (spec の「Verus」)。
 
 use vstd::prelude::*;
 

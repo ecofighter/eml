@@ -1,5 +1,5 @@
-//! Verus の写しが本体と同じコードであることを確かめる (docs/superpowers/specs/2026-10-13-s9a-eml-rt-core-design.md の
-//! 「Verus」)。両方からコメントと属性と空白を除き、写しからはさらに Verus だけの書き方を除いて比べる。
+//! Verus の写しが本体と同じコードであることを確かめる (spec の「Verus」)。両方からコメントと属性と空白を除き、写しから
+//! はさらに Verus だけの書き方を除いて比べる。
 
 /// 比べる項目。名前は、ファイルの一番外の `fn`、`struct`、`enum`、`trait`、`const` か、`型::名前` で `impl 型` の中の
 /// `fn` か `const` を指す。表に載らない型は、写しの側で証明に要る部分だけを持てばよい。
@@ -286,5 +286,33 @@ fn a_changed_body_is_reported() {
     assert_eq!(
         actual, expected,
         "the Verus copy of `f` differs from the code"
+    );
+}
+
+/// 属性は比べる前に除かれるので、証明を空にする属性や `assume` が混ざっても、上のテストは通ってしまう。
+/// 信頼してよいのは `<[T]>::contains` の約束の1つだけである。
+#[test]
+fn the_copies_trust_nothing_but_the_contains_spec() {
+    const FORBIDDEN: &[&str] = &[
+        "external_body",
+        "verifier::external",
+        "assume(",
+        "admit(",
+        "exec_allows_no_decreases_clause",
+    ];
+    let sources = COPIES
+        .iter()
+        .map(|(_, copy, _)| *copy)
+        .chain([include_str!("../verus/lib.rs")]);
+    let mut assume_specifications = 0;
+    for source in sources {
+        for word in FORBIDDEN {
+            assert!(!source.contains(word), "a Verus copy contains `{word}`");
+        }
+        assume_specifications += source.matches("assume_specification").count();
+    }
+    assert_eq!(
+        assume_specifications, 1,
+        "only `<[T]>::contains` may be trusted"
     );
 }
