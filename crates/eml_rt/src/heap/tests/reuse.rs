@@ -63,7 +63,7 @@ fn a_shared_marked_object_is_never_a_token<M: Mode>() {
     let p = cons(&mut heap, Word::imm(1), Word::imm(0));
     unsafe {
         heap.share(p, 0).unwrap();
-        // rc −1 は最後の参照だが共有の印を持つので、箱を使い回さずに空ける
+        // rc -1 は最後の参照だが共有の印を持つので、箱を使い回さずに空ける
         assert!(
             heap.release_reuse(p, CONS, &[false, false])
                 .unwrap()

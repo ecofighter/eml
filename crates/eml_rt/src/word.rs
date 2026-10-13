@@ -6,6 +6,10 @@ use std::ptr::{self, NonNull};
 
 use crate::meta::Header;
 
+// 語を 8 バイトにするので、64 ビットの環境だけを対象にする (docs/spec/object-model.md の「受け入れる制約」)。Verus の
+// 写しの `global size_of usize == 8` も、この前提に頼る
+const _: () = assert!(usize::BITS == 64);
+
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(transparent)]
 pub struct Word(*mut ());
@@ -25,12 +29,14 @@ impl Word {
     pub const EMPTY: Word = Word(ptr::null_mut());
 
     /// 即値 `(n << 1) | 1`。n は 63 ビットに収まらなければならない。
+    #[inline]
     pub const fn imm(n: i64) -> Word {
         assert!(fits_imm(n));
         Word(ptr::without_provenance_mut(imm_bits(n)))
     }
 
     /// 63 ビットに収まる `Int` を即値にする。収まらなければ `None` で、呼ぶ側が `BigInt` の物体にする。
+    #[inline]
     pub fn int(n: i64) -> Option<Word> {
         if fits_imm(n) {
             Some(Word::imm(n))
@@ -39,33 +45,40 @@ impl Word {
         }
     }
 
+    #[inline]
     pub fn is_imm(self) -> bool {
         is_imm_bits(self.0.addr())
     }
 
+    #[inline]
     pub fn is_ptr(self) -> bool {
         is_ptr_bits(self.0.addr())
     }
 
+    #[inline]
     pub fn is_empty(self) -> bool {
         self.0.is_null()
     }
 
     /// 即値の値。算術右シフトで1ビットずらす。
+    #[inline]
     pub fn imm_value(self) -> i64 {
         debug_assert!(self.is_imm());
         imm_value_bits(self.0.addr())
     }
 
     /// 語のビット列。VM が生のスロットに置くときに使う。
+    #[inline]
     pub fn bits(self) -> usize {
         self.0.addr()
     }
 
+    #[inline]
     pub(crate) fn from_header(h: NonNull<Header>) -> Word {
         Word(h.as_ptr().cast())
     }
 
+    #[inline]
     pub(crate) fn header(self) -> NonNull<Header> {
         debug_assert!(self.is_ptr());
         // ポインタの語は確保したヘッダから作るので、null にならない
@@ -77,25 +90,30 @@ impl Word {
 // (docs/implementation/testing.md の「Verus」)。
 
 /// 63 ビットに収まるか。
+#[inline]
 pub(crate) const fn fits_imm(n: i64) -> bool {
     Word::MIN_INT <= n && n <= Word::MAX_INT
 }
 
 /// 即値のビット列 `(n << 1) | 1`。
+#[inline]
 pub(crate) const fn imm_bits(n: i64) -> usize {
     ((n << 1) | 1) as usize
 }
 
+#[inline]
 pub(crate) const fn is_imm_bits(bits: usize) -> bool {
     bits & 1 == 1
 }
 
 /// ポインタの語のビット列か。空の語 (0) はポインタでない。
+#[inline]
 pub(crate) const fn is_ptr_bits(bits: usize) -> bool {
     bits & 1 == 0 && bits != 0
 }
 
 /// 即値の値。算術右シフトで1ビットずらす。
+#[inline]
 pub(crate) const fn imm_value_bits(bits: usize) -> i64 {
     (bits as i64) >> 1
 }

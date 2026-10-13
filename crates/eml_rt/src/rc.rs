@@ -12,8 +12,9 @@ pub(crate) const LOCAL_MAX: i32 = i32::MAX;
 pub(crate) const DUP_LIMIT: i32 = i32::MIN + 0x1_0000;
 /// 共有の `decref` は、これより小さい数を動かさない。2つの境目の間の幅が、並行の加減算で数が戻ってくるのを防ぐ
 /// (docs/spec/object-model.md の「上限」)。
-/// 値は MIN + (1 << 17) である。`pub` と 16 進で書くのは、Verus の写し (`verus/rc.rs`) が `pub(crate)` の定数とシフトを受け付けず、
-/// 本体と同じ文字にそろえるためである。この crate の `rc` は private な module なので、外には見えない。
+/// 値は MIN + (1 << 17) である。16 進で書くのは、Verus がシフトを受け付けず、写し (`verus/rc.rs`) と同じ文字にそろえる
+/// ためである。`pub` にするのは、写しの `pub open spec fn mark_spec` がこの定数を使い、Verus が open な spec fn の使う
+/// 定数にも `pub` を求めるためである。この crate の `rc` は private な module なので、外には見えない。
 pub const DROP_LIMIT: i32 = i32::MIN + 0x2_0000;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -65,7 +66,7 @@ pub(crate) fn decref_step(rc: i32) -> DecrefStep {
     }
 }
 
-/// `share` の1物体分の印付け。局所の数 n を −n にし、`DROP_LIMIT` より小さくなるなら `MIN` に張り付ける。局所でない数は
+/// `share` の1物体分の印付け。局所の数 n を -n にし、`DROP_LIMIT` より小さくなるなら `MIN` に張り付ける。局所でない数は
 /// たどりを止めるので `None` を返す。
 pub(crate) fn mark_step(rc: i32) -> Option<i32> {
     if rc <= 0 {
@@ -79,17 +80,20 @@ pub(crate) fn mark_step(rc: i32) -> Option<i32> {
     })
 }
 
+#[inline]
 pub(crate) fn dup_shared(rc: &AtomicI32) {
     rc.fetch_sub(1, Ordering::Relaxed);
 }
 
 /// 共有の数を1つ減らし、最後の参照なら真を返す。`fence(Acquire)` を使わず、AcqRel の加算で最後の解放を順序付ける。
+#[inline]
 pub(crate) fn decref_shared(rc: &AtomicI32) -> bool {
     rc.fetch_add(1, Ordering::AcqRel) == -1
 }
 
-/// 手放そうとしている参照が最後のものか。rc は Relaxed で読み、−1 のときだけ Acquire で読み直す。ふだんの rc が 1 の
-/// 道に Acquire の読み込みの費用を足さず、−1 のときは最後の AcqRel の `decref` と同期するためである。
+/// 手放そうとしている参照が最後のものか。rc は Relaxed で読み、-1 のときだけ Acquire で読み直す。ふだんの rc が 1 の
+/// 道に Acquire の読み込みの費用を足さず、-1 のときは最後の AcqRel の `decref` と同期するためである。
+#[inline]
 pub(crate) fn is_last(rc: &AtomicI32) -> bool {
     match rc.load(Ordering::Relaxed) {
         1 => true,

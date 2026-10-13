@@ -3,6 +3,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use super::{LONG, cons, list, mortal, probe};
+use crate::heap::TOO_LARGE;
 use crate::{Fast, Heap, HeapError, Kind, Meta, Mode, Word};
 
 fn a_cons_list_is_freed_by_one_decref<M: Mode>() {
@@ -247,7 +248,32 @@ fn walking_counts_objects_across_pages<M: Mode>() {
     assert_eq!(mortal(&heap), 0);
 }
 
+/// 語の数の和が桁あふれする大きさは、小さいブロックを取って書きあふれる前に panic する。
+fn a_wrapping_size_panics_before_allocating<M: Mode>() {
+    let sizes = [
+        (usize::MAX - 1, 1),
+        (usize::MAX, 0),
+        (0, usize::MAX),
+        (0, usize::MAX - 1),
+        (1, usize::MAX - 2),
+    ];
+    for (scanned, raw) in sizes {
+        let mut heap = Heap::<M>::new();
+        let payload = catch_unwind(AssertUnwindSafe(|| {
+            heap.alloc_data(0, scanned, raw, false);
+        }))
+        .expect_err("a wrapping size must panic");
+        let message = payload
+            .downcast_ref::<&str>()
+            .copied()
+            .or_else(|| payload.downcast_ref::<String>().map(String::as_str));
+        assert_eq!(message, Some(TOO_LARGE), "{scanned} + {raw}");
+        assert_eq!(mortal(&heap), 0);
+    }
+}
+
 both_modes!(
+    a_wrapping_size_panics_before_allocating,
     a_cons_list_is_freed_by_one_decref,
     a_dupped_object_survives_one_decref,
     a_long_list_with_boxed_elements_frees_with_a_short_worklist,

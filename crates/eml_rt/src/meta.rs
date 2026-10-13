@@ -19,6 +19,7 @@ pub enum Kind {
 }
 
 impl Kind {
+    #[inline]
     fn from_bits(bits: u32) -> Kind {
         match bits {
             0 => Kind::Data,
@@ -41,16 +42,19 @@ impl Kind {
 
     /// 走査する語 (`scan` が 255 なら数の語) がペイロードの何語目から始まるか。種類を足すときに決め忘れないように、
     /// 種類ごとに書く。
+    #[inline]
     pub(crate) fn scan_start(self) -> usize {
         match self {
             Kind::Data | Kind::BigInt | Kind::Foreign | Kind::Free => 0,
         }
     }
 
+    #[inline]
     pub(crate) fn tokenable(self) -> bool {
         matches!(self, Kind::Data)
     }
 
+    #[inline]
     pub(crate) fn has_finalizer(self) -> bool {
         matches!(self, Kind::Foreign)
     }
@@ -67,32 +71,39 @@ impl Meta {
     const KIND_SHIFT: u32 = 24;
     const KIND_MASK: u32 = 0xF;
 
+    #[inline]
     pub const fn new(tag: u16, scan: u8, kind: Kind, lin: bool) -> Meta {
         let lin = if lin { Meta::LIN } else { 0 };
         Meta(tag as u32 | ((scan as u32) << 16) | ((kind as u32) << Meta::KIND_SHIFT) | lin)
     }
 
+    #[inline]
     pub const fn tag(self) -> u16 {
         self.0 as u16
     }
 
+    #[inline]
     pub const fn scan(self) -> u8 {
         (self.0 >> 16) as u8
     }
 
+    #[inline]
     pub fn kind(self) -> Kind {
         Kind::from_bits((self.0 >> Meta::KIND_SHIFT) & Meta::KIND_MASK)
     }
 
+    #[inline]
     pub const fn lin(self) -> bool {
         self.0 & Meta::LIN != 0
     }
 
+    #[inline]
     pub const fn with_lin(self, lin: bool) -> Meta {
         Meta((self.0 & !Meta::LIN) | if lin { Meta::LIN } else { 0 })
     }
 
     /// `lin` ビットを除いて同じか。
+    #[inline]
     pub const fn same_shape(self, other: Meta) -> bool {
         (self.0 ^ other.0) & !Meta::LIN == 0
     }
@@ -122,6 +133,7 @@ pub(crate) const HEADER_WORDS: usize = size_of::<Header>().div_ceil(8);
 
 /// # Safety
 /// `h` は確保したブロックのヘッダの位置を指す。
+#[inline]
 pub(crate) unsafe fn init(h: NonNull<Header>, rc: i32, meta: Meta) {
     unsafe {
         h.as_ptr().write(Header {
@@ -133,18 +145,21 @@ pub(crate) unsafe fn init(h: NonNull<Header>, rc: i32, meta: Meta) {
 
 /// # Safety
 /// `h` は初期化したヘッダを指す。
+#[inline]
 pub(crate) unsafe fn rc<'a>(h: NonNull<Header>) -> &'a AtomicI32 {
     unsafe { &(*h.as_ptr()).rc }
 }
 
 /// # Safety
 /// `h` は初期化したヘッダを指す。
+#[inline]
 pub(crate) unsafe fn meta(h: NonNull<Header>) -> Meta {
     unsafe { Meta((&raw const (*h.as_ptr()).meta).read()) }
 }
 
 /// # Safety
 /// `h` は初期化したヘッダを指し、ほかのスレッドはその物体を読めない。
+#[inline]
 pub(crate) unsafe fn set_meta(h: NonNull<Header>, meta: Meta) {
     unsafe { (&raw mut (*h.as_ptr()).meta).write(meta.0) }
 }
@@ -153,6 +168,7 @@ pub(crate) unsafe fn set_meta(h: NonNull<Header>, meta: Meta) {
 ///
 /// # Safety
 /// `h` はペイロードが i + 1 語以上あるブロックのヘッダを指す。
+#[inline]
 pub(crate) unsafe fn slot(h: NonNull<Header>, i: usize) -> *mut Word {
     unsafe { h.as_ptr().cast::<Word>().add(HEADER_WORDS + i) }
 }

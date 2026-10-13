@@ -1,5 +1,5 @@
-//! 検査モードが報告する誤り (docs/spec/object-model.md の「報告する誤り」)。速いモードは
-//! どれも返さない。
+//! 検査モードが報告する誤り (docs/spec/object-model.md の「報告する誤り」)。速いモードが返すのは、`foreign` の
+//! `WrongKind` と、空の token を受けた `reuse_in_place` の `StaleToken` だけである (docs/spec/object-model.md の「核の操作」)。
 
 use std::fmt;
 

@@ -4,6 +4,7 @@
 use std::num::NonZero;
 use std::ptr::{self, NonNull};
 
+use crate::heap::TOO_LARGE;
 use crate::meta::{self, Header, Kind, Meta};
 use std::alloc::{Layout, alloc, dealloc, handle_alloc_error};
 
@@ -35,6 +36,7 @@ const CLASS_OF: [u8; MAX_SMALL_WORDS + 1] = {
 /// 大きい物体のページの級。
 const LARGE: u32 = u32::MAX;
 
+#[inline]
 fn class_of(block_words: usize) -> Option<usize> {
     CLASS_OF.get(block_words).map(|&class| usize::from(class))
 }
@@ -80,6 +82,7 @@ pub(crate) struct Pages {
 }
 
 /// ブロックはどれもページの先頭から 64 KiB の内にあるので、下位 16 ビットを落とせばページの頭になる。
+#[inline]
 fn page_of(h: NonNull<Header>) -> NonNull<PageHeader> {
     h.cast::<u8>()
         .map_addr(|addr| {
@@ -104,14 +107,16 @@ impl Pages {
     }
 
     /// `words` 語 (ヘッダを含み、前置きを含まない) の物体のブロックを取り、ヘッダの位置を返す。ヘッダは書かない。
+    #[inline]
     pub(crate) fn alloc(&mut self, words: usize) -> NonNull<Header> {
-        let block_words = words + self.prefix_words;
+        let block_words = words.checked_add(self.prefix_words).expect(TOO_LARGE);
         match class_of(block_words) {
             Some(class) => self.alloc_small(class),
             None => self.alloc_large(block_words),
         }
     }
 
+    #[inline]
     fn alloc_small(&mut self, class: usize) -> NonNull<Header> {
         if let Some(h) = NonNull::new(self.classes[class].free) {
             self.classes[class].free = unsafe { meta::slot(h, 0).cast::<*mut Header>().read() };
@@ -128,6 +133,7 @@ impl Pages {
         unsafe { NonNull::new_unchecked(block.add(self.prefix_words * WORD)).cast() }
     }
 
+    #[cold]
     fn next_page(&mut self, class: usize) {
         let old = self.classes[class];
         if let Some(page) = NonNull::new(old.page) {
@@ -141,8 +147,12 @@ impl Pages {
         state.end = unsafe { base.add(PAGE_BYTES) };
     }
 
+    #[cold]
     fn alloc_large(&mut self, block_words: usize) -> NonNull<Header> {
-        let bytes = FIRST_BLOCK + block_words * WORD;
+        let bytes = block_words
+            .checked_mul(WORD)
+            .and_then(|bytes| bytes.checked_add(FIRST_BLOCK))
+            .expect(TOO_LARGE);
         let page = self.new_page(bytes, LARGE, block_words);
         unsafe { (*page.as_ptr()).limit = bytes };
         let block = unsafe { page.as_ptr().cast::<u8>().add(FIRST_BLOCK) };
@@ -173,6 +183,7 @@ impl Pages {
     ///
     /// # Safety
     /// `h` はこの `Pages` が確保した、まだ空けていないブロックのヘッダを指し、ペイロードは1語以上ある。
+    #[inline]
     pub(crate) unsafe fn free(&mut self, h: NonNull<Header>) {
         let page = page_of(h);
         let class = unsafe { (*page.as_ptr()).class };
@@ -188,6 +199,7 @@ impl Pages {
         state.free = h.as_ptr();
     }
 
+    #[cold]
     unsafe fn release_large(&mut self, page: NonNull<PageHeader>) {
         let (index, bytes) = unsafe { ((*page.as_ptr()).index, (*page.as_ptr()).bytes) };
         self.list.swap_remove(index);
@@ -207,6 +219,7 @@ impl Pages {
     ///
     /// # Safety
     /// `h` はこの `Pages` が確保したブロックのヘッダを指す。
+    #[inline]
     pub(crate) unsafe fn block_words(&self, h: NonNull<Header>) -> usize {
         unsafe { (*page_of(h).as_ptr()).block_words as usize }
     }
@@ -215,6 +228,7 @@ impl Pages {
     ///
     /// # Safety
     /// `h` はこの `Pages` が確保したブロックのヘッダを指す。
+    #[inline]
     pub(crate) unsafe fn block_bytes(&self, h: NonNull<Header>) -> usize {
         let page = page_of(h);
         unsafe {
@@ -230,8 +244,9 @@ impl Pages {
     ///
     /// # Safety
     /// `h` はこの `Pages` が確保したブロックのヘッダを指す。
+    #[inline]
     pub(crate) unsafe fn fits(&self, h: NonNull<Header>, words: usize) -> bool {
-        let block_words = words + self.prefix_words;
+        let block_words = words.checked_add(self.prefix_words).expect(TOO_LARGE);
         let want = class_of(block_words).map_or(block_words, |class| CLASS_WORDS[class]);
         unsafe { self.block_words(h) == want }
     }

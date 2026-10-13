@@ -21,17 +21,20 @@ pub struct Token(Word);
 impl Token {
     pub const EMPTY: Token = Token(Word::EMPTY);
 
+    #[inline]
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
 
     /// VM のレジスタに置くための語。
+    #[inline]
     pub fn into_word(self) -> Word {
         self.0
     }
 
     /// # Safety
     /// `w` は同じヒープの `into_word` が返した語である。
+    #[inline]
     pub unsafe fn from_word(w: Word) -> Token {
         Token(w)
     }
@@ -41,7 +44,8 @@ impl<M: Mode> Heap<M> {
     /// 一意な物体の箱を、フィールドに触れずに token にする。
     ///
     /// # Safety
-    /// `w` はこのヒープの生きている物体を指し、呼ぶ側がその唯一の参照を持ち、子の参照はもう処理してある。
+    /// `w` はこのヒープの生きている物体を指し、呼ぶ側がその唯一の参照を持ち (rc が 1)、子の参照はもう処理してある。
+    /// 種類は token にできる (`Data`)。持ち主は今の worker である。
     pub unsafe fn into_token(&mut self, w: Word) -> Result<Token, HeapError> {
         if !M::CHECKED {
             return Ok(Token(w));
@@ -87,9 +91,11 @@ impl<M: Mode> Heap<M> {
     /// token が空でなければ、その箱に `meta` を書いて返す。空なら確保する。箱を使ったかも返す。フィールドは呼ぶ側が書く。
     ///
     /// # Safety
-    /// `token` はこのヒープの token で、まだ使っていない。`meta` の種類は `Foreign` でも `Free` でもない。呼ぶ側は、
-    /// ほかのヒープの操作の前に、走査する語がみな `meta` に合う値を持つようにする。箱を使い回したときは、残した
-    /// フィールドを書き直さなくてよい。
+    /// `token` はこのヒープの token で、まだ使っていない。空でなければ、その箱は `payload_words` の物体のこのモードでの
+    /// 級にある。同じ物理的な語の数の物体から作った token なら、どちらのモードでも満たす。`meta` の種類は `Foreign`
+    /// でも `Free` でもない。呼ぶ側は、ほかのヒープの操作の前に、走査する語がみな `meta` に合う値を持つようにする。
+    /// 箱を使い回したときは、残したフィールドを書き直さなくてよい。
+    #[inline]
     pub unsafe fn con_at(
         &mut self,
         token: Token,
@@ -112,8 +118,11 @@ impl<M: Mode> Heap<M> {
 
     /// 同じコンストラクタの reuse。ヘッダに何も書かずに箱を返す。`meta` は検査モードが照らすためだけに渡す。
     ///
+    /// 空の token を受けると、速いモードでも `StaleToken` を返す。
+    ///
     /// # Safety
-    /// `token` はこのヒープの空でない token で、まだ使っていない。
+    /// `token` はこのヒープの空でない token で、まだ使っていない。`meta` の tag、scan、種類は箱と同じで、箱が `lin`
+    /// ビットを持つなら `meta` も持つ。
     pub unsafe fn reuse_in_place(&mut self, token: Token, meta: Meta) -> Result<Word, HeapError> {
         let h = unsafe { self.take_token(token)? }.ok_or(HeapError::StaleToken)?;
         if M::CHECKED {
@@ -137,7 +146,8 @@ impl<M: Mode> Heap<M> {
     /// 一意なら、残さない子を手放して箱を token にする。そうでなければ `release` と同じにして、空の token を返す。
     ///
     /// # Safety
-    /// `w` はこのヒープの生きている物体を指し、呼ぶ側がその参照を1つ持っている。
+    /// `release` と同じ。
+    #[inline]
     pub unsafe fn release_reuse(
         &mut self,
         w: Word,

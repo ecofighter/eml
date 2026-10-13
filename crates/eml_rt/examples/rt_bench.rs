@@ -49,7 +49,7 @@ fn list() {
     }
 }
 
-// 値の語は読まないが、cons セルと同じ大きさにそろえるために持つ
+// 値の語は読まないが、ペイロードの語の数を cons セルと同じ2語 (値と次の箱) にそろえるために持つ
 #[expect(dead_code)]
 enum BoxList {
     Nil,
@@ -96,8 +96,9 @@ fn map(reuse: bool) {
         let mut acc = Word::imm(0);
         let mut cur = l;
         while cur.is_ptr() {
-            // SAFETY: cur は呼ぶ側が参照を1つ持つ生きた cons で、release の後は読まない。head は即値、tail の参照は
-            // keep で受け継ぐ。作った cell は2つの語を、ほかのヒープの操作の前に書く。
+            // SAFETY: cur は生きた cons で、ループはその参照を1つ持つ。最初は build が返した l の参照で、その後は前の
+            // cons の tail を keep で受け継いだ参照である。release の後は cur を読まない。head は即値である。作った cell は
+            // 2つの語を、ほかのヒープの操作の前に書く。
             unsafe {
                 let head = heap.field(cur, 0).unwrap();
                 let tail = heap.field(cur, 1).unwrap();

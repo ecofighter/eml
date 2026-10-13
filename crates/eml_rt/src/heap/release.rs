@@ -1,5 +1,5 @@
 //! LIR の `release` (docs/spec/object-model.md の「核の操作」)。判定は `is_last` で、
-//! rc が −1 の物体も最後の参照として、残すフィールドを `dup` せずに受け取る。共有の親から `lin` の子が届く形
+//! rc が -1 の物体も最後の参照として、残すフィールドを `dup` せずに受け取る。共有の親から `lin` の子が届く形
 //! (docs/spec/object-model.md の「`share`」) で、正しいプログラムの `File` を `dup` しないためである。
 
 use std::mem;
@@ -16,7 +16,10 @@ impl<M: Mode> Heap<M> {
     /// `keep` は走査する語ごとに、その子の参照を呼ぶ側に残すかを持つ。
     ///
     /// # Safety
-    /// `w` はこのヒープの生きている物体を指し、呼ぶ側がその参照を1つ持っている。
+    /// `w` はこのヒープの生きている物体を指し、呼ぶ側がその参照を1つ持っている。物体は種類 `Data` で、tag が `tag`、
+    /// 走査する語の数が `keep.len()` である。共有の物体は `lin` ビットを持たない。rc が正なら、持ち主は今の worker である。残さない子は `decref` の、
+    /// `is_last` が偽のときの残す子は `dup` の安全の条件を満たす。
+    #[inline]
     pub unsafe fn release(&mut self, w: Word, tag: u16, keep: &[bool]) -> Result<(), HeapError> {
         let h = w.header();
         unsafe { self.check_release(h, tag, keep.len())? };

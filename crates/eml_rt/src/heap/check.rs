@@ -89,7 +89,13 @@ pub(crate) unsafe fn count_immortal(h: NonNull<Header>, up: bool) -> Result<bool
         return Ok(false);
     }
     if up {
-        first.store(n + 1, Ordering::Relaxed);
+        // 数が UNCOUNTED に届くと、その物体はダミーと同じく数えないものに変わってしまう。2^32 - 1 回の取得は正しい
+        // プログラムでは起きないので、新しい誤りの種類を足さずに panic にする
+        let up = n
+            .checked_add(1)
+            .filter(|&m| m != UNCOUNTED)
+            .expect("an immortal object is acquired 2^32 - 1 times");
+        first.store(up, Ordering::Relaxed);
     } else if n == 0 {
         return Err(HeapError::ImmortalOverRelease);
     } else {

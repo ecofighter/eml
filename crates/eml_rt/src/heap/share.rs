@@ -134,7 +134,8 @@ impl<M: Mode> Heap<M> {
     /// w から届く物体を、`receiver` に渡すために共有にする。送り手のスレッドが、値を公開する前に呼ぶ。
     ///
     /// # Safety
-    /// `w` は即値か、このヒープの生きている物体を指し、そこから届く物体はどれも生きている。
+    /// `w` は即値か、このヒープの生きている物体を指し、そこから届く物体はどれも生きている。局所の `lin` の物体には
+    /// 1回だけ届き、共有の側の `lin` の物体には届かない。
     pub unsafe fn share(&mut self, w: Word, receiver: u32) -> Result<(), HeapError> {
         if !w.is_ptr() {
             return Ok(());

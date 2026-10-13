@@ -2,7 +2,8 @@
 //! (docs/spec/object-model.md の「核の操作」)。語を受ける操作と、ペイロードを
 //! 呼ぶ側が書く `alloc` と `alloc_immortal` は `unsafe fn` で、安全の条件は docs/spec/object-model.md の「核の操作」にある。その条件の
 //! 「生きている物体」は、`meta` に合うペイロード (走査する語、`scan` が 255 なら数の語、`BigInt` なら値) をすべて書いた
-//! 物体を指す。検査モードは、確かめられる違反を `Err` で返す。
+//! 物体を指す。データの生の語はこの条件に入らない。検査モードは、確かめられる違反を `Err` で返す。各メソッドの
+//! `# Safety` には、速いモードが確かめず検査モードが `Err` にする条件も書く。
 
 pub(crate) mod check;
 mod release;
@@ -72,11 +73,20 @@ impl<M: Mode> Default for Heap<M> {
 
 /// ペイロードの語の数から、ヘッダを含む物体の語の数を出す。空いたブロックのペイロードの先頭に空きリストのポインタを
 /// 置くので、ペイロードは少なくとも1語にする。
+#[inline]
 fn object_words(payload_words: usize) -> usize {
-    HEADER_WORDS + payload_words.max(1)
+    // ふだんのビルドで桁あふれが回ると小さいブロックを取り、安全な `alloc_data` がその先まで書いてしまう
+    // (docs/spec/object-model.md の「ページ」)
+    HEADER_WORDS
+        .checked_add(payload_words.max(1))
+        .expect(TOO_LARGE)
 }
 
+/// 語の数の計算が桁あふれしたときの panic の文言。
+pub(crate) const TOO_LARGE: &str = "an object of more words than the address space holds";
+
 /// 走査する語の数。`scan` が 255 なら、走査の始まりの生の語が数を持つ。
+#[inline]
 unsafe fn scan_count(h: NonNull<Header>) -> usize {
     let m = unsafe { meta::meta(h) };
     if m.scan() == Meta::EXTENDED_SCAN {
@@ -87,6 +97,7 @@ unsafe fn scan_count(h: NonNull<Header>) -> usize {
 }
 
 /// 走査する語の i 番目の位置。
+#[inline]
 unsafe fn scan_slot(h: NonNull<Header>, i: usize) -> *mut Word {
     let m = unsafe { meta::meta(h) };
     let start = m.kind().scan_start() + usize::from(m.scan() == Meta::EXTENDED_SCAN);
@@ -142,6 +153,7 @@ impl<M: Mode> Heap<M> {
     }
 
     /// ブロックを取り、ヘッダと (検査モードでは) 前置きを書く。ペイロードは書かない。
+    #[inline]
     fn alloc_header(&mut self, payload_words: usize, rc: i32, meta: Meta) -> NonNull<Header> {
         debug_assert_ne!(meta.kind(), Kind::Free);
         let h = self.pages.alloc(object_words(payload_words));
@@ -160,6 +172,7 @@ impl<M: Mode> Heap<M> {
     /// # Safety
     /// `meta` の種類は `Foreign` でも `Free` でもなく、呼ぶ側は、ほかのヒープの操作の前に、`meta` に合うペイロード
     /// (走査する語、`scan` が 255 なら数の語、`BigInt` なら値) を書く。
+    #[inline]
     pub unsafe fn alloc(&mut self, payload_words: usize, meta: Meta) -> Word {
         debug_assert_ne!(meta.kind(), Kind::Foreign);
         Word::from_header(self.alloc_header(payload_words, 1, meta))
@@ -183,11 +196,11 @@ impl<M: Mode> Heap<M> {
         } else {
             scanned as u8
         };
-        let h = self.alloc_header(
-            usize::from(extended) + scanned + raw,
-            1,
-            Meta::new(tag, scan, Kind::Data, lin),
-        );
+        let payload_words = usize::from(extended)
+            .checked_add(scanned)
+            .and_then(|words| words.checked_add(raw))
+            .expect(TOO_LARGE);
+        let h = self.alloc_header(payload_words, 1, Meta::new(tag, scan, Kind::Data, lin));
         unsafe {
             if extended {
                 meta::slot(h, 0).cast::<u64>().write(scanned as u64);
@@ -227,7 +240,7 @@ impl<M: Mode> Heap<M> {
     /// 不死の物体の参照を1つ作る (docs/spec/object-model.md の「不死の物体の数え方」)。速いモードでは何もしない。
     ///
     /// # Safety
-    /// `w` は即値か、このヒープの生きている物体を指す。
+    /// `w` は即値か、このヒープの生きている不死の物体 (rc 0) を指す。
     pub unsafe fn acquire_immortal(&mut self, w: Word) -> Result<(), HeapError> {
         if M::CHECKED && w.is_ptr() {
             let h = w.header();
@@ -244,11 +257,29 @@ impl<M: Mode> Heap<M> {
 
     /// # Safety
     /// `w` は即値か、このヒープの生きている物体を指し、呼ぶ側が参照を持っているか、生きている持ち主から借りている。
+    /// 物体は `lin` ビットを持たない。rc が正なら、持ち主は今の worker である。
+    #[inline]
     pub unsafe fn dup(&mut self, w: Word) -> Result<(), HeapError> {
         if !w.is_ptr() {
             return Ok(());
         }
         let h = w.header();
+        // 局所の速い道だけを呼ぶ側に展開し、`Result` の分岐を消す (docs/spec/object-model.md の「核の操作」)。検査モードは
+        // rc より先に前置きを読むので、いつも遅い道に進む
+        if !M::CHECKED {
+            let rc = unsafe { meta::rc(h) };
+            if let DupStep::Store(n) = rc::dup_step(rc.load(Ordering::Relaxed)) {
+                rc.store(n, Ordering::Relaxed);
+                return Ok(());
+            }
+        }
+        unsafe { self.dup_slow(h) }
+    }
+
+    /// `dup` の遅い道。共有、不死、張り付いた数と、検査モードの仕事を受け持つ。
+    #[cold]
+    #[inline(never)]
+    unsafe fn dup_slow(&mut self, h: NonNull<Header>) -> Result<(), HeapError> {
         let counted = unsafe { self.check_dup(h)? };
         let rc = unsafe { meta::rc(h) };
         match rc::dup_step(rc.load(Ordering::Relaxed)) {
@@ -265,13 +296,31 @@ impl<M: Mode> Heap<M> {
     /// 参照を1つ手放す。LIR の `decref` と `drop` は、どちらもこれで実行する (docs/spec/object-model.md の「核の操作」)。
     ///
     /// # Safety
-    /// `w` は即値か、このヒープの生きている物体を指し、呼ぶ側がその参照を1つ持っている。
+    /// `w` は即値か、このヒープの生きている物体を指し、呼ぶ側がその参照を1つ持っている。不死の物体なら、その参照は
+    /// `acquire_immortal` か `dup` で作ったものである。共有の物体は `lin` ビットを持たない。rc が正なら、持ち主は今の worker である。
+    #[inline]
     pub unsafe fn decref(&mut self, w: Word) -> Result<(), HeapError> {
         if !w.is_ptr() {
             return Ok(());
         }
-        if unsafe { self.release_ref(w.header())? } {
-            unsafe { self.free_chain(w.header())? };
+        let h = w.header();
+        // `dup` と同じく、局所の数を減らすだけの道を呼ぶ側に展開する
+        if !M::CHECKED {
+            let rc = unsafe { meta::rc(h) };
+            if let DecrefStep::Store(n) = rc::decref_step(rc.load(Ordering::Relaxed)) {
+                rc.store(n, Ordering::Relaxed);
+                return Ok(());
+            }
+        }
+        unsafe { self.decref_slow(h) }
+    }
+
+    /// `decref` の遅い道。解放の連鎖、共有、不死、張り付いた数と、検査モードの仕事を受け持つ。
+    #[cold]
+    #[inline(never)]
+    unsafe fn decref_slow(&mut self, h: NonNull<Header>) -> Result<(), HeapError> {
+        if unsafe { self.release_ref(h)? } {
+            unsafe { self.free_chain(h)? };
         }
         Ok(())
     }
@@ -322,6 +371,7 @@ impl<M: Mode> Heap<M> {
 
     /// 箱を空ける。`Foreign` なら破棄処理を呼ぶ。破棄処理が panic しても同じ値を二度破棄しないように、箱を先に
     /// 死んだことにしてから呼ぶ (箱は漏れてよい)。検査モードは箱を使い回さず、前置きを「解放」にして隔離する。
+    #[inline]
     unsafe fn free_box(&mut self, h: NonNull<Header>) {
         let finalizer = unsafe { meta::meta(h) }
             .kind()
@@ -345,7 +395,7 @@ impl<M: Mode> Heap<M> {
     /// rc が 1 か。reuse とその場の書き換えに使う。共有、不死、張り付いた数は、この比較でみな偽になる。
     ///
     /// # Safety
-    /// `w` は即値か、このヒープの生きている物体を指す。
+    /// `w` は即値か、このヒープの生きている物体を指す。rc が正なら、持ち主は今の worker である。
     pub unsafe fn is_unique(&self, w: Word) -> Result<bool, HeapError> {
         if !w.is_ptr() {
             return Ok(false);
@@ -357,10 +407,10 @@ impl<M: Mode> Heap<M> {
         Ok(rc == 1)
     }
 
-    /// 手放そうとしている参照が最後のものか (rc が 1 か −1)。フィールドを `dup` せずに受け取ってよいかに使う。
+    /// 手放そうとしている参照が最後のものか (rc が 1 か -1)。フィールドを `dup` せずに受け取ってよいかに使う。
     ///
     /// # Safety
-    /// `w` は即値か、このヒープの生きている物体を指す。
+    /// `w` は即値か、このヒープの生きている物体を指す。rc が正なら、持ち主は今の worker である。
     pub unsafe fn is_last(&self, w: Word) -> Result<bool, HeapError> {
         if !w.is_ptr() {
             return Ok(false);
@@ -376,7 +426,8 @@ impl<M: Mode> Heap<M> {
     /// `is_last` が真で、子をすでに処理した物体の箱を空ける。ヘッダの `scan` を読まない。
     ///
     /// # Safety
-    /// `w` はこのヒープの生きている物体を指し、呼ぶ側が最後の参照を持ち、子の参照はもう処理してある。
+    /// `w` はこのヒープの生きている物体を指し、呼ぶ側が最後の参照を持ち (rc が 1 か -1)、子の参照はもう処理してある。
+    /// 種類は破棄処理を持たない (`Foreign` でない)。rc が正なら、持ち主は今の worker である。
     pub unsafe fn free_block(&mut self, w: Word) -> Result<(), HeapError> {
         let h = w.header();
         if M::CHECKED {
@@ -405,7 +456,7 @@ impl<M: Mode> Heap<M> {
     /// ペイロードの物理的な i 語目を読む。ヘッダを読まない。
     ///
     /// # Safety
-    /// `w` はこのヒープの生きている物体を指し、i 語目は走査する語である。
+    /// `w` はこのヒープの生きている物体を指し、i 語目はペイロードの中の走査する語である。
     pub unsafe fn field(&self, w: Word, i: usize) -> Result<Word, HeapError> {
         let h = w.header();
         unsafe {
@@ -418,7 +469,8 @@ impl<M: Mode> Heap<M> {
     /// ペイロードの物理的な i 語目を書く。参照の数は変えない (所有の受け渡しは呼ぶ側が決める)。
     ///
     /// # Safety
-    /// `w` はこのヒープの生きている物体を指し、i 語目は走査する語で、ほかのスレッドはその物体を読めない。
+    /// `w` はこのヒープの生きている物体を指し、i 語目はペイロードの中の走査する語で、ほかのスレッドはその物体を読めない。
+    /// rc が正なら、持ち主は今の worker である。
     pub unsafe fn set_field(&mut self, w: Word, i: usize, v: Word) -> Result<(), HeapError> {
         let h = w.header();
         unsafe {
@@ -431,7 +483,9 @@ impl<M: Mode> Heap<M> {
     }
 
     /// # Safety
-    /// `w` はこのヒープの生きている物体を指し、i 語目は生の語である。
+    /// `w` はこのヒープの生きている物体を指し、i 語目はペイロードの中の生の語で、すでに書いてある。`alloc_data` は生の
+    /// 語を書かず、新しいページのメモリは初期化されていないので、書く前に読むと未初期化の読み込みになる。この条件は
+    /// 検査モードも確かめない。
     pub unsafe fn raw(&self, w: Word, i: usize) -> Result<u64, HeapError> {
         let h = w.header();
         unsafe {
@@ -442,7 +496,8 @@ impl<M: Mode> Heap<M> {
     }
 
     /// # Safety
-    /// `w` はこのヒープの生きている物体を指し、i 語目は生の語で、ほかのスレッドはその物体を読めない。
+    /// `w` はこのヒープの生きている物体を指し、i 語目はペイロードの中の生の語で、ほかのスレッドはその物体を読めない。
+    /// rc が正なら、持ち主は今の worker である。
     pub unsafe fn set_raw(&mut self, w: Word, i: usize, v: u64) -> Result<(), HeapError> {
         let h = w.header();
         unsafe {
@@ -466,7 +521,7 @@ impl<M: Mode> Heap<M> {
     /// 走査する語の i 番目を読む。`scan` が 255 のときの数の語と、種類の走査の始まりを考える。
     ///
     /// # Safety
-    /// `w` はこのヒープの生きている物体を指す。
+    /// `w` はこのヒープの生きている物体を指し、i は `scanned_len(w)` より小さい。
     pub unsafe fn scanned(&self, w: Word, i: usize) -> Result<Word, HeapError> {
         let h = w.header();
         unsafe { self.check_live(h)? };
@@ -492,7 +547,8 @@ impl<M: Mode> Heap<M> {
         Ok(unsafe { meta::slot(h, 0).cast::<i64>().read() })
     }
 
-    /// `Foreign` の物体の Rust の値の位置。値が `T` でなければ `WrongKind` を返す。
+    /// `Foreign` の物体の Rust の値の位置。物体が `Foreign` でないか、値が `T` でなければ `WrongKind` を返す。この照らし
+    /// 合わせは、速いモードでも行う (docs/spec/object-model.md の「核の操作」)。
     ///
     /// # Safety
     /// `w` はこのヒープの生きている物体を指す。
