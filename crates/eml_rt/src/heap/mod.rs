@@ -1353,7 +1353,9 @@ impl<M: Mode> Heap<M> {
 
     /// 箱を空ける。`Foreign` なら破棄処理を呼ぶ。破棄処理が panic しても同じ値を二度破棄しないように、箱を先に
     /// 死んだことにしてから呼ぶ (箱は漏れてよい)。検査モードは箱を使い回さず、前置きを「解放」にして隔離する。
-    #[inline]
+    // 展開すると `release` と `release_reuse` が大きくなり、呼ぶ側に展開されなくなる。そうなると、呼ぶ側が渡す `keep`
+    // の定数で枝を畳めない
+    #[inline(never)]
     fn free_box(&mut self, h: *mut Header)
         requires
             old(self).core.wf(),
