@@ -2,7 +2,7 @@
 
 use crate::common::{core_text, core_text_files, core_text_with_positions, function, lir_text};
 use eml_core_ir::{Pass, parse, pretty_with_positions};
-use eml_lir::Term;
+use eml_lir::{Mark, Stmt, Term};
 
 #[test]
 fn hello_world() {
@@ -2927,6 +2927,12 @@ fn a_linear_constructor_variable_is_opened_when_no_arm_receives_it() {
     let text = format!(
         "{CLOSE_ALL}data Log =\n  | Log {{ file : Fs.File, lines : Int }}\ndata Job =\n  | Job {{ name : String, log : Log }}\n\nfinish : Log -> String -> <IO> Int\nfinish l name =\n  let j = Job {{ name = name, log = l }}\n  println \"between\"\n  let Job {{ name = n, log = Log {{ file, lines }} }} = j\n  println n\n  Fs.close file\n  lines\n\ngo : List Fs.File -> <IO> Unit\ngo xs =\n  let o = Some xs\n  println \"between\"\n  match o with\n    | Some [] -> println \"empty\"\n    | Some l -> close_all l\n    | None -> println \"none\"\n\nmain : Unit -> <IO> Unit\nmain () =\n  println (show (finish (Log {{ file = Fs.open \"input.txt\", lines = 3 }}) \"job\"))\n  go []"
     );
+    // 開いた `con` は使われないので、縮約が消す
+    let lir = lir_text(&text, eml_lir::Pass::Perceus);
+    for name in ["finish", "go"] {
+        let shown = function(&lir, name);
+        assert!(!shown.contains(" = con "), "{shown}");
+    }
     let ir = core_text(&text, Pass::Translate);
     insta::assert_snapshot!(function(&ir, "finish"), @r#"
     fn finish(l.0: obj lin, name.1: obj) -> int {
@@ -3007,6 +3013,61 @@ fn a_linear_constructor_variable_received_by_an_arm_is_taken_apart() {
     b7(o.10: tobj lin):
       let t.11: unit = call close_opt(o.10)
       return t.11
+    }
+    "#);
+}
+
+#[test]
+fn a_linear_constructor_variable_used_on_another_path_is_not_opened() {
+    // `v` を参照する所が2つあるので、検査は `v` の唯一の使用でない。決定が静的でも、どの枝も `v` を受け取らなくても、
+    // 開くと `xs` を2か所で使い、Perceus が `lin` の値を `dup` と `decref` する
+    for text in [
+        "close_all : List Fs.File -> <IO> Unit\nclose_all [] = println \"closed\"\nclose_all (f :: rest) =\n  Fs.close f\n  close_all rest\n\nclose_opt : Option (List Fs.File) -> <IO> Unit\nclose_opt o =\n  match o with\n    | None -> println \"none\"\n    | Some l -> close_all l\n\ngo : Bool -> List Fs.File -> <IO> Unit\ngo c xs =\n  let v = Some xs\n  println \"between\"\n  if c then\n    match v with\n      | Some l -> close_all l\n      | None -> println \"none\"\n  else close_opt v\n\nmain : Unit -> <IO> Unit\nmain () =\n  go True [Fs.open \"input.txt\"]\n  go False [Fs.open \"input.txt\"]",
+        "close_all : List Fs.File -> <IO> Unit\nclose_all [] = println \"closed\"\nclose_all (f :: rest) =\n  Fs.close f\n  close_all rest\n\nclose_opt : Option (List Fs.File) -> <IO> Unit\nclose_opt o =\n  match o with\n    | None -> println \"none\"\n    | Some l -> close_all l\n\ngo : Bool -> List Fs.File -> <IO> Unit\ngo c xs =\n  let v = Some xs\n  println \"between\"\n  if c then\n    match v with\n      | Some [] -> println \"empty\"\n      | Some l -> close_all l\n      | None -> println \"none\"\n  else close_opt v\n\nmain : Unit -> <IO> Unit\nmain () =\n  go True [Fs.open \"input.txt\"]\n  go True []\n  go False [Fs.open \"input.txt\"]",
+        "close_all : List Fs.File -> <IO> Unit\nclose_all [] = println \"closed\"\nclose_all (f :: rest) =\n  Fs.close f\n  close_all rest\n\nident : Option (List Fs.File) -> Option (List Fs.File)\nident o = o\n\ngo : Bool -> List Fs.File -> <IO> Unit\ngo c xs =\n  let v = Some xs\n  println \"between\"\n  match (if c then v else ident v) with\n    | Some l -> close_all l\n    | None -> println \"none\"\n\nmain : Unit -> <IO> Unit\nmain () =\n  go True [Fs.open \"input.txt\"]\n  go False [Fs.open \"input.txt\"]",
+    ] {
+        let program = eml_test_support::lir(text);
+        for function in &program.functions {
+            for block in &function.blocks {
+                for stmt in &block.stmts {
+                    if let Stmt::Dup(var) | Stmt::Decref(var) = stmt {
+                        let info = &function.vars[var.0 as usize];
+                        assert_eq!(
+                            info.mark,
+                            Mark::Unr,
+                            "{}: {} of {}\n{}",
+                            function.name,
+                            if matches!(stmt, Stmt::Dup(_)) {
+                                "dup"
+                            } else {
+                                "decref"
+                            },
+                            info.name,
+                            eml_lir::pretty(&program)
+                        );
+                    }
+                }
+            }
+        }
+    }
+    insta::assert_snapshot!(function(&lir_text("close_all : List Fs.File -> <IO> Unit\nclose_all [] = println \"closed\"\nclose_all (f :: rest) =\n  Fs.close f\n  close_all rest\n\nclose_opt : Option (List Fs.File) -> <IO> Unit\nclose_opt o =\n  match o with\n    | None -> println \"none\"\n    | Some l -> close_all l\n\ngo : Bool -> List Fs.File -> <IO> Unit\ngo c xs =\n  let v = Some xs\n  println \"between\"\n  if c then\n    match v with\n      | Some l -> close_all l\n      | None -> println \"none\"\n  else close_opt v\n\nmain : Unit -> <IO> Unit\nmain () =\n  go True [Fs.open \"input.txt\"]\n  go False [Fs.open \"input.txt\"]", eml_lir::Pass::Perceus), "go"), @r#"
+    fn go(c.0: enum, xs.1: tobj lin) -> unit {
+      let d.2: tobj lin = con Prelude.Option #1(xs.1)
+      let s.3: obj = const "between"
+      let t.4: unit = extern Prelude.println(s.3)
+      switch c.0 Prelude.Bool { #0 -> b1, #1 -> b2 }
+    b1:
+      tail call close_opt(d.2)
+    b2:
+      switch d.2 Prelude.Option { #0 -> b3, #1(l.5: tobj lin) -> b4 }
+    b3:
+      let u.6: unit = drop d.2
+      let s.8: obj = const "none"
+      let t.9: unit = extern Prelude.println(s.8)
+      return t.9
+    b4:
+      release d.2 Prelude.Option #1(l.5)
+      tail call close_all(l.5)
     }
     "#);
 }

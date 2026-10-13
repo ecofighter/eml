@@ -224,11 +224,11 @@ impl FnLowering<'_> {
         let mut args = args.into_iter();
         for local in locals {
             let value = args.next().expect("one argument per pattern variable");
-            self.locals.insert(local, value);
+            self.bind_local(local, value);
         }
         if let Some(value) = args.next() {
             let alias = alias.expect("only an alias is passed after the pattern variables");
-            self.locals.insert(alias, value);
+            self.bind_local(alias, value);
         }
     }
 
@@ -776,15 +776,18 @@ impl FnLowering<'_> {
     }
 
     /// 決定木が `con` で作った変数 `var` を開いて、引数を直接読むか。`unr` の変数はいつも開く。`unr` でない変数は、
-    /// 葉が1つの静的な試みか、どの枝も受け取らないときだけ開く。ある葉が引数を読み、別の葉が変数そのものを受け取ると、
-    /// `con` が生き残ったまま引数を2か所で使い、Perceus が `unr` でない値を `dup` するためである
-    /// (docs/superpowers/specs/2026-10-13-s8d-kind-marks-design.md の「translate が決める印」)。
+    /// この検査が変数の唯一の使用で (`shared` に入っていない)、かつ葉が1つの静的な試みか、どの枝も受け取らないときだけ
+    /// 開く。ある葉や別の制御の道が変数そのものを使い、ほかの葉が引数を読むと、`con` が生き残ったまま引数を2か所で使い、
+    /// Perceus が `unr` でない値を `dup` するためである
+    /// (docs/superpowers/specs/2026-10-13-s8d-kind-marks-design.md の「translate が決める印」)。`con` の変数は、
+    /// 局所変数に束縛しなければ、それを作った式の位置でだけ使われる。
     fn opens(&self, var: VarId, attempt: Attempt) -> bool {
         self.builder.mark(var) == Mark::Unr
-            || match attempt {
-                Attempt::Static => true,
-                Attempt::Full { received } => !received.contains(&var),
-            }
+            || !self.shared.contains(&var)
+                && match attempt {
+                    Attempt::Static => true,
+                    Attempt::Full { received } => !received.contains(&var),
+                }
     }
 
     /// 根の出現 `root` の中で、ある枝が受け取る `con` で作った変数。決定を作る前に、すべての枝のパターンを各位置に

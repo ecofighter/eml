@@ -1,0 +1,11 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{stderr}\")"
+input_file: tests/ui/run/files/constructor_variable_used_on_another_branch.em
+---
+--- stdout ---
+between
+closed
+between
+closed
+--- stderr ---

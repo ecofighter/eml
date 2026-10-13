@@ -43,6 +43,18 @@ enum ContinuationForm {
     Wrapped,
 }
 
+/// 本体の中の局所変数ごとの参照の数。`continuation_forms` と同じく arena の式を全部見て数えるので、入れ子のラムダや
+/// handle の中の参照も、別の制御の道の参照も同じ数に入る。
+fn references(body: &Body) -> ArenaMap<LocalId, u32> {
+    let mut counts = ArenaMap::default();
+    for (_, expr) in body.exprs.iter() {
+        if let ExprKind::Path(Res::Local(local)) = expr.kind {
+            *counts.entry(local).or_insert(0) += 1;
+        }
+    }
+    counts
+}
+
 /// 本体の中の節の `k` ごとの変換の形。`k` の出現がすべて、引数をそろえた呼び出しの呼ばれる式か `drop` の値なら
 /// 直接の形にする。式の種類ごとに子をたどらず、arena の式を全部見て出現を数える。式の種類が増えて直接の呼び出しと
 /// して数え漏らした出現があっても、包む形になるだけで、生の継続を関数の値として `apply` することはない。`k` の
@@ -197,6 +209,7 @@ pub(crate) fn translate(
             .map(|(&pat, &ty)| (Some(pat), repr(store, ty, hir), mark(store, ty)))
             .collect();
         let forms = continuation_forms(body);
+        let references = references(body);
         let numbers = numbering(hir, body, &function.targets);
         let types = function
             .types
@@ -213,6 +226,7 @@ pub(crate) fn translate(
             root_name: &instance.name,
             numbering: &numbers,
             continuation_forms: &forms,
+            references: &references,
             source: Source {
                 files,
                 file_id: hir.modules[id.module].file,
@@ -317,6 +331,8 @@ struct BodyCtx<'a> {
     numbering: &'a Numbering,
     /// 本体の中の節の `k` の変換の形。持ち上げた入れ子の関数も同じ表を見て、捕まえた `k` を同じ形で扱う。
     continuation_forms: &'a ArenaMap<LocalId, ContinuationForm>,
+    /// 局所変数ごとの参照の数 (`references`)。
+    references: &'a ArenaMap<LocalId, u32>,
     source: Source<'a>,
 }
 
@@ -357,6 +373,9 @@ struct FnLowering<'a> {
     /// 決定木が分解した値のフィールドの変数から、分解した値への表。決定木の葉の drop が、枝の束縛した変数をどの値から
     /// 取り出したかをたどるのに使う (docs/superpowers/specs/2026-10-13-s8d-kind-marks-design.md の「明示の drop」)。
     parents: HashMap<VarId, VarId>,
+    /// 参照が1つでない局所変数に束縛した `con` の変数。決定木はこれを開かない
+    /// (docs/superpowers/specs/2026-10-13-s8d-kind-marks-design.md の「translate が決める印」)。
+    shared: HashSet<VarId>,
     /// 作っている関数が yield しうるか (docs/spec/core-ir.md の
     /// 「`yields` の印」)。この関数の中の handle の節も同じ印にする。
     yields: bool,
@@ -373,6 +392,7 @@ impl<'a> FnLowering<'a> {
             contexts: Vec::new(),
             cons: HashMap::new(),
             parents: HashMap::new(),
+            shared: HashSet::new(),
         }
     }
 
@@ -702,7 +722,18 @@ impl<'a> FnLowering<'a> {
     /// `_` と `()` で受けた値は以後使われないので、Perceus が decref する。
     fn bind_pat(&mut self, pat: PatId, value: Atom) {
         for local in self.ctx.body.pat_bindings(pat) {
-            self.locals.insert(local, value);
+            self.bind_local(local, value);
         }
+    }
+
+    /// 局所変数を値に対応させる。参照が1つでない局所変数に `con` の変数を束縛すると、その変数は `shared` に入る。
+    /// `con` の変数をほかの制御の道でも使うときに、決定木が開いて引数を読むと、Perceus が引数を `dup` するためである。
+    fn bind_local(&mut self, local: LocalId, value: Atom) {
+        if let Atom::Var(var) = value
+            && self.ctx.references.get(local).copied().unwrap_or(0) != 1
+        {
+            self.shared.insert(var);
+        }
+        self.locals.insert(local, value);
     }
 }
