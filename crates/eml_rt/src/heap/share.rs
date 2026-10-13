@@ -5,6 +5,7 @@ use std::marker::PhantomData;
 use std::mem;
 use std::ptr::NonNull;
 
+use super::check::State;
 use super::{Heap, check, scan_count, scan_slot};
 use crate::error::HeapError;
 use crate::meta::{self, Header};
@@ -15,6 +16,8 @@ use crate::word::Word;
 
 pub(crate) trait Graph {
     type Node: Copy + PartialEq;
+    /// 検査モードの前置きが生存を示すか。速いモードと、前置きのないグラフのモデルでは常に真である。
+    fn live(&self, node: Self::Node) -> bool;
     fn rc(&self, node: Self::Node) -> i32;
     fn set_rc(&mut self, node: Self::Node, rc: i32);
     fn lin(&self, node: Self::Node) -> bool;
@@ -23,9 +26,21 @@ pub(crate) trait Graph {
     fn push_children(&self, node: Self::Node, out: &mut Vec<Self::Node>);
 }
 
-/// 根から届く物体に共有の印を付ける。共有と不死の物体でたどりを止める。`lin` の物体には印を付けずに所有者を移し、
-/// その子はたどり続ける。`Lin` の物体の中の `Unr` の子は、送り手がほかの所からも参照していることがあるためである。
-/// `check_lin` なら、同じ `lin` の物体に2回届いたときにその物体を返す。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ShareError {
+    /// 生きていない物体に届いた。
+    Dead,
+    /// 同じ `lin` の物体に2回届いた。
+    LinReachedTwice,
+    /// すでに共有の側にある `lin` の物体に届いた。
+    LinShared,
+}
+
+/// 根から届く物体に共有の印を付ける。不死の物体と共有の物体でたどりを止め、不死の物体は `lin` ビットが立っていても
+/// 変えない。`lin` の物体には印を付けずに所有者を移し、その子はたどり続ける。`Lin` の物体の中の `Unr` の子は、
+/// 送り手がほかの所からも参照していることがあるためである。
+/// 届いた物体が生きていなければ `Dead` を返す。`check_lin` なら、すでに共有の `lin` の物体に届いたときは `LinShared`、
+/// 同じ `lin` の物体に2回届いたときは `LinReachedTwice` を返す。
 pub(crate) fn share_walk<G: Graph>(
     graph: &mut G,
     root: G::Node,
@@ -33,21 +48,34 @@ pub(crate) fn share_walk<G: Graph>(
     check_lin: bool,
     stack: &mut Vec<G::Node>,
     visited_lin: &mut Vec<G::Node>,
-) -> Result<(), G::Node> {
+) -> Result<(), ShareError> {
     stack.clear();
     visited_lin.clear();
     stack.push(root);
     while let Some(node) = stack.pop() {
+        if !graph.live(node) {
+            return Err(ShareError::Dead);
+        }
+        let rc = graph.rc(node);
+        if rc == 0 {
+            continue;
+        }
         if graph.lin(node) {
+            if rc < 0 {
+                if check_lin {
+                    return Err(ShareError::LinShared);
+                }
+                continue;
+            }
             if check_lin {
                 if visited_lin.contains(&node) {
-                    return Err(node);
+                    return Err(ShareError::LinReachedTwice);
                 }
                 visited_lin.push(node);
             }
             graph.set_owner(node, receiver);
             graph.push_children(node, stack);
-        } else if let Some(shared) = rc::mark_step(graph.rc(node)) {
+        } else if let Some(shared) = rc::mark_step(rc) {
             graph.set_rc(node, shared);
             graph.push_children(node, stack);
         }
@@ -55,11 +83,15 @@ pub(crate) fn share_walk<G: Graph>(
     Ok(())
 }
 
-/// ヒープの物体のグラフ。`share` の安全の条件 (届く物体はどれも生きている) の下でだけ使う。
+/// ヒープの物体のグラフ。`share` の安全の条件 (届く物体はどれも生きている) の下でだけ使う。検査モードは前置きで生存を確かめる。
 struct Objects<M>(PhantomData<M>);
 
 impl<M: Mode> Graph for Objects<M> {
     type Node = NonNull<Header>;
+
+    fn live(&self, h: NonNull<Header>) -> bool {
+        !M::CHECKED || unsafe { check::prefix(h) }.state() == State::Alive
+    }
 
     fn rc(&self, h: NonNull<Header>) -> i32 {
         unsafe { meta::rc(h) }.load(Ordering::Relaxed)
@@ -113,6 +145,10 @@ impl<M: Mode> Heap<M> {
         );
         self.share_stack = stack;
         self.visited_lin = visited;
-        result.map_err(|_| HeapError::LinReachedTwice)
+        result.map_err(|error| match error {
+            ShareError::Dead => HeapError::UseAfterFree,
+            ShareError::LinReachedTwice => HeapError::LinReachedTwice,
+            ShareError::LinShared => HeapError::LinShared,
+        })
     }
 }

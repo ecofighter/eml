@@ -310,3 +310,57 @@ fn release_checks_the_layout() {
         heap.release(p, 3, &[false, false]).unwrap();
     }
 }
+
+#[test]
+fn sharing_reaches_no_freed_object() {
+    let mut heap = H::new();
+    let c = list(&mut heap, 1);
+    let p = heap.alloc_data(0, 1, 0, false);
+    unsafe {
+        heap.decref(c).unwrap();
+        // 解放した c を古い語のまま置く。rc は検査モードでは 1 のままで、前置きだけが解放を示す
+        heap.set_field(p, 0, c).unwrap();
+        assert_eq!(heap.share(p, 0), Err(HeapError::UseAfterFree));
+        heap.set_field(p, 0, Word::UNIT).unwrap();
+        heap.decref(p).unwrap();
+    }
+}
+
+#[test]
+fn share_leaves_an_immortal_lin_object_alone() {
+    let mut heap = H::new();
+    let immortal = unsafe { heap.alloc_immortal(1, Meta::new(0, 0, Kind::Data, true)) };
+    let parent = heap.alloc_data(0, 1, 0, false);
+    unsafe {
+        heap.acquire_immortal(immortal).unwrap();
+        heap.set_field(parent, 0, immortal).unwrap();
+        heap.share(parent, 7).unwrap();
+        assert_eq!(rc(&heap, immortal), 0);
+        let count = crate::heap::check::prefix(immortal.header())
+            .first
+            .load(AtomicOrdering::Relaxed);
+        assert_eq!(count, 1);
+        heap.set_field(parent, 0, Word::UNIT).unwrap();
+        heap.decref(parent).unwrap();
+        heap.decref(immortal).unwrap();
+    }
+}
+
+#[test]
+fn a_shared_lin_object_reached_by_share_is_an_error() {
+    let mut heap = H::new();
+    let x = heap.alloc_data(0, 0, 1, false);
+    let parent = heap.alloc_data(0, 1, 0, false);
+    unsafe {
+        heap.share(x, 0).unwrap();
+        // share は lin の物体に印を付けないので、この形は印付けの誤りでしか起きない
+        let m = meta::meta(x.header());
+        meta::set_meta(x.header(), m.with_lin(true));
+        heap.set_field(parent, 0, x).unwrap();
+        assert_eq!(heap.share(parent, 0), Err(HeapError::LinShared));
+        heap.set_field(parent, 0, Word::UNIT).unwrap();
+        meta::set_meta(x.header(), m);
+        heap.decref(x).unwrap();
+        heap.decref(parent).unwrap();
+    }
+}
