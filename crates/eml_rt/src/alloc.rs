@@ -5,7 +5,7 @@ use std::num::NonZero;
 use std::ptr::{self, NonNull};
 
 use crate::meta::{self, Header, Kind, Meta};
-use crate::sync::{Layout, alloc, dealloc, handle_alloc_error};
+use std::alloc::{Layout, alloc, dealloc, handle_alloc_error};
 
 pub(crate) const PAGE_BYTES: usize = 1 << 16;
 const WORD: usize = 8;

@@ -8,7 +8,6 @@ mod heap;
 mod meta;
 mod mode;
 mod rc;
-mod sync;
 mod word;
 
 #[cfg(test)]

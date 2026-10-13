@@ -7,7 +7,7 @@ use super::{Heap, scan_count};
 use crate::error::HeapError;
 use crate::meta::{self, HEADER_WORDS, Header, Kind, Meta};
 use crate::mode::Mode;
-use crate::sync::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicU32, Ordering};
 
 #[repr(C)]
 pub(crate) struct Prefix {

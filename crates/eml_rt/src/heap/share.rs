@@ -12,8 +12,8 @@ use crate::error::HeapError;
 use crate::meta::{self, Header};
 use crate::mode::Mode;
 use crate::rc;
-use crate::sync::Ordering;
 use crate::word::Word;
+use std::sync::atomic::Ordering;
 
 pub(crate) trait Graph {
     type Node: Copy + PartialEq;

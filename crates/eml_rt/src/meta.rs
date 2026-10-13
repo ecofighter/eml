@@ -3,8 +3,8 @@
 use std::fmt;
 use std::ptr::NonNull;
 
-use crate::sync::AtomicI32;
 use crate::word::Word;
+use std::sync::atomic::AtomicI32;
 
 /// 物体の種類。`info` の下位4ビットに入る。種類ごとの欄 (名前、走査の始まり、token、破棄処理) は、型ごとの表を
 /// 持たずにここの `match` で決める。
@@ -117,7 +117,7 @@ pub(crate) struct Header {
     meta: u32,
 }
 
-/// ヘッダの語の数。loom の型に差し替えたビルドではヘッダが大きくなるので、8 と書かずに大きさから出す。
+/// ヘッダの語の数。8 と書かずに大きさから出し、ヘッダの形を変えたときに数え直す所を1か所にする。
 pub(crate) const HEADER_WORDS: usize = size_of::<Header>().div_ceil(8);
 
 /// # Safety

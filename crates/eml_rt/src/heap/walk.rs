@@ -10,8 +10,8 @@ use crate::error::HeapError;
 use crate::foreign;
 use crate::meta::{self, Header, Kind};
 use crate::mode::{Checked, Mode};
-use crate::sync::Ordering;
 use crate::word::Word;
+use std::sync::atomic::Ordering;
 
 impl<M: Mode> Heap<M> {
     /// 生きている物体 (token の箱、不死の物体、ダミーを含む) を列挙する。S11 の根からの走査が使う。

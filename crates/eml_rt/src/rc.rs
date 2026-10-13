@@ -2,7 +2,7 @@
 //! 状態を返す純粋な関数にし、ヒープと単体テストが同じ関数を使い、Verus が写しで同じ関数を証明する。rc は 0 が不死、
 //! 正が局所、負が共有である。
 
-use crate::sync::{AtomicI32, Ordering};
+use std::sync::atomic::{AtomicI32, Ordering};
 
 /// 局所の数の上限。ここに達した数は動かさない (spec の「上限」)。
 pub(crate) const LOCAL_MAX: i32 = i32::MAX;

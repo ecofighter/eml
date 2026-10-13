@@ -24,8 +24,8 @@ use crate::foreign;
 use crate::meta::{self, HEADER_WORDS, Header, Kind, Meta};
 use crate::mode::Mode;
 use crate::rc::{self, DecrefStep, DupStep};
-use crate::sync::Ordering;
 use crate::word::Word;
+use std::sync::atomic::Ordering;
 
 pub use reuse::Token;
 

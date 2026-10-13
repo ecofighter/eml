@@ -2,8 +2,8 @@ use std::sync::atomic::Ordering;
 
 use super::{LONG, list, mortal, probe};
 use crate::meta;
-use crate::sync::Ordering as AtomicOrdering;
 use crate::{Checked, Heap, HeapError, Kind, Meta, Mode, Word};
+use std::sync::atomic::Ordering as AtomicOrdering;
 
 fn rc<M: Mode>(_heap: &Heap<M>, w: Word) -> i32 {
     unsafe { meta::rc(w.header()) }.load(AtomicOrdering::Relaxed)

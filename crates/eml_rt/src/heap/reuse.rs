@@ -9,8 +9,8 @@ use super::{Heap, object_words};
 use crate::error::HeapError;
 use crate::meta::{self, Header, Kind, Meta};
 use crate::mode::Mode;
-use crate::sync::Ordering;
 use crate::word::Word;
+use std::sync::atomic::Ordering;
 
 /// reuse の token。どちらのモードでも1語で、VM のレジスタと後のネイティブの値の大きさをモードで変えない。速いモードでは
 /// 箱を指す語、検査モードでは token の表の添字の即値、空の token は `Word::EMPTY` である。
