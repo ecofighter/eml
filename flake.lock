@@ -76,7 +76,9 @@
         "flake-parts": "flake-parts",
         "nixpkgs": "nixpkgs",
         "verus-aarch64-darwin": "verus-aarch64-darwin",
-        "verus-x86_64-linux": "verus-x86_64-linux"
+        "verus-x86_64-linux": "verus-x86_64-linux",
+        "verusfmt-aarch64-darwin": "verusfmt-aarch64-darwin",
+        "verusfmt-x86_64-linux": "verusfmt-x86_64-linux"
       }
     },
     "rust-analyzer-src": {
@@ -120,6 +122,32 @@
       "original": {
         "type": "tarball",
         "url": "https://github.com/verus-lang/verus/releases/download/release%2F0.2026.10.04.426d8b0/verus-0.2026.10.04.426d8b0-x86-linux.zip"
+      }
+    },
+    "verusfmt-aarch64-darwin": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1790387235,
+        "narHash": "sha256-3/mmmzNLpJMCjoipkFYIkF2lcfJp/zZ8RHr5b+dvsJQ=",
+        "type": "tarball",
+        "url": "https://github.com/verus-lang/verusfmt/releases/download/v0.7.4/verusfmt-aarch64-apple-darwin.tar.xz"
+      },
+      "original": {
+        "type": "tarball",
+        "url": "https://github.com/verus-lang/verusfmt/releases/download/v0.7.4/verusfmt-aarch64-apple-darwin.tar.xz"
+      }
+    },
+    "verusfmt-x86_64-linux": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1790387224,
+        "narHash": "sha256-RPPru2IZB4Y7uKqKnA7WczPLv7VpTUwE1/uSIlbgssk=",
+        "type": "tarball",
+        "url": "https://github.com/verus-lang/verusfmt/releases/download/v0.7.4/verusfmt-x86_64-unknown-linux-gnu.tar.xz"
+      },
+      "original": {
+        "type": "tarball",
+        "url": "https://github.com/verus-lang/verusfmt/releases/download/v0.7.4/verusfmt-x86_64-unknown-linux-gnu.tar.xz"
       }
     }
   },

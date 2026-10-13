@@ -16,6 +16,15 @@
       url = "https://github.com/verus-lang/verus/releases/download/release%2F0.2026.10.04.426d8b0/verus-0.2026.10.04.426d8b0-x86-linux.zip";
       flake = false;
     };
+    # verusfmt の release の tar.xz。rustfmt は `verus!` の中を整えないので、eml_rt のコードはこれで整える
+    verusfmt-aarch64-darwin = {
+      url = "https://github.com/verus-lang/verusfmt/releases/download/v0.7.4/verusfmt-aarch64-apple-darwin.tar.xz";
+      flake = false;
+    };
+    verusfmt-x86_64-linux = {
+      url = "https://github.com/verus-lang/verusfmt/releases/download/v0.7.4/verusfmt-x86_64-unknown-linux-gnu.tar.xz";
+      flake = false;
+    };
   };
   outputs =
     inputs@{ flake-parts, ... }:
@@ -58,6 +67,9 @@
             toolchain = stable.rustc;
             src = inputs."verus-${system}";
           };
+          verusfmt = pkgs.callPackage ./nix/verusfmt.nix {
+            src = inputs."verusfmt-${system}";
+          };
           # cargo は外部サブコマンドを PATH より先に $CARGO_HOME/bin から探す。rustup が入っていると
           # ~/.cargo/bin の cargo-clippy や cargo-miri (rustup のプロキシ) が fenix のものより先に当たるので、
           # 2つの devShell は rustup のない CARGO_HOME を使う
@@ -80,7 +92,7 @@
               ];
               meta.license = pkgs.lib.licenses.mit;
             };
-            inherit verus;
+            inherit verus verusfmt;
             default = eml;
           };
 
@@ -90,6 +102,7 @@
                 devToolchain
                 pkgs.cargo-insta
                 verus
+                verusfmt
               ];
               inherit shellHook;
             };
