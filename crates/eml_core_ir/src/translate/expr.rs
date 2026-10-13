@@ -4,17 +4,17 @@ use eml_extern::{Extern, ExternType};
 use eml_hir::EvalStep;
 use eml_hir::{
     Closure, ConstructorId, ExprId, ExprKind, FunctionId, FunctionKind, Literal, OperationId,
-    PatId, Program as HirProgram, Res, Segment, ValueItem,
+    Program as HirProgram, Res, Segment, ValueItem,
 };
 use eml_types::{FieldTarget, Lin, TypeId, TypeKind};
 
 use crate::{Call, Rhs, Stmt};
-use eml_lir::{Atom, Ctor, FnIdx, Repr, TUPLE, VarId};
+use eml_lir::{Atom, Ctor, FnIdx, Mark, Repr, TUPLE, VarId};
 
 use super::pattern::Known;
 use super::program::{effect_index, perform_call, plain_call};
-use super::types::{named, repr, split_arrows, var_info};
-use super::{ContinuationForm, Exit, FnLowering};
+use super::types::{mark, named, repr, split_arrows, var_info};
+use super::{ContinuationForm, Exit, FnLowering, Param};
 
 /// extern の関数なら、その表の行。誤りのないプログラムの extern は、どれも標準ライブラリの宣言で行を持つ。
 pub(super) fn extern_row(hir: &HirProgram, function: FunctionId) -> Option<Extern> {
@@ -63,10 +63,10 @@ impl FnLowering<'_> {
             .expect("every reached expression is typed")
     }
 
-    /// `rhs` の値を、Repr が `repr` の新しい変数に束縛する文を今のブロックに足す。`con` で作った変数は中身を覚え、
-    /// 後の決定木がその頭で case を選べるようにする (docs/spec/core-ir.md)。
-    pub(super) fn bind(&mut self, name: &str, repr: Repr, rhs: Rhs) -> Atom {
-        let var = self.builder.var(named(name, repr));
+    /// `rhs` の値を、Repr が `repr` で印が `mark` の新しい変数に束縛する文を今のブロックに足す。`con` で作った変数は
+    /// 中身を覚え、後の決定木がその頭で case を選べるようにする (docs/spec/core-ir.md)。
+    pub(super) fn bind(&mut self, name: &str, repr: Repr, mark: Mark, rhs: Rhs) -> Atom {
+        let var = self.builder.var(named(name, repr, mark));
         if let Rhs::Con { ctor, args } = &rhs {
             let known = Known {
                 tag: ctor.tag,
@@ -80,8 +80,14 @@ impl FnLowering<'_> {
 
     /// `value` を `ctor` で分解する `unpack` を足し、フィールドの変数を返す。変数の Repr は配置のフィールドの Repr で、
     /// `overrides` に挙げたフィールドだけは、その Repr にする。使うフィールドを具体化した型の Repr で受け、配置との変換を
-    /// パターンのフィールドと同じく boxing に任せるためである。
-    fn unpack_fields(&mut self, value: Atom, ctor: Ctor, overrides: &[(u32, Repr)]) -> Vec<VarId> {
+    /// パターンのフィールドと同じく boxing に任せるためである。印は `marks` のフィールドの順の印である。
+    fn unpack_fields(
+        &mut self,
+        value: Atom,
+        ctor: Ctor,
+        overrides: &[(u32, Repr)],
+        marks: &[Mark],
+    ) -> Vec<VarId> {
         // 射影と更新の値は、型検査がフィールドを持つ `data` かタプルに決めたので、定数ではなく変数である
         let Atom::Var(value) = value else {
             unreachable!("a value with fields is a variable")
@@ -97,7 +103,7 @@ impl FnLowering<'_> {
                     .iter()
                     .find(|&&(field, _)| field as usize == index)
                     .map_or(repr, |&(_, repr)| repr);
-                self.builder.var(named("f", repr))
+                self.builder.var(named("f", repr, marks[index]))
             })
             .collect();
         self.builder.emit(Stmt::Unpack {
@@ -111,7 +117,8 @@ impl FnLowering<'_> {
     /// 型 `ty` の値を束縛する `bind`。
     fn bind_typed(&mut self, name: &str, ty: TypeId, rhs: Rhs) -> Atom {
         let repr = repr(self.ctx.store, ty, self.ctx.hir);
-        self.bind(name, repr, rhs)
+        let mark = mark(self.ctx.store, ty);
+        self.bind(name, repr, mark, rhs)
     }
 
     /// 値として使う extern の参照 `site` ごとの包む関数 (docs/spec/core-ir.md)。型は参照の式の型から取る。extern の
@@ -142,14 +149,15 @@ impl FnLowering<'_> {
             // 確かめるのは、知っている関数と構成子の部分適用だけである。extern と操作の包む関数の矢印は宣言から決まり、
             // 継続の部分適用 `k v` は確かめない所に入る (docs/spec/core-ir.md の
             // 「食い違いがないことの検査」)
+            let (captured, closure_ty) = split_arrows(self.ctx.store, callee_ty, args.len());
             if cfg!(debug_assertions)
                 && matches!(callee, Callee::Function(_) | Callee::Constructor(_))
             {
-                let (captured, closure_ty) = split_arrows(self.ctx.store, callee_ty, args.len());
                 self.check_captures(closure_ty, &captured, "partial application");
             }
             let wrapper = self.callee_wrapper(callee);
-            return self.closure(wrapper, args);
+            let closure_mark = mark(self.ctx.store, closure_ty);
+            return self.closure(wrapper, args, closure_mark);
         }
         let rest = args.split_off(arity);
         let (name, rhs) = self.saturated_rhs(id, callee, args);
@@ -441,40 +449,41 @@ impl FnLowering<'_> {
             ExprKind::Literal(Literal::Unit) => Atom::Unit,
             ExprKind::Literal(Literal::String(text)) => {
                 let index = self.program.strings.intern(text);
-                self.bind("s", ExternType::String.row().repr, Rhs::ConstString(index))
+                self.bind(
+                    "s",
+                    ExternType::String.row().repr,
+                    Mark::Unr,
+                    Rhs::ConstString(index),
+                )
             }
             ExprKind::Path(Res::Local(local)) => self.locals[*local],
             ExprKind::Path(Res::Item(ValueItem::Function(function))) => {
                 if let Some(row) = extern_row(self.ctx.hir, *function) {
-                    let wrapper = self.extern_wrapper(id, row);
-                    return self.closure(wrapper, Vec::new());
+                    return Atom::Fn(self.extern_wrapper(id, row));
                 }
                 let name = self.ctx.hir[*function].name.clone();
                 self.function_value(id, &name)
             }
             ExprKind::Path(Res::Item(ValueItem::Method(method))) => {
                 if let Some(row) = self.ctx.extern_target(id) {
-                    let wrapper = self.extern_wrapper(id, row);
-                    return self.closure(wrapper, Vec::new());
+                    return Atom::Fn(self.extern_wrapper(id, row));
                 }
                 let name = self.ctx.hir[*method].name.clone();
                 self.function_value(id, &name)
             }
-            ExprKind::Path(Res::Item(ValueItem::Operation(op))) => {
-                let wrapper = self
-                    .program
-                    .operation_wrapper(self.ctx.hir, self.ctx.store, *op);
-                self.closure(wrapper, Vec::new())
-            }
+            ExprKind::Path(Res::Item(ValueItem::Operation(op))) => Atom::Fn(
+                self.program
+                    .operation_wrapper(self.ctx.hir, self.ctx.store, *op),
+            ),
             ExprKind::Path(Res::Item(ValueItem::Constructor(ctor))) => {
                 let constructor = &self.ctx.hir[*ctor];
                 if constructor.fields.is_empty() {
                     Atom::Tag(constructor.tag)
                 } else {
-                    let wrapper =
+                    Atom::Fn(
                         self.program
-                            .constructor_wrapper(self.ctx.hir, self.ctx.store, *ctor);
-                    self.closure(wrapper, Vec::new())
+                            .constructor_wrapper(self.ctx.hir, self.ctx.store, *ctor),
+                    )
                 }
             }
             ExprKind::Call { callee, .. } => {
@@ -513,8 +522,12 @@ impl FnLowering<'_> {
                     "{}$handle{}",
                     self.ctx.root_name, self.ctx.numbering.handlers[id]
                 );
-                let unit = [(None, Repr::Unit)];
-                let handled_ret = repr(self.ctx.store, self.ty(handled.body), self.ctx.hir);
+                let unit = [(None, Repr::Unit, Mark::Unr)];
+                let handled_ty = self.ty(handled.body);
+                let handled_ret = (
+                    repr(self.ctx.store, handled_ty, self.ctx.hir),
+                    mark(self.ctx.store, handled_ty),
+                );
                 // 本体の row は扱うエフェクトを含むので、本体はいつも yield しうる
                 let handled_closure = self.lift(
                     prefix.clone(),
@@ -523,6 +536,7 @@ impl FnLowering<'_> {
                     &unit,
                     handled.body,
                     handled_ret,
+                    None,
                 );
                 // 状態のある handler は HIR の節の引数が状態を含む。状態のない handler だけ、
                 // 状態を `()` にして最後の引数で受ける (docs/spec/core-ir.md)
@@ -609,7 +623,14 @@ impl FnLowering<'_> {
                 };
                 let ty = self.ty(id);
                 let result = repr(self.ctx.store, ty, self.ctx.hir);
-                let fields = self.unpack_fields(value, ctor, &[(index, result)]);
+                // 取り出さない残りのフィールドの型は `discarded` にある
+                let rest = &self.ctx.types.discarded[id];
+                let mut marks = vec![Mark::Unr; rest.len() + 1];
+                marks[index as usize] = mark(self.ctx.store, ty);
+                for &(field, field_ty) in rest {
+                    marks[field as usize] = mark(self.ctx.store, field_ty);
+                }
+                let fields = self.unpack_fields(value, ctor, &[(index, result)], &marks);
                 Atom::Var(fields[index as usize])
             }
             ExprKind::Update { base, fields } => {
@@ -628,9 +649,14 @@ impl FnLowering<'_> {
                         (index, repr(self.ctx.store, ty, self.ctx.hir))
                     })
                     .collect();
+                let marks: Vec<Mark> = update
+                    .fields
+                    .iter()
+                    .map(|&ty| mark(self.ctx.store, ty))
+                    .collect();
                 let written = update.written.clone();
                 let mut args: Vec<Atom> = self
-                    .unpack_fields(value, ctor, &reprs)
+                    .unpack_fields(value, ctor, &reprs, &marks)
                     .into_iter()
                     .map(Atom::Var)
                     .collect();
@@ -659,7 +685,7 @@ impl FnLowering<'_> {
             }
             ExprKind::Drop(value) => {
                 let value = self.atom(*value);
-                self.bind("t", Repr::Unit, Rhs::Drop(value))
+                self.bind("t", Repr::Unit, Mark::Unr, Rhs::Drop(value))
             }
             ExprKind::Lambda(closure) => {
                 let Closure {
@@ -668,10 +694,16 @@ impl FnLowering<'_> {
                 } = closure;
                 let lambda_ty = self.ty(id);
                 let (param_types, ret_ty) = split_arrows(self.ctx.store, lambda_ty, params.len());
-                let params: Vec<(Option<PatId>, Repr)> = params
+                let params: Vec<Param> = params
                     .iter()
                     .zip(&param_types)
-                    .map(|(&pat, &ty)| (Some(pat), repr(self.ctx.store, ty, self.ctx.hir)))
+                    .map(|(&pat, &ty)| {
+                        (
+                            Some(pat),
+                            repr(self.ctx.store, ty, self.ctx.hir),
+                            mark(self.ctx.store, ty),
+                        )
+                    })
                     .collect();
                 let name = format!(
                     "{}$lambda{}",
@@ -685,7 +717,10 @@ impl FnLowering<'_> {
                         .collect();
                     self.check_captures(lambda_ty, &captured, "lambda");
                 }
-                let ret = repr(self.ctx.store, ret_ty, self.ctx.hir);
+                let ret = (
+                    repr(self.ctx.store, ret_ty, self.ctx.hir),
+                    mark(self.ctx.store, ret_ty),
+                );
                 let yields = self.ctx.resolve(
                     *self
                         .ctx
@@ -694,7 +729,16 @@ impl FnLowering<'_> {
                         .get(id)
                         .expect("every lambda has its row classified"),
                 );
-                self.lift(name, yields, captured, &params, *lambda_body, ret)
+                let lambda_mark = mark(self.ctx.store, lambda_ty);
+                self.lift(
+                    name,
+                    yields,
+                    captured,
+                    &params,
+                    *lambda_body,
+                    ret,
+                    Some(lambda_mark),
+                )
             }
         }
     }
@@ -730,7 +774,7 @@ impl FnLowering<'_> {
             let ty = self.ty(id);
             self.bind_typed(name, ty, plain_call(Call::Direct(target, Vec::new())))
         } else {
-            self.closure(target, Vec::new())
+            Atom::Fn(target)
         }
     }
 
@@ -738,21 +782,35 @@ impl FnLowering<'_> {
     /// (docs/spec/core-ir.md)。節は handle の外側の row、つまり handle を含む関数の row で動くので、その関数と同じ印に
     /// する (docs/spec/core-ir.md の「`yields` の印」)。
     fn lift_clause(&mut self, name: String, closure: &Closure, stateless: bool) -> Atom {
-        let mut params: Vec<(Option<PatId>, Repr)> = closure
+        let mut params: Vec<Param> = closure
             .params
             .iter()
             .map(|&pat| {
+                let ty = self.pat_type(pat);
                 (
                     Some(pat),
-                    repr(self.ctx.store, self.pat_type(pat), self.ctx.hir),
+                    repr(self.ctx.store, ty, self.ctx.hir),
+                    mark(self.ctx.store, ty),
                 )
             })
             .collect();
         if stateless {
-            params.push((None, Repr::Unit));
+            params.push((None, Repr::Unit, Mark::Unr));
         }
         let captured = self.ctx.body.closure_captures(closure);
-        let ret = repr(self.ctx.store, self.ty(closure.body), self.ctx.hir);
-        self.lift(name, self.yields, captured, &params, closure.body, ret)
+        let ret_ty = self.ty(closure.body);
+        let ret = (
+            repr(self.ctx.store, ret_ty, self.ctx.hir),
+            mark(self.ctx.store, ret_ty),
+        );
+        self.lift(
+            name,
+            self.yields,
+            captured,
+            &params,
+            closure.body,
+            ret,
+            None,
+        )
     }
 }

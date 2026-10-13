@@ -6,7 +6,7 @@
 use crate::builder::FnBuilder;
 use crate::{Call, CoreFn, Program, Rhs, Stmt, Term};
 use eml_lir::syntax::effects_text;
-use eml_lir::{Atom, BlockId, Case, CasePattern, FnIdx, Prim, Repr, VarId};
+use eml_lir::{Atom, BlockId, Case, CasePattern, FnIdx, Mark, Prim, Repr, VarId};
 
 use super::{call, direct, dummy, named, yield_switch};
 
@@ -15,7 +15,7 @@ pub(super) fn id() -> CoreFn {
     let mut b = FnBuilder::new();
     let x = b.param(named("x", Repr::TObj));
     b.terminate(Term::Return(Atom::Var(x)));
-    b.finish("id$".to_string(), false, true, Repr::TObj)
+    b.finish("id$".to_string(), false, true, Repr::TObj, Mark::Unr)
 }
 
 /// `compose$(κ, c, x)`。κ を先に呼び、その結果で c を呼ぶ。κ が yield したら、取り出した κ' と c で作り直す。
@@ -38,7 +38,7 @@ pub(super) fn compose(compose: FnIdx) -> CoreFn {
     b.reopen(fast);
     let t = bind(&mut b, "t", Repr::TObj, apply(c, vec![Atom::Var(r)]));
     b.terminate(Term::Return(Atom::Var(t)));
-    b.finish("compose$".to_string(), false, true, Repr::TObj)
+    b.finish("compose$".to_string(), false, true, Repr::TObj, Mark::Unr)
 }
 
 /// `prompt$(ev, ret, x)`。`evv` を `ev` の外側に戻し、`yield_status(ev)` で4つに分ける
@@ -135,7 +135,7 @@ pub(super) fn prompt(resume: FnIdx, rewind: FnIdx) -> CoreFn {
         ),
     );
     yield_dummy(&mut b, rebuilt);
-    b.finish("prompt$".to_string(), false, true, Repr::TObj)
+    b.finish("prompt$".to_string(), false, true, Repr::TObj, Mark::Unr)
 }
 
 /// `resume$(ev, ret, κ, v, s)`。状態 `s` の新しい evidence を今の `evv` の先頭に足してから κ を再開し、その結果を
@@ -180,7 +180,7 @@ pub(super) fn resume(prompt: FnIdx) -> CoreFn {
         ),
     );
     b.terminate(Term::Return(Atom::Var(r)));
-    b.finish("resume$".to_string(), false, true, Repr::TObj)
+    b.finish("resume$".to_string(), false, true, Repr::TObj, Mark::Unr)
 }
 
 /// `rewind$(ev, ret, s, κ, v)`。外側のフレームの yield で handler の外へ出たときに `prompt$` が取り出した状態 `s` で、
@@ -202,7 +202,7 @@ pub(super) fn rewind(resume: FnIdx) -> CoreFn {
         ),
     );
     b.terminate(Term::Return(Atom::Var(r)));
-    b.finish("rewind$".to_string(), false, true, Repr::TObj)
+    b.finish("rewind$".to_string(), false, true, Repr::TObj, Mark::Unr)
 }
 
 /// `mask$[effects]` の名前。多重集合をエフェクトの名前で書く。
@@ -245,7 +245,7 @@ pub(super) fn mask(mask: FnIdx, name: String, effects: &[u32]) -> CoreFn {
     b.reopen(fast);
     prim(&mut b, "u", Repr::Unit, Prim::EvvSet, vec![Atom::Var(w)]);
     b.terminate(Term::Return(Atom::Var(r)));
-    b.finish(name, false, true, Repr::TObj)
+    b.finish(name, false, true, Repr::TObj, Mark::Unr)
 }
 
 fn bind(b: &mut FnBuilder, name: &str, repr: Repr, rhs: Rhs) -> VarId {

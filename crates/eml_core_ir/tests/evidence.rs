@@ -580,7 +580,7 @@ fn a_resume_becomes_an_apply() {
     );
     let shown = core_text(&text, Pass::Evidence);
     insta::assert_snapshot!(function(&shown, "main$handle0$ask"), @"
-    internal fn main$handle0$ask(p.0: unit, k.1: tobj, p.2: unit) -> int {
+    internal fn main$handle0$ask(p.0: unit, k.1: tobj lin, p.2: unit) -> int {
       let t.3: int = apply k.1(10, ())
       let t.4: int = extern Prelude.*(t.3, 2)
       return t.4
@@ -680,7 +680,7 @@ fn a_masked_call_restores_the_evidence_list_and_wraps_the_continuation() {
     let shown = core_text(text, Pass::Evidence);
     let run = instance_name(&shown, "run");
     insta::assert_snapshot!(function(&shown, &run), @r#"
-    yields fn "run<e>"(cb.0: tobj) -> obj {
+    yields fn "run<e>"(cb.0: tobj poly) -> obj {
       let ev.5: obj = prim ev_lookup[State]()
       let c.6: tobj = prim ev_clause[State.get](ev.5)
       let t.1: int = clause State.get c.6(ev.5, ())
@@ -770,7 +770,7 @@ fn a_resume_in_a_yielding_function_becomes_a_yielding_apply() {
     );
     let shown = core_text(&text, Pass::Evidence);
     insta::assert_snapshot!(function(&shown, "f$handle0$ask"), @"
-    internal yields fn f$handle0$ask(p.0: unit, k.1: tobj, p.2: unit) -> int {
+    internal yields fn f$handle0$ask(p.0: unit, k.1: tobj lin, p.2: unit) -> int {
       let t.3: int = yields apply k.1(10, ())
       let y.5: int = prim yielding()
       switch y.5 { 0 -> b2, _ -> b1 }

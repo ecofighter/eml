@@ -88,7 +88,7 @@ fn a_function_made_uniform_by_t3_gets_no_boxed_wrapper() {
     let shown = lir_text(text, eml_lir::Pass::Boxing);
     assert!(!shown.contains("call_with$boxed"), "{shown}");
     insta::assert_snapshot!(function(&shown, "call_with"), @"
-    fn call_with(f.0: tobj) -> tobj {
+    fn call_with(f.0: tobj poly) -> tobj {
       let t.2: tobj = apply f.0(())
       let t.1: int = unbox t.2
       return t.2
@@ -273,7 +273,7 @@ fn t3_raises_the_ret_along_a_chain_of_tail_calls() {
     );
     let shown = lir_text(&text, eml_lir::Pass::Contract);
     insta::assert_snapshot!(function(&shown, "apply_to"), @"
-    fn apply_to(f.0: tobj, x.1: int) -> tobj {
+    fn apply_to(f.0: tobj poly, x.1: int) -> tobj {
       let x.3: tobj = box x.1
       tail apply f.0(x.3)
     }
@@ -284,7 +284,7 @@ fn t3_raises_the_ret_along_a_chain_of_tail_calls() {
     }
     ");
     insta::assert_snapshot!(function(&shown, "through"), @"
-    fn through(f.0: tobj, x.1: int) -> tobj {
+    fn through(f.0: tobj poly, x.1: int) -> tobj {
       let x.4: tobj = box x.1
       tail apply f.0(x.4)
     }

@@ -210,7 +210,7 @@ fn each_reference_to_an_extern_as_a_value_gets_its_own_wrapper() {
     // 包む関数は参照の場所ごとに作り、その場所の位置を持つ。実行時エラーが参照した場所を指すようにするためである
     let text = "apply : (a -> <e> b) -> a -> <e> b\napply f x = f x\n\nmain : Unit -> <IO> Unit\nmain () =\n  apply println \"a\"\n  let say = println\n  say \"b\"";
     insta::assert_snapshot!(core_text_with_positions(text), @r#"
-    fn "apply@[String, Unit]"(f.0: tobj, x.1: obj) -> unit {
+    fn "apply@[String, Unit]"(f.0: tobj poly, x.1: obj) -> unit {
       let t.2: unit = apply f.0(x.1)
       return t.2
     }
@@ -340,7 +340,7 @@ fn handlers_are_lifted_with_their_return_reprs() {
       let t.2: int = perform Ask.ask(s.1)
       return t.2
     }
-    internal fn main$handle0$ask(key.0: obj, k.1: tobj, p.2: unit) -> int {
+    internal fn main$handle0$ask(key.0: obj, k.1: tobj lin, p.2: unit) -> int {
       let t.3: int = resume k.1(1, ())
       return t.3
     }
@@ -360,15 +360,15 @@ fn a_continuation_passed_to_a_function_is_wrapped() {
     let text = "effect Ask where\n  ask : Unit -> Int\n\ntwice : (Int -> <e> Int) -> <e> Int\ntwice f = f 1\n\nmain : Unit -> <IO> Unit\nmain () =\n  let n =\n    handle ask () with\n      | ask () k -> twice k\n  println (show n)";
     let shown = core_text(text, Pass::Translate);
     insta::assert_snapshot!(function(&shown, "main$handle0$ask"), @"
-    internal fn main$handle0$ask(p.0: unit, k.1: tobj, p.2: unit) -> int {
-      let c.3: tobj = closure cont$(k.1)
+    internal fn main$handle0$ask(p.0: unit, k.1: tobj lin, p.2: unit) -> int {
+      let c.3: tobj lin = closure cont$(k.1)
       let t.4: int = call twice(c.3)
       return t.4
     }
     ");
     insta::assert_snapshot!(function(&shown, "cont$"), @"
-    internal yields fn cont$(k.0: tobj, v.1: tobj) -> tobj {
-      let t.2: tobj = resume k.0(v.1, ())
+    internal yields fn cont$(k.0: tobj poly, v.1: tobj poly) -> tobj poly {
+      let t.2: tobj poly = resume k.0(v.1, ())
       return t.2
     }
     ");
@@ -844,7 +844,7 @@ fn effect_numbers_skip_the_extern_effects() {
     insta::assert_snapshot!(core_text(text, Pass::Translate), @r#"
     effect A { ask(unit) -> int }
     effect B { tell(int) -> unit }
-    yields fn "needs_a<e>"(f.0: tobj) -> int {
+    yields fn "needs_a<e>"(f.0: tobj poly) -> int {
       let t.1: int = perform A.ask(())
       let t.2: int = mask [A] yields apply f.0(())
       let t.3: int = extern Prelude.+(t.1, t.2)
@@ -868,14 +868,14 @@ fn effect_numbers_skip_the_extern_effects() {
       let t.1: int = call "needs_a<e>"(&told)
       return t.1
     }
-    internal yields fn main$handle0$ask(p.0: unit, k.1: tobj, p.2: unit) -> int {
+    internal yields fn main$handle0$ask(p.0: unit, k.1: tobj lin, p.2: unit) -> int {
       let t.3: int = resume k.1(1, ())
       return t.3
     }
     internal yields fn main$handle0$return($r.0: int, p.1: unit) -> int {
       return $r.0
     }
-    internal fn main$handle1$tell(m.0: int, k.1: tobj, p.2: unit) -> int {
+    internal fn main$handle1$tell(m.0: int, k.1: tobj lin, p.2: unit) -> int {
       let t.3: int = resume k.1((), ())
       return t.3
     }
@@ -930,7 +930,7 @@ fn names_outside_the_entry_are_qualified_with_their_module() {
     insta::assert_snapshot!(core_text_files(main, &[("Report/Csv.em", csv)], Pass::Translate), @r#"
     layout Report.Csv.Row { Row(int) }
     effect Report.Csv.Parse { next(unit) -> int }
-    fn "apply@[String, Unit]"(f.0: tobj, x.1: obj) -> unit {
+    fn "apply@[String, Unit]"(f.0: tobj poly, x.1: obj) -> unit {
       let t.2: unit = apply f.0(x.1)
       return t.2
     }
@@ -950,7 +950,7 @@ fn names_outside_the_entry_are_qualified_with_their_module() {
       let t.1: obj = call Report.Csv.parse(())
       return t.1
     }
-    internal fn main$handle0$next(p.0: unit, k.1: tobj, p.2: unit) -> obj {
+    internal fn main$handle0$next(p.0: unit, k.1: tobj lin, p.2: unit) -> obj {
       let t.3: obj = resume k.1(1, ())
       return t.3
     }
@@ -1041,13 +1041,13 @@ fn recursion_and_top_level_values() {
 #[test]
 fn partial_and_extra_arguments_use_closures() {
     let text = "add : Int -> Int -> Int\nadd a b = a + b\n\nadder : Int -> Int -> Int\nadder x = add x\n\nmain : Unit -> <IO> Unit\nmain () =\n  let f = add 1\n  let n = f 2 + adder 3 4\n  println (show n)";
-    insta::assert_snapshot!(core_text(text, Pass::Translate), @"
+    insta::assert_snapshot!(core_text(text, Pass::Translate), @r#"
     fn add(a.0: int, b.1: int) -> int {
       let t.2: int = extern Prelude.+(a.0, b.1)
       return t.2
     }
-    fn adder(x.0: int) -> tobj {
-      let c.1: tobj = closure add(x.0)
+    fn adder(x.0: int) -> tobj poly {
+      let c.1: tobj poly = closure add(x.0)
       return c.1
     }
     fn main(p.0: unit) -> unit {
@@ -1056,7 +1056,7 @@ fn partial_and_extra_arguments_use_closures() {
       let t.3: tobj = call adder(3)
       let t.4: int = apply t.3(4)
       let t.5: int = extern Prelude.+(t.2, t.4)
-      let t.6: obj = extern \"Prelude.Show Int.show\"(t.5)
+      let t.6: obj = extern "Prelude.Show Int.show"(t.5)
       let t.7: unit = extern Prelude.println(t.6)
       return t.7
     }
@@ -1064,7 +1064,7 @@ fn partial_and_extra_arguments_use_closures() {
       let t.0: unit = call main(())
       return t.0
     }
-    ");
+    "#);
 }
 
 #[test]
@@ -1079,11 +1079,11 @@ fn builtins_used_as_values_are_wrapped() {
     b2:
       return #0
     }
-    fn "Prelude.>>@[Bool, Bool, Bool]"(f.0: tobj, g.1: tobj) -> tobj {
-      let c.2: tobj = closure "Prelude.>>@[Bool, Bool, Bool]$lambda0"(f.0, g.1)
+    fn "Prelude.>>@[Bool, Bool, Bool]"(f.0: tobj poly, g.1: tobj poly) -> tobj poly {
+      let c.2: tobj poly = closure "Prelude.>>@[Bool, Bool, Bool]$lambda0"(f.0, g.1)
       return c.2
     }
-    fn "apply@[String, Unit]"(f.0: tobj, x.1: obj) -> unit {
+    fn "apply@[String, Unit]"(f.0: tobj poly, x.1: obj) -> unit {
       let t.2: unit = apply f.0(x.1)
       return t.2
     }
@@ -1093,7 +1093,7 @@ fn builtins_used_as_values_are_wrapped() {
       let t.3: unit = call "apply@[String, Unit]"(&main$extern0, t.2)
       return t.3
     }
-    internal fn "Prelude.>>@[Bool, Bool, Bool]$lambda0"(f.0: tobj, g.1: tobj, x.2: enum) -> enum {
+    internal fn "Prelude.>>@[Bool, Bool, Bool]$lambda0"(f.0: tobj poly, g.1: tobj poly, x.2: enum) -> enum {
       let t.3: enum = apply f.0(x.2)
       let t.4: enum = apply g.1(t.3)
       return t.4
@@ -1113,7 +1113,7 @@ fn builtins_used_as_values_are_wrapped() {
 fn lambdas_are_lifted_with_their_captures_first() {
     let text = "apply : (a -> <e> b) -> a -> <e> b\napply f x = f x\n\nmain : Unit -> <IO> Unit\nmain () =\n  let s = \"!\"\n  let shout = fn t -> t ++ s\n  println (apply shout \"hi\")\n  println s";
     insta::assert_snapshot!(core_text(text, Pass::Translate), @r#"
-    fn "apply@[String, String]"(f.0: tobj, x.1: obj) -> obj {
+    fn "apply@[String, String]"(f.0: tobj poly, x.1: obj) -> obj {
       let t.2: obj = apply f.0(x.1)
       return t.2
     }
@@ -1230,7 +1230,7 @@ fn handlers_are_lifted_to_closures() {
       let t.2: int = perform Ask.ask(s.1)
       return t.2
     }
-    internal fn main$handle0$ask(key.0: obj, k.1: tobj, p.2: unit) -> int {
+    internal fn main$handle0$ask(key.0: obj, k.1: tobj lin, p.2: unit) -> int {
       let t.3: int = resume k.1(1, ())
       return t.3
     }
@@ -1303,8 +1303,8 @@ fn a_constructor_used_as_a_function_value_is_wrapped() {
     }
     ");
     insta::assert_snapshot!(function(&shown, "con$Pair"), @"
-    internal fn con$Pair(p.0: tobj, p.1: tobj) -> obj {
-      let d.2: obj = con Pair #0(p.0, p.1)
+    internal fn con$Pair(p.0: tobj poly, p.1: tobj poly) -> obj poly {
+      let d.2: obj poly = con Pair #0(p.0, p.1)
       return d.2
     }
     ");
@@ -1421,7 +1421,7 @@ fn constructor_patterns_in_handler_clause_parameters() {
     let text = "data Box a = | Box a\n\neffect Give where\n  give : Box Int -> Int\n\nrun : Unit -> Int\nrun () =\n  handle Box (give (Box 1)) with\n    | give (Box n) k -> k n\n    | return (Box r) -> r\n\nmain : Unit -> <IO> Unit\nmain () = println (show (run ()))";
     let shown = core_text(text, Pass::Translate);
     insta::assert_snapshot!(function(&shown, "run$handle0$give"), @"
-    internal fn run$handle0$give(p.0: obj, k.1: tobj, p.2: unit) -> int {
+    internal fn run$handle0$give(p.0: obj, k.1: tobj lin, p.2: unit) -> int {
       unpack p.0 Box #0(n.3: int)
       let t.4: int = resume k.1(n.3, ())
       return t.4
@@ -1584,7 +1584,7 @@ fn a_handler_with_a_state_passes_its_initial_value_and_takes_the_state_from_its_
       let t.3: int = extern Prelude.+(t.1, t.2)
       return t.3
     }
-    internal fn main$handle0$ask(p.0: unit, k.1: tobj, st.2: int) -> int {
+    internal fn main$handle0$ask(p.0: unit, k.1: tobj lin, st.2: int) -> int {
       let t.3: int = extern Prelude.+(st.2, 1)
       let t.4: int = resume k.1(st.2, t.3)
       return t.4
@@ -1634,7 +1634,7 @@ fn effects_are_numbered_in_declaration_order() {
       let t.1: int = perform A.a(())
       return t.1
     }
-    internal fn main$handle0$a(p.0: unit, k.1: tobj, p.2: unit) -> int {
+    internal fn main$handle0$a(p.0: unit, k.1: tobj lin, p.2: unit) -> int {
       let t.3: int = resume k.1(1, ())
       return t.3
     }
@@ -1645,7 +1645,7 @@ fn effects_are_numbered_in_declaration_order() {
       let t.1: int = perform B.b(())
       return t.1
     }
-    internal fn main$handle1$b(p.0: unit, k.1: tobj, p.2: unit) -> int {
+    internal fn main$handle1$b(p.0: unit, k.1: tobj lin, p.2: unit) -> int {
       let t.3: int = resume k.1(2, ())
       return t.3
     }
@@ -1801,7 +1801,7 @@ fn a_masked_callback_call() {
         state_main("run (fn () -> 1)")
     );
     insta::assert_snapshot!(function(&core_text(&text, Pass::Translate), "run@[Int]"), @r#"
-    yields fn "run@[Int]"(cb.0: tobj) -> int {
+    yields fn "run@[Int]"(cb.0: tobj poly) -> int {
       let t.1: int = perform State.get(())
       let t.2: int = mask [State] apply cb.0(())
       return t.2
@@ -1832,8 +1832,8 @@ fn arrows_with_different_masks_are_applied_apart() {
         state_main("h (fn x y -> x + y)")
     );
     insta::assert_snapshot!(function(&core_text(&text, Pass::Translate), "h"), @"
-    yields fn h(f.0: tobj) -> int {
-      let t.1: tobj = mask [State] apply f.0(1)
+    yields fn h(f.0: tobj poly) -> int {
+      let t.1: tobj poly = mask [State] apply f.0(1)
       let t.2: int = yields apply t.1(2)
       return t.2
     }
@@ -1847,7 +1847,7 @@ fn a_continuation_call_in_its_clause_has_no_mask() {
         "{STATE}run : (Unit -> <State Int | e> a) -> <e> a\nrun action =\n  handle action () from 0 with\n    | get () k st -> k st st\n    | put n k _ -> k () n\n    | return x _ -> x\n\nmain : Unit -> <IO> Unit\nmain () = println (show (run (fn () -> get ())))\n"
     );
     insta::assert_snapshot!(function(&core_text(&text, Pass::Translate), "run@[Int]$handle0$get"), @r#"
-    internal fn "run@[Int]$handle0$get"(p.0: unit, k.1: tobj, st.2: int) -> int {
+    internal fn "run@[Int]$handle0$get"(p.0: unit, k.1: tobj lin, st.2: int) -> int {
       let t.3: int = resume k.1(st.2, st.2)
       return t.3
     }
@@ -1889,7 +1889,7 @@ main () =
 ";
     // handle の番号は HIR の式の ID の順なので、内側の handle が `f<e>$handle0` になる
     insta::assert_snapshot!(function(&core_text(text, Pass::Translate), "f<e>$handle0"), @r#"
-    internal yields fn "f<e>$handle0"(k.0: tobj, p.1: unit) -> int {
+    internal yields fn "f<e>$handle0"(k.0: tobj lin, p.1: unit) -> int {
       let t.2: int = mask [Log] resume k.0(1, ())
       return t.2
     }
@@ -1905,7 +1905,7 @@ fn extra_arguments_of_a_known_call_take_the_mask_of_their_arrow() {
         state_main("run (fn () -> 1)")
     );
     insta::assert_snapshot!(function(&core_text(&text, Pass::Translate), "run@[Int]"), @r#"
-    yields fn "run@[Int]"(cb.0: tobj) -> int {
+    yields fn "run@[Int]"(cb.0: tobj poly) -> int {
       let t.1: tobj = call "pick@[Int]"(1)
       let t.2: int = mask [State] apply t.1(cb.0)
       return t.2
@@ -2017,8 +2017,8 @@ fn a_partial_continuation_is_wrapped_with_the_state_wrapper() {
     );
     assert!(shown.contains("closure cont$state(k"), "{shown}");
     insta::assert_snapshot!(function(&shown, "cont$state"), @"
-    internal yields fn cont$state(k.0: tobj, v.1: tobj, s.2: tobj) -> tobj {
-      let t.3: tobj = resume k.0(v.1, s.2)
+    internal yields fn cont$state(k.0: tobj poly, v.1: tobj poly, s.2: tobj poly) -> tobj poly {
+      let t.3: tobj poly = resume k.0(v.1, s.2)
       return t.3
     }
     ");
@@ -2710,4 +2710,130 @@ fn a_generic_update_keeps_the_fields_at_their_instantiated_types() {
       return t.7
     }
     "#);
+}
+
+#[test]
+fn a_parameter_and_a_result_of_file_type_are_lin() {
+    let text = "close_it : Fs.File -> <IO> Unit\nclose_it f = Fs.close f\n\nmain : Unit -> <IO> Unit\nmain () =\n  let f = Fs.open \"a.txt\"\n  close_it f";
+    let ir = core_text(text, Pass::Translate);
+    insta::assert_snapshot!(function(&ir, "close_it"), @"
+    fn close_it(f.0: obj lin) -> unit {
+      let t.1: unit = extern Std.Fs.close(f.0)
+      return t.1
+    }
+    ");
+    insta::assert_snapshot!(function(&ir, "main"), @r#"
+    fn main(p.0: unit) -> unit {
+      let s.1: obj = const "a.txt"
+      let t.2: obj lin = extern Std.Fs.open(s.1)
+      let t.3: unit = call close_it(t.2)
+      return t.3
+    }
+    "#);
+}
+
+#[test]
+fn a_handle_body_and_clause_closures_take_the_join_of_their_captures() {
+    // 本体と節のクロージャには HIR の型がないので、捕まえた値の印の結びにする。本体は File を、節は Int を捕まえる
+    let text = "effect Ask where\n  ask : Unit -> Int\n\nuse_file : Fs.File -> <Ask, IO> Int\nuse_file f =\n  Fs.close f\n  ask ()\n\nmain : Unit -> <IO> Unit\nmain () =\n  let f = Fs.open \"a.txt\"\n  let n = 40 + 1\n  let m =\n    handle use_file f with\n      | ask () k -> k n\n  println (show (m + 1))";
+    let ir = core_text(text, Pass::Translate);
+    insta::assert_snapshot!(function(&ir, "main"), @r#"
+    fn main(p.0: unit) -> unit {
+      let s.1: obj = const "a.txt"
+      let t.2: obj lin = extern Std.Fs.open(s.1)
+      let t.3: int = extern Prelude.+(40, 1)
+      let c.4: tobj lin = closure main$handle0(t.2)
+      let c.5: tobj = closure main$handle0$ask(t.3)
+      let t.6: int = handle Ask((), c.4) { ask: c.5 } return &main$handle0$return
+      let t.7: int = extern Prelude.+(t.6, 1)
+      let t.8: obj = extern "Prelude.Show Int.show"(t.7)
+      let t.9: unit = extern Prelude.println(t.8)
+      return t.9
+    }
+    "#);
+    insta::assert_snapshot!(function(&ir, "main$handle0"), @"
+    internal yields fn main$handle0(f.0: obj lin, p.1: unit) -> int {
+      let t.2: int = call use_file(f.0)
+      return t.2
+    }
+    ");
+}
+
+#[test]
+fn a_constructor_built_from_a_scrutinee_expression_takes_its_type_mark() {
+    // `Some []` の引数はタグだけだが、式の型 `Option (List Fs.File)` は Lin なので、葉で作る `con` は `lin` になる
+    let text = "close_all : List Fs.File -> <IO> Unit\nclose_all xs =\n  match xs with\n    | [] -> ()\n    | f :: rest ->\n        Fs.close f\n        close_all rest\n\nclose_opt : Option (List Fs.File) -> <IO> Unit\nclose_opt o =\n  match o with\n    | None -> ()\n    | Some xs -> close_all xs\n\nmain : Unit -> <IO> Unit\nmain () =\n  match Some [] with\n    | other -> close_opt other";
+    insta::assert_snapshot!(function(&core_text(text, Pass::Translate), "main"), @"
+    fn main(p.0: unit) -> unit {
+      let d.1: tobj lin = con Prelude.Option #1(#0)
+      let t.2: unit = call close_opt(d.1)
+      return t.2
+    }
+    ");
+}
+
+#[test]
+fn the_fields_a_projection_leaves_behind_take_their_types_marks() {
+    // 射影が残すフィールドは `Unr` でなければ E3004 なので、`lin` になるのは取り出す File のフィールドである。
+    // 更新が残すフィールドは、File のフィールドも含めて型の印を持つ
+    let text = "data R = | R { n : Int, f : Fs.File }\n\ntake : R -> Fs.File\ntake r = r.f\n\nbump : R -> R\nbump r = { r | n = 5 }\n\nmain : Unit -> <IO> Unit\nmain () = Fs.close (take (bump (R { n = 1, f = Fs.open \"a.txt\" })))";
+    let ir = core_text(text, Pass::Translate);
+    insta::assert_snapshot!(function(&ir, "take"), @"
+    fn take(r.0: obj lin) -> obj lin {
+      unpack r.0 R #0(f.1: int, f.2: obj lin)
+      return f.2
+    }
+    ");
+    insta::assert_snapshot!(function(&ir, "bump"), @"
+    fn bump(r.0: obj lin) -> obj lin {
+      unpack r.0 R #0(f.1: int, f.2: obj lin)
+      let d.3: obj lin = con R #0(5, f.2)
+      return d.3
+    }
+    ");
+}
+
+#[test]
+fn derived_generators_are_unr() {
+    // instance の頭の型変数は `Unr` なので、生成器の変数と戻り値はすべて `unr` である
+    // (docs/spec/types.md の「`Unr` のクラス」)
+    let text = "data Opt a =\n  | No\n  | Yes a\n  deriving (Eq, Ord, Show)\n\nmain : Unit -> <IO> Unit\nmain () =\n  println (show (Yes 1 == No) ++ show (Yes 1 < No))\n  println (show (Yes 1))";
+    let program = eml_test_support::core_until(text, Pass::Translate);
+    let generated: Vec<&eml_core_ir::CoreFn> = program
+        .functions
+        .iter()
+        .filter(|function| function.name.contains("Opt"))
+        .collect();
+    assert!(generated.len() >= 4, "the generators of Opt are lowered");
+    for function in generated {
+        assert_eq!(function.ret_mark, eml_lir::Mark::Unr, "{}", function.name);
+        for var in &function.vars {
+            assert_eq!(
+                var.mark,
+                eml_lir::Mark::Unr,
+                "{}: {}",
+                function.name,
+                var.name
+            );
+        }
+    }
+}
+
+#[test]
+fn wrappers_read_declaration_types_conservatively() {
+    // `op$` と `con$` は宣言の型を代入せずに読むので、型変数に依存する位置は `poly` になる
+    let text = "effect Pass e where\n  pass : e -> Fs.File -> e\n\ndata Box a = | Box a Fs.File\n\nuse_op : (Int -> Fs.File -> <Pass Int, IO> Int) -> <Pass Int, IO> Int\nuse_op op = op 1 (Fs.open \"a.txt\")\n\nmain : Unit -> <IO> Unit\nmain () =\n  let n = handle use_op pass with\n    | pass x g k ->\n        Fs.close g\n        k x\n  let mk = Box n\n  match mk (Fs.open \"a.txt\") with\n    | Box m f ->\n        Fs.close f\n        println (show m)";
+    let ir = core_text(text, Pass::Translate);
+    insta::assert_snapshot!(function(&ir, "op$pass"), @"
+    internal yields fn op$pass(p.0: tobj poly, p.1: obj lin) -> tobj poly {
+      let t.2: tobj poly = perform Pass.pass(p.0, p.1)
+      return t.2
+    }
+    ");
+    insta::assert_snapshot!(function(&ir, "con$Box"), @"
+    internal fn con$Box(p.0: tobj poly, p.1: obj lin) -> obj lin {
+      let d.2: obj lin = con Box #0(p.0, p.1)
+      return d.2
+    }
+    ");
 }

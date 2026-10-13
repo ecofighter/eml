@@ -11,16 +11,20 @@ use eml_hir::{
 };
 
 use crate::{Rhs, Stmt, Term};
-use eml_lir::{Atom, BlockId, Case, CasePattern, Ctor, LayoutId, Repr, TUPLE, VarId, VarInfo};
+use eml_lir::{
+    Atom, BlockId, Case, CasePattern, Ctor, LayoutId, Mark, Repr, TUPLE, VarId, VarInfo,
+};
 
-use super::types::{named, repr, type_def_repr, var_info};
+use super::types::{mark, named, repr, type_def_repr, var_info};
 use super::{Ctx, CtxId, Exit, FnLowering};
 use crate::builder::Label;
 
 /// 値の出現 (docs/spec/core-ir.md)。`Con` は頭のコンストラクタが分かっている値で、タプルはタグ 0 の
 /// コンストラクタである。値全体が要る葉でだけ値を作る。出現は型を持たない。値を作るときの Repr は `ConValue` から
 /// 決まり、フィールドの変数の Repr はパターンの型から決まる (docs/implementation/architecture.md の
-/// 「translate の組み立て」)。
+/// 「translate の組み立て」)。`Con` の `mark` は値を作るときの印で、検査した式の型か、開いた変数から決まる
+/// (docs/superpowers/specs/2026-10-13-s8d-kind-marks-design.md の「translate が決める印」)。引数の印の結びにすると、
+/// `Option (List File)` の `Some []` が `unr` になるためである。
 #[derive(Clone, PartialEq)]
 pub(super) enum Occ {
     Atom(Atom),
@@ -28,6 +32,7 @@ pub(super) enum Occ {
         tag: u32,
         fields: Vec<Occ>,
         value: ConValue,
+        mark: Mark,
     },
 }
 
@@ -59,11 +64,11 @@ pub(super) struct MatchCtx {
     unknown: Vec<(BlockId, Occ)>,
 }
 
-/// 調べる値の入り方。`match` と分解する `let` は式を、分解する引数は引数の変数を調べる。`Occ` の `Repr` は、
+/// 調べる値の入り方。`match` と分解する `let` は式を、分解する引数は引数の変数を調べる。`Occ` の `Repr` と印は、
 /// 値の分からない出口をまとめるラベルの引数に使う。
 pub(super) enum Scrutinee {
     Expr(ExprId),
-    Occ(Occ, Repr),
+    Occ(Occ, Repr, Mark),
 }
 
 /// 決定木 (docs/spec/core-ir.md)。葉の `bound` は、パターンの変数とそれが受ける出現である。
@@ -226,9 +231,15 @@ impl FnLowering<'_> {
         alias: Option<LocalId>,
         passes_alias: Vec<bool>,
     ) -> Vec<Label> {
-        let merged = match &scrutinee {
-            Scrutinee::Expr(expr) => repr(self.ctx.store, self.ty(*expr), self.ctx.hir),
-            Scrutinee::Occ(_, repr) => *repr,
+        let (merged, merged_mark) = match &scrutinee {
+            Scrutinee::Expr(expr) => {
+                let ty = self.ty(*expr);
+                (
+                    repr(self.ctx.store, ty, self.ctx.hir),
+                    mark(self.ctx.store, ty),
+                )
+            }
+            Scrutinee::Occ(_, repr, mark) => (*repr, *mark),
         };
         let arms: Vec<Label> = pats
             .iter()
@@ -256,7 +267,7 @@ impl FnLowering<'_> {
         let ctx = CtxId(self.contexts.len() - 1);
         match scrutinee {
             Scrutinee::Expr(expr) => self.tail_expr(expr, Exit::Scrutinize(ctx)),
-            Scrutinee::Occ(occ, _) => self.select(ctx, occ),
+            Scrutinee::Occ(occ, _, _) => self.select(ctx, occ),
         }
         let mut unknown = mem::take(&mut self.match_ctx(ctx).unknown);
         let root = match unknown.len() {
@@ -268,7 +279,9 @@ impl FnLowering<'_> {
             }
             _ => {
                 let name = alias.map_or("c", |alias| self.ctx.body.locals[alias].name.as_str());
-                let merge = self.builder.new_label(vec![named(name, merged)]);
+                let merge = self
+                    .builder
+                    .new_label(vec![named(name, merged, merged_mark)]);
                 for (block, occ) in unknown {
                     self.builder.reopen(block);
                     let value = self.materialize(occ);
@@ -340,7 +353,12 @@ impl FnLowering<'_> {
                 value: ConValue::Made(value),
                 ..
             } => *value,
-            Occ::Con { tag, fields, value } => {
+            Occ::Con {
+                tag,
+                fields,
+                value,
+                mark,
+            } => {
                 if let Some(&(_, atom)) = built.iter().find(|(done, _)| done == occ) {
                     return atom;
                 }
@@ -359,7 +377,7 @@ impl FnLowering<'_> {
                     ConValue::Made(_) => unreachable!("a made value is returned above"),
                 };
                 let ctor = Ctor { layout, tag: *tag };
-                let atom = self.bind("d", repr, Rhs::Con { ctor, args });
+                let atom = self.bind("d", repr, *mark, Rhs::Con { ctor, args });
                 built.push((occ.clone(), atom));
                 atom
             }
@@ -387,6 +405,7 @@ impl FnLowering<'_> {
                 tag: self.ctx.hir[ctor].tag,
                 fields,
                 value: ConValue::Data(ctor),
+                mark: mark(self.ctx.store, self.ty(id)),
             };
         }
         match &body.exprs[id].kind {
@@ -400,6 +419,7 @@ impl FnLowering<'_> {
                     tag: TUPLE,
                     fields,
                     value: ConValue::Tuple,
+                    mark: mark(self.ctx.store, self.ty(id)),
                 }
             }
             _ => Occ::Atom(self.atom(id)),
@@ -415,12 +435,14 @@ impl FnLowering<'_> {
                 tag,
                 fields: Vec::new(),
                 value: ConValue::Made(Atom::Tag(tag)),
+                mark: Mark::Unr,
             },
             Occ::Atom(Atom::Var(var)) => match self.cons.get(&var) {
                 Some(known) => Occ::Con {
                     tag: known.tag,
                     fields: known.args.iter().map(|&arg| Occ::Atom(arg)).collect(),
                     value: ConValue::Made(Atom::Var(var)),
+                    mark: self.builder.mark(var),
                 },
                 None => Occ::Atom(Atom::Var(var)),
             },
@@ -711,8 +733,10 @@ impl FnLowering<'_> {
                         _ => None,
                     })
                     .unwrap_or("x");
-                let repr = repr(self.ctx.store, self.pat_type(pat), hir);
-                self.builder.var(named(name, repr))
+                let ty = self.pat_type(pat);
+                let repr = repr(self.ctx.store, ty, hir);
+                self.builder
+                    .var(named(name, repr, mark(self.ctx.store, ty)))
             })
             .collect()
     }

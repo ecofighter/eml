@@ -9,7 +9,9 @@ use std::mem;
 use crate::builder::FnBuilder;
 use crate::tail::tail_position_call;
 use crate::{Call, CoreFn, Program, Rhs, Stmt, Term};
-use eml_lir::{Atom, BlockId, FnIdx, OpRet, OperationInfo, Prim, Repr, VarId, VarInfo, operation};
+use eml_lir::{
+    Atom, BlockId, FnIdx, Mark, OpRet, OperationInfo, Prim, Repr, VarId, VarInfo, operation,
+};
 
 use super::split::Annotations;
 use super::{Helpers, call, direct, dummy, named};
@@ -435,7 +437,13 @@ fn yielding_entry(
     let value = dummy(ret, |info, rhs| builder_bind(&mut b, info, rhs));
     b.terminate(Term::Return(value));
     // 入口はいつも yield か中断を始めるので、g の印によらず `yields` を立てる (docs/spec/core-ir.md の「`perform` と節の3つの形」)
-    let mut entry = b.finish(format!("{}$entry", function.name), true, true, ret);
+    let mut entry = b.finish(
+        format!("{}$entry", function.name),
+        true,
+        true,
+        ret,
+        Mark::Unr,
+    );
     entry.clause = Some((effect, op));
     entry
 }

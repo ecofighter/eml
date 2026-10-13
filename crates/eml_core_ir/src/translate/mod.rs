@@ -22,14 +22,14 @@ use eml_types::{BodyTypes, RowYield, TypeId, TypeStore, TypedProgram};
 use la_arena::ArenaMap;
 
 use crate::{CoreFn, Program, Rhs, Term};
-use eml_lir::{Atom, Case, CasePattern, FALSE, FnIdx, Loc, Repr, TRUE, VarId};
+use eml_lir::{Atom, Case, CasePattern, FALSE, FnIdx, Loc, Mark, Repr, TRUE, VarId};
 
 use crate::builder::{FnBuilder, Label};
 use expr::extern_row;
 use instances::{InstanceKind, Target};
 use pattern::{Known, MatchCtx, Occ, Scrutinee, destructures};
 use program::{ProgramBuilder, effect_table};
-use types::{named, repr, split_arrows, var_info};
+use types::{mark, named, repr, split_arrows, var_info};
 
 // extern の表の行と std の宣言を照らし合わせる結合テスト (tests/externs.rs) が、translate と同じ規則で型の Repr を決める
 pub use types::repr as type_repr;
@@ -190,11 +190,11 @@ pub(crate) fn translate(
         let id = function.function;
         let body = hir.body(id).expect("checked above");
         let (param_types, ret) = split_arrows(store, function.signature, body.params.len());
-        let params: Vec<(Option<PatId>, Repr)> = body
+        let params: Vec<Param> = body
             .params
             .iter()
             .zip(&param_types)
-            .map(|(&pat, &ty)| (Some(pat), repr(store, ty, hir)))
+            .map(|(&pat, &ty)| (Some(pat), repr(store, ty, hir), mark(store, ty)))
             .collect();
         let forms = continuation_forms(body);
         let numbers = numbering(hir, body, &function.targets);
@@ -225,7 +225,7 @@ pub(crate) fn translate(
             &[],
             &params,
             body.root,
-            repr(store, ret, hir),
+            (repr(store, ret, hir), mark(store, ret)),
         );
         builder.finish(index, core);
     }
@@ -260,6 +260,9 @@ pub(crate) fn translate(
         files: builder.files.values,
     }
 }
+
+/// 関数の引数のパターンと、受ける値の Repr と印。パターンが `None` なら名前のない引数 (handle の本体が受ける `()`) である。
+type Param = (Option<PatId>, Repr, Mark);
 
 /// 式の値の渡し先 (docs/spec/core-ir.md)。
 #[derive(Clone, Copy)]
@@ -370,33 +373,34 @@ impl<'a> FnLowering<'a> {
     }
 
     /// ラムダと handle の本体と節は、捕まえた変数を先頭の引数に持つ (docs/spec/core-ir.md)。トップレベルの関数では
-    /// `captured` は空である。引数のパターンが `None` なら、名前のない引数 (handle の本体が受ける `()`) である。
-    /// 捕まえた変数と引数は、その値の Repr と組にして渡す。`ret` は本体の値の Repr で、関数の `ret` になる。
-    /// `internal` は、持ち上げた関数なら真である。
+    /// `captured` は空である。捕まえた変数と引数は、その値の Repr と印と組にして渡す。`ret` は本体の値の Repr と印で、
+    /// 関数の `ret` と `ret_mark` になる。`internal` は、持ち上げた関数なら真である。
     fn lower(
         mut self,
         name: &str,
         internal: bool,
-        captured: &[(LocalId, Repr)],
-        params: &[(Option<PatId>, Repr)],
+        captured: &[(LocalId, Repr, Mark)],
+        params: &[Param],
         root: ExprId,
-        ret: Repr,
+        ret: (Repr, Mark),
     ) -> CoreFn {
         let body = self.ctx.body;
-        for &(local, repr) in captured {
-            let var = self.builder.param(named(&body.locals[local].name, repr));
+        for &(local, repr, mark) in captured {
+            let var = self
+                .builder
+                .param(named(&body.locals[local].name, repr, mark));
             self.locals.insert(local, Atom::Var(var));
         }
         let mut wrapped = Vec::new();
         let mut destructured = Vec::new();
-        for &(pat, repr) in params {
+        for &(pat, repr, mark) in params {
             // 値を調べるか分解するパターンは名前のない引数で受け、本体の前で分解する
             let pattern = pat.filter(|&pat| destructures(body, self.ctx.hir, pat));
             let local = pat
                 .filter(|_| pattern.is_none())
                 .and_then(|pat| body.pat_bindings(pat).first().copied());
             let name = local.map_or("p", |local| body.locals[local].name.as_str());
-            let var = self.builder.param(named(name, repr));
+            let var = self.builder.param(named(name, repr, mark));
             if let Some(local) = local {
                 self.locals.insert(local, Atom::Var(var));
                 if self.ctx.continuation_forms.get(local) == Some(&ContinuationForm::Wrapped) {
@@ -404,7 +408,7 @@ impl<'a> FnLowering<'a> {
                 }
             }
             if let Some(pattern) = pattern {
-                destructured.push((pattern, var, repr));
+                destructured.push((pattern, var, repr, mark));
             }
         }
         // 引数の変数をすべて作ってから包み、分解する。関数の引数の番号を、ほかの変数より前にそろえるため
@@ -412,59 +416,78 @@ impl<'a> FnLowering<'a> {
             let wrapper = self
                 .program
                 .continuation_wrapper(body.continuations[local] == 2);
-            let closure = self.closure(wrapper, vec![Atom::Var(var)]);
+            // 包んだ `k` は生の継続と同じ値なので、`k` の型の矢印の線形性で決める
+            let k_mark = mark(self.ctx.store, self.ctx.types.locals[local]);
+            let closure = self.closure(wrapper, vec![Atom::Var(var)], k_mark);
             self.locals.insert(local, closure);
         }
-        for (pat, var, repr) in destructured {
-            self.destructure(pat, Scrutinee::Occ(Occ::Atom(Atom::Var(var)), repr));
+        for (pat, var, repr, mark) in destructured {
+            self.destructure(pat, Scrutinee::Occ(Occ::Atom(Atom::Var(var)), repr, mark));
         }
         self.tail_expr(root, Exit::Return);
+        let (ret, ret_mark) = ret;
         self.builder
-            .finish(name.to_string(), internal, self.yields, ret)
+            .finish(name.to_string(), internal, self.yields, ret, ret_mark)
     }
 
     /// `root` を、捕まえた変数を先頭の引数に持つ関数に持ち上げ、そのクロージャを作る (docs/spec/core-ir.md)。ラムダと、
     /// handle の本体と節に使う。関数の番号は持ち上げる前に取るので、入れ子の持ち上げは外側より後ろの番号になる。
-    /// `yields` は持ち上げた関数の印である。
+    /// `yields` は持ち上げた関数の印である。クロージャの印は、型のあるラムダなら `typed` で、型のない handle の本体と
+    /// 節では捕まえた値の印の結びにする (docs/superpowers/specs/2026-10-13-s8d-kind-marks-design.md の
+    /// 「translate が決める印」)。
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the parts of one lifted function"
+    )]
     fn lift(
         &mut self,
         name: String,
         yields: bool,
         captured: Vec<LocalId>,
-        params: &[(Option<PatId>, Repr)],
+        params: &[Param],
         root: ExprId,
-        ret: Repr,
+        ret: (Repr, Mark),
+        typed: Option<Mark>,
     ) -> Atom {
-        let captured: Vec<(LocalId, Repr)> = captured
+        let captured: Vec<(LocalId, Repr, Mark)> = captured
             .into_iter()
             .map(|local| {
-                let ty = self
+                let ty = *self
                     .ctx
                     .types
                     .locals
                     .get(local)
                     .expect("every local is typed");
-                (local, repr(self.ctx.store, *ty, self.ctx.hir))
+                (
+                    local,
+                    repr(self.ctx.store, ty, self.ctx.hir),
+                    mark(self.ctx.store, ty),
+                )
             })
             .collect();
         let function = self.program.reserve(captured.len() + params.len());
         let core = FnLowering::new(self.ctx, &mut *self.program, yields)
             .lower(&name, true, &captured, params, root, ret);
         self.program.finish(function, core);
+        let closure_mark = typed.unwrap_or_else(|| {
+            captured
+                .iter()
+                .fold(Mark::Unr, |joined, &(_, _, mark)| joined.join(mark))
+        });
         let atoms = captured
             .iter()
-            .map(|(local, _)| self.locals[*local])
+            .map(|&(local, _, _)| self.locals[local])
             .collect();
-        self.closure(function, atoms)
+        self.closure(function, atoms, closure_mark)
     }
 
     /// 関数と渡した引数の値。引数がなければ関数の値にし、クロージャを確保しない (docs/spec/core-ir.md)。関数の値は
-    /// 型によらず `tobj` である (`types.rs` の `repr`)。
-    fn closure(&mut self, target: FnIdx, args: Vec<Atom>) -> Atom {
+    /// 型によらず `tobj` である (`types.rs` の `repr`)。`mark` はクロージャを作るときの印である。
+    fn closure(&mut self, target: FnIdx, args: Vec<Atom>, mark: Mark) -> Atom {
         if args.is_empty() {
             return Atom::Fn(target);
         }
-        self.bind("c", Repr::TObj, Rhs::MakeClosure(target, args))
+        self.bind("c", Repr::TObj, mark, Rhs::MakeClosure(target, args))
     }
 
     fn pat_type(&self, pat: PatId) -> TypeId {

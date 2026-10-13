@@ -7,7 +7,7 @@ use eml_hir::{
     ConstructorId, EffectDef, EffectId, EffectKind, FunctionId, ModuleId, OpMultiplicity,
     OperationId, Program as HirProgram, TypeDefId, TypeDefKind, ValueItem,
 };
-use eml_types::{Lin, TypeId, TypeStore, TypedProgram};
+use eml_types::{TypeId, TypeStore, TypedProgram};
 
 use crate::{Call, CoreFn, Rhs, Stmt, Term};
 use eml_lir::{
@@ -17,7 +17,7 @@ use eml_lir::{
 
 use crate::builder::FnBuilder;
 
-use super::types::{named, repr, split_arrows, var_info};
+use super::types::{declared_mark, declared_var_info, mark, named, repr, split_arrows, var_info};
 
 /// 文字列リテラルと表示用のパスの表。同じ文字列には同じ番号を返す。
 #[derive(Default)]
@@ -57,7 +57,7 @@ impl FnBuilder {
     }
 
     fn bind_string(&mut self, rhs: Rhs) -> Atom {
-        let var = self.var(named("s", ExternType::String.row().repr));
+        let var = self.var(named("s", ExternType::String.row().repr, Mark::Unr));
         self.emit(Stmt::Let { var, rhs });
         Atom::Var(var)
     }
@@ -80,10 +80,10 @@ pub(super) struct ProgramBuilder {
     /// IR が名指す data の型とタプルの配置 (`Program.layouts`)。最初に使った順に番号を振る。
     pub(super) layouts: Vec<Layout>,
     layout_ids: HashMap<LayoutKey, LayoutId>,
-    /// 操作のスキームの型。操作を包む関数の変数の Repr を決める。
+    /// 操作のスキームの型。操作を包む関数の変数の Repr と印を決める。
     operation_types: HashMap<OperationId, TypeId>,
     operation_wrappers: HashMap<OperationId, FnIdx>,
-    /// コンストラクタのスキームの型。コンストラクタを包む関数の変数の Repr を決める。
+    /// コンストラクタのスキームの型。コンストラクタを包む関数の変数の Repr と印を決める。
     constructor_types: HashMap<ConstructorId, TypeId>,
     constructor_wrappers: HashMap<ConstructorId, FnIdx>,
     /// 状態のない handler 用の、継続を包む関数。
@@ -226,14 +226,14 @@ impl ProgramBuilder {
             .into_iter()
             .map(|info| Atom::Var(builder.param(info)))
             .collect();
-        let ret = result.repr;
+        let (ret, ret_mark) = (result.repr, result.mark);
         let var = builder.var(result);
         builder.emit(Stmt::Let {
             var,
             rhs: rhs(args),
         });
         builder.terminate(Term::Return(Atom::Var(var)));
-        let core = builder.finish(name, true, yields, ret);
+        let core = builder.finish(name, true, yields, ret, ret_mark);
         self.finish(function, core);
         function
     }
@@ -250,12 +250,9 @@ impl ProgramBuilder {
         if let Some(function) = cached {
             return function;
         }
-        // 再開に渡す値と状態の型は節ごとに違うので、型変数と同じく `tobj` にする
-        let param = |name: &str| VarInfo {
-            name: name.to_string(),
-            repr: Repr::TObj,
-            mark: Mark::Unr,
-        };
+        // 再開に渡す値と状態の型は節ごとに違うので、型変数と同じく `tobj` と `poly` にする。生の継続も `once` の
+        // 操作なら `Lin`、`multi` なら `Unr` で、すべての handler が共有するこの関数では決まらない
+        let param = |name: &str| named(name, Repr::TObj, Mark::Poly);
         let mut params = vec![param("k"), param("v")];
         if stateful {
             params.push(param("s"));
@@ -304,7 +301,7 @@ impl ProgramBuilder {
         let (param_types, result_type) = split_arrows(types, ty, operation.arity);
         let params = param_types
             .iter()
-            .map(|&ty| var_info("p", types, ty, hir))
+            .map(|&ty| declared_var_info("p", types, ty, hir))
             .collect();
         let name = format!("op${}", core_name(hir, op.module, &operation.name));
         let function = self.simple(
@@ -315,7 +312,7 @@ impl ProgramBuilder {
                 call: perform_call(hir, op, args),
                 mask: Vec::new(),
             },
-            var_info("t", types, result_type, hir),
+            declared_var_info("t", types, result_type, hir),
         );
         self.operation_wrappers.insert(op, function);
         function
@@ -336,7 +333,7 @@ impl ProgramBuilder {
         let (param_types, result_type) = split_arrows(types, ty, constructor.fields.len());
         let params = param_types
             .iter()
-            .map(|&ty| var_info("p", types, ty, hir))
+            .map(|&ty| declared_var_info("p", types, ty, hir))
             .collect();
         let name = format!("con${}", core_name(hir, ctor.module, &constructor.name));
         let ctor_id = self.ctor(hir, types, ctor);
@@ -348,7 +345,7 @@ impl ProgramBuilder {
                 ctor: ctor_id,
                 args,
             },
-            var_info("d", types, result_type, hir),
+            declared_var_info("d", types, result_type, hir),
         );
         self.constructor_wrappers.insert(ctor, function);
         function
@@ -433,7 +430,13 @@ impl ProgramBuilder {
         });
         builder.terminate(Term::Return(Atom::Var(result)));
         // 入口の関数は実行系が外から呼ぶので、内部の関数でない
-        let core = builder.finish(name, false, yields, repr(types, result_type, hir));
+        let core = builder.finish(
+            name,
+            false,
+            yields,
+            repr(types, result_type, hir),
+            mark(types, result_type),
+        );
         self.finish(function, core);
         function
     }
@@ -513,7 +516,7 @@ pub(super) fn effect_table(
                     let ty = typed.decls[&ValueItem::Operation(op)].ty;
                     let (params, result) = split_arrows(types, ty, operation.arity);
                     let resumable = operation.multiplicity != OpMultiplicity::Never;
-                    let mark = |ty| mark_of(types.linearity_or_poly(ty));
+                    let mark = |ty| declared_mark(types, ty);
                     OperationInfo {
                         name: operation.name.clone(),
                         params: params.iter().map(|&ty| repr(types, ty, hir)).collect(),
@@ -530,13 +533,4 @@ pub(super) fn effect_table(
                 .collect(),
         })
         .collect()
-}
-
-/// 型の線形性が決める印。決まらない型 (`Poly`) と Kind 変数は、呼び出し側が決めるので `poly` にする。
-fn mark_of(lin: Lin) -> Mark {
-    match lin {
-        Lin::Unr => Mark::Unr,
-        Lin::Lin => Mark::Lin,
-        Lin::Poly | Lin::Var(_) => Mark::Poly,
-    }
 }

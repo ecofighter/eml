@@ -1,7 +1,7 @@
-//! 型から決まる値の表現 (Repr)。
+//! 型から決まる値の表現 (Repr) と Kind の印。
 
 use eml_hir::{Program as HirProgram, TypeDefId, TypeDefKind};
-use eml_types::{TypeId, TypeKind, TypeStore};
+use eml_types::{Lin, TypeId, TypeKind, TypeStore};
 
 use eml_lir::{Mark, Repr, VarInfo, data_repr};
 
@@ -38,15 +38,46 @@ pub(super) fn type_def_repr(id: TypeDefId, hir: &HirProgram) -> Repr {
     }
 }
 
-pub(super) fn var_info(name: &str, types: &TypeStore, ty: TypeId, hir: &HirProgram) -> VarInfo {
-    named(name, repr(types, ty, hir))
+/// instance の代入をかけた型の印 (docs/superpowers/specs/2026-10-13-s8d-kind-marks-design.md の
+/// 「translate が決める印」)。宣言に対して相対的な型は現れないので、`TypeStore::linearity` で読む。
+pub(super) fn mark(types: &TypeStore, ty: TypeId) -> Mark {
+    mark_of(types.linearity(ty))
 }
 
-pub(super) fn named(name: &str, repr: Repr) -> VarInfo {
+/// 宣言の型を代入せずに読む所 (`op$`、`con$`、操作の表) の印。`Rigid` と `Var` に依存する型は `poly` になる。
+/// 保守的なので、`(a, File)` も `lin` でなく `poly` になる。
+pub(super) fn declared_mark(types: &TypeStore, ty: TypeId) -> Mark {
+    mark_of(types.linearity_or_poly(ty))
+}
+
+/// 型の線形性が決める印。決まらない型 (`Poly`) と Kind 変数は、呼び出し側が決めるので `poly` にする。
+fn mark_of(lin: Lin) -> Mark {
+    match lin {
+        Lin::Unr => Mark::Unr,
+        Lin::Lin => Mark::Lin,
+        Lin::Poly | Lin::Var(_) => Mark::Poly,
+    }
+}
+
+pub(super) fn var_info(name: &str, types: &TypeStore, ty: TypeId, hir: &HirProgram) -> VarInfo {
+    named(name, repr(types, ty, hir), mark(types, ty))
+}
+
+/// 宣言の型で決める `var_info`。
+pub(super) fn declared_var_info(
+    name: &str,
+    types: &TypeStore,
+    ty: TypeId,
+    hir: &HirProgram,
+) -> VarInfo {
+    named(name, repr(types, ty, hir), declared_mark(types, ty))
+}
+
+pub(super) fn named(name: &str, repr: Repr, mark: Mark) -> VarInfo {
     VarInfo {
         name: name.to_string(),
         repr,
-        mark: Mark::Unr,
+        mark,
     }
 }
 

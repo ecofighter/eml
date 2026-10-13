@@ -54,6 +54,10 @@ impl FnBuilder {
         VarId(self.vars.len() as u32 - 1)
     }
 
+    pub(crate) fn mark(&self, var: VarId) -> Mark {
+        self.vars[var.0 as usize].mark
+    }
+
     /// 関数の引数。入口のブロックの引数になる。
     pub(crate) fn param(&mut self, info: VarInfo) -> VarId {
         let var = self.var(info);
@@ -166,7 +170,14 @@ impl FnBuilder {
     /// 大きいブロックから見るので、`return` に変わったブロックが次に消せる形になっても、同じ1回のループで消える。
     /// 消したブロックを詰めて、番号を振り直す。末尾呼び出しはここでは作らず、縮約に任せる (docs/spec/core-ir.md)。
     /// `internal` は内部の関数の印 (`CoreFn::internal`) である。
-    pub(crate) fn finish(self, name: String, internal: bool, yields: bool, ret: Repr) -> CoreFn {
+    pub(crate) fn finish(
+        self,
+        name: String,
+        internal: bool,
+        yields: bool,
+        ret: Repr,
+        ret_mark: Mark,
+    ) -> CoreFn {
         debug_assert!(
             self.labels.iter().all(|label| label.pending.is_empty()),
             "every label is resolved"
@@ -226,7 +237,7 @@ impl FnBuilder {
             clause: None,
             vars: self.vars,
             ret,
-            ret_mark: Mark::Unr,
+            ret_mark,
             blocks,
         }
     }

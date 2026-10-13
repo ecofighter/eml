@@ -214,12 +214,12 @@ fn a_file_taken_out_of_a_tuple_is_neither_dupped_nor_decreffed() {
     insta::assert_snapshot!(function(&lir_text(text, eml_lir::Pass::Perceus), "main"), @r#"
     fn main(p.0: unit) -> unit {
       let s.1: obj = const "input.txt"
-      let t.2: obj = extern Std.Fs.open(s.1)
-      let t.3: obj = extern Std.Fs.read_all(t.2)
-      unpack t.3 (,) #0(f.4: obj, first.5: obj)
+      let t.2: obj lin = extern Std.Fs.open(s.1)
+      let t.3: obj lin = extern Std.Fs.read_all(t.2)
+      unpack t.3 (,) #0(f.4: obj lin, first.5: obj)
       release t.3 (,) #0(f.4, first.5)
-      let t.6: obj = extern Std.Fs.read_all(f.4)
-      unpack t.6 (,) #0(f.7: obj, rest.8: obj)
+      let t.6: obj lin = extern Std.Fs.read_all(f.4)
+      unpack t.6 (,) #0(f.7: obj lin, rest.8: obj)
       release t.6 (,) #0(f.7, rest.8)
       let t.9: unit = extern Std.Fs.close(f.7)
       let t.10: unit = extern Prelude.println(first.5)

@@ -258,8 +258,8 @@ fn an_apply_is_split_after_an_arrow_that_may_yield() {
     let shown = core_text(text, Pass::Translate);
     // h 1 で yield しうるので、1つ目の apply の後で分け、1つ目に印を付ける
     insta::assert_snapshot!(function(&shown, "run"), @"
-    yields fn run(h.0: tobj) -> int {
-      let t.1: tobj = yields apply h.0(1)
+    yields fn run(h.0: tobj poly) -> int {
+      let t.1: tobj poly = yields apply h.0(1)
       let t.2: int = apply t.1(2)
       return t.2
     }
