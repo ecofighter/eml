@@ -176,14 +176,14 @@ impl<M: Mode> Heap<M> {
     }
 }
 
-/// `release` が名指す形の照らし合わせ。Kani が同じ関数を確かめる。
+/// `release` が名指す形の照らし合わせ。Verus が写しで同じ関数を証明する。
 pub(crate) fn layout_check(
     meta: Meta,
     scanned: usize,
     tag: u16,
     keep_len: usize,
 ) -> Result<(), HeapError> {
-    if meta.kind() == Kind::Data && meta.tag() == tag && scanned == keep_len {
+    if matches!(meta.kind(), Kind::Data) && meta.tag() == tag && scanned == keep_len {
         Ok(())
     } else {
         Err(HeapError::WrongLayout)
@@ -213,7 +213,7 @@ impl<M: Mode> Heap<M> {
 }
 
 /// `reuse_in_place` の照らし合わせ (spec の「`lin` ビット」)。`lin` ビットは、箱が持ち新しい `meta` が持たないときだけ
-/// 誤りにする。ビットが欠けるのは安全の側だからである。Kani が同じ関数を確かめる。
+/// 誤りにする。ビットが欠けるのは安全の側だからである。Verus が写しで同じ関数を証明する。
 pub(crate) fn reuse_in_place_check(boxed: Meta, new: Meta) -> Result<(), HeapError> {
     if !boxed.same_shape(new) {
         return Err(HeapError::WrongMeta);

@@ -1,15 +1,18 @@
 //! RC の遷移 (docs/superpowers/specs/2026-10-13-s9a-eml-rt-core-design.md の「遷移の関数」)。rc の値だけを受けて次の
-//! 状態を返す純粋な関数にし、ヒープ、単体テスト、Kani が同じ関数を使う。rc は 0 が不死、正が局所、負が共有である。
+//! 状態を返す純粋な関数にし、ヒープと単体テストが同じ関数を使い、Verus が写しで同じ関数を証明する。rc は 0 が不死、
+//! 正が局所、負が共有である。
 
 use crate::sync::{AtomicI32, Ordering};
 
 /// 局所の数の上限。ここに達した数は動かさない (spec の「上限」)。
 pub(crate) const LOCAL_MAX: i32 = i32::MAX;
 /// 共有の `dup` は、これより小さい数を動かさない。
-pub(crate) const DUP_LIMIT: i32 = i32::MIN + (1 << 16);
+/// 値は MIN + (1 << 16) である。16 進で書くのは、Verus の写し (`verus/rc.rs`) がシフトを受け付けず、本体と同じ文字に
+/// そろえるためである。
+pub(crate) const DUP_LIMIT: i32 = i32::MIN + 0x1_0000;
 /// 共有の `decref` は、これより小さい数を動かさない。2つの境目の間の幅が、並行の加減算で数が戻ってくるのを防ぐ
 /// (spec の「上限」)。
-/// 値は 1 << 17 である。`pub` と 16 進で書くのは、Verus の写し (`verus/rc.rs`) が `pub(crate)` の定数とシフトを受け付けず、
+/// 値は MIN + (1 << 17) である。`pub` と 16 進で書くのは、Verus の写し (`verus/rc.rs`) が `pub(crate)` の定数とシフトを受け付けず、
 /// 本体と同じ文字にそろえるためである。この crate の `rc` は private な module なので、外には見えない。
 pub const DROP_LIMIT: i32 = i32::MIN + 0x2_0000;
 
@@ -33,11 +36,13 @@ pub(crate) enum DecrefStep {
 }
 
 /// 局所の速い道は比較1回で決める。rc を符号なしで見て、1 以上 `LOCAL_MAX - 1` 以下かを1回で確かめる。
+// 範囲を比較で書くのは、Verus の写しが `Range::contains` の約束を信頼せずに済むようにするためである
+#[allow(clippy::manual_range_contains)]
 #[inline]
 pub(crate) fn dup_step(rc: i32) -> DupStep {
     if (rc as u32).wrapping_sub(1) < (LOCAL_MAX - 1) as u32 {
         DupStep::Store(rc + 1)
-    } else if (DUP_LIMIT..0).contains(&rc) {
+    } else if DUP_LIMIT <= rc && rc < 0 {
         DupStep::Shared
     } else {
         DupStep::Skip
@@ -45,13 +50,15 @@ pub(crate) fn dup_step(rc: i32) -> DupStep {
 }
 
 /// 2 以上 `LOCAL_MAX - 1` 以下を比較1回で確かめ、1 なら解放する。
+// 範囲を比較で書くのは、Verus の写しが `Range::contains` の約束を信頼せずに済むようにするためである
+#[allow(clippy::manual_range_contains)]
 #[inline]
 pub(crate) fn decref_step(rc: i32) -> DecrefStep {
     if (rc as u32).wrapping_sub(2) < (LOCAL_MAX - 2) as u32 {
         DecrefStep::Store(rc - 1)
     } else if rc == 1 {
         DecrefStep::Free
-    } else if (DROP_LIMIT..0).contains(&rc) {
+    } else if DROP_LIMIT <= rc && rc < 0 {
         DecrefStep::Shared
     } else {
         DecrefStep::Skip

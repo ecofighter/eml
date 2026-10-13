@@ -15,8 +15,10 @@ unsafe impl Send for Word {}
 unsafe impl Sync for Word {}
 
 impl Word {
-    pub const MIN_INT: i64 = -(1 << 62);
-    pub const MAX_INT: i64 = (1 << 62) - 1;
+    // `-(1 << 62)` と `(1 << 62) - 1` を 16 進で書くのは、Verus がシフトを桁あふれのおそれと報告し、写し
+    // (`verus/word.rs`) と同じ文字にそろえるためである
+    pub const MIN_INT: i64 = -0x4000_0000_0000_0000;
+    pub const MAX_INT: i64 = 0x3FFF_FFFF_FFFF_FFFF;
     /// `()`。値 0 の即値で、語の値は 1 である。生の `unit` の値もこの語の値にする。
     pub const UNIT: Word = Word::imm(0);
     /// 空の token と、まだ値を入れていない位置。即値でもポインタでもない。
@@ -24,23 +26,25 @@ impl Word {
 
     /// 即値 `(n << 1) | 1`。n は 63 ビットに収まらなければならない。
     pub const fn imm(n: i64) -> Word {
-        assert!(Word::MIN_INT <= n && n <= Word::MAX_INT);
-        Word(ptr::without_provenance_mut(((n << 1) | 1) as usize))
+        assert!(fits_imm(n));
+        Word(ptr::without_provenance_mut(imm_bits(n)))
     }
 
     /// 63 ビットに収まる `Int` を即値にする。収まらなければ `None` で、呼ぶ側が `BigInt` の物体にする。
     pub fn int(n: i64) -> Option<Word> {
-        (Word::MIN_INT..=Word::MAX_INT)
-            .contains(&n)
-            .then(|| Word::imm(n))
+        if fits_imm(n) {
+            Some(Word::imm(n))
+        } else {
+            None
+        }
     }
 
     pub fn is_imm(self) -> bool {
-        self.0.addr() & 1 == 1
+        is_imm_bits(self.0.addr())
     }
 
     pub fn is_ptr(self) -> bool {
-        self.0.addr() & 1 == 0 && !self.0.is_null()
+        is_ptr_bits(self.0.addr())
     }
 
     pub fn is_empty(self) -> bool {
@@ -50,7 +54,7 @@ impl Word {
     /// 即値の値。算術右シフトで1ビットずらす。
     pub fn imm_value(self) -> i64 {
         debug_assert!(self.is_imm());
-        (self.0.addr() as i64) >> 1
+        imm_value_bits(self.0.addr())
     }
 
     /// 語のビット列。VM が生のスロットに置くときに使う。
@@ -67,6 +71,33 @@ impl Word {
         // ポインタの語は確保したヘッダから作るので、null にならない
         unsafe { NonNull::new_unchecked(self.0.cast()) }
     }
+}
+
+// ビット列の計算は、ポインタ型を扱えない Verus の写し (`verus/word.rs`) で証明するため、整数の関数に分ける
+// (spec の「Verus」)。
+
+/// 63 ビットに収まるか。
+pub(crate) const fn fits_imm(n: i64) -> bool {
+    Word::MIN_INT <= n && n <= Word::MAX_INT
+}
+
+/// 即値のビット列 `(n << 1) | 1`。
+pub(crate) const fn imm_bits(n: i64) -> usize {
+    ((n << 1) | 1) as usize
+}
+
+pub(crate) const fn is_imm_bits(bits: usize) -> bool {
+    bits & 1 == 1
+}
+
+/// ポインタの語のビット列か。空の語 (0) はポインタでない。
+pub(crate) const fn is_ptr_bits(bits: usize) -> bool {
+    bits & 1 == 0 && bits != 0
+}
+
+/// 即値の値。算術右シフトで1ビットずらす。
+pub(crate) const fn imm_value_bits(bits: usize) -> i64 {
+    (bits as i64) >> 1
 }
 
 impl fmt::Debug for Word {

@@ -5,14 +5,60 @@
 /// `fn` か `const` を指す。表に載らない型は、写しの側で証明に要る部分だけを持てばよい。
 const COPIES: &[(&str, &str, &[&str])] = &[
     (
+        include_str!("meta.rs"),
+        include_str!("../verus/meta.rs"),
+        &[
+            "Kind",
+            "Kind::from_bits",
+            "Meta",
+            "Meta::LIN",
+            "Meta::KIND_SHIFT",
+            "Meta::KIND_MASK",
+            "Meta::new",
+            "Meta::tag",
+            "Meta::scan",
+            "Meta::kind",
+            "Meta::lin",
+            "Meta::with_lin",
+            "Meta::same_shape",
+        ],
+    ),
+    (
+        include_str!("word.rs"),
+        include_str!("../verus/word.rs"),
+        &[
+            "Word::MIN_INT",
+            "Word::MAX_INT",
+            "fits_imm",
+            "imm_bits",
+            "is_imm_bits",
+            "is_ptr_bits",
+            "imm_value_bits",
+        ],
+    ),
+    (
         include_str!("rc.rs"),
         include_str!("../verus/rc.rs"),
-        &["DROP_LIMIT", "mark_step"],
+        &[
+            "LOCAL_MAX",
+            "DUP_LIMIT",
+            "DROP_LIMIT",
+            "DupStep",
+            "DecrefStep",
+            "dup_step",
+            "decref_step",
+            "mark_step",
+        ],
     ),
     (
         include_str!("heap/share.rs"),
         include_str!("../verus/share.rs"),
         &["Graph", "ShareError", "share_walk"],
+    ),
+    (
+        include_str!("heap/check.rs"),
+        include_str!("../verus/check.rs"),
+        &["layout_check", "reuse_in_place_check"],
     ),
 ];
 
