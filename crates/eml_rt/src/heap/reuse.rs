@@ -172,6 +172,7 @@ impl<M: Mode> Heap<M> {
         &&& self.core.rc_of(h) == 1
         &&& self.core.ext(h) == 1
         &&& self.core.perm(h).slots == v.perm(h).slots
+        &&& self.core.perm(h).text == v.perm(h).text
         &&& self.core.model@.kept == v.model@.kept.filter(
             |e: Pos| e.0 != h || self.core.scanned(h, e.1),
         )
@@ -458,8 +459,8 @@ impl<M: Mode> Heap<M> {
     ///
     /// # Safety
     /// `token` はこのヒープの token で、まだ使っていない。空でなければ、その箱は `payload_words` の物体のこのモードでの
-    /// 級にある。同じ物理的な語の数の物体から作った token なら、どちらのモードでも満たす。`meta` の種類は `Foreign`
-    /// でも `Free` でもない。呼ぶ側は、ほかのヒープの操作の前に、走査する語がみな `meta` に合う値を持つようにする。
+    /// 級にある。同じ物理的な語の数の物体から作った token なら、どちらのモードでも満たす。`meta` の種類は `Foreign`、
+    /// `String`、`Free` のどれでもない。呼ぶ側は、ほかのヒープの操作の前に、走査する語がみな `meta` に合う値を持つようにする。
     /// 箱を使い回したときは、残したフィールドを書き直さなくてよい。
     #[inline]
     pub unsafe fn con_at(&mut self, token: Token, payload_words: usize, meta: Meta) -> (r: Result<
@@ -469,7 +470,8 @@ impl<M: Mode> Heap<M> {
         requires
             old(self).wf(),
             old(self).safe_settleable(),
-            meta.kind_spec() != Kind::Foreign && meta.kind_spec() != Kind::Free,
+            meta.kind_spec() != Kind::Foreign && meta.kind_spec() != Kind::String
+                && meta.kind_spec() != Kind::Free,
             meta.scan_spec() != 255,
             meta.scan_spec() <= payload_words,
             !M::CHECKED ==> old(self).con_at_ok(token, payload_words),
@@ -623,6 +625,7 @@ impl<M: Mode> Heap<M> {
             forall|b: usize| b != h@.addr ==> #[trigger] self.core.perms@[b] == s0.core.perms@[b],
             self.core.perm(h@.addr).rc == s0.core.perm(h@.addr).rc,
             self.core.perm(h@.addr).slots == s0.core.perm(h@.addr).slots,
+            self.core.perm(h@.addr).text == s0.core.perm(h@.addr).text,
             self.core.meta_bits(h@.addr) == match meta {
                 Some(m) => m.bits_spec(),
                 None => s0.core.meta_bits(h@.addr),

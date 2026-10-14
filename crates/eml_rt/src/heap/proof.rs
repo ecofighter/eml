@@ -39,6 +39,7 @@ impl Core {
                 &&& self.state(b) == BlockState::Live
                 &&& self.perm(b).meta == old.perm(b).meta
                 &&& self.perm(b).slots == old.perm(b).slots
+                &&& self.perm(b).text == old.perm(b).text
                 &&& self.block(b) == old.block(b)
                 &&& self.cap(b) == old.cap(b)
                 &&& (old.rc_of(b) == 0) == (self.rc_of(b) == 0)
@@ -612,6 +613,7 @@ impl Core {
             forall|b: usize| b != h ==> #[trigger] self.perms@[b] == s0.perms@[b],
             self.perm(h).meta == s0.perm(h).meta,
             self.perm(h).slots == s0.perm(h).slots,
+            self.perm(h).text == s0.perm(h).text,
             prefix_kept(self.perm(h), s0.perm(h)),
             self.perm(h).prefix is Some ==> p_code(self.perm(h)) == if dying {
                 0u32

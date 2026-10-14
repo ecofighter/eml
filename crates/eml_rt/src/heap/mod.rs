@@ -18,6 +18,7 @@ mod reuse;
 mod safe;
 pub(crate) mod share;
 mod states;
+mod string;
 mod walk;
 
 #[cfg(test)]
@@ -615,7 +616,7 @@ impl<M: Mode> Heap<M> {
     /// 物体を確保する。ペイロードは呼ぶ側が書く。
     ///
     /// # Safety
-    /// `meta` の種類は `Foreign` でも `Free` でもなく、`scan` は 255 でなく、走査する語はペイロードに収まる。呼ぶ側は、
+    /// `meta` の種類は `Foreign`、`String`、`Free` のどれでもなく、`scan` は 255 でなく、走査する語はペイロードに収まる。呼ぶ側は、
     /// ほかのヒープの操作の前に、`meta` に合うペイロード (走査する語、`BigInt` なら値) を書く。
     #[inline]
     pub unsafe fn alloc(&mut self, payload_words: usize, meta: Meta) -> (w: Word)
@@ -623,7 +624,8 @@ impl<M: Mode> Heap<M> {
             old(self).wf(),
             old(self).safe_settleable(),
             !M::CHECKED ==> old(self).settleable(),
-            meta.kind_spec() != Kind::Foreign && meta.kind_spec() != Kind::Free,
+            meta.kind_spec() != Kind::Foreign && meta.kind_spec() != Kind::String
+                && meta.kind_spec() != Kind::Free,
             meta.scan_spec() != 255,
             meta.scan_spec() <= payload_words,
         ensures
@@ -641,7 +643,8 @@ impl<M: Mode> Heap<M> {
             old(self).wf(),
             old(self).safe_settleable(),
             !M::CHECKED ==> old(self).settleable(),
-            meta.kind_spec() != Kind::Foreign && meta.kind_spec() != Kind::Free,
+            meta.kind_spec() != Kind::Foreign && meta.kind_spec() != Kind::String
+                && meta.kind_spec() != Kind::Free,
             meta.scan_spec() != 255,
             meta.scan_spec() <= payload_words,
         ensures
@@ -657,13 +660,14 @@ impl<M: Mode> Heap<M> {
             old(self).safe_settleable(),
             !M::CHECKED ==> old(self).settleable(),
             rc == 0 || rc == 1,
-            meta.kind_spec() != Kind::Foreign && meta.kind_spec() != Kind::Free,
+            meta.kind_spec() != Kind::Foreign && meta.kind_spec() != Kind::String
+                && meta.kind_spec() != Kind::Free,
             meta.scan_spec() != 255,
             meta.scan_spec() <= payload_words,
         ensures
             final(self).built(*old(self), w, meta, rc, payload_words),
     {
-        debug_assert!(!matches!(meta.kind(), Kind::Foreign | Kind::Free));
+        debug_assert!(!matches!(meta.kind(), Kind::Foreign | Kind::String | Kind::Free));
         self.settle();
         let ghost s1 = *self;
         let (h, Tracked(perm)) = self.alloc_header(payload_words, rc, meta);
@@ -2069,10 +2073,10 @@ impl<M: Mode> Heap<M> {
         self.core.scanned(w.bits_spec(), i)
     }
 
-    /// `w` の i 語目は生の語である。種類は `Foreign` でなく、i 語目は走査する語の後でブロックの中にある。
+    /// `w` の i 語目は生の語である。種類はペイロードが不透明な種類 (`Foreign`、`String`) でなく、i 語目は走査する語の後でブロックの中にある。
     pub closed spec fn raw_at(&self, w: Word, i: int) -> bool {
         let h = w.bits_spec();
-        &&& self.core.kind(h) != Kind::Foreign
+        &&& !(self.core.kind(h) == Kind::Foreign || self.core.kind(h) == Kind::String)
         &&& p_first(self.core.perm(h)) + p_count(self.core.perm(h)) <= i < self.core.cap(h)
     }
 
@@ -2267,7 +2271,7 @@ impl<M: Mode> Heap<M> {
         Ok(())
     }
 
-    /// i が生の語の物理的な添字でなければ `OutOfBounds` を、物体が `Foreign` なら `WrongKind` を返す。速いモードでは何も
+    /// i が生の語の物理的な添字でなければ `OutOfBounds` を、物体のペイロードが不透明なら `WrongKind` を返す。速いモードでは何も
     /// 確かめない。
     #[inline]
     fn raw_check(&self, h: *mut Header, i: usize) -> (r: Result<(), HeapError>)
@@ -2280,17 +2284,19 @@ impl<M: Mode> Heap<M> {
             !M::CHECKED ==> r is Ok,
             r is Ok && M::CHECKED ==> {
                 let p = self.core.perm(h@.addr);
-                &&& self.core.kind(h@.addr) != Kind::Foreign
+                &&& !(self.core.kind(h@.addr) == Kind::Foreign || self.core.kind(h@.addr)
+                    == Kind::String)
                 &&& p_first(p) + p_count(p) <= i < self.core.cap(h@.addr)
             },
             ({
                 let p = self.core.perm(h@.addr);
-                &&& self.core.kind(h@.addr) != Kind::Foreign
+                &&& !(self.core.kind(h@.addr) == Kind::Foreign || self.core.kind(h@.addr)
+                    == Kind::String)
                 &&& p_first(p) + p_count(p) <= i < self.core.cap(h@.addr)
             }) ==> r is Ok,
     {
         if M::CHECKED {
-            if self.core.meta_get(h).kind().has_finalizer() {
+            if self.core.meta_get(h).kind().opaque() {
                 return Err(HeapError::WrongKind);
             }
             let (first, n) = self.core.scan_get(h);

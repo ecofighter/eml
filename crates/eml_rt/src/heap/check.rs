@@ -248,6 +248,7 @@ impl<M: Mode> Heap<M> {
                 &&& c.perm(b).rc == s0.perm(b).rc
                 &&& c.perm(b).meta == s0.perm(b).meta
                 &&& c.perm(b).slots == s0.perm(b).slots
+                &&& c.perm(b).text == s0.perm(b).text
                 &&& prefix_recounted(c.perm(b), s0.perm(b), s0.rc_of(b) == 0)
             } by {
                 if b != h@.addr {

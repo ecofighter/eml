@@ -23,6 +23,7 @@ mod checked;
 mod raw;
 mod reuse;
 mod share;
+mod string;
 mod trusted;
 
 /// 解放の連鎖と `share` が再帰しないことを確かめる長さ。

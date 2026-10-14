@@ -94,6 +94,7 @@ impl Core {
         &&& forall|b: usize| b != h ==> #[trigger] self.perms@[b] == old.perms@[b]
         &&& self.perm(h).meta == old.perm(h).meta
         &&& self.perm(h).slots == old.perm(h).slots
+        &&& self.perm(h).text == old.perm(h).text
         &&& self.state(h) == if last {
             BlockState::Dying
         } else {
@@ -181,6 +182,7 @@ impl Core {
             &&& self.state(b) == BlockState::Live
             &&& self.perm(b).meta == v.perm(b).meta
             &&& self.perm(b).slots == v.perm(b).slots
+            &&& self.perm(b).text == v.perm(b).text
             &&& self.block(b) == v.block(b)
             &&& self.cap(b) == v.cap(b)
             &&& (v.rc_of(b) == 0) == (self.rc_of(b) == 0)
@@ -228,6 +230,7 @@ impl Core {
             &&& self.state(b) == BlockState::Live
             &&& self.perm(b).meta == s0.perm(b).meta
             &&& self.perm(b).slots == s0.perm(b).slots
+            &&& self.perm(b).text == s0.perm(b).text
             &&& self.block(b) == s0.block(b)
             &&& self.cap(b) == s0.cap(b)
             &&& (s0.rc_of(b) == 0) == (self.rc_of(b) == 0)

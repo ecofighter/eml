@@ -282,6 +282,7 @@ impl Core {
                 &&& self.perm(b).rc == old.perm(b).rc
                 &&& self.perm(b).meta == old.perm(b).meta
                 &&& self.perm(b).slots == old.perm(b).slots
+                &&& self.perm(b).text == old.perm(b).text
                 &&& prefix_recounted(self.perm(b), old.perm(b), old.rc_of(b) == 0)
             }
     }
@@ -388,6 +389,7 @@ impl Core {
             &&& self.state(b) == BlockState::Live
             &&& self.perm(b).meta == old.perm(b).meta
             &&& self.perm(b).slots == old.perm(b).slots
+            &&& self.perm(b).text == old.perm(b).text
             &&& self.block(b) == old.block(b)
             &&& self.cap(b) == old.cap(b)
             &&& (old.rc_of(b) == 0) == (self.rc_of(b) == 0)
@@ -455,6 +457,7 @@ impl Core {
             final(self).perm(h@.addr).rc == old(self).perm(h@.addr).rc,
             final(self).perm(h@.addr).meta == old(self).perm(h@.addr).meta,
             final(self).perm(h@.addr).slots == old(self).perm(h@.addr).slots,
+            final(self).perm(h@.addr).text == old(self).perm(h@.addr).text,
             final(self).perm(h@.addr).prefix is Some,
             final(self).perm(h@.addr).prefix->0.first == old(self).perm(h@.addr).prefix->0.first,
             final(self).perm(h@.addr).prefix->0.state.ptr() == old(self).perm(
@@ -492,6 +495,7 @@ impl Core {
             final(self).perm(h@.addr).rc == old(self).perm(h@.addr).rc,
             final(self).perm(h@.addr).meta == old(self).perm(h@.addr).meta,
             final(self).perm(h@.addr).slots == old(self).perm(h@.addr).slots,
+            final(self).perm(h@.addr).text == old(self).perm(h@.addr).text,
             final(self).perm(h@.addr).prefix is Some,
             final(self).perm(h@.addr).prefix->0.state == old(self).perm(h@.addr).prefix->0.state,
             final(self).perm(h@.addr).prefix->0.first.ptr() == old(self).perm(
@@ -590,6 +594,7 @@ impl Core {
         &&& forall|b: usize| b != h ==> #[trigger] self.perms@[b] == old.perms@[b]
         &&& self.perm(h).meta == old.perm(h).meta
         &&& self.perm(h).slots == old.perm(h).slots
+        &&& self.perm(h).text == old.perm(h).text
         &&& prefix_kept(self.perm(h), old.perm(h))
         &&& self.perm(h).rc.ptr() == old.perm(h).rc.ptr()
         &&& self.perm(h).rc.is_init()
@@ -727,6 +732,7 @@ impl Core {
             forall|b: usize| b != h ==> #[trigger] self.perms@[b] == s0.perms@[b],
             self.perm(h).meta == s0.perm(h).meta,
             self.perm(h).slots == s0.perm(h).slots,
+            self.perm(h).text == s0.perm(h).text,
             up ==> edge is None,
             edge matches Some(e) ==> s0.model@.edges.dom().contains(e) && s0.model@.edges[e] == h
                 && s0.state(e.0) == BlockState::Dying,
@@ -834,6 +840,7 @@ impl Core {
             &&& self.state(b) == BlockState::Live
             &&& self.perm(b).meta == s0.perm(b).meta
             &&& self.perm(b).slots == s0.perm(b).slots
+            &&& self.perm(b).text == s0.perm(b).text
             &&& self.block(b) == s0.block(b)
             &&& self.cap(b) == s0.cap(b)
             &&& (s0.rc_of(b) == 0) == (self.rc_of(b) == 0)

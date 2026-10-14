@@ -12,6 +12,7 @@ const FILES: &[(&str, &str)] = &[
     ("meta.rs", include_str!("meta.rs")),
     ("mode.rs", include_str!("mode.rs")),
     ("rc.rs", include_str!("rc.rs")),
+    ("text.rs", include_str!("text.rs")),
     ("word.rs", include_str!("word.rs")),
     ("heap/mod.rs", include_str!("heap/mod.rs")),
     ("heap/chain.rs", include_str!("heap/chain.rs")),
@@ -23,6 +24,7 @@ const FILES: &[(&str, &str)] = &[
     ("heap/inv.rs", include_str!("heap/inv.rs")),
     ("heap/proof.rs", include_str!("heap/proof.rs")),
     ("heap/states.rs", include_str!("heap/states.rs")),
+    ("heap/string.rs", include_str!("heap/string.rs")),
     ("heap/release.rs", include_str!("heap/release.rs")),
     ("heap/reuse.rs", include_str!("heap/reuse.rs")),
     ("heap/safe.rs", include_str!("heap/safe.rs")),
@@ -93,6 +95,9 @@ const TRUSTED: &[(&str, &str)] = &[
     ("cell.rs: external_body rc_is_last", "T2"),
     ("cell.rs: external_body u32_load", "T2"),
     ("cell.rs: external_body u32_store", "T2"),
+    ("text.rs: external_body write_text", "T10"),
+    ("text.rs: external_body text", "T10"),
+    ("text.rs: external_body text_ptr", "T10"),
 ];
 
 /// `verus!` の外でも書いてよい `unsafe` の始まり。`Send` と `Sync` の宣言と、検証した関数を呼ぶだけの `Drop` である。
@@ -373,7 +378,10 @@ fn the_trust_list_is_exactly_the_trusted_items() {
     );
     for (item, number) in TRUSTED {
         assert!(
-            ["T0", "T1", "T2", "T3", "T4", "T5", "T6", "T7", "T8", "T9"].contains(number),
+            [
+                "T0", "T1", "T2", "T3", "T4", "T5", "T6", "T7", "T8", "T9", "T10"
+            ]
+            .contains(number),
             "{item} has no trust row"
         );
     }

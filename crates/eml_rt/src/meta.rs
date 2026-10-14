@@ -20,11 +20,12 @@ pub enum Kind {
     Data = 0,
     BigInt = 1,
     Foreign = 2,
+    String = 3,
     /// 確保器が空いたブロックに付ける。生きている物体はこの種類を持たない。
     Free = 15,
 }
 
-/// 種類のビットが表す種類。0、1、2、15 のほかは `Meta` の型の不変条件で除く。
+/// 種類のビットが表す種類。0、1、2、3、15 のほかは `Meta` の型の不変条件で除く。
 pub open spec fn kind_of(bits: u32) -> Kind {
     if bits == 0 {
         Kind::Data
@@ -32,13 +33,15 @@ pub open spec fn kind_of(bits: u32) -> Kind {
         Kind::BigInt
     } else if bits == 2 {
         Kind::Foreign
+    } else if bits == 3 {
+        Kind::String
     } else {
         Kind::Free
     }
 }
 
 pub open spec fn known_kind(bits: u32) -> bool {
-    bits == 0 || bits == 1 || bits == 2 || bits == 15
+    bits == 0 || bits == 1 || bits == 2 || bits == 3 || bits == 15
 }
 
 impl Kind {
@@ -53,6 +56,7 @@ impl Kind {
             0 => Kind::Data,
             1 => Kind::BigInt,
             2 => Kind::Foreign,
+            3 => Kind::String,
             15 => Kind::Free,
             _ => unreachable!("an unknown object kind {bits}"),
         }
@@ -64,6 +68,7 @@ impl Kind {
             Kind::Data => "Data",
             Kind::BigInt => "BigInt",
             Kind::Foreign => "Foreign",
+            Kind::String => "String",
             Kind::Free => "Free",
         }
     }
@@ -82,6 +87,17 @@ impl Kind {
             r == (self == Kind::Foreign),
     {
         matches!(self, Kind::Foreign)
+    }
+
+    /// ペイロードが核の操作から見て不透明か。`raw` と `set_raw` はこの種類を断る。`Foreign` は Rust の値を、`String` は
+    /// 途中までしか書いていない語を持つので、語として読み書きすると未初期化の読み込みか不変条件の破れになる
+    /// (docs/spec/object-model.md の「種類」)。
+    #[inline]
+    pub(crate) fn opaque(self) -> (r: bool)
+        ensures
+            r == (self == Kind::Foreign || self == Kind::String),
+    {
+        matches!(self, Kind::Foreign | Kind::String)
     }
 }
 
@@ -479,6 +495,8 @@ pub(crate) tracked struct BlockPerm {
     pub(crate) tracked meta: PointsTo<u32>,
     pub(crate) tracked slots: Map<int, PointsTo<Word>>,
     pub(crate) tracked prefix: Option<PrefixPerm>,
+    /// `String` の物体のバイト列。メモリのバイト列はこれに等しい (信頼の一覧の T10)。ほかの種類では意味を持たない。
+    pub(crate) ghost text: Seq<u8>,
 }
 
 /// 語に揃った番地から、欄と語の揃えを導く。
@@ -575,7 +593,7 @@ impl BlockPerm {
         let tracked rc = rc_raw.into_typed::<i32>(h@.addr);
         let tracked meta = meta_raw.into_typed::<u32>((hs + 4) as usize);
         let tracked slots = Self::slots_from_raw(rest4, h, 0, cap);
-        BlockPerm { rc, meta, slots, prefix }
+        BlockPerm { rc, meta, slots, prefix, text: Seq::empty() }
     }
 
     /// ペイロードの `from` 語目から `cap` 語目の手前までの権限を作る。
@@ -628,7 +646,7 @@ impl BlockPerm {
             r.is_range(block_start(h, prefixed), block_size(cap, prefixed)),
             r.provenance() == h@.provenance,
     {
-        let tracked BlockPerm { rc: mut rc, meta: mut meta, slots, prefix } = self;
+        let tracked BlockPerm { rc: mut rc, meta: mut meta, slots, prefix, .. } = self;
         rc.leak_contents();
         meta.leak_contents();
         let hs = h@.addr as int;
@@ -745,7 +763,13 @@ mod tests {
 
     #[test]
     fn only_data_becomes_a_token_and_only_foreign_has_a_finalizer() {
-        for kind in [Kind::Data, Kind::BigInt, Kind::Foreign, Kind::Free] {
+        for kind in [
+            Kind::Data,
+            Kind::BigInt,
+            Kind::Foreign,
+            Kind::String,
+            Kind::Free,
+        ] {
             assert_eq!(kind.tokenable(), kind == Kind::Data);
             assert_eq!(kind.has_finalizer(), kind == Kind::Foreign);
         }

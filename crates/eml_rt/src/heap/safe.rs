@@ -8,7 +8,7 @@ use super::Core;
 #[cfg(verus_only)]
 use super::inv::{
     p_code, p_count, p_extended, p_first, p_gen, p_init, p_kind, p_meta, p_scanned, p_word,
-    prefix_kept, prefix_recounted, state_code,
+    prefix_kept, prefix_recounted, state_code, string_wf,
 };
 #[cfg(verus_only)]
 use super::model::{BlockState, Model, Pos};
@@ -130,6 +130,9 @@ impl Core {
         }
         &&& st == BlockState::Live || st == BlockState::Dying ==> (p_kind(p) == Kind::BigInt
             ==> self.cap(h) >= 1 && p_init(p, 0))
+        &&& st == BlockState::Live || st == BlockState::Dying ==> (p_kind(p) == Kind::String
+            ==> string_wf(p, self.cap(h)))
+        &&& st == BlockState::Building ==> p_kind(p) != Kind::String
         &&& st == BlockState::Live || st == BlockState::Dying || st == BlockState::Token ==> forall|
             i: int,
         | #[trigger]
@@ -432,6 +435,7 @@ impl Core {
                 &&& self.perm(b).rc.is_init()
                 &&& self.perm(b).meta == old.perm(b).meta
                 &&& self.perm(b).slots == old.perm(b).slots
+                &&& self.perm(b).text == old.perm(b).text
                 &&& prefix_recounted(self.perm(b), old.perm(b), true)
             }
     }
@@ -466,6 +470,7 @@ impl Core {
             self.perm(h).rc == s0.perm(h).rc,
             self.perm(h).meta == s0.perm(h).meta,
             self.perm(h).slots == s0.perm(h).slots,
+            self.perm(h).text == s0.perm(h).text,
             self.perm(h).prefix is Some,
             s0.perm(h).prefix is Some,
             self.perm(h).prefix->0.first == s0.perm(h).prefix->0.first,
@@ -508,6 +513,7 @@ impl Core {
             self.state(h) != BlockState::Building ==> self.model@.building == s0.model@.building,
             self.state(h) != BlockState::Freed,
             self.perm(h).slots == s0.perm(h).slots,
+            self.perm(h).text == s0.perm(h).text,
             self.perm(h).rc.ptr() == s0.perm(h).rc.ptr(),
             self.perm(h).rc.is_init(),
             self.perm(h).meta.ptr() == s0.perm(h).meta.ptr(),
@@ -527,6 +533,7 @@ impl Core {
             self.state(h) != BlockState::Building ==> self.perm(h).meta == s0.perm(h).meta,
             self.state(h) == BlockState::Building ==> self.model@.written[h] == Set::<int>::empty(),
             self.state(h) == BlockState::Token ==> p_kind(self.perm(h)) == Kind::Data,
+            self.state(h) == BlockState::Building ==> p_kind(self.perm(h)) != Kind::String,
             forall|i: int| #[trigger]
                 self.model@.kept.contains((h, i)) ==> p_scanned(self.perm(h), i) && p_scanned(
                     s0.perm(h),
@@ -590,7 +597,7 @@ impl Core {
                 }
             },
             !s0.scanned(h, i) ==> p_first(s0.perm(h)) + p_count(s0.perm(h)) <= i && self.model
-                == s0.model,
+                == s0.model && s0.kind(h) != Kind::String,
         ensures
             self.safe_wf(),
             forall|w: Word| #[trigger] self.word_ok(w) == s0.word_ok(w),
@@ -684,6 +691,7 @@ impl Core {
             &&& self.perm(b).rc.is_init()
             &&& self.perm(b).meta == old.perm(b).meta
             &&& self.perm(b).slots == old.perm(b).slots
+            &&& self.perm(b).text == old.perm(b).text
             &&& prefix_recounted(self.perm(b), old.perm(b), true)
         } by {
             assert(mid.dom().contains(b));
@@ -720,6 +728,7 @@ impl Core {
             &&& self.perm(b).rc.is_init()
             &&& self.perm(b).meta == old.perm(b).meta
             &&& self.perm(b).slots == old.perm(b).slots
+            &&& self.perm(b).text == old.perm(b).text
             &&& prefix_recounted(self.perm(b), old.perm(b), true)
         } by {
             old.lemma_shape(b);
@@ -907,6 +916,7 @@ impl Core {
             forall|b: usize| b != h ==> #[trigger] self.perms@[b] == s0.perms@[b],
             self.perm(h).meta == s0.perm(h).meta,
             self.perm(h).slots == s0.perm(h).slots,
+            self.perm(h).text == s0.perm(h).text,
             prefix_kept(self.perm(h), s0.perm(h)),
             self.perm(h).rc.ptr() == s0.perm(h).rc.ptr(),
             self.perm(h).rc.is_init(),
@@ -971,6 +981,7 @@ impl Core {
         ensures
             p_extended(self.perm(h)) ==> p_init(self.perm(h), 0),
             p_kind(self.perm(h)) == Kind::BigInt ==> self.cap(h) >= 1 && p_init(self.perm(h), 0),
+            p_kind(self.perm(h)) == Kind::String ==> string_wf(self.perm(h), self.cap(h)),
             p_first(self.perm(h)) + p_count(self.perm(h)) <= self.cap(h),
     {
         reveal(Core::building_wf);
@@ -1064,6 +1075,8 @@ impl Core {
         }
         &&& st == BlockState::Live || st == BlockState::Dying ==> (p_kind(p) == Kind::BigInt
             ==> self.cap(h) >= 1 && p_init(p, 0))
+        &&& st == BlockState::Live || st == BlockState::Dying ==> (p_kind(p) == Kind::String
+            ==> string_wf(p, self.cap(h)))
         &&& st == BlockState::Token ==> p_kind(p) == Kind::Data
     }
 

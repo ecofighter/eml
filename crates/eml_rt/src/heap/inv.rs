@@ -1,6 +1,8 @@
 //! ヒープの不変条件と、API の前提の述語 (docs/spec/object-model.md の「`unsafe` の核」)。
 
 use vstd::prelude::*;
+#[cfg(verus_only)]
+use vstd::utf8::valid_utf8;
 
 use super::Core;
 #[cfg(verus_only)]
@@ -101,6 +103,23 @@ pub(crate) open spec fn p_count(p: BlockPerm) -> int {
     } else {
         bits_scan(p.meta.value()) as int
     }
+}
+
+/// `String` の物体のバイト列。
+pub(crate) open spec fn p_text(p: BlockPerm) -> Seq<u8> {
+    p.text
+}
+
+/// `String` の物体の中身 (docs/spec/object-model.md の「種類」)。走査する語はなく、生の 0 語目にバイト長を持ち、
+/// バイト列は長さの語の後ろの容量に収まる妥当な UTF-8 である。
+pub(crate) open spec fn string_wf(p: BlockPerm, cap: nat) -> bool {
+    &&& p_count(p) == 0
+    &&& !p_extended(p)
+    &&& cap >= 1
+    &&& p_init(p, 0)
+    &&& p_word(p, 0).bits_spec() == p.text.len()
+    &&& p.text.len() <= 8 * (cap - 1)
+    &&& valid_utf8(p.text)
 }
 
 /// i 語目は走査する語である。
@@ -227,6 +246,7 @@ impl Core {
         &&& self.perm(h).rc == old.perm(h).rc
         &&& self.perm(h).meta == old.perm(h).meta
         &&& self.perm(h).slots == old.perm(h).slots
+        &&& self.perm(h).text == old.perm(h).text
         &&& prefix_kept(self.perm(h), old.perm(h))
     }
 
@@ -308,6 +328,9 @@ impl Core {
         }
         &&& st == BlockState::Live || st == BlockState::Dying ==> (p_kind(p) == Kind::BigInt
             ==> self.cap(h) >= 1 && p_init(p, 0))
+        &&& st == BlockState::Live || st == BlockState::Dying ==> (p_kind(p) == Kind::String
+            ==> string_wf(p, self.cap(h)))
+        &&& st == BlockState::Building ==> p_kind(p) != Kind::String
         &&& st == BlockState::Live ==> forall|i: int| #[trigger]
             p_scanned(p, i) ==> self.slot_word(p, h, i)
         &&& st == BlockState::Dying ==> forall|i: int| #[trigger] p_scanned(p, i) ==> p_init(p, i)

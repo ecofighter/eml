@@ -100,6 +100,7 @@ impl Core {
                 &&& self.state(b) == BlockState::Live
                 &&& self.perm(b).meta == old.perm(b).meta
                 &&& self.perm(b).slots == old.perm(b).slots
+                &&& self.perm(b).text == old.perm(b).text
                 &&& self.block(b) == old.block(b)
                 &&& self.cap(b) == old.cap(b)
                 &&& (old.rc_of(b) == 0) == (self.rc_of(b) == 0)
@@ -117,6 +118,7 @@ impl Core {
         &&& old.dom().contains(h) ==> {
             &&& self.perm(h).meta == old.perm(h).meta
             &&& self.perm(h).slots == old.perm(h).slots
+            &&& self.perm(h).text == old.perm(h).text
             &&& prefix_recounted(self.perm(h), old.perm(h), old.rc_of(h) == 0)
             &&& (old.rc_of(h) == 0) == (self.rc_of(h) == 0)
             &&& (old.rc_of(h) > 0) == (self.rc_of(h) > 0)
@@ -146,6 +148,7 @@ impl Core {
             old.dom().contains(b) ==> {
                 &&& self.perm(b).meta == old.perm(b).meta
                 &&& self.perm(b).slots == old.perm(b).slots
+                &&& self.perm(b).text == old.perm(b).text
                 &&& prefix_recounted(self.perm(b), old.perm(b), old.rc_of(b) == 0)
                 &&& (old.rc_of(b) == 0) == (self.rc_of(b) == 0)
                 &&& (old.rc_of(b) > 0) == (self.rc_of(b) > 0)
@@ -186,6 +189,7 @@ impl Core {
             &&& self.state(b) == BlockState::Live
             &&& self.perm(b).meta == s0.perm(b).meta
             &&& self.perm(b).slots == s0.perm(b).slots
+            &&& self.perm(b).text == s0.perm(b).text
             &&& self.block(b) == s0.block(b)
             &&& self.cap(b) == s0.cap(b)
             &&& (s0.rc_of(b) == 0) == (self.rc_of(b) == 0)
@@ -238,6 +242,7 @@ impl Core {
             &&& self.state(b) == BlockState::Live
             &&& self.perm(b).meta == s0.perm(b).meta
             &&& self.perm(b).slots == s0.perm(b).slots
+            &&& self.perm(b).text == s0.perm(b).text
             &&& self.block(b) == s0.block(b)
             &&& self.cap(b) == s0.cap(b)
             &&& (s0.rc_of(b) == 0) == (self.rc_of(b) == 0)
@@ -424,6 +429,7 @@ impl Core {
             &&& self.state(b) == BlockState::Live
             &&& self.perm(b).meta == s0.perm(b).meta
             &&& self.perm(b).slots == s0.perm(b).slots
+            &&& self.perm(b).text == s0.perm(b).text
             &&& self.block(b) == s0.block(b)
             &&& self.cap(b) == s0.cap(b)
             &&& (s0.rc_of(b) == 0) == (self.rc_of(b) == 0)

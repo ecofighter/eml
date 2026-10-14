@@ -463,6 +463,7 @@ impl Core {
             old(self).model@.building is None,
             meta matches Some(m) ==> {
                 &&& m.kind_spec() != Kind::Free
+                &&& m.kind_spec() != Kind::String
                 &&& m.scan_spec() != 255
                 &&& m.scan_spec() <= old(self).cap(h@.addr)
             },
@@ -477,6 +478,7 @@ impl Core {
                 b != h@.addr ==> #[trigger] final(self).perms@[b] == old(self).perms@[b],
             final(self).perm(h@.addr).rc == old(self).perm(h@.addr).rc,
             final(self).perm(h@.addr).slots == old(self).perm(h@.addr).slots,
+            final(self).perm(h@.addr).text == old(self).perm(h@.addr).text,
             final(self).meta_bits(h@.addr) == match meta {
                 Some(m) => m.bits_spec(),
                 None => old(self).meta_bits(h@.addr),
@@ -637,6 +639,7 @@ impl Core {
             forall|b: usize| b != a ==> #[trigger] self.perms@[b] == s0.perms@[b],
             self.perm(a).rc == s0.perm(a).rc,
             self.perm(a).slots == s0.perm(a).slots,
+            self.perm(a).text == s0.perm(a).text,
             (self.perm(a).prefix is Some) == (s0.perm(a).prefix is Some),
             self.perm(a).prefix matches Some(q) ==> {
                 &&& q.first.ptr() == s0.perm(a).prefix->0.first.ptr()
@@ -653,6 +656,7 @@ impl Core {
                     &&& self.meta_bits(a) == m.bits_spec()
                     &&& bits_wf(m.bits_spec())
                     &&& bits_kind(m.bits_spec()) != Kind::Free
+                    &&& bits_kind(m.bits_spec()) != Kind::String
                     &&& bits_scan(m.bits_spec()) != 255
                     &&& bits_scan(m.bits_spec()) <= s0.cap(a)
                 },

@@ -7,6 +7,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use vstd::prelude::Tracked;
 
+use super::string::text;
 use super::{CONS, cons, list, mortal, probe, raw};
 use crate::cell::{rc_decref_shared, rc_dup_shared};
 use crate::{Checked, Fast, Heap, HeapError, Kind, Meta, Mode, Word};
@@ -287,6 +288,27 @@ fn every_core_operation_once_checked() {
     assert!(heap.leaks().is_empty());
 }
 
+// T10
+fn strings_of_every_length_are_read_back<M: Mode>() {
+    let mut heap = Heap::<M>::new();
+    // 語に揃わない長さと、1ページを超える長さ
+    for n in [0, 1, 7, 8, 9, 15, 16, 17, 1023, 1025, PAGE_BYTES + 3] {
+        let s: String = (0..n).map(|i| char::from(b'a' + (i % 26) as u8)).collect();
+        let w = heap.alloc_string(&s);
+        assert_eq!(text(&heap, w), s);
+        unsafe { heap.decref(w) }.unwrap();
+    }
+    assert_eq!(mortal(&heap), 0);
+}
+
+fn multibyte_strings_are_read_back<M: Mode>() {
+    let mut heap = Heap::<M>::new();
+    let s = "é ü 日本 🦀".repeat(100);
+    let w = heap.alloc_string(&s);
+    assert_eq!(text(&heap, w), s);
+    unsafe { heap.decref(w) }.unwrap();
+}
+
 both_modes!(
     pages_are_aligned_and_returned,
     large_objects_get_their_own_page,
@@ -298,4 +320,6 @@ both_modes!(
     a_zero_sized_foreign_value,
     a_panicking_finalizer_is_not_run_twice,
     a_panicking_finalizer_in_a_chain_leaks_the_rest,
+    strings_of_every_length_are_read_back,
+    multibyte_strings_are_read_back,
 );

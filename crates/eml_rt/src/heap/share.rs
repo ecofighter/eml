@@ -1465,6 +1465,7 @@ pub(crate) open spec fn same_frame(
             let y = p0[a];
             &&& x.meta == y.meta
             &&& x.slots == y.slots
+            &&& x.text == y.text
             &&& x.rc.ptr() == y.rc.ptr()
             &&& x.rc.is_init() == y.rc.is_init()
             &&& (x.prefix is Some) == (y.prefix is Some)
@@ -1482,6 +1483,7 @@ pub(crate) open spec fn same_frame(
 pub(crate) proof fn lemma_kids_same(x: BlockPerm, y: BlockPerm, first: int, i: int)
     requires
         x.slots == y.slots,
+        x.text == y.text,
     ensures
         kids(x, first, i) == kids(y, first, i),
     decreases i,
@@ -2192,6 +2194,7 @@ impl<M: Mode> Heap<M> {
                 &&& self.core.perm(b).rc.is_init()
                 &&& self.core.perm(b).meta == s0.perm(b).meta
                 &&& self.core.perm(b).slots == s0.perm(b).slots
+                &&& self.core.perm(b).text == s0.perm(b).text
                 &&& prefix_recounted(self.core.perm(b), s0.perm(b), true)
             } by {
                 assert(s0.safe_block_wf(b));

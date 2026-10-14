@@ -16,6 +16,7 @@ mod heap;
 mod meta;
 mod mode;
 mod rc;
+mod text;
 #[cfg(test)]
 mod trust;
 mod word;

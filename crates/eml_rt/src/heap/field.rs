@@ -5,7 +5,7 @@ use vstd::prelude::*;
 
 use super::Core;
 #[cfg(verus_only)]
-use super::inv::{p_count, p_extended, p_first, p_init, p_kind, p_scanned, p_word};
+use super::inv::{p_count, p_extended, p_first, p_init, p_kind, p_scanned, p_word, string_wf};
 #[cfg(verus_only)]
 use super::model::{BlockState, Model, Pos, lemma_indeg_insert, lemma_indeg_remove};
 #[cfg(verus_only)]
@@ -38,6 +38,7 @@ impl Core {
         &&& self.perm(h).meta == old.perm(h).meta
         &&& self.perm(h).prefix == old.perm(h).prefix
         &&& self.perm(h).slots.dom() == old.perm(h).slots.dom()
+        &&& self.perm(h).text == old.perm(h).text
         &&& forall|j: int| j != i ==> #[trigger] self.perm(h).slots[j] == old.perm(h).slots[j]
         &&& self.perm(h).slots[i].ptr() == old.perm(h).slots[i].ptr()
         &&& p_init(self.perm(h), i)
@@ -100,6 +101,7 @@ impl Core {
         ensures
             p_extended(self.perm(h)) ==> p_init(self.perm(h), 0),
             p_kind(self.perm(h)) == Kind::BigInt ==> p_init(self.perm(h), 0),
+            p_kind(self.perm(h)) == Kind::String ==> string_wf(self.perm(h), self.cap(h)),
             p_first(self.perm(h)) + p_count(self.perm(h)) <= self.cap(h),
     {
         self.lemma_settled_view();
@@ -264,6 +266,7 @@ impl Core {
             s0.dom().contains(h),
             s0.state(h) == BlockState::Live || s0.state(h) == BlockState::Building,
             p_first(s0.perm(h)) + p_count(s0.perm(h)) <= i,
+            s0.kind(h) != Kind::String,
             self.slot_changed(s0, h, i),
             self.model == s0.model,
         ensures
