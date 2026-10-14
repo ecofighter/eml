@@ -110,6 +110,12 @@ impl<M: Mode> Ctx<M> {
         &&& w.is_ptr_spec() && self.heap.rc_value(w) < 0 ==> !self.heap.lin_of(w)
     }
 
+    /// 呼ぶ側が `ws` の語の参照を1つずつ持ち、どれも `decref` で手放せる。同じ物体を指す語が並べば、その数だけ参照を
+    /// 持つ。語ごとの `holds` を並べると、同じ参照を2つの引数に渡す呼び出しを断れないので、引数をまとめて受ける。
+    pub closed spec fn holds_args(&self, ws: Seq<Word>) -> bool {
+        forall|i: int| 0 <= i < ws.len() ==> #[trigger] self.holds(ws[i])
+    }
+
     /// モデルが合っていて、`Ctx` の持つ語を `Ctx` が持っている。速いモードの基本操作の前提であり、検査モードでは、
     /// これが成り立てば基本操作は `Ok` を返す。
     pub closed spec fn held_ok(&self) -> bool {
@@ -234,8 +240,9 @@ impl<M: Mode> Ctx<M> {
             old(self).heap_spec().word_in(ev),
             old(self).heap_spec().word_in(clause),
             old(self).heap_spec().word_in(k),
-            !M::CHECKED ==> !old(self).is_yielding() && ev.is_ptr_spec() && old(self).holds(ev)
-                && old(self).holds(clause) && old(self).holds(k),
+            !M::CHECKED ==> !old(self).is_yielding() && ev.is_ptr_spec() && old(self).holds_args(
+                seq![ev, clause, k],
+            ),
         ensures
             final(self).wf(),
             r is Err <==> M::CHECKED && (old(self).is_yielding() || !ev.is_ptr_spec()),
@@ -250,6 +257,10 @@ impl<M: Mode> Ctx<M> {
             return Err(HeapError::YieldMisuse);
         }
         proof {
+            if !M::CHECKED {
+                let ws = seq![ev, clause, k];
+                assert(self.holds(ws[0]) && self.holds(ws[1]) && self.holds(ws[2]));
+            }
             crate::word::lemma_imm_and_ptr_are_disjoint(ev.bits_spec());
             lemma_unit_bits();
         }
@@ -271,8 +282,9 @@ impl<M: Mode> Ctx<M> {
             old(self).heap_spec().word_in(ev),
             old(self).heap_spec().word_in(clause),
             old(self).heap_spec().word_in(k),
-            !M::CHECKED ==> !old(self).is_yielding() && ev.is_ptr_spec() && old(self).holds(ev)
-                && old(self).holds(clause) && old(self).holds(k),
+            !M::CHECKED ==> !old(self).is_yielding() && ev.is_ptr_spec() && old(self).holds_args(
+                seq![ev, clause, k],
+            ),
         ensures
             final(self).wf(),
             r is Err <==> M::CHECKED && (old(self).is_yielding() || !ev.is_ptr_spec()),
@@ -299,8 +311,9 @@ impl<M: Mode> Ctx<M> {
             old(self).heap_spec().word_in(ev),
             old(self).heap_spec().word_in(clause),
             old(self).heap_spec().word_in(k),
-            !M::CHECKED ==> !old(self).is_yielding() && ev.is_ptr_spec() && old(self).holds(ev)
-                && old(self).holds(clause) && old(self).holds(k),
+            !M::CHECKED ==> !old(self).is_yielding() && ev.is_ptr_spec() && old(self).holds_args(
+                seq![ev, clause, k],
+            ),
         ensures
             final(self).wf(),
             r is Err <==> M::CHECKED && (old(self).is_yielding() || !ev.is_ptr_spec()),
