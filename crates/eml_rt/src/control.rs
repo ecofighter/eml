@@ -59,8 +59,8 @@ impl Control {
 
 } // verus!
 
-// 止める語が伝えるのは「止めよ」のビットだけで、ほかのメモリへの書き込みを公開する役はない。そのため、どの読み書きも
-// Relaxed で足りる
+// 止める語が伝えるのは「止めよ」のビットだけで、確保量の数が伝えるのもその値だけである。どちらにも、ほかのメモリへの
+// 書き込みを公開する役はない。そのため、どの読み書きも Relaxed で足りる
 impl Control {
     pub const INTERRUPT: u32 = 1;
     pub const MEMORY: u32 = 2;
@@ -74,6 +74,9 @@ impl Control {
         self.stop.store(0, Ordering::Relaxed);
     }
 
+    // `Ctx::poll` は VM の呼び出しと戻りごとにこれを読む。総称でない関数は、`#[inline]` がないとほかの crate から
+    // 展開できない
+    #[inline]
     pub fn stop_bits(&self) -> u32 {
         self.stop.load(Ordering::Relaxed)
     }

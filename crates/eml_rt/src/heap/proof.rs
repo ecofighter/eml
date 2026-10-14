@@ -4,7 +4,6 @@
 use vstd::prelude::*;
 
 use super::Core;
-use super::Heap;
 #[cfg(verus_only)]
 use super::inv::{p_code, p_init, p_owner, p_scanned, p_word, prefix_kept};
 use super::model::BlockState;
@@ -13,13 +12,12 @@ use super::model::{
     Model, Pos, indeg, lemma_indeg_pos, lemma_indeg_remove, lemma_indeg_union, lemma_indeg_witness,
     lemma_indeg_zero,
 };
-use crate::error::HeapError;
 #[cfg(verus_only)]
 use crate::meta::HEADER_WORDS;
 use crate::meta::{BlockPerm, Header};
-use crate::mode::Mode;
 #[cfg(verus_only)]
 use crate::rc::{magnitude, pinned};
+#[cfg(verus_only)]
 use crate::word::Word;
 
 verus! {
@@ -1066,68 +1064,6 @@ impl Core {
             assert(s0.counted_wf(b));
         }
     }
-}
-
-// 次の2つは、`decref` と `alloc_data` の約束が組み合わせて使える形かを確かめる証明だけの関数で、どこからも呼ばない。
-// 基本操作の証明は、ヒープの子のモジュールからこの形で核の操作の約束をつなぐ
-// (docs/spec/object-model.md の「核の操作」)
-/// 2つの節点のリスト `a -> b -> ()` で外の参照を持つのが `a` だけでも、ほかの物体 `x` への `decref` の後に `b` は
-/// 読めて、中身は変わらない。`a` は `evolved` で、`b` は `kept_live` で追う。
-#[allow(dead_code)]
-unsafe fn decref_keeps_tail<M: Mode>(heap: &mut Heap<M>, Ghost(a): Ghost<Word>, x: Word) -> (r:
-    Result<(), HeapError>)
-    requires
-        old(heap).wf(),
-        old(heap).safe_settleable(),
-        old(heap).word_in(x),
-        old(heap).decref_ok(x),
-        a.is_ptr_spec(),
-        a.bits_spec() != x.bits_spec(),
-        old(heap).holds(a),
-        old(heap).count_of(a) == 1,
-    ensures
-        r is Ok ==> {
-            let b = old(heap).scanned_word(a, 0);
-            &&& final(heap).readable(b)
-            &&& b.is_ptr_spec() ==> final(heap).meta_of(b) == old(heap).meta_of(b)
-            &&& b.is_ptr_spec() ==> forall|i: int| #[trigger]
-                final(heap).scanned_word(b, i) == old(heap).scanned_word(b, i)
-        },
-{
-    let r = unsafe { heap.decref(x) };
-    proof {
-        if r is Ok {
-            let ha = a.bits_spec();
-            let v = old(heap).core.settled_view();
-            if !v.dom().contains(ha) {
-                // 付けた塊の物体は、どの操作の後も同じ権限で読める
-                old(heap).core.lemma_region_at(ha);
-            }
-            assert(heap.count_of(a) == 1);
-            assert(heap.scanned_word(a, 0) == old(heap).scanned_word(a, 0));
-            heap.lemma_readable_scanned(a, 0);
-        }
-    }
-    r
-}
-
-/// 検査モードでは、確保の後も前の語を `word_in` として使える。基本操作が節点を確保してから欄に語を書く形である。
-#[allow(dead_code)]
-unsafe fn alloc_then_store<M: Mode>(heap: &mut Heap<M>, e: Word) -> (r: Result<Word, HeapError>)
-    requires
-        M::CHECKED,
-        old(heap).wf(),
-        old(heap).safe_settleable(),
-        old(heap).word_in(e),
-    ensures
-        final(heap).wf(),
-        final(heap).word_in(e),
-        r matches Ok(n) ==> final(heap).word_in(n),
-{
-    let n = heap.alloc_data(1, 1, 0, false);
-    let r = unsafe { heap.set_field(n, 0, e) };
-    r?;
-    Ok(n)
 }
 
 } // verus!

@@ -1026,7 +1026,6 @@ impl<M: Mode> Heap<M> {
                 assert(p_word(perm, (first + i) as int).bits_spec() == 1);
                 assert(perm.slots =~= before.slots.insert((first + i) as int, slot));
                 lemma_unit_filled_extend(before, perm, first as int, first + i);
-
                 if extended {
                     assert(perm.slots[0] == before.slots[0]);
                 }
@@ -1055,7 +1054,6 @@ impl<M: Mode> Heap<M> {
             } else {
                 self.lemma_published_safe(s1);
             }
-            crate::word::lemma_aligned_is_ptr(h@.addr);
             assert forall|b: usize|
                 #![trigger old(self).core.has(b)]
                 old(self).core.has(b) && old(self).core.settled_state(b)
@@ -2777,7 +2775,6 @@ impl<M: Mode> Heap<M> {
         &&& p_owner(self.core.perm(h)) == self.worker
     }
 
-    /// `w` の物体の tag。
     pub closed spec fn tag_of(&self, w: Word) -> u16 {
         bits_tag(self.core.meta_bits(w.bits_spec()))
     }
@@ -2946,6 +2943,7 @@ impl<M: Mode> Heap<M> {
 
     /// # Safety
     /// `w` はこのヒープか付けた塊の生きている物体を指す。
+    #[inline]
     pub unsafe fn meta(&self, w: Word) -> (r: Result<Meta, HeapError>)
         requires
             self.wf(),
@@ -3133,8 +3131,8 @@ impl<M: Mode> Heap<M> {
     /// 移る。rc が正なら、持ち主は今の worker である。
     // 汎用の関数の実体は、使う側のバイナリの codegen unit の1つにしかできず、ほかの unit からは展開できない。
     // `#[inline]` で unit ごとに写しを作らせる。付けないと、`Ctx` を同じバイナリで使ったときに `map-reuse` と `append` の
-    // 命令の数が倍ほどになった。`field`、`string_push`、`push_unchecked`、`release_unkept` も同じ理由で付ける
-    // (docs/implementation/benchmarks.md の「S9b-2b (実行文脈)」)
+    // 命令の数が倍ほどになった。`field`、`string_push`、`push_unchecked`、`release_unkept` と、`perform` の道で
+    // `Ctx` が呼ぶ `meta` と `scanned` も同じ理由で付ける (docs/implementation/benchmarks.md の「S9b-2b (実行文脈)」)
     #[inline]
     pub unsafe fn set_field(&mut self, w: Word, i: usize, v: Word) -> (r: Result<(), HeapError>)
         requires
@@ -3329,6 +3327,7 @@ impl<M: Mode> Heap<M> {
     ///
     /// # Safety
     /// `w` はこのヒープか付けた塊の生きている物体を指し、i は `scanned_len(w)` より小さい。
+    #[inline]
     pub unsafe fn scanned(&self, w: Word, i: usize) -> (r: Result<Word, HeapError>)
         requires
             self.wf(),
