@@ -2,8 +2,11 @@
 
 use std::cmp::Ordering as Order;
 
+use super::ctx::ctx;
+use super::mortal;
+use super::string::text;
 use crate::externs::*;
-use crate::{HeapError, Stop};
+use crate::{HeapError, Mode, Stop, Word};
 
 const EDGES: [i64; 13] = [
     0,
@@ -144,3 +147,165 @@ fn faults_stay_small() {
     assert_eq!(std::mem::size_of::<Result<i64, ArithFault>>(), 16);
     assert_eq!(std::mem::size_of::<Fault>(), 24);
 }
+
+fn s<M: Mode>(ctx: &mut crate::Ctx<M>, x: &str) -> Word {
+    unsafe { ctx.heap_mut() }.alloc_string(x)
+}
+
+const TEXTS: [&str; 10] = [
+    "", "a", "ab", "b", "é", "日本", "a\u{0}", "\u{7f}", "\u{80}", "ab\u{0}",
+];
+
+fn strings_compare_by_bytes<M: Mode>() {
+    let mut ctx = ctx::<M>();
+    for x in TEXTS {
+        for y in TEXTS {
+            unsafe {
+                let (a, b) = (s(&mut ctx, x), s(&mut ctx, y));
+                assert_eq!(ctx.string_eq(a, b), Ok((x == y) as i64));
+                let (a, b) = (s(&mut ctx, x), s(&mut ctx, y));
+                assert_eq!(ctx.string_ne(a, b), Ok((x != y) as i64));
+                let (a, b) = (s(&mut ctx, x), s(&mut ctx, y));
+                assert_eq!(
+                    ctx.string_compare(a, b),
+                    Ok(ordering(x.as_bytes().cmp(y.as_bytes())))
+                );
+            }
+        }
+    }
+    assert_eq!(mortal(ctx.heap()), 0);
+}
+
+/// 呼ぶ側は同じ文字列の参照を2つ持って渡す。両方を手放しても正しく動く。
+fn the_same_string_on_both_sides<M: Mode>() {
+    let mut ctx = ctx::<M>();
+    unsafe {
+        let a = s(&mut ctx, "abc");
+        ctx.heap_mut().dup(a).unwrap();
+        assert_eq!(ctx.string_eq(a, a), Ok(TRUE));
+        let a = s(&mut ctx, "abc");
+        ctx.heap_mut().dup(a).unwrap();
+        assert_eq!(ctx.string_compare(a, a), Ok(EQ));
+        let a = s(&mut ctx, "abc");
+        ctx.heap_mut().dup(a).unwrap();
+        let w = ctx.string_append(a, a).unwrap();
+        assert_eq!(text(ctx.heap(), w), "abcabc");
+        ctx.heap_mut().decref(w).unwrap();
+    }
+    assert_eq!(mortal(ctx.heap()), 0);
+}
+
+/// 写すバイトを数える。その場で足せば右の長さ、作り直せば両方の長さ (今のインタプリタと同じ)。
+fn appending_counts_the_bytes_it_copies<M: Mode>() {
+    let mut ctx = ctx::<M>();
+    unsafe {
+        let a = s(&mut ctx, "ab");
+        let b = s(&mut ctx, "cde");
+        let before = ctx.stats().string_bytes_copied;
+        let w = ctx.string_append(a, b).unwrap();
+        let in_place = w == a;
+        assert_eq!(text(ctx.heap(), w), "abcde");
+        if M::CHECKED {
+            assert_eq!(
+                ctx.stats().string_bytes_copied - before,
+                if in_place { 3 } else { 5 }
+            );
+        }
+        // 共有した左は作り直す
+        ctx.heap_mut().dup(w).unwrap();
+        let c = s(&mut ctx, "fg");
+        let before = ctx.stats().string_bytes_copied;
+        let x = ctx.string_append(w, c).unwrap();
+        assert_ne!(x, w);
+        assert_eq!(text(ctx.heap(), x), "abcdefg");
+        if M::CHECKED {
+            assert_eq!(ctx.stats().string_bytes_copied - before, 7);
+        }
+        // 不死の左も作り直す。呼ぶ側は、不死の物体の参照を `acquire_immortal` で作って渡す
+        let k = ctx.heap_mut().alloc_string_immortal("k");
+        ctx.heap_mut().acquire_immortal(k).unwrap();
+        let d = s(&mut ctx, "z");
+        let y = ctx.string_append(k, d).unwrap();
+        assert_eq!(text(ctx.heap(), y), "kz");
+        for v in [w, x, y] {
+            ctx.heap_mut().decref(v).unwrap();
+        }
+    }
+    // 不死の `k` だけが残る
+    assert_eq!(mortal(ctx.heap()), 1);
+}
+
+fn ints_show_in_decimal<M: Mode>() {
+    let mut ctx = ctx::<M>();
+    for v in [
+        0,
+        7,
+        -7,
+        10,
+        -10,
+        1_234_567_890,
+        i64::MAX,
+        i64::MIN,
+        i64::MIN + 1,
+    ] {
+        let w = ctx.int_show(v);
+        assert_eq!(text(ctx.heap(), w), v.to_string());
+        unsafe { ctx.heap_mut().decref(w) }.unwrap();
+    }
+    assert_eq!(mortal(ctx.heap()), 0);
+}
+
+/// エスケープの規則は今のインタプリタの `show_string` と同じである。C1 の制御文字 (U+0080〜U+009F) はそのまま写す。
+fn strings_show_with_the_interpreters_escapes<M: Mode>() {
+    let cases = [
+        ("", r#""""#),
+        ("abc", r#""abc""#),
+        ("a\"b", r#""a\"b""#),
+        ("a\\b", r#""a\\b""#),
+        ("\n\t\r\0", r#""\n\t\r\0""#),
+        ("\u{1}\u{1f}\u{7f}", r#""\u{1}\u{1f}\u{7f}""#),
+        (
+            "\u{80}\u{85}\u{9f}é日\u{2028}",
+            "\"\u{80}\u{85}\u{9f}é日\u{2028}\"",
+        ),
+        ("x\ny", r#""x\ny""#),
+    ];
+    let mut ctx = ctx::<M>();
+    for (input, shown) in cases {
+        unsafe {
+            let a = s(&mut ctx, input);
+            let w = ctx.string_show(a).unwrap();
+            assert_eq!(text(ctx.heap(), w), shown);
+            ctx.heap_mut().decref(w).unwrap();
+        }
+    }
+    assert_eq!(mortal(ctx.heap()), 0);
+}
+
+/// 文字列でない引数は検査モードで断る。断ったときはヒープを変えない。
+fn a_string_extern_refuses_a_non_string<M: Mode>() {
+    if !M::CHECKED {
+        return;
+    }
+    let mut ctx = ctx::<M>();
+    unsafe {
+        let d = ctx.heap_mut().alloc_data(0, 0, 1, false);
+        let a = s(&mut ctx, "a");
+        let live = mortal(ctx.heap());
+        assert_eq!(ctx.string_eq(a, d), Err(Fault::Heap(HeapError::WrongKind)));
+        assert_eq!(ctx.string_show(d), Err(Fault::Heap(HeapError::WrongKind)));
+        assert_eq!(mortal(ctx.heap()), live);
+        ctx.heap_mut().decref(a).unwrap();
+        ctx.heap_mut().decref(d).unwrap();
+    }
+    assert_eq!(mortal(ctx.heap()), 0);
+}
+
+both_modes!(
+    strings_compare_by_bytes,
+    the_same_string_on_both_sides,
+    appending_counts_the_bytes_it_copies,
+    ints_show_in_decimal,
+    strings_show_with_the_interpreters_escapes,
+    a_string_extern_refuses_a_non_string,
+);

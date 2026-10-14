@@ -1,6 +1,6 @@
 //! 文字列の物体 (docs/spec/object-model.md の「文字列」)。種類 `String` の物体は、ここの操作だけが作り、書く。
 //! 長さの語は生の 0 語目で、バイト列はその後ろにあり、ghost のバイト列 `text` に等しい。バイト列を書くのは、作るときと
-//! `string_push` だけである。
+//! 後ろに足すとき (`string_push` などと、`String.show` の `append_in_place`) だけである。
 
 use vstd::prelude::*;
 #[cfg(verus_only)]
@@ -23,7 +23,7 @@ verus! {
 /// 文字列の後ろに写すバイト列。`Str` は呼ぶ側の `&str`、`Text(h, len, from, to)` はこのヒープか付けた塊の文字列の
 /// 物体 (ヘッダと長さ) のバイトの範囲 `[from, to)` である。`string_concat` の右辺はヒープの権限から借りて読むので、
 /// `&mut self` を取る操作に `&str` として渡せない。そのため、右辺の権限は写す直前に `Core::write_tail` の中で借りる。
-enum Tail<'a> {
+pub(super) enum Tail<'a> {
     Str(&'a str),
     Text(*mut Header, usize, usize, usize),
 }
@@ -54,7 +54,7 @@ proof fn lemma_boundary_in_prefix(bytes: Seq<u8>, from: int, to: int)
 }
 
 impl Core {
-    spec fn tail_bytes(&self, t: Tail) -> Seq<u8> {
+    pub(super) open spec fn tail_bytes(&self, t: Tail) -> Seq<u8> {
         match t {
             Tail::Str(s) => s.spec_bytes(),
             Tail::Text(r, _, from, to) => self.perm(r@.addr).text().subrange(
@@ -66,7 +66,7 @@ impl Core {
 
     /// `t` を読める。`Text` なら、このヒープか付けた塊の文字列のブロックで、長さはバイト列の長さに等しく、範囲の両端は
     /// 文字の境目である。
-    spec fn tail_ok(&self, t: Tail) -> bool {
+    pub(super) open spec fn tail_ok(&self, t: Tail) -> bool {
         match t {
             Tail::Str(_) => true,
             Tail::Text(r, n, from, to) => {
@@ -79,7 +79,7 @@ impl Core {
     }
 
     /// `r` はこのヒープか付けた塊の文字列のブロックで、長さ `n` はバイト列の長さに等しい。
-    spec fn text_ok(&self, r: *mut Header, n: usize) -> bool {
+    pub(super) open spec fn text_ok(&self, r: *mut Header, n: usize) -> bool {
         &&& self.has(r@.addr)
         &&& self.region_wf()
         &&& self.perm(r@.addr).holds_text(r, n as int)
@@ -224,6 +224,22 @@ impl Core {
         &&& string_wf(self.perm(h), self.cap(h))
     }
 
+    /// `old` と `self` の両方で生きているブロックは、`meta`、rc の符号、持ち主を変えず、`h` のほかは語とバイト列も
+    /// 変えない。文字列に足す操作は新しい物体を作り、`h` を書き換えるので、`kept_live` の代わりにこれを約束する。
+    pub(crate) open spec fn kept_both(&self, old: Core, h: usize) -> bool {
+        forall|b: usize|
+            #![trigger self.settled_state(b), old.settled_state(b)]
+            self.has(b) && self.settled_state(b) == BlockState::Live && old.has(b)
+                && old.settled_state(b) == BlockState::Live ==> {
+                &&& self.perm(b).meta == old.perm(b).meta
+                &&& (self.rc_of(b) > 0) == (old.rc_of(b) > 0)
+                &&& (self.rc_of(b) < 0) == (old.rc_of(b) < 0)
+                &&& self.rc_of(b) > 0 ==> self.model@.owner[b] == old.model@.owner[b]
+                &&& b != h ==> self.perm(b).slots == old.perm(b).slots && self.perm(b).text
+                    == old.perm(b).text
+            }
+    }
+
     /// その場の追記の後も、不変条件は保たれる。文字列は走査する語を持たないので、辺と数は変わらない。
     proof fn lemma_text_set(&self, s0: Core, h: usize)
         requires
@@ -332,6 +348,20 @@ impl<M: Mode> Heap<M> {
         self.core.perm(w.bits_spec()).text()
     }
 
+    /// 文字列 `w` に書けるバイト数。
+    pub closed spec fn capacity(&self, w: Word) -> int {
+        8 * (self.core.cap(w.bits_spec()) - 1)
+    }
+
+    /// 文字列の spec の中身。`Ctx` の文字列の extern の証明が、物体の権限と結び付けるのに使う。
+    pub(super) proof fn lemma_text_spec(&self, w: Word)
+        ensures
+            self.is_string(w) == (self.core.kind(w.bits_spec()) == Kind::String),
+            self.text_of(w) == self.core.perm(w.bits_spec()).text(),
+            self.capacity(w) == 8 * (self.core.cap(w.bits_spec()) - 1),
+    {
+    }
+
     /// `alloc_string_immortal` の後の状態。`w` は rc 0 の生きている物体で、検査モードの外に出ている参照の数は 0 である。
     pub closed spec fn made_immortal(&self, old: Heap<M>, w: Word) -> bool {
         let h = w.bits_spec();
@@ -363,6 +393,8 @@ impl<M: Mode> Heap<M> {
             final(self).made(*old(self), w),
             final(self).is_string(w),
             final(self).text_of(w) == s.spec_bytes(),
+            final(self).owned(w),
+            !final(self).lin_of(w),
             M::CHECKED ==> final(self).words_kept(*old(self)),
     {
         self.make_string(s, 1)
@@ -379,6 +411,10 @@ impl<M: Mode> Heap<M> {
             final(self).made(*old(self), w),
             final(self).is_string(w),
             final(self).text_of(w) == Seq::<u8>::empty(),
+            final(self).owned(w),
+            !final(self).lin_of(w),
+            final(self).capacity(w) >= room,
+            final(self).grew(*old(self), w),
             M::CHECKED ==> final(self).words_kept(*old(self)),
     {
         let empty = "";
@@ -420,6 +456,8 @@ impl<M: Mode> Heap<M> {
             rc == 0 ==> final(self).made_immortal(*old(self), w),
             final(self).is_string(w),
             final(self).text_of(w) == s.spec_bytes(),
+            final(self).core.model@.owner[w.bits_spec()] == final(self).worker,
+            !final(self).core.lin(w.bits_spec()),
             forall|x: Word| old(self).core.word_ok(x) ==> #[trigger] final(self).core.word_ok(x),
     {
         let t = Tail::Str(s);
@@ -451,6 +489,10 @@ impl<M: Mode> Heap<M> {
             final(self).text_of(w) == old(self).core.tail_bytes(head) + old(self).core.opt_bytes(
                 tail,
             ),
+            final(self).core.model@.owner[w.bits_spec()] == final(self).worker,
+            !final(self).core.lin(w.bits_spec()),
+            final(self).capacity(w) >= room,
+            final(self).grew(*old(self), w),
             forall|b: usize| #[trigger]
                 old(self).core.dom().contains(b) ==> {
                     &&& final(self).core.dom().contains(b)
@@ -525,6 +567,13 @@ impl<M: Mode> Heap<M> {
                 self.lemma_published_safe(s1);
             }
             crate::word::lemma_aligned_is_ptr(h@.addr);
+            assert forall|b: usize|
+                #![trigger old(self).core.has(b)]
+                old(self).core.has(b) && old(self).core.settled_state(b)
+                    == BlockState::Live implies self.grown_block(*old(self), b) by {
+                assert(s1.core.has(b));
+                assert(b != h@.addr);
+            }
         }
         w
     }
@@ -615,11 +664,15 @@ impl<M: Mode> Heap<M> {
         &&& self.dummy == old.dummy
         &&& self.region == old.region
         &&& self.worker == old.worker
+        &&& self.core.model@.building is None
         &&& w.is_ptr_spec()
         &&& self.core.word_ok(w)
+        &&& self.core.dom().contains(h)
         &&& self.core.state(h) == BlockState::Live
         &&& self.core.rc_of(h) == 1
         &&& self.core.ext(h) == 1
+        &&& self.owned(w)
+        &&& self.core.kept_both(v, left.bits_spec())
         &&& if w == left {
             self.core.text_changed(v, h)
         } else {
@@ -631,15 +684,70 @@ impl<M: Mode> Heap<M> {
     /// `string_concat` の後の状態。`string_push` の後の状態 `mid` から、right の参照を1つ手放した。
     pub closed spec fn concatenated(&self, old: Heap<M>, left: Word, right: Word, w: Word) -> bool {
         let h = w.bits_spec();
-        &&& exists|mid: Heap<M>| #[trigger] mid.pushed(old, left, w) && self.evolved(mid, right, -1)
+        &&& exists|mid: Heap<M>| #[trigger]
+            mid.pushed(old, left, w) && mid.consistent() && self.evolved(mid, right, -1)
+                && self.kept_live(mid)
+        &&& self.core.model@.building is None
         &&& self.core.word_ok(w)
         &&& self.core.state(h) == BlockState::Live
         &&& self.core.rc_of(h) == 1
         &&& self.core.ext(h) == 1
     }
 
+    /// `pushed` の中身。`Ctx` の証明が RC のモデルの変化に直すのに使う。
+    pub(super) proof fn lemma_pushed(&self, old: Heap<M>, left: Word, w: Word)
+        requires
+            self.pushed(old, left, w),
+        ensures
+            ({
+                let v = old.core.settled_view();
+                let h = w.bits_spec();
+                &&& self.dummy == old.dummy
+                &&& self.region == old.region
+                &&& self.worker == old.worker
+                &&& self.core.model@.building is None
+                &&& w.is_ptr_spec()
+                &&& self.core.word_ok(w)
+                &&& self.core.dom().contains(h)
+                &&& self.core.state(h) == BlockState::Live
+                &&& self.core.rc_of(h) == 1
+                &&& self.core.ext(h) == 1
+                &&& self.owned(w)
+                &&& self.core.kept_both(v, left.bits_spec())
+                &&& if w == left {
+                    self.core.text_changed(v, h)
+                } else {
+                    &&& !old.core.dom().contains(h)
+                    &&& self.core.evolved(v, left.bits_spec(), -1)
+                }
+            }),
+    {
+    }
+
+    /// `concatenated` の中身。`string_push` の後の状態を返す。
+    pub(super) proof fn lemma_concatenated(
+        &self,
+        old: Heap<M>,
+        left: Word,
+        right: Word,
+        w: Word,
+    ) -> (mid: Heap<M>)
+        requires
+            self.concatenated(old, left, right, w),
+        ensures
+            mid.pushed(old, left, w),
+            mid.consistent(),
+            self.evolved(mid, right, -1),
+            self.kept_live(mid),
+            self.core.model@.building is None,
+    {
+        choose|mid: Heap<M>| #[trigger]
+            mid.pushed(old, left, w) && mid.consistent() && self.evolved(mid, right, -1)
+                && self.kept_live(mid)
+    }
+
     /// 文字列を受けて手放す操作の検査。状態を変える前に呼ぶ。速いモードでは何も確かめない。
-    fn checked_string(&self, h: *mut Header) -> (r: Result<(), HeapError>)
+    pub(super) fn checked_string(&self, h: *mut Header) -> (r: Result<(), HeapError>)
         requires
             self.core.sound(),
             self.core.checked() == M::CHECKED,
@@ -667,9 +775,308 @@ impl<M: Mode> Heap<M> {
         Ok(())
     }
 
+    /// 検査モードで、文字列 `a` と `b` を受けて手放す操作の検査が通った。両方が文字列で `decref` の検査を通り、同じ
+    /// 物体なら2回続けた `decref` の検査も通る。
+    pub(super) open spec fn strings_pass(&self, a: Word, b: Word) -> bool {
+        &&& self.core.kind(a.bits_spec()) == Kind::String
+        &&& self.core.kind(b.bits_spec()) == Kind::String
+        &&& self.decref_passes(a.bits_spec())
+        &&& self.decref_passes(b.bits_spec())
+        &&& a.bits_spec() == b.bits_spec() ==> self.decref_twice_passes(a.bits_spec())
+    }
+
+    /// 文字列 `a` と `b` を受けて手放す操作 (`string_concat` と、文字列を比べる extern) の検査。状態を変える前に
+    /// 呼ぶ。速いモードでは何も確かめない。
+    pub(super) fn checked_strings(&self, a: Word, b: Word) -> (r: Result<(), HeapError>)
+        requires
+            self.wf(),
+            self.core.model@.building is None,
+            a.is_ptr_spec(),
+            b.is_ptr_spec(),
+            self.word_in(a),
+            self.word_in(b),
+        ensures
+            !M::CHECKED ==> r is Ok,
+            self.concat_ok(a, b) ==> r is Ok || chain_err(r),
+            M::CHECKED && r is Ok ==> self.strings_pass(a, b),
+    {
+        let ghost c = self.concat_ok(a, b);
+        let ha = self.header_of(a);
+        let hb = self.header_of(b);
+        proof {
+            self.lemma_checks_pass(a);
+            self.lemma_checks_pass(b);
+            reveal(Core::building_wf);
+            if c {
+                self.core.lemma_readable(a);
+                self.core.lemma_readable(b);
+            }
+        }
+        self.checked_string(ha)?;
+        self.checked_string(hb)?;
+        let same = a.bits() == b.bits();
+        proof {
+            if c && same && self.core.dom().contains(ha@.addr) {
+                reveal(Core::refs_wf);
+                self.core.lemma_at(ha@.addr);
+                assert(self.core.counted_wf(ha@.addr));
+            }
+            if !self.core.dom().contains(ha@.addr) {
+                self.core.lemma_region_at(ha@.addr);
+            }
+        }
+        if same {
+            self.checked_decref_twice(ha)?;
+        }
+        Ok(())
+    }
+
+    /// 文字列 `w` を読める。検査モードでは、呼ぶ側が検査 (`checked_string` か `checked_strings`) で生きている文字列の
+    /// 物体であることを確かめてある。速いモードでは、モデルで読める文字列である。
+    pub(super) open spec fn text_readable(&self, w: Word) -> bool {
+        &&& w.is_ptr_spec()
+        &&& self.word_in(w)
+        &&& M::CHECKED ==> self.core.kind(w.bits_spec()) == Kind::String && self.decref_passes(
+            w.bits_spec(),
+        )
+        &&& !M::CHECKED ==> self.settleable() && self.readable(w) && self.is_string(w)
+    }
+
+    /// 文字列 `w` のバイト列を借りる。
+    pub(super) fn string_text(&self, w: Word) -> (s: &str)
+        requires
+            self.wf(),
+            self.text_readable(w),
+        ensures
+            s.spec_bytes() == self.text_of(w),
+    {
+        let h = self.header_of(w);
+        proof {
+            if M::CHECKED {
+                self.core.lemma_shape(h@.addr);
+                if self.core.dom().contains(h@.addr) {
+                    self.core.lemma_safe_at(h@.addr);
+                }
+            } else {
+                self.core.lemma_readable(w);
+                reveal(Core::building_wf);
+                self.core.lemma_live_block(h@.addr);
+            }
+        }
+        let len = self.core.slot_get(h, 0).bits();
+        proof {
+            self.core.lemma_shape(h@.addr);
+            let cap = self.core.cap(h@.addr);
+            assert((len + 7) / 8 <= cap - 1) by (nonlinear_arith)
+                requires
+                    len <= 8 * (cap - 1),
+                    cap >= 1,
+            ;
+        }
+        let tracked p = self.core.tracked_perm(h@.addr);
+        text(h, len, Tracked(p))
+    }
+
+    /// 文字列 `w` は、ほかに参照のない生きている文字列で、その場で書き足せる。
+    pub(super) open spec fn appendable(&self, w: Word) -> bool {
+        let h = w.bits_spec();
+        &&& w.is_ptr_spec()
+        &&& self.core.word_ok(w)
+        &&& self.core.dom().contains(h)
+        &&& self.core.state(h) == BlockState::Live
+        &&& self.core.kind(h) == Kind::String
+        &&& self.core.rc_of(h) == 1
+    }
+
+    /// 書き足せる文字列 `w` の後ろに、`src` が `Some` ならその文字列のバイトの範囲 `[from, to)` を、そうでなければ `s`
+    /// を写す。容量は足りている。`w` の長さの語とバイト列のほかは変えない。`String.show` が使う。
+    pub(super) fn append_in_place(
+        &mut self,
+        w: Word,
+        s: &str,
+        src: Option<Word>,
+        from: usize,
+        to: usize,
+    )
+        requires
+            old(self).wf(),
+            old(self).core.model@.building is None,
+            old(self).appendable(w),
+            src matches Some(x) ==> {
+                &&& old(self).text_readable(x)
+                &&& x.bits_spec() != w.bits_spec()
+                &&& from <= to <= old(self).text_of(x).len()
+                &&& is_char_boundary(old(self).text_of(x), from as int)
+                &&& is_char_boundary(old(self).text_of(x), to as int)
+            },
+            old(self).text_of(w).len() + (if let Some(x) = src {
+                to - from
+            } else {
+                s.spec_bytes().len() as int
+            }) <= old(self).capacity(w),
+        ensures
+            final(self).wf(),
+            final(self).same_tokens(*old(self)),
+            final(self).dummy == old(self).dummy,
+            final(self).region == old(self).region,
+            final(self).worker == old(self).worker,
+            final(self).core.text_changed(old(self).core, w.bits_spec()),
+            final(self).appendable(w),
+            final(self).is_string(w),
+            final(self).capacity(w) == old(self).capacity(w),
+            final(self).text_of(w) == old(self).text_of(w) + if let Some(x) = src {
+                old(self).text_of(x).subrange(from as int, to as int)
+            } else {
+                s.spec_bytes()
+            },
+            old(self).consistent() ==> final(self).consistent(),
+            forall|x: Word| #[trigger] final(self).core.word_ok(x) == old(self).core.word_ok(x),
+            forall|x: Word|
+                x.bits_spec() != w.bits_spec() ==> (old(self).text_readable(x)
+                    ==> final(self).text_readable(x)) && #[trigger] final(self).text_of(x) == old(
+                    self,
+                ).text_of(x),
+    {
+        let h = self.header_of(w);
+        proof {
+            self.core.lemma_shape(h@.addr);
+            if M::CHECKED {
+                self.core.lemma_safe_at(h@.addr);
+            } else {
+                reveal(Core::building_wf);
+                self.core.lemma_live_block(h@.addr);
+            }
+        }
+        let len = self.core.slot_get(h, 0).bits();
+        let cap = self.core.cap_get(h);
+        let t = match src {
+            Some(x) => {
+                let hx = self.header_of(x);
+                proof {
+                    self.core.lemma_shape(hx@.addr);
+                    if M::CHECKED {
+                        if self.core.dom().contains(hx@.addr) {
+                            self.core.lemma_safe_at(hx@.addr);
+                        }
+                    } else {
+                        self.core.lemma_readable(x);
+                        reveal(Core::building_wf);
+                        self.core.lemma_live_block(hx@.addr);
+                    }
+                }
+                let n = self.core.slot_get(hx, 0).bits();
+                proof {
+                    let c = self.core.cap(hx@.addr);
+                    assert((n + 7) / 8 <= c - 1) by (nonlinear_arith)
+                        requires
+                            n <= 8 * (c - 1),
+                            c >= 1,
+                    ;
+                }
+                Tail::Text(hx, n, from, to)
+            },
+            None => Tail::Str(s),
+        };
+        let ghost s0 = *self;
+        self.write_in_place(h, len, cap, &t);
+        proof {
+            assert forall|x: Word| x.bits_spec() != w.bits_spec() implies (s0.text_readable(x)
+                ==> self.text_readable(x)) && #[trigger] self.text_of(x) == s0.text_of(x) by {
+                if s0.core.dom().contains(x.bits_spec()) {
+                    assert(self.core.perms@[x.bits_spec()] == s0.core.perms@[x.bits_spec()]);
+                }
+            }
+        }
+    }
+
+    /// 文字列を受けて手放す操作の前提を、`decref` の前提から言う。
+    pub(super) proof fn lemma_concat_ok(&self, a: Word, b: Word)
+        requires
+            self.settleable(),
+            self.readable(a),
+            self.readable(b),
+            self.is_string(a),
+            self.is_string(b),
+            self.decref_ok(a),
+            self.decref_ok(b),
+            a.bits_spec() == b.bits_spec() && self.rc_value(a) != 0
+                ==> self.core.settled_view().ext(a.bits_spec()) >= 2,
+        ensures
+            self.concat_ok(a, b),
+    {
+    }
+
+    /// 文字列 `a`、`b` の順に参照を1つずつ手放す (同じ物体なら2つ手放す)。検査モードの検査は、呼ぶ側が状態を変える
+    /// 前に `checked_strings` で済ませてある。`a` を手放した後の状態を返す。
+    pub(super) fn release_strings(&mut self, a: Word, b: Word, Ghost(c): Ghost<bool>) -> (mid:
+        Ghost<Heap<M>>)
+        requires
+            old(self).wf(),
+            old(self).core.model@.building is None,
+            a.is_ptr_spec(),
+            b.is_ptr_spec(),
+            old(self).word_in(a),
+            old(self).word_in(b),
+            M::CHECKED ==> old(self).strings_pass(a, b),
+            !M::CHECKED ==> c,
+            c ==> old(self).consistent() && old(self).concat_ok(a, b),
+        ensures
+            final(self).wf(),
+            final(self).same_tokens(*old(self)),
+            final(self).core.model@.building is None,
+            final(self).dummy == old(self).dummy,
+            final(self).region == old(self).region,
+            final(self).worker == old(self).worker,
+            M::CHECKED ==> final(self).words_kept(*old(self)),
+            c ==> {
+                &&& mid@.consistent()
+                &&& mid@.core.model@.building is None
+                &&& mid@.evolved(*old(self), a, -1)
+                &&& mid@.kept_live(*old(self))
+                &&& final(self).consistent()
+                &&& final(self).evolved(mid@, b, -1)
+                &&& final(self).kept_live(mid@)
+            },
+    {
+        let ha = self.header_of(a);
+        let hb = self.header_of(b);
+        let ghost s0 = *self;
+        proof {
+            if c {
+                self.lemma_checks_pass(a);
+                self.core.lemma_readable(a);
+                if s0.core.dom().contains(ha@.addr) {
+                    reveal(Core::refs_wf);
+                    s0.core.lemma_at(ha@.addr);
+                    assert(s0.core.counted_wf(ha@.addr));
+                }
+            }
+            if !s0.core.dom().contains(ha@.addr) {
+                s0.core.lemma_region_at(ha@.addr);
+            }
+            if !s0.core.dom().contains(hb@.addr) {
+                s0.core.lemma_region_at(hb@.addr);
+            }
+        }
+        self.release_text(ha, Ghost(a), Ghost(c));
+        let ghost mid = *self;
+        proof {
+            if !mid.core.dom().contains(hb@.addr) {
+                s0.core.lemma_apart(hb@.addr);
+            }
+        }
+        self.release_text(hb, Ghost(b), Ghost(c));
+        Ghost(mid)
+    }
+
     /// 文字列 `h` の参照を1つ手放す。文字列は子を持たないので、最後の参照なら解放の連鎖を通さずに箱だけを空ける。
     /// 検査モードの検査は、呼ぶ側が状態を変える前に済ませてある。
-    fn release_text(&mut self, h: *mut Header, Ghost(w): Ghost<Word>, Ghost(c): Ghost<bool>)
+    pub(super) fn release_text(
+        &mut self,
+        h: *mut Header,
+        Ghost(w): Ghost<Word>,
+        Ghost(c): Ghost<bool>,
+    )
         requires
             old(self).wf(),
             old(self).core.model@.building is None,
@@ -706,6 +1113,7 @@ impl<M: Mode> Heap<M> {
             M::CHECKED && old(self).decref_twice_passes(h@.addr) ==> final(self).decref_passes(
                 h@.addr,
             ) && final(self).core.kind(h@.addr) == Kind::String,
+            final(self).core.kept_live(old(self).core),
     {
         let ghost s0 = self.core;
         proof {
@@ -741,6 +1149,7 @@ impl<M: Mode> Heap<M> {
             }
             self.free_box(h, Ghost(c));
             proof {
+                self.core.lemma_kept_live_trans(s1, s0);
                 if c {
                     self.core.lemma_boxed_evolved(s1, h@.addr);
                     self.lemma_after_chain(*old(self), s0, s1, h@.addr, w);
@@ -761,13 +1170,74 @@ impl<M: Mode> Heap<M> {
         }
     }
 
+    /// 一意な文字列 `h` の後ろに `t` を写す。容量は足りている。長さの語とバイト列のほかは変えない。
+    #[inline]
+    fn write_in_place(&mut self, h: *mut Header, len: usize, cap: usize, t: &Tail)
+        requires
+            old(self).wf(),
+            old(self).core.model@.building is None,
+            old(self).core.dom().contains(h@.addr),
+            h == old(self).core.block(h@.addr),
+            old(self).core.state(h@.addr) == BlockState::Live,
+            old(self).core.kind(h@.addr) == Kind::String,
+            len == old(self).core.perm(h@.addr).text().len(),
+            cap == old(self).core.cap(h@.addr),
+            len + old(self).core.tail_bytes(*t).len() <= 8 * (cap - 1),
+            old(self).core.tail_ok(*t),
+            t matches Tail::Text(r, _, _, _) ==> r@.addr != h@.addr,
+        ensures
+            final(self).wf(),
+            final(self).same_tokens(*old(self)),
+            final(self).dummy == old(self).dummy,
+            final(self).region == old(self).region,
+            final(self).worker == old(self).worker,
+            final(self).core.text_changed(old(self).core, h@.addr),
+            final(self).core.perm(h@.addr).text() == old(self).core.perm(h@.addr).text() + old(
+                self,
+            ).core.tail_bytes(*t),
+            old(self).consistent() ==> final(self).consistent(),
+            forall|x: Word| #[trigger] final(self).core.word_ok(x) == old(self).core.word_ok(x),
+    {
+        let ghost s0 = *self;
+        proof {
+            s0.core.lemma_shape(h@.addr);
+        }
+        let need = len + self.core.tail_len(t);
+        let tracked mut perm = self.core.perms.borrow_mut().tracked_remove(h@.addr);
+        proof {
+            assert((8 * (cap - 1) + 7) / 8 == cap - 1);
+        }
+        self.core.write_tail(h, cap, len, t, Tracked(&mut perm));
+        let tracked mut slot = perm.slots.tracked_remove(0);
+        ptr_mut_write(slot_ptr(h, 0), Tracked(&mut slot), Word::from_bits(need));
+        proof {
+            perm.slots.tracked_insert(0, slot);
+            self.core.perms.borrow_mut().tracked_insert(h@.addr, perm);
+            let a = h@.addr;
+            let q = s0.core.perm(a);
+            s0.core.lemma_tail_utf8(*t);
+            valid_utf8_concat(q.text(), s0.core.tail_bytes(*t));
+            assert(self.core.perms@.dom() =~= s0.core.perms@.dom());
+            assert(self.core.perm(a).slots.dom() =~= q.slots.dom());
+            assert(self.core.text_changed(s0.core, a));
+            if s0.consistent() {
+                self.core.lemma_text_set(s0.core, a);
+                assert(self.core.perms@[s0.dummy.bits_spec()]
+                    == s0.core.perms@[s0.dummy.bits_spec()]);
+            }
+            if M::CHECKED {
+                self.core.lemma_safe_text_set(s0.core, a);
+            }
+        }
+    }
+
     /// `string_push` と `string_concat` の本体。検査はみな済んでいる。left の参照を1つ受け取り、`t` を後ろに足した
     /// 文字列の参照を返す。left が一意で容量が足りればその場で書き、足りなければ容量を倍にして作り直す。一意でなければ
     /// 和の長さで写す。どちらの写しも left を手放す前に済ませる。速いモードでは、大きい物体のページを箱の解放がすぐに
     /// 返すためである。速いモードは rc 0 の物体のページの頭を読まないので、容量は一意な left でだけ読む
     /// (docs/spec/object-model.md の「文字列」)。
     #[inline]
-    fn push_unchecked(&mut self, left: Word, t: Tail, Ghost(c): Ghost<bool>) -> (w: Word)
+    pub(super) fn push_unchecked(&mut self, left: Word, t: Tail, Ghost(c): Ghost<bool>) -> (w: Word)
         requires
             old(self).wf(),
             old(self).core.model@.building is None,
@@ -781,7 +1251,7 @@ impl<M: Mode> Heap<M> {
             ).core.rc_of(left.bits_spec()) != 1,
             !M::CHECKED ==> c,
             M::CHECKED ==> old(self).decref_passes(left.bits_spec()),
-            c ==> old(self).consistent() && old(self).core.holds(left),
+            c ==> old(self).consistent() && old(self).core.holds(left) && old(self).owned(left),
         ensures
             final(self).wf(),
             final(self).same_tokens(*old(self)),
@@ -844,32 +1314,19 @@ impl<M: Mode> Heap<M> {
                     s0.core.lemma_region_at(h@.addr);
                 }
             }
-            let tracked mut perm = self.core.perms.borrow_mut().tracked_remove(h@.addr);
+            self.write_in_place(h, len, cap, &t);
             proof {
-                assert((8 * (cap - 1) + 7) / 8 == cap - 1);
-            }
-            self.core.write_tail(h, cap, len, &t, Tracked(&mut perm));
-            let tracked mut slot = perm.slots.tracked_remove(0);
-            ptr_mut_write(slot_ptr(h, 0), Tracked(&mut slot), Word::from_bits(need));
-            proof {
-                perm.slots.tracked_insert(0, slot);
-                self.core.perms.borrow_mut().tracked_insert(h@.addr, perm);
-                let a = h@.addr;
-                let q = s0.core.perm(a);
-                s0.core.lemma_tail_utf8(t);
-                valid_utf8_concat(q.text(), s0.core.tail_bytes(t));
-                assert(self.core.perms@.dom() =~= s0.core.perms@.dom());
-                assert(self.core.perm(a).slots.dom() =~= q.slots.dom());
-                assert(self.core.text_changed(s0.core, a));
                 if c {
-                    self.core.lemma_text_set(s0.core, a);
                     reveal(Core::refs_wf);
-                    assert(s0.core.counted_wf(a));
-                    assert(self.core.perms@[s0.dummy.bits_spec()]
-                        == s0.core.perms@[s0.dummy.bits_spec()]);
-                }
-                if M::CHECKED {
-                    self.core.lemma_safe_text_set(s0.core, a);
+                    assert(s0.core.counted_wf(h@.addr));
+                    assert forall|b: usize|
+                        #![trigger self.core.settled_state(b), s0.core.settled_state(b)]
+                        self.core.has(b) && s0.core.has(b) && b != h@.addr implies self.core.perm(b)
+                        == s0.core.perm(b) by {
+                        if s0.core.dom().contains(b) {
+                            assert(self.core.perms@[b] == s0.core.perms@[b]);
+                        }
+                    }
                 }
             }
             return left;
@@ -913,6 +1370,22 @@ impl<M: Mode> Heap<M> {
             assert(mid.core.perms@[b] == self.core.perms@[b]);
             if c {
                 self.core.lemma_frame_evolved(mid.core, s0.core, a, -1);
+                // 両方で生きている物体は、作り直しの前 (`mid`) でも生きていて、`mid` から中身を変えない
+                assert forall|x: usize|
+                    #![trigger self.core.settled_state(x), s0.core.settled_state(x)]
+                    self.core.has(x) && self.core.settled_state(x) == BlockState::Live
+                        && s0.core.has(x) && s0.core.settled_state(x)
+                        == BlockState::Live implies self.core.kept_block(s0.core, x) by {
+                    assert(mid.core.has(x) && mid.core.settled_state(x) == BlockState::Live);
+                    assert(self.core.kept_block(mid.core, x));
+                    if s0.core.dom().contains(x) {
+                        assert(mid.core.perms@[x] == s0.core.perms@[x]);
+                    } else {
+                        s0.core.lemma_apart(x);
+                        s0.core.lemma_region_at(x);
+                        mid.core.lemma_apart(x);
+                    }
+                }
             }
         }
         w
@@ -1069,9 +1542,10 @@ impl<M: Mode> Heap<M> {
             final(self).same_tokens(*old(self)),
             r is Err ==> *final(self) == old(self).settled_heap(),
             !M::CHECKED ==> r is Ok,
-            r matches Ok(w) ==> final(self).is_string(w) && final(self).text_of(w) == old(
-                self,
-            ).text_of(left) + old(self).text_of(right),
+            final(self).settled(),
+            r matches Ok(w) ==> w.is_ptr_spec() && final(self).is_string(w) && final(self).text_of(
+                w,
+            ) == old(self).text_of(left) + old(self).text_of(right),
             old(self).concat_ok(left, right) ==> r is Ok || chain_err(r),
             r matches Ok(w) ==> (old(self).concat_ok(left, right) ==> final(self).consistent()
                 && final(self).concatenated(*old(self), left, right, w)),
@@ -1079,32 +1553,26 @@ impl<M: Mode> Heap<M> {
     {
         let ghost c = self.concat_ok(left, right);
         self.settle();
-        let hl = self.header_of(left);
         let hr = self.header_of(right);
+        self.checked_strings(left, right)?;
         proof {
-            self.lemma_checks_pass(left);
-            self.lemma_checks_pass(right);
+            let a = left.bits_spec();
             reveal(Core::building_wf);
             if c {
+                self.lemma_checks_pass(left);
+                self.lemma_checks_pass(right);
                 self.core.lemma_readable(left);
                 self.core.lemma_readable(right);
+                // 同じ物体を2つ持つなら rc は 1 でないので、その場で自分自身を写すことはない
+                if a == right.bits_spec() && self.core.dom().contains(a) {
+                    reveal(Core::refs_wf);
+                    self.core.lemma_at(a);
+                    assert(self.core.counted_wf(a));
+                }
             }
-        }
-        self.checked_string(hl)?;
-        self.checked_string(hr)?;
-        let same = left.bits() == right.bits();
-        proof {
-            if c && same && self.core.dom().contains(hl@.addr) {
-                reveal(Core::refs_wf);
-                self.core.lemma_at(hl@.addr);
-                assert(self.core.counted_wf(hl@.addr));
+            if !self.core.dom().contains(a) {
+                self.core.lemma_region_at(a);
             }
-            if !self.core.dom().contains(hl@.addr) {
-                self.core.lemma_region_at(hl@.addr);
-            }
-        }
-        if same {
-            self.checked_decref_twice(hl)?;
         }
         proof {
             self.core.lemma_shape(hr@.addr);

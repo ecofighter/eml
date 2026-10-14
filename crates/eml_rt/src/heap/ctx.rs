@@ -28,6 +28,7 @@ use proof::*;
 // 証明の部品だけを置くので、検証のときだけ読む
 #[cfg(verus_only)]
 mod proof;
+mod strings;
 
 verus! {
 
@@ -38,6 +39,9 @@ pub struct CtxStats {
     pub evidence_steps: u64,
     pub yields: u64,
     pub yield_frames: u64,
+    /// extern がヒープの文字列に写したバイト数。検査モードだけで数える。数え方は今のインタプリタの
+    /// `RunStats::string_bytes_copied` と同じで、S10 の VM が引き継ぐ。
+    pub string_bytes_copied: u64,
 }
 
 /// yield の状態。`target` が `()` なら yield していない。Rust の enum は配置が決まらないので、平らな記録にして、
@@ -755,7 +759,12 @@ impl<M: Mode> Ctx<M> {
             control,
             max_depth: limits.max_depth,
             max_evv: limits.max_evv,
-            stats: CtxStats { evidence_steps: 0, yields: 0, yield_frames: 0 },
+            stats: CtxStats {
+                evidence_steps: 0,
+                yields: 0,
+                yield_frames: 0,
+                string_bytes_copied: 0,
+            },
         };
         proof {
             lemma_unit_bits();
