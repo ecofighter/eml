@@ -198,7 +198,7 @@ impl Core {
             self.model@.kept == Set::<Pos>::empty(),
             self.model@.building is None,
         ensures
-            self.wf(),
+            self.full(),
     {
         reveal(Core::blocks_wf);
         reveal(Core::edges_wf);
@@ -210,7 +210,7 @@ impl Core {
     /// 確保器からブロックを取った後も、ヒープの不変条件は保たれ、取ったブロックはまだヒープの外にある。
     pub(crate) proof fn lemma_alloc(&self, s0: Core, words: usize, h: *mut Header, perm: BlockPerm)
         requires
-            s0.wf(),
+            s0.full(),
             self.perms == s0.perms,
             self.model == s0.model,
             self.checked == s0.checked,
@@ -238,10 +238,12 @@ impl Core {
     #[inline(always)]
     pub(crate) fn settle(&mut self)
         requires
-            old(self).wf(),
+            old(self).full(),
+            old(self).checked@ ==> old(self).safe_wf(),
             old(self).settleable(),
         ensures
-            final(self).wf(),
+            final(self).full(),
+            final(self).checked@ ==> final(self).safe_wf(),
             final(self).model@.building is None,
             final(self).frame(*old(self)),
             final(self).model == old(self).settled_view().model,
@@ -255,6 +257,9 @@ impl Core {
             if let Some(b) = self.model@.building {
                 self.model = Ghost(s0.settled_view().model@);
                 self.lemma_settle(s0, b);
+                if self.checked@ {
+                    self.lemma_safe_settle(s0, b);
+                }
             }
         }
     }
@@ -262,7 +267,7 @@ impl Core {
     /// 見方の辺は、構築中の物体の「残した」語の辺を足したものなので、行き先ごとの数は減らない。
     pub(crate) proof fn lemma_view_indeg(&self)
         requires
-            self.wf(),
+            self.full(),
         ensures
             forall|t: usize| #[trigger] self.settled_view().indeg(t) >= self.indeg(t),
             self.model@.building matches Some(b) ==> forall|t: usize| #[trigger]
@@ -296,7 +301,7 @@ impl Core {
     /// 書き終えた構築中の物体 `b` を生きている物体にした見方も、不変条件を満たす。
     pub(crate) proof fn lemma_settle(&self, s0: Core, b: usize)
         requires
-            s0.wf(),
+            s0.full(),
             s0.settleable(),
             s0.model@.building == Some(b),
             self.perms == s0.perms,
@@ -304,7 +309,7 @@ impl Core {
             self.checked == s0.checked,
             self.model == s0.settled_view().model,
         ensures
-            self.wf(),
+            self.full(),
             self.frame(s0),
             forall|t: usize| #[trigger] self.indeg(t) == s0.indeg(t) + indeg(s0.kept_edges(b), t),
     {
@@ -412,6 +417,7 @@ impl Core {
     )
         requires
             old(self).pending(h@.addr),
+            old(self).checked@ ==> old(self).safe_pending(h@.addr),
             old(self).model@.building is None,
             h == old(self).block(h@.addr),
             old(self).pages.carved_block(h@.addr),
@@ -419,7 +425,9 @@ impl Core {
             st == BlockState::Live || st == BlockState::Building,
             perm.rc.value() == 0 || perm.rc.value() == 1,
         ensures
-            final(self).wf(),
+            final(self).model@.tokens == old(self).model@.tokens,
+            final(self).full(),
+            final(self).checked@ ==> final(self).safe_wf(),
             final(self).dom() == old(self).dom().insert(h@.addr),
             final(self).perm(h@.addr) == perm,
             final(self).state(h@.addr) == st,
@@ -466,6 +474,10 @@ impl Core {
                 },
             );
             self.lemma_publish(s0, hs);
+            if self.checked@ {
+                self.lemma_safe_block_full(hs);
+                self.lemma_safe_publish(s0, hs);
+            }
         }
     }
 
@@ -501,7 +513,7 @@ impl Core {
                 None
             },
         ensures
-            self.wf(),
+            self.full(),
             self.frame(s0),
             self.indeg(h) == 0,
             forall|w: Word| s0.word_ok(w) ==> #[trigger] self.word_ok(w),
@@ -560,7 +572,7 @@ impl Core {
     /// 物体 `h` の rc と数を替える。`dying` なら、最後の参照を手放したので空ける途中にする。
     pub(crate) proof fn lemma_count_step(&self, s0: Core, h: usize, dying: bool)
         requires
-            s0.wf(),
+            s0.full(),
             s0.dom().contains(h),
             s0.state(h) == BlockState::Live,
             self.pages == s0.pages,
@@ -604,7 +616,7 @@ impl Core {
                     && self.model@.refs[h] > 0
             },
         ensures
-            self.wf(),
+            self.full(),
             forall|w: Word| #[trigger] self.word_ok(w) == s0.word_ok(w),
             forall|b: usize| #[trigger] self.indeg(b) == s0.indeg(b),
     {
@@ -645,7 +657,7 @@ impl Core {
     /// 空ける途中の親の辺 `e` を外す。
     pub(crate) proof fn lemma_edge_removed(&self, s0: Core, e: (usize, int))
         requires
-            s0.wf(),
+            s0.full(),
             s0.model@.edges.dom().contains(e),
             s0.state(e.0) == BlockState::Dying,
             self.pages == s0.pages,
@@ -653,7 +665,7 @@ impl Core {
             self.perms == s0.perms,
             self.model@ == (Model { edges: s0.model@.edges.remove(e), ..s0.model@ }),
         ensures
-            self.wf(),
+            self.full(),
             self.indeg(s0.model@.edges[e]) + 1 == s0.indeg(s0.model@.edges[e]),
             forall|b: usize| b != s0.model@.edges[e] ==> #[trigger] self.indeg(b) == s0.indeg(b),
             forall|w: Word| #[trigger] self.word_ok(w) == s0.word_ok(w),
@@ -700,7 +712,7 @@ impl Core {
     /// 速いモードで、空ける途中のブロック `h` を確保器に返した後の状態。
     pub(crate) proof fn lemma_block_released(&self, s0: Core, h: usize)
         requires
-            s0.wf(),
+            s0.full(),
             s0.dom().contains(h),
             s0.state(h) == BlockState::Dying,
             s0.indeg(h) == 0,
@@ -721,7 +733,7 @@ impl Core {
             forall|b: usize| #[trigger]
                 self.pages.in_use().contains(b) ==> self.pages.same_block(s0.pages, b),
         ensures
-            self.wf(),
+            self.full(),
             self.dom() == s0.dom().remove(h),
             forall|b: usize| #[trigger] self.indeg(b) == s0.indeg(b),
             forall|w: Word|
@@ -801,7 +813,7 @@ impl Core {
     /// 検査モードで、空ける途中のブロック `h` を隔離した後の状態。権限はヒープに残し、前置きの状態だけを替える。
     pub(crate) proof fn lemma_block_freed(&self, s0: Core, h: usize)
         requires
-            s0.wf(),
+            s0.full(),
             s0.dom().contains(h),
             s0.state(h) == BlockState::Dying,
             s0.indeg(h) == 0,
@@ -820,7 +832,7 @@ impl Core {
                 ..s0.model@
             }),
         ensures
-            self.wf(),
+            self.full(),
             self.dom() == s0.dom(),
             forall|b: usize| #[trigger] self.indeg(b) == s0.indeg(b),
             forall|w: Word| #[trigger] self.word_ok(w) == s0.word_ok(w),

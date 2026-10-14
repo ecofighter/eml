@@ -2,18 +2,17 @@
 //! token の箱は中身を消さない。一意の道で、同じ位置の同じフィールドを書かずに済ませる特殊化が、古いフィールドに頼る
 //! ためである。
 
-use std::ptr::NonNull;
 use vstd::prelude::*;
 
 #[cfg(verus_only)]
 use super::Core;
-use super::check::{self, State, reuse_in_place_check};
+use super::check::reuse_in_place_check;
 #[cfg(verus_only)]
 use super::handover::{handover, kept_set};
 #[cfg(verus_only)]
 use super::inv::{p_count, p_first};
 #[cfg(verus_only)]
-use super::model::{BlockState, Pos};
+use super::model::{BlockState, Model, Pos};
 #[cfg(verus_only)]
 use super::states::pos_set;
 use super::{Heap, object_words};
@@ -118,7 +117,7 @@ impl<M: Mode> Heap<M> {
     /// 構築中の物体を生きている物体にしても、token は使える。
     proof fn lemma_token_settled(&self, old: Heap<M>, t: Token)
         requires
-            old.core.wf(),
+            old.core.full(),
             old.token_ok(t),
             self.core == old.core.settled_view(),
             self.tokens == old.tokens,
@@ -249,12 +248,12 @@ impl<M: Mode> Heap<M> {
     /// token の箱を取り出す。検査モードでは、表の項目、箱の状態、世代の番号を確かめ、項目を空ける。
     fn take_token(&mut self, token: Token) -> (r: Result<Option<*mut Header>, HeapError>)
         requires
-            old(self).core.wf(),
+            old(self).wf(),
             !M::CHECKED ==> old(self).token_ok(token),
         ensures
-            final(self).core == old(self).core,
-            final(self).dummy == old(self).dummy,
-            final(self).worker == old(self).worker,
+            r is Err ==> *final(self) == *old(self),
+            !M::CHECKED ==> *final(self) == *old(self),
+            final(self).taken(*old(self)),
             !M::CHECKED ==> r is Ok,
             token.word_spec().bits_spec() == 0 ==> r == Ok::<Option<*mut Header>, HeapError>(None),
             !M::CHECKED && token.word_spec().bits_spec() != 0 ==> r matches Ok(Some(_)),
@@ -263,62 +262,143 @@ impl<M: Mode> Heap<M> {
                 &&& h == final(self).core.block(h@.addr)
                 &&& final(self).core.state(h@.addr) == BlockState::Token
                 &&& !M::CHECKED ==> old(self).token_box(token) == Some(h@.addr)
+                &&& M::CHECKED ==> !final(self).core.registered(h@.addr)
             },
     {
         if token.is_empty() {
+            proof {
+                self.lemma_taken_refl();
+            }
             return Ok(None);
         }
         if !M::CHECKED {
             let h = self.header_of(token.0);
+            proof {
+                self.lemma_taken_refl();
+            }
             return Ok(Some(h));
         }
         self.checked_take_token(token)
     }
 
-    /// 検査モードの token の取り出し。token の表と前置きの世代の番号を確かめる。まだ証明していない (信頼の一覧のテストの
-    /// 「未証明」)。
-    #[verifier::external_body]
-    fn checked_take_token(&mut self, token: Token) -> (r: Result<Option<*mut Header>, HeapError>)
+    /// `old` から、token の表の項目を空けたほかは変わらない。
+    pub closed spec fn taken(&self, old: Heap<M>) -> bool {
+        &&& self.core.pages == old.core.pages
+        &&& self.core.perms == old.core.perms
+        &&& self.core.checked == old.core.checked
+        &&& self.core.model@ == (Model { tokens: self.core.model@.tokens, ..old.core.model@ })
+        &&& self.tokens@ == self.core.model@.tokens
+        &&& self.dummy == old.dummy
+        &&& self.worker == old.worker
+        &&& self.wf()
+    }
+
+    proof fn lemma_taken_refl(&self)
+        requires
+            self.wf(),
         ensures
-            final(self).core == old(self).core,
-            final(self).dummy == old(self).dummy,
-            final(self).worker == old(self).worker,
-            r matches Ok(Some(h)) ==> {
+            self.taken(*self),
+    {
+    }
+
+    /// 検査モードの token の取り出し。token の表を引き、前置きの状態と世代の番号を項目と照らし、項目を空ける。表の
+    /// 項目があればその箱は token の状態で世代の番号も等しいので (`Core::safe_tokens_wf`)、照らし合わせは
+    /// 断らない。断るのは、空けた項目と、表の外の添字である。
+    fn checked_take_token(&mut self, token: Token) -> (r: Result<Option<*mut Header>, HeapError>)
+        requires
+            M::CHECKED,
+            old(self).wf(),
+            token.word_spec().bits_spec() != 0,
+        ensures
+            r is Err ==> *final(self) == *old(self),
+            final(self).taken(*old(self)),
+            r matches Ok(o) ==> o matches Some(h) && {
                 &&& final(self).core.dom().contains(h@.addr)
                 &&& h == final(self).core.block(h@.addr)
                 &&& final(self).core.state(h@.addr) == BlockState::Token
+                &&& !final(self).core.registered(h@.addr)
             },
     {
+        proof {
+            self.lemma_taken_refl();
+        }
         // 即値でない語は表の添字でないので、`imm_value` の前に断る
         if !token.0.is_imm() {
             return Err(HeapError::StaleToken);
         }
-        let index = usize::try_from(token.0.imm_value()).map_err(|_| HeapError::StaleToken)?;
-        let (h, generation) = self.tokens.get_mut(index).and_then(Option::take).ok_or(
-            HeapError::StaleToken,
-        )?;
-        // 表に入れたのは確保したブロックなので、null にならない
-        let prefix = unsafe { check::prefix(NonNull::new_unchecked(h)) };
-        if prefix.state() != State::Token || prefix.generation() != generation {
+        let v = token.0.imm_value();
+        if v < 0 {
             return Err(HeapError::StaleToken);
+        }
+        let index = v as usize;
+        if index >= self.tokens.len() {
+            return Err(HeapError::StaleToken);
+        }
+        let (h, generation) = match self.tokens[index] {
+            Some(e) => e,
+            None => return Err(HeapError::StaleToken),
+        };
+        let ghost s0 = self.core;
+        proof {
+            reveal(Core::safe_tokens_wf);
+            assert(s0.model@.tokens[index as int] == self.tokens@[index as int]);
+            assert(s0.token_entry((h, generation)));
+        }
+        let bits = self.core.prefix_state_get(h);
+        if bits & 3 != 2 || bits >> 2u32 != generation {
+            return Err(HeapError::StaleToken);
+        }
+        self.tokens.set(index, None);
+        proof {
+            self.core.model = Ghost(
+                Model { tokens: s0.model@.tokens.update(index as int, None), ..s0.model@ },
+            );
+            self.core.lemma_token_taken(s0, index as int);
+            self.core.lemma_tokens_frame(s0);
+            assert(self.tokens@ =~= self.core.model@.tokens);
+            assert(self.core.dom().contains(self.dummy.bits_spec()));
         }
         Ok(Some(h))
     }
 
-    /// 検査モードで token の箱を token の表に積む。前置きは `finish_token` がもう token にしてある。まだ証明していない
-    /// (信頼の一覧のテストの「未証明」)。
-    #[verifier::external_body]
+    /// 検査モードで token の箱を token の表に積む。前置きは `finish_token` がもう token にしてある。
     fn checked_push_token(&mut self, h: *mut Header) -> (t: Token)
+        requires
+            M::CHECKED,
+            old(self).wf(),
+            old(self).core.dom().contains(h@.addr),
+            h == old(self).core.block(h@.addr),
+            old(self).core.state(h@.addr) == BlockState::Token,
+            !old(self).core.registered(h@.addr),
         ensures
-            final(self).core == old(self).core,
+            final(self).wf(),
+            final(self).core.pages == old(self).core.pages,
+            final(self).core.perms == old(self).core.perms,
+            final(self).core.checked == old(self).core.checked,
+            final(self).core.model@ == (Model {
+                tokens: final(self).core.model@.tokens,
+                ..old(self).core.model@
+            }),
             final(self).dummy == old(self).dummy,
             final(self).worker == old(self).worker,
             final(self).token_box(t) == Some(h@.addr),
     {
-        let prefix = unsafe { check::prefix(NonNull::new_unchecked(h)) };
+        let ghost s0 = self.core;
+        let bits = self.core.prefix_state_get(h);
+        let generation = bits >> 2u32;
         // 添字は使い回さない。使った項目を空のまま残して、古い token を確実に断るためである
-        self.tokens.push(Some((h, prefix.generation())));
-        Token(Word::imm((self.tokens.len() - 1) as i64))
+        let t = Token(Word::imm_index(self.tokens.len()));
+        self.tokens.push(Some((h, generation)));
+        proof {
+            self.core.model = Ghost(
+                Model { tokens: s0.model@.tokens.push(Some((h, generation))), ..s0.model@ },
+            );
+            self.core.lemma_token_pushed(s0, h, generation);
+            self.core.lemma_tokens_frame(s0);
+            assert(self.tokens@ =~= self.core.model@.tokens);
+            assert(self.core.dom().contains(self.dummy.bits_spec()));
+        }
+        t
     }
 
     /// token が空でなければ、その箱に `meta` を書いて返す。空なら確保する。箱を使ったかも返す。フィールドは呼ぶ側が書く。
@@ -427,6 +507,7 @@ impl<M: Mode> Heap<M> {
     /// `con_at` と `reuse_in_place` の後の状態。
     proof fn lemma_rebuilt(&self, s0: Heap<M>, h: *mut Header, w: Word, meta: Option<Meta>)
         requires
+            self.tokens@ == self.core.model@.tokens,
             s0.wf(),
             s0.core.model@.building is None,
             s0.core.dom().contains(h@.addr),
@@ -434,7 +515,8 @@ impl<M: Mode> Heap<M> {
             s0.core.state(h@.addr) == BlockState::Token,
             self.dummy == s0.dummy,
             self.worker == s0.worker,
-            self.core.wf(),
+            self.core.full(),
+            M::CHECKED ==> self.core.safe_wf(),
             self.core.checked == s0.core.checked,
             self.core.pages == s0.core.pages,
             self.core.dom() == s0.core.dom(),

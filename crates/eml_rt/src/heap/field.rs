@@ -62,10 +62,10 @@ impl Core {
     /// 書き終えた構築中の物体を生きている物体にした見方も、不変条件を満たす。
     pub(crate) proof fn lemma_settled_view(&self)
         requires
-            self.wf(),
+            self.full(),
             self.settleable(),
         ensures
-            self.settled_view().wf(),
+            self.settled_view().full(),
             self.settled_view().perms == self.perms,
             self.settled_view().pages == self.pages,
             self.settled_view().checked == self.checked,
@@ -80,7 +80,7 @@ impl Core {
     /// 読める語の指す物体は、生きているか構築中である。
     pub(crate) proof fn lemma_readable(&self, w: Word)
         requires
-            self.wf(),
+            self.full(),
             self.readable(w),
             w.is_ptr_spec(),
         ensures
@@ -93,7 +93,7 @@ impl Core {
     /// 生きている物体 (書き終えた構築中の物体を含む) の形。
     pub(crate) proof fn lemma_live_block(&self, h: usize)
         requires
-            self.wf(),
+            self.full(),
             self.settleable(),
             self.dom().contains(h),
             self.settled_state(h) == BlockState::Live,
@@ -111,7 +111,7 @@ impl Core {
     /// 生きている物体 (書き終えた構築中の物体を含む) の走査する語は書いてあり、生きている物体を指す。
     pub(crate) proof fn lemma_live_slot(&self, h: usize, i: int)
         requires
-            self.wf(),
+            self.full(),
             self.settleable(),
             self.dom().contains(h),
             self.settled_state(h) == BlockState::Live,
@@ -138,7 +138,7 @@ impl Core {
     /// `set_field` の後も、不変条件は保たれる。
     pub(crate) proof fn lemma_field_set(&self, s0: Core, h: usize, i: int, v: Word)
         requires
-            s0.wf(),
+            s0.full(),
             s0.dom().contains(h),
             s0.state(h) == BlockState::Live || s0.state(h) == BlockState::Building,
             s0.scanned(h, i),
@@ -146,7 +146,7 @@ impl Core {
             v.is_ptr_spec() && s0.rc_of(v.bits_spec()) != 0 ==> s0.ext(v.bits_spec()) >= 1,
             self.field_set(s0, h, i, v),
         ensures
-            self.wf(),
+            self.full(),
             forall|w: Word| #[trigger] self.word_ok(w) == s0.word_ok(w),
             forall|b: usize, j: int| #[trigger] self.scanned(b, j) == s0.scanned(b, j),
     {
@@ -260,14 +260,14 @@ impl Core {
     /// 生の語を書いた後も、不変条件は保たれる。生の語は走査しないので、辺は変わらない。
     pub(crate) proof fn lemma_raw_set(&self, s0: Core, h: usize, i: int)
         requires
-            s0.wf(),
+            s0.full(),
             s0.dom().contains(h),
             s0.state(h) == BlockState::Live || s0.state(h) == BlockState::Building,
             p_first(s0.perm(h)) + p_count(s0.perm(h)) <= i,
             self.slot_changed(s0, h, i),
             self.model == s0.model,
         ensures
-            self.wf(),
+            self.full(),
             forall|w: Word| #[trigger] self.word_ok(w) == s0.word_ok(w),
             forall|b: usize, j: int| #[trigger] self.scanned(b, j) == s0.scanned(b, j),
     {

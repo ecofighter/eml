@@ -30,7 +30,7 @@ impl Core {
     /// ブロック `h` の位置と大きさの事実。
     pub(crate) proof fn lemma_at(&self, h: usize)
         requires
-            self.wf(),
+            self.full(),
             self.dom().contains(h),
         ensures
             self.block_wf(h),
@@ -48,7 +48,7 @@ impl Core {
     #[inline]
     pub(crate) fn rc_get(&self, h: *mut Header) -> (r: i32)
         requires
-            self.wf(),
+            self.full(),
             self.dom().contains(h@.addr),
             h == self.block(h@.addr),
         ensures
@@ -64,7 +64,7 @@ impl Core {
     #[inline]
     pub(crate) fn meta_get(&self, h: *mut Header) -> (r: Meta)
         requires
-            self.wf(),
+            self.full(),
             self.dom().contains(h@.addr),
             h == self.block(h@.addr),
         ensures
@@ -86,7 +86,7 @@ impl Core {
     #[inline]
     pub(crate) fn slot_get(&self, h: *mut Header, i: usize) -> (r: Word)
         requires
-            self.wf(),
+            self.full(),
             self.dom().contains(h@.addr),
             h == self.block(h@.addr),
             p_init(self.perm(h@.addr), i as int),
@@ -105,7 +105,7 @@ impl Core {
     #[inline]
     pub(crate) fn scan_get(&self, h: *mut Header) -> (r: (usize, usize))
         requires
-            self.wf(),
+            self.full(),
             self.dom().contains(h@.addr),
             h == self.block(h@.addr),
             self.state(h@.addr) != BlockState::Freed,
@@ -129,7 +129,7 @@ impl Core {
     #[inline]
     pub(crate) fn rc_last(&self, h: *mut Header) -> (r: bool)
         requires
-            self.wf(),
+            self.full(),
             self.dom().contains(h@.addr),
             h == self.block(h@.addr),
         ensures
@@ -146,7 +146,7 @@ impl Core {
     #[inline]
     pub(crate) fn cap_get(&self, h: *mut Header) -> (r: usize)
         requires
-            self.wf(),
+            self.full(),
             self.dom().contains(h@.addr),
             h == self.block(h@.addr),
         ensures
@@ -162,7 +162,7 @@ impl Core {
     #[inline]
     pub(crate) fn slot_put(&mut self, h: *mut Header, i: usize, v: Word)
         requires
-            old(self).wf(),
+            old(self).full(),
             old(self).dom().contains(h@.addr),
             h == old(self).block(h@.addr),
             i < old(self).cap(h@.addr),
@@ -190,7 +190,7 @@ impl Core {
     #[inline]
     pub(crate) fn prefix_state_get(&self, h: *mut Header) -> (r: u32)
         requires
-            self.wf(),
+            self.full(),
             self.dom().contains(h@.addr),
             h == self.block(h@.addr),
             self.checked@,
@@ -210,7 +210,7 @@ impl Core {
     #[inline]
     pub(crate) fn prefix_first_get(&self, h: *mut Header) -> (r: u32)
         requires
-            self.wf(),
+            self.full(),
             self.dom().contains(h@.addr),
             h == self.block(h@.addr),
             self.checked@,
@@ -229,7 +229,7 @@ impl Core {
     /// 検査モードの前置きの状態は、ブロックの状態を表す。
     pub(crate) proof fn lemma_code_state(&self, h: usize)
         requires
-            self.wf(),
+            self.full(),
             self.dom().contains(h),
             self.checked@,
         ensures
@@ -259,10 +259,10 @@ impl Core {
     /// 不死の物体の数を替えても、不変条件は保たれる。数は rc が 0 の物体の前置きにしかなく、ほかの不変条件は読まない。
     pub(crate) proof fn lemma_recounted(&self, s0: Core)
         requires
-            s0.wf(),
+            s0.full(),
             self.recounted(s0),
         ensures
-            self.wf(),
+            self.full(),
             forall|w: Word| #[trigger] self.word_ok(w) == s0.word_ok(w),
             forall|b: usize|
                 #![trigger s0.dom().contains(b)]
@@ -325,7 +325,7 @@ impl Core {
 
     pub(crate) proof fn lemma_recounted_refl(&self)
         requires
-            self.wf(),
+            self.full(),
         ensures
             self.recounted(*self),
     {
@@ -381,13 +381,13 @@ impl Core {
         edge: Option<Pos>,
     )
         requires
-            mid.wf(),
+            mid.full(),
             mid.released(old, h, edge, false),
             mid.dom().contains(h),
             self.recounted(mid),
             forall|b: usize| b != h ==> #[trigger] self.perms@[b] == mid.perms@[b],
         ensures
-            self.wf(),
+            self.full(),
             self.released(old, h, edge, false),
     {
         self.lemma_recounted(mid);
@@ -485,7 +485,7 @@ impl Core {
     #[inline]
     pub(crate) fn rc_put(&mut self, h: *mut Header, v: i32)
         requires
-            old(self).wf(),
+            old(self).full(),
             old(self).dom().contains(h@.addr),
             h == old(self).block(h@.addr),
         ensures
@@ -507,7 +507,7 @@ impl Core {
     #[inline]
     pub(crate) fn rc_up_shared(&mut self, h: *mut Header)
         requires
-            old(self).wf(),
+            old(self).full(),
             old(self).dom().contains(h@.addr),
             h == old(self).block(h@.addr),
             old(self).rc_of(h@.addr) > i32::MIN,
@@ -530,7 +530,7 @@ impl Core {
     #[inline]
     pub(crate) fn rc_down_shared(&mut self, h: *mut Header) -> (r: bool)
         requires
-            old(self).wf(),
+            old(self).full(),
             old(self).dom().contains(h@.addr),
             h == old(self).block(h@.addr),
             old(self).rc_of(h@.addr) < 0,
@@ -576,7 +576,8 @@ impl Core {
         Ghost(edge): Ghost<Option<Pos>>,
     )
         requires
-            s0.wf(),
+            s0.full(),
+            s0.checked@ ==> s0.safe_wf(),
             s0.dom().contains(h),
             s0.state(h) == BlockState::Live,
             s0.model@.building is None,
@@ -605,7 +606,9 @@ impl Core {
                 1u32
             },
         ensures
-            final(self).wf(),
+            final(self).model@.tokens == s0.model@.tokens,
+            final(self).full(),
+            final(self).checked@ ==> final(self).safe_wf(),
             final(self).pages == s0.pages,
             final(self).checked == s0.checked,
             final(self).perms == old(self).perms,
@@ -661,12 +664,22 @@ impl Core {
                 assert(s0.counted_wf(h));
                 lemma_dup(s);
             }
+            if self.checked@ {
+                self.lemma_safe_block_full(h);
+                if s0.registered(h) {
+                    s0.lemma_registered(h);
+                }
+                reveal(Core::blocks_wf);
+                assert(self.model@.state =~= s0.model@.state.insert(h, self.state(h)));
+                assert(self.model@.written =~= s0.model@.written.insert(h, self.model@.written[h]));
+                self.lemma_safe_step(s0, h);
+            }
         }
     }
 
     proof fn lemma_count_extra(&self, s0: Core, h: usize, up: bool, edge: Option<Pos>)
         requires
-            s0.wf(),
+            s0.full(),
             s0.dom().contains(h),
             s0.state(h) == BlockState::Live,
             s0.model@.building is None,
@@ -816,7 +829,7 @@ impl Core {
         Ghost(edge): Ghost<Option<Pos>>,
     )
         requires
-            s0.wf(),
+            s0.full(),
             s0.dom().contains(h),
             s0.state(h) == BlockState::Live,
             s0.model@.building is None,
@@ -844,7 +857,8 @@ impl Core {
                 1u32
             },
         ensures
-            final(self).wf(),
+            final(self).model@.tokens == s0.model@.tokens,
+            final(self).full(),
             final(self).pages == s0.pages,
             final(self).perms == old(self).perms,
             final(self).dom() == s0.dom(),

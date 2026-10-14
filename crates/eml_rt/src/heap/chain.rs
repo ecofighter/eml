@@ -314,7 +314,7 @@ impl Core {
         work: Seq<Word>,
     )
         requires
-            self.wf(),
+            self.full(),
             self.dying_word(w),
             w.bits_spec() == h@.addr,
             h == self.block(h@.addr),
@@ -353,7 +353,7 @@ impl Core {
         work: Seq<Word>,
     )
         requires
-            self.wf(),
+            self.full(),
             self.draining(h, first, i + 1, skip, work),
             0 <= i,
             !skip.contains(first + i),
@@ -391,7 +391,7 @@ impl Core {
         work: Seq<Word>,
     )
         requires
-            self.wf(),
+            self.full(),
             self.draining(h, first, i + 1, skip, work),
             0 <= i,
             !p_word(self.perm(h@.addr), first + i).is_ptr_spec() || skip.contains(first + i),

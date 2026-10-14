@@ -78,7 +78,7 @@ impl<M: Mode> Heap<M> {
         HeapError,
     >)
         requires
-            self.core.wf(),
+            self.core.full(),
             self.core.checked@ == M::CHECKED,
             self.core.dom().contains(h@.addr),
             h == self.core.block(h@.addr),
@@ -134,6 +134,8 @@ impl<M: Mode> Heap<M> {
                     &&& old(self).owned(c)
                 },
         ensures
+            final(self).core.model@.tokens == old(self).core.model@.tokens,
+            final(self).tokens == old(self).tokens,
             !M::CHECKED ==> r is Ok,
             r is Ok ==> final(self).wf() && final(self).core.evolved_by(
                 old(self).core,
@@ -155,13 +157,15 @@ impl<M: Mode> Heap<M> {
         let mut i: usize = 0;
         while i < n
             invariant
+                self.tokens == old(self).tokens,
+                self.core.model@.tokens == old(self).core.model@.tokens,
                 self.wf(),
                 self.core.model@.building is None,
                 self.core.dupped(
                     s0,
                     s0.model@.edges.restrict(pos_set(a, kept_set(first as int, keep@, i as int))),
                 ),
-                s0.wf(),
+                s0.full(),
                 s0 == old(self).core,
                 a == h@.addr,
                 w.is_ptr_spec(),
@@ -272,6 +276,9 @@ impl<M: Mode> Heap<M> {
             to_token ==> old(self).core.kind(h@.addr) == Kind::Data && old(self).core.rc_of(h@.addr)
                 == 1,
         ensures
+            M::CHECKED ==> final(self).core.pages == old(self).core.pages,
+            final(self).core.model@.tokens == old(self).core.model@.tokens,
+            final(self).tokens == old(self).tokens,
             !M::CHECKED ==> r is Ok,
             r is Ok ==> {
                 &&& final(self).wf()
@@ -284,6 +291,7 @@ impl<M: Mode> Heap<M> {
                 &&& to_token ==> final(self).core.dom().contains(h@.addr) && final(self).core.state(
                     h@.addr,
                 ) == BlockState::Token
+                &&& to_token && M::CHECKED ==> !final(self).core.registered(h@.addr)
             },
     {
         let ghost s0 = self.core;
@@ -325,7 +333,8 @@ impl<M: Mode> Heap<M> {
         Ghost(skip): Ghost<Set<int>>,
     ) -> (r: Result<(), HeapError>)
         requires
-            old(self).core.wf(),
+            old(self).core.full(),
+            M::CHECKED ==> old(self).core.safe_wf(),
             old(self).core.checked@ == M::CHECKED,
             old(self).core.model@.building is None,
             old(self).core.draining(h, first as int, keep@.len() as int, skip, old(work)@),
@@ -335,8 +344,12 @@ impl<M: Mode> Heap<M> {
             to_token ==> old(self).core.kind(h@.addr) == Kind::Data && old(self).core.rc_of(h@.addr)
                 == 1,
         ensures
+            M::CHECKED ==> final(self).core.pages == old(self).core.pages,
+            final(self).core.model@.tokens == old(self).core.model@.tokens,
+            final(self).tokens == old(self).tokens,
             !M::CHECKED ==> r is Ok,
-            final(self).core.wf(),
+            final(self).core.full(),
+            M::CHECKED ==> final(self).core.safe_wf(),
             final(self).core.checked@ == M::CHECKED,
             r is Ok ==> {
                 &&& final(self).core.quiet()
@@ -344,6 +357,7 @@ impl<M: Mode> Heap<M> {
                 &&& to_token ==> final(self).core.dom().contains(h@.addr) && final(self).core.state(
                     h@.addr,
                 ) == BlockState::Token
+                &&& to_token && M::CHECKED ==> !final(self).core.registered(h@.addr)
             },
             final(self).dummy == old(self).dummy,
             final(self).worker == old(self).worker,
@@ -357,7 +371,11 @@ impl<M: Mode> Heap<M> {
         let mut i = n;
         while i > 0
             invariant
-                self.core.wf(),
+                M::CHECKED ==> self.core.pages == old(self).core.pages,
+                self.tokens == old(self).tokens,
+                self.core.model@.tokens == old(self).core.model@.tokens,
+                self.core.full(),
+                M::CHECKED ==> self.core.safe_wf(),
                 self.core.checked@ == M::CHECKED,
                 self.core.draining(h, first as int, i as int, skip, work@),
                 skip == kept_set(first as int, keep@, n as int),
@@ -372,7 +390,7 @@ impl<M: Mode> Heap<M> {
                 self.dummy == old(self).dummy,
                 self.worker == old(self).worker,
                 to_token ==> self.core.kind(h@.addr) == Kind::Data && self.core.rc_of(h@.addr) == 1,
-                s1.wf(),
+                s1.full(),
             decreases i,
         {
             i -= 1;

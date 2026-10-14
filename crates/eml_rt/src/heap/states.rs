@@ -42,7 +42,8 @@ impl Core {
     #[inline(always)]
     pub(crate) fn begin_free(&mut self, h: *mut Header, Ghost(ps): Ghost<Set<Pos>>, checked: bool)
         requires
-            old(self).wf(),
+            old(self).full(),
+            old(self).checked@ ==> old(self).safe_wf(),
             checked == old(self).checked@,
             old(self).dom().contains(h@.addr),
             h == old(self).block(h@.addr),
@@ -51,7 +52,8 @@ impl Core {
             old(self).model@.building is None,
             forall|e: Pos| #[trigger] ps.contains(e) ==> e.0 == h@.addr,
         ensures
-            final(self).wf(),
+            final(self).full(),
+            final(self).checked@ ==> final(self).safe_wf(),
             final(self).pages == old(self).pages,
             final(self).prefix_moved(*old(self), h@.addr),
             final(self).checked == old(self).checked,
@@ -87,12 +89,21 @@ impl Core {
             );
             assert(self.perms@.dom() =~= s0.perms@.dom());
             self.lemma_begin_free(s0, a, ps);
+            if checked {
+                reveal(Core::blocks_wf);
+                s0.lemma_safe_at(a);
+                self.lemma_at(a);
+                if s0.registered(a) {
+                    s0.lemma_registered(a);
+                }
+                self.lemma_safe_restate(s0, a);
+            }
         }
     }
 
     proof fn lemma_begin_free(&self, s0: Core, h: usize, ps: Set<Pos>)
         requires
-            s0.wf(),
+            s0.full(),
             s0.dom().contains(h),
             s0.state(h) == BlockState::Live,
             s0.indeg(h) == 0,
@@ -108,7 +119,7 @@ impl Core {
                 ..s0.model@
             }),
         ensures
-            self.wf(),
+            self.full(),
             forall|t: usize| #[trigger]
                 self.indeg(t) + indeg(s0.model@.edges.restrict(ps), t) == s0.indeg(t),
     {
@@ -166,7 +177,8 @@ impl Core {
     #[inline(always)]
     pub(crate) fn finish_token(&mut self, h: *mut Header, Ghost(ks): Ghost<Set<int>>, checked: bool)
         requires
-            old(self).wf(),
+            old(self).full(),
+            old(self).checked@ ==> old(self).safe_wf(),
             checked == old(self).checked@,
             h == old(self).block(h@.addr),
             old(self).dom().contains(h@.addr),
@@ -176,7 +188,9 @@ impl Core {
             old(self).rc_of(h@.addr) == 1,
             forall|j: int| #[trigger] ks.contains(j) ==> old(self).scanned(h@.addr, j),
         ensures
-            final(self).wf(),
+            final(self).checked@ ==> !final(self).registered(h@.addr),
+            final(self).full(),
+            final(self).checked@ ==> final(self).safe_wf(),
             final(self).pages == old(self).pages,
             final(self).prefix_moved(*old(self), h@.addr),
             final(self).checked == old(self).checked,
@@ -263,6 +277,21 @@ impl Core {
             ) by {
                 assert(s0.counted_wf(b));
             }
+            if checked {
+                s0.lemma_safe_at(h@.addr);
+                self.lemma_at(h@.addr);
+                assert forall|i: int| #[trigger]
+                    self.model@.kept.contains((h@.addr, i)) implies p_scanned(self.perm(h@.addr), i)
+                    && p_scanned(s0.perm(h@.addr), i) by {
+                    if s0.model@.kept.contains((h@.addr, i)) {
+                        assert(s0.kept_wf((h@.addr, i)));
+                    }
+                }
+                if s0.registered(h@.addr) {
+                    s0.lemma_registered(h@.addr);
+                }
+                self.lemma_safe_restate(s0, h@.addr);
+            }
         }
     }
 
@@ -270,13 +299,17 @@ impl Core {
     #[inline(always)]
     pub(crate) fn token_free(&mut self, h: *mut Header, checked: bool)
         requires
-            old(self).wf(),
+            old(self).full(),
+            old(self).checked@ ==> old(self).safe_wf(),
             checked == old(self).checked@,
             h == old(self).block(h@.addr),
             old(self).dom().contains(h@.addr),
             old(self).state(h@.addr) == BlockState::Token,
+            checked ==> !old(self).registered(h@.addr),
         ensures
-            final(self).wf(),
+            final(self).model@.tokens == old(self).model@.tokens,
+            final(self).full(),
+            final(self).checked@ ==> final(self).safe_wf(),
             final(self).pages == old(self).pages,
             final(self).prefix_moved(*old(self), h@.addr),
             final(self).checked == old(self).checked,
@@ -358,6 +391,11 @@ impl Core {
             ) by {
                 assert(s0.counted_wf(b));
             }
+            if checked {
+                s0.lemma_safe_at(h@.addr);
+                self.lemma_at(h@.addr);
+                self.lemma_safe_restate(s0, h@.addr);
+            }
         }
     }
 
@@ -372,11 +410,13 @@ impl Core {
         checked: bool,
     )
         requires
-            old(self).wf(),
+            old(self).full(),
+            old(self).checked@ ==> old(self).safe_wf(),
             checked == old(self).checked@,
             old(self).dom().contains(h@.addr),
             h == old(self).block(h@.addr),
             old(self).state(h@.addr) == BlockState::Token,
+            checked ==> !old(self).registered(h@.addr),
             old(self).model@.building is None,
             meta matches Some(m) ==> {
                 &&& m.kind_spec() != Kind::Free
@@ -384,7 +424,9 @@ impl Core {
                 &&& m.scan_spec() <= old(self).cap(h@.addr)
             },
         ensures
-            final(self).wf(),
+            final(self).model@.tokens == old(self).model@.tokens,
+            final(self).full(),
+            final(self).checked@ ==> final(self).safe_wf(),
             final(self).pages == old(self).pages,
             final(self).checked == old(self).checked,
             final(self).dom() == old(self).dom(),
@@ -460,6 +502,16 @@ impl Core {
             assert(self.model@.kept =~= s0.model@.kept.filter(
                 |e: Pos| e.0 != a || self.scanned(a, e.1),
             ));
+            if checked {
+                s0.lemma_safe_at(a);
+                self.lemma_at(a);
+                assert forall|i: int| #[trigger]
+                    self.model@.kept.contains((a, i)) implies p_scanned(self.perm(a), i)
+                    && p_scanned(s0.perm(a), i) by {
+                    assert(s0.kept_wf((a, i)));
+                }
+                self.lemma_safe_restate(s0, a);
+            }
         }
     }
 
@@ -527,7 +579,7 @@ impl Core {
 
     proof fn lemma_token_build(&self, s0: Core, a: usize, meta: Option<Meta>)
         requires
-            s0.wf(),
+            s0.full(),
             s0.dom().contains(a),
             s0.state(a) == BlockState::Token,
             s0.model@.building is None,
@@ -571,7 +623,7 @@ impl Core {
             self.model@.owner.dom() == s0.model@.owner.dom(),
             forall|b: usize| b != a ==> #[trigger] self.model@.owner[b] == s0.model@.owner[b],
         ensures
-            self.wf(),
+            self.full(),
             self.indeg(a) == 0,
     {
         reveal(Core::blocks_wf);

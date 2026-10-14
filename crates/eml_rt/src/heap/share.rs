@@ -11,6 +11,7 @@ use super::check::ALIVE_STATE;
 #[cfg(verus_only)]
 use super::inv::{
     p_code, p_count, p_extended, p_first, p_init, p_meta, p_owner, p_scanned, p_word,
+    prefix_recounted,
 };
 #[cfg(verus_only)]
 use super::model::{BlockState, Model, Pos};
@@ -1790,7 +1791,7 @@ pub(crate) proof fn lemma_kids(p: BlockPerm, first: int, i: int, pred: spec_fn(*
 /// 不変条件を満たすヒープの生きている物体は節点で、そのグラフは形の前提を満たす。
 pub(crate) proof fn lemma_shaped(s0: Core, a: usize)
     requires
-        s0.wf(),
+        s0.full(),
         s0.model@.building is None,
         s0.dom().contains(a),
         s0.state(a) == BlockState::Live,
@@ -1858,7 +1859,7 @@ pub(crate) proof fn lemma_shaped(s0: Core, a: usize)
 /// たどりの後のヒープ。権限は rc の値と前置きの所有者の値だけが変わり、モデルは持ち主と張り付きの旗を替える。
 pub(crate) proof fn lemma_shared_wf(s0: Core, c1: Core, receiver: u32)
     requires
-        s0.wf(),
+        s0.full(),
         s0.model@.building is None,
         s0.quiet(),
         c1.pages == s0.pages,
@@ -1882,7 +1883,7 @@ pub(crate) proof fn lemma_shared_wf(s0: Core, c1: Core, receiver: u32)
             )),
         c1.model@ == (Model { owner: c1.model@.owner, stuck: c1.model@.stuck, ..s0.model@ }),
     ensures
-        c1.wf(),
+        c1.full(),
 {
     reveal(graph_of);
     reveal(Core::blocks_wf);
@@ -2034,6 +2035,7 @@ impl<M: Mode> Heap<M> {
         ok: bool,
     )
         requires
+            self.tokens@ == self.core.model@.tokens,
             old.wf(),
             mid.core == old.core.settled_view(),
             mid.wf(),
@@ -2105,6 +2107,20 @@ impl<M: Mode> Heap<M> {
             }
         }
         lemma_shared_wf(s0, self.core, receiver);
+        if checked {
+            reveal(Core::safe_blocks_wf);
+            assert forall|b: usize| #[trigger] s0.dom().contains(b) implies {
+                &&& self.core.perm(b).rc.ptr() == s0.perm(b).rc.ptr()
+                &&& self.core.perm(b).rc.is_init()
+                &&& self.core.perm(b).meta == s0.perm(b).meta
+                &&& self.core.perm(b).slots == s0.perm(b).slots
+                &&& prefix_recounted(self.core.perm(b), s0.perm(b), true)
+            } by {
+                assert(s0.safe_block_wf(b));
+                assert(o1.perms@[b] == self.core.perms@[b]);
+            }
+            self.core.lemma_safe_values(s0);
+        }
         lemma_graph_base(self.core, s0, self.core.perms@, self.core.model@.owner, checked);
         // ダミーの物体は不死なので、印も持ち主も変わらない
         let d = self.dummy.bits_spec();

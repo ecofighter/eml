@@ -15,6 +15,7 @@ mod model;
 mod proof;
 mod release;
 mod reuse;
+mod safe;
 pub(crate) mod share;
 mod states;
 mod walk;
@@ -158,7 +159,9 @@ proof fn lemma_unit_filled_extend(before: BlockPerm, after: BlockPerm, lo: int, 
 
 impl<M: Mode> Heap<M> {
     pub closed spec fn wf(&self) -> bool {
-        &&& self.core.wf()
+        &&& self.core.full()
+        &&& M::CHECKED ==> self.core.safe_wf()
+        &&& self.tokens@ == self.core.model@.tokens
         &&& self.core.checked@ == M::CHECKED
         &&& self.core.quiet()
         &&& self.dummy_wf()
@@ -190,6 +193,18 @@ impl<M: Mode> Heap<M> {
 
     pub closed spec fn dummy_word(&self) -> Word {
         self.dummy
+    }
+
+    /// 構築中の物体を生きている物体にしただけのヒープ。`settle` は実行の時には何もしないので、物体を受ける操作が状態を
+    /// 変える前に `Err` を返すと、ヒープはこれになる。
+    pub closed spec fn settled_heap(&self) -> Heap<M> {
+        Heap { core: self.core.settled_view(), ..*self }
+    }
+
+    /// token の表は変わらない。
+    pub closed spec fn same_tokens(&self, old: Heap<M>) -> bool {
+        &&& self.tokens == old.tokens
+        &&& self.core.model@.tokens == old.core.model@.tokens
     }
 
     /// 物体とその数は変わらない。変わってよいのは、不死の物体の外に出ている参照の数 (docs/spec/object-model.md の
@@ -281,6 +296,7 @@ impl<M: Mode> Heap<M> {
                         written: Map::empty(),
                         kept: Set::empty(),
                         building: None,
+                        tokens: Seq::empty(),
                     },
                 ),
                 checked: Ghost(M::CHECKED),
@@ -303,6 +319,7 @@ impl<M: Mode> Heap<M> {
         };
         proof {
             heap.core.lemma_empty();
+            heap.core.lemma_safe_empty();
         }
         // ダミーは値 0 の BigInt の不死の物体で、検査モードでも数えない (docs/spec/object-model.md の「ダミーの値」)
         let (h, Tracked(perm)) = heap.alloc_header(1, 0, Meta::new(0, 0, Kind::BigInt, false));
@@ -368,6 +385,9 @@ impl<M: Mode> Heap<M> {
             old(self).wf(),
             old(self).settleable(),
         ensures
+            *final(self) == old(self).settled_heap(),
+            final(self).core.model@.tokens == old(self).core.model@.tokens,
+            final(self).tokens == old(self).tokens,
             final(self).wf(),
             final(self).core.model@.building is None,
             final(self).core.frame(old(self).core),
@@ -403,11 +423,15 @@ impl<M: Mode> Heap<M> {
         Tracked<BlockPerm>,
     ))
         requires
-            old(self).core.wf(),
+            old(self).core.full(),
+            M::CHECKED ==> old(self).core.safe_wf(),
             old(self).core.checked@ == M::CHECKED,
             meta.kind_spec() != Kind::Free,
         ensures
+            final(self).core.model@.tokens == old(self).core.model@.tokens,
+            final(self).tokens == old(self).tokens,
             final(self).core.pending(r.0@.addr),
+            M::CHECKED ==> final(self).core.safe_pending(r.0@.addr),
             final(self).core.perms == old(self).core.perms,
             final(self).core.model == old(self).core.model,
             final(self).core.checked == old(self).core.checked,
@@ -443,6 +467,9 @@ impl<M: Mode> Heap<M> {
         let (h, Tracked(perm)) = self.core.pages.alloc(words);
         proof {
             self.core.lemma_alloc(s0, words, h, perm);
+            if M::CHECKED {
+                self.core.lemma_safe_pages_frame(s0);
+            }
             self.core.pages.lemma_block_bounds(h@.addr);
         }
         let tracked mut perm = perm;
@@ -540,8 +567,10 @@ impl<M: Mode> Heap<M> {
     /// 新しいブロックを入れた後も、ダミーは変わらない。
     proof fn lemma_dummy_kept(&self, s1: Heap<M>)
         requires
+            self.tokens@ == self.core.model@.tokens,
             s1.wf(),
-            self.core.wf(),
+            self.core.full(),
+            M::CHECKED ==> self.core.safe_wf(),
             self.core.checked == s1.core.checked,
             self.dummy == s1.dummy,
             self.core.frame(s1.core),
@@ -890,6 +919,7 @@ impl<M: Mode> Heap<M> {
     pub closed spec fn bumped(&self, old: Heap<M>, w: Word) -> bool {
         &&& self.dummy == old.dummy
         &&& self.worker == old.worker
+        &&& self.tokens == old.tokens
         &&& self.core.bumped(old.core.settled_view(), w.bits_spec())
     }
 
@@ -971,11 +1001,13 @@ impl<M: Mode> Heap<M> {
     /// 数を1つ動かした後。`s0` は `settle` の後の状態である。
     proof fn lemma_after_step(&self, old: Heap<M>, s0: Core, h: usize, w: Word, delta: int)
         requires
+            self.tokens@ == self.core.model@.tokens,
             old.dummy_wf(),
             s0.frame(old.core),
             self.dummy == old.dummy,
             self.worker == old.worker,
-            self.core.wf(),
+            self.core.full(),
+            M::CHECKED ==> self.core.safe_wf(),
             self.core.checked@ == M::CHECKED,
             self.core.quiet(),
             self.core.evolved(s0, h, delta),
@@ -992,6 +1024,7 @@ impl<M: Mode> Heap<M> {
     /// 不死の物体の数を替えても、ヒープの不変条件は保たれる。
     proof fn lemma_recounted_heap(&self, old: Heap<M>)
         requires
+            self.tokens@ == self.core.model@.tokens,
             old.wf(),
             self.core.recounted(old.core),
             self.dummy == old.dummy,
@@ -999,12 +1032,18 @@ impl<M: Mode> Heap<M> {
             self.wf(),
     {
         self.core.lemma_recounted(old.core);
+        if M::CHECKED {
+            self.core.lemma_recounted_values(old.core);
+            self.core.lemma_safe_values(old.core);
+        }
         assert(old.core.dom().contains(self.dummy.bits_spec()));
     }
 
     /// `dup` の後に不死の物体 `w` の数を増やしても、`dup` の後の状態のままである。
     proof fn lemma_recounted_dup(&self, mid: Heap<M>, old: Heap<M>, w: Word)
         requires
+            self.tokens == mid.tokens,
+            self.tokens@ == self.core.model@.tokens,
             mid.wf(),
             mid.evolved(old, w, 1),
             mid.bumped(old, w),
@@ -1031,12 +1070,14 @@ impl<M: Mode> Heap<M> {
     /// 最後の参照を手放して解放の連鎖を走らせた後。`s1` は `h` を空ける途中にした状態である。
     proof fn lemma_after_chain(&self, old: Heap<M>, s0: Core, s1: Core, h: usize, w: Word)
         requires
+            self.tokens@ == self.core.model@.tokens,
             old.dummy_wf(),
             s0.frame(old.core),
             s1.evolved(s0, h, -1),
             self.dummy == old.dummy,
             self.worker == old.worker,
-            self.core.wf(),
+            self.core.full(),
+            M::CHECKED ==> self.core.safe_wf(),
             self.core.checked@ == M::CHECKED,
             self.core.quiet(),
             self.core.evolved(s1, 0, 0),
@@ -1054,7 +1095,7 @@ impl<M: Mode> Heap<M> {
     #[inline]
     fn header_of(&self, w: Word) -> (h: *mut Header)
         requires
-            self.core.wf(),
+            self.core.full(),
             self.core.word_ok(w),
             w.is_ptr_spec(),
         ensures
@@ -1082,6 +1123,7 @@ impl<M: Mode> Heap<M> {
             !M::CHECKED ==> (w.is_ptr_spec() ==> !old(self).lin_of(w)),
             !M::CHECKED ==> old(self).owned(w),
         ensures
+            r is Err ==> *final(self) == old(self).settled_heap(),
             !M::CHECKED ==> r is Ok,
             r is Ok ==> final(self).wf() && final(self).evolved(*old(self), w, 1),
             r is Ok ==> final(self).bumped(*old(self), w),
@@ -1137,6 +1179,9 @@ impl<M: Mode> Heap<M> {
             h == old(self).core.block(h@.addr),
             old(self).core.state(h@.addr) == BlockState::Live,
         ensures
+            r is Err ==> *final(self) == *old(self),
+            final(self).core.model@.tokens == old(self).core.model@.tokens,
+            final(self).tokens == old(self).tokens,
             !M::CHECKED ==> r is Ok,
             r is Ok ==> final(self).wf() && final(self).evolved(*old(self), w, 1),
             r is Ok ==> final(self).bumped(*old(self), w),
@@ -1184,6 +1229,7 @@ impl<M: Mode> Heap<M> {
             !M::CHECKED ==> (w.is_ptr_spec() && old(self).rc_value(w) < 0 ==> !old(self).lin_of(w)),
             !M::CHECKED ==> old(self).owned(w),
         ensures
+            final(self).same_tokens(*old(self)),
             !M::CHECKED ==> r is Ok,
             r is Ok ==> final(self).wf() && final(self).evolved(*old(self), w, -1),
     {
@@ -1253,6 +1299,8 @@ impl<M: Mode> Heap<M> {
             old(self).core.state(h@.addr) == BlockState::Live,
             old(self).core.rc_of(h@.addr) != 0 ==> old(self).core.ext(h@.addr) >= 1,
         ensures
+            final(self).core.model@.tokens == old(self).core.model@.tokens,
+            final(self).tokens == old(self).tokens,
             !M::CHECKED ==> r is Ok,
             r is Ok ==> final(self).wf() && final(self).evolved(*old(self), w, -1),
     {
@@ -1284,7 +1332,8 @@ impl<M: Mode> Heap<M> {
         HeapError,
     >)
         requires
-            old(self).core.wf(),
+            old(self).core.full(),
+            M::CHECKED ==> old(self).core.safe_wf(),
             old(self).core.checked@ == M::CHECKED,
             old(self).core.dom().contains(h@.addr),
             h == old(self).core.block(h@.addr),
@@ -1295,7 +1344,11 @@ impl<M: Mode> Heap<M> {
             ).core.model@.edges[e] == h@.addr && old(self).core.state(e.0) == BlockState::Dying,
             edge is None && old(self).core.rc_of(h@.addr) != 0 ==> old(self).core.ext(h@.addr) >= 1,
         ensures
-            final(self).core.wf(),
+            final(self).core.pages == old(self).core.pages,
+            final(self).core.model@.tokens == old(self).core.model@.tokens,
+            final(self).tokens == old(self).tokens,
+            final(self).core.full(),
+            M::CHECKED ==> final(self).core.safe_wf(),
             final(self).dummy == old(self).dummy,
             final(self).worker == old(self).worker,
             !M::CHECKED ==> r is Ok,
@@ -1354,7 +1407,8 @@ impl<M: Mode> Heap<M> {
     #[inline(never)]
     fn free_chain(&mut self, root: *mut Header) -> (r: Result<(), HeapError>)
         requires
-            old(self).core.wf(),
+            old(self).core.full(),
+            M::CHECKED ==> old(self).core.safe_wf(),
             old(self).core.checked@ == M::CHECKED,
             old(self).core.dom().contains(root@.addr),
             root == old(self).core.block(root@.addr),
@@ -1366,8 +1420,12 @@ impl<M: Mode> Heap<M> {
                     != BlockState::Dying,
             old(self).core.model@.building is None,
         ensures
+            M::CHECKED ==> final(self).core.pages == old(self).core.pages,
+            final(self).core.model@.tokens == old(self).core.model@.tokens,
+            final(self).tokens == old(self).tokens,
             !M::CHECKED ==> r is Ok,
-            final(self).core.wf(),
+            final(self).core.full(),
+            M::CHECKED ==> final(self).core.safe_wf(),
             final(self).core.checked@ == M::CHECKED,
             r is Ok ==> final(self).core.quiet() && final(self).core.evolved(old(self).core, 0, 0),
             final(self).dummy == old(self).dummy,
@@ -1402,13 +1460,18 @@ impl<M: Mode> Heap<M> {
     /// フィールドを先に、最後のフィールド (cons セルの残りのリスト) を後に空けて、作業リストを短く保つためである。
     fn drain(&mut self, work: &mut Vec<Word>) -> (r: Result<(), HeapError>)
         requires
-            old(self).core.wf(),
+            old(self).core.full(),
+            M::CHECKED ==> old(self).core.safe_wf(),
             old(self).core.checked@ == M::CHECKED,
             old(self).core.work_ok(old(work)@),
             old(self).core.model@.building is None,
         ensures
+            M::CHECKED ==> final(self).core.pages == old(self).core.pages,
+            final(self).core.model@.tokens == old(self).core.model@.tokens,
+            final(self).tokens == old(self).tokens,
             !M::CHECKED ==> r is Ok,
-            final(self).core.wf(),
+            final(self).core.full(),
+            M::CHECKED ==> final(self).core.safe_wf(),
             final(self).core.checked@ == M::CHECKED,
             r is Ok ==> final(self).core.quiet() && final(self).core.evolved(old(self).core, 0, 0),
             final(self).core.tokens_kept(old(self).core),
@@ -1422,7 +1485,11 @@ impl<M: Mode> Heap<M> {
         // `while let` では取り出す前の作業リストを ghost の値に取れないので、`loop` と `match` で書く
         loop
             invariant
-                self.core.wf(),
+                M::CHECKED ==> self.core.pages == old(self).core.pages,
+                self.tokens == old(self).tokens,
+                self.core.model@.tokens == old(self).core.model@.tokens,
+                self.core.full(),
+                M::CHECKED ==> self.core.safe_wf(),
                 self.core.checked@ == M::CHECKED,
                 self.core.work_ok(work@),
                 self.core.evolved(s0, 0, 0),
@@ -1452,7 +1519,11 @@ impl<M: Mode> Heap<M> {
             let mut i = n;
             while i > 0
                 invariant
-                    self.core.wf(),
+                    M::CHECKED ==> self.core.pages == old(self).core.pages,
+                    self.tokens == old(self).tokens,
+                    self.core.model@.tokens == old(self).core.model@.tokens,
+                    self.core.full(),
+                    M::CHECKED ==> self.core.safe_wf(),
                     self.core.checked@ == M::CHECKED,
                     self.core.draining(h, first as int, i as int, Set::empty(), work@),
                     first + n <= self.core.cap(h@.addr),
@@ -1524,14 +1595,19 @@ impl<M: Mode> Heap<M> {
     #[inline(never)]
     fn free_box(&mut self, h: *mut Header)
         requires
-            old(self).core.wf(),
+            old(self).core.full(),
+            M::CHECKED ==> old(self).core.safe_wf(),
             old(self).core.checked@ == M::CHECKED,
             old(self).core.dom().contains(h@.addr),
             h == old(self).core.block(h@.addr),
             old(self).core.state(h@.addr) == BlockState::Dying,
             forall|j: int| !(#[trigger] old(self).core.model@.edges.dom().contains((h@.addr, j))),
         ensures
-            final(self).core.wf(),
+            M::CHECKED ==> final(self).core.pages == old(self).core.pages,
+            final(self).core.model@.tokens == old(self).core.model@.tokens,
+            final(self).tokens == old(self).tokens,
+            final(self).core.full(),
+            M::CHECKED ==> final(self).core.safe_wf(),
             final(self).core.boxed_off(old(self).core, h@.addr),
             final(self).dummy == old(self).dummy,
             final(self).worker == old(self).worker,
@@ -1592,6 +1668,7 @@ impl<M: Mode> Heap<M> {
                 );
                 assert(self.core.perms@.dom() =~= s0.perms@.dom());
                 self.core.lemma_block_freed(s0, h@.addr);
+                self.core.lemma_safe_freed(s0, h@.addr);
                 assert(self.core.active() =~= s0.active().remove(h@.addr));
             }
         }
@@ -1776,7 +1853,7 @@ impl<M: Mode> Heap<M> {
     #[inline]
     fn scanned_check(&self, h: *mut Header, i: usize) -> (r: Result<(), HeapError>)
         requires
-            self.core.wf(),
+            self.core.full(),
             self.core.dom().contains(h@.addr),
             h == self.core.block(h@.addr),
             self.core.state(h@.addr) != BlockState::Freed,
@@ -1798,7 +1875,7 @@ impl<M: Mode> Heap<M> {
     #[inline]
     fn raw_check(&self, h: *mut Header, i: usize) -> (r: Result<(), HeapError>)
         requires
-            self.core.wf(),
+            self.core.full(),
             self.core.dom().contains(h@.addr),
             h == self.core.block(h@.addr),
             self.core.state(h@.addr) != BlockState::Freed,
@@ -1899,6 +1976,10 @@ impl<M: Mode> Heap<M> {
                 },
             );
             self.core.lemma_field_set(s0, h@.addr, i as int, v);
+            if M::CHECKED {
+                assert(self.core.word_ok(v) == s0.word_ok(v));
+                self.core.lemma_safe_slot_set(s0, h@.addr, i as int);
+            }
             assert(self.core.perms@[self.dummy.bits_spec()] == s0.perms@[self.dummy.bits_spec()]);
         }
         Ok(())
@@ -1959,6 +2040,9 @@ impl<M: Mode> Heap<M> {
         self.core.slot_put(h, i, Word::from_bits(v as usize));
         proof {
             self.core.lemma_raw_set(s0, h@.addr, i as int);
+            if M::CHECKED {
+                self.core.lemma_safe_slot_set(s0, h@.addr, i as int);
+            }
             assert(self.core.perms@[self.dummy.bits_spec()] == s0.perms@[self.dummy.bits_spec()]);
         }
         Ok(())

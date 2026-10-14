@@ -135,7 +135,7 @@ impl<M: Mode> Heap<M> {
     #[inline]
     pub(super) fn checked_live(&self, h: *mut Header) -> (r: Result<(), HeapError>)
         requires
-            self.core.wf(),
+            self.core.full(),
             self.core.checked@ == M::CHECKED,
             self.core.dom().contains(h@.addr),
             h == self.core.block(h@.addr),
@@ -163,7 +163,7 @@ impl<M: Mode> Heap<M> {
     #[inline]
     pub(super) fn checked_owner(&self, h: *mut Header, rc: i32) -> (r: Result<(), HeapError>)
         requires
-            self.core.wf(),
+            self.core.full(),
             self.core.checked@ == M::CHECKED,
             self.core.dom().contains(h@.addr),
             h == self.core.block(h@.addr),
@@ -187,7 +187,7 @@ impl<M: Mode> Heap<M> {
     #[inline]
     pub(super) fn immortal_counted(&self, h: *mut Header) -> (r: bool)
         requires
-            self.core.wf(),
+            self.core.full(),
             self.core.checked@,
             self.core.dom().contains(h@.addr),
             h == self.core.block(h@.addr),
@@ -210,7 +210,8 @@ impl<M: Mode> Heap<M> {
     #[inline]
     pub(super) fn count_immortal(&mut self, h: *mut Header, up: bool)
         requires
-            old(self).core.wf(),
+            old(self).core.full(),
+            old(self).core.safe_wf(),
             old(self).core.checked@,
             old(self).core.dom().contains(h@.addr),
             h == old(self).core.block(h@.addr),
@@ -220,7 +221,9 @@ impl<M: Mode> Heap<M> {
             up ==> p_owner(old(self).core.perm(h@.addr)) < UNCOUNTED - 1,
             !up ==> p_owner(old(self).core.perm(h@.addr)) != 0,
         ensures
-            final(self).core.wf(),
+            final(self).tokens == old(self).tokens,
+            final(self).core.full(),
+            final(self).core.safe_wf(),
             final(self).core.recounted(old(self).core),
             forall|b: usize|
                 b != h@.addr ==> #[trigger] final(self).core.perms@[b] == old(self).core.perms@[b],
@@ -253,6 +256,8 @@ impl<M: Mode> Heap<M> {
                 }
             }
             c.lemma_recounted(s0);
+            c.lemma_recounted_values(s0);
+            c.lemma_safe_values(s0);
         }
     }
 
@@ -260,7 +265,7 @@ impl<M: Mode> Heap<M> {
     #[inline]
     pub(super) fn checked_dup(&self, h: *mut Header) -> (r: Result<bool, HeapError>)
         requires
-            self.core.wf(),
+            self.core.full(),
             self.core.checked@ == M::CHECKED,
             self.core.dom().contains(h@.addr),
             h == self.core.block(h@.addr),
@@ -295,7 +300,7 @@ impl<M: Mode> Heap<M> {
     #[inline]
     pub(super) fn checked_decref(&self, h: *mut Header) -> (r: Result<bool, HeapError>)
         requires
-            self.core.wf(),
+            self.core.full(),
             self.core.checked@ == M::CHECKED,
             self.core.dom().contains(h@.addr),
             h == self.core.block(h@.addr),
@@ -371,10 +376,6 @@ impl Prefix {
             2 => State::Token,
             _ => State::Freed,
         }
-    }
-
-    pub(crate) fn generation(&self) -> u32 {
-        self.state.load(Ordering::Relaxed) >> 2
     }
 }
 

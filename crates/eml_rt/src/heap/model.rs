@@ -3,6 +3,8 @@
 
 use vstd::prelude::*;
 
+use crate::meta::Header;
+
 verus! {
 
 /// ブロックの状態。速いモードの空けたブロックは確保器に返すので、`Freed` は検査モードだけに現れる。
@@ -39,6 +41,8 @@ pub(crate) ghost struct Model {
     /// token の箱と、それを使い回した構築中の物体の「残した」語。呼ぶ側がその参照を持つので、辺に数えない。
     pub(crate) kept: Set<Pos>,
     pub(crate) building: Option<usize>,
+    /// 検査モードの token の表 (`Heap` の欄) の写し。項目は箱と、箱にしたときの世代の番号である。
+    pub(crate) tokens: Seq<Option<(*mut Header, u32)>>,
 }
 
 /// `o` を指す辺の位置。

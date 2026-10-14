@@ -110,6 +110,7 @@ impl Core {
         &&& self.model@.written == old.model@.written
         &&& self.model@.kept == old.model@.kept
         &&& self.model@.building == old.model@.building
+        &&& self.model@.tokens == old.model@.tokens
     }
 
     /// `old` から、辺 `k` の行き先ごとに1つずつ `dup` した状態。
@@ -136,6 +137,7 @@ impl Core {
         &&& self.model@.written == old.model@.written
         &&& self.model@.kept == old.model@.kept
         &&& self.model@.building == old.model@.building
+        &&& self.model@.tokens == old.model@.tokens
     }
 
     /// 外の参照の数を変えない変化を後に続けても、`evolved_by` は変わらない。
@@ -226,7 +228,7 @@ impl Core {
     /// 呼ぶ側が最後の参照を持つ物体 (rc が 1 か -1) は、数えた参照が1つで、それを指す辺はない。
     pub(crate) proof fn lemma_last_ref(&self, h: usize)
         requires
-            self.wf(),
+            self.full(),
             self.dom().contains(h),
             self.state(h) == BlockState::Live,
             self.rc_of(h) == 1 || self.rc_of(h) == -1,
@@ -275,7 +277,7 @@ impl Core {
     /// `free_block` を並べた展開は、この `release` と同じ数の変化になる。
     pub(crate) proof fn lemma_release_unrolled(&self, h: usize, n: int)
         requires
-            self.wf(),
+            self.full(),
             self.dom().contains(h),
             self.state(h) == BlockState::Live,
             n == p_count(self.perm(h)),
@@ -333,7 +335,7 @@ impl Core {
     /// `dup` の列の始まり。
     pub(crate) proof fn lemma_dupped_start(&self)
         requires
-            self.wf(),
+            self.full(),
         ensures
             self.dupped(*self, Map::<Pos, usize>::empty()),
     {
@@ -414,7 +416,7 @@ impl Core {
     /// 最後の参照の道の始まり。`begin_free` で `skip` の位置の辺を外した後、`h` の子を走査する語の終わりから手放し始める。
     pub(crate) proof fn lemma_release_start(&self, s0: Core, h: *mut Header, skip: Set<int>)
         requires
-            s0.wf(),
+            s0.full(),
             s0.quiet(),
             s0.dom().contains(h@.addr),
             h == s0.block(h@.addr),

@@ -25,6 +25,7 @@ const FILES: &[(&str, &str)] = &[
     ("heap/states.rs", include_str!("heap/states.rs")),
     ("heap/release.rs", include_str!("heap/release.rs")),
     ("heap/reuse.rs", include_str!("heap/reuse.rs")),
+    ("heap/safe.rs", include_str!("heap/safe.rs")),
     ("heap/share.rs", include_str!("heap/share.rs")),
     ("heap/walk.rs", include_str!("heap/walk.rs")),
 ];
@@ -90,8 +91,6 @@ const UNPROVED: &[&str] = &[
     "foreign.rs: external_body FinalizerV",
     "foreign.rs: external_body finalizer_of",
     "foreign.rs: external_body run_finalizer",
-    "heap/reuse.rs: external_body checked_push_token",
-    "heap/reuse.rs: external_body checked_take_token",
 ];
 
 /// まだ `verus!` に入れていない `unsafe` を持つファイル。S9v の終わりに空にする。

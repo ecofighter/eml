@@ -89,6 +89,27 @@ impl Word {
         Word(ptr::without_provenance_mut(imm_bits(n)))
     }
 
+    /// 添字 `i` の即値。63 ビットに収まらなければ止める。
+    #[inline]
+    pub(crate) fn imm_index(i: usize) -> (r: Word)
+        ensures
+            i <= Word::MAX_INT,
+            r.bits_spec() == imm_spec(i as i64),
+            imm_value_spec(r.bits_spec()) == i,
+            r.bits_spec() != 0,
+    {
+        if i > Word::MAX_INT as usize {
+            not_an_immediate();
+        }
+        let r = Word::imm(i as i64);
+        proof {
+            lemma_imm_round_trip(i as i64);
+            let bits = r.bits_spec();
+            assert(bits & 1 == 1 ==> bits != 0) by (bit_vector);
+        }
+        r
+    }
+
     /// 63 ビットに収まる `Int` を即値にする。収まらなければ `None` で、呼ぶ側が `BigInt` の物体にする。
     #[inline]
     pub fn int(n: i64) -> (r: Option<Word>)

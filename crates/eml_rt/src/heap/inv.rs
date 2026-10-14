@@ -231,8 +231,8 @@ impl Core {
     }
 
     // 不変条件
-    /// 不変条件。
-    pub(crate) open spec fn wf(&self) -> bool {
+    /// モデルとの対応を含む不変条件。速いモードでは安全の条件でもある。
+    pub(crate) open spec fn full(&self) -> bool {
         &&& self.dom() == self.pages.in_use()
         &&& self.rest_wf()
     }
