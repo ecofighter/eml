@@ -1,7 +1,7 @@
 //! 期待値の表の形。`eml_rt` のテストと `eml_interp` のテスト (`#[path]` で読む) が同じ表を使う。`std` だけを使う。
 //! 表は `eml_interp` の側の出力から作る (docs/implementation/testing.md の「期待値の表」)。
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Arg {
@@ -393,6 +393,29 @@ pub fn inputs() -> Vec<(String, Vec<Arg>)> {
     push("Std.Fs.read_all", vec![Arg::Abs("plain.txt".into())]);
     push("Std.Fs.read_all2", rel("plain.txt"));
     inputs
+}
+
+/// 表のファイルを置く一時ディレクトリ。落とすときに消すので、場合が失敗して panic しても残らない
+pub struct Scratch(PathBuf);
+
+impl Scratch {
+    /// 一時ディレクトリの下に、`name` とプロセスの番号で名付けた空のディレクトリを作る
+    pub fn new(name: &str) -> Scratch {
+        let dir = std::env::temp_dir().join(format!("{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        Scratch(dir)
+    }
+
+    pub fn path(&self) -> &Path {
+        &self.0
+    }
+}
+
+impl Drop for Scratch {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
 }
 
 /// ファイルを用意する。`locked.txt` を作れなかった (root で動いている) ら false を返す

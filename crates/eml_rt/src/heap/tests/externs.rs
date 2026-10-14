@@ -10,7 +10,7 @@ use super::ctx::{ctx, ctx_with};
 use super::host::{MemoryFile, MemoryHost, Shared, host};
 use super::mortal;
 use super::string::text;
-use super::table::{self, Arg, Case, EDGES, Outcome};
+use super::table::{self, Arg, Case, EDGES, Outcome, Scratch};
 use crate::externs::*;
 use crate::{Buffering, Control, HeapError, HostRef, Limits, Mode, StdHost, Stop, Word};
 
@@ -212,8 +212,12 @@ fn appending_counts_the_bytes_it_copies<M: Mode>() {
         let k = ctx.heap_mut().alloc_string_immortal("k");
         ctx.heap_mut().acquire_immortal(k).unwrap();
         let d = s(&mut ctx, "z");
+        let before = ctx.stats().string_bytes_copied;
         let y = ctx.string_append(k, d).unwrap();
         assert_eq!(text(ctx.heap(), y), "kz");
+        if M::CHECKED {
+            assert_eq!(ctx.stats().string_bytes_copied - before, 2);
+        }
         for v in [w, x, y] {
             ctx.heap_mut().decref(v).unwrap();
         }
@@ -592,17 +596,22 @@ fn read_all_refuses_a_non_file_or_a_shared_file<M: Mode>() {
     let mut ctx = ctx_with::<M>(&memory);
     unsafe {
         let other = ctx.heap_mut().alloc_foreign(0u64, false);
+        let objects = mortal(ctx.heap());
         assert_eq!(
             ctx.fs_read_all(other),
             Err(Fault::Heap(HeapError::WrongKind))
         );
+        assert_eq!(mortal(ctx.heap()), objects);
         assert_eq!(ctx.fs_close(other), Err(Fault::Heap(HeapError::WrongKind)));
+        assert_eq!(mortal(ctx.heap()), objects);
         ctx.heap_mut().decref(other).unwrap();
         if M::CHECKED {
             let p = s(&mut ctx, "a.txt");
             let f = ctx.fs_open(p).unwrap();
             super::raw::set_rc(ctx.heap_mut(), f, 2);
+            let objects = mortal(ctx.heap());
             assert_eq!(ctx.fs_read_all(f), Err(Fault::Heap(HeapError::NotUnique)));
+            assert_eq!(mortal(ctx.heap()), objects);
             super::raw::set_rc(ctx.heap_mut(), f, 1);
             ctx.fs_close(f).unwrap();
         }
@@ -692,12 +701,10 @@ unsafe fn call<M: Mode>(
     };
     let compare = |f: fn(i64, i64) -> i64| tag_bool(f(int(0), int(1)));
     unsafe {
-        let strings = |ctx: &mut crate::Ctx<M>, args: &mut Args| {
+        let one = |ctx: &mut crate::Ctx<M>, args: &mut Args| args.string(ctx, &case.args[0], root);
+        let two = |ctx: &mut crate::Ctx<M>, args: &mut Args| {
             let a = args.string(ctx, &case.args[0], root);
-            match case.args.get(1) {
-                Some(b) => (a, args.string(ctx, b, root)),
-                None => (a, Word::imm(0)),
-            }
+            (a, args.string(ctx, &case.args[1], root))
         };
         Ok(match case.name.as_str() {
             "Prelude.+" => arith(int_add)?,
@@ -720,35 +727,35 @@ unsafe fn call<M: Mode>(
                 take_text(ctx, w)
             }
             "Prelude.Eq String.==" => {
-                let (a, b) = strings(ctx, args);
+                let (a, b) = two(ctx, args);
                 tag_bool(ctx.string_eq(a, b)?)
             }
             "Prelude.Eq String.!=" => {
-                let (a, b) = strings(ctx, args);
+                let (a, b) = two(ctx, args);
                 tag_bool(ctx.string_ne(a, b)?)
             }
             "Prelude.Ord String.compare" => {
-                let (a, b) = strings(ctx, args);
+                let (a, b) = two(ctx, args);
                 tag_order(ctx.string_compare(a, b)?)
             }
             "Prelude.++" => {
-                let (a, b) = strings(ctx, args);
+                let (a, b) = two(ctx, args);
                 let w = ctx.string_append(a, b)?;
                 take_text(ctx, w)
             }
             "Prelude.Show String.show" => {
-                let (a, _) = strings(ctx, args);
+                let a = one(ctx, args);
                 let w = ctx.string_show(a)?;
                 take_text(ctx, w)
             }
             "Prelude.println" => {
-                let (a, _) = strings(ctx, args);
+                let a = one(ctx, args);
                 ctx.println(a)?;
                 ctx.flush()?;
                 Outcome::Out(out.text())
             }
             "Std.Fs.read_all" | "Std.Fs.read_all2" => {
-                let (p, _) = strings(ctx, args);
+                let p = one(ctx, args);
                 let f = ctx.fs_open(p)?;
                 let (mut f, mut read) = read_once(ctx, f)?;
                 if case.name == "Std.Fs.read_all2" {
@@ -764,14 +771,9 @@ unsafe fn call<M: Mode>(
 
 /// `eml_rt` の extern が、期待値の表のどの場合も同じ結果を返し、物体を残さない。引数の定数の不死の物体だけが残る
 fn the_externs_match_the_table<M: Mode>() {
-    let root = std::env::temp_dir().join(format!(
-        "eml_rt-table-{}-{}",
-        std::process::id(),
-        M::CHECKED
-    ));
-    let _ = std::fs::remove_dir_all(&root);
-    std::fs::create_dir_all(&root).unwrap();
-    let locked = table::fixtures(&root);
+    let scratch = Scratch::new(&format!("eml_rt-table-{}", M::CHECKED));
+    let root = scratch.path();
+    let locked = table::fixtures(root);
     let cases = table::cases();
     assert!(!cases.is_empty());
     for case in cases {
@@ -787,7 +789,7 @@ fn the_externs_match_the_table<M: Mode>() {
         let host = StdHost::new(
             Box::new(out.clone()),
             Box::new(io::sink()),
-            root.clone(),
+            root.to_path_buf(),
             Buffering::Line,
         );
         let mut ctx = crate::Ctx::<M>::new(
@@ -795,7 +797,7 @@ fn the_externs_match_the_table<M: Mode>() {
             HostRef::new(Arc::new(host)),
         );
         let mut args = Args::default();
-        let got = unsafe { call(&mut ctx, &case, &mut args, &root, &out) }
+        let got = unsafe { call(&mut ctx, &case, &mut args, root, &out) }
             .unwrap_or_else(|fault| Outcome::Err(fault.to_string()));
         for w in args.release {
             unsafe { ctx.heap_mut().decref(w) }.unwrap();
@@ -803,7 +805,6 @@ fn the_externs_match_the_table<M: Mode>() {
         assert_eq!(table::digest(got), case.outcome, "{}", table::line(&case));
         assert_eq!(mortal(ctx.heap()), args.immortals, "{}", table::line(&case));
     }
-    std::fs::remove_dir_all(&root).ok();
 }
 
 both_modes!(

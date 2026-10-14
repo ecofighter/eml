@@ -405,13 +405,14 @@ fn a_unique_foreign_value_can_be_written<M: Mode>() {
     assert_eq!(super::mortal(&heap), 0);
 }
 
-/// 参照が2つある物体と、ほかの worker の物体は、書き換えのために借りられない。
+/// 参照が2つある物体、共有した物体、ほかの worker の物体、手放した物体は、書き換えのために借りられない。
 fn a_shared_or_foreign_workers_value_is_not_written<M: Mode>() {
     if !M::CHECKED {
         return;
     }
     let mut heap = Heap::<M>::new();
     let f = heap.alloc_foreign(0u64, false);
+    let g = heap.alloc_foreign(0u64, false);
     unsafe {
         heap.dup(f).unwrap();
         assert_eq!(heap.foreign_unique::<u64>(f), Err(HeapError::NotUnique));
@@ -423,6 +424,11 @@ fn a_shared_or_foreign_workers_value_is_not_written<M: Mode>() {
         ));
         heap.set_worker(0);
         heap.decref(f).unwrap();
+        assert_eq!(heap.foreign_unique::<u64>(f), Err(HeapError::UseAfterFree));
+        // 共有した物体はほかの worker からも見えるので、参照が1つでも借りられない。rc が負なので `NotUnique` になる
+        heap.share(g, 0).unwrap();
+        assert_eq!(heap.foreign_unique::<u64>(g), Err(HeapError::NotUnique));
+        heap.decref(g).unwrap();
     }
     assert_eq!(super::mortal(&heap), 0);
 }

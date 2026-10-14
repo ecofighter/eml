@@ -4,11 +4,11 @@
 #[path = "../../eml_rt/src/heap/tests/table.rs"]
 mod table;
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use eml_interp::{RunConfig, RuntimeError, run};
 use eml_runtime::OutputSink;
-use table::{Arg, Case, Outcome};
+use table::{Arg, Case, Outcome, Scratch};
 
 /// 変数の番号を振りながら、プログラムの本体の行を積む
 #[derive(Default)]
@@ -252,26 +252,20 @@ fn outcome(name: &str, args: &[Arg], root: &Path) -> Outcome {
 }
 
 /// 作り直した一時ディレクトリ
-fn scratch(name: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!(
-        "eml_interp-rt-externs-{}-{name}",
-        std::process::id()
-    ));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
-    dir
-}
-
 /// 表を作る。表を変えるときだけ、`cargo test -p eml_interp rt_externs -- --ignored` で流す
 #[test]
 #[ignore = "writes expected.txt"]
 fn the_table_can_be_written_from_the_interpreter() {
-    let root = scratch("write");
-    table::fixtures(&root);
+    let scratch = Scratch::new("eml_interp-rt-externs-write");
+    let root = scratch.path();
+    assert!(
+        table::fixtures(root),
+        "cannot make an unreadable locked.txt (running as root?), so its row would be wrong"
+    );
     let mut text =
         String::from("# eml_rt の extern の期待値の表。今の実装 (eml_interp) の出力から作った\n");
     for (name, args) in table::inputs() {
-        let outcome = outcome(&name, &args, &root);
+        let outcome = outcome(&name, &args, root);
         text.push_str(&table::line(&Case {
             name,
             args,
@@ -284,7 +278,6 @@ fn the_table_can_be_written_from_the_interpreter() {
         text,
     )
     .unwrap();
-    std::fs::remove_dir_all(root).ok();
 }
 
 /// 今の実装が、表のどの場合も同じ結果になる。表の入力は `inputs` と同じで、古い表が残っていれば落ちる
@@ -302,8 +295,9 @@ fn the_interpreter_matches_the_table() {
         inputs.len(),
         expected.len()
     );
-    let root = scratch("check");
-    let locked = table::fixtures(&root);
+    let scratch = Scratch::new("eml_interp-rt-externs-check");
+    let root = scratch.path();
+    let locked = table::fixtures(root);
     for case in cases {
         if !locked
             && case
@@ -314,13 +308,12 @@ fn the_interpreter_matches_the_table() {
             continue;
         }
         assert_eq!(
-            table::digest(outcome(&case.name, &case.args, &root)),
+            table::digest(outcome(&case.name, &case.args, root)),
             case.outcome,
             "{}",
             table::line(&case)
         );
     }
-    std::fs::remove_dir_all(root).ok();
 }
 
 /// `eml_lir` のタグと組の定数が、`eml_rt` の定数と同じである (S10 では VM の crate に移す)
