@@ -94,13 +94,17 @@ S8d で閉じた論点は次のとおりである。
 
 前提: S8。
 
-S9 を、S9a、S9v、S9b の3つの作業に分けて順に進める。段の列では S9 の1行のままにする。S9 の間、`eml_rt` はパイプラインから使わない。Verus、単体テスト、Miri、extern の差分テスト (S9b) で確かめ、実際のプログラムで通すのは S10 の VM からである。CEK と `eml_runtime` は S10 まで変えない。S10 で消す CEK に投資しないためである (上の「段の列」)。
+S9 を、S9a、S9v、S9b-1、S9b-2、S9b-3 の5つの作業に分けて順に進める。段の列では S9 の1行のままにする。S9 の間、`eml_rt` はパイプラインから使わない。Verus、単体テスト、Miri、extern の差分テスト (S9b-3) で確かめ、実際のプログラムで通すのは S10 の VM からである。CEK と `eml_runtime` は S10 まで変えない。S10 で消す CEK に投資しないためである (上の「段の列」)。
 
 | 作業 | 中身 | 状態 |
 |---|---|---|
 | S9a | 語、ヘッダ、ページの確保器、局所と共有の RC、`share`、`lin` ビット、reuse の部品、検査モード、Miri と Verus | 終えた。決めたことは [オブジェクトモデル](../spec/object-model.md) に移した。`eml_rt` はまだパイプラインから使わないので、UI テストの出力と `bench/` の仕事の回数は変わらない ([計測の基準](../implementation/benchmarks.md) の「S9a (`eml_rt` の核)」) |
 | S9v | vstd への依存を受け入れ、`eml_rt` のコードを `verus!` の中に書いて、`unsafe` の核を含む crate 全体を Verus で検証する。Verus で確かめない部分を信頼の一覧にまとめ、Miri はそこを通るテストだけを流す。nixpkgs を nixos-unstable に上げ、Rust の toolchain を fenix から取り、Verus と verusfmt を flake の input にする | 終えた。決めたことは [オブジェクトモデル](../spec/object-model.md) の「`unsafe` の核」と [テスト戦略](../implementation/testing.md) の「`eml_rt` の検証」に移した。S9b の extern の語の ABI が FFI の最初の境界になるので、境界を信頼の一覧と Miri のテストに足す決まりを、S9b より前に決めておくために、S9a と S9b の間に置いた ([計測の基準](../implementation/benchmarks.md) の「S9v (`eml_rt` の検証)」) |
-| S9b | 物体の種類ごとの中身 (データの物理的な形と、その規則を出す関数の置き場所、文字列、クロージャと `copy`、evidence の物体、`File`)、`Ctx`、`FnEntry`、`CodeBase`、語の ABI の extern と差分テスト | これから |
+| S9b-1 | 物体の種類ごとの中身。データの物理的な形の規則、クロージャ、evidence の3つの物体、文字列、`File` の表し方 | 終えた。決めたことは [オブジェクトモデル](../spec/object-model.md) の「種類」、「物体の形」、「文字列」、「`unsafe` の核」に移した。UI テストの出力と `bench/` の仕事の回数は変わらない ([計測の基準](../implementation/benchmarks.md) の「S9b-1 (文字列)」) |
+| S9b-2 | `Ctx`、`FnEntry`、`CodeBase`、`CodeBase` の不死の定数、基本操作、SIGINT | これから |
+| S9b-3 | 語の ABI の extern、今の実装との差分テスト、FFI の境界の信頼の一覧の行と Miri | これから |
+
+S9b を3つに分けたのは、extern が文字列と `File` と出力先 (`Ctx`) を使い、`CodeBase` の定数が文字列とクロージャの形を使うためである。
 
 S9a で閉じた論点は次のとおりである。
 
@@ -129,15 +133,12 @@ S9a で閉じた論点は次のとおりである。
 - extern を語の ABI で1回だけ書く
 - 実行文脈 `Ctx` を持つ。割り込みの旗、深さと確保量の上限、yield の状態と `evv` ([LIR とインタプリタ](../spec/lir.md) の「実行の文脈」)、セッションの根、出力先、論理的な worker ID ([オブジェクトモデル](../spec/object-model.md) の「論理的な worker ID」) を置く
 - 関数表 `FnEntry` と、追記だけの `CodeBase` (関数、文字列、配置、エフェクト) を、S8 の LIR の表をもとに作る。クロージャは今と同じく関数の番号を持つので、位置に依存しない。`CodeBase` は実行中は読むだけにし (`Sync`)、後の並列 VM の worker がそのまま共有できるようにする。この性質は、`Session` の `Send + Sync` の試験 (`crates/eml_cli/tests/api.rs`) と同じ形の、型の assert で固定する
-- リスト、文字列、レコードの物理的な表現を決める
+- リスト、文字列、レコードの物理的な表現は、S9b-1 で決めた。データは、走査する語 (`obj` と `tobj` のフィールド) を宣言の順に並べ、その後に生の語を宣言の順に並べる。cons セルは [要素, 残り] になる。文字列は長さの語と UTF-8 のバイト列を持つ種類 `String` の物体で、一意なときはその場で連結する ([オブジェクトモデル](../spec/object-model.md) の「ペイロード」、「物体の形」、「文字列」)
 
 ### 論点
 
-- データの物理的な形の規則を出す関数の置き場所。reuse analysis (`eml_lir` の上のパス) と `CodeBase` が同じ規則を使う必要がある ([オブジェクトモデル](../spec/object-model.md) の「ペイロード」)。`eml_rt` に置いて `eml_lir` から使うか、別の置き場所に置いて結び付けのテストで縛るかを、`CodeBase` の置き場所と一緒に決める
-- 文字列の表現 (一意なときのその場の連結 ([ランタイム](../spec/runtime.md) の「文字列の連結」) を保つ形)
-- `Float` を入れたときの語の表現
 - SIGINT の受け方
-- `box 5` の定数、文字列リテラル、空の evidence など、`CodeBase` の定数を、生成したときから不死の物体にするか (Lean の `_boxed_const`)。遅延して作る定数は1回だけ初期化する。不死にすれば、検査モードで「`CodeBase` から届くものは不死」を確かめられる。Koka の PR #910 は、プロセス全体で共有する物体 (空の evidence、文字列リテラル、計算するトップレベルの定数) が atomic でない RC を持っていたために、2つのスレッドで動かすとヒープが壊れたと報告している
+- `box 5` の定数や文字列リテラルなど、`CodeBase` の定数を、生成したときから不死の物体にするか (Lean の `_boxed_const`)。evidence は不死の定数にしない (空の `evv` は即値の `()` である。[オブジェクトモデル](../spec/object-model.md) の「物体の形」)。遅延して作る定数は1回だけ初期化する。不死にすれば、検査モードで「`CodeBase` から届くものは不死」を確かめられる。Koka の PR #910 は、プロセス全体で共有する物体 (空の evidence、文字列リテラル、計算するトップレベルの定数) が atomic でない RC を持っていたために、2つのスレッドで動かすとヒープが壊れたと報告している
 
 ## S10 VM と切り替え
 
@@ -260,7 +261,7 @@ S12 で書いたスクリプトの書き心地を見て、次の項目を採る�
 - 型ごとの意味: `Float` の `/` と `%` の有無、`Float` の `==` と NaN の結果、`Float` の `Eq` / `Ord` の法則
 - 除算のクラスを instance ごとの小さなクラスにするか、`Integral` / `Fractional` に分けるか。`negate` をユーザーに見せるか
 - `Float` をリテラルのパターンと `switch` から外すこと
-- 多相な位置での `Float` の表現は、S9 の語の表現の上で決める
+- 多相な位置での `Float` の表現は、S9 の語の表現の上で決める。`eml_rt` の語の表現 (`tobj` では `BigInt` と同じく箱、`float` の位置では生の 64 ビットを方向とする) も、ここで決める
 
 ### バイト列と `Array`
 

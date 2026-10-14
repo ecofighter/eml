@@ -8,11 +8,12 @@ use eml_rt::{Fast, Heap, Kind, Meta, Word};
 const CONS: Meta = Meta::new(1, 2, Kind::Data, false);
 const CELLS: usize = 1_000_000;
 const ROUNDS: usize = 10;
+const APPENDS: usize = 10_000_000;
 
 fn main() {
     let case = std::env::args()
         .nth(1)
-        .expect("a case: empty, list, box-list, dup, free, map, map-reuse");
+        .expect("a case: empty, list, box-list, dup, free, map, map-reuse, append");
     match case.as_str() {
         "empty" => {}
         "list" => list(),
@@ -21,6 +22,7 @@ fn main() {
         "free" => free(),
         "map" => map(false),
         "map-reuse" => map(true),
+        "append" => append(),
         _ => panic!("an unknown case {case}"),
     }
 }
@@ -137,4 +139,16 @@ fn map(reuse: bool) {
     }
     // SAFETY: l は最後の round が作った生きたリストで、参照を1つ持っている。
     unsafe { heap.decref(black_box(l)) }.unwrap();
+}
+
+/// 一意な文字列に 1 バイトずつ足していく。その場の追記と、倍の容量での作り直しの費用である。
+fn append() {
+    let mut heap = Heap::<Fast>::new();
+    let mut s = heap.alloc_string("");
+    for _ in 0..APPENDS {
+        // SAFETY: s は直前の追記が返した生きた文字列で、参照を1つ持っている。
+        s = unsafe { heap.string_push(black_box(s), "x") }.unwrap();
+    }
+    // SAFETY: 同上。
+    unsafe { heap.decref(s) }.unwrap();
 }

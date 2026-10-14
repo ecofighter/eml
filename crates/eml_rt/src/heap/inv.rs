@@ -110,7 +110,7 @@ pub(crate) open spec fn p_text(p: BlockPerm) -> Seq<u8> {
     p.text()
 }
 
-/// `String` の物体の中身 (docs/spec/object-model.md の「種類」)。走査する語はなく、生の 0 語目にバイト長を持ち、
+/// `String` の物体の中身 (docs/spec/object-model.md の「文字列」)。走査する語はなく、生の 0 語目にバイト長を持ち、
 /// バイト列は長さの語の後ろの容量に収まる妥当な UTF-8 である。
 pub(crate) open spec fn string_wf(p: BlockPerm, cap: nat) -> bool {
     &&& p_count(p) == 0

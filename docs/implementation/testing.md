@@ -81,7 +81,7 @@
 
 ### Verus
 
-`eml_rt` は vstd に依存し、コードを `verus!` の中に書く。`cargo verus verify -p eml_rt` が crate 全体を検証する (`Cargo.toml` の `[package.metadata.verus] verify = true`)。Apple M4 では、`437 verified, 0 errors` に約 11 秒かかる (S9v の終わり)。初めは Kani を試したが、CBMC は 3 個の節点のグラフでも `share_walk` の検査でメモリか時間が尽きた。Verus は、値の全域と任意の大きさのヒープについての証明が通る。
+`eml_rt` は vstd に依存し、コードを `verus!` の中に書く。`cargo verus verify -p eml_rt` が crate 全体を検証する (`Cargo.toml` の `[package.metadata.verus] verify = true`)。Apple M4 では、`459 verified, 0 errors` に約 11 秒かかる (S9b-1 の終わり)。初めは Kani を試したが、CBMC は 3 個の節点のグラフでも `share_walk` の検査でメモリか時間が尽きた。Verus は、値の全域と任意の大きさのヒープについての証明が通る。
 
 公開の操作の前提 ([オブジェクトモデル](../spec/object-model.md) の「核の操作」の表) を、抽象のモデルの言葉で `requires` に書く。モデルの述語は `pub closed spec fn` にするので、名前は crate の外に見えるが、中身と実行時の費用はない。その下で、次のことを証明する。
 
@@ -92,8 +92,9 @@
 5. `release` と reuse: `release` と `release_reuse` の結果を、モデルの遷移で書く。部品を並べた展開 (`is_last` と `free_block`) の遷移を合わせたものが `release` の遷移に等しいことを、モデルの上の補題で示す
 6. 検査モード: [オブジェクトモデル](../spec/object-model.md) の「検査モードの約束」の性質。安全の前提だけで `safe_wf` を保ち、モデルが合っていて前提がすべて成り立つなら `Ok` を返して速いモードと同じ遷移になる
 7. ヘッダの詰め方と即値: `Meta` は Verus の型の不変条件 (正しい形であること) を持ち、メモリの `meta` が正しい形であることはヒープの不変条件が持つ。そのため `Kind::from_bits` の `unreachable!` の枝には届かない。即値の判定と値の取り出しは、63 ビットの範囲の整数で元に戻る
+8. 文字列: `string_push` と `string_concat` を、ほかの核の操作と同じく抽象のモデルの遷移で書く。`string_push` は「left の参照を1つ消費し、結果の参照を1つ作る」遷移で、その場で足す枝、作り直す枝、写す枝のすべてを含む。ghost のバイト列が連結になること、UTF-8 が保たれること、容量の計算、不変条件の長さの条件を保つことも証明する。`raw` と `set_raw` が不透明なペイロードを断るので、ほかの検証した操作が文字列のバイトを書かないことも Verus が確かめる ([オブジェクトモデル](../spec/object-model.md) の「文字列」)
 
-信頼して証明しない部分は、[オブジェクトモデル](../spec/object-model.md) の「`unsafe` の核」の信頼の一覧 (T0 から T9) にまとめる。`src/trust.rs` の単体テストが、この一覧を固定する。
+信頼して証明しない部分は、[オブジェクトモデル](../spec/object-model.md) の「`unsafe` の核」の信頼の一覧 (T0 から T10) にまとめる。`src/trust.rs` の単体テストが、この一覧を固定する。
 
 - テストでないコード (`#[cfg(test)]` の module と `heap/tests/` を除く) から、Verus に確かめさせない項目を表す語 (`external_body`、`verifier::external`、`assume_specification`、`global`、`assume(`、`Tracked::assume_new` など) を探す。見つけた項目 (ファイル、語、それを含む関数か型の名前) が、表の番号を付けた一覧と同じであることを確かめる。属性や仮定が一覧の外に増えると、証明が空になっても検証は通ってしまうためである
 - `verus!` の外のコードに `unsafe` がないことを確かめる。除くのは `Word` と `Heap` の `unsafe impl Send` と `Sync` と、T4 の `Drop` だけである
@@ -119,15 +120,17 @@ rustfmt は `verus!` の中を整えないので、`eml_rt` の `verus!` の中�
   - `share`: 輪のあるグラフ、`lin` の物体の子のたどり、`lin` ビットのない親の中の `lin` の子、不死と共有の物体で止まること、`share` の後の共有の側の `dup` と `decref` と最後の解放、rc -1 の親の `release` が `lin` の子を `dup` しないこと
   - `release` と `release_reuse`: 一意な場合、rc -1 の場合、共有の場合、`keep` の組み合わせ。部品を並べた展開 (`is_last` と `free_block`) でも同じ場合を流し、一般の版と同じ結果になることを確かめる
   - reuse の列: 手で組んだ「解放して、同じ箱でコンストラクタを作る」列を2種類流す。同じコンストラクタでフィールドを書かずに使い回す列と、型の違う同じ大きさの箱に移る列である。生きている箱の数と RC の釣り合いを確かめ、共有の物体が token にならないことも確かめる
-  - 検査モードの誤り: [オブジェクトモデル](../spec/object-model.md) の「報告する誤り」の各項目。token の ABA の形、解放した共有の物体の使用、強めた範囲の検査 (`field` と `set_field` の生の語、`raw` と `set_raw` の走査する語と `Foreign` の物体) を含む
+  - 文字列: 空の文字列、級の境目と 128 語の境目をまたぐ長さ、一意な左辺のその場の追記、容量が足りないときの作り直し、共有と不死の左辺、容量に収まる長さと語を埋める長さの `x ++ x`、`Err` の後にヒープが変わっていないこと。一意な左辺へ 1 バイトずつ n 回足すループで、作り直しの回数 (`string_push` が返す語が左辺と違った回数) が log n で抑えられることも確かめる。容量を読む操作やテストのためだけの欄は足さない
+  - 検査モードの誤り: [オブジェクトモデル](../spec/object-model.md) の「報告する誤り」の各項目。token の ABA の形、解放した共有の物体の使用、強めた範囲の検査 (`field` と `set_field` の生の語、`raw` と `set_raw` の走査する語と、ペイロードが不透明な `Foreign` と `String` の物体)、`string`、`string_push`、`string_concat` の `WrongKind` を含む
 - `is_last` の2回の読み込みとその順序は、Verus では確かめない (T2)。単体テストと Miri で確かめる
 
 ### Miri
 
 - Miri は、信頼の一覧の「Miri で確かめること」を確かめる `crates/eml_rt/src/heap/tests/trusted.rs` (module `trusted`) のテストだけを流す。テストは信頼の部分へ届く検証したコードも通るので、借用の規則 (T8) もここで確かめる。全体の単体テストは `cargo test` で流し、メモリの安全は Verus の証明が受け持つ
 - FFI の境界を信頼の一覧に足すときは、そこを通るテストもこの module に足す。今の `Foreign` の物体 (T3) が FFI の前身なので、テストはそこを重点にする
+- 文字列のバイトの読み書き (T10) も、この module で確かめる。語に揃わない位置への追記、ページをまたぐ長さ、大きい左辺からの作り直し、1ページの長さの `x ++ x` (大きい物体のページを返す道) などを、2つの借用の規則で流す
 - Miri は、nightly と `miri` と `rust-src` を持つ別の devShell `nix develop .#miri` で流す。flake は nightly を fenix の `complete` (すべての部品がそろう最新の日の nightly) から取る ([アーキテクチャ](architecture.md) の toolchain の項)
-- `cargo miri test -p eml_rt trusted::` を、`MIRIFLAGS="-Zmiri-strict-provenance"` で1回、`MIRIFLAGS="-Zmiri-strict-provenance -Zmiri-tree-borrows"` でもう1回流す。Apple M4 では、24 個のテストにどちらも約 65 秒かかる (S9v の終わり)
+- `cargo miri test -p eml_rt trusted::` を、`MIRIFLAGS="-Zmiri-strict-provenance"` で1回、`MIRIFLAGS="-Zmiri-strict-provenance -Zmiri-tree-borrows"` でもう1回流す。Apple M4 では、38 個のテストにどちらも約 145 秒かかる (S9b-1 の終わり)
 - テストの大きさは `cfg!(miri)` で変えない。`trusted` のテストは、どの設定でも数分で終わる大きさにする。ページの大きさも Miri で変えない。ほかの crate は Miri で流さない
 
 ## LIR のテキストの形

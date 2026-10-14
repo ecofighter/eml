@@ -1,4 +1,4 @@
-//! 文字列の物体 (docs/spec/object-model.md の「種類」)。種類 `String` の物体は、ここの操作だけが作り、書く。
+//! 文字列の物体 (docs/spec/object-model.md の「文字列」)。種類 `String` の物体は、ここの操作だけが作り、書く。
 //! 長さの語は生の 0 語目で、バイト列はその後ろにあり、ghost のバイト列 `text` に等しい。バイト列を書くのは、作るときと
 //! `string_push` だけである。
 
@@ -754,7 +754,7 @@ impl<M: Mode> Heap<M> {
     }
 
     /// left の後ろに s を足した文字列を返す。left の参照を1つ受け取り、結果の参照を1つ返す。どの誤りも最初の確保より
-    /// 前に返すので、`Err` のときヒープは変わらない (docs/spec/object-model.md の「核の操作」)。
+    /// 前に返すので、`Err` のときヒープは変わらない (docs/spec/object-model.md の「文字列」)。
     ///
     /// # Safety
     /// `left` はこのヒープの生きている文字列の物体を指し、呼ぶ側がその参照を1つ持つ (`decref` と同じ前提)。`s` は left
@@ -800,7 +800,7 @@ impl<M: Mode> Heap<M> {
     }
 
     /// `++`。両辺の参照を受け取り、結果の参照を返す。`string_push(left, string(right))` の後に right を手放す。どの誤りも
-    /// 最初の確保より前に返す (docs/spec/object-model.md の「核の操作」)。
+    /// 最初の確保より前に返す (docs/spec/object-model.md の「文字列」)。
     ///
     /// # Safety
     /// `left` と `right` はこのヒープの生きている文字列の物体を指し、呼ぶ側がそれぞれの参照を1つずつ持つ (同じ物体なら

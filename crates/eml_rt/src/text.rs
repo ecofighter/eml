@@ -1,4 +1,4 @@
-//! 文字列のバイト列 (docs/spec/object-model.md の「種類」)。Verus の権限は語の単位で、語の中のバイトの位置を
+//! 文字列のバイト列 (docs/spec/object-model.md の「文字列」)。Verus の権限は語の単位で、語の中のバイトの位置を
 //! 扱わないので、ここの関数は信頼の一覧の T10 である。どれも `String` のブロックの権限を受け、長さの語 (ペイロードの
 //! 0 語目) の後ろの容量の中だけを読み書きする。メモリのバイト列は、いつも権限の ghost のバイト列 `text` に等しい。
 //! この約束は、権限が渡したポインタの `String` のブロックのものであるとき (`BlockPerm::holds_text`) に限る。ghost の
@@ -66,7 +66,7 @@ pub(crate) fn text(h: *mut Header, len: usize, Tracked(perm): Tracked<&BlockPerm
 }
 
 /// `h` の中身の位置。公開の `string` が返す。指す先を読めるのは、物体が生きていて、`string_push` で書き換えていない間
-/// だけである (docs/spec/object-model.md の「種類」)。
+/// だけである (docs/spec/object-model.md の「文字列」)。
 #[verifier::external_body]
 #[inline]
 pub(crate) fn text_ptr(h: *mut Header, len: usize, Tracked(perm): Tracked<&BlockPerm>) -> *const str
