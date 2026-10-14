@@ -131,7 +131,7 @@ impl<M: Mode> Heap<M> {
     }
 
     /// 生きている物体はどれも、同じ中身と数で生きている。
-    pub closed spec fn kept_live(&self, old: Heap<M>) -> bool {
+    pub closed spec fn untouched(&self, old: Heap<M>) -> bool {
         &&& self.dummy == old.dummy
         &&& self.region == old.region
         &&& self.worker == old.worker
@@ -222,6 +222,7 @@ impl<M: Mode> Heap<M> {
             old(self).into_token_ok(w) ==> r is Ok,
             r matches Ok(t) ==> (old(self).into_token_ok(w) ==> final(self).consistent()
                 && final(self).tokened(*old(self), w, t)),
+            M::CHECKED ==> final(self).words_kept(*old(self)),
     {
         let ghost c = self.into_token_ok(w);
         self.settle();
@@ -439,6 +440,7 @@ impl<M: Mode> Heap<M> {
             final(self).region == old(self).region,
             final(self).worker == old(self).worker,
             final(self).token_box(t) == Some(h@.addr),
+            final(self).core.kept_live(old(self).core),
     {
         let ghost s0 = self.core;
         let bits = self.core.prefix_state_get(h);
@@ -453,6 +455,7 @@ impl<M: Mode> Heap<M> {
             self.core.lemma_token_pushed(s0, h, generation);
             self.core.lemma_tokens_frame(s0);
             assert(self.tokens@ =~= self.core.model@.tokens);
+            self.core.lemma_kept_live_same(s0);
         }
         t
     }
@@ -498,6 +501,7 @@ impl<M: Mode> Heap<M> {
                 &&& reused ==> final(self).rebuilt(*old(self), w, Some(meta))
                 &&& !reused ==> final(self).built(*old(self), w, meta, 1, payload_words)
             }),
+            M::CHECKED ==> final(self).words_kept(*old(self)),
     {
         let ghost c = self.con_at_ok(token, payload_words);
         let ghost h0 = *self;
@@ -581,6 +585,7 @@ impl<M: Mode> Heap<M> {
                 w,
                 None,
             )),
+            M::CHECKED ==> final(self).words_kept(*old(self)),
     {
         let ghost c = self.reuse_ok(token);
         let ghost h0 = *self;
@@ -700,7 +705,8 @@ impl<M: Mode> Heap<M> {
             final(self).wf(),
             !M::CHECKED ==> r is Ok,
             old(self).drop_token_ok(token) ==> r is Ok && final(self).consistent()
-                && final(self).kept_live(*old(self)),
+                && final(self).untouched(*old(self)),
+            M::CHECKED ==> final(self).words_kept(*old(self)),
     {
         let ghost c = self.drop_token_ok(token);
         let ghost h0 = *self;
@@ -767,10 +773,16 @@ impl<M: Mode> Heap<M> {
             old(self).release_ok(w, tag, keep@) ==> r is Ok || chain_err(r),
             old(self).release_ok(w, tag, keep@) && r is Ok ==> final(self).consistent()
                 && final(self).handed_over(*old(self), w, keep@),
+            final(self).kept_live(*old(self)),
+            M::CHECKED ==> final(self).words_kept(*old(self)),
+            r is Ok ==> final(self).settled(),
     {
         let ghost c = self.release_ok(w, tag, keep@);
         let unique = unsafe { self.is_unique(w) };
         if unique? {
+            proof {
+                self.core.lemma_kept_live_settled();
+            }
             self.settle();
             let h = self.header_of(w);
             proof {

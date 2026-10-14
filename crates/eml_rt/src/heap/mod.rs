@@ -40,7 +40,7 @@ use crate::frozen::RegionPerms;
 use crate::frozen::{Frozen, not_a_descendant};
 use crate::meta::{self, BlockPerm, HEADER_WORDS, Header, Kind, Meta, meta_ptr, rc_ptr, slot_ptr};
 #[cfg(verus_only)]
-use crate::meta::{bits_kind, bits_scan, bits_tag, bits_wf};
+use crate::meta::{bits_kind, bits_lin, bits_scan, bits_tag, bits_wf};
 use crate::mode::Mode;
 use crate::rc::{self, DecrefStep, DupStep};
 #[cfg(verus_only)]
@@ -602,6 +602,7 @@ impl<M: Mode> Heap<M> {
             final(self).wf(),
             old(self).consistent() ==> final(self).consistent(),
             final(self).same_objects(*old(self)),
+            M::CHECKED ==> final(self).words_kept(*old(self)),
     {
         self.worker = worker;
         proof {
@@ -697,6 +698,8 @@ impl<M: Mode> Heap<M> {
             bits_wf(meta.bits_spec()),
             bits_kind(meta.bits_spec()) == meta.kind_spec(),
             bits_scan(meta.bits_spec()) == meta.scan_spec(),
+            bits_tag(meta.bits_spec()) == meta.tag_spec(),
+            bits_lin(meta.bits_spec()) == meta.lin_spec(),
             M::CHECKED ==> r.1@.prefix is Some && r.1@.prefix->0.first.is_init()
                 && r.1@.prefix->0.state.is_init() && r.1@.prefix->0.state.value() == ALIVE_STATE
                 && r.1@.prefix->0.first.value() == if rc == 0 {
@@ -768,6 +771,7 @@ impl<M: Mode> Heap<M> {
             meta.scan_spec() <= payload_words,
         ensures
             final(self).built(*old(self), w, meta, 1, payload_words),
+            M::CHECKED ==> final(self).words_kept(*old(self)),
     {
         self.alloc_building(payload_words, 1, meta)
     }
@@ -787,6 +791,7 @@ impl<M: Mode> Heap<M> {
             meta.scan_spec() <= payload_words,
         ensures
             final(self).built(*old(self), w, meta, 0, payload_words),
+            M::CHECKED ==> final(self).words_kept(*old(self)),
     {
         self.alloc_building(payload_words, 0, meta)
     }
@@ -804,6 +809,7 @@ impl<M: Mode> Heap<M> {
             meta.scan_spec() <= payload_words,
         ensures
             final(self).built(*old(self), w, meta, rc, payload_words),
+            M::CHECKED ==> final(self).words_kept(*old(self)),
     {
         debug_assert!(!matches!(meta.kind(), Kind::Foreign | Kind::String | Kind::Free));
         self.settle();
@@ -910,6 +916,11 @@ impl<M: Mode> Heap<M> {
             final(self).made(*old(self), w),
             final(self).kind_of(w) == Kind::Data,
             final(self).count_of(w) == scanned,
+            final(self).tag_of(w) == tag,
+            final(self).lin_of(w) == lin,
+            forall|i: int|
+                0 <= i < scanned ==> (#[trigger] final(self).scanned_word(w, i)).bits_spec() == 1,
+            M::CHECKED ==> final(self).words_kept(*old(self)),
     {
         let extended = scanned >= Meta::EXTENDED_SCAN as usize;
         let scan = if extended {
@@ -983,6 +994,7 @@ impl<M: Mode> Heap<M> {
                 assert(p_word(perm, (first + i) as int).bits_spec() == 1);
                 assert(perm.slots =~= before.slots.insert((first + i) as int, slot));
                 lemma_unit_filled_extend(before, perm, first as int, first + i);
+
                 if extended {
                     assert(perm.slots[0] == before.slots[0]);
                 }
@@ -994,9 +1006,17 @@ impl<M: Mode> Heap<M> {
             assert(i == scanned);
             self.lemma_data_perm(perm, h, meta, first, scanned, extended);
         }
+        let ghost filled = perm;
         self.core.publish(Ghost(h), Tracked(perm), Ghost(BlockState::Live), Ghost(self.worker));
         let w = Word::from_ptr(h);
         proof {
+            crate::word::lemma_aligned_is_ptr(h@.addr);
+            assert forall|i: int| 0 <= i < scanned implies (#[trigger] self.scanned_word(
+                w,
+                i,
+            )).bits_spec() == 1 by {
+                assert(p_init(filled, first + i));
+            }
             if old(self).consistent() && old(self).settleable() {
                 self.lemma_dummy_kept(s1);
                 self.core.lemma_frame_chain(mid, s1.core, old(self).core);
@@ -1047,6 +1067,7 @@ impl<M: Mode> Heap<M> {
         ensures
             self.core.perm_wf(perm, h@.addr, BlockState::Live, Set::empty(), self.worker),
             p_count(perm) == scanned,
+            p_first(perm) == first,
     {
         let bits = meta.bits_spec();
         check::lemma_alive_code();
@@ -1076,6 +1097,7 @@ impl<M: Mode> Heap<M> {
             w.is_imm_spec() ==> *final(self) == *old(self),
             !w.is_imm_spec() ==> final(self).made(*old(self), w) && final(self).kind_of(w)
                 == Kind::BigInt,
+            M::CHECKED ==> final(self).words_kept(*old(self)),
     {
         match Word::int(n) {
             Some(w) => {
@@ -1225,6 +1247,7 @@ impl<M: Mode> Heap<M> {
         ensures
             final(self).wf(),
             old(self).consistent() ==> final(self).consistent(),
+            M::CHECKED ==> final(self).words_kept(*old(self)),
     {
         // 塊のブロックが重ならないことは、子の塊を凍結した作り手の確保から出る。鎖でつながらない2つの塊には、それを
         // 示すものがない
@@ -1662,6 +1685,8 @@ impl<M: Mode> Heap<M> {
                 w,
                 1,
             ) && final(self).bumped(*old(self), w),
+            M::CHECKED ==> final(self).words_kept(*old(self)),
+            final(self).settled(),
     {
         let ghost c = self.dup_ok(w);
         self.settle();
@@ -1840,8 +1865,14 @@ impl<M: Mode> Heap<M> {
                 w,
                 -1,
             ),
+            final(self).kept_live(*old(self)),
+            M::CHECKED ==> final(self).words_kept(*old(self)),
+            final(self).settled(),
     {
         let ghost c = self.decref_ok(w);
+        proof {
+            self.core.lemma_kept_live_settled();
+        }
         self.settle();
         if !w.is_ptr() {
             proof {
@@ -1877,6 +1908,8 @@ impl<M: Mode> Heap<M> {
                     );
                     proof {
                         self.lemma_after_step(*old(self), s0, h@.addr, w, -1);
+                        self.core.lemma_kept_live_at(s0, h@.addr);
+                        self.core.lemma_kept_live_trans(s0, old(self).core);
                     }
                     return Ok(());
                 },
@@ -1898,11 +1931,16 @@ impl<M: Mode> Heap<M> {
                         Ghost(s0.last_by_model(h@.addr, false)),
                     );
                     let ghost s1 = self.core;
+                    proof {
+                        s1.lemma_kept_live_at(s0, h@.addr);
+                        s1.lemma_kept_live_trans(s0, old(self).core);
+                    }
                     let r = self.free_chain(h, Ghost(true));
                     proof {
                         if r is Ok {
                             self.lemma_after_chain(*old(self), s0, s1, h@.addr, w);
                         }
+                        self.core.lemma_kept_live_trans(s1, old(self).core);
                     }
                     return r;
                 },
@@ -1920,6 +1958,7 @@ impl<M: Mode> Heap<M> {
             if c && r is Ok {
                 self.lemma_evolved_settled(*old(self), mid, w, -1);
             }
+            self.core.lemma_kept_live_trans(mid.core, old(self).core);
         }
         r
     }
@@ -1944,6 +1983,9 @@ impl<M: Mode> Heap<M> {
             !M::CHECKED ==> r is Ok,
             c ==> r is Ok || chain_err(r),
             c && r is Ok ==> final(self).consistent() && final(self).evolved(*old(self), w, -1),
+            final(self).kept_live(*old(self)),
+            M::CHECKED ==> final(self).words_kept(*old(self)),
+            final(self).core.model@.building is None,
     {
         let ghost s0 = self.core;
         proof {
@@ -1956,6 +1998,10 @@ impl<M: Mode> Heap<M> {
             let ghost s1 = self.core;
             let r = self.free_chain(h, Ghost(c));
             proof {
+                self.core.lemma_kept_live_trans(s1, s0);
+                if M::CHECKED {
+                    self.core.lemma_same_words(s1);
+                }
                 if c && r is Ok {
                     self.lemma_after_chain(*old(self), s0, s1, h@.addr, w);
                 }
@@ -2035,6 +2081,9 @@ impl<M: Mode> Heap<M> {
                 BlockState::Live
             },
             final(self).core.perm(h@.addr).meta == old(self).core.perm(h@.addr).meta,
+            final(self).core.perm(h@.addr).slots == old(self).core.perm(h@.addr).slots,
+            final(self).core.perm(h@.addr).text == old(self).core.perm(h@.addr).text,
+            final(self).core.kept_live(old(self).core),
             M::CHECKED && old(self).decref_passes(h@.addr) ==> r is Ok,
             M::CHECKED && old(self).decref_twice_passes(h@.addr) && r is Ok ==> r == Ok::<
                 bool,
@@ -2115,6 +2164,7 @@ impl<M: Mode> Heap<M> {
                 assert(s1.state(b) == s0.state(b));
             }
             assert(self.core.active() =~= s0.active());
+            self.core.lemma_kept_live_at(s0, h@.addr);
         }
         if counted {
             self.stats.rc_decrements = self.stats.rc_decrements.wrapping_add(1);
@@ -2156,6 +2206,7 @@ impl<M: Mode> Heap<M> {
                 0,
                 0,
             ),
+            final(self).core.kept_live(old(self).core),
             final(self).core.model@.building is None,
             final(self).dummy == old(self).dummy,
             final(self).region == old(self).region,
@@ -2215,6 +2266,7 @@ impl<M: Mode> Heap<M> {
                 0,
             ),
             final(self).core.tokens_kept(old(self).core),
+            final(self).core.kept_live(old(self).core),
             final(self).core.model@.building is None,
             final(self).dummy == old(self).dummy,
             final(self).region == old(self).region,
@@ -2243,6 +2295,7 @@ impl<M: Mode> Heap<M> {
                 M::CHECKED ==> self.core.safe_work(work@, None),
                 c ==> self.core.evolved(s0, 0, 0),
                 self.core.tokens_kept(s0),
+                self.core.kept_live(s0),
                 s0 == old(self).core,
                 self.core.model@.building is None,
                 self.dummy == old(self).dummy,
@@ -2300,6 +2353,7 @@ impl<M: Mode> Heap<M> {
                     i <= n,
                     c ==> self.core.evolved(s0, 0, 0),
                     self.core.tokens_kept(s0),
+                    self.core.kept_live(s0),
                     s0 == old(self).core,
                     self.core.model@.building is None,
                     self.core.active() == s1.active(),
@@ -2339,6 +2393,7 @@ impl<M: Mode> Heap<M> {
                     }
                     proof {
                         self.core.lemma_tokens_kept_step(s3, s0, c_h@.addr);
+                        self.core.lemma_kept_live_trans(s3, s0);
                         if c {
                             self.core.lemma_draining_step(
                                 s3,
@@ -2375,6 +2430,7 @@ impl<M: Mode> Heap<M> {
             self.free_box(h, Ghost(c));
             proof {
                 self.core.lemma_tokens_kept_step(pre, s0, h@.addr);
+                self.core.lemma_kept_live_trans(pre, s0);
                 if c {
                     self.core.lemma_drained_one(pre, s0, h, first as int, Set::empty(), work@);
                 }
@@ -2432,6 +2488,7 @@ impl<M: Mode> Heap<M> {
             M::CHECKED ==> forall|w: Word| #[trigger]
                 final(self).core.word_ok(w) == old(self).core.word_ok(w),
             final(self).core.model@.building == old(self).core.model@.building,
+            old(self).core.model@.building is None ==> final(self).core.kept_live(old(self).core),
             final(self).dummy == old(self).dummy,
             final(self).region == old(self).region,
             final(self).worker == old(self).worker,
@@ -2487,6 +2544,10 @@ impl<M: Mode> Heap<M> {
             proof {
                 self.core.lemma_block_released(s0, h@.addr);
                 assert(self.core.active() =~= s0.active().remove(h@.addr));
+                assert(self.core.dom() =~= s0.dom().remove(h@.addr));
+                if s0.model@.building is None {
+                    self.core.lemma_kept_live_at(s0, h@.addr);
+                }
             }
         } else {
             proof {
@@ -2504,6 +2565,9 @@ impl<M: Mode> Heap<M> {
                 self.core.lemma_safe_freed(s0, h@.addr);
                 assert(self.core.active() =~= s0.active().remove(h@.addr));
                 assert forall|w: Word| #[trigger] self.core.word_ok(w) == s0.word_ok(w) by {}
+                if s0.model@.building is None {
+                    self.core.lemma_kept_live_at(s0, h@.addr);
+                }
             }
         }
     }
@@ -2559,6 +2623,44 @@ impl<M: Mode> Heap<M> {
             && self.core.rc_of(h) > 0)
     }
 
+    /// `w` の物体の tag。
+    pub closed spec fn tag_of(&self, w: Word) -> u16 {
+        bits_tag(self.core.meta_bits(w.bits_spec()))
+    }
+
+    /// 呼ぶ前と後の両方で生きているブロックは、`meta`、走査する語、生の語、文字列のバイトを変えない。後で生きている
+    /// ブロックは、前も生きていた。外の参照を持たない物体 (リストの後ろの節点など) についても言うので、`decref` の
+    /// 後に、残った物体を辺でたどった先の中身を言える。モードによらず、モデルの前提が崩れていても成り立つ。
+    pub closed spec fn kept_live(&self, old: Heap<M>) -> bool {
+        self.core.kept_live(old.core)
+    }
+
+    /// `old` で `word_in` だった語は、どれも `word_in` のままである。検査モードはブロックを使い回さず隔離するので、
+    /// 検査モードの `&mut self` の操作はこれを保つ。
+    pub closed spec fn words_kept(&self, old: Heap<M>) -> bool {
+        forall|w: Word|
+            #![trigger old.word_in(w)]
+            #![trigger self.word_in(w)]
+            old.word_in(w) ==> self.word_in(w)
+    }
+
+    /// 読める物体の走査する語は、読める (`field` と `scanned` の約束と同じ事実)。
+    pub proof fn lemma_readable_scanned(&self, w: Word, i: int)
+        requires
+            self.consistent(),
+            self.settleable(),
+            w.is_ptr_spec(),
+            self.readable(w),
+            0 <= i < self.count_of(w),
+        ensures
+            self.readable(self.scanned_word(w, i)),
+    {
+        let h = w.bits_spec();
+        let p = self.core.perm(h);
+        assert(self.core.scanned(h, p_first(p) + i));
+        self.core.lemma_live_slot(h, p_first(p) + i);
+    }
+
     /// `set_field` の後の状態。i 語目に `v` を書き、`v` の外の参照を辺に移し、前の i 語目の辺を外の参照に移す。
     pub closed spec fn field_set(&self, old: Heap<M>, w: Word, i: int, v: Word) -> bool {
         &&& self.dummy == old.dummy
@@ -2594,6 +2696,7 @@ impl<M: Mode> Heap<M> {
             old(self).consistent() && old(self).settleable() && old(self).readable(w) && (
             w.is_ptr_spec() ==> old(self).rc_value(w) == 0) ==> r is Ok,
             r is Err ==> *final(self) == *old(self),
+            M::CHECKED ==> final(self).words_kept(*old(self)),
     {
         proof {
             self.core.lemma_recounted_refl();
@@ -2858,6 +2961,7 @@ impl<M: Mode> Heap<M> {
             r is Err ==> *final(self) == *old(self),
             r is Ok ==> old(self).unshared(w),
             r is Ok ==> final(self).field_set(*old(self), w, i as int, v),
+            M::CHECKED ==> final(self).words_kept(*old(self)),
             old(self).consistent() && old(self).writable(w) && old(self).holds(v) && old(
                 self,
             ).scanned_at(w, i as int) && old(self).owned(w) ==> r is Ok && final(self).consistent(),
@@ -2961,6 +3065,7 @@ impl<M: Mode> Heap<M> {
             r is Err ==> *final(self) == *old(self),
             r is Ok ==> old(self).unshared(w),
             r is Ok ==> final(self).raw_set(*old(self), w, i as int, v),
+            M::CHECKED ==> final(self).words_kept(*old(self)),
             old(self).consistent() && old(self).writable(w) && old(self).raw_at(w, i as int) && old(
                 self,
             ).owned(w) ==> r is Ok && final(self).consistent(),
@@ -3085,6 +3190,7 @@ impl<M: Mode> Heap<M> {
         ensures
             final(self).made(*old(self), w),
             final(self).kind_of(w) == Kind::Foreign,
+            M::CHECKED ==> final(self).words_kept(*old(self)),
     {
         let n = foreign::value_words::<T>();
         self.settle();

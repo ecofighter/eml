@@ -282,6 +282,7 @@ impl<M: Mode> Heap<M> {
             final(self).made(*old(self), w),
             final(self).is_string(w),
             final(self).text_of(w) == s.spec_bytes(),
+            M::CHECKED ==> final(self).words_kept(*old(self)),
     {
         self.make_string(s, 1)
     }
@@ -296,6 +297,7 @@ impl<M: Mode> Heap<M> {
             final(self).made_immortal(*old(self), w),
             final(self).is_string(w),
             final(self).text_of(w) == s.spec_bytes(),
+            M::CHECKED ==> final(self).words_kept(*old(self)),
     {
         self.make_string(s, 0)
     }
@@ -312,6 +314,7 @@ impl<M: Mode> Heap<M> {
             rc == 0 ==> final(self).made_immortal(*old(self), w),
             final(self).is_string(w),
             final(self).text_of(w) == s.spec_bytes(),
+            forall|x: Word| old(self).core.word_ok(x) ==> #[trigger] final(self).core.word_ok(x),
     {
         let t = Tail::Str(s);
         let bytes = self.core.tail_len(&t);
@@ -684,6 +687,8 @@ impl<M: Mode> Heap<M> {
                     &&& final(self).core.state(b) == old(self).core.state(b)
                     &&& final(self).core.block(b) == old(self).core.block(b)
                 },
+            M::CHECKED ==> forall|x: Word|
+                old(self).core.word_ok(x) ==> #[trigger] final(self).core.word_ok(x),
             M::CHECKED && old(self).decref_twice_passes(left.bits_spec()) ==> {
                 &&& final(self).core.has(left.bits_spec())
                 &&& final(self).core.block(left.bits_spec()) == old(self).core.block(
@@ -821,6 +826,7 @@ impl<M: Mode> Heap<M> {
             old(self).push_ok(left) ==> r is Ok || chain_err(r),
             r matches Ok(w) ==> (old(self).push_ok(left) ==> final(self).consistent()
                 && final(self).pushed(*old(self), left, w)),
+            M::CHECKED ==> final(self).words_kept(*old(self)),
     {
         let ghost c = self.push_ok(left);
         self.settle();
@@ -867,6 +873,7 @@ impl<M: Mode> Heap<M> {
             old(self).concat_ok(left, right) ==> r is Ok || chain_err(r),
             r matches Ok(w) ==> (old(self).concat_ok(left, right) ==> final(self).consistent()
                 && final(self).concatenated(*old(self), left, right, w)),
+            M::CHECKED ==> final(self).words_kept(*old(self)),
     {
         let ghost c = self.concat_ok(left, right);
         self.settle();

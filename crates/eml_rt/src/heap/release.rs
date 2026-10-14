@@ -49,8 +49,14 @@ impl<M: Mode> Heap<M> {
             old(self).release_ok(w, tag, keep@) ==> r is Ok || chain_err(r),
             old(self).release_ok(w, tag, keep@) && r is Ok ==> final(self).consistent()
                 && final(self).handed_over(*old(self), w, keep@),
+            final(self).kept_live(*old(self)),
+            M::CHECKED ==> final(self).words_kept(*old(self)),
+            final(self).settled(),
     {
         let ghost c = self.release_ok(w, tag, keep@);
+        proof {
+            self.core.lemma_kept_live_settled();
+        }
         self.settle();
         let h = self.header_of(w);
         proof {
@@ -177,6 +183,9 @@ impl<M: Mode> Heap<M> {
                 handover(old(self).core.kept_out(h@.addr, keep@), h@.addr),
             ) && final(self).dummy == old(self).dummy && final(self).region == old(self).region
                 && final(self).worker == old(self).worker,
+            final(self).kept_live(*old(self)),
+            M::CHECKED ==> final(self).words_kept(*old(self)),
+            final(self).core.model@.building is None,
     {
         let ghost s0 = self.core;
         let ghost a = h@.addr;
@@ -284,6 +293,13 @@ impl<M: Mode> Heap<M> {
                     assert(self.core.word_ok(child) == s0.word_ok(child));
                 }
                 let r = unsafe { self.dup(child) };
+                proof {
+                    if r is Err {
+                        self.core.lemma_values_trans(mid.core, s0);
+                        self.core.lemma_kept_live_values(s0);
+                        self.core.lemma_same_words(s0);
+                    }
+                }
                 r?;
                 proof {
                     self.core.lemma_values_trans(mid.core, s0);
@@ -343,6 +359,11 @@ impl<M: Mode> Heap<M> {
             if c && r is Ok {
                 self.core.lemma_dupped_end(s0, s2, s0.kept_out(a, keep@), a);
             }
+            s2.lemma_kept_live_values(s0);
+            self.core.lemma_kept_live_trans(s2, s0);
+            if M::CHECKED {
+                s2.lemma_same_words(s0);
+            }
         }
         r
     }
@@ -396,6 +417,9 @@ impl<M: Mode> Heap<M> {
                 &&& final(self).core.state(h@.addr) == BlockState::Token
                 &&& M::CHECKED ==> !final(self).core.registered(h@.addr)
             },
+            final(self).kept_live(*old(self)),
+            M::CHECKED ==> final(self).words_kept(*old(self)),
+            final(self).core.model@.building is None,
     {
         let ghost s0 = self.core;
         let ghost a = h@.addr;
@@ -428,7 +452,10 @@ impl<M: Mode> Heap<M> {
             }
             if M::CHECKED {
                 self.lemma_safe_frame(*old(self));
+                self.core.lemma_same_words(s0);
             }
+            s1.lemma_kept_live_at(s0, a);
+            self.core.lemma_kept_live_trans(s1, s0);
         }
         r
     }
@@ -488,6 +515,7 @@ impl<M: Mode> Heap<M> {
                 &&& final(self).core.state(h@.addr) == BlockState::Token
                 &&& M::CHECKED ==> !final(self).core.registered(h@.addr)
             },
+            final(self).core.kept_live(old(self).core),
             final(self).dummy == old(self).dummy,
             final(self).region == old(self).region,
             final(self).worker == old(self).worker,
@@ -529,6 +557,7 @@ impl<M: Mode> Heap<M> {
                 first + n <= self.core.cap(h@.addr),
                 i <= n,
                 c ==> self.core.evolved(s1, 0, 0),
+                self.core.kept_live(s1),
                 self.core.model@.building is None,
                 self.dummy == old(self).dummy,
                 self.region == old(self).region,
@@ -563,6 +592,7 @@ impl<M: Mode> Heap<M> {
                         work.push(child);
                     }
                     proof {
+                        self.core.lemma_kept_live_trans(s3, s1);
                         if c {
                             self.core.lemma_draining_step(
                                 s3,
@@ -606,6 +636,8 @@ impl<M: Mode> Heap<M> {
             }
             self.core.finish_token(h, Ghost(skip), M::CHECKED, Ghost(c));
             proof {
+                self.core.lemma_kept_live_at(pre, h@.addr);
+                self.core.lemma_kept_live_trans(pre, s1);
                 if c {
                     self.core.lemma_tokened(pre, h, first as int, skip, work@);
                     self.core.lemma_evolved_trans(pre, s1, 0, 0, 0);
@@ -618,6 +650,7 @@ impl<M: Mode> Heap<M> {
         } else {
             self.free_box(h, Ghost(c));
             proof {
+                self.core.lemma_kept_live_trans(pre, s1);
                 if c {
                     self.core.lemma_drained_one(pre, s1, h, first as int, skip, work@);
                 }
@@ -629,6 +662,7 @@ impl<M: Mode> Heap<M> {
         let ghost s4 = self.core;
         let r = self.drain(work, Ghost(c));
         proof {
+            self.core.lemma_kept_live_trans(s4, s1);
             if c && r is Ok {
                 self.core.lemma_evolved_trans(s4, s1, 0, 0, 0);
             }
@@ -673,8 +707,14 @@ impl<M: Mode> Heap<M> {
                 w,
                 Seq::new(old(self).count_of(w) as nat, |_i: int| true),
             ),
+            final(self).kept_live(*old(self)),
+            M::CHECKED ==> final(self).words_kept(*old(self)),
+            final(self).settled(),
     {
         let ghost c = self.free_block_ok(w);
+        proof {
+            self.core.lemma_kept_live_settled();
+        }
         self.settle();
         let h = self.header_of(w);
         proof {
@@ -728,7 +768,11 @@ impl<M: Mode> Heap<M> {
             }
             if M::CHECKED {
                 self.lemma_safe_frame(*old(self));
+                self.core.lemma_same_words(s0);
             }
+            s1.lemma_kept_live_at(s0, a);
+            self.core.lemma_kept_live_trans(s1, s0);
+            self.core.lemma_kept_live_trans(s0, old(self).core);
         }
         Ok(())
     }

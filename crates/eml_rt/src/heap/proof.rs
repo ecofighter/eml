@@ -4,6 +4,7 @@
 use vstd::prelude::*;
 
 use super::Core;
+use super::Heap;
 #[cfg(verus_only)]
 use super::inv::{p_code, p_init, p_owner, p_scanned, p_word, prefix_kept};
 use super::model::BlockState;
@@ -12,12 +13,13 @@ use super::model::{
     Model, Pos, indeg, lemma_indeg_pos, lemma_indeg_remove, lemma_indeg_union, lemma_indeg_witness,
     lemma_indeg_zero,
 };
+use crate::error::HeapError;
 #[cfg(verus_only)]
 use crate::meta::HEADER_WORDS;
 use crate::meta::{BlockPerm, Header};
+use crate::mode::Mode;
 #[cfg(verus_only)]
 use crate::rc::{magnitude, pinned};
-#[cfg(verus_only)]
 use crate::word::Word;
 
 verus! {
@@ -107,6 +109,123 @@ impl Core {
         &&& self.model@.edges == v.model@.edges
         &&& self.model@.kept == v.model@.kept
         &&& self.env == old.env
+    }
+
+    /// `self` で生きているブロック (構築中の物体を含む) は、`old` でも生きていて、`meta`、語、文字列のバイトが同じである。
+    /// `evolved` は外の参照を持ち続ける物体しか言わないので、リストの後ろの節点のように辺だけで持たれる物体の中身は、
+    /// これで追う。解放の連鎖は何も確保せず、生き残る物体の語に書かないので、モデルが合わなくても成り立つ。
+    pub(crate) open spec fn kept_live(&self, old: Core) -> bool {
+        forall|b: usize|
+            #![trigger self.settled_state(b)]
+            self.has(b) && self.settled_state(b) == BlockState::Live ==> {
+                &&& old.has(b)
+                &&& old.settled_state(b) == BlockState::Live
+                &&& self.perm(b).meta == old.perm(b).meta
+                &&& self.perm(b).slots == old.perm(b).slots
+                &&& self.perm(b).text == old.perm(b).text
+            }
+    }
+
+    pub(crate) proof fn lemma_kept_live_trans(&self, mid: Core, old: Core)
+        requires
+            self.kept_live(mid),
+            mid.kept_live(old),
+        ensures
+            self.kept_live(old),
+    {
+    }
+
+    /// 構築中の物体を生きている物体にした見方は、どのブロックの中身も変えない。
+    pub(crate) proof fn lemma_kept_live_settled(&self)
+        ensures
+            self.settled_view().kept_live(*self),
+    {
+    }
+
+    /// rc と前置きの値だけを変えても、どのブロックの中身も変えない。
+    pub(crate) proof fn lemma_kept_live_values(&self, old: Core)
+        requires
+            self.values_changed(old),
+        ensures
+            self.kept_live(old),
+    {
+        assert forall|b: usize| #[trigger]
+            self.has(b) && self.settled_state(b) == BlockState::Live implies {
+            &&& old.has(b)
+            &&& old.settled_state(b) == BlockState::Live
+            &&& self.perm(b).meta == old.perm(b).meta
+            &&& self.perm(b).slots == old.perm(b).slots
+            &&& self.perm(b).text == old.perm(b).text
+        } by {
+            if self.dom().contains(b) {
+                assert(old.dom().contains(b));
+            }
+        }
+    }
+
+    /// 権限とブロックの状態を変えない変化 (token の表だけを替えるなど) は、どのブロックの中身も変えない。
+    pub(crate) proof fn lemma_kept_live_same(&self, old: Core)
+        requires
+            self.perms == old.perms,
+            self.env == old.env,
+            self.model@.state == old.model@.state,
+            self.model@.building == old.model@.building,
+        ensures
+            self.kept_live(old),
+    {
+    }
+
+    /// ブロック `h` のほかの権限と状態を変えず、ブロックを足さない変化は、`kept_live` を満たす。`h` は、後で生きて
+    /// いるなら前も生きていて、中身が同じであればよい。
+    pub(crate) proof fn lemma_kept_live_at(&self, old: Core, h: usize)
+        requires
+            old.sound(),
+            self.env == old.env,
+            self.dom().subset_of(old.dom()),
+            self.model@.building is None,
+            old.model@.building is None,
+            forall|b: usize|
+                b != h && #[trigger] self.dom().contains(b) ==> self.perms@[b] == old.perms@[b],
+            forall|b: usize| b != h ==> #[trigger] self.state(b) == old.state(b),
+            self.dom().contains(h) && self.state(h) == BlockState::Live ==> {
+                &&& old.state(h) == BlockState::Live
+                &&& self.perm(h).meta == old.perm(h).meta
+                &&& self.perm(h).slots == old.perm(h).slots
+                &&& self.perm(h).text == old.perm(h).text
+            },
+        ensures
+            self.kept_live(old),
+    {
+        assert forall|b: usize| #[trigger]
+            self.has(b) && self.settled_state(b) == BlockState::Live implies {
+            &&& old.has(b)
+            &&& old.settled_state(b) == BlockState::Live
+            &&& self.perm(b).meta == old.perm(b).meta
+            &&& self.perm(b).slots == old.perm(b).slots
+            &&& self.perm(b).text == old.perm(b).text
+        } by {
+            if self.dom().contains(b) {
+                assert(old.dom().contains(b));
+                if b != h {
+                    assert(self.perms@[b] == old.perms@[b]);
+                    assert(self.state(b) == old.state(b));
+                }
+            } else {
+                // 付けた塊のブロックは、前もヒープのブロックでなかった
+                old.lemma_apart(b);
+            }
+        }
+    }
+
+    /// 確保器と、ブロックの集まりと、付けた塊が同じなら、どの語の妥当さも変わらない。
+    pub(crate) proof fn lemma_same_words(&self, old: Core)
+        requires
+            self.pages == old.pages,
+            self.dom() == old.dom(),
+            self.env == old.env,
+        ensures
+            forall|w: Word| #[trigger] self.word_ok(w) == old.word_ok(w),
+    {
     }
 
     /// 枠をつなぐ。`settle` の後 (`s1`)、確保器からブロックを取った後 (`mid`)、そのブロックを入れた後 (`self`) の3つの変化を
@@ -927,6 +1046,68 @@ impl Core {
             assert(s0.counted_wf(b));
         }
     }
+}
+
+// 次の2つは、`decref` と `alloc_data` の約束が組み合わせて使える形かを確かめる証明だけの関数で、どこからも呼ばない。
+// 基本操作の証明は、ヒープの子のモジュールからこの形で核の操作の約束をつなぐ
+// (docs/spec/object-model.md の「核の操作」)
+/// 2つの節点のリスト `a -> b -> ()` で外の参照を持つのが `a` だけでも、ほかの物体 `x` への `decref` の後に `b` は
+/// 読めて、中身は変わらない。`a` は `evolved` で、`b` は `kept_live` で追う。
+#[allow(dead_code)]
+unsafe fn decref_keeps_tail<M: Mode>(heap: &mut Heap<M>, Ghost(a): Ghost<Word>, x: Word) -> (r:
+    Result<(), HeapError>)
+    requires
+        old(heap).wf(),
+        old(heap).safe_settleable(),
+        old(heap).word_in(x),
+        old(heap).decref_ok(x),
+        a.is_ptr_spec(),
+        a.bits_spec() != x.bits_spec(),
+        old(heap).holds(a),
+        old(heap).count_of(a) == 1,
+    ensures
+        r is Ok ==> {
+            let b = old(heap).scanned_word(a, 0);
+            &&& final(heap).readable(b)
+            &&& b.is_ptr_spec() ==> final(heap).meta_of(b) == old(heap).meta_of(b)
+            &&& b.is_ptr_spec() ==> forall|i: int| #[trigger]
+                final(heap).scanned_word(b, i) == old(heap).scanned_word(b, i)
+        },
+{
+    let r = unsafe { heap.decref(x) };
+    proof {
+        if r is Ok {
+            let ha = a.bits_spec();
+            let v = old(heap).core.settled_view();
+            if !v.dom().contains(ha) {
+                // 付けた塊の物体は、どの操作の後も同じ権限で読める
+                old(heap).core.lemma_region_at(ha);
+            }
+            assert(heap.count_of(a) == 1);
+            assert(heap.scanned_word(a, 0) == old(heap).scanned_word(a, 0));
+            heap.lemma_readable_scanned(a, 0);
+        }
+    }
+    r
+}
+
+/// 検査モードでは、確保の後も前の語を `word_in` として使える。基本操作が節点を確保してから欄に語を書く形である。
+#[allow(dead_code)]
+unsafe fn alloc_then_store<M: Mode>(heap: &mut Heap<M>, e: Word) -> (r: Result<Word, HeapError>)
+    requires
+        M::CHECKED,
+        old(heap).wf(),
+        old(heap).safe_settleable(),
+        old(heap).word_in(e),
+    ensures
+        final(heap).wf(),
+        final(heap).word_in(e),
+        r matches Ok(n) ==> final(heap).word_in(n),
+{
+    let n = heap.alloc_data(1, 1, 0, false);
+    let r = unsafe { heap.set_field(n, 0, e) };
+    r?;
+    Ok(n)
 }
 
 } // verus!
