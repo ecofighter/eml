@@ -2003,7 +2003,7 @@ impl<M: Mode> Heap<M> {
     {
         let ghost s0 = self.core;
         let meta = self.core.meta_get(h);
-        let finalizer = if meta.kind().has_finalizer() {
+        let finalizer = if meta.has_finalizer() {
             let tracked p = self.core.perms.borrow().tracked_borrow(h@.addr);
             proof {
                 s0.lemma_shape(h@.addr);

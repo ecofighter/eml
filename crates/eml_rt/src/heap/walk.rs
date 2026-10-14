@@ -164,7 +164,7 @@ impl<M: Mode> Heap<M> {
                 proof {
                     self.core.lemma_shape(h@.addr);
                 }
-                if self.core.meta_get(h).kind().has_finalizer() {
+                if self.core.meta_get(h).has_finalizer() {
                     let tracked p = self.core.perms.borrow().tracked_borrow(h@.addr);
                     let f = finalizer_of(h, Tracked(p));
                     run_finalizer(f, Tracked(p));

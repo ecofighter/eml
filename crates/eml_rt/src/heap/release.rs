@@ -322,6 +322,10 @@ impl<M: Mode> Heap<M> {
 
     /// 最後の参照の `release`。物体を空ける途中にして残すフィールドの辺を呼ぶ側に渡し、残さない子を手放す。`to_token`
     /// なら箱を token にし、そうでなければ空ける。
+    // 付けないと、文字列の操作を同じバイナリで使ったときに `release_reuse` の中へ展開されなくなり、一意な箱を token に
+    // する道が `keep` を数える一般のループになって、`map-reuse` の命令の数が2倍を超えた
+    // (docs/implementation/benchmarks.md の「S9b-1 (文字列)」)
+    #[inline]
     pub(super) fn release_children(
         &mut self,
         h: *mut Header,
@@ -648,7 +652,7 @@ impl<M: Mode> Heap<M> {
         }
         if M::CHECKED {
             self.checked_live(h)?;
-            if self.core.meta_get(h).kind().has_finalizer() {
+            if self.core.meta_get(h).has_finalizer() {
                 return Err(HeapError::FinalizerSkipped);
             }
             if !self.core.rc_last(h) {

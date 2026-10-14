@@ -81,14 +81,6 @@ impl Kind {
         matches!(self, Kind::Data)
     }
 
-    #[inline]
-    pub(crate) fn has_finalizer(self) -> (r: bool)
-        ensures
-            r == (self == Kind::Foreign),
-    {
-        matches!(self, Kind::Foreign)
-    }
-
     /// ペイロードが核の操作から見て不透明か。`raw` と `set_raw` はこの種類を断る。`Foreign` は Rust の値を、`String` は
     /// 途中までしか書いていない語を持つので、語として読み書きすると未初期化の読み込みか不変条件の破れになる
     /// (docs/spec/object-model.md の「種類」)。
@@ -166,6 +158,20 @@ impl Meta {
             use_type_invariant(self);
         }
         Kind::from_bits((self.0 >> Meta::KIND_SHIFT) & Meta::KIND_MASK)
+    }
+
+    /// 種類が破棄処理を持つ (`Foreign` である) か。箱を空けるたびに読むので、`Kind::from_bits` を通さずに種類のビットを
+    /// 比べる。`from_bits` の腕を1つ増やしただけで、解放の多い計測の命令の数が数 % 増えたためである
+    /// (docs/implementation/benchmarks.md の「S9b-1 (文字列)」)。
+    #[inline]
+    pub(crate) fn has_finalizer(self) -> (r: bool)
+        ensures
+            r == (self.kind_spec() == Kind::Foreign),
+    {
+        proof {
+            lemma_consts();
+        }
+        (self.0 >> Meta::KIND_SHIFT) & Meta::KIND_MASK == Kind::Foreign as u32
     }
 
     #[inline]
@@ -813,7 +819,10 @@ mod tests {
             Kind::Free,
         ] {
             assert_eq!(kind.tokenable(), kind == Kind::Data);
-            assert_eq!(kind.has_finalizer(), kind == Kind::Foreign);
+            assert_eq!(
+                Meta::new(0, 0, kind, false).has_finalizer(),
+                kind == Kind::Foreign
+            );
         }
     }
 
