@@ -3387,6 +3387,9 @@ impl<M: Mode> Heap<M> {
         ensures
             final(self).made(*old(self), w),
             final(self).kind_of(w) == Kind::Foreign,
+            final(self).lin_of(w) == lin,
+            final(self).owned(w),
+            final(self).grew(*old(self), w),
             M::CHECKED ==> final(self).words_kept(*old(self)),
     {
         let n = foreign::value_words::<T>();
@@ -3423,6 +3426,13 @@ impl<M: Mode> Heap<M> {
                 self.lemma_published_safe(s1);
             }
             crate::word::lemma_aligned_is_ptr(h@.addr);
+            assert forall|b: usize|
+                #![trigger old(self).core.has(b)]
+                old(self).core.has(b) && old(self).core.settled_state(b)
+                    == BlockState::Live implies self.grown_block(*old(self), b) by {
+                assert(s1.core.has(b));
+                assert(b != h@.addr);
+            }
         }
         w
     }

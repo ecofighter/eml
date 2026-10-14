@@ -1206,7 +1206,7 @@ impl<M: Mode> Ctx<M> {
     }
 
     /// 確保は、前に確かめた文字列 `s` に触れない。
-    proof fn lemma_room_made(&self, h1: Heap<M>, s: Word, w: Word)
+    pub(super) proof fn lemma_room_made(&self, h1: Heap<M>, s: Word, w: Word)
         requires
             h1.wf(),
             h1.core.model@.building is None,

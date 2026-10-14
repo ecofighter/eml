@@ -2,13 +2,14 @@
 
 use std::cmp::Ordering as Order;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use super::ctx::{ctx, ctx_with};
-use super::host::MemoryHost;
+use super::host::{MemoryFile, MemoryHost, host};
 use super::mortal;
 use super::string::text;
 use crate::externs::*;
-use crate::{HeapError, Mode, Stop, Word};
+use crate::{Control, HeapError, Limits, Mode, Stop, Word};
 
 const EDGES: [i64; 13] = [
     0,
@@ -356,9 +357,240 @@ fn println_refuses_a_non_string<M: Mode>() {
     unsafe {
         let d = ctx.heap_mut().alloc_data(0, 0, 1, false);
         assert_eq!(ctx.println(d), Err(Fault::Heap(HeapError::WrongKind)));
+        assert_eq!(
+            ctx.println(Word::imm(0)),
+            Err(Fault::Heap(HeapError::WrongKind))
+        );
         assert_eq!(memory.out(), "");
         ctx.heap_mut().decref(d).unwrap();
     }
+}
+
+/// 開いて、全部読み、組から取り出す。組は `lin` ビットを持ち、File の参照を持つ。
+unsafe fn open_and_read<M: Mode>(
+    ctx: &mut crate::Ctx<M>,
+    path: &str,
+) -> Result<(Word, String), Fault> {
+    unsafe {
+        let p = s(ctx, path);
+        let f = ctx.fs_open(p)?;
+        let t = ctx.fs_read_all(f)?;
+        assert!(ctx.heap().meta(t).unwrap().lin());
+        let file = ctx.heap().field(t, 0).unwrap();
+        let text_word = ctx.heap().field(t, 1).unwrap();
+        let read = text(ctx.heap(), text_word);
+        ctx.heap_mut()
+            .release(t, crate::externs::TUPLE, &[true, true])
+            .unwrap();
+        ctx.heap_mut().decref(text_word).unwrap();
+        Ok((file, read))
+    }
+}
+
+fn a_file_is_read_whole_and_closed<M: Mode>() {
+    let memory = Arc::new(MemoryHost::default());
+    let drops = Arc::new(AtomicUsize::new(0));
+    memory.add(
+        "a.txt",
+        MemoryFile {
+            drops: Some(drops.clone()),
+            ..MemoryFile::text("line 1\nline 2\n")
+        },
+    );
+    let mut ctx = ctx_with::<M>(&memory);
+    unsafe {
+        let (file, read) = open_and_read(&mut ctx, "a.txt").unwrap();
+        assert_eq!(read, "line 1\nline 2\n");
+        // 2回目は終わりから読むので空である
+        let again = ctx.fs_read_all(file).unwrap();
+        let second = ctx.heap().field(again, 1).unwrap();
+        assert_eq!(text(ctx.heap(), second), "");
+        let file = ctx.heap().field(again, 0).unwrap();
+        ctx.heap_mut()
+            .release(again, crate::externs::TUPLE, &[true, true])
+            .unwrap();
+        ctx.heap_mut().decref(second).unwrap();
+        assert_eq!(drops.load(Ordering::Relaxed), 0);
+        ctx.fs_close(file).unwrap();
+        assert_eq!(drops.load(Ordering::Relaxed), 1);
+    }
+    assert_eq!(mortal(ctx.heap()), 0);
+}
+
+fn an_empty_file_reads_as_an_empty_string<M: Mode>() {
+    let memory = Arc::new(MemoryHost::default());
+    memory.add("empty.txt", MemoryFile::text(""));
+    let mut ctx = ctx_with::<M>(&memory);
+    unsafe {
+        let (file, read) = open_and_read(&mut ctx, "empty.txt").unwrap();
+        assert_eq!(read, "");
+        ctx.fs_close(file).unwrap();
+    }
+    assert_eq!(mortal(ctx.heap()), 0);
+}
+
+/// 長さの見込みがなく、短い読みしか返さない読み手でも、64 KiB の区切りをまたいで全部読む。
+fn a_long_unsized_file_is_read_in_chunks<M: Mode>() {
+    let body: String = "abcdefg\n".repeat(20_000);
+    let memory = Arc::new(MemoryHost::default());
+    memory.add(
+        "big.txt",
+        MemoryFile {
+            sized: false,
+            chunk: 1000,
+            ..MemoryFile::text(&body)
+        },
+    );
+    let mut ctx = ctx_with::<M>(&memory);
+    unsafe {
+        let (file, read) = open_and_read(&mut ctx, "big.txt").unwrap();
+        assert_eq!(read, body);
+        ctx.fs_close(file).unwrap();
+    }
+    if M::CHECKED {
+        assert_eq!(ctx.stats().string_bytes_copied, body.len() as u64);
+    }
+    assert_eq!(mortal(ctx.heap()), 0);
+}
+
+/// シグナルで中断された読みは、誤りにせず読み直す。
+fn an_interrupted_read_is_retried<M: Mode>() {
+    let memory = Arc::new(MemoryHost::default());
+    memory.add(
+        "a.txt",
+        MemoryFile {
+            interrupt_once: true,
+            ..MemoryFile::text("abc")
+        },
+    );
+    let mut ctx = ctx_with::<M>(&memory);
+    unsafe {
+        let (file, read) = open_and_read(&mut ctx, "a.txt").unwrap();
+        assert_eq!(read, "abc");
+        ctx.fs_close(file).unwrap();
+    }
+    assert_eq!(mortal(ctx.heap()), 0);
+}
+
+fn a_missing_file_is_a_fault_naming_its_path<M: Mode>() {
+    let memory = Arc::new(MemoryHost::default());
+    let mut ctx = ctx_with::<M>(&memory);
+    unsafe {
+        let p = s(&mut ctx, "missing.txt");
+        assert_eq!(
+            ctx.fs_open(p),
+            Err(Fault::Io {
+                op: IoOp::Open,
+                path: "missing.txt".into(),
+                reason: IoReason::NotFound
+            })
+        );
+    }
+    assert_eq!(mortal(ctx.heap()), 0);
+}
+
+/// 読みの誤りと UTF-8 でない中身は、File を手放して閉じる。作りかけの文字列も残らない。
+fn a_failed_read_closes_the_file<M: Mode>() {
+    let memory = Arc::new(MemoryHost::default());
+    let drops = Arc::new(AtomicUsize::new(0));
+    memory.add(
+        "broken.txt",
+        MemoryFile {
+            fail_after: Some(3),
+            drops: Some(drops.clone()),
+            ..MemoryFile::text("abcdef")
+        },
+    );
+    memory.add(
+        "bad.bin",
+        MemoryFile {
+            bytes: vec![b'a', 0xff, 0xfe],
+            sized: true,
+            drops: Some(drops.clone()),
+            ..MemoryFile::default()
+        },
+    );
+    let mut ctx = ctx_with::<M>(&memory);
+    unsafe {
+        let p = s(&mut ctx, "broken.txt");
+        let f = ctx.fs_open(p).unwrap();
+        assert_eq!(
+            ctx.fs_read_all(f),
+            Err(Fault::Io {
+                op: IoOp::Read,
+                path: "broken.txt".into(),
+                reason: IoReason::Other
+            })
+        );
+        assert_eq!(drops.load(Ordering::Relaxed), 1);
+        let p = s(&mut ctx, "bad.bin");
+        let f = ctx.fs_open(p).unwrap();
+        assert_eq!(
+            ctx.fs_read_all(f),
+            Err(Fault::NotUtf8 {
+                path: "bad.bin".into()
+            })
+        );
+        assert_eq!(drops.load(Ordering::Relaxed), 2);
+    }
+    assert_eq!(mortal(ctx.heap()), 0);
+}
+
+/// 読む間に止める語を見る。割り込まれていれば止め、File を手放す。
+fn a_read_stops_on_an_interrupt<M: Mode>() {
+    let memory = Arc::new(MemoryHost::default());
+    memory.add("a.txt", MemoryFile::text("abc"));
+    let control = Arc::new(Control::new(Limits::default()));
+    let mut ctx = crate::Ctx::<M>::new(control.clone(), host(&memory));
+    unsafe {
+        let p = s(&mut ctx, "a.txt");
+        let f = ctx.fs_open(p).unwrap();
+        control.interrupt();
+        assert_eq!(ctx.fs_read_all(f), Err(Fault::Stopped(Stop::Interrupted)));
+    }
+    assert_eq!(mortal(ctx.heap()), 0);
+}
+
+/// ヒープの外の読みの領域も、確保量の上限に数える。
+fn a_read_past_the_memory_limit_stops<M: Mode>() {
+    let memory = Arc::new(MemoryHost::default());
+    memory.add("big.txt", MemoryFile::text(&"x".repeat(200_000)));
+    let control = Arc::new(Control::new(Limits {
+        max_bytes: 150_000,
+        ..Limits::default()
+    }));
+    let mut ctx = crate::Ctx::<M>::new(control, host(&memory));
+    unsafe {
+        let p = s(&mut ctx, "big.txt");
+        let f = ctx.fs_open(p).unwrap();
+        assert_eq!(ctx.fs_read_all(f), Err(Fault::Stopped(Stop::MemoryLimit)));
+    }
+    assert_eq!(mortal(ctx.heap()), 0);
+}
+
+/// File でない物体と、参照が2つある File は読めない。断ったときはヒープを変えない。
+fn read_all_refuses_a_non_file_or_a_shared_file<M: Mode>() {
+    let memory = Arc::new(MemoryHost::default());
+    memory.add("a.txt", MemoryFile::text("abc"));
+    let mut ctx = ctx_with::<M>(&memory);
+    unsafe {
+        let other = ctx.heap_mut().alloc_foreign(0u64, false);
+        assert_eq!(
+            ctx.fs_read_all(other),
+            Err(Fault::Heap(HeapError::WrongKind))
+        );
+        assert_eq!(ctx.fs_close(other), Err(Fault::Heap(HeapError::WrongKind)));
+        ctx.heap_mut().decref(other).unwrap();
+        if M::CHECKED {
+            let p = s(&mut ctx, "a.txt");
+            let f = ctx.fs_open(p).unwrap();
+            super::raw::set_rc(ctx.heap_mut(), f, 2);
+            assert_eq!(ctx.fs_read_all(f), Err(Fault::Heap(HeapError::NotUnique)));
+            super::raw::set_rc(ctx.heap_mut(), f, 1);
+            ctx.fs_close(f).unwrap();
+        }
+    }
+    assert_eq!(mortal(ctx.heap()), 0);
 }
 
 both_modes!(
@@ -372,4 +604,13 @@ both_modes!(
     println_writes_a_line_and_releases_its_text,
     a_failed_write_still_releases_the_text,
     println_refuses_a_non_string,
+    a_file_is_read_whole_and_closed,
+    an_empty_file_reads_as_an_empty_string,
+    a_long_unsized_file_is_read_in_chunks,
+    an_interrupted_read_is_retried,
+    a_missing_file_is_a_fault_naming_its_path,
+    a_failed_read_closes_the_file,
+    a_read_stops_on_an_interrupt,
+    a_read_past_the_memory_limit_stops,
+    read_all_refuses_a_non_file_or_a_shared_file,
 );

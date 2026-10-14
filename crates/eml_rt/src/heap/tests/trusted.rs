@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use vstd::prelude::Tracked;
 
 use super::ctx as ctx_tests;
-use super::host::{MemoryHost, host};
+use super::host::{MemoryFile, MemoryHost, host};
 use super::string::text;
 use super::{CONS, Probe, cons, list, mortal, probe, raw};
 use crate::cell::{rc_decref_shared, rc_dup_shared};
@@ -295,7 +295,8 @@ fn every_core_operation_once<M: Mode>() {
 /// 実行文脈の基本操作を1回ずつ通す。
 fn every_primitive_once<M: Mode>() {
     const UNIT: Word = Word::imm(0);
-    let mut ctx = ctx_tests::ctx::<M>();
+    let memory = Arc::new(MemoryHost::default());
+    let mut ctx = ctx_tests::ctx_with::<M>(&memory);
     let e0 = ctx_tests::push(&mut ctx, 0, 1);
     let e1 = ctx_tests::push(&mut ctx, 1, 1);
     unsafe {
@@ -337,6 +338,17 @@ fn every_primitive_once<M: Mode>() {
         for e in [e0, e1] {
             ctx.heap_mut().decref(e).unwrap();
         }
+        // extern を1回ずつ
+        let a = ctx.heap_mut().alloc_string("a");
+        let b = ctx.heap_mut().alloc_string("b");
+        assert_eq!(ctx.string_compare(a, b), Ok(crate::externs::LT));
+        let a = ctx.heap_mut().alloc_string("a\n");
+        let shown = ctx.string_show(a).unwrap();
+        let n = ctx.int_show(-12);
+        let joined = ctx.string_append(shown, n).unwrap();
+        ctx.println(joined).unwrap();
+        ctx.flush().unwrap();
+        assert_eq!(memory.out(), "\"a\\n\"-12\n");
     }
     ctx_tests::clear(&mut ctx);
     assert!(ctx.check_finished());
@@ -633,6 +645,54 @@ fn println_goes_through_the_host<M: Mode>() {
     assert_eq!(mortal(ctx.heap()), 0);
 }
 
+/// Host を通る読み。区切りをまたぐ長さ、長さの見込みのない読み手、短い読み、途中の誤り、UTF-8 でない中身、
+/// 止める語、閉じることを通す。
+fn files_go_through_the_host<M: Mode>() {
+    let memory = Arc::new(MemoryHost::default());
+    let body = "0123456789".repeat(7000);
+    memory.add(
+        "big.txt",
+        MemoryFile {
+            sized: false,
+            chunk: 4096,
+            ..MemoryFile::text(&body)
+        },
+    );
+    memory.add(
+        "broken.txt",
+        MemoryFile {
+            fail_after: Some(1),
+            ..MemoryFile::text("ab")
+        },
+    );
+    memory.add(
+        "bad.bin",
+        MemoryFile {
+            bytes: vec![0xc3],
+            sized: true,
+            ..MemoryFile::default()
+        },
+    );
+    let mut ctx = ctx_tests::ctx_with::<M>(&memory);
+    unsafe {
+        let p = ctx.heap_mut().alloc_string("big.txt");
+        let f = ctx.fs_open(p).unwrap();
+        let t = ctx.fs_read_all(f).unwrap();
+        let w = ctx.heap().field(t, 1).unwrap();
+        assert_eq!(text(ctx.heap(), w), body);
+        ctx.heap_mut().decref(t).unwrap();
+        for name in ["broken.txt", "bad.bin"] {
+            let p = ctx.heap_mut().alloc_string(name);
+            let f = ctx.fs_open(p).unwrap();
+            assert!(ctx.fs_read_all(f).is_err());
+        }
+        let p = ctx.heap_mut().alloc_string("big.txt");
+        let f = ctx.fs_open(p).unwrap();
+        ctx.fs_close(f).unwrap();
+    }
+    assert_eq!(mortal(ctx.heap()), 0);
+}
+
 both_modes!(
     pages_are_aligned_and_returned,
     large_objects_get_their_own_page,
@@ -660,4 +720,5 @@ both_modes!(
     own_objects_read_region_words,
     two_threads_share_one_control,
     println_goes_through_the_host,
+    files_go_through_the_host,
 );

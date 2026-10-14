@@ -1276,6 +1276,7 @@ impl Pages {
 
     /// 級の今のページから新しいブロックを切り出す。ページに余りがなければ、ページを替える。
     #[inline]
+    #[verifier::spinoff_prover]
     fn carve(&mut self, class: usize, Ghost(words): Ghost<usize>) -> (r: (
         *mut Header,
         Tracked<BlockPerm>,

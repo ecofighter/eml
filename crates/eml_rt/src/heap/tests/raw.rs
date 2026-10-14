@@ -3,12 +3,18 @@
 
 use std::sync::atomic::{AtomicI32, AtomicU32, Ordering};
 
-use crate::Word;
 use crate::meta::{Meta, meta_ptr, slot_ptr};
+use crate::{Heap, Mode, Word};
 
 /// rc の欄。
 pub(super) unsafe fn rc(w: Word) -> i32 {
     unsafe { AtomicI32::from_ptr(w.as_ptr().cast::<i32>()) }.load(Ordering::Relaxed)
+}
+
+/// rc の欄を書き換える。前提を崩すテストが、参照が2つある `lin` の物体を作るのに使う。ヒープを `&mut` で受けるのは、
+/// 書く間にヒープの操作が並ばないことを型で示すためである。
+pub(super) unsafe fn set_rc<M: Mode>(_heap: &mut Heap<M>, w: Word, rc: i32) {
+    unsafe { AtomicI32::from_ptr(w.as_ptr().cast::<i32>()) }.store(rc, Ordering::Relaxed)
 }
 
 /// ヘッダの `meta`。

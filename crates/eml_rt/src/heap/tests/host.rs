@@ -24,7 +24,6 @@ pub(super) struct MemoryFile {
 }
 
 impl MemoryFile {
-    #[expect(dead_code, reason = "Fs の extern のテストが使う")]
     pub(super) fn text(s: &str) -> MemoryFile {
         MemoryFile {
             bytes: s.as_bytes().to_vec(),
@@ -84,7 +83,6 @@ impl MemoryHost {
             ..MemoryHost::default()
         }
     }
-    #[expect(dead_code, reason = "Fs の extern のテストが使う")]
     pub(super) fn add(&self, path: &str, file: MemoryFile) {
         self.files.lock().unwrap().insert(path.to_string(), file);
     }
@@ -214,15 +212,16 @@ mod std_host {
         assert_eq!(err.text(), "e\n");
     }
 
-    /// 書き込み先が panic してロックが毒されても、次の行は書ける。
+    /// 書き込み先が panic してロックが毒されても、次の行は書ける。panic した行は `BufWriter` に残り、次の行と一緒に
+    /// 書かれる。
     #[test]
     fn a_poisoned_lock_is_recovered() {
         let (host, out, _) = std_host(Buffering::Line);
         *out.1.lock().unwrap() = true;
-        let panicked = catch_unwind(AssertUnwindSafe(|| host.write_line(Stream::Out, "lost")));
+        let panicked = catch_unwind(AssertUnwindSafe(|| host.write_line(Stream::Out, "a")));
         assert!(panicked.is_err());
         host.write_line(Stream::Out, "b").unwrap();
-        assert!(out.text().ends_with("b\n"));
+        assert_eq!(out.text(), "a\nb\n");
     }
 
     fn fixture(name: &str) -> PathBuf {

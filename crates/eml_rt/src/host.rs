@@ -4,13 +4,16 @@
 //! Verus は `dyn Host` も `io::Error` も扱えないので、Host の trait と実装は `verus!` の外に置く。`Ctx` は Host を不透明な
 //! `HostRef` で持ち、何も約束しない関数を通して呼ぶ (信頼の一覧の T11)。
 
-use std::fs::File;
-use std::io::{self, BufRead, BufReader, BufWriter, IsTerminal, Write};
+use std::fs;
+use std::io::{self, BufRead, BufReader, BufWriter, IsTerminal, Read, Write};
 use std::mem::ManuallyDrop;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, PoisonError};
 
 use vstd::prelude::*;
+
+use crate::control::{Control, Stop};
+use crate::externs::IoReason;
 
 verus! {
 
@@ -45,6 +48,82 @@ pub(crate) fn host_write_line(host: &HostRef, stream: Stream, line: &str) -> Res
 #[verifier::external_body]
 pub(crate) fn host_flush(host: &HostRef) -> Result<(), Box<str>> {
     host.host.flush().map_err(|e| e.to_string().into_boxed_str())
+}
+
+/// `Fs.open` で開いたファイル。`Foreign` の物体の中身にする。閉じる処理は drop glue だけで、どのスレッドで落として
+/// もよい (docs/future/multicore.md)。
+#[verifier::external_body]
+pub(crate) struct File {
+    /// `open` に渡されたままのパス。誤りの文言に使う。
+    path: Box<str>,
+    reader: Box<dyn BufRead + Send>,
+    /// まだ使っていない長さの見込み。1回目の `read_all` が取り出すので、2回目は余分に確保しない。
+    size: Option<u64>,
+}
+
+/// 読みの誤り。`Box<str>` は File のパスである。
+pub(crate) enum ReadError {
+    Io(Box<str>, IoReason),
+    NotUtf8(Box<str>),
+    Stopped(Stop),
+}
+
+/// 1回に読むバイト数。読む間に止める語と確保量を見る間隔になる。
+const READ_CHUNK: u64 = 64 * 1024;
+
+/// Host に `path` を開かせる。誤りなら、写したパスと理由を返す。
+#[verifier::external_body]
+pub(crate) fn host_open(host: &HostRef, path: &str) -> Result<File, (Box<str>, IoReason)> {
+    // パスは1回だけ写し、開けても開けなくても、それを持たせる
+    let path: Box<str> = path.into();
+    match host.host.open(&path) {
+        Ok(Opened { reader, size }) => Ok(File { path, reader, size }),
+        Err(e) => Err((path, io_reason(&e))),
+    }
+}
+
+/// `file` を終わりまで読み、UTF-8 の文字列にする。
+///
+/// # Safety
+/// `file` は生きている `File` を指し、読む間ほかに参照がない。呼ぶ側が `Heap::foreign_unique` で確かめる (T3)。
+#[verifier::external_body]
+pub(crate) unsafe fn read_text(file: *mut File, control: &Control) -> Result<String, ReadError> {
+    let file = unsafe { &mut *file };
+    let mut bytes = Vec::new();
+    if let Some(size) = file.size.take() {
+        // 確保に失敗したら I/O の誤りにする (`read_to_end` と同じ)
+        let reserved = usize::try_from(size).ok().is_some_and(|n| bytes.try_reserve(n).is_ok());
+        if !reserved {
+            return Err(ReadError::Io(file.path.clone(), IoReason::Other));
+        }
+    }
+    loop {
+        let bits = control.stop_bits();
+        if bits != 0 {
+            return Err(
+                ReadError::Stopped(
+                    if bits & Control::INTERRUPT != 0 {
+                        Stop::Interrupted
+                    } else {
+                        Stop::MemoryLimit
+                    },
+                ),
+            );
+        }
+        // `Vec` はヒープの外にあるので、ページの確保量に足して上限と比べる
+
+        if control.bytes().saturating_add(bytes.capacity()) > control.limits().max_bytes {
+            return Err(ReadError::Stopped(Stop::MemoryLimit));
+        }
+        // `read_to_end` が、`Interrupted` の読み直しと短い読みを受け持つ
+
+        match (&mut file.reader).take(READ_CHUNK).read_to_end(&mut bytes) {
+            Ok(0) => break,
+            Ok(_) => {},
+            Err(e) => return Err(ReadError::Io(file.path.clone(), io_reason(&e))),
+        }
+    }
+    String::from_utf8(bytes).map_err(|_| ReadError::NotUtf8(file.path.clone()))
 }
 
 } // verus!
@@ -175,7 +254,7 @@ impl Host for StdHost {
 
     fn open(&self, path: &str) -> io::Result<Opened> {
         // `path` が絶対パスなら、`join` の結果はそのパスになる
-        let file = File::open(self.file_root.join(path))?;
+        let file = fs::File::open(self.file_root.join(path))?;
         // ディレクトリも開けるが、長さの見込みはふつうのファイルにだけ使う
         let size = file
             .metadata()
@@ -186,5 +265,14 @@ impl Host for StdHost {
             reader: Box::new(BufReader::new(file)),
             size,
         })
+    }
+}
+
+/// I/O の誤りの理由。`Interrupted` は `read_to_end` が読み直すので、ここに届かない。
+fn io_reason(e: &io::Error) -> IoReason {
+    match e.kind() {
+        io::ErrorKind::NotFound => IoReason::NotFound,
+        io::ErrorKind::PermissionDenied => IoReason::PermissionDenied,
+        _ => IoReason::Other,
     }
 }
