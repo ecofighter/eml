@@ -9,6 +9,7 @@ const FILES: &[(&str, &str)] = &[
     ("cell.rs", include_str!("cell.rs")),
     ("control.rs", include_str!("control.rs")),
     ("error.rs", include_str!("error.rs")),
+    ("externs.rs", include_str!("externs.rs")),
     ("foreign.rs", include_str!("foreign.rs")),
     ("frozen.rs", include_str!("frozen.rs")),
     ("meta.rs", include_str!("meta.rs")),

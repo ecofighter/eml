@@ -12,6 +12,7 @@ mod alloc;
 mod cell;
 mod control;
 mod error;
+pub mod externs;
 mod foreign;
 mod frozen;
 mod heap;
@@ -25,6 +26,7 @@ mod word;
 
 pub use control::{Control, Limits, Stop};
 pub use error::HeapError;
+pub use externs::{ArithFault, Fault, IoOp, IoReason};
 pub use frozen::Frozen;
 pub use heap::{Ctx, CtxStats, Heap, Stats, Token};
 pub use meta::{Kind, Meta};

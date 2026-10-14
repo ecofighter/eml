@@ -1,6 +1,7 @@
 //! 実行の制御。セッションに1つあり、CLI と、どの worker のヒープも `Arc` で同じものを見る。実行を止める理由の語と、
 //! セッションのヒープが OS から取ったページのバイト数と、上限を持つ (docs/spec/object-model.md の「実行の制御」)。
 
+use std::fmt;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 
@@ -58,6 +59,16 @@ impl Control {
 }
 
 } // verus!
+// S10 の VM も、安全点で止めたときにこの文言を出す
+impl fmt::Display for Stop {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Stop::Interrupted => "interrupted",
+            Stop::DepthLimit => "the call depth limit is exceeded",
+            Stop::MemoryLimit => "the memory limit is exceeded",
+        })
+    }
+}
 
 // 止める語が伝えるのは「止めよ」のビットだけで、確保量の数が伝えるのもその値だけである。どちらにも、ほかのメモリへの
 // 書き込みを公開する役はない。そのため、どの読み書きも Relaxed で足りる
