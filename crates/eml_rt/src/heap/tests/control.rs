@@ -82,9 +82,10 @@ fn frozen_chunks_stay_counted_until_dropped<M: Mode>() {
     let control = Arc::new(Control::new(Limits::default()));
     let mut b = Heap::<M>::with_control(control.clone());
     let _ = b.alloc_string_immortal("constant");
+    let pages = b.bytes_in_use_pages();
     let region = b.freeze().unwrap();
-    // 作り手のヒープは消えたが、塊のページは塊が生きている間は数に入る
-    assert!(control.bytes() > 0);
+    // 作り手のヒープは消えたが、塊が引き継いだページは塊が生きている間は数に入る
+    assert_eq!(control.bytes(), pages);
     drop(region);
     assert_eq!(control.bytes(), 0);
 }

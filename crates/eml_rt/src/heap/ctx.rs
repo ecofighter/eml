@@ -1797,13 +1797,13 @@ impl<M: Mode> Ctx<M> {
             if cur.bits() != 1 {
                 return Err(HeapError::BadEvidence);
             }
-            // `ev_clause` が節を dup するので、`lin` の節は後で `LinDup` になる。入れる時点で断り、誤りを起こした呼び出しで報告する
-
             if c.is_ptr() {
                 let cm = (unsafe { self.heap.meta(c) })?;
                 proof {
                     cm.lemma_fields();
                 }
+                // `ev_clause` が節を dup するので、`lin` の節は後で `LinDup` になる。入れる時点で断り、
+                // 誤りを起こした呼び出しで報告する
                 if cm.lin() {
                     return Err(HeapError::BadEvidence);
                 }
