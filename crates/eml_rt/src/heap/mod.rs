@@ -952,6 +952,7 @@ impl<M: Mode> Heap<M> {
             forall|i: int|
                 0 <= i < scanned ==> (#[trigger] final(self).scanned_word(w, i)).bits_spec() == 1,
             M::CHECKED ==> final(self).words_kept(*old(self)),
+            final(self).grew(*old(self), w),
     {
         let extended = scanned >= Meta::EXTENDED_SCAN as usize;
         let scan = if extended {
@@ -1055,8 +1056,40 @@ impl<M: Mode> Heap<M> {
                 self.lemma_published_safe(s1);
             }
             crate::word::lemma_aligned_is_ptr(h@.addr);
+            assert forall|b: usize|
+                #![trigger old(self).core.has(b)]
+                old(self).core.has(b) && old(self).core.settled_state(b)
+                    == BlockState::Live implies self.grown_block(*old(self), b) by {
+                assert(s1.core.has(b));
+                assert(b != h@.addr);
+            }
         }
         w
+    }
+
+    /// 確保の後の、`old` で生きていたブロック `b`。同じブロックと権限と持ち主のまま生きている。
+    closed spec fn grown_block(&self, old: Heap<M>, b: usize) -> bool {
+        &&& self.core.has(b)
+        &&& self.core.settled_state(b) == BlockState::Live
+        &&& self.core.block(b) == old.core.block(b)
+        &&& self.core.perm(b) == old.core.perm(b)
+        &&& self.core.model@.owner[b] == old.core.model@.owner[b]
+    }
+
+    /// 確保は生きている物体に触れない。`w` は `old` のブロックでなく、`old` で生きていたブロックは、同じブロックと権限と
+    /// 持ち主のまま生きている。モデルが合わない検査モードのヒープでも成り立つので、確保の後に前に確かめた物体を
+    /// 読めることを、これで言う。
+    pub closed spec fn grew(&self, old: Heap<M>, w: Word) -> bool {
+        &&& !old.core.has(w.bits_spec())
+        &&& self.worker == old.worker
+        &&& self.dummy == old.dummy
+        &&& self.region == old.region
+        &&& forall|b: usize|
+            #![trigger old.core.has(b)]
+            old.core.has(b) && old.core.settled_state(b) == BlockState::Live ==> self.grown_block(
+                old,
+                b,
+            )
     }
 
     /// `alloc_data` が書いたブロックは、生きている物体として正しい。
@@ -2922,15 +2955,33 @@ impl<M: Mode> Heap<M> {
         ensures
             r matches Ok(m) ==> m.bits_spec() == self.meta_of(w),
             self.consistent() && self.settleable() && self.readable(w) ==> r is Ok,
+            M::CHECKED ==> (r is Ok <==> self.readable(w)),
     {
         let h = self.header_of(w);
         proof {
             if self.consistent() && self.settleable() && self.readable(w) {
                 self.core.lemma_readable(w);
             }
+            if M::CHECKED {
+                self.lemma_checked_readable(w);
+            }
         }
         self.checked_live(h)?;
         Ok(self.core.meta_get(h))
+    }
+
+    /// 検査モードでは、生存の検査が通ることと、読めることは同じである。構築中の物体は、モデルの構築中の物体だけである。
+    proof fn lemma_checked_readable(&self, w: Word)
+        requires
+            M::CHECKED,
+            self.wf(),
+            w.is_ptr_spec(),
+            self.word_in(w),
+        ensures
+            self.readable(w) <==> (self.core.state(w.bits_spec()) == BlockState::Live
+                || self.core.state(w.bits_spec()) == BlockState::Building),
+    {
+        reveal(Core::building_wf);
     }
 
     /// 検査モードで、`set_field` と `set_raw` が書く物体を確かめる。rc が正なら持ち主が今の worker でなければ
@@ -3046,11 +3097,15 @@ impl<M: Mode> Heap<M> {
             ) ==> r is Ok,
             r matches Ok(v) ==> (self.consistent() && self.settleable() && self.readable(w)
                 ==> self.readable(v)),
+            M::CHECKED && self.readable(w) && self.scanned_at(w, i as int) ==> r is Ok,
     {
         let h = self.header_of(w);
         proof {
             if self.consistent() && self.settleable() && self.readable(w) {
                 self.core.lemma_readable(w);
+            }
+            if M::CHECKED {
+                self.lemma_checked_readable(w);
             }
         }
         self.checked_live(h)?;

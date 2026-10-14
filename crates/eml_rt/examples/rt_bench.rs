@@ -2,18 +2,24 @@
 //! 測る。reuse analysis はまだないので、reuse の列は手で組む。reuse の効果の見込みを、パスを作る前に数字で持つためである。
 
 use std::hint::black_box;
+use std::sync::Arc;
 
-use eml_rt::{Fast, Heap, Kind, Meta, Word};
+use eml_rt::{Control, Ctx, Fast, Heap, Kind, Limits, Meta, Word};
 
 const CONS: Meta = Meta::new(1, 2, Kind::Data, false);
 const CELLS: usize = 1_000_000;
 const ROUNDS: usize = 10;
 const APPENDS: usize = 10_000_000;
+const PRIMITIVES: usize = 10_000_000;
+const HANDLERS: usize = 1_000_000;
+const POLLS: usize = 100_000_000;
+const UNIT: Word = Word::imm(0);
 
 fn main() {
-    let case = std::env::args()
-        .nth(1)
-        .expect("a case: empty, list, box-list, dup, free, map, map-reuse, append");
+    let case = std::env::args().nth(1).expect(
+        "a case: empty, list, box-list, dup, free, map, map-reuse, append, perform, \
+             perform-deep, handle, yield, mask, poll",
+    );
     match case.as_str() {
         "empty" => {}
         "list" => list(),
@@ -23,6 +29,12 @@ fn main() {
         "map" => map(false),
         "map-reuse" => map(true),
         "append" => append(),
+        "perform" => perform(&[0], 0),
+        "perform-deep" => perform(&[1, 2, 3, 4, 5, 6, 7, 8], 1),
+        "handle" => handle(),
+        "yield" => yield_once(),
+        "mask" => mask(),
+        "poll" => poll(),
         _ => panic!("an unknown case {case}"),
     }
 }
@@ -151,4 +163,107 @@ fn append() {
     }
     // SAFETY: 同上。
     unsafe { heap.decref(s) }.unwrap();
+}
+
+fn ctx() -> Ctx<Fast> {
+    Ctx::new(Arc::new(Control::new(Limits::default())))
+}
+
+/// `evv` の先頭に、エフェクト `effect` の操作1つの evidence を足す。入口は関数の値 (即値) である。
+fn push(ctx: &mut Ctx<Fast>, effect: u16) {
+    // SAFETY: evv_get と ev_new が返した参照をそのまま次の操作に渡し、ほかの語には触れない。
+    unsafe {
+        let outer = ctx.evv_get().unwrap();
+        let ev = ctx.ev_new(effect, 1, UNIT, outer).unwrap();
+        ctx.ev_set_clause(ev, 0, Word::imm(1)).unwrap();
+        let list = ctx.evv_get().unwrap();
+        let list = ctx.evv_push(list, ev).unwrap();
+        ctx.evv_set(list).unwrap();
+    }
+}
+
+/// `effects` の evidence を順に足した `evv` で、エフェクト `target` に `perform` してその場で戻る。
+fn perform(effects: &[u16], target: u16) {
+    let mut ctx = ctx();
+    for &e in effects {
+        push(&mut ctx, e);
+    }
+    for _ in 0..PRIMITIVES {
+        // SAFETY: target の evidence は evv にある。ev_lookup と ev_clause が返した参照を1つずつ手放す。
+        unsafe {
+            let ev = ctx.ev_lookup(black_box(target)).unwrap();
+            let clause = ctx.ev_clause(ev, 0).unwrap();
+            ctx.heap_mut().decref(black_box(clause)).unwrap();
+            ctx.heap_mut().decref(ev).unwrap();
+        }
+    }
+    // SAFETY: evv の参照は Ctx が持つ。
+    unsafe { ctx.evv_set(UNIT) }.unwrap();
+}
+
+/// handler を設けて外す。
+fn handle() {
+    let mut ctx = ctx();
+    for _ in 0..HANDLERS {
+        // SAFETY: ev は ev_new が返した参照と、dup した参照の2つを持つ。1つは evv_push が節点に移し、もう1つは
+        // 最後に手放す。evv_get と ev_evv が返したリストの参照は、evv_push と evv_set に渡す。
+        unsafe {
+            let outer = ctx.evv_get().unwrap();
+            let ev = ctx.ev_new(0, 1, UNIT, outer).unwrap();
+            ctx.ev_set_clause(ev, 0, Word::imm(1)).unwrap();
+            ctx.heap_mut().dup(ev).unwrap();
+            let list = ctx.evv_get().unwrap();
+            let list = ctx.evv_push(list, ev).unwrap();
+            ctx.evv_set(list).unwrap();
+            let outer = ctx.ev_evv(black_box(ev)).unwrap();
+            ctx.evv_set(outer).unwrap();
+            ctx.heap_mut().decref(ev).unwrap();
+        }
+    }
+}
+
+/// yield して継続を1回組み立て直し、再開する1往復。
+fn yield_once() {
+    let mut ctx = ctx();
+    // SAFETY: ev は ev_new が返した参照を持つ。yield_to に渡す参照は dup で作り、yield_finish が手放す。
+    unsafe {
+        let ev = ctx.ev_new(0, 1, UNIT, UNIT).unwrap();
+        for _ in 0..PRIMITIVES {
+            ctx.heap_mut().dup(ev).unwrap();
+            ctx.yield_to(black_box(ev), Word::imm(2), Word::imm(1))
+                .unwrap();
+            let k = ctx.yield_cont_take().unwrap();
+            ctx.yield_cont_set(black_box(k)).unwrap();
+            let k = ctx.yield_cont_take().unwrap();
+            black_box(k);
+            black_box(ctx.yield_finish().unwrap());
+        }
+        ctx.heap_mut().decref(ev).unwrap();
+    }
+}
+
+/// 4つの evidence の `evv` で、2つ目の evidence を飛ばす。
+fn mask() {
+    let mut ctx = ctx();
+    for e in 0..4 {
+        push(&mut ctx, e);
+    }
+    // SAFETY: list は evv_get が返した参照で、evv_mask は借りるだけである。evv_mask の結果は1回ずつ手放す。
+    unsafe {
+        let list = ctx.evv_get().unwrap();
+        for _ in 0..PRIMITIVES {
+            let masked = ctx.evv_mask(black_box(&[2]), list).unwrap();
+            ctx.heap_mut().decref(black_box(masked)).unwrap();
+        }
+        ctx.heap_mut().decref(list).unwrap();
+        ctx.evv_set(UNIT).unwrap();
+    }
+}
+
+/// 安全点の確かめ。
+fn poll() {
+    let ctx = ctx();
+    for depth in 0..POLLS {
+        ctx.poll(black_box(depth)).unwrap();
+    }
 }

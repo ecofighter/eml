@@ -2105,4 +2105,1078 @@ impl<M: Mode> Ctx<M> {
     }
 }
 
+// `evv_mask` の部品。写しの途中のヒープの変化を `kept_for` でつなぎ、たどる節点が読めるままであることを言う
+pub(super) proof fn lemma_kept_refl<M: Mode>(h: Heap<M>)
+    ensures
+        kept_for(h, h, Set::empty()),
+{
+}
+
+pub(super) proof fn lemma_kept_trans<M: Mode>(
+    h2: Heap<M>,
+    h1: Heap<M>,
+    h0: Heap<M>,
+    x1: Set<usize>,
+    x2: Set<usize>,
+    x: Set<usize>,
+)
+    requires
+        kept_for(h1, h0, x1),
+        kept_for(h2, h1, x2),
+        forall|b: usize|
+            (x1.contains(b) || x2.contains(b)) && live(h0, b) ==> #[trigger] x.contains(b),
+    ensures
+        kept_for(h2, h0, x),
+{
+    assert forall|b: usize| #![trigger live(h0, b)] live(h0, b) implies {
+        &&& live(h2, b)
+        &&& h2.core.block(b) == h0.core.block(b)
+        &&& same_head(h2, h0, b)
+        &&& !x.contains(b) ==> h2.core.perm(b).slots == h0.core.perm(b).slots
+    } by {
+        assert(live(h1, b));
+    }
+}
+
+/// `dup` の変化。rc と前置きの数のほかは変えず、物体を空けない。
+pub(super) proof fn lemma_kept_dup<M: Mode>(h1: Heap<M>, h0: Heap<M>)
+    requires
+        h1.values_moved(h0),
+        h1.settled(),
+        h1.kept_live(h0),
+        M::CHECKED ==> forall|v: Word| #[trigger] h0.dup_passes(v) ==> h1.dup_passes(v),
+    ensures
+        kept_for(h1, h0, Set::empty()),
+{
+    let v0 = h0.core.settled_view();
+    assert forall|b: usize| #![trigger live(h0, b)] live(h0, b) implies {
+        &&& live(h1, b)
+        &&& h1.core.block(b) == h0.core.block(b)
+        &&& same_head(h1, h0, b)
+        &&& h1.core.perm(b).slots == h0.core.perm(b).slots
+    } by {
+        assert(v0.dom() == h0.core.dom());
+        assert(h1.core.has(b));
+        assert(h1.core.settled_state(b) == BlockState::Live);
+    }
+}
+
+/// 確保の変化。前の物体には触れない。
+pub(super) proof fn lemma_kept_alloc<M: Mode>(h1: Heap<M>, h0: Heap<M>, c: Word)
+    requires
+        h1.grew(h0, c),
+        h1.made(h0, c),
+    ensures
+        kept_for(h1, h0, Set::empty()),
+        !live(h0, c.bits_spec()),
+        live(h1, c.bits_spec()),
+{
+    assert forall|b: usize| #![trigger live(h0, b)] live(h0, b) implies {
+        &&& live(h1, b)
+        &&& h1.core.block(b) == h0.core.block(b)
+        &&& same_head(h1, h0, b)
+        &&& h1.core.perm(b).slots == h0.core.perm(b).slots
+    } by {
+        assert(h1.grown_block(h0, b));
+    }
+    if M::CHECKED {
+        assert forall|v: Word| #[trigger] h0.dup_passes(v) implies h1.dup_passes(v) by {
+            if v.is_ptr_spec() {
+                assert(live(h0, v.bits_spec()));
+                assert(h1.grown_block(h0, v.bits_spec()));
+            }
+        }
+    }
+}
+
+/// `set_field` の変化。書いた物体の語のほかは変えない。
+pub(super) proof fn lemma_kept_set<M: Mode>(h1: Heap<M>, h0: Heap<M>, w: Word, i: int, v: Word)
+    requires
+        h1.field_set(h0, w, i, v),
+    ensures
+        kept_for(h1, h0, Set::empty().insert(w.bits_spec())),
+        h1.settled() == h0.settled(),
+        forall|j: int| j != i ==> #[trigger] h1.word_at(w, j) == h0.word_at(w, j),
+        h1.word_at(w, i) == v,
+        h1.core.perm(w.bits_spec()).meta == h0.core.perm(w.bits_spec()).meta,
+{
+    let hw = w.bits_spec();
+    assert forall|b: usize| #[trigger]
+        h1.core.perm(b).meta == h0.core.perm(b).meta && h1.core.perm(b).rc == h0.core.perm(b).rc
+            && h1.core.perm(b).prefix == h0.core.perm(b).prefix by {
+        if b != hw {
+            if h0.core.in_region(b) {
+            } else {
+                assert(h1.core.perms@[b] == h0.core.perms@[b]);
+            }
+        }
+    }
+    assert forall|b: usize| #![trigger live(h0, b)] live(h0, b) implies {
+        &&& live(h1, b)
+        &&& h1.core.block(b) == h0.core.block(b)
+        &&& same_head(h1, h0, b)
+        &&& !Set::empty().insert(hw).contains(b) ==> h1.core.perm(b).slots == h0.core.perm(b).slots
+    } by {
+        assert(h1.core.perm(b).meta == h0.core.perm(b).meta);
+        assert(h1.core.perm(b).rc == h0.core.perm(b).rc);
+        if b != hw && !h0.core.in_region(b) {
+            assert(h1.core.perms@[b] == h0.core.perms@[b]);
+        }
+    }
+    if M::CHECKED {
+        assert forall|u: Word| #[trigger] h0.dup_passes(u) implies h1.dup_passes(u) by {
+            if u.is_ptr_spec() {
+                assert(h1.core.perm(u.bits_spec()).meta == h0.core.perm(u.bits_spec()).meta);
+                assert(h1.core.perm(u.bits_spec()).prefix == h0.core.perm(u.bits_spec()).prefix);
+            }
+        }
+    }
+}
+
+/// 検査モードで、変化の後も `set_field` の確かめが通る。`dup` の確かめが通る物体は、持ち主が変わらない。
+pub(super) proof fn lemma_set_passes_moved<M: Mode>(
+    h1: Heap<M>,
+    h0: Heap<M>,
+    x: Set<usize>,
+    u: Word,
+    j: int,
+)
+    requires
+        M::CHECKED,
+        kept_for(h1, h0, x),
+        h0.set_passes(u, j),
+        h0.dup_passes(u),
+        !x.contains(u.bits_spec()),
+        h1.settled(),
+    ensures
+        h1.set_passes(u, j),
+        h1.dup_passes(u),
+{
+    assert(live(h0, u.bits_spec()));
+}
+
+/// 確保したばかりの物体は、`lin` ビットがなければ `dup` の確かめも通る。
+pub(super) proof fn lemma_fresh_dup_passes<M: Mode>(h: Heap<M>, c: Word)
+    requires
+        h.set_passes(c, 0),
+        !h.lin_of(c),
+    ensures
+        h.dup_passes(c),
+{
+}
+
+/// 物体を空けない変化の後も、読める節点は同じ形と語を持つ。
+pub(super) proof fn lemma_node_kept<M: Mode>(h1: Heap<M>, h0: Heap<M>, x: Set<usize>, n: Word)
+    requires
+        kept_for(h1, h0, x),
+        n.is_ptr_spec(),
+        h0.readable(n),
+    ensures
+        h1.readable(n),
+        h1.meta_of(n) == h0.meta_of(n),
+        h1.tag_of(n) == h0.tag_of(n),
+        h1.scan_of(n) == h0.scan_of(n),
+        h1.kind_of(n) == h0.kind_of(n),
+        h1.lin_of(n) == h0.lin_of(n),
+        !x.contains(n.bits_spec()) ==> h1.count_of(n) == h0.count_of(n),
+        h0.owned(n) ==> h1.owned(n),
+        (h1.rc_value(n) > 0) == (h0.rc_value(n) > 0),
+        (h1.rc_value(n) < 0) == (h0.rc_value(n) < 0),
+        !x.contains(n.bits_spec()) ==> forall|i: int| #[trigger]
+            h1.scanned_word(n, i) == h0.scanned_word(n, i),
+        !x.contains(n.bits_spec()) ==> forall|i: int| #[trigger]
+            h1.word_at(n, i) == h0.word_at(n, i),
+{
+    let b = n.bits_spec();
+    assert(live(h0, b));
+    assert(live(h1, b));
+    assert(same_head(h1, h0, b));
+}
+
+/// 物体を空けない変化の後も、`w` からたどる節点は同じで、読める。
+pub(super) proof fn lemma_walk_kept<M: Mode>(h1: Heap<M>, h0: Heap<M>, w: Word, k: nat)
+    requires
+        kept_for(h1, h0, Set::empty()),
+        walkable(h0, w, k),
+    ensures
+        walkable(h1, w, k),
+        agree(h1, h0, w, k),
+    decreases k,
+{
+    if k > 0 {
+        let k1 = (k - 1) as nat;
+        assert(walkable(h0, w, k1));
+        lemma_walk_kept(h1, h0, w, k1);
+        let n = nth(h0, w, k1);
+        assert(walk_node(h0, n));
+        lemma_node_kept(h1, h0, Set::empty(), n);
+        assert(nth(h1, w, k1) == n);
+        assert(nth(h1, w, k) == h1.scanned_word(n, 1));
+        assert(nth(h0, w, k) == h0.scanned_word(n, 1));
+        assert forall|j: nat| j < k implies walk_node(h1, #[trigger] nth(h1, w, j)) by {
+            if j < k1 {
+            } else {
+                assert(j == k1);
+            }
+        }
+        assert forall|j: nat| j <= k implies {
+            &&& #[trigger] nth(h1, w, j) == nth(h0, w, j)
+            &&& j < k ==> h1.tag_of(nth(h1, w, j)) == h0.tag_of(nth(h0, w, j))
+            &&& j < k ==> h1.scanned_word(nth(h1, w, j), 0) == h0.scanned_word(nth(h0, w, j), 0)
+        } by {
+            if j <= k1 {
+            }
+        }
+    } else {
+        assert(nth(h1, w, 0) == w);
+        assert(nth(h0, w, 0) == w);
+    }
+}
+
+/// 写しの列は、写しを書かない変化の後も同じ形である。
+pub(super) proof fn lemma_copies_kept<M: Mode>(
+    h1: Heap<M>,
+    h0: Heap<M>,
+    x: Set<usize>,
+    cs: Seq<Word>,
+    out: Seq<(u16, Word)>,
+)
+    requires
+        kept_for(h1, h0, x),
+        copies_ok(h0, cs, out),
+        forall|k: int| 0 <= k < cs.len() ==> !x.contains(#[trigger] cs[k].bits_spec()),
+    ensures
+        copies_ok(h1, cs, out),
+{
+    assert forall|k: int| 0 <= k < cs.len() implies {
+        &&& node_ok(h1, #[trigger] cs[k])
+        &&& h1.rc_value(cs[k]) > 0
+        &&& h1.tag_of(cs[k]) == out[k].0
+        &&& h1.scanned_word(cs[k], 0) == out[k].1
+        &&& k + 1 < cs.len() ==> h1.scanned_word(cs[k], 1) == cs[k + 1]
+    } by {
+        assert(!x.contains(cs[k].bits_spec()));
+        lemma_node_kept(h1, h0, x, cs[k]);
+    }
+}
+
+/// 着いたリストの1歩。列が空なのは `()` のときだけで、空でなければ先頭の節点の組と、次の節点からの列に分かれる。
+pub(super) proof fn lemma_path_step<M: Mode>(h: Heap<M>, n: Word, g: nat, r: Seq<(u16, Word)>)
+    requires
+        path(h, n, g) == Some(r),
+    ensures
+        (r.len() == 0) == (n.bits_spec() == 1),
+        r.len() > 0 ==> {
+            &&& g > 0
+            &&& node_ok(h, n)
+            &&& ev_ok(h, h.scanned_word(n, 0))
+            &&& h.tag_of(h.scanned_word(n, 0)) == h.tag_of(n)
+            &&& r[0] == (h.tag_of(n), h.scanned_word(n, 0))
+            &&& path(h, h.scanned_word(n, 1), (g - 1) as nat) == Some(r.drop_first())
+        },
+{
+    if n.bits_spec() != 1 {
+        let next = path(h, h.scanned_word(n, 1), (g - 1) as nat);
+        let x = (h.tag_of(n), h.scanned_word(n, 0));
+        assert(r =~= seq![x] + next->0);
+        assert((seq![x] + next->0).drop_first() =~= next->0);
+    }
+}
+
+/// 着いたリストの `j` 個目の節点。そこからの列は元の列の後ろで、節点の組は元の列の `j` 個目の組である。
+pub(super) proof fn lemma_path_nth<M: Mode>(
+    h: Heap<M>,
+    w: Word,
+    f: nat,
+    s: Seq<(u16, Word)>,
+    j: nat,
+)
+    requires
+        path(h, w, f) == Some(s),
+        j <= s.len(),
+    ensures
+        j <= f,
+        path(h, nth(h, w, j), (f - j) as nat) == Some(s.subrange(j as int, s.len() as int)),
+        j < s.len() ==> {
+            &&& node_ok(h, nth(h, w, j))
+            &&& walk_node(h, nth(h, w, j))
+            &&& ev_ok(h, s[j as int].1)
+            &&& s[j as int] == (h.tag_of(nth(h, w, j)), h.scanned_word(nth(h, w, j), 0))
+            &&& h.tag_of(s[j as int].1) == s[j as int].0
+        },
+        j == s.len() ==> nth(h, w, j).bits_spec() == 1,
+    decreases j,
+{
+    if j == 0 {
+        assert(s.subrange(0, s.len() as int) =~= s);
+    } else {
+        let j1 = (j - 1) as nat;
+        lemma_path_nth(h, w, f, s, j1);
+        let n = nth(h, w, j1);
+        let r = s.subrange(j1 as int, s.len() as int);
+        lemma_path_step(h, n, (f - j1) as nat, r);
+        assert(r.drop_first() =~= s.subrange(j as int, s.len() as int));
+    }
+    let r = s.subrange(j as int, s.len() as int);
+    lemma_path_step(h, nth(h, w, j), (f - j) as nat, r);
+    if j < s.len() {
+        assert(r[0] == s[j as int]);
+        lemma_unextended(h, nth(h, w, j));
+    }
+}
+
+/// 着いたリストの節点は、どれも読める。
+pub(super) proof fn lemma_path_walkable<M: Mode>(h: Heap<M>, w: Word, f: nat, s: Seq<(u16, Word)>)
+    requires
+        path(h, w, f) == Some(s),
+    ensures
+        walkable(h, w, s.len()),
+        forall|j: int| 0 <= j < s.len() ==> #[trigger] s[j].0 == h.tag_of(nth(h, w, j as nat)),
+{
+    assert forall|j: nat| j < s.len() implies walk_node(h, #[trigger] nth(h, w, j)) by {
+        lemma_path_nth(h, w, f, s, j);
+    }
+    assert forall|j: int| 0 <= j < s.len() implies #[trigger] s[j].0 == h.tag_of(
+        nth(h, w, j as nat),
+    ) by {
+        lemma_path_nth(h, w, f, s, j as nat);
+    }
+}
+
+/// 組の列の tag が節点の tag と同じなら、数える数も同じである。
+pub(super) proof fn lemma_seen_eq<M: Mode>(s: Seq<(u16, Word)>, h: Heap<M>, w: Word, i: nat, t: u16)
+    requires
+        i <= s.len(),
+        forall|j: int| 0 <= j < s.len() ==> #[trigger] s[j].0 == h.tag_of(nth(h, w, j as nat)),
+    ensures
+        seen(s, i as int, t) == wseen(h, w, i, t),
+    decreases i,
+{
+    if i > 0 {
+        lemma_seen_eq(s, h, w, (i - 1) as nat, t);
+        assert(s[i - 1].0 == h.tag_of(nth(h, w, (i - 1) as nat)));
+    }
+}
+
+/// 組の列とヒープの上のたどりで、mask の残す組は同じである。
+pub(super) proof fn lemma_kept_eq<M: Mode>(
+    effects: Seq<u16>,
+    s: Seq<(u16, Word)>,
+    h: Heap<M>,
+    w: Word,
+    i: nat,
+)
+    requires
+        i < s.len(),
+        forall|j: int| 0 <= j < s.len() ==> #[trigger] s[j].0 == h.tag_of(nth(h, w, j as nat)),
+    ensures
+        kept_at(effects, s, i as int) == wkept(effects, h, w, i),
+{
+    assert(s[i as int].0 == h.tag_of(nth(h, w, i)));
+    lemma_seen_eq(s, h, w, i, s[i as int].0);
+}
+
+/// 組 `i` から後ろで残す組の数と除く組の数を足すと、後ろの組の数になる。
+pub(super) proof fn lemma_mask_count<M: Mode>(
+    effects: Seq<u16>,
+    s: Seq<(u16, Word)>,
+    h: Heap<M>,
+    w: Word,
+    i: nat,
+)
+    requires
+        i <= s.len(),
+        forall|j: int| 0 <= j < s.len() ==> #[trigger] s[j].0 == h.tag_of(nth(h, w, j as nat)),
+    ensures
+        mask_from(effects, s, i as int).len() + wdropped(effects, h, w, s.len()) - wdropped(
+            effects,
+            h,
+            w,
+            i,
+        ) == s.len() - i,
+    decreases s.len() - i,
+{
+    if i < s.len() {
+        lemma_mask_count(effects, s, h, w, i + 1);
+        lemma_kept_eq(effects, s, h, w, i);
+        assert(wdropped(effects, h, w, i + 1) == wdropped(effects, h, w, i) + if wkept(
+            effects,
+            h,
+            w,
+            i,
+        ) {
+            0int
+        } else {
+            1int
+        });
+    }
+}
+
+/// 組 `i` から後ろで残す組は、後ろの組の数を超えない。同じ数なら、どの組も残す。
+pub(super) proof fn lemma_mask_full(effects: Seq<u16>, s: Seq<(u16, Word)>, i: int)
+    requires
+        0 <= i <= s.len(),
+    ensures
+        mask_from(effects, s, i).len() <= s.len() - i,
+        mask_from(effects, s, i).len() == s.len() - i ==> mask_from(effects, s, i) =~= s.subrange(
+            i,
+            s.len() as int,
+        ),
+    decreases s.len() - i,
+{
+    if i < s.len() {
+        lemma_mask_full(effects, s, i + 1);
+        if mask_from(effects, s, i).len() == s.len() - i {
+            assert(kept_at(effects, s, i));
+            assert(s.subrange(i, s.len() as int) =~= seq![s[i]] + s.subrange(
+                i + 1,
+                s.len() as int,
+            ));
+        }
+    }
+}
+
+/// 除く組がちょうど尽きる最初の節点。除く数は1歩に1つまでしか増えないので、全体で `m` 除くなら、どこかで初めて
+/// `m` になる。
+pub(super) proof fn lemma_cut<M: Mode>(
+    effects: Seq<u16>,
+    h: Heap<M>,
+    w: Word,
+    n: nat,
+    i: nat,
+) -> (k: nat)
+    requires
+        i <= n,
+        wdropped(effects, h, w, n) == effects.len(),
+        wdropped(effects, h, w, i) <= effects.len(),
+        forall|j: nat| j < i ==> #[trigger] wdropped(effects, h, w, j) < effects.len(),
+    ensures
+        i <= k <= n,
+        wdropped(effects, h, w, k) == effects.len(),
+        forall|j: nat| j < k ==> #[trigger] wdropped(effects, h, w, j) < effects.len(),
+    decreases n - i,
+{
+    if wdropped(effects, h, w, i) == effects.len() {
+        i
+    } else {
+        assert(wdropped(effects, h, w, i + 1) <= wdropped(effects, h, w, i) + 1);
+        lemma_cut(effects, h, w, n, i + 1)
+    }
+}
+
+/// 写しの列の最後を `rest` につないだ後、どの写しからも、写した組の続きと `rest` の列に着く。
+pub(super) proof fn lemma_copies_path<M: Mode>(
+    h: Heap<M>,
+    cs: Seq<Word>,
+    out: Seq<(u16, Word)>,
+    rest: Word,
+    g: nat,
+    tail: Seq<(u16, Word)>,
+    k: int,
+)
+    requires
+        copies_ok(h, cs, out),
+        0 <= k < cs.len(),
+        h.scanned_word(cs.last(), 1) == rest,
+        path(h, rest, g) == Some(tail),
+        forall|q: int|
+            0 <= q < out.len() ==> ev_ok(h, #[trigger] out[q].1) && h.tag_of(out[q].1) == out[q].0,
+    ensures
+        path(h, cs[k], (g + cs.len() - k) as nat) == Some(out.subrange(k, out.len() as int) + tail),
+    decreases cs.len() - k,
+{
+    let n = cs[k];
+    let fuel = (g + cs.len() - k) as nat;
+    let next = h.scanned_word(n, 1);
+    assert(node_ok(h, n));
+    lemma_unit_bits();
+    if k + 1 < cs.len() {
+        lemma_copies_path(h, cs, out, rest, g, tail, k + 1);
+        assert(next == cs[k + 1]);
+        assert(path(h, next, (fuel - 1) as nat) == Some(
+            out.subrange(k + 1, out.len() as int) + tail,
+        ));
+        assert(out.subrange(k, out.len() as int) + tail =~= seq![out[k]] + (out.subrange(
+            k + 1,
+            out.len() as int,
+        ) + tail));
+    } else {
+        assert(next == rest);
+        assert(out.subrange(k, out.len() as int) + tail =~= seq![out[k]] + tail);
+    }
+    assert(ev_ok(h, out[k].1));
+}
+
+pub(super) proof fn lemma_wseen_bounds<M: Mode>(h: Heap<M>, w: Word, i: nat, t: u16)
+    ensures
+        0 <= wseen(h, w, i, t) <= i,
+    decreases i,
+{
+    if i > 0 {
+        lemma_wseen_bounds(h, w, (i - 1) as nat, t);
+    }
+}
+
+pub(super) proof fn lemma_agree_refl<M: Mode>(h: Heap<M>, w: Word, k: nat)
+    ensures
+        agree(h, h, w, k),
+{
+}
+
+/// 写しの列の最後の写しの次を `v` にする。ほかの写しは変わらない。
+pub(super) proof fn lemma_copies_link<M: Mode>(
+    h1: Heap<M>,
+    h0: Heap<M>,
+    cs: Seq<Word>,
+    out: Seq<(u16, Word)>,
+    v: Word,
+)
+    requires
+        copies_ok(h0, cs, out),
+        cs.len() > 0,
+        h0.scanned_word(cs.last(), 1).bits_spec() == 1,
+        h1.field_set(h0, cs.last(), 1, v),
+    ensures
+        copies_ok(h1, cs, out),
+        h1.scanned_word(cs.last(), 1) == v,
+        kept_for(h1, h0, Set::empty().insert(cs.last().bits_spec())),
+{
+    let last = cs.last();
+    let x = Set::empty().insert(last.bits_spec());
+    lemma_kept_set(h1, h0, last, 1, v);
+    assert(node_ok(h0, cs[cs.len() - 1]));
+    lemma_unextended(h0, last);
+    lemma_node_kept(h1, h0, x, last);
+    lemma_unextended(h1, last);
+    lemma_unit_bits();
+    assert forall|k: int| 0 <= k < cs.len() implies {
+        &&& node_ok(h1, #[trigger] cs[k])
+        &&& h1.rc_value(cs[k]) > 0
+        &&& h1.tag_of(cs[k]) == out[k].0
+        &&& h1.scanned_word(cs[k], 0) == out[k].1
+        &&& k + 1 < cs.len() ==> h1.scanned_word(cs[k], 1) == cs[k + 1]
+    } by {
+        lemma_node_kept(h1, h0, x, cs[k]);
+        if k + 1 < cs.len() {
+            assert(node_ok(h0, cs[k + 1]));
+            assert(cs[k].bits_spec() != last.bits_spec());
+        } else {
+            assert(cs[k] == last);
+        }
+    }
+}
+
+/// 写しの列の最後に、新しい写し `cp` を足す。
+pub(super) proof fn lemma_copies_push<M: Mode>(
+    h: Heap<M>,
+    cs: Seq<Word>,
+    out: Seq<(u16, Word)>,
+    cp: Word,
+    pair: (u16, Word),
+)
+    requires
+        copies_ok(h, cs, out),
+        cs.len() > 0 ==> h.scanned_word(cs.last(), 1) == cp,
+        node_ok(h, cp),
+        h.rc_value(cp) > 0,
+        h.tag_of(cp) == pair.0,
+        h.scanned_word(cp, 0) == pair.1,
+    ensures
+        copies_ok(h, cs.push(cp), out.push(pair)),
+{
+    let cs1 = cs.push(cp);
+    let out1 = out.push(pair);
+    assert forall|k: int| 0 <= k < cs1.len() implies {
+        &&& node_ok(h, #[trigger] cs1[k])
+        &&& h.rc_value(cs1[k]) > 0
+        &&& h.tag_of(cs1[k]) == out1[k].0
+        &&& h.scanned_word(cs1[k], 0) == out1[k].1
+        &&& k + 1 < cs1.len() ==> h.scanned_word(cs1[k], 1) == cs1[k + 1]
+    } by {
+        if k < cs.len() {
+            assert(cs1[k] == cs[k]);
+            if k + 1 == cs.len() {
+                assert(cs[k] == cs.last());
+            }
+        }
+    }
+}
+
+/// mask の列の1歩。組 `i` を残すなら `out` に足し、除くなら除いた数を1つ増やす。
+pub(super) proof fn lemma_copy_seq_step(
+    effects: Seq<u16>,
+    s: Seq<(u16, Word)>,
+    out: Seq<(u16, Word)>,
+    js: Seq<int>,
+    i: int,
+    removed: int,
+)
+    requires
+        copy_seq(effects, s, out, js, i, removed),
+        0 <= i < s.len(),
+    ensures
+        kept_at(effects, s, i) ==> copy_seq(effects, s, out.push(s[i]), js.push(i), i + 1, removed),
+        !kept_at(effects, s, i) ==> copy_seq(effects, s, out, js, i + 1, removed + 1),
+{
+    if kept_at(effects, s, i) {
+        assert(mask_from(effects, s, i) == seq![s[i]] + mask_from(effects, s, i + 1));
+        assert(out + (seq![s[i]] + mask_from(effects, s, i + 1)) =~= out.push(s[i]) + mask_from(
+            effects,
+            s,
+            i + 1,
+        ));
+        let js1 = js.push(i);
+        let out1 = out.push(s[i]);
+        assert forall|k: int| 0 <= k < out1.len() implies 0 <= #[trigger] js1[k] < i + 1 && out1[k]
+            == s[js1[k]] by {
+            if k < out.len() {
+                assert(js1[k] == js[k]);
+            }
+        }
+    } else {
+        assert(mask_from(effects, s, i) == mask_from(effects, s, i + 1));
+    }
+}
+
+/// 写しの途中で `ev` を `dup` する。`ev` は `hs` で生きていた物体で、写しではない。
+pub(super) proof fn lemma_copy_dup<M: Mode>(
+    hs: Heap<M>,
+    h0: Heap<M>,
+    h1: Heap<M>,
+    cs: Seq<Word>,
+    out: Seq<(u16, Word)>,
+    ev: Word,
+)
+    requires
+        copy_heap(hs, h0, cs, out, |b: usize| 0int),
+        h1.bumped(h0, ev),
+        h1.settled(),
+        h1.consistent(),
+        kept_for(h1, h0, Set::empty()),
+        ev.is_ptr_spec() ==> live(hs, ev.bits_spec()),
+    ensures
+        copy_heap(hs, h1, cs, out, |b: usize| points(ev, b)),
+{
+    let z = |b: usize| 0int;
+    let d = |b: usize| points(ev, b);
+    let none = Set::<usize>::empty();
+    lemma_dup_moved(h1, h0, ev);
+    lemma_moved_chain(h1, h0, hs, z, d, d, none, none, none);
+    lemma_copies_kept(h1, h0, none, cs, out);
+    if cs.len() > 0 {
+        let b0 = cs[0].bits_spec();
+        assert(live(h0, b0));
+        assert(h0.core.settled_view().rc_of(b0) != 0) by {
+            assert(node_ok(h0, cs[0]));
+            assert(h0.rc_value(cs[0]) > 0);
+        }
+        assert(ev.bits_spec() != b0);
+        assert(live(h0, cs.last().bits_spec()));
+        assert(cs[cs.len() - 1] == cs.last());
+        lemma_node_kept(h1, h0, none, cs.last());
+    }
+}
+
+/// 写しの途中で、写しの節点 `cp` を確保する。
+pub(super) proof fn lemma_copy_alloc<M: Mode>(
+    hs: Heap<M>,
+    h1: Heap<M>,
+    h2: Heap<M>,
+    cs: Seq<Word>,
+    out: Seq<(u16, Word)>,
+    ev: Word,
+    cp: Word,
+)
+    requires
+        copy_heap(hs, h1, cs, out, |b: usize| points(ev, b)),
+        h1.settled(),
+        h2.made(h1, cp),
+        kept_for(h2, h1, Set::empty()),
+        !live(h1, cp.bits_spec()),
+    ensures
+        copy_heap(hs, h2, cs, out, |b: usize| points(ev, b)),
+        h2.core.settled_view().ext(cp.bits_spec()) == 1,
+        !live(hs, cp.bits_spec()),
+{
+    let d = |b: usize| points(ev, b);
+    let z = |b: usize| 0int;
+    let none = Set::<usize>::empty();
+    lemma_alloc_moved(h2, h1, cp);
+    lemma_moved_chain(h2, h1, hs, d, z, d, none, none, none);
+    lemma_copies_kept(h2, h1, none, cs, out);
+    if cs.len() > 0 {
+        let b0 = cs[0].bits_spec();
+        assert(live(h1, b0));
+        assert(h1.core.settled_view().rc_of(b0) != 0) by {
+            assert(node_ok(h1, cs[0]));
+            assert(h1.rc_value(cs[0]) > 0);
+        }
+        assert(cs[cs.len() - 1] == cs.last());
+        lemma_node_kept(h2, h1, none, cs.last());
+    }
+    assert(no_free(h1, hs));
+}
+
+/// 写しの途中で、確保した写し `cp` の先頭の欄に `ev` を書く。`ev` の参照は辺に移る。
+pub(super) proof fn lemma_copy_set<M: Mode>(
+    hs: Heap<M>,
+    h2: Heap<M>,
+    h3: Heap<M>,
+    cs: Seq<Word>,
+    out: Seq<(u16, Word)>,
+    ev: Word,
+    cp: Word,
+)
+    requires
+        copy_heap(hs, h2, cs, out, |b: usize| points(ev, b)),
+        h2.settled(),
+        live(h2, cp.bits_spec()),
+        !live(hs, cp.bits_spec()),
+        forall|k: int| 0 <= k < cs.len() ==> (#[trigger] cs[k]).bits_spec() != cp.bits_spec(),
+        cp.is_ptr_spec(),
+        h2.core.dom().contains(cp.bits_spec()),
+        h2.core.state(cp.bits_spec()) == BlockState::Live,
+        h2.scanned_at(cp, 0),
+        h2.word_at(cp, 0).bits_spec() == 1,
+        h2.rc_value(cp) > 0,
+        h3.field_set(h2, cp, 0, ev),
+        h3.consistent(),
+        ev.is_ptr_spec(),
+        live(hs, ev.bits_spec()),
+    ensures
+        copy_heap(hs, h3, cs, out, |b: usize| 0int),
+        h3.core.settled_view().ext(cp.bits_spec()) == h2.core.settled_view().ext(cp.bits_spec()),
+{
+    let d = |b: usize| points(ev, b);
+    let e = |b: usize| -points(ev, b);
+    let z = |b: usize| 0int;
+    let none = Set::<usize>::empty();
+    let x = none.insert(cp.bits_spec());
+    lemma_set_unit_moved(h3, h2, cp, 0, ev);
+    lemma_moved_chain(h3, h2, hs, d, e, z, none, x, none);
+    lemma_kept_set(h3, h2, cp, 0, ev);
+    lemma_copies_kept(h3, h2, x, cs, out);
+    assert(h2.core.settled_view().rc_of(cp.bits_spec()) != 0);
+    if cs.len() > 0 {
+        let b0 = cs[0].bits_spec();
+        assert(live(h2, b0));
+        assert(h2.core.settled_view().rc_of(b0) != 0) by {
+            assert(node_ok(h2, cs[0]));
+            assert(h2.rc_value(cs[0]) > 0);
+        }
+        assert(cs[cs.len() - 1] == cs.last());
+        lemma_node_kept(h3, h2, x, cs.last());
+    }
+}
+
+/// mask の写しで `dup` する evidence。`hs` で読んだ残す節点の evidence で、モデルが合っていれば `dup` の前提を満たし、
+/// 検査モードでは前のたどりが `dup` を確かめている。
+pub(super) proof fn lemma_mask_ev<M: Mode>(
+    effects: Seq<u16>,
+    hs: Heap<M>,
+    h0: Heap<M>,
+    w: Word,
+    f: nat,
+    s: Seq<(u16, Word)>,
+    bound: nat,
+    i: nat,
+    ev: Word,
+    c: bool,
+)
+    requires
+        kept_for(h0, hs, Set::empty()),
+        i < bound,
+        ev == hs.scanned_word(nth(hs, w, i), 0),
+        wkept(effects, hs, w, i),
+        M::CHECKED ==> mask_dups(effects, hs, w, bound),
+        c ==> {
+            &&& mask_path(hs, w, f, s)
+            &&& bound <= s.len()
+            &&& h0.consistent()
+            &&& h0.settleable()
+        },
+    ensures
+        M::CHECKED ==> h0.dup_passes(ev),
+        c ==> {
+            &&& ev == s[i as int].1
+            &&& ev.is_ptr_spec()
+            &&& live(hs, ev.bits_spec())
+            &&& ev_ok(hs, ev)
+            &&& held_word(h0, ev)
+            &&& h0.dup_ok(ev)
+        },
+{
+    if c {
+        lemma_path_nth(hs, w, f, s, i);
+        lemma_node_kept(h0, hs, Set::empty(), ev);
+    }
+}
+
+/// 局所の物体 (rc が正) は、このヒープのブロックで、塊のブロックでない。
+pub(super) proof fn lemma_local_in_dom<M: Mode>(h: Heap<M>, n: Word)
+    requires
+        h.consistent(),
+        h.settled(),
+        n.is_ptr_spec(),
+        h.readable(n),
+        h.rc_value(n) > 0,
+    ensures
+        h.core.dom().contains(n.bits_spec()),
+        h.core.state(n.bits_spec()) == BlockState::Live,
+        h.writable(n),
+{
+    if !h.core.dom().contains(n.bits_spec()) {
+        h.core.lemma_apart(n.bits_spec());
+        h.core.lemma_region_at(n.bits_spec());
+    }
+}
+
+/// 最後の写しの次の欄は、まだ書いていない書ける欄である。
+pub(super) proof fn lemma_last_ready<M: Mode>(h: Heap<M>, cs: Seq<Word>, out: Seq<(u16, Word)>)
+    requires
+        h.consistent(),
+        h.settled(),
+        copies_ok(h, cs, out),
+        cs.len() > 0,
+        h.scanned_word(cs.last(), 1).bits_spec() == 1,
+    ensures
+        h.writable(cs.last()),
+        h.owned(cs.last()),
+        h.scanned_at(cs.last(), 1),
+        h.word_at(cs.last(), 1).bits_spec() == 1,
+        h.core.dom().contains(cs.last().bits_spec()),
+        h.core.state(cs.last().bits_spec()) == BlockState::Live,
+        h.readable(cs.last()),
+{
+    let last = cs.last();
+    assert(cs[cs.len() - 1] == last);
+    assert(node_ok(h, last));
+    lemma_unextended(h, last);
+    lemma_local_in_dom(h, last);
+}
+
+/// 写しの途中で、書き終えた写し `cp` を写しの列の最後につなぐ。列が空なら、`cp` が最初の写しになる。
+pub(super) proof fn lemma_copy_push<M: Mode>(
+    hs: Heap<M>,
+    h3: Heap<M>,
+    h4: Heap<M>,
+    cs: Seq<Word>,
+    out: Seq<(u16, Word)>,
+    cp: Word,
+    pair: (u16, Word),
+)
+    requires
+        copy_heap(hs, h3, cs, out, |b: usize| 0int),
+        h3.settled(),
+        cp.is_ptr_spec(),
+        live(h3, cp.bits_spec()),
+        !live(hs, cp.bits_spec()),
+        forall|k: int| 0 <= k < cs.len() ==> (#[trigger] cs[k]).bits_spec() != cp.bits_spec(),
+        node_ok(h3, cp),
+        h3.rc_value(cp) > 0,
+        h3.tag_of(cp) == pair.0,
+        h3.scanned_word(cp, 0) == pair.1,
+        h3.scanned_word(cp, 1).bits_spec() == 1,
+        h3.core.settled_view().ext(cp.bits_spec()) == 1,
+        cs.len() == 0 ==> h4 == h3,
+        cs.len() > 0 ==> h4.field_set(h3, cs.last(), 1, cp) && h4.consistent(),
+    ensures
+        copy_heap(hs, h4, cs.push(cp), out.push(pair), |b: usize| 0int),
+        kept_for(h4, h3, Set::empty().insert(cs.last().bits_spec())),
+{
+    let z = |b: usize| 0int;
+    let none = Set::<usize>::empty();
+    let cs1 = cs.push(cp);
+    if cs.len() == 0 {
+        lemma_kept_refl(h3);
+        lemma_copies_push(h4, cs, out, cp, pair);
+        assert(cs1[0] == cp);
+        assert(cs1.last() == cp);
+    } else {
+        let last = cs.last();
+        let x = none.insert(last.bits_spec());
+        let e = |b: usize| -points(cp, b);
+        lemma_last_ready(h3, cs, out);
+        lemma_set_unit_moved(h4, h3, last, 1, cp);
+        assert(cs[cs.len() - 1] == last);
+        assert(!live(hs, last.bits_spec()));
+        lemma_moved_chain(h4, h3, hs, z, e, z, none, x, none);
+        lemma_copies_link(h4, h3, cs, out, cp);
+        assert(cp.bits_spec() != last.bits_spec());
+        lemma_node_kept(h4, h3, x, cp);
+        lemma_copies_push(h4, cs, out, cp, pair);
+        let b0 = cs[0].bits_spec();
+        assert(live(h3, b0));
+        assert(h3.core.settled_view().rc_of(b0) != 0) by {
+            assert(node_ok(h3, cs[0]));
+            assert(h3.rc_value(cs[0]) > 0);
+        }
+        assert(cs1[0] == cs[0]);
+        assert(cs1.last() == cp);
+        assert forall|k: int| 0 <= k < cs1.len() implies {
+            &&& (#[trigger] cs1[k]).is_ptr_spec()
+            &&& !live(hs, cs1[k].bits_spec())
+            &&& live(h4, cs1[k].bits_spec())
+        } by {
+            if k < cs.len() {
+                assert(cs1[k] == cs[k]);
+                assert(live(h3, cs[k].bits_spec()));
+            }
+        }
+    }
+}
+
+/// 写しの最後に、共有する後ろの先頭 `rest` をつなぐ。`rest` の参照は辺に移り、元の物体の参照の数は `hs` と同じに戻る。
+pub(super) proof fn lemma_copy_close<M: Mode>(
+    hs: Heap<M>,
+    h6: Heap<M>,
+    h7: Heap<M>,
+    cs: Seq<Word>,
+    out: Seq<(u16, Word)>,
+    rest: Word,
+)
+    requires
+        copy_heap(hs, h6, cs, out, |b: usize| points(rest, b)),
+        cs.len() > 0,
+        h7.field_set(h6, cs.last(), 1, rest),
+        h7.consistent(),
+        rest.is_ptr_spec() ==> live(hs, rest.bits_spec()),
+    ensures
+        moved(h7, hs, |b: usize| points(cs[0], b), Set::empty()),
+        no_free(h7, hs),
+        copies_ok(h7, cs, out),
+        h7.scanned_word(cs.last(), 1) == rest,
+        h7.core.settled_view().ext(cs[0].bits_spec()) == 1,
+        h7.settled(),
+        live(h7, cs[0].bits_spec()),
+        !live(hs, cs[0].bits_spec()),
+        cs[0].is_ptr_spec(),
+{
+    let d = |b: usize| points(rest, b);
+    let e = |b: usize| -points(rest, b);
+    let z = |b: usize| 0int;
+    let none = Set::<usize>::empty();
+    let last = cs.last();
+    let x = none.insert(last.bits_spec());
+    lemma_last_ready(h6, cs, out);
+    lemma_set_unit_moved(h7, h6, last, 1, rest);
+    assert(cs[cs.len() - 1] == last);
+    assert(!live(hs, last.bits_spec()));
+    lemma_moved_chain(h7, h6, hs, d, e, z, none, x, none);
+    lemma_copies_link(h7, h6, cs, out, rest);
+    let b0 = cs[0].bits_spec();
+    assert(live(h6, b0));
+    assert(h6.core.settled_view().rc_of(b0) != 0) by {
+        assert(node_ok(h6, cs[0]));
+        assert(h6.rc_value(cs[0]) > 0);
+    }
+    lemma_moved_weaken(h7, hs, z, |b: usize| points(cs[0], b), none, none);
+}
+
+impl<M: Mode> Ctx<M> {
+    /// `evv_mask` の、モデルが合っている道。写しの列を `rest` につないだ (写しがなければ `rest` を `dup` した) 後の
+    /// ヒープで、結果 `r` は mask した列のリストである。
+    pub(super) proof fn lemma_evv_mask_ok(
+        &self,
+        s0: Ctx<M>,
+        effects: Seq<u16>,
+        w: Word,
+        f: nat,
+        s: Seq<(u16, Word)>,
+        bound: nat,
+        cs: Seq<Word>,
+        out: Seq<(u16, Word)>,
+        js: Seq<int>,
+        rest: Word,
+        r: Word,
+    )
+        requires
+            s0.held_ok(),
+            s0.evv_wf(w),
+            s == s0.evv_seq(w),
+            mask_spec(effects, s).len() + effects.len() == s.len(),
+            mask_path(s0.heap, w, f, s),
+            bound <= s.len(),
+            copy_seq(effects, s, out, js, bound as int, effects.len() as int),
+            rest == nth(s0.heap, w, bound),
+            self.evv == s0.evv,
+            self.yielding == s0.yielding,
+            self.max_evv == s0.max_evv,
+            self.heap.consistent(),
+            self.heap.settled(),
+            moved(self.heap, s0.heap, |b: usize| points(r, b), Set::empty()),
+            no_free(self.heap, s0.heap),
+            cs.len() == out.len(),
+            cs.len() == 0 ==> r == rest,
+            cs.len() > 0 ==> {
+                &&& r == cs[0]
+                &&& copies_ok(self.heap, cs, out)
+                &&& self.heap.scanned_word(cs.last(), 1) == rest
+                &&& self.heap.core.settled_view().ext(cs[0].bits_spec()) >= 1
+                &&& !live(s0.heap, cs[0].bits_spec())
+                &&& cs[0].is_ptr_spec()
+            },
+        ensures
+            self.held_ok(),
+            self.holds(r),
+            self.evv_wf(r),
+            self.evv_seq(r) == mask_spec(effects, s0.evv_seq(w)),
+            self.evv_wf(w),
+            self.evv_seq(w) == s0.evv_seq(w),
+            self.evolved_by(s0, |b: usize| points(r, b), Set::empty()),
+    {
+        let hs = s0.heap;
+        let h = self.heap;
+        let d = |b: usize| points(r, b);
+        let none = Set::<usize>::empty();
+        let tail = s.subrange(bound as int, s.len() as int);
+        // 元のリストと、共有する後ろ
+        lemma_path_nth(hs, w, f, s, bound);
+        let g = (f - bound) as nat;
+        lemma_listed_head(hs, w, s0.max_evv);
+        lemma_readable_kept(h, hs, w);
+        lemma_path_kept(h, hs, d, none, w, f);
+        lemma_unit_bits();
+        if rest.bits_spec() != 1 {
+            lemma_path_step(hs, rest, g, tail);
+        }
+        lemma_readable_kept(h, hs, rest);
+        lemma_path_kept(h, hs, d, none, rest, g);
+        // mask した列は、残した組と共有する後ろである
+        lemma_mask_full(effects, s, bound as int);
+        assert(mask_from(effects, s, bound as int) =~= tail);
+        assert(mask_spec(effects, s) == out + tail);
+        // Ctx の語
+        assert forall|b: usize| #[trigger] self.need(seq![], b) > 0 implies s0.need(seq![], b) + d(
+            b,
+        ) >= self.need(seq![], b) by {
+            lemma_points_in(seq![], b);
+        }
+        self.lemma_holds_moved(s0, seq![], seq![], d, none);
+        self.lemma_evv_kept(s0, d, none);
+        lemma_listed_kept(h, hs, d, none, w, s0.max_evv);
+        if cs.len() == 0 {
+            assert(out.len() == 0);
+            assert(out + tail =~= tail);
+            lemma_seq_of(h, rest, g);
+            if rest.bits_spec() != 1 {
+                lemma_path_step(hs, rest, g, tail);
+            }
+            self.lemma_dupped_holds(s0, rest, none);
+        } else {
+            lemma_path_walkable(h, w, f, s);
+            assert forall|q: int| 0 <= q < out.len() implies ev_ok(h, #[trigger] out[q].1)
+                && h.tag_of(out[q].1) == out[q].0 by {
+                lemma_path_nth(h, w, f, s, js[q] as nat);
+            }
+            lemma_copies_path(h, cs, out, rest, g, tail, 0);
+            assert(out.subrange(0, out.len() as int) =~= out);
+            let fuel = (g + cs.len()) as nat;
+            lemma_seq_of(h, cs[0], fuel);
+            assert(node_ok(h, cs[0]));
+            self.lemma_fresh_holds(s0, cs[0]);
+        }
+    }
+}
+
 } // verus!

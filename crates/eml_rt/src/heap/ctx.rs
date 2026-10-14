@@ -130,6 +130,25 @@ spec fn moved<M: Mode>(h1: Heap<M>, h0: Heap<M>, d: spec_fn(usize) -> int, x: Se
         }
 }
 
+/// `h0` から `h1` への、物体を空けない変化。`h0` で生きているブロックは同じブロックのまま生きていて、`meta`、rc の
+/// 符号、持ち主を変えず、`x` のほかは語も変えない。検査モードでは、`dup` の確かめが通る語は通るままである。
+/// `moved` と違ってモデルが合わないヒープでも言えるので、検査モードで前に確かめた物体を後で読めることをこれで言う。
+spec fn kept_for<M: Mode>(h1: Heap<M>, h0: Heap<M>, x: Set<usize>) -> bool {
+    &&& h1.worker == h0.worker
+    &&& forall|b: usize|
+        #![trigger live(h0, b)]
+        live(h0, b) ==> {
+            &&& live(h1, b)
+            &&& h1.core.block(b) == h0.core.block(b)
+            &&& same_head(h1, h0, b)
+            &&& !x.contains(b) ==> h1.core.perm(b).slots == h0.core.perm(b).slots
+        }
+    &&& M::CHECKED ==> forall|v: Word|
+        #![trigger h0.dup_passes(v)]
+        #![trigger h1.dup_passes(v)]
+        h0.dup_passes(v) ==> h1.dup_passes(v)
+}
+
 /// `h0` で生きているブロックは、`h1` でも同じブロックのまま生きている。借りた語も読めるままである。
 spec fn no_free<M: Mode>(h1: Heap<M>, h0: Heap<M>) -> bool {
     forall|b: usize| #[trigger] live(h0, b) ==> live(h1, b) && h1.core.block(b) == h0.core.block(b)
@@ -256,6 +275,291 @@ spec fn find(s: Seq<(u16, Word)>, tag: u16) -> Option<Word>
     } else {
         find(s.drop_first(), tag)
     }
+}
+
+/// `effects` のうち、tag が `t` になるエフェクトの数。
+spec fn occurs(effects: Seq<u16>, t: u16) -> int
+    decreases effects.len(),
+{
+    if effects.len() == 0 {
+        0
+    } else {
+        occurs(effects.drop_last(), t) + if effect_tag(effects.last()) == t {
+            1int
+        } else {
+            0int
+        }
+    }
+}
+
+/// `s` の先頭の `i` 組のうち、tag が `t` の組の数。
+spec fn seen(s: Seq<(u16, Word)>, i: int, t: u16) -> int
+    decreases i,
+{
+    if i <= 0 {
+        0
+    } else {
+        seen(s, i - 1, t) + if s[i - 1].0 == t {
+            1int
+        } else {
+            0int
+        }
+    }
+}
+
+/// mask は組 `i` を残す。同じ tag の組が、前に除く数だけもうある。
+spec fn kept_at(effects: Seq<u16>, s: Seq<(u16, Word)>, i: int) -> bool {
+    seen(s, i, s[i].0) >= occurs(effects, s[i].0)
+}
+
+/// 組 `i` から後ろのうち、mask が残す組の列。
+spec fn mask_from(effects: Seq<u16>, s: Seq<(u16, Word)>, i: int) -> Seq<(u16, Word)>
+    decreases s.len() - i,
+{
+    if i < 0 || i >= s.len() {
+        Seq::empty()
+    } else if kept_at(effects, s, i) {
+        seq![s[i]] + mask_from(effects, s, i + 1)
+    } else {
+        mask_from(effects, s, i + 1)
+    }
+}
+
+/// `effects` の多重集合の各エフェクトについて、先頭から tag の合う組をその数だけ除いた列。組が tag を持つので、
+/// ヒープを読まずに定まる。
+pub closed spec fn mask_spec(effects: Seq<u16>, seq: Seq<(u16, Word)>) -> Seq<(u16, Word)> {
+    mask_from(effects, seq, 0)
+}
+
+/// `w` から節点を `j` 歩たどった語。
+spec fn nth<M: Mode>(h: Heap<M>, w: Word, j: nat) -> Word
+    decreases j,
+{
+    if j == 0 {
+        w
+    } else {
+        h.scanned_word(nth(h, w, (j - 1) as nat), 1)
+    }
+}
+
+/// 読める節点。mask のたどりが読むのに要る分だけで、検査モードはたどりながらこれを確かめる。
+spec fn walk_node<M: Mode>(h: Heap<M>, n: Word) -> bool {
+    &&& n.is_ptr_spec()
+    &&& h.readable(n)
+    &&& h.scan_of(n) == 2
+}
+
+/// `w` から `k` 個の節点を読める。
+spec fn walkable<M: Mode>(h: Heap<M>, w: Word, k: nat) -> bool {
+    forall|j: nat| j < k ==> walk_node(h, #[trigger] nth(h, w, j))
+}
+
+/// `h1` と `h0` で、`w` から `k` 個の節点とその次の語、各節点の tag と evidence が同じである。
+spec fn agree<M: Mode>(h1: Heap<M>, h0: Heap<M>, w: Word, k: nat) -> bool {
+    forall|j: nat|
+        j <= k ==> {
+            &&& #[trigger] nth(h1, w, j) == nth(h0, w, j)
+            &&& j < k ==> h1.tag_of(nth(h1, w, j)) == h0.tag_of(nth(h0, w, j))
+            &&& j < k ==> h1.scanned_word(nth(h1, w, j), 0) == h0.scanned_word(nth(h0, w, j), 0)
+        }
+}
+
+/// `w` から先頭の `i` 個の節点のうち、tag が `t` のものの数。
+spec fn wseen<M: Mode>(h: Heap<M>, w: Word, i: nat, t: u16) -> int
+    decreases i,
+{
+    if i == 0 {
+        0
+    } else {
+        wseen(h, w, (i - 1) as nat, t) + if h.tag_of(nth(h, w, (i - 1) as nat)) == t {
+            1int
+        } else {
+            0int
+        }
+    }
+}
+
+/// mask は `w` からの `i` 個目の節点を残す (`kept_at` のヒープの上の形)。
+spec fn wkept<M: Mode>(effects: Seq<u16>, h: Heap<M>, w: Word, i: nat) -> bool {
+    let t = h.tag_of(nth(h, w, i));
+    wseen(h, w, i, t) >= occurs(effects, t)
+}
+
+/// `w` から先頭の `i` 個の節点のうち、mask が除くものの数。
+spec fn wdropped<M: Mode>(effects: Seq<u16>, h: Heap<M>, w: Word, i: nat) -> int
+    decreases i,
+{
+    if i == 0 {
+        0
+    } else {
+        wdropped(effects, h, w, (i - 1) as nat) + if wkept(effects, h, w, (i - 1) as nat) {
+            0int
+        } else {
+            1int
+        }
+    }
+}
+
+/// mask のたどりは `w` から `k` 個の節点を読み、`k` 個目でちょうど除く組が尽きる。
+spec fn mask_walk<M: Mode>(effects: Seq<u16>, h: Heap<M>, w: Word, k: nat) -> bool {
+    &&& walkable(h, w, k)
+    &&& wdropped(effects, h, w, k) == effects.len()
+    &&& forall|i: nat| i < k ==> #[trigger] wdropped(effects, h, w, i) < effects.len()
+}
+
+/// 検査モードのたどりが確かめた、写しに要る `dup` の条件。残す節点の evidence と、共有する後ろの先頭である。
+spec fn mask_dups<M: Mode>(effects: Seq<u16>, h: Heap<M>, w: Word, k: nat) -> bool {
+    &&& forall|j: nat|
+        j < k && wkept(effects, h, w, j) ==> h.dup_passes(
+            h.scanned_word(#[trigger] nth(h, w, j), 0),
+        )
+    &&& h.dup_passes(nth(h, w, k))
+}
+
+/// 写した節点の列 `cs` は、組の列 `out` を順に持ち、どの写しの次も次の写しを指す。最後の写しの次は別に言う。
+spec fn copies_ok<M: Mode>(h: Heap<M>, cs: Seq<Word>, out: Seq<(u16, Word)>) -> bool {
+    &&& cs.len() == out.len()
+    &&& forall|k: int|
+        0 <= k < cs.len() ==> {
+            &&& node_ok(h, #[trigger] cs[k])
+            &&& h.rc_value(cs[k]) > 0
+            &&& h.tag_of(cs[k]) == out[k].0
+            &&& h.scanned_word(cs[k], 0) == out[k].1
+            &&& k + 1 < cs.len() ==> h.scanned_word(cs[k], 1) == cs[k + 1]
+        }
+}
+
+/// mask の写しの途中のヒープ (モデルが合っている道)。`hs` からの元の物体の参照の数の変化は `d` で、写した節点 `cs` は
+/// `out` を持つ。写しは `hs` になかった物体で、最後の写しの次はまだ `()` で、呼ぶ側は最初の写しの参照を1つ持つ。
+spec fn copy_heap<M: Mode>(
+    hs: Heap<M>,
+    h: Heap<M>,
+    cs: Seq<Word>,
+    out: Seq<(u16, Word)>,
+    d: spec_fn(usize) -> int,
+) -> bool {
+    &&& h.consistent()
+    &&& h.settleable()
+    &&& moved(h, hs, d, Set::empty())
+    &&& no_free(h, hs)
+    &&& exact(h, hs, d)
+    &&& copies_ok(h, cs, out)
+    &&& forall|k: int|
+        0 <= k < cs.len() ==> {
+            &&& (#[trigger] cs[k]).is_ptr_spec()
+            &&& !live(hs, cs[k].bits_spec())
+            &&& live(h, cs[k].bits_spec())
+        }
+    &&& cs.len() > 0 ==> {
+        &&& h.settled()
+        &&& h.scanned_word(cs.last(), 1).bits_spec() == 1
+        &&& h.core.settled_view().ext(cs[0].bits_spec()) == 1
+    }
+}
+
+/// mask の写しの途中の列。先頭の `i` 組のうち残した組が `out` で、その後ろで残す組を足すと `mask_spec` になる。
+spec fn copy_seq(
+    effects: Seq<u16>,
+    s: Seq<(u16, Word)>,
+    out: Seq<(u16, Word)>,
+    js: Seq<int>,
+    i: int,
+    removed: int,
+) -> bool {
+    &&& out.len() + removed == i
+    &&& mask_spec(effects, s) == out + mask_from(effects, s, i)
+    &&& js.len() == out.len()
+    &&& forall|k: int| 0 <= k < out.len() ==> 0 <= #[trigger] js[k] < i && out[k] == s[js[k]]
+}
+
+/// `w` は `hs` で `f` 歩以内に着く列 `s` のリストで、どの節点も読め、その tag は列の tag である。
+spec fn mask_path<M: Mode>(hs: Heap<M>, w: Word, f: nat, s: Seq<(u16, Word)>) -> bool {
+    &&& hs.consistent()
+    &&& hs.settleable()
+    &&& path(hs, w, f) == Some(s)
+    &&& walkable(hs, w, s.len())
+    &&& forall|j: int| 0 <= j < s.len() ==> #[trigger] s[j].0 == hs.tag_of(nth(hs, w, j as nat))
+}
+
+/// `effects` のうち、tag が `t` になるエフェクトを数える。mask のエフェクトの数は小さいので、節点ごとに数え直す。
+fn count_effect(effects: &[u16], t: u16) -> (r: usize)
+    ensures
+        r as int == occurs(effects@, t),
+{
+    let mut n: usize = 0;
+    let mut j: usize = 0;
+    while j < effects.len()
+        invariant
+            j <= effects.len(),
+            n <= j,
+            n as int == occurs(effects@.subrange(0, j as int), t),
+        decreases effects.len() - j,
+    {
+        let e = effects[j];
+        let et: u16 = if e == u16::MAX {
+            0
+        } else {
+            e + 1
+        };
+        proof {
+            assert(effects@.subrange(0, j + 1).drop_last() =~= effects@.subrange(0, j as int));
+            assert(effects@.subrange(0, j + 1).last() == e);
+        }
+        if et == t {
+            n += 1;
+        }
+        j += 1;
+    }
+    proof {
+        assert(effects@.subrange(0, effects@.len() as int) =~= effects@);
+    }
+    n
+}
+
+/// `w` から先頭の `i` 個の節点のうち、tag が `t` のものを数える。節点と tag は `hs` のものと同じである。
+fn count_tag<M: Mode>(h: &Heap<M>, Ghost(hs): Ghost<Heap<M>>, w: Word, i: usize, t: u16) -> (r:
+    Result<usize, HeapError>)
+    requires
+        h.wf(),
+        h.safe_settleable(),
+        !M::CHECKED ==> h.settleable(),
+        walkable(*h, w, i as nat),
+        agree(*h, hs, w, i as nat),
+    ensures
+        r matches Ok(n) && n as int == wseen(hs, w, i as nat, t),
+{
+    let mut n = w;
+    let mut j: usize = 0;
+    let mut count: usize = 0;
+    while j < i
+        invariant
+            h.wf(),
+            h.safe_settleable(),
+            !M::CHECKED ==> h.settleable(),
+            walkable(*h, w, i as nat),
+            agree(*h, hs, w, i as nat),
+            j <= i,
+            count <= j,
+            n == nth(*h, w, j as nat),
+            count as int == wseen(hs, w, j as nat, t),
+        decreases i - j,
+    {
+        proof {
+            assert(walk_node(*h, nth(*h, w, j as nat)));
+            lemma_unextended(*h, n);
+        }
+        let m = (unsafe { h.meta(n) })?;
+        proof {
+            m.lemma_fields();
+            assert(nth(*h, w, j as nat) == nth(hs, w, j as nat));
+        }
+        if m.tag() == t {
+            count += 1;
+        }
+        n = (unsafe { h.field(n, 1) })?;
+        j += 1;
+    }
+    Ok(count)
 }
 
 /// 実行文脈。VM はこれだけを持ち回す。`evv` と yield の状態の語は、`Ctx` が持つ数えた参照である。`Ctx` を落としても
@@ -1833,6 +2137,350 @@ impl<M: Mode> Ctx<M> {
         }
         Ok(e)
     }
+
+    /// `effects` の多重集合の各エフェクトについて、`w` の先頭から合う evidence をその数だけ除いたリストを返す。除いた
+    /// 最後の節点までに残す節点を先頭から順に写し、その後ろは元のリストを共有する。evidence の物体は写さない
+    /// (docs/spec/lir.md の「evidence を探す」)。`w` は借りる。
+    ///
+    /// # Safety
+    /// `heap_mut` の前提を守っている。`w` は即値か、このヒープか付けた塊の生きている物体を指す。速いモードでは、`w` は
+    /// `evv` のリストで、`effects` が挙げる数だけ合う evidence を持つ。検査モードは写す前にリストをたどって確かめ、
+    /// 合う evidence が足りなければ `NoHandler` を、形の違う節点や上限を超える長さには `BadEvidence` を返す。
+    #[verifier::spinoff_prover]
+    pub unsafe fn evv_mask(&mut self, effects: &[u16], w: Word) -> (r: Result<Word, HeapError>)
+        requires
+            old(self).wf(),
+            old(self).heap_spec().word_in(w),
+            !M::CHECKED ==> old(self).evv_wf(w) && mask_spec(effects@, old(self).evv_seq(w)).len()
+                + effects@.len() == old(self).evv_seq(w).len(),
+        ensures
+            final(self).wf(),
+            r is Err ==> *final(self) == *old(self),
+            final(self).evv_spec() == old(self).evv_spec(),
+            final(self).yield_spec() == old(self).yield_spec(),
+            !M::CHECKED ==> r is Ok,
+            old(self).held_ok() && old(self).evv_wf(w) && mask_spec(
+                effects@,
+                old(self).evv_seq(w),
+            ).len() + effects@.len() == old(self).evv_seq(w).len() ==> (r matches Ok(n) && {
+                &&& final(self).held_ok()
+                &&& final(self).holds(n)
+                &&& final(self).evv_wf(n)
+                &&& final(self).evv_seq(n) == mask_spec(effects@, old(self).evv_seq(w))
+                &&& final(self).evv_wf(w)
+                &&& final(self).evv_seq(w) == old(self).evv_seq(w)
+                &&& final(self).evolved_by(*old(self), |b: usize| points(n, b), Set::empty())
+            }),
+    {
+        let ghost s0 = *self;
+        let ghost hs = self.heap;
+        let ghost m = effects@.len();
+        let ghost f = choose|f: nat| #[trigger] path(hs, w, f) is Some;
+        let ghost s = seq_of(hs, w);
+        let ghost c = s0.held_ok() && s0.evv_wf(w) && mask_spec(effects@, s0.evv_seq(w)).len() + m
+            == s0.evv_seq(w).len();
+        let ghost z = |b: usize| 0int;
+        let ghost none = Set::<usize>::empty();
+        let ghost mut bound: nat = 0;
+        proof {
+            if c {
+                lemma_seq_of(hs, w, f);
+                lemma_path_walkable(hs, w, f, s);
+                lemma_mask_count(effects@, s, hs, w, 0);
+                if !M::CHECKED {
+                    bound = lemma_cut(effects@, hs, w, s.len(), 0);
+                }
+            }
+        }
+        // 写す前にすべてを確かめる。写し始めた後に `Err` を返すと、ヒープを変えたまま返すことになるためである
+        if M::CHECKED {
+            let k = self.checked_mask(effects, w)?;
+            self.stats.evidence_steps = self.stats.evidence_steps.wrapping_add(k as u64);
+            proof {
+                bound = k as nat;
+            }
+        }
+        proof {
+            if c {
+                if bound > s.len() {
+                    lemma_path_nth(hs, w, f, s, s.len());
+                    assert(walk_node(hs, nth(hs, w, s.len())));
+                }
+            }
+            lemma_kept_refl(hs);
+            lemma_unit_bits();
+            lemma_moved_refl(hs);
+            assert(mask_spec(effects@, s) == Seq::<(u16, Word)>::empty() + mask_from(
+                effects@,
+                s,
+                0,
+            ));
+        }
+        let mut node = w;
+        let mut i: usize = 0;
+        let mut removed: usize = 0;
+        let mut head = Word::UNIT;
+        let mut last = Word::UNIT;
+        let ghost mut cs: Seq<Word> = Seq::empty();
+        let ghost mut out: Seq<(u16, Word)> = Seq::empty();
+        let ghost mut js: Seq<int> = Seq::empty();
+        proof {
+            if c {
+                assert(copies_ok(hs, cs, out));
+                assert(copy_heap(hs, hs, cs, out, z));
+                assert(copy_seq(effects@, s, out, js, 0, 0));
+            }
+        }
+        while removed < effects.len()
+            invariant
+                self.heap.wf(),
+                self.heap.safe_settleable(),
+                !M::CHECKED ==> c,
+                self.evv == s0.evv,
+                self.yielding == s0.yielding,
+                self.max_evv == s0.max_evv,
+                s0.heap == hs,
+                m == effects@.len(),
+                none == Set::<usize>::empty(),
+                z == (|b: usize| 0int),
+                mask_walk(effects@, hs, w, bound),
+                M::CHECKED ==> mask_dups(effects@, hs, w, bound),
+                bound <= s0.max_evv,
+                i <= bound,
+                node == nth(hs, w, i as nat),
+                self.heap.word_in(node),
+                removed as int == wdropped(effects@, hs, w, i as nat),
+                kept_for(self.heap, hs, none),
+                M::CHECKED ==> self.heap.words_kept(hs),
+                forall|k: int|
+                    0 <= k < cs.len() ==> {
+                        &&& (#[trigger] cs[k]).is_ptr_spec()
+                        &&& !live(hs, cs[k].bits_spec())
+                        &&& live(self.heap, cs[k].bits_spec())
+                    },
+                cs.len() == 0 ==> head.bits_spec() == 1 && last.bits_spec() == 1,
+                cs.len() > 0 ==> {
+                    &&& head == cs[0]
+                    &&& last == cs.last()
+                    &&& self.heap.settled()
+                    &&& self.heap.word_in(last)
+                },
+                cs.len() > 0 && M::CHECKED ==> self.heap.set_passes(last, 1)
+                    && self.heap.dup_passes(last),
+                c ==> {
+                    &&& mask_path(hs, w, f, s)
+                    &&& s == s0.evv_seq(w)
+                    &&& bound <= s.len()
+                    &&& copy_heap(hs, self.heap, cs, out, z)
+                    &&& copy_seq(effects@, s, out, js, i as int, removed as int)
+                },
+            decreases bound - i,
+        {
+            let ghost h0 = self.heap;
+            proof {
+                if i as nat == bound {
+                    assert(false);
+                }
+                lemma_walk_kept(h0, hs, w, bound);
+                assert(walk_node(hs, nth(hs, w, i as nat)));
+                assert(nth(h0, w, i as nat) == node);
+                assert(nth(h0, w, (i + 1) as nat) == h0.scanned_word(nth(h0, w, i as nat), 1));
+                lemma_unextended(h0, node);
+                lemma_unextended(hs, node);
+                lemma_node_kept(h0, hs, none, node);
+                if c {
+                    lemma_path_nth(hs, w, f, s, i as nat);
+                }
+            }
+            let mt = (unsafe { self.heap.meta(node) })?;
+            proof {
+                mt.lemma_fields();
+            }
+            let t = mt.tag();
+            proof {
+                assert(t == hs.tag_of(node));
+                lemma_wseen_bounds(hs, w, i as nat, t);
+            }
+            let occ = count_effect(effects, t);
+            let keep = if occ == 0 {
+                true
+            } else {
+                let n = count_tag(&self.heap, Ghost(hs), w, i, t)?;
+                n >= occ
+            };
+            proof {
+                assert(keep == wkept(effects@, hs, w, i as nat));
+                if c {
+                    lemma_kept_eq(effects@, s, hs, w, i as nat);
+                    lemma_copy_seq_step(effects@, s, out, js, i as int, removed as int);
+                }
+            }
+            let next = (unsafe { self.heap.field(node, 1) })?;
+            proof {
+                assert(next == nth(hs, w, (i + 1) as nat));
+            }
+            if keep {
+                let ev = (unsafe { self.heap.field(node, 0) })?;
+                proof {
+                    lemma_mask_ev(effects@, hs, h0, w, f, s, bound, i as nat, ev, c);
+                }
+                (unsafe { self.heap.dup(ev) })?;
+                let ghost h1 = self.heap;
+                proof {
+                    lemma_kept_dup(h1, h0);
+                    if c {
+                        lemma_copy_dup(hs, h0, h1, cs, out, ev);
+                    }
+                }
+                let cp = self.heap.alloc_data(t, 2, 0, false);
+                let ghost h2 = self.heap;
+                proof {
+                    lemma_kept_alloc(h2, h1, cp);
+                    lemma_unextended(h2, cp);
+                    assert(h2.scanned_at(cp, 0) && h2.scanned_at(cp, 1));
+                    assert(h2.scanned_word(cp, 0).bits_spec() == 1);
+                    assert(h2.scanned_word(cp, 1).bits_spec() == 1);
+                    lemma_kept_trans(h1, h0, hs, none, none, none);
+                    lemma_kept_trans(h2, h1, hs, none, none, none);
+                    if M::CHECKED {
+                        lemma_words_trans(h2, h1, h0);
+                    }
+                    if c {
+                        lemma_copy_alloc(hs, h1, h2, cs, out, ev, cp);
+                        lemma_ext_nonneg_word(hs, ev);
+                        lemma_arg_moved(h2, hs, |b: usize| points(ev, b), none, ev);
+                    }
+                }
+                (unsafe { self.heap.set_field(cp, 0, ev) })?;
+                let ghost h3 = self.heap;
+                let ghost x3 = none.insert(cp.bits_spec());
+                proof {
+                    lemma_kept_set(h3, h2, cp, 0, ev);
+                    lemma_kept_trans(h3, h2, hs, none, x3, none);
+                    lemma_unextended(h3, cp);
+                    if M::CHECKED {
+                        lemma_words_trans(h3, h2, h0);
+                        lemma_set_passes_kept(h3, h2, cp, 0, ev, 1);
+                        lemma_fresh_dup_passes(h2, cp);
+                        if cs.len() > 0 {
+                            assert(live(h0, last.bits_spec()));
+                            lemma_kept_trans(h2, h1, h0, none, none, none);
+                            lemma_set_passes_moved(h2, h0, none, last, 1);
+                            lemma_set_passes_moved(h3, h2, x3, last, 1);
+                        }
+                    }
+                    if c {
+                        assert forall|k: int| 0 <= k < cs.len() implies (
+                        #[trigger] cs[k]).bits_spec() != cp.bits_spec() by {
+                            assert(live(h1, cs[k].bits_spec()));
+                        }
+                        lemma_copy_set(hs, h2, h3, cs, out, ev, cp);
+                        lemma_node_kept(h3, h2, x3, cp);
+                        if cs.len() > 0 {
+                            lemma_last_ready(h3, cs, out);
+                        }
+                    }
+                }
+                proof {
+                    lemma_unit_bits();
+                }
+                if last.bits() == 1 {
+                    head = cp;
+                } else {
+                    (unsafe { self.heap.set_field(last, 1, cp) })?;
+                }
+                let ghost h4 = self.heap;
+                proof {
+                    if cs.len() > 0 {
+                        let x4 = none.insert(last.bits_spec());
+                        lemma_kept_set(h4, h3, last, 1, cp);
+                        lemma_kept_trans(h4, h3, hs, none, x4, none);
+                        if M::CHECKED {
+                            lemma_words_trans(h4, h3, h0);
+                            lemma_set_passes_moved(h4, h3, x4, cp, 1);
+                        }
+                    }
+                    if M::CHECKED {
+                        lemma_words_trans(h4, h0, hs);
+                        lemma_words_trans(h4, h3, h2);
+                    }
+                    if c {
+                        lemma_copy_push(hs, h3, h4, cs, out, cp, s[i as int]);
+                        assert(cs.push(cp)[cs.len() as int] == cp);
+                    }
+                }
+                last = cp;
+                proof {
+                    cs = cs.push(cp);
+                    out = out.push(s[i as int]);
+                    js = js.push(i as int);
+                }
+            } else {
+                removed += 1;
+            }
+            node = next;
+            i += 1;
+        }
+        let ghost h5 = self.heap;
+        proof {
+            if (i as nat) < bound {
+                assert(wdropped(effects@, hs, w, i as nat) < m);
+            }
+            lemma_unit_bits();
+            if M::CHECKED {
+                assert(hs.dup_passes(nth(hs, w, bound)));
+            }
+            if c {
+                lemma_path_nth(hs, w, f, s, bound);
+                if node.bits_spec() != 1 {
+                    lemma_node_kept(h5, hs, none, node);
+                }
+            }
+        }
+        (unsafe { self.heap.dup(node) })?;
+        let ghost h6 = self.heap;
+        proof {
+            lemma_kept_dup(h6, h5);
+            if M::CHECKED {
+                lemma_words_trans(h6, h5, hs);
+                if cs.len() > 0 {
+                    lemma_set_passes_moved(h6, h5, none, last, 1);
+                }
+            }
+            if c {
+                lemma_copy_dup(hs, h5, h6, cs, out, node);
+                if cs.len() > 0 {
+                    lemma_last_ready(h6, cs, out);
+                    lemma_ext_nonneg_word(hs, node);
+                    lemma_arg_moved(h6, hs, |b: usize| points(node, b), none, node);
+                }
+            }
+        }
+        if last.bits() == 1 {
+            proof {
+                if M::CHECKED {
+                    self.lemma_words_kept(s0);
+                }
+                if c {
+                    self.lemma_evv_mask_ok(s0, effects@, w, f, s, bound, cs, out, js, node, node);
+                }
+            }
+            Ok(node)
+        } else {
+            (unsafe { self.heap.set_field(last, 1, node) })?;
+            proof {
+                if M::CHECKED {
+                    lemma_words_trans(self.heap, h6, hs);
+                    self.lemma_words_kept(s0);
+                }
+                if c {
+                    lemma_copy_close(hs, h6, self.heap, cs, out, node);
+                    self.lemma_evv_mask_ok(s0, effects@, w, f, s, bound, cs, out, js, node, head);
+                }
+            }
+            Ok(head)
+        }
+    }
 }
 
 // 検査モードの確かめ。状態を変える前に呼ぶ
@@ -1892,6 +2540,139 @@ impl<M: Mode> Ctx<M> {
             return Err(HeapError::BadEvidence);
         }
         Ok(t)
+    }
+
+    /// mask が除く組を、写す前に数える。節点ごとに形を確かめ、上限の歩数で止まり、除く組が足りなければ
+    /// `NoHandler` を返す。写しに要る `dup` もここで確かめるので、写す間は `Err` を返さない。返すのはたどった節点の
+    /// 数である。
+    #[verifier::spinoff_prover]
+    fn checked_mask(&self, effects: &[u16], w: Word) -> (r: Result<usize, HeapError>)
+        requires
+            M::CHECKED,
+            self.wf(),
+            self.heap.word_in(w),
+        ensures
+            r matches Ok(k) ==> {
+                &&& mask_walk(effects@, self.heap, w, k as nat)
+                &&& mask_dups(effects@, self.heap, w, k as nat)
+                &&& k <= self.max_evv
+            },
+            self.held_ok() && self.evv_wf(w) && mask_spec(effects@, self.evv_seq(w)).len()
+                + effects@.len() == self.evv_seq(w).len() ==> r is Ok,
+    {
+        let ghost h = self.heap;
+        let ghost m = effects@.len();
+        let ghost c = self.held_ok() && self.evv_wf(w) && mask_spec(effects@, self.evv_seq(w)).len()
+            + m == self.evv_seq(w).len();
+        let ghost f = choose|f: nat| #[trigger] path(h, w, f) is Some;
+        let ghost s = seq_of(h, w);
+        proof {
+            if c {
+                lemma_seq_of(h, w, f);
+                lemma_path_walkable(h, w, f, s);
+                lemma_mask_count(effects@, s, h, w, 0);
+            }
+        }
+        let mut node = w;
+        let mut k: usize = 0;
+        let mut removed: usize = 0;
+        while removed < effects.len()
+            invariant
+                M::CHECKED,
+                self.wf(),
+                self.heap == h,
+                self.heap.word_in(node),
+                c == (self.held_ok() && self.evv_wf(w) && mask_spec(effects@, self.evv_seq(w)).len()
+                    + m == self.evv_seq(w).len()),
+                m == effects@.len(),
+                walkable(h, w, k as nat),
+                node == nth(h, w, k as nat),
+                removed as int == wdropped(effects@, h, w, k as nat),
+                removed <= m,
+                forall|i: nat| i < k ==> #[trigger] wdropped(effects@, h, w, i) < m,
+                forall|j: nat|
+                    j < k && wkept(effects@, h, w, j) ==> h.dup_passes(
+                        h.scanned_word(#[trigger] nth(h, w, j), 0),
+                    ),
+                k <= self.max_evv,
+                c ==> {
+                    &&& path(h, w, f) == Some(s)
+                    &&& s.len() <= self.max_evv
+                    &&& walkable(h, w, s.len())
+                    &&& forall|j: int|
+                        0 <= j < s.len() ==> #[trigger] s[j].0 == h.tag_of(nth(h, w, j as nat))
+                    &&& wdropped(effects@, h, w, s.len()) == m
+                    &&& k <= s.len()
+                },
+            decreases self.max_evv - k,
+        {
+            proof {
+                lemma_unit_bits();
+                if c {
+                    if k == s.len() {
+                        assert(false);
+                    }
+                    lemma_path_nth(h, w, f, s, k as nat);
+                }
+            }
+            if node.bits() == 1 {
+                return Err(HeapError::NoHandler);
+            }
+            if k >= self.max_evv || !node.is_ptr() {
+                return Err(HeapError::BadEvidence);
+            }
+            let mt = (unsafe { self.heap.meta(node) })?;
+            proof {
+                mt.lemma_fields();
+            }
+            if !Self::data_meta(mt, 2) || mt.tag() == 0 {
+                return Err(HeapError::BadEvidence);
+            }
+            let t = mt.tag();
+            proof {
+                lemma_unextended(h, node);
+                assert(walk_node(h, node));
+                assert forall|j: nat| j < k + 1 implies walk_node(h, #[trigger] nth(h, w, j)) by {
+                    if j == k {
+                    }
+                }
+                lemma_agree_refl(h, w, k as nat);
+                lemma_wseen_bounds(h, w, k as nat, t);
+            }
+            let occ = count_effect(effects, t);
+            let keep = if occ == 0 {
+                true
+            } else {
+                let n = count_tag(&self.heap, Ghost(h), w, k, t)?;
+                n >= occ
+            };
+            proof {
+                assert(keep == wkept(effects@, h, w, k as nat));
+                if c {
+                    lemma_kept_eq(effects@, s, h, w, k as nat);
+                }
+            }
+            if keep {
+                let ev = (unsafe { self.heap.field(node, 0) })?;
+                self.heap.dup_check(ev)?;
+            } else {
+                removed += 1;
+            }
+            node = (unsafe { self.heap.field(node, 1) })?;
+            k += 1;
+            proof {
+                assert(nth(h, w, k as nat) == h.scanned_word(nth(h, w, (k - 1) as nat), 1));
+            }
+        }
+        proof {
+            if c {
+                lemma_path_nth(h, w, f, s, k as nat);
+                lemma_unit_bits();
+                assert(h.dup_ok(node));
+            }
+        }
+        self.heap.dup_check(node)?;
+        Ok(k)
     }
 
     /// `l` が `max_evv` より短いリストかを、節点をたどって確かめる。輪になったリストも、上限の歩数で止まる。

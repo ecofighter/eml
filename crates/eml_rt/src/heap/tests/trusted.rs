@@ -7,10 +7,11 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use vstd::prelude::Tracked;
 
+use super::ctx as ctx_tests;
 use super::string::text;
 use super::{CONS, cons, list, mortal, probe, raw};
 use crate::cell::{rc_decref_shared, rc_dup_shared};
-use crate::{Checked, Fast, Heap, HeapError, Kind, Meta, Mode, Word};
+use crate::{Checked, Control, Ctx, Fast, Heap, HeapError, Kind, Limits, Meta, Mode, Word};
 
 const PAGE_BYTES: usize = 0x1_0000;
 
@@ -271,6 +272,48 @@ fn every_core_operation_once<M: Mode>() {
     }
     // 生きているのは、ダミーと不死の物体だけである
     assert_eq!(heap.live_objects().len(), 2);
+    every_primitive_once::<M>();
+}
+
+/// 実行文脈の基本操作を1回ずつ通す。
+fn every_primitive_once<M: Mode>() {
+    const UNIT: Word = Word::imm(0);
+    let mut ctx = Ctx::<M>::new(Arc::new(Control::new(Limits::default())));
+    let e0 = ctx_tests::push(&mut ctx, 0, 1);
+    let e1 = ctx_tests::push(&mut ctx, 1, 1);
+    unsafe {
+        let c = ctx.heap_mut().alloc_data(0, 1, 0, false);
+        ctx.ev_set_clause(e0, 0, c).unwrap();
+        let found = ctx.ev_lookup(0).unwrap();
+        assert_eq!(found, e0);
+        let got = ctx.ev_clause(found, 0).unwrap();
+        assert_eq!(got, c);
+        ctx.heap_mut().decref(got).unwrap();
+        let outer = ctx.ev_evv(found).unwrap();
+        ctx.heap_mut().decref(outer).unwrap();
+        ctx.ev_set_state(found, Word::imm(1)).unwrap();
+        assert_eq!(ctx.ev_take_state(found).unwrap(), Word::imm(1));
+        let renewed = ctx.ev_renew(found, UNIT).unwrap();
+        ctx.heap_mut().decref(found).unwrap();
+        let list = ctx.evv_get().unwrap();
+        let masked = ctx.evv_mask(&[1], list).unwrap();
+        for w in [masked, list] {
+            ctx.heap_mut().decref(w).unwrap();
+        }
+        // yield の1往復
+        ctx.yield_to(renewed, UNIT, Word::imm(1)).unwrap();
+        let k = ctx.yield_cont_take().unwrap();
+        ctx.yield_cont_set(k).unwrap();
+        assert_eq!(ctx.yield_cont_take(), Ok(Word::imm(1)));
+        assert_eq!(ctx.yield_finish(), Ok(UNIT));
+        assert_eq!(ctx.poll(0), Ok(()));
+        for e in [e0, e1] {
+            ctx.heap_mut().decref(e).unwrap();
+        }
+    }
+    ctx_tests::clear(&mut ctx);
+    assert!(ctx.check_finished());
+    assert_eq!(mortal(ctx.heap()), 0);
 }
 
 #[test]
@@ -493,7 +536,7 @@ fn own_objects_read_region_words<M: Mode>() {
 // 実行の制御
 // T1: 2つのスレッドのヒープが、1つの Control にページの数を足し引きする
 fn two_threads_share_one_control<M: Mode>() {
-    let control = Arc::new(crate::Control::new(crate::Limits::default()));
+    let control = Arc::new(Control::new(Limits::default()));
     let threads: Vec<_> = (0..2)
         .map(|_| {
             let control = control.clone();
@@ -513,13 +556,15 @@ fn two_threads_share_one_control<M: Mode>() {
 // 別のスレッドが立てた止める語を読む
 #[test]
 fn an_interrupt_from_another_thread_is_seen() {
-    let control = Arc::new(crate::Control::new(crate::Limits::default()));
+    let control = Arc::new(Control::new(Limits::default()));
     let setter = {
         let control = control.clone();
         std::thread::spawn(move || control.interrupt())
     };
     setter.join().unwrap();
-    assert_eq!(control.stop_bits(), crate::Control::INTERRUPT);
+    assert_eq!(control.stop_bits(), Control::INTERRUPT);
+    let ctx = Ctx::<Fast>::new(control);
+    assert_eq!(ctx.poll(0), Err(crate::Stop::Interrupted));
 }
 
 both_modes!(

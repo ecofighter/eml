@@ -611,6 +611,11 @@ impl Core {
             forall|b: usize|
                 b != h@.addr ==> #[trigger] final(self).perms@[b] == old(self).perms@[b],
             forall|b: usize| b != h@.addr ==> #[trigger] final(self).state(b) == old(self).state(b),
+            forall|b: usize|
+                b != h@.addr ==> #[trigger] final(self).model@.owner[b] == old(
+                    self,
+                ).model@.owner[b],
+            !old(self).has(h@.addr),
     {
         proof {
             let s0 = *self;

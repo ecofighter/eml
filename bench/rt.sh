@@ -28,7 +28,7 @@ echo "- コミット: $(git -C "$root" describe --always --dirty --abbrev=7)"
 echo
 echo "| 計測 | instructions retired | 実時間 (s) |"
 echo "|---|---:|---:|"
-for case in empty list box-list dup free map map-reuse append; do
+for case in empty list box-list dup free map map-reuse append perform perform-deep handle yield mask poll; do
   instructions=()
   seconds=()
   for _ in $(seq "$runs"); do

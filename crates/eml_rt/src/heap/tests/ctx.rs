@@ -291,6 +291,265 @@ fn a_push_past_the_evv_limit_is_bad_evidence<M: Mode>() {
     assert_eq!(super::mortal(ctx.heap()), 0);
 }
 
+/// `w` のリストの節点と evidence を先頭から並べる。節点は `field(node, 0)` が evidence、`field(node, 1)` が次である。
+fn nodes<M: Mode>(ctx: &Ctx<M>, mut list: Word) -> Vec<(Word, Word)> {
+    let mut nodes = Vec::new();
+    while list != UNIT {
+        let ev = unsafe { ctx.heap().field(list, 0) }.unwrap();
+        nodes.push((list, ev));
+        list = unsafe { ctx.heap().field(list, 1) }.unwrap();
+    }
+    nodes
+}
+
+/// `eml_interp` の同じ名前のテストと同じ列で、同じ数になる。
+fn lookups_and_masks_count_the_list_nodes_they_visit<M: Mode>() {
+    let mut ctx = ctx::<M>();
+    let evs: Vec<Word> = [0, 1, 1]
+        .into_iter()
+        .map(|e| push(&mut ctx, e, 1))
+        .collect();
+    unsafe {
+        let found = ctx.ev_lookup(0).unwrap();
+        ctx.heap_mut().decref(found).unwrap();
+        if M::CHECKED {
+            assert_eq!(ctx.stats().evidence_steps, 3);
+        }
+        let list = ctx.evv_get().unwrap();
+        let masked = ctx.evv_mask(&[1], list).unwrap();
+        if M::CHECKED {
+            assert_eq!(ctx.stats().evidence_steps, 4);
+        }
+        ctx.heap_mut().decref(masked).unwrap();
+        ctx.heap_mut().decref(list).unwrap();
+        for e in evs {
+            ctx.heap_mut().decref(e).unwrap();
+        }
+    }
+    clear(&mut ctx);
+    assert_eq!(super::mortal(ctx.heap()), 0);
+}
+
+/// evv は先頭から 0、1、1、0 のエフェクトの evidence である。多重集合の各エフェクトについて、先頭から合う
+/// evidence をその数だけ飛ばし、飛ばした最後の節点の前で残した節点だけを写す。
+fn a_mask_skips_the_first_matches_of_each_effect_in_its_multiset<M: Mode>() {
+    let mut ctx = ctx::<M>();
+    let evs: Vec<Word> = [0, 1, 1, 0]
+        .into_iter()
+        .map(|e| push(&mut ctx, e, 1))
+        .collect();
+    unsafe {
+        let list = ctx.evv_get().unwrap();
+        let original = nodes(&ctx, list);
+        let distinct = ctx.evv_mask(&[0, 1], list).unwrap();
+        assert_eq!(distinct, original[2].0);
+        let twice = ctx.evv_mask(&[1, 1], list).unwrap();
+        let masked = nodes(&ctx, twice);
+        assert_eq!(
+            masked.iter().map(|&(_, ev)| ev).collect::<Vec<_>>(),
+            [original[0].1, original[3].1]
+        );
+        assert_ne!(masked[0].0, original[0].0);
+        assert_eq!(masked[1].0, original[3].0);
+        if M::CHECKED {
+            assert_eq!(ctx.stats().evidence_steps, 2 + 3);
+        }
+        for w in [distinct, twice, list] {
+            ctx.heap_mut().decref(w).unwrap();
+        }
+        for e in evs {
+            ctx.heap_mut().decref(e).unwrap();
+        }
+    }
+    clear(&mut ctx);
+    assert_eq!(super::mortal(ctx.heap()), 0);
+}
+
+fn a_mask_that_skips_more_evidence_than_the_list_holds<M: Mode>() {
+    if !M::CHECKED {
+        return;
+    }
+    let mut ctx = ctx::<M>();
+    let _e0 = push(&mut ctx, 0, 1);
+    let _e1 = push(&mut ctx, 1, 1);
+    unsafe {
+        let list = ctx.evv_get().unwrap();
+        assert_eq!(
+            ctx.evv_mask(&[1, 1], list).unwrap_err(),
+            HeapError::NoHandler
+        );
+    }
+}
+
+/// 輪になった evv は、小さい上限で BadEvidence になって止まる。
+fn a_cyclic_evv_stops_at_the_limit<M: Mode>() {
+    if !M::CHECKED {
+        return;
+    }
+    let control = Arc::new(Control::new(Limits {
+        max_evv: 8,
+        ..Limits::default()
+    }));
+    let mut ctx = Ctx::<M>::new(control);
+    let _e0 = push(&mut ctx, 0, 1);
+    unsafe {
+        let list = ctx.evv_get().unwrap();
+        // 節点の next を自分自身に向けて輪にする (前提を崩すテストなので raw で書く)
+        super::raw::set_slot(list, 1, list);
+        ctx.heap_mut().decref(list).unwrap();
+        assert_eq!(ctx.ev_lookup(5).unwrap_err(), HeapError::BadEvidence);
+    }
+}
+
+/// handle の中で perform して、その場で戻る (in-place の節)。
+fn perform_in_place<M: Mode>() {
+    let mut ctx = ctx::<M>();
+    let ev = push(&mut ctx, 3, 1);
+    unsafe {
+        let clause = ctx.heap_mut().alloc_data(0, 1, 0, false);
+        ctx.ev_set_clause(ev, 0, clause).unwrap();
+        // perform: ev_lookup + ev_clause + 節の呼び出し (ここでは節を読むだけ)
+        let found = ctx.ev_lookup(3).unwrap();
+        let c = ctx.ev_clause(found, 0).unwrap();
+        assert_eq!(c, clause);
+        ctx.heap_mut().decref(c).unwrap();
+        ctx.heap_mut().decref(found).unwrap();
+        // handle の終わり: evv を外側に戻す
+        let outer = ctx.ev_evv(ev).unwrap();
+        ctx.evv_set(outer).unwrap();
+        ctx.heap_mut().decref(ev).unwrap();
+    }
+    assert!(ctx.check_finished());
+    assert_eq!(super::mortal(ctx.heap()), 0);
+}
+
+/// yield して継続を組み立て、再開する1往復。
+fn yield_and_resume_once<M: Mode>() {
+    let mut ctx = ctx::<M>();
+    let ev = push(&mut ctx, 0, 1);
+    unsafe {
+        let body = ctx.heap_mut().alloc_data(0, 1, 0, false);
+        let k0 = ctx.heap_mut().alloc_data(0, 1, 0, false);
+        ctx.heap_mut().dup(ev).unwrap();
+        ctx.yield_to(ev, body, k0).unwrap();
+        // 呼び出しのフレームごとに継続を包む
+        let k = ctx.yield_cont_take().unwrap();
+        let wrapped = ctx.heap_mut().alloc_data(0, 2, 0, false);
+        ctx.heap_mut().set_field(wrapped, 1, k).unwrap();
+        ctx.yield_cont_set(wrapped).unwrap();
+        // prompt$ が受ける
+        assert_eq!(ctx.yield_status(ev), 1);
+        let k = ctx.yield_cont_take().unwrap();
+        let body = ctx.yield_finish().unwrap();
+        // 再開: 新しい evidence で節の本体を動かす (ここでは作るだけ)
+        let renewed = ctx.ev_renew(ev, UNIT).unwrap();
+        for w in [renewed, body, k, ev] {
+            ctx.heap_mut().decref(w).unwrap();
+        }
+    }
+    clear(&mut ctx);
+    assert!(ctx.check_finished());
+    assert_eq!(super::mortal(ctx.heap()), 0);
+}
+
+/// 物体でない宛先には yield できず、yield の状態はなしのままである。
+fn a_yield_to_a_non_object_is_misuse<M: Mode>() {
+    if !M::CHECKED {
+        return;
+    }
+    let mut ctx = ctx::<M>();
+    unsafe {
+        assert_eq!(
+            ctx.yield_to(Word::imm(3), UNIT, Word::imm(1)).unwrap_err(),
+            HeapError::YieldMisuse
+        );
+        assert_eq!(
+            ctx.yield_cont_set(Word::imm(1)).unwrap_err(),
+            HeapError::YieldMisuse
+        );
+    }
+    assert_eq!(ctx.yielding(), 0);
+    assert!(ctx.check_finished());
+}
+
+/// 断った yield の操作は、yield の状態を変えない。
+fn a_refused_yield_operation_keeps_the_state<M: Mode>() {
+    if !M::CHECKED {
+        return;
+    }
+    let mut ctx = ctx::<M>();
+    let ev = ctx_evidence(&mut ctx);
+    let other = ctx_evidence(&mut ctx);
+    unsafe {
+        ctx.yield_to(ev, UNIT, Word::imm(1)).unwrap();
+        assert_eq!(
+            ctx.yield_abort(other, UNIT, UNIT).unwrap_err(),
+            HeapError::YieldMisuse
+        );
+        assert_eq!(ctx.yield_status(ev), 1);
+        assert_eq!(ctx.yield_status(other), 3);
+        assert_eq!(
+            ctx.yield_cont_set(Word::imm(2)).unwrap_err(),
+            HeapError::YieldMisuse
+        );
+        assert_eq!(ctx.yield_finish().unwrap_err(), HeapError::YieldMisuse);
+        assert_eq!(ctx.yield_status(ev), 1);
+        assert_eq!(ctx.yield_cont_take(), Ok(Word::imm(1)));
+        assert_eq!(ctx.yield_finish(), Ok(UNIT));
+        ctx.heap_mut().decref(other).unwrap();
+    }
+    assert!(ctx.check_finished());
+    assert_eq!(super::mortal(ctx.heap()), 0);
+}
+
+/// evidence でない物体と、上限に達したリストには節点を足せない。確かめは確保の前なので、引数は呼ぶ側が持ったままである。
+fn a_refused_push_keeps_its_arguments<M: Mode>() {
+    if !M::CHECKED {
+        return;
+    }
+    let control = Arc::new(Control::new(Limits {
+        max_evv: 1,
+        ..Limits::default()
+    }));
+    let mut ctx = Ctx::<M>::new(control);
+    let ev = push(&mut ctx, 0, 1);
+    unsafe {
+        let closure = ctx.heap_mut().alloc_data(0, 3, 0, false);
+        assert_eq!(
+            ctx.evv_push(UNIT, closure).unwrap_err(),
+            HeapError::BadEvidence
+        );
+        let full = ctx.evv_get().unwrap();
+        ctx.heap_mut().dup(ev).unwrap();
+        assert_eq!(ctx.evv_push(full, ev).unwrap_err(), HeapError::BadEvidence);
+        for w in [closure, full, ev, ev] {
+            ctx.heap_mut().decref(w).unwrap();
+        }
+    }
+    clear(&mut ctx);
+    assert_eq!(super::mortal(ctx.heap()), 0);
+}
+
+/// 共有にした evidence の状態の欄は書けない (docs/spec/lir.md の「evidence」)。欄は元の値のままである。
+fn the_state_of_a_shared_evidence_is_not_writable<M: Mode>() {
+    if !M::CHECKED {
+        return;
+    }
+    let mut ctx = ctx::<M>();
+    let ev = push(&mut ctx, 0, 1);
+    unsafe {
+        ctx.ev_set_state(ev, Word::imm(5)).unwrap();
+        ctx.heap_mut().share(ev, 1).unwrap();
+        assert_eq!(ctx.ev_take_state(ev).unwrap_err(), HeapError::NotWritable);
+        assert_eq!(ctx.heap().field(ev, 1), Ok(Word::imm(5)));
+        assert_eq!(
+            ctx.ev_set_state(ev, Word::imm(6)).unwrap_err(),
+            HeapError::NotWritable
+        );
+        assert_eq!(ctx.heap().field(ev, 1), Ok(Word::imm(5)));
+    }
+}
+
 both_modes!(
     a_new_ctx_is_finished,
     poll_reports_each_stop,
@@ -305,4 +564,14 @@ both_modes!(
     replacing_a_state_that_reaches_its_evidence,
     bad_evidence_is_reported_in_checked_mode,
     a_push_past_the_evv_limit_is_bad_evidence,
+    lookups_and_masks_count_the_list_nodes_they_visit,
+    a_mask_skips_the_first_matches_of_each_effect_in_its_multiset,
+    a_mask_that_skips_more_evidence_than_the_list_holds,
+    a_cyclic_evv_stops_at_the_limit,
+    perform_in_place,
+    yield_and_resume_once,
+    a_yield_to_a_non_object_is_misuse,
+    a_refused_yield_operation_keeps_the_state,
+    a_refused_push_keeps_its_arguments,
+    the_state_of_a_shared_evidence_is_not_writable,
 );
