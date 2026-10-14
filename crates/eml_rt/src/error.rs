@@ -29,6 +29,7 @@ pub enum HeapError {
     OutOfBounds,
     SharedReachesLocal,
     ImmortalReachesMortal,
+    YieldMisuse,
 }
 
 } // verus!
@@ -73,6 +74,9 @@ impl fmt::Display for HeapError {
             HeapError::SharedReachesLocal => f.write_str("a shared object reaches a local object"),
             HeapError::ImmortalReachesMortal => {
                 f.write_str("an immortal object reaches a mortal object")
+            }
+            HeapError::YieldMisuse => {
+                f.write_str("an evidence-passing primitive breaks the yield state")
             }
         }
     }

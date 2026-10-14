@@ -51,6 +51,10 @@ impl Control {
     pub(crate) fn unbounded() -> Arc<Control> {
         Arc::new(Control::new(Limits::default()))
     }
+
+    pub fn limits(&self) -> Limits {
+        self.limits
+    }
 }
 
 } // verus!
@@ -72,10 +76,6 @@ impl Control {
 
     pub fn stop_bits(&self) -> u32 {
         self.stop.load(Ordering::Relaxed)
-    }
-
-    pub fn limits(&self) -> Limits {
-        self.limits
     }
 
     /// セッションのヒープが OS から取ったページのバイト数。

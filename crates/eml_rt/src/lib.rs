@@ -26,13 +26,13 @@ mod word;
 pub use control::{Control, Limits, Stop};
 pub use error::HeapError;
 pub use frozen::Frozen;
-pub use heap::{Heap, Stats, Token};
+pub use heap::{Ctx, CtxStats, Heap, Stats, Token};
 pub use meta::{Kind, Meta};
 pub use mode::{Checked, Fast, Mode};
 pub use word::Word;
 
-/// `Heap` が `Sync` でないことをコンパイルの時点で確かめる。`Sync` なら下の2つの実装のどちらを選ぶかが決まらず、
-/// コンパイルが止まる (static_assertions の `assert_not_impl_any!` と同じ方法)。
+/// `Heap` と `Ctx` が `Sync` でないことをコンパイルの時点で確かめる。`Sync` なら下の2つの実装のどちらを選ぶかが
+/// 決まらず、コンパイルが止まる (static_assertions の `assert_not_impl_any!` と同じ方法)。
 const _: fn() = || {
     trait AmbiguousIfSync<A> {
         fn some_item() {}
@@ -41,6 +41,8 @@ const _: fn() = || {
     impl<T: ?Sized + Sync> AmbiguousIfSync<u8> for T {}
     let _ = <Heap<Fast> as AmbiguousIfSync<_>>::some_item;
     let _ = <Heap<Checked> as AmbiguousIfSync<_>>::some_item;
+    let _ = <Ctx<Fast> as AmbiguousIfSync<_>>::some_item;
+    let _ = <Ctx<Checked> as AmbiguousIfSync<_>>::some_item;
 };
 
 // `Control` はセッションのどのスレッドからも同じものを見る
@@ -64,5 +66,8 @@ mod tests {
         send_and_sync::<Frozen<Checked>>();
         send::<Heap<Fast>>();
         send::<Heap<Checked>>();
+        send::<Ctx<Fast>>();
+        send::<Ctx<Checked>>();
+        send_and_sync::<Control>();
     }
 }

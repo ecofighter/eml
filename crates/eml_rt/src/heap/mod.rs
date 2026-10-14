@@ -9,6 +9,7 @@
 mod chain;
 pub(crate) mod check;
 mod core;
+mod ctx;
 mod field;
 mod handover;
 pub(crate) mod inv;
@@ -52,6 +53,7 @@ use vstd::raw_ptr::ptr_mut_write;
 #[cfg(verus_keep_ghost)]
 use vstd::shared::Shared;
 
+pub use ctx::{Ctx, CtxStats};
 pub use reuse::Token;
 
 use crate::foreign::{finalizer_of, run_finalizer};
@@ -1881,6 +1883,7 @@ impl<M: Mode> Heap<M> {
                 w,
                 -1,
             ),
+            !w.is_ptr_spec() ==> r is Ok && *final(self) == old(self).settled_heap(),
             final(self).kept_live(*old(self)),
             M::CHECKED ==> final(self).words_kept(*old(self)),
             final(self).settled(),
