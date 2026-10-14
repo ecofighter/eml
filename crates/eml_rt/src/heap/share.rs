@@ -1483,7 +1483,6 @@ pub(crate) open spec fn same_frame(
 pub(crate) proof fn lemma_kids_same(x: BlockPerm, y: BlockPerm, first: int, i: int)
     requires
         x.slots == y.slots,
-        x.text == y.text,
     ensures
         kids(x, first, i) == kids(y, first, i),
     decreases i,

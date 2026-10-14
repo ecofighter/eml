@@ -358,6 +358,28 @@ fn self_concat_under_both_borrow_models<M: Mode>() {
     assert_eq!(mortal(&heap), 0);
 }
 
+fn appending_the_text_of_another_string<M: Mode>() {
+    let mut heap = Heap::<M>::new();
+    let big = "R".repeat(PAGE_BYTES + 5);
+    // その場の追記、語を埋めた左辺の作り直し、大きい右辺、大きい左辺の作り直し
+    for (left, right) in [
+        ("ab", "c"),
+        ("abcdefgh", "ijk"),
+        ("ab", big.as_str()),
+        (big.as_str(), "xyz"),
+    ] {
+        let a = heap.alloc_string(left);
+        let b = heap.alloc_string(right);
+        let s = unsafe { &*heap.string(b).unwrap() };
+        let a = unsafe { heap.string_push(a, s) }.unwrap();
+        assert_eq!(text(&heap, a), format!("{left}{right}"));
+        assert_eq!(text(&heap, b), right);
+        unsafe { heap.decref(a) }.unwrap();
+        unsafe { heap.decref(b) }.unwrap();
+    }
+    assert_eq!(mortal(&heap), 0);
+}
+
 fn reading_then_appending<M: Mode>() {
     let mut heap = Heap::<M>::new();
     let w = heap.alloc_string("first");
@@ -386,5 +408,6 @@ both_modes!(
     large_strings_cross_pages,
     empty_strings_are_appended,
     self_concat_under_both_borrow_models,
+    appending_the_text_of_another_string,
     reading_then_appending,
 );

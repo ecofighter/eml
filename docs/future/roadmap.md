@@ -102,9 +102,9 @@ S9 を、S9a、S9v、S9b-1、S9b-2、S9b-3 の5つの作業に分けて順に進
 | S9v | vstd への依存を受け入れ、`eml_rt` のコードを `verus!` の中に書いて、`unsafe` の核を含む crate 全体を Verus で検証する。Verus で確かめない部分を信頼の一覧にまとめ、Miri はそこを通るテストだけを流す。nixpkgs を nixos-unstable に上げ、Rust の toolchain を fenix から取り、Verus と verusfmt を flake の input にする | 終えた。決めたことは [オブジェクトモデル](../spec/object-model.md) の「`unsafe` の核」と [テスト戦略](../implementation/testing.md) の「`eml_rt` の検証」に移した。S9b の extern の語の ABI が FFI の最初の境界になるので、境界を信頼の一覧と Miri のテストに足す決まりを、S9b より前に決めておくために、S9a と S9b の間に置いた ([計測の基準](../implementation/benchmarks.md) の「S9v (`eml_rt` の検証)」) |
 | S9b-1 | 物体の種類ごとの中身。データの物理的な形の規則、クロージャ、evidence の3つの物体、文字列、`File` の表し方 | 終えた。決めたことは [オブジェクトモデル](../spec/object-model.md) の「種類」、「物体の形」、「文字列」、「`unsafe` の核」に移した。UI テストの出力と `bench/` の仕事の回数は変わらない ([計測の基準](../implementation/benchmarks.md) の「S9b-1 (文字列)」) |
 | S9b-2 | `Ctx`、`FnEntry`、`CodeBase`、`CodeBase` の不死の定数、基本操作、SIGINT | これから |
-| S9b-3 | 語の ABI の extern、今の実装との差分テスト、FFI の境界の信頼の一覧の行と Miri | これから |
+| S9b-3 | 語の ABI の extern、`File` の物体の中身の型、今の実装との差分テスト、FFI の境界の信頼の一覧の行と Miri | これから |
 
-S9b を3つに分けたのは、extern が文字列と `File` と出力先 (`Ctx`) を使い、`CodeBase` の定数が文字列とクロージャの形を使うためである。
+この順にしたのは、extern が文字列と `File` と出力先 (`Ctx`) を使い、`CodeBase` の定数が文字列とクロージャの形を使うためである。
 
 S9a で閉じた論点は次のとおりである。
 
@@ -261,7 +261,7 @@ S12 で書いたスクリプトの書き心地を見て、次の項目を採る�
 - 型ごとの意味: `Float` の `/` と `%` の有無、`Float` の `==` と NaN の結果、`Float` の `Eq` / `Ord` の法則
 - 除算のクラスを instance ごとの小さなクラスにするか、`Integral` / `Fractional` に分けるか。`negate` をユーザーに見せるか
 - `Float` をリテラルのパターンと `switch` から外すこと
-- 多相な位置での `Float` の表現は、S9 の語の表現の上で決める。`eml_rt` の語の表現 (`tobj` では `BigInt` と同じく箱、`float` の位置では生の 64 ビットを方向とする) も、ここで決める
+- 多相な位置での `Float` の表現と、`eml_rt` の語での表現をここで決める (方向は、`tobj` では `BigInt` と同じく箱、`float` の位置では生の 64 ビット)
 
 ### バイト列と `Array`
 
@@ -354,7 +354,7 @@ UTF-8 の核の extern を入れ、標準ライブラリを広げる。`std/` �
 
 - インクリメンタル化: 各段階をクエリ (salsa など) に載せ替える。各段階を純粋な関数にしているのはこのため ([コンパイラの構成](../implementation/architecture.md))
 - LSP: 診断、hover (型と row の表示)、補完、code action。診断の構造体は、LSP の診断と code action に変換できる形にしてある ([診断](../spec/diagnostics.md))。前提: インクリメンタル化
-- ネイティブ化: LIR から Cranelift でネイティブのコードを出す。LIR のブロックの列とブロック引数は、Cranelift のブロック引数に1対1で写る。多相な位置の `Int` と `Float` の表現は、S9 で決めた語の表現を前提にする。VM とネイティブは `eml_rt` の値とヒープを共有し、関数表 `FnEntry` を接続点にして混ぜて動かせる。たとえば、標準ライブラリだけをネイティブにし、ユーザーのコードをバイトコードで動かす。VM からネイティブの関数を呼ぶときは `f$boxed` の一様な入口を使う。`eml_extern` の表は、`eml_rt` の語の ABI の関数になる。ネイティブの `par` がバイトコードの閉包を worker で呼ぶには、VM の並列化 (下の「マルチコア対応」) が要る。前提: S10、`Float`、`Char`、`Num`
+- ネイティブ化: LIR から Cranelift でネイティブのコードを出す。LIR のブロックの列とブロック引数は、Cranelift のブロック引数に1対1で写る。多相な位置の `Int` の表現は S9 で決めた語の表現を、`Float` の表現は「`Float`、`Char`、`Num`」で決める表現を前提にする。VM とネイティブは `eml_rt` の値とヒープを共有し、関数表 `FnEntry` を接続点にして混ぜて動かせる。たとえば、標準ライブラリだけをネイティブにし、ユーザーのコードをバイトコードで動かす。VM からネイティブの関数を呼ぶときは `f$boxed` の一様な入口を使う。`eml_extern` の表は、`eml_rt` の語の ABI の関数になる。ネイティブの `par` がバイトコードの閉包を worker で呼ぶには、VM の並列化 (下の「マルチコア対応」) が要る。前提: S10、`Float`、`Char`、`Num`
   - Cranelift の mid-end は制御フローをほとんど変えないので、jump threading と既知のコンストラクタの畳み込みは Core IR の側で行う
   - ネイティブのコードの中で起きた実行時エラー (オーバーフロー、ゼロ除算) を、評価全体の中断にする方法は未設計である。旗を立てて戻る方式は効果を持たない関数にも確認を足し、巻き戻しは Cranelift のコードに展開情報を要する
 - Core IR の上の最適化パス: 既知の閉包への `apply` を `call` に置き換えること、引数が定数の関数の特殊化、純粋な extern の定数畳み込み。EP より前の Core IR に置き、関数単位の作業リストで動かす。枝の部分木を置き換えると、S3b-1 までの `simplify` のように長い `else if` の連鎖で2乗の時間がかかるためである。CPS のラムダの位置の変換 (試作で 200,125 回) は、既知の閉包への特殊化で減らす。Repr が同じ instance (`List Int` と `List String` の instance など、同じ形のコードになるもの) をまとめるのも、このパスに置く ([Core IR](../spec/core-ir.md) の「変換の規則」)

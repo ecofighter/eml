@@ -265,7 +265,7 @@ RC の遷移は、rc の値だけを受け取って次の状態を返す純粋�
 | `into_token` | | 呼ぶ側が唯一の参照を持ち、子の参照はもう処理してある | token にできる種類である (`NotTokenable`)。rc が 1 である (`NotUnique`) |
 | `con_at` / `reuse_in_place` / `drop_token` | | token の箱の「残した」語 (`con_at` と `reuse_in_place` で書き直さない語) の参照を呼ぶ側が持つ | token はまだ使っていない (`StaleToken`)。`con_at` の箱は `payload_words` の物体のこのモードでの級にある (`WrongClass`。同じ物理的な語の数の物体から作った token なら、どちらのモードでも満たす)。`reuse_in_place` の `meta` の tag、scan、種類は箱と同じで (`WrongMeta`)、箱が `lin` ビットを持つなら `meta` も持つ (`LinBitKept`) |
 | `share` | | | 届く物体はどれも生きている (`UseAfterFree`)。局所の `lin` の物体には1回だけ届き (`LinReachedTwice`)、共有の側の `lin` の物体には届かない (`LinShared`) |
-| `string` | 返す位置を読むのは、物体が生きていて、`string_push` でその物体を書き換えていない間だけである | | 物体は `String` である (`WrongKind`) |
+| `string` | 返す位置を読むのは、物体が生きていて、`string_push` か `string_concat` でその物体を書き換えていない間だけである | | 物体は `String` である (`WrongKind`) |
 | `string_push` | `s` は left 自身の中身を指さない (下の「文字列」) | 呼ぶ側が left の参照を1つ持つ | left は `String` である (`WrongKind`)。left は `decref` の検査する前提を満たす |
 | `string_concat` | | 呼ぶ側が left と right の参照を1つずつ持つ (同じ物体なら2つ持つ) | 両辺は `String` である (`WrongKind`)。両辺は `decref` の検査する前提を満たし、同じ物体なら2回続けた `decref` の検査する前提を満たす |
 
@@ -341,7 +341,7 @@ RC の遷移は、rc の値だけを受け取って次の状態を返す純粋�
 |---|---|
 | `alloc_string(s: &str) -> Word` | 安全な関数。`s` を写した文字列を作る。容量は級の大きさまで |
 | `alloc_string_immortal(s: &str) -> Word` | 安全な関数。rc 0 の不死の物体として作る。S9b-2 の `CodeBase` の文字列の定数が使う。`alloc_immortal` が `String` を断るので、別に持つ |
-| `string(w) -> Result<*const str, HeapError>` | `unsafe fn`。中身の位置を返す。`foreign` と同じく生のポインタにし、ヒープの借用に縛らない。指す先は、w の物体が生きていて、`string_push` でその物体を書き換えていない間だけ読める |
+| `string(w) -> Result<*const str, HeapError>` | `unsafe fn`。中身の位置を返す。`foreign` と同じく生のポインタにし、ヒープの借用に縛らない。指す先は、w の物体が生きていて、`string_push` か `string_concat` でその物体を書き換えていない間だけ読める |
 | `string_push(left, s: &str) -> Result<Word, HeapError>` | `unsafe fn`。left の参照を受け取り、`s` を後ろに足した文字列の参照を返す |
 | `string_concat(left, right) -> Result<Word, HeapError>` | `unsafe fn`。`++` そのもの。両辺の参照を受け取り、結果の参照を返す。`string_push(left, string(right))` の後に right を `decref` するのと同じ結果になる |
 
@@ -441,7 +441,7 @@ token (`Token`) はどちらのモードでも1語である。S10 の VM のレ�
 - `lin` ビットの立った物体への `dup` (`LinDup`)。`lin` の物体の rc は 1 なので、rc が 1 を超える誤りは、この `dup` で見つかる
 - `lin` ビットの立った共有の物体の `release` と `decref` (`LinShared`)。`share` は `lin` の物体に印を付けないので、これは印付けの誤りである。`share` のたどりが、すでに共有の `lin` の物体に届いたときも同じ誤りにする
 - `share` のたどりで、同じ `lin` の物体に2回届くこと (`LinReachedTwice`)
-- 所有者の不一致 (`WrongOwner`)。正の rc の物体への `dup`、`decref`、`set_field`、`set_raw`、`is_unique`、`is_last`、`free_block`、`into_token`、`release`、`release_reuse` が、今の worker ID と違う所有者の物体に対して行われたとき
+- 所有者の不一致 (`WrongOwner`)。正の rc の物体への `dup`、`decref`、`set_field`、`set_raw`、`is_unique`、`is_last`、`free_block`、`into_token`、`release`、`release_reuse`、`string_push`、`string_concat` が、今の worker ID と違う所有者の物体に対して行われたとき
 - token の誤り。token にできない種類の `into_token` (`NotTokenable`)、一意でない物体の `into_token` (`NotUnique`)、空けた表の項目の使用、箱の状態が token でないこと、世代の番号の不一致 (`StaleToken`。token を受ける操作が断る。同じ token の2回の使用と ABA の形)、級の合わない `con_at` (`WrongClass`)、`reuse_in_place` の `meta` の tag と scan と種類が箱と違うこと (`WrongMeta`)、`reuse_in_place` で箱が `lin` ビットを持ち新しい `meta` が持たないこと (`LinBitKept`)
 - `free_block` を、破棄処理を持つ種類の物体に使うこと (`FinalizerSkipped`) と、最後の参照でない物体に使うこと (`NotLast`)
 - `release` と `release_reuse` で、物体がデータでないか、タグと走査する語の数が名指したものと違うこと (`WrongLayout`)
@@ -506,12 +506,12 @@ Verus で確かめない部分は、次の信頼の一覧にまとめる。`exte
 | T7 | unwind。検証した関数は、決まった所でしか unwind しないとして証明する。決まった所は、T5 の panic の関数 (状態を変える前に呼ぶ)、T3 の破棄処理 (箱を先に死んだことにしてから呼ぶ)、`Vec` の伸長である | Verus の `ensures` は正常に戻ったときだけを扱う。unwind の後も `Heap` を落とすことは安全でなければならない | 解放の連鎖の途中で破棄処理が panic した後に、`Heap` を落とすこと |
 | T8 | 借用の規則 (Stacked Borrows と Tree Borrows) | vstd の権限のモデルは、参照と生のポインタの借用の規則を表さない | 核の各操作を両方のモードで1回ずつ通す小さいテスト |
 | T9 | Verus、Z3、rustc、vstd (その std の約束を含む) | 道具そのもの | なし |
-| T10 | 文字列のバイトの読み書き。`String` のブロックの権限を受けてペイロードにバイトを写す関数と、ペイロードを `str` として借りる関数と、その位置を返す関数。約束は、権限が渡したポインタの `String` のブロックのもので、長さの語とバイト列の語を持つとき、メモリのバイト列が権限の ghost のバイト列に等しいこと、写すのは長さの語の後ろの容量の中だけで、長さの語の値と権限の位置を変えないこと | Verus の権限は語の単位で、語の中のバイトの位置を扱わない | 語に揃わない位置への追記、大きい物体のページをまたぐ長さ、大きい左辺からの作り直し、空の文字列、多バイトの文字、1ページの長さを含む自分自身との連結 (`x ++ x`)、`string` で読んだ位置の使用が終わった後の追記、2つの借用の規則での読み書き |
+| T10 | 文字列のバイトの読み書き。`String` のブロックの権限を受けてペイロードにバイトを写す関数と、ペイロードを `str` として借りる関数と、その位置を返す関数。約束は、権限が渡したポインタの `String` のブロックのもので、長さの語とバイト列の語を持つとき、メモリのバイト列が権限の ghost のバイト列に等しいこと、写すのは長さの語の後ろの容量の中だけで、長さの語の値と権限の位置を変えないこと。写す元のバイト列が写す先と重ならないことを前提にする。このヒープの文字列から写すときは写す先がいつも別のブロックで、`string_push` の `s` は、呼ぶ側の約束により left 自身の中身を指さない | Verus の権限は語の単位で、語の中のバイトの位置を扱わない | 語に揃わない位置への追記、大きい物体のページをまたぐ長さ、大きい左辺からの作り直し、空の文字列、多バイトの文字、1ページの長さを含む自分自身との連結 (`x ++ x`)、ほかの文字列の中身を指す `s` の追記、`string` で読んだ位置の使用が終わった後の追記、2つの借用の規則での読み書き |
 
 T10 の約束は、関数そのものの外の次の2つにも頼る。
 
 - `String` のバイト列の語を書くのは、T10 の書き込みの関数だけである。ほかの検証した書き込みは、この語に届かない。`raw` と `set_raw` は不透明なペイロードを断り (上の「種類」)、`set_field` は走査する語だけを書くためである。`string_concat` も同じ書き込みの関数で右辺を写す
-- ghost のバイト列を、別の権限の列から写して代入しない。列の型は `meta.rs` の外では作れないが、ほかの権限の列を写すことはできてしまう。`trust.rs` のテスト `only_meta_assigns_the_ghost_text` が、`meta.rs` の外の代入を断る
+- ghost のバイト列を、別の権限の列から写して入れない。列の型は `meta.rs` の外では作れないが、ほかの権限の列を写すことはできてしまう。`trust.rs` のテスト `only_meta_writes_the_ghost_text` が、`meta.rs` の外にある列への代入、列の `&mut` の借用、`BlockPerm` の構造体の式を断る
 
 写すのは生のポインタ (`ptr::copy_nonoverlapping`) だけで行い、同じブロックに `&mut [u8]` と `&[u8]` を同時に作らない。読み書きの範囲は、検証したコードの側の `requires` と `ensures` で縛る。T3 と同じ形である。
 

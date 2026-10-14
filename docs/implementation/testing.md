@@ -128,9 +128,9 @@ rustfmt は `verus!` の中を整えないので、`eml_rt` の `verus!` の中�
 
 - Miri は、信頼の一覧の「Miri で確かめること」を確かめる `crates/eml_rt/src/heap/tests/trusted.rs` (module `trusted`) のテストだけを流す。テストは信頼の部分へ届く検証したコードも通るので、借用の規則 (T8) もここで確かめる。全体の単体テストは `cargo test` で流し、メモリの安全は Verus の証明が受け持つ
 - FFI の境界を信頼の一覧に足すときは、そこを通るテストもこの module に足す。今の `Foreign` の物体 (T3) が FFI の前身なので、テストはそこを重点にする
-- 文字列のバイトの読み書き (T10) も、この module で確かめる。語に揃わない位置への追記、ページをまたぐ長さ、大きい左辺からの作り直し、1ページの長さの `x ++ x` (大きい物体のページを返す道) などを、2つの借用の規則で流す
+- 文字列のバイトの読み書き (T10) も、この module で確かめる。語に揃わない位置への追記、ページをまたぐ長さ、大きい左辺からの作り直し、1ページの長さの `x ++ x` (大きい物体のページを返す道)、ほかの文字列の中身を指す `s` の追記などを、2つの借用の規則で流す
 - Miri は、nightly と `miri` と `rust-src` を持つ別の devShell `nix develop .#miri` で流す。flake は nightly を fenix の `complete` (すべての部品がそろう最新の日の nightly) から取る ([アーキテクチャ](architecture.md) の toolchain の項)
-- `cargo miri test -p eml_rt trusted::` を、`MIRIFLAGS="-Zmiri-strict-provenance"` で1回、`MIRIFLAGS="-Zmiri-strict-provenance -Zmiri-tree-borrows"` でもう1回流す。Apple M4 では、38 個のテストにどちらも約 145 秒かかる (S9b-1 の終わり)
+- `cargo miri test -p eml_rt trusted::` を、`MIRIFLAGS="-Zmiri-strict-provenance"` で1回、`MIRIFLAGS="-Zmiri-strict-provenance -Zmiri-tree-borrows"` でもう1回流す。Apple M4 では、40 個のテストにどちらも約 145 秒かかる (S9b-1 の終わり)
 - テストの大きさは `cfg!(miri)` で変えない。`trusted` のテストは、どの設定でも数分で終わる大きさにする。ページの大きさも Miri で変えない。ほかの crate は Miri で流さない
 
 ## LIR のテキストの形

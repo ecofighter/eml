@@ -571,7 +571,11 @@ impl<M: Mode> Heap<M> {
             bits_scan(meta.bits_spec()) == meta.scan_spec(),
             M::CHECKED ==> r.1@.prefix is Some && r.1@.prefix->0.first.is_init()
                 && r.1@.prefix->0.state.is_init() && r.1@.prefix->0.state.value() == ALIVE_STATE
-                && (rc != 0 ==> r.1@.prefix->0.first.value() == old(self).worker),
+                && r.1@.prefix->0.first.value() == if rc == 0 {
+                0
+            } else {
+                old(self).worker
+            },
             r.0@.addr % 8 == 0,
             r.0@.addr >= 8,
             r.0@.addr + 8 * (HEADER_WORDS + final(self).core.cap(r.0@.addr)) <= usize::MAX,

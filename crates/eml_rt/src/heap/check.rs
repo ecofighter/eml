@@ -407,9 +407,8 @@ impl<M: Mode> Heap<M> {
         if rc == 1 || rc == -1 {
             return Err(HeapError::UseAfterFree);
         }
-        // 数 0 は `checked_decref` が断ったので、ここで足りないのは数 1 だけである
-
         if rc == 0 && self.core.prefix_first_get(h) == 1 {
+            // 数 0 は `checked_decref` が断ったので、ここで足りないのは数 1 だけである
             return Err(HeapError::ImmortalOverRelease);
         }
         Ok(())

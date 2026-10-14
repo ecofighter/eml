@@ -263,6 +263,7 @@ impl<M: Mode> Heap<M> {
         &&& self.core.dom() == old.core.dom().insert(h)
         &&& self.core.state(h) == BlockState::Live
         &&& self.core.rc_of(h) == 0
+        &&& M::CHECKED ==> p_owner(self.core.perm(h)) == 0
         &&& old.consistent() && old.settleable() ==> {
             &&& self.consistent()
             &&& self.core.frame(old.core)
@@ -417,8 +418,8 @@ impl<M: Mode> Heap<M> {
     }
 
     /// # Safety
-    /// `w` はこのヒープの生きている文字列の物体を指す。返す位置を読めるのは、物体が生きていて、`string_push` でその
-    /// 物体を書き換えていない間だけである。
+    /// `w` はこのヒープの生きている文字列の物体を指す。返す位置を読めるのは、物体が生きていて、`string_push` か
+    /// `string_concat` でその物体を書き換えていない間だけである。
     pub unsafe fn string(&self, w: Word) -> (r: Result<*const str, HeapError>)
         requires
             self.wf(),

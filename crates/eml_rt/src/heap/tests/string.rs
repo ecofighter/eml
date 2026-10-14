@@ -168,19 +168,6 @@ fn immortal_left_is_copied<M: Mode>() {
     }
 }
 
-fn self_concat_of_short_strings<M: Mode>() {
-    let mut heap = Heap::<M>::new();
-    // 8 バイトの容量に収まる長さと、1語を埋める長さ
-    for s in ["abc", "abcdefgh"] {
-        let x = heap.alloc_string(s);
-        unsafe { heap.dup(x) }.unwrap();
-        let r = unsafe { heap.string_concat(x, x) }.unwrap();
-        assert_eq!(text(&heap, r), format!("{s}{s}"));
-        unsafe { heap.decref(r) }.unwrap();
-    }
-    assert_eq!(mortal(&heap), 0);
-}
-
 fn large_strings_grow_across_pages<M: Mode>() {
     let mut heap = Heap::<M>::new();
     let chunk = "z".repeat(50_000);
@@ -205,12 +192,52 @@ fn concat_consumes_both_sides<M: Mode>() {
 
 fn concat_of_a_string_with_itself<M: Mode>() {
     let mut heap = Heap::<M>::new();
-    let x = heap.alloc_string("ab");
-    unsafe { heap.dup(x) }.unwrap();
-    let r = unsafe { heap.string_concat(x, x) }.unwrap();
-    assert_eq!(text(&heap, r), "abab");
-    unsafe { heap.decref(r) }.unwrap();
+    // `x ++ x` は `dup` で rc 2 になって届くので、容量に収まる長さでも、1語を埋める長さでも写す
+    for s in ["ab", "abcdefgh"] {
+        let x = heap.alloc_string(s);
+        unsafe { heap.dup(x) }.unwrap();
+        let r = unsafe { heap.string_concat(x, x) }.unwrap();
+        assert_ne!(r, x);
+        assert_eq!(text(&heap, r), format!("{s}{s}"));
+        unsafe { heap.decref(r) }.unwrap();
+    }
     assert_eq!(mortal(&heap), 0);
+}
+
+/// 共有の側の left は一意でないので写す。rc -1 なら最後の参照なので写した後で空け、rc -2 なら参照を1つ手放して残す。
+fn copy_of_a_left_on_the_shared_side<M: Mode>(concat: bool) {
+    let mut heap = Heap::<M>::new();
+    for extra in [false, true] {
+        let x = heap.alloc_string("ab");
+        unsafe { heap.share(x, 0) }.unwrap();
+        if extra {
+            unsafe { heap.dup(x) }.unwrap();
+        }
+        let r = if concat {
+            let y = heap.alloc_string("c");
+            unsafe { heap.string_concat(x, y) }.unwrap()
+        } else {
+            push(&mut heap, x, "c")
+        };
+        assert_ne!(r, x);
+        assert_eq!(text(&heap, r), "abc");
+        if extra {
+            assert_eq!(unsafe { raw::rc(x) }, -1);
+            assert_eq!(text(&heap, x), "ab");
+            unsafe { heap.decref(x) }.unwrap();
+        }
+        assert_eq!(mortal(&heap), 1);
+        unsafe { heap.decref(r) }.unwrap();
+    }
+    assert_eq!(mortal(&heap), 0);
+}
+
+fn push_copies_a_left_on_the_shared_side<M: Mode>() {
+    copy_of_a_left_on_the_shared_side::<M>(false);
+}
+
+fn concat_copies_a_left_on_the_shared_side<M: Mode>() {
+    copy_of_a_left_on_the_shared_side::<M>(true);
 }
 
 fn errors_leave_the_heap_unchanged<M: Mode>() {
@@ -276,6 +303,68 @@ fn over_released_immortal_left_is_refused_before_allocating<M: Mode>() {
     assert_eq!(heap.live_objects().len(), live);
 }
 
+fn concat_of_a_shared_last_reference_twice_is_refused<M: Mode>() {
+    if !M::CHECKED {
+        return;
+    }
+    let mut heap = Heap::<M>::new();
+    let y = heap.alloc_string("ab");
+    unsafe { heap.share(y, 0) }.unwrap();
+    let live = heap.live_objects().len();
+    assert_eq!(
+        unsafe { heap.string_concat(y, y) }.unwrap_err(),
+        HeapError::UseAfterFree
+    );
+    assert_eq!(heap.live_objects().len(), live);
+    assert_eq!(text(&heap, y), "ab");
+    assert_eq!(unsafe { raw::rc(y) }, -1);
+    unsafe { heap.decref(y) }.unwrap();
+}
+
+fn concat_of_an_immortal_with_itself_needs_two_references<M: Mode>() {
+    if !M::CHECKED {
+        return;
+    }
+    let mut heap = Heap::<M>::new();
+    let w = heap.alloc_string_immortal("lit");
+    unsafe { heap.acquire_immortal(w) }.unwrap();
+    let live = heap.live_objects().len();
+    assert_eq!(
+        unsafe { heap.string_concat(w, w) }.unwrap_err(),
+        HeapError::ImmortalOverRelease
+    );
+    assert_eq!(heap.live_objects().len(), live);
+    assert_eq!(unsafe { raw::prefix_first(w) }, 1);
+    unsafe { heap.acquire_immortal(w) }.unwrap();
+    let r = unsafe { heap.string_concat(w, w) }.unwrap();
+    assert_eq!(text(&heap, r), "litlit");
+    assert_eq!(unsafe { raw::prefix_first(w) }, 0);
+    unsafe { heap.decref(r) }.unwrap();
+    assert!(leaks(&heap).is_some_and(|l| l.is_empty()));
+}
+
+fn another_worker_cannot_push_to_a_local_left<M: Mode>() {
+    if !M::CHECKED {
+        return;
+    }
+    let mut heap = Heap::<M>::new();
+    let w = heap.alloc_string("ab");
+    heap.set_worker(1);
+    let live = heap.live_objects().len();
+    assert_eq!(
+        unsafe { heap.string_push(w, "c") }.unwrap_err(),
+        HeapError::WrongOwner {
+            owner: 0,
+            worker: 1
+        }
+    );
+    assert_eq!(heap.live_objects().len(), live);
+    heap.set_worker(0);
+    assert_eq!(text(&heap, w), "ab");
+    assert_eq!(unsafe { raw::rc(w) }, 1);
+    unsafe { heap.decref(w) }.unwrap();
+}
+
 both_modes!(
     strings_hold_their_text,
     immortal_strings_are_never_freed,
@@ -287,11 +376,15 @@ both_modes!(
     regrowth_is_logarithmic,
     shared_left_is_copied,
     immortal_left_is_copied,
-    self_concat_of_short_strings,
     large_strings_grow_across_pages,
     concat_consumes_both_sides,
     concat_of_a_string_with_itself,
     errors_leave_the_heap_unchanged,
     concat_of_one_reference_twice_is_refused,
     over_released_immortal_left_is_refused_before_allocating,
+    push_copies_a_left_on_the_shared_side,
+    concat_copies_a_left_on_the_shared_side,
+    concat_of_a_shared_last_reference_twice_is_refused,
+    concat_of_an_immortal_with_itself_needs_two_references,
+    another_worker_cannot_push_to_a_local_left,
 );

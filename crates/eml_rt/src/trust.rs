@@ -387,20 +387,100 @@ fn the_trust_list_is_exactly_the_trusted_items() {
     }
 }
 
-/// `BlockPerm` の ghost のバイト列に代入するのは meta.rs だけである (docs/spec/object-model.md の「`unsafe` の核」の
-/// T10)。`Text` は meta.rs の外では作れないが、ほかの権限の列を写して代入することはできてしまうためである。
+/// `pos` の直前の空白でない文字の位置。
+fn prev_non_space(s: &[char], pos: usize) -> Option<usize> {
+    (0..pos).rev().find(|&j| !s[j].is_whitespace())
+}
+
+/// `end` (`.` の位置) で終わる式の頭。識別子、`.`、`@`、括弧の組を前へたどる。
+fn expression_start(s: &[char], end: usize) -> usize {
+    let mut i = end;
+    while i > 0 {
+        let c = s[i - 1];
+        if is_ident(c) || c == '.' || c == '@' {
+            i -= 1;
+        } else if c == ')' || c == ']' {
+            let close = if c == ')' { '(' } else { '[' };
+            let mut depth = 0usize;
+            loop {
+                i -= 1;
+                if s[i] == c {
+                    depth += 1;
+                } else if s[i] == close {
+                    depth -= 1;
+                    if depth == 0 {
+                        break;
+                    }
+                }
+            }
+        } else {
+            break;
+        }
+    }
+    i
+}
+
+/// ghost のバイト列を変えうる箇所の数。`.text` への代入と `&mut` の借用、`BlockPerm` の構造体の式を数える。返り値の型
+/// (`-> BlockPerm {`) と、`impl`、`struct` の宣言は式でないので数えない。
+fn ghost_text_writes(text: &str) -> usize {
+    let s = prepare(text);
+    let mut n = 0;
+    for i in 0..s.len() {
+        if s[i] == '.'
+            && starts_with_at(&s, i + 1, "text")
+            && !s.get(i + 5).is_some_and(|&c| is_ident(c))
+        {
+            let next = skip_space(&s, i + 5);
+            // `text()` は読むだけのメソッドである
+            if s.get(next) == Some(&'(') {
+                continue;
+            }
+            let assigns = s.get(next) == Some(&'=') && s.get(next + 1) != Some(&'=');
+            let borrows = prev_non_space(&s, expression_start(&s, i))
+                .is_some_and(|j| j >= 3 && squeeze(&s[..=j]).ends_with("&mut"));
+            if assigns || borrows {
+                n += 1;
+            }
+        }
+        if word_at(&s, i, "BlockPerm")
+            && !s.get(i + 9).is_some_and(|&c| is_ident(c))
+            && s.get(skip_space(&s, i + 9)) == Some(&'{')
+        {
+            let declared = prev_non_space(&s, i).is_some_and(|j| {
+                let word_start = (0..=j)
+                    .rev()
+                    .find(|&k| !is_ident(s[k]))
+                    .map_or(0, |k| k + 1);
+                (j >= 1 && s[j - 1] == '-' && s[j] == '>')
+                    || ["impl", "struct", "for"].contains(&squeeze(&s[word_start..=j]).as_str())
+            });
+            if !declared {
+                n += 1;
+            }
+        }
+    }
+    n
+}
+
+/// `BlockPerm` の ghost のバイト列を作るか書き換えるのは meta.rs だけである (docs/spec/object-model.md の
+/// 「`unsafe` の核」の T10)。`Text` は meta.rs の外では作れないが、ほかの権限の列を写して代入するか、`&mut` で借りて
+/// 書き換えるか、その列を入れた `BlockPerm` を組み立てることはできてしまうためである。
 #[test]
-fn only_meta_assigns_the_ghost_text() {
+fn only_meta_writes_the_ghost_text() {
     for (file, text) in FILES {
         if *file == "meta.rs" {
             continue;
         }
-        let code: String = text.chars().filter(|c| !c.is_whitespace()).collect();
-        let assigns = code
-            .match_indices(".text=")
-            .any(|(i, m)| !code[i + m.len()..].starts_with('='));
-        assert!(!assigns, "{file} assigns BlockPerm::text");
+        assert_eq!(ghost_text_writes(text), 0, "{file} writes BlockPerm::text");
     }
+}
+
+#[test]
+fn ghost_text_writes_are_found() {
+    let text = "p.text = q.text;\nf(&mut p.text);\nlet r = &mut self.perm(h).text;\nlet p = BlockPerm { rc, meta, slots, prefix, text };\n";
+    assert_eq!(ghost_text_writes(text), 4);
+    let text = "fn perm(&self) -> BlockPerm {\n    p.text == q.text && p.text() == t\n}\nimpl BlockPerm {}\n// p.text = q.text\nf(&mut p.text())\n";
+    assert_eq!(ghost_text_writes(text), 0);
 }
 
 #[test]

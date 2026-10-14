@@ -12,8 +12,8 @@ use vstd::raw_ptr::{PtrData, ptr_mut_from_data};
 
 verus! {
 
-/// 物体の種類。`info` の下位4ビットに入る。種類ごとの欄 (名前、走査の始まり、token、破棄処理) は、型ごとの表を
-/// 持たずにここの `match` で決める。
+/// 物体の種類。`info` の下位4ビットに入る。種類ごとの欄 (名前、走査の始まり、token、ペイロードが不透明か) は、型ごとの
+/// 表を持たずにここの `match` で決める。
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Kind {
@@ -44,6 +44,8 @@ pub open spec fn known_kind(bits: u32) -> bool {
     bits == 0 || bits == 1 || bits == 2 || bits == 3 || bits == 15
 }
 
+// 種類ごとの欄。破棄処理の欄だけは、箱を空けるたびに読むので、この `match` でなく `Meta::has_finalizer` が持つ
+// (docs/spec/object-model.md の「種類」)
 impl Kind {
     #[inline]
     fn from_bits(bits: u32) -> (r: Kind)

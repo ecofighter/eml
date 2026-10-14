@@ -41,7 +41,9 @@ pub(crate) fn write_text(
             0 <= i < cap ==> (#[trigger] final(perm).slots[i]).ptr() == old(perm).slots[i].ptr(),
 {
     debug_assert!(at + s.len() <= 8 * (cap - 1));
-    // 生のポインタだけで写す。s がこのブロック自身の中身を指していても、写す先 (at から後ろ) とは重ならない
+    // 生のポインタだけで写す。`copy_nonoverlapping` は、s が写す先と重ならないことを前提にする。このヒープの文字列から
+    // 写すとき (`string_concat` の右辺と作り直しの left) は、写す先がいつも別のブロックである。呼ぶ側の `&str` は、
+    // `string_push` の Safety が left 自身の中身を指さないことを求める (docs/spec/object-model.md の「文字列」)
     unsafe {
         std::ptr::copy_nonoverlapping(s.as_ptr(), slot_ptr(h, 1).cast::<u8>().add(at), s.len());
     }
@@ -65,8 +67,8 @@ pub(crate) fn text(h: *mut Header, len: usize, Tracked(perm): Tracked<&BlockPerm
     }
 }
 
-/// `h` の中身の位置。公開の `string` が返す。指す先を読めるのは、物体が生きていて、`string_push` で書き換えていない間
-/// だけである (docs/spec/object-model.md の「文字列」)。
+/// `h` の中身の位置。公開の `string` が返す。指す先を読めるのは、物体が生きていて、`string_push` か `string_concat` で
+/// 書き換えていない間だけである (docs/spec/object-model.md の「文字列」)。
 #[verifier::external_body]
 #[inline]
 pub(crate) fn text_ptr(h: *mut Header, len: usize, Tracked(perm): Tracked<&BlockPerm>) -> *const str
