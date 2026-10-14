@@ -111,19 +111,29 @@ impl Core {
         &&& self.env == old.env
     }
 
-    /// `self` で生きているブロック (構築中の物体を含む) は、`old` でも生きていて、`meta`、語、文字列のバイトが同じである。
-    /// `evolved` は外の参照を持ち続ける物体しか言わないので、リストの後ろの節点のように辺だけで持たれる物体の中身は、
-    /// これで追う。解放の連鎖は何も確保せず、生き残る物体の語に書かないので、モデルが合わなくても成り立つ。
+    /// `self` で生きているブロック (構築中の物体を含む) は、`old` でも生きていて、`meta`、語、文字列のバイト、rc の
+    /// 符号、持ち主が同じである。`evolved` は外の参照を持ち続ける物体しか言わないので、リストの後ろの節点のように辺だけで
+    /// 持たれる物体の中身は、これで追う。解放の連鎖は何も確保せず、生き残る物体の語に書かず、rc を動かしても生き残る物体の
+    /// 符号を変えないので、モデルが合わなくても成り立つ。
     pub(crate) open spec fn kept_live(&self, old: Core) -> bool {
         forall|b: usize|
             #![trigger self.settled_state(b)]
             self.has(b) && self.settled_state(b) == BlockState::Live ==> {
                 &&& old.has(b)
                 &&& old.settled_state(b) == BlockState::Live
-                &&& self.perm(b).meta == old.perm(b).meta
-                &&& self.perm(b).slots == old.perm(b).slots
-                &&& self.perm(b).text == old.perm(b).text
+                &&& self.kept_block(old, b)
             }
+    }
+
+    /// ブロック `b` は、`old` と同じ `meta`、語、文字列のバイト、rc の符号、持ち主を持つ。持ち主は rc が正の物体
+    /// (`owned` が読む物体) についてだけ言う。
+    pub(crate) open spec fn kept_block(&self, old: Core, b: usize) -> bool {
+        &&& self.perm(b).meta == old.perm(b).meta
+        &&& self.perm(b).slots == old.perm(b).slots
+        &&& self.perm(b).text == old.perm(b).text
+        &&& (self.rc_of(b) > 0) == (old.rc_of(b) > 0)
+        &&& (self.rc_of(b) < 0) == (old.rc_of(b) < 0)
+        &&& self.rc_of(b) > 0 ==> self.model@.owner[b] == old.model@.owner[b]
     }
 
     pub(crate) proof fn lemma_kept_live_trans(&self, mid: Core, old: Core)
@@ -142,10 +152,16 @@ impl Core {
     {
     }
 
-    /// rc と前置きの値だけを変えても、どのブロックの中身も変えない。
-    pub(crate) proof fn lemma_kept_live_values(&self, old: Core)
+    pub(crate) proof fn lemma_kept_live_refl(&self)
+        ensures
+            self.kept_live(*self),
+    {
+    }
+
+    /// 不死の物体の数だけを替えても、どのブロックの中身も rc も変えない。
+    pub(crate) proof fn lemma_kept_live_recounted(&self, old: Core)
         requires
-            self.values_changed(old),
+            self.recounted(old),
         ensures
             self.kept_live(old),
     {
@@ -153,9 +169,7 @@ impl Core {
             self.has(b) && self.settled_state(b) == BlockState::Live implies {
             &&& old.has(b)
             &&& old.settled_state(b) == BlockState::Live
-            &&& self.perm(b).meta == old.perm(b).meta
-            &&& self.perm(b).slots == old.perm(b).slots
-            &&& self.perm(b).text == old.perm(b).text
+            &&& self.kept_block(old, b)
         } by {
             if self.dom().contains(b) {
                 assert(old.dom().contains(b));
@@ -163,13 +177,14 @@ impl Core {
         }
     }
 
-    /// 権限とブロックの状態を変えない変化 (token の表だけを替えるなど) は、どのブロックの中身も変えない。
+    /// 権限とブロックの状態と持ち主を変えない変化 (token の表だけを替えるなど) は、どのブロックの中身も変えない。
     pub(crate) proof fn lemma_kept_live_same(&self, old: Core)
         requires
             self.perms == old.perms,
             self.env == old.env,
             self.model@.state == old.model@.state,
             self.model@.building == old.model@.building,
+            self.model@.owner == old.model@.owner,
         ensures
             self.kept_live(old),
     {
@@ -187,11 +202,11 @@ impl Core {
             forall|b: usize|
                 b != h && #[trigger] self.dom().contains(b) ==> self.perms@[b] == old.perms@[b],
             forall|b: usize| b != h ==> #[trigger] self.state(b) == old.state(b),
+            forall|b: usize| #[trigger]
+                self.dom().contains(b) ==> self.model@.owner[b] == old.model@.owner[b],
             self.dom().contains(h) && self.state(h) == BlockState::Live ==> {
                 &&& old.state(h) == BlockState::Live
-                &&& self.perm(h).meta == old.perm(h).meta
-                &&& self.perm(h).slots == old.perm(h).slots
-                &&& self.perm(h).text == old.perm(h).text
+                &&& self.kept_block(old, h)
             },
         ensures
             self.kept_live(old),
@@ -200,9 +215,7 @@ impl Core {
             self.has(b) && self.settled_state(b) == BlockState::Live implies {
             &&& old.has(b)
             &&& old.settled_state(b) == BlockState::Live
-            &&& self.perm(b).meta == old.perm(b).meta
-            &&& self.perm(b).slots == old.perm(b).slots
-            &&& self.perm(b).text == old.perm(b).text
+            &&& self.kept_block(old, b)
         } by {
             if self.dom().contains(b) {
                 assert(old.dom().contains(b));
@@ -211,8 +224,9 @@ impl Core {
                     assert(self.state(b) == old.state(b));
                 }
             } else {
-                // 付けた塊のブロックは、前もヒープのブロックでなかった
+                // 付けた塊のブロックは、前もヒープのブロックでなかった。塊の物体は rc 0 なので、持ち主を読まない
                 old.lemma_apart(b);
+                old.lemma_region_at(b);
             }
         }
     }

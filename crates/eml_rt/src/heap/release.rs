@@ -201,6 +201,7 @@ impl<M: Mode> Heap<M> {
         let (first, n) = self.core.scan_get(h);
         proof {
             s0.lemma_values_refl();
+            s0.lemma_kept_live_refl();
             if c {
                 s0.lemma_dupped_start();
             }
@@ -221,6 +222,7 @@ impl<M: Mode> Heap<M> {
                 c ==> self.consistent(),
                 self.core.model@.building is None,
                 self.core.values_changed(s0),
+                self.core.kept_live(s0),
                 c ==> self.core.dupped(
                     s0,
                     s0.model@.edges.restrict(pos_set(a, kept_set(first as int, keep@, i as int))),
@@ -296,13 +298,14 @@ impl<M: Mode> Heap<M> {
                 proof {
                     if r is Err {
                         self.core.lemma_values_trans(mid.core, s0);
-                        self.core.lemma_kept_live_values(s0);
+                        self.core.lemma_kept_live_trans(mid.core, s0);
                         self.core.lemma_same_words(s0);
                     }
                 }
                 r?;
                 proof {
                     self.core.lemma_values_trans(mid.core, s0);
+                    self.core.lemma_kept_live_trans(mid.core, s0);
                     if c {
                         if !s0.dom().contains(a) {
                             // 塊の物体から出る辺はない。子も塊の物体なので、数えない
@@ -359,7 +362,6 @@ impl<M: Mode> Heap<M> {
             if c && r is Ok {
                 self.core.lemma_dupped_end(s0, s2, s0.kept_out(a, keep@), a);
             }
-            s2.lemma_kept_live_values(s0);
             self.core.lemma_kept_live_trans(s2, s0);
             if M::CHECKED {
                 s2.lemma_same_words(s0);

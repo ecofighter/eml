@@ -1705,8 +1705,12 @@ impl<M: Mode> Heap<M> {
             ) && final(self).bumped(*old(self), w),
             M::CHECKED ==> final(self).words_kept(*old(self)),
             final(self).settled(),
+            final(self).kept_live(*old(self)),
     {
         let ghost c = self.dup_ok(w);
+        proof {
+            self.core.lemma_kept_live_settled();
+        }
         self.settle();
         if !w.is_ptr() {
             proof {
@@ -1748,6 +1752,8 @@ impl<M: Mode> Heap<M> {
                 proof {
                     self.lemma_after_step(*old(self), s0, h@.addr, w, 1);
                     self.core.lemma_values_rc(mid, s0, h@.addr);
+                    self.core.lemma_kept_live_at(s0, h@.addr);
+                    self.core.lemma_kept_live_trans(s0, old(self).core);
                 }
                 return Ok(());
             }
@@ -1763,6 +1769,7 @@ impl<M: Mode> Heap<M> {
             if c {
                 self.lemma_evolved_settled(*old(self), mid, w, 1);
             }
+            self.core.lemma_kept_live_trans(mid.core, old(self).core);
         }
         r
     }
@@ -1793,10 +1800,12 @@ impl<M: Mode> Heap<M> {
             !M::CHECKED ==> r is Ok,
             c ==> r is Ok && final(self).consistent() && final(self).evolved(*old(self), w, 1)
                 && final(self).bumped(*old(self), w),
+            final(self).core.kept_live(old(self).core),
     {
         proof {
             self.lemma_checks_pass(w);
             self.core.lemma_values_refl();
+            self.core.lemma_kept_live_refl();
         }
         let counted = self.checked_dup(h)?;
         let ghost s0 = self.core;
@@ -1834,6 +1843,7 @@ impl<M: Mode> Heap<M> {
         );
         proof {
             self.core.lemma_values_rc(mid, s0, h@.addr);
+            self.core.lemma_kept_live_at(s0, h@.addr);
         }
         if counted {
             self.stats.rc_increments = self.stats.rc_increments.wrapping_add(1);
@@ -1851,6 +1861,8 @@ impl<M: Mode> Heap<M> {
             proof {
                 self.core.lemma_recounted_values(mid.core);
                 self.core.lemma_values_trans(mid.core, s0);
+                self.core.lemma_kept_live_recounted(mid.core);
+                self.core.lemma_kept_live_trans(mid.core, s0);
                 self.lemma_recounted_heap(mid);
                 if c {
                     self.lemma_recounted_dup(mid, *old(self), w);
@@ -2647,9 +2659,10 @@ impl<M: Mode> Heap<M> {
         bits_tag(self.core.meta_bits(w.bits_spec()))
     }
 
-    /// 呼ぶ前と後の両方で生きているブロックは、`meta`、走査する語、生の語、文字列のバイトを変えない。後で生きている
-    /// ブロックは、前も生きていた。外の参照を持たない物体 (リストの後ろの節点など) についても言うので、`decref` の
-    /// 後に、残った物体を辺でたどった先の中身を言える。モードによらず、モデルの前提が崩れていても成り立つ。
+    /// 呼ぶ前と後の両方で生きているブロックは、`meta`、走査する語、生の語、文字列のバイト、rc の符号、持ち主を変えない。
+    /// 後で生きているブロックは、前も生きていた。外の参照を持たない物体 (リストの後ろの節点など) についても言うので、
+    /// `decref` の後に、残った物体を辺でたどった先の中身と、`owned` と `lin` ビットの条件を言える。モードによらず、
+    /// モデルの前提が崩れていても成り立つ。
     pub closed spec fn kept_live(&self, old: Heap<M>) -> bool {
         self.core.kept_live(old.core)
     }

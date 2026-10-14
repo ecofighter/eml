@@ -753,6 +753,7 @@ impl Core {
             final(self).model@.building == s0.model@.building,
             final(self).model@.written == s0.model@.written,
             final(self).model@.kept == s0.model@.kept,
+            final(self).model@.owner == s0.model@.owner,
             c ==> final(self).evolved(
                 s0,
                 h,
@@ -1094,7 +1095,7 @@ impl Core {
                 0nat
             },
             c && up ==> final(self).model@.state == s0.model@.state,
-            c ==> final(self).model@.owner == s0.model@.owner,
+            final(self).model@.owner == s0.model@.owner,
             c ==> final(self).model@.edges == match edge {
                 Some(e) => s0.model@.edges.remove(e),
                 None => s0.model@.edges,
