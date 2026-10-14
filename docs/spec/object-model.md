@@ -276,7 +276,7 @@ RC の遷移は、rc の値だけを受け取って次の状態を返す純粋�
 - `foreign` は、物体の種類と値の型を、どちらのモードでも照らす。違えば `WrongKind` を返す。`foreign` の安全の条件は物体が生きていることだけで、違う型の値を指すポインタを返さないことは、この照らし合わせが受け持つためである
 - `reuse_in_place` は、空の token を受けると `StaleToken` を返す。空の token には箱がなく、返す語がないためである
 
-`Err` を作らない操作は、呼ぶ側に展開すれば、最適化で `Result` の分岐が消える。そのため、`dup` と `decref` は、局所の rc を書き換えるだけの速い道を `#[inline]` にし、残り (共有、不死、張り付いた数、検査モードの仕事) を、`#[cold]` と `#[inline(never)]` を付けた遅い道の関数に出す。速いモードの `decref` の速い道は、rc が 1 なら解放の連鎖を直に呼ぶ。解放の連鎖は `#[inline(never)]` にするが、一意な物体を空けることはよく起きるので、`#[cold]` にはしない。確保と箱の解放の速い道、`release`、`release_reuse`、`con_at` と、語とヘッダの小さい関数も `#[inline]` にする。VM は `eml_rt` の外の crate なので、付けないと、総称でない関数は crate をまたぐ呼び出しになりうるためである。`field`、`set_field`、`string_push` と、`string_push` の中で呼ぶ `push_unchecked` と、`release` と `release_reuse` の子の処理 (`release_children`) が呼ぶ `release_unkept` も `#[inline]` にする。総称な関数の実体は、使う側の crate のコード生成単位の1つにしかできず、ほかの単位からは展開できないためである ([計測の基準](../implementation/benchmarks.md) の「S9b-2b (実行文脈)」)。確保器の遅い道 (ページを替えること、大きい物体の確保と返却) は `#[cold]` にする。命令の数は [計測の基準](../implementation/benchmarks.md) の「S9a (`eml_rt` の核)」にある。
+`Err` を作らない操作は、呼ぶ側に展開すれば、最適化で `Result` の分岐が消える。そのため、`dup` と `decref` は、局所の rc を書き換えるだけの速い道を `#[inline]` にし、残り (共有、不死、張り付いた数、検査モードの仕事) を、`#[cold]` と `#[inline(never)]` を付けた遅い道の関数に出す。速いモードの `decref` の速い道は、rc が 1 なら解放の連鎖を直に呼ぶ。解放の連鎖は `#[inline(never)]` にするが、一意な物体を空けることはよく起きるので、`#[cold]` にはしない。確保と箱の解放の速い道、`release`、`release_reuse`、`con_at` と、語とヘッダの小さい関数も `#[inline]` にする。VM は `eml_rt` の外の crate なので、付けないと、総称でない関数は crate をまたぐ呼び出しになりうるためである。`Ctx::poll` が読む `Control::stop_bits` も、同じ理由で `#[inline]` にする。`field`、`set_field`、`meta`、`scanned`、`string_push` と、`string_push` の中で呼ぶ `push_unchecked` と、`release` と `release_reuse` の子の処理 (`release_children`) が呼ぶ `release_unkept` も `#[inline]` にする。総称な関数の実体は、使う側の crate のコード生成単位の1つにしかできず、ほかの単位からは展開できないためである ([計測の基準](../implementation/benchmarks.md) の「S9b-2b (実行文脈)」)。確保器の遅い道 (ページを替えること、大きい物体の確保と返却) は `#[cold]` にする。命令の数は [計測の基準](../implementation/benchmarks.md) の「S9a (`eml_rt` の核)」にある。
 
 ペイロードを呼ぶ側が書く `alloc` と `alloc_immortal` も `unsafe fn` である。`meta` の種類は `Foreign`、`String`、`Free` のどれでもなく、`scan` は 255 でない。呼ぶ側は、ほかのヒープの操作の前に `meta` に合うペイロードを書く。`scan` が 255 の物体は走査する語の数をペイロードの先頭の数の語から読むので、数の語を書く前には、走査する語と生の語の境目が決まらない。走査する語が 255 個以上の物体は `alloc_data` で作る。ペイロードの形が正しいかは VM が受け持ち、確保のたびに実行時に確かめると速い道の費用になるためである。ペイロードを自分で書く `alloc_data`、`alloc_int`、`alloc_foreign`、`alloc_string`、`alloc_string_immortal` は安全な関数である。`String` の物体を作れるのは、下の「文字列」の操作だけである。
 
@@ -527,7 +527,7 @@ token (`Token`) はどちらのモードでも1語である。S10 の VM のレ�
 - `unbox_int`、`foreign`、`string`、`string_push`、`string_concat` で、物体の種類が違うこと (`WrongKind`)。`foreign` は値の型も照らし、速いモードでも同じ誤りを返す (上の「核の操作」)
 - 添字の範囲の外 (`OutOfBounds`)。`field` と `set_field` は、添字が走査する語を指さないことを断る。`raw` と `set_raw` は、添字が走査する語の後のブロックの中の語を指さないことを断り、ペイロードが不透明な物体 (`Foreign` と `String`) を `WrongKind` で断る。`scanned` は、添字が走査する語の数以上であることを断る。走査する語に生の値を書くと、解放の連鎖がその値をポインタとして読み、`Foreign` の破棄処理の表を上書きすると、破棄処理が正しくない関数のポインタを呼ぶ。`String` の長さの語を書き換えると、`string` が容量の外を読む。どれも検査モードの安全を崩すので、断る
 - `Ctx` の基本操作の誤り (下の「実行文脈 `Ctx`」)
-  - 節点、evidence、入口の表の形が違うこと、入口の欄の番号が入口の数以上であること、入口の欄に2回入れること、`evv` の長さが上限を超えること、`ev_new` のエフェクトの番号が 65535 であること (`BadEvidence`)
+  - 節点、evidence、入口の表の形が違うこと、入口の欄の番号が入口の数以上であること、入口の欄に2回入れること、`evv` の長さが上限を超えること、`ev_new` のエフェクトの番号が 65535 であること、`ev_set_clause` で `lin` ビットの立った節の本体を入れること (`BadEvidence`)
   - `ev_lookup` と `evv_mask` で、合う evidence が `evv` にないこと (`NoHandler`)
   - yield の状態についての前提を破ること (`YieldMisuse`)。yield 中の `yield_to` と `yield_abort`、物体でない宛先、yield していないときの `yield_cont_take`、`yield_cont_set`、`yield_finish`、κ の欄が空でないときの `yield_cont_set` と `yield_finish` がこれに当たる
 - 生存の列挙 (`check_invariants`) で見つかる不変条件の違反
@@ -670,7 +670,7 @@ token の表の項目は、`into_token` と `release_reuse` が添字を使い�
 - 核の操作と同じ分け方にする。速いモードは上の表の前提を安全の前提にし、検査モードは確かめて `Err` を返す (上の「報告する誤り」)
 - 検査モードは、各操作が読む所だけを確かめる。`ev_lookup` と `evv_mask` は、たどる節点ごとに形と tag を確かめ、`ev_*` は evidence の形を確かめる。`evv_set` はリストをたどらず、`evv_push` は l の長さを数えるためにたどる
 - 検査モードのリストをたどるループは、`max_evv` 歩を超えたら `BadEvidence` を返す。`evv_wf` が長さを `max_evv` 以下と定めるので、超えるのは前提を破ったとき (輪になったリストなど) だけである。既定の `max_evv` は `usize::MAX` なので、輪になったリストのテストは小さい上限で作る
-- 検査モードは、状態を変える前に、確かめることをすべて確かめる。たとえば `evv_push` は、確保の前に e の形と l の長さを確かめる。`Err` のとき、ヒープと、`Ctx` の `evv` と yield の状態は変わらない。仕事の回数は、`ev_lookup` がたどった分だけ増えうる (下の仕事の回数の項)。ただし `evv_set`、`ev_set_state`、`yield_finish` は、状態を変えた後の解放の連鎖で起きた誤りを返しうる。その後は `Ctx` を落とすことしかできない (上の「検査モードの約束」)
+- 検査モードは、状態を変える前に、確かめることをすべて確かめる。たとえば `evv_push` は、確保の前に e の形と l の長さを確かめる。`Err` のとき、ヒープと、`Ctx` の `evv` と yield の状態は変わらない。`ev_evv`、`ev_clause`、`ev_take_state`、`ev_set_clause`、`ev_lookup`、`ev_set_state` は例外で、`Err` を返す前に構築中の物体を書き終えて生きている物体にすることがあり、ヒープはその点だけ変わりうる。仕事の回数は、`ev_lookup` がたどった分だけ増えうる (下の仕事の回数の項)。ただし `evv_set`、`ev_set_state`、`yield_finish` は、状態を変えた後の解放の連鎖で起きた誤りを返しうる。その後は `Ctx` を落とすことしかできない (上の「検査モードの約束」)
 - 検査モードの `evv_mask` は、確保の前にリストをたどって確かめ、合う evidence が足りなければ `NoHandler` を返す。たどった節点の数は、たどりが通ったときだけ `evidence_steps` に足し、`Err` のときは数えない。今のインタプリタは、途中までたどった数も数える
 - モデルが合っていて `held_ok()` と表の前提が成り立てば、検査モードの基本操作は `Ok` を返し、結果は速いモードと同じになる。ただし `evv_set`、`ev_set_state`、`yield_finish` の解放の連鎖は、核の `decref` と同じく、モデルが照らさない誤りを返しうる。`evv_mask` が合う evidence の足りないときに `NoHandler` を返すことは、テストで確かめ、Verus では約束しない
 - 仕事の回数の数え方は、`evv_mask` の `Err` を除いて、今のインタプリタと同じである。インタプリタの数え方のテスト3つを、同じ期待値で `eml_rt` に写してある
@@ -682,7 +682,7 @@ token の表の項目は、`into_token` と `release_reuse` が添字を使い�
 - `eml_rt` のコードは、核を含めて Verus の `verus!` の中に書き、`cargo verus verify -p eml_rt` が crate 全体を検証する ([テスト戦略](../implementation/testing.md) の「Verus」)。生のポインタの読み書きは、どれも Verus の権限 (`PointsTo`) の上で行う。証明するのは、公開の操作の前提 (上の「核の操作」の表) の下でのメモリの安全、ヒープの形の不変条件、RC と抽象のモデルの対応、`share` と `release` と reuse の遷移、上の「検査モードの約束」の性質である
 - 確保と atomic の操作は、std の関数を薄い関数で包み、その関数の約束を信頼する (下の表の T1 と T2)。vstd の確保は失敗すると `process::abort` を呼び、vstd の atomic は SeqCst だけを扱うので、使わない。包みは std の関数を1回呼ぶだけで、型を差し替える層ではない
 
-Verus で確かめない部分は、次の信頼の一覧にまとめる。`external_body`、`assume_specification` などの信頼の項目は、どれもこの表のどれかに属する。`eml_rt` の `trust.rs` のテストが、テストでないコードの項目を探し、表の番号を付けた一覧と同じであることを確かめる。`verus!` の外に置くのは、`fmt` の実装、T4 の `Drop`、`unsafe impl Send` と `Sync`、`Sync` でないことの型の assert、`leaks` の `BTreeMap` を組む安全な関数、`Foreign` の表の `const` (T3)、`Control` の止める語と確保量を読み書きする安全な関数と `Ctx::poll` (上の「実行の制御」)、テストだけである。
+Verus で確かめない部分は、次の信頼の一覧にまとめる。`external_body`、`assume_specification` などの信頼の項目は、どれもこの表のどれかに属する。`eml_rt` の `trust.rs` のテストが、テストでないコードの項目を探し、表の番号を付けた一覧と同じであることを確かめる。`verus!` の外に置くのは、`fmt` と `Default` の実装、T4 の `Drop`、`unsafe impl Send` と `Sync`、`Sync` でないことの型の assert と配置を確かめるコンパイル時の assert、`leaks` の `BTreeMap` を組む安全な関数と `check_invariants`、前置きの構造体 `Prefix` の宣言、panic の文言の `const`、`Foreign` の表の `const` (T3)、`Control` の止める語と確保量を読み書きする安全な関数と `Ctx::poll` (上の「実行の制御」)、テストだけである。
 
 | # | 中身 | 理由 | Miri で確かめること |
 |---|---|---|---|
