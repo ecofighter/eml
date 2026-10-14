@@ -271,6 +271,26 @@ fn bad_evidence_is_reported_in_checked_mode<M: Mode>() {
     }
 }
 
+/// `evv` の長さの上限が 0 なら、空のリストにも節点を足せない (docs/spec/lir.md の「実行の文脈」)。
+fn a_push_past_the_evv_limit_is_bad_evidence<M: Mode>() {
+    if !M::CHECKED {
+        return;
+    }
+    let control = Arc::new(Control::new(Limits {
+        max_evv: 0,
+        ..Limits::default()
+    }));
+    let mut ctx = Ctx::<M>::new(control);
+    unsafe {
+        let ev = ctx.ev_new(0, 1, UNIT, UNIT).unwrap();
+        assert_eq!(ctx.evv_push(UNIT, ev).unwrap_err(), HeapError::BadEvidence);
+        // 確かめは確保の前なので、ev は呼ぶ側が持ったままである
+        ctx.heap_mut().decref(ev).unwrap();
+    }
+    assert!(ctx.check_finished());
+    assert_eq!(super::mortal(ctx.heap()), 0);
+}
+
 both_modes!(
     a_new_ctx_is_finished,
     poll_reports_each_stop,
@@ -284,4 +304,5 @@ both_modes!(
     entry_tables_with_a_count_word,
     replacing_a_state_that_reaches_its_evidence,
     bad_evidence_is_reported_in_checked_mode,
+    a_push_past_the_evv_limit_is_bad_evidence,
 );

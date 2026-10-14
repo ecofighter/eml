@@ -312,6 +312,8 @@ impl<M: Mode> Heap<M> {
             >(HeapError::LinDup) || r matches Err(HeapError::WrongOwner { .. }),
             M::CHECKED && r is Ok ==> self.core.state(h@.addr) == BlockState::Live
                 || self.core.state(h@.addr) == BlockState::Building,
+            M::CHECKED && r is Ok ==> !self.core.lin(h@.addr) && (self.core.rc_of(h@.addr) > 0
+                ==> p_owner(self.core.perm(h@.addr)) == self.worker),
             !M::CHECKED ==> r == Ok::<bool, HeapError>(false),
             M::CHECKED && r is Ok ==> self.core.perm(h@.addr).prefix is Some,
             r matches Ok(c) ==> (M::CHECKED && self.core.rc_of(h@.addr) != 0 ==> c),

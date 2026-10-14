@@ -907,6 +907,7 @@ impl<M: Mode> Ctx<M> {
             ),
         ensures
             final(self).wf(),
+            r is Err ==> *final(self) == *old(self),
             final(self).evv_spec() == old(self).evv_spec(),
             final(self).yield_spec() == old(self).yield_spec(),
             !M::CHECKED ==> r is Ok,
@@ -949,6 +950,7 @@ impl<M: Mode> Ctx<M> {
         proof {
             lemma_words_trans(h2, h1, h0);
             lemma_unextended(h2, ev);
+            assert(h2.scanned_at(ev, 0));
             if c {
                 lemma_alloc_moved(h1, h0, table);
                 lemma_alloc_moved(h2, h1, ev);
@@ -962,6 +964,11 @@ impl<M: Mode> Ctx<M> {
         (unsafe { self.heap.set_field(ev, 0, table) })?;
         let ghost h3 = self.heap;
         proof {
+            if M::CHECKED {
+                assert(h2.scanned_at(ev, 1) && h2.scanned_at(ev, 2));
+                lemma_set_passes_kept(h3, h2, ev, 0, table, 1);
+                lemma_set_passes_kept(h3, h2, ev, 0, table, 2);
+            }
             if c {
                 lemma_set_unit_moved(h3, h2, ev, 0, table);
                 let d = |b: usize| -points(table, b);
@@ -975,6 +982,9 @@ impl<M: Mode> Ctx<M> {
         let ghost h4 = self.heap;
         let ghost d4 = |b: usize| -points(state, b);
         proof {
+            if M::CHECKED {
+                lemma_set_passes_kept(h4, h3, ev, 1, state, 2);
+            }
             if c {
                 lemma_unextended(h3, ev);
                 assert(h3.word_at(ev, 1) == h2.word_at(ev, 1));
@@ -1016,6 +1026,7 @@ impl<M: Mode> Ctx<M> {
             ).evv_limit() && old(self).ev_shape(e) && old(self).holds_args(seq![l, e]),
         ensures
             final(self).wf(),
+            r is Err ==> *final(self) == *old(self),
             final(self).evv_spec() == old(self).evv_spec(),
             final(self).yield_spec() == old(self).yield_spec(),
             !M::CHECKED ==> r is Ok,
@@ -1060,6 +1071,7 @@ impl<M: Mode> Ctx<M> {
         proof {
             lemma_words_trans(h1, h0, h0);
             lemma_unextended(h1, node);
+            assert(h1.scanned_at(node, 0));
             if c {
                 lemma_alloc_moved(h1, h0, node);
                 s0.lemma_arg_counted(ws, 1);
@@ -1073,6 +1085,10 @@ impl<M: Mode> Ctx<M> {
         let ghost h2 = self.heap;
         let ghost d2 = |b: usize| -points(e, b);
         proof {
+            if M::CHECKED {
+                assert(h1.scanned_at(node, 1));
+                lemma_set_passes_kept(h2, h1, node, 0, e, 1);
+            }
             if c {
                 lemma_set_unit_moved(h2, h1, node, 0, e);
                 lemma_moved_chain(h2, h1, h0, z, d2, d2, none, x, none);
@@ -1108,6 +1124,9 @@ impl<M: Mode> Ctx<M> {
             !M::CHECKED ==> old(self).ev_shape(ev),
         ensures
             final(self).wf(),
+            r is Err ==> final(self).heap_spec().settled_heap() == old(
+                self,
+            ).heap_spec().settled_heap(),
             final(self).evv_spec() == old(self).evv_spec(),
             final(self).yield_spec() == old(self).yield_spec(),
             !M::CHECKED ==> r is Ok,
@@ -1158,6 +1177,9 @@ impl<M: Mode> Ctx<M> {
             !M::CHECKED ==> old(self).ev_shape(ev) && op < old(self).ev_ops(ev),
         ensures
             final(self).wf(),
+            r is Err ==> final(self).heap_spec().settled_heap() == old(
+                self,
+            ).heap_spec().settled_heap(),
             final(self).evv_spec() == old(self).evv_spec(),
             final(self).yield_spec() == old(self).yield_spec(),
             !M::CHECKED ==> r is Ok,
@@ -1222,6 +1244,9 @@ impl<M: Mode> Ctx<M> {
             !M::CHECKED ==> old(self).ev_shape(ev) && old(self).heap_spec().rc_value(ev) > 0,
         ensures
             final(self).wf(),
+            r is Err ==> final(self).heap_spec().settled_heap() == old(
+                self,
+            ).heap_spec().settled_heap(),
             final(self).evv_spec() == old(self).evv_spec(),
             final(self).yield_spec() == old(self).yield_spec(),
             !M::CHECKED ==> r is Ok,
@@ -1288,6 +1313,16 @@ impl<M: Mode> Ctx<M> {
             ).holds_args(seq![ev, s]),
         ensures
             final(self).wf(),
+            r is Err ==> final(self).heap_spec().settled_heap() == old(
+                self,
+            ).heap_spec().settled_heap() || exists|mid: Heap<M>|
+                #![trigger mid.field_set(old(self).heap_spec().settled_heap(), ev, 1, s)]
+                final(self).heap_spec().kept_live(mid) && mid.field_set(
+                    old(self).heap_spec().settled_heap(),
+                    ev,
+                    1,
+                    s,
+                ),
             final(self).evv_spec() == old(self).evv_spec(),
             final(self).yield_spec() == old(self).yield_spec(),
             !M::CHECKED ==> r is Ok,
@@ -1377,6 +1412,9 @@ impl<M: Mode> Ctx<M> {
             },
         ensures
             final(self).wf(),
+            r is Err ==> final(self).heap_spec().settled_heap() == old(
+                self,
+            ).heap_spec().settled_heap(),
             final(self).evv_spec() == old(self).evv_spec(),
             final(self).yield_spec() == old(self).yield_spec(),
             !M::CHECKED ==> r is Ok,
@@ -1480,6 +1518,7 @@ impl<M: Mode> Ctx<M> {
             !M::CHECKED ==> old(self).ev_shape(ev) && old(self).holds(state),
         ensures
             final(self).wf(),
+            r is Err ==> *final(self) == *old(self),
             final(self).evv_spec() == old(self).evv_spec(),
             final(self).yield_spec() == old(self).yield_spec(),
             !M::CHECKED ==> r is Ok,
@@ -1516,10 +1555,21 @@ impl<M: Mode> Ctx<M> {
         proof {
             m.lemma_fields();
         }
+        let l = self.evv;
+        proof {
+            if c {
+                s0.lemma_held_dup_ok(l, seq![state]);
+            }
+        }
+        // 2つの `dup` を確かめてから、どちらかを行う。後の `dup` が誤れば、先の `dup` の後にヒープを変えたまま
+        // `Err` を返すことになるためである
+        if M::CHECKED {
+            self.heap.dup_check(t)?;
+            self.heap.dup_check(l)?;
+        }
         (unsafe { self.heap.dup(t) })?;
         let ghost h1 = self.heap;
         let ghost d1 = |b: usize| points(t, b);
-        let l = self.evv;
         proof {
             if c {
                 lemma_dup_moved(h1, h0, t);
@@ -1536,6 +1586,7 @@ impl<M: Mode> Ctx<M> {
         let ghost x = none.insert(e.bits_spec());
         proof {
             lemma_unextended(h3, e);
+            assert(h3.scanned_at(e, 0));
             if c {
                 lemma_dup_moved(h2, h1, l);
                 lemma_moved_chain(h2, h1, h0, d1, |b: usize| points(l, b), d2, none, none, none);
@@ -1550,6 +1601,11 @@ impl<M: Mode> Ctx<M> {
         let ghost h4 = self.heap;
         let ghost d4 = |b: usize| points(l, b);
         proof {
+            if M::CHECKED {
+                assert(h3.scanned_at(e, 1) && h3.scanned_at(e, 2));
+                lemma_set_passes_kept(h4, h3, e, 0, t, 1);
+                lemma_set_passes_kept(h4, h3, e, 0, t, 2);
+            }
             if c {
                 lemma_set_unit_moved(h4, h3, e, 0, t);
                 lemma_moved_chain(h4, h3, h0, d2, |b: usize| -points(t, b), d4, none, x, none);
@@ -1565,6 +1621,9 @@ impl<M: Mode> Ctx<M> {
         let ghost h5 = self.heap;
         let ghost d5 = |b: usize| points(l, b) - points(state, b);
         proof {
+            if M::CHECKED {
+                lemma_set_passes_kept(h5, h4, e, 1, state, 2);
+            }
             if c {
                 lemma_set_unit_moved(h5, h4, e, 1, state);
                 lemma_moved_chain(h5, h4, h0, d4, |b: usize| -points(state, b), d5, none, x, none);
@@ -1605,6 +1664,9 @@ impl<M: Mode> Ctx<M> {
             !M::CHECKED ==> old(self).lookup(effect) is Some,
         ensures
             final(self).wf(),
+            r is Err ==> final(self).heap_spec().settled_heap() == old(
+                self,
+            ).heap_spec().settled_heap(),
             final(self).evv_spec() == old(self).evv_spec(),
             final(self).yield_spec() == old(self).yield_spec(),
             !M::CHECKED ==> r is Ok,
@@ -1907,6 +1969,10 @@ impl<M: Mode> Ctx<M> {
             }
             n = (unsafe { self.heap.field(n, 1) })?;
             count += 1;
+        }
+        // 足す節点の分も上限に入る。空のリストに足すときはループに入らないので、ここで確かめる
+        if count >= self.max_evv {
+            return Err(HeapError::BadEvidence);
         }
         Ok(())
     }

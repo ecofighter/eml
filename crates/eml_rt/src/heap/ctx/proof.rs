@@ -1449,6 +1449,32 @@ pub(super) proof fn lemma_readable_kept<M: Mode>(h1: Heap<M>, h0: Heap<M>, w: Wo
     }
 }
 
+/// 欄を1つ書いても、同じ物体のほかの欄の `set_field` の確かめは通るままである。基本操作は、確保したばかりの物体に
+/// 続けて書くので、後の `set_field` が `Err` を返さないことをこれで言う。
+pub(super) proof fn lemma_set_passes_kept<M: Mode>(
+    h1: Heap<M>,
+    h0: Heap<M>,
+    w: Word,
+    i: int,
+    v: Word,
+    j: int,
+)
+    requires
+        h1.field_set(h0, w, i, v),
+        h0.set_passes(w, j),
+        h0.scan_of(w) != 255,
+    ensures
+        h1.set_passes(w, j),
+{
+}
+
+/// `settle` を2回しても、1回と同じである。
+pub(super) proof fn lemma_settled_twice<M: Mode>(h: Heap<M>)
+    ensures
+        h.settled_heap().settled_heap() == h.settled_heap(),
+{
+}
+
 /// 構築中の物体を生きている物体にするだけの変化 (`settle`)。
 pub(super) proof fn lemma_settle_moved<M: Mode>(h1: Heap<M>, h0: Heap<M>)
     requires

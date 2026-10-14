@@ -210,6 +210,7 @@ pub(crate) open spec fn unit_filled(p: BlockPerm, lo: int, hi: int) -> bool {
 }
 
 /// `()` を書いた範囲は、次の語に `()` を書くと1語伸びる。
+#[verifier::spinoff_prover]
 proof fn lemma_unit_filled_extend(before: BlockPerm, after: BlockPerm, lo: int, hi: int)
     requires
         unit_filled(before, lo, hi),
@@ -219,13 +220,14 @@ proof fn lemma_unit_filled_extend(before: BlockPerm, after: BlockPerm, lo: int, 
     ensures
         unit_filled(after, lo, hi + 1),
 {
+    let m = before.slots.insert(hi, after.slots[hi]);
     assert forall|j: int| #![trigger p_init(after, j)] lo <= j < hi + 1 implies p_init(after, j)
         && p_word(after, j).bits_spec() == 1 by {
         if j != hi {
             assert(p_init(before, j));
-            assert(after.slots[j] == before.slots[j]);
+            assert(m.contains_key(j) && m[j] == before.slots[j]);
         } else {
-            assert(after.slots.contains_key(hi));
+            assert(m.contains_key(hi) && m[hi] == after.slots[hi]);
         }
     }
 }
@@ -945,6 +947,8 @@ impl<M: Mode> Heap<M> {
             },
             final(self).lin_of(w) == lin,
             final(self).owned(w),
+            M::CHECKED ==> forall|i: int| #[trigger]
+                final(self).scanned_at(w, i) ==> final(self).set_passes(w, i),
             forall|i: int|
                 0 <= i < scanned ==> (#[trigger] final(self).scanned_word(w, i)).bits_spec() == 1,
             M::CHECKED ==> final(self).words_kept(*old(self)),
@@ -1691,6 +1695,31 @@ impl<M: Mode> Heap<M> {
         h
     }
 
+    /// 検査モードの `dup` の確かめだけを、状態を変えずに行う。基本操作は、状態を変える前にすべてを確かめる
+    /// (docs/spec/object-model.md の「検査モードの約束」) ので、`dup` が2つ続くときに使う。速いモードでは何もしない。
+    pub(crate) fn dup_check(&self, w: Word) -> (r: Result<(), HeapError>)
+        requires
+            self.wf(),
+            self.word_in(w),
+        ensures
+            M::CHECKED && r is Ok ==> self.dup_passes(w),
+            self.dup_ok(w) ==> r is Ok,
+    {
+        if !M::CHECKED || !w.is_ptr() {
+            return Ok(());
+        }
+        let h = self.header_of(w);
+        proof {
+            self.lemma_checks_pass(w);
+            if self.consistent() && self.settleable() && self.readable(w) {
+                self.core.lemma_readable(w);
+            }
+            reveal(Core::building_wf);
+        }
+        self.checked_dup(h)?;
+        Ok(())
+    }
+
     /// # Safety
     /// `w` は即値か、このヒープか付けた塊の生きている物体を指し、呼ぶ側が参照を持っているか、生きている持ち主から
     /// 借りている。物体は `lin` ビットを持たない。rc が正なら、持ち主は今の worker である。
@@ -1715,6 +1744,9 @@ impl<M: Mode> Heap<M> {
             M::CHECKED ==> final(self).words_kept(*old(self)),
             final(self).settled(),
             final(self).kept_live(*old(self)),
+            M::CHECKED && old(self).dup_passes(w) ==> r is Ok,
+            M::CHECKED && r is Ok ==> forall|v: Word| #[trigger]
+                old(self).dup_passes(v) ==> final(self).dup_passes(v),
     {
         let ghost c = self.dup_ok(w);
         proof {
@@ -1723,6 +1755,9 @@ impl<M: Mode> Heap<M> {
         self.settle();
         if !w.is_ptr() {
             proof {
+                assert forall|v: Word| #[trigger] old(self).dup_passes(v) implies self.dup_passes(
+                    v,
+                ) by {}
                 self.core.lemma_values_refl();
                 if c {
                     self.lemma_evolved_refl(*old(self), w, 1);
@@ -1779,6 +1814,10 @@ impl<M: Mode> Heap<M> {
                 self.lemma_evolved_settled(*old(self), mid, w, 1);
             }
             self.core.lemma_kept_live_trans(mid.core, old(self).core);
+            // `settle` は構築中の物体を生きている物体にするだけなので、確かめの結果を変えない
+            assert forall|v: Word| #[trigger] old(self).dup_passes(v) implies mid.dup_passes(
+                v,
+            ) by {}
         }
         r
     }
@@ -1810,6 +1849,9 @@ impl<M: Mode> Heap<M> {
             c ==> r is Ok && final(self).consistent() && final(self).evolved(*old(self), w, 1)
                 && final(self).bumped(*old(self), w),
             final(self).core.kept_live(old(self).core),
+            M::CHECKED && old(self).dup_passes(w) ==> r is Ok,
+            M::CHECKED && r is Ok ==> forall|v: Word| #[trigger]
+                old(self).dup_passes(v) ==> final(self).dup_passes(v),
     {
         proof {
             self.lemma_checks_pass(w);
@@ -1853,6 +1895,15 @@ impl<M: Mode> Heap<M> {
         proof {
             self.core.lemma_values_rc(mid, s0, h@.addr);
             self.core.lemma_kept_live_at(s0, h@.addr);
+            // rc を動かしても、rc が正の物体の前置き (持ち主) は変わらない
+            assert forall|v: Word| #[trigger] old(self).dup_passes(v) implies self.dup_passes(
+                v,
+            ) by {
+                let b = v.bits_spec();
+                if v.is_ptr_spec() && s0.dom().contains(b) && b != h@.addr {
+                    assert(self.core.perms@[b] == s0.perms@[b]);
+                }
+            }
         }
         if counted {
             self.stats.rc_increments = self.stats.rc_increments.wrapping_add(1);
@@ -1868,6 +1919,12 @@ impl<M: Mode> Heap<M> {
             let ghost mid = *self;
             self.count_immortal(h, true);
             proof {
+                assert forall|v: Word| #[trigger] mid.dup_passes(v) implies self.dup_passes(v) by {
+                    let b = v.bits_spec();
+                    if v.is_ptr_spec() && mid.core.dom().contains(b) {
+                        assert(mid.core.dom().contains(b));
+                    }
+                }
                 self.core.lemma_recounted_values(mid.core);
                 self.core.lemma_values_trans(mid.core, s0);
                 self.core.lemma_kept_live_recounted(mid.core);
@@ -2663,6 +2720,30 @@ impl<M: Mode> Heap<M> {
             && self.core.rc_of(h) > 0)
     }
 
+    /// 検査モードの `dup` の確かめが通る。生きていて `lin` ビットがなく、rc が正なら持ち主が今の worker である。
+    /// 基本操作は、状態を変える前にこれを確かめて、後の `dup` が `Err` を返さないようにする。
+    pub closed spec fn dup_passes(&self, w: Word) -> bool {
+        let h = w.bits_spec();
+        w.is_ptr_spec() ==> {
+            &&& self.core.has(h)
+            &&& self.core.settled_state(h) == BlockState::Live
+            &&& !self.core.lin(h)
+            &&& self.core.rc_of(h) > 0 ==> p_owner(self.core.perm(h)) == self.worker
+        }
+    }
+
+    /// 検査モードの `set_field` の確かめが通る。生きている局所の物体で、持ち主が今の worker で、i 語目は走査する語
+    /// である。確保したばかりの物体はこれを満たす。
+    pub closed spec fn set_passes(&self, w: Word, i: int) -> bool {
+        let h = w.bits_spec();
+        &&& w.is_ptr_spec()
+        &&& self.core.has(h)
+        &&& self.core.state(h) == BlockState::Live
+        &&& self.core.scanned(h, i)
+        &&& self.core.rc_of(h) > 0
+        &&& p_owner(self.core.perm(h)) == self.worker
+    }
+
     /// `w` の物体の tag。
     pub closed spec fn tag_of(&self, w: Word) -> u16 {
         bits_tag(self.core.meta_bits(w.bits_spec()))
@@ -2871,6 +2952,8 @@ impl<M: Mode> Heap<M> {
         ensures
             r is Ok ==> self.unshared(w),
             self.consistent() && self.writable(w) && self.owned(w) ==> r is Ok,
+            self.core.rc_of(h@.addr) > 0 && p_owner(self.core.perm(h@.addr)) == self.worker
+                ==> r is Ok,
     {
         let rc = self.core.rc_get(h);
         proof {
@@ -3011,6 +3094,7 @@ impl<M: Mode> Heap<M> {
             old(self).consistent() && old(self).writable(w) && old(self).holds(v) && old(
                 self,
             ).scanned_at(w, i as int) && old(self).owned(w) ==> r is Ok && final(self).consistent(),
+            M::CHECKED && old(self).set_passes(w, i as int) ==> r is Ok,
     {
         let h = self.header_of(w);
         let ghost c = self.consistent() && self.writable(w) && self.holds(v) && self.scanned_at(
