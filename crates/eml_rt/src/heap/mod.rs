@@ -33,6 +33,7 @@ use crate::alloc::FREE_META;
 use crate::alloc::{Pages, too_large};
 #[cfg(verus_only)]
 use crate::alloc::{page_base, region_cap, region_ptr};
+use crate::control::Control;
 use crate::error::HeapError;
 use crate::foreign;
 #[cfg(verus_keep_ghost)]
@@ -466,15 +467,25 @@ impl<M: Mode> Heap<M> {
         }
     }
 
-    /// ダミーの物体と、検査モードの数を除いて、空のヒープ。
+    /// ダミーの物体と、検査モードの数を除いて、空のヒープ。上限のない新しい `Control` にページを数える。
     pub fn new() -> (r: Heap<M>)
         ensures
             r.wf(),
             r.consistent(),
             r.settled(),
     {
+        Self::with_control(Control::unbounded())
+    }
+
+    /// `new` と同じ空のヒープで、ページをセッションの `control` に数える。
+    pub fn with_control(control: Arc<Control>) -> (r: Heap<M>)
+        ensures
+            r.wf(),
+            r.consistent(),
+            r.settled(),
+    {
         let mut heap = Heap {
-            core: Self::empty_core(),
+            core: Self::empty_core(control),
             region: ManuallyDrop::new(None),
             worker: 0,
             building: 0,
@@ -498,7 +509,7 @@ impl<M: Mode> Heap<M> {
     }
 
     /// ブロックを持たない `Core`。
-    fn empty_core() -> (r: Core)
+    fn empty_core(control: Arc<Control>) -> (r: Core)
         ensures
             r.full(),
             r.safe_wf(),
@@ -515,6 +526,7 @@ impl<M: Mode> Heap<M> {
                 } else {
                     0
                 },
+                control,
             ),
             perms: Tracked(Map::tracked_empty()),
             model: Ghost(
@@ -588,6 +600,10 @@ impl<M: Mode> Heap<M> {
             w == self.dummy_word(),
     {
         self.dummy
+    }
+
+    pub fn control(&self) -> &Arc<Control> {
+        self.core.pages.control()
     }
 
     pub fn worker(&self) -> u32 {
@@ -1346,7 +1362,7 @@ impl<M: Mode> Heap<M> {
         }
         // `Heap` は `Drop` を持つので、中身を空の中身と入れ替えてから落とす。落とすときの後始末は、ダミーを持ち不変条件を
         // 満たすヒープを求める
-        let mut core = Self::empty_core();
+        let mut core = Self::empty_core(b.core.pages.control().clone());
         mem::swap(&mut b.core, &mut core);
         // 作り手が付けていた塊は、新しい塊の親になる。凍結する物体は、その塊とその祖先の物体を指してよい
         let mut parent = ManuallyDrop::new(None);
@@ -3179,6 +3195,13 @@ impl<M: Mode> Heap<M> {
         // 隔離したブロックは確保したページの一部なので、引き算は桁を下回らない。この関係はまだ証明していないので、
         // 下回ったら 0 にする
         self.core.pages.bytes().saturating_sub(self.quarantined)
+    }
+
+    /// OS から取ったページのバイト数。`bytes_in_use` と違って検査モードでも隔離したブロックを引かないので、テストで
+    /// `Control` の数と比べられる。
+    #[cfg(test)]
+    pub(crate) fn bytes_in_use_pages(&self) -> usize {
+        self.core.pages.bytes()
     }
 
     /// `T` の値を持つ `Foreign` の物体を作る。値の破棄処理は、物体を空けるときか `Heap` を落とすときに1回だけ呼ぶ。

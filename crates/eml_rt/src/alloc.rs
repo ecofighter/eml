@@ -6,11 +6,14 @@
 //! 集合とページごとの数は ghost の値で持ち、割り算を量化子の中に置かずに済ませる。
 
 use std::alloc::{Layout, alloc, dealloc, handle_alloc_error};
+use std::mem::ManuallyDrop;
 use std::ptr;
+use std::sync::Arc;
 
 use vstd::prelude::*;
 use vstd::raw_ptr::{Dealloc, PointsTo, PointsToRaw, ptr_mut_write, ptr_ref};
 
+use crate::control::Control;
 #[cfg(verus_only)]
 use crate::frozen::RegionPerms;
 use crate::heap::TOO_LARGE;
@@ -166,6 +169,11 @@ pub(crate) tracked struct PagePerm {
 #[cfg_attr(not(verus_keep_ghost), allow(dead_code))]
 pub(crate) struct Pages {
     prefix_words: usize,
+    /// ページを取るときと返すときに、そのバイト数を数える先。
+    // `Drop` がページを返した後で `release_control` に渡して手放す。欄の後始末として `Arc` を手放す処理が展開されると、
+    // 計測のプログラムのコード生成単位の分け方が変わり、文字列の操作と `release` が呼ぶ側に展開されなくなったためである
+    // (`Heap` の `region` の欄と同じ。docs/implementation/benchmarks.md の「S9b-2a (凍結した領域)」)
+    control: ManuallyDrop<Arc<Control>>,
     list: Vec<*mut PageHeader>,
     classes: [Class; 27],
     bytes: usize,
@@ -804,7 +812,7 @@ impl Pages {
     }
 
     // 実行
-    pub(crate) fn new(prefix_words: usize) -> (r: Pages)
+    pub(crate) fn new(prefix_words: usize, control: Arc<Control>) -> (r: Pages)
         requires
             prefix_words <= 1,
         ensures
@@ -820,6 +828,7 @@ impl Pages {
         };
         let r = Pages {
             prefix_words,
+            control: ManuallyDrop::new(control),
             list: Vec::new(),
             classes: [empty;27],
             bytes: 0,
@@ -945,6 +954,10 @@ impl Pages {
     /// OS から取ったページのバイト数。
     pub(crate) fn bytes(&self) -> usize {
         self.bytes
+    }
+
+    pub(crate) fn control(&self) -> &Arc<Control> {
+        &self.control
     }
 
     #[inline]
@@ -1842,6 +1855,7 @@ impl Pages {
             None => too_large(),
         };
         let (base, Tracked(raw), Tracked(dealloc)) = alloc_page(bytes);
+        charge_pages(&self.control, bytes);
         let page = base as *mut PageHeader;
         let ghost a = base@.addr as int;
         let tracked (head, tail) = raw.split(Set::range(a, a + FIRST_BLOCK));
@@ -2365,6 +2379,7 @@ impl Pages {
             assert(raw.dom() =~= Set::range(a as int, a + bytes));
         }
         dealloc_page(page as *mut u8, bytes, Tracked(raw), Tracked(dealloc));
+        refund_pages(&self.control, bytes);
         proof {
             self.count = Ghost(self.count@.remove(a));
             self.carved = Ghost(self.carved@.remove(hs));
@@ -2946,6 +2961,17 @@ fn dealloc_page(
     unsafe { dealloc(p, Layout::from_size_align_unchecked(bytes, PAGE_BYTES)) }
 }
 
+// セッションのページの数の加減 (信頼の一覧の T1)。値について何も約束しないので、検証には何も持ち込まない
+#[verifier::external_body]
+fn charge_pages(control: &Control, bytes: usize) {
+    control.charge(bytes)
+}
+
+#[verifier::external_body]
+fn refund_pages(control: &Control, bytes: usize) {
+    control.refund(bytes)
+}
+
 // 止める関数 (信頼の一覧の T5)。どれも状態を変える前に呼ぶ (T7)
 #[verifier::external_body]
 #[cold]
@@ -2974,15 +3000,24 @@ const _: () = assert!(MAX_PAGE_BYTES == isize::MAX as usize - (isize::MAX as usi
 impl Drop for Pages {
     fn drop(&mut self) {
         for page in self.list.drain(..) {
+            let bytes = unsafe { (*page).bytes };
             unsafe {
-                let bytes = (*page).bytes;
                 dealloc(
                     page.cast(),
                     Layout::from_size_align_unchecked(bytes, PAGE_BYTES),
                 );
             }
+            self.control.refund(bytes);
         }
+        // `control` の欄はこの後で読まない
+        release_control(unsafe { ManuallyDrop::take(&mut self.control) });
     }
+}
+
+/// ページの数を数える先の `Arc` を手放す。呼ぶ側に展開させない理由は、`Pages` の `control` の欄の注釈にある。
+#[inline(never)]
+fn release_control(control: Arc<Control>) {
+    let _ = control;
 }
 
 #[cfg(test)]
@@ -2996,6 +3031,13 @@ mod tests {
             meta::rc_ptr(h).write(1);
             meta::meta_ptr(h).write(Meta::new(0, 0, Kind::Data, false).bits());
         }
+    }
+
+    fn new_pages(prefix_words: usize) -> Pages {
+        Pages::new(
+            prefix_words,
+            Arc::new(Control::new(crate::Limits::default())),
+        )
     }
 
     fn blocks(pages: &Pages) -> usize {
@@ -3023,7 +3065,7 @@ mod tests {
 
     #[test]
     fn blocks_of_one_class_are_carved_back_to_back() {
-        let mut pages = Pages::new(0);
+        let mut pages = new_pages(0);
         let a = alloc(&mut pages, 3);
         let b = alloc(&mut pages, 3);
         assert_eq!(a.addr() % WORD, 0);
@@ -3034,7 +3076,7 @@ mod tests {
 
     #[test]
     fn a_freed_block_is_marked_free_and_reused_first() {
-        let mut pages = Pages::new(0);
+        let mut pages = new_pages(0);
         let a = alloc(&mut pages, 2);
         init(a);
         init(alloc(&mut pages, 2));
@@ -3048,7 +3090,7 @@ mod tests {
 
     #[test]
     fn a_new_page_writes_back_where_the_old_one_stopped() {
-        let mut pages = Pages::new(0);
+        let mut pages = new_pages(0);
         let per_page = (PAGE_BYTES - FIRST_BLOCK) / (16 * WORD);
         for _ in 0..per_page + 3 {
             init(alloc(&mut pages, 16));
@@ -3059,7 +3101,7 @@ mod tests {
 
     #[test]
     fn a_large_object_gets_its_own_page_and_is_returned_at_once() {
-        let mut pages = Pages::new(0);
+        let mut pages = new_pages(0);
         init(alloc(&mut pages, 2));
         let [a, b, c] = [200, 300, 400].map(|words| {
             let h = alloc(&mut pages, words);
@@ -3080,7 +3122,7 @@ mod tests {
 
     #[test]
     fn the_prefix_shifts_the_header_and_the_class() {
-        let mut pages = Pages::new(1);
+        let mut pages = new_pages(1);
         // 前置きを足して 17 語なので、20 語の級になる
         let a = alloc(&mut pages, 16);
         assert_eq!(pages.block_words(a), 20);
@@ -3096,7 +3138,7 @@ mod tests {
     // 級を約束させるので、ここでは `fits` を直に呼ぶ
     #[test]
     fn a_wrapping_size_panics_in_the_token_check() {
-        let mut pages = Pages::new(1);
+        let mut pages = new_pages(1);
         let a = alloc(&mut pages, 2);
         let payload =
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| pages.fits(a, usize::MAX)))

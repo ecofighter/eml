@@ -10,6 +10,7 @@ use vstd::prelude::*;
 
 mod alloc;
 mod cell;
+mod control;
 mod error;
 mod foreign;
 mod frozen;
@@ -22,6 +23,7 @@ mod text;
 mod trust;
 mod word;
 
+pub use control::{Control, Limits, Stop};
 pub use error::HeapError;
 pub use frozen::Frozen;
 pub use heap::{Heap, Stats, Token};
@@ -39,6 +41,12 @@ const _: fn() = || {
     impl<T: ?Sized + Sync> AmbiguousIfSync<u8> for T {}
     let _ = <Heap<Fast> as AmbiguousIfSync<_>>::some_item;
     let _ = <Heap<Checked> as AmbiguousIfSync<_>>::some_item;
+};
+
+// `Control` はセッションのどのスレッドからも同じものを見る
+const _: fn() = || {
+    fn send_and_sync<T: Send + Sync>() {}
+    send_and_sync::<Control>();
 };
 
 #[cfg(test)]

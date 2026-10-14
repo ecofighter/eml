@@ -490,6 +490,38 @@ fn own_objects_read_region_words<M: Mode>() {
     assert_eq!(mortal(&heap), 0);
 }
 
+// 実行の制御
+// T1: 2つのスレッドのヒープが、1つの Control にページの数を足し引きする
+fn two_threads_share_one_control<M: Mode>() {
+    let control = Arc::new(crate::Control::new(crate::Limits::default()));
+    let threads: Vec<_> = (0..2)
+        .map(|_| {
+            let control = control.clone();
+            std::thread::spawn(move || {
+                let mut heap = Heap::<M>::with_control(control);
+                let big = heap.alloc_data(0, 0, PAGE_BYTES / 8, false);
+                unsafe { heap.decref(big) }.unwrap();
+            })
+        })
+        .collect();
+    for t in threads {
+        t.join().unwrap();
+    }
+    assert_eq!(control.bytes(), 0);
+}
+
+// 別のスレッドが立てた止める語を読む
+#[test]
+fn an_interrupt_from_another_thread_is_seen() {
+    let control = Arc::new(crate::Control::new(crate::Limits::default()));
+    let setter = {
+        let control = control.clone();
+        std::thread::spawn(move || control.interrupt())
+    };
+    setter.join().unwrap();
+    assert_eq!(control.stop_bits(), crate::Control::INTERRUPT);
+}
+
 both_modes!(
     pages_are_aligned_and_returned,
     large_objects_get_their_own_page,
@@ -513,4 +545,5 @@ both_modes!(
     two_threads_read_one_region,
     chains_drop_in_any_order,
     own_objects_read_region_words,
+    two_threads_share_one_control,
 );
