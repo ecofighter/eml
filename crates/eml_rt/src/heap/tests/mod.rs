@@ -23,9 +23,10 @@ mod checked;
 mod raw;
 mod reuse;
 mod share;
+mod trusted;
 
-/// Miri で遅くなりすぎない長さ。
-pub(super) const LONG: usize = if cfg!(miri) { 300 } else { 100_000 };
+/// 解放の連鎖と `share` が再帰しないことを確かめる長さ。
+pub(super) const LONG: usize = 100_000;
 
 pub(super) const CONS: u16 = 1;
 
