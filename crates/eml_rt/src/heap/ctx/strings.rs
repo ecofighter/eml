@@ -1,4 +1,4 @@
-//! 文字列の extern (docs/spec/object-model.md の「文字列」)。比較、`++`、`Int.show`、`String.show` の結果を、バイト列の
+//! 文字列の extern (docs/spec/object-model.md の「extern」)。比較、`++`、`Int.show`、`String.show` の結果を、バイト列の
 //! spec (`lex`、`decimal`、`escape`) に対して証明する。文字列の物体を読み書きする部品はヒープの `string` にある。
 
 use std::cmp::Ordering;

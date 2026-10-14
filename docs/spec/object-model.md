@@ -2,7 +2,7 @@
 
 位置づけ: 規範。
 
-VM とネイティブで共有するランタイム `eml_rt` の核と、その上に置く実行文脈 `Ctx` を定める。核は、語、物体 (ヘッダ、ペイロード、種類)、ページ単位の確保器と生存の列挙、局所と共有の参照カウント、`share`、`lin` ビット、核の操作、文字列、凍結した領域、reuse の部品、検査モードから成る。核は物体の中身の種類をほとんど知らない。中身を知るのは `BigInt`、`Foreign`、`String` だけで、データとクロージャの物体の形 (下の「物体の形」) は VM が受け持つ。evidence の3つの物体の形は、`Ctx` の基本操作が受け持つ (下の「実行文脈 `Ctx`」)。`eml_rt` はまだパイプラインから使わず、今のインタプリタのヒープは [ランタイム](runtime.md) が定める。S10 で VM が `eml_rt` を使うときに、2つの文書を合わせる。
+VM とネイティブで共有するランタイム `eml_rt` の核と、その上に置く実行文脈 `Ctx` を定める。核は、語、物体 (ヘッダ、ペイロード、種類)、ページ単位の確保器と生存の列挙、局所と共有の参照カウント、`share`、`lin` ビット、核の操作、文字列、凍結した領域、reuse の部品、検査モードから成る。核は物体の中身の種類をほとんど知らない。中身を知るのは `BigInt`、`Foreign`、`String` だけで、データとクロージャの物体の形 (下の「物体の形」) は VM が受け持つ。evidence の3つの物体の形は、`Ctx` の基本操作が受け持つ (下の「実行文脈 `Ctx`」)。`eml_extern` の表の関数の行は、`Ctx` の上に extern として置く (下の「extern」)。`eml_rt` はまだパイプラインから使わず、今のインタプリタのヒープは [ランタイム](runtime.md) が定める。S10 で VM が `eml_rt` を使うときに、2つの文書を合わせる。
 
 設計の基準は、実用的なプログラムで速いことである。関数型のプログラムで回数の多い経路は、多い順に次のとおりで、核はこの順に速さを優先する。
 
@@ -69,7 +69,7 @@ meta: u32         tag (16 ビット) | scan (8 ビット) | info (8 ビット)
 - データの物体で、宣言の順のフィールドを走査する語と生の語に並べ替える規則を、物理的な形と呼ぶ。コンパイラのパス (後の reuse analysis) とランタイム (`CodeBase`) は、同じ規則を使わなければならない。reuse analysis は、物理的な語の数と物理的な位置で reuse の組を決めるためである
 - 物理的な形は次のとおりである。フィールドのうち Repr が `obj` か `tobj` のもの (`Repr::is_rc`) を宣言の順に走査する語として並べ、その後に残り (`int`、`enum`、`unit`) を宣言の順に生の語として並べる。`unit` のフィールドも1語を取る。宣言で `()` を持つフィールドはまれなので、語を取らない3つ目の場合を作らない
 - 規則を出す関数は `eml_lir` に置く。`Layout` から、宣言の位置ごとの物理的な位置と、走査する語と生の語の数を出す。`eml_rt` は tag、走査する語の数、生の語の数だけを受け、規則を知らない。規則を使うのは `CodeBase` を組み立てる側 (S10 の VM) と後の reuse analysis で、どちらも `eml_lir` に依存する。そのため規則は1か所にあり、結び付けのテストは要らない
-- 関数は、最初に使う S10 で足す。今足すと使われないコードになるためである。S9b-3 の extern が作るデータ (`Bool`、`Ordering`、`Fs.read_all` の組 `(File, String)`) は、どれもタグだけか走査する語だけなので、規則の関数がなくても形が決まる
+- 関数は、最初に使う S10 で足す。今足すと使われないコードになるためである。extern が作るデータ (`Bool`、`Ordering`、`Fs.read_all` の組 `(File, String)`。下の「extern」) は、どれもタグだけか走査する語だけなので、規則の関数がなくても形が決まる
 
 ### 種類
 
@@ -102,8 +102,6 @@ meta: u32         tag (16 ビット) | scan (8 ビット) | info (8 ビット)
 - クロージャ、evidence の入口の表、evidence、`evv` の節点は種類を分けず、`Data` にする (下の「物体の形」)
 - 後の項目の種類の見通しは次のとおりである。`Float` は、`BigInt` と同じく1語の箱の種類を足すか、`BigInt` の形を使う。`Bytes` は `String` と同じ形 (長さとバイト列) を使える。`Array` は別の種類が要る。種類の数の上限 16 には余裕がある
 
-まだ決めていないこと: `File` の物体の中身の型。S9b-3 で extern と一緒に置く ([ロードマップ](../future/roadmap.md) の「S9 共通ランタイム `eml_rt`」)。
-
 ## 物体の形
 
 物体の種類ごとの tag とペイロードは次のとおりである。
@@ -116,7 +114,7 @@ meta: u32         tag (16 ビット) | scan (8 ビット) | info (8 ビット)
 | evidence | `Data`、エフェクトの番号 + 1 | [入口の表, 状態, 外側の `evv`] |
 | 入口の表 | `Data`、0 | [入口のクロージャ...] |
 | 文字列 | `String`、0 | 上の「種類」と下の「文字列」 |
-| `File` | `Foreign`、`lin` ビットを立てる | 中身の型は S9b-3 で extern と一緒に置く |
+| `File` | `Foreign`、`lin` ビットを立てる | 破棄処理の表と、Rust の値 `File` (下の「extern」の「`File`」) |
 
 ### クロージャ
 
@@ -237,7 +235,9 @@ RC の遷移は、rc の値だけを受け取って次の状態を返す純粋�
 - そのため、`reuse_in_place` を使ってよいのは、古い物体の印が `unr` のときか、新しい物体の印が `lin` のときである。それ以外は `con_at` で `meta` を書く。検査モードの照らし合わせも、`lin` ビットについては「箱がビットを持ち、新しい `meta` が持たない」ときだけを誤りにする
 - `unpack` と case で得たフィールドの印は、配置の表から確かめられず、translate を信用する ([LIR とインタプリタ](lir.md) の「Kind の印の検査」)。検査モードの `lin` ビットの誤り (下の「報告する誤り」) が、これを実行時に覆う
 
-まだ決めていないこと: 呼ぶ側がビットを立てる実装 (`File` の物体と、VM の `con` と `closure`)。S9b-3 と S10 で入れる ([ロードマップ](../future/roadmap.md) の「S9 共通ランタイム `eml_rt`」)。
+`File` の物体は、`Fs.open` が作るときにビットを立てる (下の「extern」の「`File`」)。
+
+まだ決めていないこと: VM の `con` と `closure` がビットを立てる実装。S10 で入れる ([ロードマップ](../future/roadmap.md) の「S10 VM と切り替え」)。
 
 ## 核の操作
 
@@ -254,7 +254,7 @@ RC の遷移は、rc の値だけを受け取って次の状態を返す純粋�
 | 操作 | 安全の前提 | モデルの前提 | 検査する前提 (検査モードの `Err`) |
 |---|---|---|---|
 | どの操作も | 語は即値か、このヒープのブロックか、このヒープに付けた塊とその祖先のブロックである。構築中の物体は書き終えている (`set_field` と `set_raw` を除く) | 読むだけの操作の語は、モデルで生きている物体 (参照の数が正か、不死) を指す | 物体は生きている (`UseAfterFree`)。rc が正の物体を書き換えるか rc を読んで判定するなら、持ち主は今の worker である (`WrongOwner`) |
-| 物体を受ける操作 (`meta`、`field`、`set_field`、`raw`、`set_raw`、`scanned_len`、`scanned`、`free_block`、`release`、`release_reuse`、`into_token`、`foreign`、`string`、`string_push`、`string_concat`) | 語はポインタである (即値でも `Word::EMPTY` でもない) | | |
+| 物体を受ける操作 (`meta`、`field`、`set_field`、`raw`、`set_raw`、`scanned_len`、`scanned`、`free_block`、`release`、`release_reuse`、`into_token`、`foreign`、`foreign_unique`、`string`、`string_push`、`string_concat`) | 語はポインタである (即値でも `Word::EMPTY` でもない) | | |
 | `alloc` / `alloc_immortal` / `con_at` | `meta` の種類は `Foreign`、`String`、`Free` のどれでもない。`scan` は 255 でなく、走査する語はペイロードに収まる | | |
 | `field` / `set_field` | | `set_field` が書く語は、呼ぶ側が数えた参照を持つ | i 語目は走査する語である (`OutOfBounds`)。`set_field` の物体は、ほかのスレッドが読めない (局所か、構築中。`NotWritable`) |
 | `scanned` | | | i は `scanned_len` より小さい (`OutOfBounds`) |
@@ -263,6 +263,7 @@ RC の遷移は、rc の値だけを受け取って次の状態を返す純粋�
 | `dup` | | 呼ぶ側が参照を持つか、借りている | 物体は `lin` ビットを持たない (`LinDup`) |
 | `decref` / `release` / `release_reuse` | | 呼ぶ側が参照を1つ持つ。残さない子は呼ぶ側の参照と数える | 不死の物体の参照は `acquire_immortal` か `dup` で作った (`ImmortalOverRelease`)。共有の物体は `lin` ビットを持たない (`LinShared`)。`release` と `release_reuse` の物体はデータで、tag と走査する語の数が名指したものである (`WrongLayout`)。残さない子は `decref` の、`is_last` が偽のときの残す子は `dup` の検査する前提を満たす |
 | `acquire_immortal` | | | 物体は不死である (`NotImmortal`) |
+| `foreign_unique` | 返すポインタを使うのは、この物体の参照を手放すか、ほかの参照を作るまでの間だけである | | rc が 1 である (`NotUnique`。共有の物体も断る) |
 | `free_block` | | 呼ぶ側が最後の参照を持ち、子の参照はもう処理してある | rc が 1 か -1 である (`NotLast`)。種類は破棄処理を持たない (`FinalizerSkipped`) |
 | `into_token` | | 呼ぶ側が唯一の参照を持ち、子の参照はもう処理してある | token にできる種類である (`NotTokenable`)。rc が 1 である (`NotUnique`) |
 | `con_at` / `reuse_in_place` / `drop_token` | | token の箱の「残した」語 (`con_at` と `reuse_in_place` で書き直さない語) の参照を呼ぶ側が持つ | token はまだ使っていない (`StaleToken`)。`con_at` の箱は `payload_words` の物体のこのモードでの級にある (`WrongClass`。同じ物理的な語の数の物体から作った token なら、どちらのモードでも満たす)。`reuse_in_place` の `meta` の tag、scan、種類は箱と同じで (`WrongMeta`)、箱が `lin` ビットを持つなら `meta` も持つ (`LinBitKept`) |
@@ -273,12 +274,12 @@ RC の遷移は、rc の値だけを受け取って次の状態を返す純粋�
 
 戻り値は、どちらのモードでも `Result` である。速いモードの操作は、次の2つを除いて `Err` を作らない。
 
-- `foreign` は、物体の種類と値の型を、どちらのモードでも照らす。違えば `WrongKind` を返す。`foreign` の安全の条件は物体が生きていることだけで、違う型の値を指すポインタを返さないことは、この照らし合わせが受け持つためである
+- `foreign` と `foreign_unique` は、物体の種類と値の型を、どちらのモードでも照らす。違えば `WrongKind` を返す。`foreign` の安全の条件は物体が生きていることだけで、違う型の値を指すポインタを返さないことは、この照らし合わせが受け持つためである
 - `reuse_in_place` は、空の token を受けると `StaleToken` を返す。空の token には箱がなく、返す語がないためである
 
 `Err` を作らない操作は、呼ぶ側に展開すれば、最適化で `Result` の分岐が消える。そのため、`dup` と `decref` は、局所の rc を書き換えるだけの速い道を `#[inline]` にし、残り (共有、不死、張り付いた数、検査モードの仕事) を、`#[cold]` と `#[inline(never)]` を付けた遅い道の関数に出す。速いモードの `decref` の速い道は、rc が 1 なら解放の連鎖を直に呼ぶ。解放の連鎖は `#[inline(never)]` にするが、一意な物体を空けることはよく起きるので、`#[cold]` にはしない。確保と箱の解放の速い道、`release`、`release_reuse`、`con_at` と、語とヘッダの小さい関数も `#[inline]` にする。VM は `eml_rt` の外の crate なので、付けないと、総称でない関数は crate をまたぐ呼び出しになりうるためである。`Ctx::poll` が読む `Control::stop_bits` も、同じ理由で `#[inline]` にする。`field`、`set_field`、`meta`、`scanned`、`string_push` と、`string_push` の中で呼ぶ `push_unchecked` と、`release` と `release_reuse` の子の処理 (`release_children`) が呼ぶ `release_unkept` も `#[inline]` にする。総称な関数の実体は、使う側の crate のコード生成単位の1つにしかできず、ほかの単位からは展開できないためである ([計測の基準](../implementation/benchmarks.md) の「S9b-2b (実行文脈)」)。確保器の遅い道 (ページを替えること、大きい物体の確保と返却) は `#[cold]` にする。命令の数は [計測の基準](../implementation/benchmarks.md) の「S9a (`eml_rt` の核)」にある。
 
-ペイロードを呼ぶ側が書く `alloc` と `alloc_immortal` も `unsafe fn` である。`meta` の種類は `Foreign`、`String`、`Free` のどれでもなく、`scan` は 255 でない。呼ぶ側は、ほかのヒープの操作の前に `meta` に合うペイロードを書く。`scan` が 255 の物体は走査する語の数をペイロードの先頭の数の語から読むので、数の語を書く前には、走査する語と生の語の境目が決まらない。走査する語が 255 個以上の物体は `alloc_data` で作る。ペイロードの形が正しいかは VM が受け持ち、確保のたびに実行時に確かめると速い道の費用になるためである。ペイロードを自分で書く `alloc_data`、`alloc_int`、`alloc_foreign`、`alloc_string`、`alloc_string_immortal` は安全な関数である。`String` の物体を作れるのは、下の「文字列」の操作だけである。
+ペイロードを呼ぶ側が書く `alloc` と `alloc_immortal` も `unsafe fn` である。`meta` の種類は `Foreign`、`String`、`Free` のどれでもなく、`scan` は 255 でない。呼ぶ側は、ほかのヒープの操作の前に `meta` に合うペイロードを書く。`scan` が 255 の物体は走査する語の数をペイロードの先頭の数の語から読むので、数の語を書く前には、走査する語と生の語の境目が決まらない。走査する語が 255 個以上の物体は `alloc_data` で作る。ペイロードの形が正しいかは VM が受け持ち、確保のたびに実行時に確かめると速い道の費用になるためである。ペイロードを自分で書く `alloc_data`、`alloc_int`、`alloc_foreign`、`alloc_string`、`alloc_string_room`、`alloc_string_immortal` は安全な関数である。`String` の物体を作れるのは、下の「文字列」の操作だけである。
 
 | 操作 | 動作 |
 |---|---|
@@ -287,7 +288,7 @@ RC の遷移は、rc の値だけを受け取って次の状態を返す純粋�
 | `alloc_immortal(payload_words, meta)` | rc 0 で確保する |
 | `acquire_immortal(w)` | 不死の物体の参照を1つ作る。速いモードでは何もしない (下の「不死の物体の数え方」) |
 | `alloc_int(n)` / `unbox_int(w)` | 上の「語」の `box` と `unbox` |
-| `alloc_foreign::<T>(value, lin)` / `foreign::<T>(w)` | `alloc_foreign` は種類 `Foreign` の物体を作り、`foreign` はその中の値へのポインタを返す |
+| `alloc_foreign::<T>(value, lin)` / `foreign::<T>(w)` / `foreign_unique::<T>(w)` | `alloc_foreign` は種類 `Foreign` の物体を作り、`foreign` はその中の値へのポインタを返す。`foreign_unique` は、局所で rc が 1 の物体の値を、書き換えるために借りる。`Fs.read_all` が `File` の読み手を進めるのに使う (下の「extern」) |
 | `dup(w)` / `decref(w)` | 上の「参照カウント」。`decref` が 0 にした物体は、解放の連鎖に入れる |
 | `is_unique(w)` | rc が 1 か。共有、不死、張り付いた数は、この1回の比較でみな偽になる。reuse とその場の書き換えに使う |
 | `is_last(w)` | rc が 1 か -1 か。手放そうとしている参照が最後のものかを判定し、フィールドを `dup` せずに受け取ってよいかに使う。rc は Relaxed で読み、-1 のときだけ Acquire で読み直す。読み直しは同じ値を返し、最後の AcqRel の `decref` と同期する。ふだんの rc が 1 の道に、aarch64 の Acquire の読み込みの費用を足さないためである |
@@ -302,7 +303,7 @@ RC の遷移は、rc の値だけを受け取って次の状態を返す純粋�
 | `release(w, tag, keep)` | LIR の `release`。`is_last` が真なら、残さない子を手放して箱を空け、残す子は箱の参照を受け継ぐ。そうでなければ、残す子を `dup` してから w を手放す |
 | `release_reuse(w, tag, keep)` | w が一意なら、残さない子を手放して箱を token にする。そうでなければ `release` と同じにして、空の token を返す |
 | `share(w, receiver)` | 上の「`share`」 |
-| `alloc_string(s)` / `alloc_string_immortal(s)` / `string(w)` / `string_push(left, s)` / `string_concat(left, right)` | 下の「文字列」 |
+| `alloc_string(s)` / `alloc_string_room(room)` / `alloc_string_immortal(s)` / `string(w)` / `string_push(left, s)` / `string_concat(left, right)` | 下の「文字列」 |
 
 - `con_at` で箱を使い回したときは、残したフィールドを書き直さなくてよい。呼ぶ側は、ほかのヒープの操作の前に、走査する語がみな `meta` に合う値を持つようにする
 - LIR の `decref` と `drop` は、どちらも `decref` で実行する。実行時の動作も検査モードの規則も同じだからである。`unr` でない値に `decref` を出さない規則 (V1) は静的な検査で、実行時には区別しない
@@ -348,6 +349,7 @@ RC の遷移は、rc の値だけを受け取って次の状態を返す純粋�
 | 操作 | 動作 |
 |---|---|
 | `alloc_string(s: &str) -> Word` | 安全な関数。`s` を写した文字列を作る。容量は級の大きさまで |
+| `alloc_string_room(room: usize) -> Word` | 安全な関数。容量が `room` バイト以上の空の文字列を作る。`String.show` が、先に数えた結果の長さで1回だけ確保するのに使う (下の「extern」) |
 | `alloc_string_immortal(s: &str) -> Word` | 安全な関数。rc 0 の不死の物体として作る。凍結した領域の文字列の定数を作るのに使う (下の「凍結した領域」)。`alloc_immortal` が `String` を断るので、別に持つ |
 | `string(w) -> Result<*const str, HeapError>` | `unsafe fn`。中身の位置を返す。`foreign` と同じく生のポインタにし、ヒープの借用に縛らない。指す先は、w の物体が生きていて、`string_push` か `string_concat` でその物体を書き換えていない間だけ読める |
 | `string_push(left, s: &str) -> Result<Word, HeapError>` | `unsafe fn`。left の参照を受け取り、`s` を後ろに足した文字列の参照を返す |
@@ -362,7 +364,7 @@ left が一意 (is_unique)
 そうでない (共有、不死) → 和の長さで確保し、left と s を写してから、left を decref
 ```
 
-- 文字列のバイトを書くのは、作るときと `string_push` だけである。`string_concat` は `string_push` と同じ道で右辺を写す。バイトを書く信頼の関数を1つにするためである。S12 の extern (`join`、`replace` など) が Rust の側の `&str` を足すときも、`string_push` を使えば余分な写しが要らない
+- 文字列のバイトを書くのは、作るときと後ろに足すときだけである。`string_concat` は `string_push` と同じ道で右辺を写し、`String.show` も同じ道でその場に足す (下の「extern」)。バイトを書く信頼の関数を1つにするためである。S12 の extern (`join`、`replace` など) が Rust の側の `&str` を足すときも、`string_push` を使えば余分な写しが要らない
 - `s` は、ほかの文字列の物体の中身を指してよい。その物体は呼び出しの間生きている。写すのは left を手放す前である。速いモードでは、大きい物体のページを `free_block` がすぐに返すためである
 - `s` は left 自身の中身を指さない。一意な left を作り直すと、`string_push` の中で left の箱を空け、大きい物体ならページも返す。引数の `&str` が指すメモリを呼び出しの間に返すと、写した後でも未定義の動作になる。自分自身との連結は、`dup` してから `string_concat(x, x)` で行う。`string_concat` の右辺は `&str` の引数でなく、写す直前にヒープの権限から借りるので、この制約を受けない。`x ++ x` は `dup` で rc が 2 になって届くので、写す枝に進む
 - 容量を読むのは、left が一意なときだけである。共有と不死の left (凍結した領域のリテラルを含む) は容量を使わないためである。そのため、速いモードの操作は rc 0 の物体のページの頭を読まない。ネイティブの静的なデータにはページの頭がないので、この性質を約束にする (下の「凍結した領域」)
@@ -370,7 +372,7 @@ left が一意 (is_unique)
 - 和の長さと倍の容量は `checked_add` と `checked_mul` で求め、桁あふれは今の確保と同じく panic にする (T5)
 - 検査モードの誤りは、語を受ける操作の共通の誤り (`UseAfterFree`、`WrongOwner`)、種類が `String` でないときの `WrongKind`、数が 0 の不死の物体の手放し (`ImmortalOverRelease`) である。どの誤りも最初の確保より前に返すので、`Err` のときヒープは変わらない。文字列は子を持たないので、left と right の `decref` の誤りをすべて先に確かめられる。left と right が同じ物体で rc が 1 のとき (参照を2つ持つという前提を破った呼び出し) も、2回の `decref` を続けて確かめるので、ここで断る。後の手放しは、先に確かめたので誤りにならない
 - モデルが合っていて前提がすべて成り立つときの結果は、`decref` と同じく、`Ok` か、モデルが照らさない誤り (下の「検査モードの約束」) である。モデルは不死の物体の外の参照の数を持たないので、不死の left の `ImmortalOverRelease` はモデルの前提の下でも返りうる
-- `show`、比較、`println` は S9b-3 で作る。どれも `string` で読むだけなので、足す操作はない
+- extern の比較、`++`、`println` は、文字列を借りて読むか、`string_concat` を使う。足した核の操作は、`String.show` が結果を1回で確保するための `alloc_string_room` だけである。`String.show` の区間の写しは、写す元の文字列を借りた `&str` を vstd の `str::split_at` で切って渡すので、T10 の関数は変わらない (下の「extern」)
 
 ## 凍結した領域
 
@@ -472,9 +474,9 @@ is_unique(x)
 
 - モードは `Heap<M: Mode>` の型の引数で選ぶ。`Mode` は封じた trait で、`Fast` と `Checked` の2つがある。各操作は `if M::CHECKED { … }` で検査を書き、速いモードではこの分岐が単相化で消える
 - 実行時の旗にしないのは、速いモードの RC の速い道に、検査のための分岐を1つも足さないためである。VM は2つのモードで単相化して2つ作る。ネイティブは、コンパイル時にどちらかを選ぶ
-- 仕事の回数 (`Stats` の `rc_increments`、`rc_decrements`、確保の回数 `allocations`、生きている箱の数 `live` とその最大 `peak_live` と、`Ctx` の `CtxStats` の `evidence_steps`、`yields`、`yield_frames`) は、検査モードだけで数える。速いモードは数える費用も持たない。S10 では、`RunStats` の回数の固定と UI テストを検査モードで走らせ、`bench/run.sh` の命令の数は速いモードで測る。OS から取ったページのバイト数だけは、両方のモードで数える (上の「確保と解放」)
+- 仕事の回数 (`Stats` の `rc_increments`、`rc_decrements`、確保の回数 `allocations`、生きている箱の数 `live` とその最大 `peak_live` と、`Ctx` の `CtxStats` の `evidence_steps`、`yields`、`yield_frames`、`string_bytes_copied`) は、検査モードだけで数える。速いモードは数える費用も持たない。S10 では、`RunStats` の回数の固定と UI テストを検査モードで走らせ、`bench/run.sh` の命令の数は速いモードで測る。OS から取ったページのバイト数だけは、両方のモードで数える (上の「確保と解放」)
 
-まだ決めていないこと: `RunStats` の各項目の VM での意味 ([ロードマップ](../future/roadmap.md) の「S10 VM と切り替え」)。`string_bytes_copied` は、VM が `string_push` を呼ぶ前に `is_unique` と容量を見れば数えられるので、`eml_rt` に欄を足さない。一意な左辺を作り直すときの数え方は、そこで決める。
+まだ決めていないこと: `RunStats` の各項目の VM での意味 ([ロードマップ](../future/roadmap.md) の「S10 VM と切り替え」)。`string_bytes_copied` は、extern が数える `CtxStats` の定義を引き継ぐ (下の「extern」の「仕事の回数」)。
 
 ### 前置き
 
@@ -519,12 +521,12 @@ token (`Token`) はどちらのモードでも1語である。S10 の VM のレ�
 - `lin` ビットの立った物体への `dup` (`LinDup`)。`lin` の物体の rc は 1 なので、rc が 1 を超える誤りは、この `dup` で見つかる
 - `lin` ビットの立った共有の物体の `release` と `decref` (`LinShared`)。`share` は `lin` の物体に印を付けないので、これは印付けの誤りである。`share` のたどりが、すでに共有の `lin` の物体に届いたときも同じ誤りにする
 - `share` のたどりで、同じ `lin` の物体に2回届くこと (`LinReachedTwice`)
-- 所有者の不一致 (`WrongOwner`)。正の rc の物体への `dup`、`decref`、`set_field`、`set_raw`、`is_unique`、`is_last`、`free_block`、`into_token`、`release`、`release_reuse`、`string_push`、`string_concat` が、今の worker ID と違う所有者の物体に対して行われたとき
+- 所有者の不一致 (`WrongOwner`)。正の rc の物体への `dup`、`decref`、`set_field`、`set_raw`、`is_unique`、`is_last`、`free_block`、`into_token`、`release`、`release_reuse`、`foreign_unique`、`string_push`、`string_concat` が、今の worker ID と違う所有者の物体に対して行われたとき
 - ほかのスレッドが読みうる物体への書き込み (`NotWritable`)。`set_field` と `set_raw` は、rc が 0 以下 (不死か共有) で構築中でない物体を断る。凍結した塊の物体と、書き終えたヒープ自身の不死の物体もこれに当たる。前置きの状態は構築中と生存を分けないので、検査モードのヒープは構築中の物体の番地を持ち、それと比べて見分ける
-- token の誤り。token にできない種類の `into_token` (`NotTokenable`)、一意でない物体の `into_token` (`NotUnique`)、空けた表の項目の使用、箱の状態が token でないこと、世代の番号の不一致 (`StaleToken`。token を受ける操作が断る。同じ token の2回の使用と ABA の形)、級の合わない `con_at` (`WrongClass`)、`reuse_in_place` の `meta` の tag と scan と種類が箱と違うこと (`WrongMeta`)、`reuse_in_place` で箱が `lin` ビットを持ち新しい `meta` が持たないこと (`LinBitKept`)
+- token の誤り。token にできない種類の `into_token` (`NotTokenable`)、一意でない物体の `into_token` (`NotUnique`。rc が 1 でない物体の `foreign_unique` も同じ誤りにする)、空けた表の項目の使用、箱の状態が token でないこと、世代の番号の不一致 (`StaleToken`。token を受ける操作が断る。同じ token の2回の使用と ABA の形)、級の合わない `con_at` (`WrongClass`)、`reuse_in_place` の `meta` の tag と scan と種類が箱と違うこと (`WrongMeta`)、`reuse_in_place` で箱が `lin` ビットを持ち新しい `meta` が持たないこと (`LinBitKept`)
 - `free_block` を、破棄処理を持つ種類の物体に使うこと (`FinalizerSkipped`) と、最後の参照でない物体に使うこと (`NotLast`)
 - `release` と `release_reuse` で、物体がデータでないか、タグと走査する語の数が名指したものと違うこと (`WrongLayout`)
-- `unbox_int`、`foreign`、`string`、`string_push`、`string_concat` で、物体の種類が違うこと (`WrongKind`)。`foreign` は値の型も照らし、速いモードでも同じ誤りを返す (上の「核の操作」)
+- `unbox_int`、`foreign`、`foreign_unique`、`string`、`string_push`、`string_concat` で、物体の種類が違うこと (`WrongKind`)。`foreign` と `foreign_unique` は値の型も照らし、速いモードでも同じ誤りを返す (上の「核の操作」)
 - 添字の範囲の外 (`OutOfBounds`)。`field` と `set_field` は、添字が走査する語を指さないことを断る。`raw` と `set_raw` は、添字が走査する語の後のブロックの中の語を指さないことを断り、ペイロードが不透明な物体 (`Foreign` と `String`) を `WrongKind` で断る。`scanned` は、添字が走査する語の数以上であることを断る。走査する語に生の値を書くと、解放の連鎖がその値をポインタとして読み、`Foreign` の破棄処理の表を上書きすると、破棄処理が正しくない関数のポインタを呼ぶ。`String` の長さの語を書き換えると、`string` が容量の外を読む。どれも検査モードの安全を崩すので、断る
 - `Ctx` の基本操作の誤り (下の「実行文脈 `Ctx`」)
   - 節点、evidence、入口の表の形が違うこと、入口の欄の番号が入口の数以上であること、入口の欄に2回入れること、`evv` の長さが上限を超えること、`ev_new` のエフェクトの番号が 65535 であること、`ev_set_clause` で `lin` ビットの立った節の本体を入れること (`BadEvidence`)
@@ -552,7 +554,7 @@ token (`Token`) はどちらのモードでも1語である。S10 の VM のレ�
 - 検査モードの操作は、安全の前提の下で `safe_wf` を保つ
 - モデルが合っていて、モデルの前提と検査する前提がすべて成り立つなら、操作は `Ok` を返し、結果は速いモードと同じモデルの遷移になる。ただし、モデルは不死の物体の外の参照の数、共有の物体の `lin` ビット、物体の持ち主、確保器の級、箱の `meta` を照らす規則を持たない。そのため、解放の連鎖が手放す子についての `ImmortalOverRelease`、`LinShared`、`WrongOwner`、`con_at` の `WrongClass`、`reuse_in_place` の `WrongMeta` と `LinBitKept` は、モデルが合っていても返りうる
 - `Err` を返すのは、その誤りに対応する違反が操作の前にあったときだけである
-- 状態を変える前に `Err` を返す操作では、ヒープは変わらない。状態を変えた後で `Err` を返しうるのは、解放の連鎖 (`decref`、`release`、`release_reuse` の子の処理)、`release` の最後でない枝の `dup` の列、`share`、`con_at` (token の項目を取り出した後の `WrongClass`) と、`Ctx` の基本操作の `evv_set`、`ev_set_state`、`yield_finish` (元の `evv`、元の状態、宛先を手放す解放の連鎖で起きた誤り) である。その後はモデルが合わなくてよく、ヒープを使わない。ただし `Heap` と `Ctx` を落とすことは安全である
+- 状態を変える前に `Err` を返す操作では、ヒープは変わらない。状態を変えた後で `Err` を返しうるのは、解放の連鎖 (`decref`、`release`、`release_reuse` の子の処理)、`release` の最後でない枝の `dup` の列、`share`、`con_at` (token の項目を取り出した後の `WrongClass`) と、`Ctx` の基本操作の `evv_set`、`ev_set_state`、`yield_finish` (元の `evv`、元の状態、宛先を手放す解放の連鎖で起きた誤り) と、extern の `fs_read_all` と `fs_close` (`File` を手放す解放の連鎖で起きた誤り。下の「extern」) である。その後はモデルが合わなくてよく、ヒープを使わない。ただし `Heap` と `Ctx` を落とすことは安全である
 
 同じ物体を2回空けないように、最後の参照と決めた時点で、その物体の前置きを「空ける途中」にする。`release_ref`、`release` の最後の参照の枝、`release_reuse` の子の処理の前がこれに当たる。呼ぶ側が `dup` せずに同じ語を2つのフィールドに書いた親を空けると、同じ子に2回届く。2回目に届いたときは、生きていないので `UseAfterFree` を返す。`Err` で解放の連鎖が途中で止まると、積んだまま空けていない物体が「空ける途中」で残る。`Heap` を落とすときは、その中の `Foreign` の破棄処理を1回だけ呼ぶ。生存の列挙、不変条件の検査、リークは、「空ける途中」の物体を生きている物体と同じに扱う。
 
@@ -580,10 +582,11 @@ token の表の項目は、`into_token` と `release_reuse` が添字を使い�
 | `yielding` | yield の状態 (下の「yield の状態」) |
 | `control` | セッションの `Arc<Control>` (下の「実行の制御」)。安全点の確かめがヒープの中をたどらずに読めるように、ヒープとは別に持つ |
 | `max_depth`、`max_evv` | `Control` の上限の写し。`Ctx::new` が写す |
-| `stats` | 仕事の回数 `CtxStats` (`evidence_steps`、`yields`、`yield_frames`)。`Heap` の `Stats` と同じく、検査モードだけで数える |
+| `host` | セッションの Host (下の「extern」の「Host」)。出力とファイルは、これを通す |
+| `stats` | 仕事の回数 `CtxStats` (`evidence_steps`、`yields`、`yield_frames`、`string_bytes_copied`)。`Heap` の `Stats` と同じく、検査モードだけで数える |
 
 - `Ctx` は `Send` で `Sync` でない (`Heap` と同じ)。`Control` は `Send` と `Sync` である。どちらも型の assert で固定する
-- 論理的な worker ID はヒープに置く (上の「論理的な worker ID」)。出力先は extern と一緒に S9b-3 で、セッションの根は S11 で足す。使う段より前に足すと、テストできない欄になるためである
+- 論理的な worker ID はヒープに置く (上の「論理的な worker ID」)。セッションの根は S11 で足す。使う段より前に足すと、テストできない欄になるためである
 - `heap()` は安全なメソッドで、`heap_mut()` は `unsafe fn` である。安全なコードがヒープを入れ替えると、`Ctx` の持つ語が、落としたヒープを指すためである。`heap_mut()` の前提は次の3つである。ヒープを入れ替えない。`Ctx` の持つ語 (`evv` と yield の状態の語) を手放したり書き換えたりせず、そこからたどれる物体 (`evv` の節点、evidence、入口の表) も書き換えない。`Ctx` のメソッドを次に呼ぶ前に、作っている物体を書き終える
 - `Ctx` は `Drop` を実装しない。`evv` と yield の状態の参照は個別に手放さず、ヒープと一緒に消える。そのため、基本操作の中の `decref` で破棄処理が panic しても、`Ctx` を落とすことは安全である (下の「`unsafe` の核」の T7)
 - `check_finished()` は、`evv` が空で yield の状態がなしであることを確かめる。VM がリークの検査の前に呼ぶ ([LIR とインタプリタ](lir.md) の「`evv` の不変条件」の最後の項)
@@ -616,7 +619,7 @@ token の表の項目は、`into_token` と `release_reuse` が添字を使い�
 - 安全点の確かめは `Ctx::poll(depth) -> Result<(), Stop>` である。速い道は、`depth` が `max_depth` を超えるかと、止める語が 0 でないかの2つの比較で、どちらも偽なら `Ok` を返す。真なら `#[cold]` の関数が、速い道で読んだビットから `Stop` を決める。優先の順は `Interrupted`、`MemoryLimit`、`DepthLimit` である。ビットを読み直さないのは、その間にほかのスレッドが `clear` すると、深さの上限を超えていないのに `DepthLimit` を返すためである。VM は呼び出しと戻りで `poll` を呼ぶ (S10)
 - 深さは、VM のタスクが持つスタックの語の数で数える。フレームの数で数えないのは、スタックの大きさを抑えるのが目的だからである
 - 確保量は、確保器がページを取るときと返すときに数え (上の「確保と解放」)、上限を超えたら `MEMORY` を立てる。worker ごとのヒープの数を足し合わせた、セッション全体の量になる。凍結した塊のページも、塊が生きている間は数に入る。ページを `Frozen` に移しても数はそのまま残り、塊を落とすときに減る
-- 確保器に `Control` を渡すため、ヒープの確保器が `Arc<Control>` を持つ。`Heap::with_control(control)` は共有の `Control` でヒープを作り、`Heap::new()` は上限のない新しい `Control` で作る。`Heap::control()` がそれを返す。`Ctx::new(control)` は `with_control` でヒープを作る
+- 確保器に `Control` を渡すため、ヒープの確保器が `Arc<Control>` を持つ。`Heap::with_control(control)` は共有の `Control` でヒープを作り、`Heap::new()` は上限のない新しい `Control` で作る。`Heap::control()` がそれを返す。`Ctx::new(control, host)` は `with_control` でヒープを作る
 - `Control::interrupt()` は `INTERRUPT` を立て、`Control::clear()` はすべてのビットを下ろす。確保量が上限を下回ってもビットは下りないので、下ろすのは `clear` だけである。S11 の REPL は、入力の始めに `clear` を呼ぶ
 - 止める語が伝えるのは「止めよ」のビットだけで、ほかのメモリへの書き込みを公開する役はない。そのため、どの読み書きも Relaxed で行う
 - `poll`、`interrupt`、`clear` と確保量の加減は、`verus!` の外の安全なコードで、値について何も約束しない。確保器が確保量を加減する関数は、信頼の一覧の T1 に入る (下の「`unsafe` の核」)
@@ -670,10 +673,163 @@ token の表の項目は、`into_token` と `release_reuse` が添字を使い�
 - 核の操作と同じ分け方にする。速いモードは上の表の前提を安全の前提にし、検査モードは確かめて `Err` を返す (上の「報告する誤り」)
 - 検査モードは、各操作が読む所だけを確かめる。`ev_lookup` と `evv_mask` は、たどる節点ごとに形と tag を確かめ、`ev_*` は evidence の形を確かめる。`evv_set` はリストをたどらず、`evv_push` は l の長さを数えるためにたどる
 - 検査モードのリストをたどるループは、`max_evv` 歩を超えたら `BadEvidence` を返す。`evv_wf` が長さを `max_evv` 以下と定めるので、超えるのは前提を破ったとき (輪になったリストなど) だけである。既定の `max_evv` は `usize::MAX` なので、輪になったリストのテストは小さい上限で作る
-- 検査モードは、状態を変える前に、確かめることをすべて確かめる。たとえば `evv_push` は、確保の前に e の形と l の長さを確かめる。`Err` のとき、ヒープと、`Ctx` の `evv` と yield の状態は変わらない。`ev_evv`、`ev_clause`、`ev_take_state`、`ev_set_clause`、`ev_lookup`、`ev_set_state` は例外で、`Err` を返す前に構築中の物体を書き終えて生きている物体にすることがあり、ヒープはその点だけ変わりうる。仕事の回数は、`ev_lookup` がたどった分だけ増えうる (下の仕事の回数の項)。ただし `evv_set`、`ev_set_state`、`yield_finish` は、状態を変えた後の解放の連鎖で起きた誤りを返しうる。その後は `Ctx` を落とすことしかできない (上の「検査モードの約束」)
+- 検査モードは、状態を変える前に、確かめることをすべて確かめる。たとえば `evv_push` は、確保の前に e の形と l の長さを確かめる。`Err` のとき、ヒープと、`Ctx` の `evv` と yield の状態は変わらない。`ev_evv`、`ev_clause`、`ev_take_state`、`ev_set_clause`、`ev_lookup`、`ev_set_state` は例外で、`Err` を返す前に構築中の物体を書き終えて生きている物体にすることがあり、ヒープはその点だけ変わりうる。仕事の回数は、`ev_lookup` がたどった分だけ増えうる (下の仕事の回数の項)。ただし `evv_set`、`ev_set_state`、`yield_finish` は、状態を変えた後の解放の連鎖で起きた誤りを返しうる。その後は `Ctx` を落とすことしかできない (上の「検査モードの約束」)。extern の誤りのときの約束は、下の「extern」にある
 - 検査モードの `evv_mask` は、確保の前にリストをたどって確かめ、合う evidence が足りなければ `NoHandler` を返す。たどった節点の数は、たどりが通ったときだけ `evidence_steps` に足し、`Err` のときは数えない。今のインタプリタは、途中までたどった数も数える
 - モデルが合っていて `held_ok()` と表の前提が成り立てば、検査モードの基本操作は `Ok` を返し、結果は速いモードと同じになる。ただし `evv_set`、`ev_set_state`、`yield_finish` の解放の連鎖は、核の `decref` と同じく、モデルが照らさない誤りを返しうる。`evv_mask` が合う evidence の足りないときに `NoHandler` を返すことは、テストで確かめ、Verus では約束しない
 - 仕事の回数の数え方は、`evv_mask` の `Err` を除いて、今のインタプリタと同じである。インタプリタの数え方のテスト3つを、同じ期待値で `eml_rt` に写してある
+
+## extern
+
+`eml_extern` の表の関数の行25個を、`eml_rt` に語の ABI で1回だけ書く。S10 の VM と、後のネイティブのコードが同じ関数を呼ぶ。ヒープを使わない算術と比較は module `externs` の関数で、文字列と I/O の extern は `Ctx` のメソッドである。純粋な extern は、結果をバイト列や整数の spec に対して Verus で証明する。
+
+行の番号 (`eml_extern::Extern`) から関数を引く表は `eml_rt` に置かない。VM が行の番号の `match` で各関数を呼ぶ。`match` は飛び先の表になるので、関数ポインタの表と同じ速さである。
+
+| 行 | 関数 |
+|---|---|
+| `Prelude.+`、`-`、`*`、`/`、`%`、`negate` | `int_add`、`int_sub`、`int_mul`、`int_div`、`int_rem`、`int_negate` |
+| `Prelude.Eq Int.==`、`!=`、`Prelude.Ord Int.<`、`<=`、`>`、`>=`、`compare` | `int_eq`、`int_ne`、`int_lt`、`int_le`、`int_gt`、`int_ge`、`int_compare` |
+| `Prelude.Eq Bool.==`、`!=` | `bool_eq`、`bool_ne` |
+| `Prelude.Eq String.==`、`!=`、`Prelude.Ord String.compare` | `Ctx::string_eq`、`string_ne`、`string_compare` |
+| `Prelude.++` | `Ctx::string_append` |
+| `Prelude.Show Int.show`、`Prelude.Show String.show` | `Ctx::int_show`、`string_show` |
+| `Prelude.println` | `Ctx::println` |
+| `Std.Fs.open`、`read_all`、`close` | `Ctx::fs_open`、`fs_read_all`、`fs_close` |
+
+### 語の ABI
+
+- 関数は、行ごとに引数の数が決まった形にする。`args: &[Word]` を受ける一律の形は採らない。引数がメモリを通り、ネイティブのコードでもレジスタで渡せなくなるためである
+- 引数と結果の型は Repr で決める。`int` は生の `i64`、`obj` は `Word`、`unit` は `()` である。`enum` のタグも `i64` にする。VM のレジスタは生の 64 ビットの語で、`yielding` と `yield_status` も `i64` を返すので、VM の側で型を変えずに済む
+- `Bool` と `Ordering` のタグ (`FALSE=0`、`TRUE=1`、`LT=0`、`EQ=1`、`GT=2`) は `i64` の定数、組のタグ (`TUPLE=0`) は `alloc_data` に合わせて `u16` の定数として `externs` に置く。`eml_lir` の定数と同じであることは、両方に依存する `eml_interp` のテストで確かめる
+- ヒープも Host も使わない算術と比較は、`Ctx` を取らない `#[inline]` の関数にする。VM の専用の命令が呼び、ほかの crate でも展開できるようにするためである。総称でない関数は、`#[inline]` がないと crate をまたいで展開されない ([計測の基準](../implementation/benchmarks.md) の「S9b-2b (実行文脈)」)
+- `Word` を受ける extern は `unsafe fn` にし、`# Safety` に前提を書く。`Word` は別のヒープからも持ち込めるためで、核の操作と同じである。前提は、`heap_mut()` の前提を守っていることと、語が即値か、このヒープか付けた塊の生きている物体を指し、呼ぶ側がその参照を1つ持つことである。速いモードでは、文字列を受ける引数が文字列であることと、`Fs.read_all` の `File` が局所で rc が 1 であることも前提にする。`File` の型は、どちらのモードでも確かめる
+- 引数の所有は LIR の規則のとおりにする。`obj` の引数は消費し、比較も読み終えたら手放す。`Int.show` は `Word` を受けないので、安全な関数である
+
+### 誤り
+
+算術の誤りは `ArithFault` (`DivisionByZero` と `IntegerOverflow`) で、`Copy` である。`Result<i64, ArithFault>` は 16 バイトで、展開されないときも2つのレジスタで返る。`Ctx` のメソッドの誤りは `Fault` (24 バイト) で、`From<ArithFault>` と `From<HeapError>` を持つ。
+
+| `Fault` | 中身 | 表示 |
+|---|---|---|
+| `Heap(HeapError)` | 検査モードの確かめと解放の連鎖の誤り | `HeapError` の表示 |
+| `Arith(ArithFault)` | 算術の誤り | `division by zero`、`integer overflow` |
+| `Output(Box<str>)` | 書き込みの誤りの `io::Error` の文言 | ``cannot write the output: {e}`` |
+| `Io { op, path, reason }` | `op` は `Open` か `Read`、`reason` は `IoReason` (`NotFound`、`PermissionDenied`、`Other`) | ``cannot open `{path}`: {reason}``、``cannot read `{path}`: {reason}``。理由は `not found`、`permission denied`、`I/O error` |
+| `NotUtf8 { path }` | 読んだ中身が UTF-8 でない | ``` `{path}` is not valid UTF-8 ``` |
+| `Stopped(Stop)` | `Fs.read_all` が、読む途中で止める語か確保量の上限に当たった | `interrupted`、`the memory limit is exceeded`、`the call depth limit is exceeded` (`Stop` の表示) |
+
+- `path` は `open` に渡されたパスの文字列そのもの (`file_root` をつなぐ前) である
+- I/O の誤りを文字列でなく値の種類で分けるのは、S12 の `try_io` が I/O の誤りを eml の `IOError` の値に変えるためである ([ロードマップ](../future/roadmap.md) の「S12 スクリプトの MVP」)
+- `Arith`、`Output`、`Io`、`NotUtf8` の表示は、今の `eml_interp::Fault` と1文字も違わない。これは verifier を通るプログラムでの約束である。`Heap(_)` の表示は `eml_rt::HeapError` のもので、今の `eml_runtime::HeapError` とは違う。今の `Fault::Internal` (文字列の操作が文字列でない値を受けたときなど) に対応するものもない。どちらも正しいプログラムでは起きないので、S10 で切り替えるときに UI テストの期待値の変更として扱う
+- 位置 (`at path:line:column`) を付けるのは VM の役で、`Fault` は持たない
+- VM は `Stopped` を、安全点の `Ctx::poll` が返す `Err(Stop)` と同じに扱う
+
+### 誤りのときの約束
+
+約束の書き方は、`Ctx` の基本操作と同じである (上の「基本操作の契約」)。速いモードは前提を安全の前提にし、検査モードは確かめて `Err` を返す。RC の増減は、引数の参照が減り、結果の参照が増える形で `ensures` に書く。
+
+| 誤り | 約束 |
+|---|---|
+| `Heap(_)` | どの確かめも、状態を変える前、Host を呼ぶ前に行う。ヒープは変わらず、何も書かず、何も開かない。確かめるのは、種類 (文字列か、`File` の `Foreign` か)、`decref` が通ること (同じ物体を2つの引数に渡したときは2回続けて通ること。`string_concat` と同じ)、`Fs.read_all` の `File` が一意であること (`foreign_unique`) である。ただし `fs_read_all` と `fs_close` は、確かめた後で `File` を手放す解放の連鎖の誤りも返しうる (下の項) |
+| `Output`、`Io`、`NotUtf8`、`Stopped` | 引数は成功のときと同じく消費する。`Fs.read_all` は `File` を手放し (破棄処理が閉じる)、読んだバイト列を手放し、結果を作らない。ほかのヒープは変わらず、`held_ok` は保たれる。S11 の REPL が続けて使うためである |
+| `ArithFault` | ヒープに触れない |
+
+- `fs_read_all` と `fs_close` の `Heap(_)` は、ヒープが変わらないか、`File` を手放す解放の連鎖で起きたモデルが照らさない誤り (上の「検査モードの約束」) である。モデルは `Foreign` の物体が走査する語を持たないことを知らないので、約束はこの形になる。基本操作の `evv_set`、`ev_set_state`、`yield_finish` と同じく、その後は `Ctx` を落とすことしかできない
+- `foreign` と `foreign_unique` は速いモードでも型の違いを `WrongKind` で返すので、`fs_read_all` と `fs_close` は速いモードでも `Err(Heap(WrongKind))` を返しうる。この2つは、即値の引数もどちらのモードでも `WrongKind` にする。このときヒープは変わらない
+- 今の実装でも、`println` は書けなくても文字列を手放し、`open` は開けなくてもパスを手放し、`read_all` は誤りのときに `File` を手放す。上の約束はこれと同じである
+
+### 証明すること
+
+整数の extern は、結果を vstd の spec で約束する。
+
+- `+`、`-`、`*` は、vstd の `checked_add`、`checked_sub`、`checked_mul` の spec で約束する。収まらなければ `IntegerOverflow` である
+- `negate` は `0.checked_sub(a)` で作る。vstd に `checked_neg` の spec がないためである
+- `/` と `%` は、`rust_div` と `rust_rem` の spec (0 の方向に切り捨て、余りの符号は割られる数に合わせる) で約束する。0 で割れば `DivisionByZero`、`MIN / -1` と `MIN % -1` は `IntegerOverflow` である。今の実装と同じである
+- 比較の6つと `compare`、`Bool` の `==` と `!=` は、タグの値で約束する。`Bool` の引数には前提を置かず、タグの値の等しさで比べる
+
+文字列の extern は、結果を ghost のバイト列の spec で約束する。文字列のバイト列は、T10 の「ペイロードを `str` として借りる関数」で借りて読む。
+
+- `==` と `!=` は、長さが違えば先に返し、同じなら slice の `==` で比べる。slice の `==` は vstd に spec があるので、信頼は要らない
+- `compare` は、辞書式の順序 (バイトの順。今と同じ) の spec `lex(a, b)` に一致することを約束する。比べるのは `<[u8] as Ord>::cmp` を1回呼ぶ包み `bytes_cmp` で、その結果が `lex` に一致することを T5 で信頼する。長さで先に返す近道は使わない (`"b" > "ab"` のため)
+- `++` は、`string_concat` の約束 (上の「文字列」) をそのまま使う。左が一意ならその場で連結する
+- `Int.show` は、ghost のバイト列が spec `decimal(i)` (負なら `-`、続けて先頭に 0 のない10進の数字。0 は `"0"`) に等しいことを証明する。数字は `u64` の絶対値から作る (`-i64::MIN` は溢れるため)。20 バイトの作業領域 (`"-9223372036854775808"` がちょうど 20 バイト) に後ろから書き、ASCII なら UTF-8 であることを証明して `from_utf8_unchecked` で `&str` にし、`alloc_string` で作る
+- `String.show` は、ghost のバイト列がバイトの単位の spec `escape(bytes)` に等しいことを証明する
+  - 全体を `"` で囲む。`"` と `\` には `\` を前に付ける。`\n`、`\t`、`\r`、`\0` は名前付きのエスケープにする。そのほかの制御文字 (0x01〜0x1F と 0x7F) は `\u{16進の小文字、桁埋めなし}` にする。それ以外のバイトは、0x80 以上も含めてそのまま写す
+  - 今の実装は文字の単位で同じ規則を使い、C1 の制御文字 (U+0080〜U+009F) もそのまま写す。UTF-8 の先頭と続きのバイトはどれも 0x80 以上なので、バイトの単位の規則は、正しい UTF-8 のすべてで今の実装と同じ結果になる
+  - 1回目の走査で結果の長さを数え (桁あふれは `checked_add` で確かめる)、`alloc_string_room` でその容量の空の文字列を1回だけ確保する。2回目の走査で、エスケープのない区間はまとめて写し、エスケープは短い ASCII の列を足す。どれも容量に収まるので、作り直しは起きない
+  - 足すのは、`string_push` と同じ道の内部の関数 (`append_str` と `append_part`) である。公開の `string_push` は検査モードで確かめ直し、その場で足すことを約束しないので使わない
+  - 区間を写すときは、写す元の文字列を T10 で借りた `&str` を、vstd の `str::split_at` で `[from, to)` に切って渡す。そのため T10 の関数は変わらない。切る位置が文字の境目であることは、「正しい UTF-8 の列で、ASCII のバイトの直前と直後は文字の境目である」という補題で示す。結果が UTF-8 であることは `valid_utf8_concat` から出る
+- 検査モードでは、引数が `String` の物体でなければ `Heap(WrongKind)` を返す。速いモードは、読めることと所有を前提にする
+
+I/O の extern (`println`、`Fs.open`、`Fs.read_all`、`Fs.close`) は、メモリの安全と、RC のモデルでの増減を証明する。引数を消費すること、結果を持つこと、組のフィールド、`File` の種類と `lin` ビット、誤りのときに作りかけの物体を手放すことを含む。OS とのやりとりの中身 (何が書かれ、何が読めたか) は約束せず、T11 (下の「`unsafe` の核」) と期待値の表 ([テスト戦略](../implementation/testing.md) の「期待値の表」) に任せる。`Fs.read_all` の結果の文字列は `alloc_string` で作るので、ghost のバイト列と UTF-8 であることは今ある約束から出る。
+
+### Host
+
+OS とのやりとりは、セッションに1つの Host にまとめ、`Ctx` が持つ。
+
+```rust
+pub trait Host: Send + Sync {
+    fn write_line(&self, stream: Stream, line: &str) -> io::Result<()>;
+    fn flush(&self) -> io::Result<()>;
+    fn open(&self, path: &str) -> io::Result<Opened>;
+}
+
+pub struct Opened {
+    pub reader: Box<dyn BufRead + Send>,
+    pub size: Option<u64>,
+}
+```
+
+- `write_line` は、本文と `\n` を、ほかの行と途中で混ざらないように書く。`&str` を受けるのは、eml の文字列は UTF-8 が証明されており、テキストしか受けない出力先 (WASM の console、GUI) にも渡せるためである。`Stream` は `Out` と `Err` で、標準エラーは S12 の `eprintln` が使う。今から `Stream` を置くのは、後でメソッドを足さずに済ませるためである
+- `open` は、`BufRead` の読み手と、読む前に分かる長さ (ふつうのファイルならメタデータの長さ) を返す。`BufRead` にするのは、S12 で行ごとに読む extern を足すときに、そのまま使えるようにするためである。`Fs.read_all` から見ると、`BufReader` は残っている分を渡したあと中の読み手をそのまま読むので、費用は開くときの 8 KiB の確保だけである
+- `Ctx` は Host を不透明な型 `HostRef` で持ち、何も約束しない関数を通して呼ぶ (下の「`unsafe` の核」の T11)。Verus は `dyn Host` も `io::Error` も扱えないためである。`HostRef` は `Arc<dyn Host>` を `ManuallyDrop` の欄に持ち、`Drop` で `#[inline(never)]` の関数に渡して手放す。`Control` と凍結した領域の鎖と同じ形で、`Ctx` を使うコードのコード生成単位の分け方を変えないための予防である。`Ctx` 自身は、今と同じく `Drop` を実装しない
+- `Ctx::new(control, host)` で受け取る。`par` の子の `Ctx` は、同じ Host を `Arc` で写して持つ
+- `Send + Sync` を求めるので、`JsValue` を持つブラウザの Host は `unsafe impl` が要る。これは受け入れる
+- Host を総称の型引数 (`Ctx<M, H>`) にはしない。基本操作がすべて `H` ごとにも単相化され、証明にも `H` が入るためである。動的な呼び出しの費用は数ナノ秒で、書き込みの費用と比べて小さい ([計測の基準](../implementation/benchmarks.md) の「S9b-3 (extern)」)
+- ネイティブ、WASM (WASI)、アプリへの組み込み、S11 の REPL は、渡す Host を替えるだけで済む。S12 で標準入力、環境変数、時刻などの extern を足すときも、Host のメソッドを足す
+
+### 出力のバッファ
+
+`eml_rt` は Host の実装 `StdHost` を持つ。ネイティブのプログラムも `eml_rt` をつないで、同じ方針を使うためである。
+
+- `StdHost::stdio(file_root)` は、標準出力と標準エラーに書く。`StdHost::new(out, err, file_root, mode)` は、テストと組み込みのために書き込み先と書き方 (`Buffering` の `Line` か `Block`) を受ける
+- 出力の方針は C の stdio と同じにする。標準出力が端末なら、対話ですぐ見えるように行ごとに書く (`Line`)。端末でなければ、64 KiB の `BufWriter` でまとめて書く (`Block`)。標準エラーは、いつも行ごとに書く
+- まとめて書くと、行ごとに flush する今の書き方より 40〜160 倍速い ([計測の基準](../implementation/benchmarks.md) の「S9b-3 (extern)」)
+- ストリームごとに `Mutex` を1つ持ち、ロックの中で本文と `\n` を書く。ロックが毒されていたら、`PoisonError::into_inner` で取り出して続ける。中身は書き込みのバッファだけで、続けても壊れないためである
+- `StdHost` を落とすときは、`BufWriter` の `Drop` がまだ書いていない出力を書く (unwind のときも同じ)。誤りは捨てる
+- `StdHost::open` は、`file_root` に `path` をつないで開く。`path` が絶対パスなら、そのパスを開く。長さの見込みは、ふつうのファイルにだけ返す。ディレクトリも今と同じく開け、読むときに `I/O error` になる
+- `Ctx::flush() -> Result<(), Fault>` は、Host の `flush` を呼ぶ。ヒープには触れない。VM は次の所で呼ぶ (S10 でつなぐ)
+  - プログラムの終わり
+  - 実行時エラーを出す前。`> out 2>&1` のときに、出力と誤りの順を保つためである
+  - 割り込みと上限で止めたとき
+  - S12 で標準入力から読む前と、S11 の REPL の入力の区切り
+- まとめて書くと、書き込みの誤り (`| head` での EPIPE など) が見つかるのは、後でバッファがあふれた `println` か、終わりの flush になる。そのため `println` の `Err(Output)` は、「この行か、それより前の行を書けなかった」ことを表す。終わりの flush の誤りは、VM が位置なしで出す
+- 2回目の Ctrl-C ですぐ終わるときは、まだ書いていない出力は失われる (C と同じ)
+
+### `File`
+
+- `File` の物体は、`Foreign` の中身を `File { path: Box<str>, reader: Box<dyn BufRead + Send>, size: Option<u64> }` にしたもので、作るときに `lin` ビットを立てる。Verus には `external_body` の不透明な型として見せる
+- 閉じる処理は、`File` の drop glue だけである (手で書いた `Drop` は置かない)。どのスレッドで落としてもよい ([マルチコア対応の設計](../future/multicore.md) の「スレッドに縛られたリソース」)
+- `Fs.open`: 確かめの後、借りたパスの `&str` を Host の `open` に渡す。パスは1回だけ写して `File` に持たせる。開けたら `File` の物体を作ってから、パスの文字列を手放す。先に手放すと、空けたパスの箱を `File` が使い回しうるので、呼ぶ前からの変化を証明で言えないためである。Host が誤りを返せば、パスを手放して `Io { op: Open, .. }` を返す
+- `Fs.close`: 検査モードは型と `decref` の前提を確かめ、その後 `decref` するだけである
+- `Fs.read_all`
+  1. `File` は、局所で rc が 1 で、今の worker が持つものでなければならない。中の読み手を書き換えるためである。`foreign_unique` で借り、検査モードは確かめて `NotUnique` か `WrongOwner` を返す。速いモードでは安全の前提にする
+  2. 長さの見込みを取り出し (`Option::take`)、あればその大きさを `Vec<u8>` に `try_reserve` する。失敗は `Io { op: Read, reason: Other }` にする (今の `read_to_end` と同じ)。2回目の `Fs.read_all` には見込みがないので、余分に確保しない
+  3. 64 KiB ずつ読む。区切りごとに止める語を見て、立っていれば `Stopped` で止める (`INTERRUPT` なら `Interrupted`、ほかは `MemoryLimit`)。次に、`Vec` の容量と `Control` の確保量の和を上限 `max_bytes` と比べ、超えれば `Stopped(MemoryLimit)` で止める。`Vec` はヒープの外にあり、そのままでは上限に数えられないためである
+  4. 各区切りは `take(64 KiB).read_to_end(&mut vec)` で読み、0 バイトなら終わる。std が、`Interrupted` を受けたときの読み直し、短い読み、空き領域を 0 で埋めないこと、終わりを小さな読みで確かめることを受け持つ
+  5. 読み終えたら `String::from_utf8` で確かめ、`alloc_string(&str)` でヒープへ写し、`Vec` を手放す
+  6. 結果は組 `(File, String)` で、`alloc_data(TUPLE, 2, 0, lin = true)` で作り、`File` の参照を組に移す。行の `ret_kind` が `Lin` なので `lin` ビットを立てる
+  - 読みの誤りなら `Io { op: Read, .. }`、UTF-8 でなければ `NotUtf8`、止めたら `Stopped` を返す。どのときも `Vec` と `File` を手放す。`File` を手放すことで閉じる (今と同じ)
+- ヒープに直接読む形、mmap で読む形、`Vec` をそのままヒープの文字列にする形は採らない。計測と理由は [計測の基準](../implementation/benchmarks.md) の「S9b-3 (extern)」にある
+- 読む途中で止める語を見るのは `Fs.read_all` だけである。ほかの extern は短い時間で終わるので、安全点を通らない
+
+### 仕事の回数
+
+検査モードの `CtxStats` の `string_bytes_copied` は、extern がヒープの文字列に写したバイト数である。今のインタプリタの `RunStats::string_bytes_copied` と同じ数え方で、S10 の `RunStats` はこの定義を引き継ぐ。
+
+- `Int.show`: 数字の列の長さ
+- `String.show`: 結果の長さ
+- `Fs.read_all`: ファイルの長さ
+- `++`: 左が一意 (rc 1 の局所の物体) なら右の長さだけを数え、容量が足りずに作り直しても同じである。左が共有か不死なら、両辺の長さを数える
 
 ## `unsafe` の核
 
@@ -682,21 +838,22 @@ token の表の項目は、`into_token` と `release_reuse` が添字を使い�
 - `eml_rt` のコードは、核を含めて Verus の `verus!` の中に書き、`cargo verus verify -p eml_rt` が crate 全体を検証する ([テスト戦略](../implementation/testing.md) の「Verus」)。生のポインタの読み書きは、どれも Verus の権限 (`PointsTo`) の上で行う。証明するのは、公開の操作の前提 (上の「核の操作」の表) の下でのメモリの安全、ヒープの形の不変条件、RC と抽象のモデルの対応、`share` と `release` と reuse の遷移、上の「検査モードの約束」の性質である
 - 確保と atomic の操作は、std の関数を薄い関数で包み、その関数の約束を信頼する (下の表の T1 と T2)。vstd の確保は失敗すると `process::abort` を呼び、vstd の atomic は SeqCst だけを扱うので、使わない。包みは std の関数を1回呼ぶだけで、型を差し替える層ではない
 
-Verus で確かめない部分は、次の信頼の一覧にまとめる。`external_body`、`assume_specification` などの信頼の項目は、どれもこの表のどれかに属する。`eml_rt` の `trust.rs` のテストが、テストでないコードの項目を探し、表の番号を付けた一覧と同じであることを確かめる。`verus!` の外に置くのは、`fmt` と `Default` の実装、T4 の `Drop`、`unsafe impl Send` と `Sync`、`Sync` でないことの型の assert と配置を確かめるコンパイル時の assert、`leaks` の `BTreeMap` を組む安全な関数と `check_invariants`、前置きの構造体 `Prefix` の宣言、panic の文言の `const`、`Foreign` の表の `const` (T3)、`Control` の止める語と確保量を読み書きする安全な関数と `Ctx::poll` (上の「実行の制御」)、テストだけである。
+Verus で確かめない部分は、次の信頼の一覧にまとめる。`external_body`、`assume_specification` などの信頼の項目は、どれもこの表のどれかに属する。`eml_rt` の `trust.rs` のテストが、テストでないコードの項目を探し、表の番号を付けた一覧と同じであることを確かめる。`verus!` の外に置くのは、`fmt` と `Default` の実装、T4 の `Drop`、`unsafe impl Send` と `Sync`、`Sync` でないことの型の assert と配置を確かめるコンパイル時の assert、`leaks` の `BTreeMap` を組む安全な関数と `check_invariants`、前置きの構造体 `Prefix` の宣言、panic の文言の `const`、`Foreign` の表の `const` (T3)、`Control` の止める語と確保量を読み書きする安全な関数と `Ctx::poll` (上の「実行の制御」)、Host の trait と `Opened`、`Buffering`、`StdHost`、`HostRef::new` と `HostRef` の `Drop` (T4)、`Fault`、`ArithFault`、`IoReason`、`Stop` の `Display`、`io::Error` を `IoReason` に写す関数 `io_reason` (上の「extern」)、テストだけである。
 
 | # | 中身 | 理由 | Miri で確かめること |
 |---|---|---|---|
 | T0 | この `Heap` の物体に触れるのは1つのスレッドだけである。共有の物体の rc もこの `Heap` の操作だけが動かすとして、証明は逐次の実行を扱う。凍結した塊のメモリは、`Arc` で公開した後は書き込まれず、どのスレッドも読むだけである。`Frozen` の `Sync` はこれに頼る (上の「凍結した領域」) | 並行の手順の証明は VM の並列化のときに行う | T2 の2つのスレッドのテスト。2つのスレッドが同じ塊を付けたそれぞれのヒープで同じ定数を読み、`dup` と `decref` を繰り返すこと |
 | T1 | ページの確保と返却の関数。中身は `std::alloc::{alloc, dealloc}` で、確保に失敗したら `handle_alloc_error` を呼ぶ。セッションの確保量の加減 (`charge_pages`、`refund_pages`) もここに入る。中身は `Control` の atomic の加減で、値について何も約束しない (上の「実行の制御」) | OS と確保器の境界 | ページの確保と返却、64 KiB の揃え、大きい物体のページ、`Heap` を落とすときの返却。2つのスレッドのヒープが、1つの `Control` に確保量を足し引きすること |
 | T2 | rc と前置きの atomic の読み書き。欄の権限を受け、`AtomicI32::from_ptr` と `AtomicU32::from_ptr` で Relaxed と AcqRel の操作をする。約束は、T0 の下での逐次の値である | vstd の atomic は SeqCst だけを扱う | 局所と共有の `dup` と `decref`、`is_last` の2回の読み込み、検査モードの前置きの書き換え。2つのスレッドが同じ共有の rc の欄を並行に増減し、最後の参照を見るのがちょうど1つのスレッドであること |
-| T3 | `Foreign` の物体の中身。破棄処理の表 (関数のポインタ)、`TypeId` の照らし合わせ、`drop_in_place` | Verus は関数のポインタと `TypeId` を扱わない | 型の違う照らし合わせ、`Drop` を持つ値 (`Box`、`String`、`Vec`)、大きさ 0 の型、破棄処理が panic する場合、解放と `Heap` の破棄での破棄処理の呼び出しが1回だけであること |
-| T4 | `verus!` の外の `Drop` の実装 (`Heap`、`Pages`、`Frozen`)。`Frozen` の `Drop` は、親への `Arc` を `Arc::into_inner` のループで手放し、ページは `Pages` の `Drop` が返す。`Heap` は付けた塊の `Arc` を `ManuallyDrop` の欄に持ち、`Drop` が生きている物体の後始末 (`finalize_all`) の後で、`#[inline(never)]` の関数に渡して手放す。`Pages` も、確保量を数える `Control` の `Arc` を `ManuallyDrop` の欄に持ち、`Drop` がページを返して確保量を引いた後で、`#[inline(never)]` の関数に渡して手放す。欄の後始末を展開させると、計測のプログラムのコード生成単位の分け方が変わり、速い道が展開されなくなるためである ([計測の基準](../implementation/benchmarks.md) の「S9b-2a (凍結した領域)」)。後始末の中で破棄処理が panic すると、塊の `Arc` は手放されずに漏れる (メモリの安全は崩れない)。ヒープの ghost の欄の塊の権限の写しは、`wf` で `Arc` の指す塊の権限に結ぶが、写しを使う間 `Arc` が塊のメモリを生かし続けることは Verus が確かめない | Verus は利用者の `Drop` を扱わない。中身は検証した関数を呼ぶか、`Arc` を手放すだけにする | T1 と T3 のテストが通る道。塊の `Drop` がページを返すこと、鎖の塊と付けたヒープをどの順に落としても漏れず、残る `Arc` が鎖を生かすこと |
-| T5 | 証明に使う std の約束のうち vstd にないもの。`ptr::without_provenance_mut` (`Word::imm` が const fn のまま即値を作るため)、2つの塊が同じ塊かを `std::ptr::eq` で比べる `same_chunk` (同じ番地の塊は同じ値であると約束する。vstd は `Arc` の番地の比較に約束を持たない)、panic で止める関数 (大きさの桁あふれ、即値に収まらない `Word::imm`、不死の物体の数の桁あふれ、ページの配置の誤り、子孫でない塊を付ける `attach` の `not_a_descendant`) | vstd の std の約束が足りない。panic の関数は値を返さないことだけを約束する | なし (値の約束で、メモリに触れない) |
+| T3 | `Foreign` の物体の中身。破棄処理の表 (関数のポインタ)、`TypeId` の照らし合わせ、`drop_in_place`。`foreign_unique` が書き換えるために返すポインタも、同じ照らし合わせで型を守る | Verus は関数のポインタと `TypeId` を扱わない | 型の違う照らし合わせ、`Drop` を持つ値 (`Box`、`String`、`Vec`)、大きさ 0 の型、破棄処理が panic する場合、解放と `Heap` の破棄での破棄処理の呼び出しが1回だけであること、`foreign_unique` で借りて書き換えた値の破棄処理が1回だけであること |
+| T4 | `verus!` の外の `Drop` の実装 (`Heap`、`Pages`、`Frozen`)。`Frozen` の `Drop` は、親への `Arc` を `Arc::into_inner` のループで手放し、ページは `Pages` の `Drop` が返す。`Heap` は付けた塊の `Arc` を `ManuallyDrop` の欄に持ち、`Drop` が生きている物体の後始末 (`finalize_all`) の後で、`#[inline(never)]` の関数に渡して手放す。`Pages` も、確保量を数える `Control` の `Arc` を `ManuallyDrop` の欄に持ち、`Drop` がページを返して確保量を引いた後で、`#[inline(never)]` の関数に渡して手放す。`HostRef` の `Drop` も、Host の `Arc` を `#[inline(never)]` の関数に渡して手放す (上の「extern」の「Host」)。欄の後始末を展開させると、計測のプログラムのコード生成単位の分け方が変わり、速い道が展開されなくなるためである ([計測の基準](../implementation/benchmarks.md) の「S9b-2a (凍結した領域)」)。後始末の中で破棄処理が panic すると、塊の `Arc` は手放されずに漏れる (メモリの安全は崩れない)。ヒープの ghost の欄の塊の権限の写しは、`wf` で `Arc` の指す塊の権限に結ぶが、写しを使う間 `Arc` が塊のメモリを生かし続けることは Verus が確かめない | Verus は利用者の `Drop` を扱わない。中身は検証した関数を呼ぶか、`Arc` を手放すだけにする | T1 と T3 のテストが通る道。塊の `Drop` がページを返すこと、鎖の塊と付けたヒープをどの順に落としても漏れず、残る `Arc` が鎖を生かすこと |
+| T5 | 証明に使う std の約束のうち vstd にないもの。`ptr::without_provenance_mut` (`Word::imm` が const fn のまま即値を作るため)、2つの塊が同じ塊かを `std::ptr::eq` で比べる `same_chunk` (同じ番地の塊は同じ値であると約束する。vstd は `Arc` の番地の比較に約束を持たない)、panic で止める関数 (大きさの桁あふれ、即値に収まらない `Word::imm`、不死の物体の数の桁あふれ、ページの配置の誤り、子孫でない塊を付ける `attach` の `not_a_descendant`)、`<[u8] as Ord>::cmp` を1回呼ぶ包み `bytes_cmp` の結果が辞書式の順序の spec `lex` に一致すること (上の「extern」。vstd の `assume_specification` は `cmp` を総称の形でしか受けないので、包みにする) | vstd の std の約束が足りない。panic の関数は値を返さないことだけを約束する | なし (値の約束で、メモリに触れない) |
 | T6 | `global` の宣言: 64 ビットの環境、`Word`、`Header`、`PageHeader`、前置きの配置 | Verus は `global` の宣言をコンパイル時に照らす | なし |
-| T7 | unwind。検証した関数は、決まった所でしか unwind しないとして証明する。決まった所は、T5 の panic の関数 (状態を変える前に呼ぶ)、T3 の破棄処理 (箱を先に死んだことにしてから呼ぶ)、`Vec` の伸長である。`Ctx` は `Drop` を実装せず、`evv` と yield の状態の語に触れないので、基本操作の中の `decref` で破棄処理が panic した後も、`Ctx` を落とすことは安全である (上の「実行文脈 `Ctx`」) | Verus の `ensures` は正常に戻ったときだけを扱う。unwind の後も `Heap` と `Ctx` を落とすことは安全でなければならない | 解放の連鎖の途中で破棄処理が panic した後に、`Heap` を落とすこと |
+| T7 | unwind。検証した関数は、決まった所でしか unwind しないとして証明する。決まった所は、T5 の panic の関数 (状態を変える前に呼ぶ)、T3 の破棄処理 (箱を先に死んだことにしてから呼ぶ)、`Vec` の伸長と、T11 の Host の呼び出し (`write_line`、`flush`、`open`、読み手の読みと drop、読んだバイト列の UTF-8 の確かめ) である。Host を呼ぶ前には、ヒープを整った状態にしておく。Host の中で unwind した後に残る状態は、`println` では文字列が漏れ、`Fs.open` では開く間借りていたパスの文字列が漏れ、`Fs.read_all` では `File` が漏れて `Heap` を落とすときの `finalize_all` が閉じる。どれもメモリの安全は崩れない。`Ctx` は `Drop` を実装せず、`evv` と yield の状態の語に触れないので、基本操作の中の `decref` で破棄処理が panic した後も、`Ctx` を落とすことは安全である (上の「実行文脈 `Ctx`」) | Verus の `ensures` は正常に戻ったときだけを扱う。unwind の後も `Heap` と `Ctx` を落とすことは安全でなければならない | 解放の連鎖の途中で破棄処理が panic した後に、`Heap` を落とすこと |
 | T8 | 借用の規則 (Stacked Borrows と Tree Borrows) | vstd の権限のモデルは、参照と生のポインタの借用の規則を表さない | 核の各操作を両方のモードで1回ずつ通す小さいテスト。ヒープの物体のフィールドに置いた領域の語を読み、領域の文字列から写し、`share` と解放の連鎖が領域の子で止まること。実行文脈の基本操作を1回ずつ通すこと |
 | T9 | Verus、Z3、rustc、vstd (その std の約束を含む) | 道具そのもの | なし |
-| T10 | 文字列のバイトの読み書き。`String` のブロックの権限を受けてペイロードにバイトを写す関数と、ペイロードを `str` として借りる関数と、その位置を返す関数。約束は、権限が渡したポインタの `String` のブロックのもので、長さの語とバイト列の語を持つとき、メモリのバイト列が権限の ghost のバイト列に等しいこと、写すのは長さの語の後ろの容量の中だけで、長さの語の値と権限の位置を変えないこと。写す元のバイト列が写す先と重ならないことを前提にする。このヒープの文字列から写すときは写す先がいつも別のブロックで、`string_push` の `s` は、呼ぶ側の約束により left 自身の中身を指さない | Verus の権限は語の単位で、語の中のバイトの位置を扱わない | 語に揃わない位置への追記、大きい物体のページをまたぐ長さ、大きい左辺からの作り直し、空の文字列、多バイトの文字、1ページの長さを含む自分自身との連結 (`x ++ x`)、ほかの文字列の中身を指す `s` の追記、`string` で読んだ位置の使用が終わった後の追記、2つの借用の規則での読み書き |
+| T10 | 文字列のバイトの読み書き。`String` のブロックの権限を受けてペイロードにバイトを写す関数と、ペイロードを `str` として借りる関数と、その位置を返す関数。約束は、権限が渡したポインタの `String` のブロックのもので、長さの語とバイト列の語を持つとき、メモリのバイト列が権限の ghost のバイト列に等しいこと、写すのは長さの語の後ろの容量の中だけで、長さの語の値と権限の位置を変えないこと。写す元のバイト列が写す先と重ならないことを前提にする。このヒープの文字列から写すときは写す先がいつも別のブロックで、`string_push` の `s` は、呼ぶ側の約束により left 自身の中身を指さない | Verus の権限は語の単位で、語の中のバイトの位置を扱わない | 語に揃わない位置への追記、大きい物体のページをまたぐ長さ、大きい左辺からの作り直し、空の文字列、多バイトの文字、1ページの長さを含む自分自身との連結 (`x ++ x`)、ほかの文字列の中身を指す `s` の追記、`string` で読んだ位置の使用が終わった後の追記、`String.show` が区間を写すこと (区間が先頭、途中、末尾にあり、多バイトの文字と接する場合)、2つの借用の規則での読み書き |
+| T11 | Host の実装と、それを呼ぶ関数。`HostRef` とその `Clone`、Host の `write_line` と `flush` を呼ぶ関数、不透明な `File`、Host の `open` を呼ぶ関数、`File` を区切りごとに読んで UTF-8 を確かめる関数 `read_text`。何も約束しない (書いた中身、読めた中身、返した値のどれも)。`read_text` の `File` を借りる前提は、`foreign_unique` で確かめる (上の「extern」) | Verus は `dyn Host`、`io::Error`、`dyn BufRead` を扱わず、OS とのやりとりの中身は証明の外にある。中身は期待値の表で確かめる ([テスト戦略](../implementation/testing.md) の「期待値の表」) | メモリの Host を通る `println` と `flush`、`open`、`read_all` (区切りをまたぐ長さ、長さの見込みのない読み手、短い読み、途中の読みの誤り、UTF-8 でない中身、止める語)、`close` |
 
 T10 の約束は、関数そのものの外の次の2つにも頼る。
 
@@ -707,7 +864,7 @@ T10 の約束は、関数そのものの外の次の2つにも頼る。
 
 Miri は、表の「Miri で確かめること」を確かめる `trusted` の module のテストだけを流す ([テスト戦略](../implementation/testing.md) の「Miri」)。テストは信頼の部分へ届く検証したコードも通るので、T8 もそこで確かめる。
 
-FFI の境界 (S9b-3 の extern の語の ABI と、その後の外の関数の呼び出し) を足すときは、この表に行を足し、Miri のテストを `trusted` の module に足す。
+FFI の境界を足すときは、この表に行を足し、Miri のテストを `trusted` の module に足す。extern の Host の境界は T11 で、その後の外の関数の呼び出しも同じ形で足す。Miri の `trusted` のテストは、メモリの Host だけを使い、`StdHost` と実際のファイルは使わない。Miri は分離を外さないと実際のファイルを開けず、テストを `cfg!(miri)` で小さくすることもしないためである。
 
 ## 受け入れる制約
 

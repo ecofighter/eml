@@ -1,5 +1,6 @@
-//! extern の実装。引数と結果は語の ABI に従い、`int` と `enum` のタグは生の `i64` で渡す。ヒープを使わない算術と
-//! 比較は `Ctx` を取らない `#[inline]` の関数にし、ほかの crate の命令からも展開できるようにする。
+//! extern の実装 (docs/spec/object-model.md の「extern」)。引数と結果は語の ABI に従い、`int` と `enum` のタグは
+//! 生の `i64` で渡す。ヒープを使わない算術と比較は `Ctx` を取らない `#[inline]` の関数にし、ほかの crate の命令からも
+//! 展開できるようにする。
 
 use std::fmt;
 

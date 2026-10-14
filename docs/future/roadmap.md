@@ -94,7 +94,7 @@ S8d で閉じた論点は次のとおりである。
 
 前提: S8。
 
-S9 を、S9a、S9v、S9b-1、S9b-2a、S9b-2b、S9b-3 の6つの作業に分けて順に進める。段の列では S9 の1行のままにする。S9 の間、`eml_rt` はパイプラインから使わない。Verus、単体テスト、Miri、extern の差分テスト (S9b-3) で確かめ、実際のプログラムで通すのは S10 の VM からである。CEK と `eml_runtime` は S10 まで変えない。S10 で消す CEK に投資しないためである (上の「段の列」)。
+S9 を、S9a、S9v、S9b-1、S9b-2a、S9b-2b、S9b-3 の6つの作業に分けて順に進め、すべて終えた。段の列では S9 の1行のままにする。S9 の間、`eml_rt` はパイプラインから使わない。Verus、単体テスト、Miri、extern の期待値の表 (S9b-3) で確かめ、実際のプログラムで通すのは S10 の VM からである。CEK と `eml_runtime` は S10 まで変えない。S10 で消す CEK に投資しないためである (上の「段の列」)。
 
 | 作業 | 中身 | 状態 |
 |---|---|---|
@@ -103,7 +103,7 @@ S9 を、S9a、S9v、S9b-1、S9b-2a、S9b-2b、S9b-3 の6つの作業に分け�
 | S9b-1 | 物体の種類ごとの中身。データの物理的な形の規則、クロージャ、evidence の3つの物体、文字列、`File` の表し方 | 終えた。決めたことは [オブジェクトモデル](../spec/object-model.md) の「種類」、「物体の形」、「文字列」、「`unsafe` の核」に移した。UI テストの出力と `bench/` の仕事の回数は変わらない ([計測の基準](../implementation/benchmarks.md) の「S9b-1 (文字列)」) |
 | S9b-2a | 不死の定数を置く凍結した領域。作る、凍結する、ヒープに付ける、寿命 | 終えた。決めたことは [オブジェクトモデル](../spec/object-model.md) の「凍結した領域」、「核の操作」、「文字列」、「不死の物体の数え方」、「報告する誤り」、「`unsafe` の核」に移した。UI テストの出力と `bench/` の仕事の回数は変わらない ([計測の基準](../implementation/benchmarks.md) の「S9b-2a (凍結した領域)」) |
 | S9b-2b | `Ctx`、基本操作、SIGINT | 終えた。決めたことは [オブジェクトモデル](../spec/object-model.md) の「実行文脈 `Ctx`」、「evidence の3つの物体」、「確保と解放」、「核の操作」、「報告する誤り」、「検査モードの約束」、「論理的な worker ID」、「`unsafe` の核」と、[LIR とインタプリタ](../spec/lir.md) の「実行の文脈」と「基本操作」に移した。UI テストの出力と `bench/` の仕事の回数は変わらない ([計測の基準](../implementation/benchmarks.md) の「S9b-2b (実行文脈)」) |
-| S9b-3 | 語の ABI の extern、`File` の物体の中身の型、今の実装との差分テスト、FFI の境界の信頼の一覧の行と Miri | これから |
+| S9b-3 | 語の ABI の extern、`File` の物体の中身の型、今の実装との差分テスト、FFI の境界の信頼の一覧の行と Miri | 終えた。決めたことは [オブジェクトモデル](../spec/object-model.md) の「extern」、「種類」、「物体の形」、「`lin` ビット」、「核の操作」、「文字列」、「検査モード」、「実行文脈 `Ctx`」、「`unsafe` の核」と、[LIR とインタプリタ](../spec/lir.md) の「実行時エラー」、[テスト戦略](../implementation/testing.md) の「期待値の表」に移した。今の実装との差分テストは、2つの実装が同じ期待値の表を確かめる形にした。UI テストの出力と `bench/` の仕事の回数は変わらない ([計測の基準](../implementation/benchmarks.md) の「S9b-3 (extern)」) |
 
 この順にしたのは、extern が文字列と `File` と出力先 (`Ctx`) を使い、凍結した領域の定数が文字列と物体の形を使うためである。S9b-2a を S9b-2b より前に置いたのは、核の操作の安全の前提を広げる作業を、基本操作の証明より前に独立して確かめるためである。
 
@@ -124,6 +124,11 @@ S9b-2b で閉じた論点は次のとおりである。
 
 - SIGINT の受け方: `eml_rt` は止める語を持つセッションの `Control` だけを持ち、vstd だけに依存したままにする。OS のハンドラは `eml_cli` が入れて `Control::interrupt()` を呼び、VM は安全点の `Ctx::poll` で止める語を読む。並列 VM でも、どの worker の `Ctx` も同じ `Control` を見る ([オブジェクトモデル](../spec/object-model.md) の「実行の制御」)。ハンドラを入れるのは S10 で、2回目の Ctrl-C の扱いはハンドラの設定にする (下の「S10 VM と切り替え」と「S11 REPL」)
 
+S9b-3 で閉じた論点は次のとおりである。
+
+- 出力先: OS とのやりとりを、セッションに1つの Host にまとめ、`Ctx` が持つ。`eml_rt` の `StdHost` は C の stdio と同じく、標準出力が端末なら行ごとに、そうでなければ 64 KiB ずつまとめて書く ([オブジェクトモデル](../spec/object-model.md) の「extern」)
+- `File` の物体の中身: `Foreign` の中身を、パス、`BufRead` の読み手、長さの見込みを持つ Rust の値にし、閉じる処理は drop glue だけにする ([オブジェクトモデル](../spec/object-model.md) の「extern」の「`File`」)
+
 ### 決めたこと
 
 - VM とネイティブで共有するランタイム `eml_rt` を作る。値の表現とヒープを共有しなければ、VM とネイティブのコードを混ぜて動かせないためである
@@ -139,8 +144,8 @@ S9b-2b で閉じた論点は次のとおりである。
 - reuse を後から入れられるように、token と `con_at` を持つ ([オブジェクトモデル](../spec/object-model.md) の「reuse」)
 - EP のダミーの値の約束を守る ([オブジェクトモデル](../spec/object-model.md) の「ダミーの値」)
 - `unsafe` は小さい核に閉じ、核を含む `eml_rt` 全体を Verus で検証する。Verus で確かめない部分は信頼の一覧にまとめ、Miri で検査する。FFI の境界を足すときは、一覧に行を足し、Miri のテストを足す ([オブジェクトモデル](../spec/object-model.md) の「`unsafe` の核」)
-- extern を語の ABI で1回だけ書く
-- 実行文脈 `Ctx` を持つ。ヒープ、yield の状態と `evv` ([LIR とインタプリタ](../spec/lir.md) の「実行の文脈」)、割り込みの旗と深さと確保量の上限を持つセッションの `Control` を置く ([オブジェクトモデル](../spec/object-model.md) の「実行文脈 `Ctx`」)。論理的な worker ID は `Heap` に置く ([オブジェクトモデル](../spec/object-model.md) の「論理的な worker ID」)。出力先は S9b-3 で extern と一緒に、セッションの根は S11 で足す
+- extern を語の ABI で1回だけ書く ([オブジェクトモデル](../spec/object-model.md) の「extern」)
+- 実行文脈 `Ctx` を持つ。ヒープ、yield の状態と `evv` ([LIR とインタプリタ](../spec/lir.md) の「実行の文脈」)、割り込みの旗と深さと確保量の上限を持つセッションの `Control` を置く ([オブジェクトモデル](../spec/object-model.md) の「実行文脈 `Ctx`」)。論理的な worker ID は `Heap` に置く ([オブジェクトモデル](../spec/object-model.md) の「論理的な worker ID」)。出力とファイルは `Ctx` が持つセッションの Host を通す ([オブジェクトモデル](../spec/object-model.md) の「extern」)。セッションの根は S11 で足す
 - リスト、文字列、レコードの物理的な表現は、S9b-1 で決めた。データは、走査する語 (`obj` と `tobj` のフィールド) を宣言の順に並べ、その後に生の語を宣言の順に並べる。cons セルは [要素, 残り] になる。文字列は長さの語と UTF-8 のバイト列を持つ種類 `String` の物体で、一意なときはその場で連結する ([オブジェクトモデル](../spec/object-model.md) の「ペイロード」、「物体の形」、「文字列」)
 
 ## S10 VM と切り替え
@@ -152,12 +157,16 @@ S9b-2b で閉じた論点は次のとおりである。
 - LIR からレジスタ型のバイトコードを作る。中間に別の IR は挟まない。命令列への変換は1回の走査で済むためである
 - レジスタは関数ごとの連続した枠にし、生存区間の彩色でスロットに割り当てる。ブロック引数は並列な代入の `move` の列に展開する
 - 算術と比較は extern の行ごとに専用の命令にする。それ以外の extern は、行の番号と引数のレジスタの範囲を持つ命令にする
+- extern の命令は、行の番号の `match` で `eml_rt` の extern の関数を呼ぶ。算術と比較は `Ctx` を取らない `#[inline]` の関数で、専用の命令の中に展開される ([オブジェクトモデル](../spec/object-model.md) の「extern」)
+- `Ctx::flush` は、プログラムの終わり、実行時エラーを出す前、割り込みと上限で止めたときに呼ぶ。終わりの flush の誤りは位置なしで出す。extern の `Fault::Stopped` は、安全点の `Ctx::poll` が返す `Stop` と同じに扱う
+- `eml_interp` の側の期待値の表のテスト (`crates/eml_interp/tests/rt_externs.rs`) は、CEK と一緒に消す。`eml_rt` の側の表のテストは残す。`Bool`、`Ordering`、組のタグの定数が `eml_lir` と同じであることのテストは、VM の crate に移す ([テスト戦略](../implementation/testing.md) の「期待値の表」)
+- 切り替えで変わる `Heap(_)` の誤りの文言 (`eml_rt::HeapError` の表示) と、今の `Fault::Internal` がなくなることは、UI テストの期待値の変更として扱う ([オブジェクトモデル](../spec/object-model.md) の「extern」の「誤り」)
 - 自己の末尾呼び出しは、バイトコードの出力で関数の入口へのジャンプにする。LIR が Core IR から引き継ぐ R2 は緩めない
 - フィールドのない `#N` の行き先では、scrutinee が `tobj` でも即値と分かる。VM は `switch` の配置の ID を見て、その行き先の scrutinee の `decref` をその場で消す。IR の規則にはしない。IR の規則にすると、verifier に「即値と分かっている」という3つ目の状態が要るためである
 - 呼び出しと戻りを安全点にし、割り込み、深さの上限、確保量の上限を確かめる。LIR に後ろ向きの辺がないので、無限に走るプログラムも必ず安全点を通る
 - SIGINT のハンドラは、`eml_cli` が ctrlc crate で入れ、`Control::interrupt()` を呼ぶ。`eml run` では、`INTERRUPT` のビットがすでに立っていれば (2回目の Ctrl-C)、その場で終了コード 130 で終わる。今の CEK は止める語を見ないので、ハンドラは VM に切り替えるこの段で入れる。CEK のうちに入れると、Ctrl-C で止まらなくなるためである。ネイティブでは、生成したプログラムの始めで同じ形で入れる ([オブジェクトモデル](../spec/object-model.md) の「実行の制御」)
 - 上限 (`Limits` の確保量、深さ、`evv` の長さ) の既定の値と、`RunConfig` での指定は、VM と一緒にこの段で決める
-- `RunStats` の仕事の回数のうち `evidence_steps`、`yields`、`yield_frames` は、`eml_rt` の検査モードの `CtxStats` の定義を引き継ぐ
+- `RunStats` の仕事の回数のうち `evidence_steps`、`yields`、`yield_frames`、`string_bytes_copied` は、`eml_rt` の検査モードの `CtxStats` の定義を引き継ぐ
 - エラー位置の表 (pc から位置) と逆アセンブラを作る
 - 関数表 `FnEntry` と、追記だけの `CodeBase` (関数、定数、配置、エフェクト) を、S8 の LIR の表をもとに VM と一緒に作る。S9 では `eml_rt` の側の部品 (語、物体の形、凍結した領域) までを作り、`FnEntry` と `CodeBase` は文書で形を決めるだけにする。クロージャは今と同じく関数の番号を持つので、位置に依存しない。`CodeBase` は定数を、凍結した領域の鎖の先頭の塊 `Arc<Frozen<M>>` と定数の語で持つ。祖先の塊は、親への `Arc` で生きている ([オブジェクトモデル](../spec/object-model.md) の「凍結した領域」)。`CodeBase` は実行中は読むだけにし (`Sync`)、後の並列 VM の worker がそのまま共有できるようにする。この性質は、`Session` の `Send + Sync` の試験 (`crates/eml_cli/tests/api.rs`) と同じ形の、型の assert で固定する
 - VM はシングルスレッドで出す。後から並列にできるように、次の2つを守る ([マルチコア対応の設計](multicore.md) の「VM の並列化の備え」)
@@ -228,6 +237,7 @@ Prelude と `std/` の標準ライブラリと、指定したモジュールを�
 
 - ローカルの再帰関数の構文
 - `Stdin` は入力全体と行を読む関数にとどめる。後の「バイト列と `Array`」の `Lin` のハンドルとの関係を決める
+- extern が閉包を呼び戻す形。`&mut Ctx` を受ける今の extern の形では書けないので、呼び戻しの引数を渡すか、VM の側で作る行にするかを、その extern を足すときに決める (上の「S10 VM と切り替え」の、呼び戻しの入れ子の中でタスクを切り替えない決まり)
 - 多相な extern の行の Repr を、std のシグネチャの型とどう比べるか。今の結び付けのテスト ([テスト戦略](../implementation/testing.md)) は、型で選ぶ行を除いて、extern の行のシグネチャに型変数がないことを確かめている
 
 ## S13 実例による判断
@@ -368,6 +378,7 @@ UTF-8 の核の extern を入れ、標準ライブラリを広げる。`std/` �
 - ネイティブ化: LIR から Cranelift でネイティブのコードを出す。LIR のブロックの列とブロック引数は、Cranelift のブロック引数に1対1で写る。多相な位置の `Int` の表現は S9 で決めた語の表現を、`Float` の表現は「`Float`、`Char`、`Num`」で決める表現を前提にする。VM とネイティブは `eml_rt` の値とヒープを共有し、関数表 `FnEntry` を接続点にして混ぜて動かせる。たとえば、標準ライブラリだけをネイティブにし、ユーザーのコードをバイトコードで動かす。VM からネイティブの関数を呼ぶときは `f$boxed` の一様な入口を使う。`eml_extern` の表は、`eml_rt` の語の ABI の関数になる。ネイティブの `par` がバイトコードの閉包を worker で呼ぶには、VM の並列化 (下の「マルチコア対応」) が要る。前提: S10、`Float`、`Char`、`Num`
   - Cranelift の mid-end は制御フローをほとんど変えないので、jump threading と既知のコンストラクタの畳み込みは Core IR の側で行う
   - ネイティブのコードの中で起きた実行時エラー (オーバーフロー、ゼロ除算) を、評価全体の中断にする方法は未設計である。旗を立てて戻る方式は効果を持たない関数にも確認を足し、巻き戻しは Cranelift のコードに展開情報を要する
+  - extern の C ABI の入口 (`extern "C"`) は、この項目で足す。今の extern は、引数がどれも 64 ビットの語で数が決まっているので、そのまま移せる。Host と読み手は panic しうるので、入口で `catch_unwind` する。`extern "C"` を越える panic はプロセスを落とすためである。`Fault` を `Ctx` の欄に置いて状態の語を返す形にするかは、`Ctx` の配置 (yield の状態は `#[repr(C)]`) の決まりと一緒に決める ([オブジェクトモデル](../spec/object-model.md) の「extern」)
   - 定数の静的なデータは、凍結した領域と同じ約束 (rc 0、書き込まない、検査ビルドでは前置きを持つ) に乗る ([オブジェクトモデル](../spec/object-model.md) の「凍結した領域」)。検査モードの範囲の確かめのようにページの頭を読む道は、起動時に `freeze` で定数を作る形か、静的なデータに容量を持たせる形で扱う
 - Core IR の上の最適化パス: 既知の閉包への `apply` を `call` に置き換えること、引数が定数の関数の特殊化、純粋な extern の定数畳み込み。EP より前の Core IR に置き、関数単位の作業リストで動かす。枝の部分木を置き換えると、S3b-1 までの `simplify` のように長い `else if` の連鎖で2乗の時間がかかるためである。CPS のラムダの位置の変換 (試作で 200,125 回) は、既知の閉包への特殊化で減らす。Repr が同じ instance (`List Int` と `List String` の instance など、同じ形のコードになるもの) をまとめるのも、このパスに置く ([Core IR](../spec/core-ir.md) の「変換の規則」)
 - evidence passing の最適化 ([Core IR](../spec/core-ir.md) の「evidence passing」)。どれも EP と実行時の中に閉じ、型検査と translate は変わらない

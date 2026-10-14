@@ -1,5 +1,5 @@
 //! 期待値の表の形。`eml_rt` のテストと `eml_interp` のテスト (`#[path]` で読む) が同じ表を使う。`std` だけを使う。
-//! 表は `eml_interp` の側の出力から作る (docs/implementation/testing.md)。
+//! 表は `eml_interp` の側の出力から作る (docs/implementation/testing.md の「期待値の表」)。
 
 use std::path::Path;
 

@@ -633,6 +633,11 @@ Perceus は、`switch` と `unpack` のフィールドを借りたまま使い�
 - 解放済みのオブジェクトへのアクセスと、`debug_heap` が有効なときのリーク ([ランタイム](runtime.md))
 - `File` の物体の参照を増やそうとしたとき (``a Lin object is shared``)。コンパイラの誤りで、`debug_heap` によらず検査する ([ランタイム](runtime.md) の「`File` の参照の検査」)
 - `Fs.open` が開けないとき (``cannot open `<path>`: <reason>``)、`Fs.read_all` が読めないとき (``cannot read `<path>`: <reason>``)、読んだ内容が UTF-8 でないとき (``` `<path>` is not valid UTF-8 ```)。`reason` は `not found`、`permission denied`、`I/O error` のどれかである
+- `println` が標準出力に書けないとき (``cannot write the output: <e>``)。`e` は書き込みの誤りの `io::Error` の文言である
+
+extern の実装は、S10 の VM とネイティブのコードが使う `eml_rt` にある ([オブジェクトモデル](object-model.md) の「extern」)。誤りの文言は、上の一覧と1文字も違わない。今のインタプリタは `eml_interp` の自前の実装を使い、2つの実装が同じ結果になることを期待値の表で確かめる ([テスト戦略](../implementation/testing.md) の「期待値の表」)。
+
+`eml_rt` の Host が出力をまとめて書くときは、書き込みの誤りが見つかるのは、後でバッファがあふれた `println` か、プログラムの終わりの flush である。そのため、`println` の誤りに付く位置は、書けなかった行を書いた `println` でなく、誤りを見つけた `println` の位置になる。終わりの flush の誤りは位置を持たない。
 
 実行時エラーは、誤りの種類 (`fault`)、そのとき実行していた LIR の関数の名前 (`function`)、省略できる位置 (`at`) を持つ。位置を持つ `extern` 命令の実行が起こした誤り (その中のヒープの誤りを含む) にだけ、その命令の位置を付ける。位置は Core IR から写したもので ([Core IR](core-ir.md) の「位置」)、ファイルは `Program.files` の添字である。引数の読み出し、`dup`、`decref`、`release`、`switch`、`unpack`、`box`、`unbox` の誤りと、位置を持たない `extern` 命令の誤りには付けない。
 

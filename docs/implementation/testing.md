@@ -77,11 +77,11 @@
 
 ## `eml_rt` の検証
 
-`eml_rt` ([オブジェクトモデル](../spec/object-model.md)) はまだパイプラインから使わないので、UI テストでなく、Verus、単体テスト、Miri で確かめる。メモリの安全と核の正しさは Verus の証明が受け持ち、単体テストは動作を、Miri は Verus で確かめない部分 (信頼の一覧) を確かめる。速いモードの命令の数は `bench/rt.sh` で測る ([計測の基準](benchmarks.md) の「命令の数の測り方」)。
+`eml_rt` ([オブジェクトモデル](../spec/object-model.md)) はまだパイプラインから使わないので、UI テストでなく、Verus、単体テスト、期待値の表、Miri で確かめる。メモリの安全と核の正しさは Verus の証明が受け持ち、単体テストは動作を、期待値の表は extern が今の実装と同じ結果になることを、Miri は Verus で確かめない部分 (信頼の一覧) を確かめる。速いモードの命令の数は `bench/rt.sh` で測る ([計測の基準](benchmarks.md) の「命令の数の測り方」)。
 
 ### Verus
 
-`eml_rt` は vstd に依存し、コードを `verus!` の中に書く。`cargo verus verify -p eml_rt` が crate 全体を検証する (`Cargo.toml` の `[package.metadata.verus] verify = true`)。Apple M4 では、`671 verified, 0 errors` に約 19 秒かかる (S9b-2b の終わり)。初めは Kani を試したが、CBMC は 3 個の節点のグラフでも `share_walk` の検査でメモリか時間が尽きた。Verus は、値の全域と任意の大きさのヒープについての証明が通る。
+`eml_rt` は vstd に依存し、コードを `verus!` の中に書く。`cargo verus verify -p eml_rt` が crate 全体を検証する (`Cargo.toml` の `[package.metadata.verus] verify = true`)。Apple M4 では、`773 verified, 0 errors` に約 20 秒かかる (S9b-3 の終わり)。初めは Kani を試したが、CBMC は 3 個の節点のグラフでも `share_walk` の検査でメモリか時間が尽きた。Verus は、値の全域と任意の大きさのヒープについての証明が通る。
 
 公開の操作の前提 ([オブジェクトモデル](../spec/object-model.md) の「核の操作」の表) を、抽象のモデルの言葉で `requires` に書く。モデルの述語は `pub closed spec fn` にするので、名前は crate の外に見えるが、中身と実行時の費用はない。その下で、次のことを証明する。
 
@@ -93,8 +93,9 @@
 6. 検査モード: [オブジェクトモデル](../spec/object-model.md) の「検査モードの約束」の性質。安全の前提だけで `safe_wf` を保ち、モデルが合っていて前提がすべて成り立つなら `Ok` を返して速いモードと同じ遷移になる
 7. ヘッダの詰め方と即値: `Meta` は Verus の型の不変条件 (正しい形であること) を持ち、メモリの `meta` が正しい形であることはヒープの不変条件が持つ。そのため `Kind::from_bits` の `unreachable!` の枝には届かない。即値の判定と値の取り出しは、63 ビットの範囲の整数で元に戻る
 8. 文字列: `string_push` と `string_concat` を、ほかの核の操作と同じく抽象のモデルの遷移で書く。`string_push` は「left の参照を1つ消費し、結果の参照を1つ作る」遷移で、その場で足す枝、作り直す枝、写す枝のすべてを含む。ghost のバイト列が連結になること、UTF-8 が保たれること、容量の計算、不変条件の長さの条件を保つことも証明する ([オブジェクトモデル](../spec/object-model.md) の「文字列」)。`raw` と `set_raw` が不透明なペイロードを断ることも、Verus が確かめる。ただし、ほかの検証した書き込みが文字列のバイト列の語に届かないことは確かめない。ブロックの不変条件が ghost のバイト列と結ぶのは長さの語だけで、その後ろの語とは結ばないためである。この性質は T10 の前提である ([オブジェクトモデル](../spec/object-model.md) の「`unsafe` の核」)
+9. extern: 整数の extern の結果を vstd の `checked_*`、`rust_div`、`rust_rem` の spec で、文字列の extern の結果をバイト列の spec (`lex`、`decimal`、`escape`) で約束する。I/O の extern は、メモリの安全と RC のモデルでの増減と、誤りのときの約束を証明し、OS とのやりとりの中身は約束しない ([オブジェクトモデル](../spec/object-model.md) の「extern」)
 
-信頼して証明しない部分は、[オブジェクトモデル](../spec/object-model.md) の「`unsafe` の核」の信頼の一覧 (T0 から T10) にまとめる。`src/trust.rs` の単体テストが、この一覧を固定する。
+信頼して証明しない部分は、[オブジェクトモデル](../spec/object-model.md) の「`unsafe` の核」の信頼の一覧 (T0 から T11) にまとめる。`src/trust.rs` の単体テストが、この一覧を固定する。
 
 - テストでないコード (`#[cfg(test)]` の module と `heap/tests/` を除く) から、Verus に確かめさせない項目を表す語 (`external_body`、`verifier::external`、`assume_specification`、`global`、`assume(`、`Tracked::assume_new` など) を探す。見つけた項目 (ファイル、語、それを含む関数か型の名前) が、表の番号を付けた一覧と同じであることを確かめる。属性や仮定が一覧の外に増えると、証明が空になっても検証は通ってしまうためである
 - `verus!` の外のコードに `unsafe` がないことを確かめる。除くのは `Word`、`Heap`、`Frozen` の `unsafe impl Send` と `Sync` と、T4 の `Drop` だけである
@@ -124,8 +125,25 @@ rustfmt は `verus!` の中を整えないので、`eml_rt` の `verus!` の中�
   - 凍結した領域: 凍結が通る場合 (文字列、`BigInt`、前の塊の定数を指す定数) と断る場合 (rc が正の物体、token、`Foreign`。検査モードでは、空けた物体を指す定数の `UseAfterFree` も)、付けた後の領域の語での核の操作 (領域の中身と前置きは変わらない)、ヒープの物体のフィールドに置いた領域の語と、それを子に持つ一意な物体の `release`、子孫の塊への付け替え (付け替えの前に作った物体が前の塊の語を持ち続けること) と、子孫でない塊と祖先の塊の `attach` の panic、10,000 個の塊の鎖を落とすこと、`Arc` を落とす順によらず漏れないこと、`Frozen` の `Send` と `Sync` の型の assert ([オブジェクトモデル](../spec/object-model.md) の「凍結した領域」)
   - 検査モードの誤り: [オブジェクトモデル](../spec/object-model.md) の「報告する誤り」の各項目。token の ABA の形、解放した共有の物体の使用、強めた範囲の検査 (`field` と `set_field` の生の語、`raw` と `set_raw` の走査する語と、ペイロードが不透明な `Foreign` と `String` の物体)、塊の物体、書き終えた不死の物体、共有の物体への `set_field` と `set_raw` の `NotWritable`、`string`、`string_push`、`string_concat` の `WrongKind` を含む
   - 実行文脈 (`heap/tests/ctx.rs`): 19個の基本操作のそれぞれ、EP が出す形を並べた筋書き (handle の中で `perform` してその場で戻る、`mask` が合う evidence を飛ばす、yield して継続を組み立てて再開する1往復。`perform` と yield の筋書きは終わりに `check_finished` が通ることを、`mask` の筋書きは生きている物体が残らないことを確かめる)、検査モードの `BadEvidence`、`NoHandler`、`YieldMisuse` と、断った操作が引数と yield の状態を変えないこと、共有にした evidence の状態の欄への `NotWritable`、輪になった `evv` が小さい `max_evv` で `BadEvidence` になって止まること、入口の欄が 255 個以上の表、`eml_interp` から写した仕事の回数のテスト3つ ([オブジェクトモデル](../spec/object-model.md) の「実行文脈 `Ctx`」)。空でない κ と入口には、物体か `Word::imm(1)` 以上の即値を使う。関数 0 の値は `()` と同じ語になるためである
-  - 実行の制御 (`heap/tests/control.rs` と `ctx.rs`): `poll` が割り込み、深さの上限、確保量の上限のそれぞれで `Stop` を返すことと、重なったときに割り込み、確保量、深さの順に報告すること、確保量が上限にちょうど等しいときはビットを立てないこと、`Control::clear` で戻ること、2つのヒープのページが1つの `Control` に足し合わされること、凍結した塊のページが塊を落とすまで数に残ること。`Ctx` が `Send` で `Sync` でないことと、`Control` が `Send` と `Sync` であることは、型の assert で固定する
+  - extern (`heap/tests/externs.rs` と `host.rs`): 整数の端の値、文字列の比較と `++` と `show` の端の場合、検査モードの誤り (`WrongKind`、`Fs.read_all` の `NotUnique` と `WrongOwner`)、物体が残らないこと。誤りのときの所有も確かめる。`Fs.read_all` が読みの誤りか UTF-8 でない中身で `File` を手放して破棄処理が走ること、`println` が書き込みの誤りでも文字列を手放すこと、検査モードの `Heap(_)` でヒープが変わらないことである。今のインタプリタは誤りの後に漏れを確かめないので、期待値の表では比べられないためである。ほかに、止める語を立てた `Control` と小さい `max_bytes` での `Fs.read_all` の `Stopped`、仕事の回数 `string_bytes_copied`、`StdHost` の `Line` と `Block` の書き方、`flush`、毒されたロック、標準エラー、`file_root` と絶対パスを確かめる。Host を通るテストは、メモリの Host (`heap/tests/host.rs` の `MemoryHost`) を使う
+- 実行の制御 (`heap/tests/control.rs` と `ctx.rs`): `poll` が割り込み、深さの上限、確保量の上限のそれぞれで `Stop` を返すことと、重なったときに割り込み、確保量、深さの順に報告すること、確保量が上限にちょうど等しいときはビットを立てないこと、`Control::clear` で戻ること、2つのヒープのページが1つの `Control` に足し合わされること、凍結した塊のページが塊を落とすまで数に残ること。`Ctx` が `Send` で `Sync` でないことと、`Control` が `Send` と `Sync` であることは、型の assert で固定する
 - `is_last` の2回の読み込みとその順序は、Verus では確かめない (T2)。単体テストと Miri で確かめる
+
+### 期待値の表
+
+extern が今の実装 (`eml_interp` と `eml_runtime`) と同じ結果になることを、1つの期待値の表で確かめる。今の実装は S10 まで変わらないので、生きた2つの実装を毎回比べることは、一度作った表と比べることと同じである。
+
+- 表は `crates/eml_rt/src/heap/tests/expected.txt` で、1行が1つの場合である。タブで区切った extern の行の名前、引数、`=>` の後の期待する結果 (文字にした値か、位置を除いた誤りの文言) を持つ。今は 4025 の場合がある。4096 バイトを超える文字列の結果は、`h:<バイト長>:<FNV-1a 64 の16進>` と書く。表を小さく保つためである
+- 表の形と入力は `crates/eml_rt/src/heap/tests/table.rs` に置き、2つのテストが同じものを使う (`eml_interp` の側は `#[path]` で読む)。`std` だけを使う
+- 入力
+  - 整数: 0、±1、±2、`MIN`、`MIN+1`、`MAX`、`MAX-1`、±2³¹、±2⁶² のすべての組み合わせと、種を固定した疑似乱数の組
+  - 文字列: 空、ASCII、複数バイトの文字 (é、日本、絵文字)、制御文字、`"`、`\`、0x7F、U+0080、U+0085、U+009F、U+2028、NUL、互いに前置きになる組と、種を固定した疑似乱数の列
+  - `++` の左: 一意なもの、`dup` で共有したもの、不死の定数
+  - ファイル: 一時ディレクトリに作り、`file_root` からの相対パスで開く。ふつうのファイル、空のファイル、UTF-8 でないもの、ないもの、読めないもの (Unix の 000。root なら飛ばす)、ディレクトリ、NUL を含むパス、64 KiB の区切りをまたぐもの (1 MiB)、絶対パス、2回目の `Fs.read_all`
+- `eml_rt` のテスト `the_externs_match_the_table` (`heap/tests/externs.rs`) は、両方のモードで表のどの場合も同じ結果になり、引数の定数のほかに物体が残らないことを確かめる。このテストは S10 の後も残り、extern の回帰を防ぐ
+- `eml_interp` のテスト (`crates/eml_interp/tests/rt_externs.rs`) は、今の実装が表のどの場合も同じ結果になることを確かめる。場合ごとに1つの LIR のプログラムを作り、`eml_lir::verify` を通してから `debug_heap` 付きで `eml_interp::run` で動かす。結果は文字にして `println` で出し (整数は `Int.show`、`Bool` と `Ordering` は `switch` でタグの名前)、誤りは位置の部分を除いた文言で比べる。表の入力が `table.rs` の入力と違えば落ちるので、古い表は残らない。同じファイルで、書き込みの誤りの文言が両方で同じであることと、`Bool`、`Ordering`、組のタグの定数が `eml_lir` と同じであることも確かめる
+- 表は `eml_interp` の側の出力から作る。入力を変えたときは、`cargo test -p eml_interp --test integration rt_externs -- --ignored` で書き直す (`#[ignore]` のテスト `the_table_can_be_written_from_the_interpreter`)
+- S10 で CEK を消すとき、`eml_interp` の側のテストも消す。タグの定数のテストは VM の crate に移す ([ロードマップ](../future/roadmap.md) の「S10 VM と切り替え」)
 
 ### Miri
 
@@ -133,7 +151,8 @@ rustfmt は `verus!` の中を整えないので、`eml_rt` の `verus!` の中�
 - FFI の境界を信頼の一覧に足すときは、そこを通るテストもこの module に足す。今の `Foreign` の物体 (T3) が FFI の前身なので、テストはそこを重点にする
 - 凍結した領域 (T0 と T4) も、この module で確かめる。2つのスレッドが同じ塊を付けたそれぞれのヒープで同じ定数を読み、`dup` と `decref` を繰り返すこと、塊の `Drop` がページを返すこと、鎖の塊と付けたヒープをどの順に落としても漏れないこと、ヒープの物体が領域の語を持つときの読み書き (T8) を、2つの借用の規則で流す
 - 文字列のバイトの読み書き (T10) も、この module で確かめる。語に揃わない位置への追記、ページをまたぐ長さ、大きい左辺からの作り直し、1ページの長さの `x ++ x` (大きい物体のページを返す道)、ほかの文字列の中身を指す `s` の追記などを、2つの借用の規則で流す
-- 実行文脈と実行の制御も、この module で確かめる。2つのスレッドのヒープが1つの `Control` に確保量を足し引きすること (T1) と、別のスレッドが `Control::interrupt()` を呼ぶと `poll` が `Stop::Interrupted` を返すことの、2つのスレッドのテストを流す。後者は、ビットを立てるスレッドと並んで `poll` を繰り返す。核の操作を1回ずつ通す T8 のテストは、基本操作も1回ずつ通す
+- extern の Host の境界 (T11) も、この module で確かめる。メモリの Host を通る `println` と `flush`、`Fs.open`、`Fs.read_all` (区切りをまたぐ長さ、長さの見込みのない読み手、短い読み、途中の読みの誤り、UTF-8 でない中身、止める語)、`Fs.close` を流す。`StdHost` と実際のファイルは使わない。Miri は分離を外さないと実際のファイルを開けず、テストを `cfg!(miri)` で小さくすることもしないためである
+- 実行文脈と実行の制御も、この module で確かめる。2つのスレッドのヒープが1つの `Control` に確保量を足し引きすること (T1) と、別のスレッドが `Control::interrupt()` を呼ぶと `poll` が `Stop::Interrupted` を返すことの、2つのスレッドのテストを流す。後者は、ビットを立てるスレッドと並んで `poll` を繰り返す。核の操作を1回ずつ通す T8 のテストは、基本操作も1回ずつ通し、文字列と出力の extern も通す
 - Miri は、nightly と `miri` と `rust-src` を持つ別の devShell `nix develop .#miri` で流す。flake は nightly を fenix の `complete` (すべての部品がそろう最新の日の nightly) から取る ([アーキテクチャ](architecture.md) の toolchain の項)
 - `cargo miri test -p eml_rt trusted::` を、`MIRIFLAGS="-Zmiri-strict-provenance"` で1回、`MIRIFLAGS="-Zmiri-strict-provenance -Zmiri-tree-borrows"` でもう1回流す。Apple M4 では、51 個のテストにどちらも約 149 秒かかる (S9b-2b の終わり)
 - テストの大きさは `cfg!(miri)` で変えない。`trusted` のテストは、どの設定でも数分で終わる大きさにする。ページの大きさも Miri で変えない。ほかの crate は Miri で流さない

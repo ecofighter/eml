@@ -1,5 +1,5 @@
 //! 今の実装 (`eml_interp` と `eml_runtime`) が、`eml_rt` の extern の期待値の表と同じ結果になることを確かめる。
-//! S10 で CEK を消すとき、このテストも消す (docs/implementation/testing.md)。
+//! S10 で CEK を消すとき、このテストも消す (docs/implementation/testing.md の「期待値の表」)。
 
 #[path = "../../eml_rt/src/heap/tests/table.rs"]
 mod table;
