@@ -464,6 +464,7 @@ impl<M: Mode> Heap<M> {
 
     /// 残さない子を、走査の逆の順に手放す (`drain` と同じ順である)。手放し終えたら、箱を token にするか空け、最後の
     /// 参照を失った子を続けて空ける。
+    #[inline]
     fn release_unkept(
         &mut self,
         h: *mut Header,

@@ -649,6 +649,7 @@ impl<M: Mode> Heap<M> {
     /// 和の長さで写す。どちらの写しも left を手放す前に済ませる。速いモードでは、大きい物体のページを箱の解放がすぐに
     /// 返すためである。速いモードは rc 0 の物体のページの頭を読まないので、容量は一意な left でだけ読む
     /// (docs/spec/object-model.md の「文字列」)。
+    #[inline]
     fn push_unchecked(&mut self, left: Word, t: Tail, Ghost(c): Ghost<bool>) -> (w: Word)
         requires
             old(self).wf(),
@@ -808,6 +809,7 @@ impl<M: Mode> Heap<M> {
     /// ページも返すが、引数の `&str` が指すメモリを呼び出しの間に返すと未定義の動作になるためである。自分自身との連結
     /// は `dup` と `string_concat(x, x)` で行う。`s` がほかの文字列の中身を指すときは、その物体はこの呼び出しの間
     /// 生きている。
+    #[inline]
     pub unsafe fn string_push(&mut self, left: Word, s: &str) -> (r: Result<Word, HeapError>)
         requires
             old(self).wf(),

@@ -3082,6 +3082,7 @@ impl<M: Mode> Heap<M> {
     ///
     /// # Safety
     /// `w` はこのヒープか付けた塊の生きている物体を指し、i 語目はペイロードの中の走査する語である。
+    #[inline]
     pub unsafe fn field(&self, w: Word, i: usize) -> (r: Result<Word, HeapError>)
         requires
             self.wf(),
@@ -3130,6 +3131,10 @@ impl<M: Mode> Heap<M> {
     /// `w` はこのヒープの生きている物体を指し、i 語目はペイロードの中の走査する語で、ほかのスレッドはその物体を読めない。
     /// `v` は即値か、このヒープか付けた塊の生きている物体を指し、呼ぶ側がその参照を1つ持つ。その参照は `w` の i 語目に
     /// 移る。rc が正なら、持ち主は今の worker である。
+    // 汎用の関数の実体は、使う側のバイナリの codegen unit の1つにしかできず、ほかの unit からは展開できない。
+    // `#[inline]` で unit ごとに写しを作らせる。付けないと、`Ctx` を同じバイナリで使ったときに `map-reuse` と `append` の
+    // 命令の数が倍ほどになった。`field`、`string_push`、`push_unchecked`、`release_unkept` も同じ理由で付ける
+    #[inline]
     pub unsafe fn set_field(&mut self, w: Word, i: usize, v: Word) -> (r: Result<(), HeapError>)
         requires
             old(self).wf(),
