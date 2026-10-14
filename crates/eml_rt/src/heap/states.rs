@@ -40,19 +40,26 @@ impl Core {
     /// 行き先の外の参照に移る (残すフィールドを呼ぶ側が受け取る)。検査モードでは前置きも「空ける途中」にする。同じ物体に
     /// 2回届いたときに、2回目を生きていない物体として断るためである (docs/spec/object-model.md の「報告する誤り」)。
     #[inline(always)]
-    pub(crate) fn begin_free(&mut self, h: *mut Header, Ghost(ps): Ghost<Set<Pos>>, checked: bool)
+    pub(crate) fn begin_free(
+        &mut self,
+        h: *mut Header,
+        Ghost(ps): Ghost<Set<Pos>>,
+        checked: bool,
+        Ghost(c): Ghost<bool>,
+    )
         requires
-            old(self).full(),
+            !checked ==> c,
+            c ==> old(self).full(),
             old(self).checked@ ==> old(self).safe_wf(),
             checked == old(self).checked@,
             old(self).dom().contains(h@.addr),
             h == old(self).block(h@.addr),
             old(self).state(h@.addr) == BlockState::Live,
-            old(self).indeg(h@.addr) == 0,
+            c ==> old(self).indeg(h@.addr) == 0,
             old(self).model@.building is None,
             forall|e: Pos| #[trigger] ps.contains(e) ==> e.0 == h@.addr,
         ensures
-            final(self).full(),
+            c ==> final(self).full(),
             final(self).checked@ ==> final(self).safe_wf(),
             final(self).pages == old(self).pages,
             final(self).prefix_moved(*old(self), h@.addr),
@@ -62,14 +69,14 @@ impl Core {
                 edges: old(self).model@.edges.remove_keys(ps),
                 ..old(self).model@
             }),
-            forall|t: usize| #[trigger]
+            c ==> forall|t: usize| #[trigger]
                 final(self).indeg(t) + indeg(old(self).model@.edges.restrict(ps), t) == old(
                     self,
                 ).indeg(t),
     {
         let ghost s0 = *self;
         proof {
-            self.lemma_at(h@.addr);
+            self.lemma_shape(h@.addr);
         }
         if checked {
             let v = self.prefix_state_get(h);
@@ -88,11 +95,19 @@ impl Core {
                 },
             );
             assert(self.perms@.dom() =~= s0.perms@.dom());
-            self.lemma_begin_free(s0, a, ps);
+            if c {
+                self.lemma_begin_free(s0, a, ps);
+            }
             if checked {
-                reveal(Core::blocks_wf);
+                s0.lemma_safe_doms();
                 s0.lemma_safe_at(a);
-                self.lemma_at(a);
+                assert forall|i: int| !#[trigger] self.model@.kept.contains((a, i)) by {
+                    if s0.model@.kept.contains((a, i)) {
+                        reveal(Core::safe_blocks_wf);
+                        assert(s0.safe_kept_wf((a, i)));
+                    }
+                }
+                assert(self.model@.state.dom() =~= s0.model@.state.dom());
                 if s0.registered(a) {
                     s0.lemma_registered(a);
                 }
@@ -175,21 +190,28 @@ impl Core {
 
     /// 子を手放し終えた空ける途中の物体 `h` を token の箱にする。`ks` の語は「残した」語になる。
     #[inline(always)]
-    pub(crate) fn finish_token(&mut self, h: *mut Header, Ghost(ks): Ghost<Set<int>>, checked: bool)
+    pub(crate) fn finish_token(
+        &mut self,
+        h: *mut Header,
+        Ghost(ks): Ghost<Set<int>>,
+        checked: bool,
+        Ghost(c): Ghost<bool>,
+    )
         requires
-            old(self).full(),
+            !checked ==> c,
+            c ==> old(self).full(),
             old(self).checked@ ==> old(self).safe_wf(),
             checked == old(self).checked@,
             h == old(self).block(h@.addr),
             old(self).dom().contains(h@.addr),
             old(self).state(h@.addr) == BlockState::Dying,
-            forall|j: int| !(#[trigger] old(self).model@.edges.dom().contains((h@.addr, j))),
+            c ==> forall|j: int| !(#[trigger] old(self).model@.edges.dom().contains((h@.addr, j))),
             old(self).kind(h@.addr) == Kind::Data,
             old(self).rc_of(h@.addr) == 1,
             forall|j: int| #[trigger] ks.contains(j) ==> old(self).scanned(h@.addr, j),
         ensures
             final(self).checked@ ==> !final(self).registered(h@.addr),
-            final(self).full(),
+            c ==> final(self).full(),
             final(self).checked@ ==> final(self).safe_wf(),
             final(self).pages == old(self).pages,
             final(self).prefix_moved(*old(self), h@.addr),
@@ -202,7 +224,7 @@ impl Core {
     {
         let ghost s0 = *self;
         proof {
-            self.lemma_at(h@.addr);
+            self.lemma_shape(h@.addr);
         }
         // 世代の番号を進める。使い終えた token の表の項目を、箱がまた token になった後も断るためである
         if checked {
@@ -222,69 +244,77 @@ impl Core {
                     ..s0.model@
                 },
             );
-            reveal(Core::blocks_wf);
-            reveal(Core::edges_wf);
-            reveal(Core::refs_wf);
-            reveal(Core::building_wf);
             lemma_pos_set(h@.addr, ks);
-            assert(self.model@.state.dom() =~= self.dom());
-            assert forall|b: usize| #[trigger] self.dom().contains(b) implies self.block_wf(b) by {
-                assert(s0.block_wf(b));
-                let p = self.perm(b);
-                if b != h@.addr {
-                    if s0.state(b) == BlockState::Live {
-                        assert forall|i: int| #[trigger] p_scanned(p, i) implies self.slot_word(
-                            p,
-                            b,
-                            i,
-                        ) by {
-                            assert(s0.slot_word(p, b, i));
+            if c {
+                reveal(Core::blocks_wf);
+                reveal(Core::edges_wf);
+                reveal(Core::refs_wf);
+                reveal(Core::building_wf);
+                assert(self.model@.state.dom() =~= self.dom());
+                assert forall|b: usize| #[trigger] self.dom().contains(b) implies self.block_wf(
+                    b,
+                ) by {
+                    assert(s0.block_wf(b));
+                    let p = self.perm(b);
+                    if b != h@.addr {
+                        if s0.state(b) == BlockState::Live {
+                            assert forall|i: int| #[trigger] p_scanned(p, i) implies self.slot_word(
+                                p,
+                                b,
+                                i,
+                            ) by {
+                                assert(s0.slot_word(p, b, i));
+                            }
+                        }
+                        if s0.state(b) == BlockState::Building {
+                            assert forall|i: int| #[trigger]
+                                self.model@.written[b].contains(i) implies p_scanned(p, i)
+                                && self.slot_word(p, b, i) && !self.model@.kept.contains(
+                                (b, i),
+                            ) by {
+                                assert(s0.slot_word(p, b, i));
+                            }
+                        }
+                    } else {
+                        let q = s0.perm(h@.addr);
+                        assert forall|i: int| #[trigger] p_scanned(p, i) implies p_init(p, i) by {
+                            assert(p_scanned(q, i));
                         }
                     }
-                    if s0.state(b) == BlockState::Building {
-                        assert forall|i: int| #[trigger]
-                            self.model@.written[b].contains(i) implies p_scanned(p, i)
-                            && self.slot_word(p, b, i) && !self.model@.kept.contains((b, i)) by {
-                            assert(s0.slot_word(p, b, i));
+                }
+                assert forall|e: Pos| #[trigger] self.model@.kept.contains(e) implies self.kept_wf(
+                    e,
+                ) by {
+                    if s0.model@.kept.contains(e) {
+                        assert(s0.kept_wf(e));
+                        if e.0 == h@.addr {
+                            assert(s0.state(h@.addr) == BlockState::Dying);
                         }
-                    }
-                } else {
-                    let q = s0.perm(h@.addr);
-                    assert forall|i: int| #[trigger] p_scanned(p, i) implies p_init(p, i) by {
-                        assert(p_scanned(q, i));
+                    } else {
+                        assert(s0.block_wf(h@.addr));
+                        assert(p_scanned(s0.perm(h@.addr), e.1));
                     }
                 }
-            }
-            assert forall|e: Pos| #[trigger] self.model@.kept.contains(e) implies self.kept_wf(
-                e,
-            ) by {
-                if s0.model@.kept.contains(e) {
-                    assert(s0.kept_wf(e));
-                    if e.0 == h@.addr {
-                        assert(s0.state(h@.addr) == BlockState::Dying);
-                    }
-                } else {
-                    assert(s0.block_wf(h@.addr));
-                    assert(p_scanned(s0.perm(h@.addr), e.1));
+                assert forall|e: Pos| #[trigger]
+                    self.model@.edges.dom().contains(e) implies self.edge_wf(e) by {
+                    assert(s0.edge_wf(e));
                 }
-            }
-            assert forall|e: Pos| #[trigger]
-                self.model@.edges.dom().contains(e) implies self.edge_wf(e) by {
-                assert(s0.edge_wf(e));
-            }
-            assert forall|b: usize| #[trigger] self.dom().contains(b) implies self.counted_wf(
-                b,
-            ) by {
-                assert(s0.counted_wf(b));
+                assert forall|b: usize| #[trigger] self.dom().contains(b) implies self.counted_wf(
+                    b,
+                ) by {
+                    assert(s0.counted_wf(b));
+                }
             }
             if checked {
+                s0.lemma_safe_doms();
                 s0.lemma_safe_at(h@.addr);
-                self.lemma_at(h@.addr);
+                assert(self.model@.state.dom() =~= s0.model@.state.dom());
                 assert forall|i: int| #[trigger]
                     self.model@.kept.contains((h@.addr, i)) implies p_scanned(self.perm(h@.addr), i)
                     && p_scanned(s0.perm(h@.addr), i) by {
                     if s0.model@.kept.contains((h@.addr, i)) {
-                        assert(s0.kept_wf((h@.addr, i)));
+                        reveal(Core::safe_blocks_wf);
+                        assert(s0.safe_kept_wf((h@.addr, i)));
                     }
                 }
                 if s0.registered(h@.addr) {
@@ -297,9 +327,10 @@ impl Core {
 
     /// 使わなかった token の箱 `h` を、空ける途中の物体にする。「残した」語は、もう呼ぶ側のものである。
     #[inline(always)]
-    pub(crate) fn token_free(&mut self, h: *mut Header, checked: bool)
+    pub(crate) fn token_free(&mut self, h: *mut Header, checked: bool, Ghost(c): Ghost<bool>)
         requires
-            old(self).full(),
+            !checked ==> c,
+            c ==> old(self).full(),
             old(self).checked@ ==> old(self).safe_wf(),
             checked == old(self).checked@,
             h == old(self).block(h@.addr),
@@ -308,7 +339,7 @@ impl Core {
             checked ==> !old(self).registered(h@.addr),
         ensures
             final(self).model@.tokens == old(self).model@.tokens,
-            final(self).full(),
+            c ==> final(self).full(),
             final(self).checked@ ==> final(self).safe_wf(),
             final(self).pages == old(self).pages,
             final(self).prefix_moved(*old(self), h@.addr),
@@ -320,11 +351,12 @@ impl Core {
             final(self).model@.building == old(self).model@.building,
             final(self).model@.refs == old(self).model@.refs,
             final(self).model@.owner == old(self).model@.owner,
-            forall|j: int| !(#[trigger] final(self).model@.edges.dom().contains((h@.addr, j))),
+            c ==> forall|j: int|
+                !(#[trigger] final(self).model@.edges.dom().contains((h@.addr, j))),
     {
         let ghost s0 = *self;
         proof {
-            self.lemma_at(h@.addr);
+            self.lemma_shape(h@.addr);
         }
         if checked {
             let v = self.prefix_state_get(h);
@@ -342,58 +374,67 @@ impl Core {
                     ..s0.model@
                 },
             );
-            reveal(Core::blocks_wf);
-            reveal(Core::edges_wf);
-            reveal(Core::refs_wf);
-            reveal(Core::building_wf);
-            assert(self.model@.state.dom() =~= self.dom());
-            assert forall|b: usize| #[trigger] self.dom().contains(b) implies self.block_wf(b) by {
-                assert(s0.block_wf(b));
-                let p = self.perm(b);
-                if b != h@.addr {
-                    if s0.state(b) == BlockState::Live {
-                        assert forall|i: int| #[trigger] p_scanned(p, i) implies self.slot_word(
-                            p,
-                            b,
-                            i,
-                        ) by {
-                            assert(s0.slot_word(p, b, i));
+            if c {
+                reveal(Core::blocks_wf);
+                reveal(Core::edges_wf);
+                reveal(Core::refs_wf);
+                reveal(Core::building_wf);
+                assert(self.model@.state.dom() =~= self.dom());
+                assert forall|b: usize| #[trigger] self.dom().contains(b) implies self.block_wf(
+                    b,
+                ) by {
+                    assert(s0.block_wf(b));
+                    let p = self.perm(b);
+                    if b != h@.addr {
+                        if s0.state(b) == BlockState::Live {
+                            assert forall|i: int| #[trigger] p_scanned(p, i) implies self.slot_word(
+                                p,
+                                b,
+                                i,
+                            ) by {
+                                assert(s0.slot_word(p, b, i));
+                            }
+                        }
+                        if s0.state(b) == BlockState::Building {
+                            assert forall|i: int| #[trigger]
+                                self.model@.written[b].contains(i) implies p_scanned(p, i)
+                                && self.slot_word(p, b, i) && !self.model@.kept.contains(
+                                (b, i),
+                            ) by {
+                                assert(s0.slot_word(p, b, i));
+                            }
+                        }
+                    } else {
+                        let q = s0.perm(h@.addr);
+                        assert forall|i: int| #[trigger] p_scanned(p, i) implies p_init(p, i) by {
+                            assert(p_scanned(q, i));
                         }
                     }
-                    if s0.state(b) == BlockState::Building {
-                        assert forall|i: int| #[trigger]
-                            self.model@.written[b].contains(i) implies p_scanned(p, i)
-                            && self.slot_word(p, b, i) && !self.model@.kept.contains((b, i)) by {
-                            assert(s0.slot_word(p, b, i));
-                        }
-                    }
-                } else {
-                    let q = s0.perm(h@.addr);
-                    assert forall|i: int| #[trigger] p_scanned(p, i) implies p_init(p, i) by {
-                        assert(p_scanned(q, i));
+                }
+                assert forall|e: Pos| #[trigger] self.model@.kept.contains(e) implies self.kept_wf(
+                    e,
+                ) by {
+                    assert(s0.kept_wf(e));
+                    if e.0 != h@.addr {
+                        assert(self.perms@[e.0] == s0.perms@[e.0]);
                     }
                 }
-            }
-            assert forall|e: Pos| #[trigger] self.model@.kept.contains(e) implies self.kept_wf(
-                e,
-            ) by {
-                assert(s0.kept_wf(e));
-                if e.0 != h@.addr {
-                    assert(self.perms@[e.0] == s0.perms@[e.0]);
+                assert forall|e: Pos| #[trigger]
+                    self.model@.edges.dom().contains(e) implies self.edge_wf(e) && e.0
+                    != h@.addr by {
+                    assert(s0.edge_wf(e));
                 }
-            }
-            assert forall|e: Pos| #[trigger]
-                self.model@.edges.dom().contains(e) implies self.edge_wf(e) && e.0 != h@.addr by {
-                assert(s0.edge_wf(e));
-            }
-            assert forall|b: usize| #[trigger] self.dom().contains(b) implies self.counted_wf(
-                b,
-            ) by {
-                assert(s0.counted_wf(b));
+                assert forall|b: usize| #[trigger] self.dom().contains(b) implies self.counted_wf(
+                    b,
+                ) by {
+                    assert(s0.counted_wf(b));
+                }
             }
             if checked {
+                s0.lemma_safe_doms();
                 s0.lemma_safe_at(h@.addr);
-                self.lemma_at(h@.addr);
+                assert(self.model@.state.dom() =~= s0.model@.state.dom());
+                assert forall|i: int| !#[trigger] self.model@.kept.contains((h@.addr, i)) by {}
                 self.lemma_safe_restate(s0, h@.addr);
             }
         }
@@ -408,9 +449,11 @@ impl Core {
         meta: Option<Meta>,
         owner: u32,
         checked: bool,
+        Ghost(c): Ghost<bool>,
     )
         requires
-            old(self).full(),
+            !checked ==> c,
+            c ==> old(self).full(),
             old(self).checked@ ==> old(self).safe_wf(),
             checked == old(self).checked@,
             old(self).dom().contains(h@.addr),
@@ -425,7 +468,7 @@ impl Core {
             },
         ensures
             final(self).model@.tokens == old(self).model@.tokens,
-            final(self).full(),
+            c ==> final(self).full(),
             final(self).checked@ ==> final(self).safe_wf(),
             final(self).pages == old(self).pages,
             final(self).checked == old(self).checked,
@@ -451,12 +494,12 @@ impl Core {
                 b != h@.addr ==> #[trigger] final(self).model@.owner[b] == old(
                     self,
                 ).model@.owner[b],
-            final(self).rc_of(h@.addr) == 1,
-            final(self).indeg(h@.addr) == 0,
+            c ==> final(self).rc_of(h@.addr) == 1,
+            c ==> final(self).indeg(h@.addr) == 0,
     {
         let ghost s0 = *self;
         proof {
-            self.lemma_at(h@.addr);
+            self.lemma_shape(h@.addr);
         }
         let v = if checked {
             self.prefix_state_get(h)
@@ -496,19 +539,24 @@ impl Core {
                     ..s0.model@
                 },
             );
-            reveal(Core::blocks_wf);
-            assert(self.model@.owner.dom() =~= s0.model@.owner.dom());
-            self.lemma_token_build(s0, a, meta);
+            if c {
+                reveal(Core::blocks_wf);
+                assert(self.model@.owner.dom() =~= s0.model@.owner.dom());
+                self.lemma_token_build(s0, a, meta);
+            }
             assert(self.model@.kept =~= s0.model@.kept.filter(
                 |e: Pos| e.0 != a || self.scanned(a, e.1),
             ));
             if checked {
+                s0.lemma_safe_doms();
                 s0.lemma_safe_at(a);
-                self.lemma_at(a);
+                assert(self.model@.state.dom() =~= s0.model@.state.dom());
+                assert(self.model@.written.dom() =~= s0.model@.written.dom());
                 assert forall|i: int| #[trigger]
                     self.model@.kept.contains((a, i)) implies p_scanned(self.perm(a), i)
                     && p_scanned(s0.perm(a), i) by {
-                    assert(s0.kept_wf((a, i)));
+                    reveal(Core::safe_blocks_wf);
+                    assert(s0.safe_kept_wf((a, i)));
                 }
                 self.lemma_safe_restate(s0, a);
             }

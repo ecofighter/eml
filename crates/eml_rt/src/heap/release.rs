@@ -8,11 +8,13 @@ use vstd::prelude::*;
 #[cfg(verus_only)]
 use super::Core;
 use super::Heap;
+#[cfg(verus_only)]
+use super::chain_err;
 use super::check::layout_check;
 #[cfg(verus_only)]
 use super::handover::{handover, kept_set, lemma_kept_set};
 #[cfg(verus_only)]
-use super::inv::{p_count, p_first};
+use super::inv::{p_count, p_first, p_owner, p_scanned};
 #[cfg(verus_only)]
 use super::model::{BlockState, Pos};
 #[cfg(verus_only)]
@@ -37,37 +39,48 @@ impl<M: Mode> Heap<M> {
     pub unsafe fn release(&mut self, w: Word, tag: u16, keep: &[bool]) -> (r: Result<(), HeapError>)
         requires
             old(self).wf(),
-            old(self).settleable(),
+            old(self).safe_settleable(),
             w.is_ptr_spec(),
-            old(self).holds(w),
-            !M::CHECKED ==> old(self).layout_of(w, tag, keep@.len() as int),
-            !M::CHECKED ==> (old(self).rc_value(w) < 0 ==> !old(self).lin_of(w)),
-            !M::CHECKED ==> old(self).owned(w),
-            !M::CHECKED ==> forall|i: int|
-                #![trigger keep@[i]]
-                0 <= i < keep@.len() && keep@[i] ==> {
-                    let c = old(self).scanned_word(w, i);
-                    &&& c.is_ptr_spec() ==> !old(self).lin_of(c)
-                    &&& old(self).owned(c)
-                },
+            old(self).word_in(w),
+            !M::CHECKED ==> old(self).release_ok(w, tag, keep@),
         ensures
+            final(self).wf(),
             !M::CHECKED ==> r is Ok,
-            r is Ok ==> final(self).wf() && final(self).handed_over(*old(self), w, keep@),
+            old(self).release_ok(w, tag, keep@) ==> r is Ok || chain_err(r),
+            old(self).release_ok(w, tag, keep@) && r is Ok ==> final(self).consistent()
+                && final(self).handed_over(*old(self), w, keep@),
     {
+        let ghost c = self.release_ok(w, tag, keep@);
         self.settle();
         let h = self.header_of(w);
+        proof {
+            if c {
+                self.core.lemma_readable(w);
+                self.lemma_checks_pass(w);
+                if M::CHECKED {
+                    self.core.lemma_code_state(h@.addr);
+                }
+            }
+        }
         self.release_check(h, tag, keep.len())?;
+        proof {
+            if M::CHECKED {
+                reveal(Core::building_wf);
+            }
+        }
         if self.core.rc_last(h) {
             proof {
-                self.core.lemma_last_ref(h@.addr);
+                if c {
+                    self.core.lemma_last_ref(h@.addr);
+                }
             }
-            self.release_children(h, keep, false)?;
+            self.release_children(h, keep, false, Ghost(c))?;
             if M::CHECKED {
                 self.stats.rc_decrements = self.stats.rc_decrements.wrapping_add(1);
             }
             Ok(())
         } else {
-            self.release_shared(h, w, keep)
+            self.release_shared(h, w, keep, Ghost(c))
         }
     }
 
@@ -78,20 +91,31 @@ impl<M: Mode> Heap<M> {
         HeapError,
     >)
         requires
-            self.core.full(),
+            self.core.sound(),
             self.core.checked@ == M::CHECKED,
             self.core.dom().contains(h@.addr),
             h == self.core.block(h@.addr),
-            self.core.state(h@.addr) == BlockState::Live,
         ensures
             !M::CHECKED ==> r is Ok,
             r is Ok && M::CHECKED ==> {
                 let a = h@.addr;
+                &&& self.core.state(a) == BlockState::Live || self.core.state(a)
+                    == BlockState::Building
                 &&& self.core.kind(a) == Kind::Data
                 &&& bits_tag(self.core.meta_bits(a)) == tag
                 &&& self.core.count(a) == n
                 &&& self.core.rc_of(a) < 0 ==> !self.core.lin(a)
             },
+            ({
+                let a = h@.addr;
+                &&& self.core.state(a) == BlockState::Live || self.core.state(a)
+                    == BlockState::Building
+                &&& self.core.kind(a) == Kind::Data
+                &&& bits_tag(self.core.meta_bits(a)) == tag
+                &&& self.core.count(a) == n
+                &&& self.core.rc_of(a) < 0 ==> !self.core.lin(a)
+                &&& self.core.rc_of(a) > 0 ==> p_owner(self.core.perm(a)) == self.worker
+            }) ==> r is Ok,
     {
         if !M::CHECKED {
             return Ok(());
@@ -107,12 +131,15 @@ impl<M: Mode> Heap<M> {
         self.checked_owner(h, rc)
     }
 
-    /// 最後の参照でないときの `release`。残す子を `dup` してから、物体の参照を手放す。
+    /// 最後の参照でない `release`。残すフィールドを `dup` してから、物体の参照を手放す。
     #[inline]
-    fn release_shared(&mut self, h: *mut Header, w: Word, keep: &[bool]) -> (r: Result<
-        (),
-        HeapError,
-    >)
+    fn release_shared(
+        &mut self,
+        h: *mut Header,
+        w: Word,
+        keep: &[bool],
+        Ghost(c): Ghost<bool>,
+    ) -> (r: Result<(), HeapError>)
         requires
             old(self).wf(),
             old(self).core.model@.building is None,
@@ -122,11 +149,13 @@ impl<M: Mode> Heap<M> {
             h == old(self).core.block(h@.addr),
             old(self).core.dom().contains(h@.addr),
             old(self).core.state(h@.addr) == BlockState::Live,
-            old(self).core.rc_of(h@.addr) != 0 ==> old(self).core.ext(h@.addr) >= 1,
             old(self).core.count(h@.addr) == keep@.len(),
-            !M::CHECKED ==> (old(self).rc_value(w) < 0 ==> !old(self).lin_of(w)),
-            !M::CHECKED ==> old(self).owned(w),
-            !M::CHECKED ==> forall|i: int|
+            !M::CHECKED ==> c,
+            c ==> old(self).consistent(),
+            c ==> (old(self).core.rc_of(h@.addr) != 0 ==> old(self).core.ext(h@.addr) >= 1),
+            c ==> (old(self).rc_value(w) < 0 ==> !old(self).lin_of(w)),
+            c ==> old(self).owned(w),
+            c ==> forall|i: int|
                 #![trigger keep@[i]]
                 0 <= i < keep@.len() && keep@[i] ==> {
                     let c = old(self).scanned_word(w, i);
@@ -134,19 +163,33 @@ impl<M: Mode> Heap<M> {
                     &&& old(self).owned(c)
                 },
         ensures
+            final(self).wf(),
             final(self).core.model@.tokens == old(self).core.model@.tokens,
             final(self).tokens == old(self).tokens,
             !M::CHECKED ==> r is Ok,
-            r is Ok ==> final(self).wf() && final(self).core.evolved_by(
+            c ==> r is Ok || chain_err(r),
+            c && r is Ok ==> final(self).consistent() && final(self).core.evolved_by(
                 old(self).core,
                 handover(old(self).core.kept_out(h@.addr, keep@), h@.addr),
             ) && final(self).dummy == old(self).dummy && final(self).worker == old(self).worker,
     {
         let ghost s0 = self.core;
         let ghost a = h@.addr;
+        proof {
+            s0.lemma_shape(a);
+            if M::CHECKED {
+                s0.lemma_safe_live_block(a);
+            }
+            if c {
+                s0.lemma_at(a);
+            }
+        }
         let (first, n) = self.core.scan_get(h);
         proof {
-            s0.lemma_dupped_start();
+            s0.lemma_values_refl();
+            if c {
+                s0.lemma_dupped_start();
+            }
             lemma_kept_set(first as int, keep@, 0);
             lemma_pos_set(a, kept_set(first as int, keep@, 0));
             assert(s0.model@.edges.restrict(pos_set(a, kept_set(first as int, keep@, 0))) =~= Map::<
@@ -157,21 +200,25 @@ impl<M: Mode> Heap<M> {
         let mut i: usize = 0;
         while i < n
             invariant
+                !M::CHECKED ==> c,
                 self.tokens == old(self).tokens,
                 self.core.model@.tokens == old(self).core.model@.tokens,
                 self.wf(),
+                c ==> self.consistent(),
                 self.core.model@.building is None,
-                self.core.dupped(
+                self.core.values_changed(s0),
+                c ==> self.core.dupped(
                     s0,
                     s0.model@.edges.restrict(pos_set(a, kept_set(first as int, keep@, i as int))),
                 ),
-                s0.full(),
+                c ==> s0.full(),
+                M::CHECKED ==> s0.safe_wf(),
                 s0 == old(self).core,
                 a == h@.addr,
                 w.is_ptr_spec(),
                 w.bits_spec() == a,
                 s0.word_ok(w),
-                old(self).core.rc_of(a) != 0 ==> old(self).core.ext(a) >= 1,
+                c ==> (old(self).core.rc_of(a) != 0 ==> old(self).core.ext(a) >= 1),
                 s0.model@.building is None,
                 s0.dom().contains(a),
                 s0.state(a) == BlockState::Live,
@@ -183,7 +230,7 @@ impl<M: Mode> Heap<M> {
                 i <= n,
                 self.dummy == old(self).dummy,
                 self.worker == old(self).worker,
-                !M::CHECKED ==> forall|j: int|
+                c ==> forall|j: int|
                     #![trigger keep@[j]]
                     0 <= j < keep@.len() && keep@[j] ==> {
                         let c = old(self).scanned_word(w, j);
@@ -202,41 +249,54 @@ impl<M: Mode> Heap<M> {
             assert(s1.perm(a).slots == s0.perm(a).slots);
             assert(s1.perm(a).meta == s0.perm(a).meta);
             proof {
-                s0.lemma_kept_out_step(a, first as int, keep@, i as int);
+                if c {
+                    s0.lemma_kept_out_step(a, first as int, keep@, i as int);
+                }
             }
             if keep[i] {
                 proof {
-                    s1.lemma_live_slot(a, (first + i) as int);
-                    s0.lemma_live_slot(a, (first + i) as int);
-                    reveal(Core::blocks_wf);
-                    assert(s0.block_wf(a));
-                    assert(s0.scanned(a, (first + i) as int));
-                    assert(s0.slot_word(s0.perm(a), a, (first + i) as int));
-                    reveal(Core::edges_wf);
+                    if c {
+                        s1.lemma_live_slot(a, (first + i) as int);
+                        s0.lemma_live_slot(a, (first + i) as int);
+                        reveal(Core::blocks_wf);
+                        assert(s0.block_wf(a));
+                        assert(s0.scanned(a, (first + i) as int));
+                        assert(s0.slot_word(s0.perm(a), a, (first + i) as int));
+                        reveal(Core::edges_wf);
+                    }
+                    if M::CHECKED {
+                        s0.lemma_safe_live_slot(a, (first + i) as int);
+                    }
                 }
                 let child = self.core.slot_get(h, first + i);
                 let ghost mid = *self;
+                proof {
+                    assert(self.core.word_ok(child) == s0.word_ok(child));
+                }
                 let r = unsafe { self.dup(child) };
                 r?;
                 proof {
-                    if child.is_ptr_spec() {
-                        assert(s0.edge_wf((a, (first + i) as int)));
-                        self.core.lemma_dupped_step(
-                            s0,
-                            s1,
-                            k0,
-                            (a, (first + i) as int),
-                            child.bits_spec(),
-                        );
-                    } else {
-                        if s0.dom().contains(child.bits_spec()) {
-                            s0.lemma_at(child.bits_spec());
-                            crate::word::lemma_aligned_is_ptr(child.bits_spec());
-                        }
-                        self.core.lemma_dupped_skip(s0, s1, k0, child.bits_spec());
-                        assert(!s0.model@.edges.dom().contains((a, (first + i) as int))) by {
-                            if s0.model@.edges.dom().contains((a, (first + i) as int)) {
-                                assert(s0.edge_wf((a, (first + i) as int)));
+                    self.core.lemma_values_trans(mid.core, s0);
+                    if c {
+                        if child.is_ptr_spec() {
+                            assert(s0.edge_wf((a, (first + i) as int)));
+                            self.core.lemma_dupped_step(
+                                s0,
+                                s1,
+                                k0,
+                                (a, (first + i) as int),
+                                child.bits_spec(),
+                            );
+                        } else {
+                            if s0.dom().contains(child.bits_spec()) {
+                                s0.lemma_at(child.bits_spec());
+                                crate::word::lemma_aligned_is_ptr(child.bits_spec());
+                            }
+                            self.core.lemma_dupped_skip(s0, s1, k0, child.bits_spec());
+                            assert(!s0.model@.edges.dom().contains((a, (first + i) as int))) by {
+                                if s0.model@.edges.dom().contains((a, (first + i) as int)) {
+                                    assert(s0.edge_wf((a, (first + i) as int)));
+                                }
                             }
                         }
                     }
@@ -249,10 +309,11 @@ impl<M: Mode> Heap<M> {
             assert(s0.kept_out(a, keep@) == s0.model@.edges.restrict(
                 pos_set(a, kept_set(first as int, keep@, n as int)),
             ));
+            assert(self.core.word_ok(w) == s0.word_ok(w));
         }
         let r = unsafe { self.decref(w) };
         proof {
-            if r is Ok {
+            if c && r is Ok {
                 self.core.lemma_dupped_end(s0, s2, s0.kept_out(a, keep@), a);
             }
         }
@@ -261,61 +322,80 @@ impl<M: Mode> Heap<M> {
 
     /// 最後の参照の `release`。物体を空ける途中にして残すフィールドの辺を呼ぶ側に渡し、残さない子を手放す。`to_token`
     /// なら箱を token にし、そうでなければ空ける。
-    pub(super) fn release_children(&mut self, h: *mut Header, keep: &[bool], to_token: bool) -> (r:
-        Result<(), HeapError>)
+    pub(super) fn release_children(
+        &mut self,
+        h: *mut Header,
+        keep: &[bool],
+        to_token: bool,
+        Ghost(c): Ghost<bool>,
+    ) -> (r: Result<(), HeapError>)
         requires
             old(self).wf(),
             old(self).core.model@.building is None,
             old(self).core.dom().contains(h@.addr),
             h == old(self).core.block(h@.addr),
             old(self).core.state(h@.addr) == BlockState::Live,
-            old(self).core.indeg(h@.addr) == 0,
-            old(self).core.model@.refs[h@.addr] == 1,
-            old(self).core.rc_of(h@.addr) != 0,
             old(self).core.count(h@.addr) == keep@.len(),
             to_token ==> old(self).core.kind(h@.addr) == Kind::Data && old(self).core.rc_of(h@.addr)
                 == 1,
+            !M::CHECKED ==> c,
+            c ==> old(self).consistent(),
+            c ==> old(self).core.indeg(h@.addr) == 0,
+            c ==> old(self).core.model@.refs[h@.addr] == 1,
+            c ==> old(self).core.rc_of(h@.addr) != 0,
         ensures
+            final(self).wf(),
             M::CHECKED ==> final(self).core.pages == old(self).core.pages,
             final(self).core.model@.tokens == old(self).core.model@.tokens,
             final(self).tokens == old(self).tokens,
+            final(self).dummy == old(self).dummy,
+            final(self).worker == old(self).worker,
             !M::CHECKED ==> r is Ok,
-            r is Ok ==> {
-                &&& final(self).wf()
+            c ==> r is Ok || chain_err(r),
+            c && r is Ok ==> {
+                &&& final(self).consistent()
                 &&& final(self).core.evolved_by(
                     old(self).core,
                     handover(old(self).core.kept_out(h@.addr, keep@), h@.addr),
                 )
-                &&& final(self).dummy == old(self).dummy
-                &&& final(self).worker == old(self).worker
-                &&& to_token ==> final(self).core.dom().contains(h@.addr) && final(self).core.state(
-                    h@.addr,
-                ) == BlockState::Token
-                &&& to_token && M::CHECKED ==> !final(self).core.registered(h@.addr)
+            },
+            r is Ok && to_token ==> {
+                &&& final(self).core.dom().contains(h@.addr)
+                &&& final(self).core.state(h@.addr) == BlockState::Token
+                &&& M::CHECKED ==> !final(self).core.registered(h@.addr)
             },
     {
         let ghost s0 = self.core;
         let ghost a = h@.addr;
+        proof {
+            s0.lemma_shape(a);
+        }
         let (first, _) = self.core.scan_get(h);
         let ghost skip = kept_set(first as int, keep@, keep@.len() as int);
-        self.core.begin_free(h, Ghost(pos_set(a, skip)), M::CHECKED);
+        self.core.begin_free(h, Ghost(pos_set(a, skip)), M::CHECKED, Ghost(c));
         let ghost s1 = self.core;
         proof {
             lemma_pos_set(a, skip);
-            self.core.lemma_begin_evolved(s0, a, pos_set(a, skip));
-            self.core.lemma_release_start(s0, h, skip);
-            assert(s0.kept_out(a, keep@) == s0.model@.edges.restrict(pos_set(a, skip)));
+            lemma_kept_set(first as int, keep@, keep@.len() as int);
+            if c {
+                self.core.lemma_begin_evolved(s0, a, pos_set(a, skip));
+                self.core.lemma_release_start(s0, h, skip);
+                assert(s0.kept_out(a, keep@) == s0.model@.edges.restrict(pos_set(a, skip)));
+            }
         }
         let mut work = Vec::new();
         mem::swap(&mut work, &mut self.work);
         work.clear();
-        let r = self.release_unkept(h, keep, first, to_token, &mut work, Ghost(skip));
+        let r = self.release_unkept(h, keep, first, to_token, &mut work, Ghost(c));
         work.clear();
         mem::swap(&mut work, &mut self.work);
         proof {
-            if r is Ok {
+            if c && r is Ok {
                 self.core.lemma_by_trans(s1, s0, handover(s0.kept_out(a, keep@), a), 0);
                 self.lemma_dummy_by(*old(self), handover(s0.kept_out(a, keep@), a));
+            }
+            if M::CHECKED {
+                self.lemma_safe_frame(*old(self));
             }
         }
         r
@@ -330,129 +410,207 @@ impl<M: Mode> Heap<M> {
         first: usize,
         to_token: bool,
         work: &mut Vec<Word>,
-        Ghost(skip): Ghost<Set<int>>,
+        Ghost(c): Ghost<bool>,
     ) -> (r: Result<(), HeapError>)
         requires
-            old(self).core.full(),
+            !M::CHECKED ==> c,
+            c ==> old(self).core.full(),
+            c ==> old(self).core.draining(
+                h,
+                first as int,
+                keep@.len() as int,
+                kept_set(first as int, keep@, keep@.len() as int),
+                old(work)@,
+            ),
             M::CHECKED ==> old(self).core.safe_wf(),
+            M::CHECKED ==> old(self).core.safe_work(old(work)@, Some(h@.addr)),
             old(self).core.checked@ == M::CHECKED,
             old(self).core.model@.building is None,
-            old(self).core.draining(h, first as int, keep@.len() as int, skip, old(work)@),
-            skip == kept_set(first as int, keep@, keep@.len() as int),
+            old(self).core.dom().contains(h@.addr),
+            h == old(self).core.block(h@.addr),
+            old(self).core.state(h@.addr) == BlockState::Dying,
+            first == p_first(old(self).core.perm(h@.addr)),
             keep@.len() == p_count(old(self).core.perm(h@.addr)),
             first + keep@.len() <= old(self).core.cap(h@.addr),
             to_token ==> old(self).core.kind(h@.addr) == Kind::Data && old(self).core.rc_of(h@.addr)
                 == 1,
         ensures
             M::CHECKED ==> final(self).core.pages == old(self).core.pages,
+            M::CHECKED ==> final(self).core.dom() == old(self).core.dom(),
             final(self).core.model@.tokens == old(self).core.model@.tokens,
             final(self).tokens == old(self).tokens,
             !M::CHECKED ==> r is Ok,
-            final(self).core.full(),
+            c ==> r is Ok || chain_err(r),
+            c ==> final(self).core.full(),
             M::CHECKED ==> final(self).core.safe_wf(),
             final(self).core.checked@ == M::CHECKED,
-            r is Ok ==> {
-                &&& final(self).core.quiet()
-                &&& final(self).core.evolved(old(self).core, 0, 0)
-                &&& to_token ==> final(self).core.dom().contains(h@.addr) && final(self).core.state(
-                    h@.addr,
-                ) == BlockState::Token
-                &&& to_token && M::CHECKED ==> !final(self).core.registered(h@.addr)
+            final(self).core.model@.building is None,
+            c && r is Ok ==> final(self).core.quiet() && final(self).core.evolved(
+                old(self).core,
+                0,
+                0,
+            ),
+            r is Ok && to_token ==> {
+                &&& final(self).core.dom().contains(h@.addr)
+                &&& final(self).core.state(h@.addr) == BlockState::Token
+                &&& M::CHECKED ==> !final(self).core.registered(h@.addr)
             },
             final(self).dummy == old(self).dummy,
             final(self).worker == old(self).worker,
     {
+        let ghost skip = kept_set(first as int, keep@, keep@.len() as int);
         let ghost s1 = self.core;
         let n = keep.len();
         proof {
-            s1.lemma_evolved_self(0);
+            if c {
+                s1.lemma_evolved_self(0);
+            }
             lemma_kept_set(first as int, keep@, n as int);
         }
         let mut i = n;
         while i > 0
             invariant
+                !M::CHECKED ==> c,
                 M::CHECKED ==> self.core.pages == old(self).core.pages,
+                M::CHECKED ==> self.core.dom() == old(self).core.dom(),
                 self.tokens == old(self).tokens,
                 self.core.model@.tokens == old(self).core.model@.tokens,
-                self.core.full(),
+                c ==> self.core.full(),
                 M::CHECKED ==> self.core.safe_wf(),
                 self.core.checked@ == M::CHECKED,
-                self.core.draining(h, first as int, i as int, skip, work@),
+                c ==> self.core.draining(h, first as int, i as int, skip, work@),
+                M::CHECKED ==> self.core.safe_work(work@, Some(h@.addr)),
+                self.core.dom().contains(h@.addr),
+                h == self.core.block(h@.addr),
+                self.core.state(h@.addr) == BlockState::Dying,
+                self.core.perms@[h@.addr] == s1.perms@[h@.addr],
                 skip == kept_set(first as int, keep@, n as int),
                 forall|j: int| #[trigger]
                     skip.contains(j) <==> first <= j < first + n && keep@[j - first],
                 n == keep@.len(),
-                n == p_count(self.core.perm(h@.addr)),
+                first == p_first(s1.perm(h@.addr)),
+                n == p_count(s1.perm(h@.addr)),
                 first + n <= self.core.cap(h@.addr),
                 i <= n,
-                self.core.evolved(s1, 0, 0),
+                c ==> self.core.evolved(s1, 0, 0),
                 self.core.model@.building is None,
                 self.dummy == old(self).dummy,
                 self.worker == old(self).worker,
-                to_token ==> self.core.kind(h@.addr) == Kind::Data && self.core.rc_of(h@.addr) == 1,
-                s1.full(),
+                to_token ==> s1.kind(h@.addr) == Kind::Data && s1.rc_of(h@.addr) == 1,
+                c ==> s1.full(),
+                s1 == old(self).core,
             decreases i,
         {
             i -= 1;
             if !keep[i] {
                 proof {
-                    self.core.lemma_draining_slot(h, first as int, i as int, skip, work@);
+                    if c {
+                        self.core.lemma_draining_slot(h, first as int, i as int, skip, work@);
+                    }
+                    if M::CHECKED {
+                        self.core.lemma_safe_at(h@.addr);
+                        assert(p_scanned(self.core.perm(h@.addr), (first + i) as int));
+                    }
                 }
                 let child = self.core.slot_get(h, first + i);
                 if child.is_ptr() {
-                    let c = self.header_of(child);
+                    let c_h = self.header_of(child);
                     let ghost s3 = self.core;
                     let ghost wb = work@;
-                    let last = self.release_ref(c, Ghost(Some((h@.addr, (first + i) as int))))?;
+                    let last = self.release_ref(
+                        c_h,
+                        Ghost(Some((h@.addr, (first + i) as int))),
+                        Ghost(c),
+                    )?;
                     if last {
                         work.push(child);
                     }
                     proof {
-                        self.core.lemma_draining_step(
-                            s3,
-                            s1,
-                            h,
-                            first as int,
-                            i as int,
-                            skip,
-                            child,
-                            last,
-                            wb,
-                            work@,
-                        );
+                        if c {
+                            self.core.lemma_draining_step(
+                                s3,
+                                s1,
+                                h,
+                                first as int,
+                                i as int,
+                                skip,
+                                child,
+                                last,
+                                wb,
+                                work@,
+                            );
+                        }
+                        if M::CHECKED {
+                            self.core.lemma_safe_work_step(s3, wb, work@, h@.addr, child, last);
+                        }
                     }
                 } else {
                     proof {
-                        self.core.lemma_draining_skip(h, first as int, i as int, skip, work@);
+                        if c {
+                            self.core.lemma_draining_skip(h, first as int, i as int, skip, work@);
+                        }
                     }
                 }
             } else {
                 proof {
-                    self.core.lemma_draining_skip(h, first as int, i as int, skip, work@);
+                    if c {
+                        self.core.lemma_draining_skip(h, first as int, i as int, skip, work@);
+                    }
                 }
             }
         }
         let ghost pre = self.core;
         if to_token {
-            self.core.finish_token(h, Ghost(skip), M::CHECKED);
             proof {
-                self.core.lemma_tokened(pre, h, first as int, skip, work@);
-                self.core.lemma_evolved_trans(pre, s1, 0, 0, 0);
+                assert forall|j: int| #[trigger] skip.contains(j) implies pre.scanned(
+                    h@.addr,
+                    j,
+                ) by {}
+            }
+            self.core.finish_token(h, Ghost(skip), M::CHECKED, Ghost(c));
+            proof {
+                if c {
+                    self.core.lemma_tokened(pre, h, first as int, skip, work@);
+                    self.core.lemma_evolved_trans(pre, s1, 0, 0, 0);
+                }
+                if M::CHECKED {
+                    assert forall|w: Word| #[trigger] self.core.word_ok(w) == pre.word_ok(w) by {}
+                    self.core.lemma_safe_work_freed(pre, work@, h@.addr);
+                }
             }
         } else {
-            self.free_box(h);
+            self.free_box(h, Ghost(c));
             proof {
-                self.core.lemma_drained_one(pre, s1, h, first as int, skip, work@);
+                if c {
+                    self.core.lemma_drained_one(pre, s1, h, first as int, skip, work@);
+                }
+                if M::CHECKED {
+                    self.core.lemma_safe_work_freed(pre, work@, h@.addr);
+                }
             }
         }
         let ghost s4 = self.core;
-        let r = self.drain(work);
+        let r = self.drain(work, Ghost(c));
         proof {
-            if r is Ok {
+            if c && r is Ok {
                 self.core.lemma_evolved_trans(s4, s1, 0, 0, 0);
+            }
+            if to_token {
+                assert(s4.state(h@.addr) == BlockState::Token);
+                assert(self.core.tokens_kept(s4));
             }
         }
         r
+    }
+
+    /// `free_block` の前提がみな成り立ち、モデルが合っている。
+    pub closed spec fn free_block_ok(&self, w: Word) -> bool {
+        &&& self.consistent()
+        &&& self.settleable()
+        &&& self.holds(w)
+        &&& self.rc_value(w) == 1 || self.rc_value(w) == -1
+        &&& self.kind_of(w) != Kind::Foreign
+        &&& self.owned(w)
     }
 
     /// `is_last` が真で、子をすでに処理した物体の箱を空ける。ヘッダの `scan` を読まない。子の参照は、残すフィールドと
@@ -464,22 +622,30 @@ impl<M: Mode> Heap<M> {
     pub unsafe fn free_block(&mut self, w: Word) -> (r: Result<(), HeapError>)
         requires
             old(self).wf(),
-            old(self).settleable(),
+            old(self).safe_settleable(),
             w.is_ptr_spec(),
-            old(self).holds(w),
-            !M::CHECKED ==> old(self).rc_value(w) == 1 || old(self).rc_value(w) == -1,
-            !M::CHECKED ==> old(self).kind_of(w) != Kind::Foreign,
-            !M::CHECKED ==> old(self).owned(w),
+            old(self).word_in(w),
+            !M::CHECKED ==> old(self).free_block_ok(w),
         ensures
+            final(self).wf(),
+            r is Err ==> *final(self) == old(self).settled_heap(),
             !M::CHECKED ==> r is Ok,
-            r is Ok ==> final(self).wf() && final(self).handed_over(
+            old(self).free_block_ok(w) ==> r is Ok && final(self).consistent()
+                && final(self).handed_over(
                 *old(self),
                 w,
                 Seq::new(old(self).count_of(w) as nat, |_i: int| true),
             ),
     {
+        let ghost c = self.free_block_ok(w);
         self.settle();
         let h = self.header_of(w);
+        proof {
+            if c {
+                self.core.lemma_readable(w);
+                self.lemma_checks_pass(w);
+            }
+        }
         if M::CHECKED {
             self.checked_live(h)?;
             if self.core.meta_get(h).kind().has_finalizer() {
@@ -496,20 +662,32 @@ impl<M: Mode> Heap<M> {
         let ghost a = h@.addr;
         let ghost ps = s0.model@.edges.dom().filter(|e: Pos| e.0 == a);
         proof {
-            s0.lemma_last_ref(a);
-            s0.lemma_release_unrolled(a, p_count(s0.perm(a)));
-            assert(s0.model@.edges.restrict(ps) == s0.out_edges(a));
+            if M::CHECKED {
+                reveal(Core::building_wf);
+            }
+            if c {
+                s0.lemma_last_ref(a);
+                s0.lemma_release_unrolled(a, p_count(s0.perm(a)));
+                assert(s0.model@.edges.restrict(ps) == s0.out_edges(a));
+            }
         }
-        self.core.begin_free(h, Ghost(ps), M::CHECKED);
+        self.core.begin_free(h, Ghost(ps), M::CHECKED, Ghost(c));
         let ghost s1 = self.core;
         proof {
-            self.core.lemma_begin_evolved(s0, a, ps);
+            if c {
+                self.core.lemma_begin_evolved(s0, a, ps);
+            }
         }
-        self.free_box(h);
+        self.free_box(h, Ghost(c));
         proof {
-            self.core.lemma_boxed_evolved(s1, a);
-            self.core.lemma_by_trans(s1, s0, handover(s0.out_edges(a), a), 0);
-            self.lemma_dummy_by(*old(self), handover(s0.out_edges(a), a));
+            if c {
+                self.core.lemma_boxed_evolved(s1, a);
+                self.core.lemma_by_trans(s1, s0, handover(s0.out_edges(a), a), 0);
+                self.lemma_dummy_by(*old(self), handover(s0.out_edges(a), a));
+            }
+            if M::CHECKED {
+                self.lemma_safe_frame(*old(self));
+            }
         }
         Ok(())
     }

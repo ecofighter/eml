@@ -288,6 +288,129 @@ impl Core {
         }
     }
 
+    /// 作業リストの語はどれも、空ける途中の物体を指し、同じ物体を2回指さない。`except` は、取り出して子を手放している
+    /// 途中の物体である。モデルが合わない検査モードでも成り立つ `work_wf` の弱い形で、前の連鎖が `Err` で止まって残した
+    /// 空ける途中の物体は載らなくてよい。
+    pub(crate) open spec fn safe_work(&self, work: Seq<Word>, except: Option<usize>) -> bool {
+        &&& forall|k: int|
+            #![trigger work[k]]
+            0 <= k < work.len() ==> {
+                &&& work[k].is_ptr_spec()
+                &&& self.word_ok(work[k])
+                &&& self.state(work[k].bits_spec()) == BlockState::Dying
+                &&& except != Some(work[k].bits_spec())
+            }
+        &&& forall|j: int, k: int|
+            #![trigger work[j], work[k]]
+            0 <= j < k < work.len() ==> work[j].bits_spec() != work[k].bits_spec()
+    }
+
+    pub(crate) proof fn lemma_safe_work_pop(&self, before: Seq<Word>, after: Seq<Word>, w: Word)
+        requires
+            self.safe_work(before, None),
+            before.len() > 0,
+            after == before.subrange(0, before.len() - 1),
+            w == before[before.len() - 1],
+        ensures
+            w.is_ptr_spec(),
+            self.word_ok(w),
+            self.state(w.bits_spec()) == BlockState::Dying,
+            self.safe_work(after, Some(w.bits_spec())),
+    {
+        let n = before.len() - 1;
+        assert(before[n] == w);
+        assert forall|k: int| #![trigger after[k]] 0 <= k < after.len() implies {
+            &&& after[k].is_ptr_spec()
+            &&& self.word_ok(after[k])
+            &&& self.state(after[k].bits_spec()) == BlockState::Dying
+            &&& Some(w.bits_spec()) != Some(after[k].bits_spec())
+        } by {
+            assert(after[k] == before[k]);
+            assert(before[k].bits_spec() != before[n].bits_spec());
+        }
+        assert forall|j: int, k: int|
+            #![trigger after[j], after[k]]
+            0 <= j < k < after.len() implies after[j].bits_spec() != after[k].bits_spec() by {
+            assert(after[j] == before[j] && after[k] == before[k]);
+        }
+    }
+
+    /// 生きている子 `c` の参照を手放した後。最後の参照なら `c` は空ける途中になり、作業リストに積む。
+    pub(crate) proof fn lemma_safe_work_step(
+        &self,
+        old: Core,
+        before: Seq<Word>,
+        after: Seq<Word>,
+        h: usize,
+        child: Word,
+        last: bool,
+    )
+        requires
+            old.safe_work(before, Some(h)),
+            old.state(h) == BlockState::Dying,
+            child.is_ptr_spec(),
+            old.word_ok(child),
+            old.state(child.bits_spec()) == BlockState::Live,
+            forall|b: usize| b != child.bits_spec() ==> #[trigger] self.state(b) == old.state(b),
+            self.state(child.bits_spec()) == if last {
+                BlockState::Dying
+            } else {
+                BlockState::Live
+            },
+            forall|w: Word| #[trigger] self.word_ok(w) == old.word_ok(w),
+            after == if last {
+                before.push(child)
+            } else {
+                before
+            },
+        ensures
+            self.safe_work(after, Some(h)),
+    {
+        let c = child.bits_spec();
+        assert forall|k: int| #![trigger after[k]] 0 <= k < after.len() implies {
+            &&& after[k].is_ptr_spec()
+            &&& self.word_ok(after[k])
+            &&& self.state(after[k].bits_spec()) == BlockState::Dying
+            &&& Some(h) != Some(after[k].bits_spec())
+        } by {
+            if k < before.len() {
+                assert(after[k] == before[k]);
+                assert(before[k].bits_spec() != c);
+            }
+        }
+        assert forall|j: int, k: int|
+            #![trigger after[j], after[k]]
+            0 <= j < k < after.len() implies after[j].bits_spec() != after[k].bits_spec() by {
+            assert(after[j] == before[j]);
+            if k < before.len() {
+                assert(after[k] == before[k]);
+            } else {
+                assert(before[j].bits_spec() != c);
+            }
+        }
+    }
+
+    /// 取り出した物体 `h` を空けた後。作業リストのほかの物体は、空ける途中のままである。
+    pub(crate) proof fn lemma_safe_work_freed(&self, old: Core, work: Seq<Word>, h: usize)
+        requires
+            old.safe_work(work, Some(h)),
+            forall|b: usize| b != h ==> #[trigger] self.state(b) == old.state(b),
+            forall|w: Word|
+                old.word_ok(w) && (w.is_ptr_spec() ==> w.bits_spec() != h)
+                    ==> #[trigger] self.word_ok(w),
+        ensures
+            self.safe_work(work, None),
+    {
+        assert forall|k: int| #![trigger work[k]] 0 <= k < work.len() implies {
+            &&& work[k].is_ptr_spec()
+            &&& self.word_ok(work[k])
+            &&& self.state(work[k].bits_spec()) == BlockState::Dying
+            &&& None::<usize> != Some(work[k].bits_spec())
+        } by {
+            assert(work[k].bits_spec() != h);
+        }
+    }
+
     /// 作業リストが空なら、空ける途中の物体はない。
     pub(crate) proof fn lemma_work_empty(&self, work: Seq<Word>)
         requires

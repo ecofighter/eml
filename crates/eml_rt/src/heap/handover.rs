@@ -65,6 +65,30 @@ impl Core {
                 && self.state(b) == BlockState::Token && self.perm(b) == old.perm(b)
     }
 
+    /// token の箱でない `x` のほかを変えない変化を続けても、`old` の token の箱はそのままである。
+    pub(crate) proof fn lemma_tokens_kept_step(&self, mid: Core, old: Core, x: usize)
+        requires
+            mid.tokens_kept(old),
+            mid.dom().subset_of(self.dom()) || (forall|b: usize|
+                b != x && mid.dom().contains(b) ==> self.dom().contains(b)),
+            forall|b: usize| b != x ==> #[trigger] self.state(b) == mid.state(b),
+            forall|b: usize|
+                b != x && mid.dom().contains(b) ==> #[trigger] self.perms@[b] == mid.perms@[b],
+            mid.dom().contains(x) ==> mid.state(x) != BlockState::Token,
+        ensures
+            self.tokens_kept(old),
+    {
+        assert forall|b: usize|
+            #![trigger old.state(b)]
+            old.dom().contains(b) && old.state(b) == BlockState::Token implies self.dom().contains(
+            b,
+        ) && self.state(b) == BlockState::Token && self.perm(b) == old.perm(b) by {
+            assert(mid.dom().contains(b) && mid.state(b) == BlockState::Token);
+            assert(b != x);
+            assert(self.perms@[b] == mid.perms@[b]);
+        }
+    }
+
     /// `evolved` の、物体ごとに数の変化 `d(b)` が違う形。
     pub(crate) open spec fn evolved_by(&self, old: Core, d: spec_fn(usize) -> int) -> bool {
         &&& self.checked == old.checked

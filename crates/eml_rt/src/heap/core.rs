@@ -48,14 +48,14 @@ impl Core {
     #[inline]
     pub(crate) fn rc_get(&self, h: *mut Header) -> (r: i32)
         requires
-            self.full(),
+            self.sound(),
             self.dom().contains(h@.addr),
             h == self.block(h@.addr),
         ensures
             r == self.rc_of(h@.addr),
     {
         proof {
-            self.lemma_at(h@.addr);
+            self.lemma_shape(h@.addr);
         }
         let tracked p = self.perms.borrow().tracked_borrow(h@.addr);
         rc_load(rc_ptr(h), Tracked(&p.rc))
@@ -64,7 +64,7 @@ impl Core {
     #[inline]
     pub(crate) fn meta_get(&self, h: *mut Header) -> (r: Meta)
         requires
-            self.full(),
+            self.sound(),
             self.dom().contains(h@.addr),
             h == self.block(h@.addr),
         ensures
@@ -75,7 +75,7 @@ impl Core {
             r.tag_spec() == bits_tag(self.meta_bits(h@.addr)),
     {
         proof {
-            self.lemma_at(h@.addr);
+            self.lemma_shape(h@.addr);
         }
         let tracked p = self.perms.borrow().tracked_borrow(h@.addr);
         let bits = *ptr_ref(meta_ptr(h), Tracked(&p.meta));
@@ -86,7 +86,7 @@ impl Core {
     #[inline]
     pub(crate) fn slot_get(&self, h: *mut Header, i: usize) -> (r: Word)
         requires
-            self.full(),
+            self.sound(),
             self.dom().contains(h@.addr),
             h == self.block(h@.addr),
             p_init(self.perm(h@.addr), i as int),
@@ -94,7 +94,7 @@ impl Core {
             r == p_word(self.perm(h@.addr), i as int),
     {
         proof {
-            self.lemma_at(h@.addr);
+            self.lemma_shape(h@.addr);
             assert(self.perm(h@.addr).slots.contains_key(i as int));
         }
         let tracked p = self.perms.borrow().tracked_borrow(h@.addr);
@@ -105,7 +105,7 @@ impl Core {
     #[inline]
     pub(crate) fn scan_get(&self, h: *mut Header) -> (r: (usize, usize))
         requires
-            self.full(),
+            self.sound(),
             self.dom().contains(h@.addr),
             h == self.block(h@.addr),
             self.state(h@.addr) != BlockState::Freed,
@@ -115,7 +115,7 @@ impl Core {
             r.0 + r.1 <= self.cap(h@.addr),
     {
         proof {
-            self.lemma_at(h@.addr);
+            self.lemma_shape(h@.addr);
         }
         let m = self.meta_get(h);
         if m.scan() == Meta::EXTENDED_SCAN {
@@ -129,14 +129,14 @@ impl Core {
     #[inline]
     pub(crate) fn rc_last(&self, h: *mut Header) -> (r: bool)
         requires
-            self.full(),
+            self.sound(),
             self.dom().contains(h@.addr),
             h == self.block(h@.addr),
         ensures
             r == (self.rc_of(h@.addr) == 1 || self.rc_of(h@.addr) == -1),
     {
         proof {
-            self.lemma_at(h@.addr);
+            self.lemma_shape(h@.addr);
         }
         let tracked p = self.perms.borrow().tracked_borrow(h@.addr);
         rc_is_last(rc_ptr(h), Tracked(&p.rc))
@@ -146,14 +146,14 @@ impl Core {
     #[inline]
     pub(crate) fn cap_get(&self, h: *mut Header) -> (r: usize)
         requires
-            self.full(),
+            self.sound(),
             self.dom().contains(h@.addr),
             h == self.block(h@.addr),
         ensures
             r == self.cap(h@.addr),
     {
         proof {
-            self.lemma_at(h@.addr);
+            self.lemma_shape(h@.addr);
         }
         self.pages.cap_of(h)
     }
@@ -162,7 +162,7 @@ impl Core {
     #[inline]
     pub(crate) fn slot_put(&mut self, h: *mut Header, i: usize, v: Word)
         requires
-            old(self).full(),
+            old(self).sound(),
             old(self).dom().contains(h@.addr),
             h == old(self).block(h@.addr),
             i < old(self).cap(h@.addr),
@@ -173,7 +173,7 @@ impl Core {
     {
         let ghost s0 = *self;
         proof {
-            self.lemma_at(h@.addr);
+            self.lemma_shape(h@.addr);
         }
         let tracked mut p = self.perms.borrow_mut().tracked_remove(h@.addr);
         let tracked mut slot = p.slots.tracked_remove(i as int);
@@ -190,7 +190,7 @@ impl Core {
     #[inline]
     pub(crate) fn prefix_state_get(&self, h: *mut Header) -> (r: u32)
         requires
-            self.full(),
+            self.sound(),
             self.dom().contains(h@.addr),
             h == self.block(h@.addr),
             self.checked@,
@@ -199,7 +199,7 @@ impl Core {
             r == self.perm(h@.addr).prefix->0.state.value(),
     {
         proof {
-            self.lemma_at(h@.addr);
+            self.lemma_shape(h@.addr);
         }
         let tracked p = self.perms.borrow().tracked_borrow(h@.addr);
         let tracked q = p.prefix.tracked_borrow();
@@ -210,7 +210,7 @@ impl Core {
     #[inline]
     pub(crate) fn prefix_first_get(&self, h: *mut Header) -> (r: u32)
         requires
-            self.full(),
+            self.sound(),
             self.dom().contains(h@.addr),
             h == self.block(h@.addr),
             self.checked@,
@@ -219,7 +219,7 @@ impl Core {
             r == p_owner(self.perm(h@.addr)),
     {
         proof {
-            self.lemma_at(h@.addr);
+            self.lemma_shape(h@.addr);
         }
         let tracked p = self.perms.borrow().tracked_borrow(h@.addr);
         let tracked q = p.prefix.tracked_borrow();
@@ -229,16 +229,20 @@ impl Core {
     /// 検査モードの前置きの状態は、ブロックの状態を表す。
     pub(crate) proof fn lemma_code_state(&self, h: usize)
         requires
-            self.full(),
+            self.sound(),
             self.dom().contains(h),
             self.checked@,
         ensures
             self.perm(h).prefix is Some,
             p_code(self.perm(h)) == state_code(self.state(h)),
-            (self.state(h) == BlockState::Live || self.state(h) == BlockState::Building)
-                && self.rc_of(h) > 0 ==> p_owner(self.perm(h)) == self.model@.owner[h],
+            self.full() && (self.state(h) == BlockState::Live || self.state(h)
+                == BlockState::Building) && self.rc_of(h) > 0 ==> p_owner(self.perm(h))
+                == self.model@.owner[h],
     {
-        self.lemma_at(h);
+        self.lemma_shape(h);
+        if self.full() {
+            self.lemma_at(h);
+        }
     }
 
     /// 不死の物体の外に出ている参照の数 (前置きの `first` の欄) のほかは変わらない。
@@ -325,7 +329,7 @@ impl Core {
 
     pub(crate) proof fn lemma_recounted_refl(&self)
         requires
-            self.full(),
+            self.sound(),
         ensures
             self.recounted(*self),
     {
@@ -334,7 +338,7 @@ impl Core {
             self.perm(b),
             self.rc_of(b) == 0,
         ) by {
-            self.lemma_at(b);
+            self.lemma_shape(b);
         }
     }
 
@@ -485,7 +489,7 @@ impl Core {
     #[inline]
     pub(crate) fn rc_put(&mut self, h: *mut Header, v: i32)
         requires
-            old(self).full(),
+            old(self).sound(),
             old(self).dom().contains(h@.addr),
             h == old(self).block(h@.addr),
         ensures
@@ -494,7 +498,7 @@ impl Core {
             final(self).rc_of(h@.addr) == v,
     {
         proof {
-            self.lemma_at(h@.addr);
+            self.lemma_shape(h@.addr);
         }
         let tracked mut p = self.perms.borrow_mut().tracked_remove(h@.addr);
         rc_store(rc_ptr(h), Tracked(&mut p.rc), v);
@@ -507,7 +511,7 @@ impl Core {
     #[inline]
     pub(crate) fn rc_up_shared(&mut self, h: *mut Header)
         requires
-            old(self).full(),
+            old(self).sound(),
             old(self).dom().contains(h@.addr),
             h == old(self).block(h@.addr),
             old(self).rc_of(h@.addr) > i32::MIN,
@@ -517,7 +521,7 @@ impl Core {
             final(self).rc_of(h@.addr) == old(self).rc_of(h@.addr) - 1,
     {
         proof {
-            self.lemma_at(h@.addr);
+            self.lemma_shape(h@.addr);
         }
         let tracked mut p = self.perms.borrow_mut().tracked_remove(h@.addr);
         rc_dup_shared(rc_ptr(h), Tracked(&mut p.rc));
@@ -530,7 +534,7 @@ impl Core {
     #[inline]
     pub(crate) fn rc_down_shared(&mut self, h: *mut Header) -> (r: bool)
         requires
-            old(self).full(),
+            old(self).sound(),
             old(self).dom().contains(h@.addr),
             h == old(self).block(h@.addr),
             old(self).rc_of(h@.addr) < 0,
@@ -541,7 +545,7 @@ impl Core {
             r == (old(self).rc_of(h@.addr) == -1),
     {
         proof {
-            self.lemma_at(h@.addr);
+            self.lemma_shape(h@.addr);
         }
         let tracked mut p = self.perms.borrow_mut().tracked_remove(h@.addr);
         let r = rc_decref_shared(rc_ptr(h), Tracked(&mut p.rc));
@@ -565,8 +569,17 @@ impl Core {
         &&& self.perm(h).rc.is_init()
     }
 
+    /// RC の遷移のモデルで、`h` の参照を手放すと最後の参照になるか。
+    pub(crate) open spec fn last_by_model(&self, h: usize, up: bool) -> bool {
+        !up && self.rc_of(h) != 0 && decref_next(
+            Obj { rc: self.rc_of(h), count: self.model@.refs[h], stuck: self.model@.stuck[h] },
+        ).freed
+    }
+
     /// RC の遷移のモデルの側。`s0` は遷移の前の状態で、メモリの rc はもう書いてある。`up` なら `dup`、そうでなければ
-    /// `decref` で、`edge` は解放の連鎖が手放す辺である。`decref` で最後の参照なら、空ける途中にする。
+    /// `decref` で、`edge` は解放の連鎖が手放す辺である。`dying` は、実行が最後の参照と決めたことである。`c` は、
+    /// モデルが合っていてモデルの前提を守った道で、そのときはモデルの遷移をたどる。そうでない道 (検査モードだけ) では、
+    /// 状態だけを `dying` に合わせる。
     #[inline(always)]
     pub(crate) fn count_ghost(
         &mut self,
@@ -574,18 +587,23 @@ impl Core {
         Ghost(h): Ghost<usize>,
         Ghost(up): Ghost<bool>,
         Ghost(edge): Ghost<Option<Pos>>,
+        Ghost(c): Ghost<bool>,
+        Ghost(dying): Ghost<bool>,
     )
         requires
-            s0.full(),
+            c ==> s0.full(),
+            !c ==> s0.checked@,
             s0.checked@ ==> s0.safe_wf(),
             s0.dom().contains(h),
             s0.state(h) == BlockState::Live,
             s0.model@.building is None,
             old(self).rc_changed(s0, h),
             up ==> edge is None,
-            edge matches Some(e) ==> s0.model@.edges.dom().contains(e) && s0.model@.edges[e] == h
-                && s0.state(e.0) == BlockState::Dying,
-            s0.rc_of(h) != 0 ==> {
+            up ==> !dying,
+            c ==> dying == s0.last_by_model(h, up),
+            c ==> (edge matches Some(e) ==> s0.model@.edges.dom().contains(e) && s0.model@.edges[e]
+                == h && s0.state(e.0) == BlockState::Dying),
+            c ==> (s0.rc_of(h) != 0 ==> {
                 let s = Obj {
                     rc: s0.rc_of(h),
                     count: s0.model@.refs[h],
@@ -594,48 +612,47 @@ impl Core {
                 &&& !up && edge is None ==> s0.ext(h) >= 1
                 &&& up ==> old(self).rc_of(h) == dup_next(s).obj.rc
                 &&& !up ==> old(self).rc_of(h) == decref_next(s).obj.rc
-            },
-            s0.rc_of(h) == 0 ==> old(self).rc_of(h) == 0,
-            up ==> old(self).perm(h).prefix == s0.perm(h).prefix,
-            old(self).perm(h).prefix is Some ==> p_code(old(self).perm(h)) == if !up && s0.rc_of(h)
-                != 0 && decref_next(
-                Obj { rc: s0.rc_of(h), count: s0.model@.refs[h], stuck: s0.model@.stuck[h] },
-            ).freed {
+            }),
+            c ==> (s0.rc_of(h) == 0 ==> old(self).rc_of(h) == 0),
+            c && up ==> old(self).perm(h).prefix == s0.perm(h).prefix,
+            old(self).perm(h).prefix is Some ==> p_code(old(self).perm(h)) == if dying {
                 0u32
             } else {
                 1u32
             },
         ensures
             final(self).model@.tokens == s0.model@.tokens,
-            final(self).full(),
+            c ==> final(self).full(),
             final(self).checked@ ==> final(self).safe_wf(),
             final(self).pages == s0.pages,
             final(self).checked == s0.checked,
             final(self).perms == old(self).perms,
             final(self).dom() == s0.dom(),
             forall|w: Word| #[trigger] final(self).word_ok(w) == s0.word_ok(w),
-            ({
-                let s = Obj {
-                    rc: s0.rc_of(h),
-                    count: s0.model@.refs[h],
-                    stuck: s0.model@.stuck[h],
-                };
-                let dying = !up && s0.rc_of(h) != 0 && decref_next(s).freed;
-                &&& final(self).state(h) == if dying {
-                    BlockState::Dying
-                } else {
-                    BlockState::Live
-                }
-                &&& dying ==> final(self).edges_complete(h)
-                &&& s0.quiet() && !dying ==> final(self).quiet()
-            }),
+            final(self).state(h) == if dying {
+                BlockState::Dying
+            } else {
+                BlockState::Live
+            },
+            c && dying ==> final(self).edges_complete(h),
+            c && s0.quiet() && !dying ==> final(self).quiet(),
             forall|b: usize| b != h ==> #[trigger] final(self).state(b) == s0.state(b),
-            final(self).model@.edges == match edge {
+            c ==> final(self).model@.edges == match edge {
                 Some(e) => s0.model@.edges.remove(e),
                 None => s0.model@.edges,
             },
+            final(self).model@.state == s0.model@.state.insert(
+                h,
+                if dying {
+                    BlockState::Dying
+                } else {
+                    BlockState::Live
+                },
+            ),
             final(self).model@.building == s0.model@.building,
-            final(self).evolved(
+            final(self).model@.written == s0.model@.written,
+            final(self).model@.kept == s0.model@.kept,
+            c ==> final(self).evolved(
                 s0,
                 h,
                 if up {
@@ -646,33 +663,28 @@ impl Core {
                     0int
                 },
             ),
-            up ==> final(self).bumped(s0, h),
+            c && up ==> final(self).bumped(s0, h),
     {
-        self.count_model(Ghost(s0), Ghost(h), Ghost(up), Ghost(edge));
+        self.count_model(Ghost(s0), Ghost(h), Ghost(up), Ghost(edge), Ghost(c), Ghost(dying));
         proof {
-            if up {
-                s0.lemma_at(h);
-            }
-            self.lemma_count_extra(s0, h, up, edge);
-            if up && s0.rc_of(h) != 0 {
-                let s = Obj {
-                    rc: s0.rc_of(h),
-                    count: s0.model@.refs[h],
-                    stuck: s0.model@.stuck[h],
-                };
-                reveal(Core::refs_wf);
-                assert(s0.counted_wf(h));
-                lemma_dup(s);
+            if c {
+                if up {
+                    s0.lemma_at(h);
+                }
+                self.lemma_count_extra(s0, h, up, edge);
+                if up && s0.rc_of(h) != 0 {
+                    let s = Obj {
+                        rc: s0.rc_of(h),
+                        count: s0.model@.refs[h],
+                        stuck: s0.model@.stuck[h],
+                    };
+                    reveal(Core::refs_wf);
+                    assert(s0.counted_wf(h));
+                    lemma_dup(s);
+                }
             }
             if self.checked@ {
-                self.lemma_safe_block_full(h);
-                if s0.registered(h) {
-                    s0.lemma_registered(h);
-                }
-                reveal(Core::blocks_wf);
-                assert(self.model@.state =~= s0.model@.state.insert(h, self.state(h)));
-                assert(self.model@.written =~= s0.model@.written.insert(h, self.model@.written[h]));
-                self.lemma_safe_step(s0, h);
+                self.lemma_safe_counted(s0, h, dying);
             }
         }
     }
@@ -827,17 +839,21 @@ impl Core {
         Ghost(h): Ghost<usize>,
         Ghost(up): Ghost<bool>,
         Ghost(edge): Ghost<Option<Pos>>,
+        Ghost(c): Ghost<bool>,
+        Ghost(dying): Ghost<bool>,
     )
         requires
-            s0.full(),
+            c ==> s0.full(),
             s0.dom().contains(h),
             s0.state(h) == BlockState::Live,
             s0.model@.building is None,
             old(self).rc_changed(s0, h),
             up ==> edge is None,
-            edge matches Some(e) ==> s0.model@.edges.dom().contains(e) && s0.model@.edges[e] == h
-                && s0.state(e.0) == BlockState::Dying,
-            s0.rc_of(h) != 0 ==> {
+            up ==> !dying,
+            c ==> dying == s0.last_by_model(h, up),
+            c ==> (edge matches Some(e) ==> s0.model@.edges.dom().contains(e) && s0.model@.edges[e]
+                == h && s0.state(e.0) == BlockState::Dying),
+            c ==> (s0.rc_of(h) != 0 ==> {
                 let s = Obj {
                     rc: s0.rc_of(h),
                     count: s0.model@.refs[h],
@@ -846,118 +862,127 @@ impl Core {
                 &&& !up && edge is None ==> s0.ext(h) >= 1
                 &&& up ==> old(self).rc_of(h) == dup_next(s).obj.rc
                 &&& !up ==> old(self).rc_of(h) == decref_next(s).obj.rc
-            },
-            s0.rc_of(h) == 0 ==> old(self).rc_of(h) == 0,
-            old(self).perm(h).prefix is Some ==> p_code(old(self).perm(h)) == if !up && s0.rc_of(h)
-                != 0 && decref_next(
-                Obj { rc: s0.rc_of(h), count: s0.model@.refs[h], stuck: s0.model@.stuck[h] },
-            ).freed {
+            }),
+            c ==> (s0.rc_of(h) == 0 ==> old(self).rc_of(h) == 0),
+            old(self).perm(h).prefix is Some ==> p_code(old(self).perm(h)) == if dying {
                 0u32
             } else {
                 1u32
             },
         ensures
             final(self).model@.tokens == s0.model@.tokens,
-            final(self).full(),
             final(self).pages == s0.pages,
             final(self).perms == old(self).perms,
             final(self).dom() == s0.dom(),
+            final(self).checked == s0.checked,
             forall|w: Word| #[trigger] final(self).word_ok(w) == s0.word_ok(w),
-            ({
-                let s = Obj {
-                    rc: s0.rc_of(h),
-                    count: s0.model@.refs[h],
-                    stuck: s0.model@.stuck[h],
-                };
-                let dying = !up && s0.rc_of(h) != 0 && decref_next(s).freed;
-                &&& final(self).state(h) == if dying {
+            final(self).model@.state == s0.model@.state.insert(
+                h,
+                if dying {
                     BlockState::Dying
                 } else {
                     BlockState::Live
-                }
-                &&& dying ==> final(self).indeg(h) == 0
-                &&& s0.rc_of(h) != 0 && !dying ==> final(self).ext(h) == s0.ext(h) + if up {
-                    1int
-                } else if edge is None {
-                    -1int
-                } else {
-                    0int
-                }
-            }),
-            forall|b: usize| b != h ==> #[trigger] final(self).state(b) == s0.state(b),
-            forall|b: usize| b != h ==> #[trigger] final(self).model@.refs[b] == s0.model@.refs[b],
-            forall|b: usize|
-                b != h && (edge matches Some(e) ==> b != s0.model@.edges[e])
-                    ==> #[trigger] final(self).indeg(b) == s0.indeg(b),
-            forall|b: usize| b != h ==> #[trigger] final(self).ext(b) == s0.ext(b),
+                },
+            ),
             final(self).model@.written == s0.model@.written,
             final(self).model@.kept == s0.model@.kept,
-            final(self).model@.refs.dom() == s0.model@.refs.dom(),
-            up ==> final(self).model@.refs[h] == s0.model@.refs[h] + if s0.rc_of(h) != 0 {
+            final(self).model@.building == s0.model@.building,
+            c ==> final(self).full(),
+            c && dying ==> final(self).indeg(h) == 0,
+            c && s0.rc_of(h) != 0 && !dying ==> final(self).ext(h) == s0.ext(h) + if up {
+                1int
+            } else if edge is None {
+                -1int
+            } else {
+                0int
+            },
+            forall|b: usize| b != h ==> #[trigger] final(self).state(b) == s0.state(b),
+            c ==> forall|b: usize|
+                b != h ==> #[trigger] final(self).model@.refs[b] == s0.model@.refs[b],
+            c ==> forall|b: usize|
+                b != h && (edge matches Some(e) ==> b != s0.model@.edges[e])
+                    ==> #[trigger] final(self).indeg(b) == s0.indeg(b),
+            c ==> forall|b: usize| b != h ==> #[trigger] final(self).ext(b) == s0.ext(b),
+            c ==> final(self).model@.refs.dom() == s0.model@.refs.dom(),
+            c && up ==> final(self).model@.refs[h] == s0.model@.refs[h] + if s0.rc_of(h) != 0 {
                 1nat
             } else {
                 0nat
             },
-            up ==> final(self).model@.state == s0.model@.state,
-            final(self).model@.owner == s0.model@.owner,
-            final(self).model@.building == s0.model@.building,
-            final(self).checked == s0.checked,
-            final(self).model@.edges == match edge {
+            c && up ==> final(self).model@.state == s0.model@.state,
+            c ==> final(self).model@.owner == s0.model@.owner,
+            c ==> final(self).model@.edges == match edge {
                 Some(e) => s0.model@.edges.remove(e),
                 None => s0.model@.edges,
             },
     {
         proof {
-            let s1 = match edge {
-                Some(e) => Core {
-                    model: Ghost(Model { edges: s0.model@.edges.remove(e), ..s0.model@ }),
-                    ..s0
-                },
-                None => s0,
-            };
-            if let Some(e) = edge {
-                s1.lemma_edge_removed(s0, e);
-            }
-            let rc = s0.rc_of(h);
-            let s = Obj { rc, count: s0.model@.refs[h], stuck: s0.model@.stuck[h] };
-            reveal(Core::refs_wf);
-            reveal(Core::blocks_wf);
-            assert(s0.counted_wf(h));
-            let (count, stuck, dying) = if rc == 0 {
-                (s.count, s.stuck, false)
-            } else if up {
-                lemma_dup(s);
-                (dup_next(s).obj.count, dup_next(s).obj.stuck, false)
-            } else {
-                lemma_decref(s);
-                (decref_next(s).obj.count, decref_next(s).obj.stuck, decref_next(s).freed)
-            };
-            self.model = Ghost(
-                Model {
-                    state: s1.model@.state.insert(
-                        h,
-                        if dying {
-                            BlockState::Dying
-                        } else {
-                            BlockState::Live
-                        },
-                    ),
-                    refs: s1.model@.refs.insert(h, count),
-                    stuck: s1.model@.stuck.insert(h, stuck),
-                    ..s1.model@
-                },
-            );
-            assert(self.model@.refs.dom() =~= s1.model@.refs.dom());
-            assert(self.model@.stuck.dom() =~= s1.model@.stuck.dom());
-            if up {
-                assert(self.model@.state =~= s0.model@.state);
-            }
-            // 正の rc は、正の rc から動いたものだけである
+            if c {
+                let s1 = match edge {
+                    Some(e) => Core {
+                        model: Ghost(Model { edges: s0.model@.edges.remove(e), ..s0.model@ }),
+                        ..s0
+                    },
+                    None => s0,
+                };
+                if let Some(e) = edge {
+                    s1.lemma_edge_removed(s0, e);
+                }
+                let rc = s0.rc_of(h);
+                let s = Obj { rc, count: s0.model@.refs[h], stuck: s0.model@.stuck[h] };
+                reveal(Core::refs_wf);
+                reveal(Core::blocks_wf);
+                assert(s0.counted_wf(h));
+                let (count, stuck, dying) = if rc == 0 {
+                    (s.count, s.stuck, false)
+                } else if up {
+                    lemma_dup(s);
+                    (dup_next(s).obj.count, dup_next(s).obj.stuck, false)
+                } else {
+                    lemma_decref(s);
+                    (decref_next(s).obj.count, decref_next(s).obj.stuck, decref_next(s).freed)
+                };
+                self.model = Ghost(
+                    Model {
+                        state: s1.model@.state.insert(
+                            h,
+                            if dying {
+                                BlockState::Dying
+                            } else {
+                                BlockState::Live
+                            },
+                        ),
+                        refs: s1.model@.refs.insert(h, count),
+                        stuck: s1.model@.stuck.insert(h, stuck),
+                        ..s1.model@
+                    },
+                );
+                assert(self.model@.refs.dom() =~= s1.model@.refs.dom());
+                assert(self.model@.stuck.dom() =~= s1.model@.stuck.dom());
+                if up {
+                    assert(self.model@.state =~= s0.model@.state);
+                }
+                // 正の rc は、正の rc から動いたものだけである
 
-            if self.rc_of(h) > 0 {
-                assert(rc > 0);
+                if self.rc_of(h) > 0 {
+                    assert(rc > 0);
+                }
+                self.lemma_count_step(s1, h, dying);
+            } else {
+                self.model = Ghost(
+                    Model {
+                        state: s0.model@.state.insert(
+                            h,
+                            if dying {
+                                BlockState::Dying
+                            } else {
+                                BlockState::Live
+                            },
+                        ),
+                        ..s0.model@
+                    },
+                );
             }
-            self.lemma_count_step(s1, h, dying);
         }
     }
 }

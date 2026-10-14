@@ -5,6 +5,8 @@ use std::ptr::NonNull;
 
 use super::Heap;
 #[cfg(verus_only)]
+use super::chain_err;
+#[cfg(verus_only)]
 use super::inv::{p_owner, prefix_recounted};
 #[cfg(verus_only)]
 use super::model::BlockState;
@@ -135,7 +137,7 @@ impl<M: Mode> Heap<M> {
     #[inline]
     pub(super) fn checked_live(&self, h: *mut Header) -> (r: Result<(), HeapError>)
         requires
-            self.core.full(),
+            self.core.sound(),
             self.core.checked@ == M::CHECKED,
             self.core.dom().contains(h@.addr),
             h == self.core.block(h@.addr),
@@ -163,11 +165,12 @@ impl<M: Mode> Heap<M> {
     #[inline]
     pub(super) fn checked_owner(&self, h: *mut Header, rc: i32) -> (r: Result<(), HeapError>)
         requires
-            self.core.full(),
+            self.core.sound(),
             self.core.checked@ == M::CHECKED,
             self.core.dom().contains(h@.addr),
             h == self.core.block(h@.addr),
         ensures
+            r is Err ==> r matches Err(HeapError::WrongOwner { .. }),
             !M::CHECKED ==> r is Ok,
             M::CHECKED ==> (r is Ok <==> (rc <= 0 || p_owner(self.core.perm(h@.addr))
                 == self.worker)),
@@ -187,7 +190,7 @@ impl<M: Mode> Heap<M> {
     #[inline]
     pub(super) fn immortal_counted(&self, h: *mut Header) -> (r: bool)
         requires
-            self.core.full(),
+            self.core.sound(),
             self.core.checked@,
             self.core.dom().contains(h@.addr),
             h == self.core.block(h@.addr),
@@ -210,7 +213,6 @@ impl<M: Mode> Heap<M> {
     #[inline]
     pub(super) fn count_immortal(&mut self, h: *mut Header, up: bool)
         requires
-            old(self).core.full(),
             old(self).core.safe_wf(),
             old(self).core.checked@,
             old(self).core.dom().contains(h@.addr),
@@ -222,7 +224,7 @@ impl<M: Mode> Heap<M> {
             !up ==> p_owner(old(self).core.perm(h@.addr)) != 0,
         ensures
             final(self).tokens == old(self).tokens,
-            final(self).core.full(),
+            old(self).core.full() ==> final(self).core.full(),
             final(self).core.safe_wf(),
             final(self).core.recounted(old(self).core),
             forall|b: usize|
@@ -234,7 +236,7 @@ impl<M: Mode> Heap<M> {
         let ghost s0 = self.core;
         let n = self.core.prefix_first_get(h);
         proof {
-            s0.lemma_at(h@.addr);
+            s0.lemma_shape(h@.addr);
         }
         let m = if up {
             n + 1
@@ -252,10 +254,12 @@ impl<M: Mode> Heap<M> {
             } by {
                 if b != h@.addr {
                     assert(c.perms@[b] == s0.perms@[b]);
-                    s0.lemma_at(b);
+                    s0.lemma_shape(b);
                 }
             }
-            c.lemma_recounted(s0);
+            if s0.full() {
+                c.lemma_recounted(s0);
+            }
             c.lemma_recounted_values(s0);
             c.lemma_safe_values(s0);
         }
@@ -265,11 +269,23 @@ impl<M: Mode> Heap<M> {
     #[inline]
     pub(super) fn checked_dup(&self, h: *mut Header) -> (r: Result<bool, HeapError>)
         requires
-            self.core.full(),
+            self.core.sound(),
             self.core.checked@ == M::CHECKED,
             self.core.dom().contains(h@.addr),
             h == self.core.block(h@.addr),
         ensures
+            r == Err::<bool, HeapError>(HeapError::UseAfterFree) ==> !(self.core.state(h@.addr)
+                == BlockState::Live || self.core.state(h@.addr) == BlockState::Building),
+            r == Err::<bool, HeapError>(HeapError::LinDup) ==> self.core.lin(h@.addr),
+            r matches Err(HeapError::WrongOwner { .. }) ==> self.core.rc_of(h@.addr) > 0 && p_owner(
+                self.core.perm(h@.addr),
+            ) != self.worker,
+            r is Err ==> r == Err::<bool, HeapError>(HeapError::UseAfterFree) || r == Err::<
+                bool,
+                HeapError,
+            >(HeapError::LinDup) || r matches Err(HeapError::WrongOwner { .. }),
+            M::CHECKED && r is Ok ==> self.core.state(h@.addr) == BlockState::Live
+                || self.core.state(h@.addr) == BlockState::Building,
             !M::CHECKED ==> r == Ok::<bool, HeapError>(false),
             M::CHECKED && r is Ok ==> self.core.perm(h@.addr).prefix is Some,
             r matches Ok(c) ==> (M::CHECKED && self.core.rc_of(h@.addr) != 0 ==> c),
@@ -300,11 +316,16 @@ impl<M: Mode> Heap<M> {
     #[inline]
     pub(super) fn checked_decref(&self, h: *mut Header) -> (r: Result<bool, HeapError>)
         requires
-            self.core.full(),
+            self.core.sound(),
             self.core.checked@ == M::CHECKED,
             self.core.dom().contains(h@.addr),
             h == self.core.block(h@.addr),
         ensures
+            r is Err ==> chain_err(r) || r == Err::<bool, HeapError>(HeapError::UseAfterFree) && !(
+            self.core.state(h@.addr) == BlockState::Live || self.core.state(h@.addr)
+                == BlockState::Building),
+            M::CHECKED && r is Ok ==> self.core.state(h@.addr) == BlockState::Live
+                || self.core.state(h@.addr) == BlockState::Building,
             !M::CHECKED ==> r == Ok::<bool, HeapError>(false),
             M::CHECKED && r is Ok ==> self.core.perm(h@.addr).prefix is Some,
             r matches Ok(c) ==> (M::CHECKED && self.core.rc_of(h@.addr) != 0 ==> c),

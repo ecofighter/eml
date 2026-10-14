@@ -8,7 +8,7 @@ use super::Core;
 #[cfg(verus_only)]
 use super::inv::{
     p_code, p_count, p_extended, p_first, p_gen, p_init, p_kind, p_meta, p_scanned, p_word,
-    prefix_recounted, state_code,
+    prefix_kept, prefix_recounted, state_code,
 };
 #[cfg(verus_only)]
 use super::model::{BlockState, Model, Pos};
@@ -385,7 +385,7 @@ impl Core {
     pub(crate) proof fn lemma_safe_settle(&self, s0: Core, b: usize)
         requires
             s0.safe_wf(),
-            s0.settleable(),
+            s0.safe_settleable(),
             s0.model@.building == Some(b),
             *self == s0.settled_view(),
         ensures
@@ -501,9 +501,11 @@ impl Core {
         requires
             s0.safe_wf(),
             self.safe_step(s0, h),
-            self.building_wf(),
             s0.state(h) == BlockState::Live || s0.state(h) == BlockState::Dying || s0.state(h)
                 == BlockState::Token,
+            self.state(h) == BlockState::Building ==> self.model@.building == Some(h)
+                && s0.model@.building is None,
+            self.state(h) != BlockState::Building ==> self.model@.building == s0.model@.building,
             self.state(h) != BlockState::Freed,
             self.perm(h).slots == s0.perm(h).slots,
             self.perm(h).rc.ptr() == s0.perm(h).rc.ptr(),
@@ -536,7 +538,16 @@ impl Core {
             forall|w: Word| #[trigger] self.word_ok(w) == s0.word_ok(w),
     {
         reveal(Core::safe_blocks_wf);
+        reveal(Core::building_wf);
         assert(s0.safe_block_wf(h));
+        assert forall|b: usize| #[trigger]
+            self.dom().contains(b) && self.state(b)
+                == BlockState::Building implies self.model@.building == Some(b) by {
+            if b != h {
+                assert(s0.state(b) == self.state(b));
+            }
+        }
+        assert(self.building_wf());
         let p = self.perm(h);
         let q = s0.perm(h);
         assert forall|i: int| #[trigger] p_scanned(q, i) implies self.safe_slot(p, i) by {
@@ -644,6 +655,78 @@ impl Core {
             s0.lemma_registered(h);
         }
         self.lemma_safe_step(s0, h);
+    }
+
+    pub(crate) proof fn lemma_values_refl(&self)
+        requires
+            self.sound(),
+        ensures
+            self.values_changed(*self),
+    {
+        assert forall|b: usize| #[trigger] self.dom().contains(b) implies prefix_recounted(
+            self.perm(b),
+            self.perm(b),
+            true,
+        ) && self.perm(b).rc.is_init() by {
+            self.lemma_shape(b);
+        }
+    }
+
+    pub(crate) proof fn lemma_values_trans(&self, mid: Core, old: Core)
+        requires
+            mid.values_changed(old),
+            self.values_changed(mid),
+        ensures
+            self.values_changed(old),
+    {
+        assert forall|b: usize| #[trigger] old.dom().contains(b) implies {
+            &&& self.perm(b).rc.ptr() == old.perm(b).rc.ptr()
+            &&& self.perm(b).rc.is_init()
+            &&& self.perm(b).meta == old.perm(b).meta
+            &&& self.perm(b).slots == old.perm(b).slots
+            &&& prefix_recounted(self.perm(b), old.perm(b), true)
+        } by {
+            assert(mid.dom().contains(b));
+        }
+    }
+
+    /// `h` の rc を書き、モデルの数を動かした後 (`dup`)。値のほかは変わらない。
+    pub(crate) proof fn lemma_values_rc(&self, mid: Core, old: Core, h: usize)
+        requires
+            old.sound(),
+            old.dom().contains(h),
+            old.state(h) == BlockState::Live,
+            mid.rc_changed(old, h),
+            mid.perm(h).prefix == old.perm(h).prefix,
+            self.perms == mid.perms,
+            self.pages == old.pages,
+            self.checked == old.checked,
+            self.model@.state == old.model@.state.insert(h, BlockState::Live),
+            self.model@.written == old.model@.written,
+            self.model@.kept == old.model@.kept,
+            self.model@.building == old.model@.building,
+            self.model@.tokens == old.model@.tokens,
+        ensures
+            self.values_changed(old),
+    {
+        if old.full() {
+            reveal(Core::blocks_wf);
+        } else {
+            reveal(Core::safe_blocks_wf);
+        }
+        assert(self.model@.state =~= old.model@.state);
+        assert forall|b: usize| #[trigger] old.dom().contains(b) implies {
+            &&& self.perm(b).rc.ptr() == old.perm(b).rc.ptr()
+            &&& self.perm(b).rc.is_init()
+            &&& self.perm(b).meta == old.perm(b).meta
+            &&& self.perm(b).slots == old.perm(b).slots
+            &&& prefix_recounted(self.perm(b), old.perm(b), true)
+        } by {
+            old.lemma_shape(b);
+            if b != h {
+                assert(self.perms@[b] == old.perms@[b]);
+            }
+        }
     }
 
     /// rc と前置きの `first` の欄の値は、安全の条件に入らない。
@@ -809,6 +892,198 @@ impl Core {
                 assert(old.model@.tokens[k] == t[k]);
                 assert(!old.registered(h@.addr));
             }
+        }
+    }
+
+    /// rc を書き、最後の参照なら空ける途中にした後 (`dying`)。モデルの状態のほかは、安全の条件に入らない。
+    pub(crate) proof fn lemma_safe_counted(&self, s0: Core, h: usize, dying: bool)
+        requires
+            s0.safe_wf(),
+            s0.dom().contains(h),
+            s0.state(h) == BlockState::Live,
+            self.pages == s0.pages,
+            self.checked == s0.checked,
+            self.perms@.dom() == s0.perms@.dom(),
+            forall|b: usize| b != h ==> #[trigger] self.perms@[b] == s0.perms@[b],
+            self.perm(h).meta == s0.perm(h).meta,
+            self.perm(h).slots == s0.perm(h).slots,
+            prefix_kept(self.perm(h), s0.perm(h)),
+            self.perm(h).rc.ptr() == s0.perm(h).rc.ptr(),
+            self.perm(h).rc.is_init(),
+            self.perm(h).prefix is Some ==> p_code(self.perm(h)) == if dying {
+                0u32
+            } else {
+                1u32
+            },
+            self.model@.state == s0.model@.state.insert(
+                h,
+                if dying {
+                    BlockState::Dying
+                } else {
+                    BlockState::Live
+                },
+            ),
+            self.model@.written == s0.model@.written,
+            self.model@.kept == s0.model@.kept,
+            self.model@.building == s0.model@.building,
+            self.model@.tokens == s0.model@.tokens,
+        ensures
+            self.safe_wf(),
+            forall|w: Word| #[trigger] self.word_ok(w) == s0.word_ok(w),
+    {
+        reveal(Core::safe_blocks_wf);
+        reveal(Core::building_wf);
+        s0.lemma_safe_at(h);
+        if s0.registered(h) {
+            s0.lemma_registered(h);
+        }
+        assert forall|i: int| !#[trigger] self.model@.kept.contains((h, i)) by {
+            if s0.model@.kept.contains((h, i)) {
+                assert(s0.safe_kept_wf((h, i)));
+            }
+        }
+        assert(self.model@.state.dom() =~= s0.model@.state.dom());
+        assert(self.building_wf());
+        self.lemma_safe_restate(s0, h);
+    }
+
+    /// 構築中の物体はないか、書き終えている。走査する語はどれも「書いた」か「残した」で、`BigInt` なら値の語が書いて
+    /// ある。`settleable` のうち、安全に要る部分である。
+    pub(crate) open spec fn safe_settleable(&self) -> bool {
+        match self.model@.building {
+            None => true,
+            Some(b) => {
+                &&& forall|i: int| #[trigger]
+                    self.scanned(b, i) ==> self.model@.written[b].contains(i)
+                        || self.model@.kept.contains((b, i))
+                &&& self.kind(b) == Kind::BigInt ==> p_init(self.perm(b), 0)
+            },
+        }
+    }
+
+    /// 生きている物体と書き終えた構築中の物体の形。
+    pub(crate) proof fn lemma_safe_live_block(&self, h: usize)
+        requires
+            self.safe_wf(),
+            self.safe_settleable(),
+            self.dom().contains(h),
+            self.state(h) == BlockState::Live || self.state(h) == BlockState::Building,
+        ensures
+            p_extended(self.perm(h)) ==> p_init(self.perm(h), 0),
+            p_kind(self.perm(h)) == Kind::BigInt ==> self.cap(h) >= 1 && p_init(self.perm(h), 0),
+            p_first(self.perm(h)) + p_count(self.perm(h)) <= self.cap(h),
+    {
+        reveal(Core::building_wf);
+        self.lemma_safe_at(h);
+        if p_kind(self.perm(h)) == Kind::BigInt {
+            assert(self.perm(h).slots.contains_key(0));
+        }
+    }
+
+    /// 生きている物体と書き終えた構築中の物体の走査する語は書いてあり、即値か、このヒープのブロックを指す。
+    pub(crate) proof fn lemma_safe_live_slot(&self, h: usize, i: int)
+        requires
+            self.safe_wf(),
+            self.safe_settleable(),
+            self.dom().contains(h),
+            self.state(h) == BlockState::Live || self.state(h) == BlockState::Building,
+            self.scanned(h, i),
+        ensures
+            self.safe_slot(self.perm(h), i),
+    {
+        reveal(Core::building_wf);
+        reveal(Core::safe_blocks_wf);
+        self.lemma_safe_at(h);
+        if self.state(h) == BlockState::Building && !self.model@.written[h].contains(i) {
+            assert(self.model@.kept.contains((h, i)));
+            assert(self.safe_kept_wf((h, i)));
+        }
+    }
+
+    /// 確保器から取ったブロック `h` に `perm_wf` を満たす権限を入れた後、`h` は安全の条件を満たす。ヒープの語は増える
+    /// だけなので、`perm_wf` の語の条件は入れた後も成り立つ。
+    pub(crate) proof fn lemma_perm_safe(
+        &self,
+        s0: Core,
+        perm: BlockPerm,
+        h: usize,
+        st: BlockState,
+        owner: u32,
+    )
+        requires
+            s0.perm_wf(perm, h, st, Set::empty(), owner),
+            st == BlockState::Live || st == BlockState::Building,
+            s0.pages.carved_block(h),
+            self.pages == s0.pages,
+            self.checked == s0.checked,
+            self.perm(h) == perm,
+            self.state(h) == st,
+            self.model@.written[h] == Set::<int>::empty(),
+            forall|w: Word| s0.word_ok(w) ==> #[trigger] self.word_ok(w),
+        ensures
+            self.safe_block_wf(h),
+    {
+        if st == BlockState::Live {
+            assert forall|i: int| #[trigger] p_scanned(perm, i) implies self.safe_slot(perm, i) by {
+                assert(s0.slot_word(perm, h, i));
+            }
+        }
+    }
+
+    /// 安全の条件の下では、モデルの状態と書いた語の表は、ヒープのブロックをみな持つ。
+    pub(crate) proof fn lemma_safe_doms(&self)
+        requires
+            self.safe_wf(),
+        ensures
+            self.model@.state.dom() == self.dom(),
+            self.model@.written.dom() == self.dom(),
+    {
+        reveal(Core::safe_blocks_wf);
+    }
+
+    /// どちらかの不変条件が成り立つ。検査モードでモデルが合わなくなっても、`safe_wf` は成り立つ。
+    pub(crate) open spec fn sound(&self) -> bool {
+        self.full() || self.safe_wf()
+    }
+
+    /// `perm_wf` と `safe_perm_wf` に共通する、ブロック `h` の形。読み書きの手順はこれだけに頼る。
+    pub(crate) open spec fn block_shape(&self, h: usize) -> bool {
+        let p = self.perm(h);
+        let st = self.state(h);
+        &&& self.pages.carved_block(h)
+        &&& p.wf(self.block(h), self.cap(h), self.checked@)
+        &&& p.prefix matches Some(q) ==> q.first.is_init() && q.state.is_init()
+        &&& p.prefix is Some ==> p_code(p) == state_code(st)
+        &&& p.rc.is_init()
+        &&& p.meta.is_init()
+        &&& bits_wf(p_meta(p))
+        &&& p_kind(p) != Kind::Free
+        &&& st != BlockState::Freed ==> {
+            &&& p_extended(p) ==> self.cap(h) >= 1 && p_init(p, 0)
+            &&& p_first(p) + p_count(p) <= self.cap(h)
+        }
+        &&& st == BlockState::Live || st == BlockState::Dying ==> (p_kind(p) == Kind::BigInt
+            ==> self.cap(h) >= 1 && p_init(p, 0))
+        &&& st == BlockState::Token ==> p_kind(p) == Kind::Data
+    }
+
+    /// どちらかの不変条件の下での、ブロック `h` の位置と大きさと形。
+    pub(crate) proof fn lemma_shape(&self, h: usize)
+        requires
+            self.sound(),
+            self.dom().contains(h),
+        ensures
+            self.block_shape(h),
+            self.pages.carved_block(h),
+            self.block(h)@.addr == h,
+            h % 8 == 0,
+            h >= 8,
+            h + 8 * (1 + self.cap(h)) <= usize::MAX,
+    {
+        if self.full() {
+            self.lemma_at(h);
+        } else {
+            self.lemma_safe_at(h);
         }
     }
 

@@ -11,7 +11,7 @@ use super::check::ALIVE_STATE;
 #[cfg(verus_only)]
 use super::inv::{
     p_code, p_count, p_extended, p_first, p_init, p_meta, p_owner, p_scanned, p_word,
-    prefix_recounted,
+    prefix_recounted, state_code,
 };
 #[cfg(verus_only)]
 use super::model::{BlockState, Model, Pos};
@@ -132,6 +132,7 @@ pub(crate) trait Graph: Sized {
     fn push_children(&self, node: Self::Node, out: &mut Vec<Self::Node>)
         requires
             self.gv().nodes.contains(node),
+            self.gv().live[node],
         ensures
             final(out)@ == old(out)@ + self.gv().children[node],
     ;
@@ -280,10 +281,9 @@ pub open spec fn node_post<N>(g0: GView<N>, g: GView<N>, root: N, receiver: u32,
 pub open spec fn marked_only<N>(g0: GView<N>, g: GView<N>, receiver: u32) -> bool {
     forall|n: N| #[trigger]
         g0.nodes.contains(n) ==> {
-            &&& g.rc[n] == g0.rc[n] || (g0.rc[n] > 0 && !g0.lin[n] && g.rc[n] == mark_spec(
-                g0.rc[n],
-            ))
-            &&& g.owner[n] == g0.owner[n] || (g0.lin[n] && g.owner[n] == receiver)
+            &&& g.rc[n] == g0.rc[n] || (g0.live[n] && g0.rc[n] > 0 && !g0.lin[n] && g.rc[n]
+                == mark_spec(g0.rc[n]))
+            &&& g.owner[n] == g0.owner[n] || (g0.live[n] && g0.lin[n] && g.owner[n] == receiver)
         }
 }
 
@@ -357,7 +357,8 @@ pub open spec fn base_inv<N>(
             root,
             stack[i],
         )
-    &&& forall|n: N| #[trigger] e.contains(n) ==> reached(g0, root, n) && expands(g0, n)
+    &&& forall|n: N| #[trigger]
+        e.contains(n) ==> reached(g0, root, n) && expands(g0, n) && g0.live[n]
     &&& check_lin ==> forall|n: N| #[trigger] visited.contains(n) ==> e.contains(n) && g0.lin[n]
     &&& check_lin ==> forall|n: N| #[trigger] e.contains(n) && g0.lin[n] ==> visited.contains(n)
 }
@@ -590,6 +591,7 @@ proof fn lemma_expand<N>(
         s.len() > 0,
         !e.contains(s.last()),
         expands(g0, s.last()),
+        g0.live[s.last()],
         g0.lin[s.last()] ==> g2 == g1.with_owner(s.last(), receiver),
         !g0.lin[s.last()] ==> g2 == g1.with_rc(s.last(), mark_spec(g0.rc[s.last()])),
         v2 == if check_lin && g0.lin[s.last()] {
@@ -777,8 +779,9 @@ proof fn lemma_marked<N>(
         marked_only(g0, g, receiver),
 {
     assert forall|n: N| #[trigger] g0.nodes.contains(n) implies {
-        &&& g.rc[n] == g0.rc[n] || (g0.rc[n] > 0 && !g0.lin[n] && g.rc[n] == mark_spec(g0.rc[n]))
-        &&& g.owner[n] == g0.owner[n] || (g0.lin[n] && g.owner[n] == receiver)
+        &&& g.rc[n] == g0.rc[n] || (g0.live[n] && g0.rc[n] > 0 && !g0.lin[n] && g.rc[n]
+            == mark_spec(g0.rc[n]))
+        &&& g.owner[n] == g0.owner[n] || (g0.live[n] && g0.lin[n] && g.owner[n] == receiver)
     } by {
         assert(node_inv(g0, g, receiver, e, n));
     }
@@ -829,6 +832,7 @@ proof fn lemma_base_expand<N>(
         s.len() > 0,
         !e.contains(s.last()),
         expands(g0, s.last()),
+        g0.live[s.last()],
         g0.lin[s.last()] ==> g2 == g1.with_owner(s.last(), receiver),
         !g0.lin[s.last()] ==> g2 == g1.with_rc(s.last(), mark_spec(g0.rc[s.last()])),
         v2 == if check_lin && g0.lin[s.last()] {
@@ -1329,8 +1333,13 @@ pub(crate) open spec fn node_ok(
     a: usize,
 ) -> bool {
     let p = perms[a];
+    let st = base.state(a);
     &&& base.dom().contains(a)
-    &&& base.state(a) == BlockState::Live
+    &&& if checked {
+        st != BlockState::Building
+    } else {
+        st == BlockState::Live
+    }
     &&& perms.dom().contains(a)
     &&& base.block(a)@.addr == a
     &&& a % 8 == 0
@@ -1341,9 +1350,12 @@ pub(crate) open spec fn node_ok(
     &&& p.meta.is_init()
     &&& bits_wf(p_meta(p))
     &&& p.prefix matches Some(q) ==> q.first.is_init() && q.state.is_init()
-    &&& p_extended(p) ==> p_init(p, 0)
-    &&& p_first(p) + p_count(p) <= base.cap(a)
-    &&& forall|i: int| #[trigger] p_scanned(p, i) ==> p_init(p, i)
+    &&& p.prefix is Some ==> p_code(p) == state_code(st)
+    &&& st != BlockState::Freed ==> {
+        &&& p_extended(p) ==> p_init(p, 0)
+        &&& p_first(p) + p_count(p) <= base.cap(a)
+    }
+    &&& st != BlockState::Freed ==> forall|i: int| #[trigger] p_scanned(p, i) ==> p_init(p, i)
 }
 
 /// 節点のヘッダの集合。
@@ -1371,7 +1383,12 @@ pub(crate) open spec fn graph_of(
         owner: Map::new(ns, |n: *mut Header| owner[n@.addr]),
         children: Map::new(
             ns,
-            |n: *mut Header| kids(perms[n@.addr], p_first(perms[n@.addr]), p_count(perms[n@.addr])),
+            |n: *mut Header|
+                if base.state(n@.addr) == BlockState::Freed {
+                    Seq::empty()
+                } else {
+                    kids(perms[n@.addr], p_first(perms[n@.addr]), p_count(perms[n@.addr]))
+                },
         ),
     }
 }
@@ -1429,8 +1446,8 @@ pub(crate) open spec fn owners_ok(
     checked: bool,
 ) -> bool {
     forall|a: usize| #[trigger]
-        node_ok(base, perms, checked, a) && base.rc_of(a) > 0 && perms[a].prefix is Some
-            ==> p_owner(perms[a]) == owner[a]
+        node_ok(base, perms, checked, a) && base.state(a) == BlockState::Live && base.rc_of(a) > 0
+            && perms[a].prefix is Some ==> p_owner(perms[a]) == owner[a]
 }
 
 /// 2つの権限の写像で、たどりが変えない部分 (rc の値と、節点の前置きの所有者の値を除くすべて) が同じである。
@@ -1636,7 +1653,8 @@ impl<M: Mode> Graph for Objects<M> {
             assert(self.gv().owner =~= old_self.gv().owner);
             if owners_ok(self.base@, old_self.perms@, old_self.owner@, M::CHECKED) {
                 assert forall|a: usize| #[trigger]
-                    node_ok(self.base@, self.perms@, M::CHECKED, a) && self.base@.rc_of(a) > 0
+                    node_ok(self.base@, self.perms@, M::CHECKED, a) && self.base@.state(a)
+                        == BlockState::Live && self.base@.rc_of(a) > 0
                         && self.perms@[a].prefix is Some implies p_owner(self.perms@[a])
                     == self.owner@[a] by {
                     assert(node_ok(self.base@, old_self.perms@, M::CHECKED, a));
@@ -1692,7 +1710,8 @@ impl<M: Mode> Graph for Objects<M> {
             assert(self.gv().rc =~= old_self.gv().rc);
             if owners_ok(self.base@, old_self.perms@, old_self.owner@, M::CHECKED) {
                 assert forall|a: usize| #[trigger]
-                    node_ok(self.base@, self.perms@, M::CHECKED, a) && self.base@.rc_of(a) > 0
+                    node_ok(self.base@, self.perms@, M::CHECKED, a) && self.base@.state(a)
+                        == BlockState::Live && self.base@.rc_of(a) > 0
                         && self.perms@[a].prefix is Some implies p_owner(self.perms@[a])
                     == self.owner@[a] by {
                     assert(node_ok(self.base@, old_self.perms@, M::CHECKED, a));
@@ -1705,6 +1724,8 @@ impl<M: Mode> Graph for Objects<M> {
         proof {
             reveal(graph_of);
             lemma_node(self.base@, self.perms@, M::CHECKED, h);
+            // たどりは生きている節点だけを展開する。前置きの状態はブロックの状態を表すので、その節点は生きている物体である
+            assert(self.base@.state(h@.addr) == BlockState::Live);
         }
         let tracked p = self.perms.borrow().tracked_borrow(h@.addr);
         let bits = *ptr_ref(meta_ptr(h), Tracked(&p.meta));
@@ -1723,6 +1744,7 @@ impl<M: Mode> Graph for Objects<M> {
                 first == p_first(*p),
                 n == p_count(*p),
                 node_ok(self.base@, self.perms@, M::CHECKED, h@.addr),
+                self.base@.state(h@.addr) == BlockState::Live,
                 *p == self.perms@[h@.addr],
                 h == self.base@.block(h@.addr),
             decreases n - i,
@@ -1791,10 +1813,11 @@ pub(crate) proof fn lemma_kids(p: BlockPerm, first: int, i: int, pred: spec_fn(*
 /// 不変条件を満たすヒープの生きている物体は節点で、そのグラフは形の前提を満たす。
 pub(crate) proof fn lemma_shaped(s0: Core, a: usize)
     requires
-        s0.full(),
+        s0.full() || s0.checked@,
+        s0.checked@ ==> s0.safe_wf(),
         s0.model@.building is None,
         s0.dom().contains(a),
-        s0.state(a) == BlockState::Live,
+        !s0.checked@ ==> s0.state(a) == BlockState::Live,
     ensures
         shaped(graph_of(s0, s0.perms@, s0.model@.owner, s0.checked@), s0.block(a)),
         forall|b: usize|
@@ -1807,10 +1830,31 @@ pub(crate) proof fn lemma_shaped(s0: Core, a: usize)
             ),
 {
     reveal(graph_of);
-    reveal(Core::blocks_wf);
-    reveal(Core::edges_wf);
     reveal(Core::building_wf);
     let checked = s0.checked@;
+    // 検査モードの節点は構築中でないブロックのすべてで、そのどれもが安全の条件を満たす (`Core::safe_wf`)
+    assert forall|b: usize|
+        s0.dom().contains(b) && (if checked {
+            s0.state(b) != BlockState::Building
+        } else {
+            s0.state(b) == BlockState::Live
+        }) implies #[trigger] node_ok(s0, s0.perms@, checked, b) by {
+        s0.lemma_shape(b);
+        let p = s0.perm(b);
+        if checked {
+            s0.lemma_safe_at(b);
+            if s0.state(b) != BlockState::Freed {
+                assert forall|i: int| #[trigger] p_scanned(p, i) implies p_init(p, i) by {
+                    assert(s0.safe_slot(p, i));
+                }
+            }
+        } else {
+            s0.lemma_at(b);
+            assert forall|i: int| #[trigger] p_scanned(p, i) implies p_init(p, i) by {
+                assert(s0.slot_word(p, b, i));
+            }
+        }
+    }
     assert forall|b: usize|
         #![trigger s0.state(b)]
         s0.dom().contains(b) && s0.state(b) == BlockState::Live implies node_ok(
@@ -1818,14 +1862,7 @@ pub(crate) proof fn lemma_shaped(s0: Core, a: usize)
         s0.perms@,
         checked,
         b,
-    ) by {
-        s0.lemma_at(b);
-        assert(s0.block_wf(b));
-        let p = s0.perm(b);
-        assert forall|i: int| #[trigger] p_scanned(p, i) implies p_init(p, i) by {
-            assert(s0.slot_word(p, b, i));
-        }
-    }
+    ) by {}
     let g = graph_of(s0, s0.perms@, s0.model@.owner, checked);
     lemma_is_node(s0, s0.perms@, checked, a);
     assert forall|n: *mut Header, k: int|
@@ -1835,7 +1872,7 @@ pub(crate) proof fn lemma_shaped(s0: Core, a: usize)
         lemma_node(s0, s0.perms@, checked, n);
         let b = n@.addr;
         let p = s0.perm(b);
-        assert(s0.block_wf(b));
+        assert(s0.state(b) != BlockState::Freed);
         let pred = |x: *mut Header| g.nodes.contains(x);
         assert forall|j: int|
             #![trigger p_word(p, j)]
@@ -1843,13 +1880,26 @@ pub(crate) proof fn lemma_shaped(s0: Core, a: usize)
             ptr_of(p_word(p, j)),
         ) by {
             assert(p_scanned(p, j));
-            assert(s0.slot_word(p, b, j));
-            assert(s0.edge_wf((b, j)));
             let t = p_word(p, j).bits_spec();
-            s0.lemma_at(t);
+            if checked {
+                s0.lemma_safe_at(b);
+                assert(s0.safe_slot(p, j));
+            } else {
+                s0.lemma_at(b);
+                reveal(Core::edges_wf);
+                assert(s0.slot_word(p, b, j));
+                assert(s0.edge_wf((b, j)));
+            }
+            assert(s0.dom().contains(t));
+            s0.lemma_shape(t);
             vstd::raw_ptr::ptrs_mut_eq_sized(s0.block(t));
             vstd::raw_ptr::ptrs_mut_eq_sized(ptr_of(p_word(p, j)));
             assert(ptr_of(p_word(p, j)) == s0.block(t));
+            assert(s0.dom().contains(t) && (if checked {
+                s0.state(t) != BlockState::Building
+            } else {
+                s0.state(t) == BlockState::Live
+            }));
             lemma_is_node(s0, s0.perms@, checked, t);
         }
         lemma_kids(p, p_first(p), p_count(p), pred);
@@ -1910,9 +1960,16 @@ pub(crate) proof fn lemma_shared_wf(s0: Core, c1: Core, receiver: u32)
             assert(n@.addr == b);
             assert(g1.rc[n] == x.rc.value());
             assert(g0.rc[n] == y.rc.value());
-            assert forall|i: int| #[trigger] p_scanned(x, i) implies c1.slot_word(x, b, i) by {
-                assert(p_scanned(y, i));
-                assert(s0.slot_word(y, b, i));
+            if s0.state(b) == BlockState::Live {
+                assert forall|i: int| #[trigger] p_scanned(x, i) implies c1.slot_word(x, b, i) by {
+                    assert(p_scanned(y, i));
+                    assert(s0.slot_word(y, b, i));
+                }
+            }
+            if s0.state(b) == BlockState::Dying || s0.state(b) == BlockState::Token {
+                assert forall|i: int| #[trigger] p_scanned(x, i) implies p_init(x, i) by {
+                    assert(p_scanned(y, i));
+                }
             }
             let rc0 = y.rc.value();
             if x.rc.value() != rc0 {
@@ -1923,7 +1980,8 @@ pub(crate) proof fn lemma_shared_wf(s0: Core, c1: Core, receiver: u32)
             assert(node_ok(s0, c1.perms@, checked, b));
             if x.prefix is Some {
                 assert(p_code(x) == p_code(y));
-                if x.rc.value() > 0 {
+                if x.rc.value() > 0 && (s0.state(b) == BlockState::Live || s0.state(b)
+                    == BlockState::Building) {
                     assert(x.rc.value() == rc0);
                     assert(s0.rc_of(b) > 0);
                     assert(p_owner(x) == c1.model@.owner[b]);
@@ -1982,6 +2040,18 @@ pub(crate) proof fn lemma_graph_base(
             s.lemma_map_contains(|a: usize| b0.block(a), n);
         }
     }
+    let g1 = graph_of(b1, perms, owner, checked);
+    let g0 = graph_of(b0, perms, owner, checked);
+    assert(g1.children =~= g0.children) by {
+        assert forall|n: *mut Header| #[trigger]
+            g1.children.dom().contains(n) implies g1.children[n] == g0.children[n] by {
+            assert(b1.state(n@.addr) == b0.state(n@.addr));
+        }
+    }
+    assert(g1.live =~= g0.live);
+    assert(g1.rc =~= g0.rc);
+    assert(g1.lin =~= g0.lin);
+    assert(g1.owner =~= g0.owner);
 }
 
 impl<M: Mode> Heap<M> {
@@ -1996,9 +2066,11 @@ impl<M: Mode> Heap<M> {
     )
         requires
             old.wf(),
-            old.readable(w),
             w.is_ptr_spec(),
-            !M::CHECKED ==> old.share_ok(w),
+            old.word_in(w),
+            !M::CHECKED ==> old.consistent() && old.settleable() && old.readable(w) && old.share_ok(
+                w,
+            ),
             mid.core == old.core.settled_view(),
             mid.wf(),
             mid.core.model@.building is None,
@@ -2013,12 +2085,11 @@ impl<M: Mode> Heap<M> {
             old.share_graph() == o0.gv(),
             old.share_root(w) == h,
             mid.core.dom().contains(h@.addr),
-            mid.core.state(h@.addr) == BlockState::Live,
+            old.consistent() && old.readable(w) ==> mid.core.state(h@.addr) == BlockState::Live,
     {
         reveal(Core::building_wf);
         let s0 = mid.core;
         assert(s0.dom().contains(h@.addr));
-        assert(s0.state(h@.addr) == BlockState::Live);
         lemma_shaped(s0, h@.addr);
     }
 
@@ -2033,10 +2104,14 @@ impl<M: Mode> Heap<M> {
         w: Word,
         receiver: u32,
         ok: bool,
+        c: bool,
     )
         requires
             self.tokens@ == self.core.model@.tokens,
             old.wf(),
+            !M::CHECKED ==> c,
+            c ==> old.consistent() && mid.consistent() && mid.core.state(h@.addr)
+                == BlockState::Live,
             mid.core == old.core.settled_view(),
             mid.wf(),
             mid.core.model@.building is None,
@@ -2046,7 +2121,6 @@ impl<M: Mode> Heap<M> {
             h == mid.core.block(w.bits_spec()),
             h@.addr == w.bits_spec(),
             mid.core.dom().contains(h@.addr),
-            mid.core.state(h@.addr) == BlockState::Live,
             o0.base@ == mid.core,
             o0.perms@ == mid.core.perms@,
             o0.owner@ == mid.core.model@.owner,
@@ -2079,34 +2153,38 @@ impl<M: Mode> Heap<M> {
                 mid.core.model@.stuck[b] || pinned(self.core.rc_of(b))),
         ensures
             self.wf(),
+            c ==> self.consistent(),
             self.shared(old, w, receiver),
             ok ==> self.shared_all(old, w, receiver),
     {
         reveal(graph_of);
         let s0 = mid.core;
         let checked = M::CHECKED;
-        reveal(Core::blocks_wf);
         lemma_shaped(s0, h@.addr);
         lemma_same_frame_graph(s0, o1.perms@, s0.perms@, o1.owner@, s0.model@.owner, checked);
-        assert(owners_ok(s0, s0.perms@, s0.model@.owner, checked)) by {
-            assert forall|a: usize| #[trigger]
-                node_ok(s0, s0.perms@, checked, a) && s0.rc_of(a) > 0
-                    && s0.perms@[a].prefix is Some implies p_owner(s0.perms@[a])
-                == s0.model@.owner[a] by {
-                assert(s0.block_wf(a));
-            }
-        }
-        assert(self.core.model@.owner.dom() =~= s0.model@.owner.dom()) by {
-            assert forall|a: usize| #[trigger]
-                self.core.model@.owner.dom().contains(a) implies s0.model@.owner.dom().contains(
-                a,
-            ) by {
-                if !o0.owner@.dom().contains(a) {
-                    assert(node_ok(s0, o0.perms@, checked, a));
+        if c {
+            reveal(Core::blocks_wf);
+            assert(owners_ok(s0, s0.perms@, s0.model@.owner, checked)) by {
+                assert forall|a: usize| #[trigger]
+                    node_ok(s0, s0.perms@, checked, a) && s0.state(a) == BlockState::Live
+                        && s0.rc_of(a) > 0 && s0.perms@[a].prefix is Some implies p_owner(
+                    s0.perms@[a],
+                ) == s0.model@.owner[a] by {
+                    assert(s0.block_wf(a));
                 }
             }
+            assert(self.core.model@.owner.dom() =~= s0.model@.owner.dom()) by {
+                assert forall|a: usize| #[trigger]
+                    self.core.model@.owner.dom().contains(a) implies s0.model@.owner.dom().contains(
+                    a,
+                ) by {
+                    if !o0.owner@.dom().contains(a) {
+                        assert(node_ok(s0, o0.perms@, checked, a));
+                    }
+                }
+            }
+            lemma_shared_wf(s0, self.core, receiver);
         }
-        lemma_shared_wf(s0, self.core, receiver);
         if checked {
             reveal(Core::safe_blocks_wf);
             assert forall|b: usize| #[trigger] s0.dom().contains(b) implies {
@@ -2124,15 +2202,29 @@ impl<M: Mode> Heap<M> {
         lemma_graph_base(self.core, s0, self.core.perms@, self.core.model@.owner, checked);
         // ダミーの物体は不死なので、印も持ち主も変わらない
         let d = self.dummy.bits_spec();
-        assert(s0.state(d) == BlockState::Live);
-        lemma_is_node(s0, s0.perms@, checked, d);
-        assert(s0.block(d)@.addr == d);
-        assert(o1.gv().rc[s0.block(d)] == o0.gv().rc[s0.block(d)]);
-        assert(self.core.rc_of(d) == 0);
-        assert forall|b: usize| #[trigger] self.core.dom().contains(b) implies self.core.state(b)
-            != BlockState::Dying by {
-            assert(s0.dom().contains(b));
+        assert(self.core.word_ok(self.dummy) == s0.word_ok(self.dummy));
+        if c {
+            assert(s0.state(d) == BlockState::Live);
+            lemma_is_node(s0, s0.perms@, checked, d);
+            assert(s0.block(d)@.addr == d);
+            assert(o1.gv().rc[s0.block(d)] == o0.gv().rc[s0.block(d)]);
+            assert(self.core.rc_of(d) == 0);
+            assert forall|b: usize| #[trigger] self.core.dom().contains(b) implies self.core.state(
+                b,
+            ) != BlockState::Dying by {
+                assert(s0.dom().contains(b));
+            }
         }
+    }
+
+    /// `share` の前提がみな成り立ち、モデルが合っている。検査モードでは、共有の側の `lin` の物体に届かないことも
+    /// 前提である (`LinShared`)。
+    pub closed spec fn share_all_ok(&self, w: Word) -> bool {
+        &&& self.consistent()
+        &&& self.settleable()
+        &&& self.readable(w)
+        &&& w.is_ptr_spec() ==> self.share_ok(w)
+        &&& M::CHECKED && w.is_ptr_spec() ==> !self.reaches_shared_lin_from(w)
     }
 
     /// `share` のたどりが見る物体のグラフ。
@@ -2198,12 +2290,13 @@ impl<M: Mode> Heap<M> {
     pub unsafe fn share(&mut self, w: Word, receiver: u32) -> (r: Result<(), HeapError>)
         requires
             old(self).wf(),
-            old(self).settleable(),
-            old(self).readable(w),
-            !M::CHECKED ==> (w.is_ptr_spec() ==> old(self).share_ok(w)),
+            old(self).safe_settleable(),
+            old(self).word_in(w),
+            !M::CHECKED ==> old(self).share_all_ok(w),
         ensures
             !M::CHECKED ==> r is Ok,
             final(self).wf(),
+            old(self).share_all_ok(w) ==> r is Ok && final(self).consistent(),
             w.is_ptr_spec() ==> final(self).shared(*old(self), w, receiver),
             w.is_ptr_spec() && r is Ok ==> final(self).shared_all(*old(self), w, receiver),
             w.is_ptr_spec() && r == Err::<(), HeapError>(HeapError::LinShared) ==> old(
@@ -2216,6 +2309,7 @@ impl<M: Mode> Heap<M> {
                 HeapError::LinReachedTwice,
             ),
     {
+        let ghost pre_ok = self.share_all_ok(w);
         if !w.is_ptr() {
             return Ok(());
         }
@@ -2253,7 +2347,7 @@ impl<M: Mode> Heap<M> {
                     ..s0.model@
                 },
             );
-            self.lemma_share_end(*old(self), mid, o0, o1, h, w, receiver, result is Ok);
+            self.lemma_share_end(*old(self), mid, o0, o1, h, w, receiver, result is Ok, pre_ok);
         }
         mem::swap(&mut stack, &mut self.share_stack);
         mem::swap(&mut visited, &mut self.visited_lin);

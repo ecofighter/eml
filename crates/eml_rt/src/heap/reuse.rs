@@ -6,6 +6,8 @@ use vstd::prelude::*;
 
 #[cfg(verus_only)]
 use super::Core;
+#[cfg(verus_only)]
+use super::chain_err;
 use super::check::reuse_in_place_check;
 #[cfg(verus_only)]
 use super::handover::{handover, kept_set};
@@ -99,6 +101,7 @@ impl<M: Mode> Heap<M> {
                 &&& self.core.dom().contains(b)
                 &&& self.core.state(b) == BlockState::Token
                 &&& !M::CHECKED ==> t.word_spec().is_ptr_spec() && self.core.word_ok(t.word_spec())
+                &&& M::CHECKED ==> t.word_spec().is_imm_spec()
             },
         }
     }
@@ -151,6 +154,7 @@ impl<M: Mode> Heap<M> {
         let v = old.core.settled_view();
         let h = w.bits_spec();
         &&& self.wf()
+        &&& self.consistent()
         &&& self.dummy == old.dummy
         &&& self.worker == old.worker
         &&& w.is_ptr_spec()
@@ -183,6 +187,16 @@ impl<M: Mode> Heap<M> {
             }
     }
 
+    /// `into_token` の前提がみな成り立ち、モデルが合っている。
+    pub closed spec fn into_token_ok(&self, w: Word) -> bool {
+        &&& self.consistent()
+        &&& self.settleable()
+        &&& self.holds(w)
+        &&& self.kind_of(w) == Kind::Data
+        &&& self.rc_value(w) == 1
+        &&& self.owned(w)
+    }
+
     /// 一意な物体の箱を、フィールドに触れずに token にする。
     ///
     /// # Safety
@@ -191,18 +205,29 @@ impl<M: Mode> Heap<M> {
     pub unsafe fn into_token(&mut self, w: Word) -> (r: Result<Token, HeapError>)
         requires
             old(self).wf(),
-            old(self).settleable(),
+            old(self).safe_settleable(),
             w.is_ptr_spec(),
-            old(self).holds(w),
-            !M::CHECKED ==> old(self).kind_of(w) == Kind::Data && old(self).rc_value(w) == 1 && old(
-                self,
-            ).owned(w),
+            old(self).word_in(w),
+            !M::CHECKED ==> old(self).into_token_ok(w),
         ensures
+            final(self).wf(),
+            r is Err ==> *final(self) == old(self).settled_heap(),
             !M::CHECKED ==> r is Ok,
-            r matches Ok(t) ==> final(self).wf() && final(self).tokened(*old(self), w, t),
+            r matches Ok(t) ==> final(self).token_box(t) == Some(w.bits_spec())
+                && final(self).is_token_box(w),
+            old(self).into_token_ok(w) ==> r is Ok,
+            r matches Ok(t) ==> (old(self).into_token_ok(w) ==> final(self).consistent()
+                && final(self).tokened(*old(self), w, t)),
     {
+        let ghost c = self.into_token_ok(w);
         self.settle();
         let h = self.header_of(w);
+        proof {
+            if c {
+                self.core.lemma_readable(w);
+                self.lemma_checks_pass(w);
+            }
+        }
         if M::CHECKED {
             self.checked_live(h)?;
             let rc = self.core.rc_get(h);
@@ -220,12 +245,20 @@ impl<M: Mode> Heap<M> {
         let ghost n = p_count(s0.perm(a));
         let ghost ps = s0.model@.edges.dom().filter(|e: Pos| e.0 == a);
         proof {
-            s0.lemma_last_ref(a);
-            assert(s0.model@.edges.restrict(ps) == s0.out_edges(a));
+            s0.lemma_shape(a);
+            if M::CHECKED {
+                reveal(Core::building_wf);
+            }
+            if c {
+                s0.lemma_last_ref(a);
+                assert(s0.model@.edges.restrict(ps) == s0.out_edges(a));
+            }
         }
-        self.core.begin_free(h, Ghost(ps), M::CHECKED);
+        self.core.begin_free(h, Ghost(ps), M::CHECKED, Ghost(c));
         proof {
-            self.core.lemma_begin_evolved(s0, a, ps);
+            if c {
+                self.core.lemma_begin_evolved(s0, a, ps);
+            }
             vstd::set_lib::lemma_int_range(first, first + n);
         }
         let ghost s1 = self.core;
@@ -233,11 +266,17 @@ impl<M: Mode> Heap<M> {
             h,
             Ghost(vstd::set_lib::set_int_range(first, first + n)),
             M::CHECKED,
+            Ghost(c),
         );
         proof {
-            self.core.lemma_after_token(s0, s1, a);
-            self.core.lemma_by_trans(s1, s0, handover(s0.out_edges(a), a), 0);
-            self.lemma_dummy_by(*old(self), handover(s0.out_edges(a), a));
+            if c {
+                self.core.lemma_after_token(s0, s1, a);
+                self.core.lemma_by_trans(s1, s0, handover(s0.out_edges(a), a), 0);
+                self.lemma_dummy_by(*old(self), handover(s0.out_edges(a), a));
+            }
+            if M::CHECKED {
+                self.lemma_safe_frame(*old(self));
+            }
         }
         if M::CHECKED {
             return Ok(self.checked_push_token(h));
@@ -255,13 +294,14 @@ impl<M: Mode> Heap<M> {
             !M::CHECKED ==> *final(self) == *old(self),
             final(self).taken(*old(self)),
             !M::CHECKED ==> r is Ok,
+            old(self).token_ok(token) ==> r is Ok,
             token.word_spec().bits_spec() == 0 ==> r == Ok::<Option<*mut Header>, HeapError>(None),
-            !M::CHECKED && token.word_spec().bits_spec() != 0 ==> r matches Ok(Some(_)),
+            token.word_spec().bits_spec() != 0 ==> (r is Ok ==> r matches Ok(Some(_))),
             r matches Ok(Some(h)) ==> {
                 &&& final(self).core.dom().contains(h@.addr)
                 &&& h == final(self).core.block(h@.addr)
                 &&& final(self).core.state(h@.addr) == BlockState::Token
-                &&& !M::CHECKED ==> old(self).token_box(token) == Some(h@.addr)
+                &&& old(self).token_box(token) == Some(h@.addr)
                 &&& M::CHECKED ==> !final(self).core.registered(h@.addr)
             },
     {
@@ -291,6 +331,7 @@ impl<M: Mode> Heap<M> {
         &&& self.dummy == old.dummy
         &&& self.worker == old.worker
         &&& self.wf()
+        &&& old.consistent() ==> self.consistent()
     }
 
     proof fn lemma_taken_refl(&self)
@@ -312,10 +353,12 @@ impl<M: Mode> Heap<M> {
         ensures
             r is Err ==> *final(self) == *old(self),
             final(self).taken(*old(self)),
+            old(self).token_ok(token) ==> r is Ok,
             r matches Ok(o) ==> o matches Some(h) && {
                 &&& final(self).core.dom().contains(h@.addr)
                 &&& h == final(self).core.block(h@.addr)
                 &&& final(self).core.state(h@.addr) == BlockState::Token
+                &&& old(self).token_box(token) == Some(h@.addr)
                 &&& !final(self).core.registered(h@.addr)
             },
     {
@@ -331,6 +374,7 @@ impl<M: Mode> Heap<M> {
             return Err(HeapError::StaleToken);
         }
         let index = v as usize;
+        assert(index as int == v as int);
         if index >= self.tokens.len() {
             return Err(HeapError::StaleToken);
         }
@@ -343,6 +387,7 @@ impl<M: Mode> Heap<M> {
             reveal(Core::safe_tokens_wf);
             assert(s0.model@.tokens[index as int] == self.tokens@[index as int]);
             assert(s0.token_entry((h, generation)));
+            s0.lemma_code_state(h@.addr);
         }
         let bits = self.core.prefix_state_get(h);
         if bits & 3 != 2 || bits >> 2u32 != generation {
@@ -356,7 +401,6 @@ impl<M: Mode> Heap<M> {
             self.core.lemma_token_taken(s0, index as int);
             self.core.lemma_tokens_frame(s0);
             assert(self.tokens@ =~= self.core.model@.tokens);
-            assert(self.core.dom().contains(self.dummy.bits_spec()));
         }
         Ok(Some(h))
     }
@@ -372,6 +416,7 @@ impl<M: Mode> Heap<M> {
             !old(self).core.registered(h@.addr),
         ensures
             final(self).wf(),
+            old(self).consistent() ==> final(self).consistent(),
             final(self).core.pages == old(self).core.pages,
             final(self).core.perms == old(self).core.perms,
             final(self).core.checked == old(self).core.checked,
@@ -396,12 +441,20 @@ impl<M: Mode> Heap<M> {
             self.core.lemma_token_pushed(s0, h, generation);
             self.core.lemma_tokens_frame(s0);
             assert(self.tokens@ =~= self.core.model@.tokens);
-            assert(self.core.dom().contains(self.dummy.bits_spec()));
         }
         t
     }
 
+    /// `con_at` の前提がみな成り立ち、モデルが合っている。
+    pub closed spec fn con_at_ok(&self, token: Token, payload_words: usize) -> bool {
+        &&& self.consistent()
+        &&& self.settleable()
+        &&& self.token_ok(token)
+        &&& self.token_fits(token, payload_words)
+    }
+
     /// token が空でなければ、その箱に `meta` を書いて返す。空なら確保する。箱を使ったかも返す。フィールドは呼ぶ側が書く。
+    /// 検査モードの級の検査 (`WrongClass`) は、モデルの外の確保器の級を見るので、モデルが合っていても返りうる。
     ///
     /// # Safety
     /// `token` はこのヒープの token で、まだ使っていない。空でなければ、その箱は `payload_words` の物体のこのモードでの
@@ -415,23 +468,29 @@ impl<M: Mode> Heap<M> {
     >)
         requires
             old(self).wf(),
-            old(self).settleable(),
-            !M::CHECKED ==> old(self).token_ok(token),
+            old(self).safe_settleable(),
             meta.kind_spec() != Kind::Foreign && meta.kind_spec() != Kind::Free,
             meta.scan_spec() != 255,
             meta.scan_spec() <= payload_words,
-            !M::CHECKED ==> old(self).token_fits(token, payload_words),
+            !M::CHECKED ==> old(self).con_at_ok(token, payload_words),
         ensures
+            final(self).wf(),
             !M::CHECKED ==> r is Ok,
-            r matches Ok((w, reused)) ==> {
+            r matches Ok((w, _)) ==> w.is_ptr_spec() && final(self).word_in(w),
+            old(self).con_at_ok(token, payload_words) ==> r is Ok || r == Err::<
+                (Word, bool),
+                HeapError,
+            >(HeapError::WrongClass),
+            old(self).con_at_ok(token, payload_words) ==> (r matches Ok((w, reused)) ==> {
                 &&& reused ==> final(self).rebuilt(*old(self), w, Some(meta))
                 &&& !reused ==> final(self).built(*old(self), w, meta, 1, payload_words)
-            },
+            }),
     {
+        let ghost c = self.con_at_ok(token, payload_words);
         let ghost h0 = *self;
         self.settle();
         proof {
-            if !M::CHECKED {
+            if c {
                 self.lemma_token_settled(h0, token);
             }
         }
@@ -443,20 +502,40 @@ impl<M: Mode> Heap<M> {
             },
             Some(h) => h,
         };
+        let ghost s1 = *self;
         if M::CHECKED {
             proof {
-                self.core.lemma_at(h@.addr);
+                self.core.lemma_shape(h@.addr);
             }
             if !self.core.pages.fits(h, object_words(payload_words)) {
                 return Err(HeapError::WrongClass);
             }
         }
-        self.core.token_build(h, Some(meta), self.worker, M::CHECKED);
+        proof {
+            self.core.lemma_shape(h@.addr);
+            if c {
+                self.core.lemma_tokens_frame(s0.core);
+            }
+        }
+        self.core.token_build(h, Some(meta), self.worker, M::CHECKED, Ghost(c));
         let w = Word::from_ptr(h);
         proof {
-            self.lemma_rebuilt(s0, h, w, Some(meta));
+            crate::word::lemma_aligned_is_ptr(h@.addr);
+            if c {
+                self.lemma_rebuilt(s0, h, w, Some(meta));
+            }
+            if M::CHECKED {
+                self.lemma_safe_frame(s1);
+            }
         }
         Ok((w, true))
+    }
+
+    /// `reuse_in_place` の前提がみな成り立ち、モデルが合っている。
+    pub closed spec fn reuse_ok(&self, token: Token) -> bool {
+        &&& self.consistent()
+        &&& self.settleable()
+        &&& self.token_ok(token)
     }
 
     /// 同じコンストラクタの reuse。ヘッダに何も書かずに箱を返す。`meta` は検査モードが照らすためだけに渡す。
@@ -472,19 +551,26 @@ impl<M: Mode> Heap<M> {
     >)
         requires
             old(self).wf(),
-            old(self).settleable(),
-            !M::CHECKED ==> old(self).token_ok(token),
+            old(self).safe_settleable(),
+            !M::CHECKED ==> old(self).reuse_ok(token),
         ensures
+            final(self).wf(),
             token.word_spec().bits_spec() == 0 ==> r == Err::<Word, HeapError>(
                 HeapError::StaleToken,
             ),
             !M::CHECKED && token.word_spec().bits_spec() != 0 ==> r is Ok,
-            r matches Ok(w) ==> final(self).rebuilt(*old(self), w, None),
+            r matches Ok(w) ==> w.is_ptr_spec() && final(self).word_in(w),
+            old(self).reuse_ok(token) ==> (r matches Ok(w) ==> final(self).rebuilt(
+                *old(self),
+                w,
+                None,
+            )),
     {
+        let ghost c = self.reuse_ok(token);
         let ghost h0 = *self;
         self.settle();
         proof {
-            if !M::CHECKED {
+            if c {
                 self.lemma_token_settled(h0, token);
             }
         }
@@ -493,13 +579,26 @@ impl<M: Mode> Heap<M> {
             None => return Err(HeapError::StaleToken),
             Some(h) => h,
         };
+        let ghost s1 = *self;
+        proof {
+            self.core.lemma_shape(h@.addr);
+            if c {
+                self.core.lemma_tokens_frame(s0.core);
+            }
+        }
         if M::CHECKED {
             reuse_in_place_check(self.core.meta_get(h), meta)?;
         }
-        self.core.token_build(h, None, self.worker, M::CHECKED);
+        self.core.token_build(h, None, self.worker, M::CHECKED, Ghost(c));
         let w = Word::from_ptr(h);
         proof {
-            self.lemma_rebuilt(s0, h, w, None);
+            crate::word::lemma_aligned_is_ptr(h@.addr);
+            if c {
+                self.lemma_rebuilt(s0, h, w, None);
+            }
+            if M::CHECKED {
+                self.lemma_safe_frame(s1);
+            }
         }
         Ok(w)
     }
@@ -509,6 +608,7 @@ impl<M: Mode> Heap<M> {
         requires
             self.tokens@ == self.core.model@.tokens,
             s0.wf(),
+            s0.consistent(),
             s0.core.model@.building is None,
             s0.core.dom().contains(h@.addr),
             h == s0.core.block(h@.addr),
@@ -558,6 +658,13 @@ impl<M: Mode> Heap<M> {
         assert(self.core.perms@[s0.dummy.bits_spec()] == s0.core.perms@[s0.dummy.bits_spec()]);
     }
 
+    /// `drop_token` の前提がみな成り立ち、モデルが合っている。
+    pub closed spec fn drop_token_ok(&self, token: Token) -> bool {
+        &&& self.consistent()
+        &&& self.settleable()
+        &&& self.token_ok(token)
+    }
+
     /// 使わなかった token の箱を空ける。
     ///
     /// # Safety
@@ -565,36 +672,52 @@ impl<M: Mode> Heap<M> {
     pub unsafe fn drop_token(&mut self, token: Token) -> (r: Result<(), HeapError>)
         requires
             old(self).wf(),
-            old(self).settleable(),
-            !M::CHECKED ==> old(self).token_ok(token),
+            old(self).safe_settleable(),
+            !M::CHECKED ==> old(self).drop_token_ok(token),
         ensures
+            final(self).wf(),
             !M::CHECKED ==> r is Ok,
-            r is Ok ==> final(self).wf() && final(self).kept_live(*old(self)),
+            old(self).drop_token_ok(token) ==> r is Ok && final(self).consistent()
+                && final(self).kept_live(*old(self)),
     {
+        let ghost c = self.drop_token_ok(token);
         let ghost h0 = *self;
         self.settle();
         proof {
-            if !M::CHECKED {
+            if c {
                 self.lemma_token_settled(h0, token);
             }
         }
         let ghost mid = *self;
         if let Some(h) = self.take_token(token)? {
             let ghost s1 = self.core;
-            self.core.token_free(h, M::CHECKED);
-            let ghost s2 = self.core;
-            self.free_box(h);
+            let ghost t1 = *self;
             proof {
-                self.core.lemma_token_dropped(s1, s2, h@.addr);
+                s1.lemma_shape(h@.addr);
+            }
+            self.core.token_free(h, M::CHECKED, Ghost(c));
+            let ghost s2 = self.core;
+            self.free_box(h, Ghost(c));
+            proof {
+                if c {
+                    self.core.lemma_token_dropped(s1, s2, h@.addr);
+                }
+                if M::CHECKED {
+                    self.lemma_safe_frame(t1);
+                }
             }
         } else {
             proof {
-                self.core.lemma_evolved_self(0);
+                if c {
+                    self.core.lemma_evolved_self(0);
+                }
             }
         }
         proof {
-            self.core.lemma_frame_evolved(mid.core, old(self).core, 0, 0);
-            self.lemma_dummy_evolved(*old(self), 0, 0);
+            if c {
+                self.core.lemma_frame_evolved(mid.core, old(self).core, 0, 0);
+                self.lemma_dummy_evolved(*old(self), 0, 0);
+            }
         }
         Ok(())
     }
@@ -610,40 +733,45 @@ impl<M: Mode> Heap<M> {
     >)
         requires
             old(self).wf(),
-            old(self).settleable(),
+            old(self).safe_settleable(),
             w.is_ptr_spec(),
-            old(self).holds(w),
-            !M::CHECKED ==> old(self).layout_of(w, tag, keep@.len() as int),
-            !M::CHECKED ==> (old(self).rc_value(w) < 0 ==> !old(self).lin_of(w)),
-            !M::CHECKED ==> old(self).owned(w),
-            !M::CHECKED ==> forall|i: int|
-                #![trigger keep@[i]]
-                0 <= i < keep@.len() && keep@[i] ==> {
-                    let c = old(self).scanned_word(w, i);
-                    &&& c.is_ptr_spec() ==> !old(self).lin_of(c)
-                    &&& old(self).owned(c)
-                },
+            old(self).word_in(w),
+            !M::CHECKED ==> old(self).release_ok(w, tag, keep@),
         ensures
+            final(self).wf(),
             !M::CHECKED ==> r is Ok,
-            r matches Ok(t) ==> {
-                &&& final(self).wf()
-                &&& final(self).handed_over(*old(self), w, keep@)
-                &&& t.word_spec().bits_spec() != 0 ==> final(self).token_box(t) == Some(
-                    w.bits_spec(),
-                ) && final(self).is_token_box(w)
-            },
+            r matches Ok(t) ==> (t.word_spec().bits_spec() != 0 ==> final(self).token_box(t)
+                == Some(w.bits_spec()) && final(self).is_token_box(w)),
+            old(self).release_ok(w, tag, keep@) ==> r is Ok || chain_err(r),
+            old(self).release_ok(w, tag, keep@) && r is Ok ==> final(self).consistent()
+                && final(self).handed_over(*old(self), w, keep@),
     {
+        let ghost c = self.release_ok(w, tag, keep@);
         let unique = unsafe { self.is_unique(w) };
         if unique? {
             self.settle();
             let h = self.header_of(w);
+            proof {
+                if c {
+                    self.core.lemma_readable(w);
+                    self.lemma_checks_pass(w);
+                    if M::CHECKED {
+                        self.core.lemma_code_state(h@.addr);
+                    }
+                }
+            }
             self.release_check(h, tag, keep.len())?;
             proof {
-                self.core.lemma_last_ref(h@.addr);
-                assert(self.core.perm(h@.addr) == old(self).core.perm(h@.addr));
-                assert(self.core.count(h@.addr) == old(self).core.count(h@.addr));
+                if M::CHECKED {
+                    reveal(Core::building_wf);
+                }
+                if c {
+                    self.core.lemma_last_ref(h@.addr);
+                    assert(self.core.perm(h@.addr) == old(self).core.perm(h@.addr));
+                    assert(self.core.count(h@.addr) == old(self).core.count(h@.addr));
+                }
             }
-            self.release_children(h, keep, true)?;
+            self.release_children(h, keep, true, Ghost(c))?;
             if M::CHECKED {
                 return Ok(self.checked_push_token(h));
             }

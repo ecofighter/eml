@@ -210,13 +210,16 @@ impl Core {
     /// 確保器からブロックを取った後も、ヒープの不変条件は保たれ、取ったブロックはまだヒープの外にある。
     pub(crate) proof fn lemma_alloc(&self, s0: Core, words: usize, h: *mut Header, perm: BlockPerm)
         requires
-            s0.full(),
+            s0.dom() == s0.pages.in_use(),
+            s0.pages.wf(),
+            s0.pages.prefixed() == s0.checked@,
             self.perms == s0.perms,
             self.model == s0.model,
             self.checked == s0.checked,
             self.pages.alloc_post(s0.pages, words, h, perm),
         ensures
-            self.pending(h@.addr),
+            s0.full() ==> self.pending(h@.addr),
+            s0.safe_wf() ==> self.safe_pending(h@.addr),
             h == self.block(h@.addr),
             self.pages.carved_block(h@.addr),
             perm.wf(h, self.cap(h@.addr), self.checked@),
@@ -230,7 +233,17 @@ impl Core {
             && self.cap(b) == s0.cap(b) && self.pages.carved_block(b) by {
             assert(s0.pages.in_use().contains(b));
         }
-        self.lemma_pages_frame(s0);
+        assert forall|w: Word| #[trigger] self.word_ok(w) == s0.word_ok(w) by {
+            if w.is_ptr_spec() && s0.dom().contains(w.bits_spec()) {
+                assert(self.block(w.bits_spec()) == s0.block(w.bits_spec()));
+            }
+        }
+        if s0.full() {
+            self.lemma_pages_frame(s0);
+        }
+        if s0.safe_wf() {
+            self.lemma_safe_pages_frame(s0);
+        }
         assert(self.dom().insert(h@.addr) =~= self.pages.in_use());
     }
 
@@ -238,12 +251,13 @@ impl Core {
     #[inline(always)]
     pub(crate) fn settle(&mut self)
         requires
-            old(self).full(),
-            old(self).checked@ ==> old(self).safe_wf(),
-            old(self).settleable(),
+            (old(self).full() && old(self).settleable()) || (old(self).checked@ && old(
+                self,
+            ).safe_wf() && old(self).safe_settleable()),
         ensures
-            final(self).full(),
-            final(self).checked@ ==> final(self).safe_wf(),
+            old(self).full() && old(self).settleable() ==> final(self).full(),
+            old(self).checked@ && old(self).safe_wf() && old(self).safe_settleable()
+                ==> final(self).safe_wf(),
             final(self).model@.building is None,
             final(self).frame(*old(self)),
             final(self).model == old(self).settled_view().model,
@@ -256,8 +270,11 @@ impl Core {
             let s0 = *self;
             if let Some(b) = self.model@.building {
                 self.model = Ghost(s0.settled_view().model@);
-                self.lemma_settle(s0, b);
-                if self.checked@ {
+                assert(*self == s0.settled_view());
+                if s0.full() && s0.settleable() {
+                    self.lemma_settle(s0, b);
+                }
+                if s0.checked@ && s0.safe_wf() && s0.safe_settleable() {
                     self.lemma_safe_settle(s0, b);
                 }
             }
@@ -416,7 +433,7 @@ impl Core {
         Ghost(owner): Ghost<u32>,
     )
         requires
-            old(self).pending(h@.addr),
+            old(self).pending(h@.addr) || old(self).checked@,
             old(self).checked@ ==> old(self).safe_pending(h@.addr),
             old(self).model@.building is None,
             h == old(self).block(h@.addr),
@@ -426,8 +443,9 @@ impl Core {
             perm.rc.value() == 0 || perm.rc.value() == 1,
         ensures
             final(self).model@.tokens == old(self).model@.tokens,
-            final(self).full(),
+            old(self).pending(h@.addr) ==> final(self).full(),
             final(self).checked@ ==> final(self).safe_wf(),
+            final(self).checked == old(self).checked,
             final(self).dom() == old(self).dom().insert(h@.addr),
             final(self).perm(h@.addr) == perm,
             final(self).state(h@.addr) == st,
@@ -442,9 +460,9 @@ impl Core {
             } else {
                 None
             },
-            final(self).frame(*old(self)),
+            old(self).pending(h@.addr) ==> final(self).frame(*old(self)),
             final(self).pages == old(self).pages,
-            final(self).indeg(h@.addr) == 0,
+            old(self).pending(h@.addr) ==> final(self).indeg(h@.addr) == 0,
             forall|w: Word| old(self).word_ok(w) ==> #[trigger] final(self).word_ok(w),
     {
         proof {
@@ -473,9 +491,22 @@ impl Core {
                     ..self.model@
                 },
             );
-            self.lemma_publish(s0, hs);
+            if s0.pending(hs) {
+                self.lemma_publish(s0, hs);
+            }
+            assert forall|w: Word| s0.word_ok(w) implies #[trigger] self.word_ok(w) by {}
             if self.checked@ {
-                self.lemma_safe_block_full(hs);
+                self.lemma_perm_safe(s0, perm, hs, st, owner);
+                reveal(Core::building_wf);
+                reveal(Core::safe_blocks_wf);
+                assert forall|b: usize| #[trigger]
+                    self.dom().contains(b) && self.state(b)
+                        == BlockState::Building implies self.model@.building == Some(b) by {
+                    if b != hs {
+                        assert(s0.dom().contains(b));
+                    }
+                }
+                assert(self.building_wf());
                 self.lemma_safe_publish(s0, hs);
             }
         }
