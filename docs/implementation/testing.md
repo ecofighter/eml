@@ -77,93 +77,58 @@
 
 ## `eml_rt` の検証
 
-`eml_rt` ([オブジェクトモデル](../spec/object-model.md)) はまだパイプラインから使わないので、UI テストでなく、単体テスト、Miri、Verus で確かめる。速いモードの命令の数は `bench/rt.sh` で測る ([計測の基準](benchmarks.md) の「命令の数の測り方」)。
+`eml_rt` ([オブジェクトモデル](../spec/object-model.md)) はまだパイプラインから使わないので、UI テストでなく、Verus、単体テスト、Miri で確かめる。メモリの安全と核の正しさは Verus の証明が受け持ち、単体テストは動作を、Miri は Verus で確かめない部分 (信頼の一覧) を確かめる。速いモードの命令の数は `bench/rt.sh` で測る ([計測の基準](benchmarks.md) の「命令の数の測り方」)。
+
+### Verus
+
+`eml_rt` は vstd に依存し、コードを `verus!` の中に書く。`cargo verus verify -p eml_rt` が crate 全体を検証する (`Cargo.toml` の `[package.metadata.verus] verify = true`)。Apple M4 では、`437 verified, 0 errors` に約 11 秒かかる (S9v の終わり)。初めは Kani を試したが、CBMC は 3 個の節点のグラフでも `share_walk` の検査でメモリか時間が尽きた。Verus は、値の全域と任意の大きさのヒープについての証明が通る。
+
+公開の操作の前提 ([オブジェクトモデル](../spec/object-model.md) の「核の操作」の表) を、抽象のモデルの言葉で `requires` に書く。モデルの述語は `pub closed spec fn` にするので、名前は crate の外に見えるが、中身と実行時の費用はない。その下で、次のことを証明する。
+
+1. メモリの安全: 生のポインタの読み書きは、どれもヒープが持つ権限 (vstd の `PointsTo`) で行う。解放の後の使用、二重の解放、ブロックの外の読み書き、書いていない語の読み込みは起きない
+2. ヒープの形の不変条件: ページの一覧、級ごとの空きリスト、切り出しの位置、各ブロックの権限が食い違わない。ブロックの番地の下位 16 ビットを落とすと、そのブロックを含むページの頭になる。`Heap` の閉じた述語 `wf` が持ち、公開のどの操作も保つ
+3. RC の正しさ: 各物体の rc は、モデルの参照の数 (ヒープの中の辺と、外の参照の数の和) と対応する。物体を空けるのは、張り付いていない物体の参照がなくなったときだけで、そのときは必ず空ける。RC の遷移の関数 (`dup_step`、`decref_step`、`mark_step`) は、理想のモデル (rc、本当の参照の数、張り付きの旗) との対応を保つ
+4. `share`: `share_walk` を `Graph` trait のメソッドの約束の上で任意のグラフについて証明し、ヒープの上の `Graph` の実装と結ぶ。検査モードで `Dead` と `LinReachedTwice` を返すのは、その違反があったときだけである
+5. `release` と reuse: `release` と `release_reuse` の結果を、モデルの遷移で書く。部品を並べた展開 (`is_last` と `free_block`) の遷移を合わせたものが `release` の遷移に等しいことを、モデルの上の補題で示す
+6. 検査モード: [オブジェクトモデル](../spec/object-model.md) の「検査モードの約束」の性質。安全の前提だけで `safe_wf` を保ち、モデルが合っていて前提がすべて成り立つなら `Ok` を返して速いモードと同じ遷移になる
+7. ヘッダの詰め方と即値: `Meta` は Verus の型の不変条件 (正しい形であること) を持ち、メモリの `meta` が正しい形であることはヒープの不変条件が持つ。そのため `Kind::from_bits` の `unreachable!` の枝には届かない。即値の判定と値の取り出しは、63 ビットの範囲の整数で元に戻る
+
+信頼して証明しない部分は、[オブジェクトモデル](../spec/object-model.md) の「`unsafe` の核」の信頼の一覧 (T0 から T9) にまとめる。`src/trust.rs` の単体テストが、この一覧を固定する。
+
+- テストでないコード (`#[cfg(test)]` の module と `heap/tests/` を除く) から、Verus に確かめさせない項目を表す語 (`external_body`、`verifier::external`、`assume_specification`、`global`、`assume(`、`Tracked::assume_new` など) を探す。見つけた項目 (ファイル、語、それを含む関数か型の名前) が、表の番号を付けた一覧と同じであることを確かめる。属性や仮定が一覧の外に増えると、証明が空になっても検証は通ってしまうためである
+- `verus!` の外のコードに `unsafe` がないことを確かめる。除くのは `Word` と `Heap` の `unsafe impl Send` と `Sync` と、T4 の `Drop` だけである
+- `src/` のテストでないファイルが、どれも調べる一覧に載っていることを確かめる
+- 探し方の規則 (コメントと文字列を除くこと、`#[cfg(test)]` の module の見分け方) は、同じファイルの小さいテストで確かめる
+
+並行の手順 (共有の側の2つの境目の並行の議論と、公開の順序) は、今は証明しない (T0)。VM の並列化のときに、手順を Verus で証明する。ただし vstd の atomic は SeqCst だけを扱うので、Relaxed と AcqRel の順序の正しさは、Verus では確かめられない。順序は、文書の議論 ([オブジェクトモデル](../spec/object-model.md) の「上限」と「共有の側」) と Miri に任せる。
+
+Verus (0.2026.10.04.426d8b0) は、ふだんの devShell が `verus` と `cargo-verus` を入れる。flake は、release の zip を系ごとの input (`verus-aarch64-darwin`、`verus-x86_64-linux`) にし、`nix/verus.nix` が要る部品 (`libvstd.rlib` と `vstd.vir` を含む) だけを展開する。Verus の起動の部分は rustup で toolchain を探すが、devShell の `verus` は rustup を使わない (`VERUS_USE_RUSTUP=0`)。代わりに、Verus が求める版の fenix の `rustc` の `lib` を、rust_verify が読むライブラリの道 (macOS は `DYLD_FALLBACK_LIBRARY_PATH`、Linux は autoPatchelf と `LD_LIBRARY_PATH`) に足す。rust_verify は公式の版の librustc_driver に繋がるので、source から組む nixpkgs の rustc では動かないためである。Verus の版を上げるときは、2つの input の URL、`flake.nix` の `stable` の版 (Verus の `rust-toolchain.toml`)、`eml_rt` の vstd の版 (cargo-verus の toolchain の表が指す版) を揃えて変え、`cargo verus verify --check-toolchain` で確かめる。
+
+rustfmt は `verus!` の中を整えないので、`eml_rt` の `verus!` の中は `verusfmt --verus-only` で整え、外は `cargo fmt` で整える。verusfmt は `verus!` の外を edition 2021 の書式で整え、edition 2024 の `cargo fmt` と import の並びが食い違うためである。verusfmt (0.7.4) も release の archive を flake の input にし、`nix/verusfmt.nix` が devShell に入れる。clippy は `verus!` の展開の後のコードも見るので、Verus の書き方から出る警告は、`lib.rs` の頭で理由を書いて `allow` する。
 
 ### 単体テスト
 
 - テストの関数はモードを型の引数に取り (`fn name<M: Mode>()`)、`crates/eml_rt/src/heap/tests/mod.rs` の `both_modes!` がそれを `fast` と `checked` の2つのテストにする。同じ列を、速いモードと検査モードの両方で流すためである
 - 検査モードだけのテスト (`heap/tests/checked.rs` など) は、誤りを1つ起こす最小の列を、誤りごとに1つ置く
-- 長いリストのように大きさの要るテストは、`cfg!(miri)` で大きさを小さくする (`LONG` は Miri で 300、ふだんは 100,000)。Miri で遅くなりすぎないためである
+- 内部の関数を呼ぶテストは、権限の引数に `Tracked::assume_new()` を渡す。テストは検証しないので、信頼の一覧には入らない
 - 確かめるものは次のとおりである
   - 語: 即値の往復、63 ビットの境界の `alloc_int` と `unbox_int`、ダミー、`Word` と `Heap` の `Send` と `Sync` の型の assert
   - 確保器: 級ごとの確保と解放、大きい物体の確保と即時の返却 (ページの一覧から外れること)、ページをまたぐ量、空きリストの使い回し (速いモード)、解放したブロックを使い回さないこと (検査モード)、今のページを替えた後と替える前の両方での生存の列挙、`Heap` を落とすときの `Foreign` の破棄処理、使っているメモリのバイト数
   - RC: 局所の上限、共有の2つの境目のそれぞれの前後、不死、不死の物体の数え方 (子を持つ不死の物体を作ること、借りた子の `dup` と `decref`、数が 0 の `decref` の誤り、ダミーを数えないこと)
-  - 解放の連鎖: 長いリスト (要素が即値のものと、要素が物体のもの。作業リストの長さが定数に収まる)、深い木、`scan` が 255 の物体、`Foreign` の破棄処理が1回だけ呼ばれること
+  - 解放の連鎖: 長いリスト (要素が即値のものと、要素が物体のもの。作業リストの長さが定数に収まる)、深い木、`scan` が 255 の物体、`Foreign` の破棄処理が1回だけ呼ばれること、同じ子を2回指す親を空けると2回目が `UseAfterFree` になり破棄処理が1回だけ呼ばれること
   - `share`: 輪のあるグラフ、`lin` の物体の子のたどり、`lin` ビットのない親の中の `lin` の子、不死と共有の物体で止まること、`share` の後の共有の側の `dup` と `decref` と最後の解放、rc -1 の親の `release` が `lin` の子を `dup` しないこと
   - `release` と `release_reuse`: 一意な場合、rc -1 の場合、共有の場合、`keep` の組み合わせ。部品を並べた展開 (`is_last` と `free_block`) でも同じ場合を流し、一般の版と同じ結果になることを確かめる
   - reuse の列: 手で組んだ「解放して、同じ箱でコンストラクタを作る」列を2種類流す。同じコンストラクタでフィールドを書かずに使い回す列と、型の違う同じ大きさの箱に移る列である。生きている箱の数と RC の釣り合いを確かめ、共有の物体が token にならないことも確かめる
-  - 検査モードの誤り: [オブジェクトモデル](../spec/object-model.md) の「報告する誤り」の各項目。token の ABA の形と、解放した共有の物体の使用を含む
-- `is_last` は単体テストだけで確かめる。中身は atomic の2回の読み込みとその順序で、Verus では確かめられないためである (下の「Verus」)
+  - 検査モードの誤り: [オブジェクトモデル](../spec/object-model.md) の「報告する誤り」の各項目。token の ABA の形、解放した共有の物体の使用、強めた範囲の検査 (`field` と `set_field` の生の語、`raw` と `set_raw` の走査する語と `Foreign` の物体) を含む
+- `is_last` の2回の読み込みとその順序は、Verus では確かめない (T2)。単体テストと Miri で確かめる
 
 ### Miri
 
+- Miri は、信頼の一覧の「Miri で確かめること」を確かめる `crates/eml_rt/src/heap/tests/trusted.rs` (module `trusted`) のテストだけを流す。テストは信頼の部分へ届く検証したコードも通るので、借用の規則 (T8) もここで確かめる。全体の単体テストは `cargo test` で流し、メモリの安全は Verus の証明が受け持つ
+- FFI の境界を信頼の一覧に足すときは、そこを通るテストもこの module に足す。今の `Foreign` の物体 (T3) が FFI の前身なので、テストはそこを重点にする
 - Miri は、nightly と `miri` と `rust-src` を持つ別の devShell `nix develop .#miri` で流す。flake は nightly を fenix の `complete` (すべての部品がそろう最新の日の nightly) から取る ([アーキテクチャ](architecture.md) の toolchain の項)
-- `cargo miri test -p eml_rt` を、`MIRIFLAGS="-Zmiri-strict-provenance"` で1回、`MIRIFLAGS="-Zmiri-strict-provenance -Zmiri-tree-borrows"` でもう1回流す。Apple M4 では、121 個のテストに約18分と約23分かかった (コミット 5231a52 の時点)
-- ページの大きさは Miri でも変えない。ほかの crate は Miri で流さない
-
-### Verus
-
-純粋な関数と `share` のたどりを、Verus で証明する。初めは Kani を試したが、CBMC は 3 個の節点のグラフでも `share_walk` の検査でメモリか時間が尽きた。Verus は、任意の大きさのグラフについての証明が約1秒で通る。
-
-S9v の作業中は、この節の写しの方式の記述を、書き換えるまで残す。今は写しを消し、本体を vstd に依存させて `verus!` の中に書き、`cargo verus verify -p eml_rt` で検証している ([S9v の設計](../superpowers/specs/2026-10-14-s9v-verified-eml-rt-design.md))。
-
-Verus が検証するのは `verus!` の中のコードだけである。本体を Verus に依存させないため、証明する関数の写しを `crates/eml_rt/verus/` (`meta.rs`、`word.rs`、`rc.rs`、`share.rs`、`check.rs`) に置く。写しは、本体と同じコードに仕様と証明を足したもので、Cargo のビルドには入らない。
-
-証明することは次の5つである。どれも、値の全域と任意の大きさのグラフについて成り立つ。
-
-1. ヘッダの詰め方: `Meta` が正しい形であることを、種類のビットが既知の値 (0、1、2、15) で、`info` の予約の3ビットが 0 であることと決める。`Meta::new` は正しい形の `Meta` を作り、tag、scan、種類、`lin` ビットのどれも取り出すと元に戻る。`with_lin` は `lin` ビットだけを変え、正しい形を保つ。`same_shape` は、正しい形の2つの `Meta` で、tag と scan と種類が等しいときにちょうど真になる。正しい形なら、`Kind::from_bits` の `unreachable!` の枝には届かない
-2. 即値: `fits_imm` は `Word::MIN_INT` 以上 `Word::MAX_INT` 以下でちょうど真になる。その範囲の整数は、即値にすると即値と判定され、ポインタとは判定されず、値を取り出すと元に戻る。即値とポインタの両方に判定される語はなく、語の値 0 はどちらでもない。`Word` はポインタ型なので、ビット列の計算を整数の純粋な関数 (`fits_imm`、`imm_bits`、`is_imm_bits`、`is_ptr_bits`、`imm_value_bits`) に分け、`Word` のメソッドはそれを呼ぶ。写すのは、その純粋な関数である。`Word::MIN_INT` と `Word::MAX_INT` は、-2^62 と 2^62 - 1 に等しい。写しは 64 ビットの環境を仮定する (`global size_of usize == 8`)。[オブジェクトモデル](../spec/object-model.md) の「受け入れる制約」も、64 ビットの環境だけを対象にしている。本体は `word.rs` の `const` の assert (`usize::BITS == 64`) で、ほかの環境ではビルドを止める
-3. RC の遷移: `dup_step` と `decref_step` が、範囲で書いた仕様と同じ値を返す (符号なしの比較1回が範囲の判定になることを含む)。その上で、`dup_step`、`decref_step`、`mark_step` が、理想のモデル (rc、本当の参照の数、張り付きの旗) との対応を保つ。対応は次のとおりである。張り付いていない間は、rc が張り付きの範囲になく、符号を除いた rc が数に一致し、数は正である。張り付いた物体の rc は、張り付きの範囲 (局所の `MAX` か、`DROP_LIMIT` より小さい共有の数) にとどまる。`dup` は対応を保ち、解放しない。`decref` は数を1つ減らし、解放するのは張り付いていない物体の数が 0 になったときだけで、そのときは必ず解放する。解放しなければ対応を保つ。印付けは対応を保つ。不死の数 0 は、どの遷移でも動かない。1回の遷移ごとに対応が保たれることを示すので、0 でない任意の i32 から始めた任意の長さの列について成り立つ。逐次の列では、共有の rc が `DUP_LIMIT` 以上 `DROP_LIMIT` 未満の間も `dup` は数えるが `decref` は飛ばすので、そこはもう張り付いたものとして扱う
-4. `share`: `share_walk` を、`Graph` trait の各メソッドの約束の上で、任意の大きさのグラフについて証明する。前提は次の3つである。届く物体はどれも生きている。局所の `lin` の物体は rc が 1 で、根か、ただ1つの辺から1回だけ参照される。共有の `lin` でない物体は、局所の `lin` でない物体を指さない。不死の `lin` の物体 (rc 0) と共有の `lin` の物体 (rc が負) には、前提を課さない。結論は次のとおりである。たどりは止まる。`check_lin` が真で、根から共有の `lin` の物体に届くときにちょうど `LinShared` を返し、それ以外は `Ok` を返す。`Ok` のときは、さらに次の3つが成り立つ。根から局所の物体だけを通って届く局所の物体のうち、`lin` の物体は所有者が受け手に移って rc が変わらず、`lin` でない物体は rc に `mark_step` の印が付く。ほかの物体 (届かない物体と、`lin` ビットによらず不死の物体と共有の物体) は、rc も所有者も変わらない。たどりの後も、共有の `lin` でない物体は局所の `lin` でない物体を指さない。前提が空でないことも、前提を満たす小さいグラフ (局所の根が局所の `lin` の子を1つ指す) を補題で作って確かめる。たどりから `return Err(LinShared)` を消した変異と、rc 0 の `lin` の物体を `lin` の枝に入れた変異は、どちらも証明が通らない
-5. `release` と reuse の判定: `layout_check` は、名指しのデータの形 (種類が `Data`、tag が同じ、走査する語の数が `keep` の長さと同じ) だけを受け入れる。`reuse_in_place_check` は、形の違う `meta` (`WrongMeta`) と、残す `lin` ビットを落とす `meta` (`LinBitKept`) だけを拒む
-
-写すのは、次の関数と型である。表は `crates/eml_rt/src/verus_copies.rs` の `COPIES` にある。
-
-| 本体 | 写すもの |
-|---|---|
-| `meta.rs` | `Kind`、`Kind::from_bits`、`Meta`、`Meta::LIN`、`Meta::KIND_SHIFT`、`Meta::KIND_MASK`、`Meta::new`、`Meta::tag`、`Meta::scan`、`Meta::kind`、`Meta::lin`、`Meta::with_lin`、`Meta::same_shape` |
-| `word.rs` | `Word::MIN_INT`、`Word::MAX_INT`、`fits_imm`、`imm_bits`、`is_imm_bits`、`is_ptr_bits`、`imm_value_bits` |
-| `rc.rs` | `LOCAL_MAX`、`DUP_LIMIT`、`DROP_LIMIT`、`DupStep`、`DecrefStep`、`dup_step`、`decref_step`、`mark_step` |
-| `heap/share.rs` | `Graph`、`ShareError`、`share_walk` |
-| `heap/check.rs` | `layout_check`、`reuse_in_place_check` |
-
-次のものは写さない。
-
-- ポインタ型を受ける `Word` のメソッド (`imm`、`int`、`is_imm`、`is_ptr`、`imm_value` など)。写した整数の関数を呼ぶだけである
-- `is_last`、`dup_shared`、`decref_shared`。中身は atomic の読み込みと加減算で、vstd の atomic は SeqCst だけを扱うためである。`is_last` は単体テストで確かめる。[オブジェクトモデル](../spec/object-model.md) の「核の操作」の展開した `release` と「reuse」の列が、一般の版と同じ結果になることも、単体テストで確かめる
-- `Graph` を実装するヒープの物体の読み書き (`heap/share.rs` の `Objects`)、ヘッダとフィールドの読み書き、種類の欄の `match` (`Kind::name`、`scan_start`、`tokenable`、`has_finalizer`)。生のポインタを使うか、証明に使わないためである
-
-写しと本体のずれは、`verus_copies.rs` の単体テストが確かめる。
-
-- `the_verus_copies_match_the_code` は、表に載せた項目を本体と写しの両方から取り出す。名前は、ファイルの一番外の `fn`、`struct`、`enum`、`trait`、`const` か、`impl 型` の中の `fn` か `const` を指す `型::名前` である。両方から、コメント、属性、空白を除く。写しからはさらに、仕様の節 (`requires`、`ensures`、`recommends`、`invariant`、`invariant_except_break`、`decreases`、`returns`、`opens_invariants`)、`proof` の塊、`let ghost` の文、`spec fn` の宣言、戻り値の名前、空の `else {}` を除く。その上で、両方が同じ文字列になることを確かめる
-- 仕様の節の終わりは、節の後の深さ 0 の `{` か `;` で見分ける。そのため、写しの仕様の節には `{` を書かない。込み入った条件は `spec fn` に出す
-- `the_copies_trust_nothing_but_the_contains_spec` は、写しと `verus/lib.rs` に `external_body`、`verifier::external`、`exec_allows_no_decreases_clause` がなく、`assume` と `admit` の呼び出し (名前と `(` の間の空白も許して探す) がないことを確かめる。`assume_specification` は1つだけで、それが `<[T]>::contains` のものであることも確かめる。属性は照合の前に除かれるので、証明を空にする属性が混ざっても、上のテストは通ってしまうためである
-- 照合の規則そのものは、同じファイルの小さいテスト (`verus_only_syntax_is_removed` など) で確かめる
-
-本体は、Verus が扱える書き方にする。次の書き換えは、動作を変えずに Verus に合わせたものである。
-
-- `share_walk` は、`while let` の代わりに `loop` と `match` を使う。写しが、取り出す前の積み場に名前を付けて証明するためである
-- `Range::contains` の代わりに比較を書く。vstd の `Range::contains` の仮定を信頼せずに済むためである
-- `Word::int` は `bool::then` を使わず、`if` で書く
-- `Word` のビット列の計算を、上の整数の関数に分ける
-- 定数は 16 進で書く (`Word::MIN_INT`、`Word::MAX_INT`、`DUP_LIMIT`、`DROP_LIMIT`)。Verus は定数の式のシフトを、溢れうるとして受け付けないためである。`DROP_LIMIT` は `pub const` にする。写しの `pub open spec fn` (`mark_spec`) がこの定数を使うので、Verus が定数にも `pub` を求めるためである。`rc` は private な module なので、crate の外には見えない
-- `layout_check` は、種類の比較に `==` でなく `matches!` を使う。Verus は導出した `PartialEq` に仕様を与えないためである
-
-信頼して証明しない部分は、次の7つである。
-
-- `Graph` を実装するヒープの物体の読み書き。生のポインタを使うので写しにしない
-- `<[T]>::contains` の仕様。vstd にないので、写しの側で `assume_specification` で仮定する
-- `obeys_concrete_eq::<G::Node>()`。節点の型の `==` が値の等しさであるという前提である
-- 64 ビットの環境 (`global size_of usize == 8`)。本体の `const` の assert が、ほかの環境のビルドを止める
-- メモリから読んだ `Meta` が正しい形であること (種類のビットが既知の値で、予約のビットが 0)。証明が示すのは、本体が作る `Meta` (`Meta::new` と `with_lin` の結果) が正しい形であることまでである。ヘッダにはその値だけを書くが、読み出した値が正しい形かは証明しない
-- 写しの照合の規則そのもの。規則は同じファイルの小さいテストで確かめるが、証明はしない
-- Verus と Z3 そのもの
-
-Verus (0.2026.10.04.426d8b0) は、ふだんの devShell が `verus` と `cargo-verus` を入れる。flake は、release の zip を系ごとの input (`verus-aarch64-darwin`、`verus-x86_64-linux`) にし、`nix/verus.nix` が要る部品だけを展開する。Verus の起動の部分は rustup で toolchain を探すが、devShell の `verus` は rustup を使わない (`VERUS_USE_RUSTUP=0`)。代わりに、Verus が求める版の fenix の `rustc` の `lib` を、rust_verify が読むライブラリの道 (macOS は `DYLD_FALLBACK_LIBRARY_PATH`、Linux は autoPatchelf と `LD_LIBRARY_PATH`) に足す。rust_verify は公式の版の librustc_driver に繋がるので、source から組む nixpkgs の rustc では動かないためである。Verus の版を上げるときは、2つの input の URL と、`flake.nix` の `stable` の版 (Verus の `rust-toolchain.toml`) を揃えて変える。
-
-S9a の終わりの写しの結果は `67 verified, 0 errors` だった。
-
-並行の手順 (共有の側の2つの境目の並行の議論と、公開の順序) は、今は証明しない。VM の並列化のときに、手順を Verus で証明する。ただし vstd の atomic は SeqCst だけを扱うので、Relaxed と AcqRel の順序の正しさは、Verus では確かめられない。順序は、文書の議論 ([オブジェクトモデル](../spec/object-model.md) の「上限」と「共有の側」) と Miri に任せる。
+- `cargo miri test -p eml_rt trusted::` を、`MIRIFLAGS="-Zmiri-strict-provenance"` で1回、`MIRIFLAGS="-Zmiri-strict-provenance -Zmiri-tree-borrows"` でもう1回流す。Apple M4 では、24 個のテストにどちらも約 65 秒かかる (S9v の終わり)
+- テストの大きさは `cfg!(miri)` で変えない。`trusted` のテストは、どの設定でも数分で終わる大きさにする。ページの大きさも Miri で変えない。ほかの crate は Miri で流さない
 
 ## LIR のテキストの形
 
@@ -304,7 +269,7 @@ cargo test --release -p eml_core_ir --test integration instances::lowering -- --
 cargo test -p eml_interp --test integration scaling::                          # インタプリタの仕事の回数 (ふだんの cargo test にも入る)
 cargo test -p eml_interp --test integration bench::                            # 基準のプログラムの回数 (ふだんの cargo test にも入る)
 bench/run.sh                                                                   # 基準のプログラムの命令の数 (macOS、release)
-nix develop .#miri -c env MIRIFLAGS="-Zmiri-strict-provenance" cargo miri test -p eml_rt   # Miri (Tree Borrows は -Zmiri-tree-borrows を足す)
+nix develop .#miri -c env MIRIFLAGS="-Zmiri-strict-provenance" cargo miri test -p eml_rt trusted::   # Miri (Tree Borrows は -Zmiri-tree-borrows を足す)
 cargo verus verify -p eml_rt                                                                # Verus の証明
 verusfmt --verus-only --check $(git ls-files 'crates/eml_rt/src/*.rs')                         # eml_rt の verus! の中の書式
 bench/rt.sh                                                                                 # eml_rt の速いモードの命令の数 (macOS、release)

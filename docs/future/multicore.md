@@ -294,11 +294,11 @@ S9 と S10 で次の制約を守り、後から VM を並列にできるよう�
 
 並列化の段階では、次の方針でテストする。テスト全体の方針は [テスト戦略](../implementation/testing.md) にある。
 
-- S9: 共有の経路 (`share`、負の RC の `dup` と `decref`、最後の参照での解放)、共有した物体を reuse しないこと、所有者の検査を、`eml_rt` の単体テストで確かめる。`unsafe` の核は Miri で検査し、RC の遷移の関数と `share` のたどりは Verus で証明する ([テスト戦略](../implementation/testing.md) の「`eml_rt` の検証」)
+- S9: 共有の経路 (`share`、負の RC の `dup` と `decref`、最後の参照での解放)、共有した物体を reuse しないこと、所有者の検査を、`eml_rt` の単体テストで確かめる。`unsafe` の核を含む `eml_rt` 全体を Verus で証明し、証明は1つのスレッドの逐次の実行を扱う。atomic の操作は信頼する部分 (信頼の一覧の T2) で、Miri が2つのスレッドのテストで確かめる ([テスト戦略](../implementation/testing.md) の「`eml_rt` の検証」)
 - `par` の a1: `run` と `run-fail` の UI テストを、逐次と乱数種付きの2つの方針で走らせ、出力が一致することを確かめる。検査用のフラグで印付けを1か所外したとき、どれかの試験が必ず失敗することを確かめる (multicoretests の負の試験に当たる)。実行時エラーの優先の規則を `run-fail` の UI テストにする
 - VM の並列化: 本物のスレッドで、UI テストを逐次、N 個の worker、乱数種付きで走らせ、逐次のスナップショットと比べる。`RunStats` は逐次でだけ固定する。ほかに次のものを使う
-  - Verus: 印付けと公開、両側からの `dup` と `decref` (共有の側の2つの境目の並行の議論を含む)、最後の解放、join の手順を証明する。vstd の atomic は SeqCst だけを扱うので、Relaxed と AcqRel の順序の正しさは Verus では確かめられない。順序は、文書の議論と Miri に任せる ([テスト戦略](../implementation/testing.md) の「Verus」)
-  - Miri: `eml_rt` の並行の単体テスト (strict provenance、many-seeds)。`par` を使う小さい UI テストを VM ごと走らせる
+  - Verus: 今の逐次の証明 (信頼の一覧の T0) を並行の証明に置き換え、印付けと公開、両側からの `dup` と `decref` (共有の側の2つの境目の並行の議論を含む)、最後の解放、join の手順を証明する。vstd の atomic は SeqCst だけを扱うので、Relaxed と AcqRel の順序の正しさは Verus では確かめられない。順序は、文書の議論と Miri に任せる ([テスト戦略](../implementation/testing.md) の「Verus」)
+  - Miri: `eml_rt` の `trusted` の module の並行のテスト (strict provenance、many-seeds)。`par` を使う小さい UI テストを VM ごと走らせる
   - TSan: VM で `par` の UI テストを走らせる。RC の語の誤りは見えず、フィールドの競合として結果だけが見えることを前提にする
   - work stealing の deque を自作するなら、スロットを atomic の語にして、crossbeam-deque の意図的な競合を避ける
   - 試験ごとに新しいプロセスとタイムアウトで動かすストレス試験

@@ -27,7 +27,7 @@ eml を実装するエージェントとプログラマのための文書群で�
 | [spec/examples.md](spec/examples.md) | 説明 | まだ動かない、本番の構文で書いたプログラム例 |
 | **implementation/** | 手引き | どう作るか、今どこまでできているか |
 | [implementation/architecture.md](implementation/architecture.md) | 手引き | プログラム全体の構成と採らなかった形、crate の構成、各段階の規律、エラー回復、各 crate の内部、CLI と lib API、translate の組み立て、継続と evidence、構文解析と名前解決の回復 |
-| [implementation/testing.md](implementation/testing.md) | 手引き | テスト戦略、テストの変更の運用、テストの置き場所、`eml_rt` の検証 (単体テスト、Miri、Verus)、UI テスト、LIR と Core IR のテキストの形、文書の引用の検査 |
+| [implementation/testing.md](implementation/testing.md) | 手引き | テスト戦略、テストの変更の運用、テストの置き場所、`eml_rt` の検証 (Verus、単体テスト、Miri)、UI テスト、LIR と Core IR のテキストの形、文書の引用の検査 |
 | [implementation/status.md](implementation/status.md) | 手引き | 今の言語の範囲、既知の制限 |
 | [implementation/benchmarks.md](implementation/benchmarks.md) | 手引き | 基準のプログラム、回数のテスト、命令の数の測り方、段ごとの記録 |
 | [implementation/diagnostics.md](implementation/diagnostics.md) | 手引き | 番号ごとの診断が指す場所、help と fix の文言と付ける条件、型エラー・線形性・網羅性の診断の表示 |

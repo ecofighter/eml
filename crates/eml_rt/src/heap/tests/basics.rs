@@ -212,8 +212,7 @@ fn mixed_sizes_keep_the_free_lists_apart<M: Mode>() {
     let mut heap = Heap::<M>::new();
     let mut live: Vec<(Word, u64)> = Vec::new();
     let mut seed: u64 = 1;
-    let rounds = if cfg!(miri) { 200 } else { 20_000 };
-    for id in 0..rounds {
+    for id in 0..20_000 {
         // 線形合同法で大きさと、確保か解放かを決める
         seed = seed
             .wrapping_mul(6364136223846793005)

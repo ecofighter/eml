@@ -42,6 +42,7 @@ eml/
     eml_core_ir/
     eml_lir/            # LIR とそのパス。eml_extern だけに依存する
     eml_runtime/
+    eml_rt/             # VM とネイティブで共有するランタイムの核。vstd だけに依存し、Verus で検証する。まだどの crate からも使わない
     eml_interp/
     eml_cli/            # lib + バイナリ (バイナリ名 `eml`)
     eml_test_support/   # 開発専用。結合テストのパイプラインと診断の文字列
@@ -53,12 +54,14 @@ eml/
   docs/
   flake.nix
   nix/verus.nix         # Verus の release の zip を展開する
+  nix/verusfmt.nix      # verusfmt の release の archive を展開する
 ```
 
 - `version`、`edition = "2024"`、依存する crate のバージョンは、workspace のルートの `Cargo.toml` でまとめて管理する
 - `flake.nix` は、workspace のルートの `Cargo.lock` を使って `eml_cli` だけを組み立て、`eml` バイナリを作る
 - nixpkgs は nixos-unstable を追う。Rust の toolchain は、stable も nightly も flake が fenix から取る。stable は Verus が求める版 (今は 1.98.1) に揃え、ふだんの devShell、`nix build`、Verus が同じ版を使う。nightly は Miri の devShell (`nix develop .#miri`) だけが使う ([テスト戦略](testing.md) の「Miri」)
-- Verus は、release の zip を flake の input にし、`nix/verus.nix` が展開してふだんの devShell に入れる ([テスト戦略](testing.md) の「Verus」)
+- Verus と verusfmt は、release の archive を flake の input にし、`nix/verus.nix` と `nix/verusfmt.nix` が展開してふだんの devShell に入れる ([テスト戦略](testing.md) の「Verus」)
+- `eml_rt` は vstd に依存するので、`Cargo.lock` に vstd とその依存が入る。`eml_cli` は `eml_rt` に依存しないので `eml` バイナリには入らないが、`nix build` は lock の crate をすべて取る。`eml_rt` の `verus!` の中は verusfmt で、外は `cargo fmt` で整える
 - 2つの devShell の shellHook は、`CARGO_HOME` を `${XDG_CACHE_HOME:-$HOME/.cache}/eml-cargo-home` にする。cargo は外部のサブコマンドを PATH より先に `$CARGO_HOME/bin` から探すので、rustup が入っていると `~/.cargo/bin` の `cargo-clippy` や `cargo-miri` (rustup のプロキシ) が fenix のものより先に当たるためである。そのため、devShell は crate の取得の置き場所を別に持ち、最初の1回は crate を取り直す
 
 ## crate の依存関係

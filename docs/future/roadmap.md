@@ -19,7 +19,7 @@
 | 段 | 中身 | 前提 | 完了の条件 |
 |---|---|---|---|
 | S8 LIR | Core IR の下の LIR、box の挿入・縮約・Perceus を LIR に移す、`Lin` の move と Kind の印 | なし | パスを移す作業の前後で、EP を通したプログラムのダンプがバイト単位で一致する。所有の形を変える作業と Kind の印による差分は、期待値の変更として spec に範囲で挙げたものに限る。CEK が LIR を読んで全 UI テストを通す |
-| S9 共通ランタイム `eml_rt` | 語の値、ヘッダ付きのオブジェクト、共有の印方式の RC、検査モード、extern の語の ABI、`Ctx`、`FnEntry`、`CodeBase` | S8 | extern を今の実装と差分テストで比べる。`unsafe` の核を Miri で検査する |
+| S9 共通ランタイム `eml_rt` | 語の値、ヘッダ付きのオブジェクト、共有の印方式の RC、検査モード、extern の語の ABI、`Ctx`、`FnEntry`、`CodeBase` | S8 | extern を今の実装と差分テストで比べる。核を Verus で検証し、信頼する部分を Miri で検査する |
 | S10 VM と切り替え | LIR からのレジスタ型のバイトコード、`eml run` を VM に切り替え、CEK の削除 | S9 | VM が全 UI テストを `debug_heap` 付きで通す。CEK を消す前に、基準のプログラムで CEK との差を記録する |
 | S11 REPL | セッション、再定義、回復、表示 | S10 | トランスクリプトの golden テストが通る。誤りや割り込みの後に、生きている物体が根だけになる |
 | S12 スクリプトの MVP | `try_io` と `exit`、ローカルの再帰関数、extern の標準ライブラリ、`eml file.em args...` | S11 | wc、grep、ログの集計、CSV の変換、デプロイ手順の5本のスクリプトが UI テストとして動く |
@@ -94,20 +94,21 @@ S8d で閉じた論点は次のとおりである。
 
 前提: S8。
 
-S9 を、S9a と S9b の2つの作業に分けて順に進める。段の列では S9 の1行のままにする。S9 の間、`eml_rt` はパイプラインから使わない。単体テスト、Miri、Verus、extern の差分テスト (S9b) で確かめ、実際のプログラムで通すのは S10 の VM からである。CEK と `eml_runtime` は S10 まで変えない。S10 で消す CEK に投資しないためである (上の「段の列」)。
+S9 を、S9a、S9v、S9b の3つの作業に分けて順に進める。段の列では S9 の1行のままにする。S9 の間、`eml_rt` はパイプラインから使わない。Verus、単体テスト、Miri、extern の差分テスト (S9b) で確かめ、実際のプログラムで通すのは S10 の VM からである。CEK と `eml_runtime` は S10 まで変えない。S10 で消す CEK に投資しないためである (上の「段の列」)。
 
 | 作業 | 中身 | 状態 |
 |---|---|---|
 | S9a | 語、ヘッダ、ページの確保器、局所と共有の RC、`share`、`lin` ビット、reuse の部品、検査モード、Miri と Verus | 終えた。決めたことは [オブジェクトモデル](../spec/object-model.md) に移した。`eml_rt` はまだパイプラインから使わないので、UI テストの出力と `bench/` の仕事の回数は変わらない ([計測の基準](../implementation/benchmarks.md) の「S9a (`eml_rt` の核)」) |
+| S9v | vstd への依存を受け入れ、`eml_rt` のコードを `verus!` の中に書いて、`unsafe` の核を含む crate 全体を Verus で検証する。Verus で確かめない部分を信頼の一覧にまとめ、Miri はそこを通るテストだけを流す。nixpkgs を nixos-unstable に上げ、Rust の toolchain を fenix から取り、Verus と verusfmt を flake の input にする | 終えた。決めたことは [オブジェクトモデル](../spec/object-model.md) の「`unsafe` の核」と [テスト戦略](../implementation/testing.md) の「`eml_rt` の検証」に移した。S9b の extern の語の ABI が FFI の最初の境界になるので、境界を信頼の一覧と Miri のテストに足す決まりを、S9b より前に決めておくために、S9a と S9b の間に置いた ([計測の基準](../implementation/benchmarks.md) の「S9v (`eml_rt` の検証)」) |
 | S9b | 物体の種類ごとの中身 (データの物理的な形と、その規則を出す関数の置き場所、文字列、クロージャと `copy`、evidence の物体、`File`)、`Ctx`、`FnEntry`、`CodeBase`、語の ABI の extern と差分テスト | これから |
 
 S9a で閉じた論点は次のとおりである。
 
-- 確保器は、自前のページの確保器にする。64 KiB に揃えたページから大きさの級ごとに切り出し、物体の大きさはページの頭から引く (mimalloc と同じ方式)。ヘッダが 8 バイトに収まり、確保と解放が空きリストの数命令で済み、Miri が確保器の経路も検査でき、生存の列挙がページを歩くだけで済むためである ([オブジェクトモデル](../spec/object-model.md) の「確保器」)
+- 確保器は、自前のページの確保器にする。64 KiB に揃えたページから大きさの級ごとに切り出し、物体の大きさはページの頭から引く (mimalloc と同じ方式)。ヘッダが 8 バイトに収まり、確保と解放が空きリストの数命令で済み、検証の道具が確保器の経路も確かめられ、生存の列挙がページを歩くだけで済むためである ([オブジェクトモデル](../spec/object-model.md) の「確保器」)
 - `tobj` の中の `enum` のタグは、即値にする ([オブジェクトモデル](../spec/object-model.md) の「語」)
 - 検証の道具は、Miri の2つの設定 (strict provenance と、それに Tree Borrows を足したもの) と Verus にする ([テスト戦略](../implementation/testing.md) の「`eml_rt` の検証」)
-  - Kani は採らない。初めに試したが、CBMC は 3 個の節点のグラフでも `share_walk` の検査でメモリか時間が尽きた。Verus は、値の全域と任意の大きさのグラフについての証明が約1秒で通る
-  - loom は採らず、atomic と確保を `cfg(loom)` で差し替える層も置かない。Verus は本体と同じコードの写しを確かめるので、本体の型を差し替える必要がないためである ([オブジェクトモデル](../spec/object-model.md) の「`unsafe` の核」)
+  - Kani は採らない。初めに試したが、CBMC は 3 個の節点のグラフでも `share_walk` の検査でメモリか時間が尽きた。Verus は、値の全域と任意の大きさのグラフについての証明が通る
+  - loom は採らず、atomic と確保を `cfg(loom)` で差し替える層も置かない。atomic と確保は std の関数を1回呼ぶ薄い関数で包み、Verus は本体のコードそのものを検証するので、本体の型を差し替える必要がないためである。並行の振る舞いは、Miri の2つのスレッドのテストで確かめる ([オブジェクトモデル](../spec/object-model.md) の「`unsafe` の核」)
   - 並行の手順は、VM の並列化のときに Verus で証明する。vstd の atomic は SeqCst だけを扱うので、atomic の順序の正しさは、文書の議論と Miri に任せる ([テスト戦略](../implementation/testing.md) の「Verus」)
 
 ### 決めたこと
@@ -124,7 +125,7 @@ S9a で閉じた論点は次のとおりである。
 - 検査モードを持ち、今の検査付きヒープの役を引き継ぐ ([オブジェクトモデル](../spec/object-model.md) の「検査モード」)。生存の列挙では「共有の物体から届くのは、共有か不死の物体か、`lin` ビットの立った局所の物体だけ」も確かめる。`lin` ビットの立った局所の物体を許すのは、`poly` の親の中に `lin` の子がありうるためである ([オブジェクトモデル](../spec/object-model.md) の「`share`」)
 - reuse を後から入れられるように、token と `con_at` を持つ ([オブジェクトモデル](../spec/object-model.md) の「reuse」)
 - EP のダミーの値の約束を守る ([オブジェクトモデル](../spec/object-model.md) の「ダミーの値」)
-- `unsafe` は小さい核に閉じ、Miri で検査する ([オブジェクトモデル](../spec/object-model.md) の「`unsafe` の核」)
+- `unsafe` は小さい核に閉じ、核を含む `eml_rt` 全体を Verus で検証する。Verus で確かめない部分は信頼の一覧にまとめ、Miri で検査する。FFI の境界を足すときは、一覧に行を足し、Miri のテストを足す ([オブジェクトモデル](../spec/object-model.md) の「`unsafe` の核」)
 - extern を語の ABI で1回だけ書く
 - 実行文脈 `Ctx` を持つ。割り込みの旗、深さと確保量の上限、yield の状態と `evv` ([LIR とインタプリタ](../spec/lir.md) の「実行の文脈」)、セッションの根、出力先、論理的な worker ID ([オブジェクトモデル](../spec/object-model.md) の「論理的な worker ID」) を置く
 - 関数表 `FnEntry` と、追記だけの `CodeBase` (関数、文字列、配置、エフェクト) を、S8 の LIR の表をもとに作る。クロージャは今と同じく関数の番号を持つので、位置に依存しない。`CodeBase` は実行中は読むだけにし (`Sync`)、後の並列 VM の worker がそのまま共有できるようにする。この性質は、`Session` の `Send + Sync` の試験 (`crates/eml_cli/tests/api.rs`) と同じ形の、型の assert で固定する
