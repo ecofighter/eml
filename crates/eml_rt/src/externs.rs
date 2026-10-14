@@ -365,19 +365,12 @@ impl fmt::Display for Fault {
             Fault::Heap(e) => write!(f, "{e}"),
             Fault::Arith(e) => write!(f, "{e}"),
             Fault::Output(e) => write!(f, "cannot write the output: {e}"),
-            Fault::Io {
-                op: IoOp::Open,
-                path,
-                reason,
-            } => {
-                write!(f, "cannot open `{path}`: {reason}")
-            }
-            Fault::Io {
-                op: IoOp::Read,
-                path,
-                reason,
-            } => {
-                write!(f, "cannot read `{path}`: {reason}")
+            Fault::Io { op, path, reason } => {
+                let verb = match op {
+                    IoOp::Open => "open",
+                    IoOp::Read => "read",
+                };
+                write!(f, "cannot {verb} `{path}`: {reason}")
             }
             Fault::NotUtf8 { path } => write!(f, "`{path}` is not valid UTF-8"),
             Fault::Stopped(s) => write!(f, "{s}"),

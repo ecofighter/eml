@@ -42,7 +42,7 @@ eml/
     eml_core_ir/
     eml_lir/            # LIR とそのパス。eml_extern だけに依存する
     eml_runtime/
-    eml_rt/             # VM とネイティブで共有するランタイムの核。vstd だけに依存し、Verus で検証する。まだどの crate からも使わない (`eml_interp` の期待値の表のテストだけが dev-dependency で使う)
+    eml_rt/             # VM とネイティブで共有するランタイムの核。vstd だけに依存し、Verus で検証する。パイプラインの crate からはまだ使わない (`eml_interp` の期待値の表のテストが dev-dependency で使う)
     eml_interp/
     eml_cli/            # lib + バイナリ (バイナリ名 `eml`)
     eml_test_support/   # 開発専用。結合テストのパイプラインと診断の文字列

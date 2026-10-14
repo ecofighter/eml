@@ -28,7 +28,7 @@ enum Tail<'a> {
     Text(*mut Header, usize, usize, usize),
 }
 
-/// 妥当な UTF-8 の `to` までの前の部分でも、`to` より前の文字の境目 `from` は文字の境目である。
+/// 妥当な UTF-8 の `to` より前の部分でも、`to` より前の文字の境目 `from` は文字の境目である。
 proof fn lemma_boundary_in_prefix(bytes: Seq<u8>, from: int, to: int)
     requires
         valid_utf8(bytes),

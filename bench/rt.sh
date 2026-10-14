@@ -29,7 +29,7 @@ measure() {
   shift
   echo "| 計測 | instructions retired | 実時間 (s) |"
   echo "|---|---:|---:|"
-  local case
+  local case instructions seconds report count elapsed
   for case in "$@"; do
     instructions=()
     seconds=()
