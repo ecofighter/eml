@@ -112,3 +112,17 @@ impl Control {
         self.bytes.fetch_sub(bytes, Ordering::Relaxed);
     }
 }
+
+/// 止める理由。割り込みを確保量より先に、確保量を深さより先に報告する。ビットがどれも立っていなければ、深さの上限で
+/// 止めたとする。ビットは呼ぶ側が速い道で読んだ値を受け、読み直さない。読み直すと、その間にほかのスレッドが `clear`
+/// したとき、深さの上限を超えていなくても `DepthLimit` を返すためである。
+#[cold]
+pub(crate) fn stop_reason(bits: u32) -> Stop {
+    if bits & Control::INTERRUPT != 0 {
+        Stop::Interrupted
+    } else if bits & Control::MEMORY != 0 {
+        Stop::MemoryLimit
+    } else {
+        Stop::DepthLimit
+    }
+}

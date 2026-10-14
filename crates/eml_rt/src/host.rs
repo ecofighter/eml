@@ -12,7 +12,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 use vstd::prelude::*;
 
-use crate::control::{Control, Stop};
+use crate::control::{Control, Stop, stop_reason};
 use crate::externs::IoReason;
 
 verus! {
@@ -89,34 +89,31 @@ pub(crate) fn host_open(host: &HostRef, path: &str) -> Result<File, (Box<str>, I
 #[verifier::external_body]
 pub(crate) unsafe fn read_text(file: *mut File, control: &Control) -> Result<String, ReadError> {
     let file = unsafe { &mut *file };
+    // 止める語と確保量を見る。`Vec` はヒープの外にあるので、持つ領域の大きさ `held` をページの確保量に足して上限と比べる
+    let check = |held: usize|
+        {
+            let bits = control.stop_bits();
+            if bits != 0 {
+                Err(ReadError::Stopped(stop_reason(bits)))
+            } else if control.bytes().saturating_add(held) > control.limits().max_bytes {
+                Err(ReadError::Stopped(Stop::MemoryLimit))
+            } else {
+                Ok(())
+            }
+        };
     let mut bytes = Vec::new();
     if let Some(size) = file.size.take() {
+        // 上限を超える見込みは、確保を試す前に止める。確保できないほど大きい見込みも、上限があれば上限の誤りになる
+        let size = usize::try_from(size).unwrap_or(usize::MAX);
+        check(size)?;
         // 確保に失敗したら I/O の誤りにする (`read_to_end` と同じ)
-        let reserved = usize::try_from(size).ok().is_some_and(|n| bytes.try_reserve(n).is_ok());
-        if !reserved {
+        if bytes.try_reserve(size).is_err() {
             return Err(ReadError::Io(file.path.clone(), IoReason::Other));
         }
     }
     loop {
-        let bits = control.stop_bits();
-        if bits != 0 {
-            return Err(
-                ReadError::Stopped(
-                    if bits & Control::INTERRUPT != 0 {
-                        Stop::Interrupted
-                    } else {
-                        Stop::MemoryLimit
-                    },
-                ),
-            );
-        }
-        // `Vec` はヒープの外にあるので、ページの確保量に足して上限と比べる
-
-        if control.bytes().saturating_add(bytes.capacity()) > control.limits().max_bytes {
-            return Err(ReadError::Stopped(Stop::MemoryLimit));
-        }
+        check(bytes.capacity())?;
         // `read_to_end` が、`Interrupted` の読み直しと短い読みを受け持つ
-
         match (&mut file.reader).take(READ_CHUNK).read_to_end(&mut bytes) {
             Ok(0) => break,
             Ok(_) => {},

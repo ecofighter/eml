@@ -13,7 +13,7 @@ use super::Heap;
 use super::chain_err;
 #[cfg(verus_only)]
 use super::model::BlockState;
-use crate::control::{Control, Stop};
+use crate::control::{Control, Stop, stop_reason};
 use crate::error::HeapError;
 use crate::host::HostRef;
 use crate::meta::{Kind, Meta};
@@ -2807,18 +2807,5 @@ impl<M: Mode> Ctx<M> {
             return Err(stop_reason(bits));
         }
         Ok(())
-    }
-}
-
-/// 止める理由。割り込みを確保量より先に、確保量を深さより先に報告する。ビットは速い道で読んだ値を受け、読み直さない。
-/// 読み直すと、その間にほかのスレッドが `clear` したとき、深さの上限を超えていなくても `DepthLimit` を返すためである。
-#[cold]
-fn stop_reason(bits: u32) -> Stop {
-    if bits & Control::INTERRUPT != 0 {
-        Stop::Interrupted
-    } else if bits & Control::MEMORY != 0 {
-        Stop::MemoryLimit
-    } else {
-        Stop::DepthLimit
     }
 }

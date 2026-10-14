@@ -813,8 +813,10 @@ pub struct Opened {
 - `Fs.close`: 検査モードは型と `decref` の前提を確かめ、その後 `decref` するだけである
 - `Fs.read_all`
   1. `File` は、局所で rc が 1 で、今の worker が持つものでなければならない。中の読み手を書き換えるためである。`foreign_unique` で借り、検査モードは確かめて `NotUnique` か `WrongOwner` を返す。速いモードでは安全の前提にする
-  2. 長さの見込みを取り出し (`Option::take`)、あればその大きさを `Vec<u8>` に `try_reserve` する。失敗は `Io { op: Read, reason: Other }` にする (今の `read_to_end` と同じ)。2回目の `Fs.read_all` には見込みがないので、余分に確保しない
-  3. 64 KiB ずつ読む。区切りごとに止める語を見て、立っていれば `Stopped` で止める (`INTERRUPT` なら `Interrupted`、ほかは `MemoryLimit`)。次に、`Vec` の容量と `Control` の確保量の和を上限 `max_bytes` と比べ、超えれば `Stopped(MemoryLimit)` で止める。`Vec` はヒープの外にあり、そのままでは上限に数えられないためである
+  2. 長さの見込みを取り出す (`Option::take`)。見込みがあれば、その大きさで 3 の確かめをしてから、`Vec<u8>` に `try_reserve` する。確保より先に上限と比べるので、確保できないほど大きい見込みも、上限があれば I/O の誤りでなく `Stopped(MemoryLimit)` になる。確保の失敗は `Io { op: Read, reason: Other }` にする (今の `read_to_end` と同じ)。2回目の `Fs.read_all` には見込みがないので、余分に確保しない
+  3. 64 KiB ずつ読む。区切りの前ごとに、`Vec` の容量で次の確かめをする
+     - 止める語が立っていれば、`Stopped` で止める。理由は `Ctx::poll` と同じ関数 `stop_reason` で決める (`INTERRUPT` なら `Interrupted`、`MEMORY` なら `MemoryLimit`)
+     - 次に、領域の大きさと `Control` の確保量の和を上限 `max_bytes` と比べ、超えれば `Stopped(MemoryLimit)` で止める。`Vec` はヒープの外にあり、そのままでは上限に数えられないためである
   4. 各区切りは `take(64 KiB).read_to_end(&mut vec)` で読み、0 バイトなら終わる。std が、`Interrupted` を受けたときの読み直し、短い読み、空き領域を 0 で埋めないこと、終わりを小さな読みで確かめることを受け持つ
   5. 読み終えたら `String::from_utf8` で確かめ、`alloc_string(&str)` でヒープへ写し、`Vec` を手放す
   6. 結果は組 `(File, String)` で、`alloc_data(TUPLE, 2, 0, lin = true)` で作り、`File` の参照を組に移す。行の `ret_kind` が `Lin` なので `lin` ビットを立てる

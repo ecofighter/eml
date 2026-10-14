@@ -13,6 +13,8 @@ pub(super) struct MemoryFile {
     pub(super) bytes: Vec<u8>,
     /// 読む前に分かる長さとして Host が返すか
     pub(super) sized: bool,
+    /// 読む前に分かる長さとして、中身の長さの代わりに返す値
+    pub(super) claimed_size: Option<u64>,
     /// 1回の読みで返す最大のバイト数。0 なら制限しない
     pub(super) chunk: usize,
     /// このバイト数を読んだ後の読みで誤りを返す
@@ -118,7 +120,9 @@ impl Host for MemoryHost {
             .get(path)
             .cloned()
             .ok_or_else(|| io::Error::from(io::ErrorKind::NotFound))?;
-        let size = file.sized.then_some(file.bytes.len() as u64);
+        let size = file
+            .claimed_size
+            .or(file.sized.then_some(file.bytes.len() as u64));
         let reader: Box<dyn BufRead + Send> = Box::new(BufReader::new(Reader {
             file,
             at: 0,

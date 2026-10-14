@@ -545,19 +545,42 @@ fn a_read_stops_on_an_interrupt<M: Mode>() {
     assert_eq!(mortal(ctx.heap()), 0);
 }
 
-/// ヒープの外の読みの領域も、確保量の上限に数える。
+/// ヒープの外の読みの領域も、確保量の上限に数える。長さの見込みがあれば確保する前に比べるので、確保できないほど
+/// 大きい見込みも I/O の誤りでなく上限で止まる。見込みがなければ、1回読むごとに比べる。
 fn a_read_past_the_memory_limit_stops<M: Mode>() {
+    let body = "x".repeat(200_000);
     let memory = Arc::new(MemoryHost::default());
-    memory.add("big.txt", MemoryFile::text(&"x".repeat(200_000)));
+    memory.add("big.txt", MemoryFile::text(&body));
+    memory.add(
+        "huge.txt",
+        MemoryFile {
+            claimed_size: Some(u64::MAX),
+            ..MemoryFile::text("x")
+        },
+    );
+    memory.add(
+        "unsized.txt",
+        MemoryFile {
+            sized: false,
+            chunk: 1000,
+            ..MemoryFile::text(&body)
+        },
+    );
     let control = Arc::new(Control::new(Limits {
         max_bytes: 150_000,
         ..Limits::default()
     }));
     let mut ctx = crate::Ctx::<M>::new(control, host(&memory));
-    unsafe {
-        let p = s(&mut ctx, "big.txt");
-        let f = ctx.fs_open(p).unwrap();
-        assert_eq!(ctx.fs_read_all(f), Err(Fault::Stopped(Stop::MemoryLimit)));
+    for path in ["big.txt", "huge.txt", "unsized.txt"] {
+        unsafe {
+            let p = s(&mut ctx, path);
+            let f = ctx.fs_open(p).unwrap();
+            assert_eq!(
+                ctx.fs_read_all(f),
+                Err(Fault::Stopped(Stop::MemoryLimit)),
+                "{path}"
+            );
+        }
     }
     assert_eq!(mortal(ctx.heap()), 0);
 }
